@@ -1,0 +1,117 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Flat single-file module (see salam/PORTING.md "Layout - FLAT").
+// Port of compiler/src/cli/{cli.c,cli_help.c,cli_options.c,cli_subcmd.c} PLUS
+// the command-dispatch switch of compiler/src/driver/driver.c's driver_main
+// (stage 8c, the FINAL wave of the self-hosting port). Package `cli`, alias
+// `cl`.
+//
+// Scope:
+// - cli_subcmd.c's cli_dispatch_command -> dispatch_command: argv[1] (a
+//   Vector<str> here, args[0] = program name exactly like C's argv[0]) ->
+//   Dr.command + the "start" index cli_parse_options resumes from.
+// - cli_options.c's cli_parse_options/cli_positional/cli_opt_value ->
+//   parse_options/positional/opt_value: every flag in the C, one-for-one.
+// - cli.c's cli_parse (defaults + the post-parse "push SALAM_SAFE" step) ->
+//   pub ParseArgs.
+// - cli_help.c's cli_print_usage -> pub UsageText() (returns the exact text
+//   instead of writing to a FILE*, so callers/tests can inspect it without
+//   capturing stdout; Run() prints it where the C would).
+// - driver_main's version print (core/build_info.h) -> pub VersionText().
+// - driver_main's `switch (opt.command)` -> pub Run(args): the actual
+//   top-level entry point main.salam calls. Dispatches to dr.Build/Obj/Run/
+//   Exec/Inspect/Llvm/Js/LayoutBuild/Web (salam/driver.salam) exactly like
+//   the C switch does, including the same "requires at least one input
+//   file" guards driver_main performs before calling into build.c for
+//   CMD_BUILD/CMD_OBJ/CMD_LLVM/CMD_JS/CMD_LAYOUT_BUILD/CMD_WEB.
+//
+// Also ports two driver_main-adjacent bodies that PORTING.md's stage-8a note
+// explicitly leaves for "the cli wave" (driver.c's driver_new/driver_fmt):
+// - CMD_NEW -> new_project() (driver_new: project scaffolding).
+// - CMD_FMT -> fmt_cmd()/fmt_walk()/fmt_one_file() (driver_fmt: the file/dir
+//   walk + --check reporting around sal_fmt.salam's already-ported Source()
+//   formatter).
+// - CMD_DEBUG / CMD_MEMCHECK -> debug_cmd()/memcheck_cmd() (driver/
+//   debug_cmd.c: build via dr.Build then launch gdb/lldb or run under
+//   valgrind/ASAN). Not part of any prior stage's brief; ported here directly
+//   in cli.salam (not driver.salam, per the "never edit driver.salam" rule)
+//   since both are thin wrappers over dr.Build + os.Run with no dependency
+//   on anything driver.salam doesn't already expose as pub.
+//
+// Deviations from the C (all deliberate, non-functional):
+// - Fixed SALAM_MAX_INPUTS array caps are dropped everywhere, matching
+//   driver.salam's own established convention (Vector<str> has no cap).
+// - core/build_info.h's SALAM_GIT_COMMIT/SALAM_GIT_DATE/SALAM_BUILD_DATE are
+//   populated by the C build's Makefile (git describe / __DATE__ __TIME__);
+//   there is no equivalent injection mechanism in a plain `salam build`, so
+//   VersionText() reports the build_info.h *fallback* defaults ("unknown" /
+//   "") instead. The version itself is not a fallback: it aliases
+//   sal_core.salam's VERSION, which tracks the repo's VERSION file and must
+//   be bumped with it until the build pipeline can stamp these in.
+// - CMD_REPL / CMD_REPL_LAYOUT (driver/repl.c) are a real port now, in the
+//   sibling `repl` package (repl.salam, alias `rp`) rather than inline
+//   here: repl.c is raw-terminal interactive I/O (termios/Win32 console,
+//   line history, incremental re-lex/parse/sema/codegen of a growing
+//   session), self-contained enough to earn its own file the same way
+//   sal_fmt.salam does. `rp.Run(&opt)` below dispatches both `salam repl`
+//   and `salam layout repl`.
+// - shell_arg()/path_stem() re-implement core/sb.c's sb_put_shell_arg and
+//   debug_cmd.c's path_stem as private helpers local to this file (the
+//   driver.salam originals of the same idioms are private to that package
+//   and, per the stage brief, driver.salam is read-only from here).
+// - fmt_cmd()'s `--fix-order` is accepted (parsed, stored on Dr) but not
+//   actually applied: fmt_order.c / `fmt_reorder_toplevel` is not ported by
+//   any wave yet (sal_fmt.salam's own header comment already documents this
+//   gap - "needs parser + semantic", which are now done, but the reordering
+//   pass itself has no Salam port to call). Passing --fix-order here simply
+//   formats normally without reordering, matching a no-op degrade rather
+//   than an error.
+package cli
+
+// ===== core/build_info.h fallback values =====
+// Deliberately NOT redeclared here. This file used to keep its own copy of
+// build_info.h's constants, and the copy went stale: it still said "0.2.6"
+// after the VERSION file and sal_core.salam had both moved on, so `salam
+// version` under-reported the release the binary was built from.
+// VersionText() below reads sal_core.salam's constants directly, so there
+// is one definition, in the module that already owns build_info.h's port.
+
+// Set by RunCommand as soon as the options are parsed, so the Run wrapper can
+// emit the time report on every exit path without threading the options
+// through the twenty-odd `ret` statements below. Mirrors driver.c's
+// g_time_report / driver_main_inner split exactly.
+mut _time_report := false
+mut _time_report_fmt := 0
+mut _time_trace := ""
+
+// ===== driver.c's fmt_ctx_t (driver_fmt's accumulator, threaded through
+// fmt_walk/fmt_one_file). All fields pub - E017: non-pub struct fields are
+// unusable even from free functions in the SAME package. =====
+struct FmtCtx:
+    pub check: bool = false
+    pub fix_order: bool = false
+    pub tabs: bool = false
+    pub width: int = 4
+    pub minify: bool = false
+    pub pack: int = 0
+    pub changed: int = 0
+    pub ok: int = 0
+    pub errors: int = 0
+    pub total: int = 0
+end
+
+// ---------------------------------------------------------------------------
+// Small private helpers
+// ---------------------------------------------------------------------------

@@ -1,0 +1,180 @@
+package semantic
+
+import str
+
+// ===== symbol.c =====
+
+// scope_new - inherits self_type and the enclosing function from the parent.
+func scope_new(s &: Sema, kind: int, parent: int): int:
+    mut sc := Scope { kind = kind }
+    sc.parent = parent
+    if parent != 0:
+        p := scope_at(s, parent)
+        sc.self_type = p.self_type
+        sc.fn = p.fn
+    end
+    id := s.scopes.len()
+    s.scopes.push(sc)
+    ret id
+end
+
+func symbol_new(s &: Sema, kind: int, name: str): int:
+    mut sy := Symbol { kind = kind }
+    sy.name = name
+    id := s.syms.len()
+    s.syms.push(sy)
+    ret id
+end
+
+// scope_lookup_local - linear scan (the C hash index is a perf-only detail).
+func scope_lookup_local(s &: Sema, sc: int, name: str): int:
+    scv := scope_at(s, sc)
+    repeat scv.symbols.len() with i:
+        id := scv.symbols.get(i)[0]
+        if str.Equals(sym_at(s, id).name, name):
+            ret id
+        end
+    end
+    ret 0
+end
+
+// scope_lookup_where - walks parents; each level also tries its aux scope.
+func scope_lookup_where(s &: Sema, sc: int, name: str, where &: int): int:
+    mut cur := sc
+    until cur != 0:
+        found := scope_lookup_local(s, cur, name)
+        if found != 0:
+            where = cur
+            ret found
+        end
+        curv := scope_at(s, cur)
+        if curv.aux != 0:
+            found2 := scope_lookup_where(s, curv.aux, name, where)
+            if found2 != 0:
+                ret found2
+            end
+        end
+        cur = curv.parent
+    end
+    ret 0
+end
+
+func scope_lookup(s &: Sema, sc: int, name: str): int:
+    mut w := 0 // discarded out-param (the C passed NULL)
+    ret scope_lookup_where(s, sc, name, w)
+end
+
+// scope_define - 0 on success, the EXISTING SymId on duplicate (the C
+// returned NULL on success / the existing symbol_t*).
+func scope_define(s &: Sema, sc: int, sym: int): int:
+    name := sym_at(s, sym).name
+    existing := scope_lookup_local(s, sc, name)
+    if existing != 0:
+        ret existing
+    end
+    mut scv := scope_at(s, sc)
+    scv.symbols.push(sym)
+    scope_put(s, sc, scv)
+    ret 0
+end
+
+// type_code (static in symbol.c) - compact per-type mangling codes.
+func type_code(s &: Sema, t: int): str:
+    if t < 0:
+        ret "v"
+    end
+    v := ty_at(s, t)
+    k := v.kind
+    if k == TY_VOID:
+        ret "v"
+    end
+    if k == TY_BOOL:
+        ret "b"
+    end
+    if k == TY_CHAR:
+        ret "c"
+    end
+    if k == TY_STR:
+        ret "s"
+    end
+    if k == TY_UCHAR:
+        ret "uc"
+    end
+    if k == TY_NULL:
+        ret "n"
+    end
+    if k == TY_I8:
+        ret "i8"
+    end
+    if k == TY_I16:
+        ret "i16"
+    end
+    if k == TY_I32:
+        ret "i32"
+    end
+    if k == TY_I64:
+        ret "i64"
+    end
+    if k == TY_U8:
+        ret "u8"
+    end
+    if k == TY_U16:
+        ret "u16"
+    end
+    if k == TY_U32:
+        ret "u32"
+    end
+    if k == TY_U64:
+        ret "u64"
+    end
+    if k == TY_SIZE:
+        ret "size"
+    end
+    if k == TY_F32:
+        ret "f32"
+    end
+    if k == TY_F64:
+        ret "f64"
+    end
+    if k == TY_STRUCT || k == TY_ENUM:
+        if str.Len(v.name) > 0:
+            ret v.name
+        end
+        ret "T"
+    end
+    if k == TY_PTR:
+        ret "P" + type_code(s, v.pointee)
+    end
+    if k == TY_ARRAY:
+        ret "A" + v.length + type_code(s, v.elem)
+    end
+    ret "x"
+end
+
+// mangle_func - struct_name "" = the C NULL. PORT-NOTE: the C clamps at a
+// 512-byte buffer; not replicated.
+func mangle_func(
+    s &: Sema, struct_name: str, fn_name: str, param_types: Vector<int>
+): str:
+    mut out := ""
+    if str.Len(struct_name) > 0:
+        out = "S_" + struct_name + "_"
+    end
+    out = out + fn_name + "__"
+    if param_types.len() > 0:
+        repeat param_types.len() with i:
+            if i > 0:
+                out = out + "_"
+            end
+            out = out + type_code(s, param_types.get(i)[0])
+        end
+    else:
+        out = out + "void"
+    end
+    ret out
+end
+
+// impl_owner_key
+func impl_owner_key(typestr: str): str:
+    ret "impl@" + typestr
+end

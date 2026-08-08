@@ -17,6 +17,7 @@
 #include "driver/web_build.h"
 #include "driver/js_build.h"
 #include "driver/driver.h"
+#include "driver/build.h"
 #include "core/arena.h"
 #include "core/sb.h"
 #include "logger/logger.h"
@@ -179,7 +180,6 @@ int driver_web(options_t *opt)
     diag_engine_t *diag = diag_new(arena, log, PH_CODEGEN);
     int rc = 0;
     langpack_t *pack = langpack_load(opt->lang);
-    const char *path = opt->inputs[0];
     source_file_t *src;
     if (!pack) {
         LOG_E(log, PH_DRIVER, i18n_tr("unknown language pack '%s'"), opt->lang);
@@ -187,6 +187,23 @@ int driver_web(options_t *opt)
         arena_free(arena);
         return 2;
     }
+    /* `salam web` with no input (or a directory): the fixed project
+     * entry file salam.salam wins when present; otherwise exactly one
+     * .salam file with a `layout` block is expected here. */
+    if (opt->input_count == 0 ||
+        (opt->input_count == 1 && driver_path_is_dir(opt->inputs[0]))) {
+        const char *resolved[1];
+        if (driver_resolve_dir_layout(arena, log, pack,
+                                      opt->input_count ? opt->inputs[0] : ".", resolved,
+                                      1, true) != 1) {
+            logger_free(log);
+            arena_free(arena);
+            return 2;
+        }
+        opt->inputs[0] = resolved[0];
+        opt->input_count = 1;
+    }
+    const char *path = opt->inputs[0];
     salam_set_stdlib_root(opt->stdlib_path);
     src = source_load(arena, path);
     if (!src) {
@@ -221,7 +238,8 @@ int driver_web(options_t *opt)
         if (!lb) {
             static char outbuf[512];
             if (!opt->output) {
-                sal_snprintf(outbuf, sizeof outbuf, "%s.html", module_of(arena, path));
+                sal_snprintf(outbuf, sizeof outbuf, "%s.html",
+                             driver_page_stem(arena, path));
                 opt->output = outbuf;
             }
             logger_free(log);
@@ -278,7 +296,7 @@ int driver_web(options_t *opt)
                     }
                 }
                 if (rc == 0) {
-                    const char *mod = module_of(arena, path);
+                    const char *mod = driver_page_stem(arena, path);
                     const char *html_path =
                         opt->output ? opt->output : path_ext(arena, mod, "html");
                     if (opt->split) {

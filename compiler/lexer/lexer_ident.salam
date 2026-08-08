@@ -1,0 +1,88 @@
+package lexer
+
+import str
+import tok "../token.salam"
+import lp "../langpack.salam"
+
+// ===== lexer_ident.c =====
+// lx_norm_ident - ZWNJ -> space, Arabic Yeh -> Farsi Yeh, Arabic Kaf -> Keheh
+func norm_ident(text: str): str:
+    n := text.len()
+    mut need := false
+    mut i := 0
+    until i < n:
+        b0 := byte_at(text, i)
+        if b0 == 226 && byte_at(text, i + 1) == 128 && byte_at(text, i + 2) == 140:
+            need = true
+            break
+        end
+        if b0 == 217 && (byte_at(text, i + 1) == 138 || byte_at(text, i + 1) == 131):
+            need = true
+            break
+        end
+        i += 1
+    end
+    if !need:
+        ret text
+    end
+    mut out := str.NewBuilder()
+    i = 0
+    until i < n:
+        c0 := byte_at(text, i)
+        c1 := byte_at(text, i + 1)
+        if c0 == 226 && c1 == 128 && byte_at(text, i + 2) == 140: // ZWNJ
+            str.BufAppendChar(out, 32)
+            i += 3
+        else c0 == 217 && c1 == 138: // U+064A -> U+06CC
+            str.BufAppend(out, "\xDB\x8C")
+            i += 2
+        else c0 == 217 && c1 == 131: // U+0643 -> U+06A9
+            str.BufAppend(out, "\xDA\xA9")
+            i += 2
+        else:
+            str.BufAppendChar(out, c0)
+            i += 1
+        end
+    end
+    r := str.BufStr(out)
+    str.BufFree(out)
+    ret r
+end
+
+// lx_scan_ident
+func scan_ident(L &: Lx):
+    start := L.pos
+    b := lx_pos(L)
+    skip_ident(L)
+    raw := lex_slice(L, start)
+    k := lp.LookupKeyword(L.pack, raw)
+    mut text := raw
+    if k == tok.TK_IDENT && !L.keep_comments:
+        canon := lp.CanonWord(L.pack, raw)
+        text = canon.len() > 0 ? canon : norm_ident(raw)
+    end
+    if k == tok.TK_KW_TRUE || k == tok.TK_KW_FALSE:
+        emit_val(L, k, b, text, tok.ValueBool(k == tok.TK_KW_TRUE))
+    else:
+        emit(L, k, b, text)
+    end
+    if k == tok.TK_KW_COMPONENT:
+        L.comp_header = true
+    end
+end
+
+// lx_scan_meta
+func scan_meta(L &: Lx):
+    b := lx_pos(L)
+    adv(L) // '@'
+    start := L.pos
+    skip_ident(L)
+    mut name := lex_slice(L, start)
+    if !L.keep_comments:
+        canon := lp.CanonWord(L.pack, name)
+        if canon.len() > 0:
+            name = canon
+        end
+    end
+    emit(L, tok.TK_META, b, name)
+end

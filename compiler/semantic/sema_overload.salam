@@ -1,0 +1,276 @@
+package semantic
+
+import str
+import co "../sal_core.salam"
+import at "../ast.salam"
+import i18 "../i18n.salam"
+
+// sig ? sig->ret : err_ty(s) - always re-reads the Sig (check_function_now
+// may have replaced an inferred return type).
+func sig_ret_or_err(s &: Sema, sigid: int): int:
+    if sigid == 0:
+        ret sema_err_ty(s)
+    end
+    ret sig_at(s, sigid).ret_type
+end
+
+// ro_found - post-match bookkeeping for a resolved overload.
+func ro_found(
+    s &: Sema, a &: at.Ast, sigid: int, sp: co.SrcSpan, what: str
+): int:
+    sg := sig_at(s, sigid)
+    if sg.decl != 0 && at.Get(a, sg.decl).is_deprecated:
+        swarn(
+            s, 13, sp, co.Format1(
+                i18.Tr("call to deprecated function '%s'"), co.ArgStr(what)
+            )
+        )
+    end
+    if sg.infer_ret:
+        if sg.in_check:
+            serr(
+                s, 12, sp, co.Format1(
+                    i18.Tr("cannot infer the return type of recursive function '%s'; annotate its return type"),
+                    co.ArgStr(what)
+                )
+            )
+        else:
+            sema_check_function_now(s, a, sigid)
+        end
+    end
+    pf := sema_pure_fn(s, a)
+    if pf != 0:
+        sg2 := sig_at(s, sigid)
+        if sg2.decl != 0 && !at.Get(a, sg2.decl).is_pure:
+            serr(
+                s, 12, sp, co.Format2(
+                    i18.Tr("'pure' function '%s' cannot call '%s': only 'pure' functions may be called from a pure function"),
+                    co.ArgStr(at.Get(a, pf).name), co.ArgStr(what)
+                )
+            )
+        end
+    end
+    ret sigid
+end
+
+// resolve_overload - exact pass, then assignable pass, then diagnostics.
+// 0 = the C NULL (no match; errors already reported).
+func resolve_overload(
+    s &: Sema, a &: at.Ast, fsym: int, argtypes: Vector<int>, sp: co.SrcSpan, what: str
+): int:
+    fv := sym_at(s, fsym)
+    mut best := 0
+    mut nmatch := 0
+
+    repeat fv.overloads.len() with i:
+        sgid := fv.overloads.get(i)[0]
+        sg := sig_at(s, sgid)
+        if argtypes.len() < sg.required:
+            continue
+        end
+        if !sg.variadic && argtypes.len() > sg.params.len():
+            continue
+        end
+        mut nfix := argtypes.len()
+        if sg.params.len() < nfix:
+            nfix = sg.params.len()
+        end
+        mut ok := true
+        repeat nfix with j:
+            if !type_equiv(s, sg.params.get(j)[0], argtypes.get(j)[0]):
+                ok = false
+                break
+            end
+        end
+        if ok:
+            best = sgid
+            nmatch += 1
+        end
+    end
+    if nmatch == 1:
+        ret ro_found(s, a, best, sp, what)
+    end
+    if nmatch > 1:
+        serr(
+            s, 12, sp, co.Format2(
+                i18.Tr("ambiguous call to '%s' (%zu candidates)"), co.ArgStr(what), co.ArgUint(nmatch as u64)
+            )
+        )
+        ret 0
+    end
+
+    repeat fv.overloads.len() with i2:
+        sgid2 := fv.overloads.get(i2)[0]
+        sg2 := sig_at(s, sgid2)
+        if argtypes.len() < sg2.required:
+            continue
+        end
+        if !sg2.variadic && argtypes.len() > sg2.params.len():
+            continue
+        end
+        mut nfix2 := argtypes.len()
+        if sg2.params.len() < nfix2:
+            nfix2 = sg2.params.len()
+        end
+        mut ok2 := true
+        repeat nfix2 with j2:
+            if !type_assignable(s, sg2.params.get(j2)[0], argtypes.get(j2)[0]):
+                ok2 = false
+                break
+            end
+        end
+        if ok2:
+            best = sgid2
+            nmatch += 1
+        end
+    end
+    if nmatch == 1:
+        ret ro_found(s, a, best, sp, what)
+    end
+    if nmatch > 1:
+        serr(
+            s, 12, sp, co.Format2(
+                i18.Tr("ambiguous call to '%s' (%zu candidates)"), co.ArgStr(what), co.ArgUint(nmatch as u64)
+            )
+        )
+        ret 0
+    end
+    if fv.overloads.len() == 1:
+        sg3 := sig_at(s, fv.overloads.get(0)[0])
+        if argtypes.len() < sg3.required || (!sg3.variadic && argtypes.len() > sg3.params.len()):
+            if sg3.variadic:
+                serr(
+                    s, 12, sp, co.Format4(
+                        i18.Tr("'%s' expects at least %zu argument%s, got %zu"), co.ArgStr(what), co.ArgUint(sg3.required as u64),
+                        co.ArgStr(plural_suffix(sg3.required)), co.ArgUint(argtypes.len() as u64)
+                    )
+                )
+            else sg3.required == sg3.params.len():
+                serr(
+                    s, 12, sp, co.Format4(
+                        i18.Tr("'%s' expects %zu argument%s, got %zu"), co.ArgStr(what), co.ArgUint(sg3.params.len() as u64),
+                        co.ArgStr(plural_suffix(sg3.params.len())), co.ArgUint(argtypes.len() as u64)
+                    )
+                )
+            else:
+                serr(
+                    s, 12, sp, co.Format4(
+                        i18.Tr("'%s' expects %zu to %zu arguments, got %zu"), co.ArgStr(what), co.ArgUint(sg3.required as u64),
+                        co.ArgUint(sg3.params.len() as u64), co.ArgUint(argtypes.len() as u64)
+                    )
+                )
+            end
+            ret 0
+        end
+        mut nfix3 := argtypes.len()
+        if sg3.params.len() < nfix3:
+            nfix3 = sg3.params.len()
+        end
+        repeat nfix3 with j3:
+            if !type_assignable(s, sg3.params.get(j3)[0], argtypes.get(j3)[0]):
+                serr(
+                    s, 12, sp, co.Format3(
+                        i18.Tr("argument %zu: cannot pass '%s' to '%s'"), co.ArgUint((j3 + 1) as u64),
+                        co.ArgStr(type_to_string(s, argtypes.get(j3)[0])), co.ArgStr(type_to_string(s, sg3.params.get(j3)[0]))
+                    )
+                )
+                ret 0
+            end
+        end
+    end
+    serr(
+        s, 12, sp, co.Format3(
+            i18.Tr("no matching overload for '%s' with %zu argument%s"), co.ArgStr(what), co.ArgUint(argtypes.len() as u64),
+            co.ArgStr(plural_suffix(argtypes.len()))
+        )
+    )
+    ret 0
+end
+
+// mark_ref_args - arguments bound to `&:` parameters count as mutations.
+func mark_ref_args(s &: Sema, a &: at.Ast, call: int, sigid: int):
+    if sigid == 0:
+        ret
+    end
+    sg := sig_at(s, sigid)
+    if sg.decl == 0:
+        ret
+    end
+    dl := at.Get(a, sg.decl).list
+    mut i := 0
+    until i < at.ChildCount(a, call) && i < dl.len():
+        p := at.Get(a, dl.get(i)[0])
+        if p.kind == at.AST_PARAM && p.is_ref:
+            argid := at.Child(a, call, i)
+            if argid != 0:
+                arg := at.Get(a, argid)
+                if arg.kind == at.AST_IDENTIFIER && str.Len(arg.name) > 0:
+                    symid := scope_lookup(s, s.cur, arg.name)
+                    if symid != 0:
+                        mut sv := sym_at(s, symid)
+                        sv.mutated = true
+                        sym_put(s, symid, sv)
+                    end
+                end
+            end
+        end
+        i += 1
+    end
+end
+
+// try_impl_call - method provided by an `impl ... on <type>` block.
+// TYPE_NONE = the C NULL ("not an impl call"); errors return err_ty.
+func try_impl_call(
+    s &: Sema, a &: at.Ast, n: int, callee: int, objt: int, argtypes: Vector<int>
+): int:
+    owner := scope_lookup(
+        s, s.global, impl_owner_key(type_to_string(s, objt))
+    )
+    if owner == 0:
+        ret TYPE_NONE
+    end
+    m := scope_lookup_local(s, sym_at(s, owner).members, at.Get(a, callee).name)
+    if m == 0 || sym_at(s, m).kind != SYM_METHOD:
+        ret TYPE_NONE
+    end
+    sig := resolve_overload(
+        s, a, m, argtypes, span_of(a, n), at.Get(a, callee).name
+    )
+    mark_ref_args(s, a, n, sig)
+    _dc := sema_decorate(s, a, callee, sym_at(s, m).ty)
+    ret sema_decorate(s, a, n, sig_ret_or_err(s, sig))
+end
+
+func check_pure_recv_mut(s &: Sema, a &: at.Ast, n: int, m: str):
+    pf := sema_pure_fn(s, a)
+    if pf != 0:
+        serr(
+            s, 12, span_of(a, n), co.Format2(
+                i18.Tr("'pure' function '%s' cannot call '%s': it modifies its receiver"), co.ArgStr(at.Get(a, pf).name),
+                co.ArgStr(m)
+            )
+        )
+    end
+end
+
+func check_pure_builtin(s &: Sema, a &: at.Ast, n: int, nm: str):
+    pf := sema_pure_fn(s, a)
+    if pf == 0 || str.Len(nm) == 0:
+        ret
+    end
+    impure := [
+        "print", "println", "printerr", "printerrln", "input", "open", "args", "listdir", "spawn", "callhandler",
+        "join"
+    ] as str[11]
+    repeat 11 with i:
+        if str.Equals(nm, impure[i]):
+            serr(
+                s, 12, span_of(a, n), co.Format2(
+                    i18.Tr("'pure' function '%s' cannot call '%s': it has side effects"), co.ArgStr(at.Get(a, pf).name),
+                    co.ArgStr(nm)
+                )
+            )
+            ret
+        end
+    end
+end

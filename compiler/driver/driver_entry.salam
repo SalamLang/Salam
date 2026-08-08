@@ -1,0 +1,253 @@
+package driver
+
+import os
+import io
+import str
+import tok "../token.salam"
+import src "../source.salam"
+import lg "../logger.salam"
+import at "../ast.salam"
+import i18 "../i18n.salam"
+import lp "../langpack.salam"
+import lx "../lexer/lexer.salam"
+import ps "../parser/parser.salam"
+import cc "../condcomp.salam"
+import co "../sal_core.salam"
+import lo "../sal_layout/sal_layout.salam"
+
+    // driver/driver.c list_salam_files (bare filenames when dir=="." for
+    // backward compat with the cwd-only callers below; dir-prefixed
+    // otherwise - no recursion either way).
+    func list_salam_files(dir: str): Vector<str>:
+        mut out := Vector {} as Vector<str>
+        entries := os.ListDir(dir)
+        defer entries.free()
+        is_cwd := str.Equals(dir, ".")
+        mut prefix := ""
+        if !is_cwd:
+            mut trimmed := dir
+            if str.EndsWith(trimmed, "/") || str.EndsWith(trimmed, "\\"):
+                trimmed = str.Substr(trimmed, 0, str.Len(trimmed) - 1)
+            end
+            prefix = trimmed + "/"
+        end
+        repeat entries.len() with i:
+            name := entries.get(i)[0]
+            if str.EndsWith(name, ".salam"):
+                out.push(prefix + name)
+            end
+        end
+        ret out
+    end
+
+    // Shared "resolve the entry file of `dir`" used by Run()/Exec()
+    // (dir="." when no input was given) and build_impl (when an explicit
+    // directory is passed instead of a file). The fixed project entry
+    // file salam.salam wins when present; otherwise the dir's top-level
+    // .salam files are scanned for exactly one defining `entry`. Logs its
+    // own error and returns "" on failure; returns the resolved path on
+    // success.
+    func resolve_dir_entry(lgr: lg.Logger, pack: lp.Langpack, dir: str): str:
+        entry := lp.Entry(pack)
+        proj := project_entry_file(dir)
+        if str.Len(proj) > 0:
+            if !file_has_entry(pack, entry, proj):
+                lg.Log(
+                    lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format2(
+                        i18.Tr("project entry file '%s' does not define a '%s' function"),
+                        co.ArgStr(proj), co.ArgStr(entry)
+                    )
+                )
+                if file_has_layout_block(pack, proj):
+                    io.EPrintln("  this looks like a web layout project; build it with: salam web " + proj)
+                end
+                ret ""
+            end
+            lg.Log(
+                lgr, lg.PH_DRIVER, lg.LOG_INFO, co.Format1(i18.Tr("entry point: %s"), co.ArgStr(proj))
+            )
+            ret proj
+        end
+        mut files := list_salam_files(dir)
+        mut entries := Vector {} as Vector<str>
+        defer files.free()
+        defer entries.free()
+        if files.len() == 0:
+            lg.Log(
+                lgr, lg.PH_DRIVER, lg.LOG_ERROR, i18.Tr("no .salam files found in the current directory")
+            )
+            ret ""
+        end
+        repeat files.len() with fi:
+            f := files.get(fi)[0]
+            if file_has_entry(pack, entry, f):
+                entries.push(f)
+            end
+        end
+        if entries.len() == 0:
+            lg.Log(
+                lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format3(
+                    i18.Tr(
+                        "no entry point: none of the %d .salam file%s here defines a '%s' function"
+                    ), co.ArgInt(files.len() as i64), co.ArgStr(plural_suffix(files.len())),
+                    co.ArgStr(entry)
+                )
+            )
+            ret ""
+        end
+        if entries.len() > 1:
+            lg.Log(
+                lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format2(
+                    i18.Tr("ambiguous entry point: %d files define '%s':"), co.ArgInt(entries.len() as i64),
+                    co.ArgStr(entry)
+                )
+            )
+            repeat entries.len() with ei:
+                io.EPrintln("    " + entries.get(ei)[0])
+            end
+            io.EPrintln("  run a specific one with: salam run <file.salam>")
+            io.EPrintln("  or name the project's entry file 'salam.salam' to make it the project entry")
+            ret ""
+        end
+        first := entries.get(0)[0]
+        lg.Log(
+            lgr, lg.PH_DRIVER, lg.LOG_INFO, co.Format1(i18.Tr("entry point: %s"), co.ArgStr(first))
+        )
+        ret first
+    end
+
+    // driver/driver.c file_has_entry - quiet lex+parse+condcomp probe (no sema).
+    func file_has_entry(pack: lp.Langpack, entry: str, path: str): bool:
+        quiet := lg.New(lg.LOG_OFF, false)
+        mut sf := src.New()
+        if !src.Load(path, sf):
+            ret false
+        end
+        mut toks := tok.StreamNew(path)
+        _lok := lx.Run(quiet, pack, sf, toks)
+        mut a := at.NewAst()
+        mut prog := 0
+        _pok := ps.Run(quiet, toks, a, prog)
+        tok.StreamFree(toks)
+        mut nodefs := Vector {} as Vector<str>
+        defer nodefs.free()
+        table := cc.TableBuild("", nodefs)
+        _ck := cc.PruneProgram(a, quiet, path, table, prog)
+        mut found := false
+        prog_n := at.Get(a, prog)
+        repeat prog_n.list.len() with i2:
+            d := at.Get(a, prog_n.list.get(i2)[0])
+            if d.kind == at.AST_FUNC_DEF && str.Equals(d.name, entry):
+                found = true
+                break
+            end
+        end
+        at.FreeAst(a)
+        ret found
+    end
+
+    // driver/build.c file_has_layout_block - quiet lex+parse+condcomp
+    // probe: does `path` contain a top-level `layout` block (a front-end
+    // DSL page rather than a program)?
+    func file_has_layout_block(pack: lp.Langpack, path: str): bool:
+        quiet := lg.New(lg.LOG_OFF, false)
+        mut sf := src.New()
+        if !src.Load(path, sf):
+            ret false
+        end
+        mut toks := tok.StreamNew(path)
+        _lok := lx.Run(quiet, pack, sf, toks)
+        mut a := at.NewAst()
+        mut prog := 0
+        _pok := ps.Run(quiet, toks, a, prog)
+        tok.StreamFree(toks)
+        mut nodefs := Vector {} as Vector<str>
+        defer nodefs.free()
+        table := cc.TableBuild("", nodefs)
+        _ck := cc.PruneProgram(a, quiet, path, table, prog)
+        found := lo.FindLayout(a, prog) != 0
+        at.FreeAst(a)
+        ret found
+    end
+
+    // driver/build.c driver_resolve_dir_layout - front-end counterpart of
+    // resolve_dir_entry, for projects that have no entry function:
+    // salam.salam when present, else the .salam files containing a
+    // `layout` block. `single` demands exactly one page (salam web);
+    // otherwise every page found is returned (salam layout build). An
+    // empty vector = error already logged.
+    func resolve_dir_layout(lgr: lg.Logger, pack: lp.Langpack, dir: str, single: bool): Vector<str>:
+        mut out := Vector {} as Vector<str>
+        proj := project_entry_file(dir)
+        if str.Len(proj) > 0:
+            lg.Log(
+                lgr, lg.PH_DRIVER, lg.LOG_INFO, co.Format1(i18.Tr("entry point: %s"), co.ArgStr(proj))
+            )
+            out.push(proj)
+            ret out
+        end
+        mut files := list_salam_files(dir)
+        mut pages := Vector {} as Vector<str>
+        defer files.free()
+        defer pages.free()
+        if files.len() == 0:
+            lg.Log(
+                lgr, lg.PH_DRIVER, lg.LOG_ERROR, i18.Tr("no .salam files found in the current directory")
+            )
+            ret out
+        end
+        repeat files.len() with fi:
+            f := files.get(fi)[0]
+            if file_has_layout_block(pack, f):
+                pages.push(f)
+            end
+        end
+        if pages.len() == 0:
+            lg.Log(
+                lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format2(
+                    i18.Tr("no layout entry: none of the %d .salam file%s here has a 'layout' block"),
+                    co.ArgInt(files.len() as i64), co.ArgStr(plural_suffix(files.len()))
+                )
+            )
+            io.EPrintln("  name the project's entry file 'salam.salam' to make it the project entry")
+            ret out
+        end
+        if single && pages.len() > 1:
+            lg.Log(
+                lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(
+                    i18.Tr("ambiguous layout entry: %d files have a 'layout' block:"),
+                    co.ArgInt(pages.len() as i64)
+                )
+            )
+            repeat pages.len() with pi:
+                io.EPrintln("    " + pages.get(pi)[0])
+            end
+            io.EPrintln("  build a specific one with: salam web <file.salam>")
+            io.EPrintln("  or name the project's entry file 'salam.salam' to make it the project entry")
+            ret out
+        end
+        repeat pages.len() with qi:
+            out.push(pages.get(qi)[0])
+        end
+        ret out
+    end
+
+    // driver/driver.c write_xml / emit_{tokens,ast,symbol}_xml's shared tail:
+    // write to xml_out if given, else print to stdout (no extra newline, same
+    // as the C's fputs).
+    func write_xml_out(lgr: lg.Logger, text: str, xml_out: str, what: str): int:
+        if str.Len(xml_out) > 0:
+            if os.WriteFile(xml_out, text) < 0:
+                lg.Log(
+                    lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("cannot open '%s' for writing"), co.ArgStr(xml_out))
+                )
+                ret 2
+            end
+            lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, what + " XML written to " + xml_out)
+            ret 0
+        end
+        print text
+        ret 0
+    end
+
+    // ===== driver/llvm_build.c (stage 8b) =====

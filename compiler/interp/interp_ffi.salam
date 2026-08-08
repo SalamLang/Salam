@@ -1,0 +1,306 @@
+package interp
+
+import str
+import co "../sal_core.salam"
+import at "../ast.salam"
+import i18 "../i18n.salam"
+
+// ===========================================================================
+// ===== interp_ffi.c =====
+// ===========================================================================
+// The C table NATIVE_SYMS[] held &symbol pointers and called each through a
+// cast int64_t(*)(int64_t x8). The port declares every table symbol as a
+// bodyless extern up top (see just below the imports - E083/ast_order
+// classifies bodyless extern funcs as ORDER_IMPORT, so they must precede all
+// consts/types/funcs, same as compiler/std/os.salam etc.) and dispatches by
+// name in native_dispatch, marshalling the same i64 bit patterns the C
+// passed. No NATIVE_SYMS function takes more than 4 arguments, so 4 slots
+// suffice (the C passed 8 junk-padded registers; a typed call passes exactly
+// the declared ones - same callee-visible values).
+
+// Reinterpret marshalled char* bits as a str (the C passed the raw pointer).
+func nx_str(x: i64): str:
+    p := x as void*
+    ret p as str
+end
+
+// typestr_is_float (interp_ffi.c)
+func typestr_is_float(ts: str): bool:
+    ret is_float_typename(base_typename(ts))
+end
+
+// marshal_arg (interp_ffi.c) - the same i64 bit patterns the C produced.
+func marshal_arg(v: Value): i64:
+    if v.kind == VAL_STR:
+        sp := v.s as void*
+        ret sp as i64
+    end
+    if v.kind == VAL_PTR:
+        ret v.pa
+    end
+    if v.kind == VAL_BOOL:
+        ret v.b ? (1 as i64) : (0 as i64)
+    end
+    if v.kind == VAL_CHAR || v.kind == VAL_INT:
+        ret v.i
+    end
+    ret 0 as i64
+end
+
+// find_native_sym + the fn(a[0..7]) call, fused: dispatch by name and call
+// the extern with the marshalled bits (table order = the C NATIVE_SYMS).
+func native_dispatch(
+    name: str, a0: i64, a1: i64, a2: i64, a3: i64, found &: bool
+): i64:
+    found = true
+    if str.Equals(name, "getenv"):
+        gv := getenv(nx_str(a0))
+        ret gv as i64
+    end
+    if str.Equals(name, "malloc"):
+        mv := malloc(a0 as u64)
+        ret mv as i64
+    end
+    if str.Equals(name, "realloc"):
+        rv := realloc(a0 as void*, a1 as u64)
+        ret rv as i64
+    end
+    if str.Equals(name, "free"):
+        free(a0 as void*)
+        ret 0 as i64
+    end
+    if str.Equals(name, "memset"):
+        msv := memset(a0 as void*, a1 as int, a2 as u64)
+        ret msv as i64
+    end
+    if str.Equals(name, "memcpy"):
+        mcv := memcpy(a0 as void*, a1 as void*, a2 as u64)
+        ret mcv as i64
+    end
+    if str.Equals(name, "memmove"):
+        mmv := memmove(a0 as void*, a1 as void*, a2 as u64)
+        ret mmv as i64
+    end
+    if str.Equals(name, "remove"):
+        ret remove(nx_str(a0)) as i64
+    end
+    if str.Equals(name, "rename"):
+        ret rename(nx_str(a0), nx_str(a1)) as i64
+    end
+    if str.Equals(name, "fopen"):
+        fv := fopen(nx_str(a0), nx_str(a1))
+        ret fv as i64
+    end
+    if str.Equals(name, "fclose"):
+        ret fclose(a0 as void*) as i64
+    end
+    if str.Equals(name, "fseek"):
+        ret fseek(a0 as void*, a1 as int, a2 as int) as i64
+    end
+    if str.Equals(name, "ftell"):
+        ret ftell(a0 as void*) as i64
+    end
+    if str.Equals(name, "fread"):
+        ret fread(a0 as void*, a1 as u64, a2 as u64, a3 as void*) as i64
+    end
+    if str.Equals(name, "fwrite"):
+        ret fwrite(a0 as void*, a1 as u64, a2 as u64, a3 as void*) as i64
+    end
+    if str.Equals(name, "fgetc"):
+        ret fgetc(a0 as void*) as i64
+    end
+    if str.Equals(name, "fgets"):
+        gsv := fgets(a0 as void*, a1 as int, a2 as void*)
+        ret gsv as i64
+    end
+    if str.Equals(name, "exit"):
+        exit(a0 as int)
+    end
+    if str.Equals(name, "abort"):
+        abort()
+    end
+    if SALAM_OS_WINDOWS:
+        if str.Equals(name, "_mkdir"):
+            ret _mkdir(nx_str(a0)) as i64
+        end
+        if str.Equals(name, "_rmdir"):
+            ret _rmdir(nx_str(a0)) as i64
+        end
+        if str.Equals(name, "_chdir"):
+            ret _chdir(nx_str(a0)) as i64
+        end
+        if str.Equals(name, "GetCurrentDirectoryA"):
+            ret GetCurrentDirectoryA(a0 as int, a1 as void*) as i64
+        end
+        if str.Equals(name, "GetFileAttributesA"):
+            ret GetFileAttributesA(nx_str(a0)) as i64
+        end
+        if str.Equals(name, "_fseeki64"):
+            ret _fseeki64(a0 as void*, a1, a2 as int) as i64
+        end
+        if str.Equals(name, "FindFirstFileA"):
+            ffv := FindFirstFileA(nx_str(a0), a1 as void*)
+            ret ffv as i64
+        end
+        if str.Equals(name, "FindNextFileA"):
+            ret FindNextFileA(a0 as void*, a1 as void*) as i64
+        end
+        if str.Equals(name, "FindClose"):
+            ret FindClose(a0 as void*) as i64
+        end
+        if str.Equals(name, "GetSystemTimeAsFileTime"):
+            GetSystemTimeAsFileTime(a0 as void*)
+            ret 0 as i64
+        end
+        if str.Equals(name, "_getpid"):
+            ret _getpid() as i64
+        end
+        if str.Equals(name, "_popen"):
+            pv := _popen(nx_str(a0), nx_str(a1))
+            ret pv as i64
+        end
+        if str.Equals(name, "_pclose"):
+            ret _pclose(a0 as void*) as i64
+        end
+    else:
+        if str.Equals(name, "mkdir"):
+            ret mkdir(nx_str(a0), a1 as int) as i64
+        end
+        if str.Equals(name, "rmdir"):
+            ret rmdir(nx_str(a0)) as i64
+        end
+        if str.Equals(name, "chdir"):
+            ret chdir(nx_str(a0)) as i64
+        end
+        if str.Equals(name, "access"):
+            ret access(nx_str(a0), a1 as int) as i64
+        end
+        if str.Equals(name, "getcwd"):
+            cwv := getcwd(a0 as void*, a1 as int)
+            ret cwv as i64
+        end
+        if str.Equals(name, "opendir"):
+            odv := opendir(nx_str(a0))
+            ret odv as i64
+        end
+        if str.Equals(name, "readdir"):
+            rdv := readdir(a0 as void*)
+            ret rdv as i64
+        end
+        if str.Equals(name, "closedir"):
+            ret closedir(a0 as void*) as i64
+        end
+        if str.Equals(name, "fseeko"):
+            ret fseeko(a0 as void*, a1, a2 as int) as i64
+        end
+        if str.Equals(name, "clock_gettime"):
+            ret clock_gettime(a0 as int, a1 as void*) as i64
+        end
+        if str.Equals(name, "popen"):
+            pov := popen(nx_str(a0), nx_str(a1))
+            ret pov as i64
+        end
+        if str.Equals(name, "pclose"):
+            ret pclose(a0 as void*) as i64
+        end
+        if str.Equals(name, "getpid"):
+            ret getpid() as i64
+        end
+        if str.Equals(name, "system"):
+            ret system(nx_str(a0)) as i64
+        end
+    end
+    found = false
+    ret 0 as i64
+end
+
+// call_native_extern (interp_ffi.c) - same guard order as the C: variadic,
+// arity > 8, float args, float return, then symbol lookup.
+func call_native_extern(
+    ip &: Interp, a &: at.Ast, call: int, decl: int, args: Vector<Value>
+): Value:
+    dn := at.Get(a, decl)
+    if dn.is_variadic:
+        rt_error(
+            ip, a, call, co.Format1(
+                i18.Tr("extern function '%s' is variadic, which the interpreter does not support (use 'salam run' instead)"),
+                co.ArgStr(dn.name)
+            )
+        )
+        ret val_null()
+    end
+    np := at.ChildCount(a, decl)
+    if np > 8:
+        rt_error(
+            ip, a, call, co.Format1(
+                i18.Tr("extern function '%s' takes too many parameters for the interpreter's native call support"),
+                co.ArgStr(dn.name)
+            )
+        )
+        ret val_null()
+    end
+    repeat np with i:
+        p := at.Child(a, decl, i)
+        pn := at.Get(a, p)
+        pts := pn.ty != 0 ? at.Get(a, pn.ty).type_str : ""
+        if typestr_is_float(pts):
+            rt_error(
+                ip, a, call, co.Format1(
+                    i18.Tr("extern function '%s' takes a floating-point argument, which the interpreter does not support (use 'salam run' instead)"),
+                    co.ArgStr(dn.name)
+                )
+            )
+            ret val_null()
+        end
+    end
+    rts := dn.ty != 0 ? at.Get(a, dn.ty).type_str : ""
+    if str.Len(rts) != 0 && typestr_is_float(rts):
+        rt_error(
+            ip, a, call, co.Format1(
+                i18.Tr("extern function '%s' returns a floating-point value, which the interpreter does not support (use 'salam run' instead)"),
+                co.ArgStr(dn.name)
+            )
+        )
+        ret val_null()
+    end
+    mut a0 := 0 as i64
+    mut a1 := 0 as i64
+    mut a2 := 0 as i64
+    mut a3 := 0 as i64
+    mut mi := 0
+    until mi < np && mi < args.len():
+        mv := marshal_arg(args.get(mi)[0])
+        if mi == 0:
+            a0 = mv
+        else mi == 1:
+            a1 = mv
+        else mi == 2:
+            a2 = mv
+        else mi == 3:
+            a3 = mv
+        end
+        mi += 1
+    end
+    mut found := false
+    r := native_dispatch(dn.name, a0, a1, a2, a3, found)
+    if !found:
+        rt_error(
+            ip, a, call, co.Format1(
+                i18.Tr("extern function '%s' is not supported by the interpreter (use 'salam run' instead)"),
+                co.ArgStr(dn.name)
+            )
+        )
+        ret val_null()
+    end
+    if str.Len(rts) == 0:
+        ret val_null()
+    end
+    if byte_at(rts, str.Len(rts) - 1) == 42:
+        ret val_ptr(r, ptr_elem_from_typestr(rts))
+    end
+    rbase := base_typename(rts)
+    if str.Equals(rbase, "bool"):
+        ret val_bool(r != (0 as i64))
+    end
+    ret val_int(r)
+end

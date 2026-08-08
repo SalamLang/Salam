@@ -90,15 +90,27 @@ func find_compiler_rt(rtarch: str): str:
         if !os.IsDir(base):
             continue
         end
+        // Freed explicitly, not with `defer`: SKILL.md documents defer as
+        // running at *scope* exit, but both backends currently emit every
+        // defer at *function* exit (cg->fn_defers / ll->defers). A defer on
+        // a binding declared inside a loop body therefore lands in the
+        // function epilogue, where that binding is out of scope - tcc says
+        // "'entries' undeclared" and the LLVM backend says "address of an
+        // unknown identifier 'entries'". Explicit frees sidestep it; see
+        // docs/LLVM_DEFAULT_BACKEND.md for the standing bug.
         entries := os.ListDir(base)
-        defer entries.free()
+        mut hit := ""
         repeat entries.len() with i:
             name := entries.get(i)[0]
             candidate := filepath.Join(filepath.Join(filepath.Join(base, name), "lib"), "linux")
             path := filepath.Join(candidate, "libclang_rt.builtins-" + rtarch + ".a")
-            if os.Exists(path):
-                ret path
+            if os.Exists(path) && str.Len(hit) == 0:
+                hit = path
             end
+        end
+        entries.free()
+        if str.Len(hit) > 0:
+            ret hit
         end
     end
     ret ""
@@ -197,6 +209,24 @@ func user_libs_of(opts: Options): Vector<str>:
     ret out
 end
 
+// resolve_linker - llvm_native.c:247-258. The C looks for a tool bundled
+// next to the running salam first; std/llvm has no access to that lookup,
+// so this is the platform default it falls back to.
+//
+// Two top-level condcomp arms rather than one function with an `if
+// SALAM_OS_WINDOWS:` inside it: condcomp prunes the dead arm outright, so a
+// `mut` only ever assigned in the pruned branch trips E069 ("declared 'mut'
+// but never mutated") on the other platform.
+if SALAM_OS_WINDOWS:
+    func resolve_linker(): str:
+        ret "gcc"
+    end
+else:
+    func resolve_linker(): str:
+        ret "cc"
+    end
+end
+
 // CanLinkTriple - ports lld_can_link(): whether LinkAuto has an in-process
 // linker for `t` at all (mingw+gnu windows, or musl linux). Anything else
 // (e.g. wasm, glibc linux, macOS) falls back to the caller's external
@@ -212,6 +242,98 @@ pub func CanLinkTriple(t: str): bool:
     gnu := str.Contains(t, "gnu") || str.Contains(t, "mingw")
     musl := str.Contains(t, "linux") && str.Contains(t, "musl")
     ret (win && gnu) || musl
+end
+
+// LinkExternal - ports link_executable() (llvm_native.c:260-317): hands the
+// object EmitObject already produced to a system C compiler, which supplies
+// the host CRT and libc that LinkElf's static-musl path cannot.
+//
+// This is the normal outcome of a plain native build, not an error path: on
+// a glibc Linux or a macOS host there is no in-process linker at all, and
+// the C reaches exactly here via `if (rc < 0) rc = link_executable(...)`.
+// Only the object is linked - the IR is never recompiled - so it costs one
+// `cc` invocation, not a second full compile.
+@en "LinkExternal"
+@fa "پیوند بیرونی"
+@ar "ربط خارجی"
+pub func LinkExternal(obj: str, out_path: str, opts: Options): LinkResult:
+    linker := resolve_linker()
+    mut cmd := `"` + linker + `" "` + obj + `" -o "` + out_path + `"`
+    repeat opts.lib_paths.len() with i:
+        cmd += ` -L"` + opts.lib_paths.get(i)[0] + `"`
+    end
+    repeat opts.link_libs.len() with i:
+        spec := opts.link_libs.get(i)[0]
+        if str.Len(spec) == 0:
+            continue
+        end
+        // A raw flag or an explicit path passes through unchanged; a bare
+        // name becomes -lname. Matches the C's strpbrk(spec, "/\\.") test.
+        if str.StartsWith(spec, "-") || str.Contains(spec, "/") || str.Contains(spec, "\\") || str.Contains(spec, "."):
+            cmd += ` "` + spec + `"`
+        else:
+            cmd += " -l" + spec
+        end
+    end
+    // The C's is_tcc branch picks -lmsvcrt over -lm, but it can only reach
+    // tcc through the bundled-tool lookup this port does not have, so the
+    // linker here is never tcc and -lm is always the right choice.
+    cmd += " -lm"
+    if os.Run(cmd) == 0:
+        ret LinkResult { ok = true }
+    end
+    ret LinkResult { ok = false, err = "external link failed: " + cmd }
+end
+
+// HostLinkTriple - ports native_host_link_triple() (llvm_native.c:878-901):
+// the triple to hand LinkAuto when the caller asked for a plain native
+// build and named no --target=. Empty means "there is no in-process linker
+// for this host" - the caller then links externally, exactly like the C's
+// `if (rc < 0) rc = link_executable(...)`.
+//
+// Windows: the host triple itself, unless it is an MSVC one (LinkMingw
+// only knows the mingw CRT layout).
+//
+// Linux: the host's glibc CRT cannot be linked by LinkElf, which is a
+// static-musl linker - so this reports a musl triple only when a musl
+// sysroot has actually been provided, which is the direct analogue of the
+// C's salam_try_embed_musl() gate. `explicit`/$SALAM_SYSROOTS only, never
+// a distro's /usr/lib/<arch>-linux-musl: the C links the *embedded*
+// sysroot it ships, and silently switching every native build on a
+// musl-dev machine to a static musl binary would diverge from it.
+@en "HostLinkTriple"
+@fa "سه‌تایی پیوند میزبان"
+@ar "ثلاثیة ربط المضیف"
+pub func HostLinkTriple(): str:
+    host := DefaultTriple()
+    if str.Len(host) == 0:
+        ret ""
+    end
+    if str.Contains(host, "windows") || str.Contains(host, "mingw") || str.Contains(host, "win32"):
+        if str.Contains(host, "msvc"):
+            ret ""
+        end
+        ret host
+    end
+    if !str.Contains(host, "linux"):
+        ret ""
+    end
+    mut arch := "x86_64"
+    if str.Contains(host, "aarch64") || str.Contains(host, "arm64"):
+        arch = "aarch64"
+    else str.Contains(host, "i686") || str.Contains(host, "i386") || str.Contains(host, "i586"):
+        arch = "i386"
+    else str.Contains(host, "arm"):
+        arch = "arm"
+    end
+    env := os.Env("SALAM_SYSROOTS")
+    if str.Len(env) == 0:
+        ret ""
+    end
+    if !os.Exists(filepath.Join(filepath.Join(env, arch + "-linux-musl"), "crt1.o")):
+        ret ""
+    end
+    ret (str.Equals(arch, "i386") ? "i686" : arch) + "-linux-musl"
 end
 
 // LinkElf - ports native_link_elf(): static-links a musl-libc ELF
@@ -258,6 +380,12 @@ pub func LinkElf(obj: str, out_path: str, opts: Options): LinkResult:
     argv.push(crt1)
     argv.push(crti)
     argv.push("-L" + sr)
+    // --libpath entries after the sysroot but before the object: an
+    // explicitly named directory should still be searched, and archive
+    // order only matters relative to the object and -l flags.
+    repeat opts.lib_paths.len() with lpi:
+        argv.push("-L" + opts.lib_paths.get(lpi)[0])
+    end
     argv.push(obj)
     libs := user_libs_of(opts)
     defer libs.free()
@@ -331,6 +459,9 @@ pub func LinkMingw(obj: str, out_path: str, opts: Options): LinkResult:
     end
     argv.push("-L" + filepath.Join(sr, "lib"))
     argv.push("-L" + filepath.Join(sr, "mingw/lib"))
+    repeat opts.lib_paths.len() with lpi:
+        argv.push("-L" + opts.lib_paths.get(lpi)[0])
+    end
     argv.push(obj)
     libs := user_libs_of(opts)
     defer libs.free()

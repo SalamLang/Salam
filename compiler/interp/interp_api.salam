@@ -1,0 +1,490 @@
+package interp
+
+import str
+import time
+import co "../sal_core.salam"
+import at "../ast.salam"
+import lg "../logger.salam"
+import i18 "../i18n.salam"
+import sm "../semantic/semantic.salam"
+
+// ===========================================================================
+// ===== PUBLIC API (rule E088: nothing but pub funcs below this line) =====
+// ===========================================================================
+
+// --- value.h constructors ---
+
+pub func ValNull(): Value:
+    ret val_null()
+end
+
+pub func ValInt(x: i64): Value:
+    ret val_int(x)
+end
+
+pub func ValChar(x: i64): Value:
+    ret val_char(x)
+end
+
+pub func ValFloat(x: f64): Value:
+    ret val_float(x)
+end
+
+pub func ValBool(x: bool): Value:
+    ret val_bool(x)
+end
+
+pub func ValStr(s: str): Value:
+    ret val_str(s)
+end
+
+pub func ValModule(m: int): Value:
+    ret val_module(m)
+end
+
+pub func ValPtr(addr: i64, elem: int): Value:
+    ret val_ptr(addr, elem)
+end
+
+pub func PtrElemSize(elem: int): int:
+    ret ptr_elem_size(elem)
+end
+
+// --- interp.c ---
+
+// interp_run's construction half: interpreter state + options. The other
+// half is Run() - split so callers (driver/web/tests) can read captured
+// output and error state off the Interp afterwards.
+pub func New(lgr: lg.Logger, entry: str, opts: Options): Interp:
+    mut ipn := Interp {}
+    ipn.log = lgr
+    ipn.entry = entry
+    ipn.lang = str.Len(opts.lang) != 0 ? opts.lang : "en"
+    ipn.capture = opts.capture
+    ipn.in_has = opts.has_input
+    ipn.in_data = opts.input_data
+    ms := opts.timeout_ms > 0 ? opts.timeout_ms : 5000
+    ipn.deadline_ms = time.NowMillis() + (ms as i64)
+    ipn.envs.push(Env {})
+    ipn.arrs.push(Arr {})
+    ipn.maps.push(SMap {})
+    ipn.iters.push(SMapIter {})
+    ipn.sts.push(SStruct {})
+    ipn.closures.push(Closure {})
+    ipn.variants.push(SVariant {})
+    ipn.mods.push(Module {})
+    ipn.fnlists.push(FuncList {})
+    ipn.extern_fns.push(Value {})
+    ipn.globals = env_new(ipn, 0)
+    ret ipn
+end
+
+// Cross-package Options literal replacement (struct literals do not cross
+// package boundaries - see salam/PORTING.md).
+pub func NewOptions(): Options:
+    ret Options {}
+end
+
+// interp_run's execution half. Returns the process exit code (main's int
+// return, 0 otherwise, 1 on a runtime error - logged like the C setjmp arm).
+pub func Run(ip &: Interp, a &: at.Ast, sem &: sm.Sema, program: int): int:
+    collect_decls(ip, a, program)
+    if ip.failed:
+        ret run_fail(ip)
+    end
+    build_modules(ip, a, sem)
+    if ip.failed:
+        ret run_fail(ip)
+    end
+    fixup_generic_envs(ip, a, sem)
+    main_fn := find_func(ip, a, ip.entry, 0 - 1)
+    if main_fn == 0:
+        lg.Log(
+            ip.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(
+                i18.Tr("no entry point: define a '%s' function"), co.ArgStr(ip.entry)
+            )
+        )
+        ret 1
+    end
+    mut noargs := Vector {} as Vector<Value>
+    defer noargs.free()
+    rc := call_func(ip, a, main_fn, ip.globals, false, val_null(), noargs)
+    if ip.failed:
+        ret run_fail(ip)
+    end
+    if rc.kind == VAL_INT:
+        ret rc.i as int
+    end
+    ret 0
+end
+
+// Releases every pool vector (the C freed its arena wholesale).
+pub func Free(ip &: Interp):
+    repeat ip.envs.len() with i0:
+        e := ip.envs.get(i0)[0]
+        e.names.free()
+        e.vals.free()
+    end
+    ip.envs.free()
+    repeat ip.arrs.len() with i1:
+        ar := ip.arrs.get(i1)[0]
+        ar.items.free()
+    end
+    ip.arrs.free()
+    repeat ip.maps.len() with i2:
+        m := ip.maps.get(i2)[0]
+        m.keys.free()
+        m.vals.free()
+        m.used.free()
+        m.index.free()
+    end
+    ip.maps.free()
+    ip.iters.free()
+    repeat ip.sts.len() with i3:
+        s := ip.sts.get(i3)[0]
+        s.fnames.free()
+        s.fvals.free()
+    end
+    ip.sts.free()
+    ip.closures.free()
+    ip.variants.free()
+    ip.mods.free()
+    repeat ip.fnlists.len() with i4:
+        fl := ip.fnlists.get(i4)[0]
+        fl.nodes.free()
+    end
+    ip.fnlists.free()
+    ip.funcs.free()
+    ip.structs.free()
+    ip.enums.free()
+    ip.impls.free()
+    ip.extern_fns.free()
+    ip.extern_decls.free()
+    ip.def_env_defs.free()
+    ip.def_env_envs.free()
+    ip.tab_funcs.keys.free()
+    ip.tab_funcs.vals.free()
+    ip.tab_structs.keys.free()
+    ip.tab_structs.vals.free()
+    ip.tab_enums.keys.free()
+    ip.tab_enums.vals.free()
+    ip.tab_modules.keys.free()
+    ip.tab_modules.vals.free()
+    ip.tab_extern_fns.keys.free()
+    ip.tab_extern_fns.vals.free()
+    ip.tab_extern_decls.keys.free()
+    ip.tab_extern_decls.vals.free()
+    ip.tab_def_envs.keys.free()
+    ip.tab_def_envs.vals.free()
+end
+
+pub func Tick(ip &: Interp):
+    tick(ip)
+end
+
+// --- environments ---
+
+pub func EnvNew(ip &: Interp, parent: int): int:
+    ret env_new(ip, parent)
+end
+
+pub func EnvDefine(ip &: Interp, e: int, name: str, v: Value):
+    env_define(ip, e, name, v)
+end
+
+// env_find over the parent chain; false when unbound.
+pub func EnvLookup(ip &: Interp, e: int, name: str, out &: Value): bool:
+    mut where := 0
+    slot := env_find(ip, e, name, where)
+    if slot < 0:
+        ret false
+    end
+    out = env_slot_val(ip, where, slot)
+    ret true
+end
+
+pub func EnvLookupLocal(ip &: Interp, e: int, name: str, out &: Value): bool:
+    slot := env_find_local(ip, e, name)
+    if slot < 0:
+        ret false
+    end
+    out = env_slot_val(ip, e, slot)
+    ret true
+end
+
+// --- lookups (interp.c find_* family) ---
+
+pub func FindFunc(ip &: Interp, a &: at.Ast, name: str, nargs: int): int:
+    ret find_func(ip, a, name, nargs)
+end
+
+pub func FindStruct(ip &: Interp, name: str): int:
+    ret find_struct(ip, name)
+end
+
+pub func FindEnum(ip &: Interp, name: str): int:
+    ret find_enum(ip, name)
+end
+
+pub func FindModule(ip &: Interp, name: str): int:
+    ret find_module(ip, name)
+end
+
+pub func FindExternDecl(ip &: Interp, name: str): int:
+    ret find_extern_decl(ip, name)
+end
+
+pub func FindImplMethod(
+    ip &: Interp, a &: at.Ast, typestr: str, method: str, nargs: int
+): int:
+    ret find_impl_method(ip, a, typestr, method, nargs)
+end
+
+pub func FindDefEnv(ip &: Interp, def: int): int:
+    ret find_def_env(ip, def)
+end
+
+// --- conversions & printing (interp_value.c) ---
+
+pub func ToBool(v: Value): bool:
+    ret to_bool(v)
+end
+
+pub func ToInt(v: Value): i64:
+    ret to_int(v)
+end
+
+pub func ToFloat(v: Value): f64:
+    ret to_float(v)
+end
+
+pub func ToStr(ip &: Interp, v: Value): str:
+    ret to_str(ip, v)
+end
+
+pub func StrRepeat(s: str, n: i64): Value:
+    ret str_repeat(s, n)
+end
+
+// --- arrays ---
+
+pub func ArrayNew(ip &: Interp, cap: int): int:
+    ret arr_new(ip, cap)
+end
+
+pub func ArrayView(ip &: Interp, base: int, off: int, length: int): int:
+    ret arr_view(ip, base, off, length)
+end
+
+pub func ArrayLen(ip &: Interp, id: int): int:
+    ret arr_len(ip, id)
+end
+
+pub func ArrayGet(ip &: Interp, id: int, i: int): Value:
+    ret arr_get(ip, id, i)
+end
+
+pub func ArraySet(ip &: Interp, id: int, i: int, v: Value):
+    arr_set(ip, id, i, v)
+end
+
+pub func ArrayPush(ip &: Interp, id: int, v: Value):
+    arr_push(ip, id, v)
+end
+
+pub func MkArray(id: int): Value:
+    ret val_arr(id)
+end
+
+// --- maps ---
+
+pub func MapNew(ip &: Interp): int:
+    ret map_new(ip)
+end
+
+pub func MapPut(ip &: Interp, mid: int, k: Value, v: Value):
+    map_put(ip, mid, k, v)
+end
+
+pub func MapGet(ip &: Interp, mid: int, k: Value, found &: bool): Value:
+    m := ip.maps.get(mid)[0]
+    e := map_find(m, k)
+    if e < 0:
+        found = false
+        ret val_null()
+    end
+    found = true
+    ret m.vals.get(e)[0]
+end
+
+pub func MapHas(ip &: Interp, mid: int, k: Value): bool:
+    m := ip.maps.get(mid)[0]
+    ret map_find(m, k) >= 0
+end
+
+pub func MapRemove(ip &: Interp, mid: int, k: Value): bool:
+    ret map_remove(ip, mid, k)
+end
+
+pub func MapSize(ip &: Interp, mid: int): int:
+    m := ip.maps.get(mid)[0]
+    ret m.count
+end
+
+pub func MkMap(id: int): Value:
+    ret val_map(id)
+end
+
+// --- structs / closures / variants ---
+
+pub func MkStruct(ip &: Interp, name: str, def: int, nfields: int): Value:
+    ret mk_struct(ip, name, def, nfields)
+end
+
+pub func StructSetField(ip &: Interp, sid: int, i: int, name: str, v: Value):
+    st_field_set(ip, sid, i, name, v)
+end
+
+pub func StructSetFieldVal(ip &: Interp, sid: int, i: int, v: Value):
+    st_field_set_val(ip, sid, i, v)
+end
+
+pub func StructFindField(ip &: Interp, sid: int, name: str): int:
+    ret st_find_field(ip, sid, name)
+end
+
+pub func StructFieldCount(ip &: Interp, sid: int): int:
+    s := ip.sts.get(sid)[0]
+    ret s.fnames.len()
+end
+
+pub func StructFieldName(ip &: Interp, sid: int, i: int): str:
+    s := ip.sts.get(sid)[0]
+    ret s.fnames.get(i)[0]
+end
+
+pub func StructFieldValue(ip &: Interp, sid: int, i: int): Value:
+    s := ip.sts.get(sid)[0]
+    ret s.fvals.get(i)[0]
+end
+
+pub func MkClosure(ip &: Interp, fnnode: int, env: int): Value:
+    ret mk_closure(ip, fnnode, env)
+end
+
+pub func MkVariant(ip &: Interp, tag: int, has_boxed: bool, boxed: Value): Value:
+    ret mk_variant(ip, tag, has_boxed, boxed)
+end
+
+// --- typed pointers ---
+
+pub func PtrElemFromTypestr(ts: str): int:
+    ret ptr_elem_from_typestr(ts)
+end
+
+pub func PtrLoad(pa: i64, elem: int, idx: i64): Value:
+    ret ptr_load(pa, elem, idx)
+end
+
+pub func PtrStore(pa: i64, elem: int, idx: i64, v: Value):
+    ptr_store(pa, elem, idx, v)
+end
+
+// --- typenames / defaults ---
+
+pub func BaseTypename(ts: str): str:
+    ret base_typename(ts)
+end
+
+pub func IsIntTypename(b0: str): bool:
+    ret is_int_typename(b0)
+end
+
+pub func IsFloatTypename(b0: str): bool:
+    ret is_float_typename(b0)
+end
+
+pub func DefaultForType(ip &: Interp, ts: str): Value:
+    ret default_for_type(ip, ts)
+end
+
+// --- operators ---
+
+pub func Arith(
+    ip &: Interp, a &: at.Ast, n: int, op: int, x: Value, y: Value
+): Value:
+    ret arith(ip, a, n, op, x, y)
+end
+
+pub func ValueCmp(x: Value, y: Value): int:
+    ret value_cmp(x, y)
+end
+
+pub func ValueEq(x: Value, y: Value): bool:
+    ret value_eq(x, y)
+end
+
+pub func CompoundBase(op: int): int:
+    ret compound_base(op)
+end
+
+pub func TryStructOp(
+    ip &: Interp, a &: at.Ast, op: int, va: Value, vb: Value, has_b: bool, found &: bool
+): Value:
+    ret try_struct_op(ip, a, op, va, vb, has_b, found)
+end
+
+// --- builtins (interp_builtin.c) ---
+
+// Index in the intrinsic table (22 = the platform sleep row), -1 = none.
+pub func IntrinsicLookup(name: str): int:
+    repeat K_IP_INTR_COUNT with i:
+        if str.Equals(k_ip_intrinsics[i], name):
+            ret i
+        end
+    end
+    if SALAM_OS_WINDOWS:
+        if str.Equals(name, "SleepEx"):
+            ret K_IP_INTR_COUNT
+        end
+    else:
+        if str.Equals(name, "usleep"):
+            ret K_IP_INTR_COUNT
+        end
+    end
+    ret 0 - 1
+end
+
+pub func CallIntrinsic(
+    ip &: Interp, name: str, args: Vector<Value>, handled &: bool
+): Value:
+    ret call_intrinsic(ip, name, args, handled)
+end
+
+pub func CallBuiltinMethod(
+    ip &: Interp, a &: at.Ast, call: int, recv: Value, method: str, args: Vector<Value>
+): Value:
+    ret call_builtin_method(ip, a, call, recv, method, args)
+end
+
+pub func CallModuleFunc(
+    ip &: Interp, a &: at.Ast, call: int, mid: int, fnname: str, args: Vector<Value>
+): Value:
+    ret call_module_func(ip, a, call, mid, fnname, args)
+end
+
+pub func CallFunc(
+    ip &: Interp, a &: at.Ast, fnnode: int, defenv: int, has_this: bool, thisv: Value, args: Vector<Value>
+): Value:
+    ret call_func(ip, a, fnnode, defenv, has_this, thisv, args)
+end
+
+pub func DoPrint(
+    ip &: Interp, a &: at.Ast, env: int, call: int, newline: bool, to_err: bool
+):
+    do_print(ip, a, env, call, newline, to_err)
+end
+
+pub func DoInput(ip &: Interp): Value:
+    ret do_input(ip)
+end

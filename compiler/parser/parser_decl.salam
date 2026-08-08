@@ -1,0 +1,543 @@
+package parser
+
+import tok "../token.salam"
+import at "../ast.salam"
+
+// ===== parser_decl.c =====
+
+func parse_type_alias(p &: Ps, a &: at.Ast): int:
+    p_rule(p, "type_alias")
+    n := p_mk(p, a, at.AST_TYPE_ALIAS)
+    p_advance(p)
+    at.SetName(a, n, p_name(p, "expected alias name"))
+    p_expect(p, tok.TK_ASSIGN, "'=' in type alias")
+    at.SetTypeNode(a, n, parse_type(p, a))
+    p_term(p)
+    p_fin(p, a, n)
+    ret n
+end
+
+func parse_const(p &: Ps, a &: at.Ast): int:
+    p_rule(p, "const_decl")
+    n := p_mk(p, a, at.AST_CONST_DECL)
+    p_advance(p)
+    at.SetName(a, n, p_name(p, "expected constant name"))
+    if p_at(p, tok.TK_COLON):
+        p_error(p, "constants with a type annotation were removed; use 'const NAME := value' (or 'const NAME := value as Type')")
+        at.SetTypeNode(a, n, parse_type_anno(p, a))
+        p_match(p, tok.TK_ASSIGN)
+        ps_set_a(a, n, parse_expr(p, a))
+        p_term(p)
+        p_fin(p, a, n)
+        ret n
+    end
+    if p_at(p, tok.TK_ASSIGN):
+        p_error(p, "constants are declared with ':=' ('const NAME := value')")
+        p_advance(p)
+    else:
+        p_expect(p, tok.TK_COLON_ASSIGN, "':=' in const declaration")
+    end
+    ps_set_a(a, n, parse_expr(p, a))
+    p_term(p)
+    p_fin(p, a, n)
+    ret n
+end
+
+func parse_enum(p &: Ps, a &: at.Ast): int:
+    p_rule(p, "enum_def")
+    n := p_mk(p, a, at.AST_ENUM_DEF)
+    p_advance(p)
+    at.SetName(a, n, p_name(p, "expected enum name"))
+    p_expect(p, tok.TK_COLON, "':' after enum name")
+    p_skip_terminators(p)
+    until !p_at(p, tok.TK_KW_END) && !p_at_eof(p):
+        before := p.pos
+        p_skip_terminators(p)
+        if p_at(p, tok.TK_KW_END) || p_at_eof(p):
+            break
+        end
+        m := p_mk(p, a, at.AST_ENUM_MEMBER)
+        at.SetName(a, m, p_name(p, "expected enum member name"))
+        if p_match(p, tok.TK_ASSIGN):
+            ps_set_a(a, m, parse_expr(p, a))
+        end
+        p_fin(p, a, m)
+        at.AddChild(a, n, m)
+
+        if !p_match(p, tok.TK_COMMA):
+            p_skip_terminators(p)
+        end
+        if p.panic:
+            p_sync(p)
+        end
+
+        if p.pos == before && !p_at(p, tok.TK_KW_END) && !p_at_eof(p):
+            p_advance(p)
+        end
+    end
+    p_expect(p, tok.TK_KW_END, "'end' to close enum")
+    p_fin(p, a, n)
+    ret n
+end
+
+func parse_typarams(p &: Ps, a &: at.Ast, n: int):
+    if !p_match(p, tok.TK_LT):
+        ret
+    end
+    mut go := true
+    until go:
+        tp := p_name(p, "expected type parameter name")
+        if tp.len() == 0:
+            break
+        end
+        mut bound := ""
+        if p_match(p, tok.TK_COLON):
+            bound = p_name(p, "expected an interface name after ':' in type parameter bound")
+        end
+        at.AddTyparam(a, n, tp, bound)
+        go = p_match(p, tok.TK_COMMA)
+    end
+    p_close_angle(p, "'>' to close type parameters")
+end
+
+func parse_interface_method(p &: Ps, a &: at.Ast): int:
+    n := p_mk(p, a, at.AST_FUNC_DEF)
+    p_advance(p)
+    at.SetName(a, n, p_name(p, "expected method name in interface"))
+    if p_match(p, tok.TK_LPAREN):
+        parse_params(p, a, n)
+        p_expect(p, tok.TK_RPAREN, "')' after parameters")
+    end
+    finish_untyped_params(p, a, n, false)
+    if p_at(p, tok.TK_COLON):
+        p_advance(p)
+        at.SetTypeNode(a, n, parse_type(p, a))
+    end
+    p_term(p)
+    p_fin(p, a, n)
+    ret n
+end
+
+func parse_interface(p &: Ps, a &: at.Ast): int:
+    p_rule(p, "interface_def")
+    n := p_mk(p, a, at.AST_INTERFACE_DEF)
+    p_advance(p)
+    at.SetName(a, n, p_name(p, "expected interface name"))
+    parse_typarams(p, a, n)
+    p_expect(p, tok.TK_COLON, "':' after interface name")
+    p_skip_terminators(p)
+    until !p_at(p, tok.TK_KW_END) && !p_at_eof(p):
+        p_skip_terminators(p)
+        if p_at(p, tok.TK_KW_END) || p_at_eof(p):
+            break
+        end
+        if p_at(p, tok.TK_KW_FUNC):
+            m := parse_interface_method(p, a)
+            if m != 0:
+                at.AddChild(a, n, m)
+            end
+        else:
+            p_error(p, "expected a method signature ('func ...') in interface")
+            if !p_at_eof(p):
+                p_advance(p)
+            end
+        end
+        if p.panic:
+            p_sync(p)
+        end
+    end
+    p_expect(p, tok.TK_KW_END, "'end' to close interface")
+    p_fin(p, a, n)
+    ret n
+end
+
+func parse_impl(p &: Ps, a &: at.Ast): int:
+    p_rule(p, "impl_def")
+    n := p_mk(p, a, at.AST_IMPL_DEF)
+    p_advance(p)
+    at.SetName(a, n, p_name(p, "expected interface name after 'impl'"))
+    p_expect(p, tok.TK_KW_ON, "'on' after interface name in impl block")
+    at.SetTypeNode(a, n, parse_type(p, a))
+    p_expect(p, tok.TK_COLON, "':' after impl target type")
+    p_skip_terminators(p)
+    until !p_at(p, tok.TK_KW_END) && !p_at_eof(p):
+        p_skip_terminators(p)
+        if p_at(p, tok.TK_KW_END) || p_at_eof(p):
+            break
+        end
+        if p_at(p, tok.TK_KW_FUNC):
+            m := parse_function(p, a, false)
+            if m != 0:
+                at.AddChild(a, n, m)
+            end
+        else:
+            p_error(p, "expected a method ('func ...') in impl block")
+            if !p_at_eof(p):
+                p_advance(p)
+            end
+        end
+        if p.panic:
+            p_sync(p)
+        end
+    end
+    p_expect(p, tok.TK_KW_END, "'end' to close impl block")
+    p_fin(p, a, n)
+    ret n
+end
+
+func parse_struct(p &: Ps, a &: at.Ast): int:
+    p_rule(p, "struct_def")
+    n := p_mk(p, a, at.AST_STRUCT_DEF)
+    p_advance(p)
+    at.SetName(a, n, p_name(p, "expected struct name"))
+    parse_typarams(p, a, n)
+    p_expect(p, tok.TK_COLON, "':' after struct name")
+    p_skip_terminators(p)
+    mut mpend := Vector {} as Vector<str>
+    defer mpend.free()
+    until !p_at(p, tok.TK_KW_END) && !p_at_eof(p):
+        before := p.pos
+        p_skip_terminators(p)
+        parse_metas(p, mpend)
+        if p_at(p, tok.TK_KW_END) || p_at_eof(p):
+            break
+        end
+        mut m_pub := false
+        if p_at(p, tok.TK_KW_PUB):
+            m_pub = true
+            p_advance(p)
+        end
+        mut member := 0
+        if p_at(p, tok.TK_KW_FUNC):
+            member = parse_function(p, a, false)
+        else:
+            member = parse_field(p, a)
+        end
+        if member != 0:
+            mut mn := at.Get(a, member)
+            mn.is_pub = m_pub
+            at.Put(a, member, mn)
+            repeat mpend.len() with i:
+                at.AddAlias(a, member, mpend.get(i)[0])
+            end
+            at.AddChild(a, n, member)
+        end
+        mpend.clear()
+        if p.panic:
+            p_sync(p)
+        end
+
+        if p.pos == before && !p_at(p, tok.TK_KW_END) && !p_at_eof(p):
+            p_advance(p)
+        end
+    end
+    p_expect(p, tok.TK_KW_END, "'end' to close struct")
+    p_fin(p, a, n)
+    ret n
+end
+
+func parse_field(p &: Ps, a &: at.Ast): int:
+    p_rule(p, "field")
+    n := p_mk(p, a, at.AST_FIELD)
+
+    mut nm := ""
+    if p_at(p, tok.TK_IDENT):
+        nm = parse_decl_name(p)
+    else:
+        nm = p_member_name(p, "expected field name")
+    end
+    at.SetName(a, n, nm)
+    if nm.len() == 0:
+        ret 0
+    end
+    at.SetTypeNode(a, n, parse_type_anno(p, a))
+    if p_match(p, tok.TK_ASSIGN):
+        ps_set_a(a, n, parse_expr(p, a))
+    end
+    p_term(p)
+    p_fin(p, a, n)
+    ret n
+end
+
+func parse_op_method_name(p &: Ps): str:
+    k := p_peek(p).kind
+    if k == tok.TK_PLUS:
+        p_advance(p)
+        ret "operator_add"
+    end
+    if k == tok.TK_MINUS:
+        p_advance(p)
+        ret "operator_sub"
+    end
+    if k == tok.TK_STAR:
+        p_advance(p)
+        ret "operator_mul"
+    end
+    if k == tok.TK_SLASH:
+        p_advance(p)
+        ret "operator_div"
+    end
+    if k == tok.TK_PERCENT:
+        p_advance(p)
+        ret "operator_mod"
+    end
+    if k == tok.TK_POWER:
+        p_advance(p)
+        ret "operator_pow"
+    end
+    if k == tok.TK_EQ:
+        p_advance(p)
+        ret "operator_eq"
+    end
+    if k == tok.TK_NE:
+        p_advance(p)
+        ret "operator_ne"
+    end
+    if k == tok.TK_LT:
+        p_advance(p)
+        ret "operator_lt"
+    end
+    if k == tok.TK_GT:
+        p_advance(p)
+        ret "operator_gt"
+    end
+    if k == tok.TK_LE:
+        p_advance(p)
+        ret "operator_le"
+    end
+    if k == tok.TK_GE:
+        p_advance(p)
+        ret "operator_ge"
+    end
+    if k == tok.TK_NOT:
+        p_advance(p)
+        ret "operator_not"
+    end
+    if k == tok.TK_LBRACKET:
+        p_advance(p)
+        p_expect(p, tok.TK_RBRACKET, "']' in operator[]")
+        if p_at(p, tok.TK_ASSIGN):
+            p_advance(p)
+            ret "operator_index_set"
+        end
+        ret "operator_index"
+    end
+    p_error(p, "unsupported operator for overloading; allowed: + - * / % ** == != < > <= >= ! []")
+    ret "operator_error"
+end
+
+func parse_function(p &: Ps, a &: at.Ast, allow_untyped: bool): int:
+    p_rule(p, "function_def")
+    n := p_mk(p, a, at.AST_FUNC_DEF)
+    p_advance(p)
+    if p_at(p, tok.TK_KW_OPERATOR):
+        p_advance(p)
+        at.SetName(a, n, parse_op_method_name(p))
+    else p_at(p, tok.TK_IDENT):
+        m := p_ident_run_len(p)
+        after := p_peekn(p, m).kind
+        if m >= 2 && after != tok.TK_LPAREN && after != tok.TK_LT:
+            mut b := ""
+            repeat m - 1 with i:
+                if i != 0:
+                    b = b + " "
+                end
+                b = b + p_peek(p).lexeme
+                p_advance(p)
+            end
+            at.SetName(a, n, b)
+        else:
+            at.SetName(a, n, p_munch_name(p))
+        end
+    else:
+        at.SetName(a, n, p_name(p, "expected function name or 'operator <op>'"))
+    end
+    parse_typarams(p, a, n)
+    if p_match(p, tok.TK_LPAREN):
+        parse_params(p, a, n)
+        p_expect(p, tok.TK_RPAREN, "')' after parameters")
+    end
+    finish_untyped_params(p, a, n, allow_untyped)
+    mut rt := 0
+    if p_try_return_type(p, a, rt):
+        at.SetTypeNode(a, n, rt)
+    end
+    ps_set_a(a, n, parse_block(p, a))
+    p_fin(p, a, n)
+    ret n
+end
+
+func parse_params(p &: Ps, a &: at.Ast, fn: int):
+    if p_at(p, tok.TK_RPAREN):
+        ret
+    end
+    mut go := true
+    until go:
+        param := p_mk(p, a, at.AST_PARAM)
+        pname := parse_decl_name(p)
+        at.SetName(a, param, pname)
+        if pname.len() == 0:
+            ret
+        end
+        if p_match(p, tok.TK_AMP):
+            mut pn := at.Get(a, param)
+            pn.is_ref = true
+            at.Put(a, param, pn)
+        end
+        if p_at(p, tok.TK_COLON):
+            at.SetTypeNode(a, param, parse_type_anno(p, a))
+        end
+        if p_match(p, tok.TK_ASSIGN):
+            ps_set_a(a, param, parse_expr(p, a))
+        end
+        p_fin(p, a, param)
+        at.AddChild(a, fn, param)
+        go = p_match(p, tok.TK_COMMA)
+    end
+end
+
+func finish_untyped_params(p &: Ps, a &: at.Ast, fn: int, allow_untyped: bool):
+    mut next_ix := 0
+    count := at.ChildCount(a, fn)
+    repeat count with i:
+        pid := at.Child(a, fn, i)
+        pnode := at.Get(a, pid)
+        if pnode.kind != at.AST_PARAM || pnode.ty != 0:
+            continue
+        end
+        if !allow_untyped:
+            p_error(p, "method and interface parameters must have explicit types")
+            ret
+        end
+        tn := "__T" + next_ix
+        next_ix += 1
+        t := at.NewNode(a, at.AST_TYPE)
+        at.SetSpan(
+            a, t, pnode.begin_line, pnode.begin_col, pnode.begin_index, pnode.end_line, pnode.end_col,
+            pnode.end_index, pnode.length
+        )
+        at.SetName(a, t, tn)
+        at.SetTypeNode(a, pid, t)
+        at.AddTyparam(a, fn, tn, "")
+    end
+end
+
+func parse_top_level(p &: Ps, a &: at.Ast): int:
+    p_rule(p, "top_level")
+
+    mut is_pub := false
+    if p_at(p, tok.TK_KW_PUB):
+        is_pub = true
+        p_advance(p)
+    end
+    mut is_deprecated := false
+    if p_at(p, tok.TK_KW_DEPRECATED):
+        is_deprecated = true
+        p_advance(p)
+    end
+    mut is_inline := false
+    mut is_noinline := false
+    if p_at(p, tok.TK_KW_INLINE):
+        is_inline = true
+        p_advance(p)
+    else p_at(p, tok.TK_KW_NOINLINE):
+        is_noinline = true
+        p_advance(p)
+    end
+    mut is_pure := false
+    mut is_noret := false
+    if p_at(p, tok.TK_KW_PURE):
+        is_pure = true
+        p_advance(p)
+    else p_at(p, tok.TK_KW_NORET):
+        is_noret = true
+        p_advance(p)
+    end
+    mut any_mod := is_deprecated || is_inline || is_noinline || is_pure || is_noret
+    if p_at(p, tok.TK_KW_PUB) || p_at(p, tok.TK_KW_DEPRECATED) || p_at(p, tok.TK_KW_INLINE) || p_at(p, tok.TK_KW_NOINLINE) || p_at(p, tok.TK_KW_PURE) || p_at(p, tok.TK_KW_NORET):
+        p_error(p, "function modifiers must appear in this order: 'pub deprecated inline|noinline pure|noret func'")
+        until p_at(p, tok.TK_KW_PUB) || p_at(p, tok.TK_KW_DEPRECATED) || p_at(p, tok.TK_KW_INLINE) || p_at(p, tok.TK_KW_NOINLINE) || p_at(p, tok.TK_KW_PURE) || p_at(p, tok.TK_KW_NORET):
+            mk := p_peek(p).kind
+            if mk == tok.TK_KW_PUB:
+                is_pub = true
+            else mk == tok.TK_KW_DEPRECATED:
+                is_deprecated = true
+            else mk == tok.TK_KW_INLINE:
+                is_inline = true
+            else mk == tok.TK_KW_NOINLINE:
+                is_noinline = true
+            else mk == tok.TK_KW_PURE:
+                is_pure = true
+            else:
+                is_noret = true
+            end
+            p_advance(p)
+        end
+        any_mod = true
+    end
+    if any_mod && !p_at(p, tok.TK_KW_FUNC):
+        p_error(p, "function modifiers ('deprecated', 'inline', 'noinline', 'pure', 'noret') are only allowed on a function definition")
+    end
+    mut n := 0
+    k := p_peek(p).kind
+    if k == tok.TK_KW_TYPE:
+        n = parse_type_alias(p, a)
+    else k == tok.TK_KW_CONST:
+        n = parse_const(p, a)
+    else k == tok.TK_KW_ENUM:
+        n = parse_enum(p, a)
+    else k == tok.TK_KW_STRUCT:
+        n = parse_struct(p, a)
+    else k == tok.TK_KW_INTERFACE:
+        n = parse_interface(p, a)
+    else k == tok.TK_KW_IMPL:
+        n = parse_impl(p, a)
+    else k == tok.TK_KW_FUNC:
+        n = parse_function(p, a, true)
+    else k == tok.TK_KW_LAYOUT:
+        if is_pub:
+            p_error(p, "'pub' cannot be applied to a layout block")
+        end
+        ret parse_layout_block(p, a)
+    else k == tok.TK_KW_COMPONENT:
+        if is_pub:
+            p_error(p, "'pub' cannot be applied to a component")
+        end
+        ret parse_component(p, a)
+    else k == tok.TK_KW_MUT:
+        n = parse_var_decl(p, a)
+        p_term(p)
+    else k == tok.TK_IDENT:
+        n = parse_bare_var_decl(p, a)
+        p_term(p)
+    else k == tok.TK_KW_PACKAGE:
+        p_error(p, "'package' can be declared only once, and only as the very first statement in the file")
+        if !p_at_eof(p):
+            p_advance(p)
+        end
+        ret 0
+    else:
+        if is_pub:
+            p_error(p, "expected a definition after 'pub'")
+        else:
+            p_error(p, "expected a top-level definition")
+        end
+        if !p_at_eof(p):
+            p_advance(p)
+        end
+        ret 0
+    end
+    if n != 0:
+        mut nn := at.Get(a, n)
+        nn.is_pub = is_pub
+        if nn.kind == at.AST_FUNC_DEF:
+            nn.is_inline = is_inline
+            nn.is_noinline = is_noinline
+            nn.is_pure = is_pure
+            nn.is_noret = is_noret
+            nn.is_deprecated = is_deprecated
+        end
+        at.Put(a, n, nn)
+    end
+    ret n
+end

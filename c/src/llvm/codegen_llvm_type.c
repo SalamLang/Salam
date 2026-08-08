@@ -15,6 +15,44 @@
 #include "llvm/codegen_llvm_internal.h"
 #include "core/sal_format.h"
 
+/*
+ * A decimal floating constant LLVM's .ll parser will accept.
+ *
+ * It requires a '.' in every decimal FP literal, and printf's %g drops the
+ * point whenever the value is exactly integral - including in exponent form
+ * for large magnitudes, where "1e+308" then lexes as an integer with a stray
+ * exponent and the module fails to parse ("integer constant must have
+ * integer type"). Put the point back, before the exponent when there is one.
+ *
+ * inf/nan text is left alone: those are not decimal literals and splicing a
+ * point into them would only make things worse.
+ *
+ * Every path returns storage that outlives the call - arena text, or a string
+ * literal. Handing `v` straight back would not: ll_literal() formats into a
+ * stack buffer and the text it gets is spliced into an instruction emitted
+ * further down, by which point that frame is gone. A literal already carrying
+ * a '.' took exactly that path, so "0.5" reached the module as whatever had
+ * since been written over those bytes ("expected value token" out of the .ll
+ * parser, on a line that reads correctly in any build where the frame happened
+ * to survive).
+ */
+const char *ll_fp_text(ll_t *ll, const char *v)
+{
+    const char *ep;
+    char mant[64], expo[64];
+    size_t mlen;
+    if (!v || !*v) return "0.0";
+    if (strchr(v, '.') || strpbrk(v, "nNiI")) return ll_fmt(ll, "%s", v);
+    ep = strpbrk(v, "eE");
+    if (!ep) return ll_fmt(ll, "%s.0", v);
+    mlen = (size_t)(ep - v);
+    if (mlen >= sizeof mant || strlen(ep) >= sizeof expo) return ll_fmt(ll, "%s", v);
+    memcpy(mant, v, mlen);
+    mant[mlen] = '\0';
+    sal_snprintf(expo, sizeof expo, "%s", ep);
+    return ll_fmt(ll, "%s.0%s", mant, expo);
+}
+
 int ll_int_bits(ll_t *ll, const char *ts)
 {
     if (!ts) return 32;
@@ -312,7 +350,7 @@ void ll_type_layout(ll_t *ll, const char *ts, size_t *out_size, size_t *out_alig
     if (!ts || !strcmp(ts, "void")) {
         *out_size = 0;
         *out_align = 1;
-    } else if (!strncmp(ts, "dyn ", 4) && !strchr(ts, '[')) {
+    } else if (!strncmp(ts, "dyn ", 4) && !strchr(ts, '[') && !ll_is_ptr_ts(ts)) {
         *out_size = 2 * p;
         *out_align = p;
     } else if (!strncmp(ts, "Variant<", 8)) {
@@ -385,6 +423,25 @@ static symbol_t *ll_sym_plain(ll_t *ll, const char *name)
     return s;
 }
 
+/*
+ * Find a struct/enum in `sc` by its *mangled* type name ("rawsock_Socket")
+ * rather than by its declared name ("Socket").
+ */
+static symbol_t *ll_scan_mangled(ll_t *ll, scope_t *sc, const char *name)
+{
+    size_t i = 0;
+    if (!sc) return NULL;
+    for (; i < sc->symbols.len; i++) {
+        symbol_t *s = (symbol_t *)sc->symbols.data[i];
+        const char *ts;
+        if (!s || !s->type) continue;
+        if (s->kind != SYM_STRUCT && s->kind != SYM_ENUM) continue;
+        ts = type_to_string(ll->sem->tc, s->type);
+        if (ts && !strcmp(ts, name)) return s;
+    }
+    return NULL;
+}
+
 static symbol_t *ll_sym_qualified(ll_t *ll, const char *name)
 {
     const char *us = strchr(name, '_');
@@ -393,6 +450,34 @@ static symbol_t *ll_sym_qualified(ll_t *ll, const char *name)
         if (s && s->type) {
             const char *ts = type_to_string(ll->sem->tc, s->type);
             if (ts && !strcmp(ts, name)) return s;
+        }
+    }
+    /*
+     * The split-on-'_' walk above resolves the tail by *declared* name, so
+     * it silently picks the wrong type whenever two packages declare the
+     * same one - std/net has both a udp.Socket and a rawsock.Socket, and
+     * only one of them wins the bare "Socket" in the global scope, leaving
+     * the other unreachable ("member 'fd' of non-struct/unknown type
+     * 'rawsock_Socket'").
+     *
+     * Mangled names are unique by construction, so scan for that instead.
+     * Package hits are touched, which is also what makes a program that
+     * uses only a package's *types* - never its functions, so nothing else
+     * would ever trigger ll_touch_pkg - get that package's struct layouts
+     * emitted.
+     */
+    {
+        symbol_t *s = ll_scan_mangled(ll, ll->sem->global, name);
+        size_t p = 0;
+        if (s) return s;
+        for (; p < ll->sem->packages.len; p++) {
+            symbol_t *pk = (symbol_t *)ll->sem->packages.data[p];
+            if (!pk || pk->kind != SYM_PACKAGE) continue;
+            s = ll_scan_mangled(ll, pk->members, name);
+            if (s) {
+                ll_touch_pkg(ll, pk);
+                return s;
+            }
         }
     }
     return NULL;
@@ -436,10 +521,36 @@ int ll_field_index(symbol_t *ssym, const char *field, symbol_t **out_field)
     return -1;
 }
 
+/*
+ * Length of the "func(" / "externfunc(" prefix, or 0 when `ts` is neither.
+ * Both spellings come out of type_to_string (types.c picks by t->length),
+ * and every structural helper below parses them identically - only the
+ * *call* lowering differs, since an externfunc is a bare C function
+ * pointer with no closure environment.
+ */
+static size_t ll_fnprefix(const char *ts)
+{
+    if (!ts) return 0;
+    if (!strncmp(ts, "func(", 5)) return 4;
+    if (!strncmp(ts, "externfunc(", 11)) return 10;
+    return 0;
+}
+
+bool ll_is_extern_fn_ts(const char *ts)
+{
+    return ts && !strncmp(ts, "externfunc(", 11);
+}
+
+bool ll_is_any_fn_ts(const char *ts)
+{
+    return ll_fnprefix(ts) != 0;
+}
+
 const char *ll_func_ret(ll_t *ll, const char *ts)
 {
-    if (!ts || strncmp(ts, "func(", 5)) return "void";
-    const char *p = ts + 4;
+    size_t pre = ll_fnprefix(ts);
+    if (!pre) return "void";
+    const char *p = ts + pre;
     int d = 0;
     for (; *p; p++) {
         if (*p == '(')
@@ -458,9 +569,10 @@ const char *ll_func_ret(ll_t *ll, const char *ts)
 
 void ll_func_params(ll_t *ll, const char *ts, vec_t *out)
 {
+    size_t pre = ll_fnprefix(ts);
     vec_init(out);
-    if (!ts || strncmp(ts, "func(", 5)) return;
-    const char *start = ts + 5;
+    if (!pre) return;
+    const char *start = ts + pre + 1;
     int depth = 0;
     {
         const char *p = start;
@@ -499,7 +611,15 @@ const char *ll_zero(const char *ts)
 const char *ll_ty(ll_t *ll, const char *ts)
 {
     if (!ts || !strcmp(ts, "void")) return "void";
-    if (!strncmp(ts, "dyn ", 4) && !strchr(ts, '[')) return "%dyn";
+    /*
+     * A `dyn X` interface value is the two-word %dyn fat pointer, but `dyn
+     * X*` and `dyn X[N]` are an ordinary pointer and an array OF those - the
+     * array case was already excluded, the pointer case was not.
+     * Vector<dyn Shape>'s `data: T*` field therefore got LLVM type %dyn, so
+     * the buffer was loaded as a struct and handed to Reallocate where a ptr
+     * was expected, and no program holding interfaces in a Vector compiled.
+     */
+    if (!strncmp(ts, "dyn ", 4) && !strchr(ts, '[') && !ll_is_ptr_ts(ts)) return "%dyn";
     if (!strncmp(ts, "Variant<", 8)) {
         ll_ensure_variant_type(ll, ts);
         return ll_variant_cname(ll, ts);

@@ -1,0 +1,298 @@
+package docgen
+
+import at "../ast.salam"
+import tok "../token.salam"
+import str
+import co "../sal_core.salam"
+
+func is_synth_typaram(name: str): bool:
+    ret str.StartsWith(name, "__T")
+end
+
+// Both front-end passes fall back to bracketed placeholders when they give up:
+// the parser substitutes "<error>" for a name it could not read (parser.salam's
+// p_name), and the semantic pass stringifies an unresolved type as "<error>" or
+// "<null>". Neither tells a reader anything, and unresolved types are routine
+// here - documenting is per-file, so a type declared in a sibling file simply
+// is not in scope. A real name never starts with '<', which makes the check
+// both simple and future-proof.
+func is_placeholder(s: str): bool:
+    if s.len() == 0:
+        ret true
+    end
+    ret byte_at(s, 0) == 60
+end
+
+// type_node_to_str, but blank for anything not worth showing.
+func type_str_or_blank(a: at.Ast, id: int): str:
+    t := type_node_to_str(a, id)
+    if is_placeholder(t):
+        ret ""
+    end
+    ret t
+end
+
+func type_node_to_str(a: at.Ast, id: int): str:
+    if id == 0:
+        ret ""
+    end
+    n := at.Get(a, id)
+    mut base := ""
+    if n.is_dyn:
+        base = "dyn " + n.name
+    else str.Equals(n.name, "func"):
+        mut b := str.NewBuilder()
+        str.BufAppend(b, "func(")
+        cnt := at.ChildCount(a, id)
+        mut i := 0
+        until i < cnt:
+            if i != 0:
+                str.BufAppend(b, ", ")
+            end
+            str.BufAppend(b, type_node_to_str(a, at.Child(a, id, i)))
+            i += 1
+        end
+        str.BufAppend(b, ")")
+        if n.ty != 0:
+            str.BufAppend(b, ": ")
+            str.BufAppend(b, type_node_to_str(a, n.ty))
+        end
+        base = str.BufStr(b)
+        str.BufFree(b)
+    else:
+        if is_synth_typaram(n.name):
+            base = "auto"
+        else:
+            base = n.name
+        end
+        gcount := at.ChildCount(a, id)
+        if gcount > 0:
+            mut b2 := str.NewBuilder()
+            str.BufAppend(b2, base)
+            str.BufAppend(b2, "<")
+            mut i2 := 0
+            until i2 < gcount:
+                if i2 != 0:
+                    str.BufAppend(b2, ", ")
+                end
+                str.BufAppend(b2, type_node_to_str(a, at.Child(a, id, i2)))
+                i2 += 1
+            end
+            str.BufAppend(b2, ">")
+            base = str.BufStr(b2)
+            str.BufFree(b2)
+        end
+    end
+    dcount := at.DimCount(a, id)
+    mut i3 := 0
+    until i3 < dcount:
+        base = base + "[]"
+        i3 += 1
+    end
+    if n.is_pointer:
+        base = base + "*"
+    end
+    ret base
+end
+
+// Best-effort one-line rendering of a simple literal initializer. Used only
+// when neither an explicit type annotation nor a semantic-resolved type is
+// available.
+func literal_preview(a: at.Ast, id: int): str:
+    if id == 0:
+        ret ""
+    end
+    n := at.Get(a, id)
+    if n.kind != at.AST_LITERAL:
+        ret ""
+    end
+    v := at.ValueOf(a, id)
+    if v.kind == tok.TV_INT:
+        ret str.FromInt(v.ival as i64)
+    end
+    if v.kind == tok.TV_FLOAT:
+        ret co.Format1("%g", co.ArgFloat(v.fval))
+    end
+    if v.kind == tok.TV_STRING:
+        ret "\"" + v.sval + "\""
+    end
+    if v.kind == tok.TV_BOOL:
+        ret v.bval ? "true" : "false"
+    end
+    ret ""
+end
+
+func typarams_str(a: at.Ast, id: int): str:
+    n := at.TyparamCount(a, id)
+    if n == 0:
+        ret ""
+    end
+    mut b := str.NewBuilder()
+    mut shown := 0
+    mut i := 0
+    until i < n:
+        tp := at.Typaram(a, id, i)
+        if is_synth_typaram(tp):
+            i += 1
+            continue
+        end
+        if shown != 0:
+            str.BufAppend(b, ", ")
+        end
+        str.BufAppend(b, tp)
+        bound := at.TyparamBound(a, id, i)
+        if bound.len() != 0:
+            str.BufAppend(b, ": ")
+            str.BufAppend(b, bound)
+        end
+        shown += 1
+        i += 1
+    end
+    inner := str.BufStr(b)
+    str.BufFree(b)
+    // Every param was synthesized by finish_untyped_params, so there is no
+    // user-visible type parameter list at all: `func f(x)` must not render as
+    // `func f<>(x)`, nor `func g<T>(x)` as `func g<T, >(x)`.
+    if shown == 0:
+        ret ""
+    end
+    ret "<" + inner + ">"
+end
+
+func params_str(a: at.Ast, fid: int): str:
+    cnt := at.ChildCount(a, fid)
+    mut b := str.NewBuilder()
+    str.BufAppend(b, "(")
+    mut shown := 0
+    mut i := 0
+    until i < cnt:
+        pid := at.Child(a, fid, i)
+        pn := at.Get(a, pid)
+        if pn.kind != at.AST_PARAM:
+            i += 1
+            continue
+        end
+        if shown != 0:
+            str.BufAppend(b, ", ")
+        end
+        str.BufAppend(b, pn.name)
+        if pn.is_ref:
+            str.BufAppend(b, " &")
+        end
+        if pn.ty != 0:
+            tstr := type_str_or_blank(a, pn.ty)
+            if tstr.len() != 0 && !str.Equals(tstr, "auto"):
+                str.BufAppend(b, ": ")
+                str.BufAppend(b, tstr)
+            end
+        end
+        if pn.a != 0:
+            prev := literal_preview(a, pn.a)
+            if prev.len() != 0:
+                str.BufAppend(b, " = ")
+                str.BufAppend(b, prev)
+            end
+        end
+        shown += 1
+        i += 1
+    end
+    str.BufAppend(b, ")")
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
+
+func func_signature(a: at.Ast, id: int): str:
+    n := at.Get(a, id)
+    mut b := str.NewBuilder()
+    str.BufAppend(b, "func ")
+    str.BufAppend(b, n.name)
+    str.BufAppend(b, typarams_str(a, id))
+    str.BufAppend(b, params_str(a, id))
+    if n.ty != 0:
+        rt := type_str_or_blank(a, n.ty)
+        if rt.len() != 0:
+            str.BufAppend(b, ": ")
+            str.BufAppend(b, rt)
+        end
+    end
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
+
+// Resolved type for a var/const/field: explicit annotation first, else the
+// semantic pass's inferred type_str (covers ':=' decls), else "".
+func resolved_type_str(a: at.Ast, id: int): str:
+    n := at.Get(a, id)
+    if n.ty != 0:
+        ret type_str_or_blank(a, n.ty)
+    end
+    if !is_placeholder(n.type_str):
+        ret n.type_str
+    end
+    ret ""
+end
+
+func value_suffix(a: at.Ast, id: int): str:
+    n := at.Get(a, id)
+    if n.a == 0:
+        ret ""
+    end
+    prev := literal_preview(a, n.a)
+    if prev.len() == 0:
+        ret ""
+    end
+    ret " = " + prev
+end
+
+func const_sig(a: at.Ast, id: int): str:
+    n := at.Get(a, id)
+    mut s := "const " + n.name
+    ty := resolved_type_str(a, id)
+    if ty.len() != 0:
+        s = s + ": " + ty
+    end
+    s = s + value_suffix(a, id)
+    ret s
+end
+
+func var_decl_sig(a: at.Ast, id: int): str:
+    n := at.Get(a, id)
+    mut s := n.is_mut ? "mut var " : "var "
+    s = s + n.name
+    ty := resolved_type_str(a, id)
+    if ty.len() != 0:
+        s = s + ": " + ty
+    end
+    s = s + value_suffix(a, id)
+    ret s
+end
+
+func field_sig(a: at.Ast, id: int): str:
+    n := at.Get(a, id)
+    mut s := n.name
+    ty := resolved_type_str(a, id)
+    if ty.len() != 0:
+        s = s + ": " + ty
+    end
+    s = s + value_suffix(a, id)
+    ret s
+end
+
+func enum_member_sig(a: at.Ast, id: int): str:
+    n := at.Get(a, id)
+    s := literal_preview(a, n.a)
+    if s.len() == 0:
+        ret n.name
+    end
+    ret n.name + " = " + s
+end
+
+// ---------------------------------------------------------------------------
+// Doc-comment extraction: a second, comment-preserving lex of the same file
+// (never fed to the parser - see the file header note), grouped into
+// contiguous blocks by physical line adjacency between consecutive comment
+// tokens (any non-comment token in between is simply ignored, since only
+// comment-to-comment line adjacency matters for grouping).
+// ---------------------------------------------------------------------------

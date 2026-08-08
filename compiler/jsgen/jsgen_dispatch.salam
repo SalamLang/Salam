@@ -1,0 +1,522 @@
+package jsgen
+
+import str
+import co "../sal_core.salam"
+import tok "../token.salam"
+import at "../ast.salam"
+import sm "../semantic/semantic.salam"
+
+func jsg_expr(g &: Jg, s &: sm.Sema, a &: at.Ast, n: int): str:
+    ret jsg_expr_p(g, s, a, n, 0)
+end
+
+func jsg_match_arm_cond(
+    g &: Jg, s &: sm.Sema, a &: at.Ast, arm: int, subj_var: str, subj_ts: str
+): str:
+    is_variant := str.StartsWith(subj_ts, "Variant<")
+    armv := at.Get(a, arm)
+    mut b := str.NewBuilder()
+    if armv.op == tok.TK_KW_ELSE:
+        str.BufAppend(b, "true")
+    else:
+        cnt := armv.list.len()
+        mut i := 0
+        until i < cnt:
+            pat := at.Get(a, armv.list.get(i)[0])
+            if i > 0:
+                str.BufAppend(b, " || ")
+            end
+            if is_variant:
+                str.BufAppend(
+                    b, "(" + subj_var + ".tag === " + co.I64Toa(pat.value_int as i64) + ")"
+                )
+            else:
+                str.BufAppend(
+                    b, "(" + subj_var + " === " + jsg_expr(g, s, a, pat.a) + ")"
+                )
+            end
+            i += 1
+        end
+    end
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
+
+func jsg_stmt_has_break_continue(a &: at.Ast, id: int): bool:
+    if id == 0:
+        ret false
+    end
+    n := at.Get(a, id)
+    if n.kind == at.AST_BREAK || n.kind == at.AST_CONTINUE:
+        ret true
+    end
+    if n.kind == at.AST_BLOCK:
+        ret jsg_list_has_break_continue(a, id)
+    end
+    if n.kind == at.AST_IF:
+        if jsg_list_has_break_continue(a, n.b):
+            ret true
+        end
+        if n.c != 0:
+            if at.KindOf(a, n.c) == at.AST_IF:
+                ret jsg_stmt_has_break_continue(a, n.c)
+            end
+            ret jsg_list_has_break_continue(a, n.c)
+        end
+        ret false
+    end
+    if n.kind == at.AST_MATCH:
+        cnt := n.list.len()
+        mut i := 0
+        until i < cnt:
+            arm := at.Get(a, n.list.get(i)[0])
+            if jsg_list_has_break_continue(a, arm.b):
+                ret true
+            end
+            i += 1
+        end
+        ret false
+    end
+    // break/continue inside a nested loop targets that loop, not any match
+    // expression enclosing it, so don't recurse into loop bodies.
+    ret false
+end
+
+func jsg_list_has_break_continue(a &: at.Ast, block: int): bool:
+    if block == 0:
+        ret false
+    end
+    bv := at.Get(a, block)
+    cnt := bv.list.len()
+    mut i := 0
+    until i < cnt:
+        if jsg_stmt_has_break_continue(a, bv.list.get(i)[0]):
+            ret true
+        end
+        i += 1
+    end
+    ret false
+end
+
+func jsg_match_expr(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int): str:
+    n := at.Get(a, id)
+    g.tmpn += 1
+    t := g.tmpn
+    subj_var := "__msubj" + co.I64Toa(t as i64)
+    hoist := jsg_stmt_has_break_continue(a, id)
+    if hoist:
+        // An arm contains break/continue meant for a loop enclosing this
+        // match expression: emit the arms hoisted in place with a labeled
+        // block (see the C comment).
+        res_var := "__mres" + co.I64Toa(t as i64)
+        lbl := "__mlbl" + co.I64Toa(t as i64)
+        saved_tmp := g.match_result_tmp
+        saved_lbl := g.match_end_label
+        cg_line(g, "let " + res_var + ";")
+        cg_line(g, lbl + ": {")
+        g.indent += 1
+        cg_line(g, "const " + subj_var + " = " + jsg_expr(g, s, a, n.a) + ";")
+        g.match_result_tmp = res_var
+        g.match_end_label = lbl
+        subj_ts := at.Get(a, n.a).type_str
+        cnt := n.list.len()
+        mut i := 0
+        until i < cnt:
+            arm := n.list.get(i)[0]
+            cond := jsg_match_arm_cond(g, s, a, arm, subj_var, subj_ts)
+            cg_line(g, (i > 0 ? "} else " : "") + "if (" + cond + ") {")
+            g.indent += 1
+            jsg_block(g, s, a, at.Get(a, arm).b)
+            g.indent -= 1
+            i += 1
+        end
+        if cnt > 0:
+            cg_line(g, "}")
+        end
+        g.match_result_tmp = saved_tmp
+        g.match_end_label = saved_lbl
+        g.indent -= 1
+        cg_line(g, "}")
+        ret res_var
+    end
+    saved_out := g.out
+    g.out = str.NewBuilder()
+    saved_indent := g.indent
+    mark := g.locals.len()
+    g.indent = 0
+    cg_line(g, "const " + subj_var + " = " + jsg_expr(g, s, a, n.a) + ";")
+    subj_ts2 := at.Get(a, n.a).type_str
+    cnt2 := n.list.len()
+    mut i2 := 0
+    until i2 < cnt2:
+        arm2 := n.list.get(i2)[0]
+        cond2 := jsg_match_arm_cond(g, s, a, arm2, subj_var, subj_ts2)
+        cg_line(g, (i2 > 0 ? "} else " : "") + "if (" + cond2 + ") {")
+        g.indent += 1
+        jsg_block(g, s, a, at.Get(a, arm2).b)
+        g.indent -= 1
+        i2 += 1
+    end
+    if cnt2 > 0:
+        cg_line(g, "}")
+    end
+    body := str.BufStr(g.out)
+    str.BufFree(g.out)
+    g.out = saved_out
+    g.indent = saved_indent
+    until g.locals.len() > mark: // C: cg->locals.len = mark (locals only)
+        _l := g.locals.pop()
+    end
+    if g.compact:
+        ret "(() => {" + body + "})()"
+    end
+    ret "(() => {\n" + body + "})()"
+end
+
+func jsg_expr_p(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, minprec: int): str:
+    if id == 0:
+        ret "0"
+    end
+    n := at.Get(a, id)
+    if n.kind == at.AST_LITERAL:
+        if n.op == tok.TK_INT:
+            u := n.value_int
+            uns := cg_is_unsigned_typestr(n.type_str)
+            if !uns && u > (9223372036854775807 as i64 as u64):
+                ret "(" + co.I64Toa(u as i64) + ")"
+            end
+            ret co.U64Toa(u)
+        end
+        if n.op == tok.TK_FLOAT:
+            ret co.Format1("%.17g", co.ArgFloat(n.value_float))
+        end
+        if n.op == tok.TK_STRING || n.op == tok.TK_TRIPLE_STRING || n.op == tok.TK_RAW_STRING || n.op == tok.TK_UTF8_CHAR:
+            ret jsg_escape(n.value_str)
+        end
+        if n.op == tok.TK_CHAR:
+            ret co.U64Toa(n.value_int)
+        end
+        if n.op == tok.TK_KW_TRUE:
+            ret "true"
+        end
+        if n.op == tok.TK_KW_FALSE:
+            ret "false"
+        end
+        if n.op == tok.TK_KW_NULL:
+            ret "null"
+        end
+        ret "0"
+    end
+    if n.kind == at.AST_IDENTIFIER:
+        if local_known(g, n.name):
+            ret jsg_local_ref(g, n.name)
+        end
+        if g.cur_struct != 0:
+            mems := sm.SymAt(s, g.cur_struct).members
+            if mems != 0:
+                f := sm.LookupLocal(s, mems, n.name)
+                if f != 0 && sm.SymAt(s, f).kind == sm.SYM_FIELD:
+                    ret "__self." + cg_cident(n.name)
+                end
+            end
+        end
+        mut sy := sm.Lookup(s, s.global, n.name)
+        if sy == 0 && g.cur_fn_home != 0:
+            sy = sm.Lookup(s, g.cur_fn_home, n.name)
+        end
+        if sy != 0:
+            syv := sm.SymAt(s, sy)
+            if syv.kind == sm.SYM_VAR || syv.kind == sm.SYM_CONST:
+                if syv.decl != 0 && at.Get(a, syv.decl).is_extern:
+                    ret cg_cident(n.name)
+                end
+                gp1 := str.Len(syv.pkgname) > 0 ? syv.pkgname : g.pkg
+                ret jsg_global_ref(g, gp1, n.name)
+            end
+            if syv.kind == sm.SYM_FUNC && syv.overloads.len() > 0:
+                sig := syv.overloads.get(0)[0]
+                if sig != 0:
+                    mut d_ext := false
+                    mut d_syn := false
+                    d := sm.SigAt(s, sig).decl
+                    if d != 0:
+                        dv := at.Get(a, d)
+                        d_ext = dv.is_extern
+                        d_syn = dv.synthetic
+                    end
+                    gp2 := str.Len(syv.pkgname) > 0 ? syv.pkgname : g.pkg
+                    ret jsg_fn_name(
+                        g, s, gp2, "", n.name, sy, sig, d_ext, d_syn
+                    )
+                end
+            end
+        end
+        ret jsg_ident(n.name)
+    end
+    if n.kind == at.AST_THIS:
+        ret "__self"
+    end
+    if n.kind == at.AST_BINARY:
+        if n.a != 0:
+            ats := at.Get(a, n.a).type_str
+            if str.Len(ats) > 0:
+                mut sname := ""
+                ssym := cg_struct_of(s, ats, sname)
+                if ssym != 0:
+                    neg_eq := n.op == tok.TK_NE && n.synthetic
+                    mname := neg_eq ? "operator_eq" : cg_op_method(n.op)
+                    if str.Len(mname) > 0:
+                        call := jsg_emit_op_call(
+                            g, s, a, n.a, ssym, sname, mname, n.b
+                        )
+                        if str.Len(call) > 0:
+                            ret neg_eq ? "!" + call : call
+                        end
+                    end
+                end
+            end
+        end
+        if n.op == tok.TK_POWER:
+            ret "Math.pow(" + jsg_expr_p(g, s, a, n.a, 0) + ", " + jsg_expr_p(g, s, a, n.b, 0) + ")"
+        end
+        if n.op == tok.TK_SLASH && cg_is_int_typestr(n.type_str):
+            qv := "Math.trunc(" + jsg_expr_p(g, s, a, n.a, 13) + " / " + jsg_expr_p(g, s, a, n.b, 14) + ")"
+            if jsg_ts_wrappable(n.type_str):
+                ret jsg_wrap_int(qv, n.type_str)
+            end
+            ret qv
+        end
+        if n.op == tok.TK_PLUS && str.Equals(n.type_str, "str"):
+            t := jsg_template_concat(g, s, a, id)
+            if str.Len(t) > 0:
+                ret t
+            end
+        end
+        if n.op == tok.TK_STAR && str.Equals(n.type_str, "str"):
+            a_str := str.Equals(at.Get(a, n.a).type_str, "str")
+            sop := a_str ? n.a : n.b
+            nop := a_str ? n.b : n.a
+            ret jsg_expr_p(g, s, a, sop, JSP_MEMBER) + ".repeat(Math.max(0, " + jsg_expr_p(g, s, a, nop, 0) + "))"
+        end
+        lts := at.Get(a, n.a).type_str
+        rts := at.Get(a, n.b).type_str
+        shift := n.op == tok.TK_SHL || n.op == tok.TK_SHR
+        mut cts := ""
+        if cg_is_int_typestr(lts) && cg_is_int_typestr(rts):
+            cts = shift ? lts : cg_common_int_typestr(lts, rts)
+        end
+        if str.Len(cts) > 0 && jsg_ts_wrappable(cts) && !jsg_op_is_cmp(n.op):
+            uns := cg_is_unsigned_typestr(cts)
+            // '>>' must be logical for unsigned; JS '>>' is arithmetic.
+            opw := (n.op == tok.TK_SHR && uns) ? ">>>" : jsg_op(n.op)
+            // A 32x32 product exceeds f64's exact range, so the low 32 bits
+            // have to come from Math.imul rather than '*'.
+            if n.op == tok.TK_STAR && jsg_int_ts_bits(cts) == 32:
+                ret jsg_wrap_int(
+                    "Math.imul(" + jsg_expr_p(g, s, a, n.a, 0) + ", " + jsg_expr_p(g, s, a, n.b, 0) + ")", cts
+                )
+            end
+            ownw := jsg_binprec(n.op)
+            ret jsg_wrap_int(
+                jsg_expr_p(g, s, a, n.a, ownw) + " " + opw + " " + jsg_expr_p(g, s, a, n.b, ownw + 1), cts
+            )
+        end
+        own := jsg_binprec(n.op)
+        sv := jsg_expr_p(g, s, a, n.a, own) + " " + jsg_op(n.op) + " " + jsg_expr_p(g, s, a, n.b, own + 1)
+        ret jsg_wrap(sv, own, minprec)
+    end
+    if n.kind == at.AST_TERNARY:
+        sv := jsg_expr_p(g, s, a, n.a, JSP_TERNARY + 1) + " ? " + jsg_expr_p(g, s, a, n.b, JSP_LAMBDA) + " : " + jsg_expr_p(g, s, a, n.c, JSP_TERNARY)
+        ret jsg_wrap(sv, JSP_TERNARY, minprec)
+    end
+    if n.kind == at.AST_UNARY:
+        if n.a != 0:
+            ats2 := at.Get(a, n.a).type_str
+            if str.Len(ats2) > 0:
+                mut sname2 := ""
+                ssym2 := cg_struct_of(s, ats2, sname2)
+                if ssym2 != 0:
+                    mut mname2 := ""
+                    if n.op == tok.TK_MINUS:
+                        mname2 = "operator_sub"
+                    else n.op == tok.TK_NOT:
+                        mname2 = "operator_not"
+                    end
+                    if str.Len(mname2) > 0:
+                        call2 := jsg_emit_op_call(
+                            g, s, a, n.a, ssym2, sname2, mname2, 0
+                        )
+                        if str.Len(call2) > 0:
+                            ret call2
+                        end
+                    end
+                end
+            end
+        end
+        // '-' and '~' preserve the operand's type (SALAM-TYPES.md 21).
+        if (n.op == tok.TK_MINUS || n.op == tok.TK_TILDE) && n.a != 0 && jsg_ts_wrappable(at.Get(a, n.a).type_str):
+            ret jsg_wrap_int(
+                cg_op(n.op) + jsg_expr_p(g, s, a, n.a, JSP_UNARY), at.Get(a, n.a).type_str
+            )
+        end
+        sv2 := cg_op(n.op) + jsg_expr_p(g, s, a, n.a, JSP_UNARY)
+        ret jsg_wrap(sv2, JSP_UNARY, minprec)
+    end
+    if n.kind == at.AST_INCDEC:
+        opc := n.op == tok.TK_PLUS_PLUS ? "++" : "--"
+        operand := jsg_expr_p(g, s, a, n.a, JSP_MEMBER)
+        sv3 := n.is_prefix ? opc + operand : operand + opc
+        ret jsg_wrap(sv3, JSP_UNARY, minprec)
+    end
+    if n.kind == at.AST_CAST:
+        if n.a != 0:
+            ak := at.KindOf(a, n.a)
+            if ak == at.AST_ARRAY_LIT || ak == at.AST_STRUCT_LIT:
+                ret jsg_expr_p(g, s, a, n.a, minprec)
+            end
+        end
+        mut dts := ""
+        if n.ty != 0 && str.Len(at.Get(a, n.ty).type_str) > 0:
+            dts = at.Get(a, n.ty).type_str
+        else str.Len(n.type_str) > 0:
+            dts = n.type_str
+        end
+        sts := n.a != 0 ? at.Get(a, n.a).type_str : ""
+        if str.Equals(dts, sts):
+            ret jsg_expr_p(g, s, a, n.a, minprec)
+        end
+        if str.StartsWith(dts, "dyn "):
+            ret jsg_unsupported(g, "dyn cast")
+        end
+        dn := str.Len(dts)
+        if cg_is_int_typestr(dts) && dn > 0 && byte_at(dts, dn - 1) != 42 && !has_bracket(dts):
+            // ToInt32/ToUint32 already truncate toward zero, so the wrap form
+            // both narrows and reinterprets (SALAM-TYPES.md 16).
+            if jsg_ts_wrappable(dts):
+                ret jsg_wrap_int(jsg_expr_p(g, s, a, n.a, 0), dts)
+            end
+            ret "Math.trunc(" + jsg_expr_p(g, s, a, n.a, 0) + ")"
+        end
+        if str.Equals(dts, "f32") || str.Equals(dts, "f64"):
+            ret "Number(" + jsg_expr_p(g, s, a, n.a, 0) + ")"
+        end
+        if str.Equals(dts, "bool"):
+            sv4 := "!!" + jsg_expr_p(g, s, a, n.a, JSP_UNARY)
+            ret jsg_wrap(sv4, JSP_UNARY, minprec)
+        end
+        if str.Equals(dts, "str") && !str.Equals(sts, "str"):
+            ret "String(" + jsg_expr_p(g, s, a, n.a, 0) + ")"
+        end
+        ret jsg_expr_p(g, s, a, n.a, minprec)
+    end
+    if n.kind == at.AST_CALL:
+        sv5 := jsg_call(g, s, a, id)
+        ret jsg_wrap(sv5, JSP_MEMBER, minprec)
+    end
+    if n.kind == at.AST_MEMBER:
+        if n.a != 0:
+            av := at.Get(a, n.a)
+            if av.kind == at.AST_IDENTIFIER && !local_known(g, av.name):
+                e := sm.Lookup(s, s.global, av.name)
+                if e != 0:
+                    ev := sm.SymAt(s, e)
+                    if ev.kind == sm.SYM_ENUM && ev.members != 0:
+                        m := sm.LookupLocal(s, ev.members, n.name)
+                        if m != 0:
+                            ret co.I64Toa(sm.SymAt(s, m).enum_value)
+                        end
+                    end
+                    if ev.kind == sm.SYM_PACKAGE && ev.members != 0:
+                        m2 := sm.LookupLocal(s, ev.members, n.name)
+                        if m2 != 0:
+                            m2v := sm.SymAt(s, m2)
+                            if m2v.kind == sm.SYM_CONST || m2v.kind == sm.SYM_VAR:
+                                if m2v.decl != 0 && at.Get(a, m2v.decl).is_extern:
+                                    ret cg_cident(n.name)
+                                end
+                                gp3 := str.Len(ev.pkgname) > 0 ? ev.pkgname : av.name
+                                ret jsg_global_ref(g, gp3, n.name)
+                            end
+                            if m2v.decl != 0 && at.Get(a, m2v.decl).a != 0:
+                                ret jsg_expr_p(
+                                    g, s, a, at.Get(a, m2v.decl).a, minprec
+                                )
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        ret jsg_expr_p(g, s, a, n.a, JSP_MEMBER) + "." + cg_cident(n.name)
+    end
+    if n.kind == at.AST_INDEX:
+        if n.a != 0:
+            ats3 := at.Get(a, n.a).type_str
+            if str.Len(ats3) > 0:
+                mut sname3 := ""
+                ssym3 := cg_struct_of(s, ats3, sname3)
+                if ssym3 != 0:
+                    mems3 := sm.SymAt(s, ssym3).members
+                    if mems3 != 0:
+                        m3 := sm.LookupLocal(s, mems3, "operator_index")
+                        if m3 != 0 && sm.SymAt(s, m3).kind == sm.SYM_METHOD:
+                            call3 := jsg_emit_op_call(
+                                g, s, a, n.a, ssym3, sname3, "operator_index", n.b
+                            )
+                            if str.Len(call3) > 0:
+                                ret call3
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        if n.a != 0 && str.Equals(at.Get(a, n.a).type_str, "str"):
+            ret jsg_expr_p(g, s, a, n.a, JSP_MEMBER) + ".charCodeAt(" + jsg_expr_p(g, s, a, n.b, 0) + ")"
+        end
+        ret jsg_expr_p(g, s, a, n.a, JSP_MEMBER) + "[" + jsg_expr_p(g, s, a, n.b, 0) + "]"
+    end
+    if n.kind == at.AST_SLICE:
+        base := jsg_expr_p(g, s, a, n.a, JSP_MEMBER)
+        lo := n.b != 0 ? jsg_expr_p(g, s, a, n.b, 0) : "0"
+        if n.c != 0:
+            ret base + ".slice(" + lo + ", " + jsg_expr_p(g, s, a, n.c, 0) + ")"
+        end
+        ret base + ".slice(" + lo + ")"
+    end
+    if n.kind == at.AST_MATCH:
+        ret jsg_match_expr(g, s, a, id)
+    end
+    if n.kind == at.AST_VARIANT_BOX:
+        ret "({ tag: " + co.I64Toa(n.value_int as i64) + ", value: " + jsg_expr(g, s, a, n.a) + " })"
+    end
+    if n.kind == at.AST_VARIANT_UNWRAP:
+        ret "(" + jsg_expr(g, s, a, n.a) + ").value"
+    end
+    if n.kind == at.AST_LAMBDA:
+        sv6 := jsg_lambda(g, s, a, id)
+        ret jsg_wrap(sv6, JSP_LAMBDA, minprec)
+    end
+    if n.kind == at.AST_STRUCT_LIT:
+        ret jsg_struct_lit(g, s, a, id)
+    end
+    if n.kind == at.AST_ARRAY_LIT:
+        mut b := str.NewBuilder()
+        str.BufAppendChar(b, 91) // '['
+        cnt := n.list.len()
+        mut i := 0
+        until i < cnt:
+            if i > 0:
+                str.BufAppend(b, ", ")
+            end
+            str.BufAppend(b, jsg_expr_p(g, s, a, n.list.get(i)[0], 0))
+            i += 1
+        end
+        str.BufAppendChar(b, 93) // ']'
+        r := str.BufStr(b)
+        str.BufFree(b)
+        ret r
+    end
+    ret "0"
+end

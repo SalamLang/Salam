@@ -1,0 +1,303 @@
+package semantic
+
+import str
+import co "../sal_core.salam"
+import at "../ast.salam"
+import i18 "../i18n.salam"
+
+// ===== sema_util.c =====
+
+// sema_ty
+func sema_ty(s &: Sema, k: int): int:
+    ret type_prim(s, k)
+end
+
+// sema_err_ty
+func sema_err_ty(s &: Sema): int:
+    ret type_prim(s, TY_ERROR)
+end
+
+// sema_decorate - stamps the node's type_str for the XML dumps/backends.
+func sema_decorate(s &: Sema, a &: at.Ast, n: int, t: int): int:
+    if n != 0:
+        at.SetTypeStr(a, n, type_to_string(s, t))
+    end
+    ret t
+end
+
+// sema_vec_str - synthesizes a `Vector<str>` type node and resolves it.
+// PORT-NOTE: resolves through the generic machinery (collections prelude);
+// until the 5b/5c stubs are real it reports "unknown type" and yields error.
+func sema_vec_str(s &: Sema, a &: at.Ast, sp: co.SrcSpan): int:
+    tn := at.NewNode(a, at.AST_TYPE)
+    at.SetName(a, tn, "Vector")
+    at.SetSpan(
+        a, tn, sp.begin.line, sp.begin.col, sp.begin.index, sp.finish.line, sp.finish.col, sp.finish.index,
+        sp.length
+    )
+    mut tv := at.Get(a, tn)
+    tv.synthetic = true
+    at.Put(a, tn, tv)
+    e := at.NewNode(a, at.AST_TYPE)
+    at.SetName(a, e, "str")
+    at.SetSpan(
+        a, e, sp.begin.line, sp.begin.col, sp.begin.index, sp.finish.line, sp.finish.col, sp.finish.index,
+        sp.length
+    )
+    mut ev := at.Get(a, e)
+    ev.synthetic = true
+    at.Put(a, e, ev)
+    at.AddChild(a, tn, e)
+    ret sema_resolve_type(s, a, tn)
+end
+
+// struct_sym_of - the SymId behind a struct (or pointer-to-struct) type.
+func struct_sym_of(s &: Sema, t: int): int:
+    if t < 0:
+        ret 0
+    end
+    v := ty_at(s, t)
+    if v.kind == TY_STRUCT:
+        ret v.decl
+    end
+    if v.kind == TY_PTR && v.pointee >= 0:
+        pv := ty_at(s, v.pointee)
+        if pv.kind == TY_STRUCT:
+            ret pv.decl
+        end
+    end
+    ret 0
+end
+
+// su_zwnj - zero-width non-joiner (E2 80 8C) at byte offset i.
+func su_zwnj(s: str, i: int): bool:
+    if i + 2 >= str.Len(s):
+        ret false
+    end
+    ret byte_at(s, i) == 226 && byte_at(s, i + 1) == 128 && byte_at(s, i + 2) == 140
+end
+
+// The "skip ZWNJ and spaces" loop from su_ident_eq.
+func su_skip(s: str, i &: int):
+    n := str.Len(s)
+    mut go := true
+    until go:
+        go = false
+        if i < n && byte_at(s, i) == 32:
+            i += 1
+            go = true
+        else su_zwnj(s, i):
+            i += 3
+            go = true
+        end
+    end
+end
+
+// su_ident_eq - identifier equality ignoring spaces/ZWNJ and folding
+// yeh/kaf variants (su_fold is byte-identical to prim_fold).
+func su_ident_eq(a: str, b: str): bool:
+    mut ia := 0
+    mut ib := 0
+    mut eq := false
+    mut done := false
+    until !done:
+        su_skip(a, ia)
+        su_skip(b, ib)
+        ka := prim_fold(a, ia)
+        kb := prim_fold(b, ib)
+        if ka != kb:
+            eq = false
+            done = true
+        else ka == 0:
+            eq = true
+            done = true
+        end
+    end
+    ret eq
+end
+
+// intrinsic_canon over k_sm_intr_types.
+func intrinsic_type_canon(name: str): str:
+    if str.Len(name) == 0:
+        ret name
+    end
+    repeat K_SM_INTR_TYPE_COUNT with i:
+        if su_ident_eq(name, k_sm_intr_types[i * 3]) || su_ident_eq(name, k_sm_intr_types[i * 3 + 1]):
+            ret k_sm_intr_types[i * 3 + 2]
+        end
+    end
+    ret name
+end
+
+// intrinsic_canon over k_sm_intr_methods.
+func intrinsic_method_canon(name: str): str:
+    if str.Len(name) == 0:
+        ret name
+    end
+    repeat K_SM_INTR_METHOD_COUNT with i:
+        if su_ident_eq(name, k_sm_intr_methods[i * 3]) || su_ident_eq(name, k_sm_intr_methods[i * 3 + 1]):
+            ret k_sm_intr_methods[i * 3 + 2]
+        end
+    end
+    ret name
+end
+
+// intrinsic_lang_form over the types table ("" = C NULL).
+func intrinsic_type_lang_form(en_name: str, lang: str): str:
+    if lang0(lang) == 0 || lang0(lang) == 101:
+        ret ""
+    end
+    repeat K_SM_INTR_TYPE_COUNT with i:
+        if str.Equals(k_sm_intr_types[i * 3 + 2], en_name):
+            if lang0(lang) == 102:
+                ret k_sm_intr_types[i * 3]
+            end
+            ret k_sm_intr_types[i * 3 + 1]
+        end
+    end
+    ret ""
+end
+
+// intrinsic_lang_form over the methods table.
+func intrinsic_method_lang_form(en_name: str, lang: str): str:
+    if lang0(lang) == 0 || lang0(lang) == 101:
+        ret ""
+    end
+    repeat K_SM_INTR_METHOD_COUNT with i:
+        if str.Equals(k_sm_intr_methods[i * 3 + 2], en_name):
+            if lang0(lang) == 102:
+                ret k_sm_intr_methods[i * 3]
+            end
+            ret k_sm_intr_methods[i * 3 + 1]
+        end
+    end
+    ret ""
+end
+
+// check_lang_form
+func check_lang_form(s &: Sema, want: str, used: str, sp: co.SrcSpan):
+    if str.Len(want) == 0 || su_ident_eq(used, want):
+        ret
+    end
+    mut msg := "identifier '%s' must be Arabic in an Arabic file"
+    if lang0(s.lang) == 102:
+        msg = "identifier '%s' must be Persian in a Persian file"
+    end
+    serr(s, 1, sp, co.Format1(i18.Tr(msg), co.ArgStr(used)))
+end
+
+// sema_check_intrinsic_type_lang
+func sema_check_intrinsic_type_lang(s &: Sema, used: str, sp: co.SrcSpan):
+    if lang0(s.lang) == 0 || lang0(s.lang) == 101 || str.Len(used) == 0:
+        ret
+    end
+    canon := intrinsic_type_canon(used)
+    want := intrinsic_type_lang_form(canon, s.lang)
+    check_lang_form(s, want, used, sp)
+end
+
+// sema_check_intrinsic_method_lang
+func sema_check_intrinsic_method_lang(
+    s &: Sema, used: str, canon: str, sp: co.SrcSpan
+):
+    if lang0(s.lang) == 0 || lang0(s.lang) == 101 || str.Len(used) == 0 || str.Len(canon) == 0:
+        ret
+    end
+    want := intrinsic_method_lang_form(canon, s.lang)
+    check_lang_form(s, want, used, sp)
+end
+
+// alias_for_lang - aliases is a flattened [lang, name, lang, name, ...]
+// vector (node.aliases); "" = the C NULL.
+func alias_for_lang(aliases: Vector<str>, lang: str): str:
+    mut i := 0
+    until i + 1 < aliases.len():
+        if str.Equals(aliases.get(i)[0], lang):
+            ret aliases.get(i + 1)[0]
+        end
+        i += 2
+    end
+    ret ""
+end
+
+// aliases_have
+func aliases_have(aliases: Vector<str>, lang: str, name: str): bool:
+    mut i := 0
+    until i + 1 < aliases.len():
+        if str.Equals(aliases.get(i)[0], lang) && su_ident_eq(aliases.get(i + 1)[0], name):
+            ret true
+        end
+        i += 2
+    end
+    ret false
+end
+
+// scope_member_canon
+func scope_member_canon(
+    s &: Sema, a &: at.Ast, members: int, name: str, sp: co.SrcSpan
+): str:
+    mut lang := s.lang
+    if str.Len(lang) == 0:
+        lang = i18.Lang()
+    end
+    if str.Len(name) == 0 || members == 0:
+        ret name
+    end
+    if !str.Equals(lang, "en"):
+        msc := scope_at(s, members)
+        repeat msc.symbols.len() with i:
+            m := sym_at(s, msc.symbols.get(i)[0])
+            if m.decl == 0:
+                continue
+            end
+            dn := at.Get(a, m.decl)
+            if aliases_have(dn.aliases, lang, name):
+                ret m.name
+            end
+        end
+    end
+    if lang0(s.lang) != 0 && lang0(s.lang) != 101:
+        direct := scope_lookup_local(s, members, name)
+        if direct != 0:
+            d := sym_at(s, direct)
+            if d.decl != 0:
+                dn2 := at.Get(a, d.decl)
+                if !dn2.synthetic:
+                    check_lang_form(
+                        s, alias_for_lang(dn2.aliases, s.lang), name, sp
+                    )
+                end
+            end
+        end
+    end
+    ret name
+end
+
+// pkg_member_canon - also marks the package binding used.
+func pkg_member_canon(
+    s &: Sema, a &: at.Ast, pk: int, name: str, sp: co.SrcSpan
+): str:
+    mut p := sym_at(s, pk)
+    p.used = true
+    sym_put(s, pk, p)
+    ret scope_member_canon(s, a, p.members, name, sp)
+end
+
+// local_canon
+func local_canon(s &: Sema, a &: at.Ast, name: str, sp: co.SrcSpan): str:
+    ret scope_member_canon(s, a, s.global, name, sp)
+end
+
+// sema_pure_fn - the current function's decl node when it is `pure`.
+func sema_pure_fn(s &: Sema, a &: at.Ast): int:
+    if s.cur_func != 0:
+        sg := sig_at(s, s.cur_func)
+        if sg.decl != 0:
+            dnode := at.Get(a, sg.decl)
+            if dnode.is_pure:
+                ret sg.decl
+            end
+        end
+    end
+    ret 0
+end

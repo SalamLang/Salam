@@ -81,6 +81,22 @@ char *arena_strdup(arena_t *a, const char *s)
     return arena_strndup(a, s, strlen(s));
 }
 
+arena_stats_t arena_stats(const arena_t *a)
+{
+    arena_stats_t st;
+    const arena_block *b;
+    st.bytes_used = 0;
+    st.bytes_reserved = 0;
+    st.blocks = 0;
+    if (!a) return st;
+    for (b = a->head; b; b = b->next) {
+        st.bytes_used += (uint64_t)b->used;
+        st.bytes_reserved += (uint64_t)b->cap + (uint64_t)sizeof(arena_block);
+        st.blocks++;
+    }
+    return st;
+}
+
 void arena_free(arena_t *a)
 {
     if (!a) return;

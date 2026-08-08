@@ -95,7 +95,7 @@ static token_kind_t ll_compound_base(token_kind_t k)
     }
 }
 
-static void ll_assign(ll_t *ll, ast_node_t *n)
+void ll_assign(ll_t *ll, ast_node_t *n)
 {
     ast_node_t *tgt = n->a;
     if (!tgt || (tgt->kind != AST_IDENTIFIER && tgt->kind != AST_MEMBER &&

@@ -166,15 +166,31 @@ static func_sig_t *ll_sig_of(ll_t *ll, ast_node_t *fn, symbol_t *owner)
     return s->overloads.len ? (func_sig_t *)s->overloads.data[0] : NULL;
 }
 
+/* Defined below; needed by main's argc/argv wiring. */
+static func_sig_t *ll_body_sig_for(ll_t *ll, const char *name, symbol_t **owner);
+static void ll_declare_extern(ll_t *ll, const char *name, func_sig_t *sig);
+
 static const char *ll_fn_header(ll_t *ll, ast_node_t *fn, func_sig_t *sig,
                                 const char *ret_lty, const char *fname,
-                                const char *recv_param, bool exported)
+                                const char *recv_param, bool exported, bool is_main)
 {
     sb_t hdr;
     sb_init(&hdr);
     sb_puts(&hdr,
             ll_fmt(ll, "define %s%s @%s(", exported ? "" : "internal ", ret_lty, fname));
     bool first = true;
+    /*
+     * main takes the real C argc/argv. Salam's own `func main:` declares no
+     * parameters, so this emitted `define i32 @main()` and the process
+     * arguments never reached the runtime - args() returned an empty vector
+     * in every LLVM-built program (the C backend has always emitted
+     * `main(int argc, char **argv)` and called salam_set_args, see
+     * codegen_decl.c).
+     */
+    if (is_main) {
+        sb_puts(&hdr, "i32 %argc, ptr %argv");
+        first = false;
+    }
     if (recv_param) {
         sb_puts(&hdr, recv_param);
         first = false;
@@ -228,7 +244,18 @@ static void ll_spill_params(ll_t *ll, ast_node_t *fn, func_sig_t *sig)
 
 void ll_function(ll_t *ll, ast_node_t *fn, symbol_t *owner)
 {
-    if (!owner && fn->is_extern && !fn->a) return;
+    /*
+     * A bodyless `extern func` has no definition to emit - but it does need a
+     * `declare`, and this is the one place every call site funnels through
+     * (ll_call_user -> ll_ensure_fn). Returning silently left the call
+     * referencing an undeclared @name whenever the declaring package was
+     * never touched by the scope walk in ll_emit_externs_in.
+     */
+    if (!owner && fn->is_extern && !fn->a) {
+        func_sig_t *xsig = ll_sig_of(ll, fn, owner);
+        if (xsig) ll_declare_extern(ll, fn->name, xsig);
+        return;
+    }
     func_sig_t *sig = ll_sig_of(ll, fn, owner);
     if (!sig) return;
     bool is_main = !owner && !strcmp(fn->name, ll->entry);
@@ -262,6 +289,25 @@ void ll_function(ll_t *ll, ast_node_t *fn, symbol_t *owner)
     sb_init(&allocs);
     sb_t *saved_b = ll->b, *saved_allocas = ll->allocas;
     int saved_tmp = ll->tmp, saved_lbl = ll->lbl, saved_nloop = ll->nloop;
+    /*
+     * The break/continue target stacks, not just their depth. A function
+     * can be emitted *nested* inside another's body (ll_ensure_fn fires
+     * while lowering a call expression), and the nested emission resets
+     * nloop to 0 and then writes brk[0]/cont[0] for its own loops - which
+     * are the outer function's live entries. The outer `continue` then
+     * branched to a label belonging to the inner function and never
+     * defined in its own, producing IR that fails to parse ("use of
+     * undefined value '%L4_wcond'"). Only the entries actually live for
+     * the outer function need preserving.
+     */
+    const char *saved_brk[64], *saved_cont[64];
+    {
+        int bi = 0;
+        for (; bi < saved_nloop && bi < 64; bi++) {
+            saved_brk[bi] = ll->brk[bi];
+            saved_cont[bi] = ll->cont[bi];
+        }
+    }
     bool saved_main = ll->is_main, saved_byval = ll->self_byval, saved_term = ll->term;
     const char *saved_ret = ll->ret_ts, *saved_sp = ll->cur_sp, *saved_dbg = ll->cur_dbg;
     const char *saved_self = ll->self_ts, *saved_this = ll->this_ref;
@@ -283,14 +329,24 @@ void ll_function(ll_t *ll, ast_node_t *fn, symbol_t *owner)
         ll_debug_subprogram(ll, fn->name, fn->span.begin.line);
         ll->cur_dbg = ll_debug_location(ll, fn->span.begin.line, fn->span.begin.col);
     }
-    const char *header = ll_fn_header(ll, fn, sig, ret_lty, fname, recv_param, exported);
+    const char *header =
+        ll_fn_header(ll, fn, sig, ret_lty, fname, recv_param, exported, is_main);
     if (is_impl) {
         ll_emit_alloca(ll, "%%p.this = alloca %s", ll_ty(ll, recv_ts));
         ll_emit(ll, "store %s %%this, ptr %%p.this", ll_ty(ll, recv_ts));
         ll->this_ref = "%p.this";
     }
     ll_spill_params(ll, fn, sig);
-    if (is_main) ll_emit_global_inits(ll);
+    if (is_main) {
+        /* Hand argc/argv to the runtime before anything can call args(). */
+        symbol_t *sa_owner = NULL;
+        func_sig_t *sa = ll_body_sig_for(ll, "salam_set_args", &sa_owner);
+        if (sa && sa->decl) {
+            ll_ensure_fn(ll, sa->decl, NULL, sa_owner->members);
+            ll_emit(ll, "call void @salam_set_args(i32 %%argc, ptr %%argv)");
+        }
+        ll_emit_global_inits(ll);
+    }
     if (fn->a) ll_block_top(ll, fn->a);
     if (!ll->term) ll_emit_return(ll, NULL);
     sb_puts(ll->g, header);
@@ -305,6 +361,13 @@ void ll_function(ll_t *ll, ast_node_t *fn, symbol_t *owner)
     ll->tmp = saved_tmp;
     ll->lbl = saved_lbl;
     ll->nloop = saved_nloop;
+    {
+        int bi = 0;
+        for (; bi < saved_nloop && bi < 64; bi++) {
+            ll->brk[bi] = saved_brk[bi];
+            ll->cont[bi] = saved_cont[bi];
+        }
+    }
     ll->is_main = saved_main;
     ll->ret_ts = saved_ret;
     ll->self_byval = saved_byval;
@@ -528,6 +591,25 @@ void ll_emit_lambda(ll_t *ll, ast_node_t *n)
     sb_init(&allocs);
     sb_t *saved_b = ll->b, *saved_allocas = ll->allocas;
     int saved_tmp = ll->tmp, saved_lbl = ll->lbl, saved_nloop = ll->nloop;
+    /*
+     * The break/continue target stacks, not just their depth. A function
+     * can be emitted *nested* inside another's body (ll_ensure_fn fires
+     * while lowering a call expression), and the nested emission resets
+     * nloop to 0 and then writes brk[0]/cont[0] for its own loops - which
+     * are the outer function's live entries. The outer `continue` then
+     * branched to a label belonging to the inner function and never
+     * defined in its own, producing IR that fails to parse ("use of
+     * undefined value '%L4_wcond'"). Only the entries actually live for
+     * the outer function need preserving.
+     */
+    const char *saved_brk[64], *saved_cont[64];
+    {
+        int bi = 0;
+        for (; bi < saved_nloop && bi < 64; bi++) {
+            saved_brk[bi] = ll->brk[bi];
+            saved_cont[bi] = ll->cont[bi];
+        }
+    }
     bool saved_main = ll->is_main, saved_term = ll->term;
     const char *saved_ret = ll->ret_ts, *saved_self = ll->self_ts,
                *saved_this = ll->this_ref;
@@ -604,6 +686,13 @@ void ll_emit_lambda(ll_t *ll, ast_node_t *n)
     ll->tmp = saved_tmp;
     ll->lbl = saved_lbl;
     ll->nloop = saved_nloop;
+    {
+        int bi = 0;
+        for (; bi < saved_nloop && bi < 64; bi++) {
+            ll->brk[bi] = saved_brk[bi];
+            ll->cont[bi] = saved_cont[bi];
+        }
+    }
     ll->is_main = saved_main;
     ll->term = saved_term;
     ll->ret_ts = saved_ret;
@@ -621,20 +710,9 @@ void ll_emit_lambda(ll_t *ll, ast_node_t *n)
     ll->match_merge_block = saved_mmerge;
 }
 
-static bool ll_text_is_int(const char *s)
-{
-    if (!s || !*s) return false;
-    size_t i = (s[0] == '-') ? 1 : 0;
-    if (!s[i]) return false;
-    for (; s[i]; i++)
-        if (s[i] < '0' || s[i] > '9') return false;
-    return true;
-}
-
 static const char *ll_const_fpfix(ll_t *ll, const char *lety, const char *v)
 {
-    if ((!strcmp(lety, "double") || !strcmp(lety, "float")) && ll_text_is_int(v))
-        return ll_fmt(ll, "%s.0", v);
+    if (!strcmp(lety, "double") || !strcmp(lety, "float")) return ll_fp_text(ll, v);
     return v;
 }
 
@@ -767,7 +845,33 @@ void ll_emit_globals(ll_t *ll, ast_node_t *program)
         for (; i < program->list.len; i++) {
             ast_node_t *d = (ast_node_t *)program->list.data[i];
             if (d->kind != AST_CONST_DECL && d->kind != AST_VAR_DECL) continue;
-            if (d->is_extern) continue;
+            /* Idempotent: emitting the same global twice would produce a
+             * duplicate definition in the module. This lets the function be
+             * called again for a package whose globals may or may not have
+             * been emitted already, which ll_addr_of relies on. */
+            if (ll_global_find(ll, d->name)) continue;
+            /*
+             * An extern *variable* - POSIX `environ`, which std/os/process
+             * declares in its non-Windows branch. ll_emit_externs_in only
+             * handles SYM_FUNC, and this loop used to skip is_extern
+             * outright, so nothing emitted these at all and every reference
+             * became "address of an unknown identifier 'environ'". Declared
+             * under its real C name, never the @g. prefix: the system linker
+             * is what resolves it.
+             */
+            if (d->is_extern) {
+                const char *ets = d->type_str ? d->type_str : "i32";
+                const char *eref = ll_fmt(ll, "@%s", d->name);
+                lvar_t *ev = (lvar_t *)arena_alloc(ll->a, sizeof *ev);
+                sb_puts(ll->g,
+                        ll_fmt(ll, "%s = external global %s\n", eref, ll_ty(ll, ets)));
+                ev->name = d->name;
+                ev->ptr = eref;
+                ev->ts = ets;
+                vec_push(ll->a, &ll->globals, ev);
+                any = 1;
+                continue;
+            }
             const char *ts = d->type_str ? d->type_str : "i32";
             const char *gref =
                 ll_fmt(ll, "@g.%s", ll_struct_ltype(ll, d->name) + strlen("%struct."));
@@ -811,6 +915,104 @@ static bool ll_extern_seen(ll_t *ll, const char *name)
     return false;
 }
 
+/*
+ * A function of this name that some package declares *with* a body, if any.
+ * A bodyless `extern:` re-declaration is how one package calls another's
+ * runtime entry point - std/collections redeclares `noret func
+ * salam_panic(msg: str)` so its bounds checks can call it, while the real
+ * body lives in std/core. Both are SYM_FUNCs of the same name, and which
+ * one a given emission order happens to reach first decided whether the
+ * module got a definition or only a declaration.
+ */
+static func_sig_t *ll_body_sig_for(ll_t *ll, const char *name, symbol_t **owner)
+{
+    size_t p = 0;
+    for (; p < ll->sem->packages.len; p++) {
+        symbol_t *pk = (symbol_t *)ll->sem->packages.data[p];
+        symbol_t *fs;
+        size_t o = 0;
+        if (!pk || pk->kind != SYM_PACKAGE || !pk->members) continue;
+        fs = scope_lookup_local(pk->members, name);
+        if (!fs || fs->kind != SYM_FUNC) continue;
+        for (; o < fs->overloads.len; o++) {
+            func_sig_t *sg = (func_sig_t *)fs->overloads.data[o];
+            /*
+             * `is_extern` too, not just "has a body": the point of this
+             * lookup is to find the definition that emits the *unmangled*
+             * @name the bodyless declaration would otherwise stand in for,
+             * and only `extern:`-block functions get that name. An ordinary
+             * same-named function is a different symbol entirely - std/net's
+             * `send(method, url, headers, body)` shadowed the libc `send`
+             * every socket write calls, so nothing declared @send and no
+             * server program could be built.
+             */
+            if (sg->decl && sg->decl->a && sg->decl->is_extern) {
+                *owner = pk;
+                return sg;
+            }
+        }
+    }
+    return NULL;
+}
+
+/*
+ * One bodyless `extern func` -> one `declare` line, de-duplicated against
+ * everything already declared or defined.
+ *
+ * Split out of ll_emit_externs_in so ll_function can reach it too: that scope
+ * walk only ever runs over the global scope and over packages ll_touch_pkg
+ * has visited, but a call can reach an extern in a package nothing touched -
+ * std/fs' `fopen`, std/net's `send` - and then the module referenced @fopen
+ * with no declaration anywhere ("use of undefined value '@fopen'", which
+ * every program doing file or socket I/O hit).
+ */
+static void ll_declare_extern(ll_t *ll, const char *name, func_sig_t *sig)
+{
+    if (!sig || !sig->decl) return;
+    if (ll_extern_seen(ll, name)) return;
+    {
+        size_t k = 0;
+        for (; k < ll->emitted.len; k++)
+            if (!strcmp(name, (const char *)ll->emitted.data[k])) return;
+    }
+    /*
+     * Emit the body instead of a declaration whenever one exists, so the
+     * outcome no longer depends on which package is walked first. Without
+     * this, `salam_panic` was declared (from collections) and never defined
+     * (from core) in any program where collections was reached first - every
+     * Vector bounds check then failed to link.
+     */
+    {
+        symbol_t *bowner = NULL;
+        func_sig_t *bsig = ll_body_sig_for(ll, name, &bowner);
+        if (bsig) {
+            ll_ensure_fn(ll, bsig->decl, NULL, bowner->members);
+            return;
+        }
+    }
+    vec_push(ll->a, &ll->extern_names, CONST_CAST(name));
+    sb_t b;
+    sb_init(&b);
+    sb_puts(&b, ll_fmt(ll, "declare %s @%s(",
+                       ll_ty(ll, type_to_string(ll->sem->tc, sig->ret)), name));
+    {
+        size_t j = 0;
+        for (; j < sig->params.len; j++) {
+            if (j) sb_puts(&b, ", ");
+            sb_puts(&b, ll_ty(ll, type_to_string(ll->sem->tc,
+                                                 (type_t *)sig->params.data[j])));
+        }
+    }
+    if (sig->variadic) sb_puts(&b, sig->params.len ? ", ..." : "...");
+    sb_puts(&b, ")");
+    if (sig->decl->is_pure)
+        sb_puts(&b, " nounwind willreturn nofree nosync memory(read)");
+    if (sig->decl->is_noret) sb_puts(&b, " noreturn");
+    sb_puts(&b, "\n");
+    sb_puts(ll->g, sb_cstr(&b));
+    sb_free(&b);
+}
+
 static void ll_emit_externs_in(ll_t *ll, scope_t *g)
 {
     {
@@ -820,39 +1022,7 @@ static void ll_emit_externs_in(ll_t *ll, scope_t *g)
             if (s->kind != SYM_FUNC || s->overloads.len == 0) continue;
             func_sig_t *sig = (func_sig_t *)s->overloads.data[0];
             if (!sig->decl || !sig->decl->is_extern || sig->decl->a) continue;
-            if (ll_extern_seen(ll, s->name)) continue;
-            {
-                bool already_defined = false;
-                size_t k = 0;
-                for (; k < ll->emitted.len; k++)
-                    if (!strcmp(s->name, (const char *)ll->emitted.data[k])) {
-                        already_defined = true;
-                        break;
-                    }
-                if (already_defined) continue;
-            }
-            vec_push(ll->a, &ll->extern_names, CONST_CAST(s->name));
-            sb_t b;
-            sb_init(&b);
-            sb_puts(&b,
-                    ll_fmt(ll, "declare %s @%s(",
-                           ll_ty(ll, type_to_string(ll->sem->tc, sig->ret)), s->name));
-            {
-                size_t j = 0;
-                for (; j < sig->params.len; j++) {
-                    if (j) sb_puts(&b, ", ");
-                    sb_puts(&b, ll_ty(ll, type_to_string(ll->sem->tc,
-                                                         (type_t *)sig->params.data[j])));
-                }
-            }
-            if (sig->variadic) sb_puts(&b, sig->params.len ? ", ..." : "...");
-            sb_puts(&b, ")");
-            if (sig->decl->is_pure)
-                sb_puts(&b, " nounwind willreturn nofree nosync memory(read)");
-            if (sig->decl->is_noret) sb_puts(&b, " noreturn");
-            sb_puts(&b, "\n");
-            sb_puts(ll->g, sb_cstr(&b));
-            sb_free(&b);
+            ll_declare_extern(ll, s->name, sig);
         }
     }
 }

@@ -27,11 +27,12 @@ endif
 PREFIX   ?= /usr/local
 DESTDIR  ?=
 BINDIR   := $(PREFIX)/bin
+LIBDIR   := $(PREFIX)/lib
 DATADIR  := $(PREFIX)/share/salam
 
 SRCDIRS := core source condcomp logger xml diag i18n langpack        \
            token lexer ast parser semantic codegen jsgen llvm interp \
-           layout fmt cli driver minify
+           layout fmt doc cli driver minify
 
 SRCS     := $(filter-out src/salam.c, $(wildcard $(addsuffix /*.c, $(addprefix src/,$(SRCDIRS)))))
 MAIN_SRC := src/salam.c
@@ -69,11 +70,31 @@ else
   LDLIBS ?= -lm
 endif
 
-WITH_LLVM       ?= 0
-WITH_LLD        ?= 0
 LLVM_CONFIG     ?= llvm-config
-LLVM_LINK_STATIC ?= 0
 CXX             ?= c++
+
+#
+# LLVM/LLD are the default backend, so a plain `make` builds them in
+# whenever this host can - a salam without them falls back to the C backend
+# and needs a compiler installed on the *end user's* machine, which is
+# exactly what shipping LLVM in-process is meant to avoid.
+#
+# "Can" means llvm-config resolves AND the static lld archives are present
+# (llvm-config knows nothing about lld, so it is probed separately). A host
+# missing either still builds, just without the LLVM path - so this stays a
+# capability upgrade rather than a new hard build dependency. Set
+# WITH_LLVM=0 to opt out explicitly.
+#
+LLVM_CONFIG_OK := $(shell $(LLVM_CONFIG) --version >/dev/null 2>&1 && echo 1)
+ifeq ($(LLVM_CONFIG_OK),1)
+  LLVM_LIBDIR_PROBE := $(shell $(LLVM_CONFIG) --libdir 2>/dev/null)
+  LLD_STATIC_OK := $(if $(wildcard $(LLVM_LIBDIR_PROBE)/liblldCommon.a),1)
+endif
+
+WITH_LLVM       ?= $(if $(LLVM_CONFIG_OK),1,0)
+WITH_LLD        ?= $(if $(LLD_STATIC_OK),1,0)
+LLVM_LINK_STATIC ?= $(if $(LLVM_CONFIG_OK),1,0)
+
 
 LLD_LIBS  :=
 LLD_SRCS  :=
@@ -150,8 +171,31 @@ ifeq ($(WITH_LLVM),1)
           | tr ' ' '\n' | grep -viE 'zstd' | tr '\n' ' ') $(MACOS_ZSTD_A)
     endif
   endif
-  LDLIBS   += $(LLD_LIBS) \
-              $(shell $(LLVM_CONFIG) $(LLVM_STATIC_FLAG) --libs $(LLVM_COMPONENTS)) \
+  # `llvm-config --libs all` can advertise Polly on an installation that
+  # does not ship libPolly.a, because distributions split it into a separate
+  # libpolly-N-dev package. Drop the -l for an archive that is not there,
+  # probing each of the pair separately since they are advertised together
+  # but not guaranteed to be packaged together.
+  #
+  # Note this only rescues an install whose LLVM does not *reference* Polly.
+  # Where libLLVMLTO.a was built against it - Debian/Ubuntu's llvm-N-dev,
+  # among others - there is no winning move here: keeping -lPolly gives
+  # "cannot find -lPolly" and dropping it gives "undefined reference to
+  # getPollyPluginInfo()". That install is simply incomplete, so say so
+  # rather than letting the linker produce a mystifying error.
+  LLVM_LIBDIR_L := $(shell $(LLVM_CONFIG) --libdir 2>/dev/null)
+  LLVM_ALL_LIBS := $(shell $(LLVM_CONFIG) $(LLVM_STATIC_FLAG) --libs $(LLVM_COMPONENTS))
+  LLVM_DROP_POLLY := $(strip \
+      $(if $(wildcard $(LLVM_LIBDIR_L)/libPolly.a),,-lPolly) \
+      $(if $(wildcard $(LLVM_LIBDIR_L)/libPollyISL.a),,-lPollyISL))
+  ifneq (,$(filter $(LLVM_DROP_POLLY),$(LLVM_ALL_LIBS)))
+    $(warning llvm-config advertises Polly but $(LLVM_LIBDIR_L) has no libPolly.a.)
+    $(warning If the link below fails on 'getPollyPluginInfo', this LLVM was)
+    $(warning built against Polly and the install is incomplete - fix it with)
+    $(warning "apt-get install libpolly-$(shell $(LLVM_CONFIG) --version | cut -d. -f1)-dev" or the equivalent.)
+  endif
+  LLVM_COMPONENT_LIBS := $(filter-out $(LLVM_DROP_POLLY),$(LLVM_ALL_LIBS))
+  LDLIBS   += $(LLD_LIBS) $(LLVM_COMPONENT_LIBS) \
               $(LLVM_SYSTEM_LIBS) $(LLVM_CXXLIB)
   ifeq ($(IS_WINDOWS),1)
     ifeq ($(WITH_LLD),1)
@@ -169,6 +213,17 @@ endif
 LLVM_CXXFLAGS := $(if $(filter 1,$(WITH_LLD)),$(shell $(LLVM_CONFIG) --cxxflags))
 
 BUILD_DIR ?= build/$(BUILD)
+
+#
+# CPPFLAGS is assembled from the WITH_*/SALAM_EMBED_* switches above, but
+# the compile rules depend only on sources - so flipping a switch (adding an
+# embedded sysroot, say) silently reuses objects compiled without it, and
+# the resulting salam reports "no mingw sysroot" despite having one baked
+# in. Recording the flag set in a file that every object depends on makes
+# such a change rebuild exactly what it must, instead of needing a clean.
+#
+CONFIG_STAMP := $(BUILD_DIR)/.config-stamp
+
 OBJS      := $(SRCS:src/%.c=$(BUILD_DIR)/%.o)
 CXXOBJS   := $(LLD_SRCS:src/%.cc=$(BUILD_DIR)/%.o)
 MAIN_OBJ  := $(MAIN_SRC:src/%.c=$(BUILD_DIR)/%.o)
@@ -278,15 +333,78 @@ $(BUILD_DIR)/embed/mingw.o:
 	printf '.section .rodata\n.global salam_embed_mingw\nsalam_embed_mingw:\n.incbin "%s"\n.global salam_embed_mingw_end\nsalam_embed_mingw_end:\n' "$(BUILD_DIR)/embed/mingw.tar" > $(BUILD_DIR)/embed/mingw.S
 	$(CC) -c $(BUILD_DIR)/embed/mingw.S -o $@
 
-$(BUILD_DIR)/%.o: src/%.c
+$(CONFIG_STAMP): FORCE
+	@mkdir -p $(dir $@)
+	@printf '%s\n' "$(CPPFLAGS)" > $@.new
+	@cmp -s $@.new $@ || mv -f $@.new $@
+	@rm -f $@.new
+
+.PHONY: FORCE
+FORCE:
+
+$(BUILD_DIR)/%.o: src/%.c $(CONFIG_STAMP)
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/%.o: src/%.cc
+$(BUILD_DIR)/%.o: src/%.cc $(CONFIG_STAMP)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CPPFLAGS) $(LLVM_CXXFLAGS) $(CXXFLAGS) -c $< -o $@
 
 -include $(DEPS)
+
+#
+# One merged static archive holding everything std/llvm needs: every LLVM
+# component `llvm-config --libs all` resolves, the six lld archives, and
+# salam's own C shims over them (llvm_native.o, lld_link.o).
+#
+# This exists for the *self-hosted* compiler. A Salam source file can only
+# say `link static "NAME"`; it cannot shell out to `llvm-config --libs` the
+# way this Makefile does, and LLVM ships ~200 version-dependent component
+# archives rather than one libLLVM.a. std/llvm/llvm.salam records that as
+# its blocking TODO(build-pipeline). Merging them here turns the whole
+# graph into a single name, so std/llvm can link with:
+#
+#     link static "salam_llvm"
+#
+# plus the handful of system libs below, which are not LLVM's to merge.
+# Build with: make libsalam-llvm
+#
+LLVM_MERGE_LIBS = $(shell $(LLVM_CONFIG) --link-static --libs all 2>/dev/null) $(LLD_LIBS)
+
+# Salam's own C shims that std/llvm binds to. llvm_native.o and lld_link.o
+# carry salam_llvm_native/salam_lld_link; orc_call.o carries
+# salam_orc_call_main plus the salam_llvm_init_all_* wrappers around LLVM-C's
+# header-inline target initializers (see orc_call.h). Omitting orc_call.o
+# left both undefined at link time.
+LLVM_MERGE_SHIMS = $(BUILD_DIR)/llvm/llvm_native.o $(BUILD_DIR)/llvm/orc_call.o \
+                   $(CXXOBJS) $(WIN_LLD_SHIM_OBJS)
+LLVM_MERGE_DIR  = $(BUILD_DIR)/merge
+SALAM_LLVM_A    = $(OUTDIR)/libsalam_llvm.a
+
+.PHONY: libsalam-llvm
+libsalam-llvm: $(LLVM_MERGE_SHIMS)
+	@test "$(WITH_LLVM)$(WITH_LLD)" = "11" \
+	  || { echo "libsalam-llvm needs WITH_LLVM=1 WITH_LLD=1 (llvm-config: $(LLVM_CONFIG))"; exit 1; }
+	@rm -rf $(LLVM_MERGE_DIR); mkdir -p $(LLVM_MERGE_DIR)
+	@LIBDIR=$$($(LLVM_CONFIG) --libdir); \
+	 : > $(LLVM_MERGE_DIR)/mri; \
+	 echo "create $(SALAM_LLVM_A)" >> $(LLVM_MERGE_DIR)/mri; \
+	 for o in $(LLVM_MERGE_SHIMS); do \
+	   echo "addmod $$o" >> $(LLVM_MERGE_DIR)/mri; \
+	 done; \
+	 n=0; \
+	 for l in $(LLVM_MERGE_LIBS); do \
+	   case "$$l" in -l*) a="$$LIBDIR/lib$${l#-l}.a";; *) continue;; esac; \
+	   if [ -f "$$a" ]; then echo "addlib $$a" >> $(LLVM_MERGE_DIR)/mri; n=$$((n+1)); fi; \
+	 done; \
+	 echo "save"  >> $(LLVM_MERGE_DIR)/mri; \
+	 echo "end"   >> $(LLVM_MERGE_DIR)/mri; \
+	 echo "merging $$n LLVM/lld archives + salam shims -> $(SALAM_LLVM_A)"; \
+	 rm -f $(SALAM_LLVM_A); \
+	 ar -M < $(LLVM_MERGE_DIR)/mri
+	@echo "Built $(SALAM_LLVM_A)"
+	@echo "  std/llvm then links with: link static \"salam_llvm\""
+	@echo "  plus system libs: $$($(LLVM_CONFIG) --link-static --system-libs 2>/dev/null) -lstdc++"
 
 test: $(OUTBIN)
 	SALAM=$(OUTBIN) sh tools/bash/run-tests.sh
@@ -300,30 +418,73 @@ MINGW_ARCH ?= x86_64
 MUSL_SR    := $(STAGE_DIR)/$(MUSL_ARCH)-linux-musl
 MINGW_SR   := $(STAGE_DIR)/$(MINGW_ARCH)-w64-mingw32
 
+#
+# Where a mingw sysroot lives differs by build host: a Linux cross-build has
+# it under /usr/<triple>, while an MSYS2 host keeps the same files directly
+# in /mingw64/lib. Both are searched so `make stage-sysroots` works natively
+# on Windows instead of being Linux-only.
+#
+MINGW_LIBDIRS := /usr/$(MINGW_ARCH)-w64-mingw32/lib \
+                 /mingw64/lib /clang64/lib /ucrt64/lib \
+                 /c/msys64/mingw64/lib
+MINGW_GCCDIRS := $(wildcard /usr/lib/gcc/$(MINGW_ARCH)-w64-mingw32/*win32) \
+                 $(wildcard /usr/lib/gcc/$(MINGW_ARCH)-w64-mingw32/*) \
+                 $(wildcard /mingw64/lib/gcc/$(MINGW_ARCH)-w64-mingw32/*) \
+                 $(wildcard /c/msys64/mingw64/lib/gcc/$(MINGW_ARCH)-w64-mingw32/*)
+
+# Import libs beyond the bare CRT. These are what `link dynamic "ws2_32"`
+# and friends resolve against, so a sysroot without them links hello-world
+# but not anything using sockets, crypto or COM. Missing ones are skipped,
+# not fatal - the set differs between mingw-w64 packagings.
+MINGW_EXTRA_LIBS := libws2_32.a libgdi32.a libole32.a liboleaut32.a libuuid.a \
+                    libcomdlg32.a libwinspool.a libpsapi.a libiphlpapi.a \
+                    libcrypt32.a libbcrypt.a libsecur32.a libwinmm.a \
+                    libversion.a libnetapi32.a libuserenv.a libdbghelp.a
+
 stage-sysroots:
 	@echo "Staging sysroots into $(STAGE_DIR) ..."
 	@mkdir -p "$(MUSL_SR)" "$(MINGW_SR)/lib"
-	@cp /usr/lib/$(MUSL_ARCH)-linux-musl/crt1.o /usr/lib/$(MUSL_ARCH)-linux-musl/crti.o \
-	    /usr/lib/$(MUSL_ARCH)-linux-musl/crtn.o /usr/lib/$(MUSL_ARCH)-linux-musl/libc.a \
-	    "$(MUSL_SR)/" || { echo "  ! musl not found - 'apt install musl-dev'"; exit 1; }
-	@cp $$(ls /usr/lib/llvm-*/lib/clang/*/lib/linux/libclang_rt.builtins-$(MUSL_ARCH).a 2>/dev/null | head -1) \
-	    "$(MUSL_SR)/" 2>/dev/null || echo "  (compiler-rt builtins not bundled; optional)"
-	@for x in crt2.o dllcrt2.o libmingw32.a libmingwex.a libmoldname.a libmsvcrt.a \
-	          libadvapi32.a libshell32.a libuser32.a libkernel32.a; do \
-	    cp /usr/$(MINGW_ARCH)-w64-mingw32/lib/$$x "$(MINGW_SR)/lib/" 2>/dev/null \
-	      || { echo "  ! mingw not found - 'apt install mingw-w64'"; exit 1; }; \
-	  done
-	@G=$$(ls -d /usr/lib/gcc/$(MINGW_ARCH)-w64-mingw32/*win32 2>/dev/null | head -1); \
-	  test -n "$$G" && cp "$$G/crtbegin.o" "$$G/crtend.o" "$$G/libgcc.a" "$$G/libgcc_eh.a" \
-	     "$(MINGW_SR)/lib/" || { echo "  ! gcc-mingw runtime not found"; exit 1; }
-	@echo "Staged:"
-	@echo "  musl  -> $(MUSL_SR)"
-	@echo "  mingw -> $(MINGW_SR)"
+	@if [ -f /usr/lib/$(MUSL_ARCH)-linux-musl/crt1.o ]; then \
+	   cp /usr/lib/$(MUSL_ARCH)-linux-musl/crt1.o /usr/lib/$(MUSL_ARCH)-linux-musl/crti.o \
+	      /usr/lib/$(MUSL_ARCH)-linux-musl/crtn.o /usr/lib/$(MUSL_ARCH)-linux-musl/libc.a \
+	      "$(MUSL_SR)/"; \
+	   cp $$(ls /usr/lib/llvm-*/lib/clang/*/lib/linux/libclang_rt.builtins-$(MUSL_ARCH).a 2>/dev/null | head -1) \
+	      "$(MUSL_SR)/" 2>/dev/null || echo "  (compiler-rt builtins not bundled; optional)"; \
+	   echo "  musl  -> $(MUSL_SR)"; \
+	 else \
+	   echo "  (musl not found - skipped; 'apt install musl-dev' to cross-compile Linux)"; \
+	   rmdir "$(MUSL_SR)" 2>/dev/null || true; \
+	 fi
+	@SRC=""; for d in $(MINGW_LIBDIRS); do \
+	   if [ -f "$$d/crt2.o" ]; then SRC="$$d"; break; fi; \
+	 done; \
+	 if [ -z "$$SRC" ]; then \
+	   echo "  (mingw not found - skipped; 'apt install mingw-w64', or MSYS2 mingw-w64-x86_64-gcc)"; \
+	   rm -rf "$(MINGW_SR)"; \
+	 else \
+	   for x in crt2.o dllcrt2.o libmingw32.a libmingwex.a libmoldname.a libmsvcrt.a \
+	            libadvapi32.a libshell32.a libuser32.a libkernel32.a; do \
+	     cp "$$SRC/$$x" "$(MINGW_SR)/lib/" || { echo "  ! incomplete mingw sysroot in $$SRC ($$x)"; exit 1; }; \
+	   done; \
+	   for x in $(MINGW_EXTRA_LIBS); do cp "$$SRC/$$x" "$(MINGW_SR)/lib/" 2>/dev/null || true; done; \
+	   G=""; for g in $(MINGW_GCCDIRS); do if [ -f "$$g/crtbegin.o" ]; then G="$$g"; break; fi; done; \
+	   test -n "$$G" || { echo "  ! gcc-mingw runtime (crtbegin.o/libgcc.a) not found"; exit 1; }; \
+	   cp "$$G/crtbegin.o" "$$G/crtend.o" "$$G/libgcc.a" "$$G/libgcc_eh.a" "$(MINGW_SR)/lib/"; \
+	   echo "  mingw -> $(MINGW_SR) (from $$SRC)"; \
+	 fi
 
+# Only pass an embed directory that stage-sysroots actually produced -
+# naming a missing one makes the embed rule fail the whole build, which
+# would turn "this host cannot cross-compile to Linux" into "this host
+# cannot build salam at all". Tested in the recipe, not with $(wildcard),
+# since the directories do not exist yet when this Makefile is parsed.
 self-contained: stage-sysroots
-	$(MAKE) WITH_LLVM=1 WITH_LLD=1 LLVM_LINK_STATIC=1 \
-	        SALAM_EMBED_MUSL_DIR="$(MUSL_SR)" SALAM_EMBED_MINGW_DIR="$(MINGW_SR)" \
-	        LLVM_CONFIG="$(LLVM_CONFIG)" CXX="$(CXX)" CC="$(CC)"
+	@EMB=""; \
+	 test -f "$(MUSL_SR)/crt1.o"     && EMB="$$EMB SALAM_EMBED_MUSL_DIR=$(MUSL_SR)"; \
+	 test -f "$(MINGW_SR)/lib/crt2.o" && EMB="$$EMB SALAM_EMBED_MINGW_DIR=$(MINGW_SR)"; \
+	 echo "  embedding:$${EMB:- (none - host-only build)}"; \
+	 $(MAKE) WITH_LLVM=1 WITH_LLD=1 LLVM_LINK_STATIC=1 $$EMB \
+	         LLVM_CONFIG="$(LLVM_CONFIG)" CXX="$(CXX)" CC="$(CC)"
 	@echo "Built self-contained salam -> $(OUTBIN)"
 	@echo "  cross-compile with e.g.:"
 	@echo "    $(OUTBIN) build app.salam --target=x86_64-linux-musl      -o app"
@@ -341,11 +502,21 @@ install: all
 	rm -rf $(DESTDIR)$(DATADIR)/std
 	mkdir -p $(DESTDIR)$(DATADIR)/std
 	cp -R std/. $(DESTDIR)$(DATADIR)/std/
+	@# std/llvm says `link static "salam_llvm"`, which the linker resolves
+	@# by name off its search path - so the merged archive has to land in
+	@# libdir for `import llvm` to work from an installed salam. Optional:
+	@# only built by `make libsalam-llvm`, and nothing else needs it.
+	@if [ -f "$(SALAM_LLVM_A)" ]; then \
+	   echo "Installing libsalam_llvm.a -> $(DESTDIR)$(LIBDIR)"; \
+	   mkdir -p $(DESTDIR)$(LIBDIR); \
+	   cp -f "$(SALAM_LLVM_A)" $(DESTDIR)$(LIBDIR)/libsalam_llvm.a; \
+	 fi
 	@echo "Done. 'salam' resolves std/ from $(DATADIR)/std automatically."
 
 uninstall:
 	rm -f  $(DESTDIR)$(BINDIR)/$(TARGET)
+	rm -f  $(DESTDIR)$(LIBDIR)/libsalam_llvm.a
 	rm -rf $(DESTDIR)$(DATADIR)
 
 clean:
-	rm -rf build $(OUTBIN) $(OUTBIN).exe $(TARGET) $(TARGET).exe
+	rm -rf build $(OUTBIN) $(OUTBIN).exe $(TARGET) $(TARGET).exe $(SALAM_LLVM_A)

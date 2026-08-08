@@ -30,6 +30,7 @@ Welcome to Salam! We're glad you're interested in contributing to our open-sourc
     - [Useful hook commands](#useful-hook-commands)
     - [Hook priority in this repository](#hook-priority-in-this-repository)
 - [⚙️ Continuous Integration](#-continuous-integration)
+  - [🧪 Memory leak checks](#-memory-leak-checks)
 - [💬 Feedback and Support](#-feedback-and-support)
 
 <!-- END doctoc -->
@@ -448,6 +449,7 @@ Every pull request triggers a suite of automated checks. Understanding what runs
 | **Compiler - Build & Test**       | Builds the compiler inside an Alpine + LLVM Docker image and runs the test suite.                                                                           |
 | **Compiler - Clone & Build**      | Verifies that a fresh clone can build on Windows, macOS, and Linux.                                                                                         |
 | **Compiler - Build & Release**    | Compiles release binaries for the supported distribution targets.                                                                                           |
+| **Memory Leaks**                  | Runs the whole test corpus through AddressSanitizer/LeakSanitizer builds of both compilers. See [Memory leak checks](#-memory-leak-checks) below.           |
 | **Editor - Build Playground**     | Builds the WebAssembly playground bundle on pull requests to catch editor or compiler integration regressions before merge.                                 |
 | **Books - Build & Validate PDFs** | Builds the language books and verifies the generated PDFs.                                                                                                  |
 | **Prek Standard Hooks**           | Runs `prek run --all-files` on Ubuntu, macOS, and Windows to verify formatting, spelling, linting, and security checks defined in `prek.toml`.              |
@@ -465,6 +467,31 @@ All checks must pass before a pull request can be merged. If a check fails:
 If you are unsure why a check failed, leave a comment on the PR and a maintainer will help you.
 
 We are currently triaging issues with the **Super-Linter** workflow and the team will be fixing each individual linter check mostly via separate pull requests. Please do not try to fix all or multiple Super-Linter checks in the same pull request. If you would like to fix a basic check please submit a small self contained and focused pull request. We like to combine and match local prek hooks with the Super-Linter so always research prek, hooks and the Super-Linter before submitting an issue or pull request.
+
+### 🧪 Memory leak checks
+
+The **Memory Leaks** workflow runs the entire test corpus through AddressSanitizer/LeakSanitizer builds of both compilers. The two compilers are held to different bars, on purpose.
+
+The reference compiler in `c/` allocates nearly everything from an arena it frees on the way out, so LeakSanitizer currently sees **zero** leaks across the whole corpus. That is a property worth keeping, so it is a hard gate:
+
+```sh
+sh c/tools/bash/leakcheck.sh --build          # build an ASan salam, then run everything
+sh c/tools/bash/leakcheck.sh --build exec     # one section, while iterating
+```
+
+That runs `run-tests.sh` plus `leakcheck-sweep.sh`, which covers the subcommands the corpus never reaches (`version`, `help`, `new`, `run`, `obj`, `doc`, both REPLs, and the argument error paths). Any leaking invocation fails the run and the report says which allocation site is responsible. Reports are also uploaded as a CI artifact.
+
+The self-hosted compiler in `compiler/` is written in Salam, which is manually memory-managed and has no arena behind its string temporaries, so zero is not reachable without changing how the compiler allocates. It is a ratchet instead, measured against `compiler/tools/selfhost-leak-budget.txt`:
+
+```sh
+make -C c                                     # a normal salam to bootstrap with
+./salam build compiler/main.salam --output=salam-selfhost-asan --cc=gcc --asan
+sh compiler/tools/bash/leakcheck-selfhost.sh ./salam-selfhost-asan
+```
+
+The counts are exactly reproducible, so the check fails on a regression and tells you to lower the number when you improve one. Lower it in the same pull request that earned it. To find out _where_ a leak came from, rebuild with `--asan -g` as well: the stacks then name the `.salam` file and line that allocated.
+
+Add a line to `c/tools/lsan.supp` only when an allocation genuinely is not the compiler's to free, and say why in the file. A suppression hides a finding forever.
 
 ## 💬 Feedback and Support
 

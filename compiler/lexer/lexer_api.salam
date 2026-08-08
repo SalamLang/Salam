@@ -1,0 +1,181 @@
+package lexer
+
+import src "../source.salam"
+import tok "../token.salam"
+import lg "../logger.salam"
+import lp "../langpack.salam"
+import i18n "../i18n.salam"
+
+// ---------------------------------------------------------------------------
+// Public API (E088: pub section last)
+// ---------------------------------------------------------------------------
+
+// ===== lexer.c =====
+// lexer_run
+pub func Run(
+    lgr: lg.Logger, pack: int, sf: src.SourceFile, out &: tok.TokenStream
+): bool:
+    ret RunEx(lgr, pack, sf, false, out)
+end
+
+// lexer_run_ex - fills `out` (made with tok.StreamNew) and returns
+// !had_error, exactly like the C bool.
+pub func RunEx(
+    lgr: lg.Logger, pack: int, sf: src.SourceFile, keep_comments: bool, out &: tok.TokenStream
+): bool:
+    // lx_init
+    mut L := Lx {}
+    L.s = sf.text
+    L.n = sf.len
+    L.file = sf.path
+    L.last = tok.TK_EOF
+    L.layout_sub = LX_SUB_NAME
+    L.keep_comments = keep_comments
+    L.lgr = lgr
+    L.pack = pack
+    lg.Log(
+        lgr, lg.PH_LEXER, lg.LOG_DEBUG, "lexing " + sf.path + " (" + sf.len + " bytes, lang=" + lp.Code(pack) + ")"
+    )
+    until true:
+        if L.layout_mode:
+            if at_end(L):
+                break
+            end
+            layout_step(L)
+            continue
+        end
+        skip_trivia(L)
+        if at_end(L):
+            break
+        end
+        scan_one(L)
+    end
+    if L.layout_mode:
+        lg.Log(lgr, lg.PH_LEXER, lg.LOG_WARN, "unclosed layout block at end of file")
+    end
+    newline_terminator(L)
+    emit_eof(L)
+    mut suffix := ""
+    if L.had_error:
+        suffix = i18n.Tr(" (with errors)")
+    end
+    lg.Log(
+        lgr, lg.PH_LEXER, lg.LOG_DEBUG, "lexing complete: " + L.toks.len() + " tokens" + suffix
+    )
+    out.file = sf.path
+    out.toks = L.toks
+    ret !L.had_error
+end
+
+// ===== lexer_detect.c =====
+// langpack_marker_code - "" where the C returns NULL. Scans the first 8
+// lines for a "// lang: …" / "// زبان: …" / "// لغة: …" marker comment.
+pub func MarkerCode(text: str, length: int): str:
+    mut i := 0
+    mut line := 0
+    until i < length && line < 8:
+        mut ls := i
+        until ls < length && (byte_at(text, ls) == 32 || byte_at(text, ls) == 9):
+            ls += 1
+        end
+        mut le := ls
+        until le < length && byte_at(text, le) != 10:
+            le += 1
+        end
+        if ls + 1 < length && byte_at(text, ls) == 47 && byte_at(text, ls + 1) == 47:
+            mut p := ls + 2
+            until p < le:
+                mut fa_tagged := false
+                mut ar_tagged := false
+                mut tlen := det_match_bytes(text, p, le, k_lx_fa_tag, 8)
+                if tlen != 0:
+                    fa_tagged = true
+                end
+                if tlen == 0:
+                    tlen = det_match_bytes(text, p, le, k_lx_ar_tag, 6)
+                    if tlen != 0:
+                        ar_tagged = true
+                    end
+                end
+                if tlen == 0:
+                    tlen = det_match_ci(text, p, le, "language", 8)
+                end
+                if tlen == 0:
+                    tlen = det_match_ci(text, p, le, "lang", 4)
+                end
+                if tlen == 0:
+                    p += 1
+                    continue
+                end
+                mut q := p + tlen
+                until q < le && (byte_at(text, q) == 32 || byte_at(text, q) == 9):
+                    q += 1
+                end
+                if q >= le || byte_at(text, q) != 58: // ':'
+                    p += 1
+                    continue
+                end
+                q += 1
+                until q < le && (byte_at(text, q) == 32 || byte_at(text, q) == 9):
+                    q += 1
+                end
+                if fa_tagged || ar_tagged:
+                    if det_match_bytes(text, q, le, k_lx_ar_val, 14) != 0:
+                        ret "ar"
+                    end
+                    if det_match_bytes(text, q, le, k_lx_fa_val, 10) != 0:
+                        ret "fa"
+                    end
+                    if det_match_bytes(text, q, le, k_lx_en_val, 14) != 0:
+                        ret "en"
+                    end
+                    ret ""
+                end
+                if det_match_ci(text, q, le, "english", 7) != 0:
+                    ret "en"
+                end
+                cs := q
+                until q < le && (
+                    (byte_at(text, q) >= 97 && byte_at(text, q) <= 122) || (byte_at(text, q) >= 65 && byte_at(text, q) <= 90)
+                ):
+                    q += 1
+                end
+                if q - cs == 2 && (byte_at(text, cs) == 101 || byte_at(text, cs) == 69) && (byte_at(text, cs + 1) == 110 || byte_at(text, cs + 1) == 78):
+                    ret "en"
+                end
+                ret ""
+            end
+        end
+        i = le < length ? le + 1 : le
+        line += 1
+    end
+    ret ""
+end
+
+// langpack_detect - marker comment first, then "which pack sees the most
+// keywords" over en/fa/ar with a silenced logger.
+pub func Detect(sf: src.SourceFile, fallback: int): int:
+    marked := MarkerCode(sf.text, sf.len)
+    if marked.len() > 0:
+        p := lp.Load(marked)
+        if p != lp.LP_NONE:
+            ret p
+        end
+    end
+    quiet := lg.New(lg.LOG_OFF, false)
+    mut best := fallback
+    mut best_kw := 0
+    codes := ["en", "fa", "ar"] as str[3]
+    each code in codes:
+        p := lp.Load(code)
+        if p == lp.LP_NONE:
+            continue
+        end
+        kw := det_count_keywords(quiet, p, sf)
+        if kw > best_kw:
+            best_kw = kw
+            best = p
+        end
+    end
+    ret best
+end

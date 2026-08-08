@@ -1,0 +1,157 @@
+package lexer
+
+import tok "../token.salam"
+import lg "../logger.salam"
+
+// ===== lexer_operator.c =====
+// lx_scan_unicode_op - fullwidth +/-, minus sign, Arabic question mark
+func scan_unicode_op(L &: Lx): bool:
+    rem := L.n - L.pos
+    s0 := peek(L)
+    s1 := peek2(L, 1)
+    s2 := peek2(L, 2)
+    mut k := 0
+    mut len := 0
+    if rem >= 3 && s0 == 239 && s1 == 188 && (s2 == 139 || s2 == 141):
+        k = s2 == 139 ? tok.TK_PLUS : tok.TK_MINUS
+        len = 3
+    else rem >= 3 && s0 == 226 && s1 == 136 && s2 == 146:
+        k = tok.TK_MINUS
+        len = 3
+    else rem >= 2 && s0 == 216 && s1 == 159:
+        k = tok.TK_QUESTION
+        len = 2
+    else:
+        ret false
+    end
+    b := lx_pos(L)
+    start := L.pos
+    repeat len:
+        adv(L)
+    end
+    emit(L, k, b, lex_slice(L, start))
+    ret true
+end
+
+// lx_scan_op
+func scan_op(L &: Lx):
+    prev := L.last
+    start := L.pos
+    b := lx_pos(L)
+    c := advc(L)
+    mut k := tok.TK_EOF
+    if c == 40: // '('
+        L.group_depth += 1
+        k = tok.TK_LPAREN
+    else c == 41: // ')'
+        if L.group_depth > 0:
+            L.group_depth -= 1
+        end
+        k = tok.TK_RPAREN
+    else c == 91: // '['
+        k = tok.TK_LBRACKET
+    else c == 93: // ']'
+        k = tok.TK_RBRACKET
+    else c == 123: // '{'
+        k = tok.TK_LBRACE
+    else c == 125: // '}'
+        k = tok.TK_RBRACE
+    else c == 44: // ','
+        k = tok.TK_COMMA
+    else c == 58: // ':'
+        k = match_ch(L, 61) ? tok.TK_COLON_ASSIGN : tok.TK_COLON
+    else c == 63: // '?'
+        k = tok.TK_QUESTION
+    else c == 46: // '.'
+        if peek(L) == 46 && peek2(L, 1) == 46:
+            adv(L)
+            adv(L)
+            k = tok.TK_ELLIPSIS
+        else:
+            k = tok.TK_DOT
+        end
+    else c == 43: // '+'
+        if match_ch(L, 43):
+            k = tok.TK_PLUS_PLUS
+        else:
+            k = match_ch(L, 61) ? tok.TK_PLUS_EQ : tok.TK_PLUS
+        end
+    else c == 45: // '-'
+        if match_ch(L, 45):
+            k = tok.TK_MINUS_MINUS
+        else:
+            k = match_ch(L, 61) ? tok.TK_MINUS_EQ : tok.TK_MINUS
+        end
+    else c == 42: // '*'
+        if match_ch(L, 42):
+            k = match_ch(L, 61) ? tok.TK_POWER_EQ : tok.TK_POWER
+        else match_ch(L, 61):
+            k = tok.TK_STAR_EQ
+        else:
+            k = tok.TK_STAR
+        end
+    else c == 47: // '/'
+        k = match_ch(L, 61) ? tok.TK_SLASH_EQ : tok.TK_SLASH
+    else c == 37: // '%'
+        k = match_ch(L, 61) ? tok.TK_PERCENT_EQ : tok.TK_PERCENT
+    else c == 61: // '='
+        if match_ch(L, 61):
+            k = tok.TK_EQ
+        else match_ch(L, 62):
+            k = tok.TK_FAT_ARROW
+        else:
+            k = tok.TK_ASSIGN
+        end
+    else c == 33: // '!'
+        k = match_ch(L, 61) ? tok.TK_NE : tok.TK_NOT
+    else c == 60: // '<'
+        if match_ch(L, 60):
+            k = match_ch(L, 61) ? tok.TK_SHL_EQ : tok.TK_SHL
+        else:
+            k = match_ch(L, 61) ? tok.TK_LE : tok.TK_LT
+        end
+    else c == 62: // '>'
+        if match_ch(L, 62):
+            k = match_ch(L, 61) ? tok.TK_SHR_EQ : tok.TK_SHR
+        else:
+            k = match_ch(L, 61) ? tok.TK_GE : tok.TK_GT
+        end
+    else c == 38: // '&'
+        if match_ch(L, 38):
+            k = tok.TK_AND
+        else:
+            k = match_ch(L, 61) ? tok.TK_AMP_EQ : tok.TK_AMP
+        end
+    else c == 124: // '|'
+        if match_ch(L, 124):
+            k = tok.TK_OR
+        else:
+            k = match_ch(L, 61) ? tok.TK_PIPE_EQ : tok.TK_PIPE
+        end
+    else c == 94: // '^'
+        k = match_ch(L, 61) ? tok.TK_CARET_EQ : tok.TK_CARET
+    else c == 126: // '~'
+        k = tok.TK_TILDE
+    else c == 59: // ';'
+        error_at(
+            L, b, "unexpected ';' (statements end at a newline; 'for' uses ',' between clauses)"
+        )
+        ret
+    else:
+        error_at(L, b, "unexpected character")
+        ret
+    end
+    emit(L, k, b, lex_slice(L, start))
+
+    if k == tok.TK_COLON && (prev == tok.TK_KW_LAYOUT || (L.comp_header && L.group_depth == 0)):
+        L.layout_mode = true
+        L.layout_depth = 1
+        L.layout_sub = LX_SUB_NAME
+        L.comp_header = false
+        lg.Log(L.lgr, lg.PH_LEXER, lg.LOG_DEBUG, "entering layout mode")
+    end
+
+    if k == tok.TK_STMT_END && L.group_depth == 0:
+        L.comp_header = false
+    end
+end

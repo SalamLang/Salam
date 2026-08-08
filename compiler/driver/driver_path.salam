@@ -1,0 +1,255 @@
+package driver
+
+import os
+import str
+import lg "../logger.salam"
+import i18 "../i18n.salam"
+import co "../sal_core.salam"
+import fs
+
+    // ===== driver/build.c =====
+
+    // Unsigned byte read from a str (idiom shared with tests_port/codegen_run.salam).
+    inline func byte_at(s: str, i: int): int: ret co.ByteAt(s, i) end
+
+    // driver/build.c module_of
+    func module_of(path: str): str:
+        slash := str.LastIndex(path, "/")
+        bs := str.LastIndex(path, "\\")
+        mut base := 0
+        if slash >= 0:
+            base = slash + 1
+        end
+        if bs >= 0 && bs + 1 > base:
+            base = bs + 1
+        end
+        stem := str.Substr(path, base, str.Len(path) - base)
+        dot := str.LastIndex(stem, ".")
+        if dot >= 0:
+            ret str.Substr(stem, 0, dot)
+        end
+        ret stem
+    end
+
+    // driver/build.c dir_of
+    func dir_of(path: str): str:
+        slash := str.LastIndex(path, "/")
+        bs := str.LastIndex(path, "\\")
+        mut cut := slash
+        if bs >= 0 && (slash < 0 || bs > slash):
+            cut = bs
+        end
+        if cut < 0:
+            ret ""
+        end
+        ret str.Substr(path, 0, cut)
+    end
+
+    // driver/build.c driver_project_entry_file. The fixed project entry
+    // filename (SALAM_PROJECT_FILE in driver/build.h): when a directory
+    // (or no input at all) is given, <dir>/salam.salam - if present - IS
+    // the project's entry file; no scanning or guessing happens.
+    // Single-file invocations (`salam build test.salam`) never come here.
+    // Returns "" when <dir>/salam.salam does not exist (bare filename for
+    // dir==".", matching list_salam_files).
+    func project_entry_file(dir: str): str:
+        mut trimmed := dir
+        until str.Len(trimmed) > 1 && (str.EndsWith(trimmed, "/") || str.EndsWith(trimmed, "\\")):
+            trimmed = str.Substr(trimmed, 0, str.Len(trimmed) - 1)
+        end
+        mut p := "salam.salam"
+        if !str.Equals(trimmed, "."):
+            p = trimmed + "/salam.salam"
+        end
+        if os.Exists(p) && !os.IsDir(p):
+            ret p
+        end
+        ret ""
+    end
+
+    // driver/build.c driver_output_stem. Stem for a default output name:
+    // normally the entry file's module name, but the fixed project entry
+    // file salam.salam would make every project's default executable
+    // "salam(.exe)" - which cmd.exe would then run from that directory
+    // instead of the real compiler - so a project executable is named
+    // after its directory instead.
+    //
+    // PORT-NOTE: the C resolves the directory to an absolute path first
+    // (realpath/_fullpath), so "salam build .." also gets a real name;
+    // here only the textual path is inspected and ".."-shaped inputs fall
+    // back to the module name - the common cases (bare build, ./dir,
+    // ../name) behave identically.
+    func output_stem_of(path: str): str:
+        module := module_of(path)
+        if !str.Equals(module, "salam"):
+            ret module
+        end
+        mut dir := dir_of(path)
+        if str.Len(dir) == 0 || str.Equals(dir, "."):
+            dir = os.Cwd()
+        end
+        until str.Len(dir) > 1 && (str.EndsWith(dir, "/") || str.EndsWith(dir, "\\")):
+            dir = str.Substr(dir, 0, str.Len(dir) - 1)
+        end
+        slash := str.LastIndex(dir, "/")
+        bs := str.LastIndex(dir, "\\")
+        mut cut := slash
+        if bs >= 0 && (slash < 0 || bs > slash):
+            cut = bs
+        end
+        mut base := dir
+        if cut >= 0:
+            base = str.Substr(dir, cut + 1, str.Len(dir) - cut - 1)
+        end
+        if str.Len(base) == 0 || str.Equals(base, ".") || str.Equals(base, ".."):
+            ret module
+        end
+        ret base
+    end
+
+    // driver/build.c driver_page_stem. Stem for a default web/layout
+    // output name: the page file's module name, except the fixed project
+    // entry file salam.salam, whose page is the site's landing page -
+    // index.html, the name every web server (including `salam serve`)
+    // treats as the directory's entry.
+    func page_stem_of(path: str): str:
+        module := module_of(path)
+        if str.Equals(module, "salam"):
+            ret "index"
+        end
+        ret module
+    end
+
+    // driver/build.c write_file (fflush/fsync dropped - os.WriteFile already
+    // opens+writes+closes in one call; no partial-write scenario to guard).
+    func write_file(lgr: lg.Logger, path: str, content: str): bool:
+        if os.WriteFile(path, content) < 0:
+            lg.Log(
+                lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("cannot write '%s'"), co.ArgStr(path))
+            )
+            ret false
+        end
+        ret true
+    end
+
+    // driver/build.c file_has_content - true when 'path' already holds exactly
+    // 'content'. Comparing before writing leaves an unchanged generated file
+    // (and therefore its cached .o) untouched, so an incremental build can
+    // skip recompiling that module.
+    func file_unchanged(path: str, content: str): bool:
+        if !os.Exists(path):
+            ret false
+        end
+        ret str.Equals(os.ReadFile(path), content)
+    end
+
+    // driver/driver.c salam_scratch_dir - scratch dir for intermediate
+    // salam_mod_*.c/.h codegen files, so a build run from any cwd doesn't
+    // litter it with generated sources. Falls back to "." if unwritable.
+    func scratch_dir(): str:
+        dir := ".salam-build"
+        if os.MkdirAll(dir) != 0:
+            ret "."
+        end
+        ret dir
+    end
+
+    // Not from build.c: whole-build skip. The per-object cache (file_unchanged
+    // above, checked once codegen has already re-run for every module) only
+    // avoids a needless recompile+relink; it still pays for a full lex/parse/
+    // semantic/codegen pass of the entire program on every invocation, which
+    // dominates wall time once the C-compile step is cheap. This tracks the
+    // exact source-file set and CLI-flag signature a successful build used, so
+    // a second `salam build` with nothing changed can skip straight to "up to
+    // date" without touching the frontend at all.
+    func manifest_path(scratch: str): str:
+        ret scratch + "/salam_build.manifest"
+    end
+
+    // CLI flags that change what gets generated/linked without touching any
+    // .salam source file's own mtime (link directives live IN the source, so
+    // they don't need to be listed here - editing them updates that file's
+    // mtime, which the source-list check below already catches).
+    func build_signature(opt &: Dr): str:
+        mut sig := opt.cc + "|" + (opt.debug_info ? "g" : "") + "|" + (opt.asan ? "a" : "") + "|" + (opt.lto ? "l" : "") + "|" + (opt.safe ? "s" : "") + "|" + opt.stdlib_path + "|" + opt.lang + "|" + opt.output
+        repeat opt.defines.len() with di:
+            sig = sig + "|D" + opt.defines.get(di)[0]
+        end
+        repeat opt.exports.len() with ei:
+            sig = sig + "|E" + opt.exports.get(ei)[0]
+        end
+        ret sig
+    end
+
+    // Records the source-file set (`sources`, one path per module actually
+    // compiled) and the CLI-flag signature a successful build used, so the
+    // next invocation can tell whether anything relevant changed.
+    func write_build_manifest(scratch: str, sig: str, sources: Vector<str>): bool:
+        mut sb := str.NewBuilder()
+        str.BufAppend(sb, sig)
+        str.BufAppendChar(sb, 10)
+        repeat sources.len() with i:
+            str.BufAppend(sb, sources.get(i)[0])
+            str.BufAppendChar(sb, 10)
+        end
+        txt := str.BufStr(sb)
+        str.BufFree(sb)
+        ret write_file(lg.New(lg.LOG_OFF, false), manifest_path(scratch), txt)
+    end
+
+    // gcc on this Windows/MinGW toolchain silently appends ".exe" to `-o
+    // output` when `output` has no extension of its own, so the file that
+    // actually lands on disk doesn't always match `opt.output`/`output`
+    // verbatim. Resolves to whichever of the two really exists.
+    func resolve_output_path(output: str): str:
+        if os.Exists(output):
+            ret output
+        end
+        if SALAM_OS_WINDOWS:
+            if !str.EndsWith(output, ".exe") && os.Exists(output + ".exe"):
+                ret output + ".exe"
+            end
+        end
+        ret output
+    end
+
+    // True when `output` was already built from exactly this source set under
+    // this flag signature and every one of those sources is still at least as
+    // old as `output` (mtimes, second resolution - same granularity `make`
+    // relies on). Any mismatch - missing manifest, missing output, changed
+    // flags, a moved/deleted/newer source, or a source not seen last time -
+    // returns false and falls back to the ordinary full build below.
+    func build_up_to_date(scratch: str, sig: str, output0: str): bool:
+        mpath := manifest_path(scratch)
+        output := resolve_output_path(output0)
+        if !os.Exists(mpath) || !os.Exists(output):
+            ret false
+        end
+        txt := os.ReadFile(mpath)
+        lines := str.Split(txt, "\n")
+        if lines.len() < 2:
+            ret false
+        end
+        if !str.Equals(lines.get(0)[0], sig):
+            ret false
+        end
+        out_mtime := fs.ModTime(output)
+        mut saw_source := false
+        repeat lines.len() with li:
+            if li == 0:
+                continue
+            end
+            src_path := lines.get(li)[0]
+            if str.Len(src_path) == 0:
+                continue
+            end
+            if !os.Exists(src_path):
+                ret false
+            end
+            if fs.ModTime(src_path) > out_mtime:
+                ret false
+            end
+            saw_source = true
+        end
+        ret saw_source
+    end

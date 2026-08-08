@@ -1,0 +1,287 @@
+package llvmgen
+
+import str
+import os
+import sm "../semantic/semantic.salam"
+
+// opt_flag
+func nt_opt_flag(l: int): str:
+    if l == LV_OPT_O0:
+        ret "-O0"
+    end
+    if l == LV_OPT_O1:
+        ret "-O1"
+    end
+    if l == LV_OPT_O2:
+        ret "-O2"
+    end
+    if l == LV_OPT_O3:
+        ret "-O3"
+    end
+    if l == LV_OPT_OS:
+        ret "-Os"
+    end
+    if l == LV_OPT_OZ:
+        ret "-Oz"
+    end
+    ret "-O0"
+end
+
+// triple_is_windows / triple_is_wasm (llvm_toolchain.c: no host-OS fallback
+// for an empty triple, unlike ll_target_is_windows a few hundred lines up - // an empty/default triple means "host default", and the C's `!win && !wasm`
+// gate for appending `-lm` must stay true in that case).
+func nt_triple_is_windows(t: str): bool:
+    if str.Len(t) == 0:
+        ret false
+    end
+    ret str.Contains(t, "windows") || str.Contains(t, "mingw") || str.Contains(t, "win32")
+end
+
+func nt_triple_is_wasm(t: str): bool:
+    ret str.Len(t) > 0 && str.Contains(t, "wasm")
+end
+
+// sb_put_shell_arg. Windows branch: C-style double-quote escaping (only
+// reachable when SALAM_OS_WINDOWS is compiled in, which this port's own
+// WSL/Linux verification builds prune away, exactly like every other
+// host-OS conditional in this file). POSIX branch: single-quote wrap with
+// '\'' escaping.
+func nt_shell_arg(v: str): str:
+    if SALAM_OS_WINDOWS:
+        mut out := `"`
+        n := str.Len(v)
+        mut i := 0
+        until i < n:
+            mut nbs := 0
+            until i < n && byte_at(v, i) == 92:
+                nbs += 1
+                i += 1
+            end
+            if i == n:
+                mut k := 0
+                until k < nbs * 2:
+                    out += `\`
+                    k += 1
+                end
+            else byte_at(v, i) == 34:
+                mut k2 := 0
+                until k2 < nbs * 2 + 1:
+                    out += `\`
+                    k2 += 1
+                end
+                out += `"`
+                i += 1
+            else:
+                mut k3 := 0
+                until k3 < nbs:
+                    out += `\`
+                    k3 += 1
+                end
+                out += str.Substr(v, i, 1)
+                i += 1
+            end
+        end
+        out += `"`
+        ret out
+    else:
+        mut out2 := "'"
+        n2 := str.Len(v)
+        mut j := 0
+        until j < n2:
+            if byte_at(v, j) == 39:
+                out2 += "'\\''"
+            else:
+                out2 += str.Substr(v, j, 1)
+            end
+            j += 1
+        end
+        out2 += "'"
+        ret out2
+    end
+end
+
+// to_tool_path. POSIX: passed through unchanged (the C's realpath() call is
+// skipped - no Salam stdlib equivalent, and every caller in this port
+// already hands a cwd-relative or absolute path that bash resolves fine on
+// its own). Windows: `C:\foo\bar` -> `/mnt/c/foo/bar` for `wsl.exe -e bash`
+// (drive-letter case-folded, backslashes flipped); a path with no drive
+// prefix is passed through as-is. This branch is compile-time-pruned out on
+// every build this port is verified against.
+func nt_to_tool_path(host: str): str:
+    if SALAM_OS_WINDOWS:
+        n := str.Len(host)
+        if n >= 2 && is_alpha_b(byte_at(host, 0)) && byte_at(host, 1) == 58:
+            mut out := "/mnt/" + str.Lower(str.Substr(host, 0, 1))
+            mut i := 2
+            until i < n:
+                c := byte_at(host, i)
+                out += (c == 92) ? "/" : str.Substr(host, i, 1)
+                i += 1
+            end
+            ret out
+        end
+        ret host
+    else:
+        ret host
+    end
+end
+
+// resolve_tool - sm.FindBundledTool next to the running executable, else a
+// bare fallback name resolved via PATH by the shell.
+func nt_resolve_tool(bundled: str, fallback: str): str:
+    mut out := ""
+    if sm.FindBundledTool(bundled, out):
+        ret nt_to_tool_path(out)
+    end
+    ret fallback
+end
+
+func nt_has_path_char(spec: str): bool:
+    ret str.Contains(spec, "/") || str.Contains(spec, "\\") || str.Contains(spec, ".")
+end
+
+// emit_llvm_link
+func nt_emit_llvm_link(spec: str, kind: str): str:
+    if str.Len(spec) == 0:
+        ret " -l" + nt_shell_arg(spec)
+    end
+    framework := str.Equals(kind, "framework")
+    is_static := str.Equals(kind, "static")
+    if framework:
+        ret " -framework " + nt_shell_arg(spec)
+    end
+    if byte_at(spec, 0) == 45 || nt_has_path_char(spec):
+        ret " " + nt_shell_arg(spec)
+    end
+    // -l:libX.a - GNU ld/lld "exact archive name" syntax, picks the static
+    // archive regardless of a same-named shared lib also being on the
+    // search path. Previously gated on `!windows` (mirroring the pre-fix
+    // C), silently falling back to a bare (dynamic) -lX there - but the
+    // clang this script invokes on Windows still targets *-w64-mingw32
+    // through the same GNU-compatible driver/lld-mingw-flavor toolchain
+    // this whole driver assumes elsewhere, which understands -l: just
+    // like the Linux/macOS case - see c/src/driver/llvm_toolchain.c's
+    // emit_llvm_link for the parity fix this mirrors.
+    if is_static:
+        ret " -l:lib" + nt_shell_arg(spec) + ".a"
+    end
+    ret " -l" + nt_shell_arg(spec)
+end
+
+// emit_tool_cmd - the tool-invocation line(s) appended after the script's
+// IN/OUT/SYSROOT variable assignments. link_kinds shorter than link_libs
+// (or absent) reads as "" per slot, same as the C's NULL kind.
+func nt_emit_tool_cmd(opts: Options): str:
+    clang_tool := nt_resolve_tool("clang", "clang-22")
+    opt_tool := nt_resolve_tool("opt", "opt-22")
+    lli_tool := nt_resolve_tool("lli", "lli-22")
+    o_flag := nt_opt_flag(opts.opt_level)
+    triple := opts.target_triple
+
+    mut out := ""
+    if opts.verify_module:
+        out += `"` + opt_tool + "\" -passes=verify -disable-output \"$IN\"\n"
+    end
+
+    if opts.output_mode == LV_OUT_ASM:
+        out += `"` + clang_tool + `" ` + o_flag
+        if str.Len(triple) > 0:
+            out += " --target=" + triple
+        else opts.native_cpu:
+            out += " -march=native"
+        end
+        out += " -S \"$IN\" -o \"$OUT\"\n"
+    else opts.output_mode == LV_OUT_OBJ:
+        out += `"` + clang_tool + `" ` + o_flag
+        if str.Len(triple) > 0:
+            out += " --target=" + triple
+        else opts.native_cpu:
+            out += " -march=native"
+        end
+        out += " -c \"$IN\" -o \"$OUT\"\n"
+    else opts.output_mode == LV_OUT_BITCODE:
+        out += `"` + opt_tool + `" ` + o_flag + " \"$IN\" -o \"$OUT\"\n"
+    else opts.output_mode == LV_OUT_EXEC:
+        win := nt_triple_is_windows(triple)
+        wasm := nt_triple_is_wasm(triple)
+        out += `"` + clang_tool + `" ` + o_flag
+        if str.Len(triple) > 0:
+            out += " --target=" + triple
+        else opts.native_cpu:
+            out += " -march=native"
+        end
+        if opts.debug_info:
+            out += " -g"
+        end
+        if str.Len(opts.sysroot) > 0:
+            out += ` --sysroot="$SYSROOT"`
+        end
+        if win:
+            out += " -fuse-ld=lld"
+        end
+        // --libpath=DIR entries first: an explicitly named directory should
+        // win over the sysroot's own copy of a same-named archive.
+        mut lp2 := 0
+        until lp2 < opts.lib_paths.len():
+            out += ` -L"` + opts.lib_paths.get(lp2)[0] + `"`
+            lp2 += 1
+        end
+        out += ` "$IN"`
+        mut li := 0
+        until li < opts.link_libs.len():
+            spec := opts.link_libs.get(li)[0]
+            mut kind := ""
+            if li < opts.link_kinds.len():
+                kind = opts.link_kinds.get(li)[0]
+            end
+            out += nt_emit_llvm_link(spec, kind)
+            li += 1
+        end
+        if !win && !wasm:
+            out += " -lm"
+        end
+        out += " -o \"$OUT\"\n"
+    else opts.output_mode == LV_OUT_JIT:
+        if opts.opt_level != LV_OPT_O0:
+            out += `"` + opt_tool + `" ` + o_flag + ` "$IN" -o - | "` + lli_tool + "\" -\n"
+        else:
+            out += `"` + lli_tool + "\" \"$IN\"\n"
+        end
+    else opts.output_mode == LV_OUT_IR:
+        if opts.opt_level != LV_OPT_O0:
+            out += `"` + opt_tool + `" ` + o_flag + " -S \"$IN\" -o \"$IN\"\n"
+        else !opts.verify_module:
+            out += "true\n"
+        end
+    end
+    ret out
+end
+
+// A quick "<tool> --version" PATH probe (redirected, exit code only).
+func nt_probe_tool(tool: str): bool:
+    mut cmd := `"` + tool + `" --version`
+    if SALAM_OS_WINDOWS:
+        cmd += " >NUL 2>&1"
+    else:
+        cmd += " >/dev/null 2>&1"
+    end
+    ret os.Run(cmd) == 0
+end
+
+// ===========================================================================
+// PUBLIC API (rule E088: pub functions last). Mapping to the C surface:
+//   OptionsDefault  = codegen_llvm_options_default
+//   ErrorOf         = codegen_llvm_error
+//   Run             = codegen_llvm_run
+//   RunOpts         = codegen_llvm_run_opts (opts by value; OptionsDefault()
+//                     plays the C NULL; src_path "" = NULL)
+//   NativeAvailable/NativeRun = driver/llvm_toolchain.c's clang/opt/lli
+//                     shell-out path (salam_llvm_toolchain's fallback
+//                     branch - see the file-header note for why, not
+//                     llvm_native.c's #ifdef SALAM_HAVE_LLVM body).
+//   NativeBuildScript = no direct C equivalent - exposes emit_tool_cmd's
+//                     generated script text for assertions without running
+//                     a real toolchain.
+// The remaining pubs re-export internals for tests_port/llvm_test.salam and
+// stage B/C (the role of codegen_llvm_internal.h).
+// ===========================================================================

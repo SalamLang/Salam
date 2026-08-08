@@ -1,0 +1,106 @@
+package parser
+
+import tok "../token.salam"
+import at "../ast.salam"
+
+// ===== parser_layout.c =====
+
+func layout_body(p &: Ps, a &: at.Ast, parent: int):
+    until !p_at(p, tok.TK_KW_END) && !p_at_eof(p):
+        p_skip_terminators(p)
+        if p_at(p, tok.TK_KW_END) || p_at_eof(p):
+            break
+        end
+        if p_at(p, tok.TK_LAYOUT_ELEMENT):
+            at.AddChild(a, parent, layout_element(p, a))
+        else p_at(p, tok.TK_LAYOUT_ATTR_NAME):
+            at.AddChild(a, parent, layout_attribute(p, a))
+        else:
+            p_error(p, "unexpected token inside layout block")
+            if !p_at_eof(p):
+                p_advance(p)
+            end
+        end
+        if p.panic:
+            p_sync(p)
+        end
+    end
+end
+
+func layout_element(p &: Ps, a &: at.Ast): int:
+    p_rule(p, "layout_element")
+    n := p_mk(p, a, at.AST_LAYOUT_ELEMENT)
+
+    if !p_recurse_enter(p, "layout nested too deeply"):
+        ret n
+    end
+    at.SetName(a, n, p_peek(p).lexeme)
+    p_advance(p)
+    p_expect(p, tok.TK_COLON, "':' after layout element name")
+    p_skip_terminators(p)
+    layout_body(p, a, n)
+    p_expect(p, tok.TK_KW_END, "'end' to close layout element")
+    p_fin(p, a, n)
+    p_skip_terminators(p)
+    p_recurse_leave(p)
+    ret n
+end
+
+func layout_attribute(p &: Ps, a &: at.Ast): int:
+    p_rule(p, "layout_attribute")
+    n := p_mk(p, a, at.AST_LAYOUT_ATTR)
+    at.SetName(a, n, p_peek(p).lexeme)
+    p_advance(p)
+    p_expect(p, tok.TK_ASSIGN, "'=' after layout attribute name")
+    ps_set_a(a, n, parse_expr(p, a))
+    p_fin(p, a, n)
+    p_skip_terminators(p)
+    ret n
+end
+
+func parse_layout_block(p &: Ps, a &: at.Ast): int:
+    p_rule(p, "layout_block")
+    n := p_mk(p, a, at.AST_LAYOUT_BLOCK)
+    p_advance(p)
+    p_expect(p, tok.TK_COLON, "':' after 'layout'")
+    p_skip_terminators(p)
+    layout_body(p, a, n)
+    p_expect(p, tok.TK_KW_END, "'end' to close layout block")
+    p_fin(p, a, n)
+    ret n
+end
+
+func parse_component(p &: Ps, a &: at.Ast): int:
+    p_rule(p, "component")
+    n := p_mk(p, a, at.AST_LAYOUT_COMPONENT)
+    p_advance(p)
+    at.SetName(a, n, p_name(p, "expected component name"))
+    if p_match(p, tok.TK_LPAREN):
+        if !p_at(p, tok.TK_RPAREN):
+            mut go := true
+            until go:
+                param := p_mk(p, a, at.AST_PARAM)
+                pname := p_name(p, "expected component parameter name")
+                at.SetName(a, param, pname)
+                if pname.len() > 0 && p_match(p, tok.TK_ASSIGN):
+                    ps_set_a(a, param, parse_expr(p, a))
+                end
+                p_fin(p, a, param)
+                if pname.len() > 0:
+                    at.AddChild(a, n, param)
+                end
+                go = p_match(p, tok.TK_COMMA)
+            end
+        end
+        p_expect(p, tok.TK_RPAREN, "')' after component parameters")
+    end
+    p_expect(p, tok.TK_COLON, "':' after component header")
+    p_skip_terminators(p)
+    body := p_mk(p, a, at.AST_BLOCK)
+    layout_body(p, a, body)
+    p_expect(p, tok.TK_KW_END, "'end' to close component")
+    p_fin(p, a, body)
+    ps_set_a(a, n, body)
+    p_fin(p, a, n)
+    ret n
+end

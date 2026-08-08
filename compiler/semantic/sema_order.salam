@@ -1,0 +1,174 @@
+package semantic
+
+import str
+import co "../sal_core.salam"
+import at "../ast.salam"
+import i18 "../i18n.salam"
+import lp "../langpack.salam"
+
+// ===========================================================================
+// ===== sema_order.c =====
+// ===========================================================================
+
+func safe_name(a &: at.Ast, d: int): str:
+    if d == 0:
+        ret "?"
+    end
+    nm := at.Get(a, d).name
+    if str.Len(nm) > 0:
+        ret nm
+    end
+    ret "?"
+end
+
+// check_pub_order - rule E088; restarts at every merged file boundary.
+func check_pub_order(s &: Sema, a &: at.Ast, list: Vector<int>):
+    entry := lp.EntryFor(s.lang)
+    mut first_pub := 0
+    repeat list.len() with i:
+        did := list.get(i)[0]
+        if did == 0:
+            continue
+        end
+        d := at.Get(a, did)
+        if d.file_boundary:
+            first_pub = 0
+        end
+        if d.synthetic || d.kind != at.AST_FUNC_DEF:
+            continue
+        end
+        if d.is_extern && d.a == 0:
+            continue // body-less prototype, not a real def
+        end
+        // main/entry is exempt from the pub-ordering rule.
+        if str.Len(d.name) > 0 && (
+            str.Equals(d.name, "main") || (str.Len(entry) > 0 && str.Equals(d.name, entry))
+        ):
+            continue
+        end
+        if d.is_pub:
+            if first_pub == 0:
+                first_pub = did
+            end
+        else first_pub != 0:
+            serr(
+                s, 88, span_of(a, did), co.Format3(
+                    i18.Tr("function '%s' must appear before 'pub' function '%s' (line %u): once a 'pub' function starts the public section, only other 'pub' functions may follow it, so callers can scan the end of the file for the public API"),
+                    co.ArgStr(safe_name(a, did)), co.ArgStr(safe_name(a, first_pub)), co.ArgUint(at.Get(a, first_pub).begin_line as u64)
+                )
+            )
+        end
+    end
+end
+
+// sema_check_toplevel_order - import -> const -> var -> type -> func, with
+// phase tracking restarting at merged-file boundaries.
+func sema_check_toplevel_order(s &: Sema, a &: at.Ast, program: int):
+    mut max_phase := at.AST_ORDER_IMPORT
+    mut first_of := [0, 0, 0, 0, 0] as int[5]
+    mut have_first := [false, false, false, false, false] as bool[5]
+
+    prog := at.Get(a, program)
+    repeat prog.list.len() with i:
+        did := prog.list.get(i)[0]
+        if did == 0:
+            continue
+        end
+        d := at.Get(a, did)
+        if d.file_boundary:
+            max_phase = at.AST_ORDER_IMPORT
+            repeat 5 with z:
+                first_of[z] = 0
+                have_first[z] = false
+            end
+        end
+        if d.synthetic:
+            continue
+        end
+        p := at.ToplevelOrderPhase(a, did)
+        if p == at.AST_ORDER_NONE:
+            continue
+        end
+        if !have_first[p]:
+            have_first[p] = true
+            first_of[p] = did
+        end
+        if p < max_phase:
+            mut blocker := 0
+            mut k := p + 1
+            until k <= max_phase:
+                if have_first[k]:
+                    blocker = first_of[k]
+                    break
+                end
+                k += 1
+            end
+            if blocker == 0:
+                blocker = did
+            end
+            bline := at.Get(a, blocker).begin_line as u64
+            sp := span_of(a, did)
+            if p == at.AST_ORDER_IMPORT:
+                serr(
+                    s, 83, sp, co.Format2(
+                        i18.Tr("'import' must appear before any other top-level statement, right after the package declaration; '%s' (line %u) already starts the rest of the file"),
+                        co.ArgStr(safe_name(a, blocker)), co.ArgUint(bline)
+                    )
+                )
+            else p == at.AST_ORDER_CONST:
+                if max_phase >= at.AST_ORDER_TYPEDEF:
+                    serr(
+                        s, 84, sp, co.Format3(
+                            i18.Tr("constant '%s' must be declared before any function or type definition; move it up near the top of the file with the other constants, above '%s' (line %u)"),
+                            co.ArgStr(safe_name(a, did)), co.ArgStr(safe_name(a, blocker)), co.ArgUint(bline)
+                        )
+                    )
+                else:
+                    serr(
+                        s, 86, sp, co.Format3(
+                            i18.Tr("constant '%s' must be declared before global variables; move it above the variable section, before '%s' (line %u)"),
+                            co.ArgStr(safe_name(a, did)), co.ArgStr(safe_name(a, blocker)), co.ArgUint(bline)
+                        )
+                    )
+                end
+            else p == at.AST_ORDER_VAR:
+                serr(
+                    s, 85, sp, co.Format3(
+                        i18.Tr("global variable '%s' must be declared before any function or type definition; move it up near the top of the file, above '%s' (line %u)"),
+                        co.ArgStr(safe_name(a, did)), co.ArgStr(safe_name(a, blocker)), co.ArgUint(bline)
+                    )
+                )
+            else p == at.AST_ORDER_TYPEDEF:
+                serr(
+                    s, 87, sp, co.Format3(
+                        i18.Tr("'%s' must be declared before any function definition; keep type, struct, enum, interface and impl declarations grouped above the functions, above '%s' (line %u)"),
+                        co.ArgStr(safe_name(a, did)), co.ArgStr(safe_name(a, blocker)), co.ArgUint(bline)
+                    )
+                )
+            end
+        else p > max_phase:
+            max_phase = p
+        end
+    end
+
+    check_pub_order(s, a, prog.list)
+    repeat prog.list.len() with j:
+        did2 := prog.list.get(j)[0]
+        if did2 == 0:
+            continue
+        end
+        d2 := at.Get(a, did2)
+        if !d2.synthetic && d2.kind == at.AST_IMPL_DEF:
+            check_pub_order(s, a, d2.list)
+        end
+    end
+end
+
+func sema_check_toplevel_order_in_file(
+    s &: Sema, a &: at.Ast, program: int, file: str
+):
+    save_file := s.file
+    s.file = file
+    sema_check_toplevel_order(s, a, program)
+    s.file = save_file
+end

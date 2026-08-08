@@ -207,7 +207,25 @@ int salam_materialize_sysroot(const char *name, const unsigned char *tar, size_t
          * directory this process extracted is harmless cache clutter,
          * not a correctness problem, and not worth a recursive-delete
          * implementation to clean up. */
-        if (!path_exists(marker)) return 0;
+        if (!path_exists(marker)) {
+            /*
+             * Neither the rename nor an already-complete extraction at
+             * `out` is usable - but this process's own staging directory
+             * is itself a complete, marker-verified extraction, so use it
+             * directly instead of reporting failure.
+             *
+             * rename() can fail on Windows for reasons beyond "destination
+             * exists": a virus scanner or a sibling build holding a handle
+             * on the directory is enough, and a stale `out` left without
+             * its marker by an earlier crashed run fails here forever
+             * rather than transiently. Returning 0 turned any of those
+             * into a spurious "no mingw sysroot ... install mingw-w64" on
+             * a salam that had the sysroot embedded all along - observed
+             * as sporadic build failures in the middle of an otherwise
+             * green test run.
+             */
+            sal_snprintf(out, out_n, "%s", staging);
+        }
     }
     return 1;
 }

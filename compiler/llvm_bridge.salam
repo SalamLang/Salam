@@ -1,0 +1,114 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Optional in-process LLVM/LLD for the self-hosted compiler - the Salam
+// counterpart of the C's `#ifdef SALAM_HAVE_LLVM` in llvm_native.c.
+//
+// Why this is a separate file rather than code inside llvm.salam:
+//
+//  1. `import llvm` (std/llvm) has to be gated, because it drags in
+//     `link static "salam_llvm"` and the host system libraries, which only
+//     exist on a machine that ran `make -C c libsalam-llvm`. An ungated
+//     import would break every build without those archives. Salam's
+//     condcomp prunes *top-level* `if FLAG:` blocks, so the import and
+//     everything referencing it live in one such block here, with an
+//     `else` arm supplying the same signatures.
+//
+//     Note the flag can only be tested at top level: `-D`-defined names are
+//     absent from the symbol table when not passed, so referencing
+//     SALAM_HAVE_LLVM inside a function body is an "unknown identifier"
+//     error rather than a false. Keeping every reference top-level is what
+//     makes the gate work in both directions.
+//
+//  2. llvm.salam is `package llvmgen` precisely so it does not collide with
+//     std/llvm's `package llvm`; this bridge is a third package again, so
+//     it can import std/llvm without either name clashing.
+//
+// The API below is deliberately primitive-typed (no shared structs): the
+// bridge cannot import llvm.salam without a cycle, and cannot expose
+// std/llvm's own Options to llvm.salam without leaking the gated type into
+// an ungated module.
+@en "llvmbridge"
+@fa "پل ال ال وی ام"
+@ar "جسر ال ال وی ام"
+package llvmbridge
+
+import str
+
+if SALAM_HAVE_LLVM:
+    import llvm
+
+    // Whether this binary has static LLVM/LLD linked in.
+    pub func Available(): bool:
+        ret llvm.LldAvailable()
+    end
+
+    // Mirrors salam_llvm_native(): emit/optimize/link `ll_path` per
+    // `output_mode`. Returns 0 on success, non-zero on failure, and -1 for
+    // "not built with LLVM" so the caller falls back to the shell-out
+    // toolchain path.
+    pub func Run(
+        ll_path: str,
+        opt_level: int,
+        output_mode: int,
+        output_file: str,
+        target_triple: str,
+        debug_info: bool,
+        verify_module: bool,
+        native_cpu: bool,
+        sysroot: str,
+        link_libs: Vector<str>,
+        link_kinds: Vector<str>,
+        lib_paths: Vector<str>
+    ): int:
+        mut o := llvm.Options {}
+        o.opt_level = opt_level
+        o.output_mode = output_mode
+        o.output_file = output_file
+        o.target_triple = target_triple
+        o.debug_info = debug_info
+        o.verify_module = verify_module
+        o.native_cpu = native_cpu
+        o.sysroot = sysroot
+        o.link_libs = link_libs
+        o.link_kinds = link_kinds
+        o.lib_paths = lib_paths
+        r := llvm.Run(ll_path, o)
+        if r.ok:
+            ret 0
+        end
+        ret 1
+    end
+else:
+    pub func Available(): bool:
+        ret false
+    end
+
+    pub func Run(
+        _ll_path: str,
+        _opt_level: int,
+        _output_mode: int,
+        _output_file: str,
+        _target_triple: str,
+        _debug_info: bool,
+        _verify_module: bool,
+        _native_cpu: bool,
+        _sysroot: str,
+        _link_libs: Vector<str>,
+        _link_kinds: Vector<str>,
+        _lib_paths: Vector<str>
+    ): int:
+        ret 0 - 1
+    end
+end

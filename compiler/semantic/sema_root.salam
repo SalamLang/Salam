@@ -1,0 +1,240 @@
+package semantic
+
+import str
+import os
+
+// ===========================================================================
+// ===== sema.c (stdlib root, sysroots, bundled tools) =====
+// ===========================================================================
+
+// file_exists - the C fopen("rb") probe (which also opens directories on
+// Linux); os.Exists is access()-based and matches that behavior.
+func file_exists(p: str): bool:
+    ret os.Exists(p)
+end
+
+func root_has_std(root: str): bool:
+    if str.Len(root) > 0:
+        ret file_exists(root + "/std/core/core.salam")
+    end
+    ret file_exists("std/core/core.salam")
+end
+
+// derive_root - accepts either the root itself or its std/ subdirectory.
+func derive_root(path: str): str:
+    if file_exists(path + "/std/core/core.salam"):
+        ret path
+    end
+    if file_exists(path + "/core/core.salam"):
+        mut out := path
+        mut e := str.Len(out)
+        until e > 0 && (byte_at(out, e - 1) == 47 || byte_at(out, e - 1) == 92):
+            e -= 1
+        end
+        out = str.Substr(out, 0, e)
+        mut cut := 0 - 1
+        repeat str.Len(out) with i:
+            b := byte_at(out, i)
+            if b == 47 || b == 92:
+                cut = i
+            end
+        end
+        if cut >= 0:
+            ret str.Substr(out, 0, cut)
+        end
+        ret ""
+    end
+    ret path
+end
+
+func path_is_absolute(p: str): bool:
+    if str.Len(p) == 0:
+        ret false
+    end
+    b0 := byte_at(p, 0)
+    if b0 == 47 || b0 == 92:
+        ret true
+    end
+    if str.Len(p) >= 2 && byte_at(p, 1) == 58 && ((b0 >= 65 && b0 <= 90) || (b0 >= 97 && b0 <= 122)):
+        ret true
+    end
+    ret false
+end
+
+// get_exe_dir - PORT-NOTE: the C reads /proc/self/exe (or the platform
+// equivalent); the port derives the directory from os.Args()[0]. Only a
+// fallback path (explicit roots / SALAM_STD are consulted first).
+func get_exe_dir(out &: str): bool:
+    args := os.Args()
+    defer args.free()
+    if args.len() == 0:
+        ret false
+    end
+    a0 := args.get(0)[0]
+    mut cut := 0 - 1
+    repeat str.Len(a0) with i:
+        b := byte_at(a0, i)
+        if b == 47 || b == 92:
+            cut = i
+        end
+    end
+    if cut < 0:
+        ret false
+    end
+    out = str.Substr(a0, 0, cut)
+    ret true
+end
+
+func has_prefix_at(s0: str, at0: int, pre: str): bool:
+    pl := str.Len(pre)
+    if at0 + pl > str.Len(s0):
+        ret false
+    end
+    ret str.Equals(str.Substr(s0, at0, pl), pre)
+end
+
+// One salam.cfg line of read_cfg_stdlib: "stdlib[_path] = <value>".
+func parse_cfg_line(line: str, out &: str): bool:
+    n := str.Len(line)
+    mut p := 0
+    until p < n && (byte_at(line, p) == 32 || byte_at(line, p) == 9):
+        p += 1
+    end
+    if p < n && (byte_at(line, p) == 35 || byte_at(line, p) == 59):
+        ret false
+    end
+    mut key := 0 - 1
+    if has_prefix_at(line, p, "stdlib_path"):
+        key = p + 11
+    else has_prefix_at(line, p, "stdlib"):
+        key = p + 6
+    end
+    if key < 0:
+        ret false
+    end
+    until key < n && (byte_at(line, key) == 32 || byte_at(line, key) == 9):
+        key += 1
+    end
+    if key >= n || byte_at(line, key) != 61:
+        ret false
+    end
+    key += 1
+    until key < n && (byte_at(line, key) == 32 || byte_at(line, key) == 9):
+        key += 1
+    end
+    mut e := n
+    until e > key:
+        b := byte_at(line, e - 1)
+        if b == 10 || b == 13 || b == 32 || b == 9:
+            e -= 1
+        else:
+            break
+        end
+    end
+    if e <= key:
+        ret false
+    end
+    out = str.Substr(line, key, e - key)
+    ret true
+end
+
+func read_cfg_stdlib(cfg: str, out &: str): bool:
+    if !file_exists(cfg) || os.IsDir(cfg):
+        ret false
+    end
+    text := os.ReadFile(cfg)
+    n := str.Len(text)
+    mut ls := 0
+    until ls < n:
+        mut le := ls
+        until le < n && byte_at(text, le) != 10:
+            le += 1
+        end
+        if parse_cfg_line(str.Substr(text, ls, le - ls), out):
+            ret true
+        end
+        ls = le + 1
+    end
+    ret false
+end
+
+func resolve_stdlib_root(explicit_path: str): str:
+    if str.Len(explicit_path) > 0:
+        ret derive_root(explicit_path)
+    end
+    env := os.Env("SALAM_STD")
+    if str.Len(env) > 0:
+        r := derive_root(env)
+        if root_has_std(r):
+            ret r
+        end
+    end
+    mut exedir := ""
+    if get_exe_dir(exedir):
+        mut val := ""
+        if read_cfg_stdlib(exedir + "/salam.cfg", val):
+            mut abs_val := val
+            if !path_is_absolute(val):
+                abs_val = exedir + "/" + val
+            end
+            r2 := derive_root(abs_val)
+            if root_has_std(r2):
+                ret r2
+            end
+        end
+        // Dev checkout layout (post self-host restructure): std/ lives at the
+        // repo root, a sibling of compiler/ (where this binary lives) - so
+        // "../std" (candidate "..") is the primary case now, not "compiler".
+        rel := [".", "..", "../share/salam", "../lib/salam"] as str[4]
+        repeat 4 with i:
+            cand := exedir + "/" + rel[i]
+            if root_has_std(cand):
+                ret cand
+            end
+        end
+    end
+    // #ifdef SALAM_STDLIB_PREFIX (configure-time install prefix): no port
+    // equivalent; installed layouts are covered by the exe-relative paths.
+    ret ""
+end
+
+// salam_set_stdlib_root / salam_get_stdlib_root
+func set_stdlib_root_impl(root: str):
+    g_sm_stdlib_root = resolve_stdlib_root(root)
+    g_sm_stdlib_resolved = true
+end
+
+func get_stdlib_root(): str:
+    if !g_sm_stdlib_resolved:
+        set_stdlib_root_impl("")
+    end
+    ret g_sm_stdlib_root
+end
+
+func mingw_sysroot_subdir(triple: str): str:
+    if str.Len(triple) == 0:
+        ret ""
+    end
+    win := str.Contains(triple, "windows") || str.Contains(triple, "mingw") || str.Contains(triple, "win32")
+    gnu := str.Contains(triple, "gnu") || str.Contains(triple, "mingw")
+    if !win || !gnu:
+        ret ""
+    end
+    if str.Contains(triple, "x86_64") || str.Contains(triple, "amd64"):
+        ret "x86_64-w64-mingw32"
+    end
+    if str.Contains(triple, "aarch64") || str.Contains(triple, "arm64"):
+        ret "aarch64-w64-mingw32"
+    end
+    if str.Contains(triple, "i686") || str.Contains(triple, "i386") || str.Contains(triple, "i586") || str.Contains(triple, "x86"):
+        ret "i686-w64-mingw32"
+    end
+    if str.Contains(triple, "armv7") || str.Contains(triple, "arm"):
+        ret "armv7-w64-mingw32"
+    end
+    ret ""
+end
+
+func sysroot_looks_valid(dir: str): bool:
+    ret file_exists(dir + "/include/windows.h")
+end

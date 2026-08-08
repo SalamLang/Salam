@@ -64,18 +64,35 @@ const char *ll_safe_name(ll_t *ll, const char *raw)
         }
     }
     if (!needs_fix) return raw;
+    /*
+     * Hex-escape rather than blank out. Mapping every disallowed byte to '_'
+     * is not injective, and a non-ASCII identifier is *all* disallowed bytes:
+     * any two Arabic or Persian parameter names of the same length collapsed
+     * to the same "____", so a function taking two of them emitted
+     * `%p.__ = alloca` twice ("multiple definition of local value named
+     * 'p.__'"). '_' itself doubles so the escape stays unambiguous.
+     */
     {
-        size_t len = strlen(raw);
-        char *out = (char *)arena_alloc(ll->a, len + 1);
-        size_t i = 0;
-        for (; i < len; i++) {
-            char c = raw[i];
-            bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-                      (c >= '0' && c <= '9') || c == '_' || c == '.' || c == '$';
-            out[i] = ok ? c : '_';
+        sb_t b;
+        const unsigned char *p = (const unsigned char *)raw;
+        const char *r;
+        sb_init(&b);
+        for (; *p; p++) {
+            bool ok = (*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
+                      (*p >= '0' && *p <= '9') || *p == '.' || *p == '$';
+            if (ok)
+                sb_putc(&b, (char)*p);
+            else if (*p == '_')
+                sb_puts(&b, "__");
+            else {
+                char h[5];
+                sal_snprintf(h, sizeof h, "_%02x", *p);
+                sb_puts(&b, h);
+            }
         }
-        out[len] = 0;
-        return out;
+        r = arena_strdup(ll->a, sb_cstr(&b));
+        sb_free(&b);
+        return r;
     }
 }
 

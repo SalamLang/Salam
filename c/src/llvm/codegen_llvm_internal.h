@@ -203,6 +203,10 @@ const char *ll_array_elem(ll_t *ll, const char *ts);
 
 bool ll_is_slice_ts(const char *ts);
 
+bool ll_is_extern_fn_ts(const char *ts);
+
+bool ll_is_any_fn_ts(const char *ts);
+
 const char *ll_slice_elem(ll_t *ll, const char *ts);
 
 const char *ll_struct_ltype(ll_t *ll, const char *name);
@@ -226,6 +230,7 @@ symbol_t *ll_enum_sym(ll_t *ll, const char *name);
 int ll_field_index(symbol_t *ssym, const char *field, symbol_t **out_field);
 
 const char *ll_zero(const char *ts);
+const char *ll_fp_text(ll_t *ll, const char *v);
 
 const char *ll_func_ret(ll_t *ll, const char *ts);
 
@@ -242,6 +247,8 @@ ll_addr_t ll_addr_of(ll_t *ll, ast_node_t *n);
 bool ll_index_set(ll_t *ll, ast_node_t *index_target, ast_node_t *value);
 
 void ll_stmt(ll_t *ll, ast_node_t *n);
+
+void ll_assign(ll_t *ll, ast_node_t *n);
 
 void ll_block(ll_t *ll, ast_node_t *block);
 

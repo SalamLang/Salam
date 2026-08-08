@@ -1,0 +1,663 @@
+package jsgen
+
+import str
+import co "../sal_core.salam"
+import tok "../token.salam"
+import lg "../logger.salam"
+import at "../ast.salam"
+import sm "../semantic/semantic.salam"
+
+// ===== jsgen_stmt.c =====
+
+func jsg_emit_defers(g &: Jg, s &: sm.Sema, a &: at.Ast):
+    mut i := g.fn_defers.len()
+    until i > 0:
+        jsg_stmt(g, s, a, g.fn_defers.get(i - 1)[0])
+        i -= 1
+    end
+end
+
+func jsg_vardecl_inline(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int): str:
+    n := at.Get(a, id)
+    kw := n.is_mut ? "let" : "const"
+    init := n.a != 0 ? jsg_expr(g, s, a, n.a) : jsg_zero(s, n.type_str)
+    nm := jsg_local(g, n.name, n.is_mut)
+    ret kw + " " + nm + " = " + init
+end
+
+// "" = C NULL (no compound form)
+func jsg_compound(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int): str:
+    n := at.Get(a, id)
+    rhs := n.b
+    if n.op != tok.TK_ASSIGN || n.a == 0 || at.KindOf(a, n.a) != at.AST_IDENTIFIER:
+        ret ""
+    end
+    if rhs == 0 || at.KindOf(a, rhs) != at.AST_BINARY:
+        ret ""
+    end
+    rv := at.Get(a, rhs)
+    if rv.op != tok.TK_PLUS && rv.op != tok.TK_MINUS && rv.op != tok.TK_STAR:
+        ret ""
+    end
+    av := at.Get(a, n.a)
+    if rv.a == 0:
+        ret ""
+    end
+    rav := at.Get(a, rv.a)
+    if rav.kind != at.AST_IDENTIFIER || str.Len(rav.name) == 0 || !str.Equals(rav.name, av.name):
+        ret ""
+    end
+    if local_known(g, av.name) && !jsg_local_is_mut(g, av.name):
+        ret ""
+    end
+    // A sized integer result has to be masked back into its type, and there
+    // is nowhere to put the mask in `x += y` / `x++` - fall through to the
+    // plain `x = <wrapped expr>` form.
+    if jsg_ts_wrappable(av.type_str):
+        ret ""
+    end
+    lv := jsg_expr(g, s, a, n.a)
+    is_int := cg_is_int_typestr(av.type_str)
+    if is_int && (rv.op == tok.TK_PLUS || rv.op == tok.TK_MINUS) && rv.b != 0:
+        rbv := at.Get(a, rv.b)
+        if rbv.kind == at.AST_LITERAL && rbv.op == tok.TK_INT && rbv.value_int as i64 == 1:
+            ret lv + (rv.op == tok.TK_PLUS ? "++" : "--")
+        end
+    end
+    ret lv + " " + cg_op(rv.op) + "= " + jsg_expr_p(g, s, a, rv.b, JSP_LAMBDA)
+end
+
+func jsg_simple_inline(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int): str:
+    k := at.KindOf(a, id)
+    if k == at.AST_VAR_DECL:
+        ret jsg_vardecl_inline(g, s, a, id)
+    end
+    if k == at.AST_ASSIGN:
+        c := jsg_compound(g, s, a, id)
+        if str.Len(c) > 0:
+            ret c
+        end
+        n := at.Get(a, id)
+        if n.op == tok.TK_POWER_EQ:
+            ret jsg_expr(g, s, a, n.a) + " = Math.pow(" + jsg_expr(g, s, a, n.a) + ", " + jsg_expr(g, s, a, n.b) + ")"
+        end
+        ret jsg_expr(g, s, a, n.a) + " " + cg_op(n.op) + " " + jsg_expr(g, s, a, n.b)
+    end
+    if k == at.AST_EXPR_STMT:
+        ret jsg_expr(g, s, a, at.Get(a, id).a)
+    end
+    ret jsg_expr(g, s, a, id)
+end
+
+// static const char *jsg_stmt_expr(jg_t *g, ast_node_t *e) - strips one
+// redundant whole-expression paren pair for expression statements.
+func jsg_stmt_expr(g &: Jg, s &: sm.Sema, a &: at.Ast, e: int): str:
+    sv := jsg_expr(g, s, a, e)
+    n := str.Len(sv)
+    if n >= 2 && byte_at(sv, 0) == 40 && byte_at(sv, n - 1) == 41 && byte_at(sv, 1) != 123: // '(' ')' '{'
+        mut depth := 0
+        mut quote := 0
+        mut whole := true
+        mut i := 0
+        until i < n:
+            c := byte_at(sv, i)
+            if quote != 0:
+                if c == 92:
+                    i += 1
+                else c == quote:
+                    quote = 0
+                end
+                i += 1
+                continue
+            end
+            if c == 34 || c == 39 || c == 96: // '"' '\'' '`'
+                quote = c
+            else c == 40:
+                depth += 1
+            else c == 41:
+                depth -= 1
+                if depth == 0 && i != n - 1:
+                    whole = false
+                    break
+                end
+            end
+            i += 1
+        end
+        if whole && quote == 0:
+            ret sv.substr(1, n - 2)
+        end
+    end
+    ret sv
+end
+
+func jsg_stmt_list(g &: Jg, s &: sm.Sema, a &: at.Ast, block: int):
+    m := g.locals.len()
+    bv := at.Get(a, block)
+    cnt := bv.list.len()
+    mut i := 0
+    until i < cnt:
+        jsg_stmt(g, s, a, bv.list.get(i)[0])
+        i += 1
+    end
+    jsg_scope_reset(g, m)
+end
+
+func jsg_int_lit(a &: at.Ast, id: int, out &: i64): bool:
+    if id == 0:
+        ret false
+    end
+    n := at.Get(a, id)
+    if n.kind == at.AST_LITERAL && n.op == tok.TK_INT:
+        out = n.value_int as i64
+        ret true
+    end
+    if n.kind == at.AST_UNARY && n.op == tok.TK_MINUS && n.a != 0:
+        av := at.Get(a, n.a)
+        if av.kind == at.AST_LITERAL && av.op == tok.TK_INT:
+            out = (0 as i64) - (av.value_int as i64)
+            ret true
+        end
+    end
+    ret false
+end
+
+func jsg_bound_inline_ok(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int): bool:
+    if id == 0:
+        ret false
+    end
+    n := at.Get(a, id)
+    if n.kind == at.AST_LITERAL:
+        ret true
+    end
+    if n.kind == at.AST_IDENTIFIER && str.Len(n.name) > 0:
+        if local_known(g, n.name):
+            ret !jsg_local_is_mut(g, n.name)
+        end
+        sy := sm.Lookup(s, s.global, n.name)
+        ret sy != 0 && sm.SymAt(s, sy).kind == sm.SYM_CONST
+    end
+    ret false
+end
+
+func jsg_loop_var(g &: Jg, a &: at.Ast, id: int): str:
+    n := at.Get(a, id)
+    if str.Len(n.name) > 0:
+        ret jsg_local(g, n.name, false)
+    end
+    bases := ["i", "j", "k"] as str[3]
+    each bb in bases:
+        if !local_known(g, bb):
+            lv := jsg_fresh(g, bb)
+            _l := jsg_local(g, lv, false)
+            ret lv
+        end
+    end
+    lv2 := jsg_fresh(g, "i")
+    _l2 := jsg_local(g, lv2, false)
+    ret lv2
+end
+
+func jsg_repeat(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int):
+    n := at.Get(a, id)
+    m := g.locals.len()
+    lv := jsg_loop_var(g, a, id)
+    if n.c == 0:
+        is_int := n.a != 0 && cg_is_int_typestr(at.Get(a, n.a).type_str)
+        mut bound := jsg_expr_p(g, s, a, n.a, 11)
+        if !is_int:
+            bound = "Math.trunc(" + jsg_expr(g, s, a, n.a) + ")"
+        end
+        if jsg_bound_inline_ok(g, s, a, n.a):
+            cg_line(
+                g, "for (let " + lv + " = 0; " + lv + " < " + bound + "; " + lv + "++) {"
+            )
+        else:
+            cnt := jsg_fresh(g, "count")
+            cg_line(
+                g, "for (let " + lv + " = 0, " + cnt + " = " + bound + "; " + lv + " < " + cnt + "; " + lv + "++) {"
+            )
+        end
+    else:
+        mut from_v := 0 as i64
+        mut to_v := 0 as i64
+        mut step_v := 1 as i64
+        mut folded := jsg_int_lit(a, n.a, from_v) && jsg_int_lit(a, n.c, to_v)
+        if folded && n.d != 0:
+            folded = jsg_int_lit(a, n.d, step_v)
+        end
+        if folded:
+            up := from_v <= to_v
+            mag := step_v < 0 ? (0 as i64) - step_v : step_v
+            if mag == 1:
+                cg_line(
+                    g, "for (let " + lv + " = " + co.I64Toa(from_v) + "; " + lv + " " + (up ? "<=" : ">=") + " " + co.I64Toa(to_v) + "; " + lv + (up ? "++" : "--") + ") {"
+                )
+            else:
+                cg_line(
+                    g, "for (let " + lv + " = " + co.I64Toa(from_v) + "; " + lv + " " + (up ? "<=" : ">=") + " " + co.I64Toa(to_v) + "; " + lv + " " + (up ? "+" : "-") + "= " + co.I64Toa(mag) + ") {"
+                )
+            end
+        else:
+            endv := jsg_fresh(g, "end")
+            stepv := jsg_fresh(g, "step")
+            ai := n.a != 0 && cg_is_int_typestr(at.Get(a, n.a).type_str)
+            ci := n.c != 0 && cg_is_int_typestr(at.Get(a, n.c).type_str)
+            mut from_s := ""
+            if ai:
+                from_s = jsg_expr(g, s, a, n.a)
+            else:
+                from_s = "Math.trunc(" + jsg_expr(g, s, a, n.a) + ")"
+            end
+            mut to_s := ""
+            if ci:
+                to_s = jsg_expr(g, s, a, n.c)
+            else:
+                to_s = "Math.trunc(" + jsg_expr(g, s, a, n.c) + ")"
+            end
+            mut step_s := "1"
+            if n.d != 0:
+                step_s = "Math.trunc(" + jsg_expr(g, s, a, n.d) + ")"
+            end
+            cg_line(
+                g, "for (let " + lv + " = " + from_s + ", " + endv + " = " + to_s + ", " + stepv + " = (" + lv + " <= " + endv + " ? 1 : -1) * " + step_s + "; " + stepv + " > 0 ? " + lv + " <= " + endv + " : " + lv + " >= " + endv + "; " + lv + " += " + stepv + ") {"
+            )
+        end
+    end
+    g.indent += 1
+    bv := at.Get(a, n.b)
+    cnt2 := bv.list.len()
+    mut i := 0
+    until i < cnt2:
+        jsg_stmt(g, s, a, bv.list.get(i)[0])
+        i += 1
+    end
+    g.indent -= 1
+    cg_line(g, "}")
+    jsg_scope_reset(g, m)
+end
+
+func jsg_stmt(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int):
+    if id == 0:
+        ret
+    end
+    n := at.Get(a, id)
+    if n.kind == at.AST_BLOCK:
+        jsg_block(g, s, a, id)
+        ret
+    end
+    if n.kind == at.AST_VAR_DECL:
+        cg_line(g, jsg_vardecl_inline(g, s, a, id) + ";")
+        ret
+    end
+    if n.kind == at.AST_CONST_DECL:
+        init := jsg_expr(g, s, a, n.a)
+        cg_line(g, "const " + jsg_local(g, n.name, false) + " = " + init + ";")
+        ret
+    end
+    if n.kind == at.AST_ASSIGN:
+        if n.op == tok.TK_ASSIGN && n.a != 0 && at.KindOf(a, n.a) == at.AST_INDEX:
+            av := at.Get(a, n.a)
+            if av.a != 0:
+                aats := at.Get(a, av.a).type_str
+                if str.Len(aats) > 0:
+                    mut sname := ""
+                    ssym := cg_struct_of(s, aats, sname)
+                    if ssym != 0:
+                        mems := sm.SymAt(s, ssym).members
+                        mut m := 0
+                        if mems != 0:
+                            m = sm.LookupLocal(s, mems, "operator_index_set")
+                        end
+                        if m != 0 && sm.SymAt(s, m).kind == sm.SYM_METHOD:
+                            sig := pick_op_overload(s, m, 2)
+                            if sig != 0:
+                                sv := sm.SymAt(s, ssym)
+                                spkg := str.Len(sv.pkgname) > 0 ? sv.pkgname : g.pkg
+                                fn := jsg_fn_name(
+                                    g, s, spkg, sv.name, "operator_index_set", m, sig, false, false
+                                )
+                                cg_line(
+                                    g, fn + "(" + jsg_expr(g, s, a, av.a) + ", " + jsg_expr(g, s, a, av.b) + ", " + jsg_expr(g, s, a, n.b) + ");"
+                                )
+                                ret
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        if n.op != tok.TK_ASSIGN && n.a != 0:
+            lts := at.Get(a, n.a).type_str
+            if str.Len(lts) > 0:
+                base_op := cg_compound_base(n.op)
+                if base_op != tok.TK_EOF:
+                    mut sname2 := ""
+                    ssym2 := cg_struct_of(s, lts, sname2)
+                    if ssym2 != 0:
+                        mname := cg_op_method(base_op)
+                        if str.Len(mname) > 0:
+                            call := jsg_emit_op_call(
+                                g, s, a, n.a, ssym2, sname2, mname, n.b
+                            )
+                            if str.Len(call) > 0:
+                                cg_line(
+                                    g, jsg_expr(g, s, a, n.a) + " = " + call + ";"
+                                )
+                                ret
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        if n.op == tok.TK_POWER_EQ:
+            cg_line(
+                g, jsg_expr(g, s, a, n.a) + " = Math.pow(" + jsg_expr(g, s, a, n.a) + ", " + jsg_expr(g, s, a, n.b) + ");"
+            )
+            ret
+        end
+        if n.op == tok.TK_SLASH_EQ && n.a != 0 && cg_is_int_typestr(at.Get(a, n.a).type_str):
+            cg_line(
+                g, jsg_expr(g, s, a, n.a) + " = Math.trunc(" + jsg_expr_p(g, s, a, n.a, 13) + " / " + jsg_expr_p(g, s, a, n.b, 14) + ");"
+            )
+            ret
+        end
+        c := jsg_compound(g, s, a, id)
+        if str.Len(c) > 0:
+            cg_line(g, c + ";")
+            ret
+        end
+        if n.op != tok.TK_ASSIGN && n.a != 0 && jsg_ts_wrappable(at.Get(a, n.a).type_str):
+            wts := at.Get(a, n.a).type_str
+            bop := cg_compound_base(n.op)
+            if bop != tok.TK_EOF:
+                wuns := cg_is_unsigned_typestr(wts)
+                wlv := jsg_expr(g, s, a, n.a)
+                wop := (bop == tok.TK_SHR && wuns) ? ">>>" : cg_op(bop)
+                mut wrhs := wlv + " " + wop + " " + jsg_expr_p(g, s, a, n.b, 14)
+                if bop == tok.TK_STAR && jsg_int_ts_bits(wts) == 32:
+                    wrhs = "Math.imul(" + wlv + ", " + jsg_expr(g, s, a, n.b) + ")"
+                end
+                cg_line(g, wlv + " = " + jsg_wrap_int(wrhs, wts) + ";")
+                ret
+            end
+        end
+        cg_line(
+            g, jsg_expr(g, s, a, n.a) + " " + cg_op(n.op) + " " + jsg_expr(g, s, a, n.b) + ";"
+        )
+        ret
+    end
+    if n.kind == at.AST_EXPR_STMT:
+        // `x++` on a sized integer wraps at that type's width; JS '++' does
+        // not, so in statement position (where the old value is unused) it
+        // becomes the masked long form.
+        if n.a != 0 && at.KindOf(a, n.a) == at.AST_INCDEC:
+            iv := at.Get(a, n.a)
+            if iv.a != 0 && jsg_ts_wrappable(at.Get(a, iv.a).type_str):
+                its := at.Get(a, iv.a).type_str
+                ilv := jsg_expr(g, s, a, iv.a)
+                iop := iv.op == tok.TK_PLUS_PLUS ? "+" : "-"
+                cg_line(g, ilv + " = " + jsg_wrap_int(ilv + " " + iop + " 1", its) + ";")
+                ret
+            end
+        end
+        cg_line(g, jsg_stmt_expr(g, s, a, n.a) + ";")
+        ret
+    end
+    if n.kind == at.AST_DEFER:
+        g.fn_defers.push(n.a)
+        ret
+    end
+    if n.kind == at.AST_RETURN:
+        if str.Len(g.match_result_tmp) > 0:
+            if n.a != 0:
+                cg_line(
+                    g, g.match_result_tmp + " = " + jsg_expr(g, s, a, n.a) + "; break " + g.match_end_label + ";"
+                )
+            else:
+                cg_line(g, "break " + g.match_end_label + ";")
+            end
+            ret
+        end
+        if n.a != 0 && g.fn_defers.len() > 0:
+            expr := jsg_expr(g, s, a, n.a)
+            g.tmpn += 1
+            tmp := "__retv" + co.I64Toa(g.tmpn as i64)
+            cg_line(g, "const " + tmp + " = " + expr + ";")
+            jsg_emit_defers(g, s, a)
+            cg_line(g, "return " + tmp + ";")
+        else:
+            jsg_emit_defers(g, s, a)
+            if n.a != 0:
+                cg_line(g, "return " + jsg_expr(g, s, a, n.a) + ";")
+            else:
+                cg_line(g, "return;")
+            end
+        end
+        ret
+    end
+    if n.kind == at.AST_BREAK:
+        cg_line(g, "break;")
+        ret
+    end
+    if n.kind == at.AST_CONTINUE:
+        cg_line(g, "continue;")
+        ret
+    end
+    if n.kind == at.AST_MATCH:
+        g.tmpn += 1
+        t := g.tmpn
+        subj_var := "__msubj" + co.I64Toa(t as i64)
+        cg_line(g, "{")
+        g.indent += 1
+        cg_line(g, "const " + subj_var + " = " + jsg_expr(g, s, a, n.a) + ";")
+        subj_ts := at.Get(a, n.a).type_str
+        cnt := n.list.len()
+        mut i := 0
+        until i < cnt:
+            arm := n.list.get(i)[0]
+            cond := jsg_match_arm_cond(g, s, a, arm, subj_var, subj_ts)
+            cg_line(g, (i > 0 ? "} else " : "") + "if (" + cond + ") {")
+            g.indent += 1
+            jsg_stmt_list(g, s, a, at.Get(a, arm).b)
+            g.indent -= 1
+            i += 1
+        end
+        if cnt > 0:
+            cg_line(g, "}")
+        end
+        g.indent -= 1
+        cg_line(g, "}")
+        ret
+    end
+    if n.kind == at.AST_IF:
+        cg_line(g, "if (" + jsg_expr(g, s, a, n.a) + ") {")
+        g.indent += 1
+        jsg_stmt_list(g, s, a, n.b)
+        g.indent -= 1
+        if n.c != 0 && at.KindOf(a, n.c) == at.AST_IF:
+            cv := at.Get(a, n.c)
+            cg_indent(g)
+            str.BufAppend(g.out, "} else ")
+            str.BufAppend(g.out, "if (" + jsg_expr(g, s, a, cv.a) + ") {\n")
+            g.indent += 1
+            jsg_stmt_list(g, s, a, cv.b)
+            g.indent -= 1
+            if cv.c != 0:
+                cg_line(g, "} else {")
+                g.indent += 1
+                jsg_stmt(g, s, a, cv.c)
+                g.indent -= 1
+            end
+            cg_line(g, "}")
+        else n.c != 0:
+            cg_line(g, "} else {")
+            g.indent += 1
+            jsg_stmt_list(g, s, a, n.c)
+            g.indent -= 1
+            cg_line(g, "}")
+        else:
+            cg_line(g, "}")
+        end
+        ret
+    end
+    if n.kind == at.AST_UNTIL:
+        cg_line(g, "while (" + jsg_expr(g, s, a, n.a) + ") {")
+        g.indent += 1
+        jsg_stmt_list(g, s, a, n.b)
+        g.indent -= 1
+        cg_line(g, "}")
+        ret
+    end
+    if n.kind == at.AST_REPEAT:
+        jsg_repeat(g, s, a, id)
+        ret
+    end
+    if n.kind == at.AST_EACH:
+        m := g.locals.len()
+        if n.c != 0 && str.Len(at.Get(a, n.c).name) > 0:
+            it := jsg_expr_p(g, s, a, n.a, JSP_MEMBER)
+            cg_line(
+                g, "for (const [" + jsg_local(g, at.Get(a, n.c).name, false) + ", " + jsg_local(g, n.name, false) + "] of " + it + ".entries()) {"
+            )
+        else:
+            it2 := jsg_expr(g, s, a, n.a)
+            cg_line(
+                g, "for (const " + jsg_local(g, n.name, false) + " of " + it2 + ") {"
+            )
+        end
+        g.indent += 1
+        bv := at.Get(a, n.b)
+        cnt2 := bv.list.len()
+        mut i2 := 0
+        until i2 < cnt2:
+            jsg_stmt(g, s, a, bv.list.get(i2)[0])
+            i2 += 1
+        end
+        g.indent -= 1
+        cg_line(g, "}")
+        jsg_scope_reset(g, m)
+        ret
+    end
+    if n.kind == at.AST_FOR:
+        mark := g.locals.len()
+        init := n.a != 0 ? jsg_simple_inline(g, s, a, n.a) : ""
+        cond := n.b != 0 ? jsg_expr(g, s, a, n.b) : ""
+        post := n.c != 0 ? jsg_simple_inline(g, s, a, n.c) : ""
+        cg_line(g, "for (" + init + "; " + cond + "; " + post + ") {")
+        g.indent += 1
+        dv := at.Get(a, n.d)
+        cnt3 := dv.list.len()
+        mut i3 := 0
+        until i3 < cnt3:
+            jsg_stmt(g, s, a, dv.list.get(i3)[0])
+            i3 += 1
+        end
+        g.indent -= 1
+        cg_line(g, "}")
+        jsg_scope_reset(g, mark)
+        ret
+    end
+end
+
+func jsg_block(g &: Jg, s &: sm.Sema, a &: at.Ast, block: int):
+    jsg_stmt_list(g, s, a, block)
+end
+
+// owner: SymId (0 = C NULL - a free function)
+func jsg_function(g &: Jg, s &: sm.Sema, a &: at.Ast, fnid: int, owner: int):
+    fn := at.Get(a, fnid)
+    mut fsym := 0
+    if owner != 0:
+        mems := sm.SymAt(s, owner).members
+        if mems != 0:
+            fsym = sm.LookupLocal(s, mems, fn.name)
+        end
+    else:
+        fsym = sm.LookupLocal(s, s.global, fn.name)
+    end
+    sig := sig_of_decl(s, fsym, fnid)
+    if sig == 0:
+        ret
+    end
+    mut ti := false
+    mut ti_ts := ""
+    mut is_instance := fn.synthetic
+    mut opkg := g.pkg
+    mut oname := ""
+    if owner != 0:
+        ov := sm.SymAt(s, owner)
+        ti = ov.kind == sm.SYM_TYPEIMPL
+        if ti:
+            ti_ts = sm.ToString(s, ov.ty)
+        end
+        if str.Len(ov.generic_base) > 0:
+            is_instance = true
+        end
+        if str.Len(ov.pkgname) > 0:
+            opkg = ov.pkgname
+        end
+        oname = ov.name
+    end
+    mut name := ""
+    if fn.is_extern:
+        name = cg_cident(fn.name)
+    else ti:
+        mut many := false
+        if fsym != 0:
+            many = sm.SymAt(s, fsym).overloads.len() > 1
+        end
+        if many:
+            name = cg_mangle_ti(s, ti_ts, fn.name, sm.SigAt(s, sig).params)
+        else:
+            name = jsg_ident(cg_cident(ti_ts) + "_" + fn.name)
+        end
+    else:
+        name = jsg_fn_name(
+            g, s, opkg, oname, fn.name, fsym, sig, false, is_instance
+        )
+    end
+    g.last_fn_name = name
+    if owner == 0 && str.Len(g.entry) > 0 && str.Equals(fn.name, g.entry):
+        g.entry_mangled = name
+    end
+    g.cur_struct = owner
+    g.cur_fn_home = fsym != 0 ? sm.SymAt(s, fsym).home : 0
+    jsg_scope_reset(g, 0)
+    g.fn_used_names.clear()
+    saved_defers := g.fn_defers
+    g.fn_defers = Vector {} as Vector<int>
+    mut params := str.NewBuilder()
+    if owner != 0:
+        str.BufAppend(params, "__self")
+        _s := jsg_local(g, "__self", false)
+    end
+    np := fn.list.len()
+    mut i := 0
+    until i < np:
+        p := at.Get(a, fn.list.get(i)[0])
+        if p.is_ref:
+            lg.Log(
+                g.log, lg.PH_CODEGEN, lg.LOG_WARN, "js backend: reference parameter '" + p.name + "' of '" + fn.name + "' is passed by value"
+            )
+        end
+        if owner != 0 || i > 0:
+            str.BufAppend(params, ", ")
+        end
+        str.BufAppend(params, jsg_local(g, p.name, false))
+        i += 1
+    end
+    cg_line(g, "function " + name + "(" + str.BufStr(params) + ") {")
+    str.BufFree(params)
+    g.indent += 1
+    if fn.a != 0:
+        jsg_block(g, s, a, fn.a)
+    end
+    jsg_emit_defers(g, s, a)
+    g.indent -= 1
+    cg_line(g, "}")
+    g.fn_defers.free()
+    g.fn_defers = saved_defers
+    g.cur_struct = 0
+    g.cur_fn_home = 0
+end

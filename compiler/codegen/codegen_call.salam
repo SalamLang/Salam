@@ -1,0 +1,689 @@
+package codegen
+
+import str
+import co "../sal_core.salam"
+import at "../ast.salam"
+import i18 "../i18n.salam"
+import sm "../semantic/semantic.salam"
+
+// ===== codegen_call.c =====
+
+func arg_at(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int, i: int): str:
+    cn := at.Get(a, n)
+    if cn.list.len() > i:
+        ret cg_expr(g, s, a, cn.list.get(i)[0])
+    end
+    ret "0"
+end
+
+func cg_fill_defaults(
+    g &: Cg, s &: sm.Sema, a &: at.Ast, b &: str.StringBuilder, call: int, sig: int, emitted0: int
+):
+    if sig == 0 || sm.SigAt(s, sig).decl == 0:
+        ret
+    end
+    dn := at.Get(a, sm.SigAt(s, sig).decl)
+    np := dn.list.len()
+    mut emitted := emitted0
+    mut i := at.Get(a, call).list.len()
+    until i < np:
+        p := at.Get(a, dn.list.get(i)[0])
+        if p.a != 0:
+            if emitted > 0:
+                co.SbPuts(b, ", ")
+            end
+            co.SbPuts(b, cg_expr(g, s, a, p.a))
+            emitted += 1
+        end
+        i += 1
+    end
+end
+
+// call_emit_arg - appends arg `i`'s C expression to b, taking its address
+// first if the matching param (from sig) is declared `&:`.
+func call_emit_arg(g &: Cg, s &: sm.Sema, a &: at.Ast, b &: str.StringBuilder, argid: int, sig: int, i: int): void:
+    mut sdecl := 0
+    if sig != 0:
+        sdecl = sm.SigAt(s, sig).decl
+    end
+    mut arg_is_ref := false
+    if sig != 0 && sdecl != 0:
+        dn := at.Get(a, sdecl)
+        if i < dn.list.len():
+            arg_is_ref = at.Get(a, dn.list.get(i)[0]).is_ref
+        end
+    end
+    if !arg_is_ref:
+        co.SbPuts(b, cg_expr(g, s, a, argid))
+        ret
+    end
+    sv := sm.SigAt(s, sig)
+    mut ref_c := ""
+    if cg_addressable(a, argid):
+        ref_c = "&(" + cg_expr(g, s, a, argid) + ")"
+    else:
+        // argid isn't a real C lvalue (e.g. a member of a
+        // byval-struct-returning call's result) - bind it to a
+        // genuine local temp first, same fallback cg_method already
+        // uses below, so `&` has an actual lvalue to operate on.
+        g.tmpn += 1
+        rt := g.tmpn
+        argc := cg_expr(g, s, a, argid)
+        argts := at.Get(a, argid).type_str
+        ref_c = "({ " + cg_ctype(argts) + " __r" + rt + " = (" + argc + "); &__r" + rt + "; })"
+    end
+    if i < sv.params.len():
+        co.SbPuts(
+            b, "(" + cg_ctype(sm.ToString(s, sv.params.get(i)[0])) + "*)" + ref_c
+        )
+    else:
+        co.SbPuts(b, ref_c)
+    end
+end
+
+// call_args - sig is a SigId (0 = C NULL).
+func call_args(g &: Cg, s &: sm.Sema, a &: at.Ast, call: int, sig: int): str:
+    mut b := co.SbNew()
+    cn := at.Get(a, call)
+    repeat cn.list.len() with i:
+        argid := cn.list.get(i)[0]
+        if i > 0:
+            co.SbPuts(b, ", ")
+        end
+        call_emit_arg(g, s, a, b, argid, sig, i)
+    end
+    cg_fill_defaults(g, s, a, b, call, sig, cn.list.len())
+    r := co.SbCstr(b)
+    co.SbFree(b)
+    ret r
+end
+
+func call_args_lead(
+    g &: Cg, s &: sm.Sema, a &: at.Ast, call: int, sig: int
+): str:
+    mut b := co.SbNew()
+    cn := at.Get(a, call)
+    repeat cn.list.len() with i:
+        co.SbPuts(b, ", ")
+        call_emit_arg(g, s, a, b, cn.list.get(i)[0], sig, i)
+    end
+    cg_fill_defaults(g, s, a, b, call, sig, 1)
+    r := co.SbCstr(b)
+    co.SbFree(b)
+    ret r
+end
+
+// call_sret - ret_t is a sm TypeId.
+func call_sret(
+    g &: Cg, s &: sm.Sema, ret_t: int, mangled: str, args: str
+): str:
+    rc := cg_ctype(sm.ToString(s, ret_t))
+    g.tmpn += 1
+    t := g.tmpn
+    sep := str.Len(args) > 0 ? ", " : ""
+    ret "({ " + rc + " __s" + t + "; " + mangled + "(" + args + sep + "&__s" + t + "); __s" + t + "; })"
+end
+
+func call_value(
+    g &: Cg, s &: sm.Sema, a &: at.Ast, n: int, callee: int
+): str:
+    callee_ts := at.Get(a, callee).type_str
+    cret := cg_ctype(func_ret_of(callee_ts))
+    cps := func_cast_params_env(callee_ts)
+    args := call_args_lead(g, s, a, n, 0)
+    tmp := "_clz" + g.clos_n
+    g.clos_n += 1
+    callee_c := cg_expr(g, s, a, callee)
+    ret "({ void *" + tmp + " = (void*)(" + callee_c + "); ((" + cret + "(*)" + cps + ")(*(void**)" + tmp + "))(" + tmp + args + "); })"
+end
+
+// 'extern func(...)' values are raw C-ABI function pointers (no closure
+// env word) - call the address directly.
+func call_raw_ptr(
+    g &: Cg, s &: sm.Sema, a &: at.Ast, n: int, callee: int
+): str:
+    callee_ts := at.Get(a, callee).type_str
+    cret := cg_ctype(raw_ret_of(callee_ts))
+    cps := raw_cast_params(callee_ts)
+    args := call_args(g, s, a, n, 0)
+    ret "((" + cret + "(*)" + cps + ")(" + cg_expr(g, s, a, callee) + "))(" + args + ")"
+end
+
+func cg_order_stdout(g &: Cg, printf_expr: str): str:
+    if !g.single_threaded:
+        ret printf_expr
+    end
+    ret "({ salam_out_flush(); " + printf_expr + "; fflush(0); })"
+end
+
+func cg_lower_print(
+    g &: Cg, s &: sm.Sema, a &: at.Ast, n: int, nl: bool, err: bool
+): str:
+    mut segs := Vector {} as Vector<PfSeg>
+    defer segs.free()
+    pf_build_impl(a, n, nl, segs)
+    if segs.len() == 0:
+        ret "(void)0"
+    end
+    if !err && g.single_threaded:
+        mut all_lit := true
+        mut raw := co.SbNew()
+        repeat segs.len() with i:
+            sg := segs.get(i)[0]
+            if sg.kind != PF_LIT:
+                all_lit = false
+                break
+            end
+            co.SbPuts(raw, sg.text)
+        end
+        if all_lit:
+            rawlen := co.SbLen(raw)
+            lit := cg_cescape(co.SbCstr(raw))
+            co.SbFree(raw)
+            ret "SALAM_OUT_LIT(" + lit + ", " + co.I64Toa(rawlen) + ")"
+        end
+        co.SbFree(raw)
+    end
+    mut fb := co.SbNew()
+    mut ab := co.SbNew()
+    repeat segs.len() with i2:
+        sg2 := segs.get(i2)[0]
+        if sg2.kind == PF_LIT:
+            tn := str.Len(sg2.text)
+            mut ti := 0
+            until ti < tn:
+                ch := byte_at(sg2.text, ti)
+                if ch == 37:
+                    co.SbPutc(fb, 37)
+                end
+                co.SbPutc(fb, ch)
+                ti += 1
+            end
+            continue
+        end
+        e := cg_expr(g, s, a, sg2.expr)
+        mut av := ""
+        if sg2.kind == PF_CHAR:
+            co.SbPuts(fb, "%s")
+            av = "salam_char_from_code(" + e + ")"
+        else sg2.kind == PF_BOOL:
+            co.SbPuts(fb, pf_spec_impl(sg2.kind))
+            av = "((" + e + `) ? "true" : "false")`
+        else sg2.kind == PF_F64:
+            co.SbPuts(fb, pf_spec_impl(sg2.kind))
+            av = "(double)(" + e + ")"
+        else sg2.kind == PF_U32:
+            co.SbPuts(fb, pf_spec_impl(sg2.kind))
+            av = "(unsigned)(" + e + ")"
+        else sg2.kind == PF_I64:
+            co.SbPuts(fb, pf_spec_impl(sg2.kind))
+            av = "(long long)(" + e + ")"
+        else sg2.kind == PF_U64:
+            co.SbPuts(fb, pf_spec_impl(sg2.kind))
+            av = "(unsigned long long)(" + e + ")"
+        else sg2.kind == PF_SIZE:
+            co.SbPuts(fb, pf_spec_impl(sg2.kind))
+            av = "(size_t)(" + e + ")"
+        else sg2.kind == PF_I32:
+            co.SbPuts(fb, pf_spec_impl(sg2.kind))
+            av = "(int)(" + e + ")"
+        else:
+            co.SbPuts(fb, pf_spec_impl(sg2.kind))
+            av = e
+        end
+        co.SbPuts(ab, ", ")
+        co.SbPuts(ab, av)
+    end
+    cfmt := cg_cescape(co.SbCstr(fb))
+    al := co.SbCstr(ab)
+    co.SbFree(fb)
+    co.SbFree(ab)
+    if err:
+        ret cg_order_stdout(
+            g, "({ int32_t __ern = snprintf((void*)0, (uint64_t)0, " + cfmt + al + "); char *__erb = __ern > 0 ? (char*)" + CG_MEM_ALLOC + "((uint64_t)__ern + 1) : (char*)0; if (__erb) snprintf(__erb, " + "(uint64_t)__ern + 1, " + cfmt + al + "); if (__erb) { int64_t __err_r = (int64_t)SALAM_RAW_WRITE(2, " + "__erb, __ern); (void)__err_r; } })"
+        )
+    end
+    ret cg_order_stdout(g, "printf(" + cfmt + al + ")")
+end
+
+func call_ident(
+    g &: Cg, s &: sm.Sema, a &: at.Ast, n: int, callee: int
+): str:
+    cn := at.Get(a, n)
+    nm := at.Get(a, callee).name
+    if str.Equals(nm, "spawn") && cn.list.len() == 1:
+        fnn := at.Get(a, cn.list.get(0)[0])
+        fsym := sm.Lookup(s, s.global, fnn.name)
+        mut mangled := fnn.name
+        if fsym != 0:
+            mut empty := Vector {} as Vector<int>
+            mangled = cg_mangle(g, s, "", fnn.name, empty)
+            empty.free()
+        end
+        ret "salam_thread_spawn((salam_thread_fn)" + mangled + ")"
+    end
+    if str.Equals(nm, "funcptr") && cn.list.len() == 1:
+        fnn2 := at.Get(a, cn.list.get(0)[0])
+        fsym2 := sm.Lookup(s, s.global, fnn2.name)
+        mut mangled2 := fnn2.name
+        if fsym2 != 0 && sm.SymAt(s, fsym2).overloads.len() > 0:
+            sig0 := sm.SymAt(s, fsym2).overloads.get(0)[0]
+            // An extern keeps its declared C name - it is not ours to
+            // mangle. Without this, funcptr() on a libc extern emits a
+            // symbol that exists nowhere: `funcptr(printf)` in
+            // std/llvm/orc.salam became `_Salam_llvm_printf_str`.
+            decl0 := sm.SigAt(s, sig0).decl
+            if decl0 == 0 || !at.Get(a, decl0).is_extern:
+                mangled2 = cg_mangle(
+                    g, s, "", fnn2.name, sm.SigAt(s, sig0).params
+                )
+            end
+        end
+        ret "(int64_t)(void*)" + mangled2
+    end
+    if str.Equals(nm, "callhandler") && cn.list.len() == 2:
+        fnp := cg_expr(g, s, a, cn.list.get(0)[0])
+        argx := cg_expr(g, s, a, cn.list.get(1)[0])
+        ret "((void(*)(int64_t))(intptr_t)(" + fnp + "))((int64_t)(" + argx + "))"
+    end
+    is_print := str.Equals(nm, "print")
+    is_println := str.Equals(nm, "println")
+    is_printerr := str.Equals(nm, "printerr")
+    is_printerrln := str.Equals(nm, "printerrln")
+    if is_print || is_println || is_printerr || is_printerrln:
+        ret cg_lower_print(
+            g, s, a, n, is_println || is_printerrln, is_printerr || is_printerrln
+        )
+    end
+    if str.Equals(nm, "input"):
+        ret "salam_input()"
+    end
+    if str.Equals(nm, "lang"):
+        ret `"` + i18.Lang() + `"`
+    end
+    if str.Equals(nm, "args"):
+        cnv := cg_ctype(str.Len(cn.type_str) > 0 ? cn.type_str : "Vector_str")
+        g.tmpn += 1
+        t := g.tmpn
+        ret "({ int32_t __an" + t + "; const char** __ad" + t + " = salam_args(&__an" + t + "); (" + cnv + "){ __ad" + t + ", __an" + t + ", __an" + t + " }; })"
+    end
+    if str.Equals(nm, "listdir") && cn.list.len() == 1:
+        cnv2 := cg_ctype(str.Len(cn.type_str) > 0 ? cn.type_str : "Vector_str")
+        argx2 := cg_expr(g, s, a, cn.list.get(0)[0])
+        g.tmpn += 1
+        t2 := g.tmpn
+        ret "({ int32_t __vn" + t2 + "; const char** __vd" + t2 + " = salam_os_listdir(" + argx2 + ", &__vn" + t2 + "); (" + cnv2 + "){ __vd" + t2 + ", __vn" + t2 + ", __vn" + t2 + " }; })"
+    end
+    if str.Equals(nm, "sizeof") && cn.list.len() == 1:
+        opn := at.Get(a, cn.list.get(0)[0])
+        ret "(size_t)sizeof(" + cg_ctype(opn.type_str) + ")"
+    end
+    if sm.Lookup(s, s.global, nm) == 0:
+        if str.Equals(nm, "hash") && cn.list.len() == 1:
+            hid := cn.list.get(0)[0]
+            ats := at.Get(a, hid).type_str
+            if str.Equals(ats, "str"):
+                ret "salam_str_hash(" + cg_expr(g, s, a, hid) + ")"
+            end
+            ret "salam_hash_int((uint64_t)(intptr_t)(" + cg_expr(g, s, a, hid) + "))"
+        end
+    end
+    if str.Equals(nm, "len") && cn.list.len() == 1:
+        argid := cn.list.get(0)[0]
+        argn := at.Get(a, argid)
+        if cg_is_slice_ts(argn.type_str):
+            ret "(int32_t)(" + cg_expr(g, s, a, argid) + ").len"
+        end
+        if str.IndexOf(argn.type_str, "[") >= 0:
+            ret co.I64Toa(array_size_of(argn.type_str))
+        end
+        klen := at.StrLitLen(a, argid)
+        if klen >= (0 as i64):
+            ret co.I64Toa(klen)
+        end
+        ret "(int32_t)strlen(" + cg_expr(g, s, a, argid) + ")"
+    end
+    if str.Equals(nm, "char_code") && cn.list.len() == 1:
+        ret "(int32_t)(unsigned char)(" + cg_expr(g, s, a, cn.list.get(0)[0]) + ")[0]"
+    end
+    bi := sm.BuiltinLookup(nm)
+    fsym0 := sm.Lookup(s, s.global, nm)
+    if bi >= 0 && fsym0 == 0:
+        mut b := co.SbNew()
+        co.SbPuts(b, sm.BuiltinAt(bi).runtime)
+        co.SbPutc(b, 40)
+        repeat cn.list.len() with i:
+            if i > 0:
+                co.SbPuts(b, ", ")
+            end
+            co.SbPuts(b, cg_expr(g, s, a, cn.list.get(i)[0]))
+        end
+        co.SbPutc(b, 41)
+        r := co.SbCstr(b)
+        co.SbFree(b)
+        ret r
+    end
+    mut fsym := sm.Lookup(s, s.global, nm)
+    mut home_pkg := ""
+    if fsym == 0 && g.cur_fn_home != 0:
+        hs := sm.Lookup(s, g.cur_fn_home, nm)
+        if hs != 0 && sm.SymAt(s, hs).kind == sm.SYM_FUNC:
+            fsym = hs
+            home_pkg = sm.SymAt(s, hs).pkgname
+        end
+    end
+    if fsym == 0 && g.cur_struct != 0 && sm.SymAt(s, g.cur_struct).home != 0:
+        hs2 := sm.Lookup(s, sm.SymAt(s, g.cur_struct).home, nm)
+        if hs2 != 0 && sm.SymAt(s, hs2).kind == sm.SYM_FUNC:
+            fsym = hs2
+            home_pkg = sm.SymAt(s, hs2).pkgname
+        end
+    end
+    mut sig := 0
+    if fsym != 0:
+        sig = pick_overload(s, a, fsym, n)
+    end
+    is_extern_call := sig != 0 && sm.SigAt(s, sig).decl != 0 && at.Get(a, sm.SigAt(s, sig).decl).is_extern
+    inst_fn := sig != 0 && sm.SigAt(s, sig).decl != 0 && at.Get(a, sm.SigAt(s, sig).decl).synthetic
+    mut mangled3 := nm
+    if is_extern_call:
+        mangled3 = nm
+    else inst_fn:
+        mangled3 = cg_mangle_in(s, "g", "", nm, sm.SigAt(s, sig).params)
+    else sig != 0:
+        mangled3 = cg_mangle_in(
+            s, str.Len(home_pkg) > 0 ? home_pkg : g.pkg, "", nm, sm.SigAt(s, sig).params
+        )
+    end
+    args := call_args(g, s, a, n, sig)
+    if sig != 0 && type_is_byval_agg(s, sm.SigAt(s, sig).ret_type) && !is_extern_call:
+        ret call_sret(g, s, sm.SigAt(s, sig).ret_type, mangled3, args)
+    end
+    ret mangled3 + "(" + args + ")"
+end
+
+func call_pkg(
+    g &: Cg, s &: sm.Sema, a &: at.Ast, n: int, pk: int, callee: int
+): str:
+    nm := at.Get(a, callee).name
+    fn := sm.LookupLocal(s, sm.SymAt(s, pk).members, nm)
+    mut sig := 0
+    if fn != 0:
+        sig = pick_overload(s, a, fn, n)
+    end
+    is_extern_call := sig != 0 && sm.SigAt(s, sig).decl != 0 && at.Get(a, sm.SigAt(s, sig).decl).is_extern
+    mut mangled := ""
+    if is_extern_call:
+        mangled = nm
+    else sig != 0 && sm.SigAt(s, sig).decl != 0 && at.Get(a, sm.SigAt(s, sig).decl).synthetic:
+        mangled = cg_mangle_in(s, "g", "", nm, sm.SigAt(s, sig).params)
+    else sig != 0:
+        mangled = cg_mangle_in(
+            s, sm.SymAt(s, pk).pkgname, "", nm, sm.SigAt(s, sig).params
+        )
+    else:
+        mut empty := Vector {} as Vector<int>
+        mangled = cg_mangle_in(s, sm.SymAt(s, pk).pkgname, "", nm, empty)
+        empty.free()
+    end
+    args := call_args(g, s, a, n, sig)
+    if sig != 0 && type_is_byval_agg(s, sm.SigAt(s, sig).ret_type) && !is_extern_call:
+        ret call_sret(g, s, sm.SigAt(s, sig).ret_type, mangled, args)
+    end
+    ret mangled + "(" + args + ")"
+end
+
+func call_dyn(
+    g &: Cg, s &: sm.Sema, a &: at.Ast, n: int, obj: int, callee: int, objts: str
+): str:
+    is_ptr := str.EndsWith(objts, "*")
+    recv := cg_expr(g, s, a, obj)
+    acc := is_ptr ? "->" : "."
+    g.tmpn += 1
+    t := g.tmpn
+    dynct := cg_ctype(objts)
+    mname := at.Get(a, callee).name
+    if str.Equals(mname, "free"):
+        ret "({ " + dynct + " __dv" + t + " = (" + recv + "); " + CG_MEM_FREE + "(__dv" + t + acc + "data); })"
+    end
+    asv := call_args_lead(g, s, a, n, 0)
+    ret "({ " + dynct + " __dv" + t + " = (" + recv + "); __dv" + t + acc + "vtable->" + cg_cident(mname) + "(__dv" + t + acc + "data" + asv + "); })"
+end
+
+func call_file(
+    g &: Cg, s &: sm.Sema, a &: at.Ast, n: int, obj: int, callee: int
+): str:
+    recv := cg_expr(g, s, a, obj)
+    m := at.Get(a, callee).name
+    a0 := arg_at(g, s, a, n, 0)
+    a1 := arg_at(g, s, a, n, 1)
+    if str.Equals(m, "read"):
+        ret "salam_file_read(" + recv + ", (unsigned long long)(" + a0 + "))"
+    end
+    if str.Equals(m, "readline"):
+        ret "salam_file_readline(" + recv + ")"
+    end
+    if str.Equals(m, "write"):
+        ret "salam_file_write(" + recv + ", " + a0 + ")"
+    end
+    if str.Equals(m, "seek"):
+        ret "salam_file_seek(" + recv + ", (long long)(" + a0 + "), " + a1 + ")"
+    end
+    if str.Equals(m, "close"):
+        ret "salam_file_close(" + recv + ")"
+    end
+    ret "0"
+end
+
+func call_array(
+    g &: Cg, s &: sm.Sema, a &: at.Ast, obj: int, callee: int
+): str:
+    m := at.Get(a, callee).name
+    if str.Equals(m, "len"):
+        objts := at.Get(a, obj).type_str
+        if cg_is_slice_ts(objts):
+            ret "(int32_t)(" + cg_expr(g, s, a, obj) + ").len"
+        end
+        ret co.I64Toa(array_size_of(objts))
+    end
+    ret "0"
+end
+
+func call_str(
+    g &: Cg, s &: sm.Sema, a &: at.Ast, n: int, obj: int, callee: int
+): str:
+    m := at.Get(a, callee).name
+    if str.Equals(m, "len"):
+        klen := at.StrLitLen(a, obj)
+        if klen >= (0 as i64):
+            ret co.I64Toa(klen)
+        end
+    end
+    recv := cg_expr(g, s, a, obj)
+    a0 := arg_at(g, s, a, n, 0)
+    a1 := arg_at(g, s, a, n, 1)
+    if str.Equals(m, "len"):
+        ret "(int32_t)strlen(" + recv + ")"
+    end
+    if str.Equals(m, "concat"):
+        ret "salam_strcat(" + recv + ", " + a0 + ")"
+    end
+    if str.Equals(m, "substr"):
+        ret "salam_str_substr(" + recv + ", " + a0 + ", " + a1 + ")"
+    end
+    if str.Equals(m, "find") || str.Equals(m, "search") || str.Equals(m, "indexOf"):
+        g.tmpn += 1
+        tf := g.tmpn
+        ret "({ const char *__fh" + tf + "=(" + recv + "); const char *__fn" + tf + "=(" + a0 + "); const char *__fp" + tf + "=(__fh" + tf + "&&__fn" + tf + ")?strstr(__fh" + tf + ",__fn" + tf + "):0; __fp" + tf + "?(int32_t)(__fp" + tf + "-__fh" + tf + "):-1; })"
+    end
+    if str.Equals(m, "trim"):
+        ret "salam_str_trim(" + recv + ")"
+    end
+    if str.Equals(m, "to_int"):
+        ret "(int32_t)strtol(" + recv + ", ((void*)0), 10)"
+    end
+    if str.Equals(m, "to_float"):
+        ret "strtod(" + recv + ", ((void*)0))"
+    end
+    if str.Equals(m, "lower"):
+        ret "salam_str_lower(" + recv + ")"
+    end
+    if str.Equals(m, "upper"):
+        ret "salam_str_upper(" + recv + ")"
+    end
+    if str.Equals(m, "repeat"):
+        ret "salam_str_repeat(" + recv + ", " + a0 + ")"
+    end
+    if str.Equals(m, "split"):
+        n_ts := at.Get(a, n).type_str
+        cnv := cg_ctype(str.Len(n_ts) > 0 ? n_ts : "Vector_str")
+        g.tmpn += 1
+        t := g.tmpn
+        ret "({ int32_t __sn" + t + "; char** __sd" + t + " = salam_str_split(" + recv + ", " + a0 + ", &__sn" + t + "); (" + cnv + "){ __sd" + t + ", __sn" + t + ", __sn" + t + " }; })"
+    end
+    ret "0"
+end
+
+func call_method(
+    g &: Cg, s &: sm.Sema, a &: at.Ast, n: int, obj: int, callee: int, objts: str
+): str:
+    obj_is_ptr := str.Len(objts) > 0 && str.EndsWith(objts, "*")
+    mname := at.Get(a, callee).name
+    mut sname := ""
+    ssym := cg_struct_of(s, objts, sname)
+    mut msym := 0
+    if ssym != 0:
+        msym = sm.LookupLocal(s, sm.SymAt(s, ssym).members, mname)
+    end
+    mut sig := 0
+    if msym != 0:
+        sig = pick_overload(s, a, msym, n)
+    end
+    mut mangled := ""
+    if sig != 0:
+        mangled = cg_mangle_method(
+            g, s, sname, ssym, mname, sm.SigAt(s, sig).params
+        )
+    else:
+        mut empty := Vector {} as Vector<int>
+        mangled = cg_mangle_method(g, s, sname, ssym, mname, empty)
+        empty.free()
+    end
+    asv := call_args_lead(g, s, a, n, sig)
+    addressable := cg_addressable(a, obj)
+    ret_struct := sig != 0 && type_is_byval_agg(s, sm.SigAt(s, sig).ret_type)
+    mut rc := ""
+    if ret_struct:
+        rc = cg_ctype(sm.ToString(s, sm.SigAt(s, sig).ret_type))
+    end
+    if obj_is_ptr || addressable:
+        mut recv := ""
+        if obj_is_ptr:
+            recv = cg_expr(g, s, a, obj)
+        else:
+            recv = "&(" + cg_expr(g, s, a, obj) + ")"
+        end
+        if ret_struct:
+            g.tmpn += 1
+            sv := g.tmpn
+            ret "({ " + rc + " __s" + sv + "; " + mangled + "(" + recv + asv + ", &__s" + sv + "); __s" + sv + "; })"
+        end
+        ret mangled + "(" + recv + asv + ")"
+    end
+    g.tmpn += 1
+    t := g.tmpn
+    oexpr := cg_expr(g, s, a, obj)
+    if ret_struct:
+        g.tmpn += 1
+        sv2 := g.tmpn
+        ret "({ " + cg_ctype(objts) + " __t" + t + " = (" + oexpr + "); " + rc + " __s" + sv2 + "; " + mangled + "(&__t" + t + asv + ", &__s" + sv2 + "); __s" + sv2 + "; })"
+    end
+    ret "({ " + cg_ctype(objts) + " __t" + t + " = (" + oexpr + "); " + mangled + "(&__t" + t + asv + "); })"
+end
+
+func call_impl(
+    g &: Cg, s &: sm.Sema, a &: at.Ast, n: int, obj: int, callee: int, objts: str, owner: int
+): str:
+    mname := at.Get(a, callee).name
+    msym := sm.LookupLocal(s, sm.SymAt(s, owner).members, mname)
+    mut sig := 0
+    if msym != 0:
+        sig = pick_overload(s, a, msym, n)
+    end
+    mut mangled := ""
+    if sig != 0:
+        mangled = cg_mangle_ti(s, objts, mname, sm.SigAt(s, sig).params)
+    else:
+        mut empty := Vector {} as Vector<int>
+        mangled = cg_mangle_ti(s, objts, mname, empty)
+        empty.free()
+    end
+    asv := call_args_lead(g, s, a, n, sig)
+    recv := cg_expr(g, s, a, obj)
+    if sig != 0 && type_is_byval_agg(s, sm.SigAt(s, sig).ret_type):
+        rc := cg_ctype(sm.ToString(s, sm.SigAt(s, sig).ret_type))
+        g.tmpn += 1
+        sv := g.tmpn
+        ret "({ " + rc + " __s" + sv + "; " + mangled + "((" + recv + ")" + asv + ", &__s" + sv + "); __s" + sv + "; })"
+    end
+    ret mangled + "((" + recv + ")" + asv + ")"
+end
+
+func call_member(
+    g &: Cg, s &: sm.Sema, a &: at.Ast, n: int, callee: int
+): str:
+    cn2 := at.Get(a, callee)
+    obj := cn2.a
+    objn := at.Get(a, obj)
+    if obj != 0 && objn.kind == at.AST_IDENTIFIER && !local_known(g, objn.name):
+        mut pk := sm.Lookup(s, s.global, objn.name)
+        if (pk == 0 || sm.SymAt(s, pk).kind != sm.SYM_PACKAGE) && g.cur_struct != 0 && sm.SymAt(s, g.cur_struct).home != 0:
+            pk = sm.Lookup(s, sm.SymAt(s, g.cur_struct).home, objn.name)
+        end
+        if (pk == 0 || sm.SymAt(s, pk).kind != sm.SYM_PACKAGE) && g.cur_fn_home != 0:
+            pk = sm.Lookup(s, g.cur_fn_home, objn.name)
+        end
+        if pk != 0 && sm.SymAt(s, pk).kind == sm.SYM_PACKAGE:
+            ret call_pkg(g, s, a, n, pk, callee)
+        end
+    end
+    objts := objn.type_str
+    implsym := sm.Lookup(s, s.global, sm.ImplOwnerKey(objts))
+    if implsym != 0 && sm.SymAt(s, implsym).kind == sm.SYM_TYPEIMPL && sm.LookupLocal(s, sm.SymAt(s, implsym).members, cn2.name) != 0:
+        ret call_impl(g, s, a, n, obj, callee, objts, implsym)
+    end
+    if str.StartsWith(objts, "dyn "):
+        ret call_dyn(g, s, a, n, obj, callee, objts)
+    end
+    if str.Equals(objts, "File*"):
+        ret call_file(g, s, a, n, obj, callee)
+    end
+    if str.Equals(objts, "str"):
+        ret call_str(g, s, a, n, obj, callee)
+    end
+    if cg_is_slice_ts(objts) || str.IndexOf(objts, "[") >= 0:
+        ret call_array(g, s, a, obj, callee)
+    end
+    ret call_method(g, s, a, n, obj, callee, objts)
+end
+
+// cg_call - returns the C expression text.
+func cg_call(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
+    calleeid := at.Get(a, n).a
+    if calleeid != 0:
+        callee := at.Get(a, calleeid)
+        if str.StartsWith(callee.type_str, "externfunc("):
+            ret call_raw_ptr(g, s, a, n, calleeid)
+        end
+        if str.StartsWith(callee.type_str, "func("):
+            ret call_value(g, s, a, n, calleeid)
+        end
+        if callee.kind == at.AST_IDENTIFIER:
+            ret call_ident(g, s, a, n, calleeid)
+        end
+        if callee.kind == at.AST_MEMBER:
+            ret call_member(g, s, a, n, calleeid)
+        end
+    end
+    ret "/*uncallable*/0"
+end

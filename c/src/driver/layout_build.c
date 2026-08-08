@@ -16,6 +16,7 @@
 #include "core/sal_format.h"
 #include "driver/layout_build.h"
 #include "driver/driver.h"
+#include "driver/build.h"
 #include "core/arena.h"
 #include "core/sb.h"
 #include "logger/logger.h"
@@ -103,6 +104,28 @@ int driver_layout_build(options_t *opt)
         arena_free(arena);
         return 2;
     }
+    /* `salam layout build` with no input (or a directory): the fixed
+     * project entry file salam.salam wins when present; otherwise every
+     * .salam file here with a `layout` block is built (a multi-page
+     * site). */
+    if (opt->input_count == 0 ||
+        (opt->input_count == 1 && driver_path_is_dir(opt->inputs[0]))) {
+        const char *resolved[SALAM_MAX_INPUTS];
+        int nres = driver_resolve_dir_layout(arena, log, pack,
+                                             opt->input_count ? opt->inputs[0] : ".",
+                                             resolved, SALAM_MAX_INPUTS, false);
+        if (nres <= 0) {
+            logger_free(log);
+            arena_free(arena);
+            return 2;
+        }
+        {
+            int i = 0;
+            for (; i < nres; i++)
+                opt->inputs[i] = resolved[i];
+        }
+        opt->input_count = nres;
+    }
     bool multi = (opt->input_count > 1);
     bool minify_ws = !opt->no_minify;
     const char *modules[SALAM_MAX_INPUTS];
@@ -135,7 +158,7 @@ int driver_layout_build(options_t *opt)
                 LOG_W(log, PH_DRIVER, i18n_tr("%s has no layout block"), path);
                 continue;
             }
-            modules[n] = module_of(arena, path);
+            modules[n] = driver_page_stem(arena, path);
             results[n] = layout_generate(arena, log, diag, src->path, lb, minify_ws);
             n++;
         }

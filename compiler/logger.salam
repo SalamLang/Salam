@@ -44,6 +44,7 @@ import str
 import io
 import time
 import dr "diag_render.salam"
+import co "sal_core.salam"
 
 // ===== logger.c =====
 // log_level_t
@@ -81,10 +82,15 @@ pub const PH_CODEGEN := 6
 // past its initial capacity while resolving imports, reallocating its
 // buffer, which leaves `lgr`'s copy of the OLD, now-freed pointer dangling).
 // Vector<T> gives growable-past-capacity semantics for free, so instead of
-// hand-rolling a fixed C array, New() reserves the full C capacity up front
-// and AddDiagSource never pushes past it - this guarantees the buffer is
-// allocated exactly once and never moves, exactly matching the C's
-// by-value-copy safety.
+// hand-rolling a fixed C array, the FIRST AddDiagSource reserves the full C
+// capacity in one shot and no push ever goes past it - this guarantees the
+// buffer is allocated exactly once and never moves, exactly matching the C's
+// by-value-copy safety. The reserve deliberately does not happen in New():
+// almost every Logger ever constructed (every default-initialized `log`
+// field on Lx/Ps/Sema/Codegen/...) registers no source at all, and paying
+// 12 KB up front for each of those was pure leak. A logger that never
+// reaches AddDiagSource keeps an empty src_table, which iterates to the
+// same "no entry for this file" answer a reserved-but-empty one did.
 pub const LOGGER_MAX_DIAG_SOURCES := 512
 
 // diag_source_entry_t (logger_internal.h) - one per-file source buffer,
@@ -130,14 +136,7 @@ end
 // Per-file byte reader for split_code_prefix, matching the small
 // file-local `byte_at` helper every other compiler/*.salam file that needs
 // raw byte access duplicates (see e.g. driver.salam:232).
-func byte_at(s: str, i: int): int:
-    bp := (s as void*) as i8*
-    mut v := bp[i] as int
-    if v < 0:
-        v += 256
-    end
-    ret v
-end
+inline func byte_at(s: str, i: int): int: ret co.ByteAt(s, i) end
 
 // The probe logger_emit_rich (logger_emit.c) runs on every rich-path
 // message before calling diag_render: msg already carries diag.Report's
@@ -209,10 +208,18 @@ pub func New(min_level: int, color: bool): Logger:
     lg.diag_format = 0 // diag.DIAG_FORMAT_HUMAN
     lg.src_text = ""
     lg.src_len = 0
+    // src_table stays EMPTY here: the full-capacity reserve happens on the
+    // first AddDiagSource instead (see below). New() runs for every Lx, Ps,
+    // Sema, Codegen, ... default-initialized `log` field - thousands of
+    // times per compile - and the overwhelming majority of those loggers
+    // never register a single diagnostic source. Reserving here allocated
+    // (and never released) LOGGER_MAX_DIAG_SOURCES entries for each of
+    // them: 12 KB a piece, ~3.3 MB leaked before the compiler had even
+    // parsed anything. Deferring it costs nothing - a logger with no
+    // entries iterates zero of them either way - and keeps the
+    // never-moves guarantee intact, since the deferred reserve is still
+    // one-shot and still at full capacity.
     lg.src_table = Vector {} as Vector<DiagSourceEntry>
-    // Reserve the full fixed capacity now, once, so the buffer never has to
-    // move later - see the LOGGER_MAX_DIAG_SOURCES comment on Logger above.
-    lg.src_table.reserve(LOGGER_MAX_DIAG_SOURCES)
     ret lg
 end
 
@@ -235,6 +242,12 @@ end
 // (see find_src below) instead of the single SetDiagSource buffer whenever
 // a diagnostic's file matches an entry here.
 pub func AddDiagSource(lg &: Logger, file: str, src_text: str, src_len: int):
+    // The one-shot full-capacity reserve New() used to do eagerly. reserve()
+    // returns immediately once the capacity is already there, so this runs
+    // for real exactly once per logger that actually registers a source, and
+    // the backing buffer still never moves afterwards - which is the whole
+    // point (see the LOGGER_MAX_DIAG_SOURCES comment on Logger above).
+    lg.src_table.reserve(LOGGER_MAX_DIAG_SOURCES)
     n := lg.src_table.len()
     mut i := 0
     until i < n:

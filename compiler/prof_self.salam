@@ -1,0 +1,632 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// ===== port of c/src/core/prof_self.c =====
+//
+// Self-profiling for the compiler itself: `salam build --time-report`.
+// Every entry point is a no-op until Enable() has been called, so the
+// instrumentation can sit in the pipeline unconditionally.
+//
+// Differences from the C, all forced by the language rather than chosen:
+// - timing_phase_t / timing_counter_t enums -> plain int consts. A `pub enum`
+//   value cannot cross a package boundary, and driver.salam is a different
+//   package, so int consts are the only option that works.
+// - The C's arrays of structs (phase_acc_t[], file_acc_t[], the nesting stack)
+//   -> parallel Vector<i64>/Vector<str>. The per-file per-phase table is a
+//   flat Vector<i64> indexed file*TP_COUNT + phase, because a nested generic
+//   (Vector<Vector<i64>>) does not work in this compiler.
+// - Labels are COPIED into _file_label, exactly as the C copies them into
+//   file_acc_t.label. The C had to because its labels live in an arena that
+//   is freed before the report prints; here it keeps the two implementations
+//   producing byte-identical file lists.
+// - fprintf(FILE*) -> io.EPrint (stderr) and fs writes for the trace file.
+package profself
+
+import io
+import os
+import str
+import time
+import co "sal_core.salam"
+
+// timing_phase_t. Values and order must match c/src/core/prof_self.h exactly:
+// the JSON both sides emit is compared key-for-key by the parity test.
+pub const TP_DRIVER := 0
+pub const TP_SOURCE := 1
+pub const TP_LEXER := 2
+pub const TP_PARSER := 3
+pub const TP_SEMANTIC := 4
+pub const TP_CODEGEN := 5
+pub const TP_LLVM := 6
+pub const TP_JSGEN := 7
+pub const TP_WRITE := 8
+pub const TP_CC := 9
+pub const TP_LINK := 10
+pub const TP_COUNT := 11
+
+// timing_counter_t
+pub const TC_TOKENS := 0
+pub const TC_AST_NODES := 1
+pub const TC_SYMBOLS := 2
+pub const TC_FUNCS_EMITTED := 3
+pub const TC_MODULES_BUILT := 4
+pub const TC_MODULES_CACHED := 5
+pub const TC_ARENA_BYTES := 6
+pub const TC_ARENA_BLOCKS := 7
+pub const TC_COUNT := 8
+
+pub const PROF_FMT_TABLE := 0
+pub const PROF_FMT_JSON := 1
+
+const PROF_MAX_DEPTH := 64
+const PROF_MAX_FILES := 512
+const PROF_TOP_FILES := 8
+const PROF_LABEL_MAX := 200
+
+mut _on := false
+mut _trace := false
+mut _overflow := false
+mut _files_full := false
+mut _start_ns := 0 as i64
+mut _start_cpu_ns := 0 as i64
+
+// phase accumulators, TP_COUNT entries each
+mut _ph_total := Vector {} as Vector<i64>
+mut _ph_self := Vector {} as Vector<i64>
+mut _ph_cpu := Vector {} as Vector<i64>
+mut _ph_calls := Vector {} as Vector<i64>
+
+// TC_COUNT entries
+mut _counter := Vector {} as Vector<i64>
+
+// nesting stack, parallel arrays, _depth entries live
+mut _st_ph := Vector {} as Vector<i64>
+mut _st_t0 := Vector {} as Vector<i64>
+mut _st_cpu0 := Vector {} as Vector<i64>
+mut _st_child := Vector {} as Vector<i64>
+mut _st_label := Vector {} as Vector<str>
+mut _depth := 0
+
+// per-input accumulators; _file_ns is flat, index file*TP_COUNT + phase
+mut _file_label := Vector {} as Vector<str>
+mut _file_total := Vector {} as Vector<i64>
+mut _file_ns := Vector {} as Vector<i64>
+
+// trace events, parallel arrays
+mut _ev_name := Vector {} as Vector<str>
+mut _ev_ph := Vector {} as Vector<i64>
+mut _ev_ts := Vector {} as Vector<i64>
+mut _ev_dur := Vector {} as Vector<i64>
+
+func phase_name(ph: int): str:
+    if ph == TP_DRIVER: ret "driver" end
+    if ph == TP_SOURCE: ret "source" end
+    if ph == TP_LEXER: ret "lexer" end
+    if ph == TP_PARSER: ret "parser" end
+    if ph == TP_SEMANTIC: ret "semantic" end
+    if ph == TP_CODEGEN: ret "codegen" end
+    if ph == TP_LLVM: ret "llvm" end
+    if ph == TP_JSGEN: ret "jsgen" end
+    if ph == TP_WRITE: ret "write" end
+    if ph == TP_CC: ret "cc" end
+    if ph == TP_LINK: ret "link" end
+    ret "?"
+end
+
+func counter_name(c: int): str:
+    if c == TC_TOKENS: ret "tokens" end
+    if c == TC_AST_NODES: ret "ast_nodes" end
+    if c == TC_SYMBOLS: ret "symbols" end
+    if c == TC_FUNCS_EMITTED: ret "funcs_emitted" end
+    if c == TC_MODULES_BUILT: ret "modules_built" end
+    if c == TC_MODULES_CACHED: ret "modules_cached" end
+    if c == TC_ARENA_BYTES: ret "arena_bytes" end
+    if c == TC_ARENA_BLOCKS: ret "arena_blocks" end
+    ret "?"
+end
+
+func fmt_bytes(b: i64): str:
+    if b >= 1073741824: ret co.Format1("%.1f", co.ArgFloat((b as f64) / 1073741824.0)) + " GB" end
+    if b >= 1048576: ret co.Format1("%.1f", co.ArgFloat((b as f64) / 1048576.0)) + " MB" end
+    if b >= 1024: ret co.Format1("%.1f", co.ArgFloat((b as f64) / 1024.0)) + " KB" end
+    ret co.I64Toa(b) + " B"
+end
+
+// Groups digits so six-figure token counts stay readable.
+func fmt_num(n: i64): str:
+    raw := co.I64Toa(n)
+    ln := str.Len(raw)
+    mut out := ""
+    mut i := 0
+    until i < ln:
+        if i > 0 && ((ln - i) % 3) == 0:
+            out = out + ","
+        end
+        out = out + str.Substr(raw, i, 1)
+        i += 1
+    end
+    ret out
+end
+
+func pad_right(s: str, w: int): str:
+    mut out := s
+    until str.Len(out) < w:
+        out = out + " "
+    end
+    ret out
+end
+
+func pad_left(s: str, w: int): str:
+    mut out := s
+    until str.Len(out) < w:
+        out = " " + out
+    end
+    ret out
+end
+
+func json_escape(s: str): str:
+    mut out := ""
+    mut i := 0
+    n := str.Len(s)
+    until i < n:
+        ch := str.Substr(s, i, 1)
+        if str.Equals(ch, "\""):
+            out = out + "\\\""
+        else str.Equals(ch, "\\"):
+            out = out + "\\\\"
+        else str.Equals(ch, "\n"):
+            out = out + "\\n"
+        else str.Equals(ch, "\r"):
+            out = out + "\\r"
+        else str.Equals(ch, "\t"):
+            out = out + "\\t"
+        else:
+            out = out + ch
+        end
+        i += 1
+    end
+    ret out
+end
+
+// Phase indices ordered by descending self time. Selection sort over
+// TP_COUNT (11) entries; not worth anything cleverer.
+func phase_order(): Vector<i64>:
+    mut order := Vector {} as Vector<i64>
+    mut i := 0
+    until i < TP_COUNT:
+        order.push(i as i64)
+        i += 1
+    end
+    mut a := 0
+    until a < TP_COUNT:
+        mut best := a
+        mut b := a + 1
+        until b < TP_COUNT:
+            ib := order.get(b)[0] as int
+            ibest := order.get(best)[0] as int
+            if _ph_self.get(ib)[0] > _ph_self.get(ibest)[0]:
+                best = b
+            end
+            b += 1
+        end
+        if best != a:
+            tmp := order.get(a)[0]
+            order.set(a, order.get(best)[0])
+            order.set(best, tmp)
+        end
+        a += 1
+    end
+    ret order
+end
+
+// File indices ordered by descending total time.
+func file_order(): Vector<i64>:
+    mut order := Vector {} as Vector<i64>
+    n := _file_label.len()
+    mut i := 0
+    until i < n:
+        order.push(i as i64)
+        i += 1
+    end
+    mut a := 0
+    until a < n:
+        mut best := a
+        mut b := a + 1
+        until b < n:
+            ib := order.get(b)[0] as int
+            ibest := order.get(best)[0] as int
+            if _file_total.get(ib)[0] > _file_total.get(ibest)[0]:
+                best = b
+            end
+            b += 1
+        end
+        if best != a:
+            tmp := order.get(a)[0]
+            order.set(a, order.get(best)[0])
+            order.set(best, tmp)
+        end
+        a += 1
+    end
+    ret order
+end
+
+func report_table(wall_ns: i64, cpu_ns: i64):
+    io.EPrint("\nSalam compile time report\n")
+    io.EPrint(
+        "  wall " + fmt_dur(wall_ns) + "   cpu " + fmt_dur(cpu_ns) + "   peak rss " + fmt_bytes(co.PeakRss()) + "\n"
+    )
+
+    order := phase_order()
+    io.EPrint(
+        "\n  " + pad_right("phase", 10) + " " + pad_left("self", 10) + " " + pad_left("total", 11) + " " + pad_left("%self", 8) + " " + pad_left("calls", 8) + "\n"
+    )
+    io.EPrint("  ----------------------------------------------------\n")
+    mut i := 0
+    until i < TP_COUNT:
+        p := order.get(i)[0] as int
+        calls := _ph_calls.get(p)[0]
+        if calls > 0:
+            selfns := _ph_self.get(p)[0]
+            mut pct := 0.0
+            if wall_ns > 0:
+                pct = ((selfns as f64) * 100.0) / (wall_ns as f64)
+            end
+            io.EPrint(
+                "  " + pad_right(phase_name(p), 10) + " " + pad_left(fmt_dur(selfns), 10) + " " + pad_left(fmt_dur(_ph_total.get(p)[0]), 11) + " " + pad_left(co.Format1("%.1f", co.ArgFloat(pct)) + "%", 8) + " " + pad_left(co.I64Toa(calls), 8) + "\n"
+            )
+        end
+        i += 1
+    end
+    order.free()
+
+    nfiles := _file_label.len()
+    if nfiles > 0:
+        forder := file_order()
+        mut shown := nfiles
+        if shown > PROF_TOP_FILES: shown = PROF_TOP_FILES end
+        io.EPrint("\n  slowest inputs\n")
+        mut f := 0
+        until f < shown:
+            fi := forder.get(f)[0] as int
+            mut worst := 0
+            mut p := 1
+            until p < TP_COUNT:
+                if _file_ns.get(fi * TP_COUNT + p)[0] > _file_ns.get(fi * TP_COUNT + worst)[0]:
+                    worst = p
+                end
+                p += 1
+            end
+            mut line := "    " + pad_right(_file_label.get(fi)[0], 44) + " " + pad_left(fmt_dur(_file_total.get(fi)[0]), 10)
+            wns := _file_ns.get(fi * TP_COUNT + worst)[0]
+            if wns > 0:
+                line = line + "   (" + phase_name(worst) + " " + fmt_dur(wns) + ")"
+            end
+            io.EPrint(line + "\n")
+            f += 1
+        end
+        forder.free()
+        if _files_full:
+            io.EPrint("    (input table full, some files not listed)\n")
+        end
+    end
+
+    io.EPrint("\n  counters\n")
+    io.EPrint(
+        "    " + pad_right("tokens", 16) + " " + pad_left(fmt_num(_counter.get(TC_TOKENS)[0]), 12) + "   " + pad_right("ast nodes", 16) + " " + pad_left(fmt_num(_counter.get(TC_AST_NODES)[0]), 12) + "\n"
+    )
+    io.EPrint(
+        "    " + pad_right("symbols", 16) + " " + pad_left(fmt_num(_counter.get(TC_SYMBOLS)[0]), 12) + "   " + pad_right("funcs emitted", 16) + " " + pad_left(fmt_num(_counter.get(TC_FUNCS_EMITTED)[0]), 12) + "\n"
+    )
+    io.EPrint(
+        "    " + pad_right("modules built", 16) + " " + pad_left(fmt_num(_counter.get(TC_MODULES_BUILT)[0]), 12) + "   " + pad_right("modules cached", 16) + " " + pad_left(fmt_num(_counter.get(TC_MODULES_CACHED)[0]), 12) + "\n"
+    )
+    io.EPrint(
+        "    " + pad_right("arena", 16) + " " + pad_left(fmt_bytes(_counter.get(TC_ARENA_BYTES)[0]), 12) + "   " + pad_right("arena blocks", 16) + " " + pad_left(fmt_num(_counter.get(TC_ARENA_BLOCKS)[0]), 12) + "\n"
+    )
+
+    if _overflow:
+        io.EPrint(
+            "\n  warning: timing scopes nested deeper than the profiler stack; some readings were dropped\n"
+        )
+    end
+    io.EPrint("\n")
+end
+
+func file_slot(label: str): int:
+    mut i := 0
+    until i < _file_label.len():
+        if str.Equals(_file_label.get(i)[0], label):
+            ret i
+        end
+        i += 1
+    end
+    if _file_label.len() >= PROF_MAX_FILES:
+        _files_full = true
+        ret -1
+    end
+    mut keep := label
+    n := str.Len(label)
+    if n >= PROF_LABEL_MAX:
+        // Keep the tail: the interesting part of a long path is its end.
+        keep = str.Substr(label, n - (PROF_LABEL_MAX - 1), PROF_LABEL_MAX - 1)
+    end
+    idx := _file_label.len()
+    _file_label.push(keep)
+    _file_total.push(0 as i64)
+    mut p := 0
+    until p < TP_COUNT:
+        _file_ns.push(0 as i64)
+        p += 1
+    end
+    ret idx
+end
+
+// ---------- formatting helpers ----------
+
+// Picks a unit so the number keeps 3 or 4 significant digits.
+func fmt_dur(ns: i64): str:
+    if ns >= 1000000000:
+        ret co.Format1("%.3f", co.ArgFloat((ns as f64) / 1000000000.0)) + " s"
+    end
+    if ns >= 1000000:
+        ret co.Format1("%.2f", co.ArgFloat((ns as f64) / 1000000.0)) + " ms"
+    end
+    if ns >= 1000:
+        ret co.Format1("%.2f", co.ArgFloat((ns as f64) / 1000.0)) + " us"
+    end
+    ret co.I64Toa(ns) + " ns"
+end
+
+func report_json(wall_ns: i64, cpu_ns: i64):
+    mut out := "{\"schema\":\"salam.timereport.v1\""
+    out = out + ",\"wall_ns\":" + co.I64Toa(wall_ns)
+    out = out + ",\"cpu_ns\":" + co.I64Toa(cpu_ns)
+    out = out + ",\"peak_rss\":" + co.I64Toa(co.PeakRss())
+    mut trunc := "false"
+    if _overflow || _files_full: trunc = "true" end
+    out = out + ",\"truncated\":" + trunc
+
+    out = out + ",\"phases\":{"
+    mut first := true
+    mut i := 0
+    until i < TP_COUNT:
+        calls := _ph_calls.get(i)[0]
+        if calls > 0:
+            if !first: out = out + "," end
+            out = out + "\"" + phase_name(i) + "\":{\"self_ns\":" + co.I64Toa(_ph_self.get(i)[0])
+            out = out + ",\"total_ns\":" + co.I64Toa(_ph_total.get(i)[0])
+            out = out + ",\"cpu_ns\":" + co.I64Toa(_ph_cpu.get(i)[0])
+            out = out + ",\"calls\":" + co.I64Toa(calls) + "}"
+            first = false
+        end
+        i += 1
+    end
+    out = out + "}"
+
+    out = out + ",\"files\":["
+    mut f := 0
+    nfiles := _file_label.len()
+    until f < nfiles:
+        if f > 0: out = out + "," end
+        out = out + "{\"name\":\"" + json_escape(_file_label.get(f)[0]) + "\""
+        out = out + ",\"total_ns\":" + co.I64Toa(_file_total.get(f)[0]) + ",\"phases\":{"
+        mut pfirst := true
+        mut p := 0
+        until p < TP_COUNT:
+            v := _file_ns.get(f * TP_COUNT + p)[0]
+            if v != 0:
+                if !pfirst: out = out + "," end
+                out = out + "\"" + phase_name(p) + "\":" + co.I64Toa(v)
+                pfirst = false
+            end
+            p += 1
+        end
+        out = out + "}}"
+        f += 1
+    end
+    out = out + "]"
+
+    out = out + ",\"counters\":{"
+    mut c := 0
+    until c < TC_COUNT:
+        if c > 0: out = out + "," end
+        out = out + "\"" + counter_name(c) + "\":" + co.I64Toa(_counter.get(c)[0])
+        c += 1
+    end
+    out = out + "}}\n"
+    io.EPrint(out)
+end
+
+@en "PhaseName"
+@fa "نام فاز"
+@ar "اسم المرحلة"
+pub func PhaseName(ph: int): str: ret phase_name(ph) end
+
+// `trace_events` also records every scope as a Chrome Trace Event, which
+// WriteTrace() can dump. Keep it off for a plain --time-report; the event
+// list is unbounded.
+@en "Enable"
+@fa "فعال کردن"
+@ar "تفعیل"
+pub func Enable(trace_events: bool):
+    _on = true
+    _trace = trace_events
+    _overflow = false
+    _files_full = false
+    _depth = 0
+    mut i := 0
+    until i < TP_COUNT:
+        _ph_total.push(0 as i64)
+        _ph_self.push(0 as i64)
+        _ph_cpu.push(0 as i64)
+        _ph_calls.push(0 as i64)
+        i += 1
+    end
+    mut c := 0
+    until c < TC_COUNT:
+        _counter.push(0 as i64)
+        c += 1
+    end
+    _start_ns = time.MonoNanos()
+    _start_cpu_ns = co.CpuNanos()
+end
+
+@en "On"
+@fa "روشن"
+@ar "مفعل"
+pub func On(): bool: ret _on end
+
+// Opens a timing scope. The returned token must be handed back to End().
+// Nesting is supported: an inner scope's elapsed time is subtracted from the
+// enclosing scope's "self" time but stays in its "total". `label` may be "".
+@en "Begin"
+@fa "آغاز"
+@ar "بدء"
+pub func Begin(ph: int, label: str): i64:
+    if !_on: ret 0 as i64 end
+    if ph < 0 || ph >= TP_COUNT: ret 0 as i64 end
+    if _depth >= PROF_MAX_DEPTH:
+        _overflow = true
+        ret 0 as i64
+    end
+    if _depth < _st_ph.len():
+        _st_ph.set(_depth, ph as i64)
+        _st_child.set(_depth, 0 as i64)
+        _st_label.set(_depth, label)
+        _st_cpu0.set(_depth, co.CpuNanos())
+        _st_t0.set(_depth, time.MonoNanos())
+    else:
+        _st_ph.push(ph as i64)
+        _st_child.push(0 as i64)
+        _st_label.push(label)
+        _st_cpu0.push(co.CpuNanos())
+        _st_t0.push(time.MonoNanos())
+    end
+    _depth += 1
+    ret _depth as i64 // 1-based, so 0 can mean "not recording"
+end
+
+@en "End"
+@fa "پایان"
+@ar "إنهاء"
+pub func End(_ph: int, token: i64):
+    if !_on || token == 0: ret end
+    if token > (_depth as i64): ret end // already unwound; nothing to do
+    now := time.MonoNanos()
+    cpu := co.CpuNanos()
+    // Tolerate a scope left open by an early return: unwind to this token
+    // rather than mis-attributing every later reading.
+    _depth = (token as int) - 1
+    fph := _st_ph.get(_depth)[0] as int
+    t0 := _st_t0.get(_depth)[0]
+    cpu0 := _st_cpu0.get(_depth)[0]
+    child := _st_child.get(_depth)[0]
+    label := _st_label.get(_depth)[0]
+    mut dt := 0 as i64
+    if now > t0: dt = now - t0 end
+    _ph_total.set(fph, _ph_total.get(fph)[0] + dt)
+    mut selfd := 0 as i64
+    if dt > child: selfd = dt - child end
+    _ph_self.set(fph, _ph_self.get(fph)[0] + selfd)
+    if cpu > cpu0:
+        _ph_cpu.set(fph, _ph_cpu.get(fph)[0] + (cpu - cpu0))
+    end
+    _ph_calls.set(fph, _ph_calls.get(fph)[0] + 1)
+    if _depth > 0:
+        _st_child.set(_depth - 1, _st_child.get(_depth - 1)[0] + dt)
+    end
+    mut fi := -1
+    if str.Len(label) > 0:
+        fi = file_slot(label)
+    end
+    if fi >= 0:
+        _file_total.set(fi, _file_total.get(fi)[0] + dt)
+        k := fi * TP_COUNT + fph
+        _file_ns.set(k, _file_ns.get(k)[0] + dt)
+    end
+    if _trace:
+        mut nm := phase_name(fph)
+        if fi >= 0: nm = _file_label.get(fi)[0] end
+        _ev_name.push(nm)
+        _ev_ph.push(fph as i64)
+        _ev_ts.push(t0)
+        _ev_dur.push(dt)
+    end
+end
+
+@en "Count"
+@fa "شمارش"
+@ar "عد"
+pub func Count(c: int, n: i64):
+    if !_on: ret end
+    if c < 0 || c >= TC_COUNT: ret end
+    _counter.set(c, _counter.get(c)[0] + n)
+end
+
+// `fmt` is PROF_FMT_TABLE or PROF_FMT_JSON. Written to stderr, never stdout:
+// `salam js`, `salam doc` and the --emit-* paths write their real output to
+// stdout.
+@en "Report"
+@fa "گزارش"
+@ar "تقریر"
+pub func Report(fmt: int):
+    if !_on: ret end
+    // Close anything still open so a report taken from an error path is not
+    // missing the scope that was in flight.
+    until _depth > 0:
+        End(_st_ph.get(_depth - 1)[0] as int, _depth as i64)
+    end
+    now := time.MonoNanos()
+    cpu := co.CpuNanos()
+    mut wall_ns := 0 as i64
+    if now > _start_ns: wall_ns = now - _start_ns end
+    mut cpu_ns := 0 as i64
+    if cpu > _start_cpu_ns: cpu_ns = cpu - _start_cpu_ns end
+    if fmt == PROF_FMT_JSON:
+        report_json(wall_ns, cpu_ns)
+    else:
+        report_table(wall_ns, cpu_ns)
+    end
+end
+
+// Chrome Trace Event JSON, readable by chrome://tracing, Perfetto and
+// speedscope, so we get a flame chart of the build for free.
+@en "WriteTrace"
+@fa "نوشتن ردیابی"
+@ar "کتابة التتبع"
+pub func WriteTrace(path: str): bool:
+    if !_on || str.Len(path) == 0: ret false end
+    mut out := "[\n"
+    mut i := 0
+    n := _ev_name.len()
+    until i < n:
+        if i > 0: out = out + ",\n" end
+        ts := (_ev_ts.get(i)[0] - _start_ns) as f64
+        dur := _ev_dur.get(i)[0] as f64
+        out = out + "{\"name\":\"" + json_escape(_ev_name.get(i)[0]) + "\""
+        out = out + ",\"cat\":\"" + phase_name(_ev_ph.get(i)[0] as int) + "\""
+        out = out + ",\"ph\":\"X\",\"pid\":1,\"tid\":1"
+        out = out + ",\"ts\":" + co.Format1("%.3f", co.ArgFloat(ts / 1000.0))
+        out = out + ",\"dur\":" + co.Format1("%.3f", co.ArgFloat(dur / 1000.0)) + "}"
+        i += 1
+    end
+    out = out + "\n]\n"
+    ret os.WriteFile(path, out) >= 0
+end
+
+@en "Shutdown"
+@fa "خاموش کردن"
+@ar "إیقاف"
+pub func Shutdown():
+    _on = false
+end

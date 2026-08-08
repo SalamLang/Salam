@@ -1,0 +1,128 @@
+package parser
+
+import str
+import tok "../token.salam"
+import at "../ast.salam"
+
+// ===== parser_type.c =====
+
+func parse_array_dims(p &: Ps, a &: at.Ast, n: int):
+    until p_match(p, tok.TK_LBRACKET):
+        p_skip_terminators(p)
+
+        if p_at(p, tok.TK_COLON):
+            p_advance(p)
+            p_skip_terminators(p)
+            p_expect(p, tok.TK_RBRACKET, "']' to close slice type 'T[:]'")
+            mut nn := at.Get(a, n)
+            nn.is_slice = true
+            at.Put(a, n, nn)
+            ret
+        end
+        mut dim := 0
+        if !p_at(p, tok.TK_RBRACKET):
+            dim = parse_expr(p, a)
+        end
+        p_skip_terminators(p)
+        p_expect(p, tok.TK_RBRACKET, "']' in array type")
+        at.AddDim(a, n, dim)
+    end
+end
+
+func parse_ptr_suffix(p &: Ps, a &: at.Ast, n: int):
+    if p_match(p, tok.TK_STAR):
+        mut nn := at.Get(a, n)
+        nn.is_pointer = true
+        at.Put(a, n, nn)
+    end
+end
+
+func parse_type_dyn(p &: Ps, a &: at.Ast, n: int): int:
+    p_advance(p)
+    mut nn := at.Get(a, n)
+    nn.is_dyn = true
+    nn.name = p_peek(p).lexeme
+    at.Put(a, n, nn)
+    p_advance(p)
+    parse_array_dims(p, a, n)
+    parse_ptr_suffix(p, a, n)
+    p_fin(p, a, n)
+    ret n
+end
+
+func parse_type_func(p &: Ps, a &: at.Ast, n: int): int:
+    at.SetName(a, n, "func")
+    p_advance(p)
+    p_expect(p, tok.TK_LPAREN, "'(' in function type")
+    // p_comma_list(p, n, TK_RPAREN, parse_type) inlined:
+    if !p_at(p, tok.TK_RPAREN):
+        mut go := true
+        until go:
+            at.AddChild(a, n, parse_type(p, a))
+            go = p_match(p, tok.TK_COMMA)
+        end
+    end
+    p_expect(p, tok.TK_RPAREN, "')' in function type")
+    if p_at(p, tok.TK_IDENT) || p_at(p, tok.TK_KW_FUNC):
+        at.SetTypeNode(a, n, parse_type(p, a))
+    end
+    parse_ptr_suffix(p, a, n)
+    p_fin(p, a, n)
+    ret n
+end
+
+func parse_type_named(p &: Ps, a &: at.Ast, n: int): int:
+    nm := p_name(p, "expected type name")
+    at.SetName(a, n, nm)
+    if nm.len() == 0:
+        ret n
+    end
+
+    if p_at(p, tok.TK_DOT) && p_peek2(p).kind == tok.TK_IDENT:
+        p_advance(p)
+        at.SetName(a, n, nm + "." + p_peek(p).lexeme)
+        p_advance(p)
+    end
+
+    if p_at(p, tok.TK_LT):
+        p_advance(p)
+        at.AddChild(a, n, parse_type(p, a))
+        until p_match(p, tok.TK_COMMA):
+            at.AddChild(a, n, parse_type(p, a))
+        end
+        p_close_angle(p, "'>' to close type arguments")
+    end
+    parse_array_dims(p, a, n)
+    parse_ptr_suffix(p, a, n)
+    p_fin(p, a, n)
+    ret n
+end
+
+func parse_type(p &: Ps, a &: at.Ast): int:
+    p_rule(p, "type")
+
+    if !p_recurse_enter(p, "type nested too deeply"):
+        ret p_mk(p, a, at.AST_TYPE)
+    end
+    mut n := p_mk(p, a, at.AST_TYPE)
+    if p_at(p, tok.TK_KW_EXTERN) && p_peek2(p).kind == tok.TK_KW_FUNC:
+        p_advance(p)
+        n = parse_type_func(p, a, n)
+        mut nn := at.Get(a, n)
+        nn.is_extern = true
+        at.Put(a, n, nn)
+    else p_at(p, tok.TK_IDENT) && str.Equals(p_peek(p).lexeme, "dyn") && p_peek2(p).kind == tok.TK_IDENT:
+        n = parse_type_dyn(p, a, n)
+    else p_at(p, tok.TK_KW_FUNC):
+        n = parse_type_func(p, a, n)
+    else:
+        n = parse_type_named(p, a, n)
+    end
+    p_recurse_leave(p)
+    ret n
+end
+
+func parse_type_anno(p &: Ps, a &: at.Ast): int:
+    p_expect(p, tok.TK_COLON, "':' before type")
+    ret parse_type(p, a)
+end

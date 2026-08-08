@@ -318,8 +318,8 @@ type_t *check_call(sema_t *s, ast_node_t *n)
             return decorate(s, n, ty(s, TY_SIZE));
         }
         ast_node_t *op = (ast_node_t *)n->list.data[0];
-        type_t *ot = sema_resolve_type(s, op);
-        decorate(s, op, ot);
+        type_t *op_type = sema_resolve_type(s, op);
+        decorate(s, op, op_type);
         decorate(s, callee, ty(s, TY_VOID));
         return decorate(s, n, ty(s, TY_SIZE));
     }
@@ -340,6 +340,21 @@ type_t *check_call(sema_t *s, ast_node_t *n)
                 (fv->kind == SYM_VAR || fv->kind == SYM_PARAM || fv->kind == SYM_CONST)) {
                 ft = fv->type;
                 fv->used = true;
+                /*
+                 * A function value *called* from inside a lambda is still a
+                 * capture. Only the AST_IDENTIFIER expression path recorded
+                 * captures, and a call's callee never goes through it - so
+                 * `(x: int): dir(x) end` left `dir` out of the capture list
+                 * entirely, and both backends then failed to find it
+                 * ("address of an unknown identifier 'dir'" / "'dir'
+                 * undeclared"). Using the same value without calling it
+                 * worked, which is what made this look target-specific.
+                 * Same condition as the expression path.
+                 */
+                if (s->lam && (fv->kind == SYM_VAR || fv->kind == SYM_PARAM) &&
+                    !defined_within(s->cur, s->lam->boundary, callee->name) &&
+                    !scope_lookup_local(s->global, callee->name))
+                    record_capture(s, callee, fv->type);
             }
         } else if (callee && callee->kind != AST_MEMBER) {
             type_t *ct = sema_check_expr(s, callee);

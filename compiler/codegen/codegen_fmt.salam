@@ -1,0 +1,285 @@
+package codegen
+
+import str
+import co "../sal_core.salam"
+import tok "../token.salam"
+import at "../ast.salam"
+
+// ===== print_fmt.c =====
+
+func ts_is_unsigned(ts: str): bool:
+    ret str.Len(ts) > 0 && cg_is_unsigned_typestr(ts)
+end
+
+func ts_is_int(ts: str): bool:
+    if str.Len(ts) == 0:
+        ret true
+    end
+    ret str.Equals(ts, "i8") || str.Equals(ts, "i16") || str.Equals(ts, "i32") || str.Equals(ts, "i64") || str.Equals(ts, "int") || str.Equals(ts, "u8") || str.Equals(ts, "u16") || str.Equals(ts, "u32") || str.Equals(ts, "u64") || str.Equals(ts, "uint") || str.Equals(ts, "size")
+end
+
+func ts_is_float(ts: str): bool:
+    ret str.Equals(ts, "f32") || str.Equals(ts, "f64")
+end
+
+func pf_kind_of(ts: str): int:
+    if str.Len(ts) == 0:
+        ret PF_I32
+    end
+    if str.Equals(ts, "str"):
+        ret PF_STR
+    end
+    if str.Equals(ts, "uchar"):
+        ret PF_STR
+    end
+    if str.Equals(ts, "bool"):
+        ret PF_BOOL
+    end
+    if str.Equals(ts, "char"):
+        ret PF_CHAR
+    end
+    if ts_is_float(ts):
+        ret PF_F64
+    end
+    if str.Equals(ts, "i64"):
+        ret PF_I64
+    end
+    if str.Equals(ts, "u64"):
+        ret PF_U64
+    end
+    if str.Equals(ts, "size"):
+        ret PF_SIZE
+    end
+    if ts_is_unsigned(ts):
+        ret PF_U32
+    end
+    ret PF_I32
+end
+
+func pf_spec_impl(k: int): str:
+    if k == PF_STR:
+        ret "%s"
+    end
+    if k == PF_I32:
+        ret "%d"
+    end
+    if k == PF_U32:
+        ret "%u"
+    end
+    if k == PF_I64:
+        ret "%lld"
+    end
+    if k == PF_U64:
+        ret "%llu"
+    end
+    if k == PF_SIZE:
+        ret "%zu"
+    end
+    if k == PF_F64:
+        ret "%g"
+    end
+    if k == PF_BOOL:
+        ret "%s"
+    end
+    if k == PF_CHAR:
+        ret "%c"
+    end
+    ret ""
+end
+
+func fold_int(a &: at.Ast, id: int, out2 &: i64): bool:
+    if id == 0:
+        ret false
+    end
+    n := at.Get(a, id)
+    if n.kind == at.AST_LITERAL && n.op == tok.TK_INT:
+        out2 = n.value_int as i64
+        ret true
+    end
+    if n.kind == at.AST_UNARY && n.op == tok.TK_MINUS:
+        mut v := 0 as i64
+        if fold_int(a, n.a, v):
+            out2 = (0 as i64) - v
+            ret true
+        end
+        ret false
+    end
+    if n.kind == at.AST_BINARY:
+        mut va := 0 as i64
+        mut vb := 0 as i64
+        if !fold_int(a, n.a, va) || !fold_int(a, n.b, vb):
+            ret false
+        end
+        if n.op == tok.TK_PLUS:
+            out2 = va + vb
+            ret true
+        end
+        if n.op == tok.TK_MINUS:
+            out2 = va - vb
+            ret true
+        end
+        if n.op == tok.TK_STAR:
+            out2 = va * vb
+            ret true
+        end
+        ret false
+    end
+    ret false
+end
+
+func fold_flt(a &: at.Ast, id: int, out2 &: f64): bool:
+    if id == 0:
+        ret false
+    end
+    n := at.Get(a, id)
+    if n.kind == at.AST_LITERAL && n.op == tok.TK_FLOAT:
+        out2 = n.value_float
+        ret true
+    end
+    mut iv := 0 as i64
+    if fold_int(a, id, iv):
+        out2 = iv as f64
+        ret true
+    end
+    if n.kind == at.AST_UNARY && n.op == tok.TK_MINUS:
+        mut v := 0.0
+        if fold_flt(a, n.a, v):
+            out2 = 0.0 - v
+            ret true
+        end
+        ret false
+    end
+    if n.kind == at.AST_BINARY:
+        mut va := 0.0
+        mut vb := 0.0
+        if !fold_flt(a, n.a, va) || !fold_flt(a, n.b, vb):
+            ret false
+        end
+        if n.op == tok.TK_PLUS:
+            out2 = va + vb
+            ret true
+        end
+        if n.op == tok.TK_MINUS:
+            out2 = va - vb
+            ret true
+        end
+        if n.op == tok.TK_STAR:
+            out2 = va * vb
+            ret true
+        end
+        if n.op == tok.TK_SLASH:
+            if vb != 0.0:
+                out2 = va / vb
+                ret true
+            end
+            ret false
+        end
+        ret false
+    end
+    ret false
+end
+
+func append_utf8(b &: str.StringBuilder, cp: i64):
+    c := cp as int
+    if cp < (128 as i64):
+        co.SbPutc(b, c)
+        ret
+    end
+    if cp < (2048 as i64):
+        co.SbPutc(b, 192 | (c >> 6))
+        co.SbPutc(b, 128 | (c & 63))
+        ret
+    end
+    if cp < (65536 as i64):
+        co.SbPutc(b, 224 | (c >> 12))
+        co.SbPutc(b, 128 | ((c >> 6) & 63))
+        co.SbPutc(b, 128 | (c & 63))
+        ret
+    end
+    co.SbPutc(b, 240 | (c >> 18))
+    co.SbPutc(b, 128 | ((c >> 12) & 63))
+    co.SbPutc(b, 128 | ((c >> 6) & 63))
+    co.SbPutc(b, 128 | (c & 63))
+end
+
+func pf_try_fold(a &: at.Ast, argid: int, lit &: str.StringBuilder): bool:
+    arg := at.Get(a, argid)
+    ts := arg.type_str
+    if arg.kind == at.AST_LITERAL:
+        if arg.op == tok.TK_KW_TRUE:
+            co.SbPuts(lit, "true")
+            ret true
+        end
+        if arg.op == tok.TK_KW_FALSE:
+            co.SbPuts(lit, "false")
+            ret true
+        end
+        if arg.op == tok.TK_STRING || arg.op == tok.TK_TRIPLE_STRING || arg.op == tok.TK_RAW_STRING:
+            co.SbPuts(lit, arg.value_str)
+            ret true
+        end
+        if arg.op == tok.TK_UTF8_CHAR:
+            co.SbPuts(lit, arg.value_str)
+            ret true
+        end
+        if arg.op == tok.TK_CHAR:
+            append_utf8(lit, arg.value_int as i64)
+            ret true
+        end
+    end
+    if ts_is_float(ts):
+        mut f := 0.0
+        if fold_flt(a, argid, f):
+            co.SbPuts(lit, co.Format1("%g", co.ArgFloat(f)))
+            ret true
+        end
+        ret false
+    end
+    if ts_is_int(ts):
+        mut v := 0 as i64
+        if fold_int(a, argid, v):
+            if ts_is_unsigned(ts):
+                co.SbPuts(lit, co.U64Toa(v as u64))
+            else:
+                co.SbPuts(lit, co.I64Toa(v))
+            end
+            ret true
+        end
+    end
+    ret false
+end
+
+func push_lit(out2 &: Vector<PfSeg>, lit &: str.StringBuilder):
+    if co.SbLen(lit) == (0 as i64):
+        ret
+    end
+    out2.push(PfSeg { kind = PF_LIT, text = co.SbCstr(lit), expr = 0 })
+    // C: sb_free + sb_init - leave the builder empty and reusable.
+    co.SbFree(lit)
+end
+
+func pf_build_impl(a &: at.Ast, call: int, nl: bool, out2 &: Vector<PfSeg>):
+    mut lit := co.SbNew()
+    cn := at.Get(a, call)
+    repeat cn.list.len() with i:
+        argid := cn.list.get(i)[0]
+        if i > 0:
+            co.SbPutc(lit, 32)
+        end
+        if pf_try_fold(a, argid, lit):
+            continue
+        end
+        push_lit(out2, lit)
+        argn := at.Get(a, argid)
+        out2.push(
+            PfSeg {
+                kind = pf_kind_of(argn.type_str), text = "", expr = argid
+            }
+        )
+    end
+    if nl:
+        co.SbPutc(lit, 10)
+    end
+    push_lit(out2, lit)
+    co.SbFree(lit)
+end

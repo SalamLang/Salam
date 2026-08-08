@@ -1,0 +1,235 @@
+package codegen
+
+import str
+import co "../sal_core.salam"
+import at "../ast.salam"
+import lg "../logger.salam"
+import sm "../semantic/semantic.salam"
+
+// ===== codegen_decl.c =====
+
+func sig_is_sret(s &: sm.Sema, sig: int, is_main: bool): bool:
+    ret !is_main && sig != 0 && type_is_byval_agg(s, sm.SigAt(s, sig).ret_type)
+end
+
+func func_signature(
+    g &: Cg, s &: sm.Sema, a &: at.Ast, fnid: int, owner: int, sigid: int, is_main: bool
+): str:
+    sig := sm.SigAt(s, sigid)
+    fn := at.Get(a, fnid)
+    sret := sig_is_sret(s, sigid, is_main)
+    mut rets := ""
+    if is_main:
+        rets = "int"
+    else sret:
+        rets = "void"
+    else:
+        rets = cg_ctype(sm.ToString(s, sig.ret_type))
+    end
+    osym := sm.SymAt(s, owner)
+    ti := owner != 0 && osym.kind == sm.SYM_TYPEIMPL
+    mut ti_ts := ""
+    if ti:
+        ti_ts = sm.ToString(s, osym.ty)
+    end
+    is_instance := (owner != 0 && str.Len(osym.generic_base) > 0) || fn.synthetic
+    mut nm := ""
+    if is_main:
+        nm = "main"
+    else fn.is_extern:
+        nm = fn.name
+    else ti:
+        nm = cg_mangle_ti(s, ti_ts, fn.name, sig.params)
+    else is_instance:
+        nm = cg_mangle_in(
+            s, "g", owner != 0 ? osym.name : "", fn.name, sig.params
+        )
+    else:
+        nm = cg_mangle_in(
+            s, g.pkg, owner != 0 ? osym.name : "", fn.name, sig.params
+        )
+    end
+    if is_main:
+        ret "int main(int argc, char** argv)"
+    end
+    pkgmod := !str.Equals(g.pkg, "main")
+    exported := (owner != 0 || fn.is_extern || fn.is_pub || pkgmod) && !is_instance
+    inl := fn.is_inline && !fn.is_extern && owner == 0 && (fn.is_pub || !pkgmod)
+    mut b := co.SbNew()
+    if is_instance || inl:
+        co.SbPuts(b, "static inline ")
+    else !exported:
+        co.SbPuts(b, "static ")
+    end
+    if !fn.is_extern:
+        if fn.is_noinline:
+            co.SbPuts(b, "SALAM_NOINLINE ")
+        end
+        if fn.is_pure:
+            co.SbPuts(b, "SALAM_PURE ")
+        end
+        if fn.is_deprecated:
+            co.SbPuts(b, "SALAM_DEPRECATED ")
+        end
+    end
+    if fn.is_noret:
+        co.SbPuts(b, "SALAM_NORET ")
+    end
+    co.SbPuts(b, rets + " " + nm + "(")
+    mut first := true
+    if owner != 0:
+        if ti:
+            co.SbPuts(b, cg_ctype(ti_ts) + " this")
+        else:
+            co.SbPuts(b, cg_ctype(sm.ToString(s, osym.ty)) + "* this")
+        end
+        first = false
+    end
+    repeat fn.list.len() with i:
+        p := at.Get(a, fn.list.get(i)[0])
+        pts := sm.ToString(s, sig.params.get(i)[0])
+        if !first:
+            co.SbPuts(b, ", ")
+        end
+        if p.is_ref:
+            co.SbPuts(b, cg_ctype(pts) + "* " + cg_cident(p.name))
+        else:
+            co.SbPuts(b, cg_decl(pts, p.name))
+        end
+        first = false
+    end
+    if sret:
+        if !first:
+            co.SbPuts(b, ", ")
+        end
+        co.SbPuts(b, cg_ctype(sm.ToString(s, sig.ret_type)) + "* __ret")
+        first = false
+    end
+    if first && owner == 0:
+        co.SbPuts(b, "void")
+    end
+    co.SbPutc(b, 41)
+    r := co.SbCstr(b)
+    co.SbFree(b)
+    ret r
+end
+
+func cg_extern_proto(s &: sm.Sema, a &: at.Ast, fnid: int, sigid: int): str:
+    sig := sm.SigAt(s, sigid)
+    fn := at.Get(a, fnid)
+    rets := cg_ctype(sm.ToString(s, sig.ret_type))
+    mut b := co.SbNew()
+    co.SbPuts(b, "extern ")
+    if fn.is_pure:
+        co.SbPuts(b, "SALAM_PURE ")
+    end
+    if fn.is_noret:
+        co.SbPuts(b, "SALAM_NORET ")
+    end
+    co.SbPuts(b, rets + " " + fn.name + "(")
+    mut first := true
+    repeat fn.list.len() with i:
+        p := at.Get(a, fn.list.get(i)[0])
+        pts := sm.ToString(s, sig.params.get(i)[0])
+        if !first:
+            co.SbPuts(b, ", ")
+        end
+        if p.is_ref:
+            co.SbPuts(b, cg_ctype(pts) + "* " + cg_cident(p.name))
+        else:
+            co.SbPuts(b, cg_decl(pts, p.name))
+        end
+        first = false
+    end
+    if fn.is_variadic:
+        if !first:
+            co.SbPuts(b, ", ")
+        end
+        co.SbPuts(b, "...")
+        first = false
+    end
+    if first:
+        co.SbPuts(b, "void")
+    end
+    co.SbPutc(b, 41)
+    r := co.SbCstr(b)
+    co.SbFree(b)
+    ret r
+end
+
+func cg_function(g &: Cg, s &: sm.Sema, a &: at.Ast, fnid: int, owner: int):
+    fn := at.Get(a, fnid)
+    mut fsym := 0
+    if owner != 0:
+        fsym = sm.LookupLocal(s, sm.SymAt(s, owner).members, fn.name)
+    else:
+        fsym = sm.LookupLocal(s, s.global, fn.name)
+    end
+    sig := sig_of_decl(s, fsym, fnid)
+    if sig == 0:
+        ret
+    end
+    is_main := owner == 0 && str.Equals(fn.name, g.entry)
+    lg.Log(
+        g.log, lg.PH_CODEGEN, lg.LOG_TRACE, "emit function " + (owner != 0 ? sm.SymAt(s, owner).name : "") + fn.name
+    )
+    g.cur_struct = owner
+    g.cur_fn_home = fsym != 0 ? sm.SymAt(s, fsym).home : 0
+    g.cur_sret = sig_is_sret(s, sig, is_main)
+    g.locals.clear()
+    if owner != 0:
+        local_add(g, "this")
+    end
+    repeat fn.list.len() with i:
+        local_add(g, at.Get(a, fn.list.get(i)[0]).name)
+    end
+    saved_defers := g.fn_defers
+    g.fn_defers = Vector {} as Vector<int>
+    cg_source_line(g, span_of(a, fnid))
+    if is_main && g.is_gui_mode:
+        out(g, "#ifdef _WIN32\n")
+        cg_line(
+            g, "int WINAPI WinMain(HINSTANCE hInst, HINSTANCE " + "hPrevInst, LPSTR lpCmdLine, int nCmdShow) {"
+        )
+        out(
+            g, "    (void)hInst; (void)hPrevInst; (void)lpCmdLine; " + "(void)nCmdShow;\n"
+        )
+        out(g, "#else\n")
+        cg_line(g, "int main(int argc, char** argv) {")
+        out(g, "#endif\n")
+    else:
+        cg_line(g, func_signature(g, s, a, fnid, owner, sig, is_main) + " {")
+    end
+    g.indent += 1
+    if is_main:
+        if !g.is_gui_mode:
+            cg_line(g, "salam_set_args(argc, argv);")
+        else:
+            cg_line(g, "#ifdef _WIN32")
+            cg_line(g, "(void)0;")
+            cg_line(g, "#else")
+            cg_line(g, "salam_set_args(argc, argv);")
+            cg_line(g, "#endif")
+        end
+        repeat g.deferred.len() with i2:
+            cg_line(g, g.deferred.get(i2)[0])
+        end
+    end
+    if fn.a != 0:
+        cg_block(g, s, a, fn.a)
+    end
+    cg_emit_defers(g, s, a)
+    if is_main && sm.TypeAt(s, sm.SigAt(s, sig).ret_type).kind == sm.TY_VOID:
+        cg_line(g, "return 0;")
+    end
+    g.indent -= 1
+    cg_line(g, "}")
+    outc(g, 10)
+    g.cur_struct = 0
+    g.cur_fn_home = 0
+    g.cur_sret = false
+    // The C leaked the inner arena vec on restore; the port frees it.
+    mut inner := g.fn_defers
+    defer inner.free()
+    g.fn_defers = saved_defers
+end

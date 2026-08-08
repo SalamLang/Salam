@@ -1,0 +1,144 @@
+package lexer
+
+import tok "../token.salam"
+
+// ===== lexer_string.c =====
+// lx_scan_string
+func scan_string(L &: Lx):
+    start := L.pos
+    b := lx_pos(L)
+    adv(L)
+    until !at_end(L) && peek(L) != 34:
+        if peek(L) == 92:
+            adv(L)
+            if !at_end(L):
+                adv(L)
+            end
+        else peek(L) == 10:
+            break
+        else:
+            adv(L)
+        end
+    end
+    expect(L, 34, b, "unterminated string literal")
+    text := lex_slice(L, start)
+    emit_val(L, tok.TK_STRING, b, text, tok.ValueStr(decode_string(text, false)))
+end
+
+// lx_scan_triple
+func scan_triple(L &: Lx):
+    start := L.pos
+    b := lx_pos(L)
+    adv(L)
+    adv(L)
+    adv(L)
+    mut closed := false
+    until !at_end(L):
+        if peek(L) == 34 && peek2(L, 1) == 34 && peek2(L, 2) == 34:
+            adv(L)
+            adv(L)
+            adv(L)
+            closed = true
+            break
+        end
+        adv(L)
+    end
+    if !closed:
+        error_at(L, b, "unterminated triple-quoted string")
+    end
+    text := lex_slice(L, start)
+    emit_val(L, tok.TK_TRIPLE_STRING, b, text, tok.ValueStr(decode_string(text, true)))
+end
+
+// lx_scan_char
+func scan_char(L &: Lx):
+    start := L.pos
+    b := lx_pos(L)
+    adv(L)
+    if peek(L) == 92:
+        adv(L)
+        if !at_end(L):
+            esc := advc(L)
+            if esc == 120: // 'x'
+                consume_hex(L, LX_ESC_HEX_X)
+            else esc == 117: // 'u'
+                consume_hex(L, LX_ESC_HEX_U)
+            else esc == 85: // 'U'
+                consume_hex(L, LX_ESC_HEX_BIG_U)
+            end
+        end
+    else !at_end(L) && peek(L) != 39:
+        adv(L)
+    end
+    expect(L, 39, b, "unterminated char literal")
+    text := lex_slice(L, start)
+    emit_val(L, tok.TK_CHAR, b, text, tok.ValueChar(decode_char(text)))
+end
+
+// lx_scan_raw_string
+func scan_raw_string(L &: Lx):
+    start := L.pos
+    b := lx_pos(L)
+    adv(L)
+    until !at_end(L) && peek(L) != 96:
+        adv(L)
+    end
+    expect(L, 96, b, "unterminated raw string literal")
+    text := lex_slice(L, start)
+    tlen := text.len()
+    inner := tlen >= 2 ? tlen - 2 : 0
+    mut sval := ""
+    if inner > 0:
+        sval = text.substr(1, inner)
+    end
+    emit_val(L, tok.TK_RAW_STRING, b, text, tok.ValueStr(sval))
+end
+
+// lx_scan_utf8_char
+func scan_utf8_char(L &: Lx):
+    start := L.pos
+    b := lx_pos(L)
+    adv(L) // 'u'
+    quote := peek(L)
+    adv(L)
+    content_start := L.pos
+    if quote == 34:
+        until !at_end(L) && peek(L) != 34:
+            if peek(L) == 92:
+                adv(L)
+                if !at_end(L):
+                    adv(L)
+                end
+            else peek(L) == 10:
+                break
+            else:
+                adv(L)
+            end
+        end
+    else:
+        until !at_end(L) && peek(L) != 39 && peek(L) != 10:
+            adv(L)
+        end
+    end
+    content_len := L.pos - content_start
+    expect(L, quote, b, "unterminated unicode char literal")
+    text := lex_slice(L, start)
+    mut bytes := ""
+    mut nbytes := 0
+    if quote == 34:
+        bytes = decode_string(text.substr(1, text.len() - 1), false)
+        nbytes = bytes.len()
+    else:
+        bytes = L.s.substr(content_start, content_len)
+        nbytes = content_len
+    end
+    if nbytes == 0:
+        error_at(L, b, "empty unicode char literal")
+    else:
+        seq := utf8_seq_len(bytes, nbytes)
+        if seq == 0 || seq != nbytes:
+            error_at(L, b, "unicode char literal must contain exactly one codepoint")
+        end
+    end
+    emit_val(L, tok.TK_UTF8_CHAR, b, text, tok.ValueStr(bytes))
+end

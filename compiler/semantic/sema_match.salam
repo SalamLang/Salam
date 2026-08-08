@@ -1,0 +1,542 @@
+package semantic
+
+import str
+import co "../sal_core.salam"
+import tok "../token.salam"
+import at "../ast.salam"
+import i18 "../i18n.salam"
+
+// ===========================================================================
+// ===== sema_match.c (5d) =====
+// ===========================================================================
+
+// sal_catf onto a 256-byte buffer (the exhaustiveness message builders):
+// appends min(len, room-1) bytes and returns off + that, exactly like the C.
+func sm_catf256(buf &: str, off: int, piece: str): int:
+    if off >= 256:
+        ret off
+    end
+    n := str.Len(piece)
+    room := 256 - off
+    mut wrote := n
+    if wrote >= room:
+        wrote = room - 1
+    end
+    buf = buf + str.Substr(piece, 0, wrote)
+    ret off + wrote
+end
+
+// rewrite_tail_expr - bare tail expression of a block arm -> synthetic ret.
+// (The C `s` param only supplied the arena; dropped here.)
+func rewrite_tail_expr(a &: at.Ast, block: int):
+    if block == 0 || at.ChildCount(a, block) == 0:
+        ret
+    end
+    lasti := at.ChildCount(a, block) - 1
+    last := at.Child(a, block, lasti)
+    if at.KindOf(a, last) != at.AST_EXPR_STMT:
+        ret
+    end
+    rid := new_node_at(a, at.AST_RETURN, span_of(a, last))
+    mut rv := at.Get(a, rid)
+    rv.synthetic = true
+    rv.a = at.Get(a, last).a
+    at.Put(a, rid, rv)
+    mut bv := at.Get(a, block)
+    bv.list.set(lasti, rid)
+    at.Put(a, block, bv)
+end
+
+// types_comparable
+func types_comparable(s &: Sema, ta: int, tb: int): bool:
+    if type_is_error(s, ta) || type_is_error(s, tb):
+        ret true
+    end
+    if type_equiv(s, ta, tb):
+        ret true
+    end
+    ret type_is_numeric(s, ta) && type_is_numeric(s, tb) && type_common_arith(s, ta, tb) >= 0
+end
+
+// check_match_pattern - resolved Variant member tag (>= 0) or -1 (value
+// pattern / error). The C pt_out param was always NULL and is dropped.
+func check_match_pattern(
+    s &: Sema, a &: at.Ast, pat: int, subj: int, subj_is_variant: bool, subj_is_enum: bool
+): int:
+    pv := at.Get(a, pat)
+    psp := span_of(a, pat)
+    if subj_is_variant:
+        if at.KindOf(a, pv.a) != at.AST_IDENTIFIER:
+            serr(
+                s, 76, psp, i18.Tr("expected a type-name pattern to match a Variant subject")
+            )
+            ret 0 - 1
+        end
+        pt := sema_resolve_type(s, a, pv.a)
+        if type_is_error(s, pt):
+            ret 0 - 1
+        end
+        tag := type_variant_tag(s, subj, pt)
+        if tag < 0:
+            serr(
+                s, 75, psp, co.Format2(
+                    i18.Tr("match arm pattern type '%s' is not a member of '%s'"), co.ArgStr(type_to_string(s, pt)),
+                    co.ArgStr(type_to_string(s, subj))
+                )
+            )
+        end
+        at.SetTypeStr(a, pat, type_to_string(s, pt))
+        mut pv2 := at.Get(a, pat)
+        pv2.value_kind = tok.TV_INT
+        pv2.value_int = (tag < 0 ? 0 : tag) as u64
+        at.Put(a, pat, pv2)
+        ret tag
+    end
+
+    if str.Len(pv.name) > 0:
+        serr(
+            s, 77, psp, co.Format1(
+                i18.Tr("value pattern used on a non-Variant match subject of type '%s'; a type-name pattern (with an optional binding) is only valid when matching a Variant"),
+                co.ArgStr(type_to_string(s, subj))
+            )
+        )
+    end
+
+    ak := at.KindOf(a, pv.a)
+    if ak == at.AST_LITERAL:
+        s.expected = subj
+        pt2 := sema_check_expr(s, a, pv.a)
+        s.expected = TYPE_NONE
+        if !types_comparable(s, subj, pt2):
+            serr(
+                s, 21, psp, co.Format2(
+                    i18.Tr("cannot compare '%s' and '%s'"), co.ArgStr(type_to_string(s, subj)), co.ArgStr(type_to_string(s, pt2))
+                )
+            )
+        end
+    else ak == at.AST_IDENTIFIER:
+        if subj_is_enum:
+            syd := ty_at(s, subj).decl
+            pname := at.Get(a, pv.a).name
+            mut m := 0
+            if syd != 0 && sym_at(s, syd).members != 0:
+                m = scope_lookup_local(s, sym_at(s, syd).members, pname)
+            end
+            if m == 0:
+                serr(
+                    s, 16, span_of(a, pv.a), co.Format2(
+                        i18.Tr("enum '%s' has no member '%s'"), co.ArgStr(syd != 0 ? sym_at(s, syd).name : "?"),
+                        co.ArgStr(pname)
+                    )
+                )
+            else:
+                mem := new_node_at(a, at.AST_MEMBER, span_of(a, pv.a))
+                idn := new_node_at(a, at.AST_IDENTIFIER, span_of(a, pv.a))
+                mut iv := at.Get(a, idn)
+                iv.synthetic = true
+                iv.name = sym_at(s, syd).name
+                at.Put(a, idn, iv)
+                mut mv := at.Get(a, mem)
+                mv.synthetic = true
+                mv.a = idn
+                mv.name = pname
+                at.Put(a, mem, mv)
+                mut pv3 := at.Get(a, pat)
+                pv3.a = mem
+                at.Put(a, pat, pv3)
+                _mt := sema_check_expr(s, a, mem)
+            end
+        else:
+            pt3 := sema_check_expr(s, a, pv.a)
+            if !types_comparable(s, subj, pt3):
+                serr(
+                    s, 21, psp, co.Format2(
+                        i18.Tr("cannot compare '%s' and '%s'"), co.ArgStr(type_to_string(s, subj)), co.ArgStr(type_to_string(s, pt3))
+                    )
+                )
+            end
+        end
+    end
+    ret 0 - 1
+end
+
+// sema_check_match. The C's per-arm heap vec of match_yield_t and the
+// arm_yields vec-of-vecs become flat parallel vectors (yr_rets/yr_tys) with
+// per-arm [offset,count) windows - same data, no nested Vector generics.
+func sema_check_match(
+    s &: Sema, a &: at.Ast, nid: int, is_expr: bool, expected: int
+): int:
+    exp := expected
+    s.expected = TYPE_NONE
+    subj := sema_check_expr(s, a, at.Get(a, nid).a)
+    mut nv0 := at.Get(a, nid)
+    nv0.match_is_expr = is_expr
+    at.Put(a, nid, nv0)
+
+    subj_is_variant := subj >= 0 && ty_at(s, subj).kind == TY_VARIANT
+    subj_is_enum := subj >= 0 && ty_at(s, subj).kind == TY_ENUM
+    mut has_wildcard := false
+
+    mut arm_types := Vector {} as Vector<int>
+    defer arm_types.free()
+    mut arm_yoff := Vector {} as Vector<int> // -1 = C NULL collect
+    defer arm_yoff.free()
+    mut arm_ycnt := Vector {} as Vector<int>
+    defer arm_ycnt.free()
+    mut yr_rets := Vector {} as Vector<int>
+    defer yr_rets.free()
+    mut yr_tys := Vector {} as Vector<int>
+    defer yr_tys.free()
+    mut seen_members := Vector {} as Vector<int> // SymIds
+    defer seen_members.free()
+    mut seen_tags := Vector {} as Vector<int>
+    defer seen_tags.free()
+
+    mut ai := 0
+    until ai < at.ChildCount(a, nid):
+        arm := at.Child(a, nid, ai)
+        ai += 1
+        mut arm_ty := TYPE_NONE
+        mut coll_off := 0 - 1
+        mut coll_cnt := 0
+
+        if at.Get(a, arm).op == tok.TK_KW_ELSE:
+            has_wildcard = true
+        else:
+            mut pi := 0
+            until pi < at.ChildCount(a, arm):
+                pat := at.Child(a, arm, pi)
+                pi += 1
+                tag := check_match_pattern(
+                    s, a, pat, subj, subj_is_variant, subj_is_enum
+                )
+                if subj_is_variant:
+                    if tag >= 0:
+                        mut dup := false
+                        repeat seen_tags.len() with k:
+                            if seen_tags.get(k)[0] == tag:
+                                dup = true
+                                break
+                            end
+                        end
+                        if dup:
+                            serr(
+                                s, 78, span_of(a, pat), i18.Tr("duplicate match arm pattern")
+                            )
+                        else:
+                            seen_tags.push(tag)
+                        end
+                        if !dup && str.Len(at.Get(a, pat).name) > 0 && at.ChildCount(a, arm) == 1:
+                            psp2 := span_of(a, pat)
+                            decl := new_node_at(a, at.AST_VAR_DECL, psp2)
+                            unwrap := new_node_at(
+                                a, at.AST_VARIANT_UNWRAP, psp2
+                            )
+                            mut uv := at.Get(a, unwrap)
+                            uv.synthetic = true
+                            uv.a = at.Clone(a, at.Get(a, nid).a)
+                            uv.ty = at.Get(a, pat).a
+                            at.Put(a, unwrap, uv)
+                            mut dv := at.Get(a, decl)
+                            dv.synthetic = true
+                            dv.name = at.Get(a, pat).name
+                            dv.a = unwrap
+                            at.Put(a, decl, dv)
+                            armb := at.Get(a, arm).b
+                            mut bv := at.Get(a, armb)
+                            mut newlist := Vector {} as Vector<int>
+                            newlist.push(decl)
+                            repeat bv.list.len() with k2:
+                                newlist.push(bv.list.get(k2)[0])
+                            end
+                            mut old := bv.list
+                            bv.list = newlist
+                            at.Put(a, armb, bv)
+                            old.free()
+                        end
+                    end
+                else subj_is_enum && at.KindOf(a, at.Get(a, pat).a) == at.AST_MEMBER:
+                    syd2 := ty_at(s, subj).decl
+                    pname2 := at.Get(a, at.Get(a, pat).a).name
+                    mut m2 := 0
+                    if syd2 != 0 && sym_at(s, syd2).members != 0:
+                        m2 = scope_lookup_local(
+                            s, sym_at(s, syd2).members, pname2
+                        )
+                    end
+                    if m2 != 0:
+                        mut dup2 := false
+                        repeat seen_members.len() with k3:
+                            if seen_members.get(k3)[0] == m2:
+                                dup2 = true
+                                break
+                            end
+                        end
+                        if dup2:
+                            serr(
+                                s, 78, span_of(a, pat), co.Format1(
+                                    i18.Tr("duplicate match arm pattern '%s'"), co.ArgStr(pname2)
+                                )
+                            )
+                        else:
+                            seen_members.push(m2)
+                        end
+                    end
+                end
+            end
+            if at.ChildCount(a, arm) > 1:
+                repeat at.ChildCount(a, arm) with pi2:
+                    pat2 := at.Child(a, arm, pi2)
+                    if str.Len(at.Get(a, pat2).name) > 0:
+                        serr(
+                            s, 76, span_of(a, pat2), i18.Tr("a match arm with multiple patterns cannot bind a name; use a single-pattern arm to bind, e.g. 'i32 n =>'")
+                        )
+                    end
+                end
+            end
+        end
+
+        if is_expr:
+            rewrite_tail_expr(a, at.Get(a, arm).b)
+        end
+
+        if is_expr:
+            saved_depth := s.match_arm_depth
+            saved_yexp := s.match_yield_expected
+            saved_vec := s.match_yield_collect
+            saved_act := s.match_yield_active
+            s.match_yield_collect = Vector {} as Vector<MatchYield>
+            s.match_arm_depth = saved_depth + 1
+            s.match_yield_expected = exp
+            s.match_yield_active = true
+            sema_check_block(s, a, at.Get(a, arm).b)
+            mut collected := s.match_yield_collect
+            s.match_arm_depth = saved_depth
+            s.match_yield_expected = saved_yexp
+            s.match_yield_collect = saved_vec
+            s.match_yield_active = saved_act
+
+            if collected.len() == 0:
+                serr(
+                    s, 81, span_of(a, arm), i18.Tr("'match' used as an expression must have arms that all produce a value")
+                )
+                arm_ty = sema_err_ty(s)
+            else:
+                mut t0 := collected.get(0)[0].ty
+                mut ok := true
+                mut yi := 1
+                until yi < collected.len():
+                    yt := collected.get(yi)[0].ty
+                    yi += 1
+                    if type_equiv(s, t0, yt):
+                        continue
+                    end
+                    if type_is_numeric(s, t0) && type_is_numeric(s, yt):
+                        c := type_common_arith(s, t0, yt)
+                        if c >= 0:
+                            t0 = c
+                            continue
+                        end
+                    end
+                    ok = false
+                end
+                if !ok:
+                    serr(
+                        s, 81, span_of(a, arm), i18.Tr("match arm produces different types on different code paths")
+                    )
+                    arm_ty = sema_err_ty(s)
+                else:
+                    arm_ty = t0
+                end
+            end
+            coll_off = yr_rets.len()
+            coll_cnt = collected.len()
+            repeat collected.len() with ci:
+                y := collected.get(ci)[0]
+                yr_rets.push(y.ret_node)
+                yr_tys.push(y.ty)
+            end
+            collected.free()
+        else:
+            sema_check_block(s, a, at.Get(a, arm).b)
+        end
+
+        arm_types.push(arm_ty)
+        arm_yoff.push(coll_off)
+        arm_ycnt.push(coll_cnt)
+    end
+
+    if !has_wildcard && subj_is_enum && ty_at(s, subj).decl != 0:
+        syid := ty_at(s, subj).decl
+        sy := sym_at(s, syid)
+        mut total := 0
+        if sy.members != 0:
+            msc5 := scope_at(s, sy.members)
+            total = msc5.symbols.len()
+        end
+        if seen_members.len() < total:
+            msyms := scope_at(s, sy.members).symbols
+            mut buf := ""
+            mut o := 0
+            mut mi := 0
+            until mi < msyms.len() && o < 224:
+                mid := msyms.get(mi)[0]
+                mut covered := false
+                repeat seen_members.len() with k4:
+                    if seen_members.get(k4)[0] == mid:
+                        covered = true
+                        break
+                    end
+                end
+                if !covered:
+                    o = sm_catf256(
+                        buf, o, (o > 0 ? ", " : "") + sym_at(s, mid).name
+                    )
+                end
+                mi += 1
+            end
+            if mi < msyms.len():
+                o = sm_catf256(buf, o, ", ...")
+            end
+            swarn(
+                s, 80, span_of(a, nid), co.Format3(
+                    i18.Tr("non-exhaustive match on enum '%s': missing member%s %s"), co.ArgStr(sy.name),
+                    co.ArgStr(plural_suffix(total - seen_members.len())), co.ArgStr(buf)
+                )
+            )
+        end
+    end
+    if !has_wildcard && subj_is_variant:
+        vparams := ty_at(s, subj).params
+        total2 := vparams.len()
+        if seen_tags.len() < total2:
+            mut buf2 := ""
+            mut o2 := 0
+            mut ti := 0
+            until ti < total2 && o2 < 224:
+                mut covered2 := false
+                repeat seen_tags.len() with k5:
+                    if seen_tags.get(k5)[0] == ti:
+                        covered2 = true
+                        break
+                    end
+                end
+                if !covered2:
+                    o2 = sm_catf256(
+                        buf2, o2, (o2 > 0 ? ", " : "") + type_to_string(s, vparams.get(ti)[0])
+                    )
+                end
+                ti += 1
+            end
+            if ti < total2:
+                o2 = sm_catf256(buf2, o2, ", ...")
+            end
+            serr(
+                s, 79, span_of(a, nid), co.Format3(
+                    i18.Tr("non-exhaustive match on Variant '%s': missing case%s for %s"), co.ArgStr(type_to_string(s, subj)),
+                    co.ArgStr(plural_suffix(total2 - seen_tags.len())), co.ArgStr(buf2)
+                )
+            )
+        end
+    end
+
+    if !is_expr:
+        ret sema_decorate(s, a, nid, sema_ty(s, TY_VOID))
+    end
+
+    mut first := TYPE_NONE
+    mut all_equiv := true
+    mut unified := TYPE_NONE
+    repeat arm_types.len() with k6:
+        t := arm_types.get(k6)[0]
+        if t < 0 || type_is_error(s, t):
+            continue
+        end
+        if first < 0:
+            first = t
+            continue
+        end
+        if !type_equiv(s, first, t):
+            all_equiv = false
+        end
+    end
+
+    if first < 0:
+        unified = sema_err_ty(s)
+    else all_equiv:
+        unified = first
+    else:
+        mut acc := TYPE_NONE
+        mut numeric_ok := true
+        repeat arm_types.len() with k7:
+            t2 := arm_types.get(k7)[0]
+            if t2 < 0 || type_is_error(s, t2):
+                continue
+            end
+            if acc < 0:
+                acc = t2
+                continue
+            end
+            c2 := type_common_arith(s, acc, t2)
+            if c2 < 0:
+                numeric_ok = false
+                break
+            end
+            acc = c2
+        end
+        if numeric_ok && acc >= 0:
+            unified = acc
+        else:
+            mut vmem := Vector {} as Vector<int>
+            repeat arm_types.len() with k8:
+                t3 := arm_types.get(k8)[0]
+                if t3 < 0 || type_is_error(s, t3):
+                    continue
+                end
+                mut dup3 := false
+                repeat vmem.len() with j8:
+                    if type_equiv(s, vmem.get(j8)[0], t3):
+                        dup3 = true
+                        break
+                    end
+                end
+                if dup3:
+                    continue
+                end
+                if vmem.len() >= 64:
+                    serr(
+                        s, 1, span_of(a, nid), i18.Tr("match expression has too many distinct arm types (max 64)")
+                    )
+                    break
+                end
+                vmem.push(t3)
+            end
+            unified = type_variant_new(s, vmem)
+            vmem.free()
+        end
+    end
+
+    if ty_at(s, unified).kind == TY_VARIANT:
+        repeat arm_types.len() with k9:
+            att := arm_types.get(k9)[0]
+            yoff := arm_yoff.get(k9)[0]
+            if att < 0 || type_is_error(s, att) || yoff < 0:
+                continue
+            end
+            tag2 := type_variant_tag(s, unified, att)
+            if tag2 < 0:
+                continue
+            end
+            repeat arm_ycnt.get(k9)[0] with yi2:
+                rid2 := yr_rets.get(yoff + yi2)[0]
+                na := coerce_to_variant(s, a, unified, at.Get(a, rid2).a, tag2)
+                mut rv2 := at.Get(a, rid2)
+                rv2.a = na
+                at.Put(a, rid2, rv2)
+            end
+        end
+    end
+
+    at.SetTypeStr(a, nid, type_to_string(s, unified))
+    ret sema_decorate(s, a, nid, unified)
+end

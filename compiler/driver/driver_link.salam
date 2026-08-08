@@ -1,0 +1,157 @@
+package driver
+
+import os
+import str
+import lg "../logger.salam"
+
+    // Not from build.c: recaps which input file(s) failed right on the abort
+    // line itself, so a reader scrolling a long CI log doesn't have to search
+    // back through the phase INFO spam to see what actually broke the build.
+    func abort_message(base: str, failed: Vector<str>): str:
+        if failed.len() == 0:
+            ret base
+        end
+        ret base + " (" + str.Join(failed, ", ") + ")"
+    end
+
+    // driver/build.c link_spec_is_path
+    func link_spec_is_path(spec: str): bool:
+        if str.Contains(spec, "/") || str.Contains(spec, "\\"):
+            ret true
+        end
+        exts := [".a", ".so", ".dll", ".lib", ".dylib"] as str[5]
+        repeat 5 with i:
+            ext := exts[i]
+            if str.Len(spec) > str.Len(ext) && str.EndsWith(spec, ext):
+                ret true
+            end
+        end
+        ret false
+    end
+
+    // core/sb.c sb_put_shell_arg - POSIX single-quote branch is the one that
+    // matters for this repo's verification target (WSL/Linux); the Windows
+    // branch is a reasonable (not byte-exact-to-the-C) double-quote escape,
+    // since driver/build.c cross-platform shelling isn't this port's gate.
+    func shell_arg(s: str): str:
+        mut b := str.NewBuilder()
+        if SALAM_OS_WINDOWS:
+            str.BufAppendChar(b, 34) // "
+            n := str.Len(s)
+            repeat n with i:
+                c := byte_at(s, i)
+                if c == 34:
+                    str.BufAppend(b, `\"`)
+                else:
+                    str.BufAppendChar(b, c)
+                end
+            end
+            str.BufAppendChar(b, 34)
+        else:
+            str.BufAppendChar(b, 39) // '
+            n := str.Len(s)
+            repeat n with i:
+                c := byte_at(s, i)
+                if c == 39:
+                    str.BufAppend(b, "'\\''")
+                else:
+                    str.BufAppendChar(b, c)
+                end
+            end
+            str.BufAppendChar(b, 39)
+        end
+        r := str.BufStr(b)
+        str.BufFree(b)
+        ret r
+    end
+
+    // Shared by link_define (SALAM_LINK_<LIB> defines) and the linker command's
+    // inline "-DSALAM_LINK_<LIB>" (driver/build.c repeats this transform twice).
+    func sanitize_ident(lib: str): str:
+        mut b := str.NewBuilder()
+        n := str.Len(lib)
+        repeat n with i:
+            code := byte_at(lib, i)
+            mut c := code
+            if c >= 97 && c <= 122:
+                c = c - 32
+            else (c >= 65 && c <= 90) || (c >= 48 && c <= 57):
+                c = c
+            else:
+                c = 95
+            end
+            str.BufAppendChar(b, c)
+        end
+        r := str.BufStr(b)
+        str.BufFree(b)
+        ret r
+    end
+
+    // cli.c's link-define sanitizer: SALAM_LINK_<LIB>.
+    func link_define(lib: str): str:
+        ret "SALAM_LINK_" + sanitize_ident(lib)
+    end
+
+    // driver/build.c emit_link
+    func emit_link(
+        cmdb &: str.StringBuilder, lgr: lg.Logger, spec: str, kind: str, use_tcc: bool
+    ):
+        framework := str.Equals(kind, "framework")
+        is_static := str.Equals(kind, "static")
+        if framework:
+            if SALAM_OS_MAC:
+                str.BufAppend(cmdb, " -framework ")
+                str.BufAppend(cmdb, spec)
+            else:
+                lg.Log(
+                    lgr, lg.PH_DRIVER, lg.LOG_WARN, "ignoring framework link '" + spec + "' (frameworks are macOS-only)"
+                )
+            end
+            ret
+        end
+        if (str.Len(spec) > 0 && byte_at(spec, 0) == 45) || link_spec_is_path(spec):
+            str.BufAppendChar(cmdb, 32)
+            str.BufAppend(cmdb, shell_arg(spec))
+            ret
+        end
+        if is_static && !use_tcc:
+            if SALAM_OS_MAC:
+                lg.Log(
+                    lgr, lg.PH_DRIVER, lg.LOG_WARN, "static link of bare name '" + spec + "' is unsupported by the macOS linker; pass an explicit " + ".a path. Linking it normally."
+                )
+                str.BufAppend(cmdb, " -l")
+                str.BufAppend(cmdb, shell_arg(spec))
+            else:
+                str.BufAppend(cmdb, " -Wl,-Bstatic -l")
+                str.BufAppend(cmdb, shell_arg(spec))
+                str.BufAppend(cmdb, " -Wl,-Bdynamic")
+            end
+            ret
+        end
+        str.BufAppend(cmdb, " -l")
+        str.BufAppend(cmdb, shell_arg(spec))
+    end
+
+    // driver/build.c detect_bundled_musl_tcc (POSIX only; no-op on Windows -
+    // the caller only invokes this from its `else: (!SALAM_OS_WINDOWS)` branch,
+    // so no OS check is needed in here too - doing so would make cc_path/r
+    // entirely unused/never-mutated once condcomp folds this body away on a
+    // Windows build, tripping E062/E069).
+    func detect_bundled_musl_tcc(cc_path: str): MuslTcc:
+        mut r := MuslTcc {}
+        if !str.Contains(cc_path, "tcc"):
+            ret r
+        end
+        slash := str.LastIndex(cc_path, "/")
+        if slash < 0:
+            ret r
+        end
+        r.tcc_dir = str.Substr(cc_path, 0, slash)
+        probe := r.tcc_dir + "/musl/lib/crt1.o"
+        if !os.Exists(probe):
+            ret r
+        end
+        r.musl_dir = r.tcc_dir + "/musl"
+        r.active = true
+        ret r
+    end

@@ -25,6 +25,7 @@ package source
 
 import io
 import os
+import mem
 
 // source_file_t { const char *path; char *text; size_t len; }
 pub struct SourceFile:
@@ -49,4 +50,26 @@ pub func Load(path: str, sf &: SourceFile): bool:
     sf.text = text
     sf.len = text.len()
     ret true
+end
+
+// No C counterpart: over there the text lives in the compiler arena and is
+// reclaimed wholesale by arena_free() at the end of the run. Here Load()
+// hands out a buffer io.ReadFile owns nothing else about, so a caller that
+// is done with a SourceFile - and knows nothing still points into its text -
+// releases it with this.
+//
+// Only call it once every consumer of sf.text is finished. Token lexemes and
+// AST strings are independent substr copies, so lexing + parsing then
+// freeing is safe; keeping a rich diagnostic's registered source buffer
+// (logger.AddDiagSource) alive is NOT - that stores the pointer itself.
+//
+// Guarded on len rather than on text != "": Load leaves text as the empty
+// string *literal* when the path exists but cannot be read, and that is
+// static storage, not a heap block mem.Free may touch.
+pub func Free(sf &: SourceFile):
+    if sf.len > 0:
+        mem.Free(sf.text as void*)
+    end
+    sf.text = ""
+    sf.len = 0
 end

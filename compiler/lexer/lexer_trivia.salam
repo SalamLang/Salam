@@ -1,0 +1,114 @@
+package lexer
+
+import tok "../token.salam"
+import lg "../logger.salam"
+
+// ===== lexer_trivia.c =====
+func token_continues(k: int): bool:
+    ret k == tok.TK_PLUS || k == tok.TK_MINUS || k == tok.TK_SLASH || k == tok.TK_PERCENT || k == tok.TK_POWER || k == tok.TK_EQ || k == tok.TK_NE || k == tok.TK_LT || k == tok.TK_GT || k == tok.TK_LE || k == tok.TK_GE || k == tok.TK_AND || k == tok.TK_OR || k == tok.TK_NOT || k == tok.TK_ASSIGN || k == tok.TK_PLUS_EQ || k == tok.TK_MINUS_EQ || k == tok.TK_STAR_EQ || k == tok.TK_SLASH_EQ || k == tok.TK_PERCENT_EQ || k == tok.TK_POWER_EQ || k == tok.TK_COMMA || k == tok.TK_DOT || k == tok.TK_COLON || k == tok.TK_KW_AS || k == tok.TK_LPAREN || k == tok.TK_LBRACKET || k == tok.TK_LBRACE
+end
+
+// lx_newline_terminator
+func newline_terminator(L &: Lx):
+    if L.group_depth != 0 || !L.has_last || L.last == tok.TK_STMT_END || token_continues(L.last):
+        ret
+    end
+    mut t := tok.New(tok.TK_STMT_END, "\\n")
+    t.begin_line = L.line as u32
+    t.begin_col = L.col as u32
+    t.begin_index = L.pos as u32
+    t.end_line = L.line as u32
+    t.end_col = L.col as u32
+    t.end_index = L.pos as u32
+    t.length = 0 as u32
+    L.toks.push(t)
+    L.last = tok.TK_STMT_END
+    L.has_last = true
+    L.comp_header = false
+    if lg.Enabled(L.lgr, lg.LOG_TRACE):
+        lg.LogAt(
+            L.lgr, lg.PH_LEXER, lg.LOG_TRACE, L.file, L.line, L.col, "statement terminator (newline)"
+        )
+    end
+end
+
+// lx_try_line_comment
+func try_line_comment(L &: Lx): bool:
+    if peek(L) != 47 || peek2(L, 1) != 47:
+        ret false
+    end
+    start := L.pos
+    b := lx_pos(L)
+    skip_to_eol(L)
+    if L.keep_comments:
+        stop := trim_ws_end(L.s, start, L.pos)
+        emit(L, tok.TK_COMMENT_LINE, b, L.s.substr(start, stop - start))
+    end
+    ret true
+end
+
+func scan_block_comment(L &: Lx):
+    start := L.pos
+    b := lx_pos(L)
+    adv(L)
+    adv(L)
+    mut saw_newline := false
+    mut depth := 1
+    until !at_end(L):
+        if peek(L) == 47 && peek2(L, 1) == 42: // "/*"
+            adv(L)
+            adv(L)
+            depth += 1
+            continue
+        end
+        if peek(L) == 42 && peek2(L, 1) == 47: // "*/"
+            adv(L)
+            adv(L)
+            depth -= 1
+            if depth == 0:
+                break
+            end
+            continue
+        end
+        if peek(L) == 10:
+            saw_newline = true
+        end
+        adv(L)
+    end
+    if depth != 0:
+        error_at(L, b, "unterminated block comment")
+    end
+    if L.keep_comments:
+        emit(L, tok.TK_COMMENT_BLOCK, b, lex_slice(L, start))
+    end
+    if saw_newline:
+        newline_terminator(L)
+    end
+end
+
+// lx_skip_trivia
+func skip_trivia(L &: Lx):
+    until true:
+        c := peek(L)
+        if c == 0:
+            ret
+        end
+        if c == 32 || c == 9 || c == 13:
+            adv(L)
+            continue
+        end
+        if c == 10:
+            adv(L)
+            newline_terminator(L)
+            continue
+        end
+        if try_line_comment(L):
+            continue
+        end
+        if c == 47 && peek2(L, 1) == 42: // "/*"
+            scan_block_comment(L)
+            continue
+        end
+        ret
+    end
+end

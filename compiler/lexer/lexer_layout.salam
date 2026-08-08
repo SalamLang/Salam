@@ -1,0 +1,234 @@
+package lexer
+
+import str
+import co "../sal_core.salam"
+import tok "../token.salam"
+import lg "../logger.salam"
+import lp "../langpack.salam"
+
+// ===== lexer_layout.c =====
+func layout_close_block(L &: Lx):
+    L.layout_depth -= 1
+    if L.layout_depth <= 0:
+        L.layout_mode = false
+        lg.Log(L.lgr, lg.PH_LEXER, lg.LOG_DEBUG, "exiting layout mode")
+    end
+end
+
+func layout_emit_punct(L &: Lx, k: int, lexeme: str):
+    cb := lx_pos(L)
+    adv(L)
+    emit(L, k, cb, lexeme)
+end
+
+func layout_skip_inline_ws(L &: Lx):
+    until true:
+        c := peek(L)
+        if c == 32 || c == 9 || c == 13:
+            adv(L)
+            continue
+        end
+        if try_line_comment(L):
+            continue
+        end
+        break
+    end
+end
+
+func layout_scan_quoted(L &: Lx):
+    if peek2(L, 1) == 34 && peek2(L, 2) == 34:
+        scan_triple(L)
+    else:
+        scan_string(L)
+    end
+end
+
+func layout_scan_func_value(L &: Lx):
+    mut depth := 0
+    until true:
+        layout_skip_inline_ws(L)
+        d := peek(L)
+        if d == 0 || d == 10:
+            eb := lx_pos(L)
+            error_at(L, eb, "unterminated function value in layout")
+            ret
+        end
+        if d == 40: // '('
+            depth += 1
+            scan_op(L)
+            continue
+        end
+        if d == 41: // ')'
+            depth -= 1
+            scan_op(L)
+            if depth <= 0:
+                ret
+            end
+            continue
+        end
+        if d == 34: // '"'
+            layout_scan_quoted(L)
+            continue
+        end
+        if at_digit(L, 0) != 0:
+            scan_number(L)
+            continue
+        end
+        if is_ident_start(d):
+            scan_ident(L)
+            continue
+        end
+        scan_op(L)
+    end
+end
+
+func layout_value(L &: Lx):
+    layout_skip_inline_ws(L)
+    c := peek(L)
+    if c == 0 || c == 10:
+        b := lx_pos(L)
+        error_at(L, b, "layout attribute requires a value")
+        ret
+    end
+    if c == 34: // '"'
+        layout_scan_quoted(L)
+        ret
+    end
+    if c == 96: // '`'
+        scan_raw_string(L)
+        ret
+    end
+    if at_digit(L, 0) != 0:
+        scan_number(L)
+        ret
+    end
+    if is_ident_start(c):
+        scan_ident(L)
+        if peek(L) == 40: // '('
+            layout_scan_func_value(L)
+        end
+        ret
+    end
+    scan_op(L)
+end
+
+func layout_try_end_inline(L &: Lx, b: co.SrcPos): bool:
+    end_kw := lp.EndSpelling(L.pack)
+    klen := end_kw.len()
+    mut matched_kw := ""
+    mut matched_len := 0
+    if L.pos + klen <= L.n && str.Equals(L.s.substr(L.pos, klen), end_kw):
+        after := peek2(L, klen)
+        if after == 32 || after == 9 || after == 13 || after == 10 || after == 0:
+            matched_kw = end_kw
+            matched_len = klen
+        end
+    end
+    if matched_len == 0 && !str.Equals(end_kw, "end"):
+        c0 := peek(L)
+        c1 := peek2(L, 1)
+        c2 := peek2(L, 2)
+        c3 := peek2(L, 3)
+        if c0 == 101 && c1 == 110 && c2 == 100 && (c3 == 32 || c3 == 9 || c3 == 13 || c3 == 10 || c3 == 0):
+            matched_kw = "end"
+            matched_len = 3
+        end
+    end
+    if matched_len == 0:
+        ret false
+    end
+    repeat matched_len:
+        adv(L)
+    end
+    emit(L, tok.TK_KW_END, b, matched_kw)
+    layout_close_block(L)
+    ret true
+end
+
+func layout_report_bad_name(L &: Lx, b: co.SrcPos, name: str, namelen: int):
+    mut fw := 0
+    until fw < namelen && byte_at(name, fw) != 32 && byte_at(name, fw) != 9:
+        fw += 1
+    end
+    n0 := byte_at(name, 0)
+    n1 := byte_at(name, 1)
+    n2 := byte_at(name, 2)
+    if fw == 3 && (n0 == 69 || n0 == 101) && (n1 == 78 || n1 == 110) && (n2 == 68 || n2 == 100):
+        error_at(L, b, "'end' keyword must be lowercase")
+    else:
+        error_at(L, b, "expected ':' or '=' after layout name")
+    end
+end
+
+func layout_name(L &: Lx):
+    b := lx_pos(L)
+    if layout_try_end_inline(L, b):
+        ret
+    end
+    start := L.pos
+    until !at_end(L):
+        c := peek(L)
+        if c == 58 || c == 61 || c == 10: // ':' '=' '\n'
+            break
+        end
+        adv(L)
+    end
+    stop := trim_ws_end(L.s, start, L.pos)
+    namelen := stop - start
+    name := L.s.substr(start, namelen)
+    term := peek(L)
+    if namelen == 0:
+        if term == 58:
+            layout_emit_punct(L, tok.TK_COLON, ":")
+        else term == 61:
+            layout_emit_punct(L, tok.TK_ASSIGN, "=")
+            L.layout_sub = LX_SUB_VALUE
+        end
+        ret
+    end
+    if (term == 10 || term == 0) && lp.LookupKeyword(L.pack, name) == tok.TK_KW_END:
+        emit(L, tok.TK_KW_END, b, name)
+        layout_close_block(L)
+        ret
+    end
+    if term == 58:
+        emit(L, tok.TK_LAYOUT_ELEMENT, b, name)
+        layout_emit_punct(L, tok.TK_COLON, ":")
+        L.layout_depth += 1
+        L.layout_sub = LX_SUB_NAME
+        ret
+    end
+    if term == 61:
+        emit(L, tok.TK_LAYOUT_ATTR_NAME, b, name)
+        layout_emit_punct(L, tok.TK_ASSIGN, "=")
+        L.layout_sub = LX_SUB_VALUE
+        ret
+    end
+    layout_report_bad_name(L, b, name, namelen)
+    emit(L, tok.TK_LAYOUT_ELEMENT, b, name)
+end
+
+// lx_layout_step
+func layout_step(L &: Lx):
+    layout_skip_inline_ws(L)
+    c := peek(L)
+    if c == 0:
+        if !at_end(L):
+            adv(L)
+        end
+        ret
+    end
+    if c == 10:
+        b := lx_pos(L)
+        adv(L)
+        emit(L, tok.TK_STMT_END, b, "\\n")
+        L.layout_sub = LX_SUB_NAME
+        ret
+    end
+    if L.layout_sub == LX_SUB_VALUE:
+        layout_value(L)
+        L.layout_sub = LX_SUB_NAME
+        ret
+    end
+    layout_name(L)
+end

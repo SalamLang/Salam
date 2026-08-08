@@ -1,0 +1,360 @@
+package codegen
+
+import str
+import co "../sal_core.salam"
+import at "../ast.salam"
+import lg "../logger.salam"
+import sm "../semantic/semantic.salam"
+
+// ===== codegen_lambda.c =====
+
+// cg_emit_lambda - writes the lifted lambda's decl into blamd and its
+// definition into blamf (the C's cg->c = cg->lam_defs swap becomes
+// g.cur = CG_OUT_LAMF). Names the node in place.
+func cg_emit_lambda(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
+    nn := at.Get(a, n)
+    if str.Len(nn.name) > 0:
+        ret
+    end
+    name := "_Salam_lambda_" + g.lam_n
+    g.lam_n += 1
+    mut nw := at.Get(a, n)
+    nw.name = name
+    at.Put(a, n, nw)
+    cret := cg_ctype(func_ret_of(nn.type_str))
+    ncap := nn.captures.len()
+    mut pb := co.SbNew()
+    co.SbPuts(pb, "void *__envp")
+    repeat nn.list.len() with i:
+        p := at.Get(a, nn.list.get(i)[0])
+        co.SbPuts(pb, ", ")
+        co.SbPuts(pb, cg_decl(p.type_str, p.name))
+    end
+    ps := co.SbCstr(pb)
+    co.SbFree(pb)
+    if ncap > 0:
+        mut st := co.SbNew()
+        co.SbPuts(st, "typedef struct { void *fn;")
+        repeat ncap with i2:
+            c := at.Get(a, nn.captures.get(i2)[0])
+            co.SbPuts(st, " " + cg_decl(c.type_str, c.name) + ";")
+        end
+        co.SbPuts(st, " } " + name + "_env;\n")
+        outd(g, co.SbCstr(st))
+        co.SbFree(st)
+        outd(g, "static void *" + name + "_make(")
+        repeat ncap with i3:
+            c2 := at.Get(a, nn.captures.get(i3)[0])
+            if i3 > 0:
+                outd(g, ", ")
+            end
+            outd(g, cg_decl(c2.type_str, c2.name))
+        end
+        outd(g, ");\n")
+    end
+    outd(g, "static " + cret + " " + name + "(" + ps + ");\n")
+    saved_cur := g.cur
+    saved_indent := g.indent
+    saved_locals := g.locals
+    saved_defers := g.fn_defers
+    saved_sret := g.cur_sret
+    saved_struct := g.cur_struct
+    saved_lambda := g.cur_lambda
+    g.cur = CG_OUT_LAMF
+    g.indent = 0
+    g.locals = Vector {} as Vector<str>
+    g.fn_defers = Vector {} as Vector<int>
+    g.cur_sret = false
+    g.cur_struct = 0
+    g.cur_lambda = n
+    repeat nn.list.len() with i4:
+        local_add(g, at.Get(a, nn.list.get(i4)[0]).name)
+    end
+    cg_line(g, "static " + cret + " " + name + "(" + ps + ") {")
+    g.indent += 1
+    if ncap > 0:
+        cg_line(
+            g, name + "_env *__env = (" + name + "_env *)__envp; (void)__env;"
+        )
+    else:
+        cg_line(g, "(void)__envp;")
+    end
+    if nn.a != 0:
+        cg_block(g, s, a, nn.a)
+    end
+    cg_emit_defers(g, s, a)
+    g.indent -= 1
+    cg_line(g, "}")
+    outc(g, 10)
+    if ncap > 0:
+        mut mp := co.SbNew()
+        repeat ncap with i5:
+            c3 := at.Get(a, nn.captures.get(i5)[0])
+            if i5 > 0:
+                co.SbPuts(mp, ", ")
+            end
+            co.SbPuts(mp, cg_decl(c3.type_str, c3.name))
+        end
+        mps := co.SbCstr(mp)
+        co.SbFree(mp)
+        cg_line(g, "static void *" + name + "_make(" + mps + ") {")
+        g.indent += 1
+        cg_line(
+            g, name + "_env *e = (" + name + "_env *)" + CG_MEM_ALLOC + "((uint64_t)sizeof(" + name + "_env));"
+        )
+        cg_line(g, "e->fn = (void*)&" + name + ";")
+        repeat ncap with i6:
+            c4 := at.Get(a, nn.captures.get(i6)[0])
+            cg_line(
+                g, "e->" + cg_cident(c4.name) + " = " + cg_cident(c4.name) + ";"
+            )
+        end
+        cg_line(g, "return e;")
+        g.indent -= 1
+        cg_line(g, "}")
+    else:
+        cg_line(g, "static void *" + name + "_env = (void*)&" + name + ";")
+    end
+    outc(g, 10)
+    // The C restored the saved vecs and leaked the inner ones; the port
+    // frees them.
+    mut inner_locals := g.locals
+    defer inner_locals.free()
+    mut inner_defers := g.fn_defers
+    defer inner_defers.free()
+    g.cur = saved_cur
+    g.indent = saved_indent
+    g.locals = saved_locals
+    g.fn_defers = saved_defers
+    g.cur_sret = saved_sret
+    g.cur_struct = saved_struct
+    g.cur_lambda = saved_lambda
+end
+
+func cg_lambda_value(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
+    if str.Len(at.Get(a, n).name) == 0:
+        cg_emit_lambda(g, s, a, n)
+    end
+    nn := at.Get(a, n)
+    if nn.captures.len() == 0:
+        ret "(void*)&" + nn.name + "_env"
+    end
+    mut ab := co.SbNew()
+    repeat nn.captures.len() with i:
+        if i > 0:
+            co.SbPuts(ab, ", ")
+        end
+        co.SbPuts(ab, cg_expr(g, s, a, nn.captures.get(i)[0]))
+    end
+    args := co.SbCstr(ab)
+    co.SbFree(ab)
+    ret nn.name + "_make(" + args + ")"
+end
+
+// cg_lift_walk - pre-pass that lifts every lambda in the tree into
+// blamd/blamf (recurses a/b/c/d and list only, like the C).
+func cg_lift_walk(g &: Cg, s &: sm.Sema, a &: at.Ast, node: int):
+    if node == 0:
+        ret
+    end
+    nn := at.Get(a, node)
+    if nn.kind == at.AST_LAMBDA:
+        cg_lift_walk(g, s, a, nn.a)
+        cg_emit_lambda(g, s, a, node)
+        ret
+    end
+    cg_lift_walk(g, s, a, nn.a)
+    cg_lift_walk(g, s, a, nn.b)
+    cg_lift_walk(g, s, a, nn.c)
+    cg_lift_walk(g, s, a, nn.d)
+    repeat nn.list.len() with i:
+        cg_lift_walk(g, s, a, nn.list.get(i)[0])
+    end
+end
+
+// ===========================================================================
+// PUBLIC API (rule E088: everything from here on must be pub).
+// ===========================================================================
+
+// --- codegen_type.c ---
+
+pub func Cident(name: str): str:
+    ret cg_cident(name)
+end
+
+pub func Ctype(ts: str): str:
+    ret cg_ctype(ts)
+end
+
+// cg_decl
+pub func CDecl(ts: str, name: str): str:
+    ret cg_decl(ts, name)
+end
+
+pub func VecElem(ts: str): str:
+    ret cg_vec_elem(ts, 96)
+end
+
+pub func VecCname(ts: str): str:
+    ret cg_vec_cname(ts)
+end
+
+pub func VariantMembersOf(ts: str): Vector<str>:
+    ret cg_variant_members(ts)
+end
+
+pub func VariantCname(ts: str): str:
+    ret cg_variant_cname(ts)
+end
+
+pub func VariantTagOf(variant_ts: str, member_ts: str): int:
+    ret cg_variant_tag_of(variant_ts, member_ts)
+end
+
+// AddExportOverride - make free (non-method) top-level pub func `fname`,
+// defined in package `pkg`, keep its literal C name `cname` instead of the
+// usual mangled one. See cg_mangle_in.
+pub func AddExportOverride(pkg: str, fname: str, cname: str):
+    g_cg_export_pkg.push(pkg)
+    g_cg_export_from.push(fname)
+    g_cg_export_to.push(cname)
+end
+
+pub func IsSliceTs(ts: str): bool:
+    ret cg_is_slice_ts(ts)
+end
+
+pub func SliceElem(ts: str): str:
+    ret cg_slice_elem(ts, 96)
+end
+
+pub func IsIntTypestr(ts: str): bool:
+    ret cg_is_int_typestr(ts)
+end
+
+pub func IsUnsignedTypestr(ts: str): bool:
+    ret cg_is_unsigned_typestr(ts)
+end
+
+pub func FuncRetOf(ts: str): str:
+    ret func_ret_of(ts)
+end
+
+pub func RawRetOf(ts: str): str:
+    ret raw_ret_of(ts)
+end
+
+pub func RawCastParams(ts: str): str:
+    ret raw_cast_params(ts)
+end
+
+pub func FuncCastParamsEnv(ts: str): str:
+    ret func_cast_params_env(ts)
+end
+
+pub func ArraySizeOf(ts: str): i64:
+    ret array_size_of(ts)
+end
+
+pub func PrintTag(ts: str): int:
+    ret print_tag(ts)
+end
+
+pub func PrimSuffix(tag: int): str:
+    ret prim_suffix(tag)
+end
+
+// cg_mangle_in - params are sm TypeIds; "" = the C NULL for pkg/sname.
+pub func MangleIn(
+    s &: sm.Sema, pkg: str, sname: str, fname: str, params: Vector<int>
+): str:
+    ret cg_mangle_in(s, pkg, sname, fname, params)
+end
+
+pub func MangleTi(
+    s &: sm.Sema, typestr: str, fname: str, params: Vector<int>
+): str:
+    ret cg_mangle_ti(s, typestr, fname, params)
+end
+
+pub func TypeIsByvalAgg(s &: sm.Sema, t: int): bool:
+    ret type_is_byval_agg(s, t)
+end
+
+// --- print_fmt.c ---
+
+pub func PfSpec(k: int): str:
+    ret pf_spec_impl(k)
+end
+
+// pf_build - segments for print/println; the caller frees `out`.
+pub func PfBuild(a &: at.Ast, call: int, nl: bool, out2 &: Vector<PfSeg>):
+    pf_build_impl(a, call, nl, out2)
+end
+
+// --- codegen.c ---
+
+// cg_tidy (exposed for tests/backends).
+pub func Tidy(src: str): str:
+    ret cg_tidy(src)
+end
+
+// salam_module_single_threaded
+pub func ModuleSingleThreaded(a &: at.Ast, program: int): bool:
+    ret module_single_threaded_impl(a, program)
+end
+
+// codegen_run - the driver-facing entry. `s` must hold a successful
+// sm.Run over `program`; module_name is the output module stem (driver's
+// module_of), entry the langpack entry name ("" = "main"), target_triple
+// "" = the C NULL. Returns the generated .h/.c text (cg_tidy'd).
+pub func Run(
+    lgr: lg.Logger, s &: sm.Sema, a &: at.Ast, program: int, module_name: str, safe: bool, debug_info: bool,
+    src_path: str, entry: str, target_triple: str
+): Output:
+    mut g := Cg {}
+    g.log = lgr
+    g.module = module_name
+    g.safe = safe
+    g.debug_info = debug_info
+    g.single_threaded = module_single_threaded_impl(a, program)
+    g.src_path = src_path
+    prog := at.Get(a, program)
+    g.pkg = str.Len(prog.name) > 0 ? prog.name : "main"
+    g.entry = str.Len(entry) > 0 ? entry : "main"
+    g.target_triple = target_triple
+    g.is_gui_mode = detect_gui_imports(a, program)
+    lg.Log(
+        g.log, lg.PH_CODEGEN, lg.LOG_INFO, "generating C for module '" + module_name + "'"
+    )
+    demote_nonexportable_inlines(g, s, a, program)
+    cg_header_impl(g, s, a, program)
+    emit_instances_header(g, s, a, program)
+    emit_inline_header(g, s, a, program)
+    outh(g, "\n#endif\n")
+    out(g, `#include "` + CG_MOD_PREFIX + module_name + ".h\"\n\n")
+    cg_emit_dyn_vtables_impl(g, s)
+    emit_private_protos(g, s, a, program)
+    emit_impl_protos(g, s, a)
+    cg_lift_walk(g, s, a, program)
+    if co.SbLen(g.blamd) > (0 as i64):
+        out(g, co.SbCstr(g.blamd))
+        outc(g, 10)
+    end
+    emit_globals(g, s, a, program)
+    if co.SbLen(g.blamf) > (0 as i64):
+        out(g, co.SbCstr(g.blamf))
+        outc(g, 10)
+    end
+    emit_function_bodies(g, s, a, program)
+    emit_impl_bodies(g, s, a)
+    mut o := Output {}
+    o.module_name = module_name
+    o.h_src = cg_tidy(co.SbCstr(g.bh))
+    o.c_src = cg_tidy(co.SbCstr(g.bc))
+    lg.Log(
+        g.log, lg.PH_CODEGEN, lg.LOG_INFO, "generated " + str.Len(o.c_src) + " bytes of C"
+    )
+    cg_free(g)
+    ret o
+end

@@ -1,0 +1,306 @@
+package driver
+
+import os
+import io
+import str
+import time
+import tok "../token.salam"
+import src "../source.salam"
+import lg "../logger.salam"
+import x "../xml.salam"
+import at "../ast.salam"
+import i18 "../i18n.salam"
+import lp "../langpack.salam"
+import lx "../lexer/lexer.salam"
+import ps "../parser/parser.salam"
+import cc "../condcomp.salam"
+import sm "../semantic/semantic.salam"
+import ip "../interp/interp.salam"
+import co "../sal_core.salam"
+
+    // ===== PUBLIC API (rule E088: nothing but pub funcs below this line) =====
+
+    // cli_set_defaults equivalent - `Dr {}` already carries every default (see
+    // the struct above); this is just a discoverable, documented entry point.
+    pub func NewOptions(): Dr:
+        ret Dr {}
+    end
+
+    pub func ModuleOf(path: str): str:
+        ret module_of(path)
+    end
+
+    pub func DirOf(path: str): str:
+        ret dir_of(path)
+    end
+
+    pub func ResolveColor(flag: int): bool:
+        ret resolve_color(flag)
+    end
+
+    // driver_build's CMD_BUILD entry (driver_main: `case CMD_BUILD: ... return
+    // driver_build(&opt);`, with opt.command already CMD_BUILD from cli_parse).
+    pub func Build(opt &: Dr): int:
+        opt.command = CMD_BUILD
+        ret build_impl(opt)
+    end
+
+    // driver_build's CMD_OBJ entry - same body, opt.command gates the
+    // assemble-only vs link-into-executable branch inside build_impl.
+    pub func Obj(opt &: Dr): int:
+        opt.command = CMD_OBJ
+        ret build_impl(opt)
+    end
+
+    // driver_run - build to a temp (or --output) executable and run it,
+    // forwarding opt.run_args, returning the child's real exit code.
+    pub func Run(opt &: Dr): int:
+        if opt.log_level == 2: // lg.LOG_INFO
+            opt.log_level = 3 // lg.LOG_WARN
+        end
+        lgr := lg.New(opt.log_level, resolve_color(opt.color))
+
+        if opt.inputs.len() == 0:
+            pack := lp.Load(opt.lang)
+            if pack == lp.LP_NONE:
+                lg.Log(
+                    lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("unknown language pack '%s'"), co.ArgStr(opt.lang))
+                )
+                ret 2
+            end
+            first := resolve_dir_entry(lgr, pack, ".")
+            if str.Len(first) == 0:
+                ret 2
+            end
+            opt.inputs.push(first)
+            opt.input = first
+        end
+
+        mut temp_exe := false
+        if str.Len(opt.output) == 0:
+            temp_exe = true
+            mut exe_suffix := ""
+            if SALAM_OS_WINDOWS:
+                exe_suffix = ".exe"
+            else:
+                exe_suffix = ""
+            end
+            opt.output = os.TempDir() + "/salam-run-" + time.NowMicros() + exe_suffix
+        end
+        opt.command = CMD_BUILD
+        opt.keep_c = false
+
+        brc := build_impl(opt)
+        if brc != 0:
+            if temp_exe:
+                _rm := os.Remove(opt.output)
+            end
+            ret brc
+        end
+
+        exe := str.Len(opt.exe_path) > 0 ? opt.exe_path : opt.output
+        mut cmdb := str.NewBuilder()
+        str.BufAppendChar(cmdb, 34)
+        if SALAM_OS_WINDOWS:
+            str.BufAppend(cmdb, exe)
+        else:
+            if str.Contains(exe, "/"):
+                str.BufAppend(cmdb, exe)
+            else:
+                str.BufAppend(cmdb, "./" + exe)
+            end
+        end
+        str.BufAppendChar(cmdb, 34)
+        repeat opt.run_args.len() with ai:
+            str.BufAppendChar(cmdb, 32)
+            str.BufAppendChar(cmdb, 34)
+            str.BufAppend(cmdb, opt.run_args.get(ai)[0])
+            str.BufAppendChar(cmdb, 34)
+        end
+        cmdtext := str.BufStr(cmdb)
+        str.BufFree(cmdb)
+        run_rc := system(cmdtext)
+        if temp_exe:
+            _rm2 := os.Remove(exe)
+        end
+        ret proc_status(run_rc)
+    end
+
+    // driver_interp - REAL exec path (salam exec / `salam run --exec`), wired
+    // straight to ip.New/ip.Run. Not a stub.
+    pub func Exec(opt &: Dr): int:
+        if opt.log_level == 2: // lg.LOG_INFO
+            opt.log_level = 3 // lg.LOG_WARN
+        end
+        lgr := lg.New(opt.log_level, resolve_color(opt.color))
+        pack := lp.Load(opt.lang)
+        if pack == lp.LP_NONE:
+            lg.Log(
+                lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("unknown language pack '%s'"), co.ArgStr(opt.lang))
+            )
+            ret 2
+        end
+        entry := lp.Entry(pack)
+
+        // Bare `salam exec` or `salam exec <dir>`: resolve the project's
+        // entry file (salam.salam when present, else the single .salam
+        // file defining `main`), same rule as `salam build`/`salam run`.
+        if str.Len(opt.input) == 0 || os.IsDir(opt.input):
+            mut rdir := "."
+            if str.Len(opt.input) > 0:
+                rdir = opt.input
+            end
+            first := resolve_dir_entry(lgr, pack, rdir)
+            if str.Len(first) == 0:
+                ret 2
+            end
+            opt.input = first
+        end
+
+        sm.SetStdlibRoot(opt.stdlib_path)
+        sm.LayoutSchemaInit(opt.stdlib_path)
+
+        mut sf := src.New()
+        if !src.Load(opt.input, sf):
+            lg.Log(
+                lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("cannot read source file '%s'"), co.ArgStr(opt.input))
+            )
+            ret 2
+        end
+        lg.SetDiagSource(lgr, sf.text, sf.len, opt.diag_style, opt.diag_format)
+        lg.AddDiagSource(lgr, opt.input, sf.text, sf.len)
+        modpack := lx.Detect(sf, pack)
+        mut toks := tok.StreamNew(opt.input)
+        lok := lx.Run(lgr, modpack, sf, toks)
+        mut a := at.NewAst()
+        mut prog := 0
+        mut pok := ps.Run(lgr, toks, a, prog)
+        tok.StreamFree(toks)
+        table := cc.TableBuild("", opt.defines)
+        if !cc.PruneProgram(a, lgr, opt.input, table, prog):
+            pok = false
+        end
+        mut s := sm.New(lgr, opt.input, lp.Code(modpack))
+        sm.SetCc(s, table)
+        sok := sm.Run(s, a, prog)
+        if !lok || !pok || !sok:
+            lg.Log(
+                lgr, lg.PH_DRIVER, lg.LOG_ERROR, i18.Tr("build aborted: errors in source") + " (" + opt.input + ")"
+            )
+            sm.Free(s)
+            at.FreeAst(a)
+            ret 1
+        end
+        mut io_opts := ip.NewOptions()
+        io_opts.lang = opt.lang
+        if opt.timeout_ms > 0:
+            io_opts.timeout_ms = opt.timeout_ms
+        end
+        mut interp := ip.New(lgr, entry, io_opts)
+        rc := ip.Run(interp, a, s, prog)
+        ip.Free(interp)
+        sm.Free(s)
+        at.FreeAst(a)
+        ret rc
+    end
+
+    // driver_main's CMD_INSPECT body ("salam inspect <file>"): raw
+    // single-file compile driving the --emit-tokens-xml / --emit-ast-xml /
+    // --emit-symbol-xml flags.
+    pub func Inspect(opt &: Dr): int:
+        if str.Len(opt.input) == 0:
+            io.EPrintln(i18.Tr("salam: no input file"))
+            ret 2
+        end
+        lgr := lg.New(opt.log_level, resolve_color(opt.color))
+        mut rc := 0
+        pack := lp.Load(opt.lang)
+        if pack == lp.LP_NONE:
+            lg.Log(
+                lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("unknown language pack '%s'"), co.ArgStr(opt.lang))
+            )
+            ret 2
+        end
+        mut sf := src.New()
+        if !src.Load(opt.input, sf):
+            lg.Log(
+                lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("cannot read source file '%s'"), co.ArgStr(opt.input))
+            )
+            ret 2
+        end
+        lg.SetDiagSource(lgr, sf.text, sf.len, opt.diag_style, opt.diag_format)
+        lg.AddDiagSource(lgr, opt.input, sf.text, sf.len)
+        lg.Log(
+            lgr, lg.PH_DRIVER, lg.LOG_INFO, "compiling " + sf.path + " (lang=" + opt.lang + ", " + sf.len + " bytes)"
+        )
+        modpack := lx.Detect(sf, pack)
+        mut toks := tok.StreamNew(opt.input)
+        ok := lx.Run(lgr, modpack, sf, toks)
+        if opt.emit_tokens_xml:
+            xrc := EmitTokensXml(lgr, toks, opt.xml_out)
+            if xrc != 0:
+                rc = xrc
+            end
+        end
+        if opt.emit_ast_xml || opt.emit_symbol_xml:
+            mut a := at.NewAst()
+            mut prog := 0
+            mut pok := ps.Run(lgr, toks, a, prog)
+            table := cc.TableBuild("", opt.defines)
+            if !cc.PruneProgram(a, lgr, opt.input, table, prog):
+                pok = false
+            end
+            mut s := sm.New(lgr, opt.input, lp.Code(modpack))
+            sm.SetCc(s, table)
+            sok := sm.Run(s, a, prog)
+            if opt.emit_ast_xml:
+                xrc2 := EmitAstXml(lgr, a, prog, opt.xml_out)
+                if xrc2 != 0:
+                    rc = xrc2
+                end
+            end
+            if opt.emit_symbol_xml:
+                xrc3 := EmitSymbolXml(lgr, s, opt.xml_out)
+                if xrc3 != 0:
+                    rc = xrc3
+                end
+            end
+            if rc == 0 && (!pok || !sok):
+                rc = 1
+            end
+            sm.Free(s)
+            at.FreeAst(a)
+        end
+        tok.StreamFree(toks)
+        if rc == 0 && !ok:
+            rc = 1
+        end
+        ret rc
+    end
+
+    pub func EmitTokensXml(lgr: lg.Logger, toks: tok.TokenStream, xml_out: str): int:
+        mut w := x.New()
+        x.Decl(w)
+        tok.TokensToXml(w, toks)
+        text := x.Str(w)
+        x.Free(w)
+        ret write_xml_out(lgr, text, xml_out, "tokens")
+    end
+
+    pub func EmitAstXml(lgr: lg.Logger, a &: at.Ast, program: int, xml_out: str): int:
+        mut w := x.New()
+        x.Decl(w)
+        at.ToXml(w, a, program)
+        text := x.Str(w)
+        x.Free(w)
+        ret write_xml_out(lgr, text, xml_out, "AST")
+    end
+
+    pub func EmitSymbolXml(lgr: lg.Logger, s &: sm.Sema, xml_out: str): int:
+        mut w := x.New()
+        x.Decl(w)
+        sm.SymbolsToXml(w, s)
+        text := x.Str(w)
+        x.Free(w)
+        ret write_xml_out(lgr, text, xml_out, "symbols")
+    end

@@ -1,0 +1,931 @@
+package interp
+
+import str
+import mem
+import co "../sal_core.salam"
+import tok "../token.salam"
+import at "../ast.salam"
+import i18 "../i18n.salam"
+
+// ===========================================================================
+// ===== interp_expr.c (stage B) =====
+// ===========================================================================
+
+// eval_args - evaluates the call's argument list into `out`; stops at the
+// first runtime error (the C longjmp'd out of the loop).
+func eval_args(
+    ip &: Interp, a &: at.Ast, env: int, call: int, out &: Vector<Value>
+):
+    repeat at.ChildCount(a, call) with i:
+        out.push(eval(ip, a, env, at.Child(a, call, i)))
+        if ip.failed:
+            ret
+        end
+    end
+end
+
+func interp_alignof_typename(ip &: Interp, a &: at.Ast, ts: str): i64:
+    n := str.Len(ts)
+    if n == 0:
+        ret 8 as i64
+    end
+    if byte_at(ts, n - 1) == 42:
+        ret 8 as i64
+    end
+    if str.Equals(ts, "i8") || str.Equals(ts, "u8") || str.Equals(ts, "bool") || str.Equals(ts, "char"):
+        ret 1 as i64
+    end
+    if str.Equals(ts, "i16") || str.Equals(ts, "u16"):
+        ret 2 as i64
+    end
+    if str.Equals(ts, "i32") || str.Equals(ts, "u32") || str.Equals(ts, "f32"):
+        ret 4 as i64
+    end
+    if str.Equals(ts, "i64") || str.Equals(ts, "u64") || str.Equals(ts, "f64") || str.Equals(ts, "str"):
+        ret 8 as i64
+    end
+    sd := find_struct(ip, ts)
+    if sd != 0:
+        mut maxalign := 1 as i64
+        repeat at.ChildCount(a, sd) with i:
+            f := at.Child(a, sd, i)
+            fn := at.Get(a, f)
+            if fn.kind != at.AST_FIELD:
+                continue
+            end
+            al := interp_alignof_typename(
+                ip, a, fn.ty != 0 ? at.Get(a, fn.ty).type_str : ""
+            )
+            if al > maxalign:
+                maxalign = al
+            end
+        end
+        ret maxalign
+    end
+    ret 8 as i64
+end
+
+func interp_sizeof_typename(ip &: Interp, a &: at.Ast, ts: str): i64:
+    n := str.Len(ts)
+    if n == 0:
+        ret 8 as i64
+    end
+    if byte_at(ts, n - 1) == 42:
+        ret 8 as i64
+    end
+    if str.Equals(ts, "i8") || str.Equals(ts, "u8") || str.Equals(ts, "bool") || str.Equals(ts, "char"):
+        ret 1 as i64
+    end
+    if str.Equals(ts, "i16") || str.Equals(ts, "u16"):
+        ret 2 as i64
+    end
+    if str.Equals(ts, "i32") || str.Equals(ts, "u32") || str.Equals(ts, "f32"):
+        ret 4 as i64
+    end
+    if str.Equals(ts, "i64") || str.Equals(ts, "u64") || str.Equals(ts, "f64") || str.Equals(ts, "str"):
+        ret 8 as i64
+    end
+    sd := find_struct(ip, ts)
+    if sd != 0:
+        mut off := 0 as i64
+        mut maxalign := 1 as i64
+        repeat at.ChildCount(a, sd) with i:
+            f := at.Child(a, sd, i)
+            fn := at.Get(a, f)
+            if fn.kind != at.AST_FIELD:
+                continue
+            end
+            fts := fn.ty != 0 ? at.Get(a, fn.ty).type_str : ""
+            sz := interp_sizeof_typename(ip, a, fts)
+            al := interp_alignof_typename(ip, a, fts)
+            off = (off + al - (1 as i64)) & (~(al - (1 as i64)))
+            off += sz
+            if al > maxalign:
+                maxalign = al
+            end
+        end
+        off = (off + maxalign - (1 as i64)) & (~(maxalign - (1 as i64)))
+        ret off != (0 as i64) ? off : (8 as i64)
+    end
+    ret 8 as i64
+end
+
+func do_listdir(ip &: Interp, a &: at.Ast, call: int, patharg: Value): Value:
+    efi := find_extern_fn(ip, "salam_os_listdir")
+    if efi == 0:
+        rt_error(ip, a, call, i18.Tr("'listdir' is not supported by the interpreter"))
+        ret val_null()
+    end
+    cntp := mem.AllocateZeroed(4 as u64)
+    mut cargs := Vector {} as Vector<Value>
+    defer cargs.free()
+    cargs.push(patharg)
+    cargs.push(val_ptr(cntp as i64, PTR_I32))
+    ef := ip.extern_fns.get(efi)[0]
+    cl := ip.closures.get(ef.id)[0]
+    r := call_func(ip, a, cl.fn, cl.env, false, val_null(), cargs)
+    cip := cntp as i32*
+    cnt := cip[0] as int
+    mem.Free(cntp)
+    out := arr_new(ip, cnt > 0 ? cnt : 4)
+    if !ip.failed && r.kind == VAL_PTR && r.pa != (0 as i64) && cnt > 0:
+        repeat cnt with i:
+            // C: val_str(arena_strdup(I->a, arr[i] ? arr[i] : "")); the port
+            // aliases the char* (the interpreted fs code owns the buffers).
+            arr_push(ip, out, ptr_load(r.pa, PTR_STR, i as i64))
+        end
+    end
+    ret val_arr(out)
+end
+
+// eval_call (interp_expr.c) - builtin names first, then bindings, named
+// functions, extern fns, intrinsics, native extern decls (same order).
+func eval_call(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
+    node := at.Get(a, n)
+    callee := node.a
+    cn := at.Get(a, callee)
+    // One shared, function-scoped args vector: `defer` cleanup runs at every
+    // `ret` in this function regardless of which nested block registered it
+    // (the codegen's defer list isn't C-block-scoped - see PORTING.md), so a
+    // Vector declared and deferred inside a nested if is unsafe once OTHER
+    // returns exist outside that block. Only ONE of the branches below ever
+    // fills this vector before returning (mirrors the C, which never calls
+    // eval_args twice for the same call), so reuse is safe.
+    mut args := Vector {} as Vector<Value>
+    defer args.free()
+
+    if cn.kind == at.AST_IDENTIFIER:
+        nm := cn.name
+        if str.Equals(nm, "print"):
+            do_print(ip, a, env, n, false, false)
+            ret val_null()
+        end
+        if str.Equals(nm, "println"):
+            do_print(ip, a, env, n, true, false)
+            ret val_null()
+        end
+        if str.Equals(nm, "printerr"):
+            do_print(ip, a, env, n, false, true)
+            ret val_null()
+        end
+        if str.Equals(nm, "printerrln"):
+            do_print(ip, a, env, n, true, true)
+            ret val_null()
+        end
+        if str.Equals(nm, "input"):
+            ret do_input(ip)
+        end
+        if str.Equals(nm, "lang"):
+            ret val_str(ip.lang)
+        end
+        if str.Equals(nm, "args") && at.ChildCount(a, n) == 0:
+            ret val_arr(arr_new(ip, 0))
+        end
+        if str.Equals(nm, "sizeof") && at.ChildCount(a, n) == 1:
+            op := at.Child(a, n, 0)
+            ret val_int(interp_sizeof_typename(ip, a, at.Get(a, op).type_str))
+        end
+        eval_args(ip, a, env, n, args)
+        if ip.failed:
+            ret val_null()
+        end
+        na := args.len()
+        if str.Equals(nm, "len") && na == 1:
+            la := args.get(0)[0]
+            if la.kind == VAL_ARRAY:
+                ret val_int(arr_len(ip, la.id) as i64)
+            end
+            if la.kind == VAL_STR:
+                ret val_int(str.Len(la.s) as i64)
+            end
+            if la.kind == VAL_MAP:
+                lm := ip.maps.get(la.id)[0]
+                ret val_int(lm.count as i64)
+            end
+            rt_error(ip, a, n, i18.Tr("len() expects an array, string, or map"))
+            ret val_null()
+        end
+        if str.Equals(nm, "char_code") && na == 1:
+            cs := to_str(ip, args.get(0)[0])
+            // C read s[0] - the NUL terminator (0) for an empty string.
+            ret val_int((str.Len(cs) > 0 ? byte_at(cs, 0) : 0) as i64)
+        end
+        if str.Equals(nm, "char_from_code") && na == 1:
+            cb := (to_int(args.get(0)[0]) & (0xFF as i64)) as int
+            if cb == 0:
+                ret val_str("") // C built "\0" - strdup'd to ""
+            end
+            mut cbb := str.NewBuilder()
+            str.BufAppendChar(cbb, cb)
+            cr := str.BufStr(cbb)
+            str.BufFree(cbb)
+            ret val_str(cr)
+        end
+        if str.Equals(nm, "strcmp") && na == 2:
+            ret val_int(
+                str.Compare(
+                    to_str(ip, args.get(0)[0]), to_str(ip, args.get(1)[0])
+                ) as i64
+            )
+        end
+        if str.Equals(nm, "funcptr") && na == 1:
+            ret args.get(0)[0]
+        end
+        if str.Equals(nm, "listdir") && na == 1:
+            ret do_listdir(ip, a, n, args.get(0)[0])
+        end
+        if str.Equals(nm, "hash") && na == 1:
+            ha := args.get(0)[0]
+            hname := ha.kind == VAL_STR ? "salam_str_hash" : "salam_hash_int"
+            hefi := find_extern_fn(ip, hname)
+            if hefi == 0:
+                rt_error(ip, a, n, i18.Tr("'hash' is not supported by the interpreter"))
+                ret val_null()
+            end
+            mut hargs := Vector {} as Vector<Value>
+            hargs.push(ha.kind == VAL_STR ? ha : val_int(to_int(ha)))
+            hef := ip.extern_fns.get(hefi)[0]
+            hcl := ip.closures.get(hef.id)[0]
+            hr := call_func(ip, a, hcl.fn, hcl.env, false, val_null(), hargs)
+            hargs.free()
+            // Clear bit 63: VAL_INT is signed, hash(k) % cap must stay >= 0.
+            ret val_int(to_int(hr) & (0x7FFFFFFFFFFFFFFF as i64))
+        end
+
+        mut bw := 0
+        bslot := env_find(ip, env, nm, bw)
+        if bslot >= 0:
+            bv := env_slot_val(ip, bw, bslot)
+            if bv.kind == VAL_FUNC:
+                bcl := ip.closures.get(bv.id)[0]
+                ret call_func(ip, a, bcl.fn, bcl.env, false, val_null(), args)
+            end
+        end
+        fn := find_func(ip, a, nm, na)
+        if fn != 0:
+            ret call_func(ip, a, fn, ip.globals, false, val_null(), args)
+        end
+        efi := find_extern_fn(ip, nm)
+        if efi != 0:
+            ef := ip.extern_fns.get(efi)[0]
+            ecl := ip.closures.get(ef.id)[0]
+            ret call_func(ip, a, ecl.fn, ecl.env, false, val_null(), args)
+        end
+        mut handled := false
+        ir := call_intrinsic(ip, nm, args, handled)
+        if handled:
+            ret ir
+        end
+        decl := find_extern_decl(ip, nm)
+        if decl != 0:
+            ret call_native_extern(ip, a, n, decl, args)
+        end
+        rt_error(
+            ip, a, n, co.Format1(
+                i18.Tr("call to undefined function '%s'"), co.ArgStr(nm)
+            )
+        )
+        ret val_null()
+    end
+
+    if cn.kind == at.AST_MEMBER:
+        obj := cn.a
+        method := cn.name
+        onn := at.Get(a, obj)
+        if onn.kind == at.AST_IDENTIFIER:
+            mut mw := 0
+            mslot := env_find(ip, env, onn.name, mw)
+            if mslot >= 0:
+                mv := env_slot_val(ip, mw, mslot)
+                if mv.kind == VAL_MODULE:
+                    eval_args(ip, a, env, n, args)
+                    if ip.failed:
+                        ret val_null()
+                    end
+                    ret call_module_func(ip, a, n, mv.id, method, args)
+                end
+            end
+        end
+        recv := eval(ip, a, env, obj)
+        if ip.failed:
+            ret val_null()
+        end
+        eval_args(ip, a, env, n, args)
+        if ip.failed:
+            ret val_null()
+        end
+        na2 := args.len()
+
+        if str.Equals(method, "free") && na2 == 0:
+            ret val_null()
+        end
+        if recv.kind == VAL_STRUCT:
+            stv := ip.sts.get(recv.id)[0]
+            mut m := struct_method_arity(a, stv.def, method, na2)
+            if m == 0:
+                m = struct_method(a, stv.def, method)
+            end
+            if m != 0:
+                denv := find_def_env(ip, m)
+                ret call_func(
+                    ip, a, m, denv != 0 ? denv : ip.globals, true, recv, args
+                )
+            end
+            fi := st_find_field(ip, recv.id, method)
+            if fi >= 0:
+                s2 := ip.sts.get(recv.id)[0]
+                fv := s2.fvals.get(fi)[0]
+                if fv.kind == VAL_FUNC:
+                    fcl := ip.closures.get(fv.id)[0]
+                    ret call_func(ip, a, fcl.fn, fcl.env, false, val_null(), args)
+                end
+            end
+            rt_error(
+                ip, a, n, co.Format2(
+                    i18.Tr("struct '%s' has no method '%s'"), co.ArgStr(stv.type_name), co.ArgStr(method)
+                )
+            )
+            ret val_null()
+        end
+
+        im := find_impl_method(ip, a, onn.type_str, method, na2)
+        if im != 0:
+            denv2 := find_def_env(ip, im)
+            ret call_func(
+                ip, a, im, denv2 != 0 ? denv2 : ip.globals, true, recv, args
+            )
+        end
+        ret call_builtin_method(ip, a, n, recv, method, args)
+    end
+
+    fv2 := eval(ip, a, env, callee)
+    if ip.failed:
+        ret val_null()
+    end
+    if fv2.kind == VAL_FUNC:
+        eval_args(ip, a, env, n, args)
+        if ip.failed:
+            ret val_null()
+        end
+        vcl := ip.closures.get(fv2.id)[0]
+        ret call_func(ip, a, vcl.fn, vcl.env, false, val_null(), args)
+    end
+    rt_error(ip, a, n, i18.Tr("value is not callable"))
+    ret val_null()
+end
+
+// Runs a frame's defers LIFO (shared by eval_match; call_func inlines the
+// same walk - ported in stage A).
+func run_defers(ip &: Interp, a &: at.Ast, fr &: Frame):
+    mut di := fr.defer_stmts.len()
+    until di > 0:
+        di -= 1
+        mut dummy := val_null()
+        mut inner := Frame {}
+        _f := exec_stmt(
+            ip, a, fr.defer_envs.get(di)[0], inner, fr.defer_stmts.get(di)[0], dummy
+        )
+        inner.defer_stmts.free()
+        inner.defer_envs.free()
+    end
+end
+
+// eval_match (interp_expr.c) - match in expression position; the arm body
+// runs with match_expr_depth bumped so `ret` yields FLOW_MATCH_RET, and
+// break/continue escape through ip.pending_flow.
+func eval_match(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
+    node := at.Get(a, n)
+    subj := eval(ip, a, env, node.a)
+    if ip.failed:
+        ret val_null()
+    end
+    arm := interp_find_match_arm(ip, a, env, n, subj)
+    if arm == 0 || ip.failed:
+        ret val_null()
+    end
+    c := env_new(ip, env)
+    mut fr := Frame {}
+    defer fr.defer_stmts.free()
+    defer fr.defer_envs.free()
+    mut val := val_null()
+    saved_depth := ip.match_expr_depth
+    ip.match_expr_depth = saved_depth + 1
+    f := exec_list(ip, a, c, fr, at.Get(a, arm).b, val)
+    ip.match_expr_depth = saved_depth
+    if f == FLOW_BREAK || f == FLOW_CONTINUE:
+        ip.pending_flow = f
+    end
+    run_defers(ip, a, fr)
+    ret val
+end
+
+// eval (interp_expr.c) - the full expression evaluator.
+// Give an integer result the width and signedness semantic analysis
+// inferred for this expression. Every expression node is decorated with its
+// static type (sema_decorate), so this one choke point is what makes
+// `x as u32`, u64 products, unsigned `>>`, and unsigned printing behave like
+// the compiled backends instead of collapsing to signed i64.
+//
+// Nodes reached without semantic analysis (REPL fragments, synthetic nodes)
+// have no decoration and are left exactly as before.
+func eval(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
+    v := eval_node(ip, a, env, n)
+    if v.kind != VAL_INT || n == 0:
+        ret v
+    end
+    ret coerce_int_ty(v, int_ty_from_typestr(at.Get(a, n).type_str))
+end
+
+func eval_node(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
+    if n == 0 || ip.failed:
+        ret val_null()
+    end
+    node := at.Get(a, n)
+    k := node.kind
+    if k == at.AST_LITERAL:
+        if node.op == tok.TK_INT:
+            ret val_int(node.value_int as i64)
+        end
+        if node.op == tok.TK_FLOAT:
+            ret val_float(node.value_float)
+        end
+        if node.op == tok.TK_CHAR:
+            ret val_char(node.value_int as i64)
+        end
+        if node.op == tok.TK_STRING || node.op == tok.TK_TRIPLE_STRING || node.op == tok.TK_RAW_STRING || node.op == tok.TK_UTF8_CHAR:
+            ret val_str(node.value_str)
+        end
+        if node.op == tok.TK_KW_TRUE:
+            ret val_bool(true)
+        end
+        if node.op == tok.TK_KW_FALSE:
+            ret val_bool(false)
+        end
+        ret val_null() // TK_KW_NULL + default
+    end
+    if k == at.AST_IDENTIFIER:
+        mut w := 0
+        slot := env_find(ip, env, node.name, w)
+        if slot >= 0:
+            ret env_slot_val(ip, w, slot)
+        end
+        mut tw := 0
+        tslot := env_find(ip, env, "this", tw)
+        if tslot >= 0:
+            tv := env_slot_val(ip, tw, tslot)
+            if tv.kind == VAL_STRUCT:
+                fi := st_find_field(ip, tv.id, node.name)
+                if fi >= 0:
+                    ts := ip.sts.get(tv.id)[0]
+                    ret ts.fvals.get(fi)[0]
+                end
+            end
+        end
+        fn := find_func(ip, a, node.name, 0 - 1)
+        if fn != 0:
+            ret mk_closure(ip, fn, ip.globals)
+        end
+        rt_error(
+            ip, a, n, co.Format1(
+                i18.Tr("undefined variable '%s'"), co.ArgStr(node.name)
+            )
+        )
+        ret val_null()
+    end
+    if k == at.AST_THIS:
+        mut this_env := 0
+        thslot := env_find(ip, env, "this", this_env)
+        if thslot < 0:
+            rt_error(ip, a, n, i18.Tr("'this' used outside a method"))
+            ret val_null()
+        end
+        ret env_slot_val(ip, this_env, thslot)
+    end
+    if k == at.AST_BINARY:
+        op := node.op
+        if op == tok.TK_AND:
+            av0 := eval(ip, a, env, node.a)
+            if ip.failed:
+                ret val_null()
+            end
+            if !to_bool(av0):
+                ret val_bool(false)
+            end
+            ret val_bool(to_bool(eval(ip, a, env, node.b)))
+        end
+        if op == tok.TK_OR:
+            av1 := eval(ip, a, env, node.a)
+            if ip.failed:
+                ret val_null()
+            end
+            if to_bool(av1):
+                ret val_bool(true)
+            end
+            ret val_bool(to_bool(eval(ip, a, env, node.b)))
+        end
+        av := eval(ip, a, env, node.a)
+        if ip.failed:
+            ret val_null()
+        end
+        bv := eval(ip, a, env, node.b)
+        if ip.failed:
+            ret val_null()
+        end
+        mut found := false
+        r := try_struct_op(ip, a, op, av, bv, true, found)
+        if found:
+            ret r
+        end
+        if op == tok.TK_EQ:
+            ret val_bool(value_eq(av, bv))
+        end
+        if op == tok.TK_NE:
+            ret val_bool(!value_eq(av, bv))
+        end
+        if op == tok.TK_LT:
+            ret val_bool(value_cmp(av, bv) < 0)
+        end
+        if op == tok.TK_GT:
+            ret val_bool(value_cmp(av, bv) > 0)
+        end
+        if op == tok.TK_LE:
+            ret val_bool(value_cmp(av, bv) <= 0)
+        end
+        if op == tok.TK_GE:
+            ret val_bool(value_cmp(av, bv) >= 0)
+        end
+        ret arith(ip, a, n, op, av, bv)
+    end
+    if k == at.AST_TERNARY:
+        cv := eval(ip, a, env, node.a)
+        if ip.failed:
+            ret val_null()
+        end
+        ret to_bool(cv) ? eval(ip, a, env, node.b) : eval(ip, a, env, node.c)
+    end
+    if k == at.AST_MATCH:
+        ret eval_match(ip, a, env, n)
+    end
+    if k == at.AST_VARIANT_BOX:
+        inner := eval(ip, a, env, node.a)
+        if ip.failed:
+            ret val_null()
+        end
+        ret mk_variant(ip, node.value_int as int, true, inner)
+    end
+    if k == at.AST_VARIANT_UNWRAP:
+        uv := eval(ip, a, env, node.a)
+        if ip.failed:
+            ret val_null()
+        end
+        if uv.kind != VAL_VARIANT || uv.id == 0:
+            rt_error(ip, a, n, i18.Tr("invalid Variant unwrap"))
+            ret val_null()
+        end
+        vv := ip.variants.get(uv.id)[0]
+        if !vv.has_boxed:
+            rt_error(ip, a, n, i18.Tr("invalid Variant unwrap"))
+            ret val_null()
+        end
+        ret vv.boxed
+    end
+    if k == at.AST_UNARY:
+        uav := eval(ip, a, env, node.a)
+        if ip.failed:
+            ret val_null()
+        end
+        if uav.kind == VAL_STRUCT:
+            mut ufound := false
+            ur := try_struct_op(ip, a, node.op, uav, val_null(), false, ufound)
+            if ufound:
+                ret ur
+            end
+        end
+        // Unary '-' and '~' preserve the operand's type (SALAM-TYPES.md 21),
+        // so they wrap in that type rather than promoting to signed i64.
+        if node.op == tok.TK_MINUS:
+            if uav.kind == VAL_FLOAT:
+                ret val_float(0.0 - uav.f)
+            end
+            ret val_int_ty(((0 as u64) - (to_int(uav) as u64)) as i64, uav.ity)
+        end
+        if node.op == tok.TK_NOT:
+            ret val_bool(!to_bool(uav))
+        end
+        if node.op == tok.TK_TILDE:
+            ret val_int_ty((~(to_int(uav) as u64)) as i64, uav.ity)
+        end
+        ret uav
+    end
+    if k == at.AST_INCDEC:
+        mut loc := interp_resolve_loc(ip, a, env, node.a)
+        if ip.failed:
+            ret val_null()
+        end
+        cur := interp_loc_get(ip, a, loc)
+        if ip.failed:
+            ret val_null()
+        end
+        base := node.op == tok.TK_PLUS_PLUS ? tok.TK_PLUS : tok.TK_MINUS
+        updated := arith(ip, a, n, base, cur, val_int(1 as i64))
+        if ip.failed:
+            ret val_null()
+        end
+        interp_loc_set(ip, a, loc, updated)
+        ret node.is_prefix ? updated : cur
+    end
+    if k == at.AST_CAST:
+        cav := eval(ip, a, env, node.a)
+        if ip.failed:
+            ret val_null()
+        end
+        ts := node.ty != 0 ? at.Get(a, node.ty).type_str : ""
+        tn := str.Len(ts)
+        if tn != 0 && byte_at(ts, tn - 1) == 42:
+            mut addr := 0 as i64
+            if cav.kind == VAL_STR:
+                svp := cav.s as void*
+                addr = svp as i64
+            else:
+                addr = to_int(cav)
+            end
+            ret val_ptr(addr, ptr_elem_from_typestr(ts))
+        end
+        base := base_typename(ts)
+        if str.Equals(base, "char"):
+            ret val_char(to_int(cav))
+        end
+        if is_int_typename(base):
+            // int -> int keeps the two's-complement bit pattern and truncates
+            // to the target width (SALAM-TYPES.md 16); float -> int truncates
+            // toward zero first.
+            cty := int_ty_from_typestr(base)
+            if cav.kind == VAL_FLOAT && int_ty_is_unsigned(cty):
+                ret val_int_ty((cav.f as u64) as i64, cty)
+            end
+            ret val_int_ty(to_int(cav), cty)
+        end
+        if is_float_typename(base):
+            ret val_float(to_float(cav))
+        end
+        if str.Equals(base, "bool"):
+            ret val_bool(to_bool(cav))
+        end
+        if str.Equals(base, "str"):
+            if cav.kind == VAL_PTR:
+                // C: val_str((const char *)addr); NULL would be unusable -                 // map it to "" (see the PTR_STR note in the file header).
+                if cav.pa == (0 as i64):
+                    ret val_str("")
+                end
+                pv := cav.pa as void*
+                ret val_str(pv as str)
+            end
+            ret val_str(to_str(ip, cav))
+        end
+        ret cav
+    end
+    if k == at.AST_CALL:
+        ret eval_call(ip, a, env, n)
+    end
+    if k == at.AST_MEMBER:
+        obj := node.a
+        onn := at.Get(a, obj)
+        if onn.kind == at.AST_IDENTIFIER:
+            mut ew := 0
+            if env_find(ip, env, onn.name, ew) < 0:
+                edef := find_enum(ip, onn.name)
+                if edef != 0:
+                    mut val := 0 as i64
+                    repeat at.ChildCount(a, edef) with i:
+                        m := at.Child(a, edef, i)
+                        mn := at.Get(a, m)
+                        if mn.a != 0:
+                            val = to_int(eval(ip, a, ip.globals, mn.a))
+                            if ip.failed:
+                                ret val_null()
+                            end
+                        end
+                        if str.Len(mn.name) != 0 && str.Equals(mn.name, node.name):
+                            ret val_int(val)
+                        end
+                        val += 1 as i64
+                    end
+                    rt_error(
+                        ip, a, n, co.Format2(
+                            i18.Tr("enum '%s' has no member '%s'"), co.ArgStr(onn.name), co.ArgStr(node.name)
+                        )
+                    )
+                    ret val_null()
+                end
+            end
+        end
+        recv := eval(ip, a, env, obj)
+        if ip.failed:
+            ret val_null()
+        end
+        if recv.kind == VAL_MODULE:
+            md := ip.mods.get(recv.id)[0]
+            cslot := env_find_local(ip, md.env, node.name)
+            if cslot >= 0:
+                ret env_slot_val(ip, md.env, cslot)
+            end
+            rt_error(
+                ip, a, n, co.Format2(
+                    i18.Tr("package '%s' has no member '%s'"), co.ArgStr(md.name), co.ArgStr(node.name)
+                )
+            )
+            ret val_null()
+        end
+        if recv.kind == VAL_STRUCT:
+            fi := st_find_field(ip, recv.id, node.name)
+            if fi >= 0:
+                sv := ip.sts.get(recv.id)[0]
+                ret sv.fvals.get(fi)[0]
+            end
+            stv := ip.sts.get(recv.id)[0]
+            rt_error(
+                ip, a, n, co.Format2(
+                    i18.Tr("struct '%s' has no field '%s'"), co.ArgStr(stv.type_name), co.ArgStr(node.name)
+                )
+            )
+            ret val_null()
+        end
+        rt_error(
+            ip, a, n, co.Format1(
+                i18.Tr("cannot access member '%s'"), co.ArgStr(node.name)
+            )
+        )
+        ret val_null()
+    end
+    if k == at.AST_INDEX:
+        iav := eval(ip, a, env, node.a)
+        if ip.failed:
+            ret val_null()
+        end
+        if iav.kind == VAL_STRUCT:
+            stv := ip.sts.get(iav.id)[0]
+            m := struct_method(a, stv.def, "operator_index")
+            if m != 0:
+                idx0 := eval(ip, a, env, node.b)
+                if ip.failed:
+                    ret val_null()
+                end
+                denv := find_def_env(ip, m)
+                mut ia := Vector {} as Vector<Value>
+                ia.push(idx0)
+                r := call_func(ip, a, m, denv != 0 ? denv : ip.globals, true, iav, ia)
+                ia.free()
+                ret r
+            end
+        end
+        idxv := eval(ip, a, env, node.b)
+        if ip.failed:
+            ret val_null()
+        end
+        if iav.kind == VAL_ARRAY:
+            iv := to_int(idxv)
+            ln := arr_len(ip, iav.id)
+            if iv < (0 as i64) || iv >= (ln as i64):
+                rt_error(
+                    ip, a, n, co.Format2(
+                        i18.Tr("index %lld out of range (len %zu)"), co.ArgInt(iv), co.ArgUint(ln as u64)
+                    )
+                )
+                ret val_null()
+            end
+            ret arr_get(ip, iav.id, iv as int)
+        end
+        if iav.kind == VAL_STR:
+            iv2 := to_int(idxv)
+            ln2 := str.Len(iav.s)
+            if iv2 < (0 as i64) || iv2 >= (ln2 as i64):
+                rt_error(ip, a, n, i18.Tr("string index out of range"))
+                ret val_null()
+            end
+            ret val_char(byte_at(iav.s, iv2 as int) as i64)
+        end
+        if iav.kind == VAL_PTR:
+            if iav.pa == (0 as i64):
+                rt_error(ip, a, n, i18.Tr("dereference of a null pointer"))
+                ret val_null()
+            end
+            ret ptr_load(iav.pa, iav.pe, to_int(idxv))
+        end
+        if to_int(idxv) == (0 as i64):
+            ret iav
+        end
+        rt_error(ip, a, n, i18.Tr("value is not indexable"))
+        ret val_null()
+    end
+    if k == at.AST_SLICE:
+        basev := eval(ip, a, env, node.a)
+        if ip.failed:
+            ret val_null()
+        end
+        if basev.kind != VAL_ARRAY:
+            rt_error(ip, a, n, i18.Tr("cannot slice a non-array value"))
+            ret val_null()
+        end
+        blen := arr_len(ip, basev.id) as i64
+        mut lo := 0 as i64
+        if node.b != 0:
+            lo = to_int(eval(ip, a, env, node.b))
+            if ip.failed:
+                ret val_null()
+            end
+        end
+        mut hi := blen
+        if node.c != 0:
+            hi = to_int(eval(ip, a, env, node.c))
+            if ip.failed:
+                ret val_null()
+            end
+        end
+        if lo < (0 as i64):
+            lo = 0 as i64
+        end
+        if hi > blen:
+            hi = blen
+        end
+        if hi < lo:
+            hi = lo
+        end
+        ret val_arr(arr_view(ip, basev.id, lo as int, (hi - lo) as int))
+    end
+    if k == at.AST_LAMBDA:
+        ret mk_closure(ip, n, env)
+    end
+    if k == at.AST_STRUCT_LIT:
+        // Keep the C's literal-name checks even though sema usually rewrites
+        // HashMap/Vector literals into generic instantiations.
+        if str.Equals(node.name, "HashMap"):
+            ret val_map(map_new(ip))
+        end
+        if str.Equals(node.name, "Vector"):
+            ret val_arr(arr_new(ip, 4))
+        end
+        sdef := find_struct(ip, node.name)
+        if sdef == 0:
+            rt_error(
+                ip, a, n, co.Format1(
+                    i18.Tr("unknown struct '%s'"), co.ArgStr(node.name)
+                )
+            )
+            ret val_null()
+        end
+        mut nf := 0
+        repeat at.ChildCount(a, sdef) with ci:
+            if at.KindOf(a, at.Child(a, sdef, ci)) == at.AST_FIELD:
+                nf += 1
+            end
+        end
+        sdn := at.Get(a, sdef)
+        sv := mk_struct(ip, sdn.name, sdef, nf)
+        mut fi := 0
+        repeat at.ChildCount(a, sdef) with i:
+            f := at.Child(a, sdef, i)
+            fnode := at.Get(a, f)
+            if fnode.kind != at.AST_FIELD:
+                continue
+            end
+            mut provided := 0
+            repeat at.ChildCount(a, n) with j:
+                p := at.Child(a, n, j)
+                pn := at.Get(a, p)
+                if str.Len(pn.name) != 0 && str.Equals(pn.name, fnode.name):
+                    provided = p
+                    break
+                end
+            end
+            mut fval := val_null()
+            if provided != 0:
+                fval = eval(ip, a, env, at.Get(a, provided).a)
+            else fnode.a != 0:
+                fval = eval(ip, a, ip.globals, fnode.a)
+            end
+            if ip.failed:
+                ret val_null()
+            end
+            st_field_set(ip, sv.id, fi, fnode.name, fval)
+            fi += 1
+        end
+        ret sv
+    end
+    if k == at.AST_ARRAY_LIT:
+        cnt := at.ChildCount(a, n)
+        aid := arr_new(ip, cnt != 0 ? cnt : 4)
+        repeat cnt with i:
+            arr_push(ip, aid, eval(ip, a, env, at.Child(a, n, i)))
+            if ip.failed:
+                ret val_null()
+            end
+        end
+        ret val_arr(aid)
+    end
+    rt_error(
+        ip, a, n, co.Format1(
+            i18.Tr("cannot evaluate %s"), co.ArgStr(at.KindName(k))
+        )
+    )
+    ret val_null()
+end

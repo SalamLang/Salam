@@ -1,0 +1,228 @@
+package interp
+
+import str
+import co "../sal_core.salam"
+
+func key_eq(ka: Value, kb: Value): bool:
+    if ka.kind != kb.kind:
+        ret false
+    end
+    if ka.kind == VAL_STR:
+        ret str.Equals(ka.s, kb.s)
+    end
+    if ka.kind == VAL_INT || ka.kind == VAL_CHAR:
+        ret ka.i == kb.i
+    end
+    if ka.kind == VAL_BOOL:
+        ret ka.b == kb.b
+    end
+    if ka.kind == VAL_FLOAT:
+        ret ka.f == kb.f
+    end
+    ret false
+end
+
+func key_hash(k: Value): u64:
+    if k.kind == VAL_STR:
+        ret itab_hash(k.s)
+    end
+    if k.kind == VAL_INT || k.kind == VAL_CHAR:
+        mut x := k.i as u64
+        x = x ^ (x >> (33 as u64))
+        x = x * (0xff51afd7ed558ccd as u64)
+        x = x ^ (x >> (33 as u64))
+        ret x
+    end
+    if k.kind == VAL_BOOL:
+        ret k.b ? (2 as u64) : (1 as u64)
+    end
+    if k.kind == VAL_FLOAT:
+        d := k.f == 0.0 ? 0.0 : k.f
+        mut bits := f64_bits(d)
+        bits = bits ^ (bits >> (33 as u64))
+        bits = bits * (0xff51afd7ed558ccd as u64)
+        bits = bits ^ (bits >> (33 as u64))
+        ret bits
+    end
+    ret 0 as u64
+end
+
+// MAP_SLOT_EMPTY = 0, MAP_SLOT_TOMB = 1, else entry_idx + 2.
+func map_index_insert(m &: SMap, hash: u64, entry_idx: int):
+    mask := m.index_cap - 1
+    mut i := (hash & (mask as u64)) as int
+    until true:
+        s0 := m.index.get(i)[0]
+        if s0 == 0 || s0 == 1:
+            if s0 == 0:
+                m.index_used += 1
+            end
+            m.index.set(i, entry_idx + 2)
+            ret
+        end
+        i = (i + 1) & mask
+    end
+end
+
+func map_index_rebuild(m &: SMap, want: int):
+    mut nc := 16
+    until nc < want * 2:
+        nc *= 2
+    end
+    old := m.index
+    mut ni := Vector {} as Vector<int>
+    repeat nc:
+        ni.push(0)
+    end
+    m.index = ni
+    old.free()
+    m.index_cap = nc
+    m.index_used = 0
+    mcap := m.cap
+    repeat mcap with i:
+        if m.used.get(i)[0]:
+            map_index_insert(m, key_hash(m.keys.get(i)[0]), i)
+        end
+    end
+end
+
+func map_new(ip &: Interp): int:
+    mut m := SMap {}
+    m.cap = 8
+    repeat 8:
+        m.keys.push(val_null())
+        m.vals.push(val_null())
+        m.used.push(false)
+    end
+    map_index_rebuild(m, 8)
+    id := ip.maps.len()
+    ip.maps.push(m)
+    ret id
+end
+
+// map_index_slot - the position in index[] holding this key, -1 when absent.
+func map_slot_pos(m: SMap, k: Value): int:
+    mask := m.index_cap - 1
+    mut i := (key_hash(k) & (mask as u64)) as int
+    until true:
+        s0 := m.index.get(i)[0]
+        if s0 == 0:
+            ret 0 - 1
+        end
+        if s0 != 1:
+            ei := s0 - 2
+            if m.used.get(ei)[0] && key_eq(m.keys.get(ei)[0], k):
+                ret i
+            end
+        end
+        i = (i + 1) & mask
+    end
+end
+
+// map_find - entry index, -1 when absent (the C returned the entry pointer).
+func map_find(m: SMap, k: Value): int:
+    pos := map_slot_pos(m, k)
+    if pos < 0:
+        ret 0 - 1
+    end
+    ret m.index.get(pos)[0] - 2
+end
+
+func map_put(ip &: Interp, mid: int, k: Value, v: Value):
+    mut m := ip.maps.get(mid)[0]
+    e := map_find(m, k)
+    if e >= 0:
+        m.vals.set(e, v)
+        ip.maps.set(mid, m)
+        ret
+    end
+    if m.count + 1 > m.cap:
+        nc := co.GrowCap(m.cap as u64, (m.count + 1) as u64, 8 as u64) as int
+        until m.cap < nc:
+            m.keys.push(val_null())
+            m.vals.push(val_null())
+            m.used.push(false)
+            m.cap += 1
+        end
+    end
+    mut i := m.free_hint
+    until i < m.cap && m.used.get(i)[0]:
+        i += 1
+    end
+    m.keys.set(i, k)
+    m.vals.set(i, v)
+    m.used.set(i, true)
+    m.count += 1
+    m.free_hint = i + 1
+    if (m.index_used + 1) * 4 >= m.index_cap * 3:
+        map_index_rebuild(m, m.count)
+    else:
+        map_index_insert(m, key_hash(k), i)
+    end
+    ip.maps.set(mid, m)
+end
+
+func map_remove(ip &: Interp, mid: int, k: Value): bool:
+    mut m := ip.maps.get(mid)[0]
+    pos := map_slot_pos(m, k)
+    if pos < 0:
+        ret false
+    end
+    ei := m.index.get(pos)[0] - 2
+    m.used.set(ei, false)
+    m.count -= 1
+    if ei < m.free_hint:
+        m.free_hint = ei
+    end
+    m.index.set(pos, 1)
+    ip.maps.set(mid, m)
+    ret true
+end
+
+// mk_struct - fields are preallocated ("", null) and filled by index later
+// (st_field_set), exactly like the C's uninitialized sfield_t array.
+func mk_struct(ip &: Interp, name: str, def: int, nfields: int): Value:
+    mut s := SStruct { type_name = name, def = def }
+    repeat nfields:
+        s.fnames.push("")
+        s.fvals.push(val_null())
+    end
+    id := ip.sts.len()
+    ip.sts.push(s)
+    ret Value { kind = VAL_STRUCT, id = id }
+end
+
+func st_field_set(ip &: Interp, sid: int, i: int, name: str, v: Value):
+    mut s := ip.sts.get(sid)[0]
+    s.fnames.set(i, name)
+    s.fvals.set(i, v)
+    ip.sts.set(sid, s)
+end
+
+func st_field_set_val(ip &: Interp, sid: int, i: int, v: Value):
+    mut s := ip.sts.get(sid)[0]
+    s.fvals.set(i, v)
+    ip.sts.set(sid, s)
+end
+
+func st_find_field(ip &: Interp, sid: int, name: str): int:
+    s := ip.sts.get(sid)[0]
+    repeat s.fnames.len() with i:
+        if str.Equals(s.fnames.get(i)[0], name):
+            ret i
+        end
+    end
+    ret 0 - 1
+end
+
+func mk_closure(ip &: Interp, fnnode: int, env: int): Value:
+    id := ip.closures.len()
+    ip.closures.push(Closure { fn = fnnode, env = env })
+    ret Value { kind = VAL_FUNC, id = id }
+end
+
+func mk_variant(ip &: Interp, tag: int, has_boxed: bool, boxed: Value): Value:
+    id := ip.variants.len()
+    ip.variants.push(SVariant { tag = tag, has_boxed = has_boxed, boxed = boxed })
+    ret val_variant(id)
+end

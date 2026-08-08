@@ -1,0 +1,565 @@
+package semantic
+
+import str
+import co "../sal_core.salam"
+import tok "../token.salam"
+import at "../ast.salam"
+import i18 "../i18n.salam"
+import cc "../condcomp.salam"
+
+// ===========================================================================
+// ===== sema_generic.c (5c) =====
+// ===========================================================================
+
+// Creates a synthetic-capable node carrying `sp` (ast_new(kind, span)).
+func new_node_at(a &: at.Ast, kind: int, sp: co.SrcSpan): int:
+    id := at.NewNode(a, kind)
+    at.SetSpan(
+        a, id, sp.begin.line, sp.begin.col, sp.begin.index, sp.finish.line, sp.finish.col, sp.finish.index,
+        sp.length
+    )
+    ret id
+end
+
+// g_sanitize - type string -> identifier-safe instance-name fragment.
+func g_sanitize(ts: str): str:
+    mut out := ""
+    n := str.Len(ts)
+    repeat n with i:
+        b := byte_at(ts, i)
+        if b == 42:
+            out = out + "_ptr"
+        else b == 91:
+            out = out + "_arr"
+        else b == 60 || b == 44:
+            out = out + "_"
+        else b == 62 || b == 32 || b == 93:
+            continue
+        else:
+            out = out + str.Substr(ts, i, 1)
+        end
+    end
+    ret out
+end
+
+// g_subst - rewrites every AST_TYPE named after a type parameter into a
+// clone of the matching argument node. The C shared the clone's list/dims
+// vectors; the port copies the child NodeIds into fresh vectors (same
+// reads, no double-free on FreeAst).
+func g_subst(a &: at.Ast, nid: int, params: Vector<str>, args: Vector<int>):
+    if nid == 0:
+        ret
+    end
+    n := at.Get(a, nid)
+    g_subst(a, n.ty, params, args)
+    g_subst(a, n.a, params, args)
+    g_subst(a, n.b, params, args)
+    g_subst(a, n.c, params, args)
+    g_subst(a, n.d, params, args)
+    repeat n.list.len() with i:
+        g_subst(a, n.list.get(i)[0], params, args)
+    end
+    repeat n.dims.len() with i2:
+        g_subst(a, n.dims.get(i2)[0], params, args)
+    end
+    if n.kind == at.AST_TYPE && str.Len(n.name) > 0:
+        repeat params.len() with pi:
+            if !str.Equals(n.name, params.get(pi)[0]):
+                continue
+            end
+            ccid := at.Clone(a, args.get(pi)[0])
+            cc := at.Get(a, ccid)
+            mut nv := at.Get(a, nid)
+            ptr := nv.is_pointer || cc.is_pointer
+            nv.name = cc.name
+            nv.list.free()
+            nv.list = Vector {} as Vector<int>
+            repeat cc.list.len() with k:
+                nv.list.push(cc.list.get(k)[0])
+            end
+            nv.is_pointer = ptr
+            nv.is_dyn = cc.is_dyn
+            mut merged := Vector {} as Vector<int>
+            repeat cc.dims.len() with k2:
+                merged.push(cc.dims.get(k2)[0])
+            end
+            repeat nv.dims.len() with k3:
+                merged.push(nv.dims.get(k3)[0])
+            end
+            nv.dims.free()
+            nv.dims = merged
+            at.Put(a, nid, nv)
+            break
+        end
+    end
+end
+
+// g_instance_name - "Base_arg1_arg2" (the C clamps at 512 bytes; not
+// replicated per the file-header conventions).
+func g_instance_name(s &: Sema, base: str, argtypes: Vector<int>): str:
+    mut out := base
+    repeat argtypes.len() with i:
+        out = out + "_" + g_sanitize(type_to_string(s, argtypes.get(i)[0]))
+    end
+    ret out
+end
+
+// g_type_to_ast - synthesizes an AST_TYPE node describing `t`.
+func g_type_to_ast(s &: Sema, a &: at.Ast, t: int, sp: co.SrcSpan): int:
+    nid := new_node_at(a, at.AST_TYPE, sp)
+    mut nv := at.Get(a, nid)
+    nv.synthetic = true
+    at.Put(a, nid, nv)
+    if t < 0:
+        at.SetName(a, nid, "void")
+        ret nid
+    end
+    v := ty_at(s, t)
+    if v.kind == TY_PTR && v.pointee >= 0:
+        p := g_type_to_ast(s, a, v.pointee, sp)
+        mut pv := at.Get(a, p)
+        pv.is_pointer = true
+        at.Put(a, p, pv)
+        ret p
+    end
+    if v.kind == TY_VEC:
+        at.SetName(a, nid, "Vector")
+        at.AddChild(a, nid, g_type_to_ast(s, a, v.elem, sp))
+        ret nid
+    end
+    if v.kind == TY_MAP:
+        at.SetName(a, nid, "HashMap")
+        at.AddChild(a, nid, g_type_to_ast(s, a, v.key, sp))
+        at.AddChild(a, nid, g_type_to_ast(s, a, v.elem, sp))
+        ret nid
+    end
+    at.SetName(a, nid, type_to_string(s, t))
+    ret nid
+end
+
+// iface_satisfied - structural interface conformance for generic bounds
+// and dyn coercion.
+func iface_satisfied(
+    s &: Sema, _a &: at.Ast, concrete: int, iface_name: str, tparam: str, sp: co.SrcSpan
+): bool:
+    iface := scope_lookup(s, s.global, iface_name)
+    mut iface_ok := iface != 0
+    if iface_ok && sym_at(s, iface).kind != SYM_INTERFACE:
+        iface_ok = false
+    end
+    if !iface_ok:
+        serr(
+            s, 1, sp, co.Format2(
+                i18.Tr("bound '%s' on type parameter '%s' is not an interface"), co.ArgStr(iface_name),
+                co.ArgStr(tparam)
+            )
+        )
+        ret false
+    end
+    mut members := 0
+    if concrete >= 0 && ty_at(s, concrete).kind == TY_STRUCT && ty_at(s, concrete).decl != 0:
+        members = sym_at(s, ty_at(s, concrete).decl).members
+    else concrete >= 0:
+        owner := scope_lookup(
+            s, s.global, impl_owner_key(type_to_string(s, concrete))
+        )
+        if owner != 0:
+            members = sym_at(s, owner).members
+        end
+    end
+    if members == 0:
+        serr(
+            s, 2, sp, co.Format2(
+                i18.Tr("'%s' does not satisfy '%s': no struct definition or `impl` block provides its methods"),
+                co.ArgStr(type_to_string(s, concrete)), co.ArgStr(iface_name)
+            )
+        )
+        ret false
+    end
+    mut all_ok := true
+    ifm := scope_at(s, sym_at(s, iface).members)
+    repeat ifm.symbols.len() with i:
+        im := sym_at(s, ifm.symbols.get(i)[0])
+        if im.kind != SYM_METHOD || im.overloads.len() == 0:
+            continue
+        end
+        want := sig_at(s, im.overloads.get(0)[0])
+        smx := scope_lookup_local(s, members, im.name)
+        mut have_m := smx != 0
+        if have_m && sym_at(s, smx).kind != SYM_METHOD:
+            have_m = false
+        end
+        if !have_m:
+            serr(
+                s, 2, sp, co.Format3(
+                    i18.Tr("'%s' does not implement interface '%s': missing method '%s'"), co.ArgStr(type_to_string(s, concrete)),
+                    co.ArgStr(iface_name), co.ArgStr(im.name)
+                )
+            )
+            all_ok = false
+            continue
+        end
+        smv := sym_at(s, smx)
+        mut sig_ok := false
+        repeat smv.overloads.len() with k:
+            have := sig_at(s, smv.overloads.get(k)[0])
+            if have.params.len() != want.params.len():
+                continue
+            end
+            mut pm := true
+            repeat want.params.len() with p:
+                if !type_equiv(s, have.params.get(p)[0], want.params.get(p)[0]):
+                    pm = false
+                    break
+                end
+            end
+            if pm && type_equiv(s, have.ret_type, want.ret_type):
+                sig_ok = true
+                break
+            end
+        end
+        if !sig_ok:
+            serr(
+                s, 2, sp, co.Format3(
+                    i18.Tr("'%s' implements method '%s' with a signature that does not match interface '%s'"),
+                    co.ArgStr(type_to_string(s, concrete)), co.ArgStr(im.name), co.ArgStr(iface_name)
+                )
+            )
+            all_ok = false
+        end
+    end
+    ret all_ok
+end
+
+// g_check_bounds - validates `<T: Iface>` bounds at instantiation.
+func g_check_bounds(
+    s &: Sema, a &: at.Ast, tmpl: int, argtypes: Vector<int>, sp: co.SrcSpan
+):
+    repeat at.TyparamCount(a, tmpl) with i:
+        if i >= argtypes.len():
+            break
+        end
+        bound := at.TyparamBound(a, tmpl, i)
+        if str.Len(bound) > 0:
+            _ok := iface_satisfied(
+                s, a, argtypes.get(i)[0], bound, at.Typaram(a, tmpl, i), sp
+            )
+        end
+    end
+end
+
+// coerce_to_dyn - wraps `expr` in a synthetic AST_CAST when the expected
+// type is a dyn interface; returns the (possibly new) node id.
+func coerce_to_dyn(
+    s &: Sema, a &: at.Ast, expected: int, expr: int, etype: int
+): int:
+    if expected < 0 || ty_at(s, expected).kind != TY_DYN || expr == 0:
+        ret expr
+    end
+    if etype < 0 || ty_at(s, etype).kind != TY_STRUCT:
+        ret expr
+    end
+    ename := ty_at(s, expected).name
+    _ok := iface_satisfied(s, a, etype, ename, ename, span_of(a, expr))
+    box := new_node_at(a, at.AST_CAST, span_of(a, expr))
+    mut bv := at.Get(a, box)
+    bv.a = expr
+    bv.synthetic = true
+    bv.type_str = type_to_string(s, expected)
+    at.Put(a, box, bv)
+    ret box
+end
+
+// coerce_to_variant - wraps `expr` in an AST_VARIANT_BOX carrying the tag.
+func coerce_to_variant(
+    s &: Sema, a &: at.Ast, variant: int, expr: int, tag: int
+): int:
+    box := new_node_at(a, at.AST_VARIANT_BOX, span_of(a, expr))
+    mut bv := at.Get(a, box)
+    bv.a = expr
+    bv.synthetic = true
+    bv.type_str = type_to_string(s, variant)
+    bv.value_kind = tok.TV_INT
+    bv.value_int = tag as u64
+    at.Put(a, box, bv)
+    ret box
+end
+
+func coerce_args_to_dyn(
+    s &: Sema, a &: at.Ast, call: int, argtypes: Vector<int>, sigid: int
+):
+    if sigid == 0:
+        ret
+    end
+    sg := sig_at(s, sigid)
+    mut i := 0
+    until i < at.ChildCount(a, call) && i < sg.params.len() && i < argtypes.len():
+        pt := sg.params.get(i)[0]
+        if pt >= 0 && ty_at(s, pt).kind == TY_DYN:
+            arg := at.Child(a, call, i)
+            nb := coerce_to_dyn(s, a, pt, arg, argtypes.get(i)[0])
+            mut cn := at.Get(a, call)
+            cn.list.set(i, nb)
+            at.Put(a, call, cn)
+        end
+        i += 1
+    end
+end
+
+func coerce_args_to_variant(
+    s &: Sema, a &: at.Ast, call: int, argtypes: Vector<int>, sigid: int
+):
+    if sigid == 0:
+        ret
+    end
+    sg := sig_at(s, sigid)
+    mut i := 0
+    until i < at.ChildCount(a, call) && i < sg.params.len() && i < argtypes.len():
+        pt := sg.params.get(i)[0]
+        att := argtypes.get(i)[0]
+        if pt >= 0 && ty_at(s, pt).kind == TY_VARIANT && att >= 0 && ty_at(s, att).kind != TY_VARIANT:
+            tag := type_variant_tag(s, pt, att)
+            if tag >= 0:
+                arg := at.Child(a, call, i)
+                nb := coerce_to_variant(s, a, pt, arg, tag)
+                mut cn := at.Get(a, call)
+                cn.list.set(i, nb)
+                at.Put(a, call, cn)
+            end
+        end
+        i += 1
+    end
+end
+
+// g_instantiate_func - like g_instantiate_struct for generic functions.
+func g_instantiate_func(
+    s &: Sema, a &: at.Ast, tmpl: int, targ_nodes: Vector<int>, sp: co.SrcSpan
+): int:
+    tn := at.Get(a, tmpl)
+    if targ_nodes.len() != tn.typarams.len():
+        serr(
+            s, 1, sp, co.Format4(
+                i18.Tr("generic '%s' expects %zu type argument%s, got %zu"), co.ArgStr(tn.name), co.ArgUint(tn.typarams.len() as u64),
+                co.ArgStr(plural_suffix(tn.typarams.len())), co.ArgUint(targ_nodes.len() as u64)
+            )
+        )
+        ret 0
+    end
+    mut argtypes := Vector {} as Vector<int>
+    defer argtypes.free()
+    repeat targ_nodes.len() with i:
+        argtypes.push(sema_resolve_type(s, a, targ_nodes.get(i)[0]))
+    end
+    iname := g_instance_name(s, tn.name, argtypes)
+    existing := scope_lookup_local(s, s.global, iname)
+    if existing != 0:
+        ret existing
+    end
+    save_lang := s.lang
+    if str.Len(tn.origin_lang) > 0:
+        s.lang = tn.origin_lang
+    end
+    g_check_bounds(s, a, tmpl, argtypes, sp)
+    inst := at.Clone(a, tmpl)
+    mut iv := at.Get(a, inst)
+    iv.name = iname
+    iv.synthetic = true
+    at.Put(a, inst, iv)
+    g_subst(a, inst, tn.typarams, targ_nodes)
+    mut iv2 := at.Get(a, inst)
+    iv2.typarams.clear()
+    at.Put(a, inst, iv2)
+    at.AddChild(a, s.program, inst)
+    fsym := get_or_make_func(s, s.global, iname, SYM_FUNC)
+    mut fv := sym_at(s, fsym)
+    if fv.home == 0:
+        fv.home = s.gen_pkg
+    end
+    sym_put(s, fsym, fv)
+    fsig := build_sig(s, a, inst, 0)
+    mut fv2 := sym_at(s, fsym)
+    fv2.overloads.push(fsig)
+    sym_put(s, fsym, fv2)
+    s.pending.push(inst)
+    s.lang = save_lang
+    ret fsym
+end
+
+// g_unify - matches a template parameter's type NODE against a concrete
+// argument type to bind type parameter `T`; TYPE_NONE = the C NULL.
+func g_unify(s &: Sema, a &: at.Ast, pty: int, att: int, tname: str): int:
+    if pty == 0 || att < 0:
+        ret TYPE_NONE
+    end
+    p := at.Get(a, pty)
+    if str.Len(p.name) == 0:
+        ret TYPE_NONE
+    end
+    pn := intrinsic_type_canon(p.name)
+    v := ty_at(s, att)
+    if str.Equals(p.name, tname) && p.dims.len() == 0:
+        if p.is_pointer:
+            if v.kind == TY_PTR:
+                ret v.pointee
+            end
+            ret TYPE_NONE
+        end
+        ret att
+    end
+    if str.Equals(pn, "Vector") && v.kind == TY_VEC && p.list.len() >= 1:
+        ret g_unify(s, a, p.list.get(0)[0], v.elem, tname)
+    end
+    if str.Equals(pn, "HashMap") && v.kind == TY_MAP:
+        mut u := TYPE_NONE
+        if p.list.len() >= 1:
+            u = g_unify(s, a, p.list.get(0)[0], v.key, tname)
+        end
+        if u < 0 && p.list.len() >= 2:
+            u = g_unify(s, a, p.list.get(1)[0], v.elem, tname)
+        end
+        ret u
+    end
+    if p.list.len() > 0 && v.kind == TY_STRUCT && v.decl != 0:
+        isym := sym_at(s, v.decl)
+        if str.Len(isym.generic_base) > 0 && str.Equals(isym.generic_base, p.name):
+            mut k := p.list.len()
+            if isym.generic_args.len() < k:
+                k = isym.generic_args.len()
+            end
+            repeat k with i:
+                u2 := g_unify(
+                    s, a, p.list.get(i)[0], isym.generic_args.get(i)[0], tname
+                )
+                if u2 >= 0:
+                    ret u2
+                end
+            end
+        end
+    end
+    ret TYPE_NONE
+end
+
+// g_localize_instance - re-materializes a generic instance type in the
+// current global scope (used for cross-package instance return types).
+func g_localize_instance(s &: Sema, a &: at.Ast, t: int, sp: co.SrcSpan): int:
+    if t < 0 || ty_at(s, t).kind != TY_STRUCT || ty_at(s, t).decl == 0:
+        ret t
+    end
+    isym := sym_at(s, ty_at(s, t).decl)
+    if str.Len(isym.generic_base) == 0 || str.Len(isym.name) == 0:
+        ret t
+    end
+    if scope_lookup_local(s, s.global, isym.name) != 0:
+        ret t
+    end
+    tnid := new_node_at(a, at.AST_TYPE, sp)
+    mut tv := at.Get(a, tnid)
+    tv.name = isym.generic_base
+    tv.synthetic = true
+    at.Put(a, tnid, tv)
+    repeat isym.generic_args.len() with i:
+        at.AddChild(a, tnid, g_type_to_ast(s, a, isym.generic_args.get(i)[0], sp))
+    end
+    lt := sema_resolve_type(s, a, tnid)
+    if lt >= 0 && ty_at(s, lt).kind == TY_STRUCT:
+        ret lt
+    end
+    ret t
+end
+
+// g_infer_call - infers a generic function's type arguments at a call site
+// and instantiates it; 0 = the C NULL.
+func g_infer_call(
+    s &: Sema, a &: at.Ast, tsym: int, argtypes: Vector<int>, sp: co.SrcSpan, expected: int
+): int:
+    tmpl := sym_at(s, tsym).decl
+    tv := at.Get(a, tmpl)
+    mut required := 0
+    mut total := 0
+    mut seen_default := false
+    repeat tv.list.len() with i:
+        param := at.Get(a, tv.list.get(i)[0])
+        if param.kind != at.AST_PARAM:
+            continue
+        end
+        total += 1
+        if param.a != 0:
+            seen_default = true
+        else !seen_default:
+            required += 1
+        end
+    end
+    if argtypes.len() < required || (!tv.is_variadic && argtypes.len() > total):
+        tname := sym_at(s, tsym).name
+        if tv.is_variadic:
+            serr(
+                s, 12, sp, co.Format4(
+                    i18.Tr("'%s' expects at least %zu argument%s, got %zu"), co.ArgStr(tname), co.ArgUint(required as u64),
+                    co.ArgStr(plural_suffix(required)), co.ArgUint(argtypes.len() as u64)
+                )
+            )
+        else required == total:
+            serr(
+                s, 12, sp, co.Format4(
+                    i18.Tr("'%s' expects %zu argument%s, got %zu"), co.ArgStr(tname), co.ArgUint(total as u64),
+                    co.ArgStr(plural_suffix(total)), co.ArgUint(argtypes.len() as u64)
+                )
+            )
+        else:
+            serr(
+                s, 12, sp, co.Format4(
+                    i18.Tr("'%s' expects %zu to %zu arguments, got %zu"), co.ArgStr(tname), co.ArgUint(required as u64),
+                    co.ArgUint(total as u64), co.ArgUint(argtypes.len() as u64)
+                )
+            )
+        end
+        ret 0
+    end
+    mut targ_nodes := Vector {} as Vector<int>
+    repeat tv.typarams.len() with t:
+        tpn := tv.typarams.get(t)[0]
+        mut bound := TYPE_NONE
+        mut pi := 0
+        until pi < tv.list.len() && pi < argtypes.len():
+            p := at.Get(a, tv.list.get(pi)[0])
+            if p.kind == at.AST_PARAM:
+                u := g_unify(s, a, p.ty, argtypes.get(pi)[0], tpn)
+                if u >= 0:
+                    bound = u
+                    break
+                end
+            end
+            pi += 1
+        end
+        if bound < 0 && expected >= 0 && tv.ty != 0:
+            bound = g_unify(s, a, tv.ty, expected, tpn)
+        end
+        if bound < 0:
+            mut pi2 := argtypes.len()
+            until pi2 < tv.list.len():
+                p2 := at.Get(a, tv.list.get(pi2)[0])
+                if p2.kind == at.AST_PARAM && p2.a != 0 && p2.ty != 0 && str.Equals(at.Get(a, p2.ty).name, tpn):
+                    bound = sema_check_expr(s, a, p2.a)
+                    if bound >= 0:
+                        break
+                    end
+                end
+                pi2 += 1
+            end
+        end
+        if bound < 0:
+            serr(
+                s, 1, sp, co.Format2(
+                    i18.Tr("cannot infer type parameter '%s' of generic function '%s'"), co.ArgStr(tpn),
+                    co.ArgStr(tv.name)
+                )
+            )
+            targ_nodes.free()
+            ret 0
+        end
+        targ_nodes.push(g_type_to_ast(s, a, bound, sp))
+    end
+    g_result := g_instantiate_func(s, a, tmpl, targ_nodes, sp)
+    targ_nodes.free()
+    ret g_result
+end

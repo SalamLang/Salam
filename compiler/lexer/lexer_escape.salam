@@ -1,0 +1,137 @@
+package lexer
+
+import str
+
+// ===== lexer_escape.c =====
+func simple_escape(e: int): int:
+    if e == 110: // 'n'
+        ret 10
+    end
+    if e == 116: // 't'
+        ret 9
+    end
+    if e == 114: // 'r'
+        ret 13
+    end
+    if e == 48: // '0'
+        ret 0
+    end
+    if e == 97: // 'a'
+        ret 7
+    end
+    if e == 98: // 'b'
+        ret 8
+    end
+    if e == 102: // 'f'
+        ret 12
+    end
+    if e == 118: // 'v'
+        ret 11
+    end
+    if e == 92: // '\\'
+        ret 92
+    end
+    if e == 34: // '"'
+        ret 34
+    end
+    if e == 39: // '\''
+        ret 39
+    end
+    ret 0 - 1
+end
+
+// decode_hex_run(p, len, max, cp) - p becomes (s, from), len -> avail
+func decode_hex_run(s: str, from: int, avail: int, maxn: int, cp &: u32): int:
+    mut v := 0 as u32
+    mut n := 0
+    until n < maxn && n < avail:
+        d := hexval(byte_at(s, from + n))
+        if d < 0:
+            break
+        end
+        v = v * (16 as u32) + (d as u32)
+        n += 1
+    end
+    cp = v
+    ret n
+end
+
+// lx_decode_string - decode the escapes of a quoted lexeme (quotes included)
+func decode_string(lex: str, triple: bool): str:
+    lexlen := lex.len()
+    q := triple ? 3 : 1
+    if lexlen < 2 * q:
+        ret ""
+    end
+    content_len := lexlen - 2 * q
+    mut out := str.NewBuilder()
+    mut i := 0
+    until i < content_len:
+        ch := byte_at(lex, q + i)
+        if ch != 92 || i + 1 >= content_len:
+            str.BufAppendChar(out, ch)
+            i += 1
+            continue
+        end
+        i += 1
+        e := byte_at(lex, q + i)
+        simple := simple_escape(e)
+        if simple >= 0:
+            str.BufAppendChar(out, simple)
+        else e == 120: // 'x'
+            hi := i + 1 < content_len ? hexval(byte_at(lex, q + i + 1)) : (0 - 1)
+            lo := i + 2 < content_len ? hexval(byte_at(lex, q + i + 2)) : (0 - 1)
+            if hi >= 0 && lo >= 0:
+                str.BufAppendChar(out, hi * 16 + lo)
+                i += 2
+            else:
+                str.BufAppendChar(out, 120) // 'x'
+            end
+        else e == 117 || e == 85: // 'u' 'U'
+            mut cp := 0 as u32
+            width := e == 117 ? LX_ESC_HEX_U : LX_ESC_HEX_BIG_U
+            n := decode_hex_run(lex, q + i + 1, content_len - (i + 1), width, cp)
+            i += n
+            utf8_append(out, cp)
+        else:
+            str.BufAppendChar(out, e)
+        end
+        i += 1
+    end
+    r := str.BufStr(out)
+    str.BufFree(out)
+    ret r
+end
+
+// lx_decode_char - codepoint value of a char literal lexeme (quotes included)
+func decode_char(lex: str): u64:
+    lexlen := lex.len()
+    if lexlen < 3:
+        ret 0 as u64
+    end
+    c0 := byte_at(lex, 1)
+    if c0 != 92:
+        ret c0 as u64
+    end
+    c1 := byte_at(lex, 2)
+    simple := simple_escape(c1)
+    if simple >= 0:
+        ret simple as u64
+    end
+    if c1 == 120: // 'x'
+        hi := lexlen > 3 ? hexval(byte_at(lex, 3)) : (0 - 1)
+        lo := lexlen > 4 ? hexval(byte_at(lex, 4)) : (0 - 1)
+        if hi >= 0 && lo >= 0:
+            ret (hi * 16 + lo) as u64
+        end
+        ret 0 as u64
+    end
+    if c1 == 117 || c1 == 85: // 'u' 'U'
+        avail := lexlen > 3 ? lexlen - 3 : 0
+        width := c1 == 117 ? LX_ESC_HEX_U : LX_ESC_HEX_BIG_U
+        mut cp := 0 as u32
+        _n := decode_hex_run(lex, 3, avail, width, cp)
+        ret cp as u64
+    end
+    ret c1 as u64
+end

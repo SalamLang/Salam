@@ -1,0 +1,301 @@
+package parser
+
+import str
+import tok "../token.salam"
+import at "../ast.salam"
+
+// ===== parser_expr.c =====
+
+func bp_pack(l: int, r: int): int:
+    ret (l << 16) | r
+end
+
+func bp_left(w: int): int:
+    ret w >> 16
+end
+
+func bp_right(w: int): int:
+    ret w & 0xFFFF
+end
+
+func bp_of(k: int): int:
+    if k == tok.TK_ASSIGN || k == tok.TK_PLUS_EQ || k == tok.TK_MINUS_EQ || k == tok.TK_STAR_EQ || k == tok.TK_SLASH_EQ || k == tok.TK_PERCENT_EQ || k == tok.TK_POWER_EQ || k == tok.TK_AMP_EQ || k == tok.TK_PIPE_EQ || k == tok.TK_CARET_EQ || k == tok.TK_SHL_EQ || k == tok.TK_SHR_EQ:
+        ret bp_pack(10, 10)
+    end
+    if k == tok.TK_QUESTION:
+        ret bp_pack(15, 14)
+    end
+    if k == tok.TK_OR:
+        ret bp_pack(20, 21)
+    end
+    if k == tok.TK_AND:
+        ret bp_pack(30, 31)
+    end
+    // Bitwise, C precedence: '|' looser than '^' looser than '&', all looser
+    // than equality and tighter than logical '&&'.
+    if k == tok.TK_PIPE:
+        ret bp_pack(32, 33)
+    end
+    if k == tok.TK_CARET:
+        ret bp_pack(34, 35)
+    end
+    if k == tok.TK_AMP:
+        ret bp_pack(36, 37)
+    end
+    if k == tok.TK_EQ || k == tok.TK_NE:
+        ret bp_pack(40, 41)
+    end
+    if k == tok.TK_LT || k == tok.TK_GT || k == tok.TK_LE || k == tok.TK_GE:
+        ret bp_pack(50, 51)
+    end
+    // Shifts: tighter than comparison, looser than '+'/'-' (C precedence).
+    if k == tok.TK_SHL || k == tok.TK_SHR:
+        ret bp_pack(56, 57)
+    end
+    if k == tok.TK_PLUS || k == tok.TK_MINUS:
+        ret bp_pack(60, 61)
+    end
+    if k == tok.TK_STAR || k == tok.TK_SLASH || k == tok.TK_PERCENT:
+        ret bp_pack(70, 71)
+    end
+    if k == tok.TK_KW_AS:
+        ret bp_pack(80, 81)
+    end
+    if k == tok.TK_POWER:
+        ret bp_pack(100, 100)
+    end
+    if k == tok.TK_PLUS_PLUS || k == tok.TK_MINUS_MINUS:
+        ret bp_pack(105, 105)
+    end
+    if k == tok.TK_LPAREN || k == tok.TK_LBRACKET || k == tok.TK_DOT:
+        ret bp_pack(110, 111)
+    end
+    ret 0
+end
+
+func make_incdec(p &: Ps, a &: at.Ast, op: int, operand: int, prefix: bool): int:
+    mut n := 0
+    if operand != 0:
+        n = mk_from_node(a, at.AST_INCDEC, operand)
+    else:
+        n = p_mk(p, a, at.AST_INCDEC)
+    end
+    mut nn := at.Get(a, n)
+    nn.op = op
+    nn.a = operand
+    nn.is_prefix = prefix
+    at.Put(a, n, nn)
+    ret n
+end
+
+func make_binary(a &: at.Ast, op: int, l: int, r: int): int:
+    n := mk_from_node(a, at.AST_BINARY, l)
+    mut nn := at.Get(a, n)
+    nn.op = op
+    nn.a = l
+    nn.b = r
+    at.Put(a, n, nn)
+    if r != 0:
+        ps_end_from_node(a, n, r)
+    end
+    ret n
+end
+
+func parse_nud(p &: Ps, a &: at.Ast): int:
+    k := p_peek(p).kind
+
+    if k == tok.TK_NOT || k == tok.TK_MINUS || k == tok.TK_TILDE:
+        n := p_mk(p, a, at.AST_UNARY)
+        at.SetOp(a, n, k)
+        p_advance(p)
+        ps_set_a(a, n, parse_expr_bp(p, a, 90))
+        p_fin(p, a, n)
+        ret n
+    end
+    if k == tok.TK_PLUS_PLUS || k == tok.TK_MINUS_MINUS:
+        start := p_peek(p)
+        p_advance(p)
+        operand := parse_expr_bp(p, a, 105)
+        n := make_incdec(p, a, k, operand, true)
+        mut nn := at.Get(a, n)
+        nn.begin_line = start.begin_line
+        nn.begin_col = start.begin_col
+        nn.begin_index = start.begin_index
+        at.Put(a, n, nn)
+        ret n
+    end
+    ret parse_primary(p, a)
+end
+
+func led_call(p &: Ps, a &: at.Ast, lhs: int): int:
+    call := mk_from_node(a, at.AST_CALL, lhs)
+    ps_set_a(a, call, lhs)
+    p_advance(p)
+
+    lnode := at.Get(a, lhs)
+    if lnode.kind == at.AST_IDENTIFIER && str.Equals(lnode.name, "sizeof"):
+        at.AddChild(a, call, parse_type(p, a))
+        p_expect(p, tok.TK_RPAREN, "')' after sizeof type")
+        p_fin(p, a, call)
+        ret call
+    end
+    // p_comma_list(p, call, TK_RPAREN, parse_expr) inlined:
+    if !p_at(p, tok.TK_RPAREN):
+        mut go := true
+        until go:
+            at.AddChild(a, call, parse_expr(p, a))
+            go = p_match(p, tok.TK_COMMA)
+        end
+    end
+    p_expect(p, tok.TK_RPAREN, "')' after arguments")
+    p_fin(p, a, call)
+    ret call
+end
+
+func led_index(p &: Ps, a &: at.Ast, lhs: int): int:
+    p_advance(p)
+    p_skip_terminators(p)
+
+    mut lo := 0
+    if !p_at(p, tok.TK_COLON):
+        lo = parse_expr_bp(p, a, 0)
+    end
+    p_skip_terminators(p)
+
+    if p_at(p, tok.TK_COLON):
+        p_advance(p)
+        p_skip_terminators(p)
+        mut hi := 0
+        if !p_at(p, tok.TK_RBRACKET):
+            hi = parse_expr_bp(p, a, 0)
+        end
+        p_skip_terminators(p)
+        p_expect(p, tok.TK_RBRACKET, "']' to close slice range 'a[lo:hi]'")
+        sl := mk_from_node(a, at.AST_SLICE, lhs)
+        mut sn := at.Get(a, sl)
+        sn.a = lhs
+        sn.b = lo
+        sn.c = hi
+        at.Put(a, sl, sn)
+        p_fin(p, a, sl)
+        ret sl
+    end
+
+    idx := mk_from_node(a, at.AST_INDEX, lhs)
+    mut ix := at.Get(a, idx)
+    ix.a = lhs
+    ix.b = lo
+    at.Put(a, idx, ix)
+    p_expect(p, tok.TK_RBRACKET, "']' after index")
+    p_fin(p, a, idx)
+    ret idx
+end
+
+func led_member(p &: Ps, a &: at.Ast, lhs: int): int:
+    m := mk_from_node(a, at.AST_MEMBER, lhs)
+    ps_set_a(a, m, lhs)
+    p_advance(p)
+
+    at.SetName(a, m, p_munch_member_name(p, "expected member name after '.'"))
+    p_fin(p, a, m)
+    ret m
+end
+
+func led_cast(p &: Ps, a &: at.Ast, lhs: int): int:
+    p_advance(p)
+    cast := mk_from_node(a, at.AST_CAST, lhs)
+    ps_set_a(a, cast, lhs)
+    at.SetTypeNode(a, cast, parse_type(p, a))
+    p_fin(p, a, cast)
+    ret cast
+end
+
+func led_ternary(p &: Ps, a &: at.Ast, lhs: int, w: int): int:
+    p_advance(p)
+    mut n := 0
+    if lhs != 0:
+        n = mk_from_node(a, at.AST_TERNARY, lhs)
+    else:
+        n = p_mk(p, a, at.AST_TERNARY)
+    end
+    ps_set_a(a, n, lhs)
+    ps_set_b(a, n, parse_expr_bp(p, a, 0))
+    p_expect(p, tok.TK_COLON, "':' in conditional expression 'cond ? a : b'")
+    ps_set_c(a, n, parse_expr_bp(p, a, bp_right(w)))
+    p_fin(p, a, n)
+    ret n
+end
+
+func led_assign(p &: Ps, a &: at.Ast, lhs: int, op: int, w: int): int:
+    p_advance(p)
+    mut n := 0
+    if lhs != 0:
+        n = mk_from_node(a, at.AST_ASSIGN, lhs)
+    else:
+        n = p_mk(p, a, at.AST_ASSIGN)
+    end
+    at.SetOp(a, n, op)
+    ps_set_a(a, n, lhs)
+    ps_set_b(a, n, parse_expr_bp(p, a, bp_right(w)))
+    p_fin(p, a, n)
+    ret n
+end
+
+func parse_led(p &: Ps, a &: at.Ast, lhs: int, op: int, w: int): int:
+    if op == tok.TK_LPAREN:
+        ret led_call(p, a, lhs)
+    end
+    if op == tok.TK_LBRACKET:
+        ret led_index(p, a, lhs)
+    end
+    if op == tok.TK_DOT:
+        ret led_member(p, a, lhs)
+    end
+    if op == tok.TK_KW_AS:
+        ret led_cast(p, a, lhs)
+    end
+    if op == tok.TK_QUESTION:
+        ret led_ternary(p, a, lhs, w)
+    end
+    if op == tok.TK_ASSIGN || op == tok.TK_PLUS_EQ || op == tok.TK_MINUS_EQ || op == tok.TK_STAR_EQ || op == tok.TK_SLASH_EQ || op == tok.TK_PERCENT_EQ || op == tok.TK_POWER_EQ || op == tok.TK_AMP_EQ || op == tok.TK_PIPE_EQ || op == tok.TK_CARET_EQ || op == tok.TK_SHL_EQ || op == tok.TK_SHR_EQ:
+        ret led_assign(p, a, lhs, op, w)
+    end
+    if op == tok.TK_PLUS_PLUS || op == tok.TK_MINUS_MINUS:
+        n := make_incdec(p, a, op, lhs, false)
+        t := p_peek(p)
+        mut nn := at.Get(a, n)
+        nn.end_line = t.end_line
+        nn.end_col = t.end_col
+        nn.end_index = t.end_index
+        at.Put(a, n, nn)
+        p_advance(p)
+        ret n
+    end
+    p_advance(p)
+    rhs := parse_expr_bp(p, a, bp_right(w))
+    ret make_binary(a, op, lhs, rhs)
+end
+
+func parse_expr_bp(p &: Ps, a &: at.Ast, min_bp: int): int:
+    if !p_recurse_enter(p, "expression nested too deeply"):
+        ret p_error_node(p, a)
+    end
+    mut lhs := parse_nud(p, a)
+    until true:
+        if p.panic:
+            break
+        end
+        op := p_peek(p).kind
+        w := bp_of(op)
+        if bp_left(w) == 0 || bp_left(w) < min_bp:
+            break
+        end
+        lhs = parse_led(p, a, lhs, op, w)
+    end
+    p_recurse_leave(p)
+    ret lhs
+end
+
+func parse_expr(p &: Ps, a &: at.Ast): int:
+    ret parse_expr_bp(p, a, 0)
+end

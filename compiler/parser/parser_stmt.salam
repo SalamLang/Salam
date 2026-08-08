@@ -1,0 +1,398 @@
+package parser
+
+import tok "../token.salam"
+import at "../ast.salam"
+
+// ===== parser_stmt.c =====
+
+func parse_cond_expr(p &: Ps, a &: at.Ast): int:
+    saved := p.no_struct_lit
+    p.no_struct_lit = true
+    e := parse_expr(p, a)
+    p.no_struct_lit = saved
+    ret e
+end
+
+func fill_block_body(p &: Ps, a &: at.Ast, n: int):
+    p_skip_terminators(p)
+    until !p_at(p, tok.TK_KW_END) && !p_at(p, tok.TK_KW_ELSE) && !p_at_eof(p):
+        p_skip_terminators(p)
+        if p_at(p, tok.TK_KW_END) || p_at(p, tok.TK_KW_ELSE) || p_at_eof(p):
+            break
+        end
+        s := parse_statement(p, a)
+        if s != 0:
+            at.AddChild(a, n, s)
+        end
+        if p.panic:
+            p_sync(p)
+        end
+    end
+end
+
+func parse_block(p &: Ps, a &: at.Ast): int:
+    p_rule(p, "block")
+    if !p_recurse_enter(p, "block nested too deeply"):
+        ret p_mk(p, a, at.AST_BLOCK)
+    end
+    n := p_mk(p, a, at.AST_BLOCK)
+    p_expect(p, tok.TK_COLON, "':' to open block")
+    fill_block_body(p, a, n)
+    p_expect(p, tok.TK_KW_END, "'end' to close block")
+    p_fin(p, a, n)
+    p_recurse_leave(p)
+    ret n
+end
+
+func parse_statement(p &: Ps, a &: at.Ast): int:
+    p_rule(p, "statement")
+    k := p_peek(p).kind
+    if k == tok.TK_KW_PRINT || k == tok.TK_KW_PRINTLN || k == tok.TK_KW_PRINTERR || k == tok.TK_KW_PRINTERRLN:
+        ret parse_print_stmt(p, a)
+    end
+    if k == tok.TK_KW_MUT:
+        n := parse_var_decl(p, a)
+        p_term(p)
+        ret n
+    end
+    if k == tok.TK_KW_CONST:
+        ret parse_const(p, a)
+    end
+    if k == tok.TK_KW_IF:
+        ret parse_if(p, a)
+    end
+    if k == tok.TK_KW_UNTIL:
+        ret parse_until(p, a)
+    end
+    if k == tok.TK_KW_EACH:
+        ret parse_each(p, a)
+    end
+    if k == tok.TK_KW_REPEAT:
+        ret parse_repeat(p, a)
+    end
+    if k == tok.TK_KW_MATCH:
+        ret parse_match(p, a)
+    end
+    if k == tok.TK_KW_RET:
+        ret parse_return(p, a)
+    end
+    if k == tok.TK_KW_DEFER:
+        ret parse_defer(p, a)
+    end
+    if k == tok.TK_KW_BREAK:
+        n := p_mk(p, a, at.AST_BREAK)
+        p_advance(p)
+        p_fin(p, a, n)
+        p_term(p)
+        ret n
+    end
+    if k == tok.TK_KW_CONTINUE:
+        n := p_mk(p, a, at.AST_CONTINUE)
+        p_advance(p)
+        p_fin(p, a, n)
+        p_term(p)
+        ret n
+    end
+    if k == tok.TK_IDENT:
+        m := p_ident_run_len(p)
+        after := p_peekn(p, m).kind
+        if after == tok.TK_COLON || after == tok.TK_COLON_ASSIGN:
+            n := parse_bare_var_decl(p, a)
+            p_term(p)
+            ret n
+        end
+        // SALAM_FALLTHROUGH to the expression-statement default.
+    end
+    e := parse_expr(p, a)
+    mut stmt := 0
+    if e != 0 && at.KindOf(a, e) == at.AST_ASSIGN:
+        stmt = e
+    else:
+        if e != 0:
+            stmt = mk_from_node(a, at.AST_EXPR_STMT, e)
+        else:
+            stmt = p_mk(p, a, at.AST_EXPR_STMT)
+        end
+        ps_set_a(a, stmt, e)
+    end
+    p_term(p)
+    ret stmt
+end
+
+func print_args_fully_parenthesized(p &: Ps): bool:
+    if !p_at(p, tok.TK_LPAREN):
+        ret false
+    end
+    mut depth := 0
+    mut idx := 0
+    until true:
+        k := p_peekn(p, idx).kind
+        if k == tok.TK_EOF:
+            ret false
+        end
+        if k == tok.TK_LPAREN:
+            depth += 1
+        else k == tok.TK_RPAREN:
+            depth -= 1
+            if depth == 0:
+                break
+            end
+        end
+        idx += 1
+    end
+    after := p_peekn(p, idx + 1).kind
+    ret after == tok.TK_STMT_END || after == tok.TK_KW_END || after == tok.TK_RBRACE || after == tok.TK_EOF
+end
+
+func parse_print_stmt(p &: Ps, a &: at.Ast): int:
+    k := p_peek(p).kind
+    call := p_mk(p, a, at.AST_CALL)
+    callee := p_mk(p, a, at.AST_IDENTIFIER)
+    at.SetName(a, callee, builtin_callable_name(k))
+    ps_set_a(a, call, callee)
+    p_advance(p)
+    p_fin(p, a, callee)
+    if print_args_fully_parenthesized(p):
+        p_error(p, "print arguments must not be wrapped in parentheses; remove them")
+    end
+    if !p_at(p, tok.TK_STMT_END) && !p_at(p, tok.TK_KW_END) && !p_at(p, tok.TK_RBRACE) && !p_at_eof(p):
+        mut go := true
+        until go:
+            at.AddChild(a, call, parse_expr(p, a))
+            go = p_match(p, tok.TK_COMMA)
+        end
+    end
+    p_fin(p, a, call)
+    stmt := mk_from_node(a, at.AST_EXPR_STMT, call)
+    ps_set_a(a, stmt, call)
+    p_term(p)
+    ret stmt
+end
+
+func parse_return(p &: Ps, a &: at.Ast): int:
+    p_rule(p, "return_stmt")
+    n := p_mk(p, a, at.AST_RETURN)
+    p_advance(p)
+    if !p_at(p, tok.TK_STMT_END) && !p_at(p, tok.TK_KW_END) && !p_at(p, tok.TK_KW_ELSE) && !p_at_eof(p):
+        ps_set_a(a, n, parse_expr(p, a))
+    end
+    p_fin(p, a, n)
+    p_term(p)
+    ret n
+end
+
+func parse_defer(p &: Ps, a &: at.Ast): int:
+    p_rule(p, "defer_stmt")
+    if !p_recurse_enter(p, "statement nested too deeply"):
+        ret p_mk(p, a, at.AST_DEFER)
+    end
+    n := p_mk(p, a, at.AST_DEFER)
+    p_advance(p)
+    ps_set_a(a, n, parse_statement(p, a))
+    p_fin(p, a, n)
+    p_recurse_leave(p)
+    ret n
+end
+
+func parse_if_tail(p &: Ps, a &: at.Ast): int:
+    if !p_recurse_enter(p, "if/else chain nested too deeply"):
+        ret p_mk(p, a, at.AST_IF)
+    end
+    n := p_mk(p, a, at.AST_IF)
+    ps_set_a(a, n, parse_cond_expr(p, a))
+    b := p_mk(p, a, at.AST_BLOCK)
+    ps_set_b(a, n, b)
+    p_expect(p, tok.TK_COLON, "':' after if condition")
+    fill_block_body(p, a, b)
+    p_fin(p, a, b)
+    p_skip_terminators(p)
+    if p_match(p, tok.TK_KW_ELSE):
+        p_match(p, tok.TK_KW_IF)
+        if !p_at(p, tok.TK_COLON):
+            ps_set_c(a, n, parse_if_tail(p, a))
+        else:
+            c := p_mk(p, a, at.AST_BLOCK)
+            ps_set_c(a, n, c)
+            p_expect(p, tok.TK_COLON, "':' after else")
+            fill_block_body(p, a, c)
+            p_expect(p, tok.TK_KW_END, "'end' to close if")
+            p_fin(p, a, c)
+        end
+    else:
+        p_expect(p, tok.TK_KW_END, "'end' to close if")
+    end
+    p_fin(p, a, n)
+    p_recurse_leave(p)
+    ret n
+end
+
+func parse_if(p &: Ps, a &: at.Ast): int:
+    p_rule(p, "if_stmt")
+    p_advance(p)
+    ret parse_if_tail(p, a)
+end
+
+func tk_is_pattern_literal(k: int): bool:
+    ret k == tok.TK_INT || k == tok.TK_FLOAT || k == tok.TK_STRING || k == tok.TK_TRIPLE_STRING || k == tok.TK_RAW_STRING || k == tok.TK_CHAR || k == tok.TK_UTF8_CHAR || k == tok.TK_KW_TRUE || k == tok.TK_KW_FALSE || k == tok.TK_KW_NULL
+end
+
+func parse_match_pattern(p &: Ps, a &: at.Ast): int:
+    pat := p_mk(p, a, at.AST_MATCH_PATTERN)
+    if tk_is_pattern_literal(p_peek(p).kind):
+        t := p_peek(p)
+        lit := p_mk(p, a, at.AST_LITERAL)
+        at.SetOp(a, lit, t.kind)
+        at.SetTokenValue(a, lit, t.value)
+        at.SetName(a, lit, t.lexeme)
+        p_advance(p)
+        p_fin(p, a, lit)
+        ps_set_a(a, pat, lit)
+    else p_at(p, tok.TK_IDENT):
+        line := p_peek(p).begin_line
+        idn := p_mk(p, a, at.AST_IDENTIFIER)
+        at.SetName(a, idn, p_peek(p).lexeme)
+        p_advance(p)
+        p_fin(p, a, idn)
+        ps_set_a(a, pat, idn)
+        if p_at(p, tok.TK_IDENT) && p_peek(p).begin_line == line:
+            at.SetName(a, pat, p_peek(p).lexeme)
+            p_advance(p)
+        end
+    else:
+        p_error(p, "expected a pattern (literal, identifier, or type name) in match arm")
+        ps_set_a(a, pat, p_error_node(p, a))
+    end
+    p_fin(p, a, pat)
+    ret pat
+end
+
+func parse_match_arm(p &: Ps, a &: at.Ast): int:
+    if !p_recurse_enter(p, "match arm nested too deeply"):
+        ret p_mk(p, a, at.AST_MATCH_ARM)
+    end
+    arm := p_mk(p, a, at.AST_MATCH_ARM)
+    if p_match(p, tok.TK_KW_ELSE):
+        at.SetOp(a, arm, tok.TK_KW_ELSE)
+    else:
+        mut go := true
+        until go:
+            at.AddChild(a, arm, parse_match_pattern(p, a))
+            go = p_match(p, tok.TK_COMMA)
+        end
+    end
+    is_block := p_at(p, tok.TK_COLON)
+    if is_block:
+        ps_set_b(a, arm, parse_block(p, a))
+    else:
+        p_expect(p, tok.TK_FAT_ARROW, "'=>' in match arm")
+        e := parse_expr(p, a)
+        mut blk := 0
+        mut es := 0
+        if e != 0:
+            blk = mk_from_node(a, at.AST_BLOCK, e)
+            es = mk_from_node(a, at.AST_EXPR_STMT, e)
+        else:
+            blk = p_mk(p, a, at.AST_BLOCK)
+            es = p_mk(p, a, at.AST_EXPR_STMT)
+        end
+        ps_set_a(a, es, e)
+        at.AddChild(a, blk, es)
+        ps_set_b(a, arm, blk)
+    end
+    p_fin(p, a, arm)
+    if !is_block:
+        p_term(p)
+    end
+    p_recurse_leave(p)
+    ret arm
+end
+
+func parse_match(p &: Ps, a &: at.Ast): int:
+    p_rule(p, "match_expr")
+    if !p_recurse_enter(p, "match nested too deeply"):
+        ret p_mk(p, a, at.AST_MATCH)
+    end
+    n := p_mk(p, a, at.AST_MATCH)
+    p_advance(p)
+    ps_set_a(a, n, parse_cond_expr(p, a))
+    p_expect(p, tok.TK_COLON, "':' after match subject")
+    p_skip_terminators(p)
+    until !p_at(p, tok.TK_KW_END) && !p_at_eof(p):
+        at.AddChild(a, n, parse_match_arm(p, a))
+        p_skip_terminators(p)
+        if p.panic:
+            p_sync(p)
+        end
+    end
+    p_expect(p, tok.TK_KW_END, "'end' to close match")
+    p_fin(p, a, n)
+    p_recurse_leave(p)
+    ret n
+end
+
+func parse_until(p &: Ps, a &: at.Ast): int:
+    p_rule(p, "until_stmt")
+    n := p_mk(p, a, at.AST_UNTIL)
+    p_advance(p)
+    ps_set_a(a, n, parse_cond_expr(p, a))
+    ps_set_b(a, n, parse_block(p, a))
+    p_fin(p, a, n)
+    ret n
+end
+
+/* Loop bounds stop before 'with' so the index binding stays visible: without
+ * this a member access would swallow it ('repeat box.count with i' parsing as
+ * the field 'count with i'). */
+func parse_repeat_bound(p &: Ps, a &: at.Ast): int:
+    saved := p.no_with_word
+    p.no_with_word = true
+    e := parse_cond_expr(p, a)
+    p.no_with_word = saved
+    ret e
+end
+
+func parse_repeat(p &: Ps, a &: at.Ast): int:
+    p_rule(p, "repeat_stmt")
+    n := p_mk(p, a, at.AST_REPEAT)
+    p_advance(p)
+    ps_set_a(a, n, parse_repeat_bound(p, a))
+    if p_at(p, tok.TK_KW_TO):
+        p_advance(p)
+        ps_set_c(a, n, parse_repeat_bound(p, a))
+    end
+    if p_at(p, tok.TK_KW_STEP):
+        p_advance(p)
+        if at.Get(a, n).c == 0:
+            p_error(p, "'by' in a repeat loop needs a 'to' bound before it")
+        end
+        ps_set_d(a, n, parse_repeat_bound(p, a))
+    end
+    if p_match(p, tok.TK_KW_WITH):
+        at.SetName(a, n, p_name(p, "expected an index variable name after 'with'"))
+    end
+    ps_set_b(a, n, parse_block(p, a))
+    p_fin(p, a, n)
+    ret n
+end
+
+func parse_each(p &: Ps, a &: at.Ast): int:
+    p_rule(p, "each_stmt")
+    n := p_mk(p, a, at.AST_EACH)
+    p_advance(p)
+    if p_match(p, tok.TK_LPAREN):
+        kn := p_mk(p, a, at.AST_IDENTIFIER)
+        at.SetName(a, kn, p_name(p, "expected a binding name in 'each (key, value)'"))
+        p_fin(p, a, kn)
+        ps_set_c(a, n, kn)
+        p_expect(p, tok.TK_COMMA, "',' between the two 'each' binding names")
+        at.SetName(a, n, p_name(p, "expected the value binding name in 'each (key, value)'"))
+        p_expect(p, tok.TK_RPAREN, "')' after the 'each' binding names")
+    else:
+        at.SetName(a, n, p_name(p, "expected a binding name after 'each'"))
+    end
+    p_expect(p, tok.TK_KW_IN, "'in' before the collection in an 'each' loop")
+    ps_set_a(a, n, parse_cond_expr(p, a))
+    ps_set_b(a, n, parse_block(p, a))
+    p_fin(p, a, n)
+    ret n
+end

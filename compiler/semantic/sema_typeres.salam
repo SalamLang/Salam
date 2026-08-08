@@ -1,0 +1,337 @@
+package semantic
+
+import str
+import co "../sal_core.salam"
+import tok "../token.salam"
+import at "../ast.salam"
+import i18 "../i18n.salam"
+
+// ===== sema_type.c =====
+
+// resolve_array_dim
+func resolve_array_dim(s &: Sema, a &: at.Ast, dim: int): i64:
+    if dim == 0:
+        ret 0 as i64
+    end
+    n := at.Get(a, dim)
+    sp := span_of(a, dim)
+    if n.kind == at.AST_LITERAL && n.value_kind == tok.TV_INT:
+        ret n.value_int as i64
+    end
+    if n.kind == at.AST_IDENTIFIER:
+        cs := scope_lookup(s, s.cur, n.name)
+        if cs != 0:
+            csv := sym_at(s, cs)
+            if csv.kind == SYM_CONST && csv.has_ival:
+                ret csv.ival
+            end
+        end
+        serr(s, 11, sp, i18.Tr("array size must be a constant integer"))
+        ret 0 as i64
+    end
+    if n.kind == at.AST_MEMBER && n.a != 0 && at.KindOf(a, n.a) == at.AST_IDENTIFIER:
+        pk := scope_lookup(s, s.cur, at.Get(a, n.a).name)
+        if pk != 0 && sym_at(s, pk).kind == SYM_PACKAGE:
+            mname := pkg_member_canon(s, a, pk, n.name, sp)
+            pkv := sym_at(s, pk)
+            cs2 := scope_lookup_local(s, pkv.members, mname)
+            if cs2 == 0:
+                serr(
+                    s, 16, sp, co.Format2(
+                        i18.Tr("package '%s' has no exported member '%s'"), co.ArgStr(pkv.name), co.ArgStr(mname)
+                    )
+                )
+                ret 0 as i64
+            end
+            c2 := sym_at(s, cs2)
+            if !c2.is_pub:
+                serr(
+                    s, 17, sp, co.Format2(
+                        i18.Tr("'%s' is not exported by package '%s' (mark it 'pub')"), co.ArgStr(mname),
+                        co.ArgStr(pkv.name)
+                    )
+                )
+                ret 0 as i64
+            end
+            if c2.kind == SYM_CONST && c2.has_ival:
+                ret c2.ival
+            end
+        end
+        serr(s, 11, sp, i18.Tr("array size must be a constant integer"))
+        ret 0 as i64
+    end
+    serr(s, 11, sp, i18.Tr("array size must be a constant integer"))
+    ret 0 as i64
+end
+
+// sema_resolve_type - AST type node -> TypeId. Mutates the node's name to
+// its canonical (English) form like the C, and decorates type_str.
+func sema_resolve_type(s &: Sema, a &: at.Ast, tnode: int): int:
+    if tnode == 0:
+        ret sema_ty(s, TY_VOID)
+    end
+    tn := at.Get(a, tnode)
+    sp := span_of(a, tnode)
+    mut base := 0
+
+    if tn.is_dyn:
+        iface := scope_lookup(s, s.cur, tn.name)
+        mut ok := iface != 0
+        if ok:
+            if sym_at(s, iface).kind != SYM_INTERFACE:
+                ok = false
+            end
+        end
+        if !ok:
+            serr(
+                s, 1, sp, co.Format1(
+                    i18.Tr("'%s' is not an interface (required after 'dyn')"), co.ArgStr(tn.name)
+                )
+            )
+            ret sema_err_ty(s)
+        end
+        mut dt := type_dyn(s, iface, tn.name)
+        mut di := tn.dims.len()
+        until di > 0:
+            di -= 1
+            dt = type_array(s, dt, resolve_array_dim(s, a, tn.dims.get(di)[0]))
+        end
+        if tn.is_pointer:
+            dt = type_ptr(s, dt)
+        end
+        ret dt
+    end
+
+    mut name := tn.name
+    dot := str.IndexOf(name, ".")
+    if dot >= 0:
+        // package-qualified type "pkg.Type" (C: char pname[64] truncation)
+        mut pl := dot
+        if pl > 63:
+            pl = 63
+        end
+        pname := str.Substr(name, 0, pl)
+        mut tname := str.Substr(name, dot + 1, str.Len(name) - dot - 1)
+        pk2 := scope_lookup(s, s.cur, pname)
+        mut pk2_ok := pk2 != 0
+        if pk2_ok:
+            if sym_at(s, pk2).kind != SYM_PACKAGE:
+                pk2_ok = false
+            end
+        end
+        if !pk2_ok:
+            serr(
+                s, 1, sp, co.Format2(
+                    i18.Tr("unknown package '%s' in type '%s'"), co.ArgStr(pname), co.ArgStr(name)
+                )
+            )
+            ret sema_err_ty(s)
+        end
+        tname = pkg_member_canon(s, a, pk2, tname, sp)
+        tsym := scope_lookup_local(s, sym_at(s, pk2).members, tname)
+        mut tks := 0 - 1
+        if tsym != 0:
+            tks = sym_at(s, tsym).kind
+        end
+        if tsym == 0 || (tks != SYM_STRUCT && tks != SYM_ENUM && tks != SYM_ALIAS):
+            serr(
+                s, 1, sp, co.Format2(
+                    i18.Tr("package '%s' has no exported type '%s'"), co.ArgStr(pname), co.ArgStr(tname)
+                )
+            )
+            ret sema_err_ty(s)
+        end
+        tsv := sym_at(s, tsym)
+        if !tsv.is_pub:
+            serr(
+                s, 17, sp, co.Format2(
+                    i18.Tr("'%s' is not exported by package '%s' (mark it 'pub')"), co.ArgStr(tname),
+                    co.ArgStr(pname)
+                )
+            )
+            ret sema_err_ty(s)
+        end
+        if tks == SYM_STRUCT && tsv.decl != 0 && at.TyparamCount(a, tsv.decl) > 0:
+            if tn.list.len() == 0:
+                serr(
+                    s, 1, sp, co.Format1(
+                        i18.Tr("generic type '%s' requires type arguments"), co.ArgStr(name)
+                    )
+                )
+                ret sema_err_ty(s)
+            end
+            save_cur := s.cur
+            save_gp := s.gen_pkg
+            pkm := sym_at(s, pk2).members
+            s.cur = pkm
+            s.gen_pkg = pkm
+            inst := g_instantiate_struct(s, a, tsv.decl, tn.list, sp)
+            s.cur = save_cur
+            s.gen_pkg = save_gp
+            if inst != 0:
+                base = sym_at(s, inst).ty
+            else:
+                base = sema_err_ty(s)
+            end
+            if tn.is_pointer:
+                base = type_ptr(s, base)
+            end
+            ret base
+        end
+        base = tsv.ty
+        if tn.is_pointer:
+            base = type_ptr(s, base)
+        end
+        ret base
+    end
+
+    if str.Len(name) > 0 && type_prim_kind_from_name(name, "") < 0:
+        orig := name
+        name = intrinsic_type_canon(local_canon(s, a, name, sp))
+        at.SetName(a, tnode, name)
+        if !tn.synthetic:
+            sema_check_intrinsic_type_lang(s, orig, sp)
+        end
+    end
+
+    if str.Len(name) > 0 && str.Equals(name, "func"):
+        mut ptypes := Vector {} as Vector<int>
+        repeat tn.list.len() with fi:
+            ptypes.push(sema_resolve_type(s, a, tn.list.get(fi)[0]))
+        end
+        mut ret_t := sema_ty(s, TY_VOID)
+        if tn.ty != 0:
+            ret_t = sema_resolve_type(s, a, tn.ty)
+        end
+        base = type_func_new(s, ret_t, ptypes)
+        ptypes.free()
+        if tn.is_extern:
+            mut bt := ty_at(s, base)
+            bt.length = 1 as i64
+            ty_put(s, base, bt)
+        end
+        if tn.is_pointer:
+            base = type_ptr(s, base)
+        end
+        sema_decorate(s, a, tnode, base)
+        ret base
+    end
+
+    mut pkk := 0 - 1
+    if str.Len(name) > 0:
+        pkk = type_prim_kind_from_name(name, "")
+    end
+
+    if str.Len(name) > 0 && str.Equals(name, "File"):
+        base = type_file(s)
+    else str.Len(name) > 0 && str.Equals(name, "Variant"):
+        if tn.list.len() < 2:
+            serr(
+                s, 1, sp, co.Format1(
+                    i18.Tr("'Variant' requires at least 2 type arguments (got %zu)"), co.ArgUint(tn.list.len() as u64)
+                )
+            )
+            base = sema_err_ty(s)
+        else:
+            mut members := Vector {} as Vector<int>
+            mut vn := tn.list.len()
+            if vn > 64:
+                vn = 64
+            end
+            repeat vn with vi:
+                m := sema_resolve_type(s, a, tn.list.get(vi)[0])
+                if m >= 0:
+                    if ty_at(s, m).kind == TY_VARIANT:
+                        serr(
+                            s, 1, sp, i18.Tr("'Variant' cannot contain another 'Variant' as a member")
+                        )
+                    end
+                end
+                members.push(m)
+            end
+            base = type_variant_new(s, members)
+            members.free()
+        end
+    else pkk >= 0:
+        base = type_prim(s, pkk)
+    else generic_template(s, a, name, SYM_STRUCT) != 0:
+        gt := generic_template(s, a, name, SYM_STRUCT)
+        gtv := sym_at(s, gt)
+        save_gp2 := s.gen_pkg
+        if gtv.home != 0:
+            s.gen_pkg = gtv.home
+        end
+        inst2 := g_instantiate_struct(s, a, gtv.decl, tn.list, sp)
+        s.gen_pkg = save_gp2
+        if inst2 != 0:
+            base = sym_at(s, inst2).ty
+        else:
+            base = sema_err_ty(s)
+        end
+    else:
+        mut sym := 0
+        if str.Len(name) > 0:
+            sym = scope_lookup(s, s.cur, name)
+        end
+        mut home := 0
+        if sym != 0:
+            home = sym_at(s, sym).home
+        end
+        if sym == 0 && str.Len(name) > 0:
+            sema_load_prelude(s, a)
+            if s.prelude != 0:
+                sym = scope_lookup_local(s, s.prelude, name)
+                home = s.prelude
+            end
+        end
+        mut handled := false
+        if sym != 0:
+            sv := sym_at(s, sym)
+            if sv.decl != 0 && at.TyparamCount(a, sv.decl) > 0:
+                handled = true
+                if tn.list.len() == 0:
+                    serr(
+                        s, 1, sp, co.Format1(
+                            i18.Tr("generic type '%s' requires type arguments"), co.ArgStr(name)
+                        )
+                    )
+                    base = sema_err_ty(s)
+                else:
+                    save_gp3 := s.gen_pkg
+                    if home != 0:
+                        s.gen_pkg = home
+                    end
+                    inst3 := g_instantiate_struct(s, a, sv.decl, tn.list, sp)
+                    s.gen_pkg = save_gp3
+                    if inst3 != 0:
+                        base = sym_at(s, inst3).ty
+                    else:
+                        base = sema_err_ty(s)
+                    end
+                end
+            else sv.kind == SYM_STRUCT || sv.kind == SYM_ENUM || sv.kind == SYM_ALIAS:
+                handled = true
+                base = sv.ty
+            end
+        end
+        if !handled:
+            nm := str.Len(name) > 0 ? name : "?"
+            serr(s, 1, sp, co.Format1(i18.Tr("unknown type '%s'"), co.ArgStr(nm)))
+            base = sema_err_ty(s)
+        end
+    end
+
+    mut ai := tn.dims.len()
+    until ai > 0:
+        ai -= 1
+        base = type_array(s, base, resolve_array_dim(s, a, tn.dims.get(ai)[0]))
+    end
+    if tn.is_slice:
+        base = type_slice(s, base)
+    end
+    if tn.is_pointer:
+        base = type_ptr(s, base)
+    end
+    sema_decorate(s, a, tnode, base)
+    ret base
+end

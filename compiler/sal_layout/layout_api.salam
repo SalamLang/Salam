@@ -1,0 +1,269 @@
+package layout
+
+import str
+import co "../sal_core.salam"
+import tok "../token.salam"
+import lg "../logger.salam"
+import dg "../diag.salam"
+import i18 "../i18n.salam"
+import lp "../langpack.salam"
+import at "../ast.salam"
+import cc "../condcomp.salam"
+import sm "../semantic/semantic.salam"
+
+// ===========================================================================
+// Public API (mirrors layout_expand.h + layout_gen.h; consumed by
+// driver/layout_build.c).
+// ===========================================================================
+
+// Constructor for Result - cross-package struct literals are a parse error
+// (salam/PORTING.md), so consumers build one through this instead of
+// `lo.Result {}`.
+pub func NewResult(): Result:
+    ret Result {}
+end
+
+// find_layout (driver/layout_build.c) / find_layout_block (layout_expand.c):
+// first AST_LAYOUT_BLOCK child of the program, 0 = none.
+pub func FindLayout(a &: at.Ast, program: int): int:
+    ret find_layout_block(a, program)
+end
+
+// layout_localize_names (layout_gen.c) - canonicalize element/attr
+// spellings through the i18n layout-word registry, recursively.
+pub func LocalizeNames(a &: at.Ast, node: int):
+    if node == 0:
+        ret
+    end
+    n := at.Get(a, node)
+    if n.kind == at.AST_LAYOUT_ELEMENT || n.kind == at.AST_LAYOUT_ATTR:
+        at.SetName(a, node, i18.LayoutWord(n.name))
+    end
+    repeat at.ChildCount(a, node) with i:
+        LocalizeNames(a, at.Child(a, node, i))
+    end
+end
+
+// layout_expand - component registration + include loading + expansion of
+// the program's layout block in place. Returns the error count (size_t).
+pub func Expand(
+    log: lg.Logger, pack: lp.Langpack, ct: cc.Table, a &: at.Ast, program: int, base_dir: str
+): int:
+    mut ex := LoExpand {}
+    defer ex.comp_name.free()
+    defer ex.comp_def.free()
+    defer ex.comp_dir.free()
+    defer ex.comp_mother.free()
+    defer ex.loaded_path.free()
+    defer ex.loaded_prog.free()
+    defer ex.loaded_dir.free()
+    mut deftab := ex.cctab
+    cc.TableFree(deftab)
+    ex.log = log
+    ex.pack = pack
+    ex.cctab = ct
+    lb := find_layout_block(a, program)
+    if lb == 0:
+        ret 0
+    end
+    collect(ex, a, program, base_dir, 0)
+    mut items := Vector {} as Vector<int>
+    mut none := LoFrame {}
+    defer none.names.free()
+    defer none.vals.free()
+    defer none.content.free()
+    expand_items(ex, a, items, lb, none, base_dir, 0)
+    mut lbn := at.Get(a, lb)
+    mut old := lbn.list
+    defer old.free()
+    lbn.list = items
+    at.Put(a, lb, lbn)
+    lg.Log(
+        log, lg.PH_DRIVER, lg.LOG_INFO, co.Format4(
+            "layout expand: %zu component%s, %zu included file%s", co.ArgUint(ex.comp_name.len() as u64),
+            co.ArgStr(plural_suffix(ex.comp_name.len())), co.ArgUint(ex.loaded_path.len() as u64),
+            co.ArgStr(plural_suffix(ex.loaded_path.len()))
+        )
+    )
+    errors := ex.errors
+    ret errors
+end
+
+// layout_generate - layout block AST -> Result (html/css/js/head + title/
+// lang/dir). `diag` collects the W002 "rendered as <div>" warnings.
+pub func Generate(
+    log: lg.Logger, diag &: dg.Engine, file: str, a &: at.Ast, layout_block: int, compact: bool
+): Result:
+    mut cx := LoCtx {}
+    defer cx.css_seen.free()
+    defer cx.cls_keys.free()
+    defer cx.cls_names.free()
+    cx.log = log
+    cx.file = file
+    cx.compact = compact
+    LocalizeNames(a, layout_block)
+    lg.Log(log, lg.PH_CODEGEN, lg.LOG_INFO, "generating layout output")
+
+    mut body_repeat := 1 as i64
+    repeat at.ChildCount(a, layout_block) with i:
+        iid := at.Child(a, layout_block, i)
+        item := at.Get(a, iid)
+        if item.kind != at.AST_LAYOUT_ATTR:
+            continue
+        end
+        v := val_str(a, item.a)
+        if str.Equals(item.name, "title"):
+            cx.title = v
+        else str.Equals(item.name, "lang"):
+            l := sm.LayoutDynValue("lang", i18.LayoutValue(v))
+            if str.Len(l) > 0:
+                cx.lang = l
+            end
+        else str.Equals(item.name, "dir"):
+            d := sm.LayoutDynValue("dir", i18.LayoutValue(v))
+            if str.Len(d) > 0:
+                cx.dir = d
+            end
+        else str.Equals(item.name, "repeat"):
+            if item.a != 0:
+                av := at.Get(a, item.a)
+                if av.kind == at.AST_LITERAL && av.value_kind == tok.TV_INT:
+                    r := av.value_int as i64
+                    body_repeat = r < 1 ? 1 as i64 : r
+                end
+            end
+        else str.Equals(item.name, "favicon"):
+            if compact:
+                cx.head += `<link rel="icon" href="` + html_escape(v) + `">`
+            else:
+                cx.head += `  <link rel="icon" href="` + html_escape(v) + "\">\n"
+            end
+        end
+    end
+
+    mut r0 := 0 as i64
+    until r0 < body_repeat:
+        repeat at.ChildCount(a, layout_block) with i2:
+            iid := at.Child(a, layout_block, i2)
+            item := at.Get(a, iid)
+            if item.kind == at.AST_LAYOUT_ATTR:
+                if str.Equals(item.name, "content"):
+                    html_line(cx, html_escape(val_str(a, item.a)))
+                else !str.Equals(item.name, "title") && !str.Equals(item.name, "lang") && !str.Equals(item.name, "dir") && !str.Equals(item.name, "repeat") && !str.Equals(item.name, "favicon"):
+                    lg.Log(
+                        log, lg.PH_CODEGEN, lg.LOG_TRACE, co.Format1(
+                            "ignoring document attribute '%s'", co.ArgStr(item.name)
+                        )
+                    )
+                end
+            else item.kind == at.AST_LAYOUT_ELEMENT:
+                gen_element_n(cx, diag, a, iid, "layout", "", false)
+            end
+        end
+        r0 += 1 as i64
+    end
+    mut r := Result {}
+    r.html = cx.html
+    r.css = cx.css
+    r.js = cx.js
+    r.head = cx.head
+    r.title = cx.title
+    r.lang = cx.lang
+    r.dir = cx.dir
+    lg.Log(
+        log, lg.PH_CODEGEN, lg.LOG_INFO, co.Format3(
+            "layout: %zu bytes HTML, %zu bytes CSS, %zu bytes JS", co.ArgUint(str.Len(r.html) as u64),
+            co.ArgUint(str.Len(r.css) as u64), co.ArgUint(str.Len(r.js) as u64)
+        )
+    )
+    ret r
+end
+
+// layout_document - full HTML document around a Result. "" hrefs play the
+// C NULL (no stylesheet/script link).
+pub func Document(
+    r: Result, inl: bool, css_href: str, js_href: str, compact: bool
+): str:
+    mut d := ""
+    if compact:
+        d += `<!doctype html><html lang="`
+        d += r.lang
+        d += `" dir="`
+        d += r.dir
+        d += `"><head><meta charset="utf-8">`
+        d += `<meta name="viewport" content="width=device-width, initial-scale=1">`
+        d += "<title>"
+        d += html_escape(r.title)
+        d += "</title>"
+        if str.Len(r.head) > 0:
+            d += r.head
+        end
+        if inl:
+            if str.Len(r.css) > 0:
+                d += "<style>"
+                d += r.css
+                d += "</style>"
+            end
+        else str.Len(css_href) > 0:
+            d += `<link rel="stylesheet" href="`
+            d += css_href
+            d += `">`
+        end
+        d += "</head><body>"
+        d += r.html
+        if inl:
+            if str.Len(r.js) > 0:
+                d += "<script>"
+                d += r.js
+                d += "</script>"
+            end
+        else str.Len(js_href) > 0:
+            d += `<script src="`
+            d += js_href
+            d += `"></script>`
+        end
+        d += "</body></html>"
+    else:
+        d += "<!doctype html>\n"
+        d += `<html lang="`
+        d += r.lang
+        d += `" dir="`
+        d += r.dir
+        d += "\">\n"
+        d += "<head>\n"
+        d += "  <meta charset=\"utf-8\">\n"
+        d += "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
+        d += "  <title>"
+        d += html_escape(r.title)
+        d += "</title>\n"
+        if str.Len(r.head) > 0:
+            d += r.head
+        end
+        if inl:
+            if str.Len(r.css) > 0:
+                d += "  <style>\n"
+                d += r.css
+                d += "  </style>\n"
+            end
+        else str.Len(css_href) > 0:
+            d += `  <link rel="stylesheet" href="`
+            d += css_href
+            d += "\">\n"
+        end
+        d += "</head>\n<body>\n"
+        d += r.html
+        if inl:
+            if str.Len(r.js) > 0:
+                d += "  <script>\n"
+                d += r.js
+                d += "  </script>\n"
+            end
+        else str.Len(js_href) > 0:
+            d += `  <script src="`
+            d += js_href
+            d += "\"></script>\n"
+        end
+        d += "</body>\n</html>\n"
+    end
+    ret d
+end

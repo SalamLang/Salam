@@ -1,0 +1,841 @@
+package semantic
+
+import str
+import os
+import co "../sal_core.salam"
+import at "../ast.salam"
+import lg "../logger.salam"
+import dg "../diag.salam"
+import cc "../condcomp.salam"
+import x "../xml.salam"
+
+// ===========================================================================
+// PUBLIC API (rule E088: every function from here on must be pub).
+// PascalCase per PORTING.md, C module prefixes dropped.
+// ===========================================================================
+
+// sema_run_cached's state initialization as a constructor (the C had no
+// sema_new; 5b's Run/RunCached will build on this). Seeds the primitive
+// type table and the sentinel scope/symbol/sig slots, creates the global
+// scope. lang "" defaults to "en" like the C.
+pub func New(lgr: lg.Logger, file: str, lang: str): Sema:
+    mut s := Sema {}
+    s.log = lgr
+    s.diag = dg.New(lgr, lg.PH_SEMANTIC)
+    s.file = file
+    if str.Len(lang) > 0:
+        s.lang = lang
+    else:
+        s.lang = "en"
+    end
+    repeat TY_F64 + 1 with k:
+        s.types.push(Type { kind = k })
+    end
+    s.scopes.push(Scope {})
+    s.syms.push(Symbol {})
+    s.sigs.push(Sig {})
+    g := scope_new(s, SCOPE_GLOBAL, 0)
+    mut gv := scope_at(s, g)
+    gv.lang = s.lang
+    scope_put(s, g, gv)
+    s.global = g
+    s.cur = g
+    s.dir = dir_of(file)
+    s.pkg = "main"
+    ret s
+end
+
+// Re-points one Sema at the next file of a build instead of building a new
+// one, so every imported package is loaded/parsed/analyzed once per build
+// rather than once per importer (the C gets this from sema_run_cached's
+// shared_pkg_cache: there symbols are arena pointers that outlive each
+// sema_t, here they are SymIds into syms/scopes/sigs, so the Sema itself is
+// what has to persist).
+//
+// KEEPS the symbol/type/scope storage, the package cache and the prelude.
+// RESETS everything per-file and installs a FRESH global scope, matching the
+// C where each sema_run has its own scope tree over a shared symbol arena.
+// Returns the new global ScopeId: the caller must hand it back via
+// RebindScope before codegen, which resolves names through s.global.
+//
+// The caller must also keep ONE at.Ast alive for the whole build - cached
+// package symbols hold NodeIds into the tree they were parsed from.
+pub func Rebind(sm &: Sema, file: str, lang: str): int:
+    sm.diag = dg.New(sm.log, lg.PH_SEMANTIC)
+    sm.file = file
+    if str.Len(lang) > 0:
+        sm.lang = lang
+    else:
+        sm.lang = "en"
+    end
+    g := scope_new(sm, SCOPE_GLOBAL, 0)
+    mut gv := scope_at(sm, g)
+    gv.lang = sm.lang
+    scope_put(sm, g, gv)
+    sm.global = g
+    sm.cur = g
+    sm.dir = dir_of(file)
+    sm.pkg = "main"
+    sm.self_type = TYPE_NONE
+    sm.cur_func = 0
+    sm.loop_depth = 0
+    sm.program = 0
+    sm.expected = TYPE_NONE
+    sm.gen_pkg = 0
+    sm.in_pkg = false
+    sm.relax_unused = false
+    sm.requal = false
+    sm.each_n = 0
+    sm.match_arm_depth = 0
+    sm.match_yield_expected = TYPE_NONE
+    sm.match_yield_active = false
+    sm.imported.clear()
+    sm.loading.clear()
+    sm.pending.clear()
+    sm.lam.clear()
+    sm.match_yield_collect.clear()
+    ret g
+end
+
+// Restores the per-file view recorded by Rebind. Codegen resolves top-level
+// names through s.global/s.pkg, so a shared Sema must be pointed back at the
+// right file's scope before generating that file's C.
+pub func RebindScope(sm &: Sema, scope: int, pkg: str, file: str):
+    sm.global = scope
+    sm.cur = scope
+    sm.pkg = pkg
+    sm.file = file
+    sm.dir = dir_of(file)
+end
+
+// Releases every vector owned by the Sema (no C equivalent; arena freed all).
+pub func Free(sm &: Sema):
+    repeat sm.types.len() with i0:
+        mut t := sm.types.get(i0)[0]
+        t.params.free()
+    end
+    sm.types.free()
+    sm.arrays_intern.free()
+    sm.ptrs_intern.free()
+    repeat sm.scopes.len() with i1:
+        mut sc := sm.scopes.get(i1)[0]
+        sc.symbols.free()
+    end
+    sm.scopes.free()
+    repeat sm.syms.len() with i2:
+        mut sy := sm.syms.get(i2)[0]
+        sy.overloads.free()
+        sy.generic_args.free()
+    end
+    sm.syms.free()
+    repeat sm.sigs.len() with i3:
+        mut sg := sm.sigs.get(i3)[0]
+        sg.params.free()
+    end
+    sm.sigs.free()
+    sm.imported.free()
+    sm.pkg_cache_paths.free()
+    sm.pkg_cache_syms.free()
+    sm.loading.free()
+    sm.pending.free()
+    sm.lam.free()
+    sm.match_yield_collect.free()
+    mut tbl := sm.cctab
+    cc.TableFree(tbl)
+    mut e := sm.diag
+    dg.Free(e)
+    sm.diag = e
+end
+
+// Installs the condcomp table (sema_run's `cc` parameter); frees the
+// default table built by the Sema literal.
+pub func SetCc(sm &: Sema, table: cc.Table):
+    mut old := sm.cctab
+    cc.TableFree(old)
+    sm.cctab = table
+    sm.has_cc = true
+end
+
+// --- types.c ---
+
+// type_prim
+pub func Prim(sm &: Sema, kind: int): int:
+    ret type_prim(sm, kind)
+end
+
+// type_array
+pub func ArrayOf(sm &: Sema, elem: int, length: i64): int:
+    ret type_array(sm, elem, length)
+end
+
+// type_slice
+pub func SliceOf(sm &: Sema, elem: int): int:
+    ret type_slice(sm, elem)
+end
+
+// type_ptr
+pub func PtrTo(sm &: Sema, pointee: int): int:
+    ret type_ptr(sm, pointee)
+end
+
+// type_struct
+pub func StructType(sm &: Sema, decl_sym: int, name: str): int:
+    ret type_struct(sm, decl_sym, name)
+end
+
+// type_enum
+pub func EnumType(sm &: Sema, decl_sym: int, name: str): int:
+    ret type_enum(sm, decl_sym, name)
+end
+
+// type_dyn
+pub func DynType(sm &: Sema, iface_decl: int, name: str): int:
+    ret type_dyn(sm, iface_decl, name)
+end
+
+// type_map
+pub func MapOf(sm &: Sema, key: int, val: int): int:
+    ret type_map(sm, key, val)
+end
+
+// type_map_iter
+pub func MapIterOf(sm &: Sema, key: int, val: int): int:
+    ret type_map_iter(sm, key, val)
+end
+
+// type_vec
+pub func VecOf(sm &: Sema, elem: int): int:
+    ret type_vec(sm, elem)
+end
+
+// type_file
+pub func FileType(sm &: Sema): int:
+    ret type_file(sm)
+end
+
+// type_func - params are TypeIds; the vector is copied (caller keeps it).
+pub func FuncType(sm &: Sema, ret_t: int, params: Vector<int>): int:
+    ret type_func_new(sm, ret_t, params)
+end
+
+// type_variant
+pub func VariantOf(sm &: Sema, members: Vector<int>): int:
+    ret type_variant_new(sm, members)
+end
+
+// type_variant_tag
+pub func VariantTag(sm &: Sema, variant: int, member: int): int:
+    ret type_variant_tag(sm, variant, member)
+end
+
+// type_prim_kind_from_name - lang "" = the C NULL (any language).
+pub func PrimKindFromName(name: str, lang: str): int:
+    ret type_prim_kind_from_name(name, lang)
+end
+
+pub func IsError(sm &: Sema, t: int): bool:
+    ret type_is_error(sm, t)
+end
+
+pub func IsInteger(sm &: Sema, t: int): bool:
+    ret type_is_integer(sm, t)
+end
+
+pub func IsFloat(sm &: Sema, t: int): bool:
+    ret type_is_float(sm, t)
+end
+
+pub func IsNumeric(sm &: Sema, t: int): bool:
+    ret type_is_numeric(sm, t)
+end
+
+pub func IsSigned(sm &: Sema, t: int): bool:
+    ret type_is_signed(sm, t)
+end
+
+// type_equiv
+pub func Equiv(sm &: Sema, a: int, b: int): bool:
+    ret type_equiv(sm, a, b)
+end
+
+// type_assignable
+pub func Assignable(sm &: Sema, dst: int, src: int): bool:
+    ret type_assignable(sm, dst, src)
+end
+
+// type_castable
+pub func Castable(sm &: Sema, dst: int, src: int): bool:
+    ret type_castable(sm, dst, src)
+end
+
+// type_common_arith - TYPE_NONE where the C returned NULL.
+pub func CommonArith(sm &: Sema, a: int, b: int): int:
+    ret type_common_arith(sm, a, b)
+end
+
+// type_to_string
+pub func ToString(sm &: Sema, t: int): str:
+    ret type_to_string(sm, t)
+end
+
+// Raw record reads (backends/tests; TypeAt clamps bad ids to TY_ERROR).
+pub func TypeAt(sm &: Sema, t: int): Type:
+    ret ty_at(sm, t)
+end
+
+pub func TypeCount(sm &: Sema): int:
+    ret sm.types.len()
+end
+
+// --- symbol.c ---
+
+// scope_new
+pub func NewScope(sm &: Sema, kind: int, parent: int): int:
+    ret scope_new(sm, kind, parent)
+end
+
+// symbol_new
+pub func NewSymbol(sm &: Sema, kind: int, name: str): int:
+    ret symbol_new(sm, kind, name)
+end
+
+// scope_define - 0 on success, the existing SymId on duplicate.
+pub func Define(sm &: Sema, sc: int, sym: int): int:
+    ret scope_define(sm, sc, sym)
+end
+
+// scope_lookup_local
+pub func LookupLocal(sm &: Sema, sc: int, name: str): int:
+    ret scope_lookup_local(sm, sc, name)
+end
+
+// scope_lookup
+pub func Lookup(sm &: Sema, sc: int, name: str): int:
+    ret scope_lookup(sm, sc, name)
+end
+
+// scope_lookup_where
+pub func LookupWhere(sm &: Sema, sc: int, name: str, where &: int): int:
+    ret scope_lookup_where(sm, sc, name, where)
+end
+
+pub func ScopeAt(sm &: Sema, sc: int): Scope:
+    ret scope_at(sm, sc)
+end
+
+pub func ScopePut(sm &: Sema, sc: int, v: Scope):
+    scope_put(sm, sc, v)
+end
+
+pub func SymAt(sm &: Sema, id: int): Symbol:
+    ret sym_at(sm, id)
+end
+
+pub func SymPut(sm &: Sema, id: int, v: Symbol):
+    sym_put(sm, id, v)
+end
+
+// func_sig_t allocation (arena_alloc in the C; sigs are built field by
+// field via SigAt/SigPut).
+pub func NewSig(sm &: Sema): int:
+    id := sm.sigs.len()
+    sm.sigs.push(Sig {})
+    ret id
+end
+
+pub func SigAt(sm &: Sema, id: int): Sig:
+    ret sig_at(sm, id)
+end
+
+pub func SigPut(sm &: Sema, id: int, v: Sig):
+    sig_put(sm, id, v)
+end
+
+// vec_push(&sym->overloads, sig)
+pub func AddOverload(sm &: Sema, sym: int, sig: int):
+    mut sy := sym_at(sm, sym)
+    sy.overloads.push(sig)
+    sym_put(sm, sym, sy)
+end
+
+// mangle_func - struct_name "" = the C NULL.
+pub func MangleFunc(
+    sm &: Sema, struct_name: str, fn_name: str, param_types: Vector<int>
+): str:
+    ret mangle_func(sm, struct_name, fn_name, param_types)
+end
+
+// impl_owner_key
+pub func ImplOwnerKey(typestr: str): str:
+    ret impl_owner_key(typestr)
+end
+
+// --- sema_internal.h / sema_util.c ---
+
+// SERR - msg is the final pre-formatted body (see serr).
+pub func Err(sm &: Sema, code: int, sp: co.SrcSpan, msg: str):
+    serr(sm, code, sp, msg)
+end
+
+// SWARN - suppressed while sm.requal, like the C macro.
+pub func Warn(sm &: Sema, code: int, sp: co.SrcSpan, msg: str):
+    swarn(sm, code, sp, msg)
+end
+
+// sema_ty
+pub func Ty(sm &: Sema, k: int): int:
+    ret sema_ty(sm, k)
+end
+
+// sema_err_ty
+pub func ErrTy(sm &: Sema): int:
+    ret sema_err_ty(sm)
+end
+
+// sema_decorate
+pub func Decorate(sm &: Sema, a &: at.Ast, n: int, t: int): int:
+    ret sema_decorate(sm, a, n, t)
+end
+
+// sema_vec_str
+pub func VecStrType(sm &: Sema, a &: at.Ast, sp: co.SrcSpan): int:
+    ret sema_vec_str(sm, a, sp)
+end
+
+// struct_sym_of
+pub func StructSymOf(sm &: Sema, t: int): int:
+    ret struct_sym_of(sm, t)
+end
+
+// intrinsic_type_canon
+pub func IntrinsicTypeCanon(name: str): str:
+    ret intrinsic_type_canon(name)
+end
+
+// intrinsic_method_canon
+pub func IntrinsicMethodCanon(name: str): str:
+    ret intrinsic_method_canon(name)
+end
+
+// sema_check_intrinsic_type_lang
+pub func CheckIntrinsicTypeLang(sm &: Sema, used: str, sp: co.SrcSpan):
+    sema_check_intrinsic_type_lang(sm, used, sp)
+end
+
+// sema_check_intrinsic_method_lang
+pub func CheckIntrinsicMethodLang(
+    sm &: Sema, used: str, canon: str, sp: co.SrcSpan
+):
+    sema_check_intrinsic_method_lang(sm, used, canon, sp)
+end
+
+// alias_for_lang ("" = the C NULL)
+pub func AliasForLang(aliases: Vector<str>, lang: str): str:
+    ret alias_for_lang(aliases, lang)
+end
+
+// scope_member_canon
+pub func ScopeMemberCanon(
+    sm &: Sema, a &: at.Ast, members: int, name: str, sp: co.SrcSpan
+): str:
+    ret scope_member_canon(sm, a, members, name, sp)
+end
+
+// pkg_member_canon
+pub func PkgMemberCanon(
+    sm &: Sema, a &: at.Ast, pk: int, name: str, sp: co.SrcSpan
+): str:
+    ret pkg_member_canon(sm, a, pk, name, sp)
+end
+
+// local_canon
+pub func LocalCanon(sm &: Sema, a &: at.Ast, name: str, sp: co.SrcSpan): str:
+    ret local_canon(sm, a, name, sp)
+end
+
+// sema_pure_fn
+pub func PureFn(sm &: Sema, a &: at.Ast): int:
+    ret sema_pure_fn(sm, a)
+end
+
+// --- sema_type.c ---
+
+// sema_resolve_type
+pub func ResolveType(sm &: Sema, a &: at.Ast, tnode: int): int:
+    ret sema_resolve_type(sm, a, tnode)
+end
+
+// --- builtins.c ---
+
+pub func BuiltinCount(): int:
+    ret K_SM_BUILTIN_COUNT
+end
+
+// salam_builtin_lookup - index, -1 = the C NULL.
+pub func BuiltinLookup(name: str): int:
+    ret builtin_lookup(name)
+end
+
+pub func BuiltinAt(i: int): Builtin:
+    mut b := Builtin {}
+    if i < 0 || i >= K_SM_BUILTIN_COUNT:
+        ret b
+    end
+    b.name = k_sm_builtin_names[i]
+    b.runtime = k_sm_builtin_runtime[i]
+    b.nargs = k_sm_builtin_nargs[i]
+    b.ret_type = k_sm_builtin_ret[i]
+    b.arg = k_sm_builtin_arg[i]
+    ret b
+end
+
+// salam_builtin_global_const
+pub func BuiltinGlobalConst(
+    a &: at.Ast, id: int, name: str, is_str &: bool
+): bool:
+    ret builtin_global_const(a, id, name, is_str)
+end
+
+// --- sema.c ---
+
+// salam_set_stdlib_root ("" = the C NULL: resolve automatically).
+pub func SetStdlibRoot(root: str):
+    set_stdlib_root_impl(root)
+end
+
+// salam_get_stdlib_root
+pub func GetStdlibRoot(): str:
+    ret get_stdlib_root()
+end
+
+// salam_find_sysroot - true and `out` set when a MinGW sysroot was found.
+pub func FindSysroot(triple: str, out &: str): bool:
+    sub := mingw_sysroot_subdir(triple)
+    if str.Len(sub) == 0:
+        ret false
+    end
+    env := os.Env("SALAM_SYSROOTS")
+    if str.Len(env) > 0:
+        cand := env + "/" + sub
+        if sysroot_looks_valid(cand):
+            out = cand
+            ret true
+        end
+    end
+    root := get_stdlib_root()
+    if str.Len(root) > 0:
+        cand2 := root + "/sysroots/" + sub
+        if sysroot_looks_valid(cand2):
+            out = cand2
+            ret true
+        end
+    end
+    mut exedir := ""
+    if get_exe_dir(exedir):
+        rel := [
+            "sysroots", "../share/salam/sysroots", "../lib/salam/sysroots"
+        ] as str[3]
+        repeat 3 with i:
+            cand3 := exedir + "/" + rel[i] + "/" + sub
+            if sysroot_looks_valid(cand3):
+                out = cand3
+                ret true
+            end
+        end
+    end
+    ret false
+end
+
+// salam_find_bundled_tool - looks for `name` next to the executable.
+pub func FindBundledTool(name: str, out &: str): bool:
+    if str.Len(name) == 0:
+        ret false
+    end
+    mut exedir := ""
+    if !get_exe_dir(exedir):
+        ret false
+    end
+    rel := [
+        "", "bin", "toolchain/bin", "../toolchain/bin", "../lib/salam/toolchain/bin", "mingw64/bin",
+        "llvm/bin", "tcc"
+    ] as str[8]
+    repeat 8 with i:
+        mut cand := exedir + "/" + name + K_SM_EXE_SUFFIX
+        if str.Len(rel[i]) > 0:
+            cand = exedir + "/" + rel[i] + "/" + name + K_SM_EXE_SUFFIX
+        end
+        if os.Exists(cand) && !os.IsDir(cand):
+            out = cand
+            ret true
+        end
+    end
+    ret false
+end
+
+// salam_resolve_import - always returns a candidate path (the C returned a
+// possibly nonexistent buffer; callers probe it).
+pub func ResolveImport(dir: str, spec: str): str:
+    ret resolve_import(dir, spec)
+end
+
+// salam_resolve_import_node - "" = the C NULL (unresolvable).
+pub func ResolveImportNode(a &: at.Ast, dir: str, imp: int, lang: str): str:
+    ret resolve_import_node(a, dir, imp, lang)
+end
+
+// salam_package_files - out[0] is main_path, out[1..] sorted; the caller
+// frees the vector.
+pub func PackageFiles(main_path: str): Vector<str>:
+    ret package_files(main_path)
+end
+
+// salam_merge_program
+pub func MergeProgram(a &: at.Ast, dst: int, srcprog: int):
+    merge_program(a, dst, srcprog)
+end
+
+// sema_run - the whole-program check entry. The Sema must come from New()
+// (plus SetCc for the condcomp table). Returns ok (= no errors); errors,
+// warnings and diagnostics stay readable through sm.diag, the symbol table
+// through sm.global + the 5a accessors, packages through PackageCount/At.
+pub func Run(sm &: Sema, a &: at.Ast, program: int): bool:
+    prog := at.Get(a, program)
+    sm.program = program
+    if str.Len(prog.name) > 0:
+        sm.pkg = prog.name
+    else:
+        sm.pkg = "main"
+    end
+    lg.Log(
+        sm.log, lg.PH_SEMANTIC, lg.LOG_INFO, "analyzing " + prog.list.len() + " top-level definitions"
+    )
+    load_imports(sm, a, program)
+    if !str.Equals(sm.pkg, "core"):
+        corep := resolve_import("", "core")
+        if str.Len(corep) > 0:
+            cimp := scratch_import_node(a)
+            _core := load_package(sm, a, corep, cimp)
+        end
+    end
+    sema_collect(sm, a, program)
+    sema_check_toplevel_order(sm, a, program)
+    sema_check_pass(sm, a, program)
+    if !sm.in_pkg && !sm.relax_unused:
+        sema_check_unused_funcs(sm, a)
+        sema_check_unused_imports(sm, a)
+    end
+    ecount := dg.ErrorCount(sm.diag)
+    wcount := dg.WarningCount(sm.diag)
+    lg.Log(
+        sm.log, lg.PH_SEMANTIC, lg.LOG_INFO, "analysis complete: " + ecount + " error" + plural_suffix(ecount) + ", " + wcount + " warning" + plural_suffix(wcount)
+    )
+    ret dg.ErrorCount(sm.diag) == 0
+end
+
+// sema_run_cached - PORT-NOTE: the C shared_pkg_cache pointer cannot cross
+// Sema instances here (SymIds/ScopeIds are Sema-local); the package cache
+// always lives in sm.pkg_cache_paths/syms, so this equals Run.
+pub func RunCached(sm &: Sema, a &: at.Ast, program: int): bool:
+    ret Run(sm, a, program)
+end
+
+// sema_result_t.packages - every load_package result, in load order.
+pub func PackageCount(sm &: Sema): int:
+    ret sm.pkg_cache_syms.len()
+end
+
+pub func PackageAt(sm &: Sema, i: int): int:
+    ret sm.pkg_cache_syms.get(i)[0]
+end
+
+// symbols_to_xml - <symbols> with diagnostics then the global symbol tree.
+pub func SymbolsToXml(w &: x.Writer, sm &: Sema):
+    x.Open(w, "symbols")
+    x.AttrInt(w, "errors", dg.ErrorCount(sm.diag) as i64)
+    x.AttrInt(w, "warnings", dg.WarningCount(sm.diag) as i64)
+    repeat dg.Count(sm.diag) with i:
+        d := dg.ItemAt(sm.diag, i)
+        x.Open(w, "diagnostic")
+        x.Attr(w, "severity", d.sev == dg.SEV_ERROR ? "error" : "warning")
+        x.AttrInt(w, "code", d.code as i64)
+        x.AttrInt(w, "line", d.span.begin.line as i64)
+        x.AttrInt(w, "col", d.span.begin.col as i64)
+        x.Attr(w, "message", d.body)
+        x.Close(w)
+    end
+    gsc := scope_at(sm, sm.global)
+    repeat gsc.symbols.len() with i2:
+        emit_symbol(w, sm, gsc.symbols.get(i2)[0])
+    end
+    x.Close(w)
+end
+
+// ===========================================================================
+// 5d public API - layout schema init (driver hook) + dce.c surface.
+// ===========================================================================
+
+// layout_schema_init (layout/schema.c) - loads the std layout schema
+// (elements/attributes/style/values) into the registry the layout checks
+// read. The C driver calls this once at startup with the stdlib root;
+// callers of Run that check layout blocks must do the same.
+pub func LayoutSchemaInit(root: str):
+    layout_schema_init(root)
+end
+
+// ---------------------------------------------------------------------------
+// Layout registry accessors (added for the layout-generator port,
+// salam/sal_layout.salam). The registry tables (layout/registry.c) live in
+// this module because sema_layout.c needs them; the C layout generator
+// linked against the same globals. Each accessor is a thin pub wrapper over
+// the private lay_* slice above - indices replace the C's def pointers
+// (-1 = C NULL), "" plays the C NULL string.
+// ---------------------------------------------------------------------------
+
+// layout_elem_lookup - element index, -1 = unknown.
+pub func LayoutElemLookup(name: str): int:
+    ret lay_elem_lookup(name)
+end
+
+// layout_elem_def_t.tag ("" = C NULL -> caller falls back to "div").
+pub func LayoutElemTag(i: int): str:
+    ret g_sm_lay_elem_tag.get(i)[0]
+end
+
+// layout_elem_def_t.type (LE_* value: 0 Single, 1 Mother, ...).
+pub func LayoutElemKind(i: int): int:
+    ret g_sm_lay_elem_type.get(i)[0]
+end
+
+// layout_attr_lookup - attribute index, -1 = unknown.
+pub func LayoutAttrLookup(name: str): int:
+    ret lay_attr_lookup(name)
+end
+
+// layout_attr_def_t.out ("" = C NULL).
+pub func LayoutAttrOut(i: int): str:
+    ret g_sm_lay_attr_out.get(i)[0]
+end
+
+// layout_attr_def_t.dest (LA_* value).
+pub func LayoutAttrDest(i: int): int:
+    ret g_sm_lay_attr_dest.get(i)[0]
+end
+
+// layout_attr_def_t.vtype (VT_* value).
+pub func LayoutAttrVtype(i: int): int:
+    ret g_sm_lay_attr_vtype.get(i)[0]
+end
+
+// layout_attr_def_t.allowed ("" = C NULL).
+pub func LayoutAttrAllowed(i: int): str:
+    ret g_sm_lay_attr_allowed.get(i)[0]
+end
+
+// registry.c dyn_value - canonical spelling for (group, v), "" = C NULL.
+// The layout generator uses it for the "dir"/"lang"/"unit" groups and for
+// VT_ENUM allowed-group mapping (layout_attr_value_map).
+pub func LayoutDynValue(group: str, v: str): str:
+    ret lay_dyn_value(group, v)
+end
+
+// layout_map_color - "" = C NULL (needed by layout_attr_value_map's
+// VT_COLOR arm in the generator).
+pub func LayoutMapColor(v: str): str:
+    ret lay_map_color(v)
+end
+
+// dce_reset - the C took the arena; the port's vectors own their storage.
+pub func DceReset():
+    g_sm_dce_edge_from.free()
+    g_sm_dce_edge_to.free()
+    g_sm_dce_roots.free()
+    g_sm_dce_reach.free()
+    g_sm_dce_edge_from = Vector {} as Vector<str>
+    g_sm_dce_edge_to = Vector {} as Vector<str>
+    g_sm_dce_roots = Vector {} as Vector<str>
+    g_sm_dce_reach = Vector {} as Vector<str>
+    g_sm_dce_enabled = false
+    g_sm_dce_init = true
+end
+
+// dce_enable
+pub func DceEnable():
+    g_sm_dce_enabled = true
+end
+
+// dce_disable
+pub func DceDisable():
+    g_sm_dce_enabled = false
+end
+
+// dce_enabled
+pub func DceEnabled(): bool:
+    ret g_sm_dce_enabled
+end
+
+// dce_mark_root
+pub func DceMarkRoot(pkg: str, fn: str):
+    dce_mark_root(pkg, fn)
+end
+
+// dce_note_call
+pub func DceNoteCall(
+    caller_pkg: str, caller_fn: str, callee_pkg: str, callee_fn: str
+):
+    dce_note_call(caller_pkg, caller_fn, callee_pkg, callee_fn)
+end
+
+// dce_finish - roots -> reachable closure over the recorded call edges.
+pub func DceFinish():
+    if !g_sm_dce_init:
+        ret
+    end
+    g_sm_dce_reach.free()
+    g_sm_dce_reach = Vector {} as Vector<str>
+    mut worklist := Vector {} as Vector<str>
+    defer worklist.free()
+    repeat g_sm_dce_roots.len() with i:
+        k := g_sm_dce_roots.get(i)[0]
+        if dce_key_in(g_sm_dce_reach, k):
+            continue
+        end
+        g_sm_dce_reach.push(k)
+        worklist.push(k)
+    end
+    until worklist.len() > 0:
+        cur := worklist.get(worklist.len() - 1)[0]
+        _p := worklist.pop()
+        repeat g_sm_dce_edge_from.len() with j:
+            if !str.Equals(g_sm_dce_edge_from.get(j)[0], cur):
+                continue
+            end
+            dst := g_sm_dce_edge_to.get(j)[0]
+            if dce_key_in(g_sm_dce_reach, dst):
+                continue
+            end
+            g_sm_dce_reach.push(dst)
+            worklist.push(dst)
+        end
+    end
+end
+
+// dce_reachable
+pub func DceReachable(pkg: str, fn: str): bool:
+    if !g_sm_dce_init:
+        ret true
+    end
+    ret dce_key_in(g_sm_dce_reach, dce_key(pkg, fn))
+end
+
+// sema_lvalue_mutable (sema_stmt.c) - thin wrapper over the write
+// classifier; the C declares it in sema_internal.h but nothing calls it,
+// so the port exposes it here for backend waves instead of as a dead
+// private helper.
+pub func LvalueMutable(
+    sm &: Sema, a &: at.Ast, n: int, is_lvalue &: bool
+): bool:
+    mut root := 0
+    v := sema_classify_write(sm, a, n, root)
+    is_lvalue = v != LV_NOT_LVALUE
+    ret v == LV_OK
+end

@@ -1,0 +1,157 @@
+package lexer
+
+import str
+import co "../sal_core.salam"
+import tok "../token.salam"
+
+// ===== lexer_number.c =====
+func scan_digits(L &: Lx, base: int, bad &: bool): int:
+    mut ndig := 0
+    mut prev_us := false
+    mut any := false
+    until true:
+        mut digit := false
+        if base != 0:
+            digit = is_base_digit(peek(L), base)
+        else:
+            digit = at_digit(L, 0) != 0
+        end
+        if digit:
+            if base != 0:
+                adv(L)
+            else:
+                _d := take_digit(L)
+            end
+            ndig += 1
+            prev_us = false
+            any = true
+        else peek(L) == 95: // '_'
+            if !any || prev_us:
+                bad = true
+            end
+            adv(L)
+            prev_us = true
+        else:
+            break
+        end
+    end
+    if prev_us:
+        bad = true
+    end
+    ret ndig
+end
+
+func scan_based_int(L &: Lx, b: co.SrcPos, bad &: bool):
+    adv(L) // '0'
+    base := advc(L) // 'x'/'b'/'o' (any case)
+    if scan_digits(L, base, bad) == 0:
+        error_at(L, b, "numeric literal has no digits after its base prefix")
+    end
+    if is_ident_cont(peek(L)):
+        error_at(L, b, "invalid digit in numeric literal")
+        skip_ident(L)
+        bad = true
+    end
+end
+
+func scan_decimal(L &: Lx, b: co.SrcPos, bad &: bool): bool:
+    mut is_float := false
+    _n1 := scan_digits(L, 0, bad)
+    if peek(L) == 46 && at_digit(L, 1) != 0: // '.'
+        is_float = true
+        adv(L)
+        _n2 := scan_digits(L, 0, bad)
+    end
+    if peek(L) == 101 || peek(L) == 69: // 'e' 'E'
+        is_float = true
+        adv(L)
+        if peek(L) == 43 || peek(L) == 45: // '+' '-'
+            adv(L)
+        end
+        if scan_digits(L, 0, bad) == 0:
+            error_at(L, b, "numeric literal has no exponent digits")
+        end
+    end
+    if is_alpha(peek(L)):
+        if peek(L) == 102: // 'f'
+            is_float = true
+        end
+        skip_ident(L)
+    end
+    ret is_float
+end
+
+// normalize_number - strip '_', fold Persian/Arabic digits to ASCII
+func normalize_number(text: str): str:
+    tlen := text.len()
+    mut out := str.NewBuilder()
+    mut i := 0
+    until i < tlen:
+        if byte_at(text, i) == 95: // '_'
+            i += 1
+            continue
+        end
+        mut val := 0
+        dlen := decimal_digit_at(text, i, tlen - i, val)
+        if dlen == 2:
+            str.BufAppendChar(out, 48 + val)
+            i += 2
+        else:
+            str.BufAppendChar(out, byte_at(text, i))
+            i += 1
+        end
+    end
+    r := str.BufStr(out)
+    str.BufFree(out)
+    ret r
+end
+
+func decode_number(clean: str, is_float: bool, overflow &: bool): tok.TokenValue:
+    overflow = false
+    if is_float:
+        ret tok.ValueFloat(clean.to_float()) // strtod(clean, NULL)
+    end
+    c0 := byte_at(clean, 0)
+    c1 := byte_at(clean, 1)
+    mut base := 10
+    mut di := 0
+    if c0 == 48 && (c1 == 120 || c1 == 88): // 0x
+        base = 16
+        di = 2
+    else c0 == 48 && (c1 == 98 || c1 == 66): // 0b
+        base = 2
+        di = 2
+    else c0 == 48 && (c1 == 111 || c1 == 79): // 0o
+        base = 8
+        di = 2
+    end
+    ret tok.ValueInt(parse_uint(clean, di, base, overflow))
+end
+
+// lx_scan_number
+func scan_number(L &: Lx):
+    start := L.pos
+    b := lx_pos(L)
+    mut bad := false
+    c1 := peek2(L, 1)
+    based := peek(L) == 48 && (
+        c1 == 120 || c1 == 88 || c1 == 98 || c1 == 66 || c1 == 111 || c1 == 79
+    )
+    mut is_float := false
+    if based:
+        scan_based_int(L, b, bad)
+    else:
+        is_float = scan_decimal(L, b, bad)
+    end
+    if bad:
+        error_at(L, b, "misplaced '_' separator in numeric literal")
+    end
+    text := lex_slice(L, start)
+    clean := normalize_number(text)
+    mut overflow := false
+    v := decode_number(clean, is_float, overflow)
+    if overflow:
+        error_at(L, b, "integer literal is too large for a 64-bit value")
+    end
+    emit_val(L, is_float ? tok.TK_FLOAT : tok.TK_INT, b, text, v)
+end

@@ -1,0 +1,314 @@
+package driver
+
+import os
+import io
+import str
+import tok "../token.salam"
+import src "../source.salam"
+import lg "../logger.salam"
+import dg "../diag.salam"
+import at "../ast.salam"
+import lp "../langpack.salam"
+import lx "../lexer/lexer.salam"
+import ps "../parser/parser.salam"
+import cc "../condcomp.salam"
+import sm "../semantic/semantic.salam"
+import cg "../codegen/codegen.salam"
+import lo "../sal_layout/sal_layout.salam"
+
+    // repl_readline - the non-tty fallback path ONLY (see the note above):
+    // print `prompt`, then read bytes up to '\n' or EOF via getchar(), trimming
+    // one trailing '\r'. `eof` mirrors the C returning NULL (true = no line was
+    // read at all, i.e. stdin was already at EOF).
+    func repl_readline(prompt: str, eof &: bool): str:
+        print prompt
+        mut c := getchar()
+        if c < 0:
+            eof = true
+            ret ""
+        end
+        mut sb := str.NewBuilder()
+        until c >= 0 && c != 10:
+            str.BufAppendChar(sb, c)
+            c = getchar()
+        end
+        mut r := str.BufStr(sb)
+        str.BufFree(sb)
+        rl := str.Len(r)
+        if rl > 0 && byte_at(r, rl - 1) == 13:
+            r = str.Substr(r, 0, rl - 1)
+        end
+        eof = false
+        ret r
+    end
+
+    func repl_ltrim(s: str): str:
+        n := str.Len(s)
+        mut i := 0
+        until i < n:
+            c := byte_at(s, i)
+            if c != 32 && c != 9:
+                break
+            end
+            i += 1
+        end
+        ret str.Substr(s, i, n - i)
+    end
+
+    func repl_is_def(line: str): bool:
+        t := repl_ltrim(line)
+        kws := [
+            "func ", "struct ", "enum ", "type ", "import ", "package ", "link ", "//"
+        ] as str[8]
+        mut hit := false
+        repeat 8 with i:
+            if str.StartsWith(t, kws[i]):
+                hit = true
+            end
+        end
+        ret hit
+    end
+
+    func repl_wants_run(line: str): bool:
+        ret str.StartsWith(repl_ltrim(line), "main()")
+    end
+
+    func repl_is_ws_byte(c: int): bool:
+        ret c == 32 || c == 9 || c == 10 || c == 13
+    end
+
+    // repl_block_depth - +1 per "opening" colon (attached to the previous
+    // token, followed by end-of-line/EOF - the C's own heuristic, ported
+    // as-is), -1 per `end` keyword token.
+    func repl_block_depth(pack: lp.Langpack, srctext: str): int:
+        quiet := lg.New(lg.LOG_OFF, false)
+        sf := repl_source(srctext)
+        mut toks := tok.StreamNew("<repl>")
+        mut depth := 0
+        if lx.Run(quiet, pack, sf, toks):
+            total := str.Len(srctext)
+            n := tok.StreamCount(toks)
+            repeat n with i:
+                t := tok.StreamAt(toks, i)
+                if t.kind == tok.TK_KW_END:
+                    depth -= 1
+                else t.kind == tok.TK_COLON:
+                    idx := t.begin_index as int
+                    lws := idx == 0 ? true : repl_is_ws_byte(byte_at(srctext, idx - 1))
+                    nx := idx + 1 < total ? byte_at(srctext, idx + 1) : 0
+                    nxt := nx == 0 || repl_is_ws_byte(nx)
+                    if !lws && nxt:
+                        depth += 1
+                    end
+                end
+            end
+        end
+        tok.StreamFree(toks)
+        ret depth
+    end
+
+    // repl_source - builds an in-memory "<repl>" SourceFile the same way the C
+    // hand-fills a local source_file_t (path="<repl>", text/len from the
+    // session buffer) since there is no real file to source.Load().
+    func repl_source(text: str): src.SourceFile:
+        mut sf := src.New()
+        sf.path = "<repl>"
+        sf.text = text
+        sf.len = str.Len(text)
+        ret sf
+    end
+
+    // repl_compile_pkg - compile one stdlib runtime package (mem/core/map/
+    // text/console/fs/thread) to salam_mod_<pkg>.{c,h} for repl_exec's link
+    // step. Returns false (no C files written) on any front-end failure,
+    // exactly like the C silently skipping a package it couldn't build.
+    func repl_compile_pkg(lgr: lg.Logger, pack: lp.Langpack, opt &: Dr, pkg: str): bool:
+        sm.SetStdlibRoot(opt.stdlib_path)
+        path := sm.ResolveImport("", pkg)
+        if str.Len(path) == 0:
+            ret false
+        end
+        mut sf := src.New()
+        if !src.Load(path, sf):
+            ret false
+        end
+        mut toks := tok.StreamNew(path)
+        if !lx.Run(lgr, pack, sf, toks):
+            tok.StreamFree(toks)
+            ret false
+        end
+        mut a := at.NewAst()
+        mut prog := 0
+        if !ps.Run(lgr, toks, a, prog):
+            tok.StreamFree(toks)
+            at.FreeAst(a)
+            ret false
+        end
+        tok.StreamFree(toks)
+        table := cc.TableBuild("", Vector {} as Vector<str>)
+        if !cc.PruneProgram(a, lgr, path, table, prog):
+            at.FreeAst(a)
+            ret false
+        end
+        mut s := sm.New(lgr, path, lp.Code(pack))
+        sm.SetCc(s, table)
+        sok := sm.Run(s, a, prog)
+        if !sok:
+            sm.Free(s)
+            at.FreeAst(a)
+            ret false
+        end
+        o := cg.Run(lgr, s, a, prog, pkg, false, false, path, lp.Entry(pack), "")
+        _w1 := os.WriteFile(scratch_dir() + "/salam_mod_" + pkg + ".c", o.c_src)
+        _w2 := os.WriteFile(scratch_dir() + "/salam_mod_" + pkg + ".h", o.h_src)
+        sm.Free(s)
+        at.FreeAst(a)
+        ret true
+    end
+
+    // repl_exec (":run" / a bare statement wrapped in `func main:`) - lex/
+    // parse/prune/sema/codegen `full_src` as "<repl>", write salam_mod__repl_.
+    // {c,h} + every runtime package repl_compile_pkg could build, invoke
+    // `cc_bin` to link them all into ./_salam_repl_, run it (its stdout goes
+    // straight to the real terminal, not captured), then delete every
+    // temporary file. Returns whether the COMPILE+LINK step succeeded (the
+    // child program's own exit code is not inspected, matching the C exactly).
+    func repl_exec(full_src: str, cc_bin: str, pack: lp.Langpack, opt &: Dr): bool:
+        lgr := lg.New(lg.LOG_ERROR, resolve_color(opt.color))
+        sf := repl_source(full_src)
+        lg.SetDiagSource(lgr, sf.text, sf.len, opt.diag_style, opt.diag_format)
+        mut toks := tok.StreamNew("<repl>")
+        mut ok := lx.Run(lgr, pack, sf, toks)
+        mut a := at.NewAst()
+        mut prog := 0
+        if ok:
+            ok = ps.Run(lgr, toks, a, prog)
+        end
+        tok.StreamFree(toks)
+        table := cc.TableBuild("", opt.defines)
+        if ok:
+            ok = cc.PruneProgram(a, lgr, sf.path, table, prog)
+        end
+        mut s := sm.New(lgr, sf.path, lp.Code(pack))
+        sm.SetCc(s, table)
+        mut sok := false
+        if ok:
+            sok = sm.Run(s, a, prog)
+        end
+        if !ok || !sok:
+            sm.Free(s)
+            at.FreeAst(a)
+            ret false
+        end
+
+        o := cg.Run(lgr, s, a, prog, "_repl_", false, false, sf.path, lp.Entry(pack), "")
+        scratch := scratch_dir()
+        repl_c := scratch + "/salam_mod__repl_.c"
+        repl_h := scratch + "/salam_mod__repl_.h"
+        _w1 := os.WriteFile(repl_c, o.c_src)
+        _w2 := os.WriteFile(repl_h, o.h_src)
+
+        rt_pkgs := ["mem", "core", "map", "text", "console", "fs", "thread"] as str[7]
+        mut have_pkg := Vector {} as Vector<bool>
+        defer have_pkg.free()
+        repeat 7 with i:
+            have_pkg.push(repl_compile_pkg(lgr, pack, opt, rt_pkgs[i]))
+        end
+
+        mut cmd := cc_bin + " -I. -I" + shell_arg(scratch) + " -o _salam_repl_"
+        if SALAM_OS_WINDOWS:
+            cmd += ".exe"
+        end
+        cmd += " " + shell_arg(repl_c)
+        repeat 7 with i2:
+            if have_pkg.get(i2)[0]:
+                cmd += " " + shell_arg(scratch + "/salam_mod_" + rt_pkgs[i2] + ".c")
+            end
+        end
+        if SALAM_OS_WINDOWS:
+            cmd += " -lmsvcrt -lws2_32 -lwinhttp"
+        else:
+            cmd += " -lm"
+        end
+        crc := system(cmd)
+        if crc == 0:
+            if SALAM_OS_WINDOWS:
+                _r := system(".\\_salam_repl_.exe")
+            else:
+                _r := system("./_salam_repl_")
+            end
+        end
+        _rm1 := os.Remove(repl_c)
+        _rm2 := os.Remove(repl_h)
+        repeat 7 with i3:
+            _rc1 := os.Remove(scratch + "/salam_mod_" + rt_pkgs[i3] + ".c")
+            _rc2 := os.Remove(scratch + "/salam_mod_" + rt_pkgs[i3] + ".h")
+        end
+        if SALAM_OS_WINDOWS:
+            _re := os.Remove("_salam_repl_.exe")
+        else:
+            _re := os.Remove("./_salam_repl_")
+        end
+        sm.Free(s)
+        at.FreeAst(a)
+        ret crc == 0
+    end
+
+    // repl_layout_exec - one "layout: ... end" block, rendered inline (compact
+    // = false, matching the C's `layout_generate(..., false)` +
+    // `layout_document(..., true, NULL, NULL, false)`).
+    func repl_layout_exec(src_text: str, pack: lp.Langpack, opt &: Dr):
+        lgr := lg.New(lg.LOG_ERROR, resolve_color(opt.color))
+        sf := repl_source(src_text)
+        lg.SetDiagSource(lgr, sf.text, sf.len, opt.diag_style, opt.diag_format)
+        mut toks := tok.StreamNew("<repl>")
+        mut ok := lx.Run(lgr, pack, sf, toks)
+        mut a := at.NewAst()
+        mut prog := 0
+        if ok:
+            ok = ps.Run(lgr, toks, a, prog)
+        end
+        tok.StreamFree(toks)
+        if ok:
+            table := cc.TableBuild("", opt.defines)
+            ok = cc.PruneProgram(a, lgr, sf.path, table, prog)
+            if ok:
+                mut s := sm.New(lgr, sf.path, lp.Code(pack))
+                sm.SetCc(s, table)
+                _sok := sm.Run(s, a, prog)
+                sm.Free(s)
+            end
+        end
+        if ok:
+            lb := lo.FindLayout(a, prog)
+            if lb != 0:
+                mut diag := dg.NewDefault(lg.LOG_ERROR, resolve_color(opt.color), lg.PH_CODEGEN)
+                r := lo.Generate(lgr, diag, sf.path, a, lb, false)
+                if !dg.HasErrors(diag):
+                    print lo.Document(r, true, "", "", false)
+                end
+                dg.Free(diag)
+            else:
+                io.EPrintln("error: no layout block found")
+            end
+        end
+        at.FreeAst(a)
+    end
+
+    // Quoted string literal for the tiny generated Salam source `Serve()`
+    // (below) writes out to drive `salam serve`.
+    func salam_str_literal(s: str): str:
+        mut b := str.NewBuilder()
+        defer str.BufFree(b)
+        str.BufAppendChar(b, 34) // '"'
+        n := str.Len(s)
+        repeat n with i:
+            c := str.Substr(s, i, 1)
+            if c == `\` || c == `"`:
+                str.BufAppendChar(b, 92) // '\'
+            end
+            str.BufAppend(b, c)
+        end
+        str.BufAppendChar(b, 34)
+        ret str.BufStr(b)
+    end

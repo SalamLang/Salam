@@ -1,0 +1,390 @@
+package semantic
+
+import str
+import co "../sal_core.salam"
+import at "../ast.salam"
+import i18 "../i18n.salam"
+
+// ===========================================================================
+// ===== sema_lit.c (5c) =====
+// ===========================================================================
+
+func finish_struct_lit(s &: Sema, a &: at.Ast, nid: int, ssym: int): int:
+    sp := span_of(a, nid)
+    ssv := sym_at(s, ssym)
+
+    repeat at.ChildCount(a, nid) with i:
+        fid := at.Child(a, nid, i)
+        fsp := span_of(a, fid)
+        fnm := scope_member_canon(s, a, ssv.members, at.Get(a, fid).name, fsp)
+        at.SetName(a, fid, fnm)
+        f := scope_lookup_local(s, ssv.members, fnm)
+        mut fty := TYPE_NONE
+        mut is_field := false
+        if f != 0:
+            fvv := sym_at(s, f)
+            if fvv.kind == SYM_FIELD:
+                is_field = true
+                fty = fvv.ty
+            end
+        end
+        mut vt := TYPE_NONE
+        if is_field && stamp_empty_intrinsic(s, a, at.Get(a, fid).a, fty):
+            vt = fty
+        else:
+            vt = sema_check_expr(s, a, at.Get(a, fid).a)
+        end
+        if !is_field:
+            serr(
+                s, 16, fsp, co.Format2(
+                    i18.Tr("struct '%s' has no field '%s'"), co.ArgStr(ssv.name), co.ArgStr(fnm)
+                )
+            )
+        else !type_assignable(s, fty, vt):
+            serr(
+                s, 2, fsp, co.Format3(
+                    i18.Tr("field '%s': cannot assign '%s' to '%s'"), co.ArgStr(fnm), co.ArgStr(type_to_string(s, vt)),
+                    co.ArgStr(type_to_string(s, fty))
+                )
+            )
+        else fty >= 0 && ty_at(s, fty).kind == TY_DYN:
+            nb := coerce_to_dyn(s, a, fty, at.Get(a, fid).a, vt)
+            mut fnode := at.Get(a, fid)
+            fnode.a = nb
+            at.Put(a, fid, fnode)
+        else fty >= 0 && ty_at(s, fty).kind == TY_VARIANT && vt >= 0 && ty_at(s, vt).kind != TY_VARIANT:
+            tag := type_variant_tag(s, fty, vt)
+            if tag >= 0:
+                nb2 := coerce_to_variant(s, a, fty, at.Get(a, fid).a, tag)
+                mut fnode2 := at.Get(a, fid)
+                fnode2.a = nb2
+                at.Put(a, fid, fnode2)
+            end
+        end
+        if f != 0:
+            _df := sema_decorate(s, a, fid, sym_at(s, f).ty)
+        end
+    end
+
+    msc := scope_at(s, ssv.members)
+    repeat msc.symbols.len() with i2:
+        f2 := sym_at(s, msc.symbols.get(i2)[0])
+        if f2.kind != SYM_FIELD:
+            continue
+        end
+        if f2.decl != 0 && at.Get(a, f2.decl).a != 0:
+            continue // field has a default value
+        end
+        mut provided := false
+        repeat at.ChildCount(a, nid) with j:
+            fj := at.Get(a, at.Child(a, nid, j))
+            if str.Len(fj.name) > 0 && str.Equals(fj.name, f2.name):
+                provided = true
+                break
+            end
+        end
+        if !provided:
+            serr(
+                s, 28, sp, co.Format2(
+                    i18.Tr("struct literal '%s' requires field '%s'"), co.ArgStr(ssv.name), co.ArgStr(f2.name)
+                )
+            )
+        end
+    end
+    ret sema_decorate(s, a, nid, ssv.ty)
+end
+
+func resolve_pkg_struct_lit(s &: Sema, a &: at.Ast, nid: int, name: str, dot: int): int:
+    sp := span_of(a, nid)
+    mut pl := dot
+    if pl > 63:
+        pl = 63
+    end
+    pname := str.Substr(name, 0, pl)
+    mut tname := str.Substr(name, dot + 1, str.Len(name) - dot - 1)
+    pk := scope_lookup(s, s.cur, pname)
+    mut pk_ok := pk != 0
+    if pk_ok:
+        if sym_at(s, pk).kind != SYM_PACKAGE:
+            pk_ok = false
+        end
+    end
+    if !pk_ok:
+        serr(
+            s, 1, sp, co.Format2(
+                i18.Tr("unknown package '%s' in struct literal '%s'"), co.ArgStr(pname), co.ArgStr(name)
+            )
+        )
+        ret 0
+    end
+    tname = pkg_member_canon(s, a, pk, tname, sp)
+    tsym := scope_lookup_local(s, sym_at(s, pk).members, tname)
+    mut tsym_ok := tsym != 0
+    if tsym_ok:
+        if sym_at(s, tsym).kind != SYM_STRUCT:
+            tsym_ok = false
+        end
+    end
+    if !tsym_ok:
+        serr(
+            s, 1, sp, co.Format2(
+                i18.Tr("package '%s' has no exported struct '%s'"), co.ArgStr(pname), co.ArgStr(tname)
+            )
+        )
+        ret 0
+    end
+    tsv := sym_at(s, tsym)
+    if !tsv.is_pub:
+        serr(
+            s, 17, sp, co.Format2(
+                i18.Tr("'%s' is not exported by package '%s' (mark it 'pub')"), co.ArgStr(tname), co.ArgStr(pname)
+            )
+        )
+        ret 0
+    end
+    at.SetName(a, nid, tname)
+    ret tsym
+end
+
+func check_struct_lit(s &: Sema, a &: at.Ast, nid: int): int:
+    sp := span_of(a, nid)
+    name0 := at.Get(a, nid).name
+    dot := str.IndexOf(name0, ".")
+    if dot >= 0:
+        s.expected = TYPE_NONE
+        ssym := resolve_pkg_struct_lit(s, a, nid, name0, dot)
+        if ssym == 0:
+            ret sema_decorate(s, a, nid, sema_err_ty(s))
+        end
+        ret finish_struct_lit(s, a, nid, ssym)
+    end
+    if str.Len(at.Get(a, nid).name) > 0:
+        orig := at.Get(a, nid).name
+        at.SetName(a, nid, intrinsic_type_canon(local_canon(s, a, orig, sp)))
+        sema_check_intrinsic_type_lang(s, orig, sp)
+    end
+    exp := s.expected
+    s.expected = TYPE_NONE
+    mut name := at.Get(a, nid).name
+    if exp >= 0 && ty_at(s, exp).kind == TY_STRUCT && str.Len(name) > 0 && (
+        generic_template(s, a, name, SYM_STRUCT) != 0 || scope_lookup(s, s.global, name) == 0
+    ):
+        name = ty_at(s, exp).name
+        at.SetName(a, nid, name)
+    end
+    if str.Len(name) == 0:
+        serr(s, 1, sp, i18.Tr("cannot infer the struct type of this literal"))
+        ret sema_decorate(s, a, nid, sema_err_ty(s))
+    end
+    ssym := scope_lookup(s, s.global, name)
+    mut is_struct := ssym != 0
+    if is_struct && sym_at(s, ssym).kind != SYM_STRUCT:
+        is_struct = false
+    end
+    if !is_struct && at.ChildCount(a, nid) == 0:
+        mut tmpl := generic_template(s, a, name, SYM_STRUCT)
+        if tmpl == 0:
+            sema_load_prelude(s, a)
+            if s.prelude != 0:
+                psym := scope_lookup_local(s, s.prelude, name)
+                if psym != 0:
+                    pv := sym_at(s, psym)
+                    if pv.kind == SYM_STRUCT && pv.decl != 0 && at.TyparamCount(a, pv.decl) > 0:
+                        tmpl = psym
+                    end
+                end
+            end
+        end
+        if tmpl != 0:
+            td := sym_at(s, tmpl).decl
+            mut targs := ""
+            repeat at.TyparamCount(a, td) with ti:
+                if ti > 0:
+                    targs = targs + ", "
+                end
+                targs = targs + at.Typaram(a, td, ti)
+            end
+            serr(
+                s, 71, sp, co.Format4(
+                    i18.Tr("cannot infer the type arguments of '%s'; write '%s {} as %s<%s>'"), co.ArgStr(name),
+                    co.ArgStr(name), co.ArgStr(name), co.ArgStr(targs)
+                )
+            )
+            ret sema_decorate(s, a, nid, sema_err_ty(s))
+        end
+    end
+    if !is_struct:
+        serr(
+            s, 1, sp, co.Format1(i18.Tr("unknown struct '%s'"), co.ArgStr(name))
+        )
+        ret sema_decorate(s, a, nid, sema_err_ty(s))
+    end
+    ret finish_struct_lit(s, a, nid, ssym)
+end
+
+func check_array_lit(s &: Sema, a &: at.Ast, nid: int): int:
+    sp := span_of(a, nid)
+    exp := s.expected
+    s.expected = TYPE_NONE
+    mut exp_elem := TYPE_NONE
+    if exp >= 0 && ty_at(s, exp).kind == TY_ARRAY:
+        exp_elem = ty_at(s, exp).elem
+    end
+    if at.ChildCount(a, nid) == 0:
+        if exp_elem >= 0:
+            ret sema_decorate(s, a, nid, type_array(s, exp_elem, 0 as i64))
+        end
+        serr(
+            s, 52, sp, i18.Tr("cannot infer the type of an empty array; write 'items := [] as Type[]'")
+        )
+        ret sema_decorate(s, a, nid, sema_err_ty(s))
+    end
+
+    if exp_elem >= 0 && ty_at(s, exp_elem).kind == TY_DYN:
+        repeat at.ChildCount(a, nid) with i:
+            eid := at.Child(a, nid, i)
+            t := sema_check_expr(s, a, eid)
+            nb := coerce_to_dyn(s, a, exp_elem, eid, t)
+            mut nv := at.Get(a, nid)
+            nv.list.set(i, nb)
+            at.Put(a, nid, nv)
+        end
+        ret sema_decorate(
+            s, a, nid, type_array(s, exp_elem, at.ChildCount(a, nid) as i64)
+        )
+    end
+    mut elem := sema_check_expr(s, a, at.Child(a, nid, 0))
+    mut i2 := 1
+    until i2 < at.ChildCount(a, nid):
+        t2 := sema_check_expr(s, a, at.Child(a, nid, i2))
+        if !type_equiv(s, elem, t2):
+            c := type_common_arith(s, elem, t2)
+            if c >= 0:
+                elem = c
+            else:
+                serr(s, 56, sp, i18.Tr("array elements have incompatible types"))
+            end
+        end
+        i2 += 1
+    end
+    ret sema_decorate(
+        s, a, nid, type_array(s, elem, at.ChildCount(a, nid) as i64)
+    )
+end
+
+// defined_within - name resolvable between `start` and `boundary` inclusive.
+func defined_within(s &: Sema, start: int, boundary: int, name: str): bool:
+    mut p := start
+    until p != 0:
+        if scope_lookup_local(s, p, name) != 0:
+            ret true
+        end
+        if p == boundary:
+            break
+        end
+        p = scope_at(s, p).parent
+    end
+    ret false
+end
+
+// record_capture - notes a captured outer variable on every enclosing
+// lambda that does not define it itself.
+func record_capture(s &: Sema, a &: at.Ast, id: int, t: int):
+    cts := type_to_string(s, t)
+    name := at.Get(a, id).name
+    mut li := s.lam.len() - 1
+    until li >= 0:
+        lc := s.lam.get(li)[0]
+        if defined_within(s, s.cur, lc.boundary, name):
+            break
+        end
+        caps := at.Get(a, lc.node).captures
+        mut seen := false
+        repeat caps.len() with i:
+            if str.Equals(at.Get(a, caps.get(i)[0]).name, name):
+                seen = true
+                break
+            end
+        end
+        if !seen:
+            cap := new_node_at(a, at.AST_IDENTIFIER, span_of(a, id))
+            mut cv := at.Get(a, cap)
+            cv.name = name
+            cv.type_str = cts
+            at.Put(a, cap, cv)
+            at.AddCapture(a, lc.node, cap)
+        end
+        li -= 1
+    end
+end
+
+// check_lambda - parameters get a fresh SCOPE_FUNC; the body is checked
+// with an inference-only Sig (a Sema-owned slot standing in for the C's
+// stack-local func_sig_t).
+func check_lambda(s &: Sema, a &: at.Ast, nid: int): int:
+    sc := scope_new(s, SCOPE_FUNC, s.cur)
+    saved_cur := s.cur
+    saved_func := s.cur_func
+    saved_self := s.self_type
+    saved_mad := s.match_arm_depth
+    saved_myexp := s.match_yield_expected
+    saved_myact := s.match_yield_active
+    s.cur = sc
+    s.self_type = TYPE_NONE
+    s.lam.push(LambdaCtx { boundary = sc, node = nid })
+    s.match_arm_depth = 0
+    s.match_yield_expected = TYPE_NONE
+    s.match_yield_active = false
+    mut nv := at.Get(a, nid)
+    nv.captures.clear()
+    at.Put(a, nid, nv)
+    mut ptypes := Vector {} as Vector<int>
+    defer ptypes.free()
+    repeat at.ChildCount(a, nid) with i:
+        pid := at.Child(a, nid, i)
+        param := at.Get(a, pid)
+        ps := symbol_new(s, SYM_PARAM, param.name)
+        pt := sema_resolve_type(s, a, param.ty)
+        mut psv := sym_at(s, ps)
+        psv.ty = pt
+        psv.is_ref = param.is_ref
+        sym_put(s, ps, psv)
+        at.SetTypeStr(a, pid, type_to_string(s, pt))
+        if scope_define(s, sc, ps) != 0:
+            serr(
+                s, 1, span_of(a, pid), co.Format1(
+                    i18.Tr("duplicate parameter '%s'"), co.ArgStr(param.name)
+                )
+            )
+        end
+        ptypes.push(pt)
+    end
+
+    sigid := s.sigs.len()
+    s.sigs.push(Sig {})
+    mut sg := sig_at(s, sigid)
+    sg.ret_type = sema_ty(s, TY_VOID)
+    sg.infer_ret = true
+    repeat ptypes.len() with pi:
+        sg.params.push(ptypes.get(pi)[0])
+    end
+    sig_put(s, sigid, sg)
+    s.cur_func = sigid
+    mut scv := scope_at(s, sc)
+    scv.fn = sigid
+    scope_put(s, sc, scv)
+    body := at.Get(a, nid).a
+    if body != 0:
+        sema_check_block(s, a, body)
+    end
+    lret := sig_at(s, sigid).ret_type
+    s.cur = saved_cur
+    s.cur_func = saved_func
+    s.self_type = saved_self
+    _lp := s.lam.pop()
+    s.match_arm_depth = saved_mad
+    s.match_yield_expected = saved_myexp
+    s.match_yield_active = saved_myact
+    ft := type_func_new(s, lret, ptypes)
+    ret sema_decorate(s, a, nid, ft)
+end

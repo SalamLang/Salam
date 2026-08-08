@@ -1,0 +1,209 @@
+package parser
+
+import str
+import tok "../token.salam"
+import at "../ast.salam"
+
+// ===== parser_ffi.c =====
+
+// "" stands in for the C NULL return.
+func canon_link_kind(s: str): str:
+    if str.Equals(s, "static"):
+        ret "static"
+    end
+    if str.Equals(s, "dynamic"):
+        ret "dynamic"
+    end
+    if str.Equals(s, "framework"):
+        ret "framework"
+    end
+    if str.Equals(s, "ایستا"):
+        ret "static"
+    end
+    if str.Equals(s, "پویا"):
+        ret "dynamic"
+    end
+    if str.Equals(s, "چارچوب"):
+        ret "framework"
+    end
+    ret ""
+end
+
+func parse_link_kind(p &: Ps): str:
+    if p_at(p, tok.TK_IDENT):
+        k := canon_link_kind(p_peek(p).lexeme)
+        if k.len() > 0:
+            p_advance(p)
+            ret k
+        end
+    end
+    ret ""
+end
+
+// try_link_directive - the kind is mandatory: a bare `link "x"` is still
+// recognized here (by the TK_STRING branch below, so it produces a
+// targeted error instead of a confusing "unknown identifier 'link'" from
+// falling through to statement parsing), but parse_link_kind returning ""
+// is now an error. Only one way to write this directive - mirrors
+// c/src/parser/parser_ffi.c's try_link_directive (try_link_attr / @link(...)
+// is gone from both sides, see that file's history).
+func try_link_directive(p &: Ps, a &: at.Ast, prog: int): bool:
+    if !(
+        p_at(p, tok.TK_IDENT) && str.Equals(p_peek(p).lexeme, "link") && (
+            p_peek2(p).kind == tok.TK_STRING || (
+                p_peek2(p).kind == tok.TK_IDENT && canon_link_kind(p_peek2(p).lexeme).len() > 0
+            )
+        )
+    ):
+        ret false
+    end
+    ln := p_mk(p, a, at.AST_LINK)
+    p_advance(p)
+    kind := parse_link_kind(p)
+    at.SetName(a, ln, kind)
+    if kind.len() == 0:
+        p_error(
+            p, `'link' requires an explicit kind: write 'link static "..."', 'link dynamic "..."', or 'link framework "..."'`
+        )
+    end
+    if p_at(p, tok.TK_STRING):
+        at.SetTokenValue(a, ln, p_peek(p).value)
+        p_advance(p)
+    else:
+        p_error(p, "expected a library-name string after 'link'")
+    end
+    p_term(p)
+    p_fin(p, a, ln)
+    at.AddChild(a, prog, ln)
+    ret true
+end
+
+func parse_extern_func(p &: Ps, a &: at.Ast): int:
+    n := p_mk(p, a, at.AST_FUNC_DEF)
+    mut n0 := at.Get(a, n)
+    n0.is_extern = true
+    at.Put(a, n, n0)
+    p_advance(p)
+    at.SetName(a, n, p_name(p, "expected external function name"))
+    p_expect(p, tok.TK_LPAREN, "'(' after external function name")
+    if !p_at(p, tok.TK_RPAREN):
+        mut go := true
+        until go:
+            if p_at(p, tok.TK_ELLIPSIS):
+                mut nv := at.Get(a, n)
+                nv.is_variadic = true
+                at.Put(a, n, nv)
+                p_advance(p)
+                break
+            end
+            param := p_mk(p, a, at.AST_PARAM)
+            pname := p_name(p, "expected parameter name")
+            at.SetName(a, param, pname)
+            if pname.len() == 0:
+                break
+            end
+            if p_match(p, tok.TK_AMP):
+                mut pn := at.Get(a, param)
+                pn.is_ref = true
+                at.Put(a, param, pn)
+            end
+            at.SetTypeNode(a, param, parse_type_anno(p, a))
+            p_fin(p, a, param)
+            at.AddChild(a, n, param)
+            go = p_match(p, tok.TK_COMMA)
+        end
+    end
+    p_expect(p, tok.TK_RPAREN, "')' after parameters")
+    mut rt := 0
+    if p_try_return_type(p, a, rt):
+        at.SetTypeNode(a, n, rt)
+    end
+
+    if p_at(p, tok.TK_COLON):
+        ps_set_a(a, n, parse_block(p, a))
+    else:
+        p_term(p)
+    end
+    p_fin(p, a, n)
+    ret n
+end
+
+func parse_extern_var(p &: Ps, a &: at.Ast): int:
+    n := p_mk(p, a, at.AST_VAR_DECL)
+    mut n0 := at.Get(a, n)
+    n0.is_extern = true
+    if p_at(p, tok.TK_KW_MUT):
+        n0.is_mut = true
+        at.Put(a, n, n0)
+        p_advance(p)
+    else p_at(p, tok.TK_IDENT) && str.Equals(p_peek(p).lexeme, "var"):
+        n0.is_mut = true
+        at.Put(a, n, n0)
+        p_advance(p)
+    else:
+        at.Put(a, n, n0)
+    end
+    at.SetName(a, n, p_name(p, "expected external variable name"))
+    at.SetTypeNode(a, n, parse_type_anno(p, a))
+    p_term(p)
+    p_fin(p, a, n)
+    ret n
+end
+
+func parse_extern_into(p &: Ps, a &: at.Ast, prog: int):
+    p_advance(p)
+    p_expect(p, tok.TK_COLON, "':' to open extern block")
+    p_skip_terminators(p)
+    until !p_at(p, tok.TK_KW_END) && !p_at_eof(p):
+        p_skip_terminators(p)
+        if p_at(p, tok.TK_KW_END) || p_at_eof(p):
+            break
+        end
+        mut d := 0
+        mut m_deprecated := false
+        mut m_pure := false
+        mut m_noret := false
+        if p_at(p, tok.TK_KW_DEPRECATED):
+            m_deprecated = true
+            p_advance(p)
+        end
+        if p_at(p, tok.TK_KW_PURE):
+            m_pure = true
+            p_advance(p)
+        else p_at(p, tok.TK_KW_NORET):
+            m_noret = true
+            p_advance(p)
+        end
+        if (m_deprecated || m_pure || m_noret) && !p_at(p, tok.TK_KW_FUNC):
+            p_error(p, "extern function modifiers ('deprecated', 'pure', 'noret') must appear in this order: 'deprecated pure|noret func'")
+        end
+        if p_at(p, tok.TK_KW_PUB) || p_at(p, tok.TK_KW_INLINE) || p_at(p, tok.TK_KW_NOINLINE):
+            p_error(p, "only 'deprecated', 'pure', or 'noret' may modify an extern function")
+        end
+        if p_at(p, tok.TK_KW_FUNC):
+            d = parse_extern_func(p, a)
+            if d != 0:
+                mut dn := at.Get(a, d)
+                dn.is_deprecated = m_deprecated
+                dn.is_pure = m_pure
+                dn.is_noret = m_noret
+                at.Put(a, d, dn)
+            end
+        else p_at(p, tok.TK_KW_MUT) || p_at(p, tok.TK_IDENT):
+            d = parse_extern_var(p, a)
+        else:
+            p_error(p, "expected 'func' or a variable in extern block")
+            if !p_at_eof(p):
+                p_advance(p)
+            end
+        end
+        if d != 0:
+            at.AddChild(a, prog, d)
+        end
+        if p.panic:
+            p_sync(p)
+        end
+    end
+    p_expect(p, tok.TK_KW_END, "'end' to close extern block")
+    p_term(p)
+end

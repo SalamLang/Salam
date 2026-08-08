@@ -22,9 +22,11 @@
 #include "driver/layout_build.h"
 #include "driver/web_build.h"
 #include "driver/serve_build.h"
+#include "driver/doc_build.h"
 #include "driver/debug_cmd.h"
 #include "driver/repl.h"
 #include "core/arena.h"
+#include "core/prof_self.h"
 #include "core/sb.h"
 #include "cli/options.h"
 #include "langpack/langpack.h"
@@ -199,7 +201,7 @@ static int driver_new(options_t *opt)
                              "نهاية\n";
     const char *content = fa ? fa_content : ar ? ar_content : en_content;
     char path[512];
-    sal_snprintf(path, sizeof path, "%s/main.salam", name);
+    sal_snprintf(path, sizeof path, "%s/%s", name, SALAM_PROJECT_FILE);
     FILE *f = fopen(path, "wb");
     if (!f) {
         fprintf(stderr, i18n_tr("salam: cannot write '%s': %s\n"), path, strerror(errno));
@@ -210,74 +212,16 @@ static int driver_new(options_t *opt)
     printf("Created project '%s':\n", name);
     printf("  %s\n", path);
     printf("\nNext steps:\n");
-    printf("  salam build %s --output=%s%s\n", path, name,
-#if defined(_WIN32)
-           ".exe");
-#else
-           "");
-#endif
+    /* salam.salam is the fixed project entry file, so a bare
+     * `salam build`/`salam run` inside the project just works. */
+    printf("  cd %s\n", name);
+    printf("  salam build\n");
     if (fa)
         printf("  (\xD8\xB2\xD8\xA8\xD8\xA7\xD9\x86 "
                "\xD9\x81\xD8\xA7\xD8\xB1\xD8\xB3\xDB\x8C)\n");
     else if (ar)
         printf("  (اللغة العربية)\n");
     return 0;
-}
-
-static void list_salam_files(arena_t *a, const char **out, int *n)
-{
-    *n = 0;
-#if defined(_WIN32)
-    struct _finddata_t fd;
-    intptr_t h = _findfirst("*.salam", &fd);
-    if (h == -1) return;
-    do {
-        if (!(fd.attrib & _A_SUBDIR) && *n < SALAM_MAX_INPUTS)
-            out[(*n)++] = arena_strdup(a, fd.name);
-    } while (_findnext(h, &fd) == 0);
-    _findclose(h);
-#else
-    DIR *d = opendir(".");
-    if (!d) return;
-    struct dirent *e;
-    while ((e = readdir(d)) != NULL && *n < SALAM_MAX_INPUTS) {
-        size_t L = strlen(e->d_name);
-        if (L > 6 && strcmp(e->d_name + L - 6, ".salam") == 0)
-            out[(*n)++] = arena_strdup(a, e->d_name);
-    }
-    closedir(d);
-#endif
-}
-
-static bool file_has_entry(arena_t *a, langpack_t *pack, const char *entry,
-                           const char *path)
-{
-    logger_t *quiet = logger_new(stderr, LOG_OFF, false);
-    source_file_t *src = source_load(a, path);
-    bool found = false;
-    if (src) {
-        token_stream_t *toks = NULL;
-        lexer_run(a, quiet, pack, src, &toks);
-        ast_node_t *program = NULL;
-        parser_run(a, quiet, toks, &program);
-        if (program) {
-            cc_table_t *cc = cc_table_build(a, NULL, NULL, 0);
-            cc_prune_program(a, quiet, path, cc, program);
-            {
-                size_t i = 0;
-                for (; i < program->list.len; i++) {
-                    ast_node_t *d = (ast_node_t *)program->list.data[i];
-                    if (d->kind == AST_FUNC_DEF && d->name &&
-                        strcmp(d->name, entry) == 0) {
-                        found = true;
-                        break;
-                    }
-                }
-            }
-        }
-    }
-    logger_free(quiet);
-    return found;
 }
 
 static int driver_run(options_t *opt)
@@ -287,6 +231,9 @@ static int driver_run(options_t *opt)
     arena_t *arena = arena_new(1 << 20);
     int rc = 0;
 
+    /* A bare `salam run` resolves the project's entry file here (so the
+     * "entry point:" note and any error carry this command's context); a
+     * directory input is resolved by driver_build below the same way. */
     if (opt->input_count == 0) {
         langpack_t *pack = langpack_load(opt->lang);
         if (!pack) {
@@ -295,51 +242,15 @@ static int driver_run(options_t *opt)
             logger_free(log);
             return 2;
         }
-        const char *entry = langpack_entry(pack);
-        const char *files[SALAM_MAX_INPUTS];
-        int nfiles = 0;
-        list_salam_files(arena, files, &nfiles);
-        if (nfiles == 0) {
-            LOG_E(log, PH_DRIVER,
-                  i18n_tr("no .salam files found in the current directory"));
+        const char *first = driver_resolve_dir_entry(arena, log, pack, ".");
+        if (!first) {
             arena_free(arena);
             logger_free(log);
             return 2;
         }
-        const char *entries[SALAM_MAX_INPUTS];
-        int nentries = 0;
-        {
-            int i = 0;
-            for (; i < nfiles; i++)
-                if (file_has_entry(arena, pack, entry, files[i]))
-                    entries[nentries++] = files[i];
-        }
-        if (nentries == 0) {
-            LOG_E(log, PH_DRIVER,
-                  i18n_tr("no entry point: none of the %d .salam file%s here defines a "
-                          "'%s' function"),
-                  nfiles, plural_suffix(nfiles), entry);
-            arena_free(arena);
-            logger_free(log);
-            return 2;
-        }
-        if (nentries > 1) {
-            LOG_E(log, PH_DRIVER, i18n_tr("ambiguous entry point: %d files define '%s':"),
-                  nentries, entry);
-            {
-                int i = 0;
-                for (; i < nentries; i++)
-                    fprintf(stderr, "    %s\n", entries[i]);
-            }
-            fprintf(stderr, "  run a specific one with: salam run <file.salam>\n");
-            arena_free(arena);
-            logger_free(log);
-            return 2;
-        }
-        opt->inputs[0] = entries[0];
+        opt->inputs[0] = first;
         opt->input_count = 1;
-        opt->input = entries[0];
-        LOG_I(log, PH_DRIVER, i18n_tr("entry point: %s"), entries[0]);
+        opt->input = first;
     }
 
     char tmp_exe[600] = {0};
@@ -413,26 +324,18 @@ static int driver_interp(options_t *opt)
     }
     const char *entry = langpack_entry(pack);
 
-    if (opt->input == NULL) {
-        const char *files[SALAM_MAX_INPUTS];
-        int nfiles = 0;
-        list_salam_files(arena, files, &nfiles);
-        const char *entries[SALAM_MAX_INPUTS];
-        int nentries = 0;
-        {
-            int i = 0;
-            for (; i < nfiles; i++)
-                if (file_has_entry(arena, pack, entry, files[i]))
-                    entries[nentries++] = files[i];
-        }
-        if (nentries != 1) {
-            LOG_E(log, PH_DRIVER, i18n_tr("no entry point: define a '%s' function"),
-                  entry);
+    /* Bare `salam exec` or `salam exec <dir>`: resolve the project's
+     * entry file (salam.salam when present, else the single .salam file
+     * defining `main`), same rule as `salam build`/`salam run`. */
+    if (opt->input == NULL || driver_path_is_dir(opt->input)) {
+        const char *first =
+            driver_resolve_dir_entry(arena, log, pack, opt->input ? opt->input : ".");
+        if (!first) {
             arena_free(arena);
             logger_free(log);
             return 2;
         }
-        opt->input = entries[0];
+        opt->input = first;
     }
     salam_set_stdlib_root(opt->stdlib_path);
     source_file_t *src = source_load(arena, opt->input);
@@ -458,7 +361,15 @@ static int driver_interp(options_t *opt)
         logger_free(log);
         return 1;
     }
-    interp_options_t io = {stdout, stderr, NULL, opt->lang, 0};
+    /* The interpreter's runaway guard is wall-clock, so a machine under load
+     * can trip it on a program that is merely slow rather than stuck. Let a
+     * caller widen or lift it: negative means no deadline at all. */
+    int timeout_ms = 0;
+    {
+        const char *e = getenv("SALAM_EXEC_TIMEOUT_MS");
+        if (e && e[0]) timeout_ms = atoi(e);
+    }
+    interp_options_t io = {stdout, stderr, NULL, opt->lang, timeout_ms, NULL, NULL};
     int rc = interp_run(arena, log, program, sr, entry, &io);
     arena_free(arena);
     logger_free(log);
@@ -624,6 +535,7 @@ static int driver_fmt(options_t *opt)
     c.fix_order = opt->fmt_fix_order;
     c.style.tabs = opt->fmt_tabs;
     c.style.width = opt->fmt_indent_width;
+    c.style.minify = opt->fmt_minify;
     if (opt->input_count == 0) {
         fmt_walk(&c, ".");
     } else {
@@ -671,7 +583,14 @@ static void driver_print_version(bool short_form)
     printf("built:   %s\n", SALAM_BUILD_DATE);
 }
 
-int driver_main(int argc, char **argv)
+/* Set by driver_main_inner() as soon as the options are parsed, so the
+ * driver_main() wrapper can emit the report on every exit path without
+ * threading the options through fifteen `return` statements. */
+static bool g_time_report = false;
+static int g_time_report_fmt = PROF_FMT_TABLE;
+static const char *g_time_trace = NULL;
+
+static int driver_main_inner(int argc, char **argv)
 {
 #if defined(_WIN32)
     SetConsoleOutputCP(CP_UTF8);
@@ -681,6 +600,12 @@ int driver_main(int argc, char **argv)
     options_t opt;
     if (!cli_parse(argc, argv, &opt)) {
         return 2;
+    }
+    if (opt.time_report || opt.time_trace) {
+        prof_self_enable(opt.time_trace != NULL);
+        g_time_report = opt.time_report;
+        g_time_report_fmt = opt.time_report_fmt;
+        g_time_trace = opt.time_trace;
     }
     i18n_set_lang(opt.lang);
     salam_set_stdlib_root(opt.stdlib_path);
@@ -697,6 +622,10 @@ int driver_main(int argc, char **argv)
         return driver_new(&opt);
     case CMD_FMT:
         return driver_fmt(&opt);
+    case CMD_DOC:
+        /* No input given -> the current directory, so a bare `salam doc`
+         * documents the tree it is run in. */
+        return driver_doc(&opt);
     case CMD_RUN:
         return opt.interp ? driver_interp(&opt) : driver_run(&opt);
     case CMD_REPL:
@@ -727,17 +656,13 @@ int driver_main(int argc, char **argv)
         }
         return driver_js(&opt);
     case CMD_LAYOUT_BUILD:
-        if (opt.input_count == 0) {
-            fprintf(stderr, "%s",
-                    i18n_tr("salam: 'layout build' requires at least one input file\n"));
-            return 2;
-        }
+        /* No input (or a directory) -> driver_layout_build() resolves the
+         * project's layout entry (salam.salam when present, else every
+         * .salam file here with a `layout` block), so an empty
+         * input_count is not an error here. */
         return driver_layout_build(&opt);
     case CMD_WEB:
-        if (opt.input_count == 0) {
-            fprintf(stderr, "%s", i18n_tr("salam: 'web' requires an input file\n"));
-            return 2;
-        }
+        /* Same resolution inside driver_web(), demanding a single page. */
         return driver_web(&opt);
     case CMD_SERVE:
         return driver_serve(&opt);
@@ -797,8 +722,27 @@ int driver_main(int argc, char **argv)
         if (rc == 0 && (!pok || !sr->ok)) rc = 1;
     }
     if (rc == 0 && !ok) rc = 1;
-cleanup:
+cleanup: {
+    arena_stats_t as = arena_stats(arena);
+    prof_self_count(TC_ARENA_BYTES, as.bytes_reserved);
+    prof_self_count(TC_ARENA_BLOCKS, as.blocks);
+    prof_self_count(TC_AST_NODES, ast_node_count());
+}
     arena_free(arena);
     logger_free(log);
+    return rc;
+}
+
+int driver_main(int argc, char **argv)
+{
+    int rc = driver_main_inner(argc, argv);
+    if (prof_self_on()) {
+        /* stderr, never stdout: `salam js`, `salam doc` and the --emit-*
+         * paths write their real output to stdout. */
+        if (g_time_report) prof_self_report(stderr, g_time_report_fmt);
+        if (g_time_trace && !prof_self_write_trace(g_time_trace))
+            fprintf(stderr, i18n_tr("salam: cannot write trace to '%s'\n"), g_time_trace);
+        prof_self_shutdown();
+    }
     return rc;
 }

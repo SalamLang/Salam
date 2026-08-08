@@ -17,7 +17,9 @@
 #include "driver/build.h"
 #include "driver/driver.h"
 #include "driver/llvm_build.h"
+#include "llvm/llvm_native.h"
 #include "core/arena.h"
+#include "core/prof_self.h"
 #include "core/sb.h"
 #include "logger/logger.h"
 #include "langpack/langpack.h"
@@ -26,6 +28,7 @@
 #include "parser/parser.h"
 #include "semantic/sema.h"
 #include "semantic/dce.h"
+#include "ast/ast.h"
 #include "codegen/codegen.h"
 #include "condcomp/condcomp.h"
 #include "i18n/i18n.h"
@@ -226,6 +229,42 @@ static bool write_file(logger_t *log, const char *path, const char *content)
     return true;
 }
 
+/* True when 'path' already holds exactly 'content'. Used to leave an unchanged
+   generated file (and therefore its .o) untouched on an incremental build. */
+static bool file_has_content(const char *path, const char *content)
+{
+    FILE *f = fopen(path, "rb");
+    size_t want = strlen(content);
+    size_t off = 0;
+    char buf[4096];
+    if (!f) return false;
+    while (off < want) {
+        size_t chunk = want - off;
+        size_t got;
+        if (chunk > sizeof(buf)) chunk = sizeof(buf);
+        got = fread(buf, 1, chunk, f);
+        if (got == 0 || memcmp(buf, content + off, got) != 0) {
+            fclose(f);
+            return false;
+        }
+        off += got;
+    }
+    /* Must be EOF: a file that starts with 'content' but is longer differs. */
+    {
+        bool eof = fread(buf, 1, 1, f) == 0;
+        fclose(f);
+        return eof;
+    }
+}
+
+static bool file_exists(const char *path)
+{
+    FILE *f = fopen(path, "rb");
+    if (!f) return false;
+    fclose(f);
+    return true;
+}
+
 static bool link_spec_is_path(const char *spec)
 {
     if (strpbrk(spec, "/\\")) return true;
@@ -311,7 +350,7 @@ static const char *plural_suffix(int n)
     return n == 1 ? "" : "s";
 }
 
-static bool path_is_dir(const char *p)
+bool driver_path_is_dir(const char *p)
 {
 #if defined(_WIN32)
     struct _stat st;
@@ -320,6 +359,86 @@ static bool path_is_dir(const char *p)
     struct stat st;
     return stat(p, &st) == 0 && S_ISDIR(st.st_mode);
 #endif
+}
+
+static bool path_is_file(const char *p)
+{
+#if defined(_WIN32)
+    struct _stat st;
+    return _stat(p, &st) == 0 && (st.st_mode & _S_IFDIR) == 0;
+#else
+    struct stat st;
+    return stat(p, &st) == 0 && S_ISREG(st.st_mode);
+#endif
+}
+
+const char *driver_project_entry_file(arena_t *a, const char *dir)
+{
+    char trimmed[1024];
+    sal_snprintf(trimmed, sizeof trimmed, "%s", dir);
+    size_t tlen = strlen(trimmed);
+    while (tlen > 1 && (trimmed[tlen - 1] == '/' || trimmed[tlen - 1] == '\\'))
+        trimmed[--tlen] = '\0';
+    char buf[1200];
+    if (strcmp(trimmed, ".") == 0)
+        sal_snprintf(buf, sizeof buf, "%s", SALAM_PROJECT_FILE);
+    else
+        sal_snprintf(buf, sizeof buf, "%s/%s", trimmed, SALAM_PROJECT_FILE);
+    if (!path_is_file(buf)) return NULL;
+    return arena_strdup(a, buf);
+}
+
+const char *driver_output_stem(arena_t *a, const char *path)
+{
+    const char *module = module_of(a, path);
+    if (strcmp(module, "salam") != 0) return module;
+    const char *dir = dir_of(a, path);
+    if (!dir[0]) dir = ".";
+    /* Resolve to an absolute path on the heap - a fixed local buffer is
+     * both unsafe (realpath() writes up to PATH_MAX and cannot be told the
+     * caller's size) and too small (Windows long paths reach ~32k), so
+     * realpath() allocates the exact answer and _fullpath(), which only
+     * fails with ERANGE when the result does not fit, is retried on a
+     * growing buffer. */
+#if defined(_WIN32)
+    char *abs = NULL;
+    {
+        size_t cap = 1024;
+        for (; cap <= 65536; cap *= 4) {
+            char *buf = (char *)malloc(cap);
+            if (!buf) break;
+            if (_fullpath(buf, dir, cap)) {
+                abs = buf;
+                break;
+            }
+            free(buf);
+        }
+    }
+#else
+    char *abs = realpath(dir, NULL);
+#endif
+    if (!abs) return module;
+    size_t L = strlen(abs);
+    while (L > 1 && (abs[L - 1] == '/' || abs[L - 1] == '\\'))
+        abs[--L] = '\0';
+    const char *base = abs;
+    {
+        const char *p = abs;
+        for (; *p; p++)
+            if (*p == '/' || *p == '\\') base = p + 1;
+    }
+    const char *stem = module;
+    if (base[0] && strcmp(base, ".") != 0 && strcmp(base, "..") != 0)
+        stem = arena_strdup(a, base);
+    free(abs);
+    return stem;
+}
+
+const char *driver_page_stem(arena_t *a, const char *path)
+{
+    const char *module = module_of(a, path);
+    if (strcmp(module, "salam") == 0) return "index";
+    return module;
 }
 
 /* driver.c's list_salam_files, generalized to an arbitrary directory (still
@@ -405,14 +524,61 @@ static bool file_has_entry(arena_t *a, langpack_t *pack, const char *entry,
     return found;
 }
 
-/* Shared "scan dir for exactly one file defining `entry`" used by driver_build
- * when no input was given (dir=".") or an explicit directory was passed
- * instead of a file. Logs its own error and returns NULL on failure (0 or >1
- * matches); returns the resolved path (arena-owned) on success. */
-static const char *resolve_dir_entry(arena_t *arena, logger_t *log, langpack_t *pack,
+/* Quiet lex+parse probe: does `path` contain a top-level `layout` block
+ * (a front-end DSL page rather than a program)? */
+static bool file_has_layout_block(arena_t *a, langpack_t *pack, const char *path)
+{
+    logger_t *quiet = logger_new(stderr, LOG_OFF, false);
+    source_file_t *src = source_load(a, path);
+    bool found = false;
+    if (src) {
+        token_stream_t *toks = NULL;
+        lexer_run(a, quiet, pack, src, &toks);
+        ast_node_t *program = NULL;
+        parser_run(a, quiet, toks, &program);
+        if (program) {
+            cc_table_t *cc = cc_table_build(a, NULL, NULL, 0);
+            cc_prune_program(a, quiet, path, cc, program);
+            size_t i = 0;
+            for (; i < program->list.len; i++) {
+                ast_node_t *d = (ast_node_t *)program->list.data[i];
+                if (d->kind == AST_LAYOUT_BLOCK) {
+                    found = true;
+                    break;
+                }
+            }
+        }
+    }
+    logger_free(quiet);
+    return found;
+}
+
+/* Shared "resolve the entry file of `dir`" used by driver_build/driver_run/
+ * driver_interp when no input was given (dir=".") or an explicit directory
+ * was passed instead of a file. The fixed project entry file salam.salam
+ * wins when present; otherwise the dir's top-level .salam files are scanned
+ * for exactly one defining `entry`. Logs its own error and returns NULL on
+ * failure; returns the resolved path (arena-owned) on success. */
+const char *driver_resolve_dir_entry(arena_t *arena, logger_t *log, langpack_t *pack,
                                      const char *dir)
 {
     const char *entry = langpack_entry(pack);
+    const char *proj = driver_project_entry_file(arena, dir);
+    if (proj) {
+        if (!file_has_entry(arena, pack, entry, proj)) {
+            LOG_E(log, PH_DRIVER,
+                  i18n_tr("project entry file '%s' does not define a '%s' function"),
+                  proj, entry);
+            if (file_has_layout_block(arena, pack, proj))
+                fprintf(stderr,
+                        "  this looks like a web layout project; build it with: "
+                        "salam web %s\n",
+                        proj);
+            return NULL;
+        }
+        LOG_I(log, PH_DRIVER, i18n_tr("entry point: %s"), proj);
+        return proj;
+    }
     const char *files[SALAM_MAX_INPUTS];
     int nfiles = 0;
     list_salam_files_in(arena, dir, files, &nfiles);
@@ -441,16 +607,206 @@ static const char *resolve_dir_entry(arena_t *arena, logger_t *log, langpack_t *
         int i = 0;
         for (; i < nentries; i++)
             fprintf(stderr, "    %s\n", entries[i]);
-        fprintf(stderr, "  run a specific one with: salam run <file.salam>\n");
+        fprintf(stderr, "  run a specific one with: salam run <file.salam>\n"
+                        "  or name the project's entry file '" SALAM_PROJECT_FILE
+                        "' to make it the project entry\n");
         return NULL;
     }
     LOG_I(log, PH_DRIVER, i18n_tr("entry point: %s"), entries[0]);
     return entries[0];
 }
 
+int driver_resolve_dir_layout(arena_t *arena, logger_t *log, langpack_t *pack,
+                              const char *dir, const char **out, int max_out, bool single)
+{
+    const char *proj = driver_project_entry_file(arena, dir);
+    if (proj) {
+        LOG_I(log, PH_DRIVER, i18n_tr("entry point: %s"), proj);
+        out[0] = proj;
+        return 1;
+    }
+    const char *files[SALAM_MAX_INPUTS];
+    int nfiles = 0;
+    list_salam_files_in(arena, dir, files, &nfiles);
+    if (nfiles == 0) {
+        LOG_E(log, PH_DRIVER, i18n_tr("no .salam files found in the current directory"));
+        return 0;
+    }
+    const char *pages[SALAM_MAX_INPUTS];
+    int npages = 0;
+    {
+        int i = 0;
+        for (; i < nfiles; i++)
+            if (file_has_layout_block(arena, pack, files[i])) pages[npages++] = files[i];
+    }
+    if (npages == 0) {
+        LOG_E(log, PH_DRIVER,
+              i18n_tr("no layout entry: none of the %d .salam file%s here has a "
+                      "'layout' block"),
+              nfiles, plural_suffix(nfiles));
+        fprintf(stderr, "  name the project's entry file '" SALAM_PROJECT_FILE
+                        "' to make it the project entry\n");
+        return 0;
+    }
+    if (single && npages > 1) {
+        LOG_E(log, PH_DRIVER,
+              i18n_tr("ambiguous layout entry: %d files have a "
+                      "'layout' block:"),
+              npages);
+        int i = 0;
+        for (; i < npages; i++)
+            fprintf(stderr, "    %s\n", pages[i]);
+        fprintf(stderr, "  build a specific one with: salam web <file.salam>\n"
+                        "  or name the project's entry file '" SALAM_PROJECT_FILE
+                        "' to make it the project entry\n");
+        return 0;
+    }
+    int n = npages < max_out ? npages : max_out;
+    {
+        int i = 0;
+        for (; i < n; i++)
+            out[i] = pages[i];
+    }
+    return n;
+}
+
+/*
+ * Backend choice for a native build.
+ *
+ * LLVM is preferred whenever this binary actually has it compiled in
+ * (WITH_LLVM=1), because it optimizes and, with WITH_LLD=1 plus an embedded
+ * sysroot, links in-process - no compiler or linker needed on the machine
+ * running salam. A binary built without LLVM has nothing to switch to and
+ * stays on the C backend.
+ *
+ * The C backend is not deprecated by this: --backend=c selects it, and so
+ * does any explicit --cc=, which names a C compiler and therefore can only
+ * mean the C path.
+ */
+/*
+ * Run a C compiler/linker command, falling back to a GCC-style @response
+ * file when the command line is too long for the platform to spawn.
+ *
+ * Windows caps a process command line at ~32 KB, and a link line naming one
+ * object per module blows through that well before the module count becomes
+ * unreasonable - a compiler laid out as 150+ files hits it, reported only as
+ * the shell's "The command line is too long." Both gcc and tcc accept
+ * @file, one argument per line.
+ *
+ * The threshold is deliberately below the real limit: `system()` goes
+ * through the shell, which needs headroom of its own.
+ */
+#define SALAM_CMDLINE_SAFE 30000
+
+static int run_cc_cmd(logger_t *log, const char *cmd, const char *builddir)
+{
+    size_t len = strlen(cmd);
+    const char *sp;
+    char rsp[1200];
+    FILE *f;
+    int rc;
+    if (len < SALAM_CMDLINE_SAFE || !builddir) return system(cmd);
+
+    /* Split at the first space: the program stays on the command line, every
+     * argument after it moves into the response file. */
+    sp = strchr(cmd, ' ');
+    if (!sp) return system(cmd);
+
+    sal_snprintf(rsp, sizeof rsp, "%s/link.rsp", builddir);
+    f = fopen(rsp, "wb");
+    if (!f) {
+        LOG_W(log, PH_DRIVER, "cannot write %s; passing the full command line", rsp);
+        return system(cmd);
+    }
+    {
+        /* One argument per line. Arguments were already shell-quoted into
+         * `cmd`; a response file needs no shell quoting, but keeping the
+         * quotes is harmless to both gcc and tcc and preserves paths with
+         * spaces. */
+        const char *p = sp + 1;
+        int inq = 0;
+        for (; *p; p++) {
+            if (*p == '"') inq = !inq;
+            if (*p == ' ' && !inq)
+                fputc('\n', f);
+            else
+                fputc(*p, f);
+        }
+        fputc('\n', f);
+    }
+    fclose(f);
+    {
+        sb_t rc_cmd;
+        const char *q = cmd;
+        sb_init(&rc_cmd);
+        for (; q < sp; q++)
+            sb_putc(&rc_cmd, *q);
+        sb_puts(&rc_cmd, " @");
+        sb_put_shell_arg(&rc_cmd, rsp);
+        LOG_I(log, PH_DRIVER, "command line too long (%lu bytes); using %s",
+              (unsigned long)len, rsp);
+        rc = system(sb_cstr(&rc_cmd));
+        sb_free(&rc_cmd);
+    }
+    return rc;
+}
+
+static bool build_use_llvm(const options_t *opt)
+{
+    if (!strcmp(opt->backend, "c")) return false;
+    if (!strcmp(opt->backend, "llvm")) return true;
+    return salam_llvm_native_available() != 0;
+}
+
 int driver_build(options_t *opt)
 {
+    /* A bare `salam build` (no inputs) or a directory passed as the sole
+     * input (`salam build .`, `salam build ../project/`) doesn't name a
+     * file - resolve it to the project's entry file (salam.salam when
+     * present, else the one .salam file defining `main`) BEFORE picking
+     * a backend: the LLVM path reads opt->input directly and must see
+     * the resolved file, not a directory, and the project-file rule has
+     * to hold for every backend equally. */
+    if (opt->input_count == 0 ||
+        (opt->input_count == 1 && driver_path_is_dir(opt->inputs[0]))) {
+        static char resolved[1024];
+        logger_t *rlog = logger_new(stderr, opt->log_level, resolve_color(opt->color));
+        arena_t *rarena = arena_new(1 << 20);
+        langpack_t *rpack = langpack_load(opt->lang);
+        const char *first = NULL;
+        if (!rpack)
+            LOG_E(rlog, PH_DRIVER, i18n_tr("unknown language pack '%s'"), opt->lang);
+        else
+            first = driver_resolve_dir_entry(rarena, rlog, rpack,
+                                             opt->input_count ? opt->inputs[0] : ".");
+        if (first) sal_snprintf(resolved, sizeof resolved, "%s", first);
+        logger_free(rlog);
+        arena_free(rarena);
+        if (!first) return 2;
+        opt->inputs[0] = resolved;
+        opt->input_count = 1;
+        opt->input = resolved;
+    }
+
     if (opt->llvm_target && opt->llvm_target[0]) return driver_llvm_build(opt);
+
+    if (build_use_llvm(opt)) {
+        int lrc = driver_llvm_build(opt);
+        /*
+         * SALAM_RC_LLVM_UNSUPPORTED means the module was emitted but is
+         * incomplete - the program uses a construct the LLVM backend does
+         * not lower yet. Falling back to the C backend keeps every program
+         * that builds today building, which is what makes defaulting to
+         * LLVM safe before backend parity is finished. Any other non-zero
+         * code is a real error (bad source, failed link) and is reported
+         * as-is rather than retried, so a genuine mistake is not hidden
+         * behind a second compile.
+         */
+        if (lrc != SALAM_RC_LLVM_UNSUPPORTED) return lrc;
+        if (!strcmp(opt->backend, "llvm")) return lrc;
+        fprintf(stderr, i18n_tr("salam: falling back to the C backend for this file "
+                                "(build with --backend=llvm to make this an error)\n"));
+    }
 
     logger_t *log = logger_new(stderr, opt->log_level, resolve_color(opt->color));
     arena_t *arena = arena_new(1 << 20);
@@ -462,43 +818,21 @@ int driver_build(options_t *opt)
         arena_free(arena);
         return 2;
     }
-    /* A bare `salam build` (no inputs) or a directory passed as the sole
-     * input (`salam build .`, `salam build ./compiler/`) doesn't name a
-     * file - scan that directory's top-level .salam files for the one that
-     * defines `main` and build that, same auto-detection driver_run()
-     * already does for a bare `salam run`. Without this, a directory input
-     * used to fall through to the per-file work-loop below, which reads it
-     * as a (nonexistent) source file instead of "build the program in this
-     * directory". */
-    if (opt->input_count == 0) {
-        const char *first = resolve_dir_entry(arena, log, pack, ".");
-        if (!first) {
-            logger_free(log);
-            arena_free(arena);
-            return 2;
-        }
-        opt->inputs[0] = first;
-        opt->input_count = 1;
-    } else if (opt->input_count == 1 && path_is_dir(opt->inputs[0])) {
-        const char *first = resolve_dir_entry(arena, log, pack, opt->inputs[0]);
-        if (!first) {
-            logger_free(log);
-            arena_free(arena);
-            return 2;
-        }
-        opt->inputs[0] = first;
-    }
-
     salam_set_stdlib_root(opt->stdlib_path);
 
 #if !defined(_WIN32)
     bundled_musl_tcc_t musl_tcc;
     musl_tcc.active = false;
 #endif
+    /* `--backend=auto` is a priority ladder: in-process LLVM first (handled
+     * by build_use_llvm above), else the C backend, which resolves its
+     * compiler clang > gcc > tcc. clang leads because it is the same
+     * codegen family as the LLVM backend, so an auto build degrades to the
+     * closest thing available rather than to a different toolchain. */
     if (opt->cc && strcmp(opt->cc, "tcc") == 0) {
         static char bundled_cc[1200];
-        if (salam_find_bundled_tool("gcc", bundled_cc, sizeof bundled_cc) ||
-            salam_find_bundled_tool("clang", bundled_cc, sizeof bundled_cc) ||
+        if (salam_find_bundled_tool("clang", bundled_cc, sizeof bundled_cc) ||
+            salam_find_bundled_tool("gcc", bundled_cc, sizeof bundled_cc) ||
             salam_find_bundled_tool("tcc", bundled_cc, sizeof bundled_cc)) {
             opt->cc = bundled_cc;
             LOG_I(log, PH_DRIVER, "using bundled C compiler: %s", opt->cc);
@@ -513,7 +847,15 @@ int driver_build(options_t *opt)
 
     const char *scratch = salam_scratch_dir();
     const char *cfiles[SALAM_MAX_INPUTS];
+    /* Source path each generated .c came from, so --time-report can charge the
+       host C compiler's time to the .salam file the user actually wrote. */
+    const char *csrc[SALAM_MAX_INPUTS];
     int ncfiles = 0;
+    /* Per-module object path, and whether that object must be rebuilt. A module
+       is clean only when its regenerated .c/.h are byte-identical to what is
+       already on disk, its .o exists, and the compile command has not changed. */
+    const char *ofiles[SALAM_MAX_INPUTS];
+    bool cdirty[SALAM_MAX_INPUTS];
     const char *generated[SALAM_MAX_INPUTS * 2 + 2];
     int ngen = 0;
     const char *first_module = NULL;
@@ -575,6 +917,10 @@ int driver_build(options_t *opt)
     const char *b_pkg[SALAM_MAX_INPUTS] = {0};
     const char *b_srcpath[SALAM_MAX_INPUTS] = {0};
     int nb = 0;
+    /* Shared across every work-list file so each imported package is loaded,
+       parsed and analyzed once per build instead of once per importer. */
+    vec_t pkg_cache;
+    vec_init(&pkg_cache);
 
     dce_reset(arena);
     dce_enable();
@@ -590,7 +936,9 @@ int driver_build(options_t *opt)
                     if (strcmp(work[j], path) == 0) dup = true;
             }
             if (dup) continue;
+            PROF_SCOPE_BEGIN(TP_SOURCE, path);
             source_file_t *src = source_load(arena, path);
+            PROF_SCOPE_END(TP_SOURCE);
             if (!src) {
                 LOG_E(log, PH_DRIVER, i18n_tr("cannot read source file '%s'"), path);
                 all_ok = false;
@@ -607,17 +955,24 @@ int driver_build(options_t *opt)
             if (!first_module) first_module = module;
             LOG_I(log, PH_DRIVER, "compiling %s -> %s.c", path, module);
             token_stream_t *toks = NULL;
+            PROF_SCOPE_BEGIN(TP_LEXER, path);
             bool lok = lexer_run(arena, log, modpack, src, &toks);
+            PROF_SCOPE_END(TP_LEXER);
+            prof_self_count(TC_TOKENS, (uint64_t)token_stream_count(toks));
             ast_node_t *program = NULL;
+            PROF_SCOPE_BEGIN(TP_PARSER, path);
             bool pok = parser_run(arena, log, toks, &program);
             if (!cc_prune_program(arena, log, path, cc, program)) pok = false;
+            PROF_SCOPE_END(TP_PARSER);
 
             {
                 const char *pfiles[SALAM_MAX_INPUTS];
                 int npf = salam_package_files(arena, path, pfiles, SALAM_MAX_INPUTS);
                 int pi = 1;
                 for (; pi < npf; pi++) {
+                    PROF_SCOPE_BEGIN(TP_SOURCE, pfiles[pi]);
                     source_file_t *psrc = source_load(arena, pfiles[pi]);
+                    PROF_SCOPE_END(TP_SOURCE);
                     if (!psrc) {
                         LOG_E(log, PH_DRIVER, i18n_tr("cannot read source file '%s'"),
                               pfiles[pi]);
@@ -626,16 +981,25 @@ int driver_build(options_t *opt)
                     }
                     logger_add_diag_source(log, pfiles[pi], psrc->text, psrc->len);
                     token_stream_t *ptoks = NULL;
+                    PROF_SCOPE_BEGIN(TP_LEXER, pfiles[pi]);
                     if (!lexer_run(arena, log, modpack, psrc, &ptoks)) lok = false;
+                    PROF_SCOPE_END(TP_LEXER);
+                    prof_self_count(TC_TOKENS, (uint64_t)token_stream_count(ptoks));
                     ast_node_t *pprog = NULL;
+                    PROF_SCOPE_BEGIN(TP_PARSER, pfiles[pi]);
                     if (!parser_run(arena, log, ptoks, &pprog)) pok = false;
                     if (!cc_prune_program(arena, log, pfiles[pi], cc, pprog)) pok = false;
+                    PROF_SCOPE_END(TP_PARSER);
                     salam_merge_program(arena, program, pprog);
                 }
             }
 
-            sema_result_t *sr =
-                sema_run(arena, log, program, src->path, langpack_code(modpack), cc);
+            PROF_SCOPE_BEGIN(TP_SEMANTIC, path);
+            sema_result_t *sr = sema_run_cached(arena, log, program, src->path,
+                                                langpack_code(modpack), cc, &pkg_cache);
+            PROF_SCOPE_END(TP_SEMANTIC);
+            if (sr && sr->global)
+                prof_self_count(TC_SYMBOLS, (uint64_t)sr->global->symbols.len);
             if (!lok || !pok || !sr->ok) {
                 all_ok = false;
                 continue;
@@ -657,7 +1021,15 @@ int driver_build(options_t *opt)
             const char *idir = dir_of(arena, path);
             {
                 size_t k = 0;
-                for (; k < program->list.len && nwork < SALAM_MAX_INPUTS; k++) {
+                /* Deliberately no `nwork < SALAM_MAX_INPUTS` guard on the loop
+                   itself. It ended the scan the moment work[] filled, which
+                   dropped every remaining `link` directive in this file and
+                   made the overflow report below unreachable - the body only
+                   runs while nwork is still under the limit, so its
+                   `nwork >= SALAM_MAX_INPUTS` arm could never be taken and the
+                   closure truncated as silently as it did before that report
+                   was added. Every push inside bounds-checks itself. */
+                for (; k < program->list.len; k++) {
                     ast_node_t *d = (ast_node_t *)program->list.data[k];
                     if (d->kind == AST_LINK) {
                         const char *lib = (d->value.kind == TV_STRING && d->value.as.s)
@@ -715,7 +1087,20 @@ int driver_build(options_t *opt)
                         for (; j < nwork; j++)
                             if (strcmp(work[j], ipath) == 0) known = true;
                     }
-                    if (!known) work[nwork++] = ipath;
+                    /* Every other push site bounds-checks; this one discovers
+                       imports and is the one that actually grows the list, so
+                       an import closure over SALAM_MAX_INPUTS files would run
+                       off the end of work[] rather than report a limit. */
+                    if (!known) {
+                        if (nwork >= SALAM_MAX_INPUTS) {
+                            LOG_E(log, PH_DRIVER,
+                                  "too many modules in the import graph (limit %d)",
+                                  SALAM_MAX_INPUTS);
+                            all_ok = false;
+                            break;
+                        }
+                        work[nwork++] = ipath;
+                    }
                 }
             }
             b_programs[wi] = program;
@@ -756,20 +1141,47 @@ int driver_build(options_t *opt)
                 program->list = kept;
             }
 
+            PROF_SCOPE_BEGIN(TP_CODEGEN, b_srcpath[wi]);
             codegen_output_t *out =
                 codegen_run(arena, log, program, sr, module, opt->safe, opt->debug_info,
                             b_srcpath[wi], modentry, opt->llvm_target);
+            PROF_SCOPE_END(TP_CODEGEN);
+            if (prof_self_on()) {
+                size_t fi = 0;
+                uint64_t nfuncs = 0;
+                for (; fi < program->list.len; fi++)
+                    if (((ast_node_t *)program->list.data[fi])->kind == AST_FUNC_DEF)
+                        nfuncs++;
+                prof_self_count(TC_FUNCS_EMITTED, nfuncs);
+            }
             size_t pfxlen = strlen(SALAM_MOD_PREFIX);
             size_t pathcap = strlen(scratch) + 1 + pfxlen + strlen(module) + 3;
             char *cpath = (char *)arena_alloc(arena, pathcap);
             char *hpath = (char *)arena_alloc(arena, pathcap);
             sal_snprintf(cpath, pathcap, "%s/%s%s.c", scratch, SALAM_MOD_PREFIX, module);
             sal_snprintf(hpath, pathcap, "%s/%s%s.h", scratch, SALAM_MOD_PREFIX, module);
-            if (!write_file(log, cpath, out->c_src) ||
-                !write_file(log, hpath, out->h_src)) {
-                all_ok = false;
-                continue;
+            {
+                char *opath = (char *)arena_alloc(arena, pathcap);
+                bool unchanged;
+                sal_snprintf(opath, pathcap, "%s/%s%s.o", scratch, SALAM_MOD_PREFIX,
+                             module);
+                PROF_SCOPE_BEGIN(TP_WRITE, b_srcpath[wi]);
+                /* Compare before writing: rewriting an identical file would only
+                   churn its timestamp and force a needless recompile. */
+                unchanged = !opt->force && file_exists(opath) &&
+                            file_has_content(cpath, out->c_src) &&
+                            file_has_content(hpath, out->h_src);
+                if (!unchanged && (!write_file(log, cpath, out->c_src) ||
+                                   !write_file(log, hpath, out->h_src))) {
+                    PROF_SCOPE_END(TP_WRITE);
+                    all_ok = false;
+                    continue;
+                }
+                PROF_SCOPE_END(TP_WRITE);
+                ofiles[ncfiles] = opath;
+                cdirty[ncfiles] = !unchanged;
             }
+            csrc[ncfiles] = b_srcpath[wi] ? b_srcpath[wi] : cpath;
             cfiles[ncfiles++] = cpath;
             generated[ngen++] = cpath;
             generated[ngen++] = hpath;
@@ -837,7 +1249,9 @@ int driver_build(options_t *opt)
                 sb_puts(&cmd, " -o ");
                 sb_put_shell_arg(&cmd, obj);
                 LOG_I(log, PH_DRIVER, "assembling: %s", sb_cstr(&cmd));
+                PROF_SCOPE_BEGIN(TP_CC, csrc[i]);
                 crc = system(sb_cstr(&cmd));
+                PROF_SCOPE_END(TP_CC);
                 sb_free(&cmd);
             }
         }
@@ -850,9 +1264,12 @@ int driver_build(options_t *opt)
     } else {
         const char *output = opt->output;
         if (!output) {
-            size_t ocap = strlen(first_module) + 5;
+            const char *stem = opt->input_count > 0
+                                   ? driver_output_stem(arena, opt->inputs[0])
+                                   : first_module;
+            size_t ocap = strlen(stem) + 5;
             char *o = (char *)arena_alloc(arena, ocap);
-            sal_snprintf(o, ocap, "%s.exe", first_module);
+            sal_snprintf(o, ocap, "%s.exe", stem);
             output = o;
         }
 #ifdef _WIN32
@@ -871,6 +1288,125 @@ int driver_build(options_t *opt)
         }
         char hostlibs[1024];
         hostlibs[0] = '\0';
+
+        /* AddressSanitizer is rejected before anything is compiled, not midway
+           through, so a failed build leaves no half-written object cache. */
+        if (opt->asan && use_tcc) {
+            LOG_E(log, PH_DRIVER,
+                  "tcc does not support AddressSanitizer; use --cc=gcc or --cc=clang");
+            if (!opt->keep_c) {
+                int i = 0;
+                for (; i < ngen; i++)
+                    remove(generated[i]);
+            }
+            logger_free(log);
+            arena_free(arena);
+            return 2;
+        }
+
+        /* Compile each module to its own .o, skipping those whose generated C
+           was byte-identical to the cached copy. The flags below must match the
+           ones the link command uses, so they are rebuilt from the same values. */
+        {
+            sb_t cflags;
+            sb_init(&cflags);
+#if !defined(_WIN32)
+            if (musl_tcc.active) {
+                sb_puts(&cflags, " -B");
+                sb_put_shell_arg(&cflags, musl_tcc.tcc_dir);
+                sb_puts(&cflags, " -nostdlib -static -I");
+                sb_put_shell_arg(&cflags, musl_tcc.tcc_dir);
+                sb_puts(&cflags, "/include -I");
+                sb_put_shell_arg(&cflags, musl_tcc.musl_dir);
+                sb_puts(&cflags, "/include");
+            }
+#endif
+            sb_puts(&cflags, opt_flag);
+            sb_puts(&cflags, lto_flag);
+            sb_puts(&cflags, " -I. -I");
+            sb_put_shell_arg(&cflags, scratch);
+            if (opt->debug_info && !use_tcc) sb_puts(&cflags, " -g");
+            if (opt->asan)
+                sb_puts(&cflags,
+                        " -fsanitize=address -fno-omit-frame-pointer -DSALAM_MEM_DEBUG");
+            {
+                int i = 0;
+                for (; i < nlinks; i++) {
+                    sb_puts(&cflags, " -DSALAM_LINK_");
+                    {
+                        const char *p = links[i];
+                        for (; *p; p++) {
+                            char c = *p;
+                            if (c >= 'a' && c <= 'z')
+                                c = (char)(c - 'a' + 'A');
+                            else if (!((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')))
+                                c = '_';
+                            sb_putc(&cflags, c);
+                        }
+                    }
+                }
+            }
+
+            /* Cached objects were built with the previous flag set; if it moved
+               (--release, -g, --asan, a new link directive, a different cc) every
+               object is stale regardless of whether its source changed. */
+            {
+                size_t sigcap = strlen(scratch) + 32;
+                char *sigpath = (char *)arena_alloc(arena, sigcap);
+                sb_t sig;
+                sb_init(&sig);
+                sb_puts(&sig, opt->cc);
+                sb_puts(&sig, sb_cstr(&cflags));
+                sal_snprintf(sigpath, sigcap, "%s/salam_build.flags", scratch);
+                if (!file_has_content(sigpath, sb_cstr(&sig))) {
+                    int i = 0;
+                    for (; i < ncfiles; i++)
+                        cdirty[i] = true;
+                    write_file(log, sigpath, sb_cstr(&sig));
+                }
+                sb_free(&sig);
+            }
+
+            {
+                int i = 0;
+                int nrebuilt = 0;
+                for (; i < ncfiles && crc == 0; i++) {
+                    sb_t cc1;
+                    if (!cdirty[i]) continue;
+                    sb_init(&cc1);
+                    sb_puts(&cc1, opt->cc);
+                    sb_puts(&cc1, sb_cstr(&cflags));
+                    sb_puts(&cc1, " -c ");
+                    sb_put_shell_arg(&cc1, cfiles[i]);
+                    sb_puts(&cc1, " -o ");
+                    sb_put_shell_arg(&cc1, ofiles[i]);
+                    LOG_I(log, PH_DRIVER, "compiling: %s", sb_cstr(&cc1));
+                    PROF_SCOPE_BEGIN(TP_CC, csrc[i]);
+                    crc = system(sb_cstr(&cc1));
+                    PROF_SCOPE_END(TP_CC);
+                    sb_free(&cc1);
+                    nrebuilt++;
+                }
+                LOG_I(log, PH_DRIVER, "compiled %d module(s), reused %d cached object(s)",
+                      nrebuilt, ncfiles - nrebuilt);
+                prof_self_count(TC_MODULES_BUILT, (uint64_t)nrebuilt);
+                prof_self_count(TC_MODULES_CACHED, (uint64_t)(ncfiles - nrebuilt));
+            }
+            sb_free(&cflags);
+        }
+        if (crc != 0) {
+            LOG_E(log, PH_DRIVER, i18n_tr("C compiler '%s' failed (exit %d)"), opt->cc,
+                  crc);
+            if (!opt->keep_c) {
+                int i = 0;
+                for (; i < ngen; i++)
+                    remove(generated[i]);
+            }
+            logger_free(log);
+            arena_free(arena);
+            return 3;
+        }
+
         sb_t cmd;
         sb_init(&cmd);
         sb_puts(&cmd, opt->cc);
@@ -932,25 +1468,8 @@ int driver_build(options_t *opt)
             else
                 sb_puts(&cmd, " -g");
         }
-        if (opt->asan) {
-            if (use_tcc) {
-                LOG_E(
-                    log, PH_DRIVER,
-                    "tcc does not support AddressSanitizer; use --cc=gcc or --cc=clang");
-                sb_free(&cmd);
-                if (!opt->keep_c) {
-                    int i = 0;
-                    for (; i < ngen; i++)
-                        remove(generated[i]);
-                }
-                logger_free(log);
-                arena_free(arena);
-                return 2;
-            }
-            sb_puts(&cmd, " -fsanitize=address -fno-omit-frame-pointer");
-
-            sb_puts(&cmd, " -DSALAM_MEM_DEBUG");
-        }
+        /* The tcc rejection already happened before the compile phase. */
+        if (opt->asan) sb_puts(&cmd, " -fsanitize=address -fno-omit-frame-pointer");
 
         {
             int i = 0;
@@ -984,7 +1503,7 @@ int driver_build(options_t *opt)
             int i = 0;
             for (; i < ncfiles; i++) {
                 sb_putc(&cmd, ' ');
-                sb_put_shell_arg(&cmd, cfiles[i]);
+                sb_put_shell_arg(&cmd, ofiles[i]);
             }
         }
         sb_puts(&cmd, lm);
@@ -992,6 +1511,16 @@ int driver_build(options_t *opt)
         if (try_embed_hostlibs(log, hostlibs, sizeof hostlibs)) {
             sb_puts(&cmd, " -L");
             sb_put_shell_arg(&cmd, hostlibs);
+        }
+        /* --libpath=DIR, same as the LLVM link paths honor - so an archive
+         * that is not installed yet (a freshly built libsalam_llvm.a, say)
+         * is linkable through the C backend too, not only through LLVM. */
+        {
+            int i = 0;
+            for (; i < opt->nlibpath; i++) {
+                sb_puts(&cmd, " -L");
+                sb_put_shell_arg(&cmd, opt->lib_paths[i]);
+            }
         }
 
         {
@@ -1017,7 +1546,9 @@ int driver_build(options_t *opt)
         }
 #endif
         LOG_I(log, PH_DRIVER, "linking: %s", sb_cstr(&cmd));
-        crc = system(sb_cstr(&cmd));
+        PROF_SCOPE_BEGIN(TP_LINK, output);
+        crc = run_cc_cmd(log, sb_cstr(&cmd), salam_scratch_dir());
+        PROF_SCOPE_END(TP_LINK);
         sb_free(&cmd);
         if (crc != 0) {
             LOG_E(log, PH_DRIVER, i18n_tr("C compiler '%s' failed (exit %d)"), opt->cc,
@@ -1031,12 +1562,16 @@ int driver_build(options_t *opt)
                 sal_snprintf(opt->exe_path, sizeof(opt->exe_path), "%s", output);
         }
     }
-    if (!opt->keep_c) {
-        int i = 0;
-        for (; i < ngen; i++)
-            remove(generated[i]);
-    } else
-        LOG_I(log, PH_DRIVER, "kept generated C files");
+    /* The generated .c/.h are the object cache's key: deleting them would make
+       every module look changed on the next build. They stay in the scratch
+       dir (gitignored) and --force ignores them anyway. */
+    if (opt->keep_c) LOG_I(log, PH_DRIVER, "kept generated C files");
+    {
+        arena_stats_t as = arena_stats(arena);
+        prof_self_count(TC_ARENA_BYTES, as.bytes_reserved);
+        prof_self_count(TC_ARENA_BLOCKS, as.blocks);
+        prof_self_count(TC_AST_NODES, ast_node_count());
+    }
     logger_free(log);
     arena_free(arena);
     return rc;

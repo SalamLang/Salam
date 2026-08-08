@@ -1,0 +1,501 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// `salam doc` engine: lexes + parses (+ best-effort semantic pass, for real
+// inferred types on ':='-declared consts/vars) one file at a time, walks the
+// resulting AST into a flat, dependency-free "DocDb" (mirrors ast.salam's own
+// Node/Ast flat-storage design - see the header note on DocDecl below for
+// why), then renders the whole database as one self-contained HTML file
+// (inline CSS + JS, no external assets). No codegen, no build - this package
+// never touches codegen.salam/jsgen.salam/llvm.salam.
+//
+// Doc comments are a new convention (there is no such concept upstream):
+// a contiguous run of leading `//`/`///` line comments, or a single
+// `/** ... */` block comment, with no blank line before the declaration it
+// precedes, becomes that declaration's doc text. Optional `@lang` tags split
+// it into per-language prose, reusing the same tagging idea as the existing
+// `@en "..."`/`@fa "..."` name-alias metas (parser.salam's parse_metas).
+//
+// Top-level ordering below follows this compiler's own required layout
+// (E085/E087/E088): consts, then global vars, then types, then private
+// functions, then the pub section last.
+package docgen
+
+// ---------------------------------------------------------------------------
+// Declaration kinds
+// ---------------------------------------------------------------------------
+pub const DOC_CONST := 0
+pub const DOC_VAR := 1
+pub const DOC_TYPE := 2
+pub const DOC_STRUCT := 3
+pub const DOC_INTERFACE := 4
+pub const DOC_ENUM := 5
+pub const DOC_IMPL := 6
+pub const DOC_FUNC := 7
+pub const DOC_FIELD := 8
+pub const DOC_ENUM_MEMBER := 9
+
+// ---------------------------------------------------------------------------
+// Static HTML assets. Backtick-delimited RAW string literals (no escape
+// decoding at all in this language - see lexer.salam's scan_raw_string), so
+// the embedded CSS/JS can be written verbatim. The one rule this buys: never
+// put a literal backtick inside them (the raw scan has no way to escape one),
+// so the JS avoids template literals and uses '+' string concatenation
+// instead.
+// ---------------------------------------------------------------------------
+css_text := `
+:root {
+  --bg: #ffffff;
+  --bg-alt: #f6f7f9;
+  --fg: #1a1d23;
+  --fg-muted: #5b6270;
+  --border: #e3e6ea;
+  --accent: #3860ff;
+  --accent-fg: #ffffff;
+  --code-bg: #f0f2f5;
+  --badge-priv-bg: #fdecec;
+  --badge-priv-fg: #b3261e;
+  --badge-dep-bg: #fff4e0;
+  --badge-dep-fg: #9a5b00;
+  --shadow: 0 1px 3px rgba(20, 22, 30, 0.08);
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14161c;
+    --bg-alt: #1b1e26;
+    --fg: #e7e9ee;
+    --fg-muted: #9aa1b1;
+    --border: #2a2e39;
+    --accent: #7b9bff;
+    --accent-fg: #10131a;
+    --code-bg: #10131a;
+    --badge-priv-bg: #3a1c1c;
+    --badge-priv-fg: #ff9d92;
+    --badge-dep-bg: #3a2c10;
+    --badge-dep-fg: #ffcb7a;
+    --shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #14161c;
+  --bg-alt: #1b1e26;
+  --fg: #e7e9ee;
+  --fg-muted: #9aa1b1;
+  --border: #2a2e39;
+  --accent: #7b9bff;
+  --accent-fg: #10131a;
+  --code-bg: #10131a;
+  --badge-priv-bg: #3a1c1c;
+  --badge-priv-fg: #ff9d92;
+  --badge-dep-bg: #3a2c10;
+  --badge-dep-fg: #ffcb7a;
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 15px;
+  line-height: 1.55;
+}
+code, pre, .mono { font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+.topbar {
+  position: sticky; top: 0; z-index: 20;
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 16px;
+  background: var(--bg); border-bottom: 1px solid var(--border);
+}
+.topbar .title { font-weight: 600; font-size: 15px; white-space: nowrap; margin-right: 4px; }
+.topbar input[type="search"] {
+  flex: 1 1 220px; min-width: 120px; max-width: 420px;
+  padding: 7px 10px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--bg-alt); color: var(--fg); font-size: 14px;
+}
+.topbar label { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--fg-muted); white-space: nowrap; }
+.topbar select {
+  padding: 6px 8px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--bg-alt); color: var(--fg); font-size: 13px;
+}
+.icon-btn {
+  border: 1px solid var(--border); background: var(--bg-alt); color: var(--fg);
+  border-radius: 8px; padding: 6px 10px; font-size: 13px; cursor: pointer;
+}
+.icon-btn:hover { border-color: var(--accent); }
+#sidebar-toggle { display: none; }
+.layout { display: flex; align-items: flex-start; }
+aside.sidebar {
+  width: 280px; flex: 0 0 280px; position: sticky; top: 49px;
+  height: calc(100vh - 49px); overflow-y: auto;
+  border-right: 1px solid var(--border); background: var(--bg-alt);
+  padding: 10px 0;
+}
+.nav-file {
+  padding: 10px 14px 4px; font-size: 11px; font-weight: 700; letter-spacing: 0.03em;
+  text-transform: uppercase; color: var(--fg-muted);
+}
+.nav-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 14px; font-size: 13px; color: var(--fg);
+}
+.nav-item:hover { background: var(--border); text-decoration: none; }
+.nav-kind {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; border-radius: 5px; font-size: 10px; font-weight: 700;
+  background: var(--accent); color: var(--accent-fg); flex: none;
+}
+.nav-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nav-lock { margin-left: auto; font-size: 10px; color: var(--fg-muted); flex: none; }
+main#main-content { flex: 1 1 auto; min-width: 0; padding: 20px 28px 80px; max-width: 920px; }
+.file-heading {
+  font-size: 13px; font-weight: 700; color: var(--fg-muted);
+  margin: 32px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border);
+}
+.file-heading:first-child { margin-top: 0; }
+.empty-state { color: var(--fg-muted); padding: 40px 0; text-align: center; }
+.decl-card {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 10px;
+  padding: 16px 18px; margin-bottom: 14px; box-shadow: var(--shadow);
+}
+.decl-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.decl-name { margin: 0; font-size: 16px; font-weight: 650; }
+.decl-source-name { font-size: 12px; color: var(--fg-muted); font-family: ui-monospace, monospace; }
+.kind-tag {
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em;
+  padding: 2px 7px; border-radius: 5px; background: var(--accent); color: var(--accent-fg);
+}
+.badge { font-size: 10px; font-weight: 700; text-transform: uppercase; padding: 2px 7px; border-radius: 5px; }
+.badge-private { background: var(--badge-priv-bg); color: var(--badge-priv-fg); }
+.badge-dep { background: var(--badge-dep-bg); color: var(--badge-dep-fg); }
+.decl-sig, .member-sig {
+  background: var(--code-bg); border-radius: 8px; padding: 10px 12px; margin: 10px 0 0;
+  font-size: 13px; overflow-x: auto; white-space: pre;
+}
+.decl-doc, .member-doc { margin: 10px 0 0; color: var(--fg); white-space: pre-wrap; }
+.member-list { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 10px; }
+.member-row { padding: 8px 0; border-bottom: 1px dashed var(--border); }
+.member-row:last-child { border-bottom: none; }
+.member-head { display: flex; align-items: center; gap: 8px; }
+.member-name { font-weight: 600; font-size: 13.5px; }
+.member-sig { font-size: 12.5px; }
+.member-doc { font-size: 13px; }
+@media (max-width: 860px) {
+  aside.sidebar {
+    position: fixed; left: 0; top: 49px; bottom: 0; z-index: 15;
+    transform: translateX(-100%); transition: transform 0.15s ease; box-shadow: var(--shadow);
+  }
+  body.sidebar-open aside.sidebar { transform: translateX(0); }
+  #sidebar-toggle { display: inline-flex; }
+  main#main-content { padding: 16px; }
+  .topbar .title { display: none; }
+}
+`
+
+js_text := `
+(function () {
+  "use strict";
+  var state = { lang: "", showPrivate: false, query: "" };
+  var KIND_ORDER = { struct: 0, interface: 1, enum: 2, impl: 3, type: 4, const: 5, var: 6, func: 7, field: 8, member: 9 };
+  var KIND_LABEL = { const: "Const", var: "Var", type: "Type", struct: "Struct", interface: "Interface", enum: "Enum", impl: "Impl", func: "Func", field: "Field", member: "Member" };
+
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined && text !== null && text !== "") e.textContent = text;
+    return e;
+  }
+
+  function pairGet(pairs, lang) {
+    for (var i = 0; i < pairs.length; i++) {
+      if (pairs[i][0] === lang) return pairs[i][1];
+    }
+    return null;
+  }
+
+  function collectLangs() {
+    var seen = {};
+    var out = [];
+    DOC.decls.forEach(function (d) {
+      [d.a, d.doc].forEach(function (pairs) {
+        pairs.forEach(function (pair) {
+          var lg = pair[0];
+          if (lg && !seen[lg]) { seen[lg] = true; out.push(lg); }
+        });
+      });
+    });
+    out.sort();
+    return out;
+  }
+
+  function displayName(d) {
+    if (state.lang) {
+      var v = pairGet(d.a, state.lang);
+      if (v) return v;
+    }
+    var en = pairGet(d.a, "en");
+    if (en) return en;
+    if (d.a.length >= 1) return d.a[0][1];
+    return d.n;
+  }
+
+  function displayDoc(d) {
+    if (state.lang) {
+      var v = pairGet(d.doc, state.lang);
+      if (v) return v;
+    }
+    var en = pairGet(d.doc, "en");
+    if (en) return en;
+    if (d.doc.length >= 1) return d.doc[0][1];
+    return "";
+  }
+
+  function matchesQuery(d) {
+    if (!state.query) return true;
+    var q = state.query.toLowerCase();
+    if (d.n.toLowerCase().indexOf(q) !== -1) return true;
+    if (d.s.toLowerCase().indexOf(q) !== -1) return true;
+    for (var i = 0; i < d.a.length; i++) {
+      if (d.a[i][1].toLowerCase().indexOf(q) !== -1) return true;
+    }
+    return false;
+  }
+
+  function declVisible(i) {
+    var d = DOC.decls[i];
+    if (!state.showPrivate && !d.p) return false;
+    if (matchesQuery(d)) return true;
+    for (var mi = 0; mi < d.m.length; mi++) {
+      var md = DOC.decls[d.m[mi]];
+      if ((state.showPrivate || md.p) && matchesQuery(md)) return true;
+    }
+    return false;
+  }
+
+  function topLevelForFile(fi) {
+    var out = [];
+    for (var i = 0; i < DOC.decls.length; i++) {
+      if (DOC.decls[i].f === fi && DOC.decls[i].par === -1) out.push(i);
+    }
+    out.sort(function (ai, bi) {
+      var a = DOC.decls[ai], b = DOC.decls[bi];
+      var ka = KIND_ORDER[a.k]; if (ka === undefined) ka = 99;
+      var kb = KIND_ORDER[b.k]; if (kb === undefined) kb = 99;
+      if (ka !== kb) return ka - kb;
+      if (a.p !== b.p) return a.p ? -1 : 1;
+      return a.n < b.n ? -1 : (a.n > b.n ? 1 : 0);
+    });
+    return out;
+  }
+
+  function renderNavItem(container, i) {
+    var d = DOC.decls[i];
+    var a = el("a", "nav-item kind-" + d.k, null);
+    a.href = "#decl-" + i;
+    var label = KIND_LABEL[d.k] || d.k;
+    a.appendChild(el("span", "nav-kind", label.substring(0, 1)));
+    a.appendChild(el("span", "nav-name", displayName(d)));
+    if (!d.p) a.appendChild(el("span", "nav-lock", "private"));
+    container.appendChild(a);
+  }
+
+  function sigLine(d) {
+    return d.s ? d.s : d.n;
+  }
+
+  function renderMemberRow(container, mi) {
+    var md = DOC.decls[mi];
+    if (!state.showPrivate && !md.p) return;
+    if (state.query && !matchesQuery(md)) return;
+    var row = el("div", "member-row", null);
+    row.id = "decl-" + mi;
+    var head = el("div", "member-head", null);
+    if (!md.p) head.appendChild(el("span", "badge badge-private", "private"));
+    if (md.dep) head.appendChild(el("span", "badge badge-dep", "deprecated"));
+    head.appendChild(el("span", "member-name", displayName(md)));
+    row.appendChild(head);
+    var sig = el("pre", "member-sig", null);
+    sig.appendChild(el("code", null, sigLine(md)));
+    row.appendChild(sig);
+    var doc = displayDoc(md);
+    if (doc) row.appendChild(el("p", "member-doc", doc));
+    container.appendChild(row);
+  }
+
+  function renderCard(container, i) {
+    var d = DOC.decls[i];
+    var card = el("section", "decl-card", null);
+    card.id = "decl-" + i;
+    var head = el("div", "decl-head", null);
+    head.appendChild(el("span", "kind-tag", KIND_LABEL[d.k] || d.k));
+    if (!d.p) head.appendChild(el("span", "badge badge-private", "private"));
+    if (d.dep) head.appendChild(el("span", "badge badge-dep", "deprecated"));
+    var dn = displayName(d);
+    head.appendChild(el("h3", "decl-name", dn));
+    if (dn !== d.n) head.appendChild(el("span", "decl-source-name", d.n));
+    card.appendChild(head);
+    var sig = el("pre", "decl-sig", null);
+    sig.appendChild(el("code", null, sigLine(d)));
+    card.appendChild(sig);
+    var doc = displayDoc(d);
+    if (doc) card.appendChild(el("p", "decl-doc", doc));
+    if (d.m.length) {
+      var mlist = el("div", "member-list", null);
+      d.m.forEach(function (mi) { renderMemberRow(mlist, mi); });
+      if (mlist.childNodes.length) card.appendChild(mlist);
+    }
+    container.appendChild(card);
+  }
+
+  function render() {
+    var sidebar = document.getElementById("sidebar-nav");
+    var main = document.getElementById("main-content");
+    sidebar.innerHTML = "";
+    main.innerHTML = "";
+    var shown = 0;
+    DOC.files.forEach(function (fname, fi) {
+      var top = topLevelForFile(fi).filter(declVisible);
+      if (!top.length) return;
+      shown += top.length;
+      sidebar.appendChild(el("div", "nav-file", fname));
+      var heading = el("h2", "file-heading", fname);
+      heading.id = "file-" + fi;
+      main.appendChild(heading);
+      top.forEach(function (i) {
+        renderNavItem(sidebar, i);
+        renderCard(main, i);
+      });
+    });
+    if (!shown) main.appendChild(el("p", "empty-state", "No declarations match the current filters."));
+  }
+
+  function initLangSwitcher() {
+    var langs = collectLangs();
+    var wrap = document.getElementById("lang-switcher");
+    if (langs.length < 2) { wrap.style.display = "none"; return; }
+    var select = document.getElementById("lang-select");
+    var srcOpt = document.createElement("option");
+    srcOpt.value = "";
+    srcOpt.textContent = "Source";
+    select.appendChild(srcOpt);
+    langs.forEach(function (lg) {
+      var opt = document.createElement("option");
+      opt.value = lg;
+      opt.textContent = lg;
+      select.appendChild(opt);
+    });
+    select.addEventListener("change", function () {
+      state.lang = select.value;
+      render();
+    });
+  }
+
+  function initTheme() {
+    var saved = null;
+    try { saved = localStorage.getItem("salam-doc-theme"); } catch (e) {}
+    if (saved === "dark" || saved === "light") document.documentElement.setAttribute("data-theme", saved);
+    var btn = document.getElementById("theme-toggle");
+    btn.addEventListener("click", function () {
+      var cur = document.documentElement.getAttribute("data-theme");
+      var next;
+      if (cur === "dark") next = "light";
+      else if (cur === "light") next = "dark";
+      else {
+        var prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+        next = prefersDark ? "light" : "dark";
+      }
+      document.documentElement.setAttribute("data-theme", next);
+      try { localStorage.setItem("salam-doc-theme", next); } catch (e) {}
+    });
+  }
+
+  function init() {
+    document.getElementById("doc-title").textContent = DOC_TITLE;
+    document.title = DOC_TITLE + " - API Documentation";
+    document.getElementById("search-box").addEventListener("input", function (e) {
+      state.query = e.target.value;
+      render();
+    });
+    document.getElementById("show-private").addEventListener("change", function (e) {
+      state.showPrivate = e.target.checked;
+      render();
+    });
+    document.getElementById("sidebar-toggle").addEventListener("click", function () {
+      document.body.classList.toggle("sidebar-open");
+    });
+    initLangSwitcher();
+    initTheme();
+    render();
+  }
+
+  init();
+})();
+`
+
+body_text := `<div class="topbar">
+  <button id="sidebar-toggle" class="icon-btn" type="button">Menu</button>
+  <span class="title" id="doc-title">salam doc</span>
+  <input type="search" id="search-box" placeholder="Search declarations...">
+  <label><input type="checkbox" id="show-private"> Show private</label>
+  <div id="lang-switcher"><select id="lang-select"></select></div>
+  <button id="theme-toggle" class="icon-btn" type="button">Theme</button>
+</div>
+<div class="layout">
+  <aside class="sidebar"><nav id="sidebar-nav"></nav></aside>
+  <main id="main-content"></main>
+</div>
+`
+
+// ---------------------------------------------------------------------------
+// Data model. Flat-storage, mirroring ast.salam's own Ast/Node design: one
+// Vector<DocDecl> (a plain, non-generic struct - not a nested generic type),
+// with integer-index parent/member links and flat [k,v,k,v,...] pair vectors
+// for aliases/doc text instead of Vector<Vector<str>>. Nested generic
+// containers (Vector<Vector<T>>, HashMap<K,Vector<V>>) are a known landmine
+// in this compiler; this shape sidesteps them entirely.
+// ---------------------------------------------------------------------------
+pub struct DocDecl:
+    pub kind: int = 0
+    pub name: str = ""
+    pub sig: str = ""
+    pub is_pub: bool = false
+    pub is_deprecated: bool = false
+    pub file_idx: int = 0
+    pub line: int = 0
+    pub parent: int = 0 - 1 // -1 = top-level; else index of the owning struct/interface/enum/impl row
+    pub members: Vector<int> = Vector {} // child row indices
+    pub aliases: Vector<str> = Vector {} // flat [lang, name, lang, name, ...] from @lang metas
+    pub doc: Vector<str> = Vector {} // flat [lang, text, lang, text, ...] from doc comments
+end
+
+pub struct DocDb:
+    pub decls: Vector<DocDecl> = Vector {}
+    pub files: Vector<str> = Vector {} // relative paths, in discovery order
+end
+
+// One contiguous doc-comment block, keyed by the source line right after it
+// ends (a declaration starting on end_line+1 claims it).
+struct CommentBlock:
+    pub end_line: int = 0
+    pub texts: Vector<str> = Vector {} // flat [lang, text, lang, text, ...]
+end
+
+// ---------------------------------------------------------------------------
+// Small private helpers
+// ---------------------------------------------------------------------------

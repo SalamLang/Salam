@@ -1,0 +1,382 @@
+package interp
+
+import str
+import co "../sal_core.salam"
+
+// ===========================================================================
+// ===== interp_value.c =====
+// ===========================================================================
+
+// value.h constructors (SAL_INLINE val_*).
+func val_null(): Value:
+    ret Value {}
+end
+
+func int_ty_is_unsigned(t: int): bool:
+    ret t >= ITY_U8
+end
+
+func int_ty_bits(t: int): int:
+    if t == ITY_I8 || t == ITY_U8:
+        ret 8
+    end
+    if t == ITY_I16 || t == ITY_U16:
+        ret 16
+    end
+    if t == ITY_I32 || t == ITY_U32:
+        ret 32
+    end
+    ret 64
+end
+
+// Rank for the "higher-rank operand wins" rule of SALAM-TYPES.md 15.
+func int_ty_rank(t: int): int:
+    ret int_ty_bits(t)
+end
+
+// Reduce x to the two's-complement bit pattern of type t, then read it back
+// as a signed i64 (the interpreter's single integer carrier).
+func int_ty_wrap(t: int, x: i64): i64:
+    bits := int_ty_bits(t)
+    if bits >= 64:
+        ret x
+    end
+    mask := (1 as u64) << (bits as u64)
+    mut bv := (x as u64) & (mask - (1 as u64))
+    if !int_ty_is_unsigned(t) && (bv & (mask >> (1 as u64))) != (0 as u64):
+        bv = bv | (~(mask - (1 as u64)))
+    end
+    ret bv as i64
+end
+
+func val_int(x: i64): Value:
+    ret Value { kind = VAL_INT, i = x }
+end
+
+func val_int_ty(x: i64, t: int): Value:
+    ret Value { kind = VAL_INT, ity = t, i = int_ty_wrap(t, x) }
+end
+
+// Read an integer value as the unsigned bit pattern of its own type.
+func val_int_bits(v: Value): u64:
+    ret int_ty_wrap(v.ity, v.i) as u64
+end
+
+func val_char(x: i64): Value:
+    ret Value { kind = VAL_CHAR, i = x }
+end
+
+func val_float(x: f64): Value:
+    ret Value { kind = VAL_FLOAT, f = x }
+end
+
+func val_bool(x: bool): Value:
+    ret Value { kind = VAL_BOOL, b = x }
+end
+
+func val_str(s: str): Value:
+    ret Value { kind = VAL_STR, s = s }
+end
+
+func val_module(m: int): Value:
+    ret Value { kind = VAL_MODULE, id = m }
+end
+
+func val_ptr(addr: i64, elem: int): Value:
+    ret Value { kind = VAL_PTR, pa = addr, pe = elem }
+end
+
+func val_variant(vid: int): Value:
+    ret Value { kind = VAL_VARIANT, id = vid }
+end
+
+func val_arr(aid: int): Value:
+    ret Value { kind = VAL_ARRAY, id = aid }
+end
+
+func val_map(mid: int): Value:
+    ret Value { kind = VAL_MAP, id = mid }
+end
+
+func ptr_elem_size(elem: int): int:
+    if elem == PTR_I8 || elem == PTR_U8:
+        ret 1
+    end
+    if elem == PTR_I16 || elem == PTR_U16:
+        ret 2
+    end
+    if elem == PTR_I32 || elem == PTR_U32 || elem == PTR_F32:
+        ret 4
+    end
+    ret 8
+end
+
+// str_repeat - the C doubled a buffer; str.Repeat is byte-identical.
+func str_repeat(s: str, n: i64): Value:
+    if n == (1 as i64):
+        ret val_str(s)
+    end
+    if n < (1 as i64) || str.Len(s) == 0:
+        ret val_str("")
+    end
+    ret val_str(str.Repeat(s, n as int))
+end
+
+func to_bool(v: Value): bool:
+    if v.kind == VAL_BOOL:
+        ret v.b
+    end
+    if v.kind == VAL_INT || v.kind == VAL_CHAR:
+        ret v.i != (0 as i64)
+    end
+    if v.kind == VAL_FLOAT:
+        ret v.f != 0.0
+    end
+    if v.kind == VAL_NULL:
+        ret false
+    end
+    if v.kind == VAL_STR:
+        ret str.Len(v.s) != 0
+    end
+    if v.kind == VAL_PTR:
+        ret v.pa != (0 as i64)
+    end
+    ret true
+end
+
+func to_float(v: Value): f64:
+    if v.kind == VAL_FLOAT:
+        ret v.f
+    end
+    if v.kind == VAL_INT || v.kind == VAL_CHAR:
+        if int_ty_is_unsigned(v.ity):
+            ret val_int_bits(v) as f64
+        end
+        ret v.i as f64
+    end
+    if v.kind == VAL_BOOL:
+        ret v.b ? 1.0 : 0.0
+    end
+    ret 0.0
+end
+
+func to_int(v: Value): i64:
+    if v.kind == VAL_INT || v.kind == VAL_CHAR:
+        ret v.i
+    end
+    if v.kind == VAL_FLOAT:
+        ret v.f as i64
+    end
+    if v.kind == VAL_BOOL:
+        ret v.b ? (1 as i64) : (0 as i64)
+    end
+    if v.kind == VAL_PTR:
+        ret v.pa
+    end
+    ret 0 as i64
+end
+
+func is_intlike(v: Value): bool:
+    ret v.kind == VAL_INT || v.kind == VAL_CHAR
+end
+
+func is_number(v: Value): bool:
+    ret v.kind == VAL_INT || v.kind == VAL_CHAR || v.kind == VAL_FLOAT
+end
+
+func utf8_put(b &: str.StringBuilder, cp: i64):
+    c := cp as int
+    if c < 0x80:
+        str.BufAppendChar(b, c)
+    else c < 0x800:
+        str.BufAppendChar(b, 0xC0 | (c >> 6))
+        str.BufAppendChar(b, 0x80 | (c & 0x3F))
+    else c < 0x10000:
+        str.BufAppendChar(b, 0xE0 | (c >> 12))
+        str.BufAppendChar(b, 0x80 | ((c >> 6) & 0x3F))
+        str.BufAppendChar(b, 0x80 | (c & 0x3F))
+    else:
+        str.BufAppendChar(b, 0xF0 | (c >> 18))
+        str.BufAppendChar(b, 0x80 | ((c >> 12) & 0x3F))
+        str.BufAppendChar(b, 0x80 | ((c >> 6) & 0x3F))
+        str.BufAppendChar(b, 0x80 | (c & 0x3F))
+    end
+end
+
+// to_str - the printing format is OBSERVABLE (print/println); every branch
+// must stay byte-identical to the C (%lld ints, %.15g floats, [a, b] arrays,
+// Name{f=v} structs).
+func to_str(ip &: Interp, v: Value): str:
+    if v.kind == VAL_STR:
+        ret v.s
+    end
+    if v.kind == VAL_INT:
+        if int_ty_is_unsigned(v.ity):
+            ret co.U64Toa(val_int_bits(v))
+        end
+        ret co.I64Toa(v.i)
+    end
+    if v.kind == VAL_CHAR:
+        mut b := str.NewBuilder()
+        utf8_put(b, v.i)
+        r := str.BufStr(b)
+        str.BufFree(b)
+        ret r
+    end
+    if v.kind == VAL_BOOL:
+        ret v.b ? "true" : "false"
+    end
+    if v.kind == VAL_NULL:
+        ret "null"
+    end
+    if v.kind == VAL_FLOAT:
+        ret co.Format1("%.15g", co.ArgFloat(v.f))
+    end
+    if v.kind == VAL_ARRAY:
+        mut ab := str.NewBuilder()
+        str.BufAppend(ab, "[")
+        n := arr_len(ip, v.id)
+        repeat n with i:
+            if i != 0:
+                str.BufAppend(ab, ", ")
+            end
+            str.BufAppend(ab, to_str(ip, arr_get(ip, v.id, i)))
+        end
+        str.BufAppend(ab, "]")
+        ar := str.BufStr(ab)
+        str.BufFree(ab)
+        ret ar
+    end
+    if v.kind == VAL_STRUCT:
+        stv := ip.sts.get(v.id)[0]
+        mut sb := str.NewBuilder()
+        str.BufAppend(sb, stv.type_name)
+        str.BufAppend(sb, "{")
+        repeat stv.fnames.len() with i:
+            if i != 0:
+                str.BufAppend(sb, ", ")
+            end
+            str.BufAppend(sb, stv.fnames.get(i)[0])
+            str.BufAppend(sb, "=")
+            str.BufAppend(sb, to_str(ip, stv.fvals.get(i)[0]))
+        end
+        str.BufAppend(sb, "}")
+        sr := str.BufStr(sb)
+        str.BufFree(sb)
+        ret sr
+    end
+    if v.kind == VAL_MAP:
+        ret "<map>"
+    end
+    if v.kind == VAL_MAPITER:
+        ret "<mapiter>"
+    end
+    if v.kind == VAL_FUNC:
+        ret "<func>"
+    end
+    if v.kind == VAL_MODULE:
+        if v.id == 0:
+            ret "<module>"
+        end
+        md := ip.mods.get(v.id)[0]
+        ret co.Format1("<module %s>", co.ArgStr(md.name))
+    end
+    if v.kind == VAL_PTR:
+        if v.pa == (0 as i64):
+            ret "null"
+        end
+        ret co.Format1("<ptr %p>", co.ArgPtr(v.pa as u64))
+    end
+    if v.kind == VAL_VARIANT:
+        vv := ip.variants.get(v.id)[0]
+        if vv.has_boxed:
+            ret to_str(ip, vv.boxed)
+        end
+        ret ""
+    end
+    ret ""
+end
+
+func arr_new(ip &: Interp, cap: int): int:
+    id := ip.arrs.len()
+    ip.arrs.push(Arr { cap = cap < 4 ? 4 : cap })
+    ret id
+end
+
+// array_view - base+off composition happens at creation, so `base` is never
+// itself a view.
+func arr_view(ip &: Interp, base: int, off: int, length: int): int:
+    mut b0 := base
+    mut o0 := off
+    bn := ip.arrs.get(base)[0]
+    if bn.is_view:
+        b0 = bn.base
+        o0 = bn.off + off
+    end
+    id := ip.arrs.len()
+    ip.arrs.push(Arr { is_view = true, base = b0, off = o0, vlen = length })
+    ret id
+end
+
+func arr_len(ip &: Interp, id: int): int:
+    an := ip.arrs.get(id)[0]
+    ret an.is_view ? an.vlen : an.items.len()
+end
+
+func arr_get(ip &: Interp, id: int, i: int): Value:
+    an := ip.arrs.get(id)[0]
+    if an.is_view:
+        bn := ip.arrs.get(an.base)[0]
+        ret bn.items.get(an.off + i)[0]
+    end
+    ret an.items.get(i)[0]
+end
+
+func arr_set(ip &: Interp, id: int, i: int, v: Value):
+    mut an := ip.arrs.get(id)[0]
+    if an.is_view:
+        mut bn := ip.arrs.get(an.base)[0]
+        bn.items.set(an.off + i, v)
+        ip.arrs.set(an.base, bn)
+        ret
+    end
+    an.items.set(i, v)
+    ip.arrs.set(id, an)
+end
+
+func arr_push(ip &: Interp, id: int, v: Value):
+    mut an := ip.arrs.get(id)[0]
+    if an.is_view:
+        // See the file header: the C wrote past the view (UB beyond the base
+        // allocation); the port writes into/onto the base instead.
+        pos := an.off + an.vlen
+        mut bn := ip.arrs.get(an.base)[0]
+        if pos < bn.items.len():
+            bn.items.set(pos, v)
+        else:
+            bn.items.push(v)
+        end
+        ip.arrs.set(an.base, bn)
+        an.vlen += 1
+        ip.arrs.set(id, an)
+        ret
+    end
+    if an.items.len() == an.cap:
+        an.cap = co.GrowCap(
+            an.cap as u64, (an.items.len() + 1) as u64, 4 as u64
+        ) as int
+    end
+    an.items.push(v)
+    ip.arrs.set(id, an)
+end
+
+// Drops the last element (the `pop` builtin's --a->len).
+func arr_shrink(ip &: Interp, id: int):
+    mut an := ip.arrs.get(id)[0]
+    if an.is_view:
+        an.vlen -= 1
+    else:
+        _last := an.items.pop()
+    end
+    ip.arrs.set(id, an)
+end

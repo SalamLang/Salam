@@ -1,0 +1,202 @@
+---
+name: 🧪 Memory Leaks - ASan/LSan over the full test suite
+# Runs the entire test corpus through AddressSanitizer/LeakSanitizer builds of
+# both compilers and fails on a leak.
+#
+# Two compilers, two different bars, on purpose:
+#
+#   c-compiler   The reference compiler (c/*.c) allocates nearly everything
+#                from an arena it frees on the way out, so LeakSanitizer sees
+#                nothing today. That is a property worth keeping, so this job
+#                is a HARD gate at exactly zero leaking invocations.
+#
+#   self-hosted  compiler/*.salam is written in Salam, which is manually
+#                memory-managed and has no arena behind its string
+#                temporaries: every discarded `a + b` stays live until exit.
+#                Zero is not reachable without changing how the compiler
+#                allocates, so this job is a RATCHET against
+#                compiler/tools/selfhost-leak-budget.txt - it fails on a
+#                regression and warns when a number can be lowered.
+#
+# Why the corpus and not a handful of smoke tests: a leak on the error path,
+# in the layout schema loader, or in one language's diagnostics is invisible
+# to anything narrower. run-tests.sh already drives ~1200 real compiles;
+# turning that into a leak gate costs one ASan build and no new test files.
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'c/**'
+      - 'compiler/**'
+      - 'std/**'
+      - 'tests/**'
+      - '.github/workflows/lint-memory-leaks.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'c/**'
+      - 'compiler/**'
+      - 'std/**'
+      - 'tests/**'
+      - '.github/workflows/lint-memory-leaks.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+concurrency:
+  group: memory-leaks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  c-compiler:
+    name: C compiler - zero leaks over the full corpus
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The same set compiler-release.yml installs before its full-suite gate.
+      # Without them the interop/db sections fail to link and the run is a
+      # wall of red that has nothing to do with leaks.
+      - name: Install test-suite dependencies
+        run: |
+          set -eu
+          sudo apt-get update
+          sudo apt-get install -y build-essential tcc libhiredis-dev \
+            libmariadb-dev libgtk-3-dev libwebkit2gtk-4.1-dev
+          gcc --version | head -1
+
+      # WITH_LLVM=0 deliberately: the in-process LLVM backend is covered by
+      # its own job below, and linking LLVM here would add a ~1 GB apt install
+      # to what is otherwise a two-minute build.
+      - name: Build salam with AddressSanitizer
+        run: |
+          set -eu
+          sh c/tools/bash/leakcheck.sh --build --no-suite --no-sweep
+          test -x c/build/asan/salam
+
+      - name: Run the full test suite under LeakSanitizer
+        run: |
+          set -eu
+          cd c
+          SALAM=build/asan/salam sh tools/bash/leakcheck.sh \
+            --reports="$GITHUB_WORKSPACE/leak-reports"
+
+      - name: Upload leak reports
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: leak-reports-c-compiler
+          path: leak-reports/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  c-compiler-llvm:
+    name: C compiler - zero leaks with the in-process LLVM backend
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install LLVM and test-suite dependencies
+        run: |
+          set -eu
+          wget -qO llvm.sh https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 22
+          sudo apt-get update
+          sudo apt-get install -y build-essential tcc \
+            llvm-22-dev libpolly-22-dev libzstd-dev zlib1g-dev libtinfo-dev
+          llvm-config-22 --version
+
+      # WITH_LLD stays off: lld is documented as never freeing anything (it is
+      # designed to run as a short-lived process and let exit reclaim its
+      # arenas), so linking it in would drown the run in suppressed noise
+      # without covering a line of salam's own code. WITH_LLVM=1 is what puts
+      # c/src/llvm/*.c - the IR builder, which IS salam's - under the gate.
+      - name: Build salam with AddressSanitizer + LLVM
+        env:
+          WITH_LLVM: '1'
+          WITH_LLD: '0'
+          LLVM_CONFIG: llvm-config-22
+        run: |
+          set -eu
+          sh c/tools/bash/leakcheck.sh --build --no-suite --no-sweep
+          test -x c/build/asan/salam
+          ./c/build/asan/salam version
+
+      # Only what the C-backend job cannot reach: the `llvm` section drives the
+      # IR path end to end (emit + JIT), and leakcheck-sweep.sh then walks the
+      # whole CLI surface with 111k LLVM symbols statically linked in. The
+      # sweep is the part that always runs - run-tests.sh SKIPS the llvm
+      # section when its `salam llvm --jit` probe does not answer, so if the
+      # JIT ever stops working here this step reports clean on the sweep
+      # alone. Watch the log for "SKIP llvm/en/*" if that matters to you.
+      #
+      # If this job is ever red for LLVM's own allocations rather than
+      # salam's, widen the `leak:llvm::` entry in c/tools/lsan.supp - the
+      # reports are uploaded as an artifact below. It was green locally
+      # against a statically linked LLVM 18 (0 reports over the sweep).
+      - name: Run the LLVM sections under LeakSanitizer
+        run: |
+          set -eu
+          cd c
+          SALAM=build/asan/salam sh tools/bash/leakcheck.sh \
+            --reports="$GITHUB_WORKSPACE/leak-reports" llvm
+
+      - name: Upload leak reports
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: leak-reports-c-compiler-llvm
+          path: leak-reports/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  self-hosted:
+    name: Self-hosted compiler - leak ratchet
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install dependencies
+        run: |
+          set -eu
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+          gcc --version | head -1
+
+      # Built from this checkout rather than from a published release: the
+      # point here is to measure the compiler/*.salam in the PR, and a seed
+      # from a release would also drag that release's own bugs into the
+      # measurement. WITH_LLVM=0 keeps it to a two-minute build; the seed only
+      # has to lower compiler/main.salam to C.
+      - name: Build the reference compiler
+        run: |
+          set -eu
+          make -C c -j"$(nproc)" WITH_LLVM=0 WITH_LLD=0
+          ./salam version | head -1
+
+      - name: Build the self-hosted compiler with AddressSanitizer
+        run: |
+          set -eu
+          SALAM_STD="$GITHUB_WORKSPACE/std" ./salam build compiler/main.salam \
+            --output=salam-selfhost-asan --cc=gcc --asan --log-level=error
+          ./salam-selfhost-asan version | head -1
+
+      - name: Check the self-hosted leak budget
+        run: |
+          set -eu
+          sh compiler/tools/bash/leakcheck-selfhost.sh ./salam-selfhost-asan

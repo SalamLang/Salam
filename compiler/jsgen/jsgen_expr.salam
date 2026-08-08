@@ -1,0 +1,495 @@
+package jsgen
+
+import str
+import co "../sal_core.salam"
+import tok "../token.salam"
+import at "../ast.salam"
+import sm "../semantic/semantic.salam"
+
+// ===== jsgen_expr.c =====
+
+// static bool jsg_reserved(const char *s)
+func jsg_reserved(s: str): bool:
+    each w in k_js_kw:
+        if str.Equals(w, s):
+            ret true
+        end
+    end
+    each h in k_js_hostg:
+        if str.Equals(h, s):
+            ret true
+        end
+    end
+    each r in k_js_runtime:
+        if str.Equals(r, s):
+            ret true
+        end
+    end
+    ret false
+end
+
+func jsg_ident(name: str): str:
+    n := str.Len(name)
+    mut plain := n > 0 && !is_digit(byte_at(name, 0))
+    mut i := 0
+    until plain && i < n:
+        c := byte_at(name, i)
+        if !(is_alnum(c) || c == 95):
+            plain = false
+        end
+        i += 1
+    end
+    c2 := plain ? name : cg_cident(name)
+    if jsg_reserved(c2):
+        ret c2 + "_"
+    end
+    ret c2
+end
+
+// static const char *jsg_minify_advance(jg_t *g)
+func jsg_minify_advance(g &: Jg): str:
+    prev := g.minify_last
+    lenp := str.Len(prev)
+    if lenp == 0: // C: !prev
+        g.minify_last = "a"
+        ret g.minify_last
+    end
+    mut bytes := Vector {} as Vector<int>
+    defer bytes.free()
+    repeat lenp with i:
+        bytes.push(byte_at(prev, i))
+    end
+    mut carried := true
+    mut i2 := lenp - 1
+    until i2 >= 0:
+        bv := bytes.get(i2)[0]
+        if bv != 122: // 'z'
+            bytes.set(i2, bv + 1)
+            carried = false
+            break
+        end
+        bytes.set(i2, 97) // 'a'
+        i2 -= 1
+    end
+    mut b := str.NewBuilder()
+    if carried:
+        str.BufAppendChar(b, 97)
+    end
+    repeat lenp with k:
+        str.BufAppendChar(b, bytes.get(k)[0])
+    end
+    g.minify_last = str.BufStr(b)
+    str.BufFree(b)
+    ret g.minify_last
+end
+
+func jsg_minify_next(g &: Jg): str:
+    mut cand := jsg_minify_advance(g)
+    until jsg_reserved(cand):
+        cand = jsg_minify_advance(g)
+    end
+    ret cand
+end
+
+func jsg_minify_cached(g &: Jg, key: str): str:
+    n := g.minify_keys.len()
+    mut i := 0
+    until i < n:
+        if str.Equals(g.minify_keys.get(i)[0], key):
+            ret g.minify_vals.get(i)[0]
+        end
+        i += 1
+    end
+    name := jsg_minify_next(g)
+    g.minify_keys.push(key)
+    g.minify_vals.push(name)
+    ret name
+end
+
+func jsg_taken(g &: Jg, name: str): bool:
+    ret name_in_strvec(g.taken, name)
+end
+
+// static const char *jsg_fresh_syn(jg_t *g)
+func jsg_fresh_syn(g &: Jg): str:
+    bases := ["i", "j", "k", "t", "u"] as str[5]
+    each cand in bases:
+        if !local_known(g, cand) && !name_in_strvec(g.fn_used_names, cand) && !jsg_taken(g, cand):
+            g.fn_used_names.push(cand)
+            ret cand
+        end
+    end
+    ret jsg_fresh(g, "i")
+end
+
+func jsg_local(g &: Jg, name: str, is_mut: bool): str:
+    mut emitted := ""
+    if str.Len(name) >= 2 && byte_at(name, 0) == 95 && byte_at(name, 1) == 95 && !str.Equals(name, "__self"):
+        emitted = jsg_fresh_syn(g)
+    else g.enable_minify:
+        emitted = jsg_minify_next(g)
+    else:
+        emitted = jsg_ident(name)
+    end
+    local_add(g, name)
+    g.local_muts.push(is_mut ? 1 : 0)
+    g.local_emit.push(emitted)
+    ret emitted
+end
+
+func jsg_local_ref(g &: Jg, name: str): str:
+    mut i := g.locals.len()
+    until i > 0:
+        if str.Equals(g.locals.get(i - 1)[0], name):
+            ret g.local_emit.get(i - 1)[0]
+        end
+        i -= 1
+    end
+    ret jsg_ident(name)
+end
+
+func jsg_scope_reset(g &: Jg, mark: int):
+    until g.locals.len() > mark:
+        _l := g.locals.pop()
+    end
+    until g.local_muts.len() > mark:
+        _m := g.local_muts.pop()
+    end
+    until g.local_emit.len() > mark:
+        _e := g.local_emit.pop()
+    end
+end
+
+func jsg_local_is_mut(g &: Jg, name: str): bool:
+    mut i := g.locals.len()
+    until i > 0:
+        if str.Equals(g.locals.get(i - 1)[0], name):
+            ret g.local_muts.get(i - 1)[0] != 0
+        end
+        i -= 1
+    end
+    ret true
+end
+
+func jsg_fresh(g &: Jg, base: str): str:
+    safe := jsg_ident(base)
+    mut i := 1
+    until true:
+        cand := i == 1 ? safe : safe + co.I64Toa(i as i64)
+        if !local_known(g, cand) && !name_in_strvec(g.fn_used_names, cand):
+            g.fn_used_names.push(cand)
+            ret cand
+        end
+        i += 1
+    end
+end
+
+// sname "" = C NULL
+func jsg_fn_name(
+    g &: Jg, s &: sm.Sema, pkg: str, sname: str, fname: str, fsym: int, sig: int, is_extern: bool, synthetic: bool
+): str:
+    p := str.Len(pkg) > 0 ? pkg : "main"
+    if is_extern:
+        ret cg_cident(fname)
+    end
+    if synthetic && sig != 0:
+        ret cg_mangle_in(s, "g", sname, fname, sm.SigAt(s, sig).params)
+    end
+    if fsym != 0 && sig != 0:
+        if sm.SymAt(s, fsym).overloads.len() > 1:
+            ret cg_mangle_in(s, p, sname, fname, sm.SigAt(s, sig).params)
+        end
+    end
+    if str.Equals(p, "main") && str.Len(sname) == 0 && jsg_taken(g, fname) && sig != 0:
+        ret cg_mangle_in(s, p, sname, fname, sm.SigAt(s, sig).params)
+    end
+    if g.enable_minify:
+        ret jsg_minify_cached(g, "F:" + p + ":" + sname + ":" + fname)
+    end
+    mut base := ""
+    if str.Len(sname) > 0:
+        base = str.Equals(p, "main") ? sname + "_" + fname : p + "_" + sname + "_" + fname
+    else:
+        base = str.Equals(p, "main") ? fname : p + "_" + fname
+    end
+    ret jsg_ident(base)
+end
+
+func jsg_global_ref(g &: Jg, pkg: str, name: str): str:
+    p := str.Len(pkg) > 0 ? pkg : "main"
+    if g.enable_minify:
+        ret jsg_minify_cached(g, "G:" + p + ":" + name)
+    end
+    if str.Equals(p, "main"):
+        if jsg_taken(g, name):
+            ret "_SalamG_" + cg_cident(p) + "_" + cg_cident(name)
+        end
+        ret jsg_ident(name)
+    end
+    ret jsg_ident(p + "_" + name)
+end
+
+func jsg_escape(s: str): str:
+    mut b := str.NewBuilder()
+    str.BufAppendChar(b, 34) // '"'
+    n := str.Len(s)
+    mut i := 0
+    until i < n:
+        ch := byte_at(s, i)
+        if ch == 10:
+            str.BufAppend(b, "\\n")
+        else ch == 9:
+            str.BufAppend(b, "\\t")
+        else ch == 13:
+            str.BufAppend(b, "\\r")
+        else ch == 34:
+            str.BufAppend(b, `\"`)
+        else ch == 92:
+            str.BufAppend(b, `\\`)
+        else:
+            if ch < 32 || ch == 127:
+                str.BufAppend(b, co.Format1("\\u%04x", co.ArgUint(ch as u64)))
+            else:
+                str.BufAppendChar(b, ch)
+            end
+        end
+        i += 1
+    end
+    str.BufAppendChar(b, 34)
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
+
+// static void jsg_template_text(sb_t *b, const char *s)
+func jsg_template_text(b &: str.StringBuilder, s: str):
+    n := str.Len(s)
+    mut i := 0
+    until i < n:
+        ch := byte_at(s, i)
+        if ch == 96 || ch == 92: // '`' '\\'
+            str.BufAppendChar(b, 92)
+            str.BufAppendChar(b, ch)
+        else ch == 36 && i + 1 < n && byte_at(s, i + 1) == 123: // "${"
+            str.BufAppend(b, "\\$")
+        else ch == 10:
+            str.BufAppend(b, "\\n")
+        else ch == 9:
+            str.BufAppend(b, "\\t")
+        else ch == 13:
+            str.BufAppend(b, "\\r")
+        else ch < 32 || ch == 127:
+            str.BufAppend(b, co.Format1("\\u%04x", co.ArgUint(ch as u64)))
+        else:
+            str.BufAppendChar(b, ch)
+        end
+        i += 1
+    end
+end
+
+// ts "" = C NULL
+func jsg_zero(s &: sm.Sema, ts: str): str:
+    if str.Len(ts) == 0:
+        ret "0"
+    end
+    if str.Equals(ts, "str") || str.Equals(ts, "uchar"):
+        ret `""`
+    end
+    if str.Equals(ts, "bool"):
+        ret "false"
+    end
+    if cg_is_int_typestr(ts) || str.Equals(ts, "f32") || str.Equals(ts, "f64") || str.Equals(ts, "char"):
+        ret "0"
+    end
+    if has_bracket(ts):
+        sz := array_size_of(ts)
+        if sz > 0:
+            ret "new Array(" + co.I64Toa(sz) + ").fill(0)"
+        end
+        ret "[]"
+    end
+    if str.StartsWith(ts, "func("):
+        ret "null"
+    end
+    if struct_by_name(s, ts) != 0:
+        ret "{}"
+    end
+    ret "null"
+end
+
+func jsg_is_str_lit(a &: at.Ast, id: int): bool:
+    if id == 0:
+        ret false
+    end
+    n := at.Get(a, id)
+    ret n.kind == at.AST_LITERAL && (
+        n.op == tok.TK_STRING || n.op == tok.TK_TRIPLE_STRING || n.op == tok.TK_RAW_STRING || n.op == tok.TK_UTF8_CHAR
+    )
+end
+
+func jsg_concat_flatten(a &: at.Ast, id: int, segs &: Vector<int>):
+    if id != 0:
+        n := at.Get(a, id)
+        if n.kind == at.AST_BINARY && n.op == tok.TK_PLUS && str.Equals(n.type_str, "str"):
+            jsg_concat_flatten(a, n.a, segs)
+            jsg_concat_flatten(a, n.b, segs)
+            ret
+        end
+    end
+    segs.push(id)
+end
+
+// "" = C NULL (no template form)
+func jsg_template_concat(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int): str:
+    mut segs := Vector {} as Vector<int>
+    defer segs.free()
+    jsg_concat_flatten(a, id, segs)
+    mut nlit := 0
+    mut nexpr := 0
+    n := segs.len()
+    mut i := 0
+    until i < n:
+        if jsg_is_str_lit(a, segs.get(i)[0]):
+            nlit += 1
+        else:
+            nexpr += 1
+        end
+        i += 1
+    end
+    if n < 2 || nlit == 0 || nexpr == 0:
+        ret ""
+    end
+    mut b := str.NewBuilder()
+    str.BufAppendChar(b, 96) // '`'
+    mut i2 := 0
+    until i2 < n:
+        sid := segs.get(i2)[0]
+        if jsg_is_str_lit(a, sid):
+            jsg_template_text(b, at.Get(a, sid).value_str)
+        else:
+            str.BufAppend(b, "${")
+            str.BufAppend(b, jsg_expr_p(g, s, a, sid, 0))
+            str.BufAppendChar(b, 125) // '}'
+        end
+        i2 += 1
+    end
+    str.BufAppendChar(b, 96)
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
+
+func jsg_binprec(k: int): int:
+    if k == tok.TK_STAR || k == tok.TK_SLASH || k == tok.TK_PERCENT:
+        ret 13
+    else k == tok.TK_PLUS || k == tok.TK_MINUS:
+        ret 12
+    else k == tok.TK_LT || k == tok.TK_GT || k == tok.TK_LE || k == tok.TK_GE:
+        ret 10
+    else k == tok.TK_EQ || k == tok.TK_NE:
+        ret 9
+    else k == tok.TK_SHL || k == tok.TK_SHR:
+        ret 11
+    else k == tok.TK_AMP:
+        ret 8
+    else k == tok.TK_CARET:
+        ret 7
+    else k == tok.TK_PIPE:
+        ret 6
+    else k == tok.TK_AND:
+        ret 5
+    else k == tok.TK_OR:
+        ret 4
+    end
+    ret 12
+end
+
+// JavaScript has one numeric type (f64) and its bitwise operators coerce to
+// *signed* 32-bit, so salam's sized integers need explicit wrapping to keep
+// the modulo-2^n semantics of SALAM-TYPES.md 4.1: without it `~(0 as u32)`
+// was -1 instead of 4294967295 and `(4000000000 as u32) + x` never wrapped.
+//
+// Only widths up to 32 bits can be modelled: an f64 cannot hold every i64/
+// u64 value, so 64-bit types are left alone rather than silently rounded.
+func jsg_int_ts_bits(ts: str): int:
+    if str.Equals(ts, "i8") || str.Equals(ts, "u8"):
+        ret 8
+    end
+    if str.Equals(ts, "i16") || str.Equals(ts, "u16"):
+        ret 16
+    end
+    if str.Equals(ts, "i32") || str.Equals(ts, "u32"):
+        ret 32
+    end
+    ret 64
+end
+
+func jsg_ts_wrappable(ts: str): bool:
+    ret cg_is_int_typestr(ts) && jsg_int_ts_bits(ts) <= 32
+end
+
+func jsg_op_is_cmp(k: int): bool:
+    ret k == tok.TK_EQ || k == tok.TK_NE || k == tok.TK_LT || k == tok.TK_GT || k == tok.TK_LE || k == tok.TK_GE
+end
+
+// Reduce a JS number to the two's-complement value of type ts.
+func jsg_wrap_int(expr: str, ts: str): str:
+    if str.Equals(ts, "u8"):
+        ret "((" + expr + ") & 255)"
+    end
+    if str.Equals(ts, "u16"):
+        ret "((" + expr + ") & 65535)"
+    end
+    if str.Equals(ts, "u32"):
+        ret "((" + expr + ") >>> 0)"
+    end
+    if str.Equals(ts, "i8"):
+        ret "((" + expr + ") << 24 >> 24)"
+    end
+    if str.Equals(ts, "i16"):
+        ret "((" + expr + ") << 16 >> 16)"
+    end
+    ret "((" + expr + ") | 0)"
+end
+
+func jsg_op(k: int): str:
+    if k == tok.TK_EQ:
+        ret "==="
+    end
+    if k == tok.TK_NE:
+        ret "!=="
+    end
+    ret cg_op(k)
+end
+
+func jsg_wrap(sv: str, own: int, minprec: int): str:
+    if own < minprec:
+        ret "(" + sv + ")"
+    end
+    ret sv
+end
+
+// "" = C NULL. rhs 0 = C NULL. _sname is unused in the C too (it renders
+// through ssym->name); kept for signature parity.
+func jsg_emit_op_call(
+    g &: Jg, s &: sm.Sema, a &: at.Ast, lhs: int, ssym: int, _sname: str, mname: str, rhs: int
+): str:
+    sv := sm.SymAt(s, ssym)
+    if sv.members == 0:
+        ret ""
+    end
+    m := sm.LookupLocal(s, sv.members, mname)
+    if m == 0 || sm.SymAt(s, m).kind != sm.SYM_METHOD:
+        ret ""
+    end
+    sig := pick_op_overload(s, m, rhs != 0 ? 1 : 0)
+    if sig == 0:
+        ret ""
+    end
+    spkg := str.Len(sv.pkgname) > 0 ? sv.pkgname : g.pkg
+    fn := jsg_fn_name(g, s, spkg, sv.name, mname, m, sig, false, false)
+    if rhs != 0:
+        ret fn + "(" + jsg_expr_p(g, s, a, lhs, 0) + ", " + jsg_expr_p(g, s, a, rhs, 0) + ")"
+    end
+    ret fn + "(" + jsg_expr_p(g, s, a, lhs, 0) + ")"
+end

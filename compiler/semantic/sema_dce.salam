@@ -1,0 +1,90 @@
+package semantic
+
+import str
+import at "../ast.salam"
+
+// ===== dce.c (5d) =====
+// The C module state is the g_sm_dce_* globals; dce_reset(arena) becomes
+// DceReset() (no arena - vectors own their storage). dce_enabled() defaults
+// to false, so a plain `sema.Run` build behaves exactly like before.
+
+// dce_key - "%s::%s"
+func dce_key(pkg: str, fn: str): str:
+    ret pkg + "::" + fn
+end
+
+// key_in
+func dce_key_in(v: Vector<str>, key: str): bool:
+    repeat v.len() with i:
+        if str.Equals(v.get(i)[0], key):
+            ret true
+        end
+    end
+    ret false
+end
+
+// dce_note_call
+func dce_note_call(
+    caller_pkg: str, caller_fn: str, callee_pkg: str, callee_fn: str
+):
+    if !g_sm_dce_enabled || !g_sm_dce_init:
+        ret
+    end
+    if str.Len(caller_fn) == 0:
+        dce_mark_root(callee_pkg, callee_fn)
+        ret
+    end
+    g_sm_dce_edge_from.push(dce_key(caller_pkg, caller_fn))
+    g_sm_dce_edge_to.push(dce_key(callee_pkg, callee_fn))
+end
+
+// dce_mark_root
+func dce_mark_root(pkg: str, fn: str):
+    if !g_sm_dce_enabled || !g_sm_dce_init:
+        ret
+    end
+    k := dce_key(pkg, fn)
+    if !dce_key_in(g_sm_dce_roots, k):
+        g_sm_dce_roots.push(k)
+    end
+end
+
+// dce_caller_rooted (sema_call.c)
+func dce_caller_rooted(s &: Sema, a &: at.Ast): bool:
+    if s.cur_func == 0:
+        ret true
+    end
+    sg := sig_at(s, s.cur_func)
+    if sg.owner != 0:
+        ret true
+    end
+    if sg.decl == 0:
+        ret true
+    end
+    d := at.Get(a, sg.decl)
+    if d.typarams.len() > 0:
+        ret true
+    end
+    if d.is_extern:
+        ret true
+    end
+    if d.synthetic:
+        ret true
+    end
+    ret false
+end
+
+// dce_note (sema_call.c) - 5d note: gained the `a` param (dce_caller_rooted
+// reads the current function's decl node).
+func dce_note(s &: Sema, a &: at.Ast, callee_pkg: str, callee_fn: str):
+    if !g_sm_dce_enabled:
+        ret
+    end
+    if dce_caller_rooted(s, a):
+        dce_mark_root(callee_pkg, callee_fn)
+        ret
+    end
+    dce_note_call(
+        s.pkg, at.Get(a, sig_at(s, s.cur_func).decl).name, callee_pkg, callee_fn
+    )
+end

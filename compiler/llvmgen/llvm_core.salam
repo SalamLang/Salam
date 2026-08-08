@@ -1,0 +1,361 @@
+package llvmgen
+
+import str
+import co "../sal_core.salam"
+import at "../ast.salam"
+import sm "../semantic/semantic.salam"
+
+// ===== codegen_llvm.c =====
+
+// ll_datalayout's host default (the C #if chain, folded at compile time).
+func dl_host(): str:
+    if SALAM_ARCH_X64 && SALAM_OS_WINDOWS:
+        ret "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+    else SALAM_ARCH_X64 && SALAM_OS_MAC:
+        ret "e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+    else SALAM_ARCH_X64:
+        ret "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+    else SALAM_ARCH_ARM64 && SALAM_OS_MAC:
+        ret "e-m:o-i64:64-i128:128-n32:64-S128"
+    else SALAM_ARCH_ARM64:
+        ret "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128"
+    else SALAM_ARCH_X86:
+        ret "e-m:e-p:32:32-p270:32:32-p271:32:32-p272:64:64-i128:128-f64:32:64-f80:32-n8:16:32-S128"
+    else:
+        ret ""
+    end
+end
+
+// ll_datalayout ("" = none/unknown).
+func datalayout(triple: str): str:
+    dl_x64_elf := "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+    dl_x64_win := "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+    dl_x64_mac := "e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+    dl_x86_elf := "e-m:e-p:32:32-p270:32:32-p271:32:32-p272:64:64-i128:128-f64:32:64-f80:32-n8:16:32-S128"
+    dl_a64_elf := "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128"
+    dl_a64_mac := "e-m:o-i64:64-i128:128-n32:64-S128"
+    dl_rv64 := "e-m:e-p:64:64-i64:64-i128:128-n32:64-S128"
+    if str.Len(triple) == 0:
+        ret dl_host()
+    end
+    win := str.Contains(triple, "windows")
+    mac := str.Contains(triple, "apple") || str.Contains(triple, "darwin") || str.Contains(triple, "macos")
+    if str.Contains(triple, "x86_64") || str.Contains(triple, "amd64"):
+        ret win ? dl_x64_win : (mac ? dl_x64_mac : dl_x64_elf)
+    end
+    if str.Contains(triple, "aarch64") || str.Contains(triple, "arm64"):
+        ret mac ? dl_a64_mac : dl_a64_elf
+    end
+    if !win && !mac && (
+        str.Contains(triple, "i686") || str.Contains(triple, "i586") || str.Contains(triple, "i486") || str.Contains(triple, "i386")
+    ):
+        ret dl_x86_elf
+    end
+    if str.Contains(triple, "riscv64"):
+        ret dl_rv64
+    end
+    ret ""
+end
+
+// ll_target_is_windows
+func target_is_windows_of(triple: str): bool:
+    if str.Len(triple) > 0:
+        ret str.Contains(triple, "windows") || str.Contains(triple, "mingw") || str.Contains(triple, "win32")
+    end
+    if SALAM_OS_WINDOWS:
+        ret true
+    else:
+        ret false
+    end
+end
+
+// pl_widen - helper-local i32 -> usize widening (writes into ll->hg).
+func pl_widen(v &: Lv, src: str, dst: str): str:
+    if v.ptr_bits <= 32:
+        ret src
+    end
+    out_hg(v, "  " + dst + " = sext i32 " + src + " to " + v.usize + "\n")
+    ret dst
+end
+
+// ll_emit_prologue
+func emit_prologue(v &: Lv):
+    u := v.usize
+    out_g(
+        v, "; Salam -> LLVM IR (textual). usize = " + u + " (" + (v.ptr_bits == 32 ? "32" : "64") + "-bit target).\n"
+    )
+    out_g(v, "declare i32 @printf(ptr, ...) nounwind\n")
+    out_g(v, "declare i32 @dprintf(i32, ptr, ...) nounwind\n")
+    out_g(v, "declare i64 @write(i32, ptr, i64) nounwind\n")
+    out_g(
+        v, "declare " + u + " @strlen(ptr) nounwind willreturn memory(argmem: read)\n"
+    )
+    out_g(v, "declare i32 @strcmp(ptr, ptr) nounwind willreturn memory(argmem: read)\n")
+    out_g(v, "declare noalias ptr @malloc(" + u + ") nounwind allocsize(0)\n")
+    out_g(
+        v, "declare noalias ptr @realloc(ptr, " + u + ") nounwind allocsize(1)\n"
+    )
+    out_g(v, "declare void @free(ptr) nounwind\n")
+    out_g(v, "declare ptr @memcpy(ptr, ptr, " + u + ") nounwind\n")
+    out_g(v, "declare ptr @memmove(ptr, ptr, " + u + ") nounwind\n")
+    out_g(v, "declare void @abort() noreturn nounwind cold\n")
+    out_g(v, "declare void @exit(i32) noreturn nounwind\n")
+    out_g(v, "declare i32 @snprintf(ptr, " + u + ", ptr, ...) nounwind\n")
+    out_g(v, "declare i64 @strtol(ptr, ptr, i32) nounwind\n")
+    out_g(v, "declare double @strtod(ptr, ptr) nounwind\n")
+    out_g(v, "declare ptr @strstr(ptr, ptr) nounwind willreturn memory(argmem: read)\n")
+    out_g(v, "declare double @llvm.pow.f64(double, double)\n")
+    out_g(v, "%dyn = type { ptr, ptr }\n")
+end
+
+// ll_emit_substr
+func emit_substr(v &: Lv):
+    u := v.usize
+    out_hg(v, "define internal noalias ptr @salam_ll_substr(ptr %s, i32 %start, i32 %len) nounwind willreturn nofree {\nentry:\n")
+    l := pl_widen(v, "%len", "%l")
+    so := pl_widen(v, "%start", "%so")
+    out_hg(v, "  %t = add " + u + " " + l + ", 1\n")
+    out_hg(v, "  %buf = call ptr @malloc(" + u + " %t)\n")
+    out_hg(v, "  %src = getelementptr i8, ptr %s, " + u + " " + so + "\n")
+    out_hg(
+        v, "  %c = call ptr @memcpy(ptr %buf, ptr %src, " + u + " " + l + ")\n"
+    )
+    out_hg(v, "  %e = getelementptr i8, ptr %buf, " + u + " " + l + "\n")
+    out_hg(v, "  store i8 0, ptr %e\n  ret ptr %buf\n}\n\n")
+end
+
+// ll_emit_strcat
+func emit_strcat(v &: Lv):
+    u := v.usize
+    out_hg(
+        v, "define internal noalias ptr @salam_ll_strcat(ptr %a, ptr %b) nounwind willreturn nofree {\n" + "entry:\n" + "  %la = call " + u + " @strlen(ptr %a)\n" + "  %lb = call " + u + " @strlen(ptr %b)\n" + "  %sum = add " + u + " %la, %lb\n" + "  %tot = add " + u + " %sum, 1\n" + "  %buf = call ptr @malloc(" + u + " %tot)\n" + "  %c1 = call ptr @memcpy(ptr %buf, ptr %a, " + u + " %la)\n" + "  %end = getelementptr i8, ptr %buf, " + u + " %la\n" + "  %lb1 = add " + u + " %lb, 1\n" + "  %c2 = call ptr @memcpy(ptr %end, ptr %b, " + u + " %lb1)\n" + "  ret ptr %buf\n}\n\n"
+    )
+end
+
+// ll_emit_isws
+func emit_isws(v &: Lv):
+    out_hg(
+        v, "define internal i1 @salam_ll_isws(i8 %c) nounwind willreturn memory(none) {\n" + "entry:\n" + "  %s32 = icmp eq i8 %c, 32\n" + "  %s9 = icmp eq i8 %c, 9\n" + "  %s10 = icmp eq i8 %c, 10\n" + "  %s13 = icmp eq i8 %c, 13\n" + "  %o1 = or i1 %s32, %s9\n" + "  %o2 = or i1 %o1, %s10\n" + "  %o3 = or i1 %o2, %s13\n" + "  ret i1 %o3\n}\n\n"
+    )
+end
+
+// ll_emit_trim
+func emit_trim(v &: Lv):
+    need(v, LV_H_ISWS)
+    u := v.usize
+    out_hg(
+        v, "define internal noalias ptr @salam_ll_trim(ptr %s) nounwind willreturn nofree {\n" + "entry:\n" + "  %n = call " + u + " @strlen(ptr %s)\n" + "  br label %f\n" + "f:\n" + "  %a = phi " + u + " [ 0, %entry ], [ %an, %fbody ]\n" + "  %c1 = icmp ult " + u + " %a, %n\n" + "  br i1 %c1, label %fchk, label %b\n" + "fchk:\n" + "  %p1 = getelementptr i8, ptr %s, " + u + " %a\n" + "  %ch1 = load i8, ptr %p1\n" + "  %w1 = call i1 @salam_ll_isws(i8 %ch1)\n" + "  br i1 %w1, label %fbody, label %b\n" + "fbody:\n" + "  %an = add " + u + " %a, 1\n" + "  br label %f\n" + "b:\n" + "  br label %r\n" + "r:\n" + "  %e = phi " + u + " [ %n, %b ], [ %en, %rbody ]\n" + "  %c2 = icmp ugt " + u + " %e, %a\n" + "  br i1 %c2, label %rchk, label %done\n" + "rchk:\n" + "  %em1 = sub " + u + " %e, 1\n" + "  %p2 = getelementptr i8, ptr %s, " + u + " %em1\n" + "  %ch2 = load i8, ptr %p2\n" + "  %w2 = call i1 @salam_ll_isws(i8 %ch2)\n" + "  br i1 %w2, label %rbody, label %done\n" + "rbody:\n" + "  %en = sub " + u + " %e, 1\n" + "  br label %r\n" + "done:\n" + "  %len = sub " + u + " %e, %a\n" + "  %tot = add " + u + " %len, 1\n" + "  %buf = call ptr @malloc(" + u + " %tot)\n" + "  %src = getelementptr i8, ptr %s, " + u + " %a\n" + "  %cp = call ptr @memcpy(ptr %buf, ptr %src, " + u + " %len)\n" + "  %endp = getelementptr i8, ptr %buf, " + u + " %len\n" + "  store i8 0, ptr %endp\n" + "  ret ptr %buf\n}\n\n"
+    )
+end
+
+// ll_emit_repeat
+func emit_repeat(v &: Lv):
+    u := v.usize
+    out_hg(v, "define internal noalias ptr @salam_ll_repeat(ptr %s, i32 %n) nounwind willreturn nofree {\nentry:\n")
+    out_hg(v, "  %slen = call " + u + " @strlen(ptr %s)\n")
+    nw := pl_widen(v, "%n", "%nw")
+    out_hg(v, "  %nle0 = icmp sle i32 %n, 0\n")
+    out_hg(v, "  %slen0 = icmp eq " + u + " %slen, 0\n")
+    out_hg(v, "  %skip = or i1 %nle0, %slen0\n")
+    out_hg(v, "  br i1 %skip, label %empty, label %compute\n")
+    out_hg(v, "empty:\n")
+    out_hg(v, "  %eb = call ptr @malloc(" + u + " 1)\n")
+    out_hg(v, "  store i8 0, ptr %eb\n  ret ptr %eb\n")
+    out_hg(v, "compute:\n")
+    out_hg(v, "  %total = mul " + u + " %slen, " + nw + "\n")
+    out_hg(v, "  %tot1 = add " + u + " %total, 1\n")
+    out_hg(v, "  %buf = call ptr @malloc(" + u + " %tot1)\n")
+    out_hg(v, "  %c0 = call ptr @memcpy(ptr %buf, ptr %s, " + u + " %slen)\n")
+    out_hg(v, "  br label %loop\n")
+    out_hg(v, "loop:\n")
+    out_hg(
+        v, "  %filled = phi " + u + " [ %slen, %compute ], [ %newfilled, %body ]\n"
+    )
+    out_hg(v, "  %done = icmp uge " + u + " %filled, %total\n")
+    out_hg(v, "  br i1 %done, label %finish, label %body\n")
+    out_hg(v, "body:\n")
+    out_hg(v, "  %remain = sub " + u + " %total, %filled\n")
+    out_hg(v, "  %lt = icmp ult " + u + " %filled, %remain\n")
+    out_hg(
+        v, "  %chunk = select i1 %lt, " + u + " %filled, " + u + " %remain\n"
+    )
+    out_hg(v, "  %dst = getelementptr i8, ptr %buf, " + u + " %filled\n")
+    out_hg(
+        v, "  %cc = call ptr @memcpy(ptr %dst, ptr %buf, " + u + " %chunk)\n"
+    )
+    out_hg(v, "  %newfilled = add " + u + " %filled, %chunk\n")
+    out_hg(v, "  br label %loop\n")
+    out_hg(v, "finish:\n")
+    out_hg(v, "  %endp = getelementptr i8, ptr %buf, " + u + " %total\n")
+    out_hg(v, "  store i8 0, ptr %endp\n  ret ptr %buf\n}\n\n")
+end
+
+// ll_emit_case
+func emit_case(v &: Lv, fname: str, lo: int, hi: int, delta: int):
+    u := v.usize
+    out_hg(
+        v, "define internal noalias ptr @" + fname + "(ptr %s) nounwind willreturn nofree {\nentry:\n"
+    )
+    out_hg(v, "  %n = call " + u + " @strlen(ptr %s)\n")
+    out_hg(v, "  %tot = add " + u + " %n, 1\n")
+    out_hg(v, "  %buf = call ptr @malloc(" + u + " %tot)\n")
+    out_hg(v, "  br label %loop\n")
+    out_hg(v, "loop:\n")
+    out_hg(v, "  %i = phi " + u + " [ 0, %entry ], [ %ni, %body ]\n")
+    out_hg(v, "  %cont = icmp ult " + u + " %i, %n\n")
+    out_hg(v, "  br i1 %cont, label %body, label %done\n")
+    out_hg(v, "body:\n")
+    out_hg(v, "  %sp = getelementptr i8, ptr %s, " + u + " %i\n")
+    out_hg(v, "  %c = load i8, ptr %sp\n")
+    out_hg(v, "  %ge = icmp sge i8 %c, " + co.I64Toa(lo as i64) + "\n")
+    out_hg(v, "  %le = icmp sle i8 %c, " + co.I64Toa(hi as i64) + "\n")
+    out_hg(v, "  %inrange = and i1 %ge, %le\n")
+    out_hg(v, "  %c2 = add i8 %c, " + co.I64Toa(delta as i64) + "\n")
+    out_hg(v, "  %oc = select i1 %inrange, i8 %c2, i8 %c\n")
+    out_hg(v, "  %dp = getelementptr i8, ptr %buf, " + u + " %i\n")
+    out_hg(v, "  store i8 %oc, ptr %dp\n")
+    out_hg(v, "  %ni = add " + u + " %i, 1\n")
+    out_hg(v, "  br label %loop\n")
+    out_hg(v, "done:\n")
+    out_hg(v, "  %ep = getelementptr i8, ptr %buf, " + u + " %n\n")
+    out_hg(v, "  store i8 0, ptr %ep\n  ret ptr %buf\n}\n\n")
+end
+
+// ll_emit_upper / ll_emit_lower
+func emit_upper(v &: Lv):
+    emit_case(v, "salam_ll_upper", 97, 122, 0 - 32)
+end
+
+func emit_lower(v &: Lv):
+    emit_case(v, "salam_ll_lower", 65, 90, 32)
+end
+
+// ll_emit_strhash
+func emit_strhash(v &: Lv):
+    out_hg(
+        v, "define internal i64 @salam_ll_strhash(ptr %s) nounwind willreturn memory(argmem: read) {\n" + "entry:\n  br label %loop\n" + "loop:\n" + "  %j = phi i64 [ 0, %entry ], [ %jn, %body ]\n" + "  %h = phi i64 [ 14695981039346656037, %entry ], [ %hn, %body ]\n" + "  %p = getelementptr i8, ptr %s, i64 %j\n" + "  %c8 = load i8, ptr %p\n" + "  %z = icmp eq i8 %c8, 0\n" + "  br i1 %z, label %done, label %body\n" + "body:\n" + "  %c = zext i8 %c8 to i64\n" + "  %hm = mul i64 %h, 1099511628211\n" + "  %hn = add i64 %hm, %c\n" + "  %jn = add i64 %j, 1\n" + "  br label %loop\n" + "done:\n  ret i64 %h\n}\n\n"
+    )
+end
+
+// ll_emit_inthash
+func emit_inthash(v &: Lv):
+    out_hg(
+        v, "define internal i64 @salam_ll_inthash(i64 %x) nounwind willreturn memory(none) {\n" + "entry:\n" + "  %h0 = add i64 %x, 14695981039346656037\n" + "  %h1 = mul i64 %h0, 1099511628211\n" + "  %h2 = add i64 %h1, 1099511628211\n" + "  %h3 = mul i64 %h2, 1099511628211\n" + "  ret i64 %h3\n}\n\n"
+    )
+end
+
+// ll_emit_i64str
+func emit_i64str(v &: Lv):
+    u := v.usize
+    out_hg(v, "@.sfmt.lld = private unnamed_addr constant [5 x i8] c\"%lld\\00\"\n")
+    out_hg(
+        v, "define internal noalias ptr @salam_ll_i64str(i64 %v) nounwind willreturn nofree {\n" + "entry:\n" + "  %b = call ptr @malloc(" + u + " 32)\n" + "  %r = call i32 (ptr, " + u + ", ptr, ...) @snprintf(ptr %b, " + u + " 32, ptr @.sfmt.lld, i64 %v)\n" + "  ret ptr %b\n}\n\n"
+    )
+end
+
+// ll_emit_u64str
+func emit_u64str(v &: Lv):
+    u := v.usize
+    out_hg(v, "@.sfmt.llu = private unnamed_addr constant [5 x i8] c\"%llu\\00\"\n")
+    out_hg(
+        v, "define internal noalias ptr @salam_ll_u64str(i64 %v) nounwind willreturn nofree {\n" + "entry:\n" + "  %b = call ptr @malloc(" + u + " 32)\n" + "  %r = call i32 (ptr, " + u + ", ptr, ...) @snprintf(ptr %b, " + u + " 32, ptr @.sfmt.llu, i64 %v)\n" + "  ret ptr %b\n}\n\n"
+    )
+end
+
+// ll_emit_f64str
+func emit_f64str(v &: Lv):
+    u := v.usize
+    out_hg(v, "@.sfmt.g = private unnamed_addr constant [3 x i8] c\"%g\\00\"\n")
+    out_hg(
+        v, "define internal noalias ptr @salam_ll_f64str(double %v) nounwind willreturn nofree {\n" + "entry:\n" + "  %b = call ptr @malloc(" + u + " 32)\n" + "  %r = call i32 (ptr, " + u + ", ptr, ...) @snprintf(ptr %b, " + u + " 32, ptr @.sfmt.g, double %v)\n" + "  ret ptr %b\n}\n\n"
+    )
+end
+
+// ll_emit_charstr
+func emit_charstr(v &: Lv):
+    out_hg(
+        v, "define internal noalias ptr @salam_ll_charstr(i32 %c) nounwind willreturn nofree {\n" + "entry:\n" + "  %b = call ptr @malloc(" + v.usize + " 2)\n" + "  %t = trunc i32 %c to i8\n" + "  store i8 %t, ptr %b\n" + "  %p1 = getelementptr i8, ptr %b, i64 1\n" + "  store i8 0, ptr %p1\n" + "  ret ptr %b\n}\n\n"
+    )
+end
+
+// ll_emit_outbuf
+func emit_outbuf(v &: Lv):
+    out_hg(
+        v, "@salam_ob = internal global [65536 x i8] zeroinitializer\n" + "@salam_obn = internal global i64 0\n" + "@stdout = external global ptr\n" + "declare i32 @fflush(ptr) nounwind\n" + "declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1) nounwind\n" + "define internal void @salam_out_flush() nounwind {\n" + "entry:\n" + "  %n = load i64, ptr @salam_obn\n" + "  %z = icmp eq i64 %n, 0\n" + "  br i1 %z, label %done, label %do\n" + "do:\n" + "  %r = call i64 @write(i32 1, ptr @salam_ob, i64 %n)\n" + "  store i64 0, ptr @salam_obn\n" + "  br label %done\n" + "done:\n" + "  ret void\n" + "}\n" + "define internal void @salam_out_write(ptr %s, i64 %n) nounwind {\n" + "entry:\n" + "  %obn = load i64, ptr @salam_obn\n" + "  %sum = add i64 %obn, %n\n" + "  %over = icmp ugt i64 %sum, 65536\n" + "  br i1 %over, label %flush, label %chk\n" + "flush:\n" + "  call void @salam_out_flush()\n" + "  br label %chk\n" + "chk:\n" + "  %big = icmp uge i64 %n, 65536\n" + "  br i1 %big, label %direct, label %copy\n" + "direct:\n" + "  %rd = call i64 @write(i32 1, ptr %s, i64 %n)\n" + "  ret void\n" + "copy:\n" + "  %obn2 = load i64, ptr @salam_obn\n" + "  %dst = getelementptr inbounds [65536 x i8], ptr @salam_ob, i64 0, i64 %obn2\n" + "  call void @llvm.memcpy.p0.p0.i64(ptr %dst, ptr %s, i64 %n, i1 false)\n" + "  %newn = add i64 %obn2, %n\n" + "  store i64 %newn, ptr @salam_obn\n" + "  ret void\n" + "}\n" + "@llvm.global_dtors = appending global [1 x { i32, ptr, ptr }] " + "[{ i32, ptr, ptr } { i32 65535, ptr @salam_out_flush, ptr null }]\n\n"
+    )
+end
+
+// ll_need - the LL_HELPER_EMIT[] dispatch as an if/else chain.
+func need(v &: Lv, which: int):
+    if v.hneed.get(which)[0]:
+        ret
+    end
+    v.hneed.set(which, true)
+    if which == LV_H_SUBSTR:
+        emit_substr(v)
+    else which == LV_H_STRCAT:
+        emit_strcat(v)
+    else which == LV_H_ISWS:
+        emit_isws(v)
+    else which == LV_H_TRIM:
+        emit_trim(v)
+    else which == LV_H_STRHASH:
+        emit_strhash(v)
+    else which == LV_H_INTHASH:
+        emit_inthash(v)
+    else which == LV_H_I64STR:
+        emit_i64str(v)
+    else which == LV_H_U64STR:
+        emit_u64str(v)
+    else which == LV_H_F64STR:
+        emit_f64str(v)
+    else which == LV_H_CHARSTR:
+        emit_charstr(v)
+    else which == LV_H_OUTBUF:
+        emit_outbuf(v)
+    else which == LV_H_REPEAT:
+        emit_repeat(v)
+    else which == LV_H_UPPER:
+        emit_upper(v)
+    else which == LV_H_LOWER:
+        emit_lower(v)
+    end
+end
+
+// ll_toplevel
+func toplevel(v &: Lv, s &: sm.Sema, a &: at.Ast, d: int):
+    dn := at.Get(a, d)
+    k := dn.kind
+    if k == at.AST_FUNC_DEF:
+        if dn.is_extern && dn.a == 0:
+            ret
+        end
+        if dn.typarams.len() > 0:
+            ret
+        end
+        emit_function(v, s, a, d, 0)
+    else k == at.AST_STRUCT_DEF:
+        if dn.typarams.len() > 0:
+            ret
+        end
+        ssym := struct_sym(v, s, a, dn.name)
+        repeat at.ChildCount(a, d) with i:
+            m := at.Child(a, d, i)
+            if at.KindOf(a, m) == at.AST_FUNC_DEF:
+                emit_function(v, s, a, m, ssym)
+            end
+        end
+    // Layout declarations are the HTML/UI DSL, lowered by sal_layout.salam
+    // for `layout-build`/`web`, never by a code generator - the C backend
+    // emits "layout block omitted in general (C) mode" and drops them.
+    // Reporting them as unsupported made every layout-using file look like
+    // an LLVM backend gap when the C backend does not compile them either.
+    else k == at.AST_ENUM_DEF || k == at.AST_CONST_DECL || k == at.AST_VAR_DECL || k == at.AST_INTERFACE_DEF || k == at.AST_IMPL_DEF || k == at.AST_IMPORT || k == at.AST_LINK || k == at.AST_TYPE_ALIAS || k == at.AST_LAYOUT_BLOCK || k == at.AST_LAYOUT_COMPONENT:
+        // nothing at the top level
+        _k := k
+    else:
+        lv_error(
+            v, a, d, "top-level " + at.KindName(k) + " (layout/unsupported)"
+        )
+    end
+end

@@ -36,19 +36,23 @@ static void cli_set_defaults(options_t *out)
     out->run_args_count = 0;
     out->output = NULL;
     out->cc = "tcc";
+    out->backend = "auto";
     out->keep_c = false;
+    out->force = false;
     out->safe = true;
     out->fmt_check = false;
     out->fmt_recursive = false;
     out->fmt_tabs = false;
     out->fmt_indent_width = 4;
     out->fmt_fix_order = false;
+    out->fmt_minify = false;
     out->debug_info = false;
     out->asan = false;
     out->interp = false;
     out->stdlib_path = NULL;
     out->exe_path[0] = '\0';
     out->ndefines = 0;
+    out->nlibpath = 0;
     out->llvm_opt_level = 0;
     out->llvm_emit = 0;
     out->llvm_verify = false;
@@ -59,6 +63,9 @@ static void cli_set_defaults(options_t *out)
     out->version_short = false;
     out->serve_host = NULL;
     out->serve_port = -1;
+    out->time_report = false;
+    out->time_report_fmt = PROF_FMT_TABLE;
+    out->time_trace = NULL;
 }
 
 bool cli_parse(int argc, char **argv, options_t *out)

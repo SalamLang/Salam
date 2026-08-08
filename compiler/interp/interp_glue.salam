@@ -1,0 +1,83 @@
+package interp
+
+import at "../ast.salam"
+import i18 "../i18n.salam"
+
+// ===========================================================================
+// ===== interp_expr.c / interp_stmt.c shared glue (ported in stage A) =====
+// ===========================================================================
+
+// call_func (interp_expr.c) - parameter binding, body execution, LIFO defers.
+// thisv is passed with has_this (the C took a nullable value_t*).
+func call_func(
+    ip &: Interp, a &: at.Ast, fnnode: int, defenv: int, has_this: bool, thisv: Value, args: Vector<Value>
+): Value:
+    ip.depth += 1
+    if ip.depth > INTERP_MAX_DEPTH:
+        rt_error(
+            ip, a, fnnode, i18.Tr("call stack too deep (possible infinite recursion)")
+        )
+        ip.depth -= 1
+        ret val_null()
+    end
+    env := env_new(ip, defenv)
+    if has_this:
+        env_define(ip, env, "this", thisv)
+    end
+    repeat at.ChildCount(a, fnnode) with i:
+        p := at.Child(a, fnnode, i)
+        pn := at.Get(a, p)
+        if i < args.len():
+            env_define(ip, env, pn.name, args.get(i)[0])
+        else pn.a != 0:
+            env_define(ip, env, pn.name, eval(ip, a, env, pn.a))
+        else:
+            env_define(ip, env, pn.name, val_null())
+        end
+        if ip.failed:
+            ip.depth -= 1
+            ret val_null()
+        end
+    end
+    mut fr := Frame {}
+    defer fr.defer_stmts.free()
+    defer fr.defer_envs.free()
+    saved_med := ip.match_expr_depth
+    mut retv := val_null()
+    ip.match_expr_depth = 0
+    fnn := at.Get(a, fnnode)
+    if fnn.a != 0:
+        _f := exec_list(ip, a, env, fr, fnn.a, retv)
+    end
+    ip.match_expr_depth = saved_med
+    mut di := fr.defer_stmts.len()
+    until di > 0:
+        di -= 1
+        mut dummy := val_null()
+        mut inner := Frame {}
+        _f2 := exec_stmt(
+            ip, a, fr.defer_envs.get(di)[0], inner, fr.defer_stmts.get(di)[0], dummy
+        )
+        inner.defer_stmts.free()
+        inner.defer_envs.free()
+    end
+    ip.depth -= 1
+    ret retv
+end
+
+// exec_list (interp_stmt.c) - executes `owner`'s child list; cooperative
+// unwinding stops the walk once ip.failed is set.
+func exec_list(
+    ip &: Interp, a &: at.Ast, env: int, fr &: Frame, owner: int, retv &: Value
+): int:
+    repeat at.ChildCount(a, owner) with i:
+        f := exec_stmt(ip, a, env, fr, at.Child(a, owner, i), retv)
+        if f != FLOW_NORMAL:
+            ret f
+        end
+        if ip.failed:
+            ret FLOW_NORMAL
+        end
+    end
+    ret FLOW_NORMAL
+end

@@ -1,0 +1,548 @@
+package semantic
+
+import str
+
+// ===== types.c =====
+
+// type_prim - primitive ids equal their kind values (pre-seeded by New;
+// the Sema is unused here but kept for C call-site parity).
+func type_prim(_s &: Sema, kind: int): int:
+    if kind < 0 || kind > TY_F64:
+        ret TY_ERROR
+    end
+    ret kind
+end
+
+// type_array - interned on (elem, length).
+func type_array(s &: Sema, elem: int, length: i64): int:
+    repeat s.arrays_intern.len() with i:
+        tid := s.arrays_intern.get(i)[0]
+        t := ty_at(s, tid)
+        if t.elem == elem && t.length == length:
+            ret tid
+        end
+    end
+    mut nt := Type { kind = TY_ARRAY }
+    nt.elem = elem
+    nt.length = length
+    id := s.types.len()
+    s.types.push(nt)
+    s.arrays_intern.push(id)
+    ret id
+end
+
+// type_slice - NOT interned (matches the C).
+func type_slice(s &: Sema, elem: int): int:
+    mut nt := Type { kind = TY_SLICE }
+    nt.elem = elem
+    id := s.types.len()
+    s.types.push(nt)
+    ret id
+end
+
+// type_ptr - interned on pointee.
+func type_ptr(s &: Sema, pointee: int): int:
+    repeat s.ptrs_intern.len() with i:
+        tid := s.ptrs_intern.get(i)[0]
+        t := ty_at(s, tid)
+        if t.pointee == pointee:
+            ret tid
+        end
+    end
+    mut nt := Type { kind = TY_PTR }
+    nt.pointee = pointee
+    id := s.types.len()
+    s.types.push(nt)
+    s.ptrs_intern.push(id)
+    ret id
+end
+
+func type_struct(s &: Sema, decl_sym: int, name: str): int:
+    mut nt := Type { kind = TY_STRUCT }
+    nt.decl = decl_sym
+    nt.name = name
+    id := s.types.len()
+    s.types.push(nt)
+    ret id
+end
+
+func type_enum(s &: Sema, decl_sym: int, name: str): int:
+    mut nt := Type { kind = TY_ENUM }
+    nt.decl = decl_sym
+    nt.name = name
+    id := s.types.len()
+    s.types.push(nt)
+    ret id
+end
+
+func type_dyn(s &: Sema, iface_decl: int, name: str): int:
+    mut nt := Type { kind = TY_DYN }
+    nt.decl = iface_decl
+    nt.name = name
+    id := s.types.len()
+    s.types.push(nt)
+    ret id
+end
+
+// type_kv (static helper for map/map_iter)
+func type_kv(s &: Sema, kind: int, key: int, val: int): int:
+    mut nt := Type { kind = kind }
+    nt.key = key
+    nt.elem = val
+    id := s.types.len()
+    s.types.push(nt)
+    ret id
+end
+
+func type_map(s &: Sema, key: int, val: int): int:
+    ret type_kv(s, TY_MAP, key, val)
+end
+
+func type_map_iter(s &: Sema, key: int, val: int): int:
+    ret type_kv(s, TY_MAP_ITER, key, val)
+end
+
+func type_vec(s &: Sema, elem: int): int:
+    mut nt := Type { kind = TY_VEC }
+    nt.elem = elem
+    id := s.types.len()
+    s.types.push(nt)
+    ret id
+end
+
+func type_file(s &: Sema): int:
+    mut nt := Type { kind = TY_FILE }
+    nt.name = "File"
+    id := s.types.len()
+    s.types.push(nt)
+    ret id
+end
+
+// type_func - `elem` holds the return type; params are copied.
+func type_func_new(s &: Sema, ret_t: int, params: Vector<int>): int:
+    mut nt := Type { kind = TY_FUNC }
+    nt.elem = ret_t
+    repeat params.len() with i:
+        nt.params.push(params.get(i)[0])
+    end
+    id := s.types.len()
+    s.types.push(nt)
+    ret id
+end
+
+// type_variant - members deduplicated with type_equiv, order kept.
+func type_variant_new(s &: Sema, members: Vector<int>): int:
+    mut nt := Type { kind = TY_VARIANT }
+    repeat members.len() with i:
+        m := members.get(i)[0]
+        mut dup := false
+        repeat nt.params.len() with j:
+            if type_equiv(s, nt.params.get(j)[0], m):
+                dup = true
+                break
+            end
+        end
+        if !dup:
+            nt.params.push(m)
+        end
+    end
+    id := s.types.len()
+    s.types.push(nt)
+    ret id
+end
+
+// type_variant_tag - member index in the variant, -1 if absent.
+func type_variant_tag(s &: Sema, variant: int, member: int): int:
+    if variant < 0:
+        ret 0 - 1
+    end
+    tv := ty_at(s, variant)
+    if tv.kind != TY_VARIANT:
+        ret 0 - 1
+    end
+    repeat tv.params.len() with i:
+        if type_equiv(s, tv.params.get(i)[0], member):
+            ret i
+        end
+    end
+    ret 0 - 1
+end
+
+// prim_fold (types.c) - one UTF-8 unit, folding Arabic/Farsi yeh (D9 8A /
+// DB 8C -> 0x101) and kaf (D9 83 / DA A9 -> 0x102). Also used for su_fold
+// (sema_util.c), which is byte-identical in the C.
+func prim_fold(s: str, i &: int): int:
+    n := str.Len(s)
+    if i >= n:
+        ret 0
+    end
+    b0 := byte_at(s, i)
+    if i + 1 < n:
+        b1 := byte_at(s, i + 1)
+        if (b0 == 217 && b1 == 138) || (b0 == 219 && b1 == 140):
+            i += 2
+            ret 257
+        end
+        if (b0 == 217 && b1 == 131) || (b0 == 218 && b1 == 169):
+            i += 2
+            ret 258
+        end
+    end
+    i += 1
+    ret b0
+end
+
+// prim_name_eq (types.c)
+func prim_name_eq(a: str, b: str): bool:
+    mut ia := 0
+    mut ib := 0
+    mut eq := false
+    mut done := false
+    until !done:
+        ka := prim_fold(a, ia)
+        kb := prim_fold(b, ib)
+        if ka != kb:
+            eq = false
+            done = true
+        else ka == 0:
+            eq = true
+            done = true
+        end
+    end
+    ret eq
+end
+
+// type_prim_kind_from_name - lang "" = the C NULL (match any language row).
+func type_prim_kind_from_name(name: str, lang: str): int:
+    if str.Len(name) == 0:
+        ret 0 - 1
+    end
+    mut want := 0
+    if str.Len(lang) >= 2:
+        b0 := byte_at(lang, 0)
+        b1 := byte_at(lang, 1)
+        if b0 == 102 && b1 == 97:
+            want = L_FA
+        else b0 == 101 && b1 == 110:
+            want = L_EN
+        else b0 == 97 && b1 == 114:
+            want = L_AR
+        end
+    end
+    repeat K_SM_PRIM_COUNT with i:
+        if prim_name_eq(name, k_sm_prim_names[i]):
+            if want == 0 || k_sm_prim_langs[i] == want:
+                ret k_sm_prim_kinds[i]
+            end
+        end
+    end
+    ret 0 - 1
+end
+
+// type_is_error - the C also treats a NULL type as error.
+func type_is_error(s &: Sema, t: int): bool:
+    if t < 0:
+        ret true
+    end
+    ret ty_at(s, t).kind == TY_ERROR
+end
+
+func type_is_integer(s &: Sema, t: int): bool:
+    if t < 0:
+        ret false
+    end
+    k := ty_at(s, t).kind
+    ret k >= TY_I8 && k <= TY_SIZE
+end
+
+func type_is_float(s &: Sema, t: int): bool:
+    if t < 0:
+        ret false
+    end
+    k := ty_at(s, t).kind
+    ret k == TY_F32 || k == TY_F64
+end
+
+func type_is_numeric(s &: Sema, t: int): bool:
+    ret type_is_integer(s, t) || type_is_float(s, t)
+end
+
+func type_is_signed(s &: Sema, t: int): bool:
+    if t < 0:
+        ret false
+    end
+    k := ty_at(s, t).kind
+    ret k >= TY_I8 && k <= TY_I64
+end
+
+// int_rank (types.c)
+func int_rank(k: int): int:
+    if k == TY_I8 || k == TY_U8:
+        ret 1
+    end
+    if k == TY_I16 || k == TY_U16:
+        ret 2
+    end
+    if k == TY_I32 || k == TY_U32:
+        ret 3
+    end
+    if k == TY_I64 || k == TY_U64 || k == TY_SIZE:
+        ret 4
+    end
+    ret 0
+end
+
+// type_equiv
+func type_equiv(s &: Sema, ta: int, tb: int): bool:
+    if ta == tb:
+        ret true
+    end
+    if ta < 0 || tb < 0:
+        ret false
+    end
+    va := ty_at(s, ta)
+    vb := ty_at(s, tb)
+    if va.kind != vb.kind:
+        ret false
+    end
+    k := va.kind
+    if k == TY_ARRAY:
+        ret va.length == vb.length && type_equiv(s, va.elem, vb.elem)
+    end
+    if k == TY_SLICE:
+        ret type_equiv(s, va.elem, vb.elem)
+    end
+    if k == TY_PTR:
+        ret type_equiv(s, va.pointee, vb.pointee)
+    end
+    if k == TY_MAP || k == TY_MAP_ITER:
+        ret type_equiv(s, va.key, vb.key) && type_equiv(s, va.elem, vb.elem)
+    end
+    if k == TY_VEC:
+        ret type_equiv(s, va.elem, vb.elem)
+    end
+    if k == TY_STRUCT || k == TY_ENUM || k == TY_DYN:
+        if va.decl == vb.decl:
+            ret true
+        end
+        ret str.Len(va.name) > 0 && str.Len(vb.name) > 0 && str.Equals(va.name, vb.name)
+    end
+    if k == TY_FUNC:
+        if !type_equiv(s, va.elem, vb.elem):
+            ret false
+        end
+        if va.params.len() != vb.params.len():
+            ret false
+        end
+        repeat va.params.len() with i:
+            if !type_equiv(s, va.params.get(i)[0], vb.params.get(i)[0]):
+                ret false
+            end
+        end
+        ret true
+    end
+    if k == TY_VARIANT:
+        if va.params.len() != vb.params.len():
+            ret false
+        end
+        repeat va.params.len() with i2:
+            if !type_equiv(s, va.params.get(i2)[0], vb.params.get(i2)[0]):
+                ret false
+            end
+        end
+        ret true
+    end
+    ret true
+end
+
+// type_implicit (static in types.c)
+func type_implicit(s &: Sema, src: int, dst: int): bool:
+    if src < 0 || dst < 0:
+        ret false
+    end
+    sk := ty_at(s, src).kind
+    dk := ty_at(s, dst).kind
+    if sk == TY_NULL && dk == TY_PTR:
+        ret true
+    end
+    if sk == TY_ENUM && dk == TY_I32:
+        ret true
+    end
+    if sk == TY_UCHAR && dk == TY_STR:
+        ret true
+    end
+    if dk == TY_DYN && sk == TY_STRUCT:
+        ret true
+    end
+    if dk == TY_VARIANT && sk != TY_VARIANT && type_variant_tag(s, dst, src) >= 0:
+        ret true
+    end
+    if type_is_signed(s, src) && type_is_signed(s, dst):
+        ret int_rank(sk) <= int_rank(dk)
+    end
+    if type_is_integer(s, src) && !type_is_signed(s, src) && type_is_integer(s, dst) && !type_is_signed(s, dst):
+        ret int_rank(sk) <= int_rank(dk)
+    end
+    if type_is_integer(s, src) && type_is_float(s, dst):
+        ret true
+    end
+    if sk == TY_F32 && dk == TY_F64:
+        ret true
+    end
+    ret false
+end
+
+func type_assignable(s &: Sema, dst: int, src: int): bool:
+    if type_is_error(s, dst) || type_is_error(s, src):
+        ret true
+    end
+    if type_equiv(s, dst, src):
+        ret true
+    end
+    ret type_implicit(s, src, dst)
+end
+
+func type_castable(s &: Sema, dst: int, src: int): bool:
+    if type_is_error(s, dst) || type_is_error(s, src):
+        ret true
+    end
+    if type_equiv(s, dst, src):
+        ret true
+    end
+    dk := ty_at(s, dst).kind
+    sk := ty_at(s, src).kind
+    if dk == TY_PTR && sk == TY_PTR:
+        ret true
+    end
+    if (dk == TY_STR && sk == TY_PTR) || (dk == TY_PTR && sk == TY_STR):
+        ret true
+    end
+    if (dk == TY_STR && sk == TY_UCHAR) || (dk == TY_UCHAR && sk == TY_STR):
+        ret true
+    end
+    if (dk == TY_PTR && type_is_integer(s, src)) || (sk == TY_PTR && type_is_integer(s, dst)):
+        ret true
+    end
+    if (dk == TY_FUNC && sk == TY_PTR) || (dk == TY_PTR && sk == TY_FUNC):
+        ret true
+    end
+    sn := type_is_numeric(s, src) || sk == TY_BOOL || sk == TY_CHAR || sk == TY_ENUM
+    dn := type_is_numeric(s, dst) || dk == TY_BOOL || dk == TY_CHAR || dk == TY_ENUM
+    if sn && dn:
+        ret true
+    end
+    ret false
+end
+
+// type_common_arith - TYPE_NONE where the C returned NULL.
+func type_common_arith(s &: Sema, ta: int, tb: int): int:
+    if !type_is_numeric(s, ta) || !type_is_numeric(s, tb):
+        ret TYPE_NONE
+    end
+    ka := ty_at(s, ta).kind
+    kb := ty_at(s, tb).kind
+    if ka == TY_F64 || kb == TY_F64:
+        ret type_prim(s, TY_F64)
+    end
+    if ka == TY_F32 || kb == TY_F32:
+        ret type_prim(s, TY_F32)
+    end
+    sa := type_is_signed(s, ta)
+    sb := type_is_signed(s, tb)
+    if sa != sb:
+        ret TYPE_NONE
+    end
+    if int_rank(ka) >= int_rank(kb):
+        ret ta
+    end
+    ret tb
+end
+
+// type_scalar_str - the keyword-named kinds ("" = not a scalar kind).
+// Flat name table; exempt from the function-size rule (STYLE.md rule 5).
+func type_scalar_str(k: int): str:
+    if k == TY_ERROR: ret "<error>" end
+    if k == TY_VOID: ret "void" end
+    if k == TY_BOOL: ret "bool" end
+    if k == TY_CHAR: ret "char" end
+    if k == TY_STR: ret "str" end
+    if k == TY_UCHAR: ret "uchar" end
+    if k == TY_NULL: ret "null" end
+    if k == TY_I8: ret "i8" end
+    if k == TY_I16: ret "i16" end
+    if k == TY_I32: ret "i32" end
+    if k == TY_I64: ret "i64" end
+    if k == TY_U8: ret "u8" end
+    if k == TY_U16: ret "u16" end
+    if k == TY_U32: ret "u32" end
+    if k == TY_U64: ret "u64" end
+    if k == TY_SIZE: ret "size" end
+    if k == TY_F32: ret "f32" end
+    if k == TY_F64: ret "f64" end
+    ret ""
+end
+
+// type_array_str - "[a][b]elem" spelling for (possibly nested) arrays.
+func type_array_str(s &: Sema, t: int): str:
+    mut dims := ""
+    mut cur := t
+    until cur >= 0 && ty_at(s, cur).kind == TY_ARRAY:
+        cv := ty_at(s, cur)
+        if cv.length != 0:
+            dims = dims + "[" + cv.length + "]"
+        else:
+            dims = dims + "[]"
+        end
+        cur = cv.elem
+    end
+    ret type_to_string(s, cur) + dims
+end
+
+// type_params_str - comma-joined parameter/member type list (func, Variant).
+func type_params_str(s &: Sema, params: Vector<int>): str:
+    mut out := ""
+    repeat params.len() with i:
+        if i > 0:
+            out = out + ", "
+        end
+        out = out + type_to_string(s, params.get(i)[0])
+    end
+    ret out
+end
+
+// type_to_string. PORT-NOTE: the C clamps at 128/160/256-byte buffers; this
+// port does not truncate (identical output for all sane type shapes).
+func type_to_string(s &: Sema, t: int): str:
+    if t < 0:
+        ret "<null>"
+    end
+    v := ty_at(s, t)
+    k := v.kind
+    prim := type_scalar_str(k)
+    if str.Len(prim) > 0:
+        ret prim
+    end
+    if k == TY_STRUCT || k == TY_ENUM:
+        ret str.Len(v.name) > 0 ? v.name : "<anon>"
+    end
+    if k == TY_DYN:
+        ret str.Len(v.name) > 0 ? "dyn " + v.name : "dyn <anon>"
+    end
+    if k == TY_PTR: ret type_to_string(s, v.pointee) + "*" end
+    if k == TY_ARRAY: ret type_array_str(s, t) end
+    if k == TY_MAP || k == TY_MAP_ITER:
+        head := k == TY_MAP ? "HashMap" : "MapIter"
+        ret head + "<" + type_to_string(s, v.key) + ", " + type_to_string(s, v.elem) + ">"
+    end
+    if k == TY_VEC: ret "Vector<" + type_to_string(s, v.elem) + ">" end
+    if k == TY_SLICE: ret "slice<" + type_to_string(s, v.elem) + ">" end
+    if k == TY_FILE: ret "File" end
+    if k == TY_FUNC:
+        head2 := v.length != 0 ? "externfunc(" : "func("
+        ret head2 + type_params_str(s, v.params) + ") " + type_to_string(s, v.elem)
+    end
+    if k == TY_VARIANT:
+        ret "Variant<" + type_params_str(s, v.params) + ">"
+    end
+    ret "<?>"
+end

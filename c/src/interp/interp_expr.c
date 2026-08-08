@@ -262,7 +262,8 @@ value_t call_func(interp_t *I, ast_node_t *fn, env_t *defenv, value_t *thisv,
 {
     if (++I->depth > INTERP_MAX_DEPTH)
         rt_error(I, fn, "call stack too deep (possible infinite recursion)");
-    env_t *env = env_new(I, defenv);
+    unsigned long long esc0 = I->env_escapes;
+    env_t *env = env_acquire(I, defenv);
     if (thisv) env_define(I, env, "this", *thisv);
     {
         size_t i = 0;
@@ -294,6 +295,9 @@ value_t call_func(interp_t *I, ast_node_t *fn, env_t *defenv, value_t *thisv,
         }
     }
     I->depth--;
+    /* Deliberately after the defers ran: they execute in scopes parented to
+     * this one, so it has to stay valid until they are done. */
+    if (I->env_escapes == esc0) env_release(I, env);
     return ret;
 }
 

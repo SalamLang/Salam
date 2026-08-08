@@ -58,6 +58,7 @@ typedef struct env {
     vec_t bindings;
     itab_t *index;
     size_t pool;
+    struct env *free_next; /* interp_t.env_free list link while unused */
 } env_t;
 
 typedef struct module {
@@ -118,6 +119,7 @@ typedef struct {
      * statement's scope. Loops compare this across an iteration to decide
      * whether the body's scope can be recycled (see env_reset). */
     unsigned long long env_escapes;
+    env_t *env_free; /* recycled scopes, see env_acquire */
     clock_t deadline;
     unsigned depth;
     int match_expr_depth;
@@ -161,6 +163,10 @@ void tick(interp_t *I);
 env_t *env_new(interp_t *I, env_t *parent);
 
 void env_reset(env_t *e);
+
+env_t *env_acquire(interp_t *I, env_t *parent);
+
+void env_release(interp_t *I, env_t *e);
 
 binding_t *env_find_local(env_t *e, const char *name);
 

@@ -361,7 +361,15 @@ static int driver_interp(options_t *opt)
         logger_free(log);
         return 1;
     }
-    interp_options_t io = {stdout, stderr, NULL, opt->lang, 0};
+    /* The interpreter's runaway guard is wall-clock, so a machine under load
+     * can trip it on a program that is merely slow rather than stuck. Let a
+     * caller widen or lift it: negative means no deadline at all. */
+    int timeout_ms = 0;
+    {
+        const char *e = getenv("SALAM_EXEC_TIMEOUT_MS");
+        if (e && e[0]) timeout_ms = atoi(e);
+    }
+    interp_options_t io = {stdout, stderr, NULL, opt->lang, timeout_ms, NULL, NULL};
     int rc = interp_run(arena, log, program, sr, entry, &io);
     arena_free(arena);
     logger_free(log);

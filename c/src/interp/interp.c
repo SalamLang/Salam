@@ -165,6 +165,7 @@ env_t *env_new(interp_t *I, env_t *parent)
     vec_init(&e->bindings);
     e->index = NULL;
     e->pool = 0;
+    e->free_next = NULL;
     return e;
 }
 
@@ -186,6 +187,36 @@ void env_reset(env_t *e)
     if (e->bindings.len > e->pool) e->pool = e->bindings.len;
     e->bindings.len = 0;
     e->index = NULL;
+}
+
+/* Scope pool. Loops recycle one scope in place (env_reset); everything else
+ * that opens a scope for a bounded stretch of work - a function call, a taken
+ * `if` branch, a match arm, a bare block - borrows one from here and hands it
+ * back on the way out.
+ *
+ * It matters because scopes are the interpreter's most frequent allocation and
+ * the arena never gives memory back mid-run. Rasterising one donut frame makes
+ * roughly 113k calls to math.Sin/Cos alone, each of which used to leave an env
+ * and a parameter binding behind for good.
+ *
+ * Same soundness rule as env_reset: a caller only releases a scope when
+ * I->env_escapes shows nothing captured it. A scope that a closure or defer
+ * kept is simply never returned to the pool. */
+env_t *env_acquire(interp_t *I, env_t *parent)
+{
+    env_t *e = I->env_free;
+    if (!e) return env_new(I, parent);
+    I->env_free = e->free_next;
+    e->free_next = NULL;
+    e->parent = parent;
+    env_reset(e);
+    return e;
+}
+
+void env_release(interp_t *I, env_t *e)
+{
+    e->free_next = I->env_free;
+    I->env_free = e;
 }
 
 binding_t *env_find_local(env_t *e, const char *name)
@@ -599,8 +630,13 @@ int interp_run(arena_t *a, logger_t *log, ast_node_t *program, sema_result_t *se
     I.in_data = opts ? opts->input_data : NULL;
 
     {
-        int ms = opts && opts->timeout_ms > 0 ? opts->timeout_ms : 5000;
-        I.deadline = clock() + (clock_t)((double)ms / 1000.0 * CLOCKS_PER_SEC);
+        int ms = opts ? opts->timeout_ms : 0;
+        if (ms < 0)
+            I.deadline = 0; /* run until it finishes or the caller kills it */
+        else {
+            if (ms == 0) ms = 5000;
+            I.deadline = clock() + (clock_t)((double)ms / 1000.0 * CLOCKS_PER_SEC);
+        }
     }
     I.globals = env_new(&I, NULL);
     vec_init(&I.funcs);

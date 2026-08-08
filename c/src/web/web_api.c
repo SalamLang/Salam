@@ -178,7 +178,7 @@ const char *salam_web_run_app(const char *source, const char *lang)
         return r;
     }
     FILE *outf = tmpfile();
-    interp_options_t io = {outf ? outf : stdout, outf ? outf : stderr, NULL, lang, 3000};
+    interp_options_t io = {outf ? outf : stdout, outf ? outf : stderr, NULL, lang, 3000, NULL, NULL};
     interp_run(arena, log, program, sema, entry, &io);
     char *out = outf ? slurp(outf) : strdup("");
     char *errs = diagf ? slurp(diagf) : strdup("");

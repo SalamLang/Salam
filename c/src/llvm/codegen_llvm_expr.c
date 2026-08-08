@@ -1503,8 +1503,16 @@ ll_addr_t ll_addr_of(ll_t *ll, ast_node_t *n)
             size_t p = 0;
             for (; p < ll->sem->packages.len; p++) {
                 symbol_t *pk = (symbol_t *)ll->sem->packages.data[p];
-                if (!pk || pk->kind != SYM_PACKAGE) continue;
-                ll_touch_pkg(ll, pk);
+                if (!pk || pk->kind != SYM_PACKAGE || !pk->decl) continue;
+                /*
+                 * ll_emit_globals rather than ll_touch_pkg: a package can be
+                 * recorded in pkg_touched while these globals were never
+                 * emitted, so the touch would short-circuit and change
+                 * nothing. Emitting straight from the package's AST is what
+                 * actually resolves the name, and it is safe to repeat now
+                 * that ll_emit_globals skips names it has already emitted.
+                 */
+                ll_emit_globals(ll, pk->decl);
                 g = ll_global_find(ll, n->name);
                 if (g) return (ll_addr_t){g->ptr, g->ts};
             }

@@ -845,6 +845,11 @@ void ll_emit_globals(ll_t *ll, ast_node_t *program)
             ast_node_t *d = (ast_node_t *)program->list.data[i];
             if (d->kind != AST_CONST_DECL && d->kind != AST_VAR_DECL) continue;
             if (d->is_extern) continue;
+            /* Idempotent: emitting the same global twice would produce a
+             * duplicate definition in the module. This lets the function be
+             * called again for a package whose globals may or may not have
+             * been emitted already, which ll_addr_of relies on. */
+            if (ll_global_find(ll, d->name)) continue;
             const char *ts = d->type_str ? d->type_str : "i32";
             const char *gref =
                 ll_fmt(ll, "@g.%s", ll_struct_ltype(ll, d->name) + strlen("%struct."));

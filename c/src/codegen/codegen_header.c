@@ -845,9 +845,9 @@ static bool is_wellknown_libc_name(const char *name)
  */
 static bool is_libm_name(const char *name)
 {
-    static const char *const names[] = {
-        "sqrt", "sin",  "cos",   "tan",   "asin",  "acos", "atan", "atan2",
-        "log",  "log10", "exp",  "floor", "ceil",  "fabs", "fmod"};
+    static const char *const names[] = {"sqrt", "sin",   "cos",   "tan",  "asin",
+                                        "acos", "atan",  "atan2", "log",  "log10",
+                                        "exp",  "floor", "ceil",  "fabs", "fmod"};
     size_t i = 0;
     for (; i < sizeof(names) / sizeof(names[0]); i++)
         if (strcmp(name, names[i]) == 0) return true;

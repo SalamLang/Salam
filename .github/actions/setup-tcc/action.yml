@@ -1,0 +1,72 @@
+---
+name: 'Setup tcc'
+description: 'Build tcc from the TinyCC commit pinned in c/tools/ci/tinycc-ref.txt, cache it, and put it on PATH.'
+author: 'SalamLang'
+
+branding:
+  icon: 'cpu'
+  color: 'green'
+
+# Every job that needs tcc used to `apt-get install -y tcc`, which on the
+# runner images is 0.9.27+git20200814 - a 2020 snapshot, and a different
+# compiler from the 2017 0.9.27 the Windows release bundles. Building the
+# one pinned commit everywhere means CI tests the compiler users actually
+# get. The build is ~30s and cached on the pin file's hash, so it only
+# happens again when the pin moves.
+#
+# Requires the repository to be checked out first: the pin and the build
+# script both live in it.
+
+inputs:
+  prefix:
+    description: 'Directory to install tcc into.'
+    required: false
+    default: ''
+  add-to-path:
+    description: 'Add the installed tcc to PATH for later steps.'
+    required: false
+    default: 'true'
+
+outputs:
+  tcc:
+    description: 'Absolute path to the installed tcc binary.'
+    value: ${{ steps.locate.outputs.tcc }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve install prefix
+      id: prefix
+      shell: bash
+      run: |
+        set -eu
+        p='${{ inputs.prefix }}'
+        [ -n "$p" ] || p="$HOME/.local/tcc"
+        echo "prefix=$p" >> "$GITHUB_OUTPUT"
+
+    - name: Restore cached tcc
+      id: cache
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.prefix.outputs.prefix }}
+        key: tcc-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('c/tools/ci/tinycc-ref.txt') }}-v1
+
+    - name: Build tcc from the pinned commit
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: sh c/tools/ci/build-tcc.sh '${{ steps.prefix.outputs.prefix }}'
+
+    - name: Locate and verify
+      id: locate
+      shell: bash
+      run: |
+        set -eu
+        p='${{ steps.prefix.outputs.prefix }}'
+        for cand in "$p/bin/tcc" "$p/tcc" "$p/tcc.exe"; do
+          [ -x "$cand" ] && { echo "tcc=$cand" >> "$GITHUB_OUTPUT"; bin=$(dirname "$cand"); break; }
+        done
+        [ -n "${bin:-}" ] || { echo "::error::no tcc under $p"; exit 1; }
+        "$bin"/tcc -v
+        if [ '${{ inputs.add-to-path }}' = 'true' ]; then
+          echo "$bin" >> "$GITHUB_PATH"
+        fi

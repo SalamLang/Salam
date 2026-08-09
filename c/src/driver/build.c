@@ -756,14 +756,32 @@ static int run_cc_cmd(logger_t *log, const char *cmd, const char *builddir)
  * each rung. clang leads because it is the same codegen family as the LLVM
  * backend, so an auto build degrades to the closest thing available rather
  * than to a different toolchain; tcc is the floor. */
+/*
+ * clang > gcc > tcc, but the *whole* ladder is walked over the bundled
+ * install tree before $PATH is consulted at all - not bundled-then-$PATH
+ * per rung. Interleaving them let a host gcc outrank the tcc a
+ * self-contained install ships with, which is not the toolchain that
+ * install was built and tested against: on Windows it swaps in a
+ * mingw-w64 gcc whose <stdlib.h> spells __argv as a macro over
+ * __p___argv(), so std/os/process' `extern void* __argv` becomes a
+ * conflicting redeclaration and every program importing it stops
+ * compiling. The $PATH pass still exists for the case it was added for -
+ * an install that ships no toolchain at all, most notably a plain source
+ * checkout.
+ */
 static bool resolve_auto_cc(char *out, size_t n, bool *bundled)
 {
     static const char *const LADDER[] = {"clang", "gcc", "tcc"};
     size_t i = 0;
     for (; i < sizeof LADDER / sizeof LADDER[0]; i++) {
-        *bundled = salam_find_bundled_tool(LADDER[i], out, n);
-        if (*bundled || salam_find_path_tool(LADDER[i], out, n)) return true;
+        if (salam_find_bundled_tool(LADDER[i], out, n)) {
+            *bundled = true;
+            return true;
+        }
     }
+    *bundled = false;
+    for (i = 0; i < sizeof LADDER / sizeof LADDER[0]; i++)
+        if (salam_find_path_tool(LADDER[i], out, n)) return true;
     return false;
 }
 

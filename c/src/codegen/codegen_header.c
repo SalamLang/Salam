@@ -939,6 +939,40 @@ static void hdr_prototypes(cg_t *cg, ast_node_t *program, sb_t *h)
     }
 }
 
+/*
+ * Prototypes for `impl Trait for T` methods, which codegen.c also forward-
+ * declares at the top of the .c. They are needed in the *header* as well:
+ * a generic function is instantiated as a `static inline` body appended to
+ * this header, and such a body calls the trait impls of whatever type it
+ * was instantiated with. Those calls sat above the .c's declarations, so
+ * the only thing that made them compile was C89 implicit declaration - tcc
+ * still allows it, gcc 16 made it an error, and the returned `const char*`
+ * came back as `int` on any compiler that took it.
+ */
+static void hdr_impl_prototypes(cg_t *cg, sb_t *h)
+{
+    size_t i = 0;
+    for (; i < cg->sem->global->symbols.len; i++) {
+        symbol_t *owner = (symbol_t *)cg->sem->global->symbols.data[i];
+        if (owner->kind != SYM_TYPEIMPL || !owner->members) continue;
+        {
+            size_t j = 0;
+            for (; j < owner->members->symbols.len; j++) {
+                symbol_t *m = (symbol_t *)owner->members->symbols.data[j];
+                size_t k = 0;
+                if (m->kind != SYM_METHOD) continue;
+                for (; k < m->overloads.len; k++) {
+                    func_sig_t *sig = (func_sig_t *)m->overloads.data[k];
+                    if (sig && sig->decl)
+                        sb_puts(h, cg_fmt(cg, "%s;\n",
+                                          func_signature(cg, sig->decl, owner, sig,
+                                                         false)));
+                }
+            }
+        }
+    }
+}
+
 void cg_header(cg_t *cg, ast_node_t *program)
 {
     sb_t *h = cg->h;
@@ -978,4 +1012,5 @@ void cg_header(cg_t *cg, ast_node_t *program)
     hdr_externs(cg, program, h);
     hdr_globals(cg, program, h);
     hdr_prototypes(cg, program, h);
+    hdr_impl_prototypes(cg, h);
 }

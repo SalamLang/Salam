@@ -62,8 +62,10 @@ cd "$WORK/tinycc/build"
 # on the machine producing it. That holds for every native build and for the
 # musl crosses (same OS, and the host can exec the result), but not for
 # Linux -> Windows, where three separate steps hand a PE to the build host.
+# The extra make arguments live in "$@" because one of them has to contain
+# spaces; PREFIX was read out of $1 above, so the positional list is free.
+set --
 cross_arg=""
-make_args=""
 if [ -n "$CROSS_PREFIX" ]; then
     # 1/3, configure: the win32 build makes libtcc a DLL and then derives
     # libtcc.def from it with `tcc -impdef`, i.e. by running the tcc.exe it
@@ -82,21 +84,29 @@ if [ -n "$CROSS_PREFIX" ]; then
     "$HOSTCC" -DC2STR ../conftest.c -o c2str.exe
     # 3/3, libtcc1.a: the compiler runtime tcc links into everything it
     # builds is itself compiled by invoking ./tcc.exe (lib/Makefile defaults
-    # XCC and XAR to it). Pointing the two at the cross toolchain is
-    # upstream's own escape hatch - its "<target>-libtcc1-usegcc=yes" switch
-    # sets exactly these - and spelling them as $(CC)/$(AR) keeps them
-    # whatever --cross-prefix resolved to rather than a second guess at it.
-    # BFLAGS goes empty because its `-bt` is a tcc flag that only makes
-    # sense when tcc is the one compiling bcheck.o.
-    make_args='XCC=$(CC) XAR=$(AR) BFLAGS='
+    # XCC and XAR to it). This is what upstream's "<target>-libtcc1-usegcc"
+    # switch exists for; setting the four variables it sets saves having to
+    # recompute the $(NATIVE_TARGET) the switch is named after, and spelling
+    # the tools as $(CC)/$(AR) keeps them whatever --cross-prefix resolved to
+    # rather than a second guess at it. BFLAGS empties out because both the
+    # value it has by default (-bt) and the one the switch gives it (-gstabs)
+    # are rejected by the compilers this runs on.
+    #
+    # XFLAGS has to be replaced along with them, not just inherited: its
+    # default passes -B$(TOPSRC)/win32, and a -B prefix is an *include* path
+    # to gcc, so tcc's own cut-down windows headers land ahead of the
+    # toolchain's and collide with them ("static declaration of 'vsnprintf'
+    # follows non-static declaration"). -std=gnu11 is ours rather than
+    # upstream's: crt1.c declares `extern int __run_on_exit();` and calls it
+    # with an argument, which a C23 default (gcc >= 15) rejects.
+    set -- 'XCC=$(CC)' 'XAR=$(AR)' 'BFLAGS=' \
+        'XFLAGS=$(CFLAGS) -std=gnu11 -fPIC -fno-omit-frame-pointer -Wno-unused-function -Wno-unused-variable -I$(TOP)'
 fi
 # shellcheck disable=SC2086
 ../configure --prefix="$PREFIX" $cross_arg $TCC_CONFIGURE_EXTRA
 
-# shellcheck disable=SC2086
-"$MAKE" -j"$(nproc 2>/dev/null || echo 4)" $make_args
-# shellcheck disable=SC2086
-"$MAKE" install $make_args
+"$MAKE" -j"$(nproc 2>/dev/null || echo 4)" "$@"
+"$MAKE" install "$@"
 
 # Two install layouts, both of them tcc's own: the Windows build puts
 # tcc.exe straight at the prefix with include/ and lib/ beside it (matching

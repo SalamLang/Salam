@@ -201,7 +201,14 @@ static symbol_t *ll_op_struct(ll_t *ll, const char *ts, const char **sname)
 {
     if (!ts) return NULL;
     *sname = ll_is_ptr_ts(ts) ? arena_strndup(ll->a, ts, strlen(ts) - 1) : ts;
-    return ll_struct_sym(ll, *sname);
+    symbol_t *ss = ll_struct_sym(ll, *sname);
+    /* Mangle by the struct symbol's own name, never by the spelling at the
+     * use site. ll_ensure_fn emits the body through ll_function(.., ss),
+     * which mangles with ss->name, so a receiver whose type_str carries the
+     * package ("excel.FileMeta") would call @salam_excel__FileMeta_free
+     * while the definition landed as @salam_FileMeta_free. */
+    if (ss && ss->name) *sname = ss->name;
+    return ss;
 }
 
 static func_sig_t *ll_pick_arity(symbol_t *ms, size_t want)
@@ -1171,8 +1178,10 @@ static llv_t ll_call_method(ll_t *ll, ast_node_t *n, ast_node_t *callee)
         func_sig_t *sig = ll_pick_overload(ll, ms, n);
         ll_ensure_fn(ll, sig->decl, ss, ll->pkg_scope);
         const char *recv = isptr ? ll_expr(ll, obj).ref : ll_addr_of(ll, obj).ptr;
+        /* ss->name, not sname: see ll_op_struct. A package-qualified
+         * receiver type would otherwise call a symbol nothing defines. */
         return ll_emit_call(ll, n, sig, ll_fmt(ll, "ptr %s", recv),
-                            ll_mangle(ll, sname, mname, sig),
+                            ll_mangle(ll, ss->name ? ss->name : sname, mname, sig),
                             type_to_string(ll->sem->tc, sig->ret));
     }
 

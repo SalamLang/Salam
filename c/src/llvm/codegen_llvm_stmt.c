@@ -48,6 +48,15 @@ void ll_emit_return(ll_t *ll, ast_node_t *value)
         ll_emit_term(ll, "ret void");
         return;
     }
+    /* Falling off the end of a value-returning function (or a bare `ret`
+     * inside one) leaves no expression to lower. ll_expr(NULL) hands back the
+     * i32 literal 0, which is a parse error the moment the return type is an
+     * aggregate - `ret %struct.xml__XMLNode 0`. Emit the type's own zero. */
+    if (!value) {
+        ll_emit_defers(ll);
+        ll_emit_term(ll, "ret %s %s", ll_ty(ll, ll->ret_ts), ll_zero(ll->ret_ts));
+        return;
+    }
     const char *v = ll_conv(ll, ll_expr(ll, value), ll->ret_ts);
     ll_emit_defers(ll);
     ll_emit_term(ll, "ret %s %s", ll_ty(ll, ll->ret_ts), v);

@@ -522,11 +522,14 @@ static const char *call_str(cg_t *cg, ast_node_t *n, ast_node_t *obj, ast_node_t
     if (!strcmp(m, "substr"))
         return cg_fmt(cg, "salam_str_substr(%s, %s, %s)", recv, a0, a1);
     if (!strcmp(m, "find") || !strcmp(m, "search") || !strcmp(m, "indexOf")) {
+        /* the match temp is "__fm", never "__fp": clang reserves __fp16 as a
+         * half-float type keyword, so a "__fp%d" temp that happened to land on
+         * counter 16 emitted a declaration clang parses as a type. */
         int tf = ++cg->tmpn;
         return cg_fmt(cg,
                       "({ const char *__fh%d=(%s); const char *__fn%d=(%s); const char "
-                      "*__fp%d=(__fh%d&&__fn%d)?strstr(__fh%d,__fn%d):0; "
-                      "__fp%d?(int32_t)(__fp%d-__fh%d):-1; })",
+                      "*__fm%d=(__fh%d&&__fn%d)?strstr(__fh%d,__fn%d):0; "
+                      "__fm%d?(int32_t)(__fm%d-__fh%d):-1; })",
                       tf, recv, tf, a0, tf, tf, tf, tf, tf, tf, tf, tf);
     }
     if (!strcmp(m, "trim")) return cg_fmt(cg, "salam_str_trim(%s)", recv);

@@ -827,6 +827,33 @@ static bool is_wellknown_libc_name(const char *name)
     return false;
 }
 
+/*
+ * The <math.h> functions std/math declares in its own `extern:` block. Every
+ * generated header includes <math.h> (see hdr_prelude), and Salam spells
+ * these exactly as the standard does - `double f(double)` - so redeclaring
+ * them adds nothing and can only conflict with what the header already said.
+ *
+ * It does conflict, on tcc 0.9.28rc: its tcc_libm.h answers msvcrt's slow
+ * fabs() with a `__CRT_INLINE double __cdecl fabs(...)` of its own ("Override
+ * msvcrt fabs(): 6.3x speedup!"), which is `static`, so a plain include
+ * leaves a harmless local `t fabs` per object. A later `extern` redeclaration
+ * promotes that definition to external linkage, every module that includes
+ * math.h exports a body, and the link dies on "symbol 'fabs' defined twice" -
+ * 10 of the general tests, and any user program importing std/math. 0.9.27
+ * ships no tcc_libm.h and never saw it. Dropping the redeclarations fixes it
+ * for whatever the next such override turns out to be, too.
+ */
+static bool is_libm_name(const char *name)
+{
+    static const char *const names[] = {
+        "sqrt", "sin",  "cos",   "tan",   "asin",  "acos", "atan", "atan2",
+        "log",  "log10", "exp",  "floor", "ceil",  "fabs", "fmod"};
+    size_t i = 0;
+    for (; i < sizeof(names) / sizeof(names[0]); i++)
+        if (strcmp(name, names[i]) == 0) return true;
+    return false;
+}
+
 static void hdr_externs(cg_t *cg, ast_node_t *program, sb_t *h)
 {
     {
@@ -838,6 +865,7 @@ static void hdr_externs(cg_t *cg, ast_node_t *program, sb_t *h)
                 symbol_t *fsym = scope_lookup_local(cg->sem->global, d->name);
                 func_sig_t *sig = sig_of_decl(fsym, d);
                 if (!sig) continue;
+                if (is_libm_name(d->name)) continue;
                 bool risky = is_wellknown_libc_name(d->name);
                 if (risky) sb_puts(h, "#ifndef SALAM_EXTERN_LIBC_ON_WIN32\n");
                 sb_puts(h, cg_fmt(cg, "%s;\n", cg_extern_proto(cg, d, sig)));

@@ -694,6 +694,33 @@ func is_wellknown_libc_name(name: str): bool:
     ret false
 end
 
+// The <math.h> functions std/math declares in its own `extern:` block. Every
+// generated header includes <math.h> (see hdr_prelude), and Salam spells
+// these exactly as the standard does - `double f(double)` - so redeclaring
+// them adds nothing and can only conflict with what the header already said.
+//
+// It does conflict, on tcc 0.9.28rc: its tcc_libm.h answers msvcrt's slow
+// fabs() with a `__CRT_INLINE double __cdecl fabs(...)` of its own ("Override
+// msvcrt fabs(): 6.3x speedup!"), which is `static`, so a plain include leaves
+// a harmless local `t fabs` per object. A later `extern` redeclaration
+// promotes that definition to external linkage, every module that includes
+// math.h exports a body, and the link dies on "symbol 'fabs' defined twice" -
+// 10 of the general tests, and any user program importing std/math. 0.9.27
+// ships no tcc_libm.h and never saw it. Dropping the redeclarations fixes it
+// for whatever the next such override turns out to be, too.
+func is_libm_name(name: str): bool:
+    names := [
+        "sqrt", "sin", "cos", "tan", "asin", "acos", "atan", "atan2",
+        "log", "log10", "exp", "floor", "ceil", "fabs", "fmod"
+    ] as str[15]
+    repeat names.len() with i:
+        if str.Equals(names[i], name):
+            ret true
+        end
+    end
+    ret false
+end
+
 func hdr_externs(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
     prog := at.Get(a, program)
     repeat prog.list.len() with i:
@@ -705,7 +732,7 @@ func hdr_externs(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
         if d.kind == at.AST_FUNC_DEF:
             fsym := sm.LookupLocal(s, s.global, d.name)
             sig := sig_of_decl(s, fsym, did)
-            if sig != 0:
+            if sig != 0 && !is_libm_name(d.name):
                 risky := is_wellknown_libc_name(d.name)
                 if risky:
                     outh(g, "#ifndef SALAM_EXTERN_LIBC_ON_WIN32\n")

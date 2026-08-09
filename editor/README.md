@@ -78,7 +78,7 @@ The numbered-header case is deliberately conservative, since a program that
 merely counts is not an animation. A candidate header has to be text followed
 by an integer, appear at least 3 times with the integers strictly increasing,
 and leave at least 3 lines per frame. Candidates are tried **rarest first**: a
-frame header appears once per frame, while body lines like `  row 0` appear
+frame header appears once per frame, while body lines like `row 0` appear
 many times over, so the rare one is the frame boundary. Frames are then padded
 to equal height so playback never resizes the pane.
 

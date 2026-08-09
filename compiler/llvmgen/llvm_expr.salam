@@ -233,7 +233,19 @@ func op_struct(v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str, sname2 &: str): int:
         ret 0
     end
     sname2 = is_ptr_ts(ts) ? str.Substr(ts, 0, str.Len(ts) - 1) : ts
-    ret struct_sym(v, s, a, sname2)
+    ss := struct_sym(v, s, a, sname2)
+    // Mangle by the struct symbol's own name, never by the spelling at the
+    // use site. ensure_fn emits the body through lv_function(.., ss), which
+    // mangles with the symbol's name, so a receiver whose type_str carries
+    // the package ("excel.FileMeta") would call @salam_excel__FileMeta_free
+    // while the definition landed as @salam_FileMeta_free.
+    if ss != 0:
+        nm := sm.SymAt(s, ss).name
+        if str.Len(nm) > 0:
+            sname2 = nm
+        end
+    end
+    ret ss
 end
 
 // ll_pick_arity - first overload of `symid` with exactly `want` params,
@@ -263,6 +275,18 @@ func op_call(
     if sig == 0:
         ret false
     end
+    // Operator methods reached this way (v[i] lowering to operator_index,
+    // etc.) emitted the call without ever requesting the callee's body, so a
+    // monomorphized instance nothing else referenced - Vector<diag.Diag>'s
+    // operator_index - was called but never defined, and the module failed
+    // to parse. Every other call site pairs its emit with an ensure_fn.
+    // The body belongs to the scope that declares its type, not the
+    // caller's (see scope_of).
+    mut osc := scope_of(s, ss)
+    if osc == 0:
+        osc = v.pkg_scope
+    end
+    ensure_fn(v, s, a, sm.SigAt(s, sig).decl, ss, osc)
     recvn := at.Get(a, recv)
     recvref := is_ptr_ts(recvn.type_str) ? lv_expr(v, s, a, recv).ref : lv_addr_of(v, s, a, recv).ptr
     mut argsb := "ptr " + recvref
@@ -307,6 +331,13 @@ func lv_index_set(v &: Lv, s &: sm.Sema, a &: at.Ast, idx: int, value: int): boo
     if sig == 0:
         ret false
     end
+    // Same missing pairing as op_call: emit the call, request the body -
+    // under the scope that declares the type, not the caller's.
+    mut osc := scope_of(s, ss)
+    if osc == 0:
+        osc = v.pkg_scope
+    end
+    ensure_fn(v, s, a, sm.SigAt(s, sig).decl, ss, osc)
     an := at.Get(a, idxn.a)
     recv := is_ptr_ts(an.type_str) ? lv_expr(v, s, a, idxn.a).ref : lv_addr_of(v, s, a, idxn.a).ptr
     sg := sm.SigAt(s, sig)

@@ -14,6 +14,7 @@ import ps "../parser/parser.salam"
 import cc "../condcomp.salam"
 import sm "../semantic/semantic.salam"
 import co "../sal_core.salam"
+import pf "../prof_self.salam"
 import lv "../llvmgen/llvmgen.salam"
 
     // driver_llvm (driver/llvm_build.c) - single-file lex/parse/prune/sema ->
@@ -42,7 +43,13 @@ import lv "../llvmgen/llvmgen.salam"
             ret 2
         end
         mut sf := src.New()
-        if !src.Load(opt.input, sf):
+        // Same phase names the C backend records, so --time-report and
+        // --time-trace describe an LLVM build too instead of reporting an
+        // empty schedule.
+        _pt_src := pf.Begin(pf.TP_SOURCE, opt.input)
+        loaded := src.Load(opt.input, sf)
+        pf.End(pf.TP_SOURCE, _pt_src)
+        if !loaded:
             lg.Log(
                 lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("cannot read source file '%s'"), co.ArgStr(opt.input))
             )
@@ -53,10 +60,14 @@ import lv "../llvmgen/llvmgen.salam"
         module := module_of(opt.input)
         modpack := lx.Detect(sf, pack)
         mut toks := tok.StreamNew(opt.input)
+        _pt_lx := pf.Begin(pf.TP_LEXER, opt.input)
         lok := lx.Run(lgr, modpack, sf, toks)
+        pf.End(pf.TP_LEXER, _pt_lx)
         mut a := at.NewAst()
         mut prog := 0
+        _pt_ps := pf.Begin(pf.TP_PARSER, opt.input)
         mut pok := ps.Run(lgr, toks, a, prog)
+        pf.End(pf.TP_PARSER, _pt_ps)
         tok.StreamFree(toks)
         // cc_table_build(arena, opt->llvm_target, opt->defines, ...) - the
         // TARGET triple (not "") drives condcomp's SALAM_OS_*/SALAM_ARCH_*
@@ -67,7 +78,9 @@ import lv "../llvmgen/llvmgen.salam"
         end
         mut s := sm.New(lgr, sf.path, lp.Code(modpack))
         sm.SetCc(s, table)
+        _pt_se := pf.Begin(pf.TP_SEMANTIC, opt.input)
         sok := sm.Run(s, a, prog)
+        pf.End(pf.TP_SEMANTIC, _pt_se)
         if !lok || !pok || !sok:
             lg.Log(
                 lgr, lg.PH_DRIVER, lg.LOG_ERROR, i18.Tr("build aborted: errors in source") + " (" + opt.input + ")"
@@ -104,14 +117,19 @@ import lv "../llvmgen/llvmgen.salam"
             end
         end
 
+        _pt_cg := pf.Begin(pf.TP_CODEGEN, sf.path)
         out := lv.RunOpts(lgr, s, a, prog, module, entry, o, sf.path)
+        pf.End(pf.TP_CODEGEN, _pt_cg)
 
         ir_mode := o.output_mode == lv.LV_OUT_IR
         mut llpath := module + ".ll"
         if ir_mode && str.Len(opt.output) > 0:
             llpath = opt.output
         end
-        if os.WriteFile(llpath, out.ll_src) < 0:
+        _pt_w := pf.Begin(pf.TP_WRITE, llpath)
+        wrote := os.WriteFile(llpath, out.ll_src)
+        pf.End(pf.TP_WRITE, _pt_w)
+        if wrote < 0:
             lg.Log(
                 lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("cannot write '%s'"), co.ArgStr(llpath))
             )

@@ -178,6 +178,32 @@ func mingw_sysroot(explicit: str, arch: str): str:
     ret "/usr/" + arch + "-w64-mingw32"
 end
 
+// musl_folds_into_libc - libraries glibc splits out but musl keeps inside
+// libc. A `link dynamic "pthread"` (std/thread, std/sync) is right for a
+// glibc host and fatal against a musl sysroot, which ships no libpthread at
+// all: ld.lld stops at "unable to find library -lpthread" and every program
+// importing threads fails to link. The symbols are in -lc, already on the
+// line. Mirrors musl_folds_into_libc() in c/src/llvm/llvm_native.c.
+func musl_folds_into_libc(flag: str): bool:
+    mut names := Vector {} as Vector<str>
+    names.push("pthread")
+    names.push("dl")
+    names.push("rt")
+    names.push("util")
+    names.push("anl")
+    names.push("resolv")
+    names.push("crypt")
+    names.push("m")
+    defer names.free()
+    repeat names.len() with i:
+        n := names.get(i)[0]
+        if str.Equals(flag, "-l" + n) || str.Equals(flag, "-l:lib" + n + ".a"):
+            ret true
+        end
+    end
+    ret false
+end
+
 // user_libs_of - ports the C's opts->link_libs argv-building loop
 // (native_link_elf/native_link_mingw, llvm_native.c), now also honoring
 // per-lib `link_kinds` ("static" -> `-l:libX.a`, GNU ld/lld's exact-
@@ -390,7 +416,11 @@ pub func LinkElf(obj: str, out_path: str, opts: Options): LinkResult:
     libs := user_libs_of(opts)
     defer libs.free()
     repeat libs.len() with i:
-        argv.push(libs.get(i)[0])
+        l := libs.get(i)[0]
+        if musl_folds_into_libc(l):
+            continue
+        end
+        argv.push(l)
     end
     argv.push("--start-group")
     argv.push("-lc")

@@ -33,6 +33,17 @@ func emit_return(v &: Lv, s &: sm.Sema, a &: at.Ast, value: int):
             val = conv(v, s, a, lv_expr(v, s, a, value), "i32")
         end
         emit_defers(v, s, a)
+        // Flush the print buffer here rather than trusting the
+        // llvm.global_dtors entry emit_outbuf registers. Whether that
+        // destructor runs depends on the link - static musl through
+        // in-process lld dropped it, and every literal-only println in the
+        // program vanished with it while printf-formatted lines still showed
+        // up. Returning from main is the one exit path codegen owns. Gated
+        // the same way the buffer itself is - a Windows target never buffers
+        // and has no `write` for the helper to call.
+        if v.single_threaded:
+            emit(v, "call void @salam_out_flush()")
+        end
         if value != 0:
             emit_term(v, "ret i32 " + val)
         else:
@@ -43,6 +54,15 @@ func emit_return(v &: Lv, s &: sm.Sema, a &: at.Ast, value: int):
     if str.Len(v.ret_ts) == 0 || str.Equals(v.ret_ts, "void"):
         emit_defers(v, s, a)
         emit_term(v, "ret void")
+        ret
+    end
+    // Falling off the end of a value-returning function (or a bare `ret`
+    // inside one) leaves no expression to lower. lv_expr(0) hands back the
+    // i32 literal 0, which is a parse error the moment the return type is an
+    // aggregate - `ret %struct.xml__XMLNode 0`. Emit the type's own zero.
+    if value == 0:
+        emit_defers(v, s, a)
+        emit_term(v, "ret " + ty_of(v, s, a, v.ret_ts) + " " + zero_of(v.ret_ts))
         ret
     end
     val2 := conv(v, s, a, lv_expr(v, s, a, value), v.ret_ts)

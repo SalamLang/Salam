@@ -193,6 +193,8 @@ void sema_check_block(sema_t *s, ast_node_t *block);
 
 bool sema_stmt_terminates(sema_t *s, ast_node_t *node);
 
+void sema_check_definite_init(sema_t *s, ast_node_t *fn);
+
 type_t *sema_check_var_decl(sema_t *s, ast_node_t *n);
 
 func_sig_t *build_sig(sema_t *s, ast_node_t *fn, symbol_t *owner);

@@ -27,6 +27,7 @@
 #include "condcomp/condcomp.h"
 #include "llvm/codegen_llvm.h"
 #include "driver/llvm_toolchain.h"
+#include "core/prof_self.h"
 #include "i18n/i18n.h"
 
 static const char *plural_suffix(int n)
@@ -225,7 +226,11 @@ int driver_llvm(options_t *opt)
         arena_free(arena);
         return 2;
     }
+    /* Same phase names the C backend records, so --time-report/--time-trace
+     * describe an LLVM build too instead of reporting an empty schedule. */
+    PROF_SCOPE_BEGIN(TP_SOURCE, opt->input);
     source_file_t *src = source_load(arena, opt->input);
+    PROF_SCOPE_END(TP_SOURCE);
     if (!src) {
         LOG_E(log, PH_DRIVER, i18n_tr("cannot read source file '%s'"), opt->input);
         logger_free(log);
@@ -237,13 +242,19 @@ int driver_llvm(options_t *opt)
     const char *module = module_of(arena, opt->input);
     const langpack_t *modpack = langpack_detect(arena, src, pack);
     token_stream_t *toks = NULL;
+    PROF_SCOPE_BEGIN(TP_LEXER, opt->input);
     bool lok = lexer_run(arena, log, modpack, src, &toks);
+    PROF_SCOPE_END(TP_LEXER);
     ast_node_t *program = NULL;
+    PROF_SCOPE_BEGIN(TP_PARSER, opt->input);
     bool pok = parser_run(arena, log, toks, &program);
     cc_table_t *cc = cc_table_build(arena, opt->llvm_target, opt->defines, opt->ndefines);
     if (!cc_prune_program(arena, log, src->path, cc, program)) pok = false;
+    PROF_SCOPE_END(TP_PARSER);
+    PROF_SCOPE_BEGIN(TP_SEMANTIC, opt->input);
     sema_result_t *sr =
         sema_run(arena, log, program, src->path, langpack_code(modpack), cc);
+    PROF_SCOPE_END(TP_SEMANTIC);
     if (!lok || !pok || !sr->ok) {
         LOG_E(log, PH_DRIVER, i18n_tr("build aborted: errors in source"));
         logger_free(log);
@@ -277,8 +288,10 @@ int driver_llvm(options_t *opt)
             LOG_I(log, PH_DRIVER, "using bundled sysroot: %s", o.sysroot);
         }
     }
+    PROF_SCOPE_BEGIN(TP_CODEGEN, src->path);
     llvm_output_t *out =
         codegen_llvm_run_opts(arena, log, program, sr, module, entry, &o, src->path);
+    PROF_SCOPE_END(TP_CODEGEN);
 
     bool ir_mode = (o.output_mode == LLVM_OUT_IR);
     const char *llpath;
@@ -290,8 +303,10 @@ int driver_llvm(options_t *opt)
         sal_snprintf(buf, bcap, "%s.ll", module);
         llpath = buf;
     }
+    PROF_SCOPE_BEGIN(TP_WRITE, llpath);
     FILE *f = fopen(llpath, "wb");
     if (!f) {
+        PROF_SCOPE_END(TP_WRITE);
         LOG_E(log, PH_DRIVER, i18n_tr("cannot write '%s'"), llpath);
         logger_free(log);
         arena_free(arena);
@@ -299,6 +314,7 @@ int driver_llvm(options_t *opt)
     }
     fputs(out->ll_src, f);
     fclose(f);
+    PROF_SCOPE_END(TP_WRITE);
     if (!out->ok) {
         const char *e = codegen_llvm_error(out);
         LOG_W(log, PH_DRIVER,

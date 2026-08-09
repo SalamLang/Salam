@@ -497,6 +497,36 @@ symbol_t *ll_struct_sym(ll_t *ll, const char *name)
     return (s && s->kind == SYM_STRUCT) ? s : NULL;
 }
 
+static bool ll_scope_holds(scope_t *sc, symbol_t *want)
+{
+    size_t i = 0;
+    if (!sc) return false;
+    for (; i < sc->symbols.len; i++)
+        if ((symbol_t *)sc->symbols.data[i] == want) return true;
+    return false;
+}
+
+/*
+ * Which package scope a symbol was declared in. Emitting a callee's body
+ * has to happen under *its* package scope, not the caller's: std/net/http
+ * has a `send(method, url, headers, body): Response` of its own, and while
+ * its Client methods were emitted under the calling module's scope that
+ * name resolved to the libc `send()` extern std/net/internal/rawsock
+ * declares - four strings went through ptrtoint into a socket call.
+ */
+scope_t *ll_scope_of(ll_t *ll, symbol_t *want)
+{
+    size_t p = 0;
+    if (!want) return NULL;
+    if (ll_scope_holds(ll->sem->global, want)) return ll->sem->global;
+    for (; p < ll->sem->packages.len; p++) {
+        symbol_t *pk = (symbol_t *)ll->sem->packages.data[p];
+        if (!pk || pk->kind != SYM_PACKAGE || !pk->members) continue;
+        if (ll_scope_holds(pk->members, want)) return pk->members;
+    }
+    return NULL;
+}
+
 symbol_t *ll_enum_sym(ll_t *ll, const char *name)
 {
     symbol_t *s = ll_sym(ll, name);

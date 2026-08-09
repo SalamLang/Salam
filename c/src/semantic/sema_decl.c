@@ -488,6 +488,9 @@ static void check_function(sema_t *s, ast_node_t *fn, symbol_t *owner, func_sig_
             } else
                 sig->ret_widened = false;
         }
+        /* Once, after the body (and any re-check) has resolved every symbol:
+         * reject reads of a local that no assignment definitely precedes. */
+        if (fn->a) sema_check_definite_init(s, fn);
     }
     if (fn->a && sig && fn->type && type_is_float(sig->ret) && sig->ret_int_seen &&
         !sig->ret_float_seen)

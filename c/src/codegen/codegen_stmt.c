@@ -36,8 +36,11 @@ static const char *cg_vardecl_inline(cg_t *cg, ast_node_t *n)
     const char *prefix = (n->is_mut || is_ref || already_const) ? "" : "const ";
     if (n->a) return cg_fmt(cg, "%s%s = %s", prefix, decl, cg_expr(cg, n->a));
 
-    if (ts && strchr(ts, '[')) return cg_fmt(cg, "%s%s = {0}", prefix, decl);
-    return cg_fmt(cg, "%s%s", prefix, decl);
+    /* No initializer. Sema rejects every read that no assignment precedes, but
+     * a `&:` parameter the callee only writes on some paths would still leave
+     * this slot indeterminate, so zero it: a defined value beats UB. `= {0}`
+     * initializes scalars, pointers, arrays and structs alike (C11 6.7.9p11). */
+    return cg_fmt(cg, "%s%s = {0}", prefix, decl);
 }
 
 static const char *cg_simple_inline(cg_t *cg, ast_node_t *n)

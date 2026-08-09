@@ -173,6 +173,7 @@ static void mark_ref_args(sema_t *s, ast_node_t *call, func_sig_t *sig)
         if (p->kind != AST_PARAM || !p->is_ref) continue;
         if (arg && arg->kind == AST_IDENTIFIER && arg->name) {
             symbol_t *sym = scope_lookup(s->cur, arg->name);
+            arg->ref_arg = true;
             if (sym) sym->mutated = true;
         }
     }

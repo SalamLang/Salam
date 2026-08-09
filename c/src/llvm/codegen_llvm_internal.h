@@ -224,6 +224,7 @@ int ll_variant_tag_of(const char *variant_ts, const char *member_ts);
 symbol_t *ll_sym(ll_t *ll, const char *name);
 
 symbol_t *ll_struct_sym(ll_t *ll, const char *name);
+scope_t *ll_scope_of(ll_t *ll, symbol_t *want);
 
 symbol_t *ll_enum_sym(ll_t *ll, const char *name);
 

@@ -96,6 +96,10 @@ struct ast_node {
     bool is_variadic;
     bool is_dyn;
     bool is_ref;
+    /* Set on a call argument that binds to a `&:` reference parameter, so the
+     * definite-assignment pass can tell "the callee writes this" apart from
+     * "this value is read". Stamped by sema_call.c's mark_ref_args(). */
+    bool ref_arg;
     bool is_pub;
     bool is_inline;
     bool is_noinline;

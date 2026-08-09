@@ -37,6 +37,18 @@ void ll_emit_return(ll_t *ll, ast_node_t *value)
     if (ll->is_main) {
         const char *v = value ? ll_conv(ll, ll_expr(ll, value), "i32") : NULL;
         ll_emit_defers(ll);
+        /*
+         * Flush the print buffer here rather than trusting the
+         * llvm.global_dtors entry ll_emit_outbuf registers. Whether that
+         * destructor runs depends on the link - static musl through
+         * in-process lld dropped it, and every literal-only `println` in
+         * the program vanished with it while printf-formatted lines still
+         * showed up. Returning from main is the one exit path codegen owns,
+         * so flush on it and leave the destructor as the backstop for
+         * programs that call exit() instead. Gated the same way the buffer
+         * itself is - a Windows target never buffers and has no `write`.
+         */
+        if (ll->single_threaded) ll_emit(ll, "call void @salam_out_flush()");
         if (value)
             ll_emit_term(ll, "ret i32 %s", v);
         else
@@ -46,6 +58,15 @@ void ll_emit_return(ll_t *ll, ast_node_t *value)
     if (!ll->ret_ts || !strcmp(ll->ret_ts, "void")) {
         ll_emit_defers(ll);
         ll_emit_term(ll, "ret void");
+        return;
+    }
+    /* Falling off the end of a value-returning function (or a bare `ret`
+     * inside one) leaves no expression to lower. ll_expr(NULL) hands back the
+     * i32 literal 0, which is a parse error the moment the return type is an
+     * aggregate - `ret %struct.xml__XMLNode 0`. Emit the type's own zero. */
+    if (!value) {
+        ll_emit_defers(ll);
+        ll_emit_term(ll, "ret %s %s", ll_ty(ll, ll->ret_ts), ll_zero(ll->ret_ts));
         return;
     }
     const char *v = ll_conv(ll, ll_expr(ll, value), ll->ret_ts);
@@ -62,7 +83,13 @@ static void ll_vardecl(ll_t *ll, ast_node_t *n)
     if (n->a) {
         const char *v = ll_conv(ll, ll_expr(ll, n->a), ts);
         ll_emit(ll, "store %s %s, ptr %s", ll_ty(ll, ts), v, ptr);
+        return;
     }
+    /* No initializer: a bare alloca reads back as undef. Sema rejects every
+     * read that no assignment precedes, but a `&:` parameter the callee only
+     * writes on some paths would still leave this indeterminate, so zero it -
+     * the C and JS backends do the same. */
+    ll_emit(ll, "store %s %s, ptr %s", ll_ty(ll, ts), ll_zero(ts), ptr);
 }
 
 static token_kind_t ll_compound_base(token_kind_t k)

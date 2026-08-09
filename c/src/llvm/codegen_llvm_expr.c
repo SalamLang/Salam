@@ -1298,7 +1298,7 @@ static llv_t ll_call_raw_ptr(ll_t *ll, ast_node_t *n, ast_node_t *callee)
 {
     const char *fts = callee->type_str;
     llv_t fv = ll_expr(ll, callee);
-    const char *fn = ll_new_tmp(ll);
+    const char *fn = fv.ref;
     const char *rts = ll_func_ret(ll, fts);
     vec_t pts;
     sb_t ab;
@@ -1308,11 +1308,14 @@ static llv_t ll_call_raw_ptr(ll_t *ll, ast_node_t *n, ast_node_t *callee)
      * function pointer is already a ptr under opaque pointers, and
      * `inttoptr ptr ... to ptr` is not a legal cast at all - `raw as extern
      * func (...)` produced exactly that and the module failed to parse.
+     * The temp is taken inside the branch, not ahead of it: numbering one
+     * that the ptr case then drops made this the one call shape whose IR
+     * did not match llvm_call_kinds.salam's byte for byte.
      */
-    if (!strcmp(ll_ty(ll, fv.ts), "ptr"))
-        fn = fv.ref;
-    else
+    if (strcmp(ll_ty(ll, fv.ts), "ptr") != 0) {
+        fn = ll_new_tmp(ll);
         ll_emit(ll, "%s = inttoptr %s %s to ptr", fn, ll_ty(ll, fv.ts), fv.ref);
+    }
     ll_func_params(ll, fts, &pts);
     sb_init(&ab);
     {

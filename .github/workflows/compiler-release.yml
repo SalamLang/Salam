@@ -306,14 +306,26 @@ jobs:
               https://github.com/mariadb-corporation/mariadb-connector-c.git /tmp/mariadb-src
           fi
           # Regenerates just the openssl-root scratch headers (cheap:
-          # extract + `Configure`, no `make`) when build_openssl() didn't
-          # run this CI invocation because its .a files were already cache
-          # hit - the headers live outside the cached /tmp/extralibs path
-          # (see build_openssl()'s comment), so a cache hit alone leaves
-          # them missing even though the actual libs are available.
+          # extract + `Configure` + `make build_generated`, no compiling)
+          # when build_openssl() didn't run this CI invocation because its
+          # .a files were already cache hit - the headers live outside the
+          # cached /tmp/extralibs path (see build_openssl()'s comment), so a
+          # cache hit alone leaves them missing even though the actual libs
+          # are available.
+          #
+          # The sentinel is opensslv.h, and it is generated, not shipped:
+          # OpenSSL 3.x keeps ~two dozen headers as .h.in templates and
+          # `Configure` alone expands none of them. Staging a Configure-only
+          # tree therefore looked complete (evp.h, macros.h and the rest of
+          # the static headers are all there, and CMake's FindOpenSSL was
+          # happy) right up to the first compile, which died on
+          # `openssl/macros.h:15: openssl/opensslv.h: No such file or
+          # directory` - the whole mariadb build for the one target whose
+          # openssl came from cache. build_openssl() never hit this because
+          # `make build_libs` generates them on the way to the .a files.
           ensure_openssl_root() {
             target="$1"; ossl_target="$2"; shift 2
-            [ -f "/tmp/openssl-root-$target/include/openssl/ssl.h" ] && return 0
+            [ -f "/tmp/openssl-root-$target/include/openssl/opensslv.h" ] && return 0
             [ -f "/tmp/extralibs/$target/libssl.a" ] || return 1
             [ -f /tmp/openssl.tar.gz ] || {
               curl -fL --connect-timeout 15 --max-time 180 -o /tmp/openssl.tar.gz \
@@ -325,9 +337,15 @@ jobs:
             ob_dir="/tmp/openssl-build-$target"
             rm -rf "$ob_dir" "$ob_dir.log"; mkdir -p "$ob_dir"
             tar xf /tmp/openssl.tar.gz -C "$ob_dir" --strip-components=1
+            # build_generated expands the .h.in templates and nothing else -
+            # it runs perl only, so it needs no cross compiler and costs
+            # seconds, unlike the build_libs that build_openssl() does.
             ( cd "$ob_dir" \
               && ./Configure "$ossl_target" no-shared no-tests no-docs no-apps \
-                   no-secure-memory no-engine "$@" ) >"$ob_dir.log" 2>&1 || {
+                   no-secure-memory no-engine "$@" \
+              && make -j"$JOBS" build_generated ) >"$ob_dir.log" 2>&1 || {
+              echo "::warning::openssl header regeneration failed for $target"
+              tail -30 "$ob_dir.log" || true
               rm -rf "$ob_dir" "$ob_dir.log"; return 1; }
             rm -rf "/tmp/openssl-root-$target"
             mkdir -p "/tmp/openssl-root-$target/include" "/tmp/openssl-root-$target/lib"
@@ -335,6 +353,12 @@ jobs:
             cp "/tmp/extralibs/$target/libssl.a" "/tmp/extralibs/$target/libcrypto.a" \
               "/tmp/openssl-root-$target/lib/"
             rm -rf "$ob_dir" "$ob_dir.log"
+            # Fail here rather than 400 lines into mariadb's compile: a root
+            # missing a generated header configures cleanly and only dies at
+            # the first #include.
+            [ -f "/tmp/openssl-root-$target/include/openssl/opensslv.h" ] || {
+              echo "::warning::openssl-root for $target is missing generated headers"
+              return 1; }
           }
           build_mariadb() {
             target="$1"; ossl_target="$2"; shift 2

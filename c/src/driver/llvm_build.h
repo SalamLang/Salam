@@ -25,6 +25,16 @@
  */
 #define SALAM_RC_LLVM_UNSUPPORTED 7
 
+/*
+ * Distinct exit code for "codegen was fine, producing the executable was
+ * not". The in-process lld links against the bundled static musl sysroot,
+ * which has none of the host's shared libraries - a program that links
+ * -lsqlite3 or -lgtk-3 finds them through the C backend's host toolchain and
+ * nowhere else. driver_build() retries those through the C backend so
+ * defaulting to LLVM does not un-build programs that built before.
+ */
+#define SALAM_RC_LLVM_LINK_FAILED 8
+
 int driver_llvm(options_t *opt);
 
 int driver_llvm_build(options_t *opt);

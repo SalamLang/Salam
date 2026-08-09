@@ -795,14 +795,19 @@ int driver_build(options_t *opt)
         /*
          * SALAM_RC_LLVM_UNSUPPORTED means the module was emitted but is
          * incomplete - the program uses a construct the LLVM backend does
-         * not lower yet. Falling back to the C backend keeps every program
-         * that builds today building, which is what makes defaulting to
-         * LLVM safe before backend parity is finished. Any other non-zero
-         * code is a real error (bad source, failed link) and is reported
-         * as-is rather than retried, so a genuine mistake is not hidden
-         * behind a second compile.
+         * not lower yet. SALAM_RC_LLVM_LINK_FAILED means codegen was fine
+         * but the in-process lld could not produce an executable, which is
+         * what happens to every program that links a host shared library
+         * (-lsqlite3, -lgtk-3): the bundled static musl sysroot has none of
+         * them, while the C backend's host toolchain does. Falling back to
+         * the C backend on both keeps every program that builds today
+         * building, which is what makes defaulting to LLVM safe before
+         * backend parity is finished. Any other non-zero code is a real
+         * error (bad source) and is reported as-is rather than retried, so
+         * a genuine mistake is not hidden behind a second compile.
          */
-        if (lrc != SALAM_RC_LLVM_UNSUPPORTED) return lrc;
+        if (lrc != SALAM_RC_LLVM_UNSUPPORTED && lrc != SALAM_RC_LLVM_LINK_FAILED)
+            return lrc;
         if (!strcmp(opt->backend, "llvm")) return lrc;
         fprintf(stderr, i18n_tr("salam: falling back to the C backend for this file "
                                 "(build with --backend=llvm to make this an error)\n"));

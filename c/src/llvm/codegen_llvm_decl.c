@@ -98,12 +98,44 @@ static void ll_put_type_code(sb_t *b, const char *ts)
     }
 }
 
-const char *ll_mangle(ll_t *ll, const char *owner, const char *fn, func_sig_t *sig)
+/*
+ * The package a member scope belongs to, or NULL for the main module. The
+ * whole program lands in one LLVM module, so a free function's symbol has to
+ * carry its package the way the C backend's _Salam_<pkg>_... names do - see
+ * ll_mangle_in.
+ */
+const char *ll_pkg_of_scope(ll_t *ll, scope_t *sc)
+{
+    size_t i = 0;
+    if (!sc) return NULL;
+    for (; i < ll->sem->packages.len; i++) {
+        symbol_t *pk = (symbol_t *)ll->sem->packages.data[i];
+        if (!pk || pk->kind != SYM_PACKAGE || pk->members != sc) continue;
+        return pk->pkgname ? pk->pkgname : pk->name;
+    }
+    return NULL;
+}
+
+/*
+ * `pkg` qualifies free functions (owner == NULL). Without it std/fs/path's
+ * `pub func Ext(p: str): ret filepath.Ext(p) end` and std/filepath's own
+ * `Ext` both mangled to @salam_Ext_str: only one body was emitted, the
+ * wrapper's tail call bound to itself, and every program calling path.Ext
+ * died in infinite recursion. Struct/impl members keep the owner-only name -
+ * their call sites only know the receiver's type, not the package that
+ * declared it.
+ */
+const char *ll_mangle_in(ll_t *ll, const char *pkg, const char *owner, const char *fn,
+                         func_sig_t *sig)
 {
     if (!owner && !strcmp(fn, ll->entry)) return "main";
     sb_t b;
     sb_init(&b);
     sb_puts(&b, "salam_");
+    if (!owner && pkg && pkg[0] && strcmp(pkg, "main") != 0) {
+        ll_put_ident(&b, pkg);
+        sb_putc(&b, '_');
+    }
     if (owner) {
         ll_put_ident(&b, owner);
         sb_putc(&b, '_');
@@ -120,6 +152,19 @@ const char *ll_mangle(ll_t *ll, const char *owner, const char *fn, func_sig_t *s
     const char *r = arena_strdup(ll->a, sb_cstr(&b));
     sb_free(&b);
     return r;
+}
+
+/*
+ * The package in scope right now. Every call site that reaches a free
+ * function through the current scope (a same-package call, funcptr/&f) is
+ * emitting into the same package the callee was declared in, so the
+ * definition in ll_function and those calls agree on the name.
+ * ll_call_pkg is the exception - it resolves through another package's
+ * member scope and passes that package to ll_mangle_in itself.
+ */
+const char *ll_mangle(ll_t *ll, const char *owner, const char *fn, func_sig_t *sig)
+{
+    return ll_mangle_in(ll, ll_pkg_of_scope(ll, ll->pkg_scope), owner, fn, sig);
 }
 
 func_sig_t *ll_pick_overload(ll_t *ll, symbol_t *sym, ast_node_t *call)
@@ -343,7 +388,23 @@ void ll_function(ll_t *ll, ast_node_t *fn, symbol_t *owner)
          * whose own prints all take the printf path. Only where the buffer
          * is reachable at all: ll->single_threaded is already false for
          * Windows targets, whose CRT has no `write` for the helper to call. */
-        if (ll->single_threaded) ll_need(ll, LL_H_OUTBUF);
+        if (ll->single_threaded) {
+            ll_need(ll, LL_H_OUTBUF);
+            /*
+             * Returning from main is not the only way out: os.Exit() calls
+             * exit(), and an atexit handler can print after main is gone.
+             * Neither path reaches the flush in ll_emit_return, and the
+             * llvm.global_dtors backstop is dropped by a static-musl link
+             * through in-process lld - so `noret func f(): println ...
+             * os.Exit(0)` printed nothing at all. Registering the flush
+             * here, before any user code runs, puts it last in atexit's
+             * LIFO order, so it still sees whatever a handler the program
+             * registers later has printed. Not under --jit: see ll.jit.
+             */
+            if (!ll->jit)
+                ll_emit(ll, "%s = call i32 @atexit(ptr @salam_out_flush)",
+                        ll_new_tmp(ll));
+        }
         /* Hand argc/argv to the runtime before anything can call args(). */
         symbol_t *sa_owner = NULL;
         func_sig_t *sa = ll_body_sig_for(ll, "salam_set_args", &sa_owner);
@@ -904,10 +965,10 @@ void ll_emit_globals(ll_t *ll, ast_node_t *program)
 
 static bool ll_extern_seen(ll_t *ll, const char *name)
 {
-    static const char *prologue[] = {"printf", "dprintf",  "strlen", "strcmp",  "malloc",
-                                     "memcpy", "realloc",  "free",   "memmove", "abort",
-                                     "exit",   "snprintf", "strtol", "strtod",  "strstr",
-                                     "write",  NULL};
+    static const char *prologue[] = {"printf", "dprintf", "strlen", "strcmp",   "malloc",
+                                     "memcpy", "realloc", "free",   "memmove",  "abort",
+                                     "exit",   "atexit",  "fflush", "snprintf", "strtol",
+                                     "strtod", "strstr",  "write",  NULL};
     {
         int p = 0;
         for (; prologue[p]; p++)

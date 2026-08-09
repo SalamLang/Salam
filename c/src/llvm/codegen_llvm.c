@@ -120,6 +120,8 @@ static void ll_emit_prologue(ll_t *ll)
     sb_puts(g, ll_fmt(ll, "declare ptr @memmove(ptr, ptr, %s) nounwind\n", U));
     sb_puts(g, "declare void @abort() noreturn nounwind cold\n");
     sb_puts(g, "declare void @exit(i32) noreturn nounwind\n");
+    sb_puts(g, "declare i32 @atexit(ptr) nounwind\n");
+    sb_puts(g, "declare i32 @fflush(ptr) nounwind\n");
     sb_puts(g, ll_fmt(ll, "declare i32 @snprintf(ptr, %s, ptr, ...) nounwind\n", U));
     sb_puts(g, "declare i64 @strtol(ptr, ptr, i32) nounwind\n");
     sb_puts(g, "declare double @strtod(ptr, ptr) nounwind\n");
@@ -422,8 +424,6 @@ static void ll_emit_outbuf(ll_t *ll)
     sb_puts(ll->hg,
             "@salam_ob = internal global [65536 x i8] zeroinitializer\n"
             "@salam_obn = internal global i64 0\n"
-            "@stdout = external global ptr\n"
-            "declare i32 @fflush(ptr) nounwind\n"
             "declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1) nounwind\n"
             "define internal void @salam_out_flush() nounwind {\n"
             "entry:\n"
@@ -558,6 +558,15 @@ llvm_output_t *codegen_llvm_run_opts(arena_t *a, logger_t *log, ast_node_t *prog
     ll.minsize = opts && opts->opt_level == LLVM_OPT_OZ;
     ll.single_threaded =
         salam_module_single_threaded(program) && !ll_target_is_windows(ll.triple);
+    /*
+     * `--jit` runs main inside salam's own process and disposes the LLJIT
+     * right after it returns, unmapping the code. An atexit() handler
+     * registered from that code would be called at process exit against a
+     * freed mapping, so the exit-path flush ll_function registers is emitted
+     * only for a real executable. A JIT'd program that calls exit() never
+     * reaches the dispose, so nothing is lost there either.
+     */
+    ll.jit = opts && opts->output_mode == LLVM_OUT_JIT;
     vec_init(&ll.locals);
     vec_init(&ll.strings);
     vec_init(&ll.defers);

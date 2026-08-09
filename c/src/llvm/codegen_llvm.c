@@ -423,22 +423,21 @@ static void ll_emit_charstr(ll_t *ll)
 
 static void ll_emit_outbuf(ll_t *ll)
 {
-    sb_puts(ll->hg,
-            "@salam_ob = internal global [65536 x i8] zeroinitializer\n"
-            "@salam_obn = internal global i64 0\n"
-            "declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1) nounwind\n"
-            "define internal void @salam_out_flush() nounwind {\n"
-            "entry:\n"
-            "  %n = load i64, ptr @salam_obn\n"
-            "  %z = icmp eq i64 %n, 0\n"
-            "  br i1 %z, label %done, label %do\n"
-            "do:\n"
-            "  %r = call i64 @write(i32 1, ptr @salam_ob, i64 %n)\n"
-            "  store i64 0, ptr @salam_obn\n"
-            "  br label %done\n"
-            "done:\n"
-            "  ret void\n"
-            "}\n");
+    sb_puts(ll->hg, "@salam_ob = internal global [65536 x i8] zeroinitializer\n"
+                    "@salam_obn = internal global i64 0\n"
+                    "declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1) nounwind\n"
+                    "define internal void @salam_out_flush() nounwind {\n"
+                    "entry:\n"
+                    "  %n = load i64, ptr @salam_obn\n"
+                    "  %z = icmp eq i64 %n, 0\n"
+                    "  br i1 %z, label %done, label %do\n"
+                    "do:\n"
+                    "  %r = call i64 @write(i32 1, ptr @salam_ob, i64 %n)\n"
+                    "  store i64 0, ptr @salam_obn\n"
+                    "  br label %done\n"
+                    "done:\n"
+                    "  ret void\n"
+                    "}\n");
     /*
      * A server prints its banner, then blocks in accept() forever - neither
      * the `ret` in main nor atexit ever runs, so the banner sits in the

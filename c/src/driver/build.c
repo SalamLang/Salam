@@ -1276,6 +1276,24 @@ int driver_build(options_t *opt)
         return 1;
     }
     int crc = 0;
+    /*
+     * -fno-strict-aliasing is not optional, and is deliberately applied
+     * whenever the compiler is not tcc - independently of -O, so a caller
+     * who passes their own --cc="gcc -O2" still gets it.
+     *
+     * Generated C reaches every aggregate through void*: slices hand back
+     * `void*` from salam_slice_at that the caller casts to the element
+     * type, Vector payloads are re-cast per element, and str arrays are
+     * walked as int64_t*. That is exactly the type punning C's strict
+     * aliasing rules forbid, so at -O2 gcc is free to assume those accesses
+     * cannot alias and reorders them - `fmt.Sprintf` over a Vector<str>
+     * segfaulted, and a dozen tests silently truncated their output
+     * mid-run. -O0 and -O1 were fine, which is what made it look like a
+     * miscompile rather than UB in what we emit. Every compiler that emits
+     * C this way disables the assumption; the real alternative is emitting
+     * unions or char* accessors everywhere, which this backend does not do.
+     */
+    const char *alias_flag = strstr(opt->cc, "tcc") ? "" : " -fno-strict-aliasing";
     const char *opt_flag = (!opt->debug_info && !opt->asan && !strstr(opt->cc, "tcc") &&
                             !strstr(opt->cc, "-O"))
                                ? " -O2"
@@ -1307,6 +1325,7 @@ int driver_build(options_t *opt)
                 sb_puts(&cmd, " -c -I. -I");
                 sb_put_shell_arg(&cmd, scratch);
                 sb_puts(&cmd, opt_flag);
+                sb_puts(&cmd, alias_flag);
                 sb_puts(&cmd, dbg_flag);
                 sb_putc(&cmd, ' ');
                 sb_put_shell_arg(&cmd, cfiles[i]);
@@ -1386,6 +1405,7 @@ int driver_build(options_t *opt)
             }
 #endif
             sb_puts(&cflags, opt_flag);
+            sb_puts(&cflags, alias_flag);
             sb_puts(&cflags, lto_flag);
             sb_puts(&cflags, " -I. -I");
             sb_put_shell_arg(&cflags, scratch);
@@ -1488,6 +1508,7 @@ int driver_build(options_t *opt)
         }
 #endif
         sb_puts(&cmd, opt_flag);
+        sb_puts(&cmd, alias_flag);
         sb_puts(&cmd, lto_flag);
         sb_puts(&cmd, " -I. -I");
         sb_put_shell_arg(&cmd, scratch);

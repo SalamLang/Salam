@@ -348,20 +348,29 @@ static void hsv_to_rgb_px(unsigned char h, unsigned char s, unsigned char v,
     double hh = h * 2.0, ss = s / 255.0, vv = v / 255.0;
     double c = vv * ss;
     /*
-     * `sextant` must be its own local: the tcc 0.9.27 win64 build bundled
-     * with the Windows release miscompiles a call whose first *two*
-     * arguments are both floating point and whose first one is a computed
-     * expression - the first argument is overwritten with the second's
-     * value, so `fmod(hh / 60.0, 2.0)` was evaluated as `fmod(2.0, 2.0)`
-     * == 0. That made x always 0, and every hue in [60,120) came back as
-     * (v*(1-s), v, v*(1-s)) instead of (x+m, c+m, m) - the red channel of
-     * an HSV round trip lost its value on Windows only, since the test
-     * runner builds this shim with whichever of tcc/gcc/cc/clang it finds
-     * first. Assigning to a local forces the argument through memory and
-     * sidesteps it; tcc 0.9.26 and 0.9.28rc are both unaffected.
+     * No libc float call in this expression, by hand instead of fmod/fabs.
+     * A tcc 0.9.27 win64 build miscompiles a call whose first *two*
+     * arguments are both floating point: the first argument is overwritten
+     * with the second's value, so `fmod(hh / 60.0, 2.0)` evaluated as
+     * `fmod(2.0, 2.0)` == 0. That made x always 0, and every hue in
+     * [60,120) came back as (v*(1-s), v, v*(1-s)) instead of (x+m, c+m, m)
+     * - the red channel of an HSV round trip lost its value on Windows
+     * only, since the test runner builds this shim with whichever of
+     * tcc/gcc/cc/clang it finds first. Hoisting the argument into a local
+     * fixed it once and then stopped being enough on a later bundled tcc,
+     * so the calls are gone rather than shaped around: `hh` is
+     * `unsigned char * 2.0`, hence finite and >= 0, which is all the
+     * reduction below needs.
      */
     double sextant = hh / 60.0;
-    double x = c * (1 - fabs(fmod(sextant, 2.0) - 1));
+    double k = sextant;
+    double d;
+    double x;
+    while (k >= 2.0)
+        k -= 2.0;
+    d = k - 1.0;
+    if (d < 0.0) d = -d;
+    x = c * (1.0 - d);
     double m = vv - c;
     double rp, gp, bp;
     if (hh < 60) {

@@ -556,6 +556,47 @@ func struct_sym(v &: Lv, s &: sm.Sema, a &: at.Ast, name: str): int:
     ret 0
 end
 
+func scope_holds(s &: sm.Sema, sc: int, want: int): bool:
+    if sc == 0:
+        ret false
+    end
+    syms := sm.ScopeAt(s, sc).symbols
+    repeat syms.len() with i:
+        if syms.get(i)[0] == want:
+            ret true
+        end
+    end
+    ret false
+end
+
+// ll_scope_of - which package scope a symbol was declared in. Emitting a
+// callee's body has to happen under *its* package scope, not the caller's:
+// std/net/http has a `send(method, url, headers, body): Response` of its
+// own, and while its Client methods were emitted under the calling module's
+// scope that name resolved to the libc `send()` extern
+// std/net/internal/rawsock declares - four strings went through ptrtoint
+// into a socket call.
+func scope_of(s &: sm.Sema, want: int): int:
+    if want == 0:
+        ret 0
+    end
+    if scope_holds(s, s.global, want):
+        ret s.global
+    end
+    mut p := 0
+    until p < sm.PackageCount(s):
+        pk := sm.PackageAt(s, p)
+        if pk != 0 && sm.SymAt(s, pk).kind == sm.SYM_PACKAGE:
+            mem := sm.SymAt(s, pk).members
+            if mem != 0 && scope_holds(s, mem, want):
+                ret mem
+            end
+        end
+        p += 1
+    end
+    ret 0
+end
+
 // ll_enum_sym
 func enum_sym(v &: Lv, s &: sm.Sema, a &: at.Ast, name: str): int:
     r := sym_of(v, s, a, name)

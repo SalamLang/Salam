@@ -45,9 +45,10 @@ void ll_emit_return(ll_t *ll, ast_node_t *value)
          * the program vanished with it while printf-formatted lines still
          * showed up. Returning from main is the one exit path codegen owns,
          * so flush on it and leave the destructor as the backstop for
-         * programs that call exit() instead.
+         * programs that call exit() instead. Gated the same way the buffer
+         * itself is - a Windows target never buffers and has no `write`.
          */
-        ll_emit(ll, "call void @salam_out_flush()");
+        if (ll->single_threaded) ll_emit(ll, "call void @salam_out_flush()");
         if (value)
             ll_emit_term(ll, "ret i32 %s", v);
         else

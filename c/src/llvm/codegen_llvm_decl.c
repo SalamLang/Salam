@@ -340,8 +340,10 @@ void ll_function(ll_t *ll, ast_node_t *fn, symbol_t *owner)
     if (is_main) {
         /* Every return from main flushes the print buffer (see
          * ll_emit_return), so the helper has to exist even in a program
-         * whose own prints all take the printf path. */
-        ll_need(ll, LL_H_OUTBUF);
+         * whose own prints all take the printf path. Only where the buffer
+         * is reachable at all: ll->single_threaded is already false for
+         * Windows targets, whose CRT has no `write` for the helper to call. */
+        if (ll->single_threaded) ll_need(ll, LL_H_OUTBUF);
         /* Hand argc/argv to the runtime before anything can call args(). */
         symbol_t *sa_owner = NULL;
         func_sig_t *sa = ll_body_sig_for(ll, "salam_set_args", &sa_owner);

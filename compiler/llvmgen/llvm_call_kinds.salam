@@ -149,8 +149,17 @@ func call_dyn(
     // lowering the C backend gives it in call_dyn().
     if str.Equals(mname, "free") && at.Get(a, n).list.len() == 0:
         dv0 := lv_expr(v, s, a, obj)
+        // Same `dyn X*` auto-deref the dispatch path below needs:
+        // Vector.get() returns the address of the slot, and extractvalue
+        // wants the %dyn itself.
+        mut dv0ref := dv0.ref
+        if is_ptr_ts(dv0.ts):
+            ld0 := new_tmp(v)
+            emit(v, ld0 + " = load %dyn, ptr " + dv0ref)
+            dv0ref = ld0
+        end
         data0 := new_tmp(v)
-        emit(v, data0 + " = extractvalue %dyn " + dv0.ref + ", 0")
+        emit(v, data0 + " = extractvalue %dyn " + dv0ref + ", 0")
         emit(v, "call void @free(ptr " + data0 + ")")
         ret make_llv("0", "void")
     end
@@ -297,10 +306,22 @@ func call_method(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, callee: int): Llv:
     end
     if ms != 0 && sm.SymAt(s, ms).kind == sm.SYM_METHOD && sm.SymAt(s, ms).overloads.len() > 0:
         sig := pick_overload(v, s, a, ms, n)
-        ensure_fn(v, s, a, sm.SigAt(s, sig).decl, ss, v.pkg_scope)
+        // The callee's body belongs to the scope that declares its type, not
+        // to whichever module is calling; and the symbol it is mangled under
+        // is the struct symbol's own name, never the (possibly
+        // package-qualified) spelling at the use site.
+        mut osc := scope_of(s, ss)
+        if osc == 0:
+            osc = v.pkg_scope
+        end
+        ensure_fn(v, s, a, sm.SigAt(s, sig).decl, ss, osc)
+        mut owner_nm := sm.SymAt(s, ss).name
+        if str.Len(owner_nm) == 0:
+            owner_nm = sname2
+        end
         recv := isptr ? lv_expr(v, s, a, obj).ref : lv_addr_of(v, s, a, obj).ptr
         ret emit_call(
-            v, s, a, n, sig, "ptr " + recv, mangle(v, s, sname2, mname, sig), sm.ToString(s, sm.SigAt(s, sig).ret_type)
+            v, s, a, n, sig, "ptr " + recv, mangle(v, s, owner_nm, mname, sig), sm.ToString(s, sm.SigAt(s, sig).ret_type)
         )
     end
 
@@ -309,7 +330,11 @@ func call_method(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, callee: int): Llv:
         im := sm.LookupLocal(s, sm.SymAt(s, implsym).members, mname)
         if im != 0 && sm.SymAt(s, im).kind == sm.SYM_METHOD && sm.SymAt(s, im).overloads.len() > 0:
             sig2 := pick_overload(v, s, a, im, n)
-            ensure_fn(v, s, a, sm.SigAt(s, sig2).decl, implsym, v.pkg_scope)
+            mut osc2 := scope_of(s, implsym)
+            if osc2 == 0:
+                osc2 = v.pkg_scope
+            end
+            ensure_fn(v, s, a, sm.SigAt(s, sig2).decl, implsym, osc2)
             rv := lv_expr(v, s, a, obj)
             ret emit_call(
                 v, s, a, n, sig2, ty_of(v, s, a, ots) + " " + rv.ref, mangle_ti(v, s, ots, mname, sig2),

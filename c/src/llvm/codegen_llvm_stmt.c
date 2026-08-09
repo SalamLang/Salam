@@ -37,6 +37,17 @@ void ll_emit_return(ll_t *ll, ast_node_t *value)
     if (ll->is_main) {
         const char *v = value ? ll_conv(ll, ll_expr(ll, value), "i32") : NULL;
         ll_emit_defers(ll);
+        /*
+         * Flush the print buffer here rather than trusting the
+         * llvm.global_dtors entry ll_emit_outbuf registers. Whether that
+         * destructor runs depends on the link - static musl through
+         * in-process lld dropped it, and every literal-only `println` in
+         * the program vanished with it while printf-formatted lines still
+         * showed up. Returning from main is the one exit path codegen owns,
+         * so flush on it and leave the destructor as the backstop for
+         * programs that call exit() instead.
+         */
+        ll_emit(ll, "call void @salam_out_flush()");
         if (value)
             ll_emit_term(ll, "ret i32 %s", v);
         else

@@ -1,0 +1,444 @@
+package semantic
+
+import str
+import co "../sal_core.salam"
+import at "../ast.salam"
+import tok "../token.salam"
+import i18 "../i18n.salam"
+
+// sema_definit.c - definite-assignment analysis.
+//
+// `x: int` declares a variable without giving it a value. In C, reading such a
+// variable before something assigns to it is undefined behaviour:
+//
+//     int x;
+//     int y = x;   // UB
+//
+// Salam rejects that shape outright. This pass walks every function body in
+// flow order and reports any read of a local that is not preceded, on every
+// path reaching it, by an assignment.
+//
+// The walk is structural rather than a real CFG:
+//   - each arm of an `if` / `match` is analyzed from the state at the join's
+//     entry, and the arm states are intersected afterwards;
+//   - an arm that cannot fall through (it ends in `ret`/`break`/`continue`)
+//     contributes nothing to the intersection;
+//   - a loop body is analyzed from the pre-loop state and its assignments are
+//     discarded afterwards, because the body may run zero times;
+//   - `defer` and lambda bodies are skipped: they run later, by which point
+//     the variable may well have been assigned.
+//
+// A variable handed to a `&:` reference parameter counts as assigned - the
+// callee writes through it. mark_ref_args (sema_overload.salam) stamps
+// `ref_arg` on those argument nodes so this pass can see them without redoing
+// overload resolution.
+
+// di_var_t
+pub struct DiVar:
+    pub name: str = ""
+    pub decl: int = 0
+    pub inited: bool = false
+end
+
+// di_t. The C kept a `vec_t vars` stack that scopes popped back to a mark;
+// Vector has no truncate, so di_drop_to pops one at a time.
+pub struct Di:
+    pub vars: Vector<DiVar> = Vector {}
+    pub filled: Vector<str> = Vector {}
+end
+
+// di_find - innermost binding of `name`, or -1.
+func di_find(d &: Di, name: str): int:
+    if str.Len(name) == 0:
+        ret 0 - 1
+    end
+    mut i := d.vars.len()
+    until i > 0:
+        i -= 1
+        if d.vars.get(i)[0].name == name:
+            ret i
+        end
+    end
+    ret 0 - 1
+end
+
+func di_drop_to(d &: Di, mark: int):
+    until d.vars.len() > mark:
+        _dropped := d.vars.pop()
+    end
+end
+
+func di_set_inited(d &: Di, idx: int, v: bool):
+    mut e := d.vars.get(idx)[0]
+    e.inited = v
+    d.vars.set(idx, e)
+end
+
+func di_mark(d &: Di, name: str):
+    idx := di_find(d, name)
+    if idx >= 0:
+        di_set_inited(d, idx, true)
+    end
+end
+
+func di_is_filled(d &: Di, name: str): bool:
+    if str.Len(name) == 0:
+        ret false
+    end
+    repeat d.filled.len() with i:
+        if d.filled.get(i)[0] == name:
+            ret true
+        end
+    end
+    ret false
+end
+
+// The identifier a chain of `.f` / `[i]` / `[a:b]` projections bottoms out on.
+func di_root_of(a &: at.Ast, nid: int): int:
+    mut cur := nid
+    until cur != 0:
+        k := at.KindOf(a, cur)
+        if k != at.AST_MEMBER && k != at.AST_INDEX && k != at.AST_SLICE:
+            ret cur
+        end
+        cur = at.Get(a, cur).a
+    end
+    ret cur
+end
+
+// Collect the names ever written through a projection - `w[i] = v`, `p.f = v`.
+// Such a variable is storage to be filled, not a value to be read: the write
+// computes a location and reads nothing, and codegen zeroes a declaration with
+// no initializer, so whatever is never written is defined rather than
+// indeterminate. Whole-variable definite assignment is the wrong granularity
+// there, and insisting on it would reject correct code such as the
+// `mut w: u32[64]` scratch block that std/crypto fills in a loop.
+func di_scan_filled(d &: Di, a &: at.Ast, nid: int):
+    if nid == 0:
+        ret
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_ASSIGN && n.a != 0 && at.KindOf(a, n.a) != at.AST_IDENTIFIER:
+        root := di_root_of(a, n.a)
+        if root != 0 && at.KindOf(a, root) == at.AST_IDENTIFIER:
+            rn := at.Get(a, root).name
+            if str.Len(rn) > 0:
+                d.filled.push(rn)
+            end
+        end
+    end
+    di_scan_filled(d, a, n.a)
+    di_scan_filled(d, a, n.b)
+    di_scan_filled(d, a, n.c)
+    di_scan_filled(d, a, n.d)
+    repeat at.ChildCount(a, nid) with i:
+        di_scan_filled(d, a, at.Child(a, nid, i))
+    end
+end
+
+// Every declaration is tracked, initialized or not, so that an inner binding
+// shadows an outer one of the same name instead of aliasing it.
+func di_declare(d &: Di, a &: at.Ast, nid: int):
+    n := at.Get(a, nid)
+    mut v := DiVar {}
+    v.name = n.name
+    v.decl = nid
+    v.inited = n.a != 0 || di_is_filled(d, n.name)
+    d.vars.push(v)
+end
+
+func di_read(s &: Sema, d &: Di, a &: at.Ast, nid: int):
+    n := at.Get(a, nid)
+    idx := di_find(d, n.name)
+    if idx < 0:
+        ret
+    end
+    if d.vars.get(idx)[0].inited:
+        ret
+    end
+    line := at.Get(a, d.vars.get(idx)[0].decl).begin_line as u64
+    serr(
+        s, 89, span_of(a, nid), co.Format2(
+            i18.Tr("'%s' is read before it is given a value (declared on line %u); give it a value with ':=', or assign to it on every path that reaches here"),
+            co.ArgStr(n.name), co.ArgUint(line)
+        )
+    )
+    // One report per variable, not one per read.
+    di_set_inited(d, idx, true)
+end
+
+// ===== flow state snapshots =====
+
+func di_snap(d &: Di, n: int): Vector<int>:
+    mut out := Vector {} as Vector<int>
+    repeat n with i:
+        if d.vars.get(i)[0].inited:
+            out.push(1)
+        else:
+            out.push(0)
+        end
+    end
+    ret out
+end
+
+func di_load(d &: Di, buf &: Vector<int>, n: int):
+    repeat n with i:
+        di_set_inited(d, i, buf.get(i)[0] != 0)
+    end
+end
+
+// Analyze one branch from `base`, restore the scope depth, and return the
+// state it ends in.
+func di_arm(s &: Sema, d &: Di, a &: at.Ast, nid: int, base &: Vector<int>, n: int): Vector<int>:
+    di_load(d, base, n)
+    di_stmt(s, d, a, nid)
+    di_drop_to(d, n)
+    ret di_snap(d, n)
+end
+
+// ===== control flow =====
+
+func di_if(s &: Sema, d &: Di, a &: at.Ast, nid: int):
+    n := at.Get(a, nid)
+    di_expr(s, d, a, n.a)
+    nv := d.vars.len()
+    mut base := di_snap(d, nv)
+    th := di_arm(s, d, a, n.b, base, nv)
+    th_live := !sema_stmt_terminates(s, a, n.b)
+    mut el := di_snap(d, 0)
+    mut el_live := true
+    if n.c != 0:
+        el = di_arm(s, d, a, n.c, base, nv)
+        el_live = !sema_stmt_terminates(s, a, n.c)
+    else:
+        // The implicit empty else assigns nothing.
+        el = di_snap(d, 0)
+        repeat nv with i:
+            el.push(base.get(i)[0])
+        end
+    end
+    di_load(d, base, nv)
+    repeat nv with i:
+        mut got := false
+        if th_live && el_live:
+            got = th.get(i)[0] != 0 && el.get(i)[0] != 0
+        else if th_live:
+            got = th.get(i)[0] != 0
+        else if el_live:
+            got = el.get(i)[0] != 0
+        end
+        if got:
+            di_set_inited(d, i, true)
+        end
+    end
+end
+
+func di_match(s &: Sema, d &: Di, a &: at.Ast, nid: int):
+    n := at.Get(a, nid)
+    di_expr(s, d, a, n.a)
+    nv := d.vars.len()
+    mut base := di_snap(d, nv)
+    mut acc := di_snap(d, 0)
+    repeat nv with i:
+        acc.push(1)
+    end
+    mut has_else := false
+    mut any_live := false
+    repeat at.ChildCount(a, nid) with j:
+        arm := at.Child(a, nid, j)
+        body := at.Get(a, arm).b
+        if at.Get(a, arm).op == tok.TK_KW_ELSE:
+            has_else = true
+        end
+        st := di_arm(s, d, a, body, base, nv)
+        if !sema_stmt_terminates(s, a, body):
+            any_live = true
+            repeat nv with k:
+                if st.get(k)[0] == 0:
+                    acc.set(k, 0)
+                end
+            end
+        end
+    end
+    di_load(d, base, nv)
+    // Without an else arm the match may match nothing, so nothing it assigns
+    // is guaranteed.
+    if has_else && any_live:
+        repeat nv with i:
+            if acc.get(i)[0] != 0:
+                di_set_inited(d, i, true)
+            end
+        end
+    end
+end
+
+// The body of a loop may run zero times, so whatever it assigns is not
+// guaranteed afterwards. Reads inside it still see the pre-loop state, which
+// is what a first iteration would see.
+func di_loop(s &: Sema, d &: Di, a &: at.Ast, cond: int, body: int, post: int):
+    di_expr(s, d, a, cond)
+    nv := d.vars.len()
+    mut base := di_snap(d, nv)
+    di_stmt(s, d, a, body)
+    di_drop_to(d, nv)
+    di_stmt(s, d, a, post)
+    di_drop_to(d, nv)
+    di_load(d, base, nv)
+end
+
+func di_for(s &: Sema, d &: Di, a &: at.Ast, nid: int):
+    n := at.Get(a, nid)
+    mark := d.vars.len()
+    // The init runs exactly once, so it does carry over.
+    di_stmt(s, d, a, n.a)
+    di_loop(s, d, a, n.b, n.d, n.c)
+    di_drop_to(d, mark)
+end
+
+func di_repeat(s &: Sema, d &: Di, a &: at.Ast, nid: int):
+    n := at.Get(a, nid)
+    di_expr(s, d, a, n.a)
+    di_expr(s, d, a, n.c)
+    di_expr(s, d, a, n.d)
+    di_loop(s, d, a, 0, n.b, 0)
+end
+
+// ===== reads and writes =====
+
+func di_call(s &: Sema, d &: Di, a &: at.Ast, nid: int):
+    di_expr(s, d, a, at.Get(a, nid).a)
+    repeat at.ChildCount(a, nid) with i:
+        arg := at.Child(a, nid, i)
+        if arg != 0 && at.KindOf(a, arg) == at.AST_IDENTIFIER && at.Get(a, arg).ref_arg:
+            // A `&:` parameter: the callee writes it.
+            di_mark(d, at.Get(a, arg).name)
+        else:
+            di_expr(s, d, a, arg)
+        end
+    end
+end
+
+func di_assign(s &: Sema, d &: Di, a &: at.Ast, nid: int):
+    n := at.Get(a, nid)
+    di_expr(s, d, a, n.b)
+    if n.a == 0:
+        ret
+    end
+    if at.KindOf(a, n.a) == at.AST_IDENTIFIER:
+        if n.op != tok.TK_ASSIGN:
+            // `x += 1` reads x first.
+            di_read(s, d, a, n.a)
+        end
+        di_mark(d, at.Get(a, n.a).name)
+        ret
+    end
+    // `x[i] = v` / `x.f = v` compute a location rather than reading x, so only
+    // the subscripts count as reads. di_scan_filled has already excused x.
+    mut cur := n.a
+    mut k := at.KindOf(a, cur)
+    until k == at.AST_MEMBER || k == at.AST_INDEX || k == at.AST_SLICE:
+        cn := at.Get(a, cur)
+        di_expr(s, d, a, cn.b)
+        di_expr(s, d, a, cn.c)
+        if cn.a == 0:
+            ret
+        end
+        cur = cn.a
+        k = at.KindOf(a, cur)
+    end
+    if k == at.AST_IDENTIFIER:
+        di_mark(d, at.Get(a, cur).name)
+        ret
+    end
+    di_expr(s, d, a, cur)
+end
+
+func di_block(s &: Sema, d &: Di, a &: at.Ast, nid: int):
+    mark := d.vars.len()
+    repeat at.ChildCount(a, nid) with i:
+        di_stmt(s, d, a, at.Child(a, nid, i))
+    end
+    di_drop_to(d, mark)
+end
+
+func di_expr(s &: Sema, d &: Di, a &: at.Ast, nid: int):
+    if nid == 0:
+        ret
+    end
+    k := at.KindOf(a, nid)
+    if k == at.AST_IDENTIFIER:
+        di_read(s, d, a, nid)
+        ret
+    end
+    // The body runs later, possibly after the assignment.
+    if k == at.AST_LAMBDA || k == at.AST_FUNC_ADDR:
+        ret
+    end
+    if k == at.AST_CALL:
+        di_call(s, d, a, nid)
+        ret
+    end
+    if k == at.AST_MATCH:
+        di_match(s, d, a, nid)
+        ret
+    end
+    if k == at.AST_BLOCK:
+        di_block(s, d, a, nid)
+        ret
+    end
+    n := at.Get(a, nid)
+    di_expr(s, d, a, n.a)
+    di_expr(s, d, a, n.b)
+    di_expr(s, d, a, n.c)
+    di_expr(s, d, a, n.d)
+    repeat at.ChildCount(a, nid) with i:
+        di_expr(s, d, a, at.Child(a, nid, i))
+    end
+end
+
+func di_stmt(s &: Sema, d &: Di, a &: at.Ast, nid: int):
+    if nid == 0:
+        ret
+    end
+    k := at.KindOf(a, nid)
+    if k == at.AST_BLOCK:
+        di_block(s, d, a, nid)
+    else k == at.AST_VAR_DECL || k == at.AST_CONST_DECL:
+        di_expr(s, d, a, at.Get(a, nid).a)
+        di_declare(d, a, nid)
+    else k == at.AST_ASSIGN:
+        di_assign(s, d, a, nid)
+    else k == at.AST_IF:
+        di_if(s, d, a, nid)
+    else k == at.AST_MATCH:
+        di_match(s, d, a, nid)
+    else k == at.AST_UNTIL:
+        di_loop(s, d, a, at.Get(a, nid).a, at.Get(a, nid).b, 0)
+    else k == at.AST_FOR:
+        di_for(s, d, a, nid)
+    else k == at.AST_REPEAT:
+        di_repeat(s, d, a, nid)
+    else k == at.AST_EACH:
+        di_expr(s, d, a, at.Get(a, nid).a)
+        di_loop(s, d, a, 0, at.Get(a, nid).b, 0)
+    else k == at.AST_DEFER || k == at.AST_BREAK || k == at.AST_CONTINUE:
+        // `defer` runs at function exit, after any later assignment.
+        ret
+    else:
+        di_expr(s, d, a, nid)
+    end
+end
+
+// sema_check_definite_init - entry point, one call per checked function body.
+pub func SemaCheckDefiniteInit(s &: Sema, a &: at.Ast, fnid: int):
+    if fnid == 0:
+        ret
+    end
+    body := at.Get(a, fnid).a
+    if body == 0:
+        ret
+    end
+    mut d := Di {}
+    di_scan_filled(d, a, body)
+    di_stmt(s, d, a, body)
+end

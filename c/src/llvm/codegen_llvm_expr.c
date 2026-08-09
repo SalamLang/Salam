@@ -197,6 +197,17 @@ static const char *ll_op_method_name(token_kind_t k)
     }
 }
 
+/*
+ * The scope a callee's body must be emitted under: the one that declares
+ * its owning type, not whichever module happens to be calling. Falls back
+ * to the current scope for a type that cannot be placed.
+ */
+static scope_t *ll_owner_scope(ll_t *ll, symbol_t *owner)
+{
+    scope_t *sc = ll_scope_of(ll, owner);
+    return sc ? sc : ll->pkg_scope;
+}
+
 static symbol_t *ll_op_struct(ll_t *ll, const char *ts, const char **sname)
 {
     if (!ts) return NULL;
@@ -238,7 +249,7 @@ static bool ll_op_call(ll_t *ll, ast_node_t *recv, const char *sname, symbol_t *
      * and the module failed to parse. Every other call site pairs its
      * emit with an ensure_fn; this one was missing it.
      */
-    ll_ensure_fn(ll, sig->decl, ss, ll->pkg_scope);
+    ll_ensure_fn(ll, sig->decl, ss, ll_owner_scope(ll, ss));
     const char *recvref =
         ll_is_ptr_ts(recv->type_str) ? ll_expr(ll, recv).ref : ll_addr_of(ll, recv).ptr;
     sb_t ab;
@@ -278,7 +289,7 @@ bool ll_index_set(ll_t *ll, ast_node_t *idx, ast_node_t *value)
     func_sig_t *sig = ll_pick_arity(ms, 2);
     if (!sig) return false;
     /* Same missing pairing as ll_op_call: emit the call, request the body. */
-    ll_ensure_fn(ll, sig->decl, ss, ll->pkg_scope);
+    ll_ensure_fn(ll, sig->decl, ss, ll_owner_scope(ll, ss));
     const char *recv = ll_is_ptr_ts(idx->a->type_str) ? ll_expr(ll, idx->a).ref
                                                       : ll_addr_of(ll, idx->a).ptr;
     const char *p0 = type_to_string(ll->sem->tc, (type_t *)sig->params.data[0]);
@@ -1186,7 +1197,7 @@ static llv_t ll_call_method(ll_t *ll, ast_node_t *n, ast_node_t *callee)
     symbol_t *ms = ss ? scope_lookup_local(ss->members, mname) : NULL;
     if (ms && ms->kind == SYM_METHOD && ms->overloads.len) {
         func_sig_t *sig = ll_pick_overload(ll, ms, n);
-        ll_ensure_fn(ll, sig->decl, ss, ll->pkg_scope);
+        ll_ensure_fn(ll, sig->decl, ss, ll_owner_scope(ll, ss));
         const char *recv = isptr ? ll_expr(ll, obj).ref : ll_addr_of(ll, obj).ptr;
         /* ss->name, not sname: see ll_op_struct. A package-qualified
          * receiver type would otherwise call a symbol nothing defines. */
@@ -1200,7 +1211,7 @@ static llv_t ll_call_method(ll_t *ll, ast_node_t *n, ast_node_t *callee)
         symbol_t *im = scope_lookup_local(impl->members, mname);
         if (im && im->kind == SYM_METHOD && im->overloads.len) {
             func_sig_t *sig = ll_pick_overload(ll, im, n);
-            ll_ensure_fn(ll, sig->decl, impl, ll->pkg_scope);
+            ll_ensure_fn(ll, sig->decl, impl, ll_owner_scope(ll, impl));
             llv_t rv = ll_expr(ll, obj);
             return ll_emit_call(ll, n, sig, ll_fmt(ll, "%s %s", ll_ty(ll, ots), rv.ref),
                                 ll_mangle_ti(ll, ots, mname, sig),

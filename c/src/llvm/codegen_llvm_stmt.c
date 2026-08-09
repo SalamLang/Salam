@@ -82,7 +82,13 @@ static void ll_vardecl(ll_t *ll, ast_node_t *n)
     if (n->a) {
         const char *v = ll_conv(ll, ll_expr(ll, n->a), ts);
         ll_emit(ll, "store %s %s, ptr %s", ll_ty(ll, ts), v, ptr);
+        return;
     }
+    /* No initializer: a bare alloca reads back as undef. Sema rejects every
+     * read that no assignment precedes, but a `&:` parameter the callee only
+     * writes on some paths would still leave this indeterminate, so zero it -
+     * the C and JS backends do the same. */
+    ll_emit(ll, "store %s %s, ptr %s", ll_ty(ll, ts), ll_zero(ts), ptr);
 }
 
 static token_kind_t ll_compound_base(token_kind_t k)

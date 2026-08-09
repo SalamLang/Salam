@@ -65,20 +65,24 @@ end
 
 // ll_call_user
 func call_user(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, nm: str): Llv:
-    mut fsym := sym_of(v, s, a, nm)
-    // A package and one of its own functions can share a name: std/time is
-    // `package time` and also declares `extern func time(tp: void*): i64`.
-    // sym_of searches the global scope first, where the package binding
-    // lives, so a bare `time(null)` *within* that package resolved to
-    // SYM_PACKAGE and was then reported as an unknown function. Ordinary
-    // scoping prefers the enclosing package's own function.
-    if fsym == 0 || sm.SymAt(s, fsym).kind != sm.SYM_FUNC:
-        if v.pkg_scope != 0:
-            lf := sm.LookupLocal(s, v.pkg_scope, nm)
-            if lf != 0 && sm.SymAt(s, lf).kind == sm.SYM_FUNC:
-                fsym = lf
-            end
+    mut fsym := 0
+    // The enclosing package's own function outranks whatever the global
+    // scope holds under that name, exactly as ordinary scoping demands.
+    // sym_of searches globally first, which got this wrong twice: std/time
+    // is `package time` and also declares `extern func time(tp: void*)`, so
+    // a bare `time(null)` inside it resolved to SYM_PACKAGE and was reported
+    // as an unknown function; and std/net/http's own `send(method, url,
+    // headers, body): Response` lost to the libc `send()` extern that
+    // std/net/internal/rawsock declares, which silently lowered four string
+    // arguments through ptrtoint into a socket call.
+    if v.pkg_scope != 0:
+        lf := sm.LookupLocal(s, v.pkg_scope, nm)
+        if lf != 0 && sm.SymAt(s, lf).kind == sm.SYM_FUNC:
+            fsym = lf
         end
+    end
+    if fsym == 0:
+        fsym = sym_of(v, s, a, nm)
     end
     if fsym == 0 || sm.SymAt(s, fsym).kind != sm.SYM_FUNC:
         lv_error(v, a, n, "call to unknown/unsupported function '" + nm + "'")

@@ -27,6 +27,32 @@
 #  endif
 #endif
 
+/*
+ * __lsan_disable/__lsan_enable, declared here rather than reached through
+ * <sanitizer/lsan_interface.h>: that header only exists inside a
+ * sanitizer-enabled toolchain's include path, while these two are part of
+ * libasan's stable C interface. Used by jit_run_file() - see the comment
+ * there for why a JIT'd program's heap must not be charged to salam.
+ * Expands to nothing in an ordinary build.
+ */
+#if defined(__has_feature)
+#  if __has_feature(address_sanitizer)
+#    define SALAM_ASAN 1
+#  endif
+#endif
+#if defined(__SANITIZE_ADDRESS__) && !defined(SALAM_ASAN)
+#  define SALAM_ASAN 1
+#endif
+#ifdef SALAM_ASAN
+void __lsan_disable(void);
+void __lsan_enable(void);
+#  define SALAM_LSAN_IGNORE_BEGIN() __lsan_disable()
+#  define SALAM_LSAN_IGNORE_END() __lsan_enable()
+#else
+#  define SALAM_LSAN_IGNORE_BEGIN() ((void)0)
+#  define SALAM_LSAN_IGNORE_END() ((void)0)
+#endif
+
 #if defined(SALAM_HAVE_EMBED_MUSL) || defined(SALAM_HAVE_EMBED_MUSL_AARCH64) ||          \
     defined(SALAM_HAVE_EMBED_MUSL_I686) || defined(SALAM_HAVE_EMBED_MUSL_ARM) ||         \
     defined(SALAM_HAVE_EMBED_MINGW) ||                                                   \
@@ -550,6 +576,23 @@ static int salam_try_embed_extralibs_mingw(logger_t *log, const char *arch, char
     return 0;
 }
 
+/*
+ * Libraries glibc splits out but musl keeps inside libc. A `link dynamic
+ * "pthread"` (std/thread, std/sync) is right for a glibc host and fatal
+ * against a musl sysroot, which ships no libpthread at all: ld.lld stops at
+ * "unable to find library -lpthread" and every program importing threads
+ * fails to link. The symbols are in -lc, which is already on the line.
+ */
+static int musl_folds_into_libc(const char *lib)
+{
+    static const char *const folded[] = {"pthread", "dl",     "rt",    "util",
+                                         "anl",     "resolv", "crypt", "m"};
+    size_t i = 0;
+    for (; i < sizeof folded / sizeof folded[0]; i++)
+        if (strcmp(lib, folded[i]) == 0) return 1;
+    return 0;
+}
+
 static int native_link_elf(logger_t *log, const char *obj, const char *out,
                            const codegen_llvm_options_t *opts, const char *t)
 {
@@ -658,6 +701,8 @@ static int native_link_elf(logger_t *log, const char *obj, const char *out,
         if (!s) continue;
         if (s[0] == '-' || strpbrk(s, "/\\.") != NULL) {
             argv[n++] = s;
+        } else if (musl_folds_into_libc(s)) {
+            LOG_I(log, PH_DRIVER, "musl provides '%s' inside libc; dropping -l%s", s, s);
         } else {
             sal_snprintf(userlibs[i], sizeof userlibs[i], "-l%s", s);
             argv[n++] = userlibs[i];
@@ -1057,8 +1102,24 @@ static int jit_run_file(logger_t *log, const char *ll_path)
         return 1;
     }
 
+    /*
+     * `salam llvm --jit` runs the user's program inside the compiler's own
+     * process, so every malloc that program makes is charged to salam by
+     * LeakSanitizer. Salam is manually memory managed: a program that
+     * concatenates a string and drops it leaks by design, exactly as its
+     * compiled binary would, and that is the program's business rather
+     * than the compiler's - the same call the interpreter already makes
+     * with the leak:call_native_extern entry in c/tools/lsan.supp. A
+     * suppression cannot express it here, because the allocation stack has
+     * no symbolized frame at all: JIT-mapped code is not in any module, so
+     * every report comes back as a bare address under driver_llvm.
+     * Ignoring exactly the window the program runs in keeps salam's own
+     * allocations, on both sides of it, under the leak gate.
+     */
     int (*main_fn)(void) = (int (*)(void))(size_t)addr;
+    SALAM_LSAN_IGNORE_BEGIN();
     int rc = main_fn();
+    SALAM_LSAN_IGNORE_END();
 
     LLVMOrcDisposeLLJIT(jit);
     return rc;

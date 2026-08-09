@@ -1,0 +1,299 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// anim - plays frame-based program output back as a real animation.
+//
+// A program that draws frames used to land in the output pane as one long
+// strip: frame 0, then frame 1 underneath it, then frame 2. This replaces the
+// pane's contents frame by frame instead, which is what the program was
+// drawing in the first place.
+//
+// anim_frames finds the frames; everything here is playback and the transport
+// bar above the pane. The clock is requestAnimationFrame (dom.EveryFrame), not
+// setInterval: the frame rate follows the display, and a background tab stops
+// burning work rather than queueing up ticks to run all at once on return.
+
+package anim
+
+import dom
+import "anim_frames.salam"
+
+const FPS_COUNT := 6
+
+fps_list := [4, 8, 12, 20, 30, 60] as int[6]
+
+mut el_out := 0 as i64
+mut el_bar := 0 as i64
+mut el_play := 0 as i64
+mut el_prev := 0 as i64
+mut el_next := 0 as i64
+mut el_range := 0 as i64
+mut el_count := 0 as i64
+mut el_speed := 0 as i64
+mut el_loop := 0 as i64
+mut el_raw := 0 as i64
+
+mut g_lang := "en"
+mut g_at := 0
+mut g_fps_i := 2
+mut g_accum := 0.0
+mut g_playing := false
+mut g_repeat := true
+mut g_show_raw := false
+
+func fps(): int: ret fps_list[g_fps_i] end
+
+func count(): int: ret anim_frames.Count() end
+
+func L(key: str): str:
+    if key == "play":
+        if g_lang == "fa": ret "پخش" end
+        if g_lang == "ar": ret "تشغيل" end
+        ret "Play"
+    end
+    if key == "pause":
+        if g_lang == "fa": ret "مکث" end
+        if g_lang == "ar": ret "إيقاف مؤقت" end
+        ret "Pause"
+    end
+    if key == "prev":
+        if g_lang == "fa": ret "فریم قبلی" end
+        if g_lang == "ar": ret "الإطار السابق" end
+        ret "Previous frame"
+    end
+    if key == "next":
+        if g_lang == "fa": ret "فریم بعدی" end
+        if g_lang == "ar": ret "الإطار التالي" end
+        ret "Next frame"
+    end
+    if key == "speed":
+        if g_lang == "fa": ret "سرعت" end
+        if g_lang == "ar": ret "السرعة" end
+        ret "Speed"
+    end
+    if key == "loop":
+        if g_lang == "fa": ret "تکرار" end
+        if g_lang == "ar": ret "تكرار" end
+        ret "Loop"
+    end
+    if key == "raw":
+        if g_lang == "fa": ret "متن خام" end
+        if g_lang == "ar": ret "النص الخام" end
+        ret "Raw"
+    end
+    ret ""
+end
+
+func render_frame():
+    if count() == 0: ret end
+    mut total := "" + count()
+    if anim_frames.Truncated(): total = total + "+" end
+    dom.SetText(el_out, anim_frames.At(g_at))
+    dom.SetValue(el_range, "" + g_at)
+    dom.SetText(el_count, "" + (g_at + 1) + " / " + total)
+end
+
+func set_play(want: bool):
+    g_playing = want && count() > 1 && g_show_raw == false
+    g_accum = 0.0
+    dom.SetText(el_play, g_playing ? "❚❚" : "▶")
+    dom.SetAttr(el_play, "title", g_playing ? L("pause") : L("play"))
+end
+
+func step(d: int):
+    if count() == 0: ret end
+    mut nx := g_at + d
+    if nx >= count():
+        if g_repeat == false:
+            g_at = count() - 1
+            set_play(false)
+            render_frame()
+            ret
+        end
+        nx = 0
+    end
+    if nx < 0: nx = count() - 1 end
+    g_at = nx
+    render_frame()
+end
+
+func on_tick(dt: f64):
+    if g_playing == false: ret end
+    if count() < 2: ret end
+    g_accum = g_accum + dt
+    ms := 1000.0 / (fps() as f64)
+    if g_accum < ms: ret end
+    g_accum = g_accum - ms
+    if g_accum > ms: g_accum = 0.0 end
+    step(1)
+end
+
+// apply_raw - Raw drops the whole unanimated text back into the pane and puts
+// the transport controls away, since there is nothing left to transport.
+func apply_raw():
+    if g_show_raw:
+        set_play(false)
+        dom.AddClass(el_bar, "raw")
+        dom.AddClass(el_raw, "on")
+        dom.SetText(el_out, anim_frames.Clean())
+    else:
+        dom.RemoveClass(el_bar, "raw")
+        dom.RemoveClass(el_raw, "on")
+        render_frame()
+    end
+end
+
+func on_play():
+    if g_playing:
+        set_play(false)
+        ret
+    end
+    if g_at >= count() - 1: g_at = 0 end
+    set_play(true)
+    render_frame()
+end
+
+func on_prev():
+    set_play(false)
+    step(0 - 1)
+end
+
+func on_next():
+    set_play(false)
+    step(1)
+end
+
+func on_scrub():
+    v := anim_frames.NumAt(dom.GetValue(el_range), 0)
+    set_play(false)
+    if v >= count(): ret end
+    g_at = v
+    render_frame()
+end
+
+func on_speed():
+    g_fps_i = g_fps_i + 1
+    if g_fps_i >= FPS_COUNT: g_fps_i = 0 end
+    g_accum = 0.0
+    dom.SetText(el_speed, "" + fps() + " fps")
+    dom.StoreSetStr("salam_anim_fps", "" + g_fps_i)
+end
+
+func on_loop():
+    g_repeat = g_repeat == false
+    if g_repeat:
+        dom.AddClass(el_loop, "on")
+    else:
+        dom.RemoveClass(el_loop, "on")
+    end
+end
+
+func on_raw():
+    g_show_raw = g_show_raw == false
+    apply_raw()
+end
+
+func relabel():
+    dom.SetAttr(el_play, "title", g_playing ? L("pause") : L("play"))
+    dom.SetAttr(el_prev, "title", L("prev"))
+    dom.SetAttr(el_next, "title", L("next"))
+    dom.SetAttr(el_speed, "title", L("speed"))
+    dom.SetAttr(el_loop, "title", L("loop"))
+    dom.SetAttr(el_raw, "title", L("raw"))
+    dom.SetText(el_raw, L("raw"))
+end
+
+func wire():
+    dom.OnEvent(el_play, "click", () => on_play())
+    dom.OnEvent(el_prev, "click", () => on_prev())
+    dom.OnEvent(el_next, "click", () => on_next())
+    dom.OnEvent(el_speed, "click", () => on_speed())
+    dom.OnEvent(el_loop, "click", () => on_loop())
+    dom.OnEvent(el_raw, "click", () => on_raw())
+    dom.OnEvent(el_range, "input", () => on_scrub())
+    dom.EveryFrame((dt: f64) => on_tick(dt))
+end
+
+func grab_elements():
+    el_out = dom.ById("output")
+    el_bar = dom.ById("anim-bar")
+    el_play = dom.ById("anim-play")
+    el_prev = dom.ById("anim-prev")
+    el_next = dom.ById("anim-next")
+    el_range = dom.ById("anim-range")
+    el_count = dom.ById("anim-count")
+    el_speed = dom.ById("anim-speed")
+    el_loop = dom.ById("anim-loop")
+    el_raw = dom.ById("anim-raw")
+end
+
+@fa "آماده سازی"
+@ar "تهیئة"
+pub func Init():
+    grab_elements()
+    saved := dom.StoreGetStr("salam_anim_fps")
+    if saved != "": g_fps_i = anim_frames.NumAt(saved, 0) end
+    if g_fps_i >= FPS_COUNT: g_fps_i = 0 end
+    dom.SetText(el_speed, "" + fps() + " fps")
+    dom.SetAttr(el_range, "min", "0")
+    dom.SetAttr(el_range, "step", "1")
+    relabel()
+    wire()
+end
+
+@fa "تنظیم زبان"
+@ar "تعیین اللغة"
+pub func SetLang(l: str):
+    g_lang = l
+    relabel()
+end
+
+@fa "فعال است"
+@ar "نشط"
+pub func Active(): bool: ret count() >= 2 end
+
+// Raw - the whole program output, which is what Copy should hand over even
+// while a single frame is the thing on screen.
+@fa "خام"
+@ar "خام"
+pub func Raw(): str: ret anim_frames.Clean() end
+
+@fa "پنهان کن"
+@ar "أخف"
+pub func Hide():
+    set_play(false)
+    anim_frames.Split("")
+    dom.SetBool(el_bar, "hidden", true)
+end
+
+// Show - render program output into the pane, as an animation when the output
+// turns out to be frames. Returns the frame count (0 or 1 means plain text).
+@fa "نمایش بده"
+@ar "اعرض"
+pub func Show(out: str): int:
+    anim_frames.Split(out)
+    dom.SetBool(el_bar, "hidden", count() < 2)
+    if count() < 2:
+        set_play(false)
+        dom.SetText(el_out, anim_frames.Clean())
+        dom.SetAttr(el_out, "class", "output")
+        ret count()
+    end
+    g_at = 0
+    dom.SetAttr(el_range, "max", "" + (count() - 1))
+    dom.SetAttr(el_out, "class", "output codeview")
+    apply_raw()
+    set_play(true)
+    ret count()
+end

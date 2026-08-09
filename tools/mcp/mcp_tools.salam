@@ -1,0 +1,284 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// mcp_tools.salam - handlers that drive the compiler itself.
+//
+// Every handler runs with --error-format=json, which makes the compiler emit
+// one JSON object per diagnostic (code, message, file, line, column, length)
+// alongside its usual human log. Those objects are lifted out and returned as
+// structuredContent, so a model gets exact positions to fix rather than
+// having to parse rendered error text.
+//
+// Builds always write their artifact to a temp path and delete it. Nothing in
+// this file writes into the user's workspace.
+
+@en "mcptool"
+@fa "ابزارام‌سی‌پی"
+@ar "أدوات‌ام‌سی‌بی"
+package mcptool
+
+import str
+import os.temp
+import fs.file
+import encoding.json
+import encoding.value
+import encoding.encerr
+import mcptxt "mcp_text.salam"
+import mcpexec "mcp_exec.salam"
+import mcpout "mcp_result.salam"
+
+// ---- private helpers -------------------------------------------------
+
+func _bad_path(p: str): mcpout.ToolResult:
+    ret mcpout.Failure("Refused path '".concat(p).concat("': paths must be workspace-relative, must not contain '..', and must not contain shell metacharacters."))
+end
+
+func _diag_array(err: str): value.Value:
+    lines := mcpexec.Diagnostics(err)
+    mut arr := value.NewValueArray()
+    mut i := 0
+    until i < lines.len():
+        mut e := encerr.EncodingError {}
+        d := json.Decode(lines.get(i)[0], e)
+        if !encerr.IsError(e): value.ArrayPush(arr, d) end
+        i += 1
+    end
+    ret arr
+end
+
+// Human-readable one-liner per diagnostic, so the text half of the result is
+// useful on its own to clients that ignore structuredContent.
+func _diag_text(err: str): str:
+    lines := mcpexec.Diagnostics(err)
+    mut out := Vector {} as Vector<str>
+    mut i := 0
+    until i < lines.len():
+        mut e := encerr.EncodingError {}
+        d := json.Decode(lines.get(i)[0], e)
+        if !encerr.IsError(e):
+            out.push(_one_diag(d))
+        end
+        i += 1
+    end
+    ret mcpout.Bullets(out)
+end
+
+func _one_diag(d: value.Value): str:
+    lvl := _sv(d, "level")
+    code := _sv(d, "code")
+    line := _iv(d, "line")
+    col := _iv(d, "column")
+    msg := _sv(d, "message")
+    ret lvl.concat(" ").concat(code).concat(" at ").concat(str.FromInt(line)).concat(":").concat(str.FromInt(col)).concat(" - ").concat(msg)
+end
+
+func _sv(v: value.Value, k: str): str:
+    if !value.IsObject(v): ret "" end
+    if !value.ObjectHas(v, k): ret "" end
+    f := value.ObjectGet(v, k)
+    if !value.IsString(f): ret "" end
+    ret value.AsString(f)
+end
+
+func _iv(v: value.Value, k: str): int:
+    if !value.IsObject(v): ret 0 end
+    if !value.ObjectHas(v, k): ret 0 end
+    f := value.ObjectGet(v, k)
+    if !value.IsNumber(f): ret 0 end
+    ret value.AsInt(f) as int
+end
+
+// Shared shape for every compiler-driving tool: run it, fold both streams and
+// the parsed diagnostics into one result.
+func _finish(title: str, r: mcpexec.Outcome, show_stdout: bool): mcpout.ToolResult:
+    if !r.launched: ret mcpout.Failure(r.reason) end
+    failed := r.code != 0
+    mut body := str.NewBuilder()
+    defer str.BufFree(body)
+    str.BufAppend(body, title)
+    str.BufAppend(body, "\nexit code: ")
+    str.BufAppend(body, str.FromInt(r.code))
+    str.BufAppend(body, "\n\n")
+    str.BufAppend(body, mcpout.Section("Diagnostics", _diag_text(r.err)))
+    if show_stdout:
+        str.BufAppend(body, mcpout.Section("Program output", mcptxt.Truncate(r.out, 20000)))
+    end
+    str.BufAppend(body, mcpout.Section("Compiler log", mcptxt.HeadLines(_human(r.err), 60)))
+    text := str.BufStr(body)
+
+    mut data := value.NewValueObject()
+    value.ObjectSet(data, "exitCode", value.ValueInt(r.code as i64))
+    value.ObjectSet(data, "ok", value.ValueBool(!failed))
+    value.ObjectSet(data, "diagnostics", _diag_array(r.err))
+    ret mcpout.Rich(text, data, failed)
+end
+
+// Drops the JSON diagnostic lines from stderr, leaving the human log.
+func _human(err: str): str:
+    lines := mcptxt.Lines(err)
+    mut keep := Vector {} as Vector<str>
+    mut i := 0
+    until i < lines.len():
+        ln := lines.get(i)[0]
+        if !str.StartsWith(ln.trim(), "{\"level\""): keep.push(ln) end
+        i += 1
+    end
+    ret mcptxt.Join(keep, "\n")
+end
+
+func _base(cmd: str, path: str): Vector<str>:
+    a := Vector {} as Vector<str>
+    a.push(cmd)
+    a.push(path)
+    a.push("--error-format=json")
+    a.push("--log-level=error")
+    ret a
+end
+
+func _push_backend(a: Vector<str>, backend: str, release: bool, target: str):
+    if backend.len() > 0: a.push("--backend=".concat(backend)) end
+    if release: a.push("--release") end
+    if target.len() > 0: a.push("--target=".concat(target)) end
+end
+
+// ---- public API ------------------------------------------------------
+
+@en "Build"
+@fa "ساخت"
+@ar "بناء"
+// Full compile to an executable. The artifact goes to a temp path and is
+// removed, so this is a pure diagnostics tool with no workspace side effects.
+pub func Build(path: str, backend: str, release: bool, target: str): mcpout.ToolResult:
+    if !mcpexec.SafePath(path): ret _bad_path(path) end
+    out := temp.File()
+    a := _base("build", path)
+    a.push("--output=".concat(out))
+    _push_backend(a, backend, release, target)
+    r := mcpexec.Run(a)
+    temp.Remove(out)
+    ret _finish("salam build ".concat(path), r, false)
+end
+
+@en "Check"
+@fa "بررسی"
+@ar "فحص"
+// Lex + parse + semantic analysis only - no codegen, no linker, no artifact.
+// This is the fast tool to reach for while iterating on source.
+pub func Check(path: str): mcpout.ToolResult:
+    if !mcpexec.SafePath(path): ret _bad_path(path) end
+    sink := temp.File()
+    a := _base("inspect", path)
+    a.push("--emit-symbol-xml")
+    a.push("--xml-out=".concat(sink))
+    r := mcpexec.Run(a)
+    temp.Remove(sink)
+    ret _finish("salam check (analyze only) ".concat(path), r, false)
+end
+
+@en "Run"
+@fa "اجرا"
+@ar "تشغیل"
+pub func Run(path: str): mcpout.ToolResult:
+    if !mcpexec.SafePath(path): ret _bad_path(path) end
+    r := mcpexec.Run(_base("run", path))
+    ret _finish("salam run ".concat(path), r, true)
+end
+
+@en "Exec"
+@fa "تفسیر"
+@ar "تفسیر"
+// Tree-walking interpreter: no C toolchain needed, and it cannot produce a
+// binary. Note the interpreter is known to get unsigned arithmetic wrong, so
+// crypto or bit-twiddling code should be verified with Build instead.
+pub func Exec(path: str): mcpout.ToolResult:
+    if !mcpexec.SafePath(path): ret _bad_path(path) end
+    r := mcpexec.Run(_base("exec", path))
+    ret _finish("salam exec ".concat(path), r, true)
+end
+
+@en "Format"
+@fa "قالب‌بندی"
+@ar "تنسیق"
+// Always runs with --check so the server never rewrites the user's files.
+pub func Format(path: str): mcpout.ToolResult:
+    if !mcpexec.SafePath(path): ret _bad_path(path) end
+    a := Vector {} as Vector<str>
+    a.push("format")
+    a.push(path)
+    a.push("--check")
+    r := mcpexec.Run(a)
+    if !r.launched: ret mcpout.Failure(r.reason) end
+    if r.code == 0: ret mcpout.Text("Already formatted: ".concat(path)) end
+    body := "Needs formatting (run `salam format` to fix):\n\n".concat(mcptxt.HeadLines(r.out.concat(r.err), 60))
+    ret mcpout.Failure(body)
+end
+
+@en "Inspect"
+@fa "بازرسی"
+@ar "تفتیش"
+// emit is one of tokens | ast | symbols.
+pub func Inspect(path: str, emit: str): mcpout.ToolResult:
+    if !mcpexec.SafePath(path): ret _bad_path(path) end
+    mut flag := "--emit-symbol-xml"
+    if emit == "tokens": flag = "--emit-tokens-xml" end
+    if emit == "ast": flag = "--emit-ast-xml" end
+    a := _base("inspect", path)
+    a.push(flag)
+    r := mcpexec.Run(a)
+    if !r.launched: ret mcpout.Failure(r.reason) end
+    body := mcptxt.Truncate(r.out, 60000)
+    ret mcpout.Rich(body, _diag_array(r.err), r.code != 0)
+end
+
+@en "LlvmIr"
+@fa "کد میانی"
+@ar "تمثیل وسیط"
+pub func LlvmIr(path: str, target: str): mcpout.ToolResult:
+    if !mcpexec.SafePath(path): ret _bad_path(path) end
+    out := temp.File()
+    a := _base("llvm", path)
+    a.push("--output=".concat(out))
+    if target.len() > 0: a.push("--target=".concat(target)) end
+    r := mcpexec.Run(a)
+    ir := file.ReadText(out)
+    temp.Remove(out)
+    if r.code != 0: ret _finish("salam llvm ".concat(path), r, false) end
+    ret mcpout.Text(mcptxt.Truncate(ir, 60000))
+end
+
+@en "Js"
+@fa "جاوااسکریپت"
+@ar "جافاسکریبت"
+pub func Js(path: str): mcpout.ToolResult:
+    if !mcpexec.SafePath(path): ret _bad_path(path) end
+    out := temp.File().concat(".js")
+    a := _base("js", path)
+    a.push("--output=".concat(out))
+    r := mcpexec.Run(a)
+    code := file.ReadText(out)
+    temp.Remove(out)
+    if r.code != 0: ret _finish("salam js ".concat(path), r, false) end
+    ret mcpout.Text(mcptxt.Truncate(code, 60000))
+end
+
+@en "Version"
+@fa "نسخه"
+@ar "إصدار"
+pub func Version(): mcpout.ToolResult:
+    a := Vector {} as Vector<str>
+    a.push("version")
+    r := mcpexec.Run(a)
+    if !r.launched: ret mcpout.Failure(r.reason) end
+    ret mcpout.Text(r.out.concat(r.err).trim())
+end

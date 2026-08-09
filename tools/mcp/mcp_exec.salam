@@ -1,0 +1,194 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// mcp_exec.salam - runs the salam compiler on behalf of a tool call.
+//
+// It deliberately does NOT use os.shell.Run, which captures through pipes but
+// calls Wait() before draining them: a child that writes more than the ~64KB
+// pipe buffer blocks on write while the parent blocks on Wait, and neither
+// side ever moves. Confirmed on this host - `salam inspect --emit-ast-xml`
+// on std/encoding/json/json.salam hangs shell.Run indefinitely and comes back
+// with zero bytes on both streams once the child is killed. Since relaying
+// large compiler dumps is the whole point of this server, that primitive is
+// unusable here.
+//
+// Instead each child writes straight to two temp files and we read them back
+// after it exits. system() gives us the exit status, there are no pipes to
+// fill, stdout and stderr stay separate, and there is no output ceiling.
+//
+// Command lines are built by hand, so every argument is validated against a
+// deny list of shell metacharacters rather than escaped. A tool call whose
+// path contains one is refused outright - safer than trying to out-quote
+// cmd.exe, and no legitimate .salam path needs those bytes.
+
+@en "mcpexec"
+@fa "اجرای‌ام‌سی‌پی"
+@ar "تنفیذ‌ام‌سی‌بی"
+package mcpexec
+
+import str
+import os
+import env
+import fs.file
+import os.temp
+import mcptxt "mcp_text.salam"
+
+// ---- types -----------------------------------------------------------
+
+@en "Outcome"
+pub struct Outcome:
+    pub code: int = 0
+    pub out: str = ""
+    pub err: str = ""
+    pub launched: bool = false
+    pub reason: str = ""
+end
+
+// ---- private helpers -------------------------------------------------
+
+// cmd.exe and /bin/sh both treat these as control characters; a .salam path
+// or compiler flag never legitimately contains one.
+func _is_unsafe(a: str): bool:
+    bad := "\"<>|&^%`$;\n\r"
+    mut i := 0
+    until i < bad.len():
+        if a.find(bad.substr(i, 1)) >= 0: ret true end
+        i += 1
+    end
+    ret false
+end
+
+func _quote(a: str): str:
+    ret "\"".concat(a).concat("\"")
+end
+
+if SALAM_OS_WINDOWS:
+    // system() hands the line to `cmd /c`, and cmd strips the outermost quote
+    // pair whenever the line begins with one - so `"salam" "build" > "out"`
+    // arrives as `salam" "build" > "out`. Wrapping the whole line in one more
+    // quote pair is the documented way to keep the inner quoting intact.
+    func _shell_wrap(line: str): str: ret "\"".concat(line).concat("\"") end
+else:
+    func _shell_wrap(line: str): str: ret line end
+end
+
+func _cmdline(exe: str, args: Vector<str>, out_path: str, err_path: str): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppend(sb, _quote(exe))
+    mut i := 0
+    until i < args.len():
+        str.BufAppend(sb, " ")
+        str.BufAppend(sb, _quote(args.get(i)[0]))
+        i += 1
+    end
+    str.BufAppend(sb, " >")
+    str.BufAppend(sb, _quote(out_path))
+    str.BufAppend(sb, " 2>")
+    str.BufAppend(sb, _quote(err_path))
+    line := str.BufStr(sb)
+    ret line
+end
+
+func _reject(reason: str): Outcome:
+    ret Outcome { code = 0 - 1, launched = false, reason = reason }
+end
+
+// ---- public API ------------------------------------------------------
+
+@en "Binary"
+@fa "برنامه"
+@ar "الثنائي"
+// Which compiler to drive. SALAM_MCP_BIN wins so a client can pin a build
+// without touching PATH; otherwise we let the OS resolve "salam".
+pub func Binary(): str:
+    pinned := env.GetOr("SALAM_MCP_BIN", "")
+    if pinned.len() > 0: ret pinned end
+    ret "salam"
+end
+
+@en "Root"
+@fa "ریشه"
+@ar "الجذر"
+// Directory tool calls are resolved against. SALAM_MCP_ROOT lets the client
+// scope the server to one project; "." means the process working directory.
+pub func Root(): str:
+    ret env.GetOr("SALAM_MCP_ROOT", ".")
+end
+
+@en "SafeArg"
+@fa "آرگومان امن"
+@ar "وسیط آمن"
+pub func SafeArg(a: str): bool:
+    if a.len() == 0: ret false end
+    ret !_is_unsafe(a)
+end
+
+@en "SafePath"
+@fa "مسیر امن"
+@ar "مسار آمن"
+// Rejects shell metacharacters and parent-directory escapes. The server is
+// read-only, but it still should not be talked into compiling files outside
+// the workspace it was pointed at.
+pub func SafePath(p: str): bool:
+    if !SafeArg(p): ret false end
+    if p.find("..") >= 0: ret false end
+    ret true
+end
+
+@en "Run"
+@fa "اجرا کن"
+@ar "شغل"
+// Runs the compiler with `args`, returning its exit code and both streams.
+// Never deadlocks regardless of how much the child writes.
+pub func Run(args: Vector<str>): Outcome:
+    exe := Binary()
+    if !SafeArg(exe): ret _reject("compiler path contains unsupported characters") end
+    mut i := 0
+    until i < args.len():
+        if !SafeArg(args.get(i)[0]):
+            ret _reject("argument contains unsupported characters: ".concat(args.get(i)[0]))
+        end
+        i += 1
+    end
+
+    out_path := temp.File()
+    err_path := temp.File()
+    code := os.Run(_shell_wrap(_cmdline(exe, args, out_path, err_path)))
+    out := file.ReadText(out_path)
+    err := file.ReadText(err_path)
+    temp.Remove(out_path)
+    temp.Remove(err_path)
+
+    ret Outcome { code = code, out = out, err = err, launched = true }
+end
+
+@en "Diagnostics"
+@fa "تشخیص‌ها"
+@ar "التشخیصات"
+// Pulls the machine-readable diagnostic lines out of a run made with
+// --error-format=json. The compiler interleaves them with human log lines on
+// stderr, and each diagnostic is exactly one JSON object per line, so
+// selecting lines that open with {"level" is both sufficient and stable.
+pub func Diagnostics(err: str): Vector<str>:
+    out := Vector {} as Vector<str>
+    lines := mcptxt.Lines(err)
+    mut i := 0
+    until i < lines.len():
+        ln := lines.get(i)[0].trim()
+        if str.StartsWith(ln, "{\"level\""): out.push(ln) end
+        i += 1
+    end
+    ret out
+end

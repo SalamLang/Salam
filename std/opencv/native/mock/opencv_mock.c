@@ -329,7 +329,10 @@ static void rgb_to_hsv_px(unsigned char r, unsigned char g, unsigned char b,
     if (delta == 0) {
         hue = 0;
     } else if (maxc == r) {
-        hue = 60.0 * fmod(((double)(g - b) / delta), 6.0);
+        /* The division is hoisted into its own local on purpose - see the
+         * comment in hsv_to_rgb_px below. */
+        double sextant = (double)(g - b) / delta;
+        hue = 60.0 * fmod(sextant, 6.0);
     } else if (maxc == g) {
         hue = 60.0 * (((double)(b - r) / delta) + 2.0);
     } else {
@@ -344,7 +347,21 @@ static void hsv_to_rgb_px(unsigned char h, unsigned char s, unsigned char v,
 {
     double hh = h * 2.0, ss = s / 255.0, vv = v / 255.0;
     double c = vv * ss;
-    double x = c * (1 - fabs(fmod(hh / 60.0, 2) - 1));
+    /*
+     * `sextant` must be its own local: the tcc 0.9.27 win64 build bundled
+     * with the Windows release miscompiles a call whose first *two*
+     * arguments are both floating point and whose first one is a computed
+     * expression - the first argument is overwritten with the second's
+     * value, so `fmod(hh / 60.0, 2.0)` was evaluated as `fmod(2.0, 2.0)`
+     * == 0. That made x always 0, and every hue in [60,120) came back as
+     * (v*(1-s), v, v*(1-s)) instead of (x+m, c+m, m) - the red channel of
+     * an HSV round trip lost its value on Windows only, since the test
+     * runner builds this shim with whichever of tcc/gcc/cc/clang it finds
+     * first. Assigning to a local forces the argument through memory and
+     * sidesteps it; tcc 0.9.26 and 0.9.28rc are both unaffected.
+     */
+    double sextant = hh / 60.0;
+    double x = c * (1 - fabs(fmod(sextant, 2.0) - 1));
     double m = vv - c;
     double rp, gp, bp;
     if (hh < 60) {

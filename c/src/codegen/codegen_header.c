@@ -791,6 +791,16 @@ static bool is_wellknown_libc_name(const char *name)
         "SetConsoleMode",
         "ReadConsoleInputA",
         "DebugBreak",
+        /* std/time's monotonic clock (QueryPerformanceCounter/Frequency take
+         * a LARGE_INTEGER* that Salam spells `void*`) and the selfhost
+         * compiler's own CPU-time profiling in sal_core (GetProcessTimes'
+         * FILETIME* params, likewise `void*`). std/time reaches a GUI
+         * translation unit transitively - webview -> ... -> debug -> time -
+         * so it collides there even though nothing GUI calls it. */
+        "QueryPerformanceCounter",
+        "QueryPerformanceFrequency",
+        "GetCurrentProcess",
+        "GetProcessTimes",
     };
     size_t i = 0;
     for (; i < sizeof(names) / sizeof(names[0]); i++)

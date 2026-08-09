@@ -48,8 +48,8 @@ static const char *cg_simple_inline(cg_t *cg, ast_node_t *n)
     if (n->kind == AST_VAR_DECL) return cg_vardecl_inline(cg, n);
     if (n->kind == AST_ASSIGN) {
         if (n->op == TK_POWER_EQ)
-            return cg_fmt(cg, "%s = pow((double)(%s), (double)(%s))", cg_expr(cg, n->a),
-                          cg_expr(cg, n->a), cg_expr(cg, n->b));
+            return cg_fmt(cg, "%s = pow(SALAM_FPARG_D((double)(%s)), (double)(%s))",
+                          cg_expr(cg, n->a), cg_expr(cg, n->a), cg_expr(cg, n->b));
         return cg_fmt(cg, "%s %s %s", cg_expr(cg, n->a), cg_op(n->op), cg_expr(cg, n->b));
     }
     if (n->kind == AST_EXPR_STMT) return cg_expr(cg, n->a);
@@ -155,8 +155,8 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
             const char *lhs = cg_expr(cg, n->a);
             const char *rhs = cg_expr(cg, n->b);
             cg_line(cg,
-                    "{ %s *__pw%d = &(%s); *__pw%d = (%s)pow((double)(*__pw%d), "
-                    "(double)(%s)); }",
+                    "{ %s *__pw%d = &(%s); *__pw%d = (%s)pow("
+                    "SALAM_FPARG_D((double)(*__pw%d)), (double)(%s)); }",
                     ct, t, lhs, t, ct, t, rhs);
             break;
         }

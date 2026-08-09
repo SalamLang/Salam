@@ -23,30 +23,57 @@ static const char *arg_at(cg_t *cg, ast_node_t *n, size_t i)
     return n->list.len > i ? cg_expr(cg, (ast_node_t *)n->list.data[i]) : "0";
 }
 
-static void cg_fill_defaults(cg_t *cg, sb_t *b, ast_node_t *call, func_sig_t *sig,
-                             size_t emitted)
+/* The C spelling of parameter `i`, falling back to the argument's own type
+ * when the callee has no signature (closures, raw function pointers). */
+static const char *cg_param_ctype(cg_t *cg, func_sig_t *sig, size_t i, ast_node_t *arg)
 {
-    if (!sig || !sig->decl) return;
-    size_t np = sig->decl->list.len;
-    {
-        size_t i = call->list.len;
-        for (; i < np; i++) {
-            ast_node_t *param = (ast_node_t *)sig->decl->list.data[i];
-            if (!param->a) continue;
-            if (emitted) sb_puts(b, ", ");
-            sb_puts(b, cg_expr(cg, param->a));
-            emitted++;
-        }
-    }
+    if (sig && i < sig->params.len)
+        return cg_ctype(cg, type_to_string(cg->sem->tc, (type_t *)sig->params.data[i]));
+    if (arg && arg->type_str) return cg_ctype(cg, arg->type_str);
+    return "";
 }
 
-static void cg_emit_call_arg(cg_t *cg, sb_t *b, ast_node_t *arg, func_sig_t *sig,
-                             size_t i)
+static bool cg_ctype_is_fp(const char *c)
+{
+    return c && (strcmp(c, "double") == 0 || strcmp(c, "float") == 0);
+}
+
+/*
+ * tcc 0.9.27 (x86-64, the current tinycc release and the build bundled with
+ * the Windows dist) miscompiles a *prototyped* call in which a computed
+ * floating-point argument is followed by another floating-point argument:
+ * the earlier one is overwritten with the later one's value. `pow(x/2.0, y)`
+ * runs as `pow(y, y)`, and a plain `dist(a + 1.0, b)` loses `a + 1.0`
+ * entirely. Only the final float argument of a run is safe, an intervening
+ * non-float parameter breaks the run, and variadic calls (every printf the
+ * print lowering emits) are unaffected. tcc 0.9.26 and 0.9.28rc are clean.
+ *
+ * Routing the argument through an opaque identity call forces it into its
+ * own slot and sidesteps it. SALAM_FPARG_D/F expand to nothing outside
+ * __TINYC__, so no other toolchain pays for this - see hdr_prelude.
+ */
+static bool cg_needs_fparg(cg_t *cg, func_sig_t *sig, size_t i, ast_node_t *arg,
+                           ast_node_t *next)
+{
+    if (!cg_ctype_is_fp(cg_param_ctype(cg, sig, i, arg))) return false;
+    if (!next && (!sig || i + 1 >= sig->params.len)) return false;
+    return cg_ctype_is_fp(cg_param_ctype(cg, sig, i + 1, next));
+}
+
+static void cg_emit_call_arg(cg_t *cg, sb_t *b, ast_node_t *arg, func_sig_t *sig, size_t i,
+                             ast_node_t *next)
 {
     bool arg_is_ref = sig && sig->decl && i < sig->decl->list.len &&
                       ((ast_node_t *)sig->decl->list.data[i])->is_ref;
     if (!arg_is_ref) {
-        sb_puts(b, cg_expr(cg, arg));
+        const char *e = cg_expr(cg, arg);
+        if (cg_needs_fparg(cg, sig, i, arg, next))
+            e = cg_fmt(cg, "%s(%s)",
+                       strcmp(cg_param_ctype(cg, sig, i, arg), "float") == 0
+                           ? "SALAM_FPARG_F"
+                           : "SALAM_FPARG_D",
+                       e);
+        sb_puts(b, e);
         return;
     }
     const char *ref_c;
@@ -67,6 +94,25 @@ static void cg_emit_call_arg(cg_t *cg, sb_t *b, ast_node_t *arg, func_sig_t *sig
         sb_puts(b, ref_c);
 }
 
+static void cg_fill_defaults(cg_t *cg, sb_t *b, ast_node_t *call, func_sig_t *sig,
+                             size_t emitted)
+{
+    if (!sig || !sig->decl) return;
+    size_t np = sig->decl->list.len;
+    {
+        size_t i = call->list.len;
+        for (; i < np; i++) {
+            ast_node_t *param = (ast_node_t *)sig->decl->list.data[i];
+            ast_node_t *next =
+                i + 1 < np ? ((ast_node_t *)sig->decl->list.data[i + 1])->a : NULL;
+            if (!param->a) continue;
+            if (emitted) sb_puts(b, ", ");
+            cg_emit_call_arg(cg, b, param->a, sig, i, next);
+            emitted++;
+        }
+    }
+}
+
 static const char *call_args(cg_t *cg, ast_node_t *call, func_sig_t *sig)
 {
     sb_t b;
@@ -74,8 +120,10 @@ static const char *call_args(cg_t *cg, ast_node_t *call, func_sig_t *sig)
     {
         size_t i = 0;
         for (; i < call->list.len; i++) {
+            ast_node_t *next =
+                i + 1 < call->list.len ? (ast_node_t *)call->list.data[i + 1] : NULL;
             if (i) sb_puts(&b, ", ");
-            cg_emit_call_arg(cg, &b, (ast_node_t *)call->list.data[i], sig, i);
+            cg_emit_call_arg(cg, &b, (ast_node_t *)call->list.data[i], sig, i, next);
         }
     }
     cg_fill_defaults(cg, &b, call, sig, call->list.len);
@@ -91,8 +139,10 @@ static const char *call_args_lead(cg_t *cg, ast_node_t *call, func_sig_t *sig)
     {
         size_t i = 0;
         for (; i < call->list.len; i++) {
+            ast_node_t *next =
+                i + 1 < call->list.len ? (ast_node_t *)call->list.data[i + 1] : NULL;
             sb_puts(&b, ", ");
-            cg_emit_call_arg(cg, &b, (ast_node_t *)call->list.data[i], sig, i);
+            cg_emit_call_arg(cg, &b, (ast_node_t *)call->list.data[i], sig, i, next);
         }
     }
     cg_fill_defaults(cg, &b, call, sig, 1);

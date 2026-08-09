@@ -16,32 +16,52 @@ func arg_at(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int, i: int): str:
     ret "0"
 end
 
-func cg_fill_defaults(
-    g &: Cg, s &: sm.Sema, a &: at.Ast, b &: str.StringBuilder, call: int, sig: int, emitted0: int
-):
-    if sig == 0 || sm.SigAt(s, sig).decl == 0:
-        ret
+// The C spelling of parameter `i`, falling back to the argument's own type
+// when the callee has no signature (closures, raw function pointers).
+func cg_param_ctype(s &: sm.Sema, a &: at.Ast, sig: int, i: int, argid: int): str:
+    if sig != 0 && i < sm.SigAt(s, sig).params.len():
+        ret cg_ctype(sm.ToString(s, sm.SigAt(s, sig).params.get(i)[0]))
     end
-    dn := at.Get(a, sm.SigAt(s, sig).decl)
-    np := dn.list.len()
-    mut emitted := emitted0
-    mut i := at.Get(a, call).list.len()
-    until i < np:
-        p := at.Get(a, dn.list.get(i)[0])
-        if p.a != 0:
-            if emitted > 0:
-                co.SbPuts(b, ", ")
-            end
-            co.SbPuts(b, cg_expr(g, s, a, p.a))
-            emitted += 1
-        end
-        i += 1
+    if argid != 0:
+        ret cg_ctype(at.Get(a, argid).type_str)
     end
+    ret ""
+end
+
+func cg_ctype_is_fp(c: str): bool:
+    ret str.Equals(c, "double") || str.Equals(c, "float")
+end
+
+// tcc 0.9.27 (x86-64, the current tinycc release and the build bundled with
+// the Windows dist) miscompiles a *prototyped* call in which a computed
+// floating-point argument is followed by another floating-point argument:
+// the earlier one is overwritten with the later one's value. `pow(x/2.0, y)`
+// runs as `pow(y, y)`, and a plain `dist(a + 1.0, b)` loses `a + 1.0`
+// entirely. Only the final float argument of a run is safe, an intervening
+// non-float parameter breaks the run, and variadic calls (every printf the
+// print lowering emits) are unaffected. tcc 0.9.26 and 0.9.28rc are clean.
+//
+// Routing the argument through an opaque identity call forces it into its
+// own slot and sidesteps it. SALAM_FPARG_D/F expand to nothing outside
+// __TINYC__, so no other toolchain pays for this - see hdr_prelude.
+func cg_needs_fparg(
+    s &: sm.Sema, a &: at.Ast, sig: int, i: int, argid: int, nextid: int
+): bool:
+    if !cg_ctype_is_fp(cg_param_ctype(s, a, sig, i, argid)):
+        ret false
+    end
+    if nextid == 0 && (sig == 0 || i + 1 >= sm.SigAt(s, sig).params.len()):
+        ret false
+    end
+    ret cg_ctype_is_fp(cg_param_ctype(s, a, sig, i + 1, nextid))
 end
 
 // call_emit_arg - appends arg `i`'s C expression to b, taking its address
 // first if the matching param (from sig) is declared `&:`.
-func call_emit_arg(g &: Cg, s &: sm.Sema, a &: at.Ast, b &: str.StringBuilder, argid: int, sig: int, i: int): void:
+func call_emit_arg(
+    g &: Cg, s &: sm.Sema, a &: at.Ast, b &: str.StringBuilder, argid: int, sig: int, i: int,
+    nextid: int
+): void:
     mut sdecl := 0
     if sig != 0:
         sdecl = sm.SigAt(s, sig).decl
@@ -54,7 +74,15 @@ func call_emit_arg(g &: Cg, s &: sm.Sema, a &: at.Ast, b &: str.StringBuilder, a
         end
     end
     if !arg_is_ref:
-        co.SbPuts(b, cg_expr(g, s, a, argid))
+        mut e := cg_expr(g, s, a, argid)
+        if cg_needs_fparg(s, a, sig, i, argid, nextid):
+            mut mac := "SALAM_FPARG_D"
+            if str.Equals(cg_param_ctype(s, a, sig, i, argid), "float"):
+                mac = "SALAM_FPARG_F"
+            end
+            e = mac + "(" + e + ")"
+        end
+        co.SbPuts(b, e)
         ret
     end
     sv := sm.SigAt(s, sig)
@@ -81,16 +109,47 @@ func call_emit_arg(g &: Cg, s &: sm.Sema, a &: at.Ast, b &: str.StringBuilder, a
     end
 end
 
+func cg_fill_defaults(
+    g &: Cg, s &: sm.Sema, a &: at.Ast, b &: str.StringBuilder, call: int, sig: int, emitted0: int
+):
+    if sig == 0 || sm.SigAt(s, sig).decl == 0:
+        ret
+    end
+    dn := at.Get(a, sm.SigAt(s, sig).decl)
+    np := dn.list.len()
+    mut emitted := emitted0
+    mut i := at.Get(a, call).list.len()
+    until i < np:
+        p := at.Get(a, dn.list.get(i)[0])
+        mut nextid := 0
+        if i + 1 < np:
+            nextid = at.Get(a, dn.list.get(i + 1)[0]).a
+        end
+        if p.a != 0:
+            if emitted > 0:
+                co.SbPuts(b, ", ")
+            end
+            call_emit_arg(g, s, a, b, p.a, sig, i, nextid)
+            emitted += 1
+        end
+        i += 1
+    end
+end
+
 // call_args - sig is a SigId (0 = C NULL).
 func call_args(g &: Cg, s &: sm.Sema, a &: at.Ast, call: int, sig: int): str:
     mut b := co.SbNew()
     cn := at.Get(a, call)
     repeat cn.list.len() with i:
         argid := cn.list.get(i)[0]
+        mut nextid := 0
+        if i + 1 < cn.list.len():
+            nextid = cn.list.get(i + 1)[0]
+        end
         if i > 0:
             co.SbPuts(b, ", ")
         end
-        call_emit_arg(g, s, a, b, argid, sig, i)
+        call_emit_arg(g, s, a, b, argid, sig, i, nextid)
     end
     cg_fill_defaults(g, s, a, b, call, sig, cn.list.len())
     r := co.SbCstr(b)
@@ -104,8 +163,12 @@ func call_args_lead(
     mut b := co.SbNew()
     cn := at.Get(a, call)
     repeat cn.list.len() with i:
+        mut nextid := 0
+        if i + 1 < cn.list.len():
+            nextid = cn.list.get(i + 1)[0]
+        end
         co.SbPuts(b, ", ")
-        call_emit_arg(g, s, a, b, cn.list.get(i)[0], sig, i)
+        call_emit_arg(g, s, a, b, cn.list.get(i)[0], sig, i, nextid)
     end
     cg_fill_defaults(g, s, a, b, call, sig, 1)
     r := co.SbCstr(b)

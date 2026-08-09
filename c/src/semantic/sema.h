@@ -58,6 +58,9 @@ const char *salam_get_stdlib_root(void);
 
 bool salam_find_bundled_tool(const char *name, char *out, size_t n);
 
+/* Same, but searching $PATH instead of the install tree. */
+bool salam_find_path_tool(const char *name, char *out, size_t n);
+
 bool salam_find_sysroot(const char *triple, char *out, size_t n);
 
 #endif /* SALAM_SEMANTIC_SEMA_H */

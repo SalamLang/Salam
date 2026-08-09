@@ -382,6 +382,25 @@ static void hdr_prelude(cg_t *cg, ast_node_t *program, sb_t *h)
         "#define SALAM_OUT_LIT(s, n) salam_out_write_((s), (uint64_t)(n))\n"
         "#endif\n");
 
+    /*
+     * See cg_needs_fparg in codegen_call.c: tcc 0.9.27 (x86-64) overwrites a
+     * computed floating-point argument with the value of the floating-point
+     * argument that follows it, so every such argument is routed through an
+     * opaque identity call that forces it into its own slot. Expands to
+     * nothing outside __TINYC__ - no other toolchain pays for it, and even
+     * under tcc only calls with two adjacent float parameters are wrapped.
+     */
+    sb_puts(h, "#ifndef SALAM_FPARG_DEFINED\n#define SALAM_FPARG_DEFINED\n"
+               "#if defined(__TINYC__)\n"
+               "static double salam_fparg_d(double v) { return v; }\n"
+               "static float salam_fparg_f(float v) { return v; }\n"
+               "#define SALAM_FPARG_D(x) salam_fparg_d(x)\n"
+               "#define SALAM_FPARG_F(x) salam_fparg_f(x)\n"
+               "#else\n"
+               "#define SALAM_FPARG_D(x) (x)\n"
+               "#define SALAM_FPARG_F(x) (x)\n"
+               "#endif\n"
+               "#endif\n");
     sb_puts(h, "#ifndef SALAM_FN_ATTRS_DEFINED\n#define SALAM_FN_ATTRS_DEFINED\n"
                "#if defined(__GNUC__) || defined(__clang__)\n"
                "#define SALAM_NOINLINE __attribute__((noinline))\n"

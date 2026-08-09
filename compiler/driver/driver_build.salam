@@ -143,23 +143,51 @@ import pf "../prof_self.salam"
 
         mut musl_tcc := MuslTcc {}
         if str.Equals(opt.cc, "tcc"):
-            mut bundled := ""
             // clang > gcc > tcc, matching build.c's ladder exactly: clang
             // leads because it is the same codegen family as the LLVM
             // backend, so an auto build degrades to the closest thing
-            // available rather than to a different toolchain.
-            if sm.FindBundledTool("clang", bundled) || sm.FindBundledTool("gcc", bundled) || sm.FindBundledTool("tcc", bundled):
-                opt.cc = bundled
-                lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "using bundled C compiler: " + opt.cc)
+            // available rather than to a different toolchain. The install
+            // tree is searched first at every rung, then $PATH - without
+            // the $PATH half the ladder collapses on any install that
+            // ships no toolchain, leaving opt.cc at its "nobody passed
+            // --cc" sentinel value and shelling out to a tcc that need not
+            // be installed.
+            ladder := ["clang", "gcc", "tcc"] as str[3]
+            mut resolved := ""
+            mut bundled := false
+            mut found := false
+            repeat 3 with i:
+                if !found:
+                    bundled = sm.FindBundledTool(ladder[i], resolved)
+                    found = bundled || sm.FindPathTool(ladder[i], resolved)
+                end
+            end
+            if found:
+                mut origin := "host"
+                if bundled:
+                    origin = "bundled"
+                end
+                lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "using " + origin + " C compiler: " + resolved)
                 if SALAM_OS_WINDOWS:
                     musl_tcc = MuslTcc {}
                 else:
-                    musl_tcc = detect_bundled_musl_tcc(bundled)
-                    if musl_tcc.active:
-                        lg.Log(
-                            lgr, lg.PH_DRIVER, lg.LOG_INFO, "using bundled musl sysroot: " + musl_tcc.musl_dir
-                        )
+                    if bundled:
+                        musl_tcc = detect_bundled_musl_tcc(resolved)
+                        if musl_tcc.active:
+                            lg.Log(
+                                lgr, lg.PH_DRIVER, lg.LOG_INFO, "using bundled musl sysroot: " + musl_tcc.musl_dir
+                            )
+                        end
                     end
+                end
+                // A --cc= the user typed is a command prefix and may carry
+                // flags, so it goes into the command line verbatim; a path
+                // resolved here is just a path, and $PATH entries like
+                // "C:/Program Files/..." have to be quoted to survive it.
+                if str.Contains(resolved, " "):
+                    opt.cc = "\"" + resolved + "\""
+                else:
+                    opt.cc = resolved
                 end
             end
         end

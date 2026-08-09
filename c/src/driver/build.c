@@ -751,6 +751,22 @@ static int run_cc_cmd(logger_t *log, const char *cmd, const char *builddir)
     return rc;
 }
 
+/* The C backend's half of `--backend=auto`: the best C compiler this host
+ * has, preferring one shipped inside the install tree over one on $PATH at
+ * each rung. clang leads because it is the same codegen family as the LLVM
+ * backend, so an auto build degrades to the closest thing available rather
+ * than to a different toolchain; tcc is the floor. */
+static bool resolve_auto_cc(char *out, size_t n, bool *bundled)
+{
+    static const char *const LADDER[] = {"clang", "gcc", "tcc"};
+    size_t i = 0;
+    for (; i < sizeof LADDER / sizeof LADDER[0]; i++) {
+        *bundled = salam_find_bundled_tool(LADDER[i], out, n);
+        if (*bundled || salam_find_path_tool(LADDER[i], out, n)) return true;
+    }
+    return false;
+}
+
 static bool build_use_llvm(const options_t *opt)
 {
     if (!strcmp(opt->backend, "c")) return false;
@@ -833,20 +849,38 @@ int driver_build(options_t *opt)
      * by build_use_llvm above), else the C backend, which resolves its
      * compiler clang > gcc > tcc. clang leads because it is the same
      * codegen family as the LLVM backend, so an auto build degrades to the
-     * closest thing available rather than to a different toolchain. */
+     * closest thing available rather than to a different toolchain.
+     *
+     * The bundled install tree is searched first at every rung, then $PATH.
+     * Without the $PATH half the ladder collapsed on any install that ships
+     * no toolchain (a plain source checkout, most notably): nothing matched,
+     * opt->cc kept its "nobody passed --cc" sentinel value - the literal
+     * string "tcc" - and the build shelled out to a tcc that need not be
+     * installed, on a host that may well have clang or gcc right there. */
     if (opt->cc && strcmp(opt->cc, "tcc") == 0) {
-        static char bundled_cc[1200];
-        if (salam_find_bundled_tool("clang", bundled_cc, sizeof bundled_cc) ||
-            salam_find_bundled_tool("gcc", bundled_cc, sizeof bundled_cc) ||
-            salam_find_bundled_tool("tcc", bundled_cc, sizeof bundled_cc)) {
-            opt->cc = bundled_cc;
-            LOG_I(log, PH_DRIVER, "using bundled C compiler: %s", opt->cc);
+        static char raw_cc[1200], quoted_cc[1208];
+        bool bundled = false;
+        if (resolve_auto_cc(raw_cc, sizeof raw_cc, &bundled)) {
+            LOG_I(log, PH_DRIVER, "using %s C compiler: %s", bundled ? "bundled" : "host",
+                  raw_cc);
 #if !defined(_WIN32)
-            musl_tcc = detect_bundled_musl_tcc(bundled_cc);
-            if (musl_tcc.active)
-                LOG_I(log, PH_DRIVER, "using bundled musl sysroot: %s",
-                      musl_tcc.musl_dir);
+            if (bundled) {
+                musl_tcc = detect_bundled_musl_tcc(raw_cc);
+                if (musl_tcc.active)
+                    LOG_I(log, PH_DRIVER, "using bundled musl sysroot: %s",
+                          musl_tcc.musl_dir);
+            }
 #endif
+            /* A --cc= the user typed is a command prefix and may carry
+             * flags, so it goes into the command line verbatim; a path we
+             * resolved ourselves is just a path, and $PATH entries like
+             * "C:/Program Files/..." have to be quoted to survive it. */
+            if (strchr(raw_cc, ' ')) {
+                sal_snprintf(quoted_cc, sizeof quoted_cc, "\"%s\"", raw_cc);
+                opt->cc = quoted_cc;
+            } else {
+                opt->cc = raw_cc;
+            }
         }
     }
 

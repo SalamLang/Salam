@@ -69,7 +69,10 @@ cross_arg=""
 # the Savannah zips), the unix build uses the usual prefix/bin.
 TCC_BIN=""
 for cand in "$PREFIX/tcc.exe" "$PREFIX/tcc" "$PREFIX/bin/tcc"; do
-    [ -x "$cand" ] && { TCC_BIN=$cand; break; }
+    [ -x "$cand" ] && {
+        TCC_BIN=$cand
+        break
+    }
 done
 [ -n "$TCC_BIN" ] || {
     echo "error: no tcc binary under $PREFIX after install" >&2

@@ -1,0 +1,430 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package rpc
+
+import compress
+import conv
+import mem
+import net.tcp
+
+// Message framing: a stream carries no record boundaries of its own, so
+// every RPC transport has to say where one message ends and the next
+// begins. Three framings cover essentially everything in the wild:
+//
+//   RPC_FRAME_LINE    one message per '\n'-terminated line
+//                     (JSON Lines - the usual choice for JSON-RPC over
+//                     TCP or stdio between cooperating processes)
+//   RPC_FRAME_HEADER  `Content-Length: N\r\n\r\n` then N bytes
+//                     (the Language Server Protocol framing)
+//   RPC_FRAME_LENGTH  4-byte big-endian length then that many bytes
+//                     (binary-safe; the right one for MessagePack-RPC)
+//
+// Reads go through Stream, a buffered reader over a socket fd that owns
+// its own byte buffer rather than a `str` - a `str` is NUL-terminated,
+// which would silently truncate any msgpack payload containing a zero
+// byte. Stream also drives the in-memory case: FeedStr/FeedBuf push
+// bytes in with no socket at all, which is how the framings are tested
+// and how an in-process client/server pair talks.
+
+// How much to pull off the socket per read.
+pub const RPC_READ_CHUNK := 4096
+// Refuse absurd declared lengths rather than trying to allocate them.
+pub const RPC_MAX_FRAME := 33554432
+
+@en "Stream"
+@fa "جریان"
+@ar "تیار"
+pub struct Stream:
+    pub fd: i64 = 0 - 1
+    pub data: compress.ByteBuf = compress.ByteBuf {}
+    pub pos: int = 0
+    pub closed: bool = false
+    pub has_fd: bool = false
+end
+
+func _left(s: Stream): int:
+    ret compress.BufLen(s.data) - s.pos
+end
+
+func _at(s: Stream, i: int): int:
+    ret compress.BufGet(s.data, s.pos + i)
+end
+
+// Drops already-consumed bytes once any exist, so a long-lived stream
+// does not grow without bound. Called only after a whole frame leaves.
+func _compact(s &: Stream):
+    if s.pos == 0: ret end
+    n := _left(s)
+    mut nb := compress.NewByteBufCap(n + 64)
+    mut i := 0
+    until i < n:
+        compress.BufPush(nb, _at(s, i))
+        i += 1
+    end
+    compress.BufFree(s.data)
+    s.data = nb
+    s.pos = 0
+end
+
+// One socket read appended to the buffer. Returns false at EOF or on
+// error, which every frame reader treats as "no more messages".
+func _fill(s &: Stream): bool:
+    if !s.has_fd || s.closed: ret false end
+    p := mem.Allocate(RPC_READ_CHUNK as u64)
+    if p == null: ret false end
+    n := tcp.ReadBytes(tcp.ConnFromFd(s.fd), p, RPC_READ_CHUNK)
+    if n <= 0:
+        mem.Free(p)
+        s.closed = true
+        ret false
+    end
+    compress.BufPushBytes(s.data, p, n)
+    mem.Free(p)
+    ret true
+end
+
+func _need(s &: Stream, n: int): bool:
+    until _left(s) < n:
+        if !_fill(s): ret false end
+    end
+    ret true
+end
+
+// Index of `b` in the unread region, or -1 (pulling more bytes in as
+// needed). `from` lets a caller resume scanning past what it already
+// rejected instead of rescanning from the start each round.
+func _scan_byte(s &: Stream, b: int, from: int): int:
+    mut i := from
+    until true:
+        if i >= _left(s):
+            if !_fill(s): ret 0 - 1 end
+            continue
+        end
+        if _at(s, i) == b: ret i end
+        i += 1
+    end
+    ret 0 - 1
+end
+
+func _take(s &: Stream, n: int): compress.ByteBuf:
+    mut out := compress.NewByteBufCap(n + 1)
+    mut i := 0
+    until i < n:
+        compress.BufPush(out, _at(s, i))
+        i += 1
+    end
+    s.pos += n
+    ret out
+end
+
+func _lc(c: int): int:
+    if c >= 65 && c <= 90: ret c + 32 end
+    ret c
+end
+
+// Case-insensitive compare of the stream bytes at `off` against `lit`
+// (which must already be lower-case).
+func _match_ci(s: Stream, off: int, lit: str): bool:
+    n := lit.len()
+    if off + n > _left(s): ret false end
+    lp := (lit as void*) as i8*
+    mut i := 0
+    until i < n:
+        mut want := lp[i] as int
+        if want < 0: want = want + 256 end
+        if _lc(_at(s, off + i)) != want: ret false end
+        i += 1
+    end
+    ret true
+end
+
+// Locates the blank line ending a header block. `sep` receives the index
+// of the first byte of the blank line, `body` the index just past it.
+// Handles both CRLF and bare-LF header blocks.
+func _find_blank_line(s &: Stream, sep &: int, body &: int): bool:
+    mut i := 0
+    until true:
+        if i + 1 >= _left(s):
+            if !_fill(s): ret false end
+            continue
+        end
+        c := _at(s, i)
+        if c == 10 && _at(s, i + 1) == 10:
+            sep = i
+            body = i + 2
+            ret true
+        end
+        if c == 13:
+            if i + 3 >= _left(s):
+                if !_fill(s): ret false end
+                continue
+            end
+            if _at(s, i + 1) == 10 && _at(s, i + 2) == 13 && _at(s, i + 3) == 10:
+                sep = i
+                body = i + 4
+                ret true
+            end
+        end
+        if i > RPC_MAX_FRAME: ret false end
+        i += 1
+    end
+    ret false
+end
+
+// Reads `Content-Length` out of the header bytes before `sep`. Other
+// headers are tolerated and ignored, as LSP requires. Returns -1 when
+// the length header is missing or unparsable.
+func _content_length(s: Stream, sep: int): int:
+    mut i := 0
+    mut line_start := 0
+    until i <= sep:
+        if i == sep || _at(s, i) == 10:
+            if _match_ci(s, line_start, "content-length:"):
+                mut j := line_start + 15
+                until j < i && (_at(s, j) == 32 || _at(s, j) == 9):
+                    j += 1
+                end
+                mut n := 0
+                mut any := false
+                until j < i:
+                    c := _at(s, j)
+                    if c < 48 || c > 57: break end
+                    n = n * 10 + (c - 48)
+                    any = true
+                    j += 1
+                end
+                if any: ret n end
+                ret 0 - 1
+            end
+            line_start = i + 1
+        end
+        i += 1
+    end
+    ret 0 - 1
+end
+
+func _read_line_frame(s &: Stream, ok &: bool): compress.ByteBuf:
+    until true:
+        idx := _scan_byte(s, 10, 0)
+        if idx < 0:
+            // A trailing line with no newline is still a message.
+            n := _left(s)
+            if n > 0:
+                out := _take(s, n)
+                _compact(s)
+                ok = true
+                ret out
+            end
+            ok = false
+            ret compress.NewByteBuf()
+        end
+        mut stop := idx
+        if stop > 0 && _at(s, stop - 1) == 13: stop -= 1 end
+        if stop == 0:
+            // Blank line between messages - drop it and keep looking.
+            s.pos += idx + 1
+            _compact(s)
+            continue
+        end
+        out := _take(s, stop)
+        s.pos += idx + 1 - stop
+        _compact(s)
+        ok = true
+        ret out
+    end
+    ok = false
+    ret compress.NewByteBuf()
+end
+
+func _read_header_frame(s &: Stream, ok &: bool): compress.ByteBuf:
+    mut sep := 0
+    mut body := 0
+    if !_find_blank_line(s, sep, body):
+        ok = false
+        ret compress.NewByteBuf()
+    end
+    clen := _content_length(s, sep)
+    if clen < 0 || clen > RPC_MAX_FRAME:
+        ok = false
+        ret compress.NewByteBuf()
+    end
+    if !_need(s, body + clen):
+        ok = false
+        ret compress.NewByteBuf()
+    end
+    s.pos += body
+    out := _take(s, clen)
+    _compact(s)
+    ok = true
+    ret out
+end
+
+func _read_length_frame(s &: Stream, ok &: bool): compress.ByteBuf:
+    if !_need(s, 4):
+        ok = false
+        ret compress.NewByteBuf()
+    end
+    n := (_at(s, 0) << 24) | (_at(s, 1) << 16) | (_at(s, 2) << 8) | _at(s, 3)
+    if n < 0 || n > RPC_MAX_FRAME:
+        ok = false
+        ret compress.NewByteBuf()
+    end
+    if !_need(s, 4 + n):
+        ok = false
+        ret compress.NewByteBuf()
+    end
+    s.pos += 4
+    out := _take(s, n)
+    _compact(s)
+    ok = true
+    ret out
+end
+
+@en "NewStream"
+@fa "جریان جدید"
+@ar "تیار جدید"
+pub func NewStream(fd: i64): Stream:
+    mut s := Stream {}
+    s.fd = fd
+    s.data = compress.NewByteBufCap(RPC_READ_CHUNK)
+    s.pos = 0
+    s.has_fd = fd >= 0
+    ret s
+end
+
+// A socket-less stream: everything it yields comes from FeedStr/FeedBuf.
+@en "NewMemStream"
+@fa "جریان حافظه"
+@ar "تیار ذاکرة"
+pub func NewMemStream(): Stream:
+    ret NewStream(0 - 1)
+end
+
+@en "FreeStream"
+@fa "آزادسازی جریان"
+@ar "تحریر التیار"
+pub func FreeStream(s &: Stream):
+    compress.BufFree(s.data)
+    s.pos = 0
+end
+
+@en "FeedStr"
+@fa "تغذیه متن"
+@ar "تغذیة نص"
+pub func FeedStr(s &: Stream, text: str):
+    compress.BufPushBytes(s.data, text as void*, text.len())
+end
+
+@en "FeedBuf"
+@fa "تغذیه بافر"
+@ar "تغذیة مخزن"
+pub func FeedBuf(s &: Stream, b: compress.ByteBuf):
+    compress.BufPushBuf(s.data, b)
+end
+
+@en "StreamPending"
+@fa "باقی‌مانده جریان"
+@ar "المتبقی فی التیار"
+pub func StreamPending(s: Stream): int:
+    ret _left(s)
+end
+
+@en "StreamClosed"
+@fa "جریان بسته"
+@ar "التیار مغلق"
+pub func StreamClosed(s: Stream): bool:
+    ret s.closed && _left(s) == 0
+end
+
+// Wraps `payload` in `kind`'s framing. Binary-safe: the payload is taken
+// as a ByteBuf, so a msgpack body full of zero bytes survives.
+@en "FrameEncode"
+@fa "قاب‌بندی"
+@ar "تأطیر"
+pub func FrameEncode(kind: int, payload: compress.ByteBuf): compress.ByteBuf:
+    n := compress.BufLen(payload)
+    mut out := compress.NewByteBufCap(n + 32)
+    if kind == RPC_FRAME_LENGTH:
+        compress.BufPush(out, (n >> 24) & 255)
+        compress.BufPush(out, (n >> 16) & 255)
+        compress.BufPush(out, (n >> 8) & 255)
+        compress.BufPush(out, n & 255)
+        compress.BufPushBuf(out, payload)
+        ret out
+    end
+    if kind == RPC_FRAME_HEADER:
+        head := "Content-Length: " + conv.FormatInt(n as i64) + "\r\n\r\n"
+        compress.BufPushBytes(out, head as void*, head.len())
+        compress.BufPushBuf(out, payload)
+        ret out
+    end
+    compress.BufPushBuf(out, payload)
+    compress.BufPush(out, 10)
+    ret out
+end
+
+@en "FrameEncodeStr"
+@fa "قاب‌بندی متن"
+@ar "تأطیر نص"
+pub func FrameEncodeStr(kind: int, payload: str): compress.ByteBuf:
+    mut b := compress.BufFromStr(payload)
+    out := FrameEncode(kind, b)
+    compress.BufFree(b)
+    ret out
+end
+
+@en "ReadFrame"
+@fa "خواندن قاب"
+@ar "قراءة إطار"
+pub func ReadFrame(s &: Stream, kind: int, ok &: bool): compress.ByteBuf:
+    if kind == RPC_FRAME_LENGTH: ret _read_length_frame(s, ok) end
+    if kind == RPC_FRAME_HEADER: ret _read_header_frame(s, ok) end
+    ret _read_line_frame(s, ok)
+end
+
+@en "ReadFrameStr"
+@fa "خواندن قاب متنی"
+@ar "قراءة إطار نصی"
+pub func ReadFrameStr(s &: Stream, kind: int, ok &: bool): str:
+    mut b := ReadFrame(s, kind, ok)
+    if !ok:
+        compress.BufFree(b)
+        ret ""
+    end
+    out := compress.BufToStrUnsafe(b)
+    compress.BufFree(b)
+    ret out
+end
+
+@en "WriteFrame"
+@fa "نوشتن قاب"
+@ar "کتابة إطار"
+pub func WriteFrame(fd: i64, kind: int, payload: compress.ByteBuf): bool:
+    mut framed := FrameEncode(kind, payload)
+    n := compress.BufLen(framed)
+    wrote := tcp.WriteBytes(tcp.ConnFromFd(fd), framed.data, n)
+    compress.BufFree(framed)
+    ret wrote == n
+end
+
+@en "WriteFrameStr"
+@fa "نوشتن قاب متنی"
+@ar "کتابة إطار نصی"
+pub func WriteFrameStr(fd: i64, kind: int, payload: str): bool:
+    mut b := compress.BufFromStr(payload)
+    ok := WriteFrame(fd, kind, b)
+    compress.BufFree(b)
+    ret ok
+end

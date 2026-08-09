@@ -122,6 +122,8 @@ static void ll_emit_prologue(ll_t *ll)
     sb_puts(g, "declare void @exit(i32) noreturn nounwind\n");
     sb_puts(g, "declare i32 @atexit(ptr) nounwind\n");
     sb_puts(g, "declare i32 @fflush(ptr) nounwind\n");
+    sb_puts(g, "declare ptr @signal(i32, ptr) nounwind\n");
+    sb_puts(g, "declare i32 @raise(i32) nounwind\n");
     sb_puts(g, ll_fmt(ll, "declare i32 @snprintf(ptr, %s, ptr, ...) nounwind\n", U));
     sb_puts(g, "declare i64 @strtol(ptr, ptr, i32) nounwind\n");
     sb_puts(g, "declare double @strtod(ptr, ptr) nounwind\n");
@@ -421,22 +423,40 @@ static void ll_emit_charstr(ll_t *ll)
 
 static void ll_emit_outbuf(ll_t *ll)
 {
+    sb_puts(ll->hg, "@salam_ob = internal global [65536 x i8] zeroinitializer\n"
+                    "@salam_obn = internal global i64 0\n"
+                    "declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1) nounwind\n"
+                    "define internal void @salam_out_flush() nounwind {\n"
+                    "entry:\n"
+                    "  %n = load i64, ptr @salam_obn\n"
+                    "  %z = icmp eq i64 %n, 0\n"
+                    "  br i1 %z, label %done, label %do\n"
+                    "do:\n"
+                    "  %r = call i64 @write(i32 1, ptr @salam_ob, i64 %n)\n"
+                    "  store i64 0, ptr @salam_obn\n"
+                    "  br label %done\n"
+                    "done:\n"
+                    "  ret void\n"
+                    "}\n");
+    /*
+     * A server prints its banner, then blocks in accept() forever - neither
+     * the `ret` in main nor atexit ever runs, so the banner sits in the
+     * buffer until something kills the process. Flush on the way out of
+     * SIGINT/SIGTERM, then restore the default disposition and re-raise so
+     * the exit status is still the ordinary death-by-signal. Only `write`
+     * runs before the re-raise, which is async-signal-safe. Paired with the
+     * signal() calls ll_function emits, and skipped under --jit for the same
+     * reason those are (see ll.jit).
+     */
+    if (!ll->jit)
+        sb_puts(ll->hg, "define internal void @salam_out_onsig(i32 %s) nounwind {\n"
+                        "entry:\n"
+                        "  call void @salam_out_flush()\n"
+                        "  %d = call ptr @signal(i32 %s, ptr null)\n"
+                        "  %r = call i32 @raise(i32 %s)\n"
+                        "  ret void\n"
+                        "}\n");
     sb_puts(ll->hg,
-            "@salam_ob = internal global [65536 x i8] zeroinitializer\n"
-            "@salam_obn = internal global i64 0\n"
-            "declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1) nounwind\n"
-            "define internal void @salam_out_flush() nounwind {\n"
-            "entry:\n"
-            "  %n = load i64, ptr @salam_obn\n"
-            "  %z = icmp eq i64 %n, 0\n"
-            "  br i1 %z, label %done, label %do\n"
-            "do:\n"
-            "  %r = call i64 @write(i32 1, ptr @salam_ob, i64 %n)\n"
-            "  store i64 0, ptr @salam_obn\n"
-            "  br label %done\n"
-            "done:\n"
-            "  ret void\n"
-            "}\n"
             "define internal void @salam_out_write(ptr %s, i64 %n) nounwind {\n"
             "entry:\n"
             "  %obn = load i64, ptr @salam_obn\n"

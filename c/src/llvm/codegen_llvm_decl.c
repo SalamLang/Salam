@@ -401,9 +401,22 @@ void ll_function(ll_t *ll, ast_node_t *fn, symbol_t *owner)
              * LIFO order, so it still sees whatever a handler the program
              * registers later has printed. Not under --jit: see ll.jit.
              */
-            if (!ll->jit)
+            if (!ll->jit) {
                 ll_emit(ll, "%s = call i32 @atexit(ptr @salam_out_flush)",
                         ll_new_tmp(ll));
+                /*
+                 * SIGINT/SIGTERM (2/15 everywhere the buffer is live - it is
+                 * off for Windows targets) reach neither `ret` nor atexit. A
+                 * single-threaded server prints its banner, blocks in
+                 * accept(), and is killed: without this the banner never
+                 * leaves the buffer. Installed before user code, so a
+                 * program that installs its own handler still wins.
+                 */
+                ll_emit(ll, "%s = call ptr @signal(i32 2, ptr @salam_out_onsig)",
+                        ll_new_tmp(ll));
+                ll_emit(ll, "%s = call ptr @signal(i32 15, ptr @salam_out_onsig)",
+                        ll_new_tmp(ll));
+            }
         }
         /* Hand argc/argv to the runtime before anything can call args(). */
         symbol_t *sa_owner = NULL;
@@ -965,10 +978,10 @@ void ll_emit_globals(ll_t *ll, ast_node_t *program)
 
 static bool ll_extern_seen(ll_t *ll, const char *name)
 {
-    static const char *prologue[] = {"printf", "dprintf", "strlen", "strcmp",   "malloc",
-                                     "memcpy", "realloc", "free",   "memmove",  "abort",
-                                     "exit",   "atexit",  "fflush", "snprintf", "strtol",
-                                     "strtod", "strstr",  "write",  NULL};
+    static const char *prologue[] = {
+        "printf", "dprintf",  "strlen", "strcmp", "malloc", "memcpy", "realloc",
+        "free",   "memmove",  "abort",  "exit",   "atexit", "fflush", "signal",
+        "raise",  "snprintf", "strtol", "strtod", "strstr", "write",  NULL};
     {
         int p = 0;
         for (; prologue[p]; p++)

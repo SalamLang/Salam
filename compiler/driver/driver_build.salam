@@ -594,6 +594,17 @@ import pf "../prof_self.salam"
         no_tcc_opt := !str.Contains(opt.cc, "tcc")
         no_o_flag := !str.Contains(opt.cc, "-O")
         opt_flag := (!opt.debug_info && !opt.asan && no_tcc_opt && no_o_flag) ? " -O2" : ""
+        // -fno-strict-aliasing is not optional, and is applied whenever the
+        // compiler is not tcc - independently of -O, so a caller who passes
+        // their own --cc="gcc -O2" still gets it. Generated C reaches every
+        // aggregate through void* (slices hand back void* from
+        // salam_slice_at, Vector payloads are re-cast per element, str
+        // arrays are walked as int64_t*), which is exactly the punning
+        // strict aliasing forbids: at -O2 gcc assumed those accesses could
+        // not alias, `fmt.Sprintf` over a Vector<str> segfaulted and a
+        // dozen tests truncated their output. -O0/-O1 were fine, which is
+        // what made it look like a miscompile rather than UB in our output.
+        alias_flag := no_tcc_opt ? " -fno-strict-aliasing" : ""
         no_o0 := !str.Contains(opt.cc, "-O0")
         optimizing_build := !opt.debug_info && !opt.asan && no_tcc_opt && no_o0
 
@@ -617,6 +628,7 @@ import pf "../prof_self.salam"
                 str.BufAppend(cmdb, " -c -I. -I")
                 str.BufAppend(cmdb, shell_arg(scratch))
                 str.BufAppend(cmdb, opt_flag)
+                str.BufAppend(cmdb, alias_flag)
                 str.BufAppend(cmdb, dbg_flag)
                 str.BufAppendChar(cmdb, 32)
                 str.BufAppend(cmdb, shell_arg(cf))
@@ -699,7 +711,7 @@ import pf "../prof_self.salam"
                 // different --cc) every object is stale no matter whether its
                 // source changed.
                 sigpath := scratch + "/salam_build.flags"
-                sigtext := opt.cc + " " + opt_flag + " " + dbg_flag2 + " " + asan_flag + " " + link_defines
+                sigtext := opt.cc + " " + opt_flag + " " + alias_flag + " " + dbg_flag2 + " " + asan_flag + " " + link_defines
                 if !file_unchanged(sigpath, sigtext):
                     repeat cfiles.len() with cd0:
                         cdirty.set(cd0, 1)
@@ -718,6 +730,7 @@ import pf "../prof_self.salam"
                     str.BufAppend(jb, " -c -I. -I")
                     str.BufAppend(jb, shell_arg(scratch))
                     str.BufAppend(jb, opt_flag)
+                    str.BufAppend(jb, alias_flag)
                     if no_tcc_opt:
                         // Some generated .c files (DCE-dependent) trip newer
                         // GCC's default-error pointer-type warnings; the old
@@ -844,6 +857,7 @@ import pf "../prof_self.salam"
                     str.BufAppend(cmdb, "/lib")
                 end
                 str.BufAppend(cmdb, opt_flag)
+                str.BufAppend(cmdb, alias_flag)
                 str.BufAppend(cmdb, lto_flag)
                 str.BufAppend(cmdb, " -I. -I")
                 str.BufAppend(cmdb, shell_arg(scratch))

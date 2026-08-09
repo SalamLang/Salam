@@ -58,7 +58,11 @@ static const char *ll_cmp_pred(token_kind_t k, bool isflt, bool issigned)
     case TK_EQ:
         return isflt ? "oeq" : "eq";
     case TK_NE:
-        return isflt ? "one" : "ne";
+        /* `une`, not `one`: `!=` has to be true when either side is NaN,
+         * the way C's `!=` is. `one` is the ordered form and answers false
+         * for NaN, which made math.IsNaN() (`ret x != x`) always false on
+         * the LLVM backend while the C backend got it right. */
+        return isflt ? "une" : "ne";
     case TK_LT:
         return isflt ? "olt" : (issigned ? "slt" : "ult");
     case TK_GT:
@@ -554,10 +558,18 @@ static void ll_lower_print(ll_t *ll, ast_node_t *n, bool nl, int err)
     } else {
         ll_emit(ll, "%s = call i32 (ptr, ...) @printf(ptr %s%s)", t, f, sb_cstr(&args));
         if (buffered) {
-            const char *sp = ll_new_tmp(ll);
-            ll_emit(ll, "%s = load ptr, ptr @stdout", sp);
+            /*
+             * fflush(NULL) flushes every open output stream, which is all
+             * this needs: push the printf line out to fd 1 before the next
+             * @salam_out_write bypasses stdio. Reaching it through the
+             * `stdout` global instead would need the platform's spelling of
+             * that symbol - Darwin calls it `__stdoutp`, so `@stdout` was
+             * left unresolved there and took the whole module down with it,
+             * which is why every formatted print failed on macOS while
+             * literal-only ones worked.
+             */
             const char *t2 = ll_new_tmp(ll);
-            ll_emit(ll, "%s = call i32 @fflush(ptr %s)", t2, sp);
+            ll_emit(ll, "%s = call i32 @fflush(ptr null)", t2);
         }
     }
     sb_free(&fmt);
@@ -916,7 +928,11 @@ static llv_t ll_call_pkg(ll_t *ll, ast_node_t *n, symbol_t *pk, const char *fnam
     func_sig_t *sig = ll_pick_overload(ll, fs, n);
     ll_ensure_fn(ll, sig->decl, NULL, pk->members);
     bool is_ext = sig->decl && sig->decl->is_extern;
-    const char *fname = is_ext ? fname_ : ll_mangle(ll, NULL, fname_, sig);
+    /* pk->pkgname, not the caller's package: this is the one call path that
+     * resolves through another package's member scope. */
+    const char *fname = is_ext ? fname_
+                               : ll_mangle_in(ll, pk->pkgname ? pk->pkgname : pk->name,
+                                              NULL, fname_, sig);
     return ll_emit_call(ll, n, sig, "", fname, type_to_string(ll->sem->tc, sig->ret));
 }
 

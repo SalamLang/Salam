@@ -52,13 +52,48 @@ func emit_struct_types(v &: Lv, s &: sm.Sema, a &: at.Ast, program: int):
     out_g(v, "\n")
 end
 
-// ll_mangle - "" owner = the C NULL; sig 0 = the C NULL.
-func mangle(v &: Lv, s &: sm.Sema, owner: str, fn_name: str, sig: int): str:
+// ll_pkg_of_scope - the package a member scope belongs to, "" for the main
+// module. The whole program lands in one LLVM module, so a free function's
+// symbol has to carry its package the way the C backend's _Salam_<pkg>_...
+// names do - see mangle_in.
+func pkg_of_scope(s &: sm.Sema, sc: int): str:
+    if sc == 0:
+        ret ""
+    end
+    mut p := 0
+    until p < sm.PackageCount(s):
+        pk := sm.PackageAt(s, p)
+        if pk != 0 && sm.SymAt(s, pk).members == sc:
+            py := sm.SymAt(s, pk)
+            if str.Len(py.pkgname) > 0:
+                ret py.pkgname
+            end
+            ret py.name
+        end
+        p += 1
+    end
+    ret ""
+end
+
+// ll_mangle_in - "" owner = the C NULL; sig 0 = the C NULL. `pkg` qualifies
+// free functions (owner == ""). Without it std/fs/path's `pub func Ext(p:
+// str): ret filepath.Ext(p) end` and std/filepath's own `Ext` both mangled
+// to @salam_Ext_str: only one body was emitted, the wrapper's tail call
+// bound to itself, and every program calling path.Ext died in infinite
+// recursion. Struct/impl members keep the owner-only name - their call sites
+// only know the receiver's type, not the package that declared it.
+func mangle_in(
+    v &: Lv, s &: sm.Sema, pkg: str, owner: str, fn_name: str, sig: int
+): str:
     if str.Len(owner) == 0 && str.Equals(fn_name, v.entry):
         ret "main"
     end
     mut b := co.SbNew()
     co.SbPuts(b, "salam_")
+    if str.Len(owner) == 0 && str.Len(pkg) > 0 && !str.Equals(pkg, "main"):
+        put_ident(b, pkg)
+        co.SbPutc(b, 95)
+    end
     if str.Len(owner) > 0:
         put_ident(b, owner)
         co.SbPutc(b, 95)
@@ -74,6 +109,16 @@ func mangle(v &: Lv, s &: sm.Sema, owner: str, fn_name: str, sig: int): str:
     r := co.SbCstr(b)
     co.SbFree(b)
     ret r
+end
+
+// ll_mangle - the package in scope right now. Every call site that reaches a
+// free function through the current scope (a same-package call, funcptr/&f)
+// is emitting into the same package the callee was declared in, so the
+// definition and those calls agree on the name. call_pkg is the exception -
+// it resolves through another package's member scope and passes that package
+// to mangle_in itself.
+func mangle(v &: Lv, s &: sm.Sema, owner: str, fn_name: str, sig: int): str:
+    ret mangle_in(v, s, pkg_of_scope(s, v.pkg_scope), owner, fn_name, sig)
 end
 
 // ll_pick_overload - first exact arg-typestring match; else first
@@ -357,6 +402,17 @@ func emit_function(v &: Lv, s &: sm.Sema, a &: at.Ast, fn: int, owner: int):
         // has no `write` for the helper to call.
         if v.single_threaded:
             need(v, LV_H_OUTBUF)
+            // Returning from main is not the only way out: os.Exit() calls
+            // exit(), and an atexit handler can print after main is gone.
+            // Neither path reaches the flush in emit_return, and the
+            // llvm.global_dtors backstop is dropped by a static-musl link
+            // through in-process lld. Registering the flush here, before any
+            // user code runs, puts it last in atexit's LIFO order, so it
+            // still sees what a handler registered later has printed. Not
+            // under --jit: see v.jit.
+            if !v.jit:
+                emit(v, new_tmp(v) + " = call i32 @atexit(ptr @salam_out_flush)")
+            end
         end
         // Hand argc/argv to the runtime before anything can call args().
         mut sa_owner := 0

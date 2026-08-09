@@ -119,6 +119,7 @@ typedef struct {
     bool optsize;
     bool minsize;
     bool single_threaded;
+    bool jit;
     sb_t *hg;
     bool hneed[LL_H_COUNT];
     const char *match_result_ptr;
@@ -258,6 +259,9 @@ void ll_block_top(ll_t *ll, ast_node_t *block);
 void ll_emit_return(ll_t *ll, ast_node_t *value);
 
 const char *ll_mangle(ll_t *ll, const char *owner, const char *fn, func_sig_t *sig);
+const char *ll_mangle_in(ll_t *ll, const char *pkg, const char *owner, const char *fn,
+                         func_sig_t *sig);
+const char *ll_pkg_of_scope(ll_t *ll, scope_t *sc);
 
 func_sig_t *ll_pick_overload(ll_t *ll, symbol_t *sym, ast_node_t *call);
 

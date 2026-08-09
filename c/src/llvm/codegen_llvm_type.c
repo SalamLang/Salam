@@ -742,7 +742,9 @@ const char *ll_as_i1(ll_t *ll, llv_t v)
     if (ll_is_bool(v.ts)) return v.ref;
     const char *r = ll_new_tmp(ll);
     if (ll_is_float(v.ts))
-        ll_emit(ll, "%s = fcmp one %s %s, 0.0", r, ll_ty(ll, v.ts), v.ref);
+        /* Truthiness is `x != 0.0`, and NaN != 0.0 is true - the unordered
+         * predicate is the one that says so (see ll_cmp_pred). */
+        ll_emit(ll, "%s = fcmp une %s %s, 0.0", r, ll_ty(ll, v.ts), v.ref);
     else
         ll_emit(ll, "%s = icmp ne %s %s, 0", r, ll_ty(ll, v.ts), v.ref);
     return r;

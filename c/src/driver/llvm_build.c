@@ -241,6 +241,15 @@ int driver_llvm(options_t *opt)
     logger_add_diag_source(log, opt->input, src->text, src->len);
     const char *module = module_of(arena, opt->input);
     const langpack_t *modpack = langpack_detect(arena, src, pack);
+    /*
+     * The entry point's name follows the language the *file* is written in,
+     * not the one --lang names: an English-keyword file built with
+     * --lang=fa still spells its entry `main`, not `اصلی`. The C backend
+     * has always taken it from the detected pack; taking it from `pack`
+     * here meant such a file got its `main` mangled like any other
+     * function and the link failed with "undefined symbol: main".
+     */
+    entry = langpack_entry(modpack);
     token_stream_t *toks = NULL;
     PROF_SCOPE_BEGIN(TP_LEXER, opt->input);
     bool lok = lexer_run(arena, log, modpack, src, &toks);
@@ -356,6 +365,11 @@ int driver_llvm(options_t *opt)
             LOG_I(log, PH_DRIVER, i18n_tr("wrote %s"), o.output_file);
             if (opt->exe_path[0] == '\0' && o.output_mode == LLVM_OUT_EXEC)
                 sal_snprintf(opt->exe_path, sizeof(opt->exe_path), "%s", o.output_file);
+        } else if (o.output_mode == LLVM_OUT_EXEC &&
+                   !(opt->llvm_target && opt->llvm_target[0])) {
+            /* Native link only: a cross-compile has no C backend to retry
+             * with, so it keeps the plain failure code. */
+            rc = SALAM_RC_LLVM_LINK_FAILED;
         }
     }
     logger_free(log);
@@ -373,8 +387,8 @@ int driver_llvm_build(options_t *opt)
      * handled by driver_build() (which falls back to the C backend), so
      * neither should be reported as a missing cross toolchain.
      */
-    if (rc != 0 && rc != SALAM_RC_LLVM_UNSUPPORTED && opt->llvm_target &&
-        opt->llvm_target[0]) {
+    if (rc != 0 && rc != SALAM_RC_LLVM_UNSUPPORTED && rc != SALAM_RC_LLVM_LINK_FAILED &&
+        opt->llvm_target && opt->llvm_target[0]) {
         fprintf(stderr,
                 i18n_tr("salam: cross-compilation for target '%s' failed; see the "
                         "diagnostics above. If they point to a missing toolchain, "

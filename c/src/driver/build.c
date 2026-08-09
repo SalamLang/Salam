@@ -856,8 +856,15 @@ int driver_build(options_t *opt)
      * no toolchain (a plain source checkout, most notably): nothing matched,
      * opt->cc kept its "nobody passed --cc" sentinel value - the literal
      * string "tcc" - and the build shelled out to a tcc that need not be
-     * installed, on a host that may well have clang or gcc right there. */
-    if (opt->cc && strcmp(opt->cc, "tcc") == 0) {
+     * installed, on a host that may well have clang or gcc right there.
+     *
+     * opt->cc_explicit is what separates that sentinel from a user who
+     * actually typed --cc=tcc. Testing the string alone made the two
+     * identical, so an explicit --cc=tcc was silently resolved away to
+     * whatever clang/gcc the ladder found first - which is not a compiler
+     * the caller asked for, and on Windows swaps in a gcc that miscompiles
+     * several stdlib paths. An explicit --cc is a choice, not a hint. */
+    if (opt->cc && !opt->cc_explicit && strcmp(opt->cc, "tcc") == 0) {
         static char raw_cc[1200], quoted_cc[1208];
         bool bundled = false;
         if (resolve_auto_cc(raw_cc, sizeof raw_cc, &bundled)) {

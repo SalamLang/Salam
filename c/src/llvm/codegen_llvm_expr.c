@@ -592,20 +592,23 @@ static void ll_fill_defaults(ll_t *ll, sb_t *ab, ast_node_t *n, func_sig_t *sig,
 
 static llv_t ll_call_user(ll_t *ll, ast_node_t *n, const char *nm)
 {
-    symbol_t *fsym = ll_sym(ll, nm);
+    symbol_t *fsym = NULL;
     /*
-     * A package and one of its own functions can share a name: std/time is
-     * `package time` and also declares `extern func time(tp: void*): i64`
-     * inside it. ll_sym searches the global scope first, where the package
-     * binding lives, so a bare `time(null)` *within* that package resolved
-     * to SYM_PACKAGE and was then reported as an unknown function. Ordinary
-     * scoping would prefer the enclosing package's own function, so do
-     * that before giving up.
+     * The enclosing package's own function outranks whatever the global
+     * scope holds under that name, exactly as ordinary scoping demands.
+     * ll_sym searches globally first, which got this wrong twice: std/time
+     * is `package time` and also declares `extern func time(tp: void*)`, so
+     * a bare `time(null)` inside it resolved to SYM_PACKAGE and was reported
+     * as an unknown function; and std/net/http's own `send(method, url,
+     * headers, body): Response` lost to the libc `send()` extern that
+     * std/net/internal/rawsock declares, which silently lowered four string
+     * arguments through ptrtoint into a socket call.
      */
-    if ((!fsym || fsym->kind != SYM_FUNC) && ll->pkg_scope) {
+    if (ll->pkg_scope) {
         symbol_t *local = scope_lookup_local(ll->pkg_scope, nm);
         if (local && local->kind == SYM_FUNC) fsym = local;
     }
+    if (!fsym) fsym = ll_sym(ll, nm);
     if (!fsym || fsym->kind != SYM_FUNC) {
         ll_error(ll, n, "call to unknown/unsupported function '%s'", nm);
         return ll_poison(n->type_str);
@@ -1034,6 +1037,13 @@ static llv_t ll_call_dyn(ll_t *ll, ast_node_t *n, ast_node_t *obj, const char *i
      */
     if (!strcmp(mname, "free") && n->list.len == 0) {
         llv_t dv = ll_expr(ll, obj);
+        /* Same `dyn X*` auto-deref the dispatch path below needs: Vector.get()
+         * returns the address of the slot, and extractvalue wants the %dyn. */
+        if (ll_is_ptr_ts(dv.ts)) {
+            const char *ld = ll_new_tmp(ll);
+            ll_emit(ll, "%s = load %%dyn, ptr %s", ld, dv.ref);
+            dv.ref = ld;
+        }
         const char *data = ll_new_tmp(ll);
         ll_emit(ll, "%s = extractvalue %%dyn %s, 0", data, dv.ref);
         ll_emit(ll, "call void @free(ptr %s)", data);

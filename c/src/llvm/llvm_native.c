@@ -550,6 +550,23 @@ static int salam_try_embed_extralibs_mingw(logger_t *log, const char *arch, char
     return 0;
 }
 
+/*
+ * Libraries glibc splits out but musl keeps inside libc. A `link dynamic
+ * "pthread"` (std/thread, std/sync) is right for a glibc host and fatal
+ * against a musl sysroot, which ships no libpthread at all: ld.lld stops at
+ * "unable to find library -lpthread" and every program importing threads
+ * fails to link. The symbols are in -lc, which is already on the line.
+ */
+static int musl_folds_into_libc(const char *lib)
+{
+    static const char *const folded[] = {"pthread", "dl",     "rt",    "util",
+                                         "anl",     "resolv", "crypt", "m"};
+    size_t i = 0;
+    for (; i < sizeof folded / sizeof folded[0]; i++)
+        if (strcmp(lib, folded[i]) == 0) return 1;
+    return 0;
+}
+
 static int native_link_elf(logger_t *log, const char *obj, const char *out,
                            const codegen_llvm_options_t *opts, const char *t)
 {
@@ -658,6 +675,8 @@ static int native_link_elf(logger_t *log, const char *obj, const char *out,
         if (!s) continue;
         if (s[0] == '-' || strpbrk(s, "/\\.") != NULL) {
             argv[n++] = s;
+        } else if (musl_folds_into_libc(s)) {
+            LOG_I(log, PH_DRIVER, "musl provides '%s' inside libc; dropping -l%s", s, s);
         } else {
             sal_snprintf(userlibs[i], sizeof userlibs[i], "-l%s", s);
             argv[n++] = userlibs[i];

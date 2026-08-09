@@ -60,8 +60,8 @@ static bool cg_needs_fparg(cg_t *cg, func_sig_t *sig, size_t i, ast_node_t *arg,
     return cg_ctype_is_fp(cg_param_ctype(cg, sig, i + 1, next));
 }
 
-static void cg_emit_call_arg(cg_t *cg, sb_t *b, ast_node_t *arg, func_sig_t *sig, size_t i,
-                             ast_node_t *next)
+static void cg_emit_call_arg(cg_t *cg, sb_t *b, ast_node_t *arg, func_sig_t *sig,
+                             size_t i, ast_node_t *next)
 {
     bool arg_is_ref = sig && sig->decl && i < sig->decl->list.len &&
                       ((ast_node_t *)sig->decl->list.data[i])->is_ref;

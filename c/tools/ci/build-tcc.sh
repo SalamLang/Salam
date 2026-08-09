@@ -14,6 +14,8 @@
 #                  caller has set TCC_CONFIGURE_EXTRA appropriately
 #   TCC_CONFIGURE_EXTRA
 #                  extra ./configure flags (--targetos, --cpu, ...)
+#   HOSTCC         compiler that produces binaries the *build* machine can
+#                  run; only consulted when cross-building (default: cc)
 #   MAKE           make to use (default: make)
 #
 # Run from anywhere. Exits non-zero if the build or the smoke test fails.
@@ -30,6 +32,7 @@ PREFIX=$1
 : "${TINYCC_REF:=$(grep -vE '^[[:space:]]*(#|$)' "$HERE/tinycc-ref.txt" | head -1)}"
 : "${TCC_CONFIGURE_EXTRA:=}"
 : "${CROSS_PREFIX:=}"
+: "${HOSTCC:=cc}"
 : "${MAKE:=make}"
 
 [ -n "$TINYCC_REF" ] || {
@@ -55,14 +58,45 @@ git -C "$WORK/tinycc" checkout --quiet "$TINYCC_REF"
 mkdir -p "$WORK/tinycc/build"
 cd "$WORK/tinycc/build"
 
-# shellcheck disable=SC2086
+# tcc's build system assumes throughout that the compiler it produces runs
+# on the machine producing it. That holds for every native build and for the
+# musl crosses (same OS, and the host can exec the result), but not for
+# Linux -> Windows, where three separate steps hand a PE to the build host.
 cross_arg=""
-[ -n "$CROSS_PREFIX" ] && cross_arg="--cross-prefix=$CROSS_PREFIX"
+make_args=""
+if [ -n "$CROSS_PREFIX" ]; then
+    # 1/3, configure: the win32 build makes libtcc a DLL and then derives
+    # libtcc.def from it with `tcc -impdef`, i.e. by running the tcc.exe it
+    # just linked. --enable-static drops the DLL and the .def with it, and
+    # is what a bundled toolchain wants regardless: one self-contained
+    # tcc.exe instead of an .exe plus a DLL that has to travel beside it.
+    cross_arg="--cross-prefix=$CROSS_PREFIX --enable-static"
+    # 2/3, c2str: it turns include/tccdefs.h into a C string literal at build
+    # time, and the Makefile compiles it with $(CC) - which under
+    # --cross-prefix is the cross compiler, so the build then tries to *run*
+    # a target binary on the host. Cross-building for Windows from Linux the
+    # shell gets handed a PE image and reports
+    # `./c2str.exe: 2: Syntax error: "(" unexpected`. Building it with the
+    # host compiler first leaves make nothing to do (the same trick
+    # build-musl-tcc.sh has always used).
+    "$HOSTCC" -DC2STR ../conftest.c -o c2str.exe
+    # 3/3, libtcc1.a: the compiler runtime tcc links into everything it
+    # builds is itself compiled by invoking ./tcc.exe (lib/Makefile defaults
+    # XCC and XAR to it). Pointing the two at the cross toolchain is
+    # upstream's own escape hatch - its "<target>-libtcc1-usegcc=yes" switch
+    # sets exactly these - and spelling them as $(CC)/$(AR) keeps them
+    # whatever --cross-prefix resolved to rather than a second guess at it.
+    # BFLAGS goes empty because its `-bt` is a tcc flag that only makes
+    # sense when tcc is the one compiling bcheck.o.
+    make_args='XCC=$(CC) XAR=$(AR) BFLAGS='
+fi
 # shellcheck disable=SC2086
 ../configure --prefix="$PREFIX" $cross_arg $TCC_CONFIGURE_EXTRA
 
-"$MAKE" -j"$(nproc 2>/dev/null || echo 4)"
-"$MAKE" install
+# shellcheck disable=SC2086
+"$MAKE" -j"$(nproc 2>/dev/null || echo 4)" $make_args
+# shellcheck disable=SC2086
+"$MAKE" install $make_args
 
 # Two install layouts, both of them tcc's own: the Windows build puts
 # tcc.exe straight at the prefix with include/ and lib/ beside it (matching
@@ -81,6 +115,20 @@ done
 }
 
 echo "tcc installed: $TCC_BIN"
+
+# A tcc without libtcc1.a links nothing: it holds the runtime helpers (64-bit
+# division, alloca, chkstk, the crt stubs) that every program it compiles
+# resolves against. Worth asserting rather than assuming, because the ways a
+# cross build loses it - a lib/ sub-make that quietly did nothing - leave a
+# perfectly good-looking tcc.exe behind.
+LIBTCC1=$(find "$PREFIX" -name libtcc1.a -print 2>/dev/null | head -1)
+[ -n "$LIBTCC1" ] || {
+    echo "error: no libtcc1.a under $PREFIX after install" >&2
+    ls -R "$PREFIX" >&2 || true
+    exit 1
+}
+echo "runtime installed: $LIBTCC1"
+
 # `tcc -v` runs the built binary, so it only proves anything when the build
 # is native; a cross-built one is checked by the job that consumes it.
 if [ -z "$CROSS_PREFIX" ]; then

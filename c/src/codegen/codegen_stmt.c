@@ -197,7 +197,16 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
             cg_line(cg, "return %s;", cg_expr(cg, n->a));
         } else {
             cg_emit_defers(cg);
-            cg_line(cg, "return;");
+            /*
+             * `func main:` has no declared return type but is emitted as C's
+             * `int main`, so a bare `ret` in it is a bare `return;` from a
+             * non-void function. tcc accepts that silently; gcc 16 makes
+             * -Wreturn-mismatch an error, which took out every telegram/
+             * websocket example that ends a branch with a bare `ret`. The
+             * language already says main implicitly returns i32, so the
+             * value that `ret` means here is 0.
+             */
+            cg_line(cg, cg->cur_is_main ? "return 0;" : "return;");
         }
         break;
     case AST_MATCH: {

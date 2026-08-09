@@ -438,23 +438,26 @@ static void ll_emit_outbuf(ll_t *ll)
             "  br label %done\n"
             "done:\n"
             "  ret void\n"
-            "}\n"
-            /*
-             * A server prints its banner, then blocks in accept() forever -
-             * neither the `ret` in main nor atexit ever runs, so the banner
-             * sits in the buffer until something kills the process. Flush on
-             * the way out of SIGINT/SIGTERM, then restore the default
-             * disposition and re-raise so the exit status is still the
-             * ordinary death-by-signal. Only `write` runs before the
-             * re-raise, which is async-signal-safe.
-             */
-            "define internal void @salam_out_onsig(i32 %s) nounwind {\n"
-            "entry:\n"
-            "  call void @salam_out_flush()\n"
-            "  %d = call ptr @signal(i32 %s, ptr null)\n"
-            "  %r = call i32 @raise(i32 %s)\n"
-            "  ret void\n"
-            "}\n"
+            "}\n");
+    /*
+     * A server prints its banner, then blocks in accept() forever - neither
+     * the `ret` in main nor atexit ever runs, so the banner sits in the
+     * buffer until something kills the process. Flush on the way out of
+     * SIGINT/SIGTERM, then restore the default disposition and re-raise so
+     * the exit status is still the ordinary death-by-signal. Only `write`
+     * runs before the re-raise, which is async-signal-safe. Paired with the
+     * signal() calls ll_function emits, and skipped under --jit for the same
+     * reason those are (see ll.jit).
+     */
+    if (!ll->jit)
+        sb_puts(ll->hg, "define internal void @salam_out_onsig(i32 %s) nounwind {\n"
+                        "entry:\n"
+                        "  call void @salam_out_flush()\n"
+                        "  %d = call ptr @signal(i32 %s, ptr null)\n"
+                        "  %r = call i32 @raise(i32 %s)\n"
+                        "  ret void\n"
+                        "}\n");
+    sb_puts(ll->hg,
             "define internal void @salam_out_write(ptr %s, i64 %n) nounwind {\n"
             "entry:\n"
             "  %obn = load i64, ptr @salam_obn\n"

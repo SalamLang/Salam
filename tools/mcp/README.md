@@ -64,7 +64,7 @@ the extension for you.
 
 ## Tools
 
-**Compiler**
+### Compiler
 
 | Tool           | Use it for                                                              |
 | -------------- | ----------------------------------------------------------------------- |
@@ -74,7 +74,7 @@ the extension for you.
 | `salam_exec`   | Interpret without a C toolchain (not trustworthy for unsigned maths)    |
 | `salam_format` | Report formatting drift; never rewrites files                           |
 
-**Inspection**
+### Inspection
 
 | Tool            | Use it for                                            |
 | --------------- | ----------------------------------------------------- |
@@ -83,7 +83,7 @@ the extension for you.
 | `salam_js`      | Compile to browser-ready JavaScript                   |
 | `salam_version` | Version, commit and build date of the driven compiler |
 
-**Standard library and examples**
+### Standard library and examples
 
 | Tool                    | Use it for                                       |
 | ----------------------- | ------------------------------------------------ |

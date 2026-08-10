@@ -29,8 +29,11 @@ package graphql
 // The convention throughout is that -1 means "absent" and any valid
 // node is at index >= 0.
 
-// ---- value nodes (spec 2.9, plus Variable) ----
+// All discriminants are declared up front: this compiler requires every
+// top-level constant in a file to precede the first type or function
+// definition (E084), so they cannot sit beside the structs they tag.
 
+// value node kinds (spec 2.9, plus Variable)
 pub const VAL_NULL := 0
 pub const VAL_BOOL := 1
 pub const VAL_INT := 2
@@ -40,6 +43,22 @@ pub const VAL_ENUM := 5
 pub const VAL_LIST := 6
 pub const VAL_OBJECT := 7
 pub const VAL_VARIABLE := 8
+
+// type reference kinds (spec 2.11)
+pub const TREF_NAMED := 0
+pub const TREF_LIST := 1
+
+// selection kinds (spec 2.4)
+pub const SEL_FIELD := 0
+pub const SEL_FRAGMENT_SPREAD := 1
+pub const SEL_INLINE_FRAGMENT := 2
+
+// operation kinds (spec 2.3)
+pub const OP_QUERY := 0
+pub const OP_MUTATION := 1
+pub const OP_SUBSCRIPTION := 2
+
+// ---- value nodes ----
 
 // A literal appearing in a document. GraphQL literals are not JSON
 // literals: enum values are unquoted names distinct from strings, and a
@@ -64,10 +83,6 @@ pub struct AstValue:
     pub line: int = 0
 end
 
-// ---- type references (spec 2.11) ----
-
-pub const TREF_NAMED := 0
-pub const TREF_LIST := 1
 
 // A type reference such as `[Episode!]!`. `nonNull` is the trailing `!`
 // on this level; `inner` is the element type id for a list.
@@ -103,9 +118,6 @@ end
 
 // ---- selections (spec 2.4) ----
 
-pub const SEL_FIELD := 0
-pub const SEL_FRAGMENT_SPREAD := 1
-pub const SEL_INLINE_FRAGMENT := 2
 
 // One entry in a selection set. The three selection forms share a
 // struct because they share most of their shape and the executor
@@ -132,9 +144,6 @@ end
 
 // ---- operations and fragments (spec 2.3, 2.8) ----
 
-pub const OP_QUERY := 0
-pub const OP_MUTATION := 1
-pub const OP_SUBSCRIPTION := 2
 
 @en "AstVariableDef"
 @fa "تعریف متغیر"
@@ -186,6 +195,97 @@ pub struct Document:
     pub trefs: Vector<AstTypeRef> = Vector {}
 end
 
+// ---- arena append helpers (private section: this compiler requires
+// every non-pub function in a file to precede the first pub one, E088) ----
+
+func _doc_add_value(doc &: Document, v: AstValue): int:
+    id := doc.vals.len()
+    doc.vals.push(v)
+    ret id
+end
+
+func _doc_add_selection(doc &: Document, s: AstSelection): int:
+    id := doc.sels.len()
+    doc.sels.push(s)
+    ret id
+end
+
+func _doc_add_tref(doc &: Document, t: AstTypeRef): int:
+    id := doc.trefs.len()
+    doc.trefs.push(t)
+    ret id
+end
+
+// Vector<T>.free() releases only its own backing array and never walks
+// its elements, so every nested Vector is freed explicitly first.
+func _free_directives(ds: Vector<AstDirective>):
+    mut i := 0
+    until i < ds.len():
+        mut d := ds.get(i)[0]
+        d.args.free()
+        i += 1
+    end
+    mut dv := ds
+    dv.free()
+end
+
+func _free_var_defs(vs: Vector<AstVariableDef>):
+    mut i := 0
+    until i < vs.len():
+        mut v := vs.get(i)[0]
+        _free_directives(v.directives)
+        i += 1
+    end
+    mut vv := vs
+    vv.free()
+end
+
+func _free_ops(doc &: Document):
+    mut i := 0
+    until i < doc.ops.len():
+        mut o := doc.ops.get(i)[0]
+        _free_directives(o.directives)
+        _free_var_defs(o.varDefs)
+        o.selections.free()
+        i += 1
+    end
+    doc.ops.free()
+end
+
+func _free_frags(doc &: Document):
+    mut i := 0
+    until i < doc.frags.len():
+        mut f := doc.frags.get(i)[0]
+        _free_directives(f.directives)
+        f.selections.free()
+        i += 1
+    end
+    doc.frags.free()
+end
+
+func _free_sels(doc &: Document):
+    mut i := 0
+    until i < doc.sels.len():
+        mut s := doc.sels.get(i)[0]
+        _free_directives(s.directives)
+        s.args.free()
+        s.selections.free()
+        i += 1
+    end
+    doc.sels.free()
+end
+
+func _free_vals(doc &: Document):
+    mut i := 0
+    until i < doc.vals.len():
+        mut v := doc.vals.get(i)[0]
+        v.items.free()
+        v.keys.free()
+        i += 1
+    end
+    doc.vals.free()
+end
+
 // ---- arena accessors ----
 //
 // Out-of-range ids return a default-constructed node rather than
@@ -215,26 +315,6 @@ end
 pub func TypeRefAt(doc: Document, id: int): AstTypeRef:
     if id < 0 || id >= doc.trefs.len(): ret AstTypeRef {} end
     ret doc.trefs.get(id)[0]
-end
-
-// ---- arena append helpers ----
-
-func _doc_add_value(doc &: Document, v: AstValue): int:
-    id := doc.vals.len()
-    doc.vals.push(v)
-    ret id
-end
-
-func _doc_add_selection(doc &: Document, s: AstSelection): int:
-    id := doc.sels.len()
-    doc.sels.push(s)
-    ret id
-end
-
-func _doc_add_tref(doc &: Document, t: AstTypeRef): int:
-    id := doc.trefs.len()
-    doc.trefs.push(t)
-    ret id
 end
 
 // ---- document queries ----
@@ -290,77 +370,14 @@ pub func ResponseKey(sel: AstSelection): str:
     ret sel.name
 end
 
-// Frees every arena and the operation and fragment lists. The nested
-// Vectors held inside each node (args, directives, selections) are
-// freed first, since Vector<T>.free() releases only its own backing
-// array and never walks its elements.
+// Frees every arena and the operation and fragment lists.
 @en "FreeDocument"
 @fa "آزادسازی سند"
 @ar "تحریر الوثیقة"
 pub func FreeDocument(doc &: Document):
-    mut i := 0
-    until i < doc.sels.len():
-        mut s := doc.sels.get(i)[0]
-        _free_directives(s.directives)
-        s.args.free()
-        s.selections.free()
-        i += 1
-    end
-    mut j := 0
-    until j < doc.vals.len():
-        mut v := doc.vals.get(j)[0]
-        v.items.free()
-        v.keys.free()
-        j += 1
-    end
+    _free_sels(doc)
+    _free_vals(doc)
     _free_ops(doc)
     _free_frags(doc)
-    doc.sels.free()
-    doc.vals.free()
     doc.trefs.free()
-end
-
-func _free_directives(ds: Vector<AstDirective>):
-    mut i := 0
-    until i < ds.len():
-        mut d := ds.get(i)[0]
-        d.args.free()
-        i += 1
-    end
-    mut dv := ds
-    dv.free()
-end
-
-func _free_ops(doc &: Document):
-    mut i := 0
-    until i < doc.ops.len():
-        mut o := doc.ops.get(i)[0]
-        _free_directives(o.directives)
-        _free_var_defs(o.varDefs)
-        o.selections.free()
-        i += 1
-    end
-    doc.ops.free()
-end
-
-func _free_var_defs(vs: Vector<AstVariableDef>):
-    mut i := 0
-    until i < vs.len():
-        mut v := vs.get(i)[0]
-        _free_directives(v.directives)
-        i += 1
-    end
-    mut vv := vs
-    vv.free()
-end
-
-func _free_frags(doc &: Document):
-    mut i := 0
-    until i < doc.frags.len():
-        mut f := doc.frags.get(i)[0]
-        _free_directives(f.directives)
-        f.selections.free()
-        i += 1
-    end
-    doc.frags.free()
 end

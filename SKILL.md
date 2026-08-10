@@ -177,6 +177,7 @@ end
   ```
 
   This is how much of the stdlib mutates its argument (`str.BufAppend(b &: StringBuilder, …)`).
+
 - **`defer stmt`** runs at scope exit, LIFO — great for cleanup:
   `defer v.free()`.
 - **Closures/lambdas** are first-class typed values: `(x: int) => x * 2`, or a

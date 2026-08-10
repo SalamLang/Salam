@@ -1,0 +1,253 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// mcp_server.salam - method dispatch, and the bridge between MCP's two eras.
+//
+// MCP 2026-07-28 dropped the initialize handshake: a modern client declares
+// its protocol version in each request's _meta and may call server/discover
+// to learn what the server speaks. Clients on 2025-11-25 and earlier still
+// open with initialize and have no way to fall forward.
+//
+// This server is dual-era, which the spec explicitly allows: an `initialize`
+// request selects legacy semantics for the rest of the process, anything else
+// is served statelessly per the modern revision. That is the only shape that
+// works against both an up-to-date client and one built on an older SDK.
+//
+// The only visible difference between the two modes is `resultType`, which
+// modern results carry and legacy ones do not.
+
+@en "mcpsrv"
+@fa "خدمت‌ام‌سی‌پی"
+@ar "خادم‌ام‌سی‌بی"
+package mcpsrv
+
+import str
+import encoding.value
+import mcprpc "mcp_rpc.salam"
+import mcpreg "mcp_registry.salam"
+import mcpsrc "mcp_resources.salam"
+import mcpout "mcp_result.salam"
+
+// Set once an `initialize` request arrives; scoped to this process, exactly
+// as the spec describes for a dual-era server on stdio.
+mut g_legacy := false
+
+// ---- private helpers -------------------------------------------------
+
+func _server_name(): str: ret "salam-mcp" end
+
+func _server_version(): str: ret "0.2.8" end
+
+func _instructions(): str:
+    ret "Tools for the Salam programming language. Before writing Salam: call salam_stdlib_packages and salam_stdlib_symbols so you use APIs that exist, and salam_find_examples for a working usage. After every edit: call salam_check, which type-checks without codegen and returns exact line/column diagnostics. Read the salam://guide/agents.md resource for the language's declaration-ordering rules and common pitfalls."
+end
+
+func _legacy_versions(): Vector<str>:
+    v := Vector {} as Vector<str>
+    v.push("2025-11-25")
+    v.push("2025-06-18")
+    v.push("2025-03-26")
+    v.push("2024-11-05")
+    ret v
+end
+
+func _is_legacy_version(p: str): bool:
+    all := _legacy_versions()
+    mut i := 0
+    until i < all.len():
+        if all.get(i)[0] == p: ret true end
+        i += 1
+    end
+    ret false
+end
+
+func _supported(): value.Value:
+    mut arr := value.NewValueArray()
+    value.ArrayPush(arr, value.ValueString(mcprpc.McpProtoModern))
+    legacy := _legacy_versions()
+    mut i := 0
+    until i < legacy.len():
+        value.ArrayPush(arr, value.ValueString(legacy.get(i)[0]))
+        i += 1
+    end
+    ret arr
+end
+
+func _capabilities(): value.Value:
+    mut caps := value.NewValueObject()
+    value.ObjectSet(caps, "tools", value.NewValueObject())
+    value.ObjectSet(caps, "resources", value.NewValueObject())
+    ret caps
+end
+
+func _server_info(): value.Value:
+    mut info := value.NewValueObject()
+    value.ObjectSet(info, "name", value.ValueString(_server_name()))
+    value.ObjectSet(info, "version", value.ValueString(_server_version()))
+    ret info
+end
+
+// Modern results are tagged complete; legacy clients never saw that field.
+func _result(): value.Value:
+    mut r := value.NewValueObject()
+    if !g_legacy: value.ObjectSet(r, "resultType", value.ValueString("complete")) end
+    ret r
+end
+
+func _discover(): value.Value:
+    mut r := _result()
+    value.ObjectSet(r, "supportedVersions", _supported())
+    value.ObjectSet(r, "capabilities", _capabilities())
+    value.ObjectSet(r, "instructions", value.ValueString(_instructions()))
+    mut meta := value.NewValueObject()
+    value.ObjectSet(meta, mcprpc.McpMetaServerInfo, _server_info())
+    value.ObjectSet(r, "_meta", meta)
+    ret r
+end
+
+func _initialize(req: mcprpc.Request): value.Value:
+    g_legacy = true
+    asked := mcprpc.ParamStr(req.params, "protocolVersion", "")
+    mut agreed := "2025-06-18"
+    if _is_legacy_version(asked): agreed = asked end
+    mut r := value.NewValueObject()
+    value.ObjectSet(r, "protocolVersion", value.ValueString(agreed))
+    value.ObjectSet(r, "capabilities", _capabilities())
+    value.ObjectSet(r, "serverInfo", _server_info())
+    value.ObjectSet(r, "instructions", value.ValueString(_instructions()))
+    ret r
+end
+
+func _content_block(text: str): value.Value:
+    mut b := value.NewValueObject()
+    value.ObjectSet(b, "type", value.ValueString("text"))
+    value.ObjectSet(b, "text", value.ValueString(text))
+    mut arr := value.NewValueArray()
+    value.ArrayPush(arr, b)
+    ret arr
+end
+
+func _tool_result(tr: mcpout.ToolResult): value.Value:
+    mut r := _result()
+    value.ObjectSet(r, "content", _content_block(tr.text))
+    value.ObjectSet(r, "isError", value.ValueBool(tr.is_error))
+    if tr.has_structured:
+        value.ObjectSet(r, "structuredContent", tr.structured)
+    end
+    ret r
+end
+
+func _tools_list(): value.Value:
+    mut r := _result()
+    value.ObjectSet(r, "tools", mcpreg.Tools())
+    ret r
+end
+
+func _resources_list(): value.Value:
+    mut r := _result()
+    value.ObjectSet(r, "resources", mcpsrc.List())
+    ret r
+end
+
+func _empty_list(key: str): value.Value:
+    mut r := _result()
+    value.ObjectSet(r, key, value.NewValueArray())
+    ret r
+end
+
+// A request whose _meta names a version we do not implement gets the spec's
+// UnsupportedProtocolVersionError so the client can retry, rather than a
+// generic failure it cannot act on.
+func _version_error(req: mcprpc.Request): str:
+    mut data := value.NewValueObject()
+    value.ObjectSet(data, "supported", _supported())
+    value.ObjectSet(data, "requested", value.ValueString(req.proto))
+    ret mcprpc.ErrorMessageData(req.id_json, mcprpc.McpErrUnsupportedVersion, "Unsupported protocol version", data)
+end
+
+func _known_version(p: str): bool:
+    if p == mcprpc.McpProtoModern: ret true end
+    ret _is_legacy_version(p)
+end
+
+func _call_tool(req: mcprpc.Request): str:
+    name := mcprpc.ParamStr(req.params, "name", "")
+    if !mcpreg.Has(name):
+        ret mcprpc.ErrorMessage(req.id_json, mcprpc.McpErrMethodNotFound, "Unknown tool: ".concat(name))
+    end
+    tr := mcpreg.Call(name, req.params)
+    ret mcprpc.ResultMessage(req.id_json, _tool_result(tr))
+end
+
+func _read_resource(req: mcprpc.Request): str:
+    uri := mcprpc.ParamStr(req.params, "uri", "")
+    contents := mcpsrc.Read(uri)
+    if value.ArrayLen(contents) == 0:
+        mut data := value.NewValueObject()
+        value.ObjectSet(data, "uri", value.ValueString(uri))
+        ret mcprpc.ErrorMessageData(req.id_json, mcprpc.McpErrInvalidParams, "Resource not found", data)
+    end
+    mut r := _result()
+    value.ObjectSet(r, "contents", contents)
+    ret mcprpc.ResultMessage(req.id_json, r)
+end
+
+func _respond(req: mcprpc.Request): str:
+    if req.method == "server/discover": ret mcprpc.ResultMessage(req.id_json, _discover()) end
+    if req.method == "ping": ret mcprpc.ResultMessage(req.id_json, _result()) end
+    if req.method == "tools/list": ret mcprpc.ResultMessage(req.id_json, _tools_list()) end
+    if req.method == "tools/call": ret _call_tool(req) end
+    if req.method == "resources/list": ret mcprpc.ResultMessage(req.id_json, _resources_list()) end
+    if req.method == "resources/read": ret _read_resource(req) end
+    if req.method == "resources/templates/list":
+        ret mcprpc.ResultMessage(req.id_json, _empty_list("resourceTemplates"))
+    end
+    if req.method == "prompts/list": ret mcprpc.ResultMessage(req.id_json, _empty_list("prompts")) end
+    ret mcprpc.ErrorMessage(req.id_json, mcprpc.McpErrMethodNotFound, "Unknown method: ".concat(req.method))
+end
+
+// ---- public API ------------------------------------------------------
+
+@en "IsNotification"
+@fa "اعلان است"
+@ar "إشعار"
+// JSON-RPC notifications carry no id and MUST NOT be answered.
+pub func IsNotification(req: mcprpc.Request): bool:
+    ret !req.has_id
+end
+
+@en "Dispatch"
+@fa "ارسال"
+@ar "توجیه"
+// Handles one request and returns the line to write back, or "" when the
+// request was a notification that needs no reply.
+pub func Dispatch(req: mcprpc.Request): str:
+    if req.bad_json:
+        ret mcprpc.ErrorMessage("null", mcprpc.McpErrParse, "Parse error: message is not a JSON object")
+    end
+    if !req.ok:
+        if IsNotification(req): ret "" end
+        ret mcprpc.ErrorMessage(req.id_json, mcprpc.McpErrInvalidRequest, "Invalid request: missing method")
+    end
+    if req.method == "initialize":
+        ret mcprpc.ResultMessage(req.id_json, _initialize(req))
+    end
+    if req.has_proto && !_known_version(req.proto):
+        if IsNotification(req): ret "" end
+        ret _version_error(req)
+    end
+    if IsNotification(req): ret "" end
+    ret _respond(req)
+end
+

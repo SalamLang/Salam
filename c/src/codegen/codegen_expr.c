@@ -565,8 +565,8 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
             }
         }
         if (n->op == TK_POWER)
-            return cg_fmt(cg, "pow((double)(%s), (double)(%s))", cg_expr(cg, n->a),
-                          cg_expr(cg, n->b));
+            return cg_fmt(cg, "pow(SALAM_FPARG_D((double)(%s)), (double)(%s))",
+                          cg_expr(cg, n->a), cg_expr(cg, n->b));
 
         if (n->op == TK_PLUS &&
             (cg_is_str_ts(n->a->type_str) || cg_is_str_ts(n->b->type_str)))

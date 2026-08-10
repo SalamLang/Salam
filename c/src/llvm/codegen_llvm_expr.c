@@ -1979,7 +1979,17 @@ llv_t ll_expr(ll_t *ll, ast_node_t *n)
         }
         func_sig_t *sig = (func_sig_t *)fsym->overloads.data[0];
         bool is_ext = sig->decl && sig->decl->is_extern;
-        if (!is_ext) ll_ensure_fn(ll, sig->decl, NULL, ll->pkg_scope);
+        /*
+         * Unconditionally, the way ll_call_user does it: `is_ext` decides the
+         * *name* (an extern keeps its own), never whether the callee needs
+         * emitting. An `extern:` block function with a body is a Salam
+         * function that merely keeps an unmangled symbol so it can be handed
+         * to C as a callback - std/webview's `&salam_com_addref` COM vtable
+         * slots are the whole reason the form exists - and skipping it here
+         * left `@salam_com_addref` with neither a declare nor a define
+         * anywhere in the module ("use of undefined value").
+         */
+        ll_ensure_fn(ll, sig->decl, NULL, ll->pkg_scope);
         const char *fname = is_ext ? n->name : ll_mangle(ll, NULL, n->name, sig);
         return (llv_t){ll_fmt(ll, "@%s", fname), "void*"};
     }

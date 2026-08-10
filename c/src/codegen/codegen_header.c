@@ -382,6 +382,25 @@ static void hdr_prelude(cg_t *cg, ast_node_t *program, sb_t *h)
         "#define SALAM_OUT_LIT(s, n) salam_out_write_((s), (uint64_t)(n))\n"
         "#endif\n");
 
+    /*
+     * See cg_needs_fparg in codegen_call.c: tcc 0.9.27 (x86-64) overwrites a
+     * computed floating-point argument with the value of the floating-point
+     * argument that follows it, so every such argument is routed through an
+     * opaque identity call that forces it into its own slot. Expands to
+     * nothing outside __TINYC__ - no other toolchain pays for it, and even
+     * under tcc only calls with two adjacent float parameters are wrapped.
+     */
+    sb_puts(h, "#ifndef SALAM_FPARG_DEFINED\n#define SALAM_FPARG_DEFINED\n"
+               "#if defined(__TINYC__)\n"
+               "static double salam_fparg_d(double v) { return v; }\n"
+               "static float salam_fparg_f(float v) { return v; }\n"
+               "#define SALAM_FPARG_D(x) salam_fparg_d(x)\n"
+               "#define SALAM_FPARG_F(x) salam_fparg_f(x)\n"
+               "#else\n"
+               "#define SALAM_FPARG_D(x) (x)\n"
+               "#define SALAM_FPARG_F(x) (x)\n"
+               "#endif\n"
+               "#endif\n");
     sb_puts(h, "#ifndef SALAM_FN_ATTRS_DEFINED\n#define SALAM_FN_ATTRS_DEFINED\n"
                "#if defined(__GNUC__) || defined(__clang__)\n"
                "#define SALAM_NOINLINE __attribute__((noinline))\n"
@@ -791,7 +810,44 @@ static bool is_wellknown_libc_name(const char *name)
         "SetConsoleMode",
         "ReadConsoleInputA",
         "DebugBreak",
+        /* std/time's monotonic clock (QueryPerformanceCounter/Frequency take
+         * a LARGE_INTEGER* that Salam spells `void*`) and the selfhost
+         * compiler's own CPU-time profiling in sal_core (GetProcessTimes'
+         * FILETIME* params, likewise `void*`). std/time reaches a GUI
+         * translation unit transitively - webview -> ... -> debug -> time -
+         * so it collides there even though nothing GUI calls it. */
+        "QueryPerformanceCounter",
+        "QueryPerformanceFrequency",
+        "GetCurrentProcess",
+        "GetProcessTimes",
     };
+    size_t i = 0;
+    for (; i < sizeof(names) / sizeof(names[0]); i++)
+        if (strcmp(name, names[i]) == 0) return true;
+    return false;
+}
+
+/*
+ * The <math.h> functions std/math declares in its own `extern:` block. Every
+ * generated header includes <math.h> (see hdr_prelude), and Salam spells
+ * these exactly as the standard does - `double f(double)` - so redeclaring
+ * them adds nothing and can only conflict with what the header already said.
+ *
+ * It does conflict, on tcc 0.9.28rc: its tcc_libm.h answers msvcrt's slow
+ * fabs() with a `__CRT_INLINE double __cdecl fabs(...)` of its own ("Override
+ * msvcrt fabs(): 6.3x speedup!"), which is `static`, so a plain include
+ * leaves a harmless local `t fabs` per object. A later `extern` redeclaration
+ * promotes that definition to external linkage, every module that includes
+ * math.h exports a body, and the link dies on "symbol 'fabs' defined twice" -
+ * 10 of the general tests, and any user program importing std/math. 0.9.27
+ * ships no tcc_libm.h and never saw it. Dropping the redeclarations fixes it
+ * for whatever the next such override turns out to be, too.
+ */
+static bool is_libm_name(const char *name)
+{
+    static const char *const names[] = {"sqrt", "sin",   "cos",   "tan",  "asin",
+                                        "acos", "atan",  "atan2", "log",  "log10",
+                                        "exp",  "floor", "ceil",  "fabs", "fmod"};
     size_t i = 0;
     for (; i < sizeof(names) / sizeof(names[0]); i++)
         if (strcmp(name, names[i]) == 0) return true;
@@ -809,6 +865,7 @@ static void hdr_externs(cg_t *cg, ast_node_t *program, sb_t *h)
                 symbol_t *fsym = scope_lookup_local(cg->sem->global, d->name);
                 func_sig_t *sig = sig_of_decl(fsym, d);
                 if (!sig) continue;
+                if (is_libm_name(d->name)) continue;
                 bool risky = is_wellknown_libc_name(d->name);
                 if (risky) sb_puts(h, "#ifndef SALAM_EXTERN_LIBC_ON_WIN32\n");
                 sb_puts(h, cg_fmt(cg, "%s;\n", cg_extern_proto(cg, d, sig)));
@@ -882,6 +939,40 @@ static void hdr_prototypes(cg_t *cg, ast_node_t *program, sb_t *h)
     }
 }
 
+/*
+ * Prototypes for `impl Trait for T` methods, which codegen.c also forward-
+ * declares at the top of the .c. They are needed in the *header* as well:
+ * a generic function is instantiated as a `static inline` body appended to
+ * this header, and such a body calls the trait impls of whatever type it
+ * was instantiated with. Those calls sat above the .c's declarations, so
+ * the only thing that made them compile was C89 implicit declaration - tcc
+ * still allows it, gcc 16 made it an error, and the returned `const char*`
+ * came back as `int` on any compiler that took it.
+ */
+static void hdr_impl_prototypes(cg_t *cg, sb_t *h)
+{
+    size_t i = 0;
+    for (; i < cg->sem->global->symbols.len; i++) {
+        symbol_t *owner = (symbol_t *)cg->sem->global->symbols.data[i];
+        if (owner->kind != SYM_TYPEIMPL || !owner->members) continue;
+        {
+            size_t j = 0;
+            for (; j < owner->members->symbols.len; j++) {
+                symbol_t *m = (symbol_t *)owner->members->symbols.data[j];
+                size_t k = 0;
+                if (m->kind != SYM_METHOD) continue;
+                for (; k < m->overloads.len; k++) {
+                    func_sig_t *sig = (func_sig_t *)m->overloads.data[k];
+                    if (sig && sig->decl)
+                        sb_puts(h, cg_fmt(cg, "%s;\n",
+                                          func_signature(cg, sig->decl, owner, sig,
+                                                         false)));
+                }
+            }
+        }
+    }
+}
+
 void cg_header(cg_t *cg, ast_node_t *program)
 {
     sb_t *h = cg->h;
@@ -921,4 +1012,5 @@ void cg_header(cg_t *cg, ast_node_t *program)
     hdr_externs(cg, program, h);
     hdr_globals(cg, program, h);
     hdr_prototypes(cg, program, h);
+    hdr_impl_prototypes(cg, h);
 }

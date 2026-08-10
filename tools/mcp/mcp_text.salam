@@ -1,0 +1,137 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// mcp_text.salam - string helpers for the MCP server.
+//
+// Why this file exists at all: std/str's Split() is NOT safe to use here.
+// On a gcc-linked build the Vector<str> it returns has a valid len() and
+// valid elements 0..n-2, but reading the LAST element segfaults (confirmed
+// live on this host: `str.Split("a/b/c/d", "/")` reports len 4, prints a, b,
+// c, then dies). Every helper below therefore walks the string with the
+// builtin find/substr primitives, which are backend-independent.
+//
+// Everything here is pure text manipulation with no I/O, so it sits at the
+// bottom of the dependency graph.
+
+@en "mcptxt"
+@fa "متن‌ام‌سی‌پی"
+@ar "نص‌ام‌سی‌بی"
+package mcptxt
+
+import str
+
+// ---- private helpers -------------------------------------------------
+
+func _clamp_low(v: int, lo: int): int:
+    if v < lo: ret lo end
+    ret v
+end
+
+// ---- public API ------------------------------------------------------
+
+@en "Split"
+@fa "جدا کن"
+@ar "قسم"
+// Backend-safe replacement for str.Split. Returns [""] for an empty input,
+// matching the usual "one empty field" convention.
+pub func Split(s: str, delim: str): Vector<str>:
+    out := Vector {} as Vector<str>
+    dn := delim.len()
+    if dn == 0:
+        out.push(s)
+        ret out
+    end
+    mut rest := s
+    mut cut := rest.find(delim)
+    until cut >= 0:
+        out.push(rest.substr(0, cut))
+        rest = rest.substr(cut + dn, rest.len() - cut - dn)
+        cut = rest.find(delim)
+    end
+    out.push(rest)
+    ret out
+end
+
+@en "Lines"
+@fa "خط‌ها"
+@ar "أسطر"
+// Splits on "\n" and drops a trailing "\r" from each line, so the same code
+// handles output captured from a Windows child process.
+pub func Lines(s: str): Vector<str>:
+    raw := Split(s, "\n")
+    out := Vector {} as Vector<str>
+    mut i := 0
+    until i < raw.len():
+        ln := raw.get(i)[0]
+        out.push(str.TrimSuffix(ln, "\r"))
+        i += 1
+    end
+    ret out
+end
+
+@en "Join"
+@fa "بپیوند"
+@ar "ادمج"
+pub func Join(parts: Vector<str>, sep: str): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    mut i := 0
+    until i < parts.len():
+        if i > 0: str.BufAppend(sb, sep) end
+        str.BufAppend(sb, parts.get(i)[0])
+        i += 1
+    end
+    out := str.BufStr(sb)
+    ret out
+end
+
+@en "Truncate"
+@fa "کوتاه کن"
+@ar "اقتطع"
+// Caps a payload so one runaway compiler dump cannot blow up the model's
+// context window. Appends an explicit marker when it actually cuts.
+pub func Truncate(s: str, max: int): str:
+    lim := _clamp_low(max, 64)
+    if s.len() <= lim: ret s end
+    head := s.substr(0, lim)
+    ret head.concat("\n... [truncated, ").concat(str.FromInt(s.len() - lim)).concat(" more bytes]")
+end
+
+@en "HeadLines"
+@fa "سرخط‌ها"
+@ar "أوائل الأسطر"
+// Keeps at most `max` lines, noting how many were dropped.
+pub func HeadLines(s: str, max: int): str:
+    all := Lines(s)
+    n := all.len()
+    if n <= max: ret s end
+    kept := Vector {} as Vector<str>
+    mut i := 0
+    until i < max:
+        kept.push(all.get(i)[0])
+        i += 1
+    end
+    kept.push("... [".concat(str.FromInt(n - max)).concat(" more lines]"))
+    ret Join(kept, "\n")
+end
+
+@en "ContainsFold"
+@fa "شامل بدون حساسیت"
+@ar "یحتوي دون حساسیة"
+// Case-insensitive substring test, for search tools where the model is
+// unlikely to match the exact casing of a declaration.
+pub func ContainsFold(hay: str, needle: str): bool:
+    if needle.len() == 0: ret true end
+    ret hay.lower().find(needle.lower()) >= 0
+end

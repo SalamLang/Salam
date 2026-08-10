@@ -1,0 +1,104 @@
+---
+name: 🤖 MCP Server - Build & Protocol Conformance
+# Builds tools/mcp (the MCP server, itself written in Salam) with the compiler
+# from this checkout, then drives it over stdio exactly as an MCP client does
+# and asserts on the wire format.
+#
+# The conformance suite is the point: a regression in JSON-RPC framing, in the
+# dual-era protocol negotiation, or in how diagnostics are surfaced shows up in
+# an AI client as inexplicably broken tooling rather than as a build failure.
+# This catches it here instead.
+#
+# The compiler is built from c/ rather than installed from a release on
+# purpose - the server must be tested against the compiler it ships alongside.
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'tools/mcp/**'
+      - 'docs/ai/**'
+      - 'std/**'
+      - '.github/workflows/mcp-server.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'tools/mcp/**'
+      - 'docs/ai/**'
+      - 'std/**'
+      - '.github/workflows/mcp-server.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mcp-server-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  conformance:
+    name: Build server and run protocol tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build the Salam compiler
+        run: make -C c -j"$(nproc)"
+
+      - name: Locate the compiler
+        id: compiler
+        run: |
+          set -eu
+          for candidate in ./salam ./c/salam ./c/build/salam; do
+            if [ -x "$candidate" ]; then
+              echo "path=$candidate" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          echo "could not find a built salam binary" >&2
+          find . -maxdepth 3 -name 'salam' -type f -perm -u+x >&2 || true
+          exit 1
+
+      - name: Build the MCP server
+        env:
+          SALAM: ${{ steps.compiler.outputs.path }}
+        run: |
+          set -eu
+          chmod +x tools/mcp/build.sh
+          tools/mcp/build.sh "$PWD/salam-mcp"
+
+      - name: Run protocol conformance tests
+        env:
+          SALAM_MCP_BIN: ${{ steps.compiler.outputs.path }}
+        run: node tools/mcp/tests/protocol_test.mjs "$PWD/salam-mcp" "$PWD"
+
+      - name: Verify the committed stdlib index is current
+        run: |
+          set -eu
+          # The index is generated from std/, so a stdlib change that does not
+          # regenerate it leaves the committed copy lying to every AI client
+          # that reads it.
+          printf '%s\n' \
+            '{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"salam://stdlib/index.json"}}' \
+            | SALAM_MCP_ROOT="$PWD" SALAM_MCP_BIN="${{ steps.compiler.outputs.path }}" \
+              ./salam-mcp 2>/dev/null > /tmp/index-response.jsonl
+          node -e '
+            const fs = require("fs");
+            const msg = JSON.parse(fs.readFileSync("/tmp/index-response.jsonl", "utf8").trim().split("\n")[0]);
+            const fresh = JSON.stringify(JSON.parse(msg.result.contents[0].text), null, 2) + "\n";
+            const committed = fs.readFileSync("docs/ai/stdlib-index.json", "utf8");
+            if (fresh !== committed) {
+              console.error("docs/ai/stdlib-index.json is stale; regenerate it (see tools/mcp/README.md).");
+              process.exit(1);
+            }
+            console.log("stdlib index is up to date");
+          '

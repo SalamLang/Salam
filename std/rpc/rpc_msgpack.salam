@@ -1,0 +1,229 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package rpc
+
+import encoding.value
+import encoding.msgpack
+import encoding.encerr
+import compress
+
+// MessagePack-RPC (https://github.com/msgpack-rpc/msgpack-rpc/blob/master/spec.md).
+// Three array-shaped message types, all binary:
+//
+//   request       [0, msgid, method, params]
+//   response      [1, msgid, error, result]
+//   notification   [2, method, params]
+//
+// The same registry and the same handlers serve this codec and JSON-RPC;
+// only the encoding differs. Error objects have no standard shape in the
+// MessagePack-RPC spec (the field is "an implementation-defined value"),
+// so this encodes JSON-RPC's `{code, message, data}` map, which is what
+// most cross-language implementations settled on and what this package's
+// own client decodes back into an rpc.Error.
+
+pub const RPC_MP_REQUEST := 0
+pub const RPC_MP_RESPONSE := 1
+pub const RPC_MP_NOTIFY := 2
+
+func _mp_err_value(e: Error): value.Value:
+    mut o := value.NewValueObject()
+    value.ObjectSet(o, "code", value.ValueInt(e.code as i64))
+    value.ObjectSet(o, "message", value.ValueString(e.message))
+    if e.has_data:
+        value.ObjectSet(o, "data", e.data)
+    end
+    ret o
+end
+
+func _mp_value_err(v: value.Value): Error:
+    mut e := Error {}
+    e.code = RPC_SERVER_ERROR
+    if value.IsString(v):
+        e.message = value.AsString(v)
+        ret e
+    end
+    if !value.IsObject(v):
+        e.message = "remote error"
+        ret e
+    end
+    if value.ObjectHas(v, "code"):
+        c := value.ObjectGet(v, "code")
+        if value.IsInt(c) || value.IsFloat(c): e.code = value.AsInt(c) as int end
+    end
+    if value.ObjectHas(v, "message"):
+        m := value.ObjectGet(v, "message")
+        if value.IsString(m): e.message = value.AsString(m) end
+    end
+    if value.ObjectHas(v, "data"):
+        e.data = value.ObjectGet(v, "data")
+        e.has_data = true
+    end
+    ret e
+end
+
+func _mp_params(r: Request): value.Value:
+    if r.has_params && value.IsArray(r.params): ret r.params end
+    if r.has_params:
+        // A named-parameter call has no array form on the wire, so it
+        // travels as a one-element array holding the map - which is what
+        // msgpack-rpc implementations that support named arguments do.
+        mut a := value.NewValueArray()
+        value.ArrayPush(a, r.params)
+        ret a
+    end
+    ret value.NewValueArray()
+end
+
+@en "MsgpackEncodeRequest"
+@fa "کدگذاری درخواست مسگ‌پک"
+@ar "ترمیز طلب مسج‌باک"
+pub func MsgpackEncodeRequest(r: Request): compress.ByteBuf:
+    mut a := value.NewValueArray()
+    if r.has_id:
+        value.ArrayPush(a, value.ValueInt(RPC_MP_REQUEST as i64))
+        value.ArrayPush(a, value.ValueInt(r.msgid))
+        value.ArrayPush(a, value.ValueString(r.method))
+        value.ArrayPush(a, _mp_params(r))
+        ret msgpack.Marshal(a)
+    end
+    value.ArrayPush(a, value.ValueInt(RPC_MP_NOTIFY as i64))
+    value.ArrayPush(a, value.ValueString(r.method))
+    value.ArrayPush(a, _mp_params(r))
+    ret msgpack.Marshal(a)
+end
+
+@en "MsgpackEncodeResponse"
+@fa "کدگذاری پاسخ مسگ‌پک"
+@ar "ترمیز استجابة مسج‌باک"
+pub func MsgpackEncodeResponse(r: Response): compress.ByteBuf:
+    mut a := value.NewValueArray()
+    value.ArrayPush(a, value.ValueInt(RPC_MP_RESPONSE as i64))
+    value.ArrayPush(a, value.ValueInt(r.msgid))
+    if r.is_error:
+        value.ArrayPush(a, _mp_err_value(r.err))
+        value.ArrayPush(a, value.ValueNull())
+        ret msgpack.Marshal(a)
+    end
+    value.ArrayPush(a, value.ValueNull())
+    value.ArrayPush(a, r.result)
+    ret msgpack.Marshal(a)
+end
+
+// MessagePack-RPC has no batch concept: one message per frame. This
+// still returns a Batch so the dispatcher can be shared with JSON-RPC -
+// it just never has more than one element and never sets `is_batch`.
+@en "MsgpackDecodeBatch"
+@fa "کدگشایی دسته مسگ‌پک"
+@ar "فک ترمیز دفعة مسج‌باک"
+pub func MsgpackDecodeBatch(b: compress.ByteBuf): Batch:
+    mut out := Batch {}
+    mut merr := encerr.NoError()
+    v := msgpack.Unmarshal(b, merr)
+    if encerr.IsError(merr):
+        out.ok = false
+        out.err = StdError(RPC_PARSE_ERROR)
+        ret out
+    end
+    if !value.IsArray(v) || value.ArrayLen(v) < 3:
+        out.ok = false
+        out.err = StdError(RPC_INVALID_REQUEST)
+        ret out
+    end
+    kindv := value.ArrayGet(v, 0)
+    if !value.IsInt(kindv):
+        out.ok = false
+        out.err = StdError(RPC_INVALID_REQUEST)
+        ret out
+    end
+    kind := value.AsInt(kindv) as int
+    mut r := Request {}
+    if kind == RPC_MP_REQUEST:
+        if value.ArrayLen(v) < 4:
+            out.ok = false
+            out.err = StdError(RPC_INVALID_REQUEST)
+            ret out
+        end
+        idv := value.ArrayGet(v, 1)
+        namev := value.ArrayGet(v, 2)
+        if !value.IsInt(idv) || !value.IsString(namev):
+            out.ok = false
+            out.err = StdError(RPC_INVALID_REQUEST)
+            ret out
+        end
+        r.msgid = value.AsInt(idv)
+        r.id = value.ValueInt(r.msgid)
+        r.has_id = true
+        r.method = value.AsString(namev)
+        r.params = value.ArrayGet(v, 3)
+        r.has_params = true
+        out.items.push(r)
+        ret out
+    end
+    if kind == RPC_MP_NOTIFY:
+        namev := value.ArrayGet(v, 1)
+        if !value.IsString(namev):
+            out.ok = false
+            out.err = StdError(RPC_INVALID_REQUEST)
+            ret out
+        end
+        r.method = value.AsString(namev)
+        r.params = value.ArrayGet(v, 2)
+        r.has_params = true
+        r.has_id = false
+        out.items.push(r)
+        ret out
+    end
+    out.ok = false
+    out.err = StdError(RPC_INVALID_REQUEST)
+    ret out
+end
+
+@en "MsgpackDecodeResponse"
+@fa "کدگشایی پاسخ مسگ‌پک"
+@ar "فک ترمیز استجابة مسج‌باک"
+pub func MsgpackDecodeResponse(b: compress.ByteBuf, ok &: bool): Response:
+    mut r := Response {}
+    mut merr := encerr.NoError()
+    v := msgpack.Unmarshal(b, merr)
+    if encerr.IsError(merr):
+        ok = false
+        ret r
+    end
+    if !value.IsArray(v) || value.ArrayLen(v) != 4:
+        ok = false
+        ret r
+    end
+    kindv := value.ArrayGet(v, 0)
+    if !value.IsInt(kindv) || value.AsInt(kindv) != (RPC_MP_RESPONSE as i64):
+        ok = false
+        ret r
+    end
+    idv := value.ArrayGet(v, 1)
+    if value.IsInt(idv):
+        r.msgid = value.AsInt(idv)
+        r.id = value.ValueInt(r.msgid)
+        r.has_id = true
+    end
+    ev := value.ArrayGet(v, 2)
+    if !value.IsNull(ev):
+        r.is_error = true
+        r.err = _mp_value_err(ev)
+        ok = true
+        ret r
+    end
+    r.result = value.ArrayGet(v, 3)
+    ok = true
+    ret r
+end

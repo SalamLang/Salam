@@ -35,4 +35,6 @@ fi
 . "$emsdk_dir/emsdk_env.sh"
 
 # tools/ scripts self-anchor to the repository root, so no cd into c/.
-sh tools/bash/update-playground.sh
+# --selfhost matches the two editor CI workflows, so a preview deploy is built
+# by the same compiler as the published playground rather than by the C one.
+sh tools/bash/update-playground.sh --selfhost

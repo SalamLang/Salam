@@ -785,6 +785,39 @@ static bool resolve_auto_cc(char *out, size_t n, bool *bundled)
     return false;
 }
 
+/*
+ * A bare tool name is one we are expected to look up: no directory
+ * component and no flags. Anything else - "gcc -O2", "C:/tools/tcc.exe" -
+ * is a command prefix the caller wrote deliberately and is passed through
+ * untouched.
+ */
+static bool cc_is_bare_name(const char *cc)
+{
+    return cc && cc[0] && !strchr(cc, ' ') && !strchr(cc, '/') && !strchr(cc, '\\');
+}
+
+/*
+ * Locate one named compiler: bundled install tree first, then $PATH. Same
+ * precedence as resolve_auto_cc, minus the ladder - an explicit --cc says
+ * *which* compiler, so only *where it lives* is still an open question.
+ *
+ * Honoring "an explicit --cc is a choice" by skipping resolution entirely
+ * left the bare string for the shell to find, and the bundled toolchain is
+ * not on $PATH: on Windows the tcc a release bundles sits in
+ * <install>/tcc/tcc.exe, so `--cc=tcc` died with cmd.exe's "'tcc' is not
+ * recognized" across every db/ and opencv/ test, which pass --cc=$DBCC.
+ * Choosing the compiler and finding it are separate questions.
+ */
+static bool resolve_named_cc(const char *name, char *out, size_t n, bool *bundled)
+{
+    if (salam_find_bundled_tool(name, out, n)) {
+        *bundled = true;
+        return true;
+    }
+    *bundled = false;
+    return salam_find_path_tool(name, out, n);
+}
+
 static bool build_use_llvm(const options_t *opt)
 {
     if (!strcmp(opt->backend, "c")) return false;
@@ -886,11 +919,18 @@ int driver_build(options_t *opt)
      * identical, so an explicit --cc=tcc was silently resolved away to
      * whatever clang/gcc the ladder found first - which is not a compiler
      * the caller asked for, and on Windows swaps in a gcc that miscompiles
-     * several stdlib paths. An explicit --cc is a choice, not a hint. */
-    if (opt->cc && !opt->cc_explicit && strcmp(opt->cc, "tcc") == 0) {
+     * several stdlib paths. An explicit --cc is a choice, not a hint.
+     *
+     * It still has to be *found*, though: see resolve_named_cc. Only the
+     * ladder is skipped for an explicit --cc, never the lookup. */
+    {
         static char raw_cc[1200], quoted_cc[1208];
-        bool bundled = false;
-        if (resolve_auto_cc(raw_cc, sizeof raw_cc, &bundled)) {
+        bool bundled = false, resolved = false;
+        if (opt->cc && !opt->cc_explicit && strcmp(opt->cc, "tcc") == 0)
+            resolved = resolve_auto_cc(raw_cc, sizeof raw_cc, &bundled);
+        else if (opt->cc && opt->cc_explicit && cc_is_bare_name(opt->cc))
+            resolved = resolve_named_cc(opt->cc, raw_cc, sizeof raw_cc, &bundled);
+        if (resolved) {
             LOG_I(log, PH_DRIVER, "using %s C compiler: %s", bundled ? "bundled" : "host",
                   raw_cc);
 #if !defined(_WIN32)

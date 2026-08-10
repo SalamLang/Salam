@@ -17,6 +17,26 @@ import cg "../codegen/codegen.salam"
 import co "../sal_core.salam"
 import pf "../prof_self.salam"
 
+    // build.c cc_is_bare_name - a tool name we are expected to look up: no
+    // directory component and no flags. Anything else ("gcc -O2",
+    // "C:/tools/tcc.exe") is a command prefix the caller wrote deliberately
+    // and is passed through untouched.
+    func cc_is_bare_name(name: str): bool:
+        if str.Len(name) == 0:
+            ret false
+        end
+        if str.Contains(name, " "):
+            ret false
+        end
+        if str.Contains(name, "/"):
+            ret false
+        end
+        if str.Contains(name, "\\"):
+            ret false
+        end
+        ret true
+    end
+
     // driver/build.c driver_build (the CMD_BUILD/CMD_OBJ shared body; `opt`
     // must have .command already set to CMD_BUILD or CMD_OBJ by the caller).
     func build_impl(opt &: Dr): int:
@@ -142,11 +162,17 @@ import pf "../prof_self.salam"
         end
 
         mut musl_tcc := MuslTcc {}
+        mut resolved := ""
+        mut bundled := false
+        mut found := false
         // opt.cc_explicit is what separates that sentinel from a user who
         // actually typed --cc=tcc. Testing the string alone made the two
         // identical, so an explicit --cc=tcc was silently resolved away to
         // whatever clang/gcc the ladder found first - not a compiler the
         // caller asked for. An explicit --cc is a choice, not a hint.
+        //
+        // It still has to be *found*, though: only the ladder is skipped
+        // for an explicit --cc, never the lookup. See the else-branch.
         if !opt.cc_explicit && str.Equals(opt.cc, "tcc"):
             // clang > gcc > tcc, matching build.c's ladder exactly: clang
             // leads because it is the same codegen family as the LLVM
@@ -165,9 +191,6 @@ import pf "../prof_self.salam"
             // the case it was added for - an install that ships no toolchain
             // at all, most notably a plain source checkout.
             ladder := ["clang", "gcc", "tcc"] as str[3]
-            mut resolved := ""
-            mut bundled := false
-            mut found := false
             repeat ladder.len() with i:
                 if !found:
                     found = sm.FindBundledTool(ladder[i], resolved)
@@ -179,33 +202,44 @@ import pf "../prof_self.salam"
                     found = sm.FindPathTool(ladder[j], resolved)
                 end
             end
-            if found:
-                mut origin := "host"
+        else opt.cc_explicit && cc_is_bare_name(opt.cc):
+            // An explicit --cc says *which* compiler; where it lives is
+            // still an open question, and the bundled toolchain is not on
+            // $PATH. On Windows a release's tcc sits at
+            // <install>/tcc/tcc.exe, so leaving the bare name for the shell
+            // got cmd.exe's "'tcc' is not recognized" on every db/ and
+            // opencv/ test - they all pass --cc=$DBCC. Bundled first, then
+            // $PATH, exactly as the ladder does, minus the ladder.
+            found = sm.FindBundledTool(opt.cc, resolved)
+            bundled = found
+            if !found:
+                found = sm.FindPathTool(opt.cc, resolved)
+            end
+        end
+        if found:
+            mut origin := "host"
+            if bundled:
+                origin = "bundled"
+            end
+            lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "using " + origin + " C compiler: " + resolved)
+            if SALAM_OS_WINDOWS:
+                musl_tcc = MuslTcc {}
+            else:
                 if bundled:
-                    origin = "bundled"
-                end
-                lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "using " + origin + " C compiler: " + resolved)
-                if SALAM_OS_WINDOWS:
-                    musl_tcc = MuslTcc {}
-                else:
-                    if bundled:
-                        musl_tcc = detect_bundled_musl_tcc(resolved)
-                        if musl_tcc.active:
-                            lg.Log(
-                                lgr, lg.PH_DRIVER, lg.LOG_INFO, "using bundled musl sysroot: " + musl_tcc.musl_dir
-                            )
-                        end
+                    musl_tcc = detect_bundled_musl_tcc(resolved)
+                    if musl_tcc.active:
+                        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "using bundled musl sysroot: " + musl_tcc.musl_dir)
                     end
                 end
-                // A --cc= the user typed is a command prefix and may carry
-                // flags, so it goes into the command line verbatim; a path
-                // resolved here is just a path, and $PATH entries like
-                // "C:/Program Files/..." have to be quoted to survive it.
-                if str.Contains(resolved, " "):
-                    opt.cc = "\"" + resolved + "\""
-                else:
-                    opt.cc = resolved
-                end
+            end
+            // A --cc= the user typed is a command prefix and may carry
+            // flags, so it goes into the command line verbatim; a path
+            // resolved here is just a path, and $PATH entries like
+            // "C:/Program Files/..." have to be quoted to survive it.
+            if str.Contains(resolved, " "):
+                opt.cc = "\"" + resolved + "\""
+            else:
+                opt.cc = resolved
             end
         end
 

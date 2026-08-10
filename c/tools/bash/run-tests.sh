@@ -125,23 +125,42 @@ if [ "${1:-}" = "--worker" ]; then
         jobdir="$WORK/exjob_${jobid}_$$"
         mkdir -p "$jobdir"
         exe="$jobdir/a.exe"
+        buildlog="$jobdir/build.log"
         btry=1
         while [ ! -x "$exe" ] && [ "$btry" -le 3 ]; do
             [ "$btry" -gt 1 ] && sleep "$btry"
-            (cd "$jobdir" && "$SALAM_ABS" build "$fabs" --output="$exe" --no-color --log-level=error --lang="$lang") >/dev/null 2>&1
+            (cd "$jobdir" && "$SALAM_ABS" build "$fabs" --output="$exe" --no-color --log-level=error --lang="$lang") >"$buildlog" 2>&1
             btry=$((btry + 1))
         done
+        # produced: 1 once something exists to inspect. Without it a build
+        # that never emitted a binary was reported as "missing expected:
+        # <last line>", i.e. blamed on the program's output, which sent
+        # anyone reading CI after the wrong bug - a compile or link error
+        # and a genuinely wrong line are not the same failure.
+        produced=0
         if [ -x "$exe" ]; then
+            produced=1
             got=$(tmo 20 "$exe" </dev/null 2>&1 | tr -d '\r')
         else
             html="$jobdir/a.html"
             wtry=1
             while [ ! -f "$html" ] && [ "$wtry" -le 3 ]; do
                 [ "$wtry" -gt 1 ] && sleep "$wtry"
-                (cd "$jobdir" && "$SALAM_ABS" web "$fabs" --output="$html" --no-color --log-level=error --lang="$lang") >/dev/null 2>&1
+                (cd "$jobdir" && "$SALAM_ABS" web "$fabs" --output="$html" --no-color --log-level=error --lang="$lang") >"$buildlog" 2>&1
                 wtry=$((wtry + 1))
             done
-            got=$([ -f "$html" ] && tr -d '\r' <"$html")
+            if [ -f "$html" ]; then
+                produced=1
+                got=$(tr -d '\r' <"$html")
+            else
+                got=""
+            fi
+        fi
+        if [ "$produced" -eq 0 ]; then
+            echo "FAIL $label (build failed)"
+            sed 's/^/  /' "$buildlog" 2>/dev/null | head -20
+            rm -rf "$jobdir"
+            return
         fi
         rm -rf "$jobdir"
         ok=1
@@ -152,7 +171,16 @@ if [ "${1:-}" = "--worker" ]; then
             *"$l"*) ;;
             *)
                 ok=0
-                missing="$l"
+                # Every unmatched line, not just the last one to fail. With
+                # only the last kept, a two-line expectation where both
+                # lines were absent looked identical to one where only the
+                # second was, which is exactly the ambiguity that made
+                # interop/en/mysql_demo unreadable from a CI log alone.
+                if [ -z "$missing" ]; then
+                    missing="$l"
+                else
+                    missing="$missing | $l"
+                fi
                 ;;
             esac
         done <"$expabs"

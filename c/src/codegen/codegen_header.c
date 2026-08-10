@@ -964,9 +964,9 @@ static void hdr_impl_prototypes(cg_t *cg, sb_t *h)
                 for (; k < m->overloads.len; k++) {
                     func_sig_t *sig = (func_sig_t *)m->overloads.data[k];
                     if (sig && sig->decl)
-                        sb_puts(h, cg_fmt(cg, "%s;\n",
-                                          func_signature(cg, sig->decl, owner, sig,
-                                                         false)));
+                        sb_puts(h,
+                                cg_fmt(cg, "%s;\n",
+                                       func_signature(cg, sig->decl, owner, sig, false)));
                 }
             }
         }

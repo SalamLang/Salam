@@ -1,0 +1,293 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package graphql
+
+import encoding.value
+import encoding.json
+import conv
+
+// result - the public execution entry points and the response object
+// (spec section 7).
+//
+// The distinction the response format makes, and that ExecutionResult
+// therefore has to keep, is between three states:
+//
+//   - `data` present and non-null: execution ran to completion;
+//   - `data` present and null: execution started but a non-null field
+//     at the top level errored, so the whole data entry nulled out;
+//   - `data` absent entirely: the request failed before execution could
+//     begin (a syntax error, a validation failure, an unknown operation
+//     name, or a variable that would not coerce).
+//
+// `hasData` is what separates the second case from the third, since a
+// null value.Value cannot express "absent" on its own.
+
+@en "ExecutionResult"
+@fa "نتیجه اجرا"
+@ar "نتیجة التنفیذ"
+pub struct ExecutionResult:
+    pub data: value.Value = value.Value {}
+    pub hasData: bool = false
+    pub errors: GqlErrorList = GqlErrorList {}
+    pub extensions: value.Value = value.Value {}
+    pub hasExtensions: bool = false
+end
+
+// ---- private: executor diagnostics ----
+
+func _gql_arg_msg(name: str, detail: str): str:
+    ret "argument " + _gql_quote(name) + " is invalid: " + detail
+end
+
+func _gql_var_msg(name: str, detail: str): str:
+    ret "variable " + _gql_quote("$" + name) + " is invalid: " + detail
+end
+
+func _gql_required_arg_msg(name: str): str:
+    ret "argument " + _gql_quote(name) + " of required type was not provided"
+end
+
+func _gql_required_var_msg(name: str): str:
+    ret "variable " + _gql_quote("$" + name) + " of required type was not provided"
+end
+
+func _gql_bad_var_type_msg(name: str): str:
+    ret "variable " + _gql_quote("$" + name) + " has a type that is not defined in the schema"
+end
+
+func _gql_unknown_field_msg(fieldName: str, typeName: str): str:
+    ret "cannot query field " + _gql_quote(fieldName) + " on type " + _gql_quote(typeName)
+end
+
+func _gql_null_nonnull_msg(): str:
+    ret "cannot return null for a non-nullable field"
+end
+
+func _gql_expected_list_msg(): str:
+    ret "expected a list value for a list type"
+end
+
+func _gql_bad_typename_msg(name: str, abstractName: str): str:
+    ret "__typename " + _gql_quote(name) + " is not a possible type of " + _gql_quote(abstractName)
+end
+
+func _gql_no_typename_msg(abstractName: str): str:
+    ret "cannot determine the concrete type for abstract type " + _gql_quote(abstractName) + ": the resolved object has no __typename"
+end
+
+func _gql_depth_msg(maxDepth: int): str:
+    ret "selection set exceeded the maximum depth of " + conv.FormatInt(maxDepth as i64)
+end
+
+func _gql_no_operation_msg(name: str): str:
+    if name == "":
+        ret "the document contains more than one operation, so an operation name is required"
+    end
+    ret "no operation named " + _gql_quote(name) + " in the document"
+end
+
+func _gql_no_root_msg(opName: str): str:
+    ret "the schema does not define a root type for a " + opName + " operation"
+end
+
+// ---- private: request setup ----
+
+func _res_request_error(message: str): ExecutionResult:
+    r := ExecutionResult {}
+    e := NewError(ERR_REQUEST, message)
+    AddError(r.errors, e)
+    ret r
+end
+
+func _res_from_ex(ex &: Ex, data: value.Value, nulled: bool): ExecutionResult:
+    mut r := ExecutionResult {}
+    r.hasData = true
+    if nulled: r.data = value.ValueNull()
+    else: r.data = data
+    end
+    r.errors = ex.errors
+    ret r
+end
+
+func _res_new_ex(sch: Schema, doc: Document, ctx: value.Value): Ex:
+    mut ex := Ex {}
+    ex.sch = sch
+    ex.doc = doc
+    ex.ctx = ctx
+    ret ex
+end
+
+// spec 6.1 ExecuteRequest, after the operation has been selected.
+func _res_run(ex &: Ex, op: AstOperation, rootValue: value.Value): ExecutionResult:
+    rootType := RootTypeName(ex.sch, op.optype)
+    if rootType == "" || !HasType(ex.sch, rootType):
+        r := _res_request_error(_gql_no_root_msg(OperationTypeName(op.optype)))
+        ret r
+    end
+    mut varsOk := true
+    ex.vars = _ex_coerce_variables(ex, op, ex.vars, varsOk)
+    if !varsOk:
+        mut r := ExecutionResult {}
+        r.errors = ex.errors
+        ret r
+    end
+    mut bubble := false
+    data := _ex_selection_set(ex, rootType, op.selections, rootValue, bubble)
+    ret _res_from_ex(ex, data, bubble)
+end
+
+// ---- public API ----
+
+// Executes a parsed document against a schema.
+//
+// `variables` is the request's raw variable object (an empty object
+// when there are none), `rootValue` is the object the root operation
+// type resolves against, and `ctx` is passed through untouched to every
+// resolver via graphql.Context, which is where a request-scoped
+// database handle or authenticated user belongs.
+@en "Execute"
+@fa "اجرا"
+@ar "تنفیذ"
+pub func Execute(sch: Schema, doc: Document, operationName: str, variables: value.Value, rootValue: value.Value, ctx: value.Value): ExecutionResult:
+    opIdx := FindOperation(doc, operationName)
+    if opIdx < 0: ret _res_request_error(_gql_no_operation_msg(operationName)) end
+    mut ex := _res_new_ex(sch, doc, ctx)
+    ex.vars = variables
+    op := doc.ops.get(opIdx)[0]
+    r := _res_run(ex, op, rootValue)
+    ex.pathKeys.free()
+    ex.pathIdx.free()
+    ret r
+end
+
+// Parses, validates and executes in one call, which is what an HTTP
+// handler wants. A syntax or validation failure short-circuits with no
+// `data` entry, exactly as the spec requires.
+@en "ExecuteSource"
+@fa "اجرای منبع"
+@ar "تنفیذ المصدر"
+pub func ExecuteSource(sch: Schema, source: str, operationName: str, variables: value.Value, rootValue: value.Value, ctx: value.Value): ExecutionResult:
+    mut err := GqlError {}
+    mut doc := Parse(source, err)
+    if err.message != "":
+        FreeDocument(doc)
+        r := ExecutionResult {}
+        AddError(r.errors, err)
+        ret r
+    end
+    mut verrs := Validate(sch, doc)
+    if HasErrors(verrs):
+        FreeDocument(doc)
+        mut r := ExecutionResult {}
+        r.errors = verrs
+        ret r
+    end
+    FreeErrorList(verrs)
+    r := Execute(sch, doc, operationName, variables, rootValue, ctx)
+    FreeDocument(doc)
+    ret r
+end
+
+// The same as ExecuteSource with no variables, root value or context,
+// which is the shape most examples and tests want.
+@en "Run"
+@fa "اجرای ساده"
+@ar "تشغیل"
+pub func Run(sch: Schema, source: str): ExecutionResult:
+    ret ExecuteSource(sch, source, "", value.NewValueObject(), value.NewValueObject(), value.NewValueObject())
+end
+
+@en "SetExtensions"
+@fa "تعیین افزونه‌ها"
+@ar "تعیین الامتدادات"
+pub func SetExtensions(r &: ExecutionResult, ext: value.Value):
+    r.extensions = ext
+    r.hasExtensions = true
+end
+
+// The response as a value.Value with the spec's key order: `errors`
+// first when present, then `data`, then `extensions`.
+@en "ResultToValue"
+@fa "نتیجه به مقدار"
+@ar "النتیجة إلى قیمة"
+pub func ResultToValue(r: ExecutionResult): value.Value:
+    mut o := value.NewValueObject()
+    if HasErrors(r.errors):
+        value.ObjectSet(o, "errors", ErrorsToValue(r.errors))
+    end
+    if r.hasData:
+        value.ObjectSet(o, "data", r.data)
+    end
+    if r.hasExtensions:
+        value.ObjectSet(o, "extensions", r.extensions)
+    end
+    ret o
+end
+
+@en "ResultToJSON"
+@fa "نتیجه به جیسون"
+@ar "النتیجة إلى جیسون"
+pub func ResultToJSON(r: ExecutionResult): str:
+    ret json.EncodeDefault(ResultToValue(r))
+end
+
+@en "ResultToJSONIndent"
+@fa "نتیجه به جیسون با تورفتگی"
+@ar "النتیجة إلى جیسون مزین"
+pub func ResultToJSONIndent(r: ExecutionResult): str:
+    ret json.Indent(json.EncodeDefault(ResultToValue(r)))
+end
+
+// The response with every object's keys in sorted order.
+//
+// Worth knowing why this exists. The spec asks a server to return
+// response keys in the order the query requested them, and this
+// implementation cannot: `data` is an encoding.value tree whose objects
+// are backed by an open-addressing HashMap, so iteration follows bucket
+// order rather than insertion order. Key order carries no meaning to a
+// JSON parser, so nothing breaks, but it does mean the same query can
+// serialise its keys in an order that looks arbitrary. Sorting gives a
+// stable, reproducible byte sequence instead, which is what a test
+// assertion, a response cache key or a diff wants.
+@en "ResultToJSONStable"
+@fa "نتیجه به جیسون پایدار"
+@ar "النتیجة إلى جیسون ثابت"
+pub func ResultToJSONStable(r: ExecutionResult): str:
+    mut opts := json.JSONOptions {}
+    opts.sort_keys = true
+    ret json.Encode(ResultToValue(r), opts)
+end
+
+@en "ResultOk"
+@fa "نتیجه درست"
+@ar "النتیجة سلیمة"
+pub func ResultOk(r: ExecutionResult): bool: ret !HasErrors(r.errors) end
+
+// The first error's message, or the empty string, which keeps a test
+// or a log line from having to walk the list.
+@en "ResultErrorMessage"
+@fa "پیام خطای نتیجه"
+@ar "رسالة خطأ النتیجة"
+pub func ResultErrorMessage(r: ExecutionResult): str:
+    if !HasErrors(r.errors): ret "" end
+    ret ErrorString(ErrorAt(r.errors, 0))
+end
+
+@en "FreeResult"
+@fa "آزادسازی نتیجه"
+@ar "تحریر النتیجة"
+pub func FreeResult(r &: ExecutionResult):
+    FreeErrorList(r.errors)
+end

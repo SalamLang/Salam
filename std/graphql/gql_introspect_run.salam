@@ -1,0 +1,416 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package graphql
+
+import encoding.value
+
+// introspect_run - materialising introspection answers.
+//
+// Each `_in_*_value` function takes the selection set the query asked
+// for and returns an object holding exactly those response keys. The
+// recursion is driven by the selection set rather than by the schema,
+// which is what keeps `__Type.ofType.ofType...` and self-referential
+// types finite.
+//
+// Selection sets are flattened with the same CollectFields the executor
+// uses, so fragments, inline fragments and @skip/@include work inside
+// an introspection query exactly as they do anywhere else.
+
+func _in_bool(includeDeprecated: bool): bool: ret includeDeprecated end
+
+// Reads the `includeDeprecated: Boolean = false` argument that
+// `fields`, `enumValues`, `inputFields` and `args` all take.
+func _in_include_deprecated(ex &: Ex, sel: AstSelection): bool:
+    mut i := 0
+    until i < sel.args.len():
+        a := sel.args.get(i)[0]
+        if a.name == "includeDeprecated":
+            r := LiteralToValue(ex.sch, ex.doc, a.value, ex.vars)
+            if r.ok && value.IsBool(r.value): ret value.AsBool(r.value) end
+        end
+        i += 1
+    end
+    ret false
+end
+
+func _in_str_or_null(s: str): value.Value:
+    if s == "": ret value.ValueNull() end
+    ret value.ValueString(s)
+end
+
+// ---- __InputValue ----
+
+func _in_input_value(ex &: Ex, iv: InputValueDef, sels: Vector<int>): value.Value:
+    mut gs := CollectFields(ex.sch, ex.doc, sels, "__InputValue", ex.vars)
+    defer FreeFieldGroups(gs)
+    mut out := value.NewValueObject()
+    mut i := 0
+    until i < gs.items.len():
+        g := gs.items.get(i)[0]
+        i += 1
+        s := SelectionAt(ex.doc, g.sels.get(0)[0])
+        if s.name == "name": value.ObjectSet(out, g.key, value.ValueString(iv.name))
+        else s.name == "description": value.ObjectSet(out, g.key, _in_str_or_null(iv.description))
+        else s.name == "type":
+            value.ObjectSet(out, g.key, _in_type_from_ref(ex, iv.typeRef, MergeSelections(ex.doc, g)))
+        else s.name == "defaultValue":
+            value.ObjectSet(out, g.key, _in_default_value(ex, iv))
+        else s.name == "isDeprecated": value.ObjectSet(out, g.key, value.ValueBool(iv.deprecated))
+        else s.name == "deprecationReason": value.ObjectSet(out, g.key, _in_str_or_null(iv.deprecationReason))
+        else s.name == "__typename": value.ObjectSet(out, g.key, value.ValueString("__InputValue"))
+        end
+    end
+    ret out
+end
+
+// The spec defines defaultValue as the value printed as GraphQL source,
+// not as a JSON value, which is why this goes through the printer.
+func _in_default_value(ex &: Ex, iv: InputValueDef): value.Value:
+    if !iv.hasDefault: ret value.ValueNull() end
+    ret value.ValueString(PrintValue(ex.sch.doc, iv.defaultValue))
+end
+
+func _in_input_values(ex &: Ex, defs: Vector<InputValueDef>, sels: Vector<int>, includeDeprecated: bool): value.Value:
+    mut out := value.NewValueArray()
+    mut i := 0
+    until i < defs.len():
+        iv := defs.get(i)[0]
+        i += 1
+        if iv.deprecated && !includeDeprecated: continue end
+        value.ArrayPush(out, _in_input_value(ex, iv, sels))
+    end
+    ret out
+end
+
+// ---- __Field ----
+
+func _in_field(ex &: Ex, f: FieldDef, sels: Vector<int>): value.Value:
+    mut gs := CollectFields(ex.sch, ex.doc, sels, "__Field", ex.vars)
+    defer FreeFieldGroups(gs)
+    mut out := value.NewValueObject()
+    mut i := 0
+    until i < gs.items.len():
+        g := gs.items.get(i)[0]
+        i += 1
+        s := SelectionAt(ex.doc, g.sels.get(0)[0])
+        if s.name == "name": value.ObjectSet(out, g.key, value.ValueString(f.name))
+        else s.name == "description": value.ObjectSet(out, g.key, _in_str_or_null(f.description))
+        else s.name == "type":
+            value.ObjectSet(out, g.key, _in_type_from_ref(ex, f.typeRef, MergeSelections(ex.doc, g)))
+        else s.name == "args":
+            value.ObjectSet(out, g.key, _in_input_values(ex, f.args, MergeSelections(ex.doc, g), _in_include_deprecated(ex, s)))
+        else s.name == "isDeprecated": value.ObjectSet(out, g.key, value.ValueBool(f.deprecated))
+        else s.name == "deprecationReason": value.ObjectSet(out, g.key, _in_str_or_null(f.deprecationReason))
+        else s.name == "__typename": value.ObjectSet(out, g.key, value.ValueString("__Field"))
+        end
+    end
+    ret out
+end
+
+func _in_fields(ex &: Ex, t: TypeDef, sels: Vector<int>, includeDeprecated: bool): value.Value:
+    if t.kind != TYPE_OBJECT && t.kind != TYPE_INTERFACE: ret value.ValueNull() end
+    mut out := value.NewValueArray()
+    mut i := 0
+    until i < t.fields.len():
+        f := t.fields.get(i)[0]
+        i += 1
+        if f.deprecated && !includeDeprecated: continue end
+        value.ArrayPush(out, _in_field(ex, f, sels))
+    end
+    ret out
+end
+
+// ---- __EnumValue ----
+
+func _in_enum_value(ex &: Ex, ev: EnumValueDef, sels: Vector<int>): value.Value:
+    mut gs := CollectFields(ex.sch, ex.doc, sels, "__EnumValue", ex.vars)
+    defer FreeFieldGroups(gs)
+    mut out := value.NewValueObject()
+    mut i := 0
+    until i < gs.items.len():
+        g := gs.items.get(i)[0]
+        i += 1
+        s := SelectionAt(ex.doc, g.sels.get(0)[0])
+        if s.name == "name": value.ObjectSet(out, g.key, value.ValueString(ev.name))
+        else s.name == "description": value.ObjectSet(out, g.key, _in_str_or_null(ev.description))
+        else s.name == "isDeprecated": value.ObjectSet(out, g.key, value.ValueBool(ev.deprecated))
+        else s.name == "deprecationReason": value.ObjectSet(out, g.key, _in_str_or_null(ev.deprecationReason))
+        else s.name == "__typename": value.ObjectSet(out, g.key, value.ValueString("__EnumValue"))
+        end
+    end
+    ret out
+end
+
+func _in_enum_values(ex &: Ex, t: TypeDef, sels: Vector<int>, includeDeprecated: bool): value.Value:
+    if t.kind != TYPE_ENUM: ret value.ValueNull() end
+    mut out := value.NewValueArray()
+    mut i := 0
+    until i < t.enumValues.len():
+        ev := t.enumValues.get(i)[0]
+        i += 1
+        if ev.deprecated && !includeDeprecated: continue end
+        value.ArrayPush(out, _in_enum_value(ex, ev, sels))
+    end
+    ret out
+end
+
+// ---- __Type ----
+
+func _in_named_types(ex &: Ex, names: Vector<str>, sels: Vector<int>): value.Value:
+    mut out := value.NewValueArray()
+    mut i := 0
+    until i < names.len():
+        value.ArrayPush(out, _in_type_named(ex, names.get(i)[0], sels))
+        i += 1
+    end
+    ret out
+end
+
+func _in_interfaces(ex &: Ex, t: TypeDef, sels: Vector<int>): value.Value:
+    if t.kind != TYPE_OBJECT && t.kind != TYPE_INTERFACE: ret value.ValueNull() end
+    ret _in_named_types(ex, t.interfaces, sels)
+end
+
+func _in_possible_types(ex &: Ex, t: TypeDef, sels: Vector<int>): value.Value:
+    if t.kind != TYPE_INTERFACE && t.kind != TYPE_UNION: ret value.ValueNull() end
+    mut poss := PossibleTypes(ex.sch, t.name)
+    defer poss.free()
+    ret _in_named_types(ex, poss, sels)
+end
+
+func _in_input_fields(ex &: Ex, t: TypeDef, sels: Vector<int>, includeDeprecated: bool): value.Value:
+    if t.kind != TYPE_INPUT_OBJECT: ret value.ValueNull() end
+    ret _in_input_values(ex, t.inputFields, sels, includeDeprecated)
+end
+
+// One named type as a `__Type` object.
+func _in_type_named(ex &: Ex, name: str, sels: Vector<int>): value.Value:
+    t := FindType(ex.sch, name)
+    if t.kind < 0: ret value.ValueNull() end
+    mut gs := CollectFields(ex.sch, ex.doc, sels, "__Type", ex.vars)
+    defer FreeFieldGroups(gs)
+    mut out := value.NewValueObject()
+    mut i := 0
+    until i < gs.items.len():
+        g := gs.items.get(i)[0]
+        i += 1
+        _in_type_field(ex, t, g, out)
+    end
+    ret out
+end
+
+func _in_type_field(ex &: Ex, t: TypeDef, g: FieldGroup, out &: value.Value):
+    s := SelectionAt(ex.doc, g.sels.get(0)[0])
+    if s.name == "kind": value.ObjectSet(out, g.key, value.ValueString(_in_kind_name(t.kind)))
+    else s.name == "name": value.ObjectSet(out, g.key, value.ValueString(t.name))
+    else s.name == "description": value.ObjectSet(out, g.key, _in_str_or_null(t.description))
+    else s.name == "specifiedByURL": value.ObjectSet(out, g.key, _in_str_or_null(t.specifiedByURL))
+    else s.name == "fields":
+        value.ObjectSet(out, g.key, _in_fields(ex, t, MergeSelections(ex.doc, g), _in_include_deprecated(ex, s)))
+    else s.name == "interfaces":
+        value.ObjectSet(out, g.key, _in_interfaces(ex, t, MergeSelections(ex.doc, g)))
+    else s.name == "possibleTypes":
+        value.ObjectSet(out, g.key, _in_possible_types(ex, t, MergeSelections(ex.doc, g)))
+    else s.name == "enumValues":
+        value.ObjectSet(out, g.key, _in_enum_values(ex, t, MergeSelections(ex.doc, g), _in_include_deprecated(ex, s)))
+    else s.name == "inputFields":
+        value.ObjectSet(out, g.key, _in_input_fields(ex, t, MergeSelections(ex.doc, g), _in_include_deprecated(ex, s)))
+    else s.name == "ofType": value.ObjectSet(out, g.key, value.ValueNull())
+    else s.name == "__typename": value.ObjectSet(out, g.key, value.ValueString("__Type"))
+    end
+end
+
+// A wrapper type (LIST or NON_NULL) as a `__Type` whose only meaningful
+// fields are `kind` and `ofType`.
+func _in_type_wrapper(ex &: Ex, kind: str, innerRef: int, innerPeeled: bool, sels: Vector<int>): value.Value:
+    mut gs := CollectFields(ex.sch, ex.doc, sels, "__Type", ex.vars)
+    defer FreeFieldGroups(gs)
+    mut out := value.NewValueObject()
+    mut i := 0
+    until i < gs.items.len():
+        g := gs.items.get(i)[0]
+        i += 1
+        s := SelectionAt(ex.doc, g.sels.get(0)[0])
+        if s.name == "kind": value.ObjectSet(out, g.key, value.ValueString(kind))
+        else s.name == "ofType":
+            value.ObjectSet(out, g.key, _in_type_ref(ex, innerRef, innerPeeled, MergeSelections(ex.doc, g)))
+        else s.name == "__typename": value.ObjectSet(out, g.key, value.ValueString("__Type"))
+        else: value.ObjectSet(out, g.key, value.ValueNull())
+        end
+    end
+    ret out
+end
+
+// Turns a type reference into the `__Type` chain the spec describes:
+// `[Int!]!` becomes NON_NULL -> LIST -> NON_NULL -> Int.
+//
+// `peeled` says the `!` on this node has already been reported as a
+// NON_NULL wrapper. Tracking it with a flag rather than by appending a
+// nullable copy of the node keeps introspection from writing into a
+// Schema that Ex holds by value; see _ex_complete_value for the same
+// reasoning on the execution side.
+func _in_type_ref(ex &: Ex, refId: int, peeled: bool, sels: Vector<int>): value.Value:
+    t := TypeRefAt(ex.sch.doc, refId)
+    if t.nonNull && !peeled:
+        ret _in_type_wrapper(ex, "NON_NULL", refId, true, sels)
+    end
+    if t.kind == TREF_LIST: ret _in_type_wrapper(ex, "LIST", t.inner, false, sels) end
+    ret _in_type_named(ex, t.name, sels)
+end
+
+func _in_type_from_ref(ex &: Ex, refId: int, sels: Vector<int>): value.Value:
+    ret _in_type_ref(ex, refId, false, sels)
+end
+
+// ---- __Directive ----
+
+func _in_directive(ex &: Ex, d: DirectiveDef, sels: Vector<int>): value.Value:
+    mut gs := CollectFields(ex.sch, ex.doc, sels, "__Directive", ex.vars)
+    defer FreeFieldGroups(gs)
+    mut out := value.NewValueObject()
+    mut i := 0
+    until i < gs.items.len():
+        g := gs.items.get(i)[0]
+        i += 1
+        s := SelectionAt(ex.doc, g.sels.get(0)[0])
+        if s.name == "name": value.ObjectSet(out, g.key, value.ValueString(d.name))
+        else s.name == "description": value.ObjectSet(out, g.key, _in_str_or_null(d.description))
+        else s.name == "isRepeatable": value.ObjectSet(out, g.key, value.ValueBool(d.repeatable))
+        else s.name == "locations": value.ObjectSet(out, g.key, _in_locations(d))
+        else s.name == "args":
+            value.ObjectSet(out, g.key, _in_input_values(ex, d.args, MergeSelections(ex.doc, g), _in_include_deprecated(ex, s)))
+        else s.name == "__typename": value.ObjectSet(out, g.key, value.ValueString("__Directive"))
+        end
+    end
+    ret out
+end
+
+func _in_locations(d: DirectiveDef): value.Value:
+    mut out := value.NewValueArray()
+    mut i := 0
+    until i < d.locations.len():
+        value.ArrayPush(out, value.ValueString(d.locations.get(i)[0]))
+        i += 1
+    end
+    ret out
+end
+
+// ---- __Schema ----
+
+func _in_all_types(ex &: Ex, sels: Vector<int>): value.Value:
+    mut out := value.NewValueArray()
+    mut i := 0
+    until i < TypeCount(ex.sch):
+        t := TypeAt(ex.sch, i)
+        i += 1
+        if _in_is_reserved(t.name): continue end
+        value.ArrayPush(out, _in_type_named(ex, t.name, sels))
+    end
+    ret out
+end
+
+func _in_all_directives(ex &: Ex, sels: Vector<int>): value.Value:
+    mut out := value.NewValueArray()
+    mut i := 0
+    until i < ex.sch.directives.len():
+        value.ArrayPush(out, _in_directive(ex, ex.sch.directives.get(i)[0], sels))
+        i += 1
+    end
+    ret out
+end
+
+func _in_root_type(ex &: Ex, name: str, sels: Vector<int>): value.Value:
+    if name == "" || !HasType(ex.sch, name): ret value.ValueNull() end
+    ret _in_type_named(ex, name, sels)
+end
+
+func _in_schema_value(ex &: Ex, sels: Vector<int>): value.Value:
+    mut gs := CollectFields(ex.sch, ex.doc, sels, "__Schema", ex.vars)
+    defer FreeFieldGroups(gs)
+    mut out := value.NewValueObject()
+    mut i := 0
+    until i < gs.items.len():
+        g := gs.items.get(i)[0]
+        i += 1
+        s := SelectionAt(ex.doc, g.sels.get(0)[0])
+        if s.name == "description": value.ObjectSet(out, g.key, _in_str_or_null(ex.sch.description))
+        else s.name == "types": value.ObjectSet(out, g.key, _in_all_types(ex, MergeSelections(ex.doc, g)))
+        else s.name == "directives": value.ObjectSet(out, g.key, _in_all_directives(ex, MergeSelections(ex.doc, g)))
+        else s.name == "queryType":
+            value.ObjectSet(out, g.key, _in_root_type(ex, ex.sch.queryType, MergeSelections(ex.doc, g)))
+        else s.name == "mutationType":
+            value.ObjectSet(out, g.key, _in_root_type(ex, ex.sch.mutationType, MergeSelections(ex.doc, g)))
+        else s.name == "subscriptionType":
+            value.ObjectSet(out, g.key, _in_root_type(ex, ex.sch.subscriptionType, MergeSelections(ex.doc, g)))
+        else s.name == "__typename": value.ObjectSet(out, g.key, value.ValueString("__Schema"))
+        end
+    end
+    ret out
+end
+
+// The `name:` argument of `__type(name: "X")`.
+func _in_type_arg(ex &: Ex, sel: AstSelection): str:
+    mut i := 0
+    until i < sel.args.len():
+        a := sel.args.get(i)[0]
+        if a.name == "name":
+            r := LiteralToValue(ex.sch, ex.doc, a.value, ex.vars)
+            if r.ok && value.IsString(r.value): ret value.AsString(r.value) end
+        end
+        i += 1
+    end
+    ret ""
+end
+
+// Handles `__schema` and `__type` at the root of a query. Returns false
+// when the field is an ordinary one, leaving it to the executor.
+// `sub` is freed explicitly rather than with `defer`: a deferred free
+// declared inside an `if` block is emitted at function exit, where the
+// block-scoped variable no longer exists.
+func _in_root_field(ex &: Ex, g: FieldGroup, out &: value.Value): bool:
+    s := SelectionAt(ex.doc, g.sels.get(0)[0])
+    if s.name != "__schema" && s.name != "__type": ret false end
+    mut sub := MergeSelections(ex.doc, g)
+    if s.name == "__schema":
+        value.ObjectSet(out, g.key, _in_schema_value(ex, sub))
+        sub.free()
+        ret true
+    end
+    name := _in_type_arg(ex, s)
+    if HasType(ex.sch, name):
+        value.ObjectSet(out, g.key, _in_type_named(ex, name, sub))
+    else:
+        value.ObjectSet(out, g.key, value.ValueNull())
+    end
+    sub.free()
+    ret true
+end
+
+// Validation counterpart: `__schema` and `__type` are only valid on the
+// query root, and their sub-selections are checked against the
+// introspection types registered in the schema.
+func _vs_introspection_field(vx &: Vx, s: AstSelection, parentType: str): bool:
+    if s.name != "__schema" && s.name != "__type": ret false end
+    if parentType != vx.sch.queryType:
+        _vx_error(vx, _gql_unknown_field_msg(s.name, parentType), s.line, s.col)
+        ret true
+    end
+    if s.name == "__schema":
+        _vs_walk(vx, s.selections, "__Schema")
+        ret true
+    end
+    _vs_walk(vx, s.selections, "__Type")
+    ret true
+end

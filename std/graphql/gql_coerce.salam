@@ -1,0 +1,312 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package graphql
+
+import encoding.value
+import conv
+
+// coerce - input coercion (spec 3.13) and result coercion (spec 6.4.3).
+//
+// Two conversions live here and they run in opposite directions.
+//
+// Input coercion turns what arrived (an AST literal in the query, or a
+// value.Value from the request's `variables`) into the value a resolver
+// receives, checked against the declared input type. GraphQL's rules
+// are stricter than JSON's in places (an Int must fit in 32 bits, an
+// enum literal is a name and not a string) and looser in others (a
+// single value coerces into a one-element list, and an Int is accepted
+// where a Float is wanted).
+//
+// Result coercion turns what a resolver returned into what goes on the
+// wire for a leaf type. A resolver that hands back an i64 for a Float
+// field, or a bool where a String was declared, is a bug worth
+// reporting rather than silently reinterpreting, so the checks are the
+// same in both directions.
+
+// A literal or variable failed to coerce. Carrying the reason as a
+// string rather than raising keeps every coercion total, which matters
+// because a single request can produce many independent coercion
+// errors and the spec wants all of them reported.
+@en "CoerceResult"
+@fa "نتیجه تبدیل"
+@ar "نتیجة التحویل"
+pub struct CoerceResult:
+    pub ok: bool = true
+    pub message: str = ""
+    pub value: value.Value = value.Value {}
+end
+
+func _co_fail(message: str): CoerceResult:
+    mut r := CoerceResult { ok = false }
+    r.message = message
+    ret r
+end
+
+func _co_ok(v: value.Value): CoerceResult:
+    mut r := CoerceResult { ok = true }
+    r.value = v
+    ret r
+end
+
+func _co_int_str(n: i64): str: ret conv.FormatInt(n) end
+
+func _co_type_msg(prefix: str, typeName: str, suffix: str): str:
+    ret prefix + typeName + suffix
+end
+
+// ---- literal to runtime value ----
+//
+// Substitutes `$variables` and drops object fields whose value is a
+// variable that was not supplied, which is what lets a default value on
+// an input field apply (spec 6.4.1: an absent variable makes the
+// argument absent rather than null).
+
+func _co_var_missing(vars: value.Value, name: str): bool:
+    ret !value.ObjectHas(vars, name)
+end
+
+func _co_literal_list(sch: Schema, doc: Document, v: AstValue, vars: value.Value): CoerceResult:
+    mut out := value.NewValueArray()
+    mut i := 0
+    until i < v.items.len():
+        r := LiteralToValue(sch, doc, v.items.get(i)[0], vars)
+        if !r.ok: ret r end
+        value.ArrayPush(out, r.value)
+        i += 1
+    end
+    ret _co_ok(out)
+end
+
+func _co_literal_object(sch: Schema, doc: Document, v: AstValue, vars: value.Value): CoerceResult:
+    mut out := value.NewValueObject()
+    mut i := 0
+    until i < v.items.len():
+        childId := v.items.get(i)[0]
+        child := ValueAt(doc, childId)
+        if child.kind == VAL_VARIABLE && _co_var_missing(vars, child.s):
+            i += 1
+            continue
+        end
+        r := LiteralToValue(sch, doc, childId, vars)
+        if !r.ok: ret r end
+        value.ObjectSet(out, v.keys.get(i)[0], r.value)
+        i += 1
+    end
+    ret _co_ok(out)
+end
+
+// ---- scalar coercion ----
+
+func _co_int(v: value.Value): CoerceResult:
+    if value.IsInt(v):
+        n := value.AsInt(v)
+        if n > 2147483647 || n < 0 - 2147483648:
+            ret _co_fail("Int cannot represent value outside 32-bit range: " + _co_int_str(n))
+        end
+        ret _co_ok(value.ValueInt(n))
+    end
+    if value.IsFloat(v):
+        f := value.AsFloat(v)
+        n := f as i64
+        if (n as f64) != f:
+            ret _co_fail("Int cannot represent non-integer value")
+        end
+        ret _co_ok(value.ValueInt(n))
+    end
+    ret _co_fail("Int cannot represent a non-numeric value")
+end
+
+func _co_float(v: value.Value): CoerceResult:
+    if value.IsInt(v): ret _co_ok(value.ValueFloat(value.AsInt(v) as f64)) end
+    if value.IsFloat(v): ret _co_ok(v) end
+    ret _co_fail("Float cannot represent a non-numeric value")
+end
+
+func _co_string(v: value.Value): CoerceResult:
+    if value.IsString(v): ret _co_ok(v) end
+    ret _co_fail("String cannot represent a non-string value")
+end
+
+func _co_boolean(v: value.Value): CoerceResult:
+    if value.IsBool(v): ret _co_ok(v) end
+    ret _co_fail("Boolean cannot represent a non-boolean value")
+end
+
+// ID accepts a string or an integer and always serialises as a string,
+// which is what lets a numeric primary key round-trip (spec 3.5.5).
+func _co_id(v: value.Value): CoerceResult:
+    if value.IsString(v): ret _co_ok(v) end
+    if value.IsInt(v): ret _co_ok(value.ValueString(_co_int_str(value.AsInt(v)))) end
+    ret _co_fail("ID cannot represent a value that is neither a string nor an integer")
+end
+
+func _co_enum(t: TypeDef, v: value.Value): CoerceResult:
+    if !value.IsString(v):
+        ret _co_fail(_co_type_msg("Enum ", t.name, " cannot represent a non-string value"))
+    end
+    name := value.AsString(v)
+    if !HasEnumValue(t, name):
+        ret _co_fail(_co_type_msg("Enum ", t.name, " has no value named " + _gql_quote(name)))
+    end
+    ret _co_ok(v)
+end
+
+func _co_scalar(t: TypeDef, v: value.Value): CoerceResult:
+    if t.name == "Int": ret _co_int(v) end
+    if t.name == "Float": ret _co_float(v) end
+    if t.name == "String": ret _co_string(v) end
+    if t.name == "Boolean": ret _co_boolean(v) end
+    if t.name == "ID": ret _co_id(v) end
+    ret _co_ok(v)
+end
+
+// ---- input object coercion ----
+
+// An input object's field types are InputValueDefs, so their type
+// references always live in the schema's own arena regardless of which
+// arena the enclosing reference came from.
+func _co_input_object_field(sch: Schema, iv: InputValueDef, provided: value.Value, has: bool, out &: value.Value, name: str): str:
+    if has:
+        r := CoerceInput(sch, sch.doc, iv.typeRef, provided)
+        if !r.ok: ret "field " + _gql_quote(name) + ": " + r.message end
+        value.ObjectSet(out, name, r.value)
+        ret ""
+    end
+    if iv.hasDefault:
+        d := LiteralToValue(sch, sch.doc, iv.defaultValue, value.NewValueObject())
+        if d.ok: value.ObjectSet(out, name, d.value) end
+        ret ""
+    end
+    if TypeRefIsNonNull(sch.doc, iv.typeRef):
+        ret "field " + _gql_quote(name) + " of required type is missing"
+    end
+    ret ""
+end
+
+func _co_input_object(sch: Schema, t: TypeDef, v: value.Value): CoerceResult:
+    if !value.IsObject(v):
+        ret _co_fail(_co_type_msg("Input type ", t.name, " expects an object"))
+    end
+    mut out := value.NewValueObject()
+    mut i := 0
+    until i < t.inputFields.len():
+        iv := t.inputFields.get(i)[0]
+        has := value.ObjectHas(v, iv.name)
+        msg := _co_input_object_field(sch, iv, value.ObjectGet(v, iv.name), has, out, iv.name)
+        if msg != "": ret _co_fail(msg) end
+        i += 1
+    end
+    mut keys := value.ObjectKeys(v)
+    defer keys.free()
+    mut j := 0
+    until j < keys.len():
+        k := keys.get(j)[0]
+        if FindInputField(t, k).name == "":
+            ret _co_fail(_co_type_msg("Input type ", t.name, " has no field " + _gql_quote(k)))
+        end
+        j += 1
+    end
+    ret _co_ok(out)
+end
+
+// A non-list value coerces into a single-element list (spec 3.13.1),
+// which is why `ids: 4` is accepted where `[ID!]` is declared.
+func _co_list(sch: Schema, refDoc: Document, elemRef: int, v: value.Value): CoerceResult:
+    if !value.IsArray(v):
+        r := CoerceInput(sch, refDoc, elemRef, v)
+        if !r.ok: ret r end
+        mut single := value.NewValueArray()
+        value.ArrayPush(single, r.value)
+        ret _co_ok(single)
+    end
+    mut out := value.NewValueArray()
+    mut i := 0
+    until i < value.ArrayLen(v):
+        r := CoerceInput(sch, refDoc, elemRef, value.ArrayGet(v, i))
+        if !r.ok: ret _co_fail("at index " + _co_int_str(i as i64) + ": " + r.message) end
+        value.ArrayPush(out, r.value)
+        i += 1
+    end
+    ret _co_ok(out)
+end
+
+// ---- public API ----
+
+// Turns a literal in a document into a runtime value, substituting any
+// `$variable` from `vars`. `doc` is the Document that owns `valueId`,
+// which for a schema default value is `schema.doc`.
+@en "LiteralToValue"
+@fa "تبدیل لفظ به مقدار"
+@ar "تحویل الحرفي إلى قیمة"
+pub func LiteralToValue(sch: Schema, doc: Document, valueId: int, vars: value.Value): CoerceResult:
+    v := ValueAt(doc, valueId)
+    if v.kind == VAL_NULL: ret _co_ok(value.ValueNull()) end
+    if v.kind == VAL_BOOL: ret _co_ok(value.ValueBool(v.b)) end
+    if v.kind == VAL_INT: ret _co_ok(value.ValueInt(v.i)) end
+    if v.kind == VAL_FLOAT: ret _co_ok(value.ValueFloat(v.f)) end
+    if v.kind == VAL_STRING: ret _co_ok(value.ValueString(v.s)) end
+    if v.kind == VAL_ENUM: ret _co_ok(value.ValueString(v.s)) end
+    if v.kind == VAL_LIST: ret _co_literal_list(sch, doc, v, vars) end
+    if v.kind == VAL_OBJECT: ret _co_literal_object(sch, doc, v, vars) end
+    if v.kind == VAL_VARIABLE:
+        if _co_var_missing(vars, v.s): ret _co_ok(value.ValueNull()) end
+        ret _co_ok(value.ObjectGet(vars, v.s))
+    end
+    ret _co_fail("unsupported literal")
+end
+
+// Coerces a runtime value to the input type `typeRef` denotes.
+//
+// `refDoc` is the Document that owns `typeRef`, because the two callers
+// hold their references in different arenas: an argument's declared
+// type comes off an InputValueDef and lives in `sch.doc`, while a
+// variable's declared type was parsed with the query and lives in the
+// query Document. Taking the arena as a parameter is what lets both be
+// coerced without copying a type reference from one arena into the
+// other, which would mean appending to a Schema that callers hold by
+// value and whose backing store a resize could pull out from under
+// them.
+@en "CoerceInput"
+@fa "تبدیل ورودی"
+@ar "تحویل الإدخال"
+pub func CoerceInput(sch: Schema, refDoc: Document, typeRef: int, v: value.Value): CoerceResult:
+    t := TypeRefAt(refDoc, typeRef)
+    if value.IsNull(v):
+        if t.nonNull: ret _co_fail("expected a non-null value, found null") end
+        ret _co_ok(value.ValueNull())
+    end
+    if t.kind == TREF_LIST: ret _co_list(sch, refDoc, t.inner, v) end
+    def := FindType(sch, t.name)
+    if def.kind < 0: ret _co_fail("unknown type " + _gql_quote(t.name)) end
+    if def.kind == TYPE_SCALAR: ret _co_scalar(def, v) end
+    if def.kind == TYPE_ENUM: ret _co_enum(def, v) end
+    if def.kind == TYPE_INPUT_OBJECT: ret _co_input_object(sch, def, v) end
+    ret _co_fail(_co_type_msg("Type ", t.name, " is not an input type"))
+end
+
+// Result coercion for a leaf: checks and normalises what a resolver
+// returned for a scalar or enum field before it goes on the wire.
+@en "CoerceLeafResult"
+@fa "تبدیل نتیجه برگ"
+@ar "تحویل نتیجة الورقة"
+pub func CoerceLeafResult(sch: Schema, typeName: str, v: value.Value): CoerceResult:
+    def := FindType(sch, typeName)
+    if def.kind == TYPE_ENUM:
+        if value.IsString(v): ret _co_enum(def, v) end
+        ret _co_fail(_co_type_msg("Enum ", typeName, " cannot represent a non-string value"))
+    end
+    if def.kind == TYPE_SCALAR: ret _co_scalar(def, v) end
+    ret _co_fail(_co_type_msg("Type ", typeName, " is not a leaf type"))
+end

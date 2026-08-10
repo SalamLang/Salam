@@ -1,0 +1,388 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package graphql
+
+// schema - the runtime type system (spec section 3).
+//
+// A Schema owns a Document purely for its arenas: type references and
+// default values inside a schema are the same AstTypeRef / AstValue
+// nodes the query parser produces, and reusing the arena means one set
+// of accessors and one printer serves both. `schema.doc.ops` and
+// `schema.doc.frags` stay empty; only `trefs` and `vals` are used.
+//
+// An index into `schema.doc` and an index into a query Document are not
+// interchangeable. Every function that takes a value or type-reference
+// id therefore also takes the Document that id belongs to, and the two
+// are never mixed: argument literals come from the query, default
+// values come from the schema.
+
+// type kinds, matching the __TypeKind enum introspection exposes
+pub const TYPE_SCALAR := 0
+pub const TYPE_OBJECT := 1
+pub const TYPE_INTERFACE := 2
+pub const TYPE_UNION := 3
+pub const TYPE_ENUM := 4
+pub const TYPE_INPUT_OBJECT := 5
+
+// A named argument or input-object field.
+@en "InputValueDef"
+@fa "تعریف مقدار ورودی"
+@ar "تعریف قیمة الإدخال"
+pub struct InputValueDef:
+    pub name: str = ""
+    pub description: str = ""
+    pub typeRef: int = 0 - 1
+    pub defaultValue: int = 0 - 1
+    pub hasDefault: bool = false
+    pub deprecated: bool = false
+    pub deprecationReason: str = ""
+end
+
+// A field on an object or interface type.
+//
+// `resolver` is a raw function pointer obtained with `funcptr(...)`, or
+// 0 for "no resolver registered", in which case the executor falls back
+// to reading the field's response key out of the parent object. See
+// gql_resolver.salam for the handler ABI.
+@en "FieldDef"
+@fa "تعریف فیلد"
+@ar "تعریف الحقل"
+pub struct FieldDef:
+    pub name: str = ""
+    pub description: str = ""
+    pub typeRef: int = 0 - 1
+    pub args: Vector<InputValueDef> = Vector {}
+    pub deprecated: bool = false
+    pub deprecationReason: str = ""
+    pub resolver: i64 = 0
+end
+
+@en "EnumValueDef"
+@fa "تعریف مقدار شمارشی"
+@ar "تعریف قیمة التعداد"
+pub struct EnumValueDef:
+    pub name: str = ""
+    pub description: str = ""
+    pub deprecated: bool = false
+    pub deprecationReason: str = ""
+end
+
+// One named type. The fields that do not apply to a given kind stay
+// empty rather than living in separate per-kind structs, which keeps
+// type lookup a single flat scan and keeps introspection, which has to
+// treat every kind uniformly, straightforward.
+@en "TypeDef"
+@fa "تعریف نوع"
+@ar "تعریف النوع"
+pub struct TypeDef:
+    pub kind: int = TYPE_SCALAR
+    pub name: str = ""
+    pub description: str = ""
+    pub fields: Vector<FieldDef> = Vector {}
+    pub inputFields: Vector<InputValueDef> = Vector {}
+    pub interfaces: Vector<str> = Vector {}
+    pub unionMembers: Vector<str> = Vector {}
+    pub enumValues: Vector<EnumValueDef> = Vector {}
+    pub specifiedByURL: str = ""
+end
+
+@en "DirectiveDef"
+@fa "تعریف دستورالعمل"
+@ar "تعریف التوجیه"
+pub struct DirectiveDef:
+    pub name: str = ""
+    pub description: str = ""
+    pub args: Vector<InputValueDef> = Vector {}
+    pub locations: Vector<str> = Vector {}
+    pub repeatable: bool = false
+end
+
+@en "Schema"
+@fa "طرح‌واره"
+@ar "مخطط"
+pub struct Schema:
+    pub doc: Document = Document {}
+    pub types: Vector<TypeDef> = Vector {}
+    pub directives: Vector<DirectiveDef> = Vector {}
+    pub queryType: str = "Query"
+    pub mutationType: str = ""
+    pub subscriptionType: str = ""
+    pub description: str = ""
+    pub hasSchemaDef: bool = false
+end
+
+// ---- private helpers ----
+
+func _sch_find_index(s: Schema, name: str): int:
+    mut i := 0
+    until i < s.types.len():
+        if s.types.get(i)[0].name == name: ret i end
+        i += 1
+    end
+    ret 0 - 1
+end
+
+func _sch_in_names(names: Vector<str>, want: str): bool:
+    mut i := 0
+    until i < names.len():
+        if names.get(i)[0] == want: ret true end
+        i += 1
+    end
+    ret false
+end
+
+// ---- type-reference navigation ----
+//
+// A type reference is one AstTypeRef node per list level, with the
+// trailing `!` recorded as a flag on that same node rather than as a
+// wrapper node. `[Int!]!` is therefore two nodes: a LIST with
+// nonNull=true whose inner is a NAMED "Int" with nonNull=true.
+
+@en "TypeRefIsNonNull"
+@fa "ارجاع نوع ناتهی است"
+@ar "مرجع النوع غیر فارغ"
+pub func TypeRefIsNonNull(doc: Document, id: int): bool:
+    ret TypeRefAt(doc, id).nonNull
+end
+
+@en "TypeRefIsList"
+@fa "ارجاع نوع فهرست است"
+@ar "مرجع النوع قائمة"
+pub func TypeRefIsList(doc: Document, id: int): bool:
+    ret TypeRefAt(doc, id).kind == TREF_LIST
+end
+
+// The element type of a list reference, or -1 for a named reference.
+@en "TypeRefElement"
+@fa "عنصر ارجاع نوع"
+@ar "عنصر مرجع النوع"
+pub func TypeRefElement(doc: Document, id: int): int:
+    t := TypeRefAt(doc, id)
+    if t.kind != TREF_LIST: ret 0 - 1 end
+    ret t.inner
+end
+
+// The innermost named type, looking through every list level.
+@en "TypeRefName"
+@fa "نام ارجاع نوع"
+@ar "اسم مرجع النوع"
+pub func TypeRefName(doc: Document, id: int): str:
+    mut cur := id
+    mut guard := 0
+    until guard < 64:
+        t := TypeRefAt(doc, cur)
+        if t.kind != TREF_LIST: ret t.name end
+        cur = t.inner
+        guard += 1
+    end
+    ret ""
+end
+
+// ---- type lookup ----
+
+@en "FindType"
+@fa "یافتن نوع"
+@ar "إیجاد النوع"
+pub func FindType(s: Schema, name: str): TypeDef:
+    idx := _sch_find_index(s, name)
+    if idx < 0: ret TypeDef { kind = 0 - 1 } end
+    ret s.types.get(idx)[0]
+end
+
+@en "HasType"
+@fa "نوع دارد"
+@ar "یملک النوع"
+pub func HasType(s: Schema, name: str): bool:
+    ret _sch_find_index(s, name) >= 0
+end
+
+@en "TypeIndex"
+@fa "نمایه نوع"
+@ar "فهرس النوع"
+pub func TypeIndex(s: Schema, name: str): int: ret _sch_find_index(s, name) end
+
+@en "TypeCount"
+@fa "تعداد نوع"
+@ar "عدد الأنواع"
+pub func TypeCount(s: Schema): int: ret s.types.len() end
+
+@en "TypeAt"
+@fa "نوع در"
+@ar "النوع عند"
+pub func TypeAt(s: Schema, i: int): TypeDef:
+    if i < 0 || i >= s.types.len(): ret TypeDef { kind = 0 - 1 } end
+    ret s.types.get(i)[0]
+end
+
+@en "FindField"
+@fa "یافتن فیلد"
+@ar "إیجاد الحقل"
+pub func FindField(t: TypeDef, name: str): FieldDef:
+    mut i := 0
+    until i < t.fields.len():
+        if t.fields.get(i)[0].name == name: ret t.fields.get(i)[0] end
+        i += 1
+    end
+    ret FieldDef { typeRef = 0 - 1 }
+end
+
+@en "HasField"
+@fa "فیلد دارد"
+@ar "یملک الحقل"
+pub func HasField(t: TypeDef, name: str): bool:
+    ret FindField(t, name).name != ""
+end
+
+@en "FindInputField"
+@fa "یافتن فیلد ورودی"
+@ar "إیجاد حقل الإدخال"
+pub func FindInputField(t: TypeDef, name: str): InputValueDef:
+    mut i := 0
+    until i < t.inputFields.len():
+        if t.inputFields.get(i)[0].name == name: ret t.inputFields.get(i)[0] end
+        i += 1
+    end
+    ret InputValueDef { typeRef = 0 - 1 }
+end
+
+@en "FindArg"
+@fa "یافتن آرگومان"
+@ar "إیجاد الوسیط"
+pub func FindArg(f: FieldDef, name: str): InputValueDef:
+    mut i := 0
+    until i < f.args.len():
+        if f.args.get(i)[0].name == name: ret f.args.get(i)[0] end
+        i += 1
+    end
+    ret InputValueDef { typeRef = 0 - 1 }
+end
+
+@en "FindDirectiveDef"
+@fa "یافتن تعریف دستورالعمل"
+@ar "إیجاد تعریف التوجیه"
+pub func FindDirectiveDef(s: Schema, name: str): DirectiveDef:
+    mut i := 0
+    until i < s.directives.len():
+        if s.directives.get(i)[0].name == name: ret s.directives.get(i)[0] end
+        i += 1
+    end
+    ret DirectiveDef {}
+end
+
+@en "HasEnumValue"
+@fa "مقدار شمارشی دارد"
+@ar "یملک قیمة التعداد"
+pub func HasEnumValue(t: TypeDef, name: str): bool:
+    mut i := 0
+    until i < t.enumValues.len():
+        if t.enumValues.get(i)[0].name == name: ret true end
+        i += 1
+    end
+    ret false
+end
+
+// ---- kind predicates ----
+
+@en "IsInputType"
+@fa "نوع ورودی است"
+@ar "نوع إدخال"
+pub func IsInputType(s: Schema, name: str): bool:
+    k := FindType(s, name).kind
+    ret k == TYPE_SCALAR || k == TYPE_ENUM || k == TYPE_INPUT_OBJECT
+end
+
+@en "IsOutputType"
+@fa "نوع خروجی است"
+@ar "نوع إخراج"
+pub func IsOutputType(s: Schema, name: str): bool:
+    k := FindType(s, name).kind
+    ret k == TYPE_SCALAR || k == TYPE_ENUM || k == TYPE_OBJECT || k == TYPE_INTERFACE || k == TYPE_UNION
+end
+
+// Interfaces and unions are the two abstract kinds: a value of such a
+// type is always some concrete object type at runtime.
+@en "IsAbstractType"
+@fa "نوع انتزاعی است"
+@ar "نوع مجرد"
+pub func IsAbstractType(s: Schema, name: str): bool:
+    k := FindType(s, name).kind
+    ret k == TYPE_INTERFACE || k == TYPE_UNION
+end
+
+@en "IsLeafType"
+@fa "نوع برگ است"
+@ar "نوع ورقي"
+pub func IsLeafType(s: Schema, name: str): bool:
+    k := FindType(s, name).kind
+    ret k == TYPE_SCALAR || k == TYPE_ENUM
+end
+
+// True when a value of concrete object type `objectName` satisfies a
+// fragment or field type condition naming `abstractName` (spec 6.4.2
+// DoesFragmentTypeApply): the same type, an interface it implements, or
+// a union it is a member of.
+@en "IsPossibleType"
+@fa "نوع ممکن است"
+@ar "نوع ممکن"
+pub func IsPossibleType(s: Schema, abstractName: str, objectName: str): bool:
+    if abstractName == objectName: ret true end
+    at := FindType(s, abstractName)
+    if at.kind == TYPE_UNION: ret _sch_in_names(at.unionMembers, objectName) end
+    if at.kind == TYPE_INTERFACE:
+        ot := FindType(s, objectName)
+        ret _sch_in_names(ot.interfaces, abstractName)
+    end
+    ret false
+end
+
+// Every object type that can occur where `name` is expected.
+@en "PossibleTypes"
+@fa "انواع ممکن"
+@ar "الأنواع الممکنة"
+pub func PossibleTypes(s: Schema, name: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    t := FindType(s, name)
+    if t.kind == TYPE_UNION:
+        mut i := 0
+        until i < t.unionMembers.len():
+            out.push(t.unionMembers.get(i)[0])
+            i += 1
+        end
+        ret out
+    end
+    if t.kind == TYPE_OBJECT:
+        out.push(name)
+        ret out
+    end
+    if t.kind != TYPE_INTERFACE: ret out end
+    mut j := 0
+    until j < s.types.len():
+        ot := s.types.get(j)[0]
+        if ot.kind == TYPE_OBJECT && _sch_in_names(ot.interfaces, name):
+            out.push(ot.name)
+        end
+        j += 1
+    end
+    ret out
+end
+
+@en "RootTypeName"
+@fa "نام نوع ریشه"
+@ar "اسم نوع الجذر"
+pub func RootTypeName(s: Schema, optype: int): str:
+    if optype == OP_MUTATION: ret s.mutationType end
+    if optype == OP_SUBSCRIPTION: ret s.subscriptionType end
+    ret s.queryType
+end

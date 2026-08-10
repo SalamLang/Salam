@@ -1,0 +1,324 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package graphql
+
+import encoding.value
+
+// validate_sel - the validation rules that need a recursive walk of a
+// selection set, carrying the type each set is selected against:
+//
+//   5.3.1  field selections must exist on the type
+//   5.3.3  leaf fields take no sub-selection, composite fields require one
+//   5.4.1  argument names must be defined
+//   5.4.2  argument uniqueness
+//   5.4.2.1 required arguments must be present
+//   5.5.2.3 fragment spread type must be compatible with its parent
+//   5.6.1  literal values must fit their declared type
+//   5.7.1  directives must be defined
+//   5.7.2  directives must be in a valid location
+//   5.7.3  directives are unique per location
+//
+// A field whose type is unknown stops the walk into its sub-selections:
+// continuing would report a cascade of "field does not exist" errors
+// caused by a single unknown parent type.
+
+func _vs_dup(names: Vector<str>, name: str): bool:
+    mut i := 0
+    until i < names.len():
+        if names.get(i)[0] == name: ret true end
+        i += 1
+    end
+    ret false
+end
+
+// ---- 5.7 directives ----
+
+func _vs_location_allowed(d: DirectiveDef, want: str): bool:
+    mut i := 0
+    until i < d.locations.len():
+        if d.locations.get(i)[0] == want: ret true end
+        i += 1
+    end
+    ret false
+end
+
+func _vs_directives(vx &: Vx, ds: Vector<AstDirective>, location: str):
+    mut seen := Vector {} as Vector<str>
+    defer seen.free()
+    mut i := 0
+    until i < ds.len():
+        d := ds.get(i)[0]
+        i += 1
+        def := FindDirectiveDef(vx.sch, d.name)
+        if def.name == "":
+            _vx_error(vx, _gql_unknown_directive_msg(d.name), d.line, 0)
+            continue
+        end
+        if !_vs_location_allowed(def, location):
+            _vx_error(vx, _gql_directive_location_msg(d.name, location), d.line, 0)
+        end
+        if !def.repeatable && _vs_dup(seen, d.name):
+            _vx_error(vx, _gql_dup_directive_msg(d.name), d.line, 0)
+        end
+        seen.push(d.name)
+        _vs_arguments(vx, def.args, d.args, d.name, true, d.line)
+    end
+end
+
+// ---- 5.4 arguments ----
+
+// Shared by fields and directives: `defs` is what the schema declares,
+// `args` is what the document supplied.
+func _vs_arguments(vx &: Vx, defs: Vector<InputValueDef>, args: Vector<AstArgument>, owner: str, isDirective: bool, line: int):
+    mut seen := Vector {} as Vector<str>
+    defer seen.free()
+    mut i := 0
+    until i < args.len():
+        a := args.get(i)[0]
+        i += 1
+        if _vs_dup(seen, a.name):
+            _vx_error(vx, _gql_dup_argument_msg(a.name), a.line, 0)
+        end
+        seen.push(a.name)
+        def := _vs_find_arg(defs, a.name)
+        if def.name == "":
+            _vx_error(vx, _gql_unknown_argument_msg(a.name, owner, isDirective), a.line, 0)
+            continue
+        end
+        _vs_value(vx, a.value, def.typeRef, a.name, a.line)
+    end
+    _vs_required_arguments(vx, defs, args, owner, isDirective, line)
+end
+
+func _vs_find_arg(defs: Vector<InputValueDef>, name: str): InputValueDef:
+    mut i := 0
+    until i < defs.len():
+        if defs.get(i)[0].name == name: ret defs.get(i)[0] end
+        i += 1
+    end
+    ret InputValueDef { typeRef = 0 - 1 }
+end
+
+func _vs_arg_present(args: Vector<AstArgument>, name: str): bool:
+    mut i := 0
+    until i < args.len():
+        if args.get(i)[0].name == name: ret true end
+        i += 1
+    end
+    ret false
+end
+
+// 5.4.2.1: an argument of a non-null type with no default must be
+// supplied, and must not be supplied as an explicit null.
+func _vs_required_arguments(vx &: Vx, defs: Vector<InputValueDef>, args: Vector<AstArgument>, owner: str, isDirective: bool, line: int):
+    mut i := 0
+    until i < defs.len():
+        def := defs.get(i)[0]
+        i += 1
+        if !TypeRefIsNonNull(vx.sch.doc, def.typeRef): continue end
+        if def.hasDefault: continue end
+        if !_vs_arg_present(args, def.name):
+            _vx_error(vx, _gql_missing_argument_msg(def.name, owner, isDirective), line, 0)
+        end
+    end
+end
+
+// ---- 5.6 values ----
+
+// Checks a literal against the type it is being supplied for. A
+// variable is accepted here and checked by the variable rules instead,
+// since its value is not known until the request arrives.
+func _vs_value(vx &: Vx, valueId: int, typeRef: int, argName: str, line: int):
+    if typeRef < 0: ret end
+    v := ValueAt(vx.doc, valueId)
+    if v.kind == VAL_VARIABLE: ret end
+    if _vs_value_has_variable(vx, valueId): ret end
+    lit := LiteralToValue(vx.sch, vx.doc, valueId, value.NewValueObject())
+    if !lit.ok:
+        _vx_error(vx, _gql_arg_msg(argName, lit.message), line, 0)
+        ret
+    end
+    // `typeRef` comes off an InputValueDef, so it already indexes the
+    // schema's arena; the literal is the only thing from the document.
+    r := CoerceInput(vx.sch, vx.sch.doc, typeRef, lit.value)
+    if !r.ok:
+        _vx_error(vx, _gql_arg_msg(argName, r.message), line, 0)
+    end
+end
+
+// A literal containing a variable anywhere inside it cannot be checked
+// statically, so the whole literal is left to runtime coercion.
+func _vs_value_has_variable(vx: Vx, valueId: int): bool:
+    v := ValueAt(vx.doc, valueId)
+    if v.kind == VAL_VARIABLE: ret true end
+    mut i := 0
+    until i < v.items.len():
+        if _vs_value_has_variable(vx, v.items.get(i)[0]): ret true end
+        i += 1
+    end
+    ret false
+end
+
+// ---- 5.3 fields ----
+
+func _vs_field_def(vx: Vx, typeName: str, fieldName: str): FieldDef:
+    t := FindType(vx.sch, typeName)
+    f := FindField(t, fieldName)
+    if f.name != "": ret f end
+    mut i := 0
+    until i < t.interfaces.len():
+        it := FindType(vx.sch, t.interfaces.get(i)[0])
+        itf := FindField(it, fieldName)
+        if itf.name != "": ret itf end
+        i += 1
+    end
+    ret FieldDef { typeRef = 0 - 1 }
+end
+
+// __typename is valid on every composite type and takes no arguments
+// and no sub-selection.
+func _vs_meta_field(vx &: Vx, s: AstSelection): bool:
+    if s.name != "__typename": ret false end
+    if s.selections.len() > 0:
+        _vx_error(vx, _gql_leaf_selection_msg(s.name, "String"), s.line, s.col)
+    end
+    ret true
+end
+
+// 5.3.3: a scalar or enum field must not have a sub-selection, and an
+// object, interface or union field must have one.
+func _vs_selection_shape(vx &: Vx, s: AstSelection, typeName: str):
+    if IsLeafType(vx.sch, typeName):
+        if s.selections.len() > 0:
+            _vx_error(vx, _gql_leaf_selection_msg(s.name, typeName), s.line, s.col)
+        end
+        ret
+    end
+    if s.selections.len() == 0:
+        _vx_error(vx, _gql_missing_selection_msg(s.name, typeName), s.line, s.col)
+    end
+end
+
+func _vs_field(vx &: Vx, s: AstSelection, parentType: str):
+    _vs_directives(vx, s.directives, "FIELD")
+    if _vs_meta_field(vx, s): ret end
+    if _vs_introspection_field(vx, s, parentType): ret end
+    def := _vs_field_def(vx, parentType, s.name)
+    if def.typeRef < 0:
+        _vx_error(vx, _gql_unknown_field_msg(s.name, parentType), s.line, s.col)
+        ret
+    end
+    _vs_arguments(vx, def.args, s.args, s.name, false, s.line)
+    typeName := TypeRefName(vx.sch.doc, def.typeRef)
+    _vs_selection_shape(vx, s, typeName)
+    if s.selections.len() > 0:
+        _vs_walk(vx, s.selections, typeName)
+    end
+end
+
+// ---- 5.5.2.3 fragment spread compatibility ----
+
+// A spread is only meaningful when its type condition and the enclosing
+// type can both be satisfied by at least one concrete object type.
+func _vs_types_overlap(vx: Vx, a: str, b: str): bool:
+    if a == b: ret true end
+    mut pa := PossibleTypes(vx.sch, a)
+    defer pa.free()
+    mut pb := PossibleTypes(vx.sch, b)
+    defer pb.free()
+    mut i := 0
+    until i < pa.len():
+        mut j := 0
+        until j < pb.len():
+            if pa.get(i)[0] == pb.get(j)[0]: ret true end
+            j += 1
+        end
+        i += 1
+    end
+    ret false
+end
+
+func _vs_spread(vx &: Vx, s: AstSelection, parentType: str):
+    _vs_directives(vx, s.directives, "FRAGMENT_SPREAD")
+    idx := FindFragment(vx.doc, s.name)
+    if idx < 0: ret end
+    cond := vx.doc.frags.get(idx)[0].typeCondition
+    if !HasType(vx.sch, cond): ret end
+    if !_vs_types_overlap(vx, cond, parentType):
+        _vx_error(vx, _gql_spread_incompatible_msg(s.name, cond, parentType), s.line, s.col)
+    end
+end
+
+func _vs_inline(vx &: Vx, s: AstSelection, parentType: str):
+    _vs_directives(vx, s.directives, "INLINE_FRAGMENT")
+    mut inner := parentType
+    if s.hasTypeCondition:
+        _v_check_condition(vx, s.typeCondition, s.line)
+        if !HasType(vx.sch, s.typeCondition): ret end
+        if !_vs_types_overlap(vx, s.typeCondition, parentType):
+            _vx_error(vx, _gql_inline_incompatible_msg(s.typeCondition, parentType), s.line, s.col)
+            ret
+        end
+        inner = s.typeCondition
+    end
+    _vs_walk(vx, s.selections, inner)
+end
+
+func _vs_walk(vx &: Vx, sels: Vector<int>, parentType: str):
+    if !HasType(vx.sch, parentType): ret end
+    mut i := 0
+    until i < sels.len():
+        s := SelectionAt(vx.doc, sels.get(i)[0])
+        i += 1
+        if s.kind == SEL_FIELD: _vs_field(vx, s, parentType)
+        else s.kind == SEL_FRAGMENT_SPREAD: _vs_spread(vx, s, parentType)
+        else: _vs_inline(vx, s, parentType)
+        end
+    end
+end
+
+// ---- entry points used by Validate ----
+
+func _v_operation_selections(vx &: Vx, op: AstOperation):
+    mut location := "QUERY"
+    if op.optype == OP_MUTATION: location = "MUTATION" end
+    if op.optype == OP_SUBSCRIPTION: location = "SUBSCRIPTION" end
+    _vs_directives(vx, op.directives, location)
+    root := RootTypeName(vx.sch, op.optype)
+    if root == "" || !HasType(vx.sch, root): ret end
+    _vs_walk(vx, op.selections, root)
+    if op.optype == OP_SUBSCRIPTION: _vs_single_root_field(vx, op) end
+end
+
+// 5.2.3.1: a subscription operation must select exactly one root field.
+func _vs_single_root_field(vx &: Vx, op: AstOperation):
+    root := RootTypeName(vx.sch, op.optype)
+    mut gs := CollectFields(vx.sch, vx.doc, op.selections, root, value.NewValueObject())
+    defer FreeFieldGroups(gs)
+    if gs.items.len() != 1:
+        _vx_error(vx, _gql_single_root_field_msg(), op.line, 0)
+    end
+end
+
+func _v_fragment_selections(vx &: Vx):
+    mut i := 0
+    until i < vx.doc.frags.len():
+        f := vx.doc.frags.get(i)[0]
+        i += 1
+        _vs_directives(vx, f.directives, "FRAGMENT_DEFINITION")
+        if !HasType(vx.sch, f.typeCondition): continue end
+        _vs_walk(vx, f.selections, f.typeCondition)
+    end
+end

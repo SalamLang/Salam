@@ -1,0 +1,294 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "net/http2"
+@fa "اچ تی تی پی ۲"
+@ar "اتش تی تی بی ۲"
+package http2
+
+import compress
+
+// HTTP/2 (RFC 7540) framing and HPACK header compression (RFC 7541),
+// written from scratch on top of net/internal/rawsock - no libnghttp2,
+// no external dependency of any kind.
+//
+// The layering is deliberate:
+//
+//   h2frame.salam         the nine frame types: read/write, flags,
+//                         padding, the 9-octet header
+//   hpack_huffman.salam   RFC 7541 Appendix B's canonical Huffman code
+//   hpack.salam           integer/string primitives, the 61-entry static
+//                         table, the evicting dynamic table, and the
+//                         encoder/decoder that sit on them
+//   h2conn.salam          a connection: preface, SETTINGS exchange,
+//                         stream ids, flow-control windows, and the
+//                         read loop that reassembles CONTINUATION runs
+//
+// What this is for: std/grpc is built directly on it, and anything else
+// needing real HTTP/2 (a client that must talk to an h2-only server, a
+// server pushing many concurrent streams down one socket) can use it
+// without going through gRPC.
+//
+// Scope, stated honestly: server push (PUSH_PROMISE) is parsed and
+// rejected rather than acted on, and stream priority is parsed and
+// ignored - both are optional for a conforming peer, and both were
+// deprecated in RFC 9113. Flow control is implemented for real (per
+// stream and per connection, with WINDOW_UPDATE both directions).
+
+// The 24-byte client connection preface, sent before anything else.
+pub const H2_PREFACE := "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
+
+// ---- frame types (RFC 7540 section 6) ----
+
+pub const H2_DATA := 0
+pub const H2_HEADERS := 1
+pub const H2_PRIORITY := 2
+pub const H2_RST_STREAM := 3
+pub const H2_SETTINGS := 4
+pub const H2_PUSH_PROMISE := 5
+pub const H2_PING := 6
+pub const H2_GOAWAY := 7
+pub const H2_WINDOW_UPDATE := 8
+pub const H2_CONTINUATION := 9
+
+// ---- frame flags ----
+
+pub const H2_FLAG_END_STREAM := 1
+pub const H2_FLAG_ACK := 1
+pub const H2_FLAG_END_HEADERS := 4
+pub const H2_FLAG_PADDED := 8
+pub const H2_FLAG_PRIORITY := 32
+
+// ---- settings identifiers ----
+
+pub const H2_SETTINGS_HEADER_TABLE_SIZE := 1
+pub const H2_SETTINGS_ENABLE_PUSH := 2
+pub const H2_SETTINGS_MAX_CONCURRENT_STREAMS := 3
+pub const H2_SETTINGS_INITIAL_WINDOW_SIZE := 4
+pub const H2_SETTINGS_MAX_FRAME_SIZE := 5
+pub const H2_SETTINGS_MAX_HEADER_LIST_SIZE := 6
+
+// ---- error codes (RFC 7540 section 7) ----
+
+pub const H2_NO_ERROR := 0
+pub const H2_PROTOCOL_ERROR := 1
+pub const H2_INTERNAL_ERROR := 2
+pub const H2_FLOW_CONTROL_ERROR := 3
+pub const H2_SETTINGS_TIMEOUT := 4
+pub const H2_STREAM_CLOSED := 5
+pub const H2_FRAME_SIZE_ERROR := 6
+pub const H2_REFUSED_STREAM := 7
+pub const H2_CANCEL := 8
+pub const H2_COMPRESSION_ERROR := 9
+pub const H2_CONNECT_ERROR := 10
+pub const H2_ENHANCE_YOUR_CALM := 11
+pub const H2_INADEQUATE_SECURITY := 12
+pub const H2_HTTP_1_1_REQUIRED := 13
+
+// ---- protocol defaults ----
+
+pub const H2_DEFAULT_FRAME_SIZE := 16384
+pub const H2_DEFAULT_WINDOW := 65535
+pub const H2_DEFAULT_TABLE_SIZE := 4096
+pub const H2_MAX_FRAME_LIMIT := 16777215
+
+// ---- stream states ----
+
+pub const H2_STREAM_IDLE := 0
+pub const H2_STREAM_OPEN := 1
+pub const H2_STREAM_HALF_CLOSED_LOCAL := 2
+pub const H2_STREAM_HALF_CLOSED_REMOTE := 3
+pub const H2_STREAM_CLOSED_STATE := 4
+
+@en "Frame"
+@fa "قاب"
+@ar "إطار"
+pub struct Frame:
+    pub kind: int = 0
+    pub flags: int = 0
+    pub stream_id: int = 0
+    pub payload: compress.ByteBuf = compress.ByteBuf {}
+    pub ok: bool = false
+end
+
+@en "Header"
+@fa "سرآیند"
+@ar "ترویسة"
+pub struct Header:
+    pub name: str = ""
+    pub value: str = ""
+    // Marks a header that must never enter a dynamic table anywhere on
+    // the path (RFC 7541 section 7.1.3 - the "never indexed" form).
+    // Authorization and Cookie carrying a session token are the usual
+    // cases.
+    pub sensitive: bool = false
+end
+
+@en "HeaderList"
+@fa "فهرست سرآیندها"
+@ar "قائمة الترویسات"
+pub struct HeaderList:
+    pub items: Vector<Header> = Vector {}
+end
+
+// The evicting dynamic table shared by an encoder or a decoder. Entries
+// are appended at the end and indexed from the end (index 1 is the
+// newest, per RFC 7541 section 2.3.3); eviction advances `head` instead
+// of shifting the whole vector, and the vector is only rebuilt once the
+// dead prefix gets large.
+@en "DynTable"
+@fa "جدول پویا"
+@ar "جدول دینامیکی"
+pub struct DynTable:
+    pub items: Vector<Header> = Vector {}
+    pub head: int = 0
+    pub size: int = 0
+    pub max_size: int = 4096
+end
+
+// Canonical-Huffman decoding tables, derived once from the static code
+// table (see hpack_huffman.salam) and cached in a module global.
+@en "HufTables"
+@fa "جدول‌های هافمن"
+@ar "جداول هوفمان"
+pub struct HufTables:
+    pub counts: Vector<int> = Vector {}
+    pub first: Vector<int> = Vector {}
+    pub syms: Vector<int> = Vector {}
+    pub ready: bool = false
+end
+
+@en "Settings"
+@fa "تنظیمات"
+@ar "إعدادات"
+pub struct Settings:
+    pub header_table_size: int = 4096
+    pub enable_push: int = 1
+    pub max_concurrent_streams: int = 0 - 1
+    pub initial_window_size: int = 65535
+    pub max_frame_size: int = 16384
+    pub max_header_list_size: int = 0 - 1
+end
+
+@en "FrameTypeName"
+@fa "نام نوع قاب"
+@ar "اسم نوع الإطار"
+pub func FrameTypeName(kind: int): str:
+    if kind == H2_DATA: ret "DATA" end
+    if kind == H2_HEADERS: ret "HEADERS" end
+    if kind == H2_PRIORITY: ret "PRIORITY" end
+    if kind == H2_RST_STREAM: ret "RST_STREAM" end
+    if kind == H2_SETTINGS: ret "SETTINGS" end
+    if kind == H2_PUSH_PROMISE: ret "PUSH_PROMISE" end
+    if kind == H2_PING: ret "PING" end
+    if kind == H2_GOAWAY: ret "GOAWAY" end
+    if kind == H2_WINDOW_UPDATE: ret "WINDOW_UPDATE" end
+    if kind == H2_CONTINUATION: ret "CONTINUATION" end
+    ret "UNKNOWN"
+end
+
+@en "ErrorName"
+@fa "نام خطا"
+@ar "اسم الخطأ"
+pub func ErrorName(code: int): str:
+    if code == H2_NO_ERROR: ret "NO_ERROR" end
+    if code == H2_PROTOCOL_ERROR: ret "PROTOCOL_ERROR" end
+    if code == H2_INTERNAL_ERROR: ret "INTERNAL_ERROR" end
+    if code == H2_FLOW_CONTROL_ERROR: ret "FLOW_CONTROL_ERROR" end
+    if code == H2_SETTINGS_TIMEOUT: ret "SETTINGS_TIMEOUT" end
+    if code == H2_STREAM_CLOSED: ret "STREAM_CLOSED" end
+    if code == H2_FRAME_SIZE_ERROR: ret "FRAME_SIZE_ERROR" end
+    if code == H2_REFUSED_STREAM: ret "REFUSED_STREAM" end
+    if code == H2_CANCEL: ret "CANCEL" end
+    if code == H2_COMPRESSION_ERROR: ret "COMPRESSION_ERROR" end
+    if code == H2_CONNECT_ERROR: ret "CONNECT_ERROR" end
+    if code == H2_ENHANCE_YOUR_CALM: ret "ENHANCE_YOUR_CALM" end
+    if code == H2_INADEQUATE_SECURITY: ret "INADEQUATE_SECURITY" end
+    if code == H2_HTTP_1_1_REQUIRED: ret "HTTP_1_1_REQUIRED" end
+    ret "UNKNOWN"
+end
+
+@en "NewHeader"
+@fa "سرآیند جدید"
+@ar "ترویسة جدیدة"
+pub func NewHeader(name: str, value: str): Header:
+    mut h := Header {}
+    h.name = name
+    h.value = value
+    ret h
+end
+
+@en "NewSensitiveHeader"
+@fa "سرآیند حساس"
+@ar "ترویسة حساسة"
+pub func NewSensitiveHeader(name: str, value: str): Header:
+    mut h := Header {}
+    h.name = name
+    h.value = value
+    h.sensitive = true
+    ret h
+end
+
+@en "HeadersAdd"
+@fa "افزودن سرآیند"
+@ar "إضافة ترویسة"
+pub func HeadersAdd(hl &: HeaderList, name: str, value: str):
+    hl.items.push(NewHeader(name, value))
+end
+
+@en "HeadersAddSensitive"
+@fa "افزودن سرآیند حساس"
+@ar "إضافة ترویسة حساسة"
+pub func HeadersAddSensitive(hl &: HeaderList, name: str, value: str):
+    hl.items.push(NewSensitiveHeader(name, value))
+end
+
+@en "HeadersGet"
+@fa "دریافت سرآیند"
+@ar "جلب الترویسة"
+pub func HeadersGet(hl: HeaderList, name: str): str:
+    mut i := 0
+    until i < hl.items.len():
+        h := hl.items.get(i)[0]
+        if h.name == name: ret h.value end
+        i += 1
+    end
+    ret ""
+end
+
+@en "HeadersHas"
+@fa "سرآیند دارد"
+@ar "تملک ترویسة"
+pub func HeadersHas(hl: HeaderList, name: str): bool:
+    mut i := 0
+    until i < hl.items.len():
+        if hl.items.get(i)[0].name == name: ret true end
+        i += 1
+    end
+    ret false
+end
+
+@en "HeadersCount"
+@fa "تعداد سرآیندها"
+@ar "عدد الترویسات"
+pub func HeadersCount(hl: HeaderList): int:
+    ret hl.items.len()
+end
+
+@en "DefaultSettings"
+@fa "تنظیمات پیش‌فرض"
+@ar "الإعدادات الافتراضیة"
+pub func DefaultSettings(): Settings:
+    ret Settings {}
+end

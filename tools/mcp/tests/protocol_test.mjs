@@ -13,7 +13,8 @@
  */
 
 import { spawn } from "node:child_process";
-import { resolve } from "node:path";
+import { existsSync } from "node:fs";
+import { join, resolve } from "node:path";
 
 const serverPath = process.argv[2];
 const repoRoot = resolve(process.argv[3] ?? process.cwd());
@@ -21,6 +22,21 @@ if (!serverPath) {
   console.error("usage: protocol_test.mjs <path-to-salam-mcp> [repo-root]");
   process.exit(2);
 }
+
+/*
+ * Pin the compiler under test to the one in this checkout. Falling back to
+ * "salam" on PATH silently tests whatever version happens to be installed:
+ * a stale 0.2.7 on PATH parses `inspect --xml-out=` as a second input file,
+ * which shows up as inexplicable tool failures rather than a version error.
+ */
+function repoCompiler() {
+  for (const candidate of ["salam.exe", "salam"]) {
+    const p = join(repoRoot, candidate);
+    if (existsSync(p)) return p;
+  }
+  return process.env.SALAM_MCP_BIN ?? "salam";
+}
+const compiler = repoCompiler();
 
 const MODERN = "2026-07-28";
 const meta = { "io.modelcontextprotocol/protocolVersion": MODERN };
@@ -48,7 +64,7 @@ function converse(messages, env = {}) {
       env: {
         ...process.env,
         SALAM_MCP_ROOT: repoRoot,
-        SALAM_MCP_BIN: env.SALAM_MCP_BIN ?? process.env.SALAM_MCP_BIN ?? "salam",
+        SALAM_MCP_BIN: env.SALAM_MCP_BIN ?? compiler,
         ...env,
       },
       stdio: ["pipe", "pipe", "pipe"],

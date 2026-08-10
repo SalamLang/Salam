@@ -3,7 +3,7 @@
 Salam is a compiled, statically typed language whose keywords exist in English,
 Persian and Arabic. This file is the orientation an AI model needs to produce
 Salam that compiles on the first try. It documents the rules that are _not_
-guessable from other languages — everything here has been verified against the
+guessable from other languages. Everything here has been verified against the
 compiler in this checkout, with the exact diagnostic it produces.
 
 If you have the `salam` MCP server available, use it rather than guessing:
@@ -27,7 +27,7 @@ end
 ```
 
 Getting this backwards produces a loop that never runs, or never stops. When
-relocating existing Salam code, copy it verbatim — do not retype loops from
+relocating existing Salam code, copy it verbatim; do not retype loops from
 memory.
 
 ## 2. Top-level declaration order is enforced
@@ -71,7 +71,7 @@ y = 3                   // reassignment requires `mut` (else E013)
 const MAX := 10         // top-level constant
 ```
 
-There is **no typed local declaration form**. `name: T = value` was removed —
+There is **no typed local declaration form**. `name: T = value` was removed, so
 always use `:=` and let the type be inferred, casting with `as` when needed.
 
 `pub const` shares a single link-level namespace across packages: two packages
@@ -94,13 +94,13 @@ end
 
 `func main:` implicitly returns `i32`, so it must end with `ret 0`, not a bare
 `ret`. Note that a bare `ret` passes Salam's own analysis and only fails later
-in the C backend, with a raw `'return' with no value` error from gcc — so
+in the C backend, with a raw `'return' with no value` error from gcc, so
 `salam_check` will call the file clean while `salam_build` fails. When a check
 passes but a build does not, look for this first.
 
 ## 6. Strings
 
-Built-in methods on `str` — this is the complete list:
+Built-in methods on `str`. This is the complete list:
 
 ```
 len  concat  substr(start, len)  find/search/indexOf  trim
@@ -131,7 +131,7 @@ m := HashMap {} as HashMap<str, int>
 ```
 
 **Nested generics do not work.** `Vector<Vector<T>>` and `HashMap<K, Vector<V>>`
-are not usable — flatten the data instead. A cross-package function returning
+are not usable, so flatten the data instead. A cross-package function returning
 `Vector<T>` may also need an explicit `as` cast at the call site.
 
 The failure mode is misleading: instantiating `Vector<Vector<int>>` reports

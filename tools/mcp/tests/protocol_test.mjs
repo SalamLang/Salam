@@ -49,8 +49,8 @@ function check(name, condition, detail) {
     passed += 1;
     console.log(`  ok   ${name}`);
   } else {
-    failures.push(`${name}${detail ? ` — ${detail}` : ""}`);
-    console.log(`  FAIL ${name}${detail ? ` — ${detail}` : ""}`);
+    failures.push(`${name}${detail ? `: ${detail}` : ""}`);
+    console.log(`  FAIL ${name}${detail ? `: ${detail}` : ""}`);
   }
 }
 

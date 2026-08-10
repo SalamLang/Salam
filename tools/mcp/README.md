@@ -1,7 +1,7 @@
 # salam-mcp
 
 A [Model Context Protocol](https://modelcontextprotocol.io) server for the
-Salam programming language — **written in Salam**.
+Salam programming language, **written in Salam**.
 
 It gives an AI model two things it otherwise has to guess at: the compiler
 (check, build, run, format, inspect, emit IR) and the standard library (what
@@ -10,7 +10,7 @@ come back as structured data with exact line and column positions, not as
 scraped text.
 
 Because it is a single native binary with no runtime dependencies, anyone who
-has `salam` can run it — there is no Node, Python or package manager in the
+has `salam` can run it. There is no Node, Python or package manager in the
 loop.
 
 ## Build
@@ -29,8 +29,8 @@ ways that look like server bugs.
 reads project-scoped MCP config (Claude Code included), so building the binary
 is enough.
 
-For a Claude Code **plugin** — the server plus a language skill and
-`/salam-check`, `/salam-api`, `/salam-run` shortcuts — install
+For a Claude Code **plugin** (the server plus a language skill and
+`/salam-check`, `/salam-api`, `/salam-run` shortcuts), install
 `tools/mcp/claude-plugin`, which expects `salam-mcp` on `PATH`.
 
 Any other MCP client:
@@ -59,7 +59,7 @@ purpose: an installed `salam` is often older than the checkout, and the
 resulting flag-parsing differences surface as confusing tool failures rather
 than as a version error.
 
-On Windows, point `command` at `salam-mcp.exe` — process spawning does not add
+On Windows, point `command` at `salam-mcp.exe`. Process spawning does not add
 the extension for you.
 
 ## Tools
@@ -68,7 +68,7 @@ the extension for you.
 
 | Tool           | Use it for                                                              |
 | -------------- | ----------------------------------------------------------------------- |
-| `salam_check`  | Type-check without codegen — the fast loop, run after every edit        |
+| `salam_check`  | Type-check without codegen; the fast loop, run after every edit         |
 | `salam_build`  | Full compile including linking; supports `backend`, `release`, `target` |
 | `salam_run`    | Build and execute, capturing stdout, stderr and exit code               |
 | `salam_exec`   | Interpret without a C toolchain (not trustworthy for unsigned maths)    |
@@ -107,7 +107,7 @@ The server is **read-only**: it never writes to the workspace. Build artifacts
 go to temp paths and are deleted, and `salam_format` always runs with
 `--check`.
 
-Paths from a tool call are validated rather than escaped — anything containing
+Paths from a tool call are validated rather than escaped; anything containing
 shell metacharacters or `..` is refused outright.
 
 ## Protocol
@@ -129,7 +129,7 @@ stdout, logging on stderr, and the process exits when stdin closes.
 node tools/mcp/tests/protocol_test.mjs ./salam-mcp "$PWD"
 ```
 
-Spawns real server processes and asserts on the wire format — framing,
+Spawns real server processes and asserts on the wire format: framing,
 dual-era negotiation, error codes, structured diagnostics, path-traversal
 refusal. CI runs this on every change to `tools/mcp/`, `docs/ai/` or `std/`.
 

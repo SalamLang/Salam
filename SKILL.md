@@ -3,14 +3,14 @@ name: write-salam
 description: >-
   Convert, rewrite, port, or redesign software from another language (PHP,
   TypeScript/JavaScript, Python, C, Go, Rust, Java, C#, …) into idiomatic,
-  full-feature Salam — write new Salam code, and port C to Salam (including
+  full-feature Salam: write new Salam code, and port C to Salam (including
   self-hosting the Salam compiler itself). Use whenever the request mentions
   "Salam" (the programming language / زبان سلام), a `.salam` file, "convert/port/
   rewrite X to Salam", "rewrite the compiler in Salam", the Salam layout DSL, or
   building with the `salam` compiler. This is the authoritative, up-to-date
   reference for Salam's current syntax, its 44-package standard library, its
   strict compiler rules, the layout DSL, and porting low-level C. The tutorial
-  books under `books/` are OUT OF DATE — trust this file, `std/`, and
+  books under `books/` are OUT OF DATE. Trust this file, `std/`, and
   `tests/en/` instead.
 ---
 
@@ -22,7 +22,7 @@ Salam is a statically typed, compiled, general-purpose systems language. The
 tree-walking interpreter (`salam exec`, pure compute only) and cross-compiled via
 LLVM. Source can be written in English, Persian, or Arabic; **this guide uses
 English throughout** (every stdlib symbol also has `@fa`/`@ar` spellings defined
-by `@en "Name" @fa "…" @ar "…"` annotations — you rarely need them).
+by `@en "Name" @fa "…" @ar "…"` annotations, though you rarely need them).
 
 > **Source of truth.** When a detail is missing here, read real code:
 > `std/<pkg>/*.salam` for exact stdlib signatures, and
@@ -50,18 +50,18 @@ by `@en "Name" @fa "…" @ar "…"` annotations — you rarely need them).
 
 When asked to convert program `X` (in some other language) into Salam:
 
-1. **Understand `X`** — its entry point, data types, control flow, external I/O,
+1. **Understand `X`**: its entry point, data types, control flow, external I/O,
    and dependencies.
 2. **Map constructs** to Salam using §7 (class→`struct`, interface→`interface`,
    generics→`<T>`, exceptions→`bool`/`Option`/sentinel, dict→`HashMap`,
    list→`Vector`, etc.).
 3. **Pick stdlib packages** from §5 rather than reimplementing (`str`, `json`,
    `http`, `regex`, `math`, `sort`, `collections`, `db`, …).
-4. **Write idiomatic Salam** using §2–§4, obeying the strict rules in §6
+4. **Write idiomatic Salam** using §2 to §4, obeying the strict rules in §6
    (unused = error, `until` = while, manual `.free()`, integer `/` truncates, no
    exceptions, `mut` to reassign, `pub` to export, top-level ordering).
 5. **Verify** with `salam exec file.salam` (interpreter) or `salam build
-file.salam --output=app` (§10). Fix every warning — most are hard errors.
+file.salam --output=app` (§10). Fix every warning; most are hard errors.
 
 Keep the program's structure and names recognizable, but produce _idiomatic_
 Salam, not a transliteration.
@@ -99,7 +99,7 @@ const MAX := 100         // compile-time constant
 `+ - * / %`, `**` (power, float result), `== != < > <= >=`, `&& || !`, ternary
 `cond ? a : b`, compound `+= -= *= /= %= **=`, `++`/`--`. Integer `/` **truncates**.
 **Bitwise operators** (integer operands only): `& | ^ ~` and shifts `<< >>`, with
-compound forms `&= |= ^= <<= >>=`. Precedence follows C — shifts bind tighter than
+compound forms `&= |= ^= <<= >>=`. Precedence follows C: shifts bind tighter than
 comparisons; `&` tighter than `^` tighter than `|`, all looser than `==`
 (so `1 | 2 & 3 == 3` and `1 << 4 + 1 == 32`). `+` on `str` concatenates and coerces
 numbers to text (`"n=" + 3` → `"n=3"`).
@@ -163,7 +163,7 @@ end
 
 - **Pass by value.** Overloading by parameter types is allowed. Definition order
   doesn't matter.
-- **Multi-word names**: identifiers may contain spaces —
+- **Multi-word names**: identifiers may contain spaces, e.g.
   `func make counter()`, `func is weekend(d: Day)`, `pet name: str`. A call is
   `is weekend(d)`; a field access `dog.pet name`.
 - **Modifiers**: `pub inline noinline pure noret deprecated` (combine freely),
@@ -178,12 +178,12 @@ end
 
   This is how much of the stdlib mutates its argument (`str.BufAppend(b &: StringBuilder, …)`).
 
-- **`defer stmt`** runs at scope exit, LIFO — great for cleanup:
+- **`defer stmt`** runs at scope exit, LIFO, which is great for cleanup:
   `defer v.free()`.
 - **Closures/lambdas** are first-class typed values: `(x: int) => x * 2`, or a
   block form `(): n = n + 1  ret n  end`. Function-typed parameters/vars:
   `func () int`, `func (int, int) bool`.
-  - **A bare named function is _not_ a value** — `apply(inc, 3)` fails with
+  - **A bare named function is _not_ a value**. `apply(inc, 3)` fails with
     "function used as a value." To pass behavior, use a **lambda**
     (`apply((x: int) => inc(x), 3)`), or, for C-style callback registries whose
     slot is an untyped pointer (`i64`/`void*`, e.g. the `web` router), take the
@@ -201,20 +201,20 @@ verified). **`str` is UTF-8 bytes**: `str.Len(s)` is the byte count,
 `str.CharCount(s)` the codepoint count; iterate codepoints with `str.Chars(s)` /
 `str.CharAt(s, i)`, classify with `str.IsDigit(code)` etc.
 
-**String/char literal forms** (no interpolation exists — build strings with `+`
+**String/char literal forms** (no interpolation exists; build strings with `+`
 or `fmt.Sprintf`):
 
-| Syntax       | Type                     | Escapes (`\n \t \" \\ \xHH \uHHHH \UHHHHHHHH` …) | Multiline | Notes                                                                                                                                                                                                                                                                                                                                 |
-| ------------ | ------------------------ | ------------------------------------------------ | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `"text"`     | `str`                    | yes                                              | no        | normal string; raw newline in source is an error                                                                                                                                                                                                                                                                                      |
-| `"""text"""` | `str`                    | yes                                              | **yes**   | triple-double-quote is the _only_ multiline form; still processes escapes                                                                                                                                                                                                                                                             |
-| `'c'`        | `char`                   | yes                                              | —         | one raw byte unless escaped — not UTF-8 safe for non-ASCII                                                                                                                                                                                                                                                                            |
-| `` `text` `` | `str`                    | **none — fully raw**                             | **yes**   | backtick string; every byte up to the next `` ` `` is taken literally, including `"`, `'`, `\`, and real newlines. **There is no triple-backtick form** — ` ``` ` lexes as an empty backtick string followed by a runaway one, not a multiline literal. Only a literal backtick can't appear inside it (no escape exists for `` ` ``) |
-| `u'c'`       | `char` (UTF-8 codepoint) | no                                               | —         | must decode to exactly one Unicode codepoint; use for non-ASCII single chars, e.g. `u'م'`, `u'中'`, `u'€'`                                                                                                                                                                                                                            |
-| `u"c"`       | `char` (UTF-8 codepoint) | yes                                              | —         | same as `u'c'` but escapes are processed first, e.g. `u"\U0001F600"`                                                                                                                                                                                                                                                                  |
+| Syntax       | Type                     | Escapes (`\n \t \" \\ \xHH \uHHHH \UHHHHHHHH` …) | Multiline | Notes                                                                                                                                                                                                                                                                                                                                |
+| ------------ | ------------------------ | ------------------------------------------------ | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `"text"`     | `str`                    | yes                                              | no        | normal string; raw newline in source is an error                                                                                                                                                                                                                                                                                     |
+| `"""text"""` | `str`                    | yes                                              | **yes**   | triple-double-quote is the _only_ multiline form; still processes escapes                                                                                                                                                                                                                                                            |
+| `'c'`        | `char`                   | yes                                              | -         | one raw byte unless escaped, not UTF-8 safe for non-ASCII                                                                                                                                                                                                                                                                            |
+| `` `text` `` | `str`                    | **none, fully raw**                              | **yes**   | backtick string; every byte up to the next `` ` `` is taken literally, including `"`, `'`, `\`, and real newlines. **There is no triple-backtick form**; ` ``` ` lexes as an empty backtick string followed by a runaway one, not a multiline literal. Only a literal backtick can't appear inside it (no escape exists for `` ` ``) |
+| `u'c'`       | `char` (UTF-8 codepoint) | no                                               | -         | must decode to exactly one Unicode codepoint; use for non-ASCII single chars, e.g. `u'م'`, `u'中'`, `u'€'`                                                                                                                                                                                                                           |
+| `u"c"`       | `char` (UTF-8 codepoint) | yes                                              | -         | same as `u'c'` but escapes are processed first, e.g. `u"\U0001F600"`                                                                                                                                                                                                                                                                 |
 
-**Prefer backtick strings for any text containing literal `"`** — JSON blobs,
-`regex` patterns, shell commands, HTML/CSS fragments — instead of escaping:
+**Prefer backtick strings for any text containing literal `"`**: JSON blobs,
+`regex` patterns, shell commands, HTML/CSS fragments, instead of escaping:
 
 ```salam
 input := `{"name": "salam", "version": 2, "active": true, "pi": 3.5, "tags": ["a", "b"]}`
@@ -230,7 +230,7 @@ Only fall back to `"..."` with escaped quotes when the string must also contain
 a literal backtick, or when it needs an escape sequence (`\n`, `\uXXXX`, …)
 that backtick strings don't process.
 
-**Type aliases:** `type NodeId = int`, `type Bytes = u8*` — a new name for an
+**Type aliases:** `type NodeId = int`, `type Bytes = u8*` gives a new name for an
 existing type (declared at top level, before functions).
 
 **Casts & typed literals with `as`:**
@@ -248,7 +248,7 @@ m := HashMap {} as HashMap<str, int>
 ```salam
 a: int[3] = [1, 2, 3]                 // indexed 0..2
 grid: int[2][3] = [[1,2,3],[4,5,6]]   // 2-D
-mid := a[1: 3]                        // slice (view) — writes through to `a`
+mid := a[1: 3]                        // slice (view), writes through to `a`
 whole := a[:]  head := a[: 2]  tail := a[1:]
 func sum(view: int[:]): int: ... end  // int[:] = slice parameter
 len(a)                                // length builtin
@@ -284,7 +284,7 @@ grade := match score / 10:                         // match is an EXPRESSION
 end
 ```
 
-**`Variant<A, B, …>`** — a tagged union (one slot sized to the largest member).
+**`Variant<A, B, …>`** is a tagged union (one slot sized to the largest member).
 Assign any member type; narrow it back with `match` on **type-name** patterns:
 
 ```salam
@@ -301,7 +301,7 @@ Assign a value whose type is exactly one of the members; **do not** write
 `"x" as Variant<…>` (casting a `str` into a Variant fails). Struct fields typed as
 a `Variant` coerce a member-typed literal automatically
 (`Reading { value = "offline" }`). Variant `match` needs the **compiled** backend,
-not `salam exec` — see §10.
+not `salam exec`; see §10.
 
 **`Option<T>`** (via `import option`) for maybe-absent values:
 
@@ -358,95 +358,95 @@ Import a package by name: `import str`, `import math`. Dotted subpackages:
 Only `pub` symbols are importable. **Function names are `PascalCase`; collection
 methods are `snake_case`.**
 
-**Everything below is real — signatures come from `std/`.** When unsure of
+**Everything below is real; signatures come from `std/`.** When unsure of
 an exact signature, grep the package file.
 
 ### Text & formatting
 
-- **`str`** — `Upper Lower Title Trim TrimLeft TrimRight TrimPrefix TrimSuffix
+- **`str`**: `Upper Lower Title Trim TrimLeft TrimRight TrimPrefix TrimSuffix
 Reverse Repeat Concat Substr Split Join Fields Chars CharAt Contains Find
 IndexOf IndexFrom LastIndex Count StartsWith EndsWith Equals EqualFold Compare
 Replace Len CharCount FromInt(i64) FromFloat(f64) ToInt ToFloat IsEmpty
 IsDigit IsAlpha IsSpace`; plus a `StringBuilder` (`NewBuilder`, `BufAppend`,
   `BufAppendInt`, `BufStr`, `BufFree`).
-- **`fmt`** — `Sprintf(tmpl, Vector<str>)` (`{}` placeholders), `Fprintf`,
+- **`fmt`**: `Sprintf(tmpl, Vector<str>)` (`{}` placeholders), `Fprintf`,
   `PadLeft PadRight Center`. (`fmt.Int`, `fmt.Float`, `fmt.Bool` build the string
   args you pass to `Sprintf`.)
-- **`conv`** — `FormatInt FormatUint FormatHex FormatFloat FormatFloatPrec`.
-- **`text`** — `ToUtf16(str): void*`, `FromUtf16(void*): str` (Windows/UTF-16 FFI).
-- **`template`** — `Render(tmpl, ctx) RenderHTML NewContext Var EscapeHTML`.
+- **`conv`**: `FormatInt FormatUint FormatHex FormatFloat FormatFloatPrec`.
+- **`text`**: `ToUtf16(str): void*`, `FromUtf16(void*): str` (Windows/UTF-16 FFI).
+- **`template`**: `Render(tmpl, ctx) RenderHTML NewContext Var EscapeHTML`.
 
 ### Numbers
 
-- **`math`** — consts `PI E TAU`; `Sqrt Cbrt Pow(**) Hypot Exp Log Log2 Log10
+- **`math`**: consts `PI E TAU`; `Sqrt Cbrt Pow(**) Hypot Exp Log Log2 Log10
 Sin Cos Tan Asin Acos Atan Atan2 Sinh Cosh Tanh Floor Ceil Round Trunc Abs
 Sign Min Max ClampF Lerp Radians Degrees Mod IsNaN IsInf NaN Inf`; integer:
   `MinI MaxI AbsI ClampI Gcd Lcm Factorial Pow10` (+ `*I64` variants).
-- **`rand`** — `Seed SeedAuto Int Int32 IntN IntRange FloatRange Float Bool
+- **`rand`**: `Seed SeedAuto Int Int32 IntN IntRange FloatRange Float Bool
 BoolP Choice{Int,Str,Char} Shuffle{Int,Str} Alpha Alnum Digit Text UUID Hash`.
-- **`stats`** — descriptive statistics helpers.
+- **`stats`**: descriptive statistics helpers.
 
 ### I/O, OS, filesystem
 
-- **`io`** — `ReadFile WriteFile AppendFile Lines WriteLines Input Read Write
+- **`io`**: `ReadFile WriteFile AppendFile Lines WriteLines Input Read Write
 ReadAll Readline Seek Close Copy EPrint EPrintln`.
-- **`os`** — `Args Env Cwd Chdir Exit Pid Run RunCapture Output Exists IsDir
+- **`os`**: `Args Env Cwd Chdir Exit Pid Run RunCapture Output Exists IsDir
 FileSize Stat ReadFile WriteFile AppendFile Copy CopyTree Move Remove RemoveAll
 Mkdir MkdirAll Rmdir ListDir ListDirs Walk TempDir Open`.
-- **`filepath`** — `Join Dir Base Ext Stem Clean Normalize IsAbs`.
+- **`filepath`**: `Join Dir Base Ext Stem Clean Normalize IsAbs`.
 - **`fs`**, **`flag`** (CLI: `New AddStr AddInt AddBool AddFloat Parse GetStr…
 Positional Usage`), **`config`**, **`log`** (`Info Warn Error Debug` + `*f`
   variants, `SetLevel ToFile ToStderr`).
 
-### Collections (heap-allocated — call `.free()`, idiom `defer x.free()`)
+### Collections (heap-allocated: call `.free()`, idiom `defer x.free()`)
 
-- **`Vector<T>`** (built-in; also `import collections`) — `push pop get(i)[0]
+- **`Vector<T>`** (built-in; also `import collections`): `push pop get(i)[0]
 set(i,x) len is_empty first last insert remove_at reserve clear iter free`;
   index via `v[i]` (read) / `v[i] = x` (write); free functions `contains index_of
 count_of slice clone reverse swap extend`.
-- **`HashMap<K,V>`** — `put(k,v) get(k) has(k) remove(k) size is_empty
+- **`HashMap<K,V>`**: `put(k,v) get(k) has(k) remove(k) size is_empty
 iter free`; iterate with `each (k, v) in m:`.
 - **`Set<T>`**, **`Stack<T>`** (`push pop peek size is_empty`),
   **`Queue<T>`** (`enqueue dequeue peek size`),
   **`Deque<T>`** (`push_front push_back pop_front pop_back front_val back_val`),
   **`PriorityQueue<T>`** (`push pop peek`), **`LinkedList<T>`**,
   **`Counter<K>`** (`add add_n count distinct`), **`Pair`**, **`CircularList`**.
-- **`sort`** — `Sort SortDesc SortBy StableSortBy Sorted IsSorted BinarySearch
+- **`sort`**: `Sort SortDesc SortBy StableSortBy Sorted IsSorted BinarySearch
 LowerBound UpperBound Min Max Reverse Swap` + named algorithms
   (`QuickSort MergeSort HeapSort IntroSort …`). Comparators: `func (T, T) bool`.
-- **`option`** — `Some None IsSome IsNone Unwrap UnwrapOr Expect`.
+- **`option`**: `Some None IsSome IsNone Unwrap UnwrapOr Expect`.
 
 ### Data formats
 
-- **`json`** — `Valid Get GetInt GetFloat Has Minify Indent Escape
+- **`json`**: `Valid Get GetInt GetFloat Has Minify Indent Escape
 Object(members) Array(items) Member/MemberInt/MemberBool/MemberFloat/MemberRaw
 Str`.
-- **`yaml`** — parse/query/encode/dump. **`csv`** — `ReadLine(str): Vector<str>`,
+- **`yaml`**: parse/query/encode/dump. **`csv`**: `ReadLine(str): Vector<str>`,
   `WriteLine(Vector<str>): str`.
-- **`encoding`** — `Base64Encode Base64Decode HexEncode HexDecode URLEncode
+- **`encoding`**: `Base64Encode Base64Decode HexEncode HexDecode URLEncode
 URLDecode`.
-- **`regex`** — `Compile Match Find Replace ReplaceAll` (`Regex` handle) and
+- **`regex`**: `Compile Match Find Replace ReplaceAll` (`Regex` handle) and
   one-shot `MatchStr FindStr ReplaceStr ReplaceAllStr`.
-- **`crypto`** — `sha1 sha256 sha512 hmac pbkdf2 random`.
+- **`crypto`**: `sha1 sha256 sha512 hmac pbkdf2 random`.
 
 ### Time, memory, testing
 
-- **`time`** — `Now NowMillis NowMicros NowNanos Sleep(ms) Format FormatISO
+- **`time`**: `Now NowMillis NowMicros NowNanos Sleep(ms) Format FormatISO
 FormatDate FormatTime Year Month Day Hour Minute Second Weekday Since Until
 ElapsedMs`; `DateTime` type.
-- **`mem`** — `Allocate AllocateZeroed AllocateArray Reallocate Free Copy Set
+- **`mem`**: `Allocate AllocateZeroed AllocateArray Reallocate Free Copy Set
 MemMove`; leak tooling `CheckLeaks LiveBytes AllocCount`.
-- **`testing`** — `AssertTrue AssertFalse AssertEqInt AssertEqStr AssertEqFloat
+- **`testing`**: `AssertTrue AssertFalse AssertEqInt AssertEqStr AssertEqFloat
 AssertEqBool AssertContains AssertNil AssertNotNil AssertMsg Summary()` (call
   `os.Exit(testing.Summary())`).
 
 ### Networking & web
 
-- **`http`** (client) — `Get Post Put Patch Delete Head Options` (+ `*With` for
+- **`http`** (client): `Get Post Put Patch Delete Head Options` (+ `*With` for
   custom `HashMap<str,str>` headers),
   `NewHeaders NewClient Ok GetHeader Headers WithQuery CookieMap`;
   response has `.status`, `.body`.
-- **`web`** (server framework) — `NewRouter Get/Post/Put/Delete(r, path, funcptr(fn))
+- **`web`** (server framework): `NewRouter Get/Post/Put/Delete(r, path, funcptr(fn))
 NewServer(port) Use Run Static`; handler `func h(ctx: i64)` uses
   `Ctx_html Ctx_json Ctx_text Ctx_param Ctx_query Ctx_form Ctx_body Ctx_method
 Ctx_status Ctx_set_header Ctx_redirect`. Also a canvas/DOM JS-interop surface.
@@ -456,7 +456,7 @@ Ctx_status Ctx_set_header Ctx_redirect`. Also a canvas/DOM JS-interop surface.
 
 ### Databases (`import db.<engine>`)
 
-- **`db.sqlite`** —
+- **`db.sqlite`**:
   `Available Version Open Ok Exec Query Next Text Int Finish Prepare BindText Reset LastInsertId Changes QueryInt Close`.
 - **`db.mysql`**, **`db.redis`** (`connect strings hashes lists sets pubsub`).
 
@@ -484,7 +484,7 @@ naive port into compile errors (each corresponds to a case in
    when they own memory.
 5. **Integer `/` truncates** toward zero. **Bitwise operators (`& | ^ ~ << >>`)
    are supported on integers** with C precedence and compound forms
-   (`&= |= ^= <<= >>=`) — but they require integer operands (a bitwise op on a
+   (`&= |= ^= <<= >>=`), but they require integer operands (a bitwise op on a
    float is a compile error).
 6. **No exceptions / no try-catch.** Signal failure with a `bool` return, an
    `Option<T>`, or a sentinel value, and check it at the call site.
@@ -493,17 +493,17 @@ naive port into compile errors (each corresponds to a case in
 8. **Top-level ordering.** Within a file: `package` first, then all `import`s,
    then top-level `const`/variable/`type` declarations, then functions. A
    top-level `if` must be a **compile-time constant** condition (see §8).
-9. **`pure` functions are checked** — they may not write globals, call impure
+9. **`pure` functions are checked**: they may not write globals, call impure
    functions, mutate parameters, or `print`. Only mark a function `pure` if it is.
 10. **`match` on a `Variant` must be exhaustive** and use valid type/member
     patterns. Enum `match` patterns must be real members.
-11. **Types are checked strictly** — no implicit narrowing; use `as`. Ternary
+11. **Types are checked strictly**: no implicit narrowing; use `as`. Ternary
     branches must share a type; a condition must be `bool`. Array-literal length
     must match the declared size.
-12. **Dead code is rejected** — an always-false `if/until/repeat/each`, an
+12. **Dead code is rejected**: an always-false `if/until/repeat/each`, an
     unreachable `ret`, etc. are errors, not warnings.
 
-When the compiler complains, fix the code — do not try to suppress the check
+When the compiler complains, fix the code; do not try to suppress the check
 (except the deliberate `_` prefix for genuinely-unused names).
 
 ---
@@ -523,7 +523,7 @@ General mapping that applies to all source languages:
 | set                          | `Set<T>`                                                                         |
 | tuple / record               | small `struct`, or `Pair`, or `Variant` for sum types                            |
 | string ops                   | `str.*` package + `+` concatenation + `len()`                                    |
-| exception / error            | `bool` flag, `Option<T>`, or sentinel — **no throw/catch**                       |
+| exception / error            | `bool` flag, `Option<T>`, or sentinel; **no throw/catch**                        |
 | null / nil / None            | `null` (pointers) or `Option.None()`                                             |
 | lambda / closure             | `(x: int) => expr` or block lambda; type `func (…) R`                            |
 | enum / union                 | `enum` (C-like) or `Variant<…>` (tagged union)                                   |
@@ -537,7 +537,7 @@ General mapping that applies to all source languages:
 ### From PHP
 
 - `$var` → plain `name`; PHP arrays split into **`Vector<T>`** (lists) and
-  **`HashMap<K,V>`** (assoc arrays) — choose per use.
+  **`HashMap<K,V>`** (assoc arrays); choose per use.
 - `class`/`interface`/`trait` → `struct`/`interface`/`impl`. Visibility
   `public`→`pub`; everything else is private by default.
 - String interpolation `"$a-$b"` → `a + "-" + b` or `fmt.Sprintf`.
@@ -552,7 +552,7 @@ General mapping that applies to all source languages:
   (`Array<T>`→`Vector<T>`, `Map`→`HashMap`, `Set`→`Set`, object literal→`struct`
   or `HashMap<str, …>`).
 - Arrow functions `(x) => x*2` map almost directly: `(x: int) => x * 2` (add
-  types). `Promise`/`async`/`await` have **no equivalent** — use synchronous
+  types). `Promise`/`async`/`await` have **no equivalent**, so use synchronous
   code, or `spawn`/`join` + `sync` (§8) for real parallelism.
 - `let`/`const`→`mut`/`:=`+`const`. `null`/`undefined`→`null`/`Option`.
   `JSON.parse/stringify`→`json.*`. `throw`→`bool`/`Option`.
@@ -713,11 +713,11 @@ salam app.salam --emit-tokens-xml | --emit-ast-xml | --emit-symbol-xml   # inspe
 
 **Always verify a converted program.** Prefer `salam exec file.salam` for a quick
 check of pure logic; use `salam build … --output=…` (or `salam run`) when it uses
-FFI, threads, or the full stdlib. Resolve every diagnostic — in Salam most are hard
+FFI, threads, or the full stdlib. Resolve every diagnostic; in Salam most are hard
 errors (§6).
 
 > **`salam exec` (the interpreter) is a subset of the compiled language.** Some
-> features — notably `Variant` type-pattern `match`, and parts of FFI/threads —
+> features (notably `Variant` type-pattern `match`, and parts of FFI/threads)
 > only work through the C/LLVM backend. If `exec` reports a runtime error like
 > "undefined variable 'i64'" on a `match` arm, that feature isn't interpreted:
 > verify it with `salam run` / `salam build` instead. Treat the **compiled
@@ -731,7 +731,7 @@ errors (§6).
 
 ## 11. When a detail is missing
 
-Read the real code — it is the specification:
+Read the real code; it is the specification:
 
 - Idioms & complete programs: `tests/en/`
   (`basics/`, `features/`, `types/`, `stdlib/`, `interop/`, `apps/`,
@@ -745,21 +745,21 @@ Read the real code — it is the specification:
 
 ## 12. Porting C → Salam (and how the compiler itself was self-hosted)
 
-**The Salam compiler itself is now self-hosted** — its ~45,000 lines of C
+**The Salam compiler itself is now self-hosted**: its ~45,000 lines of C
 (formerly `compiler/src/`) were fully ported to Salam; `compiler/` now holds
 one flat `.salam` file per former module (`compiler/lexer.salam`,
 `compiler/semantic.salam`, `compiler/codegen.salam`, …), and
 `compiler/salam` is the tracked bootstrap binary that builds new versions of
-itself from `compiler/main.salam`. There is no C source left to read — this
+itself from `compiler/main.salam`. There is no C source left to read, so this
 section is kept as **general guidance for any other large, low-level C→Salam
 port** you're asked to do (the same techniques apply), and §12.4's module
 map is kept as a historical record of how the compiler's own port was
-sequenced. Read §1–§11 first; the notes below are the C-specific deltas and
+sequenced. Read §1 to §11 first; the notes below are the C-specific deltas and
 the hard limitations you must plan around.
 
 ### 12.1 Bitwise operators (needed everywhere in a compiler port)
 
-Salam has **first-class bitwise operators** on integers, mapping 1:1 to C — so the
+Salam has **first-class bitwise operators** on integers, mapping 1:1 to C, so the
 compiler's bit-heavy code (UTF-8 encoding, hashing, flag sets, `codegen/print_fmt.c`,
 `codegen/codegen_type.c`) ports directly with no workarounds:
 
@@ -774,7 +774,7 @@ compiler's bit-heavy code (UTF-8 encoding, hashing, flag sets, `codegen/print_fm
 
 Operands must be integers (a bitwise op on a float is a compile error). **Precedence
 follows C**: `*  /  %` › `+  -` › `<<  >>` › `<  <=  >  >=` › `==  !=` › `&` › `^` ›
-`|` › `&&` › `||`. So `flags & MASK == MASK` parses as `flags & (MASK == MASK)` — add
+`|` › `&&` › `||`. So `flags & MASK == MASK` parses as `flags & (MASK == MASK)`, so add
 parentheses (`(flags & MASK) == MASK`) exactly as you would in C.
 
 ```salam
@@ -789,7 +789,7 @@ hi := (cp >> 6) & 0x3F   // UTF-8 continuation byte, straight from the C
 > (`&fn`) in their own syntactic positions; the parser disambiguates by context
 > (prefix `&fn` vs infix `a & b`), so there is no ambiguity in practice.
 
-Nested generics work too — `Vector<Vector<int>>`'s trailing `>>` is understood as
+Nested generics work too: `Vector<Vector<int>>`'s trailing `>>` is understood as
 two closing angle brackets, not a shift.
 
 ### 12.2 C construct → Salam
@@ -811,7 +811,7 @@ two closing angle brackets, not a shift.
 | growable array / `realloc` buffer           | `Vector<T>` (`push/get(i)[0]/set/len`), remember `.free()`                                         |
 | hash table (symbol table)                   | `HashMap<K, V>`                                                                                    |
 | `switch (x) { case … }`                     | `match x: … end`                                                                                   |
-| `goto`                                      | not available — restructure with functions/flags/loops                                             |
+| `goto`                                      | not available; restructure with functions/flags/loops                                              |
 | `break` / `continue`                        | `break` / `continue` (same, innermost loop only)                                                   |
 | `while (c)`                                 | **`until c:`** with the same condition, **never negated** (`while (v != 0)` → `until v != 0:`)     |
 | `while (v)` / `while (p)` (truthy)          | `until v != 0:` / `until p != null:` (Salam has no truthiness)                                     |
@@ -840,7 +840,7 @@ two closing angle brackets, not a shift.
 - **AST nodes**: a `struct` per node kind, or one node `struct` with a `kind`
   `enum` field plus a `Variant` payload; walk with recursion and `match`.
 - **Arenas / lifetime**: `mem.Allocate`/`Free`; or lean on `Vector`/`HashMap`
-  ownership + `defer x.free()`. There is no borrow checker — free deliberately.
+  ownership + `defer x.free()`. There is no borrow checker, so free deliberately.
 - **Diagnostics**: return a `bool`/`Option` up the call chain and collect an
   error list (mirror `src/diag`); no exceptions to unwind.
 
@@ -848,7 +848,7 @@ two closing angle brackets, not a shift.
 
 The C pipeline is **source → lexer → token → parser → AST → semantic →
 codegen** (with `llvm` and `jsgen` as alternative backends), all wired by
-`driver`. Approximate sizes (from `compiler/src/`, ~45k LOC total) — port roughly
+`driver`. Approximate sizes (from `compiler/src/`, ~45k LOC total); port roughly
 in dependency order:
 
 | Module                                | LOC                       | Role                                                                |

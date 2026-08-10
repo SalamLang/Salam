@@ -462,9 +462,23 @@ static void hdr_prelude(cg_t *cg, ast_node_t *program, sb_t *h)
      * core.h in the same relative position, so whichever one is textually
      * first in the .c file still defines the guard correctly either way.
      */
+    /*
+     * Two tiers, because the two supported Windows compilers do not agree
+     * on what <windows.h> drags in. Both declare the kernel32/user32 set,
+     * so SALAM_EXTERN_LIBC_ON_WIN32 is unconditional. Only gcc/clang also
+     * reach <stdlib.h> and winsock from it (winnt.h -> x86intrin.h ->
+     * mm_malloc.h -> stdlib.h, plus winsock.h), which is where getenv,
+     * socket, send, recv, ... come from - tcc's headers never do, so
+     * suppressing those names for tcc would leave them with no declaration
+     * at all. SALAM_EXTERN_WIDE_LIBC_ON_WIN32 is therefore claimed only
+     * when the compiler is not tcc.
+     */
     if (cg->is_gui_mode)
         sb_puts(h, "#ifdef _WIN32\n#define SALAM_RT_STR_DEFINED\n"
-                   "#define SALAM_EXTERN_LIBC_ON_WIN32\n#endif\n");
+                   "#define SALAM_EXTERN_LIBC_ON_WIN32\n"
+                   "#if !defined(__TINYC__)\n"
+                   "#define SALAM_EXTERN_WIDE_LIBC_ON_WIN32\n"
+                   "#endif\n#endif\n");
     sb_puts(h, "#ifndef SALAM_RT_STR_DEFINED\n#define SALAM_RT_STR_DEFINED\n"
                "extern uint64_t strlen(const char* s);\n"
                "extern int32_t strcmp(const char* a, const char* b);\n"
@@ -820,6 +834,22 @@ static bool is_wellknown_libc_name(const char *name)
         "QueryPerformanceFrequency",
         "GetCurrentProcess",
         "GetProcessTimes",
+        /* Both compilers' <windows.h> declares these; std/os/process'
+         * CreateFileA/WriteFile are the ones a GUI build actually reaches
+         * (Run/RunCapture redirect through them), and the GDI/user32 set
+         * belongs to the drawing and window-property helpers. GetProp,
+         * SetProp and LoadImage are macros over their ...A/...W variants
+         * there, so the guard is the only way the two can agree. */
+        "CreateFileA",
+        "WriteFile",
+        "Arc",
+        "BeginPath",
+        "FillRect",
+        "LineTo",
+        "RoundRect",
+        "LoadImage",
+        "GetProp",
+        "SetProp",
     };
     size_t i = 0;
     for (; i < sizeof(names) / sizeof(names[0]); i++)
@@ -854,6 +884,32 @@ static bool is_libm_name(const char *name)
     return false;
 }
 
+/*
+ * The gcc/clang-only half of the collision set: names that only *their*
+ * <windows.h> reaches, via <stdlib.h> and winsock. Guarded by
+ * SALAM_EXTERN_WIDE_LIBC_ON_WIN32, which tcc never defines, so tcc keeps
+ * emitting its own declarations exactly as before. Derived by probing every
+ * `extern:` name in std/ and compiler/ against the real GUI-mode header set
+ * with both compilers and taking the difference, not by hand.
+ */
+static bool is_wide_libc_name(const char *name)
+{
+    static const char *const names[] = {
+        /* <stdlib.h>, reached from windows.h only on gcc/clang */
+        "abort", "exit", "getenv", "system", "_putenv_s",
+        /* winsock.h, which windows.h includes unless WIN32_LEAN_AND_MEAN */
+        "socket", "bind", "listen", "accept", "connect", "shutdown",
+        "closesocket", "ioctlsocket", "send", "recv", "sendto", "recvfrom",
+        "setsockopt", "getsockname", "gethostbyname", "inet_ntoa", "htons", "ntohs",
+        "WSAStartup",
+        /* wincrypt.h, same story - std/tls' native root-store reader */
+        "CertOpenSystemStoreA", "CertEnumCertificatesInStore", "CertCloseStore"};
+    size_t i = 0;
+    for (; i < sizeof(names) / sizeof(names[0]); i++)
+        if (strcmp(name, names[i]) == 0) return true;
+    return false;
+}
+
 static void hdr_externs(cg_t *cg, ast_node_t *program, sb_t *h)
 {
     {
@@ -866,10 +922,14 @@ static void hdr_externs(cg_t *cg, ast_node_t *program, sb_t *h)
                 func_sig_t *sig = sig_of_decl(fsym, d);
                 if (!sig) continue;
                 if (is_libm_name(d->name)) continue;
-                bool risky = is_wellknown_libc_name(d->name);
-                if (risky) sb_puts(h, "#ifndef SALAM_EXTERN_LIBC_ON_WIN32\n");
+                const char *guard = is_wellknown_libc_name(d->name)
+                                        ? "SALAM_EXTERN_LIBC_ON_WIN32"
+                                    : is_wide_libc_name(d->name)
+                                        ? "SALAM_EXTERN_WIDE_LIBC_ON_WIN32"
+                                        : NULL;
+                if (guard) sb_puts(h, cg_fmt(cg, "#ifndef %s\n", guard));
                 sb_puts(h, cg_fmt(cg, "%s;\n", cg_extern_proto(cg, d, sig)));
-                if (risky) sb_puts(h, "#endif\n");
+                if (guard) sb_puts(h, "#endif\n");
             } else if (d->kind == AST_VAR_DECL) {
                 const char *ts = d->type_str ? d->type_str : "int32_t";
                 sb_puts(h, cg_fmt(cg, "extern %s;\n", cg_decl(cg, ts, d->name)));

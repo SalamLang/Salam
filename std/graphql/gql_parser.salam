@@ -1,0 +1,504 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package graphql
+
+// parser - recursive descent over the token stream for ExecutableDefinition
+// (spec 2.3 to 2.11): operations, fragments, selection sets, arguments,
+// directives, variable definitions, type references and literal values.
+//
+// The parser state carries the token stream and a cursor. On the first
+// error it records the message and sets `failed`, and every subsequent
+// production returns immediately, so a malformed document produces one
+// good diagnostic rather than a cascade from a desynchronised cursor.
+// Both parsers in this package (this one and gql_sdl.salam) share this
+// state and its primitives.
+
+struct Ps:
+    pub toks: Vector<GqlToken> = Vector {}
+    pub pos: int = 0
+    pub failed: bool = false
+    pub err: GqlError = GqlError {}
+end
+
+func _ps_cur(ps: Ps): GqlToken:
+    if ps.pos >= ps.toks.len(): ret GqlToken {} end
+    ret ps.toks.get(ps.pos)[0]
+end
+
+func _ps_kind(ps: Ps): int: ret _ps_cur(ps).kind end
+
+func _ps_at(ps: Ps, kind: int): bool: ret _ps_kind(ps) == kind end
+
+// True when the cursor is on a Name token with this exact text. Every
+// GraphQL keyword is matched this way; see gql_token.salam for why they
+// are not distinct token kinds.
+func _ps_at_name(ps: Ps, word: str): bool:
+    t := _ps_cur(ps)
+    ret t.kind == TOK_NAME && t.lexeme == word
+end
+
+func _ps_advance(ps &: Ps): GqlToken:
+    t := _ps_cur(ps)
+    if ps.pos < ps.toks.len() - 1: ps.pos += 1 end
+    ret t
+end
+
+func _ps_fail(ps &: Ps, message: str):
+    if ps.failed: ret end
+    t := _ps_cur(ps)
+    ps.failed = true
+    ps.err = SyntaxError(message, t.line, t.col)
+end
+
+// Consumes a token of the expected kind, or fails with the "expected X,
+// found Y" phrasing GraphQL tooling uses.
+func _ps_expect(ps &: Ps, kind: int): GqlToken:
+    if ps.failed: ret GqlToken {} end
+    if !_ps_at(ps, kind):
+        _ps_fail(ps, _gql_expected_msg(TokenKindName(kind), _ps_cur(ps)))
+        ret GqlToken {}
+    end
+    ret _ps_advance(ps)
+end
+
+func _ps_expect_name(ps &: Ps): str:
+    t := _ps_expect(ps, TOK_NAME)
+    ret t.lexeme
+end
+
+// Consumes a specific keyword, failing if it is not there.
+func _ps_expect_word(ps &: Ps, word: str):
+    if ps.failed: ret end
+    if !_ps_at_name(ps, word):
+        _ps_fail(ps, _gql_expected_msg(word, _ps_cur(ps)))
+        ret
+    end
+    _ps_advance(ps)
+end
+
+func _ps_skip(ps &: Ps, kind: int): bool:
+    if _ps_at(ps, kind):
+        _ps_advance(ps)
+        ret true
+    end
+    ret false
+end
+
+// ---- values (spec 2.9) ----
+
+// `isConst` rejects `$variable`, which the spec forbids in default
+// values and in every position inside the type system.
+func _p_value(ps &: Ps, doc &: Document, isConst: bool): int:
+    if ps.failed: ret 0 - 1 end
+    t := _ps_cur(ps)
+    if t.kind == TOK_DOLLAR: ret _p_variable_value(ps, doc, isConst) end
+    if t.kind == TOK_INT:
+        _ps_advance(ps)
+        mut v := AstValue { kind = VAL_INT }
+        v.i = t.ival
+        v.line = t.line
+        ret _doc_add_value(doc, v)
+    end
+    if t.kind == TOK_FLOAT:
+        _ps_advance(ps)
+        mut v := AstValue { kind = VAL_FLOAT }
+        v.f = t.fval
+        v.line = t.line
+        ret _doc_add_value(doc, v)
+    end
+    if IsStringToken(t.kind):
+        _ps_advance(ps)
+        mut v := AstValue { kind = VAL_STRING }
+        v.s = t.sval
+        v.line = t.line
+        ret _doc_add_value(doc, v)
+    end
+    if t.kind == TOK_LBRACKET: ret _p_list_value(ps, doc, isConst) end
+    if t.kind == TOK_LBRACE: ret _p_object_value(ps, doc, isConst) end
+    if t.kind == TOK_NAME: ret _p_name_value(ps, doc) end
+    _ps_fail(ps, _gql_expected_msg("Value", t))
+    ret 0 - 1
+end
+
+func _p_variable_value(ps &: Ps, doc &: Document, isConst: bool): int:
+    t := _ps_cur(ps)
+    if isConst:
+        _ps_fail(ps, "unexpected variable in constant position")
+        ret 0 - 1
+    end
+    _ps_advance(ps)
+    name := _ps_expect_name(ps)
+    if ps.failed: ret 0 - 1 end
+    mut v := AstValue { kind = VAL_VARIABLE }
+    v.s = name
+    v.line = t.line
+    ret _doc_add_value(doc, v)
+end
+
+// `true`, `false` and `null` are Name tokens the spec singles out;
+// every other bare name is an enum value.
+func _p_name_value(ps &: Ps, doc &: Document): int:
+    t := _ps_advance(ps)
+    mut v := AstValue {}
+    v.line = t.line
+    if t.lexeme == "true":
+        v.kind = VAL_BOOL
+        v.b = true
+    else t.lexeme == "false":
+        v.kind = VAL_BOOL
+        v.b = false
+    else t.lexeme == "null":
+        v.kind = VAL_NULL
+    else:
+        v.kind = VAL_ENUM
+        v.s = t.lexeme
+    end
+    ret _doc_add_value(doc, v)
+end
+
+func _p_list_value(ps &: Ps, doc &: Document, isConst: bool): int:
+    t := _ps_expect(ps, TOK_LBRACKET)
+    mut items := Vector {} as Vector<int>
+    until _ps_at(ps, TOK_RBRACKET):
+        if ps.failed || _ps_at(ps, TOK_EOF):
+            _ps_fail(ps, "unterminated list value")
+            items.free()
+            ret 0 - 1
+        end
+        items.push(_p_value(ps, doc, isConst))
+    end
+    _ps_advance(ps)
+    mut v := AstValue { kind = VAL_LIST }
+    v.items = items
+    v.line = t.line
+    ret _doc_add_value(doc, v)
+end
+
+func _p_object_value(ps &: Ps, doc &: Document, isConst: bool): int:
+    t := _ps_expect(ps, TOK_LBRACE)
+    mut items := Vector {} as Vector<int>
+    mut keys := Vector {} as Vector<str>
+    until _ps_at(ps, TOK_RBRACE):
+        if ps.failed || _ps_at(ps, TOK_EOF):
+            _ps_fail(ps, "unterminated object value")
+            items.free()
+            keys.free()
+            ret 0 - 1
+        end
+        keys.push(_ps_expect_name(ps))
+        _ps_expect(ps, TOK_COLON)
+        items.push(_p_value(ps, doc, isConst))
+    end
+    _ps_advance(ps)
+    mut v := AstValue { kind = VAL_OBJECT }
+    v.items = items
+    v.keys = keys
+    v.line = t.line
+    ret _doc_add_value(doc, v)
+end
+
+// ---- type references (spec 2.11) ----
+
+func _p_type_ref(ps &: Ps, doc &: Document): int:
+    if ps.failed: ret 0 - 1 end
+    mut id := 0 - 1
+    if _ps_skip(ps, TOK_LBRACKET):
+        inner := _p_type_ref(ps, doc)
+        _ps_expect(ps, TOK_RBRACKET)
+        mut t := AstTypeRef { kind = TREF_LIST }
+        t.inner = inner
+        id = _doc_add_tref(doc, t)
+    else:
+        name := _ps_expect_name(ps)
+        if ps.failed: ret 0 - 1 end
+        mut t := AstTypeRef { kind = TREF_NAMED }
+        t.name = name
+        id = _doc_add_tref(doc, t)
+    end
+    if _ps_skip(ps, TOK_BANG):
+        mut t := doc.trefs.get(id)[0]
+        t.nonNull = true
+        doc.trefs.set(id, t)
+    end
+    ret id
+end
+
+// ---- arguments and directives ----
+
+func _p_arguments(ps &: Ps, doc &: Document, isConst: bool): Vector<AstArgument>:
+    mut out := Vector {} as Vector<AstArgument>
+    if !_ps_at(ps, TOK_LPAREN): ret out end
+    _ps_advance(ps)
+    until _ps_at(ps, TOK_RPAREN):
+        if ps.failed || _ps_at(ps, TOK_EOF):
+            _ps_fail(ps, "unterminated argument list")
+            ret out
+        end
+        t := _ps_cur(ps)
+        mut a := AstArgument {}
+        a.name = _ps_expect_name(ps)
+        a.line = t.line
+        _ps_expect(ps, TOK_COLON)
+        a.value = _p_value(ps, doc, isConst)
+        out.push(a)
+    end
+    _ps_advance(ps)
+    ret out
+end
+
+func _p_directives(ps &: Ps, doc &: Document, isConst: bool): Vector<AstDirective>:
+    mut out := Vector {} as Vector<AstDirective>
+    until _ps_at(ps, TOK_AT):
+        if ps.failed: ret out end
+        t := _ps_advance(ps)
+        mut d := AstDirective {}
+        d.name = _ps_expect_name(ps)
+        d.line = t.line
+        d.args = _p_arguments(ps, doc, isConst)
+        out.push(d)
+    end
+    ret out
+end
+
+// ---- selection sets (spec 2.4) ----
+
+func _p_selection_set(ps &: Ps, doc &: Document): Vector<int>:
+    mut out := Vector {} as Vector<int>
+    _ps_expect(ps, TOK_LBRACE)
+    if ps.failed: ret out end
+    until _ps_at(ps, TOK_RBRACE):
+        if ps.failed || _ps_at(ps, TOK_EOF):
+            _ps_fail(ps, "unterminated selection set")
+            ret out
+        end
+        out.push(_p_selection(ps, doc))
+    end
+    _ps_advance(ps)
+    if out.len() == 0 && !ps.failed:
+        _ps_fail(ps, "a selection set must select at least one field")
+    end
+    ret out
+end
+
+func _p_selection(ps &: Ps, doc &: Document): int:
+    if _ps_at(ps, TOK_SPREAD): ret _p_spread(ps, doc) end
+    ret _p_field(ps, doc)
+end
+
+// `...` introduces either a named fragment spread or an inline
+// fragment; `on` after the spread (or a directive, or `{`) decides.
+// The name `on` cannot itself be a fragment name, which is what makes
+// this unambiguous.
+func _p_spread(ps &: Ps, doc &: Document): int:
+    t := _ps_advance(ps)
+    mut s := AstSelection {}
+    s.line = t.line
+    s.col = t.col
+    if _ps_at_name(ps, "on"):
+        _ps_advance(ps)
+        s.kind = SEL_INLINE_FRAGMENT
+        s.typeCondition = _ps_expect_name(ps)
+        s.hasTypeCondition = true
+        s.directives = _p_directives(ps, doc, false)
+        s.selections = _p_selection_set(ps, doc)
+        ret _doc_add_selection(doc, s)
+    end
+    if _ps_at(ps, TOK_NAME):
+        s.kind = SEL_FRAGMENT_SPREAD
+        s.name = _ps_expect_name(ps)
+        s.directives = _p_directives(ps, doc, false)
+        ret _doc_add_selection(doc, s)
+    end
+    s.kind = SEL_INLINE_FRAGMENT
+    s.directives = _p_directives(ps, doc, false)
+    s.selections = _p_selection_set(ps, doc)
+    ret _doc_add_selection(doc, s)
+end
+
+func _p_field(ps &: Ps, doc &: Document): int:
+    t := _ps_cur(ps)
+    mut s := AstSelection { kind = SEL_FIELD }
+    s.line = t.line
+    s.col = t.col
+    first := _ps_expect_name(ps)
+    if ps.failed: ret 0 - 1 end
+    if _ps_skip(ps, TOK_COLON):
+        s.alias = first
+        s.name = _ps_expect_name(ps)
+    else:
+        s.name = first
+    end
+    s.args = _p_arguments(ps, doc, false)
+    s.directives = _p_directives(ps, doc, false)
+    if _ps_at(ps, TOK_LBRACE):
+        s.selections = _p_selection_set(ps, doc)
+    end
+    ret _doc_add_selection(doc, s)
+end
+
+// ---- operations and fragments ----
+
+func _p_variable_defs(ps &: Ps, doc &: Document): Vector<AstVariableDef>:
+    mut out := Vector {} as Vector<AstVariableDef>
+    if !_ps_at(ps, TOK_LPAREN): ret out end
+    _ps_advance(ps)
+    until _ps_at(ps, TOK_RPAREN):
+        if ps.failed || _ps_at(ps, TOK_EOF):
+            _ps_fail(ps, "unterminated variable definitions")
+            ret out
+        end
+        out.push(_p_variable_def(ps, doc))
+    end
+    _ps_advance(ps)
+    ret out
+end
+
+func _p_variable_def(ps &: Ps, doc &: Document): AstVariableDef:
+    t := _ps_expect(ps, TOK_DOLLAR)
+    mut v := AstVariableDef {}
+    v.line = t.line
+    v.name = _ps_expect_name(ps)
+    _ps_expect(ps, TOK_COLON)
+    v.typeRef = _p_type_ref(ps, doc)
+    if _ps_skip(ps, TOK_EQUALS):
+        v.defaultValue = _p_value(ps, doc, true)
+        v.hasDefault = true
+    end
+    v.directives = _p_directives(ps, doc, true)
+    ret v
+end
+
+func _p_operation_type(ps &: Ps): int:
+    if _ps_at_name(ps, "mutation"):
+        _ps_advance(ps)
+        ret OP_MUTATION
+    end
+    if _ps_at_name(ps, "subscription"):
+        _ps_advance(ps)
+        ret OP_SUBSCRIPTION
+    end
+    _ps_expect_word(ps, "query")
+    ret OP_QUERY
+end
+
+// The bare `{ ... }` form (spec 2.3 "query shorthand").
+func _p_shorthand_operation(ps &: Ps, doc &: Document): AstOperation:
+    t := _ps_cur(ps)
+    mut op := AstOperation { optype = OP_QUERY }
+    op.shorthand = true
+    op.line = t.line
+    op.selections = _p_selection_set(ps, doc)
+    ret op
+end
+
+func _p_operation(ps &: Ps, doc &: Document): AstOperation:
+    if _ps_at(ps, TOK_LBRACE): ret _p_shorthand_operation(ps, doc) end
+    t := _ps_cur(ps)
+    mut op := AstOperation {}
+    op.line = t.line
+    op.optype = _p_operation_type(ps)
+    if _ps_at(ps, TOK_NAME): op.name = _ps_expect_name(ps) end
+    op.varDefs = _p_variable_defs(ps, doc)
+    op.directives = _p_directives(ps, doc, false)
+    op.selections = _p_selection_set(ps, doc)
+    ret op
+end
+
+func _p_fragment(ps &: Ps, doc &: Document): AstFragment:
+    t := _ps_cur(ps)
+    _ps_expect_word(ps, "fragment")
+    mut f := AstFragment {}
+    f.line = t.line
+    f.name = _ps_expect_name(ps)
+    if f.name == "on":
+        _ps_fail(ps, `a fragment cannot be named "on"`)
+        ret f
+    end
+    _ps_expect_word(ps, "on")
+    f.typeCondition = _ps_expect_name(ps)
+    f.directives = _p_directives(ps, doc, false)
+    f.selections = _p_selection_set(ps, doc)
+    ret f
+end
+
+func _p_definition(ps &: Ps, doc &: Document):
+    if _ps_at_name(ps, "fragment"):
+        doc.frags.push(_p_fragment(ps, doc))
+        ret
+    end
+    if _ps_at(ps, TOK_LBRACE) || _ps_at_name(ps, "query") || _ps_at_name(ps, "mutation") || _ps_at_name(ps, "subscription"):
+        doc.ops.push(_p_operation(ps, doc))
+        ret
+    end
+    _ps_fail(ps, _gql_unexpected_msg(_ps_cur(ps)))
+end
+
+// Builds the shared parser state from source, surfacing a lexer error
+// as a syntax error at the offending token.
+func _ps_from_source(source: str, ps &: Ps): bool:
+    mut ok := true
+    ts := Tokenize(source, ok)
+    ps.toks = ts.toks
+    ps.pos = 0
+    if ok: ret true end
+    mut i := 0
+    until i < ps.toks.len():
+        t := ps.toks.get(i)[0]
+        if t.kind == TOK_ERROR:
+            ps.failed = true
+            ps.err = SyntaxError(t.sval, t.line, t.col)
+            ret false
+        end
+        i += 1
+    end
+    ret true
+end
+
+// Parses an executable document. On failure `err` holds the single
+// syntax error and the returned Document is empty but still safe to
+// free.
+@en "Parse"
+@fa "تجزیه"
+@ar "تحلیل"
+pub func Parse(source: str, err &: GqlError): Document:
+    mut doc := Document {}
+    mut ps := Ps {}
+    if !_ps_from_source(source, ps):
+        err = ps.err
+        ps.toks.free()
+        ret doc
+    end
+    until _ps_at(ps, TOK_EOF):
+        if ps.failed: break end
+        _p_definition(ps, doc)
+    end
+    if !ps.failed && doc.ops.len() == 0 && doc.frags.len() == 0:
+        _ps_fail(ps, "a document must contain at least one definition")
+    end
+    if ps.failed: err = ps.err end
+    ps.toks.free()
+    ret doc
+end
+
+// True when `source` is a syntactically valid executable document.
+@en "ParseOk"
+@fa "تجزیه درست"
+@ar "تحلیل سلیم"
+pub func ParseOk(source: str): bool:
+    mut err := GqlError {}
+    mut doc := Parse(source, err)
+    FreeDocument(doc)
+    ret err.message == ""
+end

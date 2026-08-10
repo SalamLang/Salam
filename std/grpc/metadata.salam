@@ -1,0 +1,204 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package grpc
+
+import encoding
+import net.http2
+
+// Call metadata: the custom headers a client attaches to a request and a
+// server attaches to its response or trailers.
+//
+// Two rules from the gRPC wire spec shape everything here. Keys are
+// lower-case ASCII (HTTP/2 forbids upper-case header names outright, so
+// this is not merely a convention - a capital letter is a protocol
+// error). And a key ending in `-bin` carries arbitrary binary, which
+// cannot travel in a header value, so it is base64-encoded on the wire
+// and decoded back on arrival; callers of this API always see and supply
+// the raw bytes.
+
+// Reserved names a caller must not set as metadata: they are part of the
+// protocol itself, not user data.
+func _is_reserved(key: str): bool:
+    if key.len() > 0 && key.substr(0, 1) == ":": ret true end
+    if key == "content-type": ret true end
+    if key == "te": ret true end
+    if key == "grpc-status": ret true end
+    if key == "grpc-message": ret true end
+    if key == "grpc-timeout": ret true end
+    if key == "grpc-encoding": ret true end
+    if key == "grpc-accept-encoding": ret true end
+    if key == "user-agent": ret true end
+    ret false
+end
+
+func _lower(s: str): str:
+    ret s.lower()
+end
+
+func _ends_bin(key: str): bool:
+    n := key.len()
+    if n < 4: ret false end
+    ret key.substr(n - 4, 4) == "-bin"
+end
+
+@en "NewMetadata"
+@fa "فراداده جدید"
+@ar "بیانات وصفیة جدیدة"
+pub func NewMetadata(): Metadata:
+    ret Metadata {}
+end
+
+// Adds a text entry. The key is lower-cased for you; a `-bin` key is
+// rejected here because its value would need to be bytes - use
+// MDAddBinary for those.
+@en "MDAdd"
+@fa "افزودن فراداده"
+@ar "إضافة بیانات وصفیة"
+pub func MDAdd(md &: Metadata, key: str, value: str): bool:
+    k := _lower(key)
+    if _is_reserved(k) || _ends_bin(k): ret false end
+    mut e := MDEntry {}
+    e.key = k
+    e.value = value
+    md.items.push(e)
+    ret true
+end
+
+// Adds a binary entry. `key` must end in `-bin`; the value is carried
+// base64-encoded on the wire and handed back decoded.
+@en "MDAddBinary"
+@fa "افزودن فراداده دودویی"
+@ar "إضافة بیانات ثنائیة"
+pub func MDAddBinary(md &: Metadata, key: str, value: str): bool:
+    k := _lower(key)
+    if _is_reserved(k) || !_ends_bin(k): ret false end
+    mut e := MDEntry {}
+    e.key = k
+    e.value = value
+    e.binary = true
+    md.items.push(e)
+    ret true
+end
+
+@en "MDGet"
+@fa "دریافت فراداده"
+@ar "جلب بیانات وصفیة"
+pub func MDGet(md: Metadata, key: str): str:
+    k := _lower(key)
+    mut i := 0
+    until i < md.items.len():
+        e := md.items.get(i)[0]
+        if e.key == k: ret e.value end
+        i += 1
+    end
+    ret ""
+end
+
+@en "MDHas"
+@fa "فراداده دارد"
+@ar "تملک بیانات"
+pub func MDHas(md: Metadata, key: str): bool:
+    k := _lower(key)
+    mut i := 0
+    until i < md.items.len():
+        if md.items.get(i)[0].key == k: ret true end
+        i += 1
+    end
+    ret false
+end
+
+// gRPC allows a key to repeat; this returns every value for it, in the
+// order they arrived.
+@en "MDGetAll"
+@fa "دریافت همه فراداده"
+@ar "جلب کل القیم"
+pub func MDGetAll(md: Metadata, key: str): Vector<str>:
+    k := _lower(key)
+    mut out := Vector {} as Vector<str>
+    mut i := 0
+    until i < md.items.len():
+        e := md.items.get(i)[0]
+        if e.key == k: out.push(e.value) end
+        i += 1
+    end
+    ret out
+end
+
+@en "MDCount"
+@fa "تعداد فراداده"
+@ar "عدد البیانات"
+pub func MDCount(md: Metadata): int:
+    ret md.items.len()
+end
+
+@en "MDKeyAt"
+@fa "کلید فراداده"
+@ar "مفتاح البیانات"
+pub func MDKeyAt(md: Metadata, i: int): str:
+    if i < 0 || i >= md.items.len(): ret "" end
+    ret md.items.get(i)[0].key
+end
+
+@en "MDValueAt"
+@fa "مقدار فراداده"
+@ar "قیمة البیانات"
+pub func MDValueAt(md: Metadata, i: int): str:
+    if i < 0 || i >= md.items.len(): ret "" end
+    ret md.items.get(i)[0].value
+end
+
+// Appends every entry to an outgoing HTTP/2 header list, base64-encoding
+// the binary ones.
+@en "MDToHeaders"
+@fa "فراداده به سرآیند"
+@ar "البیانات إلی الترویسات"
+pub func MDToHeaders(md: Metadata, hl &: http2.HeaderList):
+    mut i := 0
+    until i < md.items.len():
+        e := md.items.get(i)[0]
+        if e.binary:
+            http2.HeadersAdd(hl, e.key, encoding.Base64Encode(e.value))
+        else:
+            http2.HeadersAdd(hl, e.key, e.value)
+        end
+        i += 1
+    end
+end
+
+// The inverse: pulls user metadata out of a received header block,
+// skipping the pseudo-headers and the protocol's own headers.
+@en "MDFromHeaders"
+@fa "فراداده از سرآیند"
+@ar "البیانات من الترویسات"
+pub func MDFromHeaders(hl: http2.HeaderList): Metadata:
+    mut md := Metadata {}
+    mut i := 0
+    until i < hl.items.len():
+        h := hl.items.get(i)[0]
+        if !_is_reserved(h.name):
+            mut e := MDEntry {}
+            e.key = h.name
+            if _ends_bin(h.name):
+                e.binary = true
+                e.value = encoding.Base64Decode(h.value)
+            else:
+                e.value = h.value
+            end
+            md.items.push(e)
+        end
+        i += 1
+    end
+    ret md
+end

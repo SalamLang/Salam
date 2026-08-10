@@ -8,7 +8,7 @@
 # Usage: tools/mcp/gen-index.sh
 set -eu
 
-root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+root=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 server=${SALAM_MCP:-"$root/salam-mcp"}
 [ -x "$server" ] || server="$root/salam-mcp.exe"
 if [ ! -x "$server" ]; then
@@ -24,11 +24,11 @@ printf '%s\n' \
     | SALAM_MCP_ROOT="$root" "$server" 2>/dev/null > "$response"
 
 RESPONSE_PATH="$response" OUT_PATH="$root/docs/ai/stdlib-index.json" node -e '
-  const fs = require("fs");
-  const line = fs.readFileSync(process.env.RESPONSE_PATH, "utf8").trim().split("\n")[0];
-  const obj = JSON.parse(JSON.parse(line).result.contents[0].text);
-  fs.writeFileSync(process.env.OUT_PATH, JSON.stringify(obj, null, 2) + "\n");
-  const names = Object.keys(obj.packages);
-  const decls = names.reduce((n, k) => n + obj.packages[k].length, 0);
-  console.error(`wrote ${process.env.OUT_PATH}: ${names.length} packages, ${decls} declarations`);
+    const fs = require("fs");
+    const line = fs.readFileSync(process.env.RESPONSE_PATH, "utf8").trim().split("\n")[0];
+    const obj = JSON.parse(JSON.parse(line).result.contents[0].text);
+    fs.writeFileSync(process.env.OUT_PATH, JSON.stringify(obj, null, 2) + "\n");
+    const names = Object.keys(obj.packages);
+    const decls = names.reduce((n, k) => n + obj.packages[k].length, 0);
+    console.error(`wrote ${process.env.OUT_PATH}: ${names.length} packages, ${decls} declarations`);
 '

@@ -1,0 +1,372 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package grpc
+
+import compress
+import conv
+import net.http2
+import net.internal.rawsock
+import tls
+
+// The gRPC client. A Channel is one HTTP/2 connection; every call is one
+// stream on it, and many calls can be in flight at once because HTTP/2
+// multiplexes them.
+//
+// There is no callback API, because Salam has no closures for one to
+// capture context with. Instead a call is driven explicitly:
+//
+//     sid := grpc.StartCall(ch, "/echo.Echo/Say", md)
+//     grpc.SendMessage(ch, sid, req, true)      // true = last message
+//     reply := grpc.RecvMessage(ch, sid, ok)
+//     st := grpc.FinishCall(ch, sid)
+//
+// which covers all four call shapes: send one message or many, receive
+// one or many, in any interleaving. UnaryCall wraps the common case of
+// exactly one each way.
+
+@en "Channel"
+@fa "کانال"
+@ar "قناة"
+pub struct Channel:
+    pub conn: http2.Conn = http2.Conn {}
+    pub authority: str = ""
+    pub scheme: str = "http"
+    pub user_agent: str = "salam-grpc/1.0"
+    pub timeout_ms: int = 0
+    pub use_gzip: bool = false
+    pub cursors: CursorTable = CursorTable {}
+    pub ok: bool = false
+    pub last_error: str = ""
+end
+
+func _cursor_index(ch &: Channel, sid: int): int:
+    mut i := 0
+    until i < ch.cursors.items.len():
+        if ch.cursors.items.get(i)[0].stream_id == sid: ret i end
+        i += 1
+    end
+    mut c := Cursor {}
+    c.stream_id = sid
+    c.pos = 0
+    ch.cursors.items.push(c)
+    ret ch.cursors.items.len() - 1
+end
+
+func _cursor_pos(ch &: Channel, sid: int): int:
+    ret ch.cursors.items.get(_cursor_index(ch, sid))[0].pos
+end
+
+func _cursor_set(ch &: Channel, sid: int, pos: int):
+    idx := _cursor_index(ch, sid)
+    mut c := ch.cursors.items.get(idx)[0]
+    c.pos = pos
+    ch.cursors.items.set(idx, c)
+end
+
+// gRPC's timeout header is a number plus a unit character; milliseconds
+// is precise enough for any deadline a caller can actually observe.
+func _timeout_header(ms: int): str:
+    ret conv.FormatInt(ms as i64) + "m"
+end
+
+func _finish_channel(ch &: Channel): bool:
+    if !http2.ClientHandshake(ch.conn):
+        ch.last_error = "HTTP/2 handshake failed"
+        ret false
+    end
+    // Drain the peer's opening SETTINGS so its real limits are in effect
+    // before the first call goes out.
+    if http2.Poll(ch.conn) == http2.H2_POLL_ERROR:
+        ch.last_error = "no SETTINGS from server"
+        ret false
+    end
+    ch.ok = true
+    ret true
+end
+
+@en "Dial"
+@fa "اتصال"
+@ar "اتصال"
+pub func Dial(host: str, port: int): Channel:
+    mut ch := Channel {}
+    ch.authority = host + ":" + conv.FormatInt(port as i64)
+    ch.scheme = "http"
+    sock := rawsock.Connect(host, port)
+    if !rawsock.Ok(sock):
+        ch.last_error = "connect failed"
+        ret ch
+    end
+    ch.conn = http2.NewConn(http2.PlainTransport(sock.fd), false)
+    _finish_channel(ch)
+    ret ch
+end
+
+// gRPC over TLS. Note that a real "grpcs" peer negotiates HTTP/2 through
+// ALPN; std/tls does not offer ALPN yet, so this works against servers
+// that accept h2 on the port without requiring the negotiation, and is
+// wired so that adding ALPN later changes nothing here.
+@en "DialTLS"
+@fa "اتصال امن"
+@ar "اتصال آمن"
+pub func DialTLS(host: str, port: int): Channel:
+    mut ch := Channel {}
+    ch.authority = host + ":" + conv.FormatInt(port as i64)
+    ch.scheme = "https"
+    cfg := tls.NewConfig(host)
+    sec := tls.Dial(host, port, cfg)
+    if !tls.ConnOk(sec):
+        ch.last_error = tls.ConnError(sec)
+        ret ch
+    end
+    ch.conn = http2.NewConn(http2.TLSTransport(sec), false)
+    _finish_channel(ch)
+    ret ch
+end
+
+@en "ChannelOk"
+@fa "کانال معتبر"
+@ar "القناة صالحة"
+pub func ChannelOk(ch: Channel): bool:
+    ret ch.ok
+end
+
+@en "ChannelError"
+@fa "خطای کانال"
+@ar "خطأ القناة"
+pub func ChannelError(ch: Channel): str:
+    ret ch.last_error
+end
+
+@en "SetTimeout"
+@fa "تنظیم مهلت"
+@ar "تعیین المهلة"
+pub func SetTimeout(ch &: Channel, ms: int):
+    ch.timeout_ms = ms
+end
+
+@en "SetGzip"
+@fa "فعال‌سازی فشرده‌سازی"
+@ar "تفعیل الضغط"
+pub func SetGzip(ch &: Channel, enable: bool):
+    ch.use_gzip = enable
+end
+
+@en "CloseChannel"
+@fa "بستن کانال"
+@ar "إغلاق القناة"
+pub func CloseChannel(ch &: Channel):
+    if ch.ok:
+        http2.SendGoAway(ch.conn, http2.H2_NO_ERROR, "")
+        http2.CloseConn(ch.conn)
+    end
+    ch.ok = false
+end
+
+// Opens a stream and sends the request headers. Returns the stream id,
+// or 0 when the channel is unusable.
+@en "StartCall"
+@fa "شروع فراخوانی"
+@ar "بدء الاستدعاء"
+pub func StartCall(ch &: Channel, path: str, md: Metadata): int:
+    if !ch.ok: ret 0 end
+    sid := http2.NextStreamId(ch.conn)
+    mut hl := http2.HeaderList {}
+    http2.HeadersAdd(hl, ":method", "POST")
+    http2.HeadersAdd(hl, ":scheme", ch.scheme)
+    http2.HeadersAdd(hl, ":path", path)
+    http2.HeadersAdd(hl, ":authority", ch.authority)
+    http2.HeadersAdd(hl, "content-type", GRPC_CONTENT_TYPE_PROTO)
+    http2.HeadersAdd(hl, "user-agent", ch.user_agent)
+    // `te: trailers` is mandatory: it is how a client promises it will
+    // read the trailing header block that carries grpc-status.
+    http2.HeadersAdd(hl, "te", "trailers")
+    if ch.timeout_ms > 0:
+        http2.HeadersAdd(hl, "grpc-timeout", _timeout_header(ch.timeout_ms))
+    end
+    if ch.use_gzip:
+        http2.HeadersAdd(hl, "grpc-encoding", "gzip")
+    end
+    http2.HeadersAdd(hl, "grpc-accept-encoding", "identity,gzip")
+    MDToHeaders(md, hl)
+    if !http2.SendHeaders(ch.conn, sid, hl, false):
+        ch.last_error = "failed to send headers"
+        ret 0
+    end
+    ret sid
+end
+
+// Sends one request message. `last` half-closes the stream, which is
+// what tells the server no more requests are coming.
+@en "SendMessage"
+@fa "ارسال پیام"
+@ar "إرسال رسالة"
+pub func SendMessage(ch &: Channel, sid: int, msg: compress.ByteBuf, last: bool): bool:
+    if !ch.ok || sid == 0: ret false end
+    mut framed := FrameMessageGzip(msg, ch.use_gzip)
+    ok := http2.SendData(ch.conn, sid, framed, last)
+    compress.BufFree(framed)
+    if !ok: ch.last_error = "failed to send message" end
+    ret ok
+end
+
+// Half-closes without sending anything more.
+@en "CloseSend"
+@fa "بستن ارسال"
+@ar "إغلاق الإرسال"
+pub func CloseSend(ch &: Channel, sid: int): bool:
+    if !ch.ok || sid == 0: ret false end
+    empty := compress.NewByteBuf()
+    ok := http2.SendData(ch.conn, sid, empty, true)
+    compress.BufFree(empty)
+    ret ok
+end
+
+// Reads the next response message, pumping the connection until one is
+// complete. `ok` false means the stream ended without another message -
+// the normal way a server-streaming call terminates, not an error.
+@en "RecvMessage"
+@fa "دریافت پیام"
+@ar "استقبال رسالة"
+pub func RecvMessage(ch &: Channel, sid: int, ok &: bool): compress.ByteBuf:
+    if !ch.ok || sid == 0:
+        ok = false
+        ret compress.NewByteBuf()
+    end
+    mut guard := 0
+    until guard < GRPC_MAX_FRAMES:
+        s := http2.StreamAt(ch.conn, sid)
+        mut pos := _cursor_pos(ch, sid)
+        if HasMessage(s.data, pos):
+            mut mok := false
+            msg := NextMessage(s.data, pos, mok)
+            _cursor_set(ch, sid, pos)
+            ok = mok
+            ret msg
+        end
+        if s.end_stream || s.reset:
+            ok = false
+            ret compress.NewByteBuf()
+        end
+        if http2.Poll(ch.conn) == http2.H2_POLL_ERROR:
+            ch.last_error = "connection closed while awaiting a message"
+            ok = false
+            ret compress.NewByteBuf()
+        end
+        guard += 1
+    end
+    ok = false
+    ret compress.NewByteBuf()
+end
+
+// Waits for the stream to end and reads the status out of its trailers
+// (or, for a trailers-only reply, out of its headers).
+@en "FinishCall"
+@fa "پایان فراخوانی"
+@ar "إنهاء الاستدعاء"
+pub func FinishCall(ch &: Channel, sid: int): Status:
+    mut st := Status {}
+    if !ch.ok || sid == 0:
+        st.code = GRPC_UNAVAILABLE
+        st.message = ch.last_error
+        ret st
+    end
+    if !http2.AwaitStreamEnd(ch.conn, sid, GRPC_MAX_FRAMES):
+        s := http2.StreamAt(ch.conn, sid)
+        if s.reset:
+            st.code = GRPC_CANCELLED
+            st.message = "stream reset: " + http2.ErrorName(s.error_code)
+            ret st
+        end
+        st.code = GRPC_UNAVAILABLE
+        st.message = "connection closed before the call completed"
+        ret st
+    end
+    s := http2.StreamAt(ch.conn, sid)
+    mut code_text := http2.HeadersGet(s.trailers, "grpc-status")
+    mut msg_text := http2.HeadersGet(s.trailers, "grpc-message")
+    if code_text == "":
+        // Trailers-only: the whole reply was one header block.
+        code_text = http2.HeadersGet(s.headers, "grpc-status")
+        msg_text = http2.HeadersGet(s.headers, "grpc-message")
+    end
+    if code_text == "":
+        status_text := http2.HeadersGet(s.headers, ":status")
+        if status_text != "" && status_text != "200":
+            st.code = GRPC_UNKNOWN
+            st.message = "HTTP status " + status_text
+            ret st
+        end
+        st.code = GRPC_UNKNOWN
+        st.message = "server sent no grpc-status"
+        ret st
+    end
+    st.code = ParseStatusCode(code_text)
+    st.message = DecodeStatusMessage(msg_text)
+    ret st
+end
+
+@en "CallHeaders"
+@fa "سرآیندهای فراخوانی"
+@ar "ترویسات الاستدعاء"
+pub func CallHeaders(ch: Channel, sid: int): Metadata:
+    s := http2.StreamAt(ch.conn, sid)
+    ret MDFromHeaders(s.headers)
+end
+
+@en "CallTrailers"
+@fa "دنباله‌های فراخوانی"
+@ar "ذیول الاستدعاء"
+pub func CallTrailers(ch: Channel, sid: int): Metadata:
+    s := http2.StreamAt(ch.conn, sid)
+    ret MDFromHeaders(s.trailers)
+end
+
+// The common case: one request message, one response message. `st`
+// receives the call's final status; the returned buffer is empty when
+// the call failed.
+@en "UnaryCall"
+@fa "فراخوانی یگانه"
+@ar "استدعاء أحادی"
+pub func UnaryCall(ch &: Channel, path: str, req: compress.ByteBuf, md: Metadata, st &: Status): compress.ByteBuf:
+    sid := StartCall(ch, path, md)
+    if sid == 0:
+        st = NewStatus(GRPC_UNAVAILABLE, ch.last_error)
+        ret compress.NewByteBuf()
+    end
+    if !SendMessage(ch, sid, req, true):
+        st = NewStatus(GRPC_UNAVAILABLE, ch.last_error)
+        ret compress.NewByteBuf()
+    end
+    mut ok := false
+    reply := RecvMessage(ch, sid, ok)
+    st = FinishCall(ch, sid)
+    if !ok && st.code == GRPC_OK:
+        st = NewStatus(GRPC_INTERNAL, "server returned no message")
+    end
+    ret reply
+end
+
+@en "UnaryCallStr"
+@fa "فراخوانی یگانه متنی"
+@ar "استدعاء أحادی نصی"
+pub func UnaryCallStr(ch &: Channel, path: str, req: str, st &: Status): str:
+    mut body := compress.BufFromStr(req)
+    mut md := NewMetadata()
+    mut reply := UnaryCall(ch, path, body, md, st)
+    compress.BufFree(body)
+    out := compress.BufToStrUnsafe(reply)
+    compress.BufFree(reply)
+    ret out
+end

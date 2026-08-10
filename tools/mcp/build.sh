@@ -10,7 +10,7 @@
 # resulting server fails in confusing ways.
 set -eu
 
-root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+root=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 out=${1:-"$root/salam-mcp"}
 
 pick_compiler() {

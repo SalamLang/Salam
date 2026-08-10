@@ -722,6 +722,33 @@ if want errors; then
     done
 fi
 
+# The self-hosted compiler's own unit tests. Every one of them links a large
+# slice of compiler/, so this section costs minutes of build time where the
+# others cost seconds - it is opt-in via SALAM_TEST_PORT=1 or by naming the
+# section, and skipped (never silently dropped) otherwise.
+#
+# It is wired here at all because being wired nowhere is what happened last
+# time: the dir-per-stage restructure moved lexer.salam to lexer/lexer.salam,
+# every file here kept importing the flat paths, and with no runner
+# referencing them the whole suite sat unbuildable without failing anything.
+#
+# *_test.salam only. The *_run.salam files are differential runners that take
+# a source path and print output for byte-comparison against a reference
+# compiler; they are not self-contained suites and have nothing to assert.
+if want port; then
+    if [ -z "$SECTIONS" ] && [ "${SALAM_TEST_PORT:-0}" != "1" ]; then
+        note_result "SKIP port/* (heavy; set SALAM_TEST_PORT=1 or run the 'port' section)" "port/all"
+    else
+        port_expect="$WORK/port.expect"
+        printf '0 failed\n' >"$port_expect"
+        for f in compiler/tests_port/*_test.salam; do
+            [ -e "$f" ] || continue
+            name=$(basename "$f" .salam)
+            add_job expect "port/$name" "$f" en "$port_expect"
+        done
+    fi
+fi
+
 if want layout; then
     for lang in $LANGS; do
         for f in tests/"$lang"/layout/*.salam; do

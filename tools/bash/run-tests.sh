@@ -478,10 +478,10 @@ REDIS_SKIP_MSG="requires a Redis server on 127.0.0.1:6379"
 
 if want fmt; then
     for lang in $LANGS; do
-        for f in ../tests/"$lang"/fmt/*.salam; do
+        for f in tests/"$lang"/fmt/*.salam; do
             [ -e "$f" ] || continue
             name=$(basename "$f" .salam)
-            exp="$(pick_expect "../tests/$lang/fmt/$name")"
+            exp="$(pick_expect "tests/$lang/fmt/$name")"
             [ -f "$exp" ] || continue
             add_job fmt "fmt/$lang/$name" "$f" "$lang" "$exp"
         done
@@ -491,12 +491,12 @@ fi
 collect_example_dir() {
     dir="$1"
     for lang in $LANGS; do
-        [ -d "../tests/$lang/$dir" ] || continue
-        find "../tests/$lang/$dir" -name '*.salam' | sort | while IFS= read -r f; do
+        [ -d "tests/$lang/$dir" ] || continue
+        find "tests/$lang/$dir" -name '*.salam' | sort | while IFS= read -r f; do
             case "$(basename "$f")" in _*) continue ;; esac
-            rel="${f#../tests/"$lang"/"$dir"/}"
+            rel="${f#tests/"$lang"/"$dir"/}"
             name="${rel%.salam}"
-            base="../tests/$lang/$dir/$name"
+            base="tests/$lang/$dir/$name"
             exp="$(pick_expect "$base")"
             if [ -f "$exp" ]; then
                 add_job build "$dir/$lang/$name" "$f" "$lang" "$exp"
@@ -528,11 +528,11 @@ done
 
 if want general; then
     for lang in $LANGS; do
-        for f in ../tests/"$lang"/general/*.salam; do
+        for f in tests/"$lang"/general/*.salam; do
             [ -e "$f" ] || continue
             name=$(basename "$f" .salam)
             case "$name" in _*) continue ;; esac
-            exp="$(pick_expect "../tests/$lang/general/$name")"
+            exp="$(pick_expect "tests/$lang/general/$name")"
             [ -f "$exp" ] || continue
             def=$(grep -o 'DEFINE: [A-Za-z0-9_]*' "$f" | sed 's/DEFINE: /-D/' | tr '\n' ' ')
             add_job build "general/$lang/$name" "$f" "$lang" "$exp" "${def:--}"
@@ -550,8 +550,8 @@ if want db; then
     done
     mockc=""
     for lang in $LANGS; do
-        [ -f "../tests/$lang/db/mysql_mock.c" ] && {
-            mockc="../tests/$lang/db/mysql_mock.c"
+        [ -f "tests/$lang/db/mysql_mock.c" ] && {
+            mockc="tests/$lang/db/mysql_mock.c"
             break
         }
     done
@@ -564,13 +564,13 @@ if want db; then
         fi
     fi
     for lang in $LANGS; do
-        [ -d "../tests/$lang/db" ] || continue
+        [ -d "tests/$lang/db" ] || continue
         if [ "$dbok" = "1" ]; then
-            for f in ../tests/"$lang"/db/*.salam; do
+            for f in tests/"$lang"/db/*.salam; do
                 [ -e "$f" ] || continue
                 name=$(basename "$f" .salam)
                 case "$name" in _*) continue ;; esac
-                exp="$(pick_expect "../tests/$lang/db/$name")"
+                exp="$(pick_expect "tests/$lang/db/$name")"
                 [ -f "$exp" ] || continue
                 case "$name" in
                 redis_*)
@@ -598,8 +598,8 @@ if want opencv; then
     done
     ocvmockc=""
     for lang in $LANGS; do
-        [ -f "../std/opencv/native/mock/opencv_mock.c" ] && {
-            ocvmockc="../std/opencv/native/mock/opencv_mock.c"
+        [ -f "std/opencv/native/mock/opencv_mock.c" ] && {
+            ocvmockc="std/opencv/native/mock/opencv_mock.c"
             break
         }
     done
@@ -612,13 +612,13 @@ if want opencv; then
         fi
     fi
     for lang in $LANGS; do
-        [ -d "../tests/$lang/opencv" ] || continue
+        [ -d "tests/$lang/opencv" ] || continue
         if [ "$ocvok" = "1" ]; then
-            for f in ../tests/"$lang"/opencv/*.salam; do
+            for f in tests/"$lang"/opencv/*.salam; do
                 [ -e "$f" ] || continue
                 name=$(basename "$f" .salam)
                 case "$name" in _*) continue ;; esac
-                exp="$(pick_expect "../tests/$lang/opencv/$name")"
+                exp="$(pick_expect "tests/$lang/opencv/$name")"
                 [ -f "$exp" ] || continue
                 add_job build "opencv/$lang/$name" "$f" "$lang" "$exp" "--cc=$OCVCC -DSALAM_OPENCV_MOCK"
             done
@@ -630,12 +630,12 @@ fi
 
 if want ssl; then
     for lang in $LANGS; do
-        [ -d "../tests/$lang/ssl" ] || continue
-        for f in ../tests/"$lang"/ssl/*.salam; do
+        [ -d "tests/$lang/ssl" ] || continue
+        for f in tests/"$lang"/ssl/*.salam; do
             [ -e "$f" ] || continue
             name=$(basename "$f" .salam)
             case "$name" in _*) continue ;; esac
-            exp="$(pick_expect "../tests/$lang/ssl/$name")"
+            exp="$(pick_expect "tests/$lang/ssl/$name")"
             [ -f "$exp" ] || continue
             add_job build "ssl/$lang/$name" "$f" "$lang" "$exp"
         done
@@ -644,11 +644,11 @@ fi
 
 if want js; then
     for lang in $LANGS; do
-        for f in ../tests/"$lang"/js/*.salam; do
+        for f in tests/"$lang"/js/*.salam; do
             [ -e "$f" ] || continue
             name=$(basename "$f" .salam)
             case "$name" in _*) continue ;; esac
-            exp="$(pick_expect "../tests/$lang/js/$name")"
+            exp="$(pick_expect "tests/$lang/js/$name")"
             [ -f "$exp" ] || continue
             add_job js "js/$lang/$name" "$f" "$lang" "$exp"
         done
@@ -657,12 +657,12 @@ fi
 
 if want cross; then
     for lang in $LANGS; do
-        [ -d "../tests/$lang/cross" ] || continue
-        for f in ../tests/"$lang"/cross/*.salam; do
+        [ -d "tests/$lang/cross" ] || continue
+        for f in tests/"$lang"/cross/*.salam; do
             [ -e "$f" ] || continue
             name=$(basename "$f" .salam)
             case "$name" in _*) continue ;; esac
-            exp="$(pick_expect "../tests/$lang/cross/$name")"
+            exp="$(pick_expect "tests/$lang/cross/$name")"
             [ -f "$exp" ] || continue
             for pair in x86_64-linux-musl: aarch64-linux-musl:qemu-aarch64-static \
                 i686-linux-musl:qemu-i386-static arm-linux-musleabihf:qemu-arm-static \
@@ -676,17 +676,17 @@ fi
 
 if want llvm; then
     for lang in $LANGS; do
-        [ -d "../tests/$lang/llvm" ] || continue
-        probe_raw=$("$SALAM" llvm "../tests/$lang/llvm/_probe.salam" --jit --no-color --log-level=error 2>/dev/null)
+        [ -d "tests/$lang/llvm" ] || continue
+        probe_raw=$("$SALAM" llvm "tests/$lang/llvm/_probe.salam" --jit --no-color --log-level=error 2>/dev/null)
         prc=$?
         probe=$(printf '%s' "$probe_raw" | tr -d '\r')
         rm -f _probe.ll _probe.ll.run.sh 2>/dev/null
         if [ "$probe" = "OK" ]; then
-            for f in ../tests/"$lang"/llvm/*.salam; do
+            for f in tests/"$lang"/llvm/*.salam; do
                 [ -e "$f" ] || continue
                 name=$(basename "$f" .salam)
                 case "$name" in _*) continue ;; esac
-                exp="$(pick_expect "../tests/$lang/llvm/$name")"
+                exp="$(pick_expect "tests/$lang/llvm/$name")"
                 [ -f "$exp" ] || continue
                 add_job llvm "llvm/$lang/$name" "$f" "$lang" "$exp"
             done
@@ -700,11 +700,11 @@ fi
 
 if want exec; then
     for lang in $LANGS; do
-        for f in ../tests/"$lang"/exec/*.salam; do
+        for f in tests/"$lang"/exec/*.salam; do
             [ -e "$f" ] || continue
             name=$(basename "$f" .salam)
             case "$name" in _*) continue ;; esac
-            exp="$(pick_expect "../tests/$lang/exec/$name")"
+            exp="$(pick_expect "tests/$lang/exec/$name")"
             [ -f "$exp" ] || continue
             add_job exec "exec/$lang/$name" "$f" "$lang" "$exp"
         done
@@ -713,7 +713,7 @@ fi
 
 if want errors; then
     for lang in $LANGS; do
-        for f in ../tests/"$lang"/errors/*.salam; do
+        for f in tests/"$lang"/errors/*.salam; do
             [ -e "$f" ] || continue
             name=$(basename "$f" .salam)
             case "$name" in _*) continue ;; esac
@@ -724,7 +724,7 @@ fi
 
 if want layout; then
     for lang in $LANGS; do
-        for f in ../tests/"$lang"/layout/*.salam; do
+        for f in tests/"$lang"/layout/*.salam; do
             [ -e "$f" ] || continue
             name=$(basename "$f" .salam)
             case "$name" in _*) continue ;; esac

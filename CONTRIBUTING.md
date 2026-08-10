@@ -475,8 +475,8 @@ The **Memory Leaks** workflow runs the entire test corpus through AddressSanitiz
 The reference compiler in `c/` allocates nearly everything from an arena it frees on the way out, so LeakSanitizer currently sees **zero** leaks across the whole corpus. That is a property worth keeping, so it is a hard gate:
 
 ```sh
-sh c/tools/bash/leakcheck.sh --build          # build an ASan salam, then run everything
-sh c/tools/bash/leakcheck.sh --build exec     # one section, while iterating
+sh tools/bash/leakcheck.sh --build          # build an ASan salam, then run everything
+sh tools/bash/leakcheck.sh --build exec     # one section, while iterating
 ```
 
 That runs `run-tests.sh` plus `leakcheck-sweep.sh`, which covers the subcommands the corpus never reaches (`version`, `help`, `new`, `run`, `obj`, `doc`, both REPLs, and the argument error paths). Any leaking invocation fails the run and the report says which allocation site is responsible. Reports are also uploaded as a CI artifact.
@@ -491,7 +491,7 @@ sh compiler/tools/bash/leakcheck-selfhost.sh ./salam-selfhost-asan
 
 The counts are exactly reproducible, so the check fails on a regression and tells you to lower the number when you improve one. Lower it in the same pull request that earned it. To find out _where_ a leak came from, rebuild with `--asan -g` as well: the stacks then name the `.salam` file and line that allocated.
 
-Add a line to `c/tools/lsan.supp` only when an allocation genuinely is not the compiler's to free, and say why in the file. A suppression hides a finding forever.
+Add a line to `tools/lsan.supp` only when an allocation genuinely is not the compiler's to free, and say why in the file. A suppression hides a finding forever.
 
 ## 💬 Feedback and Support
 

@@ -21,7 +21,7 @@
  * GENERATED FILE - do not hand-edit. Regenerate after changing the assets in
  * compiler/docgen.salam with:
  *
- *     python c/tools/python/gen_doc_assets.py
+ *     python tools/python/gen_doc_assets.py
  *
  * One C string literal per source line, rather than one huge concatenated
  * literal, keeps every literal well inside C90's guaranteed 509-character

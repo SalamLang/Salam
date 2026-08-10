@@ -12,7 +12,7 @@
 # whatever LSan wrote to $ASAN_OPTIONS' log_path. Run it through
 # leakcheck.sh, which sets that up; on its own it is just a smoke sweep.
 #
-# Usage: sh c/tools/bash/leakcheck-sweep.sh <salam-binary>
+# Usage: sh tools/bash/leakcheck-sweep.sh <salam-binary>
 
 set -u
 
@@ -29,8 +29,8 @@ case "$SALAM_BIN" in /* | [A-Za-z]:*) ;; *) SALAM_BIN="$(pwd)/$SALAM_BIN" ;; esa
     exit 2
 }
 
-# lib.sh put us in c/; std/ and tests/ are one level up, at the repo root.
-ROOT=$(cd .. && pwd)
+# lib.sh puts us at the repository root, where std/ and tests/ live.
+ROOT=$(pwd)
 if [ -z "${SALAM_STD:-}" ] && [ -d "$ROOT/std" ]; then
     SALAM_STD="$ROOT/std"
     export SALAM_STD

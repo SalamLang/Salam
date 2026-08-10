@@ -1109,7 +1109,7 @@ static int jit_run_file(logger_t *log, const char *ll_path)
      * concatenates a string and drops it leaks by design, exactly as its
      * compiled binary would, and that is the program's business rather
      * than the compiler's - the same call the interpreter already makes
-     * with the leak:call_native_extern entry in c/tools/lsan.supp. A
+     * with the leak:call_native_extern entry in tools/lsan.supp. A
      * suppression cannot express it here, because the allocation stack has
      * no symbolized frame at all: JIT-mapped code is not in any module, so
      * every report comes back as a bare address under driver_llvm.

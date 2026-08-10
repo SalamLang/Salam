@@ -407,10 +407,10 @@ libsalam-llvm: $(LLVM_MERGE_SHIMS)
 	@echo "  plus system libs: $$($(LLVM_CONFIG) --link-static --system-libs 2>/dev/null) -lstdc++"
 
 test: $(OUTBIN)
-	SALAM=$(OUTBIN) sh tools/bash/run-tests.sh
+	SALAM=$(abspath $(OUTBIN)) sh ../tools/bash/run-tests.sh
 
 dist: all
-	sh tools/bash/build-release.sh
+	sh ../tools/bash/build-release.sh
 
 STAGE_DIR  ?= $(BUILD_DIR)/sysroots
 MUSL_ARCH  ?= x86_64

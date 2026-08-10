@@ -35,7 +35,7 @@ fi
 echo "==> Building WebAssembly bundle (tools/bash/build-wasm.sh) ..."
 sh tools/bash/build-wasm.sh
 echo "==> Editor bundle:"
-for f in ../editor/salam-wa.js ../editor/salam-wa.wasm ../editor/salam-wa.data; do
+for f in editor/salam-wa.js editor/salam-wa.wasm editor/salam-wa.data; do
     if [ -f "$f" ]; then
         size=$(wc -c <"$f" | tr -d ' ')
         printf '    %-22s %s bytes\n' "$f" "$size"
@@ -45,7 +45,7 @@ for f in ../editor/salam-wa.js ../editor/salam-wa.wasm ../editor/salam-wa.data; 
 done
 echo "==> Exported entry points:"
 for sym in _salam_web_run_app _salam_web_compile_js _salam_web_build_layout _salam_web_emit _salam_web_syntax_ok; do
-    if grep -q "$sym" ../editor/salam-wa.js 2>/dev/null; then
+    if grep -q "$sym" editor/salam-wa.js 2>/dev/null; then
         echo "    ok   $sym"
     else echo "    WARN missing $sym" >&2; fi
 done

@@ -20,8 +20,8 @@ response=$(mktemp)
 trap 'rm -f "$response"' EXIT
 
 printf '%s\n' \
-    '{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"salam://stdlib/index.json"}}' \
-    | SALAM_MCP_ROOT="$root" "$server" 2>/dev/null > "$response"
+    '{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"salam://stdlib/index.json"}}' |
+    SALAM_MCP_ROOT="$root" "$server" 2>/dev/null >"$response"
 
 RESPONSE_PATH="$response" OUT_PATH="$root/docs/ai/stdlib-index.json" node -e '
     const fs = require("fs");

@@ -14,9 +14,18 @@ root=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 out=${1:-"$root/salam-mcp"}
 
 pick_compiler() {
-    if [ -n "${SALAM:-}" ]; then printf '%s' "$SALAM"; return; fi
-    if [ -x "$root/salam" ]; then printf '%s' "$root/salam"; return; fi
-    if [ -x "$root/salam.exe" ]; then printf '%s' "$root/salam.exe"; return; fi
+    if [ -n "${SALAM:-}" ]; then
+        printf '%s' "$SALAM"
+        return
+    fi
+    if [ -x "$root/salam" ]; then
+        printf '%s' "$root/salam"
+        return
+    fi
+    if [ -x "$root/salam.exe" ]; then
+        printf '%s' "$root/salam.exe"
+        return
+    fi
     printf 'salam'
 }
 

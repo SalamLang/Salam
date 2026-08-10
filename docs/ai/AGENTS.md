@@ -100,7 +100,7 @@ passes but a build does not, look for this first.
 
 ## 6. Strings
 
-Builtin methods on `str` — this is the complete list:
+Built-in methods on `str` — this is the complete list:
 
 ```
 len  concat  substr(start, len)  find/search/indexOf  trim
@@ -150,7 +150,7 @@ import mine "my_helpers.salam"      // sibling file, quoted, aliased
 ```
 
 Nested std packages use dots (`encoding.json`), never quoted slashes. For a
-sibling source file, the quoted form binds to the **file name**, so alias it
+sibling source file, the quoted form binds to the **filename**, so alias it
 explicitly (`import mine "my_helpers.salam"`) and call it as `mine.Thing()`.
 
 `import foo` resolves `std/foo/foo.salam` specifically; once that anchor
@@ -222,9 +222,9 @@ advice. Each one silently produces wrong behaviour rather than a diagnostic.
   contain a file called `io.salam` collide at link time. Give every source file
   a name unique across the whole project.
 
-- **`open` and `input` are reserved builtins.** Do not name anything after them.
+- **`open` and `input` are reserved built-ins.** Do not name anything after them.
 
-- **`input()` cannot report EOF.** It returns `""` both for a blank line and at
+- **`input()` cannot report EOF.** It returns `""` both for an empty line and at
   end-of-stream. Drive `getchar()` yourself if you need to tell them apart.
 
 ---

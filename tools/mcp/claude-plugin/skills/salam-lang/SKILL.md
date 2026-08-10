@@ -65,7 +65,7 @@ end
 
 - No typed local declarations: use `:=`, cast with `as`.
 - `&:` marks a by-reference parameter.
-- Builtin `str` methods are only: `len concat substr find/search/indexOf trim
+- Built-in `str` methods are only: `len concat substr find/search/indexOf trim
 lower upper repeat split to_int to_float`. Everything else is in `str`.
 - `Vector {} as Vector<str>`, `v.get(i)[0]` to read an element.
 - Nested generics (`Vector<Vector<T>>`) do not work — flatten instead. They

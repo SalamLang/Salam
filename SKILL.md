@@ -55,8 +55,8 @@ When asked to convert program `X` (in some other language) into Salam:
 2. **Map constructs** to Salam using §7 (class→`struct`, interface→`interface`,
    generics→`<T>`, exceptions→`bool`/`Option`/sentinel, dict→`HashMap`,
    list→`Vector`, etc.).
-3. **Pick stdlib packages** from §5 rather than reimplementing (str, json, http,
-   regex, math, sort, collections, db, …).
+3. **Pick stdlib packages** from §5 rather than reimplementing (`str`, `json`,
+   `http`, `regex`, `math`, `sort`, `collections`, `db`, …).
 4. **Write idiomatic Salam** using §2–§4, obeying the strict rules in §6
    (unused = error, `until` = while, manual `.free()`, integer `/` truncates, no
    exceptions, `mut` to reassign, `pub` to export, top-level ordering).
@@ -214,7 +214,7 @@ or `fmt.Sprintf`):
 | `u"c"`       | `char` (UTF-8 codepoint) | yes                                              | —         | same as `u'c'` but escapes are processed first, e.g. `u"\U0001F600"`                                                                                                                                                                                                                                                                  |
 
 **Prefer backtick strings for any text containing literal `"`** — JSON blobs,
-regex, shell commands, HTML/CSS fragments — instead of escaping:
+`regex` patterns, shell commands, HTML/CSS fragments — instead of escaping:
 
 ```salam
 input := `{"name": "salam", "version": 2, "active": true, "pi": 3.5, "tags": ["a", "b"]}`
@@ -425,7 +425,7 @@ Str`.
   `WriteLine(Vector<str>): str`.
 - **`encoding`** — `Base64Encode Base64Decode HexEncode HexDecode URLEncode
 URLDecode`.
-- **`regex`** — `Compile Match Find Replace ReplaceAll` (Regex handle) and
+- **`regex`** — `Compile Match Find Replace ReplaceAll` (`Regex` handle) and
   one-shot `MatchStr FindStr ReplaceStr ReplaceAllStr`.
 - **`crypto`** — `sha1 sha256 sha512 hmac pbkdf2 random`.
 
@@ -443,8 +443,9 @@ AssertEqBool AssertContains AssertNil AssertNotNil AssertMsg Summary()` (call
 ### Networking & web
 
 - **`http`** (client) — `Get Post Put Patch Delete Head Options` (+ `*With` for
-  custom `HashMap<str,str>` headers), `NewHeaders NewClient Ok GetHeader Headers
-WithQuery CookieMap`; response has `.status`, `.body`.
+  custom `HashMap<str,str>` headers),
+  `NewHeaders NewClient Ok GetHeader Headers WithQuery CookieMap`;
+  response has `.status`, `.body`.
 - **`web`** (server framework) — `NewRouter Get/Post/Put/Delete(r, path, funcptr(fn))
 NewServer(port) Use Run Static`; handler `func h(ctx: i64)` uses
   `Ctx_html Ctx_json Ctx_text Ctx_param Ctx_query Ctx_form Ctx_body Ctx_method
@@ -455,8 +456,8 @@ Ctx_status Ctx_set_header Ctx_redirect`. Also a canvas/DOM JS-interop surface.
 
 ### Databases (`import db.<engine>`)
 
-- **`db.sqlite`** — `Available Version Open Ok Exec Query Next Text Int Finish
-Prepare BindText Reset LastInsertId Changes QueryInt Close`.
+- **`db.sqlite`** —
+  `Available Version Open Ok Exec Query Next Text Int Finish Prepare BindText Reset LastInsertId Changes QueryInt Close`.
 - **`db.mysql`**, **`db.redis`** (`connect strings hashes lists sets pubsub`).
 
 ---

@@ -1,0 +1,283 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package protobuf
+
+import str
+import conv
+
+// Service stub generation: turns the `service` blocks a .proto declares
+// into Salam source that calls std/grpc, so a caller writes
+//
+//     reply := pb.GreeterSayHello(ch, req, st)
+//
+// instead of hand-assembling a path, marshalling, and unwrapping a
+// ByteBuf. Nothing here imports std/grpc - it only emits text that does,
+// which keeps encoding.protobuf usable for plain message encoding with
+// no gRPC dependency at all.
+//
+// Both call shapes are generated. A unary method gets one function that
+// sends and waits. A streaming method (in either direction) gets the
+// four pieces a caller drives explicitly - Start, Send, Recv, Finish -
+// because Salam has no closures and therefore no way to hand a stream
+// to a callback.
+
+func _svc_prefix(f: PFile, svc: PService): str:
+    if f.packageName == "": ret svc.name end
+    ret f.packageName + "." + svc.name
+end
+
+func _path_const(svc: PService, m: PMethod): str:
+    ret svc.name + m.name + "Path"
+end
+
+func _emit_path_const(sb &: str.StringBuilder, f: PFile, svc: PService, m: PMethod):
+    str.BufAppend(sb, "pub const ")
+    str.BufAppend(sb, _path_const(svc, m))
+    str.BufAppend(sb, " := \"/")
+    str.BufAppend(sb, _svc_prefix(f, svc))
+    str.BufAppend(sb, "/")
+    str.BufAppend(sb, m.name)
+    str.BufAppend(sb, "\"\n")
+end
+
+func _emit_unary(sb &: str.StringBuilder, svc: PService, m: PMethod):
+    str.BufAppend(sb, "pub func ")
+    str.BufAppend(sb, svc.name)
+    str.BufAppend(sb, m.name)
+    str.BufAppend(sb, "(ch &: grpc.Channel, req: ")
+    str.BufAppend(sb, m.inputType)
+    str.BufAppend(sb, ", md: grpc.Metadata, st &: grpc.Status): ")
+    str.BufAppend(sb, m.outputType)
+    str.BufAppend(sb, ":\n")
+    str.BufAppend(sb, "    mut body := Marshal")
+    str.BufAppend(sb, m.inputType)
+    str.BufAppend(sb, "(req)\n")
+    str.BufAppend(sb, "    mut raw := grpc.UnaryCall(ch, ")
+    str.BufAppend(sb, _path_const(svc, m))
+    str.BufAppend(sb, ", body, md, st)\n")
+    str.BufAppend(sb, "    compress.BufFree(body)\n")
+    str.BufAppend(sb, "    mut ok := false\n")
+    str.BufAppend(sb, "    out := Unmarshal")
+    str.BufAppend(sb, m.outputType)
+    str.BufAppend(sb, "(raw.data, compress.BufLen(raw), ok)\n")
+    str.BufAppend(sb, "    compress.BufFree(raw)\n")
+    str.BufAppend(sb, "    ret out\n")
+    str.BufAppend(sb, "end\n\n")
+end
+
+func _emit_stream(sb &: str.StringBuilder, svc: PService, m: PMethod):
+    base := svc.name + m.name
+    str.BufAppend(sb, "pub func ")
+    str.BufAppend(sb, base)
+    str.BufAppend(sb, "Start(ch &: grpc.Channel, md: grpc.Metadata): int:\n")
+    str.BufAppend(sb, "    ret grpc.StartCall(ch, ")
+    str.BufAppend(sb, _path_const(svc, m))
+    str.BufAppend(sb, ", md)\n")
+    str.BufAppend(sb, "end\n\n")
+
+    str.BufAppend(sb, "pub func ")
+    str.BufAppend(sb, base)
+    str.BufAppend(sb, "Send(ch &: grpc.Channel, sid: int, req: ")
+    str.BufAppend(sb, m.inputType)
+    str.BufAppend(sb, ", last: bool): bool:\n")
+    str.BufAppend(sb, "    mut body := Marshal")
+    str.BufAppend(sb, m.inputType)
+    str.BufAppend(sb, "(req)\n")
+    str.BufAppend(sb, "    sent := grpc.SendMessage(ch, sid, body, last)\n")
+    str.BufAppend(sb, "    compress.BufFree(body)\n")
+    str.BufAppend(sb, "    ret sent\n")
+    str.BufAppend(sb, "end\n\n")
+
+    str.BufAppend(sb, "pub func ")
+    str.BufAppend(sb, base)
+    str.BufAppend(sb, "Recv(ch &: grpc.Channel, sid: int, ok &: bool): ")
+    str.BufAppend(sb, m.outputType)
+    str.BufAppend(sb, ":\n")
+    str.BufAppend(sb, "    mut mok := false\n")
+    str.BufAppend(sb, "    mut raw := grpc.RecvMessage(ch, sid, mok)\n")
+    str.BufAppend(sb, "    if !mok:\n")
+    str.BufAppend(sb, "        compress.BufFree(raw)\n")
+    str.BufAppend(sb, "        ok = false\n")
+    str.BufAppend(sb, "        ret ")
+    str.BufAppend(sb, m.outputType)
+    str.BufAppend(sb, " {}\n")
+    str.BufAppend(sb, "    end\n")
+    str.BufAppend(sb, "    out := Unmarshal")
+    str.BufAppend(sb, m.outputType)
+    str.BufAppend(sb, "(raw.data, compress.BufLen(raw), ok)\n")
+    str.BufAppend(sb, "    compress.BufFree(raw)\n")
+    str.BufAppend(sb, "    ret out\n")
+    str.BufAppend(sb, "end\n\n")
+
+    str.BufAppend(sb, "pub func ")
+    str.BufAppend(sb, base)
+    str.BufAppend(sb, "Finish(ch &: grpc.Channel, sid: int): grpc.Status:\n")
+    str.BufAppend(sb, "    ret grpc.FinishCall(ch, sid)\n")
+    str.BufAppend(sb, "end\n\n")
+end
+
+// The server-side half: one registration helper per method, so a program
+// wires handlers by name instead of repeating the path string.
+func _emit_register(sb &: str.StringBuilder, svc: PService, m: PMethod):
+    str.BufAppend(sb, "pub func Register")
+    str.BufAppend(sb, svc.name)
+    str.BufAppend(sb, m.name)
+    str.BufAppend(sb, "(fn: i64):\n")
+    if m.clientStream || m.serverStream:
+        str.BufAppend(sb, "    grpc.RegisterStreamMethod(")
+        str.BufAppend(sb, _path_const(svc, m))
+        str.BufAppend(sb, ", fn, ")
+        if m.clientStream: str.BufAppend(sb, "true, ") else: str.BufAppend(sb, "false, ") end
+        if m.serverStream: str.BufAppend(sb, "true)\n") else: str.BufAppend(sb, "false)\n") end
+    else:
+        str.BufAppend(sb, "    grpc.RegisterMethod(")
+        str.BufAppend(sb, _path_const(svc, m))
+        str.BufAppend(sb, ", fn)\n")
+    end
+    str.BufAppend(sb, "end\n\n")
+end
+
+func _emit_service(sb &: str.StringBuilder, f: PFile, svc: PService):
+    str.BufAppend(sb, "// ---- service ")
+    str.BufAppend(sb, _svc_prefix(f, svc))
+    str.BufAppend(sb, " ----\n\n")
+    mut i := 0
+    until i < svc.methods.len():
+        _emit_path_const(sb, f, svc, svc.methods.get(i)[0])
+        i += 1
+    end
+    str.BufAppendChar(sb, 10)
+    i = 0
+    until i < svc.methods.len():
+        m := svc.methods.get(i)[0]
+        if m.clientStream || m.serverStream:
+            _emit_stream(sb, svc, m)
+        else:
+            _emit_unary(sb, svc, m)
+        end
+        _emit_register(sb, svc, m)
+        i += 1
+    end
+end
+
+@en "ServiceCount"
+@fa "تعداد سرویس‌ها"
+@ar "عدد الخدمات"
+pub func ServiceCount(f: PFile): int:
+    ret f.services.len()
+end
+
+@en "ServiceNameAt"
+@fa "نام سرویس"
+@ar "اسم الخدمة"
+pub func ServiceNameAt(f: PFile, i: int): str:
+    if i < 0 || i >= f.services.len(): ret "" end
+    ret f.services.get(i)[0].name
+end
+
+@en "ServiceMethodCount"
+@fa "تعداد متدهای سرویس"
+@ar "عدد طرق الخدمة"
+pub func ServiceMethodCount(f: PFile, i: int): int:
+    if i < 0 || i >= f.services.len(): ret 0 end
+    ret f.services.get(i)[0].methods.len()
+end
+
+// "Name(Input) returns (Output)" with `stream` markers where the .proto
+// had them - a one-line summary of a parsed method, for tooling that
+// wants to list a service without generating code.
+@en "ServiceMethodSignature"
+@fa "امضای متد"
+@ar "توقیع الطریقة"
+pub func ServiceMethodSignature(f: PFile, si: int, mi: int): str:
+    if si < 0 || si >= f.services.len(): ret "" end
+    svc := f.services.get(si)[0]
+    if mi < 0 || mi >= svc.methods.len(): ret "" end
+    m := svc.methods.get(mi)[0]
+    mut out := m.name + "("
+    if m.clientStream: out = out + "stream " end
+    out = out + m.inputType + ") returns ("
+    if m.serverStream: out = out + "stream " end
+    ret out + m.outputType + ")"
+end
+
+// Emits the gRPC stubs for every service in a parsed .proto. The result
+// is meant to be appended to GenerateSingle's output; it assumes the
+// message structs and their Marshal*/Unmarshal* functions are in scope,
+// and that the file also imports grpc.
+@en "GenerateServices"
+@fa "تولید سرویس‌ها"
+@ar "تولید الخدمات"
+pub func GenerateServices(f: PFile): str:
+    if f.services.len() == 0: ret "" end
+    mut sb := str.NewBuilder()
+    mut i := 0
+    until i < f.services.len():
+        _emit_service(sb, f, f.services.get(i)[0])
+        i += 1
+    end
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+// Everything GenerateSingle produces, plus the gRPC stubs and the extra
+// import they need. This is what a `protoc`-equivalent for gRPC emits.
+@en "GenerateWithServices"
+@fa "تولید با سرویس‌ها"
+@ar "تولید مع الخدمات"
+pub func GenerateWithServices(protoSource: str, ok &: bool): str:
+    mut pok := false
+    f := ParseFile(protoSource, pok)
+    if !pok:
+        ok = false
+        ret ""
+    end
+    base := GenerateSingle(protoSource, ok)
+    if !ok: ret "" end
+    if f.services.len() == 0: ret base end
+    stubs := GenerateServices(f)
+    // The generated file already imports encoding.protobuf and compress;
+    // the stubs add exactly one more dependency.
+    marker := "import compress\n"
+    idx := base.find(marker)
+    if idx < 0:
+        ret base + "\n" + stubs
+    end
+    head := base.substr(0, idx + marker.len())
+    tail := base.substr(idx + marker.len(), base.len() - idx - marker.len())
+    ret head + "import grpc\n" + tail + "\n" + stubs
+end
+
+@en "ServiceSummary"
+@fa "خلاصه سرویس"
+@ar "ملخص الخدمة"
+pub func ServiceSummary(protoSource: str, ok &: bool): str:
+    f := ParseFile(protoSource, ok)
+    if !ok: ret "" end
+    mut out := ""
+    mut si := 0
+    until si < f.services.len():
+        svc := f.services.get(si)[0]
+        out = out + "service " + svc.name + " (" + conv.FormatInt(svc.methods.len() as i64) + " methods)\n"
+        mut mi := 0
+        until mi < svc.methods.len():
+            out = out + "  rpc " + ServiceMethodSignature(f, si, mi) + "\n"
+            mi += 1
+        end
+        si += 1
+    end
+    ret out
+end

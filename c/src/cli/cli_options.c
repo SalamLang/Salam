@@ -218,6 +218,7 @@ bool cli_parse_options(int argc, char **argv, int start, options_t *out)
                 out->backend = val;
             } else if ((val = cli_opt_value(arg, "--cc")) != NULL) {
                 out->cc = val;
+                out->cc_explicit = true;
                 /* --cc names a *C* compiler, so asking for one is asking for
                  * the C backend; without this an explicit --cc=gcc would be
                  * silently ignored once LLVM became the default. */

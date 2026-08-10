@@ -48,8 +48,8 @@ static const char *cg_simple_inline(cg_t *cg, ast_node_t *n)
     if (n->kind == AST_VAR_DECL) return cg_vardecl_inline(cg, n);
     if (n->kind == AST_ASSIGN) {
         if (n->op == TK_POWER_EQ)
-            return cg_fmt(cg, "%s = pow((double)(%s), (double)(%s))", cg_expr(cg, n->a),
-                          cg_expr(cg, n->a), cg_expr(cg, n->b));
+            return cg_fmt(cg, "%s = pow(SALAM_FPARG_D((double)(%s)), (double)(%s))",
+                          cg_expr(cg, n->a), cg_expr(cg, n->a), cg_expr(cg, n->b));
         return cg_fmt(cg, "%s %s %s", cg_expr(cg, n->a), cg_op(n->op), cg_expr(cg, n->b));
     }
     if (n->kind == AST_EXPR_STMT) return cg_expr(cg, n->a);
@@ -155,8 +155,8 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
             const char *lhs = cg_expr(cg, n->a);
             const char *rhs = cg_expr(cg, n->b);
             cg_line(cg,
-                    "{ %s *__pw%d = &(%s); *__pw%d = (%s)pow((double)(*__pw%d), "
-                    "(double)(%s)); }",
+                    "{ %s *__pw%d = &(%s); *__pw%d = (%s)pow("
+                    "SALAM_FPARG_D((double)(*__pw%d)), (double)(%s)); }",
                     ct, t, lhs, t, ct, t, rhs);
             break;
         }
@@ -197,7 +197,16 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
             cg_line(cg, "return %s;", cg_expr(cg, n->a));
         } else {
             cg_emit_defers(cg);
-            cg_line(cg, "return;");
+            /*
+             * `func main:` has no declared return type but is emitted as C's
+             * `int main`, so a bare `ret` in it is a bare `return;` from a
+             * non-void function. tcc accepts that silently; gcc 16 makes
+             * -Wreturn-mismatch an error, which took out every telegram/
+             * websocket example that ends a branch with a bare `ret`. The
+             * language already says main implicitly returns i32, so the
+             * value that `ret` means here is 0.
+             */
+            cg_line(cg, cg->cur_is_main ? "return 0;" : "return;");
         }
         break;
     case AST_MATCH: {

@@ -1,0 +1,629 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package http2
+
+import compress
+
+// An HTTP/2 connection: the preface and SETTINGS handshake, the stream
+// table, flow control in both directions, and the frame loop that turns
+// arriving frames into per-stream state.
+//
+// The model is deliberately not callback-driven (Salam has no closures,
+// so a callback could carry no context anyway). Instead Poll() reads
+// exactly one frame, applies it, and reports which stream it touched;
+// a caller drives it in a loop and reads the stream's accumulated
+// headers/data/trailers out of the table whenever it likes. That is
+// enough to build both a client that waits for one response and a server
+// that multiplexes many streams, without either having to understand
+// framing.
+//
+// Header blocks split across HEADERS + CONTINUATION are reassembled
+// before HPACK ever sees them: HPACK state is connection-global, so a
+// partially decoded block would corrupt every later block on the
+// connection.
+
+pub const H2_POLL_ERROR := 0 - 1
+pub const H2_POLL_CONNECTION := 0
+
+@en "Stream"
+@fa "جریان اچ تی تی پی"
+@ar "تدفق"
+pub struct Stream:
+    pub id: int = 0
+    pub state: int = 0
+    pub send_window: int = 65535
+    pub recv_window: int = 65535
+    pub headers: HeaderList = HeaderList {}
+    pub trailers: HeaderList = HeaderList {}
+    pub data: compress.ByteBuf = compress.ByteBuf {}
+    pub got_headers: bool = false
+    pub got_trailers: bool = false
+    pub end_stream: bool = false
+    pub reset: bool = false
+    pub error_code: int = 0
+    pub live: bool = false
+end
+
+@en "StreamTable"
+@fa "جدول جریان‌ها"
+@ar "جدول التدفقات"
+pub struct StreamTable:
+    pub items: Vector<Stream> = Vector {}
+end
+
+@en "Conn"
+@fa "اتصال اچ تی تی پی ۲"
+@ar "اتصال اتش تی تی بی ۲"
+pub struct Conn:
+    pub tx: Transport = Transport {}
+    pub is_server: bool = false
+    pub enc: DynTable = DynTable {}
+    pub dec: DynTable = DynTable {}
+    pub local: Settings = Settings {}
+    pub remote: Settings = Settings {}
+    pub next_id: int = 1
+    pub streams: StreamTable = StreamTable {}
+    pub send_window: int = 65535
+    pub recv_window: int = 65535
+    pub goaway: bool = false
+    pub last_error: int = 0
+    pub ok: bool = false
+    // Reassembly state for a header block still arriving in CONTINUATION
+    // frames.
+    pub pending_stream: int = 0
+    pub pending_block: compress.ByteBuf = compress.ByteBuf {}
+    pub pending_end_stream: bool = false
+    pub pending_trailers: bool = false
+end
+
+func _find_stream(c: Conn, id: int): int:
+    mut i := 0
+    until i < c.streams.items.len():
+        if c.streams.items.get(i)[0].id == id: ret i end
+        i += 1
+    end
+    ret 0 - 1
+end
+
+func _ensure_stream(c &: Conn, id: int): int:
+    idx := _find_stream(c, id)
+    if idx >= 0: ret idx end
+    mut s := Stream {}
+    s.id = id
+    s.state = H2_STREAM_OPEN
+    s.send_window = c.remote.initial_window_size
+    s.recv_window = c.local.initial_window_size
+    s.data = compress.NewByteBuf()
+    s.live = true
+    c.streams.items.push(s)
+    ret c.streams.items.len() - 1
+end
+
+func _store(c &: Conn, idx: int, s: Stream):
+    c.streams.items.set(idx, s)
+end
+
+// Grants the peer more room to send once we have consumed enough of the
+// window that stalling becomes likely. Half the initial window is the
+// usual threshold; topping up on every byte would flood the connection
+// with WINDOW_UPDATE frames.
+func _maybe_window_update(c &: Conn, id: int, idx: int):
+    half := c.local.initial_window_size / 2
+    mut s := c.streams.items.get(idx)[0]
+    if s.recv_window < half:
+        inc := c.local.initial_window_size - s.recv_window
+        mut wf := MakeWindowUpdate(id, inc)
+        WriteFrame(c.tx, wf)
+        FreeFrame(wf)
+        s.recv_window += inc
+        _store(c, idx, s)
+    end
+    if c.recv_window < half:
+        inc := c.local.initial_window_size - c.recv_window
+        mut cf := MakeWindowUpdate(0, inc)
+        WriteFrame(c.tx, cf)
+        FreeFrame(cf)
+        c.recv_window += inc
+    end
+end
+
+// Decodes a fully reassembled header block into the stream it belongs
+// to. The first block on a stream is its headers; a second one (which
+// can only follow DATA) is its trailers.
+func _deliver_block(c &: Conn): int:
+    id := c.pending_stream
+    idx := _ensure_stream(c, id)
+    mut ok := false
+    hl := DecodeHeaderList(c.dec, c.pending_block, ok)
+    compress.BufFree(c.pending_block)
+    c.pending_block = compress.NewByteBuf()
+    c.pending_stream = 0
+    mut s := c.streams.items.get(idx)[0]
+    if !ok:
+        c.last_error = H2_COMPRESSION_ERROR
+        c.ok = false
+        s.reset = true
+        s.error_code = H2_COMPRESSION_ERROR
+        _store(c, idx, s)
+        ret id
+    end
+    if c.pending_trailers:
+        s.trailers = hl
+        s.got_trailers = true
+    else:
+        s.headers = hl
+        s.got_headers = true
+    end
+    if c.pending_end_stream:
+        s.end_stream = true
+        s.state = H2_STREAM_HALF_CLOSED_REMOTE
+    end
+    _store(c, idx, s)
+    ret id
+end
+
+func _on_headers(c &: Conn, f: Frame): int:
+    mut bok := false
+    block := HeaderBlockOf(f, bok)
+    if !bok:
+        compress.BufFree(block)
+        c.last_error = H2_PROTOCOL_ERROR
+        c.ok = false
+        ret H2_POLL_ERROR
+    end
+    idx := _ensure_stream(c, f.stream_id)
+    // A HEADERS frame arriving after data has already flowed carries
+    // trailers, not the response head.
+    c.pending_trailers = c.streams.items.get(idx)[0].got_headers
+    c.pending_stream = f.stream_id
+    c.pending_end_stream = FrameHasFlag(f, H2_FLAG_END_STREAM)
+    compress.BufFree(c.pending_block)
+    c.pending_block = block
+    if FrameHasFlag(f, H2_FLAG_END_HEADERS):
+        ret _deliver_block(c)
+    end
+    ret f.stream_id
+end
+
+func _on_continuation(c &: Conn, f: Frame): int:
+    if c.pending_stream == 0 || c.pending_stream != f.stream_id:
+        c.last_error = H2_PROTOCOL_ERROR
+        c.ok = false
+        ret H2_POLL_ERROR
+    end
+    compress.BufPushBuf(c.pending_block, f.payload)
+    if FrameHasFlag(f, H2_FLAG_END_HEADERS):
+        ret _deliver_block(c)
+    end
+    ret f.stream_id
+end
+
+func _on_data(c &: Conn, f: Frame): int:
+    mut dok := false
+    body := DataOf(f, dok)
+    if !dok:
+        compress.BufFree(body)
+        c.last_error = H2_PROTOCOL_ERROR
+        c.ok = false
+        ret H2_POLL_ERROR
+    end
+    idx := _ensure_stream(c, f.stream_id)
+    mut s := c.streams.items.get(idx)[0]
+    compress.BufPushBuf(s.data, body)
+    // Flow control counts the padded length, not the payload length.
+    consumed := compress.BufLen(f.payload)
+    s.recv_window -= consumed
+    c.recv_window -= consumed
+    if FrameHasFlag(f, H2_FLAG_END_STREAM):
+        s.end_stream = true
+        s.state = H2_STREAM_HALF_CLOSED_REMOTE
+    end
+    _store(c, idx, s)
+    compress.BufFree(body)
+    _maybe_window_update(c, f.stream_id, idx)
+    ret f.stream_id
+end
+
+func _on_settings(c &: Conn, f: Frame): int:
+    if FrameHasFlag(f, H2_FLAG_ACK): ret H2_POLL_CONNECTION end
+    old_initial := c.remote.initial_window_size
+    if !ApplySettings(c.remote, f):
+        c.last_error = H2_FRAME_SIZE_ERROR
+        c.ok = false
+        ret H2_POLL_ERROR
+    end
+    // A changed SETTINGS_INITIAL_WINDOW_SIZE shifts every open stream's
+    // send window by the delta (section 6.9.2), it does not reset it.
+    delta := c.remote.initial_window_size - old_initial
+    if delta != 0:
+        mut i := 0
+        until i < c.streams.items.len():
+            mut s := c.streams.items.get(i)[0]
+            s.send_window += delta
+            _store(c, i, s)
+            i += 1
+        end
+    end
+    DynSetMaxSize(c.enc, c.remote.header_table_size)
+    mut ack := MakeSettingsAck()
+    WriteFrame(c.tx, ack)
+    FreeFrame(ack)
+    ret H2_POLL_CONNECTION
+end
+
+func _on_window_update(c &: Conn, f: Frame): int:
+    inc := WindowIncrementOf(f)
+    if inc == 0:
+        c.last_error = H2_PROTOCOL_ERROR
+        c.ok = false
+        ret H2_POLL_ERROR
+    end
+    if f.stream_id == 0:
+        c.send_window += inc
+        ret H2_POLL_CONNECTION
+    end
+    idx := _find_stream(c, f.stream_id)
+    if idx < 0: ret f.stream_id end
+    mut s := c.streams.items.get(idx)[0]
+    s.send_window += inc
+    _store(c, idx, s)
+    ret f.stream_id
+end
+
+func _on_rst(c &: Conn, f: Frame): int:
+    idx := _ensure_stream(c, f.stream_id)
+    mut s := c.streams.items.get(idx)[0]
+    s.reset = true
+    s.error_code = ErrorCodeOf(f)
+    s.state = H2_STREAM_CLOSED_STATE
+    s.end_stream = true
+    _store(c, idx, s)
+    ret f.stream_id
+end
+
+// Splits an encoded header block into a HEADERS frame plus as many
+// CONTINUATION frames as the peer's max_frame_size requires.
+func _write_block(c &: Conn, stream_id: int, block: compress.ByteBuf, end_stream: bool): bool:
+    total := compress.BufLen(block)
+    mut maxf := c.remote.max_frame_size
+    if maxf < 1: maxf = H2_DEFAULT_FRAME_SIZE end
+    mut off := 0
+    mut first := true
+    mut sent_ok := true
+    until off < total || first:
+        mut n := total - off
+        if n > maxf: n = maxf end
+        last := (off + n) >= total
+        mut kind := H2_CONTINUATION
+        mut flags := 0
+        if first:
+            kind = H2_HEADERS
+            if end_stream: flags = flags | H2_FLAG_END_STREAM end
+        end
+        if last: flags = flags | H2_FLAG_END_HEADERS end
+        mut f := NewFrame(kind, flags, stream_id)
+        mut i := 0
+        until i < n:
+            compress.BufPush(f.payload, compress.BufGet(block, off + i))
+            i += 1
+        end
+        if !WriteFrame(c.tx, f): sent_ok = false end
+        FreeFrame(f)
+        off += n
+        first = false
+        if !sent_ok: ret false end
+        if last: ret true end
+    end
+    ret sent_ok
+end
+
+@en "NewConn"
+@fa "اتصال جدید"
+@ar "اتصال جدید"
+pub func NewConn(t: Transport, is_server: bool): Conn:
+    mut c := Conn {}
+    c.tx = t
+    c.is_server = is_server
+    c.enc = NewDynTable(H2_DEFAULT_TABLE_SIZE)
+    c.dec = NewDynTable(H2_DEFAULT_TABLE_SIZE)
+    c.local = DefaultSettings()
+    c.remote = DefaultSettings()
+    c.pending_block = compress.NewByteBuf()
+    if is_server:
+        c.next_id = 2
+    else:
+        c.next_id = 1
+    end
+    ret c
+end
+
+// Client half of the opening handshake: preface, our SETTINGS, then the
+// peer's SETTINGS (which Poll acknowledges).
+@en "ClientHandshake"
+@fa "دست‌دهی کارخواه"
+@ar "مصافحة العمیل"
+pub func ClientHandshake(c &: Conn): bool:
+    if !WritePreface(c.tx): ret false end
+    mut sf := MakeSettingsFrame(c.local)
+    ok := WriteFrame(c.tx, sf)
+    FreeFrame(sf)
+    if !ok: ret false end
+    c.ok = true
+    ret true
+end
+
+@en "ServerHandshake"
+@fa "دست‌دهی سرور"
+@ar "مصافحة الخادم"
+pub func ServerHandshake(c &: Conn): bool:
+    if !ReadPreface(c.tx): ret false end
+    mut sf := MakeSettingsFrame(c.local)
+    ok := WriteFrame(c.tx, sf)
+    FreeFrame(sf)
+    if !ok: ret false end
+    c.ok = true
+    ret true
+end
+
+// Client stream ids are odd and server-initiated ids even; both count up
+// by two (section 5.1.1).
+@en "NextStreamId"
+@fa "شناسه جریان بعدی"
+@ar "معرف التدفق التالی"
+pub func NextStreamId(c &: Conn): int:
+    id := c.next_id
+    c.next_id += 2
+    _ensure_stream(c, id)
+    ret id
+end
+
+@en "StreamAt"
+@fa "جریان با شناسه"
+@ar "التدفق بالمعرف"
+pub func StreamAt(c: Conn, id: int): Stream:
+    idx := _find_stream(c, id)
+    if idx < 0: ret Stream {} end
+    ret c.streams.items.get(idx)[0]
+end
+
+@en "StreamCount"
+@fa "تعداد جریان‌ها"
+@ar "عدد التدفقات"
+pub func StreamCount(c: Conn): int:
+    ret c.streams.items.len()
+end
+
+@en "ConnOk"
+@fa "اتصال معتبر"
+@ar "الاتصال صالح"
+pub func ConnOk(c: Conn): bool:
+    ret c.ok
+end
+
+@en "SendHeaders"
+@fa "ارسال سرآیندها"
+@ar "إرسال الترویسات"
+pub func SendHeaders(c &: Conn, stream_id: int, hl: HeaderList, end_stream: bool): bool:
+    mut block := EncodeHeaderList(c.enc, hl, true)
+    ok := _write_block(c, stream_id, block, end_stream)
+    compress.BufFree(block)
+    ret ok
+end
+
+// Trailers are just a second header block with END_STREAM set; gRPC
+// carries its status in exactly this shape.
+@en "SendTrailers"
+@fa "ارسال دنباله‌ها"
+@ar "إرسال الذیول"
+pub func SendTrailers(c &: Conn, stream_id: int, hl: HeaderList): bool:
+    ret SendHeaders(c, stream_id, hl, true)
+end
+
+// Sends `body` as DATA, split to the peer's max frame size. Flow control
+// is honoured: when the send window is exhausted this polls for
+// WINDOW_UPDATE rather than overrunning the peer.
+@en "SendData"
+@fa "ارسال داده"
+@ar "إرسال البیانات"
+pub func SendData(c &: Conn, stream_id: int, body: compress.ByteBuf, end_stream: bool): bool:
+    total := compress.BufLen(body)
+    mut maxf := c.remote.max_frame_size
+    if maxf < 1: maxf = H2_DEFAULT_FRAME_SIZE end
+    mut off := 0
+    mut first := true
+    until off < total || first:
+        idx := _ensure_stream(c, stream_id)
+        mut avail := c.streams.items.get(idx)[0].send_window
+        if c.send_window < avail: avail = c.send_window end
+        if avail <= 0 && (total - off) > 0:
+            // Blocked: the only thing that can unblock us is a frame
+            // from the peer.
+            if Poll(c) == H2_POLL_ERROR: ret false end
+            continue
+        end
+        mut n := total - off
+        if n > maxf: n = maxf end
+        if n > avail: n = avail end
+        last := (off + n) >= total
+        mut flags := 0
+        if last && end_stream: flags = H2_FLAG_END_STREAM end
+        mut f := NewFrame(H2_DATA, flags, stream_id)
+        mut i := 0
+        until i < n:
+            compress.BufPush(f.payload, compress.BufGet(body, off + i))
+            i += 1
+        end
+        sent := WriteFrame(c.tx, f)
+        FreeFrame(f)
+        if !sent: ret false end
+        mut s := c.streams.items.get(idx)[0]
+        s.send_window -= n
+        _store(c, idx, s)
+        c.send_window -= n
+        off += n
+        first = false
+        if last: ret true end
+    end
+    ret true
+end
+
+@en "SendRstStream"
+@fa "ارسال بازنشانی جریان"
+@ar "إرسال إعادة التعیین"
+pub func SendRstStream(c &: Conn, stream_id: int, error_code: int): bool:
+    mut f := MakeRstStream(stream_id, error_code)
+    ok := WriteFrame(c.tx, f)
+    FreeFrame(f)
+    ret ok
+end
+
+@en "SendGoAway"
+@fa "ارسال خداحافظی"
+@ar "إرسال الوداع"
+pub func SendGoAway(c &: Conn, error_code: int, debug: str): bool:
+    mut last := 0
+    mut i := 0
+    until i < c.streams.items.len():
+        id := c.streams.items.get(i)[0].id
+        if id > last: last = id end
+        i += 1
+    end
+    mut f := MakeGoAway(last, error_code, debug)
+    ok := WriteFrame(c.tx, f)
+    FreeFrame(f)
+    c.goaway = true
+    ret ok
+end
+
+@en "SendPing"
+@fa "ارسال پینگ"
+@ar "إرسال بینغ"
+pub func SendPing(c &: Conn, payload: compress.ByteBuf): bool:
+    mut f := MakePing(payload, false)
+    ok := WriteFrame(c.tx, f)
+    FreeFrame(f)
+    ret ok
+end
+
+// Reads and applies exactly one frame. Returns the stream id it touched,
+// H2_POLL_CONNECTION for a connection-level frame, or H2_POLL_ERROR when
+// the connection is finished (peer closed, or a protocol error that
+// cannot be recovered from).
+@en "Poll"
+@fa "دریافت رویداد"
+@ar "استقصاء"
+pub func Poll(c &: Conn): int:
+    mut maxf := c.local.max_frame_size
+    if maxf < 1: maxf = H2_DEFAULT_FRAME_SIZE end
+    mut f := ReadFrame(c.tx, maxf)
+    if !f.ok:
+        FreeFrame(f)
+        c.ok = false
+        ret H2_POLL_ERROR
+    end
+    // While a header block is still arriving, only CONTINUATION on the
+    // same stream is legal (section 6.10).
+    if c.pending_stream != 0 && f.kind != H2_CONTINUATION:
+        FreeFrame(f)
+        c.last_error = H2_PROTOCOL_ERROR
+        c.ok = false
+        ret H2_POLL_ERROR
+    end
+    mut result := H2_POLL_CONNECTION
+    if f.kind == H2_HEADERS:
+        result = _on_headers(c, f)
+    else f.kind == H2_CONTINUATION:
+        result = _on_continuation(c, f)
+    else f.kind == H2_DATA:
+        result = _on_data(c, f)
+    else f.kind == H2_SETTINGS:
+        result = _on_settings(c, f)
+    else f.kind == H2_WINDOW_UPDATE:
+        result = _on_window_update(c, f)
+    else f.kind == H2_RST_STREAM:
+        result = _on_rst(c, f)
+    else f.kind == H2_PING:
+        if !FrameHasFlag(f, H2_FLAG_ACK):
+            mut pong := MakePing(f.payload, true)
+            WriteFrame(c.tx, pong)
+            FreeFrame(pong)
+        end
+    else f.kind == H2_GOAWAY:
+        c.goaway = true
+        c.last_error = ErrorCodeOf(f)
+        result = H2_POLL_CONNECTION
+    else f.kind == H2_PUSH_PROMISE:
+        // Push is disabled in our SETTINGS, so a peer sending one is in
+        // violation; refuse the promised stream rather than ignore it.
+        SendRstStream(c, f.stream_id, H2_REFUSED_STREAM)
+    else:
+        // PRIORITY and any unknown type: must be ignored (section 4.1).
+        result = H2_POLL_CONNECTION
+    end
+    FreeFrame(f)
+    ret result
+end
+
+// Drives Poll until `stream_id` has both a header block and END_STREAM,
+// or the connection fails. This is what a unary client call waits on.
+@en "AwaitStreamEnd"
+@fa "انتظار پایان جریان"
+@ar "انتظار نهایة التدفق"
+pub func AwaitStreamEnd(c &: Conn, stream_id: int, max_frames: int): bool:
+    mut n := 0
+    until n < max_frames:
+        s := StreamAt(c, stream_id)
+        if s.live && s.end_stream: ret true end
+        if s.live && s.reset: ret false end
+        if c.goaway && !c.ok: ret false end
+        if Poll(c) == H2_POLL_ERROR: ret false end
+        n += 1
+    end
+    ret false
+end
+
+// Drives Poll until any stream has a complete header block, and returns
+// its id. A server's accept-a-request loop is exactly this.
+@en "AwaitAnyHeaders"
+@fa "انتظار سرآیند"
+@ar "انتظار الترویسات"
+pub func AwaitAnyHeaders(c &: Conn, max_frames: int): int:
+    mut n := 0
+    until n < max_frames:
+        id := Poll(c)
+        if id == H2_POLL_ERROR: ret H2_POLL_ERROR end
+        if id > 0:
+            s := StreamAt(c, id)
+            if s.got_headers: ret id end
+        end
+        n += 1
+    end
+    ret H2_POLL_ERROR
+end
+
+@en "CloseConn"
+@fa "بستن اتصال"
+@ar "إغلاق الاتصال"
+pub func CloseConn(c &: Conn):
+    compress.BufFree(c.pending_block)
+    mut i := 0
+    until i < c.streams.items.len():
+        s := c.streams.items.get(i)[0]
+        compress.BufFree(s.data)
+        i += 1
+    end
+    CloseTransport(c.tx)
+    c.ok = false
+end

@@ -1,0 +1,397 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package graphql
+
+// validate - document validation (spec section 5).
+//
+// Validation runs against a schema before execution and reports every
+// problem it finds rather than stopping at the first, because the whole
+// point of the phase is to hand a developer a complete list. A document
+// that fails validation is never executed, which is what lets the
+// executor assume its input is well-formed.
+//
+// Rules implemented here are the document-level ones: operation names,
+// variables, and fragments. The selection-set rules (fields, arguments,
+// directives and literal values) are in gql_validate_sel.salam, which
+// needs a recursive walk of its own.
+//
+// Where a rule's spec number is worth knowing it is cited inline.
+
+@en "Vx"
+@fa "وضعیت اعتبارسنجی"
+@ar "حالة التحقق"
+pub struct Vx:
+    pub sch: Schema = Schema {}
+    pub doc: Document = Document {}
+    pub errors: GqlErrorList = GqlErrorList {}
+    pub usedFragments: Vector<str> = Vector {}
+    pub usedVars: Vector<str> = Vector {}
+end
+
+// ---- private: reporting ----
+
+func _vx_error(vx &: Vx, message: str, line: int, col: int):
+    mut e := NewError(ERR_VALIDATION, message)
+    if line > 0:
+        e.line = line
+        e.col = col
+        e.hasLocation = true
+    end
+    AddError(vx.errors, e)
+end
+
+func _vx_has(names: Vector<str>, name: str): bool:
+    mut i := 0
+    until i < names.len():
+        if names.get(i)[0] == name: ret true end
+        i += 1
+    end
+    ret false
+end
+
+// ---- 5.2 operations ----
+
+// 5.2.1.1 operation name uniqueness, and 5.2.2.1 lone anonymous
+// operation: an unnamed operation may only appear on its own.
+func _v_operations(vx &: Vx):
+    mut seen := Vector {} as Vector<str>
+    defer seen.free()
+    mut anonymous := 0
+    mut i := 0
+    until i < vx.doc.ops.len():
+        op := vx.doc.ops.get(i)[0]
+        if op.name == "":
+            anonymous += 1
+        else:
+            if _vx_has(seen, op.name):
+                _vx_error(vx, _gql_dup_operation_msg(op.name), op.line, 0)
+            end
+            seen.push(op.name)
+        end
+        i += 1
+    end
+    if anonymous > 0 && vx.doc.ops.len() > 1:
+        _vx_error(vx, _gql_lone_anonymous_msg(), 0, 0)
+    end
+end
+
+// The root type an operation selects against must exist in the schema.
+func _v_operation_roots(vx &: Vx):
+    mut i := 0
+    until i < vx.doc.ops.len():
+        op := vx.doc.ops.get(i)[0]
+        root := RootTypeName(vx.sch, op.optype)
+        if root == "" || !HasType(vx.sch, root):
+            _vx_error(vx, _gql_no_root_msg(OperationTypeName(op.optype)), op.line, 0)
+        end
+        i += 1
+    end
+end
+
+// ---- 5.5 fragments ----
+
+// 5.5.1.1 fragment name uniqueness.
+func _v_fragment_names(vx &: Vx):
+    mut seen := Vector {} as Vector<str>
+    defer seen.free()
+    mut i := 0
+    until i < vx.doc.frags.len():
+        f := vx.doc.frags.get(i)[0]
+        if _vx_has(seen, f.name):
+            _vx_error(vx, _gql_dup_fragment_msg(f.name), f.line, 0)
+        end
+        seen.push(f.name)
+        i += 1
+    end
+end
+
+// 5.5.1.2 fragment spread type existence and 5.5.1.3 fragments on
+// composite types: a fragment's type condition must name an object,
+// interface or union.
+func _v_fragment_conditions(vx &: Vx):
+    mut i := 0
+    until i < vx.doc.frags.len():
+        f := vx.doc.frags.get(i)[0]
+        _v_check_condition(vx, f.typeCondition, f.line)
+        i += 1
+    end
+end
+
+func _v_check_condition(vx &: Vx, name: str, line: int):
+    if !HasType(vx.sch, name):
+        _vx_error(vx, _gql_unknown_type_msg(name), line, 0)
+        ret
+    end
+    k := FindType(vx.sch, name).kind
+    if k != TYPE_OBJECT && k != TYPE_INTERFACE && k != TYPE_UNION:
+        _vx_error(vx, _gql_not_composite_msg(name), line, 0)
+    end
+end
+
+// 5.5.2.2 fragment spreads must not form cycles. A depth-first walk
+// with the current chain on the stack catches both direct and indirect
+// recursion; each fragment is reported at most once.
+func _v_fragment_cycles(vx &: Vx):
+    mut reported := Vector {} as Vector<str>
+    defer reported.free()
+    mut i := 0
+    until i < vx.doc.frags.len():
+        mut chain := Vector {} as Vector<str>
+        _v_cycle_walk(vx, i, chain, reported)
+        chain.free()
+        i += 1
+    end
+end
+
+func _v_cycle_walk(vx &: Vx, fragIdx: int, chain &: Vector<str>, reported &: Vector<str>):
+    f := vx.doc.frags.get(fragIdx)[0]
+    if _vx_has(chain, f.name):
+        if !_vx_has(reported, f.name):
+            reported.push(f.name)
+            _vx_error(vx, _gql_fragment_cycle_msg(f.name), f.line, 0)
+        end
+        ret
+    end
+    chain.push(f.name)
+    _v_cycle_selections(vx, f.selections, chain, reported)
+    chain.pop()
+end
+
+func _v_cycle_selections(vx &: Vx, sels: Vector<int>, chain &: Vector<str>, reported &: Vector<str>):
+    mut i := 0
+    until i < sels.len():
+        s := SelectionAt(vx.doc, sels.get(i)[0])
+        i += 1
+        if s.kind == SEL_FRAGMENT_SPREAD:
+            idx := FindFragment(vx.doc, s.name)
+            if idx >= 0: _v_cycle_walk(vx, idx, chain, reported) end
+            continue
+        end
+        _v_cycle_selections(vx, s.selections, chain, reported)
+    end
+end
+
+// 5.5.1.4 fragments must be used, and 5.5.2.1 spread target defined.
+// Both fall out of the same traversal, which records every spread name
+// encountered anywhere in the document.
+func _v_collect_spreads(vx &: Vx, sels: Vector<int>):
+    mut i := 0
+    until i < sels.len():
+        s := SelectionAt(vx.doc, sels.get(i)[0])
+        i += 1
+        if s.kind == SEL_FRAGMENT_SPREAD:
+            if FindFragment(vx.doc, s.name) < 0:
+                _vx_error(vx, _gql_unknown_fragment_msg(s.name), s.line, s.col)
+            end
+            if !_vx_has(vx.usedFragments, s.name): vx.usedFragments.push(s.name) end
+            continue
+        end
+        _v_collect_spreads(vx, s.selections)
+    end
+end
+
+func _v_fragment_usage(vx &: Vx):
+    mut i := 0
+    until i < vx.doc.ops.len():
+        _v_collect_spreads(vx, vx.doc.ops.get(i)[0].selections)
+        i += 1
+    end
+    mut j := 0
+    until j < vx.doc.frags.len():
+        _v_collect_spreads(vx, vx.doc.frags.get(j)[0].selections)
+        j += 1
+    end
+    mut k := 0
+    until k < vx.doc.frags.len():
+        f := vx.doc.frags.get(k)[0]
+        if !_vx_has(vx.usedFragments, f.name):
+            _vx_error(vx, _gql_unused_fragment_msg(f.name), f.line, 0)
+        end
+        k += 1
+    end
+end
+
+// ---- 5.8 variables ----
+
+// 5.8.1 variable uniqueness and 5.8.2 variables are input types.
+func _v_variable_defs(vx &: Vx, op: AstOperation):
+    mut seen := Vector {} as Vector<str>
+    defer seen.free()
+    mut i := 0
+    until i < op.varDefs.len():
+        vd := op.varDefs.get(i)[0]
+        i += 1
+        if _vx_has(seen, vd.name):
+            _vx_error(vx, _gql_dup_variable_msg(vd.name), vd.line, 0)
+        end
+        seen.push(vd.name)
+        name := TypeRefName(vx.doc, vd.typeRef)
+        if !HasType(vx.sch, name):
+            _vx_error(vx, _gql_unknown_type_msg(name), vd.line, 0)
+            continue
+        end
+        if !IsInputType(vx.sch, name):
+            _vx_error(vx, _gql_not_input_type_msg(vd.name, name), vd.line, 0)
+        end
+    end
+end
+
+// Records every `$name` used anywhere under a selection set, following
+// fragment spreads, so 5.8.3 and 5.8.4 can be checked per operation.
+func _v_collect_var_uses(vx &: Vx, sels: Vector<int>, seenFrags &: Vector<str>):
+    mut i := 0
+    until i < sels.len():
+        s := SelectionAt(vx.doc, sels.get(i)[0])
+        i += 1
+        _v_collect_arg_vars(vx, s.args)
+        _v_collect_directive_vars(vx, s.directives)
+        if s.kind == SEL_FRAGMENT_SPREAD:
+            if _vx_has(seenFrags, s.name): continue end
+            seenFrags.push(s.name)
+            idx := FindFragment(vx.doc, s.name)
+            if idx >= 0:
+                f := vx.doc.frags.get(idx)[0]
+                _v_collect_directive_vars(vx, f.directives)
+                _v_collect_var_uses(vx, f.selections, seenFrags)
+            end
+            continue
+        end
+        _v_collect_var_uses(vx, s.selections, seenFrags)
+    end
+end
+
+func _v_collect_arg_vars(vx &: Vx, args: Vector<AstArgument>):
+    mut i := 0
+    until i < args.len():
+        _v_collect_value_vars(vx, args.get(i)[0].value)
+        i += 1
+    end
+end
+
+func _v_collect_directive_vars(vx &: Vx, ds: Vector<AstDirective>):
+    mut i := 0
+    until i < ds.len():
+        _v_collect_arg_vars(vx, ds.get(i)[0].args)
+        i += 1
+    end
+end
+
+func _v_collect_value_vars(vx &: Vx, valueId: int):
+    v := ValueAt(vx.doc, valueId)
+    if v.kind == VAL_VARIABLE:
+        if !_vx_has(vx.usedVars, v.s): vx.usedVars.push(v.s) end
+        ret
+    end
+    mut i := 0
+    until i < v.items.len():
+        _v_collect_value_vars(vx, v.items.get(i)[0])
+        i += 1
+    end
+end
+
+// 5.8.3 all variable uses defined, 5.8.4 all variables used.
+func _v_variable_usage(vx &: Vx, op: AstOperation):
+    vx.usedVars.free()
+    vx.usedVars = Vector {} as Vector<str>
+    mut seenFrags := Vector {} as Vector<str>
+    defer seenFrags.free()
+    _v_collect_directive_vars(vx, op.directives)
+    _v_collect_var_uses(vx, op.selections, seenFrags)
+    mut defined := Vector {} as Vector<str>
+    defer defined.free()
+    mut i := 0
+    until i < op.varDefs.len():
+        defined.push(op.varDefs.get(i)[0].name)
+        i += 1
+    end
+    mut j := 0
+    until j < vx.usedVars.len():
+        name := vx.usedVars.get(j)[0]
+        if !_vx_has(defined, name):
+            _vx_error(vx, _gql_undefined_variable_msg(name), op.line, 0)
+        end
+        j += 1
+    end
+    mut k := 0
+    until k < defined.len():
+        name := defined.get(k)[0]
+        if !_vx_has(vx.usedVars, name):
+            _vx_error(vx, _gql_unused_variable_msg(name), op.line, 0)
+        end
+        k += 1
+    end
+end
+
+// ---- public API ----
+
+// Validates a document against a schema and returns every problem
+// found. An empty list means the document is safe to execute.
+@en "Validate"
+@fa "اعتبارسنجی"
+@ar "تحقق"
+pub func Validate(sch: Schema, doc: Document): GqlErrorList:
+    mut vx := Vx {}
+    vx.sch = sch
+    vx.doc = doc
+    _v_operations(vx)
+    _v_operation_roots(vx)
+    _v_fragment_names(vx)
+    _v_fragment_conditions(vx)
+    _v_fragment_cycles(vx)
+    _v_fragment_usage(vx)
+    mut i := 0
+    until i < doc.ops.len():
+        op := doc.ops.get(i)[0]
+        _v_variable_defs(vx, op)
+        _v_variable_usage(vx, op)
+        _v_operation_selections(vx, op)
+        i += 1
+    end
+    _v_fragment_selections(vx)
+    vx.usedFragments.free()
+    vx.usedVars.free()
+    ret vx.errors
+end
+
+// True when the document validates cleanly, for callers that only need
+// a yes or no.
+@en "ValidateOk"
+@fa "اعتبارسنجی درست"
+@ar "التحقق سلیم"
+pub func ValidateOk(sch: Schema, doc: Document): bool:
+    mut errs := Validate(sch, doc)
+    ok := !HasErrors(errs)
+    FreeErrorList(errs)
+    ret ok
+end
+
+// Parses and validates source text in one call, returning every syntax
+// or validation error.
+@en "ValidateSource"
+@fa "اعتبارسنجی منبع"
+@ar "التحقق من المصدر"
+pub func ValidateSource(sch: Schema, source: str): GqlErrorList:
+    mut err := GqlError {}
+    mut doc := Parse(source, err)
+    mut out := GqlErrorList {}
+    if err.message != "":
+        AddError(out, err)
+        FreeDocument(doc)
+        ret out
+    end
+    out = Validate(sch, doc)
+    FreeDocument(doc)
+    ret out
+end

@@ -1,0 +1,388 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package rpc
+
+import encoding.value
+
+// The method registry and the call slots handlers talk through.
+//
+// `callhandler(fn, arg)` invokes a `void(i64)` function pointer, and
+// Salam has no closures, so a handler can neither receive a rich
+// argument nor return a result directly. Instead the dispatcher parks
+// the decoded Request in a slot, calls the handler with that slot's
+// index, and reads the reply back out of the slot afterwards:
+//
+//     func add(slot: i64):
+//         a := rpc.CallParamInt(slot, "a", 0)
+//         b := rpc.CallParamInt(slot, "b", 1)
+//         rpc.ReplyInt(slot, a + b)
+//     end
+//
+//     rpc.Register("add", funcptr(add))
+//
+// A handler that replies nothing gets an automatic "Internal error"
+// response, so a forgotten Reply never hangs a client. A handler for a
+// notification may reply anyway - the dispatcher simply discards it.
+//
+// Slots are recycled: dispatch is synchronous (call, read reply,
+// release), so the table only ever grows to the deepest nesting reached,
+// which is 1 unless a handler itself dispatches another call.
+
+mut _methods := MethodTable {}
+mut _slots := SlotTable {}
+
+func _find_method(name: str): int:
+    n := _methods.items.len()
+    mut i := 0
+    until i < n:
+        if _methods.items.get(i)[0].name == name: ret i end
+        i += 1
+    end
+    ret 0 - 1
+end
+
+func _alloc_slot(): int:
+    n := _slots.items.len()
+    mut i := 0
+    until i < n:
+        if !_slots.items.get(i)[0].busy:
+            mut s := CallSlot {}
+            s.busy = true
+            _slots.items.set(i, s)
+            ret i
+        end
+        i += 1
+    end
+    mut s := CallSlot {}
+    s.busy = true
+    _slots.items.push(s)
+    ret n
+end
+
+func _release_slot(id: int):
+    if id < 0 || id >= _slots.items.len(): ret end
+    mut s := CallSlot {}
+    s.busy = false
+    _slots.items.set(id, s)
+end
+
+func _slot_at(id: i64): CallSlot:
+    i := id as int
+    if i < 0 || i >= _slots.items.len(): ret CallSlot {} end
+    ret _slots.items.get(i)[0]
+end
+
+func _slot_store(id: i64, s: CallSlot):
+    i := id as int
+    if i < 0 || i >= _slots.items.len(): ret end
+    _slots.items.set(i, s)
+end
+
+@en "Register"
+@fa "ثبت متد"
+@ar "تسجیل طریقة"
+pub func Register(name: str, fn: i64):
+    idx := _find_method(name)
+    mut m := Method {}
+    m.name = name
+    m.fn = fn
+    if idx >= 0:
+        m.doc = _methods.items.get(idx)[0].doc
+        _methods.items.set(idx, m)
+        ret
+    end
+    _methods.items.push(m)
+end
+
+// Same as Register plus a one-line description, which ListMethods and
+// the built-in `rpc.describe` reflection method hand back to clients.
+@en "RegisterDoc"
+@fa "ثبت متد با توضیح"
+@ar "تسجیل طریقة مع وصف"
+pub func RegisterDoc(name: str, fn: i64, doc: str):
+    Register(name, fn)
+    idx := _find_method(name)
+    if idx < 0: ret end
+    mut m := _methods.items.get(idx)[0]
+    m.doc = doc
+    _methods.items.set(idx, m)
+end
+
+@en "Unregister"
+@fa "حذف متد"
+@ar "إلغاء تسجیل"
+pub func Unregister(name: str): bool:
+    idx := _find_method(name)
+    if idx < 0: ret false end
+    mut m := _methods.items.get(idx)[0]
+    m.name = ""
+    m.fn = 0
+    _methods.items.set(idx, m)
+    ret true
+end
+
+@en "HasMethod"
+@fa "متد دارد"
+@ar "تملک طریقة"
+pub func HasMethod(name: str): bool:
+    ret _find_method(name) >= 0
+end
+
+@en "MethodCount"
+@fa "تعداد متدها"
+@ar "عدد الطرق"
+pub func MethodCount(): int:
+    mut n := 0
+    mut i := 0
+    until i < _methods.items.len():
+        if _methods.items.get(i)[0].name != "": n += 1 end
+        i += 1
+    end
+    ret n
+end
+
+@en "ListMethods"
+@fa "فهرست متدها"
+@ar "قائمة الطرق"
+pub func ListMethods(): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    mut i := 0
+    until i < _methods.items.len():
+        nm := _methods.items.get(i)[0].name
+        if nm != "": out.push(nm) end
+        i += 1
+    end
+    ret out
+end
+
+@en "MethodDoc"
+@fa "توضیح متد"
+@ar "وصف الطریقة"
+pub func MethodDoc(name: str): str:
+    idx := _find_method(name)
+    if idx < 0: ret "" end
+    ret _methods.items.get(idx)[0].doc
+end
+
+@en "ResetRegistry"
+@fa "بازنشانی ثبت"
+@ar "إعادة تعیین السجل"
+pub func ResetRegistry():
+    _methods = MethodTable {}
+end
+
+// ---- the handler-facing slot API ---------------------------------------
+
+@en "CallRequest"
+@fa "درخواست فراخوانی"
+@ar "طلب الاستدعاء"
+pub func CallRequest(slot: i64): Request:
+    ret _slot_at(slot).req
+end
+
+@en "CallMethodName"
+@fa "نام متد فراخوانی"
+@ar "اسم طریقة الاستدعاء"
+pub func CallMethodName(slot: i64): str:
+    ret _slot_at(slot).req.method
+end
+
+@en "CallParams"
+@fa "پارامترهای فراخوانی"
+@ar "معاملات الاستدعاء"
+pub func CallParams(slot: i64): value.Value:
+    s := _slot_at(slot)
+    if !s.req.has_params: ret value.ValueNull() end
+    ret s.req.params
+end
+
+@en "CallIsNotification"
+@fa "فراخوانی اعلان است"
+@ar "الاستدعاء إشعار"
+pub func CallIsNotification(slot: i64): bool:
+    ret !_slot_at(slot).req.has_id
+end
+
+@en "CallParamCount"
+@fa "تعداد پارامتر فراخوانی"
+@ar "عدد معاملات الاستدعاء"
+pub func CallParamCount(slot: i64): int:
+    ret ParamCount(_slot_at(slot).req)
+end
+
+@en "CallParam"
+@fa "پارامتر فراخوانی"
+@ar "معامل الاستدعاء"
+pub func CallParam(slot: i64, key: str, pos: int): value.Value:
+    ret Param(_slot_at(slot).req, key, pos)
+end
+
+@en "CallParamInt"
+@fa "پارامتر عددی فراخوانی"
+@ar "معامل صحیح للاستدعاء"
+pub func CallParamInt(slot: i64, key: str, pos: int): i64:
+    ret ParamInt(_slot_at(slot).req, key, pos)
+end
+
+@en "CallParamFloat"
+@fa "پارامتر اعشاری فراخوانی"
+@ar "معامل عشری للاستدعاء"
+pub func CallParamFloat(slot: i64, key: str, pos: int): f64:
+    ret ParamFloat(_slot_at(slot).req, key, pos)
+end
+
+@en "CallParamStr"
+@fa "پارامتر متنی فراخوانی"
+@ar "معامل نصی للاستدعاء"
+pub func CallParamStr(slot: i64, key: str, pos: int): str:
+    ret ParamStr(_slot_at(slot).req, key, pos)
+end
+
+@en "CallParamBool"
+@fa "پارامتر بولی فراخوانی"
+@ar "معامل منطقی للاستدعاء"
+pub func CallParamBool(slot: i64, key: str, pos: int): bool:
+    ret ParamBool(_slot_at(slot).req, key, pos)
+end
+
+@en "Reply"
+@fa "پاسخ دادن"
+@ar "الرد"
+pub func Reply(slot: i64, result: value.Value):
+    mut s := _slot_at(slot)
+    s.result = result
+    s.is_error = false
+    s.replied = true
+    _slot_store(slot, s)
+end
+
+@en "ReplyInt"
+@fa "پاسخ عددی"
+@ar "رد صحیح"
+pub func ReplyInt(slot: i64, n: i64):
+    Reply(slot, value.ValueInt(n))
+end
+
+@en "ReplyFloat"
+@fa "پاسخ اعشاری"
+@ar "رد عشری"
+pub func ReplyFloat(slot: i64, n: f64):
+    Reply(slot, value.ValueFloat(n))
+end
+
+@en "ReplyStr"
+@fa "پاسخ متنی"
+@ar "رد نصی"
+pub func ReplyStr(slot: i64, s: str):
+    Reply(slot, value.ValueString(s))
+end
+
+@en "ReplyBool"
+@fa "پاسخ بولی"
+@ar "رد منطقی"
+pub func ReplyBool(slot: i64, b: bool):
+    Reply(slot, value.ValueBool(b))
+end
+
+@en "ReplyNull"
+@fa "پاسخ تهی"
+@ar "رد فارغ"
+pub func ReplyNull(slot: i64):
+    Reply(slot, value.ValueNull())
+end
+
+@en "Fail"
+@fa "شکست"
+@ar "فشل"
+pub func Fail(slot: i64, code: int, message: str):
+    mut s := _slot_at(slot)
+    s.err = NewError(code, message)
+    s.is_error = true
+    s.replied = true
+    _slot_store(slot, s)
+end
+
+@en "FailWithData"
+@fa "شکست با داده"
+@ar "فشل مع بیانات"
+pub func FailWithData(slot: i64, code: int, message: str, data: value.Value):
+    mut s := _slot_at(slot)
+    s.err = ErrorWithData(code, message, data)
+    s.is_error = true
+    s.replied = true
+    _slot_store(slot, s)
+end
+
+@en "FailInvalidParams"
+@fa "پارامتر نامعتبر"
+@ar "معاملات غیر صالحة"
+pub func FailInvalidParams(slot: i64, message: str):
+    if message == "":
+        Fail(slot, RPC_INVALID_PARAMS, _code_text(RPC_INVALID_PARAMS))
+        ret
+    end
+    Fail(slot, RPC_INVALID_PARAMS, message)
+end
+
+// ---- dispatch ----------------------------------------------------------
+
+// Runs one decoded request through the registry and returns the
+// Response it produced. Notifications still execute; the caller decides
+// whether to transmit the result (JsonEncodeResponses drops them).
+@en "Invoke"
+@fa "فراخوانی"
+@ar "تنفیذ"
+pub func Invoke(req: Request): Response:
+    mut resp := Response {}
+    resp.id = req.id
+    resp.has_id = req.has_id
+    resp.msgid = req.msgid
+    if req.err_code != 0:
+        resp.is_error = true
+        resp.err = NewError(req.err_code, req.err_message)
+        ret resp
+    end
+    idx := _find_method(req.method)
+    if idx < 0 || _methods.items.get(idx)[0].name == "":
+        resp.is_error = true
+        resp.err = StdError(RPC_METHOD_NOT_FOUND)
+        ret resp
+    end
+    fn := _methods.items.get(idx)[0].fn
+    if fn == 0:
+        resp.is_error = true
+        resp.err = StdError(RPC_METHOD_NOT_FOUND)
+        ret resp
+    end
+    slot := _alloc_slot()
+    mut s := _slots.items.get(slot)[0]
+    s.req = req
+    _slots.items.set(slot, s)
+    callhandler(fn, slot as i64)
+    out := _slots.items.get(slot)[0]
+    _release_slot(slot)
+    if !out.replied:
+        resp.is_error = true
+        resp.err = NewError(RPC_INTERNAL_ERROR, "handler produced no reply")
+        ret resp
+    end
+    if out.is_error:
+        resp.is_error = true
+        resp.err = out.err
+        ret resp
+    end
+    resp.result = out.result
+    ret resp
+end

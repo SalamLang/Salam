@@ -15,6 +15,7 @@
 #include "core/prelude.h"
 #include "core/sal_format.h"
 #include "driver/driver.h"
+#include "driver/build.h"
 #include "driver/repl.h"
 #include "core/arena.h"
 #include "core/sb.h"
@@ -31,12 +32,15 @@
 #include "diag/diag.h"
 
 #if defined(_WIN32)
+#  include <process.h>
 #  include <windows.h>
 #  define REPL_USE_WINCON 1
+#  define REPL_GETPID() _getpid()
 #else
 #  include <termios.h>
 #  include <unistd.h>
 #  define REPL_USE_WINCON 0
+#  define REPL_GETPID() getpid()
 #endif
 
 #define REPL_HIST_MAX 200
@@ -486,144 +490,82 @@ static bool repl_wants_run(const char *line)
     return strncmp(line, "main()", 6) == 0;
 }
 
-static bool repl_compile_pkg(arena_t *a, logger_t *lg, langpack_t *pack, options_t *opt,
-                             const char *pkg)
+/* Where the session's temp .salam / executable pair lives, same lookup
+ * driver_run() uses for its own throwaway executable. */
+static const char *repl_tmp_dir(void)
 {
-    salam_set_stdlib_root(opt->stdlib_path);
-    const char *path = salam_resolve_import(a, "", pkg);
-    source_file_t *src = path ? source_load(a, path) : NULL;
-    if (!src) return false;
-    token_stream_t *toks = NULL;
-    if (!lexer_run(a, lg, pack, src, &toks)) return false;
-    ast_node_t *prog = NULL;
-    if (!parser_run(a, lg, toks, &prog)) return false;
-    cc_table_t *cc = cc_table_build(a, NULL, NULL, 0);
-    if (!cc_prune_program(a, lg, src->path, cc, prog)) return false;
-    sema_result_t *sr = sema_run(a, lg, prog, src->path, langpack_code(pack), cc);
-    if (!sr || !sr->ok) return false;
-    codegen_output_t *out = codegen_run(a, lg, prog, sr, pkg, false, false, src->path,
-                                        langpack_entry(pack), NULL);
-    char cpath[80], hpath[80];
-    sal_snprintf(cpath, sizeof cpath, "%s/salam_mod_%s.c", salam_scratch_dir(), pkg);
-    sal_snprintf(hpath, sizeof hpath, "%s/salam_mod_%s.h", salam_scratch_dir(), pkg);
-    FILE *f;
-    if ((f = fopen(cpath, "wb"))) {
-        fputs(out->c_src, f);
-        fclose(f);
-    }
-    if ((f = fopen(hpath, "wb"))) {
-        fputs(out->h_src, f);
-        fclose(f);
-    }
-    return true;
+#if defined(_WIN32)
+    const char *t = getenv("TEMP");
+    if (!t) t = getenv("TMP");
+#else
+    const char *t = getenv("TMPDIR");
+    if (!t) t = "/tmp";
+#endif
+    return (t && t[0]) ? t : ".";
 }
 
-static bool repl_exec(const char *full_src, const char *cc, langpack_t *pack,
-                      options_t *opt)
+/* Build the session exactly the way `salam run` builds a file: hand it to
+ * driver_build(), which owns backend selection - in-process LLVM first,
+ * and only then the C backend, which itself resolves clang > gcc > tcc.
+ *
+ * This used to be a hand-rolled mini-linker: codegen the session plus a
+ * fixed list of runtime packages, then shell out to `opt->cc`, whose
+ * default is the literal string "tcc". That default is only ever meant as
+ * a sentinel - driver_build() reads it as "nobody passed --cc, go find a
+ * real compiler" - so taking it literally made every `:run` invoke a tcc
+ * that need not exist on PATH, even on a host with gcc or clang installed
+ * and with LLVM compiled into this binary. Delegating is both simpler and
+ * more complete: the user's own `import`s now resolve like they do in a
+ * normal build instead of being limited to the hardcoded package list.
+ * Mirrors compiler/repl.salam's exec_session(). */
+static bool repl_exec(const char *full_src, options_t *opt)
 {
-    arena_t *a = arena_new(1 << 20);
-    logger_t *lg = logger_new(stderr, LOG_ERROR, resolve_color(opt->color));
-    source_file_t sf;
-    sf.path = "<repl>";
-    sf.text = CONST_CAST(full_src);
-    sf.len = strlen(full_src);
-    logger_set_diag_source(lg, sf.text, sf.len, opt->diag_style, opt->diag_format);
-    token_stream_t *toks = NULL;
-    bool ok = lexer_run(a, lg, pack, &sf, &toks);
-    ast_node_t *prog = NULL;
-    ok = ok && parser_run(a, lg, toks, &prog);
-    cc_table_t *repl_cc = cc_table_build(a, NULL, opt->defines, opt->ndefines);
-    if (ok) ok = cc_prune_program(a, lg, sf.path, repl_cc, prog);
-    sema_result_t *sr =
-        ok ? sema_run(a, lg, prog, sf.path, langpack_code(pack), repl_cc) : NULL;
-    ok = sr && sr->ok;
-    if (!ok) {
-        logger_free(lg);
-        arena_free(a);
+    /* Same "INFO is too noisy for a one-shot run" bump driver_run()
+     * applies, so a REPL turn doesn't spam the stdlib closure's per-phase
+     * lines over the prompt. */
+    if (opt->log_level == LOG_INFO) opt->log_level = LOG_WARN;
+
+    /* static: driver_build() keeps these pointers for the whole call, and
+     * opt->inputs[0] outlives this frame. */
+    static char tmp_src[600], tmp_exe[600];
+    static unsigned long seq = 0;
+    const char *dir = repl_tmp_dir();
+    unsigned long pid = (unsigned long)REPL_GETPID();
+    seq++;
+    sal_snprintf(tmp_src, sizeof tmp_src, "%s/salam-repl-%lu-%lu.salam", dir, pid, seq);
+#if defined(_WIN32)
+    sal_snprintf(tmp_exe, sizeof tmp_exe, "%s/salam-repl-%lu-%lu.exe", dir, pid, seq);
+#else
+    sal_snprintf(tmp_exe, sizeof tmp_exe, "%s/salam-repl-%lu-%lu", dir, pid, seq);
+#endif
+
+    FILE *f = fopen(tmp_src, "wb");
+    if (!f) {
+        fprintf(stderr, "error: could not write a temp file for the session\n");
         return false;
     }
-    codegen_output_t *out = codegen_run(a, lg, prog, sr, "_repl_", false, false, sf.path,
-                                        langpack_entry(pack), NULL);
-    const char *scratch = salam_scratch_dir();
-    char repl_c[80], repl_h[80];
-    sal_snprintf(repl_c, sizeof repl_c, "%s/salam_mod__repl_.c", scratch);
-    sal_snprintf(repl_h, sizeof repl_h, "%s/salam_mod__repl_.h", scratch);
-    FILE *f;
-    if ((f = fopen(repl_c, "wb"))) {
-        fputs(out->c_src, f);
-        fclose(f);
-    }
-    if ((f = fopen(repl_h, "wb"))) {
-        fputs(out->h_src, f);
-        fclose(f);
-    }
+    fputs(full_src, f);
+    fclose(f);
 
-    static const char *const RT_PKGS[] = {"mem",     "core", "map",   "text",
-                                          "console", "fs",   "thread"};
-    bool have_pkg[sizeof(RT_PKGS) / sizeof(RT_PKGS[0])];
-    {
-        size_t i = 0;
-        for (; i < sizeof(RT_PKGS) / sizeof(RT_PKGS[0]); i++)
-            have_pkg[i] = repl_compile_pkg(a, lg, pack, opt, RT_PKGS[i]);
-    }
-    sb_t cmd;
-    sb_init(&cmd);
-    sb_puts(&cmd, cc);
-    sb_puts(&cmd, " -I. -I");
-    sb_put_shell_arg(&cmd, scratch);
-    sb_puts(&cmd, " -o _salam_repl_");
-#ifdef _WIN32
-    sb_puts(&cmd, ".exe");
-#endif
-    sb_putc(&cmd, ' ');
-    sb_put_shell_arg(&cmd, repl_c);
-    {
-        size_t i = 0;
-        for (; i < sizeof(RT_PKGS) / sizeof(RT_PKGS[0]); i++)
-            if (have_pkg[i]) {
-                char pkg_c[80];
-                sal_snprintf(pkg_c, sizeof pkg_c, "%s/salam_mod_%s.c", scratch,
-                             RT_PKGS[i]);
-                sb_putc(&cmd, ' ');
-                sb_put_shell_arg(&cmd, pkg_c);
-            }
-    }
-#ifdef _WIN32
-    sb_puts(&cmd, " -lmsvcrt -lws2_32 -lwinhttp");
-#else
-    sb_puts(&cmd, " -lm");
-#endif
-    int crc = system(sb_cstr(&cmd));
-    sb_free(&cmd);
-    if (crc == 0) {
-#ifdef _WIN32
-        int _src = system(".\\_salam_repl_.exe");
-#else
-        int _src = system("./_salam_repl_");
-#endif
+    opt->inputs[0] = tmp_src;
+    opt->input_count = 1;
+    opt->input = tmp_src;
+    opt->output = tmp_exe;
+    opt->exe_path[0] = '\0';
+    opt->keep_c = false;
+
+    int brc = driver_build(opt);
+    const char *exe = opt->exe_path[0] ? opt->exe_path : tmp_exe;
+    if (brc == 0) {
+        char cmd[700];
+        sal_snprintf(cmd, sizeof cmd, "\"%s\"", exe);
+        int _src = system(cmd);
         (void)_src;
         fflush(stdout);
     }
-    remove(repl_c);
-    remove(repl_h);
-    {
-        size_t i = 0;
-        for (; i < sizeof(RT_PKGS) / sizeof(RT_PKGS[0]); i++) {
-            char cp[80], hp[80];
-            sal_snprintf(cp, sizeof cp, "%s/salam_mod_%s.c", scratch, RT_PKGS[i]);
-            sal_snprintf(hp, sizeof hp, "%s/salam_mod_%s.h", scratch, RT_PKGS[i]);
-            remove(cp);
-            remove(hp);
-        }
-    }
-#ifdef _WIN32
-    remove("_salam_repl_.exe");
-#else
-    remove("./_salam_repl_");
-#endif
-    logger_free(lg);
-    arena_free(a);
-    return crc == 0;
+    remove(tmp_src);
+    remove(exe);
+    return brc == 0;
 }
 
 static ast_node_t *repl_find_layout(ast_node_t *prog)
@@ -690,7 +632,6 @@ int driver_repl(options_t *opt)
     sb_t session;
     sb_init(&session);
     bool has_main = false;
-    const char *cc = (opt->cc && opt->cc[0]) ? opt->cc : "tcc";
     for (;;) {
         char *line = repl_readline("salam> ");
         if (!line) break;
@@ -759,7 +700,7 @@ int driver_repl(options_t *opt)
             else if (!has_main)
                 printf("no func main defined - define one, or type a statement.\n");
             else
-                repl_exec(sb_cstr(&session), cc, pack, opt);
+                repl_exec(sb_cstr(&session), opt);
             fflush(stdout);
             repl_hist_push(line);
             free(line);
@@ -850,7 +791,7 @@ int driver_repl(options_t *opt)
             sb_puts(&full, "\nfunc main:\n");
             sb_puts(&full, sb_cstr(&block));
             sb_puts(&full, "end\n");
-            repl_exec(sb_cstr(&full), cc, pack, opt);
+            repl_exec(sb_cstr(&full), opt);
             sb_free(&full);
             fflush(stdout);
         }

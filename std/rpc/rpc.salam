@@ -1,0 +1,375 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "rpc"
+@fa "فراخوانی دور"
+@ar "استدعاء بعید"
+package rpc
+
+import encoding.value
+
+// Transport- and codec-agnostic remote procedure call machinery: the
+// message model (request / notification / response / error) lives here,
+// the wire codecs live in jsonrpc.salam (JSON-RPC 2.0) and
+// rpc_msgpack.salam (MessagePack-RPC), the byte framings live in
+// rpc_framing.salam, and the dispatcher + client live in
+// rpc_server.salam / rpc_client.salam.
+//
+// Everything is built on encoding.value's dynamic Value tree, so one
+// registry of handlers serves every codec: a method registered once is
+// reachable over JSON-RPC on a TCP socket, over MessagePack-RPC on the
+// same socket, over HTTP POST, or over stdin/stdout, with no per-codec
+// handler variants.
+//
+// Handler ABI: Salam has no closures and `callhandler(fn, arg)` calls a
+// `void(i64)` function pointer, so a handler cannot return a value
+// directly. Handlers therefore take an integer *call slot* and read
+// their arguments / write their reply through it
+// (rpc.CallParams / rpc.Reply / rpc.Fail) - the same shape net/http's
+// request-context handle uses. See rpc_registry.salam.
+
+// ---- JSON-RPC 2.0 reserved error codes (also used by the msgpack codec,
+// which has no code registry of its own) ----
+
+pub const RPC_PARSE_ERROR := 0 - 32700
+pub const RPC_INVALID_REQUEST := 0 - 32600
+pub const RPC_METHOD_NOT_FOUND := 0 - 32601
+pub const RPC_INVALID_PARAMS := 0 - 32602
+pub const RPC_INTERNAL_ERROR := 0 - 32603
+pub const RPC_SERVER_ERROR := 0 - 32000
+
+// ---- message kinds ----
+
+pub const RPC_KIND_REQUEST := 1
+pub const RPC_KIND_NOTIFICATION := 2
+pub const RPC_KIND_RESPONSE := 3
+
+// ---- codecs (rpc_codec.salam dispatches on these) ----
+
+pub const RPC_CODEC_JSON := 0
+pub const RPC_CODEC_MSGPACK := 1
+
+// ---- framings (rpc_framing.salam) ----
+
+pub const RPC_FRAME_LINE := 0
+pub const RPC_FRAME_HEADER := 1
+pub const RPC_FRAME_LENGTH := 2
+
+@en "Error"
+@fa "خطای فراخوانی"
+@ar "خطأ الاستدعاء"
+pub struct Error:
+    pub code: int = 0
+    pub message: str = ""
+    pub data: value.Value = value.Value {}
+    pub has_data: bool = false
+end
+
+// A single inbound call. `has_id == false` marks a notification: the
+// server must run it and send nothing back. `id` is deliberately a
+// Value, not an int - JSON-RPC allows string, number or null ids and a
+// conforming server has to echo back exactly what it was given.
+@en "Request"
+@fa "درخواست"
+@ar "طلب"
+pub struct Request:
+    pub method: str = ""
+    pub params: value.Value = value.Value {}
+    pub has_params: bool = false
+    pub id: value.Value = value.Value {}
+    pub has_id: bool = false
+    pub msgid: i64 = 0
+    // Set by the decoders when this element of a payload was itself
+    // malformed. The dispatcher answers such an element with this error
+    // instead of looking the method up - a bad member of a batch must
+    // not abort the members around it.
+    pub err_code: int = 0
+    pub err_message: str = ""
+end
+
+@en "Response"
+@fa "پاسخ"
+@ar "استجابة"
+pub struct Response:
+    pub id: value.Value = value.Value {}
+    pub has_id: bool = false
+    pub result: value.Value = value.Value {}
+    pub is_error: bool = false
+    pub err: Error = Error {}
+    pub msgid: i64 = 0
+end
+
+// A decoded batch. JSON-RPC 2.0 lets a client send an array of requests
+// in one message; `is_batch` records whether the payload was an array so
+// the reply is shaped the same way (a batch of one is still a batch).
+@en "Batch"
+@fa "دسته"
+@ar "دفعة"
+pub struct Batch:
+    pub items: Vector<Request> = Vector {}
+    pub is_batch: bool = false
+    pub ok: bool = true
+    pub err: Error = Error {}
+end
+
+@en "Responses"
+@fa "پاسخ‌ها"
+@ar "استجابات"
+pub struct Responses:
+    pub items: Vector<Response> = Vector {}
+    pub is_batch: bool = false
+end
+
+// ---- registry / dispatch types (state lives in rpc_registry.salam) ----
+
+@en "Method"
+@fa "متد"
+@ar "طریقة"
+pub struct Method:
+    pub name: str = ""
+    pub fn: i64 = 0
+    pub doc: str = ""
+end
+
+@en "MethodTable"
+@fa "جدول متدها"
+@ar "جدول الطرق"
+pub struct MethodTable:
+    pub items: Vector<Method> = Vector {}
+end
+
+// One in-flight call. The handler is handed this slot's index as its
+// single i64 argument and reads/writes the call through it.
+@en "CallSlot"
+@fa "جایگاه فراخوانی"
+@ar "خانة الاستدعاء"
+pub struct CallSlot:
+    pub req: Request = Request {}
+    pub result: value.Value = value.Value {}
+    pub err: Error = Error {}
+    pub is_error: bool = false
+    pub replied: bool = false
+    pub busy: bool = false
+end
+
+@en "SlotTable"
+@fa "جدول جایگاه‌ها"
+@ar "جدول الخانات"
+pub struct SlotTable:
+    pub items: Vector<CallSlot> = Vector {}
+end
+
+func _code_text(code: int): str:
+    if code == RPC_PARSE_ERROR: ret "Parse error" end
+    if code == RPC_INVALID_REQUEST: ret "Invalid Request" end
+    if code == RPC_METHOD_NOT_FOUND: ret "Method not found" end
+    if code == RPC_INVALID_PARAMS: ret "Invalid params" end
+    if code == RPC_INTERNAL_ERROR: ret "Internal error" end
+    ret "Server error"
+end
+
+@en "NewError"
+@fa "خطای جدید"
+@ar "خطأ جدید"
+pub func NewError(code: int, message: str): Error:
+    mut e := Error {}
+    e.code = code
+    e.message = message
+    e.has_data = false
+    ret e
+end
+
+// The standard message text for a reserved code, so callers never have
+// to hardcode "Method not found" at each raise site.
+@en "StdError"
+@fa "خطای استاندارد"
+@ar "خطأ قیاسی"
+pub func StdError(code: int): Error:
+    ret NewError(code, _code_text(code))
+end
+
+@en "ErrorWithData"
+@fa "خطا با داده"
+@ar "خطأ مع بیانات"
+pub func ErrorWithData(code: int, message: str, data: value.Value): Error:
+    mut e := Error {}
+    e.code = code
+    e.message = message
+    e.data = data
+    e.has_data = true
+    ret e
+end
+
+@en "NewRequest"
+@fa "درخواست جدید"
+@ar "طلب جدید"
+pub func NewRequest(method: str, params: value.Value, id: i64): Request:
+    mut r := Request {}
+    r.method = method
+    r.params = params
+    r.has_params = true
+    r.id = value.ValueInt(id)
+    r.has_id = true
+    r.msgid = id
+    ret r
+end
+
+@en "NewRequestStrId"
+@fa "درخواست با شناسه متنی"
+@ar "طلب بمعرف نصی"
+pub func NewRequestStrId(method: str, params: value.Value, id: str): Request:
+    mut r := Request {}
+    r.method = method
+    r.params = params
+    r.has_params = true
+    r.id = value.ValueString(id)
+    r.has_id = true
+    ret r
+end
+
+@en "NewNotification"
+@fa "اعلان جدید"
+@ar "إشعار جدید"
+pub func NewNotification(method: str, params: value.Value): Request:
+    mut r := Request {}
+    r.method = method
+    r.params = params
+    r.has_params = true
+    r.has_id = false
+    ret r
+end
+
+@en "IsNotification"
+@fa "اعلان است"
+@ar "هل هو إشعار"
+pub func IsNotification(r: Request): bool:
+    ret !r.has_id
+end
+
+@en "NewResponse"
+@fa "پاسخ جدید"
+@ar "استجابة جدیدة"
+pub func NewResponse(id: value.Value, result: value.Value): Response:
+    mut r := Response {}
+    r.id = id
+    r.has_id = true
+    r.result = result
+    r.is_error = false
+    ret r
+end
+
+@en "NewErrorResponse"
+@fa "پاسخ خطا"
+@ar "استجابة خطأ"
+pub func NewErrorResponse(id: value.Value, e: Error): Response:
+    mut r := Response {}
+    r.id = id
+    r.has_id = true
+    r.is_error = true
+    r.err = e
+    ret r
+end
+
+// ---- positional / named parameter access -------------------------------
+//
+// JSON-RPC params are either an array (positional) or an object (named);
+// these read either shape without the caller branching on which arrived,
+// and return a typed zero when the parameter is absent or of another
+// type, so a handler can be written without a cascade of guards.
+
+@en "ParamCount"
+@fa "تعداد پارامتر"
+@ar "عدد المعاملات"
+pub func ParamCount(r: Request): int:
+    if !r.has_params: ret 0 end
+    if value.IsArray(r.params): ret value.ArrayLen(r.params) end
+    if value.IsObject(r.params): ret value.ObjectLen(r.params) end
+    ret 0
+end
+
+@en "ParamAt"
+@fa "پارامتر در جایگاه"
+@ar "معامل فی الموضع"
+pub func ParamAt(r: Request, i: int): value.Value:
+    if !r.has_params: ret value.ValueNull() end
+    if !value.IsArray(r.params): ret value.ValueNull() end
+    if i < 0 || i >= value.ArrayLen(r.params): ret value.ValueNull() end
+    ret value.ArrayGet(r.params, i)
+end
+
+@en "ParamNamed"
+@fa "پارامتر نام‌دار"
+@ar "معامل مسمی"
+pub func ParamNamed(r: Request, key: str): value.Value:
+    if !r.has_params: ret value.ValueNull() end
+    if !value.IsObject(r.params): ret value.ValueNull() end
+    if !value.ObjectHas(r.params, key): ret value.ValueNull() end
+    ret value.ObjectGet(r.params, key)
+end
+
+// Named first, positional second: lets a handler declare its arguments
+// once and accept both `{"a":1,"b":2}` and `[1,2]` from clients.
+@en "Param"
+@fa "پارامتر"
+@ar "معامل"
+pub func Param(r: Request, key: str, pos: int): value.Value:
+    if r.has_params && value.IsObject(r.params):
+        ret ParamNamed(r, key)
+    end
+    ret ParamAt(r, pos)
+end
+
+@en "ParamInt"
+@fa "پارامتر عددی"
+@ar "معامل صحیح"
+pub func ParamInt(r: Request, key: str, pos: int): i64:
+    v := Param(r, key, pos)
+    if value.IsInt(v) || value.IsFloat(v): ret value.AsInt(v) end
+    ret 0 as i64
+end
+
+@en "ParamFloat"
+@fa "پارامتر اعشاری"
+@ar "معامل عشری"
+pub func ParamFloat(r: Request, key: str, pos: int): f64:
+    v := Param(r, key, pos)
+    if value.IsInt(v) || value.IsFloat(v): ret value.AsFloat(v) end
+    ret 0.0
+end
+
+@en "ParamStr"
+@fa "پارامتر متنی"
+@ar "معامل نصی"
+pub func ParamStr(r: Request, key: str, pos: int): str:
+    v := Param(r, key, pos)
+    if value.IsString(v): ret value.AsString(v) end
+    ret ""
+end
+
+@en "ParamBool"
+@fa "پارامتر بولی"
+@ar "معامل منطقی"
+pub func ParamBool(r: Request, key: str, pos: int): bool:
+    v := Param(r, key, pos)
+    if value.IsBool(v): ret value.AsBool(v) end
+    ret false
+end
+
+@en "HasParam"
+@fa "پارامتر دارد"
+@ar "یملک معاملا"
+pub func HasParam(r: Request, key: str, pos: int): bool:
+    v := Param(r, key, pos)
+    ret !value.IsNull(v)
+end

@@ -1,0 +1,527 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package http2
+
+import compress
+
+// HPACK (RFC 7541): the header compression HTTP/2 mandates. Four pieces,
+// all here:
+//
+//   - the prefix-coded integer (section 5.1) and string literal
+//     (section 5.2, optionally Huffman-coded via hpack_huffman.salam)
+//   - the 61-entry static table (Appendix A)
+//   - the dynamic table: append at the end, index from the end, evict
+//     from the front when `name + value + 32` bytes would exceed the
+//     negotiated maximum (section 4.1)
+//   - the six wire representations (section 6), encoder and decoder
+//
+// Encoder and decoder each own a DynTable and the two must stay exactly
+// in step: HPACK is stateful across a whole connection, so a decoder
+// that mis-handles one header block corrupts every block after it. That
+// is why the decoder here treats every malformed case as a hard failure
+// (`ok = false`) rather than skipping a field and continuing.
+
+// name, value, name, value, ... for static indices 1..61 (Appendix A).
+// A value of "" means the entry indexes only a name.
+const _STATIC := [
+    ":authority", ""
+    ":method", "GET"
+    ":method", "POST"
+    ":path", "/"
+    ":path", "/index.html"
+    ":scheme", "http"
+    ":scheme", "https"
+    ":status", "200"
+    ":status", "204"
+    ":status", "206"
+    ":status", "304"
+    ":status", "400"
+    ":status", "404"
+    ":status", "500"
+    "accept-charset", ""
+    "accept-encoding", "gzip, deflate"
+    "accept-language", ""
+    "accept-ranges", ""
+    "accept", ""
+    "access-control-allow-origin", ""
+    "age", ""
+    "allow", ""
+    "authorization", ""
+    "cache-control", ""
+    "content-disposition", ""
+    "content-encoding", ""
+    "content-language", ""
+    "content-length", ""
+    "content-location", ""
+    "content-range", ""
+    "content-type", ""
+    "cookie", ""
+    "date", ""
+    "etag", ""
+    "expect", ""
+    "expires", ""
+    "from", ""
+    "host", ""
+    "if-match", ""
+    "if-modified-since", ""
+    "if-none-match", ""
+    "if-range", ""
+    "if-unmodified-since", ""
+    "last-modified", ""
+    "link", ""
+    "location", ""
+    "max-forwards", ""
+    "proxy-authenticate", ""
+    "proxy-authorization", ""
+    "range", ""
+    "referer", ""
+    "refresh", ""
+    "retry-after", ""
+    "server", ""
+    "set-cookie", ""
+    "strict-transport-security", ""
+    "transfer-encoding", ""
+    "user-agent", ""
+    "vary", ""
+    "via", ""
+    "www-authenticate", ""
+] as str[122]
+
+pub const HPACK_STATIC_COUNT := 61
+// Per-entry overhead the spec charges against the dynamic table budget.
+pub const HPACK_ENTRY_OVERHEAD := 32
+
+func _dyn_count(t: DynTable): int:
+    ret t.items.len() - t.head
+end
+
+func _entry_size(h: Header): int:
+    ret h.name.len() + h.value.len() + HPACK_ENTRY_OVERHEAD
+end
+
+// Rebuilds the backing vector once the evicted prefix has grown enough
+// that keeping it around costs more than one copy.
+func _dyn_compact(t &: DynTable):
+    if t.head < 32: ret end
+    mut fresh := Vector {} as Vector<Header>
+    mut i := t.head
+    until i < t.items.len():
+        fresh.push(t.items.get(i)[0])
+        i += 1
+    end
+    t.items = fresh
+    t.head = 0
+end
+
+func _dyn_evict_to(t &: DynTable, limit: int):
+    until t.size > limit && _dyn_count(t) > 0:
+        oldest := t.items.get(t.head)[0]
+        t.size -= _entry_size(oldest)
+        t.head += 1
+    end
+    _dyn_compact(t)
+end
+
+// Encodes `value` with an N-bit prefix, OR-ing the already-positioned
+// `mask` bits into the first octet (section 5.1).
+func _enc_int(out &: compress.ByteBuf, mask: int, prefix_bits: int, value: int):
+    limit := (1 << prefix_bits) - 1
+    if value < limit:
+        compress.BufPush(out, mask | value)
+        ret
+    end
+    compress.BufPush(out, mask | limit)
+    mut v := value - limit
+    until v >= 128:
+        compress.BufPush(out, (v & 127) | 128)
+        v = v / 128
+    end
+    compress.BufPush(out, v)
+end
+
+// Reads a prefix-coded integer starting at `pos`; advances `pos` past
+// it. `first` is the octet already read.
+func _dec_int(src: compress.ByteBuf, pos &: int, first: int, prefix_bits: int, ok &: bool): int:
+    limit := (1 << prefix_bits) - 1
+    v := first & limit
+    if v < limit:
+        ok = true
+        ret v
+    end
+    mut result := limit
+    mut shift := 0
+    n := compress.BufLen(src)
+    until true:
+        if pos >= n:
+            ok = false
+            ret 0
+        end
+        b := compress.BufGet(src, pos)
+        pos += 1
+        result += (b & 127) << shift
+        if (b & 128) == 0:
+            ok = true
+            ret result
+        end
+        shift += 7
+        if shift > 28:
+            // A continuation this long can only be a corrupt or hostile
+            // encoding; the spec allows rejecting it outright.
+            ok = false
+            ret 0
+        end
+    end
+end
+
+func _enc_string(out &: compress.ByteBuf, s: str, use_huffman: bool):
+    if use_huffman:
+        hlen := HuffmanEncodedLenStr(s)
+        if hlen < s.len():
+            _enc_int(out, 128, 7, hlen)
+            HuffmanEncode(out, s as void*, s.len())
+            ret
+        end
+    end
+    _enc_int(out, 0, 7, s.len())
+    compress.BufPushBytes(out, s as void*, s.len())
+end
+
+func _dec_string(src: compress.ByteBuf, pos &: int, ok &: bool): str:
+    n := compress.BufLen(src)
+    if pos >= n:
+        ok = false
+        ret ""
+    end
+    first := compress.BufGet(src, pos)
+    pos += 1
+    huff := (first & 128) != 0
+    mut lok := false
+    slen := _dec_int(src, pos, first, 7, lok)
+    if !lok || pos + slen > n:
+        ok = false
+        ret ""
+    end
+    if !huff:
+        mut raw := compress.NewByteBufCap(slen + 1)
+        mut i := 0
+        until i < slen:
+            compress.BufPush(raw, compress.BufGet(src, pos + i))
+            i += 1
+        end
+        pos += slen
+        out := compress.BufToStrUnsafe(raw)
+        compress.BufFree(raw)
+        ok = true
+        ret out
+    end
+    mut hok := false
+    mut dec := HuffmanDecode(src, pos, slen, hok)
+    pos += slen
+    if !hok:
+        compress.BufFree(dec)
+        ok = false
+        ret ""
+    end
+    out := compress.BufToStrUnsafe(dec)
+    compress.BufFree(dec)
+    ok = true
+    ret out
+end
+
+@en "NewDynTable"
+@fa "جدول پویا جدید"
+@ar "جدول دینامیکی جدید"
+pub func NewDynTable(max_size: int): DynTable:
+    mut t := DynTable {}
+    t.max_size = max_size
+    ret t
+end
+
+@en "DynCount"
+@fa "تعداد جدول پویا"
+@ar "عدد الجدول الدینامیکی"
+pub func DynCount(t: DynTable): int:
+    ret _dyn_count(t)
+end
+
+@en "DynSize"
+@fa "اندازه جدول پویا"
+@ar "حجم الجدول الدینامیکی"
+pub func DynSize(t: DynTable): int:
+    ret t.size
+end
+
+// Index 1 is the most recently inserted entry (section 2.3.3).
+@en "DynGet"
+@fa "دریافت از جدول پویا"
+@ar "جلب من الجدول"
+pub func DynGet(t: DynTable, index: int): Header:
+    if index < 1 || index > _dyn_count(t): ret Header {} end
+    ret t.items.get(t.items.len() - index)[0]
+end
+
+@en "DynInsert"
+@fa "درج در جدول پویا"
+@ar "إدراج فی الجدول"
+pub func DynInsert(t &: DynTable, h: Header):
+    sz := _entry_size(h)
+    // An entry larger than the whole table empties it and is not stored
+    // - explicitly legal, and not an error (section 4.4).
+    if sz > t.max_size:
+        _dyn_evict_to(t, 0 - 1)
+        ret
+    end
+    _dyn_evict_to(t, t.max_size - sz)
+    t.items.push(h)
+    t.size += sz
+end
+
+@en "DynSetMaxSize"
+@fa "تنظیم اندازه جدول"
+@ar "تعیین حجم الجدول"
+pub func DynSetMaxSize(t &: DynTable, max_size: int):
+    t.max_size = max_size
+    _dyn_evict_to(t, max_size)
+end
+
+@en "StaticGet"
+@fa "دریافت از جدول ثابت"
+@ar "جلب من الجدول الثابت"
+pub func StaticGet(index: int): Header:
+    if index < 1 || index > HPACK_STATIC_COUNT: ret Header {} end
+    mut h := Header {}
+    h.name = _STATIC[(index - 1) * 2]
+    h.value = _STATIC[(index - 1) * 2 + 1]
+    ret h
+end
+
+// Resolves an HPACK index across both tables: 1..61 is static, higher
+// indices count into the dynamic table.
+@en "TableGet"
+@fa "دریافت از جدول"
+@ar "جلب من الجداول"
+pub func TableGet(t: DynTable, index: int, ok &: bool): Header:
+    if index >= 1 && index <= HPACK_STATIC_COUNT:
+        ok = true
+        ret StaticGet(index)
+    end
+    d := index - HPACK_STATIC_COUNT
+    if d >= 1 && d <= _dyn_count(t):
+        ok = true
+        ret DynGet(t, d)
+    end
+    ok = false
+    ret Header {}
+end
+
+// Finds `name`/`value`. Returns the index of an exact match if there is
+// one; otherwise the index of a name-only match with `exact` false; 0
+// when neither exists.
+@en "TableFind"
+@fa "جستجوی جدول"
+@ar "بحث فی الجداول"
+pub func TableFind(t: DynTable, name: str, value: str, exact &: bool): int:
+    mut name_only := 0
+    mut i := 1
+    until i <= HPACK_STATIC_COUNT:
+        if _STATIC[(i - 1) * 2] == name:
+            if _STATIC[(i - 1) * 2 + 1] == value:
+                exact = true
+                ret i
+            end
+            if name_only == 0: name_only = i end
+        end
+        i += 1
+    end
+    mut d := 1
+    until d <= _dyn_count(t):
+        e := DynGet(t, d)
+        if e.name == name:
+            if e.value == value:
+                exact = true
+                ret HPACK_STATIC_COUNT + d
+            end
+            if name_only == 0: name_only = HPACK_STATIC_COUNT + d end
+        end
+        d += 1
+    end
+    exact = false
+    ret name_only
+end
+
+// Appends one header to `out` using the smallest representation that is
+// correct for it: an index when both name and value are already known, a
+// name index plus a literal value when only the name is, a full literal
+// otherwise. A header marked sensitive always takes the "never indexed"
+// form and never enters the table.
+@en "EncodeHeader"
+@fa "کدگذاری سرآیند"
+@ar "ترمیز ترویسة"
+pub func EncodeHeader(out &: compress.ByteBuf, t &: DynTable, h: Header, use_huffman: bool):
+    mut exact := false
+    idx := TableFind(t, h.name, h.value, exact)
+    if exact && !h.sensitive:
+        _enc_int(out, 128, 7, idx)
+        ret
+    end
+    if h.sensitive:
+        // 0001xxxx, 4-bit name index, never indexed.
+        _enc_int(out, 16, 4, idx)
+        if idx == 0: _enc_string(out, h.name, use_huffman) end
+        _enc_string(out, h.value, use_huffman)
+        ret
+    end
+    // 01xxxxxx, 6-bit name index, with incremental indexing.
+    _enc_int(out, 64, 6, idx)
+    if idx == 0: _enc_string(out, h.name, use_huffman) end
+    _enc_string(out, h.value, use_huffman)
+    DynInsert(t, h)
+end
+
+@en "EncodeHeaderList"
+@fa "کدگذاری فهرست سرآیند"
+@ar "ترمیز قائمة الترویسات"
+pub func EncodeHeaderList(t &: DynTable, hl: HeaderList, use_huffman: bool): compress.ByteBuf:
+    mut out := compress.NewByteBufCap(256)
+    mut i := 0
+    until i < hl.items.len():
+        EncodeHeader(out, t, hl.items.get(i)[0], use_huffman)
+        i += 1
+    end
+    ret out
+end
+
+// Emits a dynamic table size update (001xxxxx). A peer that lowers
+// SETTINGS_HEADER_TABLE_SIZE must be acknowledged with one of these
+// before the next header block.
+@en "EncodeTableSizeUpdate"
+@fa "کدگذاری تغییر اندازه جدول"
+@ar "ترمیز تحدیث حجم الجدول"
+pub func EncodeTableSizeUpdate(out &: compress.ByteBuf, t &: DynTable, new_size: int):
+    DynSetMaxSize(t, new_size)
+    _enc_int(out, 32, 5, new_size)
+end
+
+// Decodes a complete header block. Any malformed field fails the whole
+// block: HPACK state is shared across a connection, so continuing past a
+// field that could not be parsed would desynchronise the dynamic table
+// and silently corrupt every later block.
+@en "DecodeHeaderList"
+@fa "کدگشایی فهرست سرآیند"
+@ar "فک ترمیز قائمة الترویسات"
+pub func DecodeHeaderList(t &: DynTable, block: compress.ByteBuf, ok &: bool): HeaderList:
+    mut out := HeaderList {}
+    mut pos := 0
+    n := compress.BufLen(block)
+    until pos < n:
+        b := compress.BufGet(block, pos)
+        pos += 1
+        if (b & 128) != 0:
+            mut iok := false
+            idx := _dec_int(block, pos, b, 7, iok)
+            if !iok || idx == 0:
+                ok = false
+                ret out
+            end
+            mut gok := false
+            h := TableGet(t, idx, gok)
+            if !gok:
+                ok = false
+                ret out
+            end
+            out.items.push(h)
+            continue
+        end
+        if (b & 64) != 0:
+            mut iok := false
+            idx := _dec_int(block, pos, b, 6, iok)
+            if !iok:
+                ok = false
+                ret out
+            end
+            mut h := Header {}
+            if idx == 0:
+                mut sok := false
+                h.name = _dec_string(block, pos, sok)
+                if !sok:
+                    ok = false
+                    ret out
+                end
+            else:
+                mut gok := false
+                h.name = TableGet(t, idx, gok).name
+                if !gok:
+                    ok = false
+                    ret out
+                end
+            end
+            mut vok := false
+            h.value = _dec_string(block, pos, vok)
+            if !vok:
+                ok = false
+                ret out
+            end
+            DynInsert(t, h)
+            out.items.push(h)
+            continue
+        end
+        if (b & 32) != 0:
+            mut iok := false
+            newmax := _dec_int(block, pos, b, 5, iok)
+            if !iok:
+                ok = false
+                ret out
+            end
+            DynSetMaxSize(t, newmax)
+            continue
+        end
+        // 0000xxxx (without indexing) and 0001xxxx (never indexed) share
+        // a 4-bit prefix and differ only in whether a proxy may re-index
+        // them; neither touches this endpoint's table.
+        never := (b & 16) != 0
+        mut iok := false
+        idx := _dec_int(block, pos, b, 4, iok)
+        if !iok:
+            ok = false
+            ret out
+        end
+        mut h := Header {}
+        h.sensitive = never
+        if idx == 0:
+            mut sok := false
+            h.name = _dec_string(block, pos, sok)
+            if !sok:
+                ok = false
+                ret out
+            end
+        else:
+            mut gok := false
+            h.name = TableGet(t, idx, gok).name
+            if !gok:
+                ok = false
+                ret out
+            end
+        end
+        mut vok := false
+        h.value = _dec_string(block, pos, vok)
+        if !vok:
+            ok = false
+            ret out
+        end
+        out.items.push(h)
+    end
+    ok = true
+    ret out
+end

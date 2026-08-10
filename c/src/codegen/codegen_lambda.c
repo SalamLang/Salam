@@ -66,7 +66,7 @@ void cg_emit_lambda(cg_t *cg, ast_node_t *n)
     sb_t *saved_c = cg->c;
     int saved_indent = cg->indent;
     vec_t saved_locals = cg->locals, saved_defers = cg->fn_defers;
-    bool saved_sret = cg->cur_sret;
+    bool saved_sret = cg->cur_sret, saved_is_main = cg->cur_is_main;
     symbol_t *saved_struct = cg->cur_struct;
     ast_node_t *saved_lambda = cg->cur_lambda;
     cg->c = cg->lam_defs;
@@ -74,6 +74,9 @@ void cg_emit_lambda(cg_t *cg, ast_node_t *n)
     vec_init(&cg->locals);
     vec_init(&cg->fn_defers);
     cg->cur_sret = false;
+    /* A lambda body is its own C function, never `int main` - a bare `ret`
+     * in it is a real `return;`. */
+    cg->cur_is_main = false;
     cg->cur_struct = NULL;
     cg->cur_lambda = n;
     {
@@ -132,6 +135,7 @@ void cg_emit_lambda(cg_t *cg, ast_node_t *n)
     cg->locals = saved_locals;
     cg->fn_defers = saved_defers;
     cg->cur_sret = saved_sret;
+    cg->cur_is_main = saved_is_main;
     cg->cur_struct = saved_struct;
     cg->cur_lambda = saved_lambda;
 }

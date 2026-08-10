@@ -1,0 +1,299 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package rpc
+
+import compress
+import conv
+import net.internal.rawsock
+import encoding.value
+
+// The server side: one pure function (HandlePayload) that turns an
+// inbound message into its reply, plus the transports that pump bytes
+// into it - TCP, stdio, and a plain string entry point for embedding the
+// dispatcher in something else (an HTTP route, a message queue consumer,
+// a test).
+//
+// Concurrency: connections are served one at a time. The registry and
+// the call slots are module-level state and Salam has no closures to
+// carry per-connection state through a `void(i64)` handler pointer, so a
+// thread-per-connection server would need a lock around every slot
+// operation and would still serialise on it. A sequential loop is the
+// honest shape for this design; a caller that needs to serve many
+// clients at once should run several processes behind a load balancer,
+// or drive ServeConn itself from its own accept loop.
+
+// The listening socket is kept as a bare fd rather than a tcp.Server:
+// this struct is itself called `Server`, and a struct whose own name
+// shadows the name of a type it holds a field of sends the compiler's
+// codegen into unbounded recursion (a genuine defect, hit while writing
+// this file - `struct Server: srv: tcp.Server` never finishes compiling).
+// Going through net/internal/rawsock, which names its handle `Socket`,
+// sidesteps the clash and drops a wrapper layer at the same time.
+@en "Server"
+@fa "سرور فراخوانی"
+@ar "خادم الاستدعاء"
+pub struct Server:
+    pub port: int = 0
+    pub codec: int = 0
+    pub framing: int = 0
+    pub listen_fd: i64 = 0 - 1
+    pub running: bool = false
+    pub served: int = 0
+end
+
+// Answers the reflection methods every registry gets for free. Returns
+// false when `name` is not one of them, so the normal lookup proceeds.
+func _builtin(req: Request, resp &: Response): bool:
+    if req.method == "rpc.listMethods":
+        names := ListMethods()
+        mut arr := value.NewValueArray()
+        mut i := 0
+        until i < names.len():
+            value.ArrayPush(arr, value.ValueString(names.get(i)[0]))
+            i += 1
+        end
+        resp.result = arr
+        ret true
+    end
+    if req.method == "rpc.describe":
+        names := ListMethods()
+        mut obj := value.NewValueObject()
+        mut i := 0
+        until i < names.len():
+            nm := names.get(i)[0]
+            value.ObjectSet(obj, nm, value.ValueString(MethodDoc(nm)))
+            i += 1
+        end
+        resp.result = obj
+        ret true
+    end
+    ret false
+end
+
+@en "NewServer"
+@fa "سرور جدید"
+@ar "خادم جدید"
+pub func NewServer(port: int, codec: int): Server:
+    mut s := Server {}
+    s.port = port
+    s.codec = codec
+    s.framing = CodecDefaultFraming(codec)
+    ret s
+end
+
+@en "SetFraming"
+@fa "تنظیم قاب‌بندی"
+@ar "تعیین التأطیر"
+pub func SetFraming(s &: Server, framing: int):
+    s.framing = framing
+end
+
+// Runs every request of one decoded payload through the registry.
+@en "InvokeBatch"
+@fa "اجرای دسته"
+@ar "تنفیذ الدفعة"
+pub func InvokeBatch(b: Batch): Responses:
+    mut out := Responses {}
+    out.is_batch = b.is_batch
+    n := b.items.len()
+    mut i := 0
+    until i < n:
+        req := b.items.get(i)[0]
+        mut resp := Response {}
+        resp.id = req.id
+        resp.has_id = req.has_id
+        resp.msgid = req.msgid
+        if req.err_code == 0 && _builtin(req, resp):
+            if req.has_id: out.items.push(resp) end
+            i += 1
+            continue
+        end
+        answered := Invoke(req)
+        // A notification gets no reply document, per both specs.
+        if req.has_id: out.items.push(answered) end
+        i += 1
+    end
+    ret out
+end
+
+// The whole server in one pure function: bytes in, bytes out. An empty
+// result means "send nothing back" - the payload was entirely
+// notifications.
+@en "HandlePayload"
+@fa "پردازش بار"
+@ar "معالجة الحمولة"
+pub func HandlePayload(codec: int, payload: compress.ByteBuf): compress.ByteBuf:
+    b := DecodeBatch(codec, payload)
+    if !b.ok:
+        ret EncodeTopLevelError(codec, b.err)
+    end
+    rs := InvokeBatch(b)
+    if rs.items.len() == 0 && !rs.is_batch:
+        ret compress.NewByteBuf()
+    end
+    ret EncodeResponses(codec, rs)
+end
+
+// JSON-RPC convenience: text in, text out. Suitable for wiring the
+// dispatcher straight into an HTTP POST route.
+@en "HandleText"
+@fa "پردازش متن"
+@ar "معالجة النص"
+pub func HandleText(text: str): str:
+    mut inbuf := compress.BufFromStr(text)
+    mut out := HandlePayload(RPC_CODEC_JSON, inbuf)
+    compress.BufFree(inbuf)
+    s := compress.BufToStrUnsafe(out)
+    compress.BufFree(out)
+    ret s
+end
+
+// Serves one already-accepted connection until the peer closes it.
+// Returns how many messages were answered.
+@en "ServeConn"
+@fa "خدمت به اتصال"
+@ar "خدمة الاتصال"
+pub func ServeConn(fd: i64, codec: int, framing: int): int:
+    mut st := NewStream(fd)
+    mut count := 0
+    until true:
+        mut ok := false
+        mut payload := ReadFrame(st, framing, ok)
+        if !ok:
+            compress.BufFree(payload)
+            break
+        end
+        mut reply := HandlePayload(codec, payload)
+        compress.BufFree(payload)
+        if compress.BufLen(reply) > 0:
+            WriteFrame(fd, framing, reply)
+        end
+        compress.BufFree(reply)
+        count += 1
+    end
+    FreeStream(st)
+    ret count
+end
+
+@en "Listen"
+@fa "گوش دادن"
+@ar "استماع"
+pub func Listen(s &: Server): bool:
+    sock := rawsock.Listen(s.port)
+    if !rawsock.Ok(sock): ret false end
+    s.listen_fd = sock.fd
+    // Bind(0) asks the OS for a free ephemeral port; read back the one
+    // it actually picked so a caller can hand the real number to a
+    // client without hardcoding (and risking) a fixed port.
+    s.port = rawsock.LocalPort(sock)
+    s.running = true
+    ret true
+end
+
+@en "Port"
+@fa "درگاه سرور"
+@ar "منفذ الخادم"
+pub func Port(s: Server): int:
+    ret s.port
+end
+
+// Accepts and fully serves exactly `n` connections, then returns. This
+// is what a test drives: bind to port 0, hand the real port to a client
+// thread, serve one connection, exit.
+@en "ServeCount"
+@fa "خدمت به تعداد"
+@ar "خدمة بعدد"
+pub func ServeCount(s &: Server, n: int): int:
+    if !s.running:
+        if !Listen(s): ret 0 end
+    end
+    mut i := 0
+    until i < n:
+        c := rawsock.Accept(rawsock.FromFd(s.listen_fd))
+        if !rawsock.Ok(c): break end
+        ServeConn(c.fd, s.codec, s.framing)
+        rawsock.Close(c)
+        s.served += 1
+        i += 1
+    end
+    ret s.served
+end
+
+@en "Serve"
+@fa "خدمت"
+@ar "خدمة"
+pub func Serve(s &: Server):
+    if !s.running:
+        if !Listen(s): ret end
+    end
+    until s.running:
+        c := rawsock.Accept(rawsock.FromFd(s.listen_fd))
+        if !rawsock.Ok(c): continue end
+        ServeConn(c.fd, s.codec, s.framing)
+        rawsock.Close(c)
+        s.served += 1
+    end
+end
+
+@en "StopServer"
+@fa "توقف سرور"
+@ar "إیقاف الخادم"
+pub func StopServer(s &: Server):
+    s.running = false
+    if s.listen_fd >= 0:
+        rawsock.Close(rawsock.FromFd(s.listen_fd))
+        s.listen_fd = 0 - 1
+    end
+end
+
+// Reads framed messages from stdin and writes replies to stdout - the
+// transport an editor uses to talk to a language server, and the easiest
+// way to expose a Salam program as an RPC service to a parent process.
+// Only the text framings make sense here (a `str`-based stdin cannot
+// carry NUL bytes), so this is JSON-RPC only.
+@en "ServeStdio"
+@fa "خدمت ورودی خروجی"
+@ar "خدمة الإدخال والإخراج"
+pub func ServeStdio(framing: int): int:
+    mut count := 0
+    mut running := true
+    until running:
+        line := input()
+        if line == "":
+            // A blank line is the header/body separator under the LSP
+            // framing and a no-op under line framing; end-of-input shows
+            // up as a blank line too, so only stop once one arrives with
+            // no pending header.
+            if framing != RPC_FRAME_HEADER: running = false end
+            continue
+        end
+        if framing == RPC_FRAME_HEADER && line.len() > 8 && line.substr(0, 8).lower() == "content-":
+            // Header line: the body is the next non-empty line, since a
+            // JSON document encoded by this package never contains a raw
+            // newline.
+            continue
+        end
+        reply := HandleText(line)
+        if reply != "":
+            if framing == RPC_FRAME_HEADER:
+                print "Content-Length: " + conv.FormatInt(reply.len() as i64) + "\r\n\r\n" + reply
+            else:
+                println reply
+            end
+        end
+        count += 1
+    end
+    ret count
+end

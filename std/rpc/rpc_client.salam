@@ -1,0 +1,325 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package rpc
+
+import compress
+import encoding.value
+import net.tcp
+import net.http
+
+// The client side. A Client owns a socket, a codec, a framing and a
+// monotonic request id; Call sends and blocks for the matching reply,
+// Notify sends and returns immediately.
+//
+// Calls are strictly request/response on one connection, so replies
+// arrive in the order they were asked for and no correlation table is
+// needed - the id is still sent and checked, so a server that answers
+// out of order is detected rather than silently mismatched.
+//
+// CallHTTP needs no Client at all: JSON-RPC over HTTP POST is a single
+// stateless round trip and is by far the most common way these services
+// are actually exposed.
+
+@en "Client"
+@fa "کارخواه"
+@ar "عمیل"
+pub struct Client:
+    pub conn: tcp.Conn = tcp.Conn {}
+    pub stream: Stream = Stream {}
+    pub codec: int = 0
+    pub framing: int = 0
+    pub next_id: i64 = 1
+    pub ok: bool = false
+    pub last_error: str = ""
+end
+
+func _join(parts: Vector<str>, sep: str): str:
+    mut out := ""
+    mut i := 0
+    until i < parts.len():
+        if i > 0: out = out + sep end
+        out = out + parts.get(i)[0]
+        i += 1
+    end
+    ret out
+end
+
+func _client_fail(c &: Client, message: str): Response:
+    c.last_error = message
+    mut r := Response {}
+    r.is_error = true
+    r.err = NewError(RPC_INTERNAL_ERROR, message)
+    ret r
+end
+
+func _send(c &: Client, req: Request): bool:
+    mut payload := EncodeRequest(c.codec, req)
+    sent := WriteFrame(c.conn.fd, c.framing, payload)
+    compress.BufFree(payload)
+    ret sent
+end
+
+@en "DialClient"
+@fa "اتصال کارخواه"
+@ar "اتصال العمیل"
+pub func DialClient(host: str, port: int, codec: int): Client:
+    mut c := Client {}
+    c.codec = codec
+    c.framing = CodecDefaultFraming(codec)
+    c.next_id = 1 as i64
+    c.conn = tcp.Dial(host, port)
+    if !tcp.ConnOk(c.conn):
+        c.last_error = "connect failed"
+        ret c
+    end
+    c.stream = NewStream(c.conn.fd)
+    c.ok = true
+    ret c
+end
+
+// Wraps a socket someone else already connected (a client half of a
+// socketpair, a connection handed over by an accept loop).
+@en "ClientFromFd"
+@fa "کارخواه از توصیف‌گر"
+@ar "عمیل من واصف"
+pub func ClientFromFd(fd: i64, codec: int): Client:
+    mut c := Client {}
+    c.codec = codec
+    c.framing = CodecDefaultFraming(codec)
+    c.next_id = 1 as i64
+    c.conn = tcp.ConnFromFd(fd)
+    c.stream = NewStream(fd)
+    c.ok = fd >= 0
+    ret c
+end
+
+@en "ClientSetFraming"
+@fa "تنظیم قاب‌بندی کارخواه"
+@ar "تعیین تأطیر العمیل"
+pub func ClientSetFraming(c &: Client, framing: int):
+    c.framing = framing
+end
+
+@en "ClientOk"
+@fa "کارخواه معتبر"
+@ar "العمیل صالح"
+pub func ClientOk(c: Client): bool:
+    ret c.ok
+end
+
+@en "ClientError"
+@fa "خطای کارخواه"
+@ar "خطأ العمیل"
+pub func ClientError(c: Client): str:
+    ret c.last_error
+end
+
+@en "CloseClient"
+@fa "بستن کارخواه"
+@ar "إغلاق العمیل"
+pub func CloseClient(c &: Client):
+    if c.ok:
+        FreeStream(c.stream)
+        tcp.Close(c.conn)
+    end
+    c.ok = false
+end
+
+// Sends one request and blocks for its reply.
+@en "Call"
+@fa "فراخوان"
+@ar "استدعاء"
+pub func Call(c &: Client, method: str, params: value.Value): Response:
+    if !c.ok: ret _client_fail(c, "client is not connected") end
+    id := c.next_id
+    c.next_id += 1 as i64
+    req := NewRequest(method, params, id)
+    if !_send(c, req): ret _client_fail(c, "send failed") end
+    mut ok := false
+    mut payload := ReadFrame(c.stream, c.framing, ok)
+    if !ok:
+        compress.BufFree(payload)
+        ret _client_fail(c, "no reply (connection closed)")
+    end
+    mut dok := false
+    resp := DecodeResponse(c.codec, payload, dok)
+    compress.BufFree(payload)
+    if !dok: ret _client_fail(c, "malformed reply") end
+    if resp.has_id && value.IsInt(resp.id) && value.AsInt(resp.id) != id:
+        ret _client_fail(c, "reply id mismatch")
+    end
+    ret resp
+end
+
+@en "CallNoParams"
+@fa "فراخوان بدون پارامتر"
+@ar "استدعاء بلا معاملات"
+pub func CallNoParams(c &: Client, method: str): Response:
+    ret Call(c, method, value.NewValueArray())
+end
+
+// Positional-argument convenience: rpc.CallArgs(c, "add", args) where
+// args was built with value.ArrayPush.
+@en "CallArgs"
+@fa "فراخوان با آرگومان"
+@ar "استدعاء بوسائط"
+pub func CallArgs(c &: Client, method: str, args: Vector<value.Value>): Response:
+    mut arr := value.NewValueArray()
+    mut i := 0
+    until i < args.len():
+        value.ArrayPush(arr, args.get(i)[0])
+        i += 1
+    end
+    ret Call(c, method, arr)
+end
+
+@en "Notify"
+@fa "اعلان"
+@ar "إشعار"
+pub func Notify(c &: Client, method: str, params: value.Value): bool:
+    if !c.ok: ret false end
+    ret _send(c, NewNotification(method, params))
+end
+
+// Sends several requests as one JSON-RPC batch and returns every reply.
+// MessagePack-RPC has no batch form, so this falls back to sending each
+// request in turn there.
+@en "CallBatch"
+@fa "فراخوان دسته‌ای"
+@ar "استدعاء دفعی"
+pub func CallBatch(c &: Client, reqs: Vector<Request>): Responses:
+    mut out := Responses {}
+    out.is_batch = true
+    if !c.ok: ret out end
+    if c.codec == RPC_CODEC_MSGPACK:
+        mut i := 0
+        until i < reqs.len():
+            r := reqs.get(i)[0]
+            out.items.push(Call(c, r.method, r.params))
+            i += 1
+        end
+        ret out
+    end
+    mut parts := Vector {} as Vector<str>
+    mut expected := 0
+    mut i := 0
+    until i < reqs.len():
+        mut r := reqs.get(i)[0]
+        if r.has_id:
+            r.id = value.ValueInt(c.next_id)
+            r.msgid = c.next_id
+            c.next_id += 1 as i64
+            expected += 1
+        end
+        parts.push(JsonEncodeRequest(r))
+        i += 1
+    end
+    text := "[" + _join(parts, ",") + "]"
+    if !WriteFrameStr(c.conn.fd, c.framing, text): ret out end
+    if expected == 0: ret out end
+    mut ok := false
+    reply := ReadFrameStr(c.stream, c.framing, ok)
+    if !ok: ret out end
+    mut dok := false
+    ret JsonDecodeResponses(reply, dok)
+end
+
+@en "ResultInt"
+@fa "نتیجه عددی"
+@ar "نتیجة صحیحة"
+pub func ResultInt(r: Response): i64:
+    if r.is_error: ret 0 as i64 end
+    if value.IsInt(r.result) || value.IsFloat(r.result): ret value.AsInt(r.result) end
+    ret 0 as i64
+end
+
+@en "ResultFloat"
+@fa "نتیجه اعشاری"
+@ar "نتیجة عشریة"
+pub func ResultFloat(r: Response): f64:
+    if r.is_error: ret 0.0 end
+    if value.IsInt(r.result) || value.IsFloat(r.result): ret value.AsFloat(r.result) end
+    ret 0.0
+end
+
+@en "ResultStr"
+@fa "نتیجه متنی"
+@ar "نتیجة نصیة"
+pub func ResultStr(r: Response): str:
+    if r.is_error: ret "" end
+    if value.IsString(r.result): ret value.AsString(r.result) end
+    ret ""
+end
+
+@en "ResultBool"
+@fa "نتیجه بولی"
+@ar "نتیجة منطقیة"
+pub func ResultBool(r: Response): bool:
+    if r.is_error: ret false end
+    if value.IsBool(r.result): ret value.AsBool(r.result) end
+    ret false
+end
+
+@en "IsErrorResponse"
+@fa "پاسخ خطاست"
+@ar "استجابة خطأ"
+pub func IsErrorResponse(r: Response): bool:
+    ret r.is_error
+end
+
+@en "ErrorCode"
+@fa "کد خطا"
+@ar "رمز الخطأ"
+pub func ErrorCode(r: Response): int:
+    if !r.is_error: ret 0 end
+    ret r.err.code
+end
+
+@en "ErrorMessage"
+@fa "پیام خطا"
+@ar "رسالة الخطأ"
+pub func ErrorMessage(r: Response): str:
+    if !r.is_error: ret "" end
+    ret r.err.message
+end
+
+// One-shot JSON-RPC over HTTP POST: no Client, no connection to manage.
+// This is how most public JSON-RPC endpoints (Ethereum nodes, Bitcoin
+// Core, many internal services) are actually reached.
+@en "CallHTTP"
+@fa "فراخوان اچ تی تی پی"
+@ar "استدعاء عبر اتش تی تی بی"
+pub func CallHTTP(url: str, method: str, params: value.Value, id: i64): Response:
+    req := NewRequest(method, params, id)
+    body := JsonEncodeRequest(req)
+    mut headers := http.NewHeaders()
+    headers.put("Content-Type", "application/json")
+    headers.put("Accept", "application/json")
+    hr := http.PostWith(url, body, headers)
+    mut r := Response {}
+    if !http.Ok(hr):
+        r.is_error = true
+        r.err = NewError(RPC_INTERNAL_ERROR, "HTTP request failed")
+        ret r
+    end
+    mut ok := false
+    out := JsonDecodeResponse(http.Body(hr), ok)
+    if !ok:
+        r.is_error = true
+        r.err = NewError(RPC_PARSE_ERROR, "malformed JSON-RPC reply")
+        ret r
+    end
+    ret out
+end

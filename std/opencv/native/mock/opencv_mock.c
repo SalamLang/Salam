@@ -329,7 +329,10 @@ static void rgb_to_hsv_px(unsigned char r, unsigned char g, unsigned char b,
     if (delta == 0) {
         hue = 0;
     } else if (maxc == r) {
-        hue = 60.0 * fmod(((double)(g - b) / delta), 6.0);
+        /* The division is hoisted into its own local on purpose - see the
+         * comment in hsv_to_rgb_px below. */
+        double sextant = (double)(g - b) / delta;
+        hue = 60.0 * fmod(sextant, 6.0);
     } else if (maxc == g) {
         hue = 60.0 * (((double)(b - r) / delta) + 2.0);
     } else {
@@ -344,7 +347,30 @@ static void hsv_to_rgb_px(unsigned char h, unsigned char s, unsigned char v,
 {
     double hh = h * 2.0, ss = s / 255.0, vv = v / 255.0;
     double c = vv * ss;
-    double x = c * (1 - fabs(fmod(hh / 60.0, 2) - 1));
+    /*
+     * No libc float call in this expression, by hand instead of fmod/fabs.
+     * A tcc 0.9.27 win64 build miscompiles a call whose first *two*
+     * arguments are both floating point: the first argument is overwritten
+     * with the second's value, so `fmod(hh / 60.0, 2.0)` evaluated as
+     * `fmod(2.0, 2.0)` == 0. That made x always 0, and every hue in
+     * [60,120) came back as (v*(1-s), v, v*(1-s)) instead of (x+m, c+m, m)
+     * - the red channel of an HSV round trip lost its value on Windows
+     * only, since the test runner builds this shim with whichever of
+     * tcc/gcc/cc/clang it finds first. Hoisting the argument into a local
+     * fixed it once and then stopped being enough on a later bundled tcc,
+     * so the calls are gone rather than shaped around: `hh` is
+     * `unsigned char * 2.0`, hence finite and >= 0, which is all the
+     * reduction below needs.
+     */
+    double sextant = hh / 60.0;
+    double k = sextant;
+    double d;
+    double x;
+    while (k >= 2.0)
+        k -= 2.0;
+    d = k - 1.0;
+    if (d < 0.0) d = -d;
+    x = c * (1.0 - d);
     double m = vv - c;
     double rp, gp, bp;
     if (hh < 60) {

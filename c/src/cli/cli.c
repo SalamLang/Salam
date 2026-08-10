@@ -36,6 +36,7 @@ static void cli_set_defaults(options_t *out)
     out->run_args_count = 0;
     out->output = NULL;
     out->cc = "tcc";
+    out->cc_explicit = false;
     out->backend = "auto";
     out->keep_c = false;
     out->force = false;

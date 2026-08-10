@@ -67,5 +67,51 @@ func main:
     r5 := shell.Exec(bad_exe)
     testing.AssertEqInt(r5.code, 0 - 1)
 
+    // Regression: a child that writes far more than a pipe buffer holds, on
+    // both streams at once. Back when capture went through anonymous pipes
+    // this is the case that hung - the child blocked in write once the 4 KB
+    // buffer filled, the parent was already blocked waiting for the child to
+    // exit, and the run came back with an empty capture. Capture is
+    // file-backed now, so there is no buffer to fill and no ordering
+    // constraint between Wait and the reads.
+    mut big_exe := ""
+    big_args := Vector {} as Vector<str>
+    if SALAM_OS_WINDOWS:
+        big_exe = "C:\\Windows\\System32\\cmd.exe"
+        big_args.push("/c")
+        big_args.push("for /L %i in (1,1,4000) do @echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    else:
+        big_exe = "/bin/sh"
+        big_args.push("-c")
+        big_args.push("i=0; while [ $i -lt 4000 ]; do echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; echo bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb 1>&2; i=$((i+1)); done")
+    end
+    r6 := shell.Run(big_exe, big_args)
+    testing.AssertEqInt(r6.code, 0)
+    testing.AssertTrue(r6.out.len() > 65536)
+    if !SALAM_OS_WINDOWS:
+        testing.AssertTrue(r6.err.len() > 65536)
+    end
+
+    if !SALAM_OS_WINDOWS:
+        // Regression: a captured child gets an empty stdin, not the parent's.
+        // Inheriting a live stdin means anything that reads it - cat here,
+        // but in practice a tool that decides to prompt - blocks on a read
+        // nobody will ever answer, and Wait blocks behind it forever. Windows
+        // has no equally universal stdin-reading binary to lean on, so this
+        // half stays POSIX-only; the redirect itself is done on both.
+        cat_args := Vector {} as Vector<str>
+        r7 := shell.Run("/bin/cat", cat_args)
+        testing.AssertEqInt(r7.code, 0)
+        testing.AssertEqInt(r7.out.len(), 0)
+
+        // A child killed by a signal is not a success. Reported the way a
+        // shell reports it: 128 + signal, here SIGKILL.
+        kill_args := Vector {} as Vector<str>
+        kill_args.push("-c")
+        kill_args.push("kill -9 $$")
+        r8 := shell.Run("/bin/sh", kill_args)
+        testing.AssertEqInt(r8.code, 128 + 9)
+    end
+
     os.Exit(testing.Summary())
 end

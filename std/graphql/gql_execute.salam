@@ -1,0 +1,455 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package graphql
+
+import encoding.value
+
+// execute - the execution algorithm (spec section 6).
+//
+// ExecuteSelectionSet, ExecuteField and CompleteValue follow the spec's
+// structure closely enough that the section numbers are worth keeping
+// in mind while reading.
+//
+// Error propagation is the part worth stating plainly, because it is
+// what separates a real implementation from a toy one. When a field
+// errors, or resolves to null where the schema declared a non-null
+// type, the field's value becomes null and the error is recorded with
+// the field's response path. If that field was non-null, the null
+// cannot stay there, so the *parent* object becomes null instead, and
+// that repeats upward until a nullable position is reached, or the
+// whole `data` entry becomes null. That upward travel is the `bubble`
+// out-parameter threaded through every completion function: it means
+// "this position could not hold the null it was given, so the caller
+// must null itself too".
+//
+// Execution state lives in one Ex struct passed by reference rather
+// than in globals, so two schemas can execute concurrently in separate
+// call stacks without stepping on each other. The response path is a
+// stack on Ex that is pushed and popped as the walk descends, so
+// building an error path costs no copying until an error actually
+// happens.
+
+@en "Ex"
+@fa "وضعیت اجرا"
+@ar "حالة التنفیذ"
+pub struct Ex:
+    pub sch: Schema = Schema {}
+    pub doc: Document = Document {}
+    pub vars: value.Value = value.Value {}
+    pub ctx: value.Value = value.Value {}
+    pub errors: GqlErrorList = GqlErrorList {}
+    pub pathKeys: Vector<str> = Vector {}
+    pub pathIdx: Vector<int> = Vector {}
+    pub depth: int = 0
+    pub maxDepth: int = 512
+end
+
+// ---- private: path and errors ----
+
+func _ex_push_key(ex &: Ex, key: str):
+    ex.pathKeys.push(key)
+    ex.pathIdx.push(0 - 1)
+end
+
+func _ex_push_index(ex &: Ex, idx: int):
+    ex.pathKeys.push("")
+    ex.pathIdx.push(idx)
+end
+
+func _ex_pop(ex &: Ex):
+    if ex.pathKeys.len() == 0: ret end
+    ex.pathKeys.pop()
+    ex.pathIdx.pop()
+end
+
+// Snapshots the current path onto an error. The path vectors on Ex are
+// mutated as the walk continues, so an error has to copy them rather
+// than share them.
+func _ex_error(ex &: Ex, message: str, line: int, col: int):
+    mut e := NewError(ERR_EXECUTION, message)
+    if line > 0:
+        e.line = line
+        e.col = col
+        e.hasLocation = true
+    end
+    mut i := 0
+    until i < ex.pathKeys.len():
+        if ex.pathIdx.get(i)[0] >= 0:
+            PathPushIndex(e, ex.pathIdx.get(i)[0])
+        else:
+            PathPushKey(e, ex.pathKeys.get(i)[0])
+        end
+        i += 1
+    end
+    AddError(ex.errors, e)
+end
+
+// ---- private: arguments ----
+
+func _ex_arg_from_literal(ex &: Ex, argDef: InputValueDef, a: AstArgument, out &: value.Value, name: str): bool:
+    lit := LiteralToValue(ex.sch, ex.doc, a.value, ex.vars)
+    if !lit.ok:
+        _ex_error(ex, _gql_arg_msg(name, lit.message), a.line, 0)
+        ret false
+    end
+    co := CoerceInput(ex.sch, ex.sch.doc, argDef.typeRef, lit.value)
+    if !co.ok:
+        _ex_error(ex, _gql_arg_msg(name, co.message), a.line, 0)
+        ret false
+    end
+    value.ObjectSet(out, name, co.value)
+    ret true
+end
+
+// An argument whose value is a variable that was not supplied counts as
+// absent, so the argument's own default can apply (spec 6.4.1 step 5).
+func _ex_arg_supplied(ex: Ex, sel: AstSelection, name: str, found &: AstArgument): bool:
+    mut i := 0
+    until i < sel.args.len():
+        a := sel.args.get(i)[0]
+        if a.name == name:
+            v := ValueAt(ex.doc, a.value)
+            if v.kind == VAL_VARIABLE && !value.ObjectHas(ex.vars, v.s): ret false end
+            found = a
+            ret true
+        end
+        i += 1
+    end
+    ret false
+end
+
+func _ex_default_arg(ex &: Ex, argDef: InputValueDef, out &: value.Value): bool:
+    if argDef.hasDefault:
+        d := LiteralToValue(ex.sch, ex.sch.doc, argDef.defaultValue, value.NewValueObject())
+        if d.ok: value.ObjectSet(out, argDef.name, d.value) end
+        ret true
+    end
+    if TypeRefIsNonNull(ex.sch.doc, argDef.typeRef):
+        _ex_error(ex, _gql_required_arg_msg(argDef.name), 0, 0)
+        ret false
+    end
+    ret true
+end
+
+func _ex_coerce_args(ex &: Ex, fieldDef: FieldDef, sel: AstSelection, ok &: bool): value.Value:
+    mut out := value.NewValueObject()
+    ok = true
+    mut i := 0
+    until i < fieldDef.args.len():
+        argDef := fieldDef.args.get(i)[0]
+        mut a := AstArgument {}
+        if _ex_arg_supplied(ex, sel, argDef.name, a):
+            if !_ex_arg_from_literal(ex, argDef, a, out, argDef.name): ok = false end
+        else:
+            if !_ex_default_arg(ex, argDef, out): ok = false end
+        end
+        i += 1
+    end
+    ret out
+end
+
+// ---- private: resolving one field's raw value ----
+
+// The default resolver reads the field's own name off the parent object
+// (spec 6.4.2 leaves this to the implementation; every GraphQL server
+// uses a property lookup). __typename is answered from the object type
+// being resolved rather than from any resolver.
+func _ex_default_resolve(parent: value.Value, fieldName: str): value.Value:
+    if !value.IsObject(parent): ret value.ValueNull() end
+    if !value.ObjectHas(parent, fieldName): ret value.ValueNull() end
+    ret value.ObjectGet(parent, fieldName)
+end
+
+func _ex_call_resolver(ex &: Ex, fn: i64, parent: value.Value, args: value.Value, objectType: str, fieldName: str, failed &: bool, message &: str): value.Value:
+    slot := _rs_alloc()
+    _rs_prepare(slot, parent, args, ex.ctx, objectType, fieldName)
+    callhandler(fn, slot as i64)
+    s := _rs_at(slot as i64)
+    failed = s.failed
+    message = s.message
+    mut out := value.ValueNull()
+    if s.resolved && !s.failed: out = s.result end
+    _rs_release(slot)
+    ret out
+end
+
+func _ex_resolve_field(ex &: Ex, objectType: str, parent: value.Value, sel: AstSelection, args: value.Value, failed &: bool): value.Value:
+    failed = false
+    if sel.name == "__typename": ret value.ValueString(objectType) end
+    fn := _rs_lookup(ex.sch, objectType, sel.name)
+    if fn == 0: ret _ex_default_resolve(parent, sel.name) end
+    mut rfailed := false
+    mut msg := ""
+    out := _ex_call_resolver(ex, fn, parent, args, objectType, sel.name, rfailed, msg)
+    if rfailed:
+        _ex_error(ex, msg, sel.line, sel.col)
+        failed = true
+        ret value.ValueNull()
+    end
+    ret out
+end
+
+// ---- private: abstract type resolution ----
+
+// Determines the concrete object type of a value sitting in an
+// interface or union position. The convention is a `__typename` entry
+// on the returned object, which is what every schema-first server does
+// and what keeps resolvers free of a second callback ABI. When the
+// abstract type has exactly one possible type, that one is used.
+func _ex_resolve_abstract(ex &: Ex, abstractName: str, v: value.Value, sel: AstSelection): str:
+    if value.IsObject(v) && value.ObjectHas(v, "__typename"):
+        name := value.AsString(value.ObjectGet(v, "__typename"))
+        if IsPossibleType(ex.sch, abstractName, name): ret name end
+        _ex_error(ex, _gql_bad_typename_msg(name, abstractName), sel.line, sel.col)
+        ret ""
+    end
+    mut poss := PossibleTypes(ex.sch, abstractName)
+    defer poss.free()
+    if poss.len() == 1: ret poss.get(0)[0] end
+    _ex_error(ex, _gql_no_typename_msg(abstractName), sel.line, sel.col)
+    ret ""
+end
+
+// ---- private: completion ----
+
+func _ex_complete_leaf(ex &: Ex, typeName: str, v: value.Value, sel: AstSelection): value.Value:
+    r := CoerceLeafResult(ex.sch, typeName, v)
+    if r.ok: ret r.value end
+    _ex_error(ex, r.message, sel.line, sel.col)
+    ret value.ValueNull()
+end
+
+func _ex_complete_list(ex &: Ex, elemRef: int, g: FieldGroup, v: value.Value, sel: AstSelection, bubble &: bool): value.Value:
+    if !value.IsArray(v):
+        _ex_error(ex, _gql_expected_list_msg(), sel.line, sel.col)
+        bubble = true
+        ret value.ValueNull()
+    end
+    mut out := value.NewValueArray()
+    mut i := 0
+    until i < value.ArrayLen(v):
+        _ex_push_index(ex, i)
+        mut itemBubble := false
+        item := _ex_complete_value(ex, elemRef, g, value.ArrayGet(v, i), sel, itemBubble)
+        _ex_pop(ex)
+        if itemBubble:
+            bubble = true
+            ret value.ValueNull()
+        end
+        value.ArrayPush(out, item)
+        i += 1
+    end
+    ret out
+end
+
+func _ex_complete_object(ex &: Ex, typeName: str, g: FieldGroup, v: value.Value, sel: AstSelection, bubble &: bool): value.Value:
+    mut concrete := typeName
+    if IsAbstractType(ex.sch, typeName):
+        concrete = _ex_resolve_abstract(ex, typeName, v, sel)
+        if concrete == "":
+            bubble = true
+            ret value.ValueNull()
+        end
+    end
+    mut sub := MergeSelections(ex.doc, g)
+    defer sub.free()
+    ret _ex_selection_set(ex, concrete, sub, v, bubble)
+end
+
+// spec 6.4.3 CompleteValue. `bubble` is set when this position could
+// not hold null and the caller must null itself.
+//
+// The non-null wrapper is peeled with a flag rather than by writing a
+// nullable copy of the node into the arena. Ex holds the Schema by
+// value, so its `trefs` Vector shares the caller's backing array:
+// appending during execution would grow that array on every request
+// and, on a resize, leave every other holder of the schema pointing at
+// freed memory.
+func _ex_complete_value(ex &: Ex, typeRef: int, g: FieldGroup, v: value.Value, sel: AstSelection, bubble &: bool): value.Value:
+    t := TypeRefAt(ex.sch.doc, typeRef)
+    if t.nonNull:
+        mut innerBubble := false
+        out := _ex_complete_nullable(ex, t, g, v, sel, innerBubble)
+        if innerBubble || value.IsNull(out):
+            if !innerBubble: _ex_error(ex, _gql_null_nonnull_msg(), sel.line, sel.col) end
+            bubble = true
+            ret value.ValueNull()
+        end
+        ret out
+    end
+    ret _ex_complete_nullable(ex, t, g, v, sel, bubble)
+end
+
+// Completes against a type reference with its `!` already accounted
+// for, so this sees the node itself rather than an id.
+func _ex_complete_nullable(ex &: Ex, t: AstTypeRef, g: FieldGroup, v: value.Value, sel: AstSelection, bubble &: bool): value.Value:
+    if value.IsNull(v): ret value.ValueNull() end
+    if t.kind == TREF_LIST: ret _ex_complete_list(ex, t.inner, g, v, sel, bubble) end
+    if IsLeafType(ex.sch, t.name): ret _ex_complete_leaf(ex, t.name, v, sel) end
+    ret _ex_complete_object(ex, t.name, g, v, sel, bubble)
+end
+
+// ---- private: fields and selection sets ----
+
+// __typename is answerable on any object type and is not declared as a
+// field, so it is handled before the schema lookup that would fail.
+func _ex_typename_field(ex &: Ex, objectType: str, g: FieldGroup, out &: value.Value): bool:
+    s := SelectionAt(ex.doc, g.sels.get(0)[0])
+    if s.name != "__typename": ret false end
+    value.ObjectSet(out, g.key, value.ValueString(objectType))
+    ret true
+end
+
+// `__schema` and `__type` are answered by gql_introspect_run.salam,
+// which walks the query's selection set itself; they are only
+// available on the query root type (spec 4.1).
+func _ex_introspection_field(ex &: Ex, objectType: str, g: FieldGroup, out &: value.Value): bool:
+    if objectType != ex.sch.queryType: ret false end
+    ret _in_root_field(ex, g, out)
+end
+
+func _ex_field(ex &: Ex, objectType: str, parent: value.Value, g: FieldGroup, out &: value.Value, bubble &: bool): bool:
+    sel := SelectionAt(ex.doc, g.sels.get(0)[0])
+    fieldDef := _ex_field_def(ex, objectType, sel.name)
+    if fieldDef.typeRef < 0:
+        _ex_error(ex, _gql_unknown_field_msg(sel.name, objectType), sel.line, sel.col)
+        ret false
+    end
+    _ex_push_key(ex, g.key)
+    mut argsOk := true
+    args := _ex_coerce_args(ex, fieldDef, sel, argsOk)
+    mut resolveFailed := false
+    mut raw := value.ValueNull()
+    if argsOk:
+        raw = _ex_resolve_field(ex, objectType, parent, sel, args, resolveFailed)
+    end
+    // A field that already raised an error yields null without a second
+    // "cannot return null" error on top of the first (spec 6.4.4): the
+    // resolver's own message is the useful one.
+    if !argsOk || resolveFailed:
+        _ex_pop(ex)
+        if TypeRefIsNonNull(ex.sch.doc, fieldDef.typeRef):
+            bubble = true
+            ret false
+        end
+        value.ObjectSet(out, g.key, value.ValueNull())
+        ret true
+    end
+    mut fieldBubble := false
+    completed := _ex_complete_value(ex, fieldDef.typeRef, g, raw, sel, fieldBubble)
+    _ex_pop(ex)
+    if fieldBubble:
+        bubble = true
+        ret false
+    end
+    value.ObjectSet(out, g.key, completed)
+    ret true
+end
+
+// Looks the field up on the object type, falling back to the
+// interfaces it implements so an inherited field resolves without being
+// redeclared.
+func _ex_field_def(ex: Ex, objectType: str, fieldName: str): FieldDef:
+    t := FindType(ex.sch, objectType)
+    f := FindField(t, fieldName)
+    if f.name != "": ret f end
+    mut i := 0
+    until i < t.interfaces.len():
+        it := FindType(ex.sch, t.interfaces.get(i)[0])
+        itf := FindField(it, fieldName)
+        if itf.name != "": ret itf end
+        i += 1
+    end
+    ret FieldDef { typeRef = 0 - 1 }
+end
+
+func _ex_selection_set(ex &: Ex, objectType: str, sels: Vector<int>, parent: value.Value, bubble &: bool): value.Value:
+    ex.depth += 1
+    if ex.depth > ex.maxDepth:
+        ex.depth -= 1
+        _ex_error(ex, _gql_depth_msg(ex.maxDepth), 0, 0)
+        bubble = true
+        ret value.ValueNull()
+    end
+    mut gs := CollectFields(ex.sch, ex.doc, sels, objectType, ex.vars)
+    defer FreeFieldGroups(gs)
+    mut out := value.NewValueObject()
+    mut i := 0
+    until i < gs.items.len():
+        g := gs.items.get(i)[0]
+        mut childBubble := false
+        if !_ex_typename_field(ex, objectType, g, out) && !_ex_introspection_field(ex, objectType, g, out):
+            _ex_field(ex, objectType, parent, g, out, childBubble)
+        end
+        if childBubble:
+            ex.depth -= 1
+            bubble = true
+            ret value.ValueNull()
+        end
+        i += 1
+    end
+    ex.depth -= 1
+    ret out
+end
+
+// ---- private: variables ----
+
+func _ex_var_missing(ex &: Ex, vd: AstVariableDef, out &: value.Value): bool:
+    if vd.hasDefault:
+        d := LiteralToValue(ex.sch, ex.doc, vd.defaultValue, value.NewValueObject())
+        if d.ok: value.ObjectSet(out, vd.name, d.value) end
+        ret true
+    end
+    if TypeRefIsNonNull(ex.doc, vd.typeRef):
+        _ex_error(ex, _gql_required_var_msg(vd.name), vd.line, 0)
+        ret false
+    end
+    ret true
+end
+
+// A variable's declared type must name a type the schema knows, but
+// the reference itself stays in the query Document: CoerceInput takes
+// the owning arena, so nothing is copied across.
+func _ex_var_type_known(ex: Ex, vd: AstVariableDef): bool:
+    ret HasType(ex.sch, TypeRefName(ex.doc, vd.typeRef))
+end
+
+// spec 6.1.2 CoerceVariableValues.
+func _ex_coerce_variables(ex &: Ex, op: AstOperation, raw: value.Value, ok &: bool): value.Value:
+    mut out := value.NewValueObject()
+    ok = true
+    mut i := 0
+    until i < op.varDefs.len():
+        vd := op.varDefs.get(i)[0]
+        i += 1
+        if !value.ObjectHas(raw, vd.name):
+            if !_ex_var_missing(ex, vd, out): ok = false end
+            continue
+        end
+        if !_ex_var_type_known(ex, vd):
+            _ex_error(ex, _gql_bad_var_type_msg(vd.name), vd.line, 0)
+            ok = false
+            continue
+        end
+        r := CoerceInput(ex.sch, ex.doc, vd.typeRef, value.ObjectGet(raw, vd.name))
+        if !r.ok:
+            _ex_error(ex, _gql_var_msg(vd.name, r.message), vd.line, 0)
+            ok = false
+            continue
+        end
+        value.ObjectSet(out, vd.name, r.value)
+    end
+    ret out
+end

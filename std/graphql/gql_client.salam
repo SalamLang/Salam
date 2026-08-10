@@ -1,0 +1,241 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package graphql
+
+import encoding.value
+import encoding.json
+import encoding.encerr
+import str
+
+// client - building a request and reading a response.
+//
+// Like gql_http.salam this stays off the wire: BuildRequestBody returns
+// the JSON to POST and ParseResponse reads what comes back, leaving the
+// actual transport to net/http, tcp, or whatever the caller already
+// has. That keeps the client usable for a request written to a file, a
+// fixture in a test, or a service reached over a unix socket, and keeps
+// std/graphql free of socket externs.
+//
+// The response reader is deliberately forgiving about shape and strict
+// about meaning: a body that is not an object, or that has neither
+// `data` nor `errors`, is itself reported as an error rather than
+// quietly yielding an empty result.
+
+@en "ClientResponse"
+@fa "پاسخ کارخواه"
+@ar "استجابة العمیل"
+pub struct ClientResponse:
+    pub data: value.Value = value.Value {}
+    pub hasData: bool = false
+    pub errors: GqlErrorList = GqlErrorList {}
+    pub extensions: value.Value = value.Value {}
+    pub hasExtensions: bool = false
+end
+
+// ---- private ----
+
+func _cl_error_from_value(v: value.Value): GqlError:
+    mut e := NewError(ERR_REQUEST, "unknown error")
+    if !value.IsObject(v):
+        if value.IsString(v): e.message = value.AsString(v) end
+        ret e
+    end
+    if value.ObjectHas(v, "message"):
+        e.message = value.AsString(value.ObjectGet(v, "message"))
+    end
+    _cl_read_location(v, e)
+    _cl_read_path(v, e)
+    _cl_read_code(v, e)
+    ret e
+end
+
+func _cl_read_location(v: value.Value, e &: GqlError):
+    if !value.ObjectHas(v, "locations"): ret end
+    locs := value.ObjectGet(v, "locations")
+    if !value.IsArray(locs) || value.ArrayLen(locs) == 0: ret end
+    first := value.ArrayGet(locs, 0)
+    if !value.IsObject(first): ret end
+    e.line = value.AsInt(value.ObjectGet(first, "line")) as int
+    e.col = value.AsInt(value.ObjectGet(first, "column")) as int
+    e.hasLocation = true
+end
+
+func _cl_read_path(v: value.Value, e &: GqlError):
+    if !value.ObjectHas(v, "path"): ret end
+    p := value.ObjectGet(v, "path")
+    if !value.IsArray(p): ret end
+    mut i := 0
+    until i < value.ArrayLen(p):
+        seg := value.ArrayGet(p, i)
+        if value.IsInt(seg):
+            PathPushIndex(e, value.AsInt(seg) as int)
+        else:
+            PathPushKey(e, value.AsString(seg))
+        end
+        i += 1
+    end
+end
+
+func _cl_read_code(v: value.Value, e &: GqlError):
+    if !value.ObjectHas(v, "extensions"): ret end
+    ext := value.ObjectGet(v, "extensions")
+    if !value.IsObject(ext) || !value.ObjectHas(ext, "code"): ret end
+    e.code = value.AsString(value.ObjectGet(ext, "code"))
+end
+
+func _cl_unreserved(c: int): bool:
+    if c >= 65 && c <= 90: ret true end
+    if c >= 97 && c <= 122: ret true end
+    if c >= 48 && c <= 57: ret true end
+    ret c == 45 || c == 95 || c == 46 || c == 126
+end
+
+// Percent-encodes for a query-string value. Everything outside RFC 3986
+// unreserved is escaped, including `+`, so a query containing one is
+// not silently read back as a space.
+func _gql_percent_encode(s: str): str:
+    hex := "0123456789ABCDEF"
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    bp := _gbp(s)
+    mut i := 0
+    until i < s.len():
+        c := _gub(bp, i)
+        if _cl_unreserved(c):
+            str.BufAppendChar(sb, c)
+        else:
+            str.BufAppendChar(sb, 37)
+            str.BufAppend(sb, hex.substr(c / 16, 1))
+            str.BufAppend(sb, hex.substr(c % 16, 1))
+        end
+        i += 1
+    end
+    ret str.BufStr(sb)
+end
+
+func _cl_bad_response(message: str): ClientResponse:
+    r := ClientResponse {}
+    AddError(r.errors, NewError(ERR_REQUEST, message))
+    ret r
+end
+
+// ---- public API ----
+
+// The JSON body of a GraphQL POST request. `variables` may be a null
+// Value when the operation takes none, in which case the key is
+// omitted rather than sent as null.
+@en "BuildRequestBody"
+@fa "ساخت بدنه درخواست"
+@ar "بناء جسم الطلب"
+pub func BuildRequestBody(queryText: str, operationName: str, variables: value.Value): str:
+    mut o := value.NewValueObject()
+    value.ObjectSet(o, "query", value.ValueString(queryText))
+    if operationName != "":
+        value.ObjectSet(o, "operationName", value.ValueString(operationName))
+    end
+    if value.IsObject(variables) && value.ObjectLen(variables) > 0:
+        value.ObjectSet(o, "variables", variables)
+    end
+    ret json.EncodeDefault(o)
+end
+
+@en "BuildQueryBody"
+@fa "ساخت بدنه پرس‌وجو"
+@ar "بناء جسم الاستعلام"
+pub func BuildQueryBody(queryText: str): str:
+    ret BuildRequestBody(queryText, "", value.NewValueObject())
+end
+
+// The query-string form for a GET request, already percent-encoded.
+@en "BuildRequestQueryString"
+@fa "ساخت رشته پرس‌وجو"
+@ar "بناء نص الاستعلام"
+pub func BuildRequestQueryString(queryText: str, operationName: str, variables: value.Value): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppend(sb, "query=")
+    str.BufAppend(sb, _gql_percent_encode(queryText))
+    if operationName != "":
+        str.BufAppend(sb, "&operationName=")
+        str.BufAppend(sb, _gql_percent_encode(operationName))
+    end
+    if value.IsObject(variables) && value.ObjectLen(variables) > 0:
+        str.BufAppend(sb, "&variables=")
+        str.BufAppend(sb, _gql_percent_encode(json.EncodeDefault(variables)))
+    end
+    ret str.BufStr(sb)
+end
+
+// Reads a GraphQL response body into data and errors.
+@en "ParseResponse"
+@fa "تجزیه پاسخ"
+@ar "تحلیل الاستجابة"
+pub func ParseResponse(body: str): ClientResponse:
+    mut err := encerr.NoError()
+    parsed := json.Decode(body, err)
+    if encerr.IsError(err): ret _cl_bad_response("the response is not valid JSON") end
+    if !value.IsObject(parsed): ret _cl_bad_response("the response is not a JSON object") end
+    mut r := ClientResponse {}
+    if value.ObjectHas(parsed, "data"):
+        r.data = value.ObjectGet(parsed, "data")
+        r.hasData = true
+    end
+    if value.ObjectHas(parsed, "extensions"):
+        r.extensions = value.ObjectGet(parsed, "extensions")
+        r.hasExtensions = true
+    end
+    if value.ObjectHas(parsed, "errors"):
+        errs := value.ObjectGet(parsed, "errors")
+        mut i := 0
+        until i < value.ArrayLen(errs):
+            AddError(r.errors, _cl_error_from_value(value.ArrayGet(errs, i)))
+            i += 1
+        end
+    end
+    if !r.hasData && !HasErrors(r.errors):
+        ret _cl_bad_response("the response has neither data nor errors")
+    end
+    ret r
+end
+
+// Reads a field out of a response's `data`, so a caller does not have
+// to unwrap the Value tree by hand for the common single-field case.
+@en "ResponseField"
+@fa "فیلد پاسخ"
+@ar "حقل الاستجابة"
+pub func ResponseField(r: ClientResponse, name: str): value.Value:
+    if !r.hasData: ret value.ValueNull() end
+    ret value.ObjectGet(r.data, name)
+end
+
+@en "ResponseOk"
+@fa "پاسخ درست"
+@ar "الاستجابة سلیمة"
+pub func ResponseOk(r: ClientResponse): bool: ret !HasErrors(r.errors) end
+
+@en "ResponseErrorMessage"
+@fa "پیام خطای پاسخ"
+@ar "رسالة خطأ الاستجابة"
+pub func ResponseErrorMessage(r: ClientResponse): str:
+    if !HasErrors(r.errors): ret "" end
+    ret ErrorString(ErrorAt(r.errors, 0))
+end
+
+@en "FreeClientResponse"
+@fa "آزادسازی پاسخ کارخواه"
+@ar "تحریر استجابة العمیل"
+pub func FreeClientResponse(r &: ClientResponse):
+    FreeErrorList(r.errors)
+end

@@ -38,6 +38,10 @@ typedef struct {
     const char *src_path;
     int tmpn;
     bool cur_sret;
+    /* Emitting the entry function, which is `int main` in C however the
+     * Salam side declares it - so a bare `ret` inside it has to become
+     * `return 0;`, not `return;`. */
+    bool cur_is_main;
     vec_t vec_types;
     vec_t variant_types;
     vec_t dyn_ifaces;

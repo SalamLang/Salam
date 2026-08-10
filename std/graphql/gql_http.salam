@@ -1,0 +1,253 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package graphql
+
+import encoding.value
+import encoding.json
+import encoding.query
+import encoding.encerr
+import str
+
+// http - the GraphQL-over-HTTP request and response shapes.
+//
+// Deliberately transport-agnostic: this file takes a method, a content
+// type, a body and a query string, and hands back a status code and a
+// response body. It does not import net/http.
+//
+// That is not squeamishness about the dependency, it is about link
+// behaviour: importing a package links every extern its public
+// functions reference, so pulling net/http into std/graphql would drag
+// sockets and TLS into a program that only wanted to parse a schema.
+// Keeping the transport out means the parser, validator and executor
+// stay usable in a CLI, a test, or a build tool. Mounting this on a
+// real server is four lines at the call site and is shown in
+// tests/en/stdlib/graphql_server_demo.salam.
+//
+// The rules implemented are those of the GraphQL-over-HTTP
+// specification: GET carries the query in the URL and may only run
+// queries, POST carries a JSON body with `query`, `operationName`,
+// `variables` and `extensions`, and a request that never reaches
+// execution answers 400 while one that executed answers 200 even if
+// `errors` is non-empty.
+
+@en "HttpRequest"
+@fa "درخواست وب"
+@ar "طلب وب"
+pub struct GqlHttpRequest:
+    pub query: str = ""
+    pub operationName: str = ""
+    pub variables: value.Value = value.Value {}
+    pub extensions: value.Value = value.Value {}
+    pub ok: bool = true
+    pub error: str = ""
+end
+
+@en "HttpResponse"
+@fa "پاسخ وب"
+@ar "استجابة وب"
+pub struct GqlHttpResponse:
+    pub status: int = 200
+    pub contentType: str = "application/json"
+    pub body: str = ""
+end
+
+// ---- private ----
+
+func _ht_bad(message: str): GqlHttpRequest:
+    mut r := GqlHttpRequest {}
+    r.ok = false
+    r.error = message
+    r.variables = value.NewValueObject()
+    r.extensions = value.NewValueObject()
+    ret r
+end
+
+func _ht_empty(): GqlHttpRequest:
+    mut r := GqlHttpRequest {}
+    r.variables = value.NewValueObject()
+    r.extensions = value.NewValueObject()
+    ret r
+end
+
+// `variables` may arrive either as a JSON object (in a POST body) or as
+// a JSON string that itself encodes an object (in a GET query string).
+// Both are accepted, which is what the specification requires.
+func _ht_object_param(v: value.Value): value.Value:
+    if value.IsObject(v): ret v end
+    if value.IsString(v):
+        mut err := encerr.NoError()
+        parsed := json.Decode(value.AsString(v), err)
+        if !encerr.IsError(err) && value.IsObject(parsed): ret parsed end
+    end
+    ret value.NewValueObject()
+end
+
+func _ht_str_param(v: value.Value): str:
+    if value.IsString(v): ret value.AsString(v) end
+    ret ""
+end
+
+// Content-Type may carry parameters (`application/json; charset=utf-8`),
+// so matching is on the media type alone, case-insensitively.
+func _ht_media_type(contentType: str): str:
+    mut out := ""
+    bp := _gbp(contentType)
+    mut i := 0
+    until i < contentType.len():
+        c := _gub(bp, i)
+        if c == 59 || c == 32: break end
+        out = out + contentType.substr(i, 1)
+        i += 1
+    end
+    ret str.Lower(out)
+end
+
+func _ht_from_json(body: str): GqlHttpRequest:
+    mut err := encerr.NoError()
+    parsed := json.Decode(body, err)
+    if encerr.IsError(err): ret _ht_bad("request body is not valid JSON") end
+    if !value.IsObject(parsed): ret _ht_bad("request body must be a JSON object") end
+    mut r := _ht_empty()
+    r.query = _ht_str_param(value.ObjectGet(parsed, "query"))
+    r.operationName = _ht_str_param(value.ObjectGet(parsed, "operationName"))
+    if value.ObjectHas(parsed, "variables"):
+        r.variables = _ht_object_param(value.ObjectGet(parsed, "variables"))
+    end
+    if value.ObjectHas(parsed, "extensions"):
+        r.extensions = _ht_object_param(value.ObjectGet(parsed, "extensions"))
+    end
+    if r.query == "": ret _ht_bad("the request is missing a query") end
+    ret r
+end
+
+func _ht_from_query_string(qs: str): GqlHttpRequest:
+    mut r := _ht_empty()
+    r.query = query.Get(qs, "query")
+    r.operationName = query.Get(qs, "operationName")
+    if query.Has(qs, "variables"):
+        r.variables = _ht_object_param(value.ValueString(query.Get(qs, "variables")))
+    end
+    if query.Has(qs, "extensions"):
+        r.extensions = _ht_object_param(value.ValueString(query.Get(qs, "extensions")))
+    end
+    if r.query == "": ret _ht_bad("the request is missing a query") end
+    ret r
+end
+
+// GET is reserved for queries: a mutation over GET would make a
+// state-changing request cacheable and safe-looking, so it is refused.
+func _ht_is_query_only(source: str): bool:
+    mut err := GqlError {}
+    mut doc := Parse(source, err)
+    defer FreeDocument(doc)
+    if err.message != "": ret true end
+    mut i := 0
+    until i < doc.ops.len():
+        if doc.ops.get(i)[0].optype != OP_QUERY: ret false end
+        i += 1
+    end
+    ret true
+end
+
+func _ht_response(status: int, body: str): GqlHttpResponse:
+    mut r := GqlHttpResponse {}
+    r.status = status
+    r.body = body
+    ret r
+end
+
+func _ht_error_body(message: str): str:
+    mut errs := GqlErrorList {}
+    AddError(errs, NewError(ERR_REQUEST, message))
+    mut o := value.NewValueObject()
+    value.ObjectSet(o, "errors", ErrorsToValue(errs))
+    out := json.EncodeDefault(o)
+    FreeErrorList(errs)
+    ret out
+end
+
+// ---- public API ----
+
+// Parses a request from its HTTP parts. `queryString` is the part after
+// `?` and is only consulted for GET.
+@en "ParseHttpRequest"
+@fa "تجزیه درخواست وب"
+@ar "تحلیل طلب الوب"
+pub func ParseHttpRequest(method: str, contentType: str, body: str, queryString: str): GqlHttpRequest:
+    m := str.Upper(method)
+    if m == "GET": ret _ht_from_query_string(queryString) end
+    if m != "POST": ret _ht_bad("only GET and POST are supported") end
+    media := _ht_media_type(contentType)
+    if media == "application/graphql":
+        mut r := _ht_empty()
+        r.query = body
+        if r.query == "": ret _ht_bad("the request is missing a query") end
+        ret r
+    end
+    ret _ht_from_json(body)
+end
+
+@en "ParseHttpRequestJSON"
+@fa "تجزیه درخواست جیسون"
+@ar "تحلیل طلب جیسون"
+pub func ParseHttpRequestJSON(body: str): GqlHttpRequest: ret _ht_from_json(body) end
+
+// Runs a parsed request against a schema.
+@en "HandleRequest"
+@fa "رسیدگی به درخواست"
+@ar "معالجة الطلب"
+pub func HandleRequest(sch: Schema, req: GqlHttpRequest, rootValue: value.Value, ctx: value.Value): ExecutionResult:
+    ret ExecuteSource(sch, req.query, req.operationName, req.variables, rootValue, ctx)
+end
+
+// The full round trip: HTTP parts in, status and body out.
+//
+// A request that could not be understood, or that tried to mutate over
+// GET, answers 400 with an `errors` list and no `data`. Anything that
+// reached execution answers 200, since GraphQL reports field failures
+// in the body rather than in the status line.
+@en "HandleHttp"
+@fa "رسیدگی به وب"
+@ar "معالجة الوب"
+pub func HandleHttp(sch: Schema, method: str, contentType: str, body: str, queryString: str, rootValue: value.Value, ctx: value.Value): GqlHttpResponse:
+    req := ParseHttpRequest(method, contentType, body, queryString)
+    if !req.ok: ret _ht_response(400, _ht_error_body(req.error)) end
+    if str.Upper(method) == "GET" && !_ht_is_query_only(req.query):
+        ret _ht_response(405, _ht_error_body("only query operations are allowed over GET"))
+    end
+    mut result := HandleRequest(sch, req, rootValue, ctx)
+    out := ResultToJSON(result)
+    mut status := 200
+    if !result.hasData: status = 400 end
+    FreeResult(result)
+    ret _ht_response(status, out)
+end
+
+// The same with no root value or context, for a schema whose resolvers
+// need neither.
+@en "HandleHttpSimple"
+@fa "رسیدگی ساده به وب"
+@ar "معالجة بسیطة للوب"
+pub func HandleHttpSimple(sch: Schema, method: str, contentType: str, body: str, queryString: str): GqlHttpResponse:
+    ret HandleHttp(sch, method, contentType, body, queryString, value.NewValueObject(), value.NewValueObject())
+end
+
+@en "FreeHttpRequest"
+@fa "آزادسازی درخواست وب"
+@ar "تحریر طلب الوب"
+pub func FreeHttpRequest(req &: GqlHttpRequest):
+    value.ValueFree(req.variables)
+    value.ValueFree(req.extensions)
+end

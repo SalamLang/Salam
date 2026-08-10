@@ -75,6 +75,13 @@ typedef struct {
     int run_args_count;
     const char *output;
     const char *cc;
+    /* Whether `cc` came from an explicit --cc=. The default is the literal
+     * string "tcc", so without this the auto-resolution ladder in build.c
+     * could not tell "nobody asked" from "the user asked for tcc" and
+     * silently replaced an explicit --cc=tcc with whatever clang/gcc it
+     * found first - which is how every `--cc=tcc` test job (opencv, db)
+     * quietly started building with a different compiler. */
+    bool cc_explicit;
     /* Backend selection for `salam build`/`obj`: "auto" (default - LLVM when
      * this binary has it compiled in, C otherwise), "llvm", or "c". Set to
      * "c" implicitly by an explicit --cc=, which only the C backend uses. */

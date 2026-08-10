@@ -145,6 +145,7 @@ void cg_function(cg_t *cg, ast_node_t *fn, symbol_t *owner)
     cg->cur_struct = owner;
     cg->cur_fn_home = fsym ? fsym->home : NULL;
     cg->cur_sret = sig_is_sret(sig, is_main);
+    cg->cur_is_main = is_main;
     cg->locals.len = 0;
     if (owner) local_add(cg, "this");
     {

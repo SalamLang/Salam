@@ -1,0 +1,159 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package graphql
+
+// introspect - `__schema`, `__type` and the `__Type` graph (spec 4).
+//
+// Introspection is answered by walking the query's own selection set
+// and materialising only what was asked for, rather than by building
+// the whole introspection tree up front and letting the ordinary
+// executor read it. That is not an optimisation, it is a correctness
+// requirement: `__Type.fields` returns `__Type` values that themselves
+// have a `fields` field, so any eager materialisation of a recursive
+// schema would not terminate. Following the selection set bounds the
+// work by the query, which is finite by construction.
+//
+// The introspection types are still registered as real TypeDefs in
+// every schema, so validation checks an introspection query the same
+// way it checks any other query, and a client that asks for a field
+// that does not exist on `__Type` gets a proper validation error.
+
+// The introspection schema, verbatim from spec section 4.
+// `__Type.fields` and friends return SDL exactly as specified, so a
+// client library that knows the standard introspection query works
+// against this server unmodified.
+func _in_sdl(): str:
+    ret `
+type __Schema {
+  description: String
+  types: [__Type!]!
+  queryType: __Type!
+  mutationType: __Type
+  subscriptionType: __Type
+  directives: [__Directive!]!
+}
+
+type __Type {
+  kind: __TypeKind!
+  name: String
+  description: String
+  specifiedByURL: String
+  fields(includeDeprecated: Boolean = false): [__Field!]
+  interfaces: [__Type!]
+  possibleTypes: [__Type!]
+  enumValues(includeDeprecated: Boolean = false): [__EnumValue!]
+  inputFields(includeDeprecated: Boolean = false): [__InputValue!]
+  ofType: __Type
+}
+
+type __Field {
+  name: String!
+  description: String
+  args(includeDeprecated: Boolean = false): [__InputValue!]!
+  type: __Type!
+  isDeprecated: Boolean!
+  deprecationReason: String
+}
+
+type __InputValue {
+  name: String!
+  description: String
+  type: __Type!
+  defaultValue: String
+  isDeprecated: Boolean!
+  deprecationReason: String
+}
+
+type __EnumValue {
+  name: String!
+  description: String
+  isDeprecated: Boolean!
+  deprecationReason: String
+}
+
+type __Directive {
+  name: String!
+  description: String
+  locations: [__DirectiveLocation!]!
+  args(includeDeprecated: Boolean = false): [__InputValue!]!
+  isRepeatable: Boolean!
+}
+
+enum __TypeKind {
+  SCALAR
+  OBJECT
+  INTERFACE
+  UNION
+  ENUM
+  INPUT_OBJECT
+  LIST
+  NON_NULL
+}
+
+enum __DirectiveLocation {
+  QUERY
+  MUTATION
+  SUBSCRIPTION
+  FIELD
+  FRAGMENT_DEFINITION
+  FRAGMENT_SPREAD
+  INLINE_FRAGMENT
+  VARIABLE_DEFINITION
+  SCHEMA
+  SCALAR
+  OBJECT
+  FIELD_DEFINITION
+  ARGUMENT_DEFINITION
+  INTERFACE
+  UNION
+  ENUM
+  ENUM_VALUE
+  INPUT_OBJECT
+  INPUT_FIELD_DEFINITION
+}
+`
+end
+
+func _in_kind_name(kind: int): str:
+    if kind == TYPE_OBJECT: ret "OBJECT" end
+    if kind == TYPE_INTERFACE: ret "INTERFACE" end
+    if kind == TYPE_UNION: ret "UNION" end
+    if kind == TYPE_ENUM: ret "ENUM" end
+    if kind == TYPE_INPUT_OBJECT: ret "INPUT_OBJECT" end
+    ret "SCALAR"
+end
+
+// A name beginning with two underscores belongs to the introspection
+// system (spec 4.1) and is hidden from `__schema.types` and from SDL
+// output, but is still resolvable by an explicit `__type(name:)`.
+func _in_is_reserved(name: str): bool:
+    if name.len() < 2: ret false end
+    ret name.substr(0, 2) == "__"
+end
+
+@en "IsIntrospectionType"
+@fa "نوع درون‌نگری است"
+@ar "نوع استبطان"
+pub func IsIntrospectionType(name: str): bool: ret _in_is_reserved(name) end
+
+// Registers the introspection types into a schema. Called once by
+// NewSchema, before any user SDL is parsed.
+@en "AddIntrospectionTypes"
+@fa "افزودن انواع درون‌نگری"
+@ar "إضافة أنواع الاستبطان"
+pub func AddIntrospectionTypes(sch &: Schema):
+    mut err := GqlError {}
+    ParseSchemaInto(sch, _in_sdl(), err)
+end

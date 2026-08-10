@@ -1,0 +1,201 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package graphql
+
+import encoding.value
+
+// collect - CollectFields (spec 6.3.2).
+//
+// Flattens a selection set into an ordered list of response keys, each
+// with every field selection that contributes to it. Three things
+// happen here:
+//
+//   - `@skip(if:)` and `@include(if:)` are evaluated and drop
+//     selections before anything else looks at them;
+//   - fragment spreads and inline fragments are inlined, keeping only
+//     those whose type condition applies to the object type being
+//     resolved;
+//   - two selections that share a response key are merged into one
+//     group, so `{ a: x, a: y }` produces a single `a` whose
+//     sub-selections are the concatenation of both.
+//
+// The visited-fragment set makes a cyclic spread terminate. A cycle is
+// a validation error, but execution must not hang on a document that
+// skipped validation.
+
+@en "FieldGroup"
+@fa "گروه فیلد"
+@ar "مجموعة الحقول"
+pub struct FieldGroup:
+    pub key: str = ""
+    pub sels: Vector<int> = Vector {}
+end
+
+@en "FieldGroups"
+@fa "گروه‌های فیلد"
+@ar "مجامیع الحقول"
+pub struct FieldGroups:
+    pub items: Vector<FieldGroup> = Vector {}
+end
+
+// ---- private ----
+
+func _cl_group_index(gs: FieldGroups, key: str): int:
+    mut i := 0
+    until i < gs.items.len():
+        if gs.items.get(i)[0].key == key: ret i end
+        i += 1
+    end
+    ret 0 - 1
+end
+
+func _cl_add(gs &: FieldGroups, key: str, selId: int):
+    idx := _cl_group_index(gs, key)
+    if idx >= 0:
+        mut g := gs.items.get(idx)[0]
+        g.sels.push(selId)
+        gs.items.set(idx, g)
+        ret
+    end
+    mut g := FieldGroup {}
+    g.key = key
+    g.sels.push(selId)
+    gs.items.push(g)
+end
+
+func _cl_visited(names: Vector<str>, name: str): bool:
+    mut i := 0
+    until i < names.len():
+        if names.get(i)[0] == name: ret true end
+        i += 1
+    end
+    ret false
+end
+
+// Reads the `if:` argument of a @skip or @include directive. A missing
+// or non-boolean argument is treated as the safe default supplied by
+// the caller, since a validated document cannot reach that state.
+func _cl_directive_if(sch: Schema, doc: Document, d: AstDirective, vars: value.Value, fallback: bool): bool:
+    mut i := 0
+    until i < d.args.len():
+        a := d.args.get(i)[0]
+        if a.name == "if":
+            r := LiteralToValue(sch, doc, a.value, vars)
+            if r.ok && value.IsBool(r.value): ret value.AsBool(r.value) end
+            ret fallback
+        end
+        i += 1
+    end
+    ret fallback
+end
+
+// spec 3.13.1: @skip wins over @include when both are present, since a
+// selection is included only if it is not skipped.
+func _cl_should_include(sch: Schema, doc: Document, ds: Vector<AstDirective>, vars: value.Value): bool:
+    mut include := true
+    mut i := 0
+    until i < ds.len():
+        d := ds.get(i)[0]
+        if d.name == "skip":
+            if _cl_directive_if(sch, doc, d, vars, false): ret false end
+        else d.name == "include":
+            if !_cl_directive_if(sch, doc, d, vars, true): include = false end
+        end
+        i += 1
+    end
+    ret include
+end
+
+func _cl_fragment_applies(sch: Schema, condition: str, objectType: str, hasCondition: bool): bool:
+    if !hasCondition: ret true end
+    ret IsPossibleType(sch, condition, objectType)
+end
+
+func _cl_visit_spread(sch: Schema, doc: Document, s: AstSelection, objectType: str, vars: value.Value, gs &: FieldGroups, visited &: Vector<str>):
+    if _cl_visited(visited, s.name): ret end
+    fragIdx := FindFragment(doc, s.name)
+    if fragIdx < 0: ret end
+    frag := doc.frags.get(fragIdx)[0]
+    if !IsPossibleType(sch, frag.typeCondition, objectType): ret end
+    visited.push(s.name)
+    _cl_walk(sch, doc, frag.selections, objectType, vars, gs, visited)
+end
+
+func _cl_walk(sch: Schema, doc: Document, sels: Vector<int>, objectType: str, vars: value.Value, gs &: FieldGroups, visited &: Vector<str>):
+    mut i := 0
+    until i < sels.len():
+        selId := sels.get(i)[0]
+        s := SelectionAt(doc, selId)
+        i += 1
+        if !_cl_should_include(sch, doc, s.directives, vars): continue end
+        if s.kind == SEL_FIELD:
+            _cl_add(gs, ResponseKey(s), selId)
+        else s.kind == SEL_FRAGMENT_SPREAD:
+            _cl_visit_spread(sch, doc, s, objectType, vars, gs, visited)
+        else:
+            if _cl_fragment_applies(sch, s.typeCondition, objectType, s.hasTypeCondition):
+                _cl_walk(sch, doc, s.selections, objectType, vars, gs, visited)
+            end
+        end
+    end
+end
+
+// ---- public API ----
+
+// Groups a selection set for one concrete object type.
+@en "CollectFields"
+@fa "گردآوری فیلدها"
+@ar "جمع الحقول"
+pub func CollectFields(sch: Schema, doc: Document, sels: Vector<int>, objectType: str, vars: value.Value): FieldGroups:
+    mut gs := FieldGroups {}
+    mut visited := Vector {} as Vector<str>
+    defer visited.free()
+    _cl_walk(sch, doc, sels, objectType, vars, gs, visited)
+    ret gs
+end
+
+// The merged sub-selection set of every field in a group, which is what
+// spec 6.4.3 CompleteValue passes down when the field returns an object
+// (`{ a { x } a { y } }` resolves `a` once against `{ x y }`).
+@en "MergeSelections"
+@fa "ادغام گزینش‌ها"
+@ar "دمج الاختیارات"
+pub func MergeSelections(doc: Document, g: FieldGroup): Vector<int>:
+    mut out := Vector {} as Vector<int>
+    mut i := 0
+    until i < g.sels.len():
+        s := SelectionAt(doc, g.sels.get(i)[0])
+        mut j := 0
+        until j < s.selections.len():
+            out.push(s.selections.get(j)[0])
+            j += 1
+        end
+        i += 1
+    end
+    ret out
+end
+
+@en "FreeFieldGroups"
+@fa "آزادسازی گروه‌های فیلد"
+@ar "تحریر مجامیع الحقول"
+pub func FreeFieldGroups(gs &: FieldGroups):
+    mut i := 0
+    until i < gs.items.len():
+        mut g := gs.items.get(i)[0]
+        g.sels.free()
+        i += 1
+    end
+    gs.items.free()
+end

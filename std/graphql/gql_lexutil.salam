@@ -1,0 +1,243 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package graphql
+
+import str
+
+// lexutil - the three self-contained pieces the lexer leans on: the
+// punctuator table, `\u` escape decoding (including UTF-8 re-encoding
+// and surrogate pairs), and the block-string indentation algorithm.
+// Split out of gql_lexer.salam to keep each file focused.
+
+// Maps a punctuator byte to its token kind, or -1 if the byte cannot
+// start a token. `.` is absent on purpose: only the three-byte `...`
+// spread is legal, so the lexer special-cases it before asking here.
+func _gql_punct_kind(c: int): int:
+    if c == 33: ret TOK_BANG end
+    if c == 36: ret TOK_DOLLAR end
+    if c == 38: ret TOK_AMP end
+    if c == 40: ret TOK_LPAREN end
+    if c == 41: ret TOK_RPAREN end
+    if c == 58: ret TOK_COLON end
+    if c == 61: ret TOK_EQUALS end
+    if c == 64: ret TOK_AT end
+    if c == 91: ret TOK_LBRACKET end
+    if c == 93: ret TOK_RBRACKET end
+    if c == 123: ret TOK_LBRACE end
+    if c == 125: ret TOK_RBRACE end
+    if c == 124: ret TOK_PIPE end
+    ret 0 - 1
+end
+
+// GraphQL calls out single quotes specifically, since coming from most
+// other languages a `'string'` is the single most likely mistake.
+func _gql_bad_char_msg(c: int): str:
+    if c == 39:
+        ret `unexpected single quote character ('), did you mean to use a double quote (")?`
+    end
+    ret "unexpected character in document"
+end
+
+func _gql_hex_val(c: int): int:
+    if c >= 48 && c <= 57: ret c - 48 end
+    if c >= 97 && c <= 102: ret c - 97 + 10 end
+    if c >= 65 && c <= 70: ret c - 65 + 10 end
+    ret 0 - 1
+end
+
+// Appends a Unicode code point to the builder as UTF-8. str.BufAppendChar
+// writes one raw byte, so anything above U+007F has to be encoded here;
+// without this a `é` would be truncated to a single 0xE9 byte and
+// produce invalid UTF-8 output.
+func _gql_append_utf8(sb &: str.StringBuilder, cp: int):
+    if cp < 0 || cp > 1114111: ret end
+    if cp < 128:
+        str.BufAppendChar(sb, cp)
+    else cp < 2048:
+        str.BufAppendChar(sb, 192 + (cp / 64))
+        str.BufAppendChar(sb, 128 + (cp % 64))
+    else cp < 65536:
+        str.BufAppendChar(sb, 224 + (cp / 4096))
+        str.BufAppendChar(sb, 128 + ((cp / 64) % 64))
+        str.BufAppendChar(sb, 128 + (cp % 64))
+    else:
+        str.BufAppendChar(sb, 240 + (cp / 262144))
+        str.BufAppendChar(sb, 128 + ((cp / 4096) % 64))
+        str.BufAppendChar(sb, 128 + ((cp / 64) % 64))
+        str.BufAppendChar(sb, 128 + (cp % 64))
+    end
+end
+
+// Reads exactly four hex digits at `lx.pos`, returning -1 if any of them
+// is not a hex digit. Advances past them only on success.
+func _lx_hex4(lx &: GqlLx): int:
+    mut v := 0
+    mut i := 0
+    until i < 4:
+        d := _gql_hex_val(_lx_at(lx, i))
+        if d < 0: ret 0 - 1 end
+        v = v * 16 + d
+        i += 1
+    end
+    lx.pos += 4
+    ret v
+end
+
+// Variable-width `\u{1F600}` form added in the October 2021 spec.
+func _lx_hex_braced(lx &: GqlLx): int:
+    lx.pos += 1
+    mut v := 0
+    mut n := 0
+    until true:
+        c := _lx_cur(lx)
+        if c == 125:
+            lx.pos += 1
+            if n == 0: ret 0 - 1 end
+            ret v
+        end
+        d := _gql_hex_val(c)
+        if d < 0 || n >= 6: ret 0 - 1 end
+        v = v * 16 + d
+        n += 1
+        lx.pos += 1
+    end
+end
+
+// Decodes `\uXXXX` or `\u{X...}` (the leading `u` is already current).
+// A leading surrogate followed by `\uXXXX` trailing surrogate is
+// combined into the single astral code point it encodes, matching the
+// spec's EscapedUnicode handling.
+func _lx_unicode_escape(lx &: GqlLx, sb &: str.StringBuilder, msg &: str): bool:
+    lx.pos += 1
+    if _lx_cur(lx) == 123:
+        cp := _lx_hex_braced(lx)
+        if cp < 0 || cp > 1114111:
+            msg = "invalid \\u{...} escape in string"
+            ret false
+        end
+        _gql_append_utf8(sb, cp)
+        ret true
+    end
+    hi := _lx_hex4(lx)
+    if hi < 0:
+        msg = "invalid \\u escape in string"
+        ret false
+    end
+    if hi >= 55296 && hi <= 56319 && _lx_cur(lx) == 92 && _lx_at(lx, 1) == 117:
+        save := lx.pos
+        lx.pos += 2
+        lo := _lx_hex4(lx)
+        if lo >= 56320 && lo <= 57343:
+            _gql_append_utf8(sb, 65536 + (hi - 55296) * 1024 + (lo - 56320))
+            ret true
+        end
+        lx.pos = save
+    end
+    _gql_append_utf8(sb, hi)
+    ret true
+end
+
+// ---- block string indentation (spec 2.9.4 BlockStringValue) ----
+
+func _gql_line_indent(line: str): int:
+    n := line.len()
+    bp := _gbp(line)
+    mut i := 0
+    until i < n:
+        c := _gub(bp, i)
+        if c != 32 && c != 9: ret i end
+        i += 1
+    end
+    ret n
+end
+
+func _gql_is_blank(line: str): bool:
+    ret _gql_line_indent(line) == line.len()
+end
+
+// The lexer has already normalised every line terminator to LF, so a
+// plain split on LF is exact here.
+func _gql_split_lines(s: str): Vector<str>:
+    ret s.split("\n")
+end
+
+// Smallest indentation across every non-blank line after the first.
+// Returns -1 when there is no such line, which means "strip nothing".
+func _gql_common_indent(lines: Vector<str>): int:
+    mut common := 0 - 1
+    mut i := 1
+    until i < lines.len():
+        line := lines.get(i)[0]
+        if !_gql_is_blank(line):
+            ind := _gql_line_indent(line)
+            if common < 0 || ind < common: common = ind end
+        end
+        i += 1
+    end
+    ret common
+end
+
+func _gql_strip_indent(lines &: Vector<str>, common: int):
+    if common <= 0: ret end
+    mut i := 1
+    until i < lines.len():
+        line := lines.get(i)[0]
+        if line.len() >= common:
+            lines.set(i, line.substr(common, line.len() - common))
+        else:
+            lines.set(i, "")
+        end
+        i += 1
+    end
+end
+
+func _gql_first_content(lines: Vector<str>): int:
+    mut i := 0
+    until i < lines.len():
+        if !_gql_is_blank(lines.get(i)[0]): ret i end
+        i += 1
+    end
+    ret lines.len()
+end
+
+func _gql_last_content(lines: Vector<str>): int:
+    mut i := lines.len() - 1
+    until i >= 0:
+        if !_gql_is_blank(lines.get(i)[0]): ret i end
+        i -= 1
+    end
+    ret 0 - 1
+end
+
+// Removes the common indentation of the block, then drops leading and
+// trailing blank lines, then rejoins with LF. This is what makes an
+// indented `"""..."""` description in an SDL file come out flush-left.
+func _gql_dedent_block(raw: str): str:
+    mut lines := _gql_split_lines(raw)
+    defer lines.free()
+    _gql_strip_indent(lines, _gql_common_indent(lines))
+    first := _gql_first_content(lines)
+    last := _gql_last_content(lines)
+    if last < first: ret "" end
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    mut i := first
+    until i <= last:
+        if i > first: str.BufAppendChar(sb, 10) end
+        str.BufAppend(sb, lines.get(i)[0])
+        i += 1
+    end
+    ret str.BufStr(sb)
+end

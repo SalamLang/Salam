@@ -1,0 +1,382 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package graphql
+
+// ast - the syntax tree for both document flavours, stored as arenas.
+//
+// Every recursive edge in GraphQL syntax (a selection set inside a
+// field, a list value inside a list value, `[[Int!]!]!` inside a type)
+// is represented as an int index into a flat Vector on the Document
+// rather than as a nested struct. A struct holding a Vector of itself
+// would be copied by value on every read, and encoding/value's header
+// spells out how a "copy" of a Vector-bearing struct still aliases the
+// original backing store until a resize silently severs it. Indices
+// have neither problem: they are plain ints, so a subtree costs one
+// word to pass and nothing at all to copy.
+//
+// The convention throughout is that -1 means "absent" and any valid
+// node is at index >= 0.
+
+// All discriminants are declared up front: this compiler requires every
+// top-level constant in a file to precede the first type or function
+// definition (E084), so they cannot sit beside the structs they tag.
+
+// value node kinds (spec 2.9, plus Variable)
+pub const VAL_NULL := 0
+pub const VAL_BOOL := 1
+pub const VAL_INT := 2
+pub const VAL_FLOAT := 3
+pub const VAL_STRING := 4
+pub const VAL_ENUM := 5
+pub const VAL_LIST := 6
+pub const VAL_OBJECT := 7
+pub const VAL_VARIABLE := 8
+
+// type reference kinds (spec 2.11)
+pub const TREF_NAMED := 0
+pub const TREF_LIST := 1
+
+// selection kinds (spec 2.4)
+pub const SEL_FIELD := 0
+pub const SEL_FRAGMENT_SPREAD := 1
+pub const SEL_INLINE_FRAGMENT := 2
+
+// operation kinds (spec 2.3)
+pub const OP_QUERY := 0
+pub const OP_MUTATION := 1
+pub const OP_SUBSCRIPTION := 2
+
+// ---- value nodes ----
+
+// A literal appearing in a document. GraphQL literals are not JSON
+// literals: enum values are unquoted names distinct from strings, and a
+// `$variable` may stand in for a value anywhere except in a constant
+// position, so neither can be folded into encoding.value here. They are
+// converted to a value.Value later, once variables are known, by
+// gql_coerce.salam.
+//
+// `items` holds child value ids for both lists and objects; for objects
+// `keys` runs parallel to it holding the field names.
+@en "AstValue"
+@fa "مقدار نحوی"
+@ar "قیمة نحویة"
+pub struct AstValue:
+    pub kind: int = VAL_NULL
+    pub b: bool = false
+    pub i: i64 = 0
+    pub f: f64 = 0.0
+    pub s: str = ""
+    pub items: Vector<int> = Vector {}
+    pub keys: Vector<str> = Vector {}
+    pub line: int = 0
+end
+
+
+// A type reference such as `[Episode!]!`. `nonNull` is the trailing `!`
+// on this level; `inner` is the element type id for a list.
+@en "AstTypeRef"
+@fa "ارجاع نوع"
+@ar "مرجع النوع"
+pub struct AstTypeRef:
+    pub kind: int = TREF_NAMED
+    pub name: str = ""
+    pub inner: int = 0 - 1
+    pub nonNull: bool = false
+end
+
+// ---- arguments and directives ----
+
+@en "AstArgument"
+@fa "آرگومان نحوی"
+@ar "وسیط نحوي"
+pub struct AstArgument:
+    pub name: str = ""
+    pub value: int = 0 - 1
+    pub line: int = 0
+end
+
+@en "AstDirective"
+@fa "دستورالعمل نحوی"
+@ar "توجیه نحوي"
+pub struct AstDirective:
+    pub name: str = ""
+    pub args: Vector<AstArgument> = Vector {}
+    pub line: int = 0
+end
+
+// ---- selections (spec 2.4) ----
+
+
+// One entry in a selection set. The three selection forms share a
+// struct because they share most of their shape and the executor
+// switches on `kind` anyway; the unused fields simply stay empty.
+//
+//   SEL_FIELD            name, alias, args, selections
+//   SEL_FRAGMENT_SPREAD  name (the fragment's name), directives
+//   SEL_INLINE_FRAGMENT  typeCondition (may be empty), selections
+@en "AstSelection"
+@fa "گزینش نحوی"
+@ar "اختیار نحوي"
+pub struct AstSelection:
+    pub kind: int = SEL_FIELD
+    pub name: str = ""
+    pub alias: str = ""
+    pub typeCondition: str = ""
+    pub hasTypeCondition: bool = false
+    pub args: Vector<AstArgument> = Vector {}
+    pub directives: Vector<AstDirective> = Vector {}
+    pub selections: Vector<int> = Vector {}
+    pub line: int = 0
+    pub col: int = 0
+end
+
+// ---- operations and fragments (spec 2.3, 2.8) ----
+
+
+@en "AstVariableDef"
+@fa "تعریف متغیر"
+@ar "تعریف متغیر"
+pub struct AstVariableDef:
+    pub name: str = ""
+    pub typeRef: int = 0 - 1
+    pub defaultValue: int = 0 - 1
+    pub hasDefault: bool = false
+    pub directives: Vector<AstDirective> = Vector {}
+    pub line: int = 0
+end
+
+@en "AstOperation"
+@fa "عملیات نحوی"
+@ar "عملیة نحویة"
+pub struct AstOperation:
+    pub optype: int = OP_QUERY
+    pub name: str = ""
+    pub varDefs: Vector<AstVariableDef> = Vector {}
+    pub directives: Vector<AstDirective> = Vector {}
+    pub selections: Vector<int> = Vector {}
+    pub shorthand: bool = false
+    pub line: int = 0
+end
+
+@en "AstFragment"
+@fa "قطعه نحوی"
+@ar "جزء نحوي"
+pub struct AstFragment:
+    pub name: str = ""
+    pub typeCondition: str = ""
+    pub directives: Vector<AstDirective> = Vector {}
+    pub selections: Vector<int> = Vector {}
+    pub line: int = 0
+end
+
+// The parsed document plus the arenas its indices point into. Passing a
+// Document by value copies only the Vector headers, so helpers take it
+// by plain value for reads and by reference only when they append.
+@en "Document"
+@fa "سند"
+@ar "وثیقة"
+pub struct Document:
+    pub ops: Vector<AstOperation> = Vector {}
+    pub frags: Vector<AstFragment> = Vector {}
+    pub sels: Vector<AstSelection> = Vector {}
+    pub vals: Vector<AstValue> = Vector {}
+    pub trefs: Vector<AstTypeRef> = Vector {}
+end
+
+// ---- arena append helpers (private section: this compiler requires
+// every non-pub function in a file to precede the first pub one, E088) ----
+
+func _doc_add_value(doc &: Document, v: AstValue): int:
+    id := doc.vals.len()
+    doc.vals.push(v)
+    ret id
+end
+
+func _doc_add_selection(doc &: Document, s: AstSelection): int:
+    id := doc.sels.len()
+    doc.sels.push(s)
+    ret id
+end
+
+func _doc_add_tref(doc &: Document, t: AstTypeRef): int:
+    id := doc.trefs.len()
+    doc.trefs.push(t)
+    ret id
+end
+
+// Vector<T>.free() releases only its own backing array and never walks
+// its elements, so every nested Vector is freed explicitly first.
+func _free_directives(ds: Vector<AstDirective>):
+    mut i := 0
+    until i < ds.len():
+        mut d := ds.get(i)[0]
+        d.args.free()
+        i += 1
+    end
+    mut dv := ds
+    dv.free()
+end
+
+func _free_var_defs(vs: Vector<AstVariableDef>):
+    mut i := 0
+    until i < vs.len():
+        _free_directives(vs.get(i)[0].directives)
+        i += 1
+    end
+    mut vv := vs
+    vv.free()
+end
+
+func _free_ops(doc &: Document):
+    mut i := 0
+    until i < doc.ops.len():
+        mut o := doc.ops.get(i)[0]
+        _free_directives(o.directives)
+        _free_var_defs(o.varDefs)
+        o.selections.free()
+        i += 1
+    end
+    doc.ops.free()
+end
+
+func _free_frags(doc &: Document):
+    mut i := 0
+    until i < doc.frags.len():
+        mut f := doc.frags.get(i)[0]
+        _free_directives(f.directives)
+        f.selections.free()
+        i += 1
+    end
+    doc.frags.free()
+end
+
+func _free_sels(doc &: Document):
+    mut i := 0
+    until i < doc.sels.len():
+        mut s := doc.sels.get(i)[0]
+        _free_directives(s.directives)
+        s.args.free()
+        s.selections.free()
+        i += 1
+    end
+    doc.sels.free()
+end
+
+func _free_vals(doc &: Document):
+    mut i := 0
+    until i < doc.vals.len():
+        mut v := doc.vals.get(i)[0]
+        v.items.free()
+        v.keys.free()
+        i += 1
+    end
+    doc.vals.free()
+end
+
+// ---- arena accessors ----
+//
+// Out-of-range ids return a default-constructed node rather than
+// trapping, matching the zeroed-miss convention HashMap.get uses across
+// this standard library. Callers that need to distinguish absence test
+// the id against -1 first, which is cheaper than a lookup anyway.
+
+@en "SelectionAt"
+@fa "گزینش در"
+@ar "الاختیار عند"
+pub func SelectionAt(doc: Document, id: int): AstSelection:
+    if id < 0 || id >= doc.sels.len(): ret AstSelection {} end
+    ret doc.sels.get(id)[0]
+end
+
+@en "ValueAt"
+@fa "مقدار در"
+@ar "القیمة عند"
+pub func ValueAt(doc: Document, id: int): AstValue:
+    if id < 0 || id >= doc.vals.len(): ret AstValue {} end
+    ret doc.vals.get(id)[0]
+end
+
+@en "TypeRefAt"
+@fa "ارجاع نوع در"
+@ar "مرجع النوع عند"
+pub func TypeRefAt(doc: Document, id: int): AstTypeRef:
+    if id < 0 || id >= doc.trefs.len(): ret AstTypeRef {} end
+    ret doc.trefs.get(id)[0]
+end
+
+// ---- document queries ----
+
+// The operation to run when the request names one, or the sole
+// operation when it does not. Returns -1 if the name is unknown, or if
+// the request named nothing and the document holds more than one
+// operation (which spec 6.1 GetOperation makes a request error).
+@en "FindOperation"
+@fa "یافتن عملیات"
+@ar "إیجاد العملیة"
+pub func FindOperation(doc: Document, name: str): int:
+    if name == "":
+        if doc.ops.len() == 1: ret 0 end
+        ret 0 - 1
+    end
+    mut i := 0
+    until i < doc.ops.len():
+        if doc.ops.get(i)[0].name == name: ret i end
+        i += 1
+    end
+    ret 0 - 1
+end
+
+@en "FindFragment"
+@fa "یافتن قطعه"
+@ar "إیجاد الجزء"
+pub func FindFragment(doc: Document, name: str): int:
+    mut i := 0
+    until i < doc.frags.len():
+        if doc.frags.get(i)[0].name == name: ret i end
+        i += 1
+    end
+    ret 0 - 1
+end
+
+@en "OperationTypeName"
+@fa "نام نوع عملیات"
+@ar "اسم نوع العملیة"
+pub func OperationTypeName(optype: int): str:
+    if optype == OP_MUTATION: ret "mutation" end
+    if optype == OP_SUBSCRIPTION: ret "subscription" end
+    ret "query"
+end
+
+// The response key a field contributes under: its alias when it has
+// one, otherwise its name (spec 6.3.2 CollectFields).
+@en "ResponseKey"
+@fa "کلید پاسخ"
+@ar "مفتاح الاستجابة"
+pub func ResponseKey(sel: AstSelection): str:
+    if sel.alias != "": ret sel.alias end
+    ret sel.name
+end
+
+// Frees every arena and the operation and fragment lists.
+@en "FreeDocument"
+@fa "آزادسازی سند"
+@ar "تحریر الوثیقة"
+pub func FreeDocument(doc &: Document):
+    _free_sels(doc)
+    _free_vals(doc)
+    _free_ops(doc)
+    _free_frags(doc)
+    doc.trefs.free()
+end

@@ -1,0 +1,342 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package graphql
+
+import str
+import conv
+
+// print - AST back to GraphQL source text.
+//
+// The output is canonical rather than a faithful reproduction of the
+// input: two-space indentation, one field per line, no commas, and the
+// query shorthand kept only where it was used. Printing a parsed
+// document and reparsing it yields an identical AST, which is what the
+// round-trip check in tests/en/stdlib exercises and what makes this
+// usable for normalising a query before hashing it into a cache key.
+
+func _pr_indent(sb &: str.StringBuilder, depth: int):
+    mut i := 0
+    until i < depth:
+        str.BufAppend(sb, "  ")
+        i += 1
+    end
+end
+
+func _gql_has_char(s: str, c: int): bool:
+    bp := _gbp(s)
+    mut i := 0
+    until i < s.len():
+        if _gub(bp, i) == c: ret true end
+        i += 1
+    end
+    ret false
+end
+
+// A float is printed through conv.FormatFloat, then given an explicit
+// ".0" when that produced an integer-looking string, so a Float literal
+// never reparses as an Int.
+func _pr_float(sb &: str.StringBuilder, f: f64):
+    text := conv.FormatFloat(f)
+    str.BufAppend(sb, text)
+    if !_gql_has_char(text, 46) && !_gql_has_char(text, 101) && !_gql_has_char(text, 69):
+        str.BufAppend(sb, ".0")
+    end
+end
+
+func _pr_hex4(c: int): str:
+    digits := "0123456789ABCDEF"
+    mut out := ""
+    out = out + digits.substr((c / 4096) % 16, 1)
+    out = out + digits.substr((c / 256) % 16, 1)
+    out = out + digits.substr((c / 16) % 16, 1)
+    out = out + digits.substr(c % 16, 1)
+    ret out
+end
+
+func _pr_escape_byte(sb &: str.StringBuilder, c: int):
+    if c == 34: str.BufAppend(sb, `\"`) ret end
+    if c == 92: str.BufAppend(sb, `\\`) ret end
+    if c == 8: str.BufAppend(sb, `\b`) ret end
+    if c == 12: str.BufAppend(sb, `\f`) ret end
+    if c == 10: str.BufAppend(sb, `\n`) ret end
+    if c == 13: str.BufAppend(sb, `\r`) ret end
+    if c == 9: str.BufAppend(sb, `\t`) ret end
+    if c < 32:
+        str.BufAppend(sb, `\u`)
+        str.BufAppend(sb, _pr_hex4(c))
+        ret
+    end
+    str.BufAppendChar(sb, c)
+end
+
+// Escapes a string for GraphQL source. The escape set is JSON's, and a
+// control character below 0x20 without a short escape becomes \uXXXX.
+func _pr_string_lit(s: str): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppendChar(sb, 34)
+    bp := _gbp(s)
+    mut i := 0
+    until i < s.len():
+        _pr_escape_byte(sb, _gub(bp, i))
+        i += 1
+    end
+    str.BufAppendChar(sb, 34)
+    ret str.BufStr(sb)
+end
+
+func _gql_bool_text(b: bool): str:
+    if b: ret "true" end
+    ret "false"
+end
+
+// ---- values ----
+
+func _pr_list(sb &: str.StringBuilder, doc: Document, v: AstValue):
+    str.BufAppendChar(sb, 91)
+    mut i := 0
+    until i < v.items.len():
+        if i > 0: str.BufAppend(sb, ", ") end
+        _pr_value(sb, doc, v.items.get(i)[0])
+        i += 1
+    end
+    str.BufAppendChar(sb, 93)
+end
+
+func _pr_object(sb &: str.StringBuilder, doc: Document, v: AstValue):
+    str.BufAppendChar(sb, 123)
+    mut i := 0
+    until i < v.items.len():
+        if i > 0: str.BufAppend(sb, ", ") end
+        str.BufAppend(sb, v.keys.get(i)[0])
+        str.BufAppend(sb, ": ")
+        _pr_value(sb, doc, v.items.get(i)[0])
+        i += 1
+    end
+    str.BufAppendChar(sb, 125)
+end
+
+func _pr_value(sb &: str.StringBuilder, doc: Document, id: int):
+    v := ValueAt(doc, id)
+    if v.kind == VAL_NULL: str.BufAppend(sb, "null")
+    else v.kind == VAL_BOOL: str.BufAppend(sb, _gql_bool_text(v.b))
+    else v.kind == VAL_INT: str.BufAppendInt(sb, v.i)
+    else v.kind == VAL_FLOAT: _pr_float(sb, v.f)
+    else v.kind == VAL_STRING: str.BufAppend(sb, _pr_string_lit(v.s))
+    else v.kind == VAL_ENUM: str.BufAppend(sb, v.s)
+    else v.kind == VAL_VARIABLE:
+        str.BufAppendChar(sb, 36)
+        str.BufAppend(sb, v.s)
+    else v.kind == VAL_LIST: _pr_list(sb, doc, v)
+    else v.kind == VAL_OBJECT: _pr_object(sb, doc, v)
+    end
+end
+
+// ---- type references ----
+
+func _pr_type_ref(sb &: str.StringBuilder, doc: Document, id: int):
+    t := TypeRefAt(doc, id)
+    if t.kind == TREF_LIST:
+        str.BufAppendChar(sb, 91)
+        _pr_type_ref(sb, doc, t.inner)
+        str.BufAppendChar(sb, 93)
+    else:
+        str.BufAppend(sb, t.name)
+    end
+    if t.nonNull: str.BufAppendChar(sb, 33) end
+end
+
+// ---- arguments and directives ----
+
+func _pr_arguments(sb &: str.StringBuilder, doc: Document, args: Vector<AstArgument>):
+    if args.len() == 0: ret end
+    str.BufAppendChar(sb, 40)
+    mut i := 0
+    until i < args.len():
+        if i > 0: str.BufAppend(sb, ", ") end
+        a := args.get(i)[0]
+        str.BufAppend(sb, a.name)
+        str.BufAppend(sb, ": ")
+        _pr_value(sb, doc, a.value)
+        i += 1
+    end
+    str.BufAppendChar(sb, 41)
+end
+
+func _pr_directives(sb &: str.StringBuilder, doc: Document, ds: Vector<AstDirective>):
+    mut i := 0
+    until i < ds.len():
+        d := ds.get(i)[0]
+        str.BufAppend(sb, " @")
+        str.BufAppend(sb, d.name)
+        _pr_arguments(sb, doc, d.args)
+        i += 1
+    end
+end
+
+// ---- selections ----
+
+func _pr_field(sb &: str.StringBuilder, doc: Document, s: AstSelection, depth: int):
+    if s.alias != "":
+        str.BufAppend(sb, s.alias)
+        str.BufAppend(sb, ": ")
+    end
+    str.BufAppend(sb, s.name)
+    _pr_arguments(sb, doc, s.args)
+    _pr_directives(sb, doc, s.directives)
+    if s.selections.len() > 0:
+        str.BufAppendChar(sb, 32)
+        _pr_selection_set(sb, doc, s.selections, depth)
+    end
+    str.BufAppendChar(sb, 10)
+end
+
+func _pr_selection(sb &: str.StringBuilder, doc: Document, id: int, depth: int):
+    s := SelectionAt(doc, id)
+    _pr_indent(sb, depth)
+    if s.kind == SEL_FRAGMENT_SPREAD:
+        str.BufAppend(sb, "...")
+        str.BufAppend(sb, s.name)
+        _pr_directives(sb, doc, s.directives)
+        str.BufAppendChar(sb, 10)
+        ret
+    end
+    if s.kind == SEL_INLINE_FRAGMENT:
+        str.BufAppend(sb, "...")
+        if s.hasTypeCondition:
+            str.BufAppend(sb, " on ")
+            str.BufAppend(sb, s.typeCondition)
+        end
+        _pr_directives(sb, doc, s.directives)
+        str.BufAppendChar(sb, 32)
+        _pr_selection_set(sb, doc, s.selections, depth)
+        str.BufAppendChar(sb, 10)
+        ret
+    end
+    _pr_field(sb, doc, s, depth)
+end
+
+func _pr_selection_set(sb &: str.StringBuilder, doc: Document, sels: Vector<int>, depth: int):
+    str.BufAppend(sb, "{\n")
+    mut i := 0
+    until i < sels.len():
+        _pr_selection(sb, doc, sels.get(i)[0], depth + 1)
+        i += 1
+    end
+    _pr_indent(sb, depth)
+    str.BufAppend(sb, "}")
+end
+
+// ---- definitions ----
+
+func _pr_variable_defs(sb &: str.StringBuilder, doc: Document, vs: Vector<AstVariableDef>):
+    if vs.len() == 0: ret end
+    str.BufAppendChar(sb, 40)
+    mut i := 0
+    until i < vs.len():
+        if i > 0: str.BufAppend(sb, ", ") end
+        v := vs.get(i)[0]
+        str.BufAppendChar(sb, 36)
+        str.BufAppend(sb, v.name)
+        str.BufAppend(sb, ": ")
+        _pr_type_ref(sb, doc, v.typeRef)
+        if v.hasDefault:
+            str.BufAppend(sb, " = ")
+            _pr_value(sb, doc, v.defaultValue)
+        end
+        _pr_directives(sb, doc, v.directives)
+        i += 1
+    end
+    str.BufAppendChar(sb, 41)
+end
+
+func _pr_operation(sb &: str.StringBuilder, doc: Document, op: AstOperation):
+    if !op.shorthand:
+        str.BufAppend(sb, OperationTypeName(op.optype))
+        if op.name != "":
+            str.BufAppendChar(sb, 32)
+            str.BufAppend(sb, op.name)
+        end
+        _pr_variable_defs(sb, doc, op.varDefs)
+        _pr_directives(sb, doc, op.directives)
+        str.BufAppendChar(sb, 32)
+    end
+    _pr_selection_set(sb, doc, op.selections, 0)
+    str.BufAppendChar(sb, 10)
+end
+
+func _pr_fragment(sb &: str.StringBuilder, doc: Document, f: AstFragment):
+    str.BufAppend(sb, "fragment ")
+    str.BufAppend(sb, f.name)
+    str.BufAppend(sb, " on ")
+    str.BufAppend(sb, f.typeCondition)
+    _pr_directives(sb, doc, f.directives)
+    str.BufAppendChar(sb, 32)
+    _pr_selection_set(sb, doc, f.selections, 0)
+    str.BufAppendChar(sb, 10)
+end
+
+// ---- public API ----
+
+// Quotes and escapes a string as a GraphQL StringValue literal.
+@en "PrintStringValue"
+@fa "چاپ مقدار رشته"
+@ar "طباعة قیمة نصیة"
+pub func PrintStringValue(s: str): str: ret _pr_string_lit(s) end
+
+@en "PrintTypeRef"
+@fa "چاپ ارجاع نوع"
+@ar "طباعة مرجع النوع"
+pub func PrintTypeRef(doc: Document, id: int): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    _pr_type_ref(sb, doc, id)
+    ret str.BufStr(sb)
+end
+
+// Prints a single value node, which the validator and the error
+// formatter both use to quote an offending literal back to the user.
+@en "PrintValue"
+@fa "چاپ مقدار"
+@ar "طباعة القیمة"
+pub func PrintValue(doc: Document, id: int): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    _pr_value(sb, doc, id)
+    ret str.BufStr(sb)
+end
+
+// Prints a whole document: operations in source order, then fragments,
+// separated by a blank line.
+@en "Print"
+@fa "چاپ"
+@ar "طباعة"
+pub func Print(doc: Document): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    mut i := 0
+    until i < doc.ops.len():
+        if i > 0: str.BufAppendChar(sb, 10) end
+        _pr_operation(sb, doc, doc.ops.get(i)[0])
+        i += 1
+    end
+    mut j := 0
+    until j < doc.frags.len():
+        if doc.ops.len() > 0 || j > 0: str.BufAppendChar(sb, 10) end
+        _pr_fragment(sb, doc, doc.frags.get(j)[0])
+        j += 1
+    end
+    ret str.BufStr(sb)
+end

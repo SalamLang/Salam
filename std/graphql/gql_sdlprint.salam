@@ -1,0 +1,304 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package graphql
+
+import str
+
+// sdlprint - a Schema back to SDL text.
+//
+// This is the other half of the introspection story: a client that has
+// run an introspection query can rebuild the schema and print it, and a
+// server can serve its own schema as SDL. Printing a parsed schema and
+// reparsing it yields an equivalent schema, which the stdlib test
+// checks.
+//
+// Built-in scalars and built-in directives are omitted by default,
+// since a schema document that redeclared Int or @skip would be invalid
+// for most consumers. PrintSchemaFull includes them.
+
+func _sp_is_builtin_scalar(name: str): bool:
+    ret name == "Int" || name == "Float" || name == "String" || name == "Boolean" || name == "ID"
+end
+
+func _sp_is_builtin_directive(name: str): bool:
+    ret name == "skip" || name == "include" || name == "deprecated" || name == "specifiedBy"
+end
+
+// A description prints as a block string when it spans lines and as an
+// ordinary string otherwise, which is what makes generated SDL read
+// like hand-written SDL.
+func _sp_description(sb &: str.StringBuilder, desc: str, indent: str):
+    if desc == "": ret end
+    str.BufAppend(sb, indent)
+    if _gql_has_char(desc, 10):
+        str.BufAppend(sb, `"""`)
+        str.BufAppendChar(sb, 10)
+        str.BufAppend(sb, desc)
+        str.BufAppendChar(sb, 10)
+        str.BufAppend(sb, indent)
+        str.BufAppend(sb, `"""`)
+    else:
+        str.BufAppend(sb, PrintStringValue(desc))
+    end
+    str.BufAppendChar(sb, 10)
+end
+
+func _sp_deprecated(sb &: str.StringBuilder, dep: bool, reason: str):
+    if !dep: ret end
+    str.BufAppend(sb, " @deprecated")
+    if reason != "" && reason != "No longer supported":
+        str.BufAppend(sb, "(reason: ")
+        str.BufAppend(sb, PrintStringValue(reason))
+        str.BufAppendChar(sb, 41)
+    end
+end
+
+func _sp_default(sb &: str.StringBuilder, sch: Schema, iv: InputValueDef):
+    if !iv.hasDefault: ret end
+    str.BufAppend(sb, " = ")
+    str.BufAppend(sb, PrintValue(sch.doc, iv.defaultValue))
+end
+
+func _sp_args(sb &: str.StringBuilder, sch: Schema, args: Vector<InputValueDef>):
+    if args.len() == 0: ret end
+    str.BufAppendChar(sb, 40)
+    mut i := 0
+    until i < args.len():
+        if i > 0: str.BufAppend(sb, ", ") end
+        iv := args.get(i)[0]
+        str.BufAppend(sb, iv.name)
+        str.BufAppend(sb, ": ")
+        str.BufAppend(sb, PrintTypeRef(sch.doc, iv.typeRef))
+        _sp_default(sb, sch, iv)
+        i += 1
+    end
+    str.BufAppendChar(sb, 41)
+end
+
+func _sp_fields(sb &: str.StringBuilder, sch: Schema, fields: Vector<FieldDef>):
+    if fields.len() == 0: ret end
+    str.BufAppend(sb, " {\n")
+    mut i := 0
+    until i < fields.len():
+        f := fields.get(i)[0]
+        _sp_description(sb, f.description, "  ")
+        str.BufAppend(sb, "  ")
+        str.BufAppend(sb, f.name)
+        _sp_args(sb, sch, f.args)
+        str.BufAppend(sb, ": ")
+        str.BufAppend(sb, PrintTypeRef(sch.doc, f.typeRef))
+        _sp_deprecated(sb, f.deprecated, f.deprecationReason)
+        str.BufAppendChar(sb, 10)
+        i += 1
+    end
+    str.BufAppendChar(sb, 125)
+end
+
+func _sp_input_fields(sb &: str.StringBuilder, sch: Schema, fields: Vector<InputValueDef>):
+    if fields.len() == 0: ret end
+    str.BufAppend(sb, " {\n")
+    mut i := 0
+    until i < fields.len():
+        iv := fields.get(i)[0]
+        _sp_description(sb, iv.description, "  ")
+        str.BufAppend(sb, "  ")
+        str.BufAppend(sb, iv.name)
+        str.BufAppend(sb, ": ")
+        str.BufAppend(sb, PrintTypeRef(sch.doc, iv.typeRef))
+        _sp_default(sb, sch, iv)
+        _sp_deprecated(sb, iv.deprecated, iv.deprecationReason)
+        str.BufAppendChar(sb, 10)
+        i += 1
+    end
+    str.BufAppendChar(sb, 125)
+end
+
+func _sp_implements(sb &: str.StringBuilder, ifaces: Vector<str>):
+    if ifaces.len() == 0: ret end
+    str.BufAppend(sb, " implements ")
+    mut i := 0
+    until i < ifaces.len():
+        if i > 0: str.BufAppend(sb, " & ") end
+        str.BufAppend(sb, ifaces.get(i)[0])
+        i += 1
+    end
+end
+
+func _sp_enum(sb &: str.StringBuilder, t: TypeDef):
+    if t.enumValues.len() == 0: ret end
+    str.BufAppend(sb, " {\n")
+    mut i := 0
+    until i < t.enumValues.len():
+        ev := t.enumValues.get(i)[0]
+        _sp_description(sb, ev.description, "  ")
+        str.BufAppend(sb, "  ")
+        str.BufAppend(sb, ev.name)
+        _sp_deprecated(sb, ev.deprecated, ev.deprecationReason)
+        str.BufAppendChar(sb, 10)
+        i += 1
+    end
+    str.BufAppendChar(sb, 125)
+end
+
+func _sp_union(sb &: str.StringBuilder, t: TypeDef):
+    if t.unionMembers.len() == 0: ret end
+    str.BufAppend(sb, " = ")
+    mut i := 0
+    until i < t.unionMembers.len():
+        if i > 0: str.BufAppend(sb, " | ") end
+        str.BufAppend(sb, t.unionMembers.get(i)[0])
+        i += 1
+    end
+end
+
+func _sp_type_keyword(kind: int): str:
+    if kind == TYPE_OBJECT: ret "type " end
+    if kind == TYPE_INTERFACE: ret "interface " end
+    if kind == TYPE_UNION: ret "union " end
+    if kind == TYPE_ENUM: ret "enum " end
+    if kind == TYPE_INPUT_OBJECT: ret "input " end
+    ret "scalar "
+end
+
+func _sp_type(sb &: str.StringBuilder, sch: Schema, t: TypeDef):
+    _sp_description(sb, t.description, "")
+    str.BufAppend(sb, _sp_type_keyword(t.kind))
+    str.BufAppend(sb, t.name)
+    if t.kind == TYPE_OBJECT || t.kind == TYPE_INTERFACE:
+        _sp_implements(sb, t.interfaces)
+        _sp_fields(sb, sch, t.fields)
+    else t.kind == TYPE_INPUT_OBJECT:
+        _sp_input_fields(sb, sch, t.inputFields)
+    else t.kind == TYPE_ENUM:
+        _sp_enum(sb, t)
+    else t.kind == TYPE_UNION:
+        _sp_union(sb, t)
+    else t.specifiedByURL != "":
+        str.BufAppend(sb, " @specifiedBy(url: ")
+        str.BufAppend(sb, PrintStringValue(t.specifiedByURL))
+        str.BufAppendChar(sb, 41)
+    end
+    str.BufAppendChar(sb, 10)
+end
+
+func _sp_directive(sb &: str.StringBuilder, sch: Schema, d: DirectiveDef):
+    _sp_description(sb, d.description, "")
+    str.BufAppend(sb, "directive @")
+    str.BufAppend(sb, d.name)
+    _sp_args(sb, sch, d.args)
+    if d.repeatable: str.BufAppend(sb, " repeatable") end
+    str.BufAppend(sb, " on ")
+    mut i := 0
+    until i < d.locations.len():
+        if i > 0: str.BufAppend(sb, " | ") end
+        str.BufAppend(sb, d.locations.get(i)[0])
+        i += 1
+    end
+    str.BufAppendChar(sb, 10)
+end
+
+// The `schema { ... }` block is only printed when a root type uses a
+// non-default name, matching what graphql-js does: a schema whose roots
+// are Query/Mutation/Subscription needs no explicit block.
+func _sp_needs_schema_block(sch: Schema): bool:
+    if sch.queryType != "" && sch.queryType != "Query": ret true end
+    if sch.mutationType != "" && sch.mutationType != "Mutation": ret true end
+    if sch.subscriptionType != "" && sch.subscriptionType != "Subscription": ret true end
+    ret false
+end
+
+func _sp_schema_block(sb &: str.StringBuilder, sch: Schema):
+    if !_sp_needs_schema_block(sch): ret end
+    str.BufAppend(sb, "schema {\n")
+    if sch.queryType != "":
+        str.BufAppend(sb, "  query: ")
+        str.BufAppend(sb, sch.queryType)
+        str.BufAppendChar(sb, 10)
+    end
+    if sch.mutationType != "":
+        str.BufAppend(sb, "  mutation: ")
+        str.BufAppend(sb, sch.mutationType)
+        str.BufAppendChar(sb, 10)
+    end
+    if sch.subscriptionType != "":
+        str.BufAppend(sb, "  subscription: ")
+        str.BufAppend(sb, sch.subscriptionType)
+        str.BufAppendChar(sb, 10)
+    end
+    str.BufAppend(sb, "}\n")
+end
+
+func _sp_print(sch: Schema, includeBuiltins: bool): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    mut wrote := false
+    if _sp_needs_schema_block(sch):
+        _sp_schema_block(sb, sch)
+        wrote = true
+    end
+    mut i := 0
+    until i < sch.directives.len():
+        d := sch.directives.get(i)[0]
+        if includeBuiltins || !_sp_is_builtin_directive(d.name):
+            if wrote: str.BufAppendChar(sb, 10) end
+            _sp_directive(sb, sch, d)
+            wrote = true
+        end
+        i += 1
+    end
+    mut j := 0
+    until j < sch.types.len():
+        t := sch.types.get(j)[0]
+        if IsIntrospectionType(t.name):
+            j += 1
+            continue
+        end
+        if includeBuiltins || !_sp_is_builtin_scalar(t.name):
+            if wrote: str.BufAppendChar(sb, 10) end
+            _sp_type(sb, sch, t)
+            wrote = true
+        end
+        j += 1
+    end
+    ret str.BufStr(sb)
+end
+
+// ---- public API ----
+
+// The schema as SDL, omitting the built-in scalars and directives.
+@en "PrintSchema"
+@fa "چاپ طرح‌واره"
+@ar "طباعة المخطط"
+pub func PrintSchema(sch: Schema): str: ret _sp_print(sch, false) end
+
+// The schema as SDL including the built-in scalars and directives.
+@en "PrintSchemaFull"
+@fa "چاپ کامل طرح‌واره"
+@ar "طباعة المخطط کاملا"
+pub func PrintSchemaFull(sch: Schema): str: ret _sp_print(sch, true) end
+
+// A single type as SDL, which is what a schema-browsing tool wants when
+// the user clicks one type.
+@en "PrintType"
+@fa "چاپ نوع"
+@ar "طباعة النوع"
+pub func PrintType(sch: Schema, name: str): str:
+    t := FindType(sch, name)
+    if t.kind < 0: ret "" end
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    _sp_type(sb, sch, t)
+    ret str.BufStr(sb)
+end

@@ -12,16 +12,13 @@ command -v gcc >/dev/null 2>&1 || command -v clang >/dev/null 2>&1 || {
 }
 
 if ! command -v tcc >/dev/null 2>&1; then
-    echo "==> tcc not found, building from source ..."
-    tcc_src="$(mktemp -d)"
-    git clone --depth 1 https://github.com/TinyCC/tinycc.git "$tcc_src"
-    (
-        cd "$tcc_src"
-        ./configure --prefix="$HOME/.local"
-        make -j"$(nproc)"
-        make install
-    )
-    export PATH="$HOME/.local/bin:$PATH"
+    # Via build-tcc.sh so this gets the same pinned TinyCC commit as CI and
+    # the release bundles. It used to clone master unpinned, which meant a
+    # preview deploy could be built by a different compiler than anything
+    # else in the project, chosen by whatever landed upstream that morning.
+    echo "==> tcc not found, building the pinned TinyCC commit ..."
+    sh c/tools/ci/build-tcc.sh "$HOME/.local/tcc"
+    export PATH="$HOME/.local/tcc/bin:$HOME/.local/tcc:$PATH"
 fi
 
 emsdk_dir="$HOME/emsdk"

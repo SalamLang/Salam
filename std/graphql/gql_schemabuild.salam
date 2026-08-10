@@ -1,0 +1,371 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package graphql
+
+// schemabuild - schema construction: the built-in scalars and
+// directives every schema starts with, a programmatic builder for code
+// that would rather not write SDL text, and the teardown.
+//
+// The builder takes type references as source text ("[String!]!")
+// rather than as a hand-assembled chain of arena nodes, because the
+// text form is both what a reader recognises and what the SDL parser
+// already knows how to read. TypeRefText runs the real type-reference
+// production over that snippet, so the two paths cannot drift.
+
+// ---- diagnostics used by the SDL parser ----
+
+func _gql_redefined_msg(name: str): str:
+    ret "type " + _gql_quote(name) + " is defined more than once"
+end
+
+func _gql_cannot_extend_msg(name: str): str:
+    ret "cannot extend type " + _gql_quote(name) + " because it is not defined"
+end
+
+func _gql_bad_root_msg(role: str): str:
+    ret "unknown root operation type " + _gql_quote(role)
+end
+
+// ---- built-ins ----
+
+func _sb_scalar(sch &: Schema, name: str, desc: str):
+    mut t := TypeDef { kind = TYPE_SCALAR }
+    t.name = name
+    t.description = desc
+    sch.types.push(t)
+end
+
+// The five scalars every GraphQL service has (spec 3.5.1 to 3.5.5).
+func _sb_builtin_scalars(sch &: Schema):
+    _sb_scalar(sch, "Int", "A signed 32-bit integer.")
+    _sb_scalar(sch, "Float", "A signed double-precision floating-point value.")
+    _sb_scalar(sch, "String", "A UTF-8 character sequence.")
+    _sb_scalar(sch, "Boolean", "True or false.")
+    _sb_scalar(sch, "ID", "A unique identifier, serialised as a String.")
+end
+
+func _sb_arg(sch &: Schema, name: str, typeText: str, desc: str): InputValueDef:
+    mut iv := InputValueDef {}
+    iv.name = name
+    iv.description = desc
+    iv.typeRef = TypeRefText(sch, typeText)
+    ret iv
+end
+
+func _sb_directive(sch &: Schema, name: str, desc: str, locations: Vector<str>, args: Vector<InputValueDef>):
+    mut d := DirectiveDef {}
+    d.name = name
+    d.description = desc
+    d.locations = locations
+    d.args = args
+    sch.directives.push(d)
+end
+
+func _sb_locs2(a: str, b: str): Vector<str>:
+    mut v := Vector {} as Vector<str>
+    v.push(a)
+    v.push(b)
+    ret v
+end
+
+func _sb_locs3(a: str, b: str, c: str): Vector<str>:
+    mut v := _sb_locs2(a, b)
+    v.push(c)
+    ret v
+end
+
+func _sb_skip_include(sch &: Schema):
+    mut ifArgs := Vector {} as Vector<InputValueDef>
+    ifArgs.push(_sb_arg(sch, "if", "Boolean!", "Included when true."))
+    _sb_directive(sch, "include", "Include this selection only when the argument is true.",
+        _sb_locs3("FIELD", "FRAGMENT_SPREAD", "INLINE_FRAGMENT"), ifArgs)
+    mut skipArgs := Vector {} as Vector<InputValueDef>
+    skipArgs.push(_sb_arg(sch, "if", "Boolean!", "Skipped when true."))
+    _sb_directive(sch, "skip", "Skip this selection when the argument is true.",
+        _sb_locs3("FIELD", "FRAGMENT_SPREAD", "INLINE_FRAGMENT"), skipArgs)
+end
+
+func _sb_deprecated(sch &: Schema):
+    mut args := Vector {} as Vector<InputValueDef>
+    mut reason := _sb_arg(sch, "reason", "String", "Why this element was deprecated.")
+    mut v := AstValue { kind = VAL_STRING }
+    v.s = "No longer supported"
+    reason.defaultValue = _doc_add_value(sch.doc, v)
+    reason.hasDefault = true
+    args.push(reason)
+    _sb_directive(sch, "deprecated", "Marks an element as deprecated.",
+        _sb_locs2("FIELD_DEFINITION", "ENUM_VALUE"), args)
+end
+
+func _sb_specified_by(sch &: Schema):
+    mut args := Vector {} as Vector<InputValueDef>
+    args.push(_sb_arg(sch, "url", "String!", "A URL specifying the scalar's behaviour."))
+    mut locs := Vector {} as Vector<str>
+    locs.push("SCALAR")
+    _sb_directive(sch, "specifiedBy", "Points at a specification for a custom scalar.", locs, args)
+end
+
+func _sb_type_index_or_add(sch &: Schema, name: str, kind: int): int:
+    idx := TypeIndex(sch, name)
+    if idx >= 0: ret idx end
+    mut t := TypeDef { kind = kind }
+    t.name = name
+    sch.types.push(t)
+    ret sch.types.len() - 1
+end
+
+// ---- teardown ----
+
+func _sb_free_inputs(vs: Vector<InputValueDef>):
+    mut v := vs
+    v.free()
+end
+
+func _sb_free_fields(fs: Vector<FieldDef>):
+    mut i := 0
+    until i < fs.len():
+        _sb_free_inputs(fs.get(i)[0].args)
+        i += 1
+    end
+    mut f := fs
+    f.free()
+end
+
+func _sb_free_type(t: TypeDef):
+    _sb_free_fields(t.fields)
+    _sb_free_inputs(t.inputFields)
+    mut ifaces := t.interfaces
+    ifaces.free()
+    mut members := t.unionMembers
+    members.free()
+    mut evs := t.enumValues
+    evs.free()
+end
+
+// ---- public API ----
+
+// A schema preloaded with the built-in scalars and directives, ready
+// for either ParseSchemaInto or the builder calls below.
+@en "NewSchema"
+@fa "طرح‌واره جدید"
+@ar "مخطط جدید"
+pub func NewSchema(): Schema:
+    mut sch := Schema {}
+    _sb_builtin_scalars(sch)
+    _sb_skip_include(sch)
+    _sb_deprecated(sch)
+    _sb_specified_by(sch)
+    AddIntrospectionTypes(sch)
+    ret sch
+end
+
+// Parses a type reference written as source text, such as "[Episode!]!",
+// into the schema's arena and returns its id. Returns -1 if the text is
+// not a well-formed type reference.
+@en "TypeRefText"
+@fa "متن ارجاع نوع"
+@ar "نص مرجع النوع"
+pub func TypeRefText(sch &: Schema, text: str): int:
+    mut ps := Ps {}
+    if !_ps_from_source(text, ps):
+        ps.toks.free()
+        ret 0 - 1
+    end
+    id := _p_type_ref(ps, sch.doc)
+    failed := ps.failed
+    ps.toks.free()
+    if failed: ret 0 - 1 end
+    ret id
+end
+
+@en "AddScalarType"
+@fa "افزودن نوع اسکالر"
+@ar "إضافة نوع قیاسي"
+pub func AddScalarType(sch &: Schema, name: str, description: str):
+    idx := _sb_type_index_or_add(sch, name, TYPE_SCALAR)
+    mut t := sch.types.get(idx)[0]
+    t.kind = TYPE_SCALAR
+    t.description = description
+    sch.types.set(idx, t)
+end
+
+@en "AddObjectType"
+@fa "افزودن نوع شیء"
+@ar "إضافة نوع کائن"
+pub func AddObjectType(sch &: Schema, name: str, description: str):
+    idx := _sb_type_index_or_add(sch, name, TYPE_OBJECT)
+    mut t := sch.types.get(idx)[0]
+    t.kind = TYPE_OBJECT
+    t.description = description
+    sch.types.set(idx, t)
+end
+
+@en "AddInterfaceType"
+@fa "افزودن نوع رابط"
+@ar "إضافة نوع واجهة"
+pub func AddInterfaceType(sch &: Schema, name: str, description: str):
+    idx := _sb_type_index_or_add(sch, name, TYPE_INTERFACE)
+    mut t := sch.types.get(idx)[0]
+    t.kind = TYPE_INTERFACE
+    t.description = description
+    sch.types.set(idx, t)
+end
+
+@en "AddInputObjectType"
+@fa "افزودن نوع ورودی"
+@ar "إضافة نوع إدخال"
+pub func AddInputObjectType(sch &: Schema, name: str, description: str):
+    idx := _sb_type_index_or_add(sch, name, TYPE_INPUT_OBJECT)
+    mut t := sch.types.get(idx)[0]
+    t.kind = TYPE_INPUT_OBJECT
+    t.description = description
+    sch.types.set(idx, t)
+end
+
+@en "AddEnumType"
+@fa "افزودن نوع شمارشی"
+@ar "إضافة نوع تعداد"
+pub func AddEnumType(sch &: Schema, name: str, values: Vector<str>):
+    idx := _sb_type_index_or_add(sch, name, TYPE_ENUM)
+    mut t := sch.types.get(idx)[0]
+    t.kind = TYPE_ENUM
+    mut i := 0
+    until i < values.len():
+        mut ev := EnumValueDef {}
+        ev.name = values.get(i)[0]
+        t.enumValues.push(ev)
+        i += 1
+    end
+    sch.types.set(idx, t)
+end
+
+@en "AddUnionType"
+@fa "افزودن نوع اجتماع"
+@ar "إضافة نوع اتحاد"
+pub func AddUnionType(sch &: Schema, name: str, members: Vector<str>):
+    idx := _sb_type_index_or_add(sch, name, TYPE_UNION)
+    mut t := sch.types.get(idx)[0]
+    t.kind = TYPE_UNION
+    mut i := 0
+    until i < members.len():
+        t.unionMembers.push(members.get(i)[0])
+        i += 1
+    end
+    sch.types.set(idx, t)
+end
+
+@en "AddInterfaceTo"
+@fa "افزودن رابط به"
+@ar "إضافة واجهة إلى"
+pub func AddInterfaceTo(sch &: Schema, typeName: str, interfaceName: str):
+    idx := TypeIndex(sch, typeName)
+    if idx < 0: ret end
+    mut t := sch.types.get(idx)[0]
+    t.interfaces.push(interfaceName)
+    sch.types.set(idx, t)
+end
+
+// Adds a field whose type is given as source text. Returns false when
+// the type text does not parse or the owning type is unknown.
+@en "AddField"
+@fa "افزودن فیلد"
+@ar "إضافة حقل"
+pub func AddField(sch &: Schema, typeName: str, fieldName: str, typeText: str): bool:
+    idx := TypeIndex(sch, typeName)
+    if idx < 0: ret false end
+    ref := TypeRefText(sch, typeText)
+    if ref < 0: ret false end
+    mut f := FieldDef {}
+    f.name = fieldName
+    f.typeRef = ref
+    mut t := sch.types.get(idx)[0]
+    t.fields.push(f)
+    sch.types.set(idx, t)
+    ret true
+end
+
+// Adds an argument to an already-added field.
+@en "AddFieldArg"
+@fa "افزودن آرگومان فیلد"
+@ar "إضافة وسیط الحقل"
+pub func AddFieldArg(sch &: Schema, typeName: str, fieldName: str, argName: str, typeText: str): bool:
+    idx := TypeIndex(sch, typeName)
+    if idx < 0: ret false end
+    ref := TypeRefText(sch, typeText)
+    if ref < 0: ret false end
+    mut t := sch.types.get(idx)[0]
+    mut i := 0
+    until i < t.fields.len():
+        mut f := t.fields.get(i)[0]
+        if f.name == fieldName:
+            mut iv := InputValueDef {}
+            iv.name = argName
+            iv.typeRef = ref
+            f.args.push(iv)
+            t.fields.set(i, f)
+            sch.types.set(idx, t)
+            ret true
+        end
+        i += 1
+    end
+    ret false
+end
+
+@en "AddInputField"
+@fa "افزودن فیلد ورودی"
+@ar "إضافة حقل إدخال"
+pub func AddInputField(sch &: Schema, typeName: str, fieldName: str, typeText: str): bool:
+    idx := TypeIndex(sch, typeName)
+    if idx < 0: ret false end
+    ref := TypeRefText(sch, typeText)
+    if ref < 0: ret false end
+    mut iv := InputValueDef {}
+    iv.name = fieldName
+    iv.typeRef = ref
+    mut t := sch.types.get(idx)[0]
+    t.inputFields.push(iv)
+    sch.types.set(idx, t)
+    ret true
+end
+
+@en "SetRootTypes"
+@fa "تعیین انواع ریشه"
+@ar "تعیین أنواع الجذر"
+pub func SetRootTypes(sch &: Schema, queryType: str, mutationType: str, subscriptionType: str):
+    sch.queryType = queryType
+    sch.mutationType = mutationType
+    sch.subscriptionType = subscriptionType
+end
+
+@en "FreeSchema"
+@fa "آزادسازی طرح‌واره"
+@ar "تحریر المخطط"
+pub func FreeSchema(sch &: Schema):
+    mut i := 0
+    until i < sch.types.len():
+        _sb_free_type(sch.types.get(i)[0])
+        i += 1
+    end
+    sch.types.free()
+    mut j := 0
+    until j < sch.directives.len():
+        mut d := sch.directives.get(j)[0]
+        _sb_free_inputs(d.args)
+        d.locations.free()
+        j += 1
+    end
+    sch.directives.free()
+    FreeDocument(sch.doc)
+end

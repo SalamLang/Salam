@@ -10,6 +10,11 @@ set -eu
 : "${MUSL_TRIPLE:?}"
 : "${TCC_CPU:?}"
 : "${TCC_CONFIGURE_EXTRA:=}"
+# Same pin as build-tcc.sh and everything else: this used to demand its own
+# TINYCC_REF from the caller, and the caller went away, leaving the two
+# scripts free to build different compilers.
+: "${TINYCC_REF:=$(grep -vE '^[[:space:]]*(#|$)' \
+    "$(cd "$(dirname "$0")" && pwd)/tinycc-ref.txt" | head -1)}"
 : "${TINYCC_REF:?}"
 
 WORK=/tmp/tcc-build-$MUSL_TRIPLE

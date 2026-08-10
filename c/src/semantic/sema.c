@@ -330,6 +330,53 @@ bool salam_find_bundled_tool(const char *name, char *out, size_t n)
     return false;
 }
 
+static bool tool_is_executable(const char *p)
+{
+    struct stat st;
+    if (stat(p, &st) != 0 || !S_ISREG(st.st_mode)) return false;
+#if defined(_WIN32)
+    return true;
+#else
+    return access(p, X_OK) == 0;
+#endif
+}
+
+/* salam_find_bundled_tool's $PATH counterpart. The bundled lookup only
+ * ever matches a toolchain shipped inside the install tree, so on a plain
+ * source checkout - or any install that ships no compiler - it finds
+ * nothing and the caller falls through to its "tcc" sentinel, shelling out
+ * to a compiler that need not exist even on a host with clang or gcc
+ * installed. Probing $PATH is what makes the clang > gcc > tcc ladder mean
+ * "the best compiler on this machine" rather than "the best one we
+ * shipped". */
+bool salam_find_path_tool(const char *name, char *out, size_t n)
+{
+#if defined(_WIN32)
+    static const char sep = ';', *suffix = ".exe";
+#else
+    static const char sep = ':', *suffix = "";
+#endif
+    const char *path = getenv("PATH");
+    const char *seg;
+
+    if (!name || !name[0] || !path || !path[0]) return false;
+    for (seg = path; *seg;) {
+        const char *end = strchr(seg, sep);
+        size_t len = end ? (size_t)(end - seg) : strlen(seg);
+        char cand[1200];
+        if (len > 0 && len < sizeof cand - 64) {
+            sal_snprintf(cand, sizeof cand, "%.*s/%s%s", (int)len, seg, name, suffix);
+            if (tool_is_executable(cand)) {
+                sal_snprintf(out, n, "%s", cand);
+                return true;
+            }
+        }
+        if (!end) break;
+        seg = end + 1;
+    }
+    return false;
+}
+
 /* path_normalize - strips leading "./" pairs, collapses "/./" and lexically
  * collapses "seg/../". The ".." collapse keeps import dedup keys canonical:
  * the same file imported as "token.salam" from the root and as

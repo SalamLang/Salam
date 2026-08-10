@@ -1,0 +1,312 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package graphql
+
+import encoding.value
+import str
+
+// error - the error shape GraphQL puts on the wire (spec section 7.1.2).
+//
+// A GraphQL response never reports failure by status code or exception:
+// it carries an `errors` list of objects with a `message`, optional
+// source `locations`, and, for a field that failed during execution,
+// the `path` from the response root to that field. This file owns that
+// representation and its conversion to encoding.value, so the parser,
+// the validator and the executor all raise errors the same way and one
+// encoder serialises all three.
+//
+// `path` is a list whose elements are either response keys or list
+// indices. Since a Vector of a sum type has no clean expression in this
+// compiler, it is stored as two parallel vectors: `pathKeys` holds the
+// key (empty for an index) and `pathIndex` holds the index (-1 for a
+// key).
+
+pub const ERR_SYNTAX := 0
+pub const ERR_VALIDATION := 1
+pub const ERR_EXECUTION := 2
+pub const ERR_REQUEST := 3
+
+@en "GqlError"
+@fa "خطای گراف‌کیوال"
+@ar "خطأ جراف‌کیوال"
+pub struct GqlError:
+    pub category: int = ERR_EXECUTION
+    pub message: str = ""
+    pub line: int = 0
+    pub col: int = 0
+    pub hasLocation: bool = false
+    pub pathKeys: Vector<str> = Vector {}
+    pub pathIndex: Vector<int> = Vector {}
+    pub code: str = ""
+end
+
+@en "ErrorList"
+@fa "فهرست خطا"
+@ar "قائمة الأخطاء"
+pub struct GqlErrorList:
+    pub items: Vector<GqlError> = Vector {}
+end
+
+// ---- private helpers ----
+
+func _path_value(e: GqlError): value.Value:
+    mut arr := value.NewValueArray()
+    mut i := 0
+    until i < e.pathKeys.len():
+        idx := e.pathIndex.get(i)[0]
+        if idx >= 0:
+            value.ArrayPush(arr, value.ValueInt(idx as i64))
+        else:
+            value.ArrayPush(arr, value.ValueString(e.pathKeys.get(i)[0]))
+        end
+        i += 1
+    end
+    ret arr
+end
+
+func _locations_value(e: GqlError): value.Value:
+    mut loc := value.NewValueObject()
+    value.ObjectSet(loc, "line", value.ValueInt(e.line as i64))
+    value.ObjectSet(loc, "column", value.ValueInt(e.col as i64))
+    mut arr := value.NewValueArray()
+    value.ArrayPush(arr, loc)
+    ret arr
+end
+
+func _gql_quote(s: str): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppendChar(sb, 34)
+    str.BufAppend(sb, s)
+    str.BufAppendChar(sb, 34)
+    ret str.BufStr(sb)
+end
+
+// Both parsers phrase their errors as "expected X, found Y", the
+// wording graphql-js uses, so a message is recognisable to anyone who
+// has seen a GraphQL syntax error before. A token is described by its
+// text when it has any and by its kind name otherwise.
+func _gql_describe_token(t: GqlToken): str:
+    if t.kind == TOK_EOF: ret "<EOF>" end
+    if t.kind == TOK_NAME: ret _gql_quote(t.lexeme) end
+    if t.kind == TOK_INT || t.kind == TOK_FLOAT: ret t.lexeme end
+    if IsStringToken(t.kind): ret "a string value" end
+    if t.kind == TOK_ERROR: ret t.sval end
+    ret _gql_quote(TokenKindName(t.kind))
+end
+
+func _gql_expected_msg(want: str, found: GqlToken): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppend(sb, "expected ")
+    str.BufAppend(sb, want)
+    str.BufAppend(sb, ", found ")
+    str.BufAppend(sb, _gql_describe_token(found))
+    ret str.BufStr(sb)
+end
+
+func _gql_unexpected_msg(found: GqlToken): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppend(sb, "unexpected ")
+    str.BufAppend(sb, _gql_describe_token(found))
+    ret str.BufStr(sb)
+end
+
+// ---- construction ----
+
+@en "NewError"
+@fa "خطای جدید"
+@ar "خطأ جدید"
+pub func NewError(category: int, message: str): GqlError:
+    mut e := GqlError { category = category }
+    e.message = message
+    ret e
+end
+
+@en "NewErrorAt"
+@fa "خطا در محل"
+@ar "خطأ عند موضع"
+pub func NewErrorAt(category: int, message: str, line: int, col: int): GqlError:
+    mut e := NewError(category, message)
+    e.line = line
+    e.col = col
+    e.hasLocation = true
+    ret e
+end
+
+@en "SyntaxError"
+@fa "خطای نحوی"
+@ar "خطأ نحوي"
+pub func SyntaxError(message: str, line: int, col: int): GqlError:
+    ret NewErrorAt(ERR_SYNTAX, message, line, col)
+end
+
+// ---- response paths ----
+
+@en "PathPushKey"
+@fa "افزودن کلید مسیر"
+@ar "إضافة مفتاح المسار"
+pub func PathPushKey(e &: GqlError, key: str):
+    e.pathKeys.push(key)
+    e.pathIndex.push(0 - 1)
+end
+
+@en "PathPushIndex"
+@fa "افزودن نمایه مسیر"
+@ar "إضافة فهرس المسار"
+pub func PathPushIndex(e &: GqlError, idx: int):
+    e.pathKeys.push("")
+    e.pathIndex.push(idx)
+end
+
+@en "PathLen"
+@fa "طول مسیر"
+@ar "طول المسار"
+pub func PathLen(e: GqlError): int: ret e.pathKeys.len() end
+
+// Renders a path the way tooling prints it: `hero.friends[0].name`.
+@en "PathString"
+@fa "رشته مسیر"
+@ar "نص المسار"
+pub func PathString(e: GqlError): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    mut i := 0
+    until i < e.pathKeys.len():
+        if e.pathIndex.get(i)[0] >= 0:
+            str.BufAppendChar(sb, 91)
+            str.BufAppendInt(sb, e.pathIndex.get(i)[0] as i64)
+            str.BufAppendChar(sb, 93)
+        else:
+            if !str.BufIsEmpty(sb): str.BufAppendChar(sb, 46) end
+            str.BufAppend(sb, e.pathKeys.get(i)[0])
+        end
+        i += 1
+    end
+    ret str.BufStr(sb)
+end
+
+// ---- error lists ----
+
+@en "AddError"
+@fa "افزودن خطا"
+@ar "إضافة خطأ"
+pub func AddError(list &: GqlErrorList, e: GqlError):
+    list.items.push(e)
+end
+
+@en "HasErrors"
+@fa "خطا دارد"
+@ar "یوجد خطأ"
+pub func HasErrors(list: GqlErrorList): bool: ret list.items.len() > 0 end
+
+@en "ErrorCount"
+@fa "تعداد خطا"
+@ar "عدد الأخطاء"
+pub func ErrorCount(list: GqlErrorList): int: ret list.items.len() end
+
+@en "ErrorAt"
+@fa "خطا در"
+@ar "الخطأ عند"
+pub func ErrorAt(list: GqlErrorList, i: int): GqlError:
+    if i < 0 || i >= list.items.len(): ret GqlError {} end
+    ret list.items.get(i)[0]
+end
+
+// ---- rendering ----
+
+// A one-line rendering used by tests and by the CLI: the message, then
+// the source location when known, then the response path when set.
+@en "ErrorString"
+@fa "رشته خطا"
+@ar "نص الخطأ"
+pub func ErrorString(e: GqlError): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppend(sb, e.message)
+    if e.hasLocation:
+        str.BufAppend(sb, " (line ")
+        str.BufAppendInt(sb, e.line as i64)
+        str.BufAppend(sb, ", column ")
+        str.BufAppendInt(sb, e.col as i64)
+        str.BufAppendChar(sb, 41)
+    end
+    if PathLen(e) > 0:
+        str.BufAppend(sb, " at ")
+        str.BufAppend(sb, PathString(e))
+    end
+    ret str.BufStr(sb)
+end
+
+// One error as the spec's `{ message, locations, path, extensions }`
+// object. `extensions.code` is emitted only when a code was set, which
+// is the convention Apollo and graphql-js settled on for machine
+// -readable error classification.
+@en "ErrorToValue"
+@fa "خطا به مقدار"
+@ar "الخطأ إلى قیمة"
+pub func ErrorToValue(e: GqlError): value.Value:
+    mut o := value.NewValueObject()
+    value.ObjectSet(o, "message", value.ValueString(e.message))
+    if e.hasLocation:
+        value.ObjectSet(o, "locations", _locations_value(e))
+    end
+    if PathLen(e) > 0:
+        value.ObjectSet(o, "path", _path_value(e))
+    end
+    if e.code != "":
+        mut ext := value.NewValueObject()
+        value.ObjectSet(ext, "code", value.ValueString(e.code))
+        value.ObjectSet(o, "extensions", ext)
+    end
+    ret o
+end
+
+@en "ErrorsToValue"
+@fa "خطاها به مقدار"
+@ar "الأخطاء إلى قیمة"
+pub func ErrorsToValue(list: GqlErrorList): value.Value:
+    mut arr := value.NewValueArray()
+    mut i := 0
+    until i < list.items.len():
+        value.ArrayPush(arr, ErrorToValue(list.items.get(i)[0]))
+        i += 1
+    end
+    ret arr
+end
+
+// ---- cleanup ----
+
+@en "FreeError"
+@fa "آزادسازی خطا"
+@ar "تحریر الخطأ"
+pub func FreeError(e &: GqlError):
+    e.pathKeys.free()
+    e.pathIndex.free()
+end
+
+@en "FreeErrorList"
+@fa "آزادسازی فهرست خطا"
+@ar "تحریر قائمة الأخطاء"
+pub func FreeErrorList(list &: GqlErrorList):
+    mut i := 0
+    until i < list.items.len():
+        mut e := list.items.get(i)[0]
+        FreeError(e)
+        i += 1
+    end
+    list.items.free()
+end

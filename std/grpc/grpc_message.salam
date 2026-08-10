@@ -1,0 +1,142 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package grpc
+
+import compress
+
+// The gRPC message framing that rides inside HTTP/2 DATA frames:
+//
+//     +---------------+-------------------------------+----------...
+//     | compressed: 1 |   message length: 4, big-end   |  message
+//     +---------------+-------------------------------+----------...
+//
+// One DATA frame can hold several of these, and one message can span
+// several DATA frames - the framing is completely independent of the
+// HTTP/2 frame boundaries, which is exactly why it exists. Everything
+// here therefore works on a growing byte buffer plus a cursor, never on
+// "one frame".
+//
+// The compressed flag selects the algorithm named by the request's
+// `grpc-encoding` header. gzip is the one every implementation supports
+// and the only one handled here; std/compress provides it.
+
+// Ceiling on a single inbound message, mirroring the 4 MiB default every
+// mainstream gRPC implementation ships with. Without one, a hostile peer
+// can name a 4 GiB length and force the allocation.
+pub const GRPC_MAX_MESSAGE := 4194304
+
+@en "FrameMessage"
+@fa "قاب‌بندی پیام"
+@ar "تأطیر الرسالة"
+pub func FrameMessage(msg: compress.ByteBuf, compressed: bool): compress.ByteBuf:
+    n := compress.BufLen(msg)
+    mut out := compress.NewByteBufCap(n + 5)
+    mut flag := 0
+    if compressed: flag = 1 end
+    compress.BufPush(out, flag)
+    compress.BufPush(out, (n >> 24) & 255)
+    compress.BufPush(out, (n >> 16) & 255)
+    compress.BufPush(out, (n >> 8) & 255)
+    compress.BufPush(out, n & 255)
+    compress.BufPushBuf(out, msg)
+    ret out
+end
+
+// Frames a message, gzip-compressing it first when `use_gzip` is set and
+// compression actually helps. A message that grows under compression is
+// sent uncompressed with the flag clear, which is legal and is what the
+// reference implementations do.
+@en "FrameMessageGzip"
+@fa "قاب‌بندی فشرده"
+@ar "تأطیر مضغوط"
+pub func FrameMessageGzip(msg: compress.ByteBuf, use_gzip: bool): compress.ByteBuf:
+    if !use_gzip: ret FrameMessage(msg, false) end
+    mut z := compress.GzipCompressBuf(msg)
+    if compress.BufLen(z) >= compress.BufLen(msg):
+        compress.BufFree(z)
+        ret FrameMessage(msg, false)
+    end
+    out := FrameMessage(z, true)
+    compress.BufFree(z)
+    ret out
+end
+
+@en "FrameMessageStr"
+@fa "قاب‌بندی پیام متنی"
+@ar "تأطیر رسالة نصیة"
+pub func FrameMessageStr(msg: str): compress.ByteBuf:
+    mut b := compress.BufFromStr(msg)
+    out := FrameMessage(b, false)
+    compress.BufFree(b)
+    ret out
+end
+
+// True when a complete message starts at `pos` in `data`.
+@en "HasMessage"
+@fa "پیام کامل دارد"
+@ar "تملک رسالة کاملة"
+pub func HasMessage(data: compress.ByteBuf, pos: int): bool:
+    n := compress.BufLen(data)
+    if pos + 5 > n: ret false end
+    len := (compress.BufGet(data, pos + 1) << 24) | (compress.BufGet(data, pos + 2) << 16) | (compress.BufGet(data, pos + 3) << 8) | compress.BufGet(data, pos + 4)
+    if len < 0 || len > GRPC_MAX_MESSAGE: ret false end
+    ret pos + 5 + len <= n
+end
+
+// Reads the message at `pos`, advancing `pos` past it and decompressing
+// when the flag says so. `ok` is false when no complete message is there
+// yet (the caller should read more DATA), which is a normal condition
+// rather than an error.
+@en "NextMessage"
+@fa "پیام بعدی"
+@ar "الرسالة التالیة"
+pub func NextMessage(data: compress.ByteBuf, pos &: int, ok &: bool): compress.ByteBuf:
+    if !HasMessage(data, pos):
+        ok = false
+        ret compress.NewByteBuf()
+    end
+    flag := compress.BufGet(data, pos)
+    len := (compress.BufGet(data, pos + 1) << 24) | (compress.BufGet(data, pos + 2) << 16) | (compress.BufGet(data, pos + 3) << 8) | compress.BufGet(data, pos + 4)
+    mut raw := compress.NewByteBufCap(len + 1)
+    mut i := 0
+    until i < len:
+        compress.BufPush(raw, compress.BufGet(data, pos + 5 + i))
+        i += 1
+    end
+    pos += 5 + len
+    if flag == 0:
+        ok = true
+        ret raw
+    end
+    mut zok := false
+    plain := compress.GzipDecompressBuf(raw, zok)
+    compress.BufFree(raw)
+    ok = zok
+    ret plain
+end
+
+@en "MessageCount"
+@fa "تعداد پیام‌ها"
+@ar "عدد الرسائل"
+pub func MessageCount(data: compress.ByteBuf): int:
+    mut pos := 0
+    mut n := 0
+    until HasMessage(data, pos):
+        len := (compress.BufGet(data, pos + 1) << 24) | (compress.BufGet(data, pos + 2) << 16) | (compress.BufGet(data, pos + 3) << 8) | compress.BufGet(data, pos + 4)
+        pos += 5 + len
+        n += 1
+    end
+    ret n
+end

@@ -19,20 +19,19 @@ import str
 
 // error - the error shape GraphQL puts on the wire (spec section 7.1.2).
 //
-// A GraphQL response never reports a failure by status code or by an
-// exception: it carries an `errors` list of objects with a `message`,
-// optional source `locations`, and, for a field that failed during
-// execution, the `path` from the response root to that field. This file
-// owns that representation and its conversion to encoding.value, so the
-// parser, the validator and the executor all raise errors the same way
-// and one encoder serialises all three.
+// A GraphQL response never reports failure by status code or exception:
+// it carries an `errors` list of objects with a `message`, optional
+// source `locations`, and, for a field that failed during execution,
+// the `path` from the response root to that field. This file owns that
+// representation and its conversion to encoding.value, so the parser,
+// the validator and the executor all raise errors the same way and one
+// encoder serialises all three.
 //
-// `path` is a list of response keys and list indices. Since a path
-// element is either a string or an int, it is stored as two parallel
-// vectors: `pathKeys` holding the key (empty for an index) and
-// `pathIndex` holding the index (-1 for a key). Flattening it this way
-// avoids a Vector of a sum type, which this compiler has no clean way
-// to express.
+// `path` is a list whose elements are either response keys or list
+// indices. Since a Vector of a sum type has no clean expression in this
+// compiler, it is stored as two parallel vectors: `pathKeys` holds the
+// key (empty for an index) and `pathIndex` holds the index (-1 for a
+// key).
 
 pub const ERR_SYNTAX := 0
 pub const ERR_VALIDATION := 1
@@ -59,6 +58,74 @@ end
 pub struct GqlErrorList:
     pub items: Vector<GqlError> = Vector {}
 end
+
+// ---- private helpers ----
+
+func _path_value(e: GqlError): value.Value:
+    mut arr := value.NewValueArray()
+    mut i := 0
+    until i < e.pathKeys.len():
+        idx := e.pathIndex.get(i)[0]
+        if idx >= 0:
+            value.ArrayPush(arr, value.ValueInt(idx as i64))
+        else:
+            value.ArrayPush(arr, value.ValueString(e.pathKeys.get(i)[0]))
+        end
+        i += 1
+    end
+    ret arr
+end
+
+func _locations_value(e: GqlError): value.Value:
+    mut loc := value.NewValueObject()
+    value.ObjectSet(loc, "line", value.ValueInt(e.line as i64))
+    value.ObjectSet(loc, "column", value.ValueInt(e.col as i64))
+    mut arr := value.NewValueArray()
+    value.ArrayPush(arr, loc)
+    ret arr
+end
+
+func _gql_quote(s: str): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppendChar(sb, 34)
+    str.BufAppend(sb, s)
+    str.BufAppendChar(sb, 34)
+    ret str.BufStr(sb)
+end
+
+// Both parsers phrase their errors as "expected X, found Y", the
+// wording graphql-js uses, so a message is recognisable to anyone who
+// has seen a GraphQL syntax error before. A token is described by its
+// text when it has any and by its kind name otherwise.
+func _gql_describe_token(t: GqlToken): str:
+    if t.kind == TOK_EOF: ret "<EOF>" end
+    if t.kind == TOK_NAME: ret _gql_quote(t.lexeme) end
+    if t.kind == TOK_INT || t.kind == TOK_FLOAT: ret t.lexeme end
+    if IsStringToken(t.kind): ret "a string value" end
+    if t.kind == TOK_ERROR: ret t.sval end
+    ret _gql_quote(TokenKindName(t.kind))
+end
+
+func _gql_expected_msg(want: str, found: GqlToken): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppend(sb, "expected ")
+    str.BufAppend(sb, want)
+    str.BufAppend(sb, ", found ")
+    str.BufAppend(sb, _gql_describe_token(found))
+    ret str.BufStr(sb)
+end
+
+func _gql_unexpected_msg(found: GqlToken): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppend(sb, "unexpected ")
+    str.BufAppend(sb, _gql_describe_token(found))
+    ret str.BufStr(sb)
+end
+
+// ---- construction ----
 
 @en "NewError"
 @fa "خطای جدید"
@@ -87,7 +154,8 @@ pub func SyntaxError(message: str, line: int, col: int): GqlError:
     ret NewErrorAt(ERR_SYNTAX, message, line, col)
 end
 
-// Appends a response-key segment to an error's path.
+// ---- response paths ----
+
 @en "PathPushKey"
 @fa "افزودن کلید مسیر"
 @ar "إضافة مفتاح المسار"
@@ -96,7 +164,6 @@ pub func PathPushKey(e &: GqlError, key: str):
     e.pathIndex.push(0 - 1)
 end
 
-// Appends a list-index segment to an error's path.
 @en "PathPushIndex"
 @fa "افزودن نمایه مسیر"
 @ar "إضافة فهرس المسار"
@@ -132,6 +199,8 @@ pub func PathString(e: GqlError): str:
     ret str.BufStr(sb)
 end
 
+// ---- error lists ----
+
 @en "AddError"
 @fa "افزودن خطا"
 @ar "إضافة خطأ"
@@ -157,6 +226,8 @@ pub func ErrorAt(list: GqlErrorList, i: int): GqlError:
     ret list.items.get(i)[0]
 end
 
+// ---- rendering ----
+
 // A one-line rendering used by tests and by the CLI: the message, then
 // the source location when known, then the response path when set.
 @en "ErrorString"
@@ -178,30 +249,6 @@ pub func ErrorString(e: GqlError): str:
         str.BufAppend(sb, PathString(e))
     end
     ret str.BufStr(sb)
-end
-
-func _path_value(e: GqlError): value.Value:
-    mut arr := value.NewValueArray()
-    mut i := 0
-    until i < e.pathKeys.len():
-        idx := e.pathIndex.get(i)[0]
-        if idx >= 0:
-            value.ArrayPush(arr, value.ValueInt(idx as i64))
-        else:
-            value.ArrayPush(arr, value.ValueString(e.pathKeys.get(i)[0]))
-        end
-        i += 1
-    end
-    ret arr
-end
-
-func _locations_value(e: GqlError): value.Value:
-    mut loc := value.NewValueObject()
-    value.ObjectSet(loc, "line", value.ValueInt(e.line as i64))
-    value.ObjectSet(loc, "column", value.ValueInt(e.col as i64))
-    mut arr := value.NewValueArray()
-    value.ArrayPush(arr, loc)
-    ret arr
 end
 
 // One error as the spec's `{ message, locations, path, extensions }`
@@ -241,6 +288,8 @@ pub func ErrorsToValue(list: GqlErrorList): value.Value:
     ret arr
 end
 
+// ---- cleanup ----
+
 @en "FreeError"
 @fa "آزادسازی خطا"
 @ar "تحریر الخطأ"
@@ -260,47 +309,4 @@ pub func FreeErrorList(list &: GqlErrorList):
         i += 1
     end
     list.items.free()
-end
-
-// ---- parser diagnostics ----
-//
-// Both parsers phrase their errors as "expected X, found Y", the wording
-// graphql-js uses, so messages are recognisable to anyone who has seen a
-// GraphQL syntax error before. A token is described by its text when it
-// has any and by its kind name otherwise.
-
-func _gql_quote(s: str): str:
-    mut sb := str.NewBuilder()
-    defer str.BufFree(sb)
-    str.BufAppendChar(sb, 34)
-    str.BufAppend(sb, s)
-    str.BufAppendChar(sb, 34)
-    ret str.BufStr(sb)
-end
-
-func _gql_describe_token(t: GqlToken): str:
-    if t.kind == TOK_EOF: ret "<EOF>" end
-    if t.kind == TOK_NAME: ret _gql_quote(t.lexeme) end
-    if t.kind == TOK_INT || t.kind == TOK_FLOAT: ret t.lexeme end
-    if IsStringToken(t.kind): ret "a string value" end
-    if t.kind == TOK_ERROR: ret t.sval end
-    ret _gql_quote(TokenKindName(t.kind))
-end
-
-func _gql_expected_msg(want: str, found: GqlToken): str:
-    mut sb := str.NewBuilder()
-    defer str.BufFree(sb)
-    str.BufAppend(sb, "expected ")
-    str.BufAppend(sb, want)
-    str.BufAppend(sb, ", found ")
-    str.BufAppend(sb, _gql_describe_token(found))
-    ret str.BufStr(sb)
-end
-
-func _gql_unexpected_msg(found: GqlToken): str:
-    mut sb := str.NewBuilder()
-    defer str.BufFree(sb)
-    str.BufAppend(sb, "unexpected ")
-    str.BufAppend(sb, _gql_describe_token(found))
-    ret str.BufStr(sb)
 end

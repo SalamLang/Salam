@@ -372,6 +372,18 @@ static void hdr_prelude(cg_t *cg, ast_node_t *program, sb_t *h)
         "    if (n >= SALAM_OB_SZ) { int64_t r = (int64_t)SALAM_RAW_WRITE(1, s, n); "
         "(void)r; return; }\n"
         "    __builtin_memcpy(salam_ob + salam_obn, s, (size_t)n); salam_obn += n;\n"
+        /*
+         * Line-buffered, not fully buffered. The buffer is only flushed on
+         * overflow and by the exit destructor, so a program that prints and
+         * then blocks - every server in std/net and every example that waits
+         * on accept() - produced nothing at all until it exited, and nothing
+         * ever if it was killed. tcc takes the #else branch below and writes
+         * through, which is why this only ever showed up on gcc/clang. One
+         * flush per line still beats that branch's one write per *segment*,
+         * and a line being built from many print calls stays buffered until
+         * its newline arrives, which is exactly what line buffering means.
+         */
+        "    if (__builtin_memchr(s, '\\n', (size_t)n)) salam_out_flush();\n"
         "}\n"
         "#else\n"
         "static void salam_out_flush(void) { fflush(0); }\n"

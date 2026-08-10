@@ -48,8 +48,7 @@ import net.internal.rawsock
 
 mut _methods := MethodTable {}
 mut _calls := CallTable {}
-mut _conn := http2.NewConn(http2.PlainTransport(0 - 1), true)
-mut _conn_live := false
+mut _conn := http2.Conn {}
 
 @en "Server"
 @fa "سرور جی آر پی سی"
@@ -61,6 +60,101 @@ pub struct Server:
     pub served: int = 0
 end
 
+func _find_method(path: str): int:
+    mut i := 0
+    until i < _methods.items.len():
+        if _methods.items.get(i)[0].path == path: ret i end
+        i += 1
+    end
+    ret 0 - 1
+end
+
+func _alloc_call(): int:
+    mut i := 0
+    until i < _calls.items.len():
+        if !_calls.items.get(i)[0].busy:
+            mut c := CallCtx {}
+            c.busy = true
+            c.recv = compress.NewByteBuf()
+            _calls.items.set(i, c)
+            ret i
+        end
+        i += 1
+    end
+    mut c := CallCtx {}
+    c.busy = true
+    c.recv = compress.NewByteBuf()
+    _calls.items.push(c)
+    ret _calls.items.len() - 1
+end
+
+func _call_at(slot: i64): CallCtx:
+    i := slot as int
+    if i < 0 || i >= _calls.items.len(): ret CallCtx {} end
+    ret _calls.items.get(i)[0]
+end
+
+func _call_store(slot: i64, c: CallCtx):
+    i := slot as int
+    if i < 0 || i >= _calls.items.len(): ret end
+    _calls.items.set(i, c)
+end
+
+func _release_call(slot: int):
+    if slot < 0 || slot >= _calls.items.len(): ret end
+    c := _calls.items.get(slot)[0]
+    compress.BufFree(c.recv)
+    _calls.items.set(slot, CallCtx {})
+end
+
+// Copies everything the connection has accumulated for this stream into
+// the call's own buffer, so a handler reading messages never has to know
+// about frames.
+func _sync_recv(slot: i64):
+    mut c := _call_at(slot)
+    s := http2.StreamAt(_conn, c.stream_id)
+    have := compress.BufLen(c.recv)
+    total := compress.BufLen(s.data)
+    if total > have:
+        mut i := have
+        until i < total:
+            compress.BufPush(c.recv, compress.BufGet(s.data, i))
+            i += 1
+        end
+    end
+    if s.end_stream: c.client_done = true end
+    _call_store(slot, c)
+end
+
+func _send_response_headers(slot: i64):
+    mut c := _call_at(slot)
+    if c.sent_headers: ret end
+    mut hl := http2.HeaderList {}
+    http2.HeadersAdd(hl, ":status", "200")
+    http2.HeadersAdd(hl, "content-type", GRPC_CONTENT_TYPE_PROTO)
+    http2.HeadersAdd(hl, "grpc-accept-encoding", "identity,gzip")
+    http2.SendHeaders(_conn, c.stream_id, hl, false)
+    c.sent_headers = true
+    _call_store(slot, c)
+end
+
+// Closes the stream with the trailing header block carrying grpc-status.
+// When nothing at all has been sent yet this collapses into the
+// "trailers-only" reply the spec defines for immediate failures.
+func _send_trailers(slot: i64):
+    c := _call_at(slot)
+    mut hl := http2.HeaderList {}
+    if !c.sent_headers:
+        http2.HeadersAdd(hl, ":status", "200")
+        http2.HeadersAdd(hl, "content-type", GRPC_CONTENT_TYPE_PROTO)
+    end
+    http2.HeadersAdd(hl, "grpc-status", FormatStatusCode(c.status.code))
+    if c.status.message != "":
+        http2.HeadersAdd(hl, "grpc-message", EncodeStatusMessage(c.status.message))
+    end
+    http2.SendTrailers(_conn, c.stream_id, hl)
+end
+
 @en "NewServer"
 @fa "سرور جدید"
 @ar "خادم جدید"
@@ -68,4 +162,273 @@ pub func NewServer(port: int): Server:
     mut s := Server {}
     s.port = port
     ret s
+end
+
+// Registers a unary method. `path` is the full "/Package.Service/Method"
+// a client will ask for.
+@en "RegisterMethod"
+@fa "ثبت متد"
+@ar "تسجیل طریقة"
+pub func RegisterMethod(path: str, fn: i64):
+    idx := _find_method(path)
+    mut m := MethodDesc {}
+    m.path = path
+    m.fn = fn
+    if idx >= 0:
+        _methods.items.set(idx, m)
+        ret
+    end
+    _methods.items.push(m)
+end
+
+// Registers a streaming method. The flags are advisory - the handler API
+// is identical either way - but they are what a generated stub records
+// and what reflection would report.
+@en "RegisterStreamMethod"
+@fa "ثبت متد جریانی"
+@ar "تسجیل طریقة تدفقیة"
+pub func RegisterStreamMethod(path: str, fn: i64, client_stream: bool, server_stream: bool):
+    RegisterMethod(path, fn)
+    idx := _find_method(path)
+    if idx < 0: ret end
+    mut m := _methods.items.get(idx)[0]
+    m.client_stream = client_stream
+    m.server_stream = server_stream
+    _methods.items.set(idx, m)
+end
+
+@en "MethodCount"
+@fa "تعداد متدها"
+@ar "عدد الطرق"
+pub func MethodCount(): int:
+    ret _methods.items.len()
+end
+
+@en "HasMethod"
+@fa "متد دارد"
+@ar "تملک طریقة"
+pub func HasMethod(path: str): bool:
+    ret _find_method(path) >= 0
+end
+
+@en "ResetMethods"
+@fa "بازنشانی متدها"
+@ar "إعادة تعیین الطرق"
+pub func ResetMethods():
+    _methods = MethodTable {}
+end
+
+// ---- the handler-facing call API ---------------------------------------
+
+@en "CallPath"
+@fa "مسیر فراخوانی"
+@ar "مسار الاستدعاء"
+pub func CallPath(slot: i64): str:
+    ret _call_at(slot).method
+end
+
+@en "CallMetadata"
+@fa "فراداده فراخوانی"
+@ar "بیانات الاستدعاء"
+pub func CallMetadata(slot: i64): Metadata:
+    ret MDFromHeaders(_call_at(slot).headers)
+end
+
+// Reads the next request message, pumping the connection until one
+// arrives. `ok` false means the client has half-closed and there are no
+// more - the normal end of a client-streaming call.
+@en "Recv"
+@fa "دریافت"
+@ar "استقبال"
+pub func Recv(slot: i64, ok &: bool): compress.ByteBuf:
+    mut guard := 0
+    until guard < GRPC_MAX_FRAMES:
+        _sync_recv(slot)
+        mut c := _call_at(slot)
+        if HasMessage(c.recv, c.recv_pos):
+            mut pos := c.recv_pos
+            mut mok := false
+            msg := NextMessage(c.recv, pos, mok)
+            c.recv_pos = pos
+            _call_store(slot, c)
+            ok = mok
+            ret msg
+        end
+        if c.client_done:
+            ok = false
+            ret compress.NewByteBuf()
+        end
+        if http2.Poll(_conn) == http2.H2_POLL_ERROR:
+            c.failed = true
+            _call_store(slot, c)
+            ok = false
+            ret compress.NewByteBuf()
+        end
+        guard += 1
+    end
+    ok = false
+    ret compress.NewByteBuf()
+end
+
+@en "RecvStr"
+@fa "دریافت متن"
+@ar "استقبال نص"
+pub func RecvStr(slot: i64, ok &: bool): str:
+    mut b := Recv(slot, ok)
+    out := compress.BufToStrUnsafe(b)
+    compress.BufFree(b)
+    ret out
+end
+
+// Sends one response message. Response headers go out automatically on
+// the first Send, which is what makes a later SetStatus land in trailers
+// rather than in the head.
+@en "Send"
+@fa "ارسال"
+@ar "إرسال"
+pub func Send(slot: i64, msg: compress.ByteBuf): bool:
+    _send_response_headers(slot)
+    c := _call_at(slot)
+    mut framed := FrameMessage(msg, false)
+    ok := http2.SendData(_conn, c.stream_id, framed, false)
+    compress.BufFree(framed)
+    ret ok
+end
+
+@en "SendStr"
+@fa "ارسال متن"
+@ar "إرسال نص"
+pub func SendStr(slot: i64, msg: str): bool:
+    mut b := compress.BufFromStr(msg)
+    ok := Send(slot, b)
+    compress.BufFree(b)
+    ret ok
+end
+
+@en "SetStatus"
+@fa "تنظیم وضعیت"
+@ar "تعیین الحالة"
+pub func SetStatus(slot: i64, code: int, message: str):
+    mut c := _call_at(slot)
+    c.status = NewStatus(code, message)
+    _call_store(slot, c)
+end
+
+@en "Fail"
+@fa "شکست"
+@ar "فشل"
+pub func Fail(slot: i64, code: int, message: str):
+    SetStatus(slot, code, message)
+end
+
+// ---- serving -----------------------------------------------------------
+
+@en "Listen"
+@fa "گوش دادن"
+@ar "استماع"
+pub func Listen(s &: Server): bool:
+    sock := rawsock.Listen(s.port)
+    if !rawsock.Ok(sock): ret false end
+    s.listen_fd = sock.fd
+    s.port = rawsock.LocalPort(sock)
+    s.running = true
+    ret true
+end
+
+@en "Port"
+@fa "درگاه"
+@ar "منفذ"
+pub func Port(s: Server): int:
+    ret s.port
+end
+
+// Runs one already-accepted connection: HTTP/2 handshake, then dispatch
+// every stream whose headers complete, until the peer goes away.
+// Returns how many calls it handled.
+@en "ServeConn"
+@fa "خدمت به اتصال"
+@ar "خدمة الاتصال"
+pub func ServeConn(fd: i64): int:
+    _conn = http2.NewConn(http2.PlainTransport(fd), true)
+    if !http2.ServerHandshake(_conn):
+        http2.CloseConn(_conn)
+        ret 0
+    end
+    mut handled := 0
+    mut guard := 0
+    until guard < GRPC_MAX_FRAMES:
+        sid := http2.AwaitAnyHeaders(_conn, GRPC_MAX_FRAMES)
+        if sid == http2.H2_POLL_ERROR: break end
+        st := http2.StreamAt(_conn, sid)
+        path := http2.HeadersGet(st.headers, ":path")
+        slot := _alloc_call()
+        mut c := _calls.items.get(slot)[0]
+        c.stream_id = sid
+        c.method = path
+        c.headers = st.headers
+        _calls.items.set(slot, c)
+        idx := _find_method(path)
+        if idx < 0:
+            SetStatus(slot as i64, GRPC_UNIMPLEMENTED, "unknown method " + path)
+        else:
+            fn := _methods.items.get(idx)[0].fn
+            callhandler(fn, slot as i64)
+        end
+        _send_trailers(slot as i64)
+        _release_call(slot)
+        handled += 1
+        // One stream is complete; a client that closed the connection
+        // will make the next AwaitAnyHeaders fail and end the loop.
+        if _conn.goaway: break end
+        guard += 1
+    end
+    http2.CloseConn(_conn)
+    ret handled
+end
+
+// Accepts and fully serves exactly `n` connections. This is what a test
+// drives: bind to port 0, hand the real port to a client, serve one
+// connection, return.
+@en "ServeCount"
+@fa "خدمت به تعداد"
+@ar "خدمة بعدد"
+pub func ServeCount(s &: Server, n: int): int:
+    if !s.running:
+        if !Listen(s): ret 0 end
+    end
+    mut i := 0
+    until i < n:
+        c := rawsock.Accept(rawsock.FromFd(s.listen_fd))
+        if !rawsock.Ok(c): break end
+        ServeConn(c.fd)
+        s.served += 1
+        i += 1
+    end
+    ret s.served
+end
+
+@en "Serve"
+@fa "خدمت"
+@ar "خدمة"
+pub func Serve(s &: Server):
+    if !s.running:
+        if !Listen(s): ret end
+    end
+    until s.running:
+        c := rawsock.Accept(rawsock.FromFd(s.listen_fd))
+        if !rawsock.Ok(c): continue end
+        ServeConn(c.fd)
+        s.served += 1
+    end
+end
+
+@en "StopServer"
+@fa "توقف سرور"
+@ar "إیقاف الخادم"
+pub func StopServer(s &: Server):
+    s.running = false
+    if s.listen_fd >= 0:
+        rawsock.Close(rawsock.FromFd(s.listen_fd))
+        s.listen_fd = 0 - 1
+    end
 end

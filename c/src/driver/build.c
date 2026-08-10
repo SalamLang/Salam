@@ -843,8 +843,13 @@ int driver_build(options_t *opt)
         if (lrc != SALAM_RC_LLVM_UNSUPPORTED && lrc != SALAM_RC_LLVM_LINK_FAILED)
             return lrc;
         if (!strcmp(opt->backend, "llvm")) return lrc;
-        fprintf(stderr, i18n_tr("salam: falling back to the C backend for this file "
-                                "(build with --backend=llvm to make this an error)\n"));
+        /* fputs, not fprintf: i18n_tr() returns a translated string, and a
+         * translation carrying a '%' would be read as a format directive
+         * with no argument behind it (clang -Wformat-security). The selfhost
+         * driver prints this with EPrintln for the same reason. */
+        fputs(i18n_tr("salam: falling back to the C backend for this file "
+                      "(build with --backend=llvm to make this an error)\n"),
+              stderr);
     }
 
     logger_t *log = logger_new(stderr, opt->log_level, resolve_color(opt->color));

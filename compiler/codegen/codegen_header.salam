@@ -337,7 +337,7 @@ func hdr_prelude(g &: Cg, a &: at.Ast, program: int):
         g, "#include <stdint.h>\n#include <stdbool.h>\n#include <math.h>" + "\n#include <stddef.h>\n"
     )
     outh(
-        g, "#ifndef SALAM_OUT_DEFINED\n#define SALAM_OUT_DEFINED\n" + "#define SALAM_OB_SZ 65536\n" + "extern int fflush(void *);\n" + "extern int snprintf(char *buf, uint64_t size, const char " + "*fmt, ...);\n" + "#if defined(_WIN32)\n" + "extern int _write(int, void *, unsigned);\n" + "#define SALAM_RAW_WRITE(fd, buf, n) _write((fd), (void " + "*)(buf), (unsigned)(n))\n" + "#else\n" + "extern int64_t write(int32_t, void *, uint64_t);\n" + "#define SALAM_RAW_WRITE(fd, buf, n) write((fd), (void " + "*)(buf), (uint64_t)(n))\n" + "#endif\n" + "#if (defined(__GNUC__) || defined(__clang__)) && " + "!defined(__TINYC__)\n" + "__attribute__((weak)) char salam_ob[SALAM_OB_SZ];\n" + "__attribute__((weak)) uint64_t salam_obn;\n" + "__attribute__((weak)) void salam_out_flush(void) {\n" + "    if (salam_obn) { int64_t r = " + "(int64_t)SALAM_RAW_WRITE(1, salam_ob, salam_obn); (void)r; " + "salam_obn = 0; }\n" + "}\n" + "__attribute__((weak, destructor)) void salam_out_fini(void) " + "{ salam_out_flush(); }\n" + "static inline void salam_out_write_(const void *s, uint64_t " + "n) {\n" + "    if (salam_obn + n > SALAM_OB_SZ) salam_out_flush();\n" + "    if (n >= SALAM_OB_SZ) { int64_t r = " + "(int64_t)SALAM_RAW_WRITE(1, s, n); (void)r; return; }\n" + "    __builtin_memcpy(salam_ob + salam_obn, s, (size_t)n); " + "salam_obn += n;\n" + "}\n" + "#else\n" + "static void salam_out_flush(void) { fflush(0); }\n" + "static void salam_out_write_(const void *s, uint64_t n) {\n" + "    int64_t r = (int64_t)SALAM_RAW_WRITE(1, s, n); (void)r;\n" + "}\n" + "#endif\n" + "#define SALAM_OUT_LIT(s, n) salam_out_write_((s), " + "(uint64_t)(n))\n" + "#endif\n"
+        g, "#ifndef SALAM_OUT_DEFINED\n#define SALAM_OUT_DEFINED\n" + "#define SALAM_OB_SZ 65536\n" + "extern int fflush(void *);\n" + "extern int snprintf(char *buf, uint64_t size, const char " + "*fmt, ...);\n" + "#if defined(_WIN32)\n" + "extern int _write(int, void *, unsigned);\n" + "#define SALAM_RAW_WRITE(fd, buf, n) _write((fd), (void " + "*)(buf), (unsigned)(n))\n" + "#else\n" + "extern int64_t write(int32_t, void *, uint64_t);\n" + "#define SALAM_RAW_WRITE(fd, buf, n) write((fd), (void " + "*)(buf), (uint64_t)(n))\n" + "#endif\n" + "#if (defined(__GNUC__) || defined(__clang__)) && " + "!defined(__TINYC__)\n" + "__attribute__((weak)) char salam_ob[SALAM_OB_SZ];\n" + "__attribute__((weak)) uint64_t salam_obn;\n" + "__attribute__((weak)) void salam_out_flush(void) {\n" + "    if (salam_obn) { int64_t r = " + "(int64_t)SALAM_RAW_WRITE(1, salam_ob, salam_obn); (void)r; " + "salam_obn = 0; }\n" + "}\n" + "__attribute__((weak, destructor)) void salam_out_fini(void) " + "{ salam_out_flush(); }\n" + "static inline void salam_out_write_(const void *s, uint64_t " + "n) {\n" + "    if (salam_obn + n > SALAM_OB_SZ) salam_out_flush();\n" + "    if (n >= SALAM_OB_SZ) { int64_t r = " + "(int64_t)SALAM_RAW_WRITE(1, s, n); (void)r; return; }\n" + "    __builtin_memcpy(salam_ob + salam_obn, s, (size_t)n); " + "salam_obn += n;\n" + "    if (__builtin_memchr(s, '\\n', (size_t)n)) salam_out_flush();\n" + "}\n" + "#else\n" + "static void salam_out_flush(void) { fflush(0); }\n" + "static void salam_out_write_(const void *s, uint64_t n) {\n" + "    int64_t r = (int64_t)SALAM_RAW_WRITE(1, s, n); (void)r;\n" + "}\n" + "#endif\n" + "#define SALAM_OUT_LIT(s, n) salam_out_write_((s), " + "(uint64_t)(n))\n" + "#endif\n"
     )
     // See cg_needs_fparg in codegen_call.salam: tcc 0.9.27 (x86-64)
     // overwrites a computed floating-point argument with the value of the
@@ -360,14 +360,27 @@ func hdr_prelude(g &: Cg, a &: at.Ast, program: int):
     // salam's own type spellings. tcc does strict typedef-identity
     // comparison, so on _WIN32 in GUI mode - where <windows.h> above
     // transitively pulls in the *real* prototypes - those collide with the
-    // hand-rolled ones just below and in hdr_externs. Claiming both guards
+    // hand-rolled ones just below and in hdr_externs. Claiming these guards
     // here, before either block, suppresses this module's own copies so
     // only the <windows.h> versions apply. See is_wellknown_libc_name.
+    //
+    // Two tiers, because the two supported Windows compilers do not agree on
+    // what <windows.h> drags in. Both declare the kernel32/user32 set, so
+    // SALAM_EXTERN_LIBC_ON_WIN32 is unconditional. Only gcc/clang also reach
+    // <stdlib.h> and winsock from it (winnt.h -> x86intrin.h -> mm_malloc.h ->
+    // stdlib.h, plus winsock.h), which is where getenv, socket, send, recv, ...
+    // come from - tcc's headers never do, so suppressing those names for tcc
+    // would leave them with no declaration at all.
+    // SALAM_EXTERN_WIDE_LIBC_ON_WIN32 is therefore claimed only when the
+    // compiler is not tcc.
     if g.is_gui_mode:
-        outh(g, "#ifdef _WIN32\n#define SALAM_RT_STR_DEFINED\n#define SALAM_EXTERN_LIBC_ON_WIN32\n#endif\n")
+        outh(g, "#ifdef _WIN32\n#define SALAM_RT_STR_DEFINED\n" + "#define SALAM_EXTERN_LIBC_ON_WIN32\n" + "#if !defined(__TINYC__)\n" + "#define SALAM_EXTERN_WIDE_LIBC_ON_WIN32\n" + "#endif\n#endif\n")
     end
     outh(
-        g, "#ifndef SALAM_RT_STR_DEFINED\n#define SALAM_RT_STR_DEFINED\n" + "extern uint64_t strlen(const char* s);\n" + "extern int32_t strcmp(const char* a, const char* b);\n" + "extern const char* strstr(const char* haystack, const char* " + "needle);\n" + "extern int64_t strtol(const char* s, void* endptr, int32_t " + "base);\n" + "extern double strtod(const char* s, void* endptr);\n" + "extern const char* salam_strcat(const char* a, const char* " + "b);\n" + "extern const char* salam_char_from_code(int32_t c);\n" + "extern const char* salam_str_substr(const char* s, int32_t " + "start, int32_t n);\n" + "extern const char* salam_str_trim(const char* s);\n" + "extern void* salam_str_split(const char* s, const char* " + "delim, void* out_count);\n" + "extern const char* salam_str_repeat(const char* s, int32_t " + "n);\n" + "extern const char* salam_str_upper(const char* s);\n" + "extern const char* salam_str_lower(const char* s);\n" + "#endif\n"
+        g, "#ifndef SALAM_RT_STR_DEFINED\n#define SALAM_RT_STR_DEFINED\n" + "extern uint64_t strlen(const char* s);\n" + "extern int32_t strcmp(const char* a, const char* b);\n" + "extern const char* strstr(const char* haystack, const char* " + "needle);\n" + "extern int64_t strtol(const char* s, void* endptr, int32_t " + "base);\n" + "extern double strtod(const char* s, void* endptr);\n" + "#endif\n"
+    )
+    outh(
+        g, "#ifndef SALAM_RT_STR2_DEFINED\n#define SALAM_RT_STR2_DEFINED\n" + "extern const char* salam_strcat(const char* a, const char* " + "b);\n" + "extern const char* salam_char_from_code(int32_t c);\n" + "extern const char* salam_str_substr(const char* s, int32_t " + "start, int32_t n);\n" + "extern const char* salam_str_trim(const char* s);\n" + "extern void* salam_str_split(const char* s, const char* " + "delim, void* out_count);\n" + "extern const char* salam_str_repeat(const char* s, int32_t " + "n);\n" + "extern const char* salam_str_upper(const char* s);\n" + "extern const char* salam_str_lower(const char* s);\n" + "#endif\n"
     )
     if !str.Equals(g.module, "core"):
         outh(g, `#include "` + CG_MOD_PREFIX + "core.h\"\n")
@@ -683,7 +696,15 @@ func is_wellknown_libc_name(name: str): bool:
         // even though nothing GUI calls it.
         "QueryPerformanceCounter", "QueryPerformanceFrequency",
         "GetCurrentProcess", "GetProcessTimes",
-    ] as str[63]
+        // Both compilers' <windows.h> declares these; std/os/process'
+        // CreateFileA/WriteFile are the ones a GUI build actually reaches
+        // (Run/RunCapture redirect through them), and the GDI/user32 set
+        // belongs to the drawing and window-property helpers. GetProp, SetProp
+        // and LoadImage are macros over their ...A/...W variants there, so the
+        // guard is the only way the two can agree.
+        "CreateFileA", "WriteFile", "Arc", "BeginPath", "FillRect", "LineTo",
+        "RoundRect", "LoadImage", "GetProp", "SetProp",
+    ] as str[73]
     // names.len(), never a literal: a hand-written bound silently stops
     // guarding the tail entries the next time a name is appended.
     repeat names.len() with i:
@@ -721,6 +742,32 @@ func is_libm_name(name: str): bool:
     ret false
 end
 
+// The gcc/clang-only half of the collision set: names that only *their*
+// <windows.h> reaches, via <stdlib.h> and winsock. Guarded by
+// SALAM_EXTERN_WIDE_LIBC_ON_WIN32, which tcc never defines, so tcc keeps
+// emitting its own declarations exactly as before. Derived by probing every
+// `extern:` name in std/ and compiler/ against the real GUI-mode header set
+// with both compilers and taking the difference, not by hand.
+func is_wide_libc_name(name: str): bool:
+    names := [
+        // <stdlib.h>, reached from windows.h only on gcc/clang
+        "abort", "exit", "getenv", "system", "_putenv_s",
+        // winsock.h, which windows.h includes unless WIN32_LEAN_AND_MEAN
+        "socket", "bind", "listen", "accept", "connect", "shutdown",
+        "closesocket", "ioctlsocket", "send", "recv", "sendto", "recvfrom",
+        "setsockopt", "getsockname", "gethostbyname", "inet_ntoa", "htons",
+        "ntohs", "WSAStartup",
+        // wincrypt.h, same story - std/tls' native root-store reader
+        "CertOpenSystemStoreA", "CertEnumCertificatesInStore", "CertCloseStore",
+    ] as str[27]
+    repeat names.len() with i:
+        if str.Equals(names[i], name):
+            ret true
+        end
+    end
+    ret false
+end
+
 func hdr_externs(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
     prog := at.Get(a, program)
     repeat prog.list.len() with i:
@@ -733,12 +780,17 @@ func hdr_externs(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
             fsym := sm.LookupLocal(s, s.global, d.name)
             sig := sig_of_decl(s, fsym, did)
             if sig != 0 && !is_libm_name(d.name):
-                risky := is_wellknown_libc_name(d.name)
-                if risky:
-                    outh(g, "#ifndef SALAM_EXTERN_LIBC_ON_WIN32\n")
+                mut guard := ""
+                if is_wellknown_libc_name(d.name):
+                    guard = "SALAM_EXTERN_LIBC_ON_WIN32"
+                else is_wide_libc_name(d.name):
+                    guard = "SALAM_EXTERN_WIDE_LIBC_ON_WIN32"
+                end
+                if str.Len(guard) > 0:
+                    outh(g, "#ifndef " + guard + "\n")
                 end
                 outh(g, cg_extern_proto(s, a, did, sig) + ";\n")
-                if risky:
+                if str.Len(guard) > 0:
                     outh(g, "#endif\n")
                 end
             end
@@ -819,6 +871,42 @@ func hdr_prototypes(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
     end
 end
 
+// Prototypes for `impl Trait for T` methods, which codegen_core also
+// forward-declares at the top of the .c. They are needed in the *header*
+// as well: a generic function is instantiated as a `static inline` body
+// appended to this header, and such a body calls the trait impls of
+// whatever type it was instantiated with. Those calls sat above the .c's
+// declarations, so the only thing that made them compile was C89 implicit
+// declaration - tcc still allows it, gcc 16 made it an error, and the
+// returned `const char*` came back as `int` on any compiler that took it.
+func hdr_impl_prototypes(g &: Cg, s &: sm.Sema, a &: at.Ast):
+    gsc := sm.ScopeAt(s, s.global)
+    repeat gsc.symbols.len() with i:
+        oid := gsc.symbols.get(i)[0]
+        owner := sm.SymAt(s, oid)
+        if owner.kind != sm.SYM_TYPEIMPL || owner.members == 0:
+            continue
+        end
+        msc := sm.ScopeAt(s, owner.members)
+        repeat msc.symbols.len() with j:
+            m := sm.SymAt(s, msc.symbols.get(j)[0])
+            if m.kind != sm.SYM_METHOD:
+                continue
+            end
+            repeat m.overloads.len() with k:
+                sig := m.overloads.get(k)[0]
+                if sig != 0 && sm.SigAt(s, sig).decl != 0:
+                    outh(
+                        g, func_signature(
+                            g, s, a, sm.SigAt(s, sig).decl, oid, sig, false
+                        ) + ";\n"
+                    )
+                end
+            end
+        end
+    end
+end
+
 func cg_header_impl(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
     hdr_prelude(g, a, program)
     hdr_enums(g, a, program)
@@ -846,4 +934,5 @@ func cg_header_impl(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
     hdr_externs(g, s, a, program)
     hdr_globals(g, a, program)
     hdr_prototypes(g, s, a, program)
+    hdr_impl_prototypes(g, s, a)
 end

@@ -1,0 +1,394 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/net/http2: HPACK (RFC 7541) and the frame layer (RFC 7540).
+//
+// The Huffman and header-block checks are the RFC's own published test
+// vectors, byte for byte - the only way to know an implementation of a
+// compression format is right rather than merely self-consistent.
+
+import net.http2
+import compress
+import conv
+import testing
+import os
+
+func hex of(b: compress.ByteBuf): str:
+    mut out := ""
+    mut i := 0
+    until i < compress.BufLen(b):
+        v := compress.BufGet(b, i)
+        if v < 16: out = out + "0" end
+        out = out + conv.FormatHex(v as u64).lower()
+        i += 1
+    end
+    ret out
+end
+
+func buf of hex(text: str): compress.ByteBuf:
+    mut out := compress.NewByteBuf()
+    mut i := 0
+    until i + 1 < text.len():
+        hi := _nib(text.substr(i, 1))
+        lo := _nib(text.substr(i + 1, 1))
+        compress.BufPush(out, hi * 16 + lo)
+        i += 2
+    end
+    ret out
+end
+
+func _nib(c: str): int:
+    if c == "0": ret 0 end
+    if c == "1": ret 1 end
+    if c == "2": ret 2 end
+    if c == "3": ret 3 end
+    if c == "4": ret 4 end
+    if c == "5": ret 5 end
+    if c == "6": ret 6 end
+    if c == "7": ret 7 end
+    if c == "8": ret 8 end
+    if c == "9": ret 9 end
+    if c == "a": ret 10 end
+    if c == "b": ret 11 end
+    if c == "c": ret 12 end
+    if c == "d": ret 13 end
+    if c == "e": ret 14 end
+    ret 15
+end
+
+// ---- RFC 7541 Appendix C.4: Huffman-coded strings -----------------------
+
+func check huffman():
+    mut a := http2.HuffmanEncodeStr("www.example.com")
+    testing.AssertEqStr(hex of(a), "f1e3c2e5f23a6ba0ab90f4ff")
+    mut b := http2.HuffmanEncodeStr("no-cache")
+    testing.AssertEqStr(hex of(b), "a8eb10649cbf")
+    mut c := http2.HuffmanEncodeStr("custom-key")
+    testing.AssertEqStr(hex of(c), "25a849e95ba97d7f")
+    mut d := http2.HuffmanEncodeStr("custom-value")
+    testing.AssertEqStr(hex of(d), "25a849e95bb8e8b4bf")
+    // From C.6.1: a full HTTP date, which exercises digits, punctuation
+    // and upper-case letters in one string.
+    mut e := http2.HuffmanEncodeStr("Mon, 21 Oct 2013 20:13:21 GMT")
+    testing.AssertEqStr(hex of(e), "d07abe941054d444a8200595040b8166e082a62d1bff")
+
+    mut ok := false
+    mut back := http2.HuffmanDecodeBuf(a, ok)
+    testing.AssertTrue(ok)
+    testing.AssertEqStr(compress.BufToStrUnsafe(back), "www.example.com")
+    compress.BufFree(back)
+
+    // Every byte value must survive a round trip, including the ones
+    // whose codes are 28 to 30 bits long.
+    mut all := compress.NewByteBuf()
+    mut i := 1
+    until i < 256:
+        compress.BufPush(all, i)
+        i += 1
+    end
+    mut enc := compress.NewByteBuf()
+    http2.HuffmanEncode(enc, all.data, compress.BufLen(all))
+    mut rok := false
+    mut dec := http2.HuffmanDecodeBuf(enc, rok)
+    testing.AssertTrue(rok)
+    testing.AssertTrue(compress.BufEquals(dec, all))
+
+    // Padding longer than 7 bits is a compression error, not something
+    // to tolerate: an all-ones octet appended to a valid encoding must
+    // be rejected.
+    compress.BufPush(enc, 255)
+    mut bad := false
+    mut junk := http2.HuffmanDecode(enc, 0, compress.BufLen(enc), bad)
+    testing.AssertFalse(bad)
+
+    compress.BufFree(junk)
+    compress.BufFree(dec)
+    compress.BufFree(enc)
+    compress.BufFree(all)
+    compress.BufFree(a)
+    compress.BufFree(b)
+    compress.BufFree(c)
+    compress.BufFree(d)
+    compress.BufFree(e)
+end
+
+// ---- RFC 7541 Appendix A: the static table -----------------------------
+
+func check static table():
+    testing.AssertEqStr(http2.StaticGet(1).name, ":authority")
+    testing.AssertEqStr(http2.StaticGet(2).value, "GET")
+    testing.AssertEqStr(http2.StaticGet(8).name, ":status")
+    testing.AssertEqStr(http2.StaticGet(8).value, "200")
+    testing.AssertEqStr(http2.StaticGet(16).value, "gzip, deflate")
+    testing.AssertEqStr(http2.StaticGet(61).name, "www-authenticate")
+    testing.AssertEqStr(http2.StaticGet(62).name, "")
+    testing.AssertEqInt(http2.HPACK_STATIC_COUNT, 61)
+
+    t := http2.NewDynTable(4096)
+    mut exact := false
+    testing.AssertEqInt(http2.TableFind(t, ":method", "GET", exact), 2)
+    testing.AssertTrue(exact)
+    // A name-only hit reports the index but clears `exact`.
+    testing.AssertEqInt(http2.TableFind(t, ":method", "PATCH", exact), 2)
+    testing.AssertFalse(exact)
+    testing.AssertEqInt(http2.TableFind(t, "x-nothing", "v", exact), 0)
+end
+
+// ---- RFC 7541 Appendix C.3: a request sequence with indexing ------------
+
+func check rfc request sequence():
+    mut enc := http2.NewDynTable(4096)
+    mut dec := http2.NewDynTable(4096)
+
+    mut r1 := http2.HeaderList {}
+    http2.HeadersAdd(r1, ":method", "GET")
+    http2.HeadersAdd(r1, ":scheme", "http")
+    http2.HeadersAdd(r1, ":path", "/")
+    http2.HeadersAdd(r1, ":authority", "www.example.com")
+    mut b1 := http2.EncodeHeaderList(enc, r1, true)
+    // C.4.1: the four fields become three static indexes plus one
+    // Huffman-coded literal that also enters the dynamic table.
+    testing.AssertEqStr(hex of(b1), "828684418cf1e3c2e5f23a6ba0ab90f4ff")
+    testing.AssertEqInt(http2.DynCount(enc), 1)
+    testing.AssertEqInt(http2.DynSize(enc), 57)
+
+    mut ok := false
+    out1 := http2.DecodeHeaderList(dec, b1, ok)
+    testing.AssertTrue(ok)
+    testing.AssertEqInt(http2.HeadersCount(out1), 4)
+    testing.AssertEqStr(http2.HeadersGet(out1, ":authority"), "www.example.com")
+    testing.AssertEqInt(http2.DynCount(dec), 1)
+
+    // Second request: identical but for one added header. Everything
+    // already seen now costs a single index byte.
+    mut r2 := http2.HeaderList {}
+    http2.HeadersAdd(r2, ":method", "GET")
+    http2.HeadersAdd(r2, ":scheme", "http")
+    http2.HeadersAdd(r2, ":path", "/")
+    http2.HeadersAdd(r2, ":authority", "www.example.com")
+    http2.HeadersAdd(r2, "cache-control", "no-cache")
+    mut b2 := http2.EncodeHeaderList(enc, r2, true)
+    testing.AssertEqStr(hex of(b2), "828684be5886a8eb10649cbf")
+    testing.AssertEqInt(http2.DynCount(enc), 2)
+
+    mut ok2 := false
+    out2 := http2.DecodeHeaderList(dec, b2, ok2)
+    testing.AssertTrue(ok2)
+    testing.AssertEqInt(http2.HeadersCount(out2), 5)
+    testing.AssertEqStr(http2.HeadersGet(out2, "cache-control"), "no-cache")
+
+    // Third request: a brand new name and value, plus a path that is not
+    // in either table.
+    mut r3 := http2.HeaderList {}
+    http2.HeadersAdd(r3, ":method", "GET")
+    http2.HeadersAdd(r3, ":scheme", "https")
+    http2.HeadersAdd(r3, ":path", "/index.html")
+    http2.HeadersAdd(r3, ":authority", "www.example.com")
+    http2.HeadersAdd(r3, "custom-key", "custom-value")
+    mut b3 := http2.EncodeHeaderList(enc, r3, true)
+    testing.AssertEqStr(hex of(b3), "828785bf408825a849e95ba97d7f8925a849e95bb8e8b4bf")
+    testing.AssertEqInt(http2.DynCount(enc), 3)
+
+    mut ok3 := false
+    out3 := http2.DecodeHeaderList(dec, b3, ok3)
+    testing.AssertTrue(ok3)
+    testing.AssertEqStr(http2.HeadersGet(out3, "custom-key"), "custom-value")
+    testing.AssertEqInt(http2.DynCount(dec), 3)
+
+    compress.BufFree(b1)
+    compress.BufFree(b2)
+    compress.BufFree(b3)
+end
+
+// ---- decoding a block this implementation did not produce --------------
+
+func check decode foreign block():
+    // C.2.1 verbatim: a literal header field with incremental indexing,
+    // both name and value sent uncompressed.
+    mut blk := buf of hex("400a637573746f6d2d6b65790d637573746f6d2d686561646572")
+    mut t := http2.NewDynTable(4096)
+    mut ok := false
+    hl := http2.DecodeHeaderList(t, blk, ok)
+    testing.AssertTrue(ok)
+    testing.AssertEqInt(http2.HeadersCount(hl), 1)
+    testing.AssertEqStr(http2.HeadersGet(hl, "custom-key"), "custom-header")
+    testing.AssertEqInt(http2.DynCount(t), 1)
+    testing.AssertEqInt(http2.DynSize(t), 55)
+    compress.BufFree(blk)
+
+    // C.2.2: literal without indexing - the table must not grow.
+    mut blk2 := buf of hex("040c2f73616d706c652f70617468")
+    mut t2 := http2.NewDynTable(4096)
+    mut ok2 := false
+    hl2 := http2.DecodeHeaderList(t2, blk2, ok2)
+    testing.AssertTrue(ok2)
+    testing.AssertEqStr(http2.HeadersGet(hl2, ":path"), "/sample/path")
+    testing.AssertEqInt(http2.DynCount(t2), 0)
+    compress.BufFree(blk2)
+
+    // C.2.3: never indexed - decoded, kept out of the table, and the
+    // sensitive flag survives so a proxy would re-emit it the same way.
+    mut blk3 := buf of hex("100870617373776f726406736563726574")
+    mut t3 := http2.NewDynTable(4096)
+    mut ok3 := false
+    hl3 := http2.DecodeHeaderList(t3, blk3, ok3)
+    testing.AssertTrue(ok3)
+    testing.AssertEqStr(http2.HeadersGet(hl3, "password"), "secret")
+    testing.AssertTrue(hl3.items.get(0)[0].sensitive)
+    testing.AssertEqInt(http2.DynCount(t3), 0)
+    compress.BufFree(blk3)
+
+    // C.2.4: a bare index into the static table.
+    mut blk4 := buf of hex("82")
+    mut t4 := http2.NewDynTable(4096)
+    mut ok4 := false
+    hl4 := http2.DecodeHeaderList(t4, blk4, ok4)
+    testing.AssertTrue(ok4)
+    testing.AssertEqStr(http2.HeadersGet(hl4, ":method"), "GET")
+    compress.BufFree(blk4)
+
+    // Index 0 is reserved and must be rejected outright.
+    mut blk5 := buf of hex("80")
+    mut t5 := http2.NewDynTable(4096)
+    mut ok5 := false
+    http2.DecodeHeaderList(t5, blk5, ok5)
+    testing.AssertFalse(ok5)
+    compress.BufFree(blk5)
+end
+
+// ---- dynamic table eviction --------------------------------------------
+
+func check eviction():
+    // Room for exactly one 57-byte entry.
+    mut t := http2.NewDynTable(64)
+    h1 := http2.NewHeader(":authority", "www.example.com")
+    http2.DynInsert(t, h1)
+    testing.AssertEqInt(http2.DynCount(t), 1)
+    h2 := http2.NewHeader(":authority", "other.example.com")
+    http2.DynInsert(t, h2)
+    // The newcomer pushed the older entry out; index 1 is always newest.
+    testing.AssertEqInt(http2.DynCount(t), 1)
+    testing.AssertEqStr(http2.DynGet(t, 1).value, "other.example.com")
+
+    // An entry bigger than the whole table empties it and is not stored,
+    // which RFC 7541 section 4.4 explicitly allows.
+    big := http2.NewHeader("x", "0123456789012345678901234567890123456789012345678901234567890123456789")
+    http2.DynInsert(t, big)
+    testing.AssertEqInt(http2.DynCount(t), 0)
+    testing.AssertEqInt(http2.DynSize(t), 0)
+
+    // Shrinking the maximum evicts immediately.
+    mut t2 := http2.NewDynTable(4096)
+    http2.DynInsert(t2, http2.NewHeader("a", "1"))
+    http2.DynInsert(t2, http2.NewHeader("b", "2"))
+    testing.AssertEqInt(http2.DynCount(t2), 2)
+    http2.DynSetMaxSize(t2, 34)
+    testing.AssertEqInt(http2.DynCount(t2), 1)
+    testing.AssertEqStr(http2.DynGet(t2, 1).name, "b")
+end
+
+// ---- frames -------------------------------------------------------------
+
+func check frames():
+    mut f := http2.NewFrame(http2.H2_DATA, http2.H2_FLAG_END_STREAM, 5)
+    compress.BufPush(f.payload, 0x41)
+    compress.BufPush(f.payload, 0x42)
+    mut wire := http2.FrameEncode(f)
+    // length 000002, type 00, flags 01, stream 00000005, then "AB".
+    testing.AssertEqStr(hex of(wire), "000002000100000005" + "4142")
+    testing.AssertEqInt(compress.BufLen(wire), 11)
+    compress.BufFree(wire)
+
+    testing.AssertTrue(http2.FrameHasFlag(f, http2.H2_FLAG_END_STREAM))
+    testing.AssertFalse(http2.FrameHasFlag(f, http2.H2_FLAG_PADDED))
+    mut dok := false
+    mut body := http2.DataOf(f, dok)
+    testing.AssertTrue(dok)
+    testing.AssertEqInt(compress.BufLen(body), 2)
+    compress.BufFree(body)
+    http2.FreeFrame(f)
+
+    // A padded DATA frame: one length octet, the data, then the padding,
+    // none of which may reach the application.
+    mut p := http2.NewFrame(http2.H2_DATA, http2.H2_FLAG_PADDED, 1)
+    compress.BufPush(p.payload, 3)
+    compress.BufPush(p.payload, 0x58)
+    compress.BufPush(p.payload, 0)
+    compress.BufPush(p.payload, 0)
+    compress.BufPush(p.payload, 0)
+    mut pok := false
+    mut pbody := http2.DataOf(p, pok)
+    testing.AssertTrue(pok)
+    testing.AssertEqInt(compress.BufLen(pbody), 1)
+    testing.AssertEqInt(compress.BufGet(pbody, 0), 0x58)
+    compress.BufFree(pbody)
+    http2.FreeFrame(p)
+
+    // WINDOW_UPDATE and RST_STREAM round trip through their accessors.
+    mut wu := http2.MakeWindowUpdate(3, 65535)
+    testing.AssertEqInt(http2.WindowIncrementOf(wu), 65535)
+    http2.FreeFrame(wu)
+    mut rst := http2.MakeRstStream(3, http2.H2_REFUSED_STREAM)
+    testing.AssertEqInt(http2.ErrorCodeOf(rst), http2.H2_REFUSED_STREAM)
+    http2.FreeFrame(rst)
+    mut ga := http2.MakeGoAway(7, http2.H2_ENHANCE_YOUR_CALM, "slow down")
+    testing.AssertEqInt(http2.ErrorCodeOf(ga), http2.H2_ENHANCE_YOUR_CALM)
+    http2.FreeFrame(ga)
+
+    testing.AssertEqStr(http2.FrameTypeName(http2.H2_HEADERS), "HEADERS")
+    testing.AssertEqStr(http2.ErrorName(http2.H2_FLOW_CONTROL_ERROR), "FLOW_CONTROL_ERROR")
+end
+
+func check settings():
+    s := http2.DefaultSettings()
+    testing.AssertEqInt(s.initial_window_size, http2.H2_DEFAULT_WINDOW)
+    testing.AssertEqInt(s.max_frame_size, http2.H2_DEFAULT_FRAME_SIZE)
+
+    mut mine := http2.DefaultSettings()
+    mine.initial_window_size = 1048576
+    mine.max_frame_size = 32768
+    mine.max_concurrent_streams = 100
+    mut f := http2.MakeSettingsFrame(mine)
+    // Five entries at six octets each (max_header_list_size is unset).
+    testing.AssertEqInt(compress.BufLen(f.payload), 30)
+
+    mut applied := http2.DefaultSettings()
+    testing.AssertTrue(http2.ApplySettings(applied, f))
+    testing.AssertEqInt(applied.initial_window_size, 1048576)
+    testing.AssertEqInt(applied.max_frame_size, 32768)
+    testing.AssertEqInt(applied.max_concurrent_streams, 100)
+    http2.FreeFrame(f)
+
+    // A payload that is not a multiple of six is a frame-size error.
+    mut bad := http2.NewFrame(http2.H2_SETTINGS, 0, 0)
+    compress.BufPush(bad.payload, 1)
+    testing.AssertFalse(http2.ApplySettings(applied, bad))
+    http2.FreeFrame(bad)
+
+    testing.AssertEqStr(http2.H2_PREFACE.substr(0, 3), "PRI")
+    testing.AssertEqInt(http2.H2_PREFACE.len(), 24)
+end
+
+func main:
+    check huffman()
+    check static table()
+    check rfc request sequence()
+    check decode foreign block()
+    check eviction()
+    check frames()
+    check settings()
+    os.Exit(testing.Summary())
+end

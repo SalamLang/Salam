@@ -32,26 +32,42 @@ import tls
 pub const H2_TRANSPORT_PLAIN := 0
 pub const H2_TRANSPORT_TLS := 1
 
+// Every TLS connection any Transport refers to. See TlsBox in
+// http2.salam for why the connection cannot simply be a field.
+mut _tls_conns := TlsBox {}
+
 @en "Transport"
 @fa "ترابری"
 @ar "ناقل"
 pub struct Transport:
     pub kind: int = 0
     pub fd: i64 = 0 - 1
-    pub sec: tls.Conn = tls.Conn {}
+    // Index into _tls_conns, or -1 for a plaintext transport.
+    pub sec_id: int = 0 - 1
     pub ok: bool = false
 end
 
+// A tls.Conn's protocol state (record sequence numbers, buffered
+// plaintext) advances on every read and write, and a vector element
+// handed out by `get()` is a copy, not an alias - so each operation has
+// to be written straight back or the connection desynchronises after the
+// very first record.
 func _tx_send(t &: Transport, p: void*, n: int): int:
     if t.kind == H2_TRANSPORT_TLS:
-        ret tls.WriteBytes(t.sec, p, n)
+        mut c := _tls_conns.items.get(t.sec_id)[0]
+        r := tls.WriteBytes(c, p, n)
+        _tls_conns.items.set(t.sec_id, c)
+        ret r
     end
     ret rawsock.SendBytes(rawsock.FromFd(t.fd), p, n)
 end
 
 func _tx_recv(t &: Transport, p: void*, n: int): int:
     if t.kind == H2_TRANSPORT_TLS:
-        ret tls.ReadBytes(t.sec, p, n)
+        mut c := _tls_conns.items.get(t.sec_id)[0]
+        r := tls.ReadBytes(c, p, n)
+        _tls_conns.items.set(t.sec_id, c)
+        ret r
     end
     ret rawsock.RecvBytes(rawsock.FromFd(t.fd), p, n)
 end
@@ -126,7 +142,8 @@ end
 pub func TLSTransport(c: tls.Conn): Transport:
     mut t := Transport {}
     t.kind = H2_TRANSPORT_TLS
-    t.sec = c
+    _tls_conns.items.push(c)
+    t.sec_id = _tls_conns.items.len() - 1
     t.ok = tls.ConnOk(c)
     ret t
 end
@@ -136,7 +153,11 @@ end
 @ar "إغلاق الناقل"
 pub func CloseTransport(t &: Transport):
     if t.kind == H2_TRANSPORT_TLS:
-        tls.Close(t.sec)
+        if t.sec_id >= 0 && t.sec_id < _tls_conns.items.len():
+            mut c := _tls_conns.items.get(t.sec_id)[0]
+            tls.Close(c)
+            _tls_conns.items.set(t.sec_id, c)
+        end
     else:
         if t.fd >= 0: rawsock.Close(rawsock.FromFd(t.fd)) end
     end

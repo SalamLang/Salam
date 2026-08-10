@@ -910,10 +910,9 @@ static bool is_wide_libc_name(const char *name)
         /* <stdlib.h>, reached from windows.h only on gcc/clang */
         "abort", "exit", "getenv", "system", "_putenv_s",
         /* winsock.h, which windows.h includes unless WIN32_LEAN_AND_MEAN */
-        "socket", "bind", "listen", "accept", "connect", "shutdown",
-        "closesocket", "ioctlsocket", "send", "recv", "sendto", "recvfrom",
-        "setsockopt", "getsockname", "gethostbyname", "inet_ntoa", "htons", "ntohs",
-        "WSAStartup",
+        "socket", "bind", "listen", "accept", "connect", "shutdown", "closesocket",
+        "ioctlsocket", "send", "recv", "sendto", "recvfrom", "setsockopt", "getsockname",
+        "gethostbyname", "inet_ntoa", "htons", "ntohs", "WSAStartup",
         /* wincrypt.h, same story - std/tls' native root-store reader */
         "CertOpenSystemStoreA", "CertEnumCertificatesInStore", "CertCloseStore"};
     size_t i = 0;
@@ -934,11 +933,10 @@ static void hdr_externs(cg_t *cg, ast_node_t *program, sb_t *h)
                 func_sig_t *sig = sig_of_decl(fsym, d);
                 if (!sig) continue;
                 if (is_libm_name(d->name)) continue;
-                const char *guard = is_wellknown_libc_name(d->name)
-                                        ? "SALAM_EXTERN_LIBC_ON_WIN32"
-                                    : is_wide_libc_name(d->name)
-                                        ? "SALAM_EXTERN_WIDE_LIBC_ON_WIN32"
-                                        : NULL;
+                const char *guard =
+                    is_wellknown_libc_name(d->name) ? "SALAM_EXTERN_LIBC_ON_WIN32"
+                    : is_wide_libc_name(d->name)    ? "SALAM_EXTERN_WIDE_LIBC_ON_WIN32"
+                                                    : NULL;
                 if (guard) sb_puts(h, cg_fmt(cg, "#ifndef %s\n", guard));
                 sb_puts(h, cg_fmt(cg, "%s;\n", cg_extern_proto(cg, d, sig)));
                 if (guard) sb_puts(h, "#endif\n");

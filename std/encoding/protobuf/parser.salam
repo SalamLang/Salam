@@ -297,10 +297,61 @@ func parse_message(p &: Pp, out &: PMessage): bool:
     ret true
 end
 
-func parse_service(p &: Pp):
+// service Foo {
+//   rpc Bar (BarRequest) returns (BarResponse);
+//   rpc Baz (stream BazRequest) returns (stream BazResponse) { ... }
+// }
+//
+// Options attached to a method (the trailing brace block) are skipped:
+// nothing in this codebase consumes them, and a method that carries them
+// must still parse.
+func parse_rpc(p &: Pp, out &: PService):
     pp_advance(p)
+    nameTok := pp_advance(p)
+    mut m := PMethod {}
+    m.name = nameTok.lexeme
+    pp_expect(p, PTK_LPAREN, "'('")
+    if pp_match_ident(p, "stream"): m.clientStream = true end
+    m.inputType = parse_type_name(p)
+    pp_expect(p, PTK_RPAREN, "')'")
+    if !pp_match_ident(p, "returns"):
+        pp_error(p, "expected 'returns' in rpc declaration")
+        pp_sync(p)
+        ret
+    end
+    pp_expect(p, PTK_LPAREN, "'('")
+    if pp_match_ident(p, "stream"): m.serverStream = true end
+    m.outputType = parse_type_name(p)
+    pp_expect(p, PTK_RPAREN, "')'")
+    if pp_check(p, PTK_LBRACE):
+        pp_skip_balanced(p)
+    else:
+        pp_expect(p, PTK_SEMI, "';'")
+    end
+    out.methods.push(m)
+end
+
+func parse_service(p &: Pp, out &: PFile):
     pp_advance(p)
-    pp_skip_balanced(p)
+    nameTok := pp_advance(p)
+    mut svc := PService {}
+    svc.name = nameTok.lexeme
+    pp_expect(p, PTK_LBRACE, "'{'")
+    until !pp_check(p, PTK_RBRACE) && !pp_check(p, PTK_EOF):
+        if pp_match(p, PTK_SEMI): continue end
+        if pp_check_ident(p, "option"):
+            parse_option_stmt(p)
+            continue
+        end
+        if pp_check_ident(p, "rpc"):
+            parse_rpc(p, svc)
+            continue
+        end
+        pp_error(p, "unexpected token in service body")
+        pp_sync(p)
+    end
+    pp_expect(p, PTK_RBRACE, "'}'")
+    out.services.push(svc)
 end
 
 func parse_package_stmt(p &: Pp, out &: PFile):
@@ -365,7 +416,7 @@ pub func ParseFile(source: str, ok &: bool): PFile:
             continue
         end
         if pp_check_ident(p, "service"):
-            parse_service(p)
+            parse_service(p, out)
             continue
         end
         pp_error(p, "unexpected top-level token")

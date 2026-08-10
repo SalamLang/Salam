@@ -16,6 +16,11 @@
 #                  extra ./configure flags (--targetos, --cpu, ...)
 #   HOSTCC         compiler that produces binaries the *build* machine can
 #                  run; only consulted when cross-building (default: cc)
+#   TCC_CROSS_TARGET
+#                  the name tcc's own Makefile gives the target being built
+#                  (i386-win32, x86_64-win32, arm64-win32, ...); only used
+#                  when cross-building, and derived from the --cpu/--targetos
+#                  in TCC_CONFIGURE_EXTRA when unset
 #   MAKE           make to use (default: make)
 #
 # Run from anywhere. Exits non-zero if the build or the smoke test fails.
@@ -34,6 +39,28 @@ PREFIX=$1
 : "${CROSS_PREFIX:=}"
 : "${HOSTCC:=cc}"
 : "${MAKE:=make}"
+JOBS=$(nproc 2>/dev/null || echo 4)
+
+# The name tcc's Makefile gives a target: "<cpu>" for unix, "<cpu>-win32"
+# for Windows, "<cpu>-osx" for macOS. It is what `make cross-<target>` and
+# the <target>-libtcc1.a that target produces are called, and it is derived
+# from the same --cpu/--targetos the caller already passes to configure.
+tcc_cross_target() {
+    cpu=""
+    os=""
+    for arg in $TCC_CONFIGURE_EXTRA; do
+        case $arg in
+        --cpu=*) cpu=${arg#--cpu=} ;;
+        --targetos=*) os=${arg#--targetos=} ;;
+        esac
+    done
+    [ -n "$cpu" ] || return 1
+    case $os in
+    WIN32 | Windows*) echo "$cpu-win32" ;;
+    Darwin) echo "$cpu-osx" ;;
+    *) echo "$cpu" ;;
+    esac
+}
 
 [ -n "$TINYCC_REF" ] || {
     echo "error: no TINYCC_REF and none readable from $HERE/tinycc-ref.txt" >&2
@@ -62,10 +89,8 @@ cd "$WORK/tinycc/build"
 # on the machine producing it. That holds for every native build and for the
 # musl crosses (same OS, and the host can exec the result), but not for
 # Linux -> Windows, where three separate steps hand a PE to the build host.
-# The extra make arguments live in "$@" because one of them has to contain
-# spaces; PREFIX was read out of $1 above, so the positional list is free.
-set --
 cross_arg=""
+CROSS_TARGET=""
 if [ -n "$CROSS_PREFIX" ]; then
     # 1/3, configure: the win32 build makes libtcc a DLL and then derives
     # libtcc.def from it with `tcc -impdef`, i.e. by running the tcc.exe it
@@ -83,30 +108,77 @@ if [ -n "$CROSS_PREFIX" ]; then
     # build-musl-tcc.sh has always used).
     "$HOSTCC" -DC2STR ../conftest.c -o c2str.exe
     # 3/3, libtcc1.a: the compiler runtime tcc links into everything it
-    # builds is itself compiled by invoking ./tcc.exe (lib/Makefile defaults
-    # XCC and XAR to it). This is what upstream's "<target>-libtcc1-usegcc"
-    # switch exists for; setting the four variables it sets saves having to
-    # recompute the $(NATIVE_TARGET) the switch is named after, and spelling
-    # the tools as $(CC)/$(AR) keeps them whatever --cross-prefix resolved to
-    # rather than a second guess at it. BFLAGS empties out because both the
-    # value it has by default (-bt) and the one the switch gives it (-gstabs)
-    # are rejected by the compilers this runs on.
+    # builds is compiled by invoking ./tcc.exe (lib/Makefile defaults XCC and
+    # XAR to it), which this host cannot run either. Pointing XCC at the
+    # cross compiler instead - upstream's "<target>-libtcc1-usegcc" switch -
+    # is a dead end: lib/*.c is written for tcc, and llvm-mingw's clang
+    # rejects it outright (the i386 asm in libtcc1.c casts its output
+    # operands, -Winvalid-gnu-asm-cast, and stdatomic.c redeclares clang's
+    # own __atomic_is_lock_free builtin with an `unsigned long` size where
+    # clang's is size_t - only equal on LP64, and this target is ILP32).
     #
-    # XFLAGS has to be replaced along with them, not just inherited: its
-    # default passes -B$(TOPSRC)/win32, and a -B prefix is an *include* path
-    # to gcc, so tcc's own cut-down windows headers land ahead of the
-    # toolchain's and collide with them ("static declaration of 'vsnprintf'
-    # follows non-static declaration"). -std=gnu11 is ours rather than
-    # upstream's: crt1.c declares `extern int __run_on_exit();` and calls it
-    # with an argument, which a C23 default (gcc >= 15) rejects.
-    set -- 'XCC=$(CC)' 'XAR=$(AR)' 'BFLAGS=' \
-        'XFLAGS=$(CFLAGS) -std=gnu11 -fPIC -fno-omit-frame-pointer -Wno-unused-function -Wno-unused-variable -I$(TOP)'
+    # So the runtime is built the way upstream builds its own cross
+    # distributions: a second, host-native tcc tree whose `make cross-<T>`
+    # produces a <T>-tcc that runs here and a <T>-libtcc1.a compiled by it,
+    # which is dropped into the install below. tcc compiles its own runtime,
+    # exactly as in the native x86_64 Windows bundle - the C compiler this
+    # script was handed never touches lib/ at all.
+    : "${TCC_CROSS_TARGET:=$(tcc_cross_target || true)}"
+    CROSS_TARGET=$TCC_CROSS_TARGET
+    [ -n "$CROSS_TARGET" ] || {
+        echo "error: cross-building needs TCC_CROSS_TARGET, and none could" >&2
+        echo "  be derived from TCC_CONFIGURE_EXTRA='$TCC_CONFIGURE_EXTRA'" >&2
+        exit 2
+    }
 fi
 # shellcheck disable=SC2086
 ../configure --prefix="$PREFIX" $cross_arg $TCC_CONFIGURE_EXTRA
 
-"$MAKE" -j"$(nproc 2>/dev/null || echo 4)" "$@"
-"$MAKE" install "$@"
+# Whatever configure decided the target's executables and install layout
+# look like, rather than a second guess at it from here.
+EXESUF=$(sed -n 's/^EXESUF=//p' config.mak | head -1)
+TCCDIR=$(sed -n 's/^tccdir=\$(DESTDIR)//p' config.mak | head -1)
+
+if [ -n "$CROSS_TARGET" ]; then
+    # Only the compiler: `make` with no target would also try to build
+    # libtcc1.a here, with the cross compiler, which is what 3/3 above is
+    # avoiding. libtcc.a comes along as a dependency of tcc itself.
+    "$MAKE" -j"$JOBS" "tcc$EXESUF"
+
+    # The host-native tree that builds the runtime. Its own config is
+    # deliberately plain - no --cross-prefix, no --targetos - because it
+    # exists to produce a <target>-tcc that runs *here*; the target is named
+    # on the make command line instead.
+    mkdir -p "$WORK/tinycc/build-host"
+    (
+        cd "$WORK/tinycc/build-host"
+        ../configure --cc="$HOSTCC" --prefix="$WORK/host-prefix"
+        "$MAKE" -j"$JOBS" "cross-$CROSS_TARGET"
+    )
+    RUNTIME="$WORK/tinycc/build-host/$CROSS_TARGET-libtcc1.a"
+    [ -f "$RUNTIME" ] || {
+        echo "error: 'make cross-$CROSS_TARGET' produced no $CROSS_TARGET-libtcc1.a" >&2
+        ls -la "$WORK/tinycc/build-host" >&2 || true
+        exit 1
+    }
+else
+    "$MAKE" -j"$JOBS"
+fi
+
+"$MAKE" install
+
+if [ -n "$CROSS_TARGET" ]; then
+    # install skipped libtcc1.a (this tree never built one), so put the
+    # tcc-built runtime where tcc looks for it: $(tccdir)/lib on Windows,
+    # $(tccdir) itself elsewhere - the two layouts install-win/install-unx
+    # use for it.
+    dest=$TCCDIR
+    if grep -q '^CONFIG_WIN32=yes' config.mak; then
+        dest=$TCCDIR/lib
+    fi
+    mkdir -p "$dest"
+    cp "$RUNTIME" "$dest/libtcc1.a"
+fi
 
 # Two install layouts, both of them tcc's own: the Windows build puts
 # tcc.exe straight at the prefix with include/ and lib/ beside it (matching
@@ -140,10 +212,27 @@ LIBTCC1=$(find "$PREFIX" -name libtcc1.a -print 2>/dev/null | head -1)
 echo "runtime installed: $LIBTCC1"
 
 # `tcc -v` runs the built binary, so it only proves anything when the build
-# is native; a cross-built one is checked by the job that consumes it.
+# is native. A cross-built tcc.exe can't run here, but the runtime beside it
+# can still be exercised: the host-native <target>-tcc from the tree that
+# produced libtcc1.a generates the same code the installed tcc.exe does, so
+# linking a program with it against the *installed* prefix proves the
+# archive is complete and for the right CPU rather than leaving that to
+# whoever unzips the bundle. It looks for its runtime under the crossprefix
+# ($(CONFIG_TCC_CROSSPREFIX)libtcc1.a), so the copy under that name goes in
+# for the test and comes straight back out.
+printf 'int main(void){return 0;}\n' >"$WORK/smoke.c"
 if [ -z "$CROSS_PREFIX" ]; then
     "$TCC_BIN" -v
-    printf 'int main(void){return 0;}\n' >"$WORK/smoke.c"
     "$TCC_BIN" "$WORK/smoke.c" -o "$WORK/smoke" && "$WORK/smoke"
     echo "smoke test: compiled and ran"
+else
+    cp "$RUNTIME" "$dest/$CROSS_TARGET-libtcc1.a"
+    "$WORK/tinycc/build-host/$CROSS_TARGET-tcc" -B"$TCCDIR" \
+        "$WORK/smoke.c" -o "$WORK/smoke$EXESUF"
+    rm -f "$dest/$CROSS_TARGET-libtcc1.a"
+    [ -s "$WORK/smoke$EXESUF" ] || {
+        echo "error: linking against $LIBTCC1 produced nothing" >&2
+        exit 1
+    }
+    echo "smoke test: linked a $CROSS_TARGET program against the installed runtime"
 fi

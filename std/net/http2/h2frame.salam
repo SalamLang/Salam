@@ -1,0 +1,491 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package http2
+
+import compress
+import mem
+import net.internal.rawsock
+import tls
+
+// The HTTP/2 frame layer (RFC 7540 section 4): a 9-octet header - 24-bit
+// length, 8-bit type, 8-bit flags, 1 reserved bit and a 31-bit stream
+// identifier - followed by that many payload octets.
+//
+// Frames travel over a Transport, which is either a plain socket fd or a
+// std/tls connection. TLS cannot be reduced to an fd here: a tls.Conn
+// carries record sequence numbers and buffered plaintext that would be
+// lost if it were copied by value between calls, which is why Transport
+// holds the whole connection and every read/write takes it by reference.
+
+pub const H2_TRANSPORT_PLAIN := 0
+pub const H2_TRANSPORT_TLS := 1
+
+// Every TLS connection any Transport refers to. See TlsBox in
+// http2.salam for why the connection cannot simply be a field.
+mut _tls_conns := TlsBox {}
+
+@en "Transport"
+@fa "ترابری"
+@ar "ناقل"
+pub struct Transport:
+    pub kind: int = 0
+    pub fd: i64 = 0 - 1
+    // Index into _tls_conns, or -1 for a plaintext transport.
+    pub sec_id: int = 0 - 1
+    pub ok: bool = false
+end
+
+// A tls.Conn's protocol state (record sequence numbers, buffered
+// plaintext) advances on every read and write, and a vector element
+// handed out by `get()` is a copy, not an alias - so each operation has
+// to be written straight back or the connection desynchronises after the
+// very first record.
+func _tx_send(t &: Transport, p: void*, n: int): int:
+    if t.kind == H2_TRANSPORT_TLS:
+        mut c := _tls_conns.items.get(t.sec_id)[0]
+        r := tls.WriteBytes(c, p, n)
+        _tls_conns.items.set(t.sec_id, c)
+        ret r
+    end
+    ret rawsock.SendBytes(rawsock.FromFd(t.fd), p, n)
+end
+
+func _tx_recv(t &: Transport, p: void*, n: int): int:
+    if t.kind == H2_TRANSPORT_TLS:
+        mut c := _tls_conns.items.get(t.sec_id)[0]
+        r := tls.ReadBytes(c, p, n)
+        _tls_conns.items.set(t.sec_id, c)
+        ret r
+    end
+    ret rawsock.RecvBytes(rawsock.FromFd(t.fd), p, n)
+end
+
+// Reads exactly `n` bytes or fails. Short reads are normal on a stream
+// socket, and a frame header read short would desynchronise the whole
+// connection, so every read here loops.
+func _read_exact(t &: Transport, n: int, ok &: bool): compress.ByteBuf:
+    mut out := compress.NewByteBufCap(n + 1)
+    if n == 0:
+        ok = true
+        ret out
+    end
+    p := mem.Allocate(n as u64)
+    if p == null:
+        ok = false
+        ret out
+    end
+    mut got := 0
+    until got < n:
+        base := ((p as i64) + (got as i64)) as void*
+        r := _tx_recv(t, base, n - got)
+        if r <= 0:
+            mem.Free(p)
+            ok = false
+            ret out
+        end
+        got += r
+    end
+    compress.BufPushBytes(out, p, n)
+    mem.Free(p)
+    ok = true
+    ret out
+end
+
+func _write_all(t &: Transport, b: compress.ByteBuf): bool:
+    n := compress.BufLen(b)
+    if n == 0: ret true end
+    mut sent := 0
+    until sent < n:
+        base := ((b.data as i64) + (sent as i64)) as void*
+        w := _tx_send(t, base, n - sent)
+        if w <= 0: ret false end
+        sent += w
+    end
+    ret true
+end
+
+func _put_setting(out &: compress.ByteBuf, id: int, v: int):
+    compress.BufPush(out, (id >> 8) & 255)
+    compress.BufPush(out, id & 255)
+    compress.BufPush(out, (v >> 24) & 255)
+    compress.BufPush(out, (v >> 16) & 255)
+    compress.BufPush(out, (v >> 8) & 255)
+    compress.BufPush(out, v & 255)
+end
+
+@en "PlainTransport"
+@fa "ترابری ساده"
+@ar "ناقل عادی"
+pub func PlainTransport(fd: i64): Transport:
+    mut t := Transport {}
+    t.kind = H2_TRANSPORT_PLAIN
+    t.fd = fd
+    t.ok = fd >= 0
+    ret t
+end
+
+@en "TLSTransport"
+@fa "ترابری امن"
+@ar "ناقل آمن"
+pub func TLSTransport(c: tls.Conn): Transport:
+    mut t := Transport {}
+    t.kind = H2_TRANSPORT_TLS
+    _tls_conns.items.push(c)
+    t.sec_id = _tls_conns.items.len() - 1
+    t.ok = tls.ConnOk(c)
+    ret t
+end
+
+@en "CloseTransport"
+@fa "بستن ترابری"
+@ar "إغلاق الناقل"
+pub func CloseTransport(t &: Transport):
+    if t.kind == H2_TRANSPORT_TLS:
+        if t.sec_id >= 0 && t.sec_id < _tls_conns.items.len():
+            mut c := _tls_conns.items.get(t.sec_id)[0]
+            tls.Close(c)
+            _tls_conns.items.set(t.sec_id, c)
+        end
+    else:
+        if t.fd >= 0: rawsock.Close(rawsock.FromFd(t.fd)) end
+    end
+    t.ok = false
+end
+
+@en "NewFrame"
+@fa "قاب جدید"
+@ar "إطار جدید"
+pub func NewFrame(kind: int, flags: int, stream_id: int): Frame:
+    mut f := Frame {}
+    f.kind = kind
+    f.flags = flags
+    f.stream_id = stream_id
+    f.payload = compress.NewByteBuf()
+    f.ok = true
+    ret f
+end
+
+@en "FreeFrame"
+@fa "آزادسازی قاب"
+@ar "تحریر الإطار"
+pub func FreeFrame(f &: Frame):
+    compress.BufFree(f.payload)
+    f.ok = false
+end
+
+@en "FrameHasFlag"
+@fa "قاب پرچم دارد"
+@ar "الإطار یحمل رایة"
+pub func FrameHasFlag(f: Frame, flag: int): bool:
+    ret (f.flags & flag) != 0
+end
+
+// Serialises a whole frame - 9-octet header then payload - into a fresh
+// buffer, which is what the write path sends in one call so a frame is
+// never split across two syscalls under a concurrent writer.
+@en "FrameEncode"
+@fa "کدگذاری قاب"
+@ar "ترمیز الإطار"
+pub func FrameEncode(f: Frame): compress.ByteBuf:
+    n := compress.BufLen(f.payload)
+    mut out := compress.NewByteBufCap(n + 9)
+    compress.BufPush(out, (n >> 16) & 255)
+    compress.BufPush(out, (n >> 8) & 255)
+    compress.BufPush(out, n & 255)
+    compress.BufPush(out, f.kind & 255)
+    compress.BufPush(out, f.flags & 255)
+    compress.BufPush(out, (f.stream_id >> 24) & 127)
+    compress.BufPush(out, (f.stream_id >> 16) & 255)
+    compress.BufPush(out, (f.stream_id >> 8) & 255)
+    compress.BufPush(out, f.stream_id & 255)
+    compress.BufPushBuf(out, f.payload)
+    ret out
+end
+
+@en "WriteFrame"
+@fa "نوشتن قاب"
+@ar "کتابة الإطار"
+pub func WriteFrame(t &: Transport, f: Frame): bool:
+    mut wire := FrameEncode(f)
+    ok := _write_all(t, wire)
+    compress.BufFree(wire)
+    ret ok
+end
+
+// Reads one frame. `f.ok == false` means the peer went away or sent a
+// frame longer than `max_frame_size` (a connection error under section
+// 4.2, not something to try to resynchronise from).
+@en "ReadFrame"
+@fa "خواندن قاب"
+@ar "قراءة الإطار"
+pub func ReadFrame(t &: Transport, max_frame_size: int): Frame:
+    mut f := Frame {}
+    mut ok := false
+    mut head := _read_exact(t, 9, ok)
+    if !ok:
+        compress.BufFree(head)
+        ret f
+    end
+    n := (compress.BufGet(head, 0) << 16) | (compress.BufGet(head, 1) << 8) | compress.BufGet(head, 2)
+    f.kind = compress.BufGet(head, 3)
+    f.flags = compress.BufGet(head, 4)
+    f.stream_id = ((compress.BufGet(head, 5) & 127) << 24) | (compress.BufGet(head, 6) << 16) | (compress.BufGet(head, 7) << 8) | compress.BufGet(head, 8)
+    compress.BufFree(head)
+    if n > max_frame_size:
+        ret f
+    end
+    mut pok := false
+    f.payload = _read_exact(t, n, pok)
+    if !pok:
+        compress.BufFree(f.payload)
+        f.payload = compress.NewByteBuf()
+        ret f
+    end
+    f.ok = true
+    ret f
+end
+
+@en "WritePreface"
+@fa "نوشتن پیش‌درآمد"
+@ar "کتابة الدیباجة"
+pub func WritePreface(t &: Transport): bool:
+    mut b := compress.BufFromStr(H2_PREFACE)
+    ok := _write_all(t, b)
+    compress.BufFree(b)
+    ret ok
+end
+
+@en "ReadPreface"
+@fa "خواندن پیش‌درآمد"
+@ar "قراءة الدیباجة"
+pub func ReadPreface(t &: Transport): bool:
+    mut ok := false
+    mut got := _read_exact(t, H2_PREFACE.len(), ok)
+    if !ok:
+        compress.BufFree(got)
+        ret false
+    end
+    mut want := compress.BufFromStr(H2_PREFACE)
+    same := compress.BufEquals(got, want)
+    compress.BufFree(got)
+    compress.BufFree(want)
+    ret same
+end
+
+// ---- payload helpers ---------------------------------------------------
+
+// The header-block fragment inside a HEADERS frame, with any padding and
+// the optional 5-octet priority field removed.
+@en "HeaderBlockOf"
+@fa "بلوک سرآیند قاب"
+@ar "کتلة ترویسة الإطار"
+pub func HeaderBlockOf(f: Frame, ok &: bool): compress.ByteBuf:
+    n := compress.BufLen(f.payload)
+    mut start := 0
+    mut stop := n
+    if FrameHasFlag(f, H2_FLAG_PADDED):
+        if n < 1:
+            ok = false
+            ret compress.NewByteBuf()
+        end
+        pad := compress.BufGet(f.payload, 0)
+        start = 1
+        stop = n - pad
+    end
+    if FrameHasFlag(f, H2_FLAG_PRIORITY):
+        start += 5
+    end
+    if start > stop:
+        ok = false
+        ret compress.NewByteBuf()
+    end
+    mut out := compress.NewByteBufCap(stop - start + 1)
+    mut i := start
+    until i < stop:
+        compress.BufPush(out, compress.BufGet(f.payload, i))
+        i += 1
+    end
+    ok = true
+    ret out
+end
+
+// The application bytes inside a DATA frame, with padding removed.
+@en "DataOf"
+@fa "داده قاب"
+@ar "بیانات الإطار"
+pub func DataOf(f: Frame, ok &: bool): compress.ByteBuf:
+    n := compress.BufLen(f.payload)
+    mut start := 0
+    mut stop := n
+    if FrameHasFlag(f, H2_FLAG_PADDED):
+        if n < 1:
+            ok = false
+            ret compress.NewByteBuf()
+        end
+        pad := compress.BufGet(f.payload, 0)
+        start = 1
+        stop = n - pad
+    end
+    if start > stop:
+        ok = false
+        ret compress.NewByteBuf()
+    end
+    mut out := compress.NewByteBufCap(stop - start + 1)
+    mut i := start
+    until i < stop:
+        compress.BufPush(out, compress.BufGet(f.payload, i))
+        i += 1
+    end
+    ok = true
+    ret out
+end
+
+@en "MakeSettingsFrame"
+@fa "ساخت قاب تنظیمات"
+@ar "إنشاء إطار الإعدادات"
+pub func MakeSettingsFrame(s: Settings): Frame:
+    f := NewFrame(H2_SETTINGS, 0, 0)
+    _put_setting(f.payload, H2_SETTINGS_HEADER_TABLE_SIZE, s.header_table_size)
+    _put_setting(f.payload, H2_SETTINGS_ENABLE_PUSH, s.enable_push)
+    if s.max_concurrent_streams >= 0:
+        _put_setting(f.payload, H2_SETTINGS_MAX_CONCURRENT_STREAMS, s.max_concurrent_streams)
+    end
+    _put_setting(f.payload, H2_SETTINGS_INITIAL_WINDOW_SIZE, s.initial_window_size)
+    _put_setting(f.payload, H2_SETTINGS_MAX_FRAME_SIZE, s.max_frame_size)
+    if s.max_header_list_size >= 0:
+        _put_setting(f.payload, H2_SETTINGS_MAX_HEADER_LIST_SIZE, s.max_header_list_size)
+    end
+    ret f
+end
+
+@en "MakeSettingsAck"
+@fa "ساخت تایید تنظیمات"
+@ar "إنشاء تأکید الإعدادات"
+pub func MakeSettingsAck(): Frame:
+    ret NewFrame(H2_SETTINGS, H2_FLAG_ACK, 0)
+end
+
+// Applies a received SETTINGS payload on top of `s`. Unknown identifiers
+// must be ignored (section 6.5.2), not rejected.
+@en "ApplySettings"
+@fa "اعمال تنظیمات"
+@ar "تطبیق الإعدادات"
+pub func ApplySettings(s &: Settings, f: Frame): bool:
+    n := compress.BufLen(f.payload)
+    if n % 6 != 0: ret false end
+    mut i := 0
+    until i < n:
+        id := (compress.BufGet(f.payload, i) << 8) | compress.BufGet(f.payload, i + 1)
+        v := (compress.BufGet(f.payload, i + 2) << 24) | (compress.BufGet(f.payload, i + 3) << 16) | (compress.BufGet(f.payload, i + 4) << 8) | compress.BufGet(f.payload, i + 5)
+        if id == H2_SETTINGS_HEADER_TABLE_SIZE: s.header_table_size = v end
+        if id == H2_SETTINGS_ENABLE_PUSH: s.enable_push = v end
+        if id == H2_SETTINGS_MAX_CONCURRENT_STREAMS: s.max_concurrent_streams = v end
+        if id == H2_SETTINGS_INITIAL_WINDOW_SIZE: s.initial_window_size = v end
+        if id == H2_SETTINGS_MAX_FRAME_SIZE: s.max_frame_size = v end
+        if id == H2_SETTINGS_MAX_HEADER_LIST_SIZE: s.max_header_list_size = v end
+        i += 6
+    end
+    ret true
+end
+
+@en "MakeWindowUpdate"
+@fa "ساخت به‌روزرسانی پنجره"
+@ar "إنشاء تحدیث النافذة"
+pub func MakeWindowUpdate(stream_id: int, increment: int): Frame:
+    f := NewFrame(H2_WINDOW_UPDATE, 0, stream_id)
+    compress.BufPush(f.payload, (increment >> 24) & 127)
+    compress.BufPush(f.payload, (increment >> 16) & 255)
+    compress.BufPush(f.payload, (increment >> 8) & 255)
+    compress.BufPush(f.payload, increment & 255)
+    ret f
+end
+
+@en "WindowIncrementOf"
+@fa "مقدار افزایش پنجره"
+@ar "مقدار زیادة النافذة"
+pub func WindowIncrementOf(f: Frame): int:
+    if compress.BufLen(f.payload) < 4: ret 0 end
+    ret ((compress.BufGet(f.payload, 0) & 127) << 24) | (compress.BufGet(f.payload, 1) << 16) | (compress.BufGet(f.payload, 2) << 8) | compress.BufGet(f.payload, 3)
+end
+
+@en "MakeRstStream"
+@fa "ساخت بازنشانی جریان"
+@ar "إنشاء إعادة تعیین التدفق"
+pub func MakeRstStream(stream_id: int, error_code: int): Frame:
+    f := NewFrame(H2_RST_STREAM, 0, stream_id)
+    compress.BufPush(f.payload, (error_code >> 24) & 255)
+    compress.BufPush(f.payload, (error_code >> 16) & 255)
+    compress.BufPush(f.payload, (error_code >> 8) & 255)
+    compress.BufPush(f.payload, error_code & 255)
+    ret f
+end
+
+@en "ErrorCodeOf"
+@fa "کد خطای قاب"
+@ar "رمز خطأ الإطار"
+pub func ErrorCodeOf(f: Frame): int:
+    n := compress.BufLen(f.payload)
+    if f.kind == H2_RST_STREAM:
+        if n < 4: ret H2_PROTOCOL_ERROR end
+        ret (compress.BufGet(f.payload, 0) << 24) | (compress.BufGet(f.payload, 1) << 16) | (compress.BufGet(f.payload, 2) << 8) | compress.BufGet(f.payload, 3)
+    end
+    // GOAWAY: last-stream-id then the error code.
+    if n < 8: ret H2_PROTOCOL_ERROR end
+    ret (compress.BufGet(f.payload, 4) << 24) | (compress.BufGet(f.payload, 5) << 16) | (compress.BufGet(f.payload, 6) << 8) | compress.BufGet(f.payload, 7)
+end
+
+@en "MakeGoAway"
+@fa "ساخت خداحافظی"
+@ar "إنشاء وداع"
+pub func MakeGoAway(last_stream_id: int, error_code: int, debug: str): Frame:
+    f := NewFrame(H2_GOAWAY, 0, 0)
+    compress.BufPush(f.payload, (last_stream_id >> 24) & 127)
+    compress.BufPush(f.payload, (last_stream_id >> 16) & 255)
+    compress.BufPush(f.payload, (last_stream_id >> 8) & 255)
+    compress.BufPush(f.payload, last_stream_id & 255)
+    compress.BufPush(f.payload, (error_code >> 24) & 255)
+    compress.BufPush(f.payload, (error_code >> 16) & 255)
+    compress.BufPush(f.payload, (error_code >> 8) & 255)
+    compress.BufPush(f.payload, error_code & 255)
+    if debug != "":
+        compress.BufPushBytes(f.payload, debug as void*, debug.len())
+    end
+    ret f
+end
+
+@en "MakePing"
+@fa "ساخت پینگ"
+@ar "إنشاء بینغ"
+pub func MakePing(payload: compress.ByteBuf, ack: bool): Frame:
+    mut flags := 0
+    if ack: flags = H2_FLAG_ACK end
+    f := NewFrame(H2_PING, flags, 0)
+    mut i := 0
+    until i < 8:
+        mut v := 0
+        if i < compress.BufLen(payload): v = compress.BufGet(payload, i) end
+        compress.BufPush(f.payload, v)
+        i += 1
+    end
+    ret f
+end
+
+// Writes one setting entry: 16-bit identifier then a 32-bit value.
+@en "PutSetting"
+@fa "درج تنظیم"
+@ar "إدراج إعداد"
+pub func PutSetting(out &: compress.ByteBuf, id: int, v: int):
+    _put_setting(out, id, v)
+end

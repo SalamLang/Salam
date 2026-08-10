@@ -1,0 +1,780 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/graphql - the full stack, asserted end to end: lexer, parser,
+// printer, SDL, schema model, validation, execution, introspection,
+// HTTP transport and client.
+//
+// Assertions rather than golden output wherever a value is checked, so
+// a failure names the thing that broke. Where a whole response is
+// compared it goes through ResultToJSONStable, whose key order is
+// sorted and therefore reproducible; see gql_result.salam for why the
+// unsorted order is not.
+
+import graphql
+import encoding.value
+import testing
+
+// ---- schema under test ----
+
+func sdl(): str:
+    ret "\"\"\"\nA tiny film database.\n\"\"\"\n" +
+        "type Query {\n" +
+        "  hello: String!\n" +
+        "  add(a: Int!, b: Int = 10): Int!\n" +
+        "  person(id: ID!): Person\n" +
+        "  people: [Person!]!\n" +
+        "  search(text: String!): [SearchResult!]!\n" +
+        "  echo(payload: EchoInput!): String!\n" +
+        "  favourite: Genre!\n" +
+        "  flaky: String\n" +
+        "  required: String!\n" +
+        "}\n" +
+        "\n" +
+        "interface Named {\n" +
+        "  name: String!\n" +
+        "}\n" +
+        "\n" +
+        "type Person implements Named {\n" +
+        "  id: ID!\n" +
+        "  name: String!\n" +
+        "  shout: String!\n" +
+        "  age: Int\n" +
+        "  oldName: String @deprecated(reason: \"use name\")\n" +
+        "}\n" +
+        "\n" +
+        "type Film implements Named {\n" +
+        "  id: ID!\n" +
+        "  name: String!\n" +
+        "  year: Int!\n" +
+        "}\n" +
+        "\n" +
+        "union SearchResult = Person | Film\n" +
+        "\n" +
+        "enum Genre {\n" +
+        "  DRAMA\n" +
+        "  COMEDY\n" +
+        "}\n" +
+        "\n" +
+        "input EchoInput {\n" +
+        "  text: String!\n" +
+        "  times: Int = 2\n" +
+        "}\n" +
+        "\n" +
+        "type Mutation {\n" +
+        "  rename(id: ID!, name: String!): Person!\n" +
+        "}\n" +
+        "\n" +
+        "type Subscription {\n" +
+        "  ticks: Int!\n" +
+        "  events: String\n" +
+        "}\n"
+end
+
+// ---- resolvers ----
+
+func mk_person(id: str, name: str): value.Value:
+    mut p := value.NewValueObject()
+    value.ObjectSet(p, "id", value.ValueString(id))
+    value.ObjectSet(p, "name", value.ValueString(name))
+    ret p
+end
+
+func r_hello(slot: i64): graphql.ResolveStr(slot, "world") end
+
+func r_add(slot: i64):
+    graphql.ResolveInt(slot, graphql.ArgInt(slot, "a") + graphql.ArgInt(slot, "b"))
+end
+
+func r_person(slot: i64):
+    id := graphql.ArgStr(slot, "id")
+    if id == "0":
+        graphql.ResolveNull(slot)
+        ret
+    end
+    graphql.Resolve(slot, mk_person(id, "Ada"))
+end
+
+func r_people(slot: i64):
+    mut arr := value.NewValueArray()
+    value.ArrayPush(arr, mk_person("1", "Ada"))
+    value.ArrayPush(arr, mk_person("2", "Grace"))
+    graphql.Resolve(slot, arr)
+end
+
+// Derives its answer from the parent object rather than from arguments.
+func r_shout(slot: i64):
+    graphql.ResolveStr(slot, value.AsString(graphql.ParentField(slot, "name")) + "!")
+end
+
+func r_search(slot: i64):
+    mut arr := value.NewValueArray()
+    mut p := mk_person("1", "Ada")
+    value.ObjectSet(p, "__typename", value.ValueString("Person"))
+    value.ArrayPush(arr, p)
+    mut f := value.NewValueObject()
+    value.ObjectSet(f, "__typename", value.ValueString("Film"))
+    value.ObjectSet(f, "id", value.ValueString("f1"))
+    value.ObjectSet(f, "name", value.ValueString("Solaris"))
+    value.ObjectSet(f, "year", value.ValueInt(1972 as i64))
+    value.ArrayPush(arr, f)
+    graphql.Resolve(slot, arr)
+end
+
+func r_echo(slot: i64):
+    p := graphql.Arg(slot, "payload")
+    text := value.AsString(value.ObjectGet(p, "text"))
+    times := value.AsInt(value.ObjectGet(p, "times"))
+    mut out := ""
+    mut i := 0 as i64
+    until i < times:
+        out = out + text
+        i += 1
+    end
+    graphql.ResolveStr(slot, out)
+end
+
+func r_favourite(slot: i64): graphql.ResolveStr(slot, "COMEDY") end
+
+func r_flaky(slot: i64): graphql.Fail(slot, "the flaky field failed") end
+
+func r_required(slot: i64): graphql.Fail(slot, "the required field failed") end
+
+func r_rename(slot: i64):
+    graphql.Resolve(slot, mk_person(graphql.ArgStr(slot, "id"), graphql.ArgStr(slot, "name")))
+end
+
+func build(): graphql.Schema:
+    mut err := graphql.GqlError {}
+    mut sch := graphql.ParseSchema(sdl(), err)
+    testing.AssertEqStr(err.message, "")
+    testing.AssertTrue(graphql.SetResolver(sch, "Query", "hello", funcptr(r_hello)))
+    testing.AssertTrue(graphql.SetResolver(sch, "Query", "add", funcptr(r_add)))
+    testing.AssertTrue(graphql.SetResolver(sch, "Query", "person", funcptr(r_person)))
+    testing.AssertTrue(graphql.SetResolver(sch, "Query", "people", funcptr(r_people)))
+    testing.AssertTrue(graphql.SetResolver(sch, "Query", "search", funcptr(r_search)))
+    testing.AssertTrue(graphql.SetResolver(sch, "Query", "echo", funcptr(r_echo)))
+    testing.AssertTrue(graphql.SetResolver(sch, "Query", "favourite", funcptr(r_favourite)))
+    testing.AssertTrue(graphql.SetResolver(sch, "Query", "flaky", funcptr(r_flaky)))
+    testing.AssertTrue(graphql.SetResolver(sch, "Query", "required", funcptr(r_required)))
+    testing.AssertTrue(graphql.SetResolver(sch, "Person", "shout", funcptr(r_shout)))
+    testing.AssertTrue(graphql.SetResolver(sch, "Mutation", "rename", funcptr(r_rename)))
+    ret sch
+end
+
+// Runs a query and asserts the whole response, key-sorted.
+func expect(sch: graphql.Schema, q: str, want: str):
+    mut r := graphql.Run(sch, q)
+    testing.AssertEqStr(graphql.ResultToJSONStable(r), want)
+    graphql.FreeResult(r)
+end
+
+// Runs a query expected to fail, asserting only the first message.
+func expect_error(sch: graphql.Schema, q: str, wantMessage: str):
+    mut r := graphql.Run(sch, q)
+    testing.AssertFalse(graphql.ResultOk(r))
+    testing.AssertEqStr(graphql.ErrorAt(r.errors, 0).message, wantMessage)
+    graphql.FreeResult(r)
+end
+
+// ---- 1. lexer ----
+
+func test_lexer():
+    testing.AssertTrue(graphql.LexOk("{ hero { name } }"))
+    testing.AssertTrue(graphql.LexOk("# comment only\n{ a }"))
+    testing.AssertFalse(graphql.LexOk("{ a(b: 'single') }"))
+    testing.AssertFalse(graphql.LexOk("{ a(b: 01) }"))
+    testing.AssertFalse(graphql.LexOk("{ a(b: \"unterminated) }"))
+
+    mut ok := true
+    mut ts := graphql.Tokenize(`{ a(n: -1.5e3, s: "x\ny", u: "A") }`, ok)
+    testing.AssertTrue(ok)
+    testing.AssertEqInt(ts.toks.get(5)[0].kind, graphql.TOK_FLOAT)
+    testing.AssertEqStr(ts.toks.get(8)[0].sval, "x\ny")
+    testing.AssertEqStr(ts.toks.get(11)[0].sval, "A")
+
+    // block strings have their common indentation stripped
+    mut ok2 := true
+    mut ts2 := graphql.Tokenize("\"\"\"\n    one\n      two\n    \"\"\"", ok2)
+    testing.AssertTrue(ok2)
+    testing.AssertEqStr(ts2.toks.get(0)[0].sval, "one\n  two")
+
+    // commas are insignificant, so these tokenise identically
+    mut o3 := true
+    mut o4 := true
+    mut a := graphql.Tokenize("{a b c}", o3)
+    mut b := graphql.Tokenize("{a, b, c}", o4)
+    testing.AssertEqInt(a.toks.len(), b.toks.len())
+end
+
+// ---- 2. parser and printer ----
+
+func test_parser():
+    src := "query Q($ep: Genre = DRAMA) @x {\n" +
+        "  a: person(id: \"1\", f: {k: [1, 2], t: true, n: null}) {\n" +
+        "    name\n" +
+        "    ...Bits\n" +
+        "    ... on Person {\n" +
+        "      age\n" +
+        "    }\n" +
+        "  }\n" +
+        "}\n" +
+        "\n" +
+        "fragment Bits on Person {\n" +
+        "  id\n" +
+        "}\n"
+    mut err := graphql.GqlError {}
+    mut doc := graphql.Parse(src, err)
+    testing.AssertEqStr(err.message, "")
+    testing.AssertEqInt(doc.ops.len(), 1)
+    testing.AssertEqInt(doc.frags.len(), 1)
+    op := doc.ops.get(0)[0]
+    testing.AssertEqStr(op.name, "Q")
+    testing.AssertEqInt(op.varDefs.len(), 1)
+    testing.AssertEqInt(op.directives.len(), 1)
+
+    // printing then reparsing is a fixed point
+    printed := graphql.Print(doc)
+    testing.AssertEqStr(printed, src)
+    mut err2 := graphql.GqlError {}
+    doc2 := graphql.Parse(printed, err2)
+    testing.AssertEqStr(graphql.Print(doc2), printed)
+
+    testing.AssertTrue(graphql.ParseOk("{ a }"))
+    testing.AssertTrue(graphql.ParseOk("mutation { m { id } }"))
+    testing.AssertTrue(graphql.ParseOk("subscription S { e { id } }"))
+    testing.AssertFalse(graphql.ParseOk("{ a"))
+    testing.AssertFalse(graphql.ParseOk("query { }"))
+    testing.AssertFalse(graphql.ParseOk("fragment on on X { a }"))
+    testing.AssertFalse(graphql.ParseOk("query Q($a: Int = $b) { x }"))
+
+    mut e3 := graphql.GqlError {}
+    mut d3 := graphql.Parse("{ a", e3)
+    testing.AssertEqInt(e3.category, graphql.ERR_SYNTAX)
+    testing.AssertTrue(e3.hasLocation)
+    graphql.FreeDocument(d3)
+end
+
+// ---- 3. SDL and the schema model ----
+
+func test_schema(sch: graphql.Schema):
+    testing.AssertTrue(graphql.HasType(sch, "Person"))
+    testing.AssertTrue(graphql.HasType(sch, "String"))
+    testing.AssertEqInt(graphql.FindType(sch, "Named").kind, graphql.TYPE_INTERFACE)
+    testing.AssertEqInt(graphql.FindType(sch, "SearchResult").kind, graphql.TYPE_UNION)
+    testing.AssertEqInt(graphql.FindType(sch, "Genre").kind, graphql.TYPE_ENUM)
+    testing.AssertEqInt(graphql.FindType(sch, "EchoInput").kind, graphql.TYPE_INPUT_OBJECT)
+    testing.AssertEqStr(graphql.FindType(sch, "Query").description, "A tiny film database.")
+
+    // root types default to the conventional names (spec 3.3.1)
+    testing.AssertEqStr(sch.queryType, "Query")
+    testing.AssertEqStr(sch.mutationType, "Mutation")
+    testing.AssertEqStr(sch.subscriptionType, "Subscription")
+
+    q := graphql.FindType(sch, "Query")
+    add := graphql.FindField(q, "add")
+    testing.AssertEqStr(graphql.PrintTypeRef(sch.doc, add.typeRef), "Int!")
+    b := graphql.FindArg(add, "b")
+    testing.AssertTrue(b.hasDefault)
+    testing.AssertEqStr(graphql.PrintValue(sch.doc, b.defaultValue), "10")
+
+    people := graphql.FindField(q, "people")
+    testing.AssertEqStr(graphql.PrintTypeRef(sch.doc, people.typeRef), "[Person!]!")
+    testing.AssertTrue(graphql.TypeRefIsNonNull(sch.doc, people.typeRef))
+    testing.AssertTrue(graphql.TypeRefIsList(sch.doc, people.typeRef))
+    testing.AssertEqStr(graphql.TypeRefName(sch.doc, people.typeRef), "Person")
+
+    old := graphql.FindField(graphql.FindType(sch, "Person"), "oldName")
+    testing.AssertTrue(old.deprecated)
+    testing.AssertEqStr(old.deprecationReason, "use name")
+
+    testing.AssertTrue(graphql.IsPossibleType(sch, "Named", "Person"))
+    testing.AssertTrue(graphql.IsPossibleType(sch, "SearchResult", "Film"))
+    testing.AssertFalse(graphql.IsPossibleType(sch, "SearchResult", "Query"))
+    mut poss := graphql.PossibleTypes(sch, "Named")
+    testing.AssertEqInt(poss.len(), 2)
+    poss.free()
+
+    testing.AssertTrue(graphql.IsInputType(sch, "EchoInput"))
+    testing.AssertFalse(graphql.IsInputType(sch, "Person"))
+    testing.AssertTrue(graphql.IsLeafType(sch, "Genre"))
+    testing.AssertTrue(graphql.IsAbstractType(sch, "SearchResult"))
+
+    // built-in directives exist without being declared
+    testing.AssertEqStr(graphql.FindDirectiveDef(sch, "skip").name, "skip")
+    testing.AssertEqStr(graphql.FindDirectiveDef(sch, "include").name, "include")
+    testing.AssertEqStr(graphql.FindDirectiveDef(sch, "deprecated").name, "deprecated")
+end
+
+func test_schema_roundtrip(sch: graphql.Schema):
+    printed := graphql.PrintSchema(sch)
+    mut err := graphql.GqlError {}
+    mut again := graphql.ParseSchema(printed, err)
+    testing.AssertEqStr(err.message, "")
+    testing.AssertEqStr(graphql.PrintSchema(again), printed)
+    graphql.FreeSchema(again)
+
+    // the introspection types are registered but never printed
+    testing.AssertTrue(graphql.HasType(sch, "__Type"))
+    testing.AssertFalse(graphql.IsIntrospectionType("Person"))
+    testing.AssertTrue(graphql.IsIntrospectionType("__Schema"))
+end
+
+func test_schema_builder():
+    mut b := graphql.NewSchema()
+    graphql.AddObjectType(b, "Query", "the root")
+    testing.AssertTrue(graphql.AddField(b, "Query", "ping", "String!"))
+    testing.AssertTrue(graphql.AddFieldArg(b, "Query", "ping", "n", "Int"))
+    testing.AssertFalse(graphql.AddField(b, "Nope", "x", "Int"))
+    mut vals := Vector {} as Vector<str>
+    vals.push("A")
+    vals.push("B")
+    graphql.AddEnumType(b, "Letter", vals)
+    vals.free()
+    testing.AssertTrue(graphql.HasEnumValue(graphql.FindType(b, "Letter"), "B"))
+    testing.AssertEqStr(graphql.PrintSchema(b),
+        "\"the root\"\ntype Query {\n  ping(n: Int): String!\n}\n\nenum Letter {\n  A\n  B\n}\n")
+    graphql.FreeSchema(b)
+
+    // extending an existing schema
+    mut err := graphql.GqlError {}
+    mut e := graphql.ParseSchema("type Query { a: Int }", err)
+    mut err2 := graphql.GqlError {}
+    graphql.ParseSchemaInto(e, "extend type Query { b: Int }", err2)
+    testing.AssertEqStr(err2.message, "")
+    testing.AssertTrue(graphql.HasField(graphql.FindType(e, "Query"), "b"))
+    graphql.FreeSchema(e)
+
+    testing.AssertFalse(graphql.ParseSchemaOk("type Query { a: }"))
+    testing.AssertFalse(graphql.ParseSchemaOk("type Q { a: Int }\ntype Q { b: Int }"))
+    testing.AssertFalse(graphql.ParseSchemaOk("extend type Missing { a: Int }"))
+end
+
+// ---- 4. execution ----
+
+func test_execution(sch: graphql.Schema):
+    expect(sch, "{ hello }", `{"data": {"hello": "world"}}`)
+    expect(sch, "{ greeting: hello }", `{"data": {"greeting": "world"}}`)
+    expect(sch, "{ add(a: 5) }", `{"data": {"add": 15}}`)
+    expect(sch, "{ add(a: 5, b: 2) }", `{"data": {"add": 7}}`)
+    expect(sch, `{ person(id: "1") { id name shout } }`,
+        `{"data": {"person": {"id": "1", "name": "Ada", "shout": "Ada!"}}}`)
+    expect(sch, `{ person(id: "0") { id } }`, `{"data": {"person": null}}`)
+    expect(sch, "{ people { name } }",
+        `{"data": {"people": [{"name": "Ada"}, {"name": "Grace"}]}}`)
+    expect(sch, "{ favourite }", `{"data": {"favourite": "COMEDY"}}`)
+
+    // __typename on the root, on an object, and inside a list
+    expect(sch, "{ __typename }", `{"data": {"__typename": "Query"}}`)
+    expect(sch, "{ people { __typename name } }",
+        `{"data": {"people": [{"__typename": "Person", "name": "Ada"}, {"__typename": "Person", "name": "Grace"}]}}`)
+
+    // an input object, with and without the defaulted field
+    expect(sch, `{ echo(payload: {text: "ab"}) }`, `{"data": {"echo": "abab"}}`)
+    expect(sch, `{ echo(payload: {text: "x", times: 3}) }`, `{"data": {"echo": "xxx"}}`)
+
+    // a mutation
+    expect(sch, `mutation { rename(id: "1", name: "Grace") { id name } }`,
+        `{"data": {"rename": {"id": "1", "name": "Grace"}}}`)
+end
+
+func test_abstract_types(sch: graphql.Schema):
+    // a union resolved through __typename on each member
+    expect(sch, "{ search(text: \"a\") { __typename ... on Person { name } ... on Film { year } } }",
+        `{"data": {"search": [{"__typename": "Person", "name": "Ada"}, {"__typename": "Film", "year": 1972}]}}`)
+
+    // a named fragment on the interface, spread over concrete objects
+    expect(sch, "{ people { ...N } } fragment N on Named { name }",
+        `{"data": {"people": [{"name": "Ada"}, {"name": "Grace"}]}}`)
+end
+
+func test_directives(sch: graphql.Schema):
+    expect(sch, "{ hello @include(if: true) }", `{"data": {"hello": "world"}}`)
+    expect(sch, "{ hello @include(if: false) }", `{"data": {}}`)
+    expect(sch, "{ hello @skip(if: true) }", `{"data": {}}`)
+    expect(sch, "{ hello @skip(if: false) }", `{"data": {"hello": "world"}}`)
+    // @skip wins when both say to include
+    expect(sch, "{ hello @skip(if: true) @include(if: true) }", `{"data": {}}`)
+end
+
+func test_variables(sch: graphql.Schema):
+    mut vars := value.NewValueObject()
+    value.ObjectSet(vars, "n", value.ValueInt(4 as i64))
+    mut r := graphql.ExecuteSource(sch, "query Q($n: Int!) { add(a: $n) }", "",
+        vars, value.NewValueObject(), value.NewValueObject())
+    testing.AssertEqStr(graphql.ResultToJSONStable(r), `{"data": {"add": 14}}`)
+    graphql.FreeResult(r)
+
+    // a variable with a default, left unsupplied
+    mut r2 := graphql.ExecuteSource(sch, "query Q($n: Int = 7) { add(a: $n) }", "",
+        value.NewValueObject(), value.NewValueObject(), value.NewValueObject())
+    testing.AssertEqStr(graphql.ResultToJSONStable(r2), `{"data": {"add": 17}}`)
+    graphql.FreeResult(r2)
+
+    // a missing required variable is a request error, so no data at all
+    mut r3 := graphql.ExecuteSource(sch, "query Q($n: Int!) { add(a: $n) }", "",
+        value.NewValueObject(), value.NewValueObject(), value.NewValueObject())
+    testing.AssertFalse(r3.hasData)
+    testing.AssertEqStr(graphql.ErrorAt(r3.errors, 0).message,
+        `variable "$n" of required type was not provided`)
+    graphql.FreeResult(r3)
+
+    // a variable of the wrong type
+    mut bad := value.NewValueObject()
+    value.ObjectSet(bad, "n", value.ValueString("x"))
+    mut r4 := graphql.ExecuteSource(sch, "query Q($n: Int!) { add(a: $n) }", "",
+        bad, value.NewValueObject(), value.NewValueObject())
+    testing.AssertFalse(r4.hasData)
+    graphql.FreeResult(r4)
+
+    // selecting one of several operations by name
+    two := "query A { hello }\nquery B { add(a: 1) }"
+    mut rb := graphql.ExecuteSource(sch, two, "B",
+        value.NewValueObject(), value.NewValueObject(), value.NewValueObject())
+    testing.AssertEqStr(graphql.ResultToJSONStable(rb), `{"data": {"add": 11}}`)
+    graphql.FreeResult(rb)
+
+    // ambiguous without a name
+    mut rn := graphql.ExecuteSource(sch, two, "",
+        value.NewValueObject(), value.NewValueObject(), value.NewValueObject())
+    testing.AssertFalse(rn.hasData)
+    graphql.FreeResult(rn)
+end
+
+// ---- 5. errors and null propagation ----
+
+func test_field_errors(sch: graphql.Schema):
+    // a nullable field that errors becomes null and keeps its siblings
+    mut r := graphql.Run(sch, "{ hello flaky }")
+    testing.AssertTrue(r.hasData)
+    testing.AssertEqInt(graphql.ErrorCount(r.errors), 1)
+    testing.AssertEqStr(graphql.ErrorAt(r.errors, 0).message, "the flaky field failed")
+    testing.AssertEqStr(graphql.PathString(graphql.ErrorAt(r.errors, 0)), "flaky")
+    testing.AssertEqStr(graphql.ResultToJSONStable(r),
+        `{"data": {"flaky": null, "hello": "world"}, "errors": [{"locations": [{"column": 9, "line": 1}], "message": "the flaky field failed", "path": ["flaky"]}]}`)
+    graphql.FreeResult(r)
+
+    // a non-null field that errors nulls the whole data entry, and
+    // reports the resolver's message only once
+    mut r2 := graphql.Run(sch, "{ hello required }")
+    testing.AssertTrue(r2.hasData)
+    testing.AssertTrue(value.IsNull(r2.data))
+    testing.AssertEqInt(graphql.ErrorCount(r2.errors), 1)
+    testing.AssertEqStr(graphql.ErrorAt(r2.errors, 0).message, "the required field failed")
+    graphql.FreeResult(r2)
+end
+
+// ---- 6. validation ----
+
+func test_validation(sch: graphql.Schema):
+    expect_error(sch, "{ nope }", `cannot query field "nope" on type "Query"`)
+    expect_error(sch, "{ hello { x } }",
+        `field "hello" of type "String" must not have a selection set`)
+    expect_error(sch, "{ people }", `field "people" of type "Person" must have a selection set`)
+    expect_error(sch, "{ add }", `field "add" requires argument "a"`)
+    expect_error(sch, `{ add(a: "x") }`,
+        `argument "a" is invalid: Int cannot represent a non-numeric value`)
+    expect_error(sch, "{ add(a: 1, z: 2) }", `unknown argument "z" on field "add"`)
+    expect_error(sch, "{ add(a: $z) }", `variable "$z" is not defined by the operation`)
+    expect_error(sch, "query Q($n: Int) { hello }", `variable "$n" is never used`)
+    expect_error(sch, "{ people { ...Missing } }", `unknown fragment "Missing"`)
+    expect_error(sch, "{ hello } fragment Unused on Person { id }",
+        `fragment "Unused" is never used`)
+    expect_error(sch, "query A { hello } query A { hello }",
+        `there can be only one operation named "A"`)
+    expect_error(sch, "{ hello } query B { hello }",
+        "this anonymous operation must be the only defined operation")
+    expect_error(sch, "{ hello @nope }", `unknown directive "@nope"`)
+    expect_error(sch, "{ hello @deprecated }", `directive "@deprecated" may not be used on FIELD`)
+    expect_error(sch, "{ people { ...A } } fragment A on Person { ...B } fragment B on Person { ...A }",
+        `cannot spread fragment "A" within itself`)
+    expect_error(sch, "{ favourite(x: 1) }", `unknown argument "x" on field "favourite"`)
+    expect_error(sch, "query Q($v: Person) { hello }",
+        `variable "$v" cannot be non-input type "Person"`)
+    expect_error(sch, "subscription S { ticks events }",
+        "a subscription operation must select exactly one root field")
+
+    // a fragment on a type that can never apply
+    expect_error(sch, "{ people { ... on Film { year } } }",
+        `fragment cannot be spread here as objects of type "Person" can never be of type "Film"`)
+
+    // valid documents pass
+    testing.AssertTrue(graphql.ValidateOk(sch, parse_ok("{ hello }")))
+    mut errs := graphql.ValidateSource(sch, "{ hello }")
+    testing.AssertFalse(graphql.HasErrors(errs))
+    graphql.FreeErrorList(errs)
+end
+
+func parse_ok(src: str): graphql.Document:
+    mut err := graphql.GqlError {}
+    ret graphql.Parse(src, err)
+end
+
+// ---- 7. introspection ----
+
+func test_introspection(sch: graphql.Schema):
+    expect(sch, `{ __type(name: "Person") { name kind } }`,
+        `{"data": {"__type": {"kind": "OBJECT", "name": "Person"}}}`)
+    expect(sch, `{ __type(name: "Nope") { name } }`, `{"data": {"__type": null}}`)
+    expect(sch, "{ __schema { queryType { name } mutationType { name } subscriptionType { name } } }",
+        `{"data": {"__schema": {"mutationType": {"name": "Mutation"}, "queryType": {"name": "Query"}, "subscriptionType": {"name": "Subscription"}}}}`)
+
+    // the wrapper-type chain: [Person!]! is NON_NULL -> LIST -> NON_NULL -> Person
+    expect(sch, `{ __type(name: "Query") { fields(includeDeprecated: false) { name } } }`,
+        `{"data": {"__type": {"fields": [{"name": "hello"}, {"name": "add"}, {"name": "person"}, {"name": "people"}, {"name": "search"}, {"name": "echo"}, {"name": "favourite"}, {"name": "flaky"}, {"name": "required"}]}}}`)
+
+    mut r := graphql.Run(sch, `{ __type(name: "Query") { fields { name type { kind ofType { kind ofType { kind ofType { name } } } } } } }`)
+    testing.AssertTrue(graphql.ResultOk(r))
+    fields := value.ObjectGet(value.ObjectGet(r.data, "__type"), "fields")
+    people := value.ArrayGet(fields, 3)
+    testing.AssertEqStr(value.AsString(value.ObjectGet(people, "name")), "people")
+    t0 := value.ObjectGet(people, "type")
+    testing.AssertEqStr(value.AsString(value.ObjectGet(t0, "kind")), "NON_NULL")
+    t1 := value.ObjectGet(t0, "ofType")
+    testing.AssertEqStr(value.AsString(value.ObjectGet(t1, "kind")), "LIST")
+    t2 := value.ObjectGet(t1, "ofType")
+    testing.AssertEqStr(value.AsString(value.ObjectGet(t2, "kind")), "NON_NULL")
+    t3 := value.ObjectGet(t2, "ofType")
+    testing.AssertEqStr(value.AsString(value.ObjectGet(t3, "name")), "Person")
+    graphql.FreeResult(r)
+
+    // deprecated fields are hidden unless asked for
+    expect(sch, `{ __type(name: "Person") { fields { name } } }`,
+        `{"data": {"__type": {"fields": [{"name": "id"}, {"name": "name"}, {"name": "shout"}, {"name": "age"}]}}}`)
+    expect(sch, `{ __type(name: "Person") { fields(includeDeprecated: true) { name isDeprecated deprecationReason } } }`,
+        `{"data": {"__type": {"fields": [{"deprecationReason": null, "isDeprecated": false, "name": "id"}, {"deprecationReason": null, "isDeprecated": false, "name": "name"}, {"deprecationReason": null, "isDeprecated": false, "name": "shout"}, {"deprecationReason": null, "isDeprecated": false, "name": "age"}, {"deprecationReason": "use name", "isDeprecated": true, "name": "oldName"}]}}}`)
+
+    // enum values, input fields, interfaces and possible types
+    expect(sch, `{ __type(name: "Genre") { kind enumValues { name } } }`,
+        `{"data": {"__type": {"enumValues": [{"name": "DRAMA"}, {"name": "COMEDY"}], "kind": "ENUM"}}}`)
+    expect(sch, `{ __type(name: "EchoInput") { inputFields { name defaultValue } } }`,
+        `{"data": {"__type": {"inputFields": [{"defaultValue": null, "name": "text"}, {"defaultValue": "2", "name": "times"}]}}}`)
+    expect(sch, `{ __type(name: "Person") { interfaces { name } } }`,
+        `{"data": {"__type": {"interfaces": [{"name": "Named"}]}}}`)
+    expect(sch, `{ __type(name: "SearchResult") { possibleTypes { name } } }`,
+        `{"data": {"__type": {"possibleTypes": [{"name": "Person"}, {"name": "Film"}]}}}`)
+
+    // introspection is only available on the query root
+    expect_error(sch, "{ people { __schema { types { name } } } }",
+        `cannot query field "__schema" on type "Person"`)
+
+    // the standard client introspection query runs end to end
+    mut full := graphql.Run(sch, introspection_query())
+    testing.AssertTrue(graphql.ResultOk(full))
+    types := value.ObjectGet(value.ObjectGet(full.data, "__schema"), "types")
+    testing.AssertTrue(value.ArrayLen(types) > 8)
+    graphql.FreeResult(full)
+end
+
+// A trimmed version of the query every GraphQL client sends on connect.
+func introspection_query(): str:
+    ret "query IntrospectionQuery {\n" +
+        "  __schema {\n" +
+        "    queryType { name }\n" +
+        "    mutationType { name }\n" +
+        "    types { ...FullType }\n" +
+        "    directives { name locations args { ...InputValue } }\n" +
+        "  }\n" +
+        "}\n" +
+        "fragment FullType on __Type {\n" +
+        "  kind\n" +
+        "  name\n" +
+        "  description\n" +
+        "  fields(includeDeprecated: true) {\n" +
+        "    name\n" +
+        "    args { ...InputValue }\n" +
+        "    type { ...TypeRef }\n" +
+        "    isDeprecated\n" +
+        "    deprecationReason\n" +
+        "  }\n" +
+        "  inputFields { ...InputValue }\n" +
+        "  interfaces { ...TypeRef }\n" +
+        "  enumValues(includeDeprecated: true) { name isDeprecated deprecationReason }\n" +
+        "  possibleTypes { ...TypeRef }\n" +
+        "}\n" +
+        "fragment InputValue on __InputValue {\n" +
+        "  name\n" +
+        "  type { ...TypeRef }\n" +
+        "  defaultValue\n" +
+        "}\n" +
+        "fragment TypeRef on __Type {\n" +
+        "  kind\n" +
+        "  name\n" +
+        "  ofType { kind name ofType { kind name ofType { kind name } } }\n" +
+        "}\n"
+end
+
+// ---- 8. HTTP transport ----
+
+func test_http(sch: graphql.Schema):
+    // POST with a JSON body
+    res := graphql.HandleHttpSimple(sch, "POST", "application/json",
+        `{"query": "{ hello }"}`, "")
+    testing.AssertEqInt(res.status, 200)
+    testing.AssertEqStr(res.body, `{"data": {"hello": "world"}}`)
+
+    // variables and an operation name in the body
+    body := `{"query": "query A($n: Int!) { add(a: $n) } query B { hello }", "operationName": "A", "variables": {"n": 2}}`
+    res2 := graphql.HandleHttpSimple(sch, "POST", "application/json; charset=utf-8", body, "")
+    testing.AssertEqInt(res2.status, 200)
+    testing.AssertEqStr(res2.body, `{"data": {"add": 12}}`)
+
+    // the application/graphql content type carries a bare query
+    res3 := graphql.HandleHttpSimple(sch, "POST", "application/graphql", "{ hello }", "")
+    testing.AssertEqInt(res3.status, 200)
+
+    // GET with the query in the URL
+    res4 := graphql.HandleHttpSimple(sch, "GET", "", "", "query=%7B%20hello%20%7D")
+    testing.AssertEqInt(res4.status, 200)
+    testing.AssertEqStr(res4.body, `{"data": {"hello": "world"}}`)
+
+    // a mutation over GET is refused
+    res5 := graphql.HandleHttpSimple(sch, "GET", "", "",
+        "query=mutation%20%7B%20rename(id%3A%20%221%22%2C%20name%3A%20%22x%22)%20%7B%20id%20%7D%20%7D")
+    testing.AssertEqInt(res5.status, 405)
+
+    // malformed and unsupported requests
+    testing.AssertEqInt(graphql.HandleHttpSimple(sch, "POST", "application/json", "not json", "").status, 400)
+    testing.AssertEqInt(graphql.HandleHttpSimple(sch, "POST", "application/json", "{}", "").status, 400)
+    testing.AssertEqInt(graphql.HandleHttpSimple(sch, "DELETE", "", "", "").status, 400)
+
+    // a validation failure never reaches execution, so there is no data
+    res6 := graphql.HandleHttpSimple(sch, "POST", "application/json", `{"query": "{ nope }"}`, "")
+    testing.AssertEqInt(res6.status, 400)
+
+    // request parsing on its own
+    req := graphql.ParseHttpRequestJSON(`{"query": "{ a }", "operationName": "Op", "variables": {"k": 1}}`)
+    testing.AssertTrue(req.ok)
+    testing.AssertEqStr(req.query, "{ a }")
+    testing.AssertEqStr(req.operationName, "Op")
+    testing.AssertEqInt64(value.AsInt(value.ObjectGet(req.variables, "k")), 1 as i64)
+end
+
+// ---- 9. client ----
+
+func test_client():
+    mut vars := value.NewValueObject()
+    value.ObjectSet(vars, "id", value.ValueString("7"))
+    body := graphql.BuildRequestBody("query Q($id: ID!) { person(id: $id) { name } }", "Q", vars)
+    testing.AssertContains(body, `"query"`)
+    testing.AssertContains(body, `"operationName"`)
+    testing.AssertContains(body, `"variables"`)
+
+    // a request with no variables omits the key rather than sending null
+    plain := graphql.BuildQueryBody("{ hello }")
+    testing.AssertEqStr(plain, `{"query": "{ hello }"}`)
+
+    qs := graphql.BuildRequestQueryString("{ hello }", "", value.NewValueObject())
+    testing.AssertEqStr(qs, "query=%7B%20hello%20%7D")
+
+    // reading a successful response
+    mut ok := graphql.ParseResponse(`{"data": {"hello": "world"}}`)
+    testing.AssertTrue(graphql.ResponseOk(ok))
+    testing.AssertEqStr(value.AsString(graphql.ResponseField(ok, "hello")), "world")
+    graphql.FreeClientResponse(ok)
+
+    // reading an error response, including path and extension code
+    mut bad := graphql.ParseResponse(`{"errors": [{"message": "boom", "locations": [{"line": 2, "column": 5}], "path": ["a", 0, "b"], "extensions": {"code": "BOOM"}}]}`)
+    testing.AssertFalse(graphql.ResponseOk(bad))
+    e := graphql.ErrorAt(bad.errors, 0)
+    testing.AssertEqStr(e.message, "boom")
+    testing.AssertEqInt(e.line, 2)
+    testing.AssertEqInt(e.col, 5)
+    testing.AssertEqStr(graphql.PathString(e), "a[0].b")
+    testing.AssertEqStr(e.code, "BOOM")
+    graphql.FreeClientResponse(bad)
+
+    // a malformed body is reported rather than silently accepted
+    mut broken := graphql.ParseResponse("not json")
+    testing.AssertFalse(graphql.ResponseOk(broken))
+    graphql.FreeClientResponse(broken)
+    mut empty := graphql.ParseResponse("{}")
+    testing.AssertFalse(graphql.ResponseOk(empty))
+    graphql.FreeClientResponse(empty)
+end
+
+// ---- 10. a full round trip ----
+
+// Client builds a request, the server handles it, the client reads the
+// answer back, with only strings crossing between them.
+func test_round_trip(sch: graphql.Schema):
+    mut vars := value.NewValueObject()
+    value.ObjectSet(vars, "id", value.ValueString("42"))
+    request := graphql.BuildRequestBody("query P($id: ID!) { person(id: $id) { id name shout } }", "P", vars)
+
+    res := graphql.HandleHttpSimple(sch, "POST", "application/json", request, "")
+    testing.AssertEqInt(res.status, 200)
+
+    mut got := graphql.ParseResponse(res.body)
+    testing.AssertTrue(graphql.ResponseOk(got))
+    person := graphql.ResponseField(got, "person")
+    testing.AssertEqStr(value.AsString(value.ObjectGet(person, "id")), "42")
+    testing.AssertEqStr(value.AsString(value.ObjectGet(person, "shout")), "Ada!")
+    graphql.FreeClientResponse(got)
+end
+
+// ---- 11. executing does not mutate the schema ----
+
+// A regression guard. Execution used to peel a `!` off a type reference
+// by appending a nullable copy of the node to the schema's arena, and
+// introspection did the same building its ofType chain. Ex holds the
+// Schema by value, so that arena is the caller's: it grew on every
+// request, and a push that resized it left every other holder of the
+// schema pointing at freed memory. Both now peel with a flag, so the
+// arena must be exactly as long after a workload as before it.
+func test_schema_is_not_mutated(sch: graphql.Schema):
+    before := sch.doc.trefs.len()
+    beforeVals := sch.doc.vals.len()
+    mut i := 0
+    until i < 25:
+        mut a := graphql.Run(sch, "{ people { id name shout } required }")
+        graphql.FreeResult(a)
+        mut b := graphql.Run(sch, `{ __type(name: "Query") { fields { type { kind ofType { kind ofType { name } } } } } }`)
+        graphql.FreeResult(b)
+        mut c := graphql.Run(sch, `{ echo(payload: {text: "z", times: 2}) }`)
+        graphql.FreeResult(c)
+        i += 1
+    end
+    testing.AssertEqInt(sch.doc.trefs.len(), before)
+    testing.AssertEqInt(sch.doc.vals.len(), beforeVals)
+
+    // and the schema still answers correctly afterwards
+    expect(sch, "{ hello }", `{"data": {"hello": "world"}}`)
+end
+
+func main:
+    test_lexer()
+    test_parser()
+    test_schema_builder()
+
+    mut sch := build()
+    test_schema(sch)
+    test_schema_roundtrip(sch)
+    test_execution(sch)
+    test_abstract_types(sch)
+    test_directives(sch)
+    test_variables(sch)
+    test_field_errors(sch)
+    test_validation(sch)
+    test_introspection(sch)
+    test_http(sch)
+    test_client()
+    test_round_trip(sch)
+    test_schema_is_not_mutated(sch)
+    graphql.FreeSchema(sch)
+
+    ret testing.Summary()
+end

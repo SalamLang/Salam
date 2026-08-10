@@ -751,6 +751,40 @@ static int run_cc_cmd(logger_t *log, const char *cmd, const char *builddir)
     return rc;
 }
 
+/* The C backend's half of `--backend=auto`: the best C compiler this host
+ * has, preferring one shipped inside the install tree over one on $PATH at
+ * each rung. clang leads because it is the same codegen family as the LLVM
+ * backend, so an auto build degrades to the closest thing available rather
+ * than to a different toolchain; tcc is the floor. */
+/*
+ * clang > gcc > tcc, but the *whole* ladder is walked over the bundled
+ * install tree before $PATH is consulted at all - not bundled-then-$PATH
+ * per rung. Interleaving them let a host gcc outrank the tcc a
+ * self-contained install ships with, which is not the toolchain that
+ * install was built and tested against: on Windows it swaps in a
+ * mingw-w64 gcc whose <stdlib.h> spells __argv as a macro over
+ * __p___argv(), so std/os/process' `extern void* __argv` becomes a
+ * conflicting redeclaration and every program importing it stops
+ * compiling. The $PATH pass still exists for the case it was added for -
+ * an install that ships no toolchain at all, most notably a plain source
+ * checkout.
+ */
+static bool resolve_auto_cc(char *out, size_t n, bool *bundled)
+{
+    static const char *const LADDER[] = {"clang", "gcc", "tcc"};
+    size_t i = 0;
+    for (; i < sizeof LADDER / sizeof LADDER[0]; i++) {
+        if (salam_find_bundled_tool(LADDER[i], out, n)) {
+            *bundled = true;
+            return true;
+        }
+    }
+    *bundled = false;
+    for (i = 0; i < sizeof LADDER / sizeof LADDER[0]; i++)
+        if (salam_find_path_tool(LADDER[i], out, n)) return true;
+    return false;
+}
+
 static bool build_use_llvm(const options_t *opt)
 {
     if (!strcmp(opt->backend, "c")) return false;
@@ -809,8 +843,13 @@ int driver_build(options_t *opt)
         if (lrc != SALAM_RC_LLVM_UNSUPPORTED && lrc != SALAM_RC_LLVM_LINK_FAILED)
             return lrc;
         if (!strcmp(opt->backend, "llvm")) return lrc;
-        fprintf(stderr, i18n_tr("salam: falling back to the C backend for this file "
-                                "(build with --backend=llvm to make this an error)\n"));
+        /* fputs, not fprintf: i18n_tr() returns a translated string, and a
+         * translation carrying a '%' would be read as a format directive
+         * with no argument behind it (clang -Wformat-security). The selfhost
+         * driver prints this with EPrintln for the same reason. */
+        fputs(i18n_tr("salam: falling back to the C backend for this file "
+                      "(build with --backend=llvm to make this an error)\n"),
+              stderr);
     }
 
     logger_t *log = logger_new(stderr, opt->log_level, resolve_color(opt->color));
@@ -833,20 +872,45 @@ int driver_build(options_t *opt)
      * by build_use_llvm above), else the C backend, which resolves its
      * compiler clang > gcc > tcc. clang leads because it is the same
      * codegen family as the LLVM backend, so an auto build degrades to the
-     * closest thing available rather than to a different toolchain. */
-    if (opt->cc && strcmp(opt->cc, "tcc") == 0) {
-        static char bundled_cc[1200];
-        if (salam_find_bundled_tool("clang", bundled_cc, sizeof bundled_cc) ||
-            salam_find_bundled_tool("gcc", bundled_cc, sizeof bundled_cc) ||
-            salam_find_bundled_tool("tcc", bundled_cc, sizeof bundled_cc)) {
-            opt->cc = bundled_cc;
-            LOG_I(log, PH_DRIVER, "using bundled C compiler: %s", opt->cc);
+     * closest thing available rather than to a different toolchain.
+     *
+     * The bundled install tree is searched first at every rung, then $PATH.
+     * Without the $PATH half the ladder collapsed on any install that ships
+     * no toolchain (a plain source checkout, most notably): nothing matched,
+     * opt->cc kept its "nobody passed --cc" sentinel value - the literal
+     * string "tcc" - and the build shelled out to a tcc that need not be
+     * installed, on a host that may well have clang or gcc right there.
+     *
+     * opt->cc_explicit is what separates that sentinel from a user who
+     * actually typed --cc=tcc. Testing the string alone made the two
+     * identical, so an explicit --cc=tcc was silently resolved away to
+     * whatever clang/gcc the ladder found first - which is not a compiler
+     * the caller asked for, and on Windows swaps in a gcc that miscompiles
+     * several stdlib paths. An explicit --cc is a choice, not a hint. */
+    if (opt->cc && !opt->cc_explicit && strcmp(opt->cc, "tcc") == 0) {
+        static char raw_cc[1200], quoted_cc[1208];
+        bool bundled = false;
+        if (resolve_auto_cc(raw_cc, sizeof raw_cc, &bundled)) {
+            LOG_I(log, PH_DRIVER, "using %s C compiler: %s", bundled ? "bundled" : "host",
+                  raw_cc);
 #if !defined(_WIN32)
-            musl_tcc = detect_bundled_musl_tcc(bundled_cc);
-            if (musl_tcc.active)
-                LOG_I(log, PH_DRIVER, "using bundled musl sysroot: %s",
-                      musl_tcc.musl_dir);
+            if (bundled) {
+                musl_tcc = detect_bundled_musl_tcc(raw_cc);
+                if (musl_tcc.active)
+                    LOG_I(log, PH_DRIVER, "using bundled musl sysroot: %s",
+                          musl_tcc.musl_dir);
+            }
 #endif
+            /* A --cc= the user typed is a command prefix and may carry
+             * flags, so it goes into the command line verbatim; a path we
+             * resolved ourselves is just a path, and $PATH entries like
+             * "C:/Program Files/..." have to be quoted to survive it. */
+            if (strchr(raw_cc, ' ')) {
+                sal_snprintf(quoted_cc, sizeof quoted_cc, "\"%s\"", raw_cc);
+                opt->cc = quoted_cc;
+            } else {
+                opt->cc = raw_cc;
+            }
         }
     }
 
@@ -1217,6 +1281,24 @@ int driver_build(options_t *opt)
         return 1;
     }
     int crc = 0;
+    /*
+     * -fno-strict-aliasing is not optional, and is deliberately applied
+     * whenever the compiler is not tcc - independently of -O, so a caller
+     * who passes their own --cc="gcc -O2" still gets it.
+     *
+     * Generated C reaches every aggregate through void*: slices hand back
+     * `void*` from salam_slice_at that the caller casts to the element
+     * type, Vector payloads are re-cast per element, and str arrays are
+     * walked as int64_t*. That is exactly the type punning C's strict
+     * aliasing rules forbid, so at -O2 gcc is free to assume those accesses
+     * cannot alias and reorders them - `fmt.Sprintf` over a Vector<str>
+     * segfaulted, and a dozen tests silently truncated their output
+     * mid-run. -O0 and -O1 were fine, which is what made it look like a
+     * miscompile rather than UB in what we emit. Every compiler that emits
+     * C this way disables the assumption; the real alternative is emitting
+     * unions or char* accessors everywhere, which this backend does not do.
+     */
+    const char *alias_flag = strstr(opt->cc, "tcc") ? "" : " -fno-strict-aliasing";
     const char *opt_flag = (!opt->debug_info && !opt->asan && !strstr(opt->cc, "tcc") &&
                             !strstr(opt->cc, "-O"))
                                ? " -O2"
@@ -1248,6 +1330,7 @@ int driver_build(options_t *opt)
                 sb_puts(&cmd, " -c -I. -I");
                 sb_put_shell_arg(&cmd, scratch);
                 sb_puts(&cmd, opt_flag);
+                sb_puts(&cmd, alias_flag);
                 sb_puts(&cmd, dbg_flag);
                 sb_putc(&cmd, ' ');
                 sb_put_shell_arg(&cmd, cfiles[i]);
@@ -1327,6 +1410,7 @@ int driver_build(options_t *opt)
             }
 #endif
             sb_puts(&cflags, opt_flag);
+            sb_puts(&cflags, alias_flag);
             sb_puts(&cflags, lto_flag);
             sb_puts(&cflags, " -I. -I");
             sb_put_shell_arg(&cflags, scratch);
@@ -1429,6 +1513,7 @@ int driver_build(options_t *opt)
         }
 #endif
         sb_puts(&cmd, opt_flag);
+        sb_puts(&cmd, alias_flag);
         sb_puts(&cmd, lto_flag);
         sb_puts(&cmd, " -I. -I");
         sb_put_shell_arg(&cmd, scratch);

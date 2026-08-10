@@ -20,6 +20,7 @@ package process
 import mem
 import str
 import io
+import os
 import os.error
 import os.temp
 
@@ -32,9 +33,7 @@ if SALAM_OS_WINDOWS:
         func TerminateProcess(h: void*, code: int): int
         func CloseHandle(h: void*): int
         func GetLastError(): int
-        func CreatePipe(readh: void*, writeh: void*, sattr: void*, size: int): int
-        func SetHandleInformation(h: void*, mask: int, flags: int): int
-        func ReadFile(h: void*, buf: void*, n: int, nread: void*, overlapped: void*): int
+        func CreateFileA(path: str, access: u32, share: u32, sattr: void*, disp: u32, flags: u32, template: void*): void*
     end
 else:
     extern:
@@ -56,8 +55,8 @@ pub struct Process:
     pub handle: void* = null
     pub running: bool = false
     pub exit_code: int = 0
-    pub stdout_handle: void* = null
-    pub stderr_handle: void* = null
+    // Capture is file-backed on every platform - see _open_inheritable and the
+    // POSIX StartCaptured - so there are no stream handles to hold onto here.
     pub stdout_path: str = ""
     pub stderr_path: str = ""
 end
@@ -120,30 +119,24 @@ if SALAM_OS_WINDOWS:
         ret sa
     end
 
-    func _read_all_handle(h: void*): str:
-        mut sb := str.NewBuilder()
-        buf := mem.Allocate(4096 as u64)
-        readbuf := mem.AllocateZeroed(4 as u64)
-        mut go := true
-        until go:
-            ok := ReadFile(h, buf, 4096, readbuf, null)
-            n := _u32_at(readbuf, 0) as int
-            if ok == 0 || n <= 0:
-                go = false
-            else:
-                mut i := 0
-                until i < n:
-                    bp := ((buf as i64) + i) as u8*
-                    str.BufAppendChar(sb, bp[0] as int)
-                    i += 1
-                end
-            end
-        end
-        mem.Free(buf)
-        mem.Free(readbuf)
-        out := str.BufStr(sb)
-        str.BufFree(sb)
-        ret out
+    // Capture targets a real file opened with an inheritable handle, never an
+    // anonymous pipe. A pipe has a fixed kernel buffer (4 KB by default, which
+    // is what CreatePipe's size=0 asks for): a child that outruns it blocks in
+    // WriteFile, and a parent that waits for the child before draining blocks
+    // in WaitForSingleObject - neither side can break that. Draining first
+    // does not fix it either, because two pipes have to be drained
+    // concurrently or whichever one is read second fills up and deadlocks the
+    // same way. A file handle applies no back-pressure at all, so both streams
+    // are captured with no ordering constraint between Wait and the reads.
+    func _open_inheritable(path: str, access: u32, disp: u32): void*:
+        sa := _build_sa()
+        // FILE_SHARE_READ | FILE_SHARE_WRITE, FILE_ATTRIBUTE_NORMAL: the
+        // parent has to be able to read the file back while the child writes.
+        h := CreateFileA(path, access, 3 as u32, sa, disp, 128 as u32, null)
+        mem.Free(sa)
+        invalid := (0 - 1) as i64
+        if (h as i64) == invalid: ret null end
+        ret h
     end
 else:
     func _build_argv(path: str, args: Vector<str>): void*:
@@ -159,6 +152,8 @@ else:
         ret arr as void*
     end
 
+    // O_WRONLY | O_CREAT | O_TRUNC, whose bit values differ between Linux
+    // (0x40 / 0x200) and macOS (0x200 / 0x400).
     func _open_flags(): int:
         if SALAM_OS_MAC: ret 1 + 512 + 1024 end
         ret 1 + 64 + 512
@@ -195,47 +190,45 @@ if SALAM_OS_WINDOWS:
     @fa "شروع با ضبط"
     @ar "بدء مع الالتقاط"
     pub func StartCaptured(path: str, args: Vector<str>): Process:
-        sa := _build_sa()
-        out_r := mem.Allocate(8 as u64)
-        out_w := mem.Allocate(8 as u64)
-        CreatePipe(out_r, out_w, sa, 0)
-        err_r := mem.Allocate(8 as u64)
-        err_w := mem.Allocate(8 as u64)
-        CreatePipe(err_r, err_w, sa, 0)
-        mem.Free(sa)
-
-        out_rh := (out_r as i64*)[0] as void*
-        out_wh := (out_w as i64*)[0] as void*
-        err_rh := (err_r as i64*)[0] as void*
-        err_wh := (err_w as i64*)[0] as void*
-        mem.Free(out_r)
-        mem.Free(out_w)
-        mem.Free(err_r)
-        mem.Free(err_w)
-
-        SetHandleInformation(out_rh, 1, 0)
-        SetHandleInformation(err_rh, 1, 0)
+        out_path := temp.File()
+        err_path := temp.File()
+        // GENERIC_WRITE + CREATE_ALWAYS for the two capture files. NUL with
+        // GENERIC_READ + OPEN_EXISTING for stdin, so a child that reads stdin
+        // sees EOF instead of competing with the parent for its console - a
+        // captured child inheriting a live stdin blocks forever on the first
+        // read, and the parent blocks with it in Wait.
+        out_h := _open_inheritable(out_path, 1073741824 as u32, 2 as u32)
+        err_h := _open_inheritable(err_path, 1073741824 as u32, 2 as u32)
+        in_h := _open_inheritable("NUL", 2147483648 as u32, 3 as u32)
 
         cmdline := _build_cmdline(path, args)
         si := mem.AllocateZeroed(104 as u64)
         _u32_set(si, 0, 104 as u32)
         _u32_set(si, 60, 256 as u32)
+        p80 := ((si as i64) + 80) as i64*
+        p80[0] = in_h as i64
         p88 := ((si as i64) + 88) as i64*
-        p88[0] = out_wh as i64
+        p88[0] = out_h as i64
         p96 := ((si as i64) + 96) as i64*
-        p96[0] = err_wh as i64
+        p96[0] = err_h as i64
 
         pi := mem.AllocateZeroed(24 as u64)
         ok := CreateProcessA(null, cmdline as void*, null, null, 1, 0, null, null, si, pi)
         mem.Free(si)
-        CloseHandle(out_wh)
-        CloseHandle(err_wh)
+        // The child owns its own duplicates from here on; without these the
+        // parent keeps the capture files open for writing for its own
+        // lifetime.
+        if in_h != null: CloseHandle(in_h) end
+        if out_h != null: CloseHandle(out_h) end
+        if err_h != null: CloseHandle(err_h) end
 
         mut p := Process {}
+        // Recorded even on the failure path so Cleanup can still remove the
+        // two temp files that were created above.
+        p.stdout_path = out_path
+        p.stderr_path = err_path
         if ok == 0:
             error.Set(error.ProcessFailed, "CreateProcess failed", "StartCaptured", path, GetLastError())
-            CloseHandle(out_rh)
-            CloseHandle(err_rh)
             mem.Free(pi)
             ret p
         end
@@ -245,41 +238,26 @@ if SALAM_OS_WINDOWS:
         CloseHandle(th)
         mem.Free(pi)
         p.running = true
-        p.stdout_handle = out_rh
-        p.stderr_handle = err_rh
         ret p
-    end
-
-    @en "ReadStdout"
-    @fa "خواندن خروجی"
-    @ar "قراءة المخرجات"
-    pub func ReadStdout(p: Process): str:
-        if p.stdout_handle == null: ret "" end
-        out := _read_all_handle(p.stdout_handle)
-        CloseHandle(p.stdout_handle)
-        ret out
-    end
-
-    @en "ReadStderr"
-    @fa "خواندن خطا"
-    @ar "قراءة الأخطاء"
-    pub func ReadStderr(p: Process): str:
-        if p.stderr_handle == null: ret "" end
-        out := _read_all_handle(p.stderr_handle)
-        CloseHandle(p.stderr_handle)
-        ret out
     end
 
     @en "Wait"
     @fa "انتظار"
     @ar "انتظار"
     pub func Wait(p &: Process): int:
+        // A Process whose spawn failed has no handle to wait on; without this
+        // GetExitCodeProcess fails too and its untouched buffer reads back as
+        // a clean exit 0.
+        if p.handle == null: ret 0 - 1 end
         WaitForSingleObject(p.handle, 0 - 1)
         buf := mem.AllocateZeroed(4 as u64)
         GetExitCodeProcess(p.handle, buf)
         code := _u32_at(buf, 0) as int
         mem.Free(buf)
         CloseHandle(p.handle)
+        // Cleared, not just closed: the guard above is only worth anything if
+        // a second Wait (or a Kill after Wait) cannot reach a stale handle.
+        p.handle = null
         p.running = false
         p.exit_code = code
         ret code
@@ -289,6 +267,7 @@ if SALAM_OS_WINDOWS:
     @fa "کشتن"
     @ar "قتل"
     pub func Kill(p &: Process): int:
+        if p.handle == null: ret 0 - 1 end
         if TerminateProcess(p.handle, 1) == 0: ret 0 - 1 end
         p.running = false
         ret 0
@@ -329,6 +308,13 @@ else:
         argv := _build_argv(path, args)
         actions := mem.AllocateZeroed(256 as u64)
         posix_spawn_file_actions_init(actions)
+        // fd 0 <- /dev/null (O_RDONLY, which is 0 on every supported target).
+        // A captured child otherwise inherits the parent's stdin: anything
+        // that reads it - a prompt, `git`, a pager - blocks forever with no
+        // reader ever supplying input, and Wait below blocks with it. That is
+        // a hang whose only visible symptom is an empty capture, because the
+        // child never got far enough to write a byte.
+        posix_spawn_file_actions_addopen(actions, 0, "/dev/null", 0, 0)
         posix_spawn_file_actions_addopen(actions, 1, out_path, _open_flags(), 420)
         posix_spawn_file_actions_addopen(actions, 2, err_path, _open_flags(), 420)
         pidbuf := mem.AllocateZeroed(4 as u64)
@@ -337,6 +323,10 @@ else:
         mem.Free(actions)
         mem.Free(argv)
         mut p := Process {}
+        // Recorded even on the failure path so Cleanup can still remove the
+        // two temp files that were created above.
+        p.stdout_path = out_path
+        p.stderr_path = err_path
         if rc != 0:
             error.Set(error.ProcessFailed, "posix_spawnp failed", "StartCaptured", path, rc)
             mem.Free(pidbuf)
@@ -346,38 +336,50 @@ else:
         p.pid = pidp2[0]
         mem.Free(pidbuf)
         p.running = true
-        p.stdout_path = out_path
-        p.stderr_path = err_path
         ret p
-    end
-
-    @en "ReadStdout"
-    @fa "خواندن خروجی"
-    @ar "قراءة المخرجات"
-    pub func ReadStdout(p: Process): str:
-        if p.stdout_path.len() == 0: ret "" end
-        ret io.ReadFile(p.stdout_path)
-    end
-
-    @en "ReadStderr"
-    @fa "خواندن خطا"
-    @ar "قراءة الأخطاء"
-    pub func ReadStderr(p: Process): str:
-        if p.stderr_path.len() == 0: ret "" end
-        ret io.ReadFile(p.stderr_path)
     end
 
     @en "Wait"
     @fa "انتظار"
     @ar "انتظار"
     pub func Wait(p &: Process): int:
+        // pid 0 is a Process that never started (Start/StartCaptured left the
+        // default in place after a failed spawn). It has to be turned away
+        // here: to waitpid and kill, 0 does not mean "nothing", it means
+        // "every process in my group".
+        if p.pid <= 0: ret 0 - 1 end
         statusbuf := mem.AllocateZeroed(4 as u64)
-        waitpid(p.pid, statusbuf, 0)
+        mut rc := waitpid(p.pid, statusbuf, 0)
+        // waitpid is a cancellation point: any signal delivered to this thread
+        // (an http.Run handler thread is as likely to get one as the main
+        // thread) cuts it short with EINTR before the child is reaped, leaving
+        // statusbuf untouched. The old code ignored the return value entirely
+        // and read that still-zero buffer as "exited, status 0" - a success
+        // code for a child that was in fact still running, and whose capture
+        // files were then read empty. kill(pid, 0) is the errno-free way to
+        // tell the two failure modes apart: it succeeds while the child exists
+        // (zombies included, so the retry can still reap it) and fails once it
+        // is gone for good, which is what stops this from spinning when the
+        // child was already reaped elsewhere.
+        until rc < 0 && kill(p.pid, 0) == 0:
+            rc = waitpid(p.pid, statusbuf, 0)
+        end
         sp := statusbuf as int*
         status := sp[0]
         mem.Free(statusbuf)
         mut code := 0 - 1
-        if status >= 0: code = (status / 256) % 256 end
+        if rc == p.pid:
+            // Low 7 bits are the terminating signal, 0 for a normal exit, in
+            // which case the exit status is the next byte up. A child killed
+            // by a signal used to divide down to 0 and report success; report
+            // it the way a shell does instead, as 128 + signal.
+            low := status % 128
+            if low == 0:
+                code = (status / 256) % 256
+            else:
+                if low != 127: code = 128 + low end
+            end
+        end
         p.running = false
         p.exit_code = code
         ret code
@@ -387,6 +389,7 @@ else:
     @fa "کشتن"
     @ar "قتل"
     pub func Kill(p &: Process): int:
+        if p.pid <= 0: ret 0 - 1 end // see Wait: kill(0, sig) signals the group
         if kill(p.pid, 9) != 0: ret 0 - 1 end
         p.running = false
         ret 0
@@ -396,9 +399,46 @@ else:
     @fa "پایان دادن"
     @ar "إنهاء"
     pub func Terminate(p &: Process): int:
+        if p.pid <= 0: ret 0 - 1 end // see Wait: kill(0, sig) signals the group
         if kill(p.pid, 15) != 0: ret 0 - 1 end
         p.running = false
         ret 0
+    end
+end
+
+// StartCaptured redirects both streams to temp files on every platform, so
+// reading them is one plain file read with no ordering constraint against
+// Wait: read before it, after it, twice, or not at all.
+@en "ReadStdout"
+@fa "خواندن خروجی"
+@ar "قراءة المخرجات"
+pub func ReadStdout(p: Process): str:
+    if p.stdout_path.len() == 0: ret "" end
+    ret io.ReadFile(p.stdout_path)
+end
+
+@en "ReadStderr"
+@fa "خواندن خطا"
+@ar "قراءة الأخطاء"
+pub func ReadStderr(p: Process): str:
+    if p.stderr_path.len() == 0: ret "" end
+    ret io.ReadFile(p.stderr_path)
+end
+
+// Removes the temp files StartCaptured created. Callers that capture in a
+// loop - a request handler shelling out per request, say - have to call this
+// or leak two files per spawn for the lifetime of the process.
+@en "Cleanup"
+@fa "پاکسازی"
+@ar "تنظیف"
+pub func Cleanup(p &: Process):
+    if p.stdout_path.len() > 0:
+        os.Remove(p.stdout_path)
+        p.stdout_path = ""
+    end
+    if p.stderr_path.len() > 0:
+        os.Remove(p.stderr_path)
+        p.stderr_path = ""
     end
 end
 

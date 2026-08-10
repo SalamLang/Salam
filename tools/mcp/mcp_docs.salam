@@ -1,0 +1,289 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// mcp_docs.salam - the knowledge half of the server.
+//
+// The compiler tools tell a model whether its code is correct; these tell it
+// what to write in the first place. Guessing stdlib APIs is the single
+// biggest source of invalid Salam, so every answer here is derived from the
+// checkout at call time rather than from anything baked into this binary:
+// package lists come from the std/ tree, symbols from the `pub` declarations
+// in the source, examples from the test corpus, and the keyword table is
+// parsed out of the compiler's own langpack. Nothing can drift out of date.
+
+@en "mcpdoc"
+@fa "مستندات‌ام‌سی‌پی"
+@ar "وثائق‌ام‌سی‌بی"
+package mcpdoc
+
+import str
+import env
+import fs.dir
+import fs.file
+import fs.path
+import encoding.value
+import mcptxt "mcp_text.salam"
+import mcpexec "mcp_exec.salam"
+import mcpout "mcp_result.salam"
+
+// ---- private helpers -------------------------------------------------
+
+func _std_root(): str:
+    pinned := env.GetOr("SALAM_STD", "")
+    if pinned.len() > 0: ret pinned end
+    ret path.Join(mcpexec.Root(), "std")
+end
+
+func _is_salam(p: str): bool:
+    ret str.EndsWith(p, ".salam")
+end
+
+// `import foo` resolves std/foo/foo.salam specifically, so a directory
+// without that anchor is not importable no matter what else it contains.
+// std/excel_bak is exactly such a directory; listing it would send a model
+// after a package that cannot be imported.
+func _is_package(root: str, name: str): bool:
+    ret file.Exists(path.Join(path.Join(root, name), name.concat(".salam")))
+end
+
+// Every .salam file under a directory, recursively, in a stable order.
+// dir.Walk follows the filesystem, so sorting is what keeps symbol and
+// example listings identical across machines.
+func _sources(root: str): Vector<str>:
+    out := Vector {} as Vector<str>
+    if !dir.Exists(root): ret out end
+    all := mcptxt.Sorted(dir.Walk(root))
+    mut i := 0
+    until i < all.len():
+        p := all.get(i)[0]
+        if _is_salam(p): out.push(p) end
+        i += 1
+    end
+    ret out
+end
+
+// Recognises the declaration forms the docs tools care about.
+func _decl_kind(line: str): str:
+    t := line.trim()
+    if str.StartsWith(t, "pub func "): ret "func" end
+    if str.StartsWith(t, "pub inline func "): ret "func" end
+    if str.StartsWith(t, "pub pure func "): ret "func" end
+    if str.StartsWith(t, "pub inline pure func "): ret "func" end
+    if str.StartsWith(t, "pub struct "): ret "struct" end
+    if str.StartsWith(t, "pub enum "): ret "enum" end
+    if str.StartsWith(t, "pub const "): ret "const" end
+    if str.StartsWith(t, "pub type "): ret "type" end
+    ret ""
+end
+
+func _decls_in(file_path: str, query: str): Vector<str>:
+    out := Vector {} as Vector<str>
+    lines := mcptxt.Lines(file.ReadText(file_path))
+    mut i := 0
+    until i < lines.len():
+        ln := lines.get(i)[0]
+        kind := _decl_kind(ln)
+        if kind.len() > 0 && mcptxt.ContainsFold(ln, query):
+            out.push(ln.trim())
+        end
+        i += 1
+    end
+    ret out
+end
+
+func _hits_in(file_path: str, query: str, cap: int): Vector<str>:
+    out := Vector {} as Vector<str>
+    lines := mcptxt.Lines(file.ReadText(file_path))
+    mut i := 0
+    until i < lines.len() && out.len() < cap:
+        ln := lines.get(i)[0]
+        if mcptxt.ContainsFold(ln, query):
+            out.push(str.FromInt(i + 1).concat(": ").concat(ln.trim()))
+        end
+        i += 1
+    end
+    ret out
+end
+
+// Pulls one {TK_..., "word"} table out of the compiler's langpack source.
+func _kw_table(src: str, array_name: str): Vector<str>:
+    out := Vector {} as Vector<str>
+    start := src.find(array_name)
+    if start < 0: ret out end
+    rest := src.substr(start, src.len() - start)
+    stop := rest.find("};")
+    mut body := rest
+    if stop > 0: body = rest.substr(0, stop) end
+    lines := mcptxt.Lines(body)
+    mut i := 0
+    until i < lines.len():
+        ln := lines.get(i)[0].trim()
+        if str.StartsWith(ln, "{TK_"):
+            out.push(_kw_pair(ln))
+        end
+        i += 1
+    end
+    ret out
+end
+
+func _kw_pair(ln: str): str:
+    comma := ln.find(",")
+    tok := ln.substr(1, comma - 1)
+    q1 := ln.find("\"")
+    rest := ln.substr(q1 + 1, ln.len() - q1 - 1)
+    q2 := rest.find("\"")
+    word := rest.substr(0, q2)
+    ret str.TrimPrefix(tok, "TK_KW_").concat("\t").concat(word)
+end
+
+func _langpack_src(): str:
+    p := path.Join(mcpexec.Root(), "c/src/langpack/langpack_data.c")
+    ret file.ReadText(p)
+end
+
+func _word(pair: str): str:
+    tab := pair.find("\t")
+    if tab < 0: ret pair end
+    ret pair.substr(tab + 1, pair.len() - tab - 1)
+end
+
+func _row(en: Vector<str>, fa: Vector<str>, ar: Vector<str>, i: int): str:
+    mut line := en.get(i)[0]
+    if i < fa.len(): line = line.concat("\t").concat(_word(fa.get(i)[0])) end
+    if i < ar.len(): line = line.concat("\t").concat(_word(ar.get(i)[0])) end
+    ret line
+end
+
+// ---- public API ------------------------------------------------------
+
+@en "Packages"
+@fa "بسته‌ها"
+@ar "الحزم"
+// Every importable std package, read from the tree rather than hardcoded.
+pub func Packages(): mcpout.ToolResult:
+    root := _std_root()
+    if !dir.Exists(root):
+        ret mcpout.Failure("stdlib not found at ".concat(root).concat(" - set SALAM_STD or SALAM_MCP_ROOT."))
+    end
+    names := mcptxt.Sorted(dir.ListDirs(root))
+    mut items := Vector {} as Vector<str>
+    mut i := 0
+    until i < names.len():
+        n := names.get(i)[0]
+        if !str.StartsWith(n, ".") && _is_package(root, n): items.push(n) end
+        i += 1
+    end
+    body := "Importable std packages (".concat(str.FromInt(items.len())).concat("):\n\n").concat(mcpout.Bullets(items))
+    ret mcpout.Rich(body, mcpout.StrArray(items), false)
+end
+
+@en "Symbols"
+@fa "نمادها"
+@ar "الرموز"
+// Public declarations of one std package, optionally filtered. This is the
+// tool that stops a model inventing function names.
+pub func Symbols(pkg: str, query: str): mcpout.ToolResult:
+    if !mcpexec.SafePath(pkg): ret mcpout.Failure("unsupported package name: ".concat(pkg)) end
+    root := path.Join(_std_root(), pkg)
+    if !dir.Exists(root): ret mcpout.Failure("no such std package: ".concat(pkg)) end
+    files := _sources(root)
+    mut all := Vector {} as Vector<str>
+    mut i := 0
+    until i < files.len():
+        decls := _decls_in(files.get(i)[0], query)
+        mut j := 0
+        until j < decls.len():
+            all.push(decls.get(j)[0])
+            j += 1
+        end
+        i += 1
+    end
+    if all.len() == 0:
+        ret mcpout.Text("No public declarations matched in std/".concat(pkg).concat("."))
+    end
+    body := "Public declarations in std/".concat(pkg).concat(" (").concat(str.FromInt(all.len())).concat("):\n\n").concat(mcpout.Bullets(all))
+    ret mcpout.Rich(body, mcpout.StrArray(all), false)
+end
+
+@en "FindExamples"
+@fa "یافتن نمونه‌ها"
+@ar "ابحث عن أمثلة"
+// Greps the shipped test corpus, which doubles as the largest body of known
+// good Salam in the repo.
+pub func FindExamples(query: str, limit: int): mcpout.ToolResult:
+    if query.trim().len() == 0: ret mcpout.Failure("query must not be empty") end
+    root := path.Join(mcpexec.Root(), "tests")
+    files := _sources(root)
+    mut cap := limit
+    if cap <= 0: cap = 20 end
+    mut items := Vector {} as Vector<str>
+    mut i := 0
+    until i < files.len() && items.len() < cap:
+        f := files.get(i)[0]
+        hits := _hits_in(f, query, 2)
+        if hits.len() > 0:
+            items.push(f.concat("\n    ").concat(mcptxt.Join(hits, "\n    ")))
+        end
+        i += 1
+    end
+    if items.len() == 0: ret mcpout.Text("No examples matched '".concat(query).concat("'.")) end
+    body := "Examples matching '".concat(query).concat("':\n\n").concat(mcpout.Bullets(items))
+    ret mcpout.Rich(body, mcpout.StrArray(items), false)
+end
+
+@en "ReadSource"
+@fa "خواندن منبع"
+@ar "قراءة المصدر"
+// Reads a workspace file so the model can look at real, compiling Salam.
+pub func ReadSource(rel: str, start: int, count: int): mcpout.ToolResult:
+    if !mcpexec.SafePath(rel): ret mcpout.Failure("unsupported path: ".concat(rel)) end
+    full := path.Join(mcpexec.Root(), rel)
+    if !file.Exists(full): ret mcpout.Failure("no such file: ".concat(rel)) end
+    lines := mcptxt.Lines(file.ReadText(full))
+    mut from := start
+    if from < 1: from = 1 end
+    mut n := count
+    if n <= 0: n = 200 end
+    mut picked := Vector {} as Vector<str>
+    mut i := from - 1
+    until i < lines.len() && picked.len() < n:
+        picked.push(str.FromInt(i + 1).concat("\t").concat(lines.get(i)[0]))
+        i += 1
+    end
+    ret mcpout.Text(rel.concat("\n\n").concat(mcptxt.Join(picked, "\n")))
+end
+
+@en "Keywords"
+@fa "کلیدواژه‌ها"
+@ar "الکلمات المفتاحیة"
+// The en/fa/ar keyword table, parsed from the compiler's own langpack so it
+// can never disagree with what the lexer actually accepts.
+pub func Keywords(): mcpout.ToolResult:
+    src := _langpack_src()
+    if src.len() == 0:
+        ret mcpout.Failure("langpack source not readable; set SALAM_MCP_ROOT to the Salam checkout.")
+    end
+    en := _kw_table(src, "k_lang_en[]")
+    fa := _kw_table(src, "k_lang_fa[]")
+    ar := _kw_table(src, "k_lang_ar[]")
+    mut rows := Vector {} as Vector<str>
+    rows.push("token\tenglish\tpersian\tarabic")
+    mut i := 0
+    until i < en.len():
+        rows.push(_row(en, fa, ar, i))
+        i += 1
+    end
+    body := "Salam is written in English, Persian or Arabic; these are the same keywords in each.\n\n".concat(mcptxt.Join(rows, "\n"))
+    ret mcpout.Rich(body, mcpout.StrArray(rows), false)
+end

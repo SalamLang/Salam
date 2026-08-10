@@ -1,0 +1,292 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package graphql
+
+import encoding.value
+
+// resolver - the handler ABI, and the call slots resolvers talk through.
+//
+// `callhandler(fn, arg)` invokes a `void(i64)` function pointer and
+// Salam has no closures, so a resolver can neither be handed the parent
+// object and arguments directly nor return a value. The executor
+// therefore parks everything the resolver needs in a *slot* and calls
+// the handler with that slot's index; the resolver reads its inputs
+// back with graphql.Parent / graphql.Arg* and writes its answer with
+// graphql.Resolve*:
+//
+//     func resolve_user(slot: i64):
+//         id := graphql.ArgInt(slot, "id")
+//         mut u := value.NewValueObject()
+//         value.ObjectSet(u, "name", value.ValueString(lookup(id)))
+//         graphql.Resolve(slot, u)
+//     end
+//
+//     graphql.SetResolver(sch, "Query", "user", funcptr(resolve_user))
+//
+// This is the same shape std/rpc's dispatcher uses, for the same
+// underlying reason. A resolver that writes nothing yields null, which
+// is a legitimate answer for a nullable field and becomes a field error
+// on a non-null one.
+//
+// Slots are recycled. Execution is depth-first and synchronous, so the
+// table only grows to the deepest nesting a query actually reaches.
+
+// The slot table. ResolverSlot and GqlSlotTable are declared in
+// gql_slot.salam so that this global can sit above every definition in
+// its own file, which E085 requires.
+mut _gql_slots := GqlSlotTable {}
+
+// ---- private slot plumbing ----
+
+func _rs_at(id: i64): ResolverSlot:
+    i := id as int
+    if i < 0 || i >= _gql_slots.items.len(): ret ResolverSlot {} end
+    ret _gql_slots.items.get(i)[0]
+end
+
+func _rs_store(id: i64, s: ResolverSlot):
+    i := id as int
+    if i < 0 || i >= _gql_slots.items.len(): ret end
+    _gql_slots.items.set(i, s)
+end
+
+func _rs_alloc(): int:
+    mut i := 0
+    until i < _gql_slots.items.len():
+        if !_gql_slots.items.get(i)[0].busy:
+            mut s := ResolverSlot {}
+            s.busy = true
+            _gql_slots.items.set(i, s)
+            ret i
+        end
+        i += 1
+    end
+    mut s := ResolverSlot {}
+    s.busy = true
+    _gql_slots.items.push(s)
+    ret _gql_slots.items.len() - 1
+end
+
+func _rs_release(id: int):
+    if id < 0 || id >= _gql_slots.items.len(): ret end
+    _gql_slots.items.set(id, ResolverSlot {})
+end
+
+// Fills a freshly allocated slot with the field's inputs.
+func _rs_prepare(id: int, parent: value.Value, args: value.Value, ctx: value.Value, parentType: str, fieldName: str):
+    mut s := _rs_at(id as i64)
+    s.busy = true
+    s.parent = parent
+    s.args = args
+    s.ctx = ctx
+    s.parentType = parentType
+    s.fieldName = fieldName
+    _rs_store(id as i64, s)
+end
+
+func _rs_set_result(slot: i64, v: value.Value):
+    mut s := _rs_at(slot)
+    s.result = v
+    s.resolved = true
+    _rs_store(slot, s)
+end
+
+// Finds a resolver on a field, walking to the interfaces the owning
+// type implements when the object type itself does not define one. That
+// lets a single resolver registered on an interface serve every
+// implementing type, which is how most schemas want shared fields like
+// `Node.id` handled.
+func _rs_lookup(sch: Schema, typeName: str, fieldName: str): i64:
+    t := FindType(sch, typeName)
+    f := FindField(t, fieldName)
+    if f.resolver != 0: ret f.resolver end
+    mut i := 0
+    until i < t.interfaces.len():
+        it := FindType(sch, t.interfaces.get(i)[0])
+        itf := FindField(it, fieldName)
+        if itf.resolver != 0: ret itf.resolver end
+        i += 1
+    end
+    ret 0 as i64
+end
+
+// ---- public API: registration ----
+
+// Attaches a resolver to a field. `fn` comes from `funcptr(handler)`
+// where handler has the signature `func(slot: i64)`. Returns false when
+// the type or field is unknown, which catches a typo at startup rather
+// than as a silent null at query time.
+@en "SetResolver"
+@fa "تعیین حل‌کننده"
+@ar "تعیین المحلل"
+pub func SetResolver(sch &: Schema, typeName: str, fieldName: str, fn: i64): bool:
+    idx := TypeIndex(sch, typeName)
+    if idx < 0: ret false end
+    mut t := sch.types.get(idx)[0]
+    mut i := 0
+    until i < t.fields.len():
+        mut f := t.fields.get(i)[0]
+        if f.name == fieldName:
+            f.resolver = fn
+            t.fields.set(i, f)
+            sch.types.set(idx, t)
+            ret true
+        end
+        i += 1
+    end
+    ret false
+end
+
+@en "HasResolver"
+@fa "حل‌کننده دارد"
+@ar "یملک محللا"
+pub func HasResolver(sch: Schema, typeName: str, fieldName: str): bool:
+    ret _rs_lookup(sch, typeName, fieldName) != 0
+end
+
+// ---- public API: reading inputs inside a resolver ----
+
+@en "Parent"
+@fa "والد"
+@ar "الأصل"
+pub func Parent(slot: i64): value.Value: ret _rs_at(slot).parent end
+
+@en "Args"
+@fa "آرگومان‌ها"
+@ar "الوسائط"
+pub func Args(slot: i64): value.Value: ret _rs_at(slot).args end
+
+@en "Context"
+@fa "زمینه"
+@ar "السیاق"
+pub func Context(slot: i64): value.Value: ret _rs_at(slot).ctx end
+
+@en "FieldName"
+@fa "نام فیلد"
+@ar "اسم الحقل"
+pub func FieldName(slot: i64): str: ret _rs_at(slot).fieldName end
+
+@en "ParentTypeName"
+@fa "نام نوع والد"
+@ar "اسم نوع الأصل"
+pub func ParentTypeName(slot: i64): str: ret _rs_at(slot).parentType end
+
+@en "HasArg"
+@fa "آرگومان دارد"
+@ar "یملک وسیطا"
+pub func HasArg(slot: i64, name: str): bool:
+    ret value.ObjectHas(_rs_at(slot).args, name)
+end
+
+@en "Arg"
+@fa "آرگومان"
+@ar "وسیط"
+pub func Arg(slot: i64, name: str): value.Value:
+    ret value.ObjectGet(_rs_at(slot).args, name)
+end
+
+@en "ArgInt"
+@fa "آرگومان عددی"
+@ar "وسیط صحیح"
+pub func ArgInt(slot: i64, name: str): i64:
+    ret value.AsInt(Arg(slot, name))
+end
+
+@en "ArgFloat"
+@fa "آرگومان اعشاری"
+@ar "وسیط عشري"
+pub func ArgFloat(slot: i64, name: str): f64:
+    ret value.AsFloat(Arg(slot, name))
+end
+
+@en "ArgStr"
+@fa "آرگومان رشته"
+@ar "وسیط نصي"
+pub func ArgStr(slot: i64, name: str): str:
+    ret value.AsString(Arg(slot, name))
+end
+
+@en "ArgBool"
+@fa "آرگومان بولی"
+@ar "وسیط منطقي"
+pub func ArgBool(slot: i64, name: str): bool:
+    ret value.AsBool(Arg(slot, name))
+end
+
+// A field of the parent object, which is the common case for a resolver
+// that derives one value from another (`fullName` from `first`/`last`).
+@en "ParentField"
+@fa "فیلد والد"
+@ar "حقل الأصل"
+pub func ParentField(slot: i64, name: str): value.Value:
+    ret value.ObjectGet(_rs_at(slot).parent, name)
+end
+
+// ---- public API: writing the answer ----
+
+@en "Resolve"
+@fa "حل"
+@ar "حل"
+pub func Resolve(slot: i64, v: value.Value): _rs_set_result(slot, v) end
+
+@en "ResolveInt"
+@fa "حل عددی"
+@ar "حل صحیح"
+pub func ResolveInt(slot: i64, n: i64): _rs_set_result(slot, value.ValueInt(n)) end
+
+@en "ResolveFloat"
+@fa "حل اعشاری"
+@ar "حل عشري"
+pub func ResolveFloat(slot: i64, f: f64): _rs_set_result(slot, value.ValueFloat(f)) end
+
+@en "ResolveStr"
+@fa "حل رشته"
+@ar "حل نصي"
+pub func ResolveStr(slot: i64, s: str): _rs_set_result(slot, value.ValueString(s)) end
+
+@en "ResolveBool"
+@fa "حل بولی"
+@ar "حل منطقي"
+pub func ResolveBool(slot: i64, b: bool): _rs_set_result(slot, value.ValueBool(b)) end
+
+@en "ResolveNull"
+@fa "حل تهی"
+@ar "حل فارغ"
+pub func ResolveNull(slot: i64): _rs_set_result(slot, value.ValueNull()) end
+
+// Reports a field error. The executor records it against this field's
+// response path and treats the field as having resolved to null, which
+// then propagates according to the field's nullability.
+@en "Fail"
+@fa "شکست"
+@ar "فشل"
+pub func Fail(slot: i64, message: str):
+    mut s := _rs_at(slot)
+    s.failed = true
+    s.message = message
+    s.resolved = true
+    _rs_store(slot, s)
+end
+
+// Releases every slot. Execution recycles slots on its own, so this is
+// only needed by a long-running process that wants the table's memory
+// back between requests.
+@en "ResetSlots"
+@fa "بازنشانی شکاف‌ها"
+@ar "إعادة تعیین الخانات"
+pub func ResetSlots():
+    _gql_slots.items.free()
+    _gql_slots = GqlSlotTable {}
+end

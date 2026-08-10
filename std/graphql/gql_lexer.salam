@@ -1,0 +1,337 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package graphql
+
+import str
+
+// lexer - GraphQL source text to tokens (spec section 2).
+//
+// Byte-oriented, over the same `_gbp`/`_gub` byte-pointer style
+// encoding/json and encoding/protobuf already use. GraphQL source is
+// UTF-8 and every structural character is ASCII, so scanning bytes is
+// safe: any byte >= 0x80 can only occur inside a string body, a comment,
+// or as an illegal character, and all three are handled by passing the
+// bytes through untouched.
+//
+// Commas are insignificant in GraphQL (spec 2.1.1) and are skipped as
+// whitespace, not tokenised.
+
+struct GqlLx:
+    pub s: str = ""
+    pub n: int = 0
+    pub pos: int = 0
+    pub line: int = 1
+    pub lineStart: int = 0
+end
+
+inline pure func _gbp(s: str): i8*: ret (s as void*) as i8* end
+
+inline pure func _gub(bp: i8*, i: int): int:
+    mut v := bp[i] as int
+    if v < 0: v = v + 256 end
+    ret v
+end
+
+func _gql_is_digit(c: int): bool: ret c >= 48 && c <= 57 end
+
+func _gql_is_name_start(c: int): bool:
+    ret (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 95
+end
+
+func _gql_is_name_cont(c: int): bool:
+    ret _gql_is_name_start(c) || _gql_is_digit(c)
+end
+
+func _lx_at(lx: GqlLx, off: int): int:
+    p := lx.pos + off
+    if p >= lx.n || p < 0: ret -1 end
+    ret _gub(_gbp(lx.s), p)
+end
+
+func _lx_cur(lx: GqlLx): int: ret _lx_at(lx, 0) end
+
+func _lx_col(lx: GqlLx): int: ret lx.pos - lx.lineStart + 1 end
+
+// Consumes one line terminator (LF, CR, or CRLF as a single unit) and
+// bumps the line counter. Caller has already established that the
+// current byte is CR or LF.
+func _lx_newline(lx &: GqlLx):
+    if _lx_cur(lx) == 13 && _lx_at(lx, 1) == 10: lx.pos += 2
+    else: lx.pos += 1
+    end
+    lx.line += 1
+    lx.lineStart = lx.pos
+end
+
+// Skips everything the spec calls "Ignored": the UTF-8 BOM, whitespace,
+// line terminators, commas, and `#` comments.
+func _lx_skip_ignored(lx &: GqlLx):
+    until true:
+        c := _lx_cur(lx)
+        if c == 32 || c == 9 || c == 44:
+            lx.pos += 1
+        else c == 10 || c == 13:
+            _lx_newline(lx)
+        else c == 35:
+            until true:
+                d := _lx_cur(lx)
+                if d == -1 || d == 10 || d == 13: break end
+                lx.pos += 1
+            end
+        else c == 239 && _lx_at(lx, 1) == 187 && _lx_at(lx, 2) == 191:
+            lx.pos += 3
+        else:
+            ret
+        end
+    end
+end
+
+func _lx_make(kind: int, startLine: int, startCol: int, startPos: int): GqlToken:
+    mut t := GqlToken { kind = kind }
+    t.line = startLine
+    t.col = startCol
+    t.pos = startPos
+    ret t
+end
+
+func _lx_error(lx &: GqlLx, msg: str, startLine: int, startCol: int): GqlToken:
+    mut t := GqlToken { kind = TOK_ERROR }
+    t.sval = msg
+    t.line = startLine
+    t.col = startCol
+    t.pos = lx.pos
+    ret t
+end
+
+func _lx_name(lx &: GqlLx): GqlToken:
+    startLine := lx.line
+    startCol := _lx_col(lx)
+    start := lx.pos
+    until _gql_is_name_cont(_lx_cur(lx)):
+        lx.pos += 1
+    end
+    mut t := _lx_make(TOK_NAME, startLine, startCol, start)
+    t.lexeme = lx.s.substr(start, lx.pos - start)
+    ret t
+end
+
+// IntValue / FloatValue (spec 2.9.1, 2.9.2). Leading zeroes and a name
+// character glued to the end of a number are both hard errors in
+// GraphQL, unlike in JSON, so they are reported rather than silently
+// re-lexed as two tokens.
+func _lx_number(lx &: GqlLx): GqlToken:
+    startLine := lx.line
+    startCol := _lx_col(lx)
+    start := lx.pos
+    if _lx_cur(lx) == 45: lx.pos += 1 end
+    if _lx_cur(lx) == 48:
+        lx.pos += 1
+        if _gql_is_digit(_lx_cur(lx)):
+            ret _lx_error(lx, "invalid number: unexpected digit after 0", startLine, startCol)
+        end
+    else:
+        if !_gql_is_digit(_lx_cur(lx)):
+            ret _lx_error(lx, "invalid number: expected digit", startLine, startCol)
+        end
+        until _gql_is_digit(_lx_cur(lx)):
+            lx.pos += 1
+        end
+    end
+    mut isFloat := false
+    if _lx_cur(lx) == 46 && _gql_is_digit(_lx_at(lx, 1)):
+        isFloat = true
+        lx.pos += 1
+        until _gql_is_digit(_lx_cur(lx)):
+            lx.pos += 1
+        end
+    end
+    if _lx_cur(lx) == 101 || _lx_cur(lx) == 69:
+        isFloat = true
+        lx.pos += 1
+        if _lx_cur(lx) == 43 || _lx_cur(lx) == 45: lx.pos += 1 end
+        if !_gql_is_digit(_lx_cur(lx)):
+            ret _lx_error(lx, "invalid number: expected exponent digits", startLine, startCol)
+        end
+        until _gql_is_digit(_lx_cur(lx)):
+            lx.pos += 1
+        end
+    end
+    if _gql_is_name_start(_lx_cur(lx)) || _lx_cur(lx) == 46:
+        ret _lx_error(lx, "invalid number: unexpected trailing character", startLine, startCol)
+    end
+    text := lx.s.substr(start, lx.pos - start)
+    if isFloat:
+        mut t := _lx_make(TOK_FLOAT, startLine, startCol, start)
+        t.lexeme = text
+        t.fval = text.to_float()
+        ret t
+    end
+    mut t := _lx_make(TOK_INT, startLine, startCol, start)
+    t.lexeme = text
+    t.ival = text.to_int() as i64
+    ret t
+end
+
+// Handles the escape sequence after a backslash inside a normal string.
+// Returns false (with `msg` set) for an invalid escape.
+func _lx_escape(lx &: GqlLx, sb &: str.StringBuilder, msg &: str): bool:
+    e := _lx_cur(lx)
+    if e == 34: str.BufAppendChar(sb, 34) lx.pos += 1 ret true end
+    if e == 92: str.BufAppendChar(sb, 92) lx.pos += 1 ret true end
+    if e == 47: str.BufAppendChar(sb, 47) lx.pos += 1 ret true end
+    if e == 98: str.BufAppendChar(sb, 8) lx.pos += 1 ret true end
+    if e == 102: str.BufAppendChar(sb, 12) lx.pos += 1 ret true end
+    if e == 110: str.BufAppendChar(sb, 10) lx.pos += 1 ret true end
+    if e == 114: str.BufAppendChar(sb, 13) lx.pos += 1 ret true end
+    if e == 116: str.BufAppendChar(sb, 9) lx.pos += 1 ret true end
+    if e == 117: ret _lx_unicode_escape(lx, sb, msg) end
+    msg = "invalid escape sequence in string"
+    ret false
+end
+
+func _lx_string(lx &: GqlLx): GqlToken:
+    startLine := lx.line
+    startCol := _lx_col(lx)
+    start := lx.pos
+    lx.pos += 1
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    until true:
+        c := _lx_cur(lx)
+        if c == -1 || c == 10 || c == 13:
+            ret _lx_error(lx, "unterminated string", startLine, startCol)
+        end
+        if c == 34:
+            lx.pos += 1
+            mut t := _lx_make(TOK_STRING, startLine, startCol, start)
+            t.sval = str.BufStr(sb)
+            ret t
+        end
+        if c == 92:
+            lx.pos += 1
+            mut msg := ""
+            if !_lx_escape(lx, sb, msg):
+                ret _lx_error(lx, msg, startLine, startCol)
+            end
+        else:
+            str.BufAppendChar(sb, c)
+            lx.pos += 1
+        end
+    end
+end
+
+// Block string (spec 2.9.4): raw text between triple quotes where the
+// only escape is \""" . Indentation is stripped afterwards by
+// _gql_dedent_block in gql_lexutil.salam.
+func _lx_block_string(lx &: GqlLx): GqlToken:
+    startLine := lx.line
+    startCol := _lx_col(lx)
+    start := lx.pos
+    lx.pos += 3
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    until true:
+        c := _lx_cur(lx)
+        if c == -1:
+            ret _lx_error(lx, "unterminated block string", startLine, startCol)
+        end
+        if c == 92 && _lx_at(lx, 1) == 34 && _lx_at(lx, 2) == 34 && _lx_at(lx, 3) == 34:
+            str.BufAppend(sb, `"""`)
+            lx.pos += 4
+        else c == 34 && _lx_at(lx, 1) == 34 && _lx_at(lx, 2) == 34:
+            lx.pos += 3
+            mut t := _lx_make(TOK_BLOCK_STRING, startLine, startCol, start)
+            t.sval = _gql_dedent_block(str.BufStr(sb))
+            ret t
+        else c == 10 || c == 13:
+            _lx_newline(lx)
+            str.BufAppendChar(sb, 10)
+        else:
+            str.BufAppendChar(sb, c)
+            lx.pos += 1
+        end
+    end
+end
+
+// Single- and multi-byte punctuators. Returns a TOK_ERROR token for any
+// byte that cannot begin a GraphQL token.
+func _lx_punct(lx &: GqlLx): GqlToken:
+    startLine := lx.line
+    startCol := _lx_col(lx)
+    start := lx.pos
+    c := _lx_cur(lx)
+    if c == 46:
+        if _lx_at(lx, 1) == 46 && _lx_at(lx, 2) == 46:
+            lx.pos += 3
+            ret _lx_make(TOK_SPREAD, startLine, startCol, start)
+        end
+        lx.pos += 1
+        ret _lx_error(lx, `expected "..." but found "."`, startLine, startCol)
+    end
+    k := _gql_punct_kind(c)
+    if k < 0:
+        lx.pos += 1
+        ret _lx_error(lx, _gql_bad_char_msg(c), startLine, startCol)
+    end
+    lx.pos += 1
+    ret _lx_make(k, startLine, startCol, start)
+end
+
+func _lx_next(lx &: GqlLx): GqlToken:
+    _lx_skip_ignored(lx)
+    c := _lx_cur(lx)
+    if c == -1:
+        ret _lx_make(TOK_EOF, lx.line, _lx_col(lx), lx.pos)
+    end
+    if _gql_is_name_start(c): ret _lx_name(lx) end
+    if _gql_is_digit(c) || c == 45: ret _lx_number(lx) end
+    if c == 34:
+        if _lx_at(lx, 1) == 34 && _lx_at(lx, 2) == 34: ret _lx_block_string(lx) end
+        ret _lx_string(lx)
+    end
+    ret _lx_punct(lx)
+end
+
+// Tokenises a whole document. Always terminates the stream with a
+// TOK_EOF token so the parser can read one past the end unconditionally.
+// `ok` is set false if any token failed to lex; lexing still continues
+// so that a caller reporting diagnostics sees more than the first error.
+@en "Tokenize"
+@fa "توکن‌سازی"
+@ar "ترمیز"
+pub func Tokenize(source: str, ok &: bool): GqlTokenStream:
+    mut lx := GqlLx { s = source }
+    lx.n = source.len()
+    mut out := GqlTokenStream {}
+    ok = true
+    until true:
+        t := _lx_next(lx)
+        out.toks.push(t)
+        if t.kind == TOK_EOF: ret out end
+        if t.kind == TOK_ERROR: ok = false end
+    end
+end
+
+// Convenience wrapper for callers that only want to know whether the
+// source is lexically well-formed.
+@en "LexOk"
+@fa "تحلیل واژگانی درست"
+@ar "تحلیل لفظی سلیم"
+pub func LexOk(source: str): bool:
+    mut ok := true
+    mut ts := Tokenize(source, ok)
+    ts.toks.free()
+    ret ok
+end

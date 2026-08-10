@@ -1,0 +1,188 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// mcp_resources.salam - the read-side context a client can pull in wholesale.
+//
+// Tools answer questions; resources are the material a client may want to
+// attach up front - the language guide, and a machine-readable index of the
+// whole standard library. The index is computed from the checkout on every
+// read rather than served from a committed file, so it cannot go stale
+// against the tree it is describing.
+
+@en "mcpsrc"
+@fa "منابع‌ام‌سی‌پی"
+@ar "موارد‌ام‌سی‌بی"
+package mcpsrc
+
+import str
+import fs.dir
+import fs.file
+import fs.path
+import encoding.json
+import encoding.value
+import mcptxt "mcp_text.salam"
+import mcpexec "mcp_exec.salam"
+
+// ---- private helpers -------------------------------------------------
+
+func _guide_path(): str:
+    ret path.Join(mcpexec.Root(), "docs/ai/AGENTS.md")
+end
+
+func _llms_path(): str:
+    ret path.Join(mcpexec.Root(), "docs/ai/llms.txt")
+end
+
+func _std_root(): str:
+    ret path.Join(mcpexec.Root(), "std")
+end
+
+func _entry(list &: value.Value, uri: str, name: str, title: str, desc: str, mime: str):
+    mut r := value.NewValueObject()
+    value.ObjectSet(r, "uri", value.ValueString(uri))
+    value.ObjectSet(r, "name", value.ValueString(name))
+    value.ObjectSet(r, "title", value.ValueString(title))
+    value.ObjectSet(r, "description", value.ValueString(desc))
+    value.ObjectSet(r, "mimeType", value.ValueString(mime))
+    value.ArrayPush(list, r)
+end
+
+func _decl_line(line: str): bool:
+    t := line.trim()
+    if str.StartsWith(t, "pub func "): ret true end
+    if str.StartsWith(t, "pub inline func "): ret true end
+    if str.StartsWith(t, "pub pure func "): ret true end
+    if str.StartsWith(t, "pub inline pure func "): ret true end
+    if str.StartsWith(t, "pub struct "): ret true end
+    if str.StartsWith(t, "pub enum "): ret true end
+    if str.StartsWith(t, "pub const "): ret true end
+    ret false
+end
+
+// Declarations of one package, ordered by their own text.
+//
+// Sorting the file list is NOT enough to make this reproducible. dir.Walk
+// returns whatever the platform's directory walk produces - absolute or
+// relative, '/' or '\' separated, in filesystem order - and any of that can
+// change how paths compare, which changes the order declarations land in.
+// The committed index is byte-compared in CI against a Linux run, so an
+// order that depends on the host at all makes that check fail on content
+// that is actually identical.
+//
+// Sorting the declaration strings themselves removes the filesystem from the
+// answer completely: the output becomes a pure function of what std/ says,
+// not of how the OS enumerates it.
+func _decls_of(pkg_dir: str): value.Value:
+    mut arr := value.NewValueArray()
+    if !dir.Exists(pkg_dir): ret arr end
+    files := dir.Walk(pkg_dir)
+    mut found := Vector {} as Vector<str>
+    mut i := 0
+    until i < files.len():
+        f := files.get(i)[0]
+        if str.EndsWith(f, ".salam"): _collect(found, f) end
+        i += 1
+    end
+    sorted := mcptxt.Sorted(found)
+    mut j := 0
+    until j < sorted.len():
+        value.ArrayPush(arr, value.ValueString(sorted.get(j)[0]))
+        j += 1
+    end
+    ret arr
+end
+
+func _collect(out &: Vector<str>, f: str):
+    lines := mcptxt.Lines(file.ReadText(f))
+    mut i := 0
+    until i < lines.len():
+        ln := lines.get(i)[0]
+        if _decl_line(ln): out.push(ln.trim()) end
+        i += 1
+    end
+end
+
+func _index(): str:
+    root := _std_root()
+    mut out := value.NewValueObject()
+    value.ObjectSet(out, "root", value.ValueString("std"))
+    mut pkgs := value.NewValueObject()
+    if dir.Exists(root):
+        names := dir.ListDirs(root)
+        mut i := 0
+        until i < names.len():
+            n := names.get(i)[0]
+            // Same anchor rule the compiler uses: std/foo/foo.salam or it is
+            // not an importable package.
+            if file.Exists(path.Join(path.Join(root, n), n.concat(".salam"))):
+                value.ObjectSet(pkgs, n, _decls_of(path.Join(root, n)))
+            end
+            i += 1
+        end
+    end
+    value.ObjectSet(out, "packages", pkgs)
+    // sort_keys is load-bearing, not cosmetic: package names land in a
+    // HashMap, so their iteration order follows hash buckets seeded by
+    // insertion order, and insertion order follows dir.ListDirs - i.e. the
+    // filesystem. Without sorting, the same std/ tree serialises to different
+    // bytes on different machines.
+    ret json.Encode(out, json.JSONOptions { indent = "  ", sort_keys = true })
+end
+
+func _text_content(uri: str, mime: str, body: str): value.Value:
+    mut c := value.NewValueObject()
+    value.ObjectSet(c, "uri", value.ValueString(uri))
+    value.ObjectSet(c, "mimeType", value.ValueString(mime))
+    value.ObjectSet(c, "text", value.ValueString(body))
+    mut wrap := value.NewValueArray()
+    value.ArrayPush(wrap, c)
+    ret wrap
+end
+
+// ---- public API ------------------------------------------------------
+
+@en "List"
+@fa "فهرست"
+@ar "قائمة"
+pub func List(): value.Value:
+    mut list := value.NewValueArray()
+    _entry(
+        list, "salam://guide/agents.md", "salam-language-guide", "Salam language guide for AI agents", "How to write Salam correctly: syntax, declaration ordering rules, and the compiler pitfalls that most often produce invalid code. Attach this before writing Salam.", "text/markdown"
+    )
+    _entry(
+        list, "salam://stdlib/index.json", "salam-stdlib-index", "Machine-readable standard library index", "Every std package mapped to its public declarations, generated from this checkout at read time.", "application/json"
+    )
+    _entry(
+        list, "salam://guide/llms.txt", "salam-llms-txt", "llms.txt entry point", "Short orientation file pointing at the rest of Salam's machine-readable documentation.", "text/plain"
+    )
+    ret list
+end
+
+@en "Read"
+@fa "بخوان"
+@ar "اقرأ"
+// Returns the contents array for a URI, or an empty array when unknown so
+// the caller can answer with the spec's -32602 resource-not-found error.
+pub func Read(uri: str): value.Value:
+    if uri == "salam://stdlib/index.json":
+        ret _text_content(uri, "application/json", _index())
+    end
+    if uri == "salam://guide/agents.md":
+        ret _text_content(uri, "text/markdown", file.ReadText(_guide_path()))
+    end
+    if uri == "salam://guide/llms.txt":
+        ret _text_content(uri, "text/plain", file.ReadText(_llms_path()))
+    end
+    ret value.NewValueArray()
+end

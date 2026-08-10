@@ -1,0 +1,135 @@
+---
+name: 🤖 MCP Server - Build & Protocol Conformance
+# Builds tools/mcp (the MCP server, itself written in Salam) with the compiler
+# from this checkout, then drives it over stdio exactly as an MCP client does
+# and asserts on the wire format.
+#
+# The conformance suite is the point: a regression in JSON-RPC framing, in the
+# dual-era protocol negotiation, or in how diagnostics are surfaced shows up in
+# an AI client as inexplicably broken tooling rather than as a build failure.
+# This catches it here instead.
+#
+# The compiler is built from c/ rather than installed from a release on
+# purpose - the server must be tested against the compiler it ships alongside.
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'tools/mcp/**'
+      - 'docs/ai/**'
+      - 'std/**'
+      - '.github/workflows/mcp-server.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'tools/mcp/**'
+      - 'docs/ai/**'
+      - 'std/**'
+      - '.github/workflows/mcp-server.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mcp-server-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  conformance:
+    name: Build server and run protocol tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: '22'
+
+      - name: Build the Salam compiler
+        run: make -C c -j"$(nproc)"
+
+      - name: Locate the compiler
+        id: compiler
+        run: |
+          set -eu
+          for candidate in ./salam ./c/salam ./c/build/salam; do
+            if [ -x "$candidate" ]; then
+              echo "path=$candidate" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          echo "could not find a built salam binary" >&2
+          find . -maxdepth 3 -name 'salam' -type f -perm -u+x >&2 || true
+          exit 1
+
+      - name: Build the MCP server
+        env:
+          SALAM: ${{ steps.compiler.outputs.path }}
+        run: |
+          set -eu
+          chmod +x tools/mcp/build.sh
+          tools/mcp/build.sh "$PWD/salam-mcp"
+
+      - name: Run protocol conformance tests
+        env:
+          SALAM_MCP_BIN: ${{ steps.compiler.outputs.path }}
+        run: node tools/mcp/tests/protocol_test.mjs "$PWD/salam-mcp" "$PWD"
+
+      - name: Verify the committed stdlib index is current
+        env:
+          SALAM_MCP_BIN: ${{ steps.compiler.outputs.path }}
+        run: |
+          set -eu
+          # The index is generated from std/, so a stdlib change that does not
+          # regenerate it leaves the committed copy lying to every AI client
+          # that reads it.
+          printf '%s\n' \
+            '{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"salam://stdlib/index.json"}}' \
+            | SALAM_MCP_ROOT="$PWD" \
+              ./salam-mcp 2>/dev/null > /tmp/index-response.jsonl
+          # Compare canonical compact JSON, never pretty-printed bytes. The
+          # committed file is reformatted by the biome pre-commit hook, which
+          # collapses short arrays onto one line where JSON.stringify(…, 2)
+          # always expands them - a byte comparison fails on that alone while
+          # the content is identical. Comparing compact form still catches
+          # what matters: added, removed or reordered packages and symbols.
+          node -e '
+            const fs = require("fs");
+            const msg = JSON.parse(fs.readFileSync("/tmp/index-response.jsonl", "utf8").trim().split("\n")[0]);
+            const fresh = JSON.parse(msg.result.contents[0].text);
+            const committed = JSON.parse(fs.readFileSync("docs/ai/stdlib-index.json", "utf8"));
+            if (JSON.stringify(fresh) === JSON.stringify(committed)) {
+              console.log("stdlib index is up to date");
+              process.exit(0);
+            }
+            // Say what actually differs. A bare "stale" tells a maintainer
+            // nothing about whether std/ changed or the generator did.
+            const fp = fresh.packages ?? {}, cp = committed.packages ?? {};
+            const fk = Object.keys(fp), ck = Object.keys(cp);
+            const only = (a, b) => a.filter((k) => !b.includes(k));
+            console.error("docs/ai/stdlib-index.json is stale; regenerate it with tools/mcp/gen-index.sh.");
+            if (only(fk, ck).length) console.error("  packages only in std/:    " + only(fk, ck).join(", "));
+            if (only(ck, fk).length) console.error("  packages only in commit:  " + only(ck, fk).join(", "));
+            for (const k of fk.filter((k) => ck.includes(k))) {
+              const a = fp[k], b = cp[k];
+              if (JSON.stringify(a) === JSON.stringify(b)) continue;
+              const same = JSON.stringify([...a].sort()) === JSON.stringify([...b].sort());
+              console.error(
+                same
+                  ? `  ${k}: same ${a.length} declarations, different ORDER (generator is not deterministic)`
+                  : `  ${k}: ${b.length} committed vs ${a.length} in std/`,
+              );
+            }
+            if (JSON.stringify(fk) !== JSON.stringify(ck) && !only(fk, ck).length && !only(ck, fk).length) {
+              console.error("  package KEY ORDER differs (generator is not deterministic)");
+            }
+            process.exit(1);
+          '

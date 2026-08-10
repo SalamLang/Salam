@@ -372,6 +372,18 @@ static void hdr_prelude(cg_t *cg, ast_node_t *program, sb_t *h)
         "    if (n >= SALAM_OB_SZ) { int64_t r = (int64_t)SALAM_RAW_WRITE(1, s, n); "
         "(void)r; return; }\n"
         "    __builtin_memcpy(salam_ob + salam_obn, s, (size_t)n); salam_obn += n;\n"
+        /*
+         * Line-buffered, not fully buffered. The buffer is only flushed on
+         * overflow and by the exit destructor, so a program that prints and
+         * then blocks - every server in std/net and every example that waits
+         * on accept() - produced nothing at all until it exited, and nothing
+         * ever if it was killed. tcc takes the #else branch below and writes
+         * through, which is why this only ever showed up on gcc/clang. One
+         * flush per line still beats that branch's one write per *segment*,
+         * and a line being built from many print calls stays buffered until
+         * its newline arrives, which is exactly what line buffering means.
+         */
+        "    if (__builtin_memchr(s, '\\n', (size_t)n)) salam_out_flush();\n"
         "}\n"
         "#else\n"
         "static void salam_out_flush(void) { fflush(0); }\n"
@@ -382,6 +394,25 @@ static void hdr_prelude(cg_t *cg, ast_node_t *program, sb_t *h)
         "#define SALAM_OUT_LIT(s, n) salam_out_write_((s), (uint64_t)(n))\n"
         "#endif\n");
 
+    /*
+     * See cg_needs_fparg in codegen_call.c: tcc 0.9.27 (x86-64) overwrites a
+     * computed floating-point argument with the value of the floating-point
+     * argument that follows it, so every such argument is routed through an
+     * opaque identity call that forces it into its own slot. Expands to
+     * nothing outside __TINYC__ - no other toolchain pays for it, and even
+     * under tcc only calls with two adjacent float parameters are wrapped.
+     */
+    sb_puts(h, "#ifndef SALAM_FPARG_DEFINED\n#define SALAM_FPARG_DEFINED\n"
+               "#if defined(__TINYC__)\n"
+               "static double salam_fparg_d(double v) { return v; }\n"
+               "static float salam_fparg_f(float v) { return v; }\n"
+               "#define SALAM_FPARG_D(x) salam_fparg_d(x)\n"
+               "#define SALAM_FPARG_F(x) salam_fparg_f(x)\n"
+               "#else\n"
+               "#define SALAM_FPARG_D(x) (x)\n"
+               "#define SALAM_FPARG_F(x) (x)\n"
+               "#endif\n"
+               "#endif\n");
     sb_puts(h, "#ifndef SALAM_FN_ATTRS_DEFINED\n#define SALAM_FN_ATTRS_DEFINED\n"
                "#if defined(__GNUC__) || defined(__clang__)\n"
                "#define SALAM_NOINLINE __attribute__((noinline))\n"
@@ -443,9 +474,23 @@ static void hdr_prelude(cg_t *cg, ast_node_t *program, sb_t *h)
      * core.h in the same relative position, so whichever one is textually
      * first in the .c file still defines the guard correctly either way.
      */
+    /*
+     * Two tiers, because the two supported Windows compilers do not agree
+     * on what <windows.h> drags in. Both declare the kernel32/user32 set,
+     * so SALAM_EXTERN_LIBC_ON_WIN32 is unconditional. Only gcc/clang also
+     * reach <stdlib.h> and winsock from it (winnt.h -> x86intrin.h ->
+     * mm_malloc.h -> stdlib.h, plus winsock.h), which is where getenv,
+     * socket, send, recv, ... come from - tcc's headers never do, so
+     * suppressing those names for tcc would leave them with no declaration
+     * at all. SALAM_EXTERN_WIDE_LIBC_ON_WIN32 is therefore claimed only
+     * when the compiler is not tcc.
+     */
     if (cg->is_gui_mode)
         sb_puts(h, "#ifdef _WIN32\n#define SALAM_RT_STR_DEFINED\n"
-                   "#define SALAM_EXTERN_LIBC_ON_WIN32\n#endif\n");
+                   "#define SALAM_EXTERN_LIBC_ON_WIN32\n"
+                   "#if !defined(__TINYC__)\n"
+                   "#define SALAM_EXTERN_WIDE_LIBC_ON_WIN32\n"
+                   "#endif\n#endif\n");
     sb_puts(h, "#ifndef SALAM_RT_STR_DEFINED\n#define SALAM_RT_STR_DEFINED\n"
                "extern uint64_t strlen(const char* s);\n"
                "extern int32_t strcmp(const char* a, const char* b);\n"
@@ -791,7 +836,85 @@ static bool is_wellknown_libc_name(const char *name)
         "SetConsoleMode",
         "ReadConsoleInputA",
         "DebugBreak",
+        /* std/time's monotonic clock (QueryPerformanceCounter/Frequency take
+         * a LARGE_INTEGER* that Salam spells `void*`) and the selfhost
+         * compiler's own CPU-time profiling in sal_core (GetProcessTimes'
+         * FILETIME* params, likewise `void*`). std/time reaches a GUI
+         * translation unit transitively - webview -> ... -> debug -> time -
+         * so it collides there even though nothing GUI calls it. */
+        "QueryPerformanceCounter",
+        "QueryPerformanceFrequency",
+        "GetCurrentProcess",
+        "GetProcessTimes",
+        /* Both compilers' <windows.h> declares these; std/os/process'
+         * CreateFileA/WriteFile are the ones a GUI build actually reaches
+         * (Run/RunCapture redirect through them), and the GDI/user32 set
+         * belongs to the drawing and window-property helpers. GetProp,
+         * SetProp and LoadImage are macros over their ...A/...W variants
+         * there, so the guard is the only way the two can agree. */
+        "CreateFileA",
+        "WriteFile",
+        "Arc",
+        "BeginPath",
+        "FillRect",
+        "LineTo",
+        "RoundRect",
+        "LoadImage",
+        "GetProp",
+        "SetProp",
     };
+    size_t i = 0;
+    for (; i < sizeof(names) / sizeof(names[0]); i++)
+        if (strcmp(name, names[i]) == 0) return true;
+    return false;
+}
+
+/*
+ * The <math.h> functions std/math declares in its own `extern:` block. Every
+ * generated header includes <math.h> (see hdr_prelude), and Salam spells
+ * these exactly as the standard does - `double f(double)` - so redeclaring
+ * them adds nothing and can only conflict with what the header already said.
+ *
+ * It does conflict, on tcc 0.9.28rc: its tcc_libm.h answers msvcrt's slow
+ * fabs() with a `__CRT_INLINE double __cdecl fabs(...)` of its own ("Override
+ * msvcrt fabs(): 6.3x speedup!"), which is `static`, so a plain include
+ * leaves a harmless local `t fabs` per object. A later `extern` redeclaration
+ * promotes that definition to external linkage, every module that includes
+ * math.h exports a body, and the link dies on "symbol 'fabs' defined twice" -
+ * 10 of the general tests, and any user program importing std/math. 0.9.27
+ * ships no tcc_libm.h and never saw it. Dropping the redeclarations fixes it
+ * for whatever the next such override turns out to be, too.
+ */
+static bool is_libm_name(const char *name)
+{
+    static const char *const names[] = {"sqrt", "sin",   "cos",   "tan",  "asin",
+                                        "acos", "atan",  "atan2", "log",  "log10",
+                                        "exp",  "floor", "ceil",  "fabs", "fmod"};
+    size_t i = 0;
+    for (; i < sizeof(names) / sizeof(names[0]); i++)
+        if (strcmp(name, names[i]) == 0) return true;
+    return false;
+}
+
+/*
+ * The gcc/clang-only half of the collision set: names that only *their*
+ * <windows.h> reaches, via <stdlib.h> and winsock. Guarded by
+ * SALAM_EXTERN_WIDE_LIBC_ON_WIN32, which tcc never defines, so tcc keeps
+ * emitting its own declarations exactly as before. Derived by probing every
+ * `extern:` name in std/ and compiler/ against the real GUI-mode header set
+ * with both compilers and taking the difference, not by hand.
+ */
+static bool is_wide_libc_name(const char *name)
+{
+    static const char *const names[] = {
+        /* <stdlib.h>, reached from windows.h only on gcc/clang */
+        "abort", "exit", "getenv", "system", "_putenv_s",
+        /* winsock.h, which windows.h includes unless WIN32_LEAN_AND_MEAN */
+        "socket", "bind", "listen", "accept", "connect", "shutdown", "closesocket",
+        "ioctlsocket", "send", "recv", "sendto", "recvfrom", "setsockopt", "getsockname",
+        "gethostbyname", "inet_ntoa", "htons", "ntohs", "WSAStartup",
+        /* wincrypt.h, same story - std/tls' native root-store reader */
+        "CertOpenSystemStoreA", "CertEnumCertificatesInStore", "CertCloseStore"};
     size_t i = 0;
     for (; i < sizeof(names) / sizeof(names[0]); i++)
         if (strcmp(name, names[i]) == 0) return true;
@@ -809,10 +932,14 @@ static void hdr_externs(cg_t *cg, ast_node_t *program, sb_t *h)
                 symbol_t *fsym = scope_lookup_local(cg->sem->global, d->name);
                 func_sig_t *sig = sig_of_decl(fsym, d);
                 if (!sig) continue;
-                bool risky = is_wellknown_libc_name(d->name);
-                if (risky) sb_puts(h, "#ifndef SALAM_EXTERN_LIBC_ON_WIN32\n");
+                if (is_libm_name(d->name)) continue;
+                const char *guard =
+                    is_wellknown_libc_name(d->name) ? "SALAM_EXTERN_LIBC_ON_WIN32"
+                    : is_wide_libc_name(d->name)    ? "SALAM_EXTERN_WIDE_LIBC_ON_WIN32"
+                                                    : NULL;
+                if (guard) sb_puts(h, cg_fmt(cg, "#ifndef %s\n", guard));
                 sb_puts(h, cg_fmt(cg, "%s;\n", cg_extern_proto(cg, d, sig)));
-                if (risky) sb_puts(h, "#endif\n");
+                if (guard) sb_puts(h, "#endif\n");
             } else if (d->kind == AST_VAR_DECL) {
                 const char *ts = d->type_str ? d->type_str : "int32_t";
                 sb_puts(h, cg_fmt(cg, "extern %s;\n", cg_decl(cg, ts, d->name)));
@@ -882,6 +1009,40 @@ static void hdr_prototypes(cg_t *cg, ast_node_t *program, sb_t *h)
     }
 }
 
+/*
+ * Prototypes for `impl Trait for T` methods, which codegen.c also forward-
+ * declares at the top of the .c. They are needed in the *header* as well:
+ * a generic function is instantiated as a `static inline` body appended to
+ * this header, and such a body calls the trait impls of whatever type it
+ * was instantiated with. Those calls sat above the .c's declarations, so
+ * the only thing that made them compile was C89 implicit declaration - tcc
+ * still allows it, gcc 16 made it an error, and the returned `const char*`
+ * came back as `int` on any compiler that took it.
+ */
+static void hdr_impl_prototypes(cg_t *cg, sb_t *h)
+{
+    size_t i = 0;
+    for (; i < cg->sem->global->symbols.len; i++) {
+        symbol_t *owner = (symbol_t *)cg->sem->global->symbols.data[i];
+        if (owner->kind != SYM_TYPEIMPL || !owner->members) continue;
+        {
+            size_t j = 0;
+            for (; j < owner->members->symbols.len; j++) {
+                symbol_t *m = (symbol_t *)owner->members->symbols.data[j];
+                size_t k = 0;
+                if (m->kind != SYM_METHOD) continue;
+                for (; k < m->overloads.len; k++) {
+                    func_sig_t *sig = (func_sig_t *)m->overloads.data[k];
+                    if (sig && sig->decl)
+                        sb_puts(h,
+                                cg_fmt(cg, "%s;\n",
+                                       func_signature(cg, sig->decl, owner, sig, false)));
+                }
+            }
+        }
+    }
+}
+
 void cg_header(cg_t *cg, ast_node_t *program)
 {
     sb_t *h = cg->h;
@@ -921,4 +1082,5 @@ void cg_header(cg_t *cg, ast_node_t *program)
     hdr_externs(cg, program, h);
     hdr_globals(cg, program, h);
     hdr_prototypes(cg, program, h);
+    hdr_impl_prototypes(cg, h);
 }

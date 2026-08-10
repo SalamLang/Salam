@@ -1,0 +1,194 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "grpc"
+@fa "جی آر پی سی"
+@ar "جی آر بی سی"
+package grpc
+
+import compress
+import net.http2
+
+// gRPC over HTTP/2, client and server, built entirely on this project's
+// own std/net/http2 (framing + HPACK) and std/encoding/protobuf (wire
+// format) - no libgrpc, no protoc, no external dependency.
+//
+// The protocol in one paragraph: every call is one HTTP/2 stream. The
+// client opens it with HEADERS carrying `:path /Package.Service/Method`
+// and `content-type: application/grpc`, then sends DATA holding
+// length-prefixed messages (one compression flag octet, a 4-octet
+// big-endian length, then the bytes). The server answers with HEADERS
+// (`:status 200`), its own DATA messages, and finally a *trailing*
+// header block carrying `grpc-status` - which is what lets a server
+// report failure after it has already started streaming a reply, and is
+// why gRPC needs HTTP/2 rather than HTTP/1.1.
+//
+// All four call shapes work, because they are the same machinery: unary
+// is one message each way, streaming just sends more of them before
+// half-closing.
+//
+//   grpc_message.salam   the length-prefixed message framing (+ gzip)
+//   metadata.salam       custom headers, including the base64 `-bin` form
+//   status.salam         the 17 status codes and their wire encoding
+//   grpc_client.salam    Channel, unary calls, streaming calls
+//   grpc_server.salam    method registry and dispatch
+
+// ---- status codes (https://grpc.io/docs/guides/status-codes/) ----
+
+pub const GRPC_OK := 0
+pub const GRPC_CANCELLED := 1
+pub const GRPC_UNKNOWN := 2
+pub const GRPC_INVALID_ARGUMENT := 3
+pub const GRPC_DEADLINE_EXCEEDED := 4
+pub const GRPC_NOT_FOUND := 5
+pub const GRPC_ALREADY_EXISTS := 6
+pub const GRPC_PERMISSION_DENIED := 7
+pub const GRPC_RESOURCE_EXHAUSTED := 8
+pub const GRPC_FAILED_PRECONDITION := 9
+pub const GRPC_ABORTED := 10
+pub const GRPC_OUT_OF_RANGE := 11
+pub const GRPC_UNIMPLEMENTED := 12
+pub const GRPC_INTERNAL := 13
+pub const GRPC_UNAVAILABLE := 14
+pub const GRPC_DATA_LOSS := 15
+pub const GRPC_UNAUTHENTICATED := 16
+
+// ---- content types ----
+
+pub const GRPC_CONTENT_TYPE := "application/grpc"
+pub const GRPC_CONTENT_TYPE_PROTO := "application/grpc+proto"
+pub const GRPC_CONTENT_TYPE_JSON := "application/grpc+json"
+
+// ---- message compression flags ----
+
+pub const GRPC_COMP_NONE := 0
+pub const GRPC_COMP_GZIP := 1
+
+// How many HTTP/2 frames a single call may consume before it is declared
+// stuck. Generous, but bounded: an unbounded read loop against a hostile
+// or broken peer never terminates.
+pub const GRPC_MAX_FRAMES := 100000
+
+@en "Status"
+@fa "وضعیت"
+@ar "حالة"
+pub struct Status:
+    pub code: int = 0
+    pub message: str = ""
+end
+
+@en "MDEntry"
+@fa "مدخل فراداده"
+@ar "مدخل البیانات الوصفیة"
+pub struct MDEntry:
+    pub key: str = ""
+    pub value: str = ""
+    // A `-bin` key carries arbitrary bytes and travels base64-encoded;
+    // `value` always holds the decoded form on this side of the wire.
+    pub binary: bool = false
+end
+
+@en "Metadata"
+@fa "فراداده"
+@ar "بیانات وصفیة"
+pub struct Metadata:
+    pub items: Vector<MDEntry> = Vector {}
+end
+
+// One in-flight server call. Handlers never see this struct directly -
+// they get its slot index and go through the Call* functions in
+// grpc_server.salam, since `callhandler` can only pass one i64.
+@en "CallCtx"
+@fa "زمینه فراخوانی"
+@ar "سیاق الاستدعاء"
+pub struct CallCtx:
+    pub stream_id: int = 0
+    pub method: str = ""
+    pub headers: http2.HeaderList = http2.HeaderList {}
+    pub recv: compress.ByteBuf = compress.ByteBuf {}
+    pub recv_pos: int = 0
+    pub client_done: bool = false
+    pub sent_headers: bool = false
+    pub status: Status = Status {}
+    pub busy: bool = false
+    pub failed: bool = false
+end
+
+@en "CallTable"
+@fa "جدول فراخوانی‌ها"
+@ar "جدول الاستدعاءات"
+pub struct CallTable:
+    pub items: Vector<CallCtx> = Vector {}
+end
+
+@en "MethodDesc"
+@fa "توصیف متد"
+@ar "وصف الطریقة"
+pub struct MethodDesc:
+    // Fully qualified, with the leading slash: "/echo.Echo/Say".
+    pub path: str = ""
+    pub fn: i64 = 0
+    pub client_stream: bool = false
+    pub server_stream: bool = false
+end
+
+@en "MethodTable"
+@fa "جدول متدها"
+@ar "جدول الطرق"
+pub struct MethodTable:
+    pub items: Vector<MethodDesc> = Vector {}
+end
+
+// Per-stream read cursor on the client side: how much of a stream's
+// accumulated DATA has already been handed out as complete messages.
+@en "Cursor"
+@fa "مکان‌نما"
+@ar "مؤشر"
+pub struct Cursor:
+    pub stream_id: int = 0
+    pub pos: int = 0
+end
+
+@en "CursorTable"
+@fa "جدول مکان‌نماها"
+@ar "جدول المؤشرات"
+pub struct CursorTable:
+    pub items: Vector<Cursor> = Vector {}
+end
+
+@en "NewStatus"
+@fa "وضعیت جدید"
+@ar "حالة جدیدة"
+pub func NewStatus(code: int, message: str): Status:
+    mut s := Status {}
+    s.code = code
+    s.message = message
+    ret s
+end
+
+@en "StatusOk"
+@fa "وضعیت موفق"
+@ar "حالة ناجحة"
+pub func StatusOk(s: Status): bool:
+    ret s.code == GRPC_OK
+end
+
+// Builds the ":path" for a call from its service and method names, which
+// is the only place the wire format cares about either.
+@en "MethodPath"
+@fa "مسیر متد"
+@ar "مسار الطریقة"
+pub func MethodPath(service: str, method: str): str:
+    ret "/" + service + "/" + method
+end

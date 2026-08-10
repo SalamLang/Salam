@@ -1,0 +1,431 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package graphql
+
+// sdl - the Schema Definition Language (spec section 3).
+//
+// Covers every type-system definition: `schema`, `scalar`, `type`,
+// `interface`, `union`, `enum`, `input` and `directive`, each with
+// descriptions, directives, and the `extend` form. Definitions parse
+// into the Schema's own arena (schema.doc) so a default value written
+// in SDL is an AstValue exactly like an argument literal in a query.
+//
+// Reuses the Ps parser state and all the token primitives from
+// gql_parser.salam; only the productions differ.
+
+// A description is a string or block string immediately preceding a
+// definition (spec 3.1). It is consumed here and attached to whatever
+// definition follows.
+func _sd_description(ps &: Ps): str:
+    if !IsStringToken(_ps_kind(ps)): ret "" end
+    ret _ps_advance(ps).sval
+end
+
+// `@deprecated(reason: ...)` and `@specifiedBy(url: ...)` carry meaning
+// the schema model stores as struct fields rather than as directives,
+// so they are read off the parsed directive list here.
+func _sd_directive_arg_string(doc: Document, d: AstDirective, argName: str, fallback: str): str:
+    mut i := 0
+    until i < d.args.len():
+        a := d.args.get(i)[0]
+        if a.name == argName:
+            v := ValueAt(doc, a.value)
+            if v.kind == VAL_STRING: ret v.s end
+        end
+        i += 1
+    end
+    ret fallback
+end
+
+func _sd_find_directive(ds: Vector<AstDirective>, name: str, found &: bool): AstDirective:
+    mut i := 0
+    until i < ds.len():
+        if ds.get(i)[0].name == name:
+            found = true
+            ret ds.get(i)[0]
+        end
+        i += 1
+    end
+    found = false
+    ret AstDirective {}
+end
+
+func _sd_apply_deprecated(doc: Document, ds: Vector<AstDirective>, dep &: bool, reason &: str):
+    mut found := false
+    d := _sd_find_directive(ds, "deprecated", found)
+    if !found: ret end
+    dep = true
+    reason = _sd_directive_arg_string(doc, d, "reason", "No longer supported")
+end
+
+// ---- input values (arguments and input-object fields) ----
+
+func _sd_input_value(ps &: Ps, sch &: Schema): InputValueDef:
+    mut iv := InputValueDef {}
+    iv.description = _sd_description(ps)
+    iv.name = _ps_expect_name(ps)
+    _ps_expect(ps, TOK_COLON)
+    iv.typeRef = _p_type_ref(ps, sch.doc)
+    if _ps_skip(ps, TOK_EQUALS):
+        iv.defaultValue = _p_value(ps, sch.doc, true)
+        iv.hasDefault = true
+    end
+    ds := _p_directives(ps, sch.doc, true)
+    _sd_apply_deprecated(sch.doc, ds, iv.deprecated, iv.deprecationReason)
+    _free_directives(ds)
+    ret iv
+end
+
+func _sd_arguments_def(ps &: Ps, sch &: Schema): Vector<InputValueDef>:
+    mut out := Vector {} as Vector<InputValueDef>
+    if !_ps_at(ps, TOK_LPAREN): ret out end
+    _ps_advance(ps)
+    until !_ps_at(ps, TOK_RPAREN):
+        if ps.failed || _ps_at(ps, TOK_EOF):
+            _ps_fail(ps, "unterminated argument definitions")
+            ret out
+        end
+        out.push(_sd_input_value(ps, sch))
+    end
+    _ps_advance(ps)
+    ret out
+end
+
+// ---- fields ----
+
+func _sd_field(ps &: Ps, sch &: Schema): FieldDef:
+    mut f := FieldDef {}
+    f.description = _sd_description(ps)
+    f.name = _ps_expect_name(ps)
+    f.args = _sd_arguments_def(ps, sch)
+    _ps_expect(ps, TOK_COLON)
+    f.typeRef = _p_type_ref(ps, sch.doc)
+    ds := _p_directives(ps, sch.doc, true)
+    _sd_apply_deprecated(sch.doc, ds, f.deprecated, f.deprecationReason)
+    _free_directives(ds)
+    ret f
+end
+
+func _sd_fields_def(ps &: Ps, sch &: Schema): Vector<FieldDef>:
+    mut out := Vector {} as Vector<FieldDef>
+    if !_ps_at(ps, TOK_LBRACE): ret out end
+    _ps_advance(ps)
+    until !_ps_at(ps, TOK_RBRACE):
+        if ps.failed || _ps_at(ps, TOK_EOF):
+            _ps_fail(ps, "unterminated field definitions")
+            ret out
+        end
+        out.push(_sd_field(ps, sch))
+    end
+    _ps_advance(ps)
+    ret out
+end
+
+func _sd_input_fields_def(ps &: Ps, sch &: Schema): Vector<InputValueDef>:
+    mut out := Vector {} as Vector<InputValueDef>
+    if !_ps_at(ps, TOK_LBRACE): ret out end
+    _ps_advance(ps)
+    until !_ps_at(ps, TOK_RBRACE):
+        if ps.failed || _ps_at(ps, TOK_EOF):
+            _ps_fail(ps, "unterminated input field definitions")
+            ret out
+        end
+        out.push(_sd_input_value(ps, sch))
+    end
+    _ps_advance(ps)
+    ret out
+end
+
+// `implements A & B`, with an optional leading `&` the spec allows.
+func _sd_implements(ps &: Ps): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    if !_ps_at_name(ps, "implements"): ret out end
+    _ps_advance(ps)
+    _ps_skip(ps, TOK_AMP)
+    out.push(_ps_expect_name(ps))
+    until _ps_skip(ps, TOK_AMP):
+        if ps.failed: ret out end
+        out.push(_ps_expect_name(ps))
+    end
+    ret out
+end
+
+// `= A | B`, with an optional leading `|`.
+func _sd_union_members(ps &: Ps): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    if !_ps_skip(ps, TOK_EQUALS): ret out end
+    _ps_skip(ps, TOK_PIPE)
+    out.push(_ps_expect_name(ps))
+    until _ps_skip(ps, TOK_PIPE):
+        if ps.failed: ret out end
+        out.push(_ps_expect_name(ps))
+    end
+    ret out
+end
+
+func _sd_enum_values(ps &: Ps, sch &: Schema): Vector<EnumValueDef>:
+    mut out := Vector {} as Vector<EnumValueDef>
+    if !_ps_at(ps, TOK_LBRACE): ret out end
+    _ps_advance(ps)
+    until !_ps_at(ps, TOK_RBRACE):
+        if ps.failed || _ps_at(ps, TOK_EOF):
+            _ps_fail(ps, "unterminated enum values")
+            ret out
+        end
+        mut ev := EnumValueDef {}
+        ev.description = _sd_description(ps)
+        ev.name = _ps_expect_name(ps)
+        ds := _p_directives(ps, sch.doc, true)
+        _sd_apply_deprecated(sch.doc, ds, ev.deprecated, ev.deprecationReason)
+        _free_directives(ds)
+        out.push(ev)
+    end
+    _ps_advance(ps)
+    ret out
+end
+
+// ---- whole definitions ----
+
+// Merges a parsed definition into the schema. An `extend` adds to an
+// existing type; a plain definition of a name that already exists is a
+// redefinition and is rejected.
+func _sd_merge_type(ps &: Ps, sch &: Schema, t: TypeDef, isExtend: bool):
+    if ps.failed: ret end
+    idx := TypeIndex(sch, t.name)
+    if idx < 0:
+        if isExtend:
+            _ps_fail(ps, _gql_cannot_extend_msg(t.name))
+            ret
+        end
+        sch.types.push(t)
+        ret
+    end
+    if !isExtend:
+        _ps_fail(ps, _gql_redefined_msg(t.name))
+        ret
+    end
+    mut cur := sch.types.get(idx)[0]
+    _sd_extend_into(cur, t)
+    sch.types.set(idx, cur)
+end
+
+func _sd_extend_into(cur &: TypeDef, add: TypeDef):
+    mut i := 0
+    until i < add.fields.len():
+        cur.fields.push(add.fields.get(i)[0])
+        i += 1
+    end
+    mut j := 0
+    until j < add.inputFields.len():
+        cur.inputFields.push(add.inputFields.get(j)[0])
+        j += 1
+    end
+    mut k := 0
+    until k < add.interfaces.len():
+        cur.interfaces.push(add.interfaces.get(k)[0])
+        k += 1
+    end
+    mut m := 0
+    until m < add.unionMembers.len():
+        cur.unionMembers.push(add.unionMembers.get(m)[0])
+        m += 1
+    end
+    mut n := 0
+    until n < add.enumValues.len():
+        cur.enumValues.push(add.enumValues.get(n)[0])
+        n += 1
+    end
+end
+
+func _sd_object(ps &: Ps, sch &: Schema, desc: str, kind: int, isExtend: bool):
+    _ps_advance(ps)
+    mut t := TypeDef { kind = kind }
+    t.description = desc
+    t.name = _ps_expect_name(ps)
+    t.interfaces = _sd_implements(ps)
+    _free_directives(_p_directives(ps, sch.doc, true))
+    t.fields = _sd_fields_def(ps, sch)
+    _sd_merge_type(ps, sch, t, isExtend)
+end
+
+func _sd_scalar(ps &: Ps, sch &: Schema, desc: str, isExtend: bool):
+    _ps_advance(ps)
+    mut t := TypeDef { kind = TYPE_SCALAR }
+    t.description = desc
+    t.name = _ps_expect_name(ps)
+    ds := _p_directives(ps, sch.doc, true)
+    mut found := false
+    d := _sd_find_directive(ds, "specifiedBy", found)
+    if found: t.specifiedByURL = _sd_directive_arg_string(sch.doc, d, "url", "") end
+    _free_directives(ds)
+    _sd_merge_type(ps, sch, t, isExtend)
+end
+
+func _sd_union(ps &: Ps, sch &: Schema, desc: str, isExtend: bool):
+    _ps_advance(ps)
+    mut t := TypeDef { kind = TYPE_UNION }
+    t.description = desc
+    t.name = _ps_expect_name(ps)
+    _free_directives(_p_directives(ps, sch.doc, true))
+    t.unionMembers = _sd_union_members(ps)
+    _sd_merge_type(ps, sch, t, isExtend)
+end
+
+func _sd_enum(ps &: Ps, sch &: Schema, desc: str, isExtend: bool):
+    _ps_advance(ps)
+    mut t := TypeDef { kind = TYPE_ENUM }
+    t.description = desc
+    t.name = _ps_expect_name(ps)
+    _free_directives(_p_directives(ps, sch.doc, true))
+    t.enumValues = _sd_enum_values(ps, sch)
+    _sd_merge_type(ps, sch, t, isExtend)
+end
+
+func _sd_input(ps &: Ps, sch &: Schema, desc: str, isExtend: bool):
+    _ps_advance(ps)
+    mut t := TypeDef { kind = TYPE_INPUT_OBJECT }
+    t.description = desc
+    t.name = _ps_expect_name(ps)
+    _free_directives(_p_directives(ps, sch.doc, true))
+    t.inputFields = _sd_input_fields_def(ps, sch)
+    _sd_merge_type(ps, sch, t, isExtend)
+end
+
+// `directive @name(args) repeatable on LOC | LOC`
+func _sd_directive_def(ps &: Ps, sch &: Schema, desc: str):
+    _ps_advance(ps)
+    _ps_expect(ps, TOK_AT)
+    mut d := DirectiveDef {}
+    d.description = desc
+    d.name = _ps_expect_name(ps)
+    d.args = _sd_arguments_def(ps, sch)
+    if _ps_at_name(ps, "repeatable"):
+        _ps_advance(ps)
+        d.repeatable = true
+    end
+    _ps_expect_word(ps, "on")
+    _ps_skip(ps, TOK_PIPE)
+    d.locations.push(_ps_expect_name(ps))
+    until _ps_skip(ps, TOK_PIPE):
+        if ps.failed: break end
+        d.locations.push(_ps_expect_name(ps))
+    end
+    if !ps.failed: sch.directives.push(d) end
+end
+
+// `schema { query: Q, mutation: M }` overrides the default root names.
+func _sd_schema_def(ps &: Ps, sch &: Schema, desc: str):
+    _ps_advance(ps)
+    sch.hasSchemaDef = true
+    if desc != "": sch.description = desc end
+    _free_directives(_p_directives(ps, sch.doc, true))
+    _ps_expect(ps, TOK_LBRACE)
+    until !_ps_at(ps, TOK_RBRACE):
+        if ps.failed || _ps_at(ps, TOK_EOF):
+            _ps_fail(ps, "unterminated schema definition")
+            ret
+        end
+        role := _ps_expect_name(ps)
+        _ps_expect(ps, TOK_COLON)
+        name := _ps_expect_name(ps)
+        if role == "query": sch.queryType = name
+        else role == "mutation": sch.mutationType = name
+        else role == "subscription": sch.subscriptionType = name
+        else:
+            _ps_fail(ps, _gql_bad_root_msg(role))
+            ret
+        end
+    end
+    _ps_advance(ps)
+end
+
+// spec 3.3.1: with no explicit `schema` definition, the root operation
+// types are whichever of Query, Mutation and Subscription happen to be
+// defined. An explicit `schema` block is authoritative and suppresses
+// this, so a service can deliberately expose no mutation root even
+// while a type called Mutation exists.
+func _sd_default_roots(sch &: Schema):
+    if sch.hasSchemaDef: ret end
+    if sch.mutationType == "" && HasType(sch, "Mutation"): sch.mutationType = "Mutation" end
+    if sch.subscriptionType == "" && HasType(sch, "Subscription"): sch.subscriptionType = "Subscription" end
+end
+
+func _sd_definition(ps &: Ps, sch &: Schema, isExtend: bool):
+    desc := _sd_description(ps)
+    if _ps_at_name(ps, "extend") && !isExtend:
+        _ps_advance(ps)
+        _sd_definition(ps, sch, true)
+        ret
+    end
+    if _ps_at_name(ps, "type"): _sd_object(ps, sch, desc, TYPE_OBJECT, isExtend)
+    else _ps_at_name(ps, "interface"): _sd_object(ps, sch, desc, TYPE_INTERFACE, isExtend)
+    else _ps_at_name(ps, "scalar"): _sd_scalar(ps, sch, desc, isExtend)
+    else _ps_at_name(ps, "union"): _sd_union(ps, sch, desc, isExtend)
+    else _ps_at_name(ps, "enum"): _sd_enum(ps, sch, desc, isExtend)
+    else _ps_at_name(ps, "input"): _sd_input(ps, sch, desc, isExtend)
+    else _ps_at_name(ps, "directive"): _sd_directive_def(ps, sch, desc)
+    else _ps_at_name(ps, "schema"): _sd_schema_def(ps, sch, desc)
+    else:
+        _ps_fail(ps, _gql_unexpected_msg(_ps_cur(ps)))
+    end
+end
+
+// ---- public API ----
+
+// Parses SDL text into a Schema, adding the built-in scalars and
+// directives first so a document may reference Int/String/@skip without
+// declaring them. On failure `err` holds the syntax error.
+@en "ParseSchema"
+@fa "تجزیه طرح‌واره"
+@ar "تحلیل المخطط"
+pub func ParseSchema(source: str, err &: GqlError): Schema:
+    mut sch := NewSchema()
+    ParseSchemaInto(sch, source, err)
+    ret sch
+end
+
+// Parses additional SDL into an existing schema, which is how a schema
+// split across several files (or extended after construction) is built
+// up. Built-ins are not re-added.
+@en "ParseSchemaInto"
+@fa "تجزیه در طرح‌واره"
+@ar "تحلیل ضمن المخطط"
+pub func ParseSchemaInto(sch &: Schema, source: str, err &: GqlError):
+    mut ps := Ps {}
+    if !_ps_from_source(source, ps):
+        err = ps.err
+        ps.toks.free()
+        ret
+    end
+    until !_ps_at(ps, TOK_EOF):
+        if ps.failed: break end
+        _sd_definition(ps, sch, false)
+    end
+    if ps.failed: err = ps.err end
+    _sd_default_roots(sch)
+    ps.toks.free()
+end
+
+// True when `source` is a syntactically valid schema document. This
+// checks syntax only; use ValidateSchema for the type-system rules.
+@en "ParseSchemaOk"
+@fa "تجزیه طرح‌واره درست"
+@ar "تحلیل المخطط سلیم"
+pub func ParseSchemaOk(source: str): bool:
+    mut err := GqlError {}
+    mut sch := ParseSchema(source, err)
+    FreeSchema(sch)
+    ret err.message == ""
+end

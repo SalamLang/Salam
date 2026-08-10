@@ -1,0 +1,98 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package rpc
+
+import compress
+
+// One indirection over the two wire codecs, so the server, the client
+// and the transports are written once against `codec: int` rather than
+// duplicated per format. Everything here is a pure ByteBuf-in /
+// ByteBuf-out function: no sockets, no globals, which is also what makes
+// the whole dispatch path testable without opening a port.
+
+@en "CodecName"
+@fa "نام کدک"
+@ar "اسم المرمز"
+pub func CodecName(codec: int): str:
+    if codec == RPC_CODEC_MSGPACK: ret "msgpack-rpc" end
+    ret "json-rpc-2.0"
+end
+
+// The framing a codec is normally paired with: JSON-RPC is text and
+// travels line-delimited, MessagePack-RPC is binary and needs an
+// explicit length prefix. Callers are free to pair them differently
+// (JSON-RPC under the LSP header framing, say); this is only the default.
+@en "CodecDefaultFraming"
+@fa "قاب‌بندی پیش‌فرض کدک"
+@ar "تأطیر افتراضی للمرمز"
+pub func CodecDefaultFraming(codec: int): int:
+    if codec == RPC_CODEC_MSGPACK: ret RPC_FRAME_LENGTH end
+    ret RPC_FRAME_LINE
+end
+
+@en "EncodeRequest"
+@fa "کدگذاری درخواست"
+@ar "ترمیز الطلب"
+pub func EncodeRequest(codec: int, r: Request): compress.ByteBuf:
+    if codec == RPC_CODEC_MSGPACK: ret MsgpackEncodeRequest(r) end
+    ret compress.BufFromStr(JsonEncodeRequest(r))
+end
+
+@en "EncodeResponses"
+@fa "کدگذاری پاسخ‌ها"
+@ar "ترمیز الاستجابات"
+pub func EncodeResponses(codec: int, rs: Responses): compress.ByteBuf:
+    if codec == RPC_CODEC_MSGPACK:
+        if rs.items.len() == 0: ret compress.NewByteBuf() end
+        ret MsgpackEncodeResponse(rs.items.get(0)[0])
+    end
+    text := JsonEncodeResponses(rs)
+    if text == "": ret compress.NewByteBuf() end
+    ret compress.BufFromStr(text)
+end
+
+@en "DecodeBatch"
+@fa "کدگشایی دسته"
+@ar "فک ترمیز الدفعة"
+pub func DecodeBatch(codec: int, payload: compress.ByteBuf): Batch:
+    if codec == RPC_CODEC_MSGPACK: ret MsgpackDecodeBatch(payload) end
+    text := compress.BufToStrUnsafe(payload)
+    ret JsonDecodeBatch(text)
+end
+
+@en "DecodeResponse"
+@fa "کدگشایی پاسخ"
+@ar "فک ترمیز الاستجابة"
+pub func DecodeResponse(codec: int, payload: compress.ByteBuf, ok &: bool): Response:
+    if codec == RPC_CODEC_MSGPACK: ret MsgpackDecodeResponse(payload, ok) end
+    text := compress.BufToStrUnsafe(payload)
+    ret JsonDecodeResponse(text, ok)
+end
+
+// The single top-level error document for a payload that never got far
+// enough to have per-request ids.
+@en "EncodeTopLevelError"
+@fa "کدگذاری خطای سطح بالا"
+@ar "ترمیز خطأ المستوی الأعلی"
+pub func EncodeTopLevelError(codec: int, e: Error): compress.ByteBuf:
+    if codec == RPC_CODEC_MSGPACK:
+        mut r := Response {}
+        r.is_error = true
+        r.err = e
+        r.msgid = 0 as i64
+        ret MsgpackEncodeResponse(r)
+    end
+    ret compress.BufFromStr(JsonTopLevelError(e))
+end

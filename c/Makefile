@@ -470,6 +470,22 @@ LLVM_MERGE_SHIMS = $(BUILD_DIR)/llvm/llvm_native.o $(BUILD_DIR)/llvm/orc_call.o 
 LLVM_MERGE_DIR  = $(BUILD_DIR)/merge
 SALAM_LLVM_A    = $(OUTDIR)/libsalam_llvm.a
 
+#
+# The archive merge is driven by an MRI script (`ar -M`), which is a GNU
+# binutils extension. macOS ships BSD ar, which has no -M at all and answers
+# with its usage text, so libsalam-llvm could never succeed there - and while
+# that failure was only a ::warning::, that is why every macOS stage2 fell
+# back to the C backend.
+#
+# llvm-ar reads the same MRI script and ships inside the very LLVM
+# installation this target already requires, so it is preferred on every
+# host rather than special-casing macOS. The plain `ar` fallback keeps a
+# GNU host working if the LLVM package somehow omits it.
+#
+LLVM_BINDIR := $(shell $(LLVM_CONFIG) --bindir 2>/dev/null)
+AR_MRI      := $(firstword $(wildcard $(LLVM_BINDIR)/llvm-ar) \
+                           $(shell command -v llvm-ar 2>/dev/null) ar)
+
 .PHONY: libsalam-llvm
 libsalam-llvm: $(LLVM_MERGE_SHIMS)
 	@test "$(WITH_LLVM)$(WITH_LLD)" = "11" \
@@ -490,10 +506,10 @@ libsalam-llvm: $(LLVM_MERGE_SHIMS)
 	 echo "end"   >> $(LLVM_MERGE_DIR)/mri; \
 	 echo "merging $$n LLVM/lld archives + salam shims -> $(SALAM_LLVM_A)"; \
 	 rm -f $(SALAM_LLVM_A); \
-	 ar -M < $(LLVM_MERGE_DIR)/mri
+	 $(AR_MRI) -M < $(LLVM_MERGE_DIR)/mri
 	@echo "Built $(SALAM_LLVM_A)"
 	@echo "  std/llvm then links with: link static \"salam_llvm\""
-	@echo "  plus system libs: $$($(LLVM_CONFIG) --link-static --system-libs 2>/dev/null) -lstdc++"
+	@echo "  plus system libs: $(LLVM_SYSTEM_LIBS) $(LLVM_CXXLIB)"
 
 test: $(OUTBIN)
 	SALAM=$(abspath $(OUTBIN)) sh ../tools/bash/run-tests.sh

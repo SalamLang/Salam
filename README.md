@@ -34,49 +34,6 @@ Salam is a general-purpose and systems programming language designed for efficie
 
 ---
 
-<!-- START doctoc generated TOC please keep comment here to allow auto update -->
-<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
-
-- [✨ Introducing Salam](#-introducing-salam)
-  - [Supported Languages](#supported-languages)
-  - [Why Choose Salam?](#why-choose-salam)
-  - [Key Features](#key-features)
-- [Quick Installing](#quick-installing)
-- [🧩 Editor Support](#-editor-support)
-  - [Visual Studio Code](#visual-studio-code)
-- [🛠️ The Compiler (`salam`)](#-the-compiler-salam)
-  - [Build](#build)
-  - [Usage](#usage)
-  - [Cross-compilation](#cross-compilation)
-- [🐳 Docker & Docker Compose](#-docker--docker-compose)
-  - [Development (live reload)](#development-live-reload)
-  - [Production (copy & build)](#production-copy--build)
-  - [Plain Docker (without Compose)](#plain-docker-without-compose)
-  - [Books (XeLaTeX)](#books-xelatex)
-- [🚀 Bun Workspaces: Multi-App Development & Static Site Guide](#-bun-workspaces-multi-app-development--static-site-guide)
-  - [🚀 1. Quickstart Execution Guide](#-1-quickstart-execution-guide)
-  - [📁 2. Monorepo Architecture & Core Setup](#-2-monorepo-architecture--core-setup)
-    - [Root Configuration Files](#root-configuration-files)
-      - [`package.json` (Workspace Root)](#packagejson-workspace-root)
-      - [`bunfig.toml` (Workspace Root)](#bunfigtoml-workspace-root)
-  - [🔄 3. Global Monorepo Package Updates](#-3-global-monorepo-package-updates)
-    - [Explaining the Flags Behind the Script (`bun update -i -r`)](#explaining-the-flags-behind-the-script-bun-update--i--r)
-  - [📚 4. MyST Documentation](#-4-myst-documentation)
-    - [Configuration Files](#configuration-files)
-    - [Running the Documentation Locally](#running-the-documentation-locally)
-- [🤝 Contributing](#-contributing)
-- [🔍 Joining Code Reviews](#-joining-code-reviews)
-  - [How a GitHub PR Review Works](#how-a-github-pr-review-works)
-    - [Leaving an inline comment](#leaving-an-inline-comment)
-    - [Suggesting a code change](#suggesting-a-code-change)
-    - [Submitting the review](#submitting-the-review)
-    - [Tips for great reviews](#tips-for-great-reviews)
-  - [Growing with the Community](#growing-with-the-community)
-  - [💬 Real-Time Community](#-real-time-community)
-- [📖 Glossary](#-glossary)
-
-<!-- END doctoc -->
-
 <div align="center">
 
 ## ✨ Introducing Salam

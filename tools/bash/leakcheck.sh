@@ -3,7 +3,7 @@
 # of salam and fail if the compiler leaked anything.
 #
 # Usage:
-#   sh c/tools/bash/leakcheck.sh [-j N] [--no-suite] [--no-sweep]
+#   sh tools/bash/leakcheck.sh [-j N] [--no-suite] [--no-sweep]
 #                               [--reports=DIR] [--allow=N] [section ...]
 #
 # Env:
@@ -12,7 +12,7 @@
 #                uninstrumented binary reports zero leaks no matter what.
 #                Default: build/asan/salam, which `--build` produces.
 #   SALAM_STD    stdlib root (defaults to ./std, as run-tests.sh does)
-#   LSAN_SUPP    suppression file (default: c/tools/lsan.supp)
+#   LSAN_SUPP    suppression file (default: tools/lsan.supp)
 #   NPROC        parallel workers, same meaning as in run-tests.sh
 #
 # Options:
@@ -89,12 +89,18 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-# lib.sh leaves us in c/, which is where run-tests.sh expects to run from
-# (it reaches the corpus as ../tests/...). REPO is the repository root, which
-# is where std/ and tests/ actually live.
+# lib.sh leaves us at the repository root, which is where run-tests.sh
+# expects to run from (it reaches the corpus as tests/...) and where std/
+# and tests/ live. CDIR and REPO are the same directory; both names are
+# kept because the two are used for different things below (absolutising
+# our own arguments vs locating the stdlib).
 CDIR=$(pwd)
-REPO=$(cd .. && pwd)
-ASAN_BUILD_DIR=build/asan
+REPO=$CDIR
+# Repo-relative, for the SALAM default and the absolute OUTDIR handed to
+# make. MAKE_BUILD_DIR is the same directory spelled relative to c/, which
+# is what `make -C c` resolves BUILD_DIR against.
+ASAN_BUILD_DIR=c/build/asan
+MAKE_BUILD_DIR=build/asan
 : "${SALAM:=$ASAN_BUILD_DIR/salam}"
 : "${LSAN_SUPP:=tools/lsan.supp}"
 
@@ -114,11 +120,11 @@ if [ "$DO_BUILD" -eq 1 ]; then
     ASAN_CFLAGS="-O1 -g -fsanitize=address -fno-omit-frame-pointer"
     ASAN_CFLAGS="$ASAN_CFLAGS -std=gnu89 -Wall -Wextra -Wno-unused-parameter"
     ASAN_CFLAGS="$ASAN_CFLAGS -Wno-unused-function -Wno-unused-variable"
-    make -j"${NPROC:-4}" \
+    make -C c -j"${NPROC:-4}" \
         CC="${CC:-gcc}" \
         LLVM_CONFIG="${LLVM_CONFIG:-llvm-config}" \
         WITH_LLVM="${WITH_LLVM:-0}" WITH_LLD="${WITH_LLD:-0}" \
-        BUILD_DIR="$ASAN_BUILD_DIR" OUTDIR="$CDIR/$ASAN_BUILD_DIR" \
+        BUILD_DIR="$MAKE_BUILD_DIR" OUTDIR="$CDIR/$ASAN_BUILD_DIR" \
         CFLAGS="$ASAN_CFLAGS" EXTRA_LDFLAGS="-fsanitize=address" ||
         {
             echo "leakcheck: ASan build failed" >&2
@@ -180,10 +186,11 @@ export ASAN_OPTIONS
 LSAN_OPTIONS="suppressions=$SUPP_ABS:print_suppressions=0"
 export LSAN_OPTIONS
 export SALAM="$SALAM_ABS"
-# run-tests.sh only auto-sets SALAM_STD when ./std exists, and from c/ it does
-# not - so an ASan salam living under c/build/asan, rather than beside the
-# repository's std/, would resolve no stdlib at all and every test would fail
-# for a reason that has nothing to do with leaks.
+# run-tests.sh auto-sets SALAM_STD from ./std, which does now exist here.
+# Setting it explicitly anyway: an ASan salam lives under c/build/asan
+# rather than beside the repository's std/, and a compiler that resolves no
+# stdlib fails every test for a reason that has nothing to do with leaks.
+# Cheap insurance against that auto-detection changing again.
 if [ -z "${SALAM_STD:-}" ] && [ -d "$REPO/std" ]; then
     SALAM_STD="$REPO/std"
     export SALAM_STD

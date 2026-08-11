@@ -17,7 +17,7 @@ if ! command -v tcc >/dev/null 2>&1; then
     # preview deploy could be built by a different compiler than anything
     # else in the project, chosen by whatever landed upstream that morning.
     echo "==> tcc not found, building the pinned TinyCC commit ..."
-    sh c/tools/ci/build-tcc.sh "$HOME/.local/tcc"
+    sh tools/ci/build-tcc.sh "$HOME/.local/tcc"
     export PATH="$HOME/.local/tcc/bin:$HOME/.local/tcc:$PATH"
 fi
 
@@ -34,5 +34,7 @@ fi
 )
 . "$emsdk_dir/emsdk_env.sh"
 
-cd "$repo_root/c"
-sh tools/bash/update-playground.sh
+# tools/ scripts self-anchor to the repository root, so no cd into c/.
+# --selfhost matches the two editor CI workflows, so a preview deploy is built
+# by the same compiler as the published playground rather than by the C one.
+sh tools/bash/update-playground.sh --selfhost

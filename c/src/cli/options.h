@@ -97,11 +97,32 @@ typedef struct {
     bool fmt_minify;
     bool debug_info;
     bool asan;
+    /* --lto: whole-program LTO on the final link. Opt-in, not implied by an
+     * optimizing build: the default path compiles each module to its own .o
+     * and reuses the unchanged ones, which -flto defeats (every object is
+     * bitcode, so the link is one serial LTRANS pass over all of them). On
+     * Windows the toolchain's lto-wrapper falls back to serial LTRANS no
+     * matter what -flto=N asks for, and mingw's lto1 is where this host's
+     * `internal compiler error: original not compressed with zstd` comes
+     * from - so the fast path stays the default and LTO is a choice. */
+    bool lto;
     bool interp;
+    /* --timeout=MS: the tree-walking interpreter's wall-clock deadline for
+     * `run`/`exec`/`jit`. 0 = unset, in which case SALAM_INTERP_TIMEOUT_MS
+     * is consulted and interp.c's own default applies after that. */
+    int timeout_ms;
     const char *stdlib_path;
     char exe_path[512];
     const char *defines[SALAM_MAX_INPUTS];
     int ndefines;
+    /* --export=Fn:CName, repeatable: keep top-level pub func Fn alive through
+     * dead-code elimination and emit it under the literal C name CName rather
+     * than the mangled one, so a host with no Salam entry point can link
+     * against a hand-picked API. Applies to the entry file only - matching by
+     * name across every transitively imported module would rename unrelated
+     * same-named functions too. */
+    const char *exports[SALAM_MAX_INPUTS];
+    int nexports;
     /* --libpath=DIR, repeatable: extra library search directories for the
      * link step, for archives not installed under the usual prefix. */
     const char *lib_paths[SALAM_MAX_INPUTS];

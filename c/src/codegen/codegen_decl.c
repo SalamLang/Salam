@@ -134,6 +134,37 @@ const char *cg_extern_proto(cg_t *cg, ast_node_t *fn, func_sig_t *sig)
     return r;
 }
 
+/*
+ * Closes a non-void function whose body does not end in `ret` - one ending in
+ * an if/else chain, a match, or a loop that returns from inside it. C calls
+ * falling off such a function undefined behaviour, and clang says so
+ * (-Wreturn-type: "does not return a value in all control paths"), so a zero
+ * of the return type is returned instead. `= {0}` covers scalars, pointers
+ * and structs alike where `(T)0` would not compile for the last of those.
+ *
+ * sret functions return void in C - the value goes through the `__ret` out-
+ * parameter - and need nothing here, and neither does a body already ending
+ * in a return.
+ */
+static void cg_fallthrough_ret(cg_t *cg, ast_node_t *fn, func_sig_t *sig)
+{
+    if (cg->cur_sret || sig->ret->kind == TY_VOID) return;
+    /* A `noret` function carries SALAM_NORET, and returning from one of those
+     * is its own diagnostic on gcc and clang. Falling off its end is the
+     * point. */
+    if (fn->is_noret) return;
+    if (fn->a && fn->a->list.len > 0) {
+        ast_node_t *last = (ast_node_t *)fn->a->list.data[fn->a->list.len - 1];
+        if (last->kind == AST_RETURN) return;
+    }
+    {
+        int t = ++cg->tmpn;
+        const char *ct = cg_ctype(cg, type_to_string(cg->sem->tc, sig->ret));
+        cg_line(cg, "%s __fret%d = {0};", ct, t);
+        cg_line(cg, "return __fret%d;", t);
+    }
+}
+
 void cg_function(cg_t *cg, ast_node_t *fn, symbol_t *owner)
 {
     symbol_t *fsym = owner ? scope_lookup_local(owner->members, fn->name)
@@ -190,7 +221,10 @@ void cg_function(cg_t *cg, ast_node_t *fn, symbol_t *owner)
     }
     if (fn->a) cg_block(cg, fn->a);
     cg_emit_defers(cg);
-    if (is_main && sig->ret->kind == TY_VOID) cg_line(cg, "return 0;");
+    if (is_main && sig->ret->kind == TY_VOID)
+        cg_line(cg, "return 0;");
+    else if (!is_main)
+        cg_fallthrough_ret(cg, fn, sig);
     cg->indent--;
     cg_line(cg, "}");
     sb_putc(cg->c, '\n');

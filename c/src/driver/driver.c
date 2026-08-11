@@ -365,7 +365,11 @@ static int driver_interp(options_t *opt)
      * can trip it on a program that is merely slow rather than stuck. Let a
      * caller widen or lift it: negative means no deadline at all. */
     int timeout_ms = 0;
-    {
+    if (opt->timeout_ms > 0) {
+        /* --timeout beats the environment: the flag is the caller asking for
+         * this run specifically, the variable is ambient configuration. */
+        timeout_ms = opt->timeout_ms;
+    } else {
         const char *e = getenv("SALAM_EXEC_TIMEOUT_MS");
         if (e && e[0]) timeout_ms = atoi(e);
     }

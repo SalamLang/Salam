@@ -13,14 +13,14 @@
 # HTTPS will not work in such an image until this is generated.
 #
 # Usage:
-#   c/tools/bash/gen-tls-roots.sh [path-to-ca-bundle.pem]
+#   tools/bash/gen-tls-roots.sh [path-to-ca-bundle.pem]
 #
 # Re-run whenever the upstream bundle is refreshed. The output is plain Salam
 # source and is safe to commit.
 
 set -euo pipefail
 
-cd "$(dirname "$0")/../../.."
+cd "$(dirname "$0")/../.."
 
 OUT="std/tls/roots_embedded.salam"
 SRC="${1:-}"
@@ -70,7 +70,7 @@ echo "gen-tls-roots: embedding $COUNT certificates from $SRC" >&2
 package tls
 
 // GENERATED FILE - do not edit by hand.
-// Regenerate with c/tools/bash/gen-tls-roots.sh
+// Regenerate with tools/bash/gen-tls-roots.sh
 //
 // Fallback trust roots, used only when no system CA bundle can be located.
 // See roots.salam for the search order.

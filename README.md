@@ -293,7 +293,7 @@ from the repository root. There are two modes:
 
 The compiler tree is bind-mounted and `./salam` is **recompiled automatically on
 every change** to `src/` (powered by [`entr`](https://eradman.com/entrproject/), see
-[`tools/bash/docker-dev.sh`](compiler/tools/bash/docker-dev.sh)):
+[`tools/bash/docker-dev.sh`](tools/bash/docker-dev.sh)):
 
 ```sh
 docker compose -f compiler/docker/docker-compose.yml up dev   # build, then watch & rebuild

@@ -23,6 +23,49 @@ void cg_emit_defers(cg_t *cg)
     }
 }
 
+/*
+ * cg_expr parenthesizes every binary expression it builds, so `if (%s)` came
+ * out as `if ((f == NULL))`. clang reads doubled parens around an equality
+ * test as the "did you mean = ?" idiom and warns on every one of them
+ * (-Wparentheses-equality; 22 in a benchmark-runner build alone), and gcc does
+ * the same under -Wall. Dropping the redundant layer at the condition sites
+ * fixes it without changing how expressions are built anywhere else.
+ *
+ * The outer parens only come off when they wrap the whole expression: `(a) &&
+ * (b)` opens and closes before the end and is left alone. String and char
+ * literals are skipped so a parenthesis inside one is not counted.
+ */
+const char *cg_unparen(cg_t *cg, const char *s)
+{
+    size_t len = s ? strlen(s) : 0;
+    int depth = 0;
+    size_t i = 0;
+    /* `({ ... })` is a GNU statement expression: those parens are syntax, not
+     * grouping, and taking them off leaves a block where an expression goes. */
+    if (len < 2 || s[0] != '(' || s[len - 1] != ')' || s[1] == '{') return s;
+    for (; i < len; i++) {
+        if (s[i] == '"' || s[i] == '\'') {
+            char q = s[i];
+            for (i++; i < len && s[i] != q; i++)
+                if (s[i] == '\\') i++;
+            continue;
+        }
+        if (s[i] == '(') {
+            depth++;
+        } else if (s[i] == ')') {
+            depth--;
+            if (depth == 0 && i + 1 != len) return s;
+        }
+    }
+    if (depth != 0) return s;
+    return cg_fmt(cg, "%.*s", (int)(len - 2), s + 1);
+}
+
+static const char *cg_cond(cg_t *cg, ast_node_t *n)
+{
+    return cg_unparen(cg, cg_expr(cg, n));
+}
+
 static const char *cg_vardecl_inline(cg_t *cg, ast_node_t *n)
 {
     const char *ts = n->type_str ? n->type_str : "int32_t";
@@ -47,10 +90,18 @@ static const char *cg_simple_inline(cg_t *cg, ast_node_t *n)
 {
     if (n->kind == AST_VAR_DECL) return cg_vardecl_inline(cg, n);
     if (n->kind == AST_ASSIGN) {
-        if (n->op == TK_POWER_EQ)
-            return cg_fmt(cg, "%s = pow(SALAM_FPARG_D((double)(%s)), (double)(%s))",
-                          cg_expr(cg, n->a), cg_expr(cg, n->a), cg_expr(cg, n->b));
-        return cg_fmt(cg, "%s %s %s", cg_expr(cg, n->a), cg_op(n->op), cg_expr(cg, n->b));
+        if (n->op == TK_POWER_EQ) {
+            const char *dst = cg_expr(cg, n->a);
+            const char *base = cg_expr(cg, n->a);
+            const char *exp = cg_expr(cg, n->b);
+            return cg_fmt(cg, "%s = pow(SALAM_FPARG_D((double)(%s)), (double)(%s))", dst,
+                          base, exp);
+        }
+        {
+            const char *lhs = cg_expr(cg, n->a);
+            const char *rhs = cg_expr(cg, n->b);
+            return cg_fmt(cg, "%s %s %s", lhs, cg_op(n->op), rhs);
+        }
     }
     if (n->kind == AST_EXPR_STMT) return cg_expr(cg, n->a);
     return cg_expr(cg, n);
@@ -79,6 +130,19 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
             break;
         }
         cg_line(cg, "%s;", cg_vardecl_inline(cg, n));
+        /*
+         * A leading underscore is how Salam spells "declared on purpose,
+         * never read" - it is what stops sema's unused-name rule firing. The
+         * C compiler has no way to know that, so gcc and clang report
+         * -Wunused-variable for exactly the bindings the author already
+         * marked as deliberate (std/compress reads DEFLATE's NLEN field into
+         * one just to advance the bit stream). Carry the intent across.
+         *
+         * The initializer still runs: it is the call's side effect that was
+         * wanted, so this suppresses the warning without dropping the work.
+         */
+        if (n->name && n->name[0] == '_')
+            cg_line(cg, "(void)%s;", cg_cident(cg, n->name));
         break;
     case AST_CONST_DECL: {
         const char *cts = n->type_str ? n->type_str : "int32_t";
@@ -145,8 +209,10 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
         }
 
         if (n->op == TK_PLUS_EQ && n->a->type_str && !strcmp(n->a->type_str, "str")) {
-            cg_line(cg, "%s = salam_strcat(%s, %s);", cg_expr(cg, n->a),
-                    cg_expr(cg, n->a), cg_str_operand(cg, n->b));
+            const char *dst = cg_expr(cg, n->a);
+            const char *cur = cg_expr(cg, n->a);
+            const char *add = cg_str_operand(cg, n->b);
+            cg_line(cg, "%s = salam_strcat(%s, %s);", dst, cur, add);
             break;
         }
         if (n->op == TK_POWER_EQ) {
@@ -160,12 +226,25 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
                     ct, t, lhs, t, ct, t, rhs);
             break;
         }
-        cg_line(cg, "%s %s %s;", cg_expr(cg, n->a), cg_op(n->op), cg_expr(cg, n->b));
+        {
+            const char *lhs = cg_expr(cg, n->a);
+            const char *rhs = cg_expr(cg, n->b);
+            cg_line(cg, "%s %s %s;", lhs, cg_op(n->op), rhs);
+        }
         break;
     }
-    case AST_EXPR_STMT:
-        cg_line(cg, "%s;", cg_expr(cg, n->a));
+    case AST_EXPR_STMT: {
+        /*
+         * A call returning a struct is built as a GNU statement expression
+         * whose value is the temporary it filled in. Called for its effect
+         * only, that trailing value is dropped, and clang says so
+         * (-Wunused-value). Casting to void is how C spells "yes, on
+         * purpose".
+         */
+        const char *e = cg_expr(cg, n->a);
+        cg_line(cg, (e[0] == '(' && e[1] == '{') ? "(void)%s;" : "%s;", e);
         break;
+    }
     case AST_DEFER:
         vec_push(cg->a, &cg->fn_defers, n->a);
         break;
@@ -221,7 +300,8 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
             size_t i = 0;
             for (; i < n->list.len; i++) {
                 ast_node_t *arm = (ast_node_t *)n->list.data[i];
-                const char *cond = cg_match_arm_cond(cg, arm, subj_var, subj_ts);
+                const char *cond =
+                    cg_unparen(cg, cg_match_arm_cond(cg, arm, subj_var, subj_ts));
                 cg_line(cg, "%sif (%s) {", i ? "} else " : "", cond);
                 cg->indent++;
                 {
@@ -246,7 +326,7 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
         cg_line(cg, "continue;");
         break;
     case AST_IF:
-        cg_line(cg, "if (%s) {", cg_expr(cg, n->a));
+        cg_line(cg, "if (%s) {", cg_cond(cg, n->a));
         cg->indent++;
         {
             size_t m = cg->locals.len;
@@ -262,7 +342,7 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
             cg_indent(cg);
             sb_puts(cg->c, "} else ");
 
-            sb_puts(cg->c, cg_fmt(cg, "if (%s) {\n", cg_expr(cg, n->c->a)));
+            sb_puts(cg->c, cg_fmt(cg, "if (%s) {\n", cg_cond(cg, n->c->a)));
             cg->indent++;
             {
                 size_t m = cg->locals.len;
@@ -300,7 +380,7 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
         }
         break;
     case AST_UNTIL:
-        cg_line(cg, "while (%s) {", cg_expr(cg, n->a));
+        cg_line(cg, "while (%s) {", cg_cond(cg, n->a));
         cg->indent++;
         {
             size_t m = cg->locals.len;
@@ -340,6 +420,16 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
                 const char *ivct = cg_ctype(cg, n->type_str ? n->type_str : "i32");
                 cg_line(cg, "const %s %s = (%s)__rep%d;", ivct, cg_cident(cg, n->name),
                         ivct, t);
+                /*
+                 * `repeat n with i:` may legitimately ignore i - the count is
+                 * the point and the binding is there for the cases that do
+                 * use it - so the declaration alone draws -Wunused-variable
+                 * from gcc and clang. Salam's own unused-name rule does not
+                 * apply to a loop binding, so this cannot be pushed back to
+                 * the source. (void) is the portable way to say "declared on
+                 * purpose"; __attribute__((unused)) is not available on tcc.
+                 */
+                cg_line(cg, "(void)%s;", cg_cident(cg, n->name));
                 local_add(cg, n->name);
             }
             {

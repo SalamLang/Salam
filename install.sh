@@ -46,15 +46,59 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+# GitHub's REST API budgets anonymous callers per source IP, and shared CI
+# runners exhaust that budget between them - the call then answers 403 for
+# everyone on that IP. A token moves it onto the far larger authenticated
+# budget; GitHub Actions exposes one as github.token. Only ever sent to
+# api.github.com so it cannot leak to a release download or a redirect.
+API_TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
+
 fetch_to_stdout() {
     # $1 = URL
+    auth=""
+    case "$1" in
+    https://api.github.com/*)
+        if [ -n "$API_TOKEN" ]; then
+            auth="Authorization: Bearer $API_TOKEN"
+        fi
+        ;;
+    esac
     if command -v curl >/dev/null 2>&1; then
-        curl -fsSL "$1"
+        if [ -n "$auth" ]; then
+            curl -fsSL --retry 3 --retry-delay 2 -H "$auth" "$1"
+        else
+            curl -fsSL --retry 3 --retry-delay 2 "$1"
+        fi
     elif command -v wget >/dev/null 2>&1; then
-        wget -qO- "$1"
+        if [ -n "$auth" ]; then
+            wget -qO- --tries=3 --header="$auth" "$1"
+        else
+            wget -qO- --tries=3 "$1"
+        fi
     else
         die "need curl or wget to install Salam"
     fi
+}
+
+# Newest release tag first, one per line. Empty output means neither source
+# answered.
+list_release_tags() {
+    json="$(fetch_to_stdout "https://api.github.com/repos/${REPO}/releases?per_page=10" 2>/dev/null || true)"
+    found_tags="$(printf '%s' "$json" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')"
+    if [ -z "$found_tags" ]; then
+        # The API is rate-limited and unauthenticated CI runners routinely
+        # hit 403 on it. The releases feed is served by github.com itself
+        # and carries no such limit, so it keeps the installer working.
+        log "  releases API unavailable, falling back to the Atom feed"
+        atom="$(fetch_to_stdout "https://github.com/${REPO}/releases.atom" 2>/dev/null || true)"
+        found_tags="$(printf '%s' "$atom" | sed -n 's#.*/releases/tag/\([^"]*\)".*#\1#p')"
+    fi
+    # Nightlies are prereleases and their assets carry the plain version
+    # (salam-0.2.9-linux.zip under a v0.2.9-nightly-<date> tag), so they can
+    # never match the name built from the tag below - dropping them here just
+    # skips a guaranteed-failed download attempt. Filtered by name because
+    # the Atom fallback carries no prerelease flag to filter on.
+    printf '%s\n' "$found_tags" | grep -v nightly || true
 }
 
 fetch_to_file() {
@@ -124,10 +168,12 @@ if [ -n "$VERSION" ]; then
     fetch_to_file "$URL" "$archive" || die "download failed: $URL"
 else
     log "Resolving latest Salam release with a ${platform} asset..."
-    releases_json="$(fetch_to_stdout "https://api.github.com/repos/${REPO}/releases?per_page=10")" ||
-        die "could not list releases: https://api.github.com/repos/${REPO}/releases"
-    tags="$(printf '%s' "$releases_json" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')"
-    [ -n "$tags" ] || die "no releases found for ${REPO}"
+    tags="$(list_release_tags)"
+    lookup_err="could not list releases for ${REPO}: both"
+    lookup_err="$lookup_err https://api.github.com/repos/${REPO}/releases"
+    lookup_err="$lookup_err and https://github.com/${REPO}/releases.atom failed."
+    lookup_err="$lookup_err Pass --version to skip the lookup."
+    [ -n "$tags" ] || die "$lookup_err"
 
     found=0
     for tag in $tags; do

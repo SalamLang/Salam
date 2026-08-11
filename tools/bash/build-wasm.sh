@@ -44,7 +44,7 @@ command -v "$EMCC" >/dev/null 2>&1 || [ -e "$EMCC" ] || {
     exit 1
 }
 
-OUT_DIR="../editor"
+OUT_DIR="editor"
 mkdir -p "$OUT_DIR"
 
 # --- stdlib preload image -------------------------------------------------
@@ -57,11 +57,11 @@ mkdir -p "$OUT_DIR"
 # and blank lines while leaving the token stream identical (verified across
 # all stdlib files), worth another ~500 KB the browser would download and
 # then discard, since the lexer drops that trivia anyway.
-STD_MIN="$(pwd)/build/std-min"
+STD_MIN="$(pwd)/c/build/std-min"
 rm -rf "$STD_MIN"
 mkdir -p "$STD_MIN"
 (
-    cd ../std
+    cd std
     find . -name '*.salam' | while IFS= read -r f; do
         mkdir -p "$STD_MIN/$(dirname "$f")"
         cp "$f" "$STD_MIN/$f"
@@ -72,14 +72,14 @@ echo "staged minified stdlib preload image at $STD_MIN"
 SRC_DIRS="core source logger xml condcomp token langpack i18n lexer ast parser
         diag semantic interp layout minify codegen llvm jsgen web"
 SRCS=""
-for d in $SRC_DIRS; do SRCS="$SRCS src/$d/*.c"; done
+for d in $SRC_DIRS; do SRCS="$SRCS c/src/$d/*.c"; done
 # js_build.c only, not all of src/driver: it is the bundler that turns jsgen's
 # per-module output into one runnable program (prelude, globals, entry call),
 # which is exactly what salam_web_compile_js needs. The rest of the driver
 # shells out to a C toolchain and has no meaning in the browser.
-SRCS="$SRCS src/driver/js_build.c"
+SRCS="$SRCS c/src/driver/js_build.c"
 # shellcheck disable=SC2086
-"$EMCC" -O2 -Isrc $SRCS \
+"$EMCC" -O2 -Ic/src $SRCS \
     -o "$OUT_DIR/salam-wa.js" \
     --preload-file "$STD_MIN"@/std \
     -s MODULARIZE=0 \

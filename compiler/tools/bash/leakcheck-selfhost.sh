@@ -1,7 +1,7 @@
 #!/bin/sh
 # Leak ratchet for the SELF-HOSTED compiler (compiler/*.salam).
 #
-# The C compiler is held to zero leaks (c/tools/bash/leakcheck.sh) because it
+# The C compiler is held to zero leaks (tools/bash/leakcheck.sh) because it
 # allocates almost everything from an arena it frees on the way out. The
 # self-hosted compiler cannot be held to the same bar today: Salam is manually
 # memory-managed and has no arena behind its string temporaries, so every

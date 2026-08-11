@@ -252,7 +252,7 @@ func cg_match_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
     repeat nn.list.len() with i:
         armid := nn.list.get(i)[0]
         armn := at.Get(a, armid)
-        cond := cg_match_arm_cond(g, s, a, armid, subj_var, subj_ts)
+        cond := cg_unparen(cg_match_arm_cond(g, s, a, armid, subj_var, subj_ts))
         if armn.op == tok.TK_KW_ELSE:
             has_wildcard = true
         end
@@ -689,17 +689,34 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
         end
         if str.Len(cts) > 0:
             cty := cg_ctype(cts)
+            // The operands are computed in the unsigned twin for the three
+            // operators that can overflow, and for <<, whose result is
+            // undefined once a signed value shifts into or past the sign bit.
+            // Unsigned arithmetic wraps by definition, which is what Salam
+            // promises; signed overflow is undefined in C, which is what let
+            // gcc fold `(int32_t)x + (int32_t)x` at compile time and reject it
+            // under -Werror=overflow. See cg_unsigned_twin.
+            //
+            // / and % are deliberately not on the list: unsigned division is a
+            // different operation for negative operands, and the only signed
+            // case that overflows is INT_MIN / -1. Bitwise & | ^ and >> cannot
+            // overflow at all.
+            wraps := nn.op == tok.TK_PLUS || nn.op == tok.TK_MINUS || nn.op == tok.TK_STAR || nn.op == tok.TK_SHL
+            mut aty := cty
+            if wraps && !cg_is_unsigned_typestr(cts):
+                aty = cg_ctype(cg_unsigned_twin(cts))
+            end
             eaq := cg_expr(g, s, a, nn.a)
             ebq := cg_expr(g, s, a, nn.b)
             // Shifts keep the left operand's type; the right operand's value
             // is used as-is.
             if shift:
-                ret "((" + cty + ")((" + cty + ")(" + eaq + ") " + cg_op(nn.op) + " (" + ebq + ")))"
+                ret "((" + cty + ")((" + aty + ")(" + eaq + ") " + cg_op(nn.op) + " (" + ebq + ")))"
             end
             if cg_op_is_cmp(nn.op):
                 ret "((" + cty + ")(" + eaq + ") " + cg_op(nn.op) + " (" + cty + ")(" + ebq + "))"
             end
-            ret "((" + cty + ")((" + cty + ")(" + eaq + ") " + cg_op(nn.op) + " (" + cty + ")(" + ebq + ")))"
+            ret "((" + cty + ")((" + aty + ")(" + eaq + ") " + cg_op(nn.op) + " (" + aty + ")(" + ebq + ")))"
         end
         ea3 := cg_expr(g, s, a, nn.a)
         eb3 := cg_expr(g, s, a, nn.b)
@@ -742,7 +759,15 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
         // as -1 rather than 255.
         if (nn.op == tok.TK_MINUS || nn.op == tok.TK_TILDE) && nn.a != 0 && cg_is_int_typestr(at.Get(a, nn.a).type_str):
             ucty := cg_ctype(at.Get(a, nn.a).type_str)
-            ret "((" + ucty + ")(" + cg_op(nn.op) + "(" + cg_expr(g, s, a, nn.a) + ")))"
+            // Negating the most negative value overflows, which is undefined
+            // for a signed operand; the unsigned twin negates modularly and
+            // converts back to the same bit pattern. '~' cannot overflow, so
+            // it keeps the operand's own type. See cg_unsigned_twin.
+            mut oty := ucty
+            if nn.op == tok.TK_MINUS && !cg_is_unsigned_typestr(at.Get(a, nn.a).type_str):
+                oty = cg_ctype(cg_unsigned_twin(at.Get(a, nn.a).type_str))
+            end
+            ret "((" + ucty + ")(" + cg_op(nn.op) + "((" + oty + ")(" + cg_expr(g, s, a, nn.a) + "))))"
         end
         ret "(" + cg_op(nn.op) + cg_expr(g, s, a, nn.a) + ")"
     end

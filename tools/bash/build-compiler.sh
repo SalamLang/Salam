@@ -26,9 +26,9 @@ esac
 SRC_DIRS="core source condcomp logger xml diag i18n langpack token lexer ast
         parser semantic codegen jsgen llvm interp layout fmt doc cli driver
         minify"
-SRCS="src/salam.c"
-for d in $SRC_DIRS; do SRCS="$SRCS src/$d/*.c"; done
+SRCS="c/src/salam.c"
+for d in $SRC_DIRS; do SRCS="$SRCS c/src/$d/*.c"; done
 
 # shellcheck disable=SC2086 # deliberately word-split and glob-expanded
-"$CC" -Wall -Isrc -o salam $SRCS $LDLIBS
+"$CC" -Wall -Ic/src -o salam $SRCS $LDLIBS
 echo "built ./salam with $CC"

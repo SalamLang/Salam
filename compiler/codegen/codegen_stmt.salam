@@ -16,6 +16,55 @@ func cg_emit_defers(g &: Cg, s &: sm.Sema, a &: at.Ast):
     end
 end
 
+// cg_expr parenthesizes every binary expression it builds, so `if (%s)` came
+// out as `if ((f == NULL))`. clang reads doubled parens around an equality
+// test as the "did you mean = ?" idiom and warns on every one of them
+// (-Wparentheses-equality; 22 in a benchmark-runner build alone), and gcc does
+// the same under -Wall. Dropping the redundant layer at the condition sites
+// fixes it without changing how expressions are built anywhere else.
+//
+// The outer parens only come off when they wrap the whole expression: `(a) &&
+// (b)` opens and closes before the end and is left alone. String and char
+// literals are skipped so a parenthesis inside one is not counted.
+func cg_unparen(e: str): str:
+    n := e.len()
+    // `({ ... })` is a GNU statement expression: those parens are syntax, not
+    // grouping, and taking them off leaves a block where an expression goes.
+    if n < 2 || byte_at(e, 0) != 40 || byte_at(e, n - 1) != 41 || byte_at(e, 1) == 123:
+        ret e
+    end
+    mut depth := 0
+    mut i := 0
+    until i < n:
+        c := byte_at(e, i)
+        if c == 34 || c == 39:
+            i += 1
+            until i < n && byte_at(e, i) != c:
+                if byte_at(e, i) == 92:
+                    i += 1
+                end
+                i += 1
+            end
+        else c == 40:
+            depth += 1
+        else c == 41:
+            depth -= 1
+            if depth == 0 && i + 1 != n:
+                ret e
+            end
+        end
+        i += 1
+    end
+    if depth != 0:
+        ret e
+    end
+    ret e.substr(1, n - 2)
+end
+
+func cg_cond(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
+    ret cg_unparen(cg_expr(g, s, a, n))
+end
+
 func cg_vardecl_inline(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
     nn := at.Get(a, n)
     ts := str.Len(nn.type_str) > 0 ? nn.type_str : "int32_t"
@@ -179,7 +228,16 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
         ret
     end
     if k == at.AST_EXPR_STMT:
-        cg_line(g, cg_expr(g, s, a, nn.a) + ";")
+        // A call returning a struct is built as a GNU statement expression
+        // whose value is the temporary it filled in. Called for its effect
+        // only, that trailing value is dropped, and clang says so
+        // (-Wunused-value). Casting to void is how C spells "yes, on purpose".
+        e := cg_expr(g, s, a, nn.a)
+        mut pfx := ""
+        if byte_at(e, 0) == 40 && byte_at(e, 1) == 123:
+            pfx = "(void)"
+        end
+        cg_line(g, pfx + e + ";")
         ret
     end
     if k == at.AST_DEFER:
@@ -247,7 +305,7 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
         )
         repeat nn.list.len() with i:
             armid := nn.list.get(i)[0]
-            cond := cg_match_arm_cond(g, s, a, armid, subj_var, subj_ts)
+            cond := cg_unparen(cg_match_arm_cond(g, s, a, armid, subj_var, subj_ts))
             cg_line(g, (i > 0 ? "} else " : "") + "if (" + cond + ") {")
             g.indent += 1
             mark := g.locals.len()
@@ -274,7 +332,7 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
         ret
     end
     if k == at.AST_IF:
-        cg_line(g, "if (" + cg_expr(g, s, a, nn.a) + ") {")
+        cg_line(g, "if (" + cg_cond(g, s, a, nn.a) + ") {")
         g.indent += 1
         mark := g.locals.len()
         bn := at.Get(a, nn.b)
@@ -287,7 +345,7 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
             cg_indent(g)
             out(g, "} else ")
             en := at.Get(a, nn.c)
-            out(g, "if (" + cg_expr(g, s, a, en.a) + ") {\n")
+            out(g, "if (" + cg_cond(g, s, a, en.a) + ") {\n")
             g.indent += 1
             mark2 := g.locals.len()
             ebn := at.Get(a, en.b)
@@ -320,7 +378,7 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
         ret
     end
     if k == at.AST_UNTIL:
-        cg_line(g, "while (" + cg_expr(g, s, a, nn.a) + ") {")
+        cg_line(g, "while (" + cg_cond(g, s, a, nn.a) + ") {")
         g.indent += 1
         mark := g.locals.len()
         bn := at.Get(a, nn.b)

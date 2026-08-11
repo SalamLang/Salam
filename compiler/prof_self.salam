@@ -75,7 +75,10 @@ const PROF_LABEL_MAX := 200
 
 mut _on := false
 mut _trace := false
-mut _overflow := false
+// Not `_overflow`: a leading underscore comes out doubled in the generated C
+// (`_` is escaped as `__`), and `__overflow` is one of glibc's own internal
+// stdio functions, which every generated module now includes a header for.
+mut _depth_overflow := false
 mut _files_full := false
 mut _start_ns := 0 as i64
 mut _start_cpu_ns := 0 as i64
@@ -334,7 +337,7 @@ func report_table(wall_ns: i64, cpu_ns: i64):
         "    " + pad_right("arena", 16) + " " + pad_left(fmt_bytes(_counter.get(TC_ARENA_BYTES)[0]), 12) + "   " + pad_right("arena blocks", 16) + " " + pad_left(fmt_num(_counter.get(TC_ARENA_BLOCKS)[0]), 12) + "\n"
     )
 
-    if _overflow:
+    if _depth_overflow:
         io.EPrint(
             "\n  warning: timing scopes nested deeper than the profiler stack; some readings were dropped\n"
         )
@@ -393,7 +396,7 @@ func report_json(wall_ns: i64, cpu_ns: i64):
     out = out + ",\"cpu_ns\":" + co.I64Toa(cpu_ns)
     out = out + ",\"peak_rss\":" + co.I64Toa(co.PeakRss())
     mut trunc := "false"
-    if _overflow || _files_full: trunc = "true" end
+    if _depth_overflow || _files_full: trunc = "true" end
     out = out + ",\"truncated\":" + trunc
 
     out = out + ",\"phases\":{"
@@ -461,7 +464,7 @@ pub func PhaseName(ph: int): str: ret phase_name(ph) end
 pub func Enable(trace_events: bool):
     _on = true
     _trace = trace_events
-    _overflow = false
+    _depth_overflow = false
     _files_full = false
     _depth = 0
     mut i := 0
@@ -496,7 +499,7 @@ pub func Begin(ph: int, label: str): i64:
     if !_on: ret 0 as i64 end
     if ph < 0 || ph >= TP_COUNT: ret 0 as i64 end
     if _depth >= PROF_MAX_DEPTH:
-        _overflow = true
+        _depth_overflow = true
         ret 0 as i64
     end
     if _depth < _st_ph.len():

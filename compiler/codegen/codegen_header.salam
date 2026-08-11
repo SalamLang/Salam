@@ -336,8 +336,29 @@ func hdr_prelude(g &: Cg, a &: at.Ast, program: int):
     outh(
         g, "#include <stdint.h>\n#include <stdbool.h>\n#include <math.h>" + "\n#include <stddef.h>\n"
     )
+    // <stdio.h> is included rather than fopen/fread/fwrite being
+    // hand-declared like the rest of the CRT surface: clang's
+    // -Wbuiltin-requires-header fires on any declaration of those three
+    // outside the real header, however exactly it matches its own idea of
+    // the prototype (78 warnings in one benchmark-runner build).
+    // is_stdio_name below drops the hand-declarations that would now
+    // conflict with it.
+    //
+    // Its macros are undefined again immediately. `stdout` and `stderr` are
+    // ordinary field names in Salam - std/ssh's Channel has both - and musl
+    // spells the macro `(stdout)`, which turns `ch->stdout` into a syntax
+    // error; mingw spells it `(&__iob_func()[1])`. Only the macro shorthand
+    // goes, the libc functions and objects behind it survive, and nothing
+    // generated here ever refers to a stdio macro.
     outh(
-        g, "#ifndef SALAM_OUT_DEFINED\n#define SALAM_OUT_DEFINED\n" + "#define SALAM_OB_SZ 65536\n" + "extern int fflush(void *);\n" + "extern int snprintf(char *buf, uint64_t size, const char " + "*fmt, ...);\n" + "#if defined(_WIN32)\n" + "extern int _write(int, void *, unsigned);\n" + "#define SALAM_RAW_WRITE(fd, buf, n) _write((fd), (void " + "*)(buf), (unsigned)(n))\n" + "#else\n" + "extern int64_t write(int32_t, void *, uint64_t);\n" + "#define SALAM_RAW_WRITE(fd, buf, n) write((fd), (void " + "*)(buf), (uint64_t)(n))\n" + "#endif\n" + "#if (defined(__GNUC__) || defined(__clang__)) && " + "!defined(__TINYC__)\n" + "__attribute__((weak)) char salam_ob[SALAM_OB_SZ];\n" + "__attribute__((weak)) uint64_t salam_obn;\n" + "__attribute__((weak)) void salam_out_flush(void) {\n" + "    if (salam_obn) { int64_t r = " + "(int64_t)SALAM_RAW_WRITE(1, salam_ob, salam_obn); (void)r; " + "salam_obn = 0; }\n" + "}\n" + "__attribute__((weak, destructor)) void salam_out_fini(void) " + "{ salam_out_flush(); }\n" + "static inline void salam_out_write_(const void *s, uint64_t " + "n) {\n" + "    if (salam_obn + n > SALAM_OB_SZ) salam_out_flush();\n" + "    if (n >= SALAM_OB_SZ) { int64_t r = " + "(int64_t)SALAM_RAW_WRITE(1, s, n); (void)r; return; }\n" + "    __builtin_memcpy(salam_ob + salam_obn, s, (size_t)n); " + "salam_obn += n;\n" + "    if (__builtin_memchr(s, '\\n', (size_t)n)) salam_out_flush();\n" + "}\n" + "#else\n" + "static void salam_out_flush(void) { fflush(0); }\n" + "static void salam_out_write_(const void *s, uint64_t n) {\n" + "    int64_t r = (int64_t)SALAM_RAW_WRITE(1, s, n); (void)r;\n" + "}\n" + "#endif\n" + "#define SALAM_OUT_LIT(s, n) salam_out_write_((s), " + "(uint64_t)(n))\n" + "#endif\n"
+        g, "#include <stdio.h>\n" + "#undef stdin\n#undef stdout\n#undef stderr\n" + "#undef EOF\n#undef BUFSIZ\n" + "#undef SEEK_SET\n#undef SEEK_CUR\n#undef SEEK_END\n"
+    )
+    // fflush and snprintf come from the <stdio.h> above. Hand-declaring them
+    // again is what the include is there to avoid: salam spells the size as
+    // uint64_t where the standard says size_t, and the stream as void* where
+    // it says FILE*.
+    outh(
+        g, "#ifndef SALAM_OUT_DEFINED\n#define SALAM_OUT_DEFINED\n" + "#define SALAM_OB_SZ 65536\n" + "#if defined(_WIN32)\n" + "extern int _write(int, void *, unsigned);\n" + "#define SALAM_RAW_WRITE(fd, buf, n) _write((fd), (void " + "*)(buf), (unsigned)(n))\n" + "#else\n" + "extern int64_t write(int32_t, void *, uint64_t);\n" + "#define SALAM_RAW_WRITE(fd, buf, n) write((fd), (void " + "*)(buf), (uint64_t)(n))\n" + "#endif\n" + "#if (defined(__GNUC__) || defined(__clang__)) && " + "!defined(__TINYC__)\n" + "__attribute__((weak)) char salam_ob[SALAM_OB_SZ];\n" + "__attribute__((weak)) uint64_t salam_obn;\n" + "__attribute__((weak)) void salam_out_flush(void) {\n" + "    if (salam_obn) { int64_t r = " + "(int64_t)SALAM_RAW_WRITE(1, salam_ob, salam_obn); (void)r; " + "salam_obn = 0; }\n" + "}\n" + "__attribute__((weak, destructor)) void salam_out_fini(void) " + "{ salam_out_flush(); }\n" + "static inline void salam_out_write_(const void *s, uint64_t " + "n) {\n" + "    if (salam_obn + n > SALAM_OB_SZ) salam_out_flush();\n" + "    if (n >= SALAM_OB_SZ) { int64_t r = " + "(int64_t)SALAM_RAW_WRITE(1, s, n); (void)r; return; }\n" + "    __builtin_memcpy(salam_ob + salam_obn, s, (size_t)n); " + "salam_obn += n;\n" + "    if (__builtin_memchr(s, '\\n', (size_t)n)) salam_out_flush();\n" + "}\n" + "#else\n" + "static void salam_out_flush(void) { fflush(0); }\n" + "static void salam_out_write_(const void *s, uint64_t n) {\n" + "    int64_t r = (int64_t)SALAM_RAW_WRITE(1, s, n); (void)r;\n" + "}\n" + "#endif\n" + "#define SALAM_OUT_LIT(s, n) salam_out_write_((s), " + "(uint64_t)(n))\n" + "#endif\n"
     )
     // See cg_needs_fparg in codegen_call.salam: tcc 0.9.27 (x86-64)
     // overwrites a computed floating-point argument with the value of the
@@ -376,8 +397,17 @@ func hdr_prelude(g &: Cg, a &: at.Ast, program: int):
     if g.is_gui_mode:
         outh(g, "#ifdef _WIN32\n#define SALAM_RT_STR_DEFINED\n" + "#define SALAM_EXTERN_LIBC_ON_WIN32\n" + "#if !defined(__TINYC__)\n" + "#define SALAM_EXTERN_WIDE_LIBC_ON_WIN32\n" + "#endif\n#endif\n")
     end
+    // Spelled exactly as <string.h>/<stdlib.h> spell them, not in salam's own
+    // type vocabulary. gcc (-Wbuiltin-declaration-mismatch) and clang
+    // (-Wincompatible-library-redeclaration) both know these five by name and
+    // warn about every difference: `const char*` where strstr returns `char*`,
+    // `void*` where strtol/strtod take `char**`, `int64_t` where strtol
+    // returns `long` (a different width on Windows). Salam has no way to write
+    // a `char**` parameter, so the C text is written out here instead of being
+    // derived from a salam signature - same reason libc_canonical_proto exists
+    // for the extern blocks in std/.
     outh(
-        g, "#ifndef SALAM_RT_STR_DEFINED\n#define SALAM_RT_STR_DEFINED\n" + "extern uint64_t strlen(const char* s);\n" + "extern int32_t strcmp(const char* a, const char* b);\n" + "extern const char* strstr(const char* haystack, const char* " + "needle);\n" + "extern int64_t strtol(const char* s, void* endptr, int32_t " + "base);\n" + "extern double strtod(const char* s, void* endptr);\n" + "#endif\n"
+        g, "#ifndef SALAM_RT_STR_DEFINED\n#define SALAM_RT_STR_DEFINED\n" + "extern size_t strlen(const char* s);\n" + "extern int strcmp(const char* a, const char* b);\n" + "extern char* strstr(const char* haystack, const char* " + "needle);\n" + "extern long strtol(const char* s, char** endptr, int " + "base);\n" + "extern double strtod(const char* s, char** endptr);\n" + "#endif\n"
     )
     outh(
         g, "#ifndef SALAM_RT_STR2_DEFINED\n#define SALAM_RT_STR2_DEFINED\n" + "extern const char* salam_strcat(const char* a, const char* " + "b);\n" + "extern const char* salam_char_from_code(int32_t c);\n" + "extern const char* salam_str_substr(const char* s, int32_t " + "start, int32_t n);\n" + "extern const char* salam_str_trim(const char* s);\n" + "extern void* salam_str_split(const char* s, const char* " + "delim, void* out_count);\n" + "extern const char* salam_str_repeat(const char* s, int32_t " + "n);\n" + "extern const char* salam_str_upper(const char* s);\n" + "extern const char* salam_str_lower(const char* s);\n" + "#endif\n"
@@ -742,6 +772,71 @@ func is_libm_name(name: str): bool:
     ret false
 end
 
+// Declared by the <stdio.h> that hdr_prelude includes, so std/'s own `extern
+// func fopen(...)` blocks must not be emitted at all: their salam spelling
+// (`void*` for FILE*, `int` for long, `u64` for size_t) conflicts with the
+// real prototype, and for fopen/fread/fwrite clang additionally rejects any
+// declaration outside the header itself (-Wbuiltin-requires-header). Call
+// sites keep compiling because void* converts to FILE* and back implicitly.
+//
+// Standard names, plus the non-C ones <stdio.h> declares on every platform
+// that has them: std/fs, std/os and compiler/interp declare each group inside
+// the matching half of a `if SALAM_OS_WINDOWS:` split, so a build that emits
+// one is a build whose <stdio.h> already declared it. The Windows spellings
+// are in mingw's header and in the bundled tcc's alike. Anything a platform
+// might *not* have stays hand-declared.
+func is_stdio_name(name: str): bool:
+    names := [
+        "clearerr", "fclose", "feof", "ferror", "fflush", "fgetc", "fgetpos",
+        "fgets", "fopen", "fprintf", "fputc", "fputs", "fread", "freopen",
+        "fscanf", "fseek", "fsetpos", "ftell", "fwrite", "getc", "getchar",
+        "perror", "printf", "putc", "putchar", "puts", "remove", "rename",
+        "rewind", "scanf", "setbuf", "setvbuf", "snprintf", "sprintf",
+        "sscanf", "tmpfile", "tmpnam", "ungetc", "vfprintf", "vprintf",
+        "vsnprintf", "vsprintf",
+        "fdopen", "fileno", "fseeko", "ftello", "getdelim", "getline",
+        "pclose", "popen",
+        "_fdopen", "_fileno", "_fseeki64", "_ftelli64", "_pclose", "_popen"
+    ] as str[56]
+    repeat names.len() with i:
+        if str.Equals(names[i], name):
+            ret true
+        end
+    end
+    ret false
+end
+
+// <string.h>/<stdlib.h> names whose real prototype salam's type vocabulary
+// cannot express, so an `extern func memcpy(dst: void*, src: void*, n: u64)`
+// in std/mem came out as a declaration both gcc and clang consider
+// incompatible with the library function they know (const-qualified source
+// pointer, char** out-parameter, size_t/long widths). The C text wins over the
+// salam signature for these; every call site still type-checks, because the
+// differences only ever *add* a qualifier or widen a parameter.
+//
+// Only functions whose declaration is warned about are listed. The rest of the
+// CRT surface std/ declares (memset, strlen, malloc, ...) already matches and
+// is emitted from its salam signature as before. Returns "" for anything not
+// in the table.
+func libc_canonical_proto(name: str): str:
+    if str.Equals(name, "memcpy"):
+        ret "extern void* memcpy(void* dst, const void* src, size_t n)"
+    end
+    if str.Equals(name, "memmove"):
+        ret "extern void* memmove(void* dst, const void* src, size_t n)"
+    end
+    if str.Equals(name, "strstr"):
+        ret "extern char* strstr(const char* haystack, const char* needle)"
+    end
+    if str.Equals(name, "strtol"):
+        ret "extern long strtol(const char* s, char** endptr, int base)"
+    end
+    if str.Equals(name, "strtod"):
+        ret "extern double strtod(const char* s, char** endptr)"
+    end
+    ret ""
+end
+
 // The gcc/clang-only half of the collision set: names that only *their*
 // <windows.h> reaches, via <stdlib.h> and winsock. Guarded by
 // SALAM_EXTERN_WIDE_LIBC_ON_WIN32, which tcc never defines, so tcc keeps
@@ -779,7 +874,7 @@ func hdr_externs(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
         if d.kind == at.AST_FUNC_DEF:
             fsym := sm.LookupLocal(s, s.global, d.name)
             sig := sig_of_decl(s, fsym, did)
-            if sig != 0 && !is_libm_name(d.name):
+            if sig != 0 && !is_libm_name(d.name) && !is_stdio_name(d.name):
                 mut guard := ""
                 if is_wellknown_libc_name(d.name):
                     guard = "SALAM_EXTERN_LIBC_ON_WIN32"
@@ -789,7 +884,11 @@ func hdr_externs(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
                 if str.Len(guard) > 0:
                     outh(g, "#ifndef " + guard + "\n")
                 end
-                outh(g, cg_extern_proto(s, a, did, sig) + ";\n")
+                mut proto := libc_canonical_proto(d.name)
+                if str.Len(proto) == 0:
+                    proto = cg_extern_proto(s, a, did, sig)
+                end
+                outh(g, proto + ";\n")
                 if str.Len(guard) > 0:
                     outh(g, "#endif\n")
                 end
@@ -817,7 +916,10 @@ func hdr_globals(g &: Cg, a &: at.Ast, program: int):
         decl := cg_decl(ts, d.name)
         is_array := str.IndexOf(ts, "[") >= 0
         can_defer := d.kind == at.AST_VAR_DECL && d.a != 0 && at.KindOf(a, d.a) != at.AST_LITERAL && !is_array
-        want_const := !can_defer && (d.kind == at.AST_CONST_DECL || !d.is_mut)
+        // !is_array matches emit_globals in codegen_core - see the comment
+        // there for why an array global cannot carry the qualifier. The two
+        // must agree or the extern and the definition conflict.
+        want_const := !can_defer && !is_array && (d.kind == at.AST_CONST_DECL || !d.is_mut)
         gct_const := want_const && str.StartsWith(cg_ctype(ts), "const ")
         pfx := (want_const && !gct_const) ? "const " : ""
         outh(g, "extern " + pfx + decl + ";\n")

@@ -232,6 +232,27 @@ const char *cg_common_int_typestr(const char *a, const char *b)
     return cg_int_ts_bits(a) >= cg_int_ts_bits(b) ? a : b;
 }
 
+/*
+ * The unsigned type of the same width, or `ts` itself when there isn't one.
+ *
+ * Salam defines +, - and * to wrap modulo 2^n in the operand type (SALAM-TYPES
+ * 4.1, 15), but signed overflow is undefined in C, not wrapping: at -O2 gcc is
+ * entitled to assume it never happens and fold the branch that checks for it.
+ * Emitting the arithmetic in the unsigned twin and converting the result back
+ * gives exactly the defined wrap Salam promises - unsigned arithmetic is
+ * modular by definition, and the narrowing conversion back is two's complement
+ * on every target Salam supports (and mandated outright by C23).
+ */
+const char *cg_unsigned_twin(const char *ts)
+{
+    if (!ts) return ts;
+    if (!strcmp(ts, "i8")) return "u8";
+    if (!strcmp(ts, "i16")) return "u16";
+    if (!strcmp(ts, "i32")) return "u32";
+    if (!strcmp(ts, "i64")) return "u64";
+    return ts;
+}
+
 bool cg_is_unsigned_typestr(const char *ts)
 {
     static const char *const uns[] = {"u8", "u16", "u32", "u64", "size", NULL};
@@ -466,9 +487,64 @@ static const char *type_code(cg_t *cg, type_t *t)
     return r;
 }
 
+/*
+ * --export=Fn:CName overrides, keyed by the DEFINING file's own package.
+ * Keying on the name alone would rename EVERY same-named free function in
+ * every module the build transitively pulls in - std/llvm's Emit() and
+ * sal_web's Emit() would both answer to one --export=Emit:foo.
+ *
+ * The strings are borrowed, not copied: the driver passes argv slices and
+ * pointers out of the build arena, both of which outlive codegen. The table
+ * is file-scope for the same reason dce.c's is - it is set up by the driver
+ * before any module is emitted and read from deep inside the mangler.
+ */
+typedef struct {
+    const char *pkg;
+    const char *from;
+    const char *to;
+} cg_export_ovr_t;
+
+/* Matches the CLI's own cap on --export entries, so cli_parse's "too many"
+   error is the only place a limit is ever reported to the user. */
+#define CG_MAX_EXPORT_OVERRIDES 1024
+
+static cg_export_ovr_t g_cg_exports[CG_MAX_EXPORT_OVERRIDES];
+static int g_cg_nexports;
+
+void cg_reset_export_overrides(void)
+{
+    g_cg_nexports = 0;
+}
+
+void cg_add_export_override(const char *pkg, const char *fn, const char *cname)
+{
+    if (!pkg || !fn || !cname) return;
+    if (g_cg_nexports >= CG_MAX_EXPORT_OVERRIDES) return;
+    g_cg_exports[g_cg_nexports].pkg = pkg;
+    g_cg_exports[g_cg_nexports].from = fn;
+    g_cg_exports[g_cg_nexports].to = cname;
+    g_cg_nexports++;
+}
+
+/* NULL when (pkg, fn) has no registered override. */
+static const char *cg_export_override(const char *pkg, const char *fn)
+{
+    int i = 0;
+    for (; i < g_cg_nexports; i++)
+        if (!strcmp(g_cg_exports[i].pkg, pkg) && !strcmp(g_cg_exports[i].from, fn))
+            return g_cg_exports[i].to;
+    return NULL;
+}
+
 const char *cg_mangle_in(cg_t *cg, const char *pkg, const char *struct_name,
                          const char *fn, vec_t *params)
 {
+    /* Free functions only: a method's C name carries its receiver type, and
+     * an override that dropped that would collide across structs. */
+    if (!struct_name) {
+        const char *ovr = cg_export_override(pkg ? pkg : "main", fn);
+        if (ovr) return ovr;
+    }
     sb_t s;
     sb_init(&s);
     sb_puts(&s, "_Salam_");

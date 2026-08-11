@@ -42,7 +42,7 @@ endif()
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 
-option(SALAM_BUILD_TESTS "Enable the `test` target (runs tools/bash/run-tests.sh)" ON)
+option(SALAM_BUILD_TESTS "Enable the `test` target (runs ../tools/bash/run-tests.sh)" ON)
 
 set(SALAM_SRC_DIRS
     core source condcomp logger xml diag i18n langpack
@@ -224,7 +224,7 @@ find_program(SALAM_SH NAMES sh bash)
 
 if(SALAM_BUILD_TESTS AND SALAM_SH)
     add_custom_target(run-tests
-        COMMAND "${SALAM_SH}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/bash/run-tests.sh"
+        COMMAND "${SALAM_SH}" "${CMAKE_CURRENT_SOURCE_DIR}/../tools/bash/run-tests.sh"
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
         DEPENDS salam
         USES_TERMINAL
@@ -232,7 +232,7 @@ if(SALAM_BUILD_TESTS AND SALAM_SH)
 
     enable_testing()
     add_test(NAME salam-suite
-        COMMAND "${SALAM_SH}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/bash/run-tests.sh"
+        COMMAND "${SALAM_SH}" "${CMAKE_CURRENT_SOURCE_DIR}/../tools/bash/run-tests.sh"
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     set_tests_properties(salam-suite PROPERTIES
         ENVIRONMENT "SALAM=$<TARGET_FILE:salam>")
@@ -240,7 +240,7 @@ endif()
 
 if(SALAM_SH)
     add_custom_target(dist
-        COMMAND "${SALAM_SH}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/bash/build-release.sh"
+        COMMAND "${SALAM_SH}" "${CMAKE_CURRENT_SOURCE_DIR}/../tools/bash/build-release.sh"
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
         DEPENDS salam
         USES_TERMINAL

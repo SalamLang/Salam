@@ -16,7 +16,7 @@
 #define SALAM_BUILD_INFO_H
 
 #ifndef SALAM_VERSION
-#  define SALAM_VERSION "0.2.8"
+#  define SALAM_VERSION "0.2.9"
 #endif
 
 #ifndef SALAM_GIT_COMMIT

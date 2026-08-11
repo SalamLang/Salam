@@ -22,7 +22,7 @@
  * This is the C port of the self-hosted compiler/docgen.salam; the two are
  * expected to produce byte-identical HTML for the same inputs. The static
  * assets are shared verbatim through the generated doc_assets.c (see
- * c/tools/python/gen_doc_assets.py).
+ * tools/python/gen_doc_assets.py).
  *
  * Doc comments are a Salam convention, not a language feature: a contiguous
  * run of leading '//'/'///' line comments, or a single block comment, with no

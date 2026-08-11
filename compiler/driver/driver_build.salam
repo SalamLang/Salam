@@ -639,6 +639,16 @@ import pf "../prof_self.salam"
         // dozen tests truncated their output. -O0/-O1 were fine, which is
         // what made it look like a miscompile rather than UB in our output.
         alias_flag := no_tcc_opt ? " -fno-strict-aliasing" : ""
+        // SALAM_C_STRICT=1 turns every diagnostic the C compiler would have
+        // printed about generated code into a hard error, so a codegen
+        // regression stops the build instead of scrolling past. -Werror on
+        // its own, deliberately: it promotes what the compiler already chose
+        // to warn about rather than switching on new warning classes, so the
+        // bar means the same thing under tcc, gcc and clang. Off unless asked
+        // for - a user's newer gcc inventing a warning must not break their
+        // build - and turned on by run-tests.sh, where regressions have to be
+        // caught and the compiler set is known.
+        werror_flag := str.Equals(os.Env("SALAM_C_STRICT"), "1") ? " -Werror" : ""
         no_o0 := !str.Contains(opt.cc, "-O0")
         optimizing_build := !opt.debug_info && !opt.asan && no_tcc_opt && no_o0
 
@@ -663,6 +673,7 @@ import pf "../prof_self.salam"
                 str.BufAppend(cmdb, shell_arg(scratch))
                 str.BufAppend(cmdb, opt_flag)
                 str.BufAppend(cmdb, alias_flag)
+                str.BufAppend(cmdb, werror_flag)
                 str.BufAppend(cmdb, dbg_flag)
                 str.BufAppendChar(cmdb, 32)
                 str.BufAppend(cmdb, shell_arg(cf))
@@ -746,11 +757,21 @@ import pf "../prof_self.salam"
                 // source changed.
                 sigpath := scratch + "/salam_build.flags"
                 sigtext := opt.cc + " " + opt_flag + " " + alias_flag + " " + dbg_flag2 + " " + asan_flag + " " + link_defines
+                mut sig_pending := false
                 if !file_unchanged(sigpath, sigtext):
                     repeat cfiles.len() with cd0:
                         cdirty.set(cd0, 1)
                     end
-                    _wsig := write_file(lgr, sigpath, sigtext)
+                    // Recorded only once every object has actually been
+                    // rebuilt with these flags (see after compile_parallel).
+                    // Writing it here, before compiling, meant a build that
+                    // failed or was interrupted left the file claiming a flag
+                    // set the objects on disk were never built with. The next
+                    // run then believed its cache and linked whatever was
+                    // lying there: switching gcc -> tcc that way handed the
+                    // linker gcc's objects and it died on "unrecognized file
+                    // type", pointing at nothing the user did.
+                    sig_pending = true
                 end
                 repeat cfiles.len() with ci2:
                     cf2 := cfiles.get(ci2)[0]
@@ -765,15 +786,20 @@ import pf "../prof_self.salam"
                     str.BufAppend(jb, shell_arg(scratch))
                     str.BufAppend(jb, opt_flag)
                     str.BufAppend(jb, alias_flag)
-                    if no_tcc_opt:
-                        // Some generated .c files (DCE-dependent) trip newer
-                        // GCC's default-error pointer-type warnings; the old
-                        // single-invocation path tolerated these as warnings.
-                        // Match that leniency here instead of blocking the
-                        // parallel path on an unrelated pre-existing codegen
-                        // issue.
-                        str.BufAppend(jb, " -Wno-error=incompatible-pointer-types")
-                    end
+                    str.BufAppend(jb, werror_flag)
+                    // No -Wno-error=incompatible-pointer-types here. It was
+                    // added to keep the parallel path building while newer
+                    // GCC promoted pointer-type mismatches to errors, with
+                    // the reason given as "an unrelated pre-existing codegen
+                    // issue" - which is to say the generated C really was
+                    // wrong and the driver agreed to look away. It also sat
+                    // after -Werror, so it silently un-errored the one class
+                    // SALAM_C_STRICT most needs to catch: emitting a pointer
+                    // where an integer is expected is a bug wherever it comes
+                    // from. All 45 modules of the self-hosted compiler now
+                    // compile clean under gcc 16 and tcc with no exemption,
+                    // so this is deleted rather than narrowed; if it ever
+                    // trips again the build must stop and say so.
                     str.BufAppend(jb, dbg_flag2)
                     str.BufAppend(jb, asan_flag)
                     str.BufAppend(jb, link_defines)
@@ -801,6 +827,13 @@ import pf "../prof_self.salam"
                     )
                     rc = 3
                 else:
+                    // Every object now matches these flags, so the cache may
+                    // claim them. On failure the file is deliberately left
+                    // alone, so the next run still sees the old signature,
+                    // marks everything dirty and rebuilds.
+                    if sig_pending:
+                        _wsig := write_file(lgr, sigpath, sigtext)
+                    end
                     mut cmdb2 := str.NewBuilder()
                     str.BufAppend(cmdb2, opt.cc)
                     str.BufAppend(cmdb2, asan_flag)
@@ -892,6 +925,7 @@ import pf "../prof_self.salam"
                 end
                 str.BufAppend(cmdb, opt_flag)
                 str.BufAppend(cmdb, alias_flag)
+                str.BufAppend(cmdb, werror_flag)
                 str.BufAppend(cmdb, lto_flag)
                 str.BufAppend(cmdb, " -I. -I")
                 str.BufAppend(cmdb, shell_arg(scratch))

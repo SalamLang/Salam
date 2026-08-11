@@ -55,7 +55,7 @@ void __lsan_enable(void);
 
 #if defined(SALAM_HAVE_EMBED_MUSL) || defined(SALAM_HAVE_EMBED_MUSL_AARCH64) ||          \
     defined(SALAM_HAVE_EMBED_MUSL_I686) || defined(SALAM_HAVE_EMBED_MUSL_ARM) ||         \
-    defined(SALAM_HAVE_EMBED_MINGW) ||                                                   \
+    defined(SALAM_HAVE_EMBED_MINGW) || defined(SALAM_HAVE_EMBED_MINGW_I686) ||           \
     defined(SALAM_HAVE_EMBED_EXTRALIBS_X86_64_LINUX_MUSL) ||                             \
     defined(SALAM_HAVE_EMBED_EXTRALIBS_AARCH64_LINUX_MUSL) ||                            \
     defined(SALAM_HAVE_EMBED_EXTRALIBS_I686_LINUX_MUSL) ||                               \
@@ -83,6 +83,10 @@ extern const unsigned char salam_embed_musl_arm_end[];
 #ifdef SALAM_HAVE_EMBED_MINGW
 extern const unsigned char salam_embed_mingw[];
 extern const unsigned char salam_embed_mingw_end[];
+#endif
+#ifdef SALAM_HAVE_EMBED_MINGW_I686
+extern const unsigned char salam_embed_mingw_i686[];
+extern const unsigned char salam_embed_mingw_i686_end[];
 #endif
 /*
  * Static builds of third-party libraries (sqlite3, openssl, hiredis,
@@ -760,6 +764,20 @@ static int native_link_mingw(logger_t *log, const char *obj, const char *out,
             LOG_I(log, PH_DRIVER, "using embedded mingw sysroot: %s", sr);
         }
 #    endif
+#    ifdef SALAM_HAVE_EMBED_MINGW_I686
+        /* 32-bit Windows was the one target with no embedded sysroot from any
+           host, so --target=i686-w64-windows-gnu depended on the user having
+           a mingw32 install while every other target linked from what this
+           binary carries. */
+        if (!got && strcmp(arch, "i686") == 0 &&
+            salam_materialize_sysroot(
+                "i686-w64-mingw32", salam_embed_mingw_i686,
+                (size_t)(salam_embed_mingw_i686_end - salam_embed_mingw_i686), sr,
+                sizeof sr)) {
+            got = 1;
+            LOG_I(log, PH_DRIVER, "using embedded mingw i686 sysroot: %s", sr);
+        }
+#    endif
         if (!got && !salam_find_sysroot(t, sr, sizeof sr))
             sal_snprintf(sr, sizeof sr, "/usr/%s-w64-mingw32", arch);
     }
@@ -1109,7 +1127,7 @@ static int jit_run_file(logger_t *log, const char *ll_path)
      * concatenates a string and drops it leaks by design, exactly as its
      * compiled binary would, and that is the program's business rather
      * than the compiler's - the same call the interpreter already makes
-     * with the leak:call_native_extern entry in c/tools/lsan.supp. A
+     * with the leak:call_native_extern entry in tools/lsan.supp. A
      * suppression cannot express it here, because the allocation stack has
      * no symbolized frame at all: JIT-mapped code is not in any module, so
      * every report comes back as a bare address under driver_llvm.

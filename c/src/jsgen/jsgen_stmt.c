@@ -66,10 +66,17 @@ static const char *jsg_simple_inline(jg_t *g, ast_node_t *n)
         cg_t *cg = &g->cg;
         const char *c = jsg_compound(g, n);
         if (c) return c;
-        if (n->op == TK_POWER_EQ)
-            return cg_fmt(cg, "%s = Math.pow(%s, %s)", jsg_expr(g, n->a),
-                          jsg_expr(g, n->a), jsg_expr(g, n->b));
-        return cg_fmt(cg, "%s %s %s", jsg_expr(g, n->a), cg_op(n->op), jsg_expr(g, n->b));
+        if (n->op == TK_POWER_EQ) {
+            const char *dst = jsg_expr(g, n->a);
+            const char *base = jsg_expr(g, n->a);
+            const char *exp = jsg_expr(g, n->b);
+            return cg_fmt(cg, "%s = Math.pow(%s, %s)", dst, base, exp);
+        }
+        {
+            const char *lhs = jsg_expr(g, n->a);
+            const char *rhs = jsg_expr(g, n->b);
+            return cg_fmt(cg, "%s %s %s", lhs, cg_op(n->op), rhs);
+        }
     }
     if (n->kind == AST_EXPR_STMT) return jsg_expr(g, n->a);
     return jsg_expr(g, n);
@@ -258,8 +265,10 @@ void jsg_stmt(jg_t *g, ast_node_t *n)
                         const char *fn =
                             jsg_fn_name(g, spkg, ssym->name, "operator_index_set", m, sig,
                                         false, false);
-                        cg_line(cg, "%s(%s, %s, %s);", fn, jsg_expr(g, n->a->a),
-                                jsg_expr(g, n->a->b), jsg_expr(g, n->b));
+                        const char *recv = jsg_expr(g, n->a->a);
+                        const char *idx = jsg_expr(g, n->a->b);
+                        const char *val = jsg_expr(g, n->b);
+                        cg_line(cg, "%s(%s, %s, %s);", fn, recv, idx, val);
                         break;
                     }
                 }
@@ -284,13 +293,17 @@ void jsg_stmt(jg_t *g, ast_node_t *n)
             }
         }
         if (n->op == TK_POWER_EQ) {
-            cg_line(cg, "%s = Math.pow(%s, %s);", jsg_expr(g, n->a), jsg_expr(g, n->a),
-                    jsg_expr(g, n->b));
+            const char *dst = jsg_expr(g, n->a);
+            const char *base = jsg_expr(g, n->a);
+            const char *exp = jsg_expr(g, n->b);
+            cg_line(cg, "%s = Math.pow(%s, %s);", dst, base, exp);
             break;
         }
         if (n->op == TK_SLASH_EQ && n->a && cg_is_int_typestr(n->a->type_str)) {
-            cg_line(cg, "%s = Math.trunc(%s / %s);", jsg_expr(g, n->a),
-                    jsg_expr_p(g, n->a, 13), jsg_expr_p(g, n->b, 14));
+            const char *dst = jsg_expr(g, n->a);
+            const char *num = jsg_expr_p(g, n->a, 13);
+            const char *den = jsg_expr_p(g, n->b, 14);
+            cg_line(cg, "%s = Math.trunc(%s / %s);", dst, num, den);
             break;
         }
         {
@@ -315,7 +328,11 @@ void jsg_stmt(jg_t *g, ast_node_t *n)
                 break;
             }
         }
-        cg_line(cg, "%s %s %s;", jsg_expr(g, n->a), cg_op(n->op), jsg_expr(g, n->b));
+        {
+            const char *lhs = jsg_expr(g, n->a);
+            const char *rhs = jsg_expr(g, n->b);
+            cg_line(cg, "%s %s %s;", lhs, cg_op(n->op), rhs);
+        }
         break;
     }
     case AST_EXPR_STMT:
@@ -430,8 +447,9 @@ void jsg_stmt(jg_t *g, ast_node_t *n)
         size_t m = cg->locals.len;
         if (n->c && n->c->name) {
             const char *it = jsg_expr_p(g, n->a, JSP_MEMBER);
-            cg_line(cg, "for (const [%s, %s] of %s.entries()) {",
-                    jsg_local(g, n->c->name, false), jsg_local(g, n->name, false), it);
+            const char *kv = jsg_local(g, n->c->name, false);
+            const char *vv = jsg_local(g, n->name, false);
+            cg_line(cg, "for (const [%s, %s] of %s.entries()) {", kv, vv, it);
         } else {
             const char *it = jsg_expr(g, n->a);
             cg_line(cg, "for (const %s of %s) {", jsg_local(g, n->name, false), it);

@@ -1,6 +1,6 @@
 #!/bin/sh
 # Installs the same tcc CI builds and the release bundles ship - the TinyCC
-# commit pinned in c/tools/ci/tinycc-ref.txt - for local development (WSL,
+# commit pinned in tools/ci/tinycc-ref.txt - for local development (WSL,
 # a Linux box, or an MSYS2 MINGW64 shell on Windows).
 #
 # Why not the distro package: `apt install tcc` on Ubuntu is
@@ -9,7 +9,7 @@
 # different compiler from the one users get.
 #
 # Usage:
-#   c/tools/bash/install-tcc.sh [prefix]      # default: $HOME/.local/tcc
+#   tools/bash/install-tcc.sh [prefix]      # default: $HOME/.local/tcc
 #
 # Then put it first on PATH, ahead of any distro tcc:
 #   export PATH="$HOME/.local/tcc/bin:$PATH"    # Linux/WSL

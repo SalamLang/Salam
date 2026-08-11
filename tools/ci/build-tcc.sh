@@ -6,7 +6,7 @@
 # where tcc itself looks for libtcc1.a and its headers.
 #
 # Usage:
-#   c/tools/ci/build-tcc.sh <prefix>
+#   tools/ci/build-tcc.sh <prefix>
 #
 # Env:
 #   TINYCC_REF     commit to build (default: contents of tinycc-ref.txt)

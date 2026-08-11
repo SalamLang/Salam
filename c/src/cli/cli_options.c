@@ -192,6 +192,8 @@ bool cli_parse_options(int argc, char **argv, int start, options_t *out)
                 out->debug_info = true;
             } else if (strcmp(arg, "--asan") == 0) {
                 out->asan = true;
+            } else if (strcmp(arg, "--lto") == 0) {
+                out->lto = true;
             } else if (strcmp(arg, "--interp") == 0 || strcmp(arg, "--jit") == 0) {
                 out->interp = true;
             } else if (strcmp(arg, "--inline") == 0) {
@@ -231,6 +233,12 @@ bool cli_parse_options(int argc, char **argv, int start, options_t *out)
                     return false;
                 }
                 out->defines[out->ndefines++] = val;
+            } else if ((val = cli_opt_value(arg, "--export")) != NULL) {
+                if (out->nexports >= SALAM_MAX_INPUTS) {
+                    fprintf(stderr, "%s", i18n_tr("salam: too many --export entries\n"));
+                    return false;
+                }
+                out->exports[out->nexports++] = val;
             } else if (strncmp(arg, "-D", 2) == 0 && arg[2]) {
                 if (out->ndefines >= SALAM_MAX_INPUTS) {
                     fprintf(stderr, "%s", i18n_tr("salam: too many macro definitions\n"));
@@ -285,6 +293,21 @@ bool cli_parse_options(int argc, char **argv, int start, options_t *out)
                     return false;
                 }
                 out->serve_port = (int)n;
+            } else if ((val = cli_opt_value(arg, "--timeout")) != NULL) {
+                /* Bounded like --port rather than left to strtol's full range:
+                 * long-running interpreted programs are legitimate, so there is
+                 * no small cap, but the value still has to fit the int field
+                 * the interpreter reads it back out of. */
+                char *endp = NULL;
+                long n = strtol(val, &endp, 10);
+                if (endp == val || *endp != '\0' || n < 1 || n > 999999999L) {
+                    fprintf(stderr,
+                            i18n_tr("salam: invalid --timeout value '%s' "
+                                    "(milliseconds, > 0)\n"),
+                            val);
+                    return false;
+                }
+                out->timeout_ms = (int)n;
             } else if (arg[0] == '-' && arg[1] != '\0') {
                 fprintf(stderr, i18n_tr("salam: unknown option '%s'\n"), arg);
                 return false;

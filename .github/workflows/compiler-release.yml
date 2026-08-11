@@ -631,6 +631,46 @@ jobs:
           SALAM="$GITHUB_WORKSPACE/salam" sh tools/bash/run-tests.sh 2>&1 | tee /tmp/tests.log || true
           grep -qE 'RESULT: [0-9]+ passed, 0 failed' /tmp/tests.log \
             || { echo "::error::Linux test suite failed - blocking release"; exit 1; }
+
+      # Generated C has to compile without a single diagnostic, under every C
+      # compiler that can build it - not just the one the auto-ladder happens
+      # to pick above. SALAM_C_STRICT=1 makes any diagnostic fatal, so a
+      # codegen regression stops the job rather than scrolling past in a log
+      # nobody reads; running all three matters because they disagree about
+      # what is worth warning about, and a construct only gcc objects to is
+      # still a construct we emitted wrongly.
+      #
+      # Deliberately not a matrix job: it reuses the salam built above, and
+      # the sections listed are the codegen-heavy ones. db/opencv are skipped
+      # because they pass their own --cc for the mock link.
+      - name: Generated C compiles clean under tcc, gcc and clang
+        if: startsWith(github.event.head_commit.message, 'release:') || (github.event_name == 'workflow_dispatch' && inputs.nightly)
+        run: |
+          set -eu
+          # One clang, whichever name this image has it under.
+          CLANG=""
+          for c in clang-22 clang; do
+            if command -v "$c" >/dev/null 2>&1; then
+              CLANG="$c"
+              break
+            fi
+          done
+          rc=0
+          for cc in tcc gcc $CLANG; do
+            command -v "$cc" >/dev/null 2>&1 || continue
+            echo "::group::generated C under $cc"
+            log="/tmp/strict-$cc.log"
+            SALAM="$GITHUB_WORKSPACE/salam" SALAM_CC="$cc" SALAM_C_STRICT=1 \
+              sh tools/bash/run-tests.sh general exec errors layout >"$log" 2>&1 || true
+            tail -20 "$log"
+            echo "::endgroup::"
+            if ! grep -qE 'RESULT: [0-9]+ passed, 0 failed' "$log"; then
+              echo "::error::generated C is not clean under $cc"
+              grep -E '^FAIL' "$log" | head -20
+              rc=1
+            fi
+          done
+          exit "$rc"
       - name: Stage versioned archive
         run: |
           set -eu

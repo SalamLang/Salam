@@ -818,6 +818,18 @@ static bool resolve_named_cc(const char *name, char *out, size_t n, bool *bundle
     return salam_find_path_tool(name, out, n);
 }
 
+/*
+ * SALAM_C_STRICT=1 makes any C-compiler diagnostic about generated code
+ * fatal. An environment variable rather than a CLI flag because the callers
+ * that need it are build scripts and CI, which set it once for a whole run
+ * and do not thread a flag through every salam invocation they make.
+ */
+bool salam_c_strict(void)
+{
+    const char *v = getenv("SALAM_C_STRICT");
+    return v && v[0] == '1' && v[1] == '\0';
+}
+
 static bool build_use_llvm(const options_t *opt)
 {
     if (!strcmp(opt->backend, "c")) return false;
@@ -923,6 +935,21 @@ int driver_build(options_t *opt)
      *
      * It still has to be *found*, though: see resolve_named_cc. Only the
      * ladder is skipped for an explicit --cc, never the lookup. */
+    /*
+     * SALAM_CC names the C compiler for a caller that drives many builds at
+     * once and cannot thread --cc through each of them - the test suite
+     * holding the whole corpus to tcc and then to gcc is the case this
+     * exists for. A --cc actually typed on the command line still wins; this
+     * only replaces the "nobody chose" default, and is then resolved through
+     * the same bundled-first lookup an explicit --cc gets.
+     */
+    {
+        const char *env_cc = getenv("SALAM_CC");
+        if (env_cc && env_cc[0] && !opt->cc_explicit) {
+            opt->cc = env_cc;
+            opt->cc_explicit = true;
+        }
+    }
     {
         static char raw_cc[1200], quoted_cc[1208];
         bool bundled = false, resolved = false;
@@ -1034,6 +1061,37 @@ int driver_build(options_t *opt)
     dce_reset(arena);
     dce_enable();
 
+    /* --export=Fn:CName is split here but registered later, inside the module
+       loop, because cg_add_export_override wants the DEFINING file's package
+       and that is only known once the file has been parsed. */
+    const char *export_fn[SALAM_MAX_INPUTS];
+    const char *export_cname[SALAM_MAX_INPUTS];
+    int nexport = 0;
+    cg_reset_export_overrides();
+    {
+        int ei = 0;
+        for (; ei < opt->nexports; ei++) {
+            const char *spec = opt->exports[ei];
+            const char *colon = strchr(spec, ':');
+            if (!colon || colon == spec || colon[1] == '\0') {
+                LOG_E(log, PH_DRIVER, "invalid --export value '%s' (want Fn:CName)",
+                      spec);
+                logger_free(log);
+                arena_free(arena);
+                return 2;
+            }
+            {
+                size_t nlen = (size_t)(colon - spec);
+                char *fn = (char *)arena_alloc(arena, nlen + 1);
+                memcpy(fn, spec, nlen);
+                fn[nlen] = '\0';
+                export_fn[nexport] = fn;
+                export_cname[nexport] = colon + 1;
+                nexport++;
+            }
+        }
+    }
+
     {
         int wi = 0;
         for (; wi < nwork; wi++) {
@@ -1123,6 +1181,24 @@ int driver_build(options_t *opt)
                         has_entry = true;
                         dce_mark_root(modpkg, modentry);
                         break;
+                    }
+                }
+            }
+            /* --export applies to the entry file only (wi == 0). Matching by
+               name across every transitively imported module would catch
+               unrelated same-named functions too. */
+            if (wi == 0 && nexport > 0) {
+                size_t k = 0;
+                for (; k < program->list.len; k++) {
+                    ast_node_t *d = (ast_node_t *)program->list.data[k];
+                    if (d->kind != AST_FUNC_DEF || !d->name) continue;
+                    {
+                        int ei = 0;
+                        for (; ei < nexport; ei++) {
+                            if (strcmp(d->name, export_fn[ei]) != 0) continue;
+                            dce_mark_root(modpkg, d->name);
+                            cg_add_export_override(modpkg, d->name, export_cname[ei]);
+                        }
                     }
                 }
             }
@@ -1339,6 +1415,25 @@ int driver_build(options_t *opt)
      * unions or char* accessors everywhere, which this backend does not do.
      */
     const char *alias_flag = strstr(opt->cc, "tcc") ? "" : " -fno-strict-aliasing";
+    /*
+     * Strict mode: every diagnostic the C compiler would have printed about
+     * generated code becomes a hard error, so a codegen regression stops the
+     * build instead of scrolling past.
+     *
+     * -Werror on its own, deliberately: it promotes what the compiler
+     * already decided to warn about rather than switching on new warning
+     * classes. Generated C is not hand-written C - it is entitled to look
+     * odd - so the bar being enforced is "the toolchain found nothing wrong
+     * with it", which is stable across tcc, gcc and clang. Adding -Wall
+     * here would instead import each compiler's opinion about style and
+     * make the gate mean something different on every host.
+     *
+     * Off unless asked for. A user's newer gcc inventing a warning must not
+     * break their build of a release that predates it; the test suite turns
+     * it on (see run-tests.sh) because that is where a regression has to be
+     * caught, and where the compiler set is known.
+     */
+    const char *werror_flag = salam_c_strict() ? " -Werror" : "";
     const char *opt_flag = (!opt->debug_info && !opt->asan && !strstr(opt->cc, "tcc") &&
                             !strstr(opt->cc, "-O"))
                                ? " -O2"
@@ -1371,6 +1466,7 @@ int driver_build(options_t *opt)
                 sb_put_shell_arg(&cmd, scratch);
                 sb_puts(&cmd, opt_flag);
                 sb_puts(&cmd, alias_flag);
+                sb_puts(&cmd, werror_flag);
                 sb_puts(&cmd, dbg_flag);
                 sb_putc(&cmd, ' ');
                 sb_put_shell_arg(&cmd, cfiles[i]);
@@ -1406,8 +1502,15 @@ int driver_build(options_t *opt)
 
         const char *lm = " -lm";
 #endif
+        /* Opt-in via --lto, not implied by an optimizing build. -flto turns
+         * every per-module .o into bitcode, so the object cache below stops
+         * buying anything and the link becomes one serial LTRANS pass over
+         * the whole program; on Windows the toolchain's lto-wrapper falls
+         * back to serial LTRANS regardless of -flto=N anyway, and mingw's
+         * lto1 fails outright on some hosts. The parallel per-file compile
+         * is the better default, so LTO is a choice the caller makes. */
         const char *lto_flag = "";
-        if (optimizing_build && !use_tcc) {
+        if (opt->lto && optimizing_build && !use_tcc) {
 #ifdef _WIN32
             if (!strstr(opt->cc, "clang")) lto_flag = " -flto";
 #else
@@ -1451,6 +1554,7 @@ int driver_build(options_t *opt)
 #endif
             sb_puts(&cflags, opt_flag);
             sb_puts(&cflags, alias_flag);
+            sb_puts(&cflags, werror_flag);
             sb_puts(&cflags, lto_flag);
             sb_puts(&cflags, " -I. -I");
             sb_put_shell_arg(&cflags, scratch);
@@ -1479,21 +1583,40 @@ int driver_build(options_t *opt)
             /* Cached objects were built with the previous flag set; if it moved
                (--release, -g, --asan, a new link directive, a different cc) every
                object is stale regardless of whether its source changed. */
+            size_t sigcap = strlen(scratch) + 32;
+            char *sigpath = (char *)arena_alloc(arena, sigcap);
+            sb_t sig;
+            bool sig_pending = false;
+            sb_init(&sig);
+            sb_puts(&sig, opt->cc);
+            sb_puts(&sig, sb_cstr(&cflags));
+            /* --export renames symbols in the emitted C, so an object built
+               under a different set of them is stale even though its own
+               source did not change. */
             {
-                size_t sigcap = strlen(scratch) + 32;
-                char *sigpath = (char *)arena_alloc(arena, sigcap);
-                sb_t sig;
-                sb_init(&sig);
-                sb_puts(&sig, opt->cc);
-                sb_puts(&sig, sb_cstr(&cflags));
-                sal_snprintf(sigpath, sigcap, "%s/salam_build.flags", scratch);
-                if (!file_has_content(sigpath, sb_cstr(&sig))) {
-                    int i = 0;
-                    for (; i < ncfiles; i++)
-                        cdirty[i] = true;
-                    write_file(log, sigpath, sb_cstr(&sig));
+                int ei = 0;
+                for (; ei < opt->nexports; ei++) {
+                    sb_puts(&sig, "|E");
+                    sb_puts(&sig, opt->exports[ei]);
                 }
-                sb_free(&sig);
+            }
+            sal_snprintf(sigpath, sigcap, "%s/salam_build.flags", scratch);
+            if (!file_has_content(sigpath, sb_cstr(&sig))) {
+                int i = 0;
+                for (; i < ncfiles; i++)
+                    cdirty[i] = true;
+                /*
+                 * Recorded only once every object has actually been rebuilt
+                 * with these flags - see after the compile loop. Writing it
+                 * here, before compiling, meant a build that failed or was
+                 * interrupted left the file claiming a flag set the objects
+                 * on disk were never built with. The next run then believed
+                 * its cache and linked whatever was lying there: switching
+                 * gcc -> tcc that way fed the linker gcc's objects and it
+                 * died on "salam_mod_mem.o:1: error: unrecognized file
+                 * type", a message that points at nothing the user did.
+                 */
+                sig_pending = true;
             }
 
             {
@@ -1521,6 +1644,12 @@ int driver_build(options_t *opt)
                 prof_self_count(TC_MODULES_BUILT, (uint64_t)nrebuilt);
                 prof_self_count(TC_MODULES_CACHED, (uint64_t)(ncfiles - nrebuilt));
             }
+            /* Every object now matches these flags, so the cache may claim
+               them. On failure the file is deliberately left alone: the next
+               run must still see the old signature, mark everything dirty
+               and rebuild rather than trust half-written state. */
+            if (crc == 0 && sig_pending) write_file(log, sigpath, sb_cstr(&sig));
+            sb_free(&sig);
             sb_free(&cflags);
         }
         if (crc != 0) {

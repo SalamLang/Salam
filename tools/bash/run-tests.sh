@@ -384,6 +384,17 @@ if [ -z "${SALAM_STD:-}" ] && [ -d "$(pwd)/std" ]; then
     export SALAM_STD
 fi
 
+# Generated C must compile without a single diagnostic from the C compiler,
+# and a build that produces one fails the test that produced it. On by
+# default here, not left to the caller: a warning that only fails when
+# somebody remembers to ask is a warning that comes back, which is exactly
+# how the "assignment makes pointer from integer without a cast" family kept
+# reappearing in one module after being fixed in another. Set
+# SALAM_C_STRICT=0 to inspect a corpus-wide regression without the suite
+# stopping on the first one.
+: "${SALAM_C_STRICT:=1}"
+export SALAM_C_STRICT
+
 # Some tests (e.g. stdlib/os_detect) legitimately produce different, all
 # "correct", output depending on the host OS and/or CPU architecture -
 # rather than skip them off the primary (linux/x64) CI host, an optional

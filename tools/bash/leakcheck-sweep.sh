@@ -5,8 +5,9 @@
 #   run-tests.sh runs: build, exec, format, inspect, js, layout build, llvm, web
 #   this script adds: version, help (per language), new, run, obj, doc, cli
 #                     (REPL), layout (REPL), --time-report/--time-trace,
-#                     --keep-c, -g, --release, -B, --asan, and the argument
-#                     error paths (bad file, bad option, unknown command)
+#                     --keep-c, -g, --release, -B, --asan, --lto, --export,
+#                     --timeout, and the argument error paths (bad file, bad
+#                     option, bad --export/--timeout value, unknown command)
 #
 # It grades nothing: exit codes are printed for eyeballing, and the verdict is
 # whatever LSan wrote to $ASAN_OPTIONS' log_path. Run it through
@@ -108,6 +109,14 @@ try release "$SALAM_BIN" build hello.salam --output=t6 $CCPICK --release
 try force-rebuild "$SALAM_BIN" build hello.salam --output=t7 $CCPICK -B
 # shellcheck disable=SC2086
 try asan-build "$SALAM_BIN" build hello.salam --output=t8 $CCPICK --asan
+# shellcheck disable=SC2086
+try lto "$SALAM_BIN" build hello.salam --output=t9 $CCPICK --release --lto
+# shellcheck disable=SC2086
+try export-override "$SALAM_BIN" build hello.salam --output=t10 $CCPICK --export=main:salam_entry
+# shellcheck disable=SC2086
+try export-bad-spec "$SALAM_BIN" build hello.salam --output=t11 $CCPICK --export=NoColon
+try exec-timeout "$SALAM_BIN" exec hello.salam --timeout=3000
+try exec-timeout-bad "$SALAM_BIN" exec hello.salam --timeout=nope
 
 try js "$SALAM_BIN" js hello.salam --output=a.js
 try js-html "$SALAM_BIN" js hello.salam --output=a.html

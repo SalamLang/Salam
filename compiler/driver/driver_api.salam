@@ -18,6 +18,43 @@ import sm "../semantic/semantic.salam"
 import ip "../interp/interp.salam"
 import co "../sal_core.salam"
 
+    // $SALAM_EXEC_TIMEOUT_MS, the ambient form of --timeout. A leading '-'
+    // means "no deadline at all", which is what a sweep running deliberately
+    // long programs sets; interp_api spells that deadline_ms 0. Anything that
+    // is not a whole number is ignored rather than rejected: the variable can
+    // be set process-wide by something the caller does not control, and
+    // failing every `salam exec` over it would be worse than falling back to
+    // the default.
+    func parse_env_timeout_ms(val: str, out &: int): bool:
+        n := str.Len(val)
+        if n == 0 || n > 10:
+            ret false
+        end
+        mut i := 0
+        mut neg := false
+        if str.StartsWith(val, "-"):
+            neg = true
+            i = 1
+        end
+        if i >= n:
+            ret false
+        end
+        mut num := 0
+        until i < n:
+            code := co.ByteAt(val, i)
+            if !str.IsDigit(code):
+                ret false
+            end
+            num = num * 10 + (code - 48)
+            i = i + 1
+        end
+        if num == 0:
+            ret false
+        end
+        out = neg ? 0 - num : num
+        ret true
+    end
+
     // ===== PUBLIC API (rule E088: nothing but pub funcs below this line) =====
 
     // cli_set_defaults equivalent - `Dr {}` already carries every default (see
@@ -193,8 +230,20 @@ import co "../sal_core.salam"
         end
         mut io_opts := ip.NewOptions()
         io_opts.lang = opt.lang
+        // --timeout beats $SALAM_EXEC_TIMEOUT_MS: the flag is the caller
+        // asking for this run specifically, the variable is ambient
+        // configuration for a whole test sweep or CI job. Without either,
+        // interp_api's own 5000ms default applies.
         if opt.timeout_ms > 0:
             io_opts.timeout_ms = opt.timeout_ms
+        else:
+            env_ms := str.Trim(os.Env("SALAM_EXEC_TIMEOUT_MS"))
+            if str.Len(env_ms) > 0:
+                mut ms := 0
+                if parse_env_timeout_ms(env_ms, ms):
+                    io_opts.timeout_ms = ms
+                end
+            end
         end
         mut interp := ip.New(lgr, entry, io_opts)
         rc := ip.Run(interp, a, s, prog)

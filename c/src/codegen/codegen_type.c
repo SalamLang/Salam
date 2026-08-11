@@ -232,6 +232,27 @@ const char *cg_common_int_typestr(const char *a, const char *b)
     return cg_int_ts_bits(a) >= cg_int_ts_bits(b) ? a : b;
 }
 
+/*
+ * The unsigned type of the same width, or `ts` itself when there isn't one.
+ *
+ * Salam defines +, - and * to wrap modulo 2^n in the operand type (SALAM-TYPES
+ * 4.1, 15), but signed overflow is undefined in C, not wrapping: at -O2 gcc is
+ * entitled to assume it never happens and fold the branch that checks for it.
+ * Emitting the arithmetic in the unsigned twin and converting the result back
+ * gives exactly the defined wrap Salam promises - unsigned arithmetic is
+ * modular by definition, and the narrowing conversion back is two's complement
+ * on every target Salam supports (and mandated outright by C23).
+ */
+const char *cg_unsigned_twin(const char *ts)
+{
+    if (!ts) return ts;
+    if (!strcmp(ts, "i8")) return "u8";
+    if (!strcmp(ts, "i16")) return "u16";
+    if (!strcmp(ts, "i32")) return "u32";
+    if (!strcmp(ts, "i64")) return "u64";
+    return ts;
+}
+
 bool cg_is_unsigned_typestr(const char *ts)
 {
     static const char *const uns[] = {"u8", "u16", "u32", "u64", "size", NULL};

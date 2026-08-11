@@ -1432,8 +1432,30 @@ int driver_build(options_t *opt)
      * break their build of a release that predates it; the test suite turns
      * it on (see run-tests.sh) because that is where a regression has to be
      * caught, and where the compiler set is known.
+     *
+     * Two diagnostics are switched off rather than promoted, because neither
+     * can tell what the generated code means:
+     *
+     *   div-by-zero            fires on a constant-folded `10 / d` sitting in
+     *                          the right arm of `d != 0 && ...`. Salam's &&
+     *                          short-circuits, so that arm never runs, but the
+     *                          fold happens before the compiler knows that.
+     *                          Silencing it costs nothing: a division by a
+     *                          literal zero that IS reachable is a Salam-level
+     *                          bug the semantic pass should catch, not
+     *                          something to discover through gcc.
+     *   deprecated-declarations
+     *                          codegen puts __attribute__((deprecated)) on the
+     *                          prototype so hand-written C including the
+     *                          header is warned. Salam call sites already get
+     *                          the semantic pass's own deprecation warning -
+     *                          which is what tests/en/general/deprecated_chain
+     *                          asserts - so promoting the C copy of it turns
+     *                          "this test exercises a deprecated function" into
+     *                          a build failure.
      */
-    const char *werror_flag = salam_c_strict() ? " -Werror" : "";
+    const char *werror_flag =
+        salam_c_strict() ? " -Werror -Wno-div-by-zero -Wno-deprecated-declarations" : "";
     const char *opt_flag = (!opt->debug_info && !opt->asan && !strstr(opt->cc, "tcc") &&
                             !strstr(opt->cc, "-O"))
                                ? " -O2"

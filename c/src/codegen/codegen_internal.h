@@ -110,6 +110,8 @@ bool cg_is_int_typestr(const char *ts);
 
 bool cg_is_unsigned_typestr(const char *ts);
 
+const char *cg_unsigned_twin(const char *ts);
+
 const char *cg_common_int_typestr(const char *a, const char *b);
 
 void cg_vec_elem(const char *ts, char *ebuf, size_t cap);

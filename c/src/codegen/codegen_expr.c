@@ -635,18 +635,37 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
                 cts = shift ? lts : cg_common_int_typestr(lts, rts);
             if (cts) {
                 const char *cty = cg_ctype(cg, cts);
+                /*
+                 * The operands are computed in the unsigned twin for the three
+                 * operators that can overflow, and for <<, whose result is
+                 * undefined once a signed value shifts into or past the sign
+                 * bit. Unsigned arithmetic wraps by definition, which is what
+                 * Salam promises; signed overflow is undefined in C, which is
+                 * what let gcc fold `(int32_t)x + (int32_t)x` at compile time
+                 * and reject it under -Werror=overflow. See cg_unsigned_twin.
+                 *
+                 * / and % are deliberately not on the list: unsigned division
+                 * is a different operation for negative operands, and the only
+                 * signed case that overflows is INT_MIN / -1. Bitwise & | ^
+                 * and >> cannot overflow at all.
+                 */
+                bool wraps = (n->op == TK_PLUS || n->op == TK_MINUS ||
+                              n->op == TK_STAR || n->op == TK_SHL);
+                const char *aty = (wraps && !cg_is_unsigned_typestr(cts))
+                                      ? cg_ctype(cg, cg_unsigned_twin(cts))
+                                      : cty;
                 const char *wa = cg_expr(cg, n->a);
                 const char *wb = cg_expr(cg, n->b);
                 /* Shifts keep the left operand's type; the right operand's
                  * value is used as-is. */
                 if (shift)
-                    return cg_fmt(cg, "((%s)((%s)(%s) %s (%s)))", cty, cty, wa,
+                    return cg_fmt(cg, "((%s)((%s)(%s) %s (%s)))", cty, aty, wa,
                                   cg_op(n->op), wb);
                 if (cg_op_is_cmp(n->op))
                     return cg_fmt(cg, "((%s)(%s) %s (%s)(%s))", cty, wa, cg_op(n->op),
                                   cty, wb);
-                return cg_fmt(cg, "((%s)((%s)(%s) %s (%s)(%s)))", cty, cty, wa,
-                              cg_op(n->op), cty, wb);
+                return cg_fmt(cg, "((%s)((%s)(%s) %s (%s)(%s)))", cty, aty, wa,
+                              cg_op(n->op), aty, wb);
             }
         }
         {
@@ -685,7 +704,15 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
         if ((n->op == TK_MINUS || n->op == TK_TILDE) && n->a && n->a->type_str &&
             cg_is_int_typestr(n->a->type_str)) {
             const char *cty = cg_ctype(cg, n->a->type_str);
-            return cg_fmt(cg, "((%s)(%s(%s)))", cty, cg_op(n->op), cg_expr(cg, n->a));
+            /* Negating the most negative value overflows, which is undefined
+               for a signed operand; the unsigned twin negates modularly and
+               converts back to the same bit pattern. '~' cannot overflow, so
+               it keeps the operand's own type. See cg_unsigned_twin. */
+            const char *oty = (n->op == TK_MINUS && !cg_is_unsigned_typestr(n->a->type_str))
+                                  ? cg_ctype(cg, cg_unsigned_twin(n->a->type_str))
+                                  : cty;
+            return cg_fmt(cg, "((%s)(%s((%s)(%s))))", cty, cg_op(n->op), oty,
+                          cg_expr(cg, n->a));
         }
         return cg_fmt(cg, "(%s%s)", cg_op(n->op), cg_expr(cg, n->a));
     }

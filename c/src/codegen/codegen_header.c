@@ -963,7 +963,11 @@ static void hdr_globals(cg_t *cg, ast_node_t *program, sb_t *h)
             bool is_array = ts && strchr(ts, '[');
             bool can_defer =
                 d->kind == AST_VAR_DECL && d->a && d->a->kind != AST_LITERAL && !is_array;
-            bool want_const = !can_defer && (d->kind == AST_CONST_DECL || !d->is_mut);
+            /* !is_array matches emit_globals in codegen.c - see the comment
+               there for why an array global cannot carry the qualifier. The
+               two must agree or the extern and the definition conflict. */
+            bool want_const =
+                !can_defer && !is_array && (d->kind == AST_CONST_DECL || !d->is_mut);
             bool gct_const = want_const && (strncmp(cg_ctype(cg, ts), "const ", 6) == 0);
             const char *pfx = (want_const && !gct_const) ? "const " : "";
             sb_puts(h, cg_fmt(cg, "extern %s%s;\n", pfx, decl));

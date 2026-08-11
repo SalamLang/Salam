@@ -45,12 +45,18 @@ const char *langpack_entry_for(const char *code)
     return p ? p->entry : "main";
 }
 
-const char *langpack_end_spelling(const langpack_t *p)
+const char *langpack_spelling(const langpack_t *p, token_kind_t kind)
 {
     {
         const kw_entry_t *e = p->keywords;
         for (; e->spelling != NULL; e++)
-            if (e->kind == TK_KW_END) return e->spelling;
+            if (e->kind == kind) return e->spelling;
     }
-    return "end";
+    return NULL;
+}
+
+const char *langpack_end_spelling(const langpack_t *p)
+{
+    const char *s = langpack_spelling(p, TK_KW_END);
+    return s ? s : "end";
 }

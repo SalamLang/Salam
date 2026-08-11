@@ -397,6 +397,15 @@ type_t *check_call(sema_t *s, ast_node_t *n)
                     type_t *at = (type_t *)argtypes.data[i];
                     if (!at) continue;
                     switch (at->kind) {
+                    /* Printing a call that returns nothing reached the C
+                     * backend as `printf("%d", f(x))` on a void expression
+                     * and was only caught by the C compiler, in generated
+                     * code the user never wrote. */
+                    case TY_VOID:
+                        SERR(s, 2, &n->span,
+                             "cannot print a value of type 'void' - this expression "
+                             "produces no value");
+                        break;
                     case TY_ARRAY:
                     case TY_STRUCT:
                     case TY_MAP:

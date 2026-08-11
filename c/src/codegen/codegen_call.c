@@ -178,10 +178,21 @@ static const char *call_raw_ptr(cg_t *cg, ast_node_t *n, ast_node_t *callee)
     return cg_fmt(cg, "((%s(*)%s)(%s))(%s)", cret, cps, cg_expr(cg, callee), args);
 }
 
-static const char *cg_order_stdout(cg_t *cg, const char *printf_expr)
+/*
+ * `pre` holds the argument temporaries (see cg_lower_print) and must stay in
+ * front of the call that consumes them. It is emitted before the flush as
+ * well as before the printf: an argument may itself print, and its output
+ * belongs ahead of this statement's, which only holds if it is evaluated
+ * before the buffer is flushed.
+ */
+static const char *cg_order_stdout(cg_t *cg, const char *pre, const char *printf_expr)
 {
-    if (!cg->single_threaded) return printf_expr;
-    return cg_fmt(cg, "({ salam_out_flush(); %s; fflush(0); })", printf_expr);
+    if (!pre || !pre[0])
+        return cg->single_threaded
+                   ? cg_fmt(cg, "({ salam_out_flush(); %s; fflush(0); })", printf_expr)
+                   : printf_expr;
+    if (!cg->single_threaded) return cg_fmt(cg, "({ %s%s; })", pre, printf_expr);
+    return cg_fmt(cg, "({ %ssalam_out_flush(); %s; fflush(0); })", pre, printf_expr);
 }
 
 static const char *cg_lower_print(cg_t *cg, ast_node_t *n, bool nl, int err)
@@ -217,6 +228,19 @@ static const char *cg_lower_print(cg_t *cg, ast_node_t *n, bool nl, int err)
     sb_init(&fmt);
     sb_t args;
     sb_init(&args);
+    /* Declarations that force left-to-right argument evaluation; see the
+       comment at the binding site below. Empty when there is nothing to
+       order. */
+    sb_t pre;
+    sb_init(&pre);
+    int nseq = 0;
+    {
+        size_t i = 0;
+        for (; i < segs.len; i++) {
+            pf_seg_t *s = (pf_seg_t *)segs.data[i];
+            if (s->kind != PF_LIT) nseq++;
+        }
+    }
     {
         size_t i = 0;
         for (; i < segs.len; i++) {
@@ -233,43 +257,79 @@ static const char *cg_lower_print(cg_t *cg, ast_node_t *n, bool nl, int err)
             }
             const char *e = cg_expr(cg, s->expr);
             const char *a;
+            const char *at;
             switch (s->kind) {
             case PF_CHAR:
                 sb_puts(&fmt, "%s");
                 a = cg_fmt(cg, "salam_char_from_code(%s)", e);
+                at = "const char*";
                 break;
             case PF_BOOL:
                 sb_puts(&fmt, pf_spec(s->kind));
                 a = cg_fmt(cg, "((%s) ? \"true\" : \"false\")", e);
+                at = "const char*";
                 break;
             case PF_F64:
                 sb_puts(&fmt, pf_spec(s->kind));
                 a = cg_fmt(cg, "(double)(%s)", e);
+                at = "double";
                 break;
             case PF_U32:
                 sb_puts(&fmt, pf_spec(s->kind));
                 a = cg_fmt(cg, "(unsigned)(%s)", e);
+                at = "unsigned";
                 break;
             case PF_I64:
                 sb_puts(&fmt, pf_spec(s->kind));
                 a = cg_fmt(cg, "(long long)(%s)", e);
+                at = "long long";
                 break;
             case PF_U64:
                 sb_puts(&fmt, pf_spec(s->kind));
                 a = cg_fmt(cg, "(unsigned long long)(%s)", e);
+                at = "unsigned long long";
                 break;
             case PF_SIZE:
                 sb_puts(&fmt, pf_spec(s->kind));
                 a = cg_fmt(cg, "(size_t)(%s)", e);
+                at = "size_t";
                 break;
             case PF_I32:
                 sb_puts(&fmt, pf_spec(s->kind));
                 a = cg_fmt(cg, "(int)(%s)", e);
+                at = "int";
                 break;
             default:
                 sb_puts(&fmt, pf_spec(s->kind));
                 a = e;
+                at = "const char*";
                 break;
+            }
+            /*
+             * Bind to a temporary rather than passing the expression
+             * straight to printf. C leaves the order in which call
+             * arguments are evaluated unspecified, so `println c(), c(),
+             * c(), c()` over a counter closure printed "4 3 2 1" under gcc
+             * (right to left) and "1 2 3 4" under tcc (left to right) - the
+             * same program, two answers, and the test only passed because
+             * CI happened to build it with tcc.
+             *
+             * Declarations inside a statement expression are sequenced, so
+             * emitting one per argument pins evaluation to source order on
+             * every compiler. Only done when there is more than one
+             * argument to evaluate: a single one cannot be misordered, and
+             * this keeps the common `println x` unchanged.
+             *
+             * The stderr path is always bound, whatever the count: it names
+             * the argument list twice (once to size the buffer with a null
+             * snprintf, once to fill it), so an argument with a side effect
+             * ran twice - `eprintln next()` advanced the counter twice and
+             * printed the second value.
+             */
+            if (nseq > 1 || err) {
+                int pi = ++cg->tmpn;
+                sb_puts(&pre, cg_fmt(cg, "%s __pa%d = %s; ", at, pi, a));
+                a = cg_fmt(cg, "__pa%d", pi);
             }
             sb_puts(&args, ", ");
             sb_puts(&args, a);
@@ -277,11 +337,13 @@ static const char *cg_lower_print(cg_t *cg, ast_node_t *n, bool nl, int err)
     }
     const char *cfmt = cg_cescape(cg, sb_cstr(&fmt));
     const char *al = arena_strdup(cg->a, sb_cstr(&args));
+    const char *pl = arena_strdup(cg->a, sb_cstr(&pre));
     sb_free(&fmt);
     sb_free(&args);
+    sb_free(&pre);
     if (err) {
         return cg_order_stdout(
-            cg,
+            cg, pl,
             cg_fmt(cg,
                    "({ int32_t __ern = snprintf((void*)0, (uint64_t)0, %s%s); "
                    "char *__erb = __ern > 0 ? (char*)" SALAM_MEM_ALLOC
@@ -291,7 +353,7 @@ static const char *cg_lower_print(cg_t *cg, ast_node_t *n, bool nl, int err)
                    "__ern); (void)__err_r; } })",
                    cfmt, al, cfmt, al));
     }
-    return cg_order_stdout(cg, cg_fmt(cg, "printf(%s%s)", cfmt, al));
+    return cg_order_stdout(cg, pl, cg_fmt(cg, "printf(%s%s)", cfmt, al));
 }
 
 static const char *call_ident(cg_t *cg, ast_node_t *n, ast_node_t *callee)

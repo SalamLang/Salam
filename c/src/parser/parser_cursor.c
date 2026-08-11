@@ -94,6 +94,7 @@ void p_error(parser_t *p, const char *msg)
 
     LOG_E_AT(p->log, PH_PARSER, p->file, t->span, i18n_tr("%s (near '%s')"), i18n_tr(msg),
              t->lexeme ? t->lexeme : "<eof>");
+    if (!p->had_error && t->kind == TK_EOF) p->err_at_eof = true;
     p->had_error = true;
     p->panic = true;
 }

@@ -1058,7 +1058,7 @@ int driver_build(options_t *opt)
     vec_t pkg_cache;
     vec_init(&pkg_cache);
 
-    dce_reset(arena);
+    dce_reset();
     dce_enable();
 
     /* --export=Fn:CName is split here but registered later, inside the module

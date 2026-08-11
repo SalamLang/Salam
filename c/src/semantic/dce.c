@@ -46,9 +46,21 @@ static bool key_in(const vec_t *v, const char *key)
     return false;
 }
 
-void dce_reset(arena_t *a)
+/* The graph owns its memory instead of borrowing the caller's arena.
+ *
+ * It used to be handed driver_build()'s arena, which dies with the build -
+ * and every key, edge and root in these three vectors pointed into it.
+ * One build followed by any later analysis in the same process (the REPL
+ * checking the next thing typed, a second build) then recorded calls into
+ * freed memory. Comparing arena pointers to detect that is not enough
+ * either: malloc reuses addresses, so the next arena can land exactly
+ * where the dead one was and the check passes while the vectors still
+ * hold pointers into the old blocks. Owning the allocation is the fix
+ * that has no such hole. */
+void dce_reset(void)
 {
-    g_arena = a;
+    arena_free(g_arena);
+    g_arena = arena_new(1 << 16);
     vec_init(&g_edges);
     vec_init(&g_roots);
     vec_init(&g_reachable);

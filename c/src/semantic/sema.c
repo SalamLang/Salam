@@ -1102,6 +1102,17 @@ void sema_load_prelude(sema_t *s)
     if (pk) s->prelude = pk->members;
 }
 
+/* Process-wide because sema_run's callers are the whole compiler pipeline
+ * (driver_build, the REPL's own dry runs, every package load underneath
+ * them) and threading a flag through all of them would only ever carry the
+ * one value the REPL sets once at startup. See sema_set_relax_unused. */
+static bool g_relax_unused = false;
+
+void sema_set_relax_unused(bool on)
+{
+    g_relax_unused = on;
+}
+
 sema_result_t *sema_run_cached(arena_t *a, logger_t *log, ast_node_t *program,
                                const char *file, const char *lang, const cc_table_t *cc,
                                vec_t *shared_pkg_cache)
@@ -1114,6 +1125,7 @@ sema_result_t *sema_run_cached(arena_t *a, logger_t *log, ast_node_t *program,
     s.file = file;
     s.lang = (lang && *lang) ? lang : "en";
     s.cc = cc;
+    s.relax_unused = g_relax_unused;
     s.tc = type_ctx_new(a);
     s.diag = diag_new(a, log, PH_SEMANTIC);
     s.global = scope_new(a, SCOPE_GLOBAL, NULL);

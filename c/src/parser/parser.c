@@ -250,6 +250,19 @@ static void parse_imports_into(parser_t *p, ast_node_t *prog)
     p_term(p);
 }
 
+bool parser_needs_more(arena_t *a, logger_t *log, const token_stream_t *toks)
+{
+    parser_t p;
+    memset(&p, 0, sizeof(p));
+    p.toks = toks;
+    p.count = token_stream_count(toks);
+    p.file = token_stream_file(toks);
+    p.a = a;
+    p.log = log;
+    (void)parse_program(&p);
+    return p.had_error && p.err_at_eof;
+}
+
 bool parser_run(arena_t *a, logger_t *log, const token_stream_t *toks,
                 ast_node_t **out_program)
 {

@@ -29,6 +29,10 @@ typedef struct {
     arena_t *a;
     logger_t *log;
     bool had_error;
+    /* The first error landed on the EOF token, i.e. the parse did not
+     * fail on anything the user wrote - it simply ran out of input. See
+     * parser_needs_more. */
+    bool err_at_eof;
     bool panic;
     bool no_struct_lit;
     bool no_with_word;

@@ -894,6 +894,27 @@ cat "$WORK/results"/* >"$ALL" 2>/dev/null || true
 pass=$(grep -c '^PASS' "$ALL")
 fail=$(grep -c '^FAIL' "$ALL")
 skip=$(grep -c '^SKIP' "$ALL")
+
+# A job that produced no result at all is not a pass. The tally above counts
+# result files, so a worker that died before writing one simply vanished from
+# the arithmetic: a run where 42 of 302 workers failed to start still printed
+# "260 passed, 0 failed" and every CI gate grepping for "0 failed" accepted
+# it. Compare what was queued against what came back and account for the
+# difference as failure, which is the only honest reading of "the test never
+# ran".
+njobs=$(wc -l <"$JOBS" 2>/dev/null | tr -d ' ')
+ngot=$(find "$WORK/results" -name 'r*' -type f 2>/dev/null | wc -l | tr -d ' ')
+: "${njobs:=0}"
+: "${ngot:=0}"
+if [ "$njobs" -gt 0 ] && [ "$ngot" -lt "$njobs" ]; then
+    missing=$((njobs - ngot))
+    echo ""
+    echo "FAIL harness/incomplete ($missing of $njobs jobs produced no result)"
+    echo "  A worker that cannot start writes nothing, so those tests were"
+    echo "  neither run nor reported. Counting them as failures rather than"
+    echo "  omitting them keeps the summary honest."
+    fail=$((fail + missing))
+fi
 if [ "$fail" -gt 0 ]; then
     echo ""
     echo "==== failed tests ===="

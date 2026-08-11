@@ -68,7 +68,16 @@ func emit_globals(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
                 cg_cident(d.name) + " = " + cg_expr(g, s, a, d.a) + ";"
             )
         else:
-            want_const := d.kind == at.AST_CONST_DECL
+            // Arrays are excluded on purpose. A Salam array parameter is a
+            // plain pointer the callee may write through - `func f(a: u64[8])`
+            // can do `a[0] = x` - so a const array global can reach a mutable
+            // T*, and C says writing through a pointer to a const object is
+            // undefined. std/tls' `const IV384` fed to _sha512_init_with(iv:
+            // u64[8]) is exactly that. Scalars are passed by value and can
+            // never alias, so they keep the qualifier (and .rodata).
+            // codegen_header's extern declaration must agree, or the
+            // definition and the declaration conflict.
+            want_const := d.kind == at.AST_CONST_DECL && !is_array
             gct_const := want_const && str.StartsWith(cg_ctype(ts), "const ")
             pfx := (want_const && !gct_const) ? "const " : ""
             if d.a != 0:

@@ -69,7 +69,20 @@ static void emit_globals(cg_t *cg, ast_node_t *program)
                          CONST_CAST(cg_fmt(cg, "%s = %s;", cg_cident(cg, d->name),
                                            cg_expr(cg, d->a))));
             } else {
-                bool want_const = (d->kind == AST_CONST_DECL);
+                /*
+                 * Arrays are excluded on purpose. A Salam array parameter is
+                 * a plain pointer the callee may write through - `func f(a:
+                 * u64[8])` can do `a[0] = x` - so a const array global can
+                 * reach a mutable T*, and C says writing through a pointer to
+                 * a const object is undefined. std/tls' `const IV384` fed to
+                 * _sha512_init_with(iv: u64[8]) is exactly that, and gcc's
+                 * discarded-qualifiers diagnostic was reporting a real defect
+                 * rather than being noisy. Scalars are passed by value and
+                 * can never alias, so they keep the qualifier (and .rodata).
+                 * codegen_header.c's extern declaration must agree, or the
+                 * definition and the declaration conflict.
+                 */
+                bool want_const = (d->kind == AST_CONST_DECL) && !is_array;
                 bool gct_const =
                     want_const && (strncmp(cg_ctype(cg, ts), "const ", 6) == 0);
                 const char *pfx = (want_const && !gct_const) ? "const " : "";

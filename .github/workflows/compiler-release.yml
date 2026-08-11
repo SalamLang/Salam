@@ -628,10 +628,49 @@ jobs:
         if: startsWith(github.event.head_commit.message, 'release:') || (github.event_name == 'workflow_dispatch' && inputs.nightly)
         run: |
           sudo apt-get install -y libhiredis-dev libmariadb-dev libgtk-3-dev libwebkit2gtk-4.1-dev
-          cd c
           SALAM="$GITHUB_WORKSPACE/salam" sh tools/bash/run-tests.sh 2>&1 | tee /tmp/tests.log || true
           grep -qE 'RESULT: [0-9]+ passed, 0 failed' /tmp/tests.log \
             || { echo "::error::Linux test suite failed - blocking release"; exit 1; }
+
+      # Generated C has to compile without a single diagnostic, under every C
+      # compiler that can build it - not just the one the auto-ladder happens
+      # to pick above. SALAM_C_STRICT=1 makes any diagnostic fatal, so a
+      # codegen regression stops the job rather than scrolling past in a log
+      # nobody reads; running all three matters because they disagree about
+      # what is worth warning about, and a construct only gcc objects to is
+      # still a construct we emitted wrongly.
+      #
+      # Deliberately not a matrix job: it reuses the salam built above, and
+      # the sections listed are the codegen-heavy ones. db/opencv are skipped
+      # because they pass their own --cc for the mock link.
+      - name: Generated C compiles clean under tcc, gcc and clang
+        if: startsWith(github.event.head_commit.message, 'release:') || (github.event_name == 'workflow_dispatch' && inputs.nightly)
+        run: |
+          set -eu
+          # One clang, whichever name this image has it under.
+          CLANG=""
+          for c in clang-22 clang; do
+            if command -v "$c" >/dev/null 2>&1; then
+              CLANG="$c"
+              break
+            fi
+          done
+          rc=0
+          for cc in tcc gcc $CLANG; do
+            command -v "$cc" >/dev/null 2>&1 || continue
+            echo "::group::generated C under $cc"
+            log="/tmp/strict-$cc.log"
+            SALAM="$GITHUB_WORKSPACE/salam" SALAM_CC="$cc" SALAM_C_STRICT=1 \
+              sh tools/bash/run-tests.sh general exec errors layout >"$log" 2>&1 || true
+            tail -20 "$log"
+            echo "::endgroup::"
+            if ! grep -qE 'RESULT: [0-9]+ passed, 0 failed' "$log"; then
+              echo "::error::generated C is not clean under $cc"
+              grep -E '^FAIL' "$log" | head -20
+              rc=1
+            fi
+          done
+          exit "$rc"
       - name: Stage versioned archive
         run: |
           set -eu
@@ -762,7 +801,6 @@ jobs:
       - name: Validate test suite (release gate)
         if: startsWith(github.event.head_commit.message, 'release:') || (github.event_name == 'workflow_dispatch' && inputs.nightly)
         run: |
-          cd c
           SALAM="$GITHUB_WORKSPACE/salam" sh tools/bash/run-tests.sh exec errors layout llvm 2>&1 | tee /tmp/tests.log || true
           grep -qE 'RESULT: [0-9]+ passed, 0 failed' /tmp/tests.log \
             || { echo "::error::macOS test suite failed - blocking release"; exit 1; }
@@ -1318,7 +1356,7 @@ jobs:
           fi
           echo "OK: salam.exe imports only Windows system DLLs."
 
-      # Built from the pin in c/tools/ci/tinycc-ref.txt rather than fetched
+      # Built from the pin in tools/ci/tinycc-ref.txt rather than fetched
       # from Savannah, whose newest win64 binary is 0.9.27 from December 2017
       # - eight years and a win64 float-argument miscompile behind mob. It
       # installs straight into the bundle at salam-windows/tcc, the same path
@@ -1331,7 +1369,7 @@ jobs:
           MSYSTEM: MINGW64
           CHERE_INVOKING: '1'
         run: |
-          sh c/tools/ci/build-tcc.sh "$(pwd)/salam-windows/tcc"
+          sh tools/ci/build-tcc.sh "$(pwd)/salam-windows/tcc"
 
       - name: Stage self-contained bundle
         shell: bash
@@ -1471,7 +1509,7 @@ jobs:
           rm -rf wv2pkg webview2.nupkg
 
       # The db-category tests build a mysql_mock.a via a POSIX `ln -s`
-      # (see c/tools/bash/run-one-build.sh); unprivileged symlink creation
+      # (see tools/bash/run-one-build.sh); unprivileged symlink creation
       # on Windows silently no-ops without Developer Mode, which failed
       # tests would otherwise mask as ordinary link errors.
       - name: Enable Developer Mode (symlink support for db mock tests)
@@ -1532,7 +1570,6 @@ jobs:
           # links ssl/crypto/sqlite3 fails at process start with no output
           # (DLL not found, before stdio is even initialized).
           export PATH="$GITHUB_WORKSPACE/salam-windows/tcc:$GITHUB_WORKSPACE/salam-windows/tcc/lib:/c/msys64/mingw64/bin:$PATH"
-          cd c
           SALAM="$GITHUB_WORKSPACE/salam-windows/salam.exe" \
             sh tools/bash/run-tests.sh 2>&1 | tee /tmp/tests.log || true
           grep -qE 'RESULT: [0-9]+ passed, 0 failed' /tmp/tests.log \
@@ -1756,7 +1793,7 @@ jobs:
           mkdir -p "$DIST"
           cp salam.exe "$DIST/"
           cp -r std    "$DIST/std"
-          # Cross-built from the pin in c/tools/ci/tinycc-ref.txt with the
+          # Cross-built from the pin in tools/ci/tinycc-ref.txt with the
           # same llvm-mingw toolchain this job already uses for LLVM, rather
           # than fetched from Savannah, whose newest win32 binary is 0.9.27
           # from December 2017. --cpu=i386 with --targetos=WIN32 is what
@@ -1766,7 +1803,7 @@ jobs:
           # runtime with a host-native tcc of its own - see the script.
           CROSS_PREFIX=/tmp/llvm-mingw/bin/i686-w64-mingw32- \
           TCC_CONFIGURE_EXTRA="--targetos=WIN32 --cpu=i386" \
-            sh c/tools/ci/build-tcc.sh "$(pwd)/$DIST/tcc"
+            sh tools/ci/build-tcc.sh "$(pwd)/$DIST/tcc"
           file "$DIST/tcc/tcc.exe"
           cp README.md LICENSE "$DIST/" 2>/dev/null || true
           {
@@ -2331,7 +2368,6 @@ jobs:
       - name: Validate test suite (release gate)
         if: startsWith(github.event.head_commit.message, 'release:') || (github.event_name == 'workflow_dispatch' && inputs.nightly)
         run: |
-          cd c
           SALAM="$GITHUB_WORKSPACE/salam" sh tools/bash/run-tests.sh exec errors layout llvm general 2>&1 | tee /tmp/tests.log || true
           grep -qE 'RESULT: [0-9]+ passed, 0 failed' /tmp/tests.log \
             || { echo "::error::Linux aarch64 test suite failed - blocking release"; exit 1; }
@@ -2652,3 +2688,96 @@ jobs:
             --generate-notes \
             ${PRERELEASE_FLAG:+"$PRERELEASE_FLAG"} \
             "${assets[@]}"
+
+  # A failed nightly used to be invisible. The nightly-check workflow goes
+  # green the moment it dispatches, and the failure then lands in *this*
+  # workflow's run, which nobody is watching at 04:30 UTC - so every nightly
+  # attempt after 2026-08-04 failed its release gate unnoticed and the newest
+  # published nightly went stale for a week. This job keeps a single tracking
+  # issue in sync with the outcome: opened/updated when a nightly cannot
+  # publish, closed when one does.
+  nightly-report:
+    name: Report nightly outcome
+    if: |
+      always() &&
+      github.event_name == 'workflow_dispatch' && inputs.nightly &&
+      github.repository == 'SalamLang/Salam'
+    needs:
+      [
+        build-linux,
+        build-macos,
+        build-windows,
+        build-windows-i686,
+        build-linux-i686,
+        build-linux-armhf,
+        build-linux-aarch64,
+        android-gate,
+        create-release,
+      ]
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Open, update or close the nightly tracking issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # This job deliberately has no checkout - it only talks to the
+          # issues API - so gh cannot infer the repository from a git
+          # remote and has to be told which one it is.
+          GH_REPO: ${{ github.repository }}
+          RESULTS: ${{ toJSON(needs) }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          NIGHTLY_DATE: ${{ inputs.nightly_date }}
+        run: |
+          set -eu
+          TITLE="🌙 Nightly release is failing"
+
+          # "skipped" is not a failure: create-release skips itself when a
+          # build job fails, and reporting it alongside the build that
+          # actually broke just buries the real cause.
+          failed=$(printf '%s' "$RESULTS" \
+            | jq -r 'to_entries
+                     | map(select(.value.result == "failure" or .value.result == "cancelled"))
+                     | .[].key')
+
+          # Matched on the exact title rather than `gh issue list --search`:
+          # the search index lags behind by minutes, which would open a
+          # second copy of this issue every night.
+          num=$(gh issue list --state open --limit 100 --json number,title \
+            | jq -r --arg t "$TITLE" 'map(select(.title == $t)) | .[0].number // empty')
+
+          if [ -z "$failed" ]; then
+            echo "nightly ${NIGHTLY_DATE:-$(date -u +%F)} published successfully"
+            if [ -n "$num" ]; then
+              gh issue comment "$num" \
+                --body "Nightly \`${NIGHTLY_DATE:-$(date -u +%F)}\` published successfully in ${RUN_URL} - closing."
+              gh issue close "$num"
+            fi
+            exit 0
+          fi
+
+          echo "failed jobs:"
+          printf '%s\n' "$failed" | sed 's/^/  /'
+
+          body=$(
+            echo "The nightly release for \`${NIGHTLY_DATE:-$(date -u +%F)}\` did not publish."
+            echo ""
+            echo "Failed jobs:"
+            printf '%s\n' "$failed" | while IFS= read -r job; do
+              printf -- "- \`%s\`\n" "$job"
+            done
+            echo ""
+            echo "Run: ${RUN_URL}"
+            echo ""
+            echo "Nothing is published unless every platform passes its release gate,"
+            echo "so the newest nightly stays stale until this run is green again."
+            echo "This issue is updated on each nightly attempt and closed"
+            echo "automatically by the first one that succeeds."
+          )
+
+          if [ -n "$num" ]; then
+            gh issue comment "$num" --body "$body"
+            echo "updated issue #$num"
+          else
+            gh issue create --title "$TITLE" --body "$body"
+          fi

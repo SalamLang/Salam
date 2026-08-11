@@ -4,7 +4,7 @@
 set -e
 . "$(dirname "$0")/lib.sh"
 CC="${CC:-tcc}"
-VERSION="$(cat ../VERSION 2>/dev/null || echo 0.2.8)"
+VERSION="$(cat VERSION 2>/dev/null || echo 0.2.9)"
 OS="$(uname -s 2>/dev/null | tr '[:upper:]' '[:lower:]' | sed 's/mingw.*/windows/;s/msys.*/windows/')"
 DIST="dist/salam-$VERSION-$OS"
 echo ">> building compiler ($CC)"
@@ -13,13 +13,13 @@ echo ">> staging $DIST"
 rm -rf "$DIST"
 mkdir -p "$DIST/bin" "$DIST/doc" "$DIST/tests"
 cp salam "$DIST/bin/" 2>/dev/null || cp salam.exe "$DIST/bin/"
-cp ../README.md "$DIST/" 2>/dev/null || true
+cp README.md "$DIST/" 2>/dev/null || true
 cp doc/*.md "$DIST/doc/" 2>/dev/null || true
 EXAMPLE_DIRS="apps basics data editor-selected features games interop stdlib types webframework"
 for lang in en fa; do
     mkdir -p "$DIST/tests/$lang"
     for d in $EXAMPLE_DIRS; do
-        cp -r "../tests/$lang/$d" "$DIST/tests/$lang/$d" 2>/dev/null || true
+        cp -r "tests/$lang/$d" "$DIST/tests/$lang/$d" 2>/dev/null || true
     done
 done
 find "$DIST/tests" \( -name '*.out' -o -name '*.expect' -o -name '*.buildonly' \) -delete 2>/dev/null || true

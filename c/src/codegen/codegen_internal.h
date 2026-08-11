@@ -36,6 +36,16 @@ typedef struct {
     bool debug_info;
     bool single_threaded;
     const char *src_path;
+    /* Serial number behind the __fh/__pw/... temporaries. It is bumped from
+     * inside cg_expr, so the emitters are not pure and the order they run in
+     * is visible in the output. C does not sequence a call's arguments against
+     * one another, so two cg_expr calls in the same cg_fmt() ran in whatever
+     * order the host compiler chose (gcc goes right to left) and the temp ids
+     * came out in that order - which made the generated C differ depending on
+     * which compiler built salam, and disagree with the compiler/codegen
+     * sources, which evaluate left to right. Bind each emitter call to its own
+     * local first, in source order, and pass the locals. A C ternary is fine,
+     * only one arm ever runs. */
     int tmpn;
     bool cur_sret;
     /* Emitting the entry function, which is `int main` in C however the
@@ -99,6 +109,8 @@ void parse_typestr(const char *ts, char *base, size_t cap, bool *ptr, vec_t *dim
 bool cg_is_int_typestr(const char *ts);
 
 bool cg_is_unsigned_typestr(const char *ts);
+
+const char *cg_unsigned_twin(const char *ts);
 
 const char *cg_common_int_typestr(const char *a, const char *b);
 
@@ -177,6 +189,10 @@ const char *cg_expr(cg_t *cg, ast_node_t *n);
 
 const char *cg_match_arm_cond(cg_t *cg, ast_node_t *arm, const char *subj_var,
                               const char *subj_ts);
+
+/* Drops the parentheses an expression already wraps itself in, for the
+ * condition slot of an `if`/`while` - see the definition in codegen_stmt.c. */
+const char *cg_unparen(cg_t *cg, const char *s);
 
 void cg_emit_defers(cg_t *cg);
 

@@ -344,13 +344,34 @@ static void hdr_prelude(cg_t *cg, ast_node_t *program, sb_t *h)
     }
     sb_puts(h, "#include <stdint.h>\n#include <stdbool.h>\n#include <math.h>\n#include "
                "<stddef.h>\n");
+    /*
+     * <stdio.h> is included rather than fopen/fread/fwrite being hand-declared
+     * like the rest of the CRT surface: clang's -Wbuiltin-requires-header fires
+     * on any declaration of those three outside the real header, however
+     * exactly it matches its own idea of the prototype (78 warnings in one
+     * benchmark-runner build). is_stdio_name below drops the hand-declarations
+     * that would now conflict with it.
+     *
+     * Its macros are undefined again immediately. `stdout` and `stderr` are
+     * ordinary field names in Salam - std/ssh's Channel has both - and musl
+     * spells the macro `(stdout)`, which turns `ch->stdout` into a syntax
+     * error; mingw spells it `(&__iob_func()[1])`. Only the macro shorthand
+     * goes, the libc functions and objects behind it survive, and nothing
+     * generated here ever refers to a stdio macro.
+     */
+    sb_puts(h, "#include <stdio.h>\n"
+               "#undef stdin\n#undef stdout\n#undef stderr\n"
+               "#undef EOF\n#undef BUFSIZ\n"
+               "#undef SEEK_SET\n#undef SEEK_CUR\n#undef SEEK_END\n");
 
     sb_puts(
         h,
         "#ifndef SALAM_OUT_DEFINED\n#define SALAM_OUT_DEFINED\n"
         "#define SALAM_OB_SZ 65536\n"
-        "extern int fflush(void *);\n"
-        "extern int snprintf(char *buf, uint64_t size, const char *fmt, ...);\n"
+        /* fflush and snprintf come from the <stdio.h> above. Hand-declaring
+         * them again is what the include is there to avoid: salam spells the
+         * size as uint64_t where the standard says size_t, and the stream as
+         * void* where it says FILE*. */
         "#if defined(_WIN32)\n"
         "extern int _write(int, void *, unsigned);\n"
         "#define SALAM_RAW_WRITE(fd, buf, n) _write((fd), (void *)(buf), (unsigned)(n))\n"
@@ -491,12 +512,23 @@ static void hdr_prelude(cg_t *cg, ast_node_t *program, sb_t *h)
                    "#if !defined(__TINYC__)\n"
                    "#define SALAM_EXTERN_WIDE_LIBC_ON_WIN32\n"
                    "#endif\n#endif\n");
+    /*
+     * Spelled exactly as <string.h>/<stdlib.h> spell them, not in salam's own
+     * type vocabulary. gcc (-Wbuiltin-declaration-mismatch) and clang
+     * (-Wincompatible-library-redeclaration) both know these five by name and
+     * warn about every difference: `const char*` where strstr returns `char*`,
+     * `void*` where strtol/strtod take `char**`, `int64_t` where strtol
+     * returns `long` (a different width on Windows). Salam has no way to write
+     * a `char**` parameter, so the C text is written out here instead of being
+     * derived from a salam signature - same reason libc_canonical_proto exists
+     * for the extern blocks in std/.
+     */
     sb_puts(h, "#ifndef SALAM_RT_STR_DEFINED\n#define SALAM_RT_STR_DEFINED\n"
-               "extern uint64_t strlen(const char* s);\n"
-               "extern int32_t strcmp(const char* a, const char* b);\n"
-               "extern const char* strstr(const char* haystack, const char* needle);\n"
-               "extern int64_t strtol(const char* s, void* endptr, int32_t base);\n"
-               "extern double strtod(const char* s, void* endptr);\n"
+               "extern size_t strlen(const char* s);\n"
+               "extern int strcmp(const char* a, const char* b);\n"
+               "extern char* strstr(const char* haystack, const char* needle);\n"
+               "extern long strtol(const char* s, char** endptr, int base);\n"
+               "extern double strtod(const char* s, char** endptr);\n"
                "#endif\n");
     sb_puts(h, "#ifndef SALAM_RT_STR2_DEFINED\n#define SALAM_RT_STR2_DEFINED\n"
                "extern const char* salam_strcat(const char* a, const char* b);\n"
@@ -897,6 +929,94 @@ static bool is_libm_name(const char *name)
 }
 
 /*
+ * Declared by the <stdio.h> that hdr_prelude includes, so std/'s own `extern
+ * func fopen(...)` blocks must not be emitted at all: their salam spelling
+ * (`void*` for FILE*, `int` for long, `u64` for size_t) conflicts with the
+ * real prototype, and for fopen/fread/fwrite clang additionally rejects any
+ * declaration outside the header itself (-Wbuiltin-requires-header). Call
+ * sites keep compiling because void* converts to FILE* and back implicitly.
+ */
+static bool is_stdio_name(const char *name)
+{
+    static const char *const names[] = {
+        "clearerr", "fclose", "feof", "ferror", "fflush", "fgetc", "fgetpos", "fgets",
+        "fopen", "fprintf", "fputc", "fputs", "fread", "freopen", "fscanf", "fseek",
+        "fsetpos", "ftell", "fwrite", "getc", "getchar", "perror", "printf", "putc",
+        "putchar", "puts", "remove", "rename", "rewind", "scanf", "setbuf", "setvbuf",
+        "snprintf", "sprintf", "sscanf", "tmpfile", "tmpnam", "ungetc", "vfprintf",
+        "vprintf", "vsnprintf", "vsprintf",
+        /*
+         * Not C, but declared by <stdio.h> on every platform that has them,
+         * and std/fs, std/os and compiler/interp declare each group inside
+         * the matching half of a `if SALAM_OS_WINDOWS:` split - so a build
+         * that emits one is a build whose <stdio.h> already declared it. The
+         * Windows spellings are in mingw's header and in the bundled tcc's
+         * alike. Anything a platform might *not* have stays hand-declared.
+         */
+        "fdopen", "fileno", "fseeko", "ftello", "getdelim", "getline", "pclose", "popen",
+        "_fdopen", "_fileno", "_fseeki64", "_ftelli64", "_pclose", "_popen"};
+    size_t i = 0;
+    for (; i < sizeof(names) / sizeof(names[0]); i++)
+        if (strcmp(name, names[i]) == 0) return true;
+    return false;
+}
+
+/*
+ * <string.h>/<stdlib.h> names whose real prototype salam's type vocabulary
+ * cannot express, so an `extern func memcpy(dst: void*, src: void*, n: u64)`
+ * in std/mem came out as a declaration both gcc and clang consider
+ * incompatible with the library function they know (const-qualified source
+ * pointer, char** out-parameter, size_t/long widths). The C text wins over
+ * the salam signature for these; every call site still type-checks, because
+ * the differences only ever *add* a qualifier or widen a parameter.
+ *
+ * Only functions whose declaration is warned about are listed. The rest of
+ * the CRT surface std/ declares (memset, strlen, malloc, ...) already matches
+ * and is emitted from its salam signature as before. Returns NULL for
+ * anything not in the table.
+ */
+static const char *libc_canonical_proto(const char *name)
+{
+    static const struct {
+        const char *name;
+        const char *proto;
+    } protos[] = {
+        {"memcpy", "extern void* memcpy(void* dst, const void* src, size_t n)"},
+        {"memmove", "extern void* memmove(void* dst, const void* src, size_t n)"},
+        {"strstr", "extern char* strstr(const char* haystack, const char* needle)"},
+        {"strtol", "extern long strtol(const char* s, char** endptr, int base)"},
+        {"strtod", "extern double strtod(const char* s, char** endptr)"},
+        /*
+         * Everything taking or returning a size. Salam spells these `u64`,
+         * which codegen writes as `uint64_t` - the same type as size_t on
+         * LP64 Linux, so gcc never objected, but a DIFFERENT type on macOS
+         * where size_t is `unsigned long` and uint64_t is `unsigned long
+         * long`. clang then rejects the second declaration outright:
+         *
+         *   error: conflicting types for 'strlen'
+         *   extern uint64_t strlen(const char* s);
+         *   note: previous declaration is here
+         *   extern size_t strlen(const char* s);
+         *
+         * (the prelude's own, correct, one). That killed the stage 2 build.
+         * memset's `int` matters for the same reason - `int32_t` is not
+         * spelled `int` everywhere - and clang reports it as an
+         * incompatible-library-redeclaration of a builtin.
+         */
+        {"strlen", "extern size_t strlen(const char* s)"},
+        {"malloc", "extern void* malloc(size_t size)"},
+        {"calloc", "extern void* calloc(size_t n, size_t size)"},
+        {"realloc", "extern void* realloc(void* ptr, size_t size)"},
+        {"memset", "extern void* memset(void* ptr, int value, size_t n)"},
+        {"memcmp", "extern int memcmp(const void* a, const void* b, size_t n)"},
+    };
+    size_t i = 0;
+    for (; i < sizeof(protos) / sizeof(protos[0]); i++)
+        if (strcmp(name, protos[i].name) == 0) return protos[i].proto;
+    return NULL;
+}
+
+/*
  * The gcc/clang-only half of the collision set: names that only *their*
  * <windows.h> reaches, via <stdlib.h> and winsock. Guarded by
  * SALAM_EXTERN_WIDE_LIBC_ON_WIN32, which tcc never defines, so tcc keeps
@@ -933,12 +1053,15 @@ static void hdr_externs(cg_t *cg, ast_node_t *program, sb_t *h)
                 func_sig_t *sig = sig_of_decl(fsym, d);
                 if (!sig) continue;
                 if (is_libm_name(d->name)) continue;
+                if (is_stdio_name(d->name)) continue;
+                const char *canonical = libc_canonical_proto(d->name);
                 const char *guard =
                     is_wellknown_libc_name(d->name) ? "SALAM_EXTERN_LIBC_ON_WIN32"
                     : is_wide_libc_name(d->name)    ? "SALAM_EXTERN_WIDE_LIBC_ON_WIN32"
                                                     : NULL;
                 if (guard) sb_puts(h, cg_fmt(cg, "#ifndef %s\n", guard));
-                sb_puts(h, cg_fmt(cg, "%s;\n", cg_extern_proto(cg, d, sig)));
+                sb_puts(h, cg_fmt(cg, "%s;\n",
+                                  canonical ? canonical : cg_extern_proto(cg, d, sig)));
                 if (guard) sb_puts(h, "#endif\n");
             } else if (d->kind == AST_VAR_DECL) {
                 const char *ts = d->type_str ? d->type_str : "int32_t";
@@ -963,7 +1086,11 @@ static void hdr_globals(cg_t *cg, ast_node_t *program, sb_t *h)
             bool is_array = ts && strchr(ts, '[');
             bool can_defer =
                 d->kind == AST_VAR_DECL && d->a && d->a->kind != AST_LITERAL && !is_array;
-            bool want_const = !can_defer && (d->kind == AST_CONST_DECL || !d->is_mut);
+            /* !is_array matches emit_globals in codegen.c - see the comment
+               there for why an array global cannot carry the qualifier. The
+               two must agree or the extern and the definition conflict. */
+            bool want_const =
+                !can_defer && !is_array && (d->kind == AST_CONST_DECL || !d->is_mut);
             bool gct_const = want_const && (strncmp(cg_ctype(cg, ts), "const ", 6) == 0);
             const char *pfx = (want_const && !gct_const) ? "const " : "";
             sb_puts(h, cg_fmt(cg, "extern %s%s;\n", pfx, decl));

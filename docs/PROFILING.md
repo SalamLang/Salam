@@ -28,7 +28,7 @@ Shipped files, §1 and Part A:
 - `std/time/{time.salam,hires.salam}` - `_mono_ns` + the `Mono*`/`Since*` API
 - `std/debug/debug.salam` - `StartTimer`/`StopTimer` moved onto that clock
 - `tests/en/stdlib/mono_clock_demo.{salam,out}` - 11 assertions
-- `c/tools/bash/run-tests.sh` - new `timereport` section (3 checks)
+- `tools/bash/run-tests.sh` - new `timereport` section (3 checks)
 
 Sections 3 and 4 below remain the design for the work that has not landed.
 Section 8 records what the implementation of §1/Part A changed relative to the
@@ -485,7 +485,7 @@ Wiring differences that follow from how `compiler/` is written:
 
 **Parity test.** `tests/en/features/time_report.salam` is not the right shape
 here because the output is timing-dependent. Instead add a shell check to
-`c/tools/bash/run-tests.sh` in a new `selfprof` section that runs both binaries
+`tools/bash/run-tests.sh` in a new `selfprof` section that runs both binaries
 with `--time-report=json`, parses the JSON, and asserts:
 
 1. exit code 0,
@@ -1209,7 +1209,7 @@ noise-aware to be useful.
 ```json
 {
   "schema": "salam.bench.v1",
-  "salam_version": "0.2.8",
+  "salam_version": "0.2.9",
   "backend": "c",
   "cc": "gcc",
   "flags": "-O2",
@@ -1288,7 +1288,7 @@ the reference doc and any examples must use that form.
 
 ### 5.3 Tests
 
-New section `bench` in `c/tools/bash/run-tests.sh` (modelled on the `opencv`
+New section `bench` in `tools/bash/run-tests.sh` (modelled on the `opencv`
 section at line 563, which degrades to SKIP when a dependency is missing):
 
 | Test                                                       | Asserts                                                                                                                                         |
@@ -1466,10 +1466,10 @@ make -C c CC=gcc
 salam build --stdlib-path=./std -o salamx.exe compiler/main.salam
 
 # the three timereport checks, including C-vs-Salam parity
-SALAM=./salam SALAM_SELFHOST=./salamx.exe sh c/tools/bash/run-tests.sh timereport
+SALAM=./salam SALAM_SELFHOST=./salamx.exe sh tools/bash/run-tests.sh timereport
 
 # the clock assertions
-SALAM=./salam sh c/tools/bash/run-tests.sh stdlib
+SALAM=./salam sh tools/bash/run-tests.sh stdlib
 ```
 
 `timereport/parity` **skips** rather than fails when `SALAM_SELFHOST` is unset,

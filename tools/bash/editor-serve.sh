@@ -1,11 +1,11 @@
 #!/bin/sh
-# Serve the playground (../editor/, relative to the repo's compiler/ dir).
+# Serve the playground (editor/, relative to the repo's compiler/ dir).
 
 set -eu
 . "$(dirname "$0")/lib.sh"
 PORT="${1:-3000}"
 
-EDITOR_DIR=../editor
+EDITOR_DIR=editor
 
 if [ ! -f "$EDITOR_DIR/salam-wa.js" ]; then
     echo "note: $EDITOR_DIR/salam-wa.js is missing the editor loads but the compiler" >&2

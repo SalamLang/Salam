@@ -62,14 +62,18 @@ else
     SUITES=$(grep -vE '^[[:space:]]*(#|$)' "$BUDGET_FILE" | awk '{ print $1 }')
 fi
 
-# run-tests.sh resolves the corpus as ../tests and expects to be run from c/.
+# run-tests.sh lives at tools/bash/ and anchors itself on the repository root
+# (it reaches the corpus as tests/...), so it is invoked by full path from
+# wherever this script happens to be. It used to be run as a c/-relative path
+# from inside c/, which stopped resolving when tools/ moved up out of c/ and
+# left every parity job dying on "sh: 0: cannot open tools/bash/run-tests.sh".
 run_suite() {
     # $1 = salam binary, $2 = suite. Echoes "<passed> <failed>".
     log="$WORK/$(basename "$1").$2.log"
     (
-        cd "$ROOT/c" || exit 1
+        cd "$ROOT" || exit 1
         SALAM="$1" SALAM_STD="$ROOT/std" \
-            sh tools/bash/run-tests.sh "$2" >"$log" 2>&1 || true
+            sh "$ROOT/tools/bash/run-tests.sh" "$2" >"$log" 2>&1 || true
     )
     # A missing/garbled RESULT line means the run died before summarising -
     # treat it as a hard error rather than silently scoring it 0 0 (which

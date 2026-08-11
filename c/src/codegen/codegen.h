@@ -40,4 +40,17 @@ codegen_output_t *codegen_run(arena_t *a, logger_t *log, ast_node_t *program,
 
 bool salam_module_single_threaded(ast_node_t *program);
 
+/*
+ * --export=Fn:CName. Registers that free (non-method) top-level func `fn`,
+ * as defined in package `pkg`, keeps the literal C name `cname` instead of
+ * the mangled one. The driver calls this while scanning the entry file's own
+ * AST, once it knows that file's package - see cg_mangle_in.
+ *
+ * Strings are borrowed and must outlive codegen; argv slices and build-arena
+ * pointers both qualify. Call cg_reset_export_overrides between builds in a
+ * process that runs more than one.
+ */
+void cg_add_export_override(const char *pkg, const char *fn, const char *cname);
+void cg_reset_export_overrides(void);
+
 #endif /* SALAM_CODEGEN_CODEGEN_H */

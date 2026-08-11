@@ -130,11 +130,43 @@ ifeq ($(WITH_LLVM),1)
     ifeq ($(IS_WINDOWS),1)
       LDFLAGS += -static -static-libgcc -static-libstdc++
     endif
+    # Linux got neither of these, so `ldd` on a LLVM_LINK_STATIC=1 build named
+    # libstdc++.so.6, libgcc_s.so.1, libz.so.1, libzstd.so.1 and libxml2.so.2
+    # (which drags libicuuc, libicudata and liblzma in behind it) - eight
+    # shared objects a user of a "self-contained" compiler should never have
+    # to install. LLVM and LLD are C++, so the C++ runtime is not optional
+    # here; folding it in is what makes the binary portable across distros
+    # with different libstdc++ ABIs.
+    #
+    # Deliberately not plain -static: a fully static glibc binary silently
+    # loses NSS (getaddrinfo, getpwnam) at runtime, which std/net and
+    # std/os/user need. libc stays dynamic - it is on every target machine by
+    # definition - and only the extras are folded in.
+    ifneq ($(IS_WINDOWS)$(IS_MACOS),1)
+      LDFLAGS += -static-libgcc -static-libstdc++
+    endif
   else
     LLVM_STATIC_FLAG :=
   endif
   CPPFLAGS += -DSALAM_HAVE_LLVM -I$(shell $(LLVM_CONFIG) --includedir) \
               -DSALAM_LLVM_VERSION_MAJOR=$(shell $(LLVM_CONFIG) --version | cut -d. -f1)
+  # Homebrew ships lld as its own formula with its own prefix, so lld's
+  # headers are NOT under `llvm-config --includedir` the way they are in the
+  # apt.llvm.org packages. lld_link.cc includes <lld/Common/Driver.h>, so on
+  # macOS the C++ shim failed with "file not found" and libsalam-llvm died -
+  # which, while that failure was only a ::warning::, is why every macOS
+  # stage2 quietly shipped on the C backend instead of LLVM. Added only when
+  # the prefix resolves, so a machine without the formula is unaffected.
+  ifeq ($(WITH_LLD),1)
+    BREW_LLD_PREFIX := $(shell brew --prefix lld 2>/dev/null)
+    ifneq (,$(wildcard $(BREW_LLD_PREFIX)/include/lld/Common/Driver.h))
+      CPPFLAGS += -I$(BREW_LLD_PREFIX)/include
+      # The archives live beside the headers in that same keg, and
+      # `llvm-config --ldflags` only ever points at llvm's own libdir, so
+      # -llldCommon would not resolve either.
+      LDFLAGS  += -L$(BREW_LLD_PREFIX)/lib
+    endif
+  endif
   LDFLAGS  += $(shell $(LLVM_CONFIG) $(LLVM_STATIC_FLAG) --ldflags)
   # z3 is dropped everywhere: Homebrew (and several Linux distros) build
   # their llvm package with LLVM_ENABLE_Z3_SOLVER=ON, so llvm-config reports
@@ -170,6 +202,41 @@ ifeq ($(WITH_LLVM),1)
       LLVM_SYSTEM_LIBS := $(shell printf '%s' "$(LLVM_SYSTEM_LIBS)" \
           | tr ' ' '\n' | grep -viE 'zstd' | tr '\n' ' ') $(MACOS_ZSTD_A)
     endif
+  endif
+  # Same idea on Linux, where llvm-config's -lz/-lzstd resolve to the shared
+  # objects and put libz.so.1/libzstd.so.1 in the released binary's ldd. Each
+  # is probed separately and left alone when its archive is not installed:
+  # a missing .a should cost portability on that build host, not break the
+  # link. -l: is GNU ld's exact-archive-name syntax, so no path is needed.
+  #
+  # libxml2 is deliberately NOT folded in here. LLVMWindowsManifest really
+  # does call xmlNewDoc (on every host, not just Windows - see std/llvm), but
+  # libxml2.a pulls ICU and lzma behind it, and libicudata.a alone is ~30 MB
+  # of collation tables this compiler never reads. That one stays dynamic
+  # until the WindowsManifest component can be dropped from the link instead.
+  #
+  # Substituted in BOTH places each -l appears, not just here: LLD_LIBS
+  # carries its own hardcoded -lz -lzstd and sits earlier on the command
+  # line, and ld takes the first match, so rewriting only the later copy
+  # changed the link line without changing a single entry in `ldd`.
+  ifeq ($(IS_WINDOWS)$(IS_MACOS),)
+    LINUX_LIBDIR := /usr/lib/$(shell uname -m)-linux-gnu
+    ifneq (,$(wildcard $(LINUX_LIBDIR)/libz.a))
+      LLD_LIBS := $(patsubst -lz,-l:libz.a,$(LLD_LIBS))
+      LLVM_SYSTEM_LIBS := $(shell printf '%s' "$(LLVM_SYSTEM_LIBS)" \
+          | tr ' ' '\n' | grep -vxE '\-lz' | tr '\n' ' ') -l:libz.a
+    endif
+    ifneq (,$(wildcard $(LINUX_LIBDIR)/libzstd.a))
+      LLD_LIBS := $(patsubst -lzstd,-l:libzstd.a,$(LLD_LIBS))
+      LLVM_SYSTEM_LIBS := $(shell printf '%s' "$(LLVM_SYSTEM_LIBS)" \
+          | tr ' ' '\n' | grep -vxE '\-lzstd' | tr '\n' ' ') -l:libzstd.a
+    endif
+    # -static-libstdc++ only governs the libstdc++ the compiler driver adds
+    # implicitly. This link is driven by cc, not c++, so the C++ runtime is
+    # requested explicitly through LLVM_CXXLIB - and an explicit -lstdc++
+    # resolves to the shared object regardless of the flag, which is why
+    # libstdc++.so.6 stayed in ldd. Name the archive instead.
+    LLVM_CXXLIB := $(if $(wildcard $(shell $(CC) -print-file-name=libstdc++.a)),-l:libstdc++.a,-lstdc++)
   endif
   # `llvm-config --libs all` can advertise Polly on an installation that
   # does not ship libPolly.a, because distributions split it into a separate
@@ -258,6 +325,28 @@ $(eval $(call embed_musl_arch,aarch64,AARCH64))
 $(eval $(call embed_musl_arch,i686,I686))
 $(eval $(call embed_musl_arch,arm,ARM))
 
+# The same, for mingw. SALAM_EMBED_MINGW_DIR above is the x86_64 slot (its
+# name predates there being more than one); this adds the others. Without an
+# i686 slot, 32-bit Windows was the one target with no embedded sysroot from
+# any host - `--target=i686-w64-windows-gnu` had to find a mingw32 install on
+# the user's machine, while every other target linked from what the compiler
+# carries. sema.c's mingw_sysroot_subdir already maps the triple to
+# i686-w64-mingw32, so only the staging and embedding were missing.
+define embed_mingw_arch
+SALAM_EMBED_MINGW_$(2)_DIR ?=
+ifneq ($$(SALAM_EMBED_MINGW_$(2)_DIR),)
+  CPPFLAGS   += -DSALAM_HAVE_EMBED_MINGW_$(2)
+  EMBED_OBJS += $$(BUILD_DIR)/embed/mingw_$(1).o
+endif
+$$(BUILD_DIR)/embed/mingw_$(1).o:
+	@test -d "$$(SALAM_EMBED_MINGW_$(2)_DIR)" || { echo "SALAM_EMBED_MINGW_$(2)_DIR='$$(SALAM_EMBED_MINGW_$(2)_DIR)' is not a directory"; exit 1; }
+	@mkdir -p $$(BUILD_DIR)/embed
+	tar cf $$(BUILD_DIR)/embed/mingw_$(1).tar -C "$$(SALAM_EMBED_MINGW_$(2)_DIR)" .
+	printf '.section .rodata\n.global salam_embed_mingw_$(1)\nsalam_embed_mingw_$(1):\n.incbin "%s"\n.global salam_embed_mingw_$(1)_end\nsalam_embed_mingw_$(1)_end:\n' "$$(BUILD_DIR)/embed/mingw_$(1).tar" > $$(BUILD_DIR)/embed/mingw_$(1).S
+	$$(CC) -c $$(BUILD_DIR)/embed/mingw_$(1).S -o $$@
+endef
+$(eval $(call embed_mingw_arch,i686,I686))
+
 # Static builds of third-party libraries (sqlite3, openssl, hiredis,
 # mariadb-client) for a given --target= triple, embedded independently of
 # the musl/mingw crt+libc sysroots above: not every target's crt/libc
@@ -317,6 +406,7 @@ $(BUILD_DIR)/llvm/win_lld_demangle_shim.o: src/llvm/win_lld_demangle_shim.S
 all: $(OUTBIN)
 
 $(OUTBIN): $(OBJS) $(CXXOBJS) $(EMBED_OBJS) $(MAIN_OBJ)
+	@mkdir -p $(OUTDIR)
 	$(CC) $(LDFLAGS) $(EXTRA_LDFLAGS) -o $@ $^ $(LDLIBS) $(EXTRA_LDLIBS)
 
 $(BUILD_DIR)/embed/musl.o:
@@ -381,6 +471,22 @@ LLVM_MERGE_SHIMS = $(BUILD_DIR)/llvm/llvm_native.o $(BUILD_DIR)/llvm/orc_call.o 
 LLVM_MERGE_DIR  = $(BUILD_DIR)/merge
 SALAM_LLVM_A    = $(OUTDIR)/libsalam_llvm.a
 
+#
+# The archive merge is driven by an MRI script (`ar -M`), which is a GNU
+# binutils extension. macOS ships BSD ar, which has no -M at all and answers
+# with its usage text, so libsalam-llvm could never succeed there - and while
+# that failure was only a ::warning::, that is why every macOS stage2 fell
+# back to the C backend.
+#
+# llvm-ar reads the same MRI script and ships inside the very LLVM
+# installation this target already requires, so it is preferred on every
+# host rather than special-casing macOS. The plain `ar` fallback keeps a
+# GNU host working if the LLVM package somehow omits it.
+#
+LLVM_BINDIR := $(shell $(LLVM_CONFIG) --bindir 2>/dev/null)
+AR_MRI      := $(firstword $(wildcard $(LLVM_BINDIR)/llvm-ar) \
+                           $(shell command -v llvm-ar 2>/dev/null) ar)
+
 .PHONY: libsalam-llvm
 libsalam-llvm: $(LLVM_MERGE_SHIMS)
 	@test "$(WITH_LLVM)$(WITH_LLD)" = "11" \
@@ -401,16 +507,16 @@ libsalam-llvm: $(LLVM_MERGE_SHIMS)
 	 echo "end"   >> $(LLVM_MERGE_DIR)/mri; \
 	 echo "merging $$n LLVM/lld archives + salam shims -> $(SALAM_LLVM_A)"; \
 	 rm -f $(SALAM_LLVM_A); \
-	 ar -M < $(LLVM_MERGE_DIR)/mri
+	 $(AR_MRI) -M < $(LLVM_MERGE_DIR)/mri
 	@echo "Built $(SALAM_LLVM_A)"
 	@echo "  std/llvm then links with: link static \"salam_llvm\""
-	@echo "  plus system libs: $$($(LLVM_CONFIG) --link-static --system-libs 2>/dev/null) -lstdc++"
+	@echo "  plus system libs: $(LLVM_SYSTEM_LIBS) $(LLVM_CXXLIB)"
 
 test: $(OUTBIN)
-	SALAM=$(OUTBIN) sh tools/bash/run-tests.sh
+	SALAM=$(abspath $(OUTBIN)) sh ../tools/bash/run-tests.sh
 
 dist: all
-	sh tools/bash/build-release.sh
+	sh ../tools/bash/build-release.sh
 
 STAGE_DIR  ?= $(BUILD_DIR)/sysroots
 MUSL_ARCH  ?= x86_64
@@ -427,6 +533,17 @@ MINGW_SR   := $(STAGE_DIR)/$(MINGW_ARCH)-w64-mingw32
 MINGW_LIBDIRS := /usr/$(MINGW_ARCH)-w64-mingw32/lib \
                  /mingw64/lib /clang64/lib /ucrt64/lib \
                  /c/msys64/mingw64/lib
+
+# The 32-bit Windows counterpart. Debian's mingw-w64 package ships both
+# arches, and MSYS2 keeps i686 in its own /mingw32 prefix.
+MINGW32_ARCH   := i686
+MINGW32_SR     := $(STAGE_DIR)/$(MINGW32_ARCH)-w64-mingw32
+MINGW32_LIBDIRS := /usr/$(MINGW32_ARCH)-w64-mingw32/lib \
+                   /mingw32/lib /c/msys64/mingw32/lib
+MINGW32_GCCDIRS := $(wildcard /usr/lib/gcc/$(MINGW32_ARCH)-w64-mingw32/*win32) \
+                   $(wildcard /usr/lib/gcc/$(MINGW32_ARCH)-w64-mingw32/*) \
+                   $(wildcard /mingw32/lib/gcc/$(MINGW32_ARCH)-w64-mingw32/*) \
+                   $(wildcard /c/msys64/mingw32/lib/gcc/$(MINGW32_ARCH)-w64-mingw32/*)
 MINGW_GCCDIRS := $(wildcard /usr/lib/gcc/$(MINGW_ARCH)-w64-mingw32/*win32) \
                  $(wildcard /usr/lib/gcc/$(MINGW_ARCH)-w64-mingw32/*) \
                  $(wildcard /mingw64/lib/gcc/$(MINGW_ARCH)-w64-mingw32/*) \
@@ -472,6 +589,24 @@ stage-sysroots:
 	   cp "$$G/crtbegin.o" "$$G/crtend.o" "$$G/libgcc.a" "$$G/libgcc_eh.a" "$(MINGW_SR)/lib/"; \
 	   echo "  mingw -> $(MINGW_SR) (from $$SRC)"; \
 	 fi
+	@mkdir -p "$(MINGW32_SR)/lib"
+	@SRC=""; for d in $(MINGW32_LIBDIRS); do \
+	   if [ -f "$$d/crt2.o" ]; then SRC="$$d"; break; fi; \
+	 done; \
+	 if [ -z "$$SRC" ]; then \
+	   echo "  (mingw i686 not found - skipped; 'apt install mingw-w64' ships both, or MSYS2 mingw-w64-i686-gcc)"; \
+	   rm -rf "$(MINGW32_SR)"; \
+	 else \
+	   for x in crt2.o dllcrt2.o libmingw32.a libmingwex.a libmoldname.a libmsvcrt.a \
+	            libadvapi32.a libshell32.a libuser32.a libkernel32.a; do \
+	     cp "$$SRC/$$x" "$(MINGW32_SR)/lib/" || { echo "  ! incomplete mingw i686 sysroot in $$SRC ($$x)"; exit 1; }; \
+	   done; \
+	   for x in $(MINGW_EXTRA_LIBS); do cp "$$SRC/$$x" "$(MINGW32_SR)/lib/" 2>/dev/null || true; done; \
+	   G=""; for g in $(MINGW32_GCCDIRS); do if [ -f "$$g/crtbegin.o" ]; then G="$$g"; break; fi; done; \
+	   test -n "$$G" || { echo "  ! gcc-mingw i686 runtime (crtbegin.o/libgcc.a) not found"; exit 1; }; \
+	   cp "$$G/crtbegin.o" "$$G/crtend.o" "$$G/libgcc.a" "$$G/libgcc_eh.a" "$(MINGW32_SR)/lib/"; \
+	   echo "  mingw32 -> $(MINGW32_SR) (from $$SRC)"; \
+	 fi
 
 # Only pass an embed directory that stage-sysroots actually produced -
 # naming a missing one makes the embed rule fail the whole build, which
@@ -482,6 +617,7 @@ self-contained: stage-sysroots
 	@EMB=""; \
 	 test -f "$(MUSL_SR)/crt1.o"     && EMB="$$EMB SALAM_EMBED_MUSL_DIR=$(MUSL_SR)"; \
 	 test -f "$(MINGW_SR)/lib/crt2.o" && EMB="$$EMB SALAM_EMBED_MINGW_DIR=$(MINGW_SR)"; \
+	 test -f "$(MINGW32_SR)/lib/crt2.o" && EMB="$$EMB SALAM_EMBED_MINGW_I686_DIR=$(MINGW32_SR)"; \
 	 echo "  embedding:$${EMB:- (none - host-only build)}"; \
 	 $(MAKE) WITH_LLVM=1 WITH_LLD=1 LLVM_LINK_STATIC=1 $$EMB \
 	         LLVM_CONFIG="$(LLVM_CONFIG)" CXX="$(CXX)" CC="$(CC)"

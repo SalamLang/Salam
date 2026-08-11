@@ -160,6 +160,42 @@ func cg_extern_proto(s &: sm.Sema, a &: at.Ast, fnid: int, sigid: int): str:
     ret r
 end
 
+// Closes a non-void function whose body does not end in `ret` - one ending in
+// an if/else chain, a match, or a loop that returns from inside it. C calls
+// falling off such a function undefined behaviour, and clang says so
+// (-Wreturn-type: "does not return a value in all control paths"), so a zero
+// of the return type is returned instead. `= {0}` covers scalars, pointers and
+// structs alike where `(T)0` would not compile for the last of those.
+//
+// sret functions return void in C - the value goes through the `__ret` out-
+// parameter - and need nothing here, and neither does a body already ending in
+// a return.
+func cg_fallthrough_ret(g &: Cg, s &: sm.Sema, a &: at.Ast, fnid: int, sig: int):
+    if g.cur_sret || sm.TypeAt(s, sm.SigAt(s, sig).ret_type).kind == sm.TY_VOID:
+        ret
+    end
+    fn := at.Get(a, fnid)
+    // A `noret` function carries SALAM_NORET, and returning from one of those
+    // is its own diagnostic on gcc and clang. Falling off its end is the point.
+    if fn.is_noret:
+        ret
+    end
+    if fn.a != 0:
+        body := at.Get(a, fn.a)
+        if body.list.len() > 0:
+            last := at.Get(a, body.list.get(body.list.len() - 1)[0])
+            if last.kind == at.AST_RETURN:
+                ret
+            end
+        end
+    end
+    g.tmpn += 1
+    t := g.tmpn
+    ct := cg_ctype(sm.ToString(s, sm.SigAt(s, sig).ret_type))
+    cg_line(g, ct + " __fret" + t + " = {0};")
+    cg_line(g, "return __fret" + t + ";")
+end
+
 func cg_function(g &: Cg, s &: sm.Sema, a &: at.Ast, fnid: int, owner: int):
     fn := at.Get(a, fnid)
     mut fsym := 0
@@ -225,6 +261,8 @@ func cg_function(g &: Cg, s &: sm.Sema, a &: at.Ast, fnid: int, owner: int):
     cg_emit_defers(g, s, a)
     if is_main && sm.TypeAt(s, sm.SigAt(s, sig).ret_type).kind == sm.TY_VOID:
         cg_line(g, "return 0;")
+    else !is_main:
+        cg_fallthrough_ret(g, s, a, fnid, sig)
     end
     g.indent -= 1
     cg_line(g, "}")

@@ -150,6 +150,23 @@ ifeq ($(WITH_LLVM),1)
   endif
   CPPFLAGS += -DSALAM_HAVE_LLVM -I$(shell $(LLVM_CONFIG) --includedir) \
               -DSALAM_LLVM_VERSION_MAJOR=$(shell $(LLVM_CONFIG) --version | cut -d. -f1)
+  # Homebrew ships lld as its own formula with its own prefix, so lld's
+  # headers are NOT under `llvm-config --includedir` the way they are in the
+  # apt.llvm.org packages. lld_link.cc includes <lld/Common/Driver.h>, so on
+  # macOS the C++ shim failed with "file not found" and libsalam-llvm died -
+  # which, while that failure was only a ::warning::, is why every macOS
+  # stage2 quietly shipped on the C backend instead of LLVM. Added only when
+  # the prefix resolves, so a machine without the formula is unaffected.
+  ifeq ($(WITH_LLD),1)
+    BREW_LLD_PREFIX := $(shell brew --prefix lld 2>/dev/null)
+    ifneq (,$(wildcard $(BREW_LLD_PREFIX)/include/lld/Common/Driver.h))
+      CPPFLAGS += -I$(BREW_LLD_PREFIX)/include
+      # The archives live beside the headers in that same keg, and
+      # `llvm-config --ldflags` only ever points at llvm's own libdir, so
+      # -llldCommon would not resolve either.
+      LDFLAGS  += -L$(BREW_LLD_PREFIX)/lib
+    endif
+  endif
   LDFLAGS  += $(shell $(LLVM_CONFIG) $(LLVM_STATIC_FLAG) --ldflags)
   # z3 is dropped everywhere: Homebrew (and several Linux distros) build
   # their llvm package with LLVM_ENABLE_Z3_SOLVER=ON, so llvm-config reports
@@ -307,6 +324,28 @@ endef
 $(eval $(call embed_musl_arch,aarch64,AARCH64))
 $(eval $(call embed_musl_arch,i686,I686))
 $(eval $(call embed_musl_arch,arm,ARM))
+
+# The same, for mingw. SALAM_EMBED_MINGW_DIR above is the x86_64 slot (its
+# name predates there being more than one); this adds the others. Without an
+# i686 slot, 32-bit Windows was the one target with no embedded sysroot from
+# any host - `--target=i686-w64-windows-gnu` had to find a mingw32 install on
+# the user's machine, while every other target linked from what the compiler
+# carries. sema.c's mingw_sysroot_subdir already maps the triple to
+# i686-w64-mingw32, so only the staging and embedding were missing.
+define embed_mingw_arch
+SALAM_EMBED_MINGW_$(2)_DIR ?=
+ifneq ($$(SALAM_EMBED_MINGW_$(2)_DIR),)
+  CPPFLAGS   += -DSALAM_HAVE_EMBED_MINGW_$(2)
+  EMBED_OBJS += $$(BUILD_DIR)/embed/mingw_$(1).o
+endif
+$$(BUILD_DIR)/embed/mingw_$(1).o:
+	@test -d "$$(SALAM_EMBED_MINGW_$(2)_DIR)" || { echo "SALAM_EMBED_MINGW_$(2)_DIR='$$(SALAM_EMBED_MINGW_$(2)_DIR)' is not a directory"; exit 1; }
+	@mkdir -p $$(BUILD_DIR)/embed
+	tar cf $$(BUILD_DIR)/embed/mingw_$(1).tar -C "$$(SALAM_EMBED_MINGW_$(2)_DIR)" .
+	printf '.section .rodata\n.global salam_embed_mingw_$(1)\nsalam_embed_mingw_$(1):\n.incbin "%s"\n.global salam_embed_mingw_$(1)_end\nsalam_embed_mingw_$(1)_end:\n' "$$(BUILD_DIR)/embed/mingw_$(1).tar" > $$(BUILD_DIR)/embed/mingw_$(1).S
+	$$(CC) -c $$(BUILD_DIR)/embed/mingw_$(1).S -o $$@
+endef
+$(eval $(call embed_mingw_arch,i686,I686))
 
 # Static builds of third-party libraries (sqlite3, openssl, hiredis,
 # mariadb-client) for a given --target= triple, embedded independently of
@@ -477,6 +516,17 @@ MINGW_SR   := $(STAGE_DIR)/$(MINGW_ARCH)-w64-mingw32
 MINGW_LIBDIRS := /usr/$(MINGW_ARCH)-w64-mingw32/lib \
                  /mingw64/lib /clang64/lib /ucrt64/lib \
                  /c/msys64/mingw64/lib
+
+# The 32-bit Windows counterpart. Debian's mingw-w64 package ships both
+# arches, and MSYS2 keeps i686 in its own /mingw32 prefix.
+MINGW32_ARCH   := i686
+MINGW32_SR     := $(STAGE_DIR)/$(MINGW32_ARCH)-w64-mingw32
+MINGW32_LIBDIRS := /usr/$(MINGW32_ARCH)-w64-mingw32/lib \
+                   /mingw32/lib /c/msys64/mingw32/lib
+MINGW32_GCCDIRS := $(wildcard /usr/lib/gcc/$(MINGW32_ARCH)-w64-mingw32/*win32) \
+                   $(wildcard /usr/lib/gcc/$(MINGW32_ARCH)-w64-mingw32/*) \
+                   $(wildcard /mingw32/lib/gcc/$(MINGW32_ARCH)-w64-mingw32/*) \
+                   $(wildcard /c/msys64/mingw32/lib/gcc/$(MINGW32_ARCH)-w64-mingw32/*)
 MINGW_GCCDIRS := $(wildcard /usr/lib/gcc/$(MINGW_ARCH)-w64-mingw32/*win32) \
                  $(wildcard /usr/lib/gcc/$(MINGW_ARCH)-w64-mingw32/*) \
                  $(wildcard /mingw64/lib/gcc/$(MINGW_ARCH)-w64-mingw32/*) \
@@ -522,6 +572,24 @@ stage-sysroots:
 	   cp "$$G/crtbegin.o" "$$G/crtend.o" "$$G/libgcc.a" "$$G/libgcc_eh.a" "$(MINGW_SR)/lib/"; \
 	   echo "  mingw -> $(MINGW_SR) (from $$SRC)"; \
 	 fi
+	@mkdir -p "$(MINGW32_SR)/lib"
+	@SRC=""; for d in $(MINGW32_LIBDIRS); do \
+	   if [ -f "$$d/crt2.o" ]; then SRC="$$d"; break; fi; \
+	 done; \
+	 if [ -z "$$SRC" ]; then \
+	   echo "  (mingw i686 not found - skipped; 'apt install mingw-w64' ships both, or MSYS2 mingw-w64-i686-gcc)"; \
+	   rm -rf "$(MINGW32_SR)"; \
+	 else \
+	   for x in crt2.o dllcrt2.o libmingw32.a libmingwex.a libmoldname.a libmsvcrt.a \
+	            libadvapi32.a libshell32.a libuser32.a libkernel32.a; do \
+	     cp "$$SRC/$$x" "$(MINGW32_SR)/lib/" || { echo "  ! incomplete mingw i686 sysroot in $$SRC ($$x)"; exit 1; }; \
+	   done; \
+	   for x in $(MINGW_EXTRA_LIBS); do cp "$$SRC/$$x" "$(MINGW32_SR)/lib/" 2>/dev/null || true; done; \
+	   G=""; for g in $(MINGW32_GCCDIRS); do if [ -f "$$g/crtbegin.o" ]; then G="$$g"; break; fi; done; \
+	   test -n "$$G" || { echo "  ! gcc-mingw i686 runtime (crtbegin.o/libgcc.a) not found"; exit 1; }; \
+	   cp "$$G/crtbegin.o" "$$G/crtend.o" "$$G/libgcc.a" "$$G/libgcc_eh.a" "$(MINGW32_SR)/lib/"; \
+	   echo "  mingw32 -> $(MINGW32_SR) (from $$SRC)"; \
+	 fi
 
 # Only pass an embed directory that stage-sysroots actually produced -
 # naming a missing one makes the embed rule fail the whole build, which
@@ -532,6 +600,7 @@ self-contained: stage-sysroots
 	@EMB=""; \
 	 test -f "$(MUSL_SR)/crt1.o"     && EMB="$$EMB SALAM_EMBED_MUSL_DIR=$(MUSL_SR)"; \
 	 test -f "$(MINGW_SR)/lib/crt2.o" && EMB="$$EMB SALAM_EMBED_MINGW_DIR=$(MINGW_SR)"; \
+	 test -f "$(MINGW32_SR)/lib/crt2.o" && EMB="$$EMB SALAM_EMBED_MINGW_I686_DIR=$(MINGW32_SR)"; \
 	 echo "  embedding:$${EMB:- (none - host-only build)}"; \
 	 $(MAKE) WITH_LLVM=1 WITH_LLD=1 LLVM_LINK_STATIC=1 $$EMB \
 	         LLVM_CONFIG="$(LLVM_CONFIG)" CXX="$(CXX)" CC="$(CC)"

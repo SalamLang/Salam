@@ -235,7 +235,8 @@ static const char *cg_match_expr(cg_t *cg, ast_node_t *n)
         size_t i = 0;
         for (; i < n->list.len; i++) {
             ast_node_t *arm = (ast_node_t *)n->list.data[i];
-            const char *cond = cg_match_arm_cond(cg, arm, subj_var, n->a->type_str);
+            const char *cond =
+                cg_unparen(cg, cg_match_arm_cond(cg, arm, subj_var, n->a->type_str));
             if (arm->op == TK_KW_ELSE) has_wildcard = true;
             sb_puts(&b, cg_fmt(cg, "%s if (%s) {\n", i ? "else" : "", cond));
             {

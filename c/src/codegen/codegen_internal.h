@@ -190,6 +190,10 @@ const char *cg_expr(cg_t *cg, ast_node_t *n);
 const char *cg_match_arm_cond(cg_t *cg, ast_node_t *arm, const char *subj_var,
                               const char *subj_ts);
 
+/* Drops the parentheses an expression already wraps itself in, for the
+ * condition slot of an `if`/`while` - see the definition in codegen_stmt.c. */
+const char *cg_unparen(cg_t *cg, const char *s);
+
 void cg_emit_defers(cg_t *cg);
 
 void cg_stmt(cg_t *cg, ast_node_t *n);

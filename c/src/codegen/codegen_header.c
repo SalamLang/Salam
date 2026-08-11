@@ -986,6 +986,29 @@ static const char *libc_canonical_proto(const char *name)
         {"strstr", "extern char* strstr(const char* haystack, const char* needle)"},
         {"strtol", "extern long strtol(const char* s, char** endptr, int base)"},
         {"strtod", "extern double strtod(const char* s, char** endptr)"},
+        /*
+         * Everything taking or returning a size. Salam spells these `u64`,
+         * which codegen writes as `uint64_t` - the same type as size_t on
+         * LP64 Linux, so gcc never objected, but a DIFFERENT type on macOS
+         * where size_t is `unsigned long` and uint64_t is `unsigned long
+         * long`. clang then rejects the second declaration outright:
+         *
+         *   error: conflicting types for 'strlen'
+         *   extern uint64_t strlen(const char* s);
+         *   note: previous declaration is here
+         *   extern size_t strlen(const char* s);
+         *
+         * (the prelude's own, correct, one). That killed the stage 2 build.
+         * memset's `int` matters for the same reason - `int32_t` is not
+         * spelled `int` everywhere - and clang reports it as an
+         * incompatible-library-redeclaration of a builtin.
+         */
+        {"strlen", "extern size_t strlen(const char* s)"},
+        {"malloc", "extern void* malloc(size_t size)"},
+        {"calloc", "extern void* calloc(size_t n, size_t size)"},
+        {"realloc", "extern void* realloc(void* ptr, size_t size)"},
+        {"memset", "extern void* memset(void* ptr, int value, size_t n)"},
+        {"memcmp", "extern int memcmp(const void* a, const void* b, size_t n)"},
     };
     size_t i = 0;
     for (; i < sizeof(protos) / sizeof(protos[0]); i++)

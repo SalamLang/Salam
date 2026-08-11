@@ -406,6 +406,7 @@ $(BUILD_DIR)/llvm/win_lld_demangle_shim.o: src/llvm/win_lld_demangle_shim.S
 all: $(OUTBIN)
 
 $(OUTBIN): $(OBJS) $(CXXOBJS) $(EMBED_OBJS) $(MAIN_OBJ)
+	@mkdir -p $(OUTDIR)
 	$(CC) $(LDFLAGS) $(EXTRA_LDFLAGS) -o $@ $^ $(LDLIBS) $(EXTRA_LDLIBS)
 
 $(BUILD_DIR)/embed/musl.o:

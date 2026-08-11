@@ -47,10 +47,18 @@ static const char *cg_simple_inline(cg_t *cg, ast_node_t *n)
 {
     if (n->kind == AST_VAR_DECL) return cg_vardecl_inline(cg, n);
     if (n->kind == AST_ASSIGN) {
-        if (n->op == TK_POWER_EQ)
-            return cg_fmt(cg, "%s = pow(SALAM_FPARG_D((double)(%s)), (double)(%s))",
-                          cg_expr(cg, n->a), cg_expr(cg, n->a), cg_expr(cg, n->b));
-        return cg_fmt(cg, "%s %s %s", cg_expr(cg, n->a), cg_op(n->op), cg_expr(cg, n->b));
+        if (n->op == TK_POWER_EQ) {
+            const char *dst = cg_expr(cg, n->a);
+            const char *base = cg_expr(cg, n->a);
+            const char *exp = cg_expr(cg, n->b);
+            return cg_fmt(cg, "%s = pow(SALAM_FPARG_D((double)(%s)), (double)(%s))", dst,
+                          base, exp);
+        }
+        {
+            const char *lhs = cg_expr(cg, n->a);
+            const char *rhs = cg_expr(cg, n->b);
+            return cg_fmt(cg, "%s %s %s", lhs, cg_op(n->op), rhs);
+        }
     }
     if (n->kind == AST_EXPR_STMT) return cg_expr(cg, n->a);
     return cg_expr(cg, n);
@@ -145,8 +153,10 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
         }
 
         if (n->op == TK_PLUS_EQ && n->a->type_str && !strcmp(n->a->type_str, "str")) {
-            cg_line(cg, "%s = salam_strcat(%s, %s);", cg_expr(cg, n->a),
-                    cg_expr(cg, n->a), cg_str_operand(cg, n->b));
+            const char *dst = cg_expr(cg, n->a);
+            const char *cur = cg_expr(cg, n->a);
+            const char *add = cg_str_operand(cg, n->b);
+            cg_line(cg, "%s = salam_strcat(%s, %s);", dst, cur, add);
             break;
         }
         if (n->op == TK_POWER_EQ) {
@@ -160,7 +170,11 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
                     ct, t, lhs, t, ct, t, rhs);
             break;
         }
-        cg_line(cg, "%s %s %s;", cg_expr(cg, n->a), cg_op(n->op), cg_expr(cg, n->b));
+        {
+            const char *lhs = cg_expr(cg, n->a);
+            const char *rhs = cg_expr(cg, n->b);
+            cg_line(cg, "%s %s %s;", lhs, cg_op(n->op), rhs);
+        }
         break;
     }
     case AST_EXPR_STMT:

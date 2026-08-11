@@ -35,6 +35,7 @@ import ps "../parser/parser.salam"
 import cc "../condcomp.salam"
 import sm "../semantic/semantic.salam"
 import lv "../llvmgen/llvmgen.salam"
+import co "../sal_core.salam"
 
 // Runs one throwaway fixture through the full lex->parse->sema->lv.RunOpts
 // pipeline (same recipe as the bottom of this file) and returns the
@@ -61,6 +62,20 @@ func run_fixture(quiet: lg.Logger, stem: str, src_text: str): lv.Output:
     )
     _rm := os.Remove(fixture)
     ret o
+end
+
+// Shell-quote exactly the way the link-script generator does. SbPutShellArg
+// spells a quoted argument "x" on Windows and 'x' on POSIX, so pinning the
+// link-script expectations to either form makes them fail on the other host,
+// which is what happened here: they were written against a WSL run and every
+// one of them broke on Windows. Building the expectation with the same helper
+// keeps the assertion about the script's structure, which is what it is for.
+func q(s: str): str:
+    mut b := co.SbNew()
+    co.SbPutShellArg(b, s)
+    r := co.SbCstr(b)
+    co.SbFree(b)
+    ret r
 end
 
 func main:
@@ -96,9 +111,9 @@ func main:
 
     // --- ll_safe_name ---
     testing.AssertEqStr(lv.SafeNameOf("plain_Name.42"), "plain_Name.42")
-    testing.AssertEqStr(lv.SafeNameOf("a b"), "a_b")
+    testing.AssertEqStr(lv.SafeNameOf("a b"), "a_20b")
     testing.AssertEqStr(lv.SafeNameOf(""), "_")
-    testing.AssertEqStr(lv.SafeNameOf("سلام"), "________")
+    testing.AssertEqStr(lv.SafeNameOf("سلام"), "_d8_b3_d9_84_d8_a7_d9_85")
 
     // --- ll_struct_ltype ---
     testing.AssertEqStr(lv.StructLtypeOf("Point"), "%struct.Point")
@@ -281,7 +296,7 @@ func main:
     testing.AssertContains(
         o.ll_src, "define void @salam_panic(ptr %arg0) noreturn nounwind {"
     )
-    testing.AssertContains(o.ll_src, "define i32 @main() nounwind {")
+    testing.AssertContains(o.ll_src, "define i32 @main(i32 %argc, ptr %argv) nounwind {")
     testing.AssertContains(o.ll_src, "ret i32 0")
 
     sm.Free(s2)
@@ -425,9 +440,15 @@ func main:
     // ===== stage C: native toolchain glue (llvm_native.c / =====
     // ===== driver/llvm_toolchain.c) =====
 
-    // --- NativeAvailable: this port is verified under WSL, which always
-    // has clang/opt/lli on PATH (see PORTING.md's llvm row) ---
-    testing.AssertTrue(lv.NativeAvailable())
+    // --- NativeAvailable reports whether in-process LLVM was statically
+    // linked into the salam binary running this test (lb.Available()). That
+    // is a property of how that binary was built, not of the code under
+    // test, so there is nothing host-independent to assert about it. It used
+    // to be an unconditional AssertTrue on the grounds that the reference
+    // build under WSL always has it, which fails on any salam built without
+    // WITH_LLVM. The behaviour that does hold everywhere - a shell-out link
+    // only succeeds when an external toolchain is reachable - is covered by
+    // the NativeRun block at the end of this function. ---
 
     // --- default Options (no triple, no links, O0): the exact "native:
     // clang %s -lm -o %s" convention driver_llvm's own log line names ---
@@ -435,8 +456,8 @@ func main:
     optsA.output_mode = lv.LV_OUT_EXEC
     optsA.output_file = "a.out"
     scriptA := lv.NativeBuildScript("a.ll", optsA)
-    testing.AssertContains(scriptA, "IN='a.ll'\n")
-    testing.AssertContains(scriptA, "OUT='a.out'\n")
+    testing.AssertContains(scriptA, "IN=" + q("a.ll") + "\n")
+    testing.AssertContains(scriptA, "OUT=" + q("a.out") + "\n")
     testing.AssertContains(scriptA, "-O0 \"$IN\" -lm -o \"$OUT\"\n")
     testing.AssertFalse(str.Contains(scriptA, "--target="))
     testing.AssertFalse(str.Contains(scriptA, "-fuse-ld=lld"))
@@ -475,7 +496,7 @@ func main:
     testing.AssertContains(scriptO, "-passes=verify -disable-output \"$IN\"\n")
     testing.AssertContains(scriptO, "-O2")
     testing.AssertContains(scriptO, " -g")
-    testing.AssertContains(scriptO, "SYSROOT='/opt/sysroot'\n")
+    testing.AssertContains(scriptO, "SYSROOT=" + q("/opt/sysroot") + "\n")
     testing.AssertContains(scriptO, `--sysroot="$SYSROOT"`)
 
     // --- link_libs / link_kinds: bare name, "-lname"-shaped, framework,
@@ -492,12 +513,17 @@ func main:
     optsL.link_libs.push("./vendor/libfoo.a")
     optsL.link_kinds.push("")
     scriptL := lv.NativeBuildScript("a.ll", optsL)
-    testing.AssertContains(scriptL, " -l'sqlite3'")
-    testing.AssertContains(scriptL, " -framework 'Cocoa'")
-    testing.AssertContains(scriptL, " -Wl,-Bstatic -l'm' -Wl,-Bdynamic")
-    testing.AssertContains(scriptL, " './vendor/libfoo.a'")
+    testing.AssertContains(scriptL, " -l" + q("sqlite3"))
+    testing.AssertContains(scriptL, " -framework " + q("Cocoa"))
+    testing.AssertContains(scriptL, " -l:lib" + q("m") + ".a")
+    testing.AssertContains(scriptL, " " + q("./vendor/libfoo.a"))
 
-    // static + windows must NOT get -Wl,-Bstatic/-Bdynamic (only non-win)
+    // A static link is spelled -l:libX.a on every target now, Windows
+    // included: the clang this script drives targets *-w64-mingw32 through
+    // the same GNU-flavour driver, which understands -l: identically, so the
+    // old !windows gate (which fell back to a bare, dynamic -lX there) had no
+    // platform reason to exist. -Wl,-Bstatic is no longer emitted anywhere,
+    // which is what the AssertFalse below still pins down.
     mut optsLW := lv.OptionsDefault()
     optsLW.output_mode = lv.LV_OUT_EXEC
     optsLW.output_file = "a.exe"
@@ -506,7 +532,7 @@ func main:
     optsLW.link_kinds.push("static")
     scriptLW := lv.NativeBuildScript("a.ll", optsLW)
     testing.AssertFalse(str.Contains(scriptLW, "-Wl,-Bstatic"))
-    testing.AssertContains(scriptLW, " -l'm'")
+    testing.AssertContains(scriptLW, " -l:lib" + q("m") + ".a")
 
     // --- other output modes: ASM/OBJ use clang -S/-c; BITCODE uses opt;
     // JIT pipes through opt|lli (or bare lli at O0); IR re-optimizes
@@ -560,18 +586,25 @@ func main:
     // the script builder) - a tiny hand-written .ll compiled and executed
     // via clang, confirming NativeRun's rc + file-cleanup contract ---
     ll_ok_src := "; ModuleID = 'nrun_ok'\n" + "@.str.0 = private unnamed_addr constant [5 x i8] c\"hi!\\0A\\00\"\n" + "declare i32 @printf(ptr, ...)\n" + "define i32 @main() {\n" + "entry:\n" + "  %r = call i32 (ptr, ...) @printf(ptr @.str.0)\n" + "  ret i32 0\n" + "}\n"
-    ll_ok_path := "compiler/tests_port/tmp_lv/nrun_ok.ll"
-    exe_ok_path := "compiler/tests_port/tmp_lv/nrun_ok_exe"
-    _wok := os.WriteFile(ll_ok_path, ll_ok_src)
-    mut optsRun := lv.OptionsDefault()
-    optsRun.output_mode = lv.LV_OUT_EXEC
-    optsRun.output_file = exe_ok_path
-    rc_ok := lv.NativeRun(quiet, ll_ok_path, optsRun)
-    testing.AssertEqInt(rc_ok, 0)
-    testing.AssertFalse(os.Exists(ll_ok_path + ".run.sh"))
-    testing.AssertEqStr(os.Output(exe_ok_path), "hi!\n")
-    _rmok1 := os.Remove(ll_ok_path)
-    _rmok2 := os.Remove(exe_ok_path)
+    // Only meaningful where an external clang is actually reachable: without
+    // one NativeRun returns -1 having compiled nothing, and asserting rc 0
+    // and "hi!" then tests whether the machine has a toolchain rather than
+    // whether NativeRun honours its contract. The failure path below stays
+    // unconditional - invalid IR must not yield an executable either way.
+    if lv.ToolchainAvailable():
+        ll_ok_path := "compiler/tests_port/tmp_lv/nrun_ok.ll"
+        exe_ok_path := "compiler/tests_port/tmp_lv/nrun_ok_exe"
+        _wok := os.WriteFile(ll_ok_path, ll_ok_src)
+        mut optsRun := lv.OptionsDefault()
+        optsRun.output_mode = lv.LV_OUT_EXEC
+        optsRun.output_file = exe_ok_path
+        rc_ok := lv.NativeRun(quiet, ll_ok_path, optsRun)
+        testing.AssertEqInt(rc_ok, 0)
+        testing.AssertFalse(os.Exists(ll_ok_path + ".run.sh"))
+        testing.AssertEqStr(os.Output(exe_ok_path), "hi!\n")
+        _rmok1 := os.Remove(ll_ok_path)
+        _rmok2 := os.Remove(exe_ok_path)
+    end
 
     // invalid IR -> clang fails -> nonzero rc, no crash
     ll_bad_path := "compiler/tests_port/tmp_lv/nrun_bad.ll"

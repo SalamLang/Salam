@@ -557,10 +557,12 @@ const char *jsg_emit_op_call(jg_t *g, ast_node_t *lhs, symbol_t *ssym, const cha
             const char *spkg = ssym->pkgname ? ssym->pkgname : cg->pkg;
             const char *fn =
                 jsg_fn_name(g, spkg, ssym->name, mname, m, sig, false, false);
-            if (rhs)
-                return cg_fmt(cg, "%s(%s, %s)", fn, jsg_expr_p(g, lhs, 0),
-                              jsg_expr_p(g, rhs, 0));
-            return cg_fmt(cg, "%s(%s)", fn, jsg_expr_p(g, lhs, 0));
+            const char *l = jsg_expr_p(g, lhs, 0);
+            if (rhs) {
+                const char *r = jsg_expr_p(g, rhs, 0);
+                return cg_fmt(cg, "%s(%s, %s)", fn, l, r);
+            }
+            return cg_fmt(cg, "%s(%s)", fn, l);
         }
     }
 }
@@ -872,10 +874,11 @@ static const char *jsg_call_ident(jg_t *g, ast_node_t *n, ast_node_t *callee)
         }
         return cg_cident(cg, fn->name);
     }
-    if (!strcmp(nm, "callhandler") && n->list.len == 2)
-        return cg_fmt(cg, "%s(%s)",
-                      jsg_expr_p(g, (ast_node_t *)n->list.data[0], JSP_MEMBER),
-                      jsg_expr_p(g, (ast_node_t *)n->list.data[1], 0));
+    if (!strcmp(nm, "callhandler") && n->list.len == 2) {
+        const char *h = jsg_expr_p(g, (ast_node_t *)n->list.data[0], JSP_MEMBER);
+        const char *a = jsg_expr_p(g, (ast_node_t *)n->list.data[1], 0);
+        return cg_fmt(cg, "%s(%s)", h, a);
+    }
     if (!strcmp(nm, "len") && n->list.len == 1) {
         ast_node_t *arg = (ast_node_t *)n->list.data[0];
         long klen = ast_str_lit_len(arg);
@@ -1077,13 +1080,17 @@ const char *jsg_call(jg_t *g, ast_node_t *n)
 {
     ast_node_t *callee = n->a;
     if (callee && callee->type_str && !strncmp(callee->type_str, "func(", 5) &&
-        callee->kind != AST_IDENTIFIER)
-        return cg_fmt(&g->cg, "(%s)(%s)", jsg_expr_p(g, callee, 0),
-                      jsg_call_args(g, n, NULL));
+        callee->kind != AST_IDENTIFIER) {
+        const char *fn = jsg_expr_p(g, callee, 0);
+        const char *as = jsg_call_args(g, n, NULL);
+        return cg_fmt(&g->cg, "(%s)(%s)", fn, as);
+    }
     if (callee && callee->kind == AST_IDENTIFIER && callee->type_str &&
-        !strncmp(callee->type_str, "func(", 5) && local_known(&g->cg, callee->name))
-        return cg_fmt(&g->cg, "%s(%s)", jsg_local_ref(g, callee->name),
-                      jsg_call_args(g, n, NULL));
+        !strncmp(callee->type_str, "func(", 5) && local_known(&g->cg, callee->name)) {
+        const char *fn = jsg_local_ref(g, callee->name);
+        const char *as = jsg_call_args(g, n, NULL);
+        return cg_fmt(&g->cg, "%s(%s)", fn, as);
+    }
     if (callee && callee->kind == AST_IDENTIFIER) return jsg_call_ident(g, n, callee);
     if (callee && callee->kind == AST_MEMBER) return jsg_call_member(g, n, callee);
     return "undefined";
@@ -1497,12 +1504,15 @@ const char *jsg_expr_p(jg_t *g, ast_node_t *n, int minprec)
                 }
             }
         }
-        if (n->op == TK_POWER)
-            return cg_fmt(cg, "Math.pow(%s, %s)", jsg_expr_p(g, n->a, 0),
-                          jsg_expr_p(g, n->b, 0));
+        if (n->op == TK_POWER) {
+            const char *ba = jsg_expr_p(g, n->a, 0);
+            const char *bb = jsg_expr_p(g, n->b, 0);
+            return cg_fmt(cg, "Math.pow(%s, %s)", ba, bb);
+        }
         if (n->op == TK_SLASH && cg_is_int_typestr(n->type_str)) {
-            const char *q = cg_fmt(cg, "Math.trunc(%s / %s)", jsg_expr_p(g, n->a, 13),
-                                   jsg_expr_p(g, n->b, 14));
+            const char *da = jsg_expr_p(g, n->a, 13);
+            const char *db = jsg_expr_p(g, n->b, 14);
+            const char *q = cg_fmt(cg, "Math.trunc(%s / %s)", da, db);
             return jsg_ts_wrappable(n->type_str) ? jsg_wrap_int(g, q, n->type_str) : q;
         }
         if (n->op == TK_PLUS && n->type_str && !strcmp(n->type_str, "str")) {
@@ -1513,8 +1523,9 @@ const char *jsg_expr_p(jg_t *g, ast_node_t *n, int minprec)
             bool a_str = n->a->type_str && !strcmp(n->a->type_str, "str");
             ast_node_t *sop = a_str ? n->a : n->b;
             ast_node_t *nop = a_str ? n->b : n->a;
-            return cg_fmt(cg, "%s.repeat(Math.max(0, %s))",
-                          jsg_expr_p(g, sop, JSP_MEMBER), jsg_expr_p(g, nop, 0));
+            const char *sv = jsg_expr_p(g, sop, JSP_MEMBER);
+            const char *nv = jsg_expr_p(g, nop, 0);
+            return cg_fmt(cg, "%s.repeat(Math.max(0, %s))", sv, nv);
         }
         {
             const char *lts = n->a ? n->a->type_str : NULL;
@@ -1529,32 +1540,32 @@ const char *jsg_expr_p(jg_t *g, ast_node_t *n, int minprec)
                 const char *op = (n->op == TK_SHR && uns) ? ">>>" : jsg_op(n->op);
                 /* A 32x32 product exceeds f64's exact range, so the low 32
                  * bits have to come from Math.imul rather than '*'. */
-                if (n->op == TK_STAR && jsg_int_ts_bits(cts) == 32)
-                    return jsg_wrap_int(g,
-                                        cg_fmt(cg, "Math.imul(%s, %s)",
-                                               jsg_expr_p(g, n->a, 0),
-                                               jsg_expr_p(g, n->b, 0)),
-                                        cts);
+                if (n->op == TK_STAR && jsg_int_ts_bits(cts) == 32) {
+                    const char *ma = jsg_expr_p(g, n->a, 0);
+                    const char *mb = jsg_expr_p(g, n->b, 0);
+                    return jsg_wrap_int(g, cg_fmt(cg, "Math.imul(%s, %s)", ma, mb), cts);
+                }
                 {
                     int own = jsg_binprec(n->op);
-                    return jsg_wrap_int(g,
-                                        cg_fmt(cg, "%s %s %s", jsg_expr_p(g, n->a, own),
-                                               op, jsg_expr_p(g, n->b, own + 1)),
-                                        cts);
+                    const char *wa = jsg_expr_p(g, n->a, own);
+                    const char *wb = jsg_expr_p(g, n->b, own + 1);
+                    return jsg_wrap_int(g, cg_fmt(cg, "%s %s %s", wa, op, wb), cts);
                 }
             }
         }
         {
             int own = jsg_binprec(n->op);
-            const char *s = cg_fmt(cg, "%s %s %s", jsg_expr_p(g, n->a, own),
-                                   jsg_op(n->op), jsg_expr_p(g, n->b, own + 1));
+            const char *ba = jsg_expr_p(g, n->a, own);
+            const char *bb = jsg_expr_p(g, n->b, own + 1);
+            const char *s = cg_fmt(cg, "%s %s %s", ba, jsg_op(n->op), bb);
             return jsg_wrap(g, s, own, minprec);
         }
     }
     case AST_TERNARY: {
-        const char *s =
-            cg_fmt(cg, "%s ? %s : %s", jsg_expr_p(g, n->a, JSP_TERNARY + 1),
-                   jsg_expr_p(g, n->b, JSP_LAMBDA), jsg_expr_p(g, n->c, JSP_TERNARY));
+        const char *tc = jsg_expr_p(g, n->a, JSP_TERNARY + 1);
+        const char *tt = jsg_expr_p(g, n->b, JSP_LAMBDA);
+        const char *tf = jsg_expr_p(g, n->c, JSP_TERNARY);
+        const char *s = cg_fmt(cg, "%s ? %s : %s", tc, tt, tf);
         return jsg_wrap(g, s, JSP_TERNARY, minprec);
     }
     case AST_UNARY: {
@@ -1661,11 +1672,13 @@ const char *jsg_expr_p(jg_t *g, ast_node_t *n, int minprec)
                 }
             }
         }
-        if (n->a && n->a->type_str && !strcmp(n->a->type_str, "str"))
-            return cg_fmt(cg, "%s.charCodeAt(%s)", jsg_expr_p(g, n->a, JSP_MEMBER),
-                          jsg_expr_p(g, n->b, 0));
-        return cg_fmt(cg, "%s[%s]", jsg_expr_p(g, n->a, JSP_MEMBER),
-                      jsg_expr_p(g, n->b, 0));
+        {
+            const char *base = jsg_expr_p(g, n->a, JSP_MEMBER);
+            const char *idx = jsg_expr_p(g, n->b, 0);
+            if (n->a && n->a->type_str && !strcmp(n->a->type_str, "str"))
+                return cg_fmt(cg, "%s.charCodeAt(%s)", base, idx);
+            return cg_fmt(cg, "%s[%s]", base, idx);
+        }
     }
     case AST_SLICE: {
         const char *base = jsg_expr_p(g, n->a, JSP_MEMBER);

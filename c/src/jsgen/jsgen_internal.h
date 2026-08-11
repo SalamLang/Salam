@@ -19,6 +19,19 @@
 #include "jsgen/jsgen.h"
 #include "codegen/codegen_internal.h"
 
+/* The emitters below are not pure: jsg_expr/jsg_local/jsg_fn_name and friends
+ * hand out `minify_last`, `taken` and `fn_used_names` entries on first sight of
+ * a name, so the identifiers in the output are a function of the order the
+ * emitters run in. C does not sequence a call's arguments relative to one
+ * another, so two emitter calls inside one cg_fmt() run in whatever order the
+ * host compiler picked (gcc goes right to left) and the minified names come out
+ * reversed against the source. That made the JS output depend on which C
+ * compiler built salam, and it disagreed with the compiler/jsgen sources,
+ * which evaluate left to right.
+ *
+ * So: never call two emitters in the same expression. Bind each to its own
+ * local first, in source order, and pass the locals. A C ternary is fine, only
+ * one arm ever runs. */
 typedef struct {
     cg_t cg;
     const char *entry_mangled;

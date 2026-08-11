@@ -36,6 +36,16 @@ typedef struct {
     bool debug_info;
     bool single_threaded;
     const char *src_path;
+    /* Serial number behind the __fh/__pw/... temporaries. It is bumped from
+     * inside cg_expr, so the emitters are not pure and the order they run in
+     * is visible in the output. C does not sequence a call's arguments against
+     * one another, so two cg_expr calls in the same cg_fmt() ran in whatever
+     * order the host compiler chose (gcc goes right to left) and the temp ids
+     * came out in that order - which made the generated C differ depending on
+     * which compiler built salam, and disagree with the compiler/codegen
+     * sources, which evaluate left to right. Bind each emitter call to its own
+     * local first, in source order, and pass the locals. A C ternary is fine,
+     * only one arm ever runs. */
     int tmpn;
     bool cur_sret;
     /* Emitting the entry function, which is `int main` in C however the

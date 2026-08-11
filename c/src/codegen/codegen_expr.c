@@ -564,22 +564,27 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
                 }
             }
         }
-        if (n->op == TK_POWER)
-            return cg_fmt(cg, "pow(SALAM_FPARG_D((double)(%s)), (double)(%s))",
-                          cg_expr(cg, n->a), cg_expr(cg, n->b));
+        if (n->op == TK_POWER) {
+            const char *pa = cg_expr(cg, n->a);
+            const char *pb = cg_expr(cg, n->b);
+            return cg_fmt(cg, "pow(SALAM_FPARG_D((double)(%s)), (double)(%s))", pa, pb);
+        }
 
         if (n->op == TK_PLUS &&
-            (cg_is_str_ts(n->a->type_str) || cg_is_str_ts(n->b->type_str)))
-            return cg_fmt(cg, "salam_strcat(%s, %s)", cg_str_operand(cg, n->a),
-                          cg_str_operand(cg, n->b));
+            (cg_is_str_ts(n->a->type_str) || cg_is_str_ts(n->b->type_str))) {
+            const char *sa = cg_str_operand(cg, n->a);
+            const char *sb = cg_str_operand(cg, n->b);
+            return cg_fmt(cg, "salam_strcat(%s, %s)", sa, sb);
+        }
 
         if (n->op == TK_STAR &&
             (cg_is_str_ts(n->a->type_str) || cg_is_str_ts(n->b->type_str))) {
             bool a_str = cg_is_str_ts(n->a->type_str);
             ast_node_t *sop = a_str ? n->a : n->b;
             ast_node_t *nop = a_str ? n->b : n->a;
-            return cg_fmt(cg, "salam_str_repeat(%s, (int32_t)(%s))", cg_expr(cg, sop),
-                          cg_expr(cg, nop));
+            const char *sv = cg_expr(cg, sop);
+            const char *nv = cg_expr(cg, nop);
+            return cg_fmt(cg, "salam_str_repeat(%s, (int32_t)(%s))", sv, nv);
         }
 
         if (cg_is_str_ts(n->a->type_str) && cg_is_str_ts(n->b->type_str)) {
@@ -606,9 +611,11 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
             default:
                 break;
             }
-            if (op)
-                return cg_fmt(cg, "(strcmp(%s, %s) %s 0)", cg_expr(cg, n->a),
-                              cg_expr(cg, n->b), op);
+            if (op) {
+                const char *ca = cg_expr(cg, n->a);
+                const char *cb = cg_expr(cg, n->b);
+                return cg_fmt(cg, "(strcmp(%s, %s) %s 0)", ca, cb, op);
+            }
         }
         /*
          * Integer operands are converted to the operation's common type and
@@ -628,24 +635,32 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
                 cts = shift ? lts : cg_common_int_typestr(lts, rts);
             if (cts) {
                 const char *cty = cg_ctype(cg, cts);
+                const char *wa = cg_expr(cg, n->a);
+                const char *wb = cg_expr(cg, n->b);
                 /* Shifts keep the left operand's type; the right operand's
                  * value is used as-is. */
                 if (shift)
-                    return cg_fmt(cg, "((%s)((%s)(%s) %s (%s)))", cty, cty,
-                                  cg_expr(cg, n->a), cg_op(n->op), cg_expr(cg, n->b));
+                    return cg_fmt(cg, "((%s)((%s)(%s) %s (%s)))", cty, cty, wa,
+                                  cg_op(n->op), wb);
                 if (cg_op_is_cmp(n->op))
-                    return cg_fmt(cg, "((%s)(%s) %s (%s)(%s))", cty, cg_expr(cg, n->a),
-                                  cg_op(n->op), cty, cg_expr(cg, n->b));
-                return cg_fmt(cg, "((%s)((%s)(%s) %s (%s)(%s)))", cty, cty,
-                              cg_expr(cg, n->a), cg_op(n->op), cty, cg_expr(cg, n->b));
+                    return cg_fmt(cg, "((%s)(%s) %s (%s)(%s))", cty, wa, cg_op(n->op),
+                                  cty, wb);
+                return cg_fmt(cg, "((%s)((%s)(%s) %s (%s)(%s)))", cty, cty, wa,
+                              cg_op(n->op), cty, wb);
             }
         }
-        return cg_fmt(cg, "(%s %s %s)", cg_expr(cg, n->a), cg_op(n->op),
-                      cg_expr(cg, n->b));
+        {
+            const char *ba = cg_expr(cg, n->a);
+            const char *bb = cg_expr(cg, n->b);
+            return cg_fmt(cg, "(%s %s %s)", ba, cg_op(n->op), bb);
+        }
     }
-    case AST_TERNARY:
-        return cg_fmt(cg, "((%s) ? (%s) : (%s))", cg_expr(cg, n->a), cg_expr(cg, n->b),
-                      cg_expr(cg, n->c));
+    case AST_TERNARY: {
+        const char *tc = cg_expr(cg, n->a);
+        const char *tt = cg_expr(cg, n->b);
+        const char *tf = cg_expr(cg, n->c);
+        return cg_fmt(cg, "((%s) ? (%s) : (%s))", tc, tt, tf);
+    }
     case AST_UNARY: {
         if (n->a && n->a->type_str) {
             char sname[96];

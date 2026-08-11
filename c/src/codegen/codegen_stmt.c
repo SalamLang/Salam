@@ -141,7 +141,8 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
          * The initializer still runs: it is the call's side effect that was
          * wanted, so this suppresses the warning without dropping the work.
          */
-        if (n->name && n->name[0] == '_') cg_line(cg, "(void)%s;", cg_cident(cg, n->name));
+        if (n->name && n->name[0] == '_')
+            cg_line(cg, "(void)%s;", cg_cident(cg, n->name));
         break;
     case AST_CONST_DECL: {
         const char *cts = n->type_str ? n->type_str : "int32_t";

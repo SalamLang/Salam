@@ -939,13 +939,12 @@ static bool is_libm_name(const char *name)
 static bool is_stdio_name(const char *name)
 {
     static const char *const names[] = {
-        "clearerr", "fclose",  "feof",    "ferror",  "fflush",   "fgetc",   "fgetpos",
-        "fgets",    "fopen",   "fprintf", "fputc",   "fputs",    "fread",   "freopen",
-        "fscanf",   "fseek",   "fsetpos", "ftell",   "fwrite",   "getc",    "getchar",
-        "perror",   "printf",  "putc",    "putchar", "puts",     "remove",  "rename",
-        "rewind",   "scanf",   "setbuf",  "setvbuf", "snprintf", "sprintf", "sscanf",
-        "tmpfile",  "tmpnam",  "ungetc",  "vfprintf", "vprintf", "vsnprintf",
-        "vsprintf",
+        "clearerr", "fclose", "feof", "ferror", "fflush", "fgetc", "fgetpos", "fgets",
+        "fopen", "fprintf", "fputc", "fputs", "fread", "freopen", "fscanf", "fseek",
+        "fsetpos", "ftell", "fwrite", "getc", "getchar", "perror", "printf", "putc",
+        "putchar", "puts", "remove", "rename", "rewind", "scanf", "setbuf", "setvbuf",
+        "snprintf", "sprintf", "sscanf", "tmpfile", "tmpnam", "ungetc", "vfprintf",
+        "vprintf", "vsnprintf", "vsprintf",
         /*
          * Not C, but declared by <stdio.h> on every platform that has them,
          * and std/fs, std/os and compiler/interp declare each group inside

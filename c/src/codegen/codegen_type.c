@@ -511,7 +511,10 @@ typedef struct {
 static cg_export_ovr_t g_cg_exports[CG_MAX_EXPORT_OVERRIDES];
 static int g_cg_nexports;
 
-void cg_reset_export_overrides(void) { g_cg_nexports = 0; }
+void cg_reset_export_overrides(void)
+{
+    g_cg_nexports = 0;
+}
 
 void cg_add_export_override(const char *pkg, const char *fn, const char *cname)
 {

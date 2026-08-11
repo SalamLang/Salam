@@ -18,6 +18,20 @@
 
 static void cli_set_defaults(options_t *out)
 {
+    /*
+     * Zero first, then set the non-zero defaults below. driver_main declares
+     * its options_t as a plain stack local, so anything this function forgets
+     * to assign is read as whatever was on the stack.
+     *
+     * That is not hypothetical: --lto, --timeout and --export added fields
+     * here and none of them were listed below, so `lto` and `timeout_ms` took
+     * random values on every run, and `nexports` - a count driving a loop
+     * over `exports[]` - sent driver_build through strchr() on garbage
+     * pointers. Every `salam build` and `salam obj` segfaulted, including on
+     * hello-world. Assigning field-by-field means each new option silently
+     * inherits that bug until someone remembers; a memset cannot forget.
+     */
+    memset(out, 0, sizeof *out);
     out->input = NULL;
     out->lang = "en";
     out->log_level = LOG_INFO;
@@ -47,6 +61,12 @@ static void cli_set_defaults(options_t *out)
     out->fmt_indent_width = 4;
     out->fmt_fix_order = false;
     out->fmt_minify = false;
+    /* Also covered by the memset above; spelled out so the intended value of
+       each is visible next to its siblings. timeout_ms 0 means "unset" - see
+       driver.c's `opt->timeout_ms > 0` test. */
+    out->lto = false;
+    out->timeout_ms = 0;
+    out->nexports = 0;
     out->debug_info = false;
     out->asan = false;
     out->interp = false;

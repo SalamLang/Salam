@@ -2648,3 +2648,94 @@ jobs:
             --generate-notes \
             ${PRERELEASE_FLAG:+"$PRERELEASE_FLAG"} \
             "${assets[@]}"
+
+  # A failed nightly used to be invisible. The nightly-check workflow goes
+  # green the moment it dispatches, and the failure then lands in *this*
+  # workflow's run, which nobody is watching at 04:30 UTC - so every nightly
+  # attempt after 2026-08-04 failed its release gate unnoticed and the newest
+  # published nightly went stale for a week. This job keeps a single tracking
+  # issue in sync with the outcome: opened/updated when a nightly cannot
+  # publish, closed when one does.
+  nightly-report:
+    name: Report nightly outcome
+    if: |
+      always() &&
+      github.event_name == 'workflow_dispatch' && inputs.nightly &&
+      github.repository == 'SalamLang/Salam'
+    needs:
+      [
+        build-linux,
+        build-macos,
+        build-windows,
+        build-windows-i686,
+        build-linux-i686,
+        build-linux-armhf,
+        build-linux-aarch64,
+        android-gate,
+        create-release,
+      ]
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Open, update or close the nightly tracking issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # This job deliberately has no checkout - it only talks to the
+          # issues API - so gh cannot infer the repository from a git
+          # remote and has to be told which one it is.
+          GH_REPO: ${{ github.repository }}
+          RESULTS: ${{ toJSON(needs) }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          NIGHTLY_DATE: ${{ inputs.nightly_date }}
+        run: |
+          set -eu
+          TITLE="🌙 Nightly release is failing"
+
+          # "skipped" is not a failure: create-release skips itself when a
+          # build job fails, and reporting it alongside the build that
+          # actually broke just buries the real cause.
+          failed=$(printf '%s' "$RESULTS" \
+            | jq -r 'to_entries
+                     | map(select(.value.result == "failure" or .value.result == "cancelled"))
+                     | .[].key')
+
+          # Matched on the exact title rather than `gh issue list --search`:
+          # the search index lags behind by minutes, which would open a
+          # second copy of this issue every night.
+          num=$(gh issue list --state open --limit 100 --json number,title \
+            | jq -r --arg t "$TITLE" 'map(select(.title == $t)) | .[0].number // empty')
+
+          if [ -z "$failed" ]; then
+            echo "nightly ${NIGHTLY_DATE:-$(date -u +%F)} published successfully"
+            if [ -n "$num" ]; then
+              gh issue comment "$num" \
+                --body "Nightly \`${NIGHTLY_DATE:-$(date -u +%F)}\` published successfully in ${RUN_URL} - closing."
+              gh issue close "$num"
+            fi
+            exit 0
+          fi
+
+          echo "failed jobs:"
+          printf '%s\n' "$failed" | sed 's/^/  /'
+
+          body=$(
+            echo "The nightly release for \`${NIGHTLY_DATE:-$(date -u +%F)}\` did not publish."
+            echo ""
+            echo "Failed jobs:"
+            printf '%s\n' "$failed" | sed 's/^/- `/; s/$/`/'
+            echo ""
+            echo "Run: ${RUN_URL}"
+            echo ""
+            echo "Nothing is published unless every platform passes its release gate,"
+            echo "so the newest nightly stays stale until this run is green again."
+            echo "This issue is updated on each nightly attempt and closed"
+            echo "automatically by the first one that succeeds."
+          )
+
+          if [ -n "$num" ]; then
+            gh issue comment "$num" --body "$body"
+            echo "updated issue #$num"
+          else
+            gh issue create --title "$TITLE" --body "$body"
+          fi

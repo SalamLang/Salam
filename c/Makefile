@@ -130,6 +130,21 @@ ifeq ($(WITH_LLVM),1)
     ifeq ($(IS_WINDOWS),1)
       LDFLAGS += -static -static-libgcc -static-libstdc++
     endif
+    # Linux got neither of these, so `ldd` on a LLVM_LINK_STATIC=1 build named
+    # libstdc++.so.6, libgcc_s.so.1, libz.so.1, libzstd.so.1 and libxml2.so.2
+    # (which drags libicuuc, libicudata and liblzma in behind it) - eight
+    # shared objects a user of a "self-contained" compiler should never have
+    # to install. LLVM and LLD are C++, so the C++ runtime is not optional
+    # here; folding it in is what makes the binary portable across distros
+    # with different libstdc++ ABIs.
+    #
+    # Deliberately not plain -static: a fully static glibc binary silently
+    # loses NSS (getaddrinfo, getpwnam) at runtime, which std/net and
+    # std/os/user need. libc stays dynamic - it is on every target machine by
+    # definition - and only the extras are folded in.
+    ifneq ($(IS_WINDOWS)$(IS_MACOS),1)
+      LDFLAGS += -static-libgcc -static-libstdc++
+    endif
   else
     LLVM_STATIC_FLAG :=
   endif
@@ -170,6 +185,41 @@ ifeq ($(WITH_LLVM),1)
       LLVM_SYSTEM_LIBS := $(shell printf '%s' "$(LLVM_SYSTEM_LIBS)" \
           | tr ' ' '\n' | grep -viE 'zstd' | tr '\n' ' ') $(MACOS_ZSTD_A)
     endif
+  endif
+  # Same idea on Linux, where llvm-config's -lz/-lzstd resolve to the shared
+  # objects and put libz.so.1/libzstd.so.1 in the released binary's ldd. Each
+  # is probed separately and left alone when its archive is not installed:
+  # a missing .a should cost portability on that build host, not break the
+  # link. -l: is GNU ld's exact-archive-name syntax, so no path is needed.
+  #
+  # libxml2 is deliberately NOT folded in here. LLVMWindowsManifest really
+  # does call xmlNewDoc (on every host, not just Windows - see std/llvm), but
+  # libxml2.a pulls ICU and lzma behind it, and libicudata.a alone is ~30 MB
+  # of collation tables this compiler never reads. That one stays dynamic
+  # until the WindowsManifest component can be dropped from the link instead.
+  #
+  # Substituted in BOTH places each -l appears, not just here: LLD_LIBS
+  # carries its own hardcoded -lz -lzstd and sits earlier on the command
+  # line, and ld takes the first match, so rewriting only the later copy
+  # changed the link line without changing a single entry in `ldd`.
+  ifeq ($(IS_WINDOWS)$(IS_MACOS),)
+    LINUX_LIBDIR := /usr/lib/$(shell uname -m)-linux-gnu
+    ifneq (,$(wildcard $(LINUX_LIBDIR)/libz.a))
+      LLD_LIBS := $(patsubst -lz,-l:libz.a,$(LLD_LIBS))
+      LLVM_SYSTEM_LIBS := $(shell printf '%s' "$(LLVM_SYSTEM_LIBS)" \
+          | tr ' ' '\n' | grep -vxE '\-lz' | tr '\n' ' ') -l:libz.a
+    endif
+    ifneq (,$(wildcard $(LINUX_LIBDIR)/libzstd.a))
+      LLD_LIBS := $(patsubst -lzstd,-l:libzstd.a,$(LLD_LIBS))
+      LLVM_SYSTEM_LIBS := $(shell printf '%s' "$(LLVM_SYSTEM_LIBS)" \
+          | tr ' ' '\n' | grep -vxE '\-lzstd' | tr '\n' ' ') -l:libzstd.a
+    endif
+    # -static-libstdc++ only governs the libstdc++ the compiler driver adds
+    # implicitly. This link is driven by cc, not c++, so the C++ runtime is
+    # requested explicitly through LLVM_CXXLIB - and an explicit -lstdc++
+    # resolves to the shared object regardless of the flag, which is why
+    # libstdc++.so.6 stayed in ldd. Name the archive instead.
+    LLVM_CXXLIB := $(if $(wildcard $(shell $(CC) -print-file-name=libstdc++.a)),-l:libstdc++.a,-lstdc++)
   endif
   # `llvm-config --libs all` can advertise Polly on an installation that
   # does not ship libPolly.a, because distributions split it into a separate

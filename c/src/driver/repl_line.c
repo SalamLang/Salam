@@ -59,6 +59,28 @@ void repl_hist_clear(void)
     repl_nhist = 0;
 }
 
+#if REPL_USE_WINCON
+/* Park the cursor `pos` characters into the line. */
+static void repl_cursor(const char *prompt, const char *buf, int pos)
+{
+    printf("\r%s%.*s", prompt, pos, buf);
+    fflush(stdout);
+}
+
+/* Redraw the line and park the cursor. `erase` is how many characters the
+ * previous content occupied: a recalled history entry, a backspace or a
+ * Ctrl-U usually leaves a shorter line than it replaced, and the old code
+ * blanked a fixed width measured from column 0 - which covers the prompt
+ * rather than the tail of the old text, so whatever hung past the new end
+ * of line stayed on screen. */
+static void repl_paint(const char *prompt, const char *buf, int len, int pos, int erase)
+{
+    int pad = (erase > len ? erase - len : 0) + 1;
+    printf("\r%s%.*s%*s", prompt, len, buf, pad, "");
+    repl_cursor(prompt, buf, pos);
+}
+#endif
+
 char *repl_readline(const char *prompt)
 {
 #if REPL_USE_WINCON
@@ -107,39 +129,31 @@ char *repl_readline(const char *prompt)
             memmove(buf + pos - 1, buf + pos, (size_t)(len - pos));
             pos--;
             len--;
-            printf("\r%s%.*s \r%s%.*s", prompt, len, buf, prompt, pos, buf);
-            fflush(stdout);
+            repl_paint(prompt, buf, len, pos, len + 1);
             continue;
         }
         if (vk == VK_DELETE && pos < len) {
             memmove(buf + pos, buf + pos + 1, (size_t)(len - pos - 1));
             len--;
-            printf("\r%s%.*s \r%s%.*s", prompt, len, buf, prompt, pos, buf);
-            fflush(stdout);
+            repl_paint(prompt, buf, len, pos, len + 1);
             continue;
         }
         if (vk == VK_LEFT && pos > 0) {
-            pos--;
-            printf("\r%s%.*s", prompt, pos, buf);
-            fflush(stdout);
+            repl_cursor(prompt, buf, --pos);
             continue;
         }
         if (vk == VK_RIGHT && pos < len) {
-            pos++;
-            printf("\r%s%.*s", prompt, pos, buf);
-            fflush(stdout);
+            repl_cursor(prompt, buf, ++pos);
             continue;
         }
         if (vk == VK_HOME) {
             pos = 0;
-            printf("\r%s", prompt);
-            fflush(stdout);
+            repl_cursor(prompt, buf, pos);
             continue;
         }
         if (vk == VK_END) {
             pos = len;
-            printf("\r%s%.*s", prompt, pos, buf);
-            fflush(stdout);
+            repl_cursor(prompt, buf, pos);
             continue;
         }
         if (vk == VK_UP) {
@@ -149,46 +163,46 @@ char *repl_readline(const char *prompt)
                 saved_len = len;
             }
             if (hi > 0) {
+                int was = len;
+                int hlen = (int)strlen(repl_hist[hi - 1]);
                 hi--;
-                int hlen = (int)strlen(repl_hist[hi]);
-                printf("\r%s%*s\r%s%.*s", prompt, len + 1, "", prompt, hlen,
-                       repl_hist[hi]);
                 memcpy(buf, repl_hist[hi], (size_t)(hlen + 1));
                 len = pos = hlen;
-                fflush(stdout);
+                repl_paint(prompt, buf, len, pos, was);
             }
             continue;
         }
         if (vk == VK_DOWN) {
             if (hi < repl_nhist) {
+                int was = len;
+                const char *h;
+                int hlen;
                 hi++;
-                const char *h = (hi == repl_nhist) ? saved : repl_hist[hi];
-                int hlen = (hi == repl_nhist) ? saved_len : (int)strlen(h);
-                printf("\r%s%*s\r%s%.*s", prompt, len + 1, "", prompt, hlen, h);
-                memcpy(
-                    buf, h,
-                    (size_t)((hlen < REPL_LINE_MAX - 1 ? hlen : REPL_LINE_MAX - 2) + 1));
+                h = (hi == repl_nhist) ? saved : repl_hist[hi];
+                hlen = (hi == repl_nhist) ? saved_len : (int)strlen(h);
+                if (hlen > REPL_LINE_MAX - 1) hlen = REPL_LINE_MAX - 1;
+                memcpy(buf, h, (size_t)hlen);
+                buf[hlen] = '\0';
                 len = pos = hlen;
-                fflush(stdout);
+                repl_paint(prompt, buf, len, pos, was);
             }
             continue;
         }
         if (ch == 1) {
             pos = 0;
-            printf("\r%s", prompt);
-            fflush(stdout);
+            repl_cursor(prompt, buf, pos);
             continue;
         }
         if (ch == 5) {
             pos = len;
-            printf("\r%s%.*s", prompt, pos, buf);
-            fflush(stdout);
+            repl_cursor(prompt, buf, pos);
             continue;
         }
         if (ch == 21) {
-            printf("\r%s%*s\r%s", prompt, len + 1, "", prompt);
+            int was = len;
             len = pos = 0;
-            fflush(stdout);
+            buf[0] = '\0';
+            repl_paint(prompt, buf, len, pos, was);
             continue;
         }
         if (ch == 3 || (ch == 4 && len == 0)) {
@@ -202,9 +216,8 @@ char *repl_readline(const char *prompt)
             memmove(buf + pos + 1, buf + pos, (size_t)(len - pos));
             buf[pos] = ch;
             len++;
-            printf("\r%s%.*s \r%s%.*s", prompt, len, buf, prompt, pos + 1, buf);
             pos++;
-            fflush(stdout);
+            repl_paint(prompt, buf, len, pos, len);
         }
     }
     SetConsoleMode(hIn, orig);

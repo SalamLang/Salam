@@ -420,6 +420,24 @@ type_t *check_call(sema_t *s, ast_node_t *n)
                              "elements or fields instead",
                              type_to_string(s->tc, at));
                         break;
+                    /* `xs.get(i)` hands back a pointer into the vector, so
+                     * `println xs.get(i)` used to reach the C backend as
+                     * printf("%d", (int)ptr): a truncated address printed as
+                     * a number, plus a cast warning in code the user never
+                     * wrote. */
+                    case TY_PTR:
+                        if (at->pointee && at->pointee->kind != TY_VOID)
+                            SERR(s, 2, &n->span,
+                                 "cannot print a pointer of type '%s' - add '[0]' to "
+                                 "print the '%s' it points to",
+                                 type_to_string(s->tc, at),
+                                 type_to_string(s->tc, at->pointee));
+                        else
+                            SERR(s, 2, &n->span,
+                                 "cannot print a pointer of type '%s' - print what it "
+                                 "points to instead",
+                                 type_to_string(s->tc, at));
+                        break;
                     default:
                         break;
                     }

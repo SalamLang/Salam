@@ -563,6 +563,79 @@ func lv_match_expr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     ret make_llv(r, rts)
 end
 
+// ll_gep_from_int_add - peephole for `(p as u64 + off) as T*`, the way every
+// stdlib container spells "address of element". Emitted literally that is
+// ptrtoint / add / inttoptr, and the round trip through an integer severs
+// pointer provenance: alias analysis then has to assume the result may point
+// anywhere, so a load through it is never proven independent of a nearby
+// store. LICM leaves loop-invariant element loads inside the loop and the
+// loop vectorizer bails. `getelementptr i8` computes the same address and
+// keeps the base pointer visible.
+//
+// The shape test is pure AST inspection, so a miss costs nothing; once it
+// commits it emits the whole cast, including the non-pointer base case that
+// only the emitted operand's type can rule out. Deliberately not `inbounds`:
+// this fires on arbitrary user arithmetic, and plain byte GEP has exactly the
+// wraparound semantics the integer form had.
+func gep_from_int_add(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, to: str, out &: str
+): bool:
+    node := at.Get(a, n)
+    if !is_ptr_ts(to) || is_str(to):
+        ret false
+    end
+    if node.a == 0 || at.KindOf(a, node.a) != at.AST_BINARY:
+        ret false
+    end
+    bin := at.Get(a, node.a)
+    if bin.op != tok.TK_PLUS && bin.op != tok.TK_MINUS:
+        ret false
+    end
+    // The base has to be a `<something> as <pointer-width int>` cast. Only the
+    // left operand: `off - p` is not an address, and for `+` the stdlib always
+    // writes the pointer first.
+    if bin.a == 0 || at.KindOf(a, bin.a) != at.AST_CAST:
+        ret false
+    end
+    base := at.Get(a, bin.a)
+    if base.a == 0:
+        ret false
+    end
+    mut ity := ""
+    if base.ty != 0 && str.Len(at.Get(a, base.ty).type_str) > 0:
+        ity = at.Get(a, base.ty).type_str
+    else:
+        ity = base.type_str
+    end
+    if !is_int_ts(ity) || int_bits(v, ity) != v.ptr_bits:
+        ret false
+    end
+
+    p := lv_expr(v, s, a, base.a)
+    off := lv_expr(v, s, a, bin.b)
+    u := ty_of(v, s, a, v.usize)
+    mut o := conv(v, s, a, off, v.usize)
+    r := new_tmp(v)
+    if is_ptr_ts(p.ts) || is_str(p.ts):
+        if bin.op == tok.TK_MINUS:
+            neg := new_tmp(v)
+            emit(v, neg + " = sub " + u + " 0, " + o)
+            o = neg
+        end
+        emit(v, r + " = getelementptr i8, ptr " + p.ref + ", " + u + " " + o)
+    else:
+        b := conv(v, s, a, p, v.usize)
+        sum := new_tmp(v)
+        emit(
+            v,
+            sum + " = " + (bin.op == tok.TK_MINUS ? "sub " : "add ") + u + " " + b + ", " + o
+        )
+        emit(v, r + " = inttoptr " + u + " " + sum + " to ptr")
+    end
+    out = r
+    ret true
+end
+
 // ll_expr
 func lv_expr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     if n == 0:
@@ -664,13 +737,20 @@ func lv_expr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
         ret lv_incdec(v, s, a, n)
     end
     if k == at.AST_CAST:
-        vv3 := lv_expr(v, s, a, node.a)
         mut to_ts := ""
         if node.ty != 0 && str.Len(at.Get(a, node.ty).type_str) > 0:
             to_ts = at.Get(a, node.ty).type_str
         else str.Len(node.type_str) > 0:
             to_ts = node.type_str
-        else:
+        end
+        if str.Len(to_ts) > 0:
+            mut gep := ""
+            if gep_from_int_add(v, s, a, n, to_ts, gep):
+                ret make_llv(gep, to_ts)
+            end
+        end
+        vv3 := lv_expr(v, s, a, node.a)
+        if str.Len(to_ts) == 0:
             to_ts = vv3.ts
         end
         ret make_llv(conv(v, s, a, vv3, to_ts), to_ts)

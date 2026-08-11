@@ -325,7 +325,13 @@ static void repl_turn_stmt(repl_ctx_t *c, const char *block)
         free(src);
     }
     src = repl_render(&c->s, c->pack, &cand);
-    if (repl_exec(c, src, true) == 0) repl_session_add_stmt(&c->s, cand.text);
+    /* Analyze before building. A rejected turn is then reported against
+     * "<repl>" - the same source the def path shows - instead of against a
+     * temp file whose path is longer than the program and which is deleted
+     * before the user could open it, and no backend or C compiler is
+     * started for a turn that cannot survive the front end. */
+    if (repl_check(c, src, false) && repl_exec(c, src, true) == 0)
+        repl_session_add_stmt(&c->s, cand.text);
     free(src);
     free(echo);
 }

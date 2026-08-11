@@ -1959,6 +1959,65 @@ static llv_t ll_match_expr(ll_t *ll, ast_node_t *n)
     return out;
 }
 
+/*
+ * Peephole for `(p as u64 + off) as T*` - the way every stdlib container
+ * spells "address of element". Emitted literally that is ptrtoint / add /
+ * inttoptr, and the round trip through an integer severs pointer provenance:
+ * alias analysis has to assume the result may point anywhere, so a load
+ * through it is never proven independent of a nearby store. LICM then leaves
+ * loop-invariant element loads inside the loop, SCEV cannot describe the
+ * address as an affine recurrence, and the loop vectorizer bails.
+ *
+ * `getelementptr i8, ptr p, i64 off` computes the same address and keeps the
+ * base pointer visible. Deliberately not `inbounds`: this fires on arbitrary
+ * user arithmetic, and plain byte GEP has exactly the wraparound semantics
+ * the integer form had.
+ *
+ * The shape test is pure AST inspection, so `false` costs nothing; once it
+ * commits it emits the whole cast, including the non-pointer base case that
+ * only the emitted operand's type can rule out.
+ */
+static bool ll_gep_from_int_add(ll_t *ll, ast_node_t *n, const char *to,
+                                const char **out)
+{
+    ast_node_t *bin = n->a;
+    if (!ll_is_ptr_ts(to) || ll_is_str(to)) return false;
+    if (!bin || bin->kind != AST_BINARY) return false;
+    if (bin->op != TK_PLUS && bin->op != TK_MINUS) return false;
+
+    /* The base has to be a `<something> as <pointer-width int>` cast. Only the
+     * left operand: `off - p` is not an address, and for `+` the stdlib always
+     * writes the pointer first. */
+    ast_node_t *base = bin->a;
+    if (!base || base->kind != AST_CAST || !base->a) return false;
+    const char *ity = base->type && base->type->type_str ? base->type->type_str
+                                                         : base->type_str;
+    if (!ll_is_int(ity) || ll_int_bits(ll, ity) != ll->ptr_bits) return false;
+
+    llv_t p = ll_expr(ll, base->a);
+    llv_t off = ll_expr(ll, bin->b);
+    const char *u = ll_ty(ll, ll->usize);
+    const char *o = ll_conv(ll, off, ll->usize);
+    bool ptr_base = ll_is_ptr_ts(p.ts) || ll_is_str(p.ts);
+    const char *r = ll_new_tmp(ll);
+    if (ptr_base) {
+        if (bin->op == TK_MINUS) {
+            const char *neg = ll_new_tmp(ll);
+            ll_emit(ll, "%s = sub %s 0, %s", neg, u, o);
+            o = neg;
+        }
+        ll_emit(ll, "%s = getelementptr i8, ptr %s, %s %s", r, p.ref, u, o);
+    } else {
+        const char *b = ll_conv(ll, p, ll->usize);
+        const char *sum = ll_new_tmp(ll);
+        ll_emit(ll, "%s = %s %s %s, %s", sum, bin->op == TK_MINUS ? "sub" : "add",
+                u, b, o);
+        ll_emit(ll, "%s = inttoptr %s %s to ptr", r, u, sum);
+    }
+    *out = r;
+    return true;
+}
+
 llv_t ll_expr(ll_t *ll, ast_node_t *n)
 {
     if (!n) return (llv_t){"0", "i32"};
@@ -2048,11 +2107,13 @@ llv_t ll_expr(ll_t *ll, ast_node_t *n)
     case AST_INCDEC:
         return ll_incdec(ll, n);
     case AST_CAST: {
-        llv_t v = ll_expr(ll, n->a);
         const char *to = n->type && n->type->type_str
                              ? n->type->type_str
-                             : (n->type_str ? n->type_str : v.ts);
-        return (llv_t){ll_conv(ll, v, to), to};
+                             : (n->type_str ? n->type_str : NULL);
+        const char *gep = NULL;
+        if (to && ll_gep_from_int_add(ll, n, to, &gep)) return (llv_t){gep, to};
+        llv_t v = ll_expr(ll, n->a);
+        return (llv_t){ll_conv(ll, v, to ? to : v.ts), to ? to : v.ts};
     }
     case AST_CALL:
         return ll_call(ll, n);

@@ -154,7 +154,11 @@ if [ -n "$VERSION" ]; then
 else
     log "Resolving latest Salam release with a ${platform} asset..."
     tags="$(list_release_tags)"
-    [ -n "$tags" ] || die "could not list releases for ${REPO}: both https://api.github.com/repos/${REPO}/releases and https://github.com/${REPO}/releases.atom failed. Pass --version to skip the lookup."
+    lookup_err="could not list releases for ${REPO}: both"
+    lookup_err="$lookup_err https://api.github.com/repos/${REPO}/releases"
+    lookup_err="$lookup_err and https://github.com/${REPO}/releases.atom failed."
+    lookup_err="$lookup_err Pass --version to skip the lookup."
+    [ -n "$tags" ] || die "$lookup_err"
 
     found=0
     for tag in $tags; do

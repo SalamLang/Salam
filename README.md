@@ -34,58 +34,6 @@ Salam is a general-purpose and systems programming language designed for efficie
 
 ---
 
-<!-- START doctoc generated TOC please keep comment here to allow auto update -->
-<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
-
-- [✨ Introducing Salam](#-introducing-salam)
-  - [Supported Languages](#supported-languages)
-  - [Why Choose Salam?](#why-choose-salam)
-  - [Key Features](#key-features)
-- [Quick Installing](#quick-installing)
-- [🧩 Editor Support](#-editor-support)
-  - [Visual Studio Code](#visual-studio-code)
-- [🛠️ The Compiler (`salam`)](#-the-compiler-salam)
-  - [Build](#build)
-  - [Usage](#usage)
-  - [Cross-compilation](#cross-compilation)
-- [🐳 Docker & Docker Compose](#-docker--docker-compose)
-  - [Development (live reload)](#development-live-reload)
-  - [Production (copy & build)](#production-copy--build)
-  - [Plain Docker (without Compose)](#plain-docker-without-compose)
-  - [Books (XeLaTeX)](#books-xelatex)
-- [🚀 Bun Workspaces: Multi-App Development & Static Site Guide](#-bun-workspaces-multi-app-development--static-site-guide)
-  - [🚀 1. Quickstart Execution Guide](#-1-quickstart-execution-guide)
-  - [📁 2. Monorepo Architecture & Core Setup](#-2-monorepo-architecture--core-setup)
-    - [Root Configuration Files](#root-configuration-files)
-      - [`package.json` (Workspace Root)](#packagejson-workspace-root)
-      - [`bunfig.toml` (Workspace Root)](#bunfigtoml-workspace-root)
-  - [🛠️ 3. Static Site Package Implementation](#-3-static-site-package-implementation)
-    - [Static Site Configuration](#static-site-configuration)
-  - [⚡ 4. The Serve Methods Evaluated](#-4-the-serve-methods-evaluated)
-    - [Method A: Bun Native Dev Engine (`bun run --watch index.html`)](#method-a-bun-native-dev-engine-bun-run---watch-indexhtml)
-    - [Method B: The Local Isolation Method (`bunx vite`)](#method-b-the-local-isolation-method-bunx-vite)
-  - [🔄 5. Global Monorepo Package Updates](#-5-global-monorepo-package-updates)
-    - [Explaining the Flags Behind the Script (`bun update -i -r`)](#explaining-the-flags-behind-the-script-bun-update--i--r)
-  - [🔒 6. Security Breakdown & Best Practices](#-6-security-breakdown--best-practices)
-    - [The Port Selection Architecture](#the-port-selection-architecture)
-    - [Network Address Binding (`0.0.0.0` vs `127.0.0.1`)](#network-address-binding-0000-vs-127001)
-    - [Safe Command Formula](#safe-command-formula)
-  - [📚 7. MyST Documentation](#-7-myst-documentation)
-    - [Configuration Files](#configuration-files)
-    - [Running the Documentation Locally](#running-the-documentation-locally)
-- [🤝 Contributing](#-contributing)
-- [🔍 Joining Code Reviews](#-joining-code-reviews)
-  - [How a GitHub PR Review Works](#how-a-github-pr-review-works)
-    - [Leaving an inline comment](#leaving-an-inline-comment)
-    - [Suggesting a code change](#suggesting-a-code-change)
-    - [Submitting the review](#submitting-the-review)
-    - [Tips for great reviews](#tips-for-great-reviews)
-  - [Growing with the Community](#growing-with-the-community)
-  - [💬 Real-Time Community](#-real-time-community)
-- [📖 Glossary](#-glossary)
-
-<!-- END doctoc -->
-
 <div align="center">
 
 ## ✨ Introducing Salam
@@ -374,7 +322,7 @@ To kick off your entire localized monorepo environment simultaneously, run the f
 bun install
 ```
 
-- Boot up all servers concurrently on high ports:
+- Boot up all servers concurrently:
 
 ```bash
 bun run dev:all
@@ -385,19 +333,10 @@ Your terminal window will display interleaved logs, cleanly prefixed by their re
 ```text
 Salam % bun run dev:all
 $ bun run --filter='*' --parallel dev
-@workspace/pages:dev         |
-@workspace/pages:dev         |   VITE v8.1.3  ready in 61 ms
-@workspace/pages:dev         |
-@workspace/pages:dev         |   ➜  Local:   http://127.0.0.1:55002/
 @workspace/editor:dev        |
 @workspace/editor:dev        |   VITE v8.1.3  ready in 65 ms
 @workspace/editor:dev        |
 @workspace/editor:dev        |   ➜  Local:   http://127.0.0.1:55001/
-@workspace/vercel-editor:dev |
-@workspace/vercel-editor:dev |   VITE v8.1.3  ready in 91 ms
-@workspace/vercel-editor:dev |
-@workspace/vercel-editor:dev |   ➜  Local:   http://localhost:5173/
-@workspace/vercel-editor:dev |   ➜  Network: use --host to expose
 @workspace/runner:dev        |
 @workspace/runner:dev        |  ⛅️ wrangler 4.107.0
 @workspace/runner:dev        | ────────────────────
@@ -419,9 +358,7 @@ salam-monorepo/
 ├── editor/
 ├── extensions/
 │   └── vscode/
-├── pages/
-├── runner/
-└── vercel-editor/
+└── runner/
 ```
 
 #### Root Configuration Files
@@ -442,9 +379,7 @@ dependency updates.
     "packages": [
       "editor",
       "extensions/vscode",
-      "pages",
-      "runner",
-      "vercel-editor"
+      "runner"
     ],
     "catalog": {
       "react": "^19.2.7",
@@ -465,18 +400,16 @@ dependency updates.
     "dev:all": "bun run --filter='*' --parallel --if-present dev",
     "dev:editor": "bun run --filter='@workspace/editor' dev",
     "docs:myst": "bun run myst start",
-    "dev:pages": "bun run --filter='@workspace/pages' dev",
     "dev:runner": "bun run --filter='@workspace/runner' dev",
-    "dev:vercel": "bun run --filter='@workspace/vercel-editor' dev",
     "build:all": "bun run --filter='*' --if-present build",
     "build:myst": "bun run myst build --html",
-    "build:vercel": "bun run --filter='@workspace/vercel-editor' build",
     "update:deps": "bun update -i -r",
     "clean": "rm -rf node_modules **/node_modules .bun-cache",
     "generate": "bun run --filter='@workspace/runner' generate",
     "typecheck": "bun run --filter='@workspace/runner' typecheck"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.6",
     "@tailwindcss/vite": "catalog:",
     "@vitejs/plugin-react": "catalog:",
     "mystmd": "^1.10.1",
@@ -488,10 +421,8 @@ dependency updates.
 Useful root commands:
 
 - `bun run dev:all`: start every workspace that exposes a `dev` script
-- `bun run dev:editor`, `bun run dev:pages`, `bun run dev:runner`, and
-  `bun run dev:vercel`: start one workspace at a time
+- `bun run dev:editor` and `bun run dev:runner`: start one workspace at a time
 - `bun run build:all`: run every workspace `build` script that exists
-- `bun run build:vercel`: build the React/Vite app in `vercel-editor/`
 - `bun run docs:myst`: start the [MyST](https://mystmd.org/) documentation dev server
 - `bun run build:myst`: build the MyST documentation to static HTML (`_build/html/`)
 - `bun run generate`: refresh Cloudflare Wrangler types for `runner/`
@@ -510,54 +441,7 @@ development = true
 
 ---
 
-### 🛠️ 3. Static Site Package Implementation
-
-The independent workspace utilizes your specific package scope (`@workspace/pages`). It is set to `"private": true` to protect against accidental package publishing to the public [npm](https://www.npmjs.com/) registry.
-
-#### Static Site Configuration
-
-`pages/package.json`
-
-```json
-{
-  "name": "@workspace/pages",
-  "version": "1.0.0",
-  "private": true,
-  "scripts": {
-    "dev": "bunx vite --port 55002 --host 127.0.0.1"
-  }
-}
-```
-
----
-
-### ⚡ 4. The Serve Methods Evaluated
-
-Depending on your asset compilation pipelines, you can run and serve your static file assets via two distinct command-line approaches.
-
-#### Method A: Bun Native Dev Engine (`bun run --watch index.html`)
-
-Bun acts as a full-stack compiler. It looks for runtime entry points, hooks a watcher loop, and injects code straight into the runtime.
-
-```bash
-PORT=55002 bun run --watch index.html
-```
-
-- 🟥 **The Critical Crash Bug**: If an HTML file links a `<script src="./app.js">` tag and `app.js` is missing, deleted, or generated out-of-order by another builder script, Bun's dependency engine throws a fatal compilation or segmentation panic and crashes your entire root dev terminal.
-
-#### Method B: The Local Isolation Method (`bunx vite`)
-
-Bypasses complex multi-environment integrations entirely by mounting a dedicated Vite development context over the directory.
-
-```bash
-bunx vite --port 55002 --host 127.0.0.1
-```
-
-- 🟩 **The Fix**: Missing scripts or components safely emit standard frontend browser `404 Not Found` messages instead of breaking your backend engine processes.
-
----
-
-### 🔄 5. Global Monorepo Package Updates
+### 🔄 3. Global Monorepo Package Updates
 
 To manage and upgrade your external dependencies across all application subdirectories together without navigating into individual package folders, trigger your custom root shortcut:
 
@@ -568,40 +452,13 @@ bun run update:deps
 #### Explaining the Flags Behind the Script (`bun update -i -r`)
 
 - **`-i` (`--interactive`)**: Spawns an interactive Terminal User Interface (TUI) mapping out all out-of-date assets. Use your Arrow keys and spacebar to selectively pick packages to upgrade, or toggle `l` to force a package beyond its defined [SemVer](https://semver.org/) range to its absolute `--latest` release.
-- **`-r` (`--recursive`)**: Forces Bun's resolution engine to sweep across all items listed under your `workspaces` field (`editor`, `pages`, `runner`, etc.) instead of executing purely inside the main directory.
+- **`-r` (`--recursive`)**: Forces Bun's resolution engine to sweep across all items listed under your `workspaces` field (`editor`, `runner`, etc.) instead of executing purely inside the main directory.
 
 When initialized, Bun appends a **Workspace** column to your terminal output grid so you can verify exactly where every target module upgrade is bound before writing the changes to disk.
 
 ---
 
-### 🔒 6. Security Breakdown & Best Practices
-
-When operating servers on your host machine, observe these boundaries:
-
-#### The Port Selection Architecture
-
-Network ports scale from `1` to `65535`.
-
-- **`1` - `1023`**: System-privileged root ports. Avoid using these.
-- **`1024` - `49151`**: Registered user application ports (e.g., `8080`, `3000`). High risk of overlapping with other applications.
-- **`49152` - `65535`**: **Dynamic, Private, and High Ports**. Ideal for setting up workspace dev contexts cleanly.
-
-#### Network Address Binding (`0.0.0.0` vs `127.0.0.1`)
-
-- **`0.0.0.0` (All Interfaces)**: Default configuration for most servers. If you are on an open public Wi-Fi network (like a cafe), anyone on that network can read your unreleased static code by querying your local IP address.
-- **`127.0.0.1` (Loopback Localhost)**: Hardware-restricted isolation. Only your exact physical computer can access the ports. Highly recommended for untrusted networks.
-
-#### Safe Command Formula
-
-To enforce instant browser updates, skip disk caches, isolate network eavesdroppers, and bypass compiler engine crashes, use this script formula:
-
-```bash
-bunx vite --port 55002 --host 127.0.0.1
-```
-
----
-
-### 📚 7. MyST Documentation
+### 📚 4. MyST Documentation
 
 The repository ships a [MyST (Markedly Structured Text)](https://mystmd.org/) docs site powered by [`mystmd`](https://mystmd.org/guide). Source content comes from `books/` (TeX book files) and `.md` files across the repository.
 
@@ -749,7 +606,7 @@ Terms used across this readme, the [Contributing Guide](CONTRIBUTING.md), and th
 | **[prek](https://prek.j178.dev/)** | Git hook manager used by Salam. Hooks are defined in `prek.toml` (standard and manual stages) and `prek-audit.toml` (security-focused audit checks). |
 | **prek-audit.toml** | prek configuration file for security-focused audit hooks. Run separately with `prek run --all-files --config prek-audit.toml`. |
 | **[Prettier](https://prettier.io/)** | Opinionated code formatter for JavaScript, TypeScript, CSS, and JSON. Run as a prek hook. |
-| **[React](https://react.dev/)** | JavaScript library for building user interfaces with a component model. Used in the `vercel-editor/` workspace. |
+| **[React](https://react.dev/)** | JavaScript library for building user interfaces with a component model. Used in the `editor/` workspace. |
 | **[Read the Docs](https://readthedocs.org/)** | Free documentation hosting platform. Salam's MyST docs are automatically built and published there via `.readthedocs.yaml`. |
 | **[REPL](https://en.wikipedia.org/wiki/Read%E2%80%93eval%E2%80%93print_loop)** | Read-Eval-Print Loop, an interactive session where you type expressions and see results immediately. `salam cli` starts a general REPL; `salam layout` starts a layout REPL. |
 | **[RTL (Right-to-Left)](https://en.wikipedia.org/wiki/Right-to-left_script)** | Text direction used by Arabic and Persian scripts. The Salam web playground supports RTL and switches direction when the Persian language is selected. |
@@ -761,10 +618,10 @@ Terms used across this readme, the [Contributing Guide](CONTRIBUTING.md), and th
 | **[TCC (Tiny C Compiler)](https://bellard.org/tcc/)** | Lightweight, fast C compiler. The default backend used by Salam's quick-build script. |
 | **[Tree-walking interpreter](https://en.wikipedia.org/wiki/Interpreter_(computing))** | An interpreter that evaluates the AST directly without first compiling to native code. Used by the web playground and via `salam exec` / `salam run --interp` for pure-compute programs. |
 | **[TUI (Terminal User Interface)](https://en.wikipedia.org/wiki/Text-based_user_interface)** | Interactive, keyboard-driven interface rendered in the terminal. Bun's `bun update -i` flag opens a TUI for selecting which packages to upgrade. |
-| **[TypeScript](https://www.typescriptlang.org/)** | Typed superset of JavaScript that compiles to plain JavaScript. Used in the `runner/` and `vercel-editor/` workspaces. |
+| **[TypeScript](https://www.typescriptlang.org/)** | Typed superset of JavaScript that compiles to plain JavaScript. Used in the `runner/` workspace. |
 | **[Upstream](https://en.wikipedia.org/wiki/Upstream_(software_development))** | The original `SalamLang/Salam` repository. Contributors add it as a Git remote (`git remote add upstream …`) to keep their fork in sync. |
 | **[Virtual filesystem](https://en.wikipedia.org/wiki/Virtual_file_system)** | Emscripten's in-browser filesystem layer. `build-wasm.sh` preloads the `std/` directory into it so import resolution and the layout schema work when running Salam in the browser. |
-| **[Vite](https://vite.dev/)** | Frontend build tool and dev server. Used in the Salam monorepo to serve the editor and pages workspaces. |
+| **[Vite](https://vite.dev/)** | Frontend build tool and dev server. Used in the Salam monorepo to serve the editor workspace. |
 | **[WebAssembly (Wasm)](https://webassembly.org/)** | Portable binary instruction format that runs at near-native speed in modern browsers. Salam's web playground is powered by a Wasm build of the compiler produced by Emscripten. |
 | **[Wrangler](https://developers.cloudflare.com/workers/wrangler/)** | Cloudflare's CLI for building and deploying Workers. The `runner/` workspace uses Wrangler for local development (`wrangler dev`) and CI type generation. |
 | **[yamllint](https://github.com/adrienverge/yamllint)** | YAML linter. Run as a prek hook to validate `.yml` workflow and configuration files. |

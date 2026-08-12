@@ -81,49 +81,6 @@ static bool path_exists(const char *p)
 #endif
 }
 
-/* "src/" from "src/main.salam"; "" when there is no directory part. */
-static void dir_prefix_of(const char *path, char *out, size_t cap)
-{
-    const char *slash = strrchr(path, '/');
-    const char *bslash = strrchr(path, '\\');
-    const char *cut = slash;
-    size_t n;
-    if (bslash && (!cut || bslash > cut)) cut = bslash;
-    if (!cut) {
-        out[0] = '\0';
-        return;
-    }
-    n = (size_t)(cut - path) + 1;
-    if (n >= cap) n = cap - 1;
-    memcpy(out, path, n);
-    out[n] = '\0';
-}
-
-static void path_stem(const char *path, char *out, size_t cap)
-{
-    const char *slash = strrchr(path, '/');
-    const char *bslash = strrchr(path, '\\');
-    const char *base = path;
-    const char *dot;
-    size_t len;
-    if (slash && slash + 1 > base) base = slash + 1;
-    if (bslash && bslash + 1 > base) base = bslash + 1;
-    dot = strrchr(base, '.');
-    len = dot ? (size_t)(dot - base) : strlen(base);
-    if (len >= cap) len = cap - 1;
-    memcpy(out, base, len);
-    out[len] = '\0';
-}
-
-static void strip_trailing_slash(const char *p, char *out, size_t cap)
-{
-    size_t n = strlen(p);
-    if (n > 0 && (p[n - 1] == '/' || p[n - 1] == '\\')) n--;
-    if (n >= cap) n = cap - 1;
-    memcpy(out, p, n);
-    out[n] = '\0';
-}
-
 /*
  * Directory input -> "<dir>/doc.html", so a bare `salam doc` writes
  * "./doc.html"; single-file input -> "<same dir>/<stem>.doc.html".
@@ -136,15 +93,14 @@ static void doc_output_path(const options_t *opt, const char *path, char *out, s
         return;
     }
     if (path_is_dir(path)) {
-        char base[DOC_PATH_MAX];
-        strip_trailing_slash(path, base, sizeof base);
-        sal_snprintf(out, cap, "%s/doc.html", base);
+        sal_path_join(out, cap, path, "doc.html");
     } else {
         char dir[DOC_PATH_MAX];
-        char stem[DOC_PATH_MAX];
-        dir_prefix_of(path, dir, sizeof dir);
-        path_stem(path, stem, sizeof stem);
-        sal_snprintf(out, cap, "%s%s.doc.html", dir, stem);
+        char leaf[DOC_PATH_MAX];
+        sal_path_dir_buf(path, dir, sizeof dir);
+        sal_path_stem_buf(path, leaf, sizeof leaf);
+        sal_snprintf(leaf + strlen(leaf), sizeof leaf - strlen(leaf), ".doc.html");
+        sal_path_join(out, cap, dir, leaf);
     }
 }
 
@@ -159,13 +115,13 @@ static void doc_walk(arena_t *a, vec_t *files, const char *dir)
     char pattern[DOC_PATH_MAX];
     struct _finddata_t fd;
     intptr_t h;
-    sal_snprintf(pattern, sizeof pattern, "%s/*", dir);
+    sal_path_join(pattern, sizeof pattern, dir, "*");
     h = _findfirst(pattern, &fd);
     if (h == -1) return;
     do {
         char child[DOC_PATH_MAX];
         if (fd.name[0] == '.') continue;
-        sal_snprintf(child, sizeof child, "%s/%s", dir, fd.name);
+        sal_path_join(child, sizeof child, dir, fd.name);
         if (fd.attrib & _A_SUBDIR)
             doc_walk(a, files, child);
         else if (has_salam_ext(fd.name))
@@ -179,7 +135,7 @@ static void doc_walk(arena_t *a, vec_t *files, const char *dir)
     while ((e = readdir(d)) != NULL) {
         char child[DOC_PATH_MAX];
         if (e->d_name[0] == '.') continue;
-        sal_snprintf(child, sizeof child, "%s/%s", dir, e->d_name);
+        sal_path_join(child, sizeof child, dir, e->d_name);
         if (path_is_dir(child))
             doc_walk(a, files, child);
         else if (has_salam_ext(e->d_name))
@@ -231,7 +187,7 @@ int driver_doc(options_t *opt)
     arena = arena_new(1 << 16);
     vec_init(&files);
     if (path_is_dir(path)) {
-        strip_trailing_slash(path, base, sizeof base);
+        sal_path_join(base, sizeof base, path, "");
         doc_walk(arena, &files, base);
     } else {
         /* A single file documents its whole package: same sibling auto-glob
@@ -255,8 +211,8 @@ int driver_doc(options_t *opt)
         if (!docgen_parse_file(db, pack, p, p, opt->defines, opt->ndefines)) warn++;
     }
 
-    strip_trailing_slash(path, base, sizeof base);
-    path_stem(base, title, sizeof title);
+    sal_path_join(base, sizeof base, path, "");
+    sal_path_stem_buf(base, title, sizeof title);
     sb_init(&html);
     docgen_render(db, title, &html);
     doc_output_path(opt, path, out, sizeof out);

@@ -20,20 +20,6 @@
 #include "core/sb.h"
 #include "logger/logger.h"
 
-static void path_stem(const char *path, char *out, size_t cap)
-{
-    const char *slash = strrchr(path, '/');
-    const char *bslash = strrchr(path, '\\');
-    const char *base = path;
-    if (slash && slash + 1 > base) base = slash + 1;
-    if (bslash && bslash + 1 > base) base = bslash + 1;
-    const char *dot = strrchr(base, '.');
-    size_t len = dot ? (size_t)(dot - base) : strlen(base);
-    if (len >= cap) len = cap - 1;
-    memcpy(out, base, len);
-    out[len] = '\0';
-}
-
 int driver_debug(options_t *opt)
 {
     if (opt->input_count == 0) {
@@ -55,7 +41,7 @@ int driver_debug(options_t *opt)
         sal_snprintf(exe, sizeof(exe), "%s", opt->output);
     } else {
         char stem[256];
-        path_stem(opt->inputs[0], stem, sizeof(stem));
+        sal_path_stem_buf(opt->inputs[0], stem, sizeof(stem));
         sal_snprintf(exe, sizeof(exe), "%s.exe", stem);
         opt->output = exe;
     }
@@ -163,7 +149,7 @@ int driver_memcheck(options_t *opt)
         sal_snprintf(exe, sizeof(exe), "%s", opt->output);
     } else {
         char stem[256];
-        path_stem(opt->inputs[0], stem, sizeof(stem));
+        sal_path_stem_buf(opt->inputs[0], stem, sizeof(stem));
         sal_snprintf(exe, sizeof(exe), "%s.exe", stem);
         opt->output = exe;
     }

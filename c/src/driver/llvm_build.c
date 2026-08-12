@@ -142,7 +142,7 @@ static int ll_gather_links(arena_t *a, logger_t *log, langpack_t *pack,
     int nwork = 0, wi = 0, dropped = 0;
 
     ll_scan_links(main_prog, libs, kinds, &n, cap);
-    dropped += ll_enqueue_imports(a, main_prog, dir_of(a, main_path), main_lang, work,
+    dropped += ll_enqueue_imports(a, main_prog, sal_path_dir(a, main_path), main_lang, work,
                                   &nwork, 256);
 
     for (; wi < nwork; wi++) {
@@ -173,7 +173,7 @@ static int ll_gather_links(arena_t *a, logger_t *log, langpack_t *pack,
             }
         }
         ll_scan_links(prog, libs, kinds, &n, cap);
-        dropped += ll_enqueue_imports(a, prog, dir_of(a, path), langpack_code(mp), work,
+        dropped += ll_enqueue_imports(a, prog, sal_path_dir(a, path), langpack_code(mp), work,
                                       &nwork, 256);
     }
     if (dropped > 0)
@@ -218,7 +218,7 @@ int driver_llvm(options_t *opt)
     }
     logger_set_diag_source(log, src->text, src->len, opt->diag_style, opt->diag_format);
     logger_add_diag_source(log, opt->input, src->text, src->len);
-    const char *module = module_of(arena, opt->input);
+    const char *module = sal_path_stem(arena, opt->input);
     const langpack_t *modpack = langpack_detect(arena, src, pack);
     /*
      * The entry point's name follows the language the *file* is written in,

@@ -129,7 +129,7 @@ int driver_layout_build(options_t *opt)
             cc_table_t *cc = cc_table_build(arena, NULL, opt->defines, opt->ndefines);
             cc_prune_program(arena, log, src->path, cc, program);
 
-            const char *base_dir = dir_of(arena, src->path);
+            const char *base_dir = sal_path_dir(arena, src->path);
             if (layout_expand(arena, log, modpack, program, base_dir, cc)) rc = 1;
             sema_run(arena, log, program, src->path, langpack_code(modpack), cc);
             ast_node_t *lb = find_layout(program);

@@ -278,7 +278,7 @@ const char *js_build_bundle(arena_t *arena, logger_t *log, options_t *opt,
                     cc_table_t *cc = cc_table_build(arena, NULL, defs, ndefs);
                     const langpack_t *modpack = langpack_detect(arena, src, pack);
                     const char *modentry = langpack_entry(modpack);
-                    const char *module = module_of(arena, path);
+                    const char *module = sal_path_stem(arena, path);
                     token_stream_t *toks = NULL;
                     ast_node_t *program = NULL;
                     bool lok, pok;
@@ -325,7 +325,7 @@ const char *js_build_bundle(arena_t *arena, logger_t *log, options_t *opt,
                             continue;
                         }
                         {
-                            const char *idir = dir_of(arena, path);
+                            const char *idir = sal_path_dir(arena, path);
                             size_t k = 0;
                             for (; k < program->list.len && nwork < SALAM_MAX_INPUTS;
                                  k++) {

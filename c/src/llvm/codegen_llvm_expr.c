@@ -1977,8 +1977,7 @@ static llv_t ll_match_expr(ll_t *ll, ast_node_t *n)
  * commits it emits the whole cast, including the non-pointer base case that
  * only the emitted operand's type can rule out.
  */
-static bool ll_gep_from_int_add(ll_t *ll, ast_node_t *n, const char *to,
-                                const char **out)
+static bool ll_gep_from_int_add(ll_t *ll, ast_node_t *n, const char *to, const char **out)
 {
     ast_node_t *bin = n->a;
     if (!ll_is_ptr_ts(to) || ll_is_str(to)) return false;
@@ -1990,17 +1989,19 @@ static bool ll_gep_from_int_add(ll_t *ll, ast_node_t *n, const char *to,
      * writes the pointer first. */
     ast_node_t *base = bin->a;
     if (!base || base->kind != AST_CAST || !base->a) return false;
-    const char *ity = base->type && base->type->type_str ? base->type->type_str
-                                                         : base->type_str;
+    const char *ity =
+        base->type && base->type->type_str ? base->type->type_str : base->type_str;
     if (!ll_is_int(ity) || ll_int_bits(ll, ity) != ll->ptr_bits) return false;
 
     llv_t p = ll_expr(ll, base->a);
     llv_t off = ll_expr(ll, bin->b);
-    const char *u = ll_ty(ll, ll->usize);
-    const char *o = ll_conv(ll, off, ll->usize);
-    bool ptr_base = ll_is_ptr_ts(p.ts) || ll_is_str(p.ts);
     const char *r = ll_new_tmp(ll);
-    if (ptr_base) {
+    /* A float offset would have been added in float and only then truncated to
+     * a pointer, so it is not this idiom - fall through to the faithful
+     * arithmetic below rather than folding it into a byte GEP. */
+    if ((ll_is_ptr_ts(p.ts) || ll_is_str(p.ts)) && !ll_is_float(off.ts)) {
+        const char *u = ll_ty(ll, ll->usize);
+        const char *o = ll_conv(ll, off, ll->usize);
         if (bin->op == TK_MINUS) {
             const char *neg = ll_new_tmp(ll);
             ll_emit(ll, "%s = sub %s 0, %s", neg, u, o);
@@ -2008,11 +2009,17 @@ static bool ll_gep_from_int_add(ll_t *ll, ast_node_t *n, const char *to,
         }
         ll_emit(ll, "%s = getelementptr i8, ptr %s, %s %s", r, p.ref, u, o);
     } else {
-        const char *b = ll_conv(ll, p, ll->usize);
+        const char *cty =
+            ll_is_float(off.ts) ? ll_common(ll, ll->usize, off.ts) : ll->usize;
+        bool flt = ll_is_float(cty);
+        const char *b = ll_conv(ll, p, cty);
+        const char *o = ll_conv(ll, off, cty);
         const char *sum = ll_new_tmp(ll);
-        ll_emit(ll, "%s = %s %s %s, %s", sum, bin->op == TK_MINUS ? "sub" : "add",
-                u, b, o);
-        ll_emit(ll, "%s = inttoptr %s %s to ptr", r, u, sum);
+        ll_emit(ll, "%s = %s %s %s, %s", sum,
+                bin->op == TK_MINUS ? (flt ? "fsub" : "sub") : (flt ? "fadd" : "add"),
+                ll_ty(ll, cty), b, o);
+        const char *ip = flt ? ll_conv(ll, (llv_t){sum, cty}, ll->usize) : sum;
+        ll_emit(ll, "%s = inttoptr %s %s to ptr", r, ll_ty(ll, ll->usize), ip);
     }
     *out = r;
     return true;

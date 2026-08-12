@@ -102,10 +102,10 @@ a level. Ctrl+Z therefore used to do nothing after any of them. `history.salam`
 keeps the stack instead, and every route into the buffer reports to it: typing,
 paste, cut, drag and drop, the indent commands, loading an example.
 
-| Key                        | Does                            |
-| -------------------------- | ------------------------------- |
-| `Ctrl+Z` / `Cmd+Z`         | undo                            |
-| `Ctrl+Shift+Z` / `Ctrl+Y`  | redo                            |
+| Key                       | Does |
+| ------------------------- | ---- |
+| `Ctrl+Z` / `Cmd+Z`        | undo |
+| `Ctrl+Shift+Z` / `Ctrl+Y` | redo |
 
 An entry is a whole snapshot (buffer text plus selection), not a diff, so it
 cannot drift out of step with the textarea, including for edits nothing here

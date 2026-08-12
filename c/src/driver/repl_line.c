@@ -48,7 +48,6 @@ void repl_hist_push(const char *line)
     repl_hist[repl_nhist++] = sal_strdup(line);
 }
 
-
 void repl_hist_clear(void)
 {
     {

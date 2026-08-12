@@ -577,11 +577,13 @@ end
 // only the emitted operand's type can rule out. Deliberately not `inbounds`:
 // this fires on arbitrary user arithmetic, and plain byte GEP has exactly the
 // wraparound semantics the integer form had.
+// (The C names this parameter `to`. Here that is the keyword `repeat a to b`
+// is spelled with, so it carries the caller's own name for the same thing.)
 func gep_from_int_add(
-    v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, to: str, out &: str
+    v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, to_ts: str, out &: str
 ): bool:
     node := at.Get(a, n)
-    if !is_ptr_ts(to) || is_str(to):
+    if !is_ptr_ts(to_ts) || is_str(to_ts):
         ret false
     end
     if node.a == 0 || at.KindOf(a, node.a) != at.AST_BINARY:
@@ -613,10 +615,13 @@ func gep_from_int_add(
 
     p := lv_expr(v, s, a, base.a)
     off := lv_expr(v, s, a, bin.b)
-    u := ty_of(v, s, a, v.usize)
-    mut o := conv(v, s, a, off, v.usize)
     r := new_tmp(v)
-    if is_ptr_ts(p.ts) || is_str(p.ts):
+    // A float offset would have been added in float and only then truncated to
+    // a pointer, so it is not this idiom - fall through to the faithful
+    // arithmetic below rather than folding it into a byte GEP.
+    if (is_ptr_ts(p.ts) || is_str(p.ts)) && !is_float(off.ts):
+        u := ty_of(v, s, a, v.usize)
+        mut o := conv(v, s, a, off, v.usize)
         if bin.op == tok.TK_MINUS:
             neg := new_tmp(v)
             emit(v, neg + " = sub " + u + " 0, " + o)
@@ -624,13 +629,23 @@ func gep_from_int_add(
         end
         emit(v, r + " = getelementptr i8, ptr " + p.ref + ", " + u + " " + o)
     else:
-        b := conv(v, s, a, p, v.usize)
+        cty := is_float(off.ts) ? common_ts(v, v.usize, off.ts) : v.usize
+        flt := is_float(cty)
+        b := conv(v, s, a, p, cty)
+        o2 := conv(v, s, a, off, cty)
         sum := new_tmp(v)
-        emit(
-            v,
-            sum + " = " + (bin.op == tok.TK_MINUS ? "sub " : "add ") + u + " " + b + ", " + o
-        )
-        emit(v, r + " = inttoptr " + u + " " + sum + " to ptr")
+        mut opc := ""
+        if bin.op == tok.TK_MINUS:
+            opc = flt ? "fsub" : "sub"
+        else:
+            opc = flt ? "fadd" : "add"
+        end
+        emit(v, sum + " = " + opc + " " + ty_of(v, s, a, cty) + " " + b + ", " + o2)
+        mut ip := sum
+        if flt:
+            ip = conv(v, s, a, make_llv(sum, cty), v.usize)
+        end
+        emit(v, r + " = inttoptr " + ty_of(v, s, a, v.usize) + " " + ip + " to ptr")
     end
     out = r
     ret true

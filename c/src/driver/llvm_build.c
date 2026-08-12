@@ -142,8 +142,8 @@ static int ll_gather_links(arena_t *a, logger_t *log, langpack_t *pack,
     int nwork = 0, wi = 0, dropped = 0;
 
     ll_scan_links(main_prog, libs, kinds, &n, cap);
-    dropped += ll_enqueue_imports(a, main_prog, sal_path_dir(a, main_path), main_lang, work,
-                                  &nwork, 256);
+    dropped += ll_enqueue_imports(a, main_prog, sal_path_dir(a, main_path), main_lang,
+                                  work, &nwork, 256);
 
     for (; wi < nwork; wi++) {
         const char *path = work[wi];
@@ -173,8 +173,8 @@ static int ll_gather_links(arena_t *a, logger_t *log, langpack_t *pack,
             }
         }
         ll_scan_links(prog, libs, kinds, &n, cap);
-        dropped += ll_enqueue_imports(a, prog, sal_path_dir(a, path), langpack_code(mp), work,
-                                      &nwork, 256);
+        dropped += ll_enqueue_imports(a, prog, sal_path_dir(a, path), langpack_code(mp),
+                                      work, &nwork, 256);
     }
     if (dropped > 0)
         LOG_W(log, PH_DRIVER,

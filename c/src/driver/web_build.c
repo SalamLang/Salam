@@ -220,7 +220,8 @@ int driver_web(options_t *opt)
                 {
                     int i = 0;
                     for (; i < scripts.n && rc == 0; i++) {
-                        const char *sp = sal_path_joina(arena, base_dir, scripts.paths[i]);
+                        const char *sp =
+                            sal_path_joina(arena, base_dir, scripts.paths[i]);
                         const char *entry1[1];
                         const char *bundle;
                         int brc = 0;

@@ -197,6 +197,7 @@ size_t sal_path_join(char *out, size_t n, const char *dir, const char *name)
     if (have + 1 < n) {
         out[have] = '/';
         copy_bounded(out + have + 1, n - have - 1, name, strlen(name));
+        sal_path_to_slash(out);
     }
     return need;
 }

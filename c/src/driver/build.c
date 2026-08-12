@@ -419,8 +419,8 @@ static void list_salam_files_in(arena_t *a, const char *dir, const char **out, i
     if (h == -1) return;
     do {
         if (!(fd.attrib & _A_SUBDIR) && *n < SALAM_MAX_INPUTS)
-            out[(*n)++] = is_cwd ? arena_strdup(a, fd.name)
-                                 : sal_path_joina(a, trimmed, fd.name);
+            out[(*n)++] =
+                is_cwd ? arena_strdup(a, fd.name) : sal_path_joina(a, trimmed, fd.name);
     } while (_findnext(h, &fd) == 0);
     _findclose(h);
 #else

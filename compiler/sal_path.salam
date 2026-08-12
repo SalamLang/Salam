@@ -1,0 +1,227 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// ===== core/sal_path.c =====
+//
+// One place that knows what a path separator is.
+//
+// Both '/' (47) and '\' (92) are separators, on every platform. Windows
+// accepts either in every path it is handed, and a user on Windows types,
+// pastes and gets back backslashes: %PATH% entries, drag-and-dropped
+// filenames and tab-completed directories all arrive that way. Meanwhile
+// everything the compiler builds itself joins with '/', so a path that mixes
+// the two ("C:\gcc\bin/gcc.exe") is the normal case, not an odd one, and
+// anything that scans for only one of the two silently gets the wrong answer
+// on half of them.
+//
+// Treating '\' as a separator on POSIX too - where it is a legal filename
+// character - is deliberate: the compiler's own path handling then behaves
+// identically on every host, which is what keeps this backend and the C one
+// emitting byte-identical output for the same sources.
+//
+// '/' is the canonical form. Everything produced here is slash-only, so
+// paths used as dedup keys ("did I already load this module?") compare equal
+// no matter which spelling they came in as.
+package salpath
+
+import str
+import co "sal_core.salam"
+
+const K_PATH_SEP = 47      // '/'
+const K_PATH_BACKSEP = 92  // '\'
+const K_PATH_DOT = 46      // '.'
+const K_PATH_COLON = 58    // ':'
+
+inline func byte_at(s: str, i: int): int: ret co.ByteAt(s, i) end
+
+func is_sep(b: int): bool:
+    ret b == K_PATH_SEP || b == K_PATH_BACKSEP
+end
+
+// "a//b" -> "a/b". Starts at index 2 so a leading "//" survives: on Windows
+// that is a UNC root ("//server/share"), where the doubling is the syntax.
+func collapse_double_sep(p: str): str:
+    if str.Len(p) < 3:
+        ret p
+    end
+    mut q := p
+    mut i := 2
+    until i < str.Len(q):
+        if byte_at(q, i) == K_PATH_SEP && byte_at(q, i - 1) == K_PATH_SEP:
+            q = str.Substr(q, 0, i) + str.Substr(q, i + 1, str.Len(q) - i - 1)
+        else:
+            i += 1
+        end
+    end
+    ret q
+end
+
+// Index just past the last character `dir` keeps once its trailing
+// separators are dropped. "/" and "c:/" are roots: the separator is the
+// whole path, not a trailing one, and dropping it would turn them into ""
+// and "c:".
+func trimmed_len(dir: str): int:
+    mut n := str.Len(dir)
+    until n > 1 && is_sep(byte_at(dir, n - 1)) && !(n == 3 && byte_at(dir, 1) == K_PATH_COLON):
+        n -= 1
+    end
+    ret n
+end
+
+// Offset of the last separator, or -1 when the path has none.
+func last_sep(p: str): int:
+    mut cut := 0 - 1
+    repeat str.Len(p) with i:
+        if is_sep(byte_at(p, i)):
+            cut = i
+        end
+    end
+    ret cut
+end
+
+pub func PathIsSep(b: int): bool:
+    ret is_sep(b)
+end
+
+// True for "/x", "\x", "c:/x", "c:\x".
+pub func PathIsAbs(p: str): bool:
+    n := str.Len(p)
+    if n == 0:
+        ret false
+    end
+    b0 := byte_at(p, 0)
+    if is_sep(b0):
+        ret true
+    end
+    if n >= 2 && byte_at(p, 1) == K_PATH_COLON:
+        if (b0 >= 65 && b0 <= 90) || (b0 >= 97 && b0 <= 122):
+            ret true
+        end
+    end
+    ret false
+end
+
+// '\' -> '/'.
+pub func PathToSlash(p: str): str:
+    if !str.Contains(p, "\\"):
+        ret p
+    end
+    mut sb := str.NewBuilder()
+    repeat str.Len(p) with i:
+        b := byte_at(p, i)
+        if b == K_PATH_BACKSEP:
+            str.BufAppendChar(sb, K_PATH_SEP)
+        else:
+            str.BufAppendChar(sb, b)
+        end
+    end
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+// Drop trailing separators, keeping a root ("/", "c:/") intact.
+pub func PathTrimSep(p: str): str:
+    ret str.Substr(p, 0, trimmed_len(p))
+end
+
+// The component after the last separator.
+pub func PathBase(p: str): str:
+    cut := last_sep(p)
+    if cut < 0:
+        ret p
+    end
+    ret str.Substr(p, cut + 1, str.Len(p) - cut - 1)
+end
+
+// Basename with its last extension removed.
+pub func PathStem(p: str): str:
+    b := PathBase(p)
+    dot := str.LastIndex(b, ".")
+    if dot >= 0:
+        ret str.Substr(b, 0, dot)
+    end
+    ret b
+end
+
+// Everything before the last separator; "" when there is none.
+pub func PathDir(p: str): str:
+    cut := last_sep(p)
+    if cut < 0:
+        ret ""
+    end
+    ret PathToSlash(str.Substr(p, 0, cut))
+end
+
+// dir + "/" + name, with exactly one separator between them and no trailing
+// one, slash-canonical throughout. An empty dir yields name alone.
+pub func PathJoin(dir: str, name0: str): str:
+    mut name := name0
+    // A leading separator on `name` would double up against the one added
+    // here; the caller means "under dir", not "at the root".
+    until str.Len(name) > 0 && is_sep(byte_at(name, 0)):
+        name = str.Substr(name, 1, str.Len(name) - 1)
+    end
+    if str.Len(dir) == 0:
+        ret PathToSlash(name)
+    end
+    d := PathToSlash(PathTrimSep(dir))
+    if str.Len(name) == 0:
+        ret d
+    end
+    ret d + "/" + PathToSlash(name)
+end
+
+// to_slash, then strip leading "./", collapse "/./", "//" and "seg/../".
+// Lexical only - the filesystem is never consulted, so a symlinked "seg" is
+// not resolved.
+//
+// The ".." collapse keeps import dedup keys canonical: the same file
+// imported as "token.salam" from the root and as "../token.salam" from a
+// sibling directory must resolve to ONE module, or its globals get linked
+// twice ('defined twice' at link time).
+pub func PathNormalize(p: str): str:
+    mut q := collapse_double_sep(PathToSlash(p))
+    until str.Len(q) >= 2 && byte_at(q, 0) == K_PATH_DOT && byte_at(q, 1) == K_PATH_SEP:
+        q = str.Substr(q, 2, str.Len(q) - 2)
+    end
+    mut idx := str.IndexOf(q, "/./")
+    until idx >= 0:
+        q = str.Substr(q, 0, idx + 1) + str.Substr(q, idx + 3, str.Len(q) - idx - 3)
+        idx = str.IndexOf(q, "/./")
+    end
+    mut dd := str.IndexOf(q, "/../")
+    until dd >= 0:
+        // start of the path segment right before this "/../"
+        mut segstart := 0
+        mut k := dd - 1
+        until k >= 0:
+            if byte_at(q, k) == K_PATH_SEP:
+                segstart = k + 1
+                break
+            end
+            k -= 1
+        end
+        seg := str.Substr(q, segstart, dd - segstart)
+        // never collapse a ".." segment, an empty segment ("//../", a
+        // rooted "/../") or a drive prefix like "c:" - skip past those
+        if str.Len(seg) == 0 || str.Equals(seg, "..") || str.Contains(seg, ":"):
+            dd = str.IndexFrom(q, "/../", dd + 1)
+            continue
+        end
+        q = str.Substr(q, 0, segstart) + str.Substr(q, dd + 4, str.Len(q) - dd - 4)
+        dd = str.IndexOf(q, "/../")
+    end
+    ret q
+end

@@ -244,17 +244,25 @@ ifeq ($(WITH_LLVM),1)
   # carries its own hardcoded -lz -lzstd and sits earlier on the command
   # line, and ld takes the first match, so rewriting only the later copy
   # changed the link line without changing a single entry in `ldd`.
+  #
+  # A pure substitution, never an append. These two used to filter the flag
+  # out and add -l:lib*.a back unconditionally, which put the archive on the
+  # link line even when llvm-config had not asked for the library at all.
+  # IS_WINDOWS/IS_MACOS describe the *host*, so this block also runs when a
+  # Linux host cross-compiles: the i686-w64-mingw32 release build, whose
+  # LLVM is configured -DLLVM_ENABLE_ZLIB=OFF -DLLVM_ENABLE_ZSTD=OFF
+  # precisely because that sysroot has neither, still got both appended and
+  # died on "lld: error: unable to find library -l:libz.a" - and the whole
+  # target silently fell back to a tcc-only salam.exe with no LLVM in it.
   ifeq ($(IS_WINDOWS)$(IS_MACOS),)
     LINUX_LIBDIR := /usr/lib/$(shell uname -m)-linux-gnu
     ifneq (,$(wildcard $(LINUX_LIBDIR)/libz.a))
       LLD_LIBS := $(patsubst -lz,-l:libz.a,$(LLD_LIBS))
-      LLVM_SYSTEM_LIBS := $(shell printf '%s' "$(LLVM_SYSTEM_LIBS)" \
-          | tr ' ' '\n' | grep -vxE '\-lz' | tr '\n' ' ') -l:libz.a
+      LLVM_SYSTEM_LIBS := $(patsubst -lz,-l:libz.a,$(LLVM_SYSTEM_LIBS))
     endif
     ifneq (,$(wildcard $(LINUX_LIBDIR)/libzstd.a))
       LLD_LIBS := $(patsubst -lzstd,-l:libzstd.a,$(LLD_LIBS))
-      LLVM_SYSTEM_LIBS := $(shell printf '%s' "$(LLVM_SYSTEM_LIBS)" \
-          | tr ' ' '\n' | grep -vxE '\-lzstd' | tr '\n' ' ') -l:libzstd.a
+      LLVM_SYSTEM_LIBS := $(patsubst -lzstd,-l:libzstd.a,$(LLVM_SYSTEM_LIBS))
     endif
     # -static-libstdc++ only governs the libstdc++ the compiler driver adds
     # implicitly. This link is driven by cc, not c++, so the C++ runtime is

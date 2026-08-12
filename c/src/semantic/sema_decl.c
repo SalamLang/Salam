@@ -14,6 +14,7 @@
 
 #include "core/prelude.h"
 #include "core/sal_format.h"
+#include "core/sal_path.h"
 #include "semantic/sema_internal.h"
 #include "langpack/langpack.h"
 #include "i18n/i18n.h"
@@ -105,15 +106,9 @@ static void check_link(sema_t *s, ast_node_t *d)
     if (kind && !strcmp(kind, "framework")) return;
     if (spec[0] == '-') return;
     if (!link_spec_is_path(spec)) return;
-    bool absolute = spec[0] == '/' || spec[0] == '\\' ||
-                    (isalpha((unsigned char)spec[0]) && spec[1] == ':');
     const char *full = spec;
-    if (!absolute && s->dir && s->dir[0]) {
-        size_t n = strlen(s->dir) + 1 + strlen(spec) + 1;
-        char *buf = (char *)arena_alloc(s->a, n);
-        sal_snprintf(buf, n, "%s/%s", s->dir, spec);
-        full = buf;
-    }
+    if (!sal_path_is_absolute(spec) && s->dir && s->dir[0])
+        full = sal_path_joina(s->a, s->dir, spec);
     FILE *f = fopen(full, "rb");
     if (f) {
         fclose(f);

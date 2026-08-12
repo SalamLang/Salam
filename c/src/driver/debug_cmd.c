@@ -14,6 +14,7 @@
 
 #include "core/prelude.h"
 #include "core/sal_format.h"
+#include "core/sal_path.h"
 #include "driver/debug_cmd.h"
 #include "driver/build.h"
 #include "core/sb.h"

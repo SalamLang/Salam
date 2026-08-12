@@ -14,6 +14,7 @@
 
 #include "core/prelude.h"
 #include "core/sal_format.h"
+#include "core/sal_path.h"
 #include "driver/layout_build.h"
 #include "driver/driver.h"
 #include "driver/build.h"
@@ -30,28 +31,6 @@
 #include "layout/layout_expand.h"
 #include "condcomp/condcomp.h"
 #include "i18n/i18n.h"
-
-static const char *module_of(arena_t *a, const char *path)
-{
-    const char *base = path, *p;
-    if ((p = strrchr(path, '/'))) base = p + 1;
-    if ((p = strrchr(base, '\\'))) base = p + 1;
-    const char *dot = strrchr(base, '.');
-    size_t len = dot ? (size_t)(dot - base) : strlen(base);
-    return arena_strndup(a, base, len);
-}
-
-static const char *dir_of(arena_t *a, const char *path)
-{
-    const char *slash = NULL;
-    {
-        const char *p = path;
-        for (; *p; p++)
-            if (*p == '/' || *p == '\\') slash = p;
-    }
-    if (!slash) return "";
-    return arena_strndup(a, path, (size_t)(slash - path));
-}
 
 static bool write_file(logger_t *log, const char *path, const char *content)
 {

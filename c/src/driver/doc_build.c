@@ -28,6 +28,7 @@
 
 #include "core/prelude.h"
 #include "core/sal_format.h"
+#include "core/sal_path.h"
 #include "core/sb.h"
 #include "core/arena.h"
 #include "core/vec.h"

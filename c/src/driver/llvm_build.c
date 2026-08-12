@@ -14,6 +14,7 @@
 
 #include "core/prelude.h"
 #include "core/sal_format.h"
+#include "core/sal_path.h"
 #include "driver/llvm_build.h"
 #include "driver/driver.h"
 #include "driver/build.h"
@@ -33,28 +34,6 @@
 static const char *plural_suffix(int n)
 {
     return n == 1 ? "" : "s";
-}
-
-static const char *module_of(arena_t *a, const char *path)
-{
-    const char *slash = strrchr(path, '/');
-    const char *bslash = strrchr(path, '\\');
-    const char *base = path;
-    if (slash && slash + 1 > base) base = slash + 1;
-    if (bslash && bslash + 1 > base) base = bslash + 1;
-    const char *dot = strrchr(base, '.');
-    size_t len = dot ? (size_t)(dot - base) : strlen(base);
-    return arena_strndup(a, base, len);
-}
-
-static const char *dir_of(arena_t *a, const char *path)
-{
-    const char *slash = strrchr(path, '/');
-    const char *bs = strrchr(path, '\\');
-    const char *cut = slash;
-    if (bs && (!slash || bs > slash)) cut = bs;
-    if (!cut) return "";
-    return arena_strndup(a, path, (size_t)(cut - path));
 }
 
 static bool triple_is_windows(const char *t)

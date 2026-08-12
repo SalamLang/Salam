@@ -364,7 +364,6 @@ bool salam_find_path_tool(const char *name, char *out, size_t n)
     return false;
 }
 
-
 static bool file_exists(const char *p)
 {
     FILE *f = fopen(p, "rb");

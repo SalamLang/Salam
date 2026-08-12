@@ -1,0 +1,122 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Scrapes every gold and coin row from https://alanchand.com/en/gold-price:
+// the quoted price with its daily change, the "real" (intrinsic) price, and
+// the bubble - how far the quote sits above or below that real price.
+//
+// Run it with:  salam run alanchand_gold.salam
+//
+// A row on that page looks like this; the data-label attributes name the
+// columns and are what this parser anchors on:
+//
+//   <tr class="clickable-row" onclick="...">
+//     <td>Raw 24K Gold (Mesghal)</td>
+//     <td data-label="Price (IRR) + Change" class="priceTd">
+//         828,900,000 IRR<span class="priceSymbol down">0.49%</span></td>
+//     <td data-label="Real Price">863,570,000 IRR</td>
+//     <td data-label="Bubble Amount(%)" class="priceTd">
+//         -3,467,000<span class="priceSymbol">(-4.01%)</span></td>
+//   </tr>
+
+package main
+
+import ac "_alanchand.salam"
+import str
+import fmt
+
+const NAME_W := 28
+const PRICE_W := 20
+const CHANGE_W := 10
+const BUBBLE_W := 22
+
+const ROW_MARK := `class="clickable-row"`
+const PRICE_MARK := `data-label="Price (IRR) + Change"`
+const REAL_MARK := `data-label="Real Price"`
+const BUBBLE_MARK := `data-label="Bubble Amount(%)"`
+
+func show_row(name: str, price: str, change: str, real: str, bubble: str):
+    mut line := fmt.PadRight(name, NAME_W)
+    line = line + " " + fmt.PadLeft(price, PRICE_W)
+    line = line + " " + fmt.PadLeft(change, CHANGE_W)
+    line = line + " " + fmt.PadLeft(real, PRICE_W)
+    line = line + " " + fmt.PadLeft(bubble, BUBBLE_W)
+    println line
+end
+
+func show_header():
+    show_row("Item", "Price", "Change", "Real price", "Bubble")
+    println str.Repeat("-", NAME_W + PRICE_W + CHANGE_W + PRICE_W + BUBBLE_W + 4)
+end
+
+// The change sits in a priceSymbol span inside the price cell, and its class
+// carries the direction the site draws as an arrow.
+func change_of(cell: str): str:
+    pct := ac.Clean(cell)
+    lead := ac.Lead(cell)
+    trail := str.Trim(str.TrimPrefix(pct, lead))
+    if trail.len() == 0:
+        ret "-"
+    end
+    dir := ac.Direction(cell)
+    if dir == "-":
+        ret trail
+    end
+    ret dir + " " + trail
+end
+
+func show_item(html: str, at: int):
+    mut cursor := 0
+    name := ac.Text(html, "<td>", at, "</td>", cursor)
+    price_cell := ac.Inner(html, PRICE_MARK, at, "</td>", cursor)
+    real := ac.CellText(html, REAL_MARK, at)
+    bubble_cell := ac.Inner(html, BUBBLE_MARK, at, "</td>", cursor)
+    show_row(name, ac.Lead(price_cell), change_of(price_cell), real, ac.Clean(bubble_cell))
+end
+
+// Every gold row carries class="clickable-row", so each hit is one item and
+// the four cells that follow it belong to that item.
+func scrape(html: str): int:
+    mut pos := 0
+    mut found := 0
+    until true:
+        at := str.IndexFrom(html, ROW_MARK, pos)
+        if at < 0:
+            break
+        end
+        show_item(html, at)
+        found = found + 1
+        pos = at + ROW_MARK.len()
+    end
+    ret found
+end
+
+func main:
+    mut session := ac.NewSession()
+    println "Fetching " + ac.GOLD_URL
+    html := ac.Fetch(session, ac.GOLD_URL)
+    if html.len() == 0:
+        println "no gold data"
+        ret 1
+    end
+    _saved := ac.SaveCookies(session)
+
+    println ""
+    ac.Banner("Alanchand - live gold and coin prices (Iranian Rial)", ac.GOLD_URL, html)
+    show_header()
+    n := scrape(html)
+    println ""
+    println str.FromInt(n as i64) + " items"
+    ret 0
+end

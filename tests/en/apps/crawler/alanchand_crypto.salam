@@ -1,0 +1,114 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Scrapes the full coin list from https://alanchand.com/en/crypto-price:
+// name, ticker, price in Iranian Rial, price in US Dollar, and the direction
+// the Rial quote moved.
+//
+// Run it with:  salam run alanchand_crypto.salam
+//
+// A row on that page looks like this; the span classes are what this parser
+// anchors on (the trailing sparkline column is ignored):
+//
+//   <tr onclick="...">
+//     <td class="currNameIco"><img ...>
+//         <span class="faCurr">Tether</span><span class="symbolCurr">USDT</span></td>
+//     <td class="perTmn text-center"><span class="tmn">1,870,700</span>
+//         <span class="faSymbol"> IRR</span>
+//         <span class="priceSymbol down">0.34<span class="percentage">%</span></span></td>
+//     <td class="perUsd text-center">...<span class="dlr">1</span></td>
+//   </tr>
+
+package main
+
+import ac "_alanchand.salam"
+import str
+import fmt
+
+const NAME_W := 22
+const SYMBOL_W := 8
+const IRR_W := 20
+const USD_W := 16
+const MOVE_W := 6
+
+const NAME_MARK := `class="faCurr"`
+const SYMBOL_MARK := `class="symbolCurr"`
+const IRR_CELL_MARK := `class="perTmn`
+const IRR_MARK := `class="tmn"`
+const USD_MARK := `class="dlr"`
+
+func show_row(name: str, symbol: str, irr: str, usd: str, move: str):
+    mut line := fmt.PadRight(name, NAME_W)
+    line = line + " " + fmt.PadRight(symbol, SYMBOL_W)
+    line = line + " " + fmt.PadLeft(irr, IRR_W)
+    line = line + " " + fmt.PadLeft(usd, USD_W)
+    line = line + " " + fmt.PadLeft(move, MOVE_W)
+    println line
+end
+
+func show_header():
+    show_row("Coin", "Symbol", "Price (IRR)", "Price (USD)", "Move")
+    println str.Repeat("-", NAME_W + SYMBOL_W + IRR_W + USD_W + MOVE_W + 4)
+end
+
+// The USD figure is split across spans ("$" then the number), so the dlr
+// span alone is the value; an empty one means the site quotes no USD price.
+func usd_of(html: str, at: int): str:
+    usd := ac.SpanText(html, USD_MARK, at)
+    if usd.len() == 0:
+        ret "-"
+    end
+    ret "$" + usd
+end
+
+// Walks the page one coin name at a time. Every other field of that coin sits
+// after its name span and before the next one.
+func scrape(html: str): int:
+    mut pos := 0
+    mut found := 0
+    until true:
+        mut next := 0
+        name := ac.Text(html, NAME_MARK, pos, "</span>", next)
+        if next < 0:
+            break
+        end
+        mut cell_end := 0
+        symbol := ac.SpanText(html, SYMBOL_MARK, next)
+        irr := ac.SpanText(html, IRR_MARK, next)
+        move := ac.Direction(ac.Inner(html, IRR_CELL_MARK, next, "</td>", cell_end))
+        show_row(name, symbol, irr, usd_of(html, next), move)
+        found = found + 1
+        pos = next
+    end
+    ret found
+end
+
+func main:
+    mut session := ac.NewSession()
+    println "Fetching " + ac.CRYPTO_URL
+    html := ac.Fetch(session, ac.CRYPTO_URL)
+    if html.len() == 0:
+        println "no crypto data"
+        ret 1
+    end
+    _saved := ac.SaveCookies(session)
+
+    println ""
+    ac.Banner("Alanchand - live cryptocurrency prices", ac.CRYPTO_URL, html)
+    show_header()
+    n := scrape(html)
+    println ""
+    println str.FromInt(n as i64) + " coins"
+    ret 0
+end

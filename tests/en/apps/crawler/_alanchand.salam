@@ -1,0 +1,310 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Shared plumbing for the three alanchand.com scrapers in this directory
+// (alanchand_currency.salam, alanchand_gold.salam, alanchand_crypto.salam):
+// a browser-shaped HTTP session with a persistent cookie jar, plus the few
+// HTML-slicing helpers those three pages need.
+//
+// alanchand.com sits behind Cloudflare. It serves plain HTML to a request
+// that looks like a browser, but it can answer an unfamiliar client with a
+// 403/503 interstitial while handing out __cf_bm / cf_clearance cookies. The
+// session below therefore sends a full desktop-Chrome header set, keeps every
+// cookie the site sets, replays the request with them, and persists the jar
+// to disk so the next run starts out already "known".
+
+package alanchand
+
+import net.http
+import str
+import io
+import os
+import time
+
+pub const CURRENCY_URL := "https://alanchand.com/en"
+pub const GOLD_URL := "https://alanchand.com/en/gold-price"
+pub const CRYPTO_URL := "https://alanchand.com/en/crypto-price"
+
+pub const USER_AGENT := "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"
+
+const JAR_FILE := "alanchand-cookies.txt"
+const MAX_REDIRECTS := 3
+const RETRY_DELAY_MS := 1500
+
+func jar_path(): str:
+    ret os.TempDir().concat("/").concat(JAR_FILE)
+end
+
+// Every header a stock Chrome navigation sends, in the same spelling. The
+// transport owns Accept-Encoding and Connection, so they are not listed.
+func apply_browser_headers(c &: http.Client):
+    c.SetHeader("User-Agent", USER_AGENT)
+    c.SetHeader("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
+    c.SetHeader("Accept-Language", "en-US,en;q=0.9,fa;q=0.8")
+    c.SetHeader("Upgrade-Insecure-Requests", "1")
+    c.SetHeader("Sec-Fetch-Dest", "document")
+    c.SetHeader("Sec-Fetch-Mode", "navigate")
+    c.SetHeader("Sec-Fetch-Site", "none")
+    c.SetHeader("Sec-Fetch-User", "?1")
+    c.SetHeader("Sec-Ch-Ua", "\"Chromium\";v=\"127\", \"Not)A;Brand\";v=\"99\"")
+    c.SetHeader("Sec-Ch-Ua-Mobile", "?0")
+    c.SetHeader("Sec-Ch-Ua-Platform", "\"Windows\"")
+    c.SetHeader("Cache-Control", "no-cache")
+    c.SetHeader("Pragma", "no-cache")
+end
+
+// A Cloudflare edge answers an unproven client with one of these while it
+// sets the cookies that make the next request pass.
+func is_challenge(status: int): bool:
+    ret status == 0 || status == 403 || status == 429 || status == 503
+end
+
+func is_redirect(status: int): bool:
+    ret status == 301 || status == 302 || status == 303 || status == 307 || status == 308
+end
+
+// Turns a Location header (absolute, root-relative or bare) into a full URL.
+func absolute(base: str, location: str): str:
+    if str.StartsWith(location, "http://") || str.StartsWith(location, "https://"):
+        ret location
+    end
+    scheme_end := str.Find(base, "://")
+    if scheme_end < 0:
+        ret location
+    end
+    slash := str.IndexFrom(base, "/", scheme_end + 3)
+    mut root := base
+    if slash >= 0:
+        root = base.substr(0, slash)
+    end
+    if str.StartsWith(location, "/"):
+        ret root.concat(location)
+    end
+    ret root.concat("/").concat(location)
+end
+
+func follow(c &: http.Client, first: http.Response, url: str): http.Response:
+    mut r := first
+    mut here := url
+    mut hop := 0
+    until hop < MAX_REDIRECTS && is_redirect(r.status):
+        next := http.GetHeader(r, "Location")
+        if next.len() == 0:
+            ret r
+        end
+        here = absolute(here, next)
+        r = c.Get(here)
+        hop = hop + 1
+    end
+    ret r
+end
+
+func entities(s: str): str:
+    mut t := str.Replace(s, "&nbsp;", " ")
+    t = str.Replace(t, "&amp;", "&")
+    t = str.Replace(t, "&lt;", "<")
+    t = str.Replace(t, "&gt;", ">")
+    t = str.Replace(t, "&quot;", "\"")
+    t = str.Replace(t, "&#039;", "'")
+    t = str.Replace(t, "&rsquo;", "'")
+    ret t
+end
+
+// Collapses every run of whitespace to a single space and trims the edges.
+func squeeze(s: str): str:
+    mut t := str.Replace(s, "\r", " ")
+    t = str.Replace(t, "\n", " ")
+    t = str.Replace(t, "\t", " ")
+    until str.Contains(t, "  "):
+        t = str.Replace(t, "  ", " ")
+    end
+    ret str.Trim(t)
+end
+
+// -------------------------------------------------------------- session ----
+
+pub func NewSession(): http.Client:
+    mut c := http.NewClient()
+    apply_browser_headers(c)
+    _restored := LoadCookies(c)
+    ret c
+end
+
+// The jar is "name<TAB>value" per line. An unreadable jar is just a cold
+// start, never fatal: the site sets its cookies again on the first request.
+pub func LoadCookies(c &: http.Client): int:
+    raw := io.ReadFile(jar_path())
+    if raw.len() == 0:
+        ret 0
+    end
+    lines := str.Split(raw, "\n")
+    defer lines.free()
+    mut n := 0
+    each line in lines:
+        tab := str.Find(line, "\t")
+        if tab > 0:
+            c.SetCookie(line.substr(0, tab), str.Trim(line.substr(tab + 1, line.len() - tab - 1)))
+            n = n + 1
+        end
+    end
+    ret n
+end
+
+pub func SaveCookies(c &: http.Client): int:
+    mut out := ""
+    mut n := 0
+    it := c.cookies.iter()
+    until it.has_next():
+        out = out.concat(it.key()).concat("\t").concat(it.value()).concat("\n")
+        n = n + 1
+        it.next()
+    end
+    if n == 0:
+        ret 0
+    end
+    _written := io.WriteFile(jar_path(), out)
+    ret n
+end
+
+// Fetches `url` as a browser would. Returns the response body, or "" when
+// the page could not be retrieved (the reason is printed).
+pub func Fetch(c &: http.Client, url: str): str:
+    mut r := follow(c, c.Get(url), url)
+    if is_challenge(r.status):
+        // The client absorbed whatever cookies came with the challenge;
+        // replaying the request with them is what a browser does next.
+        println "  challenged (status " + str.FromInt(r.status as i64) + "), retrying with cookies"
+        time.Sleep(RETRY_DELAY_MS)
+        r = follow(c, c.Get(url), url)
+    end
+    if !http.Ok(r):
+        println "  fetch failed: status " + str.FromInt(r.status as i64) + " for " + url
+        ret ""
+    end
+    ret r.body
+end
+
+// ----------------------------------------------------------------- HTML ----
+
+// Replaces every tag with a space and decodes the handful of entities the
+// site emits, so a cell's markup collapses to its text.
+pub func Clean(html: str): str:
+    mut out := ""
+    mut i := 0
+    until i < html.len():
+        lt := str.IndexFrom(html, "<", i)
+        if lt < 0:
+            out = out.concat(html.substr(i, html.len() - i))
+            i = html.len()
+        else:
+            out = out.concat(html.substr(i, lt - i)).concat(" ")
+            gt := str.IndexFrom(html, ">", lt)
+            if gt < 0:
+                i = html.len()
+            else:
+                i = gt + 1
+            end
+        end
+    end
+    ret squeeze(entities(out))
+end
+
+// Raw inner markup of the first element at/after `from` whose opening tag
+// contains `marker`, up to `closing`. `next` receives the index just past
+// that element, or -1 when the marker was not found.
+pub func Inner(html: str, marker: str, from: int, closing: str, next &: int): str:
+    at := str.IndexFrom(html, marker, from)
+    if at < 0:
+        next = 0 - 1
+        ret ""
+    end
+    gt := str.IndexFrom(html, ">", at)
+    if gt < 0:
+        next = 0 - 1
+        ret ""
+    end
+    close := str.IndexFrom(html, closing, gt)
+    if close < 0:
+        next = 0 - 1
+        ret ""
+    end
+    next = close + closing.len()
+    ret html.substr(gt + 1, close - gt - 1)
+end
+
+// Same, but cleaned to plain text.
+pub func Text(html: str, marker: str, from: int, closing: str, next &: int): str:
+    ret Clean(Inner(html, marker, from, closing, next))
+end
+
+// Text of a cell/span relative to a row anchor, without a cursor to thread.
+pub func CellText(html: str, marker: str, from: int): str:
+    mut at := 0
+    text := Text(html, marker, from, "</td>", at)
+    if at < 0:
+        ret ""
+    end
+    ret text
+end
+
+pub func SpanText(html: str, marker: str, from: int): str:
+    mut at := 0
+    text := Text(html, marker, from, "</span>", at)
+    if at < 0:
+        ret ""
+    end
+    ret text
+end
+
+// The leading text of a cell, i.e. everything before its first nested tag:
+// "828,900,000 IRR" out of "828,900,000 IRR<span ...>0.49%</span>".
+pub func Lead(inner: str): str:
+    cut := str.Find(inner, "<")
+    if cut < 0:
+        ret squeeze(entities(inner))
+    end
+    ret squeeze(entities(inner.substr(0, cut)))
+end
+
+// "up" / "down" / "-" from the priceSymbol class the site puts on a cell.
+pub func Direction(inner: str): str:
+    if str.Contains(inner, "priceSymbol up"):
+        ret "up"
+    end
+    if str.Contains(inner, "priceSymbol down"):
+        ret "down"
+    end
+    ret "-"
+end
+
+// The "Last Update : ..." line every page carries under its heading.
+pub func LastUpdate(html: str): str:
+    at := str.Find(html, "Last Update")
+    if at < 0:
+        ret "unknown"
+    end
+    stop := str.IndexFrom(html, "</p>", at)
+    if stop < 0:
+        ret "unknown"
+    end
+    line := Clean(html.substr(at, stop - at))
+    ret str.Trim(str.TrimPrefix(line, "Last Update :"))
+end
+
+pub func Banner(title: str, url: str, html: str):
+    println title
+    println "Source      : " + url
+    println "Last update : " + LastUpdate(html)
+    println ""
+end

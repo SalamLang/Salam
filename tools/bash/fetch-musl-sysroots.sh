@@ -199,11 +199,17 @@ for arch in $ARCHES; do
         # features.h is a stable, always-present marker for the real libc
         # include root.
         hdr=$(find "$arch-x" -type f -name features.h ! -path '*/c++/*' 2>/dev/null | head -1)
+        rm -rf "$SR/include"
         if [ -n "$hdr" ]; then
-            rm -rf "$SR/include"
             mkdir -p "$SR/include"
-            cp -r "$(dirname "$hdr")/." "$SR/include/"
-        else
+            # `|| true` for the same reason tar's status is ignored above:
+            # a header tree can carry a symlink this host cannot reproduce,
+            # and cp would then fail the whole step over one file. What
+            # matters is whether features.h arrived, so check that instead.
+            cp -r "$(dirname "$hdr")/." "$SR/include/" 2>/dev/null || true
+        fi
+        if [ ! -f "$SR/include/features.h" ]; then
+            rm -rf "$SR/include"
             echo "::warning::no musl libc headers in the fetched $arch toolchain; static third-party libs for $triple will be skipped"
         fi
     fi

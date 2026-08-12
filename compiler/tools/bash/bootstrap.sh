@@ -148,6 +148,30 @@ case "${SALAM_WITH_LLVM:-auto}" in
     ;;
 esac
 
+# The one LLVM system library macOS does not ship in its SDK is zstd, and
+# Homebrew keeps it in a keg that is not on the linker's default search path,
+# so std/llvm's `link dynamic "zstd"` failed the stage 2 link with
+# `ld: library 'zstd' not found`. c/Makefile solves the same problem for the C
+# build by resolving the full archive path from `brew --prefix zstd`; a .salam
+# file cannot shell out, so hand the directory to the driver instead. Only the
+# keg's own lib dir is added, never `$(brew --prefix)/lib` wholesale, which
+# would put Homebrew's copy of every other library ahead of the SDK's.
+#
+# Apple's linker searches libzstd.dylib before libzstd.a and has no way to ask
+# for the archive short of naming its full path, so the stage2 built here does
+# carry a dynamic reference into the keg. That is fine for a bootstrap on the
+# machine that produced it; a *released* macOS binary must not, which is why
+# c/Makefile hands the C build the .a by path instead.
+if [ -n "$LLVM_FLAGS" ] && [ "$(uname -s)" = Darwin ]; then
+    for d in "$(brew --prefix zstd 2>/dev/null)/lib" \
+        /opt/homebrew/opt/zstd/lib /usr/local/opt/zstd/lib; do
+        [ -d "$d" ] || continue
+        LLVM_FLAGS="$LLVM_FLAGS --libpath=$d"
+        LLVM_STATE="$LLVM_STATE, zstd from $d"
+        break
+    done
+fi
+
 echo "root   : $ROOT"
 echo "seed   : $SEED"
 "$SEED" version 2>&1 | head -1 || true

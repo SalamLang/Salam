@@ -277,6 +277,7 @@ int driver_llvm(options_t *opt)
     o.output_mode = (llvm_output_mode_t)opt->llvm_emit;
     o.debug_info = opt->debug_info;
     o.verify_module = opt->llvm_verify;
+    o.release = !opt->safe;
     o.target_triple = opt->llvm_target;
     o.lib_paths = opt->lib_paths;
     o.nlibpath = opt->nlibpath;

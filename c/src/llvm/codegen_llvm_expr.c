@@ -19,11 +19,30 @@
 #include "i18n/i18n.h"
 
 /*
- * No 'nsw'/'nuw': salam defines signed and unsigned overflow alike as
- * two's-complement wrap (SALAM-TYPES.md 4.1), while 'nsw' tells LLVM that
- * signed overflow is poison - which let `(100 as i8) + (100 as i8)` fold to
- * 200 instead of wrapping to -56.
+ * The 'nsw' on signed add/sub/mul, and only in a release build.
+ *
+ * A debug build emits none: salam defines signed and unsigned overflow alike
+ * as two's-complement wrap (SALAM-TYPES.md 4.1), and 'nsw' tells LLVM signed
+ * overflow is poison - which lets `(100 as i8) + (100 as i8)` fold to 200
+ * instead of wrapping to -56. tests/en/exec/int_width_wrap.salam pins that.
+ *
+ * A release build trades the guarantee away, the same bargain it already makes
+ * for bounds checks. It buys more than skipping a compare does: without it
+ * LLVM cannot prove an `int` loop counter stays in range, so it will not widen
+ * the counter to 64 bits, and without a widened counter it cannot strength
+ * reduce the element address to a walking pointer or unroll the loop. That is
+ * worth ~40% on an index-heavy loop (33_subset_sum_reachability, 22_knapsack).
+ *
+ * Never on unsigned types - unsigned wrap stays defined in every mode - and
+ * never on the bitwise or shift operators, whose overflow is a different
+ * question.
  */
+static bool ll_nowrap(ll_t *ll, token_kind_t k, bool isflt, bool issigned)
+{
+    if (!ll->nowrap || isflt || !issigned) return false;
+    return k == TK_PLUS || k == TK_MINUS || k == TK_STAR;
+}
+
 static const char *ll_arith_op(token_kind_t k, bool isflt, bool issigned)
 {
     switch (k) {
@@ -383,7 +402,9 @@ llv_t ll_binary(ll_t *ll, ast_node_t *n)
         return ll_poison(rt);
     }
     const char *r = ll_new_tmp(ll);
-    ll_emit(ll, "%s = %s %s %s, %s", r, o, ll_ty(ll, rt), lc, rc);
+    ll_emit(ll, "%s = %s%s %s %s, %s", r, o,
+            ll_nowrap(ll, op, flt, ll_is_signed(rt)) ? " nsw" : "", ll_ty(ll, rt), lc,
+            rc);
     return (llv_t){r, rt};
 }
 
@@ -441,10 +462,12 @@ static llv_t ll_incdec(ll_t *ll, ast_node_t *n)
     ll_emit(ll, "%s = load %s, ptr %s", oldv, ll_ty(ll, ts), a.ptr);
     bool flt = ll_is_float(ts);
     const char *step = flt ? "1.0" : "1";
-    const char *op =
-        ll_arith_op(n->op == TK_PLUS_PLUS ? TK_PLUS : TK_MINUS, flt, ll_is_signed(ts));
+    token_kind_t ik = n->op == TK_PLUS_PLUS ? TK_PLUS : TK_MINUS;
+    const char *op = ll_arith_op(ik, flt, ll_is_signed(ts));
     const char *newv = ll_new_tmp(ll);
-    ll_emit(ll, "%s = %s %s %s, %s", newv, op, ll_ty(ll, ts), oldv, step);
+    ll_emit(ll, "%s = %s%s %s %s, %s", newv, op,
+            ll_nowrap(ll, ik, flt, ll_is_signed(ts)) ? " nsw" : "", ll_ty(ll, ts), oldv,
+            step);
     ll_emit(ll, "store %s %s, ptr %s", ll_ty(ll, ts), newv, a.ptr);
     return (llv_t){n->is_prefix ? newv : oldv, ts};
 }

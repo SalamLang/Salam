@@ -95,19 +95,22 @@ ifeq ($(LLVM_CONFIG_OK),1)
   # the directory is remembered because libsalam-llvm's archive merge has to
   # name those archives by path (see LLVM_MERGE_LIBDIRS).
   #
-  # As of 2026-08 that probe comes up empty on macOS regardless: Homebrew's
-  # lld formula builds with BUILD_SHARED_LIBS=ON, so the keg holds
-  # liblld*.dylib and no archives at all. Which is why this has to be a
-  # probe for the .a rather than for the formula: WITH_LLD then correctly
-  # settles on 0 there, and the build produces LLVM-without-LLD instead of
-  # claiming an in-process linker it cannot link. Merging the dylibs is not
-  # an alternative - Homebrew's lld resolves LLVM through libLLVM.dylib,
-  # and a process holding both that and this archive's static LLVM has two
-  # copies of LLVM's global state.
+  # As of 2026-08 the Homebrew keg comes up empty regardless: that formula
+  # builds with BUILD_SHARED_LIBS=ON, so it holds liblld*.dylib and no
+  # archives at all. Which is why this probes for the .a rather than for the
+  # formula. Merging the dylibs is not an alternative - Homebrew's lld
+  # resolves LLVM through libLLVM.dylib, and a process holding both that and
+  # this archive's static LLVM has two copies of LLVM's global state.
+  #
+  # So pass LLD_PREFIX=DIR to point at an lld built with
+  # BUILD_SHARED_LIBS=OFF (tools/bash/build-static-lld.sh produces one) and
+  # macOS gets in-process LLD exactly like Linux. Without it WITH_LLD
+  # settles on 0, which is a working configuration and not an error: LLVM
+  # codegen still runs in-process and only the link shells out.
+  LLD_PREFIX ?= $(shell brew --prefix lld 2>/dev/null)
   ifeq (,$(wildcard $(LLVM_LIBDIR_PROBE)/liblldCommon.a))
-    BREW_LLD_PREFIX := $(shell brew --prefix lld 2>/dev/null)
-    ifneq (,$(wildcard $(BREW_LLD_PREFIX)/lib/liblldCommon.a))
-      LLD_EXTRA_LIBDIR := $(BREW_LLD_PREFIX)/lib
+    ifneq (,$(wildcard $(LLD_PREFIX)/lib/liblldCommon.a))
+      LLD_EXTRA_LIBDIR := $(LLD_PREFIX)/lib
     endif
   endif
   LLD_STATIC_OK := \
@@ -173,20 +176,20 @@ ifeq ($(WITH_LLVM),1)
   endif
   CPPFLAGS += -DSALAM_HAVE_LLVM -I$(shell $(LLVM_CONFIG) --includedir) \
               -DSALAM_LLVM_VERSION_MAJOR=$(shell $(LLVM_CONFIG) --version | cut -d. -f1)
-  # lld's headers are in the same separate keg as its archives (see
-  # BREW_LLD_PREFIX above), not under `llvm-config --includedir` the way they
-  # are in the apt.llvm.org packages. lld_link.cc includes
+  # lld's headers are in the same separate prefix as its archives (see
+  # LLD_PREFIX above), not under `llvm-config --includedir` the way they are
+  # in the apt.llvm.org packages. lld_link.cc includes
   # <lld/Common/Driver.h>, so on macOS the C++ shim failed with "file not
   # found" and libsalam-llvm died - which, while that failure was only a
   # ::warning::, is why every macOS stage2 quietly shipped on the C backend
   # instead of LLVM. Added only when the prefix resolves, so a machine
-  # without the formula is unaffected.
+  # without it is unaffected.
   ifeq ($(WITH_LLD),1)
-    ifneq (,$(wildcard $(BREW_LLD_PREFIX)/include/lld/Common/Driver.h))
-      CPPFLAGS += -I$(BREW_LLD_PREFIX)/include
+    ifneq (,$(wildcard $(LLD_PREFIX)/include/lld/Common/Driver.h))
+      CPPFLAGS += -I$(LLD_PREFIX)/include
       # `llvm-config --ldflags` only ever points at llvm's own libdir, so
       # -llldCommon would not resolve either.
-      LDFLAGS  += -L$(BREW_LLD_PREFIX)/lib
+      LDFLAGS  += -L$(LLD_PREFIX)/lib
     endif
   endif
   LDFLAGS  += $(shell $(LLVM_CONFIG) $(LLVM_STATIC_FLAG) --ldflags)
@@ -496,12 +499,27 @@ LLVM_MERGE_LIBS = $(shell $(LLVM_CONFIG) --link-static --libs all 2>/dev/null) $
 # when WITH_LLD=1 the archive either carries lld or the build stops.
 LLVM_MERGE_LIBDIRS = $(shell $(LLVM_CONFIG) --libdir 2>/dev/null) $(LLD_EXTRA_LIBDIR)
 
-# Salam's own C shims that std/llvm binds to. llvm_native.o and lld_link.o
-# carry salam_llvm_native/salam_lld_link; orc_call.o carries
-# salam_orc_call_main plus the salam_llvm_init_all_* wrappers around LLVM-C's
-# header-inline target initializers (see orc_call.h). Omitting orc_call.o
-# left both undefined at link time.
-LLVM_MERGE_SHIMS = $(BUILD_DIR)/llvm/llvm_native.o $(BUILD_DIR)/llvm/orc_call.o \
+# Salam's own C shims that std/llvm binds to, and *only* those: every symbol
+# std/llvm declares `extern:` lives in one of these objects.
+#
+#   orc_call.o   salam_orc_call_main, plus the salam_llvm_init_all_* wrappers
+#                around LLVM-C's header-inline target initializers (see
+#                orc_call.h). Omitting it left all six undefined.
+#   lld_link.o   salam_lld_available/salam_lld_link, when WITH_LLD=1.
+#   lld_stub.o   the same two, when it is 0. Empty otherwise.
+#
+# llvm_native.o is deliberately NOT here, though it is the biggest shim of
+# the lot. It is the C compiler's own LLVM driver and it calls the C
+# compiler's core - sb_*, sal_snprintf, logger_log, i18n_tr,
+# salam_find_bundled_tool - none of which exists in a self-hosted link,
+# where every one of those was ported to Salam. std/llvm never references
+# salam_llvm_native (it ports that dispatch itself, see run.salam), so the
+# member was only ever dead weight: the linker never pulled it and its
+# unresolvable dependencies never surfaced. Anything that gives std/llvm a
+# reason to pull it fails the self-host link on nine undefined core symbols,
+# which is exactly what happened when the LLD stubs were first written into
+# it instead of into lld_stub.c.
+LLVM_MERGE_SHIMS = $(BUILD_DIR)/llvm/orc_call.o $(BUILD_DIR)/llvm/lld_stub.o \
                    $(CXXOBJS) $(WIN_LLD_SHIM_OBJS)
 LLVM_MERGE_DIR  = $(BUILD_DIR)/merge
 SALAM_LLVM_A    = $(OUTDIR)/libsalam_llvm.a

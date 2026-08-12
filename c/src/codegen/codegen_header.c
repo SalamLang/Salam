@@ -971,9 +971,8 @@ static bool is_stdio_name(const char *name)
  * the differences only ever *add* a qualifier or widen a parameter.
  *
  * Only functions whose declaration is warned about are listed. The rest of
- * the CRT surface std/ declares (memset, strlen, malloc, ...) already matches
- * and is emitted from its salam signature as before. Returns NULL for
- * anything not in the table.
+ * the CRT surface std/ declares is emitted from its salam signature as
+ * before. Returns NULL for anything not in the table.
  */
 static const char *libc_canonical_proto(const char *name)
 {

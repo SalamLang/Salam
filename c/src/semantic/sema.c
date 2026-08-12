@@ -14,6 +14,7 @@
 
 #include "core/prelude.h"
 #include "core/sal_format.h"
+#include "core/sal_path.h"
 #include "core/sb.h"
 #include "core/numstr.h"
 #include <sys/stat.h>
@@ -50,47 +51,29 @@ static bool file_exists(const char *p);
 static bool root_has_std(const char *root)
 {
     char p[1100];
-    if (root && root[0])
-        sal_snprintf(p, sizeof p, "%s/std/core/core.salam", root);
-    else
-        sal_snprintf(p, sizeof p, "std/core/core.salam");
+    sal_path_join(p, sizeof p, root, "std/core/core.salam");
     return file_exists(p);
 }
 
+/* Every root that leaves here is slash-canonical, so the joins built on top
+   of it below never mix separators - see core/sal_path.h. */
 static void derive_root(const char *path, char *out, size_t n)
 {
     char probe[1100];
-    sal_snprintf(probe, sizeof probe, "%s/std/core/core.salam", path);
+    sal_path_join(probe, sizeof probe, path, "std/core/core.salam");
     if (file_exists(probe)) {
-        sal_snprintf(out, n, "%s", path);
+        sal_path_join(out, n, path, "");
         return;
     }
 
-    sal_snprintf(probe, sizeof probe, "%s/core/core.salam", path);
+    sal_path_join(probe, sizeof probe, path, "core/core.salam");
     if (file_exists(probe)) {
-        sal_snprintf(out, n, "%s", path);
-        char *s = out + strlen(out);
-        while (s > out && (s[-1] == '/' || s[-1] == '\\'))
-            *--s = '\0';
-        char *slash = strrchr(out, '/');
-        char *bs = strrchr(out, '\\');
-        char *cut = (bs && (!slash || bs > slash)) ? bs : slash;
-        if (cut)
-            *cut = '\0';
-        else
-            out[0] = '\0';
+        char trimmed[1200];
+        sal_path_join(trimmed, sizeof trimmed, path, "");
+        sal_path_dir_buf(trimmed, out, n);
         return;
     }
-    sal_snprintf(out, n, "%s", path);
-}
-
-static bool path_is_absolute(const char *p)
-{
-    if (!p || !p[0]) return false;
-    if (p[0] == '/' || p[0] == '\\') return true;
-    if (((p[0] >= 'A' && p[0] <= 'Z') || (p[0] >= 'a' && p[0] <= 'z')) && p[1] == ':')
-        return true;
-    return false;
+    sal_path_join(out, n, path, "");
 }
 
 static bool get_exe_dir(char *out, size_t n)
@@ -116,12 +99,7 @@ static bool get_exe_dir(char *out, size_t n)
     return false;
 #else
     {
-        char *slash = strrchr(buf, '/');
-        char *bs = strrchr(buf, '\\');
-        char *cut = (bs && (!slash || bs > slash)) ? bs : slash;
-        if (!cut) return false;
-        *cut = '\0';
-        sal_snprintf(out, n, "%s", buf);
+        if (sal_path_dir_buf(buf, out, n) == 0) return false;
         return true;
     }
 #endif
@@ -184,13 +162,13 @@ static const char *resolve_stdlib_root(const char *explicit_path)
         char exedir[1024];
         if (get_exe_dir(exedir, sizeof exedir)) {
             char cfg[1100], val[1024];
-            sal_snprintf(cfg, sizeof cfg, "%s/salam.cfg", exedir);
+            sal_path_join(cfg, sizeof cfg, exedir, "salam.cfg");
             if (read_cfg_stdlib(cfg, val, sizeof val)) {
                 char abs_val[1200];
-                if (path_is_absolute(val))
-                    sal_snprintf(abs_val, sizeof abs_val, "%s", val);
+                if (sal_path_is_absolute(val))
+                    sal_path_join(abs_val, sizeof abs_val, val, "");
                 else
-                    sal_snprintf(abs_val, sizeof abs_val, "%s/%s", exedir, val);
+                    sal_path_join(abs_val, sizeof abs_val, exedir, val);
                 derive_root(abs_val, buf, N);
                 if (root_has_std(buf)) return buf;
             }
@@ -200,7 +178,7 @@ static const char *resolve_stdlib_root(const char *explicit_path)
                 size_t i = 0;
                 for (; i < sizeof rel / sizeof rel[0]; i++) {
                     char cand[1200];
-                    sal_snprintf(cand, sizeof cand, "%s/%s", exedir, rel[i]);
+                    sal_path_join(cand, sizeof cand, exedir, rel[i]);
                     if (root_has_std(cand)) {
                         sal_snprintf(buf, N, "%s", cand);
                         return buf;
@@ -251,7 +229,7 @@ static bool sysroot_looks_valid(const char *dir)
 {
     char p[1400];
     FILE *f;
-    sal_snprintf(p, sizeof p, "%s/include/windows.h", dir);
+    sal_path_join(p, sizeof p, dir, "include/windows.h");
     f = fopen(p, "rb");
     if (f) {
         fclose(f);
@@ -268,14 +246,16 @@ bool salam_find_sysroot(const char *triple, char *out, size_t n)
     {
         const char *env = getenv("SALAM_SYSROOTS");
         if (env && env[0]) {
-            sal_snprintf(out, n, "%s/%s", env, sub);
+            sal_path_join(out, n, env, sub);
             if (sysroot_looks_valid(out)) return true;
         }
     }
     {
         const char *root = salam_get_stdlib_root();
         if (root && root[0]) {
-            sal_snprintf(out, n, "%s/sysroots/%s", root, sub);
+            char base[1200];
+            sal_path_join(base, sizeof base, root, "sysroots");
+            sal_path_join(out, n, base, sub);
             if (sysroot_looks_valid(out)) return true;
         }
     }
@@ -286,7 +266,9 @@ bool salam_find_sysroot(const char *triple, char *out, size_t n)
                                         "../lib/salam/sysroots"};
             size_t i = 0;
             for (; i < sizeof rel / sizeof rel[0]; i++) {
-                sal_snprintf(out, n, "%s/%s/%s", exedir, rel[i], sub);
+                char base[1200];
+                sal_path_join(base, sizeof base, exedir, rel[i]);
+                sal_path_join(out, n, base, sub);
                 if (sysroot_looks_valid(out)) return true;
             }
         }
@@ -316,12 +298,11 @@ bool salam_find_bundled_tool(const char *name, char *out, size_t n)
     if (!get_exe_dir(exedir, sizeof exedir)) return false;
 
     for (i = 0; i < sizeof rel / sizeof rel[0]; i++) {
-        char cand[1200];
+        char dir[1200], cand[1300], leaf[128];
         struct stat st;
-        if (rel[i][0])
-            sal_snprintf(cand, sizeof cand, "%s/%s/%s%s", exedir, rel[i], name, suffix);
-        else
-            sal_snprintf(cand, sizeof cand, "%s/%s%s", exedir, name, suffix);
+        sal_snprintf(leaf, sizeof leaf, "%s%s", name, suffix);
+        sal_path_join(dir, sizeof dir, exedir, rel[i]);
+        sal_path_join(cand, sizeof cand, dir, leaf);
         if (stat(cand, &st) == 0 && S_ISREG(st.st_mode)) {
             sal_snprintf(out, n, "%s", cand);
             return true;
@@ -363,9 +344,15 @@ bool salam_find_path_tool(const char *name, char *out, size_t n)
     for (seg = path; *seg;) {
         const char *end = strchr(seg, sep);
         size_t len = end ? (size_t)(end - seg) : strlen(seg);
-        char cand[1200];
-        if (len > 0 && len < sizeof cand - 64) {
-            sal_snprintf(cand, sizeof cand, "%.*s/%s%s", (int)len, seg, name, suffix);
+        char dir[1200], cand[1300], leaf[128];
+        if (len > 0 && len < sizeof dir - 64) {
+            /* %PATH% entries are whatever the user's shell holds - on
+               Windows, backslashes - so the join has to canonicalize or the
+               command line ends up spelling one path two ways
+               ("C:\gcc\bin/gcc.exe"). */
+            sal_snprintf(dir, sizeof dir, "%.*s", (int)len, seg);
+            sal_snprintf(leaf, sizeof leaf, "%s%s", name, suffix);
+            sal_path_join(cand, sizeof cand, dir, leaf);
             if (tool_is_executable(cand)) {
                 sal_snprintf(out, n, "%s", cand);
                 return true;
@@ -377,38 +364,6 @@ bool salam_find_path_tool(const char *name, char *out, size_t n)
     return false;
 }
 
-/* path_normalize - strips leading "./" pairs, collapses "/./" and lexically
- * collapses "seg/../". The ".." collapse keeps import dedup keys canonical:
- * the same file imported as "token.salam" from the root and as
- * "../token.salam" from a sibling directory must resolve to ONE module, or
- * its globals get linked twice ('defined twice' at link time). */
-static char *path_normalize(char *p)
-{
-    while (p[0] == '.' && p[1] == '/')
-        memmove(p, p + 2, strlen(p + 2) + 1);
-
-    char *q;
-    while ((q = strstr(p, "/./")) != NULL)
-        memmove(q + 1, q + 3, strlen(q + 3) + 1);
-
-    char *dd = p;
-    while ((dd = strstr(dd, "/../")) != NULL) {
-        char *seg = dd;
-        while (seg > p && seg[-1] != '/')
-            seg--;
-        size_t seglen = (size_t)(dd - seg);
-        /* never collapse a ".." segment, an empty segment ("//../", a
-         * rooted "/../") or a drive prefix like "c:" - skip past those */
-        if (seglen == 0 || (seglen == 2 && seg[0] == '.' && seg[1] == '.') ||
-            memchr(seg, ':', seglen) != NULL) {
-            dd += 1;
-            continue;
-        }
-        memmove(seg, dd + 4, strlen(dd + 4) + 1);
-        dd = p;
-    }
-    return p;
-}
 
 static bool file_exists(const char *p)
 {
@@ -425,7 +380,7 @@ static int list_entries(arena_t *a, const char *dir, const char **out, int max)
     int n = 0;
 #if defined(_WIN32)
     char pat[512];
-    sal_snprintf(pat, sizeof pat, "%s/*", dir);
+    sal_path_join(pat, sizeof pat, dir, "*");
     struct _finddata_t fd;
     intptr_t h = _findfirst(pat, &fd);
     if (h == -1) return 0;
@@ -552,16 +507,12 @@ static void scan_std_dir(arena_t *a, const char *base, int depth)
     int ne = list_entries(a, base, entries, 256);
     int i = 0;
     for (; i < ne; i++) {
-        size_t need = strlen(base) + 2 * strlen(entries[i]) + sizeof("//.salam");
+        const char *sub = sal_path_joina(a, base, entries[i]);
+        size_t need = strlen(sub) + strlen(entries[i]) + sizeof("/.salam");
         char *pf = (char *)arena_alloc(a, need);
-        sal_snprintf(pf, need, "%s/%s/%s.salam", base, entries[i], entries[i]);
+        sal_snprintf(pf, need, "%s/%s.salam", sub, entries[i]);
         if (file_exists(pf)) index_pkg_file(a, pf, entries[i]);
-        if (depth > 0) {
-            char *sub = (char *)arena_alloc(a, strlen(base) + strlen(entries[i]) + 2);
-            sal_snprintf(sub, strlen(base) + strlen(entries[i]) + 2, "%s/%s", base,
-                         entries[i]);
-            scan_std_dir(a, sub, depth - 1);
-        }
+        if (depth > 0) scan_std_dir(a, sub, depth - 1);
     }
 }
 
@@ -570,10 +521,7 @@ static void build_seg_index(const char *root)
     if (!g_seg_alias_arena) g_seg_alias_arena = arena_new(1 << 16);
     g_seg_alias_n = 0;
     char base[512];
-    if (root && root[0])
-        sal_snprintf(base, sizeof base, "%s/std", root);
-    else
-        sal_snprintf(base, sizeof base, "std");
+    sal_path_join(base, sizeof base, root, "std");
     scan_std_dir(g_seg_alias_arena, base, 2);
     sal_snprintf(g_seg_alias_root, sizeof g_seg_alias_root, "%s", root ? root : "");
 }
@@ -662,16 +610,24 @@ static const char *resolve_ident_direct(arena_t *a, const char *root, const char
     }
 }
 
+/*
+ * An import spec is written by hand, so it arrives in whichever spelling the
+ * author typed - on Windows `import "sub\util.salam"` is what copying the
+ * path out of Explorer gives. sal_path_normalize folds '\\' to '/' before
+ * the "seg/../" collapse runs, so both spellings of one file produce one
+ * dedup key and the module is loaded once.
+ */
 static const char *resolve_user_string(arena_t *a, const char *dir, const char *spec)
 {
     bool has_ext = strstr(spec, ".salam") != NULL;
     size_t n = strlen(dir) + strlen(spec) + 16;
     char *p = (char *)arena_alloc(a, n);
-    if (dir && dir[0])
-        sal_snprintf(p, n, "%s/%s%s", dir, spec, has_ext ? "" : ".salam");
-    else
-        sal_snprintf(p, n, "%s%s", spec, has_ext ? "" : ".salam");
-    return path_normalize(p);
+    sal_path_join(p, n, dir, spec);
+    if (!has_ext) {
+        size_t at = strlen(p);
+        sal_snprintf(p + at, n - at, ".salam");
+    }
+    return sal_path_normalize(p);
 }
 
 const char *salam_resolve_import(arena_t *a, const char *dir, const char *spec)
@@ -682,19 +638,16 @@ const char *salam_resolve_import(arena_t *a, const char *dir, const char *spec)
     char *p = (char *)arena_alloc(a, n);
 
     if (has_ext) {
-        if (dir && dir[0])
-            sal_snprintf(p, n, "%s/%s", dir, spec);
-        else
-            sal_snprintf(p, n, "%s", spec);
-        return path_normalize(p);
+        sal_path_join(p, n, dir, spec);
+        return sal_path_normalize(p);
     }
 
-    const char *slash = strrchr(spec, '/');
-    const char *last = slash ? slash + 1 : spec;
+    const char *last = sal_path_base(spec);
     if (root[0])
         sal_snprintf(p, n, "%s/std/%s/%s.salam", root, spec, last);
     else
         sal_snprintf(p, n, "std/%s/%s.salam", spec, last);
+    sal_path_normalize(p);
 
     if (!file_exists(p)) {
         const char *loc = resolve_ident_import(a, root, spec, i18n_lang());
@@ -730,30 +683,10 @@ static const char *import_local_name(arena_t *a, ast_node_t *imp, const char *sp
         return dot ? arena_strdup(a, dot + 1) : nm;
     }
     if (imp->name) return imp->name;
-    const char *slash = strrchr(spec, '/');
-    const char *seg = slash ? slash + 1 : spec;
+    const char *seg = sal_path_base(spec);
     const char *dot = strstr(seg, ".salam");
     size_t len = dot ? (size_t)(dot - seg) : strlen(seg);
     return arena_strndup(a, seg, len);
-}
-
-static const char *dir_of(arena_t *a, const char *path)
-{
-    const char *slash = strrchr(path, '/');
-    const char *bs = strrchr(path, '\\');
-    const char *cut = slash;
-    if (bs && (!slash || bs > slash)) cut = bs;
-    if (!cut) return "";
-    return arena_strndup(a, path, (size_t)(cut - path));
-}
-
-static const char *base_of(const char *path)
-{
-    const char *slash = strrchr(path, '/');
-    const char *bs = strrchr(path, '\\');
-    const char *cut = slash;
-    if (bs && (!slash || bs > slash)) cut = bs;
-    return cut ? cut + 1 : path;
 }
 
 int salam_package_files(arena_t *a, const char *main_path, const char **out, int max)
@@ -761,13 +694,13 @@ int salam_package_files(arena_t *a, const char *main_path, const char **out, int
     if (max <= 0) return 0;
     int n = 0;
     out[n++] = main_path;
-    const char *dir = dir_of(a, main_path);
-    const char *mainbase = base_of(main_path);
+    const char *dir = sal_path_dir(a, main_path);
+    const char *mainbase = sal_path_base(main_path);
 
     {
         const char *dot = strrchr(mainbase, '.');
         size_t stemlen = dot ? (size_t)(dot - mainbase) : strlen(mainbase);
-        const char *dirseg = (dir && dir[0]) ? base_of(dir) : "";
+        const char *dirseg = (dir && dir[0]) ? sal_path_base(dir) : "";
         if (strlen(dirseg) != stemlen || strncmp(dirseg, mainbase, stemlen) != 0)
             return n;
     }
@@ -779,7 +712,7 @@ int salam_package_files(arena_t *a, const char *main_path, const char **out, int
         sal_snprintf(dbuf, sizeof dbuf, "%s", dir);
 #if defined(_WIN32)
     char pat[1100];
-    sal_snprintf(pat, sizeof pat, "%s/*.salam", dbuf);
+    sal_path_join(pat, sizeof pat, dbuf, "*.salam");
     struct _finddata_t fd;
     intptr_t h = _findfirst(pat, &fd);
     if (h != -1) {
@@ -787,10 +720,7 @@ int salam_package_files(arena_t *a, const char *main_path, const char **out, int
             if (fd.attrib & _A_SUBDIR) continue;
             if (strcmp(fd.name, mainbase) == 0) continue;
             if (n >= max) break;
-            size_t fcap = strlen(dbuf) + strlen(fd.name) + 2;
-            char *full = (char *)arena_alloc(a, fcap);
-            sal_snprintf(full, fcap, "%s/%s", dbuf, fd.name);
-            out[n++] = full;
+            out[n++] = sal_path_joina(a, dbuf, fd.name);
         } while (_findnext(h, &fd) == 0);
         _findclose(h);
     }
@@ -802,10 +732,7 @@ int salam_package_files(arena_t *a, const char *main_path, const char **out, int
             size_t L = strlen(e->d_name);
             if (L <= 6 || strcmp(e->d_name + L - 6, ".salam") != 0) continue;
             if (strcmp(e->d_name, mainbase) == 0) continue;
-            size_t fcap = strlen(dbuf) + L + 2;
-            char *full = (char *)arena_alloc(a, fcap);
-            sal_snprintf(full, fcap, "%s/%s", dbuf, e->d_name);
-            out[n++] = full;
+            out[n++] = sal_path_joina(a, dbuf, e->d_name);
         }
         closedir(d);
     }
@@ -955,7 +882,7 @@ static symbol_t *load_package(sema_t *s, const char *path, ast_node_t *imp)
     s->in_pkg = true;
     s->global = pkgscope;
     s->cur = pkgscope;
-    s->dir = dir_of(s->a, path);
+    s->dir = sal_path_dir(s->a, path);
     s->pkg = prog->name ? prog->name : "main";
     s->lang = langpack_code(pack);
     s->file = path;
@@ -1131,7 +1058,7 @@ sema_result_t *sema_run_cached(arena_t *a, logger_t *log, ast_node_t *program,
     s.global = scope_new(a, SCOPE_GLOBAL, NULL);
     s.global->lang = s.lang;
     s.cur = s.global;
-    s.dir = dir_of(a, file);
+    s.dir = sal_path_dir(a, file);
     s.pkg = program->name ? program->name : "main";
     s.program = program;
     vec_init(&s.imported);

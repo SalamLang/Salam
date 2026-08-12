@@ -14,7 +14,8 @@
 
 // Scrapes the full coin list from https://alanchand.com/en/crypto-price:
 // name, ticker, price in Iranian Rial, price in US Dollar, and the direction
-// the Rial quote moved.
+// the Rial quote moved. Prints a table and writes alanchand-crypto.json next
+// to the run.
 //
 // Run it with:  salam run alanchand_crypto.salam
 //
@@ -33,6 +34,7 @@
 package main
 
 import ac "_alanchand.salam"
+import acjson "_alanchand_json.salam"
 import str
 import fmt
 
@@ -41,12 +43,56 @@ const SYMBOL_W := 8
 const IRR_W := 20
 const USD_W := 16
 const MOVE_W := 6
+const OUT_FILE := "alanchand-crypto.json"
 
 const NAME_MARK := `class="faCurr"`
 const SYMBOL_MARK := `class="symbolCurr"`
 const IRR_CELL_MARK := `class="perTmn`
 const IRR_MARK := `class="tmn"`
 const USD_MARK := `class="dlr"`
+
+struct Coin:
+    pub name: str = ""
+    pub symbol: str = ""
+    pub irr: str = ""
+    pub usd: str = ""
+    pub direction: str = "flat"
+end
+
+// Walks the page one coin name at a time. Every other field of that coin
+// sits after its name span and before the next one.
+func collect(html: str): Vector<Coin>:
+    mut coins := Vector {} as Vector<Coin>
+    mut pos := 0
+    until true:
+        mut next := 0
+        name := ac.Text(html, NAME_MARK, pos, "</span>", next)
+        if next < 0:
+            break
+        end
+        mut cell_end := 0
+        mut c := Coin {}
+        c.name = name
+        c.symbol = ac.SpanText(html, SYMBOL_MARK, next)
+        c.irr = ac.SpanText(html, IRR_MARK, next)
+        c.usd = ac.SpanText(html, USD_MARK, next)
+        c.direction = ac.Direction(ac.Inner(html, IRR_CELL_MARK, next, "</td>", cell_end))
+        coins.push(c)
+        pos = next
+    end
+    ret coins
+end
+
+// -------------------------------------------------------------- output ----
+
+// The USD figure is split across spans ("$" then the number), so the dlr
+// span alone is the value; an empty one means the site quotes no USD price.
+func usd_text(c: Coin): str:
+    if c.usd.len() == 0:
+        ret "-"
+    end
+    ret "$" + c.usd
+end
 
 func show_row(name: str, symbol: str, irr: str, usd: str, move: str):
     mut line := fmt.PadRight(name, NAME_W)
@@ -57,41 +103,32 @@ func show_row(name: str, symbol: str, irr: str, usd: str, move: str):
     println line
 end
 
-func show_header():
+func show_table(coins: Vector<Coin>):
     show_row("Coin", "Symbol", "Price (IRR)", "Price (USD)", "Move")
     println str.Repeat("-", NAME_W + SYMBOL_W + IRR_W + USD_W + MOVE_W + 4)
+    each c in coins:
+        show_row(c.name, c.symbol, c.irr, usd_text(c), c.direction)
+    end
 end
 
-// The USD figure is split across spans ("$" then the number), so the dlr
-// span alone is the value; an empty one means the site quotes no USD price.
-func usd_of(html: str, at: int): str:
-    usd := ac.SpanText(html, USD_MARK, at)
-    if usd.len() == 0:
-        ret "-"
-    end
-    ret "$" + usd
+func encode(c: Coin): str:
+    mut members := Vector {} as Vector<str>
+    defer members.free()
+    members.push(acjson.TextMember("name", c.name))
+    members.push(acjson.TextMember("symbol", c.symbol))
+    members.push(acjson.NumberMember("price_irr", c.irr))
+    members.push(acjson.NumberMember("price_usd", c.usd))
+    members.push(acjson.TextMember("direction", c.direction))
+    ret acjson.Object(members)
 end
 
-// Walks the page one coin name at a time. Every other field of that coin sits
-// after its name span and before the next one.
-func scrape(html: str): int:
-    mut pos := 0
-    mut found := 0
-    until true:
-        mut next := 0
-        name := ac.Text(html, NAME_MARK, pos, "</span>", next)
-        if next < 0:
-            break
-        end
-        mut cell_end := 0
-        symbol := ac.SpanText(html, SYMBOL_MARK, next)
-        irr := ac.SpanText(html, IRR_MARK, next)
-        move := ac.Direction(ac.Inner(html, IRR_CELL_MARK, next, "</td>", cell_end))
-        show_row(name, symbol, irr, usd_of(html, next), move)
-        found = found + 1
-        pos = next
+func save(coins: Vector<Coin>, last_update: str):
+    mut rows := Vector {} as Vector<str>
+    defer rows.free()
+    each c in coins:
+        rows.push(encode(c))
     end
-    ret found
+    _ok := acjson.Write(OUT_FILE, acjson.Document(ac.CRYPTO_URL, last_update, "crypto", rows))
 end
 
 func main:
@@ -106,9 +143,12 @@ func main:
 
     println ""
     ac.Banner("Alanchand - live cryptocurrency prices", ac.CRYPTO_URL, html)
-    show_header()
-    n := scrape(html)
+
+    coins := collect(html)
+    defer coins.free()
+    show_table(coins)
     println ""
-    println str.FromInt(n as i64) + " coins"
+    println str.FromInt(coins.len() as i64) + " coins"
+    save(coins, ac.LastUpdate(html))
     ret 0
 end

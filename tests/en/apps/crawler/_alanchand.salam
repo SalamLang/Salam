@@ -38,6 +38,7 @@ pub const CRYPTO_URL := "https://alanchand.com/en/crypto-price"
 
 pub const USER_AGENT := "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"
 
+const DIGITS := "0123456789"
 const JAR_FILE := "alanchand-cookies.txt"
 const MAX_REDIRECTS := 3
 const RETRY_DELAY_MS := 1500
@@ -277,7 +278,8 @@ pub func Lead(inner: str): str:
     ret squeeze(entities(inner.substr(0, cut)))
 end
 
-// "up" / "down" / "-" from the priceSymbol class the site puts on a cell.
+// "up" / "down" / "flat" from the priceSymbol class the site puts on a
+// cell (its arrow glyph, which carries no text of its own).
 pub func Direction(inner: str): str:
     if str.Contains(inner, "priceSymbol up"):
         ret "up"
@@ -285,7 +287,43 @@ pub func Direction(inner: str): str:
     if str.Contains(inner, "priceSymbol down"):
         ret "down"
     end
-    ret "-"
+    ret "flat"
+end
+
+// Lifts the number out of a scraped cell and returns it as a JSON numeric
+// literal, keeping the site's own digits rather than round-tripping through
+// a float: "1,852,000" -> "1852000", "828,700,000 IRR" -> "828700000",
+// "4,419.27$" -> "4419.27", "(-4.03%)" -> "-4.03", "down 0.52%" -> "0.52".
+// Returns "" when the cell holds no digits, which is how the site writes a
+// missing value ("-").
+// Anything before the first digit is skipped ("down 0.52%", "(-4.03%)"),
+// thousands separators are dropped, and the number ends at the first
+// character that cannot continue it - which is what keeps a cell holding two
+// numbers, "-3,481,000 (-4.03%)", from running together into one.
+pub func NumberText(text: str): str:
+    mut out := ""
+    mut seen := false
+    mut i := 0
+    until i < text.len():
+        c := text.substr(i, 1)
+        if str.Contains(DIGITS, c):
+            out = out.concat(c)
+            seen = true
+        else c == "." || c == ",":
+            if c == "." && seen:
+                out = out.concat(c)
+            end
+        else c == "-" && out.len() == 0:
+            out = "-"
+        else seen:
+            break
+        end
+        i = i + 1
+    end
+    if !seen:
+        ret ""
+    end
+    ret str.TrimSuffix(out, ".")
 end
 
 // Pulls a JSON array literal out of an inline <script>, given the name of

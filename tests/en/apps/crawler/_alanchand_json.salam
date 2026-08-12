@@ -1,0 +1,118 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// The JSON side of the alanchand scrapers: turns scraped cells into typed
+// JSON members and wraps a run's rows in one envelope on disk. Every app in
+// this directory writes its own file through Document + Write.
+//
+// The envelope always carries the site's own "Last Update" line, so a saved
+// file says when alanchand published the numbers, not just when we fetched
+// them:
+//
+//   {
+//     "source": "https://alanchand.com/en",
+//     "last_update": "19:50 Wednesday 12 August 2026",
+//     "generated_at": "2026-08-12T19:52:04",
+//     "count": 20,
+//     "currencies": [ ... ]
+//   }
+//
+// Scraped numbers keep the site's own digits instead of being round-tripped
+// through a float: "1,852,000" is written as 1852000, never as 1.8595e+06.
+// A cell the site leaves as "-" becomes JSON null, not 0.
+
+package acjson
+
+import ac "_alanchand.salam"
+import encoding.json
+import str
+import conv
+import io
+import time
+
+// "4419.270000" -> "4419.27", "82.000000" -> "82"
+func trim_zeros(text: str): str:
+    if !str.Contains(text, "."):
+        ret text
+    end
+    mut out := text
+    until str.EndsWith(out, "0"):
+        out = out.substr(0, out.len() - 1)
+    end
+    ret str.TrimSuffix(out, ".")
+end
+
+// A f64 as a JSON number: whole values stay whole, fractions keep six
+// digits at most. Never exponent notation, which is legal JSON but reads
+// badly for a price.
+pub func Number(x: f64): str:
+    whole := x as i64
+    if (whole as f64) == x:
+        ret str.FromInt(whole)
+    end
+    ret trim_zeros(conv.FormatFloatPrec(x, 6))
+end
+
+// A number scraped from a cell, or null when the cell had no digits.
+pub func NumberMember(key: str, text: str): str:
+    literal := ac.NumberText(text)
+    if literal.len() == 0:
+        ret json.MemberRaw(key, "null")
+    end
+    ret json.MemberRaw(key, literal)
+end
+
+pub func FloatMember(key: str, x: f64): str:
+    ret json.MemberRaw(key, Number(x))
+end
+
+pub func IntMember(key: str, n: i64): str:
+    ret json.MemberInt(key, n)
+end
+
+// A string member, or null for the placeholder the site prints when it has
+// no value.
+pub func TextMember(key: str, value: str): str:
+    if value.len() == 0 || value == "-":
+        ret json.MemberRaw(key, "null")
+    end
+    ret json.Member(key, value)
+end
+
+pub func Object(members: Vector<str>): str:
+    ret json.Object(members)
+end
+
+// Wraps one run's rows: `key` names the array ("currencies", "gold",
+// "crypto", "series"), `last_update` is the site's own timestamp line.
+pub func Document(source: str, last_update: str, key: str, items: Vector<str>): str:
+    mut members := Vector {} as Vector<str>
+    defer members.free()
+    members.push(json.Member("source", source))
+    members.push(TextMember("last_update", last_update))
+    members.push(json.Member("generated_at", time.FormatISO(time.Now())))
+    members.push(json.MemberInt("count", items.len() as i64))
+    members.push(json.MemberRaw(key, json.Array(items)))
+    ret json.Indent(json.Object(members))
+end
+
+pub func Write(path: str, doc: str): bool:
+    written := io.WriteFile(path, doc)
+    if written <= 0:
+        println "could not write " + path
+        ret false
+    end
+    println "wrote " + path + " (" + str.FromInt(doc.len() as i64) + " bytes)"
+    ret true
+end

@@ -88,7 +88,20 @@ CXX             ?= c++
 LLVM_CONFIG_OK := $(shell $(LLVM_CONFIG) --version >/dev/null 2>&1 && echo 1)
 ifeq ($(LLVM_CONFIG_OK),1)
   LLVM_LIBDIR_PROBE := $(shell $(LLVM_CONFIG) --libdir 2>/dev/null)
-  LLD_STATIC_OK := $(if $(wildcard $(LLVM_LIBDIR_PROBE)/liblldCommon.a),1)
+  # Homebrew ships lld as its own formula in its own keg, so liblld*.a are
+  # NOT under llvm-config's libdir there the way they are in the
+  # apt.llvm.org packages. Probed only when the libdir has no lld of its
+  # own, which keeps `brew` off the critical path on every other host, and
+  # the directory is remembered because libsalam-llvm's archive merge has to
+  # name those archives by path (see LLVM_MERGE_LIBDIRS).
+  ifeq (,$(wildcard $(LLVM_LIBDIR_PROBE)/liblldCommon.a))
+    BREW_LLD_PREFIX := $(shell brew --prefix lld 2>/dev/null)
+    ifneq (,$(wildcard $(BREW_LLD_PREFIX)/lib/liblldCommon.a))
+      LLD_EXTRA_LIBDIR := $(BREW_LLD_PREFIX)/lib
+    endif
+  endif
+  LLD_STATIC_OK := \
+      $(if $(wildcard $(LLVM_LIBDIR_PROBE)/liblldCommon.a)$(LLD_EXTRA_LIBDIR),1)
 endif
 
 WITH_LLVM       ?= $(if $(LLVM_CONFIG_OK),1,0)
@@ -150,18 +163,17 @@ ifeq ($(WITH_LLVM),1)
   endif
   CPPFLAGS += -DSALAM_HAVE_LLVM -I$(shell $(LLVM_CONFIG) --includedir) \
               -DSALAM_LLVM_VERSION_MAJOR=$(shell $(LLVM_CONFIG) --version | cut -d. -f1)
-  # Homebrew ships lld as its own formula with its own prefix, so lld's
-  # headers are NOT under `llvm-config --includedir` the way they are in the
-  # apt.llvm.org packages. lld_link.cc includes <lld/Common/Driver.h>, so on
-  # macOS the C++ shim failed with "file not found" and libsalam-llvm died -
-  # which, while that failure was only a ::warning::, is why every macOS
-  # stage2 quietly shipped on the C backend instead of LLVM. Added only when
-  # the prefix resolves, so a machine without the formula is unaffected.
+  # lld's headers are in the same separate keg as its archives (see
+  # BREW_LLD_PREFIX above), not under `llvm-config --includedir` the way they
+  # are in the apt.llvm.org packages. lld_link.cc includes
+  # <lld/Common/Driver.h>, so on macOS the C++ shim failed with "file not
+  # found" and libsalam-llvm died - which, while that failure was only a
+  # ::warning::, is why every macOS stage2 quietly shipped on the C backend
+  # instead of LLVM. Added only when the prefix resolves, so a machine
+  # without the formula is unaffected.
   ifeq ($(WITH_LLD),1)
-    BREW_LLD_PREFIX := $(shell brew --prefix lld 2>/dev/null)
     ifneq (,$(wildcard $(BREW_LLD_PREFIX)/include/lld/Common/Driver.h))
       CPPFLAGS += -I$(BREW_LLD_PREFIX)/include
-      # The archives live beside the headers in that same keg, and
       # `llvm-config --ldflags` only ever points at llvm's own libdir, so
       # -llldCommon would not resolve either.
       LDFLAGS  += -L$(BREW_LLD_PREFIX)/lib
@@ -461,6 +473,17 @@ $(BUILD_DIR)/%.o: src/%.cc $(CONFIG_STAMP)
 #
 LLVM_MERGE_LIBS = $(shell $(LLVM_CONFIG) --link-static --libs all 2>/dev/null) $(LLD_LIBS)
 
+# Where each -lNAME in LLVM_MERGE_LIBS is looked up. `llvm-config --libdir`
+# alone covers the apt.llvm.org layout, where lld's archives sit beside LLVM's
+# own - but Homebrew ships lld as a separate formula in its own keg, so on
+# macOS the six liblld*.a are not there. The merge loop has to tolerate a miss
+# (LLD_LIBS also carries -lz/-lzstd, which are system libraries and must stay
+# out of the archive), so the misses were silent: macOS merged 201 members
+# instead of 207 and produced a libsalam_llvm.a with no lld in it at all. The
+# stage 2 self-host link then failed on undefined lld::elf::link and friends.
+# A missing liblld* is fatal now; see the recipe below.
+LLVM_MERGE_LIBDIRS = $(shell $(LLVM_CONFIG) --libdir 2>/dev/null) $(LLD_EXTRA_LIBDIR)
+
 # Salam's own C shims that std/llvm binds to. llvm_native.o and lld_link.o
 # carry salam_llvm_native/salam_lld_link; orc_call.o carries
 # salam_orc_call_main plus the salam_llvm_init_all_* wrappers around LLVM-C's
@@ -492,17 +515,29 @@ libsalam-llvm: $(LLVM_MERGE_SHIMS)
 	@test "$(WITH_LLVM)$(WITH_LLD)" = "11" \
 	  || { echo "libsalam-llvm needs WITH_LLVM=1 WITH_LLD=1 (llvm-config: $(LLVM_CONFIG))"; exit 1; }
 	@rm -rf $(LLVM_MERGE_DIR); mkdir -p $(LLVM_MERGE_DIR)
-	@LIBDIR=$$($(LLVM_CONFIG) --libdir); \
+	@LIBDIRS="$(LLVM_MERGE_LIBDIRS)"; \
 	 : > $(LLVM_MERGE_DIR)/mri; \
 	 echo "create $(SALAM_LLVM_A)" >> $(LLVM_MERGE_DIR)/mri; \
 	 for o in $(LLVM_MERGE_SHIMS); do \
 	   echo "addmod $$o" >> $(LLVM_MERGE_DIR)/mri; \
 	 done; \
-	 n=0; \
+	 n=0; missing=; \
 	 for l in $(LLVM_MERGE_LIBS); do \
-	   case "$$l" in -l*) a="$$LIBDIR/lib$${l#-l}.a";; *) continue;; esac; \
-	   if [ -f "$$a" ]; then echo "addlib $$a" >> $(LLVM_MERGE_DIR)/mri; n=$$((n+1)); fi; \
+	   case "$$l" in -l*) nm="lib$${l#-l}.a";; *) continue;; esac; \
+	   a=; \
+	   for d in $$LIBDIRS; do \
+	     if [ -f "$$d/$$nm" ]; then a="$$d/$$nm"; break; fi; \
+	   done; \
+	   if [ -n "$$a" ]; then echo "addlib $$a" >> $(LLVM_MERGE_DIR)/mri; n=$$((n+1)); \
+	   else case "$$nm" in liblld*) missing="$$missing $$nm";; esac; fi; \
 	 done; \
+	 if [ -n "$$missing" ]; then \
+	   echo "error: lld archives not found in [$$LIBDIRS]:$$missing" >&2; \
+	   echo "       lld is a separate package on some hosts (Homebrew's lld formula," >&2; \
+	   echo "       Debian's liblld-<ver>-dev). Install it, or point LLD_EXTRA_LIBDIR" >&2; \
+	   echo "       at the directory holding liblldCommon.a." >&2; \
+	   exit 1; \
+	 fi; \
 	 echo "save"  >> $(LLVM_MERGE_DIR)/mri; \
 	 echo "end"   >> $(LLVM_MERGE_DIR)/mri; \
 	 echo "merging $$n LLVM/lld archives + salam shims -> $(SALAM_LLVM_A)"; \

@@ -94,6 +94,16 @@ ifeq ($(LLVM_CONFIG_OK),1)
   # own, which keeps `brew` off the critical path on every other host, and
   # the directory is remembered because libsalam-llvm's archive merge has to
   # name those archives by path (see LLVM_MERGE_LIBDIRS).
+  #
+  # As of 2026-08 that probe comes up empty on macOS regardless: Homebrew's
+  # lld formula builds with BUILD_SHARED_LIBS=ON, so the keg holds
+  # liblld*.dylib and no archives at all. Which is why this has to be a
+  # probe for the .a rather than for the formula: WITH_LLD then correctly
+  # settles on 0 there, and the build produces LLVM-without-LLD instead of
+  # claiming an in-process linker it cannot link. Merging the dylibs is not
+  # an alternative - Homebrew's lld resolves LLVM through libLLVM.dylib,
+  # and a process holding both that and this archive's static LLVM has two
+  # copies of LLVM's global state.
   ifeq (,$(wildcard $(LLVM_LIBDIR_PROBE)/liblldCommon.a))
     BREW_LLD_PREFIX := $(shell brew --prefix lld 2>/dev/null)
     ifneq (,$(wildcard $(BREW_LLD_PREFIX)/lib/liblldCommon.a))
@@ -475,13 +485,15 @@ LLVM_MERGE_LIBS = $(shell $(LLVM_CONFIG) --link-static --libs all 2>/dev/null) $
 
 # Where each -lNAME in LLVM_MERGE_LIBS is looked up. `llvm-config --libdir`
 # alone covers the apt.llvm.org layout, where lld's archives sit beside LLVM's
-# own - but Homebrew ships lld as a separate formula in its own keg, so on
-# macOS the six liblld*.a are not there. The merge loop has to tolerate a miss
-# (LLD_LIBS also carries -lz/-lzstd, which are system libraries and must stay
-# out of the archive), so the misses were silent: macOS merged 201 members
-# instead of 207 and produced a libsalam_llvm.a with no lld in it at all. The
-# stage 2 self-host link then failed on undefined lld::elf::link and friends.
-# A missing liblld* is fatal now; see the recipe below.
+# own; LLD_EXTRA_LIBDIR adds the separate keg Homebrew would put them in, if
+# that host had static ones (it does not - see WITH_LLD above).
+#
+# The merge loop has to tolerate a miss, because LLD_LIBS also carries
+# -lz/-lzstd, which are system libraries and must stay out of the archive.
+# That silence is what let a macOS build merge 201 members instead of 207 and
+# produce a libsalam_llvm.a with no lld in it at all, failing the stage 2
+# self-host link on undefined lld::elf::link. A missing liblld* is fatal now:
+# when WITH_LLD=1 the archive either carries lld or the build stops.
 LLVM_MERGE_LIBDIRS = $(shell $(LLVM_CONFIG) --libdir 2>/dev/null) $(LLD_EXTRA_LIBDIR)
 
 # Salam's own C shims that std/llvm binds to. llvm_native.o and lld_link.o
@@ -512,8 +524,12 @@ AR_MRI      := $(firstword $(wildcard $(LLVM_BINDIR)/llvm-ar) \
 
 .PHONY: libsalam-llvm
 libsalam-llvm: $(LLVM_MERGE_SHIMS)
-	@test "$(WITH_LLVM)$(WITH_LLD)" = "11" \
-	  || { echo "libsalam-llvm needs WITH_LLVM=1 WITH_LLD=1 (llvm-config: $(LLVM_CONFIG))"; exit 1; }
+	@test "$(WITH_LLVM)" = "1" \
+	  || { echo "libsalam-llvm needs WITH_LLVM=1 (llvm-config: $(LLVM_CONFIG))"; exit 1; }
+	@test "$(WITH_LLD)" = "1" \
+	  || echo "note: WITH_LLD=0 - the archive gets LLVM codegen but no in-process \
+LLD, so the linker is the host cc. Normal on macOS, where Homebrew's lld is \
+shared-only; llvm_native.c stubs salam_lld_link so std/llvm still resolves."
 	@rm -rf $(LLVM_MERGE_DIR); mkdir -p $(LLVM_MERGE_DIR)
 	@LIBDIRS="$(LLVM_MERGE_LIBDIRS)"; \
 	 : > $(LLVM_MERGE_DIR)/mri; \

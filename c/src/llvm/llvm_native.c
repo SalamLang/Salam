@@ -20,8 +20,8 @@
 #include "i18n/i18n.h"
 #include <stdlib.h>
 
+#include "llvm/lld_link.h"
 #ifdef SALAM_HAVE_LLD
-#  include "llvm/lld_link.h"
 #  if !defined(_WIN32)
 #    include <dirent.h>
 #  endif
@@ -126,6 +126,35 @@ extern const unsigned char salam_embed_extralibs_x86_64_w64_windows_gnu_end[];
 #ifdef SALAM_HAVE_EMBED_HOSTLIBS
 extern const unsigned char salam_embed_hostlibs[];
 extern const unsigned char salam_embed_hostlibs_end[];
+#endif
+
+/*
+ * The two entry points lld_link.cc exports, stubbed out when this build has
+ * no in-process LLD. Nothing in c/ calls them without an #ifdef
+ * SALAM_HAVE_LLD, but std/llvm/lld.salam declares them `extern:`, and
+ * importing a Salam package links every extern its pub functions name -
+ * so the self-hosted compiler needs both symbols to exist in
+ * libsalam_llvm.a whether or not LLD went into it.
+ *
+ * That combination is the normal one on macOS: Homebrew builds its lld
+ * formula with BUILD_SHARED_LIBS=ON, so there are no liblld*.a to merge
+ * into the archive at all. LLVM codegen still runs in-process there; only
+ * the final link shells out to cc, which is what native_link_lld already
+ * does on any host whose triple it does not recognise.
+ */
+#ifndef SALAM_HAVE_LLD
+int salam_lld_available(void)
+{
+    return 0;
+}
+
+int salam_lld_link(int flavor, int argc, const char *const *argv)
+{
+    (void)flavor;
+    (void)argc;
+    (void)argv;
+    return 1;
+}
 #endif
 
 #ifndef SALAM_HAVE_LLVM

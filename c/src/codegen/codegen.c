@@ -286,9 +286,83 @@ static const char *inst_fn_name(cg_t *cg, symbol_t *owner, ast_node_t *fn,
     return cg_mangle_in(cg, "g", owner ? owner->name : NULL, fn->name, &sig->params);
 }
 
+/*
+ * Prototypes for the other-package functions a generic instance body calls.
+ *
+ * An instance is emitted as a `static inline` body appended to *this* module's
+ * header, but the module whose header that is need not be the one declaring
+ * the callee: `Vector<str>.zeros` lands in str's header and calls mem's
+ * allocator. str.h is included well before mem.h declares it, so the call
+ * compiled only by C89 implicit declaration - which gcc 16 rejects outright,
+ * and which every other compiler resolved to a wrong `int` return. Same
+ * reasoning as codegen_header.c's hdr_impl_prototypes, one scope out.
+ *
+ * Only callees actually reached from an instance body are declared, so a
+ * package nothing instantiates against costs nothing. Each is guarded, since
+ * the owning module emits the same prototype itself.
+ */
+static void inst_pkg_protos(cg_t *cg, ast_node_t *n, sb_t *h)
+{
+    if (!n) return;
+    if (n->kind == AST_CALL && n->a && n->a->kind == AST_MEMBER && n->a->a &&
+        n->a->a->kind == AST_IDENTIFIER && n->a->name) {
+        symbol_t *pk = scope_lookup(cg->sem->global, n->a->a->name);
+        if (pk && pk->kind == SYM_PACKAGE && pk->members && pk->pkgname &&
+            (!cg->pkg || strcmp(pk->pkgname, cg->pkg) != 0)) {
+            symbol_t *fn = scope_lookup_local(pk->members, n->a->name);
+            if (fn && fn->kind == SYM_FUNC) {
+                const char *save = cg->pkg;
+                size_t k = 0;
+                /* func_signature mangles with cg->pkg; borrow the callee's. */
+                cg->pkg = pk->pkgname;
+                for (; k < fn->overloads.len; k++) {
+                    func_sig_t *sig = (func_sig_t *)fn->overloads.data[k];
+                    if (!sig || !sig->decl) continue;
+                    if (sig->decl->is_extern || sig->decl->synthetic) continue;
+                    if (sig->decl->typarams.len > 0) continue;
+                    {
+                        const char *nm = cg_mangle_in(cg, pk->pkgname, NULL,
+                                                      sig->decl->name, &sig->params);
+                        sb_puts(h,
+                                cg_fmt(cg,
+                                       "#ifndef SALAM_PP_%s\n#define SALAM_PP_%s\n"
+                                       "%s;\n#endif\n",
+                                       nm, nm,
+                                       func_signature(cg, sig->decl, NULL, sig, false)));
+                    }
+                }
+                cg->pkg = save;
+            }
+        }
+    }
+    inst_pkg_protos(cg, n->type, h);
+    inst_pkg_protos(cg, n->a, h);
+    inst_pkg_protos(cg, n->b, h);
+    inst_pkg_protos(cg, n->c, h);
+    inst_pkg_protos(cg, n->d, h);
+    {
+        size_t i = 0;
+        for (; i < n->list.len; i++)
+            inst_pkg_protos(cg, (ast_node_t *)n->list.data[i], h);
+    }
+    {
+        size_t i = 0;
+        for (; i < n->dims.len; i++)
+            inst_pkg_protos(cg, (ast_node_t *)n->dims.data[i], h);
+    }
+}
+
 static void emit_instances_header(cg_t *cg, ast_node_t *program)
 {
     sb_t *h = cg->h;
+
+    {
+        size_t i = 0;
+        for (; i < program->list.len; i++) {
+            ast_node_t *d = (ast_node_t *)program->list.data[i];
+            if (d->synthetic) inst_pkg_protos(cg, d, h);
+        }
+    }
 
     {
         size_t i = 0;

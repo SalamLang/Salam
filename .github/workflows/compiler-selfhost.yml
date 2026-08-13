@@ -449,20 +449,33 @@ jobs:
       # Records which backend stage2 actually got, so a silent downgrade to
       # the C backend is visible in the log rather than only showing up as a
       # parity number weeks later.
-      - name: Report stage2 backend
+      # Every stage, not just stage2: LLVM is meant to be in all three now
+      # (bootstrap.sh links it into stage1 as well and compiles each stage
+      # with its builder's in-process LLVM), so a downgrade anywhere in the
+      # chain is worth seeing. bootstrap.sh already fails a stage that was
+      # asked to link LLVM and came out without it - this re-checks the
+      # shipped artifacts independently and prints the sizes, which is the
+      # cheapest possible tell: a stage with static LLVM inside is ~160MB and
+      # one without is ~1.5MB.
+      - name: Report per-stage backend
         env:
           SALAM_STD: ${{ github.workspace }}/std
         run: |
           set -eu
-          sh=build/selfhost/salam-stage2
           printf 'func main:\n    println "backend-probe"\nend\n' > probe.salam
-          if "$sh" build probe.salam --output=probe_exe --log-level=info 2>&1 |
-            grep -qi "generating LLVM IR"; then
-            echo "stage2 backend: LLVM (in-process)"
-          else
-            echo "stage2 backend: C (no static LLVM linked in)"
-          fi
-          rm -f probe.salam probe_exe
+          for s in build/selfhost/salam-stage*; do
+            [ -x "$s" ] || continue
+            if "$s" build probe.salam --output=probe_exe --log-level=info 2>&1 |
+              grep -q "LLVM IR"; then
+              backend="LLVM (in-process)"
+            else
+              backend="C (no static LLVM linked in)"
+            fi
+            printf '%-28s %12s bytes  %s\n' "$(basename "$s")" \
+              "$(wc -c <"$s" | tr -d ' ')" "$backend"
+            rm -f probe_exe
+          done
+          rm -f probe.salam
 
       - name: Smoke-test the self-hosted compiler
         env:

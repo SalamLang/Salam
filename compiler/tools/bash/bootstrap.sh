@@ -239,8 +239,8 @@ has_inprocess_llvm() {
     rm -rf "$_probe_dir"
     mkdir -p "$_probe_dir"
     printf 'func main:\n    ret 0\nend\n' >"$_probe_dir/probe.salam"
-    ( cd "$_probe_dir" && "$1" build probe.salam --output=probe_exe \
-        --log-level=info ) >"$_probe_dir/log" 2>&1
+    (cd "$_probe_dir" && "$1" build probe.salam --output=probe_exe \
+        --log-level=info) >"$_probe_dir/log" 2>&1
     _rc=1
     if grep -q "LLVM IR" "$_probe_dir/log" 2>/dev/null; then
         _rc=0

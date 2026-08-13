@@ -13,6 +13,7 @@
  */
 
 #include "codegen/codegen_internal.h"
+#include "core/sal_path.h"
 #include "core/sal_format.h"
 #include "semantic/sema.h"
 
@@ -556,10 +557,7 @@ static void hdr_prelude(cg_t *cg, ast_node_t *program, sb_t *h)
                 if (!p) continue;
                 const char *resolved =
                     d->type_str ? d->type_str : salam_resolve_import(cg->a, "", p);
-                const char *slash = strrchr(resolved, '/');
-                const char *bs = strrchr(resolved, '\\');
-                const char *stem = slash ? slash + 1 : resolved;
-                if (bs && (!slash || bs > slash)) stem = bs + 1;
+                const char *stem = sal_path_base(resolved);
                 char base[128];
                 size_t k = 0;
                 {

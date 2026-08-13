@@ -13,6 +13,7 @@
  */
 
 #include "llvm/codegen_llvm_internal.h"
+#include "core/sal_path.h"
 
 const char *ll_meta_add(ll_t *ll, const char *text)
 {
@@ -45,16 +46,10 @@ static void di_split_path(ll_t *ll, const char *path)
         ll->src_dir = ".";
         return;
     }
-    const char *slash = strrchr(path, '/');
-    const char *bs = strrchr(path, '\\');
-    const char *cut = slash;
-    if (bs && (!slash || bs > slash)) cut = bs;
-    if (cut) {
-        ll->src_file = arena_strdup(ll->a, cut + 1);
-        ll->src_dir = arena_strndup(ll->a, path, (size_t)(cut - path));
-    } else {
-        ll->src_file = arena_strdup(ll->a, path);
-        ll->src_dir = ".";
+    ll->src_file = arena_strdup(ll->a, sal_path_base(path));
+    {
+        const char *dir = sal_path_dir(ll->a, path);
+        ll->src_dir = dir[0] ? dir : ".";
     }
 }
 

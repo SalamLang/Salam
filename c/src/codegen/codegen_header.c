@@ -455,7 +455,17 @@ static void hdr_prelude(cg_t *cg, ast_node_t *program, sb_t *h)
                "typedef struct { void* data; int64_t len; } salam_slice;\n"
                "extern int64_t salam_idx(int64_t, int64_t);\n"
                "extern SALAM_NORET void salam_panic(const char* msg);\n"
+               /*
+                * The four allocator entry points are declared here, ahead of
+                * every #include, because a generic method is instantiated into
+                * the header of whichever module happens to use it: Vector<str>
+                * lands in salam_mod_str.h, which core.h reaches long before
+                * mem.h gets to declare its own functions. Whatever those
+                * instantiated bodies call therefore has to be visible from the
+                * very top of any module header, not from mem's.
+                */
                "void* " SALAM_MEM_ALLOC "(uint64_t size);\n"
+               "void* " SALAM_MEM_ALLOC_ZEROED "(uint64_t size);\n"
                "void* " SALAM_MEM_REALLOC "(void* ptr, uint64_t size);\n"
                "void " SALAM_MEM_FREE "(void* ptr);\n"
                "static inline void salam_slice_new(salam_slice* out, void* b, int64_t "

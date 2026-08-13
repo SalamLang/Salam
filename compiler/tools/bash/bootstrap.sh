@@ -15,9 +15,13 @@
 # real proof the self-hosted compiler is sound - stage1 only proves the seed
 # can parse the sources. stage2 is the artifact you ship/test with.
 #
-# The seed must be 0.2.8 or newer: earlier ones do not collapse '..' in
+# The seed must be 0.2.9 or newer. 0.2.7 and older do not collapse '..' in
 # import paths, so compiler/'s per-directory layout blows past their module
-# limit (see the stage 1 hint below). `make -C c` builds a usable one.
+# limit (see the stage 1 hint below). 0.2.8 clears that but emits no
+# prototype for the other-package functions a generic instantiation calls,
+# and std/'s Vector<T> has one, so its stage 1 dies in the C compiler on an
+# implicit declaration of _Salam_mem_AllocateZeroed_u64. `make -C c` builds a
+# usable seed.
 #
 # Usage:
 #   compiler/tools/bash/bootstrap.sh <seed-salam> [outdir] [--stages N]
@@ -323,8 +327,14 @@ while [ "$stage" -le "$STAGES" ]; do
             echo "      collapse '..' in import paths - compiler/'s per-directory layout" >&2
             echo "      then overruns their 64-entry module work list and whole modules" >&2
             echo "      go missing, which surfaces as the C compiler failing on a" >&2
-            echo "      'salam_mod_*.h: No such file or directory'. Use a newer seed, or" >&2
-            echo "      build one from this checkout with 'make -C c' and pass ./salam." >&2
+            echo "      'salam_mod_*.h: No such file or directory'." >&2
+            echo "hint: 0.2.8 seeds get that far but emit no prototype for the" >&2
+            echo "      other-package functions a generic instantiation calls, so" >&2
+            echo "      std/'s Vector<T> lands in another module's header calling a" >&2
+            echo "      mem function nothing declared yet - an implicit declaration of" >&2
+            echo "      _Salam_mem_AllocateZeroed_u64 that gcc 16 and clang reject." >&2
+            echo "hint: use a 0.2.9 or newer seed, or build one from this checkout" >&2
+            echo "      with 'make -C c' and pass ./salam." >&2
         fi
         exit 1
     }

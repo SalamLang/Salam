@@ -188,15 +188,18 @@ size_t sal_path_join(char *out, size_t n, const char *dir, const char *name)
         return strlen(name);
     }
 
-    copy_bounded(out, n, dir, trimmed_len(dir));
-    sal_path_to_slash(out);
-    need = trimmed_len(dir);
-    if (!name[0]) return need;
-    need += 1 + strlen(name);
-    have = strlen(out);
-    if (have + 1 < n) {
-        out[have] = '/';
-        copy_bounded(out + have + 1, n - have - 1, name, strlen(name));
+    {
+        size_t dlen = trimmed_len(dir);
+        /* A root ("/", "c:/") keeps its separator, so adding one here would
+           double it. */
+        bool rooted = dlen > 0 && sal_path_is_sep(dir[dlen - 1]);
+        copy_bounded(out, n, dir, dlen);
+        sal_path_to_slash(out);
+        if (!name[0]) return dlen;
+        need = dlen + (rooted ? 0 : 1) + strlen(name);
+        have = strlen(out);
+        if (!rooted && have + 1 < n) out[have++] = '/';
+        if (have < n) copy_bounded(out + have, n - have, name, strlen(name));
         sal_path_to_slash(out);
     }
     return need;

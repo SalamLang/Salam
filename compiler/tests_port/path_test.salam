@@ -1,0 +1,116 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Unit tests for the sal_path port (core/sal_path.c). Every case here is a
+// spelling a real Windows path arrives in - %PATH% entries, a pasted
+// Explorer path, a tab-completed directory with a trailing separator - so
+// the C module and this one must agree byte for byte on all of them.
+import testing
+import os
+import pth "../sal_path.salam"
+
+func test_is_sep():
+    testing.AssertTrue(pth.PathIsSep(47))
+    testing.AssertTrue(pth.PathIsSep(92))
+    testing.AssertFalse(pth.PathIsSep(58))
+    testing.AssertFalse(pth.PathIsSep(97))
+end
+
+func test_is_abs():
+    testing.AssertTrue(pth.PathIsAbs("/usr/lib"))
+    testing.AssertTrue(pth.PathIsAbs("\\srv\\share"))
+    testing.AssertTrue(pth.PathIsAbs("C:/gcc"))
+    testing.AssertTrue(pth.PathIsAbs("c:\\gcc"))
+    testing.AssertFalse(pth.PathIsAbs("gcc/bin"))
+    testing.AssertFalse(pth.PathIsAbs("../x"))
+    testing.AssertFalse(pth.PathIsAbs(""))
+end
+
+func test_to_slash():
+    testing.AssertEqStr(pth.PathToSlash("C:\\gcc\\bin"), "C:/gcc/bin")
+    testing.AssertEqStr(pth.PathToSlash("C:\\gcc/bin"), "C:/gcc/bin")
+    testing.AssertEqStr(pth.PathToSlash("already/slashed"), "already/slashed")
+    testing.AssertEqStr(pth.PathToSlash(""), "")
+end
+
+func test_trim_sep():
+    testing.AssertEqStr(pth.PathTrimSep("a/b/"), "a/b")
+    testing.AssertEqStr(pth.PathTrimSep("a\\b\\"), "a\\b")
+    testing.AssertEqStr(pth.PathTrimSep("a/b"), "a/b")
+    // roots keep their separator: trimming would leave "" and "c:"
+    testing.AssertEqStr(pth.PathTrimSep("/"), "/")
+    testing.AssertEqStr(pth.PathTrimSep("c:/"), "c:/")
+end
+
+func test_base_stem_dir():
+    testing.AssertEqStr(pth.PathBase("sub/util.salam"), "util.salam")
+    testing.AssertEqStr(pth.PathBase("sub\\util.salam"), "util.salam")
+    testing.AssertEqStr(pth.PathBase("a/b\\c/d.salam"), "d.salam")
+    testing.AssertEqStr(pth.PathBase("util.salam"), "util.salam")
+
+    testing.AssertEqStr(pth.PathStem("sub\\util.salam"), "util")
+    testing.AssertEqStr(pth.PathStem("C:\\gcc\\bin\\gcc.exe"), "gcc")
+    testing.AssertEqStr(pth.PathStem("noext"), "noext")
+
+    // slash-canonical, so two spellings of one directory compare equal
+    testing.AssertEqStr(pth.PathDir("sub\\util.salam"), "sub")
+    testing.AssertEqStr(pth.PathDir("a\\b/c.salam"), "a/b")
+    testing.AssertEqStr(pth.PathDir("util.salam"), "")
+end
+
+func test_join():
+    testing.AssertEqStr(pth.PathJoin("C:\\gcc\\bin", "gcc.exe"), "C:/gcc/bin/gcc.exe")
+    testing.AssertEqStr(pth.PathJoin("dir/", "f.salam"), "dir/f.salam")
+    testing.AssertEqStr(pth.PathJoin("dir\\", "f.salam"), "dir/f.salam")
+    testing.AssertEqStr(pth.PathJoin("dir", "/f.salam"), "dir/f.salam")
+    testing.AssertEqStr(pth.PathJoin("dir", "sub\\f.salam"), "dir/sub/f.salam")
+    testing.AssertEqStr(pth.PathJoin("", "f.salam"), "f.salam")
+    testing.AssertEqStr(pth.PathJoin("dir\\", ""), "dir")
+    testing.AssertEqStr(pth.PathJoin("/", "etc"), "/etc")
+    testing.AssertEqStr(pth.PathJoin("c:/", "x"), "c:/x")
+end
+
+func test_normalize():
+    testing.AssertEqStr(pth.PathNormalize("./token.salam"), "token.salam")
+    testing.AssertEqStr(pth.PathNormalize(".\\token.salam"), "token.salam")
+    testing.AssertEqStr(pth.PathNormalize("a/./b"), "a/b")
+    testing.AssertEqStr(pth.PathNormalize("a//b"), "a/b")
+    testing.AssertEqStr(pth.PathNormalize("a/b/../c"), "a/c")
+    testing.AssertEqStr(pth.PathNormalize("a\\b\\..\\c"), "a/c")
+    // both spellings of one file must produce ONE dedup key, or the module
+    // is loaded twice and its globals are 'defined twice' at link time
+    testing.AssertEqStr(
+        pth.PathNormalize("sub\\util.salam"), pth.PathNormalize("sub/util.salam")
+    )
+    testing.AssertEqStr(
+        pth.PathNormalize("compiler\\semantic\\..\\token.salam"),
+        pth.PathNormalize("compiler/token.salam")
+    )
+    // a ".." with nothing to cancel, and a drive prefix, both survive
+    testing.AssertEqStr(pth.PathNormalize("../../x"), "../../x")
+    testing.AssertEqStr(pth.PathNormalize("c:/../x"), "c:/../x")
+    // a leading "//" is a UNC root, not a doubled separator
+    testing.AssertEqStr(pth.PathNormalize("//server/share"), "//server/share")
+end
+
+func main:
+    test_is_sep()
+    test_is_abs()
+    test_to_slash()
+    test_trim_sep()
+    test_base_stem_dir()
+    test_join()
+    test_normalize()
+    os.Exit(testing.Summary())
+end

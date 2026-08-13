@@ -2000,6 +2000,34 @@ static llv_t ll_match_expr(ll_t *ll, ast_node_t *n)
  * commits it emits the whole cast, including the non-pointer base case that
  * only the emitted operand's type can rule out.
  */
+/* `sizeof(T)`, through any number of casts, yields T's spelling; else NULL. */
+static const char *ll_sizeof_arg_ts(ast_node_t *n)
+{
+    while (n && n->kind == AST_CAST)
+        n = n->a;
+    if (!n || n->kind != AST_CALL || n->list.len != 1) return NULL;
+    ast_node_t *callee = n->a;
+    if (!callee || callee->kind != AST_IDENTIFIER || !callee->name) return NULL;
+    if (strcmp(callee->name, "sizeof") != 0) return NULL;
+    return ((ast_node_t *)n->list.data[0])->type_str;
+}
+
+/*
+ * `idx * sizeof(T)` (either order) where T is `want` - the element-offset half
+ * of the idiom above. Returns the index operand, so the caller can emit a GEP
+ * over T instead of over i8. Worth separating: a byte GEP makes LLVM carry a
+ * second induction variable for the byte offset and re-derive the scale, where
+ * a typed GEP folds straight into x86's scaled addressing.
+ */
+static ast_node_t *ll_elem_index(ast_node_t *n, const char *want)
+{
+    if (!n || n->kind != AST_BINARY || n->op != TK_STAR || !want) return NULL;
+    const char *lt = ll_sizeof_arg_ts(n->a), *rt = ll_sizeof_arg_ts(n->b);
+    if (rt && !strcmp(rt, want)) return n->a;
+    if (lt && !strcmp(lt, want)) return n->b;
+    return NULL;
+}
+
 static bool ll_gep_from_int_add(ll_t *ll, ast_node_t *n, const char *to, const char **out)
 {
     ast_node_t *bin = n->a;
@@ -2016,13 +2044,39 @@ static bool ll_gep_from_int_add(ll_t *ll, ast_node_t *n, const char *to, const c
         base->type && base->type->type_str ? base->type->type_str : base->type_str;
     if (!ll_is_int(ity) || ll_int_bits(ll, ity) != ll->ptr_bits) return false;
 
+    /* `to` is `T*`; its pointee is what a typed GEP would step over. */
+    char pointee[128];
+    size_t to_len = strlen(to);
+    if (to_len && to_len < sizeof pointee) {
+        memcpy(pointee, to, to_len - 1);
+        pointee[to_len - 1] = '\0';
+    } else {
+        pointee[0] = '\0';
+    }
+    ast_node_t *idx = pointee[0] ? ll_elem_index(bin->b, pointee) : NULL;
+
     llv_t p = ll_expr(ll, base->a);
-    llv_t off = ll_expr(ll, bin->b);
-    const char *r = ll_new_tmp(ll);
+    bool ptr_base = ll_is_ptr_ts(p.ts) || ll_is_str(p.ts);
+    /* Evaluate the offset operand exactly once: the index alone when a typed
+     * GEP is on the table, the whole `idx * sizeof(T)` otherwise. */
+    llv_t off = ll_expr(ll, (ptr_base && idx) ? idx : bin->b);
     /* A float offset would have been added in float and only then truncated to
-     * a pointer, so it is not this idiom - fall through to the faithful
-     * arithmetic below rather than folding it into a byte GEP. */
-    if ((ll_is_ptr_ts(p.ts) || ll_is_str(p.ts)) && !ll_is_float(off.ts)) {
+     * a pointer, so it is not this idiom - take the faithful arithmetic path,
+     * scaling the index back up to the byte offset the source asked for. */
+    bool flt_off = ll_is_float(off.ts);
+    if (idx && ptr_base && flt_off) {
+        const char *szp = ll_new_tmp(ll), *sz = ll_new_tmp(ll);
+        ll_emit(ll, "%s = getelementptr %s, ptr null, i32 1", szp, ll_ty(ll, pointee));
+        ll_emit(ll, "%s = ptrtoint ptr %s to %s", sz, szp, ll->usize);
+        const char *mul = ll_new_tmp(ll);
+        ll_emit(ll, "%s = mul %s %s, %s", mul, ll_ty(ll, ll->usize),
+                ll_conv(ll, off, ll->usize), sz);
+        off = (llv_t){mul, ll->usize};
+        flt_off = false;
+        idx = NULL;
+    }
+    const char *r = ll_new_tmp(ll);
+    if (ptr_base && !flt_off) {
         const char *u = ll_ty(ll, ll->usize);
         const char *o = ll_conv(ll, off, ll->usize);
         if (bin->op == TK_MINUS) {
@@ -2030,7 +2084,8 @@ static bool ll_gep_from_int_add(ll_t *ll, ast_node_t *n, const char *to, const c
             ll_emit(ll, "%s = sub %s 0, %s", neg, u, o);
             o = neg;
         }
-        ll_emit(ll, "%s = getelementptr i8, ptr %s, %s %s", r, p.ref, u, o);
+        ll_emit(ll, "%s = getelementptr %s, ptr %s, %s %s", r,
+                idx ? ll_ty(ll, pointee) : "i8", p.ref, u, o);
     } else {
         const char *cty =
             ll_is_float(off.ts) ? ll_common(ll, ll->usize, off.ts) : ll->usize;

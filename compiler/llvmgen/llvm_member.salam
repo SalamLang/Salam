@@ -579,6 +579,51 @@ end
 // wraparound semantics the integer form had.
 // (The C names this parameter `to`. Here that is the keyword `repeat a to b`
 // is spelled with, so it carries the caller's own name for the same thing.)
+// ll_sizeof_arg_ts - `sizeof(T)`, through any number of casts, yields T's
+// spelling; else "".
+func sizeof_arg_ts(a &: at.Ast, n: int): str:
+    mut k := n
+    until k != 0 && at.KindOf(a, k) == at.AST_CAST:
+        k = at.Get(a, k).a
+    end
+    if k == 0 || at.KindOf(a, k) != at.AST_CALL:
+        ret ""
+    end
+    nn := at.Get(a, k)
+    if nn.list.len() != 1 || nn.a == 0 || at.KindOf(a, nn.a) != at.AST_IDENTIFIER:
+        ret ""
+    end
+    if !str.Equals(at.Get(a, nn.a).name, "sizeof"):
+        ret ""
+    end
+    ret at.Get(a, nn.list.get(0)[0]).type_str
+end
+
+// ll_elem_index - `idx * sizeof(T)` (either order) where T is `want`, the
+// element-offset half of the idiom below. Returns the index operand so the
+// caller can emit a GEP over T instead of over i8. Worth separating: a byte
+// GEP makes LLVM carry a second induction variable for the byte offset and
+// re-derive the scale, where a typed GEP folds straight into x86's scaled
+// addressing. Returns 0 for no match.
+func elem_index(a &: at.Ast, n: int, want: str): int:
+    if n == 0 || at.KindOf(a, n) != at.AST_BINARY || str.Len(want) == 0:
+        ret 0
+    end
+    bn := at.Get(a, n)
+    if bn.op != tok.TK_STAR:
+        ret 0
+    end
+    lt := sizeof_arg_ts(a, bn.a)
+    rt := sizeof_arg_ts(a, bn.b)
+    if str.Len(rt) > 0 && str.Equals(rt, want):
+        ret bn.a
+    end
+    if str.Len(lt) > 0 && str.Equals(lt, want):
+        ret bn.b
+    end
+    ret 0
+end
+
 func gep_from_int_add(
     v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, to_ts: str, out &: str
 ): bool:
@@ -613,13 +658,35 @@ func gep_from_int_add(
         ret false
     end
 
+    // `to_ts` is `T*`; its pointee is what a typed GEP would step over.
+    pointee := str.Substr(to_ts, 0, str.Len(to_ts) - 1)
+    mut idx := elem_index(a, bin.b, pointee)
+
     p := lv_expr(v, s, a, base.a)
-    off := lv_expr(v, s, a, bin.b)
-    r := new_tmp(v)
+    ptr_base := is_ptr_ts(p.ts) || is_str(p.ts)
+    // Evaluate the offset operand exactly once: the index alone when a typed
+    // GEP is on the table, the whole `idx * sizeof(T)` otherwise.
+    mut off := lv_expr(v, s, a, (ptr_base && idx != 0) ? idx : bin.b)
     // A float offset would have been added in float and only then truncated to
-    // a pointer, so it is not this idiom - fall through to the faithful
-    // arithmetic below rather than folding it into a byte GEP.
-    if (is_ptr_ts(p.ts) || is_str(p.ts)) && !is_float(off.ts):
+    // a pointer, so it is not this idiom - take the faithful arithmetic path,
+    // scaling the index back up to the byte offset the source asked for.
+    mut flt_off := is_float(off.ts)
+    if idx != 0 && ptr_base && flt_off:
+        szp := new_tmp(v)
+        sz := new_tmp(v)
+        emit(v, szp + " = getelementptr " + ty_of(v, s, a, pointee) + ", ptr null, i32 1")
+        emit(v, sz + " = ptrtoint ptr " + szp + " to " + v.usize)
+        mul := new_tmp(v)
+        emit(
+            v,
+            mul + " = mul " + ty_of(v, s, a, v.usize) + " " + conv(v, s, a, off, v.usize) + ", " + sz
+        )
+        off = make_llv(mul, v.usize)
+        flt_off = false
+        idx = 0
+    end
+    r := new_tmp(v)
+    if ptr_base && !flt_off:
         u := ty_of(v, s, a, v.usize)
         mut o := conv(v, s, a, off, v.usize)
         if bin.op == tok.TK_MINUS:
@@ -627,7 +694,10 @@ func gep_from_int_add(
             emit(v, neg + " = sub " + u + " 0, " + o)
             o = neg
         end
-        emit(v, r + " = getelementptr i8, ptr " + p.ref + ", " + u + " " + o)
+        emit(
+            v,
+            r + " = getelementptr " + (idx != 0 ? ty_of(v, s, a, pointee) : "i8") + ", ptr " + p.ref + ", " + u + " " + o
+        )
     else:
         cty := is_float(off.ts) ? common_ts(v, v.usize, off.ts) : v.usize
         flt := is_float(cty)

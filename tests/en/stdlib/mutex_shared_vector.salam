@@ -1,0 +1,113 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// Four threads appending to one shared Vector.
+//
+// A counter under a lock is the easy case: the shared thing is one machine
+// word. A Vector is the real one. `push` can reallocate - read the length,
+// grow the buffer, copy the old contents, write the new element, store the
+// new length - and two threads doing that at once do not merely lose an
+// element, they free a buffer the other one is still copying out of.
+//
+// So the lock is not optional here, and it has to cover the whole of push,
+// not just the length update.
+//
+// WHAT THE TEST CAN CHECK
+//
+// The ORDER of the elements is up to the scheduler. Their number, their sum
+// and their set are not. Every assertion below is order-independent, which
+// is the only kind a concurrency test may make.
+
+import sync
+
+const WORKERS := 4
+const PER_WORKER := 250
+
+mut items := Vector {} as Vector<int>
+mut lock := sync.Mutex {}
+mut wg := sync.WaitGroup {}
+// Each worker adds its own marker so the pushes can be told apart afterwards.
+mut next_marker := 0
+
+func take_marker(): int:
+    sync.Lock(lock)
+    mine := next_marker
+    next_marker = next_marker + 1
+    sync.Unlock(lock)
+    ret mine
+end
+
+func worker():
+    marker := take_marker()
+    repeat PER_WORKER with i:
+        sync.Lock(lock)
+        // The whole push is inside the lock, reallocation included.
+        items.push(marker * 1000 + i)
+        sync.Unlock(lock)
+    end
+    sync.Done(wg)
+end
+
+func main:
+    lock = sync.NewMutex()
+    wg = sync.NewWaitGroup()
+    defer items.free()
+
+    sync.Add(wg, WORKERS as i64)
+    t1 := spawn(worker)
+    t2 := spawn(worker)
+    t3 := spawn(worker)
+    t4 := spawn(worker)
+    sync.Wait(wg)
+    join(t1)
+    join(t2)
+    join(t3)
+    join(t4)
+
+    println "markers taken :", next_marker
+    println "length        :", items.len(), "of", WORKERS * PER_WORKER
+
+    // Every worker's whole run is present: count the elements belonging to
+    // each marker, and check the values are the ones that worker wrote.
+    mut per_marker_ok := true
+    mut strays := 0
+    repeat WORKERS with m:
+        mut seen := 0
+        repeat items.len() with i:
+            v := items.get(i)[0]
+            if v / 1000 == m: seen = seen + 1 end
+        end
+        if seen != PER_WORKER: per_marker_ok = false end
+    end
+    repeat items.len() with i:
+        v := items.get(i)[0]
+        if v / 1000 >= WORKERS || v % 1000 >= PER_WORKER: strays = strays + 1 end
+    end
+    println "per worker ok :", per_marker_ok
+    println "stray values  :", strays
+
+    // Order-independent, so it is the same on every run: each worker
+    // contributes marker*1000*250 plus 0+1+...+249.
+    mut sum := 0
+    repeat items.len() with i:
+        sum = sum + items.get(i)[0]
+    end
+    println "sum           :", sum
+
+    sync.DestroyWaitGroup(wg)
+    sync.Destroy(lock)
+    ret 0
+end

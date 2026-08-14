@@ -129,6 +129,7 @@ static void define_local(sema_t *s, ast_node_t *decl, sym_kind_t kind, type_t *t
     sym->type = t;
     sym->is_mut = decl->is_mut;
     sym->decl = decl;
+    sema_check_shadows_func(s, decl->name, &decl->span);
     if (scope_define(s->a, s->cur, sym))
         SERR(s, 1, &decl->span, "redefinition of '%s'", decl->name);
 }
@@ -445,6 +446,7 @@ static void check_stmt(sema_t *s, ast_node_t *n)
             sym->has_ival = true;
             sym->ival = (long long)n->a->value.as.i;
         }
+        sema_check_shadows_func(s, n->name, &n->span);
         if (scope_define(s->a, s->cur, sym))
             SERR(s, 1, &n->span, "redefinition of '%s'", n->name);
         break;

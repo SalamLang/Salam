@@ -305,7 +305,21 @@ void sema_collect(sema_t *s, ast_node_t *program)
                 break;
             }
             case AST_FUNC_DEF: {
-                symbol_t *fsym = get_or_make_func(s, s->global, d->name, SYM_FUNC);
+                /*
+                 * The other half of sema_check_shadows_func: top-level
+                 * ordering puts globals before functions, so this is the
+                 * direction a global/function clash actually shows up in.
+                 * Without it get_or_make_func's scope_define silently loses
+                 * to the global and every call site reported "call to
+                 * undefined function" instead.
+                 */
+                symbol_t *prev = scope_lookup_local(s->global, d->name);
+                symbol_t *fsym;
+                if (prev && (prev->kind == SYM_VAR || prev->kind == SYM_CONST))
+                    SERR(s, 89, &d->span,
+                         "'%s' is already the name of a variable in this file",
+                         d->name);
+                fsym = get_or_make_func(s, s->global, d->name, SYM_FUNC);
                 if (!fsym->decl) fsym->decl = d;
                 if (!fsym->pkgname) fsym->pkgname = s->pkg;
                 if (!fsym->home) fsym->home = s->global;
@@ -452,6 +466,7 @@ static void check_function(sema_t *s, ast_node_t *fn, symbol_t *owner, func_sig_
             ps->is_mut = false;
             ps->is_ref = param->is_ref;
             ps->decl = param;
+            sema_check_shadows_func(s, param->name, &param->span);
             if (scope_define(s->a, sc, ps))
                 SERR(s, 1, &param->span, "duplicate parameter '%s'", param->name);
         }

@@ -277,3 +277,20 @@ ast_node_t *sema_pure_fn(sema_t *s)
         return s->cur_func->decl;
     return NULL;
 }
+
+/*
+ * A variable, parameter or constant may not reuse a function's name. Since a
+ * bare function name is now a value (its address), a local of the same name
+ * would silently take the name over for the rest of its scope and a reader
+ * could no longer tell which of the two an identifier meant. Only free
+ * functions are checked: methods live in a struct's member scope and are only
+ * ever reachable through a receiver, so they cannot be shadowed this way.
+ */
+void sema_check_shadows_func(sema_t *s, const char *name, const src_span_t *span)
+{
+    symbol_t *f;
+    if (!name || !name[0]) return;
+    f = scope_lookup_local(s->global, name);
+    if (f && f->kind == SYM_FUNC)
+        SERR(s, 89, span, "'%s' is already the name of a function in this file", name);
+}

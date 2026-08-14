@@ -283,6 +283,7 @@ type_t *check_lambda(sema_t *s, ast_node_t *n)
             ps->type = sema_resolve_type(s, param->type);
             ps->is_ref = param->is_ref;
             param->type_str = type_to_string(s->tc, ps->type);
+            sema_check_shadows_func(s, param->name, &param->span);
             if (scope_define(s->a, sc, ps))
                 SERR(s, 1, &param->span, "duplicate parameter '%s'", param->name);
             vec_push(s->a, &ptypes, ps->type);

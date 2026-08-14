@@ -1,0 +1,339 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package jwt
+
+// Verification, in the order that matters: shape, then algorithm, then
+// signature, then claims. Nothing after the signature check runs on a token
+// whose MAC did not match, so a forged payload never reaches the clock or
+// the issuer comparison.
+
+@en "Options"
+@fa "گزینه ها"
+@ar "خیارات"
+pub struct Options:
+    // The algorithm the signature is checked with. NOT read from the token:
+    // a header advertising something else is rejected. Empty means "accept
+    // any supported HMAC", which gives up that protection - set it.
+    pub alg: str = "HS256"
+    // Non-empty values are required to match the corresponding claim.
+    pub issuer: str = ""
+    pub audience: str = ""
+    pub subject: str = ""
+    // Seconds of tolerance on exp/nbf/iat, for clock skew between machines.
+    pub leeway: i64 = 0
+    // Fixed "now" in epoch seconds, for tests. 0 = the real clock.
+    pub now: i64 = 0
+    // Refuse a token that omits these.
+    pub require_exp: bool = false
+    pub require_nbf: bool = false
+    pub require_iat: bool = false
+    pub require_sub: bool = false
+    pub require_jti: bool = false
+    // Refuse a header whose "typ" is present and is neither "JWT" nor a
+    // media type ending in "+jwt" (RFC 9068's "at+jwt", say).
+    pub check_typ: bool = true
+end
+
+// Compare in time that does not depend on where the mismatch is. An early
+// return on the first differing byte leaks the position of that byte, and a
+// signature can be recovered one byte at a time from the timing.
+func _consttime_eq(a: str, b: str): bool:
+    if a.len() != b.len(): ret false end
+    n := a.len()
+    ap := _bp(a)
+    bp := _bp(b)
+    mut diff := 0
+    repeat n with i:
+        diff = diff | (_ub(ap, i) ^ _ub(bp, i))
+    end
+    ret diff == 0
+end
+
+func _split3(token: str, a &: str, b &: str, c &: str): bool:
+    n := token.len()
+    bp := _bp(token)
+    mut d1 := 0 - 1
+    mut d2 := 0 - 1
+    repeat n with i:
+        if _ub(bp, i) == 46:
+            if d1 < 0:
+                d1 = i
+            else d2 < 0:
+                d2 = i
+            else:
+                // a fourth segment: JWE, or garbage. Not ours either way.
+                ret false
+            end
+        end
+    end
+    if d1 < 0 || d2 < 0: ret false end
+    // An empty header or payload cannot be JSON. An empty SIGNATURE is left
+    // to the algorithm check on purpose: that shape is the "alg": "none"
+    // forgery, and it should be reported as the unsupported algorithm it is
+    // rather than as a parse failure.
+    if d1 == 0 || d2 == d1 + 1: ret false end
+    a = token.substr(0, d1)
+    b = token.substr(d1 + 1, d2 - d1 - 1)
+    c = token.substr(d2 + 1, n - d2 - 1)
+    ret true
+end
+
+// One member, refusing the ambiguous case.
+//
+// A claim this package acts on, appearing twice in the same object, is not a
+// token with a redundant field: it is a token that two implementations can
+// read differently, since JSON says nothing useful about duplicate names.
+// `ok` goes false rather than this picking a winner.
+func _once(text: str, key: str, ok &: bool): str:
+    mut count := 0
+    value := _member_all(text, key, count)
+    if count > 1: ok = false end
+    ret value
+end
+
+func _read_claims(payload: str, c &: Claims, ok &: bool):
+    c.iss = _raw_to_str(_once(payload, "iss", ok))
+    c.sub = _raw_to_str(_once(payload, "sub", ok))
+    c.jti = _raw_to_str(_once(payload, "jti", ok))
+    aud := _once(payload, "aud", ok)
+    if aud.len() > 0:
+        c.aud_raw = aud
+        c.aud = _raw_to_str(aud)
+    end
+    c.exp = _raw_to_i64(_once(payload, "exp", ok))
+    c.nbf = _raw_to_i64(_once(payload, "nbf", ok))
+    c.iat = _raw_to_i64(_once(payload, "iat", ok))
+end
+
+// Shape and decode only. Shared by Decode and Verify so both see exactly the
+// same parse; Verify is the one that goes on to check anything.
+func _parse(token: str, t &: Token, err &: int): bool:
+    err = JWT_OK
+    mut h := ""
+    mut p := ""
+    mut s := ""
+    if !_split3(token, h, p, s):
+        err = JWT_ERR_MALFORMED
+        ret false
+    end
+    mut ok := false
+    header := B64UrlDecode(h, ok)
+    if !ok:
+        err = JWT_ERR_BAD_BASE64
+        ret false
+    end
+    payload := B64UrlDecode(p, ok)
+    if !ok:
+        err = JWT_ERR_BAD_BASE64
+        ret false
+    end
+    mut single := true
+    mut alg_count := 0
+    alg := _raw_to_str(_member_all(header, "alg", alg_count))
+    if alg_count != 1:
+        err = JWT_ERR_BAD_JSON
+        ret false
+    end
+    t.alg = alg
+    t.typ = _raw_to_str(_once(header, "typ", single))
+    t.kid = _raw_to_str(_once(header, "kid", single))
+    t.header_json = header
+    t.payload_json = payload
+    t.signing_input = h.concat(".").concat(p)
+    t.signature = s
+    mut c := Claims {}
+    _read_claims(payload, c, single)
+    t.claims = c
+    if !single:
+        err = JWT_ERR_BAD_JSON
+        ret false
+    end
+    ret true
+end
+
+// "JWT", or a media type ending in "+jwt" - RFC 9068 access tokens arrive as
+// "at+jwt", and a verifier that only knows the bare spelling rejects them.
+// Matching is case-insensitive because "typ" is a media type (RFC 7515 §4.1.9).
+func _typ_ok(typ: str): bool:
+    n := typ.len()
+    if n == 0: ret true end
+    if _lower(typ) == "jwt": ret true end
+    if n < 4: ret false end
+    ret _lower(typ.substr(n - 4, 4)) == "+jwt"
+end
+
+func _lower(s: str): str:
+    n := s.len()
+    bp := _bp(s)
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    repeat n with i:
+        mut c := _ub(bp, i)
+        if c >= 65 && c <= 90: c = c + 32 end
+        str.BufAppendChar(sb, c)
+    end
+    out := str.BufStr(sb)
+    ret out
+end
+
+func _check_time(t: Token, opts: Options, err &: int): bool:
+    mut now := opts.now
+    if now == 0 as i64: now = time.Now() end
+    if t.claims.exp != 0 as i64 && now - opts.leeway >= t.claims.exp:
+        err = JWT_ERR_EXPIRED
+        ret false
+    end
+    if t.claims.nbf != 0 as i64 && now + opts.leeway < t.claims.nbf:
+        err = JWT_ERR_NOT_YET_VALID
+        ret false
+    end
+    if t.claims.iat != 0 as i64 && now + opts.leeway < t.claims.iat:
+        err = JWT_ERR_ISSUED_IN_FUTURE
+        ret false
+    end
+    ret true
+end
+
+func _check_required(t: Token, opts: Options, err &: int): bool:
+    if opts.require_exp && t.claims.exp == 0 as i64:
+        err = JWT_ERR_MISSING_CLAIM
+        ret false
+    end
+    if opts.require_nbf && t.claims.nbf == 0 as i64:
+        err = JWT_ERR_MISSING_CLAIM
+        ret false
+    end
+    if opts.require_iat && t.claims.iat == 0 as i64:
+        err = JWT_ERR_MISSING_CLAIM
+        ret false
+    end
+    if opts.require_sub && t.claims.sub.len() == 0:
+        err = JWT_ERR_MISSING_CLAIM
+        ret false
+    end
+    if opts.require_jti && t.claims.jti.len() == 0:
+        err = JWT_ERR_MISSING_CLAIM
+        ret false
+    end
+    ret true
+end
+
+func _check_claims(t: Token, opts: Options, err &: int): bool:
+    if opts.issuer.len() > 0 && opts.issuer != t.claims.iss:
+        err = JWT_ERR_ISSUER
+        ret false
+    end
+    if opts.subject.len() > 0 && opts.subject != t.claims.sub:
+        err = JWT_ERR_SUBJECT
+        ret false
+    end
+    if opts.audience.len() > 0 && !HasAudience(t, opts.audience):
+        err = JWT_ERR_AUDIENCE
+        ret false
+    end
+    if !_check_required(t, opts, err): ret false end
+    ret _check_time(t, opts, err)
+end
+
+@en "DefaultOptions"
+@fa "گزینه های پیش فرض"
+@ar "الخیارات الافتراضیة"
+pub func DefaultOptions(): Options:
+    ret Options {}
+end
+
+@en "OptionsFor"
+@fa "گزینه ها برای"
+@ar "خیارات لـ"
+pub func OptionsFor(alg: str): Options:
+    ret Options { alg = alg }
+end
+
+// Parse WITHOUT verifying anything.
+//
+// This is for reading a token you have already verified, for a CLI that
+// prints one, or for finding the "kid" so you know which key to verify with.
+// The Token it returns has valid = false always. Do not branch on its claims
+// for anything that grants access: every byte in it is attacker-supplied
+// until Verify says otherwise.
+@en "Decode"
+@fa "کدگشایی"
+@ar "فك"
+pub func Decode(token: str, err &: int): Token:
+    mut t := Token {}
+    _unused := _parse(token, t, err)
+    ret t
+end
+
+// The real entry point. Returns a Token whose `valid` is true only when
+// `err` came back JWT_OK.
+@en "Verify"
+@fa "تایید"
+@ar "تحقق"
+pub func Verify(token: str, secret: str, opts: Options, err &: int): Token:
+    mut t := Token {}
+    if !_parse(token, t, err): ret t end
+    if secret.len() == 0:
+        err = JWT_ERR_EMPTY_SECRET
+        ret t
+    end
+    // "none" lands here as unsupported, which is the whole point: a token
+    // that says it is unsigned is a forgery attempt, not a token.
+    if !IsSupportedAlg(t.alg):
+        err = JWT_ERR_ALG_UNSUPPORTED
+        ret t
+    end
+    if opts.alg.len() > 0 && opts.alg != t.alg:
+        err = JWT_ERR_ALG_MISMATCH
+        ret t
+    end
+    if opts.check_typ && !_typ_ok(t.typ):
+        err = JWT_ERR_TYPE
+        ret t
+    end
+    // RFC 7515 §4.1.11: "crit" lists header extensions the verifier is
+    // required to understand. This one understands none of them, and the
+    // spec's answer to that is to reject, not to carry on ignoring them.
+    if _member_count(t.header_json, "crit") > 0:
+        err = JWT_ERR_ALG_UNSUPPORTED
+        ret t
+    end
+    expected := _signature(t.alg, secret, t.signing_input)
+    if !_consttime_eq(expected, t.signature):
+        err = JWT_ERR_SIGNATURE
+        ret t
+    end
+    if !_check_claims(t, opts, err): ret t end
+    err = JWT_OK
+    t.valid = true
+    ret t
+end
+
+@en "VerifyHS256"
+@fa "تایید اچ اس۲۵۶"
+@ar "تحقق اتش اس٢٥٦"
+pub func VerifyHS256(token: str, secret: str, err &: int): Token:
+    ret Verify(token, secret, Options {}, err)
+end
+
+// True when the token verifies, for the call site that only needs a yes/no.
+@en "IsValid"
+@fa "معتبر است"
+@ar "صالح"
+pub func IsValid(token: str, secret: str, opts: Options): bool:
+    mut err := 0
+    t := Verify(token, secret, opts, err)
+    ret t.valid
+end

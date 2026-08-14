@@ -1,0 +1,178 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package jwt
+
+// The claim set (RFC 7519 §4): the seven registered claims as typed fields,
+// and everything else accumulated as pre-rendered JSON members.
+//
+// `extra` holds rendered text rather than a HashMap for two reasons. It keeps
+// Claims a plain value that can be copied, returned and stored without an
+// owner having to free it, and it fixes the member order, so a signed token
+// is reproducible - which is what makes a signature testable at all.
+//
+// Set* routes a registered name to its field instead of appending a second
+// copy, so SetInt(c, "exp", n) and c.exp = n mean the same thing and a
+// payload can never carry the same key twice.
+
+@en "Claims"
+@fa "ادعاها"
+@ar "مطالبات"
+pub struct Claims:
+    // "iss": who issued it
+    pub iss: str = ""
+    // "sub": who it is about
+    pub sub: str = ""
+    // "aud": a single audience
+    pub aud: str = ""
+    // "aud" as raw JSON, for the array form: ["web", "mobile"]. Wins over
+    // `aud` when both are set.
+    pub aud_raw: str = ""
+    // "exp" / "nbf" / "iat": NumericDate, seconds since the epoch. 0 = absent.
+    pub exp: i64 = 0
+    pub nbf: i64 = 0
+    pub iat: i64 = 0
+    // "jti": unique token id, for replay tracking and revocation lists
+    pub jti: str = ""
+    // Custom claims, already rendered as `"k":v` and comma-joined.
+    pub extra: str = ""
+end
+
+pure func _is_registered(key: str): bool:
+    if key == "iss" || key == "sub" || key == "aud": ret true end
+    if key == "exp" || key == "nbf" || key == "iat": ret true end
+    ret key == "jti"
+end
+
+func _append_member(c &: Claims, key: str, rendered_value: str):
+    if c.extra.len() > 0:
+        c.extra = c.extra.concat(",")
+    end
+    c.extra = c.extra.concat(_quoted(key)).concat(":").concat(rendered_value)
+end
+
+func _emit(sb &: str.StringBuilder, count: int, key: str, rendered: str): int:
+    if count > 0: str.BufAppendChar(sb, 44) end
+    str.BufAppend(sb, _quoted(key))
+    str.BufAppendChar(sb, 58)
+    str.BufAppend(sb, rendered)
+    ret count + 1
+end
+
+@en "NewClaims"
+@fa "ادعاهای جدید"
+@ar "مطالبات جدیدة"
+pub func NewClaims(): Claims:
+    ret Claims {}
+end
+
+@en "SetStr"
+@fa "تنظیم رشته"
+@ar "تعیین نص"
+pub func SetStr(c &: Claims, key: str, value: str):
+    if key == "iss": c.iss = value ret end
+    if key == "sub": c.sub = value ret end
+    if key == "aud": c.aud = value ret end
+    if key == "jti": c.jti = value ret end
+    _append_member(c, key, _quoted(value))
+end
+
+@en "SetInt"
+@fa "تنظیم عدد"
+@ar "تعیین عدد"
+pub func SetInt(c &: Claims, key: str, value: i64):
+    if key == "exp": c.exp = value ret end
+    if key == "nbf": c.nbf = value ret end
+    if key == "iat": c.iat = value ret end
+    _append_member(c, key, conv.FormatInt(value))
+end
+
+@en "SetBool"
+@fa "تنظیم منطقی"
+@ar "تعیین منطقي"
+pub func SetBool(c &: Claims, key: str, value: bool):
+    _append_member(c, key, conv.FormatBool(value))
+end
+
+// Raw JSON, for values that are not scalars: ["read","write"], {"a":1}.
+// The caller owns its validity; nothing here parses it.
+@en "SetRaw"
+@fa "تنظیم خام"
+@ar "تعیین خام"
+pub func SetRaw(c &: Claims, key: str, raw: str):
+    if key == "aud": c.aud_raw = raw ret end
+    if _is_registered(key):
+        // A registered claim has a fixed shape; do not let raw text past it.
+        ret
+    end
+    _append_member(c, key, raw)
+end
+
+// iat = now, exp = now + seconds. The usual last call before signing.
+@en "ExpiresIn"
+@fa "انقضا در"
+@ar "ینتهي خلال"
+pub func ExpiresIn(c &: Claims, seconds: i64):
+    now := time.Now()
+    c.iat = now
+    c.exp = now + seconds
+end
+
+// Not valid until `seconds` from now, on top of ExpiresIn's window.
+@en "NotBeforeIn"
+@fa "معتبر نه پیش از"
+@ar "لیس قبل"
+pub func NotBeforeIn(c &: Claims, seconds: i64):
+    c.nbf = time.Now() + seconds
+end
+
+@en "ClaimsJSON"
+@fa "جیسون ادعاها"
+@ar "جیسون المطالبات"
+pub func ClaimsJSON(c: Claims): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppendChar(sb, 123)
+    mut count := 0
+    if c.iss.len() > 0:
+        count = _emit(sb, count, "iss", _quoted(c.iss))
+    end
+    if c.sub.len() > 0:
+        count = _emit(sb, count, "sub", _quoted(c.sub))
+    end
+    if c.aud_raw.len() > 0:
+        count = _emit(sb, count, "aud", c.aud_raw)
+    else c.aud.len() > 0:
+        count = _emit(sb, count, "aud", _quoted(c.aud))
+    end
+    if c.exp != 0 as i64:
+        count = _emit(sb, count, "exp", conv.FormatInt(c.exp))
+    end
+    if c.nbf != 0 as i64:
+        count = _emit(sb, count, "nbf", conv.FormatInt(c.nbf))
+    end
+    if c.iat != 0 as i64:
+        count = _emit(sb, count, "iat", conv.FormatInt(c.iat))
+    end
+    if c.jti.len() > 0:
+        count = _emit(sb, count, "jti", _quoted(c.jti))
+    end
+    if c.extra.len() > 0:
+        if count > 0: str.BufAppendChar(sb, 44) end
+        str.BufAppend(sb, c.extra)
+    end
+    str.BufAppendChar(sb, 125)
+    out := str.BufStr(sb)
+    ret out
+end

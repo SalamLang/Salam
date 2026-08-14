@@ -1,0 +1,180 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// A JWT-protected JSON API: login, refresh, a protected route, a
+// scope-protected route, and an ownership-protected route.
+//
+// The shape to copy:
+//
+//   * one guard() that every handler asks for, so the verification policy
+//     (algorithm, issuer, audience, leeway) is written once
+//   * auth.Require* as the first line of a protected handler; on false the
+//     response is already written and the handler just returns
+//   * short-lived access token, long-lived refresh token, and a refresh
+//     route that will not accept an access token
+//
+// Run it, then:
+//   curl -s -XPOST localhost:8080/auth/login -d '{"user":"ali","pass":"salam"}'
+//   curl -s localhost:8080/api/me -H "Authorization: Bearer <access>"
+
+import auth
+import jwt
+import net.http
+import net.router
+import encoding.json
+
+const ISSUER := "api.example.com"
+const ACCESS_TTL := 900
+const REFRESH_TTL := 604800
+
+// In a real service the secret comes from the environment, not a literal,
+// and starts life as auth.RandomSecret(32).
+func secret(): str:
+    ret "dev-only-secret-change-me"
+end
+
+// One policy, asked for by every handler. Cheap to build; nothing here holds
+// state between requests.
+func guard(): auth.Guard:
+    mut g := auth.NewGuard(secret())
+    g.opts.issuer = ISSUER
+    g.opts.alg = jwt.JWT_HS256
+    // 30 seconds of tolerance for clock drift between this box and whoever
+    // minted the token
+    g.opts.leeway = 30 as i64
+    g.opts.require_exp = true
+    ret g
+end
+
+func send(ctx: i64, code: int, body: str):
+    http.Ctx_status(ctx, code)
+    http.Ctx_json(ctx, body)
+end
+
+// The user store, standing in for a database. Passwords are compared through
+// auth.VerifyPassword against a PBKDF2 hash, never in the clear.
+func lookup_scope(user: str): str:
+    if user == "ali": ret "read write admin" end
+    if user == "sara": ret "read" end
+    ret ""
+end
+
+func stored_hash(user: str): str:
+    // Whatever the database holds. Hashed here so the example has no
+    // plaintext password in it and still runs.
+    if user == "ali": ret auth.HashPassword("salam") end
+    if user == "sara": ret auth.HashPassword("salam") end
+    ret ""
+end
+
+func login(ctx: i64):
+    body := http.Ctx_body(ctx)
+    user := json.Get(body, "user")
+    pass := json.Get(body, "pass")
+    hash := stored_hash(user)
+    // Same answer for an unknown user and a wrong password: which of the two
+    // it was is not the client's business.
+    if hash.len() == 0 || !auth.VerifyPassword(pass, hash):
+        send(ctx, 401, `{"error":"invalid credentials"}`)
+        ret
+    end
+    mut c := jwt.NewClaims()
+    c.sub = user
+    jwt.SetStr(c, "scope", lookup_scope(user))
+    jwt.SetStr(c, "kind", "access")
+    mut err := 0
+    access := auth.Issue(guard(), c, ACCESS_TTL as i64, err)
+    mut r := jwt.NewClaims()
+    r.sub = user
+    jwt.SetStr(r, "kind", "refresh")
+    refresh := auth.Issue(guard(), r, REFRESH_TTL as i64, err)
+    if err != jwt.JWT_OK:
+        send(ctx, 500, `{"error":"could not issue token"}`)
+        ret
+    end
+    send(ctx, 200, `{"access":"` + access + `","refresh":"` + refresh + `","expires_in":900}`)
+end
+
+// Trade a refresh token for a new access token. The kind check is the point:
+// without it any access token would also be a refresh token, and a stolen
+// one would renew itself forever.
+func refresh(ctx: i64):
+    mut t := jwt.Token {}
+    if !auth.Require(ctx, guard(), t): ret end
+    if jwt.Str(t, "kind") != "refresh":
+        auth.Forbidden(ctx, "not a refresh token")
+        ret
+    end
+    mut c := jwt.NewClaims()
+    c.sub = t.claims.sub
+    jwt.SetStr(c, "scope", lookup_scope(t.claims.sub))
+    jwt.SetStr(c, "kind", "access")
+    mut err := 0
+    access := auth.Issue(guard(), c, ACCESS_TTL as i64, err)
+    if err != jwt.JWT_OK:
+        send(ctx, 500, `{"error":"could not issue token"}`)
+        ret
+    end
+    send(ctx, 200, `{"access":"` + access + `","expires_in":900}`)
+end
+
+// Signed in is enough.
+func me(ctx: i64):
+    mut t := jwt.Token {}
+    if !auth.Require(ctx, guard(), t): ret end
+    if jwt.Str(t, "kind") != "access":
+        auth.Forbidden(ctx, "not an access token")
+        ret
+    end
+    send(ctx, 200, `{"sub":"` + t.claims.sub + `","scope":"` + jwt.Str(t, "scope") + `"}`)
+end
+
+// Signed in AND holding the scope.
+func admin_stats(ctx: i64):
+    mut t := jwt.Token {}
+    if !auth.RequireScope(ctx, guard(), "admin", t): ret end
+    send(ctx, 200, `{"users":2,"requests":41231}`)
+end
+
+// Signed in AND the owner of the resource in the path.
+func user_settings(ctx: i64):
+    id := http.Ctx_param(ctx, "id")
+    mut t := jwt.Token {}
+    if !auth.RequireSubject(ctx, guard(), id, t): ret end
+    send(ctx, 200, `{"id":"` + id + `","theme":"dark"}`)
+end
+
+// Open route that says more when a valid token happens to be present.
+func home(ctx: i64):
+    mut err := 0
+    t := auth.Check(ctx, guard(), err)
+    if err == jwt.JWT_OK:
+        send(ctx, 200, `{"hello":"` + t.claims.sub + `"}`)
+        ret
+    end
+    send(ctx, 200, `{"hello":"stranger"}`)
+end
+
+func main:
+    mut r := router.NewRouter()
+    router.Get(r, "/", funcptr(home))
+    router.Post(r, "/auth/login", funcptr(login))
+    router.Post(r, "/auth/refresh", funcptr(refresh))
+    router.Get(r, "/api/me", funcptr(me))
+    router.Get(r, "/api/admin/stats", funcptr(admin_stats))
+    router.Get(r, "/api/users/:id/settings", funcptr(user_settings))
+    mut s := http.NewServer(8080)
+    http.Use(s, r)
+    http.Run(s)
+end

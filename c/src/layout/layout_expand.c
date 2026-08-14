@@ -13,6 +13,7 @@
  */
 
 #include "core/prelude.h"
+#include "core/sal_path.h"
 #include "core/sal_format.h"
 #include "core/numstr.h"
 #include "layout/layout_expand.h"
@@ -74,18 +75,6 @@ static bool is_include_attr(const char *n)
 static bool is_content_word(const char *n)
 {
     return name_eq(n, "content") || name_eq(n, "محتوا");
-}
-
-static const char *dir_of(arena_t *a, const char *path)
-{
-    const char *slash = NULL;
-    {
-        const char *p = path;
-        for (; *p; p++)
-            if (*p == '/' || *p == '\\') slash = p;
-    }
-    if (!slash) return "";
-    return arena_strndup(a, path, (size_t)(slash - path));
 }
 
 static ast_node_t *mk_str(expand_t *ex, const char *s, const src_span_t *span)
@@ -307,7 +296,7 @@ static loaded_t *load_include(expand_t *ex, const char *path)
     loaded_t *l = (loaded_t *)arena_alloc(ex->a, sizeof(*l));
     l->path = arena_strdup(ex->a, path);
     l->prog = NULL;
-    l->dir = dir_of(ex->a, path);
+    l->dir = sal_path_dir(ex->a, path);
     vec_push(ex->a, &ex->loaded, l);
     source_file_t *src = source_load(ex->a, path);
     if (!src) {

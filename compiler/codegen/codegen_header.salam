@@ -1,6 +1,7 @@
 package codegen
 
 import str
+import pth "../sal_path.salam"
 import co "../sal_core.salam"
 import tok "../token.salam"
 import at "../ast.salam"
@@ -373,8 +374,14 @@ func hdr_prelude(g &: Cg, a &: at.Ast, program: int):
     outh(
         g, "#ifndef SALAM_FN_ATTRS_DEFINED\n#define " + "SALAM_FN_ATTRS_DEFINED\n" + "#if defined(__GNUC__) || defined(__clang__)\n" + "#define SALAM_NOINLINE __attribute__((noinline))\n" + "#define SALAM_PURE __attribute__((pure))\n" + "#define SALAM_NORET __attribute__((noreturn))\n" + "#define SALAM_DEPRECATED __attribute__((deprecated))\n" + "#else\n" + "#define SALAM_NOINLINE\n" + "#define SALAM_PURE\n" + "#define SALAM_NORET\n" + "#define SALAM_DEPRECATED\n" + "#endif\n" + "#endif\n"
     )
+    // The four allocator entry points are declared here, ahead of every
+    // #include, because a generic method is instantiated into the header of
+    // whichever module happens to use it: Vector<str> lands in
+    // salam_mod_str.h, which core.h reaches long before mem.h gets to declare
+    // its own functions. Whatever those instantiated bodies call therefore has
+    // to be visible from the very top of any module header, not from mem's.
     outh(
-        g, "#ifndef SALAM_RT_TYPES_DEFINED\n#define " + "SALAM_RT_TYPES_DEFINED\n" + "typedef struct salam_file salam_file;\n" + "typedef struct salam_map salam_map;\n" + "typedef struct salam_map_iter salam_map_iter;\n" + "typedef struct { void* data; int64_t len; } salam_slice;\n" + "extern int64_t salam_idx(int64_t, int64_t);\n" + "extern SALAM_NORET void salam_panic(const char* msg);\n" + "void* " + CG_MEM_ALLOC + "(uint64_t size);\n" + "void* " + CG_MEM_REALLOC + "(void* ptr, uint64_t size);\n" + "void " + CG_MEM_FREE + "(void* ptr);\n" + "static inline void salam_slice_new(salam_slice* out, void* " + "b, int64_t lo, int64_t hi, int64_t esz)" + "{ out->data=(void*)((char*)b+(lo)*(esz)); " + "out->len=(hi)-(lo); }\n" + "static inline void salam_slice_sub(salam_slice* out, " + "salam_slice b, int64_t lo, int64_t hi, int has_hi, int64_t " + "esz)" + "{ if(!has_hi) hi=b.len; " + "out->data=(void*)((char*)b.data+(lo)*(esz)); " + "out->len=(hi)-(lo); }\n" + "static inline void* salam_slice_at(salam_slice s, int64_t i, " + "int64_t esz, int sf)" + "{ return " + "(void*)((char*)s.data+(sf?salam_idx(i,s.len):i)*(esz)); }\n" + "typedef void (*salam_thread_fn)(void);\n" + "#endif\n"
+        g, "#ifndef SALAM_RT_TYPES_DEFINED\n#define " + "SALAM_RT_TYPES_DEFINED\n" + "typedef struct salam_file salam_file;\n" + "typedef struct salam_map salam_map;\n" + "typedef struct salam_map_iter salam_map_iter;\n" + "typedef struct { void* data; int64_t len; } salam_slice;\n" + "extern int64_t salam_idx(int64_t, int64_t);\n" + "extern SALAM_NORET void salam_panic(const char* msg);\n" + "void* " + CG_MEM_ALLOC + "(uint64_t size);\n" + "void* " + CG_MEM_ALLOC_ZEROED + "(uint64_t size);\n" + "void* " + CG_MEM_REALLOC + "(void* ptr, uint64_t size);\n" + "void " + CG_MEM_FREE + "(void* ptr);\n" + "static inline void salam_slice_new(salam_slice* out, void* " + "b, int64_t lo, int64_t hi, int64_t esz)" + "{ out->data=(void*)((char*)b+(lo)*(esz)); " + "out->len=(hi)-(lo); }\n" + "static inline void salam_slice_sub(salam_slice* out, " + "salam_slice b, int64_t lo, int64_t hi, int has_hi, int64_t " + "esz)" + "{ if(!has_hi) hi=b.len; " + "out->data=(void*)((char*)b.data+(lo)*(esz)); " + "out->len=(hi)-(lo); }\n" + "static inline void* salam_slice_at(salam_slice s, int64_t i, " + "int64_t esz, int sf)" + "{ return " + "(void*)((char*)s.data+(sf?salam_idx(i,s.len):i)*(esz)); }\n" + "typedef void (*salam_thread_fn)(void);\n" + "#endif\n"
     )
     // std/ modules (mem, str, thread, sync, webview, ...) declare their own
     // CRT/WinAPI extern funcs (e.g. strlen, WaitForSingleObject) using
@@ -432,12 +439,7 @@ func hdr_prelude(g &: Cg, a &: at.Ast, program: int):
         if str.Len(resolved) == 0:
             resolved = sm.ResolveImport("", p)
         end
-        slash := str.LastIndex(resolved, "/")
-        bs := str.LastIndex(resolved, "\\")
-        mut stem := slash >= 0 ? slash + 1 : 0
-        if bs >= 0 && (slash < 0 || bs > slash):
-            stem = bs + 1
-        end
+        stem := str.Len(resolved) - str.Len(pth.PathBase(resolved))
         // char base[128] clamp kept.
         rl := str.Len(resolved)
         mut k := 0
@@ -815,9 +817,8 @@ end
 // differences only ever *add* a qualifier or widen a parameter.
 //
 // Only functions whose declaration is warned about are listed. The rest of the
-// CRT surface std/ declares (memset, strlen, malloc, ...) already matches and
-// is emitted from its salam signature as before. Returns "" for anything not
-// in the table.
+// CRT surface std/ declares is emitted from its salam signature as before.
+// Returns "" for anything not in the table.
 func libc_canonical_proto(name: str): str:
     if str.Equals(name, "memcpy"):
         ret "extern void* memcpy(void* dst, const void* src, size_t n)"
@@ -833,6 +834,39 @@ func libc_canonical_proto(name: str): str:
     end
     if str.Equals(name, "strtod"):
         ret "extern double strtod(const char* s, char** endptr)"
+    end
+    // Everything taking or returning a size. Salam spells these `u64`, which
+    // codegen writes as `uint64_t` - the same type as size_t on LP64 Linux, so
+    // gcc never objected, but a DIFFERENT type on macOS where size_t is
+    // `unsigned long` and uint64_t is `unsigned long long`. clang then rejects
+    // the second declaration outright:
+    //
+    //   error: conflicting types for 'strlen'
+    //   extern uint64_t strlen(const char* s);
+    //   note: previous declaration is here
+    //   extern size_t strlen(const char* s);
+    //
+    // (the prelude's own, correct, one). That killed the stage 2 build.
+    // memset's `int` matters for the same reason - `int32_t` is not spelled
+    // `int` everywhere - and clang reports it as an
+    // incompatible-library-redeclaration of a builtin.
+    if str.Equals(name, "strlen"):
+        ret "extern size_t strlen(const char* s)"
+    end
+    if str.Equals(name, "malloc"):
+        ret "extern void* malloc(size_t size)"
+    end
+    if str.Equals(name, "calloc"):
+        ret "extern void* calloc(size_t n, size_t size)"
+    end
+    if str.Equals(name, "realloc"):
+        ret "extern void* realloc(void* ptr, size_t size)"
+    end
+    if str.Equals(name, "memset"):
+        ret "extern void* memset(void* ptr, int value, size_t n)"
+    end
+    if str.Equals(name, "memcmp"):
+        ret "extern int memcmp(const void* a, const void* b, size_t n)"
     end
     ret ""
 end

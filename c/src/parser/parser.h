@@ -24,4 +24,11 @@
 bool parser_run(arena_t *a, logger_t *log, const token_stream_t *toks,
                 ast_node_t **out_program);
 
+/* True when this token stream fails to parse only because it ends too
+ * early - a block still open, an expression still owed an operand. The
+ * REPL asks this to decide whether to keep reading the turn instead of
+ * guessing block structure from punctuation. Pass a throwaway arena and a
+ * silent logger: the parse is a question, not a diagnosis. */
+bool parser_needs_more(arena_t *a, logger_t *log, const token_stream_t *toks);
+
 #endif /* SALAM_PARSER_PARSER_H */

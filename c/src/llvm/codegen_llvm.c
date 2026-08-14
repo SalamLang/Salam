@@ -576,6 +576,7 @@ llvm_output_t *codegen_llvm_run_opts(arena_t *a, logger_t *log, ast_node_t *prog
     ll.optsize =
         opts && (opts->opt_level == LLVM_OPT_OS || opts->opt_level == LLVM_OPT_OZ);
     ll.minsize = opts && opts->opt_level == LLVM_OPT_OZ;
+    ll.nowrap = opts && opts->release;
     ll.single_threaded =
         salam_module_single_threaded(program) && !ll_target_is_windows(ll.triple);
     /*

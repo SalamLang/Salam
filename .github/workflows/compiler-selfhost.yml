@@ -96,7 +96,9 @@ jobs:
     # visible without letting it block the branch. Drop `experimental`
     # from the matrix entry once it goes green consistently.
     continue-on-error: ${{ matrix.experimental }}
-    timeout-minutes: 45
+    # 60, not 45: a cold macOS cache builds lld from source (~10-20 min on
+    # top of the archive merge). Warm runs are unaffected.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -187,15 +189,27 @@ jobs:
       # crypto.h still #include'd. No amount of trimming closes a 501-vs-64
       # gap; the seed simply has to be one that canonicalizes "..".
       #
-      # Both that collapse and the raised cap are already in c/, so until a
-      # release carries them the in-repo reference compiler stands in as
+      # 0.2.8 fixed that but stops short of a second requirement: a generic
+      # method is instantiated into the header of whichever module uses it, so
+      # `Vector<str>.zeros` lands in str's header while the mem function it
+      # calls is only declared in mem's, which that header reaches long after
+      # the call. 0.2.8 emits no prototype for such a callee, leaving a C89
+      # implicit declaration that gcc 16 rejects outright - stage 1 dies in
+      # the C compiler on `_Salam_mem_AllocateZeroed_u64`. Nothing in std/ can
+      # work around it: the seed only ever declares the three allocator
+      # entry points its own prelude hard-codes.
+      #
+      # All of it - the "seg/../" collapse, the raised cap, and the generic
+      # instantiation's cross-package prototypes - is already in c/, so until
+      # a release carries them the in-repo reference compiler stands in as
       # stage 0. Once SEED_MIN is published this step no-ops itself; delete
       # it then, along with the note at the top of the file.
       - name: Pick the stage-0 compiler
         env:
           SEED_VERSION: ${{ needs.seed.outputs.version }}
-          # First release whose import resolver collapses "seg/../".
-          SEED_MIN: '0.2.8'
+          # First release that both collapses "seg/../" and forward-declares
+          # the cross-package callees of a generic instantiation.
+          SEED_MIN: '0.2.9'
         run: |
           set -eu
           newest=$(printf '%s\n%s\n' "$SEED_MIN" "$SEED_VERSION" |
@@ -254,10 +268,11 @@ jobs:
             'c/src/llvm/**', 'c/src/core/*.h', 'c/src/semantic/*.h',
             'c/src/i18n/*.h', 'c/src/logger/*.h', 'c/src/diag/*.h') }}
 
-      # Only useful on a miss, and only for the two objects that are actually
-      # compiled (llvm_native.c + lld_link.cc); the bulk of the archive is
-      # prebuilt LLVM. Cheap to keep, and it makes a source-only change to
-      # those two files rebuild in seconds instead of minutes.
+      # Only useful on a miss, and only for the handful of objects that are
+      # actually compiled (orc_call.c, lld_stub.c, lld_link.cc); the bulk of
+      # the archive is prebuilt LLVM. Cheap to keep, and it makes a
+      # source-only change to those files rebuild in seconds instead of
+      # minutes.
       - name: Cache ccache for the LLVM archive build
         if: steps.llvm-archive.outputs.cache-hit != 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -266,6 +281,31 @@ jobs:
           key: ccache-selfhost-llvm-${{ matrix.os }}-${{ github.run_id }}
           restore-keys: |
             ccache-selfhost-llvm-${{ matrix.os }}-
+
+      # macOS only, and the reason is upstream packaging: Homebrew's lld
+      # formula is BUILD_SHARED_LIBS=ON, so the machine has liblld*.dylib and
+      # no archives, and an archive is the only thing libsalam_llvm.a can
+      # absorb. Building the same release from source with the shared-libs
+      # switch off is what lets a Mac carry in-process LLD internally, the
+      # way apt.llvm.org's liblld-22-dev already lets Linux.
+      #
+      # Its own cache, keyed on the script and the LLVM major: it is a
+      # ~10 minute build, and it must not be redone every time the archive
+      # key moves for an unrelated reason. Restore-keys are safe here, unlike
+      # for the archive itself - the payload is a plain upstream release
+      # build with no salam sources in it, and the script re-verifies the
+      # version before reusing what it finds.
+      - name: Cache static lld (macOS)
+        id: lld-static
+        if: runner.os == 'macOS' && steps.llvm-archive.outputs.cache-hit != 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: lldstatic
+          key: >-
+            salam-lld-static-${{ matrix.os }}-llvm22-${{
+            hashFiles('tools/bash/build-static-lld.sh') }}
+          restore-keys: |
+            salam-lld-static-${{ matrix.os }}-llvm22-
 
       - name: Build static LLVM/LLD archive (best-effort)
         if: steps.llvm-archive.outputs.cache-hit != 'true'
@@ -291,6 +331,26 @@ jobs:
           macos*)
             brew install ccache llvm lld || true
             LLVM_CONFIG="$(brew --prefix llvm)/bin/llvm-config"
+            # Homebrew's lld formula is BUILD_SHARED_LIBS=ON, so it leaves
+            # liblld*.dylib and no archives - and only an archive can go into
+            # libsalam_llvm.a. Build the matching release from source with
+            # the switch off, so a Mac carries in-process LLD internally
+            # instead of depending on what the package manager felt like
+            # shipping. Restored from its own cache when warm; the script
+            # exits early if the prefix is already populated.
+            #
+            # Best-effort by design: what a failure here costs is in-process
+            # LLD, not the job. The Makefile then probes for liblld*.a, finds
+            # none, and builds LLVM-without-LLD - see the LLD_ARGS block.
+            if [ ! -f lldstatic/lib/liblldCommon.a ]; then
+              sh tools/bash/build-static-lld.sh \
+                --prefix "$PWD/lldstatic" \
+                --llvm-config "$LLVM_CONFIG" \
+                --jobs "$(sysctl -n hw.ncpu)" || {
+                echo "::warning::static lld build failed - stage2 will have LLVM but no in-process LLD"
+                rm -rf lldstatic
+              }
+            fi
             ;;
           *)
             LLVM_CONFIG=llvm-config
@@ -314,7 +374,32 @@ jobs:
             C_COMPILER="ccache gcc"
             CXX_COMPILER="ccache g++"
           fi
-          if make -C c libsalam-llvm -j2 WITH_LLVM=1 WITH_LLD=1 \
+          # Linux gets its static lld from liblld-22-dev, so WITH_LLD is
+          # forced there and a silent 0 is a failure, not a downgrade.
+          #
+          # macOS has to build its own (Homebrew's is shared-only), which is
+          # what LLD_PREFIX below points at. Best-effort on purpose: if that
+          # build did not happen, the Makefile's probe finds no liblld*.a,
+          # settles on WITH_LLD=0, and the job still produces a working
+          # stage2 - LLVM codegen in-process, the final link through cc,
+          # which is what a macOS host does even with LLD linked in, since
+          # in-process LLD only ever serves the mingw-gnu and linux-musl
+          # triples. So a Mac never *needs* it; having it means a Mac can
+          # cross-link to Linux and Windows with nothing else installed.
+          LLD_ARGS=WITH_LLD=1
+          case "${{ matrix.os }}" in
+          macos*)
+            if [ -f lldstatic/lib/liblldCommon.a ]; then
+              LLD_ARGS="WITH_LLD=1 LLD_PREFIX=$PWD/lldstatic"
+            else
+              LLD_ARGS=
+              echo "::warning::no static lld - stage2 gets LLVM without in-process LLD"
+            fi
+            ;;
+          esac
+          echo "lld: ${LLD_ARGS:-(autodetect)}"
+          # shellcheck disable=SC2086 # deliberately unquoted: empty = omit
+          if make -C c libsalam-llvm -j2 WITH_LLVM=1 $LLD_ARGS \
             LLVM_LINK_STATIC=1 LLVM_CONFIG="$LLVM_CONFIG" \
             CC="$C_COMPILER" CXX="$CXX_COMPILER"; then
             # The merged archive carries LLVM's own DWARF, which nothing here
@@ -338,7 +423,7 @@ jobs:
               rm -f libsalam_llvm.a
               exit 1
             fi
-            echo "libsalam_llvm.a built - stage2 will link LLVM/LLD in-process"
+            echo "libsalam_llvm.a built - stage2 gets LLVM in-process"
           else
             echo "::error::libsalam-llvm failed - stage2 would fall back to the C backend"
             exit 1
@@ -349,16 +434,24 @@ jobs:
       # `link static "z"` / `"zstd"` next to libsalam_llvm.a, and the static
       # libz.a/libzstd.a come from these packages. A few hundred KB, versus
       # the ~1 GB of llvm-*-dev the cache hit avoided.
-      # Unconditional on Linux rather than gated on the archive existing:
-      # these are a few hundred KB and usually already present, so the check
-      # would cost more than the install. Notably NOT gated with
+      # Unconditional rather than gated on the archive existing: these are a
+      # few hundred KB and usually already present, so the check would cost
+      # more than the install. Notably NOT gated with
       # `hashFiles('libsalam_llvm.a')`, which would read and hash a
       # multi-hundred-MB archive just to decide whether to run apt.
+      #
+      # macOS needs the same treatment: zstd is the one LLVM system library
+      # its SDK does not carry, so a cache hit that skipped `brew install
+      # llvm` (which pulls zstd in as a dependency) would leave the stage 2
+      # link with nothing to resolve -lzstd against. bootstrap.sh finds the
+      # keg and passes it as --libpath.
       - name: Install LLVM link-time system libs
-        if: runner.os == 'Linux'
         run: |
           set -u
-          sudo apt-get install -y zlib1g-dev libzstd-dev || true
+          case "${{ runner.os }}" in
+          Linux) sudo apt-get install -y zlib1g-dev libzstd-dev || true ;;
+          macOS) brew install zstd || true ;;
+          esac
 
       - name: Bootstrap stage1 -> stage2 -> stage3
         run: |
@@ -368,20 +461,33 @@ jobs:
       # Records which backend stage2 actually got, so a silent downgrade to
       # the C backend is visible in the log rather than only showing up as a
       # parity number weeks later.
-      - name: Report stage2 backend
+      # Every stage, not just stage2: LLVM is meant to be in all three now
+      # (bootstrap.sh links it into stage1 as well and compiles each stage
+      # with its builder's in-process LLVM), so a downgrade anywhere in the
+      # chain is worth seeing. bootstrap.sh already fails a stage that was
+      # asked to link LLVM and came out without it - this re-checks the
+      # shipped artifacts independently and prints the sizes, which is the
+      # cheapest possible tell: a stage with static LLVM inside is ~160MB and
+      # one without is ~1.5MB.
+      - name: Report per-stage backend
         env:
           SALAM_STD: ${{ github.workspace }}/std
         run: |
           set -eu
-          sh=build/selfhost/salam-stage2
           printf 'func main:\n    println "backend-probe"\nend\n' > probe.salam
-          if "$sh" build probe.salam --output=probe_exe --log-level=info 2>&1 |
-            grep -qi "generating LLVM IR"; then
-            echo "stage2 backend: LLVM (in-process)"
-          else
-            echo "stage2 backend: C (no static LLVM linked in)"
-          fi
-          rm -f probe.salam probe_exe
+          for s in build/selfhost/salam-stage*; do
+            [ -x "$s" ] || continue
+            if "$s" build probe.salam --output=probe_exe --log-level=info 2>&1 |
+              grep -q "LLVM IR"; then
+              backend="LLVM (in-process)"
+            else
+              backend="C (no static LLVM linked in)"
+            fi
+            printf '%-28s %12s bytes  %s\n' "$(basename "$s")" \
+              "$(wc -c <"$s" | tr -d ' ')" "$backend"
+            rm -f probe_exe
+          done
+          rm -f probe.salam
 
       - name: Smoke-test the self-hosted compiler
         env:

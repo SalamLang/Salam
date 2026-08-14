@@ -323,10 +323,80 @@ func inst_fn_name(s &: sm.Sema, owner: int, fname: str, sig: int): str:
     )
 end
 
+// Prototypes for the other-package functions a generic instance body calls.
+//
+// An instance is emitted as a `static inline` body appended to *this* module's
+// header, but the module whose header that is need not be the one declaring
+// the callee: `Vector<str>.zeros` lands in str's header and calls mem's
+// allocator. str.h is included well before mem.h declares it, so the call
+// compiled only by C89 implicit declaration - which gcc 16 rejects outright,
+// and which every other compiler resolved to a wrong `int` return. Same
+// reasoning as codegen_header's impl prototypes, one scope out.
+//
+// Only callees actually reached from an instance body are declared, so a
+// package nothing instantiates against costs nothing. Each is guarded, since
+// the owning module emits the same prototype itself.
+func inst_pkg_protos(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
+    if n == 0:
+        ret
+    end
+    nn := at.Get(a, n)
+    if nn.kind == at.AST_CALL && nn.a != 0 && at.KindOf(a, nn.a) == at.AST_MEMBER:
+        mem_node := at.Get(a, nn.a)
+        if mem_node.a != 0 && at.KindOf(a, mem_node.a) == at.AST_IDENTIFIER && str.Len(mem_node.name) > 0:
+            pk := sm.Lookup(s, s.global, at.Get(a, mem_node.a).name)
+            if pk != 0 && sm.SymAt(s, pk).kind == sm.SYM_PACKAGE && sm.SymAt(s, pk).members != 0:
+                pkname := sm.SymAt(s, pk).pkgname
+                if str.Len(pkname) > 0 && !str.Equals(pkname, g.pkg):
+                    fn := sm.LookupLocal(s, sm.SymAt(s, pk).members, mem_node.name)
+                    if fn != 0 && sm.SymAt(s, fn).kind == sm.SYM_FUNC:
+                        save := g.pkg
+                        // func_signature mangles with g.pkg; borrow the callee's.
+                        g.pkg = pkname
+                        repeat sm.SymAt(s, fn).overloads.len() with k:
+                            sig := sm.SymAt(s, fn).overloads.get(k)[0]
+                            if sig != 0 && sm.SigAt(s, sig).decl != 0:
+                                dd := at.Get(a, sm.SigAt(s, sig).decl)
+                                if !dd.is_extern && !dd.synthetic && dd.typarams.len() == 0:
+                                    pnm := cg_mangle_in(
+                                        s, pkname, "", dd.name, sm.SigAt(s, sig).params
+                                    )
+                                    outh(
+                                        g,
+                                        "#ifndef SALAM_PP_" + pnm + "\n#define SALAM_PP_" + pnm + "\n" + func_signature(g, s, a, sm.SigAt(s, sig).decl, 0, sig, false) + ";\n#endif\n"
+                                    )
+                                end
+                            end
+                        end
+                        g.pkg = save
+                    end
+                end
+            end
+        end
+    end
+    inst_pkg_protos(g, s, a, nn.ty)
+    inst_pkg_protos(g, s, a, nn.a)
+    inst_pkg_protos(g, s, a, nn.b)
+    inst_pkg_protos(g, s, a, nn.c)
+    inst_pkg_protos(g, s, a, nn.d)
+    repeat nn.list.len() with li:
+        inst_pkg_protos(g, s, a, nn.list.get(li)[0])
+    end
+    repeat nn.dims.len() with di:
+        inst_pkg_protos(g, s, a, nn.dims.get(di)[0])
+    end
+end
+
 func emit_instances_header(
     g &: Cg, s &: sm.Sema, a &: at.Ast, program: int
 ):
     prog := at.Get(a, program)
+    repeat prog.list.len() with pi:
+        pd := prog.list.get(pi)[0]
+        if at.Get(a, pd).synthetic:
+            inst_pkg_protos(g, s, a, pd)
+        end
+    end
     repeat prog.list.len() with i:
         did := prog.list.get(i)[0]
         d := at.Get(a, did)

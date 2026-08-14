@@ -1,0 +1,401 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Price history for one currency or one gold item on alanchand.com, with a
+// summary and an ASCII chart. Companion to the three table scrapers in this
+// directory (alanchand_currency / _gold / _crypto), which read today's
+// numbers; this one reads the whole series behind the site's chart.
+//
+// Run it with:  salam run alanchand_history.salam
+// It writes alanchand-history.json next to the run.
+//
+// The one function to call is series(kind, slug) -> Vector<Point>, with kind
+// "currency" or "gold" and slug "usd" / "eur" / "aed" / "jpy" / "abshodeh" /
+// "18ayar" / "sekkeh" ... It builds the right URL, fetches it through the
+// shared browser session, lifts the chart series out of the page's inline
+// script and JSON-decodes it. The two pages ship different record shapes:
+//
+//   currency  https://alanchand.com/en/currencies-price/archive/usd
+//             const fullPriceData = [{"timestamp":1207769400,"price":190}, ...]
+//
+//   gold      https://alanchand.com/en/gold-price/abshodeh
+//             let fullPriceData = [{"timestamp":1753043105,"price":29790000,
+//                 "real_price":30377626.55,"hobab":-587627,"hobab_percent":-1.97}, ...]
+//
+// "hobab" is the bubble: how far the quoted price sits above or below the
+// intrinsic one. Gold records carry it, currency records do not, so Point
+// keeps it optional behind has_bubble.
+
+package main
+
+import ac "_alanchand.salam"
+import acjson "_alanchand_json.salam"
+import encoding.json
+import encoding.value
+import encoding.encerr
+import str
+import fmt
+import time
+import conv
+
+const CHART_COLS := 62
+const CHART_ROWS := 14
+const AXIS_W := 14
+const RECENT_ROWS := 8
+const OUT_FILE := "alanchand-history.json"
+
+// series() answers with the points alone, so the two facts about the page
+// itself that the report and the JSON file also want - its URL and the
+// site's own "Last Update" line - are left here for the caller to read
+// straight after the call.
+mut g_url := ""
+mut g_last_update := ""
+
+pub struct Point:
+    pub at: i64 = 0
+    pub price: f64 = 0.0
+    pub real_price: f64 = 0.0
+    pub bubble: f64 = 0.0
+    pub bubble_pct: f64 = 0.0
+    pub has_bubble: bool = false
+end
+
+// ------------------------------------------------------------- fetching ----
+
+func series_url(kind: str, slug: str): str:
+    if kind == "gold":
+        // Gold has no /archive/ page: the item page itself carries the series.
+        ret "https://alanchand.com/en/gold-price/" + slug
+    end
+    ret "https://alanchand.com/en/currencies-price/archive/" + slug
+end
+
+func number(o: value.Value, key: str): f64:
+    if !value.ObjectHas(o, key):
+        ret 0.0
+    end
+    ret value.AsFloat(value.ObjectGet(o, key))
+end
+
+func point_of(o: value.Value): Point:
+    mut p := Point {}
+    p.at = value.AsInt(value.ObjectGet(o, "timestamp"))
+    p.price = number(o, "price")
+    if value.ObjectHas(o, "real_price"):
+        p.real_price = number(o, "real_price")
+        p.bubble = number(o, "hobab")
+        p.bubble_pct = number(o, "hobab_percent")
+        p.has_bubble = true
+    end
+    ret p
+end
+
+func decode_points(raw: str): Vector<Point>:
+    mut points := Vector {} as Vector<Point>
+    mut err := encerr.NoError()
+    doc := json.Decode(raw, err)
+    if encerr.IsError(err):
+        println "  JSON error at " + str.FromInt(err.position as i64) + ": " + err.message
+        ret points
+    end
+    if !value.IsArray(doc):
+        println "  chart data is not a JSON array"
+        ret points
+    end
+    n := value.ArrayLen(doc)
+    repeat n with i:
+        points.push(point_of(value.ArrayGet(doc, i)))
+    end
+    ret points
+end
+
+// The whole job in one call: kind ("currency" / "gold") plus slug ("usd",
+// "eur", "18ayar", "sekkeh", ...) in, the full price history out. An empty
+// vector means the page could not be read; the reason is printed.
+func series(kind: str, slug: str): Vector<Point>:
+    mut session := ac.NewSession()
+    url := series_url(kind, slug)
+    g_url = url
+    g_last_update = ""
+    println "Fetching " + url
+    html := ac.Fetch(session, url)
+    _saved := ac.SaveCookies(session)
+    if html.len() == 0:
+        ret Vector {} as Vector<Point>
+    end
+    g_last_update = ac.LastUpdate(html)
+    raw := ac.ScriptArray(html, "fullPriceData")
+    if raw.len() == 0:
+        println "  no fullPriceData series on that page"
+        ret Vector {} as Vector<Point>
+    end
+    println "  " + str.FromInt(raw.len() as i64) + " bytes of JSON, decoding"
+    started := time.MonoMillis()
+    points := decode_points(raw)
+    spent := (time.MonoMillis() - started) as f64 / 1000.0
+    println "  " + str.FromInt(points.len() as i64) + " points in " + conv.FormatFloatPrec(spent, 1) + "s"
+    ret points
+end
+
+// ----------------------------------------------------------- formatting ----
+
+// 1879500 -> "1,879,500", the way the site itself prints prices.
+func group(n: f64): str:
+    mut digits := str.FromInt(n as i64)
+    mut sign := ""
+    if str.StartsWith(digits, "-"):
+        sign = "-"
+        digits = digits.substr(1, digits.len() - 1)
+    end
+    mut out := ""
+    mut left := digits.len()
+    until left > 3:
+        out = "," + digits.substr(left - 3, 3) + out
+        left = left - 3
+    end
+    ret sign + digits.substr(0, left) + out
+end
+
+// Two decimals, sign always shown: "+12.40%", "-4.13%".
+func signed_pct(x: f64): str:
+    mut sign := "+"
+    if x < 0.0:
+        sign = ""
+    end
+    ret sign + conv.FormatFloatPrec(x, 2) + "%"
+end
+
+func change_pct(part: f64, whole: f64): str:
+    if whole == 0.0:
+        ret "n/a"
+    end
+    ret signed_pct((part - whole) / whole * 100.0)
+end
+
+// --------------------------------------------------------------- report ----
+
+func extremes(points: Vector<Point>, want_high: bool): f64:
+    mut best := points[0].price
+    each p in points:
+        if want_high && p.price > best:
+            best = p.price
+        end
+        if !want_high && p.price < best:
+            best = p.price
+        end
+    end
+    ret best
+end
+
+func average(points: Vector<Point>): f64:
+    mut total := 0.0
+    each p in points:
+        total = total + p.price
+    end
+    ret total / (points.len() as f64)
+end
+
+func show_summary(points: Vector<Point>):
+    first := points[0]
+    last := points[points.len() - 1]
+    println "Points      : " + str.FromInt(points.len() as i64)
+    println "Range       : " + time.FormatDate(first.at) + "  ..  " + time.FormatDate(last.at)
+    println "Latest      : " + group(last.price) + "   (" + change_pct(last.price, first.price) + " since " + time.FormatDate(first.at) + ")"
+    println "Low / High  : " + group(extremes(points, false)) + "  /  " + group(extremes(points, true))
+    println "Average     : " + group(average(points))
+    if last.has_bubble:
+        println "Real price  : " + group(last.real_price)
+        println "Bubble      : " + group(last.bubble) + "  (" + signed_pct(last.bubble_pct) + ")"
+    end
+end
+
+func show_recent(points: Vector<Point>):
+    mut head := fmt.PadRight("Date", 12) + fmt.PadLeft("Price", 18)
+    if points[points.len() - 1].has_bubble:
+        head = head + fmt.PadLeft("Real price", 18) + fmt.PadLeft("Bubble %", 12)
+    end
+    println head
+    println str.Repeat("-", head.len())
+    mut i := points.len() - RECENT_ROWS
+    if i < 0:
+        i = 0
+    end
+    until i < points.len():
+        p := points[i]
+        mut line := fmt.PadRight(time.FormatDate(p.at), 12) + fmt.PadLeft(group(p.price), 18)
+        if p.has_bubble:
+            line = line + fmt.PadLeft(group(p.real_price), 18) + fmt.PadLeft(signed_pct(p.bubble_pct), 12)
+        end
+        println line
+        i = i + 1
+    end
+end
+
+// ---------------------------------------------------------------- chart ----
+
+// One sample per column, picked evenly across the series, mapped onto
+// CHART_ROWS levels between the series low and high.
+func levels_of(points: Vector<Point>, low: f64, high: f64): Vector<int>:
+    mut levels := Vector {} as Vector<int>
+    span := high - low
+    last := points.len() - 1
+    repeat CHART_COLS with c:
+        idx := c * last / (CHART_COLS - 1)
+        share := (points[idx].price - low) / span
+        levels.push((share * ((CHART_ROWS - 1) as f64)) as int)
+    end
+    ret levels
+end
+
+// '*' marks the sample in this column; '|' fills the gap to the previous
+// column so a steep move reads as a line rather than two dots.
+func cell(levels: Vector<int>, c: int, row: int): str:
+    here := levels[c]
+    if here == row:
+        ret "*"
+    end
+    if c == 0:
+        ret " "
+    end
+    before := levels[c - 1]
+    if row > here && row < before:
+        ret "|"
+    end
+    if row < here && row > before:
+        ret "|"
+    end
+    ret " "
+end
+
+func chart_row(levels: Vector<int>, row: int, label: str):
+    mut line := fmt.PadLeft(label, AXIS_W) + " |"
+    repeat CHART_COLS with c:
+        line = line + cell(levels, c, row)
+    end
+    println line
+end
+
+func show_chart(points: Vector<Point>):
+    low := extremes(points, false)
+    mut high := extremes(points, true)
+    if high <= low:
+        high = low + 1.0
+    end
+    levels := levels_of(points, low, high)
+    defer levels.free()
+    repeat CHART_ROWS with r:
+        row := CHART_ROWS - 1 - r
+        mut label := ""
+        if row == CHART_ROWS - 1:
+            label = group(high)
+        end
+        if row == 0:
+            label = group(low)
+        end
+        chart_row(levels, row, label)
+    end
+    println fmt.PadLeft("", AXIS_W) + " +" + str.Repeat("-", CHART_COLS)
+    first_day := time.FormatDate(points[0].at)
+    last_day := time.FormatDate(points[points.len() - 1].at)
+    println fmt.PadLeft("", AXIS_W) + "  " + fmt.PadRight(first_day, CHART_COLS - last_day.len()) + last_day
+end
+
+// ----------------------------------------------------------------- JSON ----
+
+// { "timestamp": 1207769400, "date": "2008-04-09", "price": 190 } plus the
+// three gold-only fields when the record carried them.
+func encode_point(p: Point): str:
+    mut members := Vector {} as Vector<str>
+    defer members.free()
+    members.push(acjson.IntMember("timestamp", p.at))
+    members.push(acjson.TextMember("date", time.FormatDate(p.at)))
+    members.push(acjson.FloatMember("price", p.price))
+    if p.has_bubble:
+        members.push(acjson.FloatMember("real_price", p.real_price))
+        members.push(acjson.FloatMember("bubble", p.bubble))
+        members.push(acjson.FloatMember("bubble_percent", p.bubble_pct))
+    end
+    ret acjson.Object(members)
+end
+
+func encode_data(points: Vector<Point>): str:
+    mut rows := Vector {} as Vector<str>
+    defer rows.free()
+    each p in points:
+        rows.push(encode_point(p))
+    end
+    ret acjson.Array(rows)
+end
+
+// One series: what it is, where it came from, its shape, and every point.
+func encode_series(kind: str, slug: str, points: Vector<Point>): str:
+    last := points[points.len() - 1]
+    mut members := Vector {} as Vector<str>
+    defer members.free()
+    members.push(acjson.TextMember("kind", kind))
+    members.push(acjson.TextMember("slug", slug))
+    members.push(acjson.TextMember("url", g_url))
+    // The archive pages print no "Last Update" line, so last_update is null
+    // there; updated_at is the newest sample's own stamp and always answers
+    // "how fresh is this series".
+    members.push(acjson.TextMember("last_update", g_last_update))
+    members.push(acjson.TextMember("updated_at", time.Format(last.at)))
+    members.push(acjson.IntMember("points", points.len() as i64))
+    members.push(acjson.TextMember("first_date", time.FormatDate(points[0].at)))
+    members.push(acjson.TextMember("last_date", time.FormatDate(last.at)))
+    members.push(acjson.FloatMember("latest", last.price))
+    members.push(acjson.FloatMember("low", extremes(points, false)))
+    members.push(acjson.FloatMember("high", extremes(points, true)))
+    members.push(acjson.FloatMember("average", average(points)))
+    members.push(acjson.RawMember("data", encode_data(points)))
+    ret acjson.Object(members)
+end
+
+// --------------------------------------------------------------- report ----
+
+func report(kind: str, slug: str, out &: Vector<str>):
+    println ""
+    println "=============================================================================="
+    println kind + " / " + slug
+    println "=============================================================================="
+    points := series(kind, slug)
+    defer points.free()
+    if points.len() < 2:
+        println "  no series"
+        ret
+    end
+    out.push(encode_series(kind, slug, points))
+    println ""
+    show_summary(points)
+    println ""
+    show_chart(points)
+    println ""
+    show_recent(points)
+end
+
+func main:
+    kinds := ["currency", "currency", "currency", "currency", "gold", "gold", "gold"] as str[7]
+    slugs := ["usd", "eur", "aed", "jpy", "abshodeh", "18ayar", "sekkeh"] as str[7]
+    println "Alanchand price history (the currency archives are large, this takes a moment)"
+    mut all := Vector {} as Vector<str>
+    defer all.free()
+    repeat 7 with i:
+        report(kinds[i], slugs[i], all)
+    end
+    println ""
+    // The envelope covers seven pages fetched at seven moments, so it claims
+    // no single last_update; each series carries its own.
+    _ok := acjson.Write(OUT_FILE, acjson.Document("https://alanchand.com/en", "", "series", all))
+    ret 0
+end

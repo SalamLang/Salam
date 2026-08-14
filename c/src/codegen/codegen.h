@@ -24,6 +24,7 @@
 #define SALAM_MOD_PREFIX "salam_mod_"
 
 #define SALAM_MEM_ALLOC "_Salam_mem_Allocate_u64"
+#define SALAM_MEM_ALLOC_ZEROED "_Salam_mem_AllocateZeroed_u64"
 #define SALAM_MEM_REALLOC "_Salam_mem_Reallocate_void_ptr_u64"
 #define SALAM_MEM_FREE "_Salam_mem_Free_void_ptr"
 

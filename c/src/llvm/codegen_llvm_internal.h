@@ -118,6 +118,7 @@ typedef struct {
     int ptr_bits;
     bool optsize;
     bool minsize;
+    bool nowrap;
     bool single_threaded;
     bool jit;
     sb_t *hg;

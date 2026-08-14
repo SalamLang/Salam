@@ -34,6 +34,17 @@ typedef struct {
     vec_t packages;
 } sema_result_t;
 
+/* Turn the "you declared it and never used it" family of errors (unused
+ * variable / unused `mut` / unused function / unused import) off for every
+ * later sema_run in this process.
+ *
+ * Only the REPL sets this. A REPL turn is a slice of a program that is
+ * still being typed: `mut xs := Vector {}` is a complete, correct thought
+ * whose first use arrives on the next line, and a helper `func` is worth
+ * defining several turns before it is called. Rejecting those is right in
+ * a source file and useless in a prompt. */
+void sema_set_relax_unused(bool on);
+
 sema_result_t *sema_run(arena_t *a, logger_t *log, ast_node_t *program, const char *file,
                         const char *lang, const cc_table_t *cc);
 

@@ -61,17 +61,53 @@ pub struct Vector<T>:
     @ar "جلب"
     pub func get(i: int): T*:
         if SALAM_SAFE:
-            if i < 0 || i >= this._len: salam_panic("Vector.get: index out of bounds") end
+            // One unsigned compare covers both ends: _len is never negative, so
+            // a negative i reinterprets as a huge u32 and fails the same test.
+            // Two compares cost more than the extra instruction suggests - they
+            // keep LLVM from folding the guard into the loop's own exit test.
+            if (i as u32) >= (this._len as u32):
+                salam_panic("Vector.get: index out of bounds")
+            end
         end
         ret (this.data as i64 + (i as i64) * (sizeof(T) as i64)) as T*
     end
 
+    // Writes an element that is already there. Out of range is a panic, not a
+    // resize - see resize_set for the growing form.
+    //
+    // Growing here put a realloc on a path inside every loop that writes a
+    // vector, and that one call is enough to stop LLVM proving `data` and
+    // `_len` unchanged across an iteration: bounds checks stay, loop-invariant
+    // element loads are reloaded every time, and stores are never forwarded.
+    // Splitting the two meanings apart is worth up to half the instructions in
+    // a DP kernel.
+    //
+    // The guard sits under SALAM_SAFE, same as gets, so the two accessors
+    // agree about what --release means. Code written against the older,
+    // growing set therefore panics in a default build and stores out of
+    // bounds in a --release one; that is the same bargain --release already
+    // offers for every other indexed access.
     @en "set"
     @fa "تنظیم"
     @ar "تعیین"
     pub func set(i: int, x: T):
         if SALAM_SAFE:
-            if i < 0: salam_panic("Vector.set: negative index") end
+            if (i as u32) >= (this._len as u32):
+                salam_panic("Vector.set: index out of bounds")
+            end
+        end
+        d := this.data
+        d[i] = x
+    end
+
+    // set that grows the vector to fit, filling up to `i` with whatever
+    // reserve left there. This is what set itself used to do.
+    @en "resize_set"
+    @fa "تنظیم با تغییر اندازه"
+    @ar "تعيين مع تغيير الحجم"
+    pub func resize_set(i: int, x: T):
+        if SALAM_SAFE:
+            if i < 0: salam_panic("Vector.resize_set: negative index") end
         end
         if i >= this._len:
             this.reserve(i + 1)
@@ -79,6 +115,25 @@ pub struct Vector<T>:
         end
         d := this.data
         d[i] = x
+    end
+
+    // n zeroed elements in one allocation, the counterpart of C's calloc,
+    // Rust's `vec![0; n]` and C++'s `vector<T>(n)`. Filling by push instead
+    // costs a bounds-checked store per element and denies the allocator the
+    // chance to hand back pages the kernel has already zeroed; on a 3M-element
+    // sieve that loop alone was most of the gap to C.
+    //
+    // Anything already held is dropped, so this is a fresh start, not a
+    // resize - see reserve for growing an existing vector.
+    @en "zeros"
+    @fa "صفرها"
+    @ar "أصفار"
+    pub func zeros(n: int):
+        if n <= 0: ret end
+        if this.data != null: mem.Free(this.data as void*) end
+        this.data = mem.AllocateZeroed((n as u64) * sizeof(T)) as T*
+        this._cap = n
+        this._len = n
     end
 
     @en "len"

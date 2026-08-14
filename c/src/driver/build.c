@@ -14,6 +14,7 @@
 
 #include "core/prelude.h"
 #include "core/sal_format.h"
+#include "core/sal_path.h"
 #include "driver/build.h"
 #include "driver/driver.h"
 #include "driver/llvm_build.h"
@@ -71,28 +72,6 @@ static int try_embed_hostlibs(logger_t *log, char *out, size_t outn)
     }
 #endif
     return 0;
-}
-
-static const char *module_of(arena_t *a, const char *path)
-{
-    const char *slash = strrchr(path, '/');
-    const char *bslash = strrchr(path, '\\');
-    const char *base = path;
-    if (slash && slash + 1 > base) base = slash + 1;
-    if (bslash && bslash + 1 > base) base = bslash + 1;
-    const char *dot = strrchr(base, '.');
-    size_t len = dot ? (size_t)(dot - base) : strlen(base);
-    return arena_strndup(a, base, len);
-}
-
-static const char *dir_of(arena_t *a, const char *path)
-{
-    const char *slash = strrchr(path, '/');
-    const char *bs = strrchr(path, '\\');
-    const char *cut = slash;
-    if (bs && (!slash || bs > slash)) cut = bs;
-    if (!cut) return "";
-    return arena_strndup(a, path, (size_t)(cut - path));
 }
 
 static bool copy_file_bin(const char *src, const char *dst)
@@ -159,16 +138,11 @@ static void copy_hostlib_shared_libs(logger_t *log, arena_t *a, const char *host
                                      const char *output, const char **links, int nlinks)
 {
     if (!hostlibs_dir || !hostlibs_dir[0] || nlinks <= 0) return;
-    const char *dest_dir = dir_of(a, output);
-    const char *out_name = strrchr(output, '/');
-    {
-        const char *bs = strrchr(output, '\\');
-        if (bs && (!out_name || bs > out_name)) out_name = bs;
-    }
-    out_name = out_name ? out_name + 1 : output;
+    const char *dest_dir = sal_path_dir(a, output);
+    const char *out_name = sal_path_base(output);
 #if defined(_WIN32)
-    char pattern[1024];
-    sal_snprintf(pattern, sizeof pattern, "%s\\*.dll", hostlibs_dir);
+    char pattern[1100];
+    sal_path_join(pattern, sizeof pattern, hostlibs_dir, "*.dll");
     struct _finddata_t fd;
     intptr_t h = _findfirst(pattern, &fd);
     if (h == -1) return;
@@ -176,11 +150,8 @@ static void copy_hostlib_shared_libs(logger_t *log, arena_t *a, const char *host
         if (fd.attrib & _A_SUBDIR) continue;
         if (!hostlib_file_wanted(fd.name, links, nlinks)) continue;
         char src[1200], dst[1200];
-        sal_snprintf(src, sizeof src, "%s/%s", hostlibs_dir, fd.name);
-        if (dest_dir[0])
-            sal_snprintf(dst, sizeof dst, "%s/%s", dest_dir, fd.name);
-        else
-            sal_snprintf(dst, sizeof dst, "%s", fd.name);
+        sal_path_join(src, sizeof src, hostlibs_dir, fd.name);
+        sal_path_join(dst, sizeof dst, dest_dir, fd.name);
         if (strcmp(dst, output) == 0 || strcmp(fd.name, out_name) == 0)
             continue; /* never overwrite the binary we just linked */
         if (!copy_file_bin(src, dst))
@@ -197,11 +168,8 @@ static void copy_hostlib_shared_libs(logger_t *log, arena_t *a, const char *host
         if (!is_so) continue;
         if (!hostlib_file_wanted(e->d_name, links, nlinks)) continue;
         char src[1200], dst[1200];
-        sal_snprintf(src, sizeof src, "%s/%s", hostlibs_dir, e->d_name);
-        if (dest_dir[0])
-            sal_snprintf(dst, sizeof dst, "%s/%s", dest_dir, e->d_name);
-        else
-            sal_snprintf(dst, sizeof dst, "%s", e->d_name);
+        sal_path_join(src, sizeof src, hostlibs_dir, e->d_name);
+        sal_path_join(dst, sizeof dst, dest_dir, e->d_name);
         if (strcmp(dst, output) == 0 || strcmp(e->d_name, out_name) == 0) continue;
         if (!copy_file_bin(src, dst))
             LOG_W(log, PH_DRIVER, "could not copy '%s' next to '%s'", src, output);
@@ -331,15 +299,13 @@ static bundled_musl_tcc_t detect_bundled_musl_tcc(const char *cc_path)
     r.tcc_dir[0] = '\0';
     r.musl_dir[0] = '\0';
     if (!strstr(cc_path, "tcc")) return r;
-    const char *slash = strrchr(cc_path, '/');
-    if (!slash) return r;
-    sal_snprintf(r.tcc_dir, sizeof r.tcc_dir, "%.*s", (int)(slash - cc_path), cc_path);
+    if (sal_path_dir_buf(cc_path, r.tcc_dir, sizeof r.tcc_dir) == 0) return r;
     char probe[1200];
-    sal_snprintf(probe, sizeof probe, "%s/musl/lib/crt1.o", r.tcc_dir);
+    sal_path_join(probe, sizeof probe, r.tcc_dir, "musl/lib/crt1.o");
     FILE *f = fopen(probe, "rb");
     if (!f) return r;
     fclose(f);
-    sal_snprintf(r.musl_dir, sizeof r.musl_dir, "%s/musl", r.tcc_dir);
+    sal_path_join(r.musl_dir, sizeof r.musl_dir, r.tcc_dir, "musl");
     r.active = true;
     return r;
 }
@@ -374,25 +340,22 @@ static bool path_is_file(const char *p)
 
 const char *driver_project_entry_file(arena_t *a, const char *dir)
 {
-    char trimmed[1024];
-    sal_snprintf(trimmed, sizeof trimmed, "%s", dir);
-    size_t tlen = strlen(trimmed);
-    while (tlen > 1 && (trimmed[tlen - 1] == '/' || trimmed[tlen - 1] == '\\'))
-        trimmed[--tlen] = '\0';
+    /* join trims a trailing separator (`salam build ./compiler/`) and
+       normalize drops a leading "./", so the entry file comes out spelled
+       exactly one way whatever the caller typed - the dedup-by-equality
+       import resolution downstream depends on that. */
     char buf[1200];
-    if (strcmp(trimmed, ".") == 0)
-        sal_snprintf(buf, sizeof buf, "%s", SALAM_PROJECT_FILE);
-    else
-        sal_snprintf(buf, sizeof buf, "%s/%s", trimmed, SALAM_PROJECT_FILE);
+    sal_path_join(buf, sizeof buf, dir, SALAM_PROJECT_FILE);
+    sal_path_normalize(buf);
     if (!path_is_file(buf)) return NULL;
     return arena_strdup(a, buf);
 }
 
 const char *driver_output_stem(arena_t *a, const char *path)
 {
-    const char *module = module_of(a, path);
+    const char *module = sal_path_stem(a, path);
     if (strcmp(module, "salam") != 0) return module;
-    const char *dir = dir_of(a, path);
+    const char *dir = sal_path_dir(a, path);
     if (!dir[0]) dir = ".";
     /* Resolve to an absolute path on the heap - a fixed local buffer is
      * both unsafe (realpath() writes up to PATH_MAX and cannot be told the
@@ -418,15 +381,8 @@ const char *driver_output_stem(arena_t *a, const char *path)
     char *abs = realpath(dir, NULL);
 #endif
     if (!abs) return module;
-    size_t L = strlen(abs);
-    while (L > 1 && (abs[L - 1] == '/' || abs[L - 1] == '\\'))
-        abs[--L] = '\0';
-    const char *base = abs;
-    {
-        const char *p = abs;
-        for (; *p; p++)
-            if (*p == '/' || *p == '\\') base = p + 1;
-    }
+    sal_path_trim_sep(abs);
+    const char *base = sal_path_base(abs);
     const char *stem = module;
     if (base[0] && strcmp(base, ".") != 0 && strcmp(base, "..") != 0)
         stem = arena_strdup(a, base);
@@ -436,7 +392,7 @@ const char *driver_output_stem(arena_t *a, const char *path)
 
 const char *driver_page_stem(arena_t *a, const char *path)
 {
-    const char *module = module_of(a, path);
+    const char *module = sal_path_stem(a, path);
     if (strcmp(module, "salam") == 0) return "index";
     return module;
 }
@@ -454,26 +410,17 @@ static void list_salam_files_in(arena_t *a, const char *dir, const char **out, i
      * recognize as the same file as the canonical one, causing the entry
      * file to be compiled twice under two different-looking paths. */
     char trimmed[1024];
-    sal_snprintf(trimmed, sizeof trimmed, "%s", dir);
-    size_t tlen = strlen(trimmed);
-    if (tlen > 0 && (trimmed[tlen - 1] == '/' || trimmed[tlen - 1] == '\\'))
-        trimmed[tlen - 1] = '\0';
+    sal_path_join(trimmed, sizeof trimmed, dir, "");
 #if defined(_WIN32)
-    char pattern[1024];
-    sal_snprintf(pattern, sizeof pattern, "%s\\*.salam", trimmed);
+    char pattern[1100];
+    sal_path_join(pattern, sizeof pattern, trimmed, "*.salam");
     struct _finddata_t fd;
     intptr_t h = _findfirst(is_cwd ? "*.salam" : pattern, &fd);
     if (h == -1) return;
     do {
-        if (!(fd.attrib & _A_SUBDIR) && *n < SALAM_MAX_INPUTS) {
-            if (is_cwd)
-                out[(*n)++] = arena_strdup(a, fd.name);
-            else {
-                char full[1024];
-                sal_snprintf(full, sizeof full, "%s/%s", trimmed, fd.name);
-                out[(*n)++] = arena_strdup(a, full);
-            }
-        }
+        if (!(fd.attrib & _A_SUBDIR) && *n < SALAM_MAX_INPUTS)
+            out[(*n)++] =
+                is_cwd ? arena_strdup(a, fd.name) : sal_path_joina(a, trimmed, fd.name);
     } while (_findnext(h, &fd) == 0);
     _findclose(h);
 #else
@@ -482,15 +429,9 @@ static void list_salam_files_in(arena_t *a, const char *dir, const char **out, i
     struct dirent *e;
     while ((e = readdir(d)) != NULL && *n < SALAM_MAX_INPUTS) {
         size_t L = strlen(e->d_name);
-        if (L > 6 && strcmp(e->d_name + L - 6, ".salam") == 0) {
-            if (is_cwd)
-                out[(*n)++] = arena_strdup(a, e->d_name);
-            else {
-                char full[1024];
-                sal_snprintf(full, sizeof full, "%s/%s", trimmed, e->d_name);
-                out[(*n)++] = arena_strdup(a, full);
-            }
-        }
+        if (L > 6 && strcmp(e->d_name + L - 6, ".salam") == 0)
+            out[(*n)++] = is_cwd ? arena_strdup(a, e->d_name)
+                                 : sal_path_joina(a, trimmed, e->d_name);
     }
     closedir(d);
 #endif
@@ -1058,7 +999,7 @@ int driver_build(options_t *opt)
     vec_t pkg_cache;
     vec_init(&pkg_cache);
 
-    dce_reset(arena);
+    dce_reset();
     dce_enable();
 
     /* --export=Fn:CName is split here but registered later, inside the module
@@ -1118,7 +1059,7 @@ int driver_build(options_t *opt)
             logger_set_diag_source(log, src->text, src->len, opt->diag_style,
                                    opt->diag_format);
             logger_add_diag_source(log, path, src->text, src->len);
-            const char *module = module_of(arena, path);
+            const char *module = sal_path_stem(arena, path);
             if (!first_module) first_module = module;
             LOG_I(log, PH_DRIVER, "compiling %s -> %s.c", path, module);
             token_stream_t *toks = NULL;
@@ -1203,7 +1144,7 @@ int driver_build(options_t *opt)
                 }
             }
 
-            const char *idir = dir_of(arena, path);
+            const char *idir = sal_path_dir(arena, path);
             {
                 size_t k = 0;
                 /* Deliberately no `nwork < SALAM_MAX_INPUTS` guard on the loop

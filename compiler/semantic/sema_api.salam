@@ -1,6 +1,7 @@
 package semantic
 
 import str
+import pth "../sal_path.salam"
 import os
 import co "../sal_core.salam"
 import at "../ast.salam"
@@ -42,6 +43,11 @@ pub func New(lgr: lg.Logger, file: str, lang: str): Sema:
     s.cur = g
     s.dir = dir_of(file)
     s.pkg = "main"
+    // Same pickup Rebind does below. The C reads the process-wide switch in
+    // sema_run_cached, which every analysis goes through; here New and
+    // Rebind are two doors into the same place, and the REPL - the only
+    // caller that sets the switch - comes through this one.
+    s.relax_unused = g_sm_relax_unused
     ret s
 end
 
@@ -83,7 +89,7 @@ pub func Rebind(sm &: Sema, file: str, lang: str): int:
     sm.expected = TYPE_NONE
     sm.gen_pkg = 0
     sm.in_pkg = false
-    sm.relax_unused = false
+    sm.relax_unused = g_sm_relax_unused
     sm.requal = false
     sm.each_n = 0
     sm.match_arm_depth = 0
@@ -516,7 +522,7 @@ pub func FindSysroot(triple: str, out &: str): bool:
     end
     env := os.Env("SALAM_SYSROOTS")
     if str.Len(env) > 0:
-        cand := env + "/" + sub
+        cand := pth.PathJoin(env, sub)
         if sysroot_looks_valid(cand):
             out = cand
             ret true
@@ -524,7 +530,7 @@ pub func FindSysroot(triple: str, out &: str): bool:
     end
     root := get_stdlib_root()
     if str.Len(root) > 0:
-        cand2 := root + "/sysroots/" + sub
+        cand2 := pth.PathJoin(pth.PathJoin(root, "sysroots"), sub)
         if sysroot_looks_valid(cand2):
             out = cand2
             ret true
@@ -536,7 +542,7 @@ pub func FindSysroot(triple: str, out &: str): bool:
             "sysroots", "../share/salam/sysroots", "../lib/salam/sysroots"
         ] as str[3]
         repeat 3 with i:
-            cand3 := exedir + "/" + rel[i] + "/" + sub
+            cand3 := pth.PathJoin(pth.PathJoin(exedir, rel[i]), sub)
             if sysroot_looks_valid(cand3):
                 out = cand3
                 ret true
@@ -560,10 +566,7 @@ pub func FindBundledTool(name: str, out &: str): bool:
         "llvm/bin", "tcc"
     ] as str[8]
     repeat 8 with i:
-        mut cand := exedir + "/" + name + K_SM_EXE_SUFFIX
-        if str.Len(rel[i]) > 0:
-            cand = exedir + "/" + rel[i] + "/" + name + K_SM_EXE_SUFFIX
-        end
+        cand := pth.PathJoin(pth.PathJoin(exedir, rel[i]), name + K_SM_EXE_SUFFIX)
         if os.Exists(cand) && !os.IsDir(cand):
             out = cand
             ret true
@@ -598,7 +601,11 @@ pub func FindPathTool(name: str, out &: str): bool:
             rest = ""
         end
         if str.Len(seg) > 0:
-            cand := seg + "/" + name + K_SM_EXE_SUFFIX
+            // %PATH% entries are whatever the user's shell holds - on
+            // Windows, backslashes - so the join has to canonicalize or the
+            // command line ends up spelling one path two ways
+            // ("C:\gcc\bin/gcc.exe").
+            cand := pth.PathJoin(seg, name + K_SM_EXE_SUFFIX)
             if os.Exists(cand) && !os.IsDir(cand):
                 out = cand
                 ret true
@@ -778,6 +785,21 @@ end
 // VT_COLOR arm in the generator).
 pub func LayoutMapColor(v: str): str:
     ret lay_map_color(v)
+end
+
+// sema_set_relax_unused - turn the "you declared it and never used it"
+// family of errors (unused variable / unused `mut` / unused function /
+// unused import) off for every later analysis in this process.
+//
+// Only the REPL sets this. A turn is a slice of a program still being
+// typed: `mut xs := Vector {}` is a complete, correct thought whose first
+// use arrives on the next line, and a helper `func` is worth defining
+// several turns before it is called. Rejecting those is right in a source
+// file and useless at a prompt.
+// (`on` would read better than `relax` here, but it is the keyword that
+// binds an impl block to its type, so it cannot be a parameter name.)
+pub func SetRelaxUnused(relax: bool):
+    g_sm_relax_unused = relax
 end
 
 // dce_reset - the C took the arena; the port's vectors own their storage.

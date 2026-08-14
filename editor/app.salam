@@ -15,6 +15,7 @@
 import dom
 import "examples_data.salam"
 import "anim.salam"
+import "history.salam"
 
 extern:
     func salam_js_call(obj: i64, method: str, a: str, b: str, c: str[2]): func (str, str) str
@@ -821,8 +822,7 @@ func save_code_state():
     end
 end
 
-func on_edit():
-    maybe_outdent_end()
+func after_edit():
     render_highlight()
     idx := find_example(g_example_id)
     if g_example_id != "custom":
@@ -835,6 +835,15 @@ func on_edit():
     end
     save_code_state()
     schedule_run()
+end
+
+// commit_edit - the tail every edit the editor performs itself runs through.
+// The snapshot is taken here, after the buffer and the caret have settled, so
+// undo restores both. Native edits do not come this way: they arrive as an
+// input event, which carries its own classification.
+func commit_edit(kind: str):
+    history.Record(dom.GetValue(el_code), get_sel_start(), get_sel_end(), kind)
+    after_edit()
 end
 
 func set_active_by_data(selector: str, data_attr: str, value: str):
@@ -930,6 +939,8 @@ func apply_lang(next: str):
     idx := find_example(g_example_id)
     if g_example_id != "custom" && idx >= 0:
         dom.SetValue(el_code, ex_code(idx))
+        set_caret(0)
+        history.Reset(ex_code(idx), 0, 0)
         render_highlight()
     end
     apply_theme()
@@ -940,16 +951,17 @@ func apply_lang(next: str):
     schedule_run()
 end
 
+// select_example - loading an example is recorded rather than reset, so a
+// mis-clicked example is one Ctrl+Z away from the code it replaced.
 func select_example(id: str):
     idx := find_example(id)
     if idx < 0: ret end
     g_example_id = id
     if examples_data.EXAMPLES[idx].mode != g_mode: apply_mode(examples_data.EXAMPLES[idx].mode) end
     dom.SetValue(el_code, ex_code(idx))
-    render_highlight()
+    set_caret(0)
     rebuild_dropdown()
-    save_code_state()
-    schedule_run()
+    commit_edit("load")
 end
 
 func on_dd_item_click(id: str):
@@ -1084,15 +1096,18 @@ func set_caret(pos: int):
     dom.SetProp(el_code, "selectionEnd", pos as i64)
 end
 
-func insert_at_cursor(text: str):
+// replace_range - swap [start, stop) for `text`, leave the caret at `caret`
+// and file the result in the undo history under `kind`. Every edit the editor
+// makes on the user's behalf goes through here, so none of them can slip past
+// the history.
+func replace_range(start: int, stop: int, text: str, caret: int, kind: str):
+    history.Mark(start, stop)
     val := dom.GetValue(el_code)
-    pos := get_sel_start()
-    before := val.substr(0, pos)
-    after := val.substr(pos, val.len() - pos)
+    before := val.substr(0, start)
+    after := val.substr(stop, val.len() - stop)
     dom.SetValue(el_code, before + text + after)
-    new_pos := pos + text.len()
-    set_caret(new_pos)
-    on_edit()
+    set_caret(caret)
+    commit_edit(kind)
 end
 
 // needs_block_end - should Enter on a block-opening line scaffold a matching
@@ -1122,58 +1137,56 @@ func needs_block_end(val: str, pos: int, scaffold: str): bool:
     ret fn_syntax_ok(cand, g_lang) == "1"
 end
 
-func auto_indent_enter():
-    val := dom.GetValue(el_code)
-    pos := get_sel_start()
-    before := val.substr(0, pos)
-    mut line_start := 0
-    mut i := 0
-    until i < before.len():
-        if cc(before, i) == 10: line_start = i + 1 end
-        i += 1
-    end
-    line := before.substr(line_start, before.len() - line_start)
+func current_line_prefix(val: str, pos: int): str:
+    ls := line_start_of(val, pos)
+    ret val.substr(ls, pos - ls)
+end
+
+func leading_indent(line: str): str:
     mut indent := ""
     mut k := 0
     until k < line.len() && (cc(line, k) == 32 || cc(line, k) == 9):
         indent = indent + line.substr(k, 1)
         k += 1
     end
-    opens_block := line.len() > 0 && cc(line, line.len() - 1) == 58
-    if opens_block:
-        child_indent := indent + "    "
-        scaffold := "\n" + child_indent + "\n" + indent + end_keyword()
-        if needs_block_end(val, pos, scaffold):
-            insert_at_cursor(scaffold)
-            set_caret(pos + 1 + child_indent.len())
-        else:
-            insert_at_cursor("\n" + child_indent)
-        end
-    else:
-        insert_at_cursor("\n" + indent)
-    end
+    ret indent
 end
 
+func auto_indent_enter():
+    val := dom.GetValue(el_code)
+    pos := get_sel_start()
+    stop := get_sel_end()
+    line := current_line_prefix(val, pos)
+    indent := leading_indent(line)
+    if line.len() == 0 || cc(line, line.len() - 1) != 58:
+        replace_range(pos, stop, "\n" + indent, pos + 1 + indent.len(), "newline")
+        ret
+    end
+    child_indent := indent + "    "
+    base := val.substr(0, pos) + val.substr(stop, val.len() - stop)
+    scaffold := "\n" + child_indent + "\n" + indent + end_keyword()
+    if needs_block_end(base, pos, scaffold):
+        replace_range(pos, stop, scaffold, pos + 1 + child_indent.len(), "newline")
+        ret
+    end
+    replace_range(pos, stop, "\n" + child_indent, pos + 1 + child_indent.len(), "newline")
+end
+
+// maybe_outdent_end - typing the last letter of `end` on a line of its own
+// pulls that line back one level. Deliberately no commit_edit: this runs
+// inside the input event for the keystroke that completed the word, and the
+// snapshot taken there covers both the letter and this outdent, so undo takes
+// them back together instead of leaving a half-formed `end` behind.
 func maybe_outdent_end():
     val := dom.GetValue(el_code)
     pos := get_sel_start()
-    before := val.substr(0, pos)
-    mut line_start := 0
-    mut i := 0
-    until i < before.len():
-        if cc(before, i) == 10: line_start = i + 1 end
-        i += 1
-    end
-    line := before.substr(line_start, before.len() - line_start)
-    kw := end_keyword()
-    mut indent_len := 0
-    until indent_len < line.len() && (cc(line, indent_len) == 32 || cc(line, indent_len) == 9):
-        indent_len += 1
-    end
-    rest := line.substr(indent_len, line.len() - indent_len)
-    if rest != kw || indent_len < 4: ret end
-    new_val := val.substr(0, line_start) + line.substr(4, line.len() - 4) + val.substr(pos, val.len() - pos)
-    dom.SetValue(el_code, new_val)
+    line := current_line_prefix(val, pos)
+    indent := leading_indent(line)
+    rest := line.substr(indent.len(), line.len() - indent.len())
+    if rest != end_keyword() || indent.len() < 4: ret end
+    line_start := pos - line.len()
+    outdented := line.substr(4, line.len() - 4)
+    dom.SetValue(el_code, val.substr(0, line_start) + outdented + val.substr(pos, val.len() - pos))
     set_caret(pos - 4)
 end
 
@@ -1200,6 +1213,7 @@ func block_indent(outdent: bool):
     val := dom.GetValue(el_code)
     s := get_sel_start()
     e := get_sel_end()
+    history.Mark(s, e)
     ls := line_start_of(val, s)
     mut e_adj := e
     if e > s && e > 0 && cc(val, e - 1) == 10: e_adj = e - 1 end
@@ -1255,7 +1269,7 @@ func block_indent(outdent: bool):
     new_e := e + total_delta
     dom.SetProp(el_code, "selectionStart", new_s as i64)
     dom.SetProp(el_code, "selectionEnd", new_e as i64)
-    on_edit()
+    commit_edit("indent")
 end
 
 func on_gutter_move(ev: i64):
@@ -1309,13 +1323,101 @@ func on_mode_seg_click(m: str):
     if m != g_mode: select_example(examples_data.EXAMPLES[default_example_for(m)].id) end
 end
 
-func on_code_input(): on_edit() end
+// edit_kind - classify a native edit from its inputType, so the history knows
+// which ones may run together into a single undo step. A space or a newline
+// deliberately ends a typing run: Ctrl+Z should give back a word at a time.
+func edit_kind(ev: i64): str:
+    it := dom.GetStr(ev, "inputType")
+    if it == "insertLineBreak" || it == "insertParagraph": ret "newline" end
+    if it == "insertFromPaste" || it == "insertFromPasteAsQuotation": ret "paste" end
+    if it == "insertFromDrop" || it == "insertReplacementText": ret "replace" end
+    if it == "deleteByCut" || it == "deleteByDrag": ret "cut" end
+    if it == "insertText" || it == "insertCompositionText":
+        data := dom.GetStr(ev, "data")
+        if data == " " || data == "\t": ret "space" end
+        if data.len() != 1: ret "chunk" end
+        ret "type"
+    end
+    if it.find("delete") == 0: ret "delete" end
+    ret "edit"
+end
+
+// caret_into_view - a programmatic selection change does not scroll the
+// textarea, so undoing an edit that sits off screen would put the buffer right
+// out of sight. The metrics are read off the box itself rather than hardcoded,
+// so this keeps working if the stylesheet's font size or padding changes.
+func caret_into_view():
+    line_h := dom.GetStyle(el_code, "line-height").to_float()
+    view_h := dom.GetNum(el_code, "clientHeight")
+    if line_h <= 0.0 || view_h <= 0.0: ret end
+    before := dom.GetValue(el_code).substr(0, get_sel_start())
+    caret_line := (line_count(before) - 1) as f64
+    y := dom.GetStyle(el_code, "padding-top").to_float() + caret_line * line_h
+    top := dom.GetNum(el_code, "scrollTop")
+    if y >= top && y + line_h <= top + view_h: ret end
+    dom.SetNum(el_code, "scrollTop", y - view_h / 2.0 + line_h)
+    on_code_scroll()
+end
+
+func apply_history_state():
+    dom.SetValue(el_code, history.Text())
+    dom.SetProp(el_code, "selectionStart", history.SelStart() as i64)
+    dom.SetProp(el_code, "selectionEnd", history.SelEnd() as i64)
+    after_edit()
+    caret_into_view()
+end
+
+func do_undo():
+    if history.Undo(): apply_history_state() end
+end
+
+func do_redo():
+    if history.Redo(): apply_history_state() end
+end
+
+func on_code_input(ev: i64):
+    maybe_outdent_end()
+    commit_edit(edit_kind(ev))
+end
+
+// on_code_beforeinput - fires while the buffer still holds the pre-edit text,
+// which is the only moment the selection the user edited from can be read.
+// It is also where the browser announces its own undo (the Edit menu, the
+// context menu, a trackpad gesture); that stack is empty by now, so those
+// requests are taken over rather than passed on.
+func on_code_beforeinput(ev: i64):
+    it := dom.GetStr(ev, "inputType")
+    if it == "historyUndo":
+        dom.PreventDefault(ev)
+        do_undo()
+        ret
+    end
+    if it == "historyRedo":
+        dom.PreventDefault(ev)
+        do_redo()
+        ret
+    end
+    history.Mark(get_sel_start(), get_sel_end())
+end
+
+func on_undo_key(ev: i64, redo: bool):
+    dom.PreventDefault(ev)
+    if redo:
+        do_redo()
+    else:
+        do_undo()
+    end
+end
 
 func on_code_keydown(ev: i64):
     key := dom.EventKey(ev)
     ctrl := dom.GetBool(ev, "ctrlKey") || dom.GetBool(ev, "metaKey")
     shift := dom.GetBool(ev, "shiftKey")
-    if key == "Tab":
+    if ctrl && (key == "z" || key == "Z"):
+        on_undo_key(ev, shift)
+    else ctrl && (key == "y" || key == "Y"):
+        on_undo_key(ev, true)
+    else key == "Tab":
         dom.PreventDefault(ev)
         s0 := get_sel_start()
         e0 := get_sel_end()
@@ -1325,7 +1427,7 @@ func on_code_keydown(ev: i64):
         else has_nl:
             block_indent(false)
         else:
-            insert_at_cursor("    ")
+            replace_range(s0, e0, "    ", s0 + 4, "indent")
         end
     else key == "]" && ctrl:
         dom.PreventDefault(ev)
@@ -1404,7 +1506,8 @@ func wire_events():
         vi += 1
     end
 
-    dom.OnEvent(el_code, "input", () => on_code_input())
+    dom.OnEventE(el_code, "input", (ev: i64) => on_code_input(ev))
+    dom.OnEventE(el_code, "beforeinput", (ev: i64) => on_code_beforeinput(ev))
     dom.OnEventE(el_code, "keydown", (ev: i64) => on_code_keydown(ev))
     dom.OnEvent(el_code, "scroll", () => on_code_scroll())
 
@@ -1471,6 +1574,7 @@ func Init():
         g_example_id = "custom"
         dom.SetValue(el_code, saved_code != "" ? saved_code : ex_code(0))
     end
+    history.Reset(dom.GetValue(el_code), 0, 0)
     apply_mode(g_mode)
     set_autorun(g_autorun)
     render_highlight()

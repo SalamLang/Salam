@@ -14,6 +14,7 @@
 
 #include "core/prelude.h"
 #include "core/sal_format.h"
+#include "core/sal_path.h"
 #include "driver/llvm_build.h"
 #include "driver/driver.h"
 #include "driver/build.h"
@@ -33,28 +34,6 @@
 static const char *plural_suffix(int n)
 {
     return n == 1 ? "" : "s";
-}
-
-static const char *module_of(arena_t *a, const char *path)
-{
-    const char *slash = strrchr(path, '/');
-    const char *bslash = strrchr(path, '\\');
-    const char *base = path;
-    if (slash && slash + 1 > base) base = slash + 1;
-    if (bslash && bslash + 1 > base) base = bslash + 1;
-    const char *dot = strrchr(base, '.');
-    size_t len = dot ? (size_t)(dot - base) : strlen(base);
-    return arena_strndup(a, base, len);
-}
-
-static const char *dir_of(arena_t *a, const char *path)
-{
-    const char *slash = strrchr(path, '/');
-    const char *bs = strrchr(path, '\\');
-    const char *cut = slash;
-    if (bs && (!slash || bs > slash)) cut = bs;
-    if (!cut) return "";
-    return arena_strndup(a, path, (size_t)(cut - path));
 }
 
 static bool triple_is_windows(const char *t)
@@ -163,8 +142,8 @@ static int ll_gather_links(arena_t *a, logger_t *log, langpack_t *pack,
     int nwork = 0, wi = 0, dropped = 0;
 
     ll_scan_links(main_prog, libs, kinds, &n, cap);
-    dropped += ll_enqueue_imports(a, main_prog, dir_of(a, main_path), main_lang, work,
-                                  &nwork, 256);
+    dropped += ll_enqueue_imports(a, main_prog, sal_path_dir(a, main_path), main_lang,
+                                  work, &nwork, 256);
 
     for (; wi < nwork; wi++) {
         const char *path = work[wi];
@@ -194,8 +173,8 @@ static int ll_gather_links(arena_t *a, logger_t *log, langpack_t *pack,
             }
         }
         ll_scan_links(prog, libs, kinds, &n, cap);
-        dropped += ll_enqueue_imports(a, prog, dir_of(a, path), langpack_code(mp), work,
-                                      &nwork, 256);
+        dropped += ll_enqueue_imports(a, prog, sal_path_dir(a, path), langpack_code(mp),
+                                      work, &nwork, 256);
     }
     if (dropped > 0)
         LOG_W(log, PH_DRIVER,
@@ -239,7 +218,7 @@ int driver_llvm(options_t *opt)
     }
     logger_set_diag_source(log, src->text, src->len, opt->diag_style, opt->diag_format);
     logger_add_diag_source(log, opt->input, src->text, src->len);
-    const char *module = module_of(arena, opt->input);
+    const char *module = sal_path_stem(arena, opt->input);
     const langpack_t *modpack = langpack_detect(arena, src, pack);
     /*
      * The entry point's name follows the language the *file* is written in,
@@ -277,6 +256,7 @@ int driver_llvm(options_t *opt)
     o.output_mode = (llvm_output_mode_t)opt->llvm_emit;
     o.debug_info = opt->debug_info;
     o.verify_module = opt->llvm_verify;
+    o.release = !opt->safe;
     o.target_triple = opt->llvm_target;
     o.lib_paths = opt->lib_paths;
     o.nlibpath = opt->nlibpath;

@@ -14,6 +14,7 @@
 
 #include "core/prelude.h"
 #include "core/sal_format.h"
+#include "core/sal_path.h"
 #include "driver/js_build.h"
 #include "driver/driver.h"
 #include "core/arena.h"
@@ -167,30 +168,6 @@ static const js_seg_t k_prelude[] = {
                     "}\n"},
 };
 
-static const char *module_of(arena_t *a, const char *path)
-{
-    const char *slash = strrchr(path, '/');
-    const char *bslash = strrchr(path, '\\');
-    const char *base = path;
-    if (slash && slash + 1 > base) base = slash + 1;
-    if (bslash && bslash + 1 > base) base = bslash + 1;
-    {
-        const char *dot = strrchr(base, '.');
-        size_t len = dot ? (size_t)(dot - base) : strlen(base);
-        return arena_strndup(a, base, len);
-    }
-}
-
-static const char *dir_of(arena_t *a, const char *path)
-{
-    const char *slash = strrchr(path, '/');
-    const char *bs = strrchr(path, '\\');
-    const char *cut = slash;
-    if (bs && (!slash || bs > slash)) cut = bs;
-    if (!cut) return "";
-    return arena_strndup(a, path, (size_t)(cut - path));
-}
-
 static bool write_file(logger_t *log, const char *path, const char *content)
 {
     FILE *f = fopen(path, "wb");
@@ -301,7 +278,7 @@ const char *js_build_bundle(arena_t *arena, logger_t *log, options_t *opt,
                     cc_table_t *cc = cc_table_build(arena, NULL, defs, ndefs);
                     const langpack_t *modpack = langpack_detect(arena, src, pack);
                     const char *modentry = langpack_entry(modpack);
-                    const char *module = module_of(arena, path);
+                    const char *module = sal_path_stem(arena, path);
                     token_stream_t *toks = NULL;
                     ast_node_t *program = NULL;
                     bool lok, pok;
@@ -348,7 +325,7 @@ const char *js_build_bundle(arena_t *arena, logger_t *log, options_t *opt,
                             continue;
                         }
                         {
-                            const char *idir = dir_of(arena, path);
+                            const char *idir = sal_path_dir(arena, path);
                             size_t k = 0;
                             for (; k < program->list.len && nwork < SALAM_MAX_INPUTS;
                                  k++) {

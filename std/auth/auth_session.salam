@@ -1,0 +1,123 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package auth
+
+import crypto
+
+// The issuing half: mint a token for a login, and (for a browser client)
+// park it in a cookie.
+//
+// The cookie defaults here are the ones that are hard to add later: HttpOnly
+// so script cannot read the token, SameSite=Lax so a cross-site form post
+// does not carry it, Secure so it never goes out over plain HTTP. Secure is
+// the one to turn off for local development, and the only one.
+
+func _cookie_name(g: Guard): str:
+    if g.cookie.len() > 0: ret g.cookie end
+    ret "session"
+end
+
+func _refresh_id(subject: str): str:
+    ret subject.concat("-").concat(crypto.RandomHex(16))
+end
+
+func _write_session_cookie(ctx: i64, g: Guard, token: str, max_age: int, secure: bool):
+    mut c := http.Cookie {}
+    c.name = _cookie_name(g)
+    c.value = token
+    c.path = "/"
+    c.max_age = max_age
+    c.has_max_age = true
+    c.http_only = true
+    c.secure = secure
+    c.same_site = "Lax"
+    http.Ctx_set_cookie(ctx, c)
+end
+
+// Mint a token from `c`, stamping iat/exp `ttl` seconds out. The guard's
+// Options.alg picks the algorithm, so issuing and verifying cannot drift.
+@en "Issue"
+@fa "صدور"
+@ar "إصدار"
+pub func Issue(g: Guard, c: jwt.Claims, ttl: i64, err &: int): str:
+    mut claims := c
+    jwt.ExpiresIn(claims, ttl)
+    if g.opts.issuer.len() > 0 && claims.iss.len() == 0:
+        claims.iss = g.opts.issuer
+    end
+    if g.opts.audience.len() > 0 && claims.aud.len() == 0 && claims.aud_raw.len() == 0:
+        claims.aud = g.opts.audience
+    end
+    mut alg := g.opts.alg
+    if alg.len() == 0: alg = jwt.JWT_HS256 end
+    ret jwt.Sign(claims, alg, g.secret, err)
+end
+
+// The common case: a token for `subject`, valid for `ttl` seconds.
+@en "IssueFor"
+@fa "صدور برای"
+@ar "إصدار لـ"
+pub func IssueFor(g: Guard, subject: str, ttl: i64, err &: int): str:
+    mut c := jwt.NewClaims()
+    c.sub = subject
+    ret Issue(g, c, ttl, err)
+end
+
+// A short-lived access token and a long-lived refresh token in one call.
+// The refresh token carries "kind":"refresh" as an ordinary claim, so the
+// refresh route can refuse an access token and every other route can refuse
+// a refresh token - check jwt.Str(t, "kind") on both sides.
+@en "IssuePair"
+@fa "صدور جفت"
+@ar "إصدار زوج"
+pub func IssuePair(g: Guard, subject: str, access_ttl: i64, refresh_ttl: i64, access &: str, refresh &: str, err &: int): bool:
+    mut a := jwt.NewClaims()
+    a.sub = subject
+    jwt.SetStr(a, "kind", "access")
+    access = Issue(g, a, access_ttl, err)
+    if err != jwt.JWT_OK: ret false end
+    mut r := jwt.NewClaims()
+    r.sub = subject
+    r.jti = _refresh_id(subject)
+    jwt.SetStr(r, "kind", "refresh")
+    refresh = Issue(g, r, refresh_ttl, err)
+    ret err == jwt.JWT_OK
+end
+
+// Write the session cookie. `max_age` should match the token's TTL so the
+// browser stops sending a token that can no longer verify.
+@en "SetSessionCookie"
+@fa "تنظیم کوکی نشست"
+@ar "تعیین كوكي الجلسة"
+pub func SetSessionCookie(ctx: i64, g: Guard, token: str, max_age: int):
+    _write_session_cookie(ctx, g, token, max_age, true)
+end
+
+// Same, minus Secure, for http://localhost during development.
+@en "SetSessionCookieInsecure"
+@fa "تنظیم کوکی نشست ناامن"
+@ar "تعیین كوكي الجلسة غیر آمن"
+pub func SetSessionCookieInsecure(ctx: i64, g: Guard, token: str, max_age: int):
+    _write_session_cookie(ctx, g, token, max_age, false)
+end
+
+// Log out. Nothing server-side is invalidated - a JWT is valid until it
+// expires - so keep the TTL short, or check jti against a revocation list.
+@en "ClearSessionCookie"
+@fa "پاک کردن کوکی نشست"
+@ar "مسح كوكي الجلسة"
+pub func ClearSessionCookie(ctx: i64, g: Guard):
+    http.Ctx_clear_cookie(ctx, _cookie_name(g))
+end

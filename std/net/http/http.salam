@@ -176,6 +176,67 @@ pub struct Client:
     pub func Head(url: str): Response: ret this.Request("HEAD", url, "") end
 end
 
+// Caller-supplied headers take precedence over this client's defaults, so a
+// scraper that has to look like a browser gets ITS User-Agent on the wire
+// rather than a second copy after "Salam/1.0" (servers read the first one).
+// Only User-Agent and Accept are overridable: Accept-Encoding and Connection
+// are owned by the transport, which can inflate gzip and nothing else, and
+// reads the body until EOF. A caller asking for "br" or "keep-alive" would
+// get undecodable bytes or a stall, so those lines are dropped from the
+// caller's block below instead of being honoured.
+func _header_at(headers: str, name: str): int:
+    if headers.len() == 0:
+        ret 0 - 1
+    end
+    lower := str.Lower(headers)
+    key := str.Lower(name).concat(":")
+    if str.StartsWith(lower, key):
+        ret 0
+    end
+    nl := str.Find(lower, "\r\n".concat(key))
+    if nl < 0:
+        ret 0 - 1
+    end
+    ret nl + 2
+end
+
+func _header_value(headers: str, name: str, fallback: str): str:
+    at := _header_at(headers, name)
+    if at < 0:
+        ret fallback
+    end
+    start := at + name.len() + 1
+    mut stop := str.IndexFrom(headers, "\r\n", start)
+    if stop < 0:
+        stop = headers.len()
+    end
+    value := str.Trim(headers.substr(start, stop - start))
+    if value.len() == 0:
+        ret fallback
+    end
+    ret value
+end
+
+func _drop_transport_headers(headers: str): str:
+    if headers.len() == 0:
+        ret ""
+    end
+    lines := str.Split(headers, "\r\n")
+    defer lines.free()
+    mut out := ""
+    each line in lines:
+        low := str.Lower(line)
+        mut keep := line.len() > 0
+        if str.StartsWith(low, "accept-encoding:") || str.StartsWith(low, "connection:"):
+            keep = false
+        end
+        if keep:
+            out = out.concat(line).concat("\r\n")
+        end
+    end
+    ret out
+end
+
 if SALAM_OS_WINDOWS && !SALAM_NATIVE_TLS:
     func _make_str(buf: void*, len: int): str:
         if buf == null || len <= 0:
@@ -206,7 +267,8 @@ if SALAM_OS_WINDOWS && !SALAM_NATIVE_TLS:
         ret _make_str(buf, n - 1)
     end
 
-    func _fetch_https(method: str, url: str, headers: str, body: str): str:
+    func _fetch_https(method: str, url: str, raw_headers: str, body: str): str:
+        headers := _drop_transport_headers(raw_headers)
         mut p := url
         mut secure := 1
         mut wport := 443
@@ -232,7 +294,10 @@ if SALAM_OS_WINDOWS && !SALAM_NATIVE_TLS:
             host_only = host_part.substr(0, colon_pos)
             wport = host_part.substr(colon_pos + 1, host_part.len() - colon_pos - 1).to_int()
         end
-        wagent := _str_to_wide("Salam/1.0")
+        // WinHttpAddRequestHeaders below runs with ADD|ADD_IF_NEW, so a
+        // User-Agent in the caller's block would lose to whatever this
+        // session was opened with - open the session with theirs instead.
+        wagent := _str_to_wide(_header_value(headers, "User-Agent", "Salam/1.0"))
         sess := WinHttpOpen(wagent, 0, null, null, 0)
         mem.Free(wagent)
         if sess == null: ret "" end
@@ -465,10 +530,17 @@ else:
         ret path
     end
 
-    func _build_request(method: str, u: url.URL, headers: str, body: str): str:
+    func _build_request(method: str, u: url.URL, raw_headers: str, body: str): str:
         target := _request_target(u)
+        headers := _drop_transport_headers(raw_headers)
         mut req := method.concat(" ").concat(target).concat(" HTTP/1.1\r\nHost: ").concat(u.host).concat("\r\n")
-        req = req.concat("User-Agent: Salam/1.0\r\nAccept: */*\r\nAccept-Encoding: gzip\r\nConnection: close\r\n")
+        if _header_at(headers, "User-Agent") < 0:
+            req = req.concat("User-Agent: Salam/1.0\r\n")
+        end
+        if _header_at(headers, "Accept") < 0:
+            req = req.concat("Accept: */*\r\n")
+        end
+        req = req.concat("Accept-Encoding: gzip\r\nConnection: close\r\n")
         if headers.len() > 0:
             req = req.concat(headers)
         end

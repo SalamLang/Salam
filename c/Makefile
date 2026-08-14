@@ -88,7 +88,33 @@ CXX             ?= c++
 LLVM_CONFIG_OK := $(shell $(LLVM_CONFIG) --version >/dev/null 2>&1 && echo 1)
 ifeq ($(LLVM_CONFIG_OK),1)
   LLVM_LIBDIR_PROBE := $(shell $(LLVM_CONFIG) --libdir 2>/dev/null)
-  LLD_STATIC_OK := $(if $(wildcard $(LLVM_LIBDIR_PROBE)/liblldCommon.a),1)
+  # Homebrew ships lld as its own formula in its own keg, so liblld*.a are
+  # NOT under llvm-config's libdir there the way they are in the
+  # apt.llvm.org packages. Probed only when the libdir has no lld of its
+  # own, which keeps `brew` off the critical path on every other host, and
+  # the directory is remembered because libsalam-llvm's archive merge has to
+  # name those archives by path (see LLVM_MERGE_LIBDIRS).
+  #
+  # As of 2026-08 the Homebrew keg comes up empty regardless: that formula
+  # builds with BUILD_SHARED_LIBS=ON, so it holds liblld*.dylib and no
+  # archives at all. Which is why this probes for the .a rather than for the
+  # formula. Merging the dylibs is not an alternative - Homebrew's lld
+  # resolves LLVM through libLLVM.dylib, and a process holding both that and
+  # this archive's static LLVM has two copies of LLVM's global state.
+  #
+  # So pass LLD_PREFIX=DIR to point at an lld built with
+  # BUILD_SHARED_LIBS=OFF (tools/bash/build-static-lld.sh produces one) and
+  # macOS gets in-process LLD exactly like Linux. Without it WITH_LLD
+  # settles on 0, which is a working configuration and not an error: LLVM
+  # codegen still runs in-process and only the link shells out.
+  LLD_PREFIX ?= $(shell brew --prefix lld 2>/dev/null)
+  ifeq (,$(wildcard $(LLVM_LIBDIR_PROBE)/liblldCommon.a))
+    ifneq (,$(wildcard $(LLD_PREFIX)/lib/liblldCommon.a))
+      LLD_EXTRA_LIBDIR := $(LLD_PREFIX)/lib
+    endif
+  endif
+  LLD_STATIC_OK := \
+      $(if $(wildcard $(LLVM_LIBDIR_PROBE)/liblldCommon.a)$(LLD_EXTRA_LIBDIR),1)
 endif
 
 WITH_LLVM       ?= $(if $(LLVM_CONFIG_OK),1,0)
@@ -150,21 +176,20 @@ ifeq ($(WITH_LLVM),1)
   endif
   CPPFLAGS += -DSALAM_HAVE_LLVM -I$(shell $(LLVM_CONFIG) --includedir) \
               -DSALAM_LLVM_VERSION_MAJOR=$(shell $(LLVM_CONFIG) --version | cut -d. -f1)
-  # Homebrew ships lld as its own formula with its own prefix, so lld's
-  # headers are NOT under `llvm-config --includedir` the way they are in the
-  # apt.llvm.org packages. lld_link.cc includes <lld/Common/Driver.h>, so on
-  # macOS the C++ shim failed with "file not found" and libsalam-llvm died -
-  # which, while that failure was only a ::warning::, is why every macOS
-  # stage2 quietly shipped on the C backend instead of LLVM. Added only when
-  # the prefix resolves, so a machine without the formula is unaffected.
+  # lld's headers are in the same separate prefix as its archives (see
+  # LLD_PREFIX above), not under `llvm-config --includedir` the way they are
+  # in the apt.llvm.org packages. lld_link.cc includes
+  # <lld/Common/Driver.h>, so on macOS the C++ shim failed with "file not
+  # found" and libsalam-llvm died - which, while that failure was only a
+  # ::warning::, is why every macOS stage2 quietly shipped on the C backend
+  # instead of LLVM. Added only when the prefix resolves, so a machine
+  # without it is unaffected.
   ifeq ($(WITH_LLD),1)
-    BREW_LLD_PREFIX := $(shell brew --prefix lld 2>/dev/null)
-    ifneq (,$(wildcard $(BREW_LLD_PREFIX)/include/lld/Common/Driver.h))
-      CPPFLAGS += -I$(BREW_LLD_PREFIX)/include
-      # The archives live beside the headers in that same keg, and
+    ifneq (,$(wildcard $(LLD_PREFIX)/include/lld/Common/Driver.h))
+      CPPFLAGS += -I$(LLD_PREFIX)/include
       # `llvm-config --ldflags` only ever points at llvm's own libdir, so
       # -llldCommon would not resolve either.
-      LDFLAGS  += -L$(BREW_LLD_PREFIX)/lib
+      LDFLAGS  += -L$(LLD_PREFIX)/lib
     endif
   endif
   LDFLAGS  += $(shell $(LLVM_CONFIG) $(LLVM_STATIC_FLAG) --ldflags)
@@ -219,17 +244,25 @@ ifeq ($(WITH_LLVM),1)
   # carries its own hardcoded -lz -lzstd and sits earlier on the command
   # line, and ld takes the first match, so rewriting only the later copy
   # changed the link line without changing a single entry in `ldd`.
+  #
+  # A pure substitution, never an append. These two used to filter the flag
+  # out and add -l:lib*.a back unconditionally, which put the archive on the
+  # link line even when llvm-config had not asked for the library at all.
+  # IS_WINDOWS/IS_MACOS describe the *host*, so this block also runs when a
+  # Linux host cross-compiles: the i686-w64-mingw32 release build, whose
+  # LLVM is configured -DLLVM_ENABLE_ZLIB=OFF -DLLVM_ENABLE_ZSTD=OFF
+  # precisely because that sysroot has neither, still got both appended and
+  # died on "lld: error: unable to find library -l:libz.a" - and the whole
+  # target silently fell back to a tcc-only salam.exe with no LLVM in it.
   ifeq ($(IS_WINDOWS)$(IS_MACOS),)
     LINUX_LIBDIR := /usr/lib/$(shell uname -m)-linux-gnu
     ifneq (,$(wildcard $(LINUX_LIBDIR)/libz.a))
       LLD_LIBS := $(patsubst -lz,-l:libz.a,$(LLD_LIBS))
-      LLVM_SYSTEM_LIBS := $(shell printf '%s' "$(LLVM_SYSTEM_LIBS)" \
-          | tr ' ' '\n' | grep -vxE '\-lz' | tr '\n' ' ') -l:libz.a
+      LLVM_SYSTEM_LIBS := $(patsubst -lz,-l:libz.a,$(LLVM_SYSTEM_LIBS))
     endif
     ifneq (,$(wildcard $(LINUX_LIBDIR)/libzstd.a))
       LLD_LIBS := $(patsubst -lzstd,-l:libzstd.a,$(LLD_LIBS))
-      LLVM_SYSTEM_LIBS := $(shell printf '%s' "$(LLVM_SYSTEM_LIBS)" \
-          | tr ' ' '\n' | grep -vxE '\-lzstd' | tr '\n' ' ') -l:libzstd.a
+      LLVM_SYSTEM_LIBS := $(patsubst -lzstd,-l:libzstd.a,$(LLVM_SYSTEM_LIBS))
     endif
     # -static-libstdc++ only governs the libstdc++ the compiler driver adds
     # implicitly. This link is driven by cc, not c++, so the C++ runtime is
@@ -461,12 +494,40 @@ $(BUILD_DIR)/%.o: src/%.cc $(CONFIG_STAMP)
 #
 LLVM_MERGE_LIBS = $(shell $(LLVM_CONFIG) --link-static --libs all 2>/dev/null) $(LLD_LIBS)
 
-# Salam's own C shims that std/llvm binds to. llvm_native.o and lld_link.o
-# carry salam_llvm_native/salam_lld_link; orc_call.o carries
-# salam_orc_call_main plus the salam_llvm_init_all_* wrappers around LLVM-C's
-# header-inline target initializers (see orc_call.h). Omitting orc_call.o
-# left both undefined at link time.
-LLVM_MERGE_SHIMS = $(BUILD_DIR)/llvm/llvm_native.o $(BUILD_DIR)/llvm/orc_call.o \
+# Where each -lNAME in LLVM_MERGE_LIBS is looked up. `llvm-config --libdir`
+# alone covers the apt.llvm.org layout, where lld's archives sit beside LLVM's
+# own; LLD_EXTRA_LIBDIR adds the separate keg Homebrew would put them in, if
+# that host had static ones (it does not - see WITH_LLD above).
+#
+# The merge loop has to tolerate a miss, because LLD_LIBS also carries
+# -lz/-lzstd, which are system libraries and must stay out of the archive.
+# That silence is what let a macOS build merge 201 members instead of 207 and
+# produce a libsalam_llvm.a with no lld in it at all, failing the stage 2
+# self-host link on undefined lld::elf::link. A missing liblld* is fatal now:
+# when WITH_LLD=1 the archive either carries lld or the build stops.
+LLVM_MERGE_LIBDIRS = $(shell $(LLVM_CONFIG) --libdir 2>/dev/null) $(LLD_EXTRA_LIBDIR)
+
+# Salam's own C shims that std/llvm binds to, and *only* those: every symbol
+# std/llvm declares `extern:` lives in one of these objects.
+#
+#   orc_call.o   salam_orc_call_main, plus the salam_llvm_init_all_* wrappers
+#                around LLVM-C's header-inline target initializers (see
+#                orc_call.h). Omitting it left all six undefined.
+#   lld_link.o   salam_lld_available/salam_lld_link, when WITH_LLD=1.
+#   lld_stub.o   the same two, when it is 0. Empty otherwise.
+#
+# llvm_native.o is deliberately NOT here, though it is the biggest shim of
+# the lot. It is the C compiler's own LLVM driver and it calls the C
+# compiler's core - sb_*, sal_snprintf, logger_log, i18n_tr,
+# salam_find_bundled_tool - none of which exists in a self-hosted link,
+# where every one of those was ported to Salam. std/llvm never references
+# salam_llvm_native (it ports that dispatch itself, see run.salam), so the
+# member was only ever dead weight: the linker never pulled it and its
+# unresolvable dependencies never surfaced. Anything that gives std/llvm a
+# reason to pull it fails the self-host link on nine undefined core symbols,
+# which is exactly what happened when the LLD stubs were first written into
+# it instead of into lld_stub.c.
+LLVM_MERGE_SHIMS = $(BUILD_DIR)/llvm/orc_call.o $(BUILD_DIR)/llvm/lld_stub.o \
                    $(CXXOBJS) $(WIN_LLD_SHIM_OBJS)
 LLVM_MERGE_DIR  = $(BUILD_DIR)/merge
 SALAM_LLVM_A    = $(OUTDIR)/libsalam_llvm.a
@@ -489,20 +550,36 @@ AR_MRI      := $(firstword $(wildcard $(LLVM_BINDIR)/llvm-ar) \
 
 .PHONY: libsalam-llvm
 libsalam-llvm: $(LLVM_MERGE_SHIMS)
-	@test "$(WITH_LLVM)$(WITH_LLD)" = "11" \
-	  || { echo "libsalam-llvm needs WITH_LLVM=1 WITH_LLD=1 (llvm-config: $(LLVM_CONFIG))"; exit 1; }
+	@test "$(WITH_LLVM)" = "1" \
+	  || { echo "libsalam-llvm needs WITH_LLVM=1 (llvm-config: $(LLVM_CONFIG))"; exit 1; }
+	@test "$(WITH_LLD)" = "1" \
+	  || echo "note: WITH_LLD=0 - the archive gets LLVM codegen but no in-process \
+LLD, so the linker is the host cc. Normal on macOS, where Homebrew's lld is \
+shared-only; llvm_native.c stubs salam_lld_link so std/llvm still resolves."
 	@rm -rf $(LLVM_MERGE_DIR); mkdir -p $(LLVM_MERGE_DIR)
-	@LIBDIR=$$($(LLVM_CONFIG) --libdir); \
+	@LIBDIRS="$(LLVM_MERGE_LIBDIRS)"; \
 	 : > $(LLVM_MERGE_DIR)/mri; \
 	 echo "create $(SALAM_LLVM_A)" >> $(LLVM_MERGE_DIR)/mri; \
 	 for o in $(LLVM_MERGE_SHIMS); do \
 	   echo "addmod $$o" >> $(LLVM_MERGE_DIR)/mri; \
 	 done; \
-	 n=0; \
+	 n=0; missing=; \
 	 for l in $(LLVM_MERGE_LIBS); do \
-	   case "$$l" in -l*) a="$$LIBDIR/lib$${l#-l}.a";; *) continue;; esac; \
-	   if [ -f "$$a" ]; then echo "addlib $$a" >> $(LLVM_MERGE_DIR)/mri; n=$$((n+1)); fi; \
+	   case "$$l" in -l*) nm="lib$${l#-l}.a";; *) continue;; esac; \
+	   a=; \
+	   for d in $$LIBDIRS; do \
+	     if [ -f "$$d/$$nm" ]; then a="$$d/$$nm"; break; fi; \
+	   done; \
+	   if [ -n "$$a" ]; then echo "addlib $$a" >> $(LLVM_MERGE_DIR)/mri; n=$$((n+1)); \
+	   else case "$$nm" in liblld*) missing="$$missing $$nm";; esac; fi; \
 	 done; \
+	 if [ -n "$$missing" ]; then \
+	   echo "error: lld archives not found in [$$LIBDIRS]:$$missing" >&2; \
+	   echo "       lld is a separate package on some hosts (Homebrew's lld formula," >&2; \
+	   echo "       Debian's liblld-<ver>-dev). Install it, or point LLD_EXTRA_LIBDIR" >&2; \
+	   echo "       at the directory holding liblldCommon.a." >&2; \
+	   exit 1; \
+	 fi; \
 	 echo "save"  >> $(LLVM_MERGE_DIR)/mri; \
 	 echo "end"   >> $(LLVM_MERGE_DIR)/mri; \
 	 echo "merging $$n LLVM/lld archives + salam shims -> $(SALAM_LLVM_A)"; \

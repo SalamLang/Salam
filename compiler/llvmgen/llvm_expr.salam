@@ -9,11 +9,34 @@ import cg "../codegen/codegen.salam"
 
 // ===== codegen_llvm_expr.c =====
 
+// ll_nowrap - the 'nsw' on signed add/sub/mul, and only in a release build.
+//
+// A debug build emits none: salam defines signed and unsigned overflow alike
+// as two's-complement wrap (SALAM-TYPES.md 4.1), and 'nsw' tells LLVM signed
+// overflow is poison - which lets `(100 as i8) + (100 as i8)` fold to 200
+// instead of wrapping to -56. tests/en/exec/int_width_wrap.salam pins that.
+//
+// A release build trades the guarantee away, the same bargain it already makes
+// for bounds checks. It buys more than skipping a compare does: without it
+// LLVM cannot prove an `int` loop counter stays in range, so it will not widen
+// the counter to 64 bits, and without a widened counter it cannot strength
+// reduce the element address to a walking pointer or unroll the loop. That is
+// worth ~40% on an index-heavy loop (33_subset_sum_reachability, 22_knapsack).
+//
+// Never on unsigned types - unsigned wrap stays defined in every mode - and
+// never on the bitwise or shift operators, whose overflow is a different
+// question.
+func nowrap_flag(v &: Lv, k: int, isflt: bool, issigned: bool): str:
+    if !v.nowrap || isflt || !issigned:
+        ret ""
+    end
+    if k == tok.TK_PLUS || k == tok.TK_MINUS || k == tok.TK_STAR:
+        ret " nsw"
+    end
+    ret ""
+end
+
 // ll_arith_op
-// No 'nsw'/'nuw': salam defines signed and unsigned overflow alike as
-// two's-complement wrap (SALAM-TYPES.md 4.1), while 'nsw' tells LLVM that
-// signed overflow is poison - which let `(100 as i8) + (100 as i8)` fold to
-// 200 instead of wrapping to -56.
 func arith_op(k: int, isflt: bool, issigned: bool): str:
     if k == tok.TK_PLUS:
         ret isflt ? "fadd" : "add"
@@ -450,7 +473,8 @@ func lv_binary(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
         ret poison(rt)
     end
     r5 := new_tmp(v)
-    emit(v, r5 + " = " + o + " " + ty_of(v, s, a, rt) + " " + lc3 + ", " + rc3)
+    nw := nowrap_flag(v, op, flt2, is_signed_ts(rt))
+    emit(v, r5 + " = " + o + nw + " " + ty_of(v, s, a, rt) + " " + lc3 + ", " + rc3)
     ret make_llv(r5, rt)
 end
 
@@ -515,11 +539,11 @@ func lv_incdec(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     emit(v, oldv + " = load " + ty_of(v, s, a, ts) + ", ptr " + addr.ptr)
     flt := is_float(ts)
     step := flt ? "1.0" : "1"
-    op2 := arith_op(
-        node.op == tok.TK_PLUS_PLUS ? tok.TK_PLUS : tok.TK_MINUS, flt, is_signed_ts(ts)
-    )
+    ik := node.op == tok.TK_PLUS_PLUS ? tok.TK_PLUS : tok.TK_MINUS
+    op2 := arith_op(ik, flt, is_signed_ts(ts))
     newv := new_tmp(v)
-    emit(v, newv + " = " + op2 + " " + ty_of(v, s, a, ts) + " " + oldv + ", " + step)
+    nw2 := nowrap_flag(v, ik, flt, is_signed_ts(ts))
+    emit(v, newv + " = " + op2 + nw2 + " " + ty_of(v, s, a, ts) + " " + oldv + ", " + step)
     emit(v, "store " + ty_of(v, s, a, ts) + " " + newv + ", ptr " + addr.ptr)
     ret make_llv(node.is_prefix ? newv : oldv, ts)
 end

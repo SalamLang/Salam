@@ -100,72 +100,10 @@ jobs:
           key: musl-embed-sysroots-v2-${{ github.run_id }}
           restore-keys: |
             musl-embed-sysroots-v2-
+      # x86_64 is absent on purpose: this job takes it from the distro's
+      # musl-dev via `make stage-sysroots`, not from a downloaded toolchain.
       - name: Fetch cross musl sysroots (aarch64 + i686 + armhf) for embedding
-        run: |
-          # musl.cc is a small volunteer-run host serving ~100MB archives.
-          # It has been observed fully unreachable (connection timeout, not
-          # just slow) from GitHub-hosted runners - likely rate-limiting or
-          # blocking cloud/CI IP ranges - so --connect-timeout stays short
-          # and there is no curl --retry - retrying a dead host just burns
-          # CI minutes. cross-tools/musl-cross publishes the same prebuilt
-          # toolchains as GitHub Releases, which resolve over the same
-          # network GitHub-hosted runners already use, so it is tried first;
-          # musl.cc stays as a fallback mirror. --max-time stays generous in
-          # case a connection DOES succeed but transfers slowly. Either way
-          # this is a best-effort embed: every embed is optional and the
-          # build falls back gracefully when none of it is present.
-          fetch() {
-            out="$1"; shift
-            for url in "$@"; do
-              echo "trying $url"
-              if curl -fL --connect-timeout 5 --max-time 900 \
-                   --speed-limit 512 --speed-time 30 \
-                   -o "$out" "$url"; then
-                return 0
-              fi
-            done
-            return 1
-          }
-          mkdir -p /tmp/muslcc && cd /tmp/muslcc
-          for pair in aarch64:aarch64-linux-musl:aarch64-unknown-linux-musl \
-                      i686:i686-linux-musl:i686-unknown-linux-musl \
-                      arm:arm-linux-musleabihf:arm-unknown-linux-musleabihf; do
-            arch="${pair%%:*}"; rest="${pair#*:}"; triple="${rest%%:*}"; ctriple="${rest#*:}"
-            SR="/tmp/muslcc/sr-${arch}"
-            U=$(echo "$arch" | tr '[:lower:]' '[:upper:]')
-            if [ -f "$SR/libc.a" ] && [ -f "$SR/libgcc.a" ]; then
-              echo "SALAM_EMBED_MUSL_${U}_DIR=$SR" >> "$GITHUB_ENV"
-              echo "reusing cached $arch musl sysroot -> $SR"
-              continue
-            fi
-            chmod -R u+rwX "${arch}-x" 2>/dev/null || true
-            rm -rf "${arch}-x" 2>/dev/null || true
-            mkdir -p "${arch}-x"
-            if fetch "${arch}.tar" \
-                 "https://github.com/cross-tools/musl-cross/releases/latest/download/${ctriple}.tar.xz" \
-                 "https://musl.cc/${triple}-cross.tgz" \
-                 "https://more.musl.cc/11.2.1/x86_64-linux-musl/${triple}-cross.tgz" \
-                 "https://more.musl.cc/11/x86_64-linux-musl/${triple}-cross.tgz" \
-                 && tar xf "${arch}.tar" -C "${arch}-x"; then
-              mkdir -p "$SR"
-              for f in crt1.o crti.o crtn.o libc.a libgcc.a; do
-                found=$(find "${arch}-x" -name "$f" | head -1)
-                [ -n "$found" ] && cp "$found" "$SR/$f"
-              done
-              echo "SALAM_EMBED_MUSL_${U}_DIR=$SR" >> "$GITHUB_ENV"
-              echo "staged $arch musl sysroot -> $SR"; ls "$SR"
-            else
-              echo "::warning::could not fetch $arch ($triple) musl toolchain from any mirror; not embedding $arch."
-            fi
-            # cross-tools/musl-cross archives ship some files/dirs read-only
-            # (crosstool-NG's build output); without the chmod first, rm -rf
-            # fails outright on them (bash -e default in GH Actions steps
-            # then kills the whole job even though this is just scratch
-            # cleanup) instead of just leaving stray files in an ephemeral
-            # /tmp that gets wiped with the runner anyway.
-            chmod -R u+rwX "${arch}-x" 2>/dev/null || true
-            rm -rf "${arch}.tar" "${arch}-x" 2>/dev/null || true
-          done
+        run: sh tools/bash/fetch-musl-sysroots.sh --out /tmp/muslcc --arches "aarch64 i686 arm"
       - name: Cache ccache (Linux)
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -393,8 +331,17 @@ jobs:
             # targets below) so independent targets can build concurrently.
             mb_dir="/tmp/mariadb-build-$target"
             rm -rf "$mb_dir" "$mb_dir.log"; mkdir -p "$mb_dir"
+            # CMAKE_COMPILE_WARNING_AS_ERROR=OFF is load-bearing, not
+            # tidiness: mariadb-connector-c adds -Werror to CMAKE_C_FLAGS
+            # unless that variable is *defined* (CMakeLists.txt:145), and
+            # its ma_context.c falls back to empty stubs with unused
+            # parameters on any target with neither inline asm nor working
+            # ucontext - which is every musl arch outside x86. That turned
+            # -Wunused-parameter into a hard build failure for
+            # arm-linux-musleabihf and cost that target its static mariadb.
             if ( cd "$mb_dir" \
                  && cmake /tmp/mariadb-src -DCMAKE_BUILD_TYPE=Release \
+                      -DCMAKE_COMPILE_WARNING_AS_ERROR=OFF \
                       -DWITH_UNIT_TESTS=OFF -DWITH_CURL=OFF "${ssl_args[@]}" "$@" \
                  && cmake --build . --target mariadbclient -j"$JOBS" ) \
                  >"$mb_dir.log" 2>&1; then
@@ -931,77 +878,10 @@ jobs:
         env:
           MSYSTEM: MINGW64
           CHERE_INVOKING: '1'
-        run: |
-          # cross-tools/musl-cross publishes the same prebuilt toolchains as
-          # GitHub Releases (same network GitHub-hosted runners use), so it
-          # is tried first; musl.cc, which has been observed unreachable
-          # from GitHub-hosted runners, is a fallback mirror only.
-          fetch() {
-            out="$1"; shift
-            for url in "$@"; do
-              echo "trying $url"
-              if curl -fL --connect-timeout 5 --max-time 900 \
-                   --speed-limit 512 --speed-time 30 \
-                   -o "$out" "$url"; then
-                return 0
-              fi
-            done
-            return 1
-          }
-          mkdir -p /c/muslcc && cd /c/muslcc
-          for pair in x86_64:x86_64-linux-musl:x86_64-unknown-linux-musl \
-                      aarch64:aarch64-linux-musl:aarch64-unknown-linux-musl \
-                      i686:i686-linux-musl:i686-unknown-linux-musl \
-                      arm:arm-linux-musleabihf:arm-unknown-linux-musleabihf; do
-            arch="${pair%%:*}"; rest="${pair#*:}"; triple="${rest%%:*}"; ctriple="${rest#*:}"
-            SR="/c/muslcc/sr-${arch}"
-            if [ "$arch" = "x86_64" ]; then VARNAME=SALAM_EMBED_MUSL_DIR
-            else VARNAME="SALAM_EMBED_MUSL_$(echo "$arch" | tr '[:lower:]' '[:upper:]')_DIR"; fi
-            if [ -f "$SR/libc.a" ] && [ -f "$SR/libgcc.a" ] && [ -f "$SR/include/features.h" ]; then
-              echo "${VARNAME}=$SR" >> "$GITHUB_ENV"
-              echo "reusing cached $arch musl sysroot -> $SR"
-              continue
-            fi
-            chmod -R u+rwX "${arch}-x" 2>/dev/null || true
-            rm -rf "${arch}-x" 2>/dev/null || true
-            mkdir -p "${arch}-x"
-            if fetch "${arch}.tar" \
-                 "https://github.com/cross-tools/musl-cross/releases/latest/download/${ctriple}.tar.xz" \
-                 "https://musl.cc/${triple}-cross.tgz" \
-                 "https://more.musl.cc/11.2.1/x86_64-linux-musl/${triple}-cross.tgz" \
-                 "https://more.musl.cc/11/x86_64-linux-musl/${triple}-cross.tgz" \
-                 && tar xf "${arch}.tar" -C "${arch}-x"; then
-              mkdir -p "$SR"
-              for f in crt1.o crti.o crtn.o libc.a libgcc.a; do
-                found=$(find "${arch}-x" -name "$f" | head -1)
-                [ -n "$found" ] && cp "$found" "$SR/$f"
-              done
-              # musl's libc headers (not gcc's own fixed-includes, which sit
-              # in a sibling lib/gcc/.../include dir) - needed so clang can
-              # cross-compile sqlite3/hiredis/openssl/mariadb against this
-              # target further down, via -isystem. features.h is a stable,
-              # always-present marker for the real libc include root.
-              hdr=$(find "${arch}-x" -type f -name features.h ! -path '*/c++/*' | head -1)
-              if [ -n "$hdr" ]; then
-                rm -rf "$SR/include"; mkdir -p "$SR/include"
-                cp -r "$(dirname "$hdr")/." "$SR/include/"
-              else
-                echo "::warning::musl libc headers not found in fetched $arch toolchain; static third-party libs for $triple will be skipped"
-              fi
-              echo "${VARNAME}=$SR" >> "$GITHUB_ENV"
-              echo "staged $arch musl sysroot -> $SR"; ls "$SR"
-            else
-              echo "::warning::could not fetch $arch ($triple) musl toolchain from any mirror; not embedding $arch."
-            fi
-            # cross-tools/musl-cross archives ship some files/dirs read-only
-            # (crosstool-NG's build output); without the chmod first, rm -rf
-            # fails outright on them (bash -e default in GH Actions steps
-            # then kills the whole job even though this is just scratch
-            # cleanup) instead of just leaving stray files in an ephemeral
-            # /tmp that gets wiped with the runner anyway.
-            chmod -R u+rwX "${arch}-x" 2>/dev/null || true
-            rm -rf "${arch}.tar" "${arch}-x" 2>/dev/null || true
-          done
+        # --headers, unlike the Linux jobs: this one has no cross toolchain
+        # of its own to build the static third-party libs with, so it
+        # cross-compiles them with clang against exactly these sysroots.
+        run: sh tools/bash/fetch-musl-sysroots.sh --out /c/muslcc --headers
 
       - name: Cache static third-party libs (sqlite3 + hiredis + openssl + mariadb, per --target=)
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -1201,8 +1081,11 @@ jobs:
             mb_dir="/tmp/mariadb-build-$target"
             rm -rf "$mb_dir" "$mb_dir.log"; mkdir -p "$mb_dir"
             # shellcheck disable=SC2086
+            # -DCMAKE_COMPILE_WARNING_AS_ERROR=OFF: see the Linux job's copy
+            # of build_mariadb for why this is load-bearing on musl targets.
             if ( cd "$mb_dir" \
                  && cmake /tmp/mariadb-src -G "MSYS Makefiles" -DCMAKE_BUILD_TYPE=Release \
+                      -DCMAKE_COMPILE_WARNING_AS_ERROR=OFF \
                       -DWITH_UNIT_TESTS=OFF -DWITH_CURL=OFF $ssl_args $extra_args \
                  && cmake --build . --target mariadbclient -j"$(nproc)" ) \
                  >"$mb_dir.log" 2>&1; then
@@ -2219,65 +2102,7 @@ jobs:
           restore-keys: |
             musl-embed-sysroots-arm64-v1-
       - name: Fetch cross musl sysroots (x86_64 + aarch64 + i686 + armhf) for embedding
-        run: |
-          # cross-tools/musl-cross publishes the same prebuilt toolchains as
-          # GitHub Releases (same network GitHub-hosted runners use), so it
-          # is tried first; musl.cc, which has been observed unreachable
-          # from GitHub-hosted runners, is a fallback mirror only.
-          fetch() {
-            out="$1"; shift
-            for url in "$@"; do
-              echo "trying $url"
-              if curl -fL --connect-timeout 5 --max-time 900 \
-                   --speed-limit 512 --speed-time 30 \
-                   -o "$out" "$url"; then
-                return 0
-              fi
-            done
-            return 1
-          }
-          mkdir -p /tmp/muslcc && cd /tmp/muslcc
-          for pair in x86_64:x86_64-linux-musl:x86_64-unknown-linux-musl \
-                      aarch64:aarch64-linux-musl:aarch64-unknown-linux-musl \
-                      i686:i686-linux-musl:i686-unknown-linux-musl \
-                      arm:arm-linux-musleabihf:arm-unknown-linux-musleabihf; do
-            arch="${pair%%:*}"; rest="${pair#*:}"; triple="${rest%%:*}"; ctriple="${rest#*:}"
-            SR="/tmp/muslcc/sr-${arch}"
-            if [ "$arch" = "x86_64" ]; then VARNAME=SALAM_EMBED_MUSL_DIR
-            else VARNAME="SALAM_EMBED_MUSL_$(echo "$arch" | tr '[:lower:]' '[:upper:]')_DIR"; fi
-            if [ -f "$SR/libc.a" ] && [ -f "$SR/libgcc.a" ]; then
-              echo "${VARNAME}=$SR" >> "$GITHUB_ENV"
-              echo "reusing cached $arch musl sysroot -> $SR"
-              continue
-            fi
-            chmod -R u+rwX "${arch}-x" 2>/dev/null || true
-            rm -rf "${arch}-x" 2>/dev/null || true
-            mkdir -p "${arch}-x"
-            if fetch "${arch}.tar" \
-                 "https://github.com/cross-tools/musl-cross/releases/latest/download/${ctriple}.tar.xz" \
-                 "https://musl.cc/${triple}-cross.tgz" \
-                 "https://more.musl.cc/11.2.1/x86_64-linux-musl/${triple}-cross.tgz" \
-                 "https://more.musl.cc/11/x86_64-linux-musl/${triple}-cross.tgz" \
-                 && tar xf "${arch}.tar" -C "${arch}-x"; then
-              mkdir -p "$SR"
-              for f in crt1.o crti.o crtn.o libc.a libgcc.a; do
-                found=$(find "${arch}-x" -name "$f" | head -1)
-                [ -n "$found" ] && cp "$found" "$SR/$f"
-              done
-              echo "${VARNAME}=$SR" >> "$GITHUB_ENV"
-              echo "staged $arch musl sysroot -> $SR"; ls "$SR"
-            else
-              echo "::warning::could not fetch $arch ($triple) musl toolchain from any mirror; not embedding $arch."
-            fi
-            # cross-tools/musl-cross archives ship some files/dirs read-only
-            # (crosstool-NG's build output); without the chmod first, rm -rf
-            # fails outright on them (bash -e default in GH Actions steps
-            # then kills the whole job even though this is just scratch
-            # cleanup) instead of just leaving stray files in an ephemeral
-            # /tmp that gets wiped with the runner anyway.
-            chmod -R u+rwX "${arch}-x" 2>/dev/null || true
-            rm -rf "${arch}.tar" "${arch}-x" 2>/dev/null || true
-          done
+        run: sh tools/bash/fetch-musl-sysroots.sh --out /tmp/muslcc
       - name: Stage mingw-w64 x86_64 target files (for cross-to-Windows embed)
         run: |
           G=""

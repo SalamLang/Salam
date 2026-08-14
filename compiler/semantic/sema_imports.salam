@@ -6,50 +6,11 @@ import tok "../token.salam"
 import at "../ast.salam"
 import i18 "../i18n.salam"
 import src "../source.salam"
+import pth "../sal_path.salam"
 
 // ===========================================================================
 // ===== sema.c (import path resolution) =====
 // ===========================================================================
-
-// path_normalize - strips leading "./" pairs, collapses "/./" and lexically
-// collapses "seg/../". The ".." collapse keeps import dedup keys canonical:
-// the same file imported as "token.salam" from the root and as
-// "../token.salam" from a sibling directory must resolve to ONE module, or
-// its globals get linked twice ('defined twice' at link time).
-func path_normalize(p: str): str:
-    mut q := p
-    until str.Len(q) >= 2 && byte_at(q, 0) == 46 && byte_at(q, 1) == 47:
-        q = str.Substr(q, 2, str.Len(q) - 2)
-    end
-    mut idx := str.IndexOf(q, "/./")
-    until idx >= 0:
-        q = str.Substr(q, 0, idx + 1) + str.Substr(q, idx + 3, str.Len(q) - idx - 3)
-        idx = str.IndexOf(q, "/./")
-    end
-    mut dd := str.IndexOf(q, "/../")
-    until dd >= 0:
-        // start of the path segment right before this "/../"
-        mut segstart := 0
-        mut k := dd - 1
-        until k >= 0:
-            if byte_at(q, k) == 47:
-                segstart = k + 1
-                break
-            end
-            k -= 1
-        end
-        seg := str.Substr(q, segstart, dd - segstart)
-        // never collapse a ".." segment, an empty segment ("//../", a
-        // rooted "/../") or a drive prefix like "c:" - skip past those
-        if str.Len(seg) == 0 || str.Equals(seg, "..") || str.Contains(seg, ":"):
-            dd = str.IndexFrom(q, "/../", dd + 1)
-            continue
-        end
-        q = str.Substr(q, 0, segstart) + str.Substr(q, dd + 4, str.Len(q) - dd - 4)
-        dd = str.IndexOf(q, "/../")
-    end
-    ret q
-end
 
 // norm_ident - ZWNJ (E2 80 8C) -> space, Arabic yeh (D9 8A) -> Farsi yeh
 // (DB 8C), Arabic kaf (D9 83) -> Farsi kaf (DA A9).
@@ -174,12 +135,13 @@ func scan_std_dir(base: str, depth: int):
     defer entries.free()
     repeat entries.len() with i:
         e := entries.get(i)[0]
-        pf := base + "/" + e + "/" + e + ".salam"
+        sub := pth.PathJoin(base, e)
+        pf := pth.PathJoin(sub, e + ".salam")
         if file_exists(pf):
             index_pkg_file(pf, e)
         end
         if depth > 0:
-            scan_std_dir(base + "/" + e, depth - 1)
+            scan_std_dir(sub, depth - 1)
         end
     end
 end
@@ -189,10 +151,7 @@ func build_seg_index(root: str):
     g_sm_seg_alias.clear()
     g_sm_seg_canon.clear()
     g_sm_seg_n = 0
-    mut base := "std"
-    if str.Len(root) > 0:
-        base = root + "/std"
-    end
+    base := pth.PathJoin(root, "std")
     scan_std_dir(base, 2)
     g_sm_seg_root = root
 end
@@ -283,16 +242,18 @@ func resolve_ident_direct(root: str, dotted: str): str:
     ret ""
 end
 
+// An import spec is written by hand, so it arrives in whichever spelling the
+// author typed - on Windows `import "sub\\util.salam"` is what copying the
+// path out of Explorer gives. PathNormalize folds '\' to '/' before the
+// "seg/../" collapse runs, so both spellings of one file produce one dedup
+// key and the module is loaded once.
 func resolve_user_string(dir: str, spec: str): str:
     has_ext := str.Contains(spec, ".salam")
-    mut p := spec
-    if str.Len(dir) > 0:
-        p = dir + "/" + spec
-    end
+    mut p := pth.PathJoin(dir, spec)
     if !has_ext:
         p = p + ".salam"
     end
-    ret path_normalize(p)
+    ret pth.PathNormalize(p)
 end
 
 // salam_resolve_import - always returns a path (possibly nonexistent).
@@ -300,21 +261,14 @@ func resolve_import(dir: str, spec: str): str:
     root := get_stdlib_root()
     has_ext := str.Contains(spec, ".salam")
     if has_ext:
-        mut p := spec
-        if str.Len(dir) > 0:
-            p = dir + "/" + spec
-        end
-        ret path_normalize(p)
+        ret pth.PathNormalize(pth.PathJoin(dir, spec))
     end
-    mut last := spec
-    sl := str.LastIndex(spec, "/")
-    if sl >= 0:
-        last = str.Substr(spec, sl + 1, str.Len(spec) - sl - 1)
-    end
+    last := pth.PathBase(spec)
     mut p2 := "std/" + spec + "/" + last + ".salam"
     if str.Len(root) > 0:
         p2 = root + "/std/" + spec + "/" + last + ".salam"
     end
+    p2 = pth.PathNormalize(p2)
     if !file_exists(p2):
         loc := resolve_ident_import(root, spec, i18.Lang())
         if str.Len(loc) > 0:
@@ -368,27 +322,12 @@ func import_local_name(a &: at.Ast, imp: int, spec: str): str:
     if str.Len(n.name) > 0:
         ret n.name
     end
-    seg := base_of(spec)
+    seg := pth.PathBase(spec)
     dot2 := str.IndexOf(seg, ".salam")
     if dot2 >= 0:
         ret str.Substr(seg, 0, dot2)
     end
     ret seg
-end
-
-// base_of - the path component after the last '/' or '\\'.
-func base_of(path: str): str:
-    mut cut := 0 - 1
-    repeat str.Len(path) with i:
-        b := byte_at(path, i)
-        if b == 47 || b == 92:
-            cut = i
-        end
-    end
-    if cut < 0:
-        ret path
-    end
-    ret str.Substr(path, cut + 1, str.Len(path) - cut - 1)
 end
 
 // salam_package_files - the directory auto-merge list: when the file's stem
@@ -398,12 +337,12 @@ func package_files(main_path: str): Vector<str>:
     mut out := Vector {} as Vector<str>
     out.push(main_path)
     dir := dir_of(main_path)
-    mainbase := base_of(main_path)
+    mainbase := pth.PathBase(main_path)
     dot := str.LastIndex(mainbase, ".")
     stemlen := dot >= 0 ? dot : str.Len(mainbase)
     mut dirseg := ""
     if str.Len(dir) > 0:
-        dirseg = base_of(dir)
+        dirseg = pth.PathBase(dir)
     end
     if str.Len(dirseg) != stemlen || !str.Equals(dirseg, str.Substr(mainbase, 0, stemlen)):
         ret out
@@ -427,7 +366,7 @@ func package_files(main_path: str): Vector<str>:
         if out.len() >= K_SM_PKG_FILES_MAX:
             continue
         end
-        out.push(dbuf + "/" + nm)
+        out.push(pth.PathJoin(dbuf, nm))
     end
     mut i2 := 2
     until i2 < out.len():

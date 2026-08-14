@@ -1,0 +1,134 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Scrapes every currency row from https://alanchand.com/en - the buy price,
+// the sell price and, where the site publishes one, the USD rate - prints
+// them as a table and writes alanchand-currency.json next to the run. Gold
+// and crypto live on their own pages and have their own scrapers next to
+// this one (alanchand_gold.salam, alanchand_crypto.salam).
+//
+// Run it with:  salam run alanchand_currency.salam
+//
+// A row on that page looks like this, and the four class names are the only
+// thing this parser depends on:
+//
+//   <tr onclick="...">
+//     <td class="currName"><span class="flag-container">..</span> US Dollar</td>
+//     <td class="buyPrice text-center">1,852,000</td>
+//     <td class="sellPrice text-center">1,870,500<span class="priceSymbol down"></span></td>
+//     <td class="usdRate text-center">-<span class="priceSymbol no_change"></span></td>
+//   </tr>
+
+package main
+
+import ac "_alanchand.salam"
+import acjson "_alanchand_json.salam"
+import str
+import fmt
+
+const NAME_W := 26
+const PRICE_W := 14
+const RATE_W := 10
+const OUT_FILE := "alanchand-currency.json"
+
+struct Rate:
+    pub name: str = ""
+    pub buy: str = ""
+    pub sell: str = ""
+    pub usd: str = ""
+end
+
+// Walks the page one currName cell at a time; the three price cells always
+// follow their name cell, so the name's end offset anchors the whole row.
+func collect(html: str): Vector<Rate>:
+    mut rates := Vector {} as Vector<Rate>
+    mut pos := 0
+    until true:
+        mut next := 0
+        name := ac.Text(html, `class="currName"`, pos, "</td>", next)
+        if next < 0:
+            break
+        end
+        if name.len() > 0:
+            mut r := Rate {}
+            r.name = name
+            r.buy = ac.CellText(html, `class="buyPrice`, next)
+            r.sell = ac.CellText(html, `class="sellPrice`, next)
+            r.usd = ac.CellText(html, `class="usdRate`, next)
+            rates.push(r)
+        end
+        pos = next
+    end
+    ret rates
+end
+
+// -------------------------------------------------------------- output ----
+
+func show_row(name: str, buy: str, sell: str, usd: str):
+    mut line := fmt.PadRight(name, NAME_W)
+    line = line + " " + fmt.PadLeft(buy, PRICE_W)
+    line = line + " " + fmt.PadLeft(sell, PRICE_W)
+    line = line + " " + fmt.PadLeft(usd, RATE_W)
+    println line
+end
+
+func show_table(rates: Vector<Rate>):
+    show_row("Currency", "Buy (IRR)", "Sell (IRR)", "USD rate")
+    println str.Repeat("-", NAME_W + PRICE_W + PRICE_W + RATE_W + 3)
+    each r in rates:
+        show_row(r.name, r.buy, r.sell, r.usd)
+    end
+end
+
+// { "name": "Euro", "buy": 2136000, "sell": 2158000, "usd_rate": 0.867 }
+func encode(r: Rate): str:
+    mut members := Vector {} as Vector<str>
+    defer members.free()
+    members.push(acjson.TextMember("name", r.name))
+    members.push(acjson.NumberMember("buy", r.buy))
+    members.push(acjson.NumberMember("sell", r.sell))
+    members.push(acjson.NumberMember("usd_rate", r.usd))
+    ret acjson.Object(members)
+end
+
+func save(rates: Vector<Rate>, last_update: str):
+    mut items := Vector {} as Vector<str>
+    defer items.free()
+    each r in rates:
+        items.push(encode(r))
+    end
+    _ok := acjson.Write(OUT_FILE, acjson.Document(ac.CURRENCY_URL, last_update, "currencies", items))
+end
+
+func main:
+    mut session := ac.NewSession()
+    println "Fetching " + ac.CURRENCY_URL
+    html := ac.Fetch(session, ac.CURRENCY_URL)
+    if html.len() == 0:
+        println "no currency data"
+        ret 1
+    end
+    _saved := ac.SaveCookies(session)
+
+    println ""
+    ac.Banner("Alanchand - live currency prices (Iranian Rial)", ac.CURRENCY_URL, html)
+
+    rates := collect(html)
+    defer rates.free()
+    show_table(rates)
+    println ""
+    println str.FromInt(rates.len() as i64) + " currencies"
+    save(rates, ac.LastUpdate(html))
+    ret 0
+end

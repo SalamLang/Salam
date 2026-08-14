@@ -13,6 +13,7 @@
  */
 
 #include "core/prelude.h"
+#include "core/sal_path.h"
 #include "core/sal_format.h"
 #include "layout/schema.h"
 #include "layout/registry.h"
@@ -285,14 +286,14 @@ static int list_schema_files(arena_t *a, const char *dir, const char **out, int 
     int n = 0;
 #if defined(_WIN32)
     char pat[512];
-    sal_snprintf(pat, sizeof pat, "%s/*.salam", dir);
+    sal_path_join(pat, sizeof pat, dir, "*.salam");
     struct _finddata_t fd;
     intptr_t h = _findfirst(pat, &fd);
     if (h == -1) return 0;
     do {
         if (!(fd.attrib & _A_SUBDIR) && n < max) {
             char p[512];
-            sal_snprintf(p, sizeof p, "%s/%s", dir, fd.name);
+            sal_path_join(p, sizeof p, dir, fd.name);
             out[n++] = arena_strdup(a, p);
         }
     } while (_findnext(h, &fd) == 0);
@@ -305,7 +306,7 @@ static int list_schema_files(arena_t *a, const char *dir, const char **out, int 
         size_t L = strlen(e->d_name);
         if (L > 6 && strcmp(e->d_name + L - 6, ".salam") == 0) {
             char p[512];
-            sal_snprintf(p, sizeof p, "%s/%s", dir, e->d_name);
+            sal_path_join(p, sizeof p, dir, e->d_name);
             out[n++] = arena_strdup(a, p);
         }
     }

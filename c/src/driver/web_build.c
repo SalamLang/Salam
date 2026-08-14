@@ -14,6 +14,7 @@
 
 #include "core/prelude.h"
 #include "core/sal_format.h"
+#include "core/sal_path.h"
 #include "driver/web_build.h"
 #include "driver/js_build.h"
 #include "driver/driver.h"
@@ -37,47 +38,13 @@ typedef struct {
     int n;
 } script_list_t;
 
-static const char *module_of(arena_t *a, const char *path)
-{
-    const char *base = path, *p;
-    if ((p = strrchr(path, '/'))) base = p + 1;
-    if ((p = strrchr(base, '\\'))) base = p + 1;
-    {
-        const char *dot = strrchr(base, '.');
-        size_t len = dot ? (size_t)(dot - base) : strlen(base);
-        return arena_strndup(a, base, len);
-    }
-}
-
-static const char *dir_of(arena_t *a, const char *path)
-{
-    const char *slash = NULL;
-    {
-        const char *p = path;
-        for (; *p; p++)
-            if (*p == '/' || *p == '\\') slash = p;
-    }
-    if (!slash) return "";
-    return arena_strndup(a, path, (size_t)(slash - path));
-}
-
-static const char *base_name(const char *p)
-{
-    const char *s = strrchr(p, '/');
-    const char *b = strrchr(p, '\\');
-    const char *cut = s;
-    if (b && (!cut || b > cut)) cut = b;
-    return cut ? cut + 1 : p;
-}
-
+/* Whole path minus its last extension - unlike sal_path_stem, which also
+   drops the directory part. */
 static const char *strip_ext(arena_t *a, const char *p)
 {
-    const char *dot = strrchr(p, '.');
-    const char *s = strrchr(p, '/');
-    const char *b = strrchr(p, '\\');
-    const char *cut = s;
-    if (b && (!cut || b > cut)) cut = b;
-    if (dot && (!cut || dot > cut)) return arena_strndup(a, p, (size_t)(dot - p));
+    const char *base = sal_path_base(p);
+    const char *dot = strrchr(base, '.');
+    if (dot) return arena_strndup(a, p, (size_t)(dot - p));
     return p;
 }
 
@@ -86,17 +53,6 @@ static const char *path_ext(arena_t *a, const char *stem, const char *ext)
     size_t n = strlen(stem) + strlen(ext) + 2;
     char *p = (char *)arena_alloc(a, n);
     sal_snprintf(p, n, "%s.%s", stem, ext);
-    return p;
-}
-
-static const char *join_path(arena_t *a, const char *dir, const char *rel)
-{
-    size_t n;
-    char *p;
-    if (!dir || !dir[0]) return rel;
-    n = strlen(dir) + strlen(rel) + 2;
-    p = (char *)arena_alloc(a, n);
-    sal_snprintf(p, n, "%s/%s", dir, rel);
     return p;
 }
 
@@ -219,7 +175,7 @@ int driver_web(options_t *opt)
         ast_node_t *program = NULL;
         ast_node_t *lb = NULL;
         cc_table_t *cc = cc_table_build(arena, NULL, opt->defines, opt->ndefines);
-        const char *base_dir = dir_of(arena, src->path);
+        const char *base_dir = sal_path_dir(arena, src->path);
         logger_set_diag_source(log, src->text, src->len, opt->diag_style,
                                opt->diag_format);
         lexer_run(arena, log, modpack, src, &toks);
@@ -264,7 +220,8 @@ int driver_web(options_t *opt)
                 {
                     int i = 0;
                     for (; i < scripts.n && rc == 0; i++) {
-                        const char *sp = join_path(arena, base_dir, scripts.paths[i]);
+                        const char *sp =
+                            sal_path_joina(arena, base_dir, scripts.paths[i]);
                         const char *entry1[1];
                         const char *bundle;
                         int brc = 0;
@@ -304,9 +261,9 @@ int driver_web(options_t *opt)
                         const char *css_path = path_ext(arena, stem, "css");
                         const char *js_path = path_ext(arena, stem, "js");
                         const char *css_href =
-                            (r->css && r->css[0]) ? base_name(css_path) : NULL;
+                            (r->css && r->css[0]) ? sal_path_base(css_path) : NULL;
                         const char *js_href =
-                            (r->js && r->js[0]) ? base_name(js_path) : NULL;
+                            (r->js && r->js[0]) ? sal_path_base(js_path) : NULL;
                         if (!write_file(log, html_path,
                                         layout_document(arena, r, false, css_href,
                                                         js_href, minify_ws)))

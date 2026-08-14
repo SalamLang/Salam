@@ -44,6 +44,9 @@ typedef struct {
     bool debug_info;
     bool verify_module;
     bool native_cpu;
+    /* Release build (SALAM_SAFE off). Besides dropping the library's bounds
+     * checks it lets signed arithmetic be emitted `nsw` - see ll_nowrap. */
+    bool release;
     llvm_output_mode_t output_mode;
     const char *output_file;
     const char *target_triple;

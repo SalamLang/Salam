@@ -13,6 +13,7 @@
  */
 
 #include "codegen/codegen_internal.h"
+#include "core/sal_path.h"
 #include "core/sal_format.h"
 #include "semantic/sema.h"
 
@@ -454,7 +455,17 @@ static void hdr_prelude(cg_t *cg, ast_node_t *program, sb_t *h)
                "typedef struct { void* data; int64_t len; } salam_slice;\n"
                "extern int64_t salam_idx(int64_t, int64_t);\n"
                "extern SALAM_NORET void salam_panic(const char* msg);\n"
+               /*
+                * The four allocator entry points are declared here, ahead of
+                * every #include, because a generic method is instantiated into
+                * the header of whichever module happens to use it: Vector<str>
+                * lands in salam_mod_str.h, which core.h reaches long before
+                * mem.h gets to declare its own functions. Whatever those
+                * instantiated bodies call therefore has to be visible from the
+                * very top of any module header, not from mem's.
+                */
                "void* " SALAM_MEM_ALLOC "(uint64_t size);\n"
+               "void* " SALAM_MEM_ALLOC_ZEROED "(uint64_t size);\n"
                "void* " SALAM_MEM_REALLOC "(void* ptr, uint64_t size);\n"
                "void " SALAM_MEM_FREE "(void* ptr);\n"
                "static inline void salam_slice_new(salam_slice* out, void* b, int64_t "
@@ -556,10 +567,7 @@ static void hdr_prelude(cg_t *cg, ast_node_t *program, sb_t *h)
                 if (!p) continue;
                 const char *resolved =
                     d->type_str ? d->type_str : salam_resolve_import(cg->a, "", p);
-                const char *slash = strrchr(resolved, '/');
-                const char *bs = strrchr(resolved, '\\');
-                const char *stem = slash ? slash + 1 : resolved;
-                if (bs && (!slash || bs > slash)) stem = bs + 1;
+                const char *stem = sal_path_base(resolved);
                 char base[128];
                 size_t k = 0;
                 {
@@ -971,9 +979,8 @@ static bool is_stdio_name(const char *name)
  * the differences only ever *add* a qualifier or widen a parameter.
  *
  * Only functions whose declaration is warned about are listed. The rest of
- * the CRT surface std/ declares (memset, strlen, malloc, ...) already matches
- * and is emitted from its salam signature as before. Returns NULL for
- * anything not in the table.
+ * the CRT surface std/ declares is emitted from its salam signature as
+ * before. Returns NULL for anything not in the table.
  */
 static const char *libc_canonical_proto(const char *name)
 {

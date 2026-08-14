@@ -886,7 +886,7 @@ void sema_check_block(sema_t *s, ast_node_t *block)
         }
     }
 
-    {
+    if (!s->relax_unused) {
         size_t i = 0;
         for (; i < sc->symbols.len; i++) {
             symbol_t *v = (symbol_t *)sc->symbols.data[i];

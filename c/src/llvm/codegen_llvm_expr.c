@@ -19,11 +19,30 @@
 #include "i18n/i18n.h"
 
 /*
- * No 'nsw'/'nuw': salam defines signed and unsigned overflow alike as
- * two's-complement wrap (SALAM-TYPES.md 4.1), while 'nsw' tells LLVM that
- * signed overflow is poison - which let `(100 as i8) + (100 as i8)` fold to
- * 200 instead of wrapping to -56.
+ * The 'nsw' on signed add/sub/mul, and only in a release build.
+ *
+ * A debug build emits none: salam defines signed and unsigned overflow alike
+ * as two's-complement wrap (SALAM-TYPES.md 4.1), and 'nsw' tells LLVM signed
+ * overflow is poison - which lets `(100 as i8) + (100 as i8)` fold to 200
+ * instead of wrapping to -56. tests/en/exec/int_width_wrap.salam pins that.
+ *
+ * A release build trades the guarantee away, the same bargain it already makes
+ * for bounds checks. It buys more than skipping a compare does: without it
+ * LLVM cannot prove an `int` loop counter stays in range, so it will not widen
+ * the counter to 64 bits, and without a widened counter it cannot strength
+ * reduce the element address to a walking pointer or unroll the loop. That is
+ * worth ~40% on an index-heavy loop (33_subset_sum_reachability, 22_knapsack).
+ *
+ * Never on unsigned types - unsigned wrap stays defined in every mode - and
+ * never on the bitwise or shift operators, whose overflow is a different
+ * question.
  */
+static bool ll_nowrap(ll_t *ll, token_kind_t k, bool isflt, bool issigned)
+{
+    if (!ll->nowrap || isflt || !issigned) return false;
+    return k == TK_PLUS || k == TK_MINUS || k == TK_STAR;
+}
+
 static const char *ll_arith_op(token_kind_t k, bool isflt, bool issigned)
 {
     switch (k) {
@@ -383,7 +402,9 @@ llv_t ll_binary(ll_t *ll, ast_node_t *n)
         return ll_poison(rt);
     }
     const char *r = ll_new_tmp(ll);
-    ll_emit(ll, "%s = %s %s %s, %s", r, o, ll_ty(ll, rt), lc, rc);
+    ll_emit(ll, "%s = %s%s %s %s, %s", r, o,
+            ll_nowrap(ll, op, flt, ll_is_signed(rt)) ? " nsw" : "", ll_ty(ll, rt), lc,
+            rc);
     return (llv_t){r, rt};
 }
 
@@ -441,10 +462,12 @@ static llv_t ll_incdec(ll_t *ll, ast_node_t *n)
     ll_emit(ll, "%s = load %s, ptr %s", oldv, ll_ty(ll, ts), a.ptr);
     bool flt = ll_is_float(ts);
     const char *step = flt ? "1.0" : "1";
-    const char *op =
-        ll_arith_op(n->op == TK_PLUS_PLUS ? TK_PLUS : TK_MINUS, flt, ll_is_signed(ts));
+    token_kind_t ik = n->op == TK_PLUS_PLUS ? TK_PLUS : TK_MINUS;
+    const char *op = ll_arith_op(ik, flt, ll_is_signed(ts));
     const char *newv = ll_new_tmp(ll);
-    ll_emit(ll, "%s = %s %s %s, %s", newv, op, ll_ty(ll, ts), oldv, step);
+    ll_emit(ll, "%s = %s%s %s %s, %s", newv, op,
+            ll_nowrap(ll, ik, flt, ll_is_signed(ts)) ? " nsw" : "", ll_ty(ll, ts), oldv,
+            step);
     ll_emit(ll, "store %s %s, ptr %s", ll_ty(ll, ts), newv, a.ptr);
     return (llv_t){n->is_prefix ? newv : oldv, ts};
 }
@@ -1959,6 +1982,127 @@ static llv_t ll_match_expr(ll_t *ll, ast_node_t *n)
     return out;
 }
 
+/*
+ * Peephole for `(p as u64 + off) as T*` - the way every stdlib container
+ * spells "address of element". Emitted literally that is ptrtoint / add /
+ * inttoptr, and the round trip through an integer severs pointer provenance:
+ * alias analysis has to assume the result may point anywhere, so a load
+ * through it is never proven independent of a nearby store. LICM then leaves
+ * loop-invariant element loads inside the loop, SCEV cannot describe the
+ * address as an affine recurrence, and the loop vectorizer bails.
+ *
+ * `getelementptr i8, ptr p, i64 off` computes the same address and keeps the
+ * base pointer visible. Deliberately not `inbounds`: this fires on arbitrary
+ * user arithmetic, and plain byte GEP has exactly the wraparound semantics
+ * the integer form had.
+ *
+ * The shape test is pure AST inspection, so `false` costs nothing; once it
+ * commits it emits the whole cast, including the non-pointer base case that
+ * only the emitted operand's type can rule out.
+ */
+/* `sizeof(T)`, through any number of casts, yields T's spelling; else NULL. */
+static const char *ll_sizeof_arg_ts(ast_node_t *n)
+{
+    while (n && n->kind == AST_CAST)
+        n = n->a;
+    if (!n || n->kind != AST_CALL || n->list.len != 1) return NULL;
+    ast_node_t *callee = n->a;
+    if (!callee || callee->kind != AST_IDENTIFIER || !callee->name) return NULL;
+    if (strcmp(callee->name, "sizeof") != 0) return NULL;
+    return ((ast_node_t *)n->list.data[0])->type_str;
+}
+
+/*
+ * `idx * sizeof(T)` (either order) where T is `want` - the element-offset half
+ * of the idiom above. Returns the index operand, so the caller can emit a GEP
+ * over T instead of over i8. Worth separating: a byte GEP makes LLVM carry a
+ * second induction variable for the byte offset and re-derive the scale, where
+ * a typed GEP folds straight into x86's scaled addressing.
+ */
+static ast_node_t *ll_elem_index(ast_node_t *n, const char *want)
+{
+    if (!n || n->kind != AST_BINARY || n->op != TK_STAR || !want) return NULL;
+    const char *lt = ll_sizeof_arg_ts(n->a), *rt = ll_sizeof_arg_ts(n->b);
+    if (rt && !strcmp(rt, want)) return n->a;
+    if (lt && !strcmp(lt, want)) return n->b;
+    return NULL;
+}
+
+static bool ll_gep_from_int_add(ll_t *ll, ast_node_t *n, const char *to, const char **out)
+{
+    ast_node_t *bin = n->a;
+    if (!ll_is_ptr_ts(to) || ll_is_str(to)) return false;
+    if (!bin || bin->kind != AST_BINARY) return false;
+    if (bin->op != TK_PLUS && bin->op != TK_MINUS) return false;
+
+    /* The base has to be a `<something> as <pointer-width int>` cast. Only the
+     * left operand: `off - p` is not an address, and for `+` the stdlib always
+     * writes the pointer first. */
+    ast_node_t *base = bin->a;
+    if (!base || base->kind != AST_CAST || !base->a) return false;
+    const char *ity =
+        base->type && base->type->type_str ? base->type->type_str : base->type_str;
+    if (!ll_is_int(ity) || ll_int_bits(ll, ity) != ll->ptr_bits) return false;
+
+    /* `to` is `T*`; its pointee is what a typed GEP would step over. */
+    char pointee[128];
+    size_t to_len = strlen(to);
+    if (to_len && to_len < sizeof pointee) {
+        memcpy(pointee, to, to_len - 1);
+        pointee[to_len - 1] = '\0';
+    } else {
+        pointee[0] = '\0';
+    }
+    ast_node_t *idx = pointee[0] ? ll_elem_index(bin->b, pointee) : NULL;
+
+    llv_t p = ll_expr(ll, base->a);
+    bool ptr_base = ll_is_ptr_ts(p.ts) || ll_is_str(p.ts);
+    /* Evaluate the offset operand exactly once: the index alone when a typed
+     * GEP is on the table, the whole `idx * sizeof(T)` otherwise. */
+    llv_t off = ll_expr(ll, (ptr_base && idx) ? idx : bin->b);
+    /* A float offset would have been added in float and only then truncated to
+     * a pointer, so it is not this idiom - take the faithful arithmetic path,
+     * scaling the index back up to the byte offset the source asked for. */
+    bool flt_off = ll_is_float(off.ts);
+    if (idx && ptr_base && flt_off) {
+        const char *szp = ll_new_tmp(ll), *sz = ll_new_tmp(ll);
+        ll_emit(ll, "%s = getelementptr %s, ptr null, i32 1", szp, ll_ty(ll, pointee));
+        ll_emit(ll, "%s = ptrtoint ptr %s to %s", sz, szp, ll->usize);
+        const char *mul = ll_new_tmp(ll);
+        ll_emit(ll, "%s = mul %s %s, %s", mul, ll_ty(ll, ll->usize),
+                ll_conv(ll, off, ll->usize), sz);
+        off = (llv_t){mul, ll->usize};
+        flt_off = false;
+        idx = NULL;
+    }
+    const char *r = ll_new_tmp(ll);
+    if (ptr_base && !flt_off) {
+        const char *u = ll_ty(ll, ll->usize);
+        const char *o = ll_conv(ll, off, ll->usize);
+        if (bin->op == TK_MINUS) {
+            const char *neg = ll_new_tmp(ll);
+            ll_emit(ll, "%s = sub %s 0, %s", neg, u, o);
+            o = neg;
+        }
+        ll_emit(ll, "%s = getelementptr %s, ptr %s, %s %s", r,
+                idx ? ll_ty(ll, pointee) : "i8", p.ref, u, o);
+    } else {
+        const char *cty =
+            ll_is_float(off.ts) ? ll_common(ll, ll->usize, off.ts) : ll->usize;
+        bool flt = ll_is_float(cty);
+        const char *b = ll_conv(ll, p, cty);
+        const char *o = ll_conv(ll, off, cty);
+        const char *sum = ll_new_tmp(ll);
+        ll_emit(ll, "%s = %s %s %s, %s", sum,
+                bin->op == TK_MINUS ? (flt ? "fsub" : "sub") : (flt ? "fadd" : "add"),
+                ll_ty(ll, cty), b, o);
+        const char *ip = flt ? ll_conv(ll, (llv_t){sum, cty}, ll->usize) : sum;
+        ll_emit(ll, "%s = inttoptr %s %s to ptr", r, ll_ty(ll, ll->usize), ip);
+    }
+    *out = r;
+    return true;
+}
+
 llv_t ll_expr(ll_t *ll, ast_node_t *n)
 {
     if (!n) return (llv_t){"0", "i32"};
@@ -2048,11 +2192,13 @@ llv_t ll_expr(ll_t *ll, ast_node_t *n)
     case AST_INCDEC:
         return ll_incdec(ll, n);
     case AST_CAST: {
-        llv_t v = ll_expr(ll, n->a);
         const char *to = n->type && n->type->type_str
                              ? n->type->type_str
-                             : (n->type_str ? n->type_str : v.ts);
-        return (llv_t){ll_conv(ll, v, to), to};
+                             : (n->type_str ? n->type_str : NULL);
+        const char *gep = NULL;
+        if (to && ll_gep_from_int_add(ll, n, to, &gep)) return (llv_t){gep, to};
+        llv_t v = ll_expr(ll, n->a);
+        return (llv_t){ll_conv(ll, v, to ? to : v.ts), to ? to : v.ts};
     }
     case AST_CALL:
         return ll_call(ll, n);

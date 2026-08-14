@@ -67,6 +67,17 @@ static int64_t nf_malloc(int64_t a0, int64_t a1, int64_t a2, int64_t a3, int64_t
     (void)a7;
     return (int64_t)(intptr_t)malloc((size_t)a0);
 }
+static int64_t nf_calloc(int64_t a0, int64_t a1, int64_t a2, int64_t a3, int64_t a4,
+                         int64_t a5, int64_t a6, int64_t a7)
+{
+    (void)a2;
+    (void)a3;
+    (void)a4;
+    (void)a5;
+    (void)a6;
+    (void)a7;
+    return (int64_t)(intptr_t)calloc((size_t)a0, (size_t)a1);
+}
 static int64_t nf_realloc(int64_t a0, int64_t a1, int64_t a2, int64_t a3, int64_t a4,
                           int64_t a5, int64_t a6, int64_t a7)
 {
@@ -590,6 +601,7 @@ typedef struct {
 static const native_sym_t NATIVE_SYMS[] = {
     {"getenv", nf_getenv},
     {"malloc", nf_malloc},
+    {"calloc", nf_calloc},
     {"realloc", nf_realloc},
     {"free", nf_free},
     {"memset", nf_memset},

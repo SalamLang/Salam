@@ -14,6 +14,7 @@
 
 #include "core/prelude.h"
 #include "core/sal_format.h"
+#include "core/sal_path.h"
 #include "driver/embed_sysroot.h"
 
 #include <errno.h>
@@ -58,15 +59,8 @@ static int mkdir_p(const char *path)
 static int mkdir_parent(const char *file)
 {
     char buf[1024];
-    char *slash, *bs, *cut;
-    size_t len = strlen(file);
-    if (len >= sizeof buf) return -1;
-    memcpy(buf, file, len + 1);
-    slash = strrchr(buf, '/');
-    bs = strrchr(buf, '\\');
-    cut = (bs && (!slash || bs > slash)) ? bs : slash;
-    if (!cut) return 0;
-    *cut = '\0';
+    if (strlen(file) >= sizeof buf) return -1;
+    if (sal_path_dir_buf(file, buf, sizeof buf) == 0) return 0;
     return mkdir_p(buf);
 }
 

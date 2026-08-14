@@ -39,6 +39,12 @@ token_kind_t langpack_lookup_keyword(const langpack_t *p, const char *ident);
 
 const char *langpack_canon_word(const langpack_t *p, const char *ident);
 
+/* Spelling this pack gives `kind`, or NULL when the pack has no word for
+ * it. Callers that build source text (the REPL wrapping a statement in a
+ * `func main:` of the session's own language) need this to stay off
+ * hardcoded English. */
+const char *langpack_spelling(const langpack_t *p, token_kind_t kind);
+
 const char *langpack_end_spelling(const langpack_t *p);
 
 #endif /* SALAM_LANGPACK_LANGPACK_H */

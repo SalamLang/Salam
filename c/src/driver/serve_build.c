@@ -17,14 +17,20 @@
  * equivalent of `python -m http.server` or `php -S`.
  *
  * Rather than reimplementing sockets/threading/HTTP parsing here in C,
- * this generates a tiny Salam program that wires up the real std/web
- * router (web.Static + web.EnableListing, which own the actual
- * path-traversal safety and directory-listing logic - see
- * std/web/web.salam's _safe_static_path/_dir_listing_html) and builds +
- * runs it exactly like `salam run` does. That keeps exactly one
- * implementation of "serve files safely over HTTP" for both this C
+ * this generates a tiny Salam program that wires up the real std/net
+ * router (router.Static + router.EnableListing, whose serving side owns
+ * the actual path-traversal safety and directory-listing logic - see
+ * std/net/http/ctx_internal.salam's _safe_static_path/_dir_listing_html)
+ * and builds + runs it exactly like `salam run` does. That keeps exactly
+ * one implementation of "serve files safely over HTTP" for both this C
  * toolchain and the self-hosted compiler/driver.salam to share (the
- * latter can call into std/web directly, without needing to shell out).
+ * latter can call into std/net directly, without needing to shell out).
+ *
+ * The generated program must stay in sync with the std/net API it calls:
+ * these are ordinary package functions resolved at compile time, so a
+ * rename there turns into an E012 "package has no exported function" at
+ * `salam serve` time, not a build-time error here. tests/en/general/
+ * serve_template.salam compiles this exact program shape as a guard.
  */
 
 #include "core/prelude.h"
@@ -81,23 +87,24 @@ int driver_serve(options_t *opt)
 
     sb_t src;
     sb_init(&src);
-    sb_puts(&src, "import web\n"
+    sb_puts(&src, "import net.http\n"
+                  "import net.router\n"
                   "\n"
                   "func main:\n"
-                  "    r := web.NewRouter()\n"
-                  "    web.EnableListing(r)\n"
-                  "    web.Static(r, \"/\", ");
+                  "    mut r := router.NewRouter()\n"
+                  "    router.EnableListing(r)\n"
+                  "    router.Static(r, \"/\", ");
     sb_put_salam_string_literal(&src, dir);
-    sb_puts(&src, ")\n    s := web.NewServer(");
+    sb_puts(&src, ")\n    mut s := http.NewServer(");
     {
         char portbuf[16];
         sal_snprintf(portbuf, sizeof portbuf, "%d", port);
         sb_puts(&src, portbuf);
     }
-    sb_puts(&src, ")\n    web.SetHost(s, ");
+    sb_puts(&src, ")\n    http.SetHost(s, ");
     sb_put_salam_string_literal(&src, host);
     sb_puts(&src,
-            ")\n    web.EnableAccessLog(s)\n    web.Use(s, r)\n    web.Run(s)\nend\n");
+            ")\n    http.EnableAccessLog(s)\n    http.Use(s, r)\n    http.Run(s)\nend\n");
 
     char salam_path[600];
 #if defined(_WIN32)

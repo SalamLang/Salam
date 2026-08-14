@@ -1,0 +1,209 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// history - the editor's own undo/redo stack.
+//
+// A textarea keeps an undo stack of its own, but the browser throws that
+// stack away the moment a script assigns to `.value`, and every editing aid
+// in the playground does exactly that: Tab, Ctrl+], Ctrl+[, the auto-indent
+// on Enter, the `end` that snaps back a level. That is why Ctrl+Z used to sit
+// there doing nothing after any of them. So the editor keeps the stack
+// itself, and every route into the buffer reports here: typing, paste, cut,
+// drag and drop, the indent commands, loading an example.
+//
+// An entry is a whole snapshot (the buffer text plus the selection), not a
+// diff. Playground programs are a few kilobytes, so a bounded ring of
+// snapshots costs almost nothing, and it cannot drift out of step with the
+// textarea the way an incremental patch log can: whatever the browser did to
+// the buffer, photographing the result afterwards is always right, including
+// for edits nobody here predicted (an IME commit, a spellcheck replacement, a
+// drop from another window).
+//
+// Runs of plain typing collapse into a single entry, so Ctrl+Z takes back a
+// word rather than a letter. A space, a newline, a paste, a caret jump, a
+// pause longer than MERGE_MS or any command edit closes the run.
+//
+// The slots live in a plain JavaScript object: the JS backend has no Vector,
+// and a fixed Salam array would need a literal with CAP elements written out
+// in it. Keys are the slot number behind a one letter field tag - "t7" text,
+// "s7" and "e7" selection, "k7" kind, "m7" timestamp.
+
+package history
+
+import dom
+
+extern:
+    func salam_js_global(name: str): func () i64
+end
+
+const CAP := 200
+const MERGE_MS := 700.0
+
+mut store := 0 as i64
+mut first := 0
+mut count := 0
+mut pos := 0
+mut pre_s := 0
+mut pre_e := 0
+mut end_caret := 0
+
+func ensure_store():
+    if store != 0: ret end
+    obj_ctor := salam_js_global("Object")
+    store = obj_ctor()
+end
+
+func slot(i: int): int: ret (first + i) % CAP end
+
+func str_at(field: str, i: int): str: ret dom.GetStr(store, field + slot(i)) end
+
+func num_at(field: str, i: int): f64: ret dom.GetNum(store, field + slot(i)) end
+
+func set_sel(i: int, s: int, e: int):
+    k := slot(i)
+    dom.SetNum(store, "s" + k, s as f64)
+    dom.SetNum(store, "e" + k, e as f64)
+end
+
+func write(i: int, text: str, s: int, e: int, kind: str, at: f64):
+    k := slot(i)
+    dom.SetStr(store, "t" + k, text)
+    dom.SetStr(store, "k" + k, kind)
+    dom.SetNum(store, "m" + k, at)
+    set_sel(i, s, e)
+end
+
+// merge_ok - may an edit of this kind join a run of `prev` edits? Typing runs
+// with typing and deleting with deleting. A space joins the word it just
+// ended, and then closes the run, since it is stored as the entry's kind and
+// no later letter matches it: that way Ctrl+Z gives back "one two " and then
+// "one ", rather than stopping on the space in between.
+func merge_ok(kind: str, prev: str): bool:
+    if kind == "type" || kind == "delete": ret kind == prev end
+    if kind == "space": ret prev == "type" || prev == "space" end
+    ret false
+end
+
+// merges - does this edit continue the run already sitting in the top entry?
+// Runs only continue while the edits stay under MERGE_MS apart and while the
+// caret carries on from where the previous edit left it with nothing
+// selected. Anything else opens a fresh entry.
+func merges(kind: str, at: f64): bool:
+    if merge_ok(kind, str_at("k", pos)) == false: ret false end
+    if at - num_at("m", pos) > MERGE_MS: ret false end
+    if pre_s != pre_e: ret false end
+    ret pre_s == end_caret
+end
+
+// advance - open a new entry after the current one. Anything past it was a
+// redo tail and is dropped, which is what makes an edit after an undo the new
+// future. The ring is full at CAP entries and then loses its oldest.
+func advance():
+    if pos + 1 >= CAP:
+        first = (first + 1) % CAP
+        pos -= 1
+    end
+    pos += 1
+    count = pos + 1
+end
+
+// after_move - the buffer has jumped to another entry, so the run that was
+// being merged into is over.
+func after_move():
+    pre_s = num_at("s", pos) as int
+    pre_e = num_at("e", pos) as int
+    end_caret = pre_e
+end
+
+// Reset - start a fresh timeline holding only this buffer. For a document
+// swap, a new example or a language change, rather than for an edit: there is
+// nothing sensible to undo back into.
+@fa "بازنشانی"
+@ar "إعادة ضبط"
+pub func Reset(text: str, s: int, e: int):
+    ensure_store()
+    first = 0
+    count = 1
+    pos = 0
+    write(0, text, s, e, "load", dom.Now())
+    pre_s = s
+    pre_e = e
+    end_caret = e
+end
+
+@fa "متن"
+@ar "النص"
+pub func Text(): str: ret str_at("t", pos) end
+
+@fa "آغاز گزینش"
+@ar "بدایة التحدید"
+pub func SelStart(): int: ret num_at("s", pos) as int end
+
+@fa "پایان گزینش"
+@ar "نهایة التحدید"
+pub func SelEnd(): int: ret num_at("e", pos) as int end
+
+// Mark - where the selection sat just before an edit landed, reported from
+// beforeinput. It is stored on the current entry, so undoing the edit that
+// follows returns the caret to where the user was working rather than to
+// wherever that edit happened to end.
+@fa "نشانه"
+@ar "علامة"
+pub func Mark(s: int, e: int):
+    if count == 0: ret end
+    pre_s = s
+    pre_e = e
+    set_sel(pos, s, e)
+end
+
+// Record - the buffer now reads `text`; remember it. `kind` classifies the
+// edit for run merging: "type", "space", "delete", "paste", "newline",
+// "indent" and so on, of which only the first three ever merge.
+@fa "ثبت"
+@ar "تسجیل"
+pub func Record(text: str, s: int, e: int, kind: str):
+    ensure_store()
+    if count == 0:
+        Reset(text, s, e)
+        ret
+    end
+    if text == str_at("t", pos):
+        Mark(s, e)
+        ret
+    end
+    at := dom.Now()
+    if merges(kind, at) == false: advance() end
+    write(pos, text, s, e, kind, at)
+    pre_s = s
+    pre_e = e
+    end_caret = e
+end
+
+@fa "واگرد"
+@ar "تراجع"
+pub func Undo(): bool:
+    if pos <= 0: ret false end
+    pos -= 1
+    after_move()
+    ret true
+end
+
+@fa "ازنو"
+@ar "إعادة"
+pub func Redo(): bool:
+    if pos + 1 >= count: ret false end
+    pos += 1
+    after_move()
+    ret true
+end

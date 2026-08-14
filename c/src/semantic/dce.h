@@ -18,7 +18,10 @@
 #include "core/arena.h"
 #include <stdbool.h>
 
-void dce_reset(arena_t *a);
+/* Starts a fresh call graph, freeing the previous one. The graph is
+ * allocated from an arena DCE owns, so it outlives no caller and no
+ * caller's arena can leave it holding freed memory. */
+void dce_reset(void);
 void dce_enable(void);
 void dce_disable(void);
 bool dce_enabled(void);

@@ -1,0 +1,333 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package store
+
+// Every line of SQL in the todo API. main.salam does HTTP and nothing else.
+//
+// TWO RULES THIS FILE EXISTS TO ENFORCE
+//
+// 1. Nothing reaches SQL without going through Q() or N(). std/db/mysql has
+//    no prepared statements, so escaping is the whole defence, and the way
+//    to make that reliable is to have exactly one place where a value can
+//    become SQL text. Q() quotes and escapes a string; N() formats a number.
+//    A literal `'` + value + `'` anywhere outside this file is a bug.
+//
+// 2. Every query naming `todos` carries `user_id = ...`, including the ones
+//    that already have an id. Looking a row up by id and then checking who
+//    owns it is one forgotten `if` away from letting anyone read anyone's
+//    list; making ownership part of the WHERE clause means a wrong id
+//    returns "not found" rather than someone else's data.
+//
+// Salam requires a file to be laid out constants, then types, then private
+// functions, then public ones (E084/E087/E088), so that is the order here.
+
+import os
+import sync
+import str
+import conv
+import db.mysql
+import encoding.json
+
+const COLS := "id, title, notes, done, due_on, created_at"
+
+// One connection, opened at startup. net/http's server is single-threaded
+// here, so a pool would be ceremony without a purpose; a real deployment
+// behind several workers would open one of these per worker.
+mut _db := mysql.Database {}
+mut _mu := sync.Mutex {}
+
+pub struct User:
+    pub id: i64 = 0
+    pub email: str = ""
+    pub hash: str = ""
+end
+
+// Take the connection, and make this thread ready to use it.
+//
+// net/http runs every request on its own thread. libmariadb keeps per-thread
+// state that mysql_thread_init() sets up, and a single MariaDB connection
+// cannot be used by two threads at once - so every public entry point below
+// prepares the thread and then holds _mu for the whole of its work.
+//
+// KNOWN ISSUE: this is necessary but is NOT currently sufficient. Two
+// overlapping requests that both reach the database still crash the process,
+// with two threads inside libmariadb at the same time despite this lock. See
+// the "Known issue" section in ../README.md for the repro and what has been
+// ruled out. Run these examples without overlapping requests until it is
+// root-caused.
+func _enter():
+    _t := mysql.ThreadInit()
+    sync.Lock(_mu)
+end
+
+func _env(name: str, fallback: str): str:
+    v := os.Env(name)
+    if v.len() == 0: ret fallback end
+    ret v
+end
+
+func _exec(sql: str, err &: str): bool:
+    err = ""
+    if mysql.Exec(_db, sql) != 0:
+        err = mysql.Error(_db)
+        ret false
+    end
+    ret true
+end
+
+func _scalar(sql: str): i64:
+    mut res := mysql.Query(_db, sql)
+    if !mysql.QueryOk(res): ret 0 as i64 end
+    mut v := 0 as i64
+    if mysql.Next(res): v = mysql.Int64(res, 0) end
+    mysql.Finish(res)
+    ret v
+end
+
+// A NULL-aware JSON value for a text column.
+func _text_or_null(res: mysql.Result, col: int): str:
+    if mysql.IsNull(res, col): ret "null" end
+    ret json.Str(mysql.Text(res, col))
+end
+
+func _bool_json(res: mysql.Result, col: int): str:
+    if mysql.Int(res, col) == 1: ret "true" end
+    ret "false"
+end
+
+// One row as a JSON object. The row cursor is where serialization belongs:
+// the alternative is copying every row into a Vector of structs first, which
+// buys nothing when the destination is a JSON string either way.
+func _row_json(res: mysql.Result): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppend(sb, `{"id":`)
+    str.BufAppend(sb, mysql.Text(res, 0))
+    str.BufAppend(sb, `,"title":`)
+    str.BufAppend(sb, json.Str(mysql.Text(res, 1)))
+    str.BufAppend(sb, `,"notes":`)
+    str.BufAppend(sb, _text_or_null(res, 2))
+    str.BufAppend(sb, `,"done":`)
+    str.BufAppend(sb, _bool_json(res, 3))
+    str.BufAppend(sb, `,"due_on":`)
+    str.BufAppend(sb, _text_or_null(res, 4))
+    str.BufAppend(sb, `,"created_at":`)
+    str.BufAppend(sb, json.Str(mysql.Text(res, 5)))
+    str.BufAppendChar(sb, 125)
+    out := str.BufStr(sb)
+    ret out
+end
+
+// Unlocked counter, so Stats can use it while already holding the mutex.
+func _count(user_id: i64, status: str): i64:
+    mut sql := "SELECT COUNT(*) FROM todos WHERE user_id = ".concat(N(user_id))
+    sql = sql.concat(_status_clause(status))
+    ret _scalar(sql)
+end
+
+func _status_clause(status: str): str:
+    if status == "open": ret " AND done = 0" end
+    if status == "done": ret " AND done = 1" end
+    ret ""
+end
+
+// net/http runs every connection on its own thread (see std/net/http's Run:
+// one salam_spawn_fn_i64 per accepted socket), and a MariaDB connection is
+// NOT safe to use from two threads at once. Sharing one connection without
+// this mutex is not a subtle race: it segfaults, and before it does it hands
+// one request another request's rows.
+//
+// Serializing database access - one query at a time across the whole process
+// - is the honest cost of a single connection. The next step up is a pool: N
+// connections behind the same mutex, each checked out for the length of one
+// call. That is the right change to make when the lock shows up in a profile,
+// and not before.
+//
+// Q() deliberately does NOT lock: the functions below call it while holding
+// the mutex, and mysql_real_escape_string only reads the connection's charset
+// rather than touching the socket.
+
+// ---------------------------------------------------------------- connection
+
+pub func Open(err &: str): bool:
+    err = ""
+    host := _env("DB_HOST", "127.0.0.1")
+    port := _env("DB_PORT", "3306")
+    user := _env("DB_USER", "root")
+    // No default. A password compiled into a program is a password in the
+    // repository, and a default of "" hides a missing one until production.
+    pass := os.Env("DB_PASS")
+    name := _env("DB_NAME", "salam_todo")
+    d := mysql.Open(host, user, pass, name, port.to_int())
+    if !mysql.Ok(d):
+        err = mysql.Error(d)
+        ret false
+    end
+    // Tell the server the connection speaks utf8mb4, or a 4-byte character
+    // arrives mangled no matter what the column says.
+    _x := mysql.SetCharset(d, "utf8mb4")
+    _db = d
+    _mu = sync.NewMutex()
+    ret true
+end
+
+pub func Close():
+    mysql.Close(_db)
+end
+
+// A string, escaped and quoted, ready to drop into SQL.
+pub func Q(s: str): str:
+    ret "'".concat(mysql.Escape(_db, s)).concat("'")
+end
+
+// A number, as SQL text. Going through i64 means a caller cannot smuggle
+// anything but digits into the statement.
+pub func N(v: i64): str:
+    ret conv.FormatInt(v)
+end
+
+// ---------------------------------------------------------------- users
+pub func CreateUser(email: str, hash: str, err &: str): i64:
+    _enter()
+    defer sync.Unlock(_mu)
+    mut sql := "INSERT INTO users (email, pass_hash) VALUES ("
+    sql = sql.concat(Q(email)).concat(", ").concat(Q(hash)).concat(")")
+    if !_exec(sql, err): ret 0 as i64 end
+    ret mysql.LastInsertId(_db)
+end
+
+// The zero User (id 0) means "no such address". The caller must treat that
+// exactly like a wrong password - see main.salam's login.
+pub func FindUser(email: str): User:
+    _enter()
+    defer sync.Unlock(_mu)
+    mut u := User {}
+    mut sql := "SELECT id, email, pass_hash FROM users WHERE email = "
+    sql = sql.concat(Q(email)).concat(" LIMIT 1")
+    mut res := mysql.Query(_db, sql)
+    if !mysql.QueryOk(res): ret u end
+    if mysql.Next(res):
+        u.id = mysql.Int64(res, 0)
+        u.email = mysql.Text(res, 1)
+        u.hash = mysql.Text(res, 2)
+    end
+    mysql.Finish(res)
+    ret u
+end
+
+// ---------------------------------------------------------------- todos
+pub func ListTodos(user_id: i64, status: str, limit: int, offset: int): str:
+    _enter()
+    defer sync.Unlock(_mu)
+    mut sql := "SELECT ".concat(COLS).concat(" FROM todos WHERE user_id = ").concat(N(user_id))
+    sql = sql.concat(_status_clause(status))
+    // Sort by due date with the undated at the end, then newest first.
+    sql = sql.concat(" ORDER BY due_on IS NULL, due_on ASC, id DESC")
+    sql = sql.concat(" LIMIT ").concat(N(limit as i64)).concat(" OFFSET ").concat(N(offset as i64))
+    mut res := mysql.Query(_db, sql)
+    if !mysql.QueryOk(res): ret "[]" end
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppendChar(sb, 91)
+    mut n := 0
+    until mysql.Next(res):
+        if n > 0: str.BufAppendChar(sb, 44) end
+        str.BufAppend(sb, _row_json(res))
+        n += 1
+    end
+    str.BufAppendChar(sb, 93)
+    mysql.Finish(res)
+    out := str.BufStr(sb)
+    ret out
+end
+
+pub func CountTodos(user_id: i64, status: str): i64:
+    _enter()
+    defer sync.Unlock(_mu)
+    ret _count(user_id, status)
+end
+
+// "" when there is no such todo OR it belongs to somebody else. The caller
+// cannot tell the difference, and should not be able to.
+pub func GetTodo(user_id: i64, id: i64): str:
+    _enter()
+    defer sync.Unlock(_mu)
+    mut sql := "SELECT ".concat(COLS).concat(" FROM todos WHERE id = ").concat(N(id))
+    sql = sql.concat(" AND user_id = ").concat(N(user_id)).concat(" LIMIT 1")
+    mut res := mysql.Query(_db, sql)
+    if !mysql.QueryOk(res): ret "" end
+    mut out := ""
+    if mysql.Next(res): out = _row_json(res) end
+    mysql.Finish(res)
+    ret out
+end
+
+pub func CreateTodo(user_id: i64, title: str, notes: str, due: str, err &: str): i64:
+    _enter()
+    defer sync.Unlock(_mu)
+    mut cols := "user_id, title"
+    mut vals := N(user_id).concat(", ").concat(Q(title))
+    if notes.len() > 0:
+        cols = cols.concat(", notes")
+        vals = vals.concat(", ").concat(Q(notes))
+    end
+    if due.len() > 0:
+        cols = cols.concat(", due_on")
+        vals = vals.concat(", ").concat(Q(due))
+    end
+    sql := "INSERT INTO todos (".concat(cols).concat(") VALUES (").concat(vals).concat(")")
+    if !_exec(sql, err): ret 0 as i64 end
+    ret mysql.LastInsertId(_db)
+end
+
+// A PATCH: only the fields the caller sent are touched. `set` is built by
+// main.salam from the request body, one clause per present field, and every
+// value in it came from Q().
+pub func UpdateTodo(user_id: i64, id: i64, set: str, err &: str): bool:
+    _enter()
+    defer sync.Unlock(_mu)
+    err = ""
+    if set.len() == 0: ret false end
+    mut sql := "UPDATE todos SET ".concat(set).concat(" WHERE id = ").concat(N(id))
+    sql = sql.concat(" AND user_id = ").concat(N(user_id))
+    // AffectedRows would be 0 for both "no such row" and "the values were
+    // already these", so existence is checked by the caller instead.
+    ret _exec(sql, err)
+end
+
+pub func DeleteTodo(user_id: i64, id: i64, err &: str): bool:
+    _enter()
+    defer sync.Unlock(_mu)
+    mut sql := "DELETE FROM todos WHERE id = ".concat(N(id))
+    sql = sql.concat(" AND user_id = ").concat(N(user_id))
+    if !_exec(sql, err): ret false end
+    ret mysql.AffectedRows(_db) > 0 as i64
+end
+
+pub func Stats(user_id: i64): str:
+    _enter()
+    defer sync.Unlock(_mu)
+    total := _count(user_id, "all")
+    done := _count(user_id, "done")
+    // Overdue: past its date and still not done. CURDATE() runs on the
+    // server, so the answer does not depend on the client's clock.
+    mut osql := "SELECT COUNT(*) FROM todos WHERE user_id = ".concat(N(user_id))
+    osql = osql.concat(" AND done = 0 AND due_on IS NOT NULL AND due_on < CURDATE()")
+    overdue := _scalar(osql)
+    mut out := `{"total":`.concat(N(total)).concat(`,"done":`).concat(N(done))
+    out = out.concat(`,"open":`).concat(N(total - done))
+    out = out.concat(`,"overdue":`).concat(N(overdue)).concat("}")
+    ret out
+end

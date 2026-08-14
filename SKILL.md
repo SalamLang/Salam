@@ -494,8 +494,8 @@ func me(ctx: i64):
 end
 ```
 
-  Working example: `tests/en/webframework/authapi.salam` (login, refresh,
-  scope- and owner-protected routes). Package tests: `tests/en/stdlib/jwt_demo.salam`.
+Working example: `tests/en/webframework/authapi.salam` (login, refresh,
+scope- and owner-protected routes). Package tests: `tests/en/stdlib/jwt_demo.salam`.
 
 ### Databases (`import db.<engine>`)
 

@@ -1,0 +1,361 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// A link shortener: a public redirect, and a private API to manage it.
+//
+//   GET    /:code                  302 to the target                (public)
+//   POST   /auth/register          {email, password}
+//   POST   /auth/login
+//   POST   /api/links              {target, code?}
+//   GET    /api/links              ?limit=&offset=
+//   GET    /api/links/:code        one link with its counter
+//   GET    /api/links/:code/stats  ?days=30   clicks per day + referers
+//   PATCH  /api/links/:code        {disabled}
+//   DELETE /api/links/:code
+//   GET    /health
+//
+// WHAT THIS ONE IS ABOUT
+//
+// Three things the other four do not have to deal with.
+//
+// 1. A RESPONSE THAT IS NOT JSON. The redirect is the product here: a 302
+//    with a Location header, no body. Everything else is JSON.
+//
+// 2. AN OPEN REDIRECT IS A VULNERABILITY. A shortener that will point at
+//    anything is a phishing tool with your domain on it: "click this link on
+//    a domain you trust" is the whole trick. safe_target() below refuses
+//    anything that is not http/https, which also rules out javascript: and
+//    data: URLs - those turn a redirect into script execution in the
+//    visitor's browser.
+//
+// 3. THE CATCH-ALL ROUTE COMES LAST. "/:code" matches "/health" too, so
+//    route order decides which handler wins. Registering it after the real
+//    routes is the whole mechanism, and it is worth a comment at the point
+//    where somebody will later add a route in the wrong place.
+
+import os
+import auth
+import jwt
+import conv
+import crypto
+import net.http
+import net.router
+import encoding.json
+import store "_store.salam"
+
+const PORT := 8094
+const ACCESS_TTL := 3600
+const CODE_LEN := 7
+const MAX_PAGE := 100
+
+func secret(): str:
+    s := os.Env("JWT_SECRET")
+    if s.len() > 0: ret s end
+    ret "dev-only-secret-change-me"
+end
+
+func guard(): auth.Guard:
+    mut g := auth.NewGuard(secret())
+    g.opts.issuer = "links.salam"
+    g.opts.require_exp = true
+    g.opts.leeway = 30 as i64
+    ret g
+end
+
+// ---------------------------------------------------------------- helpers
+
+func send(ctx: i64, code: int, body: str):
+    http.Ctx_status(ctx, code)
+    http.Ctx_set_header(ctx, "Access-Control-Allow-Origin", "*")
+    http.Ctx_json(ctx, body)
+end
+
+func fail(ctx: i64, code: int, message: str):
+    send(ctx, code, `{"error":`.concat(json.Str(message)).concat("}"))
+end
+
+func db_fail(ctx: i64, where: str, err: str):
+    println "[db] ", where, ": ", err
+    fail(ctx, 500, "database error")
+end
+
+func caller(ctx: i64): i64:
+    mut t := jwt.Token {}
+    if !auth.Require(ctx, guard(), t): ret 0 as i64 end
+    ret t.claims.sub.to_int() as i64
+end
+
+func int_param(ctx: i64, name: str, fallback: int, max: int): int:
+    raw := http.Ctx_query(ctx, name)
+    if raw.len() == 0: ret fallback end
+    v := raw.to_int()
+    if v < 0: ret fallback end
+    if v > max: ret max end
+    ret v
+end
+
+// http and https only. Anything else - javascript:, data:, file:, or a bare
+// "example.com" that a browser would resolve relative to this host - is
+// refused. This is the single most important line in the file.
+func safe_target(url: str): bool:
+    if url.len() < 10 || url.len() > 2048: ret false end
+    lower := url.lower()
+    if lower.substr(0, 7) == "http://": ret true end
+    if lower.substr(0, 8) == "https://": ret true end
+    ret false
+end
+
+// A custom code has to survive being typed, so: letters, digits, dash and
+// underscore, and nothing that collides with a real route.
+func valid_code(code: str): bool:
+    n := code.len()
+    if n < 3 || n > 32: ret false end
+    repeat n with i:
+        c := code.substr(i, 1)
+        ok := (c >= "a" && c <= "z") || (c >= "A" && c <= "Z") || (c >= "0" && c <= "9") || c == "-" || c == "_"
+        if !ok: ret false end
+    end
+    ret !reserved(code)
+end
+
+func reserved(code: str): bool:
+    ret code == "api" || code == "auth" || code == "health" || code == "favicon.ico"
+end
+
+// A random code, retried on the (very unlikely) collision. RandomSecret is
+// hex, so the alphabet is 16 characters wide and CODE_LEN of them is about
+// 28 bits - fine for a demo, worth widening for a real one.
+func fresh_code(): str:
+    mut tries := 0
+    until tries < 8:
+        candidate := crypto.RandomHex(CODE_LEN).substr(0, CODE_LEN)
+        if !store.CodeExists(candidate): ret candidate end
+        tries += 1
+    end
+    ret ""
+end
+
+// ---------------------------------------------------------------- auth
+
+func register(ctx: i64):
+    body := http.Ctx_body(ctx)
+    email := json.Get(body, "email").trim().lower()
+    password := json.Get(body, "password")
+    if email.len() < 3 || email.find("@") < 0:
+        fail(ctx, 400, "a valid email is required")
+        ret
+    end
+    if password.len() < 8:
+        fail(ctx, 400, "password must be at least 8 characters")
+        ret
+    end
+    if store.FindUser(email).id != 0 as i64:
+        fail(ctx, 409, "that email is already registered")
+        ret
+    end
+    mut err := ""
+    id := store.CreateUser(email, auth.HashPassword(password), err)
+    if id == 0 as i64:
+        db_fail(ctx, "create user", err)
+        ret
+    end
+    send(ctx, 201, `{"id":`.concat(conv.FormatInt(id)).concat(`,"email":`).concat(json.Str(email)).concat("}"))
+end
+
+func login(ctx: i64):
+    body := http.Ctx_body(ctx)
+    u := store.FindUser(json.Get(body, "email").trim().lower())
+    mut stored := u.hash
+    if stored.len() == 0: stored = auth.HashPassword("_no_such_user_") end
+    ok := auth.VerifyPassword(json.Get(body, "password"), stored)
+    if u.id == 0 as i64 || !ok:
+        fail(ctx, 401, "invalid email or password")
+        ret
+    end
+    mut c := jwt.NewClaims()
+    c.sub = conv.FormatInt(u.id)
+    mut err := 0
+    token := auth.Issue(guard(), c, ACCESS_TTL as i64, err)
+    send(ctx, 200, `{"access":`.concat(json.Str(token)).concat("}"))
+end
+
+// ---------------------------------------------------------------- links
+
+func create_link(ctx: i64):
+    uid := caller(ctx)
+    if uid == 0 as i64: ret end
+    body := http.Ctx_body(ctx)
+    target := json.Get(body, "target").trim()
+    if !safe_target(target):
+        fail(ctx, 400, "target must be an absolute http:// or https:// URL")
+        ret
+    end
+    mut code := json.Get(body, "code").trim()
+    if code.len() == 0:
+        code = fresh_code()
+        if code.len() == 0:
+            fail(ctx, 500, "could not allocate a code")
+            ret
+        end
+    else:
+        if !valid_code(code):
+            fail(ctx, 400, "code must be 3-32 characters of a-z, 0-9, - or _, and not a reserved word")
+            ret
+        end
+    end
+    mut err := ""
+    reason := store.CreateLink(uid, code, target, err)
+    if reason == "taken":
+        fail(ctx, 409, "that code is already in use")
+        ret
+    end
+    if reason.len() > 0:
+        db_fail(ctx, "create link", err)
+        ret
+    end
+    http.Ctx_set_header(ctx, "Location", "/".concat(code))
+    send(ctx, 201, store.GetLink(code))
+end
+
+func my_links(ctx: i64):
+    uid := caller(ctx)
+    if uid == 0 as i64: ret end
+    limit := int_param(ctx, "limit", 20, MAX_PAGE)
+    offset := int_param(ctx, "offset", 0, 100000)
+    send(ctx, 200, store.MyLinks(uid, limit, offset))
+end
+
+// Load a link and check it is the caller's. 404 rather than 403 for someone
+// else's code: whether a code exists is public information via the redirect,
+// but who owns it is not.
+func own_code(ctx: i64, uid: i64, code &: str): bool:
+    c := http.Ctx_param(ctx, "code")
+    owner := store.OwnerOf(c)
+    if owner == 0 as i64 || owner != uid:
+        fail(ctx, 404, "no such link")
+        ret false
+    end
+    code = c
+    ret true
+end
+
+func get_link(ctx: i64):
+    uid := caller(ctx)
+    if uid == 0 as i64: ret end
+    mut code := ""
+    if !own_code(ctx, uid, code): ret end
+    send(ctx, 200, store.GetLink(code))
+end
+
+func link_stats(ctx: i64):
+    uid := caller(ctx)
+    if uid == 0 as i64: ret end
+    mut code := ""
+    if !own_code(ctx, uid, code): ret end
+    l := store.Resolve(code)
+    days := int_param(ctx, "days", 30, 365)
+    mut out := `{"code":`.concat(json.Str(code))
+    out = out.concat(`,"daily":`).concat(store.DailyStats(l.id, days))
+    out = out.concat(`,"referers":`).concat(store.TopReferers(l.id, 10))
+    send(ctx, 200, out.concat("}"))
+end
+
+func update_link(ctx: i64):
+    uid := caller(ctx)
+    if uid == 0 as i64: ret end
+    mut code := ""
+    if !own_code(ctx, uid, code): ret end
+    body := http.Ctx_body(ctx)
+    if !json.Has(body, "disabled"):
+        fail(ctx, 400, "nothing to update")
+        ret
+    end
+    mut err := ""
+    if !store.SetDisabled(code, uid, json.Get(body, "disabled") == "true", err):
+        db_fail(ctx, "update link", err)
+        ret
+    end
+    send(ctx, 200, store.GetLink(code))
+end
+
+func delete_link(ctx: i64):
+    uid := caller(ctx)
+    if uid == 0 as i64: ret end
+    mut code := ""
+    if !own_code(ctx, uid, code): ret end
+    mut err := ""
+    if !store.DeleteLink(code, uid, err):
+        db_fail(ctx, "delete link", err)
+        ret
+    end
+    // The click_log rows go with it, by ON DELETE CASCADE.
+    send(ctx, 200, `{"deleted":true}`)
+end
+
+// ---------------------------------------------------------------- redirect
+
+// The public route, and the only one that answers with something other than
+// JSON. Note the order of operations: the redirect is written FIRST, then
+// the click is recorded. A visitor should never wait on analytics.
+func redirect(ctx: i64):
+    code := http.Ctx_param(ctx, "code")
+    l := store.Resolve(code)
+    if l.id == 0 as i64:
+        fail(ctx, 404, "no such link")
+        ret
+    end
+    if l.disabled:
+        // 410 Gone, not 404: this code was a link and is not any more, and
+        // a crawler should stop asking.
+        fail(ctx, 410, "this link has been disabled")
+        ret
+    end
+    http.Ctx_redirect(ctx, l.target)
+    store.RecordClick(l.id, http.Ctx_header(ctx, "Referer"))
+end
+
+func health(ctx: i64):
+    send(ctx, 200, `{"status":"ok","service":"links"}`)
+end
+
+func main:
+    mut err := ""
+    if !store.Open(err):
+        println "cannot reach the database: ", err
+        println "set DB_HOST / DB_PORT / DB_USER / DB_PASS / DB_NAME, then load schema.sql"
+        ret 1
+    end
+    defer store.Close()
+    mut r := router.NewRouter()
+    router.Get(r, "/health", health)
+    router.Post(r, "/auth/register", register)
+    router.Post(r, "/auth/login", login)
+    router.Post(r, "/api/links", create_link)
+    router.Get(r, "/api/links", my_links)
+    router.Get(r, "/api/links/:code", get_link)
+    router.Get(r, "/api/links/:code/stats", link_stats)
+    router.Patch(r, "/api/links/:code", update_link)
+    router.Delete(r, "/api/links/:code", delete_link)
+    // LAST. "/:code" matches "/health" and "/api" just as happily, so it has
+    // to be registered after everything it must not shadow. A new route
+    // added below this line will never be reached.
+    router.Get(r, "/:code", redirect)
+    mut s := http.NewServer(PORT)
+    http.Use(s, r)
+    println "links API on http://localhost:8094"
+    http.Run(s)
+    ret 0
+end

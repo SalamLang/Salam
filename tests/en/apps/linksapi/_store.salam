@@ -1,0 +1,382 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package store
+
+// SQL for the link shortener.
+//
+// THE HOT PATH IS THE POINT
+//
+// Every other query in these examples runs a handful of times a minute. The
+// redirect runs on every visit, and it is the one that has to stay cheap:
+//
+//   1 SELECT by a unique index   ->  the target URL
+//   1 UPDATE ... clicks + 1      ->  the counter
+//   1 INSERT into click_log      ->  the detail
+//
+// No transaction. If the log INSERT fails, a visitor still gets where they
+// were going, and one row of analytics is worth less than one redirect. That
+// is a deliberate choice about which half is allowed to fail, and it is the
+// kind of choice worth writing down next to the code that makes it.
+//
+// The counter uses `clicks = clicks + 1` rather than a read and a write, so
+// two visits in the same millisecond both count. Reading the value into the
+// program and writing it back is the version that loses clicks.
+
+import os
+import sync
+import str
+import conv
+import db.mysql
+import encoding.json
+
+const ER_DUP_ENTRY := 1062
+const LINK_COLS := "id, code, target, clicks, disabled, created_at"
+
+mut _db := mysql.Database {}
+mut _mu := sync.Mutex {}
+
+pub struct User:
+    pub id: i64 = 0
+    pub email: str = ""
+    pub hash: str = ""
+end
+
+pub struct Link:
+    pub id: i64 = 0
+    pub target: str = ""
+    pub disabled: bool = false
+end
+
+// Take the connection, and make this thread ready to use it.
+//
+// net/http runs every request on its own thread. libmariadb keeps per-thread
+// state that mysql_thread_init() sets up, and a single MariaDB connection
+// cannot be used by two threads at once - so every public entry point below
+// prepares the thread and then holds _mu for the whole of its work.
+//
+// KNOWN ISSUE: this is necessary but is NOT currently sufficient. Two
+// overlapping requests that both reach the database still crash the process,
+// with two threads inside libmariadb at the same time despite this lock. See
+// the "Known issue" section in ../README.md for the repro and what has been
+// ruled out. Run these examples without overlapping requests until it is
+// root-caused.
+func _enter():
+    _t := mysql.ThreadInit()
+    sync.Lock(_mu)
+end
+
+func _env(name: str, fallback: str): str:
+    v := os.Env(name)
+    if v.len() == 0: ret fallback end
+    ret v
+end
+
+func _exec(sql: str, err &: str): bool:
+    err = ""
+    if mysql.Exec(_db, sql) != 0:
+        err = mysql.Error(_db)
+        ret false
+    end
+    ret true
+end
+
+func _scalar(sql: str): i64:
+    mut res := mysql.Query(_db, sql)
+    if !mysql.QueryOk(res): ret 0 as i64 end
+    mut v := 0 as i64
+    if mysql.Next(res): v = mysql.Int64(res, 0) end
+    mysql.Finish(res)
+    ret v
+end
+
+func _link_json(res: mysql.Result): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppend(sb, `{"id":`)
+    str.BufAppend(sb, mysql.Text(res, 0))
+    str.BufAppend(sb, `,"code":`)
+    str.BufAppend(sb, json.Str(mysql.Text(res, 1)))
+    str.BufAppend(sb, `,"target":`)
+    str.BufAppend(sb, json.Str(mysql.Text(res, 2)))
+    str.BufAppend(sb, `,"clicks":`)
+    str.BufAppend(sb, mysql.Text(res, 3))
+    str.BufAppend(sb, `,"disabled":`)
+    if mysql.Int(res, 4) == 1:
+        str.BufAppend(sb, "true")
+    else:
+        str.BufAppend(sb, "false")
+    end
+    str.BufAppend(sb, `,"created_at":`)
+    str.BufAppend(sb, json.Str(mysql.Text(res, 5)))
+    str.BufAppendChar(sb, 125)
+    out := str.BufStr(sb)
+    ret out
+end
+
+// net/http runs every connection on its own thread (see std/net/http's Run:
+// one salam_spawn_fn_i64 per accepted socket), and a MariaDB connection is
+// NOT safe to use from two threads at once. Sharing one connection without
+// this mutex is not a subtle race: it segfaults, and before it does it hands
+// one request another request's rows.
+//
+// Serializing database access - one query at a time across the whole process
+// - is the honest cost of a single connection. The next step up is a pool: N
+// connections behind the same mutex, each checked out for the length of one
+// call. That is the right change to make when the lock shows up in a profile,
+// and not before.
+//
+// Q() deliberately does NOT lock: the functions below call it while holding
+// the mutex, and mysql_real_escape_string only reads the connection's charset
+// rather than touching the socket.
+
+// ---------------------------------------------------------------- connection
+
+pub func Open(err &: str): bool:
+    err = ""
+    host := _env("DB_HOST", "127.0.0.1")
+    port := _env("DB_PORT", "3306")
+    user := _env("DB_USER", "root")
+    pass := os.Env("DB_PASS")
+    name := _env("DB_NAME", "salam_links")
+    d := mysql.Open(host, user, pass, name, port.to_int())
+    if !mysql.Ok(d):
+        err = mysql.Error(d)
+        ret false
+    end
+    _x := mysql.SetCharset(d, "utf8mb4")
+    _db = d
+    _mu = sync.NewMutex()
+    ret true
+end
+
+pub func Close():
+    mysql.Close(_db)
+end
+
+pub func Q(s: str): str:
+    ret "'".concat(mysql.Escape(_db, s)).concat("'")
+end
+
+pub func N(v: i64): str:
+    ret conv.FormatInt(v)
+end
+
+// ---------------------------------------------------------------- users
+
+pub func CreateUser(email: str, hash: str, err &: str): i64:
+    _enter()
+    defer sync.Unlock(_mu)
+    mut sql := "INSERT INTO users (email, pass_hash) VALUES ("
+    sql = sql.concat(Q(email)).concat(", ").concat(Q(hash)).concat(")")
+    if !_exec(sql, err): ret 0 as i64 end
+    ret mysql.LastInsertId(_db)
+end
+
+pub func FindUser(email: str): User:
+    _enter()
+    defer sync.Unlock(_mu)
+    mut u := User {}
+    mut sql := "SELECT id, email, pass_hash FROM users WHERE email = "
+    sql = sql.concat(Q(email)).concat(" LIMIT 1")
+    mut res := mysql.Query(_db, sql)
+    if !mysql.QueryOk(res): ret u end
+    if mysql.Next(res):
+        u.id = mysql.Int64(res, 0)
+        u.email = mysql.Text(res, 1)
+        u.hash = mysql.Text(res, 2)
+    end
+    mysql.Finish(res)
+    ret u
+end
+
+// ---------------------------------------------------------------- redirect
+
+// The hot path: one indexed lookup. A disabled link still resolves so the
+// caller can answer 410 Gone rather than 404 - the code WAS a link.
+pub func Resolve(code: str): Link:
+    _enter()
+    defer sync.Unlock(_mu)
+    mut l := Link {}
+    mut sql := "SELECT id, target, disabled FROM links WHERE code = "
+    sql = sql.concat(Q(code)).concat(" LIMIT 1")
+    mut res := mysql.Query(_db, sql)
+    if !mysql.QueryOk(res): ret l end
+    if mysql.Next(res):
+        l.id = mysql.Int64(res, 0)
+        l.target = mysql.Text(res, 1)
+        l.disabled = mysql.Int(res, 2) == 1
+    end
+    mysql.Finish(res)
+    ret l
+end
+
+// Called after the redirect has been written. Failures are logged and
+// swallowed on purpose - see the file header.
+pub func RecordClick(link_id: i64, referer: str):
+    _enter()
+    defer sync.Unlock(_mu)
+    mut err := ""
+    bump := "UPDATE links SET clicks = clicks + 1 WHERE id = ".concat(N(link_id))
+    if !_exec(bump, err): println "[db] click counter: ", err end
+    mut ins := "INSERT INTO click_log (link_id, referer) VALUES (".concat(N(link_id))
+    if referer.len() > 0:
+        ins = ins.concat(", ").concat(Q(referer)).concat(")")
+    else:
+        ins = ins.concat(", NULL)")
+    end
+    if !_exec(ins, err): println "[db] click log: ", err end
+end
+
+// ---------------------------------------------------------------- links
+
+// "" on success, "taken" when the code is already in use. Like the votes
+// table in pollsapi, the UNIQUE index is the check: two requests asking for
+// the same custom code cannot both win.
+pub func CreateLink(owner_id: i64, code: str, target: str, err &: str): str:
+    _enter()
+    defer sync.Unlock(_mu)
+    mut sql := "INSERT INTO links (owner_id, code, target) VALUES ("
+    sql = sql.concat(N(owner_id)).concat(", ").concat(Q(code)).concat(", ").concat(Q(target)).concat(")")
+    if _exec(sql, err): ret "" end
+    if mysql.Errno(_db) == ER_DUP_ENTRY: ret "taken" end
+    ret "db"
+end
+
+pub func OwnerOf(code: str): i64:
+    _enter()
+    defer sync.Unlock(_mu)
+    ret _scalar("SELECT owner_id FROM links WHERE code = ".concat(Q(code)))
+end
+
+pub func GetLink(code: str): str:
+    _enter()
+    defer sync.Unlock(_mu)
+    mut sql := "SELECT ".concat(LINK_COLS).concat(" FROM links WHERE code = ")
+    sql = sql.concat(Q(code)).concat(" LIMIT 1")
+    mut res := mysql.Query(_db, sql)
+    if !mysql.QueryOk(res): ret "" end
+    mut out := ""
+    if mysql.Next(res): out = _link_json(res) end
+    mysql.Finish(res)
+    ret out
+end
+
+pub func MyLinks(owner_id: i64, limit: int, offset: int): str:
+    _enter()
+    defer sync.Unlock(_mu)
+    mut sql := "SELECT ".concat(LINK_COLS).concat(" FROM links WHERE owner_id = ").concat(N(owner_id))
+    sql = sql.concat(" ORDER BY id DESC LIMIT ").concat(N(limit as i64))
+    sql = sql.concat(" OFFSET ").concat(N(offset as i64))
+    mut res := mysql.Query(_db, sql)
+    if !mysql.QueryOk(res): ret "[]" end
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppendChar(sb, 91)
+    mut n := 0
+    until mysql.Next(res):
+        if n > 0: str.BufAppendChar(sb, 44) end
+        str.BufAppend(sb, _link_json(res))
+        n += 1
+    end
+    str.BufAppendChar(sb, 93)
+    mysql.Finish(res)
+    out := str.BufStr(sb)
+    ret out
+end
+
+pub func SetDisabled(code: str, owner_id: i64, disabled: bool, err &: str): bool:
+    _enter()
+    defer sync.Unlock(_mu)
+    mut flag := "0"
+    if disabled: flag = "1" end
+    mut sql := "UPDATE links SET disabled = ".concat(flag).concat(" WHERE code = ").concat(Q(code))
+    sql = sql.concat(" AND owner_id = ").concat(N(owner_id))
+    if !_exec(sql, err): ret false end
+    ret true
+end
+
+pub func DeleteLink(code: str, owner_id: i64, err &: str): bool:
+    _enter()
+    defer sync.Unlock(_mu)
+    mut sql := "DELETE FROM links WHERE code = ".concat(Q(code))
+    sql = sql.concat(" AND owner_id = ").concat(N(owner_id))
+    if !_exec(sql, err): ret false end
+    ret mysql.AffectedRows(_db) > 0 as i64
+end
+
+// ---------------------------------------------------------------- stats
+
+// Clicks per day for the last `days` days, newest first. This is the query
+// the click_log exists for; the counter on `links` cannot answer it.
+pub func DailyStats(link_id: i64, days: int): str:
+    _enter()
+    defer sync.Unlock(_mu)
+    mut sql := "SELECT DATE(clicked_at) AS day, COUNT(*) FROM click_log"
+    sql = sql.concat(" WHERE link_id = ").concat(N(link_id))
+    sql = sql.concat(" AND clicked_at >= DATE_SUB(CURDATE(), INTERVAL ").concat(N(days as i64)).concat(" DAY)")
+    sql = sql.concat(" GROUP BY day ORDER BY day DESC")
+    mut res := mysql.Query(_db, sql)
+    if !mysql.QueryOk(res): ret "[]" end
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppendChar(sb, 91)
+    mut n := 0
+    until mysql.Next(res):
+        if n > 0: str.BufAppendChar(sb, 44) end
+        str.BufAppend(sb, `{"day":`)
+        str.BufAppend(sb, json.Str(mysql.Text(res, 0)))
+        str.BufAppend(sb, `,"clicks":`)
+        str.BufAppend(sb, mysql.Text(res, 1))
+        str.BufAppendChar(sb, 125)
+        n += 1
+    end
+    str.BufAppendChar(sb, 93)
+    mysql.Finish(res)
+    out := str.BufStr(sb)
+    ret out
+end
+
+pub func TopReferers(link_id: i64, limit: int): str:
+    _enter()
+    defer sync.Unlock(_mu)
+    mut sql := "SELECT COALESCE(referer, '(direct)') AS src, COUNT(*) FROM click_log"
+    sql = sql.concat(" WHERE link_id = ").concat(N(link_id))
+    sql = sql.concat(" GROUP BY src ORDER BY COUNT(*) DESC LIMIT ").concat(N(limit as i64))
+    mut res := mysql.Query(_db, sql)
+    if !mysql.QueryOk(res): ret "[]" end
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppendChar(sb, 91)
+    mut n := 0
+    until mysql.Next(res):
+        if n > 0: str.BufAppendChar(sb, 44) end
+        str.BufAppend(sb, `{"referer":`)
+        str.BufAppend(sb, json.Str(mysql.Text(res, 0)))
+        str.BufAppend(sb, `,"clicks":`)
+        str.BufAppend(sb, mysql.Text(res, 1))
+        str.BufAppendChar(sb, 125)
+        n += 1
+    end
+    str.BufAppendChar(sb, 93)
+    mysql.Finish(res)
+    out := str.BufStr(sb)
+    ret out
+end
+
+pub func CodeExists(code: str): bool:
+    _enter()
+    defer sync.Unlock(_mu)
+    ret _scalar("SELECT COUNT(*) FROM links WHERE code = ".concat(Q(code))) > 0 as i64
+end

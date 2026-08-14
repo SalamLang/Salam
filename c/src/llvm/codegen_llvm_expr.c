@@ -636,6 +636,35 @@ static void ll_fill_defaults(ll_t *ll, sb_t *ab, ast_node_t *n, func_sig_t *sig,
     }
 }
 
+/*
+ * The LLVM symbol a function name denotes, without the leading '@'. Shared by
+ * `&f`, by a bare function name read as a value, and by spawn(f).
+ *
+ * ll_ensure_fn runs unconditionally, the way ll_call_user does it: `is_extern`
+ * decides the *name* (an extern keeps its own), never whether the callee needs
+ * emitting. An `extern:` block function with a body is a Salam function that
+ * merely keeps an unmangled symbol so it can be handed to C as a callback -
+ * std/webview's `&salam_com_addref` COM vtable slots are the whole reason the
+ * form exists - and skipping it here left `@salam_com_addref` with neither a
+ * declare nor a define anywhere in the module ("use of undefined value").
+ */
+static const char *ll_func_symbol(ll_t *ll, ast_node_t *n)
+{
+    symbol_t *fsym = ll_sym(ll, n->name);
+    func_sig_t *sig;
+    if (!fsym || fsym->kind != SYM_FUNC || fsym->overloads.len != 1) {
+        ll_error(ll, n, "cannot take the address of '%s'", n->name);
+        return NULL;
+    }
+    sig = (func_sig_t *)fsym->overloads.data[0];
+    if (!sig->decl) {
+        ll_error(ll, n, "cannot take the address of '%s'", n->name);
+        return NULL;
+    }
+    ll_ensure_fn(ll, sig->decl, NULL, ll->pkg_scope);
+    return sig->decl->is_extern ? n->name : ll_mangle(ll, NULL, n->name, sig);
+}
+
 static llv_t ll_call_user(ll_t *ll, ast_node_t *n, const char *nm)
 {
     symbol_t *fsym = NULL;
@@ -1415,27 +1444,16 @@ static bool ll_call_intrinsic(ll_t *ll, ast_node_t *n, const char *nm, llv_t *ou
         return true;
     }
     /*
-     * funcptr(f)/spawn(f) take a *function name*, not a value, so the
-     * argument is lowered to the mangled symbol's address rather than
-     * through ll_expr. spawn additionally hands that address to the
-     * thread runtime. Mirrors call_ident() in the C backend.
+     * spawn(f) takes a *function name*, not a value, so the argument is
+     * lowered to the mangled symbol's address rather than through ll_expr,
+     * then handed to the thread runtime. Mirrors call_ident() in the C
+     * backend.
      */
-    if ((!strcmp(nm, "funcptr") || !strcmp(nm, "spawn")) && na == 1 &&
-        a0->kind == AST_IDENTIFIER) {
-        symbol_t *fs = ll_sym(ll, a0->name);
-        func_sig_t *fsig = (fs && fs->kind == SYM_FUNC && fs->overloads.len)
-                               ? (func_sig_t *)fs->overloads.data[0]
-                               : NULL;
-        const char *sym;
-        if (!fsig || !fsig->decl) return false;
-        ll_ensure_fn(ll, fsig->decl, NULL, ll->pkg_scope);
-        sym = fsig->decl->is_extern ? a0->name : ll_mangle(ll, NULL, a0->name, fsig);
+    if (!strcmp(nm, "spawn") && na == 1 && a0->kind == AST_IDENTIFIER) {
+        const char *sym = ll_func_symbol(ll, a0);
+        if (!sym) return false;
         r = ll_new_tmp(ll);
         ll_emit(ll, "%s = ptrtoint ptr @%s to i64", r, sym);
-        if (!strcmp(nm, "funcptr")) {
-            *out = (llv_t){r, "i64"};
-            return true;
-        }
         {
             symbol_t *pk = NULL;
             func_sig_t *sp = ll_runtime_fn(ll, "salam_thread_spawn", &pk);
@@ -2110,32 +2128,24 @@ llv_t ll_expr(ll_t *ll, ast_node_t *n)
     case AST_LITERAL:
         return ll_literal(ll, n);
     case AST_IDENTIFIER: {
+        /* A bare function name read as a value: its address, as an i64. */
+        if (n->func_value) {
+            const char *sym = ll_func_symbol(ll, n);
+            const char *r;
+            if (!sym) return ll_poison("i64");
+            r = ll_new_tmp(ll);
+            ll_emit(ll, "%s = ptrtoint ptr @%s to i64", r, sym);
+            return (llv_t){r, "i64"};
+        }
         ll_addr_t a = ll_addr_of(ll, n);
         const char *r = ll_new_tmp(ll);
         ll_emit(ll, "%s = load %s, ptr %s", r, ll_ty(ll, a.ts), a.ptr);
         return (llv_t){r, a.ts};
     }
     case AST_FUNC_ADDR: {
-        symbol_t *fsym = ll_sym(ll, n->name);
-        if (!fsym || fsym->kind != SYM_FUNC || fsym->overloads.len != 1) {
-            ll_error(ll, n, "cannot take the address of '%s'", n->name);
-            return ll_poison(n->type_str ? n->type_str : "ptr");
-        }
-        func_sig_t *sig = (func_sig_t *)fsym->overloads.data[0];
-        bool is_ext = sig->decl && sig->decl->is_extern;
-        /*
-         * Unconditionally, the way ll_call_user does it: `is_ext` decides the
-         * *name* (an extern keeps its own), never whether the callee needs
-         * emitting. An `extern:` block function with a body is a Salam
-         * function that merely keeps an unmangled symbol so it can be handed
-         * to C as a callback - std/webview's `&salam_com_addref` COM vtable
-         * slots are the whole reason the form exists - and skipping it here
-         * left `@salam_com_addref` with neither a declare nor a define
-         * anywhere in the module ("use of undefined value").
-         */
-        ll_ensure_fn(ll, sig->decl, NULL, ll->pkg_scope);
-        const char *fname = is_ext ? n->name : ll_mangle(ll, NULL, n->name, sig);
-        return (llv_t){ll_fmt(ll, "@%s", fname), "void*"};
+        const char *sym = ll_func_symbol(ll, n);
+        if (!sym) return ll_poison(n->type_str ? n->type_str : "ptr");
+        return (llv_t){ll_fmt(ll, "@%s", sym), "void*"};
     }
     case AST_THIS: {
         if (!ll->this_ref) {

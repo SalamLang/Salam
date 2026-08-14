@@ -282,25 +282,6 @@ type_t *check_call(sema_t *s, ast_node_t *n)
     }
 
     if (callee && callee->kind == AST_IDENTIFIER &&
-        strcmp(callee->name, "funcptr") == 0) {
-        if (n->list.len != 1 || ((ast_node_t *)n->list.data[0])->kind != AST_IDENTIFIER) {
-            SERR(s, 12, &n->span, "funcptr(func) takes a single function name");
-            return decorate(s, n, ty(s, TY_I64));
-        }
-        ast_node_t *fn = (ast_node_t *)n->list.data[0];
-        symbol_t *fsym = scope_lookup(s->cur, fn->name);
-        if (!fsym || fsym->kind != SYM_FUNC) {
-            SERR(s, 12, &n->span, "funcptr argument '%s' is not a function", fn->name);
-            return decorate(s, n, ty(s, TY_I64));
-        }
-        fsym->used = true;
-        dce_mark_root(s->pkg, fn->name);
-        decorate(s, fn, ty(s, TY_VOID));
-        decorate(s, callee, ty(s, TY_VOID));
-        return decorate(s, n, ty(s, TY_I64));
-    }
-
-    if (callee && callee->kind == AST_IDENTIFIER &&
         strcmp(callee->name, "callhandler") == 0) {
         if (n->list.len != 2) {
             SERR(s, 12, &n->span,

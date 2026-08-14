@@ -49,6 +49,14 @@ extern:
     func mysql_error(conn: void*): str
     func mysql_errno(conn: void*): u32
     func mysql_get_client_info(): str
+    // libmariadb keeps per-thread state (net buffers, the error slot). A
+    // thread that calls into the library without mysql_thread_init() first
+    // works by accident until two of them do it at once, and then the
+    // process dies somewhere unrelated. net/http runs every request on its
+    // own thread, so a server MUST call ThreadInit there - see ThreadInit
+    // below.
+    func mysql_thread_init(): bool
+    func mysql_thread_end()
     func mysql_get_server_info(conn: void*): str
 end
 import mem
@@ -449,4 +457,28 @@ pub func QueryText(db: Database, sql: str): str:
     end
     Finish(res)
     ret out
+end
+
+// Prepare the CALLING thread to use this library. Safe to call more than
+// once (libmariadb reference-counts it) and cheap after the first time.
+//
+// Required in any thread that did not open the connection. net/http hands
+// every request to a fresh thread, so a handler that touches the database
+// calls this before its first query. Skipping it does not fail cleanly: it
+// corrupts memory under concurrency and crashes somewhere else entirely.
+@en "ThreadInit"
+@fa "آماده سازی نخ"
+@ar "تهیئة الخیط"
+pub func ThreadInit(): bool:
+    ret mysql_thread_init()
+end
+
+// Release this thread's libmariadb state. Optional - the process exiting
+// covers it - but a long-lived worker that stops using the database should
+// call it.
+@en "ThreadEnd"
+@fa "پایان نخ"
+@ar "إنهاء الخیط"
+pub func ThreadEnd():
+    mysql_thread_end()
 end

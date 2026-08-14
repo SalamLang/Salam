@@ -1,0 +1,131 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/jwt in one file: mint a token, read it back, and watch it get refused
+// for each of the reasons a real verifier has to care about.
+//
+//     salam run tests/en/apps/auth/jwt_basics.salam
+//
+// Everything is pinned to a fixed clock (Options.now) and a fixed secret, so
+// the output is the same on every run - which is also how you write a test
+// for anything with an expiry.
+
+import jwt
+
+const SECRET := "a-32-byte-or-longer-signing-secret"
+const NOW := 1700000000
+
+func clock(): jwt.Options:
+    mut o := jwt.DefaultOptions()
+    o.now = NOW as i64
+    ret o
+end
+
+func report(label: str, code: int):
+    println label, "->", jwt.ErrorText(code)
+end
+
+func mint(): str:
+    // Registered claims are struct fields; anything else goes through Set*.
+    mut c := jwt.NewClaims()
+    c.iss = "api.example.com"
+    c.sub = "user-42"
+    c.aud = "web"
+    c.iat = NOW as i64
+    c.exp = (NOW + 3600) as i64
+    jwt.SetStr(c, "name", "Sara")
+    jwt.SetStr(c, "scope", "todos:read todos:write")
+    jwt.SetBool(c, "mfa", true)
+    jwt.SetRaw(c, "roles", `["author","reviewer"]`)
+    mut err := 0
+    token := jwt.SignHS256(c, SECRET, err)
+    if err != jwt.JWT_OK:
+        println "cannot sign:", jwt.ErrorText(err)
+        ret ""
+    end
+    ret token
+end
+
+func read_it(token: str):
+    // The verifier's policy: which algorithm, which issuer, which audience,
+    // and how much clock skew to forgive. None of it is read from the token.
+    mut o := clock()
+    o.issuer = "api.example.com"
+    o.audience = "web"
+    o.leeway = 30 as i64
+    o.require_exp = true
+    mut err := 0
+    t := jwt.Verify(token, SECRET, o, err)
+    report("verify", err)
+    println "  valid   :", t.valid
+    println "  subject :", t.claims.sub
+    println "  name    :", jwt.Str(t, "name")
+    println "  mfa     :", jwt.Bool(t, "mfa")
+    println "  roles   :", jwt.Raw(t, "roles")
+    println "  author? :", jwt.ListHas(t, "roles", "author")
+    println "  admin?  :", jwt.ListHas(t, "roles", "admin")
+    println "  can read:", jwt.HasScope(t, "todos:read")
+    println "  can drop:", jwt.HasScope(t, "todos:delete")
+    println "  seconds :", t.claims.exp - (NOW as i64)
+end
+
+// Change the last character of the signature to something it is not.
+func flip_last(token: str): str:
+    head := token.substr(0, token.len() - 1)
+    if token.substr(token.len() - 1, 1) == "A": ret head.concat("B") end
+    ret head.concat("A")
+end
+
+func rejections(token: str):
+    mut err := 0
+    // 1. someone else's key
+    _a := jwt.Verify(token, "not-the-secret", clock(), err)
+    report("wrong key", err)
+    // 2. one character of the signature changed
+    _b := jwt.Verify(flip_last(token), SECRET, clock(), err)
+    report("tampered", err)
+    // 3. an hour and a second later
+    mut late := clock()
+    late.now = (NOW + 3601) as i64
+    _c := jwt.Verify(token, SECRET, late, err)
+    report("expired", err)
+    // 4. the same token offered to a verifier expecting HS512. The header
+    //    says HS256, but the header does not get a vote.
+    mut other := jwt.OptionsFor(jwt.JWT_HS512)
+    other.now = NOW as i64
+    _d := jwt.Verify(token, SECRET, other, err)
+    report("alg mismatch", err)
+    // 5. the classic forgery: a token that claims it needs no signature
+    forged := "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJhZG1pbiJ9."
+    _e := jwt.Verify(forged, SECRET, clock(), err)
+    report("alg none", err)
+    // 6. issued for a different audience
+    mut audit := clock()
+    audit.audience = "mobile"
+    _f := jwt.Verify(token, SECRET, audit, err)
+    report("wrong audience", err)
+end
+
+func main:
+    token := mint()
+    println "token:"
+    println token
+    println ""
+    read_it(token)
+    println ""
+    rejections(token)
+    ret 0
+end

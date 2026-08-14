@@ -484,6 +484,46 @@ func cg_struct_lit(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
 end
 
 // cg_expr - returns the C expression text ("0" for the C NULL node).
+// The C symbol a function name denotes, as a void*. Shared by `&f` and by a
+// bare function name read as a value. An extern keeps its declared C name -
+// it is not ours to mangle; without this a libc extern emits a symbol that
+// exists nowhere (`printf` in std/llvm/orc.salam became
+// `_Salam_llvm_printf_str`).
+func cg_func_addr(g &: Cg, s &: sm.Sema, a &: at.Ast, name: str): str:
+    mut fsym := sm.Lookup(s, s.global, name)
+    mut home_pkg := ""
+    if fsym == 0 && g.cur_fn_home != 0:
+        hs := sm.Lookup(s, g.cur_fn_home, name)
+        if hs != 0 && sm.SymAt(s, hs).kind == sm.SYM_FUNC:
+            fsym = hs
+            home_pkg = sm.SymAt(s, hs).pkgname
+        end
+    end
+    if fsym == 0 && g.cur_struct != 0 && sm.SymAt(s, g.cur_struct).home != 0:
+        hs2 := sm.Lookup(s, sm.SymAt(s, g.cur_struct).home, name)
+        if hs2 != 0 && sm.SymAt(s, hs2).kind == sm.SYM_FUNC:
+            fsym = hs2
+            home_pkg = sm.SymAt(s, hs2).pkgname
+        end
+    end
+    mut sig := 0
+    if fsym != 0 && sm.SymAt(s, fsym).overloads.len() == 1:
+        sig = sm.SymAt(s, fsym).overloads.get(0)[0]
+    end
+    is_extern_fn := sig != 0 && sm.SigAt(s, sig).decl != 0 && at.Get(a, sm.SigAt(s, sig).decl).is_extern
+    if is_extern_fn:
+        ret "((void*)(&" + name + "))"
+    end
+    pkg2 := str.Len(home_pkg) > 0 ? home_pkg : g.pkg
+    if sig != 0:
+        ret "((void*)(&" + cg_mangle_in(s, pkg2, "", name, sm.SigAt(s, sig).params) + "))"
+    end
+    mut empty := Vector {} as Vector<int>
+    raw := cg_mangle_in(s, pkg2, "", name, empty)
+    empty.free()
+    ret "((void*)(&" + raw + "))"
+end
+
 func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
     if n == 0:
         ret "0"
@@ -546,6 +586,10 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
         ret "0"
     end
     if k == at.AST_IDENTIFIER:
+        // A bare function name read as a value: its address, as an i64.
+        if nn.func_value:
+            ret "(int64_t)" + cg_func_addr(g, s, a, nn.name)
+        end
         if g.cur_lambda != 0:
             lam := at.Get(a, g.cur_lambda)
             repeat lam.captures.len() with ci:
@@ -573,43 +617,7 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
         ret cg_cident(nn.name)
     end
     if k == at.AST_FUNC_ADDR:
-        mut fsym := sm.Lookup(s, s.global, nn.name)
-        mut home_pkg := ""
-        if fsym == 0 && g.cur_fn_home != 0:
-            hs := sm.Lookup(s, g.cur_fn_home, nn.name)
-            if hs != 0 && sm.SymAt(s, hs).kind == sm.SYM_FUNC:
-                fsym = hs
-                home_pkg = sm.SymAt(s, hs).pkgname
-            end
-        end
-        if fsym == 0 && g.cur_struct != 0 && sm.SymAt(s, g.cur_struct).home != 0:
-            hs2 := sm.Lookup(s, sm.SymAt(s, g.cur_struct).home, nn.name)
-            if hs2 != 0 && sm.SymAt(s, hs2).kind == sm.SYM_FUNC:
-                fsym = hs2
-                home_pkg = sm.SymAt(s, hs2).pkgname
-            end
-        end
-        mut sig := 0
-        if fsym != 0 && sm.SymAt(s, fsym).overloads.len() == 1:
-            sig = sm.SymAt(s, fsym).overloads.get(0)[0]
-        end
-        is_extern_fn := sig != 0 && sm.SigAt(s, sig).decl != 0 && at.Get(a, sm.SigAt(s, sig).decl).is_extern
-        mut raw := ""
-        if is_extern_fn:
-            raw = nn.name
-        else:
-            pkg2 := str.Len(home_pkg) > 0 ? home_pkg : g.pkg
-            if sig != 0:
-                raw = cg_mangle_in(
-                    s, pkg2, "", nn.name, sm.SigAt(s, sig).params
-                )
-            else:
-                mut empty := Vector {} as Vector<int>
-                raw = cg_mangle_in(s, pkg2, "", nn.name, empty)
-                empty.free()
-            end
-        end
-        ret "((void*)(&" + raw + "))"
+        ret cg_func_addr(g, s, a, nn.name)
     end
     if k == at.AST_THIS:
         ret "this"

@@ -101,6 +101,11 @@ struct ast_node {
      * "this value is read". Stamped by sema_call.c's mark_ref_args(). */
     bool ref_arg;
     bool is_pub;
+    /* Set on an AST_IDENTIFIER that names a free function and is being read as
+     * a value rather than called. Sema types it i64 (the handler-slot ABI that
+     * std/net/router and friends take) and every backend lowers it to the
+     * function's address. This is what `funcptr(f)` used to spell. */
+    bool func_value;
     bool is_inline;
     bool is_noinline;
     bool is_pure;

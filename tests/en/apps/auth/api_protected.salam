@@ -1,0 +1,124 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// The smallest complete thing: a login route that mints a token, and one
+// route that will not answer without it.
+//
+//     salam run tests/en/apps/auth/api_protected.salam
+//     curl -s -XPOST localhost:8081/login -d '{"email":"sara@example.com","password":"hunter2"}'
+//     curl -s localhost:8081/me -H "Authorization: Bearer <token>"
+//
+// Three lines carry the whole idea:
+//
+//     mut t := jwt.Token { }
+//     if !auth.Require(ctx, guard(), t): ret end
+//     ... t.claims.sub is now a verified identity ...
+//
+// Require writes the 401 itself, so a handler's entire obligation on a false
+// is to return. net/router has no middleware chain - routes are function
+// pointers - so the guard lives at the top of the handler it protects, where
+// you can see it.
+
+import auth
+import jwt
+import net.http
+import net.router
+import encoding.json
+
+const PORT := 8081
+
+// One policy, built where every handler can ask for it. In a real service
+// the secret comes from os.Env, and starts life as auth.RandomSecret(32).
+func guard(): auth.Guard:
+    mut g := auth.NewGuard("dev-only-secret-change-me")
+    g.opts.issuer = "auth.example"
+    g.opts.require_exp = true
+    // forgive half a minute of clock drift between machines
+    g.opts.leeway = 30 as i64
+    ret g
+end
+
+// Stands in for a users table. Passwords are only ever compared as hashes.
+func password_hash(email: str): str:
+    if email == "sara@example.com": ret auth.HashPassword("hunter2") end
+    if email == "ali@example.com": ret auth.HashPassword("salam") end
+    ret ""
+end
+
+func send(ctx: i64, code: int, body: str):
+    http.Ctx_status(ctx, code)
+    http.Ctx_json(ctx, body)
+end
+
+func login(ctx: i64):
+    body := http.Ctx_body(ctx)
+    email := json.Get(body, "email")
+    password := json.Get(body, "password")
+    stored := password_hash(email)
+    // An unknown address and a wrong password get the same answer. Which of
+    // the two it was is not the caller's business - that difference is how
+    // an account list gets enumerated.
+    if stored.len() == 0 || !auth.VerifyPassword(password, stored):
+        send(ctx, 401, `{"error":"invalid credentials"}`)
+        ret
+    end
+    mut c := jwt.NewClaims()
+    c.sub = email
+    jwt.SetStr(c, "name", display_name(email))
+    mut err := 0
+    token := auth.Issue(guard(), c, 3600 as i64, err)
+    if err != jwt.JWT_OK:
+        send(ctx, 500, `{"error":"could not issue a token"}`)
+        ret
+    end
+    send(ctx, 200, `{"token":"` + token + `","expires_in":3600}`)
+end
+
+func display_name(email: str): str:
+    if email == "sara@example.com": ret "Sara" end
+    ret "Ali"
+end
+
+// Protected: no valid token, no answer.
+func me(ctx: i64):
+    mut t := jwt.Token {}
+    if !auth.Require(ctx, guard(), t): ret end
+    send(ctx, 200, `{"sub":"` + t.claims.sub + `","name":"` + jwt.Str(t, "name") + `"}`)
+end
+
+// Open, but richer when a token happens to be there. Check verifies without
+// touching the response, which is what a page like this needs.
+func home(ctx: i64):
+    mut err := 0
+    t := auth.Check(ctx, guard(), err)
+    if err == jwt.JWT_OK:
+        send(ctx, 200, `{"hello":"` + jwt.Str(t, "name") + `"}`)
+        ret
+    end
+    send(ctx, 200, `{"hello":"stranger"}`)
+end
+
+func main:
+    mut r := router.NewRouter()
+    router.Get(r, "/", home)
+    router.Post(r, "/login", login)
+    router.Get(r, "/me", me)
+    mut s := http.NewServer(PORT)
+    http.Use(s, r)
+    println "listening on http://localhost:8081"
+    http.Run(s)
+    ret 0
+end

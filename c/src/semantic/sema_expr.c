@@ -321,6 +321,29 @@ static type_t *check_ternary(sema_t *s, ast_node_t *n)
     return decorate(s, n, err_ty(s));
 }
 
+/*
+ * Shared by `&f` and by a bare function name read as a value. Both need one
+ * unambiguous, non-generic target: a generic function has no code until it is
+ * instantiated, and an overload set gives no way to say which body was meant.
+ */
+static bool func_addr_target_ok(sema_t *s, symbol_t *sym, ast_node_t *n)
+{
+    if (sym->overloads.len == 0 ||
+        (sym->overloads.len == 1 && ((func_sig_t *)sym->overloads.data[0])->decl &&
+         ((func_sig_t *)sym->overloads.data[0])->decl->typarams.len > 0)) {
+        SERR(s, 73, &n->span, "cannot take the address of generic function '%s'",
+             n->name);
+        return false;
+    }
+    if (sym->overloads.len > 1) {
+        SERR(s, 74, &n->span,
+             "function '%s' is ambiguous as a value (%zu overloads exist)", n->name,
+             sym->overloads.len);
+        return false;
+    }
+    return true;
+}
+
 static type_t *check_member(sema_t *s, ast_node_t *n)
 {
     if (n->a && n->a->kind == AST_IDENTIFIER) {
@@ -454,9 +477,23 @@ type_t *sema_check_expr(sema_t *s, ast_node_t *n)
             SERR(s, 1, &n->span, "unknown identifier '%s'", n->name);
             return decorate(s, n, err_ty(s));
         }
-        if (sym->kind == SYM_FUNC || sym->kind == SYM_METHOD) {
-            SERR(s, 1, &n->span, "function '%s' used as a value", n->name);
+        if (sym->kind == SYM_METHOD) {
+            SERR(s, 1, &n->span, "method '%s' used as a value (call it)", n->name);
             return decorate(s, n, err_ty(s));
+        }
+        /*
+         * A free function read as a value decays to its address, typed i64 -
+         * the handler-slot ABI std/net/router and friends take. This is what
+         * `funcptr(f)` used to spell; the wrapper is gone and the bare name
+         * carries the meaning. `&f` still exists and still yields a void*,
+         * for the C-callback casts in std/webview.
+         */
+        if (sym->kind == SYM_FUNC) {
+            if (!func_addr_target_ok(s, sym, n)) return decorate(s, n, err_ty(s));
+            sym->used = true;
+            dce_mark_root(s->pkg, sym->name);
+            n->func_value = true;
+            return decorate(s, n, ty(s, TY_I64));
         }
         if (sym->kind == SYM_STRUCT || sym->kind == SYM_ENUM) {
             SERR(s, 1, &n->span, "type '%s' used as a value", n->name);
@@ -494,19 +531,7 @@ type_t *sema_check_expr(sema_t *s, ast_node_t *n)
                  n->name);
             return decorate(s, n, err_ty(s));
         }
-        if (sym->overloads.len == 0 ||
-            (sym->overloads.len == 1 && ((func_sig_t *)sym->overloads.data[0])->decl &&
-             ((func_sig_t *)sym->overloads.data[0])->decl->typarams.len > 0)) {
-            SERR(s, 73, &n->span, "cannot take the address of generic function '%s'",
-                 n->name);
-            return decorate(s, n, err_ty(s));
-        }
-        if (sym->overloads.len > 1) {
-            SERR(s, 74, &n->span,
-                 "function '%s' is ambiguous for '&' (%zu overloads exist)", n->name,
-                 sym->overloads.len);
-            return decorate(s, n, err_ty(s));
-        }
+        if (!func_addr_target_ok(s, sym, n)) return decorate(s, n, err_ty(s));
         sym->used = true;
         dce_mark_root(s->pkg, sym->name);
         return decorate(s, n, type_ptr(s->tc, ty(s, TY_VOID)));

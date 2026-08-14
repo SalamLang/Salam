@@ -1,0 +1,149 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// Short-lived access token, long-lived refresh token, and the route that
+// trades one for the other.
+//
+//     salam run tests/en/apps/auth/api_refresh.salam
+//     curl -s -XPOST localhost:8082/auth/login   -d '{"email":"sara@example.com","password":"hunter2"}'
+//     curl -s -XPOST localhost:8082/auth/refresh -H "Authorization: Bearer <refresh>"
+//     curl -s localhost:8082/api/me              -H "Authorization: Bearer <access>"
+//
+// WHY BOTH TOKENS
+//
+// A JWT cannot be recalled: it is valid until it expires, because verifying
+// it involves no database. That argues for a very short life. But a token
+// that dies every 15 minutes means logging in every 15 minutes, unless
+// something longer-lived can mint a new one. Hence the pair: the access
+// token is spent constantly and expires fast, the refresh token is spent
+// once in a while and is the only thing worth protecting carefully.
+//
+// The rule that makes the split mean anything is that each token is refused
+// where the other belongs. Both carry a "kind" claim, and both sides check
+// it. Without that check an access token would also be a refresh token, and
+// a stolen one could renew itself forever.
+
+import auth
+import jwt
+import conv
+import net.http
+import net.router
+import encoding.json
+
+const PORT := 8082
+const ACCESS_TTL := 900
+const REFRESH_TTL := 604800
+
+func guard(): auth.Guard:
+    mut g := auth.NewGuard("dev-only-secret-change-me")
+    g.opts.issuer = "auth.example"
+    g.opts.require_exp = true
+    ret g
+end
+
+func password_hash(email: str): str:
+    if email == "sara@example.com": ret auth.HashPassword("hunter2") end
+    ret ""
+end
+
+func send(ctx: i64, code: int, body: str):
+    http.Ctx_status(ctx, code)
+    http.Ctx_json(ctx, body)
+end
+
+func issue_access(subject: str, err &: int): str:
+    mut c := jwt.NewClaims()
+    c.sub = subject
+    jwt.SetStr(c, "kind", "access")
+    jwt.SetStr(c, "scope", "profile:read")
+    ret auth.Issue(guard(), c, ACCESS_TTL as i64, err)
+end
+
+func issue_refresh(subject: str, err &: int): str:
+    mut c := jwt.NewClaims()
+    c.sub = subject
+    jwt.SetStr(c, "kind", "refresh")
+    // A unique id per refresh token. Nothing here uses it, but it is what a
+    // revocation list keys on: store the jti of a token you want dead and
+    // check it here. That is the one server-side lookup worth paying for,
+    // and it belongs on the rare route, not the hot one.
+    c.jti = auth.RandomSecret(12)
+    ret auth.Issue(guard(), c, REFRESH_TTL as i64, err)
+end
+
+func login(ctx: i64):
+    body := http.Ctx_body(ctx)
+    email := json.Get(body, "email")
+    stored := password_hash(email)
+    if stored.len() == 0 || !auth.VerifyPassword(json.Get(body, "password"), stored):
+        send(ctx, 401, `{"error":"invalid credentials"}`)
+        ret
+    end
+    mut err := 0
+    access := issue_access(email, err)
+    refresh := issue_refresh(email, err)
+    if err != jwt.JWT_OK:
+        send(ctx, 500, `{"error":"could not issue tokens"}`)
+        ret
+    end
+    send(ctx, 200, `{"access":"` + access + `","refresh":"` + refresh + `","expires_in":900}`)
+end
+
+// Spend a refresh token, get a new access token. The refresh token itself is
+// left alone here; rotating it (issuing a new one and retiring this jti) is
+// the stricter variant, and needs the revocation store mentioned above.
+func refresh(ctx: i64):
+    mut t := jwt.Token {}
+    if !auth.Require(ctx, guard(), t): ret end
+    if jwt.Str(t, "kind") != "refresh":
+        auth.Forbidden(ctx, "this route needs a refresh token")
+        ret
+    end
+    mut err := 0
+    access := issue_access(t.claims.sub, err)
+    if err != jwt.JWT_OK:
+        send(ctx, 500, `{"error":"could not issue a token"}`)
+        ret
+    end
+    send(ctx, 200, `{"access":"` + access + `","expires_in":900}`)
+end
+
+// The other half of the rule: an ordinary route refuses a refresh token.
+func me(ctx: i64):
+    mut t := jwt.Token {}
+    if !auth.Require(ctx, guard(), t): ret end
+    if jwt.Str(t, "kind") != "access":
+        auth.Forbidden(ctx, "this route needs an access token")
+        ret
+    end
+    send(ctx, 200, `{"sub":"` + t.claims.sub + `","expires_at":` + expiry(t) + "}")
+end
+
+func expiry(t: jwt.Token): str:
+    ret conv.FormatInt(t.claims.exp)
+end
+
+func main:
+    mut r := router.NewRouter()
+    router.Post(r, "/auth/login", login)
+    router.Post(r, "/auth/refresh", refresh)
+    router.Get(r, "/api/me", me)
+    mut s := http.NewServer(PORT)
+    http.Use(s, r)
+    println "listening on http://localhost:8082"
+    http.Run(s)
+    ret 0
+end

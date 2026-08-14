@@ -1,0 +1,149 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// Four ways to say "and you also have to be allowed to do this".
+//
+//     salam run tests/en/apps/auth/api_scopes.salam
+//     curl -s -XPOST localhost:8084/login -d '{"user":"sara"}'   # admin
+//     curl -s -XPOST localhost:8084/login -d '{"user":"ali"}'    # plain member
+//
+// 401 vs 403 is the distinction worth getting right. 401 means "I do not
+// know who you are" - the credential is missing, expired or forged, and
+// retrying with a better one may work. 403 means "I know exactly who you
+// are, and no" - retrying is pointless. auth.Require* returns the first;
+// the scope, claim and subject checks return the second.
+//
+//   auth.Require        signed in
+//   auth.RequireScope   ... and "scope" contains the named scope
+//   auth.RequireClaim   ... and a claim equals, or an array claim contains
+//   auth.RequireSubject ... and it is that user's own resource
+//
+// The last one is the guard people forget. Being signed in is not permission
+// to read /users/someone-else/settings.
+
+import auth
+import jwt
+import net.http
+import net.router
+import encoding.json
+
+const PORT := 8084
+
+func guard(): auth.Guard:
+    mut g := auth.NewGuard("dev-only-secret-change-me")
+    g.opts.issuer = "scopes.example"
+    g.opts.require_exp = true
+    ret g
+end
+
+func send(ctx: i64, code: int, body: str):
+    http.Ctx_status(ctx, code)
+    http.Ctx_json(ctx, body)
+end
+
+// Two accounts with different rights. A real service reads these from a
+// users table; the shape of the claims is the part to copy.
+func scopes_of(user: str): str:
+    if user == "sara": ret "reports:read reports:write billing:read" end
+    if user == "ali": ret "reports:read" end
+    ret ""
+end
+
+func roles_of(user: str): str:
+    if user == "sara": ret `["admin","analyst"]` end
+    if user == "ali": ret `["analyst"]` end
+    ret "[]"
+end
+
+// No password here - this example is about authorisation, not authentication.
+// api_protected.salam is the one that checks a password.
+func login(ctx: i64):
+    user := json.Get(http.Ctx_body(ctx), "user")
+    if scopes_of(user).len() == 0:
+        send(ctx, 401, `{"error":"unknown user"}`)
+        ret
+    end
+    mut c := jwt.NewClaims()
+    c.sub = user
+    // A space-delimited "scope" string is the OAuth 2 convention, and what
+    // jwt.HasScope / auth.RequireScope read.
+    jwt.SetStr(c, "scope", scopes_of(user))
+    // Roles as a JSON array, read by jwt.ListHas / auth.RequireClaim.
+    jwt.SetRaw(c, "roles", roles_of(user))
+    mut err := 0
+    token := auth.Issue(guard(), c, 3600 as i64, err)
+    send(ctx, 200, `{"token":"` + token + `"}`)
+end
+
+// 1. signed in, nothing more
+func reports(ctx: i64):
+    mut t := jwt.Token {}
+    if !auth.Require(ctx, guard(), t): ret end
+    send(ctx, 200, `{"reports":["q1","q2"],"for":"` + t.claims.sub + `"}`)
+end
+
+// 2. signed in AND holding a scope
+func create_report(ctx: i64):
+    mut t := jwt.Token {}
+    if !auth.RequireScope(ctx, guard(), "reports:write", t): ret end
+    send(ctx, 201, `{"created":true,"by":"` + t.claims.sub + `"}`)
+end
+
+// 3. signed in AND carrying a role
+func audit_log(ctx: i64):
+    mut t := jwt.Token {}
+    if !auth.RequireClaim(ctx, guard(), "roles", "admin", t): ret end
+    send(ctx, 200, `{"entries":41,"viewer":"` + t.claims.sub + `"}`)
+end
+
+// 4. signed in AND it is your own record
+func user_settings(ctx: i64):
+    id := http.Ctx_param(ctx, "id")
+    mut t := jwt.Token {}
+    if !auth.RequireSubject(ctx, guard(), id, t): ret end
+    send(ctx, 200, `{"user":"` + id + `","theme":"dark"}`)
+end
+
+// Two rules at once, and the order matters: authenticate, then authorise.
+// Anything that reads a claim before Require has run is reading unverified
+// input.
+func close_account(ctx: i64):
+    id := http.Ctx_param(ctx, "id")
+    mut t := jwt.Token {}
+    if !auth.Require(ctx, guard(), t): ret end
+    owner := t.claims.sub == id
+    admin := jwt.ListHas(t, "roles", "admin")
+    if !owner && !admin:
+        auth.Forbidden(ctx, "only the account holder or an admin can close this")
+        ret
+    end
+    send(ctx, 200, `{"closed":"` + id + `","by":"` + t.claims.sub + `"}`)
+end
+
+func main:
+    mut r := router.NewRouter()
+    router.Post(r, "/login", login)
+    router.Get(r, "/api/reports", reports)
+    router.Post(r, "/api/reports", create_report)
+    router.Get(r, "/api/audit", audit_log)
+    router.Get(r, "/api/users/:id/settings", user_settings)
+    router.Delete(r, "/api/users/:id", close_account)
+    mut s := http.NewServer(PORT)
+    http.Use(s, r)
+    println "listening on http://localhost:8084"
+    http.Run(s)
+    ret 0
+end

@@ -374,6 +374,16 @@ static bool file_exists(const char *p)
     return false;
 }
 
+/*
+ * Sorted, because seg_to_canon answers with the FIRST alias that matches and
+ * this is the order the aliases are indexed in. _findfirst hands back NTFS's
+ * alphabetical order while readdir hands back whatever the filesystem stored,
+ * so two packages claiming one alias resolved to different packages on
+ * different hosts - std/text once shadowed std/str's Arabic name on Linux
+ * only, and the Arabic donut test built on Windows and failed CI. Aliases are
+ * meant to be unique and a duplicate is still a bug, but which one wins must
+ * not depend on the machine.
+ */
 static int list_entries(arena_t *a, const char *dir, const char **out, int max)
 {
     int n = 0;
@@ -398,6 +408,16 @@ static int list_entries(arena_t *a, const char *dir, const char **out, int max)
     }
     closedir(d);
 #endif
+    {
+        int i = 1;
+        for (; i < n; i++) {
+            const char *key = out[i];
+            int j = i - 1;
+            for (; j >= 0 && strcmp(out[j], key) > 0; j--)
+                out[j + 1] = out[j];
+            out[j + 1] = key;
+        }
+    }
     return n;
 }
 

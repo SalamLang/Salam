@@ -427,7 +427,13 @@ Str`.
 URLDecode`.
 - **`regex`**: `Compile Match Find Replace ReplaceAll` (`Regex` handle) and
   one-shot `MatchStr FindStr ReplaceStr ReplaceAllStr`.
-- **`crypto`**: `sha1 sha256 sha512 hmac pbkdf2 random`.
+- **`crypto`**: `Sha1Hex Sha256Hex Sha512Hex Md5Hex`, `Sha256Bytes/Sha384Bytes/
+Sha512Bytes` (+ streaming `Sha256New/Update/Final`), HMAC
+  `HmacSha256Hex/HmacSha384Hex/HmacSha512Hex` and the byte-oriented
+  `HmacSha256Bytes/HmacSha384Bytes/HmacSha512Bytes` (write into a caller
+  buffer) / `HmacSha256Raw/HmacSha384Raw/HmacSha512Raw` (pointer+length, for
+  binary keys), `HashPassword VerifyPassword Pbkdf2HmacSha256Hex`,
+  `RandomHex RandomToken RandomBytes`.
 
 ### Time, memory, testing
 
@@ -453,6 +459,43 @@ Ctx_status Ctx_set_header Ctx_redirect`. Also a canvas/DOM JS-interop surface.
 - **`tcp`** (`Bind Accept Read Write Close Ok ConnOk`), **`socket`** (WebSocket),
   **`ssl`**, **`net`**, **`dom`**/**`console`** (browser/JS targets),
   **`webview`**/**`webview_cef`** (desktop windows).
+
+### Auth (JWT and API route protection)
+
+- **`jwt`**: JSON Web Tokens (RFC 7519/7515) over HMAC-SHA2. `NewClaims
+SetStr/SetInt/SetBool/SetRaw ExpiresIn NotBeforeIn ClaimsJSON`;
+  `Sign SignHS256/384/512 SignWithKid SignJSON`; `Verify VerifyHS256 IsValid
+DefaultOptions OptionsFor`; `Decode` (parses, verifies **nothing**);
+  claim readers `Str Int Bool Raw Has ListHas HasScope HasAudience
+SecondsRemaining`; `ErrorText IsSupportedAlg`; error codes `JWT_OK
+JWT_ERR_*`. `Options` is where policy lives (`alg issuer audience subject
+leeway now require_exp/nbf/iat/sub/jti`). **`alg` comes from `Options`, never
+  from the token**; `"none"` and RS*/ES* are rejected (no asymmetric support).
+- **`auth`**: the HTTP half, over `net.http` + `net.router`. `NewGuard`
+  bundles secret + `jwt.Options`; `Require RequireScope RequireClaim
+RequireSubject` verify at the top of a handler and, on failure, write the
+  401/403 themselves and return false. Also `Check` (verify, write nothing),
+  `ParseBearer BearerToken TokenFrom Unauthorized MissingCredential
+Forbidden`, issuing (`Issue IssueFor IssuePair`), cookies
+  (`SetSessionCookie SetSessionCookieInsecure ClearSessionCookie`), and
+  passwords (`HashPassword VerifyPassword SecretEquals RandomSecret`).
+
+```salam
+func guard(): auth.Guard:
+    mut g := auth.NewGuard(os.Env("API_SECRET"))
+    g.opts.issuer = "api.example.com"
+    ret g
+end
+
+func me(ctx: i64):
+    mut t := jwt.Token { }
+    if !auth.Require(ctx, guard(), t): ret end     // 401 already written
+    http.Ctx_json(ctx, `{"sub":"` + t.claims.sub + `"}`)
+end
+```
+
+  Working example: `tests/en/webframework/authapi.salam` (login, refresh,
+  scope- and owner-protected routes). Package tests: `tests/en/stdlib/jwt_demo.salam`.
 
 ### Databases (`import db.<engine>`)
 

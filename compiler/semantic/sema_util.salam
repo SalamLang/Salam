@@ -212,8 +212,8 @@ end
 func alias_for_lang(aliases: Vector<str>, lang: str): str:
     mut i := 0
     until i + 1 < aliases.len():
-        if str.Equals(aliases.get(i)[0], lang):
-            ret aliases.get(i + 1)[0]
+        if str.Equals(aliases.get(i), lang):
+            ret aliases.get(i + 1)
         end
         i += 2
     end
@@ -224,7 +224,7 @@ end
 func aliases_have(aliases: Vector<str>, lang: str, name: str): bool:
     mut i := 0
     until i + 1 < aliases.len():
-        if str.Equals(aliases.get(i)[0], lang) && su_ident_eq(aliases.get(i + 1)[0], name):
+        if str.Equals(aliases.get(i), lang) && su_ident_eq(aliases.get(i + 1), name):
             ret true
         end
         i += 2
@@ -246,7 +246,7 @@ func scope_member_canon(
     if !str.Equals(lang, "en"):
         msc := scope_at(s, members)
         repeat msc.symbols.len() with i:
-            m := sym_at(s, msc.symbols.get(i)[0])
+            m := sym_at(s, msc.symbols.get(i))
             if m.decl == 0:
                 continue
             end
@@ -286,6 +286,38 @@ end
 // local_canon
 func local_canon(s &: Sema, a &: at.Ast, name: str, sp: co.SrcSpan): str:
     ret scope_member_canon(s, a, s.global, name, sp)
+end
+
+// sema_check_shadows_func - a variable, parameter or constant may not reuse a
+// function's name. Since a bare function name is now a value (its address), a
+// local of the same name would silently take the name over for the rest of its
+// scope and a reader could no longer tell which of the two an identifier
+// meant. Only free functions are checked: methods live in a struct's member
+// scope and are only ever reachable through a receiver, so they cannot be
+// shadowed this way.
+func sema_check_shadows_func(s &: Sema, name: str, sp: co.SrcSpan):
+    if str.Len(name) == 0:
+        ret
+    end
+    // A generic instance carries the locals of the file the generic was
+    // WRITTEN in, not the file being compiled, so a param like Vector's
+    // `reserve(need)` would collide with any free function named `need` in
+    // the importing package. The C side skips the check for the same reason.
+    if s.in_generic_inst:
+        ret
+    end
+    f := scope_lookup_local(s, s.global, name)
+    if f == 0:
+        ret
+    end
+    if sym_at(s, f).kind != SYM_FUNC:
+        ret
+    end
+    serr(
+        s, 90, sp, co.Format1(
+            i18.Tr("'%s' is already the name of a function in this file"), co.ArgStr(name)
+        )
+    )
 end
 
 // sema_pure_fn - the current function's decl node when it is `pure`.

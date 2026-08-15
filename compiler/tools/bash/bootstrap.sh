@@ -207,6 +207,13 @@ accepts_llvm_flags() {
     "$1" help 2>&1 | grep -q -- '--libpath'
 }
 
+# Does this compiler understand -dNAME=VALUE compile-time constants? A seed
+# released before they existed rejects the flag outright rather than ignoring
+# it, so stage 1 has to ask before stamping the build info onto it.
+accepts_const_defines() {
+    "$1" help 2>&1 | grep -q -- '-dNAME=VALUE'
+}
+
 # Escape hatch for the LLVM-builds-LLVM chain below. `c` puts every stage
 # back on the C backend without giving up the LLVM the stages *link*, which
 # is the knob to reach for if the LLVM backend ever cannot compile the
@@ -252,6 +259,28 @@ has_inprocess_llvm() {
     rm -rf "$_probe_dir"
     return $_rc
 }
+
+# What `salam version` will report for every stage. compiler/sal_core.salam
+# reads these as compile-time constants, so without them a stage inherits the
+# *builder's* build info - which for stage 1 means a released seed's version
+# number rather than this checkout's. VERSION is the repo file, the single
+# place the release number lives; the git metadata describes the tree being
+# compiled, not the compiler doing the compiling.
+STAMP_VERSION="$(cat "$ROOT/VERSION" 2>/dev/null || echo 0.0.0-dev)"
+STAMP_COMMIT="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+# Strict ISO 8601 (%cI, not %ci): the flag list below is word-split on the
+# way to the build command, so a commit date with spaces in it would arrive
+# as four separate arguments. The C Makefile stamps the same format.
+STAMP_DATE="$(git -C "$ROOT" show -s --format=%cI HEAD 2>/dev/null || echo unknown)"
+STAMP_DIRTY=
+if [ -n "$(git -C "$ROOT" status --porcelain 2>/dev/null)" ]; then
+    STAMP_DIRTY=-dirty
+fi
+# Quoted so a value that would otherwise read as a number (a two-component
+# version like "0.3") stays a string constant.
+BUILD_INFO_FLAGS="-dSALAM_VERSION=\"$STAMP_VERSION\" -dSALAM_GIT_COMMIT=\"$STAMP_COMMIT\""
+BUILD_INFO_FLAGS="$BUILD_INFO_FLAGS -dSALAM_GIT_DATE=\"$STAMP_DATE\""
+BUILD_INFO_FLAGS="$BUILD_INFO_FLAGS -dSALAM_GIT_DIRTY=\"$STAMP_DIRTY\""
 
 # The seed decides whether stage 1 can have LLVM. Everything after it is
 # built by a compiler from this checkout, so from stage 2 on the only
@@ -309,11 +338,20 @@ while [ "$stage" -le "$STAGES" ]; do
         stage_backend=LLVM
     fi
     echo "   backend: $stage_backend (via $(basename "$prev"))"
+    # A seed too old to know -d gets no stamp and reports its own build info;
+    # every later stage is built by a compiler from this checkout, so only
+    # stage 1 can ever fall back.
+    stage_info=$BUILD_INFO_FLAGS
+    if ! accepts_const_defines "$prev"; then
+        stage_info=
+        echo "::warning::$(basename "$prev") predates -dNAME=VALUE;" \
+            "stage $stage reports its builder's version, not $STAMP_VERSION" >&2
+    fi
     # shellcheck disable=SC2086 # flag lists; splitting is wanted
     (
         cd "$ROOT" &&
             "$prev" build compiler/main.salam \
-                --output="$out" $stage_cc --log-level=error $stage_llvm
+                --output="$out" $stage_cc --log-level=error $stage_llvm $stage_info
     ) || {
         echo "::error::stage $stage build failed" >&2
         if [ "$stage_backend" = LLVM ]; then

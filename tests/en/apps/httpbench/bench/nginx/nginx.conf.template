@@ -1,0 +1,113 @@
+# nginx counterpart to main.salam, for the routes nginx can answer on its own.
+#
+# nginx is not an application server, and pretending otherwise would make the
+# comparison dishonest in nginx's favour. What it can do without help is the
+# part of the workload that is "parse a request, pick a response, write it":
+#
+#   /plaintext /json /health   a fixed body, returned from the config
+#   /users/:id                 one regex-captured path segment
+#   /file /cached /static/...  bytes off disk, through nginx's file path
+#   /                          the HTML page, pre-rendered to a file
+#
+# What it cannot do is /compute, /search and /echo: real per-request work over
+# caller-supplied input. Those need PHP-FPM or a proxy behind it, at which
+# point the number measures the thing behind nginx, not nginx. They are left
+# out of nginx's column rather than faked.
+#
+# Every placeholder is filled in by bench/run.sh.
+
+worker_processes  @WORKERS@;
+daemon            off;
+pid               @RUNDIR@/nginx.pid;
+error_log         @RUNDIR@/error.log crit;
+
+events {
+    worker_connections  4096;
+    multi_accept        on;
+}
+
+http {
+    access_log      off;
+    sendfile        on;
+    tcp_nopush      on;
+    tcp_nodelay     on;
+    keepalive_timeout   65;
+    keepalive_requests  100000;
+    server_tokens   off;
+
+    client_body_temp_path @RUNDIR@/client_body;
+    proxy_temp_path       @RUNDIR@/proxy;
+    fastcgi_temp_path     @RUNDIR@/fastcgi;
+    uwsgi_temp_path       @RUNDIR@/uwsgi;
+    scgi_temp_path        @RUNDIR@/scgi;
+
+    types {
+        text/css   css;
+        text/html  html;
+        application/json json;
+    }
+    default_type application/octet-stream;
+
+    server {
+        listen       127.0.0.1:@PORT@ reuseport backlog=4096;
+        server_name  localhost;
+        root         @ASSETS@;
+
+        location = /plaintext {
+            default_type "text/plain; charset=utf-8";
+            return 200 "Hello, World!";
+        }
+
+        location = /health {
+            default_type application/json;
+            return 200 '{"status":"ok","service":"httpbench"}';
+        }
+
+        location = /json {
+            default_type application/json;
+            return 200 '{"message":"Hello, World!","server":"nginx","routes":13,"ok":true}';
+        }
+
+        location ~ ^/users/([^/]+)$ {
+            default_type application/json;
+            return 200 '{"id":"$1","name":"user-$1","active":true}';
+        }
+
+        # Both hit the same file. nginx has no "read it once at boot" mode
+        # distinct from its page cache, so /file and /cached are the same
+        # response here, and the pair says nothing about nginx the way it does
+        # about the other three.
+        location = /file    { default_type application/json; alias @ASSETS@/data.json; }
+        location = /cached  { default_type application/json; alias @ASSETS@/data.json; }
+
+        # Serving one HTML file at / took three tries, and the first two both
+        # returned non-2xx for every single request while looking correct in
+        # the config. `alias` inside an exact-match location does not do what
+        # it looks like. `index index.html` on its own does not either: it
+        # internally redirects to /index.html, which then falls through to the
+        # catch-all `location /` below and 404s. The exact location for
+        # /index.html underneath is what makes the redirect land on the file.
+        #
+        # Worth stating plainly, since this benchmark is partly about how
+        # servers fail: nothing warned about either mistake. The only signal
+        # was the load generator counting non-2xx responses, which is why it
+        # counts them.
+        location = / {
+            default_type "text/html; charset=utf-8";
+            index index.html;
+        }
+
+        location = /index.html {
+            default_type "text/html; charset=utf-8";
+        }
+
+        location /static/ {
+            alias @ASSETS@/;
+        }
+
+        location / {
+            default_type "text/plain; charset=utf-8";
+            return 404 "404 Not Found";
+        }
+    }
+}

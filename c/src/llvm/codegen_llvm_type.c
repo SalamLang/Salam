@@ -676,9 +676,21 @@ const char *ll_conv(ll_t *ll, llv_t v, const char *to_ts)
 
     if (to_ts && !strncmp(to_ts, "dyn ", 4) && ll_struct_sym(ll, from))
         return ll_box_dyn(ll, v, to_ts + 4);
-    bool fi = ll_is_int(from), ff = ll_is_float(from),
+    /*
+     * An enum is an i32 everywhere else in this backend (ll_ty returns "i32"
+     * for one, and ll_int_bits falls through to 32), but ll_is_int only knows
+     * the builtin spellings - so an enum-typed operand matched none of the
+     * branches below and fell out of the bottom UNCONVERTED. `println` of a
+     * struct with an enum field then emitted
+     *   %t5 = load i32, ptr %t4
+     *   %t7 = call ptr @salam_ll_i64str(i64 %t5)
+     * which is not valid IR at all. The C compiler hid it by falling back to
+     * the C backend for the whole file; a self-hosted compiler with
+     * in-process LLVM has no such fallback and simply failed the build.
+     */
+    bool fi = ll_is_int(from) || ll_enum_sym(ll, from), ff = ll_is_float(from),
          fp = ll_is_str(from) || ll_is_ptr_ts(from);
-    bool ti = ll_is_int(to_ts), tf = ll_is_float(to_ts),
+    bool ti = ll_is_int(to_ts) || ll_enum_sym(ll, to_ts), tf = ll_is_float(to_ts),
          tp = ll_is_str(to_ts) || ll_is_ptr_ts(to_ts);
     const char *lf = ll_ty(ll, from), *lt = ll_ty(ll, to_ts);
     const char *r = ll_new_tmp(ll);

@@ -1,0 +1,410 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package graph
+
+// Tours: walks that must use every edge (Eulerian) or visit every node
+// (Hamiltonian), and the travelling salesman problem on top of the latter.
+//
+// The two look alike and could not be more different. Eulerian is decided by
+// a degree count and constructed in linear time by Hierholzer's algorithm.
+// Hamiltonian is NP-complete, so the routines here are exhaustive search with
+// pruning, for small graphs, plus the standard TSP heuristics for when the
+// graph is too big to be exact on.
+//
+//   Eulerian circuit exists  <=>  connected and every degree is even
+//   Eulerian path exists     <=>  connected and 0 or 2 nodes have odd degree
+//   directed circuit exists  <=>  strongly connected on the used nodes and
+//                                 in-degree equals out-degree everywhere
+
+func _odd_count(g &: Graph): int:
+    mut c := 0
+    repeat g.n with u:
+        if g.degree(u) % 2 == 1: c += 1 end
+    end
+    ret c
+end
+
+// Connectivity restricted to the nodes that actually have an edge: an
+// Eulerian circuit does not care about isolated nodes, and refusing one
+// because of them would be wrong.
+func _edges_connected(g &: Graph): bool:
+    mut start := GRAPH_NONE
+    repeat g.n with u:
+        if g.degree(u) > 0:
+            if start == GRAPH_NONE: start = u end
+        end
+    end
+    if start == GRAPH_NONE: ret true end
+    mut r := Reachable(g, start)
+    defer r.free()
+    mut ok := true
+    repeat g.n with u:
+        if g.degree(u) > 0:
+            if r.get(u) == false: ok = false end
+        end
+    end
+    ret ok
+end
+
+func _balanced(g &: Graph): bool:
+    repeat g.n with u:
+        if g.in_degree(u) != g.out_degree(u): ret false end
+    end
+    ret true
+end
+
+// Hierholzer's algorithm: walk until stuck, and every time you get stuck
+// splice the closed walk you just made into the answer. The cursor per node
+// never rewinds, which is what makes it linear.
+func _hierholzer(g &: Graph, start: int): Vector<int>:
+    mut used := Vector {} as Vector<bool>
+    defer used.free()
+    mut iter := Vector {} as Vector<int>
+    defer iter.free()
+    mut stack := Vector {} as Vector<int>
+    defer stack.free()
+    mut out := Vector {} as Vector<int>
+    FillBool(used, g.size(), false)
+    FillInt(iter, g.n, 0)
+    repeat g.n with u: iter.set(u, g.adj_start(u)) end
+    stack.push(start)
+    until stack.len() > 0:
+        u := stack.last()
+        e := _next_unused(g, u, used, iter)
+        if e == GRAPH_NONE:
+            out.push(u)
+            stack.pop()
+        else:
+            used.set(g.adj_edge(e), true)
+            stack.push(g.adj_node(e))
+        end
+    end
+    ReverseInt(out)
+    ret out
+end
+
+func _next_unused(g &: Graph, u: int, used &: Vector<bool>, iter &: Vector<int>): int:
+    mut k := iter.get(u)
+    stop := g.adj_stop(u)
+    until k < stop:
+        if used.get(g.adj_edge(k)) == false:
+            iter.set(u, k)
+            ret k
+        end
+        k += 1
+        iter.set(u, k)
+    end
+    ret GRAPH_NONE
+end
+
+func _euler_start(g &: Graph): int:
+    if g.directed: ret _euler_start_directed(g) end
+    mut odd := GRAPH_NONE
+    mut any := GRAPH_NONE
+    repeat g.n with u:
+        if g.degree(u) > 0:
+            if any == GRAPH_NONE: any = u end
+            if g.degree(u) % 2 == 1:
+                if odd == GRAPH_NONE: odd = u end
+            end
+        end
+    end
+    if odd != GRAPH_NONE: ret odd end
+    ret any
+end
+
+func _euler_start_directed(g &: Graph): int:
+    mut any := GRAPH_NONE
+    repeat g.n with u:
+        if g.out_degree(u) > 0:
+            if any == GRAPH_NONE: any = u end
+            if g.out_degree(u) - g.in_degree(u) == 1: ret u end
+        end
+    end
+    ret any
+end
+
+func _ham_extend(g &: Graph, path &: Vector<int>, onpath &: Vector<bool>, want_cycle: bool): bool:
+    if path.len() == g.n: ret _ham_finish(g, path, want_cycle) end
+    u := path.last()
+    mut k := g.adj_start(u)
+    stop := g.adj_stop(u)
+    until k < stop:
+        v := g.adj_node(k)
+        if onpath.get(v) == false:
+            onpath.set(v, true)
+            path.push(v)
+            if _ham_extend(g, path, onpath, want_cycle): ret true end
+            path.pop()
+            onpath.set(v, false)
+        end
+        k += 1
+    end
+    ret false
+end
+
+func _ham_finish(g &: Graph, path &: Vector<int>, want_cycle: bool): bool:
+    if want_cycle == false: ret true end
+    ret g.has_edge(path.last(), path.get(0))
+end
+
+func _nn_tour(g &: Graph, w &: Matrix, start: int): Vector<int>:
+    mut seen := Vector {} as Vector<bool>
+    defer seen.free()
+    FillBool(seen, g.n, false)
+    mut tour := Vector {} as Vector<int>
+    mut cur := start
+    seen.set(cur, true)
+    tour.push(cur)
+    repeat g.n - 1:
+        nxt := _nearest(w, cur, seen, g.n)
+        if nxt == GRAPH_NONE: break end
+        seen.set(nxt, true)
+        tour.push(nxt)
+        cur = nxt
+    end
+    ret tour
+end
+
+func _nearest(w &: Matrix, cur: int, seen: Vector<bool>, n: int): int:
+    mut best := GRAPH_NONE
+    repeat n with v:
+        if seen.get(v) == false:
+            if w.at(cur, v) < GRAPH_INF:
+                if best == GRAPH_NONE: best = v
+                else w.at(cur, v) < w.at(cur, best): best = v
+                end
+            end
+        end
+    end
+    ret best
+end
+
+// One 2-opt pass: reverse any tour segment whose two boundary edges can be
+// replaced by a cheaper pair. Repeated to a fixed point this removes every
+// crossing, which is most of the gap between nearest-neighbour and optimal.
+func _two_opt_pass(w &: Matrix, tour &: Vector<int>): bool:
+    n := tour.len()
+    mut improved := false
+    mut i := 0
+    until i < n - 2:
+        mut j := i + 2
+        until j < n:
+            if _two_opt_gain(w, tour, i, j, n) < 0.0:
+                _reverse_span(tour, i + 1, j)
+                improved = true
+            end
+            j += 1
+        end
+        i += 1
+    end
+    ret improved
+end
+
+func _two_opt_gain(w &: Matrix, tour: Vector<int>, i: int, j: int, n: int): f64:
+    a := tour.get(i)
+    b := tour.get(i + 1)
+    c := tour.get(j)
+    d := tour.get((j + 1) % n)
+    if a == d: ret 0.0 end
+    before := w.at(a, b) + w.at(c, d)
+    after := w.at(a, c) + w.at(b, d)
+    if before >= GRAPH_INF: ret 0.0 end
+    if after >= GRAPH_INF: ret 0.0 end
+    ret after - before
+end
+
+func _reverse_span(tour &: Vector<int>, lo: int, hi: int):
+    mut i := lo
+    mut j := hi
+    until i < j:
+        a := tour.get(i)
+        b := tour.get(j)
+        tour.set(i, b)
+        tour.set(j, a)
+        i += 1
+        j = j - 1
+    end
+end
+
+func _directed_path_ok(g &: Graph): bool:
+    mut extra_out := 0
+    mut extra_in := 0
+    repeat g.n with u:
+        d := g.out_degree(u) - g.in_degree(u)
+        if d == 1: extra_out += 1
+        else d == 0 - 1: extra_in += 1
+        else d != 0: ret false
+        end
+    end
+    if extra_out == 0:
+        ret extra_in == 0
+    end
+    if extra_out != 1: ret false end
+    ret extra_in == 1
+end
+
+func _ham_search(g &: Graph, want_cycle: bool): Vector<int>:
+    mut path := Vector {} as Vector<int>
+    mut onpath := Vector {} as Vector<bool>
+    defer onpath.free()
+    if g.n == 0: ret path end
+    mut start := 0
+    until start < g.n:
+        FillBool(onpath, g.n, false)
+        path.clear()
+        onpath.set(start, true)
+        path.push(start)
+        if _ham_extend(g, path, onpath, want_cycle): ret path end
+        if want_cycle: break end
+        start += 1
+    end
+    path.clear()
+    ret path
+end
+
+// An Eulerian circuit uses every edge exactly once and returns to its start.
+@en "HasEulerianCircuit"
+@fa "دارای دور اویلری"
+@ar "به دورة أويلرية"
+pub func HasEulerianCircuit(g &: Graph): bool:
+    if g.size() == 0: ret true end
+    if _edges_connected(g) == false: ret false end
+    if g.directed: ret _balanced(g) end
+    ret _odd_count(g) == 0
+end
+
+// An Eulerian path uses every edge exactly once but may end elsewhere, which
+// undirected graphs allow when exactly two nodes have odd degree.
+@en "HasEulerianPath"
+@fa "دارای مسیر اویلری"
+@ar "به مسار أويلري"
+pub func HasEulerianPath(g &: Graph): bool:
+    if g.size() == 0: ret true end
+    if _edges_connected(g) == false: ret false end
+    if g.directed: ret _directed_path_ok(g) end
+    odd := _odd_count(g)
+    if odd == 0: ret true end
+    ret odd == 2
+end
+
+// The circuit itself as a node sequence of m+1 entries, first equal to last.
+// Empty when none exists.
+@en "EulerianCircuit"
+@fa "دور اویلری"
+@ar "دورة أويلرية"
+pub func EulerianCircuit(g &: Graph): Vector<int>:
+    mut out := Vector {} as Vector<int>
+    if HasEulerianCircuit(g) == false: ret out end
+    if g.size() == 0: ret out end
+    defer out.free()
+    ret _hierholzer(g, _euler_start(g))
+end
+
+// The path as a node sequence of m+1 entries. Starts at an odd-degree node
+// when there is one, which is the only way a path can exist.
+@en "EulerianPath"
+@fa "مسیر اویلری"
+@ar "مسار أويلري"
+pub func EulerianPath(g &: Graph): Vector<int>:
+    mut out := Vector {} as Vector<int>
+    if HasEulerianPath(g) == false: ret out end
+    if g.size() == 0: ret out end
+    defer out.free()
+    ret _hierholzer(g, _euler_start(g))
+end
+
+// A Hamiltonian path visits every node exactly once. Exhaustive search with
+// the visited set as the only pruning, so this is for small graphs.
+@en "HamiltonianPath"
+@fa "مسیر همیلتونی"
+@ar "مسار هاميلتوني"
+pub func HamiltonianPath(g &: Graph): Vector<int>:
+    ret _ham_search(g, false)
+end
+
+// A Hamiltonian cycle: a Hamiltonian path whose ends are joined.
+@en "HamiltonianCycle"
+@fa "دور همیلتونی"
+@ar "دورة هاميلتونية"
+pub func HamiltonianCycle(g &: Graph): Vector<int>:
+    ret _ham_search(g, true)
+end
+
+@en "HasHamiltonianCycle"
+@fa "دارای دور همیلتونی"
+@ar "به دورة هاميلتونية"
+pub func HasHamiltonianCycle(g &: Graph): bool:
+    mut c := HamiltonianCycle(g)
+    defer c.free()
+    ret c.len() > 0
+end
+
+// The total weight of a closed tour, GRAPH_INF if any step is missing.
+@en "TourLength"
+@fa "طول تور"
+@ar "طول الجولة"
+pub func TourLength(g &: Graph, tour: Vector<int>): f64:
+    if tour.len() < 2: ret 0.0 end
+    mut w := WeightMatrix(g)
+    mut total := 0.0
+    repeat tour.len() with i:
+        a := tour.get(i)
+        b := tour.get((i + 1) % tour.len())
+        total += w.at(a, b)
+    end
+    defer w.free()
+    if total >= GRAPH_INF: ret GRAPH_INF end
+    ret total
+end
+
+// Nearest neighbour: from where you are, go to the closest place you have
+// not been. Fast, and typically 25% above optimal on metric instances.
+@en "TSPNearestNeighbor"
+@fa "نزدیک‌ترین همسایه"
+@ar "أقرب جار"
+pub func TSPNearestNeighbor(g &: Graph, start: int): Vector<int>:
+    mut w := WeightMatrix(g)
+    tour := _nn_tour(g, w, start)
+    defer w.free()
+    ret tour
+end
+
+// 2-opt local search on an existing tour: repeatedly uncross pairs of edges
+// until no swap helps. Cheap, and it fixes the worst of what a greedy
+// construction leaves behind.
+@en "TSPTwoOpt"
+@fa "دو-بهینه"
+@ar "التحسين الثنائي"
+pub func TSPTwoOpt(g &: Graph, tour &: Vector<int>): f64:
+    mut w := WeightMatrix(g)
+    mut rounds := 0
+    until rounds < 1000:
+        if _two_opt_pass(w, tour) == false: break end
+        rounds += 1
+    end
+    defer w.free()
+    ret TourLength(g, tour)
+end
+
+// Nearest neighbour followed by 2-opt: the standard cheap TSP pipeline.
+@en "TSPHeuristic"
+@fa "ابتکاری فروشنده دوره‌گرد"
+@ar "تقريبي البائع المتجول"
+pub func TSPHeuristic(g &: Graph, start: int): Vector<int>:
+    tour := TSPNearestNeighbor(g, start)
+    TSPTwoOpt(g, tour)
+    ret tour
+end

@@ -198,7 +198,7 @@ const L_AR := 3
 
 const K_SM_PRIM_COUNT := 77
 const K_SM_INTR_TYPE_COUNT := 5
-const K_SM_INTR_METHOD_COUNT := 28
+const K_SM_INTR_METHOD_COUNT := 29
 const K_SM_BUILTIN_COUNT := 3
 // sema.c: g_seg_aliases[512] capacity and package_files' max (256).
 const K_SM_SEG_MAX := 512
@@ -286,6 +286,7 @@ k_sm_intr_types := [
 
 k_sm_intr_methods := [
     "بیفزا", "أضف", "push", "دربیاور", "أخرج", "pop", "بگیر", "احصل", "get",
+    "ارجاع", "مرجع", "ref",
     "بنشان", "عين", "set", "طول", "طول", "len", "ظرفیت", "سعة", "cap", "آزادکن",
     "حرر", "free", "درج", "ضع", "put", "دارد", "يحوي", "has", "حذف", "احذف", "remove",
     "اندازه", "حجم", "size", "پیمایش", "تكرار", "iter", "داردبعدی", "يوجدتالي",
@@ -295,7 +296,7 @@ k_sm_intr_methods := [
     "close", "پیوست", "دمج", "concat", "زیررشته", "مقطع", "substr", "بیاب", "ابحث",
     "find", "بشکاف", "قسم", "split", "پیراست", "شذب", "trim", "به صحیح", "إلىصحيح",
     "to_int", "به اعشار", "إلىعشري", "to_float"
-] as str[84]
+] as str[87]
 
 // ===== builtins.c (data) =====
 // k_builtins[] as parallel arrays.
@@ -313,6 +314,20 @@ mut g_sm_stdlib_resolved := false
 // g_relax_unused - process-wide "this is a REPL, not a file" switch; see
 // SetRelaxUnused.
 mut g_sm_relax_unused := false
+// builtins.c's -dNAME=VALUE table (g_cli_consts), as parallel vectors: name,
+// the token kind the value lexes as, and one slot per value shape. The C
+// holds these in a fixed pool because name resolution has no allocator to
+// hand down; here the vectors own their storage and SetConsts replaces the
+// lot. op is tok.TK_INT | TK_FLOAT | TK_STRING | TK_KW_TRUE | TK_KW_FALSE.
+mut g_sm_const_name := Vector {} as Vector<str>
+mut g_sm_const_op := Vector {} as Vector<int>
+mut g_sm_const_int := Vector {} as Vector<u64>
+mut g_sm_const_neg := Vector {} as Vector<bool>
+mut g_sm_const_float := Vector {} as Vector<f64>
+mut g_sm_const_str := Vector {} as Vector<str>
+// The moment this build started, for SALAM_BUILD_DATE; filled in on first
+// use so a program that never mentions it pays nothing.
+mut g_sm_build_date := ""
 // g_seg_aliases[512] + g_seg_alias_n + g_seg_alias_root as parallel vectors
 // (lang, alias, canon); n = -1 means "index not built yet" like the C.
 mut g_sm_seg_lang := Vector {} as Vector<str>
@@ -401,6 +416,13 @@ pub struct Symbol:
     pub is_pub: bool = false
     pub used: bool = false
     pub mutated: bool = false
+    // A name the loop itself introduced: `repeat ... with i`, or either half
+    // of an `each` binding. Held to a stricter unused rule than an ordinary
+    // local - a '_' prefix does not excuse them, because the fix is to drop
+    // the binding rather than to rename it. Only the bare name "_" is a
+    // discard, for the `each (_, v) in map` case where the key binding
+    // cannot be left out.
+    pub loop_bind: bool = false
     pub decl: int = 0
     pub overloads: Vector<int> = Vector {}
     pub members: int = 0
@@ -494,6 +516,24 @@ pub struct Sema:
     pub prelude: int = 0 // ScopeId
     pub prelude_tried: bool = false
     pub in_pkg: bool = false
+    // Set while the pending-instantiation loop is running. A generic body is
+    // a clone of a template from whatever package declared it, re-checked
+    // against the *instantiating* package's globals - so its locals are not
+    // something the programmer of this package wrote, and must not be held to
+    // this package's name-collision rule. Without this, a local named `out`
+    // in std/collections' Vector.remove_at reported a collision in every
+    // package that happened to declare a function called `out`.
+    pub in_generic_inst: bool = false
+    // Stringify functions derived for `println <aggregate>` (sema_derive.salam).
+    // The C keeps one vec of derived_t{scope,name,decl}; three parallel
+    // vectors here. Shared across every package this run analyses; each entry
+    // names the scope it was installed in.
+    pub derived_scopes: Vector<int> = Vector {} // ScopeIds
+    pub derived_names: Vector<str> = Vector {}
+    pub derived_decls: Vector<int> = Vector {} // at.NodeIds
+    // Set while one of those bodies is being checked. It reads every field of
+    // the struct it prints, private ones included.
+    pub in_derive: bool = false
     pub relax_unused: bool = false
     pub requal: bool = false
     pub each_n: int = 0

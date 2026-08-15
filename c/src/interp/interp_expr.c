@@ -160,7 +160,6 @@ static value_t eval_call(interp_t *I, env_t *env, ast_node_t *n)
         }
         if (!strcmp(nm, "strcmp") && na == 2)
             return val_int(strcmp(to_str(I, args[0]), to_str(I, args[1])));
-        if (!strcmp(nm, "funcptr") && na == 1) return args[0];
         if (!strcmp(nm, "listdir") && na == 1) return do_listdir(I, n, args[0]);
         if (!strcmp(nm, "hash") && na == 1) {
             const char *fname =

@@ -367,28 +367,6 @@ static const char *call_ident(cg_t *cg, ast_node_t *n, ast_node_t *callee)
         const char *mangled = fsym ? cg_mangle(cg, NULL, fn->name, &empty) : fn->name;
         return cg_fmt(cg, "salam_thread_spawn((salam_thread_fn)%s)", mangled);
     }
-    if (!strcmp(nm, "funcptr") && n->list.len == 1) {
-        ast_node_t *fn = (ast_node_t *)n->list.data[0];
-        symbol_t *fsym = scope_lookup(cg->sem->global, fn->name);
-        const char *mangled;
-        if (fsym && fsym->overloads.len > 0) {
-            func_sig_t *sig = (func_sig_t *)fsym->overloads.data[0];
-            /*
-             * An extern keeps its declared C name - it is not one of ours
-             * to mangle. Without this, funcptr() on a libc extern emitted
-             * a mangled symbol that exists nowhere: `funcptr(printf)` in
-             * std/llvm/orc.salam became `_Salam_llvm_printf_str` and the
-             * link failed with "undeclared". Matches how ll_call_user and
-             * the LLVM backend's funcptr lowering both treat externs.
-             */
-            mangled = (sig->decl && sig->decl->is_extern)
-                          ? fn->name
-                          : cg_mangle(cg, NULL, fn->name, &sig->params);
-        } else {
-            mangled = fn->name;
-        }
-        return cg_fmt(cg, "(int64_t)(void*)%s", mangled);
-    }
     if (!strcmp(nm, "callhandler") && n->list.len == 2) {
         const char *fnp = cg_expr(cg, (ast_node_t *)n->list.data[0]);
         const char *arg = cg_expr(cg, (ast_node_t *)n->list.data[1]);

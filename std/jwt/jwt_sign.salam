@@ -1,0 +1,125 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package jwt
+
+// Signing: JWS compact serialization (RFC 7515 §7.1).
+//
+//     base64url(header) "." base64url(payload) "." base64url(MAC)
+//
+// The MAC is over the ASCII of the first two segments joined by the dot,
+// which is why the signature is computed from the encoded text and never
+// from the JSON.
+
+func _header_json(alg: str, kid: str): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppend(sb, `{"alg":`)
+    str.BufAppend(sb, _quoted(alg))
+    str.BufAppend(sb, `,"typ":"JWT"`)
+    if kid.len() > 0:
+        str.BufAppend(sb, `,"kid":`)
+        str.BufAppend(sb, _quoted(kid))
+    end
+    str.BufAppendChar(sb, 125)
+    out := str.BufStr(sb)
+    ret out
+end
+
+// The MAC over `signing_input`, base64url-encoded. Raw bytes throughout: the digest
+// is not turned into hex on the way, because hex would have to be decoded
+// back through a `str` that a 0x00 byte truncates.
+func _signature(alg: str, secret: str, signing_input: str): str:
+    n := DigestSize(alg)
+    if n == 0: ret "" end
+    out := mem.Allocate(n as u64)
+    defer mem.Free(out)
+    if alg == JWT_HS256:
+        crypto.HmacSha256Bytes(secret, signing_input, out)
+    else alg == JWT_HS384:
+        crypto.HmacSha384Bytes(secret, signing_input, out)
+    else:
+        crypto.HmacSha512Bytes(secret, signing_input, out)
+    end
+    sig := B64UrlEncodeBytes(out, n)
+    ret sig
+end
+
+// Sign a payload the caller rendered. The escape hatch for a claim set this
+// package's Claims does not cover; `payload_json` goes out verbatim.
+@en "SignJSON"
+@fa "امضای جیسون"
+@ar "توقیع جیسون"
+pub func SignJSON(payload_json: str, alg: str, kid: str, secret: str, err &: int): str:
+    err = JWT_OK
+    if !IsSupportedAlg(alg):
+        err = JWT_ERR_ALG_UNSUPPORTED
+        ret ""
+    end
+    // An empty secret is a configuration bug that produces a token anyone
+    // can forge, so it fails here rather than shipping.
+    if secret.len() == 0:
+        err = JWT_ERR_EMPTY_SECRET
+        ret ""
+    end
+    signing_input := B64UrlEncode(_header_json(alg, kid)).concat(".").concat(B64UrlEncode(payload_json))
+    ret signing_input.concat(".").concat(_signature(alg, secret, signing_input))
+end
+
+// The base64url MAC over an arbitrary signing input - the third segment of
+// a JWS whose first two segments are `signing_input`. For a caller that
+// builds its own header, and for detached-signature checks. Returns "" for
+// an unsupported algorithm.
+@en "SignatureOf"
+@fa "امضای ورودی"
+@ar "توقیع المدخل"
+pub func SignatureOf(signing_input: str, alg: str, secret: str): str:
+    if secret.len() == 0: ret "" end
+    ret _signature(alg, secret, signing_input)
+end
+
+@en "SignWithKid"
+@fa "امضا با شناسه کلید"
+@ar "توقیع مع معرف المفتاح"
+pub func SignWithKid(c: Claims, alg: str, kid: str, secret: str, err &: int): str:
+    ret SignJSON(ClaimsJSON(c), alg, kid, secret, err)
+end
+
+@en "Sign"
+@fa "امضا"
+@ar "توقیع"
+pub func Sign(c: Claims, alg: str, secret: str, err &: int): str:
+    ret SignJSON(ClaimsJSON(c), alg, "", secret, err)
+end
+
+@en "SignHS256"
+@fa "امضای اچ اس۲۵۶"
+@ar "توقیع اتش اس٢٥٦"
+pub func SignHS256(c: Claims, secret: str, err &: int): str:
+    ret SignJSON(ClaimsJSON(c), JWT_HS256, "", secret, err)
+end
+
+@en "SignHS384"
+@fa "امضای اچ اس۳۸۴"
+@ar "توقیع اتش اس٣٨٤"
+pub func SignHS384(c: Claims, secret: str, err &: int): str:
+    ret SignJSON(ClaimsJSON(c), JWT_HS384, "", secret, err)
+end
+
+@en "SignHS512"
+@fa "امضای اچ اس۵۱۲"
+@ar "توقیع اتش اس٥١٢"
+pub func SignHS512(c: Claims, secret: str, err &: int): str:
+    ret SignJSON(ClaimsJSON(c), JWT_HS512, "", secret, err)
+end

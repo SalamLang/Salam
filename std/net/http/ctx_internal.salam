@@ -56,13 +56,20 @@ end
 @en "SERVER_VERSION"
 @fa "نسخه سرور"
 @ar "إصدار الخادم"
-pub const SERVER_VERSION := "0.2.9"
+// The toolchain's own version, so the Server: header a Salam service sends
+// tracks the repo's VERSION file with nothing to bump here.
+pub const SERVER_VERSION := SALAM_VERSION
+
+// Bytes per socket read; one buffer per connection, reused per request.
+const _RD_CHUNK := 65536
 
 mut _reqctx_size := 0 as i64
 mut _current_router := router.NewRouter()
 mut _hide_tokens := false
 mut _access_log := false
 mut _current_tls_cfg := tls.NewServerConfig("", "")
+mut _keepalive_idle_ms := 5000
+mut _keepalive_max_reqs := 100000
 
 @en "Context"
 @fa "زمینه"
@@ -89,6 +96,11 @@ struct _ReqCtx:
     pub req_hdrs: Vector<_KV> = Vector {}
     pub path_params: Vector<_KV> = Vector {}
     pub resp_hdrs: Vector<_KV> = Vector {}
+    // Whether this request permits the connection to be reused, decided by
+    // _parse_http from the HTTP version and the Connection header. The
+    // default is the HTTP/1.1 rule (reuse unless told otherwise); a request
+    // line ending in HTTP/1.0, or an explicit "Connection: close", flips it.
+    pub keep_alive: bool = true
 end
 
 @en "Server"
@@ -122,7 +134,9 @@ func _reqctx_sizeof(): i64:
     if _reqctx_size == 0:
         v := Vector {} as Vector<_ReqCtx> v.push(_ReqCtx {})
         v.push(_ReqCtx {})
-        _reqctx_size = (v.get(1) as i64) - (v.get(0) as i64)
+        // the stride between two slots, so these have to be the addresses
+        // ref hands back, not the elements get returns
+        _reqctx_size = (v.ref(1) as i64) - (v.ref(0) as i64)
     end
     ret _reqctx_size
 end
@@ -189,7 +203,7 @@ end
 
 func _kvl_get(l &: Vector<_KV>, key: str): str:
     repeat l.len() with i:
-        kv := l.get(i)[0]
+        kv := l.get(i)
         if kv.k == key: ret kv.v end
     end
     ret ""
@@ -197,7 +211,7 @@ end
 
 func _kvl_set(l &: Vector<_KV>, key: str, val: str):
     repeat l.len() with i:
-        if l.get(i)[0].k == key:
+        if l.get(i).k == key:
             l.set(i, _KV { k = key, v = val })
             ret
         end
@@ -217,7 +231,7 @@ func _kvl_set_cookie(l &: Vector<_KV>, cookie_name: str, val: str):
     prefix := cookie_name.concat("=")
     mut i := 0
     until i < l.len():
-        kv := l.get(i)[0]
+        kv := l.get(i)
         if kv.k == "Set-Cookie" && kv.v.len() >= prefix.len() && kv.v.substr(0, prefix.len()) == prefix:
             l.remove_at(i)
         else:
@@ -276,19 +290,19 @@ end
 
 func salam_ctx_kv_key(h: i64, list: int, idx: int): str:
     c := _rc(h)
-    if list == 0: ret c.req_hdrs.get(idx)[0].k
-    else list == 1: ret c.path_params.get(idx)[0].k
+    if list == 0: ret c.req_hdrs.get(idx).k
+    else list == 1: ret c.path_params.get(idx).k
     else:
-        ret c.resp_hdrs.get(idx)[0].k
+        ret c.resp_hdrs.get(idx).k
     end
 end
 
 func salam_ctx_kv_val(h: i64, list: int, idx: int): str:
     c := _rc(h)
-    if list == 0: ret c.req_hdrs.get(idx)[0].v
-    else list == 1: ret c.path_params.get(idx)[0].v
+    if list == 0: ret c.req_hdrs.get(idx).v
+    else list == 1: ret c.path_params.get(idx).v
     else:
-        ret c.resp_hdrs.get(idx)[0].v
+        ret c.resp_hdrs.get(idx).v
     end
 end
 
@@ -316,50 +330,64 @@ func _query_parse(req: str, key: str): str:
     ret ""
 end
 
+// Three copies of the whole request used to be made before a single header
+// was read: `after_method` (everything past the verb), then the header walk,
+// then a fresh scan from offset 0 for the blank line that the header walk had
+// already stepped over. This version copies out only the request target,
+// remembers where the header walk stopped, and slices the body from there.
 func _parse_http(ctx: i64, req: str):
+    c := _rc(ctx)
+    n := req.len()
     sp1 := req.find(" ")
     if sp1 < 0: ret end
-    salam_ctx_set(ctx, 0, req.substr(0, sp1))
-    after_method := req.substr(sp1 + 1, req.len() - sp1 - 1)
-    sp2 := after_method.find(" ")
+    c.method = req.substr(0, sp1)
+    sp2 := str.IndexFrom(req, " ", sp1 + 1)
     if sp2 < 0: ret end
-    pathquery := after_method.substr(0, sp2)
+    pathquery := req.substr(sp1 + 1, sp2 - sp1 - 1)
     qmark := pathquery.find("?")
     if qmark >= 0:
-        salam_ctx_set(ctx, 1, pathquery.substr(0, qmark))
-        salam_ctx_set(ctx, 2, pathquery.substr(qmark + 1, pathquery.len() - qmark - 1))
+        c.path = pathquery.substr(0, qmark)
+        c.query = pathquery.substr(qmark + 1, pathquery.len() - qmark - 1)
     else:
-        salam_ctx_set(ctx, 1, pathquery)
-        salam_ctx_set(ctx, 2, "")
+        c.path = pathquery
+        c.query = ""
     end
-    first_crlf := req.find("\r\n")
+    first_crlf := str.IndexFrom(req, "\r\n", sp2 + 1)
     if first_crlf < 0: ret end
+    // "HTTP/1.0" defaults to closing the connection; 1.1 and later default to
+    // keeping it. Either default can still be overridden by Connection below.
+    if first_crlf - sp2 - 1 >= 8 && req.substr(sp2 + 1, 8) == "HTTP/1.0":
+        c.keep_alive = false
+    end
     mut pos := first_crlf + 2
-    until pos < req.len():
-        if pos + 1 < req.len() && req.substr(pos, 2) == "\r\n":
-            pos += 2
+    mut body_start := 0 - 1
+    until pos < n:
+        if pos + 1 < n && req.substr(pos, 2) == "\r\n":
+            body_start = pos + 2
             break
         end
         line_end := str.IndexFrom(req, "\r\n", pos)
         if line_end < 0:
-            pos = req.len()
             break
         end
-        line := req.substr(pos, line_end - pos)
-        colon := line.find(":")
-        if colon >= 0:
-            hk := line.substr(0, colon)
-            hv := str.TrimLeft(line.substr(colon + 1, line.len() - colon - 1))
+        colon := str.IndexFrom(req, ":", pos)
+        if colon >= 0 && colon < line_end:
+            hk := req.substr(pos, colon - pos)
+            hv := str.TrimLeft(req.substr(colon + 1, line_end - colon - 1))
             salam_ctx_kv_add(ctx, 0, hk, hv)
+            // "Connection" is ten characters; nothing else that matters here
+            // is, so the length check keeps the lowercase copy off the hot
+            // path for every other header on every request.
+            if hk.len() == 10 && hk.lower() == "connection":
+                lv := hv.lower()
+                if lv == "close": c.keep_alive = false
+                else lv == "keep-alive": c.keep_alive = true end
+            end
         end
         pos = line_end + 2
     end
-    body_sep := str.IndexFrom(req, "\r\n\r\n", 0)
-    if body_sep >= 0:
-        body_start := body_sep + 4
-        if body_start < req.len():
-            salam_ctx_set(ctx, 3, req.substr(body_start, req.len() - body_start))
-        end
+    if body_start >= 0 && body_start < n:
+        c.body = req.substr(body_start, n - body_start)
     end
 end
 
@@ -368,34 +396,71 @@ func _server_header(hide: bool): str:
     ret "Salam/".concat(SERVER_VERSION)
 end
 
-func _build_response(ctx: i64, hide: bool): str:
+// "200 OK" without a heap allocation. The old path called conv.FormatInt to
+// turn the number into digits and mime.StatusText to look up the reason
+// phrase, then concatenated both, for every response. These four cover
+// essentially all of the traffic a server actually emits; everything else
+// falls through to the general path, which still works.
+func _status_line(status: int): str:
+    if status == 200: ret "200 OK" end
+    if status == 404: ret "404 Not Found" end
+    if status == 204: ret "204 No Content" end
+    if status == 500: ret "500 Internal Server Error" end
+    ret conv.FormatInt(status as i64).concat(" ").concat(mime.StatusText(status))
+end
+
+// Serializes the response into `b`, headers and body together.
+//
+// The old version built the same bytes with about a dozen `resp = resp.concat(...)`
+// steps. Each one allocates a new string the size of everything written so
+// far and copies it, so serializing an n-piece response costs O(n^2) bytes
+// copied and n allocations, all of them thrown away. A builder doubles its
+// buffer instead: one allocation per doubling, each byte written once.
+//
+// Body and headers land in the same buffer on purpose, so the whole response
+// leaves in a single write. Two writes would mean two syscalls, and with
+// TCP_NODELAY on, two packets for what fits in one.
+func _fill_response(b &: str.StringBuilder, ctx: i64, hide: bool, keep: bool):
     status := salam_ctx_get_status(ctx)
     ct := salam_ctx_get(ctx, 4)
     body := salam_ctx_get(ctx, 5)
-    mut resp := "HTTP/1.1 "
-    resp = resp.concat(conv.FormatInt(status as i64))
-    resp = resp.concat(" ")
-    resp = resp.concat(mime.StatusText(status))
-    resp = resp.concat("\r\nContent-Length: ")
-    resp = resp.concat(conv.FormatInt(body.len() as i64))
-    resp = resp.concat("\r\nConnection: close\r\nServer: ")
-    resp = resp.concat(_server_header(hide))
-    resp = resp.concat("\r\n")
+    str.BufAppend(b, "HTTP/1.1 ")
+    str.BufAppend(b, _status_line(status))
+    str.BufAppend(b, "\r\nContent-Length: ")
+    str.BufAppendInt(b, body.len() as i64)
+    if keep:
+        str.BufAppend(b, "\r\nConnection: keep-alive")
+    else:
+        str.BufAppend(b, "\r\nConnection: close")
+    end
+    str.BufAppend(b, "\r\nServer: ")
+    str.BufAppend(b, _server_header(hide))
+    str.BufAppend(b, "\r\n")
     if ct.len() > 0:
-        resp = resp.concat("Content-Type: ")
-        resp = resp.concat(ct)
-        resp = resp.concat("\r\n")
+        str.BufAppend(b, "Content-Type: ")
+        str.BufAppend(b, ct)
+        str.BufAppend(b, "\r\n")
     end
     nhdr := salam_ctx_kv_n(ctx, 2)
     repeat nhdr with i:
-        resp = resp.concat(salam_ctx_kv_key(ctx, 2, i))
-        resp = resp.concat(": ")
-        resp = resp.concat(salam_ctx_kv_val(ctx, 2, i))
-        resp = resp.concat("\r\n")
+        str.BufAppend(b, salam_ctx_kv_key(ctx, 2, i))
+        str.BufAppend(b, ": ")
+        str.BufAppend(b, salam_ctx_kv_val(ctx, 2, i))
+        str.BufAppend(b, "\r\n")
     end
-    resp = resp.concat("\r\n")
-    resp = resp.concat(body)
-    ret resp
+    str.BufAppend(b, "\r\n")
+    str.BufAppend(b, body)
+end
+
+// Kept because std/tls's handler and any caller outside this file still want
+// a response as a string. The plain-HTTP path does not use it: it writes the
+// builder's bytes straight to the socket, which skips the copy BufStr makes.
+func _build_response(ctx: i64, hide: bool): str:
+    mut b := str.NewBuilder()
+    _fill_response(b, ctx, hide, false)
+    out := str.BufStr(b)
+    str.BufFree(b)
+    ret out
 end
 
 // Runs net/router.Dispatch and, on a match, copies the extracted path
@@ -410,7 +475,7 @@ func _dispatch(r: router.Router, ctx: i64): bool:
     n := m.params.items.len()
     mut i := 0
     until i < n:
-        kv := m.params.items.get(i)[0]
+        kv := m.params.items.get(i)
         salam_ctx_kv_add(ctx, 1, kv.key, kv.value)
         i += 1
     end
@@ -426,8 +491,91 @@ func _net_accept(lfd: i64): i64:
     ret rawsock.Accept(rawsock.FromFd(lfd)).fd
 end
 
-func _net_recv_req(fd: i64): str:
-    ret tcp.Read(tcp.ConnFromFd(fd), 32768)
+// ------------------------------------------------------- keep-alive plumbing
+
+// How long a connection may sit idle between requests before its thread is
+// taken back, and how many requests one connection may serve before it is
+// retired. Neither limit is about correctness: they are what stops a client
+// that opens a connection and says nothing from holding a thread forever.
+
+// Bytes per socket read. One buffer is allocated per connection and reused
+// for every request on it, rather than allocated and zeroed per read.
+
+// A str of exactly `n` bytes from `ptr`. rawsock.Recv cannot be used on this
+// path: it allocates a fresh max-sized buffer per call and memsets all of it
+// (64 KiB of zeroing to receive a 100-byte GET), then measures the result
+// with strlen. This copies the bytes the kernel actually delivered, once.
+func _str_of(ptr: void *, n: int): str:
+    r := mem.Allocate((n + 1) as u64)
+    mem.Copy(r, ptr, n as u64)
+    p := r as i8 *
+    p[n] = 0 as i8
+    ret r as str
+end
+
+// Content-Length, or 0. Only the framing of a request that can carry a body
+// depends on this, so the header block is scanned for it only when the method
+// says a body is possible - which keeps it off the path GET traffic takes.
+func _content_length(head: str, head_len: int): int:
+    mut pos := 0
+    until pos < head_len:
+        line_end := str.IndexFrom(head, "\r\n", pos)
+        if line_end < 0 || line_end >= head_len: break end
+        colon := str.IndexFrom(head, ":", pos)
+        if colon >= 0 && colon < line_end:
+            hk := head.substr(pos, colon - pos)
+            if hk.len() == 14 && hk.lower() == "content-length":
+                v := str.TrimLeft(head.substr(colon + 1, line_end - colon - 1)).to_int()
+                if v > 0: ret v end
+                ret 0
+            end
+        end
+        pos = line_end + 2
+    end
+    ret 0
+end
+
+func _has_body(method: str): bool:
+    if method == "GET" || method == "HEAD" || method == "OPTIONS": ret false end
+    ret true
+end
+
+// Reads exactly one complete request off `fd`, leaving anything that arrived
+// with it in `pending` for the next call.
+//
+// The old server did one recv per connection and treated whatever came back
+// as the whole request. That is right often enough to look right, and wrong
+// in two ways that keep-alive makes routine: a request split across packets
+// was truncated, and a second pipelined request in the same segment was
+// thrown away. Framing it properly - headers to the blank line, then exactly
+// Content-Length body bytes - is what makes connection reuse safe rather than
+// merely fast.
+func _read_request(fd: i64, scratch: void *, pending &: str): str:
+    sock := rawsock.FromFd(fd)
+    mut buf := pending
+    pending = ""
+    mut head_end := str.IndexFrom(buf, "\r\n\r\n", 0)
+    until head_end < 0:
+        got := rawsock.RecvBytes(sock, scratch, _RD_CHUNK)
+        if got <= 0: ret "" end
+        buf = buf.concat(_str_of(scratch, got))
+        head_end = str.IndexFrom(buf, "\r\n\r\n", 0)
+    end
+    head_len := head_end + 4
+    mut need := head_len
+    sp := buf.find(" ")
+    if sp > 0 && _has_body(buf.substr(0, sp)):
+        need = head_len + _content_length(buf, head_len)
+        until buf.len() < need:
+            got := rawsock.RecvBytes(sock, scratch, _RD_CHUNK)
+            if got <= 0: break end
+            buf = buf.concat(_str_of(scratch, got))
+        end
+        if buf.len() < need: need = buf.len() end
+    end
+    if need == buf.len(): ret buf end
+    pending = buf.substr(need, buf.len() - need)
+    ret buf.substr(0, need)
 end
 
 func _net_send_all(fd: i64, data: str):
@@ -441,7 +589,7 @@ end
 // Streams the file in fixed-size chunks instead of loading it whole into
 // memory, so serving large files (video, archives, ...) doesn't blow up
 // process memory or hit an arbitrary size cap.
-func _send_file(fd: i64, path: str, ct: str, server_hdr: str): int:
+func _send_file(fd: i64, path: str, ct: str, server_hdr: str, keep: bool): int:
     f := fopen(path, "rb")
     if f == null:
         ret 0
@@ -453,13 +601,20 @@ func _send_file(fd: i64, path: str, ct: str, server_hdr: str): int:
     if sz < 0:
         ret 0
     end
-    mut hdr := "HTTP/1.1 200 OK\r\nContent-Length: "
-    hdr = hdr.concat(conv.FormatInt(sz))
-    hdr = hdr.concat("\r\nContent-Type: ")
-    hdr = hdr.concat(ct)
-    hdr = hdr.concat("\r\nConnection: close\r\nServer: ")
-    hdr = hdr.concat(server_hdr)
-    hdr = hdr.concat("\r\n\r\n")
+    mut hb := str.NewBuilder()
+    str.BufAppend(hb, "HTTP/1.1 200 OK\r\nContent-Length: ")
+    str.BufAppendInt(hb, sz)
+    str.BufAppend(hb, "\r\nContent-Type: ")
+    str.BufAppend(hb, ct)
+    if keep:
+        str.BufAppend(hb, "\r\nConnection: keep-alive\r\nServer: ")
+    else:
+        str.BufAppend(hb, "\r\nConnection: close\r\nServer: ")
+    end
+    str.BufAppend(hb, server_hdr)
+    str.BufAppend(hb, "\r\n\r\n")
+    hdr := str.BufStr(hb)
+    str.BufFree(hb)
     _net_send_all(fd, hdr)
     chunk_cap := 65536 as u64
     buf := mem.Allocate(chunk_cap)
@@ -472,7 +627,12 @@ func _send_file(fd: i64, path: str, ct: str, server_hdr: str): int:
         if got == (0 as u64):
             break
         end
-        tcp.WriteBytes(conn, buf, got as int)
+        // A client that hangs up part way through a download used to be read
+        // from disk and written into a dead socket for the whole rest of the
+        // file. Stop at the first refused write instead.
+        if tcp.WriteBytes(conn, buf, got as int) <= 0:
+            break
+        end
         remaining -= got as i64
     end
     ret 1
@@ -542,7 +702,7 @@ func _dir_listing_html(url_path: str, disk_path: str): str:
     mut files := Vector {} as Vector<str>
     defer files.free()
     repeat names.len() with i:
-        name := names.get(i)[0]
+        name := names.get(i)
         if os.IsDir(filepath.Join(disk_path, name)):
             dirs.push(name)
         else:
@@ -557,7 +717,7 @@ func _dir_listing_html(url_path: str, disk_path: str): str:
         str.BufAppend(rows, "<li><a href=\"../\">../</a></li>\n")
     end
     repeat dirs.len() with i:
-        name := dirs.get(i)[0]
+        name := dirs.get(i)
         href := encoding.URLEncode(name)
         str.BufAppend(rows, `<li><a href="`)
         str.BufAppend(rows, href)
@@ -566,7 +726,7 @@ func _dir_listing_html(url_path: str, disk_path: str): str:
         str.BufAppend(rows, "/</a></li>\n")
     end
     repeat files.len() with i:
-        name := files.get(i)[0]
+        name := files.get(i)
         href := encoding.URLEncode(name)
         str.BufAppend(rows, `<li><a href="`)
         str.BufAppend(rows, href)
@@ -596,9 +756,9 @@ func _insertion_sort_strs(v &: Vector<str>):
         // "until pos < req.len()"), not "until COND becomes true" - the
         // condition here is deliberately the keep-shifting condition
         // (in-bounds AND out of order), not a stop condition.
-        until j > 0 && v.get(j - 1)[0] > v.get(j)[0]:
-            a := v.get(j - 1)[0]
-            b := v.get(j)[0]
+        until j > 0 && v.get(j - 1) > v.get(j):
+            a := v.get(j - 1)
+            b := v.get(j)
             v.set(j - 1, b)
             v.set(j, a)
             j -= 1
@@ -615,11 +775,16 @@ end
 // static-file/router dispatch, and returns the fully-serialized response
 // (or "" when the static-file branch already streamed its own response
 // straight to the transport and there is nothing left to send).
-func _handle_request(fd: i64, req: str): str:
-    if req.len() == 0: ret "" end
+// Serves one request and writes its response. Sets `keep` to whether the
+// connection may be reused afterwards; the caller owns the socket either way.
+func _serve_request(fd: i64, req: str, keep &: bool): bool:
+    if req.len() == 0:
+        keep = false
+        ret false
+    end
     ctx := salam_ctx_new(fd)
-    defer salam_ctx_free(ctx)
     _parse_http(ctx, req)
+    keep = _rc(ctx).keep_alive
     r := _current_router
     hide := _hide_tokens
     shdr := _server_header(hide)
@@ -634,7 +799,7 @@ func _handle_request(fd: i64, req: str): str:
                 if os.IsDir(target):
                     idx := filepath.Join(target, "index.html")
                     if os.Exists(idx) && os.IsDir(idx) == false:
-                        if _send_file(fd, idx, mime.MimeType(idx), shdr) == 1:
+                        if _send_file(fd, idx, mime.MimeType(idx), shdr, keep) == 1:
                             _ctx_mark_sent(ctx)
                             static_handled = true
                         end
@@ -645,7 +810,7 @@ func _handle_request(fd: i64, req: str): str:
                         static_handled = true
                     end
                 else os.Exists(target):
-                    if _send_file(fd, target, mime.MimeType(target), shdr) == 1:
+                    if _send_file(fd, target, mime.MimeType(target), shdr, keep) == 1:
                         _ctx_mark_sent(ctx)
                         static_handled = true
                     end
@@ -662,16 +827,47 @@ func _handle_request(fd: i64, req: str): str:
         end
     end
     _log_access(salam_ctx_get(ctx, 0), salam_ctx_get(ctx, 1), salam_ctx_get_status(ctx))
-    if salam_ctx_is_sent(ctx) != 0: ret "" end
-    ret _build_response(ctx, hide)
+    if salam_ctx_is_sent(ctx) == 0:
+        mut b := str.NewBuilder()
+        _fill_response(b, ctx, hide, keep)
+        // Straight out of the builder: no BufStr copy, one write for headers
+        // and body together.
+        tcp.WriteBytes(tcp.ConnFromFd(fd), b.data, b._len as int)
+        str.BufFree(b)
+    end
+    salam_ctx_free(ctx)
+    ret true
 end
 
+// One thread per connection, and now one connection for many requests.
+//
+// This used to be one thread per *request*: the handler read once, answered,
+// closed, and exited, so every single GET cost a TCP handshake, a thread
+// creation, a thread teardown and a four-way close. That is most of the work
+// in serving a small response, and none of it is serving.
+//
+// TCP_NODELAY matters more once the connection is reused. Without it, a
+// small response can sit in the kernel waiting for more data to coalesce
+// with, and on a reused connection there is nothing behind it to coalesce
+// with until the client's next request - which the client will not send
+// until it has this response. Nagle plus delayed ACK turns that standoff
+// into tens of milliseconds of latency on an otherwise idle link.
 func _web_conn_handler(fd: i64):
-    req := _net_recv_req(fd)
-    resp := _handle_request(fd, req)
-    if resp.len() > 0:
-        _net_send_all(fd, resp)
+    sock := rawsock.FromFd(fd)
+    rawsock.SetNoDelay(sock, true)
+    rawsock.SetTimeout(sock, _keepalive_idle_ms)
+    scratch := mem.Allocate((_RD_CHUNK + 1) as u64)
+    mut pending := ""
+    mut served := 0
+    until 1 == 1:
+        req := _read_request(fd, scratch, pending)
+        if req.len() == 0: break end
+        mut keep := true
+        if _serve_request(fd, req, keep) == false: break end
+        served += 1
+        if keep == false || served >= _keepalive_max_reqs: break end
     end
+    mem.Free(scratch)
     _net_close(fd)
 end
 
@@ -779,4 +975,18 @@ func _tls_send_file(c &: tls.Conn, path: str, ct: str, server_hdr: str):
     if got > (0 as u64):
         tls.WriteBytes(c, buf, got as int)
     end
+end
+
+@en "SetKeepAliveIdle"
+@fa "تنظیم بیکاری زنده نگه داشتن"
+@ar "تعیین خمول الاتصال"
+pub func SetKeepAliveIdle(millis: int):
+    _keepalive_idle_ms = millis
+end
+
+@en "SetKeepAliveMaxRequests"
+@fa "بیشینه درخواست زنده نگه داشتن"
+@ar "أقصی طلبات الاتصال"
+pub func SetKeepAliveMaxRequests(n: int):
+    _keepalive_max_reqs = n
 end

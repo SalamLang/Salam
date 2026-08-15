@@ -37,6 +37,7 @@
 #include "parser/parser.h"
 #include "ast/ast.h"
 #include "semantic/sema.h"
+#include "semantic/builtins.h"
 #include "interp/interp.h"
 #include "condcomp/condcomp.h"
 #include "xml/xml.h"
@@ -612,6 +613,10 @@ static int driver_main_inner(int argc, char **argv)
         g_time_trace = opt.time_trace;
     }
     i18n_set_lang(opt.lang);
+    /* Once, here, rather than at each of the eight places that build a
+     * conditional-compilation table: -d constants are resolved by name
+     * during sema and every subcommand that runs sema needs the same set. */
+    salam_builtin_set_consts(opt.consts, opt.nconsts);
     salam_set_stdlib_root(opt.stdlib_path);
     layout_schema_init(salam_get_stdlib_root());
 

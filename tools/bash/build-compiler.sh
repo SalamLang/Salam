@@ -29,6 +29,17 @@ SRC_DIRS="core source condcomp logger xml diag i18n langpack token lexer ast
 SRCS="c/src/salam.c"
 for d in $SRC_DIRS; do SRCS="$SRCS c/src/$d/*.c"; done
 
+# The release number comes from the repo's VERSION file, the same source the
+# Makefile stamps from; build_info.h keeps no copy of its own. The define is
+# carried in the positional parameters rather than a plain variable so the
+# inner quotes reach the compiler as literal characters instead of being
+# re-split by the shell.
+SALAM_VERSION="$(cat VERSION 2>/dev/null || true)"
+set --
+if [ -n "$SALAM_VERSION" ]; then
+    set -- "-DSALAM_VERSION=\"$SALAM_VERSION\""
+fi
+
 # shellcheck disable=SC2086 # deliberately word-split and glob-expanded
-"$CC" -Wall -Ic/src -o salam $SRCS $LDLIBS
+"$CC" -Wall -Ic/src "$@" -o salam $SRCS $LDLIBS
 echo "built ./salam with $CC"

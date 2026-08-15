@@ -79,6 +79,37 @@ func trimmed_len(dir: str): int:
     ret n
 end
 
+// Append p[lo:hi) to `sb` with '\' rewritten to '/'.
+//
+// Building the answer straight into the caller's buffer is what keeps
+// PathJoin/PathDir down to the single allocation they return. Composing
+// PathToSlash(PathTrimSep(dir)) instead reads better but allocates an
+// intermediate string per call and drops it, and Salam has no arena behind
+// those temporaries: on a `salam inspect` of one file the std-package scan
+// joins paths thousands of times, and every intermediate stayed live until
+// the process exited.
+func buf_append_slashed(sb &: str.StringBuilder, p: str, lo: int, hi: int):
+    mut i := lo
+    until i < hi:
+        b := byte_at(p, i)
+        if b == K_PATH_BACKSEP:
+            str.BufAppendChar(sb, K_PATH_SEP)
+        else:
+            str.BufAppendChar(sb, b)
+        end
+        i += 1
+    end
+end
+
+// The slash-canonical p[lo:hi) as a fresh string.
+func slashed_range(p: str, lo: int, hi: int): str:
+    mut sb := str.NewBuilder()
+    buf_append_slashed(sb, p, lo, hi)
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
 // Offset of the last separator, or -1 when the path has none.
 func last_sep(p: str): int:
     mut cut := 0 - 1
@@ -161,31 +192,35 @@ pub func PathDir(p: str): str:
     if cut < 0:
         ret ""
     end
-    ret PathToSlash(str.Substr(p, 0, cut))
+    ret slashed_range(p, 0, cut)
 end
 
 // dir + "/" + name, with exactly one separator between them and no trailing
 // one, slash-canonical throughout. An empty dir yields name alone.
 pub func PathJoin(dir: str, name0: str): str:
-    mut name := name0
+    n := str.Len(name0)
     // A leading separator on `name` would double up against the one added
-    // here; the caller means "under dir", not "at the root".
-    until str.Len(name) > 0 && is_sep(byte_at(name, 0)):
-        name = str.Substr(name, 1, str.Len(name) - 1)
+    // here; the caller means "under dir", not "at the root". Skipped by
+    // offset rather than by re-slicing, which allocated once per separator.
+    mut off := 0
+    until off < n && is_sep(byte_at(name0, off)):
+        off += 1
     end
     if str.Len(dir) == 0:
-        ret PathToSlash(name)
+        ret slashed_range(name0, off, n)
     end
-    d := PathToSlash(PathTrimSep(dir))
-    if str.Len(name) == 0:
-        ret d
+    dn := trimmed_len(dir)
+    mut sb := str.NewBuilder()
+    buf_append_slashed(sb, dir, 0, dn)
+    // Nothing to separate when the name is empty, and a root ("/", "c:/")
+    // keeps its own separator, so adding one here would double it.
+    if off < n && !is_sep(byte_at(dir, dn - 1)):
+        str.BufAppendChar(sb, K_PATH_SEP)
     end
-    // A root ("/", "c:/") keeps its separator, so adding one here would
-    // double it.
-    if is_sep(byte_at(d, str.Len(d) - 1)):
-        ret d + PathToSlash(name)
-    end
-    ret d + "/" + PathToSlash(name)
+    buf_append_slashed(sb, name0, off, n)
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
 end
 
 // to_slash, then strip leading "./", collapse "/./", "//" and "seg/../".

@@ -1,0 +1,276 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package matrix
+
+import math
+
+// The symmetric eigenproblem, by cyclic Jacobi rotation.
+//
+// A real symmetric matrix is the well-behaved case of the eigenproblem and
+// deserves its own solver. Its eigenvalues are all real, its eigenvectors are
+// orthogonal, and it is diagonalizable no matter what: A = V D V^T with V
+// orthogonal. None of that is true of a general matrix, and the general
+// solver in mat_eig.salam is far more machinery for a far weaker guarantee.
+//
+// The method is the oldest one there is (Jacobi, 1846) and still the most
+// accurate. Each step picks an off-diagonal entry and applies a plane
+// rotation chosen to annihilate it. The rotation is a similarity
+// transformation, so the spectrum never changes, and it is orthogonal, so
+// symmetry never degrades. Zeroing one entry disturbs others, but the sum of
+// squares off the diagonal falls by exactly 2*A(p,q)^2 every time, so the
+// process converges, and once the off-diagonal part is small it converges
+// quadratically: the number of correct digits doubles per sweep, and three to
+// six sweeps is typical.
+//
+// What Jacobi buys over the tridiagonal-QR method that LAPACK uses by default
+// is relative accuracy on small eigenvalues, the same argument that puts
+// one-sided Jacobi behind the SVD here. It costs several times more, and for
+// the matrices that motivate a symmetric solver (covariance matrices, Hessians,
+// Laplacians, Gram matrices) that is the right side of the trade.
+//
+// Eigenvalues come back in descending order with their eigenvectors as the
+// matching columns of `vectors`, so the leading column is the direction of
+// largest variance, which is what PCA wants without further sorting.
+
+// A sweep touches every pair once, so n^2/2 rotations. Quadratic convergence
+// means the count below is never reached in practice; it is there so a matrix
+// full of NaN terminates rather than spinning.
+const _EIG_MAX_SWEEPS := 100
+
+@en "EigenSym"
+@fa "ویژه متقارن"
+@ar "ذاتي متماثل"
+pub struct EigenSym:
+    pub n: int = 0
+    pub values: Matrix = Matrix {}
+    pub vectors: Matrix = Matrix {}
+    pub sweeps: int = 0
+    pub ok: bool = false
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free():
+        this.values.free()
+        this.vectors.free()
+    end
+end
+
+// The sum of squares strictly above the diagonal, the quantity Jacobi drives
+// to zero and therefore the honest convergence measure.
+func _off_norm(a &: Matrix, n: int): f64:
+    mut s := 0.0
+    repeat n with i:
+        mut j := i + 1
+        until j < n:
+            s += a.at(i, j) * a.at(i, j)
+            j += 1
+        end
+    end
+    ret math.Sqrt(2.0 * s)
+end
+
+// Rotates rows/columns p and q of the symmetric matrix a, and accumulates the
+// same rotation into the eigenvector matrix v.
+func _sym_rotate(a &: Matrix, v &: Matrix, p: int, q: int, c: f64, s: f64):
+    n := a.rows
+    repeat n with k:
+        akp := a.at(k, p)
+        akq := a.at(k, q)
+        a.set(k, p, c * akp - s * akq)
+        a.set(k, q, s * akp + c * akq)
+    end
+    repeat n with k:
+        apk := a.at(p, k)
+        aqk := a.at(q, k)
+        a.set(p, k, c * apk - s * aqk)
+        a.set(q, k, s * apk + c * aqk)
+    end
+    repeat n with k:
+        vkp := v.at(k, p)
+        vkq := v.at(k, q)
+        v.set(k, p, c * vkp - s * vkq)
+        v.set(k, q, s * vkp + c * vkq)
+    end
+end
+
+// The rotation that annihilates a(p,q). Computing tan of the half angle by
+// the stable branch (dividing by theta plus a square root, never by their
+// difference) keeps this accurate when the two diagonal entries are close,
+// which is exactly when a naive formula cancels.
+func _sym_step(a &: Matrix, v &: Matrix, p: int, q: int, tol: f64): bool:
+    apq := a.at(p, q)
+    if math.Abs(apq) <= tol: ret false end
+    theta := (a.at(q, q) - a.at(p, p)) / (2.0 * apq)
+    mut t := 1.0 / (math.Abs(theta) + math.Sqrt(theta * theta + 1.0))
+    if theta < 0.0: t = 0.0 - t end
+    c := 1.0 / math.Sqrt(t * t + 1.0)
+    s := t * c
+    _sym_rotate(a, v, p, q, c, s)
+    ret true
+end
+
+func _sym_sweep(a &: Matrix, v &: Matrix, n: int, tol: f64):
+    mut p := 0
+    until p < n - 1:
+        mut q := p + 1
+        until q < n:
+            _sym_step(a, v, p, q, tol)
+            q += 1
+        end
+        p += 1
+    end
+end
+
+// Descending order, carrying eigenvectors along. Selection sort: n is small
+// and each swap moves a whole column.
+func _eig_sort(vals &: Matrix, vecs &: Matrix, n: int):
+    repeat n with i:
+        mut best := i
+        mut j := i + 1
+        until j < n:
+            if vals.at(0, j) > vals.at(0, best): best = j end
+            j += 1
+        end
+        if best != i:
+            t := vals.at(0, i)
+            vals.set(0, i, vals.at(0, best))
+            vals.set(0, best, t)
+            SwapCols(vecs, i, best)
+        end
+    end
+end
+
+// Fixes the sign of each eigenvector so its largest-magnitude entry is
+// positive. Eigenvectors are only defined up to sign, and without a
+// convention the same matrix can produce v or -v depending on rounding, which
+// makes results irreproducible and tests flaky for no mathematical reason.
+func _fix_signs(vecs &: Matrix, n: int):
+    repeat n with j:
+        mut bi := 0
+        repeat vecs.rows with i:
+            if math.Abs(vecs.at(i, j)) > math.Abs(vecs.at(bi, j)): bi = i end
+        end
+        if vecs.at(bi, j) < 0.0:
+            repeat vecs.rows with i: vecs.set(i, j, 0.0 - vecs.at(i, j)) end
+        end
+    end
+end
+
+func _eig_iterate(r &: EigenSym, work &: Matrix, n: int, tol: f64):
+    mut sweeps := 0
+    until _off_norm(work, n) > tol && sweeps < _EIG_MAX_SWEEPS:
+        _sym_sweep(work, r.vectors, n, tol * 0.001)
+        sweeps += 1
+    end
+    r.sweeps = sweeps
+    r.ok = sweeps < _EIG_MAX_SWEEPS
+end
+
+func _pow_eigval(f &: EigenSym, k: int, p: f64):
+    v := f.values.a.get(k)
+    if v <= 0.0:
+        f.values.a.set(k, 0.0)
+        ret
+    end
+    f.values.a.set(k, math.Pow(v, p))
+end
+
+// The full symmetric eigendecomposition A = V D V^T. Only the symmetric part
+// of the input is used, so a matrix that is symmetric to within rounding is
+// handled exactly rather than pulled off course by the asymmetry.
+@en "EigSym"
+@fa "ویژه متقارن"
+@ar "ذاتي متماثل"
+pub func EigSym(x &: Matrix): EigenSym:
+    mut r := EigenSym {}
+    if x.is_square() == false: ret r end
+    n := x.rows
+    r.n = n
+    mut work := SymPart(x)
+    r.vectors = Eye(n)
+    tol := MAT_EPS * NormFrobenius(work)
+    _eig_iterate(r, work, n, tol)
+    r.values = Diagonal(work)
+    _eig_sort(r.values, r.vectors, n)
+    _fix_signs(r.vectors, n)
+    defer work.free()
+    ret r
+end
+
+// The eigenvalues alone, descending, as a row vector.
+@en "EigValsSym"
+@fa "مقادیر ویژه متقارن"
+@ar "قيم ذاتية متماثلة"
+pub func EigValsSym(x &: Matrix): Matrix:
+    mut f := EigSym(x)
+    v := Clone(f.values)
+    defer f.free()
+    ret v
+end
+
+// Reassembles V D V^T. Useful as a check (it should reproduce the input) and
+// as the machinery behind every function of a symmetric matrix.
+@en "EigReconstruct"
+@fa "بازسازی ویژه"
+@ar "إعادة بناء ذاتية"
+pub func EigReconstruct(f &: EigenSym): Matrix:
+    mut d := Diag(f.values.a)
+    mut t := MatMul(f.vectors, d)
+    r := MulTranspose(t, f.vectors)
+    defer d.free()
+    defer t.free()
+    ret r
+end
+
+// The largest eigenvalue by magnitude, the spectral radius. It bounds every
+// matrix norm from below, and for an iteration x <- Ax it decides everything:
+// below 1 the iteration converges to zero, above 1 it diverges.
+@en "SpectralRadiusSym"
+@fa "شعاع طیفی متقارن"
+@ar "نصف قطر طيفي متماثل"
+pub func SpectralRadiusSym(x &: Matrix): f64:
+    mut v := EigValsSym(x)
+    mut m := 0.0
+    repeat v.count() with k:
+        a := math.Abs(v.a.get(k))
+        if a > m: m = a end
+    end
+    defer v.free()
+    ret m
+end
+
+// Applies a real power to a symmetric positive semidefinite matrix by raising
+// its eigenvalues: A^p = V D^p V^T. This is how a matrix square root, an
+// inverse square root (p = -0.5, the whitening transform of statistics) and
+// any other real power are defined, and it is exact where a series expansion
+// would only approximate.
+@en "PowSym"
+@fa "توان متقارن"
+@ar "قوة متماثلة"
+pub func PowSym(x &: Matrix, p: f64): Matrix:
+    mut f := EigSym(x)
+    repeat f.values.count() with k: _pow_eigval(f, k, p) end
+    r := EigReconstruct(f)
+    defer f.free()
+    ret r
+end
+
+// The symmetric positive semidefinite square root: the unique S with S S = A
+// and S itself symmetric positive semidefinite.
+@en "SqrtSym"
+@fa "جذر متقارن"
+@ar "جذر متماثل"
+pub func SqrtSym(x &: Matrix): Matrix: ret PowSym(x, 0.5) end

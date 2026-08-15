@@ -1,0 +1,154 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package jwt
+
+// A parsed token. `valid` is the only field that answers "may I act on
+// this": it is set by Verify and never by Decode, so a Token that came out
+// of Decode always reads false no matter how well-formed it was.
+
+@en "Token"
+@fa "توکن"
+@ar "رمز"
+pub struct Token:
+    // Header
+    pub alg: str = ""
+    pub typ: str = ""
+    // "kid": which key signed it, for rotation. Attacker-controlled like the
+    // rest of the header: look a key up by it, never trust it further.
+    pub kid: str = ""
+    // Registered claims, parsed out of the payload
+    pub claims: Claims = Claims {}
+    // Decoded JSON of both parts, for claims this API does not model
+    pub header_json: str = ""
+    pub payload_json: str = ""
+    // The three compact-serialization pieces, as they arrived
+    pub signing_input: str = ""
+    pub signature: str = ""
+    // Set only by a Verify that returned JWT_OK
+    pub valid: bool = false
+end
+
+func _claim_raw(t: Token, key: str, found &: bool): str:
+    ret _member_raw(t.payload_json, key, found)
+end
+
+@en "Has"
+@fa "دارد"
+@ar "یملك"
+pub func Has(t: Token, key: str): bool:
+    mut found := false
+    _unused := _claim_raw(t, key, found)
+    ret found
+end
+
+// Raw JSON text of a claim, quotes and brackets intact. This is the way in
+// to array and object claims: hand the result to std/encoding/json.
+@en "Raw"
+@fa "خام"
+@ar "خام"
+pub func Raw(t: Token, key: str): str:
+    mut found := false
+    raw := _claim_raw(t, key, found)
+    if !found: ret "" end
+    ret raw
+end
+
+// A string claim, unescaped. Numbers and booleans come back as written;
+// objects and arrays as "" (use Raw for those).
+@en "Str"
+@fa "رشته"
+@ar "نص"
+pub func Str(t: Token, key: str): str:
+    mut found := false
+    raw := _claim_raw(t, key, found)
+    if !found: ret "" end
+    ret _raw_to_str(raw)
+end
+
+@en "Int"
+@fa "عدد"
+@ar "عدد صحیح"
+pub func Int(t: Token, key: str): i64:
+    mut found := false
+    raw := _claim_raw(t, key, found)
+    if !found: ret 0 as i64 end
+    ret _raw_to_i64(raw)
+end
+
+@en "Bool"
+@fa "منطقی"
+@ar "منطقي"
+pub func Bool(t: Token, key: str): bool:
+    mut found := false
+    raw := _claim_raw(t, key, found)
+    if !found: ret false end
+    ret raw == "true"
+end
+
+// Is `want` one of the token's audiences? Handles both shapes RFC 7519
+// allows for "aud": a lone string and an array of strings.
+@en "HasAudience"
+@fa "مخاطب دارد"
+@ar "لدیه جمهور"
+pub func HasAudience(t: Token, want: str): bool:
+    mut found := false
+    raw := _claim_raw(t, "aud", found)
+    if !found: ret false end
+    ret _raw_has_string(raw, want)
+end
+
+// Is `want` in a claim that holds an array of strings - "scope", "roles",
+// "permissions"? A string claim is compared whole, so a single-role token
+// works the same way.
+@en "ListHas"
+@fa "فهرست دارد"
+@ar "القائمة تحتوي"
+pub func ListHas(t: Token, key: str, want: str): bool:
+    mut found := false
+    raw := _claim_raw(t, key, found)
+    if !found: ret false end
+    ret _raw_has_string(raw, want)
+end
+
+// OAuth-style "scope": one space-delimited string. Separate from ListHas
+// because the delimiter, not the JSON shape, is what carries the list.
+@en "HasScope"
+@fa "دامنه دارد"
+@ar "لدیه نطاق"
+pub func HasScope(t: Token, want: str): bool:
+    scopes := Str(t, "scope")
+    if scopes.len() == 0 || want.len() == 0: ret false end
+    n := scopes.len()
+    w := want.len()
+    mut i := 0
+    until i < n:
+        mut e := i
+        until e < n && scopes.substr(e, 1) != " ":
+            e += 1
+        end
+        if e - i == w && scopes.substr(i, w) == want: ret true end
+        i = e + 1
+    end
+    ret false
+end
+
+// Seconds until "exp", negative once it has passed. 0 when there is no exp.
+@en "SecondsRemaining"
+@fa "ثانیه های باقی مانده"
+@ar "الثواني المتبقیة"
+pub func SecondsRemaining(t: Token): i64:
+    if t.claims.exp == 0 as i64: ret 0 as i64 end
+    ret t.claims.exp - time.Now()
+end

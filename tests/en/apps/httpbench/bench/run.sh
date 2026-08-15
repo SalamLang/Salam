@@ -49,7 +49,7 @@ NPROC="$(nproc)"
 # The generator needs cores of its own, or it becomes the bottleneck and every
 # server converges on the same wrong number. Servers get the low cores, the
 # generator gets the rest, and neither is ever scheduled onto the other's.
-SERVER_CORES="$(( NPROC > 2 ? NPROC - THREADS : 1 ))"
+SERVER_CORES="$((NPROC > 2 ? NPROC - THREADS : 1))"
 [ "$SERVER_CORES" -lt 1 ] && SERVER_CORES=1
 SERVER_CPUS="0-$((SERVER_CORES - 1))"
 GEN_CPUS="$SERVER_CORES-$((NPROC - 1))"
@@ -57,7 +57,7 @@ GEN_CPUS="$SERVER_CORES-$((NPROC - 1))"
 
 mkdir -p "$RUNDIR"
 RESULTS="$RUNDIR/results.json"
-: > "$RESULTS"
+: >"$RESULTS"
 
 say() { printf '\033[1m%s\033[0m\n' "$*" >&2; }
 note() { printf '  %s\n' "$*" >&2; }
@@ -84,15 +84,24 @@ build_salam() {
     # cross-built one may sit under c/. Either is fine, SALAM_BIN overrides.
     if [ -z "${SALAM_BIN:-}" ]; then
         for cand in "$ROOT/salam" "$ROOT/c/salam"; do
-            [ -x "$cand" ] && { SALAM_BIN="$cand"; break; }
+            [ -x "$cand" ] && {
+                SALAM_BIN="$cand"
+                break
+            }
         done
     fi
-    [ -n "${SALAM_BIN:-}" ] && [ -x "$SALAM_BIN" ] \
-        || { echo "no salam binary (run: make -C c)" >&2; exit 1; }
+    [ -n "${SALAM_BIN:-}" ] && [ -x "$SALAM_BIN" ] ||
+        {
+            echo "no salam binary (run: make -C c)" >&2
+            exit 1
+        }
     say "building httpbench with $SALAM_BIN"
-    ( cd "$RUNDIR" && "$SALAM_BIN" build "$APP/main.salam" --output="$RUNDIR/httpbench" \
-        ${SALAM_BUILD_FLAGS:-} >"$RUNDIR/salam-build.log" 2>&1 ) \
-        || { tail -20 "$RUNDIR/salam-build.log" >&2; exit 1; }
+    (cd "$RUNDIR" && "$SALAM_BIN" build "$APP/main.salam" --output="$RUNDIR/httpbench" \
+        ${SALAM_BUILD_FLAGS:-} >"$RUNDIR/salam-build.log" 2>&1) ||
+        {
+            tail -20 "$RUNDIR/salam-build.log" >&2
+            exit 1
+        }
 }
 
 # The repository's .gitignore drops *.css and *.html under tests/, so neither
@@ -103,7 +112,7 @@ build_salam() {
 ensure_assets() {
     if [ ! -s "$ASSETS/style.css" ]; then
         say "regenerating $ASSETS/style.css (gitignored)"
-        cat > "$ASSETS/style.css" <<'CSS'
+        cat >"$ASSETS/style.css" <<'CSS'
 :root {
     color-scheme: light dark;
     --bg:#fff; --fg:#1b1b1f; --muted:#5b5b66;
@@ -196,7 +205,7 @@ start_nginx() {
         -e "s|@ASSETS@|$ASSETS|g" \
         -e "s|@PORT@|$NGINX_PORT|g" \
         -e "s|@WORKERS@|$SERVER_CORES|g" \
-        "$HERE/nginx/nginx.conf.template" > "$RUNDIR/nginx/nginx.conf"
+        "$HERE/nginx/nginx.conf.template" >"$RUNDIR/nginx/nginx.conf"
     taskset -c "$SERVER_CPUS" \
         nginx -p "$RUNDIR/nginx" -c "$RUNDIR/nginx/nginx.conf" >"$RUNDIR/nginx.log" 2>&1 &
     SERVER_PID=$!
@@ -226,11 +235,11 @@ start_php() {
 
 start_server() {
     case "$1" in
-        salam) start_salam ;;
-        nginx) start_nginx ;;
-        node)  start_node ;;
-        php)   start_php ;;
-        *)     return 1 ;;
+    salam) start_salam ;;
+    nginx) start_nginx ;;
+    node) start_node ;;
+    php) start_php ;;
+    *) return 1 ;;
     esac
 }
 
@@ -251,10 +260,10 @@ ensure_up() {
 
 port_of() {
     case "$1" in
-        salam) echo "$SALAM_PORT" ;;
-        nginx) echo "$NGINX_PORT" ;;
-        php)   echo "$PHP_PORT" ;;
-        node)  echo "$NODE_PORT" ;;
+    salam) echo "$SALAM_PORT" ;;
+    nginx) echo "$NGINX_PORT" ;;
+    php) echo "$PHP_PORT" ;;
+    node) echo "$NODE_PORT" ;;
     esac
 }
 
@@ -262,17 +271,17 @@ port_of() {
 
 path_of() {
     case "$1" in
-        plaintext) echo "/plaintext" ;;
-        json)      echo "/json" ;;
-        cached)    echo "/cached" ;;
-        file)      echo "/file" ;;
-        users)     echo "/users/42" ;;
-        search)    echo "/search?q=salam&n=5" ;;
-        compute)   echo "/compute?n=1000" ;;
-        headers)   echo "/headers" ;;
-        static)    echo "/static/style.css" ;;
-        home)      echo "/" ;;
-        echo)      echo "/echo" ;;
+    plaintext) echo "/plaintext" ;;
+    json) echo "/json" ;;
+    cached) echo "/cached" ;;
+    file) echo "/file" ;;
+    users) echo "/users/42" ;;
+    search) echo "/search?q=salam&n=5" ;;
+    compute) echo "/compute?n=1000" ;;
+    headers) echo "/headers" ;;
+    static) echo "/static/style.css" ;;
+    home) echo "/" ;;
+    echo) echo "/echo" ;;
     esac
 }
 
@@ -281,8 +290,8 @@ path_of() {
 # pre-rendered page is missing, which nginx cannot produce for itself.
 nginx_skips() {
     case "$1" in
-        search | compute | echo | headers) return 0 ;;
-        home) [ ! -s "$ASSETS/index.html" ] && return 0 ;;
+    search | compute | echo | headers) return 0 ;;
+    home) [ ! -s "$ASSETS/index.html" ] && return 0 ;;
     esac
     return 1
 }
@@ -332,8 +341,8 @@ measure() {
 
     local out
     out="$(taskset -c "$GEN_CPUS" "$RUNDIR/loadgen" -j -c "$CONNS" -t "$THREADS" \
-            -d "$DURATION" -w "$WARMUP" "${extra[@]}" \
-            "http://127.0.0.1:$port$path" 2>/dev/null)"
+        -d "$DURATION" -w "$WARMUP" "${extra[@]}" \
+        "http://127.0.0.1:$port$path" 2>/dev/null)"
     [ -z "$out" ] && return 1
 
     local died=false
@@ -341,7 +350,7 @@ measure() {
         died=true
         CRASHED_ROUTES="$CRASHED_ROUTES $server:$route"
     fi
-    printf '%s\n' "{\"server\":\"$server\",\"route\":\"$route\",\"died\":$died,${out#\{}" >> "$RESULTS"
+    printf '%s\n' "{\"server\":\"$server\",\"route\":\"$route\",\"died\":$died,${out#\{}" >>"$RESULTS"
     printf '  %-6s %-10s %s%s\n' "$server" "$route" \
         "$(printf '%s' "$out" | sed -n 's/.*"rps":\([0-9.]*\).*"p99_us":\([0-9]*\).*/\1 req\/s, p99 \2us/p')" \
         "$($died && printf '   <-- SERVER DIED')" >&2
@@ -379,4 +388,4 @@ done
 
 [ -n "$CRASHED_ROUTES" ] && say "servers that died during a run:$CRASHED_ROUTES"
 say "results: $RESULTS"
-python3 "$HERE/report.py" "$RESULTS" > "$RUNDIR/results.md" && say "table: $RUNDIR/results.md"
+python3 "$HERE/report.py" "$RESULTS" >"$RUNDIR/results.md" && say "table: $RUNDIR/results.md"

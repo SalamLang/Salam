@@ -531,21 +531,21 @@ Zero differing files. The self-hosted compiler also passes 73/73 on
 
 ### What was ported
 
-| C                                                                                           | self-hosted                                |
-| ------------------------------------------------------------------------------------------- | ------------------------------------------ |
-| `ll_runtime_fn` / `ll_call_runtime`                                                         | `runtime_fn` / `call_runtime`              |
-| `ll_call_file`                                                                              | `call_file`                                |
-| `ll_call_vec_str` (split/args/listdir)                                                      | `call_vec_str`                             |
-| `ll_pkg_value`                                                                              | `pkg_value`                                |
-| built-ins (`char_code`, `spawn`, `input`, `lang`, `callhandler`, table fallback)             | same, in `call_intrinsic`                  |
-| `ll_sym_qualified` mangled-name scan                                                        | `sym_qualified` + `scan_mangled`           |
-| `ll_call_user` package/function preference                                                  | `call_user`                                |
-| func-typed struct field -> indirect call                                                    | `call_method`                              |
-| `SALAM_RC_LLVM_UNSUPPORTED` + C fallback                                                    | `RC_LLVM_UNSUPPORTED` + `use_llvm_backend` |
-| `--backend=llvm\|c`, `--cc=` implies `c`                                                    | same, in `cli.salam`                       |
-| `--libpath=DIR`                                                                             | same, threaded through `Opts.lib_paths`    |
-| stray `.ll` cleanup on fallback                                                             | same                                       |
-| native build must not report "cross-compilation failed"                                     | same                                       |
+| C                                                                                | self-hosted                                |
+| -------------------------------------------------------------------------------- | ------------------------------------------ |
+| `ll_runtime_fn` / `ll_call_runtime`                                              | `runtime_fn` / `call_runtime`              |
+| `ll_call_file`                                                                   | `call_file`                                |
+| `ll_call_vec_str` (split/args/listdir)                                           | `call_vec_str`                             |
+| `ll_pkg_value`                                                                   | `pkg_value`                                |
+| built-ins (`char_code`, `spawn`, `input`, `lang`, `callhandler`, table fallback) | same, in `call_intrinsic`                  |
+| `ll_sym_qualified` mangled-name scan                                             | `sym_qualified` + `scan_mangled`           |
+| `ll_call_user` package/function preference                                       | `call_user`                                |
+| func-typed struct field -> indirect call                                         | `call_method`                              |
+| `SALAM_RC_LLVM_UNSUPPORTED` + C fallback                                         | `RC_LLVM_UNSUPPORTED` + `use_llvm_backend` |
+| `--backend=llvm\|c`, `--cc=` implies `c`                                         | same, in `cli.salam`                       |
+| `--libpath=DIR`                                                                  | same, threaded through `Opts.lib_paths`    |
+| stray `.ll` cleanup on fallback                                                  | same                                       |
+| native build must not report "cross-compilation failed"                          | same                                       |
 
 Two C-side items have no self-hosted counterpart _yet_, both for the same
 reason - `NativeRun` still uses the shell-out toolchain path rather than

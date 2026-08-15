@@ -459,7 +459,8 @@ static llv_t ll_incdec(ll_t *ll, ast_node_t *n)
     ll_addr_t a = ll_addr_of(ll, tgt);
     const char *ts = a.ts;
     const char *oldv = ll_new_tmp(ll);
-    ll_emit(ll, "%s = load %s, ptr %s", oldv, ll_ty(ll, ts), a.ptr);
+    ll_emit(ll, "%s = load %s, ptr %s%s", oldv, ll_ty(ll, ts), a.ptr,
+            a.tbaa ? a.tbaa : "");
     bool flt = ll_is_float(ts);
     const char *step = flt ? "1.0" : "1";
     token_kind_t ik = n->op == TK_PLUS_PLUS ? TK_PLUS : TK_MINUS;
@@ -468,7 +469,8 @@ static llv_t ll_incdec(ll_t *ll, ast_node_t *n)
     ll_emit(ll, "%s = %s%s %s %s, %s", newv, op,
             ll_nowrap(ll, ik, flt, ll_is_signed(ts)) ? " nsw" : "", ll_ty(ll, ts), oldv,
             step);
-    ll_emit(ll, "store %s %s, ptr %s", ll_ty(ll, ts), newv, a.ptr);
+    ll_emit(ll, "store %s %s, ptr %s%s", ll_ty(ll, ts), newv, a.ptr,
+            a.tbaa ? a.tbaa : "");
     return (llv_t){n->is_prefix ? newv : oldv, ts};
 }
 
@@ -1549,7 +1551,7 @@ ll_addr_t ll_addr_of(ll_t *ll, ast_node_t *n)
     switch (n->kind) {
     case AST_IDENTIFIER: {
         lvar_t *v = ll_local_find(ll, n->name);
-        if (v) return (ll_addr_t){v->ptr, v->ts};
+        if (v) return (ll_addr_t){v->ptr, v->ts, NULL};
 
         if (ll->cur_lambda) {
             vec_t *caps = &ll->cur_lambda->captures;
@@ -1562,7 +1564,7 @@ ll_addr_t ll_addr_of(ll_t *ll, ast_node_t *n)
                         ll_emit(ll,
                                 "%s = getelementptr inbounds %s, ptr %s, i32 0, i32 %zu",
                                 r, ll->env_ty, ll->env_ref, i + 1);
-                        return (ll_addr_t){r, c->type_str};
+                        return (ll_addr_t){r, c->type_str, NULL};
                     }
                 }
             }
@@ -1575,11 +1577,11 @@ ll_addr_t ll_addr_of(ll_t *ll, ast_node_t *n)
                 const char *r = ll_new_tmp(ll);
                 ll_emit(ll, "%s = getelementptr inbounds %s, ptr %s, i32 0, i32 %d", r,
                         ll_struct_ltype(ll, ll->self_ts), ll->this_ref, idx);
-                return (ll_addr_t){r, fts};
+                return (ll_addr_t){r, fts, ll_tbaa_suffix(ll, fts, true)};
             }
         }
         lvar_t *g = ll_global_find(ll, n->name);
-        if (g) return (ll_addr_t){g->ptr, g->ts};
+        if (g) return (ll_addr_t){g->ptr, g->ts, NULL};
         /*
          * A package-level global reached from a function of that same
          * package that nothing has touched yet - std/core's `mut _argc`,
@@ -1597,7 +1599,7 @@ ll_addr_t ll_addr_of(ll_t *ll, ast_node_t *n)
                 if (!gv || (gv->kind != SYM_VAR && gv->kind != SYM_CONST)) continue;
                 ll_touch_pkg(ll, pk);
                 g = ll_global_find(ll, n->name);
-                if (g) return (ll_addr_t){g->ptr, g->ts};
+                if (g) return (ll_addr_t){g->ptr, g->ts, NULL};
             }
         }
         /*
@@ -1633,11 +1635,11 @@ ll_addr_t ll_addr_of(ll_t *ll, ast_node_t *n)
                  */
                 ll_emit_globals(ll, pk->decl);
                 g = ll_global_find(ll, n->name);
-                if (g) return (ll_addr_t){g->ptr, g->ts};
+                if (g) return (ll_addr_t){g->ptr, g->ts, NULL};
             }
         }
         ll_error(ll, n, "address of an unknown identifier '%s'", n->name);
-        return (ll_addr_t){"null", n->type_str ? n->type_str : "i32"};
+        return (ll_addr_t){"null", n->type_str ? n->type_str : "i32", NULL};
     }
     case AST_MEMBER:
         return ll_member_addr(ll, n);
@@ -1648,7 +1650,7 @@ ll_addr_t ll_addr_of(ll_t *ll, ast_node_t *n)
         const char *p = ll_fmt(ll, "%%agg.%d", ll->tmp++);
         ll_emit_alloca(ll, "%s = alloca %s", p, ll_ty(ll, v.ts));
         ll_emit(ll, "store %s %s, ptr %s", ll_ty(ll, v.ts), v.ref, p);
-        return (ll_addr_t){p, v.ts};
+        return (ll_addr_t){p, v.ts, NULL};
     }
     }
 }
@@ -1669,13 +1671,13 @@ static ll_addr_t ll_member_addr(ll_t *ll, ast_node_t *n)
     int idx = ss ? ll_field_index(ss, n->name, &fs) : -1;
     if (idx < 0) {
         ll_error(ll, n, "member '%s' of non-struct/unknown type '%s'", n->name, sname);
-        return (ll_addr_t){"null", n->type_str ? n->type_str : "i32"};
+        return (ll_addr_t){"null", n->type_str ? n->type_str : "i32", NULL};
     }
     const char *fts = type_to_string(ll->sem->tc, fs->type);
     const char *r = ll_new_tmp(ll);
     ll_emit(ll, "%s = getelementptr inbounds %s, ptr %s, i32 0, i32 %d", r,
             ll_struct_ltype(ll, sname), base, idx);
-    return (ll_addr_t){r, fts};
+    return (ll_addr_t){r, fts, ll_tbaa_suffix(ll, fts, true)};
 }
 
 static ll_addr_t ll_index_addr(ll_t *ll, ast_node_t *n)
@@ -1690,7 +1692,7 @@ static ll_addr_t ll_index_addr(ll_t *ll, ast_node_t *n)
         const char *r = ll_new_tmp(ll);
         ll_emit(ll, "%s = getelementptr inbounds %s, ptr %s, i64 %s", r, ll_ty(ll, ets),
                 data, idx);
-        return (ll_addr_t){r, ets};
+        return (ll_addr_t){r, ets, ll_tbaa_suffix(ll, ets, false)};
     }
     /*
      * `s[i]` on a str. A str IS the pointer, so this indexes the value, not
@@ -1707,7 +1709,7 @@ static ll_addr_t ll_index_addr(ll_t *ll, ast_node_t *n)
         const char *r = ll_new_tmp(ll);
         ll_emit(ll, "%s = getelementptr inbounds %s, ptr %s, i64 %s", r, ll_ty(ll, ets),
                 base, idx);
-        return (ll_addr_t){r, ets};
+        return (ll_addr_t){r, ets, ll_tbaa_suffix(ll, ets, false)};
     }
     if (ll_is_ptr_ts(ots)) {
         const char *base = ll_expr(ll, n->a).ref;
@@ -1716,7 +1718,7 @@ static ll_addr_t ll_index_addr(ll_t *ll, ast_node_t *n)
         const char *r = ll_new_tmp(ll);
         ll_emit(ll, "%s = getelementptr inbounds %s, ptr %s, i64 %s", r, ll_ty(ll, ets),
                 base, idx);
-        return (ll_addr_t){r, ets};
+        return (ll_addr_t){r, ets, ll_tbaa_suffix(ll, ets, false)};
     }
     ll_addr_t b = ll_addr_of(ll, n->a);
     const char *ets = ll_array_elem(ll, ots);
@@ -1724,14 +1726,15 @@ static ll_addr_t ll_index_addr(ll_t *ll, ast_node_t *n)
     const char *r = ll_new_tmp(ll);
     ll_emit(ll, "%s = getelementptr inbounds %s, ptr %s, i64 0, i64 %s", r,
             ll_ty(ll, ots), b.ptr, idx);
-    return (ll_addr_t){r, ets};
+    return (ll_addr_t){r, ets, ll_tbaa_suffix(ll, ets, false)};
 }
 
 static llv_t ll_load_addr(ll_t *ll, ast_node_t *n)
 {
     ll_addr_t a = ll_addr_of(ll, n);
     const char *r = ll_new_tmp(ll);
-    ll_emit(ll, "%s = load %s, ptr %s", r, ll_ty(ll, a.ts), a.ptr);
+    ll_emit(ll, "%s = load %s, ptr %s%s", r, ll_ty(ll, a.ts), a.ptr,
+            a.tbaa ? a.tbaa : "");
     return (llv_t){r, a.ts};
 }
 

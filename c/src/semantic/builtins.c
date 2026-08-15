@@ -49,7 +49,7 @@ const salam_builtin_t *salam_builtin_lookup(const char *name)
 typedef struct {
     const char *name;
     token_kind_t op; /* TK_INT | TK_FLOAT | TK_STRING | TK_KW_TRUE | TK_KW_FALSE */
-    uint64_t i;     /* magnitude; `neg` carries the sign */
+    uint64_t i;      /* magnitude; `neg` carries the sign */
     bool neg;
     double f;
     const char *s;
@@ -312,8 +312,7 @@ static bool bc_cli_const(arena_t *a, const cli_const_entry_t *e, ast_node_t *n,
     return true;
 }
 
-bool salam_builtin_global_const(arena_t *a, const char *name, ast_node_t *n,
-                                bool *is_str)
+bool salam_builtin_global_const(arena_t *a, const char *name, ast_node_t *n, bool *is_str)
 {
     const cli_const_entry_t *e = cli_const_lookup(name);
     if (e) return bc_cli_const(a, e, n, is_str);

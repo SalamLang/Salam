@@ -79,7 +79,8 @@ static bool struct_seq(symbol_t *sym, type_t **elem, const char **count)
     static const char *const names[] = {"len", "size"};
     func_sig_t *get = method_sig(sym, "get", 1);
     size_t i = 0;
-    if (!get || !get->ret || !type_is_integer((type_t *)get->params.data[0])) return false;
+    if (!get || !get->ret || !type_is_integer((type_t *)get->params.data[0]))
+        return false;
     for (; i < 2; i++) {
         func_sig_t *n = method_sig(sym, names[i], 0);
         if (!n || !n->ret || !type_is_integer(n->ret)) continue;
@@ -213,13 +214,35 @@ void derive_append(sema_t *s, sb_t *b, type_t *t, const char *expr,
 
 /* ---------------------------------------------------------------- bodies */
 
+/* What the struct calls itself in the printed text. A generic instance is
+ * named `Box_i32` internally; it is shown as the `Box<i32>` the programmer
+ * wrote instead. */
+static const char *display_name(sema_t *s, symbol_t *sym)
+{
+    sb_t b;
+    size_t i = 0;
+    const char *r;
+    if (!sym->generic_base || sym->generic_args.len == 0) return sym->name;
+    sb_init(&b);
+    sb_puts(&b, sym->generic_base);
+    sb_putc(&b, '<');
+    for (; i < sym->generic_args.len; i++) {
+        if (i) sb_puts(&b, ", ");
+        sb_puts(&b, type_to_string(s->tc, (type_t *)sym->generic_args.data[i]));
+    }
+    sb_putc(&b, '>');
+    r = arena_strdup(s->a, sb_cstr(&b));
+    sb_free(&b);
+    return r;
+}
+
 static void body_struct(sema_t *s, sb_t *b, type_t *t, const src_span_t *span)
 {
     symbol_t *sym = (symbol_t *)t->decl;
     bool first = true;
     size_t i = 0;
-    sb_printf(b, IND "mut %s := \"%s {\"\n", DV_BUF, sym->name);
-    for (; i < sym->members->symbols.len; i++) {
+    sb_printf(b, IND "mut %s := \"%s {\"\n", DV_BUF, display_name(s, sym));
+    for (; sym->members && i < sym->members->symbols.len; i++) {
         symbol_t *f = (symbol_t *)sym->members->symbols.data[i];
         if (f->kind != SYM_FIELD) continue;
         sb_printf(b, IND "%s = %s + \"%s%s = \"\n", DV_BUF, DV_BUF, first ? "" : ", ",

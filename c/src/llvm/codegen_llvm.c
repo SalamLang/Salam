@@ -614,6 +614,10 @@ llvm_output_t *codegen_llvm_run_opts(arena_t *a, logger_t *log, ast_node_t *prog
     sb_puts(&g, "\n");
     ll_emit_prologue(&ll);
     ll_emit_struct_types(&ll, program);
+    /* Before the rt-essentials block: ensure_fn on salam_panic emits a
+     * DISubprogram, and without the DIFile/DICompileUnit nodes it references
+     * the module prints "(null)" scopes that LLVM rejects. */
+    if (ll.debug) ll_debug_init(&ll, src_path);
     {
         static const char *const rt_essentials[] = {"salam_panic", "salam_idx", NULL};
         symbol_t *core_pk = NULL;
@@ -650,7 +654,6 @@ llvm_output_t *codegen_llvm_run_opts(arena_t *a, logger_t *log, ast_node_t *prog
     }
     ll_emit_externs(&ll);
     ll_emit_globals(&ll, program);
-    if (ll.debug) ll_debug_init(&ll, src_path);
     ll_emit_impls(&ll);
     LOG_I(log, PH_CODEGEN, "generating LLVM IR for module '%s'%s", module,
           ll.debug ? i18n_tr(" (+debug info)") : "");
@@ -659,7 +662,7 @@ llvm_output_t *codegen_llvm_run_opts(arena_t *a, logger_t *log, ast_node_t *prog
         for (; i < program->list.len; i++)
             ll_toplevel(&ll, (ast_node_t *)program->list.data[i]);
     }
-    if (ll.debug) ll_debug_finalize(&ll);
+    ll_debug_finalize(&ll);
     if (hg.len > 0) {
         sb_puts(&g, "; on-demand runtime helpers\n");
         sb_puts(&g, sb_cstr(&hg));

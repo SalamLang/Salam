@@ -33,6 +33,9 @@ typedef struct {
 typedef struct {
     const char *ptr;
     const char *ts;
+    /* ", !tbaa !N" suffix for loads/stores through this address, or NULL.
+     * Only member and index addresses carry one; see ll_tbaa_suffix. */
+    const char *tbaa;
 } ll_addr_t;
 
 typedef struct {
@@ -104,6 +107,9 @@ typedef struct {
     bool debug;
     sb_t *meta;
     int meta_n;
+    const char *tbaa_char;
+    const char *tbaa_data_sfx;
+    const char *tbaa_ptr_sfx;
     const char *di_file;
     const char *di_cu;
     const char *di_subty;
@@ -295,6 +301,8 @@ const char *ll_mangle_ti(ll_t *ll, const char *typestr, const char *fn, func_sig
 void ll_emit_global_inits(ll_t *ll);
 
 const char *ll_meta_add(ll_t *ll, const char *text);
+
+const char *ll_tbaa_suffix(ll_t *ll, const char *ts, bool is_field);
 
 void ll_debug_init(ll_t *ll, const char *src_path);
 

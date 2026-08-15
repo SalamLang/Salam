@@ -328,6 +328,33 @@ static bool body_of(sema_t *s, sb_t *b, type_t *t, const src_span_t *span)
     }
 }
 
+/* ------------------------------------------------- shared with the JSON derive */
+
+func_sig_t *derive_method_sig(symbol_t *sym, const char *name, size_t nparams)
+{
+    return method_sig(sym, name, nparams);
+}
+
+bool derive_struct_seq(symbol_t *sym, type_t **elem, const char **count)
+{
+    return struct_seq(sym, elem, count);
+}
+
+bool derive_struct_map(symbol_t *sym, type_t **key, type_t **val)
+{
+    return struct_map(sym, key, val);
+}
+
+bool derive_is_plain(const type_t *t)
+{
+    return is_plain(t);
+}
+
+const char *derive_display_name(sema_t *s, symbol_t *sym)
+{
+    return display_name(s, sym);
+}
+
 const char *derive_fn_source(sema_t *s, type_t *t, const char *fname,
                              const src_span_t *span)
 {

@@ -1,0 +1,343 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package json
+
+import conv
+import str
+
+// Runtime layer for the compiler-derived JSON codecs.
+//
+// `json.Marshal(v)` and `json.Unmarshal(text, out, err)` are lowered by sema
+// into a pair of generated functions per concrete type (see
+// c/src/semantic/sema_derive_json.c). Those functions are installed with this
+// module as their home scope, so they call everything below unqualified and
+// nothing here has to be part of the public API.
+//
+// Everything is written so a generated caller needs no imports and no type
+// spelling of its own: builders are produced and consumed by handle, and every
+// scanner reports failure through an `endpos` of -1 rather than a sentinel
+// value that a caller would have to know how to recognise.
+
+// ---------------------------------------------------------------- encoding
+
+// _dnew, _dadd, _dfin - the builder trio a generated encoder is written
+// around. _dfin takes the finished text and releases the buffer in one step,
+// so generated bodies need no `defer` (which only works at function top level
+// anyway, and a derived encoder for a nested type is all loops).
+func _dnew(): str.StringBuilder:
+    ret str.NewBuilder()
+end
+
+func _dadd(b &: str.StringBuilder, s: str):
+    str.BufAppend(b, s)
+end
+
+func _dfin(b &: str.StringBuilder): str:
+    out := str.BufStr(b)
+    str.BufFree(b)
+    ret out
+end
+
+// _dqs - a JSON string literal, quotes included. Escape() in json.salam
+// covers the five characters JSON names; a document is only valid if every
+// other control character is escaped too, which is what the \u00xx tail here
+// is for.
+func _dqs(s: str): str:
+    l := s.len()
+    bp := _bp(s)
+    mut sb := str.NewBuilder()
+    repeat l with i:
+        code := _ub(bp, i)
+        if code == 34:
+            str.BufAppend(sb, "\\\"")
+        else code == 92:
+            str.BufAppend(sb, "\\\\")
+        else code == 10:
+            str.BufAppend(sb, "\\n")
+        else code == 9:
+            str.BufAppend(sb, "\\t")
+        else code == 13:
+            str.BufAppend(sb, "\\r")
+        else code == 8:
+            str.BufAppend(sb, "\\b")
+        else code == 12:
+            str.BufAppend(sb, "\\f")
+        else code < 32:
+            str.BufAppend(sb, "\\u00")
+            str.BufAppendChar(sb, _dhex(code / 16))
+            str.BufAppendChar(sb, _dhex(code % 16))
+        else:
+            str.BufAppendChar(sb, code)
+        end
+    end
+    body := str.BufStr(sb)
+    str.BufFree(sb)
+    ret "\"" + body + "\""
+end
+
+func _dhex(n: int): int:
+    if n < 10: ret 48 + n end
+    ret 87 + n
+end
+
+func _di(n: i64): str:
+    ret conv.FormatInt(n)
+end
+
+func _du(n: u64): str:
+    ret conv.FormatUint(n)
+end
+
+// _df - JSON has no spelling for an infinity or a NaN, and a document
+// containing one cannot be parsed back by anything. They encode as null,
+// which every decoder accepts, rather than as text that silently produces a
+// broken payload.
+func _df(x: f64): str:
+    if x != x: ret "null" end
+    if x > 1.7976931348623157e308: ret "null" end
+    if x < -1.7976931348623157e308: ret "null" end
+    ret conv.FormatFloat(x)
+end
+
+func _db(v: bool): str:
+    if v: ret "true" end
+    ret "false"
+end
+
+// _dch - a `char` is one codepoint, and JSON's only spelling for one is a
+// one-character string.
+func _dch(code: int): str:
+    mut sb := str.NewBuilder()
+    str.BufAppendChar(sb, code)
+    one := str.BufStr(sb)
+    str.BufFree(sb)
+    ret _dqs(one)
+end
+
+// ---------------------------------------------------------------- decoding
+
+// _derr - the single failure path. Returns -1 so a generated body can say
+// `ret _derr(...)` in one line, and leaves the first error in place: a struct
+// twelve levels down reports where it actually went wrong rather than having
+// its message overwritten by every frame on the way out.
+func _derr(e &: str, ep &: int, msg: str, pos: int): int:
+    if e == "":
+        e = msg
+        ep = pos
+    end
+    ret -1
+end
+
+func _dbyte(s: str, i: int): int:
+    if i < 0 || i >= s.len(): ret -1 end
+    ret _ub(_bp(s), i)
+end
+
+// _dat - true when `word` sits at `i`. Used for the three JSON literals.
+func _dat(s: str, i: int, word: str): bool:
+    n := word.len()
+    if i < 0 || i + n > s.len(): ret false end
+    ret s.substr(i, n) == word
+end
+
+func _dnullat(s: str, i: int): int:
+    if _dat(s, i, "null"): ret i + 4 end
+    ret -1
+end
+
+// _dgstr - decodes a JSON string at `i`, resolving escapes. endpos is the
+// position just past the closing quote, or -1 when there is no string here.
+func _dgstr(s: str, i: int, endpos &: int): str:
+    n := s.len()
+    bp := _bp(s)
+    if i < 0 || i >= n || _ub(bp, i) != 34:
+        endpos = -1
+        ret ""
+    end
+    mut sb := str.NewBuilder()
+    mut p := i + 1
+    until p < n:
+        c := _ub(bp, p)
+        if c == 34:
+            endpos = p + 1
+            out := str.BufStr(sb)
+            str.BufFree(sb)
+            ret out
+        end
+        if c == 92:
+            p += 1
+            if p >= n: break end
+            e := _ub(bp, p)
+            if e == 34: str.BufAppendChar(sb, 34)
+            else e == 92: str.BufAppendChar(sb, 92)
+            else e == 47: str.BufAppendChar(sb, 47)
+            else e == 98: str.BufAppendChar(sb, 8)
+            else e == 102: str.BufAppendChar(sb, 12)
+            else e == 110: str.BufAppendChar(sb, 10)
+            else e == 114: str.BufAppendChar(sb, 13)
+            else e == 116: str.BufAppendChar(sb, 9)
+            else e == 117:
+                if p + 4 >= n: break end
+                code := _dhex4(s, p + 1)
+                if code < 0: break end
+                str.BufAppendChar(sb, code)
+                p += 4
+            else:
+                str.BufFree(sb)
+                endpos = -1
+                ret ""
+            end
+            p += 1
+        else:
+            str.BufAppendChar(sb, c)
+            p += 1
+        end
+    end
+    str.BufFree(sb)
+    endpos = -1
+    ret ""
+end
+
+func _dhex4(s: str, i: int): int:
+    mut v := 0
+    repeat 4 with k:
+        d := _dhexval(_dbyte(s, i + k))
+        if d < 0: ret -1 end
+        v = v * 16 + d
+    end
+    ret v
+end
+
+func _dhexval(c: int): int:
+    if c >= 48 && c <= 57: ret c - 48 end
+    if c >= 97 && c <= 102: ret c - 87 end
+    if c >= 65 && c <= 70: ret c - 55 end
+    ret -1
+end
+
+// _dgint - a JSON number that has to land in an integer. A fractional or
+// exponent form is rejected rather than truncated: a decoder that silently
+// turns 1.9 into 1 hides a schema mismatch instead of reporting it.
+func _dgint(s: str, i: int, endpos &: int): i64:
+    e := _jnum(s, i)
+    if e < 0 || e == i:
+        endpos = -1
+        ret 0
+    end
+    text := s.substr(i, e - i)
+    if str.Contains(text, ".") || str.Contains(text, "e") || str.Contains(text, "E"):
+        endpos = -1
+        ret 0
+    end
+    endpos = e
+    ret text.to_int() as i64
+end
+
+func _dguint(s: str, i: int, endpos &: int): u64:
+    v := _dgint(s, i, endpos)
+    if endpos < 0: ret 0 as u64 end
+    if v < 0:
+        endpos = -1
+        ret 0 as u64
+    end
+    ret v as u64
+end
+
+func _dgflt(s: str, i: int, endpos &: int): f64:
+    e := _jnum(s, i)
+    if e < 0 || e == i:
+        endpos = -1
+        ret 0.0
+    end
+    endpos = e
+    ret s.substr(i, e - i).to_float()
+end
+
+func _dgbool(s: str, i: int, endpos &: int): bool:
+    if _dat(s, i, "true"):
+        endpos = i + 4
+        ret true
+    end
+    if _dat(s, i, "false"):
+        endpos = i + 5
+        ret false
+    end
+    endpos = -1
+    ret false
+end
+
+// _dgch - the one-character string a `char` field encodes to.
+func _dgch(s: str, i: int, endpos &: int): int:
+    text := _dgstr(s, i, endpos)
+    if endpos < 0: ret 0 end
+    if text.len() != 1:
+        endpos = -1
+        ret 0
+    end
+    ret _dbyte(text, 0)
+end
+
+// _drange - the bounds check a narrow integer field needs. i64 is what every
+// JSON number decodes to; a u8 field handed 300 is a schema error, not a
+// value to truncate.
+func _drange(v: i64, lo: i64, hi: i64, endpos &: int): i64:
+    if endpos < 0: ret 0 end
+    if v < lo || v > hi:
+        endpos = -1
+        ret 0
+    end
+    ret v
+end
+
+// _dskip - steps over one complete value without decoding it, for the
+// unknown keys a lenient decode is allowed to drop. -1 when the text is not
+// a value at all.
+func _dskip(s: str, i: int): int:
+    p := _jws(s, i)
+    c := _dbyte(s, p)
+    if c == 34:
+        ret _jstr(s, p)
+    end
+    if c == 123: ret _dskip_pair(s, p, 123, 125) end
+    if c == 91: ret _dskip_pair(s, p, 91, 93) end
+    if _dat(s, p, "true"): ret p + 4 end
+    if _dat(s, p, "false"): ret p + 5 end
+    if _dat(s, p, "null"): ret p + 4 end
+    ret _jnum(s, p)
+end
+
+// Bracket matching that steps over strings, so a '}' inside a value does not
+// close the object that contains it.
+func _dskip_pair(s: str, i: int, open: int, close: int): int:
+    n := s.len()
+    mut depth := 0
+    mut p := i
+    until p < n:
+        c := _dbyte(s, p)
+        if c == 34:
+            q := _jstr(s, p)
+            if q < 0: ret -1 end
+            p = q
+            continue
+        end
+        if c == open: depth += 1 end
+        if c == close:
+            depth -= 1
+            if depth == 0: ret p + 1 end
+        end
+        p += 1
+    end
+    ret -1
+end

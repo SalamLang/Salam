@@ -1,0 +1,409 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package matrix
+
+import math
+import sort
+
+// Reductions: whole-matrix ones that collapse to a scalar, and per-axis ones
+// that collapse to a vector.
+//
+// The axis names are spelled out rather than passed as an integer. NumPy's
+// sum(axis=0) sums *down* the rows and produces one number per column, which
+// is correct and which almost everyone reads backwards the first time. Here
+// that operation is ColSums, because what it returns is a sum per column, and
+// the shape of the result says so too: ColSums gives a row vector, RowSums
+// gives a column vector.
+//
+// Sum uses pairwise summation, not a running total. Adding n numbers in
+// sequence accumulates error that grows like n*eps, because each addition
+// rounds against a total that has already grown large compared to the next
+// term. Splitting the range in half recursively makes that error grow like
+// log(n)*eps instead, for the same number of additions and no extra memory.
+// On a 10^6-element matrix that is the difference between losing six digits
+// and losing one. Every mean, variance and norm in this library goes through
+// it.
+
+// The block below which pairwise splitting stops paying for itself and a
+// straight loop is faster. 64 keeps the recursion depth at log2(n) - 6.
+const _SUM_BLOCK := 64
+
+func _sum_flat(x &: Matrix, lo: int, hi: int): f64:
+    n := hi - lo
+    if n <= 0: ret 0.0 end
+    if n <= _SUM_BLOCK:
+        mut s := 0.0
+        mut k := lo
+        until k < hi:
+            s += x.a.get(k)
+            k += 1
+        end
+        ret s
+    end
+    mid := lo + n / 2
+    ret _sum_flat(x, lo, mid) + _sum_flat(x, mid, hi)
+end
+
+func _row_sum(x &: Matrix, i: int): f64:
+    mut s := 0.0
+    repeat x.cols with j: s += x.at(i, j) end
+    ret s
+end
+
+func _col_sum(x &: Matrix, j: int): f64:
+    mut s := 0.0
+    repeat x.rows with i: s += x.at(i, j) end
+    ret s
+end
+
+// Extreme of a row or column. `want_max` picks the direction and `by_row`
+// the axis, so one body covers the four public functions that follow.
+func _extreme(x &: Matrix, idx: int, by_row: bool, want_max: bool): f64:
+    n := _extreme_len(x, by_row)
+    if n <= 0: ret 0.0 end
+    mut best := _extreme_at(x, idx, 0, by_row)
+    mut k := 1
+    until k < n:
+        v := _extreme_at(x, idx, k, by_row)
+        if want_max && v > best: best = v end
+        if want_max == false && v < best: best = v end
+        k += 1
+    end
+    ret best
+end
+
+func _extreme_len(x &: Matrix, by_row: bool): int:
+    if by_row: ret x.cols end
+    ret x.rows
+end
+
+func _extreme_at(x &: Matrix, idx: int, k: int, by_row: bool): f64:
+    if by_row: ret x.at(idx, k) end
+    ret x.at(k, idx)
+end
+
+// The sum of squared deviations from the mean, computed in two passes. The
+// one-pass formula sum(x^2) - n*mean^2 is algebraically identical and
+// numerically indefensible: on data with a large mean and small spread it
+// subtracts two nearly equal large numbers and can even return a negative
+// variance.
+func _sum_sq_dev(x &: Matrix): f64:
+    mu := Mean(x)
+    mut acc := 0.0
+    repeat x.count() with k:
+        d := x.a.get(k) - mu
+        acc += d * d
+    end
+    ret acc
+end
+
+func _denominator(n: int, sample: bool): f64:
+    if sample: ret (n - 1) as f64 end
+    ret n as f64
+end
+
+@en "Sum"
+@fa "مجموع"
+@ar "مجموع"
+pub func Sum(x &: Matrix): f64: ret _sum_flat(x, 0, x.count()) end
+
+@en "Prod"
+@fa "حاصل‌ضرب"
+@ar "جداء"
+pub func Prod(x &: Matrix): f64:
+    mut p := 1.0
+    repeat x.count() with k: p = p * x.a.get(k) end
+    ret p
+end
+
+@en "Mean"
+@fa "میانگین"
+@ar "متوسط"
+pub func Mean(x &: Matrix): f64:
+    if x.count() == 0: ret 0.0 end
+    ret Sum(x) / (x.count() as f64)
+end
+
+@en "Min"
+@fa "کمینه"
+@ar "أصغر"
+pub func Min(x &: Matrix): f64:
+    if x.count() == 0: ret 0.0 end
+    mut b := x.a.get(0)
+    repeat x.count() with k:
+        if x.a.get(k) < b: b = x.a.get(k) end
+    end
+    ret b
+end
+
+@en "Max"
+@fa "بیشینه"
+@ar "أكبر"
+pub func Max(x &: Matrix): f64:
+    if x.count() == 0: ret 0.0 end
+    mut b := x.a.get(0)
+    repeat x.count() with k:
+        if x.a.get(k) > b: b = x.a.get(k) end
+    end
+    ret b
+end
+
+// Peak to peak, max - min. NumPy's ptp.
+@en "Range"
+@fa "دامنه"
+@ar "مدى"
+pub func Range(x &: Matrix): f64: ret Max(x) - Min(x) end
+
+// Flat row-major index of the smallest entry. Pair with IndexRow and
+// IndexCol to get the position back as a coordinate.
+@en "ArgMin"
+@fa "اندیس کمینه"
+@ar "دليل الأصغر"
+pub func ArgMin(x &: Matrix): int:
+    mut bi := 0
+    repeat x.count() with k:
+        if x.a.get(k) < x.a.get(bi): bi = k end
+    end
+    ret bi
+end
+
+@en "ArgMax"
+@fa "اندیس بیشینه"
+@ar "دليل الأكبر"
+pub func ArgMax(x &: Matrix): int:
+    mut bi := 0
+    repeat x.count() with k:
+        if x.a.get(k) > x.a.get(bi): bi = k end
+    end
+    ret bi
+end
+
+@en "IndexRow"
+@fa "سطر اندیس"
+@ar "صف الدليل"
+pub func IndexRow(x &: Matrix, k: int): int:
+    if x.cols <= 0: ret 0 end
+    ret k / x.cols
+end
+
+@en "IndexCol"
+@fa "ستون اندیس"
+@ar "عمود الدليل"
+pub func IndexCol(x &: Matrix, k: int): int:
+    if x.cols <= 0: ret 0 end
+    ret k % x.cols
+end
+
+// The entry of largest magnitude, which is what a convergence test wants:
+// it is the infinity norm of the matrix read as a vector.
+@en "MaxAbs"
+@fa "بیشینه قدرمطلق"
+@ar "أكبر قيمة مطلقة"
+pub func MaxAbs(x &: Matrix): f64:
+    mut b := 0.0
+    repeat x.count() with k:
+        v := math.Abs(x.a.get(k))
+        if v > b: b = v end
+    end
+    ret b
+end
+
+// Population variance by default; `sample` switches to the n-1 denominator,
+// the unbiased estimator for a sample drawn from a larger population.
+@en "Var"
+@fa "واریانس"
+@ar "تباين"
+pub func Var(x &: Matrix, sample: bool): f64:
+    d := _denominator(x.count(), sample)
+    if d <= 0.0: ret 0.0 end
+    ret _sum_sq_dev(x) / d
+end
+
+@en "Std"
+@fa "انحراف معیار"
+@ar "انحراف معياري"
+pub func Std(x &: Matrix, sample: bool): f64: ret math.Sqrt(Var(x, sample)) end
+
+@en "Median"
+@fa "میانه"
+@ar "وسيط"
+pub func Median(x &: Matrix): f64:
+    n := x.count()
+    if n == 0: ret 0.0 end
+    mut v := Vector {} as Vector<f64>
+    repeat n with k: v.push(x.a.get(k)) end
+    sort.Sort(v)
+    mut m := v.get(n / 2)
+    if n % 2 == 0: m = 0.5 * (v.get(n / 2 - 1) + v.get(n / 2)) end
+    v.free()
+    ret m
+end
+
+// One sum per row, as a column vector.
+@en "RowSums"
+@fa "مجموع سطرها"
+@ar "مجاميع الصفوف"
+pub func RowSums(x &: Matrix): Matrix:
+    mut r := Zeros(x.rows, 1)
+    repeat x.rows with i: r.set(i, 0, _row_sum(x, i)) end
+    ret r
+end
+
+// One sum per column, as a row vector. This is NumPy's sum(axis=0).
+@en "ColSums"
+@fa "مجموع ستون‌ها"
+@ar "مجاميع الأعمدة"
+pub func ColSums(x &: Matrix): Matrix:
+    mut r := Zeros(1, x.cols)
+    repeat x.cols with j: r.set(0, j, _col_sum(x, j)) end
+    ret r
+end
+
+@en "RowMeans"
+@fa "میانگین سطرها"
+@ar "متوسطات الصفوف"
+pub func RowMeans(x &: Matrix): Matrix:
+    mut r := RowSums(x)
+    if x.cols > 0: ScaleInPlace(r, 1.0 / (x.cols as f64)) end
+    ret r
+end
+
+@en "ColMeans"
+@fa "میانگین ستون‌ها"
+@ar "متوسطات الأعمدة"
+pub func ColMeans(x &: Matrix): Matrix:
+    mut r := ColSums(x)
+    if x.rows > 0: ScaleInPlace(r, 1.0 / (x.rows as f64)) end
+    ret r
+end
+
+@en "RowMins"
+@fa "کمینه سطرها"
+@ar "أصغر الصفوف"
+pub func RowMins(x &: Matrix): Matrix:
+    mut r := Zeros(x.rows, 1)
+    repeat x.rows with i: r.set(i, 0, _extreme(x, i, true, false)) end
+    ret r
+end
+
+@en "RowMaxs"
+@fa "بیشینه سطرها"
+@ar "أكبر الصفوف"
+pub func RowMaxs(x &: Matrix): Matrix:
+    mut r := Zeros(x.rows, 1)
+    repeat x.rows with i: r.set(i, 0, _extreme(x, i, true, true)) end
+    ret r
+end
+
+@en "ColMins"
+@fa "کمینه ستون‌ها"
+@ar "أصغر الأعمدة"
+pub func ColMins(x &: Matrix): Matrix:
+    mut r := Zeros(1, x.cols)
+    repeat x.cols with j: r.set(0, j, _extreme(x, j, false, false)) end
+    ret r
+end
+
+@en "ColMaxs"
+@fa "بیشینه ستون‌ها"
+@ar "أكبر الأعمدة"
+pub func ColMaxs(x &: Matrix): Matrix:
+    mut r := Zeros(1, x.cols)
+    repeat x.cols with j: r.set(0, j, _extreme(x, j, false, true)) end
+    ret r
+end
+
+// Running totals along each row, left to right, keeping the shape.
+@en "CumSumRows"
+@fa "مجموع تجمعی سطری"
+@ar "مجموع تراكمي صفي"
+pub func CumSumRows(x &: Matrix): Matrix:
+    mut r := Zeros(x.rows, x.cols)
+    repeat x.rows with i:
+        mut s := 0.0
+        repeat x.cols with j:
+            s += x.at(i, j)
+            r.set(i, j, s)
+        end
+    end
+    ret r
+end
+
+// Running totals down each column.
+@en "CumSumCols"
+@fa "مجموع تجمعی ستونی"
+@ar "مجموع تراكمي عمودي"
+pub func CumSumCols(x &: Matrix): Matrix:
+    mut r := Zeros(x.rows, x.cols)
+    repeat x.cols with j:
+        mut s := 0.0
+        repeat x.rows with i:
+            s += x.at(i, j)
+            r.set(i, j, s)
+        end
+    end
+    ret r
+end
+
+// Running products along each row.
+@en "CumProdRows"
+@fa "ضرب تجمعی سطری"
+@ar "جداء تراكمي صفي"
+pub func CumProdRows(x &: Matrix): Matrix:
+    mut r := Zeros(x.rows, x.cols)
+    repeat x.rows with i:
+        mut p := 1.0
+        repeat x.cols with j:
+            p = p * x.at(i, j)
+            r.set(i, j, p)
+        end
+    end
+    ret r
+end
+
+@en "CountNonZero"
+@fa "شمار ناصفر"
+@ar "عدد غير الصفر"
+pub func CountNonZero(x &: Matrix): int:
+    mut n := 0
+    repeat x.count() with k:
+        if x.a.get(k) != 0.0: n += 1 end
+    end
+    ret n
+end
+
+@en "Any"
+@fa "هر"
+@ar "أي"
+pub func Any(x &: Matrix): bool: ret CountNonZero(x) > 0 end
+
+@en "All"
+@fa "همه"
+@ar "كل"
+pub func All(x &: Matrix): bool: ret CountNonZero(x) == x.count() end
+
+// Every entry finite: no NaN and no infinity. The check to run on anything
+// that came out of a factorization before trusting it.
+@en "AllFinite"
+@fa "همه متناهی"
+@ar "كلها منتهية"
+pub func AllFinite(x &: Matrix): bool:
+    repeat x.count() with k:
+        v := x.a.get(k)
+        if math.IsNaN(v): ret false end
+        if math.IsInf(v): ret false end
+    end
+    ret true
+end

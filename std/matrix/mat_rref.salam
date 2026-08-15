@@ -1,0 +1,300 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package matrix
+
+import math
+
+// Gauss-Jordan elimination: row echelon form, reduced row echelon form, and
+// the exact structure of a linear system's solution set.
+//
+// This is the constructive, symbolic side of linear algebra, and it answers
+// questions the numerical factorizations do not. The SVD will tell you that a
+// system is rank 2, but RREF tells you *which* variables are free, and gives
+// a basis for the solution set that a person can read. That is what a linear
+// algebra course means by solving a system, and it is genuinely useful:
+// parameterizing a solution set, finding an explicit null space basis with
+// rational entries, and identifying which columns of a matrix are the
+// independent ones.
+//
+// Two cautions, stated rather than papered over:
+//
+//   - RREF is discontinuous in the entries. Whether a pivot is "zero"
+//     decides the shape of the answer, so an input perturbed in the sixteenth
+//     digit can produce a different rank and a different set of free
+//     variables. For rank decisions on measured data, use MatrixRank, which
+//     goes through the SVD. Use this when the input is exact.
+//   - Partial pivoting is still used here even though the goal is symbolic.
+//     It costs nothing and it stops a merely unlucky ordering from dividing
+//     by a pivot many orders of magnitude smaller than the entries beneath
+//     it.
+
+// A pivot must exceed this multiple of the largest entry in the matrix to
+// count as nonzero. Relative, for the same reason LU's threshold is.
+const _RREF_SCALE := 1.0e-12
+
+func _matrix_scale(x &: Matrix): f64:
+    mut m := 0.0
+    repeat x.count() with k:
+        v := math.Abs(x.a.get(k))
+        if v > m: m = v end
+    end
+    if m == 0.0: ret 1.0 end
+    ret m
+end
+
+// The row at or below `from` with the largest magnitude in column `col`.
+func _best_pivot(x &: Matrix, from: int, col: int): int:
+    mut best := from
+    mut bv := math.Abs(x.at(from, col))
+    mut i := from + 1
+    until i < x.rows:
+        v := math.Abs(x.at(i, col))
+        if v > bv:
+            bv = v
+            best = i
+        end
+        i += 1
+    end
+    ret best
+end
+
+func _scale_row(x &: Matrix, i: int, f: f64):
+    repeat x.cols with j: x.mul_at(i, j, f) end
+end
+
+// row_target -= f * row_source, the elementary operation everything here is
+// built from.
+func _axpy_row(x &: Matrix, target: int, source: int, f: f64):
+    repeat x.cols with j:
+        x.set(target, j, x.at(target, j) - f * x.at(source, j))
+    end
+end
+
+// Clears column `col` above and/or below the pivot row.
+func _clear_column(x &: Matrix, pivot_row: int, col: int, full: bool):
+    repeat x.rows with i:
+        if i != pivot_row:
+            if full || i > pivot_row:
+                f := x.at(i, col)
+                if f != 0.0: _axpy_row(x, i, pivot_row, f) end
+            end
+        end
+    end
+end
+
+// The shared elimination pass. `reduced` decides between row echelon form
+// (clear below the pivot only, leaving the pivot as it is) and reduced row
+// echelon form (normalize the pivot to 1 and clear the whole column).
+// Pivot columns are recorded as they are found, which is what every consumer
+// of this actually needs.
+func _eliminate(x &: Matrix, pivots &: Vector<int>, reduced: bool):
+    tol := _RREF_SCALE * _matrix_scale(x)
+    mut row := 0
+    repeat x.cols with col:
+        if row < x.rows:
+            _eliminate_col(x, pivots, row, col, tol, reduced)
+            if pivots.len() > row: row += 1 end
+        end
+    end
+end
+
+func _eliminate_col(x &: Matrix, pivots &: Vector<int>, row: int, col: int, tol: f64, reduced: bool):
+    p := _best_pivot(x, row, col)
+    if math.Abs(x.at(p, col)) <= tol: ret end
+    SwapRows(x, row, p)
+    if reduced: _scale_row(x, row, 1.0 / x.at(row, col)) end
+    _clear_column(x, row, col, reduced)
+    pivots.push(col)
+end
+
+func _free_columns(ncols: int, piv &: Vector<int>): Vector<int>:
+    mut free := Vector {} as Vector<int>
+    repeat ncols with j:
+        mut found := false
+        repeat piv.len() with k:
+            if piv.get(k) == j: found = true end
+        end
+        if found == false: free.push(j) end
+    end
+    ret free
+end
+
+// One null space basis vector: set free variable k to 1, then read each
+// leading variable off its pivot row, where the RREF has already isolated it.
+func _null_column(r &: Matrix, piv &: Vector<int>, free &: Vector<int>, basis &: Matrix, k: int):
+    fc := free.get(k)
+    basis.set(fc, k, 1.0)
+    repeat piv.len() with row:
+        basis.set(piv.get(row), k, 0.0 - r.at(row, fc))
+    end
+end
+
+func _copy_col(src &: Matrix, dst &: Matrix, src_col: int, dst_col: int):
+    repeat src.rows with i: dst.set(i, dst_col, src.at(i, src_col)) end
+end
+
+func _read_solution(aug &: Matrix, piv &: Vector<int>, out &: Matrix, ncols: int): bool:
+    repeat piv.len() with k:
+        col := piv.get(k)
+        if col >= ncols: ret false end
+        out.set(col, 0, aug.at(k, ncols))
+    end
+    ret true
+end
+
+// Row echelon form: zeros below every pivot, pivots left unnormalized. The
+// output of Gaussian elimination, and the form whose diagonal product is the
+// determinant.
+@en "RowEchelon"
+@fa "پلکانی سطری"
+@ar "درجي صفي"
+pub func RowEchelon(x &: Matrix): Matrix:
+    mut r := Clone(x)
+    mut piv := Vector {} as Vector<int>
+    _eliminate(r, piv, false)
+    piv.free()
+    ret r
+end
+
+// Reduced row echelon form: every pivot is 1 and is the only nonzero in its
+// column. Unique for a given matrix, unlike row echelon form, which is what
+// makes it the canonical answer.
+@en "RREF"
+@fa "پلکانی کاهش‌یافته"
+@ar "درجي مختزل"
+pub func RREF(x &: Matrix): Matrix:
+    mut r := Clone(x)
+    mut piv := Vector {} as Vector<int>
+    _eliminate(r, piv, true)
+    piv.free()
+    ret r
+end
+
+// The indices of the pivot columns, as a row vector. These are the positions
+// of the leading variables; every other column is free.
+@en "PivotColumns"
+@fa "ستون‌های محوری"
+@ar "أعمدة محورية"
+pub func PivotColumns(x &: Matrix): Matrix:
+    mut work := Clone(x)
+    mut piv := Vector {} as Vector<int>
+    _eliminate(work, piv, true)
+    mut r := Zeros(1, piv.len())
+    repeat piv.len() with k: r.set(0, k, piv.get(k) as f64) end
+    piv.free()
+    work.free()
+    ret r
+end
+
+// The rank by elimination: the number of pivots. Exact on exact input and
+// cheap, but see the caution at the top of this file; MatrixRank is the one
+// to use on measured data.
+@en "RankExact"
+@fa "رتبه دقیق"
+@ar "رتبة دقيقة"
+pub func RankExact(x &: Matrix): int:
+    mut work := Clone(x)
+    mut piv := Vector {} as Vector<int>
+    _eliminate(work, piv, true)
+    n := piv.len()
+    piv.free()
+    work.free()
+    ret n
+end
+
+// The dimension of the null space. The rank-nullity theorem in one line:
+// rank + nullity = number of columns.
+@en "Nullity"
+@fa "پوچی"
+@ar "بطلان"
+pub func Nullity(x &: Matrix): int: ret x.cols - RankExact(x) end
+
+// A basis for the null space read off the RREF, as the columns of the result.
+//
+// Different from the SVD's NullSpace in a way worth knowing: that one returns
+// an orthonormal basis, this one returns the basis you get by setting one
+// free variable to 1 and the rest to 0. This basis is not orthogonal, but its
+// entries are exactly the numbers that appear in the RREF, so on an integer
+// matrix they come out as recognizable rationals rather than as decimals.
+@en "NullSpaceExact"
+@fa "فضای پوچ دقیق"
+@ar "فضاء العدم الدقيق"
+pub func NullSpaceExact(x &: Matrix): Matrix:
+    mut r := Clone(x)
+    mut piv := Vector {} as Vector<int>
+    _eliminate(r, piv, true)
+    mut free := _free_columns(x.cols, piv)
+    mut basis := Zeros(x.cols, free.len())
+    repeat free.len() with k: _null_column(r, piv, free, basis, k) end
+    piv.free()
+    free.free()
+    r.free()
+    ret basis
+end
+// A basis for the column space, taken as the original columns in the pivot
+// positions. Unlike the SVD's orthonormal ColumnSpace, these are actual
+// columns of A, which is what "which of my columns are independent" means.
+@en "ColumnSpaceExact"
+@fa "فضای ستونی دقیق"
+@ar "فضاء الأعمدة الدقيق"
+pub func ColumnSpaceExact(x &: Matrix): Matrix:
+    mut work := Clone(x)
+    mut piv := Vector {} as Vector<int>
+    _eliminate(work, piv, true)
+    mut r := Zeros(x.rows, piv.len())
+    repeat piv.len() with k: _copy_col(x, r, piv.get(k), k) end
+    piv.free()
+    work.free()
+    ret r
+end
+
+// Solves A x = b by Gauss-Jordan on the augmented matrix, returning one
+// particular solution. Free variables are set to zero, so this is the
+// solution supported on the leading variables alone; add any combination of
+// NullSpaceExact's columns to get every other solution.
+//
+// An inconsistent system (a pivot in the augmented column, meaning a row that
+// reads 0 = 1) returns 0x0.
+@en "SolveGeneral"
+@fa "حل عمومی"
+@ar "حل عام"
+pub func SolveGeneral(a &: Matrix, b &: Matrix): Matrix:
+    if a.rows != b.rows || b.cols != 1: ret Zeros(0, 0) end
+    mut aug := HStack(a, b)
+    mut piv := Vector {} as Vector<int>
+    _eliminate(aug, piv, true)
+    mut r := Zeros(a.cols, 1)
+    ok := _read_solution(aug, piv, r, a.cols)
+    piv.free()
+    aug.free()
+    if ok: ret r end
+    r.free()
+    ret Zeros(0, 0)
+end
+
+// Whether A x = b has any solution at all. True exactly when b lies in the
+// column space of A, which elimination detects as the absence of a pivot in
+// the augmented column.
+@en "IsConsistent"
+@fa "سازگار است"
+@ar "متسق"
+pub func IsConsistent(a &: Matrix, b &: Matrix): bool:
+    if a.rows != b.rows: ret false end
+    mut aug := HStack(a, b)
+    ra := RankExact(a)
+    rb := RankExact(aug)
+    aug.free()
+    ret ra == rb
+end

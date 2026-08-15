@@ -1,0 +1,451 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package matrix
+
+import math
+
+// The structural questions: what kind of matrix is this?
+//
+// Every predicate here takes a tolerance, and that is the whole design. In
+// exact arithmetic "is A symmetric" has a yes or no answer; in floating point
+// a matrix that was symmetric before it went through a factorization comes
+// back symmetric to within 1e-15, and a predicate that tests for exact
+// equality answers no, which is useless. So the tolerance is an argument, not
+// a hidden constant, and passing MAT_TOL is the sensible default.
+//
+// The comparisons are relative where relativity means something. A matrix
+// scaled by 10^8 has off-diagonal differences around 10^-7 after the same
+// computation that gave 10^-15 at unit scale, and it is no less symmetric for
+// it, so the tests scale their tolerance by the size of the matrix.
+//
+// Positive definiteness goes through Cholesky rather than through
+// eigenvalues: it is the cheapest test, it is exact about what it decides,
+// and the factorization failing *is* the answer.
+
+func _scale_of(x &: Matrix): f64:
+    mut m := 0.0
+    repeat x.count() with k:
+        v := math.Abs(x.a.get(k))
+        if v > m: m = v end
+    end
+    if m == 0.0: ret 1.0 end
+    ret m
+end
+
+func _close(a: f64, b: f64, tol: f64): bool: ret math.Abs(a - b) <= tol end
+
+// Whether every entry outside the band [lo, hi] relative to the diagonal is
+// zero. Every triangular and diagonal test is a special case of this.
+func _banded(x &: Matrix, lo: int, hi: int, tol: f64): bool:
+    repeat x.rows with i:
+        repeat x.cols with j:
+            d := j - i
+            if d < 0 - lo || d > hi:
+                if math.Abs(x.at(i, j)) > tol: ret false end
+            end
+        end
+    end
+    ret true
+end
+
+func _row_sum_is(x &: Matrix, i: int, want: f64, tol: f64): bool:
+    mut s := 0.0
+    repeat x.cols with j: s += x.at(i, j) end
+    ret _close(s, want, tol)
+end
+
+func _col_sum_is(x &: Matrix, j: int, want: f64, tol: f64): bool:
+    mut s := 0.0
+    repeat x.rows with i: s += x.at(i, j) end
+    ret _close(s, want, tol)
+end
+
+func _nonnegative(x &: Matrix): bool:
+    repeat x.count() with k:
+        if x.a.get(k) < 0.0: ret false end
+    end
+    ret true
+end
+
+// Whether the product of x with itself (or with its transpose) matches a
+// target, which is the shape of the idempotent, involutory, orthogonal and
+// normal tests.
+func _product_matches(p &: Matrix, target &: Matrix, tol: f64): bool:
+    if p.same_shape(target) == false: ret false end
+    repeat p.count() with k:
+        if math.Abs(p.a.get(k) - target.a.get(k)) > tol: ret false end
+    end
+    ret true
+end
+
+func _binary_entries(x &: Matrix, tol: f64): bool:
+    repeat x.count() with k:
+        v := x.a.get(k)
+        if _close(v, 0.0, tol) == false && _close(v, 1.0, tol) == false:
+            ret false
+        end
+    end
+    ret true
+end
+
+@en "IsSquare"
+@fa "مربع است"
+@ar "مربعة"
+pub func IsSquare(x &: Matrix): bool: ret x.is_square() end
+
+// Entrywise equality within tolerance, NumPy's allclose.
+@en "AllClose"
+@fa "همه نزدیک"
+@ar "كلها قريبة"
+pub func AllClose(x &: Matrix, y &: Matrix, tol: f64): bool:
+    if x.same_shape(y) == false: ret false end
+    s := _scale_of(x)
+    repeat x.count() with k:
+        if math.Abs(x.a.get(k) - y.a.get(k)) > tol * s: ret false end
+    end
+    ret true
+end
+
+@en "IsZero"
+@fa "صفر است"
+@ar "صفرية"
+pub func IsZero(x &: Matrix, tol: f64): bool:
+    repeat x.count() with k:
+        if math.Abs(x.a.get(k)) > tol: ret false end
+    end
+    ret true
+end
+
+@en "IsIdentity"
+@fa "همانی است"
+@ar "وحدة"
+pub func IsIdentity(x &: Matrix, tol: f64): bool:
+    if x.is_square() == false: ret false end
+    repeat x.rows with i:
+        repeat x.cols with j:
+            mut want := 0.0
+            if i == j: want = 1.0 end
+            if _close(x.at(i, j), want, tol) == false: ret false end
+        end
+    end
+    ret true
+end
+
+// A = A^T. For a real matrix this is the same thing as Hermitian, which is
+// why there is no separate IsHermitian.
+@en "IsSymmetric"
+@fa "متقارن است"
+@ar "متماثلة"
+pub func IsSymmetric(x &: Matrix, tol: f64): bool:
+    if x.is_square() == false: ret false end
+    t := tol * _scale_of(x)
+    repeat x.rows with i:
+        mut j := i + 1
+        until j < x.cols:
+            if _close(x.at(i, j), x.at(j, i), t) == false: ret false end
+            j += 1
+        end
+    end
+    ret true
+end
+
+// A = -A^T, which forces the diagonal to be zero. The tangent space of the
+// rotation group, and the form every cross product matrix takes.
+@en "IsSkewSymmetric"
+@fa "پادمتقارن است"
+@ar "متخالفة"
+pub func IsSkewSymmetric(x &: Matrix, tol: f64): bool:
+    if x.is_square() == false: ret false end
+    t := tol * _scale_of(x)
+    repeat x.rows with i:
+        repeat x.cols with j:
+            if _close(x.at(i, j), 0.0 - x.at(j, i), t) == false: ret false end
+        end
+    end
+    ret true
+end
+
+@en "IsDiagonal"
+@fa "قطری است"
+@ar "قطرية"
+pub func IsDiagonal(x &: Matrix, tol: f64): bool:
+    ret _banded(x, 0, 0, tol * _scale_of(x))
+end
+
+@en "IsUpperTriangular"
+@fa "بالامثلثی است"
+@ar "مثلثية عليا"
+pub func IsUpperTriangular(x &: Matrix, tol: f64): bool:
+    ret _banded(x, 0, x.cols, tol * _scale_of(x))
+end
+
+@en "IsLowerTriangular"
+@fa "پایین‌مثلثی است"
+@ar "مثلثية سفلى"
+pub func IsLowerTriangular(x &: Matrix, tol: f64): bool:
+    ret _banded(x, x.rows, 0, tol * _scale_of(x))
+end
+
+// Zero outside a band of `lower` subdiagonals and `upper` superdiagonals.
+@en "IsBanded"
+@fa "نواری است"
+@ar "نطاقية"
+pub func IsBanded(x &: Matrix, lower: int, upper: int, tol: f64): bool:
+    ret _banded(x, lower, upper, tol * _scale_of(x))
+end
+
+// How many subdiagonals carry a nonzero entry. Zero for an upper triangular
+// matrix, one for a Hessenberg one.
+@en "LowerBandwidth"
+@fa "پهنای نوار پایین"
+@ar "عرض النطاق السفلي"
+pub func LowerBandwidth(x &: Matrix, tol: f64): int:
+    t := tol * _scale_of(x)
+    mut b := 0
+    repeat x.rows with i:
+        repeat x.cols with j:
+            if i - j > b && math.Abs(x.at(i, j)) > t: b = i - j end
+        end
+    end
+    ret b
+end
+
+@en "UpperBandwidth"
+@fa "پهنای نوار بالا"
+@ar "عرض النطاق العلوي"
+pub func UpperBandwidth(x &: Matrix, tol: f64): int:
+    t := tol * _scale_of(x)
+    mut b := 0
+    repeat x.rows with i:
+        repeat x.cols with j:
+            if j - i > b && math.Abs(x.at(i, j)) > t: b = j - i end
+        end
+    end
+    ret b
+end
+
+// A^T A = I: the columns are orthonormal. For a square matrix this makes A a
+// rotation or a reflection, and A^-1 = A^T, which is the cheapest inverse
+// there is.
+@en "IsOrthogonal"
+@fa "متعامد است"
+@ar "متعامدة"
+pub func IsOrthogonal(x &: Matrix, tol: f64): bool:
+    mut g := Gram(x)
+    mut id := Eye(x.cols)
+    ok := _product_matches(g, id, tol)
+    g.free()
+    id.free()
+    ret ok
+end
+
+// A A^T = A^T A. Normal matrices are exactly the ones diagonalizable by a
+// unitary transformation, which puts symmetric, skew-symmetric and orthogonal
+// matrices all inside one class.
+@en "IsNormal"
+@fa "نرمال است"
+@ar "ناظمية"
+pub func IsNormal(x &: Matrix, tol: f64): bool:
+    if x.is_square() == false: ret false end
+    mut aat := MulTranspose(x, x)
+    mut ata := TransposeMul(x, x)
+    ok := _product_matches(aat, ata, tol * _scale_of(x))
+    aat.free()
+    ata.free()
+    ret ok
+end
+
+// A^2 = A: a projection. Its eigenvalues are all 0 or 1 and its trace is its
+// rank, which is how the degrees of freedom of a linear model get counted.
+@en "IsIdempotent"
+@fa "خودتوان است"
+@ar "متساوية القوى"
+pub func IsIdempotent(x &: Matrix, tol: f64): bool:
+    if x.is_square() == false: ret false end
+    mut p := MatMul(x, x)
+    ok := _product_matches(p, x, tol * _scale_of(x))
+    p.free()
+    ret ok
+end
+
+// A^2 = I: its own inverse. A reflection is the standard example.
+@en "IsInvolutory"
+@fa "خودوارون است"
+@ar "انقلابية"
+pub func IsInvolutory(x &: Matrix, tol: f64): bool:
+    if x.is_square() == false: ret false end
+    mut p := MatMul(x, x)
+    mut id := Eye(x.rows)
+    ok := _product_matches(p, id, tol)
+    p.free()
+    id.free()
+    ret ok
+end
+
+// A^k = 0 for some k <= n. Every eigenvalue is zero, so a nilpotent matrix is
+// the purely defective case: nonzero, yet with an empty spectrum in the sense
+// that matters.
+@en "IsNilpotent"
+@fa "پوچ‌توان است"
+@ar "معدومة القوى"
+pub func IsNilpotent(x &: Matrix, tol: f64): bool:
+    if x.is_square() == false: ret false end
+    mut p := MatPow(x, x.rows)
+    ok := IsZero(p, tol * _scale_of(x))
+    p.free()
+    ret ok
+end
+
+// Symmetric with every eigenvalue strictly positive, tested by whether
+// Cholesky succeeds. The condition for x^T A x > 0 for all nonzero x, which
+// is what makes a quadratic form a genuine minimum and a covariance matrix a
+// genuine covariance.
+@en "IsPositiveDefinite"
+@fa "معین مثبت است"
+@ar "معرفة موجبة"
+pub func IsPositiveDefinite(x &: Matrix, tol: f64): bool:
+    if IsSymmetric(x, tol) == false: ret false end
+    mut l := Cholesky(x)
+    ok := l.is_empty() == false
+    l.free()
+    ret ok
+end
+
+// Symmetric with no negative eigenvalues, zeros allowed. The class every
+// Gram matrix and every sample covariance matrix belongs to.
+@en "IsPositiveSemiDefinite"
+@fa "نیمه‌معین مثبت است"
+@ar "شبه معرفة موجبة"
+pub func IsPositiveSemiDefinite(x &: Matrix, tol: f64): bool:
+    if IsSymmetric(x, tol) == false: ret false end
+    mut v := EigValsSym(x)
+    cut := 0.0 - tol * _scale_of(x)
+    mut ok := true
+    repeat v.count() with k:
+        if v.a.get(k) < cut: ok = false end
+    end
+    v.free()
+    ret ok
+end
+
+// Numerically singular: rank below full, decided by the SVD rather than by
+// the determinant. The determinant is a terrible singularity test, since it
+// scales like the n-th power of the entries and is tiny for a perfectly good
+// matrix of small numbers and huge for a nearly singular matrix of large ones.
+@en "IsSingular"
+@fa "تکین است"
+@ar "شاذة"
+pub func IsSingular(x &: Matrix): bool:
+    if x.is_square() == false: ret true end
+    ret MatrixRank(x, 0.0) < x.rows
+end
+
+@en "IsInvertible"
+@fa "وارون‌پذیر است"
+@ar "قابلة للعكس"
+pub func IsInvertible(x &: Matrix): bool: ret IsSingular(x) == false end
+
+// Nonnegative with every row summing to 1: a Markov transition matrix, whose
+// rows are probability distributions over the next state.
+@en "IsRowStochastic"
+@fa "تصادفی سطری است"
+@ar "عشوائية صفية"
+pub func IsRowStochastic(x &: Matrix, tol: f64): bool:
+    if _nonnegative(x) == false: ret false end
+    repeat x.rows with i:
+        if _row_sum_is(x, i, 1.0, tol) == false: ret false end
+    end
+    ret true
+end
+
+@en "IsColStochastic"
+@fa "تصادفی ستونی است"
+@ar "عشوائية عمودية"
+pub func IsColStochastic(x &: Matrix, tol: f64): bool:
+    if _nonnegative(x) == false: ret false end
+    repeat x.cols with j:
+        if _col_sum_is(x, j, 1.0, tol) == false: ret false end
+    end
+    ret true
+end
+
+// Stochastic both ways, which by Birkhoff's theorem makes it a convex
+// combination of permutation matrices.
+@en "IsDoublyStochastic"
+@fa "تصادفی دوگانه است"
+@ar "عشوائية مزدوجة"
+pub func IsDoublyStochastic(x &: Matrix, tol: f64): bool:
+    if IsRowStochastic(x, tol) == false: ret false end
+    ret IsColStochastic(x, tol)
+end
+
+// Exactly one 1 in every row and every column, the rest zero. A relabelling
+// of the coordinates, and its own inverse is its transpose.
+@en "IsPermutation"
+@fa "جایگشتی است"
+@ar "تبديلية"
+pub func IsPermutation(x &: Matrix, tol: f64): bool:
+    if x.is_square() == false: ret false end
+    if _binary_entries(x, tol) == false: ret false end
+    ret IsDoublyStochastic(x, tol)
+end
+
+// Constant along every diagonal, which is what makes a matrix a discrete
+// convolution operator. Toeplitz structure is why a linear time-invariant
+// system can be applied in n log n rather than n^2.
+@en "IsToeplitz"
+@fa "توپلیتز است"
+@ar "توبليتز"
+pub func IsToeplitz(x &: Matrix, tol: f64): bool:
+    t := tol * _scale_of(x)
+    mut i := 1
+    until i < x.rows:
+        mut j := 1
+        until j < x.cols:
+            if _close(x.at(i, j), x.at(i - 1, j - 1), t) == false: ret false end
+            j += 1
+        end
+        i += 1
+    end
+    ret true
+end
+
+// Constant along every antidiagonal, the mirror image of Toeplitz.
+@en "IsHankel"
+@fa "هنکل است"
+@ar "هانكل"
+pub func IsHankel(x &: Matrix, tol: f64): bool:
+    t := tol * _scale_of(x)
+    mut i := 1
+    until i < x.rows:
+        mut j := 0
+        until j < x.cols - 1:
+            if _close(x.at(i, j), x.at(i - 1, j + 1), t) == false: ret false end
+            j += 1
+        end
+        i += 1
+    end
+    ret true
+end
+
+// The fraction of entries that are nonzero. Below about 0.1 a matrix is worth
+// storing sparsely, which is the decision this number exists to inform.
+@en "Density"
+@fa "چگالی"
+@ar "كثافة"
+pub func Density(x &: Matrix): f64:
+    if x.count() == 0: ret 0.0 end
+    ret (CountNonZero(x) as f64) / (x.count() as f64)
+end

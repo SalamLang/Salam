@@ -1,0 +1,341 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package matrix
+
+import math
+
+// QR factorization by Householder reflections: A = QR, with Q orthogonal and
+// R upper triangular. The right tool for least squares, and for anything else
+// that wants an orthonormal basis for a column space.
+//
+// Householder rather than Gram-Schmidt. Classical Gram-Schmidt loses
+// orthogonality catastrophically on nearly dependent columns (the computed Q
+// can fail Q^T Q = I in the first digit), and modified Gram-Schmidt only
+// softens that. A Householder reflection is an exactly orthogonal
+// transformation up to rounding of its own entries, so the product of them is
+// orthogonal to working precision no matter how ill-conditioned A is. That is
+// the whole reason this factorization is trusted.
+//
+// The reflectors are stored where they are computed, in the part of the
+// matrix they have just zeroed: the strict lower triangle holds the vectors v
+// and `rdiag` holds R's diagonal. Q is never formed unless asked for, because
+// least squares does not need it. Applying Q^T to a vector costs O(mn), while
+// building Q costs O(mn^2) and then multiplying costs O(mn) anyway.
+//
+// Solving via QR costs about twice what LU costs, and is worth it exactly
+// when the system is overdetermined (where LU does not apply at all) or badly
+// conditioned (where QR's error grows with cond(A) and the normal equations'
+// with cond(A)^2, which is the difference between losing 8 digits and losing
+// all 16).
+
+@en "QR"
+@fa "تجزیه کیوآر"
+@ar "تحليل كيو آر"
+pub struct QR:
+    pub m: int = 0
+    pub n: int = 0
+    pub qr: Matrix = Matrix {}
+    pub rdiag: Matrix = Matrix {}
+    pub full_rank: bool = true
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free():
+        this.qr.free()
+        this.rdiag.free()
+    end
+end
+
+// Euclidean length of the part of column k at or below row k, computed by
+// scaling so that a column of large or tiny entries does not overflow or
+// underflow on the way to a representable answer.
+func _house_norm(a &: Matrix, k: int, m: int): f64:
+    mut scale := 0.0
+    mut i := k
+    until i < m:
+        v := math.Abs(a.at(i, k))
+        if v > scale: scale = v end
+        i += 1
+    end
+    if scale == 0.0: ret 0.0 end
+    mut s := 0.0
+    mut j := k
+    until j < m:
+        t := a.at(j, k) / scale
+        s += t * t
+        j += 1
+    end
+    ret scale * math.Sqrt(s)
+end
+
+// Applies the reflector held in column k to column j of the same matrix.
+func _house_apply(a &: Matrix, k: int, j: int, m: int):
+    mut s := 0.0
+    mut i := k
+    until i < m:
+        s += a.at(i, k) * a.at(i, j)
+        i += 1
+    end
+    if a.at(k, k) == 0.0: ret end
+    f := 0.0 - s / a.at(k, k)
+    mut p := k
+    until p < m:
+        a.add_at(p, j, f * a.at(p, k))
+        p += 1
+    end
+end
+
+// Builds the reflector for column k in place and applies it to the columns to
+// its right. The sign of the norm is chosen to match the leading entry, which
+// avoids the cancellation that the other choice produces when that entry is
+// already close to the norm.
+func _house_step(f &: QR, k: int):
+    mut nrm := _house_norm(f.qr, k, f.m)
+    if nrm != 0.0:
+        if f.qr.at(k, k) < 0.0: nrm = 0.0 - nrm end
+        mut i := k
+        until i < f.m:
+            f.qr.set(i, k, f.qr.at(i, k) / nrm)
+            i += 1
+        end
+        f.qr.add_at(k, k, 1.0)
+        mut j := k + 1
+        until j < f.n:
+            _house_apply(f.qr, k, j, f.m)
+            j += 1
+        end
+    end
+    f.rdiag.set(0, k, 0.0 - nrm)
+    if nrm == 0.0: f.full_rank = false end
+end
+
+// Applies Q^T to every column of b, in place, by replaying the reflectors in
+// the order they were formed.
+func _qt_apply(f &: QR, b &: Matrix):
+    repeat f.n with k:
+        repeat b.cols with c: _qt_col(f, b, k, c) end
+    end
+end
+
+func _qt_col(f &: QR, b &: Matrix, k: int, c: int):
+    mut s := 0.0
+    mut i := k
+    until i < f.m:
+        s += f.qr.at(i, k) * b.at(i, c)
+        i += 1
+    end
+    if f.qr.at(k, k) == 0.0: ret end
+    t := 0.0 - s / f.qr.at(k, k)
+    mut p := k
+    until p < f.m:
+        b.add_at(p, c, t * f.qr.at(p, k))
+        p += 1
+    end
+end
+
+// Back substitution against R, whose diagonal lives in rdiag rather than in
+// the matrix.
+func _r_backsolve(f &: QR, b &: Matrix):
+    repeat b.cols with c:
+        mut k := f.n - 1
+        until k >= 0:
+            mut s := b.at(k, c)
+            mut j := k + 1
+            until j < f.n:
+                s -= f.qr.at(k, j) * b.at(j, c)
+                j += 1
+            end
+            b.set(k, c, s / f.rdiag.at(0, k))
+            k -= 1
+        end
+    end
+end
+
+func _q_expand(f &: QR, q &: Matrix, k: int, j: int):
+    if f.qr.at(k, k) == 0.0: ret end
+    mut s := 0.0
+    mut i := k
+    until i < f.m:
+        s += f.qr.at(i, k) * q.at(i, j)
+        i += 1
+    end
+    t := 0.0 - s / f.qr.at(k, k)
+    mut p := k
+    until p < f.m:
+        q.add_at(p, j, t * f.qr.at(p, k))
+        p += 1
+    end
+end
+
+// Subtracts the projections onto every basis vector already accepted, then
+// keeps the remainder if it is long enough to be real.
+//
+// "Long enough" is measured against the column's own length before the
+// projections were removed, never against an absolute constant. A column that
+// is an exact multiple of an earlier one leaves a remainder around
+// eps * |column|, so an absolute threshold accepts it for any column scaled
+// above about 1 and rejects it below, which makes the reported rank depend on
+// the units the data happens to be in.
+func _mgs_column(w &: Matrix, cols &: Vector<int>, j: int):
+    before := _col_length(w, j)
+    repeat cols.len() with t:
+        b := cols.get(t)
+        mut d := 0.0
+        repeat w.rows with i: d += w.at(i, b) * w.at(i, j) end
+        repeat w.rows with i: w.add_at(i, j, 0.0 - d * w.at(i, b)) end
+    end
+    nrm := _col_length(w, j)
+    if nrm <= before * MAT_EPS * (w.rows as f64) * 8.0: ret end
+    repeat w.rows with i: w.set(i, j, w.at(i, j) / nrm) end
+    cols.push(j)
+end
+
+func _col_length(w &: Matrix, j: int): f64:
+    mut s := 0.0
+    repeat w.rows with i: s += w.at(i, j) * w.at(i, j) end
+    ret math.Sqrt(s)
+end
+
+func _pack_cols(w &: Matrix, cols &: Vector<int>): Matrix:
+    mut r := Zeros(w.rows, cols.len())
+    repeat cols.len() with c:
+        j := cols.get(c)
+        repeat w.rows with i: r.set(i, c, w.at(i, j)) end
+    end
+    ret r
+end
+
+@en "QRDecompose"
+@fa "تجزیه کیوآر"
+@ar "تحليل كيو آر"
+pub func QRDecompose(x &: Matrix): QR:
+    mut f := QR {}
+    if x.is_empty(): ret f end
+    f.m = x.rows
+    f.n = x.cols
+    f.qr = Clone(x)
+    f.rdiag = Zeros(1, x.cols)
+    repeat x.cols with k: _house_step(f, k) end
+    ret f
+end
+
+// The thin Q, m x n with orthonormal columns. Built on demand from the stored
+// reflectors, applied in reverse order.
+@en "QRGetQ"
+@fa "کیو"
+@ar "كيو"
+pub func QRGetQ(f &: QR): Matrix:
+    mut q := Zeros(f.m, f.n)
+    mut k := f.n - 1
+    until k >= 0:
+        q.set(k, k, 1.0)
+        mut j := k
+        until j < f.n:
+            _q_expand(f, q, k, j)
+            j += 1
+        end
+        k -= 1
+    end
+    ret q
+end
+
+// The n x n upper triangular R.
+@en "QRGetR"
+@fa "آر"
+@ar "آر"
+pub func QRGetR(f &: QR): Matrix:
+    mut r := Zeros(f.n, f.n)
+    repeat f.n with i:
+        r.set(i, i, f.rdiag.at(0, i))
+        mut j := i + 1
+        until j < f.n:
+            r.set(i, j, f.qr.at(i, j))
+            j += 1
+        end
+    end
+    ret r
+end
+
+// The least squares solution of A x = b: the x that minimizes |Ax - b|.
+//
+// For a square nonsingular A this is the exact solution and agrees with
+// Solve. For an overdetermined A (more equations than unknowns, the usual
+// case in fitting) there is no exact solution and this is the best one in the
+// Euclidean sense. A rank-deficient A has no unique answer and gives 0x0
+// here; PseudoInverse is what answers that case, by picking the solution of
+// smallest norm.
+@en "LeastSquares"
+@fa "کمترین مربعات"
+@ar "أصغر المربعات"
+pub func LeastSquares(a &: Matrix, b &: Matrix): Matrix:
+    if a.rows != b.rows || a.rows < a.cols: ret Zeros(0, 0) end
+    mut f := QRDecompose(a)
+    r := QRSolve(f, b)
+    f.free()
+    ret r
+end
+
+// Reuses a factorization across right-hand sides, the QR counterpart of
+// LUSolve.
+@en "QRSolve"
+@fa "حل کیوآر"
+@ar "حل كيو آر"
+pub func QRSolve(f &: QR, b &: Matrix): Matrix:
+    if f.full_rank == false || f.m != b.rows: ret Zeros(0, 0) end
+    mut work := Clone(b)
+    _qt_apply(f, work)
+    _r_backsolve(f, work)
+    r := SubMatrix(work, 0, 0, f.n, b.cols)
+    work.free()
+    ret r
+end
+
+// The residual vector b - A x for a computed solution. Worth looking at: a
+// least squares fit is only as good as this is small, and its norm is the
+// quantity the fit actually minimized.
+@en "Residual"
+@fa "باقیمانده"
+@ar "بقية"
+pub func Residual(a &: Matrix, x &: Matrix, b &: Matrix): Matrix:
+    mut ax := MatMul(a, x)
+    r := Sub(b, ax)
+    ax.free()
+    ret r
+end
+
+// An orthonormal basis for the column space, by modified Gram-Schmidt.
+//
+// Kept alongside the Householder path because it answers a different
+// question: it returns a basis whose k-th vector spans the same space as the
+// first k columns of A, which is what a Krylov method needs and what
+// QRGetQ's reflector product does not directly give. Columns that are
+// numerically dependent on the ones before them are dropped rather than
+// normalized into noise, so the result always has orthonormal columns and its
+// width is the numerical rank.
+@en "Orthonormalize"
+@fa "متعامدسازی"
+@ar "تعامد"
+pub func Orthonormalize(x &: Matrix): Matrix:
+    mut cols := Vector {} as Vector<int>
+    mut w := Clone(x)
+    repeat x.cols with j:
+        _mgs_column(w, cols, j)
+    end
+    r := _pack_cols(w, cols)
+    cols.free()
+    w.free()
+    ret r
+end

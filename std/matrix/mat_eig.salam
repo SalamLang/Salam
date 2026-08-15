@@ -1,0 +1,478 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package matrix
+
+import math
+
+// The general (nonsymmetric) eigenproblem: Hessenberg reduction followed by
+// shifted QR iteration to real Schur form.
+//
+// A general real matrix is the hard case. Its eigenvalues need not be real,
+// it need not have a full set of eigenvectors at all (a defective matrix does
+// not), and the eigenvalues can be arbitrarily sensitive to perturbation in
+// the entries. So this returns eigenvalues as two real vectors, `re` and
+// `im`, rather than pretending there is a complex type underneath: a complex
+// pair appears as two adjacent entries with equal real parts and opposite
+// imaginary parts, which is exactly how a real matrix's spectrum is
+// structured.
+//
+// Three stages, each earning its place:
+//
+//   1. Reduction to upper Hessenberg by Householder reflections. This is a
+//      similarity transformation, so the spectrum is untouched, and it is
+//      finite: O(n^3) once, no iteration. Everything after it works on a
+//      matrix with one nonzero subdiagonal, which drops the cost of a QR
+//      step from O(n^3) to O(n^2). Skipping this stage does not make the
+//      algorithm wrong, it makes it n times slower.
+//
+//   2. Shifted QR iteration, one Givens rotation per subdiagonal entry. The
+//      shift is Wilkinson's, taken from the trailing 2x2 block, which turns
+//      the linear convergence of the unshifted iteration into quadratic (and
+//      cubic on symmetric input). When the trailing block's own eigenvalues
+//      are complex, its real part is used as the shift, since a real
+//      similarity transformation cannot produce a complex number.
+//
+//   3. Deflation. A subdiagonal entry that has become negligible relative to
+//      its neighbours splits the problem in two, and the bottom block is
+//      read off: a 1x1 block is a real eigenvalue, a 2x2 block is either two
+//      real eigenvalues or one complex conjugate pair. That last case is why
+//      the iteration is allowed to stop at 2x2 rather than being driven to a
+//      triangle it can never reach with real arithmetic.
+//
+// An exceptional shift every ten iterations breaks the cycles that a
+// perfectly symmetric shift pattern can fall into (the standard example is a
+// permutation matrix, whose eigenvalues are all on the unit circle and which
+// the plain iteration will orbit forever).
+
+const _QR_MAX_ITER := 120
+const _QR_EXCEPTIONAL := 10
+
+@en "Eigen"
+@fa "ویژه"
+@ar "ذاتي"
+pub struct Eigen:
+    pub n: int = 0
+    pub re: Matrix = Matrix {}
+    pub im: Matrix = Matrix {}
+    pub iterations: int = 0
+    pub ok: bool = false
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free():
+        this.re.free()
+        this.im.free()
+    end
+end
+
+// One Householder step of the Hessenberg reduction: reflect column k so that
+// everything below the subdiagonal becomes zero, applying the reflection on
+// both sides to keep the transformation a similarity.
+func _hess_step(a &: Matrix, k: int, n: int):
+    mut scale := 0.0
+    mut i := k + 1
+    until i < n:
+        scale += math.Abs(a.at(i, k))
+        i += 1
+    end
+    if scale == 0.0: ret end
+    mut h := 0.0
+    mut v := Zeros(n, 1)
+    mut p := k + 1
+    until p < n:
+        val := a.at(p, k) / scale
+        v.set(p, 0, val)
+        h += val * val
+        p += 1
+    end
+    _hess_reflect(a, v, k, n, h, scale)
+    v.free()
+end
+
+func _hess_reflect(a &: Matrix, v &: Matrix, k: int, n: int, h0: f64, scale: f64):
+    mut g := math.Sqrt(h0)
+    if v.at(k + 1, 0) > 0.0: g = 0.0 - g end
+    h := h0 - v.at(k + 1, 0) * g
+    v.set(k + 1, 0, v.at(k + 1, 0) - g)
+    _hess_rows(a, v, k, n, h)
+    _hess_cols(a, v, k, n, h)
+    a.set(k + 1, k, scale * g)
+    mut i := k + 2
+    until i < n:
+        a.set(i, k, 0.0)
+        i += 1
+    end
+end
+
+// A <- (I - v v^T / h) A, restricted to the rows the reflector touches.
+func _hess_rows(a &: Matrix, v &: Matrix, k: int, n: int, h: f64):
+    mut j := k
+    until j < n:
+        mut f := 0.0
+        mut i := k + 1
+        until i < n:
+            f += v.at(i, 0) * a.at(i, j)
+            i += 1
+        end
+        f = f / h
+        mut p := k + 1
+        until p < n:
+            a.add_at(p, j, 0.0 - f * v.at(p, 0))
+            p += 1
+        end
+        j += 1
+    end
+end
+
+// A <- A (I - v v^T / h), the matching right-hand application.
+func _hess_cols(a &: Matrix, v &: Matrix, k: int, n: int, h: f64):
+    repeat n with i:
+        mut f := 0.0
+        mut j := k + 1
+        until j < n:
+            f += v.at(j, 0) * a.at(i, j)
+            j += 1
+        end
+        f = f / h
+        mut q := k + 1
+        until q < n:
+            a.add_at(i, q, 0.0 - f * v.at(q, 0))
+            q += 1
+        end
+    end
+end
+
+// Scans upward from `hi` for a subdiagonal entry small enough to split the
+// problem. The test is relative to the two diagonal entries beside it, which
+// is the standard criterion: an entry is negligible when adding it to its
+// neighbours changes nothing in floating point.
+func _find_split(h &: Matrix, lo: int, hi: int): int:
+    mut l := hi
+    until l > lo:
+        s := math.Abs(h.at(l - 1, l - 1)) + math.Abs(h.at(l, l))
+        mut ref := s
+        if ref == 0.0: ref = 1.0 end
+        if math.Abs(h.at(l, l - 1)) <= MAT_EPS * ref:
+            h.set(l, l - 1, 0.0)
+            ret l
+        end
+        l -= 1
+    end
+    ret lo
+end
+
+// Wilkinson's shift: the eigenvalue of the trailing 2x2 block nearer to the
+// bottom diagonal entry. When that pair is complex, its real part is used,
+// which is the best a real iteration can do and is what lets the exceptional
+// shift take over if progress stalls.
+func _wilkinson(h &: Matrix, hi: int): f64:
+    a := h.at(hi - 1, hi - 1)
+    b := h.at(hi - 1, hi)
+    c := h.at(hi, hi - 1)
+    d := h.at(hi, hi)
+    tr := a + d
+    disc := (a - d) * (a - d) * 0.25 + b * c
+    if disc < 0.0: ret tr * 0.5 end
+    root := math.Sqrt(disc)
+    up := tr * 0.5 + root
+    down := tr * 0.5 - root
+    if math.Abs(up - d) < math.Abs(down - d): ret up end
+    ret down
+end
+
+// One implicit-free QR step on the active block: factor H - mu I by Givens
+// rotations, then multiply the factors back in the other order and restore
+// the shift. Each rotation is stored so the second pass can apply it from the
+// right without recomputing anything.
+func _qr_step(h &: Matrix, lo: int, hi: int, mu: f64):
+    mut cs := Zeros(1, hi + 1)
+    mut sn := Zeros(1, hi + 1)
+    mut k := lo
+    until k <= hi:
+        h.add_at(k, k, 0.0 - mu)
+        k += 1
+    end
+    _qr_left(h, lo, hi, cs, sn)
+    _qr_right(h, lo, hi, cs, sn)
+    mut j := lo
+    until j <= hi:
+        h.add_at(j, j, mu)
+        j += 1
+    end
+    cs.free()
+    sn.free()
+end
+
+func _qr_left(h &: Matrix, lo: int, hi: int, cs &: Matrix, sn &: Matrix):
+    n := h.cols
+    mut k := lo
+    until k < hi:
+        a := h.at(k, k)
+        b := h.at(k + 1, k)
+        r := math.Hypot(a, b)
+        mut c := 1.0
+        mut s := 0.0
+        if r != 0.0:
+            c = a / r
+            s = b / r
+        end
+        cs.set(0, k, c)
+        sn.set(0, k, s)
+        _rot_rows(h, k, c, s, k, n)
+        k += 1
+    end
+end
+
+func _rot_rows(h &: Matrix, k: int, c: f64, s: f64, lo: int, hi: int):
+    mut j := lo
+    until j < hi:
+        u := h.at(k, j)
+        w := h.at(k + 1, j)
+        h.set(k, j, c * u + s * w)
+        h.set(k + 1, j, c * w - s * u)
+        j += 1
+    end
+end
+
+func _qr_right(h &: Matrix, lo: int, hi: int, cs &: Matrix, sn &: Matrix):
+    mut k := lo
+    until k < hi:
+        c := cs.at(0, k)
+        s := sn.at(0, k)
+        mut top := k + 2
+        if top > hi: top = hi end
+        mut i := lo
+        until i <= top:
+            u := h.at(i, k)
+            w := h.at(i, k + 1)
+            h.set(i, k, c * u + s * w)
+            h.set(i, k + 1, c * w - s * u)
+            i += 1
+        end
+        k += 1
+    end
+end
+
+// Reads a 2x2 diagonal block, which holds either two real eigenvalues or one
+// complex conjugate pair.
+func _emit_pair(h &: Matrix, r &: Eigen, hi: int):
+    a := h.at(hi - 1, hi - 1)
+    b := h.at(hi - 1, hi)
+    c := h.at(hi, hi - 1)
+    d := h.at(hi, hi)
+    half := (a + d) * 0.5
+    disc := (a - d) * (a - d) * 0.25 + b * c
+    if disc >= 0.0:
+        root := math.Sqrt(disc)
+        _emit(r, hi - 1, half + root, 0.0)
+        _emit(r, hi, half - root, 0.0)
+        ret
+    end
+    root := math.Sqrt(0.0 - disc)
+    _emit(r, hi - 1, half, root)
+    _emit(r, hi, half, 0.0 - root)
+end
+
+func _emit(r &: Eigen, k: int, re: f64, im: f64):
+    r.re.set(0, k, re)
+    r.im.set(0, k, im)
+end
+
+// An exceptional shift, taken from the size of the surviving subdiagonal
+// entries rather than from the spectrum. Its only job is to be different from
+// the shift that just failed, so that a cyclic pattern is broken.
+func _exceptional(h &: Matrix, hi: int): f64:
+    s := math.Abs(h.at(hi, hi - 1)) + math.Abs(h.at(hi - 1, hi - 2))
+    ret h.at(hi, hi) + 0.75 * s
+end
+
+func _choose_shift(h &: Matrix, hi: int, its: int): f64:
+    if its > 0 && its % _QR_EXCEPTIONAL == 0:
+        if hi >= 2: ret _exceptional(h, hi) end
+    end
+    ret _wilkinson(h, hi)
+end
+
+// The deflation loop. Works from the bottom of the matrix upward, peeling off
+// one or two eigenvalues at a time and shrinking the active block.
+func _qr_iterate(h &: Matrix, r &: Eigen, n: int): bool:
+    mut hi := n - 1
+    mut its := 0
+    mut total := 0
+    until hi >= 0:
+        l := _find_split(h, 0, hi)
+        if l == hi:
+            _emit(r, hi, h.at(hi, hi), 0.0)
+            hi -= 1
+            its = 0
+        else l == hi - 1:
+            _emit_pair(h, r, hi)
+            hi -= 2
+            its = 0
+        else:
+            if its >= _QR_MAX_ITER: ret false end
+            _qr_step(h, l, hi, _choose_shift(h, hi, its))
+            its += 1
+            total += 1
+        end
+    end
+    r.iterations = total
+    ret true
+end
+
+// One Faddeev-LeVerrier step: M <- A M + c I, then read the next coefficient
+// off the trace of A M.
+func _faddeev(a &: Matrix, m &: Matrix, c &: Matrix, k: int, n: int):
+    mut t := MatMul(a, m)
+    ShiftDiagonal(t, c.at(0, n - k + 1))
+    CopyInto(m, t)
+    t.free()
+    mut am := MatMul(a, m)
+    c.set(0, n - k, 0.0 - Trace(am) / (k as f64))
+    am.free()
+end
+
+func _inverse_step(f &: LU, v &: Matrix):
+    mut w := LUSolve(f, v)
+    if w.is_empty(): ret end
+    nrm := NormFrobenius(w)
+    if nrm > 0.0: ScaleInPlace(w, 1.0 / nrm) end
+    CopyInto(v, w)
+    w.free()
+end
+
+// The upper Hessenberg form of A: zero below the first subdiagonal, same
+// eigenvalues. Exposed because it is useful on its own, in Krylov methods and
+// in control theory, and because seeing it makes the eigenvalue routine
+// legible.
+@en "Hessenberg"
+@fa "هسنبرگ"
+@ar "هيسنبرغ"
+pub func Hessenberg(x &: Matrix): Matrix:
+    if x.is_square() == false: ret Zeros(0, 0) end
+    mut h := Clone(x)
+    n := x.rows
+    mut k := 0
+    until k < n - 2:
+        _hess_step(h, k, n)
+        k += 1
+    end
+    ret h
+end
+
+// All eigenvalues of a general real square matrix, as real and imaginary
+// parts. Complex ones come in adjacent conjugate pairs.
+//
+// `ok` reports whether every block deflated within the iteration limit. A
+// false there means some eigenvalues are whatever the unconverged diagonal
+// happened to hold, and should not be trusted; it is reported rather than
+// hidden because the honest answer to a matrix that will not converge is to
+// say so.
+@en "EigVals"
+@fa "مقادیر ویژه"
+@ar "قيم ذاتية"
+pub func EigVals(x &: Matrix): Eigen:
+    mut r := Eigen {}
+    if x.is_square() == false: ret r end
+    n := x.rows
+    r.n = n
+    r.re = Zeros(1, n)
+    r.im = Zeros(1, n)
+    mut h := Hessenberg(x)
+    r.ok = _qr_iterate(h, r, n)
+    h.free()
+    ret r
+end
+// The eigenvalues of a symmetric matrix are all real, so this hands the work
+// to the Jacobi solver, which is both faster here and more accurate.
+@en "EigValsAuto"
+@fa "مقادیر ویژه خودکار"
+@ar "قيم ذاتية تلقائية"
+pub func EigValsAuto(x &: Matrix): Eigen:
+    if IsSymmetric(x, MAT_TOL) == false: ret EigVals(x) end
+    mut r := Eigen {}
+    r.n = x.rows
+    r.re = EigValsSym(x)
+    r.im = Zeros(1, x.rows)
+    r.ok = true
+    ret r
+end
+
+// max |lambda|, the spectral radius. It decides whether the iteration
+// x <- A x converges (below 1) or diverges (above 1), which makes it the
+// number that governs every stationary iterative method and every discrete
+// linear dynamical system.
+@en "SpectralRadius"
+@fa "شعاع طیفی"
+@ar "نصف قطر طيفي"
+pub func SpectralRadius(x &: Matrix): f64:
+    mut e := EigValsAuto(x)
+    mut m := 0.0
+    repeat e.n with k:
+        v := math.Hypot(e.re.a.get(k), e.im.a.get(k))
+        if v > m: m = v end
+    end
+    e.free()
+    ret m
+end
+
+// The characteristic polynomial, by Faddeev-LeVerrier. Coefficients are
+// returned in ascending order of power, so entry k multiplies lambda^k and
+// the last entry is always 1.
+//
+// A caveat worth stating: computing eigenvalues by rooting this polynomial is
+// a famously bad idea, because polynomial roots can be wildly more sensitive
+// to their coefficients than the eigenvalues are to the matrix entries
+// (Wilkinson's polynomial is the classic demonstration). The QR iteration
+// above exists precisely to avoid this route. The polynomial itself is still
+// worth having: it is what the Cayley-Hamilton theorem is about, and its
+// coefficients are the sums of principal minors.
+@en "CharPoly"
+@fa "چندجمله‌ای مشخصه"
+@ar "كثير حدود مميز"
+pub func CharPoly(x &: Matrix): Matrix:
+    if x.is_square() == false: ret Zeros(0, 0) end
+    n := x.rows
+    mut c := Zeros(1, n + 1)
+    c.set(0, n, 1.0)
+    mut m := Zeros(n, n)
+    repeat n with step: _faddeev(x, m, c, step + 1, n) end
+    m.free()
+    ret c
+end
+// An eigenvector for a known real eigenvalue, by inverse iteration: solving
+// (A - lambda I) x = x repeatedly amplifies the component along the
+// eigenvector by a factor of 1/(mu - lambda) per step, which is enormous
+// precisely because the shifted matrix is nearly singular. The near
+// singularity that would worry anyone solving a normal system is the entire
+// mechanism here, and the error it introduces points along the very direction
+// being sought.
+@en "EigVecFor"
+@fa "بردار ویژه برای"
+@ar "متجه ذاتي لـ"
+pub func EigVecFor(x &: Matrix, lambda: f64, iters: int): Matrix:
+    if x.is_square() == false: ret Zeros(0, 0) end
+    n := x.rows
+    mut shifted := Clone(x)
+    ShiftDiagonal(shifted, 0.0 - lambda - MAT_EPS * (1.0 + math.Abs(lambda)))
+    mut f := Decompose(shifted)
+    mut v := Full(n, 1, 1.0 / math.Sqrt(n as f64))
+    repeat iters: _inverse_step(f, v) end
+    shifted.free()
+    f.free()
+    ret v
+end
+

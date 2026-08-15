@@ -1,0 +1,299 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package matrix
+
+// Reshaping and indexing: taking a matrix apart and putting it back together.
+//
+// Everything here copies. There are no views, no strides and no aliasing
+// between a result and its source, which is a real cost (Row in a loop over
+// every row is O(n^2) allocations) and a deliberate one. A view type would
+// have to carry an offset and two strides through every kernel in the
+// library, turning each A(i,j) from one multiply-add into two, and it would
+// make lifetime a question the caller has to answer for every result. Copying
+// keeps the hot paths dense and the ownership rule one sentence long.
+//
+// The one place that cost would bite, walking rows inside an algorithm, does
+// not arise: the algorithms here index the matrix directly.
+//
+// Reshape follows the row-major reading order, the same order NumPy calls
+// C order and uses by default.
+
+func _copy_block(dst &: Matrix, src &: Matrix, r0: int, c0: int, dr: int, dc: int):
+    repeat dr with i:
+        repeat dc with j: dst.set(i, j, src.at(r0 + i, c0 + j)) end
+    end
+end
+
+// Copies every row of src except `skip` into dst, which is one row shorter.
+func _copy_skip_row(dst &: Matrix, src &: Matrix, skip: int):
+    mut w := 0
+    repeat src.rows with i:
+        if i != skip:
+            repeat src.cols with j: dst.set(w, j, src.at(i, j)) end
+            w += 1
+        end
+    end
+end
+
+func _copy_skip_col(dst &: Matrix, src &: Matrix, skip: int):
+    repeat src.rows with i:
+        mut w := 0
+        repeat src.cols with j:
+            if j != skip:
+                dst.set(i, w, src.at(i, j))
+                w += 1
+            end
+        end
+    end
+end
+
+// Copies src rows `from`..end into dst shifted down by one, the tail half of
+// an insertion.
+func _shift_rows_down(dst &: Matrix, src &: Matrix, from: int):
+    mut i := from
+    until i < src.rows:
+        repeat src.cols with j: dst.set(i + 1, j, src.at(i, j)) end
+        i += 1
+    end
+end
+
+// Copies row i of src into dst with `v` spliced in at column `at`.
+func _copy_row_split(dst &: Matrix, src &: Matrix, i: int, at: int, v: f64):
+    repeat at with j: dst.set(i, j, src.at(i, j)) end
+    dst.set(i, at, v)
+    mut j := at
+    until j < src.cols:
+        dst.set(i, j + 1, src.at(i, j))
+        j += 1
+    end
+end
+
+func _clamp(v: int, lo: int, hi: int): int:
+    if v < lo: ret lo end
+    if v > hi: ret hi end
+    ret v
+end
+
+// The same entries read in a different shape. Row-major order, so the last
+// index varies fastest; a shape whose product differs from the original is a
+// shape error and gives 0x0.
+@en "Reshape"
+@fa "تغییر شکل"
+@ar "إعادة تشكيل"
+pub func Reshape(x &: Matrix, rows: int, cols: int): Matrix:
+    if rows * cols != x.count(): ret Zeros(0, 0) end
+    mut r := Zeros(rows, cols)
+    repeat x.count() with k: r.a.set(k, x.a.get(k)) end
+    ret r
+end
+
+// Everything in one row, NumPy's ravel.
+@en "Flatten"
+@fa "تخت‌سازی"
+@ar "تسطيح"
+pub func Flatten(x &: Matrix): Matrix: ret Reshape(x, 1, x.count()) end
+
+// Everything in one column.
+@en "FlattenCol"
+@fa "تخت‌سازی ستونی"
+@ar "تسطيح عمودي"
+pub func FlattenCol(x &: Matrix): Matrix: ret Reshape(x, x.count(), 1) end
+
+@en "Row"
+@fa "سطر"
+@ar "صف"
+pub func Row(x &: Matrix, i: int): Matrix:
+    if i < 0 || i >= x.rows: ret Zeros(0, 0) end
+    mut r := Zeros(1, x.cols)
+    repeat x.cols with j: r.set(0, j, x.at(i, j)) end
+    ret r
+end
+
+@en "Col"
+@fa "ستون"
+@ar "عمود"
+pub func Col(x &: Matrix, j: int): Matrix:
+    if j < 0 || j >= x.cols: ret Zeros(0, 0) end
+    mut r := Zeros(x.rows, 1)
+    repeat x.rows with i: r.set(i, 0, x.at(i, j)) end
+    ret r
+end
+
+// Writes a row in place. `v` is read flat, so a 1xn row and an nx1 column are
+// both accepted, which is what callers building a matrix out of computed
+// vectors actually want.
+@en "SetRow"
+@fa "تنظیم سطر"
+@ar "تعيين صف"
+pub func SetRow(x &: Matrix, i: int, v &: Matrix):
+    if i < 0 || i >= x.rows || v.count() != x.cols: ret end
+    repeat x.cols with j: x.set(i, j, v.a.get(j)) end
+end
+
+@en "SetCol"
+@fa "تنظیم ستون"
+@ar "تعيين عمود"
+pub func SetCol(x &: Matrix, j: int, v &: Matrix):
+    if j < 0 || j >= x.cols || v.count() != x.rows: ret end
+    repeat x.rows with i: x.set(i, j, v.a.get(i)) end
+end
+
+// The dr x dc block whose top-left corner is (r0, c0). Out-of-range requests
+// are clipped to what exists rather than refused, so a caller can ask for a
+// window near an edge without doing the arithmetic first.
+@en "SubMatrix"
+@fa "زیرماتریس"
+@ar "مصفوفة جزئية"
+pub func SubMatrix(x &: Matrix, r0: int, c0: int, dr: int, dc: int): Matrix:
+    sr := _clamp(r0, 0, x.rows)
+    sc := _clamp(c0, 0, x.cols)
+    nr := _clamp(dr, 0, x.rows - sr)
+    nc := _clamp(dc, 0, x.cols - sc)
+    mut r := Zeros(nr, nc)
+    _copy_block(r, x, sr, sc, nr, nc)
+    ret r
+end
+
+// The (i,j) minor: row i and column j struck out. The determinant of this is
+// what the cofactor expansion and the adjugate are built from.
+@en "Minor"
+@fa "کهاد"
+@ar "قاصر"
+pub func Minor(x &: Matrix, i: int, j: int): Matrix:
+    if x.rows <= 1 || x.cols <= 1: ret Zeros(0, 0) end
+    mut cut := DeleteRow(x, i)
+    r := DeleteCol(cut, j)
+    cut.free()
+    ret r
+end
+
+@en "DeleteRow"
+@fa "حذف سطر"
+@ar "حذف صف"
+pub func DeleteRow(x &: Matrix, i: int): Matrix:
+    if i < 0 || i >= x.rows: ret Clone(x) end
+    mut r := Zeros(x.rows - 1, x.cols)
+    _copy_skip_row(r, x, i)
+    ret r
+end
+
+@en "DeleteCol"
+@fa "حذف ستون"
+@ar "حذف عمود"
+pub func DeleteCol(x &: Matrix, j: int): Matrix:
+    if j < 0 || j >= x.cols: ret Clone(x) end
+    mut r := Zeros(x.rows, x.cols - 1)
+    _copy_skip_col(r, x, j)
+    ret r
+end
+
+// Inserts `v` as the new row `i`, shifting the rest down. i == rows appends.
+@en "InsertRow"
+@fa "درج سطر"
+@ar "إدراج صف"
+pub func InsertRow(x &: Matrix, i: int, v &: Matrix): Matrix:
+    if v.count() != x.cols || i < 0 || i > x.rows: ret Clone(x) end
+    mut r := Zeros(x.rows + 1, x.cols)
+    _copy_block(r, x, 0, 0, i, x.cols)
+    repeat x.cols with j: r.set(i, j, v.a.get(j)) end
+    _shift_rows_down(r, x, i)
+    ret r
+end
+
+@en "InsertCol"
+@fa "درج ستون"
+@ar "إدراج عمود"
+pub func InsertCol(x &: Matrix, j: int, v &: Matrix): Matrix:
+    if v.count() != x.rows || j < 0 || j > x.cols: ret Clone(x) end
+    mut r := Zeros(x.rows, x.cols + 1)
+    repeat x.rows with i:
+        _copy_row_split(r, x, i, j, v.a.get(i))
+    end
+    ret r
+end
+
+// In-place row exchange. This is an elementary row operation, and doing it in
+// place is the point: elimination swaps rows constantly and cannot afford a
+// copy each time.
+@en "SwapRows"
+@fa "تعویض سطر"
+@ar "تبديل صفين"
+pub func SwapRows(x &: Matrix, i: int, j: int):
+    if i == j || i < 0 || j < 0 || i >= x.rows || j >= x.rows: ret end
+    repeat x.cols with c:
+        t := x.at(i, c)
+        x.set(i, c, x.at(j, c))
+        x.set(j, c, t)
+    end
+end
+
+@en "SwapCols"
+@fa "تعویض ستون"
+@ar "تبديل عمودين"
+pub func SwapCols(x &: Matrix, i: int, j: int):
+    if i == j || i < 0 || j < 0 || i >= x.cols || j >= x.cols: ret end
+    repeat x.rows with r:
+        t := x.at(r, i)
+        x.set(r, i, x.at(r, j))
+        x.set(r, j, t)
+    end
+end
+
+// The main diagonal as a row vector. For a rectangular matrix that is
+// min(rows, cols) entries, the same convention NumPy uses.
+@en "Diagonal"
+@fa "قطر"
+@ar "قطر"
+pub func Diagonal(x &: Matrix): Matrix:
+    n := x.min_dim()
+    mut r := Zeros(1, n)
+    repeat n with i: r.set(0, i, x.at(i, i)) end
+    ret r
+end
+
+// The k-th diagonal: k > 0 above the main one, k < 0 below.
+@en "DiagonalOffset"
+@fa "قطر جابه‌جا"
+@ar "قطر مزاح"
+pub func DiagonalOffset(x &: Matrix, k: int): Matrix:
+    mut data := Vector {} as Vector<f64>
+    repeat x.rows with i:
+        j := i + k
+        if j >= 0 && j < x.cols: data.push(x.at(i, j)) end
+    end
+    r := RowVector(data)
+    data.free()
+    ret r
+end
+
+// Writes the main diagonal in place from a vector read flat.
+@en "SetDiagonal"
+@fa "تنظیم قطر"
+@ar "تعيين القطر"
+pub func SetDiagonal(x &: Matrix, v &: Matrix):
+    mut n := x.min_dim()
+    if v.count() < n: n = v.count() end
+    repeat n with i: x.set(i, i, v.a.get(i)) end
+end
+
+// Adds a scalar to the main diagonal, the A + cI shift. Named because it
+// happens constantly: ridge regression, Levenberg-Marquardt damping, shifted
+// inverse iteration and Tikhonov regularization are all this one line.
+@en "ShiftDiagonal"
+@fa "افزودن به قطر"
+@ar "إزاحة القطر"
+pub func ShiftDiagonal(x &: Matrix, c: f64):
+    repeat x.min_dim() with i: x.add_at(i, i, c) end
+end

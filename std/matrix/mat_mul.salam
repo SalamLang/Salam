@@ -1,0 +1,318 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package matrix
+
+// Matrix products: the O(n^3) part of the library, and the only part where
+// the memory layout shows up in the running time.
+//
+// The kernel is the ikj loop order, tiled. Two things follow from row-major
+// storage, and both point the same way:
+//
+//   - In i-k-j order the inner loop reads a contiguous row of Y and writes a
+//     contiguous row of R, with the scalar X(i,k) held in a register. Every
+//     access is a sequential stream, so the hardware prefetcher gets it right
+//     and there is no gather anywhere.
+//   - The textbook i-j-k order instead walks a *column* of Y in the inner
+//     loop, which strides by cols*8 bytes and touches a fresh cache line per
+//     iteration. On anything that does not fit in L1 that costs several times
+//     the ikj version, for identical arithmetic.
+//
+// Tiling on top of that bounds the working set: without it, the inner loop
+// sweeps a full row of Y (cols*8 bytes) per k, so by the time k advances the
+// front of that row has been evicted and every k re-reads it from memory.
+// With a 64-wide tile the block of Y in play is 64*64*8 = 32KB, which is an
+// L1 the size of what real hardware ships.
+//
+// The zero test in the middle loop is not a micro-optimization, it is what
+// makes products involving triangular, banded, permutation and adjacency
+// matrices cost what their sparsity says they should, and those are most of
+// the matrices this library produces internally.
+
+const _MAT_BLOCK := 64
+
+func _mm_end(start: int, limit: int): int:
+    e := start + _MAT_BLOCK
+    if e > limit: ret limit end
+    ret e
+end
+
+// r(i, j0..j1) += v * y(k, j0..j1). Split out of the tile loop so the tile
+// itself stays at three levels of nesting, and so this one line is the only
+// thing in the hot path.
+func _mm_axpy(r &: Matrix, i: int, v: f64, y &: Matrix, k: int, j0: int, j1: int):
+    mut j := j0
+    until j < j1:
+        r.add_at(i, j, v * y.at(k, j))
+        j += 1
+    end
+end
+
+func _mm_tile(r &: Matrix, x &: Matrix, y &: Matrix, ii: int, kk: int, jj: int):
+    i1 := _mm_end(ii, r.rows)
+    k1 := _mm_end(kk, x.cols)
+    j1 := _mm_end(jj, r.cols)
+    mut i := ii
+    until i < i1:
+        mut k := kk
+        until k < k1:
+            v := x.at(i, k)
+            if v != 0.0: _mm_axpy(r, i, v, y, k, jj, j1) end
+            k += 1
+        end
+        i += 1
+    end
+end
+
+func _mm_cols(r &: Matrix, x &: Matrix, y &: Matrix, ii: int, kk: int):
+    mut jj := 0
+    until jj < r.cols:
+        _mm_tile(r, x, y, ii, kk, jj)
+        jj += _MAT_BLOCK
+    end
+end
+
+// Dot product of row xr of x with row yr of y, over the first n columns.
+func _dot_rows(x &: Matrix, xr: int, y &: Matrix, yr: int, n: int): f64:
+    mut s := 0.0
+    repeat n with k: s += x.at(xr, k) * y.at(yr, k) end
+    ret s
+end
+
+func _kron_block(r &: Matrix, s: f64, y &: Matrix, r0: int, c0: int):
+    repeat y.rows with p:
+        repeat y.cols with q: r.set(r0 + p, c0 + q, s * y.at(p, q)) end
+    end
+end
+
+// A negative power is the positive power of the inverse, which is the only
+// reading that keeps A^i A^j = A^(i+j) true for signed exponents.
+func _matpow_neg(x &: Matrix, k: int): Matrix:
+    mut inv := Inverse(x)
+    if inv.is_empty(): ret Zeros(0, 0) end
+    r := MatPow(inv, 0 - k)
+    inv.free()
+    ret r
+end
+
+@en "Transpose"
+@fa "ترانهاده"
+@ar "منقول"
+pub func Transpose(x &: Matrix): Matrix:
+    mut r := Zeros(x.cols, x.rows)
+    repeat x.rows with i:
+        repeat x.cols with j: r.set(j, i, x.at(i, j)) end
+    end
+    ret r
+end
+
+// The (n,k)x(k,m) product. Inner dimensions must agree; if they do not the
+// result is 0x0, the same shape-error convention the elementwise ops use.
+@en "MatMul"
+@fa "ضرب ماتریسی"
+@ar "ضرب المصفوفات"
+pub func MatMul(x &: Matrix, y &: Matrix): Matrix:
+    if x.cols != y.rows: ret Zeros(0, 0) end
+    mut r := Zeros(x.rows, y.cols)
+    mut ii := 0
+    until ii < x.rows:
+        mut kk := 0
+        until kk < x.cols:
+            _mm_cols(r, x, y, ii, kk)
+            kk += _MAT_BLOCK
+        end
+        ii += _MAT_BLOCK
+    end
+    ret r
+end
+
+// X^T Y without asking the caller to build the transpose. Normal equations,
+// Gram matrices, covariance and the projection steps inside least squares all
+// have this shape.
+@en "TransposeMul"
+@fa "ضرب ترانهاده"
+@ar "ضرب المنقول"
+pub func TransposeMul(x &: Matrix, y &: Matrix): Matrix:
+    if x.rows != y.rows: ret Zeros(0, 0) end
+    mut t := Transpose(x)
+    r := MatMul(t, y)
+    t.free()
+    ret r
+end
+
+// X Y^T, the other one-sided transpose product. Here both operands are walked
+// by row, so it needs no temporary at all.
+@en "MulTranspose"
+@fa "ضرب در ترانهاده"
+@ar "ضرب في المنقول"
+pub func MulTranspose(x &: Matrix, y &: Matrix): Matrix:
+    if x.cols != y.cols: ret Zeros(0, 0) end
+    mut r := Zeros(x.rows, y.rows)
+    repeat x.rows with i:
+        repeat y.rows with j: r.set(i, j, _dot_rows(x, i, y, j, x.cols)) end
+    end
+    ret r
+end
+
+// X^T X, symmetric positive semidefinite by construction. Only the upper
+// triangle is computed and then mirrored, which halves the work and, more
+// usefully, makes the result exactly symmetric instead of symmetric to within
+// rounding. Cholesky and the symmetric eigensolver both care.
+@en "Gram"
+@fa "گرام"
+@ar "غرام"
+pub func Gram(x &: Matrix): Matrix:
+    mut t := Transpose(x)
+    mut r := Zeros(x.cols, x.cols)
+    repeat x.cols with i:
+        mut j := i
+        until j < x.cols:
+            v := _dot_rows(t, i, t, j, x.rows)
+            r.set(i, j, v)
+            r.set(j, i, v)
+            j += 1
+        end
+    end
+    t.free()
+    ret r
+end
+
+// A x for a column vector x (nx1), returned as a column vector.
+@en "MatVec"
+@fa "ضرب در بردار"
+@ar "ضرب بمتجه"
+pub func MatVec(a &: Matrix, x &: Matrix): Matrix:
+    if x.cols != 1 || a.cols != x.rows: ret Zeros(0, 0) end
+    mut r := Zeros(a.rows, 1)
+    repeat a.rows with i:
+        mut s := 0.0
+        repeat a.cols with j: s += a.at(i, j) * x.at(j, 0) end
+        r.set(i, 0, s)
+    end
+    ret r
+end
+
+// x A for a row vector x (1xn), returned as a row vector.
+@en "VecMat"
+@fa "ضرب بردار در ماتریس"
+@ar "ضرب متجه في مصفوفة"
+pub func VecMat(x &: Matrix, a &: Matrix): Matrix:
+    if x.rows != 1 || x.cols != a.rows: ret Zeros(0, 0) end
+    mut r := Zeros(1, a.cols)
+    repeat a.rows with k:
+        v := x.at(0, k)
+        if v != 0.0:
+            repeat a.cols with j: r.add_at(0, j, v * a.at(k, j)) end
+        end
+    end
+    ret r
+end
+
+// The Frobenius inner product sum(X(i,j) Y(i,j)). For two vectors of the same
+// length this is exactly the dot product, which is why there is no separate
+// vector Dot: a vector here is a matrix.
+@en "Dot"
+@fa "ضرب داخلی"
+@ar "ضرب داخلي"
+pub func Dot(x &: Matrix, y &: Matrix): f64:
+    if x.count() != y.count(): ret 0.0 end
+    mut s := 0.0
+    repeat x.count() with k: s += x.a.get(k) * y.a.get(k) end
+    ret s
+end
+
+// u v^T, the rank-1 matrix. Both operands are read flat, so Outer(col, col)
+// and Outer(row, row) both mean what the notation says.
+@en "Outer"
+@fa "ضرب خارجی"
+@ar "ضرب خارجي"
+pub func Outer(u &: Matrix, v &: Matrix): Matrix:
+    m := u.count()
+    n := v.count()
+    mut r := Zeros(m, n)
+    repeat m with i:
+        ui := u.a.get(i)
+        repeat n with j: r.set(i, j, ui * v.a.get(j)) end
+    end
+    ret r
+end
+
+// The Kronecker product: every entry of X replaced by that entry times the
+// whole of Y, giving an (rx*ry) by (cx*cy) matrix. The operation that turns a
+// matrix equation into a plain linear system, which is how Sylvester and
+// Lyapunov equations get solved.
+@en "Kron"
+@fa "ضرب کرونکر"
+@ar "ضرب كرونيكر"
+pub func Kron(x &: Matrix, y &: Matrix): Matrix:
+    mut r := Zeros(x.rows * y.rows, x.cols * y.cols)
+    repeat x.rows with i:
+        repeat x.cols with j:
+            _kron_block(r, x.at(i, j), y, i * y.rows, j * y.cols)
+        end
+    end
+    ret r
+end
+
+// A^k by repeated squaring, so the cost is log(k) products rather than k.
+// A^0 is the identity for every square A, including the zero matrix, which is
+// the convention that keeps the polynomial evaluators consistent.
+@en "MatPow"
+@fa "توان ماتریس"
+@ar "قوة المصفوفة"
+pub func MatPow(x &: Matrix, k: int): Matrix:
+    if x.is_square() == false: ret Zeros(0, 0) end
+    if k < 0: ret _matpow_neg(x, k) end
+    mut acc := Eye(x.rows)
+    mut base := Clone(x)
+    mut e := k
+    until e > 0:
+        if e % 2 == 1:
+            t := MatMul(acc, base)
+            acc.free()
+            acc = t
+        end
+        e = e / 2
+        if e > 0:
+            s := MatMul(base, base)
+            base.free()
+            base = s
+        end
+    end
+    base.free()
+    ret acc
+end
+
+@en "Trace"
+@fa "رد"
+@ar "أثر"
+pub func Trace(x &: Matrix): f64:
+    mut s := 0.0
+    repeat x.min_dim() with i: s += x.at(i, i) end
+    ret s
+end
+
+// The 3-vector cross product, for the geometry that reaches for a matrix
+// library. Orientation is preserved: two columns give a column.
+@en "Cross3"
+@fa "ضرب برداری"
+@ar "ضرب اتجاهي"
+pub func Cross3(u &: Matrix, v &: Matrix): Matrix:
+    if u.count() != 3 || v.count() != 3: ret Zeros(0, 0) end
+    mut r := Zeros(u.rows, u.cols)
+    r.a.set(0, u.a.get(1) * v.a.get(2) - u.a.get(2) * v.a.get(1))
+    r.a.set(1, u.a.get(2) * v.a.get(0) - u.a.get(0) * v.a.get(2))
+    r.a.set(2, u.a.get(0) * v.a.get(1) - u.a.get(1) * v.a.get(0))
+    ret r
+end

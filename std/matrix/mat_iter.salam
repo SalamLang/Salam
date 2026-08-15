@@ -1,0 +1,300 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package matrix
+
+import math
+
+// Iterative solvers and iterative eigenvalue methods.
+//
+// Direct methods factor the matrix and are done; iterative methods improve a
+// guess until it is good enough. The trade is memory and structure: LU on an
+// n x n matrix costs O(n^3) time and, worse, fills in the zeros, so a sparse
+// matrix of a million rows is not merely slow to factor, its factors do not
+// fit. An iterative method touches A only through matrix-vector products, so
+// it costs one sparse product per step and stores a handful of vectors.
+//
+// Which one to use:
+//
+//   - Conjugate gradient, for symmetric positive definite A. It is the right
+//     answer whenever it applies. In exact arithmetic it terminates in n
+//     steps; in practice it converges in a number of steps governed by the
+//     square root of the condition number, which is usually far fewer.
+//   - Gauss-Seidel and SOR, for diagonally dominant A. Gauss-Seidel uses each
+//     updated component immediately, so it converges about twice as fast as
+//     Jacobi for roughly the same work. SOR overshoots that update by a
+//     factor omega, and with a well-chosen omega turns Gauss-Seidel's linear
+//     convergence into something an order faster.
+//   - Jacobi, when the updates must be independent, which is the case that
+//     parallelizes: every component of the next iterate depends only on the
+//     previous one.
+//
+// All three stationary methods converge exactly when the spectral radius of
+// their iteration matrix is below 1, and strict diagonal dominance is the
+// simple sufficient condition. That is checked and reported rather than
+// assumed, since a stationary method applied to the wrong matrix does not
+// fail loudly, it just diverges.
+
+@en "IterResult"
+@fa "نتیجه تکرار"
+@ar "نتيجة التكرار"
+pub struct IterResult:
+    pub x: Matrix = Matrix {}
+    pub iterations: int = 0
+    pub residual: f64 = 0.0
+    pub converged: bool = false
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free(): this.x.free() end
+end
+
+// |b - Ax|, the quantity every method here drives to zero.
+func _resid_norm(a &: Matrix, x &: Matrix, b &: Matrix): f64:
+    mut ax := MatVec(a, x)
+    mut r := Sub(b, ax)
+    v := NormFrobenius(r)
+    ax.free()
+    r.free()
+    ret v
+end
+
+// One sweep of Jacobi or Gauss-Seidel. They differ in exactly one place:
+// whether the sum reads the previous iterate or the one being built, so they
+// share a body and a flag rather than duplicating the loop.
+func _sweep(a &: Matrix, x &: Matrix, xo &: Matrix, b &: Matrix, omega: f64, in_place: bool):
+    n := a.rows
+    repeat n with i:
+        d := a.at(i, i)
+        if d != 0.0:
+            mut s := b.at(i, 0)
+            repeat n with j:
+                if j != i: s -= a.at(i, j) * _pick(x, xo, j, in_place) end
+            end
+            _relax(x, i, s / d, omega)
+        end
+    end
+end
+
+func _pick(x &: Matrix, xo &: Matrix, j: int, in_place: bool): f64:
+    if in_place: ret x.at(j, 0) end
+    ret xo.at(j, 0)
+end
+
+// x_i <- (1 - omega) x_i + omega * candidate. omega = 1 is the plain update;
+// above 1 it overshoots deliberately, which is what successive over-relaxation
+// means and where its speed comes from.
+func _relax(x &: Matrix, i: int, candidate: f64, omega: f64):
+    if omega == 1.0:
+        x.set(i, 0, candidate)
+        ret
+    end
+    x.set(i, 0, (1.0 - omega) * x.at(i, 0) + omega * candidate)
+end
+
+// The shared driver for the three stationary methods.
+func _stationary(a &: Matrix, b &: Matrix, omega: f64, in_place: bool, iters: int, tol: f64): IterResult:
+    mut r := IterResult {}
+    if a.is_square() == false || a.rows != b.rows || b.cols != 1: ret r end
+    r.x = Zeros(a.rows, 1)
+    mut prev := Zeros(a.rows, 1)
+    mut k := 0
+    until k < iters:
+        CopyInto(prev, r.x)
+        _sweep(a, r.x, prev, b, omega, in_place)
+        k += 1
+        if _resid_norm(a, r.x, b) <= tol: break end
+    end
+    prev.free()
+    r.iterations = k
+    r.residual = _resid_norm(a, r.x, b)
+    r.converged = r.residual <= tol
+    ret r
+end
+
+func _cg_loop(a &: Matrix, out &: IterResult, r &: Matrix, p &: Matrix, iters: int, tol: f64):
+    mut rs := Dot(r, r)
+    mut k := 0
+    until k < iters:
+        if math.Sqrt(rs) <= tol: break end
+        rs = _cg_step(a, out.x, r, p, rs)
+        k += 1
+    end
+    out.iterations = k
+end
+
+// One CG step: the step length alpha is chosen to minimize the error along
+// the current direction, and beta makes the next direction A-orthogonal to
+// this one.
+func _cg_step(a &: Matrix, x &: Matrix, r &: Matrix, p &: Matrix, rs: f64): f64:
+    mut ap := MatVec(a, p)
+    denom := Dot(p, ap)
+    if denom == 0.0:
+        ap.free()
+        ret 0.0
+    end
+    alpha := rs / denom
+    AddScaled(x, p, alpha)
+    AddScaled(r, ap, 0.0 - alpha)
+    rs_new := Dot(r, r)
+    _cg_direction(p, r, rs_new / rs)
+    ap.free()
+    ret rs_new
+end
+
+// p <- r + beta p, the new search direction.
+func _cg_direction(p &: Matrix, r &: Matrix, beta: f64):
+    repeat p.count() with k: p.a.set(k, r.a.get(k) + beta * p.a.get(k)) end
+end
+
+func _power_step(a &: Matrix, v &: Matrix):
+    mut w := MatVec(a, v)
+    nrm := NormFrobenius(w)
+    if nrm > 0.0:
+        ScaleInPlace(w, 1.0 / nrm)
+        CopyInto(v, w)
+    end
+    w.free()
+end
+
+func _rayleigh(a &: Matrix, x &: Matrix): f64:
+    d := Dot(x, x)
+    if d == 0.0: ret 0.0 end
+    mut ax := MatVec(a, x)
+    v := Dot(x, ax) / d
+    ax.free()
+    ret v
+end
+
+// |A(i,i)| > sum of |A(i,j)| over j != i, for every row. Sufficient (not
+// necessary) for Jacobi, Gauss-Seidel and SOR to converge from any start.
+@en "IsDiagonallyDominant"
+@fa "غالب قطری است"
+@ar "مهيمنة قطريا"
+pub func IsDiagonallyDominant(a &: Matrix): bool:
+    if a.is_square() == false: ret false end
+    repeat a.rows with i:
+        mut off := 0.0
+        repeat a.cols with j:
+            if j != i: off += math.Abs(a.at(i, j)) end
+        end
+        if math.Abs(a.at(i, i)) <= off: ret false end
+    end
+    ret true
+end
+
+// The Jacobi method: every component of the next iterate is computed from the
+// previous one alone, so the sweep is embarrassingly parallel.
+@en "SolveJacobi"
+@fa "حل ژاکوبی"
+@ar "حل جاكوبي"
+pub func SolveJacobi(a &: Matrix, b &: Matrix, iters: int, tol: f64): IterResult:
+    ret _stationary(a, b, 1.0, false, iters, tol)
+end
+
+// Gauss-Seidel: each component uses the values already updated in this same
+// sweep, which roughly doubles the convergence rate for the same work.
+@en "SolveGaussSeidel"
+@fa "حل گاوس زایدل"
+@ar "حل غاوس زايدل"
+pub func SolveGaussSeidel(a &: Matrix, b &: Matrix, iters: int, tol: f64): IterResult:
+    ret _stationary(a, b, 1.0, true, iters, tol)
+end
+
+// Successive over-relaxation. omega must lie in (0, 2) for any hope of
+// convergence; the optimum for a well-behaved problem is usually between 1.5
+// and 1.9, and omega = 1 reduces exactly to Gauss-Seidel.
+@en "SolveSOR"
+@fa "حل فوق‌آسایش"
+@ar "حل الاسترخاء الزائد"
+pub func SolveSOR(a &: Matrix, b &: Matrix, omega: f64, iters: int, tol: f64): IterResult:
+    ret _stationary(a, b, omega, true, iters, tol)
+end
+
+// The conjugate gradient method, for symmetric positive definite A.
+//
+// Each step minimizes the error over a Krylov subspace one dimension larger
+// than the last, and does it while storing only four vectors, because the
+// search directions are built to be A-orthogonal to every previous one and so
+// never need to be revisited. That is the whole idea, and it is what makes CG
+// the standard method for the large sparse systems that come out of
+// discretized differential equations.
+@en "SolveCG"
+@fa "حل گرادیان مزدوج"
+@ar "حل التدرج المرافق"
+pub func SolveCG(a &: Matrix, b &: Matrix, iters: int, tol: f64): IterResult:
+    mut out := IterResult {}
+    if a.is_square() == false || a.rows != b.rows || b.cols != 1: ret out end
+    out.x = Zeros(a.rows, 1)
+    mut r := Clone(b)
+    mut p := Clone(b)
+    _cg_loop(a, out, r, p, iters, tol)
+    out.residual = NormFrobenius(r)
+    out.converged = out.residual <= tol
+    r.free()
+    p.free()
+    ret out
+end
+// The dominant eigenvalue and its eigenvector, by the power method: repeated
+// multiplication by A amplifies the component along the largest eigenvector
+// faster than any other, so any starting vector not exactly orthogonal to it
+// converges there.
+//
+// The eigenvalue is returned as a Rayleigh quotient x^T A x / x^T x, which is
+// accurate to second order in the error of x: even a mediocre eigenvector
+// yields a good eigenvalue. Returned as a column vector of length n+1, with
+// the eigenvalue appended after the eigenvector.
+//
+// It converges at the rate |lambda_2 / lambda_1| per step, so it is fast when
+// the top eigenvalue is well separated and useless when it is not, and it
+// cannot find a complex pair at all, since two conjugate eigenvalues have
+// equal magnitude and neither ever wins.
+@en "PowerIteration"
+@fa "تکرار توانی"
+@ar "تكرار القوى"
+pub func PowerIteration(a &: Matrix, iters: int): Matrix:
+    if a.is_square() == false: ret Zeros(0, 0) end
+    n := a.rows
+    mut v := Full(n, 1, 1.0 / math.Sqrt(n as f64))
+    repeat iters: _power_step(a, v) end
+    lambda := _rayleigh(a, v)
+    mut r := Zeros(n + 1, 1)
+    repeat n with i: r.set(i, 0, v.at(i, 0)) end
+    r.set(n, 0, lambda)
+    v.free()
+    ret r
+end
+
+// The Rayleigh quotient x^T A x / x^T x: the scalar that best represents A
+// along the direction x, and an eigenvalue exactly when x is an eigenvector.
+@en "Rayleigh"
+@fa "خارج‌قسمت ریلی"
+@ar "خارج قسمة رايلي"
+pub func Rayleigh(a &: Matrix, x &: Matrix): f64: ret _rayleigh(a, x) end
+
+// The eigenvalue of A closest to `shift`, by inverse iteration. Multiplying
+// by (A - shift I)^-1 amplifies whichever eigenvector has an eigenvalue
+// nearest the shift, so this is the power method aimed anywhere in the
+// spectrum rather than only at its largest end.
+@en "ShiftedInverseIteration"
+@fa "تکرار وارون شیفت‌دار"
+@ar "تكرار معكوس مزاح"
+pub func ShiftedInverseIteration(a &: Matrix, shift: f64, iters: int): f64:
+    mut v := EigVecFor(a, shift, iters)
+    if v.is_empty(): ret shift end
+    lambda := _rayleigh(a, v)
+    v.free()
+    ret lambda
+end

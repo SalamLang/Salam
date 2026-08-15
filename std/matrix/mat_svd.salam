@@ -1,0 +1,373 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package matrix
+
+import math
+
+// The singular value decomposition, A = U S V^T, by one-sided Jacobi.
+//
+// This is the most informative factorization a matrix has. The singular
+// values are the semi-axes of the ellipsoid A maps the unit sphere onto, so
+// they answer at once: how far is this from singular (the smallest one), how
+// much can it amplify (the largest), what is its rank (how many are nonzero),
+// what is its condition number (their ratio), and what is the best rank-k
+// approximation to it (keep the largest k). Rank, null space, the
+// pseudoinverse, the spectral and nuclear norms and cond_2 all come from here.
+//
+// One-sided Jacobi, rather than the usual Golub-Kahan bidiagonalization,
+// because of accuracy. Bidiagonalization is faster and is what LAPACK's
+// default driver does, but it computes small singular values with an absolute
+// error proportional to the *largest* one, so a matrix whose singular values
+// span 10^12 gets its small ones wrong in every digit. One-sided Jacobi
+// orthogonalizes pairs of columns directly and delivers every singular value
+// to high *relative* accuracy, tiny ones included. For a library whose job
+// includes deciding what is numerically zero, that is the property that
+// matters, and O(n^3) with a bigger constant is the right trade.
+//
+// The method: rotate pairs of columns of A until they are mutually
+// orthogonal. The accumulated rotations are V, the norms of the resulting
+// columns are the singular values, and the columns normalized are U. Nothing
+// is ever squared into a Gram matrix, which is the other way small singular
+// values get destroyed (forming A^T A squares the condition number and halves
+// the digits available).
+//
+// The decomposition is thin: for an m x n matrix with m >= n, U is m x n and
+// V is n x n. Nobody needs the m - n columns of the full U that span the
+// orthogonal complement, and for a tall matrix they are the bulk of the cost.
+
+// Sweeps beyond this mean the rotation threshold is never being met, which in
+// practice means the matrix has entries that are not finite. Jacobi converges
+// quadratically and real problems finish in well under ten.
+const _SVD_MAX_SWEEPS := 60
+
+@en "SVD"
+@fa "تجزیه مقادیر تکین"
+@ar "تحليل القيم المفردة"
+pub struct SVD:
+    pub u: Matrix = Matrix {}
+    pub s: Matrix = Matrix {}
+    pub v: Matrix = Matrix {}
+    pub ok: bool = false
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free():
+        this.u.free()
+        this.s.free()
+        this.v.free()
+    end
+end
+
+func _col_dot(w &: Matrix, p: int, q: int): f64:
+    mut s := 0.0
+    repeat w.rows with i: s += w.at(i, p) * w.at(i, q) end
+    ret s
+end
+
+func _col_norm2(w &: Matrix, p: int): f64: ret _col_dot(w, p, p) end
+
+// Applies the plane rotation (c, s) to columns p and q.
+func _rot_cols(w &: Matrix, p: int, q: int, c: f64, s: f64):
+    repeat w.rows with i:
+        wp := w.at(i, p)
+        wq := w.at(i, q)
+        w.set(i, p, c * wp - s * wq)
+        w.set(i, q, s * wp + c * wq)
+    end
+end
+
+// The rotation that makes columns p and q orthogonal. Solving for the angle
+// directly would need an arctangent and then a sine and a cosine; the
+// half-angle identity used here gets c and s from one square root, and the
+// branch on the sign of zeta picks the smaller of the two rotations, which is
+// what keeps the sweep from cycling.
+func _jacobi_rot(w &: Matrix, v &: Matrix, p: int, q: int): bool:
+    g := _col_dot(w, p, q)
+    if g == 0.0: ret false end
+    alpha := _col_norm2(w, p)
+    beta := _col_norm2(w, q)
+    if math.Abs(g) <= MAT_EPS * math.Sqrt(alpha * beta): ret false end
+    zeta := (beta - alpha) / (2.0 * g)
+    mut t := 1.0 / (math.Abs(zeta) + math.Sqrt(1.0 + zeta * zeta))
+    if zeta < 0.0: t = 0.0 - t end
+    c := 1.0 / math.Sqrt(1.0 + t * t)
+    s := c * t
+    _rot_cols(w, p, q, c, s)
+    _rot_cols(v, p, q, c, s)
+    ret true
+end
+
+func _svd_sweep(w &: Matrix, v &: Matrix): bool:
+    mut moved := false
+    n := w.cols
+    mut p := 0
+    until p < n - 1:
+        mut q := p + 1
+        until q < n:
+            if _jacobi_rot(w, v, p, q): moved = true end
+            q += 1
+        end
+        p += 1
+    end
+    ret moved
+end
+
+// Column norms become the singular values; the columns themselves, divided
+// through, become U. A column that came out numerically zero corresponds to a
+// zero singular value and is left as zero rather than divided by it.
+func _svd_extract(w &: Matrix, s &: Matrix):
+    repeat w.cols with j:
+        sigma := math.Sqrt(_col_norm2(w, j))
+        s.set(0, j, sigma)
+        if sigma > 0.0:
+            inv := 1.0 / sigma
+            repeat w.rows with i: w.mul_at(i, j, inv) end
+        end
+    end
+end
+
+// Selection sort into descending order, carrying the matching columns of U
+// and V along. n is small (it is the rank bound, not the data size) and the
+// swap has to move whole columns, so a sort with a minimal number of swaps
+// beats an asymptotically better one that moves more.
+func _svd_sort(u &: Matrix, s &: Matrix, v &: Matrix):
+    n := s.cols
+    repeat n with i:
+        mut best := i
+        mut j := i + 1
+        until j < n:
+            if s.at(0, j) > s.at(0, best): best = j end
+            j += 1
+        end
+        if best != i: _svd_swap(u, s, v, i, best) end
+    end
+end
+
+func _svd_swap(u &: Matrix, s &: Matrix, v &: Matrix, i: int, j: int):
+    t := s.at(0, i)
+    s.set(0, i, s.at(0, j))
+    s.set(0, j, t)
+    SwapCols(u, i, j)
+    SwapCols(v, i, j)
+end
+
+func _svd_tall(x &: Matrix): SVD:
+    mut r := SVD {}
+    r.u = Clone(x)
+    r.v = Eye(x.cols)
+    r.s = Zeros(1, x.cols)
+    mut sweeps := 0
+    mut moved := true
+    until moved && sweeps < _SVD_MAX_SWEEPS:
+        moved = _svd_sweep(r.u, r.v)
+        sweeps += 1
+    end
+    _svd_extract(r.u, r.s)
+    _svd_sort(r.u, r.s, r.v)
+    r.ok = sweeps < _SVD_MAX_SWEEPS
+    ret r
+end
+
+// A wide matrix is handled by factoring its transpose and swapping the two
+// orthogonal factors, since (A^T = U S V^T) is exactly (A = V S U^T).
+func _svd_wide(x &: Matrix): SVD:
+    mut t := Transpose(x)
+    inner := _svd_tall(t)
+    mut r := SVD {}
+    r.u = inner.v
+    r.v = inner.u
+    r.s = inner.s
+    r.ok = inner.ok
+    t.free()
+    ret r
+end
+
+// The default rank tolerance, the same rule LAPACK and NumPy use: the largest
+// singular value scaled by the machine epsilon and the larger dimension.
+// Anything below it is indistinguishable from zero given the rounding that
+// producing the matrix already involved.
+func _rank_tol(x &: Matrix, s &: Matrix): f64:
+    if s.count() == 0: ret 0.0 end
+    mut d := x.rows
+    if x.cols > d: d = x.cols end
+    ret s.a.get(0) * (d as f64) * MAT_EPS
+end
+
+// A column of V belongs to the null space basis when its singular value is
+// below the cut, and also when it has no singular value at all, which is the
+// case for the trailing columns of a wide matrix.
+func _null_pick(f &: SVD, keep &: Vector<int>, k: int, cut: f64):
+    if k >= f.s.count():
+        keep.push(k)
+        ret
+    end
+    if f.s.a.get(k) <= cut: keep.push(k) end
+end
+
+func _gather_cols(src &: Matrix, idx &: Vector<int>): Matrix:
+    mut r := Zeros(src.rows, idx.len())
+    repeat idx.len() with c:
+        j := idx.get(c)
+        repeat src.rows with i: r.set(i, c, src.at(i, j)) end
+    end
+    ret r
+end
+
+// Adds w * v_k u_k^T, one rank-1 term of the pseudoinverse.
+func _pinv_add(f &: SVD, out &: Matrix, k: int, w: f64):
+    repeat out.rows with i:
+        vi := w * f.v.at(i, k)
+        repeat out.cols with j: out.add_at(i, j, vi * f.u.at(j, k)) end
+    end
+end
+
+func _pinv_build(f &: SVD, out &: Matrix, cut: f64):
+    repeat f.s.count() with k:
+        sigma := f.s.a.get(k)
+        if sigma > cut: _pinv_add(f, out, k, 1.0 / sigma) end
+    end
+end
+
+// A column of V belongs to the null space basis when its singular value is
+// below the cut, and also when it has no singular value at all, which happens
+// for the trailing columns of a wide matrix.
+// Adds sigma_t u_t v_t^T to a running reconstruction.
+func _rank1_add(f &: SVD, out &: Matrix, t: int):
+    sigma := f.s.a.get(t)
+    repeat out.rows with i:
+        ui := sigma * f.u.at(i, t)
+        repeat out.cols with j: out.add_at(i, j, ui * f.v.at(j, t)) end
+    end
+end
+
+@en "SVDecompose"
+@fa "تجزیه تکین"
+@ar "تحليل مفرد"
+pub func SVDecompose(x &: Matrix): SVD:
+    if x.is_empty(): ret SVD {} end
+    if x.rows >= x.cols: ret _svd_tall(x) end
+    ret _svd_wide(x)
+end
+
+// The singular values alone, descending, as a row vector. Cheaper to ask for
+// than the full decomposition only in convenience, not in work: the algorithm
+// produces U and V on the way regardless.
+@en "SingularValues"
+@fa "مقادیر تکین"
+@ar "قيم مفردة"
+pub func SingularValues(x &: Matrix): Matrix:
+    mut f := SVDecompose(x)
+    s := Clone(f.s)
+    f.free()
+    ret s
+end
+
+// The number of singular values that are meaningfully nonzero. Pass tol <= 0
+// to use the standard tolerance described above.
+//
+// This is the only trustworthy way to compute a rank in floating point.
+// Counting pivots in an elimination asks whether a computed number is exactly
+// zero, and after O(n) roundings it never is; the SVD instead asks how far
+// the matrix is from one of lower rank, which is a question with a stable
+// answer.
+@en "MatrixRank"
+@fa "رتبه"
+@ar "رتبة"
+pub func MatrixRank(x &: Matrix, tol: f64): int:
+    mut s := SingularValues(x)
+    mut cut := tol
+    if cut <= 0.0: cut = _rank_tol(x, s) end
+    mut n := 0
+    repeat s.count() with k:
+        if s.a.get(k) > cut: n += 1 end
+    end
+    s.free()
+    ret n
+end
+
+// The Moore-Penrose pseudoinverse, V S^+ U^T, where S^+ inverts the singular
+// values above the tolerance and zeroes the rest.
+//
+// Defined for every matrix, square or not, singular or not. For an
+// overdetermined system it gives the least squares solution and for an
+// underdetermined one the minimum-norm solution, which is why PseudoInverse
+// times b is the right answer to Ax = b whatever shape A has.
+@en "PseudoInverse"
+@fa "شبه‌وارون"
+@ar "شبه معكوس"
+pub func PseudoInverse(x &: Matrix, tol: f64): Matrix:
+    mut f := SVDecompose(x)
+    mut cut := tol
+    if cut <= 0.0: cut = _rank_tol(x, f.s) end
+    mut sv := Zeros(f.v.rows, f.u.rows)
+    _pinv_build(f, sv, cut)
+    f.free()
+    ret sv
+end
+
+// An orthonormal basis for the null space (kernel), as the columns of the
+// result: the directions A annihilates. Empty when A has full column rank.
+@en "NullSpace"
+@fa "فضای پوچ"
+@ar "فضاء العدم"
+pub func NullSpace(x &: Matrix, tol: f64): Matrix:
+    mut f := SVDecompose(x)
+    mut cut := tol
+    if cut <= 0.0: cut = _rank_tol(x, f.s) end
+    mut keep := Vector {} as Vector<int>
+    repeat f.v.cols with k: _null_pick(f, keep, k, cut) end
+    r := _gather_cols(f.v, keep)
+    keep.free()
+    f.free()
+    ret r
+end
+
+// An orthonormal basis for the column space (range) of A, as the columns of
+// the result. Its width is the rank.
+@en "ColumnSpace"
+@fa "فضای ستونی"
+@ar "فضاء الأعمدة"
+pub func ColumnSpace(x &: Matrix, tol: f64): Matrix:
+    mut f := SVDecompose(x)
+    mut cut := tol
+    if cut <= 0.0: cut = _rank_tol(x, f.s) end
+    mut keep := Vector {} as Vector<int>
+    repeat f.s.count() with k:
+        if f.s.a.get(k) > cut: keep.push(k) end
+    end
+    r := _gather_cols(f.u, keep)
+    keep.free()
+    f.free()
+    ret r
+end
+
+// The best rank-k approximation to A in both the Frobenius and the spectral
+// norm: keep the k largest singular values and discard the rest. The
+// Eckart-Young theorem says no other matrix of rank k comes closer, which is
+// what makes this the basis of PCA, of latent semantic analysis and of image
+// compression by SVD.
+@en "LowRankApprox"
+@fa "تقریب رتبه پایین"
+@ar "تقريب منخفض الرتبة"
+pub func LowRankApprox(x &: Matrix, k: int): Matrix:
+    mut f := SVDecompose(x)
+    mut r := Zeros(x.rows, x.cols)
+    mut n := k
+    if n > f.s.count(): n = f.s.count() end
+    repeat n with t: _rank1_add(f, r, t) end
+    f.free()
+    ret r
+end

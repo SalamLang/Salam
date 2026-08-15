@@ -1,0 +1,320 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package matrix
+
+import math
+
+// Cholesky, A = L L^T, and its indefinite cousin LDL^T.
+//
+// For a symmetric positive definite matrix this is the factorization to use.
+// It costs half of what LU costs (n^3/3 against 2n^3/3, since only one
+// triangle is touched), it needs no pivoting at all, and it is
+// unconditionally stable: the multipliers cannot grow because every one of
+// them is divided by a diagonal entry that is provably positive. That last
+// property is unusual and is why Cholesky is the one factorization nobody
+// worries about.
+//
+// It is also the cheapest reliable test for positive definiteness. A matrix
+// is positive definite exactly when this factorization runs to completion
+// with every diagonal entry positive, which is a far better test than
+// computing eigenvalues and looking at signs, and a far better test than
+// checking determinants of leading minors, which is what textbooks suggest
+// and which overflows on anything of size.
+//
+// LDL^T is here for the symmetric matrices that are not positive definite:
+// covariance estimates that came out slightly indefinite, saddle point
+// systems, and quasi-Newton updates. It factors A = L D L^T with L unit lower
+// triangular and D diagonal, needs no square roots at all, and its diagonal
+// D reports the inertia of A, meaning how many of its eigenvalues are
+// positive, negative and zero, without computing a single eigenvalue.
+//
+// Both refuse to guess about symmetry: they read the lower triangle and
+// ignore the upper one, which is what LAPACK does, and means a caller who
+// passes a nonsymmetric matrix gets the factorization of its symmetrized
+// lower half rather than a silently wrong answer.
+
+@en "LDL"
+@fa "تجزیه ال‌دی‌ال"
+@ar "تحليل إل دي إل"
+pub struct LDL:
+    pub n: int = 0
+    pub l: Matrix = Matrix {}
+    pub d: Matrix = Matrix {}
+    pub ok: bool = false
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free():
+        this.l.free()
+        this.d.free()
+    end
+end
+
+// The dot product of the first k entries of rows i and j of L, which is the
+// part of A(i,j) already accounted for by the columns factored so far.
+func _chol_dot(l &: Matrix, i: int, j: int, k: int): f64:
+    mut s := 0.0
+    repeat k with p: s += l.at(i, p) * l.at(j, p) end
+    ret s
+end
+
+// One column of the factorization. Returns false the moment a diagonal entry
+// fails to be positive, which is exactly the point at which A stops being
+// positive definite.
+func _chol_col(l &: Matrix, a &: Matrix, j: int, n: int): bool:
+    d := a.at(j, j) - _chol_dot(l, j, j, j)
+    if d <= 0.0: ret false end
+    p := math.Sqrt(d)
+    l.set(j, j, p)
+    mut i := j + 1
+    until i < n:
+        l.set(i, j, (a.at(i, j) - _chol_dot(l, i, j, j)) / p)
+        i += 1
+    end
+    ret true
+end
+
+// Forward substitution against a lower triangular L with its diagonal stored.
+func _tri_forward(l &: Matrix, b &: Matrix, n: int):
+    repeat b.cols with c:
+        repeat n with i:
+            mut s := b.at(i, c)
+            repeat i with j: s -= l.at(i, j) * b.at(j, c) end
+            b.set(i, c, s / l.at(i, i))
+        end
+    end
+end
+
+// Back substitution against L^T, reading the same lower triangular storage
+// transposed rather than building the transpose.
+func _tri_backward_t(l &: Matrix, b &: Matrix, n: int):
+    repeat b.cols with c:
+        mut i := n - 1
+        until i >= 0:
+            mut s := b.at(i, c)
+            mut j := i + 1
+            until j < n:
+                s -= l.at(j, i) * b.at(j, c)
+                j += 1
+            end
+            b.set(i, c, s / l.at(i, i))
+            i -= 1
+        end
+    end
+end
+
+// Forward substitution against unit lower triangular L, whose diagonal is
+// known to be 1 and is not divided by.
+func _unit_forward(l &: Matrix, b &: Matrix, n: int):
+    repeat b.cols with c:
+        repeat n with i:
+            mut s := b.at(i, c)
+            repeat i with j: s -= l.at(i, j) * b.at(j, c) end
+            b.set(i, c, s)
+        end
+    end
+end
+
+func _unit_backward_t(l &: Matrix, b &: Matrix, n: int):
+    repeat b.cols with c:
+        mut i := n - 1
+        until i >= 0:
+            mut s := b.at(i, c)
+            mut j := i + 1
+            until j < n:
+                s -= l.at(j, i) * b.at(j, c)
+                j += 1
+            end
+            b.set(i, c, s)
+            i -= 1
+        end
+    end
+end
+
+func _ldl_col(f &: LDL, a &: Matrix, j: int, n: int):
+    mut d := a.at(j, j)
+    repeat j with p: d -= f.l.at(j, p) * f.l.at(j, p) * f.d.at(0, p) end
+    f.d.set(0, j, d)
+    f.l.set(j, j, 1.0)
+    if d == 0.0: ret end
+    mut i := j + 1
+    until i < n:
+        mut s := a.at(i, j)
+        repeat j with p: s -= f.l.at(i, p) * f.l.at(j, p) * f.d.at(0, p) end
+        f.l.set(i, j, s / d)
+        i += 1
+    end
+end
+
+func _ldl_nonsingular(f &: LDL): bool:
+    repeat f.n with i:
+        if f.d.at(0, i) == 0.0: ret false end
+    end
+    ret true
+end
+
+func _ldl_scale(f &: LDL, b &: Matrix):
+    repeat f.n with i:
+        d := f.d.at(0, i)
+        repeat b.cols with c: b.set(i, c, b.at(i, c) / d) end
+    end
+end
+
+func _tally(r &: Matrix, d: f64):
+    if d > 0.0:
+        r.add_at(0, 0, 1.0)
+        ret
+    end
+    if d < 0.0:
+        r.add_at(0, 1, 1.0)
+        ret
+    end
+    r.add_at(0, 2, 1.0)
+end
+
+// The lower triangular L with A = L L^T. A 0x0 result means A is not
+// symmetric positive definite; there is no separate error channel because
+// that answer is itself the useful information.
+@en "Cholesky"
+@fa "چولسکی"
+@ar "تشوليسكي"
+pub func Cholesky(x &: Matrix): Matrix:
+    if x.is_square() == false: ret Zeros(0, 0) end
+    n := x.rows
+    mut l := Zeros(n, n)
+    repeat n with j:
+        if _chol_col(l, x, j, n) == false:
+            l.free()
+            ret Zeros(0, 0)
+        end
+    end
+    ret l
+end
+
+// Solves A X = B for symmetric positive definite A, using two triangular
+// solves against the Cholesky factor. Half the cost of Solve and, for the
+// matrices it applies to, more accurate.
+@en "SolveSPD"
+@fa "حل معین مثبت"
+@ar "حل معرف موجب"
+pub func SolveSPD(a &: Matrix, b &: Matrix): Matrix:
+    mut l := Cholesky(a)
+    if l.is_empty(): ret Zeros(0, 0) end
+    r := CholeskySolve(l, b)
+    l.free()
+    ret r
+end
+
+// Reuses a Cholesky factor across right-hand sides.
+@en "CholeskySolve"
+@fa "حل چولسکی"
+@ar "حل تشوليسكي"
+pub func CholeskySolve(l &: Matrix, b &: Matrix): Matrix:
+    if l.rows != b.rows: ret Zeros(0, 0) end
+    mut r := Clone(b)
+    _tri_forward(l, r, l.rows)
+    _tri_backward_t(l, r, l.rows)
+    ret r
+end
+
+// A^-1 for symmetric positive definite A, by solving against the identity.
+@en "InverseSPD"
+@fa "وارون معین مثبت"
+@ar "معكوس معرف موجب"
+pub func InverseSPD(x &: Matrix): Matrix:
+    mut id := Eye(x.rows)
+    r := SolveSPD(x, id)
+    id.free()
+    ret r
+end
+
+// det(A) for symmetric positive definite A: the square of the product of the
+// Cholesky diagonal. Always positive when it exists, which is a fact about
+// positive definite matrices rather than an accident of the algorithm.
+@en "DetSPD"
+@fa "دترمینان معین مثبت"
+@ar "محدد معرف موجب"
+pub func DetSPD(x &: Matrix): f64:
+    mut l := Cholesky(x)
+    if l.is_empty(): ret 0.0 end
+    mut p := 1.0
+    repeat l.rows with i: p = p * l.at(i, i) end
+    l.free()
+    ret p * p
+end
+
+// log(det A) for symmetric positive definite A, summed rather than
+// multiplied. This is the form a Gaussian log-likelihood needs, and the only
+// one that survives a covariance matrix of any size.
+@en "LogDetSPD"
+@fa "لگاریتم دترمینان معین مثبت"
+@ar "لوغاريتم محدد معرف موجب"
+pub func LogDetSPD(x &: Matrix): f64:
+    mut l := Cholesky(x)
+    if l.is_empty(): ret 0.0 - MAT_INF end
+    mut s := 0.0
+    repeat l.rows with i: s += math.Log(l.at(i, i)) end
+    l.free()
+    ret 2.0 * s
+end
+
+// A = L D L^T with L unit lower triangular and D diagonal, for any symmetric
+// A. No square roots, so it works where Cholesky does not.
+@en "LDLDecompose"
+@fa "تجزیه ال‌دی‌ال"
+@ar "تحليل إل دي إل"
+pub func LDLDecompose(x &: Matrix): LDL:
+    mut f := LDL {}
+    if x.is_square() == false: ret f end
+    n := x.rows
+    f.n = n
+    f.l = Zeros(n, n)
+    f.d = Zeros(1, n)
+    repeat n with j: _ldl_col(f, x, j, n) end
+    f.ok = _ldl_nonsingular(f)
+    ret f
+end
+
+// Solves A X = B for symmetric A through its LDL^T factorization.
+@en "LDLSolve"
+@fa "حل ال‌دی‌ال"
+@ar "حل إل دي إل"
+pub func LDLSolve(f &: LDL, b &: Matrix): Matrix:
+    if f.ok == false || f.n != b.rows: ret Zeros(0, 0) end
+    mut r := Clone(b)
+    _unit_forward(f.l, r, f.n)
+    _ldl_scale(f, r)
+    _unit_backward_t(f.l, r, f.n)
+    ret r
+end
+
+// The inertia of a symmetric matrix: how many eigenvalues are positive,
+// negative and zero, read off the signs of D. Sylvester's law of inertia says
+// those counts are invariant under the congruence transformation LDL^T
+// performs, so this is exact without any eigenvalue ever being computed.
+//
+// Returned as a 1x3 row vector: positive, negative, zero.
+@en "Inertia"
+@fa "لختی"
+@ar "قصور ذاتي"
+pub func Inertia(x &: Matrix): Matrix:
+    mut f := LDLDecompose(x)
+    mut r := Zeros(1, 3)
+    repeat f.n with i: _tally(r, f.d.at(0, i)) end
+    f.free()
+    ret r
+end
+

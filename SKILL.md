@@ -94,6 +94,40 @@ const MAX := 100         // compile-time constant
 `:=` declares (immutable by default). Reassigning a non-`mut` variable is a
 **compile error**. `mut` makes it reassignable; `const` is a compile-time value.
 
+### Printing
+
+`print`/`println` (stdout) and `printerr`/`printerrln` (stderr) take
+comma-separated arguments and space-join them. They are statements, not calls:
+never wrap the whole argument list in parentheses.
+
+Any **struct, array, slice, `Vector` or `HashMap`** can be printed directly:
+the compiler derives a stringify function for the type and prints what it
+returns, recursing into fields and elements.
+
+```salam
+struct Point:  x: int  y: int  end
+
+p := Point {x = 10, y = 15}
+println p                                   // Point {x = 10, y = 15}
+println [p, Point {x = 20, y = 25}] as Point[2]
+                                            // [Point {x = 10, y = 15}, Point {x = 20, y = 25}]
+println ["ali", "reza"] as str[2]           // ["ali", "reza"]
+```
+
+Rules worth knowing:
+
+- Nested `str` values are quoted (`"ali"`) so an empty one stays visible; a
+  top-level `println s` on a `str` is unquoted as always.
+- A `HashMap` prints as `{"a": 1, "b": 2}`; iteration order is the map's.
+- Every field is shown, `pub` or not - the derived function is compiler-written
+  and is not held to the privacy rule.
+- Pointer fields print as `null` or `<ptr>`; they are never followed, so a
+  cyclic structure still terminates. Enum fields print as their integer value.
+- Give a struct `pub func to_str(): str` to control its own rendering; the
+  derived function calls that instead.
+- Anything with no derivable form (a `File` handle, a function value) is still
+  the old error, and inside a struct renders as `<its type>`.
+
 ### Operators
 
 `+ - * / %`, `**` (power, float result), `== != < > <= >=`, `&& || !`, ternary
@@ -388,6 +422,30 @@ Sign Min Max ClampF Lerp Radians Degrees Mod IsNaN IsInf NaN Inf`; integer:
 - **`rand`**: `Seed SeedAuto Int Int32 IntN IntRange FloatRange Float Bool
 BoolP Choice{Int,Str,Char} Shuffle{Int,Str} Alpha Alnum Digit Text UUID Hash`.
 - **`stats`**: descriptive statistics helpers.
+- **`matrix`**: dense linear algebra over `f64`, row-major, one `Matrix` type
+  for matrices and vectors alike. Construct: `Zeros Ones Full Eye EyeOffset
+Diag FromArray RowVector ColVector Arange Linspace Logspace Clone`. Elementwise:
+  `Add Sub MulElem DivElem Scale Neg Combine AddScaled` (+ `...InPlace`),
+  broadcast via `AddRowVector AddColVector MulRowVector MulColVector`, ufuncs
+  `Abs Sqrt Exp Log Sin Cos Round Sign Clip PowElem Chop`. Products: `MatMul
+(tiled) TransposeMul MulTranspose Gram MatVec VecMat Dot Outer Kron MatPow
+Trace Cross3`. Shape: `Reshape Flatten Row Col SubMatrix Minor Delete/Insert
+Row/Col SwapRows Diagonal Triu Tril HStack VStack BlockDiag Rot90 Roll Tile
+Pad`. Reduce: `Sum Mean Min Max Var Std Median ArgMin/Max Row/ColSums
+Row/ColMeans CumSumRows`. Norms: `NormFrobenius Norm1 NormInf Norm2
+NormNuclear Cond1 CondInf Cond2 Normalize`. Factor: `Decompose(LU) Det
+LogAbsDet Solve Inverse Adjugate QRDecompose LeastSquares Orthonormalize
+Cholesky SolveSPD LDLDecompose Inertia SVDecompose SingularValues MatrixRank
+PseudoInverse NullSpace ColumnSpace LowRankApprox EigSym EigVals Hessenberg
+CharPoly`. Also `RREF NullSpaceExact SolveGeneral`, matrix functions `Expm
+Sqrtm MatrixSign PolyEval CayleyHamilton LogmSym`, iterative `SolveJacobi
+SolveGaussSeidel SolveSOR SolveCG PowerIteration Rayleigh`, statistics
+  `Covariance Correlation Standardize PCAFit LinearRegression RSquared`,
+  predicates `IsSymmetric IsOrthogonal IsPositiveDefinite IsToeplitz ...`,
+  named matrices `Hilbert Vandermonde Toeplitz Circulant Companion Pascal
+Rotation2D/3D Householder Givens Random RandomSPD RandomOrthogonal`, and
+  printing `ToString ToStringPrec Print PrintLabeled ToCSV`. Shape errors
+  return a `0x0` matrix rather than panicking.
 
 ### I/O, OS, filesystem
 

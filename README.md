@@ -29,8 +29,8 @@ Salam is a general-purpose and systems programming language designed for efficie
 [![PR - Pull Request Labeler](https://github.com/SalamLang/Salam/actions/workflows/pr-labeler.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/pr-labeler.yml)
 [![Dependabot Updates](https://github.com/SalamLang/Salam/actions/workflows/dependabot/dependabot-updates/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/dependabot/dependabot-updates)
 [![GitHub Pages Build Deployment](https://github.com/SalamLang/Salam/actions/workflows/pages/pages-build-deployment/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/pages/pages-build-deployment)
-[![VS Code Marketplace Version](https://vsmarketplacebadges.dev/version/salamlanguage.salam-programming-language.svg)](https://marketplace.visualstudio.com/items?itemName=salamlanguage.salam-programming-language)
-[![VS Code Marketplace Installs](https://vsmarketplacebadges.dev/installs/salamlanguage.salam-programming-language.svg)](https://marketplace.visualstudio.com/items?itemName=salamlanguage.salam-programming-language)
+[![VS Code Marketplace Version](https://vsmarketplacebadges.dev/version/salamlanguage.salam-programming-language.svg?label=VS%20Code%20Marketplace%20Version)](https://marketplace.visualstudio.com/items?itemName=salamlanguage.salam-programming-language)
+[![VS Code Marketplace Installs](https://vsmarketplacebadges.dev/installs/salamlanguage.salam-programming-language.svg?label=VS%20Code%20Marketplace%20Installs)](https://marketplace.visualstudio.com/items?itemName=salamlanguage.salam-programming-language)
 
 ---
 
@@ -88,7 +88,7 @@ powershell -NoProfile -Command "[Net.ServicePointManager]::SecurityProtocol = [N
 
 Install the official Salam Language extension from the [Visual Studio Code Marketplace](https://marketplace.visualstudio.com/) for syntax highlighting and language support.
 
-[![Install on VS Code](https://vsmarketplacebadges.dev/version/salamlanguage.salam-programming-language.svg)](https://marketplace.visualstudio.com/items?itemName=salamlanguage.salam-programming-language)
+[![Install on VS Code](https://vsmarketplacebadges.dev/version/salamlanguage.salam-programming-language.svg?label=Install%20on%20VS%20Code)](https://marketplace.visualstudio.com/items?itemName=salamlanguage.salam-programming-language)
 
 ## 🛠️ The Compiler (`salam`)
 

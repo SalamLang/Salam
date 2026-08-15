@@ -13,6 +13,48 @@ func meta_add(v &: Lv, text: str): str:
     ret id
 end
 
+// ll_tbaa_ensure_common - see codegen_llvm_debug.c for the full soundness
+// note: two families only ("any pointer" for pointer-typed struct fields,
+// "salam data" for >=16-bit ints and floats), because Salam code lawfully
+// reinterprets data buffers across non-pointer views and republishes
+// pointer-sized cells through raw T* views. i8/char/bool stay untagged.
+func tbaa_ensure_common(v &: Lv):
+    if str.Len(v.tbaa_char) > 0:
+        ret
+    end
+    root := meta_add(v, `!{!"salam-tbaa"}`)
+    v.tbaa_char = meta_add(v, `!{!"salam bytes", ` + root + ", i64 0}")
+end
+
+// ll_tbaa_suffix
+func tbaa_suffix(v &: Lv, ts: str, is_field: bool): str:
+    if str.Len(ts) == 0:
+        ret ""
+    end
+    if is_ptr_ts(ts) || is_str(ts) || fn_prefix(ts) != 0:
+        if !is_field:
+            ret ""
+        end
+        if str.Len(v.tbaa_ptr_sfx) == 0:
+            tbaa_ensure_common(v)
+            pnode := meta_add(v, `!{!"any pointer", ` + v.tbaa_char + ", i64 0}")
+            ptag := meta_add(v, "!{" + pnode + ", " + pnode + ", i64 0}")
+            v.tbaa_ptr_sfx = ", !tbaa " + ptag
+        end
+        ret v.tbaa_ptr_sfx
+    end
+    if !(is_float(ts) || (is_int_ts(ts) && int_bits(v, ts) >= 16)):
+        ret ""
+    end
+    if str.Len(v.tbaa_data_sfx) == 0:
+        tbaa_ensure_common(v)
+        dnode := meta_add(v, `!{!"salam data", ` + v.tbaa_char + ", i64 0}")
+        dtag := meta_add(v, "!{" + dnode + ", " + dnode + ", i64 0}")
+        v.tbaa_data_sfx = ", !tbaa " + dtag
+    end
+    ret v.tbaa_data_sfx
+end
+
 // di_escape
 func di_escape(sx: str): str:
     n := str.Len(sx)
@@ -89,14 +131,17 @@ end
 
 // ll_debug_finalize
 func debug_finalize(v &: Lv):
-    if !v.debug:
+    // Also the flush point for TBAA nodes, which exist without -g.
+    if !v.debug && v.meta_n == 0:
         ret
     end
     out_g(v, "\n")
-    out_g(
-        v, "!llvm.module.flags = !{" + v.di_flag_dwarf + ", " + v.di_flag_debug + "}\n"
-    )
-    out_g(v, "!llvm.dbg.cu = !{" + v.di_cu + "}\n")
+    if v.debug:
+        out_g(
+            v, "!llvm.module.flags = !{" + v.di_flag_dwarf + ", " + v.di_flag_debug + "}\n"
+        )
+        out_g(v, "!llvm.dbg.cu = !{" + v.di_cu + "}\n")
+    end
     out_g(v, co.SbCstr(v.bmeta))
 end
 

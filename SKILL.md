@@ -570,10 +570,7 @@ tests: `tests/en/stdlib/jwt_demo.salam`.
 
 - **`db.sqlite`**:
   `Available Version Open Ok Exec Query Next Text Int Finish Prepare BindText Reset LastInsertId Changes QueryInt Close`.
-- **`db.mysql`** (MariaDB/MySQL): `Open Ok Close Ping Error Errno Exec Query
-QueryOk Next Finish Text Int Int64 Float IsNull ColumnCount RowCount
-ColumnName AffectedRows LastInsertId Begin Commit Rollback Autocommit
-Escape SetCharset SelectDB QueryInt QueryText`. **Threading**: a connection
+- **`db.mysql`** (MariaDB/MySQL): `Open Ok Close Ping Error Errno Exec Query QueryOk Next Finish Text Int Int64 Float IsNull ColumnCount RowCount ColumnName AffectedRows LastInsertId Begin Commit Rollback Autocommit Escape SetCharset SelectDB QueryInt QueryText`. **Threading**: a connection
   cannot be used by two threads at once (it segfaults, it does not error), so
   a threaded server gives each request its own connection. Call
   `LibraryInit()` once from `main` before any thread starts, and `ThreadInit()`

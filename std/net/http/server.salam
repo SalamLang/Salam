@@ -30,6 +30,42 @@ else:
     end
 end
 
+// Writing to a socket whose peer has gone away raises SIGPIPE, and the
+// default disposition for SIGPIPE is to kill the process. For a server that
+// means any client which hangs up early - a cancelled download, a closed
+// browser tab, a health check that times out, a load generator that moves on
+// to the next test - takes the whole server down with it, every other
+// in-flight connection included. It is trivially reachable from outside, and
+// serving a static file made it near-certain: the file is written in chunks,
+// so there is a window on every request where the peer can disappear
+// mid-write.
+//
+// Every real server ignores SIGPIPE and lets the failing write report EPIPE
+// instead, which is what the send loops in rawsock already check for.
+//
+// This lives here rather than in ctx_internal.salam because an `extern` with
+// a body is both an extern (which must precede every global) and a function
+// definition (which must follow every global and type). ctx_internal has
+// both; this file has neither.
+if SALAM_OS_WINDOWS:
+    // Windows has no SIGPIPE; a send to a closed socket just fails, so there
+    // is nothing to disable. The function still has to exist, because Run
+    // calls it unconditionally.
+    extern:
+        func _http_ignore_sigpipe():
+            ret
+        end
+    end
+else:
+    extern:
+        func signal(signum: int, handler: void *): void *
+        // 13 is SIGPIPE and 1 is SIG_IGN on Linux, macOS and the BSDs.
+        func _http_ignore_sigpipe():
+            signal(13, 1 as void *)
+        end
+    end
+end
+
 if SALAM_OS_WINDOWS:
     extern:
         func salam_spawn_fn_i64(fn: i64, arg: i64):
@@ -91,6 +127,7 @@ end
 pub func Run(s: Server):
     _reqctx_sizeof()
     _warm_up_split()
+    _http_ignore_sigpipe()
     _current_router = s.router
     _hide_tokens = s.hide_tokens
     _access_log = s.access_log
@@ -135,6 +172,7 @@ end
 pub func RunTLS(s: Server, cert_file: str, key_file: str):
     _reqctx_sizeof()
     _warm_up_split()
+    _http_ignore_sigpipe()
     _current_router = s.router
     _hide_tokens = s.hide_tokens
     _access_log = s.access_log

@@ -29,16 +29,16 @@ package main
 // automatically, which is what CSRF exploits - so SameSite=Lax is not
 // optional here, it is the other half of the decision.
 //
-// auth.SetSessionCookie sets HttpOnly, SameSite=Lax and Secure together.
+// jwt.SetSessionCookie sets HttpOnly, SameSite=Lax and Secure together.
 // Secure means the cookie never travels over plain HTTP, which would stop
 // this example working on localhost, so it uses the *Insecure variant and
 // says so. That is the ONE flag to relax for development, and only there.
 //
-// The guard is told `g.cookie = "session"`, so auth.Require accepts the
+// The guard is told `g.cookie = "session"`, so jwt.Require accepts the
 // token from either the Authorization header or that cookie - the same
 // handler then serves both a browser and an API client.
 
-import auth
+import crypto
 import jwt
 import time
 import net.http
@@ -46,18 +46,18 @@ import net.router
 
 const PORT := 8083
 
-func guard(): auth.Guard:
-    mut g := auth.NewGuard("dev-only-secret-change-me")
+func guard(): jwt.Guard:
+    mut g := jwt.NewGuard("dev-only-secret-change-me")
     g.opts.issuer = "session.example"
     g.opts.require_exp = true
-    // Header first, then this cookie. See auth.TokenFrom.
+    // Header first, then this cookie. See jwt.TokenFrom.
     g.cookie = "session"
     ret g
 end
 
 func password_hash(user: str): str:
-    if user == "sara": ret auth.HashPassword("hunter2") end
-    if user == "ali": ret auth.HashPassword("salam") end
+    if user == "sara": ret crypto.HashPassword("hunter2") end
+    if user == "ali": ret crypto.HashPassword("salam") end
     ret ""
 end
 
@@ -79,13 +79,13 @@ func login(ctx: i64):
     user := http.Ctx_form(ctx, "user")
     password := http.Ctx_form(ctx, "password")
     stored := password_hash(user)
-    if stored.len() == 0 || !auth.VerifyPassword(password, stored):
+    if stored.len() == 0 || !crypto.VerifyPassword(password, stored):
         http.Ctx_status(ctx, 401)
         page(ctx, "<h1>No.</h1><p>Wrong user or password. <a href=/>Try again</a></p>")
         ret
     end
     mut err := 0
-    token := auth.IssueFor(guard(), user, 3600 as i64, err)
+    token := jwt.IssueFor(guard(), user, 3600 as i64, err)
     if err != jwt.JWT_OK:
         http.Ctx_status(ctx, 500)
         page(ctx, "<h1>Could not start a session</h1>")
@@ -93,7 +93,7 @@ func login(ctx: i64):
     end
     // Max-Age matches the token's own lifetime, so the browser stops sending
     // a token that can no longer verify.
-    auth.SetSessionCookieInsecure(ctx, guard(), token, 3600)
+    jwt.SetSessionCookieInsecure(ctx, guard(), token, 3600)
     http.Ctx_redirect(ctx, "/dashboard")
 end
 
@@ -107,10 +107,10 @@ func dashboard(ctx: i64):
 end
 
 // A browser wants a redirect to the sign-in page, not a 401 with JSON, so
-// this wraps auth.Check rather than using auth.Require's API-shaped reply.
+// this wraps jwt.Check rather than using jwt.Require's API-shaped reply.
 func require_page(ctx: i64, t &: jwt.Token): bool:
     mut err := 0
-    verified := auth.Check(ctx, guard(), err)
+    verified := jwt.Check(ctx, guard(), err)
     if err != jwt.JWT_OK:
         http.Ctx_redirect(ctx, "/")
         ret false
@@ -127,7 +127,7 @@ func logout(ctx: i64):
     // Nothing server-side is invalidated: the token stays valid until it
     // expires. Clearing the cookie is what "sign out" means for a JWT
     // session, which is the real argument for a short TTL.
-    auth.ClearSessionCookie(ctx, guard())
+    jwt.ClearSessionCookie(ctx, guard())
     http.Ctx_redirect(ctx, "/")
 end
 

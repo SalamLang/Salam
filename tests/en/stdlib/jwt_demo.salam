@@ -14,8 +14,8 @@
 
 package main
 
-// std/jwt end to end, plus the parts of std/auth that do not need a live
-// request.
+// std/jwt end to end, including the HTTP-facing parts that can be tested
+// without a live request.
 //
 // The signing tests pin whole tokens, not just "it round-trips". A JWS is
 // only worth anything if another implementation agrees byte for byte, so the
@@ -28,7 +28,7 @@ package main
 // "valid" for the wrong reason.
 
 import jwt
-import auth
+import crypto
 import testing
 
 const SECRET := "your-256-bit-secret"
@@ -498,23 +498,23 @@ end
 // ---------------------------------------------------------------- auth layer
 
 func test_bearer_parsing():
-    testing.AssertEqStr(auth.ParseBearer("Bearer abc.def.ghi"), "abc.def.ghi")
-    testing.AssertEqStr(auth.ParseBearer("bearer abc"), "abc")
-    testing.AssertEqStr(auth.ParseBearer("BEARER abc"), "abc")
-    testing.AssertEqStr(auth.ParseBearer("Bearer    abc"), "abc")
-    testing.AssertEqStr(auth.ParseBearer("Basic abc"), "")
-    testing.AssertEqStr(auth.ParseBearer("Bearer"), "")
-    testing.AssertEqStr(auth.ParseBearer("Bearer "), "")
-    testing.AssertEqStr(auth.ParseBearer(""), "")
-    testing.AssertEqStr(auth.ParseBearer("Bearerabc"), "")
+    testing.AssertEqStr(jwt.ParseBearer("Bearer abc.def.ghi"), "abc.def.ghi")
+    testing.AssertEqStr(jwt.ParseBearer("bearer abc"), "abc")
+    testing.AssertEqStr(jwt.ParseBearer("BEARER abc"), "abc")
+    testing.AssertEqStr(jwt.ParseBearer("Bearer    abc"), "abc")
+    testing.AssertEqStr(jwt.ParseBearer("Basic abc"), "")
+    testing.AssertEqStr(jwt.ParseBearer("Bearer"), "")
+    testing.AssertEqStr(jwt.ParseBearer("Bearer "), "")
+    testing.AssertEqStr(jwt.ParseBearer(""), "")
+    testing.AssertEqStr(jwt.ParseBearer("Bearerabc"), "")
 end
 
 func test_guard_issue():
-    mut g := auth.NewGuard(SECRET)
+    mut g := jwt.NewGuard(SECRET)
     g.opts.issuer = "api.example.com"
     g.opts.audience = "web"
     mut err := 0
-    tok := auth.IssueFor(g, "user-42", 3600 as i64, err)
+    tok := jwt.IssueFor(g, "user-42", 3600 as i64, err)
     testing.AssertEqInt(err, JWT_OK_CODE())
     mut verr := 0
     t := jwt.Verify(tok, SECRET, g.opts, verr)
@@ -528,18 +528,18 @@ func test_guard_issue():
     testing.AssertTrue(t.claims.exp > t.claims.iat)
     testing.AssertEqInt64(t.claims.exp - t.claims.iat, 3600 as i64)
     // a guard with no secret cannot mint anything
-    broken := auth.NewGuard("")
+    broken := jwt.NewGuard("")
     mut e2 := 0
-    testing.AssertEqStr(auth.IssueFor(broken, "user-42", 60 as i64, e2), "")
+    testing.AssertEqStr(jwt.IssueFor(broken, "user-42", 60 as i64, e2), "")
     testing.AssertEqInt(e2, jwt.JWT_ERR_EMPTY_SECRET)
 end
 
 func test_guard_pair():
-    g := auth.NewGuard(SECRET)
+    g := jwt.NewGuard(SECRET)
     mut access := ""
     mut refresh := ""
     mut err := 0
-    ok := auth.IssuePair(g, "user-42", 900 as i64, 604800 as i64, access, refresh, err)
+    ok := jwt.IssuePair(g, "user-42", 900 as i64, 604800 as i64, access, refresh, err)
     testing.AssertTrue(ok)
     testing.AssertEqInt(err, JWT_OK_CODE())
     mut e1 := 0
@@ -557,21 +557,33 @@ func test_guard_pair():
 end
 
 func test_password_and_secrets():
-    hash := auth.HashPassword("correct horse battery staple")
-    testing.AssertTrue(auth.VerifyPassword("correct horse battery staple", hash))
-    testing.AssertFalse(auth.VerifyPassword("Correct horse battery staple", hash))
-    testing.AssertFalse(auth.VerifyPassword("", hash))
+    hash := crypto.HashPassword("correct horse battery staple")
+    testing.AssertTrue(crypto.VerifyPassword("correct horse battery staple", hash))
+    testing.AssertFalse(crypto.VerifyPassword("Correct horse battery staple", hash))
+    testing.AssertFalse(crypto.VerifyPassword("", hash))
     // the same password twice must not produce the same stored hash
-    hash2 := auth.HashPassword("correct horse battery staple")
+    hash2 := crypto.HashPassword("correct horse battery staple")
     testing.AssertTrue(hash != hash2)
-    testing.AssertTrue(auth.VerifyPassword("correct horse battery staple", hash2))
-    testing.AssertTrue(auth.SecretEquals("abc", "abc"))
-    testing.AssertFalse(auth.SecretEquals("abc", "abd"))
-    testing.AssertFalse(auth.SecretEquals("abc", "abcd"))
-    // an unset expected secret never matches, not even an empty candidate
-    testing.AssertFalse(auth.SecretEquals("", ""))
-    testing.AssertEqInt(auth.RandomSecret(32).len(), 64)
-    testing.AssertTrue(auth.RandomSecret(32) != auth.RandomSecret(32))
+    testing.AssertTrue(crypto.VerifyPassword("correct horse battery staple", hash2))
+    testing.AssertTrue(crypto.SecretEquals("abc", "abc"))
+    testing.AssertFalse(crypto.SecretEquals("abc", "abd"))
+    testing.AssertFalse(crypto.SecretEquals("abc", "abcd"))
+    // crypto.SecretEquals is an EXACT constant-time compare, so two empty
+    // strings are equal. That is the documented trap: an expected secret
+    // that failed to load would match an empty candidate, and the guard
+    // belongs at the call site rather than inside the primitive.
+    testing.AssertTrue(crypto.SecretEquals("", ""))
+    testing.AssertFalse(secret_ok("", ""))
+    testing.AssertTrue(secret_ok("abc", "abc"))
+    testing.AssertEqInt(crypto.RandomHex(32).len(), 64)
+    testing.AssertTrue(crypto.RandomHex(32) != crypto.RandomHex(32))
+end
+
+// The call-site guard every secret comparison needs: an unset expected value
+// must never match. See crypto.SecretEquals.
+func secret_ok(given: str, expected: str): bool:
+    if expected.len() == 0: ret false end
+    ret crypto.SecretEquals(given, expected)
 end
 
 // jwt.JWT_OK is 0; wrapped so the assertions read as intent rather than as a

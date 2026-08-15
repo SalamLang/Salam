@@ -50,7 +50,7 @@ package main
 // request, which is wrong advice here.
 
 import os
-import auth
+import crypto
 import jwt
 import conv
 import net.http
@@ -68,8 +68,8 @@ func secret(): str:
     ret "dev-only-secret-change-me"
 end
 
-func guard(): auth.Guard:
-    mut g := auth.NewGuard(secret())
+func guard(): jwt.Guard:
+    mut g := jwt.NewGuard(secret())
     g.opts.issuer = "library.salam"
     g.opts.require_exp = true
     // Half a minute of tolerance on exp/nbf/iat. Not politeness: two
@@ -96,19 +96,34 @@ func db_fail(ctx: i64, where: str, err: str):
     fail(ctx, 500, "database error")
 end
 
+// A connection for this request, or a 503 and false. Every handler that
+// touches the database starts with this and pairs it with `defer
+// store.Close(conn)` - the connection belongs to this request and to this
+// thread, and it goes away when the handler returns however it returns.
+func db(ctx: i64, c &: store.Conn): bool:
+    conn := store.Connect()
+    if !store.Ok(conn):
+        println "[db] connect: ", store.Err(conn)
+        fail(ctx, 503, "database unavailable")
+        ret false
+    end
+    c = conn
+    ret true
+end
+
 func caller(ctx: i64): i64:
     mut t := jwt.Token {}
-    if !auth.Require(ctx, guard(), t): ret 0 as i64 end
+    if !jwt.Require(ctx, guard(), t): ret 0 as i64 end
     ret t.claims.sub.to_int() as i64
 end
 
 // Signed in AND on the staff. The role lives in the database, so revoking it
 // takes effect on the next request rather than on the next login.
-func librarian(ctx: i64): i64:
+func librarian(ctx: i64, conn: store.Conn): i64:
     uid := caller(ctx)
     if uid == 0 as i64: ret 0 as i64 end
-    if !store.IsLibrarian(uid):
-        auth.Forbidden(ctx, "librarians only")
+    if !store.IsLibrarian(conn, uid):
+        jwt.Forbidden(ctx, "librarians only")
         ret 0 as i64
     end
     ret uid
@@ -137,6 +152,9 @@ end
 // ---------------------------------------------------------------- auth
 
 func register(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
     body := http.Ctx_body(ctx)
     email := json.Get(body, "email").trim().lower()
     password := json.Get(body, "password")
@@ -148,12 +166,12 @@ func register(ctx: i64):
         fail(ctx, 400, "password must be at least 8 characters")
         ret
     end
-    if store.FindUser(email).id != 0 as i64:
+    if store.FindUser(conn, email).id != 0 as i64:
         fail(ctx, 409, "that email is already registered")
         ret
     end
     mut err := ""
-    id := store.CreateUser(email, auth.HashPassword(password), err)
+    id := store.CreateUser(conn, email, crypto.HashPassword(password), err)
     if id == 0 as i64:
         db_fail(ctx, "create user", err)
         ret
@@ -162,11 +180,14 @@ func register(ctx: i64):
 end
 
 func login(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
     body := http.Ctx_body(ctx)
-    u := store.FindUser(json.Get(body, "email").trim().lower())
+    u := store.FindUser(conn, json.Get(body, "email").trim().lower())
     mut stored := u.hash
-    if stored.len() == 0: stored = auth.HashPassword("_no_such_user_") end
-    ok := auth.VerifyPassword(json.Get(body, "password"), stored)
+    if stored.len() == 0: stored = crypto.HashPassword("_no_such_user_") end
+    ok := crypto.VerifyPassword(json.Get(body, "password"), stored)
     if u.id == 0 as i64 || !ok:
         fail(ctx, 401, "invalid email or password")
         ret
@@ -174,7 +195,7 @@ func login(ctx: i64):
     mut c := jwt.NewClaims()
     c.sub = conv.FormatInt(u.id)
     mut err := 0
-    token := auth.Issue(guard(), c, ACCESS_TTL as i64, err)
+    token := jwt.Issue(guard(), c, ACCESS_TTL as i64, err)
     if err != jwt.JWT_OK:
         fail(ctx, 500, "could not issue a token")
         ret
@@ -185,17 +206,23 @@ end
 // ---------------------------------------------------------------- catalogue
 
 func list_books(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
     q := http.Ctx_query(ctx, "q")
     available := http.Ctx_query(ctx, "available") == "1"
     limit := int_param(ctx, "limit", 20, MAX_PAGE)
     offset := int_param(ctx, "offset", 0, 100000)
-    items := store.ListBooks(q, available, limit, offset)
-    total := store.CountBooks(q, available)
+    items := store.ListBooks(conn, q, available, limit, offset)
+    total := store.CountBooks(conn, q, available)
     send(ctx, 200, `{"items":`.concat(items).concat(`,"total":`).concat(conv.FormatInt(total)).concat("}"))
 end
 
 func get_book(ctx: i64):
-    row := store.GetBook(path_id(ctx))
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
+    row := store.GetBook(conn, path_id(ctx))
     if row.len() == 0:
         fail(ctx, 404, "no such book")
         ret
@@ -204,7 +231,10 @@ func get_book(ctx: i64):
 end
 
 func add_book(ctx: i64):
-    if librarian(ctx) == 0 as i64: ret end
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
+    if librarian(ctx, conn) == 0 as i64: ret end
     body := http.Ctx_body(ctx)
     isbn := json.Get(body, "isbn").trim()
     title := json.Get(body, "title").trim()
@@ -217,7 +247,7 @@ func add_book(ctx: i64):
     if copies < 1: copies = 1 end
     if copies > 999: copies = 999 end
     mut err := ""
-    id := store.AddBook(isbn, title, author, json.Get(body, "year"), copies, err)
+    id := store.AddBook(conn, isbn, title, author, json.Get(body, "year"), copies, err)
     if id == 0 as i64:
         // The UNIQUE on isbn is what makes this reachable, and a duplicate
         // ISBN is the librarian's mistake to see, not a 500.
@@ -228,11 +258,14 @@ func add_book(ctx: i64):
         db_fail(ctx, "add book", err)
         ret
     end
-    send(ctx, 201, store.GetBook(id))
+    send(ctx, 201, store.GetBook(conn, id))
 end
 
 func add_copies(ctx: i64):
-    if librarian(ctx) == 0 as i64: ret end
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
+    if librarian(ctx, conn) == 0 as i64: ret end
     id := path_id(ctx)
     delta := json.GetInt(http.Ctx_body(ctx), "delta")
     if delta < 1 || delta > 100:
@@ -240,7 +273,7 @@ func add_copies(ctx: i64):
         ret
     end
     mut err := ""
-    if !store.AddCopies(id, delta, err):
+    if !store.AddCopies(conn, id, delta, err):
         if err.len() > 0:
             db_fail(ctx, "add copies", err)
             ret
@@ -248,18 +281,21 @@ func add_copies(ctx: i64):
         fail(ctx, 404, "no such book")
         ret
     end
-    send(ctx, 200, store.GetBook(id))
+    send(ctx, 200, store.GetBook(conn, id))
 end
 
 func delete_book(ctx: i64):
-    if librarian(ctx) == 0 as i64: ret end
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
+    if librarian(ctx, conn) == 0 as i64: ret end
     id := path_id(ctx)
-    if store.GetBook(id).len() == 0:
+    if store.GetBook(conn, id).len() == 0:
         fail(ctx, 404, "no such book")
         ret
     end
     mut err := ""
-    if !store.DeleteBook(id, err):
+    if !store.DeleteBook(conn, id, err):
         if err.len() > 0:
             db_fail(ctx, "delete book", err)
             ret
@@ -274,9 +310,12 @@ end
 // ---------------------------------------------------------------- loans
 
 func borrow(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
     uid := caller(ctx)
     if uid == 0 as i64: ret end
-    r := store.Borrow(uid, path_id(ctx))
+    r := store.Borrow(conn, uid, path_id(ctx))
     if r.reason == "no_book":
         fail(ctx, 404, "no such book")
         ret
@@ -294,15 +333,18 @@ func borrow(ctx: i64):
 end
 
 func return_loan(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
     uid := caller(ctx)
     if uid == 0 as i64: ret end
-    reason := store.ReturnLoan(uid, path_id(ctx), store.IsLibrarian(uid))
+    reason := store.ReturnLoan(conn, uid, path_id(ctx), store.IsLibrarian(conn, uid))
     if reason == "no_loan":
         fail(ctx, 404, "no such loan")
         ret
     end
     if reason == "not_yours":
-        auth.Forbidden(ctx, "that is not your loan")
+        jwt.Forbidden(ctx, "that is not your loan")
         ret
     end
     if reason == "already_returned":
@@ -317,15 +359,21 @@ func return_loan(ctx: i64):
 end
 
 func my_loans(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
     uid := caller(ctx)
     if uid == 0 as i64: ret end
     open_only := http.Ctx_query(ctx, "open") == "1"
-    send(ctx, 200, store.MyLoans(uid, open_only))
+    send(ctx, 200, store.MyLoans(conn, uid, open_only))
 end
 
 func overdue(ctx: i64):
-    if librarian(ctx) == 0 as i64: ret end
-    send(ctx, 200, store.OverdueLoans())
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
+    if librarian(ctx, conn) == 0 as i64: ret end
+    send(ctx, 200, store.OverdueLoans(conn))
 end
 
 func health(ctx: i64):
@@ -333,13 +381,19 @@ func health(ctx: i64):
 end
 
 func main:
+    // Reads the settings, initialises the client library, and proves the
+    // credentials work by opening one connection and closing it again. After
+    // this returns, no connection is held: each request makes its own.
+    //
+    // The library init has to happen here, on the main thread, before any
+    // request thread exists - see _store.salam's header.
     mut err := ""
-    if !store.Open(err):
+    if !store.Configure(err):
         println "cannot reach the database: ", err
         println "set DB_HOST / DB_PORT / DB_USER / DB_PASS / DB_NAME, then load schema.sql"
         ret 1
     end
-    defer store.Close()
+    defer store.Shutdown()
     mut r := router.NewRouter()
     router.Post(r, "/auth/register", register)
     router.Post(r, "/auth/login", login)

@@ -1,0 +1,244 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/matrix: LU with partial pivoting, and the determinant, inverse and
+// linear solve built on it.
+
+import matrix
+import testing
+
+func mk3(a: f64, b: f64, c: f64, d: f64, e: f64, f: f64, g: f64, h: f64, i: f64): matrix.Matrix:
+    mut m := matrix.Zeros(3, 3)
+    m.set(0, 0, a)
+    m.set(0, 1, b)
+    m.set(0, 2, c)
+    m.set(1, 0, d)
+    m.set(1, 1, e)
+    m.set(1, 2, f)
+    m.set(2, 0, g)
+    m.set(2, 1, h)
+    m.set(2, 2, i)
+    ret m
+end
+
+func mk2(a: f64, b: f64, c: f64, d: f64): matrix.Matrix:
+    mut m := matrix.Zeros(2, 2)
+    m.set(0, 0, a)
+    m.set(0, 1, b)
+    m.set(1, 0, c)
+    m.set(1, 1, d)
+    ret m
+end
+
+func check_det(eps: f64):
+    // The closed forms for 1x1, 2x2 and 3x3
+    mut one := matrix.Full(1, 1, 5.0)
+    testing.AssertEqFloat(matrix.Det(one), 5.0, eps)
+
+    mut two := mk2(4.0, 7.0, 2.0, 6.0)
+    testing.AssertEqFloat(matrix.Det(two), 10.0, eps)
+
+    mut three := mk3(6.0, 1.0, 1.0, 4.0, 0.0 - 2.0, 5.0, 2.0, 8.0, 7.0)
+    testing.AssertEqFloat(matrix.Det(three), 0.0 - 306.0, eps)
+
+    // A singular matrix has determinant zero
+    mut sing := mk3(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0)
+    testing.AssertEqFloat(matrix.Det(sing), 0.0, 0.0000001)
+
+    // Beyond 3x3 the LU path takes over. det(I) = 1, det(diag) is the product.
+    mut e5 := matrix.Eye(5)
+    testing.AssertEqFloat(matrix.Det(e5), 1.0, eps)
+    mut d5 := matrix.Eye(5)
+    repeat 5 with i: d5.set(i, i, (i + 2) as f64) end
+    testing.AssertEqFloat(matrix.Det(d5), 720.0, 0.0000001)
+
+    // Swapping two rows flips the sign
+    mut swapped := matrix.Clone(d5)
+    matrix.SwapRows(swapped, 0, 1)
+    testing.AssertEqFloat(matrix.Det(swapped), 0.0 - 720.0, 0.0000001)
+
+    // A non-square matrix has no determinant
+    mut rect := matrix.Zeros(2, 3)
+    testing.AssertEqFloat(matrix.Det(rect), 0.0, eps)
+
+    // log|det| for a matrix whose determinant is far too large to represent
+    mut big := matrix.Eye(200)
+    repeat 200 with i: big.set(i, i, 10.0) end
+    testing.AssertEqFloat(matrix.LogAbsDet(big), 200.0 * 2.302585092994046, 0.000001)
+
+    one.free()
+    two.free()
+    three.free()
+    sing.free()
+    e5.free()
+    d5.free()
+    swapped.free()
+    rect.free()
+    big.free()
+end
+
+func check_solve(eps: f64):
+    // 2x + y = 5, x + 3y = 10  ->  x = 1, y = 3
+    mut a := mk2(2.0, 1.0, 1.0, 3.0)
+    mut b := matrix.Zeros(2, 1)
+    b.set(0, 0, 5.0)
+    b.set(1, 0, 10.0)
+    mut x := matrix.Solve(a, b)
+    testing.AssertEqFloat(x.at(0, 0), 1.0, 0.000000001)
+    testing.AssertEqFloat(x.at(1, 0), 3.0, 0.000000001)
+
+    // The residual of a good solve is zero
+    mut r := matrix.Residual(a, x, b)
+    testing.AssertEqFloat(matrix.NormFrobenius(r), 0.0, 0.000000001)
+
+    // SolveVec is the single-column spelling
+    mut xv := matrix.SolveVec(a, b)
+    testing.AssertTrue(matrix.AllClose(x, xv, eps))
+
+    // A zero pivot in the natural order is exactly what pivoting is for
+    mut swap := mk2(0.0, 1.0, 1.0, 0.0)
+    mut sb := matrix.Zeros(2, 1)
+    sb.set(0, 0, 3.0)
+    sb.set(1, 0, 7.0)
+    mut sx := matrix.Solve(swap, sb)
+    testing.AssertEqFloat(sx.at(0, 0), 7.0, eps)
+    testing.AssertEqFloat(sx.at(1, 0), 3.0, eps)
+
+    // A singular system has no solution and says so
+    mut sing := mk2(1.0, 2.0, 2.0, 4.0)
+    mut bad := matrix.Solve(sing, sb)
+    testing.AssertTrue(bad.is_empty())
+
+    a.free()
+    b.free()
+    x.free()
+    r.free()
+    xv.free()
+    swap.free()
+    sb.free()
+    sx.free()
+    sing.free()
+    bad.free()
+end
+
+func check_multi_rhs():
+    // One factorization, several right-hand sides
+    mut a := mk3(2.0, 1.0, 1.0, 1.0, 3.0, 2.0, 1.0, 0.0, 0.0)
+    mut b := matrix.Eye(3)
+    mut x := matrix.Solve(a, b)
+    testing.AssertEqInt(x.rows, 3)
+    testing.AssertEqInt(x.cols, 3)
+
+    // Solving against the identity is the inverse
+    mut inv := matrix.Inverse(a)
+    testing.AssertTrue(matrix.AllClose(x, inv, 0.000001))
+
+    // Reusing a factorization gives the same answer
+    mut f := matrix.Decompose(a)
+    testing.AssertFalse(f.singular)
+    mut x2 := matrix.LUSolve(f, b)
+    testing.AssertTrue(matrix.AllClose(x, x2, 0.000001))
+
+    a.free()
+    b.free()
+    x.free()
+    inv.free()
+    f.free()
+    x2.free()
+end
+
+func check_inverse():
+    mut a := mk3(2.0, 1.0, 1.0, 1.0, 3.0, 2.0, 1.0, 0.0, 0.0)
+    mut inv := matrix.Inverse(a)
+
+    // A A^-1 and A^-1 A are both the identity
+    mut p := matrix.MatMul(a, inv)
+    testing.AssertTrue(matrix.IsIdentity(p, 0.000001))
+    mut q := matrix.MatMul(inv, a)
+    testing.AssertTrue(matrix.IsIdentity(q, 0.000001))
+
+    // det(A^-1) = 1/det(A)
+    testing.AssertEqFloat(matrix.Det(inv), 1.0 / matrix.Det(a), 0.000001)
+
+    // A singular matrix has no inverse
+    mut sing := mk3(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0)
+    mut none := matrix.Inverse(sing)
+    testing.AssertTrue(none.is_empty())
+
+    a.free()
+    inv.free()
+    p.free()
+    q.free()
+    sing.free()
+    none.free()
+end
+
+func check_adjugate():
+    mut a := mk3(1.0, 2.0, 3.0, 0.0, 1.0, 4.0, 5.0, 6.0, 0.0)
+    mut adj := matrix.Adjugate(a)
+
+    // A adj(A) = det(A) I
+    mut p := matrix.MatMul(a, adj)
+    d := matrix.Det(a)
+    testing.AssertEqFloat(d, 1.0, 0.000001)
+    testing.AssertEqFloat(p.at(0, 0), d, 0.000001)
+    testing.AssertEqFloat(p.at(0, 1), 0.0, 0.000001)
+    testing.AssertEqFloat(p.at(2, 2), d, 0.000001)
+
+    // The identity holds for a singular matrix too, where the inverse fails
+    mut sing := mk3(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0)
+    mut sadj := matrix.Adjugate(sing)
+    mut sp := matrix.MatMul(sing, sadj)
+    testing.AssertTrue(matrix.IsZero(sp, 0.000001))
+
+    a.free()
+    adj.free()
+    p.free()
+    sing.free()
+    sadj.free()
+    sp.free()
+end
+
+func check_hilbert_accuracy():
+    // The known hard case. The 6x6 Hilbert matrix has a condition number
+    // around 10^7, so a solve keeps roughly half its digits, and the computed
+    // inverse should still be close to the exact integer one.
+    mut h := matrix.Hilbert(6)
+    mut inv := matrix.Inverse(h)
+    mut exact := matrix.HilbertInverse(6)
+    mut d := matrix.Sub(inv, exact)
+    rel := matrix.NormFrobenius(d) / matrix.NormFrobenius(exact)
+    testing.AssertTrue(rel < 0.0001)
+
+    // And its condition number is genuinely enormous
+    testing.AssertTrue(matrix.Cond2(h) > 1.0e6)
+
+    h.free()
+    inv.free()
+    exact.free()
+    d.free()
+end
+
+func main:
+    eps := 0.000000001
+    check_det(eps)
+    check_solve(eps)
+    check_multi_rhs()
+    check_inverse()
+    check_adjugate()
+    check_hilbert_accuracy()
+    ret testing.Summary()
+end

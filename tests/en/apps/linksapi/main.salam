@@ -47,7 +47,6 @@ package main
 //    where somebody will later add a route in the wrong place.
 
 import os
-import auth
 import jwt
 import conv
 import crypto
@@ -67,8 +66,8 @@ func secret(): str:
     ret "dev-only-secret-change-me"
 end
 
-func guard(): auth.Guard:
-    mut g := auth.NewGuard(secret())
+func guard(): jwt.Guard:
+    mut g := jwt.NewGuard(secret())
     g.opts.issuer = "links.salam"
     g.opts.require_exp = true
     g.opts.leeway = 30 as i64
@@ -92,9 +91,24 @@ func db_fail(ctx: i64, where: str, err: str):
     fail(ctx, 500, "database error")
 end
 
+// A connection for this request, or a 503 and false. Every handler that
+// touches the database starts with this and pairs it with `defer
+// store.Close(conn)` - the connection belongs to this request and to this
+// thread, and it goes away when the handler returns however it returns.
+func db(ctx: i64, c &: store.Conn): bool:
+    conn := store.Connect()
+    if !store.Ok(conn):
+        println "[db] connect: ", store.Err(conn)
+        fail(ctx, 503, "database unavailable")
+        ret false
+    end
+    c = conn
+    ret true
+end
+
 func caller(ctx: i64): i64:
     mut t := jwt.Token {}
-    if !auth.Require(ctx, guard(), t): ret 0 as i64 end
+    if !jwt.Require(ctx, guard(), t): ret 0 as i64 end
     ret t.claims.sub.to_int() as i64
 end
 
@@ -138,11 +152,11 @@ end
 // A random code, retried on the (very unlikely) collision. RandomSecret is
 // hex, so the alphabet is 16 characters wide and CODE_LEN of them is about
 // 28 bits - fine for a demo, worth widening for a real one.
-func fresh_code(): str:
+func fresh_code(conn: store.Conn): str:
     mut tries := 0
     until tries < 8:
         candidate := crypto.RandomHex(CODE_LEN).substr(0, CODE_LEN)
-        if !store.CodeExists(candidate): ret candidate end
+        if !store.CodeExists(conn, candidate): ret candidate end
         tries += 1
     end
     ret ""
@@ -151,6 +165,9 @@ end
 // ---------------------------------------------------------------- auth
 
 func register(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
     body := http.Ctx_body(ctx)
     email := json.Get(body, "email").trim().lower()
     password := json.Get(body, "password")
@@ -162,12 +179,12 @@ func register(ctx: i64):
         fail(ctx, 400, "password must be at least 8 characters")
         ret
     end
-    if store.FindUser(email).id != 0 as i64:
+    if store.FindUser(conn, email).id != 0 as i64:
         fail(ctx, 409, "that email is already registered")
         ret
     end
     mut err := ""
-    id := store.CreateUser(email, auth.HashPassword(password), err)
+    id := store.CreateUser(conn, email, crypto.HashPassword(password), err)
     if id == 0 as i64:
         db_fail(ctx, "create user", err)
         ret
@@ -176,11 +193,14 @@ func register(ctx: i64):
 end
 
 func login(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
     body := http.Ctx_body(ctx)
-    u := store.FindUser(json.Get(body, "email").trim().lower())
+    u := store.FindUser(conn, json.Get(body, "email").trim().lower())
     mut stored := u.hash
-    if stored.len() == 0: stored = auth.HashPassword("_no_such_user_") end
-    ok := auth.VerifyPassword(json.Get(body, "password"), stored)
+    if stored.len() == 0: stored = crypto.HashPassword("_no_such_user_") end
+    ok := crypto.VerifyPassword(json.Get(body, "password"), stored)
     if u.id == 0 as i64 || !ok:
         fail(ctx, 401, "invalid email or password")
         ret
@@ -188,13 +208,16 @@ func login(ctx: i64):
     mut c := jwt.NewClaims()
     c.sub = conv.FormatInt(u.id)
     mut err := 0
-    token := auth.Issue(guard(), c, ACCESS_TTL as i64, err)
+    token := jwt.Issue(guard(), c, ACCESS_TTL as i64, err)
     send(ctx, 200, `{"access":`.concat(json.Str(token)).concat("}"))
 end
 
 // ---------------------------------------------------------------- links
 
 func create_link(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
     uid := caller(ctx)
     if uid == 0 as i64: ret end
     body := http.Ctx_body(ctx)
@@ -205,7 +228,7 @@ func create_link(ctx: i64):
     end
     mut code := json.Get(body, "code").trim()
     if code.len() == 0:
-        code = fresh_code()
+        code = fresh_code(conn)
         if code.len() == 0:
             fail(ctx, 500, "could not allocate a code")
             ret
@@ -217,7 +240,7 @@ func create_link(ctx: i64):
         end
     end
     mut err := ""
-    reason := store.CreateLink(uid, code, target, err)
+    reason := store.CreateLink(conn, uid, code, target, err)
     if reason == "taken":
         fail(ctx, 409, "that code is already in use")
         ret
@@ -227,23 +250,26 @@ func create_link(ctx: i64):
         ret
     end
     http.Ctx_set_header(ctx, "Location", "/".concat(code))
-    send(ctx, 201, store.GetLink(code))
+    send(ctx, 201, store.GetLink(conn, code))
 end
 
 func my_links(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
     uid := caller(ctx)
     if uid == 0 as i64: ret end
     limit := int_param(ctx, "limit", 20, MAX_PAGE)
     offset := int_param(ctx, "offset", 0, 100000)
-    send(ctx, 200, store.MyLinks(uid, limit, offset))
+    send(ctx, 200, store.MyLinks(conn, uid, limit, offset))
 end
 
 // Load a link and check it is the caller's. 404 rather than 403 for someone
 // else's code: whether a code exists is public information via the redirect,
 // but who owns it is not.
-func own_code(ctx: i64, uid: i64, code &: str): bool:
+func own_code(conn: store.Conn, ctx: i64, uid: i64, code &: str): bool:
     c := http.Ctx_param(ctx, "code")
-    owner := store.OwnerOf(c)
+    owner := store.OwnerOf(conn, c)
     if owner == 0 as i64 || owner != uid:
         fail(ctx, 404, "no such link")
         ret false
@@ -253,51 +279,63 @@ func own_code(ctx: i64, uid: i64, code &: str): bool:
 end
 
 func get_link(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
     uid := caller(ctx)
     if uid == 0 as i64: ret end
     mut code := ""
-    if !own_code(ctx, uid, code): ret end
-    send(ctx, 200, store.GetLink(code))
+    if !own_code(conn, ctx, uid, code): ret end
+    send(ctx, 200, store.GetLink(conn, code))
 end
 
 func link_stats(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
     uid := caller(ctx)
     if uid == 0 as i64: ret end
     mut code := ""
-    if !own_code(ctx, uid, code): ret end
-    l := store.Resolve(code)
+    if !own_code(conn, ctx, uid, code): ret end
+    l := store.Resolve(conn, code)
     days := int_param(ctx, "days", 30, 365)
     mut out := `{"code":`.concat(json.Str(code))
-    out = out.concat(`,"daily":`).concat(store.DailyStats(l.id, days))
-    out = out.concat(`,"referers":`).concat(store.TopReferers(l.id, 10))
+    out = out.concat(`,"daily":`).concat(store.DailyStats(conn, l.id, days))
+    out = out.concat(`,"referers":`).concat(store.TopReferers(conn, l.id, 10))
     send(ctx, 200, out.concat("}"))
 end
 
 func update_link(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
     uid := caller(ctx)
     if uid == 0 as i64: ret end
     mut code := ""
-    if !own_code(ctx, uid, code): ret end
+    if !own_code(conn, ctx, uid, code): ret end
     body := http.Ctx_body(ctx)
     if !json.Has(body, "disabled"):
         fail(ctx, 400, "nothing to update")
         ret
     end
     mut err := ""
-    if !store.SetDisabled(code, uid, json.Get(body, "disabled") == "true", err):
+    if !store.SetDisabled(conn, code, uid, json.Get(body, "disabled") == "true", err):
         db_fail(ctx, "update link", err)
         ret
     end
-    send(ctx, 200, store.GetLink(code))
+    send(ctx, 200, store.GetLink(conn, code))
 end
 
 func delete_link(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
     uid := caller(ctx)
     if uid == 0 as i64: ret end
     mut code := ""
-    if !own_code(ctx, uid, code): ret end
+    if !own_code(conn, ctx, uid, code): ret end
     mut err := ""
-    if !store.DeleteLink(code, uid, err):
+    if !store.DeleteLink(conn, code, uid, err):
         db_fail(ctx, "delete link", err)
         ret
     end
@@ -311,8 +349,11 @@ end
 // JSON. Note the order of operations: the redirect is written FIRST, then
 // the click is recorded. A visitor should never wait on analytics.
 func redirect(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
     code := http.Ctx_param(ctx, "code")
-    l := store.Resolve(code)
+    l := store.Resolve(conn, code)
     if l.id == 0 as i64:
         fail(ctx, 404, "no such link")
         ret
@@ -324,7 +365,7 @@ func redirect(ctx: i64):
         ret
     end
     http.Ctx_redirect(ctx, l.target)
-    store.RecordClick(l.id, http.Ctx_header(ctx, "Referer"))
+    store.RecordClick(conn, l.id, http.Ctx_header(ctx, "Referer"))
 end
 
 func health(ctx: i64):
@@ -332,13 +373,19 @@ func health(ctx: i64):
 end
 
 func main:
+    // Reads the settings, initialises the client library, and proves the
+    // credentials work by opening one connection and closing it again. After
+    // this returns, no connection is held: each request makes its own.
+    //
+    // The library init has to happen here, on the main thread, before any
+    // request thread exists - see _store.salam's header.
     mut err := ""
-    if !store.Open(err):
+    if !store.Configure(err):
         println "cannot reach the database: ", err
         println "set DB_HOST / DB_PORT / DB_USER / DB_PASS / DB_NAME, then load schema.sql"
         ret 1
     end
-    defer store.Close()
+    defer store.Shutdown()
     mut r := router.NewRouter()
     router.Get(r, "/health", health)
     router.Post(r, "/auth/register", register)

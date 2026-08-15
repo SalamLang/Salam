@@ -1,0 +1,257 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/matrix: iterative solvers, and the iterative eigenvalue methods.
+
+import matrix
+import math
+import testing
+
+// A strictly diagonally dominant system, the class the stationary methods
+// are guaranteed to converge on:
+//   4x -  y      =  2
+//   -x + 4y -  z =  4
+//        -y + 4z = 10
+// with solution (1, 2, 3).
+func dominant(): matrix.Matrix:
+    mut a := matrix.Zeros(3, 3)
+    a.set(0, 0, 4.0)
+    a.set(0, 1, 0.0 - 1.0)
+    a.set(1, 0, 0.0 - 1.0)
+    a.set(1, 1, 4.0)
+    a.set(1, 2, 0.0 - 1.0)
+    a.set(2, 1, 0.0 - 1.0)
+    a.set(2, 2, 4.0)
+    ret a
+end
+
+func rhs(): matrix.Matrix:
+    mut b := matrix.Zeros(3, 1)
+    b.set(0, 0, 2.0)
+    b.set(1, 0, 4.0)
+    b.set(2, 0, 10.0)
+    ret b
+end
+
+func check_dominance():
+    mut a := dominant()
+    testing.AssertTrue(matrix.IsDiagonallyDominant(a))
+
+    // [[1,2],[3,4]] is not dominant in either row
+    mut bad := matrix.Zeros(2, 2)
+    bad.set(0, 0, 1.0)
+    bad.set(0, 1, 2.0)
+    bad.set(1, 0, 3.0)
+    bad.set(1, 1, 4.0)
+    testing.AssertFalse(matrix.IsDiagonallyDominant(bad))
+
+    mut rect := matrix.Zeros(2, 3)
+    testing.AssertFalse(matrix.IsDiagonallyDominant(rect))
+
+    a.free()
+    bad.free()
+    rect.free()
+end
+
+func check_stationary():
+    tol := 0.000000001
+    mut a := dominant()
+    mut b := rhs()
+    mut exact := matrix.Solve(a, b)
+    testing.AssertEqFloat(exact.at(0, 0), 1.0, 0.000001)
+    testing.AssertEqFloat(exact.at(1, 0), 2.0, 0.000001)
+    testing.AssertEqFloat(exact.at(2, 0), 3.0, 0.000001)
+
+    mut j := matrix.SolveJacobi(a, b, 500, tol)
+    testing.AssertTrue(j.converged)
+    testing.AssertTrue(matrix.AllClose(j.x, exact, 0.000001))
+
+    mut g := matrix.SolveGaussSeidel(a, b, 500, tol)
+    testing.AssertTrue(g.converged)
+    testing.AssertTrue(matrix.AllClose(g.x, exact, 0.000001))
+
+    // Gauss-Seidel converges in fewer sweeps than Jacobi, which is the whole
+    // reason to prefer it.
+    testing.AssertTrue(g.iterations < j.iterations)
+
+    // omega = 1 makes SOR exactly Gauss-Seidel
+    mut s1 := matrix.SolveSOR(a, b, 1.0, 500, tol)
+    testing.AssertEqInt(s1.iterations, g.iterations)
+
+    // A well-chosen over-relaxation beats it
+    mut s := matrix.SolveSOR(a, b, 1.03, 500, tol)
+    testing.AssertTrue(s.converged)
+    testing.AssertTrue(matrix.AllClose(s.x, exact, 0.000001))
+    testing.AssertTrue(s.iterations < g.iterations)
+
+    // Stopping early leaves an unconverged result, honestly reported
+    mut early := matrix.SolveJacobi(a, b, 2, tol)
+    testing.AssertFalse(early.converged)
+    testing.AssertTrue(early.residual > tol)
+
+    a.free()
+    b.free()
+    exact.free()
+    j.free()
+    g.free()
+    s1.free()
+    s.free()
+    early.free()
+end
+
+func check_cg():
+    tol := 0.000000001
+    // Conjugate gradient needs symmetric positive definite input
+    mut a := dominant()
+    testing.AssertTrue(matrix.IsSymmetric(a, 0.0))
+    testing.AssertTrue(matrix.IsPositiveDefinite(a, 0.000000001))
+
+    mut b := rhs()
+    mut exact := matrix.Solve(a, b)
+    mut cg := matrix.SolveCG(a, b, 100, tol)
+    testing.AssertTrue(cg.converged)
+    testing.AssertTrue(matrix.AllClose(cg.x, exact, 0.000001))
+
+    // In exact arithmetic CG terminates in at most n steps
+    testing.AssertTrue(cg.iterations <= 3)
+
+    // It scales to a larger random positive definite system
+    mut big := matrix.RandomSPD(20, 99)
+    mut bb := matrix.RandomNormal(20, 1, 5)
+    mut xe := matrix.Solve(big, bb)
+    mut xc := matrix.SolveCG(big, bb, 500, 0.0000000001)
+    testing.AssertTrue(xc.converged)
+    testing.AssertTrue(matrix.AllClose(xc.x, xe, 0.00001))
+
+    // Wrong shapes are refused
+    mut rect := matrix.Zeros(2, 3)
+    mut none := matrix.SolveCG(rect, b, 10, tol)
+    testing.AssertTrue(none.x.is_empty())
+
+    a.free()
+    b.free()
+    exact.free()
+    cg.free()
+    big.free()
+    bb.free()
+    xe.free()
+    xc.free()
+    rect.free()
+    none.free()
+end
+
+func check_power_iteration():
+    // [[2,1],[1,2]] has dominant eigenvalue 3
+    mut a := matrix.Zeros(2, 2)
+    a.set(0, 0, 2.0)
+    a.set(0, 1, 1.0)
+    a.set(1, 0, 1.0)
+    a.set(1, 1, 2.0)
+
+    mut r := matrix.PowerIteration(a, 200)
+    // The eigenvalue is appended after the eigenvector
+    testing.AssertEqInt(r.rows, 3)
+    testing.AssertEqFloat(r.at(2, 0), 3.0, 0.000001)
+
+    // The vector part really is an eigenvector
+    mut v := matrix.SubMatrix(r, 0, 0, 2, 1)
+    mut av := matrix.MatVec(a, v)
+    mut lv := matrix.Scale(v, 3.0)
+    testing.AssertTrue(matrix.AllClose(av, lv, 0.000001))
+
+    // And the Rayleigh quotient at an eigenvector is the eigenvalue
+    testing.AssertEqFloat(matrix.Rayleigh(a, v), 3.0, 0.000001)
+
+    // It agrees with the symmetric eigensolver
+    mut ev := matrix.EigValsSym(a)
+    testing.AssertEqFloat(ev.at(0, 0), 3.0, 0.000001)
+
+    // A diagonal matrix with a clearly separated top eigenvalue
+    mut d := matrix.Eye(3)
+    d.set(0, 0, 10.0)
+    d.set(1, 1, 2.0)
+    d.set(2, 2, 1.0)
+    mut rd := matrix.PowerIteration(d, 200)
+    testing.AssertEqFloat(rd.at(3, 0), 10.0, 0.000001)
+
+    a.free()
+    r.free()
+    v.free()
+    av.free()
+    lv.free()
+    ev.free()
+    d.free()
+    rd.free()
+end
+
+func check_shifted_inverse():
+    // Aimed near the smaller eigenvalue, inverse iteration finds it rather
+    // than the dominant one, which the power method cannot do.
+    mut d := matrix.Eye(3)
+    d.set(0, 0, 10.0)
+    d.set(1, 1, 2.0)
+    d.set(2, 2, 1.0)
+
+    near1 := matrix.ShiftedInverseIteration(d, 1.1, 30)
+    testing.AssertEqFloat(near1, 1.0, 0.000001)
+
+    near2 := matrix.ShiftedInverseIteration(d, 2.2, 30)
+    testing.AssertEqFloat(near2, 2.0, 0.000001)
+
+    near10 := matrix.ShiftedInverseIteration(d, 9.5, 30)
+    testing.AssertEqFloat(near10, 10.0, 0.000001)
+
+    // The Rayleigh quotient is bounded by the extreme eigenvalues
+    mut x := matrix.Full(3, 1, 1.0)
+    q := matrix.Rayleigh(d, x)
+    testing.AssertTrue(q >= 1.0)
+    testing.AssertTrue(q <= 10.0)
+    testing.AssertEqFloat(q, 13.0 / 3.0, 0.000001)
+
+    // A zero vector has no quotient, and says zero rather than dividing by it
+    mut z := matrix.Zeros(3, 1)
+    testing.AssertEqFloat(matrix.Rayleigh(d, z), 0.0, 0.000001)
+
+    d.free()
+    x.free()
+    z.free()
+end
+
+func check_residuals():
+    tol := 0.0000001
+    mut a := dominant()
+    mut b := rhs()
+    mut g := matrix.SolveGaussSeidel(a, b, 500, tol)
+    // The reported residual matches an independently computed one
+    mut r := matrix.Residual(a, g.x, b)
+    testing.AssertEqFloat(g.residual, matrix.NormFrobenius(r), 0.0000000001)
+    testing.AssertTrue(math.Abs(g.residual) <= tol)
+
+    a.free()
+    b.free()
+    g.free()
+    r.free()
+end
+
+func main:
+    check_dominance()
+    check_stationary()
+    check_cg()
+    check_power_iteration()
+    check_shifted_inverse()
+    check_residuals()
+    ret testing.Summary()
+end

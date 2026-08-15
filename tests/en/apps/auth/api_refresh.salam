@@ -36,7 +36,7 @@ package main
 // it. Without that check an access token would also be a refresh token, and
 // a stolen one could renew itself forever.
 
-import auth
+import crypto
 import jwt
 import conv
 import net.http
@@ -47,15 +47,15 @@ const PORT := 8082
 const ACCESS_TTL := 900
 const REFRESH_TTL := 604800
 
-func guard(): auth.Guard:
-    mut g := auth.NewGuard("dev-only-secret-change-me")
-    g.opts.issuer = "auth.example"
+func guard(): jwt.Guard:
+    mut g := jwt.NewGuard("dev-only-secret-change-me")
+    g.opts.issuer = "jwt.example"
     g.opts.require_exp = true
     ret g
 end
 
 func password_hash(email: str): str:
-    if email == "sara@example.com": ret auth.HashPassword("hunter2") end
+    if email == "sara@example.com": ret crypto.HashPassword("hunter2") end
     ret ""
 end
 
@@ -69,7 +69,7 @@ func issue_access(subject: str, err &: int): str:
     c.sub = subject
     jwt.SetStr(c, "kind", "access")
     jwt.SetStr(c, "scope", "profile:read")
-    ret auth.Issue(guard(), c, ACCESS_TTL as i64, err)
+    ret jwt.Issue(guard(), c, ACCESS_TTL as i64, err)
 end
 
 func issue_refresh(subject: str, err &: int): str:
@@ -80,26 +80,26 @@ func issue_refresh(subject: str, err &: int): str:
     // revocation list keys on: store the jti of a token you want dead and
     // check it here. That is the one server-side lookup worth paying for,
     // and it belongs on the rare route, not the hot one.
-    c.jti = auth.RandomSecret(12)
-    ret auth.Issue(guard(), c, REFRESH_TTL as i64, err)
+    c.jti = crypto.RandomHex(12)
+    ret jwt.Issue(guard(), c, REFRESH_TTL as i64, err)
 end
 
 func login(ctx: i64):
     body := http.Ctx_body(ctx)
     email := json.Get(body, "email")
     stored := password_hash(email)
-    if stored.len() == 0 || !auth.VerifyPassword(json.Get(body, "password"), stored):
+    if stored.len() == 0 || !crypto.VerifyPassword(json.Get(body, "password"), stored):
         send(ctx, 401, `{"error":"invalid credentials"}`)
         ret
     end
     mut err := 0
     access := issue_access(email, err)
-    refresh := issue_refresh(email, err)
+    refresh_tok := issue_refresh(email, err)
     if err != jwt.JWT_OK:
         send(ctx, 500, `{"error":"could not issue tokens"}`)
         ret
     end
-    send(ctx, 200, `{"access":"` + access + `","refresh":"` + refresh + `","expires_in":900}`)
+    send(ctx, 200, `{"access":"` + access + `","refresh":"` + refresh_tok + `","expires_in":900}`)
 end
 
 // Spend a refresh token, get a new access token. The refresh token itself is
@@ -107,9 +107,9 @@ end
 // the stricter variant, and needs the revocation store mentioned above.
 func refresh(ctx: i64):
     mut t := jwt.Token {}
-    if !auth.Require(ctx, guard(), t): ret end
+    if !jwt.Require(ctx, guard(), t): ret end
     if jwt.Str(t, "kind") != "refresh":
-        auth.Forbidden(ctx, "this route needs a refresh token")
+        jwt.Forbidden(ctx, "this route needs a refresh token")
         ret
     end
     mut err := 0
@@ -124,9 +124,9 @@ end
 // The other half of the rule: an ordinary route refuses a refresh token.
 func me(ctx: i64):
     mut t := jwt.Token {}
-    if !auth.Require(ctx, guard(), t): ret end
+    if !jwt.Require(ctx, guard(), t): ret end
     if jwt.Str(t, "kind") != "access":
-        auth.Forbidden(ctx, "this route needs an access token")
+        jwt.Forbidden(ctx, "this route needs an access token")
         ret
     end
     send(ctx, 200, `{"sub":"` + t.claims.sub + `","expires_at":` + expiry(t) + "}")

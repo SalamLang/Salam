@@ -1,0 +1,209 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/matrix: Householder QR, least squares and orthonormalization.
+
+import matrix
+import testing
+
+func col3(a: f64, b: f64, c: f64): matrix.Matrix:
+    mut m := matrix.Zeros(3, 1)
+    m.set(0, 0, a)
+    m.set(1, 0, b)
+    m.set(2, 0, c)
+    ret m
+end
+
+func check_factorization():
+    mut a := matrix.Zeros(3, 3)
+    a.set(0, 0, 12.0)
+    a.set(0, 1, 0.0 - 51.0)
+    a.set(0, 2, 4.0)
+    a.set(1, 0, 6.0)
+    a.set(1, 1, 167.0)
+    a.set(1, 2, 0.0 - 68.0)
+    a.set(2, 0, 0.0 - 4.0)
+    a.set(2, 1, 24.0)
+    a.set(2, 2, 0.0 - 41.0)
+
+    mut f := matrix.QRDecompose(a)
+    testing.AssertTrue(f.full_rank)
+    mut q := matrix.QRGetQ(f)
+    mut r := matrix.QRGetR(f)
+
+    // Q is orthogonal and R is upper triangular
+    testing.AssertTrue(matrix.IsOrthogonal(q, 0.000000001))
+    testing.AssertTrue(matrix.IsUpperTriangular(r, 0.000000001))
+
+    // And QR reproduces A
+    mut back := matrix.MatMul(q, r)
+    testing.AssertTrue(matrix.AllClose(back, a, 0.000000001))
+
+    // Q is orthogonal, so |det A| = |det R| = |product of R's diagonal|
+    mut prod := 1.0
+    repeat 3 with i: prod = prod * r.at(i, i) end
+    da := matrix.Det(a)
+    testing.AssertEqFloat(da * da, prod * prod, 0.001)
+    testing.AssertEqFloat(da, 0.0 - 85750.0, 0.001)
+
+    a.free()
+    f.free()
+    q.free()
+    r.free()
+    back.free()
+end
+
+func check_rectangular():
+    // A tall matrix: Q is 4x2 with orthonormal columns, R is 2x2
+    mut a := matrix.Zeros(4, 2)
+    repeat 4 with i:
+        a.set(i, 0, 1.0)
+        a.set(i, 1, (i as f64))
+    end
+    mut f := matrix.QRDecompose(a)
+    mut q := matrix.QRGetQ(f)
+    mut r := matrix.QRGetR(f)
+    testing.AssertEqInt(q.rows, 4)
+    testing.AssertEqInt(q.cols, 2)
+    testing.AssertEqInt(r.rows, 2)
+    testing.AssertEqInt(r.cols, 2)
+    testing.AssertTrue(matrix.IsOrthogonal(q, 0.000000001))
+
+    mut back := matrix.MatMul(q, r)
+    testing.AssertTrue(matrix.AllClose(back, a, 0.000000001))
+
+    a.free()
+    f.free()
+    q.free()
+    r.free()
+    back.free()
+end
+
+func check_square_solve():
+    // For a square nonsingular system, least squares is the exact solution
+    mut a := matrix.Zeros(2, 2)
+    a.set(0, 0, 2.0)
+    a.set(0, 1, 1.0)
+    a.set(1, 0, 1.0)
+    a.set(1, 1, 3.0)
+    mut b := matrix.Zeros(2, 1)
+    b.set(0, 0, 5.0)
+    b.set(1, 0, 10.0)
+
+    mut x := matrix.LeastSquares(a, b)
+    testing.AssertEqFloat(x.at(0, 0), 1.0, 0.0000001)
+    testing.AssertEqFloat(x.at(1, 0), 3.0, 0.0000001)
+
+    mut direct := matrix.Solve(a, b)
+    testing.AssertTrue(matrix.AllClose(x, direct, 0.0000001))
+
+    a.free()
+    b.free()
+    x.free()
+    direct.free()
+end
+
+func check_least_squares():
+    // Fit y = c0 + c1 t through (0,1), (1,3), (2,5): an exact line, so the
+    // residual must vanish and the coefficients must be 1 and 2.
+    mut design := matrix.Zeros(3, 2)
+    repeat 3 with i:
+        design.set(i, 0, 1.0)
+        design.set(i, 1, (i as f64))
+    end
+    mut y := col3(1.0, 3.0, 5.0)
+    mut beta := matrix.LeastSquares(design, y)
+    testing.AssertEqInt(beta.rows, 2)
+    testing.AssertEqInt(beta.cols, 1)
+    testing.AssertEqFloat(beta.at(0, 0), 1.0, 0.0000001)
+    testing.AssertEqFloat(beta.at(1, 0), 2.0, 0.0000001)
+
+    mut res := matrix.Residual(design, beta, y)
+    testing.AssertEqFloat(matrix.NormFrobenius(res), 0.0, 0.0000001)
+
+    // Now an inconsistent system: (0,1), (1,3), (2,4). The best line through
+    // these has slope 1.5 and intercept 7/6, and a nonzero residual.
+    mut y2 := col3(1.0, 3.0, 4.0)
+    mut beta2 := matrix.LeastSquares(design, y2)
+    testing.AssertEqFloat(beta2.at(1, 0), 1.5, 0.0000001)
+    testing.AssertEqFloat(beta2.at(0, 0), 7.0 / 6.0, 0.0000001)
+    mut res2 := matrix.Residual(design, beta2, y2)
+    testing.AssertTrue(matrix.NormFrobenius(res2) > 0.0)
+
+    // The least squares residual is orthogonal to the column space, which is
+    // the defining property of the projection.
+    mut proj := matrix.TransposeMul(design, res2)
+    testing.AssertTrue(matrix.IsZero(proj, 0.0000001))
+
+    // An underdetermined system is refused here; PseudoInverse answers it
+    mut wide := matrix.Zeros(2, 3)
+    mut wb := matrix.Zeros(2, 1)
+    mut none := matrix.LeastSquares(wide, wb)
+    testing.AssertTrue(none.is_empty())
+
+    design.free()
+    y.free()
+    beta.free()
+    res.free()
+    y2.free()
+    beta2.free()
+    res2.free()
+    proj.free()
+    wide.free()
+    wb.free()
+    none.free()
+end
+
+func check_orthonormalize():
+    // Three independent columns give three orthonormal ones
+    mut a := matrix.Zeros(3, 3)
+    a.set(0, 0, 1.0)
+    a.set(1, 0, 1.0)
+    a.set(0, 1, 1.0)
+    a.set(2, 1, 1.0)
+    a.set(1, 2, 1.0)
+    a.set(2, 2, 1.0)
+    mut o := matrix.Orthonormalize(a)
+    testing.AssertEqInt(o.cols, 3)
+    testing.AssertTrue(matrix.IsOrthogonal(o, 0.000000001))
+
+    // A dependent column is dropped rather than normalized into noise, so the
+    // width of the result is the numerical rank.
+    mut dep := matrix.Zeros(3, 3)
+    repeat 3 with i:
+        dep.set(i, 0, 1.0)
+        dep.set(i, 1, 2.0)
+        dep.set(i, 2, (i as f64))
+    end
+    mut od := matrix.Orthonormalize(dep)
+    testing.AssertEqInt(od.cols, 2)
+    testing.AssertTrue(matrix.IsOrthogonal(od, 0.000000001))
+    testing.AssertEqInt(matrix.MatrixRank(dep, 0.0), 2)
+
+    a.free()
+    o.free()
+    dep.free()
+    od.free()
+end
+
+func main:
+    check_factorization()
+    check_rectangular()
+    check_square_solve()
+    check_least_squares()
+    check_orthonormalize()
+    ret testing.Summary()
+end

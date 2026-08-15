@@ -14,33 +14,42 @@
 
 package store
 
-// SQL for the library API, and the one file in these examples that runs a
-// transaction.
+// SQL for the library API, and the file that shows how to talk to MariaDB
+// from a threaded server.
 //
-// BORROWING IS THE WHOLE POINT
+// ONE CONNECTION PER REQUEST, NEVER ONE PER PROCESS
 //
-// The obvious way to lend a book is: SELECT the copy count, check it is more
-// than zero, then UPDATE it down by one. That code is wrong on any server
-// with two clients. Between the SELECT and the UPDATE another request can do
-// the same thing, and the last copy goes out twice.
+// net/http gives every connection its own thread. A MariaDB connection
+// cannot be used by two threads at once - not "should not", cannot: the
+// driver multiplexes one socket with one result-set cursor, so a second
+// thread sending a command while the first is reading rows puts the protocol
+// out of sync, libmariadb tears the connection down mid-read, and the first
+// thread walks freed memory. That is a segfault, not an error return.
 //
-// The fix is not a bigger lock, it is a smaller step. The condition moves
-// INTO the update:
+// A mutex around every call does technically prevent it, and was tried here
+// first. It is still the wrong answer: it serializes the entire server behind
+// one socket, so a thread-per-connection server can never do two things at
+// once and one slow query blocks every other request in the process.
 //
-//     UPDATE books SET copies_available = copies_available - 1
-//      WHERE id = ? AND copies_available > 0
+// So there is no shared connection in this file. Connect() opens one, the
+// handler closes it, and nothing crosses a thread boundary:
 //
-// One statement. The database applies it atomically, and AffectedRows tells
-// you whether YOU were the one who got the copy: 1 means yes, 0 means
-// someone else took the last one between your read and your write. No
-// SELECT ... FOR UPDATE, no retry loop, no lock held across a round trip.
+//     mut c := store.Conn { }
+//     if !db(ctx, c): ret end        // Connect, or 503
+//     defer store.Close(c)           // released however the handler exits
 //
-// The transaction around it exists for a different reason: the loan row and
-// the decremented count have to land together, or the shelf count drifts.
-// Rollback on any failure, commit only when both are done.
+// The cost is a TCP connect and an auth handshake per request. On a local
+// socket that is well under a millisecond; across the internet it is a real
+// tens of milliseconds, and the answer there is a pool - N connections made
+// up front, each handed to one request at a time. A pool would be a change to
+// Connect() and Close() alone, because every function below already takes the
+// connection it uses as an argument. That is why it is passed explicitly.
+//
+// Two calls the driver requires that nothing else will make for you:
+//   - LibraryInit() once, from main, before any thread exists (main.salam)
+//   - ThreadInit() from each thread before its first call (Connect, below)
 
 import os
-import sync
 import str
 import conv
 import db.mysql
@@ -50,8 +59,29 @@ const BOOK_COLS := "id, isbn, title, author, published_year, copies_total, copie
 const LOAN_LIMIT := 3
 const LOAN_DAYS := 14
 
-mut _db := mysql.Database {}
-mut _mu := sync.Mutex {}
+// Connection settings, read once at startup and never written again. Sharing
+// them across threads is safe precisely because nothing mutates them after
+// Configure returns.
+mut _host := "127.0.0.1"
+mut _port := 3306
+mut _user := "root"
+mut _pass := ""
+mut _name := "salam_library"
+
+// One request's connection. Passed explicitly to every function here, so a
+// caller cannot be vague about which connection it is using.
+//
+// It holds the raw handle rather than a mysql.Database, and _db() rebuilds
+// the struct on the way into the driver. That is a workaround, not a design:
+// a struct field whose DEFAULT is a struct from another package makes the C
+// backend emit the type name without its module prefix - `(Database){0}`
+// instead of `(mysql__Database){0}` - and the generated C does not compile.
+// A pointer field with a `null` default has no such problem.
+pub struct Conn:
+    pub handle: void* = null
+    pub ok: bool = false
+    pub err: str = ""
+end
 
 pub struct User:
     pub id: i64 = 0
@@ -70,22 +100,9 @@ pub struct BorrowResult:
     pub due_at: str = ""
 end
 
-// Take the connection, and make this thread ready to use it.
-//
-// net/http runs every request on its own thread. libmariadb keeps per-thread
-// state that mysql_thread_init() sets up, and a single MariaDB connection
-// cannot be used by two threads at once - so every public entry point below
-// prepares the thread and then holds _mu for the whole of its work.
-//
-// KNOWN ISSUE: this is necessary but is NOT currently sufficient. Two
-// overlapping requests that both reach the database still crash the process,
-// with two threads inside libmariadb at the same time despite this lock. See
-// the "Known issue" section in ../README.md for the repro and what has been
-// ruled out. Run these examples without overlapping requests until it is
-// root-caused.
-func _enter():
-    _t := mysql.ThreadInit()
-    sync.Lock(_mu)
+// The driver handle, rebuilt from the raw pointer. See Conn above.
+func _db(c: Conn): mysql.Database:
+    ret mysql.Database { handle = c.handle }
 end
 
 func _env(name: str, fallback: str): str:
@@ -94,17 +111,25 @@ func _env(name: str, fallback: str): str:
     ret v
 end
 
-func _exec(sql: str, err &: str): bool:
+func _quote(c: Conn, s: str): str:
+    ret "'".concat(mysql.Escape(_db(c), s)).concat("'")
+end
+
+func _num(v: i64): str:
+    ret conv.FormatInt(v)
+end
+
+func _exec(c: Conn, sql: str, err &: str): bool:
     err = ""
-    if mysql.Exec(_db, sql) != 0:
-        err = mysql.Error(_db)
+    if mysql.Exec(_db(c), sql) != 0:
+        err = mysql.Error(_db(c))
         ret false
     end
     ret true
 end
 
-func _scalar(sql: str): i64:
-    mut res := mysql.Query(_db, sql)
+func _scalar(c: Conn, sql: str): i64:
+    mut res := mysql.Query(_db(c), sql)
     if !mysql.QueryOk(res): ret 0 as i64 end
     mut v := 0 as i64
     if mysql.Next(res): v = mysql.Int64(res, 0) end
@@ -172,8 +197,8 @@ func _loan_json(res: mysql.Result): str:
     ret out
 end
 
-func _book_array(sql: str): str:
-    mut res := mysql.Query(_db, sql)
+func _book_array(c: Conn, sql: str): str:
+    mut res := mysql.Query(_db(c), sql)
     if !mysql.QueryOk(res): ret "[]" end
     mut sb := str.NewBuilder()
     defer str.BufFree(sb)
@@ -190,8 +215,8 @@ func _book_array(sql: str): str:
     ret out
 end
 
-func _loan_array(sql: str): str:
-    mut res := mysql.Query(_db, sql)
+func _loan_array(c: Conn, sql: str): str:
+    mut res := mysql.Query(_db(c), sql)
     if !mysql.QueryOk(res): ret "[]" end
     mut sb := str.NewBuilder()
     defer str.BufFree(sb)
@@ -216,11 +241,9 @@ func _loan_select(): str:
     ret s
 end
 
-// Unlocked forms of the three checks Borrow makes while it already holds the
-// mutex. The public wrappers below are the same calls with the lock taken.
-func _book_row(id: i64): str:
-    sql := "SELECT ".concat(BOOK_COLS).concat(" FROM books WHERE id = ").concat(N(id)).concat(" LIMIT 1")
-    mut res := mysql.Query(_db, sql)
+func _book_row(c: Conn, id: i64): str:
+    sql := "SELECT ".concat(BOOK_COLS).concat(" FROM books WHERE id = ").concat(_num(id)).concat(" LIMIT 1")
+    mut res := mysql.Query(_db(c), sql)
     if !mysql.QueryOk(res): ret "" end
     mut out := ""
     if mysql.Next(res): out = _book_json(res) end
@@ -228,21 +251,21 @@ func _book_row(id: i64): str:
     ret out
 end
 
-func _open_loans(user_id: i64): i64:
-    mut sql := "SELECT COUNT(*) FROM loans WHERE user_id = ".concat(N(user_id))
+func _open_loans(c: Conn, user_id: i64): i64:
+    mut sql := "SELECT COUNT(*) FROM loans WHERE user_id = ".concat(_num(user_id))
     sql = sql.concat(" AND returned_at IS NULL")
-    ret _scalar(sql)
+    ret _scalar(c, sql)
 end
 
-func _has_copy_out(user_id: i64, book_id: i64): bool:
-    mut sql := "SELECT COUNT(*) FROM loans WHERE user_id = ".concat(N(user_id))
-    sql = sql.concat(" AND book_id = ").concat(N(book_id)).concat(" AND returned_at IS NULL")
-    ret _scalar(sql) > 0 as i64
+func _has_copy_out(c: Conn, user_id: i64, book_id: i64): bool:
+    mut sql := "SELECT COUNT(*) FROM loans WHERE user_id = ".concat(_num(user_id))
+    sql = sql.concat(" AND book_id = ").concat(_num(book_id)).concat(" AND returned_at IS NULL")
+    ret _scalar(c, sql) > 0 as i64
 end
 
-func _loan_due(loan_id: i64): str:
-    sql := "SELECT due_at FROM loans WHERE id = ".concat(N(loan_id))
-    mut res := mysql.Query(_db, sql)
+func _loan_due(c: Conn, loan_id: i64): str:
+    sql := "SELECT due_at FROM loans WHERE id = ".concat(_num(loan_id))
+    mut res := mysql.Query(_db(c), sql)
     if !mysql.QueryOk(res): ret "" end
     mut out := ""
     if mysql.Next(res): out = mysql.Text(res, 0) end
@@ -250,70 +273,102 @@ func _loan_due(loan_id: i64): str:
     ret out
 end
 
-// net/http runs every connection on its own thread (see std/net/http's Run:
-// one salam_spawn_fn_i64 per accepted socket), and a MariaDB connection is
-// NOT safe to use from two threads at once. Sharing one connection without
-// this mutex is not a subtle race: it segfaults, and before it does it hands
-// one request another request's rows.
-//
-// Serializing database access - one query at a time across the whole process
-// - is the honest cost of a single connection. The next step up is a pool: N
-// connections behind the same mutex, each checked out for the length of one
-// call. That is the right change to make when the lock shows up in a profile,
-// and not before.
-//
-// Q() deliberately does NOT lock: the functions below call it while holding
-// the mutex, and mysql_real_escape_string only reads the connection's charset
-// rather than touching the socket.
-
 // ---------------------------------------------------------------- connection
-pub func Open(err &: str): bool:
+
+// Read the settings and prove they work, once, from main. Returns false with
+// a reason rather than letting every request discover the problem separately.
+pub func Configure(err &: str): bool:
     err = ""
-    host := _env("DB_HOST", "127.0.0.1")
-    port := _env("DB_PORT", "3306")
-    user := _env("DB_USER", "root")
-    pass := os.Env("DB_PASS")
-    name := _env("DB_NAME", "salam_library")
-    d := mysql.Open(host, user, pass, name, port.to_int())
-    if !mysql.Ok(d):
-        err = mysql.Error(d)
+    if !mysql.LibraryInit():
+        err = "cannot initialise the MariaDB client library"
         ret false
     end
-    _x := mysql.SetCharset(d, "utf8mb4")
-    _db = d
-    _mu = sync.NewMutex()
+    _host = _env("DB_HOST", "127.0.0.1")
+    _port = _env("DB_PORT", "3306").to_int()
+    _user = _env("DB_USER", "root")
+    // No default. A password compiled into a program is a password in the
+    // repository, and a default of "" hides a missing one until production.
+    _pass = os.Env("DB_PASS")
+    _name = _env("DB_NAME", "salam_library")
+    probe := Connect()
+    if !probe.ok:
+        err = probe.err
+        ret false
+    end
+    Close(probe)
     ret true
 end
 
-pub func Close():
-    mysql.Close(_db)
+// One connection, for one request, on the thread that will use it.
+pub func Connect(): Conn:
+    mut c := Conn {}
+    // Per-thread driver state. Cheap after the first call on a thread, and
+    // required before any other libmariadb call from it.
+    _t := mysql.ThreadInit()
+    d := mysql.Open(_host, _user, _pass, _name, _port)
+    if !mysql.Ok(d):
+        c.err = mysql.Error(d)
+        // Even a failed handle has to be closed: mysql_init allocated it.
+        mysql.Close(d)
+        ret c
+    end
+    // Tell the server the connection speaks utf8mb4, or a 4-byte character
+    // arrives mangled no matter what the column says.
+    _x := mysql.SetCharset(d, "utf8mb4")
+    c.handle = d.handle
+    c.ok = true
+    ret c
 end
 
-pub func Q(s: str): str:
-    ret "'".concat(mysql.Escape(_db, s)).concat("'")
+pub func Close(c: Conn):
+    if c.handle != null: mysql.Close(_db(c)) end
 end
 
+pub func Ok(c: Conn): bool:
+    ret c.ok
+end
+
+pub func Err(c: Conn): str:
+    ret c.err
+end
+
+// Release the calling thread's driver state. A request thread does not need
+// it - the thread dies with the request - but a long-lived worker that stops
+// using the database should.
+pub func ThreadDone():
+    mysql.ThreadEnd()
+end
+
+pub func Shutdown():
+    mysql.LibraryEnd()
+end
+
+// A string, escaped and quoted, ready to drop into SQL. Takes the connection
+// because escaping depends on its character set.
+pub func Q(c: Conn, s: str): str:
+    ret _quote(c, s)
+end
+
+// A number, as SQL text. Going through i64 means a caller cannot smuggle
+// anything but digits into the statement.
 pub func N(v: i64): str:
-    ret conv.FormatInt(v)
+    ret _num(v)
 end
 
 // ---------------------------------------------------------------- users
-pub func CreateUser(email: str, hash: str, err &: str): i64:
-    _enter()
-    defer sync.Unlock(_mu)
+
+pub func CreateUser(c: Conn, email: str, hash: str, err &: str): i64:
     mut sql := "INSERT INTO users (email, pass_hash) VALUES ("
-    sql = sql.concat(Q(email)).concat(", ").concat(Q(hash)).concat(")")
-    if !_exec(sql, err): ret 0 as i64 end
-    ret mysql.LastInsertId(_db)
+    sql = sql.concat(_quote(c, email)).concat(", ").concat(_quote(c, hash)).concat(")")
+    if !_exec(c, sql, err): ret 0 as i64 end
+    ret mysql.LastInsertId(_db(c))
 end
 
-pub func FindUser(email: str): User:
-    _enter()
-    defer sync.Unlock(_mu)
+pub func FindUser(c: Conn, email: str): User:
     mut u := User {}
     mut sql := "SELECT id, email, pass_hash, role FROM users WHERE email = "
-    sql = sql.concat(Q(email)).concat(" LIMIT 1")
-    mut res := mysql.Query(_db, sql)
+    sql = sql.concat(_quote(c, email)).concat(" LIMIT 1")
+    mut res := mysql.Query(_db(c), sql)
     if !mysql.QueryOk(res): ret u end
     if mysql.Next(res):
         u.id = mysql.Int64(res, 0)
@@ -325,207 +380,192 @@ pub func FindUser(email: str): User:
     ret u
 end
 
-pub func IsLibrarian(user_id: i64): bool:
-    _enter()
-    defer sync.Unlock(_mu)
-    sql := "SELECT COUNT(*) FROM users WHERE id = ".concat(N(user_id)).concat(" AND role = 'librarian'")
-    ret _scalar(sql) > 0 as i64
+pub func IsLibrarian(c: Conn, user_id: i64): bool:
+    sql := "SELECT COUNT(*) FROM users WHERE id = ".concat(_num(user_id)).concat(" AND role = 'librarian'")
+    ret _scalar(c, sql) > 0 as i64
 end
 
 // ---------------------------------------------------------------- catalogue
-pub func ListBooks(q: str, only_available: bool, limit: int, offset: int): str:
-    _enter()
-    defer sync.Unlock(_mu)
+
+pub func ListBooks(c: Conn, q: str, only_available: bool, limit: int, offset: int): str:
     mut sql := "SELECT ".concat(BOOK_COLS).concat(" FROM books WHERE 1 = 1")
     if q.len() > 0:
-        like := Q("%".concat(q).concat("%"))
+        like := _quote(c, "%".concat(q).concat("%"))
         sql = sql.concat(" AND (title LIKE ").concat(like).concat(" OR author LIKE ").concat(like)
         sql = sql.concat(" OR isbn LIKE ").concat(like).concat(")")
     end
     if only_available: sql = sql.concat(" AND copies_available > 0") end
-    sql = sql.concat(" ORDER BY title ASC LIMIT ").concat(N(limit as i64))
-    sql = sql.concat(" OFFSET ").concat(N(offset as i64))
-    ret _book_array(sql)
+    sql = sql.concat(" ORDER BY title ASC LIMIT ").concat(_num(limit as i64))
+    sql = sql.concat(" OFFSET ").concat(_num(offset as i64))
+    ret _book_array(c, sql)
 end
 
-pub func CountBooks(q: str, only_available: bool): i64:
-    _enter()
-    defer sync.Unlock(_mu)
+pub func CountBooks(c: Conn, q: str, only_available: bool): i64:
     mut sql := "SELECT COUNT(*) FROM books WHERE 1 = 1"
     if q.len() > 0:
-        like := Q("%".concat(q).concat("%"))
+        like := _quote(c, "%".concat(q).concat("%"))
         sql = sql.concat(" AND (title LIKE ").concat(like).concat(" OR author LIKE ").concat(like)
         sql = sql.concat(" OR isbn LIKE ").concat(like).concat(")")
     end
     if only_available: sql = sql.concat(" AND copies_available > 0") end
-    ret _scalar(sql)
+    ret _scalar(c, sql)
 end
 
-pub func GetBook(id: i64): str:
-    _enter()
-    defer sync.Unlock(_mu)
-    ret _book_row(id)
+pub func GetBook(c: Conn, id: i64): str:
+    ret _book_row(c, id)
 end
 
-pub func AddBook(isbn: str, title: str, author: str, year: str, copies: int, err &: str): i64:
-    _enter()
-    defer sync.Unlock(_mu)
+pub func AddBook(c: Conn, isbn: str, title: str, author: str, year: str, copies: int, err &: str): i64:
     mut cols := "isbn, title, author, copies_total, copies_available"
-    mut vals := Q(isbn).concat(", ").concat(Q(title)).concat(", ").concat(Q(author))
-    vals = vals.concat(", ").concat(N(copies as i64)).concat(", ").concat(N(copies as i64))
+    mut vals := _quote(c, isbn).concat(", ").concat(_quote(c, title)).concat(", ").concat(_quote(c, author))
+    vals = vals.concat(", ").concat(_num(copies as i64)).concat(", ").concat(_num(copies as i64))
     if year.len() > 0:
         cols = cols.concat(", published_year")
-        vals = vals.concat(", ").concat(Q(year))
+        vals = vals.concat(", ").concat(_quote(c, year))
     end
     sql := "INSERT INTO books (".concat(cols).concat(") VALUES (").concat(vals).concat(")")
-    if !_exec(sql, err): ret 0 as i64 end
-    ret mysql.LastInsertId(_db)
+    if !_exec(c, sql, err): ret 0 as i64 end
+    ret mysql.LastInsertId(_db(c))
 end
 
 // Adding copies raises both counts; the CHECK constraint stops a librarian
 // from lowering the total below what is currently on loan.
-pub func AddCopies(id: i64, delta: int, err &: str): bool:
-    _enter()
-    defer sync.Unlock(_mu)
-    mut sql := "UPDATE books SET copies_total = copies_total + ".concat(N(delta as i64))
-    sql = sql.concat(", copies_available = copies_available + ").concat(N(delta as i64))
-    sql = sql.concat(" WHERE id = ").concat(N(id))
-    if !_exec(sql, err): ret false end
-    ret mysql.AffectedRows(_db) > 0 as i64
+pub func AddCopies(c: Conn, id: i64, delta: int, err &: str): bool:
+    mut sql := "UPDATE books SET copies_total = copies_total + ".concat(_num(delta as i64))
+    sql = sql.concat(", copies_available = copies_available + ").concat(_num(delta as i64))
+    sql = sql.concat(" WHERE id = ").concat(_num(id))
+    if !_exec(c, sql, err): ret false end
+    ret mysql.AffectedRows(_db(c)) > 0 as i64
 end
 
-pub func DeleteBook(id: i64, err &: str): bool:
-    _enter()
-    defer sync.Unlock(_mu)
+pub func DeleteBook(c: Conn, id: i64, err &: str): bool:
     // Only when every copy is on the shelf. The foreign key would refuse it
     // anyway once a loan exists, but this gives a usable error instead of a
     // constraint violation.
-    mut sql := "DELETE FROM books WHERE id = ".concat(N(id))
+    mut sql := "DELETE FROM books WHERE id = ".concat(_num(id))
     sql = sql.concat(" AND copies_available = copies_total")
-    if !_exec(sql, err): ret false end
-    ret mysql.AffectedRows(_db) > 0 as i64
+    if !_exec(c, sql, err): ret false end
+    ret mysql.AffectedRows(_db(c)) > 0 as i64
 end
 
 // ---------------------------------------------------------------- borrowing
-pub func OpenLoanCount(user_id: i64): i64:
-    _enter()
-    defer sync.Unlock(_mu)
-    ret _open_loans(user_id)
+
+pub func OpenLoanCount(c: Conn, user_id: i64): i64:
+    ret _open_loans(c, user_id)
 end
 
-pub func HasCopyOut(user_id: i64, book_id: i64): bool:
-    _enter()
-    defer sync.Unlock(_mu)
-    ret _has_copy_out(user_id, book_id)
+pub func HasCopyOut(c: Conn, user_id: i64, book_id: i64): bool:
+    ret _has_copy_out(c, user_id, book_id)
 end
 
-// Lend one copy. See the header for why the availability check lives inside
-// the UPDATE and not in front of it.
-pub func Borrow(user_id: i64, book_id: i64): BorrowResult:
-    _enter()
-    defer sync.Unlock(_mu)
+// Lend one copy.
+//
+// The obvious way to do this is to SELECT the copy count, check it is above
+// zero, then UPDATE it down by one - and that is wrong on any server with two
+// clients, because another request can take the last copy in between. The fix
+// is not a bigger lock, it is a smaller step: the condition moves INTO the
+// update, and AffectedRows says whether this request was the one that got it.
+//
+// Now that each request has its own connection, two of these really do run at
+// the same time - which is exactly the case the conditional UPDATE exists to
+// survive, and what the concurrency check in the README exercises.
+pub func Borrow(c: Conn, user_id: i64, book_id: i64): BorrowResult:
     mut r := BorrowResult {}
-    if _book_row(book_id).len() == 0:
+    if _book_row(c, book_id).len() == 0:
         r.reason = "no_book"
         ret r
     end
     // These two are policy, not integrity: a stale read here means at worst
     // a member briefly holding a fourth book, and no shelf count is harmed.
     // The copy count is the one that must not be raced, and it is not.
-    if _open_loans(user_id) >= LOAN_LIMIT as i64:
+    if _open_loans(c, user_id) >= LOAN_LIMIT as i64:
         r.reason = "limit_reached"
         ret r
     end
-    if _has_copy_out(user_id, book_id):
+    if _has_copy_out(c, user_id, book_id):
         r.reason = "already_out"
         ret r
     end
     mut err := ""
-    if mysql.Begin(_db) != 0:
+    if mysql.Begin(_db(c)) != 0:
         r.reason = "db"
         ret r
     end
     mut claim := "UPDATE books SET copies_available = copies_available - 1 WHERE id = "
-    claim = claim.concat(N(book_id)).concat(" AND copies_available > 0")
-    if !_exec(claim, err):
-        _r1 := mysql.Rollback(_db)
+    claim = claim.concat(_num(book_id)).concat(" AND copies_available > 0")
+    if !_exec(c, claim, err):
+        _r1 := mysql.Rollback(_db(c))
         r.reason = "db"
         ret r
     end
     // 0 rows means the last copy went to somebody else between the check
     // above and this statement. That is exactly the race this shape exists
     // to lose safely.
-    if mysql.AffectedRows(_db) == 0 as i64:
-        _r2 := mysql.Rollback(_db)
+    if mysql.AffectedRows(_db(c)) == 0 as i64:
+        _r2 := mysql.Rollback(_db(c))
         r.reason = "unavailable"
         ret r
     end
     mut ins := "INSERT INTO loans (book_id, user_id, due_at) VALUES ("
-    ins = ins.concat(N(book_id)).concat(", ").concat(N(user_id))
-    ins = ins.concat(", DATE_ADD(CURDATE(), INTERVAL ").concat(N(LOAN_DAYS as i64)).concat(" DAY))")
-    if !_exec(ins, err):
-        _r3 := mysql.Rollback(_db)
+    ins = ins.concat(_num(book_id)).concat(", ").concat(_num(user_id))
+    ins = ins.concat(", DATE_ADD(CURDATE(), INTERVAL ").concat(_num(LOAN_DAYS as i64)).concat(" DAY))")
+    if !_exec(c, ins, err):
+        _r3 := mysql.Rollback(_db(c))
         r.reason = "db"
         ret r
     end
-    id := mysql.LastInsertId(_db)
-    if mysql.Commit(_db) != 0:
-        _r4 := mysql.Rollback(_db)
+    id := mysql.LastInsertId(_db(c))
+    if mysql.Commit(_db(c)) != 0:
+        _r4 := mysql.Rollback(_db(c))
         r.reason = "db"
         ret r
     end
     r.loan_id = id
-    r.due_at = _loan_due(id)
+    r.due_at = _loan_due(c, id)
     ret r
 end
 
 // Give it back. Same shape in reverse: the WHERE clause carries the "still
 // out" condition, so returning twice cannot credit two copies.
-pub func ReturnLoan(user_id: i64, loan_id: i64, librarian: bool): str:
-    _enter()
-    defer sync.Unlock(_mu)
-    owner_sql := "SELECT user_id FROM loans WHERE id = ".concat(N(loan_id))
-    owner := _scalar(owner_sql)
+pub func ReturnLoan(c: Conn, user_id: i64, loan_id: i64, librarian: bool): str:
+    owner_sql := "SELECT user_id FROM loans WHERE id = ".concat(_num(loan_id))
+    owner := _scalar(c, owner_sql)
     if owner == 0 as i64: ret "no_loan" end
     if owner != user_id && !librarian: ret "not_yours" end
     mut err := ""
-    if mysql.Begin(_db) != 0: ret "db" end
-    mut close := "UPDATE loans SET returned_at = NOW() WHERE id = ".concat(N(loan_id))
-    close = close.concat(" AND returned_at IS NULL")
-    if !_exec(close, err):
-        _r1 := mysql.Rollback(_db)
+    if mysql.Begin(_db(c)) != 0: ret "db" end
+    mut close_sql := "UPDATE loans SET returned_at = NOW() WHERE id = ".concat(_num(loan_id))
+    close_sql = close_sql.concat(" AND returned_at IS NULL")
+    if !_exec(c, close_sql, err):
+        _r1 := mysql.Rollback(_db(c))
         ret "db"
     end
-    if mysql.AffectedRows(_db) == 0 as i64:
-        _r2 := mysql.Rollback(_db)
+    if mysql.AffectedRows(_db(c)) == 0 as i64:
+        _r2 := mysql.Rollback(_db(c))
         ret "already_returned"
     end
     mut back := "UPDATE books SET copies_available = copies_available + 1 WHERE id ="
-    back = back.concat(" (SELECT book_id FROM loans WHERE id = ").concat(N(loan_id)).concat(")")
-    if !_exec(back, err):
-        _r3 := mysql.Rollback(_db)
+    back = back.concat(" (SELECT book_id FROM loans WHERE id = ").concat(_num(loan_id)).concat(")")
+    if !_exec(c, back, err):
+        _r3 := mysql.Rollback(_db(c))
         ret "db"
     end
-    if mysql.Commit(_db) != 0:
-        _r4 := mysql.Rollback(_db)
+    if mysql.Commit(_db(c)) != 0:
+        _r4 := mysql.Rollback(_db(c))
         ret "db"
     end
     ret ""
 end
 
-pub func MyLoans(user_id: i64, open_only: bool): str:
-    _enter()
-    defer sync.Unlock(_mu)
-    mut sql := _loan_select().concat(" WHERE l.user_id = ").concat(N(user_id))
+pub func MyLoans(c: Conn, user_id: i64, open_only: bool): str:
+    mut sql := _loan_select().concat(" WHERE l.user_id = ").concat(_num(user_id))
     if open_only: sql = sql.concat(" AND l.returned_at IS NULL") end
     sql = sql.concat(" ORDER BY l.id DESC LIMIT 100")
-    ret _loan_array(sql)
+    ret _loan_array(c, sql)
 end
 
-pub func OverdueLoans(): str:
-    _enter()
-    defer sync.Unlock(_mu)
+pub func OverdueLoans(c: Conn): str:
     mut sql := _loan_select().concat(" WHERE l.returned_at IS NULL AND l.due_at < CURDATE()")
     sql = sql.concat(" ORDER BY l.due_at ASC LIMIT 200")
-    ret _loan_array(sql)
+    ret _loan_array(c, sql)
 end

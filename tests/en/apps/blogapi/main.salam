@@ -42,7 +42,7 @@ package main
 //   role         an admin can edit anyone's, and only an admin can delete
 //
 // So authorisation cannot live in the WHERE clause here. The store returns
-// each post with its author_id, and may_edit() below is the single place
+// each post with its author_id, and may_edit(conn) below is the single place
 // that decides. One function, called by every route that changes something.
 //
 // The role is read from the DATABASE, not from the token, on every check.
@@ -51,7 +51,7 @@ package main
 // per write is a good trade for revocation that takes effect immediately.
 
 import os
-import auth
+import crypto
 import jwt
 import str
 import conv
@@ -71,8 +71,8 @@ func secret(): str:
     ret "dev-only-secret-change-me"
 end
 
-func guard(): auth.Guard:
-    mut g := auth.NewGuard(secret())
+func guard(): jwt.Guard:
+    mut g := jwt.NewGuard(secret())
     g.opts.issuer = "blog.salam"
     g.opts.require_exp = true
     // Half a minute of tolerance on exp/nbf/iat. Not politeness: two
@@ -99,20 +99,35 @@ func db_fail(ctx: i64, where: str, err: str):
     fail(ctx, 500, "database error")
 end
 
+// A connection for this request, or a 503 and false. Every handler that
+// touches the database starts with this and pairs it with `defer
+// store.Close(conn)` - the connection belongs to this request and to this
+// thread, and it goes away when the handler returns however it returns.
+func db(ctx: i64, c &: store.Conn): bool:
+    conn := store.Connect()
+    if !store.Ok(conn):
+        println "[db] connect: ", store.Err(conn)
+        fail(ctx, 503, "database unavailable")
+        ret false
+    end
+    c = conn
+    ret true
+end
+
 func caller(ctx: i64): i64:
     mut t := jwt.Token {}
-    if !auth.Require(ctx, guard(), t): ret 0 as i64 end
+    if !jwt.Require(ctx, guard(), t): ret 0 as i64 end
     ret t.claims.sub.to_int() as i64
 end
 
 // The authorisation rule, in one place. `admin` is re-read per call.
-func may_edit(user_id: i64, post: store.Post): bool:
+func may_edit(conn: store.Conn, user_id: i64, post: store.Post): bool:
     if post.author_id == user_id: ret true end
-    ret store.RoleOf(user_id) == "admin"
+    ret store.RoleOf(conn, user_id) == "admin"
 end
 
-func is_admin(user_id: i64): bool:
-    ret store.RoleOf(user_id) == "admin"
+func is_admin(conn: store.Conn, user_id: i64): bool:
+    ret store.RoleOf(conn, user_id) == "admin"
 end
 
 func int_param(ctx: i64, name: str, fallback: int, max: int): int:
@@ -174,20 +189,23 @@ end
 
 // The UNIQUE index is the real guard against a duplicate slug; this just
 // keeps the common case from turning into an error the user has to read.
-func unique_slug(stem: str): str:
-    if !store.SlugTaken(stem): ret stem end
+func unique_slug(conn: store.Conn, stem: str): str:
+    if !store.SlugTaken(conn, stem): ret stem end
     mut n := 2
     until n < 500:
         candidate := stem.concat("-").concat(conv.FormatInt(n as i64))
-        if !store.SlugTaken(candidate): ret candidate end
+        if !store.SlugTaken(conn, candidate): ret candidate end
         n += 1
     end
-    ret stem.concat("-").concat(auth.RandomSecret(4))
+    ret stem.concat("-").concat(crypto.RandomHex(4))
 end
 
 // ---------------------------------------------------------------- auth
 
 func register(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
     body := http.Ctx_body(ctx)
     email := json.Get(body, "email").trim().lower()
     password := json.Get(body, "password")
@@ -199,14 +217,14 @@ func register(ctx: i64):
         fail(ctx, 400, "password must be at least 8 characters")
         ret
     end
-    if store.FindUser(email).id != 0 as i64:
+    if store.FindUser(conn, email).id != 0 as i64:
         fail(ctx, 409, "that email is already registered")
         ret
     end
     // Everyone registers as an author. There is deliberately no way to ask
     // for "admin" over HTTP: that is an UPDATE somebody runs by hand.
     mut err := ""
-    id := store.CreateUser(email, auth.HashPassword(password), "author", err)
+    id := store.CreateUser(conn, email, crypto.HashPassword(password), "author", err)
     if id == 0 as i64:
         db_fail(ctx, "create user", err)
         ret
@@ -218,34 +236,40 @@ func issue(user_id: i64, kind: str, ttl: int, err &: int): str:
     mut c := jwt.NewClaims()
     c.sub = conv.FormatInt(user_id)
     jwt.SetStr(c, "kind", kind)
-    ret auth.Issue(guard(), c, ttl as i64, err)
+    ret jwt.Issue(guard(), c, ttl as i64, err)
 end
 
 func login(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
     body := http.Ctx_body(ctx)
-    u := store.FindUser(json.Get(body, "email").trim().lower())
+    u := store.FindUser(conn, json.Get(body, "email").trim().lower())
     mut stored := u.hash
-    if stored.len() == 0: stored = auth.HashPassword("_no_such_user_") end
-    ok := auth.VerifyPassword(json.Get(body, "password"), stored)
+    if stored.len() == 0: stored = crypto.HashPassword("_no_such_user_") end
+    ok := crypto.VerifyPassword(json.Get(body, "password"), stored)
     if u.id == 0 as i64 || !ok:
         fail(ctx, 401, "invalid email or password")
         ret
     end
     mut err := 0
     access := issue(u.id, "access", ACCESS_TTL, err)
-    refresh := issue(u.id, "refresh", REFRESH_TTL, err)
+    refresh_tok := issue(u.id, "refresh", REFRESH_TTL, err)
     if err != jwt.JWT_OK:
         fail(ctx, 500, "could not issue tokens")
         ret
     end
-    send(ctx, 200, `{"access":`.concat(json.Str(access)).concat(`,"refresh":`).concat(json.Str(refresh)).concat(`,"role":`).concat(json.Str(u.role)).concat("}"))
+    send(ctx, 200, `{"access":`.concat(json.Str(access)).concat(`,"refresh":`).concat(json.Str(refresh_tok)).concat(`,"role":`).concat(json.Str(u.role)).concat("}"))
 end
 
 func refresh(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
     mut t := jwt.Token {}
-    if !auth.Require(ctx, guard(), t): ret end
+    if !jwt.Require(ctx, guard(), t): ret end
     if jwt.Str(t, "kind") != "refresh":
-        auth.Forbidden(ctx, "this route needs a refresh token")
+        jwt.Forbidden(ctx, "this route needs a refresh token")
         ret
     end
     mut err := 0
@@ -256,23 +280,29 @@ end
 // ---------------------------------------------------------------- public
 
 func list_posts(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
     q := http.Ctx_query(ctx, "q")
     limit := int_param(ctx, "limit", 10, MAX_PAGE)
     offset := int_param(ctx, "offset", 0, 100000)
-    items := store.ListPublished(q, limit, offset)
-    total := store.CountPublished(q)
+    items := store.ListPublished(conn, q, limit, offset)
+    total := store.CountPublished(conn, q)
     send(ctx, 200, `{"items":`.concat(items).concat(`,"total":`).concat(conv.FormatInt(total)).concat(`,"limit":`).concat(conv.FormatInt(limit as i64)).concat(`,"offset":`).concat(conv.FormatInt(offset as i64)).concat("}"))
 end
 
 // Public, but a draft is visible only to someone allowed to edit it. That is
 // why this route reads the token when there is one and ignores its absence.
 func get_post(ctx: i64):
-    p := store.PostBySlug(http.Ctx_param(ctx, "slug"))
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
+    p := store.PostBySlug(conn, http.Ctx_param(ctx, "slug"))
     if p.id == 0 as i64:
         fail(ctx, 404, "no such post")
         ret
     end
-    if !p.published && !viewer_may_edit(ctx, p):
+    if !p.published && !viewer_may_edit(conn, ctx, p):
         // 404, not 403: an unpublished URL should not confirm it exists.
         fail(ctx, 404, "no such post")
         ret
@@ -280,34 +310,43 @@ func get_post(ctx: i64):
     send(ctx, 200, p.json)
 end
 
-// auth.Check verifies if a token is present and says nothing if it is not.
-func viewer_may_edit(ctx: i64, p: store.Post): bool:
+// jwt.Check verifies if a token is present and says nothing if it is not.
+func viewer_may_edit(conn: store.Conn, ctx: i64, p: store.Post): bool:
     mut err := 0
-    t := auth.Check(ctx, guard(), err)
+    t := jwt.Check(ctx, guard(), err)
     if err != jwt.JWT_OK: ret false end
-    ret may_edit(t.claims.sub.to_int() as i64, p)
+    ret may_edit(conn, t.claims.sub.to_int() as i64, p)
 end
 
 func list_comments(ctx: i64):
-    p := store.PostBySlug(http.Ctx_param(ctx, "slug"))
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
+    p := store.PostBySlug(conn, http.Ctx_param(ctx, "slug"))
     if p.id == 0 as i64 || !p.published:
         fail(ctx, 404, "no such post")
         ret
     end
-    send(ctx, 200, store.ListComments(p.id, 200))
+    send(ctx, 200, store.ListComments(conn, p.id, 200))
 end
 
 // ---------------------------------------------------------------- writing
 
 func my_posts(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
     uid := caller(ctx)
     if uid == 0 as i64: ret end
     limit := int_param(ctx, "limit", 20, MAX_PAGE)
     offset := int_param(ctx, "offset", 0, 100000)
-    send(ctx, 200, store.ListByAuthor(uid, limit, offset))
+    send(ctx, 200, store.ListByAuthor(conn, uid, limit, offset))
 end
 
 func create_post(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
     uid := caller(ctx)
     if uid == 0 as i64: ret end
     body := http.Ctx_body(ctx)
@@ -322,27 +361,27 @@ func create_post(ctx: i64):
         ret
     end
     mut err := ""
-    id := store.CreatePost(uid, unique_slug(slugify(title)), title, text, err)
+    id := store.CreatePost(conn, uid, unique_slug(conn, slugify(title)), title, text, err)
     if id == 0 as i64:
         db_fail(ctx, "create post", err)
         ret
     end
-    p := store.PostById(id)
+    p := store.PostById(conn, id)
     http.Ctx_set_header(ctx, "Location", "/api/posts/".concat(conv.FormatInt(id)))
     send(ctx, 201, p.json)
 end
 
 // Fetch, then authorise, then act. Every write route below is this shape.
-func load_for_edit(ctx: i64, p &: store.Post): bool:
+func load_for_edit(conn: store.Conn, ctx: i64, p &: store.Post): bool:
     uid := caller(ctx)
     if uid == 0 as i64: ret false end
-    post := store.PostById(path_id(ctx))
+    post := store.PostById(conn, path_id(ctx))
     if post.id == 0 as i64:
         fail(ctx, 404, "no such post")
         ret false
     end
-    if !may_edit(uid, post):
-        auth.Forbidden(ctx, "not your post")
+    if !may_edit(conn, uid, post):
+        jwt.Forbidden(ctx, "not your post")
         ret false
     end
     p = post
@@ -350,8 +389,11 @@ func load_for_edit(ctx: i64, p &: store.Post): bool:
 end
 
 func update_post(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
     mut p := store.Post {}
-    if !load_for_edit(ctx, p): ret end
+    if !load_for_edit(conn, ctx, p): ret end
     body := http.Ctx_body(ctx)
     mut set := ""
     if json.Has(body, "title"):
@@ -360,10 +402,10 @@ func update_post(ctx: i64):
             fail(ctx, 400, "title cannot be empty")
             ret
         end
-        set = "title = ".concat(store.Q(title))
+        set = "title = ".concat(store.Q(conn, title))
     end
     if json.Has(body, "body"):
-        clause := "body = ".concat(store.Q(json.Get(body, "body")))
+        clause := "body = ".concat(store.Q(conn, json.Get(body, "body")))
         if set.len() == 0: set = clause else:
             set = set.concat(", ").concat(clause)
         end
@@ -375,46 +417,55 @@ func update_post(ctx: i64):
     // The slug is deliberately NOT regenerated when the title changes: a
     // published URL that moves is a broken link everywhere it was shared.
     mut err := ""
-    if !store.UpdatePost(p.id, set, err):
+    if !store.UpdatePost(conn, p.id, set, err):
         db_fail(ctx, "update post", err)
         ret
     end
-    send(ctx, 200, store.PostById(p.id).json)
+    send(ctx, 200, store.PostById(conn, p.id).json)
 end
 
 func publish_post(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
     mut p := store.Post {}
-    if !load_for_edit(ctx, p): ret end
+    if !load_for_edit(conn, ctx, p): ret end
     mut err := ""
-    if !store.PublishPost(p.id, err):
+    if !store.PublishPost(conn, p.id, err):
         db_fail(ctx, "publish", err)
         ret
     end
-    send(ctx, 200, store.PostById(p.id).json)
+    send(ctx, 200, store.PostById(conn, p.id).json)
 end
 
 func unpublish_post(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
     mut p := store.Post {}
-    if !load_for_edit(ctx, p): ret end
+    if !load_for_edit(conn, ctx, p): ret end
     mut err := ""
-    if !store.UnpublishPost(p.id, err):
+    if !store.UnpublishPost(conn, p.id, err):
         db_fail(ctx, "unpublish", err)
         ret
     end
-    send(ctx, 200, store.PostById(p.id).json)
+    send(ctx, 200, store.PostById(conn, p.id).json)
 end
 
 // Deleting is the one thing an author cannot do to their own post: it takes
 // the comments with it, so it is an admin decision.
 func delete_post(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
     uid := caller(ctx)
     if uid == 0 as i64: ret end
-    if !is_admin(uid):
-        auth.Forbidden(ctx, "only an admin can delete a post")
+    if !is_admin(conn, uid):
+        jwt.Forbidden(ctx, "only an admin can delete a post")
         ret
     end
     mut err := ""
-    gone := store.DeletePost(path_id(ctx), err)
+    gone := store.DeletePost(conn, path_id(ctx), err)
     if err.len() > 0:
         db_fail(ctx, "delete post", err)
         ret
@@ -429,9 +480,12 @@ end
 // ---------------------------------------------------------------- comments
 
 func add_comment(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
     uid := caller(ctx)
     if uid == 0 as i64: ret end
-    p := store.PostById(path_id(ctx))
+    p := store.PostById(conn, path_id(ctx))
     if p.id == 0 as i64 || !p.published:
         fail(ctx, 404, "no such post")
         ret
@@ -446,7 +500,7 @@ func add_comment(ctx: i64):
         ret
     end
     mut err := ""
-    id := store.AddComment(p.id, uid, text, err)
+    id := store.AddComment(conn, p.id, uid, text, err)
     if id == 0 as i64:
         db_fail(ctx, "add comment", err)
         ret
@@ -455,20 +509,23 @@ func add_comment(ctx: i64):
 end
 
 func delete_comment(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
     uid := caller(ctx)
     if uid == 0 as i64: ret end
     id := path_id(ctx)
-    owner := store.CommentAuthor(id)
+    owner := store.CommentAuthor(conn, id)
     if owner == 0 as i64:
         fail(ctx, 404, "no such comment")
         ret
     end
-    if owner != uid && !is_admin(uid):
-        auth.Forbidden(ctx, "not your comment")
+    if owner != uid && !is_admin(conn, uid):
+        jwt.Forbidden(ctx, "not your comment")
         ret
     end
     mut err := ""
-    if !store.DeleteComment(id, err):
+    if !store.DeleteComment(conn, id, err):
         db_fail(ctx, "delete comment", err)
         ret
     end
@@ -480,13 +537,19 @@ func health(ctx: i64):
 end
 
 func main:
+    // Reads the settings, initialises the client library, and proves the
+    // credentials work by opening one connection and closing it again. After
+    // this returns, no connection is held: each request makes its own.
+    //
+    // The library init has to happen here, on the main thread, before any
+    // request thread exists - see _store.salam's header.
     mut err := ""
-    if !store.Open(err):
+    if !store.Configure(err):
         println "cannot reach the database: ", err
         println "set DB_HOST / DB_PORT / DB_USER / DB_PASS / DB_NAME, then load schema.sql"
         ret 1
     end
-    defer store.Close()
+    defer store.Shutdown()
     mut r := router.NewRouter()
     router.Post(r, "/auth/register", register)
     router.Post(r, "/auth/login", login)

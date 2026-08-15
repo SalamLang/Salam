@@ -23,18 +23,17 @@ package main
 // 401 vs 403 is the distinction worth getting right. 401 means "I do not
 // know who you are" - the credential is missing, expired or forged, and
 // retrying with a better one may work. 403 means "I know exactly who you
-// are, and no" - retrying is pointless. auth.Require* returns the first;
+// are, and no" - retrying is pointless. jwt.Require* returns the first;
 // the scope, claim and subject checks return the second.
 //
-//   auth.Require        signed in
-//   auth.RequireScope   ... and "scope" contains the named scope
-//   auth.RequireClaim   ... and a claim equals, or an array claim contains
-//   auth.RequireSubject ... and it is that user's own resource
+//   jwt.Require        signed in
+//   jwt.RequireScope   ... and "scope" contains the named scope
+//   jwt.RequireClaim   ... and a claim equals, or an array claim contains
+//   jwt.RequireSubject ... and it is that user's own resource
 //
 // The last one is the guard people forget. Being signed in is not permission
 // to read /users/someone-else/settings.
 
-import auth
 import jwt
 import net.http
 import net.router
@@ -42,8 +41,8 @@ import encoding.json
 
 const PORT := 8084
 
-func guard(): auth.Guard:
-    mut g := auth.NewGuard("dev-only-secret-change-me")
+func guard(): jwt.Guard:
+    mut g := jwt.NewGuard("dev-only-secret-change-me")
     g.opts.issuer = "scopes.example"
     g.opts.require_exp = true
     ret g
@@ -79,33 +78,33 @@ func login(ctx: i64):
     mut c := jwt.NewClaims()
     c.sub = user
     // A space-delimited "scope" string is the OAuth 2 convention, and what
-    // jwt.HasScope / auth.RequireScope read.
+    // jwt.HasScope / jwt.RequireScope read.
     jwt.SetStr(c, "scope", scopes_of(user))
-    // Roles as a JSON array, read by jwt.ListHas / auth.RequireClaim.
+    // Roles as a JSON array, read by jwt.ListHas / jwt.RequireClaim.
     jwt.SetRaw(c, "roles", roles_of(user))
     mut err := 0
-    token := auth.Issue(guard(), c, 3600 as i64, err)
+    token := jwt.Issue(guard(), c, 3600 as i64, err)
     send(ctx, 200, `{"token":"` + token + `"}`)
 end
 
 // 1. signed in, nothing more
 func reports(ctx: i64):
     mut t := jwt.Token {}
-    if !auth.Require(ctx, guard(), t): ret end
+    if !jwt.Require(ctx, guard(), t): ret end
     send(ctx, 200, `{"reports":["q1","q2"],"for":"` + t.claims.sub + `"}`)
 end
 
 // 2. signed in AND holding a scope
 func create_report(ctx: i64):
     mut t := jwt.Token {}
-    if !auth.RequireScope(ctx, guard(), "reports:write", t): ret end
+    if !jwt.RequireScope(ctx, guard(), "reports:write", t): ret end
     send(ctx, 201, `{"created":true,"by":"` + t.claims.sub + `"}`)
 end
 
 // 3. signed in AND carrying a role
 func audit_log(ctx: i64):
     mut t := jwt.Token {}
-    if !auth.RequireClaim(ctx, guard(), "roles", "admin", t): ret end
+    if !jwt.RequireClaim(ctx, guard(), "roles", "admin", t): ret end
     send(ctx, 200, `{"entries":41,"viewer":"` + t.claims.sub + `"}`)
 end
 
@@ -113,7 +112,7 @@ end
 func user_settings(ctx: i64):
     id := http.Ctx_param(ctx, "id")
     mut t := jwt.Token {}
-    if !auth.RequireSubject(ctx, guard(), id, t): ret end
+    if !jwt.RequireSubject(ctx, guard(), id, t): ret end
     send(ctx, 200, `{"user":"` + id + `","theme":"dark"}`)
 end
 
@@ -123,11 +122,11 @@ end
 func close_account(ctx: i64):
     id := http.Ctx_param(ctx, "id")
     mut t := jwt.Token {}
-    if !auth.Require(ctx, guard(), t): ret end
+    if !jwt.Require(ctx, guard(), t): ret end
     owner := t.claims.sub == id
     admin := jwt.ListHas(t, "roles", "admin")
     if !owner && !admin:
-        auth.Forbidden(ctx, "only the account holder or an admin can close this")
+        jwt.Forbidden(ctx, "only the account holder or an admin can close this")
         ret
     end
     send(ctx, 200, `{"closed":"` + id + `","by":"` + t.claims.sub + `"}`)

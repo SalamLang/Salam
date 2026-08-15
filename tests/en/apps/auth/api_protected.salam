@@ -24,7 +24,7 @@ package main
 // Three lines carry the whole idea:
 //
 //     mut t := jwt.Token { }
-//     if !auth.Require(ctx, guard(), t): ret end
+//     if !jwt.Require(ctx, guard(), t): ret end
 //     ... t.claims.sub is now a verified identity ...
 //
 // Require writes the 401 itself, so a handler's entire obligation on a false
@@ -32,7 +32,7 @@ package main
 // pointers - so the guard lives at the top of the handler it protects, where
 // you can see it.
 
-import auth
+import crypto
 import jwt
 import net.http
 import net.router
@@ -41,10 +41,10 @@ import encoding.json
 const PORT := 8081
 
 // One policy, built where every handler can ask for it. In a real service
-// the secret comes from os.Env, and starts life as auth.RandomSecret(32).
-func guard(): auth.Guard:
-    mut g := auth.NewGuard("dev-only-secret-change-me")
-    g.opts.issuer = "auth.example"
+// the secret comes from os.Env, and starts life as crypto.RandomHex(32).
+func guard(): jwt.Guard:
+    mut g := jwt.NewGuard("dev-only-secret-change-me")
+    g.opts.issuer = "jwt.example"
     g.opts.require_exp = true
     // forgive half a minute of clock drift between machines
     g.opts.leeway = 30 as i64
@@ -53,8 +53,8 @@ end
 
 // Stands in for a users table. Passwords are only ever compared as hashes.
 func password_hash(email: str): str:
-    if email == "sara@example.com": ret auth.HashPassword("hunter2") end
-    if email == "ali@example.com": ret auth.HashPassword("salam") end
+    if email == "sara@example.com": ret crypto.HashPassword("hunter2") end
+    if email == "ali@example.com": ret crypto.HashPassword("salam") end
     ret ""
 end
 
@@ -71,7 +71,7 @@ func login(ctx: i64):
     // An unknown address and a wrong password get the same answer. Which of
     // the two it was is not the caller's business - that difference is how
     // an account list gets enumerated.
-    if stored.len() == 0 || !auth.VerifyPassword(password, stored):
+    if stored.len() == 0 || !crypto.VerifyPassword(password, stored):
         send(ctx, 401, `{"error":"invalid credentials"}`)
         ret
     end
@@ -79,7 +79,7 @@ func login(ctx: i64):
     c.sub = email
     jwt.SetStr(c, "name", display_name(email))
     mut err := 0
-    token := auth.Issue(guard(), c, 3600 as i64, err)
+    token := jwt.Issue(guard(), c, 3600 as i64, err)
     if err != jwt.JWT_OK:
         send(ctx, 500, `{"error":"could not issue a token"}`)
         ret
@@ -95,7 +95,7 @@ end
 // Protected: no valid token, no answer.
 func me(ctx: i64):
     mut t := jwt.Token {}
-    if !auth.Require(ctx, guard(), t): ret end
+    if !jwt.Require(ctx, guard(), t): ret end
     send(ctx, 200, `{"sub":"` + t.claims.sub + `","name":"` + jwt.Str(t, "name") + `"}`)
 end
 
@@ -103,7 +103,7 @@ end
 // touching the response, which is what a page like this needs.
 func home(ctx: i64):
     mut err := 0
-    t := auth.Check(ctx, guard(), err)
+    t := jwt.Check(ctx, guard(), err)
     if err == jwt.JWT_OK:
         send(ctx, 200, `{"hello":"` + jwt.Str(t, "name") + `"}`)
         ret

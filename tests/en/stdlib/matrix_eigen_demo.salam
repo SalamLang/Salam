@@ -1,0 +1,268 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/matrix: the symmetric eigensolver, the general one, and the
+// characteristic polynomial.
+
+import matrix
+import testing
+
+func check_symmetric(eps: f64):
+    // [[2,1],[1,2]] has eigenvalues 3 and 1, with eigenvectors along the
+    // diagonals of the square.
+    mut a := matrix.Zeros(2, 2)
+    a.set(0, 0, 2.0)
+    a.set(0, 1, 1.0)
+    a.set(1, 0, 1.0)
+    a.set(1, 1, 2.0)
+
+    mut e := matrix.EigSym(a)
+    testing.AssertTrue(e.ok)
+    testing.AssertEqInt(e.n, 2)
+    // Descending order
+    testing.AssertEqFloat(e.values.at(0, 0), 3.0, 0.000000001)
+    testing.AssertEqFloat(e.values.at(0, 1), 1.0, 0.000000001)
+
+    // The eigenvectors are orthonormal
+    testing.AssertTrue(matrix.IsOrthogonal(e.vectors, 0.000000001))
+
+    // A v = lambda v for the leading pair
+    mut v0 := matrix.Col(e.vectors, 0)
+    mut av := matrix.MatVec(a, v0)
+    mut lv := matrix.Scale(v0, e.values.at(0, 0))
+    testing.AssertTrue(matrix.AllClose(av, lv, 0.000001))
+
+    // V D V^T rebuilds A
+    mut back := matrix.EigReconstruct(e)
+    testing.AssertTrue(matrix.AllClose(back, a, 0.000001))
+
+    // Trace is the sum of eigenvalues and det is their product
+    testing.AssertEqFloat(matrix.Trace(a), 4.0, eps)
+    testing.AssertEqFloat(e.values.at(0, 0) + e.values.at(0, 1), 4.0, 0.000001)
+    testing.AssertEqFloat(e.values.at(0, 0) * e.values.at(0, 1), matrix.Det(a), 0.000001)
+
+    a.free()
+    e.free()
+    v0.free()
+    av.free()
+    lv.free()
+    back.free()
+end
+
+func check_symmetric_known():
+    // A diagonal matrix is its own eigendecomposition, sorted descending
+    mut d := matrix.Eye(3)
+    d.set(0, 0, 1.0)
+    d.set(1, 1, 5.0)
+    d.set(2, 2, 3.0)
+    mut v := matrix.EigValsSym(d)
+    testing.AssertEqFloat(v.at(0, 0), 5.0, 0.000000001)
+    testing.AssertEqFloat(v.at(0, 1), 3.0, 0.000000001)
+    testing.AssertEqFloat(v.at(0, 2), 1.0, 0.000000001)
+
+    // The 4x4 Hilbert matrix, whose spectrum is a standard reference
+    mut h := matrix.Hilbert(4)
+    mut hv := matrix.EigValsSym(h)
+    testing.AssertEqFloat(hv.at(0, 0), 1.5002142800592426, 0.000001)
+    testing.AssertEqFloat(hv.at(0, 1), 0.1691412202214045, 0.000001)
+    testing.AssertEqFloat(hv.at(0, 2), 0.0067382736057606, 0.000001)
+    testing.AssertEqFloat(hv.at(0, 3), 0.0000967023145949, 0.000001)
+    // All positive, as a positive definite matrix requires
+    testing.AssertTrue(matrix.IsPositiveDefinite(h, 0.000000001))
+
+    testing.AssertEqFloat(matrix.SpectralRadiusSym(d), 5.0, 0.000001)
+
+    d.free()
+    v.free()
+    h.free()
+    hv.free()
+end
+
+func check_powers():
+    // The symmetric square root: S S must be A again
+    mut a := matrix.Zeros(2, 2)
+    a.set(0, 0, 5.0)
+    a.set(0, 1, 4.0)
+    a.set(1, 0, 4.0)
+    a.set(1, 1, 5.0)
+    mut s := matrix.SqrtSym(a)
+    mut ss := matrix.MatMul(s, s)
+    testing.AssertTrue(matrix.AllClose(ss, a, 0.000001))
+    testing.AssertTrue(matrix.IsSymmetric(s, 0.000001))
+
+    // A^-1 through the eigenvalues agrees with the general inverse
+    mut ainv := matrix.PowSym(a, 0.0 - 1.0)
+    mut ginv := matrix.Inverse(a)
+    testing.AssertTrue(matrix.AllClose(ainv, ginv, 0.000001))
+
+    // A^1 is A
+    mut a1 := matrix.PowSym(a, 1.0)
+    testing.AssertTrue(matrix.AllClose(a1, a, 0.000001))
+
+    a.free()
+    s.free()
+    ss.free()
+    ainv.free()
+    ginv.free()
+    a1.free()
+end
+
+func check_general_real():
+    // An upper triangular matrix wears its eigenvalues on the diagonal
+    mut t := matrix.Zeros(3, 3)
+    t.set(0, 0, 1.0)
+    t.set(0, 1, 2.0)
+    t.set(0, 2, 3.0)
+    t.set(1, 1, 4.0)
+    t.set(1, 2, 5.0)
+    t.set(2, 2, 6.0)
+    mut e := matrix.EigVals(t)
+    testing.AssertTrue(e.ok)
+    mut sum := 0.0
+    mut prod := 1.0
+    repeat e.n with k:
+        sum += e.re.a.get(k)
+        prod = prod * e.re.a.get(k)
+        testing.AssertEqFloat(e.im.a.get(k), 0.0, 0.000001)
+    end
+    testing.AssertEqFloat(sum, 11.0, 0.000001)
+    testing.AssertEqFloat(prod, 24.0, 0.000001)
+
+    // A genuinely nonsymmetric matrix, [[4,1],[2,3]], with eigenvalues 5 and 2
+    mut a := matrix.Zeros(2, 2)
+    a.set(0, 0, 4.0)
+    a.set(0, 1, 1.0)
+    a.set(1, 0, 2.0)
+    a.set(1, 1, 3.0)
+    testing.AssertFalse(matrix.IsSymmetric(a, 0.000001))
+    mut ea := matrix.EigVals(a)
+    hi := ea.re.a.get(0)
+    lo := ea.re.a.get(1)
+    testing.AssertEqFloat(hi + lo, matrix.Trace(a), 0.000001)
+    testing.AssertEqFloat(hi * lo, matrix.Det(a), 0.000001)
+    testing.AssertEqFloat(hi * lo, 10.0, 0.000001)
+    testing.AssertEqFloat(matrix.SpectralRadius(a), 5.0, 0.000001)
+
+    t.free()
+    e.free()
+    a.free()
+    ea.free()
+end
+
+func check_general_complex():
+    // A quarter-turn rotation has eigenvalues +i and -i: nothing real about
+    // them, and the real Schur form stops at a 2x2 block rather than trying.
+    mut r := matrix.Rotation2D(1.5707963267948966)
+    mut e := matrix.EigVals(r)
+    testing.AssertTrue(e.ok)
+    testing.AssertEqFloat(e.re.a.get(0), 0.0, 0.000001)
+    testing.AssertEqFloat(e.re.a.get(1), 0.0, 0.000001)
+    // Conjugates: equal magnitude, opposite sign
+    testing.AssertEqFloat(e.im.a.get(0) + e.im.a.get(1), 0.0, 0.000001)
+    testing.AssertEqFloat(e.im.a.get(0) * e.im.a.get(0), 1.0, 0.000001)
+
+    // The spectral radius of a rotation is exactly 1
+    testing.AssertEqFloat(matrix.SpectralRadius(r), 1.0, 0.000001)
+
+    // A companion matrix of x^2 + 1 has the same spectrum
+    mut c := matrix.Zeros(1, 3)
+    c.set(0, 0, 1.0)
+    c.set(0, 2, 1.0)
+    mut comp := matrix.Companion(c)
+    testing.AssertEqInt(comp.rows, 2)
+    mut ec := matrix.EigVals(comp)
+    testing.AssertEqFloat(ec.re.a.get(0), 0.0, 0.000001)
+    testing.AssertEqFloat(ec.im.a.get(0) * ec.im.a.get(0), 1.0, 0.000001)
+
+    r.free()
+    e.free()
+    c.free()
+    comp.free()
+    ec.free()
+end
+
+func check_hessenberg():
+    mut a := matrix.RandomNormal(5, 5, 7)
+    mut h := matrix.Hessenberg(a)
+    // Zero below the first subdiagonal
+    testing.AssertEqFloat(h.at(2, 0), 0.0, 0.000000001)
+    testing.AssertEqFloat(h.at(3, 0), 0.0, 0.000000001)
+    testing.AssertEqFloat(h.at(4, 1), 0.0, 0.000000001)
+    testing.AssertEqInt(matrix.LowerBandwidth(h, 0.000000001), 1)
+
+    // A similarity transformation preserves the trace and the determinant
+    testing.AssertEqFloat(matrix.Trace(h), matrix.Trace(a), 0.000001)
+    testing.AssertEqFloat(matrix.Det(h), matrix.Det(a), 0.000001)
+
+    a.free()
+    h.free()
+end
+
+func check_charpoly(eps: f64):
+    // For [[1,2],[3,4]] the characteristic polynomial is x^2 - 5x - 2
+    mut a := matrix.Zeros(2, 2)
+    a.set(0, 0, 1.0)
+    a.set(0, 1, 2.0)
+    a.set(1, 0, 3.0)
+    a.set(1, 1, 4.0)
+    mut p := matrix.CharPoly(a)
+    testing.AssertEqInt(p.cols, 3)
+    testing.AssertEqFloat(p.at(0, 2), 1.0, eps)
+    testing.AssertEqFloat(p.at(0, 1), 0.0 - 5.0, 0.000001)
+    testing.AssertEqFloat(p.at(0, 0), 0.0 - 2.0, 0.000001)
+
+    // The constant term is (-1)^n det A and the x^(n-1) term is -trace A
+    testing.AssertEqFloat(p.at(0, 0), matrix.Det(a), 0.000001)
+    testing.AssertEqFloat(p.at(0, 1), 0.0 - matrix.Trace(a), 0.000001)
+
+    // Cayley-Hamilton: the matrix satisfies its own polynomial
+    mut ch := matrix.CayleyHamilton(a)
+    testing.AssertTrue(matrix.IsZero(ch, 0.000001))
+
+    a.free()
+    p.free()
+    ch.free()
+end
+
+func check_eigvec_for():
+    mut a := matrix.Zeros(2, 2)
+    a.set(0, 0, 2.0)
+    a.set(0, 1, 1.0)
+    a.set(1, 0, 1.0)
+    a.set(1, 1, 2.0)
+    // Inverse iteration aimed at the known eigenvalue 3
+    mut v := matrix.EigVecFor(a, 3.0, 20)
+    mut av := matrix.MatVec(a, v)
+    mut lv := matrix.Scale(v, 3.0)
+    testing.AssertTrue(matrix.AllClose(av, lv, 0.000001))
+    a.free()
+    v.free()
+    av.free()
+    lv.free()
+end
+
+func main:
+    eps := 0.000000001
+    check_symmetric(eps)
+    check_symmetric_known()
+    check_powers()
+    check_general_real()
+    check_general_complex()
+    check_hessenberg()
+    check_charpoly(eps)
+    check_eigvec_for()
+    ret testing.Summary()
+end

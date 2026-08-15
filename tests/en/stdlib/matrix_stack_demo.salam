@@ -1,0 +1,223 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/matrix: assembling matrices, and the triangular and reflected views.
+
+import matrix
+import testing
+
+func mk(r: int, c: int, base: f64): matrix.Matrix:
+    mut m := matrix.Zeros(r, c)
+    repeat m.count() with k: m.a.set(k, base + (k as f64)) end
+    ret m
+end
+
+func check_stacking(eps: f64):
+    mut a := mk(2, 2, 1.0)
+    mut b := mk(2, 2, 5.0)
+
+    mut h := matrix.HStack(a, b)
+    testing.AssertEqInt(h.rows, 2)
+    testing.AssertEqInt(h.cols, 4)
+    testing.AssertEqFloat(h.at(0, 1), 2.0, eps)
+    testing.AssertEqFloat(h.at(0, 2), 5.0, eps)
+    testing.AssertEqFloat(h.at(1, 3), 8.0, eps)
+
+    mut v := matrix.VStack(a, b)
+    testing.AssertEqInt(v.rows, 4)
+    testing.AssertEqInt(v.cols, 2)
+    testing.AssertEqFloat(v.at(2, 0), 5.0, eps)
+
+    // Mismatched dimensions are a shape error
+    mut tall := matrix.Zeros(3, 2)
+    mut bad := matrix.HStack(a, tall)
+    testing.AssertTrue(bad.is_empty())
+
+    // Augment is HStack under the name elimination uses
+    mut rhs := matrix.Full(2, 1, 1.0)
+    mut aug := matrix.Augment(a, rhs)
+    testing.AssertEqInt(aug.cols, 3)
+    testing.AssertEqFloat(aug.at(0, 2), 1.0, eps)
+
+    // BlockDiag places the two operands on the diagonal and zeroes the rest
+    mut bd := matrix.BlockDiag(a, b)
+    testing.AssertEqInt(bd.rows, 4)
+    testing.AssertEqInt(bd.cols, 4)
+    testing.AssertEqFloat(bd.at(0, 0), 1.0, eps)
+    testing.AssertEqFloat(bd.at(2, 2), 5.0, eps)
+    testing.AssertEqFloat(bd.at(0, 3), 0.0, eps)
+    testing.AssertEqFloat(bd.at(3, 0), 0.0, eps)
+
+    a.free()
+    b.free()
+    h.free()
+    v.free()
+    tall.free()
+    bad.free()
+    rhs.free()
+    aug.free()
+    bd.free()
+end
+
+func check_triangles(eps: f64):
+    mut a := mk(3, 3, 1.0)
+
+    mut u := matrix.Triu(a, 0)
+    testing.AssertEqFloat(u.at(0, 0), 1.0, eps)
+    testing.AssertEqFloat(u.at(1, 0), 0.0, eps)
+    testing.AssertEqFloat(u.at(2, 1), 0.0, eps)
+    testing.AssertTrue(matrix.IsUpperTriangular(u, eps))
+
+    // Offset 1 excludes the main diagonal
+    mut u1 := matrix.Triu(a, 1)
+    testing.AssertEqFloat(u1.at(0, 0), 0.0, eps)
+    testing.AssertEqFloat(u1.at(0, 1), 2.0, eps)
+
+    mut l := matrix.Tril(a, 0)
+    testing.AssertEqFloat(l.at(0, 1), 0.0, eps)
+    testing.AssertEqFloat(l.at(2, 0), 7.0, eps)
+    testing.AssertTrue(matrix.IsLowerTriangular(l, eps))
+
+    // Offset -1 is the strict lower triangle
+    mut lm1 := matrix.Tril(a, 0 - 1)
+    testing.AssertEqFloat(lm1.at(0, 0), 0.0, eps)
+    testing.AssertEqFloat(lm1.at(1, 0), 4.0, eps)
+
+    // Triu(A,0) + Tril(A,-1) reassembles A
+    mut sum := matrix.Add(u, lm1)
+    testing.AssertTrue(matrix.AllClose(sum, a, eps))
+
+    a.free()
+    u.free()
+    u1.free()
+    l.free()
+    lm1.free()
+    sum.free()
+end
+
+func check_symmetry(eps: f64):
+    mut a := mk(3, 3, 1.0)
+
+    mut s := matrix.SymmetrizeUpper(a)
+    testing.AssertTrue(matrix.IsSymmetric(s, 0.0))
+    testing.AssertEqFloat(s.at(1, 0), s.at(0, 1), 0.0)
+    testing.AssertEqFloat(s.at(0, 1), 2.0, eps)
+
+    mut sp := matrix.SymPart(a)
+    testing.AssertTrue(matrix.IsSymmetric(sp, 0.0))
+    testing.AssertEqFloat(sp.at(0, 1), 3.0, eps)
+
+    mut kp := matrix.SkewPart(a)
+    testing.AssertTrue(matrix.IsSkewSymmetric(kp, eps))
+    testing.AssertEqFloat(kp.at(0, 0), 0.0, eps)
+    testing.AssertEqFloat(kp.at(0, 1), 0.0 - 1.0, eps)
+
+    // Every square matrix is its symmetric plus its skew part
+    mut back := matrix.Add(sp, kp)
+    testing.AssertTrue(matrix.AllClose(back, a, eps))
+
+    a.free()
+    s.free()
+    sp.free()
+    kp.free()
+    back.free()
+end
+
+func check_flips(eps: f64):
+    mut a := mk(2, 3, 1.0)
+
+    mut fv := matrix.FlipVertical(a)
+    testing.AssertEqFloat(fv.at(0, 0), 4.0, eps)
+    testing.AssertEqFloat(fv.at(1, 2), 3.0, eps)
+
+    mut fh := matrix.FlipHorizontal(a)
+    testing.AssertEqFloat(fh.at(0, 0), 3.0, eps)
+    testing.AssertEqFloat(fh.at(1, 2), 4.0, eps)
+
+    // A quarter turn transposes the shape
+    mut r1 := matrix.Rot90(a, 1)
+    testing.AssertEqInt(r1.rows, 3)
+    testing.AssertEqInt(r1.cols, 2)
+    testing.AssertEqFloat(r1.at(0, 0), 3.0, eps)
+
+    // Four turns is a full circle
+    mut r4 := matrix.Rot90(a, 4)
+    testing.AssertTrue(matrix.AllClose(r4, a, eps))
+
+    // Negative k turns the other way, so -1 undoes 1
+    mut rback := matrix.Rot90(r1, 0 - 1)
+    testing.AssertTrue(matrix.AllClose(rback, a, eps))
+
+    a.free()
+    fv.free()
+    fh.free()
+    r1.free()
+    r4.free()
+    rback.free()
+end
+
+func check_roll_tile_pad(eps: f64):
+    mut a := mk(2, 3, 1.0)
+
+    // Circular: what leaves one edge reappears at the other
+    mut r := matrix.Roll(a, 1, 0)
+    testing.AssertEqFloat(r.at(0, 0), 4.0, eps)
+    testing.AssertEqFloat(r.at(1, 0), 1.0, eps)
+
+    mut rc := matrix.Roll(a, 0, 1)
+    testing.AssertEqFloat(rc.at(0, 0), 3.0, eps)
+    testing.AssertEqFloat(rc.at(0, 1), 1.0, eps)
+
+    // Rolling by the full width is the identity, and a negative roll is the
+    // complementary positive one
+    mut full := matrix.Roll(a, 0, 3)
+    testing.AssertTrue(matrix.AllClose(full, a, eps))
+    mut neg := matrix.Roll(a, 0, 0 - 1)
+    mut pos := matrix.Roll(a, 0, 2)
+    testing.AssertTrue(matrix.AllClose(neg, pos, eps))
+
+    mut t := matrix.Tile(a, 2, 2)
+    testing.AssertEqInt(t.rows, 4)
+    testing.AssertEqInt(t.cols, 6)
+    testing.AssertEqFloat(t.at(2, 3), a.at(0, 0), eps)
+    testing.AssertEqFloat(t.at(3, 5), a.at(1, 2), eps)
+
+    mut p := matrix.Pad(a, 1, 1, 2, 2, 0.0 - 1.0)
+    testing.AssertEqInt(p.rows, 4)
+    testing.AssertEqInt(p.cols, 7)
+    testing.AssertEqFloat(p.at(0, 0), 0.0 - 1.0, eps)
+    testing.AssertEqFloat(p.at(1, 2), 1.0, eps)
+    testing.AssertEqFloat(p.at(3, 6), 0.0 - 1.0, eps)
+
+    a.free()
+    r.free()
+    rc.free()
+    full.free()
+    neg.free()
+    pos.free()
+    t.free()
+    p.free()
+end
+
+func main:
+    eps := 0.000000001
+    check_stacking(eps)
+    check_triangles(eps)
+    check_symmetry(eps)
+    check_flips(eps)
+    check_roll_tile_pad(eps)
+    ret testing.Summary()
+end

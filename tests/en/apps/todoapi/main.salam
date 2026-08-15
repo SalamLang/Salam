@@ -40,7 +40,7 @@ package main
 // user_id would not need to steal a token.
 
 import os
-import auth
+import crypto
 import jwt
 import conv
 import net.http
@@ -53,8 +53,8 @@ const ACCESS_TTL := 900
 const REFRESH_TTL := 604800
 const MAX_PAGE := 100
 
-func guard(): auth.Guard:
-    mut g := auth.NewGuard(secret())
+func guard(): jwt.Guard:
+    mut g := jwt.NewGuard(secret())
     g.opts.issuer = "todo.salam"
     g.opts.require_exp = true
     g.opts.leeway = 30 as i64
@@ -92,11 +92,26 @@ end
 
 // Identify the caller and hand back their user id. Returns 0 when the guard
 // already answered the request.
+// A connection for this request, or a 503 and false. Every handler that
+// touches the database starts with this and pairs it with `defer
+// store.Close(conn)` - the connection belongs to this request and to this
+// thread, and it goes away when the handler returns however it returns.
+func db(ctx: i64, c &: store.Conn): bool:
+    conn := store.Connect()
+    if !store.Ok(conn):
+        println "[db] connect: ", store.Err(conn)
+        fail(ctx, 503, "database unavailable")
+        ret false
+    end
+    c = conn
+    ret true
+end
+
 func caller(ctx: i64): i64:
     mut t := jwt.Token {}
-    if !auth.Require(ctx, guard(), t): ret 0 as i64 end
+    if !jwt.Require(ctx, guard(), t): ret 0 as i64 end
     if jwt.Str(t, "kind") != "access":
-        auth.Forbidden(ctx, "this route needs an access token")
+        jwt.Forbidden(ctx, "this route needs an access token")
         ret 0 as i64
     end
     ret t.claims.sub.to_int() as i64
@@ -114,6 +129,9 @@ end
 // ---------------------------------------------------------------- auth
 
 func register(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
     body := http.Ctx_body(ctx)
     email := json.Get(body, "email").trim().lower()
     password := json.Get(body, "password")
@@ -128,7 +146,7 @@ func register(ctx: i64):
         fail(ctx, 400, "password must be at least 8 characters")
         ret
     end
-    existing := store.FindUser(email)
+    existing := store.FindUser(conn, email)
     if existing.id != 0 as i64:
         // A registration form leaks address existence no matter what, since
         // it has to refuse a duplicate. The place to be careful is /login.
@@ -136,7 +154,7 @@ func register(ctx: i64):
         ret
     end
     mut err := ""
-    id := store.CreateUser(email, auth.HashPassword(password), err)
+    id := store.CreateUser(conn, email, crypto.HashPassword(password), err)
     if id == 0 as i64:
         db_fail(ctx, "create user", err)
         ret
@@ -148,41 +166,47 @@ func issue(user_id: i64, kind: str, ttl: int, err &: int): str:
     mut c := jwt.NewClaims()
     c.sub = conv.FormatInt(user_id)
     jwt.SetStr(c, "kind", kind)
-    ret auth.Issue(guard(), c, ttl as i64, err)
+    ret jwt.Issue(guard(), c, ttl as i64, err)
 end
 
 func login(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
     body := http.Ctx_body(ctx)
     email := json.Get(body, "email").trim().lower()
-    u := store.FindUser(email)
+    u := store.FindUser(conn, email)
     // One answer for "no such user" and "wrong password", and the password
     // is verified either way so the two paths take the same time. Skipping
     // the hash when the user is unknown turns login into an account
     // enumerator that anyone can time from the other side of the internet.
     mut stored := u.hash
-    if stored.len() == 0: stored = auth.HashPassword("_no_such_user_") end
-    ok := auth.VerifyPassword(json.Get(body, "password"), stored)
+    if stored.len() == 0: stored = crypto.HashPassword("_no_such_user_") end
+    ok := crypto.VerifyPassword(json.Get(body, "password"), stored)
     if u.id == 0 as i64 || !ok:
         fail(ctx, 401, "invalid email or password")
         ret
     end
     mut err := 0
     access := issue(u.id, "access", ACCESS_TTL, err)
-    refresh := issue(u.id, "refresh", REFRESH_TTL, err)
+    refresh_tok := issue(u.id, "refresh", REFRESH_TTL, err)
     if err != jwt.JWT_OK:
         fail(ctx, 500, "could not issue tokens")
         ret
     end
     send(
-        ctx, 200, `{"access":`.concat(json.Str(access)).concat(`,"refresh":`).concat(json.Str(refresh)).concat(`,"expires_in":`).concat(conv.FormatInt(ACCESS_TTL as i64)).concat("}")
+        ctx, 200, `{"access":`.concat(json.Str(access)).concat(`,"refresh":`).concat(json.Str(refresh_tok)).concat(`,"expires_in":`).concat(conv.FormatInt(ACCESS_TTL as i64)).concat("}")
     )
 end
 
 func refresh(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
     mut t := jwt.Token {}
-    if !auth.Require(ctx, guard(), t): ret end
+    if !jwt.Require(ctx, guard(), t): ret end
     if jwt.Str(t, "kind") != "refresh":
-        auth.Forbidden(ctx, "this route needs a refresh token")
+        jwt.Forbidden(ctx, "this route needs a refresh token")
         ret
     end
     mut err := 0
@@ -199,13 +223,16 @@ end
 // ---------------------------------------------------------------- todos
 
 func list_todos(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
     uid := caller(ctx)
     if uid == 0 as i64: ret end
     status := status_filter(http.Ctx_query(ctx, "status"))
     limit := int_param(ctx, "limit", 20, MAX_PAGE)
     offset := int_param(ctx, "offset", 0, 1000000)
-    items := store.ListTodos(uid, status, limit, offset)
-    total := store.CountTodos(uid, status)
+    items := store.ListTodos(conn, uid, status, limit, offset)
+    total := store.CountTodos(conn, uid, status)
     // The count comes back with the page so a client can render "1-20 of 57"
     // without a second request.
     send(
@@ -219,9 +246,12 @@ func status_filter(raw: str): str:
 end
 
 func get_todo(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
     uid := caller(ctx)
     if uid == 0 as i64: ret end
-    row := store.GetTodo(uid, path_id(ctx))
+    row := store.GetTodo(conn, uid, path_id(ctx))
     if row.len() == 0:
         fail(ctx, 404, "no such todo")
         ret
@@ -234,6 +264,9 @@ func path_id(ctx: i64): i64:
 end
 
 func create_todo(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
     uid := caller(ctx)
     if uid == 0 as i64: ret end
     body := http.Ctx_body(ctx)
@@ -253,13 +286,13 @@ func create_todo(ctx: i64):
         ret
     end
     mut err := ""
-    id := store.CreateTodo(uid, title, json.Get(body, "notes"), due, err)
+    id := store.CreateTodo(conn, uid, title, json.Get(body, "notes"), due, err)
     if id == 0 as i64:
         db_fail(ctx, "create todo", err)
         ret
     end
     http.Ctx_set_header(ctx, "Location", "/api/todos/".concat(conv.FormatInt(id)))
-    send(ctx, 201, store.GetTodo(uid, id))
+    send(ctx, 201, store.GetTodo(conn, uid, id))
 end
 
 // YYYY-MM-DD, checked here so a bad date is a 400 and not a 500 from the
@@ -280,12 +313,15 @@ func digits(s: str): bool:
 end
 
 func update_todo(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
     uid := caller(ctx)
     if uid == 0 as i64: ret end
     id := path_id(ctx)
     // 404 before doing any work, so a caller cannot use the difference
     // between "nothing changed" and "not yours" to probe for ids.
-    if store.GetTodo(uid, id).len() == 0:
+    if store.GetTodo(conn, uid, id).len() == 0:
         fail(ctx, 404, "no such todo")
         ret
     end
@@ -297,10 +333,10 @@ func update_todo(ctx: i64):
             fail(ctx, 400, "title cannot be empty")
             ret
         end
-        set = add_set(set, "title = ".concat(store.Q(title)))
+        set = add_set(set, "title = ".concat(store.Q(conn, title)))
     end
     if json.Has(body, "notes"):
-        set = add_set(set, "notes = ".concat(store.Q(json.Get(body, "notes"))))
+        set = add_set(set, "notes = ".concat(store.Q(conn, json.Get(body, "notes"))))
     end
     if json.Has(body, "due_on"):
         due := json.Get(body, "due_on")
@@ -311,7 +347,7 @@ func update_todo(ctx: i64):
                 fail(ctx, 400, "due_on must be YYYY-MM-DD")
                 ret
             end
-            set = add_set(set, "due_on = ".concat(store.Q(due)))
+            set = add_set(set, "due_on = ".concat(store.Q(conn, due)))
         end
     end
     if json.Has(body, "done"):
@@ -326,11 +362,11 @@ func update_todo(ctx: i64):
         ret
     end
     mut err := ""
-    if !store.UpdateTodo(uid, id, set, err):
+    if !store.UpdateTodo(conn, uid, id, set, err):
         db_fail(ctx, "update todo", err)
         ret
     end
-    send(ctx, 200, store.GetTodo(uid, id))
+    send(ctx, 200, store.GetTodo(conn, uid, id))
 end
 
 func add_set(set: str, clause: str): str:
@@ -339,10 +375,13 @@ func add_set(set: str, clause: str): str:
 end
 
 func delete_todo(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
     uid := caller(ctx)
     if uid == 0 as i64: ret end
     mut err := ""
-    gone := store.DeleteTodo(uid, path_id(ctx), err)
+    gone := store.DeleteTodo(conn, uid, path_id(ctx), err)
     if err.len() > 0:
         db_fail(ctx, "delete todo", err)
         ret
@@ -355,9 +394,12 @@ func delete_todo(ctx: i64):
 end
 
 func stats(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
     uid := caller(ctx)
     if uid == 0 as i64: ret end
-    send(ctx, 200, store.Stats(uid))
+    send(ctx, 200, store.Stats(conn, uid))
 end
 
 // Unauthenticated on purpose: this is what a load balancer polls.
@@ -366,13 +408,19 @@ func health(ctx: i64):
 end
 
 func main:
+    // Reads the settings, initialises the client library, and proves the
+    // credentials work by opening one connection and closing it again. After
+    // this returns, no connection is held: each request makes its own.
+    //
+    // The library init has to happen here, on the main thread, before any
+    // request thread exists - see _store.salam's header.
     mut err := ""
-    if !store.Open(err):
+    if !store.Configure(err):
         println "cannot reach the database: ", err
         println "set DB_HOST / DB_PORT / DB_USER / DB_PASS / DB_NAME, then load schema.sql"
         ret 1
     end
-    defer store.Close()
+    defer store.Shutdown()
     mut r := router.NewRouter()
     router.Post(r, "/auth/register", register)
     router.Post(r, "/auth/login", login)

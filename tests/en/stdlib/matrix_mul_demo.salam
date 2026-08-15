@@ -1,0 +1,269 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/matrix: matrix products, transposes and the Kronecker product.
+
+import matrix
+import testing
+
+func mk(r: int, c: int, base: f64): matrix.Matrix:
+    mut m := matrix.Zeros(r, c)
+    repeat m.count() with k: m.a.set(k, base + (k as f64)) end
+    ret m
+end
+
+func check_transpose(eps: f64):
+    mut a := mk(2, 3, 1.0)
+    mut t := matrix.Transpose(a)
+    testing.AssertEqInt(t.rows, 3)
+    testing.AssertEqInt(t.cols, 2)
+    testing.AssertEqFloat(t.at(0, 1), 4.0, eps)
+    testing.AssertEqFloat(t.at(2, 0), 3.0, eps)
+
+    // Transposing twice is the identity
+    mut back := matrix.Transpose(t)
+    testing.AssertTrue(matrix.AllClose(a, back, eps))
+
+    a.free()
+    t.free()
+    back.free()
+end
+
+func check_matmul(eps: f64):
+    // [[1,2],[3,4]] * [[5,6],[7,8]] = [[19,22],[43,50]]
+    mut a := mk(2, 2, 1.0)
+    mut b := mk(2, 2, 5.0)
+    mut p := matrix.MatMul(a, b)
+    testing.AssertEqFloat(p.at(0, 0), 19.0, eps)
+    testing.AssertEqFloat(p.at(0, 1), 22.0, eps)
+    testing.AssertEqFloat(p.at(1, 0), 43.0, eps)
+    testing.AssertEqFloat(p.at(1, 1), 50.0, eps)
+
+    // Matrix multiplication does not commute
+    mut q := matrix.MatMul(b, a)
+    testing.AssertFalse(matrix.AllClose(p, q, eps))
+
+    // The identity is neutral
+    mut e := matrix.Eye(2)
+    mut ae := matrix.MatMul(a, e)
+    testing.AssertTrue(matrix.AllClose(a, ae, eps))
+
+    // Non-conforming shapes give 0x0
+    mut wide := matrix.Zeros(3, 4)
+    mut bad := matrix.MatMul(a, wide)
+    testing.AssertTrue(bad.is_empty())
+
+    // A rectangular product keeps the outer dimensions
+    mut r23 := mk(2, 3, 1.0)
+    mut r34 := mk(3, 4, 1.0)
+    mut rp := matrix.MatMul(r23, r34)
+    testing.AssertEqInt(rp.rows, 2)
+    testing.AssertEqInt(rp.cols, 4)
+    // row 0 of r23 is [1,2,3], column 0 of r34 is [1,5,9] -> 1+10+27 = 38
+    testing.AssertEqFloat(rp.at(0, 0), 38.0, eps)
+
+    a.free()
+    b.free()
+    p.free()
+    q.free()
+    e.free()
+    ae.free()
+    wide.free()
+    bad.free()
+    r23.free()
+    r34.free()
+    rp.free()
+end
+
+func check_blocked(eps: f64):
+    // Large enough to cross the 64-wide tile boundary in both dimensions,
+    // which is the path the small cases above never reach.
+    n := 70
+    mut a := matrix.Eye(n)
+    mut b := mk(n, n, 1.0)
+    mut p := matrix.MatMul(a, b)
+    testing.AssertTrue(matrix.AllClose(p, b, eps))
+
+    mut c := matrix.Full(n, n, 2.0)
+    mut d := matrix.Full(n, n, 3.0)
+    mut q := matrix.MatMul(c, d)
+    // Every entry is n * 2 * 3
+    testing.AssertEqFloat(q.at(0, 0), (n as f64) * 6.0, eps)
+    testing.AssertEqFloat(q.at(69, 69), (n as f64) * 6.0, eps)
+    testing.AssertEqFloat(q.at(37, 11), (n as f64) * 6.0, eps)
+
+    a.free()
+    b.free()
+    p.free()
+    c.free()
+    d.free()
+    q.free()
+end
+
+func check_transpose_products(eps: f64):
+    mut a := mk(3, 2, 1.0)
+    mut b := mk(3, 2, 7.0)
+
+    // TransposeMul(a, b) must equal MatMul(a^T, b)
+    mut ta := matrix.Transpose(a)
+    mut want := matrix.MatMul(ta, b)
+    mut got := matrix.TransposeMul(a, b)
+    testing.AssertTrue(matrix.AllClose(want, got, eps))
+
+    // MulTranspose(a, b) must equal MatMul(a, b^T)
+    mut bt := matrix.Transpose(b)
+    mut want2 := matrix.MatMul(a, bt)
+    mut got2 := matrix.MulTranspose(a, b)
+    testing.AssertTrue(matrix.AllClose(want2, got2, eps))
+
+    // Gram is a^T a, and is exactly symmetric
+    mut g := matrix.Gram(a)
+    mut g2 := matrix.TransposeMul(a, a)
+    testing.AssertTrue(matrix.AllClose(g, g2, eps))
+    testing.AssertTrue(matrix.IsSymmetric(g, 0.0))
+
+    a.free()
+    b.free()
+    ta.free()
+    want.free()
+    got.free()
+    bt.free()
+    want2.free()
+    got2.free()
+    g.free()
+    g2.free()
+end
+
+func check_vectors(eps: f64):
+    mut a := mk(2, 3, 1.0)
+    mut x := mk(3, 1, 1.0)
+    mut y := matrix.MatVec(a, x)
+    testing.AssertEqInt(y.rows, 2)
+    testing.AssertEqInt(y.cols, 1)
+    // [1,2,3].[1,2,3] = 14 and [4,5,6].[1,2,3] = 32
+    testing.AssertEqFloat(y.at(0, 0), 14.0, eps)
+    testing.AssertEqFloat(y.at(1, 0), 32.0, eps)
+
+    mut rv := mk(1, 2, 1.0)
+    mut z := matrix.VecMat(rv, a)
+    testing.AssertEqInt(z.rows, 1)
+    testing.AssertEqInt(z.cols, 3)
+    // [1,2] * [[1,2,3],[4,5,6]] = [9,12,15]
+    testing.AssertEqFloat(z.at(0, 0), 9.0, eps)
+    testing.AssertEqFloat(z.at(0, 2), 15.0, eps)
+
+    // Dot is the Frobenius inner product, orientation-blind
+    mut u := mk(3, 1, 1.0)
+    mut v := mk(1, 3, 1.0)
+    testing.AssertEqFloat(matrix.Dot(u, v), 14.0, eps)
+
+    // Outer builds the rank-1 matrix
+    mut o := matrix.Outer(u, v)
+    testing.AssertEqInt(o.rows, 3)
+    testing.AssertEqInt(o.cols, 3)
+    testing.AssertEqFloat(o.at(1, 2), 6.0, eps)
+    testing.AssertEqInt(matrix.MatrixRank(o, 0.0), 1)
+
+    a.free()
+    x.free()
+    y.free()
+    rv.free()
+    z.free()
+    u.free()
+    v.free()
+    o.free()
+end
+
+func check_cross(eps: f64):
+    mut e1 := matrix.Zeros(3, 1)
+    e1.set(0, 0, 1.0)
+    mut e2 := matrix.Zeros(3, 1)
+    e2.set(1, 0, 1.0)
+    mut c := matrix.Cross3(e1, e2)
+    // x cross y = z
+    testing.AssertEqFloat(c.at(0, 0), 0.0, eps)
+    testing.AssertEqFloat(c.at(1, 0), 0.0, eps)
+    testing.AssertEqFloat(c.at(2, 0), 1.0, eps)
+    // The cross product is orthogonal to both factors
+    testing.AssertEqFloat(matrix.Dot(c, e1), 0.0, eps)
+    testing.AssertEqFloat(matrix.Dot(c, e2), 0.0, eps)
+    e1.free()
+    e2.free()
+    c.free()
+end
+
+func check_kron_and_pow(eps: f64):
+    mut a := mk(2, 2, 1.0)
+    mut e := matrix.Eye(2)
+    mut k := matrix.Kron(a, e)
+    testing.AssertEqInt(k.rows, 4)
+    testing.AssertEqInt(k.cols, 4)
+    testing.AssertEqFloat(k.at(0, 0), 1.0, eps)
+    testing.AssertEqFloat(k.at(1, 1), 1.0, eps)
+    testing.AssertEqFloat(k.at(0, 1), 0.0, eps)
+    testing.AssertEqFloat(k.at(2, 0), 3.0, eps)
+
+    // A^0 is the identity, A^1 is A, A^3 matches three multiplications
+    mut p0 := matrix.MatPow(a, 0)
+    testing.AssertTrue(matrix.IsIdentity(p0, eps))
+    mut p1 := matrix.MatPow(a, 1)
+    testing.AssertTrue(matrix.AllClose(p1, a, eps))
+    mut aa := matrix.MatMul(a, a)
+    mut aaa := matrix.MatMul(aa, a)
+    mut p3 := matrix.MatPow(a, 3)
+    testing.AssertTrue(matrix.AllClose(p3, aaa, eps))
+
+    // A negative power is the power of the inverse
+    mut pm1 := matrix.MatPow(a, 0 - 1)
+    mut inv := matrix.Inverse(a)
+    testing.AssertTrue(matrix.AllClose(pm1, inv, 0.000001))
+
+    // Trace
+    testing.AssertEqFloat(matrix.Trace(a), 5.0, eps)
+    testing.AssertEqFloat(matrix.Trace(e), 2.0, eps)
+
+    // trace(AB) = trace(BA), even though AB is not BA
+    mut b := mk(2, 2, 5.0)
+    mut ab := matrix.MatMul(a, b)
+    mut ba := matrix.MatMul(b, a)
+    testing.AssertEqFloat(matrix.Trace(ab), matrix.Trace(ba), eps)
+
+    a.free()
+    e.free()
+    k.free()
+    p0.free()
+    p1.free()
+    aa.free()
+    aaa.free()
+    p3.free()
+    pm1.free()
+    inv.free()
+    b.free()
+    ab.free()
+    ba.free()
+end
+
+func main:
+    eps := 0.000000001
+    check_transpose(eps)
+    check_matmul(eps)
+    check_blocked(eps)
+    check_transpose_products(eps)
+    check_vectors(eps)
+    check_cross(eps)
+    check_kron_and_pow(eps)
+    ret testing.Summary()
+end

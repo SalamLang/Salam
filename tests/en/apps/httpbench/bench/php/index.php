@@ -1,4 +1,5 @@
 <?php
+
 // The php -S equivalent of main.salam. Same routes, same response bodies, so
 // the only thing that differs between the two numbers is the server.
 //
@@ -12,32 +13,46 @@
 
 declare(strict_types=1);
 
-$ASSETS = getenv('HTTPBENCH_ASSETS') ?: __DIR__ . '/../../public';
-$CACHED = file_get_contents($ASSETS . '/data.json');
+$env    = getenv('HTTPBENCH_ASSETS');
+$ASSETS = ($env === false || $env === '') ? __DIR__ . '/../../public' : $env;
+
+// Read once at boot, which is the whole point of the /cached route. An
+// unreadable asset leaves it empty rather than false, so the route answers
+// instead of dying on json_ok()'s string parameter.
+$cached = file_get_contents($ASSETS . '/data.json');
+$CACHED = $cached === false ? '' : $cached;
 
 $uri    = $_SERVER['REQUEST_URI'] ?? '/';
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 $qpos   = strpos($uri, '?');
 $path   = $qpos === false ? $uri : substr($uri, 0, $qpos);
 
-function text(string $body): void {
+function text(string $body): void
+{
     header('Content-Type: text/plain; charset=utf-8');
     echo $body;
 }
 
-function json_ok(string $body): void {
+function json_ok(string $body): void
+{
     header('Content-Type: application/json');
     echo $body;
 }
 
-function int_query(string $name, int $fallback, int $lo, int $hi): int {
+function int_query(string $name, int $fallback, int $lo, int $hi): int
+{
+    // A query parameter can arrive as an array (?n[]=1), so anything that is
+    // not a plain string falls back rather than being cast.
     $raw = $_GET[$name] ?? '';
-    if ($raw === '') return $fallback;
+    if (!is_string($raw) || $raw === '') {
+        return $fallback;
+    }
     $v = (int)$raw;
     return max($lo, min($hi, $v));
 }
 
-function row(string $p, string $note): string {
+function row(string $p, string $note): string
+{
     return "<tr><td><a href=\"$p\">$p</a></td><td>$note</td></tr>\n";
 }
 
@@ -76,11 +91,14 @@ switch ($path) {
         return;
 
     case '/search':
-        $q = $_GET['q'] ?? '';
+        $raw = $_GET['q'] ?? '';
+        $q = is_string($raw) ? $raw : '';
         $n = int_query('n', 5, 0, 100);
         $out = '{"query":"' . $q . '","count":' . $n . ',"results":[';
         for ($i = 0; $i < $n; $i++) {
-            if ($i > 0) $out .= ',';
+            if ($i > 0) {
+                $out .= ',';
+            }
             $r = $i + 1;
             $out .= '{"rank":' . $r . ',"title":"' . $q . ' result ' . $r . '"}';
         }
@@ -90,7 +108,9 @@ switch ($path) {
     case '/compute':
         $n = int_query('n', 1000, 0, 5000000);
         $acc = 0;
-        for ($i = 0; $i < $n; $i++) $acc += ($i * $i) % 7;
+        for ($i = 0; $i < $n; $i++) {
+            $acc += ($i * $i) % 7;
+        }
         json_ok('{"n":' . $n . ',"sum":' . $acc . '}');
         return;
 
@@ -101,12 +121,16 @@ switch ($path) {
             'accept'     => $_SERVER['HTTP_ACCEPT'] ?? '',
             'method'     => $method,
             'path'       => $path,
-        ], JSON_UNESCAPED_SLASHES));
+        ], JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR));
         return;
 
     case '/echo':
-        $body = file_get_contents('php://input');
-        json_ok(json_encode(['bytes' => strlen($body), 'echo' => $body], JSON_UNESCAPED_SLASHES));
+        $raw = file_get_contents('php://input');
+        $body = $raw === false ? '' : $raw;
+        json_ok(json_encode(
+            ['bytes' => strlen($body), 'echo' => $body],
+            JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR
+        ));
         return;
 
     case '/':

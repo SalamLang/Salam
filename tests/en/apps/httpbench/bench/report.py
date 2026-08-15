@@ -39,7 +39,7 @@ ROUTE_LABEL = OrderedDict(
 def load(path):
     rows = {}
     meta = {}
-    with open(path) as fh:
+    with open(path, encoding="utf-8") as fh:
         for line in fh:
             line = line.strip()
             if not line:

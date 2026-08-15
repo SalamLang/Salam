@@ -199,6 +199,48 @@ static const char *map_pass_pipeline(llvm_opt_level_t l)
     }
 }
 
+/*
+ * The CPU name handed to LLVMCreateTargetMachine when the caller did not ask
+ * for --native-cpu.
+ *
+ * This used to be "", which is not the same as "portable": an empty CPU
+ * leaves the subtarget with no scheduling model and no tuning features at
+ * all, and both the optimizer and the backend then skip every decision that
+ * reads one. Two showed up all over the benchmark set:
+ *
+ *   - X86 never applied bypass-slow-divide, so a 64-bit `%` by a variable ran
+ *     a full idivq every time instead of the 32-bit fast path with a range
+ *     check. This is the big one: 28_prime_factorization went 5.12G -> 3.18G
+ *     cycles, 09_perfect_numbers -37.7%, 03_primes_count -36.1%.
+ *   - BasicTTIImpl::getUnrollingPreferences returned before considering
+ *     partial unrolling (it reads LoopMicroOpBufferSize off the missing
+ *     schedule model), so no loop was ever unrolled at -O3.
+ *
+ * Measured over all 39 benchmark/programs: -17.8% cycles in total, with
+ * identical output from every one of them. It is not free everywhere - giving
+ * LLVM a real machine also lets it narrow some 64-bit constant-modulus
+ * arithmetic to 32-bit, whose magic sequence needs a fixup the 64-bit one
+ * does not, which costs 14_lcg_random +18.9% and 04_collatz +12.2%. Those
+ * programs land exactly on clang's own numbers afterwards: the old behaviour
+ * beat clang there by accident, because LLVM was flying blind.
+ *
+ * These are clang's per-arch defaults, so the instruction set is unchanged -
+ * this hands LLVM a baseline CPU, it does not raise one. An arch that is not
+ * listed keeps the old empty string rather than guessing a name the backend
+ * would reject, and --native-cpu still wins outright.
+ */
+static const char *default_target_cpu(const char *triple)
+{
+    if (!triple) return "";
+    if (!strncmp(triple, "x86_64", 6) || !strncmp(triple, "amd64", 5)) return "x86-64";
+    /* i386 / i486 / i586 / i686 */
+    if (triple[0] == 'i' && triple[1] >= '3' && triple[1] <= '6' &&
+        !strncmp(triple + 2, "86", 2))
+        return "pentium4";
+    if (!strncmp(triple, "aarch64", 7) || !strncmp(triple, "arm64", 5)) return "generic";
+    return "";
+}
+
 static void init_targets_once(void)
 {
     static int done = 0;
@@ -1283,8 +1325,9 @@ int salam_llvm_native(logger_t *log, const char *ll_path,
             host_features_is_fallback = 1;
         }
         LLVMTargetMachineRef tm = LLVMCreateTargetMachine(
-            target, triple, host_cpu ? host_cpu : "", host_features ? host_features : "",
-            map_cg_level(opts->opt_level), LLVMRelocPIC, LLVMCodeModelDefault);
+            target, triple, host_cpu ? host_cpu : default_target_cpu(triple),
+            host_features ? host_features : "", map_cg_level(opts->opt_level),
+            LLVMRelocPIC, LLVMCodeModelDefault);
         if (host_cpu) LLVMDisposeMessage(host_cpu);
         if (host_features && !host_features_is_fallback)
             LLVMDisposeMessage(host_features);

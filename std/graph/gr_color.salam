@@ -14,7 +14,6 @@
 
 package graph
 
-import math
 
 // Colouring, cliques, independent sets and vertex covers: the NP-hard corner
 // of the library, where the honest thing is to say which routines are exact
@@ -142,154 +141,7 @@ func _color_search(g &: Graph, k: int, u: int, color &: Vector<int>, high: int):
     ret false
 end
 
-func _has_loop(g &: Graph): bool:
-    repeat g.size() with e:
-        if g.edge_from(e) == g.edge_to(e): ret true end
-    end
-    ret false
-end
 
-// Contract edge `drop`, whose ends are u and v: v disappears into u and the
-// edge itself goes with it. Every other edge is kept exactly as it is, which
-// includes any parallel copy of `drop` that is now a self loop on the merged
-// node. Those loops are the whole point: a loop means no proper colouring,
-// and dropping them would inflate every count.
-func _contract(g &: Graph, drop: int, u: int, v: int): Graph:
-    mut map := Vector {} as Vector<int>
-    defer map.free()
-    mut next := 0
-    repeat g.n with x:
-        if x == v: map.push(GRAPH_NONE)
-        else:
-            map.push(next)
-            next += 1
-        end
-    end
-    map.set(v, map.get(u))
-    mut h := New(next, false)
-    repeat g.size() with e:
-        if e != drop:
-            h.add_edge(map.get(g.edge_from(e)), map.get(g.edge_to(e)))
-        end
-    end
-    ret h
-end
-
-func _delete_edge(g &: Graph, drop: int): Graph:
-    mut h := New(g.n, false)
-    repeat g.size() with e:
-        if e != drop: h.add_edge(g.edge_from(e), g.edge_to(e)) end
-    end
-    ret h
-end
-
-// The chromatic polynomial by deletion-contraction: P(G) = P(G - e) - P(G/e).
-// Every step removes an edge or a node, so the recursion terminates on the
-// empty graph, where every one of the k^n assignments is proper.
-//
-// Contraction is where this is easy to get wrong. Merging the ends of one of
-// two parallel edges turns the other into a self loop, and a self loop means
-// no proper colouring at all. Dropping those loops instead would make
-// P(two parallel edges) come out as P(one edge) minus P(a bare node) rather
-// than minus zero, and every count above a triangle would be too high.
-func _count_colorings(g &: Graph, k: int): f64:
-    if _has_loop(g): ret 0.0 end
-    if g.size() == 0: ret math.Pow(k as f64, g.n as f64) end
-    e := 0
-    u := g.edge_from(e)
-    v := g.edge_to(e)
-    mut del := _delete_edge(g, e)
-    mut con := _contract(g, e, u, v)
-    a := _count_colorings(del, k)
-    b := _count_colorings(con, k)
-    del.free()
-    con.free()
-    ret a - b
-end
-
-// Bron-Kerbosch with pivoting. The pivot is a node of P union X with the most
-// neighbours in P; only non-neighbours of the pivot need to be branched on,
-// since any maximal clique must contain the pivot or one of them.
-func _bk_pivot(adj &: HashMap<i64, bool>, n: int, p: Vector<int>, x: Vector<int>): int:
-    mut best := GRAPH_NONE
-    mut bestc := GRAPH_NONE
-    repeat p.len() with i: _bk_offer(adj, n, p, p.get(i), best, bestc) end
-    repeat x.len() with i: _bk_offer(adj, n, p, x.get(i), best, bestc) end
-    ret best
-end
-
-func _bk_offer(adj &: HashMap<i64, bool>, n: int, p: Vector<int>, u: int, best &: int, bestc &: int):
-    mut c := 0
-    repeat p.len() with i:
-        if adj.has(_color_key(n, u, p.get(i))): c += 1 end
-    end
-    if c > bestc:
-        bestc = c
-        best = u
-    end
-end
-
-func _bk_filter(adj &: HashMap<i64, bool>, n: int, src: Vector<int>, v: int, out &: Vector<int>):
-    out.clear()
-    repeat src.len() with i:
-        u := src.get(i)
-        if adj.has(_color_key(n, v, u)): out.push(u) end
-    end
-end
-
-func _bk_run(adj &: HashMap<i64, bool>, n: int, r &: Vector<int>, p: Vector<int>, x: Vector<int>, best &: Vector<int>):
-    if p.len() == 0:
-        if x.len() == 0: _bk_record(r, best) end
-        ret
-    end
-    pivot := _bk_pivot(adj, n, p, x)
-    mut cand := Vector {} as Vector<int>
-    defer cand.free()
-    repeat p.len() with i:
-        v := p.get(i)
-        if adj.has(_color_key(n, pivot, v)) == false: cand.push(v) end
-    end
-    mut px := Vector {} as Vector<int>
-    defer px.free()
-    mut xx := Vector {} as Vector<int>
-    defer xx.free()
-    _bk_branch(adj, n, r, p, x, best, cand, px, xx)
-end
-
-func _bk_branch(adj &: HashMap<i64, bool>, n: int, r &: Vector<int>, p: Vector<int>, x: Vector<int>, best &: Vector<int>, cand: Vector<int>, px &: Vector<int>, xx &: Vector<int>):
-    mut live := Vector {} as Vector<int>
-    defer live.free()
-    mut done := Vector {} as Vector<int>
-    defer done.free()
-    repeat p.len() with i: live.push(p.get(i)) end
-    repeat x.len() with i: done.push(x.get(i)) end
-    repeat cand.len() with i:
-        v := cand.get(i)
-        _bk_filter(adj, n, live, v, px)
-        _bk_filter(adj, n, done, v, xx)
-        r.push(v)
-        _bk_run(adj, n, r, px, xx, best)
-        r.pop()
-        _bk_drop(live, v)
-        done.push(v)
-    end
-end
-
-func _bk_drop(v &: Vector<int>, x: int):
-    mut keep := Vector {} as Vector<int>
-    repeat v.len() with i:
-        if v.get(i) != x: keep.push(v.get(i)) end
-    end
-    v.clear()
-    repeat keep.len() with i: v.push(keep.get(i)) end
-    keep.free()
-end
-
-func _bk_record(r: Vector<int>, best &: Vector<int>):
-    if r.len() <= best.len(): ret end
-    best.clear()
-    repeat r.len() with i: best.push(r.get(i)) end
-end
 
 func _mark_incident(g &: Graph, u: int, ecolor: Vector<int>, used &: Vector<bool>):
     mut k := g.adj_start(u)
@@ -413,25 +265,6 @@ pub func ChromaticNumber(g &: Graph): int:
         k += 1
     end
     ret limit
-end
-
-// The number of proper colourings with k colours: the chromatic polynomial
-// evaluated at k. Zero exactly when k is below the chromatic number, which
-// makes it a second, independent way to compute that number.
-@en "CountColorings"
-@fa "شمار رنگ‌آمیزی‌ها"
-@ar "عدد التلوينات"
-pub func CountColorings(g &: Graph, k: int): f64:
-    mut s := Simplify(g)
-    repeat g.size() with e:
-        if g.edge_from(e) == g.edge_to(e):
-            s.free()
-            ret 0.0
-        end
-    end
-    v := _count_colorings(s, k)
-    s.free()
-    ret v
 end
 
 // Greedy edge colouring: adjacent edges get different colours. Vizing's

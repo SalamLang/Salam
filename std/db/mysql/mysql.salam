@@ -57,6 +57,16 @@ extern:
     // below.
     func mysql_thread_init(): bool
     func mysql_thread_end()
+    // Whole-library setup/teardown. libmariadb will initialise itself on the
+    // first mysql_init(), but that lazy path is not thread safe: two threads
+    // reaching it at once race on the same global tables. A threaded program
+    // calls LibraryInit() from main before it starts any thread.
+    //
+    // The names are mysql_server_init/mysql_server_end: the mysql_library_*
+    // spellings everyone knows from the manual are #defines in mysql.h, so
+    // they exist for a C caller and not for a linker.
+    func mysql_server_init(argc: int, argv: void*, groups: void*): int
+    func mysql_server_end()
     func mysql_get_server_info(conn: void*): str
 end
 import mem
@@ -457,6 +467,29 @@ pub func QueryText(db: Database, sql: str): str:
     end
     Finish(res)
     ret out
+end
+
+// Initialise the client library itself. Call this ONCE from the main thread
+// before spawning anything - a threaded server does it at startup, right
+// before the accept loop.
+//
+// Returns true on success. Skipping it works for a single-threaded program,
+// because the first mysql_init() initialises the library implicitly; in a
+// threaded one that implicit path is a race two connections can lose.
+@en "LibraryInit"
+@fa "آماده سازی کتابخانه"
+@ar "تهیئة المكتبة"
+pub func LibraryInit(): bool:
+    ret mysql_server_init(0, null, null) == 0
+end
+
+// Release everything the client library holds. Optional at process exit;
+// worth calling when a leak checker is watching.
+@en "LibraryEnd"
+@fa "پایان کتابخانه"
+@ar "إنهاء المكتبة"
+pub func LibraryEnd():
+    mysql_server_end()
 end
 
 // Prepare the CALLING thread to use this library. Safe to call more than

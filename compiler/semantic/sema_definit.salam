@@ -203,16 +203,15 @@ func di_if(s &: Sema, d &: Di, a &: at.Ast, nid: int):
     di_expr(s, d, a, n.a)
     nv := d.vars.len()
     mut base := di_snap(d, nv)
-    th := di_arm(s, d, a, n.b, base, nv)
+    mut th := di_arm(s, d, a, n.b, base, nv)
     th_live := !sema_stmt_terminates(s, a, n.b)
-    mut el := di_snap(d, 0)
+    mut el := Vector {} as Vector<int>
     mut el_live := true
     if n.c != 0:
         el = di_arm(s, d, a, n.c, base, nv)
         el_live = !sema_stmt_terminates(s, a, n.c)
     else:
         // The implicit empty else assigns nothing.
-        el = di_snap(d, 0)
         repeat nv with i:
             el.push(base.get(i))
         end
@@ -231,6 +230,9 @@ func di_if(s &: Sema, d &: Di, a &: at.Ast, nid: int):
             di_set_inited(d, i, true)
         end
     end
+    base.free()
+    th.free()
+    el.free()
 end
 
 func di_match(s &: Sema, d &: Di, a &: at.Ast, nid: int):
@@ -250,7 +252,7 @@ func di_match(s &: Sema, d &: Di, a &: at.Ast, nid: int):
         if at.Get(a, arm).op == tok.TK_KW_ELSE:
             has_else = true
         end
-        st := di_arm(s, d, a, body, base, nv)
+        mut st := di_arm(s, d, a, body, base, nv)
         if !sema_stmt_terminates(s, a, body):
             any_live = true
             repeat nv with k:
@@ -259,6 +261,7 @@ func di_match(s &: Sema, d &: Di, a &: at.Ast, nid: int):
                 end
             end
         end
+        st.free()
     end
     di_load(d, base, nv)
     // Without an else arm the match may match nothing, so nothing it assigns
@@ -270,6 +273,8 @@ func di_match(s &: Sema, d &: Di, a &: at.Ast, nid: int):
             end
         end
     end
+    base.free()
+    acc.free()
 end
 
 // The body of a loop may run zero times, so whatever it assigns is not
@@ -284,6 +289,7 @@ func di_loop(s &: Sema, d &: Di, a &: at.Ast, cond: int, body: int, post: int):
     di_stmt(s, d, a, post)
     di_drop_to(d, nv)
     di_load(d, base, nv)
+    base.free()
 end
 
 func di_for(s &: Sema, d &: Di, a &: at.Ast, nid: int):
@@ -441,4 +447,8 @@ pub func SemaCheckDefiniteInit(s &: Sema, a &: at.Ast, fnid: int):
     mut d := Di {}
     di_scan_filled(d, a, body)
     di_stmt(s, d, a, body)
+    // Both vectors hold borrowed AST names, so the storage is all there is to
+    // release. Without this every checked function left two blocks behind.
+    d.vars.free()
+    d.filled.free()
 end

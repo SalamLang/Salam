@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS click_log (
     id         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     link_id    INT UNSIGNED NOT NULL,
     clicked_at DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    referer    VARCHAR(255) NULL,
+    referrer   VARCHAR(255) NULL,
     PRIMARY KEY (id),
     KEY idx_clicks_link_day (link_id, clicked_at),
     CONSTRAINT fk_clicks_link FOREIGN KEY (link_id) REFERENCES links (id) ON DELETE CASCADE

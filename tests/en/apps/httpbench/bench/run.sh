@@ -104,24 +104,37 @@ ensure_assets() {
     if [ ! -s "$ASSETS/style.css" ]; then
         say "regenerating $ASSETS/style.css (gitignored)"
         cat > "$ASSETS/style.css" <<'CSS'
-:root { color-scheme: light dark; --bg:#fff; --fg:#1b1b1f; --muted:#5b5b66;
-        --line:#e2e2e8; --accent:#2f6f4f; }
-@media (prefers-color-scheme: dark) {
-  :root { --bg:#16161a; --fg:#eceef2; --muted:#a0a0ad; --line:#2c2c34;
-          --accent:#7fd1a5; }
+:root {
+    color-scheme: light dark;
+    --bg:#fff; --fg:#1b1b1f; --muted:#5b5b66;
+    --line:#e2e2e8; --accent:#2f6f4f;
 }
-body { margin:0; background:var(--bg); color:var(--fg);
-       font:16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+@media (prefers-color-scheme: dark) {
+    :root {
+        --bg:#16161a; --fg:#eceef2; --muted:#a0a0ad;
+        --line:#2c2c34; --accent:#7fd1a5;
+    }
+}
+body {
+    margin:0; background:var(--bg); color:var(--fg);
+    font:16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
 main { max-width:46rem; margin:0 auto; padding:3rem 1.25rem; }
 h1 { margin:0 0 .35rem; font-size:1.65rem; letter-spacing:-.01em; }
 p { margin:0 0 1.75rem; color:var(--muted); }
 table { width:100%; border-collapse:collapse; font-size:.94rem; }
-th, td { text-align:left; padding:.55rem .7rem; border-bottom:1px solid var(--line);
-         vertical-align:top; }
-th { font-weight:600; color:var(--muted); font-size:.8rem; text-transform:uppercase;
-     letter-spacing:.06em; }
-td:first-child { white-space:nowrap;
-                 font-family:ui-monospace, SFMono-Regular, Menlo, monospace; }
+th, td {
+    text-align:left; padding:.55rem .7rem;
+    border-bottom:1px solid var(--line); vertical-align:top;
+}
+th {
+    font-weight:600; color:var(--muted); font-size:.8rem;
+    text-transform:uppercase; letter-spacing:.06em;
+}
+td:first-child {
+    white-space:nowrap;
+    font-family:ui-monospace, SFMono-Regular, Menlo, monospace;
+}
 a { color:var(--accent); text-decoration:none; }
 a:hover { text-decoration:underline; }
 CSS

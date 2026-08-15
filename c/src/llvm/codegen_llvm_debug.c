@@ -64,7 +64,8 @@ const char *ll_tbaa_suffix(ll_t *ll, const char *ts, bool is_field)
     if (!ll->tbaa_data_sfx) {
         const char *node, *tag;
         ll_tbaa_ensure_common(ll);
-        node = ll_meta_add(ll, ll_fmt(ll, "!{!\"salam data\", %s, i64 0}", ll->tbaa_char));
+        node =
+            ll_meta_add(ll, ll_fmt(ll, "!{!\"salam data\", %s, i64 0}", ll->tbaa_char));
         tag = ll_meta_add(ll, ll_fmt(ll, "!{%s, %s, i64 0}", node, node));
         ll->tbaa_data_sfx = ll_fmt(ll, ", !tbaa %s", tag);
     }

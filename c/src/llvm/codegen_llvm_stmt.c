@@ -153,8 +153,7 @@ void ll_assign(ll_t *ll, ast_node_t *n)
         bin.type_str = ts;
         rhs = ll_conv(ll, ll_binary(ll, &bin), ts);
     }
-    ll_emit(ll, "store %s %s, ptr %s%s", ll_ty(ll, ts), rhs, a.ptr,
-            a.tbaa ? a.tbaa : "");
+    ll_emit(ll, "store %s %s, ptr %s%s", ll_ty(ll, ts), rhs, a.ptr, a.tbaa ? a.tbaa : "");
 }
 
 static void ll_stmts_scoped(ll_t *ll, ast_node_t *block)

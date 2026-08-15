@@ -546,6 +546,14 @@ if want general; then
             exp="$(pick_expect "tests/$lang/general/$name")"
             [ -f "$exp" ] || continue
             def=$(grep -o 'DEFINE: [A-Za-z0-9_]*' "$f" | sed 's/DEFINE: /-D/' | tr '\n' ' ')
+            # `// CONST: NAME=VALUE` -> `-dNAME=VALUE`, the value-carrying
+            # sibling of DEFINE (a bare NAME is the flag's valueless form).
+            # [!-~] is "printable, not a space": a value may not contain one,
+            # because the whole flag list travels as a single tab-separated
+            # jobs.tsv field and is word-split back apart in the worker.
+            # Quotes are kept literal on purpose - `-dTAG="0.3"` is how a
+            # numeric-looking constant is pinned to str.
+            def="$def$(grep -o 'CONST: [!-~]*' "$f" | sed 's/CONST: /-d/' | tr '\n' ' ')"
             add_job build "general/$lang/$name" "$f" "$lang" "$exp" "${def:--}"
         done
     done

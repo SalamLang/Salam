@@ -1,0 +1,342 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/matrix: the structural predicates, and the attributes that go with them.
+
+import matrix
+import testing
+
+func mk(r: int, c: int, base: f64): matrix.Matrix:
+    mut m := matrix.Zeros(r, c)
+    repeat m.count() with k: m.a.set(k, base + (k as f64)) end
+    ret m
+end
+
+func check_basic():
+    tol := 0.000000001
+
+    mut e := matrix.Eye(3)
+    testing.AssertTrue(matrix.IsSquare(e))
+    testing.AssertTrue(matrix.IsIdentity(e, tol))
+    testing.AssertTrue(matrix.IsSymmetric(e, tol))
+    testing.AssertTrue(matrix.IsDiagonal(e, tol))
+    testing.AssertTrue(matrix.IsOrthogonal(e, tol))
+    testing.AssertTrue(matrix.IsNormal(e, tol))
+    testing.AssertTrue(matrix.IsIdempotent(e, tol))
+    testing.AssertTrue(matrix.IsInvolutory(e, tol))
+    testing.AssertTrue(matrix.IsInvertible(e))
+    testing.AssertFalse(matrix.IsSingular(e))
+    testing.AssertFalse(matrix.IsZero(e, tol))
+
+    mut z := matrix.Zeros(3, 3)
+    testing.AssertTrue(matrix.IsZero(z, tol))
+    testing.AssertTrue(matrix.IsSymmetric(z, tol))
+    testing.AssertTrue(matrix.IsSkewSymmetric(z, tol))
+    testing.AssertTrue(matrix.IsSingular(z))
+    testing.AssertTrue(matrix.IsNilpotent(z, tol))
+
+    mut rect := matrix.Zeros(2, 3)
+    testing.AssertFalse(matrix.IsSquare(rect))
+    testing.AssertFalse(matrix.IsSymmetric(rect, tol))
+    testing.AssertTrue(matrix.IsSingular(rect))
+
+    defer e.free()
+    defer z.free()
+    defer rect.free()
+end
+
+func check_symmetry():
+    tol := 0.000000001
+
+    mut a := mk(3, 3, 1.0)
+    testing.AssertFalse(matrix.IsSymmetric(a, tol))
+
+    mut s := matrix.SymPart(a)
+    testing.AssertTrue(matrix.IsSymmetric(s, tol))
+    testing.AssertFalse(matrix.IsSkewSymmetric(s, tol))
+
+    mut k := matrix.SkewPart(a)
+    testing.AssertTrue(matrix.IsSkewSymmetric(k, tol))
+    // A skew-symmetric matrix has a zero diagonal by construction
+    testing.AssertEqFloat(k.at(0, 0), 0.0, tol)
+    testing.AssertEqFloat(k.at(2, 2), 0.0, tol)
+
+    // The cross-product matrix is the canonical skew example
+    mut cx := matrix.Zeros(3, 3)
+    cx.set(0, 1, 0.0 - 3.0)
+    cx.set(0, 2, 2.0)
+    cx.set(1, 0, 3.0)
+    cx.set(1, 2, 0.0 - 1.0)
+    cx.set(2, 0, 0.0 - 2.0)
+    cx.set(2, 1, 1.0)
+    testing.AssertTrue(matrix.IsSkewSymmetric(cx, tol))
+    testing.AssertTrue(matrix.IsNormal(cx, tol))
+
+    // The tolerance is doing real work: a matrix off by 1e-12 is symmetric
+    // for any practical purpose but not exactly so.
+    mut nearly := matrix.SymPart(a)
+    nearly.add_at(0, 1, 1.0e-12)
+    testing.AssertFalse(matrix.IsSymmetric(nearly, 0.0))
+    testing.AssertTrue(matrix.IsSymmetric(nearly, 0.000001))
+
+    defer a.free()
+    defer s.free()
+    defer k.free()
+    defer cx.free()
+    defer nearly.free()
+end
+
+func check_triangular():
+    tol := 0.000000001
+
+    mut a := mk(4, 4, 1.0)
+    mut u := matrix.Triu(a, 0)
+    mut l := matrix.Tril(a, 0)
+    testing.AssertTrue(matrix.IsUpperTriangular(u, tol))
+    testing.AssertFalse(matrix.IsLowerTriangular(u, tol))
+    testing.AssertTrue(matrix.IsLowerTriangular(l, tol))
+    testing.AssertFalse(matrix.IsUpperTriangular(l, tol))
+
+    // A diagonal matrix is both
+    mut d := matrix.Eye(4)
+    testing.AssertTrue(matrix.IsUpperTriangular(d, tol))
+    testing.AssertTrue(matrix.IsLowerTriangular(d, tol))
+    testing.AssertTrue(matrix.IsDiagonal(d, tol))
+    testing.AssertFalse(matrix.IsDiagonal(u, tol))
+
+    // Bandwidths
+    testing.AssertEqInt(matrix.LowerBandwidth(d, tol), 0)
+    testing.AssertEqInt(matrix.UpperBandwidth(d, tol), 0)
+    testing.AssertEqInt(matrix.LowerBandwidth(l, tol), 3)
+    testing.AssertEqInt(matrix.UpperBandwidth(u, tol), 3)
+    testing.AssertTrue(matrix.IsBanded(d, 0, 0, tol))
+    testing.AssertFalse(matrix.IsBanded(a, 0, 0, tol))
+
+    // A tridiagonal matrix has bandwidth one in each direction
+    mut tri := matrix.Eye(4)
+    tri.set(0, 1, 1.0)
+    tri.set(1, 0, 1.0)
+    tri.set(2, 3, 1.0)
+    testing.AssertTrue(matrix.IsBanded(tri, 1, 1, tol))
+    testing.AssertEqInt(matrix.LowerBandwidth(tri, tol), 1)
+    testing.AssertEqInt(matrix.UpperBandwidth(tri, tol), 1)
+
+    defer a.free()
+    defer u.free()
+    defer l.free()
+    defer d.free()
+    defer tri.free()
+end
+
+func check_orthogonal_and_projections():
+    tol := 0.000001
+
+    // A rotation is orthogonal, normal and invertible, but not symmetric
+    mut r := matrix.Rotation2D(0.7)
+    testing.AssertTrue(matrix.IsOrthogonal(r, tol))
+    testing.AssertTrue(matrix.IsNormal(r, tol))
+    testing.AssertFalse(matrix.IsSymmetric(r, tol))
+    testing.AssertFalse(matrix.IsIdempotent(r, tol))
+
+    // A reflection is orthogonal, symmetric and its own inverse
+    mut v := matrix.Zeros(2, 1)
+    v.set(0, 0, 1.0)
+    v.set(1, 0, 1.0)
+    mut h := matrix.Householder(v)
+    testing.AssertTrue(matrix.IsOrthogonal(h, tol))
+    testing.AssertTrue(matrix.IsSymmetric(h, tol))
+    testing.AssertTrue(matrix.IsInvolutory(h, tol))
+
+    // A projection onto one axis is idempotent, and its trace is its rank
+    mut p := matrix.Zeros(3, 3)
+    p.set(0, 0, 1.0)
+    p.set(1, 1, 1.0)
+    testing.AssertTrue(matrix.IsIdempotent(p, tol))
+    testing.AssertEqFloat(matrix.Trace(p), 2.0, tol)
+    testing.AssertEqInt(matrix.MatrixRank(p, 0.0), 2)
+    testing.AssertTrue(matrix.IsSingular(p))
+
+    // A strictly upper triangular matrix is nilpotent
+    mut n := matrix.Zeros(3, 3)
+    n.set(0, 1, 1.0)
+    n.set(1, 2, 1.0)
+    testing.AssertTrue(matrix.IsNilpotent(n, tol))
+    testing.AssertFalse(matrix.IsNilpotent(p, tol))
+
+    defer r.free()
+    defer v.free()
+    defer h.free()
+    defer p.free()
+    defer n.free()
+end
+
+func check_definiteness():
+    tol := 0.000001
+
+    mut spd := matrix.RandomSPD(4, 17)
+    testing.AssertTrue(matrix.IsPositiveDefinite(spd, tol))
+    testing.AssertTrue(matrix.IsPositiveSemiDefinite(spd, tol))
+
+    // A Gram matrix of a rank-deficient matrix is semidefinite but not definite
+    mut rank1 := matrix.Zeros(3, 2)
+    repeat 3 with i:
+        rank1.set(i, 0, 1.0)
+        rank1.set(i, 1, 2.0)
+    end
+    mut g := matrix.Gram(rank1)
+    testing.AssertTrue(matrix.IsPositiveSemiDefinite(g, tol))
+    testing.AssertFalse(matrix.IsPositiveDefinite(g, tol))
+
+    // A negative definite matrix is neither
+    mut neg := matrix.Eye(2)
+    matrix.ScaleInPlace(neg, 0.0 - 1.0)
+    testing.AssertFalse(matrix.IsPositiveDefinite(neg, tol))
+    testing.AssertFalse(matrix.IsPositiveSemiDefinite(neg, tol))
+
+    defer spd.free()
+    defer rank1.free()
+    defer g.free()
+    defer neg.free()
+end
+
+func check_stochastic():
+    tol := 0.000001
+
+    // A Markov transition matrix: nonnegative rows summing to 1
+    mut m := matrix.Zeros(2, 2)
+    m.set(0, 0, 0.7)
+    m.set(0, 1, 0.3)
+    m.set(1, 0, 0.4)
+    m.set(1, 1, 0.6)
+    testing.AssertTrue(matrix.IsRowStochastic(m, tol))
+    testing.AssertFalse(matrix.IsColStochastic(m, tol))
+    testing.AssertFalse(matrix.IsDoublyStochastic(m, tol))
+
+    // A permutation matrix is doubly stochastic and orthogonal
+    mut perm := matrix.Zeros(1, 3)
+    perm.set(0, 0, 2.0)
+    perm.set(0, 1, 0.0)
+    perm.set(0, 2, 1.0)
+    mut p := matrix.Permutation(perm)
+    testing.AssertTrue(matrix.IsPermutation(p, tol))
+    testing.AssertTrue(matrix.IsDoublyStochastic(p, tol))
+    testing.AssertTrue(matrix.IsOrthogonal(p, tol))
+    testing.AssertFalse(matrix.IsPermutation(m, tol))
+
+    // A negative entry disqualifies a matrix even if the rows sum to 1
+    mut bad := matrix.Zeros(2, 2)
+    bad.set(0, 0, 1.5)
+    bad.set(0, 1, 0.0 - 0.5)
+    bad.set(1, 0, 0.5)
+    bad.set(1, 1, 0.5)
+    testing.AssertFalse(matrix.IsRowStochastic(bad, tol))
+
+    defer m.free()
+    defer perm.free()
+    defer p.free()
+    defer bad.free()
+end
+
+func check_structured():
+    tol := 0.000001
+
+    // Toeplitz: constant along diagonals
+    mut c := matrix.Zeros(1, 3)
+    c.set(0, 0, 1.0)
+    c.set(0, 1, 2.0)
+    c.set(0, 2, 3.0)
+    mut r := matrix.Zeros(1, 3)
+    r.set(0, 0, 1.0)
+    r.set(0, 1, 4.0)
+    r.set(0, 2, 5.0)
+    mut t := matrix.Toeplitz(c, r)
+    testing.AssertTrue(matrix.IsToeplitz(t, tol))
+    testing.AssertFalse(matrix.IsHankel(t, tol))
+
+    // A circulant matrix is Toeplitz too
+    mut circ := matrix.Circulant(c)
+    testing.AssertTrue(matrix.IsToeplitz(circ, tol))
+
+    // Hankel: constant along antidiagonals
+    mut lr := matrix.Zeros(1, 3)
+    lr.set(0, 0, 3.0)
+    lr.set(0, 1, 6.0)
+    lr.set(0, 2, 7.0)
+    mut hk := matrix.Hankel(c, lr)
+    testing.AssertTrue(matrix.IsHankel(hk, tol))
+
+    // The identity is both, trivially
+    mut e := matrix.Eye(3)
+    testing.AssertTrue(matrix.IsToeplitz(e, tol))
+
+    defer c.free()
+    defer r.free()
+    defer t.free()
+    defer circ.free()
+    defer lr.free()
+    defer hk.free()
+    defer e.free()
+end
+
+func check_density():
+    mut e := matrix.Eye(4)
+    testing.AssertEqFloat(matrix.Density(e), 0.25, 0.000001)
+    testing.AssertEqInt(matrix.CountNonZero(e), 4)
+
+    mut full := matrix.Full(2, 2, 1.0)
+    testing.AssertEqFloat(matrix.Density(full), 1.0, 0.000001)
+
+    mut z := matrix.Zeros(2, 2)
+    testing.AssertEqFloat(matrix.Density(z), 0.0, 0.000001)
+
+    mut empty := matrix.Zeros(0, 0)
+    testing.AssertEqFloat(matrix.Density(empty), 0.0, 0.000001)
+
+    defer e.free()
+    defer full.free()
+    defer z.free()
+    defer empty.free()
+end
+
+func check_allclose():
+    mut a := mk(2, 2, 1.0)
+    mut b := matrix.Clone(a)
+    testing.AssertTrue(matrix.AllClose(a, b, 0.0))
+    b.add_at(0, 0, 1.0e-12)
+    testing.AssertFalse(matrix.AllClose(a, b, 0.0))
+    testing.AssertTrue(matrix.AllClose(a, b, 0.000001))
+
+    // Different shapes are never close
+    mut c := matrix.Zeros(3, 3)
+    testing.AssertFalse(matrix.AllClose(a, c, 1.0))
+
+    defer a.free()
+    defer b.free()
+    defer c.free()
+end
+
+func main:
+    check_basic()
+    check_symmetry()
+    check_triangular()
+    check_orthogonal_and_projections()
+    check_definiteness()
+    check_stochastic()
+    check_structured()
+    check_density()
+    check_allclose()
+    ret testing.Summary()
+end

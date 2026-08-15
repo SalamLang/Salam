@@ -1,0 +1,99 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// sync.WaitGroup: waiting for a group of threads to finish without joining
+// them one by one.
+//
+// Add(n) before spawning, Done() as the last thing each worker does, Wait()
+// blocks until the counter reaches zero. The counter is the whole API.
+//
+// WAIT IS NOT JOIN
+//
+// Wait() says "the work is finished". join() says "this thread has exited".
+// They usually happen a moment apart, and both are needed: Wait so the main
+// thread can read the result, join so the thread's resources are released.
+// The test below reads the total straight after Wait, which is exactly what
+// Wait is for - if Wait returned early the total would be short.
+//
+// Add() BEFORE spawn, ALWAYS
+//
+// Adding from inside the worker is a race with the Wait: if the main thread
+// reaches Wait before the first worker has run its Add, the counter is still
+// zero and Wait returns immediately. Every Add here happens on the main
+// thread before any thread starts.
+
+import sync
+
+const WORKERS := 4
+const PER_WORKER := 2500
+
+mut total := 0
+mut lock := sync.Mutex {}
+mut wg := sync.WaitGroup {}
+
+func worker():
+    repeat PER_WORKER:
+        sync.Lock(lock)
+        total = total + 1
+        sync.Unlock(lock)
+    end
+    // The last thing, always: a Done that is skipped on some path leaves
+    // Wait blocked forever.
+    sync.Done(wg)
+end
+
+func main:
+    lock = sync.NewMutex()
+    wg = sync.NewWaitGroup()
+
+    // Waiting for nothing returns immediately. Worth stating: a group whose
+    // counter is already zero is the base case a loop over batches hits.
+    sync.Wait(wg)
+    println "empty wait returns"
+
+    sync.Add(wg, WORKERS as i64)
+    t1 := spawn(worker)
+    t2 := spawn(worker)
+    t3 := spawn(worker)
+    t4 := spawn(worker)
+
+    // Blocks until all four have called Done.
+    sync.Wait(wg)
+    println "after wait    :", total, "of", WORKERS * PER_WORKER
+    println "all done      :", total == WORKERS * PER_WORKER
+
+    // Then join, so the threads themselves are cleaned up.
+    join(t1)
+    join(t2)
+    join(t3)
+    join(t4)
+    println "joined"
+
+    // A group is reusable: add again and run a second batch through it.
+    total = 0
+    sync.Add(wg, 2 as i64)
+    a := spawn(worker)
+    b := spawn(worker)
+    sync.Wait(wg)
+    join(a)
+    join(b)
+    println "second batch  :", total, "of", 2 * PER_WORKER
+
+    sync.DestroyWaitGroup(wg)
+    sync.Destroy(lock)
+    println "destroyed"
+    ret 0
+end

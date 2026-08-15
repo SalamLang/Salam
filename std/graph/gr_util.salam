@@ -1,0 +1,300 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package graph
+
+// Shared machinery: a binary heap keyed on f64, a disjoint-set forest, and the
+// array fills every algorithm in this library starts with.
+//
+// The heap stores the key and the payload in two parallel vectors rather than
+// a vector of pairs. That keeps the comparison a plain f64 load in the sift
+// loops, which is where a Dijkstra run spends most of its time, and it avoids
+// pushing a struct through a generic container on every relaxation.
+//
+// It is a lazy heap: it has no decrease-key. Relaxing a node pushes a second
+// entry with the smaller key, and the stale entry is recognised on pop
+// (its key no longer matches dist[v]) and skipped. That makes the heap
+// O(m log m) instead of O(m log n), which is the same complexity class, and
+// costs far less than maintaining node->position indices.
+
+@en "MinHeap"
+@fa "هرم کمینه"
+@ar "كومة صغرى"
+pub struct MinHeap:
+    pub key: Vector<f64> = Vector {}
+    pub val: Vector<int> = Vector {}
+
+    pub func _swap(i: int, j: int):
+        ka := this.key.get(i)
+        kb := this.key.get(j)
+        this.key.set(i, kb)
+        this.key.set(j, ka)
+        va := this.val.get(i)
+        vb := this.val.get(j)
+        this.val.set(i, vb)
+        this.val.set(j, va)
+    end
+
+    @en "push"
+    @fa "افزودن"
+    @ar "إضافة"
+    pub func push(k: f64, v: int):
+        this.key.push(k)
+        this.val.push(v)
+        mut i := this.key.len() - 1
+        until i > 0:
+            p := (i - 1) / 2
+            if this.key.get(p) <= this.key.get(i): break end
+            this._swap(i, p)
+            i = p
+        end
+    end
+
+    @en "size"
+    @fa "اندازه"
+    @ar "حجم"
+    pub func size(): int: ret this.val.len() end
+
+    @en "is_empty"
+    @fa "تهی است"
+    @ar "فارغ"
+    pub func is_empty(): bool: ret this.val.len() == 0 end
+
+    @en "top_key"
+    @fa "کلید بالا"
+    @ar "مفتاح القمة"
+    pub func top_key(): f64: ret this.key.get(0) end
+
+    @en "top_value"
+    @fa "مقدار بالا"
+    @ar "قيمة القمة"
+    pub func top_value(): int: ret this.val.get(0) end
+
+    @en "pop"
+    @fa "برداشتن"
+    @ar "إخراج"
+    pub func pop(): int:
+        top := this.val.get(0)
+        last := this.val.len() - 1
+        this.key.set(0, this.key.get(last))
+        this.val.set(0, this.val.get(last))
+        this.key.pop()
+        this.val.pop()
+        this._sift(0)
+        ret top
+    end
+
+    pub func _sift(from: int):
+        n := this.val.len()
+        mut i := from
+        until true:
+            l := 2 * i + 1
+            if l >= n: break end
+            mut s := l
+            r := l + 1
+            if r < n:
+                if this.key.get(r) < this.key.get(l): s = r end
+            end
+            if this.key.get(i) <= this.key.get(s): break end
+            this._swap(i, s)
+            i = s
+        end
+    end
+
+    @en "clear"
+    @fa "پاکسازی"
+    @ar "مسح"
+    pub func clear():
+        this.key.clear()
+        this.val.clear()
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free():
+        this.key.free()
+        this.val.free()
+    end
+end
+
+// Disjoint-set forest with union by size and full path compression. Kruskal,
+// Boruvka, the cycle test and the connected-component shortcuts all sit on
+// top of it; find is effectively constant time (inverse Ackermann).
+@en "DisjointSet"
+@fa "مجموعه‌های جدا"
+@ar "مجموعات منفصلة"
+pub struct DisjointSet:
+    pub parent: Vector<int> = Vector {}
+    pub sz: Vector<int> = Vector {}
+    pub groups: int = 0
+
+    @en "reset"
+    @fa "بازنشانی"
+    @ar "إعادة"
+    pub func reset(n: int):
+        this.parent.clear()
+        this.sz.clear()
+        repeat n with i:
+            this.parent.push(i)
+            this.sz.push(1)
+        end
+        this.groups = n
+    end
+
+    @en "find"
+    @fa "یافتن"
+    @ar "إيجاد"
+    pub func find(x: int): int:
+        mut r := x
+        until this.parent.get(r) != r: r = this.parent.get(r) end
+        mut c := x
+        until this.parent.get(c) != c:
+            nx := this.parent.get(c)
+            this.parent.set(c, r)
+            c = nx
+        end
+        ret r
+    end
+
+    @en "union"
+    @fa "یکی‌سازی"
+    @ar "دمج"
+    pub func union(a: int, b: int): bool:
+        mut ra := this.find(a)
+        mut rb := this.find(b)
+        if ra == rb: ret false end
+        if this.sz.get(ra) < this.sz.get(rb):
+            t := ra
+            ra = rb
+            rb = t
+        end
+        this.parent.set(rb, ra)
+        this.sz.set(ra, this.sz.get(ra) + this.sz.get(rb))
+        this.groups = this.groups - 1
+        ret true
+    end
+
+    @en "connected"
+    @fa "متصل"
+    @ar "متصل"
+    pub func connected(a: int, b: int): bool: ret this.find(a) == this.find(b) end
+
+    @en "set_size"
+    @fa "اندازه مجموعه"
+    @ar "حجم المجموعة"
+    pub func set_size(a: int): int: ret this.sz.get(this.find(a)) end
+
+    @en "count"
+    @fa "شمار"
+    @ar "عدد"
+    pub func count(): int: ret this.groups end
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free():
+        this.parent.free()
+        this.sz.free()
+    end
+end
+
+@en "NewDisjointSet"
+@fa "مجموعه جدا نو"
+@ar "مجموعة منفصلة جديدة"
+pub func NewDisjointSet(n: int): DisjointSet:
+    mut d := DisjointSet { }
+    d.reset(n)
+    ret d
+end
+
+@en "FillInt"
+@fa "پرکردن صحیح"
+@ar "ملء صحيح"
+pub func FillInt(v &: Vector<int>, n: int, x: int):
+    v.clear()
+    repeat n: v.push(x) end
+end
+
+@en "FillFloat"
+@fa "پرکردن اعشاری"
+@ar "ملء عشري"
+pub func FillFloat(v &: Vector<f64>, n: int, x: f64):
+    v.clear()
+    repeat n: v.push(x) end
+end
+
+@en "FillBool"
+@fa "پرکردن منطقی"
+@ar "ملء منطقي"
+pub func FillBool(v &: Vector<bool>, n: int, x: bool):
+    v.clear()
+    repeat n: v.push(x) end
+end
+
+@en "Iota"
+@fa "دنباله"
+@ar "تسلسل"
+pub func Iota(v &: Vector<int>, n: int):
+    v.clear()
+    repeat n with i: v.push(i) end
+end
+
+@en "MaxInt"
+@fa "بیشینه صحیح"
+@ar "أكبر صحيح"
+pub func MaxInt(v: Vector<int>): int:
+    if v.len() == 0: ret 0 end
+    mut b := v.get(0)
+    repeat v.len() with i:
+        if v.get(i) > b: b = v.get(i) end
+    end
+    ret b
+end
+
+@en "SumInt"
+@fa "مجموع صحیح"
+@ar "مجموع صحيح"
+pub func SumInt(v: Vector<int>): int:
+    mut s := 0
+    repeat v.len() with i: s += v.get(i) end
+    ret s
+end
+
+@en "SumFloat"
+@fa "مجموع اعشاری"
+@ar "مجموع عشري"
+pub func SumFloat(v: Vector<f64>): f64:
+    mut s := 0.0
+    repeat v.len() with i: s += v.get(i) end
+    ret s
+end
+
+// Reverse a node sequence in place, which is how every path routine here
+// turns a chain of predecessors into a path from source to target.
+@en "ReverseInt"
+@fa "وارونه‌سازی"
+@ar "عكس"
+pub func ReverseInt(v &: Vector<int>):
+    mut i := 0
+    mut j := v.len() - 1
+    until i < j:
+        a := v.get(i)
+        b := v.get(j)
+        v.set(i, b)
+        v.set(j, a)
+        i += 1
+        j = j - 1
+    end
+end

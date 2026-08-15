@@ -115,6 +115,16 @@ typedef struct {
     char exe_path[512];
     const char *defines[SALAM_MAX_INPUTS];
     int ndefines;
+    /* -dNAME=VALUE (or --const=NAME=VALUE), repeatable: a compile-time
+     * constant the program can read by name, as if the source had declared
+     * `const NAME := VALUE` at top level. Distinct from -D/--define, which
+     * feeds the conditional-compilation table and is only legal in an `if`
+     * condition. Names must be SCREAMING_SNAKE_CASE so a build-injected
+     * constant never reads as an ordinary local. A source-level declaration
+     * of the same name still wins; these are only consulted for a name
+     * nothing else defines. */
+    const char *consts[SALAM_MAX_INPUTS];
+    int nconsts;
     /* --export=Fn:CName, repeatable: keep top-level pub func Fn alive through
      * dead-code elimination and emit it under the literal C name CName rather
      * than the mangled one, so a host with no Salam entry point can link

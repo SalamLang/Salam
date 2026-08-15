@@ -1,0 +1,315 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// A load-bearing HTTP server whose only job is to be measured. Every route
+// isolates one cost so a number can be attributed to something:
+//
+//   GET  /plaintext      the floor: 13 bytes, no allocation past the response
+//   GET  /json           small-object serialization
+//   GET  /               an HTML page assembled per request
+//   GET  /file           read a file off disk on every request (no cache)
+//   GET  /cached         the same file, read once at boot (isolates the I/O)
+//   GET  /static/...     the server's own static-file path (sendfile-ish)
+//   GET  /users/:id      one path parameter, extracted by the router
+//   GET  /search?q=&n=   query-string parsing
+//   POST /echo           request body read back out
+//   GET  /compute?n=     CPU work, tunable, to find where the server stops
+//                        being the bottleneck
+//   GET  /headers        request headers walked and echoed
+//   GET  /health         a load balancer's poll
+//
+// The point of /cached next to /file, and of /compute's tunable n, is that a
+// single "requests per second" figure is not a fact about a server - it is a
+// fact about a server plus a workload. Two routes that differ in exactly one
+// cost let you subtract.
+//
+// Run it:  salam build tests/en/apps/httpbench/main.salam -o httpbench
+//          ./httpbench            # PORT=8099, or set PORT
+//
+// The comparison against php -S, node/express and nginx, along with the
+// method used to produce it, is in BENCHMARK.md next to this file.
+
+import os
+import conv
+import str
+import net.http
+import net.router
+
+const DEFAULT_PORT := 8099
+
+// Read once at boot so /cached can be compared against /file, whose whole
+// purpose is to pay the read on every request.
+mut _cached_file := ""
+mut _asset_dir := ""
+
+// ---------------------------------------------------------------- helpers
+
+func text(ctx: i64, body: str):
+    http.Ctx_status(ctx, 200)
+    http.Ctx_text(ctx, body)
+end
+
+func json_ok(ctx: i64, body: str):
+    http.Ctx_status(ctx, 200)
+    http.Ctx_json(ctx, body)
+end
+
+func fail(ctx: i64, code: int, message: str):
+    http.Ctx_status(ctx, code)
+    http.Ctx_json(ctx, `{"error":"`.concat(message).concat(`"}`))
+end
+
+// Clamps a query parameter to a range. A benchmark route that takes an
+// unbounded integer from the caller is a denial-of-service route.
+func int_query(ctx: i64, name: str, fallback: int, lo: int, hi: int): int:
+    raw := http.Ctx_query(ctx, name)
+    if raw.len() == 0: ret fallback end
+    v := raw.to_int()
+    if v < lo: ret lo end
+    if v > hi: ret hi end
+    ret v
+end
+
+// ---------------------------------------------------------------- routes
+
+// The floor. Whatever this route measures is the server itself: accept,
+// parse, route, serialize, write. Everything else is this plus something.
+func plaintext(ctx: i64):
+    text(ctx, "Hello, World!")
+end
+
+func health(ctx: i64):
+    json_ok(ctx, `{"status":"ok","service":"httpbench"}`)
+end
+
+// A small object, built per request rather than returned as a constant, so
+// the string work is real.
+func json_route(ctx: i64):
+    json_ok(
+        ctx,
+        `{"message":"Hello, World!","server":"salam","routes":13,"ok":true}`
+    )
+end
+
+// An HTML page assembled per request out of pieces, which is what a
+// templating layer ultimately does.
+func home(ctx: i64):
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    str.BufAppend(b, "<!doctype html>\n<html lang=\"en\">\n<head>\n")
+    str.BufAppend(b, "<meta charset=\"utf-8\">\n")
+    str.BufAppend(b, "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n")
+    str.BufAppend(b, "<title>Salam httpbench</title>\n")
+    str.BufAppend(b, "<link rel=\"stylesheet\" href=\"/static/style.css\">\n")
+    str.BufAppend(b, "</head>\n<body>\n<main>\n")
+    str.BufAppend(b, "<h1>Salam httpbench</h1>\n")
+    str.BufAppend(b, "<p>A server built to be measured. Each route isolates one cost.</p>\n")
+    str.BufAppend(b, "<table>\n<tr><th>Route</th><th>What it costs</th></tr>\n")
+    row(b, "/plaintext", "the floor: accept, parse, route, write")
+    row(b, "/json", "small-object serialization")
+    row(b, "/", "this page, assembled per request")
+    row(b, "/file", "a disk read on every request")
+    row(b, "/cached", "the same bytes, read once at boot")
+    row(b, "/static/style.css", "the built-in static file path")
+    row(b, "/users/:id", "one router-extracted path parameter")
+    row(b, "/search?q=salam&n=5", "query-string parsing")
+    row(b, "/compute?n=1000", "tunable CPU work")
+    row(b, "/headers", "request headers walked and echoed")
+    row(b, "/echo (POST)", "request body read back out")
+    row(b, "/health", "a load balancer's poll")
+    str.BufAppend(b, "</table>\n</main>\n</body>\n</html>\n")
+    http.Ctx_status(ctx, 200)
+    http.Ctx_html(ctx, str.BufStr(b))
+end
+
+func row(b &: str.StringBuilder, path: str, note: str):
+    str.BufAppend(b, "<tr><td><a href=\"")
+    str.BufAppend(b, path)
+    str.BufAppend(b, "\">")
+    str.BufAppend(b, path)
+    str.BufAppend(b, "</a></td><td>")
+    str.BufAppend(b, note)
+    str.BufAppend(b, "</td></tr>\n")
+end
+
+// Pays a full open/read/close per request, on purpose.
+func file_route(ctx: i64):
+    body := os.ReadFile(_asset_dir.concat("/data.json"))
+    if body.len() == 0:
+        fail(ctx, 500, "asset missing")
+        ret
+    end
+    json_ok(ctx, body)
+end
+
+// The same bytes with the read hoisted out. /file minus /cached is the cost
+// of the filesystem on this machine, per request.
+func cached_route(ctx: i64):
+    json_ok(ctx, _cached_file)
+end
+
+// One path parameter. The response embeds it so a load generator can tell
+// that routing actually happened rather than a static string being returned.
+func user_route(ctx: i64):
+    id := http.Ctx_param(ctx, "id")
+    if id.len() == 0:
+        fail(ctx, 400, "missing id")
+        ret
+    end
+    json_ok(
+        ctx,
+        `{"id":"`.concat(id).concat(`","name":"user-`).concat(id).concat(`","active":true}`)
+    )
+end
+
+// Query-string parsing, plus a result list whose length the caller picks, so
+// the response size is a variable rather than a constant.
+func search_route(ctx: i64):
+    q := http.Ctx_query(ctx, "q")
+    n := int_query(ctx, "n", 5, 0, 100)
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    str.BufAppend(b, `{"query":"`)
+    str.BufAppend(b, q)
+    str.BufAppend(b, `","count":`)
+    str.BufAppend(b, conv.FormatInt(n as i64))
+    str.BufAppend(b, `,"results":[`)
+    repeat n with i:
+        if i > 0: str.BufAppend(b, ",") end
+        str.BufAppend(b, `{"rank":`)
+        str.BufAppend(b, conv.FormatInt((i + 1) as i64))
+        str.BufAppend(b, `,"title":"`)
+        str.BufAppend(b, q)
+        str.BufAppend(b, " result ")
+        str.BufAppend(b, conv.FormatInt((i + 1) as i64))
+        str.BufAppend(b, `"}`)
+    end
+    str.BufAppend(b, "]}")
+    json_ok(ctx, str.BufStr(b))
+end
+
+// Reads the request body back out. Measures the read path with a body
+// attached, which the GET routes never exercise.
+func echo_route(ctx: i64):
+    body := http.Ctx_body(ctx)
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    str.BufAppend(b, `{"bytes":`)
+    str.BufAppend(b, conv.FormatInt(body.len() as i64))
+    str.BufAppend(b, `,"echo":"`)
+    str.BufAppend(b, escape_json(body))
+    str.BufAppend(b, `"}`)
+    json_ok(ctx, str.BufStr(b))
+end
+
+// Deliberately minimal: enough that an arbitrary request body cannot break
+// out of the JSON string it is placed in.
+func escape_json(s: str): str:
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    repeat s.len() with i:
+        c := s.substr(i, 1)
+        if c == `"`: str.BufAppend(b, `\"`)
+        else c == "\\": str.BufAppend(b, "\\\\")
+        else c == "\n": str.BufAppend(b, "\\n")
+        else c == "\r": str.BufAppend(b, "\\r")
+        else c == "\t": str.BufAppend(b, "\\t")
+        else:
+            str.BufAppend(b, c)
+        end
+    end
+    ret str.BufStr(b)
+end
+
+// Tunable CPU work. Turn n up until requests per second stops tracking the
+// server and starts tracking this loop - that crossover is the useful
+// number, because past it every server under test converges.
+func compute_route(ctx: i64):
+    n := int_query(ctx, "n", 1000, 0, 5000000)
+    mut acc := 0 as i64
+    mut i := 0
+    until i < n:
+        acc += ((i * i) % 7) as i64
+        i += 1
+    end
+    json_ok(
+        ctx,
+        `{"n":`.concat(conv.FormatInt(n as i64)).concat(`,"sum":`).concat(conv.FormatInt(acc)).concat("}")
+    )
+end
+
+// Walks the parsed request headers. A request with many headers costs more
+// here than a bare one, which is the point.
+func headers_route(ctx: i64):
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    str.BufAppend(b, `{"host":"`)
+    str.BufAppend(b, http.Ctx_header(ctx, "Host"))
+    str.BufAppend(b, `","user_agent":"`)
+    str.BufAppend(b, http.Ctx_header(ctx, "User-Agent"))
+    str.BufAppend(b, `","accept":"`)
+    str.BufAppend(b, http.Ctx_header(ctx, "Accept"))
+    str.BufAppend(b, `","method":"`)
+    str.BufAppend(b, http.Ctx_method(ctx))
+    str.BufAppend(b, `","path":"`)
+    str.BufAppend(b, http.Ctx_path(ctx))
+    str.BufAppend(b, `"}`)
+    json_ok(ctx, str.BufStr(b))
+end
+
+// ---------------------------------------------------------------- boot
+
+func asset_dir(): str:
+    d := os.Env("HTTPBENCH_ASSETS")
+    if d.len() > 0: ret d end
+    ret "tests/en/apps/httpbench/public"
+end
+
+func port(): int:
+    p := os.Env("PORT")
+    if p.len() == 0: ret DEFAULT_PORT end
+    v := p.to_int()
+    if v <= 0 || v > 65535: ret DEFAULT_PORT end
+    ret v
+end
+
+func main:
+    _asset_dir = asset_dir()
+    _cached_file = os.ReadFile(_asset_dir.concat("/data.json"))
+    if _cached_file.len() == 0:
+        println "assets not found under ", _asset_dir
+        println "run from the repository root, or set HTTPBENCH_ASSETS"
+        ret 1
+    end
+    mut r := router.NewRouter()
+    router.Get(r, "/", home)
+    router.Get(r, "/plaintext", plaintext)
+    router.Get(r, "/json", json_route)
+    router.Get(r, "/health", health)
+    router.Get(r, "/file", file_route)
+    router.Get(r, "/cached", cached_route)
+    router.Get(r, "/users/:id", user_route)
+    router.Get(r, "/search", search_route)
+    router.Get(r, "/compute", compute_route)
+    router.Get(r, "/headers", headers_route)
+    router.Post(r, "/echo", echo_route)
+    router.Static(r, "/static", _asset_dir)
+    mut s := http.NewServer(port())
+    http.Use(s, r)
+    println "httpbench on http://localhost:", conv.FormatInt(port() as i64)
+    http.Run(s)
+    ret 0
+end

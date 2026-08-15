@@ -193,7 +193,7 @@ end
 func call_module_func(
     ip &: Interp, a &: at.Ast, call: int, mid: int, fnname: str, args: Vector<Value>
 ): Value:
-    md := ip.mods.get(mid)[0]
+    md := ip.mods.get(mid)
     slot := env_find_local(ip, md.env, fnname)
     mut fv := val_null()
     if slot >= 0:
@@ -207,7 +207,7 @@ func call_module_func(
         )
         ret val_null()
     end
-    cl := ip.closures.get(fv.id)[0]
+    cl := ip.closures.get(fv.id)
     ret call_func(ip, a, cl.fn, cl.env, false, val_null(), args)
 end
 
@@ -221,8 +221,8 @@ func call_intrinsic(
         ret val_null()
     end
     handled = true
-    a0 := args.len() > 0 ? args.get(0)[0] : val_null()
-    a1 := args.len() > 1 ? args.get(1)[0] : val_null()
+    a0 := args.len() > 0 ? args.get(0) : val_null()
+    a1 := args.len() > 1 ? args.get(1) : val_null()
     if idx == 0:
         ret val_float(math.Sqrt(to_float(a0)))
     end
@@ -301,8 +301,8 @@ end
 func call_builtin_method(
     ip &: Interp, a &: at.Ast, call: int, recv: Value, method: str, args: Vector<Value>
 ): Value:
-    a0 := args.len() > 0 ? args.get(0)[0] : val_null()
-    a1 := args.len() > 1 ? args.get(1)[0] : val_null()
+    a0 := args.len() > 0 ? args.get(0) : val_null()
+    a1 := args.len() > 1 ? args.get(1) : val_null()
     if recv.kind == VAL_STR:
         s := recv.s
         if str.Equals(method, "len"):
@@ -365,8 +365,25 @@ func call_builtin_method(
                 )
                 ret val_null()
             end
+            ret arr_get(ip, aid, iv as int)
+        end
+        // The address form. There are no addresses in the tree walker, so it
+        // is the same one-element box get used to return: v.ref(i)[0] reads
+        // the element, and a write through it lands in the box, exactly as
+        // v.get(i)[0] = x always did here.
+        if str.Equals(method, "ref"):
+            ivr := to_int(a0)
+            nr := arr_len(ip, aid)
+            if ivr < (0 as i64) || ivr >= (nr as i64):
+                rt_error(
+                    ip, a, call, co.Format2(
+                        i18.Tr("vector index %lld out of range (len %zu)"), co.ArgInt(ivr), co.ArgUint(nr as u64)
+                    )
+                )
+                ret val_null()
+            end
             box := arr_new(ip, 1)
-            arr_push(ip, box, arr_get(ip, aid, iv as int))
+            arr_push(ip, box, arr_get(ip, aid, ivr as int))
             ret val_arr(box)
         end
         if str.Equals(method, "set"):
@@ -387,7 +404,7 @@ func call_builtin_method(
             ret val_int(arr_len(ip, aid) as i64)
         end
         if str.Equals(method, "cap"):
-            an := ip.arrs.get(aid)[0]
+            an := ip.arrs.get(aid)
             ret val_int(an.cap as i64)
         end
         if str.Equals(method, "free"):
@@ -400,19 +417,19 @@ func call_builtin_method(
             ret val_null()
         end
         if str.Equals(method, "get"):
-            m := ip.maps.get(mid)[0]
+            m := ip.maps.get(mid)
             e := map_find(m, a0)
-            ret e >= 0 ? m.vals.get(e)[0] : val_null()
+            ret e >= 0 ? m.vals.get(e) : val_null()
         end
         if str.Equals(method, "has"):
-            m2 := ip.maps.get(mid)[0]
+            m2 := ip.maps.get(mid)
             ret val_bool(map_find(m2, a0) >= 0)
         end
         if str.Equals(method, "remove"):
             ret val_bool(map_remove(ip, mid, a0))
         end
         if str.Equals(method, "size"):
-            m3 := ip.maps.get(mid)[0]
+            m3 := ip.maps.get(mid)
             ret val_int(m3.count as i64)
         end
         if str.Equals(method, "iter"):
@@ -433,24 +450,24 @@ func call_builtin_method(
             if efi == 0:
                 break
             end
-            ef := ip.extern_fns.get(efi)[0]
+            ef := ip.extern_fns.get(efi)
             mut allargs := Vector {} as Vector<Value>
             allargs.push(recv)
             repeat args.len() with j:
-                allargs.push(args.get(j)[0])
+                allargs.push(args.get(j))
             end
-            cl := ip.closures.get(ef.id)[0]
+            cl := ip.closures.get(ef.id)
             r := call_func(ip, a, cl.fn, cl.env, false, val_null(), allargs)
             allargs.free()
             ret r
         end
     else recv.kind == VAL_MAPITER:
-        itv := ip.iters.get(recv.id)[0]
-        m4 := ip.maps.get(itv.map)[0]
+        itv := ip.iters.get(recv.id)
+        m4 := ip.maps.get(itv.map)
         if str.Equals(method, "has_next"):
             mut i := itv.idx
             until i < m4.cap:
-                if m4.used.get(i)[0]:
+                if m4.used.get(i):
                     ret val_bool(true)
                 end
                 i += 1
@@ -459,7 +476,7 @@ func call_builtin_method(
         end
         if str.Equals(method, "next"):
             mut i2 := itv.idx
-            until i2 < m4.cap && !m4.used.get(i2)[0]:
+            until i2 < m4.cap && !m4.used.get(i2):
                 i2 += 1
             end
             if i2 < m4.cap:
@@ -470,17 +487,17 @@ func call_builtin_method(
         end
         if str.Equals(method, "key"):
             mut i3 := itv.idx
-            until i3 < m4.cap && !m4.used.get(i3)[0]:
+            until i3 < m4.cap && !m4.used.get(i3):
                 i3 += 1
             end
-            ret i3 < m4.cap ? m4.keys.get(i3)[0] : val_null()
+            ret i3 < m4.cap ? m4.keys.get(i3) : val_null()
         end
         if str.Equals(method, "value"):
             mut i4 := itv.idx
-            until i4 < m4.cap && !m4.used.get(i4)[0]:
+            until i4 < m4.cap && !m4.used.get(i4):
                 i4 += 1
             end
-            ret i4 < m4.cap ? m4.vals.get(i4)[0] : val_null()
+            ret i4 < m4.cap ? m4.vals.get(i4) : val_null()
         end
     end
     rt_error(

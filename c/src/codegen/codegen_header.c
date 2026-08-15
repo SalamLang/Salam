@@ -314,7 +314,15 @@ static void vec_emit(cg_t *cg, sb_t *h, const char *ts)
     sb_puts(h, cg_fmt(cg, "static %s %s_pop(%s* v){ return v->data[--v->len]; }\n", E, cn,
                       cn));
     sb_puts(h, cg_fmt(cg,
-                      "static %s* %s_get(%s* v, int32_t i){ if(i<0||i>=v->len) return "
+                      "static %s %s_get(%s* v, int32_t i){ if(i<0||i>=v->len) "
+                      "salam_panic(\"Vector.get: index out of bounds\"); return "
+                      "v->data[i]; }\n",
+                      E, cn, cn));
+    /* What get returned before it started handing back the element itself.
+     * Out of range stays a null pointer rather than a panic: this is the
+     * escape hatch, and code that reaches for it can check. */
+    sb_puts(h, cg_fmt(cg,
+                      "static %s* %s_ref(%s* v, int32_t i){ if(i<0||i>=v->len) return "
                       "(%s*)0; return &v->data[i]; }\n",
                       E, cn, cn, E));
     sb_puts(h, cg_fmt(cg,

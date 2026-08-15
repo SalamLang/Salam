@@ -1,0 +1,435 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package graph
+
+// Traversal and everything that falls straight out of it: breadth-first and
+// depth-first orders, reachability, unweighted shortest paths, connected
+// components, bipartiteness, cycle detection and topological order.
+//
+// Every routine here is iterative. A recursive DFS is shorter to write but
+// blows the C stack on the long paths that real graphs contain (a 200k-node
+// path graph is not unusual), so the explicit stack is not a stylistic
+// choice. The pattern is a node stack paired with an iterator stack holding
+// each frame's current position in the CSR adjacency, which is exactly what
+// the recursion would have kept in its frame.
+//
+// On a directed graph, traversal follows arcs. Connectivity and bipartiteness
+// instead use the underlying undirected graph, since those are the standard
+// meanings (weak connectivity); StronglyConnected in gr_connect.salam is the
+// directed notion.
+
+func _visit_out(g &: Graph, u: int, id: int, comp &: Vector<int>, q &: Vector<int>):
+    mut k := g.adj_start(u)
+    stop := g.adj_stop(u)
+    until k < stop:
+        v := g.adj_node(k)
+        if comp.get(v) == GRAPH_NONE:
+            comp.set(v, id)
+            q.push(v)
+        end
+        k += 1
+    end
+end
+
+func _visit_in(g &: Graph, u: int, id: int, comp &: Vector<int>, q &: Vector<int>):
+    mut k := g.in_start(u)
+    stop := g.in_stop(u)
+    until k < stop:
+        v := g.in_node(k)
+        if comp.get(v) == GRAPH_NONE:
+            comp.set(v, id)
+            q.push(v)
+        end
+        k += 1
+    end
+end
+
+func _comp_bfs(g &: Graph, s: int, id: int, comp &: Vector<int>):
+    mut q := Vector {} as Vector<int>
+    defer q.free()
+    q.push(s)
+    comp.set(s, id)
+    mut head := 0
+    until head < q.len():
+        u := q.get(head)
+        head += 1
+        _visit_out(g, u, id, comp, q)
+        if g.directed: _visit_in(g, u, id, comp, q) end
+    end
+end
+
+func _dfs_walk(g &: Graph, src: int, pre &: Vector<int>, post &: Vector<int>, seen &: Vector<bool>):
+    if seen.get(src): ret end
+    mut stack := Vector {} as Vector<int>
+    defer stack.free()
+    mut it := Vector {} as Vector<int>
+    defer it.free()
+    seen.set(src, true)
+    pre.push(src)
+    stack.push(src)
+    it.push(g.adj_start(src))
+    until stack.len() > 0:
+        u := stack.last()
+        k := it.last()
+        if k < g.adj_stop(u):
+            it.set(it.len() - 1, k + 1)
+            v := g.adj_node(k)
+            if seen.get(v) == false:
+                seen.set(v, true)
+                pre.push(v)
+                stack.push(v)
+                it.push(g.adj_start(v))
+            end
+        else:
+            post.push(u)
+            stack.pop()
+            it.pop()
+        end
+    end
+end
+
+func _color_bfs(g &: Graph, s: int, color &: Vector<int>): bool:
+    mut q := Vector {} as Vector<int>
+    defer q.free()
+    mut ok := true
+    color.set(s, 0)
+    q.push(s)
+    mut head := 0
+    until head < q.len():
+        u := q.get(head)
+        head += 1
+        if _color_step(g, u, color, q) == false: ok = false end
+    end
+    ret ok
+end
+
+func _color_step(g &: Graph, u: int, color &: Vector<int>, q &: Vector<int>): bool:
+    mut ok := true
+    mut k := g.adj_start(u)
+    stop := g.adj_stop(u)
+    until k < stop:
+        v := g.adj_node(k)
+        if color.get(v) == GRAPH_NONE:
+            color.set(v, 1 - color.get(u))
+            q.push(v)
+        else color.get(v) == color.get(u):
+            ok = false
+        end
+        k += 1
+    end
+    ret ok
+end
+
+func _stack_index(stack: Vector<int>, v: int): int:
+    mut i := stack.len() - 1
+    until i >= 0:
+        if stack.get(i) == v: ret i end
+        i = i - 1
+    end
+    ret GRAPH_NONE
+end
+
+func _cycle_from(stack: Vector<int>, at: int): Vector<int>:
+    mut out := Vector {} as Vector<int>
+    mut i := at
+    until i < stack.len():
+        out.push(stack.get(i))
+        i += 1
+    end
+    ret out
+end
+
+// One depth-first probe for a cycle. `state` is 0 unseen / 1 on the current
+// path / 2 finished; a hit on state 1 closes a cycle, which is why the walk
+// tracks the live path in `stack` rather than only a visited flag. On an
+// undirected graph the edge we arrived by must be excluded by edge id, not by
+// node id, or a parallel edge would be mistaken for the way back.
+func _find_cycle_from(g &: Graph, src: int, state &: Vector<int>, out &: Vector<int>): bool:
+    mut stack := Vector {} as Vector<int>
+    defer stack.free()
+    mut it := Vector {} as Vector<int>
+    defer it.free()
+    mut via := Vector {} as Vector<int>
+    defer via.free()
+    state.set(src, 1)
+    stack.push(src)
+    it.push(g.adj_start(src))
+    via.push(GRAPH_NONE)
+    until stack.len() > 0:
+        u := stack.last()
+        k := it.last()
+        if k >= g.adj_stop(u):
+            state.set(u, 2)
+            stack.pop()
+            it.pop()
+            via.pop()
+            continue
+        end
+        it.set(it.len() - 1, k + 1)
+        e := g.adj_edge(k)
+        v := g.adj_node(k)
+        if g.directed == false:
+            if e == via.last(): continue end
+        end
+        if state.get(v) == 1:
+            at := _stack_index(stack, v)
+            mut c := _cycle_from(stack, at)
+            repeat c.len() with i: out.push(c.get(i)) end
+            c.free()
+            ret true
+        end
+        if state.get(v) == 0:
+            state.set(v, 1)
+            stack.push(v)
+            it.push(g.adj_start(v))
+            via.push(e)
+        end
+    end
+    ret false
+end
+
+func _relax_indegree(g &: Graph, u: int, deg &: Vector<int>, q &: Vector<int>):
+    mut k := g.adj_start(u)
+    stop := g.adj_stop(u)
+    until k < stop:
+        v := g.adj_node(k)
+        deg.set(v, deg.get(v) - 1)
+        if deg.get(v) == 0: q.push(v) end
+        k += 1
+    end
+end
+
+func _relax_indegree_heap(g &: Graph, u: int, deg &: Vector<int>, h &: MinHeap):
+    mut k := g.adj_start(u)
+    stop := g.adj_stop(u)
+    until k < stop:
+        v := g.adj_node(k)
+        deg.set(v, deg.get(v) - 1)
+        if deg.get(v) == 0: h.push(v as f64, v) end
+        k += 1
+    end
+end
+
+func _bipartite_all(g &: Graph, color &: Vector<int>, n: int): bool:
+    mut ok := true
+    repeat n with s:
+        if color.get(s) == GRAPH_NONE:
+            if _color_bfs(g, s, color) == false: ok = false end
+        end
+    end
+    ret ok
+end
+
+func _indegrees(g &: Graph, deg &: Vector<int>):
+    FillInt(deg, g.n, 0)
+    repeat g.size() with e:
+        v := g.edge_to(e)
+        deg.set(v, deg.get(v) + 1)
+    end
+end
+
+// Hop distance from `src` to every node, GRAPH_NONE where unreachable, plus
+// the BFS tree in `parent`. This is the unweighted shortest path, and it is
+// worth reaching for even on a weighted graph when the question is about the
+// number of edges rather than their cost.
+@en "BFSFrom"
+@fa "پیمایش سطحی از"
+@ar "بحث بالعرض من"
+pub func BFSFrom(g &: Graph, src: int, dist &: Vector<int>, parent &: Vector<int>):
+    FillInt(dist, g.n, GRAPH_NONE)
+    FillInt(parent, g.n, GRAPH_NONE)
+    if src < 0: ret end
+    if src >= g.n: ret end
+    mut q := Vector {} as Vector<int>
+    defer q.free()
+    dist.set(src, 0)
+    q.push(src)
+    mut head := 0
+    until head < q.len():
+        u := q.get(head)
+        head += 1
+        mut k := g.adj_start(u)
+        stop := g.adj_stop(u)
+        until k < stop:
+            v := g.adj_node(k)
+            if dist.get(v) == GRAPH_NONE:
+                dist.set(v, dist.get(u) + 1)
+                parent.set(v, u)
+                q.push(v)
+            end
+            k += 1
+        end
+    end
+end
+
+@en "BFS"
+@fa "پیمایش سطحی"
+@ar "بحث بالعرض"
+pub func BFS(g &: Graph, src: int): Vector<int>:
+    mut dist := Vector {} as Vector<int>
+    mut parent := Vector {} as Vector<int>
+    defer parent.free()
+    BFSFrom(g, src, dist, parent)
+    ret dist
+end
+
+// The nodes in the order breadth-first search reaches them.
+@en "BFSOrder"
+@fa "ترتیب سطحی"
+@ar "ترتيب العرض"
+pub func BFSOrder(g &: Graph, src: int): Vector<int>:
+    mut out := Vector {} as Vector<int>
+    if src < 0: ret out end
+    if src >= g.n: ret out end
+    mut seen := Vector {} as Vector<bool>
+    defer seen.free()
+    FillBool(seen, g.n, false)
+    seen.set(src, true)
+    out.push(src)
+    mut head := 0
+    until head < out.len():
+        u := out.get(head)
+        head += 1
+        mut k := g.adj_start(u)
+        stop := g.adj_stop(u)
+        until k < stop:
+            v := g.adj_node(k)
+            if seen.get(v) == false:
+                seen.set(v, true)
+                out.push(v)
+            end
+            k += 1
+        end
+    end
+    ret out
+end
+
+@en "DFSOrder"
+@fa "ترتیب عمقی"
+@ar "ترتيب العمق"
+pub func DFSOrder(g &: Graph, src: int): Vector<int>:
+    mut pre := Vector {} as Vector<int>
+    mut post := Vector {} as Vector<int>
+    defer post.free()
+    mut seen := Vector {} as Vector<bool>
+    defer seen.free()
+    FillBool(seen, g.n, false)
+    _dfs_walk(g, src, pre, post, seen)
+    ret pre
+end
+
+// Depth-first finishing order. Reversed, this is a topological order of a
+// DAG, and it is the order Kosaraju's algorithm needs.
+@en "DFSPostOrder"
+@fa "ترتیب پسین عمقی"
+@ar "ترتيب لاحق للعمق"
+pub func DFSPostOrder(g &: Graph, src: int): Vector<int>:
+    mut pre := Vector {} as Vector<int>
+    defer pre.free()
+    mut post := Vector {} as Vector<int>
+    mut seen := Vector {} as Vector<bool>
+    defer seen.free()
+    FillBool(seen, g.n, false)
+    _dfs_walk(g, src, pre, post, seen)
+    ret post
+end
+
+// A full depth-first forest: every node appears, restarting at the lowest
+// unvisited id whenever a probe runs out of reachable nodes.
+@en "DFSForest"
+@fa "جنگل عمقی"
+@ar "غابة العمق"
+pub func DFSForest(g &: Graph): Vector<int>:
+    mut pre := Vector {} as Vector<int>
+    mut post := Vector {} as Vector<int>
+    defer post.free()
+    mut seen := Vector {} as Vector<bool>
+    defer seen.free()
+    FillBool(seen, g.n, false)
+    repeat g.n with u: _dfs_walk(g, u, pre, post, seen) end
+    ret pre
+end
+
+@en "Reachable"
+@fa "دست‌یافتنی"
+@ar "قابل الوصول"
+pub func Reachable(g &: Graph, src: int): Vector<bool>:
+    mut dist := Vector {} as Vector<int>
+    defer dist.free()
+    mut parent := Vector {} as Vector<int>
+    defer parent.free()
+    BFSFrom(g, src, dist, parent)
+    mut out := Vector {} as Vector<bool>
+    repeat g.n with u: out.push(dist.get(u) != GRAPH_NONE) end
+    ret out
+end
+
+@en "ReachableCount"
+@fa "شمار دست‌یافتنی"
+@ar "عدد الوصول"
+pub func ReachableCount(g &: Graph, src: int): int:
+    mut r := Reachable(g, src)
+    defer r.free()
+    mut c := 0
+    repeat r.len() with u:
+        if r.get(u): c += 1 end
+    end
+    ret c
+end
+
+@en "HopDistance"
+@fa "فاصله گامی"
+@ar "مسافة القفزات"
+pub func HopDistance(g &: Graph, s: int, t: int): int:
+    mut d := BFS(g, s)
+    defer d.free()
+    if t < 0: ret GRAPH_NONE end
+    if t >= g.n: ret GRAPH_NONE end
+    ret d.get(t)
+end
+
+// Walk a predecessor table back from `t` and hand the path over in forward
+// order. Empty when `t` was never reached.
+@en "PathFromParents"
+@fa "مسیر از والدها"
+@ar "مسار من الآباء"
+pub func PathFromParents(parent: Vector<int>, s: int, t: int): Vector<int>:
+    mut out := Vector {} as Vector<int>
+    if t < 0: ret out end
+    if t >= parent.len(): ret out end
+    if t != s:
+        if parent.get(t) == GRAPH_NONE: ret out end
+    end
+    mut c := t
+    until c != GRAPH_NONE:
+        out.push(c)
+        if c == s: break end
+        c = parent.get(c)
+    end
+    ReverseInt(out)
+    ret out
+end
+
+@en "HopPath"
+@fa "مسیر گامی"
+@ar "مسار القفزات"
+pub func HopPath(g &: Graph, s: int, t: int): Vector<int>:
+    mut dist := Vector {} as Vector<int>
+    defer dist.free()
+    mut parent := Vector {} as Vector<int>
+    defer parent.free()
+    BFSFrom(g, s, dist, parent)
+    ret PathFromParents(parent, s, t)
+end

@@ -452,6 +452,40 @@ static const char *cg_struct_lit(cg_t *cg, ast_node_t *n)
     return r;
 }
 
+/*
+ * The C symbol a function name denotes, as a void*. Shared by `&f` and by a
+ * bare function name read as a value. An extern keeps its declared C name -
+ * it is not one of ours to mangle.
+ */
+static const char *cg_func_addr(cg_t *cg, ast_node_t *n)
+{
+    symbol_t *fsym = scope_lookup(cg->sem->global, n->name);
+    const char *home_pkg = NULL;
+    if (!fsym && cg->cur_fn_home) {
+        symbol_t *hs = scope_lookup(cg->cur_fn_home, n->name);
+        if (hs && hs->kind == SYM_FUNC) {
+            fsym = hs;
+            home_pkg = hs->pkgname;
+        }
+    }
+    if (!fsym && cg->cur_struct && cg->cur_struct->home) {
+        symbol_t *hs = scope_lookup(cg->cur_struct->home, n->name);
+        if (hs && hs->kind == SYM_FUNC) {
+            fsym = hs;
+            home_pkg = hs->pkgname;
+        }
+    }
+    func_sig_t *sig =
+        (fsym && fsym->overloads.len == 1) ? (func_sig_t *)fsym->overloads.data[0] : NULL;
+    bool is_extern_fn = sig && sig->decl && sig->decl->is_extern;
+    vec_t empty;
+    vec_init(&empty);
+    const char *raw = is_extern_fn ? n->name
+                                   : cg_mangle_in(cg, home_pkg ? home_pkg : cg->pkg, NULL,
+                                                  n->name, sig ? &sig->params : &empty);
+    return cg_fmt(cg, "((void*)(&%s))", raw);
+}
+
 const char *cg_expr(cg_t *cg, ast_node_t *n)
 {
     if (!n) return "0";
@@ -500,6 +534,8 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
             return "0";
         }
     case AST_IDENTIFIER:
+        /* A bare function name read as a value: its address, as an i64. */
+        if (n->func_value) return cg_fmt(cg, "(int64_t)%s", cg_func_addr(cg, n));
 
         if (cg->cur_lambda) {
             vec_t *caps = &cg->cur_lambda->captures;
@@ -520,35 +556,8 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
                 return cg_fmt(cg, "this->%s", cg_cident(cg, n->name));
         }
         return cg_cident(cg, n->name);
-    case AST_FUNC_ADDR: {
-        symbol_t *fsym = scope_lookup(cg->sem->global, n->name);
-        const char *home_pkg = NULL;
-        if (!fsym && cg->cur_fn_home) {
-            symbol_t *hs = scope_lookup(cg->cur_fn_home, n->name);
-            if (hs && hs->kind == SYM_FUNC) {
-                fsym = hs;
-                home_pkg = hs->pkgname;
-            }
-        }
-        if (!fsym && cg->cur_struct && cg->cur_struct->home) {
-            symbol_t *hs = scope_lookup(cg->cur_struct->home, n->name);
-            if (hs && hs->kind == SYM_FUNC) {
-                fsym = hs;
-                home_pkg = hs->pkgname;
-            }
-        }
-        func_sig_t *sig = (fsym && fsym->overloads.len == 1)
-                              ? (func_sig_t *)fsym->overloads.data[0]
-                              : NULL;
-        bool is_extern_fn = sig && sig->decl && sig->decl->is_extern;
-        vec_t empty;
-        vec_init(&empty);
-        const char *raw = is_extern_fn
-                              ? n->name
-                              : cg_mangle_in(cg, home_pkg ? home_pkg : cg->pkg, NULL,
-                                             n->name, sig ? &sig->params : &empty);
-        return cg_fmt(cg, "((void*)(&%s))", raw);
-    }
+    case AST_FUNC_ADDR:
+        return cg_func_addr(cg, n);
     case AST_THIS:
         return "this";
     case AST_BINARY: {

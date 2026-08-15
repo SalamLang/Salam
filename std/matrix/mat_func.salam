@@ -1,0 +1,282 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package matrix
+
+import math
+
+// Functions of a matrix: not the entrywise ufuncs of mat_apply.salam, but the
+// genuine matrix functions, defined so that f(A) has the eigenvalues f(lambda)
+// of A and the same eigenvectors.
+//
+// The distinction matters and is the most common confusion in the area.
+// Entrywise exp of a matrix is a different object from its matrix
+// exponential: only the second one solves x' = Ax, and for a 2x2 rotation
+// generator the two do not agree in a single entry.
+//
+// The exponential is by scaling and squaring with a Pade approximant, the
+// method Moler and Van Loan concluded was the least bad of the nineteen they
+// surveyed, and the one every serious library uses. The idea: a Pade rational
+// approximation is excellent near zero and poor far from it, so divide A by a
+// power of two until it is near zero, approximate there, then undo the
+// division by repeated squaring, using exp(A) = exp(A/2^s)^(2^s). Each
+// squaring costs one matrix product, so bringing the norm down to 1/2 costs
+// only log2(|A|) extra products and buys many digits.
+//
+// The square root and the sign function are Newton iterations. Both converge
+// quadratically, both are self-correcting (an error in one step is treated as
+// the starting point of the next), and both are the standard approach.
+
+// Enough Pade order to reach machine precision once the norm is below 1/2,
+// and enough squarings for any matrix that is not already overflowing.
+const _PADE_Q := 6
+const _EXPM_MAX_SQUARINGS := 60
+const _SQRTM_MAX_ITER := 60
+const _SIGN_MAX_ITER := 100
+
+// The Pade coefficients c_k = (2q-k)! q! / ((2q)! k! (q-k)!), by the
+// multiplicative recurrence rather than by factorials, which would overflow
+// well before q gets interesting.
+func _pade_coeff(k: int, q: int): f64:
+    mut c := 1.0
+    mut i := 1
+    until i <= k:
+        c = c * ((q - i + 1) as f64) / (((2 * q - i + 1) * i) as f64)
+        i += 1
+    end
+    ret c
+end
+
+// How many halvings bring the infinity norm below 1/2, which is where the
+// Pade approximant is accurate to machine precision.
+func _expm_squarings(x &: Matrix): int:
+    nrm := NormInf(x)
+    mut s := 0
+    mut v := nrm
+    until v > 0.5 && s < _EXPM_MAX_SQUARINGS:
+        v = v * 0.5
+        s += 1
+    end
+    ret s
+end
+
+// Accumulates the numerator and denominator of the Pade approximant together,
+// since they share every power of A and differ only in the sign pattern.
+func _pade_accumulate(a &: Matrix, num &: Matrix, den &: Matrix, n: int):
+    mut power := Eye(n)
+    mut k := 1
+    until k <= _PADE_Q:
+        t := MatMul(power, a)
+        power.free()
+        power = t
+        c := _pade_coeff(k, _PADE_Q)
+        AddScaled(num, power, c)
+        mut sign := c
+        if k % 2 == 1: sign = 0.0 - c end
+        AddScaled(den, power, sign)
+        k += 1
+    end
+    defer power.free()
+end
+
+// One Denman-Beavers step. Y converges to the square root and Z to its
+// inverse; keeping both is what makes the iteration stable, since neither
+// factor is ever formed by inverting something nearly singular.
+func _db_step(y &: Matrix, z &: Matrix):
+    mut yi := Inverse(y)
+    mut zi := Inverse(z)
+    if yi.is_empty() || zi.is_empty():
+        yi.free()
+        zi.free()
+        ret
+    end
+    mut ny := Combine(y, 0.5, zi, 0.5)
+    mut nz := Combine(z, 0.5, yi, 0.5)
+    CopyInto(y, ny)
+    CopyInto(z, nz)
+    defer yi.free()
+    defer zi.free()
+    defer ny.free()
+    defer nz.free()
+end
+
+func _converged(a &: Matrix, b &: Matrix, tol: f64): bool:
+    d := Distance(a, b)
+    scale := NormFrobenius(b)
+    if scale == 0.0: ret d <= tol end
+    ret d <= tol * scale
+end
+
+func _pade_core(a &: Matrix, n: int): Matrix:
+    mut num := Eye(n)
+    mut den := Eye(n)
+    _pade_accumulate(a, num, den, n)
+    mut r := Solve(den, num)
+    defer num.free()
+    defer den.free()
+    if r.is_empty(): ret Eye(n) end
+    ret r
+end
+
+func _square_in_place(r &: Matrix):
+    mut t := MatMul(r, r)
+    CopyInto(r, t)
+    defer t.free()
+end
+
+func _log_eigval(f &: EigenSym, k: int):
+    v := f.values.a.get(k)
+    if v <= 0.0:
+        f.values.a.set(k, math.NaN())
+        ret
+    end
+    f.values.a.set(k, math.Log(v))
+end
+
+// exp(A), the matrix exponential. The solution of x'(t) = A x(t) at t = 1 is
+// exp(A) x(0), which is what makes this the fundamental object of linear
+// dynamical systems, of continuous-time Markov chains, and of Lie theory.
+@en "Expm"
+@fa "نمایی ماتریسی"
+@ar "أسي مصفوفي"
+pub func Expm(x &: Matrix): Matrix:
+    if x.is_square() == false: ret Zeros(0, 0) end
+    n := x.rows
+    s := _expm_squarings(x)
+    mut a := Scale(x, math.Pow(0.5, s as f64))
+    mut r := _pade_core(a, n)
+    defer a.free()
+    repeat s: _square_in_place(r) end
+    ret r
+end
+
+// A principal square root S with S S = A, by the Denman-Beavers iteration.
+//
+// Exists and is unique when A has no eigenvalue on the negative real axis. A
+// symmetric positive definite matrix always qualifies, and for that case
+// SqrtSym is both faster and exact; this one handles the general case.
+@en "Sqrtm"
+@fa "جذر ماتریسی"
+@ar "جذر مصفوفي"
+pub func Sqrtm(x &: Matrix): Matrix:
+    if x.is_square() == false: ret Zeros(0, 0) end
+    mut y := Clone(x)
+    mut z := Eye(x.rows)
+    mut prev := Clone(y)
+    mut i := 0
+    until i < _SQRTM_MAX_ITER:
+        _db_step(y, z)
+        if _converged(prev, y, MAT_TOL): break end
+        CopyInto(prev, y)
+        i += 1
+    end
+    defer z.free()
+    defer prev.free()
+    ret y
+end
+
+// The matrix sign function: the limit of the Newton iteration
+// X <- (X + X^-1)/2. Every eigenvalue is mapped to +1 or -1 according to the
+// sign of its real part, so the trace of the result counts the difference
+// between the two, and (I + sign(A))/2 projects onto the invariant subspace
+// of the eigenvalues with positive real part. That projection is how a
+// stable and an unstable subspace are separated without computing a single
+// eigenvector.
+@en "MatrixSign"
+@fa "علامت ماتریسی"
+@ar "إشارة مصفوفية"
+pub func MatrixSign(x &: Matrix): Matrix:
+    if x.is_square() == false: ret Zeros(0, 0) end
+    mut s := Clone(x)
+    mut prev := Clone(x)
+    mut i := 0
+    until i < _SIGN_MAX_ITER:
+        mut inv := Inverse(s)
+        if inv.is_empty(): break end
+        mut nx := Combine(s, 0.5, inv, 0.5)
+        CopyInto(s, nx)
+        inv.free()
+        nx.free()
+        if _converged(prev, s, MAT_TOL): break end
+        CopyInto(prev, s)
+        i += 1
+    end
+    defer prev.free()
+    ret s
+end
+
+// Evaluates the polynomial with the given coefficients at A, by Horner's
+// rule. Coefficients ascend, so entry k multiplies A^k, and the constant term
+// becomes c_0 I rather than c_0, which is the only reading that makes the
+// result a matrix.
+//
+// Horner rather than summing powers: it needs n-1 products instead of 2n-2,
+// and it never forms a high power of A explicitly, which is where the
+// rounding in the naive version comes from.
+@en "PolyEval"
+@fa "ارزیابی چندجمله‌ای"
+@ar "تقييم كثير الحدود"
+pub func PolyEval(x &: Matrix, coeffs &: Matrix): Matrix:
+    if x.is_square() == false: ret Zeros(0, 0) end
+    n := coeffs.count()
+    if n == 0: ret Zeros(x.rows, x.cols) end
+    mut acc := Full(x.rows, x.cols, 0.0)
+    ShiftDiagonal(acc, coeffs.a.get(n - 1))
+    mut k := n - 2
+    until k >= 0:
+        mut t := MatMul(acc, x)
+        ShiftDiagonal(t, coeffs.a.get(k))
+        CopyInto(acc, t)
+        t.free()
+        k -= 1
+    end
+    ret acc
+end
+
+// The Cayley-Hamilton residual: p(A) for A's own characteristic polynomial p.
+// The theorem says this is exactly the zero matrix, so what comes back is
+// pure accumulated rounding, which makes it a direct measure of how much
+// precision the computation actually kept.
+@en "CayleyHamilton"
+@fa "کیلی همیلتون"
+@ar "كايلي هاملتون"
+pub func CayleyHamilton(x &: Matrix): Matrix:
+    mut p := CharPoly(x)
+    r := PolyEval(x, p)
+    defer p.free()
+    ret r
+end
+
+// The natural logarithm of a symmetric positive definite matrix, taken
+// through its eigendecomposition: log(A) = V log(D) V^T. The inverse of Expm
+// on that class, and the map that turns the cone of covariance matrices into
+// a flat space, which is why it appears throughout diffusion tensor imaging
+// and Riemannian statistics.
+@en "LogmSym"
+@fa "لگاریتم متقارن"
+@ar "لوغاريتم متماثل"
+pub func LogmSym(x &: Matrix): Matrix:
+    if IsSymmetric(x, MAT_TOL) == false: ret Zeros(0, 0) end
+    mut f := EigSym(x)
+    mut ok := true
+    repeat f.values.count() with k: _log_eigval(f, k) end
+    repeat f.values.count() with k:
+        if math.IsNaN(f.values.a.get(k)): ok = false end
+    end
+    mut r := EigReconstruct(f)
+    defer f.free()
+    if ok: ret r end
+    defer r.free()
+    ret Zeros(0, 0)
+end

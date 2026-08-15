@@ -1,0 +1,389 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/graph, part 2: connectivity structure, flows and cuts, matchings, and
+// the metric and centrality families.
+//
+// The theorems these implement are the assertions. Menger's theorem ties the
+// connectivity numbers to maximum flows, the max-flow min-cut theorem ties a
+// flow value to a cut capacity, Konig's theorem ties a bipartite matching to
+// a vertex cover, and Euler's handshake ties the degree sum to the edge
+// count. Where a theorem pins the answer, the test checks the theorem rather
+// than a number this library produced.
+
+import graph
+import testing
+import os
+
+func clrs_network(): graph.FlowNet:
+    mut f := graph.NewFlowNet(6)
+    f.add_arc(0, 1, 16.0)
+    f.add_arc(0, 2, 13.0)
+    f.add_arc(1, 2, 10.0)
+    f.add_arc(2, 1, 4.0)
+    f.add_arc(1, 3, 12.0)
+    f.add_arc(3, 2, 9.0)
+    f.add_arc(2, 4, 14.0)
+    f.add_arc(4, 3, 7.0)
+    f.add_arc(3, 5, 20.0)
+    f.add_arc(4, 5, 4.0)
+    ret f
+end
+
+// Two triangles joined by a bridge, with a pendant: the standard shape for
+// exercising cut vertices, bridges and blocks all at once.
+func blocks_example(): graph.Graph:
+    mut g := graph.NewUndirected(7)
+    g.add_edge(0, 1)
+    g.add_edge(1, 2)
+    g.add_edge(2, 0)
+    g.add_edge(2, 3)
+    g.add_edge(3, 4)
+    g.add_edge(4, 5)
+    g.add_edge(5, 3)
+    g.add_edge(4, 6)
+    ret g
+end
+
+func test_strong_components():
+    println "-- strongly connected components"
+    mut d := graph.NewDirected(8)
+    defer d.free()
+    d.add_edge(0, 1)
+    d.add_edge(1, 2)
+    d.add_edge(2, 0)
+    d.add_edge(2, 3)
+    d.add_edge(3, 4)
+    d.add_edge(4, 5)
+    d.add_edge(5, 3)
+    d.add_edge(6, 7)
+    mut comp := Vector {} as Vector<int>
+    defer comp.free()
+    testing.AssertEqInt(graph.StronglyConnected(d, comp), 4)
+    testing.AssertEqInt(comp.get(0), comp.get(1))
+    testing.AssertEqInt(comp.get(1), comp.get(2))
+    testing.AssertEqInt(comp.get(3), comp.get(5))
+    testing.AssertNeInt(comp.get(0), comp.get(3))
+    mut k := Vector {} as Vector<int>
+    defer k.free()
+    testing.AssertEqInt(graph.Kosaraju(d, k), 4)
+    testing.AssertFalse(graph.IsStronglyConnected(d))
+    // the condensation of any digraph is acyclic
+    mut cond := graph.Condensation(d, comp)
+    defer cond.free()
+    testing.AssertEqInt(cond.order(), 4)
+    testing.AssertTrue(graph.IsDAG(cond))
+    mut ring := graph.NewDirected(3)
+    defer ring.free()
+    ring.add_edge(0, 1)
+    ring.add_edge(1, 2)
+    ring.add_edge(2, 0)
+    testing.AssertTrue(graph.IsStronglyConnected(ring))
+end
+
+func test_blocks():
+    println "-- bridges, cut vertices and blocks"
+    mut g := blocks_example()
+    defer g.free()
+    mut br := graph.Bridges(g)
+    defer br.free()
+    testing.AssertEqInt(br.len(), 2)
+    mut ap := graph.ArticulationPoints(g)
+    defer ap.free()
+    testing.AssertEqInt(ap.len(), 3)
+    testing.AssertEqInt(ap.get(0), 2)
+    testing.AssertEqInt(ap.get(1), 3)
+    testing.AssertEqInt(ap.get(2), 4)
+    mut ec := Vector {} as Vector<int>
+    defer ec.free()
+    testing.AssertEqInt(graph.BiconnectedComponents(g, ec), 4)
+    testing.AssertFalse(graph.IsBiconnected(g))
+    testing.AssertFalse(graph.IsTwoEdgeConnected(g))
+    mut tc := Vector {} as Vector<int>
+    defer tc.free()
+    testing.AssertEqInt(graph.TwoEdgeComponents(g, tc), 3)
+    // a cycle has no bridge and no cut vertex
+    mut c := graph.CycleGraph(5)
+    defer c.free()
+    testing.AssertTrue(graph.IsBiconnected(c))
+    testing.AssertTrue(graph.IsTwoEdgeConnected(c))
+end
+
+func test_max_flow():
+    println "-- maximum flow"
+    mut f := clrs_network()
+    defer f.free()
+    testing.AssertEqFloat(graph.MaxFlow(f, 0, 5), 23.0, 0.000001)
+    f.reset()
+    testing.AssertEqFloat(graph.MaxFlowEdmondsKarp(f, 0, 5), 23.0, 0.000001)
+    f.reset()
+    mut side := Vector {} as Vector<bool>
+    defer side.free()
+    // max-flow min-cut: the cut capacity equals the flow value
+    testing.AssertEqFloat(graph.MinCut(f, 0, 5, side), 23.0, 0.000001)
+    testing.AssertTrue(side.get(0))
+    testing.AssertFalse(side.get(5))
+end
+
+func test_flow_from_graph():
+    println "-- flow through a weighted graph"
+    mut g := graph.NewDirected(4)
+    defer g.free()
+    g.add_weighted(0, 1, 3.0)
+    g.add_weighted(0, 2, 2.0)
+    g.add_weighted(1, 3, 2.0)
+    g.add_weighted(2, 3, 3.0)
+    g.add_weighted(1, 2, 5.0)
+    testing.AssertEqFloat(graph.MaxFlowValue(g, 0, 3), 5.0, 0.000001)
+    mut cut := Vector {} as Vector<int>
+    defer cut.free()
+    testing.AssertEqFloat(graph.MinCutEdges(g, 0, 3, cut), 5.0, 0.000001)
+    testing.AssertEqInt(cut.len(), 2)
+end
+
+func test_min_cost_flow():
+    println "-- minimum cost flow"
+    mut f := graph.NewFlowNet(4)
+    defer f.free()
+    f.add_cost_arc(0, 1, 2.0, 1.0)
+    f.add_cost_arc(0, 2, 2.0, 5.0)
+    f.add_cost_arc(1, 3, 1.0, 1.0)
+    f.add_cost_arc(2, 3, 3.0, 1.0)
+    mut sent := 0.0
+    cost := graph.MinCostFlow(f, 0, 3, 3.0, sent)
+    testing.AssertEqFloat(sent, 3.0, 0.000001)
+    testing.AssertEqFloat(cost, 14.0, 0.000001)
+end
+
+func test_connectivity_numbers():
+    println "-- edge and vertex connectivity"
+    mut c := graph.CycleGraph(4)
+    defer c.free()
+    testing.AssertEqFloat(graph.GlobalMinCut(c), 2.0, 0.000001)
+    testing.AssertEqInt(graph.EdgeConnectivity(c), 2)
+    testing.AssertEqInt(graph.VertexConnectivity(c), 2)
+    mut p := graph.PathGraph(4)
+    defer p.free()
+    testing.AssertEqInt(graph.EdgeConnectivity(p), 1)
+    testing.AssertEqInt(graph.VertexConnectivity(p), 1)
+    // a complete graph cannot be disconnected: both numbers are n-1
+    mut k4 := graph.CompleteGraph(4)
+    defer k4.free()
+    testing.AssertEqInt(graph.EdgeConnectivity(k4), 3)
+    testing.AssertEqInt(graph.VertexConnectivity(k4), 3)
+    // and connectivity is bounded by the minimum degree
+    testing.AssertTrue(graph.VertexConnectivity(c) <= graph.EdgeConnectivity(c))
+    testing.AssertTrue(graph.EdgeConnectivity(c) <= graph.MinDegree(c))
+end
+
+func test_matching():
+    println "-- matching and cover"
+    mut b := graph.NewUndirected(6)
+    defer b.free()
+    b.add_edge(0, 3)
+    b.add_edge(0, 4)
+    b.add_edge(1, 3)
+    b.add_edge(2, 4)
+    b.add_edge(2, 5)
+    mut mate := Vector {} as Vector<int>
+    defer mate.free()
+    m := graph.BipartiteMatching(b, mate)
+    testing.AssertEqInt(m, 3)
+    // every matched pair points at each other
+    mut paired := true
+    repeat b.order() with u:
+        if mate.get(u) != graph.GRAPH_NONE:
+            if mate.get(mate.get(u)) != u: paired = false end
+        end
+    end
+    testing.AssertMsg(paired, "matching is not symmetric")
+    // Konig: minimum vertex cover equals maximum matching on a bipartite graph
+    mut cover := Vector {} as Vector<bool>
+    defer cover.free()
+    testing.AssertEqInt(graph.MinimumVertexCover(b, cover), m)
+    mut ind := Vector {} as Vector<bool>
+    defer ind.free()
+    testing.AssertEqInt(graph.MaximumIndependentSetBipartite(b, ind), b.order() - m)
+    // a greedy maximal matching is at least half the maximum
+    mut mm := Vector {} as Vector<int>
+    defer mm.free()
+    greedy := graph.MaximalMatching(b, mm)
+    testing.AssertTrue(2 * greedy >= m)
+    // an odd cycle is not bipartite, and the matcher says so
+    mut c5 := graph.CycleGraph(5)
+    defer c5.free()
+    testing.AssertEqInt(graph.BipartiteMatching(c5, mate), graph.GRAPH_NONE)
+end
+
+func test_metrics():
+    println "-- metrics"
+    mut s := graph.StarGraph(5)
+    defer s.free()
+    testing.AssertEqFloat(graph.Density(s), 0.4, 0.000001)
+    testing.AssertEqFloat(graph.AverageDegree(s), 1.6, 0.000001)
+    testing.AssertEqInt(graph.Diameter(s), 2)
+    testing.AssertEqInt(graph.Radius(s), 1)
+    mut ctr := graph.Center(s)
+    defer ctr.free()
+    testing.AssertEqInt(ctr.len(), 1)
+    testing.AssertEqInt(ctr.get(0), 0)
+    mut per := graph.Periphery(s)
+    defer per.free()
+    testing.AssertEqInt(per.len(), 4)
+    testing.AssertEqFloat(graph.WienerIndex(s), 16.0, 0.000001)
+    testing.AssertEqInt(graph.MaxDegree(s), 4)
+    testing.AssertEqInt(graph.MinDegree(s), 1)
+    testing.AssertFalse(graph.IsRegular(s))
+    // the handshake lemma: the degrees sum to twice the edges
+    mut total := 0
+    repeat s.order() with u: total += s.degree(u) end
+    testing.AssertEqInt(total, 2 * s.size())
+end
+
+func test_clustering():
+    println "-- clustering and triangles"
+    mut t := graph.NewUndirected(4)
+    defer t.free()
+    t.add_edge(0, 1)
+    t.add_edge(1, 2)
+    t.add_edge(2, 0)
+    t.add_edge(2, 3)
+    testing.AssertEqInt(graph.TriangleCount(t), 1)
+    testing.AssertEqFloat(graph.Transitivity(t), 0.6, 0.000001)
+    testing.AssertEqFloat(graph.AverageClustering(t), 0.5833333, 0.00001)
+    testing.AssertEqFloat(graph.LocalClustering(t, 0), 1.0, 0.000001)
+    testing.AssertEqInt(graph.Girth(t), 3)
+    testing.AssertEqInt(graph.CircuitRank(t), 1)
+    mut p := graph.PathGraph(4)
+    defer p.free()
+    testing.AssertEqInt(graph.Girth(p), graph.GRAPH_NONE)
+    testing.AssertEqInt(graph.CircuitRank(p), 0)
+    mut k4 := graph.CompleteGraph(4)
+    defer k4.free()
+    testing.AssertEqInt(graph.TriangleCount(k4), 4)
+    testing.AssertEqFloat(graph.Transitivity(k4), 1.0, 0.000001)
+    testing.AssertTrue(graph.IsComplete(k4))
+    testing.AssertTrue(graph.IsRegular(k4))
+end
+
+func test_degree_sequence():
+    println "-- degree sequence"
+    mut g := graph.NewUndirected(4)
+    defer g.free()
+    g.add_edge(0, 1)
+    g.add_edge(1, 2)
+    g.add_edge(2, 0)
+    g.add_edge(2, 3)
+    mut ds := graph.DegreeSequence(g)
+    defer ds.free()
+    testing.AssertEqInt(ds.get(0), 3)
+    testing.AssertEqInt(ds.get(1), 2)
+    testing.AssertEqInt(ds.get(2), 2)
+    testing.AssertEqInt(ds.get(3), 1)
+    mut hist := graph.DegreeHistogram(g)
+    defer hist.free()
+    testing.AssertEqInt(hist.get(2), 2)
+    testing.AssertEqInt(hist.get(3), 1)
+end
+
+func test_centrality():
+    println "-- centrality"
+    mut s := graph.StarGraph(5)
+    defer s.free()
+    mut bc := graph.BetweennessCentrality(s)
+    defer bc.free()
+    testing.AssertEqFloat(bc.get(0), 6.0, 0.000001)
+    testing.AssertEqFloat(bc.get(1), 0.0, 0.000001)
+    testing.AssertEqInt(graph.TopNode(bc), 0)
+    mut cc := graph.ClosenessCentrality(s)
+    defer cc.free()
+    testing.AssertEqFloat(cc.get(0), 1.0, 0.000001)
+    testing.AssertTrue(cc.get(1) < cc.get(0))
+    mut hc := graph.HarmonicCentrality(s)
+    defer hc.free()
+    testing.AssertEqFloat(hc.get(0), 1.0, 0.000001)
+    mut dc := graph.DegreeCentrality(s)
+    defer dc.free()
+    testing.AssertEqFloat(dc.get(0), 1.0, 0.000001)
+    testing.AssertEqFloat(dc.get(1), 0.25, 0.000001)
+end
+
+func test_edge_betweenness():
+    println "-- edge betweenness"
+    mut t := graph.NewUndirected(4)
+    defer t.free()
+    t.add_edge(0, 1)
+    t.add_edge(1, 2)
+    t.add_edge(2, 0)
+    t.add_edge(2, 3)
+    mut eb := graph.EdgeBetweenness(t)
+    defer eb.free()
+    testing.AssertEqInt(eb.len(), 4)
+    // the pendant edge carries every path into node 3
+    testing.AssertEqFloat(eb.get(3), 3.0, 0.000001)
+    testing.AssertTrue(eb.get(3) > eb.get(0))
+end
+
+func test_spectral_centrality():
+    println "-- eigenvector, katz, pagerank, hits"
+    mut d := graph.NewDirected(4)
+    defer d.free()
+    d.add_edge(0, 1)
+    d.add_edge(1, 2)
+    d.add_edge(2, 0)
+    d.add_edge(3, 2)
+    mut pr := graph.PageRank(d, 0.85, 200, 0.000000001)
+    defer pr.free()
+    mut total := 0.0
+    repeat pr.len() with u: total += pr.get(u) end
+    testing.AssertEqFloat(total, 1.0, 0.00001)
+    testing.AssertEqInt(graph.TopNode(pr), 2)
+    testing.AssertTrue(pr.get(3) < pr.get(0))
+    mut hubs := Vector {} as Vector<f64>
+    defer hubs.free()
+    mut auth := Vector {} as Vector<f64>
+    defer auth.free()
+    graph.HITS(d, 200, 0.000001, hubs, auth)
+    testing.AssertEqInt(graph.TopNode(auth), 2)
+    mut kz := graph.KatzCentrality(d, 0.1, 1.0, 200, 0.000001)
+    defer kz.free()
+    testing.AssertEqInt(graph.TopNode(kz), 2)
+    mut ring := graph.CycleGraph(4)
+    defer ring.free()
+    mut ev := graph.EigenvectorCentrality(ring, 500, 0.0000001)
+    defer ev.free()
+    // every node of a cycle is equivalent, so all scores match
+    testing.AssertEqFloat(ev.get(0), ev.get(2), 0.0001)
+    testing.AssertEqFloat(ev.get(1), ev.get(3), 0.0001)
+end
+
+func main:
+    println "std/graph: connectivity, flow, cuts, matching, metrics, centrality"
+    test_strong_components()
+    test_blocks()
+    test_max_flow()
+    test_flow_from_graph()
+    test_min_cost_flow()
+    test_connectivity_numbers()
+    test_matching()
+    test_metrics()
+    test_clustering()
+    test_degree_sequence()
+    test_centrality()
+    test_edge_betweenness()
+    test_spectral_centrality()
+    os.Exit(testing.Summary())
+end

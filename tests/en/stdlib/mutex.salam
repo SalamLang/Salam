@@ -1,0 +1,106 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// sync.Mutex: four threads, 20000 increments each, with and without the lock.
+//
+// `counter = counter + 1` is a read, an add and a write. Two threads that
+// interleave those three steps both read the same value and both write the
+// same result, and one increment disappears. The lock makes the three steps
+// one step as far as any other thread can tell.
+//
+// WHY THE UNLOCKED RUN DOES NOT PRINT ITS COUNT
+//
+// It would be a different number on every run - that is the entire point of
+// the bug - so a golden-output test cannot compare it. What IS guaranteed is
+// the direction: losing an update can only ever make the count too low, never
+// too high. So the unlocked run asserts `<= 80000`, and the locked run
+// asserts the exact number. A run where the scheduler happens not to
+// interleave anything still passes, which is correct: this test proves the
+// lock is sufficient, not that the race is inevitable.
+
+import sync
+
+const THREADS := 4
+const PER_THREAD := 20000
+
+mut counter := 0
+mut mu := sync.Mutex {}
+
+func worker():
+    repeat PER_THREAD:
+        sync.Lock(mu)
+        counter = counter + 1
+        sync.Unlock(mu)
+    end
+end
+
+func unguarded():
+    repeat PER_THREAD:
+        counter = counter + 1
+    end
+end
+
+func run_locked():
+    counter = 0
+    t1 := spawn(worker)
+    t2 := spawn(worker)
+    t3 := spawn(worker)
+    t4 := spawn(worker)
+    join(t1)
+    join(t2)
+    join(t3)
+    join(t4)
+end
+
+func run_unguarded():
+    counter = 0
+    u1 := spawn(unguarded)
+    u2 := spawn(unguarded)
+    u3 := spawn(unguarded)
+    u4 := spawn(unguarded)
+    join(u1)
+    join(u2)
+    join(u3)
+    join(u4)
+end
+
+func main:
+    mu = sync.NewMutex()
+    want := THREADS * PER_THREAD
+
+    // Lock and Unlock report 0 on success, and an uncontended pair from a
+    // single thread is the simplest case there is.
+    println "lock returns  :", sync.Lock(mu)
+    println "unlock returns:", sync.Unlock(mu)
+
+    // The arithmetic itself is not in question: one thread reaches its own
+    // total every time, lock or no lock. Only sharing breaks it.
+    counter = 0
+    unguarded()
+    println "one thread    :", counter, "of", PER_THREAD
+
+    run_locked()
+    println "with lock     :", counter, "of", want
+
+    run_unguarded()
+    // Never above the total: an increment can be lost, never invented.
+    println "without lock  : at most", want, "->", counter <= want
+    println "without lock  : made progress ->", counter > 0
+
+    sync.Destroy(mu)
+    println "destroyed"
+    ret 0
+end

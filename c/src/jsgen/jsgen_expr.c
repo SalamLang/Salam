@@ -863,17 +863,6 @@ static const char *jsg_call_ident(jg_t *g, ast_node_t *n, ast_node_t *callee)
     if (is_print || is_printerr) return jsg_print(g, n, is_printerr ? 1 : 0);
     if (!strcmp(nm, "input")) return "salam_input()";
     if (!strcmp(nm, "lang")) return cg_fmt(cg, "\"%s\"", i18n_lang());
-    if (!strcmp(nm, "funcptr") && n->list.len == 1) {
-        ast_node_t *fn = (ast_node_t *)n->list.data[0];
-        symbol_t *fsym = scope_lookup(cg->sem->global, fn->name);
-        if (fsym && fsym->overloads.len > 0) {
-            func_sig_t *sig = (func_sig_t *)fsym->overloads.data[0];
-            return jsg_fn_name(g, fsym->pkgname ? fsym->pkgname : cg->pkg, NULL, fn->name,
-                               fsym, sig, sig && sig->decl && sig->decl->is_extern,
-                               sig && sig->decl && sig->decl->synthetic);
-        }
-        return cg_cident(cg, fn->name);
-    }
     if (!strcmp(nm, "callhandler") && n->list.len == 2) {
         const char *h = jsg_expr_p(g, (ast_node_t *)n->list.data[0], JSP_MEMBER);
         const char *a = jsg_expr_p(g, (ast_node_t *)n->list.data[1], 0);

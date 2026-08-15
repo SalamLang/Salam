@@ -1,6 +1,7 @@
 package semantic
 
 import str
+import time
 import co "../sal_core.salam"
 import tok "../token.salam"
 import at "../ast.salam"
@@ -17,9 +18,209 @@ func builtin_lookup(name: str): int:
     ret 0 - 1
 end
 
+// cli_all_digits.
+func all_digits(v: str): bool:
+    n := str.Len(v)
+    if n == 0:
+        ret false
+    end
+    mut i := 0
+    until i < n:
+        c := byte_at(v, i)
+        if c < 48 || c > 57:
+            ret false
+        end
+        i += 1
+    end
+    ret true
+end
+
+// cli_is_float_lit - exactly the grammar a Salam float literal has: optional
+// sign, digits with at most one '.', and an optional decimal exponent, with
+// at least one digit and at least one of '.'/'e' so a plain integer is not
+// claimed here. The C spells the same grammar out rather than leaning on
+// strtod's endptr precisely so these two agree character for character.
+func is_float_lit(v: str): bool:
+    n := str.Len(v)
+    mut i := 0
+    if i < n && (byte_at(v, i) == 45 || byte_at(v, i) == 43): // '-' '+'
+        i += 1
+    end
+    mut digits := 0
+    mut dot := false
+    until i < n && byte_at(v, i) != 101 && byte_at(v, i) != 69: // 'e' 'E'
+        c := byte_at(v, i)
+        if c == 46: // '.'
+            if dot:
+                ret false
+            end
+            dot = true
+        else c >= 48 && c <= 57:
+            digits += 1
+        else:
+            ret false
+        end
+        i += 1
+    end
+    if digits == 0:
+        ret false
+    end
+    mut exp := false
+    if i < n:
+        exp = true
+        i += 1
+        if i < n && (byte_at(v, i) == 45 || byte_at(v, i) == 43):
+            i += 1
+        end
+        mut edigits := 0
+        until i < n:
+            c2 := byte_at(v, i)
+            if c2 < 48 || c2 > 57:
+                ret false
+            end
+            edigits += 1
+            i += 1
+        end
+        if edigits == 0:
+            ret false
+        end
+    end
+    ret dot || exp
+end
+
+// cli_const_value - classify the text after '='. Integers, floats and
+// booleans are recognised so `-dAGE=22` is a number the way it reads;
+// everything else is a string, which is why `-dVERSION=0.3.0` stays text.
+// Wrapping the value in double quotes forces the string reading.
+func const_value(v: str, op &: int, iv &: u64, neg &: bool, fv &: f64, sv &: str):
+    n := str.Len(v)
+    if n >= 2 && byte_at(v, 0) == 34 && byte_at(v, n - 1) == 34: // '"'
+        op = tok.TK_STRING
+        sv = str.Substr(v, 1, n - 2)
+        ret
+    end
+    if str.Equals(v, "true"):
+        op = tok.TK_KW_TRUE
+        ret
+    end
+    if str.Equals(v, "false"):
+        op = tok.TK_KW_FALSE
+        ret
+    end
+    mut digits := v
+    if n > 0 && (byte_at(v, 0) == 45 || byte_at(v, 0) == 43):
+        neg = byte_at(v, 0) == 45
+        digits = str.Substr(v, 1, n - 1)
+    end
+    if all_digits(digits):
+        mut u := 0 as u64
+        dn := str.Len(digits)
+        mut i := 0
+        until i < dn:
+            u = u * 10 as u64 + (byte_at(digits, i) - 48) as u64
+            i += 1
+        end
+        op = tok.TK_INT
+        iv = u
+        ret
+    end
+    if is_float_lit(v):
+        op = tok.TK_FLOAT
+        fv = str.ToFloat(v)
+        ret
+    end
+    op = tok.TK_STRING
+    sv = v
+end
+
+// salam_builtin_set_consts - replace the -dNAME=VALUE table with `defs`, one
+// raw "NAME=VALUE" (or bare "NAME", meaning true) string per entry, whose
+// name the CLI has already held to SCREAMING_SNAKE_CASE. Exposed through
+// sema_api.salam's SetConsts, where this package's public surface lives.
+func set_consts(defs &: Vector<str>):
+    g_sm_const_name.clear()
+    g_sm_const_op.clear()
+    g_sm_const_int.clear()
+    g_sm_const_neg.clear()
+    g_sm_const_float.clear()
+    g_sm_const_str.clear()
+    repeat defs.len() with i:
+        def := defs.get(i)
+        eq := str.IndexOf(def, "=")
+        mut op := tok.TK_KW_TRUE
+        mut iv := 0 as u64
+        mut neg := false
+        mut fv := 0.0
+        mut sv := ""
+        mut nm := def
+        if eq >= 0:
+            nm = str.Substr(def, 0, eq)
+            const_value(
+                str.Substr(def, eq + 1, str.Len(def) - eq - 1), op, iv, neg, fv, sv
+            )
+        end
+        g_sm_const_name.push(nm)
+        g_sm_const_op.push(op)
+        g_sm_const_int.push(iv)
+        g_sm_const_neg.push(neg)
+        g_sm_const_float.push(fv)
+        g_sm_const_str.push(sv)
+    end
+end
+
+// cli_const_lookup - index into the table, -1 when the name is not defined.
+// Walked backwards so a repeated -d overrides the earlier one.
+func const_lookup(name: str): int:
+    mut i := g_sm_const_name.len() - 1
+    until i >= 0:
+        if str.Equals(g_sm_const_name.get(i), name):
+            ret i
+        end
+        i -= 1
+    end
+    ret 0 - 1
+end
+
+// The version the compiler reports, following a -dSALAM_VERSION override so
+// the string and VERSION_CODE can never disagree.
+func version_str(): str:
+    idx := const_lookup("SALAM_VERSION")
+    if idx >= 0 && g_sm_const_op.get(idx) == tok.TK_STRING:
+        ret g_sm_const_str.get(idx)
+    end
+    ret co.VERSION
+end
+
+// salam_compile_time - when *this* program is being compiled, for
+// SALAM_BUILD_DATE. Same "%b %d %Y %H:%M:%S" layout the C builds with
+// strftime, so a binary's build stamp reads the same whichever compiler
+// produced it. Computed once, on first use.
+func compile_time(): str:
+    if str.Len(g_sm_build_date) > 0:
+        ret g_sm_build_date
+    end
+    now := time.Now()
+    months := [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+    ] as str[12]
+    m := time.Month(now)
+    mon := m >= 1 && m <= 12 ? months[m - 1] : "???"
+    mut out := mon + " " + two(time.Day(now)) + " " + str.FromInt(time.Year(now))
+    out = out + " " + two(time.Hour(now)) + ":" + two(time.Minute(now))
+    out = out + ":" + two(time.Second(now))
+    g_sm_build_date = out
+    ret out
+end
+
+// Zero-padded two-digit field, matching strftime's %d/%H/%M/%S.
+func two(n: int): str:
+    ret n < 10 ? "0" + str.FromInt(n) : str.FromInt(n)
+end
+
 // salam_version_code - SALAM_VERSION "maj.min.pat" -> maj*10000+min*100+pat.
 func version_code(): int:
-    v := co.VERSION
+    v := version_str()
     n := str.Len(v)
     mut parts := [0, 0, 0] as int[3]
     mut pi := 0
@@ -42,19 +243,107 @@ func version_code(): int:
     ret parts[0] * 10000 + parts[1] * 100 + parts[2]
 end
 
+// bc_str - rewrite the node into a string literal in place.
+func lit_str(a &: at.Ast, id: int, s: str, is_str &: bool):
+    mut n := at.Get(a, id)
+    n.kind = at.AST_LITERAL
+    n.op = tok.TK_STRING
+    n.value_kind = tok.TV_STRING
+    n.value_str = s
+    n.value_int = 0 as u64
+    n.value_float = 0.0
+    n.a = 0
+    n.b = 0
+    n.synthetic = false
+    at.Put(a, id, n)
+    is_str = true
+end
+
+// bc_cli_const - rewrite the node into whatever literal the -d value was.
+func lit_const(a &: at.Ast, id: int, idx: int, is_str &: bool):
+    op := g_sm_const_op.get(idx)
+    if op == tok.TK_STRING:
+        lit_str(a, id, g_sm_const_str.get(idx), is_str)
+        ret
+    end
+    // A negative integer becomes unary minus over its magnitude, exactly what
+    // the parser produces for `-7` in source. Storing the two's complement in
+    // a bare literal instead would type it u64 - the literal arm picks the
+    // type from the magnitude, and 0xFFFF...F9 is not a small number.
+    if op == tok.TK_INT && g_sm_const_neg.get(idx):
+        sp := span_of(a, id)
+        mag := new_node_at(a, at.AST_LITERAL, sp)
+        mut mv := at.Get(a, mag)
+        mv.op = tok.TK_INT
+        mv.value_kind = tok.TV_INT
+        mv.value_int = g_sm_const_int.get(idx)
+        at.Put(a, mag, mv)
+        mut un := at.Get(a, id)
+        un.kind = at.AST_UNARY
+        un.op = tok.TK_MINUS
+        un.value_kind = tok.TV_NONE
+        un.value_int = 0 as u64
+        un.value_float = 0.0
+        un.value_str = ""
+        un.a = mag
+        un.b = 0
+        un.synthetic = false
+        at.Put(a, id, un)
+        is_str = false
+        ret
+    end
+    mut n := at.Get(a, id)
+    n.kind = at.AST_LITERAL
+    n.op = op
+    n.value_str = ""
+    n.value_int = 0 as u64
+    n.value_float = 0.0
+    if op == tok.TK_INT:
+        n.value_kind = tok.TV_INT
+        n.value_int = g_sm_const_int.get(idx)
+    else op == tok.TK_FLOAT:
+        n.value_kind = tok.TV_FLOAT
+        n.value_float = g_sm_const_float.get(idx)
+    else:
+        n.value_kind = tok.TV_BOOL
+        n.value_int = op == tok.TK_KW_TRUE ? 1 as u64 : 0 as u64
+    end
+    n.a = 0
+    n.b = 0
+    n.synthetic = false
+    at.Put(a, id, n)
+    is_str = false
+end
+
 // salam_builtin_global_const - rewrites the node into a literal in place.
+// A -d constant is looked up first, so the command line can override any of
+// the build-info names below; a constant declared in the source never
+// reaches here at all, because the caller only asks once name resolution
+// has come up empty.
 func builtin_global_const(a &: at.Ast, id: int, name: str, is_str &: bool): bool:
+    idx := const_lookup(name)
+    if idx >= 0:
+        lit_const(a, id, idx, is_str)
+        ret true
+    end
     if str.Equals(name, "SALAM_VERSION"):
-        mut n := at.Get(a, id)
-        n.kind = at.AST_LITERAL
-        n.op = tok.TK_STRING
-        n.value_kind = tok.TV_STRING
-        n.value_str = co.VERSION
-        n.a = 0
-        n.b = 0
-        n.synthetic = false
-        at.Put(a, id, n)
-        is_str = true
+        lit_str(a, id, co.VERSION, is_str)
+        ret true
+    end
+    if str.Equals(name, "SALAM_GIT_COMMIT"):
+        lit_str(a, id, co.GIT_COMMIT, is_str)
+        ret true
+    end
+    if str.Equals(name, "SALAM_GIT_DATE"):
+        lit_str(a, id, co.GIT_DATE, is_str)
+        ret true
+    end
+    if str.Equals(name, "SALAM_GIT_DIRTY"):
+        lit_str(a, id, co.GIT_DIRTY, is_str)
+        ret true
+    end
+    if str.Equals(name, "SALAM_BUILD_DATE"):
+        lit_str(a, id, compile_time(), is_str)
         ret true
     end
     if str.Equals(name, "SALAM_VERSION_CODE"):

@@ -15,8 +15,16 @@
 #ifndef SALAM_BUILD_INFO_H
 #define SALAM_BUILD_INFO_H
 
+/*
+ * SALAM_VERSION is stamped by the build from the repo's VERSION file, which
+ * is the one place the release number lives. Nothing here duplicates it: a
+ * second copy in this header went stale every release and made `salam
+ * version` under-report the build. The fallback below is deliberately not a
+ * plausible release number, so an unstamped binary is obvious rather than
+ * quietly wrong.
+ */
 #ifndef SALAM_VERSION
-#  define SALAM_VERSION "0.2.9"
+#  define SALAM_VERSION "0.0.0-dev"
 #endif
 
 #ifndef SALAM_GIT_COMMIT

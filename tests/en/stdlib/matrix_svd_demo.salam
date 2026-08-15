@@ -1,0 +1,274 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/matrix: the SVD, and the rank, pseudoinverse, subspaces and low-rank
+// approximation that come out of it.
+
+import matrix
+import testing
+
+func mk(r: int, c: int, base: f64): matrix.Matrix:
+    mut m := matrix.Zeros(r, c)
+    repeat m.count() with k: m.a.set(k, base + (k as f64)) end
+    ret m
+end
+
+// Rebuilds U S V^T from a decomposition.
+func rebuild(f &: matrix.SVD): matrix.Matrix:
+    mut d := matrix.Diag(f.s.a)
+    mut us := matrix.MatMul(f.u, d)
+    r := matrix.MulTranspose(us, f.v)
+    defer d.free()
+    defer us.free()
+    ret r
+end
+
+func check_square():
+    // [[1,2,3],[4,5,6],[7,8,9]] is rank 2, with a known leading singular value
+    mut a := mk(3, 3, 1.0)
+    mut f := matrix.SVDecompose(a)
+    testing.AssertTrue(f.ok)
+
+    // Singular values are nonnegative and descending
+    testing.AssertTrue(f.s.at(0, 0) >= f.s.at(0, 1))
+    testing.AssertTrue(f.s.at(0, 1) >= f.s.at(0, 2))
+    testing.AssertTrue(f.s.at(0, 2) >= 0.0)
+    testing.AssertEqFloat(f.s.at(0, 0), 16.848103352614210, 0.000001)
+    testing.AssertEqFloat(f.s.at(0, 1), 1.068369514554709, 0.000001)
+    testing.AssertEqFloat(f.s.at(0, 2), 0.0, 0.000001)
+
+    // U and V have orthonormal columns
+    testing.AssertTrue(matrix.IsOrthogonal(f.u, 0.000001))
+    testing.AssertTrue(matrix.IsOrthogonal(f.v, 0.000001))
+
+    // U S V^T reproduces A
+    mut back := rebuild(f)
+    testing.AssertTrue(matrix.AllClose(back, a, 0.000001))
+
+    defer a.free()
+    defer f.free()
+    defer back.free()
+end
+
+func check_shapes():
+    // Tall: U is m x n, V is n x n
+    mut tall := mk(5, 3, 1.0)
+    mut ft := matrix.SVDecompose(tall)
+    testing.AssertEqInt(ft.u.rows, 5)
+    testing.AssertEqInt(ft.u.cols, 3)
+    testing.AssertEqInt(ft.v.rows, 3)
+    testing.AssertEqInt(ft.v.cols, 3)
+    mut bt := rebuild(ft)
+    testing.AssertTrue(matrix.AllClose(bt, tall, 0.000001))
+
+    // Wide: the transposed path, with the two factors swapped back
+    mut wide := mk(3, 5, 1.0)
+    mut fw := matrix.SVDecompose(wide)
+    testing.AssertEqInt(fw.u.rows, 3)
+    testing.AssertEqInt(fw.v.rows, 5)
+    mut bw := rebuild(fw)
+    testing.AssertTrue(matrix.AllClose(bw, wide, 0.000001))
+
+    // A diagonal matrix has its own entries as singular values, sorted
+    mut d := matrix.Eye(3)
+    d.set(0, 0, 2.0)
+    d.set(1, 1, 0.0 - 5.0)
+    d.set(2, 2, 1.0)
+    mut sv := matrix.SingularValues(d)
+    testing.AssertEqFloat(sv.at(0, 0), 5.0, 0.000001)
+    testing.AssertEqFloat(sv.at(0, 1), 2.0, 0.000001)
+    testing.AssertEqFloat(sv.at(0, 2), 1.0, 0.000001)
+
+    defer tall.free()
+    defer ft.free()
+    defer bt.free()
+    defer wide.free()
+    defer fw.free()
+    defer bw.free()
+    defer d.free()
+    defer sv.free()
+end
+
+func check_rank():
+    mut e := matrix.Eye(4)
+    testing.AssertEqInt(matrix.MatrixRank(e, 0.0), 4)
+
+    mut sing := mk(3, 3, 1.0)
+    testing.AssertEqInt(matrix.MatrixRank(sing, 0.0), 2)
+
+    mut z := matrix.Zeros(3, 3)
+    testing.AssertEqInt(matrix.MatrixRank(z, 0.0), 0)
+
+    // A rank-1 outer product
+    mut u := mk(4, 1, 1.0)
+    mut v := mk(1, 3, 1.0)
+    mut o := matrix.Outer(u, v)
+    testing.AssertEqInt(matrix.MatrixRank(o, 0.0), 1)
+
+    // Rank is bounded by the smaller dimension
+    mut wide := matrix.RandomNormal(3, 7, 11)
+    testing.AssertEqInt(matrix.MatrixRank(wide, 0.0), 3)
+
+    defer e.free()
+    defer sing.free()
+    defer z.free()
+    defer u.free()
+    defer v.free()
+    defer o.free()
+    defer wide.free()
+end
+
+func check_pseudoinverse():
+    // For an invertible matrix the pseudoinverse is the inverse
+    mut a := matrix.Zeros(2, 2)
+    a.set(0, 0, 4.0)
+    a.set(0, 1, 7.0)
+    a.set(1, 0, 2.0)
+    a.set(1, 1, 6.0)
+    mut p := matrix.PseudoInverse(a, 0.0)
+    mut inv := matrix.Inverse(a)
+    testing.AssertTrue(matrix.AllClose(p, inv, 0.000001))
+
+    // The Moore-Penrose conditions, on a rectangular matrix where a true
+    // inverse does not exist at all.
+    mut b := mk(3, 2, 1.0)
+    mut pb := matrix.PseudoInverse(b, 0.0)
+    testing.AssertEqInt(pb.rows, 2)
+    testing.AssertEqInt(pb.cols, 3)
+
+    mut bpb := matrix.MatMul(b, pb)
+    mut c1 := matrix.MatMul(bpb, b)
+    testing.AssertTrue(matrix.AllClose(c1, b, 0.000001))
+
+    mut pbp := matrix.MatMul(pb, b)
+    mut c2 := matrix.MatMul(pbp, pb)
+    testing.AssertTrue(matrix.AllClose(c2, pb, 0.000001))
+
+    // Both products are symmetric
+    testing.AssertTrue(matrix.IsSymmetric(bpb, 0.000001))
+    testing.AssertTrue(matrix.IsSymmetric(pbp, 0.000001))
+
+    defer a.free()
+    defer p.free()
+    defer inv.free()
+    defer b.free()
+    defer pb.free()
+    defer bpb.free()
+    defer c1.free()
+    defer pbp.free()
+    defer c2.free()
+end
+
+func check_subspaces():
+    // [[1,2,3],[4,5,6],[7,8,9]] has a one-dimensional null space
+    mut a := mk(3, 3, 1.0)
+    mut ns := matrix.NullSpace(a, 0.0)
+    testing.AssertEqInt(ns.rows, 3)
+    testing.AssertEqInt(ns.cols, 1)
+
+    // A n = 0 for every basis vector
+    mut an := matrix.MatMul(a, ns)
+    testing.AssertTrue(matrix.IsZero(an, 0.000001))
+    // and the basis is orthonormal
+    testing.AssertTrue(matrix.IsOrthogonal(ns, 0.000001))
+
+    // The column space has dimension equal to the rank
+    mut cs := matrix.ColumnSpace(a, 0.0)
+    testing.AssertEqInt(cs.cols, 2)
+    testing.AssertTrue(matrix.IsOrthogonal(cs, 0.000001))
+
+    // Rank plus nullity is the number of columns
+    testing.AssertEqInt(matrix.MatrixRank(a, 0.0) + ns.cols, a.cols)
+
+    // A full-rank matrix has an empty null space
+    mut e := matrix.Eye(3)
+    mut none := matrix.NullSpace(e, 0.0)
+    testing.AssertEqInt(none.cols, 0)
+
+    defer a.free()
+    defer ns.free()
+    defer an.free()
+    defer cs.free()
+    defer e.free()
+    defer none.free()
+end
+
+func check_low_rank():
+    mut a := mk(4, 4, 1.0)
+    // A rank-1 truncation, and its error is exactly the next singular value
+    mut sv := matrix.SingularValues(a)
+    mut r1 := matrix.LowRankApprox(a, 1)
+    testing.AssertEqInt(matrix.MatrixRank(r1, 0.0), 1)
+    mut diff := matrix.Sub(a, r1)
+    testing.AssertEqFloat(matrix.Norm2(diff), sv.at(0, 1), 0.000001)
+
+    // Keeping every singular value reconstructs the matrix
+    mut full := matrix.LowRankApprox(a, 4)
+    testing.AssertTrue(matrix.AllClose(full, a, 0.000001))
+
+    // Asking for more than exist is not an error
+    mut over := matrix.LowRankApprox(a, 99)
+    testing.AssertTrue(matrix.AllClose(over, a, 0.000001))
+
+    defer a.free()
+    defer sv.free()
+    defer r1.free()
+    defer diff.free()
+    defer full.free()
+    defer over.free()
+end
+
+func check_norms_from_svd():
+    mut a := mk(3, 3, 1.0)
+    mut sv := matrix.SingularValues(a)
+
+    // The spectral norm is the largest singular value
+    testing.AssertEqFloat(matrix.Norm2(a), sv.at(0, 0), 0.000001)
+
+    // The nuclear norm is their sum
+    mut total := 0.0
+    repeat sv.count() with k: total += sv.a.get(k) end
+    testing.AssertEqFloat(matrix.NormNuclear(a), total, 0.000001)
+
+    // The Frobenius norm is the root of their sum of squares
+    mut sq := 0.0
+    repeat sv.count() with k: sq += sv.a.get(k) * sv.a.get(k) end
+    frob_norm := matrix.NormFrobenius(a)
+    testing.AssertEqFloat(frob_norm * frob_norm, sq, 0.00001)
+
+    // A singular matrix has infinite condition number
+    testing.AssertTrue(matrix.Cond2(a) > 1.0e15)
+
+    // An orthogonal matrix is perfectly conditioned
+    mut q := matrix.RandomOrthogonal(4, 3)
+    testing.AssertEqFloat(matrix.Cond2(q), 1.0, 0.000001)
+    testing.AssertEqFloat(matrix.Norm2(q), 1.0, 0.000001)
+
+    defer a.free()
+    defer sv.free()
+    defer q.free()
+end
+
+func main:
+    check_square()
+    check_shapes()
+    check_rank()
+    check_pseudoinverse()
+    check_subspaces()
+    check_low_rank()
+    check_norms_from_svd()
+    ret testing.Summary()
+end

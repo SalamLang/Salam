@@ -1,0 +1,342 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "matrix"
+@fa "ماتریس"
+@ar "مصفوفة"
+package matrix
+
+import math
+
+// Dense linear algebra over f64.
+//
+// One type, Matrix, carries every result in this library: a shape plus a
+// single flat Vector<f64> in row-major order, so a matrix is one allocation
+// and A(i,j) is a multiply-add away from a load. Vectors are matrices too, a
+// row vector is 1xn and a column vector is nx1, which keeps the API from
+// splitting into a matrix half and a vector half that disagree.
+//
+// Row-major is the deliberate choice. Every kernel here walks rows, and the
+// two that would rather walk columns (matmul and the Jacobi sweeps) transpose
+// once up front instead, which costs one pass and buys sequential access in
+// the O(n^3) part.
+//
+// Nothing is reference counted and nothing is garbage collected: a function
+// that returns a Matrix hands over ownership, and the caller frees it with
+// Free. Functions that take `x &: Matrix` borrow and never free.
+//
+// Numerical policy, which the rest of the library depends on:
+//
+//   - Factorizations pivot. LU uses partial pivoting, QR uses Householder
+//     reflections, and the symmetric eigenproblem uses Jacobi rotations.
+//     None of these is the fastest possible choice; all three are the ones
+//     that stay accurate on the matrices people actually hand a library.
+//   - Rank, null space and the pseudoinverse go through the SVD, not through
+//     Gaussian elimination, because a rank decision made by comparing a pivot
+//     against zero is a coin flip on anything ill-conditioned.
+//   - Comparisons are tolerant by default (MAT_TOL), and every predicate that
+//     asks "is this symmetric / orthogonal / singular" takes the tolerance as
+//     an argument in its ...Tol form.
+
+// Roughly the f64 machine epsilon (2^-52). The unit in the last place at 1.0,
+// and the scale below which two computed numbers cannot be told apart.
+@en "MAT_EPS"
+@fa "اپسیلون ماتریس"
+@ar "إبسيلون المصفوفة"
+pub const MAT_EPS := 2.220446049250313e-16
+
+// The default slack for "are these equal" questions. Deliberately far looser
+// than MAT_EPS: by the time a value falls out of a factorization it has been
+// through O(n) roundings, so comparing at machine precision reports honest
+// arithmetic as failure.
+@en "MAT_TOL"
+@fa "رواداری ماتریس"
+@ar "تسامح المصفوفة"
+pub const MAT_TOL := 1.0e-9
+
+// A stand-in for infinity that survives every arithmetic path here without
+// producing a NaN, used where an algorithm needs a value no real entry can
+// beat.
+@en "MAT_INF"
+@fa "بی‌نهایت ماتریس"
+@ar "لانهاية المصفوفة"
+pub const MAT_INF := 1.0e300
+
+@en "Matrix"
+@fa "ماتریس"
+@ar "مصفوفة"
+pub struct Matrix:
+    pub rows: int = 0
+    pub cols: int = 0
+    pub a: Vector<f64> = Vector {}
+
+    @en "at"
+    @fa "در"
+    @ar "عند"
+    pub func at(i: int, j: int): f64: ret this.a.get(i * this.cols + j) end
+
+    @en "set"
+    @fa "تنظیم"
+    @ar "تعيين"
+    pub func set(i: int, j: int, v: f64): this.a.set(i * this.cols + j, v) end
+
+    @en "add_at"
+    @fa "افزودن در"
+    @ar "إضافة عند"
+    pub func add_at(i: int, j: int, v: f64):
+        k := i * this.cols + j
+        this.a.set(k, this.a.get(k) + v)
+    end
+
+    @en "mul_at"
+    @fa "ضرب در"
+    @ar "ضرب عند"
+    pub func mul_at(i: int, j: int, v: f64):
+        k := i * this.cols + j
+        this.a.set(k, this.a.get(k) * v)
+    end
+
+    // Flat row-major access, for the kernels that have already done the
+    // index arithmetic themselves and should not pay for it twice.
+    @en "flat"
+    @fa "تخت"
+    @ar "مسطح"
+    pub func flat(k: int): f64: ret this.a.get(k) end
+
+    @en "set_flat"
+    @fa "تنظیم تخت"
+    @ar "تعيين مسطح"
+    pub func set_flat(k: int, v: f64): this.a.set(k, v) end
+
+    @en "count"
+    @fa "شمار"
+    @ar "عدد"
+    pub func count(): int: ret this.rows * this.cols end
+
+    @en "is_square"
+    @fa "مربع است"
+    @ar "مربعة"
+    pub func is_square(): bool: ret this.rows == this.cols end
+
+    @en "is_empty"
+    @fa "تهی است"
+    @ar "فارغة"
+    pub func is_empty(): bool: ret this.rows <= 0 || this.cols <= 0 end
+
+    @en "same_shape"
+    @fa "هم‌شکل"
+    @ar "نفس الشكل"
+    pub func same_shape(o &: Matrix): bool:
+        ret this.rows == o.rows && this.cols == o.cols
+    end
+
+    // The length of the shorter side, which is how many diagonal entries a
+    // rectangular matrix has and the cap on its rank.
+    @en "min_dim"
+    @fa "کمینه بعد"
+    @ar "أصغر بعد"
+    pub func min_dim(): int:
+        if this.rows < this.cols: ret this.rows end
+        ret this.cols
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free(): this.a.free() end
+end
+
+func _fill(v &: Vector<f64>, n: int, x: f64):
+    v.clear()
+    repeat n: v.push(x) end
+end
+
+func _shape(r: int, c: int): Matrix:
+    mut m := Matrix {}
+    m.rows = r
+    m.cols = c
+    ret m
+end
+
+// Arange's loop guard, which has to flip with the sign of the step: counting
+// up stops at the first value that reaches `stop`, counting down at the first
+// that falls to it.
+func _arange_go(x: f64, stop: f64, step: f64): bool:
+    if step > 0.0: ret x < stop end
+    ret x > stop
+end
+
+@en "Zeros"
+@fa "صفرها"
+@ar "أصفار"
+pub func Zeros(rows: int, cols: int): Matrix:
+    mut m := _shape(rows, cols)
+    m.a.zeros(rows * cols)
+    ret m
+end
+
+@en "Ones"
+@fa "یک‌ها"
+@ar "آحاد"
+pub func Ones(rows: int, cols: int): Matrix: ret Full(rows, cols, 1.0) end
+
+@en "Full"
+@fa "پرشده"
+@ar "مملوءة"
+pub func Full(rows: int, cols: int, x: f64): Matrix:
+    m := _shape(rows, cols)
+    _fill(m.a, rows * cols, x)
+    ret m
+end
+
+// The nxn identity. Neutral element of MatMul, and the thing every inverse
+// and every orthogonality check is measured against.
+@en "Eye"
+@fa "همانی"
+@ar "وحدة"
+pub func Eye(n: int): Matrix:
+    mut m := Zeros(n, n)
+    repeat n with i: m.set(i, i, 1.0) end
+    ret m
+end
+
+// NumPy's eye(N, M, k): rectangular, with the ones on the k-th diagonal
+// (k > 0 above the main one, k < 0 below).
+@en "EyeOffset"
+@fa "همانی جابه‌جا"
+@ar "وحدة مزاحة"
+pub func EyeOffset(rows: int, cols: int, k: int): Matrix:
+    mut m := Zeros(rows, cols)
+    repeat rows with i:
+        j := i + k
+        if j >= 0 && j < cols: m.set(i, j, 1.0) end
+    end
+    ret m
+end
+
+// Wraps an existing row-major buffer. The data is copied, so the caller keeps
+// ownership of what it passed in.
+@en "FromArray"
+@fa "از آرایه"
+@ar "من مصفوفة خطية"
+pub func FromArray(rows: int, cols: int, data &: Vector<f64>): Matrix:
+    mut m := Zeros(rows, cols)
+    mut n := rows * cols
+    if data.len() < n: n = data.len() end
+    repeat n with k: m.a.set(k, data.get(k)) end
+    ret m
+end
+
+@en "RowVector"
+@fa "بردار سطری"
+@ar "متجه صفي"
+pub func RowVector(data &: Vector<f64>): Matrix:
+    ret FromArray(1, data.len(), data)
+end
+
+@en "ColVector"
+@fa "بردار ستونی"
+@ar "متجه عمودي"
+pub func ColVector(data &: Vector<f64>): Matrix:
+    ret FromArray(data.len(), 1, data)
+end
+
+// A square matrix with `data` down the main diagonal.
+@en "Diag"
+@fa "قطری"
+@ar "قطرية"
+pub func Diag(data &: Vector<f64>): Matrix:
+    n := data.len()
+    mut m := Zeros(n, n)
+    repeat n with i: m.set(i, i, data.get(i)) end
+    ret m
+end
+
+@en "Clone"
+@fa "همانند"
+@ar "نسخة"
+pub func Clone(x &: Matrix): Matrix:
+    mut m := _shape(x.rows, x.cols)
+    m.a.zeros(x.count())
+    repeat x.count() with k: m.a.set(k, x.a.get(k)) end
+    ret m
+end
+
+// Overwrites dst with src, keeping dst's allocation. Shapes must already
+// agree; this is the in-place counterpart of Clone for loops that would
+// otherwise allocate a fresh matrix per iteration.
+@en "CopyInto"
+@fa "رونوشت در"
+@ar "نسخ إلى"
+pub func CopyInto(dst &: Matrix, src &: Matrix):
+    if dst.same_shape(src) == false: ret end
+    repeat src.count() with k: dst.a.set(k, src.a.get(k)) end
+end
+
+@en "Free"
+@fa "آزادسازی"
+@ar "تحرير"
+pub func Free(x &: Matrix): x.a.free() end
+
+@en "SetAll"
+@fa "تنظیم همه"
+@ar "تعيين الكل"
+pub func SetAll(x &: Matrix, v: f64):
+    repeat x.count() with k: x.a.set(k, v) end
+end
+
+// Half-open [start, stop) in steps of `step`, as a 1xn row vector, the same
+// shape contract as NumPy's arange.
+@en "Arange"
+@fa "بازه گام"
+@ar "مدى بخطوة"
+pub func Arange(start: f64, stop: f64, step: f64): Matrix:
+    mut data := Vector {} as Vector<f64>
+    if step != 0.0:
+        mut x := start
+        until _arange_go(x, stop, step):
+            data.push(x)
+            x += step
+        end
+    end
+    m := RowVector(data)
+    defer data.free()
+    ret m
+end
+
+// `num` points from start to stop inclusive, as a 1xn row vector. The last
+// point is written from `stop` rather than accumulated, so Linspace never
+// drifts off its own endpoint.
+@en "Linspace"
+@fa "بازه یکنواخت"
+@ar "مدى متساو"
+pub func Linspace(start: f64, stop: f64, num: int): Matrix:
+    if num <= 0: ret Zeros(1, 0) end
+    if num == 1: ret Full(1, 1, start) end
+    mut m := Zeros(1, num)
+    h := (stop - start) / ((num - 1) as f64)
+    repeat num with i: m.set(0, i, start + h * (i as f64)) end
+    m.set(0, num - 1, stop)
+    ret m
+end
+
+// `num` points spaced evenly on a log scale, base^start to base^stop.
+@en "Logspace"
+@fa "بازه لگاریتمی"
+@ar "مدى لوغاريتمي"
+pub func Logspace(start: f64, stop: f64, num: int, base: f64): Matrix:
+    mut m := Linspace(start, stop, num)
+    repeat m.count() with k: m.a.set(k, math.Pow(base, m.a.get(k))) end
+    ret m
+end

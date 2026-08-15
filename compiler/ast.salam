@@ -158,6 +158,11 @@ pub struct Node:
     // "this value is read". Stamped by mark_ref_args (sema_overload.salam).
     pub ref_arg: bool = false
     pub is_pub: bool = false
+    // Set on an AST_IDENTIFIER that names a free function and is being read as
+    // a value rather than called. Sema types it i64 (the handler-slot ABI that
+    // std/net/router and friends take) and every backend lowers it to the
+    // function's address.
+    pub func_value: bool = false
     pub is_inline: bool = false
     pub is_noinline: bool = false
     pub is_pure: bool = false
@@ -166,6 +171,10 @@ pub struct Node:
     pub is_slice: bool = false
     pub is_prefix: bool = false
     pub match_is_expr: bool = false
+    // Set on the synthetic AST_VAR_DECLs an `each` lowers its key/value
+    // bindings to, so the unused-variable check can tell a loop binding from
+    // an ordinary local and apply the stricter rule.
+    pub loop_bind: bool = false
     pub ty: NodeId = 0 // ast_node_t *type
     pub a: NodeId = 0
     pub b: NodeId = 0
@@ -243,7 +252,7 @@ end
 func emit_child_list(w &: x.Writer, role: str, a: Ast, ids: Vector<int>):
     x.Open(w, role)
     repeat ids.len() with i:
-        ToXml(w, a, ids.get(i)[0])
+        ToXml(w, a, ids.get(i))
     end
     x.Close(w)
 end
@@ -260,7 +269,7 @@ end
 // Frees every node's vectors and the node storage itself.
 pub func FreeAst(a &: Ast):
     repeat a.nodes.len() with i:
-        mut n := a.nodes.get(i)[0]
+        mut n := a.nodes.get(i)
         n.list.free()
         n.dims.free()
         n.typarams.free()
@@ -285,7 +294,7 @@ end
 
 // Full node read (returns a copy; see the mutation protocol in the header).
 pub func Get(a: Ast, id: NodeId): Node:
-    ret a.nodes.get(id)[0]
+    ret a.nodes.get(id)
 end
 
 // Full node write-back.
@@ -294,14 +303,14 @@ pub func Put(a &: Ast, id: NodeId, n: Node):
 end
 
 pub func KindOf(a: Ast, id: NodeId): AstKind:
-    n := a.nodes.get(id)[0]
+    n := a.nodes.get(id)
     ret n.kind
 end
 
 pub func SetSpan(
     a &: Ast, id: NodeId, bl: u32, bc: u32, bi: u32, el: u32, ec: u32, ei: u32, length: u32
 ):
-    mut n := a.nodes.get(id)[0]
+    mut n := a.nodes.get(id)
     n.begin_line = bl
     n.begin_col = bc
     n.begin_index = bi
@@ -313,32 +322,32 @@ pub func SetSpan(
 end
 
 pub func SetName(a &: Ast, id: NodeId, name: str):
-    mut n := a.nodes.get(id)[0]
+    mut n := a.nodes.get(id)
     n.name = name
     a.nodes.set(id, n)
 end
 
 pub func SetOp(a &: Ast, id: NodeId, op: int):
-    mut n := a.nodes.get(id)[0]
+    mut n := a.nodes.get(id)
     n.op = op
     a.nodes.set(id, n)
 end
 
 pub func SetTypeNode(a &: Ast, id: NodeId, t: NodeId):
-    mut n := a.nodes.get(id)[0]
+    mut n := a.nodes.get(id)
     n.ty = t
     a.nodes.set(id, n)
 end
 
 pub func SetTypeStr(a &: Ast, id: NodeId, s: str):
-    mut n := a.nodes.get(id)[0]
+    mut n := a.nodes.get(id)
     n.type_str = s
     a.nodes.set(id, n)
 end
 
 // Copies a token.TokenValue payload into the node (parser convenience).
 pub func SetTokenValue(a &: Ast, id: NodeId, v: tok.TokenValue):
-    mut n := a.nodes.get(id)[0]
+    mut n := a.nodes.get(id)
     n.value_kind = v.kind
     n.value_int = v.ival
     n.value_float = v.fval
@@ -349,7 +358,7 @@ end
 
 // Reads the node's value back as a token.TokenValue.
 pub func ValueOf(a: Ast, id: NodeId): tok.TokenValue:
-    n := a.nodes.get(id)[0]
+    n := a.nodes.get(id)
     mut v := tok.ValueNone()
     v.kind = n.value_kind
     v.ival = n.value_int
@@ -364,89 +373,89 @@ pub func AddChild(a &: Ast, parent: NodeId, child: NodeId):
     if child == 0:
         ret
     end
-    mut n := a.nodes.get(parent)[0]
+    mut n := a.nodes.get(parent)
     n.list.push(child)
     a.nodes.set(parent, n)
 end
 
 pub func Child(a: Ast, id: NodeId, i: int): NodeId:
-    n := a.nodes.get(id)[0]
-    ret n.list.get(i)[0]
+    n := a.nodes.get(id)
+    ret n.list.get(i)
 end
 
 pub func ChildCount(a: Ast, id: NodeId): int:
-    n := a.nodes.get(id)[0]
+    n := a.nodes.get(id)
     ret n.list.len()
 end
 
 pub func AddDim(a &: Ast, id: NodeId, dim: NodeId):
-    mut n := a.nodes.get(id)[0]
+    mut n := a.nodes.get(id)
     n.dims.push(dim)
     a.nodes.set(id, n)
 end
 
 pub func Dim(a: Ast, id: NodeId, i: int): NodeId:
-    n := a.nodes.get(id)[0]
-    ret n.dims.get(i)[0]
+    n := a.nodes.get(id)
+    ret n.dims.get(i)
 end
 
 pub func DimCount(a: Ast, id: NodeId): int:
-    n := a.nodes.get(id)[0]
+    n := a.nodes.get(id)
     ret n.dims.len()
 end
 
 pub func AddCapture(a &: Ast, id: NodeId, cap: NodeId):
-    mut n := a.nodes.get(id)[0]
+    mut n := a.nodes.get(id)
     n.captures.push(cap)
     a.nodes.set(id, n)
 end
 
 pub func Capture(a: Ast, id: NodeId, i: int): NodeId:
-    n := a.nodes.get(id)[0]
-    ret n.captures.get(i)[0]
+    n := a.nodes.get(id)
+    ret n.captures.get(i)
 end
 
 pub func CaptureCount(a: Ast, id: NodeId): int:
-    n := a.nodes.get(id)[0]
+    n := a.nodes.get(id)
     ret n.captures.len()
 end
 
 // Type parameter + its bound ("" = unbounded), kept in lockstep.
 pub func AddTyparam(a &: Ast, id: NodeId, name: str, bound: str):
-    mut n := a.nodes.get(id)[0]
+    mut n := a.nodes.get(id)
     n.typarams.push(name)
     n.typaram_bounds.push(bound)
     a.nodes.set(id, n)
 end
 
 pub func Typaram(a: Ast, id: NodeId, i: int): str:
-    n := a.nodes.get(id)[0]
-    ret n.typarams.get(i)[0]
+    n := a.nodes.get(id)
+    ret n.typarams.get(i)
 end
 
 pub func TyparamBound(a: Ast, id: NodeId, i: int): str:
-    n := a.nodes.get(id)[0]
-    ret n.typaram_bounds.get(i)[0]
+    n := a.nodes.get(id)
+    ret n.typaram_bounds.get(i)
 end
 
 pub func TyparamCount(a: Ast, id: NodeId): int:
-    n := a.nodes.get(id)[0]
+    n := a.nodes.get(id)
     ret n.typarams.len()
 end
 
 pub func AddAlias(a &: Ast, id: NodeId, alias: str):
-    mut n := a.nodes.get(id)[0]
+    mut n := a.nodes.get(id)
     n.aliases.push(alias)
     a.nodes.set(id, n)
 end
 
 pub func Alias(a: Ast, id: NodeId, i: int): str:
-    n := a.nodes.get(id)[0]
-    ret n.aliases.get(i)[0]
+    n := a.nodes.get(id)
+    ret n.aliases.get(i)
 end
 
 pub func AliasCount(a: Ast, id: NodeId): int:
-    n := a.nodes.get(id)[0]
+    n := a.nodes.get(id)
     ret n.aliases.len()
 end
 
@@ -460,7 +469,7 @@ end
 
 // ast_toplevel_order_phase
 pub func ToplevelOrderPhase(a: Ast, id: NodeId): int:
-    n := a.nodes.get(id)[0]
+    n := a.nodes.get(id)
     if n.is_extern && n.kind == AST_VAR_DECL:
         ret AST_ORDER_IMPORT
     end
@@ -491,7 +500,7 @@ pub func StrLitLen(a: Ast, id: NodeId): i64:
     if id == 0:
         ret (0 - 1) as i64
     end
-    n := a.nodes.get(id)[0]
+    n := a.nodes.get(id)
     if n.kind != AST_LITERAL:
         ret (0 - 1) as i64
     end
@@ -509,7 +518,7 @@ pub func Clone(a &: Ast, id: NodeId): NodeId:
     if id == 0:
         ret 0
     end
-    src := a.nodes.get(id)[0]
+    src := a.nodes.get(id)
     mut c := src
     c.ty = Clone(a, src.ty)
     c.a = Clone(a, src.a)
@@ -518,27 +527,27 @@ pub func Clone(a &: Ast, id: NodeId): NodeId:
     c.d = Clone(a, src.d)
     c.list = Vector {} as Vector<int>
     repeat src.list.len() with i0:
-        c.list.push(Clone(a, src.list.get(i0)[0]))
+        c.list.push(Clone(a, src.list.get(i0)))
     end
     c.dims = Vector {} as Vector<int>
     repeat src.dims.len() with i1:
-        c.dims.push(Clone(a, src.dims.get(i1)[0]))
+        c.dims.push(Clone(a, src.dims.get(i1)))
     end
     c.captures = Vector {} as Vector<int>
     repeat src.captures.len() with i2:
-        c.captures.push(Clone(a, src.captures.get(i2)[0]))
+        c.captures.push(Clone(a, src.captures.get(i2)))
     end
     c.typarams = Vector {} as Vector<str>
     repeat src.typarams.len() with i3:
-        c.typarams.push(src.typarams.get(i3)[0])
+        c.typarams.push(src.typarams.get(i3))
     end
     c.typaram_bounds = Vector {} as Vector<str>
     repeat src.typaram_bounds.len() with i4:
-        c.typaram_bounds.push(src.typaram_bounds.get(i4)[0])
+        c.typaram_bounds.push(src.typaram_bounds.get(i4))
     end
     c.aliases = Vector {} as Vector<str>
     repeat src.aliases.len() with i5:
-        c.aliases.push(src.aliases.get(i5)[0])
+        c.aliases.push(src.aliases.get(i5))
     end
     nid := a.nodes.len()
     a.nodes.push(c)

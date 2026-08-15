@@ -1,0 +1,265 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package jwt
+
+// The small amount of JSON a JWS header and a claim set need.
+//
+// std/encoding/json is the general-purpose parser, and this is not a
+// replacement for it. Three things a token parser needs are not what that
+// API offers:
+//
+//   * a member read that keeps the value RAW, quotes included. json.Get
+//     strips the quotes off a string, so `"aud": "a"` and `"aud": ["a"]`
+//     come back indistinguishable when the string happens to start with "[".
+//     Audience matching turns on exactly that distinction.
+//   * unescaping. json.Get returns the escaped bytes, so a claim carrying
+//     \" or é would be compared in its escaped form.
+//   * escaping every control character. json.Escape covers \n \t \r \" \\;
+//     a claim value holding, say, 0x01 would make the payload invalid JSON.
+//
+// So the read side here is raw-preserving, and the escaping half lives in
+// jwt_jsontext.salam. Nothing recursive: a JWS payload is a flat object, and
+// values that are themselves objects or arrays are handed back as raw text
+// for the caller to feed to std/encoding/json if it wants them parsed.
+
+pure func _is_ws(code: int): bool:
+    ret code == 32 || code == 9 || code == 10 || code == 13
+end
+
+func _skip_ws(s: str, from: int): int:
+    n := s.len()
+    bp := _bp(s)
+    mut i := from
+    until i < n && _is_ws(_ub(bp, i)):
+        i += 1
+    end
+    ret i
+end
+
+// `p` is the index of the opening quote. Returns the index just past the
+// closing quote, or -1 if the string never closes.
+func _end_of_string(s: str, p: int): int:
+    n := s.len()
+    bp := _bp(s)
+    mut i := p + 1
+    until i < n:
+        code := _ub(bp, i)
+        if code == 92:
+            i += 2
+            continue
+        end
+        if code == 34: ret i + 1 end
+        i += 1
+    end
+    ret 0 - 1
+end
+
+// Balanced scan over {...} or [...], skipping strings so a brace inside one
+// does not count.
+func _end_of_group(s: str, p: int): int:
+    n := s.len()
+    bp := _bp(s)
+    mut depth := 0
+    mut i := p
+    until i < n:
+        code := _ub(bp, i)
+        if code == 34:
+            e := _end_of_string(s, i)
+            if e < 0: ret 0 - 1 end
+            i = e
+            continue
+        end
+        if code == 123 || code == 91:
+            depth += 1
+        else code == 125 || code == 93:
+            depth -= 1
+            if depth == 0: ret i + 1 end
+        end
+        i += 1
+    end
+    ret 0 - 1
+end
+
+// End of any JSON value starting at `p`.
+func _end_of_value(s: str, p: int): int:
+    n := s.len()
+    if p >= n: ret 0 - 1 end
+    bp := _bp(s)
+    code := _ub(bp, p)
+    if code == 34: ret _end_of_string(s, p) end
+    if code == 123 || code == 91: ret _end_of_group(s, p) end
+    mut i := p
+    until i < n:
+        c := _ub(bp, i)
+        if c == 44 || c == 125 || c == 93 || _is_ws(c): ret i end
+        i += 1
+    end
+    ret n
+end
+
+func _slice_eq(text: str, start: int, length: int, key: str): bool:
+    if length != key.len(): ret false end
+    tp := _bp(text)
+    kp := _bp(key)
+    repeat length with i:
+        if _ub(tp, start + i) != _ub(kp, i): ret false end
+    end
+    ret true
+end
+
+// Compare a key in place. Unescaping every key on every lookup would
+// allocate a string per member per scan, and a server verifies a token per
+// request; an escape in a claim NAME is rare enough to pay for only when it
+// actually appears.
+func _key_eq(text: str, start: int, length: int, key: str): bool:
+    tp := _bp(text)
+    mut escaped := false
+    repeat length with i:
+        if _ub(tp, start + i) == 92:
+            escaped = true
+            break
+        end
+    end
+    if escaped: ret _unescape(text.substr(start, length)) == key end
+    ret _slice_eq(text, start, length, key)
+end
+
+// Raw JSON text of the FIRST `key` member, quotes included for strings, and
+// how many members carried that name.
+//
+// The count is not decoration. `{"sub":"admin","sub":"guest"}` is a real
+// attack: JSON says nothing useful about duplicate names, so two services
+// reading the same token can each pick a different one. This scans to the
+// end of the object rather than stopping at the first hit so the caller can
+// refuse a token that is ambiguous in the first place.
+func _member_all(text: str, key: str, count &: int): str:
+    count = 0
+    mut first := ""
+    n := text.len()
+    if n == 0: ret "" end
+    bp := _bp(text)
+    mut p := _skip_ws(text, 0)
+    if p >= n || _ub(bp, p) != 123: ret "" end
+    p += 1
+    until p < n:
+        p = _skip_ws(text, p)
+        if p >= n || _ub(bp, p) == 125: ret first end
+        if _ub(bp, p) != 34: ret first end
+        ke := _end_of_string(text, p)
+        if ke < 0: ret first end
+        matched := _key_eq(text, p + 1, ke - p - 2, key)
+        p = _skip_ws(text, ke)
+        if p >= n || _ub(bp, p) != 58: ret first end
+        vs := _skip_ws(text, p + 1)
+        ve := _end_of_value(text, vs)
+        if ve < 0: ret first end
+        if matched:
+            if count == 0: first = text.substr(vs, ve - vs) end
+            count += 1
+        end
+        p = _skip_ws(text, ve)
+        if p < n && _ub(bp, p) == 44:
+            p += 1
+            continue
+        end
+        ret first
+    end
+    ret first
+end
+
+// Raw JSON text of `key`'s value. `found` distinguishes an absent member
+// from one whose value is empty.
+func _member_raw(text: str, key: str, found &: bool): str:
+    mut count := 0
+    v := _member_all(text, key, count)
+    found = count > 0
+    ret v
+end
+
+func _member_count(text: str, key: str): int:
+    mut count := 0
+    _v := _member_all(text, key, count)
+    ret count
+end
+
+// A raw value that is a JSON string -> its decoded text. Anything else
+// (number, bool, null) comes back as written; objects and arrays as "".
+func _raw_to_str(raw: str): str:
+    if raw.len() == 0: ret "" end
+    bp := _bp(raw)
+    c := _ub(bp, 0)
+    if c == 34:
+        ret _unescape(raw.substr(1, raw.len() - 2))
+    end
+    if c == 123 || c == 91: ret "" end
+    if raw == "null": ret "" end
+    ret raw
+end
+
+// JSON numbers are f64 on paper; NumericDate values are whole seconds, so a
+// fractional part is truncated rather than rounded (RFC 7519 allows the
+// non-integer form, and every second of leeway is the caller's to give).
+pure func _raw_to_i64(raw: str): i64:
+    n := raw.len()
+    if n == 0: ret 0 as i64 end
+    bp := _bp(raw)
+    mut i := 0
+    mut neg := false
+    if _ub(bp, 0) == 45:
+        neg = true
+        i = 1
+    else _ub(bp, 0) == 43:
+        i = 1
+    end
+    mut v := 0 as i64
+    mut digits := 0
+    until i < n:
+        c := _ub(bp, i)
+        if c < 48 || c > 57: break end
+        v = v * (10 as i64) + ((c - 48) as i64)
+        digits += 1
+        i += 1
+    end
+    if digits == 0: ret 0 as i64 end
+    if neg: ret 0 as i64 - v end
+    ret v
+end
+
+// Does a raw "aud" value contain `want`? Handles both shapes RFC 7519
+// allows: a lone string, and an array of them.
+func _raw_has_string(raw: str, want: str): bool:
+    n := raw.len()
+    if n == 0: ret false end
+    bp := _bp(raw)
+    if _ub(bp, 0) == 34:
+        ret _raw_to_str(raw) == want
+    end
+    if _ub(bp, 0) != 91: ret false end
+    mut i := 1
+    until i < n:
+        i = _skip_ws(raw, i)
+        if i >= n || _ub(bp, i) == 93: ret false end
+        e := _end_of_value(raw, i)
+        if e < 0: ret false end
+        if _raw_to_str(raw.substr(i, e - i)) == want: ret true end
+        i = _skip_ws(raw, e)
+        if i < n && _ub(bp, i) == 44:
+            i += 1
+            continue
+        end
+        ret false
+    end
+    ret false
+end

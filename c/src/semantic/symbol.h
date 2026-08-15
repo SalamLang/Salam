@@ -69,6 +69,13 @@ struct symbol_t {
     bool is_pub;
     bool used;
     bool mutated;
+    /* A name the loop itself introduced: `repeat ... with i`, or either half
+     * of an `each` binding. These are held to a stricter unused rule than an
+     * ordinary local - a '_' prefix does not excuse them, because the fix is
+     * to drop the binding rather than to rename it. Only the bare name "_"
+     * is a discard, for the `each (_, v) in map` case where the key binding
+     * cannot be left out. */
+    bool loop_bind;
     ast_node_t *decl;
     vec_t overloads;
     scope_t *members;

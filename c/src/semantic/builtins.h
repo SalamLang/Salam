@@ -28,6 +28,17 @@ typedef struct {
 
 const salam_builtin_t *salam_builtin_lookup(const char *name);
 
-bool salam_builtin_global_const(const char *name, ast_node_t *n, bool *is_str);
+bool salam_builtin_global_const(arena_t *a, const char *name, ast_node_t *n,
+                                bool *is_str);
+
+/*
+ * Hand the -dNAME=VALUE constants from the command line to the name
+ * resolver. Each entry is one raw "NAME=VALUE" (or bare "NAME", meaning
+ * true) string, already checked for a SCREAMING_SNAKE_CASE name by the CLI.
+ * Values are copied into storage that lives as long as the process, so the
+ * caller's strings need not outlive the call. Definitions past the internal
+ * capacity are reported and dropped rather than silently ignored.
+ */
+void salam_builtin_set_consts(const char *const *defs, int ndefs);
 
 #endif /* SALAM_SEMANTIC_BUILTINS_H */

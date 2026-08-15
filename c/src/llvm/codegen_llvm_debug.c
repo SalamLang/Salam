@@ -22,6 +22,56 @@ const char *ll_meta_add(ll_t *ll, const char *text)
     return id;
 }
 
+/*
+ * Two-family TBAA: "any pointer" for pointer-typed struct fields, "salam data"
+ * for every 16-bit-or-wider integer and both floats, nothing else tagged.
+ * The families are this coarse on purpose. Salam code may reinterpret one
+ * data buffer through several non-pointer views (std/encoding/binary reads a
+ * stored f64 back as i64; the interpreter's value payload is written through
+ * every width), so all of those must stay in ONE family. Pointer accesses are
+ * tagged only when they are struct-field accesses because raw T*-view element
+ * reads of pointer-sized cells are how std/core republishes argv i64s as strs;
+ * an untagged access aliases everything, which keeps that legal. i8/char/bool
+ * stay untagged so byte-level walks of any memory remain universal aliases.
+ * What the split buys: an element store (data) can no longer clobber a
+ * container's data-pointer field (any pointer), so LICM keeps `v.data` in a
+ * register across loops that write elements through a &: parameter.
+ */
+static void ll_tbaa_ensure_common(ll_t *ll)
+{
+    const char *root;
+    if (ll->tbaa_char) return;
+    root = ll_meta_add(ll, "!{!\"salam-tbaa\"}");
+    ll->tbaa_char = ll_meta_add(ll, ll_fmt(ll, "!{!\"salam bytes\", %s, i64 0}", root));
+}
+
+const char *ll_tbaa_suffix(ll_t *ll, const char *ts, bool is_field)
+{
+    if (!ts) return "";
+    if (ll_is_ptr_ts(ts) || ll_is_str(ts) || ll_is_any_fn_ts(ts)) {
+        if (!is_field) return "";
+        if (!ll->tbaa_ptr_sfx) {
+            const char *node, *tag;
+            ll_tbaa_ensure_common(ll);
+            node = ll_meta_add(
+                ll, ll_fmt(ll, "!{!\"any pointer\", %s, i64 0}", ll->tbaa_char));
+            tag = ll_meta_add(ll, ll_fmt(ll, "!{%s, %s, i64 0}", node, node));
+            ll->tbaa_ptr_sfx = ll_fmt(ll, ", !tbaa %s", tag);
+        }
+        return ll->tbaa_ptr_sfx;
+    }
+    if (!(ll_is_float(ts) || (ll_is_int(ts) && ll_int_bits(ll, ts) >= 16))) return "";
+    if (!ll->tbaa_data_sfx) {
+        const char *node, *tag;
+        ll_tbaa_ensure_common(ll);
+        node =
+            ll_meta_add(ll, ll_fmt(ll, "!{!\"salam data\", %s, i64 0}", ll->tbaa_char));
+        tag = ll_meta_add(ll, ll_fmt(ll, "!{%s, %s, i64 0}", node, node));
+        ll->tbaa_data_sfx = ll_fmt(ll, ", !tbaa %s", tag);
+    }
+    return ll->tbaa_data_sfx;
+}
+
 static const char *di_escape(ll_t *ll, const char *s)
 {
     if (!s) return "";
@@ -91,10 +141,13 @@ const char *ll_debug_location(ll_t *ll, unsigned line, unsigned col)
 
 void ll_debug_finalize(ll_t *ll)
 {
-    if (!ll->debug) return;
+    /* Also the flush point for TBAA nodes, which exist without -g. */
+    if (!ll->debug && ll->meta_n == 0) return;
     sb_puts(ll->g, "\n");
-    sb_puts(ll->g, ll_fmt(ll, "!llvm.module.flags = !{%s, %s}\n", ll->di_flag_dwarf,
-                          ll->di_flag_debug));
-    sb_puts(ll->g, ll_fmt(ll, "!llvm.dbg.cu = !{%s}\n", ll->di_cu));
+    if (ll->debug) {
+        sb_puts(ll->g, ll_fmt(ll, "!llvm.module.flags = !{%s, %s}\n", ll->di_flag_dwarf,
+                              ll->di_flag_debug));
+        sb_puts(ll->g, ll_fmt(ll, "!llvm.dbg.cu = !{%s}\n", ll->di_cu));
+    }
     sb_puts(ll->g, sb_cstr(ll->meta));
 }

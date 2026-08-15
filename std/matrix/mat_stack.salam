@@ -1,0 +1,280 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package matrix
+
+// Assembling matrices out of other matrices, and the triangular and
+// reflection views that the factorizations produce.
+//
+// Triu and Tril carry the offset argument NumPy gives them, and it earns its
+// place: Triu(A, 1) is the strictly upper triangle, which is what separates
+// the R of a QR factorization from the reflectors stored underneath it, and
+// Tril(A, -1) is the strict lower triangle, which is the L of an LU with its
+// implicit unit diagonal left out.
+//
+// Rot90 composes: rotating k times is the same as rotating once, k times, so
+// the implementation reduces k mod 4 and never rotates more than three times
+// no matter what the caller passes, including negative k.
+//
+// Roll is circular, not shifting: entries that fall off one edge reappear at
+// the other. That is what makes it the right primitive for building
+// circulant matrices and for cyclic difference stencils.
+
+func _hstack_into(r &: Matrix, x &: Matrix, c0: int):
+    repeat x.rows with i:
+        repeat x.cols with j: r.set(i, c0 + j, x.at(i, j)) end
+    end
+end
+
+func _vstack_into(r &: Matrix, x &: Matrix, r0: int):
+    repeat x.rows with i:
+        repeat x.cols with j: r.set(r0 + i, j, x.at(i, j)) end
+    end
+end
+
+// True Euclidean modulus: the remainder is never negative, so Roll(-1) and
+// Roll(n-1) agree the way circular indexing requires. C's % does not do this.
+func _wrap(i: int, n: int): int:
+    if n <= 0: ret 0 end
+    mut k := i % n
+    if k < 0: k += n end
+    ret k
+end
+
+func _rot90_once(x &: Matrix): Matrix:
+    mut r := Zeros(x.cols, x.rows)
+    repeat x.rows with i:
+        repeat x.cols with j: r.set(x.cols - 1 - j, i, x.at(i, j)) end
+    end
+    ret r
+end
+
+// Side by side. Row counts must agree.
+@en "HStack"
+@fa "چینش افقی"
+@ar "رص أفقي"
+pub func HStack(x &: Matrix, y &: Matrix): Matrix:
+    if x.rows != y.rows: ret Zeros(0, 0) end
+    mut r := Zeros(x.rows, x.cols + y.cols)
+    _hstack_into(r, x, 0)
+    _hstack_into(r, y, x.cols)
+    ret r
+end
+
+// One above the other. Column counts must agree.
+@en "VStack"
+@fa "چینش عمودی"
+@ar "رص عمودي"
+pub func VStack(x &: Matrix, y &: Matrix): Matrix:
+    if x.cols != y.cols: ret Zeros(0, 0) end
+    mut r := Zeros(x.rows + y.rows, x.cols)
+    _vstack_into(r, x, 0)
+    _vstack_into(r, y, x.rows)
+    ret r
+end
+
+// [A | b], the augmented matrix that Gaussian elimination and RREF operate
+// on. Just HStack, named for what it means.
+@en "Augment"
+@fa "افزوده"
+@ar "موسعة"
+pub func Augment(a &: Matrix, b &: Matrix): Matrix: ret HStack(a, b) end
+
+// The block diagonal [[A, 0], [0, B]]. The direct sum of two operators, and
+// the shape a decoupled system takes.
+@en "BlockDiag"
+@fa "قطری بلوکی"
+@ar "قطرية كتلية"
+pub func BlockDiag(x &: Matrix, y &: Matrix): Matrix:
+    mut r := Zeros(x.rows + y.rows, x.cols + y.cols)
+    repeat x.rows with i:
+        repeat x.cols with j: r.set(i, j, x.at(i, j)) end
+    end
+    repeat y.rows with i:
+        repeat y.cols with j: r.set(x.rows + i, x.cols + j, y.at(i, j)) end
+    end
+    ret r
+end
+
+// Everything on or above the k-th diagonal, the rest zeroed. k = 0 includes
+// the main diagonal, k = 1 excludes it.
+@en "Triu"
+@fa "بالامثلثی"
+@ar "مثلثية عليا"
+pub func Triu(x &: Matrix, k: int): Matrix:
+    mut r := Zeros(x.rows, x.cols)
+    repeat x.rows with i:
+        mut j := i + k
+        if j < 0: j = 0 end
+        until j < x.cols:
+            r.set(i, j, x.at(i, j))
+            j += 1
+        end
+    end
+    ret r
+end
+
+// Everything on or below the k-th diagonal, the rest zeroed.
+@en "Tril"
+@fa "پایین‌مثلثی"
+@ar "مثلثية سفلى"
+pub func Tril(x &: Matrix, k: int): Matrix:
+    mut r := Zeros(x.rows, x.cols)
+    repeat x.rows with i:
+        mut top := i + k
+        if top >= x.cols: top = x.cols - 1 end
+        mut j := 0
+        until j <= top:
+            r.set(i, j, x.at(i, j))
+            j += 1
+        end
+    end
+    ret r
+end
+
+// Reflects the upper triangle into the lower one, producing the symmetric
+// matrix that shares A's upper half. The honest way to build a symmetric
+// matrix from a computed half: exactly symmetric, not symmetric to within
+// rounding, which is what Cholesky and the Jacobi eigensolver assume.
+@en "SymmetrizeUpper"
+@fa "متقارن‌سازی بالا"
+@ar "تماثل علوي"
+pub func SymmetrizeUpper(x &: Matrix): Matrix:
+    if x.is_square() == false: ret Zeros(0, 0) end
+    mut r := Clone(x)
+    repeat x.rows with i:
+        mut j := i + 1
+        until j < x.cols:
+            r.set(j, i, r.at(i, j))
+            j += 1
+        end
+    end
+    ret r
+end
+
+// (A + A^T)/2, the symmetric part. Every square matrix is the sum of this and
+// its skew-symmetric part, and for a quadratic form x^T A x only this part
+// contributes.
+@en "SymPart"
+@fa "بخش متقارن"
+@ar "الجزء المتماثل"
+pub func SymPart(x &: Matrix): Matrix:
+    if x.is_square() == false: ret Zeros(0, 0) end
+    mut r := Zeros(x.rows, x.cols)
+    repeat x.rows with i:
+        repeat x.cols with j:
+            r.set(i, j, 0.5 * (x.at(i, j) + x.at(j, i)))
+        end
+    end
+    ret r
+end
+
+// (A - A^T)/2, the skew-symmetric part.
+@en "SkewPart"
+@fa "بخش پادمتقارن"
+@ar "الجزء المتخالف"
+pub func SkewPart(x &: Matrix): Matrix:
+    if x.is_square() == false: ret Zeros(0, 0) end
+    mut r := Zeros(x.rows, x.cols)
+    repeat x.rows with i:
+        repeat x.cols with j:
+            r.set(i, j, 0.5 * (x.at(i, j) - x.at(j, i)))
+        end
+    end
+    ret r
+end
+
+// Reverses the row order, NumPy's flipud.
+@en "FlipVertical"
+@fa "وارونه عمودی"
+@ar "قلب عمودي"
+pub func FlipVertical(x &: Matrix): Matrix:
+    mut r := Zeros(x.rows, x.cols)
+    repeat x.rows with i:
+        repeat x.cols with j: r.set(x.rows - 1 - i, j, x.at(i, j)) end
+    end
+    ret r
+end
+
+// Reverses the column order, NumPy's fliplr.
+@en "FlipHorizontal"
+@fa "وارونه افقی"
+@ar "قلب أفقي"
+pub func FlipHorizontal(x &: Matrix): Matrix:
+    mut r := Zeros(x.rows, x.cols)
+    repeat x.rows with i:
+        repeat x.cols with j: r.set(i, x.cols - 1 - j, x.at(i, j)) end
+    end
+    ret r
+end
+
+// Quarter turns counter-clockwise. k is taken mod 4 and may be negative, so
+// Rot90(A, -1) is a clockwise turn and Rot90(A, 4) is a copy.
+@en "Rot90"
+@fa "چرخش نود"
+@ar "تدوير تسعين"
+pub func Rot90(x &: Matrix, k: int): Matrix:
+    turns := _wrap(k, 4)
+    mut r := Clone(x)
+    repeat turns:
+        t := _rot90_once(r)
+        r.free()
+        r = t
+    end
+    ret r
+end
+
+// Circular shift by whole rows and columns. Entries that leave one edge
+// re-enter at the opposite one.
+@en "Roll"
+@fa "چرخش دوری"
+@ar "لف دوري"
+pub func Roll(x &: Matrix, dr: int, dc: int): Matrix:
+    mut r := Zeros(x.rows, x.cols)
+    repeat x.rows with i:
+        ti := _wrap(i + dr, x.rows)
+        repeat x.cols with j:
+            r.set(ti, _wrap(j + dc, x.cols), x.at(i, j))
+        end
+    end
+    ret r
+end
+
+// The whole matrix repeated ry times down and rx times across.
+@en "Tile"
+@fa "کاشی‌کاری"
+@ar "تبليط"
+pub func Tile(x &: Matrix, ry: int, rx: int): Matrix:
+    if ry <= 0 || rx <= 0: ret Zeros(0, 0) end
+    mut r := Zeros(x.rows * ry, x.cols * rx)
+    repeat r.rows with i:
+        repeat r.cols with j: r.set(i, j, x.at(i % x.rows, j % x.cols)) end
+    end
+    ret r
+end
+
+// A border of `v` around the matrix. The stencil operations that motivate
+// padding all want a constant border, so that is the only mode offered
+// rather than a mode flag with five settings and four of them untested.
+@en "Pad"
+@fa "لبه‌گذاری"
+@ar "حشو"
+pub func Pad(x &: Matrix, top: int, bottom: int, left: int, right: int, v: f64): Matrix:
+    if top < 0 || bottom < 0 || left < 0 || right < 0: ret Clone(x) end
+    mut r := Full(x.rows + top + bottom, x.cols + left + right, v)
+    repeat x.rows with i:
+        repeat x.cols with j: r.set(top + i, left + j, x.at(i, j)) end
+    end
+    ret r
+end

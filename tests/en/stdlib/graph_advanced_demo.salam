@@ -1,0 +1,595 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/graph, part 3: colouring and cliques, Eulerian and Hamiltonian tours,
+// trees, directed acyclic graphs, communities, the named graph families,
+// spectra, isomorphism and the text formats.
+//
+// The named families carry their own answers, which is what makes them good
+// fixtures: the Petersen graph is 3-regular with girth 5 and chromatic number
+// 3, K(n) has n^(n-2) spanning trees by Cayley's formula, the hypercube is
+// bipartite and d-regular, and a cycle of odd length needs three colours.
+// Where a value is not classical it is derived twice by different routes and
+// the two are compared.
+
+import graph
+import testing
+import str
+import rand
+import os
+
+func test_coloring():
+    println "-- colouring"
+    mut c5 := graph.CycleGraph(5)
+    defer c5.free()
+    testing.AssertEqInt(graph.ChromaticNumber(c5), 3)
+    mut greedy := graph.GreedyColoringNatural(c5)
+    defer greedy.free()
+    testing.AssertTrue(graph.IsProperColoring(c5, greedy))
+    mut ds := graph.DSatur(c5)
+    defer ds.free()
+    testing.AssertTrue(graph.IsProperColoring(c5, ds))
+    testing.AssertEqInt(graph.ColorCount(ds), 3)
+    mut wp := graph.WelshPowell(c5)
+    defer wp.free()
+    testing.AssertTrue(graph.IsProperColoring(c5, wp))
+    // an even cycle is bipartite, so two colours suffice
+    mut c4 := graph.CycleGraph(4)
+    defer c4.free()
+    testing.AssertEqInt(graph.ChromaticNumber(c4), 2)
+    // and a complete graph needs one colour per node
+    mut k4 := graph.CompleteGraph(4)
+    defer k4.free()
+    testing.AssertEqInt(graph.ChromaticNumber(k4), 4)
+    mut pet := graph.PetersenGraph()
+    defer pet.free()
+    testing.AssertEqInt(graph.ChromaticNumber(pet), 3)
+end
+
+func test_chromatic_polynomial():
+    println "-- chromatic polynomial"
+    mut p3 := graph.PathGraph(3)
+    defer p3.free()
+    // a path on n nodes has k(k-1)^(n-1) proper colourings
+    testing.AssertEqFloat(graph.CountColorings(p3, 3), 12.0, 0.000001)
+    mut k3 := graph.CompleteGraph(3)
+    defer k3.free()
+    testing.AssertEqFloat(graph.CountColorings(k3, 3), 6.0, 0.000001)
+    testing.AssertEqFloat(graph.CountColorings(k3, 2), 0.0, 0.000001)
+    // zero colourings exactly below the chromatic number
+    mut c5 := graph.CycleGraph(5)
+    defer c5.free()
+    testing.AssertEqFloat(graph.CountColorings(c5, 2), 0.0, 0.000001)
+    testing.AssertEqFloat(graph.CountColorings(c5, 3), 30.0, 0.000001)
+end
+
+func test_cliques():
+    println "-- cliques, independent sets, covers"
+    mut g := graph.NewUndirected(5)
+    defer g.free()
+    g.add_edge(0, 1)
+    g.add_edge(1, 2)
+    g.add_edge(2, 0)
+    g.add_edge(2, 3)
+    g.add_edge(3, 4)
+    mut mc := graph.MaxClique(g)
+    defer mc.free()
+    testing.AssertEqInt(mc.len(), 3)
+    testing.AssertEqInt(graph.CliqueNumber(g), 3)
+    testing.AssertEqInt(graph.IndependenceNumber(g), 2)
+    // Gallai: independence number plus vertex cover number is n
+    testing.AssertEqInt(graph.VertexCoverNumber(g) + graph.IndependenceNumber(g), g.order())
+    mut cover := Vector {} as Vector<bool>
+    defer cover.free()
+    // the 2-approximation is never worse than twice the optimum
+    approx := graph.GreedyVertexCover(g, cover)
+    testing.AssertTrue(approx <= 2 * graph.VertexCoverNumber(g))
+    mut k5 := graph.CompleteGraph(5)
+    defer k5.free()
+    testing.AssertEqInt(graph.CliqueNumber(k5), 5)
+    testing.AssertEqInt(graph.IndependenceNumber(k5), 1)
+end
+
+func test_edge_coloring():
+    println "-- edge colouring"
+    mut c4 := graph.CycleGraph(4)
+    defer c4.free()
+    mut ec := graph.EdgeColoringGreedy(c4)
+    defer ec.free()
+    testing.AssertEqInt(ec.len(), 4)
+    // Vizing: at most maxdegree + 1 colours, and greedy stays under 2d
+    testing.AssertTrue(graph.ColorCount(ec) <= 2 * graph.MaxDegree(c4))
+end
+
+func test_eulerian():
+    println "-- eulerian tours"
+    mut c4 := graph.CycleGraph(4)
+    defer c4.free()
+    testing.AssertTrue(graph.HasEulerianCircuit(c4))
+    mut circuit := graph.EulerianCircuit(c4)
+    defer circuit.free()
+    testing.AssertEqInt(circuit.len(), c4.size() + 1)
+    testing.AssertEqInt(circuit.get(0), circuit.get(circuit.len() - 1))
+    // the seven bridges of Konigsberg: four nodes of odd degree, no tour
+    mut kon := graph.NewUndirected(4)
+    defer kon.free()
+    kon.add_edge(0, 1)
+    kon.add_edge(0, 1)
+    kon.add_edge(0, 2)
+    kon.add_edge(0, 2)
+    kon.add_edge(0, 3)
+    kon.add_edge(1, 3)
+    kon.add_edge(2, 3)
+    testing.AssertFalse(graph.HasEulerianCircuit(kon))
+    testing.AssertFalse(graph.HasEulerianPath(kon))
+    // remove one bridge and a path appears
+    mut path_graph := graph.NewUndirected(3)
+    defer path_graph.free()
+    path_graph.add_edge(0, 1)
+    path_graph.add_edge(1, 2)
+    testing.AssertTrue(graph.HasEulerianPath(path_graph))
+    testing.AssertFalse(graph.HasEulerianCircuit(path_graph))
+    mut ep := graph.EulerianPath(path_graph)
+    defer ep.free()
+    testing.AssertEqInt(ep.len(), 3)
+end
+
+func test_hamiltonian():
+    println "-- hamiltonian tours"
+    mut c5 := graph.CycleGraph(5)
+    defer c5.free()
+    mut hc := graph.HamiltonianCycle(c5)
+    defer hc.free()
+    testing.AssertEqInt(hc.len(), 5)
+    testing.AssertTrue(graph.HasHamiltonianCycle(c5))
+    mut p4 := graph.PathGraph(4)
+    defer p4.free()
+    testing.AssertFalse(graph.HasHamiltonianCycle(p4))
+    mut hp := graph.HamiltonianPath(p4)
+    defer hp.free()
+    testing.AssertEqInt(hp.len(), 4)
+    // the Petersen graph is the classic non-hamiltonian 3-regular graph
+    mut pet := graph.PetersenGraph()
+    defer pet.free()
+    testing.AssertFalse(graph.HasHamiltonianCycle(pet))
+end
+
+func test_tsp():
+    println "-- travelling salesman heuristics"
+    mut g := graph.CompleteGraph(5)
+    defer g.free()
+    repeat g.size() with e:
+        u := g.edge_from(e)
+        v := g.edge_to(e)
+        g.set_weight(e, ((u - v) * (u - v)) as f64 + 1.0)
+    end
+    mut tour := graph.TSPNearestNeighbor(g, 0)
+    defer tour.free()
+    testing.AssertEqInt(tour.len(), 5)
+    before := graph.TourLength(g, tour)
+    after := graph.TSPTwoOpt(g, tour)
+    // 2-opt never makes a tour worse
+    testing.AssertTrue(after <= before)
+    testing.AssertEqInt(tour.len(), 5)
+end
+
+func test_trees():
+    println "-- trees"
+    mut t := graph.BalancedTree(2, 3)
+    defer t.free()
+    testing.AssertEqInt(t.order(), 15)
+    testing.AssertTrue(graph.IsTree(t))
+    testing.AssertTrue(graph.IsForest(t))
+    testing.AssertEqInt(t.size(), t.order() - 1)
+    mut ends := Vector {} as Vector<int>
+    defer ends.free()
+    testing.AssertEqInt(graph.TreeDiameter(t, ends), 6)
+    mut ctr := graph.TreeCenter(t)
+    defer ctr.free()
+    testing.AssertEqInt(ctr.len(), 1)
+    testing.AssertEqInt(ctr.get(0), 0)
+    mut cen := graph.TreeCentroid(t)
+    defer cen.free()
+    testing.AssertEqInt(cen.get(0), 0)
+    mut sizes := graph.SubtreeSizes(t, 0)
+    defer sizes.free()
+    testing.AssertEqInt(sizes.get(0), 15)
+    testing.AssertEqInt(sizes.get(1), 7)
+    // a path of even length has two centres
+    mut p4 := graph.PathGraph(4)
+    defer p4.free()
+    mut c2 := graph.TreeCenter(p4)
+    defer c2.free()
+    testing.AssertEqInt(c2.len(), 2)
+end
+
+func test_lca():
+    println "-- lowest common ancestors"
+    mut t := graph.BalancedTree(2, 3)
+    defer t.free()
+    mut ix := graph.BuildLCA(t, 0)
+    defer ix.free()
+    testing.AssertEqInt(graph.LCA(ix, 7, 8), 3)
+    testing.AssertEqInt(graph.LCA(ix, 7, 14), 0)
+    testing.AssertEqInt(graph.LCA(ix, 3, 7), 3)
+    testing.AssertEqInt(graph.TreeDistance(ix, 7, 8), 2)
+    testing.AssertEqInt(graph.TreeDistance(ix, 7, 14), 6)
+    // the tree distance agrees with breadth-first search
+    mut d := graph.BFS(t, 7)
+    defer d.free()
+    testing.AssertEqInt(graph.TreeDistance(ix, 7, 14), d.get(14))
+end
+
+func test_prufer():
+    println "-- prufer codes"
+    mut t := graph.BalancedTree(2, 2)
+    defer t.free()
+    mut code := graph.PruferEncode(t)
+    defer code.free()
+    testing.AssertEqInt(code.len(), t.order() - 2)
+    mut back := graph.PruferDecode(code)
+    defer back.free()
+    testing.AssertEqInt(back.order(), t.order())
+    testing.AssertTrue(graph.IsTree(back))
+    // decoding the encoding gives the same tree, node for node
+    testing.AssertTrue(graph.TreeIsomorphic(t, back))
+    mut same := true
+    repeat t.size() with e:
+        if back.has_edge(t.edge_from(e), t.edge_to(e)) == false: same = false end
+    end
+    testing.AssertMsg(same, "prufer round trip changed an edge")
+    // Cayley's formula
+    testing.AssertEqFloat(graph.LabeledTreeCount(4), 16.0, 0.000001)
+end
+
+func test_tree_isomorphism():
+    println "-- tree isomorphism"
+    mut a := graph.PathGraph(4)
+    defer a.free()
+    mut b := graph.NewUndirected(4)
+    defer b.free()
+    b.add_edge(3, 1)
+    b.add_edge(1, 0)
+    b.add_edge(0, 2)
+    testing.AssertTrue(graph.TreeIsomorphic(a, b))
+    mut star := graph.StarGraph(4)
+    defer star.free()
+    testing.AssertFalse(graph.TreeIsomorphic(a, star))
+    ca := graph.TreeCanonicalForm(a)
+    cb := graph.TreeCanonicalForm(b)
+    testing.AssertTrue(str.Equals(ca, cb))
+end
+
+func test_dag():
+    println "-- directed acyclic graphs"
+    mut d := graph.NewDirected(6)
+    defer d.free()
+    d.add_weighted(0, 1, 3.0)
+    d.add_weighted(0, 2, 2.0)
+    d.add_weighted(1, 3, 4.0)
+    d.add_weighted(2, 3, 1.0)
+    d.add_weighted(3, 4, 2.0)
+    d.add_weighted(4, 5, 1.0)
+    mut dist := Vector {} as Vector<f64>
+    defer dist.free()
+    mut parent := Vector {} as Vector<int>
+    defer parent.free()
+    testing.AssertTrue(graph.DAGShortestPath(d, 0, dist, parent))
+    testing.AssertEqFloat(dist.get(5), 6.0, 0.000001)
+    testing.AssertTrue(graph.DAGLongestPath(d, 0, dist, parent))
+    testing.AssertEqFloat(dist.get(5), 10.0, 0.000001)
+    mut cp := graph.CriticalPath(d)
+    defer cp.free()
+    testing.AssertEqInt(cp.len(), 5)
+    testing.AssertEqFloat(graph.CountPaths(d, 0, 5), 2.0, 0.000001)
+    mut layer := Vector {} as Vector<int>
+    defer layer.free()
+    testing.AssertEqInt(graph.TopologicalLayers(d, layer), 5)
+    testing.AssertEqInt(layer.get(0), 0)
+    testing.AssertEqInt(layer.get(5), 4)
+    mut closure := graph.TransitiveClosure(d)
+    defer closure.free()
+    testing.AssertEqInt(closure.at(0, 5), 1)
+    testing.AssertEqInt(closure.at(5, 0), 0)
+    mut red := graph.TransitiveReduction(d)
+    defer red.free()
+    testing.AssertEqInt(red.size(), 6)
+    // a chain is a total order, a diamond is not
+    mut chain := graph.NewDirected(3)
+    defer chain.free()
+    chain.add_edge(0, 1)
+    chain.add_edge(1, 2)
+    testing.AssertTrue(graph.IsTotalOrder(chain))
+    testing.AssertFalse(graph.IsTotalOrder(d))
+end
+
+func test_communities():
+    println "-- communities"
+    // two triangles joined by one edge: the textbook two-community graph
+    mut g := graph.NewUndirected(6)
+    defer g.free()
+    g.add_edge(0, 1)
+    g.add_edge(1, 2)
+    g.add_edge(2, 0)
+    g.add_edge(3, 4)
+    g.add_edge(4, 5)
+    g.add_edge(5, 3)
+    g.add_edge(2, 3)
+    mut comm := Vector {} as Vector<int>
+    defer comm.free()
+    k := graph.Louvain(g, comm)
+    testing.AssertTrue(k >= 2)
+    testing.AssertEqInt(comm.get(0), comm.get(1))
+    testing.AssertEqInt(comm.get(3), comm.get(4))
+    testing.AssertNeInt(comm.get(0), comm.get(4))
+    testing.AssertTrue(graph.Modularity(g, comm) > 0.3)
+    mut lp := Vector {} as Vector<int>
+    defer lp.free()
+    testing.AssertTrue(graph.LabelPropagation(g, lp) >= 1)
+    mut gn := Vector {} as Vector<int>
+    defer gn.free()
+    testing.AssertEqInt(graph.GirvanNewman(g, 2, gn), 2)
+    testing.AssertEqInt(gn.get(0), gn.get(2))
+    testing.AssertNeInt(gn.get(0), gn.get(3))
+end
+
+func test_cores():
+    println "-- k-cores"
+    mut g := graph.NewUndirected(6)
+    defer g.free()
+    g.add_edge(0, 1)
+    g.add_edge(1, 2)
+    g.add_edge(2, 0)
+    g.add_edge(2, 3)
+    g.add_edge(3, 4)
+    g.add_edge(4, 5)
+    mut core := graph.CoreNumbers(g)
+    defer core.free()
+    testing.AssertEqInt(core.get(0), 2)
+    testing.AssertEqInt(core.get(5), 1)
+    testing.AssertEqInt(graph.Degeneracy(g), 2)
+    mut alive := Vector {} as Vector<bool>
+    defer alive.free()
+    testing.AssertEqInt(graph.KCore(g, 2, alive), 3)
+    testing.AssertTrue(alive.get(0))
+    testing.AssertFalse(alive.get(5))
+    // every graph is 1-degenerate exactly when it is a forest
+    mut t := graph.PathGraph(5)
+    defer t.free()
+    testing.AssertEqInt(graph.Degeneracy(t), 1)
+end
+
+func test_generators():
+    println "-- named families"
+    mut k5 := graph.CompleteGraph(5)
+    defer k5.free()
+    testing.AssertEqInt(k5.size(), 10)
+    testing.AssertEqFloat(graph.SpanningTreeCount(k5), 125.0, 0.5)
+    mut kb := graph.CompleteBipartite(2, 3)
+    defer kb.free()
+    testing.AssertEqInt(kb.size(), 6)
+    testing.AssertTrue(graph.Bipartite(kb))
+    mut q3 := graph.HypercubeGraph(3)
+    defer q3.free()
+    testing.AssertEqInt(q3.order(), 8)
+    testing.AssertEqInt(q3.size(), 12)
+    testing.AssertTrue(graph.IsRegular(q3))
+    testing.AssertTrue(graph.Bipartite(q3))
+    testing.AssertEqInt(graph.Diameter(q3), 3)
+    mut pet := graph.PetersenGraph()
+    defer pet.free()
+    testing.AssertEqInt(pet.order(), 10)
+    testing.AssertEqInt(pet.size(), 15)
+    testing.AssertEqInt(graph.Girth(pet), 5)
+    testing.AssertTrue(graph.IsRegular(pet))
+    testing.AssertEqInt(graph.MaxDegree(pet), 3)
+    mut grid := graph.GridGraph(3, 4)
+    defer grid.free()
+    testing.AssertEqInt(grid.order(), 12)
+    testing.AssertEqInt(grid.size(), 17)
+    testing.AssertTrue(graph.Bipartite(grid))
+    mut wheel := graph.WheelGraph(5)
+    defer wheel.free()
+    testing.AssertEqInt(wheel.size(), 8)
+    mut circ := Vector {} as Vector<int>
+    defer circ.free()
+    circ.push(1)
+    circ.push(2)
+    mut cg := graph.CirculantGraph(6, circ)
+    defer cg.free()
+    testing.AssertTrue(graph.IsRegular(cg))
+    testing.AssertEqInt(graph.MaxDegree(cg), 4)
+end
+
+func test_random_models():
+    println "-- random models"
+    // seeded, so the assertions below are about the models rather than about
+    // whichever graph today's entropy happened to produce
+    rand.Seed(20260815 as i64)
+    mut t := graph.RandomTree(12)
+    defer t.free()
+    testing.AssertEqInt(t.order(), 12)
+    testing.AssertTrue(graph.IsTree(t))
+    mut gm := graph.RandomGraph(10, 15)
+    defer gm.free()
+    testing.AssertEqInt(gm.size(), 15)
+    testing.AssertTrue(graph.IsSimple(gm))
+    mut ba := graph.BarabasiAlbert(20, 2)
+    defer ba.free()
+    testing.AssertEqInt(ba.order(), 20)
+    testing.AssertTrue(graph.IsConnected(ba))
+    mut ws := graph.WattsStrogatz(20, 4, 0.1)
+    defer ws.free()
+    testing.AssertEqInt(ws.order(), 20)
+    mut er := graph.ErdosRenyi(15, 1.0)
+    defer er.free()
+    // probability one is the complete graph
+    testing.AssertEqInt(er.size(), 105)
+end
+
+func test_matrices():
+    println "-- matrices and spectra"
+    mut c4 := graph.CycleGraph(4)
+    defer c4.free()
+    mut a := graph.AdjacencyMatrix(c4)
+    defer a.free()
+    testing.AssertEqFloat(a.at(0, 1), 1.0, 0.000001)
+    testing.AssertEqFloat(a.at(0, 2), 0.0, 0.000001)
+    testing.AssertEqFloat(a.trace(), 0.0, 0.000001)
+    mut l := graph.LaplacianMatrix(c4)
+    defer l.free()
+    testing.AssertEqFloat(l.at(0, 0), 2.0, 0.000001)
+    testing.AssertEqFloat(l.at(0, 1), 0.0 - 1.0, 0.000001)
+    // the Laplacian rows sum to zero
+    testing.AssertEqFloat(l.row_sum(0), 0.0, 0.000001)
+    mut spec := graph.LaplacianSpectrum(c4)
+    defer spec.free()
+    testing.AssertEqFloat(spec.get(0), 0.0, 0.00001)
+    testing.AssertEqFloat(spec.get(3), 4.0, 0.00001)
+    // Kirchhoff's matrix-tree theorem against the known count for a 4-cycle
+    testing.AssertEqFloat(graph.SpanningTreeCount(c4), 4.0, 0.5)
+    testing.AssertEqFloat(graph.SpectralRadius(c4), 2.0, 0.0001)
+    testing.AssertEqFloat(graph.AlgebraicConnectivity(c4), 2.0, 0.0001)
+    // a disconnected graph has algebraic connectivity zero
+    mut two := graph.NewUndirected(4)
+    defer two.free()
+    two.add_edge(0, 1)
+    two.add_edge(2, 3)
+    testing.AssertEqFloat(graph.AlgebraicConnectivity(two), 0.0, 0.00001)
+    // walks of length 2 in a 4-cycle: two between opposite nodes
+    testing.AssertEqFloat(graph.WalkCount(c4, 2, 0, 2), 2.0, 0.000001)
+    mut inc := graph.IncidenceMatrix(c4)
+    defer inc.free()
+    testing.AssertEqInt(inc.rows, 4)
+    testing.AssertEqInt(inc.cols, 4)
+end
+
+func test_isomorphism():
+    println "-- isomorphism"
+    mut a := graph.CycleGraph(5)
+    defer a.free()
+    mut b := graph.NewUndirected(5)
+    defer b.free()
+    b.add_edge(0, 2)
+    b.add_edge(2, 4)
+    b.add_edge(4, 1)
+    b.add_edge(1, 3)
+    b.add_edge(3, 0)
+    testing.AssertTrue(graph.Isomorphic(a, b))
+    testing.AssertTrue(graph.SameDegreeSequence(a, b))
+    mut map := Vector {} as Vector<int>
+    defer map.free()
+    testing.AssertTrue(graph.IsomorphismMap(a, b, map))
+    mut star := graph.StarGraph(5)
+    defer star.free()
+    testing.AssertFalse(graph.Isomorphic(a, star))
+    // a 5-cycle has 10 automorphisms: five rotations times two reflections
+    testing.AssertEqInt(graph.AutomorphismCount(a), 10)
+    // and a complete graph has n!
+    mut k4 := graph.CompleteGraph(4)
+    defer k4.free()
+    testing.AssertEqInt(graph.AutomorphismCount(k4), 24)
+end
+
+func test_degree_realization():
+    println "-- degree sequences"
+    mut seq := Vector {} as Vector<int>
+    defer seq.free()
+    seq.push(3)
+    seq.push(3)
+    seq.push(2)
+    seq.push(2)
+    seq.push(2)
+    testing.AssertTrue(graph.IsGraphical(seq))
+    mut g := graph.HavelHakimi(seq)
+    defer g.free()
+    mut got := graph.DegreeSequence(g)
+    defer got.free()
+    testing.AssertEqInt(got.get(0), 3)
+    testing.AssertEqInt(got.get(4), 2)
+    // an odd degree sum is never graphical
+    mut bad := Vector {} as Vector<int>
+    defer bad.free()
+    bad.push(3)
+    bad.push(1)
+    bad.push(1)
+    testing.AssertFalse(graph.IsGraphical(bad))
+end
+
+func test_io():
+    println "-- text formats"
+    mut g := graph.NewUndirected(3)
+    defer g.free()
+    g.add_weighted(0, 1, 2.0)
+    g.add_edge(1, 2)
+    g.set_name(0, "alpha")
+    text := graph.ToEdgeList(g)
+    testing.AssertContains(text, "0 1 2")
+    mut back := graph.FromEdgeList(text, 0, false)
+    defer back.free()
+    testing.AssertEqInt(back.order(), 3)
+    testing.AssertEqInt(back.size(), 2)
+    testing.AssertEqFloat(back.weight_between(0, 1), 2.0, 0.000001)
+    dot := graph.ToDot(g)
+    testing.AssertContains(dot, "graph G {")
+    testing.AssertContains(dot, "alpha")
+    testing.AssertContains(dot, " -- ")
+    mermaid := graph.ToMermaid(g)
+    testing.AssertContains(mermaid, "graph LR")
+    testing.AssertContains(mermaid, "---")
+    js := graph.ToJSON(g)
+    testing.AssertContains(js, "\"directed\":false")
+    testing.AssertContains(js, "\"source\":0")
+    adj := graph.ToAdjacencyList(g)
+    testing.AssertContains(adj, "alpha:")
+    mat := graph.ToMatrixText(g)
+    testing.AssertContains(mat, "0 1 0")
+    desc := graph.Describe(g)
+    testing.AssertContains(desc, "n=3 m=2")
+    testing.AssertContains(desc, "undirected")
+    testing.AssertContains(desc, "tree")
+    // a directed graph reads back as one
+    mut d := graph.FromEdgeList("0 1\n1 2\n# comment\n\n2 0\n", 0, true)
+    defer d.free()
+    testing.AssertEqInt(d.size(), 3)
+    testing.AssertTrue(d.directed)
+    testing.AssertContains(graph.ToDot(d), "digraph")
+end
+
+func main:
+    println "std/graph: colouring, tours, trees, dags, communities, spectra, io"
+    test_coloring()
+    test_chromatic_polynomial()
+    test_cliques()
+    test_edge_coloring()
+    test_eulerian()
+    test_hamiltonian()
+    test_tsp()
+    test_trees()
+    test_lca()
+    test_prufer()
+    test_tree_isomorphism()
+    test_dag()
+    test_communities()
+    test_cores()
+    test_generators()
+    test_random_models()
+    test_matrices()
+    test_isomorphism()
+    test_degree_realization()
+    test_io()
+    os.Exit(testing.Summary())
+end

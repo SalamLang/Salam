@@ -156,7 +156,8 @@ const char *ll_mangle_in(ll_t *ll, const char *pkg, const char *owner, const cha
 
 /*
  * The package in scope right now. Every call site that reaches a free
- * function through the current scope (a same-package call, funcptr/&f) is
+ * function through the current scope (a same-package call, a bare name read
+ * as a value, &f) is
  * emitting into the same package the callee was declared in, so the
  * definition in ll_function and those calls agree on the name.
  * ll_call_pkg is the exception - it resolves through another package's

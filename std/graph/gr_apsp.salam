@@ -1,0 +1,174 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package graph
+
+// All-pairs shortest paths, by the two algorithms that scale differently.
+//
+// Floyd-Warshall is O(n^3) with a tiny constant over a dense matrix, and does
+// not care about negative weights. Johnson reweights with Bellman-Ford
+// potentials so that Dijkstra can run from every node, which is O(n m log n)
+// and much faster on a sparse graph. They agree on every entry, which is what
+// the tests check them by.
+
+// Floyd-Warshall over the dense weight matrix: shortest distances between
+// every pair, negative weights allowed. A negative value on the diagonal
+// afterwards is the signature of a negative cycle through that node.
+@en "FloydWarshall"
+@fa "فلوید-وارشال"
+@ar "فلويد-وارشال"
+pub func FloydWarshall(g &: Graph): Matrix:
+    mut next := NewIntMatrix(0, 0, 0)
+    m := FloydWarshallPaths(g, next)
+    next.free()
+    ret m
+end
+
+// The same, keeping the successor table that reconstructs the paths
+// themselves; feed `next` to FloydPath.
+@en "FloydWarshallPaths"
+@fa "فلوید-وارشال با مسیر"
+@ar "فلويد-وارشال بالمسارات"
+pub func FloydWarshallPaths(g &: Graph, next &: IntMatrix): Matrix:
+    n := g.n
+    mut d := WeightMatrix(g)
+    next.rows = n
+    next.cols = n
+    FillInt(next.a, n * n, GRAPH_NONE)
+    _init_next(g, d, next)
+    repeat n with k:
+        repeat n with i:
+            if d.at(i, k) < GRAPH_INF: _fw_row(d, next, i, k, n) end
+        end
+    end
+    ret d
+end
+
+@en "FloydPath"
+@fa "مسیر فلوید"
+@ar "مسار فلويد"
+pub func FloydPath(next &: IntMatrix, s: int, t: int): Vector<int>:
+    mut out := Vector {} as Vector<int>
+    if next.at(s, t) == GRAPH_NONE: ret out end
+    mut u := s
+    out.push(u)
+    until u != t:
+        u = next.at(u, t)
+        out.push(u)
+    end
+    ret out
+end
+
+// Johnson's algorithm: reweight with Bellman-Ford potentials so every edge
+// becomes non-negative while shortest paths are preserved, then run Dijkstra
+// from every node. On a sparse graph this beats Floyd-Warshall by a wide
+// margin and still tolerates negative edges. The matrix comes back empty
+// (all GRAPH_INF) if a negative cycle makes the question meaningless.
+@en "Johnson"
+@fa "جانسون"
+@ar "جونسون"
+pub func Johnson(g &: Graph): Matrix:
+    n := g.n
+    mut out := NewMatrix(n, n)
+    mut pot := Vector {} as Vector<f64>
+    defer pot.free()
+    mut parent := Vector {} as Vector<int>
+    defer parent.free()
+    FillFloat(pot, n, 0.0)
+    FillInt(parent, n, GRAPH_NONE)
+    mut round := 0
+    until round < n:
+        if _bf_pass(g, pot, parent) == false: break end
+        round += 1
+    end
+    if round == n: ret _all_inf(out, n) end
+    _johnson_rows(g, pot, out)
+    ret out
+end
+
+// A* with an admissible heuristic: a per-node lower bound on the remaining
+// distance to `target`. With the zero heuristic this is exactly Dijkstra;
+// with a good one it settles a fraction of the nodes. An inadmissible
+// heuristic (one that ever overestimates) silently returns a suboptimal path,
+// which is a property of A*, not of this implementation.
+@en "AStar"
+@fa "ای‌استار"
+@ar "أ ستار"
+pub func AStar(g &: Graph, src: int, target: int, heuristic: Vector<f64>): Vector<int>:
+    mut dist := Vector {} as Vector<f64>
+    defer dist.free()
+    mut parent := Vector {} as Vector<int>
+    defer parent.free()
+    FillFloat(dist, g.n, GRAPH_INF)
+    FillInt(parent, g.n, GRAPH_NONE)
+    mut h := MinHeap { }
+    defer h.free()
+    dist.set(src, 0.0)
+    h.push(heuristic.get(src), src)
+    until h.is_empty() == false:
+        u := h.pop()
+        if u == target: break end
+        _relax_astar(g, u, dist, parent, h, heuristic)
+    end
+    ret PathFromParents(parent, src, target)
+end
+
+// The lengths of the K shortest routes from s to t in non-decreasing order.
+// Routes here are walks: a node may repeat, which is the classic
+// count-based extension of Dijkstra and the right notion when the graph
+// models a network where revisiting is allowed. Fewer than K entries come
+// back when fewer exist.
+@en "KShortestLengths"
+@fa "کوتاه‌ترین طول‌ها"
+@ar "أقصر الأطوال"
+pub func KShortestLengths(g &: Graph, s: int, t: int, k: int): Vector<f64>:
+    mut out := Vector {} as Vector<f64>
+    mut count := Vector {} as Vector<int>
+    defer count.free()
+    FillInt(count, g.n, 0)
+    mut h := MinHeap { }
+    defer h.free()
+    h.push(0.0, s)
+    until h.is_empty() == false:
+        if out.len() >= k: break end
+        d := h.top_key()
+        u := h.pop()
+        if count.get(u) < k:
+            count.set(u, count.get(u) + 1)
+            if u == t: out.push(d) end
+            _push_successors(g, u, d, h)
+        end
+    end
+    ret out
+end
+
+// Hop distances between every pair, by breadth-first search from each node.
+// GRAPH_NONE where there is no route. This is the input the diameter, radius
+// and closeness routines want on an unweighted graph.
+@en "AllPairsHops"
+@fa "همه فاصله‌های گامی"
+@ar "كل مسافات القفزات"
+pub func AllPairsHops(g &: Graph): IntMatrix:
+    n := g.n
+    mut m := NewIntMatrix(n, n, GRAPH_NONE)
+    mut dist := Vector {} as Vector<int>
+    defer dist.free()
+    mut parent := Vector {} as Vector<int>
+    defer parent.free()
+    repeat n with s:
+        BFSFrom(g, s, dist, parent)
+        repeat n with t: m.set(s, t, dist.get(t)) end
+    end
+    ret m
+end

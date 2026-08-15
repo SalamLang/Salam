@@ -1,0 +1,387 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package graph
+
+import math
+import str
+import conv
+
+// Trees and forests: recognition, rooting, subtree sizes, diameter, centre
+// and centroid, lowest common ancestors by binary lifting, Prufer codes, and
+// exact tree isomorphism.
+//
+// A tree is a connected acyclic graph, which for m distinct edges over n
+// nodes means exactly m = n - 1 and connected; a forest is acyclic, meaning
+// m = n - c. Those two identities are how IsTree and IsForest decide, in
+// linear time and without a search for cycles.
+//
+// Two facts make trees worth special-casing. The diameter is found by two
+// breadth-first searches (the farthest node from anywhere is an endpoint of
+// some diameter), and every tree has one or two centres, which are the
+// middle of that diameter. Both are used below.
+
+func _tree_far(g &: Graph, s: int, dist &: Vector<int>, parent &: Vector<int>): int:
+    BFSFrom(g, s, dist, parent)
+    mut best := s
+    repeat g.n with u:
+        if dist.get(u) != GRAPH_NONE:
+            if dist.get(u) > dist.get(best): best = u end
+        end
+    end
+    ret best
+end
+
+func _lift_levels(n: int): int:
+    mut k := 1
+    mut span := 1
+    until span < n:
+        span = span * 2
+        k += 1
+    end
+    ret k
+end
+
+// Peel leaves layer by layer. The last layer left is the centre: one node if
+// the diameter is even, two if it is odd.
+func _peel_leaves(g &: Graph, alive &: Vector<bool>, deg &: Vector<int>, left: int): Vector<int>:
+    mut remaining := left
+    mut layer := Vector {} as Vector<int>
+    repeat g.n with u:
+        if alive.get(u):
+            if deg.get(u) <= 1: layer.push(u) end
+        end
+    end
+    until remaining > 2:
+        remaining = remaining - layer.len()
+        mut nxt := Vector {} as Vector<int>
+        _peel_step(g, alive, deg, layer, nxt)
+        layer.free()
+        layer = nxt
+    end
+    ret layer
+end
+
+func _peel_step(g &: Graph, alive &: Vector<bool>, deg &: Vector<int>, layer: Vector<int>, nxt &: Vector<int>):
+    repeat layer.len() with i:
+        u := layer.get(i)
+        alive.set(u, false)
+        mut k := g.adj_start(u)
+        stop := g.adj_stop(u)
+        until k < stop:
+            v := g.adj_node(k)
+            if alive.get(v):
+                deg.set(v, deg.get(v) - 1)
+                if deg.get(v) == 1: nxt.push(v) end
+            end
+            k += 1
+        end
+    end
+end
+
+// AHU canonical naming: a leaf is "()", and any other node is its children's
+// canonical names sorted and concatenated inside brackets. Sorting is what
+// makes the name independent of the order the children happen to be stored
+// in, so two trees are isomorphic exactly when their canonical names match.
+func _ahu_name(g &: Graph, u: int, parent: int): str:
+    mut parts := Vector {} as Vector<str>
+    defer parts.free()
+    mut k := g.adj_start(u)
+    stop := g.adj_stop(u)
+    until k < stop:
+        v := g.adj_node(k)
+        if v != parent: parts.push(_ahu_name(g, v, u)) end
+        k += 1
+    end
+    _sort_strings(parts)
+    mut out := "("
+    repeat parts.len() with i: out = out + parts.get(i) end
+    ret out + ")"
+end
+
+func _sort_strings(v &: Vector<str>):
+    mut i := 1
+    until i < v.len():
+        x := v.get(i)
+        mut j := i - 1
+        until j >= 0:
+            if str.Compare(v.get(j), x) <= 0: break end
+            v.set(j + 1, v.get(j))
+            j = j - 1
+        end
+        v.set(j + 1, x)
+        i += 1
+    end
+end
+
+func _canonical_rooted(g &: Graph): str:
+    mut c := TreeCenter(g)
+    defer c.free()
+    if c.len() == 0: ret "" end
+    a := _ahu_name(g, c.get(0), GRAPH_NONE)
+    if c.len() == 1: ret a end
+    b := _ahu_name(g, c.get(1), GRAPH_NONE)
+    if str.Compare(a, b) <= 0: ret a + b end
+    ret b + a
+end
+
+func _render(g &: Graph, u: int, parent: int): str:
+    mut out := conv.FormatInt(u as i64)
+    mut kids := Vector {} as Vector<str>
+    defer kids.free()
+    mut k := g.adj_start(u)
+    stop := g.adj_stop(u)
+    until k < stop:
+        v := g.adj_node(k)
+        if v != parent: kids.push(_render(g, v, u)) end
+        k += 1
+    end
+    if kids.len() == 0: ret out end
+    out = out + "("
+    repeat kids.len() with i:
+        if i > 0: out = out + " " end
+        out = out + kids.get(i)
+    end
+    ret out + ")"
+end
+
+func _is_centroid(g &: Graph, u: int, size: Vector<int>, parent: Vector<int>): bool:
+    half := g.n / 2
+    mut biggest := g.n - size.get(u)
+    mut k := g.adj_start(u)
+    stop := g.adj_stop(u)
+    until k < stop:
+        v := g.adj_node(k)
+        if parent.get(v) == u:
+            if size.get(v) > biggest: biggest = size.get(v) end
+        end
+        k += 1
+    end
+    ret biggest <= half
+end
+
+func _lca_depths(g &: Graph, root: int, parent: Vector<int>, order: Vector<int>, ix &: LCAIndex):
+    FillInt(ix.depth, g.n, 0)
+    repeat order.len() with i:
+        u := order.get(i)
+        p := parent.get(u)
+        if p != GRAPH_NONE: ix.depth.set(u, ix.depth.get(p) + 1) end
+    end
+    ix.depth.set(root, 0)
+end
+
+func _lca_table(parent: Vector<int>, ix &: LCAIndex):
+    n := ix.n
+    FillInt(ix.up, ix.levels * n, GRAPH_NONE)
+    repeat n with v:
+        p := parent.get(v)
+        if p == GRAPH_NONE: ix.up.set(v, v)
+        else: ix.up.set(v, p)
+        end
+    end
+    mut k := 1
+    until k < ix.levels:
+        repeat n with v:
+            mid := ix.up.get((k - 1) * n + v)
+            ix.up.set(k * n + v, ix.up.get((k - 1) * n + mid))
+        end
+        k += 1
+    end
+end
+
+func _lift_to(ix &: LCAIndex, u0: int, want: int): int:
+    mut u := u0
+    mut k := ix.levels - 1
+    until k >= 0:
+        if ix.depth.get(ix.ancestor(k, u)) >= want: u = ix.ancestor(k, u) end
+        k = k - 1
+    end
+    ret u
+end
+
+func _lowest_leaf(deg: Vector<int>, alive: Vector<bool>, n: int): int:
+    repeat n with u:
+        if alive.get(u):
+            if deg.get(u) == 1: ret u end
+        end
+    end
+    ret GRAPH_NONE
+end
+
+func _only_neighbor(g &: Graph, u: int, alive: Vector<bool>): int:
+    mut k := g.adj_start(u)
+    stop := g.adj_stop(u)
+    until k < stop:
+        v := g.adj_node(k)
+        if alive.get(v): ret v end
+        k += 1
+    end
+    ret GRAPH_NONE
+end
+
+func _prufer_build(g &: Graph, code: Vector<int>, deg &: Vector<int>, n: int):
+    mut h := MinHeap { }
+    defer h.free()
+    repeat n with u:
+        if deg.get(u) == 1: h.push(u as f64, u) end
+    end
+    repeat code.len() with i:
+        p := code.get(i)
+        leaf := h.pop()
+        g.add_edge(leaf, p)
+        deg.set(p, deg.get(p) - 1)
+        if deg.get(p) == 1: h.push(p as f64, p) end
+    end
+    a := h.pop()
+    b := h.pop()
+    g.add_edge(a, b)
+end
+
+@en "IsTree"
+@fa "درخت است"
+@ar "شجرة"
+pub func IsTree(g &: Graph): bool:
+    if g.n == 0: ret false end
+    mut s := Simplify(g)
+    ok := s.size() == g.n - 1
+    s.free()
+    if ok == false: ret false end
+    if HasSelfLoop(g): ret false end
+    ret IsConnected(g)
+end
+
+@en "IsForest"
+@fa "جنگل است"
+@ar "غابة"
+pub func IsForest(g &: Graph): bool:
+    if HasSelfLoop(g): ret false end
+    mut s := Simplify(g)
+    ok := s.size() == g.n - ComponentCount(g)
+    s.free()
+    ret ok
+end
+
+// Root the tree at `root`: `parent` gets each node's parent (GRAPH_NONE at
+// the root) and `order` a breadth-first ordering, which is the order to
+// process children before parents by walking it backwards.
+@en "RootTree"
+@fa "ریشه‌دار کردن"
+@ar "تجذير"
+pub func RootTree(g &: Graph, root: int, parent &: Vector<int>, order &: Vector<int>):
+    mut dist := Vector {} as Vector<int>
+    defer dist.free()
+    BFSFrom(g, root, dist, parent)
+    order.clear()
+    mut best := 0
+    repeat g.n with u:
+        if dist.get(u) != GRAPH_NONE:
+            if dist.get(u) > best: best = dist.get(u) end
+        end
+    end
+    mut d := 0
+    until d <= best:
+        repeat g.n with u:
+            if dist.get(u) == d: order.push(u) end
+        end
+        d += 1
+    end
+end
+
+// The number of nodes in each node's subtree, root included.
+@en "SubtreeSizes"
+@fa "اندازه زیردرخت‌ها"
+@ar "أحجام الأشجار الجزئية"
+pub func SubtreeSizes(g &: Graph, root: int): Vector<int>:
+    mut parent := Vector {} as Vector<int>
+    defer parent.free()
+    mut order := Vector {} as Vector<int>
+    defer order.free()
+    RootTree(g, root, parent, order)
+    mut size := Vector {} as Vector<int>
+    FillInt(size, g.n, 1)
+    mut i := order.len() - 1
+    until i >= 0:
+        u := order.get(i)
+        p := parent.get(u)
+        if p != GRAPH_NONE: size.set(p, size.get(p) + size.get(u)) end
+        i = i - 1
+    end
+    ret size
+end
+
+// Tree diameter by double breadth-first search: the farthest node from any
+// start is one end of a longest path, and the farthest node from there is
+// the other. Two searches, no dynamic programming.
+@en "TreeDiameter"
+@fa "قطر درخت"
+@ar "قطر الشجرة"
+pub func TreeDiameter(g &: Graph, ends &: Vector<int>): int:
+    ends.clear()
+    if g.n == 0: ret GRAPH_NONE end
+    mut dist := Vector {} as Vector<int>
+    defer dist.free()
+    mut parent := Vector {} as Vector<int>
+    defer parent.free()
+    a := _tree_far(g, 0, dist, parent)
+    b := _tree_far(g, a, dist, parent)
+    ends.push(a)
+    ends.push(b)
+    ret dist.get(b)
+end
+
+// The centre: the one or two nodes that minimise the distance to the
+// farthest node, found by peeling leaves until at most two remain.
+@en "TreeCenter"
+@fa "مرکز درخت"
+@ar "مركز الشجرة"
+pub func TreeCenter(g &: Graph): Vector<int>:
+    mut out := Vector {} as Vector<int>
+    if g.n == 0: ret out end
+    if g.n <= 2:
+        repeat g.n with u: out.push(u) end
+        ret out
+    end
+    mut alive := Vector {} as Vector<bool>
+    defer alive.free()
+    mut deg := Vector {} as Vector<int>
+    defer deg.free()
+    FillBool(alive, g.n, true)
+    FillInt(deg, g.n, 0)
+    repeat g.n with u: deg.set(u, g.degree(u)) end
+    out.free()
+    ret _peel_leaves(g, alive, deg, g.n)
+end
+
+// The centroid: the node whose removal leaves no component larger than half
+// the tree. There are at most two, and unlike the centre it is about
+// balancing sizes rather than distances, which is what divide and conquer on
+// trees needs.
+@en "TreeCentroid"
+@fa "مرکز ثقل درخت"
+@ar "مركز ثقل الشجرة"
+pub func TreeCentroid(g &: Graph): Vector<int>:
+    mut out := Vector {} as Vector<int>
+    if g.n == 0: ret out end
+    mut size := SubtreeSizes(g, 0)
+    defer size.free()
+    mut parent := Vector {} as Vector<int>
+    defer parent.free()
+    mut order := Vector {} as Vector<int>
+    defer order.free()
+    RootTree(g, 0, parent, order)
+    repeat g.n with u:
+        if _is_centroid(g, u, size, parent): out.push(u) end
+    end
+    ret out
+end

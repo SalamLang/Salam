@@ -1,0 +1,435 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package graph
+
+// Connectivity structure: strongly connected components of a digraph, and
+// the cut vertices, bridges and biconnected components of an undirected
+// graph.
+//
+// Everything here is one depth-first search with a discovery time and a
+// lowpoint. The lowpoint of u is the earliest discovery time reachable from
+// u's subtree using at most one non-tree edge, and every result below is a
+// comparison of a lowpoint against a discovery time:
+//
+//   low[v] >  disc[u]   the tree edge u-v is a bridge
+//   low[v] >= disc[u]   u is a cut vertex, and a biconnected block closes
+//   low[u] == disc[u]   u roots a strongly connected component (Tarjan)
+//
+// The walks are iterative for the same reason as in gr_traverse.salam: the
+// recursion depth is the length of a path, and real graphs have long ones.
+
+func _tarjan_walk(g &: Graph, root: int, disc &: Vector<int>, low &: Vector<int>, comp &: Vector<int>, onstk &: Vector<bool>, timer &: int, ncomp &: int):
+    mut stk := Vector {} as Vector<int>
+    defer stk.free()
+    mut call := Vector {} as Vector<int>
+    defer call.free()
+    mut it := Vector {} as Vector<int>
+    defer it.free()
+    _tarjan_open(g, root, disc, low, onstk, stk, call, it, timer)
+    until call.len() > 0:
+        u := call.last()
+        k := it.last()
+        if k < g.adj_stop(u):
+            it.set(it.len() - 1, k + 1)
+            _tarjan_edge(g, u, g.adj_node(k), disc, low, onstk, stk, call, it, timer)
+        else:
+            _tarjan_close(u, disc, low, comp, onstk, stk, call, it, ncomp)
+        end
+    end
+end
+
+func _tarjan_open(g &: Graph, v: int, disc &: Vector<int>, low &: Vector<int>, onstk &: Vector<bool>, stk &: Vector<int>, call &: Vector<int>, it &: Vector<int>, timer &: int):
+    disc.set(v, timer)
+    low.set(v, timer)
+    timer = timer + 1
+    stk.push(v)
+    onstk.set(v, true)
+    call.push(v)
+    it.push(g.adj_start(v))
+end
+
+func _tarjan_edge(g &: Graph, u: int, v: int, disc &: Vector<int>, low &: Vector<int>, onstk &: Vector<bool>, stk &: Vector<int>, call &: Vector<int>, it &: Vector<int>, timer &: int):
+    if disc.get(v) == GRAPH_NONE:
+        _tarjan_open(g, v, disc, low, onstk, stk, call, it, timer)
+        ret
+    end
+    if onstk.get(v):
+        if disc.get(v) < low.get(u): low.set(u, disc.get(v)) end
+    end
+end
+
+func _tarjan_close(u: int, disc &: Vector<int>, low &: Vector<int>, comp &: Vector<int>, onstk &: Vector<bool>, stk &: Vector<int>, call &: Vector<int>, it &: Vector<int>, ncomp &: int):
+    if low.get(u) == disc.get(u):
+        until true:
+            w := stk.pop()
+            onstk.set(w, false)
+            comp.set(w, ncomp)
+            if w == u: break end
+        end
+        ncomp = ncomp + 1
+    end
+    call.pop()
+    it.pop()
+    if call.len() > 0:
+        p := call.last()
+        if low.get(u) < low.get(p): low.set(p, low.get(u)) end
+    end
+end
+
+func _bcc_open(g &: Graph, v: int, e: int, disc &: Vector<int>, low &: Vector<int>, call &: Vector<int>, it &: Vector<int>, via &: Vector<int>, kids &: Vector<int>, timer &: int):
+    disc.set(v, timer)
+    low.set(v, timer)
+    timer = timer + 1
+    call.push(v)
+    it.push(g.adj_start(v))
+    via.push(e)
+    kids.push(0)
+end
+
+// Close out the tree edge p-u. This is where a bridge, a cut vertex and a
+// finished biconnected block are all decided, from low[u] against disc[p].
+func _bcc_close(u: int, p: int, root: int, disc &: Vector<int>, low &: Vector<int>, isart &: Vector<bool>, bridge &: Vector<bool>, ecomp &: Vector<int>, estack &: Vector<int>, kids: Vector<int>, e: int, ncomp &: int):
+    if low.get(u) < low.get(p): low.set(p, low.get(u)) end
+    if low.get(u) > disc.get(p): bridge.set(e, true) end
+    if low.get(u) >= disc.get(p):
+        if p != root: isart.set(p, true)
+        else kids.get(kids.len() - 1) > 1: isart.set(p, true)
+        end
+        until true:
+            f := estack.pop()
+            ecomp.set(f, ncomp)
+            if f == e: break end
+        end
+        ncomp = ncomp + 1
+    end
+end
+
+func _bcc_walk(g &: Graph, root: int, disc &: Vector<int>, low &: Vector<int>, isart &: Vector<bool>, bridge &: Vector<bool>, ecomp &: Vector<int>, timer &: int, ncomp &: int):
+    mut call := Vector {} as Vector<int>
+    defer call.free()
+    mut it := Vector {} as Vector<int>
+    defer it.free()
+    mut via := Vector {} as Vector<int>
+    defer via.free()
+    mut kids := Vector {} as Vector<int>
+    defer kids.free()
+    mut estack := Vector {} as Vector<int>
+    defer estack.free()
+    _bcc_open(g, root, GRAPH_NONE, disc, low, call, it, via, kids, timer)
+    until call.len() > 0:
+        u := call.last()
+        k := it.last()
+        if k < g.adj_stop(u):
+            it.set(it.len() - 1, k + 1)
+            _bcc_step(g, u, k, disc, low, call, it, via, kids, estack, timer)
+        else:
+            _bcc_pop(u, root, disc, low, isart, bridge, ecomp, estack, call, it, via, kids, ncomp)
+        end
+    end
+end
+
+func _bcc_step(g &: Graph, u: int, k: int, disc &: Vector<int>, low &: Vector<int>, call &: Vector<int>, it &: Vector<int>, via &: Vector<int>, kids &: Vector<int>, estack &: Vector<int>, timer &: int):
+    e := g.adj_edge(k)
+    v := g.adj_node(k)
+    if e == via.last(): ret end
+    if disc.get(v) == GRAPH_NONE:
+        estack.push(e)
+        kids.set(kids.len() - 1, kids.last() + 1)
+        _bcc_open(g, v, e, disc, low, call, it, via, kids, timer)
+        ret
+    end
+    if disc.get(v) < disc.get(u):
+        estack.push(e)
+        if disc.get(v) < low.get(u): low.set(u, disc.get(v)) end
+    end
+end
+
+func _bcc_pop(u: int, root: int, disc &: Vector<int>, low &: Vector<int>, isart &: Vector<bool>, bridge &: Vector<bool>, ecomp &: Vector<int>, estack &: Vector<int>, call &: Vector<int>, it &: Vector<int>, via &: Vector<int>, kids &: Vector<int>, ncomp &: int):
+    e := via.last()
+    call.pop()
+    it.pop()
+    via.pop()
+    kids.pop()
+    if call.len() > 0:
+        p := call.last()
+        _bcc_close(u, p, root, disc, low, isart, bridge, ecomp, estack, kids, e, ncomp)
+    end
+end
+
+func _dedupe_arc(seen &: HashMap<i64, bool>, h &: Graph, a: int, b: int, n: int):
+    k := (a as i64) * (n as i64) + (b as i64)
+    if seen.has(k): ret end
+    seen.put(k, true)
+    h.add_edge(a, b)
+end
+
+func _kosaraju_pass(t &: Graph, order: Vector<int>, comp &: Vector<int>): int:
+    mut ncomp := 0
+    mut i := order.len() - 1
+    until i >= 0:
+        u := order.get(i)
+        if comp.get(u) == GRAPH_NONE:
+            _label_reachable(t, u, ncomp, comp)
+            ncomp += 1
+        end
+        i = i - 1
+    end
+    ret ncomp
+end
+
+func _label_reachable(t &: Graph, s: int, id: int, comp &: Vector<int>):
+    mut q := Vector {} as Vector<int>
+    defer q.free()
+    comp.set(s, id)
+    q.push(s)
+    mut head := 0
+    until head < q.len():
+        u := q.get(head)
+        head += 1
+        mut k := t.adj_start(u)
+        stop := t.adj_stop(u)
+        until k < stop:
+            v := t.adj_node(k)
+            if comp.get(v) == GRAPH_NONE:
+                comp.set(v, id)
+                q.push(v)
+            end
+            k += 1
+        end
+    end
+end
+
+// Cut vertices, bridges and blocks are undirected notions, so a digraph is
+// read through its underlying undirected graph. ToUndirected keeps the edge
+// order, so the edge ids in the answer still index the caller's graph.
+func _bcc_all(g &: Graph, isart &: Vector<bool>, bridge &: Vector<bool>, ecomp &: Vector<int>): int:
+    if g.directed == false: ret _bcc_run(g, isart, bridge, ecomp) end
+    mut u := ToUndirected(g)
+    c := _bcc_run(u, isart, bridge, ecomp)
+    u.free()
+    ret c
+end
+
+func _bcc_run(g &: Graph, isart &: Vector<bool>, bridge &: Vector<bool>, ecomp &: Vector<int>): int:
+    mut disc := Vector {} as Vector<int>
+    defer disc.free()
+    mut low := Vector {} as Vector<int>
+    defer low.free()
+    FillInt(disc, g.n, GRAPH_NONE)
+    FillInt(low, g.n, 0)
+    FillBool(isart, g.n, false)
+    FillBool(bridge, g.size(), false)
+    FillInt(ecomp, g.size(), GRAPH_NONE)
+    mut timer := 0
+    mut ncomp := 0
+    repeat g.n with u:
+        if disc.get(u) == GRAPH_NONE:
+            _bcc_walk(g, u, disc, low, isart, bridge, ecomp, timer, ncomp)
+        end
+    end
+    ret ncomp
+end
+
+// Tarjan's strongly connected components, in one pass. `comp` receives a
+// component id per node. The ids come out in reverse topological order of
+// the condensation, which is exactly what a dependency resolver wants: a
+// component only ever depends on components with smaller ids.
+@en "StronglyConnected"
+@fa "مؤلفه‌های همبند قوی"
+@ar "المكونات المتصلة بقوة"
+pub func StronglyConnected(g &: Graph, comp &: Vector<int>): int:
+    mut disc := Vector {} as Vector<int>
+    defer disc.free()
+    mut low := Vector {} as Vector<int>
+    defer low.free()
+    mut onstk := Vector {} as Vector<bool>
+    defer onstk.free()
+    FillInt(disc, g.n, GRAPH_NONE)
+    FillInt(low, g.n, 0)
+    FillBool(onstk, g.n, false)
+    FillInt(comp, g.n, GRAPH_NONE)
+    mut timer := 0
+    mut ncomp := 0
+    repeat g.n with u:
+        if disc.get(u) == GRAPH_NONE:
+            _tarjan_walk(g, u, disc, low, comp, onstk, timer, ncomp)
+        end
+    end
+    ret ncomp
+end
+
+@en "SCCCount"
+@fa "شمار مؤلفه قوی"
+@ar "عدد المكونات القوية"
+pub func SCCCount(g &: Graph): int:
+    mut comp := Vector {} as Vector<int>
+    defer comp.free()
+    ret StronglyConnected(g, comp)
+end
+
+@en "IsStronglyConnected"
+@fa "همبند قوی است"
+@ar "متصل بقوة"
+pub func IsStronglyConnected(g &: Graph): bool:
+    if g.n == 0: ret true end
+    ret SCCCount(g) == 1
+end
+
+// Kosaraju's two-pass algorithm: finish times from one depth-first forest,
+// then components from a second pass over the transpose in reverse finishing
+// order. Slower than Tarjan by a constant factor, kept because it is the
+// version that is easy to check by hand and it cross-validates Tarjan.
+@en "Kosaraju"
+@fa "کوساراجو"
+@ar "كوساراجو"
+pub func Kosaraju(g &: Graph, comp &: Vector<int>): int:
+    mut order := Vector {} as Vector<int>
+    defer order.free()
+    mut seen := Vector {} as Vector<bool>
+    defer seen.free()
+    mut pre := Vector {} as Vector<int>
+    defer pre.free()
+    FillBool(seen, g.n, false)
+    repeat g.n with u: _dfs_walk(g, u, pre, order, seen) end
+    mut t := Transpose(g)
+    FillInt(comp, g.n, GRAPH_NONE)
+    ncomp := _kosaraju_pass(t, order, comp)
+    t.free()
+    ret ncomp
+end
+
+// The condensation: one node per strongly connected component, one arc
+// wherever an arc runs between two components. It is always a DAG, which is
+// the point: cyclic structure is collapsed and everything acyclic reasoning
+// can then be applied to it.
+@en "Condensation"
+@fa "چگالش"
+@ar "تكثيف"
+pub func Condensation(g &: Graph, comp &: Vector<int>): Graph:
+    ncomp := StronglyConnected(g, comp)
+    mut h := New(ncomp, true)
+    mut seen := HashMap {} as HashMap<i64, bool>
+    defer seen.free()
+    repeat g.size() with e:
+        a := comp.get(g.edge_from(e))
+        b := comp.get(g.edge_to(e))
+        if a != b: _dedupe_arc(seen, h, a, b, ncomp) end
+    end
+    ret h
+end
+
+// Bridges (cut edges) as edge ids: the edges whose removal raises the number
+// of connected components. A parallel edge is never a bridge, which the
+// edge-id based parent skip gets right.
+@en "Bridges"
+@fa "پل‌ها"
+@ar "الجسور"
+pub func Bridges(g &: Graph): Vector<int>:
+    mut isart := Vector {} as Vector<bool>
+    defer isart.free()
+    mut bridge := Vector {} as Vector<bool>
+    defer bridge.free()
+    mut ecomp := Vector {} as Vector<int>
+    defer ecomp.free()
+    _bcc_all(g, isart, bridge, ecomp)
+    mut out := Vector {} as Vector<int>
+    repeat g.size() with e:
+        if bridge.get(e): out.push(e) end
+    end
+    ret out
+end
+
+// Cut vertices: the nodes whose removal disconnects the graph.
+@en "ArticulationPoints"
+@fa "نقاط برش"
+@ar "نقاط القطع"
+pub func ArticulationPoints(g &: Graph): Vector<int>:
+    mut isart := Vector {} as Vector<bool>
+    defer isart.free()
+    mut bridge := Vector {} as Vector<bool>
+    defer bridge.free()
+    mut ecomp := Vector {} as Vector<int>
+    defer ecomp.free()
+    _bcc_all(g, isart, bridge, ecomp)
+    mut out := Vector {} as Vector<int>
+    repeat g.n with u:
+        if isart.get(u): out.push(u) end
+    end
+    ret out
+end
+
+// Biconnected components, labelled per edge: two edges share a label exactly
+// when they lie on a common simple cycle. Every edge gets a label, so a
+// bridge forms a block of its own.
+@en "BiconnectedComponents"
+@fa "مؤلفه‌های دوهمبند"
+@ar "المكونات ثنائية الاتصال"
+pub func BiconnectedComponents(g &: Graph, ecomp &: Vector<int>): int:
+    mut isart := Vector {} as Vector<bool>
+    defer isart.free()
+    mut bridge := Vector {} as Vector<bool>
+    defer bridge.free()
+    ret _bcc_all(g, isart, bridge, ecomp)
+end
+
+// Biconnected: connected, at least three nodes, and no cut vertex. This is
+// 2-vertex-connectivity, the guarantee that any single node can fail and the
+// rest still communicates.
+@en "IsBiconnected"
+@fa "دوهمبند است"
+@ar "ثنائي الاتصال"
+pub func IsBiconnected(g &: Graph): bool:
+    if g.n < 3: ret false end
+    if IsConnected(g) == false: ret false end
+    mut a := ArticulationPoints(g)
+    defer a.free()
+    ret a.len() == 0
+end
+
+// 2-edge-connected: connected with no bridge, so any single link can fail.
+@en "IsTwoEdgeConnected"
+@fa "دو-یال-همبند است"
+@ar "ثنائي اتصال الأضلاع"
+pub func IsTwoEdgeConnected(g &: Graph): bool:
+    if g.n < 2: ret false end
+    if IsConnected(g) == false: ret false end
+    mut b := Bridges(g)
+    defer b.free()
+    ret b.len() == 0
+end
+
+// The 2-edge-connected components: what is left when every bridge is
+// removed. Contracting each of these to a point turns the graph into a
+// forest, the bridge tree.
+@en "TwoEdgeComponents"
+@fa "مؤلفه‌های دو-یالی"
+@ar "مكونات ثنائية الأضلاع"
+pub func TwoEdgeComponents(g &: Graph, comp &: Vector<int>): int:
+    mut bridge := Vector {} as Vector<bool>
+    defer bridge.free()
+    mut isart := Vector {} as Vector<bool>
+    defer isart.free()
+    mut ecomp := Vector {} as Vector<int>
+    defer ecomp.free()
+    _bcc_all(g, isart, bridge, ecomp)
+    mut keep := Vector {} as Vector<bool>
+    defer keep.free()
+    repeat g.size() with e: keep.push(bridge.get(e) == false) end
+    mut h := EdgeSubgraph(g, keep)
+    c := Components(h, comp)
+    h.free()
+    ret c
+end
+

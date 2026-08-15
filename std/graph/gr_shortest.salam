@@ -1,0 +1,397 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package graph
+
+// Shortest paths, one routine per assumption you can make about the weights.
+//
+//   Dijkstra        non-negative weights, single source     O(m log n)
+//   ZeroOneBFS      weights that are only 0 or 1            O(n + m)
+//   BellmanFord     any weights, detects negative cycles    O(n m)
+//   FloydWarshall   all pairs, dense, any weights           O(n^3)
+//   Johnson         all pairs, sparse, negative weights ok  O(n m log n)
+//   AStar           single target with an admissible guess  O(m log n) worst
+//
+// Picking the weakest assumption that holds is the whole game: Dijkstra is
+// wrong the moment a negative edge exists (it settles a node before a cheaper
+// route through a negative edge is discovered), so Dijkstra here refuses to
+// run rather than returning a plausible wrong answer. On an undirected graph
+// a single negative edge is already a negative cycle, since the edge can be
+// walked back and forth, and BellmanFord reports it as such.
+//
+// Distances come back as f64 with GRAPH_INF meaning unreachable. Predecessor
+// tables use GRAPH_NONE, and PathFromParents in gr_traverse.salam turns one
+// into a node sequence.
+
+func _has_negative(g &: Graph): bool:
+    repeat g.size() with e:
+        if g.edge_weight(e) < 0.0: ret true end
+    end
+    ret false
+end
+
+func _relax_heap(g &: Graph, u: int, d: f64, dist &: Vector<f64>, parent &: Vector<int>, h &: MinHeap):
+    mut k := g.adj_start(u)
+    stop := g.adj_stop(u)
+    until k < stop:
+        v := g.adj_node(k)
+        nd := d + g.adj_weight(k)
+        if nd < dist.get(v):
+            dist.set(v, nd)
+            parent.set(v, u)
+            h.push(nd, v)
+        end
+        k += 1
+    end
+end
+
+func _relax_astar(g &: Graph, u: int, dist &: Vector<f64>, parent &: Vector<int>, h &: MinHeap, hs: Vector<f64>):
+    mut k := g.adj_start(u)
+    stop := g.adj_stop(u)
+    until k < stop:
+        v := g.adj_node(k)
+        nd := dist.get(u) + g.adj_weight(k)
+        if nd < dist.get(v):
+            dist.set(v, nd)
+            parent.set(v, u)
+            h.push(nd + hs.get(v), v)
+        end
+        k += 1
+    end
+end
+
+// One full pass of Bellman-Ford over the edge list, returning whether
+// anything improved. An undirected edge is relaxed in both directions,
+// which is what makes the undirected case fall out of the same loop.
+func _bf_pass(g &: Graph, dist &: Vector<f64>, parent &: Vector<int>): bool:
+    mut changed := false
+    repeat g.size() with e:
+        u := g.edge_from(e)
+        v := g.edge_to(e)
+        w := g.edge_weight(e)
+        if _bf_edge(u, v, w, dist, parent): changed = true end
+        if g.directed == false:
+            if _bf_edge(v, u, w, dist, parent): changed = true end
+        end
+    end
+    ret changed
+end
+
+func _bf_edge(u: int, v: int, w: f64, dist &: Vector<f64>, parent &: Vector<int>): bool:
+    if dist.get(u) >= GRAPH_INF: ret false end
+    nd := dist.get(u) + w
+    if nd < dist.get(v):
+        dist.set(v, nd)
+        parent.set(v, u)
+        ret true
+    end
+    ret false
+end
+
+// A node that is still improving after n-1 passes lies on, or downstream of,
+// a negative cycle. Walking n predecessors from it lands inside the cycle
+// itself, and the loop then closes when a node repeats.
+func _cycle_at(parent: Vector<int>, start: int, n: int): Vector<int>:
+    mut c := start
+    repeat n: c = parent.get(c) end
+    mut out := Vector {} as Vector<int>
+    mut seen := Vector {} as Vector<bool>
+    FillBool(seen, parent.len(), false)
+    mut x := c
+    until seen.get(x) == false:
+        seen.set(x, true)
+        x = parent.get(x)
+    end
+    mut y := x
+    until true:
+        out.push(y)
+        y = parent.get(y)
+        if y == x: break end
+    end
+    seen.free()
+    ReverseInt(out)
+    ret out
+end
+
+func _deque_pop_front(front &: Vector<int>, back &: Vector<int>): int:
+    if front.len() == 0:
+        mut i := back.len() - 1
+        until i >= 0:
+            front.push(back.get(i))
+            i = i - 1
+        end
+        back.clear()
+    end
+    ret front.pop()
+end
+
+func _reweight(g &: Graph, pot: Vector<f64>): Graph:
+    mut h := New(g.n, true)
+    repeat g.size() with e:
+        u := g.edge_from(e)
+        v := g.edge_to(e)
+        w := g.edge_weight(e)
+        h.add_weighted(u, v, w + pot.get(u) - pot.get(v))
+        if g.directed == false:
+            h.add_weighted(v, u, w + pot.get(v) - pot.get(u))
+        end
+    end
+    ret h
+end
+
+func _bf_mark(g &: Graph, dist &: Vector<f64>, parent &: Vector<int>): int:
+    mut last := GRAPH_NONE
+    repeat g.size() with e:
+        u := g.edge_from(e)
+        v := g.edge_to(e)
+        w := g.edge_weight(e)
+        if _bf_edge(u, v, w, dist, parent): last = v end
+        if g.directed == false:
+            if _bf_edge(v, u, w, dist, parent): last = u end
+        end
+    end
+    ret last
+end
+
+func _zero_one_ok(g &: Graph): bool:
+    repeat g.size() with e:
+        w := g.edge_weight(e)
+        if w != 0.0:
+            if w != 1.0: ret false end
+        end
+    end
+    ret true
+end
+
+func _relax_zero_one(g &: Graph, u: int, dist &: Vector<f64>, parent &: Vector<int>, front &: Vector<int>, back &: Vector<int>):
+    mut k := g.adj_start(u)
+    stop := g.adj_stop(u)
+    until k < stop:
+        v := g.adj_node(k)
+        w := g.adj_weight(k)
+        nd := dist.get(u) + w
+        if nd < dist.get(v):
+            dist.set(v, nd)
+            parent.set(v, u)
+            if w == 0.0: front.push(v)
+            else: back.push(v)
+            end
+        end
+        k += 1
+    end
+end
+
+func _init_next(g &: Graph, d &: Matrix, next &: IntMatrix):
+    repeat g.n with i:
+        repeat g.n with j:
+            if d.at(i, j) < GRAPH_INF: next.set(i, j, j) end
+        end
+    end
+end
+
+func _fw_row(d &: Matrix, next &: IntMatrix, i: int, k: int, n: int):
+    dik := d.at(i, k)
+    repeat n with j:
+        if d.at(k, j) < GRAPH_INF:
+            nd := dik + d.at(k, j)
+            if nd < d.at(i, j):
+                d.set(i, j, nd)
+                next.set(i, j, next.at(i, k))
+            end
+        end
+    end
+end
+
+func _all_inf(out &: Matrix, n: int): Matrix:
+    repeat n with i:
+        repeat n with j: out.set(i, j, GRAPH_INF) end
+    end
+    ret out
+end
+
+func _johnson_rows(g &: Graph, pot: Vector<f64>, out &: Matrix):
+    mut r := _reweight(g, pot)
+    mut dist := Vector {} as Vector<f64>
+    mut parent := Vector {} as Vector<int>
+    repeat g.n with s:
+        Dijkstra(r, s, dist, parent)
+        _johnson_row(pot, dist, out, s, g.n)
+    end
+    dist.free()
+    parent.free()
+    r.free()
+end
+
+func _johnson_row(pot: Vector<f64>, dist: Vector<f64>, out &: Matrix, s: int, n: int):
+    repeat n with t:
+        d := dist.get(t)
+        if d >= GRAPH_INF: out.set(s, t, GRAPH_INF)
+        else: out.set(s, t, d - pot.get(s) + pot.get(t))
+        end
+    end
+end
+
+func _push_successors(g &: Graph, u: int, d: f64, h &: MinHeap):
+    mut k := g.adj_start(u)
+    stop := g.adj_stop(u)
+    until k < stop:
+        h.push(d + g.adj_weight(k), g.adj_node(k))
+        k += 1
+    end
+end
+
+// Dijkstra's algorithm on a lazy binary heap. False, with every distance left
+// at GRAPH_INF, when the graph has a negative weight: that is a precondition
+// violation, not a graph property, so it is reported rather than papered over.
+@en "Dijkstra"
+@fa "دایکسترا"
+@ar "دايكسترا"
+pub func Dijkstra(g &: Graph, src: int, dist &: Vector<f64>, parent &: Vector<int>): bool:
+    FillFloat(dist, g.n, GRAPH_INF)
+    FillInt(parent, g.n, GRAPH_NONE)
+    if src < 0: ret false end
+    if src >= g.n: ret false end
+    if _has_negative(g): ret false end
+    mut h := MinHeap { }
+    defer h.free()
+    dist.set(src, 0.0)
+    h.push(0.0, src)
+    until h.is_empty() == false:
+        d := h.top_key()
+        u := h.pop()
+        if d <= dist.get(u): _relax_heap(g, u, d, dist, parent, h) end
+    end
+    ret true
+end
+
+@en "DijkstraDist"
+@fa "فاصله دایکسترا"
+@ar "مسافة دايكسترا"
+pub func DijkstraDist(g &: Graph, src: int): Vector<f64>:
+    mut dist := Vector {} as Vector<f64>
+    mut parent := Vector {} as Vector<int>
+    defer parent.free()
+    Dijkstra(g, src, dist, parent)
+    ret dist
+end
+
+@en "ShortestPath"
+@fa "کوتاه‌ترین مسیر"
+@ar "أقصر مسار"
+pub func ShortestPath(g &: Graph, s: int, t: int): Vector<int>:
+    mut dist := Vector {} as Vector<f64>
+    defer dist.free()
+    mut parent := Vector {} as Vector<int>
+    defer parent.free()
+    if _has_negative(g): BellmanFord(g, s, dist, parent)
+    else: Dijkstra(g, s, dist, parent)
+    end
+    ret PathFromParents(parent, s, t)
+end
+
+@en "ShortestPathLength"
+@fa "طول کوتاه‌ترین مسیر"
+@ar "طول أقصر مسار"
+pub func ShortestPathLength(g &: Graph, s: int, t: int): f64:
+    mut dist := Vector {} as Vector<f64>
+    defer dist.free()
+    mut parent := Vector {} as Vector<int>
+    defer parent.free()
+    if _has_negative(g): BellmanFord(g, s, dist, parent)
+    else: Dijkstra(g, s, dist, parent)
+    end
+    if t < 0: ret GRAPH_INF end
+    if t >= g.n: ret GRAPH_INF end
+    ret dist.get(t)
+end
+
+// Bellman-Ford: n-1 relaxation passes, then one more to see whether anything
+// still improves. False means a negative cycle is reachable from `src`, in
+// which case no shortest path exists and the distances are meaningless.
+@en "BellmanFord"
+@fa "بلمن-فورد"
+@ar "بلمان-فورد"
+pub func BellmanFord(g &: Graph, src: int, dist &: Vector<f64>, parent &: Vector<int>): bool:
+    FillFloat(dist, g.n, GRAPH_INF)
+    FillInt(parent, g.n, GRAPH_NONE)
+    if src < 0: ret false end
+    if src >= g.n: ret false end
+    dist.set(src, 0.0)
+    mut round := 0
+    until round < g.n - 1:
+        if _bf_pass(g, dist, parent) == false: ret true end
+        round += 1
+    end
+    ret _bf_pass(g, dist, parent) == false
+end
+
+// A negative cycle anywhere in the graph, as a node sequence, or empty when
+// there is none. Every node starts at distance 0, which is the standard trick
+// for reaching cycles that no single source can see.
+@en "FindNegativeCycle"
+@fa "یافتن دور منفی"
+@ar "إيجاد دورة سالبة"
+pub func FindNegativeCycle(g &: Graph): Vector<int>:
+    mut dist := Vector {} as Vector<f64>
+    defer dist.free()
+    mut parent := Vector {} as Vector<int>
+    defer parent.free()
+    FillFloat(dist, g.n, 0.0)
+    FillInt(parent, g.n, GRAPH_NONE)
+    mut round := 0
+    mut last := GRAPH_NONE
+    until round < g.n:
+        last = _bf_mark(g, dist, parent)
+        if last == GRAPH_NONE: break end
+        round += 1
+    end
+    if last == GRAPH_NONE: ret Vector {} as Vector<int> end
+    ret _cycle_at(parent, last, g.n)
+end
+
+@en "HasNegativeCycle"
+@fa "دارای دور منفی"
+@ar "به دورة سالبة"
+pub func HasNegativeCycle(g &: Graph): bool:
+    mut c := FindNegativeCycle(g)
+    defer c.free()
+    ret c.len() > 0
+end
+
+// Breadth-first search over a deque: an edge of weight 0 goes to the front,
+// an edge of weight 1 to the back, which keeps the queue sorted by distance
+// without a heap. Weights other than 0 and 1 make this wrong, so they are
+// rejected and GRAPH_INF comes back everywhere.
+@en "ZeroOneBFS"
+@fa "پیمایش صفر و یک"
+@ar "بحث صفر وواحد"
+pub func ZeroOneBFS(g &: Graph, src: int, dist &: Vector<f64>, parent &: Vector<int>): bool:
+    FillFloat(dist, g.n, GRAPH_INF)
+    FillInt(parent, g.n, GRAPH_NONE)
+    if _zero_one_ok(g) == false: ret false end
+    if src < 0: ret false end
+    if src >= g.n: ret false end
+    mut front := Vector {} as Vector<int>
+    defer front.free()
+    mut back := Vector {} as Vector<int>
+    defer back.free()
+    dist.set(src, 0.0)
+    front.push(src)
+    until front.len() + back.len() > 0:
+        u := _deque_pop_front(front, back)
+        _relax_zero_one(g, u, dist, parent, front, back)
+    end
+    ret true
+end
+

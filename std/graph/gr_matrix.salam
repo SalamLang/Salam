@@ -1,0 +1,433 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package graph
+
+import math
+
+// The matrix view of a graph, and the linear algebra that goes with it:
+// adjacency, weight, incidence, degree and Laplacian matrices, matrix powers
+// for walk counting, determinants, and the eigenvalues of a symmetric matrix
+// by Jacobi rotation.
+//
+// Spectral graph theory lives here. The adjacency spectrum bounds the
+// chromatic number and the maximum degree; the Laplacian spectrum gives the
+// number of connected components (the multiplicity of eigenvalue 0), the
+// algebraic connectivity (the second smallest, Fiedler's value) which lower
+// bounds vertex connectivity, and via the matrix-tree theorem the exact
+// number of spanning trees.
+//
+// Storage is row-major in a flat Vector<f64>, so a matrix is one allocation
+// and A(i,j) is one multiply-add away from a load.
+
+@en "Matrix"
+@fa "ماتریس"
+@ar "مصفوفة"
+pub struct Matrix:
+    pub rows: int = 0
+    pub cols: int = 0
+    pub a: Vector<f64> = Vector {}
+
+    @en "at"
+    @fa "در"
+    @ar "عند"
+    pub func at(i: int, j: int): f64: ret this.a.get(i * this.cols + j) end
+
+    @en "set"
+    @fa "تنظیم"
+    @ar "تعيين"
+    pub func set(i: int, j: int, v: f64): this.a.set(i * this.cols + j, v) end
+
+    @en "add_at"
+    @fa "افزودن در"
+    @ar "إضافة عند"
+    pub func add_at(i: int, j: int, v: f64):
+        this.a.set(i * this.cols + j, this.a.get(i * this.cols + j) + v)
+    end
+
+    @en "trace"
+    @fa "رد"
+    @ar "أثر"
+    pub func trace(): f64:
+        mut s := 0.0
+        mut n := this.rows
+        if this.cols < n: n = this.cols end
+        repeat n with i: s += this.at(i, i) end
+        ret s
+    end
+
+    @en "row_sum"
+    @fa "مجموع سطر"
+    @ar "مجموع الصف"
+    pub func row_sum(i: int): f64:
+        mut s := 0.0
+        repeat this.cols with j: s += this.at(i, j) end
+        ret s
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free(): this.a.free() end
+end
+
+@en "IntMatrix"
+@fa "ماتریس صحیح"
+@ar "مصفوفة صحيحة"
+pub struct IntMatrix:
+    pub rows: int = 0
+    pub cols: int = 0
+    pub a: Vector<int> = Vector {}
+
+    @en "at"
+    @fa "در"
+    @ar "عند"
+    pub func at(i: int, j: int): int: ret this.a.get(i * this.cols + j) end
+
+    @en "set"
+    @fa "تنظیم"
+    @ar "تعيين"
+    pub func set(i: int, j: int, v: int): this.a.set(i * this.cols + j, v) end
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free(): this.a.free() end
+end
+
+func _matrix_copy(x &: Matrix): Matrix:
+    mut r := NewMatrix(x.rows, x.cols)
+    repeat x.rows * x.cols with i: r.a.set(i, x.a.get(i)) end
+    ret r
+end
+
+func _fill_weights(g &: Graph, m &: Matrix):
+    repeat g.size() with e:
+        u := g.edge_from(e)
+        v := g.edge_to(e)
+        w := g.edge_weight(e)
+        if w < m.at(u, v): m.set(u, v, w) end
+        if g.directed == false:
+            if w < m.at(v, u): m.set(v, u, w) end
+        end
+    end
+end
+
+func _fill_normalized(g &: Graph, a &: Matrix, m &: Matrix):
+    repeat g.n with i:
+        di := g.degree(i) as f64
+        repeat g.n with j:
+            dj := g.degree(j) as f64
+            if di > 0.0:
+                if i == j: m.set(i, j, 1.0)
+                else dj > 0.0: m.set(i, j, (0.0 - a.at(i, j)) / math.Sqrt(di * dj))
+                end
+            end
+        end
+    end
+end
+
+func _pivot(m &: Matrix, c: int, n: int): int:
+    mut best := GRAPH_NONE
+    mut bv := 0.000000001
+    mut r := c
+    until r < n:
+        v := math.Abs(m.at(r, c))
+        if v > bv:
+            bv = v
+            best = r
+        end
+        r += 1
+    end
+    ret best
+end
+
+func _swap_rows(m &: Matrix, i: int, j: int, n: int):
+    repeat n with c:
+        t := m.at(i, c)
+        m.set(i, c, m.at(j, c))
+        m.set(j, c, t)
+    end
+end
+
+func _eliminate(m &: Matrix, c: int, n: int):
+    mut r := c + 1
+    until r < n:
+        f := m.at(r, c) / m.at(c, c)
+        if f != 0.0:
+            mut j := c
+            until j < n:
+                m.set(r, j, m.at(r, j) - f * m.at(c, j))
+                j += 1
+            end
+        end
+        r += 1
+    end
+end
+
+func _off_diagonal(m &: Matrix, n: int): f64:
+    mut s := 0.0
+    repeat n with i:
+        repeat n with j:
+            if i != j: s += m.at(i, j) * m.at(i, j) end
+        end
+    end
+    ret s
+end
+
+// One Jacobi rotation in the (p,q) plane, chosen to annihilate the entry
+// A(p,q). Applied on both sides it keeps the matrix symmetric and its
+// spectrum unchanged, so sweeping to convergence leaves the eigenvalues on
+// the diagonal.
+func _jacobi_rotate(m &: Matrix, n: int, p: int, q: int):
+    apq := m.at(p, q)
+    if math.Abs(apq) < 1.0e-290: ret end
+    theta := (m.at(q, q) - m.at(p, p)) / (2.0 * apq)
+    mut t := 1.0 / (math.Abs(theta) + math.Sqrt(theta * theta + 1.0))
+    if theta < 0.0: t = 0.0 - t end
+    c := 1.0 / math.Sqrt(t * t + 1.0)
+    s := t * c
+    _apply_rotation(m, n, p, q, c, s)
+end
+
+func _apply_rotation(m &: Matrix, n: int, p: int, q: int, c: f64, s: f64):
+    repeat n with k:
+        akp := m.at(k, p)
+        akq := m.at(k, q)
+        m.set(k, p, c * akp - s * akq)
+        m.set(k, q, s * akp + c * akq)
+    end
+    repeat n with k:
+        apk := m.at(p, k)
+        aqk := m.at(q, k)
+        m.set(p, k, c * apk - s * aqk)
+        m.set(q, k, s * apk + c * aqk)
+    end
+end
+
+func _jacobi_sweep(m &: Matrix, n: int):
+    mut p := 0
+    until p < n - 1:
+        mut q := p + 1
+        until q < n:
+            _jacobi_rotate(m, n, p, q)
+            q += 1
+        end
+        p += 1
+    end
+end
+
+func _sort_floats(v &: Vector<f64>):
+    mut i := 1
+    until i < v.len():
+        x := v.get(i)
+        mut j := i - 1
+        until j >= 0:
+            if v.get(j) <= x: break end
+            v.set(j + 1, v.get(j))
+            j = j - 1
+        end
+        v.set(j + 1, x)
+        i += 1
+    end
+end
+
+@en "NewMatrix"
+@fa "ماتریس نو"
+@ar "مصفوفة جديدة"
+pub func NewMatrix(rows: int, cols: int): Matrix:
+    mut m := Matrix { }
+    m.rows = rows
+    m.cols = cols
+    FillFloat(m.a, rows * cols, 0.0)
+    ret m
+end
+
+@en "NewIntMatrix"
+@fa "ماتریس صحیح نو"
+@ar "مصفوفة صحيحة جديدة"
+pub func NewIntMatrix(rows: int, cols: int, fill: int): IntMatrix:
+    mut m := IntMatrix { }
+    m.rows = rows
+    m.cols = cols
+    FillInt(m.a, rows * cols, fill)
+    ret m
+end
+
+// A(i,j) counts the edges from i to j, so parallel edges show up as values
+// above 1 and an undirected self loop as 2, which is what keeps the
+// degree = row sum identity true.
+@en "AdjacencyMatrix"
+@fa "ماتریس مجاورت"
+@ar "مصفوفة الجوار"
+pub func AdjacencyMatrix(g &: Graph): Matrix:
+    mut m := NewMatrix(g.n, g.n)
+    repeat g.size() with e:
+        u := g.edge_from(e)
+        v := g.edge_to(e)
+        m.add_at(u, v, 1.0)
+        if g.directed == false:
+            m.add_at(v, u, 1.0)
+        end
+    end
+    ret m
+end
+
+// The weighted counterpart, with GRAPH_INF where there is no edge and 0 on
+// the diagonal: the input Floyd-Warshall wants.
+@en "WeightMatrix"
+@fa "ماتریس وزن"
+@ar "مصفوفة الأوزان"
+pub func WeightMatrix(g &: Graph): Matrix:
+    mut m := NewMatrix(g.n, g.n)
+    repeat g.n with i:
+        repeat g.n with j:
+            if i == j: m.set(i, j, 0.0)
+            else: m.set(i, j, GRAPH_INF)
+            end
+        end
+    end
+    _fill_weights(g, m)
+    ret m
+end
+
+@en "DegreeMatrix"
+@fa "ماتریس درجه"
+@ar "مصفوفة الدرجات"
+pub func DegreeMatrix(g &: Graph): Matrix:
+    mut m := NewMatrix(g.n, g.n)
+    repeat g.n with u: m.set(u, u, g.degree(u) as f64) end
+    ret m
+end
+
+// L = D - A. Its rank deficiency is the number of connected components, and
+// its eigenvalues drive expansion, mixing and clustering results.
+@en "LaplacianMatrix"
+@fa "ماتریس لاپلاس"
+@ar "مصفوفة لابلاس"
+pub func LaplacianMatrix(g &: Graph): Matrix:
+    mut a := AdjacencyMatrix(g)
+    mut m := NewMatrix(g.n, g.n)
+    repeat g.n with i:
+        repeat g.n with j:
+            if i == j: m.set(i, j, a.row_sum(i) - a.at(i, i))
+            else: m.set(i, j, 0.0 - a.at(i, j))
+            end
+        end
+    end
+    a.free()
+    ret m
+end
+
+// The symmetric normalized Laplacian, whose spectrum sits in [0, 2] no matter
+// how the degrees are distributed, which is what makes it the right operator
+// for spectral clustering.
+@en "NormalizedLaplacian"
+@fa "لاپلاس بهنجار"
+@ar "لابلاس معياري"
+pub func NormalizedLaplacian(g &: Graph): Matrix:
+    mut a := AdjacencyMatrix(g)
+    mut m := NewMatrix(g.n, g.n)
+    _fill_normalized(g, a, m)
+    a.free()
+    ret m
+end
+
+// Rows are nodes, columns edges. Undirected: a 1 at each endpoint. Directed:
+// -1 at the tail and +1 at the head, the boundary operator whose null space
+// is the cycle space.
+@en "IncidenceMatrix"
+@fa "ماتریس وقوع"
+@ar "مصفوفة الوقوع"
+pub func IncidenceMatrix(g &: Graph): Matrix:
+    m := g.size()
+    mut r := NewMatrix(g.n, m)
+    repeat m with e:
+        u := g.edge_from(e)
+        v := g.edge_to(e)
+        if g.directed:
+            r.add_at(u, e, 0.0 - 1.0)
+            r.add_at(v, e, 1.0)
+        else:
+            r.add_at(u, e, 1.0)
+            r.add_at(v, e, 1.0)
+        end
+    end
+    ret r
+end
+
+@en "MatrixMultiply"
+@fa "ضرب ماتریس"
+@ar "ضرب المصفوفات"
+pub func MatrixMultiply(x &: Matrix, y &: Matrix): Matrix:
+    mut r := NewMatrix(x.rows, y.cols)
+    repeat x.rows with i:
+        repeat x.cols with k:
+            v := x.at(i, k)
+            if v != 0.0:
+                repeat y.cols with j: r.add_at(i, j, v * y.at(k, j)) end
+            end
+        end
+    end
+    ret r
+end
+
+@en "MatrixIdentity"
+@fa "ماتریس همانی"
+@ar "مصفوفة الوحدة"
+pub func MatrixIdentity(n: int): Matrix:
+    mut r := NewMatrix(n, n)
+    repeat n with i: r.set(i, i, 1.0) end
+    ret r
+end
+
+// Repeated squaring, so A^k costs log k multiplications.
+@en "MatrixPower"
+@fa "توان ماتریس"
+@ar "قوة المصفوفة"
+pub func MatrixPower(x &: Matrix, k: int): Matrix:
+    mut result := MatrixIdentity(x.rows)
+    mut base := _matrix_copy(x)
+    mut e := k
+    until e > 0:
+        if e % 2 == 1:
+            t := MatrixMultiply(result, base)
+            result.free()
+            result = t
+        end
+        e = e / 2
+        if e > 0:
+            s := MatrixMultiply(base, base)
+            base.free()
+            base = s
+        end
+    end
+    base.free()
+    ret result
+end
+
+// The number of distinct walks of exactly `k` steps from u to v, which is the
+// (u,v) entry of A^k. Walks, not paths: nodes may repeat.
+@en "WalkCount"
+@fa "شمار گشت"
+@ar "عدد المسارات"
+pub func WalkCount(g &: Graph, k: int, u: int, v: int): f64:
+    mut a := AdjacencyMatrix(g)
+    mut p := MatrixPower(a, k)
+    r := p.at(u, v)
+    p.free()
+    a.free()
+    ret r
+end
+

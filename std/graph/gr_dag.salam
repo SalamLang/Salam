@@ -1,0 +1,282 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package graph
+
+// Directed acyclic graphs, where the hard problems become easy.
+//
+// Once a topological order exists, every node can be processed after all its
+// predecessors, so one linear pass replaces search: shortest paths work with
+// negative weights and no Bellman-Ford, longest paths become tractable
+// (they are NP-hard in general, since a Hamiltonian path is a longest path),
+// and the number of distinct paths between two nodes is a sum rather than an
+// enumeration.
+//
+// Everything here checks acyclicity first and reports failure rather than
+// looping or returning nonsense on a cyclic input.
+
+func _dag_order(g &: Graph, order &: Vector<int>): bool:
+    if g.directed == false: ret false end
+    ret TopologicalSort(g, order)
+end
+
+func _relax_forward(g &: Graph, u: int, dist &: Vector<f64>, parent &: Vector<int>, longest: bool):
+    mut k := g.adj_start(u)
+    stop := g.adj_stop(u)
+    until k < stop:
+        v := g.adj_node(k)
+        nd := dist.get(u) + g.adj_weight(k)
+        if _better(nd, dist.get(v), longest):
+            dist.set(v, nd)
+            parent.set(v, u)
+        end
+        k += 1
+    end
+end
+
+func _better(candidate: f64, current: f64, longest: bool): bool:
+    if longest: ret candidate > current end
+    ret candidate < current
+end
+
+func _closure_row(g &: Graph, s: int, m &: IntMatrix):
+    mut r := Reachable(g, s)
+    defer r.free()
+    repeat g.n with t:
+        if r.get(t):
+            if t != s: m.set(s, t, 1) end
+        end
+    end
+end
+
+// The transitive reduction of a DAG: keep an arc u->v only when there is no
+// longer route from u to v. Those are exactly the arcs that carry
+// information; everything else is implied by transitivity.
+func _is_redundant(g &: Graph, closure &: IntMatrix, u: int, v: int): bool:
+    repeat g.n with w:
+        if w != u:
+            if w != v:
+                if closure.at(u, w) == 1:
+                    if closure.at(w, v) == 1: ret true end
+                end
+            end
+        end
+    end
+    ret false
+end
+
+func _dag_relax(g &: Graph, src: int, dist &: Vector<f64>, parent &: Vector<int>, longest: bool): bool:
+    mut order := Vector {} as Vector<int>
+    defer order.free()
+    mut start := GRAPH_INF
+    if longest: start = 0.0 - GRAPH_INF end
+    FillFloat(dist, g.n, start)
+    FillInt(parent, g.n, GRAPH_NONE)
+    if _dag_order(g, order) == false: ret false end
+    dist.set(src, 0.0)
+    repeat order.len() with i:
+        u := order.get(i)
+        if dist.get(u) != start: _relax_forward(g, u, dist, parent, longest) end
+    end
+    ret true
+end
+
+func _spread_ways(g &: Graph, u: int, ways &: Vector<f64>):
+    mut k := g.adj_start(u)
+    stop := g.adj_stop(u)
+    until k < stop:
+        v := g.adj_node(k)
+        ways.set(v, ways.get(v) + ways.get(u))
+        k += 1
+    end
+end
+
+func _push_layer(g &: Graph, u: int, layer &: Vector<int>):
+    mut k := g.adj_start(u)
+    stop := g.adj_stop(u)
+    until k < stop:
+        v := g.adj_node(k)
+        if layer.get(v) < layer.get(u) + 1: layer.set(v, layer.get(u) + 1) end
+        k += 1
+    end
+end
+
+func _argmax(dist: Vector<f64>): int:
+    mut best := 0
+    repeat dist.len() with u:
+        if dist.get(u) > dist.get(best): best = u end
+    end
+    ret best
+end
+
+func _path_root(parent: Vector<int>, t: int): int:
+    mut u := t
+    until parent.get(u) != GRAPH_NONE: u = parent.get(u) end
+    ret u
+end
+
+func _reduce_edge(g &: Graph, h &: Graph, closure &: IntMatrix, seen &: HashMap<i64, bool>, u: int, v: int):
+    if u == v: ret end
+    k := (u as i64) * (g.n as i64) + (v as i64)
+    if seen.has(k): ret end
+    seen.put(k, true)
+    if _is_redundant(g, closure, u, v): ret end
+    h.add_edge(u, v)
+end
+
+// Single-source shortest paths on a DAG in one topological pass. Negative
+// weights are fine here, which is what makes this worth having next to
+// Dijkstra.
+@en "DAGShortestPath"
+@fa "کوتاه‌ترین مسیر بی‌دور"
+@ar "أقصر مسار لابياني"
+pub func DAGShortestPath(g &: Graph, src: int, dist &: Vector<f64>, parent &: Vector<int>): bool:
+    ret _dag_relax(g, src, dist, parent, false)
+end
+
+// Single-source longest paths, the same pass with the comparison flipped.
+// NP-hard on a general graph, linear here.
+@en "DAGLongestPath"
+@fa "بلندترین مسیر بی‌دور"
+@ar "أطول مسار لابياني"
+pub func DAGLongestPath(g &: Graph, src: int, dist &: Vector<f64>, parent &: Vector<int>): bool:
+    ret _dag_relax(g, src, dist, parent, true)
+end
+
+// The longest path in the whole DAG, as a node sequence: the critical path
+// of a schedule, and the height of a dependency graph.
+@en "CriticalPath"
+@fa "مسیر بحرانی"
+@ar "المسار الحرج"
+pub func CriticalPath(g &: Graph): Vector<int>:
+    mut order := Vector {} as Vector<int>
+    defer order.free()
+    out := Vector {} as Vector<int>
+    if _dag_order(g, order) == false: ret out end
+    mut dist := Vector {} as Vector<f64>
+    defer dist.free()
+    mut parent := Vector {} as Vector<int>
+    defer parent.free()
+    FillFloat(dist, g.n, 0.0)
+    FillInt(parent, g.n, GRAPH_NONE)
+    repeat order.len() with i: _relax_forward(g, order.get(i), dist, parent, true) end
+    ret PathFromParents(parent, _path_root(parent, _argmax(dist)), _argmax(dist))
+end
+
+// The number of distinct directed paths from s to t, counted by dynamic
+// programming over the topological order rather than by enumeration, so it
+// is linear even when the count itself is astronomical.
+@en "CountPaths"
+@fa "شمار مسیرها"
+@ar "عدد المسارات"
+pub func CountPaths(g &: Graph, s: int, t: int): f64:
+    mut order := Vector {} as Vector<int>
+    defer order.free()
+    if _dag_order(g, order) == false: ret 0.0 end
+    mut ways := Vector {} as Vector<f64>
+    defer ways.free()
+    FillFloat(ways, g.n, 0.0)
+    ways.set(s, 1.0)
+    repeat order.len() with i:
+        u := order.get(i)
+        if ways.get(u) > 0.0: _spread_ways(g, u, ways) end
+    end
+    ret ways.get(t)
+end
+
+// The number of paths ending at each node, from `src`.
+@en "PathCounts"
+@fa "شمارش مسیرها"
+@ar "إحصاء المسارات"
+pub func PathCounts(g &: Graph, src: int): Vector<f64>:
+    mut order := Vector {} as Vector<int>
+    defer order.free()
+    mut ways := Vector {} as Vector<f64>
+    FillFloat(ways, g.n, 0.0)
+    if _dag_order(g, order) == false: ret ways end
+    ways.set(src, 1.0)
+    repeat order.len() with i:
+        u := order.get(i)
+        if ways.get(u) > 0.0: _spread_ways(g, u, ways) end
+    end
+    ret ways
+end
+
+// The reachability relation as a graph: an arc wherever a directed route
+// exists. Works on any digraph, not only acyclic ones.
+@en "TransitiveClosure"
+@fa "بستار تعدی"
+@ar "الإغلاق المتعدي"
+pub func TransitiveClosure(g &: Graph): IntMatrix:
+    mut m := NewIntMatrix(g.n, g.n, 0)
+    repeat g.n with s: _closure_row(g, s, m) end
+    ret m
+end
+
+// The smallest graph with the same reachability: the Hasse diagram of the
+// partial order a DAG defines. Unique for a DAG, which is why this is only
+// offered for one.
+@en "TransitiveReduction"
+@fa "کاهش تعدی"
+@ar "الاختزال المتعدي"
+pub func TransitiveReduction(g &: Graph): Graph:
+    mut h := New(g.n, true)
+    if IsDAG(g) == false: ret h end
+    mut closure := TransitiveClosure(g)
+    defer closure.free()
+    mut seen := HashMap {} as HashMap<i64, bool>
+    defer seen.free()
+    repeat g.size() with e:
+        u := g.edge_from(e)
+        v := g.edge_to(e)
+        _reduce_edge(g, h, closure, seen, u, v)
+    end
+    ret h
+end
+
+// Longest-path layering: every node sits one level below its deepest
+// predecessor, so all arcs point downwards. This is the first step of every
+// layered graph drawing, and the level count is the height of the DAG.
+@en "TopologicalLayers"
+@fa "لایه‌های توپولوژیک"
+@ar "الطبقات الطوبولوجية"
+pub func TopologicalLayers(g &: Graph, layer &: Vector<int>): int:
+    mut order := Vector {} as Vector<int>
+    defer order.free()
+    FillInt(layer, g.n, 0)
+    if _dag_order(g, order) == false: ret GRAPH_NONE end
+    repeat order.len() with i: _push_layer(g, order.get(i), layer) end
+    ret MaxInt(layer) + 1
+end
+
+// Whether every pair of nodes is comparable, i.e. the DAG describes a total
+// order. True exactly when a Hamiltonian path runs through the topological
+// order, which on a DAG is a linear check rather than a search.
+@en "IsTotalOrder"
+@fa "ترتیب کلی است"
+@ar "ترتيب كلي"
+pub func IsTotalOrder(g &: Graph): bool:
+    mut order := Vector {} as Vector<int>
+    defer order.free()
+    if _dag_order(g, order) == false: ret false end
+    mut closure := TransitiveClosure(g)
+    defer closure.free()
+    mut i := 0
+    until i < order.len() - 1:
+        if closure.at(order.get(i), order.get(i + 1)) == 0: ret false end
+        i += 1
+    end
+    ret true
+end
+

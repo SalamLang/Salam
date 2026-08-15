@@ -1,0 +1,241 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package graph
+
+// Minimum spanning trees, by all three classical algorithms.
+//
+//   Kruskal   sort the edges, take one whenever it joins two components
+//   Prim      grow one tree, always across its cheapest outgoing edge
+//   Boruvka   every component picks its own cheapest edge, all at once
+//
+// They agree on the weight of the result always, and on the tree itself when
+// the weights are distinct. Kruskal and Boruvka handle a disconnected graph
+// by returning a minimum spanning forest; Prim grows from one root and so
+// only spans that root's component, which is why it also reports how many
+// nodes it reached.
+//
+// All three treat the graph as undirected. A minimum spanning tree of a
+// directed graph is a different problem (the minimum arborescence, Chu-Liu /
+// Edmonds), and pretending an arc is an edge would quietly answer the wrong
+// question, so directed input is read through its underlying undirected
+// graph, which is the standard convention.
+
+func _sorted_edges(g &: Graph, order &: Vector<int>, sign: f64):
+    mut h := MinHeap { }
+    repeat g.size() with e: h.push(sign * g.edge_weight(e), e) end
+    order.clear()
+    until h.is_empty() == false: order.push(h.pop()) end
+    h.free()
+end
+
+func _kruskal_run(g &: Graph, chosen &: Vector<int>, sign: f64): f64:
+    mut order := Vector {} as Vector<int>
+    defer order.free()
+    _sorted_edges(g, order, sign)
+    mut ds := NewDisjointSet(g.n)
+    defer ds.free()
+    chosen.clear()
+    mut total := 0.0
+    repeat order.len() with i:
+        e := order.get(i)
+        if ds.union(g.edge_from(e), g.edge_to(e)):
+            chosen.push(e)
+            total += g.edge_weight(e)
+        end
+    end
+    ret total
+end
+
+func _prim_scan(g &: Graph, u: int, inside &: Vector<bool>, best &: Vector<f64>, parent &: Vector<int>, h &: MinHeap):
+    mut k := g.adj_start(u)
+    stop := g.adj_stop(u)
+    until k < stop:
+        v := g.adj_node(k)
+        w := g.adj_weight(k)
+        if inside.get(v) == false:
+            if w < best.get(v):
+                best.set(v, w)
+                parent.set(v, u)
+                h.push(w, v)
+            end
+        end
+        k += 1
+    end
+end
+
+func _prim_run(g &: Graph, root: int, parent &: Vector<int>): f64:
+    mut inside := Vector {} as Vector<bool>
+    defer inside.free()
+    mut best := Vector {} as Vector<f64>
+    defer best.free()
+    FillBool(inside, g.n, false)
+    FillFloat(best, g.n, GRAPH_INF)
+    FillInt(parent, g.n, GRAPH_NONE)
+    if g.n == 0: ret 0.0 end
+    mut h := MinHeap { }
+    defer h.free()
+    mut total := 0.0
+    best.set(root, 0.0)
+    h.push(0.0, root)
+    until h.is_empty() == false:
+        u := h.pop()
+        if inside.get(u) == false:
+            inside.set(u, true)
+            total += best.get(u)
+            _prim_scan(g, u, inside, best, parent, h)
+        end
+    end
+    ret total
+end
+
+// One Boruvka round: for every component, the cheapest edge leaving it.
+// Ties are broken by edge id so that two components never pick each other's
+// edge in a way that would build a cycle.
+func _boruvka_round(g &: Graph, ds &: DisjointSet, pick &: Vector<int>):
+    FillInt(pick, g.n, GRAPH_NONE)
+    repeat g.size() with e:
+        a := ds.find(g.edge_from(e))
+        b := ds.find(g.edge_to(e))
+        if a != b:
+            _boruvka_offer(g, pick, a, e)
+            _boruvka_offer(g, pick, b, e)
+        end
+    end
+end
+
+func _boruvka_offer(g &: Graph, pick &: Vector<int>, comp: int, e: int):
+    cur := pick.get(comp)
+    if cur == GRAPH_NONE:
+        pick.set(comp, e)
+        ret
+    end
+    if g.edge_weight(e) < g.edge_weight(cur):
+        pick.set(comp, e)
+        ret
+    end
+    if g.edge_weight(e) == g.edge_weight(cur):
+        if e < cur: pick.set(comp, e) end
+    end
+end
+
+// Kruskal's algorithm. `chosen` receives the edge ids of the tree (or of the
+// spanning forest when the graph is disconnected) and the total weight comes
+// back.
+@en "Kruskal"
+@fa "کروسکال"
+@ar "كروسكال"
+pub func Kruskal(g &: Graph, chosen &: Vector<int>): f64:
+    ret _kruskal_run(g, chosen, 1.0)
+end
+
+// The heaviest spanning forest, from the same algorithm run on reversed
+// comparisons. Useful for maximum-capacity paths and for bottleneck
+// analysis, where the widest route matters rather than the shortest.
+@en "MaximumSpanningTree"
+@fa "درخت پوشای بیشینه"
+@ar "شجرة ممتدة عظمى"
+pub func MaximumSpanningTree(g &: Graph, chosen &: Vector<int>): f64:
+    ret _kruskal_run(g, chosen, 0.0 - 1.0)
+end
+
+// Prim's algorithm from `root`, over a lazy heap. `parent` gets the tree
+// edge into each node (GRAPH_NONE at the root and at every node outside the
+// root's component) and the weight of the tree comes back.
+@en "Prim"
+@fa "پریم"
+@ar "بريم"
+pub func Prim(g &: Graph, root: int, parent &: Vector<int>): f64:
+    if g.directed == false: ret _prim_run(g, root, parent) end
+    mut u := ToUndirected(g)
+    t := _prim_run(u, root, parent)
+    u.free()
+    ret t
+end
+
+// Boruvka's algorithm: every component contributes its cheapest outgoing
+// edge in each round, halving the number of components each time, so it
+// finishes in O(m log n) and is the one of the three that parallelises.
+@en "Boruvka"
+@fa "بوروفکا"
+@ar "بوروفكا"
+pub func Boruvka(g &: Graph, chosen &: Vector<int>): f64:
+    chosen.clear()
+    mut ds := NewDisjointSet(g.n)
+    defer ds.free()
+    mut pick := Vector {} as Vector<int>
+    defer pick.free()
+    mut total := 0.0
+    mut progress := true
+    until progress:
+        progress = false
+        _boruvka_round(g, ds, pick)
+        repeat g.n with c:
+            e := pick.get(c)
+            if e != GRAPH_NONE:
+                if ds.union(g.edge_from(e), g.edge_to(e)):
+                    chosen.push(e)
+                    total += g.edge_weight(e)
+                    progress = true
+                end
+            end
+        end
+    end
+    ret total
+end
+
+@en "MSTWeight"
+@fa "وزن درخت پوشا"
+@ar "وزن الشجرة الممتدة"
+pub func MSTWeight(g &: Graph): f64:
+    mut chosen := Vector {} as Vector<int>
+    defer chosen.free()
+    ret Kruskal(g, chosen)
+end
+
+// The spanning forest itself, as a graph on the same nodes.
+@en "MinimumSpanningTree"
+@fa "درخت پوشای کمینه"
+@ar "شجرة ممتدة صغرى"
+pub func MinimumSpanningTree(g &: Graph): Graph:
+    mut chosen := Vector {} as Vector<int>
+    defer chosen.free()
+    Kruskal(g, chosen)
+    mut h := New(g.n, false)
+    repeat chosen.len() with i:
+        e := chosen.get(i)
+        h.add_weighted(g.edge_from(e), g.edge_to(e), g.edge_weight(e))
+    end
+    ret h
+end
+
+// True when the three algorithms agree with each other, which is a strong
+// self check on a weighted graph and the invariant the tests lean on.
+@en "SpanningAgreement"
+@fa "توافق پوشا"
+@ar "توافق الامتداد"
+pub func SpanningAgreement(g &: Graph): bool:
+    mut a := Vector {} as Vector<int>
+    defer a.free()
+    mut b := Vector {} as Vector<int>
+    defer b.free()
+    mut p := Vector {} as Vector<int>
+    defer p.free()
+    ka := Kruskal(g, a)
+    kb := Boruvka(g, b)
+    if IsClose(ka, kb) == false: ret false end
+    if IsConnected(g) == false: ret true end
+    pr := Prim(g, 0, p)
+    ret IsClose(ka, pr)
+end

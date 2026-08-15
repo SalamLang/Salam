@@ -1,0 +1,409 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "graph"
+@fa "گراف"
+@ar "بيان"
+package graph
+
+// The core graph object.
+//
+// One structure covers every graph family the rest of this library needs:
+// directed and undirected, weighted and unweighted, multigraphs (parallel
+// edges are kept, never merged), graphs with self loops, and by extension
+// simple graphs, DAGs, trees, bipartite graphs and forests, which are all
+// just graphs that satisfy a predicate (see gr_classify.salam).
+//
+// Storage is an edge list (eu, ev, ew) plus a compressed-sparse-row index
+// rebuilt on demand. The edge list is the source of truth: adding an edge is
+// O(1) and only marks the index stale. The CSR index is what every traversal
+// walks, so neighbours of a node are contiguous in memory and iteration costs
+// one pointer bump per neighbour.
+//
+// Nodes are dense integers 0..n-1. That is deliberate: every algorithm here
+// can then use a plain Vector as a node-keyed array instead of hashing, which
+// is the difference between a graph library that is usable on millions of
+// edges and one that is not. Names are optional and live alongside, see
+// set_name / name.
+//
+// Undirected edges are stored once and indexed twice, so edge ids stay stable
+// and edge-keyed arrays (used by the flow and matching code) have exactly one
+// slot per edge. A self loop in an undirected graph therefore contributes 2
+// to the degree of its endpoint, which is the standard convention.
+
+const _GRAPH_EPS := 0.000000000001
+
+@en "GRAPH_INF"
+@fa "بی‌نهایت گراف"
+@ar "لانهاية البيان"
+pub const GRAPH_INF := 1.0e300
+
+@en "GRAPH_NONE"
+@fa "هیچ"
+@ar "لاشيء"
+pub const GRAPH_NONE := -1
+
+@en "Graph"
+@fa "گراف"
+@ar "بيان"
+pub struct Graph:
+    pub directed: bool = false
+    pub n: int = 0
+    pub eu: Vector<int> = Vector {}
+    pub ev: Vector<int> = Vector {}
+    pub ew: Vector<f64> = Vector {}
+    pub names: Vector<str> = Vector {}
+    pub off: Vector<int> = Vector {}
+    pub nbr: Vector<int> = Vector {}
+    pub eix: Vector<int> = Vector {}
+    pub roff: Vector<int> = Vector {}
+    pub rnbr: Vector<int> = Vector {}
+    pub reix: Vector<int> = Vector {}
+    pub built: bool = false
+
+    @en "add_node"
+    @fa "افزودن گره"
+    @ar "إضافة عقدة"
+    pub func add_node(): int:
+        id := this.n
+        this.n = this.n + 1
+        this.built = false
+        ret id
+    end
+
+    @en "add_nodes"
+    @fa "افزودن گره‌ها"
+    @ar "إضافة عقد"
+    pub func add_nodes(k: int):
+        if k <= 0: ret end
+        this.n = this.n + k
+        this.built = false
+    end
+
+    @en "add_edge"
+    @fa "افزودن یال"
+    @ar "إضافة ضلع"
+    pub func add_edge(u: int, v: int): int:
+        ret this.add_weighted(u, v, 1.0)
+    end
+
+    @en "add_weighted"
+    @fa "افزودن یال وزن‌دار"
+    @ar "إضافة ضلع موزون"
+    pub func add_weighted(u: int, v: int, w: f64): int:
+        if u < 0: ret GRAPH_NONE end
+        if v < 0: ret GRAPH_NONE end
+        if u >= this.n: this.n = u + 1 end
+        if v >= this.n: this.n = v + 1 end
+        this.eu.push(u)
+        this.ev.push(v)
+        this.ew.push(w)
+        this.built = false
+        ret this.eu.len() - 1
+    end
+
+    @en "order"
+    @fa "مرتبه"
+    @ar "رتبة"
+    pub func order(): int: ret this.n end
+
+    @en "size"
+    @fa "اندازه"
+    @ar "حجم"
+    pub func size(): int: ret this.eu.len() end
+
+    @en "edge_from"
+    @fa "سر یال"
+    @ar "بداية الضلع"
+    pub func edge_from(e: int): int: ret this.eu.get(e) end
+
+    @en "edge_to"
+    @fa "ته یال"
+    @ar "نهاية الضلع"
+    pub func edge_to(e: int): int: ret this.ev.get(e) end
+
+    @en "edge_weight"
+    @fa "وزن یال"
+    @ar "وزن الضلع"
+    pub func edge_weight(e: int): f64: ret this.ew.get(e) end
+
+    @en "set_weight"
+    @fa "تنظیم وزن"
+    @ar "تعيين الوزن"
+    pub func set_weight(e: int, w: f64): this.ew.set(e, w) end
+
+    @en "set_name"
+    @fa "تنظیم نام"
+    @ar "تعيين الاسم"
+    pub func set_name(u: int, s: str):
+        if u < 0: ret end
+        if u >= this.n: this.n = u + 1 end
+        until this.names.len() <= u: this.names.push("") end
+        this.names.set(u, s)
+    end
+
+    @en "name"
+    @fa "نام"
+    @ar "اسم"
+    pub func name(u: int): str:
+        if u < 0: ret "" end
+        if u >= this.names.len(): ret "" end
+        ret this.names.get(u)
+    end
+
+    @en "build"
+    @fa "ساخت"
+    @ar "بناء"
+    pub func build():
+        if this.built: ret end
+        _csr(this.eu, this.ev, this.n, this.directed == false, this.off, this.nbr, this.eix)
+        if this.directed:
+            _csr(this.ev, this.eu, this.n, false, this.roff, this.rnbr, this.reix)
+        end
+        this.built = true
+    end
+
+    @en "adj_start"
+    @fa "آغاز مجاورت"
+    @ar "بداية الجوار"
+    pub func adj_start(u: int): int:
+        this.build()
+        ret this.off.get(u)
+    end
+
+    @en "adj_stop"
+    @fa "پایان مجاورت"
+    @ar "نهاية الجوار"
+    pub func adj_stop(u: int): int:
+        this.build()
+        ret this.off.get(u + 1)
+    end
+
+    @en "adj_node"
+    @fa "گره مجاور"
+    @ar "عقدة مجاورة"
+    pub func adj_node(k: int): int: ret this.nbr.get(k) end
+
+    @en "adj_edge"
+    @fa "یال مجاور"
+    @ar "ضلع مجاور"
+    pub func adj_edge(k: int): int: ret this.eix.get(k) end
+
+    @en "adj_weight"
+    @fa "وزن مجاور"
+    @ar "وزن مجاور"
+    pub func adj_weight(k: int): f64: ret this.ew.get(this.eix.get(k)) end
+
+    @en "in_start"
+    @fa "آغاز ورودی"
+    @ar "بداية الوارد"
+    pub func in_start(u: int): int:
+        this.build()
+        if this.directed: ret this.roff.get(u) end
+        ret this.off.get(u)
+    end
+
+    @en "in_stop"
+    @fa "پایان ورودی"
+    @ar "نهاية الوارد"
+    pub func in_stop(u: int): int:
+        this.build()
+        if this.directed: ret this.roff.get(u + 1) end
+        ret this.off.get(u + 1)
+    end
+
+    @en "in_node"
+    @fa "گره ورودی"
+    @ar "عقدة واردة"
+    pub func in_node(k: int): int:
+        if this.directed: ret this.rnbr.get(k) end
+        ret this.nbr.get(k)
+    end
+
+    @en "in_edge"
+    @fa "یال ورودی"
+    @ar "ضلع وارد"
+    pub func in_edge(k: int): int:
+        if this.directed: ret this.reix.get(k) end
+        ret this.eix.get(k)
+    end
+
+    @en "out_degree"
+    @fa "درجه خروجی"
+    @ar "درجة خارجة"
+    pub func out_degree(u: int): int:
+        ret this.adj_stop(u) - this.adj_start(u)
+    end
+
+    @en "in_degree"
+    @fa "درجه ورودی"
+    @ar "درجة واردة"
+    pub func in_degree(u: int): int:
+        ret this.in_stop(u) - this.in_start(u)
+    end
+
+    @en "degree"
+    @fa "درجه"
+    @ar "درجة"
+    pub func degree(u: int): int:
+        if this.directed: ret this.out_degree(u) + this.in_degree(u) end
+        ret this.out_degree(u)
+    end
+
+    @en "has_edge"
+    @fa "دارای یال"
+    @ar "يحوي ضلعا"
+    pub func has_edge(u: int, v: int): bool:
+        ret this.find_edge(u, v) != GRAPH_NONE
+    end
+
+    @en "find_edge"
+    @fa "یافتن یال"
+    @ar "إيجاد ضلع"
+    pub func find_edge(u: int, v: int): int:
+        if u < 0: ret GRAPH_NONE end
+        if u >= this.n: ret GRAPH_NONE end
+        mut k := this.adj_start(u)
+        stop := this.adj_stop(u)
+        until k < stop:
+            if this.adj_node(k) == v: ret this.adj_edge(k) end
+            k += 1
+        end
+        ret GRAPH_NONE
+    end
+
+    @en "weight_between"
+    @fa "وزن میان"
+    @ar "الوزن بين"
+    pub func weight_between(u: int, v: int): f64:
+        e := this.find_edge(u, v)
+        if e == GRAPH_NONE: ret GRAPH_INF end
+        ret this.ew.get(e)
+    end
+
+    @en "neighbors"
+    @fa "همسایگان"
+    @ar "الجيران"
+    pub func neighbors(u: int): Vector<int>:
+        mut out := Vector {} as Vector<int>
+        mut k := this.adj_start(u)
+        stop := this.adj_stop(u)
+        until k < stop:
+            out.push(this.adj_node(k))
+            k += 1
+        end
+        ret out
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free():
+        this.eu.free()
+        this.ev.free()
+        this.ew.free()
+        this.names.free()
+        this.off.free()
+        this.nbr.free()
+        this.eix.free()
+        this.roff.free()
+        this.rnbr.free()
+        this.reix.free()
+    end
+end
+
+// Bucket the edge list into compressed-sparse-row form. `a` supplies the
+// bucket key of each edge and `b` the value stored, so calling it with
+// (eu, ev) builds the out-adjacency and with (ev, eu) the in-adjacency.
+// `both` additionally files every edge under its other endpoint, which is
+// what makes an undirected edge visible from either side while still being
+// one edge with one id.
+func _csr(a: Vector<int>, b: Vector<int>, n: int, both: bool, off &: Vector<int>, nbr &: Vector<int>, eix &: Vector<int>):
+    m := a.len()
+    off.zeros(n + 1)
+    repeat m with i:
+        _bump(off, a.get(i) + 1)
+        if both: _bump(off, b.get(i) + 1) end
+    end
+    repeat n with i:
+        off.set(i + 1, off.get(i + 1) + off.get(i))
+    end
+    total := off.get(n)
+    nbr.clear()
+    eix.clear()
+    if total > 0:
+        nbr.zeros(total)
+        eix.zeros(total)
+    end
+    mut cur := Vector {} as Vector<int>
+    defer cur.free()
+    cur.zeros(n + 1)
+    repeat n + 1 with i: cur.set(i, off.get(i)) end
+    repeat m with i:
+        _place(cur, nbr, eix, a.get(i), b.get(i), i)
+        if both: _place(cur, nbr, eix, b.get(i), a.get(i), i) end
+    end
+end
+
+func _bump(v &: Vector<int>, i: int): v.set(i, v.get(i) + 1) end
+
+func _place(cur &: Vector<int>, nbr &: Vector<int>, eix &: Vector<int>, u: int, v: int, e: int):
+    p := cur.get(u)
+    nbr.set(p, v)
+    eix.set(p, e)
+    cur.set(u, p + 1)
+end
+
+@en "New"
+@fa "نو"
+@ar "جديد"
+pub func New(n: int, directed: bool): Graph:
+    mut g := Graph { }
+    g.directed = directed
+    g.add_nodes(n)
+    ret g
+end
+
+@en "NewUndirected"
+@fa "نو بی‌جهت"
+@ar "جديد غير موجه"
+pub func NewUndirected(n: int): Graph: ret New(n, false) end
+
+@en "NewDirected"
+@fa "نو جهت‌دار"
+@ar "جديد موجه"
+pub func NewDirected(n: int): Graph: ret New(n, true) end
+
+// Build straight from a parallel pair of endpoint arrays, the shape edge
+// lists arrive in from files and generators.
+@en "FromEdges"
+@fa "از یال‌ها"
+@ar "من الأضلاع"
+pub func FromEdges(n: int, us: Vector<int>, vs: Vector<int>, directed: bool): Graph:
+    mut g := New(n, directed)
+    m := us.len()
+    repeat m with i:
+        g.add_edge(us.get(i), vs.get(i))
+    end
+    ret g
+end
+
+@en "IsClose"
+@fa "نزدیک است"
+@ar "متقارب"
+pub func IsClose(a: f64, b: f64): bool:
+    d := a - b
+    if d < 0.0: ret 0.0 - d < _GRAPH_EPS end
+    ret d < _GRAPH_EPS
+end

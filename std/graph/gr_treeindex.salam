@@ -1,0 +1,199 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package graph
+import math
+import str
+import conv
+
+// Lowest common ancestors, Prufer codes and tree isomorphism: the operations
+// that need a tree to be indexed or encoded first.
+//
+// LCAIndex is binary lifting: up[k][v] is v's 2^k-th ancestor, so a query
+// climbs in powers of two and costs O(log n) after an O(n log n) build. Tree
+// distances fall straight out of it, since the path from u to v goes up to
+// their lowest common ancestor and back down.
+//
+// A Prufer code is n-2 numbers that determine a labelled tree completely.
+// The encoding is a bijection, which is exactly Cayley's formula (there are
+// n^(n-2) labelled trees) and is also what makes RandomTree in gr_gen.salam
+// draw uniformly.
+
+// Binary lifting table for lowest common ancestors: up[k][v] is the 2^k-th
+// ancestor of v, so any jump is a sum of powers of two and a query is
+// O(log n) after an O(n log n) build.
+@en "LCAIndex"
+@fa "نمایه نیای مشترک"
+@ar "فهرس السلف المشترك"
+pub struct LCAIndex:
+    pub n: int = 0
+    pub levels: int = 0
+    pub depth: Vector<int> = Vector {}
+    pub up: Vector<int> = Vector {}
+
+    @en "ancestor"
+    @fa "نیا"
+    @ar "سلف"
+    pub func ancestor(k: int, v: int): int: ret this.up.get(k * this.n + v) end
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free():
+        this.depth.free()
+        this.up.free()
+    end
+end
+
+@en "BuildLCA"
+@fa "ساخت نیای مشترک"
+@ar "بناء السلف المشترك"
+pub func BuildLCA(g &: Graph, root: int): LCAIndex:
+    mut ix := LCAIndex { }
+    ix.n = g.n
+    ix.levels = _lift_levels(g.n)
+    mut parent := Vector {} as Vector<int>
+    defer parent.free()
+    mut order := Vector {} as Vector<int>
+    defer order.free()
+    RootTree(g, root, parent, order)
+    _lca_depths(g, root, parent, order, ix)
+    _lca_table(parent, ix)
+    ret ix
+end
+
+// The lowest common ancestor of u and v: lift the deeper one to the other's
+// depth, then lift both by the largest jumps that keep them apart. What is
+// left is the parent of the answer.
+@en "LCA"
+@fa "نیای مشترک"
+@ar "السلف المشترك"
+pub func LCA(ix &: LCAIndex, u0: int, v0: int): int:
+    mut u := u0
+    mut v := v0
+    if ix.depth.get(u) < ix.depth.get(v):
+        t := u
+        u = v
+        v = t
+    end
+    u = _lift_to(ix, u, ix.depth.get(v))
+    if u == v: ret u end
+    mut k := ix.levels - 1
+    until k >= 0:
+        if ix.ancestor(k, u) != ix.ancestor(k, v):
+            u = ix.ancestor(k, u)
+            v = ix.ancestor(k, v)
+        end
+        k = k - 1
+    end
+    ret ix.ancestor(0, u)
+end
+
+@en "TreeDistance"
+@fa "فاصله درختی"
+@ar "المسافة الشجرية"
+pub func TreeDistance(ix &: LCAIndex, u: int, v: int): int:
+    a := LCA(ix, u, v)
+    if a == GRAPH_NONE: ret GRAPH_NONE end
+    ret ix.depth.get(u) + ix.depth.get(v) - 2 * ix.depth.get(a)
+end
+
+// The Prufer code of a labelled tree on n nodes: n-2 numbers that determine
+// the tree completely. Cayley's formula, that there are n^(n-2) labelled
+// trees, is exactly the statement that this encoding is a bijection.
+@en "PruferEncode"
+@fa "کد پروفر"
+@ar "ترميز بروفر"
+pub func PruferEncode(g &: Graph): Vector<int>:
+    mut code := Vector {} as Vector<int>
+    if g.n < 2: ret code end
+    mut deg := Vector {} as Vector<int>
+    defer deg.free()
+    mut alive := Vector {} as Vector<bool>
+    defer alive.free()
+    FillInt(deg, g.n, 0)
+    FillBool(alive, g.n, true)
+    repeat g.n with u: deg.set(u, g.degree(u)) end
+    repeat g.n - 2:
+        leaf := _lowest_leaf(deg, alive, g.n)
+        p := _only_neighbor(g, leaf, alive)
+        code.push(p)
+        alive.set(leaf, false)
+        deg.set(p, deg.get(p) - 1)
+    end
+    ret code
+end
+
+@en "PruferDecode"
+@fa "کدگشایی پروفر"
+@ar "فك ترميز بروفر"
+pub func PruferDecode(code: Vector<int>): Graph:
+    n := code.len() + 2
+    mut g := New(n, false)
+    mut deg := Vector {} as Vector<int>
+    defer deg.free()
+    FillInt(deg, n, 1)
+    repeat code.len() with i:
+        p := code.get(i)
+        deg.set(p, deg.get(p) + 1)
+    end
+    _prufer_build(g, code, deg, n)
+    ret g
+end
+
+// Exact tree isomorphism by AHU canonical form, rooted at the centre so no
+// root has to be guessed. Linear-ish, and unlike the general graph case it
+// is not a heuristic: equal canonical names means isomorphic, always.
+@en "TreeIsomorphic"
+@fa "درخت‌های یکریخت"
+@ar "شجرتان متماثلتان"
+pub func TreeIsomorphic(a &: Graph, b &: Graph): bool:
+    if a.n != b.n: ret false end
+    if IsTree(a) == false: ret false end
+    if IsTree(b) == false: ret false end
+    ca := _canonical_rooted(a)
+    cb := _canonical_rooted(b)
+    ret str.Equals(ca, cb)
+end
+
+// The canonical name of a tree: two trees are isomorphic exactly when these
+// strings are equal, so it can be used as a hash key.
+@en "TreeCanonicalForm"
+@fa "شکل متعارف درخت"
+@ar "الشكل المعياري للشجرة"
+pub func TreeCanonicalForm(g &: Graph): str:
+    if IsTree(g) == false: ret "" end
+    ret _canonical_rooted(g)
+end
+
+// Cayley's formula: the number of distinct labelled trees on n nodes.
+@en "LabeledTreeCount"
+@fa "شمار درخت برچسب‌دار"
+@ar "عدد الأشجار المعنونة"
+pub func LabeledTreeCount(n: int): f64:
+    if n < 1: ret 0.0 end
+    if n < 3: ret 1.0 end
+    ret math.Pow(n as f64, (n - 2) as f64)
+end
+
+// A readable bracket rendering of the tree rooted at `root`, children in id
+// order. Handy in tests and when eyeballing a structure.
+@en "TreeToString"
+@fa "درخت به رشته"
+@ar "الشجرة إلى نص"
+pub func TreeToString(g &: Graph, root: int): str:
+    if g.n == 0: ret "" end
+    ret _render(g, root, GRAPH_NONE)
+end
+

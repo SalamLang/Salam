@@ -1,0 +1,382 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package graph
+
+import math
+
+// The numbers you quote about a graph: size and density, degree statistics,
+// the distance-based family (eccentricity, radius, diameter, centre,
+// periphery, Wiener index), the triangle-based family (clustering,
+// transitivity), girth, assortativity and the circuit rank.
+//
+// Distance metrics count edges, not weights, unless the name says Weighted.
+// Both are legitimate and they disagree, so the distinction is in the name
+// rather than in a flag.
+//
+// On a disconnected graph the eccentricity of a node is infinite. That is
+// reported as GRAPH_NONE rather than a large number, and the aggregates
+// (radius, diameter, average path length) are taken over reachable pairs so
+// they stay finite and meaningful; IsConnected tells you which case you are
+// in.
+
+func _pair_key(n: int, u: int, v: int): i64: ret (u as i64) * (n as i64) + (v as i64) end
+
+func _sort_desc(v &: Vector<int>):
+    mut i := 1
+    until i < v.len():
+        x := v.get(i)
+        mut j := i - 1
+        until j >= 0:
+            if v.get(j) >= x: break end
+            v.set(j + 1, v.get(j))
+            j = j - 1
+        end
+        v.set(j + 1, x)
+        i += 1
+    end
+end
+
+func _adjacency_set(g &: Graph): HashMap<i64, bool>:
+    mut s := HashMap {} as HashMap<i64, bool>
+    repeat g.size() with e:
+        u := g.edge_from(e)
+        v := g.edge_to(e)
+        if u != v:
+            s.put(_pair_key(g.n, u, v), true)
+            s.put(_pair_key(g.n, v, u), true)
+        end
+    end
+    ret s
+end
+
+// Distinct neighbours of u, ignoring self loops and edge multiplicity: the
+// set every clustering and triangle count is defined over.
+func _distinct_neighbors(g &: Graph, u: int, out &: Vector<int>):
+    out.clear()
+    mut seen := HashMap {} as HashMap<i64, bool>
+    mut k := g.adj_start(u)
+    stop := g.adj_stop(u)
+    until k < stop:
+        v := g.adj_node(k)
+        if v != u:
+            if seen.has(v as i64) == false:
+                seen.put(v as i64, true)
+                out.push(v)
+            end
+        end
+        k += 1
+    end
+    seen.free()
+end
+
+func _links_among(adj &: HashMap<i64, bool>, nb: Vector<int>, n: int): int:
+    mut links := 0
+    repeat nb.len() with i:
+        repeat nb.len() with j:
+            if i < j:
+                if adj.has(_pair_key(n, nb.get(i), nb.get(j))): links += 1 end
+            end
+        end
+    end
+    ret links
+end
+
+// Girth by breadth-first search from every node: the first non-tree edge met
+// at distance d closes a cycle of length 2d or 2d+1. Self loops give 1 and
+// parallel edges give 2, both of which are cycles by definition.
+func _girth_from(g &: Graph, s: int, dist &: Vector<int>, via &: Vector<int>, best: int): int:
+    FillInt(dist, g.n, GRAPH_NONE)
+    FillInt(via, g.n, GRAPH_NONE)
+    mut q := Vector {} as Vector<int>
+    defer q.free()
+    mut found := best
+    dist.set(s, 0)
+    q.push(s)
+    mut head := 0
+    until head < q.len():
+        u := q.get(head)
+        head += 1
+        if 2 * dist.get(u) < found: found = _girth_scan(g, u, dist, via, q, found) end
+    end
+    ret found
+end
+
+func _girth_scan(g &: Graph, u: int, dist &: Vector<int>, via &: Vector<int>, q &: Vector<int>, best: int): int:
+    mut found := best
+    mut k := g.adj_start(u)
+    stop := g.adj_stop(u)
+    until k < stop:
+        v := g.adj_node(k)
+        e := g.adj_edge(k)
+        if e != via.get(u):
+            if dist.get(v) == GRAPH_NONE:
+                dist.set(v, dist.get(u) + 1)
+                via.set(v, e)
+                q.push(v)
+            else:
+                c := dist.get(u) + dist.get(v) + 1
+                if c < found: found = c end
+            end
+        end
+        k += 1
+    end
+    ret found
+end
+
+@en "Density"
+@fa "چگالی"
+@ar "كثافة"
+pub func Density(g &: Graph): f64:
+    if g.n < 2: ret 0.0 end
+    m := g.size() as f64
+    n := g.n as f64
+    if g.directed: ret m / (n * (n - 1.0)) end
+    ret 2.0 * m / (n * (n - 1.0))
+end
+
+@en "AverageDegree"
+@fa "میانگین درجه"
+@ar "متوسط الدرجة"
+pub func AverageDegree(g &: Graph): f64:
+    if g.n == 0: ret 0.0 end
+    mut s := 0
+    repeat g.n with u: s += g.degree(u) end
+    ret (s as f64) / (g.n as f64)
+end
+
+@en "MaxDegree"
+@fa "بیشینه درجه"
+@ar "أقصى درجة"
+pub func MaxDegree(g &: Graph): int:
+    mut b := 0
+    repeat g.n with u:
+        if g.degree(u) > b: b = g.degree(u) end
+    end
+    ret b
+end
+
+@en "MinDegree"
+@fa "کمینه درجه"
+@ar "أدنى درجة"
+pub func MinDegree(g &: Graph): int:
+    if g.n == 0: ret 0 end
+    mut b := g.degree(0)
+    repeat g.n with u:
+        if g.degree(u) < b: b = g.degree(u) end
+    end
+    ret b
+end
+
+// Degrees in non-increasing order: the graph's degree sequence, the input to
+// Havel-Hakimi and the first thing two graphs must share to be isomorphic.
+@en "DegreeSequence"
+@fa "دنباله درجه"
+@ar "متتالية الدرجات"
+pub func DegreeSequence(g &: Graph): Vector<int>:
+    mut out := Vector {} as Vector<int>
+    repeat g.n with u: out.push(g.degree(u)) end
+    _sort_desc(out)
+    ret out
+end
+
+// How many nodes have each degree, indexed by degree. The shape of this
+// vector is what distinguishes a random graph from a scale-free one.
+@en "DegreeHistogram"
+@fa "بافت‌نگار درجه"
+@ar "مدرج الدرجات"
+pub func DegreeHistogram(g &: Graph): Vector<int>:
+    mut out := Vector {} as Vector<int>
+    FillInt(out, MaxDegree(g) + 1, 0)
+    repeat g.n with u:
+        d := g.degree(u)
+        out.set(d, out.get(d) + 1)
+    end
+    ret out
+end
+
+@en "IsRegular"
+@fa "منتظم است"
+@ar "منتظم"
+pub func IsRegular(g &: Graph): bool:
+    if g.n == 0: ret true end
+    ret MinDegree(g) == MaxDegree(g)
+end
+
+@en "IsComplete"
+@fa "کامل است"
+@ar "كامل"
+pub func IsComplete(g &: Graph): bool:
+    mut s := Simplify(g)
+    mut want := g.n * (g.n - 1) / 2
+    got := s.size()
+    if g.directed: want = g.n * (g.n - 1) end
+    s.free()
+    ret got == want
+end
+
+// The greatest distance from u to any node it can reach. GRAPH_NONE when u
+// reaches nothing at all.
+@en "Eccentricity"
+@fa "برون‌مرکزی"
+@ar "الانحراف"
+pub func Eccentricity(g &: Graph, u: int): int:
+    mut d := BFS(g, u)
+    defer d.free()
+    mut best := GRAPH_NONE
+    repeat g.n with v:
+        if d.get(v) > best: best = d.get(v) end
+    end
+    ret best
+end
+
+@en "EccentricityAll"
+@fa "همه برون‌مرکزی‌ها"
+@ar "كل الانحرافات"
+pub func EccentricityAll(g &: Graph): Vector<int>:
+    mut out := Vector {} as Vector<int>
+    repeat g.n with u: out.push(Eccentricity(g, u)) end
+    ret out
+end
+
+// The largest eccentricity: the longest shortest path in the graph.
+@en "Diameter"
+@fa "قطر"
+@ar "قطر"
+pub func Diameter(g &: Graph): int:
+    mut e := EccentricityAll(g)
+    defer e.free()
+    ret MaxInt(e)
+end
+
+// The smallest eccentricity. Radius and diameter bracket each other:
+// radius <= diameter <= 2 * radius.
+@en "Radius"
+@fa "شعاع"
+@ar "نصف القطر"
+pub func Radius(g &: Graph): int:
+    mut e := EccentricityAll(g)
+    defer e.free()
+    mut best := GRAPH_NONE
+    repeat e.len() with u:
+        if e.get(u) != GRAPH_NONE:
+            if best == GRAPH_NONE: best = e.get(u)
+            else e.get(u) < best: best = e.get(u)
+            end
+        end
+    end
+    ret best
+end
+
+// The nodes of minimum eccentricity: the best places to put something that
+// has to reach everywhere quickly.
+@en "Center"
+@fa "مرکز"
+@ar "مركز"
+pub func Center(g &: Graph): Vector<int>:
+    mut e := EccentricityAll(g)
+    defer e.free()
+    r := Radius(g)
+    mut out := Vector {} as Vector<int>
+    repeat e.len() with u:
+        if e.get(u) == r: out.push(u) end
+    end
+    ret out
+end
+
+// The nodes of maximum eccentricity: the extremities.
+@en "Periphery"
+@fa "پیرامون"
+@ar "المحيط"
+pub func Periphery(g &: Graph): Vector<int>:
+    mut e := EccentricityAll(g)
+    defer e.free()
+    d := Diameter(g)
+    mut out := Vector {} as Vector<int>
+    repeat e.len() with u:
+        if e.get(u) == d: out.push(u) end
+    end
+    ret out
+end
+
+// The mean distance over all ordered pairs that can reach each other.
+@en "AveragePathLength"
+@fa "میانگین طول مسیر"
+@ar "متوسط طول المسار"
+pub func AveragePathLength(g &: Graph): f64:
+    mut total := 0.0
+    mut pairs := 0.0
+    mut d := Vector {} as Vector<int>
+    defer d.free()
+    mut p := Vector {} as Vector<int>
+    defer p.free()
+    repeat g.n with s:
+        BFSFrom(g, s, d, p)
+        repeat g.n with t:
+            if t != s:
+                if d.get(t) != GRAPH_NONE:
+                    total += d.get(t) as f64
+                    pairs += 1.0
+                end
+            end
+        end
+    end
+    if pairs == 0.0: ret 0.0 end
+    ret total / pairs
+end
+
+// The sum of all pairwise distances, counted once per unordered pair on an
+// undirected graph. A classic chemical graph theory index.
+@en "WienerIndex"
+@fa "شاخص وینر"
+@ar "دليل فينر"
+pub func WienerIndex(g &: Graph): f64:
+    mut total := 0.0
+    mut d := Vector {} as Vector<int>
+    defer d.free()
+    mut p := Vector {} as Vector<int>
+    defer p.free()
+    repeat g.n with s:
+        BFSFrom(g, s, d, p)
+        repeat g.n with t:
+            if t != s:
+                if d.get(t) != GRAPH_NONE: total += d.get(t) as f64 end
+            end
+        end
+    end
+    if g.directed: ret total end
+    ret total / 2.0
+end
+
+// The length of the shortest cycle, or GRAPH_NONE in a forest.
+@en "Girth"
+@fa "کمر"
+@ar "الطوق"
+pub func Girth(g &: Graph): int:
+    // No simple cycle is longer than n, so n + 2 stands in for infinity and
+    // doubles as the pruning bound inside the search.
+    cap := g.n + 2
+    mut best := cap
+    repeat g.size() with e:
+        if g.edge_from(e) == g.edge_to(e): ret 1 end
+    end
+    mut dist := Vector {} as Vector<int>
+    defer dist.free()
+    mut via := Vector {} as Vector<int>
+    defer via.free()
+    repeat g.n with s: best = _girth_from(g, s, dist, via, best) end
+    if best >= cap: ret GRAPH_NONE end
+    ret best
+end
+

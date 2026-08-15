@@ -82,6 +82,11 @@ ast_node_t *derive_install_source(sema_t *s, const char *text, const char *want,
  * no scope on the chain has it. */
 scope_t *derive_home_of(scope_t *from, const char *probe);
 
+/* The name of the package a scope is the body of, or NULL. Stamped onto
+ * synthetic declarations so the interpreter can run them against the right
+ * module environment. */
+const char *derive_pkg_name_of(sema_t *s, scope_t *scope);
+
 /* Dump generated sources to stderr. Set by SALAM_DERIVE_DUMP=1. */
 bool derive_dump_enabled(void);
 

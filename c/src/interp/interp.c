@@ -524,6 +524,29 @@ static void collect_decls(interp_t *I, ast_node_t *program)
     }
 }
 
+/*
+ * A generic instance or a derived codec has a global name but a package's
+ * body: it is reachable from anywhere, and resolves the names it calls -
+ * private ones included - inside the module it was cloned or generated from.
+ * Its closure is built before the modules exist, so the environment is
+ * corrected here, once they do.
+ */
+static void rehome_synthetic_funcs(interp_t *I)
+{
+    size_t i = 0;
+    for (; i < I->funcs.len; i++) {
+        ast_node_t *f = (ast_node_t *)I->funcs.data[i];
+        module_t *home;
+        binding_t *b;
+        if (!f->name || !f->home_pkg) continue;
+        home = find_module(I, f->home_pkg);
+        if (!home) continue;
+        b = env_find_local(I->globals, f->name);
+        if (b && b->val.kind == VAL_FUNC && b->val.as.fn->fn == f)
+            b->val.as.fn->env = home->env;
+    }
+}
+
 static void collect_module_funcs(interp_t *I, module_t *mod, ast_node_t *prog)
 {
     {

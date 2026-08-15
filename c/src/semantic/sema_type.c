@@ -73,6 +73,10 @@ static size_t resolve_array_dim(sema_t *s, ast_node_t *dim)
 type_t *sema_resolve_type(sema_t *s, ast_node_t *tnode)
 {
     if (!tnode) return ty(s, TY_VOID);
+    /* A type the generic machinery resolved in the caller's scope and is
+     * carrying into a package's scope, where the name would not resolve. See
+     * ast_node_t::sema_type. */
+    if (tnode->sema_type) return (type_t *)tnode->sema_type;
     type_t *base;
 
     if (tnode->is_dyn) {

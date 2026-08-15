@@ -14,6 +14,7 @@
 
 #include "core/prelude.h"
 #include "core/sal_format.h"
+#include "semantic/sema_derive_core.h"
 #include "semantic/sema_internal.h"
 
 symbol_t *generic_template(sema_t *s, const char *name, sym_kind_t kind)
@@ -80,6 +81,12 @@ static void g_subst(arena_t *a, ast_node_t *n, vec_t *params, vec_t *args)
                 n->list = cc->list;
                 n->is_pointer = ptr;
                 n->is_dyn = cc->is_dyn;
+                /* The resolved type comes along only where the occurrence is
+                 * the bare parameter. `T*` or `T[4]` in the template is a
+                 * different type from what the caller resolved, and has to go
+                 * back through the ordinary path. */
+                if (ptr == cc->is_pointer && n->dims.len == 0)
+                    n->sema_type = cc->sema_type;
                 vec_t merged;
                 vec_init(&merged);
                 {
@@ -116,7 +123,7 @@ static const char *g_instance_name(sema_t *s, const char *base, vec_t *argtypes)
     return arena_strdup(s->a, buf);
 }
 
-static ast_node_t *g_type_to_ast(sema_t *s, type_t *t, const src_span_t *span)
+static ast_node_t *g_type_to_ast_bare(sema_t *s, type_t *t, const src_span_t *span)
 {
     ast_node_t *n = ast_new(s->a, AST_TYPE, span);
     n->synthetic = true;
@@ -125,22 +132,36 @@ static ast_node_t *g_type_to_ast(sema_t *s, type_t *t, const src_span_t *span)
         return n;
     }
     if (t->kind == TY_PTR && t->pointee) {
-        n = g_type_to_ast(s, t->pointee, span);
+        n = g_type_to_ast_bare(s, t->pointee, span);
         n->is_pointer = true;
         return n;
     }
     if (t->kind == TY_VEC) {
         n->name = "Vector";
-        ast_add(s->a, n, g_type_to_ast(s, t->elem, span));
+        ast_add(s->a, n, g_type_to_ast_bare(s, t->elem, span));
         return n;
     }
     if (t->kind == TY_MAP) {
         n->name = "HashMap";
-        ast_add(s->a, n, g_type_to_ast(s, t->key, span));
-        ast_add(s->a, n, g_type_to_ast(s, t->elem, span));
+        ast_add(s->a, n, g_type_to_ast_bare(s, t->key, span));
+        ast_add(s->a, n, g_type_to_ast_bare(s, t->elem, span));
         return n;
     }
     n->name = arena_strdup(s->a, type_to_string(s->tc, t));
+    return n;
+}
+
+/*
+ * The name is kept for diagnostics and for the instance's mangled name, but
+ * the resolved type travels with the node: the template is checked inside the
+ * package that declared it, and that scope cannot see a struct the caller
+ * declared. Without this a stdlib generic could only ever be instantiated
+ * with a built-in type.
+ */
+static ast_node_t *g_type_to_ast(sema_t *s, type_t *t, const src_span_t *span)
+{
+    ast_node_t *n = g_type_to_ast_bare(s, t, span);
+    if (t) n->sema_type = t;
     return n;
 }
 
@@ -315,6 +336,10 @@ symbol_t *g_instantiate_struct(sema_t *s, ast_node_t *tmpl, vec_t *targ_nodes,
         ast_node_t *inst = ast_clone(s->a, tmpl);
         inst->name = iname;
         inst->synthetic = true;
+        /* The clone is checked against the declaring package's scope, so its
+         * body may name that package's private functions. See
+         * ast_node_t::home_pkg. */
+        inst->home_pkg = derive_pkg_name_of(s, s->gen_pkg);
         g_subst(s->a, inst, &tmpl->typarams, targ_nodes);
         inst->typarams.len = 0;
         vec_push(s->a, &s->program->list, inst);
@@ -385,6 +410,10 @@ static symbol_t *g_instantiate_func(sema_t *s, ast_node_t *tmpl, vec_t *targ_nod
         ast_node_t *inst = ast_clone(s->a, tmpl);
         inst->name = iname;
         inst->synthetic = true;
+        /* The clone is checked against the declaring package's scope, so its
+         * body may name that package's private functions. See
+         * ast_node_t::home_pkg. */
+        inst->home_pkg = derive_pkg_name_of(s, s->gen_pkg);
         g_subst(s->a, inst, &tmpl->typarams, targ_nodes);
         inst->typarams.len = 0;
         vec_push(s->a, &s->program->list, inst);

@@ -874,7 +874,7 @@ static bool ll_call_runtime(ll_t *ll, ast_node_t *n, const char *rtname, ast_nod
 /*
  * Builtins that hand back a freshly allocated `const char**` plus an
  * out-param element count, which the surface language sees as a
- * Vector<str>. Vector<T> is { data: T*, _len: int, _cap: int } (see
+ * Vector<str>. Vector<T> is { data: T*, count: int, capacity: int } (see
  * std/collections/vector.salam), so cap is filled with the same count as
  * len - the buffer is exactly sized and never grown in place, matching
  * what the C backend's call_ident/call_str build for the same runtimes.

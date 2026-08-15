@@ -127,6 +127,29 @@ struct ast_node {
     vec_t aliases;
     vec_t captures;
     const char *type_str;
+    /*
+     * On an AST_TYPE the generic machinery built rather than parsed: the
+     * type_t it already stands for. A type argument is resolved in the
+     * caller's scope but substituted into a template that is checked in the
+     * declaring package's scope, and a package's scope cannot see the
+     * caller's declarations - so a round trip through the name would lose a
+     * user-defined struct handed to a stdlib generic ("unknown type 'User'"
+     * from inside std/encoding/json). Carrying the resolved type across that
+     * switch is what keeps `json.Marshal(user)` and `option.Some(user)`
+     * working. NULL on everything the parser produced. Void so ast.h stays
+     * free of the semantic layer; sema_resolve_type is the only reader.
+     */
+    void *sema_type;
+    /*
+     * On a synthetic top-level function - a generic instantiation or a derived
+     * codec - the package whose scope its body was checked inside. Its name is
+     * global, but the names it calls are that package's, private ones
+     * included. The interpreter keeps one environment per module, so without
+     * this a body would be looked up against the program's globals and its own
+     * module's helpers would be missing ("call to undefined function
+     * '_dnew'"). NULL for everything else.
+     */
+    const char *home_pkg;
     const char *origin_lang;
     /* Interpreter-only inline cache for identifier lookups; ignored by every
      * other consumer of the AST. Resolving a name meant walking the scope

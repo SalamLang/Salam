@@ -71,6 +71,14 @@ const char *jd_quote(sema_t *s, const char *text);
  * caller does not have to derive a helper function. */
 bool jd_is_scalar(const type_t *t);
 
+/* u8/u16/u32/u64/size: the widths that decode through _du and have to reject
+ * a negative number rather than wrap it. */
+bool jd_is_unsigned(const type_t *t);
+
+/* The bounds a narrow integer field is checked against, or false when the
+ * type is i64/u64 and the check would be a no-op. */
+bool jd_int_bounds(const type_t *t, long long *lo, long long *hi);
+
 /* The `func ...` text, or NULL when some part of the type has no JSON form.
  * Both may derive further functions before returning. */
 const char *jd_enc_source(sema_t *s, type_t *t, const char *fname, scope_t *home,

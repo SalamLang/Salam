@@ -16,6 +16,7 @@ package json
 
 import conv
 import str
+import mem
 
 // Runtime layer for the compiler-derived JSON codecs.
 //
@@ -157,6 +158,14 @@ func _dnullat(s: str, i: int): int:
     ret -1
 end
 
+// _dalloc - storage for a pointer field the document turned out to have a
+// value for. Salam has no address-of operator, so a decoded pointee has to
+// live on the heap; zeroed, so a field the derived body does not reach keeps
+// a defined value.
+func _dalloc(n: u64): void*:
+    ret mem.AllocateZeroed(n)
+end
+
 // _dgstr - decodes a JSON string at `i`, resolving escapes. endpos is the
 // position just past the closing quote, or -1 when there is no string here.
 func _dgstr(s: str, i: int, endpos &: int): str:
@@ -227,6 +236,61 @@ func _dhexval(c: int): int:
     ret -1
 end
 
+// _dpint - digits to i64, by hand. str.to_int() is 32 bits wide, so an id
+// past two billion would come back saturated and a range check downstream
+// would see a value that was in range only because it had already been
+// clipped. Overflow is reported, never clamped.
+func _dpint(s: str, beg: int, stop: int, neg: bool, ok &: bool): i64:
+    mut v := 0 as i64
+    mut p := beg
+    ok = true
+    if p >= stop:
+        ok = false
+        ret 0 as i64
+    end
+    until p < stop:
+        d := (_dbyte(s, p) - 48) as i64
+        if v > 922337203685477580 as i64:
+            ok = false
+            ret 0 as i64
+        end
+        v = v * (10 as i64)
+        if v > (9223372036854775807 as i64) - d:
+            ok = false
+            ret 0 as i64
+        end
+        v = v + d
+        p += 1
+    end
+    if neg: ret 0 as i64 - v end
+    ret v
+end
+
+func _dpuint(s: str, beg: int, stop: int, ok &: bool): u64:
+    mut v := 0 as u64
+    mut p := beg
+    ok = true
+    if p >= stop:
+        ok = false
+        ret 0 as u64
+    end
+    until p < stop:
+        d := (_dbyte(s, p) - 48) as u64
+        if v > 1844674407370955161 as u64:
+            ok = false
+            ret 0 as u64
+        end
+        v = v * (10 as u64)
+        if v > (18446744073709551615 as u64) - d:
+            ok = false
+            ret 0 as u64
+        end
+        v = v + d
+        p += 1
+    end
+    ret v
+end
+
 // _dgint - a JSON number that has to land in an integer. A fractional or
 // exponent form is rejected rather than truncated: a decoder that silently
 // turns 1.9 into 1 hides a schema mismatch instead of reporting it.
@@ -234,25 +298,49 @@ func _dgint(s: str, i: int, endpos &: int): i64:
     e := _jnum(s, i)
     if e < 0 || e == i:
         endpos = -1
-        ret 0
+        ret 0 as i64
     end
     text := s.substr(i, e - i)
     if str.Contains(text, ".") || str.Contains(text, "e") || str.Contains(text, "E"):
         endpos = -1
-        ret 0
+        ret 0 as i64
+    end
+    neg := _dbyte(s, i) == 45
+    mut ok := false
+    mut start := i
+    if neg: start = i + 1 end
+    v := _dpint(s, start, e, neg, ok)
+    if ok == false:
+        endpos = -1
+        ret 0 as i64
     end
     endpos = e
-    ret text.to_int() as i64
+    ret v
 end
 
 func _dguint(s: str, i: int, endpos &: int): u64:
-    v := _dgint(s, i, endpos)
-    if endpos < 0: ret 0 as u64 end
-    if v < 0:
+    e := _jnum(s, i)
+    if e < 0 || e == i:
         endpos = -1
         ret 0 as u64
     end
-    ret v as u64
+    text := s.substr(i, e - i)
+    if str.Contains(text, ".") || str.Contains(text, "e") || str.Contains(text, "E"):
+        endpos = -1
+        ret 0 as u64
+    end
+    if _dbyte(s, i) == 45:
+        endpos = -1
+        ret 0 as u64
+    end
+    mut ok := false
+    v := _dpuint(s, i, e, ok)
+    if ok == false:
+        endpos = -1
+        ret 0 as u64
+    end
+    endpos = e
+    ret v
 end
 
 func _dgflt(s: str, i: int, endpos &: int): f64:

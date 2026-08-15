@@ -14,6 +14,8 @@
 
 #include "core/prelude.h"
 #include "semantic/sema_internal.h"
+#include "semantic/sema_derive_core.h"
+#include "semantic/sema_derive_json.h"
 #include "semantic/sema_derive_str.h"
 #include "semantic/builtins.h"
 #include "semantic/dce.h"
@@ -269,6 +271,70 @@ static bool print_derived(sema_t *s, ast_node_t *call, size_t i, type_t *at)
     return true;
 }
 
+/*
+ * `jsonenc(v)` and `jsondec(text, from, out, err, errpos, strict)`: the two
+ * hooks std/encoding/json's generic Marshal and Unmarshal are written around.
+ *
+ * They are recognised by name here, the way `sizeof` is, rather than declared
+ * anywhere. By the time one is checked the wrapper has been monomorphised, so
+ * the type parameter is concrete and a codec can be derived for it
+ * (sema_derive_json.c). The call is then rewritten to name that codec and the
+ * rest of the pipeline sees an ordinary call.
+ *
+ * Reaching either from outside that module is an error: the generated bodies
+ * are checked inside its scope and call its private runtime layer, so there is
+ * nowhere else they would resolve.
+ */
+static type_t *check_json_builtin(sema_t *s, ast_node_t *n, bool enc)
+{
+    ast_node_t *callee = n->a;
+    size_t want = enc ? 1 : 6;
+    size_t ti = enc ? 0 : 2;
+    scope_t *home;
+    type_t *at;
+    const char *fn;
+    symbol_t *fsym;
+    func_sig_t *sig;
+    size_t i = 0;
+
+    if (n->list.len != want) {
+        SERR(s, 12, &n->span, "'%s' takes %zu argument%s", enc ? "jsonenc" : "jsondec",
+             want, want == 1 ? "" : "s");
+        return decorate(s, n, ty(s, enc ? TY_STR : TY_I32));
+    }
+    at = NULL;
+    for (; i < n->list.len; i++) {
+        type_t *t = sema_check_expr(s, (ast_node_t *)n->list.data[i]);
+        if (i == ti) at = t;
+    }
+
+    home = derive_home_of(s->cur, enc ? "_dqs" : "_dgstr");
+    if (!home) {
+        SERR(s, 12, &n->span,
+             "'%s' is internal to std/encoding/json; use json.%s instead",
+             enc ? "jsonenc" : "jsondec", enc ? "Marshal" : "Unmarshal");
+        return decorate(s, n, ty(s, enc ? TY_STR : TY_I32));
+    }
+
+    fn = enc ? sema_derive_json_enc(s, at, home, &n->span)
+             : sema_derive_json_dec(s, at, home, &n->span);
+    if (!fn) {
+        SERR(s, 2, &n->span, "cannot %s a value of type '%s' as JSON",
+             enc ? "encode" : "decode", at ? type_to_string(s->tc, at) : "?");
+        return decorate(s, n, ty(s, enc ? TY_STR : TY_I32));
+    }
+
+    callee->name = fn;
+    callee->synthetic = true;
+    decorate(s, callee, ty(s, TY_VOID));
+    fsym = scope_lookup_local(s->global, fn);
+    sig = (fsym && fsym->overloads.len > 0) ? (func_sig_t *)fsym->overloads.data[0] : NULL;
+    if (fsym) fsym->used = true;
+    dce_mark_root(s->pkg, fn);
+    mark_ref_args(s, n, sig);
+    return decorate(s, n, sig && sig->ret ? sig->ret : ty(s, enc ? TY_STR : TY_I32));
+}
+
 type_t *check_call(sema_t *s, ast_node_t *n)
 {
     ast_node_t *callee = n->a;
@@ -331,6 +397,10 @@ type_t *check_call(sema_t *s, ast_node_t *n)
         decorate(s, callee, ty(s, TY_VOID));
         return decorate(s, n, ty(s, TY_SIZE));
     }
+
+    if (callee && callee->kind == AST_IDENTIFIER &&
+        (strcmp(callee->name, "jsonenc") == 0 || strcmp(callee->name, "jsondec") == 0))
+        return check_json_builtin(s, n, strcmp(callee->name, "jsonenc") == 0);
 
     vec_t argtypes;
     vec_init(&argtypes);

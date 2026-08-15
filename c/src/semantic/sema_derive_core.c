@@ -123,12 +123,54 @@ void derive_set_decl(derived_t *ent, ast_node_t *fn)
     ent->decl = fn;
 }
 
+const char *derive_pkg_name_of(sema_t *s, scope_t *scope)
+{
+    size_t i = 0;
+    if (!scope || !s->global) return NULL;
+    for (; i < s->global->symbols.len; i++) {
+        symbol_t *pk = (symbol_t *)s->global->symbols.data[i];
+        if (pk->kind != SYM_PACKAGE || pk->members != scope) continue;
+        return pk->pkgname ? pk->pkgname : pk->name;
+    }
+    return NULL;
+}
+
 scope_t *derive_home_of(scope_t *from, const char *probe)
 {
     scope_t *sc = from;
     for (; sc; sc = sc->parent)
         if (scope_lookup_local(sc, probe)) return sc;
     return NULL;
+}
+
+/*
+ * A derived body has to see two things at once: the program's own
+ * declarations (the struct being encoded) and the runtime layer of the module
+ * the codec belongs to (its private _d* helpers). Those live in separate
+ * scope trees - a package is analysed on its own and merged in as a symbol,
+ * so its scope's ancestors are its own globals, not the program's.
+ *
+ * The bridge is a scope holding the module's symbols with the program's
+ * global scope as its parent, so a lookup finds the helper first and the
+ * user's types straight after. One per module per run.
+ */
+static scope_t *bridge_for(sema_t *s, scope_t *home)
+{
+    static scope_t *cached_home;
+    static scope_t *cached_bridge;
+    static scope_t *cached_global;
+    scope_t *sc;
+    size_t i = 0;
+
+    if (cached_home == home && cached_global == s->global) return cached_bridge;
+    sc = scope_new(s->a, SCOPE_BLOCK, s->global);
+    sc->label = "<derive>";
+    for (; i < home->symbols.len; i++)
+        scope_define(s->a, sc, (symbol_t *)home->symbols.data[i]);
+    cached_home = home;
+    cached_global = s->global;
+    cached_bridge = sc;
+    return sc;
 }
 
 static ast_node_t *parse_derived(sema_t *s, const char *text, const char *fname)
@@ -152,11 +194,12 @@ static ast_node_t *parse_derived(sema_t *s, const char *text, const char *fname)
  * analysed: AST into the program list, symbol into the global scope,
  * declaration onto the pending queue so its body is checked with everything
  * else instantiation produces. */
-static void install_fn(sema_t *s, ast_node_t *fn, scope_t *home)
+static void install_fn(sema_t *s, ast_node_t *fn, scope_t *home, const char *pkg)
 {
     symbol_t *fsym;
     fn->synthetic = true;
     fn->origin_lang = "en";
+    fn->home_pkg = pkg;
     vec_push(s->a, &s->program->list, fn);
     fsym = get_or_make_func(s, s->global, fn->name, SYM_FUNC);
     if (home)
@@ -179,20 +222,27 @@ ast_node_t *derive_install_source(sema_t *s, const char *text, const char *want,
     const char *save_lang = s->lang;
     ast_node_t *found = NULL;
 
-    if (derive_dump_enabled()) fprintf(stderr, "--- derived ---\n%s\n", text);
+    if (derive_dump_enabled()) {
+        const char *pk = derive_pkg_name_of(s, home);
+        fprintf(stderr, "--- derived (home pkg: %s) ---\n%s\n", pk ? pk : "(none)", text);
+    }
 
     prog = parse_derived(s, text, "<derived>");
     if (!prog) return NULL;
 
-    s->cur = home ? home : s->global;
-    s->lang = "en";
     {
-        size_t i = 0;
-        for (; i < prog->list.len; i++) {
-            ast_node_t *d = (ast_node_t *)prog->list.data[i];
-            if (d->kind != AST_FUNC_DEF || !d->name) continue;
-            install_fn(s, d, home);
-            if (strcmp(d->name, want) == 0) found = d;
+        const char *pkg = derive_pkg_name_of(s, home);
+        if (home) home = bridge_for(s, home);
+        s->cur = home ? home : s->global;
+        s->lang = "en";
+        {
+            size_t i = 0;
+            for (; i < prog->list.len; i++) {
+                ast_node_t *d = (ast_node_t *)prog->list.data[i];
+                if (d->kind != AST_FUNC_DEF || !d->name) continue;
+                install_fn(s, d, home, pkg);
+                if (strcmp(d->name, want) == 0) found = d;
+            }
         }
     }
     s->cur = save_cur;

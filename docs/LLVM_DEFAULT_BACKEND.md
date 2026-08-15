@@ -76,7 +76,7 @@ lowering from surface syntax down to them was absent.
   New `ll_call_file()`, mirroring the C backend's `call_file()`.
 - **`str.split`** - 51 errors. Returns `Vector<str>`, built as
   `{ ptr, i32, i32 }` matching `std/collections/vector.salam`.
-- **Built-in functions** - 150 errors: `char_code`, `funcptr`, `spawn`,
+- **Built-in functions** - 150 errors: `char_code`, `spawn`,
   `listdir`, `args`, `input`, `lang`, `callhandler`, plus a generic fallback
   through `salam_builtin_lookup()` so the shared `k_builtins` table
   (`join` -> `salam_thread_join`, `strcmp`) reaches both backends from one
@@ -488,7 +488,7 @@ of scope. 20-line repro:
 
 ```salam
 repeat bases.len() with bi:
-    entries := os.ListDir(bases.get(bi)[0])
+    entries := os.ListDir(bases.get(bi))
     defer entries.free()          // <- epilogue cannot see `entries`
     ...
 end
@@ -503,13 +503,13 @@ is a language-semantics change with stdlib-wide blast radius and wants its
 own change with tests. `std/llvm/linker.salam` was rewritten to free
 explicitly instead, with a comment pointing here.
 
-### 2. `funcptr()` on an extern mangled the symbol (fixed)
+### 2. Taking an extern's address mangled the symbol (fixed)
 
-`funcptr(printf)` in `std/llvm/orc.salam` emitted
+Reading `printf` as a value in `std/llvm/orc.salam` emitted
 `_Salam_llvm_printf_str` - a name that exists nowhere - because the C
 backend mangled unconditionally when it resolved the symbol. An extern keeps
 its declared C name. Fixed in `codegen_call.c` and `compiler/codegen.salam`.
-The LLVM backend's own `funcptr` lowering, written in this pass, already had
+The LLVM backend's own address lowering, written in this pass, already had
 the extern check.
 
 ## Parity: the self-hosted compiler
@@ -537,7 +537,7 @@ Zero differing files. The self-hosted compiler also passes 73/73 on
 | `ll_call_file`                                                                              | `call_file`                                |
 | `ll_call_vec_str` (split/args/listdir)                                                      | `call_vec_str`                             |
 | `ll_pkg_value`                                                                              | `pkg_value`                                |
-| built-ins (`char_code`, `funcptr`, `spawn`, `input`, `lang`, `callhandler`, table fallback) | same, in `call_intrinsic`                  |
+| built-ins (`char_code`, `spawn`, `input`, `lang`, `callhandler`, table fallback)             | same, in `call_intrinsic`                  |
 | `ll_sym_qualified` mangled-name scan                                                        | `sym_qualified` + `scan_mangled`           |
 | `ll_call_user` package/function preference                                                  | `call_user`                                |
 | func-typed struct field -> indirect call                                                    | `call_method`                              |

@@ -54,6 +54,21 @@ typedef struct {
     scope_t *prelude;
     bool prelude_tried;
     bool in_pkg;
+    /* Set while the pending-instantiation loop is running. A generic body is
+     * a clone of a template from whatever package declared it, re-checked
+     * against the *instantiating* package's globals - so its locals are not
+     * something the programmer of this package wrote, and must not be held to
+     * this package's name-collision rule. Without this, a local named `out`
+     * in std/collections' Vector.remove_at reported a collision in every
+     * package that happened to declare a function called `out`. */
+    bool in_generic_inst;
+    /* Stringify functions derived for `println <aggregate>`: derived_t*, see
+     * sema_derive_str.c. Shared across every package this run analyses; each
+     * entry names the scope it was installed in. */
+    vec_t derived;
+    /* Set while one of those bodies is being checked. It reads every field of
+     * the struct it prints, private ones included. */
+    bool in_derive;
     bool relax_unused;
     bool requal;
     int each_n;
@@ -192,6 +207,8 @@ bool defined_within(scope_t *start, scope_t *boundary, const char *name);
 void record_capture(sema_t *s, ast_node_t *id, type_t *t);
 
 void sema_check_block(sema_t *s, ast_node_t *block);
+
+bool sema_check_unused_loop_bind(sema_t *s, symbol_t *v);
 
 bool sema_stmt_terminates(sema_t *s, ast_node_t *node);
 

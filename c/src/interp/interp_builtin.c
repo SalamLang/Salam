@@ -304,6 +304,17 @@ value_t call_builtin_method(interp_t *I, ast_node_t *call, value_t recv,
             if (i < 0 || (size_t)i >= a->len)
                 rt_error(I, call, "vector index %lld out of range (len %zu)",
                          (long long)i, a->len);
+            return a->data[i];
+        }
+        /* The address form. There are no addresses in the tree walker, so it
+         * is the same one-element box get used to return: v.ref(i)[0] reads
+         * the element, and a write through it lands in the box, exactly as
+         * v.get(i)[0] = x always did here. */
+        if (!strcmp(method, "ref")) {
+            int64_t i = to_int(a0);
+            if (i < 0 || (size_t)i >= a->len)
+                rt_error(I, call, "vector index %lld out of range (len %zu)",
+                         (long long)i, a->len);
 
             sarray_t *box = array_new(I, 1);
             array_push(I, box, a->data[i]);

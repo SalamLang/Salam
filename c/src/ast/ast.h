@@ -104,7 +104,7 @@ struct ast_node {
     /* Set on an AST_IDENTIFIER that names a free function and is being read as
      * a value rather than called. Sema types it i64 (the handler-slot ABI that
      * std/net/router and friends take) and every backend lowers it to the
-     * function's address. This is what `funcptr(f)` used to spell. */
+     * function's address. */
     bool func_value;
     bool is_inline;
     bool is_noinline;
@@ -114,6 +114,10 @@ struct ast_node {
     bool is_slice;
     bool is_prefix;
     bool match_is_expr;
+    /* Set on the synthetic AST_VAR_DECLs an `each` lowers its key/value
+     * bindings to, so the unused-variable check can tell a loop binding from
+     * an ordinary local and apply the stricter rule. */
+    bool loop_bind;
     ast_node_t *type;
     ast_node_t *a, *b, *c, *d;
     vec_t list;

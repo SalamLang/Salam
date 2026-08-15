@@ -1089,6 +1089,7 @@ sema_result_t *sema_run_cached(arena_t *a, logger_t *log, ast_node_t *program,
     }
     vec_init(&s.loading);
     vec_init(&s.pending);
+    vec_init(&s.derived);
     LOG_I(log, PH_SEMANTIC, "analyzing %zu top-level definitions", program->list.len);
     load_imports(&s, program);
     if (!s.pkg || strcmp(s.pkg, "core") != 0) {

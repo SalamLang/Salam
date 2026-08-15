@@ -400,7 +400,7 @@ static type_t *check_member(sema_t *s, ast_node_t *n)
         SERR(s, 17, &n->span, "method '%s' used as a value (call it)", n->name);
         return decorate(s, n, err_ty(s));
     }
-    if (!f->is_pub && struct_sym_of(s->self_type) != ssym)
+    if (!f->is_pub && struct_sym_of(s->self_type) != ssym && !s->in_derive)
         SERR(s, 17, &n->span, "field '%s' is private in struct '%s' (mark it 'pub')",
              n->name, ssym->name);
     return decorate(s, n, f->type);
@@ -470,8 +470,12 @@ type_t *sema_check_expr(sema_t *s, ast_node_t *n)
         }
         if (!sym) {
             bool is_str;
-            if (salam_builtin_global_const(n->name, n, &is_str))
-                return decorate(s, n, is_str ? ty(s, TY_STR) : ty(s, TY_I32));
+            /* The node has been rewritten into a literal in place, so the
+             * literal arm above types it - a -d constant then gets exactly
+             * the type the same text written in the source would have,
+             * f64 and bool included. */
+            if (salam_builtin_global_const(s->a, n->name, n, &is_str))
+                return sema_check_expr(s, n);
         }
         if (!sym) {
             SERR(s, 1, &n->span, "unknown identifier '%s'", n->name);
@@ -483,10 +487,9 @@ type_t *sema_check_expr(sema_t *s, ast_node_t *n)
         }
         /*
          * A free function read as a value decays to its address, typed i64 -
-         * the handler-slot ABI std/net/router and friends take. This is what
-         * `funcptr(f)` used to spell; the wrapper is gone and the bare name
-         * carries the meaning. `&f` still exists and still yields a void*,
-         * for the C-callback casts in std/webview.
+         * the handler-slot ABI std/net/router and friends take. `&f` is the
+         * other spelling and still yields a void*, for the C-callback casts
+         * in std/webview.
          */
         if (sym->kind == SYM_FUNC) {
             if (!func_addr_target_ok(s, sym, n)) return decorate(s, n, err_ty(s));

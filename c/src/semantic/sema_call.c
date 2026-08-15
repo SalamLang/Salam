@@ -14,6 +14,7 @@
 
 #include "core/prelude.h"
 #include "semantic/sema_internal.h"
+#include "semantic/sema_derive_str.h"
 #include "semantic/builtins.h"
 #include "semantic/dce.h"
 
@@ -243,6 +244,31 @@ static void dce_note(sema_t *s, const char *callee_pkg, const char *callee_fn)
     dce_note_call(s->pkg, s->cur_func->decl->name, callee_pkg, callee_fn);
 }
 
+/*
+ * Replace print argument `i` with a call to a stringify function derived for
+ * its type, so `println p` becomes `println _strof_Point(p)` and the rest of
+ * the pipeline sees an ordinary str. False when the type has no derivable
+ * form; the caller then reports "cannot print".
+ */
+static bool print_derived(sema_t *s, ast_node_t *call, size_t i, type_t *at)
+{
+    if (i >= call->list.len) return false;
+    ast_node_t *arg = (ast_node_t *)call->list.data[i];
+    if (!arg) return false;
+    const char *fn = sema_derive_stringify(s, at, &arg->span);
+    if (!fn) return false;
+    ast_node_t *wrap = ast_new(s->a, AST_CALL, &arg->span);
+    ast_node_t *callee = ast_new(s->a, AST_IDENTIFIER, &arg->span);
+    wrap->synthetic = true;
+    callee->synthetic = true;
+    callee->name = fn;
+    wrap->a = callee;
+    ast_add(s->a, wrap, arg);
+    decorate(s, wrap, ty(s, TY_STR));
+    call->list.data[i] = wrap;
+    return true;
+}
+
 type_t *check_call(sema_t *s, ast_node_t *n)
 {
     ast_node_t *callee = n->a;
@@ -387,6 +413,11 @@ type_t *check_call(sema_t *s, ast_node_t *n)
                              "cannot print a value of type 'void' - this expression "
                              "produces no value");
                         break;
+                    /* An aggregate has no printf spelling, so it is turned
+                     * into one: a stringify function derived for its type
+                     * takes the argument's place. Only what that pass cannot
+                     * render - a file handle, a closure - still has to be
+                     * taken apart by hand. */
                     case TY_ARRAY:
                     case TY_STRUCT:
                     case TY_MAP:
@@ -396,16 +427,18 @@ type_t *check_call(sema_t *s, ast_node_t *n)
                     case TY_FUNC:
                     case TY_SLICE:
                     case TY_VARIANT:
-                        SERR(s, 2, &n->span,
-                             "cannot print value of type '%s' directly - print its "
-                             "elements or fields instead",
-                             type_to_string(s->tc, at));
+                        if (!print_derived(s, n, i, at))
+                            SERR(s, 2, &n->span,
+                                 "cannot print value of type '%s' directly - print its "
+                                 "elements or fields instead",
+                                 type_to_string(s->tc, at));
                         break;
-                    /* `xs.get(i)` hands back a pointer into the vector, so
-                     * `println xs.get(i)` used to reach the C backend as
+                    /* Printing any pointer used to reach the C backend as
                      * printf("%d", (int)ptr): a truncated address printed as
                      * a number, plus a cast warning in code the user never
-                     * wrote. */
+                     * wrote. `xs.get(i)` is a value now, so what lands here is
+                     * a real pointer - `xs.ref(i)` or a `T*` of the user's
+                     * own - and '[0]' is still the way to print its target. */
                     case TY_PTR:
                         if (at->pointee && at->pointee->kind != TY_VOID)
                             SERR(s, 2, &n->span,
@@ -660,6 +693,14 @@ type_t *check_call(sema_t *s, ast_node_t *n)
             }
             if (!strcmp(m, "get")) {
                 if (argtypes.len != 1) SERR(s, 12, &n->span, "get(index) takes 1 arg");
+                return decorate(s, n, E);
+            }
+            /* The address of the slot, which get used to hand back. Kept for
+             * writing one field of a struct element in place and for passing a
+             * stored element to something that takes a pointer; the collections
+             * Vector spells it the same way. */
+            if (!strcmp(m, "ref")) {
+                if (argtypes.len != 1) SERR(s, 12, &n->span, "ref(index) takes 1 arg");
                 return decorate(s, n, type_ptr(s->tc, E));
             }
             if (!strcmp(m, "set")) {

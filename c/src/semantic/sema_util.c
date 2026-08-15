@@ -107,6 +107,7 @@ static const intrinsic_name_t k_intrinsic_methods[] = {
     {"بیفزا", "أضف", "push"},
     {"دربیاور", "أخرج", "pop"},
     {"بگیر", "احصل", "get"},
+    {"ارجاع", "مرجع", "ref"},
     {"بنشان", "عين", "set"},
     {"طول", "طول", "len"},
     {"ظرفیت", "سعة", "cap"},
@@ -289,8 +290,8 @@ ast_node_t *sema_pure_fn(sema_t *s)
 void sema_check_shadows_func(sema_t *s, const char *name, const src_span_t *span)
 {
     symbol_t *f;
-    if (!name || !name[0]) return;
+    if (!name || !name[0] || s->in_generic_inst) return;
     f = scope_lookup_local(s->global, name);
     if (f && f->kind == SYM_FUNC)
-        SERR(s, 89, span, "'%s' is already the name of a function in this file", name);
+        SERR(s, 90, span, "'%s' is already the name of a function in this file", name);
 }

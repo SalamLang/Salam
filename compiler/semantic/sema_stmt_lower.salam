@@ -20,6 +20,7 @@ func define_local(s &: Sema, a &: at.Ast, did: int, kind: int, t: int):
     mut sv := sym_at(s, symid)
     sv.ty = t
     sv.is_mut = d.is_mut
+    sv.loop_bind = d.loop_bind
     sv.decl = did
     sym_put(s, symid, sv)
     sema_check_shadows_func(s, d.name, span_of(a, did))
@@ -28,6 +29,32 @@ func define_local(s &: Sema, a &: at.Ast, did: int, kind: int, t: int):
             s, 1, span_of(a, did), co.Format1(i18.Tr("redefinition of '%s'"), co.ArgStr(d.name))
         )
     end
+end
+
+// sema_check_unused_loop_bind - E059 for a name the loop itself introduced.
+// A loop binding exists to be read; when nothing reads it the honest fix is
+// to drop it (`repeat 20000:` rather than `repeat 20000 with _i:`), so the
+// '_' prefix that excuses an ordinary local does not apply here. The one
+// exception is the bare name "_": `each (key, value)` has no form that omits
+// the key, so "_" is the discard that lets a map be iterated for its values
+// alone.
+//
+// Returns true when the symbol was a loop binding, reported or not, so the
+// caller can skip the ordinary rules for it.
+func check_unused_loop_bind(s &: Sema, a &: at.Ast, v &: Symbol): bool:
+    if !v.loop_bind || v.kind != SYM_VAR || v.decl == 0 || str.Len(v.name) == 0:
+        ret false
+    end
+    if v.used || str.Equals(v.name, "_"):
+        ret true
+    end
+    serr(
+        s, 59, span_of(a, v.decl), co.Format1(
+            i18.Tr("unused loop variable '%s': drop the binding, or name it '_' where the loop needs one"),
+            co.ArgStr(v.name)
+        )
+    )
+    ret true
 end
 
 // ea_node .. ea_binary - synthetic-node builders for the `each` lowering.
@@ -63,6 +90,18 @@ func ea_decl(
     nv.name = name
     nv.a = init
     nv.is_mut = is_mut
+    at.Put(a, id, nv)
+    ret id
+end
+
+// The same, for the two bindings the user actually wrote after `each`: they
+// carry loop_bind so the unused check holds them to the loop rule rather
+// than the ordinary-local one. The `__ea`/`__ei` decls around them are the
+// lowering's own and stay unmarked.
+func ea_bind(a &: at.Ast, name: str, init: int, sp: co.SrcSpan): int:
+    id := ea_decl(a, name, init, false, sp)
+    mut nv := at.Get(a, id)
+    nv.loop_bind = true
     at.Put(a, id, nv)
     ret id
 end
@@ -204,13 +243,13 @@ func check_each(s &: Sema, a &: at.Ast, nid: int):
         fv.c = post
         blk := ea_node(a, at.AST_BLOCK, sp)
         at.AddChild(
-            a, blk, ea_decl(
-                a, keyname, ea_mcall(a, itn, "key", 0, sp), false, have_key ? span_of(a, n0.c) : sp
+            a, blk, ea_bind(
+                a, keyname, ea_mcall(a, itn, "key", 0, sp), have_key ? span_of(a, n0.c) : sp
             )
         )
         at.AddChild(
-            a, blk, ea_decl(
-                a, valname, ea_mcall(a, itn, "value", 0, sp), false, sp
+            a, blk, ea_bind(
+                a, valname, ea_mcall(a, itn, "value", 0, sp), sp
             )
         )
         repeat at.ChildCount(a, body) with bi:
@@ -249,20 +288,18 @@ func check_each(s &: Sema, a &: at.Ast, nid: int):
     blk2 := ea_node(a, at.AST_BLOCK, sp)
     if have_key:
         at.AddChild(
-            a, blk2, ea_decl(
-                a, keyname, ea_ident(a, idx, sp), false, span_of(a, n0.c)
+            a, blk2, ea_bind(
+                a, keyname, ea_ident(a, idx, sp), span_of(a, n0.c)
             )
         )
     end
     mut elem := 0
     if vec_like:
-        elem = ea_index(
-            a, ea_mcall(a, seq, "get", ea_ident(a, idx, sp), sp), ea_int(a, 0 as u64, sp), sp
-        )
+        elem = ea_mcall(a, seq, "get", ea_ident(a, idx, sp), sp)
     else:
         elem = ea_index(a, ea_ident(a, seq, sp), ea_ident(a, idx, sp), sp)
     end
-    at.AddChild(a, blk2, ea_decl(a, valname, elem, false, sp))
+    at.AddChild(a, blk2, ea_bind(a, valname, elem, sp))
     repeat at.ChildCount(a, body) with bi2:
         at.AddChild(a, blk2, at.Child(a, body, bi2))
     end
@@ -602,13 +639,15 @@ func check_stmt(s &: Sema, a &: at.Ast, nid: int):
         ivty := sema_ty(s, iv_need64 ? TY_I64 : TY_I32)
         _dt := sema_decorate(s, a, nid, ivty)
         saved5 := s.cur
+        mut iv5 := 0
         if str.Len(n5.name) > 0:
             sc5 := scope_new(s, SCOPE_BLOCK, s.cur)
-            iv5 := symbol_new(s, SYM_VAR, n5.name)
+            iv5 = symbol_new(s, SYM_VAR, n5.name)
             mut ivv := sym_at(s, iv5)
             ivv.ty = ivty
             ivv.is_mut = false
             ivv.decl = nid
+            ivv.loop_bind = true
             sym_put(s, iv5, ivv)
             _sd := scope_define(s, sc5, iv5)
             s.cur = sc5
@@ -616,6 +655,13 @@ func check_stmt(s &: Sema, a &: at.Ast, nid: int):
         s.loop_depth += 1
         check_stmt(s, a, n5.b)
         s.loop_depth -= 1
+        // The index lives in a scope of its own, which sema_check_block never
+        // walks - so the unused check has to happen here, once the body has
+        // had its chance to read it.
+        if iv5 != 0 && !s.relax_unused:
+            mut ivv2 := sym_at(s, iv5)
+            _lb := check_unused_loop_bind(s, a, ivv2)
+        end
         s.cur = saved5
         ret
     end
@@ -835,9 +881,11 @@ func sema_check_block(s &: Sema, a &: at.Ast, block: int):
 
     scv := scope_at(s, sc)
     repeat scv.symbols.len() with si:
-        v := sym_at(s, scv.symbols.get(si)[0])
+        v := sym_at(s, scv.symbols.get(si))
         if s.relax_unused:
             _skip := 0
+        else check_unused_loop_bind(s, a, v):
+            _skip2 := 0 // reported (or excused) as a loop binding
         else v.kind == SYM_VAR && !v.used && v.decl != 0 && str.Len(v.name) > 0 && byte_at(v.name, 0) != 95:
             serr(
                 s, 59, span_of(a, v.decl), co.Format1(

@@ -291,16 +291,61 @@ void sema_collect(sema_t *s, ast_node_t *program)
                     SERR(s, 58, &d->span, "empty enum '%s' (declare at least one member)",
                          d->name);
                 symbol_t *sym = scope_lookup_local(s->global, d->name);
+                /*
+                 * The first member with an initializer fixes this enum's
+                 * backing kind (TV_INT if none has one, preserving the
+                 * default 0/1/2... auto-increment). Every later member's
+                 * initializer, if any, must agree with it - an enum is
+                 * either all-int, all-string, or all-float, never mixed.
+                 */
+                token_value_kind_t backing = TV_INT;
+                {
+                    size_t j = 0;
+                    for (; j < d->list.len; j++) {
+                        ast_node_t *m = (ast_node_t *)d->list.data[j];
+                        if (m->a && m->a->kind == AST_LITERAL) {
+                            backing = m->a->value.kind;
+                            break;
+                        }
+                    }
+                }
+                sym->enum_val_kind = backing;
                 long long next = 0;
                 {
                     size_t j = 0;
                     for (; j < d->list.len; j++) {
                         ast_node_t *m = (ast_node_t *)d->list.data[j];
                         symbol_t *em = symbol_new(s->a, SYM_ENUM_MEMBER, m->name);
-                        if (m->a && m->a->kind == AST_LITERAL &&
-                            m->a->value.kind == TV_INT)
-                            next = (long long)m->a->value.as.i;
-                        em->enum_value = next++;
+                        em->enum_val_kind = backing;
+                        if (m->a && m->a->kind == AST_LITERAL) {
+                            if (m->a->value.kind != backing) {
+                                SERR(s, 91, &m->span,
+                                     "enum '%s' is %s-backed; member '%s' cannot use a "
+                                     "%s value",
+                                     d->name, tv_kind_name(backing), m->name,
+                                     tv_kind_name(m->a->value.kind));
+                            } else
+                                switch (backing) {
+                                case TV_INT:
+                                    next = (long long)m->a->value.as.i;
+                                    break;
+                                case TV_FLOAT:
+                                    em->enum_value_f = m->a->value.as.f;
+                                    break;
+                                case TV_STRING:
+                                    em->enum_value_str =
+                                        arena_strdup(s->a, m->a->value.as.s);
+                                    break;
+                                default:
+                                    break;
+                                }
+                        } else if (backing != TV_INT) {
+                            SERR(s, 92, &m->span,
+                                 "member '%s' of %s-backed enum '%s' needs an explicit "
+                                 "value",
+                                 m->name, tv_kind_name(backing), d->name);
+                        }
+                        if (backing == TV_INT) em->enum_value = next++;
                         em->type = sym->type;
                         if (scope_define(s->a, sym->members, em))
                             SERR(s, 1, &m->span, "duplicate enum member '%s'", m->name);

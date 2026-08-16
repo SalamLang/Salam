@@ -1,0 +1,196 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Jalali (Persian / Solar Hijri) calendar <-> JDN.
+//
+// This ports the algorithm behind the `jalaali-js` library, itself based
+// on Kazimierz M. Borkowski's astronomical algorithm ("A New Algorithm
+// for Converting from the Christian Era to the Jalali Calendar", 1984),
+// which is what the *official* calendar of Iran is defined by - not the
+// simpler "33-year cycle" tabular approximation some older tools (e.g.
+// FarsiWeb's jalali.c, which jdatetime and various PHP jdate() ports use).
+// The two agree for every day from 1800-01-01 to 2256-01-01 CE (checked
+// exhaustively); they can differ by a single day outside that range,
+// because the 33-year rule is only an approximation of the true solar
+// year. Valid for Jalali years -61 to 3177 (the `_JALALI_BREAKS` table).
+package calendar
+
+// Years (in the Jalali calendar) at which the leap-year pattern's 33-year
+// cycle resets, per Borkowski's table.
+const _JALALI_BREAKS := [
+    -61 as i64, 9 as i64, 38 as i64, 199 as i64, 426 as i64, 686 as i64, 756 as i64, 818 as i64
+    1111 as i64, 1181 as i64, 1210 as i64, 1635 as i64, 2060 as i64, 2097 as i64, 2192 as i64
+    2262 as i64, 2324 as i64, 2394 as i64, 2456 as i64, 3178 as i64
+] as i64[20]
+
+const _JALALI_BREAKS_LEN := 20
+
+@en "JalCalResult"
+@fa "نتیجه محاسبه سال جلالی"
+@ar "نتیجة حساب السنة الجلالیة"
+struct _JalCalResult:
+    leap: i64 = 0
+    gy: i64 = 0
+    march: i64 = 0
+end
+
+// Determines, for Jalali year `jy`: whether it is a leap year (`leap`,
+// counted 0..4 - it is leap exactly when `leap == 0`), the Gregorian year
+// its Farvardin 1st falls in (`gy`), and the Gregorian day-of-March that
+// Farvardin 1st lands on (`march`).
+func _jalCal(jy: i64): _JalCalResult:
+    gy := jy + 621
+    mut leapJ := 0 - 14
+    mut jp := _JALALI_BREAKS[0]
+    mut jump := 0 as i64
+    mut i := 1
+    until i < _JALALI_BREAKS_LEN:
+        jm := _JALALI_BREAKS[i]
+        jump = jm - jp
+        if jy < jm: break end
+        leapJ = leapJ + _fdiv(jump, 33) * 8 + _fdiv(_fmod(jump, 33), 4)
+        jp = jm
+        i += 1
+    end
+    mut n := jy - jp
+    leapJ = leapJ + _fdiv(n, 33) * 8 + _fdiv(_fmod(n, 33) + 3, 4)
+    if _fmod(jump, 33) == 4 && jump - n == 4:
+        leapJ += 1
+    end
+    leapG := _fdiv(gy, 4) - _fdiv((_fdiv(gy, 100) + 1) * 3, 4) - 150
+    march := 20 + leapJ - leapG
+    if jump - n < 6:
+        n = n - jump + _fdiv(jump + 4, 33) * 33
+    end
+    mut leap := _fmod(_fmod(n + 1, 33) - 1, 4)
+    if leap == 0 - 1: leap = 4 end
+    ret _JalCalResult { leap = leap, gy = gy, march = march }
+end
+
+@en "JalaliToJDN"
+@fa "جلالی به روز ژولیانی"
+@ar "الجلالیة إلى الیوم الجولیانی"
+pub func JalaliToJDN(d: JalaliDate): i64:
+    jy := d.year as i64
+    jm := d.month as i64
+    jd := d.day as i64
+    r := _jalCal(jy)
+    base := GregorianToJDN(GregorianDate { year = r.gy as int, month = 3, day = r.march as int })
+    ret base + (jm - 1) * 31 - _fdiv(jm, 7) * (jm - 7) + jd - 1
+end
+
+@en "JDNToJalali"
+@fa "روز ژولیانی به جلالی"
+@ar "الیوم الجولیانی إلى الجلالیة"
+pub func JDNToJalali(jdn: i64): JalaliDate:
+    g := JDNToGregorian(jdn)
+    mut jy := (g.year as i64) - 621
+    mut r := _jalCal(jy)
+    jdn1f := GregorianToJDN(GregorianDate { year = g.year, month = 3, day = r.march as int })
+    mut k := jdn - jdn1f
+    if k >= 0:
+        if k <= 185:
+            ret JalaliDate { year = jy as int, month = (1 + _fdiv(k, 31)) as int, day = (_fmod(k, 31) + 1) as int }
+        end
+        k -= 186
+    else:
+        jy -= 1
+        k += 179
+        if r.leap == 1: k += 1 end
+    end
+    jm := 7 + _fdiv(k, 30)
+    jd := _fmod(k, 30) + 1
+    ret JalaliDate { year = jy as int, month = jm as int, day = jd as int }
+end
+
+@en "IsLeapJalali"
+@fa "سال کبیسه جلالی"
+@ar "سنة کبیسة جلالیة"
+pub func IsLeapJalali(year: int): bool:
+    ret _jalCal(year as i64).leap == 0
+end
+
+const _JALALI_MONTH_DAYS := [
+    31 as int, 31 as int, 31 as int, 31 as int, 31 as int, 31 as int
+    30 as int, 30 as int, 30 as int, 30 as int, 30 as int, 29 as int
+] as int[12]
+
+@en "DaysInJalaliMonth"
+@fa "روزهای ماه جلالی"
+@ar "أیام الشهر الجلالی"
+pub func DaysInJalaliMonth(year: int, month: int): int:
+    if month == 12 && IsLeapJalali(year): ret 30 end
+    ret _JALALI_MONTH_DAYS[month - 1]
+end
+
+@en "IsValidJalaliDate"
+@fa "تاریخ جلالی معتبر است"
+@ar "التاریخ الجلالی صالح"
+pub func IsValidJalaliDate(year: int, month: int, day: int): bool:
+    if month < 1 || month > 12: ret false end
+    if day < 1: ret false end
+    ret day <= DaysInJalaliMonth(year, month)
+end
+
+const _JALALI_MONTH_NAMES_FA := [
+    "فروردین" as str, "اردیبهشت" as str, "خرداد" as str, "تیر" as str
+    "مرداد" as str, "شهریور" as str, "مهر" as str, "آبان" as str
+    "آذر" as str, "دی" as str, "بهمن" as str, "اسفند" as str
+] as str[12]
+
+const _JALALI_MONTH_NAMES_EN := [
+    "Farvardin" as str, "Ordibehesht" as str, "Khordad" as str, "Tir" as str
+    "Mordad" as str, "Shahrivar" as str, "Mehr" as str, "Aban" as str
+    "Azar" as str, "Dey" as str, "Bahman" as str, "Esfand" as str
+] as str[12]
+
+@en "JalaliMonthNameFa"
+@fa "نام ماه جلالی"
+@ar "اسم الشهر الجلالی"
+pub func JalaliMonthNameFa(month: int): str: ret _JALALI_MONTH_NAMES_FA[month - 1] end
+
+@en "JalaliMonthNameEn"
+@fa "نام ماه جلالی به انگلیسی"
+@ar "اسم الشهر الجلالی بالإنجلیزیة"
+pub func JalaliMonthNameEn(month: int): str: ret _JALALI_MONTH_NAMES_EN[month - 1] end
+
+// Weekday of a JDN on the Persian week, where Saturday is day 0 (the
+// first day of the Iranian work week) through Friday as day 6.
+@en "JalaliWeekday"
+@fa "روز هفته جلالی"
+@ar "یوم الأسبوع الجلالی"
+pub inline pure func JalaliWeekday(jdn: i64): int:
+    ret _fmod(jdn + 2, 7) as int
+end
+
+const _JALALI_WEEKDAY_NAMES_FA := [
+    "شنبه" as str, "یکشنبه" as str, "دوشنبه" as str, "سه‌شنبه" as str
+    "چهارشنبه" as str, "پنجشنبه" as str, "جمعه" as str
+] as str[7]
+
+@en "JalaliWeekdayNameFa"
+@fa "نام روز هفته جلالی"
+@ar "اسم یوم الأسبوع الجلالی"
+pub func JalaliWeekdayNameFa(weekday: int): str: ret _JALALI_WEEKDAY_NAMES_FA[weekday] end
+
+@en "CompareJalali"
+@fa "مقایسه تاریخ جلالی"
+@ar "مقارنة التاریخ الجلالی"
+pub func CompareJalali(a: JalaliDate, b: JalaliDate): int:
+    da := JalaliToJDN(a)
+    db := JalaliToJDN(b)
+    if da < db: ret 0 - 1 end
+    if da > db: ret 1 end
+    ret 0
+end

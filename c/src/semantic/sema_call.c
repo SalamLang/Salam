@@ -316,12 +316,21 @@ static type_t *check_json_builtin(sema_t *s, ast_node_t *n, bool enc)
         return decorate(s, n, ty(s, enc ? TY_STR : TY_I32));
     }
 
-    fn = enc ? sema_derive_json_enc(s, at, home, &n->span)
-             : sema_derive_json_dec(s, at, home, &n->span);
-    if (!fn) {
-        SERR(s, 2, &n->span, "cannot %s a value of type '%s' as JSON",
-             enc ? "encode" : "decode", at ? type_to_string(s->tc, at) : "?");
-        return decorate(s, n, ty(s, enc ? TY_STR : TY_I32));
+    {
+        size_t before = s->diag->errors;
+        fn = enc ? sema_derive_json_enc(s, at, home, &n->span)
+                 : sema_derive_json_dec(s, at, home, &n->span);
+        if (!fn) {
+            /* The emitters name the member that has no JSON form, and point at
+             * it. This call's own span is inside the monomorphised wrapper, so
+             * it would point at std/encoding/json rather than at anything the
+             * programmer wrote - only worth printing when nothing better was
+             * said. */
+            if (s->diag->errors == before)
+                SERR(s, 2, &n->span, "cannot %s a value of type '%s' as JSON",
+                     enc ? "encode" : "decode", at ? type_to_string(s->tc, at) : "?");
+            return decorate(s, n, ty(s, enc ? TY_STR : TY_I32));
+        }
     }
 
     callee->name = fn;

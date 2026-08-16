@@ -42,8 +42,11 @@ const char *func_signature(cg_t *cg, ast_node_t *fn, symbol_t *owner, func_sig_t
     bool pkgmod = cg->pkg && strcmp(cg->pkg, "main") != 0;
     bool exported =
         (owner != NULL || fn->is_extern || fn->is_pub || pkgmod) && !is_instance;
-    bool inl =
-        fn->is_inline && !fn->is_extern && owner == NULL && (fn->is_pub || !pkgmod);
+    /* Struct methods take `inline` on the same terms as free functions: a pub
+       one is exported as a body in the header, a private one only stays inline
+       where nothing links against it. Generic instances are static inline
+       already, so is_instance covers those. */
+    bool inl = fn->is_inline && !fn->is_extern && (fn->is_pub || !pkgmod);
     sb_t b;
     sb_init(&b);
     if (is_instance || inl)

@@ -5,6 +5,103 @@ import at "../ast.salam"
 
 // ===== parser_decl.c =====
 
+// The modifier run in front of a definition, shared by top level and struct
+// bodies. `any` records whether anything func-only was seen, which is what
+// makes 'inline on a field' an error rather than a silent no-op.
+struct FnMods:
+    pub is_pub: bool = false
+    pub is_deprecated: bool = false
+    pub is_inline: bool = false
+    pub is_noinline: bool = false
+    pub is_pure: bool = false
+    pub is_noret: bool = false
+    pub any: bool = false
+end
+
+func p_at_fn_mod(p &: Ps): bool:
+    ret p_at(p, tok.TK_KW_PUB) || p_at(p, tok.TK_KW_DEPRECATED) || p_at(p, tok.TK_KW_INLINE) || p_at(p, tok.TK_KW_NOINLINE) || p_at(p, tok.TK_KW_PURE) || p_at(p, tok.TK_KW_NORET)
+end
+
+// Soaks up a misordered modifier run after the error is reported, so the rest
+// of the definition still parses instead of cascading.
+func absorb_misordered_mods(p &: Ps, m &: FnMods):
+    p_error(p, "function modifiers must appear in this order: 'pub deprecated inline|noinline pure|noret func'")
+    until p_at_fn_mod(p):
+        mk := p_peek(p).kind
+        if mk == tok.TK_KW_PUB:
+            m.is_pub = true
+        else mk == tok.TK_KW_DEPRECATED:
+            m.is_deprecated = true
+        else mk == tok.TK_KW_INLINE:
+            m.is_inline = true
+        else mk == tok.TK_KW_NOINLINE:
+            m.is_noinline = true
+        else mk == tok.TK_KW_PURE:
+            m.is_pure = true
+        else:
+            m.is_noret = true
+        end
+        p_advance(p)
+    end
+    m.any = true
+end
+
+// The `pub deprecated inline|noinline pure|noret` run that may precede a
+// definition. Struct members take the same run as top-level definitions, so
+// both callers share this rather than each growing its own copy.
+func parse_fn_mods(p &: Ps): FnMods:
+    mut m := FnMods {}
+    if p_at(p, tok.TK_KW_PUB):
+        m.is_pub = true
+        p_advance(p)
+    end
+    if p_at(p, tok.TK_KW_DEPRECATED):
+        m.is_deprecated = true
+        p_advance(p)
+    end
+    if p_at(p, tok.TK_KW_INLINE):
+        m.is_inline = true
+        p_advance(p)
+    else p_at(p, tok.TK_KW_NOINLINE):
+        m.is_noinline = true
+        p_advance(p)
+    end
+    if p_at(p, tok.TK_KW_PURE):
+        m.is_pure = true
+        p_advance(p)
+    else p_at(p, tok.TK_KW_NORET):
+        m.is_noret = true
+        p_advance(p)
+    end
+    m.any = m.is_deprecated || m.is_inline || m.is_noinline || m.is_pure || m.is_noret
+    if p_at_fn_mod(p):
+        absorb_misordered_mods(p, m)
+    end
+    ret m
+end
+
+func apply_fn_mods(a &: at.Ast, n: int, m &: FnMods):
+    if n == 0:
+        ret
+    end
+    mut nn := at.Get(a, n)
+    nn.is_pub = m.is_pub
+    if nn.kind == at.AST_FUNC_DEF:
+        nn.is_inline = m.is_inline
+        nn.is_noinline = m.is_noinline
+        nn.is_pure = m.is_pure
+        nn.is_noret = m.is_noret
+        nn.is_deprecated = m.is_deprecated
+    end
+    at.Put(a, n, nn)
+end
+
+func check_fn_mods_target(p &: Ps, m &: FnMods):
+    if m.any && !p_at(p, tok.TK_KW_FUNC):
+        p_error(p, "function modifiers ('deprecated', 'inline', 'noinline', 'pure', 'noret') are only allowed on a function definition")
+    end
+end
+
 func parse_type_alias(p &: Ps, a &: at.Ast): int:
     p_rule(p, "type_alias")
     n := p_mk(p, a, at.AST_TYPE_ALIAS)
@@ -202,11 +299,8 @@ func parse_struct(p &: Ps, a &: at.Ast): int:
         if p_at(p, tok.TK_KW_END) || p_at_eof(p):
             break
         end
-        mut m_pub := false
-        if p_at(p, tok.TK_KW_PUB):
-            m_pub = true
-            p_advance(p)
-        end
+        mut mmods := parse_fn_mods(p)
+        check_fn_mods_target(p, mmods)
         mut member := 0
         if p_at(p, tok.TK_KW_FUNC):
             member = parse_function(p, a, false)
@@ -214,9 +308,7 @@ func parse_struct(p &: Ps, a &: at.Ast): int:
             member = parse_field(p, a)
         end
         if member != 0:
-            mut mn := at.Get(a, member)
-            mn.is_pub = m_pub
-            at.Put(a, member, mn)
+            apply_fn_mods(a, member, mmods)
             repeat mpend.len() with i:
                 at.AddAlias(a, member, mpend.get(i))
             end
@@ -425,59 +517,9 @@ end
 func parse_top_level(p &: Ps, a &: at.Ast): int:
     p_rule(p, "top_level")
 
-    mut is_pub := false
-    if p_at(p, tok.TK_KW_PUB):
-        is_pub = true
-        p_advance(p)
-    end
-    mut is_deprecated := false
-    if p_at(p, tok.TK_KW_DEPRECATED):
-        is_deprecated = true
-        p_advance(p)
-    end
-    mut is_inline := false
-    mut is_noinline := false
-    if p_at(p, tok.TK_KW_INLINE):
-        is_inline = true
-        p_advance(p)
-    else p_at(p, tok.TK_KW_NOINLINE):
-        is_noinline = true
-        p_advance(p)
-    end
-    mut is_pure := false
-    mut is_noret := false
-    if p_at(p, tok.TK_KW_PURE):
-        is_pure = true
-        p_advance(p)
-    else p_at(p, tok.TK_KW_NORET):
-        is_noret = true
-        p_advance(p)
-    end
-    mut any_mod := is_deprecated || is_inline || is_noinline || is_pure || is_noret
-    if p_at(p, tok.TK_KW_PUB) || p_at(p, tok.TK_KW_DEPRECATED) || p_at(p, tok.TK_KW_INLINE) || p_at(p, tok.TK_KW_NOINLINE) || p_at(p, tok.TK_KW_PURE) || p_at(p, tok.TK_KW_NORET):
-        p_error(p, "function modifiers must appear in this order: 'pub deprecated inline|noinline pure|noret func'")
-        until p_at(p, tok.TK_KW_PUB) || p_at(p, tok.TK_KW_DEPRECATED) || p_at(p, tok.TK_KW_INLINE) || p_at(p, tok.TK_KW_NOINLINE) || p_at(p, tok.TK_KW_PURE) || p_at(p, tok.TK_KW_NORET):
-            mk := p_peek(p).kind
-            if mk == tok.TK_KW_PUB:
-                is_pub = true
-            else mk == tok.TK_KW_DEPRECATED:
-                is_deprecated = true
-            else mk == tok.TK_KW_INLINE:
-                is_inline = true
-            else mk == tok.TK_KW_NOINLINE:
-                is_noinline = true
-            else mk == tok.TK_KW_PURE:
-                is_pure = true
-            else:
-                is_noret = true
-            end
-            p_advance(p)
-        end
-        any_mod = true
-    end
-    if any_mod && !p_at(p, tok.TK_KW_FUNC):
-        p_error(p, "function modifiers ('deprecated', 'inline', 'noinline', 'pure', 'noret') are only allowed on a function definition")
-    end
+    mut mods := parse_fn_mods(p)
+    is_pub := mods.is_pub
+    check_fn_mods_target(p, mods)
     mut n := 0
     k := p_peek(p).kind
     if k == tok.TK_KW_TYPE:
@@ -527,17 +569,6 @@ func parse_top_level(p &: Ps, a &: at.Ast): int:
         end
         ret 0
     end
-    if n != 0:
-        mut nn := at.Get(a, n)
-        nn.is_pub = is_pub
-        if nn.kind == at.AST_FUNC_DEF:
-            nn.is_inline = is_inline
-            nn.is_noinline = is_noinline
-            nn.is_pure = is_pure
-            nn.is_noret = is_noret
-            nn.is_deprecated = is_deprecated
-        end
-        at.Put(a, n, nn)
-    end
+    apply_fn_mods(a, n, mods)
     ret n
 end

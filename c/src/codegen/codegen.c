@@ -209,11 +209,46 @@ static bool inl_body_exportable(cg_t *cg, vec_t *names, ast_node_t *n)
     return true;
 }
 
+/*
+ * A `pub inline` body is copied into the header, so it may only name things
+ * every includer can also see. One that reaches for a module-private symbol
+ * loses the inline rather than the compile.
+ */
+static void demote_if_nonexportable(cg_t *cg, ast_node_t *fn)
+{
+    vec_t names;
+    vec_init(&names);
+    inl_collect_locals(cg, &names, fn);
+    if (inl_body_exportable(cg, &names, fn->a)) return;
+    fn->is_inline = false;
+    LOG_I(cg->log, PH_CODEGEN,
+          "inline '%s' uses module-private symbols; emitting it as a regular function",
+          fn->name);
+}
+
+/* Methods of a generic struct are already emitted `static inline` once per
+ * instantiation, so `inline` on them is a no-op rather than a header export. */
+static void demote_struct_inlines(cg_t *cg, ast_node_t *d)
+{
+    size_t j = 0;
+    if (d->typarams.len > 0 || d->synthetic) return;
+    for (; j < d->list.len; j++) {
+        ast_node_t *m = (ast_node_t *)d->list.data[j];
+        if (m->kind != AST_FUNC_DEF || !m->is_inline || !m->is_pub) continue;
+        if (m->is_extern) continue;
+        demote_if_nonexportable(cg, m);
+    }
+}
+
 static void demote_nonexportable_inlines(cg_t *cg, ast_node_t *program)
 {
     size_t i = 0;
     for (; i < program->list.len; i++) {
         ast_node_t *d = (ast_node_t *)program->list.data[i];
+        if (d->kind == AST_STRUCT_DEF) {
+            demote_struct_inlines(cg, d);
+            continue;
+        }
         if (d->kind != AST_FUNC_DEF || !d->is_inline) continue;
         if (d->typarams.len > 0 || d->synthetic || d->is_extern) continue;
         if (strcmp(d->name, cg->entry) == 0) {
@@ -221,18 +256,26 @@ static void demote_nonexportable_inlines(cg_t *cg, ast_node_t *program)
             continue;
         }
         if (!d->is_pub) continue;
-        {
-            vec_t names;
-            vec_init(&names);
-            inl_collect_locals(cg, &names, d);
-            if (!inl_body_exportable(cg, &names, d->a)) {
-                d->is_inline = false;
-                LOG_I(cg->log, PH_CODEGEN,
-                      "inline '%s' uses module-private symbols; emitting it as a "
-                      "regular function",
-                      d->name);
-            }
-        }
+        demote_if_nonexportable(cg, d);
+    }
+}
+
+static bool is_header_inline(ast_node_t *fn)
+{
+    return fn->kind == AST_FUNC_DEF && fn->is_inline && fn->is_pub && !fn->is_extern &&
+           fn->typarams.len == 0 && !fn->synthetic && fn->a != NULL;
+}
+
+static void emit_struct_inline_bodies(cg_t *cg, ast_node_t *d)
+{
+    symbol_t *ssym;
+    size_t j = 0;
+    if (d->typarams.len > 0 || d->synthetic) return;
+    ssym = scope_lookup_local(cg->sem->global, d->name);
+    if (!ssym) return;
+    for (; j < d->list.len; j++) {
+        ast_node_t *m = (ast_node_t *)d->list.data[j];
+        if (is_header_inline(m)) cg_function(cg, m, ssym);
     }
 }
 
@@ -244,9 +287,11 @@ static void emit_inline_header(cg_t *cg, ast_node_t *program)
         size_t i = 0;
         for (; i < program->list.len; i++) {
             ast_node_t *d = (ast_node_t *)program->list.data[i];
-            if (d->kind != AST_FUNC_DEF || !d->is_inline || !d->is_pub) continue;
-            if (d->typarams.len > 0 || d->synthetic || d->is_extern || !d->a) continue;
-            cg_function(cg, d, NULL);
+            if (d->kind == AST_STRUCT_DEF) {
+                emit_struct_inline_bodies(cg, d);
+                continue;
+            }
+            if (is_header_inline(d)) cg_function(cg, d, NULL);
         }
     }
     cg->c = savec;
@@ -270,7 +315,11 @@ static void emit_function_bodies(cg_t *cg, ast_node_t *program)
                     size_t j = 0;
                     for (; j < d->list.len; j++) {
                         ast_node_t *m = (ast_node_t *)d->list.data[j];
-                        if (m->kind == AST_FUNC_DEF) cg_function(cg, m, ssym);
+                        if (m->kind != AST_FUNC_DEF) continue;
+                        /* pub inline methods already have their body in the
+                           header, same as pub inline free functions above. */
+                        if (m->is_inline && m->is_pub) continue;
+                        cg_function(cg, m, ssym);
                     }
                 }
             } else if (d->kind == AST_LAYOUT_BLOCK) {

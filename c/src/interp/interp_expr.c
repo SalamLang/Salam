@@ -183,7 +183,14 @@ static value_t eval_call(interp_t *I, env_t *env, ast_node_t *n)
         if (b && b->val.kind == VAL_FUNC)
             return call_func(I, b->val.as.fn->fn, b->val.as.fn->env, NULL, args, na);
         ast_node_t *fn = find_func(I, nm, na);
-        if (fn) return call_func(I, fn, I->globals, NULL, args, na);
+        if (fn) {
+            /* A generic instance or a derived codec carries a global name but
+             * a package's body: the names it calls, private ones included,
+             * are that module's. Running it against the program's globals
+             * instead loses them ("call to undefined function '_dnew'"). */
+            module_t *hm = fn->home_pkg ? find_module(I, fn->home_pkg) : NULL;
+            return call_func(I, fn, hm ? hm->env : I->globals, NULL, args, na);
+        }
 
         value_t *ef = find_extern_fn(I, nm);
         if (ef) return call_func(I, ef->as.fn->fn, ef->as.fn->env, NULL, args, na);

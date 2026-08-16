@@ -207,7 +207,16 @@ static bool enc_struct(sema_t *s, sb_t *b, jd_ctx_t *c, type_t *t, scope_t *home
         sb_printf(b, "%sif _n > 0: _dadd(" JV_BUF ", \",\") end\n", ind);
         sb_printf(b, "%s_n = _n + 1\n", ind);
         add(b, ind, jd_quote(s, jd_fmt(s, "\"%s\":", at.name)));
-        if (!enc_value(s, b, c, f->type, expr, ind, &at, home, span)) return false;
+        if (!enc_value(s, b, c, f->type, expr, ind, &at, home, span)) {
+            /* Naming the field is the whole diagnostic: "cannot encode
+             * 'Config'" leaves the reader to find which of its twelve members
+             * has no JSON form. */
+            SERR(s, 2, f->decl ? &f->decl->span : span,
+                 "field '%s' of type '%s' has no JSON form; mark it '@json \"-\"' to "
+                 "leave it out",
+                 f->name, type_to_string(s->tc, f->type));
+            return false;
+        }
         if (test) sb_puts(b, JIND "end\n");
     }
     add(b, JIND, "\"}\"");

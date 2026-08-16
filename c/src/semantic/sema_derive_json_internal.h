@@ -79,6 +79,15 @@ bool jd_is_unsigned(const type_t *t);
  * type is i64/u64 and the check would be a no-op. */
 bool jd_int_bounds(const type_t *t, long long *lo, long long *hi);
 
+/* The decoder's single failure path, and its value dispatch. Shared between
+ * sema_derive_json_dec.c and the container bodies split out of it. */
+void jd_fail(sb_t *b, sema_t *s, const char *ind, const char *msg, const char *pos);
+bool jd_dec_value(sema_t *s, sb_t *b, jd_ctx_t *c, type_t *t, const char *lval,
+                  const char *ind, const json_attr_t *at, scope_t *home,
+                  const src_span_t *span);
+bool jd_dec_body(sema_t *s, sb_t *b, jd_ctx_t *c, type_t *t, scope_t *home,
+                 const src_span_t *span);
+
 /* The `func ...` text, or NULL when some part of the type has no JSON form.
  * Both may derive further functions before returning. */
 const char *jd_enc_source(sema_t *s, type_t *t, const char *fname, scope_t *home,

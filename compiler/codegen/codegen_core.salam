@@ -230,6 +230,40 @@ func inl_body_exportable(
     ret true
 end
 
+// A `pub inline` body is copied into the header, so it may only name things
+// every includer can also see. One that reaches for a module-private symbol
+// loses the inline rather than the compile.
+func demote_if_nonexportable(g &: Cg, s &: sm.Sema, a &: at.Ast, fid: int):
+    f := at.Get(a, fid)
+    mut names := Vector {} as Vector<str>
+    inl_collect_locals(a, names, fid)
+    if !inl_body_exportable(s, a, names, f.a):
+        mut fn2 := at.Get(a, fid)
+        fn2.is_inline = false
+        at.Put(a, fid, fn2)
+        lg.Log(
+            g.log, lg.PH_CODEGEN, lg.LOG_INFO, "inline '" + f.name + "' uses module-private symbols; " + "emitting it as a regular function"
+        )
+    end
+    names.free()
+end
+
+// Methods of a generic struct are already emitted `static inline` once per
+// instantiation, so `inline` on them is a no-op rather than a header export.
+func demote_struct_inlines(g &: Cg, s &: sm.Sema, a &: at.Ast, did: int):
+    d := at.Get(a, did)
+    if d.typarams.len() > 0 || d.synthetic:
+        ret
+    end
+    repeat d.list.len() with j:
+        mid := d.list.get(j)
+        m := at.Get(a, mid)
+        if m.kind == at.AST_FUNC_DEF && m.is_inline && m.is_pub && !m.is_extern:
+            demote_if_nonexportable(g, s, a, mid)
+        end
+    end
+end
+
 func demote_nonexportable_inlines(
     g &: Cg, s &: sm.Sema, a &: at.Ast, program: int
 ):
@@ -237,6 +271,10 @@ func demote_nonexportable_inlines(
     repeat prog.list.len() with i:
         did := prog.list.get(i)
         d := at.Get(a, did)
+        if d.kind == at.AST_STRUCT_DEF:
+            demote_struct_inlines(g, s, a, did)
+            continue
+        end
         if d.kind != at.AST_FUNC_DEF || !d.is_inline:
             continue
         end
@@ -252,17 +290,29 @@ func demote_nonexportable_inlines(
         if !d.is_pub:
             continue
         end
-        mut names := Vector {} as Vector<str>
-        inl_collect_locals(a, names, did)
-        if !inl_body_exportable(s, a, names, d.a):
-            mut dn2 := at.Get(a, did)
-            dn2.is_inline = false
-            at.Put(a, did, dn2)
-            lg.Log(
-                g.log, lg.PH_CODEGEN, lg.LOG_INFO, "inline '" + d.name + "' uses module-private symbols; " + "emitting it as a regular function"
-            )
+        demote_if_nonexportable(g, s, a, did)
+    end
+end
+
+func is_header_inline(a &: at.Ast, fid: int): bool:
+    f := at.Get(a, fid)
+    ret f.kind == at.AST_FUNC_DEF && f.is_inline && f.is_pub && !f.is_extern && f.typarams.len() == 0 && !f.synthetic && f.a != 0
+end
+
+func emit_struct_inline_bodies(g &: Cg, s &: sm.Sema, a &: at.Ast, did: int):
+    d := at.Get(a, did)
+    if d.typarams.len() > 0 || d.synthetic:
+        ret
+    end
+    ssym := sm.LookupLocal(s, s.global, d.name)
+    if ssym == 0:
+        ret
+    end
+    repeat d.list.len() with j:
+        mid := d.list.get(j)
+        if is_header_inline(a, mid):
+            cg_function(g, s, a, mid, ssym)
         end
-        names.free()
     end
 end
 
@@ -273,13 +323,13 @@ func emit_inline_header(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
     repeat prog.list.len() with i:
         did := prog.list.get(i)
         d := at.Get(a, did)
-        if d.kind != at.AST_FUNC_DEF || !d.is_inline || !d.is_pub:
+        if d.kind == at.AST_STRUCT_DEF:
+            emit_struct_inline_bodies(g, s, a, did)
             continue
         end
-        if d.typarams.len() > 0 || d.synthetic || d.is_extern || d.a == 0:
-            continue
+        if is_header_inline(a, did):
+            cg_function(g, s, a, did, 0)
         end
-        cg_function(g, s, a, did, 0)
     end
     g.cur = save
 end
@@ -307,7 +357,10 @@ func emit_function_bodies(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
             ssym := sm.LookupLocal(s, s.global, d.name)
             repeat d.list.len() with j:
                 mid := d.list.get(j)
-                if at.KindOf(a, mid) == at.AST_FUNC_DEF:
+                m := at.Get(a, mid)
+                // pub inline methods already have their body in the header,
+                // same as pub inline free functions above.
+                if m.kind == at.AST_FUNC_DEF && !(m.is_inline && m.is_pub):
                     cg_function(g, s, a, mid, ssym)
                 end
             end

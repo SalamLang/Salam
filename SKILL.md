@@ -201,7 +201,9 @@ end
   `func make counter()`, `func is weekend(d: Day)`, `pet name: str`. A call is
   `is weekend(d)`; a field access `dog.pet name`.
 - **Modifiers**: `pub inline noinline pure noret deprecated` (combine freely),
-  e.g. `pub inline pure func Area(w: f64, h: f64): f64: ret w * h end`.
+  e.g. `pub inline pure func Area(w: f64, h: f64): f64: ret w * h end`. They
+  work on struct methods too, in the same order:
+  `pub inline func len(): int: ret this.count end`.
 - **Reference parameters** (`name &: Type`) pass by reference so the callee can
   mutate the caller's value (in/out params, and to avoid copying big structs):
 

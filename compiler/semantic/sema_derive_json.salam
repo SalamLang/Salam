@@ -1,0 +1,305 @@
+package semantic
+
+import str
+import co "../sal_core.salam"
+import at "../ast.salam"
+import dg "../diag.salam"
+
+// ===== sema_derive_json.c =====
+//
+// `json.Marshal(v)` and `json.Unmarshal(text, out, err)` on a type the
+// compiler has never seen.
+//
+// Neither can be written once and for all in a language without runtime
+// reflection, so sema writes them per concrete type: this pass generates
+// `_jsonenc_T` and `_jsondec_T` as Salam source, parses them, and installs
+// them as synthetic top-level declarations - the same treatment a generic
+// instantiation gets, so every backend emits them without knowing this pass
+// exists. It is the machinery `println <aggregate>` already uses, sharing one
+// registry with it (sema_derive.salam).
+//
+// The trigger is `jsonenc`/`jsondec` inside std/encoding/json's own generic
+// wrappers. Because those are monomorphised before their bodies are checked,
+// the type parameter is concrete by the time the call is looked at, and the
+// compiler needs no notion of what a "json package" is - only the two builtin
+// names, handled in sema_checkcall.salam the way `sizeof` is.
+//
+// PORT-NOTE: the C splits the emitters into sema_derive_json_enc.c and
+// sema_derive_json_dec.c; the same split is kept here. The C builds bodies
+// into an sb_t and answers bool; here a body is a returned str and "" is the
+// failure, matching sema_derive_emit.salam.
+
+// Locals the generated bodies use. Underscore-prefixed so they never collide
+// with a field, a package name or anything the unused-name rules care about.
+pub const JV_PARAM := "_v" // encoder: the value being written
+pub const JV_BUF := "_sb" // encoder: the builder
+pub const JD_TEXT := "_s" // decoder: the whole document
+pub const JD_POS := "_p" // decoder: the cursor
+pub const JD_START := "_i" // decoder: where this value began
+pub const JD_OUT := "_o" // decoder: the destination, by reference
+pub const JD_ERR := "_e" // decoder: the message, by reference
+pub const JD_ERRP := "_ep" // decoder: the position, by reference
+pub const JD_STRICT := "_st"
+pub const JIND := "    "
+
+// What a `@json` marker on a field says. `@json "wire" "omitempty"`: the
+// first value renames the field, the rest are options. `"-"` drops the field
+// from both directions, `""` keeps the field's own name.
+pub struct JsonAttr:
+    pub name: str = ""
+    pub skip: bool = false
+    pub omitempty: bool = false
+    pub optional: bool = false
+    pub as_string: bool = false
+    pub ok: bool = true
+end
+
+func jd_attr_option(s &: Sema, out &: JsonAttr, opt: str, sp: co.SrcSpan):
+    if str.Equals(opt, "omitempty"):
+        out.omitempty = true
+        // A field the encoder is allowed to leave out has to be one the
+        // decoder is allowed not to find, or a strict round trip of the
+        // struct's own output would fail.
+        out.optional = true
+        ret
+    end
+    if str.Equals(opt, "optional"):
+        out.optional = true
+        ret
+    end
+    if str.Equals(opt, "string"):
+        out.as_string = true
+        ret
+    end
+    out.ok = false
+    serr(
+        s, 12, sp,
+        "unknown '@json' option '" + opt + "'; expected 'omitempty', 'optional' or 'string'"
+    )
+end
+
+// Read the marker off a field symbol. `ok` is false when a value is not one of
+// the options, so a typo is a compile error rather than a setting that
+// silently does nothing.
+func jd_attr_of(s &: Sema, a &: at.Ast, field: int, sp: co.SrcSpan): JsonAttr:
+    mut out := JsonAttr {}
+    fv := sym_at(s, field)
+    out.name = fv.name
+    if fv.decl == 0:
+        ret out
+    end
+    al := at.Get(a, fv.decl).aliases
+    mut i := 0
+    mut first := true
+    until i + 1 < al.len():
+        lang := al.get(i)
+        val := al.get(i + 1)
+        i += 2
+        if !str.Equals(lang, "json"):
+            continue
+        end
+        if first:
+            first = false
+            if str.Equals(val, "-"):
+                out.skip = true
+                ret out
+            end
+            if str.Len(val) > 0:
+                out.name = val
+            end
+            continue
+        end
+        jd_attr_option(s, out, val, sp)
+    end
+    ret out
+end
+
+// The diagnostic for a member with no JSON form, pointing at the member
+// rather than at the struct or the call.
+func jd_field_err(s &: Sema, a &: at.Ast, f: int, t: int, sp: co.SrcSpan):
+    fv := sym_at(s, f)
+    mut at_sp := sp
+    if fv.decl != 0:
+        at_sp = span_of(a, fv.decl)
+    end
+    serr(
+        s, 2, at_sp, "field '" + fv.name + "' of type '" + type_to_string(s, t)
+            + "' has no JSON form; mark it '@json \"-\"' to leave it out"
+    )
+end
+
+// `"..."` as it has to be written inside generated Salam source.
+func jd_quote(text: str): str:
+    mut out := "\""
+    repeat str.Len(text) with i:
+        c := text.substr(i, 1)
+        if str.Equals(c, "\"") || str.Equals(c, "\\"):
+            out = out + "\\"
+        end
+        out = out + c
+    end
+    ret out + "\""
+end
+
+// True when the type is one the codec has a direct spelling for and the caller
+// does not have to derive a helper function.
+func jd_is_scalar(s &: Sema, t: int): bool:
+    if t < 0:
+        ret false
+    end
+    ret derive_is_plain(s, t) || ty_at(s, t).kind == TY_STR
+end
+
+// u8/u16/u32/u64/size: the widths that decode through _du and have to reject a
+// negative number rather than wrap it.
+func jd_is_unsigned(s &: Sema, t: int): bool:
+    k := ty_at(s, t).kind
+    ret k == TY_U8 || k == TY_U16 || k == TY_U32 || k == TY_U64 || k == TY_SIZE
+end
+
+// ----------------------------------------------------------------- driver
+
+func derive_json_name(s &: Sema, prefix: str, t: int): str:
+    ret prefix + derive_key(type_to_string(s, t))
+end
+
+func derive_json_one(
+    s &: Sema, a &: at.Ast, t: int, prefix: str, enc: bool, home: int, sp: co.SrcSpan
+): str:
+    if t < 0 || s.program == 0:
+        ret ""
+    end
+    fname := derive_json_name(s, prefix, t)
+    if derive_registry_find(s, fname) != 0:
+        ret fname
+    end
+    if scope_lookup_local(s, s.global, fname) != 0:
+        ret ""
+    end
+    // Claimed before the body is generated: a struct holding a Vector of
+    // itself asks for this same function again from inside the emitter, and
+    // has to be told it already exists rather than recurse forever.
+    derive_registry_claim(s, fname)
+    mut text := ""
+    if enc:
+        text = jd_enc_source(s, a, t, fname, home, sp)
+    else:
+        text = jd_dec_source(s, a, t, fname, home, sp)
+    end
+    ret derive_json_finish(s, a, text, fname, home)
+end
+
+func derive_json_finish(s &: Sema, a &: at.Ast, text: str, fname: str, home: int): str:
+    if str.Len(text) == 0:
+        derive_registry_drop(s, derive_registry_find(s, fname))
+        ret ""
+    end
+    prog := derive_parse(s, a, text, "<derived>")
+    mut fn := 0
+    if prog != 0:
+        fn = derive_install_all(s, a, prog, fname, home)
+    end
+    if fn == 0:
+        derive_registry_drop(s, derive_registry_find(s, fname))
+        ret ""
+    end
+    slot := derive_registry_find(s, fname)
+    s.derived_decls.set(slot - 1, fn)
+    ret fname
+end
+
+// `jsonenc(v)` and `jsondec(text, from, out, err, errpos, strict)`: the two
+// hooks std/encoding/json's generic Marshal and Unmarshal are written around.
+//
+// They are recognised by name here, the way `sizeof` is, rather than declared
+// anywhere. By the time one is checked the wrapper has been monomorphised, so
+// the type parameter is concrete and a codec can be derived for it. The call
+// is then rewritten to name that codec and the rest of the pipeline sees an
+// ordinary call.
+//
+// Reaching either from outside that module is an error: the generated bodies
+// are checked inside its scope and call its private runtime layer, so there is
+// nowhere else they would resolve.
+func check_json_builtin(s &: Sema, a &: at.Ast, n: int, enc: bool, sp: co.SrcSpan): int:
+    want := enc ? 1 : 6
+    fallback := sema_ty(s, enc ? TY_STR : TY_I32)
+    if at.ChildCount(a, n) != want:
+        serr(s, 12, sp, "'" + (enc ? "jsonenc" : "jsondec") + "' takes " + want + " arguments")
+        ret sema_decorate(s, a, n, fallback)
+    end
+    ti := enc ? 0 : 2
+    mut argt := TYPE_NONE
+    repeat at.ChildCount(a, n) with i:
+        t := sema_check_expr(s, a, at.Child(a, n, i))
+        if i == ti:
+            argt = t
+        end
+    end
+    ret check_json_rewrite(s, a, n, enc, argt, sp)
+end
+
+func check_json_rewrite(
+    s &: Sema, a &: at.Ast, n: int, enc: bool, argt: int, sp: co.SrcSpan
+): int:
+    fallback := sema_ty(s, enc ? TY_STR : TY_I32)
+    home := derive_home_of(s, s.cur, enc ? "_dqs" : "_dgstr")
+    if home == 0:
+        serr(
+            s, 12, sp, "'" + (enc ? "jsonenc" : "jsondec")
+                + "' is internal to std/encoding/json; use json."
+                + (enc ? "Marshal" : "Unmarshal") + " instead"
+        )
+        ret sema_decorate(s, a, n, fallback)
+    end
+    before := dg.ErrorCount(s.diag)
+    fname := enc ? derive_json_enc(s, a, argt, home, sp) : derive_json_dec(s, a, argt, home, sp)
+    if str.Len(fname) == 0:
+        // The emitters name the member that has no JSON form, and point at it.
+        // This call's own span is inside the monomorphised wrapper, so it
+        // would point at std/encoding/json rather than at anything the
+        // programmer wrote - only worth printing when nothing better was said.
+        if dg.ErrorCount(s.diag) == before:
+            serr(
+                s, 2, sp, "cannot " + (enc ? "encode" : "decode") + " a value of type '"
+                    + type_to_string(s, argt) + "' as JSON"
+            )
+        end
+        ret sema_decorate(s, a, n, fallback)
+    end
+    ret check_json_bind(s, a, n, fname, fallback)
+end
+
+func check_json_bind(s &: Sema, a &: at.Ast, n: int, fname: str, fallback: int): int:
+    callee := at.Get(a, n).a
+    at.SetName(a, callee, fname)
+    mut cv := at.Get(a, callee)
+    cv.synthetic = true
+    at.Put(a, callee, cv)
+    _d := sema_decorate(s, a, callee, sema_ty(s, TY_VOID))
+    fsym := scope_lookup_local(s, s.global, fname)
+    mut sigid := 0
+    if fsym != 0:
+        mut fv := sym_at(s, fsym)
+        fv.used = true
+        sym_put(s, fsym, fv)
+        if fv.overloads.len() > 0:
+            sigid = fv.overloads.get(0)
+        end
+    end
+    dce_mark_root(s.pkg, fname)
+    mark_ref_args(s, a, n, sigid)
+    rt := sigid != 0 ? sig_at(s, sigid).ret_type : fallback
+    ret sema_decorate(s, a, n, rt >= 0 ? rt : fallback)
+end
+
+// Derive `func _jsonenc_T(_v: T): str`, or "" when the type has no JSON form.
+func derive_json_enc(s &: Sema, a &: at.Ast, t: int, home: int, sp: co.SrcSpan): str:
+    ret derive_json_one(s, a, t, "_jsonenc_", true, home, sp)
+end
+
+// Derive `func _jsondec_T(_s, _i, _o &: T, _e &: str, _ep &: int, _st: bool):
+// int`, returning the position just past the value it read or -1 with the
+// message and offset filled in.
+func derive_json_dec(s &: Sema, a &: at.Ast, t: int, home: int, sp: co.SrcSpan): str:
+    ret derive_json_one(s, a, t, "_jsondec_", false, home, sp)
+end

@@ -580,6 +580,17 @@ static void collect_module_funcs(interp_t *I, module_t *mod, ast_node_t *prog)
                 vec_push(I->a, &I->impls, d);
                 if (!d->synthetic) register_method_envs(I, d, mod->env);
                 break;
+            /* A module's own constants and globals belong to its environment
+             * too. Without them a function in one file of a package could not
+             * see a `pub const` declared in a sibling ("undefined variable
+             * 'KindNone'"), which every compiled backend resolves fine. */
+            case AST_CONST_DECL:
+            case AST_VAR_DECL:
+                if (d->name && !env_find_local(mod->env, d->name))
+                    env_define(I, mod->env, d->name,
+                               d->a ? eval(I, mod->env, d->a)
+                                    : default_for_type(I, d->type_str));
+                break;
             default:
                 break;
             }
@@ -627,12 +638,19 @@ void build_modules(interp_t *I, ast_node_t *program)
             symbol_t *pk = (symbol_t *)pkgs->data[i];
             const char *name =
                 pk->pkgname ? pk->pkgname : (pk->decl ? pk->decl->name : NULL);
-            if (!name || !pk->decl || find_module(I, name)) continue;
-            module_t *mod = (module_t *)arena_alloc(I->a, sizeof *mod);
-            mod->name = name;
-            mod->env = env_new(I, NULL);
-            vec_push(I->a, &I->modules, mod);
-            itab_put(I, &I->tab_modules, name, mod);
+            if (!name || !pk->decl) continue;
+            /* A package spread over several files arrives as one entry per
+             * file. They share one environment: a helper in a sibling file is
+             * as reachable as one in the anchor, which is what every other
+             * backend already does. */
+            module_t *mod = find_module(I, name);
+            if (!mod) {
+                mod = (module_t *)arena_alloc(I->a, sizeof *mod);
+                mod->name = name;
+                mod->env = env_new(I, NULL);
+                vec_push(I->a, &I->modules, mod);
+                itab_put(I, &I->tab_modules, name, mod);
+            }
             collect_module_funcs(I, mod, pk->decl);
         }
     }
@@ -730,6 +748,7 @@ int interp_run(arena_t *a, logger_t *log, ast_node_t *program, sema_result_t *se
     collect_decls(&I, program);
     build_modules(&I, program);
     fixup_generic_envs(&I);
+    rehome_synthetic_funcs(&I);
     ast_node_t *main_fn = find_func(&I, entry, (size_t)-1);
     if (!main_fn) {
         LOG_E(log, PH_DRIVER, i18n_tr("no entry point: define a '%s' function"), entry);

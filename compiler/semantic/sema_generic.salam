@@ -79,6 +79,13 @@ func g_subst(a &: at.Ast, nid: int, params: Vector<str>, args: Vector<int>):
             end
             nv.is_pointer = ptr
             nv.is_dyn = cc.is_dyn
+            // The resolved type comes along only where the occurrence is the
+            // bare parameter. `T*` or `T[4]` in the template is a different
+            // type from what the caller resolved, and has to go back through
+            // the ordinary path.
+            if ptr == cc.is_pointer && nv.dims.len() == 0:
+                nv.sema_type = cc.sema_type
+            end
             mut merged := Vector {} as Vector<int>
             repeat cc.dims.len() with k2:
                 merged.push(cc.dims.get(k2))
@@ -105,7 +112,22 @@ func g_instance_name(s &: Sema, base: str, argtypes: Vector<int>): str:
 end
 
 // g_type_to_ast - synthesizes an AST_TYPE node describing `t`.
+// The name is kept for diagnostics and for the instance's mangled name, but
+// the resolved type travels with the node: the template is checked inside the
+// package that declared it, and that scope cannot see a struct the caller
+// declared. Without this a stdlib generic could only ever be instantiated with
+// a built-in type.
 func g_type_to_ast(s &: Sema, a &: at.Ast, t: int, sp: co.SrcSpan): int:
+    nid := g_type_to_ast_bare(s, a, t, sp)
+    if t >= 0:
+        mut nv := at.Get(a, nid)
+        nv.sema_type = t
+        at.Put(a, nid, nv)
+    end
+    ret nid
+end
+
+func g_type_to_ast_bare(s &: Sema, a &: at.Ast, t: int, sp: co.SrcSpan): int:
     nid := new_node_at(a, at.AST_TYPE, sp)
     mut nv := at.Get(a, nid)
     nv.synthetic = true
@@ -364,6 +386,9 @@ func g_instantiate_func(
     mut iv := at.Get(a, inst)
     iv.name = iname
     iv.synthetic = true
+    // The clone is checked against the declaring package's scope, so its body
+    // may name that package's private functions. See at.Node.home_pkg.
+    iv.home_pkg = derive_pkg_name_of(s, s.gen_pkg)
     at.Put(a, inst, iv)
     g_subst(a, inst, tn.typarams, targ_nodes)
     mut iv2 := at.Get(a, inst)

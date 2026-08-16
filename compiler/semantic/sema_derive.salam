@@ -120,19 +120,86 @@ func derive_parse(s &: Sema, a &: at.Ast, text: str, path: str): int:
     ret prog
 end
 
+// derive_home_of - the scope, at or above `from`, that declares `probe`; the
+// way the JSON derive finds std/encoding/json without hardcoding a package
+// name. 0 when no scope on the chain has it.
+func derive_home_of(s &: Sema, from: int, probe: str): int:
+    mut sc := from
+    until sc != 0:
+        if scope_lookup_local(s, sc, probe) != 0:
+            ret sc
+        end
+        sc = scope_at(s, sc).parent
+    end
+    ret 0
+end
+
+// derive_pkg_name_of - the name of the package a scope is the body of, or ""
+// Stamped onto synthetic declarations so the interpreter can run them against
+// the right module environment.
+func derive_pkg_name_of(s &: Sema, sc: int): str:
+    if sc == 0 || s.global == 0:
+        ret ""
+    end
+    g := scope_at(s, s.global)
+    repeat g.symbols.len() with i:
+        pk := sym_at(s, g.symbols.get(i))
+        if pk.kind == SYM_PACKAGE && pk.members == sc:
+            if str.Len(pk.pkgname) > 0:
+                ret pk.pkgname
+            end
+            ret pk.name
+        end
+    end
+    ret ""
+end
+
+// A derived body has to see two things at once: the program's own
+// declarations (the struct being encoded) and the runtime layer of the module
+// the codec belongs to (its private _d* helpers). Those live in separate scope
+// trees - a package is analysed on its own and merged in as a symbol, so its
+// scope's ancestors are its own globals, not the program's.
+//
+// The bridge is a scope holding the module's symbols with the program's global
+// scope as its parent, so a lookup finds the helper first and the user's types
+// straight after.
+func derive_bridge_for(s &: Sema, home: int): int:
+    if home == 0:
+        ret 0
+    end
+    if s.derive_bridge_home == home && s.derive_bridge_global == s.global:
+        ret s.derive_bridge
+    end
+    sc := scope_new(s, SCOPE_BLOCK, s.global)
+    mut scv := scope_at(s, sc)
+    scv.label = "<derive>"
+    scope_put(s, sc, scv)
+    hv := scope_at(s, home)
+    repeat hv.symbols.len() with i:
+        _d := scope_define(s, sc, hv.symbols.get(i))
+    end
+    s.derive_bridge_home = home
+    s.derive_bridge_global = s.global
+    s.derive_bridge = sc
+    ret sc
+end
+
 // Register one parsed `func` as a synthetic top-level of the program being
 // analysed: AST into the program list, symbol into the global scope,
 // declaration onto the pending queue so its body is checked with everything
 // else instantiation produces.
-func derive_install_fn(s &: Sema, a &: at.Ast, did: int):
+func derive_install_fn(s &: Sema, a &: at.Ast, did: int, home: int, pkg: str):
     mut d := at.Get(a, did)
     d.synthetic = true
     d.origin_lang = "en"
+    d.home_pkg = pkg
     at.Put(a, did, d)
     at.AddChild(a, s.program, did)
     fsym := get_or_make_func(s, s.global, at.Get(a, did).name, SYM_FUNC)
     mut fv := sym_at(s, fsym)
-    if fv.home == 0:
+    if home != 0:
+        fv.home = home
+    else fv.home == 0:
         fv.home = s.global
     end
     fv.used = true
@@ -147,10 +214,16 @@ end
 // Signature types resolve against the global scope in English: a local named
 // after the struct must not shadow it, and `Vector` must not be held to the
 // Farsi spelling rule that applies to what the user typed.
-func derive_install_all(s &: Sema, a &: at.Ast, prog: int, want: str): int:
+func derive_install_all(s &: Sema, a &: at.Ast, prog: int, want: str, home0: int): int:
     save_cur := s.cur
     save_lang := s.lang
-    s.cur = s.global
+    pkg := derive_pkg_name_of(s, home0)
+    home := derive_bridge_for(s, home0)
+    if home != 0:
+        s.cur = home
+    else:
+        s.cur = s.global
+    end
     s.lang = "en"
     mut found := 0
     mut i := 0
@@ -159,7 +232,7 @@ func derive_install_all(s &: Sema, a &: at.Ast, prog: int, want: str): int:
         i += 1
         d := at.Get(a, did)
         if d.kind == at.AST_FUNC_DEF && str.Len(d.name) > 0:
-            derive_install_fn(s, a, did)
+            derive_install_fn(s, a, did, home, pkg)
             if str.Equals(d.name, want):
                 found = did
             end
@@ -196,7 +269,7 @@ func derive_stringify(s &: Sema, a &: at.Ast, t: int, sp: co.SrcSpan): str:
     prog := derive_parse(s, a, text, "<derived>")
     mut fn := 0
     if prog != 0:
-        fn = derive_install_all(s, a, prog, fname)
+        fn = derive_install_all(s, a, prog, fname, 0)
     end
     if fn == 0:
         derive_registry_drop(s, derive_registry_find(s, fname))

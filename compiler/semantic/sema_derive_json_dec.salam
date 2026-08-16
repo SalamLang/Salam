@@ -1,0 +1,306 @@
+package semantic
+
+import str
+import co "../sal_core.salam"
+import at "../ast.salam"
+
+// ===== sema_derive_json_dec.c =====
+//
+// The Salam source of a derived JSON decoder.
+//
+// Shape: `func _jsondec_T(_s, _i, _o &: T, _e &: str, _ep &: int, _st: bool):
+// int`, returning the position just past the value it read or -1 with the
+// message and offset filled in. Every nested decoder has the same shape, so a
+// failure twelve levels down needs no unwinding: the first _derr wins and
+// every frame above it returns -1.
+//
+// `_st` is strictness, threaded through rather than baked in, so one Unmarshal
+// has one policy for the whole document:
+//
+//   strict    unknown key, missing key and repeated key are errors
+//   lenient   unknown keys are skipped, missing keys keep the field's
+//             default, a repeated key wins
+//
+// A type mismatch is an error in both: a decoder that quietly turns "3" into
+// 3, or 1.9 into 1, hides the schema drift it exists to catch.
+//
+// PORT-NOTE: the C threads an on-key callback into dec_object. Here the key
+// body is built first and handed in as text, which needs no function pointer
+// and reads the same way.
+
+func jd_fresh(ctr &: int, stem: str): str:
+    ctr += 1
+    ret "_" + stem + ctr
+end
+
+func jd_fail(ind: str, msg: str, pos: str): str:
+    ret ind + "ret _derr(" + JD_ERR + ", " + JD_ERRP + ", " + jd_quote(msg) + ", " + pos + ")\n"
+end
+
+// The bounds a narrow integer field is checked against, or "" when the type is
+// i64/u64 and the check would be a no-op.
+func jd_int_bounds(s &: Sema, t: int): str:
+    k := ty_at(s, t).kind
+    if k == TY_I8:
+        ret "-128, 127"
+    end
+    if k == TY_I16:
+        ret "-32768, 32767"
+    end
+    if k == TY_I32:
+        ret "-2147483648, 2147483647"
+    end
+    if k == TY_U8:
+        ret "0, 255"
+    end
+    if k == TY_U16:
+        ret "0, 65535"
+    end
+    if k == TY_U32:
+        ret "0, 4294967295"
+    end
+    ret ""
+end
+
+// --------------------------------------------------------------- scalars
+
+// The reader call for a scalar, given the endpos variable it reports through.
+func jd_read_call(s &: Sema, t: int, q: str, spelling: str): str:
+    k := ty_at(s, t).kind
+    lead := "(" + JD_TEXT + ", " + JD_POS + ", " + q + ")"
+    if k == TY_STR || k == TY_UCHAR:
+        ret "_dgstr" + lead
+    end
+    if k == TY_BOOL:
+        ret "_dgbool" + lead
+    end
+    if k == TY_CHAR:
+        ret "_dgch" + lead + " as " + spelling
+    end
+    if type_is_float(s, t):
+        ret "_dgflt" + lead + " as " + spelling
+    end
+    bounds := jd_int_bounds(s, t)
+    if jd_is_unsigned(s, t):
+        if str.Len(bounds) == 0:
+            ret "_dguint" + lead + " as " + spelling
+        end
+        ret "_drange(_dguint" + lead + " as i64, " + bounds + ", " + q + ") as " + spelling
+    end
+    if type_is_integer(s, t):
+        if str.Len(bounds) == 0:
+            ret "_dgint" + lead + " as " + spelling
+        end
+        ret "_drange(_dgint" + lead + ", " + bounds + ", " + q + ") as " + spelling
+    end
+    ret ""
+end
+
+// `@json "" "string"` on the way in: the value arrives as a JSON string and its
+// contents are what the number or the bool is spelled in.
+func jd_dec_quoted(s &: Sema, t: int, lval: str, ind: str, ctr &: int, spelling: str): str:
+    q := jd_fresh(ctr, "q")
+    raw := jd_fresh(ctr, "r")
+    mut out := ind + "mut " + q + " := 0\n"
+    out = out + ind + raw + " := _dgstr(" + JD_TEXT + ", " + JD_POS + ", " + q + ")\n"
+    out = out + ind + "if " + q + " < 0:\n" + jd_fail(ind + JIND, "expected a quoted value", JD_POS)
+    out = out + ind + "end\n" + ind + "mut " + q + "2 := 0\n"
+    inner := jd_read_inner(s, t, raw, q + "2", spelling)
+    out = out + ind + lval + " = " + inner + "\n"
+    out = out + ind + "if " + q + "2 < 0:\n"
+    out = out + jd_fail(ind + JIND, "quoted value is not well formed", JD_POS)
+    ret out + ind + "end\n" + ind + JD_POS + " = " + q + "\n"
+end
+
+func jd_read_inner(s &: Sema, t: int, raw: str, q: str, spelling: str): str:
+    lead := "(" + raw + ", 0, " + q + ")"
+    if ty_at(s, t).kind == TY_BOOL:
+        ret "_dgbool" + lead
+    end
+    if type_is_float(s, t):
+        ret "_dgflt" + lead + " as " + spelling
+    end
+    if jd_is_unsigned(s, t):
+        ret "_dguint" + lead + " as " + spelling
+    end
+    ret "_dgint" + lead + " as " + spelling
+end
+
+// One scalar: read it, check it landed, store it. Every reader reports failure
+// the same way (an endpos of -1), so the shape here does not vary with the
+// type - only the call and the cast do.
+func jd_dec_scalar(
+    s &: Sema, t: int, lval: str, ind: str, ctr &: int, as_string: bool
+): str:
+    spelling := derive_type_spelling(s, t)
+    if str.Len(spelling) == 0:
+        ret ""
+    end
+    k := ty_at(s, t).kind
+    if as_string && k != TY_STR && k != TY_UCHAR:
+        ret jd_dec_quoted(s, t, lval, ind, ctr, spelling)
+    end
+    q := jd_fresh(ctr, "q")
+    read := jd_read_call(s, t, q, spelling)
+    if str.Len(read) == 0:
+        ret ""
+    end
+    mut out := ind + "mut " + q + " := 0\n" + ind + lval + " = " + read + "\n"
+    out = out + ind + "if " + q + " < 0:\n"
+    out = out + jd_fail(ind + JIND, "value does not match the expected type", JD_POS)
+    ret out + ind + "end\n" + ind + JD_POS + " = " + q + "\n"
+end
+
+func jd_dec_enum(s &: Sema, t: int, lval: str, ind: str, ctr &: int): str:
+    sym := ty_at(s, t).decl
+    spelling := derive_type_spelling(s, t)
+    if sym == 0 || sym_at(s, sym).members == 0 || str.Len(spelling) == 0:
+        ret ""
+    end
+    q := jd_fresh(ctr, "q")
+    nm := jd_fresh(ctr, "en")
+    deep := ind + JIND
+    mut out := ind + "mut " + q + " := 0\n"
+    out = out + ind + nm + " := _dgstr(" + JD_TEXT + ", " + JD_POS + ", " + q + ")\n"
+    out = out + ind + "if " + q + " < 0:\n"
+    out = out + jd_fail(deep, "expected a string naming an enum member", JD_POS) + ind + "end\n"
+    arms := jd_dec_enum_arms(s, sym, lval, ind, deep, nm, spelling)
+    if str.Len(arms) == 0:
+        ret ""
+    end
+    out = out + arms + ind + "else:\n"
+    out = out + jd_fail(deep, "no enum member with that name", JD_POS) + ind + "end\n"
+    ret out + ind + JD_POS + " = " + q + "\n"
+end
+
+func jd_dec_enum_arms(
+    s &: Sema, sym: int, lval: str, ind: str, deep: str, nm: str, spelling: str
+): str:
+    mems := scope_at(s, sym_at(s, sym).members).symbols
+    mut out := ""
+    mut first := true
+    repeat mems.len() with i:
+        m := sym_at(s, mems.get(i))
+        if m.kind == SYM_ENUM_MEMBER:
+            head := first ? "if" : "else"
+            out = out + ind + head + " " + nm + " == " + jd_quote(m.name) + ":\n"
+            out = out + deep + lval + " = " + spelling + "." + m.name + "\n"
+            first = false
+        end
+    end
+    ret first ? "" : out
+end
+
+// ------------------------------------------------------------ aggregates
+
+// Anything with its own derived function: recurse into it and take its cursor.
+// `lval` is passed by reference, so a field twelve levels down is written in
+// place rather than copied back up.
+func jd_dec_nested(
+    s &: Sema, a &: at.Ast, t: int, lval: str, ind: str, ctr &: int, home: int, sp: co.SrcSpan
+): str:
+    fn := derive_json_dec(s, a, t, home, sp)
+    if str.Len(fn) == 0:
+        ret ""
+    end
+    q := jd_fresh(ctr, "q")
+    args := "(" + JD_TEXT + ", " + JD_POS + ", " + lval + ", " + JD_ERR + ", " + JD_ERRP
+    mut out := ind + q + " := " + fn + args + ", " + JD_STRICT + ")\n"
+    out = out + ind + "if " + q + " < 0: ret -1 end\n"
+    ret out + ind + JD_POS + " = " + q + "\n"
+end
+
+// A pointer field: `null` clears it, anything else gets storage of its own and
+// is decoded straight through the pointer. Salam has no address-of operator,
+// so a pointee that outlives this frame has to be allocated rather than
+// pointed at.
+func jd_dec_ptr(
+    s &: Sema, a &: at.Ast, t: int, lval: str, ind: str, ctr &: int, home: int, sp: co.SrcSpan
+): str:
+    spelling := derive_type_spelling(s, ty_at(s, t).pointee)
+    if str.Len(spelling) == 0:
+        ret ""
+    end
+    nul := jd_fresh(ctr, "q")
+    deep := ind + JIND
+    inner := jd_dec_value(s, a, ty_at(s, t).pointee, "(" + lval + ")[0]", deep, ctr, false, home, sp)
+    if str.Len(inner) == 0:
+        ret ""
+    end
+    mut out := ind + nul + " := _dnullat(" + JD_TEXT + ", " + JD_POS + ")\n"
+    out = out + ind + "if " + nul + " > 0:\n" + deep + lval + " = null\n"
+    out = out + deep + JD_POS + " = " + nul + "\n" + ind + "else:\n"
+    out = out + deep + lval + " = _dalloc(sizeof(" + spelling + ")) as " + spelling + "*\n"
+    ret out + inner + ind + "end\n"
+end
+
+func jd_dec_value(
+    s &: Sema, a &: at.Ast, t: int, lval: str, ind: str, ctr &: int, as_string: bool,
+    home: int, sp: co.SrcSpan
+): str:
+    if t < 0:
+        ret ""
+    end
+    if jd_is_scalar(s, t):
+        ret jd_dec_scalar(s, t, lval, ind, ctr, as_string)
+    end
+    if as_string:
+        ret ""
+    end
+    k := ty_at(s, t).kind
+    if k == TY_ENUM:
+        ret jd_dec_enum(s, t, lval, ind, ctr)
+    end
+    if k == TY_PTR:
+        ret jd_dec_ptr(s, a, t, lval, ind, ctr, home, sp)
+    end
+    ret jd_dec_nested(s, a, t, lval, ind, ctr, home, sp)
+end
+
+// ---------------------------------------------------------------- bodies
+
+// The object walk every struct and map decoder shares: open brace, then
+// key/colon/value until the closing brace. `keybody` is what to do with a
+// decoded key, already indented, and is the only part that differs.
+func jd_dec_object(keyvar: str, keybody: str, ke: str): str:
+    i3 := JIND + JIND + JIND
+    mut out := JIND + JD_POS + " = _jws(" + JD_TEXT + ", " + JD_START + ")\n"
+    out = out + JIND + "if _dbyte(" + JD_TEXT + ", " + JD_POS + ") != 123:\n"
+    out = out + jd_fail(JIND + JIND, "expected '{'", JD_POS) + JIND + "end\n"
+    out = out + JIND + JD_POS + " = _jws(" + JD_TEXT + ", " + JD_POS + " + 1)\n"
+    out = out + JIND + "if _dbyte(" + JD_TEXT + ", " + JD_POS + ") == 125:\n"
+    out = out + JIND + JIND + JD_POS + " = " + JD_POS + " + 1\n" + JIND + "else:\n"
+    out = out + JIND + JIND + "until true:\n"
+    out = out + i3 + "mut " + ke + " := 0\n"
+    out = out + i3 + keyvar + " := _dgstr(" + JD_TEXT + ", " + JD_POS + ", " + ke + ")\n"
+    out = out + i3 + "if " + ke + " < 0:\n"
+    out = out + jd_fail(i3 + JIND, "expected an object key", JD_POS) + i3 + "end\n"
+    out = out + i3 + JD_POS + " = _jws(" + JD_TEXT + ", " + ke + ")\n"
+    out = out + i3 + "if _dbyte(" + JD_TEXT + ", " + JD_POS + ") != 58:\n"
+    out = out + jd_fail(i3 + JIND, "expected ':'", JD_POS) + i3 + "end\n"
+    out = out + i3 + JD_POS + " = _jws(" + JD_TEXT + ", " + JD_POS + " + 1)\n" + keybody
+    ret out + jd_dec_close(i3, 125, "expected ',' or '}'")
+end
+
+// The `, next` / `close, done` tail both the object and the array walk end
+// with. `close` is the byte that finishes the container.
+func jd_dec_close(i3: str, close: int, msg: str): str:
+    mut out := i3 + JD_POS + " = _jws(" + JD_TEXT + ", " + JD_POS + ")\n"
+    out = out + i3 + "if _dbyte(" + JD_TEXT + ", " + JD_POS + ") == 44:\n"
+    out = out + i3 + JIND + JD_POS + " = _jws(" + JD_TEXT + ", " + JD_POS + " + 1)\n"
+    out = out + i3 + JIND + "continue\n" + i3 + "end\n"
+    out = out + i3 + "if _dbyte(" + JD_TEXT + ", " + JD_POS + ") == " + close + ":\n"
+    out = out + i3 + JIND + JD_POS + " = " + JD_POS + " + 1\n" + i3 + JIND + "break\n"
+    out = out + i3 + "end\n" + jd_fail(i3, msg, JD_POS)
+    ret out + JIND + JIND + "end\n" + JIND + "end\n"
+end
+
+// The `else` arm every object walk needs: an unknown key is an error under
+// strict and a skipped value otherwise.
+func jd_dec_unknown(ind: str, deep: str): str:
+    mut out := ind + "if " + JD_STRICT + ":\n"
+    out = out + jd_fail(deep, "unknown key", JD_POS) + ind + "end\n"
+    out = out + ind + JD_POS + " = _dskip(" + JD_TEXT + ", " + JD_POS + ")\n"
+    out = out + ind + "if " + JD_POS + " < 0:\n"
+    ret out + jd_fail(deep, "value is not well formed", JD_START) + ind + "end\n"
+end

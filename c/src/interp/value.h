@@ -75,6 +75,9 @@ typedef enum {
     PTR_F32,
     PTR_F64,
     PTR_STR,
+    /* Points at a struct laid out in real memory: `tname` names the type and
+     * interp_memlayout.c turns the bytes into a value and back. */
+    PTR_STRUCT,
     PTR_OPAQUE
 } ptr_elem_t;
 
@@ -99,6 +102,7 @@ struct module;
 typedef struct {
     void *addr;
     ptr_elem_t elem;
+    const char *tname; /* PTR_STRUCT only: the pointee's type name */
 } sptr_t;
 
 struct value {
@@ -287,6 +291,7 @@ SAL_INLINE value_t val_ptr(void *addr, ptr_elem_t elem)
     v.ity = ITY_NONE;
     v.as.ptr.addr = addr;
     v.as.ptr.elem = elem;
+    v.as.ptr.tname = NULL;
     return v;
 }
 

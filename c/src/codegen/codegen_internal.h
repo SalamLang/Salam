@@ -21,6 +21,8 @@
 #include "semantic/symbol.h"
 #include "semantic/types.h"
 
+#define CG_MAX_LOOP_DEPTH 64
+
 typedef struct {
     arena_t *a;
     logger_t *log;
@@ -60,6 +62,12 @@ typedef struct {
     const char *entry;
     vec_t deferred;
     vec_t fn_defers;
+    /* Defer-stack depth at the start of each enclosing loop body, so break and
+     * continue can run that body's defers before jumping over its closing
+     * brace. Deeper nesting than this simply keeps the old behaviour (the
+     * loop's own defers are skipped on those paths) rather than misfiring. */
+    size_t loop_dmark[CG_MAX_LOOP_DEPTH];
+    int nloop;
     sb_t *lam_decls;
     sb_t *lam_defs;
     int lam_n;
@@ -195,6 +203,10 @@ const char *cg_match_arm_cond(cg_t *cg, ast_node_t *arm, const char *subj_var,
 const char *cg_unparen(cg_t *cg, const char *s);
 
 void cg_emit_defers(cg_t *cg);
+
+void cg_emit_defers_from(cg_t *cg, size_t mark);
+
+void cg_scoped_stmts(cg_t *cg, vec_t *list);
 
 void cg_stmt(cg_t *cg, ast_node_t *n);
 

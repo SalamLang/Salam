@@ -472,8 +472,9 @@ ptr_elem_t ptr_elem_from_typestr(const char *ts)
     return PTR_OPAQUE;
 }
 
-value_t ptr_load(sptr_t p, int64_t idx)
+value_t ptr_load(interp_t *I, sptr_t p, int64_t idx)
 {
+    if (p.elem == PTR_STRUCT) return interp_mem_load(I, interp_ptr_elem_addr(I, p, idx), p.tname);
     switch (p.elem) {
     case PTR_I8:
         return val_int_ty(((int8_t *)p.addr)[idx], ITY_I8);
@@ -495,15 +496,24 @@ value_t ptr_load(sptr_t p, int64_t idx)
         return val_float((double)((float *)p.addr)[idx]);
     case PTR_F64:
         return val_float(((double *)p.addr)[idx]);
-    case PTR_STR:
-        return val_str(((const char **)p.addr)[idx]);
+    case PTR_STR: {
+        /* A zeroed slot is the empty string, not a null char* that the next
+         * strlen would fault on: it matches what an uninitialized `str`
+         * holds everywhere else (see zero_for_base). */
+        const char *s = ((const char **)p.addr)[idx];
+        return val_str(s ? s : "");
+    }
     default:
         return val_ptr(((void **)p.addr)[idx], PTR_OPAQUE);
     }
 }
 
-void ptr_store(sptr_t p, int64_t idx, value_t v)
+void ptr_store(interp_t *I, sptr_t p, int64_t idx, value_t v)
 {
+    if (p.elem == PTR_STRUCT) {
+        interp_mem_store(I, interp_ptr_elem_addr(I, p, idx), p.tname, v);
+        return;
+    }
     switch (p.elem) {
     case PTR_I8:
         ((int8_t *)p.addr)[idx] = (int8_t)to_int(v);

@@ -1,0 +1,318 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import testing
+import encoding.dotenv
+import env
+import os
+import io
+import fs.path
+
+func sample(): str:
+    mut t := "# a comment line\n"
+    t = t.concat("\n")
+    t = t.concat("export API_KEY=abc123 # trailing comment\n")
+    t = t.concat("SPACED  =  padded value  \n")
+    t = t.concat("QUOTED=\"a b\"\n")
+    t = t.concat("LITERAL='raw $NOPE \\n stays'\n")
+    t = t.concat("EMPTY=\n")
+    t = t.concat("COLOUR=#ff0000\n")
+    ret t
+end
+
+func test_basic():
+    mut d := dotenv.Parse(sample())
+    defer dotenv.Free(d)
+    testing.AssertEqInt(dotenv.Len(d), 6)
+    testing.AssertEqStr(dotenv.Get(d, "API_KEY"), "abc123")
+    testing.AssertEqStr(dotenv.Get(d, "SPACED"), "padded value")
+    testing.AssertEqStr(dotenv.Get(d, "QUOTED"), "a b")
+    testing.AssertEqStr(dotenv.Get(d, "EMPTY"), "")
+    testing.AssertTrue(dotenv.Has(d, "EMPTY"))
+    testing.AssertFalse(dotenv.Has(d, "NOPE"))
+    testing.AssertEqStr(dotenv.GetOr(d, "NOPE", "fallback"), "fallback")
+    // a '#' with no space before it belongs to the value
+    testing.AssertEqStr(dotenv.Get(d, "COLOUR"), "#ff0000")
+    // single quotes are verbatim: no expansion, no escape processing
+    testing.AssertEqStr(dotenv.Get(d, "LITERAL"), "raw $NOPE \\n stays")
+end
+
+func test_escapes():
+    mut t := "TABS=\"a\\tb\"\n"
+    t = t.concat("NL=\"one\\ntwo\"\n")
+    t = t.concat("DOLLAR=\"literal \\$HOME\"\n")
+    t = t.concat("UNKNOWN=\"keep \\q as is\"\n")
+    mut d := dotenv.Parse(t)
+    defer dotenv.Free(d)
+    testing.AssertEqStr(dotenv.Get(d, "TABS"), "a\tb")
+    testing.AssertEqStr(dotenv.Get(d, "NL"), "one\ntwo")
+    testing.AssertEqStr(dotenv.Get(d, "DOLLAR"), "literal $HOME")
+    testing.AssertEqStr(dotenv.Get(d, "UNKNOWN"), "keep \\q as is")
+end
+
+// A quoted value may run past the newline, which is the only way a PEM
+// block or a private key fits in a .env file.
+func test_multiline():
+    t := "KEY=\"line1\nline2\nline3\"\nAFTER=tail\n"
+    mut d := dotenv.Parse(t)
+    defer dotenv.Free(d)
+    testing.AssertEqStr(dotenv.Get(d, "KEY"), "line1\nline2\nline3")
+    testing.AssertEqStr(dotenv.Get(d, "AFTER"), "tail")
+    testing.AssertEqInt(dotenv.Len(d), 2)
+end
+
+func test_crlf_and_bom():
+    t := "\xEF\xBB\xBFFIRST=1\r\nSECOND=2\r\n"
+    mut d := dotenv.Parse(t)
+    defer dotenv.Free(d)
+    testing.AssertEqStr(dotenv.KeyAt(d, 0), "FIRST")
+    testing.AssertEqStr(dotenv.Get(d, "FIRST"), "1")
+    testing.AssertEqStr(dotenv.Get(d, "SECOND"), "2")
+end
+
+func expansion_text(): str:
+    mut t := "HOST=localhost\n"
+    t = t.concat("PORT=8080\n")
+    t = t.concat("BLANK=\n")
+    t = t.concat("URL=http://$HOST:${PORT}/api\n")
+    t = t.concat("MISS=[${NOT_SET}]\n")
+    t = t.concat("DEF=${NOT_SET:-fallback}\n")
+    t = t.concat("BLANK_COLON=${BLANK:-used}\n")
+    t = t.concat("BLANK_DASH=${BLANK-unused}\n")
+    t = t.concat("DASHED=$HOST-suffix\n")
+    t = t.concat("PRICE=costs $5 total\n")
+    ret t
+end
+
+func test_expansion():
+    mut d := dotenv.Parse(expansion_text())
+    defer dotenv.Free(d)
+    testing.AssertEqStr(dotenv.Get(d, "URL"), "http://localhost:8080/api")
+    // an unresolvable reference with no default becomes empty
+    testing.AssertEqStr(dotenv.Get(d, "MISS"), "[]")
+    testing.AssertEqStr(dotenv.Get(d, "DEF"), "fallback")
+    // ':-' falls back on empty, plain '-' only on undefined
+    testing.AssertEqStr(dotenv.Get(d, "BLANK_COLON"), "used")
+    testing.AssertEqStr(dotenv.Get(d, "BLANK_DASH"), "")
+    // a bare $NAME stops at '-', so the suffix survives
+    testing.AssertEqStr(dotenv.Get(d, "DASHED"), "localhost-suffix")
+    // '$5' is not a reference and is left exactly as written
+    testing.AssertEqStr(dotenv.Get(d, "PRICE"), "costs $5 total")
+end
+
+func test_refnames():
+    mut raw := dotenv.ParseRaw(expansion_text())
+    defer dotenv.Free(raw)
+    names := dotenv.RefNames(raw)
+    defer names.free()
+    testing.AssertEqInt(names.len(), 4)
+    testing.AssertEqStr(names.get(0), "HOST")
+    testing.AssertEqStr(names.get(1), "PORT")
+    testing.AssertEqStr(names.get(2), "NOT_SET")
+    testing.AssertEqStr(names.get(3), "BLANK")
+    refs_in := dotenv.RefNamesIn("${A} and $B and $A")
+    defer refs_in.free()
+    testing.AssertEqInt(refs_in.len(), 2)
+end
+
+// ParseRaw plus ExpandDoc is the seam that lets a caller resolve against
+// values this package cannot see. std/env uses it for the real
+// environment; here a hand built Doc stands in for one.
+func test_expand_with_base():
+    mut raw := dotenv.ParseRaw("GREETING=hello ${WHO}\nOWN=${GREETING}!\n")
+    defer dotenv.Free(raw)
+    mut base := dotenv.New()
+    defer dotenv.Free(base)
+    dotenv.Set(base, "WHO", "world")
+    mut d := dotenv.ExpandDoc(raw, base)
+    defer dotenv.Free(d)
+    testing.AssertEqStr(dotenv.Get(d, "GREETING"), "hello world")
+    // an entry sees the entries resolved before it
+    testing.AssertEqStr(dotenv.Get(d, "OWN"), "hello world!")
+end
+
+func test_strict():
+    testing.AssertTrue(dotenv.Valid("A=1\n# fine\nB=\"two\"\n"))
+    testing.AssertFalse(dotenv.Valid("A=1\nthis line has no equals\n"))
+    testing.AssertFalse(dotenv.Valid("A=\"never closed\n"))
+    // the lenient reader keeps what it understood and drops the rest
+    mut d := dotenv.Parse("A=1\ngarbage\nB=2\n")
+    defer dotenv.Free(d)
+    testing.AssertEqInt(dotenv.Len(d), 2)
+    testing.AssertEqStr(dotenv.Get(d, "B"), "2")
+end
+
+// The property that matters for Format: anything the reader treats as
+// syntax has to come back unchanged through a write and a re-read.
+func test_roundtrip():
+    mut d := dotenv.Parse(sample())
+    defer dotenv.Free(d)
+    text := dotenv.Format(d)
+    mut back := dotenv.Parse(text)
+    defer dotenv.Free(back)
+    testing.AssertEqInt(dotenv.Len(back), dotenv.Len(d))
+    repeat dotenv.Len(d) with i:
+        testing.AssertEqStr(dotenv.KeyAt(back, i), dotenv.KeyAt(d, i))
+        testing.AssertEqStr(dotenv.ValueAt(back, i), dotenv.ValueAt(d, i))
+    end
+end
+
+func test_format():
+    mut d := dotenv.New()
+    defer dotenv.Free(d)
+    dotenv.Set(d, "PLAIN", "value")
+    dotenv.Set(d, "SPACED", "a b")
+    dotenv.Set(d, "EMPTY", "")
+    dotenv.Set(d, "MONEY", "$HOME")
+    testing.AssertEqStr(dotenv.Format(d), "PLAIN=value\nSPACED=\"a b\"\nEMPTY=\nMONEY=\"\\$HOME\"\n")
+    testing.AssertEqStr(dotenv.Quote("plain"), "plain")
+    testing.AssertEqStr(dotenv.Quote("a b"), `"a b"`)
+    testing.AssertEqStr(dotenv.Quote(""), "")
+    mut e := dotenv.New()
+    defer dotenv.Free(e)
+    dotenv.Set(e, "A", "1")
+    testing.AssertEqStr(dotenv.FormatExport(e), "export A=1\n")
+end
+
+// A '$' written bare would come back as an expansion, so Format escapes
+// it. This checks the escape actually survives the round trip.
+func test_dollar_roundtrip():
+    mut d := dotenv.New()
+    defer dotenv.Free(d)
+    dotenv.Set(d, "MONEY", "$HOME")
+    mut back := dotenv.Parse(dotenv.Format(d))
+    defer dotenv.Free(back)
+    testing.AssertEqStr(dotenv.Get(back, "MONEY"), "$HOME")
+end
+
+func test_doc_api():
+    mut d := dotenv.New()
+    defer dotenv.Free(d)
+    dotenv.Set(d, "A", "1")
+    dotenv.Set(d, "B", "2")
+    dotenv.Set(d, "A", "3")
+    testing.AssertEqInt(dotenv.Len(d), 2)
+    testing.AssertEqStr(dotenv.Get(d, "A"), "3")
+    keys := dotenv.Keys(d)
+    defer keys.free()
+    testing.AssertEqInt(keys.len(), 2)
+    testing.AssertTrue(dotenv.Remove(d, "A"))
+    testing.AssertFalse(dotenv.Remove(d, "A"))
+    testing.AssertEqInt(dotenv.Len(d), 1)
+    testing.AssertEqStr(dotenv.KeyAt(d, 0), "B")
+    testing.AssertEqStr(dotenv.ValueAt(d, 5), "")
+end
+
+func test_merge_into():
+    mut base := dotenv.Parse("A=1\nB=2\n")
+    defer dotenv.Free(base)
+    mut over := dotenv.Parse("B=two\nC=3\n")
+    defer dotenv.Free(over)
+    dotenv.MergeInto(base, over)
+    testing.AssertEqInt(dotenv.Len(base), 3)
+    testing.AssertEqStr(dotenv.Get(base, "B"), "two")
+    testing.AssertEqStr(dotenv.Get(base, "C"), "3")
+end
+
+// std/config reads INI values through this, so both formats agree on
+// what a written scalar means without a second implementation.
+func test_scalar():
+    testing.AssertEqStr(dotenv.ParseScalar("  bare value  "), "bare value")
+    testing.AssertEqStr(dotenv.ParseScalar(` "quoted" `), "quoted")
+    testing.AssertEqStr(dotenv.ParseScalar("value # comment"), "value")
+    testing.AssertEqStr(dotenv.ParseScalar("value ; kept"), "value ; kept")
+    testing.AssertEqStr(dotenv.ParseScalarEx("value ; dropped", true), "value")
+end
+
+func env_file(name: str): str:
+    ret path.Join(os.TempDir(), name)
+end
+
+func test_env_load():
+    p := env_file("salam_dotenv_load.env")
+    os.Remove(p)
+    io.WriteFile(p, "SALAM_DE_A=fromfile\nSALAM_DE_B=other\n")
+    env.Unset("SALAM_DE_A")
+    env.Set("SALAM_DE_B", "preset")
+    // Load leaves an already set variable alone
+    testing.AssertEqInt(env.Load(p), 1)
+    testing.AssertEqStr(env.Get("SALAM_DE_A"), "fromfile")
+    testing.AssertEqStr(env.Get("SALAM_DE_B"), "preset")
+    // Overload lets the file win
+    testing.AssertEqInt(env.Overload(p), 2)
+    testing.AssertEqStr(env.Get("SALAM_DE_B"), "other")
+    os.Remove(p)
+    env.Unset("SALAM_DE_A")
+    env.Unset("SALAM_DE_B")
+end
+
+// A reference the file does not define is resolved from the real
+// environment, which is the layer std/encoding/dotenv cannot supply.
+func test_env_expansion():
+    env.Set("SALAM_DE_HOST", "example.com")
+    env.Unset("SALAM_DE_URL")
+    testing.AssertEqInt(env.LoadText("SALAM_DE_URL=https://${SALAM_DE_HOST}/x\n"), 1)
+    testing.AssertEqStr(env.Get("SALAM_DE_URL"), "https://example.com/x")
+    testing.AssertEqStr(env.Expand("at $SALAM_DE_HOST now"), "at example.com now")
+    testing.AssertEqStr(env.Expand("${SALAM_DE_ABSENT:-none}"), "none")
+    env.Unset("SALAM_DE_HOST")
+    env.Unset("SALAM_DE_URL")
+end
+
+func test_env_profile():
+    dir := env_file("salam_dotenv_profile")
+    os.RemoveAll(dir)
+    os.Mkdir(dir)
+    io.WriteFile(path.Join(dir, ".env"), "SALAM_DE_P=base\nSALAM_DE_Q=kept\n")
+    io.WriteFile(path.Join(dir, ".env.local"), "SALAM_DE_P=local\n")
+    env.Set("SALAM_ENV", "production")
+    io.WriteFile(path.Join(dir, ".env.production"), "SALAM_DE_R=prod-${SALAM_DE_Q}\n")
+    env.Unset("SALAM_DE_P")
+    env.Unset("SALAM_DE_Q")
+    env.Unset("SALAM_DE_R")
+    testing.AssertEqInt(env.LoadProfile(dir), 3)
+    // later file in the cascade wins
+    testing.AssertEqStr(env.Get("SALAM_DE_P"), "local")
+    // and it can reference a value an earlier file set
+    testing.AssertEqStr(env.Get("SALAM_DE_R"), "prod-kept")
+    os.RemoveAll(dir)
+    env.Unset("SALAM_ENV")
+    env.Unset("SALAM_DE_P")
+    env.Unset("SALAM_DE_Q")
+    env.Unset("SALAM_DE_R")
+end
+
+func main:
+    test_basic()
+    test_escapes()
+    test_multiline()
+    test_crlf_and_bom()
+    test_expansion()
+    test_refnames()
+    test_expand_with_base()
+    test_strict()
+    test_roundtrip()
+    test_format()
+    test_dollar_roundtrip()
+    test_doc_api()
+    test_merge_into()
+    test_scalar()
+    test_env_load()
+    test_env_expansion()
+    test_env_profile()
+    testing.Summary()
+    ret 0
+end

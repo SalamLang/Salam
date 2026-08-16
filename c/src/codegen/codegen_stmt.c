@@ -14,13 +14,82 @@
 
 #include "codegen/codegen_internal.h"
 
-void cg_emit_defers(cg_t *cg)
+/*
+ * `defer` is scoped to the block it is written in, not to the whole function.
+ * The registration list is still one flat per-function stack, but every nested
+ * block remembers its depth on entry and flushes back down to it on the way
+ * out, so a defer that names a block-local sees that name in scope:
+ *
+ *     if cond:
+ *         mut v := ...
+ *         defer v.free()     // emitted here, at the closing brace
+ *     end                    // - not at function exit, where v is gone
+ *
+ * That also makes the cleanup conditional (it only runs when the branch runs)
+ * and makes a defer in a loop body run once per iteration, which is what the
+ * interpreter does by registering defers as it reaches them.
+ *
+ * `ret` still flushes the whole stack, since it leaves every open block.
+ */
+void cg_emit_defers_from(cg_t *cg, size_t mark)
 {
     {
         size_t i = cg->fn_defers.len;
-        for (; i > 0; i--)
+        for (; i > mark; i--)
             cg_stmt(cg, (ast_node_t *)cg->fn_defers.data[i - 1]);
     }
+}
+
+void cg_emit_defers(cg_t *cg)
+{
+    cg_emit_defers_from(cg, 0);
+}
+
+/*
+ * A block whose last statement jumps has already emitted its defers on that
+ * path (ret flushes everything, break/continue flush back to the loop mark),
+ * so a second copy at the closing brace would be dead code.
+ */
+static bool cg_list_terminates(const vec_t *list)
+{
+    ast_node_t *last;
+    if (!list->len) return false;
+    last = (ast_node_t *)list->data[list->len - 1];
+    return last && (last->kind == AST_RETURN || last->kind == AST_BREAK ||
+                    last->kind == AST_CONTINUE);
+}
+
+void cg_scoped_stmts(cg_t *cg, vec_t *list)
+{
+    size_t lmark = cg->locals.len;
+    size_t dmark = cg->fn_defers.len;
+    {
+        size_t i = 0;
+        for (; i < list->len; i++)
+            cg_stmt(cg, (ast_node_t *)list->data[i]);
+    }
+    if (!cg_list_terminates(list)) cg_emit_defers_from(cg, dmark);
+    cg->fn_defers.len = dmark;
+    cg->locals.len = lmark;
+}
+
+/* Loop bodies additionally record their defer depth so that break/continue,
+ * which skip the closing brace, still run what the body registered. */
+static void cg_loop_push(cg_t *cg)
+{
+    if (cg->nloop < CG_MAX_LOOP_DEPTH) cg->loop_dmark[cg->nloop] = cg->fn_defers.len;
+    cg->nloop++;
+}
+
+static void cg_loop_pop(cg_t *cg)
+{
+    if (cg->nloop > 0) cg->nloop--;
+}
+
+static void cg_emit_loop_exit_defers(cg_t *cg)
+{
+    if (cg->nloop > 0 && cg->nloop <= CG_MAX_LOOP_DEPTH)
+        cg_emit_defers_from(cg, cg->loop_dmark[cg->nloop - 1]);
 }
 
 /*
@@ -304,13 +373,7 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
                     cg_unparen(cg, cg_match_arm_cond(cg, arm, subj_var, subj_ts));
                 cg_line(cg, "%sif (%s) {", i ? "} else " : "", cond);
                 cg->indent++;
-                {
-                    size_t mark = cg->locals.len;
-                    size_t j = 0;
-                    for (; j < arm->b->list.len; j++)
-                        cg_stmt(cg, (ast_node_t *)arm->b->list.data[j]);
-                    cg->locals.len = mark;
-                }
+                cg_scoped_stmts(cg, &arm->b->list);
                 cg->indent--;
             }
         }
@@ -320,23 +383,17 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
         break;
     }
     case AST_BREAK:
+        cg_emit_loop_exit_defers(cg);
         cg_line(cg, "break;");
         break;
     case AST_CONTINUE:
+        cg_emit_loop_exit_defers(cg);
         cg_line(cg, "continue;");
         break;
     case AST_IF:
         cg_line(cg, "if (%s) {", cg_cond(cg, n->a));
         cg->indent++;
-        {
-            size_t m = cg->locals.len;
-            {
-                size_t i = 0;
-                for (; i < n->b->list.len; i++)
-                    cg_stmt(cg, (ast_node_t *)n->b->list.data[i]);
-            }
-            cg->locals.len = m;
-        }
+        cg_scoped_stmts(cg, &n->b->list);
         cg->indent--;
         if (n->c && n->c->kind == AST_IF) {
             cg_indent(cg);
@@ -344,15 +401,7 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
 
             sb_puts(cg->c, cg_fmt(cg, "if (%s) {\n", cg_cond(cg, n->c->a)));
             cg->indent++;
-            {
-                size_t m = cg->locals.len;
-                {
-                    size_t i = 0;
-                    for (; i < n->c->b->list.len; i++)
-                        cg_stmt(cg, (ast_node_t *)n->c->b->list.data[i]);
-                }
-                cg->locals.len = m;
-            }
+            cg_scoped_stmts(cg, &n->c->b->list);
             cg->indent--;
             if (n->c->c) {
                 cg_line(cg, "} else {");
@@ -364,15 +413,7 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
         } else if (n->c) {
             cg_line(cg, "} else {");
             cg->indent++;
-            {
-                size_t m = cg->locals.len;
-                {
-                    size_t i = 0;
-                    for (; i < n->c->list.len; i++)
-                        cg_stmt(cg, (ast_node_t *)n->c->list.data[i]);
-                }
-                cg->locals.len = m;
-            }
+            cg_scoped_stmts(cg, &n->c->list);
             cg->indent--;
             cg_line(cg, "}");
         } else {
@@ -382,15 +423,9 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
     case AST_UNTIL:
         cg_line(cg, "while (%s) {", cg_cond(cg, n->a));
         cg->indent++;
-        {
-            size_t m = cg->locals.len;
-            {
-                size_t i = 0;
-                for (; i < n->b->list.len; i++)
-                    cg_stmt(cg, (ast_node_t *)n->b->list.data[i]);
-            }
-            cg->locals.len = m;
-        }
+        cg_loop_push(cg);
+        cg_scoped_stmts(cg, &n->b->list);
+        cg_loop_pop(cg);
         cg->indent--;
         cg_line(cg, "}");
         break;
@@ -414,6 +449,7 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
                     t, t, cg_expr(cg, n->a), t, t, t);
         }
         cg->indent++;
+        cg_loop_push(cg);
         {
             size_t m = cg->locals.len;
             if (n->name) {
@@ -432,13 +468,10 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
                 cg_line(cg, "(void)%s;", cg_cident(cg, n->name));
                 local_add(cg, n->name);
             }
-            {
-                size_t i = 0;
-                for (; i < n->b->list.len; i++)
-                    cg_stmt(cg, (ast_node_t *)n->b->list.data[i]);
-            }
+            cg_scoped_stmts(cg, &n->b->list);
             cg->locals.len = m;
         }
+        cg_loop_pop(cg);
         cg->indent--;
         cg_line(cg, "}");
         break;
@@ -450,11 +483,9 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
         const char *post = n->c ? cg_simple_inline(cg, n->c) : "";
         cg_line(cg, "for (%s; %s; %s) {", init, cond, post);
         cg->indent++;
-        {
-            size_t i = 0;
-            for (; i < n->d->list.len; i++)
-                cg_stmt(cg, (ast_node_t *)n->d->list.data[i]);
-        }
+        cg_loop_push(cg);
+        cg_scoped_stmts(cg, &n->d->list);
+        cg_loop_pop(cg);
         cg->indent--;
         cg_line(cg, "}");
         cg->locals.len = mark;
@@ -467,11 +498,5 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
 
 void cg_block(cg_t *cg, ast_node_t *block)
 {
-    size_t mark = cg->locals.len;
-    {
-        size_t i = 0;
-        for (; i < block->list.len; i++)
-            cg_stmt(cg, (ast_node_t *)block->list.data[i]);
-    }
-    cg->locals.len = mark;
+    cg_scoped_stmts(cg, &block->list);
 }

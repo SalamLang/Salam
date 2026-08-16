@@ -24,90 +24,23 @@ func eval_args(
     end
 end
 
-func interp_alignof_typename(ip &: Interp, a &: at.Ast, ts: str): i64:
-    n := str.Len(ts)
-    if n == 0:
-        ret 8 as i64
+// The scope a struct's own declarations live in. A struct declared inside a
+// package resolves the names in its field defaults there, and a generic
+// instance cloned from one inherits that scope through fixup_generic_envs;
+// everything else belongs to the program.
+func struct_home_env(ip &: Interp, a &: at.Ast, sdef: int): int:
+    e := find_def_env(ip, sdef)
+    if e != 0:
+        ret e
     end
-    if byte_at(ts, n - 1) == 42:
-        ret 8 as i64
-    end
-    if str.Equals(ts, "i8") || str.Equals(ts, "u8") || str.Equals(ts, "bool") || str.Equals(ts, "char"):
-        ret 1 as i64
-    end
-    if str.Equals(ts, "i16") || str.Equals(ts, "u16"):
-        ret 2 as i64
-    end
-    if str.Equals(ts, "i32") || str.Equals(ts, "u32") || str.Equals(ts, "f32"):
-        ret 4 as i64
-    end
-    if str.Equals(ts, "i64") || str.Equals(ts, "u64") || str.Equals(ts, "f64") || str.Equals(ts, "str"):
-        ret 8 as i64
-    end
-    sd := find_struct(ip, ts)
-    if sd != 0:
-        mut maxalign := 1 as i64
-        repeat at.ChildCount(a, sd) with i:
-            f := at.Child(a, sd, i)
-            fn := at.Get(a, f)
-            if fn.kind != at.AST_FIELD:
-                continue
-            end
-            al := interp_alignof_typename(
-                ip, a, fn.ty != 0 ? at.Get(a, fn.ty).type_str : ""
-            )
-            if al > maxalign:
-                maxalign = al
-            end
+    hp := at.Get(a, sdef).home_pkg
+    if str.Len(hp) > 0:
+        hm := find_module(ip, hp)
+        if hm != 0:
+            ret ip.mods.get(hm).env
         end
-        ret maxalign
     end
-    ret 8 as i64
-end
-
-func interp_sizeof_typename(ip &: Interp, a &: at.Ast, ts: str): i64:
-    n := str.Len(ts)
-    if n == 0:
-        ret 8 as i64
-    end
-    if byte_at(ts, n - 1) == 42:
-        ret 8 as i64
-    end
-    if str.Equals(ts, "i8") || str.Equals(ts, "u8") || str.Equals(ts, "bool") || str.Equals(ts, "char"):
-        ret 1 as i64
-    end
-    if str.Equals(ts, "i16") || str.Equals(ts, "u16"):
-        ret 2 as i64
-    end
-    if str.Equals(ts, "i32") || str.Equals(ts, "u32") || str.Equals(ts, "f32"):
-        ret 4 as i64
-    end
-    if str.Equals(ts, "i64") || str.Equals(ts, "u64") || str.Equals(ts, "f64") || str.Equals(ts, "str"):
-        ret 8 as i64
-    end
-    sd := find_struct(ip, ts)
-    if sd != 0:
-        mut off := 0 as i64
-        mut maxalign := 1 as i64
-        repeat at.ChildCount(a, sd) with i:
-            f := at.Child(a, sd, i)
-            fn := at.Get(a, f)
-            if fn.kind != at.AST_FIELD:
-                continue
-            end
-            fts := fn.ty != 0 ? at.Get(a, fn.ty).type_str : ""
-            sz := interp_sizeof_typename(ip, a, fts)
-            al := interp_alignof_typename(ip, a, fts)
-            off = (off + al - (1 as i64)) & (~(al - (1 as i64)))
-            off += sz
-            if al > maxalign:
-                maxalign = al
-            end
-        end
-        off = (off + maxalign - (1 as i64)) & (~(maxalign - (1 as i64)))
-        ret off != (0 as i64) ? off : (8 as i64)
-    end
-    ret 8 as i64
+    ret ip.globals
 end
 
 func do_listdir(ip &: Interp, a &: at.Ast, call: int, patharg: Value): Value:
@@ -144,13 +77,13 @@ func eval_call(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
     node := at.Get(a, n)
     callee := node.a
     cn := at.Get(a, callee)
-    // One shared, function-scoped args vector: `defer` cleanup runs at every
-    // `ret` in this function regardless of which nested block registered it
-    // (the codegen's defer list isn't C-block-scoped - see PORTING.md), so a
-    // Vector declared and deferred inside a nested if is unsafe once OTHER
-    // returns exist outside that block. Only ONE of the branches below ever
-    // fills this vector before returning (mirrors the C, which never calls
-    // eval_args twice for the same call), so reuse is safe.
+    // One shared, function-scoped args vector, so a single `defer` covers
+    // every `ret` below. Only ONE of the branches ever fills it before
+    // returning (mirrors the C, which never calls eval_args twice for the
+    // same call), so the reuse is safe. Written this way when defers were
+    // replayed at function exit and a nested-block one would not compile;
+    // defers are block-scoped now, but one vector for one args list is still
+    // the simpler shape.
     mut args := Vector {} as Vector<Value>
     defer args.free()
 
@@ -255,7 +188,7 @@ func eval_call(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
             bv := env_slot_val(ip, bw, bslot)
             if bv.kind == VAL_FUNC:
                 bcl := ip.closures.get(bv.id)
-                ret call_func(ip, a, bcl.fn, bcl.env, false, val_null(), args)
+                ret invoke(ip, a, env, n, bcl.fn, bcl.env, false, val_null(), args)
             end
         end
         fn := find_func(ip, a, nm, na)
@@ -272,13 +205,13 @@ func eval_call(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
                     henv = ip.mods.get(hm).env
                 end
             end
-            ret call_func(ip, a, fn, henv, false, val_null(), args)
+            ret invoke(ip, a, env, n, fn, henv, false, val_null(), args)
         end
         efi := find_extern_fn(ip, nm)
         if efi != 0:
             ef := ip.extern_fns.get(efi)
             ecl := ip.closures.get(ef.id)
-            ret call_func(ip, a, ecl.fn, ecl.env, false, val_null(), args)
+            ret invoke(ip, a, env, n, ecl.fn, ecl.env, false, val_null(), args)
         end
         mut handled := false
         ir := call_intrinsic(ip, nm, args, handled)
@@ -311,7 +244,7 @@ func eval_call(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
                     if ip.failed:
                         ret val_null()
                     end
-                    ret call_module_func(ip, a, n, mv.id, method, args)
+                    ret call_module_func(ip, a, env, n, mv.id, method, args)
                 end
             end
         end
@@ -336,8 +269,8 @@ func eval_call(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
             end
             if m != 0:
                 denv := find_def_env(ip, m)
-                ret call_func(
-                    ip, a, m, denv != 0 ? denv : ip.globals, true, recv, args
+                ret invoke(
+                    ip, a, env, n, m, denv != 0 ? denv : ip.globals, true, recv, args
                 )
             end
             fi := st_find_field(ip, recv.id, method)
@@ -346,7 +279,7 @@ func eval_call(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
                 fv := s2.fvals.get(fi)
                 if fv.kind == VAL_FUNC:
                     fcl := ip.closures.get(fv.id)
-                    ret call_func(ip, a, fcl.fn, fcl.env, false, val_null(), args)
+                    ret invoke(ip, a, env, n, fcl.fn, fcl.env, false, val_null(), args)
                 end
             end
             rt_error(
@@ -360,8 +293,8 @@ func eval_call(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
         im := find_impl_method(ip, a, onn.type_str, method, na2)
         if im != 0:
             denv2 := find_def_env(ip, im)
-            ret call_func(
-                ip, a, im, denv2 != 0 ? denv2 : ip.globals, true, recv, args
+            ret invoke(
+                ip, a, env, n, im, denv2 != 0 ? denv2 : ip.globals, true, recv, args
             )
         end
         ret call_builtin_method(ip, a, n, recv, method, args)
@@ -377,17 +310,24 @@ func eval_call(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
             ret val_null()
         end
         vcl := ip.closures.get(fv2.id)
-        ret call_func(ip, a, vcl.fn, vcl.env, false, val_null(), args)
+        ret invoke(ip, a, env, n, vcl.fn, vcl.env, false, val_null(), args)
     end
     rt_error(ip, a, n, i18.Tr("value is not callable"))
     ret val_null()
 end
 
-// Runs a frame's defers LIFO (shared by eval_match; call_func inlines the
-// same walk - ported in stage A).
-func run_defers(ip &: Interp, a &: at.Ast, fr &: Frame):
+// Runs everything the current block registered with `defer`, innermost first,
+// and drops it from the frame.
+//
+// `defer` is scoped to the block it appears in, the same way the compiled
+// backends lower it: the cleanup runs on every way out of that block - falling
+// off the end, break, continue, or a return travelling through it. A return
+// that leaves several blocks runs them from the inside out as it unwinds,
+// which is the same LIFO order the function-exit replay produces for the
+// defers written at the top level of the function.
+func run_defers_from(ip &: Interp, a &: at.Ast, fr &: Frame, mark: int):
     mut di := fr.defer_stmts.len()
-    until di > 0:
+    until di > mark:
         di -= 1
         mut dummy := val_null()
         mut inner := Frame {}
@@ -397,6 +337,16 @@ func run_defers(ip &: Interp, a &: at.Ast, fr &: Frame):
         inner.defer_stmts.free()
         inner.defer_envs.free()
     end
+    until fr.defer_stmts.len() > mark:
+        _ds := fr.defer_stmts.pop()
+        _de := fr.defer_envs.pop()
+    end
+end
+
+// Runs a frame's defers LIFO (shared by eval_match; call_func inlines the
+// same walk - ported in stage A).
+func run_defers(ip &: Interp, a &: at.Ast, fr &: Frame):
+    run_defers_from(ip, a, fr, 0)
 end
 
 // eval_match (interp_expr.c) - match in expression position; the arm body
@@ -658,7 +608,7 @@ func eval_node(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
             else:
                 addr = to_int(cav)
             end
-            ret val_ptr(addr, ptr_elem_from_typestr(ts))
+            ret interp_ptr_value(ip, addr, ts)
         end
         base := base_typename(ts)
         if str.Equals(base, "char"):
@@ -818,7 +768,7 @@ func eval_node(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
                 rt_error(ip, a, n, i18.Tr("dereference of a null pointer"))
                 ret val_null()
             end
-            ret ptr_load(iav.pa, iav.pe, to_int(idxv))
+            ret mem_ptr_load(ip, a, iav, to_int(idxv))
         end
         if to_int(idxv) == (0 as i64):
             ret iav
@@ -890,6 +840,10 @@ func eval_node(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
         end
         sdn := at.Get(a, sdef)
         sv := mk_struct(ip, sdn.name, sdef, nf)
+        // Field defaults are written in the package that declares the struct,
+        // so they resolve there: `pub kind: int = KindNone` reads a constant
+        // of encerr's own module, which the program's globals never hold.
+        fenv := struct_home_env(ip, a, sdef)
         mut fi := 0
         repeat at.ChildCount(a, sdef) with i:
             f := at.Child(a, sdef, i)
@@ -910,7 +864,7 @@ func eval_node(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
             if provided != 0:
                 fval = eval(ip, a, env, at.Get(a, provided).a)
             else fnode.a != 0:
-                fval = eval(ip, a, ip.globals, fnode.a)
+                fval = eval(ip, a, fenv, fnode.a)
             end
             if ip.failed:
                 ret val_null()

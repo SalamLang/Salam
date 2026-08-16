@@ -1,0 +1,350 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package dotenv
+
+import str
+import mem
+import encoding.encerr
+
+// The .env reader. It walks (text, position) with a cursor rather than
+// splitting into lines, because a quoted value is allowed to span
+// newlines and a line-at-a-time loop cannot express that. Storing a PEM
+// block or an RSA key in a .env file is the case that needs it.
+//
+// Grammar accepted:
+//
+//   blank lines, and '#' comments to end of line
+//   optional 'export ' before a key
+//   KEY=value          bare, trailing whitespace dropped, ' #' ends it
+//   KEY="value"        escapes processed, variables expanded, multiline
+//   KEY='value'        verbatim: no escapes, no expansion, multiline
+//   KEY=               empty value
+//
+// Keys are [A-Za-z0-9_.-]. Expansion itself lives in dotenv_expand.salam;
+// this file only records whether an entry is eligible for it.
+//
+// Every scanner takes the document length `n` as a parameter instead of
+// asking for it. A str is NUL terminated, so `s.len()` is a strlen and
+// costs the whole document; calling it inside helpers that run several
+// times per entry made parsing quadratic in the number of entries. It is
+// measured once in the public entry points and passed down from there.
+
+// Result of reading one token. `value` doubles as the error message when
+// `ok` is false, which keeps the private helpers to a single shape.
+struct _DV:
+    pub value: str = ""
+    pub next: int = 0
+    pub flag: int = 1
+    pub ok: bool = true
+end
+
+// Cuts [i, i+ln) out of the document.
+//
+// This is what `s.substr(i, ln)` does, minus the part that made it the
+// wrong tool here: substr clamps its arguments against the string
+// length, so it strlens the WHOLE document on every call. The parser
+// already knows the bounds are good at the point it cuts, so that scan
+// is pure waste and is skipped here. Extracting a
+// key or a value stays proportional to the token, not to the file.
+func _slice(s: str, i: int, ln: int): str:
+    if ln <= 0: ret "" end
+    p := mem.AllocateZeroed((ln + 1) as u64)
+    bp := _bp(s)
+    src := ((bp as u64) + (i as u64)) as void*
+    mem.Copy(p, src, ln as u64)
+    ret p as str
+end
+
+func _is_hspace(c: int): bool: ret c == 32 || c == 9 end
+
+func _is_eol(c: int): bool: ret c == 10 || c == 13 end
+
+func _is_key_char(c: int): bool:
+    if c >= 48 && c <= 57: ret true end
+    if c >= 65 && c <= 90: ret true end
+    if c >= 97 && c <= 122: ret true end
+    ret c == 95 || c == 46 || c == 45
+end
+
+// Editors on Windows routinely leave a UTF-8 BOM on a .env file. Without
+// this the first key would be named "\xEF\xBB\xBFPATH" and silently miss.
+func _skip_bom(s: str, n: int, i: int): int:
+    if n < 3: ret i end
+    bp := _bp(s)
+    if _ub(bp, 0) == 239 && _ub(bp, 1) == 187 && _ub(bp, 2) == 191: ret i + 3 end
+    ret i
+end
+
+func _skip_hspace(s: str, n: int, i: int): int:
+    bp := _bp(s)
+    mut p := i
+    until p < n && _is_hspace(_ub(bp, p)):
+        p += 1
+    end
+    ret p
+end
+
+// Always lands on the start of the next line, so the caller is
+// guaranteed to make progress even on a malformed line.
+func _skip_to_eol(s: str, n: int, i: int): int:
+    bp := _bp(s)
+    mut p := i
+    until p < n && _is_eol(_ub(bp, p)) == false:
+        p += 1
+    end
+    if p < n && _ub(bp, p) == 13: p += 1 end
+    if p < n && _ub(bp, p) == 10: p += 1 end
+    ret p
+end
+
+func _skip_blank(s: str, n: int, i: int): int:
+    bp := _bp(s)
+    mut p := i
+    until p < n:
+        c := _ub(bp, p)
+        if _is_hspace(c) || _is_eol(c):
+            p += 1
+        else c == 35:
+            p = _skip_to_eol(s, n, p)
+        else:
+            ret p
+        end
+    end
+    ret p
+end
+
+// Compared byte by byte rather than with a substr, which would allocate
+// a 7 byte string and strlen the document once per entry just to throw
+// both away on the common case of no 'export ' prefix.
+func _skip_export(s: str, n: int, i: int): int:
+    if i + 7 > n: ret i end
+    bp := _bp(s)
+    word := "export "
+    wp := _bp(word)
+    repeat 7 with k:
+        if _ub(bp, i + k) != _ub(wp, k): ret i end
+    end
+    ret _skip_hspace(s, n, i + 7)
+end
+
+// Returns the byte an escape stands for, or -1 when the sequence is not
+// one we define. Unknown escapes are kept verbatim (backslash and all)
+// rather than silently dropping the backslash.
+//
+// '\$' is deliberately NOT resolved here. Reading happens before
+// expansion, so collapsing it to a bare '$' at this point would hand the
+// expander something indistinguishable from a real reference and the
+// escape would achieve nothing. It is left intact and dotenv_expand.salam
+// turns it into a literal '$'. The corner this leaves: inside double
+// quotes a backslash written directly before '$' always reads as that
+// escape, so a literal backslash followed by an expansion needs single
+// quotes instead.
+func _escape_char(c: int): int:
+    if c == 110: ret 10 end
+    if c == 114: ret 13 end
+    if c == 116: ret 9 end
+    if c == 98: ret 8 end
+    if c == 102: ret 12 end
+    if c == 118: ret 11 end
+    if c == 92 || c == 34 || c == 39: ret c end
+    ret 0 - 1
+end
+
+// `p` points at the character after a backslash. Returns the next
+// position to read from.
+func _append_escape(sb &: str.StringBuilder, s: str, p: int): int:
+    c := _ub(_bp(s), p)
+    e := _escape_char(c)
+    if e < 0:
+        str.BufAppendChar(sb, 92)
+        str.BufAppendChar(sb, c)
+    else:
+        str.BufAppendChar(sb, e)
+    end
+    ret p + 1
+end
+
+func _read_key(s: str, n: int, i: int): _DV:
+    bp := _bp(s)
+    mut p := i
+    until p < n && _is_key_char(_ub(bp, p)):
+        p += 1
+    end
+    ret _DV { value = _slice(s, i, p - i), next = p, ok = p > i }
+end
+
+// `i` points just past the opening quote. Double quotes process escapes
+// and stay eligible for expansion; single quotes are verbatim. Both may
+// run past a newline until the matching quote.
+func _read_quoted(s: str, n: int, i: int, q: int): _DV:
+    bp := _bp(s)
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    mut p := i
+    mut closed := false
+    until p < n:
+        c := _ub(bp, p)
+        if c == q:
+            p += 1
+            closed = true
+            break
+        end
+        if c == 92 && q == 34 && p + 1 < n:
+            p = _append_escape(sb, s, p + 1)
+        else:
+            str.BufAppendChar(sb, c)
+            p += 1
+        end
+    end
+    out := str.BufStr(sb)
+    mut flag := _EXPANDABLE
+    if q == 39: flag = _LITERAL end
+    ret _DV { value = out, next = _skip_to_eol(s, n, p), flag = flag, ok = closed }
+end
+
+// An unquoted value ends at the newline, or at a '#' that follows
+// whitespace. A '#' with no space before it is part of the value, which
+// is what keeps a URL fragment or a colour like #ff0000 intact.
+// `semi` additionally treats ';' as a comment opener, for INI callers.
+func _read_bare(s: str, n: int, i: int, semi: bool): _DV:
+    bp := _bp(s)
+    mut p := i
+    mut cut := i
+    until p < n:
+        c := _ub(bp, p)
+        if _is_eol(c): break end
+        if (c == 35 || (semi && c == 59)) && p > i && _is_hspace(_ub(bp, p - 1)): break end
+        p += 1
+        if _is_hspace(c) == false: cut = p end
+    end
+    ret _DV { value = _slice(s, i, cut - i), next = _skip_to_eol(s, n, p), ok = true }
+end
+
+func _read_value(s: str, n: int, i: int, semi: bool): _DV:
+    if i >= n: ret _DV { value = "", next = i, ok = true } end
+    c := _ub(_bp(s), i)
+    if c == 34 || c == 39: ret _read_quoted(s, n, i + 1, c) end
+    if _is_eol(c): ret _DV { value = "", next = _skip_to_eol(s, n, i), ok = true } end
+    ret _read_bare(s, n, i, semi)
+end
+
+func _parse_entry(d &: Doc, s: str, n: int, i: int): _DV:
+    bp := _bp(s)
+    k := _read_key(s, n, _skip_export(s, n, i))
+    p := _skip_hspace(s, n, k.next)
+    if k.ok == false || p >= n || _ub(bp, p) != 61:
+        ret _DV { value = "dotenv: expected KEY=VALUE", next = _skip_to_eol(s, n, i), ok = false }
+    end
+    v := _read_value(s, n, _skip_hspace(s, n, p + 1), false)
+    if v.ok == false:
+        ret _DV { value = "dotenv: unterminated quoted value", next = v.next, ok = false }
+    end
+    _push(d, k.value, v.value, v.flag)
+    ret _DV { value = "", next = v.next, ok = true }
+end
+
+func _parse_into(d &: Doc, text: str, err &: encerr.EncodingError, strict: bool):
+    n := text.len()
+    mut p := _skip_bom(text, n, 0)
+    until p < n:
+        p = _skip_blank(text, n, p)
+        if p >= n: ret end
+        r := _parse_entry(d, text, n, p)
+        if r.ok == false && strict:
+            err = encerr.ErrUnexpectedToken(r.value, p)
+            ret
+        end
+        if r.next > p:
+            p = r.next
+        else:
+            p = _skip_to_eol(text, n, p)
+        end
+    end
+end
+
+// Parses without resolving any variable reference. Values keep their
+// '$NAME' text and each entry keeps its expansion eligibility, which is
+// what lets a caller resolve against something this package cannot see,
+// such as the real process environment. See RefNames and ExpandDoc.
+@en "ParseRaw"
+@fa "تجزیه خام"
+@ar "تحلیل خام"
+pub func ParseRaw(text: str): Doc:
+    mut out := Doc {}
+    mut err := encerr.NoError()
+    _parse_into(out, text, err, false)
+    ret out
+end
+
+// Parses and resolves references against the file's own earlier entries.
+// Malformed lines are skipped; use ParseStrict to be told about them.
+@en "Parse"
+@fa "تجزیه"
+@ar "تحلیل"
+pub func Parse(text: str): Doc:
+    mut raw := ParseRaw(text)
+    defer Free(raw)
+    mut base := Doc {}
+    defer Free(base)
+    ret ExpandDoc(raw, base)
+end
+
+// Stops at the first malformed line and reports it through `err`. A line
+// is malformed when it is neither blank nor a comment yet has no usable
+// KEY=, or when a quoted value is never closed.
+@en "ParseStrict"
+@fa "تجزیه سخت گیرانه"
+@ar "تحلیل صارم"
+pub func ParseStrict(text: str, err &: encerr.EncodingError): Doc:
+    mut raw := Doc {}
+    err = encerr.NoError()
+    _parse_into(raw, text, err, true)
+    defer Free(raw)
+    mut base := Doc {}
+    defer Free(base)
+    ret ExpandDoc(raw, base)
+end
+
+@en "Valid"
+@fa "معتبر"
+@ar "صالح"
+pub func Valid(text: str): bool:
+    mut err := encerr.NoError()
+    mut d := ParseStrict(text, err)
+    defer Free(d)
+    ret encerr.IsError(err) == false
+end
+
+// Reads a single already-split value the way a .env value is read:
+// trimmed, quotes honoured with escapes, inline comment removed. Exposed
+// because std/config needs exactly this for INI values too, and a second
+// copy of the rules is how the two formats would drift apart.
+@en "ParseScalar"
+@fa "تجزیه مقدار"
+@ar "تحلیل قیمة"
+pub func ParseScalar(raw: str): str:
+    ret ParseScalarEx(raw, false)
+end
+
+// As ParseScalar, but `semi` also lets ';' open an inline comment, which
+// INI allows and .env does not.
+@en "ParseScalarEx"
+@fa "تجزیه مقدار گسترده"
+@ar "تحلیل قیمة موسع"
+pub func ParseScalarEx(raw: str, semi: bool): str:
+    n := raw.len()
+    v := _read_value(raw, n, _skip_hspace(raw, n, 0), semi)
+    ret v.value
+end

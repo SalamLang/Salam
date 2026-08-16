@@ -659,6 +659,39 @@ func fixup_generic_envs(ip &: Interp, a &: at.Ast, sem &: sm.Sema):
     fixup_generic_envs_in(ip, a, sem, ip.impls)
 end
 
+// A generic instance or a derived codec has a global name but a package's
+// body: it is reachable from anywhere, and resolves the names it calls -
+// private ones included - inside the module it was cloned or generated from.
+// Its closure is built before the modules exist, so the environment is
+// corrected here, once they do ("call to undefined function '_dnew'" without
+// it, from the JSON codecs the compiler derives).
+func rehome_synthetic_funcs(ip &: Interp, a &: at.Ast):
+    repeat ip.funcs.len() with i:
+        f := ip.funcs.get(i)
+        fnode := at.Get(a, f)
+        if str.Len(fnode.name) == 0 || str.Len(fnode.home_pkg) == 0:
+            continue
+        end
+        home := find_module(ip, fnode.home_pkg)
+        if home == 0:
+            continue
+        end
+        slot := env_find_local(ip, ip.globals, fnode.name)
+        if slot < 0:
+            continue
+        end
+        bv := env_slot_val(ip, ip.globals, slot)
+        if bv.kind != VAL_FUNC:
+            continue
+        end
+        mut cl := ip.closures.get(bv.id)
+        if cl.fn == f:
+            cl.env = ip.mods.get(home).env
+            ip.closures.set(bv.id, cl)
+        end
+    end
+end
+
 // The C interp_run's setjmp branch (runtime-error report), shared by Run.
 func run_fail(ip &: Interp): int:
     if ip.have_errspan:

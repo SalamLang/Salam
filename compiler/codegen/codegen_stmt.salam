@@ -7,12 +7,84 @@ import sm "../semantic/semantic.salam"
 
 // ===== codegen_stmt.c =====
 
-// cg_emit_defers - flush g.fn_defers LIFO (without popping).
-func cg_emit_defers(g &: Cg, s &: sm.Sema, a &: at.Ast):
+// `defer` is scoped to the block it is written in, not to the whole function.
+// The registration list is still one flat per-function stack, but every nested
+// block remembers its depth on entry and flushes back down to it on the way
+// out, so a defer that names a block-local sees that name in scope:
+//
+//     if cond:
+//         mut v := ...
+//         defer v.free()     // emitted here, at the closing brace
+//     end                    // - not at function exit, where v is gone
+//
+// That also makes the cleanup conditional (it only runs when the branch runs)
+// and makes a defer in a loop body run once per iteration, which is what the
+// interpreter does by registering defers as it reaches them.
+//
+// `ret` still flushes the whole stack, since it leaves every open block.
+func cg_emit_defers_from(g &: Cg, s &: sm.Sema, a &: at.Ast, mark: int):
     mut i := g.fn_defers.len()
-    until i > 0:
+    until i > mark:
         cg_stmt(g, s, a, g.fn_defers.get(i - 1))
         i -= 1
+    end
+end
+
+// cg_emit_defers - flush g.fn_defers LIFO (without popping).
+func cg_emit_defers(g &: Cg, s &: sm.Sema, a &: at.Ast):
+    cg_emit_defers_from(g, s, a, 0)
+end
+
+func defers_trunc(g &: Cg, mark: int):
+    until g.fn_defers.len() > mark:
+        _dropped := g.fn_defers.pop()
+    end
+end
+
+// A block whose last statement jumps has already emitted its defers on that
+// path (ret flushes everything, break/continue flush back to the loop mark),
+// so a second copy at the closing brace would be dead code.
+func cg_list_terminates(a &: at.Ast, blockid: int): bool:
+    bn := at.Get(a, blockid)
+    n := bn.list.len()
+    if n == 0:
+        ret false
+    end
+    k := at.KindOf(a, bn.list.get(n - 1))
+    ret k == at.AST_RETURN || k == at.AST_BREAK || k == at.AST_CONTINUE
+end
+
+// Emit the statements of a nested block, then its own defers, then drop them.
+func cg_scoped_stmts(g &: Cg, s &: sm.Sema, a &: at.Ast, blockid: int):
+    lmark := g.locals.len()
+    dmark := g.fn_defers.len()
+    bn := at.Get(a, blockid)
+    repeat bn.list.len() with i:
+        cg_stmt(g, s, a, bn.list.get(i))
+    end
+    if cg_list_terminates(a, blockid) == false:
+        cg_emit_defers_from(g, s, a, dmark)
+    end
+    defers_trunc(g, dmark)
+    locals_trunc(g, lmark)
+end
+
+// Loop bodies additionally record their defer depth so that break/continue,
+// which skip the end of the body, still run what the body registered.
+func cg_loop_push(g &: Cg):
+    g.loop_dmark.push(g.fn_defers.len())
+end
+
+func cg_loop_pop(g &: Cg):
+    if g.loop_dmark.len() > 0:
+        _dropped := g.loop_dmark.pop()
+    end
+end
+
+func cg_emit_loop_exit_defers(g &: Cg, s &: sm.Sema, a &: at.Ast):
+    n := g.loop_dmark.len()
+    if n > 0:
+        cg_emit_defers_from(g, s, a, g.loop_dmark.get(n - 1))
     end
 end
 
@@ -308,12 +380,7 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
             cond := cg_unparen(cg_match_arm_cond(g, s, a, armid, subj_var, subj_ts))
             cg_line(g, (i > 0 ? "} else " : "") + "if (" + cond + ") {")
             g.indent += 1
-            mark := g.locals.len()
-            bn := at.Get(a, at.Get(a, armid).b)
-            repeat bn.list.len() with j:
-                cg_stmt(g, s, a, bn.list.get(j))
-            end
-            locals_trunc(g, mark)
+            cg_scoped_stmts(g, s, a, at.Get(a, armid).b)
             g.indent -= 1
         end
         if nn.list.len() > 0:
@@ -324,22 +391,19 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
         ret
     end
     if k == at.AST_BREAK:
+        cg_emit_loop_exit_defers(g, s, a)
         cg_line(g, "break;")
         ret
     end
     if k == at.AST_CONTINUE:
+        cg_emit_loop_exit_defers(g, s, a)
         cg_line(g, "continue;")
         ret
     end
     if k == at.AST_IF:
         cg_line(g, "if (" + cg_cond(g, s, a, nn.a) + ") {")
         g.indent += 1
-        mark := g.locals.len()
-        bn := at.Get(a, nn.b)
-        repeat bn.list.len() with i:
-            cg_stmt(g, s, a, bn.list.get(i))
-        end
-        locals_trunc(g, mark)
+        cg_scoped_stmts(g, s, a, nn.b)
         g.indent -= 1
         if nn.c != 0 && at.KindOf(a, nn.c) == at.AST_IF:
             cg_indent(g)
@@ -347,12 +411,7 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
             en := at.Get(a, nn.c)
             out(g, "if (" + cg_cond(g, s, a, en.a) + ") {\n")
             g.indent += 1
-            mark2 := g.locals.len()
-            ebn := at.Get(a, en.b)
-            repeat ebn.list.len() with i2:
-                cg_stmt(g, s, a, ebn.list.get(i2))
-            end
-            locals_trunc(g, mark2)
+            cg_scoped_stmts(g, s, a, en.b)
             g.indent -= 1
             if en.c != 0:
                 cg_line(g, "} else {")
@@ -364,12 +423,7 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
         else nn.c != 0:
             cg_line(g, "} else {")
             g.indent += 1
-            mark3 := g.locals.len()
-            en2 := at.Get(a, nn.c)
-            repeat en2.list.len() with i3:
-                cg_stmt(g, s, a, en2.list.get(i3))
-            end
-            locals_trunc(g, mark3)
+            cg_scoped_stmts(g, s, a, nn.c)
             g.indent -= 1
             cg_line(g, "}")
         else:
@@ -380,12 +434,9 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
     if k == at.AST_UNTIL:
         cg_line(g, "while (" + cg_cond(g, s, a, nn.a) + ") {")
         g.indent += 1
-        mark := g.locals.len()
-        bn := at.Get(a, nn.b)
-        repeat bn.list.len() with i:
-            cg_stmt(g, s, a, bn.list.get(i))
-        end
-        locals_trunc(g, mark)
+        cg_loop_push(g)
+        cg_scoped_stmts(g, s, a, nn.b)
+        cg_loop_pop(g)
         g.indent -= 1
         cg_line(g, "}")
         ret
@@ -409,6 +460,7 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
             )
         end
         g.indent += 1
+        cg_loop_push(g)
         mark := g.locals.len()
         if str.Len(nn.name) > 0:
             ivct := cg_ctype(str.Len(nn.type_str) > 0 ? nn.type_str : "i32")
@@ -417,11 +469,9 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
             )
             local_add(g, nn.name)
         end
-        bn := at.Get(a, nn.b)
-        repeat bn.list.len() with i:
-            cg_stmt(g, s, a, bn.list.get(i))
-        end
+        cg_scoped_stmts(g, s, a, nn.b)
         locals_trunc(g, mark)
+        cg_loop_pop(g)
         g.indent -= 1
         cg_line(g, "}")
         ret
@@ -442,10 +492,9 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
         end
         cg_line(g, "for (" + init + "; " + cond + "; " + post + ") {")
         g.indent += 1
-        dn := at.Get(a, nn.d)
-        repeat dn.list.len() with i:
-            cg_stmt(g, s, a, dn.list.get(i))
-        end
+        cg_loop_push(g)
+        cg_scoped_stmts(g, s, a, nn.d)
+        cg_loop_pop(g)
         g.indent -= 1
         cg_line(g, "}")
         locals_trunc(g, mark)
@@ -454,10 +503,5 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
 end
 
 func cg_block(g &: Cg, s &: sm.Sema, a &: at.Ast, block: int):
-    mark := g.locals.len()
-    bn := at.Get(a, block)
-    repeat bn.list.len() with i:
-        cg_stmt(g, s, a, bn.list.get(i))
-    end
-    locals_trunc(g, mark)
+    cg_scoped_stmts(g, s, a, block)
 end

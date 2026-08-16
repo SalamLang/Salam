@@ -6,12 +6,36 @@ import sm "../semantic/semantic.salam"
 
 // ===== codegen_llvm_stmt.c (stage A slice - B must NOT re-port) =====
 
-// ll_emit_defers - LIFO defer replay (body statements come from lv_stmt).
-func emit_defers(v &: Lv, s &: sm.Sema, a &: at.Ast):
+// ll_emit_defers_from - `defer` is scoped to the block it is written in: every
+// nested block records the defer-stack depth it started at and replays anything
+// registered above that mark on the way out, so a defer naming a block-local is
+// lowered while that local's alloca is still a live name. `ret` replays the
+// whole stack. See the long note in codegen/codegen_stmt.salam.
+func emit_defers_from(v &: Lv, s &: sm.Sema, a &: at.Ast, mark: int):
     mut i := v.defers.len()
-    until i > 0:
+    until i > mark:
         lv_stmt(v, s, a, v.defers.get(i - 1))
         i -= 1
+    end
+end
+
+// ll_emit_defers - LIFO defer replay (body statements come from lv_stmt).
+func emit_defers(v &: Lv, s &: sm.Sema, a &: at.Ast):
+    emit_defers_from(v, s, a, 0)
+end
+
+func defers_trunc(v &: Lv, mark: int):
+    until v.defers.len() > mark:
+        _dropped := v.defers.pop()
+    end
+end
+
+// break/continue jump over the end of the loop body, so they run what the body
+// registered before branching. lv_stmt is a no-op once the block has a
+// terminator, so a body that ends in `ret` never emits these twice.
+func emit_loop_exit_defers(v &: Lv, s &: sm.Sema, a &: at.Ast):
+    if v.nloop > 0:
+        emit_defers_from(v, s, a, v.loop_dmark.get(v.nloop - 1))
     end
 end
 

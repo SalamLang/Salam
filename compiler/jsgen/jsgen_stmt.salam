@@ -9,11 +9,52 @@ import sm "../semantic/semantic.salam"
 
 // ===== jsgen_stmt.c =====
 
-func jsg_emit_defers(g &: Jg, s &: sm.Sema, a &: at.Ast):
+// `defer` is scoped to its block, matching the C and LLVM backends - see the
+// note in codegen/codegen_stmt.salam. It matters just as much here: a `let`
+// declared inside an `if` is not in scope at the end of the function, so a
+// function-exit replay would emit a ReferenceError.
+func jsg_emit_defers_from(g &: Jg, s &: sm.Sema, a &: at.Ast, mark: int):
     mut i := g.fn_defers.len()
-    until i > 0:
+    until i > mark:
         jsg_stmt(g, s, a, g.fn_defers.get(i - 1))
         i -= 1
+    end
+end
+
+func jsg_emit_defers(g &: Jg, s &: sm.Sema, a &: at.Ast):
+    jsg_emit_defers_from(g, s, a, 0)
+end
+
+func jsg_defers_trunc(g &: Jg, mark: int):
+    until g.fn_defers.len() > mark:
+        _dropped := g.fn_defers.pop()
+    end
+end
+
+func jsg_list_terminates(a &: at.Ast, block: int): bool:
+    bv := at.Get(a, block)
+    cnt := bv.list.len()
+    if cnt == 0:
+        ret false
+    end
+    k := at.KindOf(a, bv.list.get(cnt - 1))
+    ret k == at.AST_RETURN || k == at.AST_BREAK || k == at.AST_CONTINUE
+end
+
+func jsg_loop_push(g &: Jg):
+    g.loop_dmark.push(g.fn_defers.len())
+end
+
+func jsg_loop_pop(g &: Jg):
+    if g.loop_dmark.len() > 0:
+        _dropped := g.loop_dmark.pop()
+    end
+end
+
+func jsg_emit_loop_exit_defers(g &: Jg, s &: sm.Sema, a &: at.Ast):
+    cnt := g.loop_dmark.len()
+    if cnt > 0:
+        jsg_emit_defers_from(g, s, a, g.loop_dmark.get(cnt - 1))
     end
 end
 
@@ -132,6 +173,7 @@ end
 
 func jsg_stmt_list(g &: Jg, s &: sm.Sema, a &: at.Ast, block: int):
     m := g.locals.len()
+    dmark := g.fn_defers.len()
     bv := at.Get(a, block)
     cnt := bv.list.len()
     mut i := 0
@@ -139,6 +181,10 @@ func jsg_stmt_list(g &: Jg, s &: sm.Sema, a &: at.Ast, block: int):
         jsg_stmt(g, s, a, bv.list.get(i))
         i += 1
     end
+    if jsg_list_terminates(a, block) == false:
+        jsg_emit_defers_from(g, s, a, dmark)
+    end
+    jsg_defers_trunc(g, dmark)
     jsg_scope_reset(g, m)
 end
 
@@ -264,13 +310,9 @@ func jsg_repeat(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int):
         end
     end
     g.indent += 1
-    bv := at.Get(a, n.b)
-    cnt2 := bv.list.len()
-    mut i := 0
-    until i < cnt2:
-        jsg_stmt(g, s, a, bv.list.get(i))
-        i += 1
-    end
+    jsg_loop_push(g)
+    jsg_stmt_list(g, s, a, n.b)
+    jsg_loop_pop(g)
     g.indent -= 1
     cg_line(g, "}")
     jsg_scope_reset(g, m)
@@ -437,10 +479,12 @@ func jsg_stmt(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int):
         ret
     end
     if n.kind == at.AST_BREAK:
+        jsg_emit_loop_exit_defers(g, s, a)
         cg_line(g, "break;")
         ret
     end
     if n.kind == at.AST_CONTINUE:
+        jsg_emit_loop_exit_defers(g, s, a)
         cg_line(g, "continue;")
         ret
     end
@@ -504,7 +548,9 @@ func jsg_stmt(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int):
     if n.kind == at.AST_UNTIL:
         cg_line(g, "while (" + jsg_expr(g, s, a, n.a) + ") {")
         g.indent += 1
+        jsg_loop_push(g)
         jsg_stmt_list(g, s, a, n.b)
+        jsg_loop_pop(g)
         g.indent -= 1
         cg_line(g, "}")
         ret
@@ -527,13 +573,9 @@ func jsg_stmt(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int):
             )
         end
         g.indent += 1
-        bv := at.Get(a, n.b)
-        cnt2 := bv.list.len()
-        mut i2 := 0
-        until i2 < cnt2:
-            jsg_stmt(g, s, a, bv.list.get(i2))
-            i2 += 1
-        end
+        jsg_loop_push(g)
+        jsg_stmt_list(g, s, a, n.b)
+        jsg_loop_pop(g)
         g.indent -= 1
         cg_line(g, "}")
         jsg_scope_reset(g, m)
@@ -546,13 +588,9 @@ func jsg_stmt(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int):
         post := n.c != 0 ? jsg_simple_inline(g, s, a, n.c) : ""
         cg_line(g, "for (" + init + "; " + cond + "; " + post + ") {")
         g.indent += 1
-        dv := at.Get(a, n.d)
-        cnt3 := dv.list.len()
-        mut i3 := 0
-        until i3 < cnt3:
-            jsg_stmt(g, s, a, dv.list.get(i3))
-            i3 += 1
-        end
+        jsg_loop_push(g)
+        jsg_stmt_list(g, s, a, n.d)
+        jsg_loop_pop(g)
         g.indent -= 1
         cg_line(g, "}")
         jsg_scope_reset(g, mark)
@@ -627,6 +665,8 @@ func jsg_function(g &: Jg, s &: sm.Sema, a &: at.Ast, fnid: int, owner: int):
     g.fn_used_names.clear()
     saved_defers := g.fn_defers
     g.fn_defers = Vector {} as Vector<int>
+    saved_dmark := g.loop_dmark
+    g.loop_dmark = Vector {} as Vector<int>
     mut params := str.NewBuilder()
     if owner != 0:
         str.BufAppend(params, "__self")
@@ -658,6 +698,8 @@ func jsg_function(g &: Jg, s &: sm.Sema, a &: at.Ast, fnid: int, owner: int):
     cg_line(g, "}")
     g.fn_defers.free()
     g.fn_defers = saved_defers
+    g.loop_dmark.free()
+    g.loop_dmark = saved_dmark
     g.cur_struct = 0
     g.cur_fn_home = 0
 end

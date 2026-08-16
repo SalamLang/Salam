@@ -87,6 +87,9 @@ typedef struct {
     bool is_main;
     const char *brk[64];
     const char *cont[64];
+    /* Defer-stack depth at the start of each enclosing loop body, so break and
+     * continue can replay that body's defers before branching away. */
+    size_t loop_dmark[64];
     int nloop;
     vec_t defers;
     const char *self_ts;

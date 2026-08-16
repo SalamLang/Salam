@@ -188,7 +188,9 @@ void cg_function(cg_t *cg, ast_node_t *fn, symbol_t *owner)
             local_add(cg, ((ast_node_t *)fn->list.data[i])->name);
     }
     vec_t saved_defers = cg->fn_defers;
+    int saved_nloop = cg->nloop;
     vec_init(&cg->fn_defers);
+    cg->nloop = 0;
     cg_source_line(cg, &fn->span);
 
     if (is_main && cg->is_gui_mode) {
@@ -235,4 +237,5 @@ void cg_function(cg_t *cg, ast_node_t *fn, symbol_t *owner)
     cg->cur_fn_home = NULL;
     cg->cur_sret = false;
     cg->fn_defers = saved_defers;
+    cg->nloop = saved_nloop;
 }

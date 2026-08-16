@@ -42,6 +42,14 @@ ast_node_t *interp_find_match_arm(interp_t *I, env_t *env, ast_node_t *n, value_
     return NULL;
 }
 
+/* The expression a `a.b.c` chain hangs off, with the fields peeled away. */
+static ast_node_t *member_chain_root(ast_node_t *n)
+{
+    while (n->kind == AST_MEMBER)
+        n = n->a;
+    return n;
+}
+
 iloc_t interp_resolve_loc(interp_t *I, env_t *env, ast_node_t *target)
 {
     iloc_t loc;
@@ -70,7 +78,15 @@ iloc_t interp_resolve_loc(interp_t *I, env_t *env, ast_node_t *target)
     }
 
     if (target->kind == AST_MEMBER) {
-        value_t obj = eval(I, env, target->a);
+        value_t obj;
+        /* Only a chain rooted in an index can name a place in real memory, and
+         * offering anything else would cost an extra evaluation for nothing. */
+        if (member_chain_root(target)->kind == AST_INDEX &&
+            interp_mem_lvalue(I, env, target, &loc.mem, &loc.mem_ts)) {
+            loc.kind = ILOC_MEM;
+            return loc;
+        }
+        obj = eval(I, env, target->a);
         if (obj.kind != VAL_STRUCT)
             rt_error(I, target, "cannot assign to member of non-struct");
         {
@@ -134,7 +150,9 @@ value_t interp_loc_get(interp_t *I, iloc_t *loc)
     case ILOC_ARR:
         return loc->arr->data[loc->idx];
     case ILOC_PTR:
-        return ptr_load(loc->ptr, loc->idx);
+        return ptr_load(I, loc->ptr, loc->idx);
+    case ILOC_MEM:
+        return interp_mem_load(I, loc->mem, loc->mem_ts);
     case ILOC_OPIDX:
         if (loc->get_m) {
             env_t *denv = find_def_env(I, loc->get_m);
@@ -159,7 +177,10 @@ void interp_loc_set(interp_t *I, iloc_t *loc, value_t v)
         loc->arr->data[loc->idx] = v;
         return;
     case ILOC_PTR:
-        ptr_store(loc->ptr, loc->idx, v);
+        ptr_store(I, loc->ptr, loc->idx, v);
+        return;
+    case ILOC_MEM:
+        interp_mem_store(I, loc->mem, loc->mem_ts, v);
         return;
     case ILOC_OPIDX: {
         value_t args[2];
@@ -198,6 +219,30 @@ flow_t exec_list(interp_t *I, env_t *env, frame_t *fr, vec_t *list, value_t *ret
     return FLOW_NORMAL;
 }
 
+/*
+ * Run everything the current block registered with `defer`, innermost first,
+ * and drop it from the frame.
+ *
+ * `defer` is scoped to the block it appears in, the same way the compiled
+ * backends lower it: the cleanup runs on every way out of that block - falling
+ * off the end, break, continue, or a return travelling through it. A return
+ * that leaves several blocks runs them from the inside out as it unwinds,
+ * which is the same LIFO order the function-exit replay produces for the
+ * defers written at the top level of the function.
+ */
+void run_defers_from(interp_t *I, frame_t *fr, size_t mark)
+{
+    size_t i = fr->defers.len;
+    for (; i > mark; i--) {
+        defer_t *d = (defer_t *)fr->defers.data[i - 1];
+        value_t dummy = val_null();
+        frame_t inner;
+        vec_init(&inner.defers);
+        exec_stmt(I, d->env, &inner, d->stmt, &dummy);
+    }
+    fr->defers.len = mark;
+}
+
 /* Run `list` in a fresh child scope of `env` and give that scope back to the
  * pool afterwards. This is the shape every non-looping construct that opens a
  * scope wants: a block, a taken `if` branch, a match arm. The scope is only
@@ -206,7 +251,9 @@ static flow_t exec_scoped(interp_t *I, env_t *env, frame_t *fr, vec_t *list, val
 {
     unsigned long long esc0 = I->env_escapes;
     env_t *c = env_acquire(I, env);
+    size_t dmark = fr->defers.len;
     flow_t f = exec_list(I, c, fr, list, ret);
+    run_defers_from(I, fr, dmark);
     if (I->env_escapes == esc0) env_release(I, c);
     return f;
 }
@@ -297,7 +344,9 @@ flow_t exec_stmt(interp_t *I, env_t *env, frame_t *fr, ast_node_t *n, value_t *r
             if (!cond) break;
             {
                 unsigned long long esc0 = I->env_escapes;
+                size_t dmark = fr->defers.len;
                 flow_t f = exec_list(I, c, fr, &n->b->list, ret);
+                run_defers_from(I, fr, dmark);
                 if (f == FLOW_RETURN) return f;
                 if (f == FLOW_BREAK) break;
                 c = loop_env_next(I, env, c, esc0);
@@ -345,7 +394,9 @@ flow_t exec_stmt(interp_t *I, env_t *env, frame_t *fr, ast_node_t *n, value_t *r
                 unsigned long long esc0 = I->env_escapes;
                 tick(I);
                 if (n->name) env_define(I, c, n->name, val_int(k));
+                size_t dmark = fr->defers.len;
                 flow_t f = exec_list(I, c, fr, &n->b->list, ret);
+                run_defers_from(I, fr, dmark);
                 if (f == FLOW_RETURN) return f;
                 if (f == FLOW_BREAK) break;
                 c = loop_env_next(I, env, c, esc0);
@@ -366,7 +417,9 @@ flow_t exec_stmt(interp_t *I, env_t *env, frame_t *fr, ast_node_t *n, value_t *r
             if (!cond) break;
             {
                 unsigned long long esc0 = I->env_escapes;
+                size_t dmark = fr->defers.len;
                 flow_t f = exec_list(I, c, fr, &n->d->list, ret);
+                run_defers_from(I, fr, dmark);
                 if (f == FLOW_RETURN) return f;
                 if (f == FLOW_BREAK) break;
                 c = loop_env_next(I, loop, c, esc0);
@@ -393,7 +446,9 @@ flow_t exec_stmt(interp_t *I, env_t *env, frame_t *fr, ast_node_t *n, value_t *r
         d->stmt = n->a;
         d->env = env;
         vec_push(I->a, &fr->defers, d);
-        I->env_escapes++; /* runs at function exit, long after this scope */
+        /* The deferred statement holds on to this scope until the block it was
+         * written in exits, so the scope cannot be recycled underneath it. */
+        I->env_escapes++;
         return FLOW_NORMAL;
     }
     default:

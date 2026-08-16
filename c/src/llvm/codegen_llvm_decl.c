@@ -346,12 +346,14 @@ void ll_function(ll_t *ll, ast_node_t *fn, symbol_t *owner)
      * undefined value '%L4_wcond'"). Only the entries actually live for
      * the outer function need preserving.
      */
+    size_t saved_dmark[64];
     const char *saved_brk[64], *saved_cont[64];
     {
         int bi = 0;
         for (; bi < saved_nloop && bi < 64; bi++) {
             saved_brk[bi] = ll->brk[bi];
             saved_cont[bi] = ll->cont[bi];
+            saved_dmark[bi] = ll->loop_dmark[bi];
         }
     }
     bool saved_main = ll->is_main, saved_byval = ll->self_byval, saved_term = ll->term;
@@ -447,6 +449,7 @@ void ll_function(ll_t *ll, ast_node_t *fn, symbol_t *owner)
         for (; bi < saved_nloop && bi < 64; bi++) {
             ll->brk[bi] = saved_brk[bi];
             ll->cont[bi] = saved_cont[bi];
+            ll->loop_dmark[bi] = saved_dmark[bi];
         }
     }
     ll->is_main = saved_main;
@@ -683,12 +686,14 @@ void ll_emit_lambda(ll_t *ll, ast_node_t *n)
      * undefined value '%L4_wcond'"). Only the entries actually live for
      * the outer function need preserving.
      */
+    size_t saved_dmark[64];
     const char *saved_brk[64], *saved_cont[64];
     {
         int bi = 0;
         for (; bi < saved_nloop && bi < 64; bi++) {
             saved_brk[bi] = ll->brk[bi];
             saved_cont[bi] = ll->cont[bi];
+            saved_dmark[bi] = ll->loop_dmark[bi];
         }
     }
     bool saved_main = ll->is_main, saved_term = ll->term;
@@ -772,6 +777,7 @@ void ll_emit_lambda(ll_t *ll, ast_node_t *n)
         for (; bi < saved_nloop && bi < 64; bi++) {
             ll->brk[bi] = saved_brk[bi];
             ll->cont[bi] = saved_cont[bi];
+            ll->loop_dmark[bi] = saved_dmark[bi];
         }
     }
     ll->is_main = saved_main;

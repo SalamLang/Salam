@@ -588,6 +588,7 @@ codegen_output_t *codegen_run(arena_t *a, logger_t *log, ast_node_t *program,
     vec_init(&cg.dyn_impls);
     vec_init(&cg.deferred);
     vec_init(&cg.fn_defers);
+    cg.nloop = 0;
     sb_t h, c, lamd, lamf;
     sb_init(&h);
     sb_init(&c);

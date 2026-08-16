@@ -1137,7 +1137,9 @@ static const char *jsg_lambda(jg_t *g, ast_node_t *n)
         const char *core;
         size_t mark = cg->locals.len;
         vec_t saved_defers = cg->fn_defers;
+        int saved_nloop = cg->nloop;
         vec_init(&cg->fn_defers);
+        cg->nloop = 0;
         if (!plain) {
             size_t i = 0;
             for (; i < n->captures.len; i++) {
@@ -1202,6 +1204,7 @@ static const char *jsg_lambda(jg_t *g, ast_node_t *n)
         }
         jsg_scope_reset(g, mark);
         cg->fn_defers = saved_defers;
+        cg->nloop = saved_nloop;
         if (!plain)
             core =
                 cg_fmt(cg, "((%s) => %s)(%s)", sb_cstr(&caps), core, sb_cstr(&capvals));

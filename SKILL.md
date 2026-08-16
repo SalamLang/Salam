@@ -406,8 +406,10 @@ an exact signature, grep the package file.
 Reverse Repeat Concat Substr Split Join Fields Chars CharAt Contains Find
 IndexOf IndexFrom LastIndex Count StartsWith EndsWith Equals EqualFold Compare
 Replace Len CharCount FromInt(i64) FromFloat(f64) ToInt ToFloat IsEmpty
-IsDigit IsAlpha IsSpace`; plus a `StringBuilder` (`NewBuilder`, `BufAppend`,
-  `BufAppendInt`, `BufStr`, `BufFree`).
+IsDigit IsAlpha IsSpace ToEnglishDigits ToPersianDigits ToArabicDigits
+DigitValue IsAnyDigit IsPersianDigit IsArabicDigit HasEnglishDigits
+HasPersianDigits HasArabicDigits`; plus a `StringBuilder` (`NewBuilder`,
+  `BufAppend`, `BufAppendInt`, `BufStr`, `BufFree`).
 - **`fmt`**: `Sprintf(tmpl, Vector<str>)` (`{}` placeholders), `Fprintf`,
   `PadLeft PadRight Center`. (`fmt.Int`, `fmt.Float`, `fmt.Bool` build the string
   args you pass to `Sprintf`.)

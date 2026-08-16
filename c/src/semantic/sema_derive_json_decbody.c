@@ -37,11 +37,11 @@ static bool dec_object(sema_t *s, sb_t *b, jd_ctx_t *c, key_body_fn on_key, void
     const char *k = jd_fresh(s, c, "k");
     const char *ke = jd_fresh(s, c, "q");
 
-    sb_puts(b, JIND JD_POS " = _jws(" JD_TEXT ", " JD_START ")\n");
+    sb_puts(b, JIND JD_POS " = _dws(" JD_TEXT ", " JD_START ")\n");
     sb_puts(b, JIND "if _dbyte(" JD_TEXT ", " JD_POS ") != 123:\n");
     jd_fail(b, s, JIND JIND, "expected '{'", JD_POS);
     sb_puts(b, JIND "end\n");
-    sb_puts(b, JIND JD_POS " = _jws(" JD_TEXT ", " JD_POS " + 1)\n");
+    sb_puts(b, JIND JD_POS " = _dws(" JD_TEXT ", " JD_POS " + 1)\n");
     sb_puts(b, JIND "if _dbyte(" JD_TEXT ", " JD_POS ") == 125:\n");
     sb_puts(b, JIND JIND JD_POS " = " JD_POS " + 1\n");
     sb_puts(b, JIND "else:\n");
@@ -51,15 +51,15 @@ static bool dec_object(sema_t *s, sb_t *b, jd_ctx_t *c, key_body_fn on_key, void
     sb_printf(b, JIND JIND JIND "if %s < 0:\n", ke);
     jd_fail(b, s, JIND JIND JIND JIND, "expected an object key", JD_POS);
     sb_puts(b, JIND JIND JIND "end\n");
-    sb_printf(b, JIND JIND JIND JD_POS " = _jws(" JD_TEXT ", %s)\n", ke);
+    sb_printf(b, JIND JIND JIND JD_POS " = _dws(" JD_TEXT ", %s)\n", ke);
     sb_puts(b, JIND JIND JIND "if _dbyte(" JD_TEXT ", " JD_POS ") != 58:\n");
     jd_fail(b, s, JIND JIND JIND JIND, "expected ':'", JD_POS);
     sb_puts(b, JIND JIND JIND "end\n");
-    sb_puts(b, JIND JIND JIND JD_POS " = _jws(" JD_TEXT ", " JD_POS " + 1)\n");
+    sb_puts(b, JIND JIND JIND JD_POS " = _dws(" JD_TEXT ", " JD_POS " + 1)\n");
     if (!on_key(s, b, c, ud, k, JIND JIND JIND)) return false;
-    sb_puts(b, JIND JIND JIND JD_POS " = _jws(" JD_TEXT ", " JD_POS ")\n");
+    sb_puts(b, JIND JIND JIND JD_POS " = _dws(" JD_TEXT ", " JD_POS ")\n");
     sb_puts(b, JIND JIND JIND "if _dbyte(" JD_TEXT ", " JD_POS ") == 44:\n");
-    sb_puts(b, JIND JIND JIND JIND JD_POS " = _jws(" JD_TEXT ", " JD_POS " + 1)\n");
+    sb_puts(b, JIND JIND JIND JIND JD_POS " = _dws(" JD_TEXT ", " JD_POS " + 1)\n");
     sb_puts(b, JIND JIND JIND JIND "continue\n");
     sb_puts(b, JIND JIND JIND "end\n");
     sb_puts(b, JIND JIND JIND "if _dbyte(" JD_TEXT ", " JD_POS ") == 125:\n");
@@ -225,11 +225,11 @@ static bool dec_seq(sema_t *s, sb_t *b, jd_ctx_t *c, type_t *elem, const char *p
     const char *spelling = derive_type_spelling(s, elem);
     const char *tmp = jd_fresh(s, c, "t");
     if (!spelling) return false;
-    sb_puts(b, JIND JD_POS " = _jws(" JD_TEXT ", " JD_START ")\n");
+    sb_puts(b, JIND JD_POS " = _dws(" JD_TEXT ", " JD_START ")\n");
     sb_puts(b, JIND "if _dbyte(" JD_TEXT ", " JD_POS ") != 91:\n");
     jd_fail(b, s, JIND JIND, "expected '['", JD_POS);
     sb_puts(b, JIND "end\n");
-    sb_puts(b, JIND JD_POS " = _jws(" JD_TEXT ", " JD_POS " + 1)\n");
+    sb_puts(b, JIND JD_POS " = _dws(" JD_TEXT ", " JD_POS " + 1)\n");
     sb_puts(b, JIND "if _dbyte(" JD_TEXT ", " JD_POS ") == 93:\n");
     sb_puts(b, JIND JIND JD_POS " = " JD_POS " + 1\n");
     sb_puts(b, JIND "else:\n");
@@ -243,9 +243,9 @@ static bool dec_seq(sema_t *s, sb_t *b, jd_ctx_t *c, type_t *elem, const char *p
         sb_printf(b, JIND JIND JIND "mut %s := %s {}\n", tmp, spelling);
     if (!jd_dec_value(s, b, c, elem, tmp, JIND JIND JIND, NULL, home, span)) return false;
     sb_printf(b, JIND JIND JIND "%s(%s)\n", push, tmp);
-    sb_puts(b, JIND JIND JIND JD_POS " = _jws(" JD_TEXT ", " JD_POS ")\n");
+    sb_puts(b, JIND JIND JIND JD_POS " = _dws(" JD_TEXT ", " JD_POS ")\n");
     sb_puts(b, JIND JIND JIND "if _dbyte(" JD_TEXT ", " JD_POS ") == 44:\n");
-    sb_puts(b, JIND JIND JIND JIND JD_POS " = _jws(" JD_TEXT ", " JD_POS " + 1)\n");
+    sb_puts(b, JIND JIND JIND JIND JD_POS " = _dws(" JD_TEXT ", " JD_POS " + 1)\n");
     sb_puts(b, JIND JIND JIND JIND "continue\n");
     sb_puts(b, JIND JIND JIND "end\n");
     sb_puts(b, JIND JIND JIND "if _dbyte(" JD_TEXT ", " JD_POS ") == 93:\n");
@@ -274,7 +274,7 @@ static bool dec_of_struct(sema_t *s, sb_t *b, jd_ctx_t *c, type_t *t, scope_t *h
         sb_printf(b, JIND "if %s < 0:\n", q);
         jd_fail(b, s, JIND JIND, "value is not well formed", JD_START);
         sb_puts(b, JIND "end\n");
-        sb_printf(b, JIND JD_POS " = _jws(" JD_TEXT ", " JD_START ")\n");
+        sb_printf(b, JIND JD_POS " = _dws(" JD_TEXT ", " JD_START ")\n");
         sb_printf(b, JIND "if " JD_OUT ".from_json(" JD_TEXT ".substr(" JD_POS ", %s - "
                          JD_POS ")) == false:\n",
                   q);
@@ -310,7 +310,7 @@ bool jd_dec_body(sema_t *s, sb_t *b, jd_ctx_t *c, type_t *t, scope_t *home,
     case TY_MAP:
         return dec_map(s, b, c, t->key, t->elem, home, span);
     default:
-        sb_puts(b, JIND JD_POS " = _jws(" JD_TEXT ", " JD_START ")\n");
+        sb_puts(b, JIND JD_POS " = _dws(" JD_TEXT ", " JD_START ")\n");
         return jd_dec_value(s, b, c, t, JD_OUT, JIND, NULL, home, span);
     }
 }

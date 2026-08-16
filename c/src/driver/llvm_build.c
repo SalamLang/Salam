@@ -36,9 +36,24 @@ static const char *plural_suffix(int n)
     return n == 1 ? "" : "s";
 }
 
+/*
+ * An empty triple is not "not Windows", it is "no --target=, so the target is
+ * this host". Reading it as the former cost every native Windows build its
+ * .exe: default_output() below picked the extensionless branch, `salam build
+ * hello.salam` wrote `hello`, and while bash will still exec that, cmd.exe
+ * matches on PATHEXT and refuses to launch it at all. The C backend never had
+ * the bug because it appends ".exe" unconditionally.
+ */
 static bool triple_is_windows(const char *t)
 {
-    return t && (strstr(t, "windows") || strstr(t, "mingw") || strstr(t, "win32"));
+    if (!t || !t[0]) {
+#if defined(_WIN32)
+        return true;
+#else
+        return false;
+#endif
+    }
+    return strstr(t, "windows") || strstr(t, "mingw") || strstr(t, "win32");
 }
 
 static const char *default_output(arena_t *a, const char *module, llvm_output_mode_t m,

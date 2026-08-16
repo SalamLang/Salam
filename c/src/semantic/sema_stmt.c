@@ -159,9 +159,13 @@ static void define_local(sema_t *s, ast_node_t *decl, sym_kind_t kind, type_t *t
 
 type_t *sema_check_var_decl(sema_t *s, ast_node_t *n)
 {
+    src_span_t cast_span;
+    bool cast_sugar = false;
     if (!n->type && n->a && n->a->kind == AST_CAST && n->a->type &&
         (n->a->a->kind == AST_ARRAY_LIT || n->a->a->kind == AST_STRUCT_LIT ||
          n->a->a->kind == AST_LITERAL)) {
+        cast_sugar = true;
+        cast_span = n->a->span;
         n->type = n->a->type;
         n->a = n->a->a;
     }
@@ -200,6 +204,11 @@ type_t *sema_check_var_decl(sema_t *s, ast_node_t *n)
          n->a->kind == AST_MATCH))
         s->expected = declared;
     type_t *initt = n->a ? sema_check_expr(s, n->a) : NULL;
+    if (cast_sugar && declared && initt && !type_is_error(initt) && !s->in_derive &&
+        type_equiv(declared, initt) &&
+        !sema_cast_target_is_context_dependent(n->a, declared))
+        SERR(s, 93, &cast_span, "useless cast: this expression already has type '%s'",
+             type_to_string(s->tc, declared));
     type_t *t;
     if (declared && initt) {
         if (!type_assignable(declared, initt))

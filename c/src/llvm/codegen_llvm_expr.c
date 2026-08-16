@@ -103,7 +103,7 @@ static bool ll_is_cmp(token_kind_t k)
 
 static const char *ll_to_ptr(ll_t *ll, llv_t v)
 {
-    if (ll_is_ptr_ts(v.ts) || ll_is_str(v.ts) || !strcmp(v.ts, "null")) return v.ref;
+    if (ll_is_ptr_ts(v.ts) || ll_is_str(ll, v.ts) || !strcmp(v.ts, "null")) return v.ref;
     const char *r = ll_new_tmp(ll);
     ll_emit(ll, "%s = inttoptr %s %s to ptr", r, ll_ty(ll, v.ts), v.ref);
     return r;
@@ -112,7 +112,7 @@ static const char *ll_to_ptr(ll_t *ll, llv_t v)
 static const char *ll_str_operand(ll_t *ll, ast_node_t *n)
 {
     const char *ts = n->type_str;
-    if (ts && ll_is_str(ts)) return ll_expr(ll, n).ref;
+    if (ts && ll_is_str(ll, ts)) return ll_expr(ll, n).ref;
     llv_t v = ll_expr(ll, n);
     const char *r = ll_new_tmp(ll);
     if (ll_is_bool(ts)) {
@@ -145,8 +145,8 @@ static const char *ll_str_operand(ll_t *ll, ast_node_t *n)
 
 static bool ll_binary_string(ll_t *ll, ast_node_t *n, token_kind_t op, llv_t *out)
 {
-    bool as = n->a->type_str && ll_is_str(n->a->type_str);
-    bool bs = n->b->type_str && ll_is_str(n->b->type_str);
+    bool as = n->a->type_str && ll_is_str(ll, n->a->type_str);
+    bool bs = n->b->type_str && ll_is_str(ll, n->b->type_str);
     if (op == TK_PLUS && (as || bs)) {
         const char *L = ll_str_operand(ll, n->a), *R = ll_str_operand(ll, n->b);
         const char *r = ll_new_tmp(ll);
@@ -744,7 +744,7 @@ static llv_t ll_len_of(ll_t *ll, ast_node_t *n, ast_node_t *arg)
         return (llv_t){ll_conv(ll, (llv_t){l, "i64"}, "i32"), "i32"};
     }
     if (ts && strchr(ts, '[')) return (llv_t){ll_fmt(ll, "%ld", ll_array_dim(ts)), "i32"};
-    if (!ts || !ll_is_str(ts)) {
+    if (!ts || !ll_is_str(ll, ts)) {
         ll_error(ll, n, "len() of an unsupported type");
         return ll_poison("i32");
     }
@@ -949,6 +949,30 @@ static bool ll_call_file(ll_t *ll, ast_node_t *n, ast_node_t *obj, const char *m
  * that package's globals and registers them in ll->globals, so the
  * ll_global_find below can only succeed afterwards.
  */
+/*
+ * An enum member's LLVM value, in its backing type: an i32 immediate for
+ * int (unchanged), a float immediate for float, or the same deduplicated
+ * global-string reference an ordinary string literal would get for string -
+ * ll_strconst hands back the identical @.str.N for equal content, so two
+ * reads of the same member (or of an equal-valued member elsewhere) are
+ * pointer-identical without that being load-bearing for ==, which still
+ * goes through ll_binary_string's strcmp like any other str comparison.
+ */
+static llv_t ll_enum_member_value(ll_t *ll, symbol_t *m)
+{
+    switch (m->enum_val_kind) {
+    case TV_FLOAT: {
+        char buf[64];
+        sal_snprintf(buf, sizeof buf, "%.17g", m->enum_value_f);
+        return (llv_t){ll_fp_text(ll, buf), "f64"};
+    }
+    case TV_STRING:
+        return (llv_t){ll_strconst(ll, m->enum_value_str ? m->enum_value_str : ""), "str"};
+    default:
+        return (llv_t){ll_fmt(ll, "%lld", (long long)m->enum_value), "i32"};
+    }
+}
+
 static bool ll_pkg_value(ll_t *ll, ast_node_t *n, symbol_t *pk, llv_t *out)
 {
     symbol_t *m;
@@ -958,7 +982,7 @@ static bool ll_pkg_value(ll_t *ll, ast_node_t *n, symbol_t *pk, llv_t *out)
     m = scope_lookup_local(pk->members, n->name);
     if (!m) return false;
     if (m->kind == SYM_ENUM_MEMBER) {
-        *out = (llv_t){ll_fmt(ll, "%lld", (long long)m->enum_value), "i32"};
+        *out = ll_enum_member_value(ll, m);
         return true;
     }
     if (m->kind != SYM_CONST && m->kind != SYM_VAR) return false;
@@ -1401,7 +1425,7 @@ static bool ll_call_intrinsic(ll_t *ll, ast_node_t *n, const char *nm, llv_t *ou
     const char *r;
     if (!strcmp(nm, "hash") && na == 1) {
         r = ll_new_tmp(ll);
-        if (ll_is_str(a0->type_str)) {
+        if (ll_is_str(ll, a0->type_str)) {
             ll_need(ll, LL_H_STRHASH);
             ll_emit(ll, "%s = call i64 @salam_ll_strhash(ptr %s)", r,
                     ll_expr(ll, a0).ref);
@@ -1770,7 +1794,7 @@ static llv_t ll_struct_lit(ll_t *ll, ast_node_t *n)
             const char *val =
                 prov ? ll_conv(ll, ll_expr(ll, prov->a), fts)
                      : (f->decl && f->decl->a ? ll_conv(ll, ll_expr(ll, f->decl->a), fts)
-                                              : ll_zero(fts));
+                                              : ll_zero(ll, fts));
             const char *r = ll_new_tmp(ll);
             ll_emit(ll, "%s = insertvalue %s %s, %s %s, %d", r, sty, cur, ll_ty(ll, fts),
                     val, idx);
@@ -1902,7 +1926,7 @@ static llv_t ll_literal(ll_t *ll, ast_node_t *n)
 static const char *ll_match_pat_eq(ll_t *ll, llv_t subj, ast_node_t *pat_head)
 {
     llv_t pv = ll_expr(ll, pat_head);
-    if (ll_is_str(subj.ts)) {
+    if (ll_is_str(ll, subj.ts)) {
         const char *c = ll_new_tmp(ll);
         const char *r = ll_new_tmp(ll);
         ll_emit(ll, "%s = call i32 @strcmp(ptr %s, ptr %s)", c, subj.ref, pv.ref);
@@ -2052,7 +2076,7 @@ static ast_node_t *ll_elem_index(ast_node_t *n, const char *want)
 static bool ll_gep_from_int_add(ll_t *ll, ast_node_t *n, const char *to, const char **out)
 {
     ast_node_t *bin = n->a;
-    if (!ll_is_ptr_ts(to) || ll_is_str(to)) return false;
+    if (!ll_is_ptr_ts(to) || ll_is_str(ll, to)) return false;
     if (!bin || bin->kind != AST_BINARY) return false;
     if (bin->op != TK_PLUS && bin->op != TK_MINUS) return false;
 
@@ -2077,7 +2101,7 @@ static bool ll_gep_from_int_add(ll_t *ll, ast_node_t *n, const char *to, const c
     ast_node_t *idx = pointee[0] ? ll_elem_index(bin->b, pointee) : NULL;
 
     llv_t p = ll_expr(ll, base->a);
-    bool ptr_base = ll_is_ptr_ts(p.ts) || ll_is_str(p.ts);
+    bool ptr_base = ll_is_ptr_ts(p.ts) || ll_is_str(ll, p.ts);
     /* Evaluate the offset operand exactly once: the index alone when a typed
      * GEP is on the table, the whole `idx * sizeof(T)` otherwise. */
     llv_t off = ll_expr(ll, (ptr_base && idx) ? idx : bin->b);
@@ -2220,8 +2244,7 @@ llv_t ll_expr(ll_t *ll, ast_node_t *n)
             symbol_t *e = ll_enum_sym(ll, n->a->name);
             if (e) {
                 symbol_t *m = scope_lookup_local(e->members, n->name);
-                if (m && m->kind == SYM_ENUM_MEMBER)
-                    return (llv_t){ll_fmt(ll, "%lld", (long long)m->enum_value), "i32"};
+                if (m && m->kind == SYM_ENUM_MEMBER) return ll_enum_member_value(ll, m);
             }
             {
                 llv_t pv;

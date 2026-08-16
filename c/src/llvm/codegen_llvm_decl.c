@@ -903,7 +903,7 @@ static bool ll_const_agg(ll_t *ll, ast_node_t *n, const char **out)
                         return false;
                     }
                 } else {
-                    v = ll_zero(fts);
+                    v = ll_zero(ll, fts);
                 }
                 const char *flety = ll_ty(ll, fts);
                 if (idx) sb_puts(&b, ", ");
@@ -968,7 +968,7 @@ void ll_emit_globals(ll_t *ll, ast_node_t *program)
             if (d->a && ll_const_value(ll, d->a, &cv)) {
                 init = cv;
             } else {
-                init = ll_zero(ts);
+                init = ll_zero(ll, ts);
                 if (d->a) vec_push(ll->a, &ll->gdefer, d);
             }
             sb_puts(ll->g, ll_fmt(ll, "%s = internal global %s %s\n", gref, lty, init));

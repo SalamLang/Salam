@@ -518,13 +518,51 @@ static value_t eval_node(interp_t *I, env_t *env, ast_node_t *n)
         if (obj->kind == AST_IDENTIFIER && !env_find(env, obj->name)) {
             ast_node_t *edef = find_enum(I, obj->name);
             if (edef) {
+                /*
+                 * Mirrors sema_decl.c's AST_ENUM_DEF handling: the first
+                 * member with a literal initializer fixes the enum's
+                 * backing kind (TV_INT if none has one); int members
+                 * auto-increment, string/float members carry their own
+                 * literal value directly (sema already rejects a
+                 * string/float-backed member with no initializer, so this
+                 * always resolves for a program that passed sema).
+                 */
+                token_value_kind_t backing = TV_INT;
                 {
-                    size_t i = 0, val = 0;
-                    for (; i < edef->list.len; i++, val++) {
+                    size_t i = 0;
+                    for (; i < edef->list.len; i++) {
                         ast_node_t *m = (ast_node_t *)edef->list.data[i];
-                        if (m->a) val = (size_t)to_int(eval(I, I->globals, m->a));
-                        if (m->name && strcmp(m->name, n->name) == 0)
-                            return val_int((int64_t)val);
+                        if (m->a && m->a->kind == AST_LITERAL) {
+                            backing = m->a->value.kind;
+                            break;
+                        }
+                    }
+                }
+                {
+                    size_t i = 0;
+                    int64_t next = 0;
+                    for (; i < edef->list.len; i++) {
+                        ast_node_t *m = (ast_node_t *)edef->list.data[i];
+                        value_t val;
+                        if (m->a && m->a->kind == AST_LITERAL &&
+                            m->a->value.kind == backing) {
+                            switch (backing) {
+                            case TV_FLOAT:
+                                val = val_float(m->a->value.as.f);
+                                break;
+                            case TV_STRING:
+                                val = val_str(m->a->value.as.s);
+                                break;
+                            default:
+                                next = (int64_t)m->a->value.as.i;
+                                val = val_int(next);
+                                break;
+                            }
+                        } else {
+                            val = val_int(next);
+                        }
+                        if (m->name && strcmp(m->name, n->name) == 0) return val;
+                        if (backing == TV_INT) next++;
                     }
                 }
                 rt_error(I, n, "enum '%s' has no member '%s'", obj->name, n->name);

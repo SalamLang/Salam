@@ -48,7 +48,7 @@ static void ll_tbaa_ensure_common(ll_t *ll)
 const char *ll_tbaa_suffix(ll_t *ll, const char *ts, bool is_field)
 {
     if (!ts) return "";
-    if (ll_is_ptr_ts(ts) || ll_is_str(ts) || ll_is_any_fn_ts(ts)) {
+    if (ll_is_ptr_ts(ts) || ll_is_str(ll, ts) || ll_is_any_fn_ts(ts)) {
         if (!is_field) return "";
         if (!ll->tbaa_ptr_sfx) {
             const char *node, *tag;

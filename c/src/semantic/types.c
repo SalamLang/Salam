@@ -101,6 +101,7 @@ type_t *type_enum(type_ctx_t *tc, void *decl, const char *name)
     t->kind = TY_ENUM;
     t->decl = decl;
     t->name = name;
+    t->enum_val_kind = TV_INT;
     return t;
 }
 
@@ -389,7 +390,13 @@ static bool type_implicit(const type_t *src, const type_t *dst)
 {
     if (!src || !dst) return false;
     if (src->kind == TY_NULL && dst->kind == TY_PTR) return true;
-    if (src->kind == TY_ENUM && dst->kind == TY_I32) return true;
+    if (src->kind == TY_ENUM) {
+        if (src->enum_val_kind == TV_STRING && dst->kind == TY_STR) return true;
+        if (src->enum_val_kind == TV_FLOAT &&
+            (dst->kind == TY_F64 || dst->kind == TY_F32))
+            return true;
+        if (src->enum_val_kind == TV_INT && dst->kind == TY_I32) return true;
+    }
 
     if (src->kind == TY_UCHAR && dst->kind == TY_STR) return true;
 
@@ -435,8 +442,14 @@ bool type_castable(const type_t *dst, const type_t *src)
     if ((dst->kind == TY_FUNC && src->kind == TY_PTR) ||
         (dst->kind == TY_PTR && src->kind == TY_FUNC))
         return true;
+
+    if (src->kind == TY_ENUM && src->enum_val_kind == TV_STRING && dst->kind == TY_STR)
+        return true;
+    /* A string-backed enum's only valid cast target is str (above); it
+     * must not fall into the numeric-ish cast below just because TY_ENUM
+     * is generally cast-compatible with numbers. */
     bool sn = type_is_numeric(src) || src->kind == TY_BOOL || src->kind == TY_CHAR ||
-              src->kind == TY_ENUM;
+              (src->kind == TY_ENUM && src->enum_val_kind != TV_STRING);
     bool dn = type_is_numeric(dst) || dst->kind == TY_BOOL || dst->kind == TY_CHAR ||
               dst->kind == TY_ENUM;
     if (sn && dn) return true;

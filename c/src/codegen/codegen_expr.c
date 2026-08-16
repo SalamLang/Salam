@@ -91,14 +91,30 @@ const char *cg_op(token_kind_t k)
     }
 }
 
-static bool cg_is_str_ts(const char *ts)
+/*
+ * A string-backed enum's C representation is `const char *` (hdr_enums), so
+ * for every purpose codegen cares about (== via strcmp, string coercion) it
+ * has to be treated exactly like str/uchar - only its *name* ("Color") isn't
+ * literally "str". Int/float-backed enums need no such translation: their C
+ * representation already behaves correctly under the plain C operators the
+ * generic fallbacks emit (a real C `enum` for int, a `double` for float).
+ */
+static bool cg_ts_is_string_enum(cg_t *cg, const char *ts)
 {
-    return ts && (!strcmp(ts, "str") || !strcmp(ts, "uchar"));
+    symbol_t *esym;
+    if (!ts || !cg->sem) return false;
+    esym = scope_lookup_local(cg->sem->global, ts);
+    return esym && esym->kind == SYM_ENUM && esym->enum_val_kind == TV_STRING;
+}
+
+static bool cg_is_str_ts(cg_t *cg, const char *ts)
+{
+    return ts && (!strcmp(ts, "str") || !strcmp(ts, "uchar") || cg_ts_is_string_enum(cg, ts));
 }
 
 const char *cg_str_operand(cg_t *cg, ast_node_t *n)
 {
-    if (cg_is_str_ts(n->type_str)) return cg_expr(cg, n);
+    if (cg_is_str_ts(cg, n->type_str)) return cg_expr(cg, n);
     return cg_fmt(cg, "salam_tostr_%s(%s)", prim_suffix(print_tag(n->type_str)),
                   cg_expr(cg, n));
 }
@@ -175,7 +191,7 @@ const char *cg_match_arm_cond(cg_t *cg, ast_node_t *arm, const char *subj_var,
             if (is_variant)
                 sb_puts(&b,
                         cg_fmt(cg, "((%s).tag == %d)", subj_var, (int)pat->value.as.i));
-            else if (cg_is_str_ts(subj_ts))
+            else if (cg_is_str_ts(cg, subj_ts))
                 sb_puts(&b, cg_fmt(cg, "(strcmp(%s, %s) == 0)", subj_var,
                                    cg_expr(cg, pat->a)));
             else
@@ -581,15 +597,15 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
         }
 
         if (n->op == TK_PLUS &&
-            (cg_is_str_ts(n->a->type_str) || cg_is_str_ts(n->b->type_str))) {
+            (cg_is_str_ts(cg, n->a->type_str) || cg_is_str_ts(cg, n->b->type_str))) {
             const char *sa = cg_str_operand(cg, n->a);
             const char *sb = cg_str_operand(cg, n->b);
             return cg_fmt(cg, "salam_strcat(%s, %s)", sa, sb);
         }
 
         if (n->op == TK_STAR &&
-            (cg_is_str_ts(n->a->type_str) || cg_is_str_ts(n->b->type_str))) {
-            bool a_str = cg_is_str_ts(n->a->type_str);
+            (cg_is_str_ts(cg, n->a->type_str) || cg_is_str_ts(cg, n->b->type_str))) {
+            bool a_str = cg_is_str_ts(cg, n->a->type_str);
             ast_node_t *sop = a_str ? n->a : n->b;
             ast_node_t *nop = a_str ? n->b : n->a;
             const char *sv = cg_expr(cg, sop);
@@ -597,7 +613,7 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
             return cg_fmt(cg, "salam_str_repeat(%s, (int32_t)(%s))", sv, nv);
         }
 
-        if (cg_is_str_ts(n->a->type_str) && cg_is_str_ts(n->b->type_str)) {
+        if (cg_is_str_ts(cg, n->a->type_str) && cg_is_str_ts(cg, n->b->type_str)) {
             const char *op = NULL;
             switch (n->op) {
             case TK_EQ:

@@ -86,7 +86,7 @@ void ll_emit_return(ll_t *ll, ast_node_t *value)
      * aggregate - `ret %struct.xml__XMLNode 0`. Emit the type's own zero. */
     if (!value) {
         ll_emit_defers(ll);
-        ll_emit_term(ll, "ret %s %s", ll_ty(ll, ll->ret_ts), ll_zero(ll->ret_ts));
+        ll_emit_term(ll, "ret %s %s", ll_ty(ll, ll->ret_ts), ll_zero(ll, ll->ret_ts));
         return;
     }
     const char *v = ll_conv(ll, ll_expr(ll, value), ll->ret_ts);
@@ -109,7 +109,7 @@ static void ll_vardecl(ll_t *ll, ast_node_t *n)
      * read that no assignment precedes, but a `&:` parameter the callee only
      * writes on some paths would still leave this indeterminate, so zero it -
      * the C and JS backends do the same. */
-    ll_emit(ll, "store %s %s, ptr %s", ll_ty(ll, ts), ll_zero(ts), ptr);
+    ll_emit(ll, "store %s %s, ptr %s", ll_ty(ll, ts), ll_zero(ll, ts), ptr);
 }
 
 static token_kind_t ll_compound_base(token_kind_t k)

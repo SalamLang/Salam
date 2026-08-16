@@ -17,6 +17,7 @@
 #include "semantic/sema_derive_core.h"
 #include "semantic/sema_derive_json.h"
 #include "semantic/sema_derive_str.h"
+#include "semantic/sema_derive_enum.h"
 #include "semantic/builtins.h"
 #include "semantic/dce.h"
 
@@ -285,6 +286,75 @@ static bool print_derived(sema_t *s, ast_node_t *call, size_t i, type_t *at)
  * are checked inside its scope and call its private runtime layer, so there is
  * nowhere else they would resolve.
  */
+/*
+ * `Color.FromString(name, ok)`, `Color.Names()`, `Color.Count()` - the three
+ * "static" operations on an enum *type* (as opposed to `.name()`, on an
+ * enum *value*, handled in the TY_ENUM branch of the builtin-method cascade
+ * below). Without this branch, `Color` as the object of a call falls through
+ * to the generic AST_MEMBER path, which evaluates it as an ordinary
+ * expression and rejects it with "type 'Color' used as a value" (the same
+ * error `Color` alone, unqualified, already gets) before ever looking at
+ * what member was being called.
+ *
+ * FromString/Names are one call each into the sema_derive_enum.c machinery,
+ * mirroring check_json_builtin's rewrite-to-a-real-function dance. Count
+ * needs no derived function - the member count is known right here, so the
+ * whole call node is folded straight to an int literal (same idea as a
+ * `sizeof` result, just for a value already sitting in the symbol table).
+ */
+static type_t *check_enum_static_call(sema_t *s, ast_node_t *n, ast_node_t *callee,
+                                      symbol_t *esym, vec_t *argtypes)
+{
+    const char *m = callee->name;
+    decorate(s, callee->a, esym->type);
+
+    if (!strcmp(m, "Count")) {
+        size_t cnt = 0;
+        size_t i = 0;
+        if (argtypes->len != 0) SERR(s, 12, &n->span, "Count() takes no arguments");
+        for (; i < esym->members->symbols.len; i++)
+            if (((symbol_t *)esym->members->symbols.data[i])->kind == SYM_ENUM_MEMBER)
+                cnt++;
+        n->kind = AST_LITERAL;
+        n->op = TK_INT;
+        n->value.slen = 0;
+        n->value.kind = TV_INT;
+        n->value.as.i = (uint64_t)cnt;
+        n->a = NULL;
+        n->b = NULL;
+        n->synthetic = false;
+        return decorate(s, n, ty(s, TY_I32));
+    }
+
+    if (!strcmp(m, "FromString") || !strcmp(m, "Names")) {
+        bool is_fs = !strcmp(m, "FromString");
+        const char *fn = is_fs ? sema_derive_enum_fromstring(s, esym->type, &n->span)
+                               : sema_derive_enum_names(s, esym->type, &n->span);
+        symbol_t *fsym;
+        func_sig_t *sig;
+        if (!fn) return decorate(s, n, err_ty(s));
+        if (is_fs && (argtypes->len != 2 || ((type_t *)argtypes->data[0])->kind != TY_STR ||
+                      ((type_t *)argtypes->data[1])->kind != TY_BOOL))
+            SERR(s, 12, &n->span, "FromString(name, ok) takes a str and a bool ref");
+        if (!is_fs && argtypes->len != 0)
+            SERR(s, 12, &n->span, "Names() takes no arguments");
+        callee->kind = AST_IDENTIFIER;
+        callee->name = fn;
+        callee->synthetic = true;
+        decorate(s, callee, ty(s, TY_VOID));
+        fsym = scope_lookup_local(s->global, fn);
+        sig = (fsym && fsym->overloads.len > 0) ? (func_sig_t *)fsym->overloads.data[0]
+                                                : NULL;
+        if (fsym) fsym->used = true;
+        dce_mark_root(s->pkg, fn);
+        mark_ref_args(s, n, sig);
+        return decorate(s, n, sig && sig->ret ? sig->ret : esym->type);
+    }
+
+    SERR(s, 16, &n->span, "enum '%s' has no member '%s'", esym->name, m);
+    return decorate(s, n, err_ty(s));
+}
+
 static type_t *check_json_builtin(sema_t *s, ast_node_t *n, bool enc)
 {
     ast_node_t *callee = n->a;
@@ -688,6 +758,8 @@ type_t *check_call(sema_t *s, ast_node_t *n)
             return decorate(s, n,
                             sig ? g_localize_instance(s, sig->ret, &n->span) : err_ty(s));
         }
+        if (pk && pk->kind == SYM_ENUM)
+            return check_enum_static_call(s, n, callee, pk, &argtypes);
     }
 
     if (callee && callee->kind == AST_MEMBER) {
@@ -825,6 +897,45 @@ type_t *check_call(sema_t *s, ast_node_t *n)
             }
             if (!strcmp(m, "close")) return decorate(s, n, ty(s, TY_VOID));
             SERR(s, 17, &n->span, "File has no method '%s'", m);
+            return decorate(s, n, err_ty(s));
+        }
+
+        if (objt->kind == TY_ENUM) {
+            const char *m = callee->name;
+            decorate(s, callee, objt);
+            if (!strcmp(m, "name")) {
+                const char *fn;
+                symbol_t *fsym;
+                func_sig_t *sig;
+                if (argtypes.len != 0) SERR(s, 12, &n->span, "name() takes no arguments");
+                fn = sema_derive_enum_name(s, objt, &n->span);
+                if (!fn) return decorate(s, n, err_ty(s));
+                callee->kind = AST_IDENTIFIER;
+                callee->name = fn;
+                callee->synthetic = true;
+                decorate(s, callee, ty(s, TY_VOID));
+                fsym = scope_lookup_local(s->global, fn);
+                sig = (fsym && fsym->overloads.len > 0)
+                          ? (func_sig_t *)fsym->overloads.data[0]
+                          : NULL;
+                if (fsym) fsym->used = true;
+                dce_mark_root(s->pkg, fn);
+                /* The receiver becomes the derived function's sole argument -
+                 * it was already type-checked above as callee->a, so splice
+                 * it into the argument list the way a UFCS call would. */
+                {
+                    vec_t args;
+                    vec_init(&args);
+                    vec_push(s->a, &args, callee->a);
+                    n->list = args;
+                }
+                return decorate(s, n, sig && sig->ret ? sig->ret : ty(s, TY_STR));
+            }
+            {
+                type_t *r = try_impl_call(s, n, callee, objt, &argtypes);
+                if (r) return r;
+            }
+            SERR(s, 17, &n->span, "enum has no method '%s'", m);
             return decorate(s, n, err_ty(s));
         }
 

@@ -1636,7 +1636,22 @@ const char *jsg_expr_p(jg_t *g, ast_node_t *n, int minprec)
             symbol_t *e = scope_lookup(cg->sem->global, n->a->name);
             if (e && e->kind == SYM_ENUM && e->members) {
                 symbol_t *m = scope_lookup_local(e->members, n->name);
-                if (m) return cg_fmt(cg, "%lld", (long long)m->enum_value);
+                if (m) {
+                    /* JS strings/numbers are value types compared by content
+                     * with ===, so unlike C/LLVM no separate comparison
+                     * codegen is needed once the member itself is right. */
+                    switch (m->enum_val_kind) {
+                    case TV_FLOAT: {
+                        char buf[64];
+                        sal_snprintf(buf, sizeof buf, "%.17g", m->enum_value_f);
+                        return cg_fmt(cg, "%s", buf);
+                    }
+                    case TV_STRING:
+                        return jsg_escape(g, m->enum_value_str ? m->enum_value_str : "");
+                    default:
+                        return cg_fmt(cg, "%lld", (long long)m->enum_value);
+                    }
+                }
             }
             if (e && e->kind == SYM_PACKAGE) {
                 symbol_t *m = scope_lookup_local(e->members, n->name);

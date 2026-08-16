@@ -25,6 +25,24 @@ static type_t *ty(sema_t *s, type_kind_t k)
     return sema_ty(s, k);
 }
 
+static const char *tv_kind_name(token_value_kind_t k)
+{
+    switch (k) {
+    case TV_INT:
+        return "int";
+    case TV_FLOAT:
+        return "float";
+    case TV_STRING:
+        return "string";
+    case TV_CHAR:
+        return "char";
+    case TV_BOOL:
+        return "bool";
+    default:
+        return "?";
+    }
+}
+
 static bool block_has_valued_ret(const ast_node_t *n)
 {
     if (!n) return false;
@@ -310,6 +328,7 @@ void sema_collect(sema_t *s, ast_node_t *program)
                     }
                 }
                 sym->enum_val_kind = backing;
+                if (sym->type) sym->type->enum_val_kind = backing;
                 long long next = 0;
                 {
                     size_t j = 0;

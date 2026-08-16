@@ -183,6 +183,8 @@ type_t *sema_try_op_overload(sema_t *s, ast_node_t *n, symbol_t *ssym, const cha
 
 bool sema_type_is_stringable(type_t *t);
 
+bool sema_cast_target_is_context_dependent(const ast_node_t *a, const type_t *target);
+
 typedef enum { LV_OK, LV_NOT_LVALUE, LV_CONST, LV_IMMUTABLE } lvalue_verdict_t;
 
 lvalue_verdict_t sema_classify_write(sema_t *s, ast_node_t *n, symbol_t **root_out);

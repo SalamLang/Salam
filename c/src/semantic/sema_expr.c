@@ -38,6 +38,37 @@ static bool tk_is_arith(token_kind_t k)
            k == TK_PERCENT;
 }
 
+/* Whether `a`'s type can genuinely change depending on the cast's target
+ * type (via the `s->expected` hint the AST_CAST case feeds it, or the
+ * equivalent hint sema_check_var_decl feeds a `name := <expr> as Type`
+ * initializer it unwraps into a plain declared-type binding). For these
+ * kinds, `a`'s checked type naturally comes out equal to the cast target
+ * even when the cast is meaningful (e.g. `1 as i64` picks i64 precisely
+ * because of the hint), so an equal-type result there must not be flagged
+ * as a useless cast. Everything else already has a fixed type before the
+ * cast is applied, so casting it to that same type is always useless. */
+bool sema_cast_target_is_context_dependent(const ast_node_t *a, const type_t *target)
+{
+    if (!a) return false;
+    switch (a->kind) {
+    case AST_ARRAY_LIT:
+        /* check_array_lit only consults the expected element type for an
+         * empty literal or a 'dyn' element slot; a non-empty literal of
+         * any other element type infers its shape purely from its
+         * elements, so the cast target never changes the outcome there. */
+        if (a->list.len == 0) return true;
+        return target && target->kind == TY_ARRAY && target->elem &&
+               target->elem->kind == TY_DYN;
+    case AST_STRUCT_LIT:
+    case AST_CALL:
+        return true;
+    case AST_LITERAL:
+        return a->op == TK_INT || a->op == TK_FLOAT;
+    default:
+        return false;
+    }
+}
+
 bool sema_tk_is_bitwise(token_kind_t k)
 {
     return k == TK_AMP || k == TK_PIPE || k == TK_CARET || k == TK_SHL || k == TK_SHR;
@@ -634,7 +665,13 @@ type_t *sema_check_expr(sema_t *s, ast_node_t *n)
         type_t *o = sema_check_expr(s, n->a);
         s->expected = NULL;
         if (!target) return decorate(s, n, o);
-        if (type_assignable(target, o)) return decorate(s, n, target);
+        if (type_assignable(target, o)) {
+            if (!type_is_error(o) && !s->in_derive && type_equiv(target, o) &&
+                !sema_cast_target_is_context_dependent(n->a, target))
+                SERR(s, 93, &n->span, "useless cast: this expression already has type '%s'",
+                     type_to_string(s->tc, target));
+            return decorate(s, n, target);
+        }
         if (!type_castable(target, o))
             SERR(s, 23, &n->span, "cannot cast '%s' to '%s'", type_to_string(s->tc, o),
                  type_to_string(s->tc, target));

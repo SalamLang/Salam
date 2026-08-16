@@ -1,0 +1,193 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Timezones as a fixed UTC offset (no IANA tzdata is bundled, so these
+// never auto-adjust for DST - `TZLocal` is the one exception: it asks
+// the OS for the real offset of a specific instant, which does track the
+// system's DST rules, since it goes through std/time's libc localtime()).
+package calendar
+
+import time
+
+@en "TimeZone"
+@fa "منطقه زمانی"
+@ar "المنطقة الزمنیة"
+pub struct TimeZone:
+    pub name: str = "UTC"
+    pub offset_minutes: int = 0
+end
+
+struct _EpochParts:
+    pub jdn: i64 = 0
+    pub secOfDay: i64 = 0
+end
+
+// Converts Gregorian Y/M/D and H:M:S into a "pseudo-epoch" as though those
+// fields were UTC - the standard trick (equivalent to `timegm`) for turning
+// broken-down time back into a seconds count without needing libc's mktime,
+// which Salam's std/time does not expose.
+func _pseudoEpoch(y: int, m: int, d: int, hh: int, mm: int, ss: int): i64:
+    jdn := GregorianToJDN(GregorianDate { year = y, month = m, day = d })
+    ret (jdn - _UNIX_EPOCH_JDN) * _SECONDS_PER_DAY + (hh as i64) * 3600 + (mm as i64) * 60 + (ss as i64)
+end
+
+func _epochParts(epoch: i64): _EpochParts:
+    days := _floordiv(epoch, _SECONDS_PER_DAY)
+    sec := epoch - days * _SECONDS_PER_DAY
+    ret _EpochParts { jdn = _UNIX_EPOCH_JDN + days, secOfDay = sec }
+end
+
+@en "FixedOffsetZone"
+@fa "منطقه زمانی ثابت"
+@ar "منطقة زمنیة ثابتة"
+pub func FixedOffsetZone(name: str, offsetMinutes: int): TimeZone:
+    ret TimeZone { name = name, offset_minutes = offsetMinutes }
+end
+
+@en "TZUTC"
+@fa "منطقه زمانی جهانی"
+@ar "توقیت غرینتش"
+pub func TZUTC(): TimeZone: ret TimeZone { name = "UTC", offset_minutes = 0 } end
+
+@en "TZTehran"
+@fa "منطقه زمانی تهران"
+@ar "توقیت طهران"
+pub func TZTehran(): TimeZone: ret TimeZone { name = "Asia/Tehran", offset_minutes = 210 } end
+
+@en "TZKabul"
+@fa "منطقه زمانی کابل"
+@ar "توقیت کابل"
+pub func TZKabul(): TimeZone: ret TimeZone { name = "Asia/Kabul", offset_minutes = 270 } end
+
+@en "TZRiyadh"
+@fa "منطقه زمانی ریاض"
+@ar "توقیت الریاض"
+pub func TZRiyadh(): TimeZone: ret TimeZone { name = "Asia/Riyadh", offset_minutes = 180 } end
+
+@en "TZMecca"
+@fa "منطقه زمانی مکه"
+@ar "توقیت مکة المکرمة"
+pub func TZMecca(): TimeZone: ret TimeZone { name = "Asia/Riyadh", offset_minutes = 180 } end
+
+@en "TZDubai"
+@fa "منطقه زمانی دبی"
+@ar "توقیت دبی"
+pub func TZDubai(): TimeZone: ret TimeZone { name = "Asia/Dubai", offset_minutes = 240 } end
+
+@en "TZIstanbul"
+@fa "منطقه زمانی استانبول"
+@ar "توقیت إسطنبول"
+pub func TZIstanbul(): TimeZone: ret TimeZone { name = "Europe/Istanbul", offset_minutes = 180 } end
+
+// Fixed at standard time (UTC+0); Europe/London observes British Summer
+// Time (UTC+1) roughly late March - late October, which this does not
+// model since it is a fixed offset - use `TZLocal` on a machine actually
+// in that zone for a DST-correct offset.
+@en "TZLondon"
+@fa "منطقه زمانی لندن"
+@ar "توقیت لندن"
+pub func TZLondon(): TimeZone: ret TimeZone { name = "Europe/London", offset_minutes = 0 } end
+
+// Fixed at Eastern Standard Time (UTC-5); does not model Eastern Daylight
+// Time (UTC-4, roughly mid-March - early November). See TZLondon's note.
+@en "TZNewYork"
+@fa "منطقه زمانی نیویورک"
+@ar "توقیت نیویورك"
+pub func TZNewYork(): TimeZone: ret TimeZone { name = "America/New_York", offset_minutes = 0 - 300 } end
+
+@en "TZTokyo"
+@fa "منطقه زمانی توکیو"
+@ar "توقیت طوکیو"
+pub func TZTokyo(): TimeZone: ret TimeZone { name = "Asia/Tokyo", offset_minutes = 540 } end
+
+// The system's real UTC offset, in minutes, for the given instant -
+// tracks DST because it is derived from std/time's Year/Month/Day/Hour/
+// Minute/Second, which call libc's localtime() (i.e. this depends on the
+// process's TZ / system timezone database, not on this package's fixed
+// zone tables).
+@en "LocalOffsetMinutes"
+@fa "اختلاف زمانی محلی"
+@ar "فرق التوقیت المحلی"
+pub func LocalOffsetMinutes(epoch: i64): int:
+    localPseudo := _pseudoEpoch(time.Year(epoch), time.Month(epoch), time.Day(epoch), time.Hour(epoch), time.Minute(epoch), time.Second(epoch))
+    ret ((localPseudo - epoch) / 60) as int
+end
+
+@en "TZLocal"
+@fa "منطقه زمانی محلی"
+@ar "التوقیت المحلی"
+pub func TZLocal(epoch: i64): TimeZone:
+    ret TimeZone { name = "Local", offset_minutes = LocalOffsetMinutes(epoch) }
+end
+
+// The Gregorian calendar date an absolute instant (`epoch`, a Unix
+// timestamp - always UTC) falls on when observed in timezone `tz`.
+@en "WallClockGregorian"
+@fa "تاریخ میلادی محلی"
+@ar "التاریخ المیلادی المحلی"
+pub func WallClockGregorian(epoch: i64, tz: TimeZone): GregorianDate:
+    shifted := epoch + (tz.offset_minutes as i64) * 60
+    ret JDNToGregorian(_epochParts(shifted).jdn)
+end
+
+@en "WallClockJalali"
+@fa "تاریخ جلالی محلی"
+@ar "التاریخ الجلالی المحلی"
+pub func WallClockJalali(epoch: i64, tz: TimeZone): JalaliDate: ret GregorianToJalali(WallClockGregorian(epoch, tz)) end
+
+@en "WallClockHijri"
+@fa "تاریخ هجری محلی"
+@ar "التاریخ الهجری المحلی"
+pub func WallClockHijri(epoch: i64, tz: TimeZone): HijriDate: ret GregorianToHijri(WallClockGregorian(epoch, tz)) end
+
+@en "WallClockTime"
+@fa "ساعت محلی"
+@ar "الوقت المحلی"
+pub func WallClockTime(epoch: i64, tz: TimeZone): ClockTime:
+    shifted := epoch + (tz.offset_minutes as i64) * 60
+    secOfDay := _epochParts(shifted).secOfDay
+    hh := secOfDay / 3600
+    mm := (secOfDay - hh * 3600) / 60
+    ss := secOfDay - hh * 3600 - mm * 60
+    ret ClockTime { hour = hh as int, minute = mm as int, second = ss as int }
+end
+
+// Turns a Gregorian date + time-of-day *known to be in `tz`* into the
+// absolute Unix instant it names - the inverse of WallClockGregorian/
+// WallClockTime together.
+@en "ZonedGregorianToEpoch"
+@fa "میلادی محلی به زمان مطلق"
+@ar "المیلادی المحلی إلى الحقبة"
+pub func ZonedGregorianToEpoch(d: GregorianDate, t: ClockTime, tz: TimeZone): i64:
+    ret GregorianToUnixUTC(d, t.hour, t.minute, t.second) - (tz.offset_minutes as i64) * 60
+end
+
+// The general timezone-to-timezone conversion: "this Gregorian date and
+// time in `from`'s zone is what date and time in `to`'s zone?" - e.g.
+// converting a meeting time from Tehran to Tokyo.
+@en "ConvertZonedGregorian"
+@fa "تبدیل میلادی بین مناطق زمانی"
+@ar "تحویل المیلادی بین المناطق الزمنیة"
+pub func ConvertZonedGregorian(d: GregorianDate, t: ClockTime, from: TimeZone, toTz: TimeZone): GregorianDate:
+    epoch := ZonedGregorianToEpoch(d, t, from)
+    ret WallClockGregorian(epoch, toTz)
+end
+
+@en "ConvertZonedTime"
+@fa "تبدیل ساعت بین مناطق زمانی"
+@ar "تحویل الوقت بین المناطق الزمنیة"
+pub func ConvertZonedTime(d: GregorianDate, t: ClockTime, from: TimeZone, toTz: TimeZone): ClockTime:
+    epoch := ZonedGregorianToEpoch(d, t, from)
+    ret WallClockTime(epoch, toTz)
+end

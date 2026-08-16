@@ -598,6 +598,45 @@ static void hdr_enums(cg_t *cg, ast_node_t *program, sb_t *h)
         for (; i < program->list.len; i++) {
             ast_node_t *d = (ast_node_t *)program->list.data[i];
             if (d->kind != AST_ENUM_DEF) continue;
+            symbol_t *esym = scope_lookup_local(cg->sem->global, d->name);
+            token_value_kind_t backing = esym ? esym->enum_val_kind : TV_INT;
+            /*
+             * A C `enum` can only ever hold integers, so a string/float
+             * backed enum can't become one - it's emitted as one `static
+             * const` declaration per member instead. Either way the member-
+             * read site (cg_expr's AST_MEMBER case) just emits the bare
+             * identifier `Enum_Member`, so it doesn't care which of these
+             * two forms declared it.
+             */
+            if (backing != TV_INT) {
+                /*
+                 * Other codegen sites resolve the type name "Color" straight
+                 * to a C type via typedef (variable decls, params, struct
+                 * fields) - without a C `enum` to supply that, a plain
+                 * typedef to the backing C type keeps "Color" valid.
+                 */
+                sb_puts(h, cg_fmt(cg, "typedef %s %s;\n",
+                                  backing == TV_STRING ? "const char *" : "double",
+                                  cg_cident(cg, d->name)));
+                size_t j = 0;
+                for (; j < d->list.len; j++) {
+                    ast_node_t *m = (ast_node_t *)d->list.data[j];
+                    const char *lit = "0";
+                    if (m->a && m->a->kind == AST_LITERAL) {
+                        if (backing == TV_STRING)
+                            lit = cg_cescape(cg, m->a->value.as.s ? m->a->value.as.s : "");
+                        else if (backing == TV_FLOAT) {
+                            char buf[64];
+                            sal_snprintf(buf, sizeof buf, "%.17g", m->a->value.as.f);
+                            lit = arena_strdup(cg->a, buf);
+                        }
+                    }
+                    sb_puts(h, cg_fmt(cg, "static const %s %s_%s = %s;\n",
+                                      cg_cident(cg, d->name), cg_cident(cg, d->name),
+                                      cg_cident(cg, m->name), lit));
+                }
+                continue;
+            }
             sb_puts(h, "typedef enum {");
             long long next = 0;
             {

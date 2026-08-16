@@ -104,11 +104,11 @@ static bool struct_key(sema_t *s, sb_t *b, jd_ctx_t *c, void *ud, const char *ke
                   jd_quote(s, at.name));
         sb_printf(b, "%sif %s && " JD_STRICT ":\n", deep, flag);
         jd_fail(b, s, jd_fmt(s, "%s" JIND, deep),
-             jd_fmt(s, "duplicate key '%s'", at.name), JD_POS);
+                jd_fmt(s, "duplicate key '%s'", at.name), JD_POS);
         sb_printf(b, "%send\n", deep);
         sb_printf(b, "%s%s = true\n", deep, flag);
         if (!jd_dec_value(s, b, c, f->type, jd_fmt(s, JD_OUT ".%s", f->name), deep, &at,
-                       u->home, u->span)) {
+                          u->home, u->span)) {
             /* Naming the field is the whole diagnostic: "cannot decode
              * 'Config'" leaves the reader to find which of its twelve members
              * has no JSON form. */
@@ -275,8 +275,9 @@ static bool dec_of_struct(sema_t *s, sb_t *b, jd_ctx_t *c, type_t *t, scope_t *h
         jd_fail(b, s, JIND JIND, "value is not well formed", JD_START);
         sb_puts(b, JIND "end\n");
         sb_printf(b, JIND JD_POS " = _dws(" JD_TEXT ", " JD_START ")\n");
-        sb_printf(b, JIND "if " JD_OUT ".from_json(" JD_TEXT ".substr(" JD_POS ", %s - "
-                         JD_POS ")) == false:\n",
+        sb_printf(b,
+                  JIND "if " JD_OUT ".from_json(" JD_TEXT ".substr(" JD_POS
+                       ", %s - " JD_POS ")) == false:\n",
                   q);
         jd_fail(b, s, JIND JIND, "value rejected by from_json", JD_START);
         sb_puts(b, JIND "end\n");
@@ -300,7 +301,7 @@ static bool dec_of_struct(sema_t *s, sb_t *b, jd_ctx_t *c, type_t *t, scope_t *h
 }
 
 bool jd_dec_body(sema_t *s, sb_t *b, jd_ctx_t *c, type_t *t, scope_t *home,
-                     const src_span_t *span)
+                 const src_span_t *span)
 {
     switch (t->kind) {
     case TY_STRUCT:

@@ -142,8 +142,8 @@ bool jd_attr_of(sema_t *s, symbol_t *field, json_attr_t *out, const src_span_t *
 typedef const char *(*jd_source_fn)(sema_t *, type_t *, const char *, scope_t *,
                                     const src_span_t *);
 
-static const char *derive_one(sema_t *s, type_t *t, const char *prefix,
-                              jd_source_fn body, scope_t *home, const src_span_t *span)
+static const char *derive_one(sema_t *s, type_t *t, const char *prefix, jd_source_fn body,
+                              scope_t *home, const src_span_t *span)
 {
     const char *fname;
     derived_t *ent;

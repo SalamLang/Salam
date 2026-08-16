@@ -22,14 +22,14 @@
 
 /* Locals the generated bodies use. Underscore-prefixed so they never collide
  * with a field, a package name or anything the unused-name rules care about. */
-#define JV_PARAM "_v"  /* encoder: the value being written        */
-#define JV_BUF "_sb"   /* encoder: the builder                    */
-#define JD_TEXT "_s"   /* decoder: the whole document             */
-#define JD_POS "_p"    /* decoder: the cursor                     */
-#define JD_START "_i"  /* decoder: where this value began         */
-#define JD_OUT "_o"    /* decoder: the destination, by reference  */
-#define JD_ERR "_e"    /* decoder: the message, by reference      */
-#define JD_ERRP "_ep"  /* decoder: the position, by reference     */
+#define JV_PARAM "_v" /* encoder: the value being written        */
+#define JV_BUF "_sb"  /* encoder: the builder                    */
+#define JD_TEXT "_s"  /* decoder: the whole document             */
+#define JD_POS "_p"   /* decoder: the cursor                     */
+#define JD_START "_i" /* decoder: where this value began         */
+#define JD_OUT "_o"   /* decoder: the destination, by reference  */
+#define JD_ERR "_e"   /* decoder: the message, by reference      */
+#define JD_ERRP "_ep" /* decoder: the position, by reference     */
 #define JD_STRICT "_st"
 
 #define JIND "    "

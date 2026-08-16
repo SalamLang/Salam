@@ -1,0 +1,330 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package image
+
+import mem
+import compress
+import archive
+
+// TrueType/OpenType font loading - the container half: the sfnt table
+// directory, the headers it points at (head/maxp/hhea), and the Font
+// value the rest of the package reads everything else out of. The four
+// files around this one each take one table family: ttf_cmap.salam maps
+// codepoints to glyphs, ttf_metrics.salam reads hmtx/kern, and
+// ttf_glyph.salam decodes glyf/loca outlines that glyph_raster.salam
+// then fills. Nothing here knows what a glyph looks like.
+//
+// A `Font` owns a private copy of the whole font file (fonts are a few
+// hundred KB and every table is read by offset into it, so keeping the
+// bytes is both simpler and faster than copying each table out) - free it
+// with FreeFont, the same explicit-ownership rule Image itself follows.
+//
+// Supported: TrueType outlines (`glyf`/`loca`), i.e. .ttf files and the
+// .ttc collections that wrap several of them, from either an 0x00010000
+// or a 'true' sfnt header. cmap formats 0, 4, 6 and 12 cover every real
+// font's Unicode table, including the 3/0 "symbol" encoding whose
+// codepoints live at 0xF000+ch (looked up transparently, see
+// GlyphIndex).
+//
+// NOT supported: PostScript/CFF outlines (an 'OTTO' header - most .otf
+// files), which are a completely separate charstring format rather than
+// a variation on `glyf`. LoadFont reports those through `ok = false`
+// rather than half-reading them, the same "report, don't misread" rule
+// webp.salam's stub follows. Bitmap-only fonts (EBDT/CBDT color emoji)
+// and variable-font instancing (`gvar`) are likewise reported, not
+// approximated.
+//
+// Every read goes through the bounds-checked _ttf_* helpers below, which
+// return 0 past the end of the buffer, so a truncated or hostile font
+// file produces a blank/garbled glyph at worst, never an out-of-bounds
+// read.
+
+const _TTF_TAG_HEAD := (0x68 << 24) | (0x65 << 16) | (0x61 << 8) | 0x64
+const _TTF_TAG_MAXP := (0x6D << 24) | (0x61 << 16) | (0x78 << 8) | 0x70
+const _TTF_TAG_LOCA := (0x6C << 24) | (0x6F << 16) | (0x63 << 8) | 0x61
+const _TTF_TAG_GLYF := (0x67 << 24) | (0x6C << 16) | (0x79 << 8) | 0x66
+const _TTF_TAG_CMAP := (0x63 << 24) | (0x6D << 16) | (0x61 << 8) | 0x70
+const _TTF_TAG_HHEA := (0x68 << 24) | (0x68 << 16) | (0x65 << 8) | 0x61
+const _TTF_TAG_HMTX := (0x68 << 24) | (0x6D << 16) | (0x74 << 8) | 0x78
+const _TTF_TAG_KERN := (0x6B << 24) | (0x65 << 16) | (0x72 << 8) | 0x6E
+const _TTF_TAG_CFF := (0x43 << 24) | (0x46 << 16) | (0x46 << 8) | 0x20
+
+const _TTF_SFNT_10 := 0x00010000
+const _TTF_SFNT_TRUE := (0x74 << 24) | (0x72 << 16) | (0x75 << 8) | 0x65
+const _TTF_SFNT_OTTO := (0x4F << 24) | (0x54 << 16) | (0x54 << 8) | 0x4F
+const _TTF_SFNT_TTCF := (0x74 << 24) | (0x74 << 16) | (0x63 << 8) | 0x66
+
+// A loaded font file. Every field is derived from the file at load time
+// so drawing never re-scans the table directory; `data`/`size` are the
+// owned file bytes and everything else is either a byte offset into them
+// or a value read out of a header.
+@en "Font"
+@fa "قلم"
+@ar "خط"
+pub struct Font:
+    // The whole font file, owned by this Font - FreeFont releases it.
+    pub data: void* = null
+    pub size: int = 0
+    // head/maxp/hhea, in font design units (see UnitsPerEm).
+    pub units_per_em: int = 0
+    pub num_glyphs: int = 0
+    pub ascent: int = 0
+    // Negative in every real font (it measures downward from the
+    // baseline), kept verbatim rather than negated so arithmetic reads
+    // the way the spec writes it.
+    pub descent: int = 0
+    pub line_gap: int = 0
+    // Table offsets; 0 means "absent".
+    pub glyf: int = 0
+    pub glyf_len: int = 0
+    pub loca: int = 0
+    pub loca_len: int = 0
+    pub hmtx: int = 0
+    pub kern: int = 0
+    // The one cmap subtable this font will be looked up through, already
+    // chosen (see _ttf_pick_cmap); 0 when the font has no usable one.
+    pub cmap_sub: int = 0
+    pub cmap_symbol: bool = false
+    pub num_hmetrics: int = 0
+    // head.indexToLocFormat: false = 16-bit loca offsets, true = 32-bit.
+    pub loca_long: bool = false
+    pub ok: bool = false
+end
+
+// ------------------------------------------------------- bounds-checked IO
+
+func _ttf_u8(p: void*, n: int, off: int): int:
+    if off < 0 || off >= n:
+        ret 0
+    end
+    bp := p as u8*
+    ret bp[off] as int
+end
+
+func _ttf_u16(p: void*, n: int, off: int): int:
+    ret (_ttf_u8(p, n, off) << 8) | _ttf_u8(p, n, off + 1)
+end
+
+func _ttf_i16(p: void*, n: int, off: int): int:
+    v := _ttf_u16(p, n, off)
+    if v >= 32768:
+        ret v - 65536
+    end
+    ret v
+end
+
+// Table offsets/lengths are the only u32s this parser reads (checksums
+// are never verified - a font that fails its own checksum still renders,
+// and no rasterizer in the wild rejects one), and those always fit in a
+// signed int for any file small enough to have been read into memory.
+func _ttf_u32(p: void*, n: int, off: int): int:
+    ret (_ttf_u16(p, n, off) << 16) | _ttf_u16(p, n, off + 2)
+end
+
+// ------------------------------------------------------------ table lookup
+
+func _ttf_find_table(p: void*, n: int, dir_off: int, tag: int, len_out &: int): int:
+    num_tables := _ttf_u16(p, n, dir_off + 4)
+    mut i := 0
+    until i < num_tables:
+        rec := dir_off + 12 + i * 16
+        if _ttf_u32(p, n, rec) == tag:
+            len_out = _ttf_u32(p, n, rec + 12)
+            ret _ttf_u32(p, n, rec + 8)
+        end
+        i += 1
+    end
+    len_out = 0
+    ret 0
+end
+
+// -------------------------------------------------------------- table init
+
+func _ttf_init(f &: Font, dir_off: int): bool:
+    ver := _ttf_u32(f.data, f.size, dir_off)
+    if ver != _TTF_SFNT_10 && ver != _TTF_SFNT_TRUE:
+        ret false
+    end
+    mut tlen := 0
+    head := _ttf_find_table(f.data, f.size, dir_off, _TTF_TAG_HEAD, tlen)
+    maxp := _ttf_find_table(f.data, f.size, dir_off, _TTF_TAG_MAXP, tlen)
+    hhea := _ttf_find_table(f.data, f.size, dir_off, _TTF_TAG_HHEA, tlen)
+    if head == 0 || maxp == 0:
+        ret false
+    end
+    f.glyf = _ttf_find_table(f.data, f.size, dir_off, _TTF_TAG_GLYF, tlen)
+    f.glyf_len = tlen
+    f.loca = _ttf_find_table(f.data, f.size, dir_off, _TTF_TAG_LOCA, tlen)
+    f.loca_len = tlen
+    f.hmtx = _ttf_find_table(f.data, f.size, dir_off, _TTF_TAG_HMTX, tlen)
+    f.kern = _ttf_find_table(f.data, f.size, dir_off, _TTF_TAG_KERN, tlen)
+    if f.glyf == 0 || f.loca == 0:
+        ret false
+    end
+    f.units_per_em = _ttf_u16(f.data, f.size, head + 18)
+    f.loca_long = _ttf_i16(f.data, f.size, head + 50) != 0
+    f.num_glyphs = _ttf_u16(f.data, f.size, maxp + 4)
+    if f.units_per_em <= 0 || f.num_glyphs <= 0:
+        ret false
+    end
+    if hhea != 0:
+        f.ascent = _ttf_i16(f.data, f.size, hhea + 4)
+        f.descent = _ttf_i16(f.data, f.size, hhea + 6)
+        f.line_gap = _ttf_i16(f.data, f.size, hhea + 8)
+        f.num_hmetrics = _ttf_u16(f.data, f.size, hhea + 34)
+    end
+    // A font with no hhea still renders; only its line spacing is
+    // guessed, from the em square the way a typographer would.
+    if f.ascent == 0 && f.descent == 0:
+        f.ascent = (f.units_per_em * 4) / 5
+        f.descent = 0 - f.units_per_em / 5
+    end
+    _ttf_pick_cmap(f, _ttf_find_table(f.data, f.size, dir_off, _TTF_TAG_CMAP, tlen))
+    ret true
+end
+
+// ------------------------------------------------------------------ public
+
+// Parses a font from bytes already in memory, taking a private copy so
+// the caller can free its own buffer immediately. `index` selects a face
+// inside a .ttc collection (0 for a plain .ttf, which is what ParseFont
+// passes).
+@en "ParseFontIndex"
+@fa "خواندن قلم با اندیس"
+@ar "تحليل خط بفهرس"
+pub func ParseFontIndex(p: void*, n: int, index: int, ok &: bool): Font:
+    mut f := Font {}
+    ok = false
+    if p == null || n < 12:
+        ret f
+    end
+    f.data = mem.Allocate(n as u64)
+    if f.data == null:
+        ret f
+    end
+    mem.Copy(f.data, p, n as u64)
+    f.size = n
+    mut dir := 0
+    if _ttf_u32(f.data, f.size, 0) == _TTF_SFNT_TTCF:
+        count := _ttf_u32(f.data, f.size, 8)
+        if index < 0 || index >= count:
+            FreeFont(f)
+            ret f
+        end
+        dir = _ttf_u32(f.data, f.size, 12 + index * 4)
+    else:
+        if index != 0:
+            FreeFont(f)
+            ret f
+        end
+    end
+    if !_ttf_init(f, dir):
+        FreeFont(f)
+        ret f
+    end
+    f.ok = true
+    ok = true
+    ret f
+end
+
+@en "ParseFont"
+@fa "خواندن قلم"
+@ar "تحليل خط"
+pub func ParseFont(p: void*, n: int, ok &: bool): Font:
+    ret ParseFontIndex(p, n, 0, ok)
+end
+
+// Reads and parses a .ttf/.ttc file. Reports failure (a missing file, a
+// CFF/OpenType-PostScript outline format, a truncated header) through
+// `ok`, never through a half-built Font.
+@en "LoadFont"
+@fa "بارگذاری قلم"
+@ar "تحميل خط"
+pub func LoadFont(path: str, ok &: bool): Font:
+    ret LoadFontIndex(path, 0, ok)
+end
+
+@en "LoadFontIndex"
+@fa "بارگذاری قلم با اندیس"
+@ar "تحميل خط بفهرس"
+pub func LoadFontIndex(path: str, index: int, ok &: bool): Font:
+    ok = false
+    mut read_ok := false
+    buf := archive.ReadBinaryFile(path, read_ok)
+    if !read_ok:
+        compress.BufFree(buf)
+        ret Font {}
+    end
+    out := ParseFontIndex(buf.data, buf.len, index, ok)
+    compress.BufFree(buf)
+    ret out
+end
+
+@en "FreeFont"
+@fa "آزادسازی قلم"
+@ar "تحرير الخط"
+pub func FreeFont(f &: Font):
+    if f.data != null:
+        mem.Free(f.data)
+    end
+    f.data = null
+    f.size = 0
+    f.ok = false
+    f.num_glyphs = 0
+    f.units_per_em = 0
+end
+
+@en "FontValid"
+@fa "قلم معتبر"
+@ar "خط صالح"
+pub func FontValid(f: Font): bool:
+    ret f.ok && f.data != null && f.units_per_em > 0
+end
+
+// True when the bytes are a font this package cannot rasterize but can
+// still recognize: 'OTTO' (PostScript/CFF outlines). Lets a caller tell
+// "not a font at all" apart from "a font of the wrong flavor" in its own
+// error message.
+@en "IsCFFFont"
+@fa "قلم سی‌اف‌اف است"
+@ar "خط سي إف إف"
+pub func IsCFFFont(p: void*, n: int): bool:
+    if p == null || n < 12:
+        ret false
+    end
+    mut tlen := 0
+    if _ttf_u32(p, n, 0) == _TTF_SFNT_OTTO:
+        ret true
+    end
+    ret _ttf_find_table(p, n, 0, _TTF_TAG_CFF, tlen) != 0
+end
+
+// The design-unit grid the outlines are drawn on (1000 or 2048 in
+// practice). Every metric below is in these units; divide by it and
+// multiply by a pixel size to get pixels, which is what ScaleFactor
+// does.
+@en "UnitsPerEm"
+@fa "واحد در ام"
+@ar "وحدات لكل إم"
+pub func UnitsPerEm(f: Font): int:
+    ret f.units_per_em
+end
+
+@en "NumGlyphs"
+@fa "تعداد نویسه‌ها"
+@ar "عدد الرسوم"
+pub func NumGlyphs(f: Font): int:
+    ret f.num_glyphs
+end

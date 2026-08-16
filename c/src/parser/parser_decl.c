@@ -59,12 +59,24 @@ static void absorb_misordered_mods(parser_t *p, fn_mods_t *m)
                "'pub deprecated inline|noinline pure|noret func'");
     while (p_at_fn_mod(p)) {
         switch (p_peek(p)->kind) {
-        case TK_KW_PUB: m->is_pub = true; break;
-        case TK_KW_DEPRECATED: m->is_deprecated = true; break;
-        case TK_KW_INLINE: m->is_inline = true; break;
-        case TK_KW_NOINLINE: m->is_noinline = true; break;
-        case TK_KW_PURE: m->is_pure = true; break;
-        default: m->is_noret = true; break;
+        case TK_KW_PUB:
+            m->is_pub = true;
+            break;
+        case TK_KW_DEPRECATED:
+            m->is_deprecated = true;
+            break;
+        case TK_KW_INLINE:
+            m->is_inline = true;
+            break;
+        case TK_KW_NOINLINE:
+            m->is_noinline = true;
+            break;
+        case TK_KW_PURE:
+            m->is_pure = true;
+            break;
+        default:
+            m->is_noret = true;
+            break;
         }
         p_advance(p);
     }

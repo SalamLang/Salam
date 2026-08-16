@@ -474,7 +474,8 @@ ptr_elem_t ptr_elem_from_typestr(const char *ts)
 
 value_t ptr_load(interp_t *I, sptr_t p, int64_t idx)
 {
-    if (p.elem == PTR_STRUCT) return interp_mem_load(I, interp_ptr_elem_addr(I, p, idx), p.tname);
+    if (p.elem == PTR_STRUCT)
+        return interp_mem_load(I, interp_ptr_elem_addr(I, p, idx), p.tname);
     switch (p.elem) {
     case PTR_I8:
         return val_int_ty(((int8_t *)p.addr)[idx], ITY_I8);

@@ -1,0 +1,231 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import testing
+import collections
+import conv
+
+// HashMap and the containers built on it. Assertions never depend on
+// iteration order: HashMap is open addressed, so it comes back in bucket
+// order and that order is not part of its contract. Where order does
+// matter, OrderedMap is the type to reach for, and the last test here
+// shows the difference.
+
+func test_basic():
+    mut m := HashMap {} as HashMap<str, int>
+    defer m.free()
+    testing.AssertTrue(m.is_empty())
+    testing.AssertEqInt(m.size(), 0)
+    m.put("one", 1)
+    m.put("two", 2)
+    m.insert("three", 3)
+    testing.AssertEqInt(m.size(), 3)
+    testing.AssertFalse(m.is_empty())
+    testing.AssertEqInt(m.get("two"), 2)
+    testing.AssertTrue(m.has("one"))
+    testing.AssertFalse(m.has("four"))
+    // a missing key reads as the zero value of V, not as an error
+    testing.AssertEqInt(m.get("four"), 0)
+end
+
+func test_overwrite():
+    mut m := HashMap {} as HashMap<str, int>
+    defer m.free()
+    m.put("k", 1)
+    m.put("k", 2)
+    m.put("k", 3)
+    // an overwrite replaces, it does not add
+    testing.AssertEqInt(m.size(), 1)
+    testing.AssertEqInt(m.get("k"), 3)
+end
+
+func test_remove():
+    mut m := HashMap {} as HashMap<str, int>
+    defer m.free()
+    m.put("a", 1)
+    m.put("b", 2)
+    testing.AssertTrue(m.remove("a"))
+    testing.AssertEqInt(m.size(), 1)
+    testing.AssertFalse(m.has("a"))
+    // removing twice reports that there was nothing to remove
+    testing.AssertFalse(m.remove("a"))
+    testing.AssertFalse(m.remove("never there"))
+    // the entries around it are untouched
+    testing.AssertEqInt(m.get("b"), 2)
+    // a key can come back after being removed
+    m.put("a", 9)
+    testing.AssertEqInt(m.get("a"), 9)
+    testing.AssertEqInt(m.size(), 2)
+end
+
+// Open addressing has to keep working across the rehash that growth
+// forces, and across the tombstones that removal leaves behind.
+func test_growth():
+    mut m := HashMap {} as HashMap<str, int>
+    defer m.free()
+    mut i := 0
+    until i < 500:
+        m.put("key".concat(conv.FormatInt(i as i64)), i)
+        i += 1
+    end
+    testing.AssertEqInt(m.size(), 500)
+    testing.AssertEqInt(m.get("key0"), 0)
+    testing.AssertEqInt(m.get("key250"), 250)
+    testing.AssertEqInt(m.get("key499"), 499)
+    // remove every other entry, then check the survivors are all findable
+    mut j := 0
+    until j < 500:
+        m.remove("key".concat(conv.FormatInt(j as i64)))
+        j += 2
+    end
+    testing.AssertEqInt(m.size(), 250)
+    mut k := 1
+    mut found := 0
+    until k < 500:
+        if m.get("key".concat(conv.FormatInt(k as i64))) == k: found += 1 end
+        k += 2
+    end
+    testing.AssertEqInt(found, 250)
+end
+
+// Iteration visits every live entry exactly once. Checked with a sum and
+// a count, both of which are independent of the order it hands them back.
+func test_iteration():
+    mut m := HashMap {} as HashMap<str, int>
+    defer m.free()
+    mut expected := 0
+    mut i := 1
+    until i < 51:
+        m.put("n".concat(conv.FormatInt(i as i64)), i)
+        expected = expected + i
+        i += 1
+    end
+    mut total := 0
+    mut seen := 0
+    it := m.iter()
+    until it.has_next():
+        total = total + it.value()
+        seen += 1
+        it.next()
+    end
+    testing.AssertEqInt(seen, 50)
+    testing.AssertEqInt(total, expected)
+    // an empty map yields nothing at all
+    mut e := HashMap {} as HashMap<str, int>
+    defer e.free()
+    mut count := 0
+    eit := e.iter()
+    until eit.has_next():
+        count += 1
+        eit.next()
+    end
+    testing.AssertEqInt(count, 0)
+end
+
+func test_int_keys():
+    mut m := HashMap {} as HashMap<int, str>
+    defer m.free()
+    m.put(1, "one")
+    m.put(2, "two")
+    m.put(1000000, "big")
+    testing.AssertEqStr(m.get(1), "one")
+    testing.AssertEqStr(m.get(1000000), "big")
+    testing.AssertEqInt(m.size(), 3)
+    // A miss returns the zero value of V, which for str is null rather
+    // than "". Reading it back with get() and then touching it would
+    // crash, so a str valued map is guarded with has() or read through
+    // get_or().
+    testing.AssertFalse(m.has(7))
+    testing.AssertEqStr(m.get_or(7, "none"), "none")
+    testing.AssertEqStr(m.get_or(1, "none"), "one")
+end
+
+// Keys are compared by content, so a key assembled at runtime finds an
+// entry stored under a literal.
+func test_runtime_keys():
+    mut m := HashMap {} as HashMap<str, int>
+    defer m.free()
+    src := "USER_NAME=max"
+    m.put(src.substr(0, 9), 1)
+    testing.AssertTrue(m.has("USER_NAME"))
+    testing.AssertEqInt(m.get("USER_NAME"), 1)
+    testing.AssertEqInt(m.get("USER".concat("_NAME")), 1)
+end
+
+func test_set():
+    mut s := Set {} as Set<str>
+    defer s.free()
+    testing.AssertTrue(s.is_empty())
+    s.add("a")
+    s.add("b")
+    s.add("a")
+    // a set holds each member once
+    testing.AssertEqInt(s.size(), 2)
+    testing.AssertTrue(s.has("a"))
+    testing.AssertFalse(s.has("z"))
+    testing.AssertTrue(s.remove("a"))
+    testing.AssertFalse(s.remove("a"))
+    testing.AssertEqInt(s.size(), 1)
+end
+
+func test_counter():
+    mut c := Counter {} as Counter<str>
+    defer c.free()
+    c.add("apple")
+    c.add("apple")
+    c.add("pear")
+    c.add_n("apple", 3)
+    testing.AssertEqInt(c.count("apple"), 5)
+    testing.AssertEqInt(c.count("pear"), 1)
+    // an unseen key counts zero rather than failing
+    testing.AssertEqInt(c.count("plum"), 0)
+    testing.AssertEqInt(c.distinct(), 2)
+end
+
+// The contrast that decides which of the two to use: HashMap answers a
+// lookup fast but forgets the order, OrderedMap answers just as fast and
+// remembers it. std/config and std/encoding/envfile need the second.
+func test_ordered_vs_hash():
+    mut om := collections.OrderedMap {}
+    defer om.free()
+    om.set("zebra", "1")
+    om.set("apple", "2")
+    om.set("mango", "3")
+    testing.AssertEqStr(om.key_at(0), "zebra")
+    testing.AssertEqStr(om.key_at(1), "apple")
+    testing.AssertEqStr(om.key_at(2), "mango")
+    testing.AssertEqStr(om.get("apple"), "2")
+    // overwriting keeps the entry in the position it first appeared
+    om.set("zebra", "9")
+    testing.AssertEqStr(om.key_at(0), "zebra")
+    testing.AssertEqStr(om.get("zebra"), "9")
+    testing.AssertEqInt(om.len(), 3)
+end
+
+func main:
+    test_basic()
+    test_overwrite()
+    test_remove()
+    test_growth()
+    test_iteration()
+    test_int_keys()
+    test_runtime_keys()
+    test_set()
+    test_counter()
+    test_ordered_vs_hash()
+    testing.Summary()
+    ret 0
+end

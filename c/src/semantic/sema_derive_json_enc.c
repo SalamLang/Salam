@@ -164,7 +164,8 @@ static const char *empty_test(sema_t *s, type_t *t, const char *expr)
         symbol_t *sym = (symbol_t *)t->decl;
         type_t *k, *v;
         const char *count;
-        if (sym && derive_struct_map(sym, &k, &v)) return jd_fmt(s, "(%s).size() > 0", expr);
+        if (sym && derive_struct_map(sym, &k, &v))
+            return jd_fmt(s, "(%s).size() > 0", expr);
         if (sym && derive_struct_seq(sym, &v, &count))
             return jd_fmt(s, "(%s).%s() > 0", expr, count);
     }
@@ -261,7 +262,8 @@ static bool enc_map(sema_t *s, sb_t *b, jd_ctx_t *c, type_t *key, type_t *val,
     sb_puts(b, JIND JIND "if _n > 0: _dadd(" JV_BUF ", \",\") end\n");
     add(b, JIND JIND, ke);
     add(b, JIND JIND, "\":\"");
-    if (!enc_value(s, b, c, val, "_it.value()", JIND JIND, NULL, home, span)) return false;
+    if (!enc_value(s, b, c, val, "_it.value()", JIND JIND, NULL, home, span))
+        return false;
     sb_puts(b, JIND JIND "_n = _n + 1\n");
     sb_puts(b, JIND JIND "_it.next()\n");
     sb_puts(b, JIND "end\n");
@@ -298,7 +300,8 @@ static bool enc_body(sema_t *s, sb_t *b, jd_ctx_t *c, type_t *t, scope_t *home,
                        span);
     case TY_ARRAY:
     case TY_SLICE:
-        return enc_seq(s, b, c, t->elem, "len(" JV_PARAM ")", JV_PARAM "[_i]", home, span);
+        return enc_seq(s, b, c, t->elem, "len(" JV_PARAM ")", JV_PARAM "[_i]", home,
+                       span);
     case TY_MAP:
         return enc_map(s, b, c, t->key, t->elem, home, span);
     default:

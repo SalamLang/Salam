@@ -523,7 +523,8 @@ static void check_function(sema_t *s, ast_node_t *fn, symbol_t *owner, func_sig_
             for (; i < sc->symbols.len; i++) {
                 symbol_t *p = (symbol_t *)sc->symbols.data[i];
                 if (p->kind == SYM_PARAM && !p->used && p->decl && p->name &&
-                    p->name[0] != '_' && strcmp(p->name, "this") != 0)
+                    p->name[0] != '_' && !ast_name_is_err(p->name) &&
+                    strcmp(p->name, "this") != 0)
                     SERR(s, 62, &p->decl->span,
                          "unused parameter '%s' (prefix with '_' if intentional)",
                          p->name);
@@ -568,7 +569,7 @@ void sema_check_unused_funcs(sema_t *s)
         symbol_t *f = (symbol_t *)s->global->symbols.data[i];
         if (f->kind != SYM_FUNC || f->used || f->is_pub) continue;
         if (!f->decl || f->decl->synthetic || f->decl->is_extern) continue;
-        if (!f->name || f->name[0] == '_') continue;
+        if (!f->name || f->name[0] == '_' || ast_name_is_err(f->name)) continue;
         if (strcmp(f->name, "main") == 0 || strcmp(f->name, entry) == 0) continue;
         SERR(s, 66, &f->decl->span,
              "unused function '%s' (call it, mark it 'pub', or prefix its name with "

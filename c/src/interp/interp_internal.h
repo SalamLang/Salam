@@ -139,17 +139,17 @@ typedef enum {
 typedef struct {
     iloc_kind_t kind;
     ast_node_t *target;
-    binding_t *b;      /* ILOC_VAR */
-    value_t obj;       /* ILOC_FIELD / ILOC_OPIDX: the struct value */
-    size_t field_idx;  /* ILOC_FIELD */
-    sarray_t *arr;     /* ILOC_ARR */
-    int64_t idx;       /* ILOC_ARR / ILOC_PTR */
-    sptr_t ptr;        /* ILOC_PTR */
-    void *mem;         /* ILOC_MEM: the field's address in real memory */
-    const char *mem_ts;/* ILOC_MEM: its declared type */
-    value_t key;       /* ILOC_OPIDX */
-    ast_node_t *get_m; /* ILOC_OPIDX */
-    ast_node_t *set_m; /* ILOC_OPIDX */
+    binding_t *b;       /* ILOC_VAR */
+    value_t obj;        /* ILOC_FIELD / ILOC_OPIDX: the struct value */
+    size_t field_idx;   /* ILOC_FIELD */
+    sarray_t *arr;      /* ILOC_ARR */
+    int64_t idx;        /* ILOC_ARR / ILOC_PTR */
+    sptr_t ptr;         /* ILOC_PTR */
+    void *mem;          /* ILOC_MEM: the field's address in real memory */
+    const char *mem_ts; /* ILOC_MEM: its declared type */
+    value_t key;        /* ILOC_OPIDX */
+    ast_node_t *get_m;  /* ILOC_OPIDX */
+    ast_node_t *set_m;  /* ILOC_OPIDX */
 } iloc_t;
 
 #define INTERP_MAX_DEPTH 1000

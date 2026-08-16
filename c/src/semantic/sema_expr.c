@@ -460,6 +460,9 @@ type_t *sema_check_expr(sema_t *s, ast_node_t *n)
         return decorate(s, n, t);
     }
     case AST_IDENTIFIER: {
+        /* The parser already reported why this name could not be read; a
+         * follow-up "unknown identifier '<error>'" would only bury it. */
+        if (ast_name_is_err(n->name)) return decorate(s, n, err_ty(s));
         symbol_t *sym = scope_lookup(s->cur, n->name);
         if (!sym) {
             const char *c = local_canon(s, n->name, &n->span);
@@ -512,6 +515,7 @@ type_t *sema_check_expr(sema_t *s, ast_node_t *n)
         return decorate(s, n, sym->type);
     }
     case AST_FUNC_ADDR: {
+        if (ast_name_is_err(n->name)) return decorate(s, n, err_ty(s));
         symbol_t *sym = scope_lookup(s->cur, n->name);
         if (!sym) {
             const char *c = local_canon(s, n->name, &n->span);

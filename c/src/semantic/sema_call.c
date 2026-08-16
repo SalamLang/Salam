@@ -337,7 +337,8 @@ static type_t *check_json_builtin(sema_t *s, ast_node_t *n, bool enc)
     callee->synthetic = true;
     decorate(s, callee, ty(s, TY_VOID));
     fsym = scope_lookup_local(s->global, fn);
-    sig = (fsym && fsym->overloads.len > 0) ? (func_sig_t *)fsym->overloads.data[0] : NULL;
+    sig =
+        (fsym && fsym->overloads.len > 0) ? (func_sig_t *)fsym->overloads.data[0] : NULL;
     if (fsym) fsym->used = true;
     dce_mark_root(s->pkg, fn);
     mark_ref_args(s, n, sig);

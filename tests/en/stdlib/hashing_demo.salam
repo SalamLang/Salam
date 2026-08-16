@@ -1,0 +1,136 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import testing
+import crypto
+import str
+
+// Every digest here is checked against a published test vector, not
+// against another run of the same code. A hash that is self consistently
+// wrong is exactly the bug a round trip test cannot see.
+
+func test_md5():
+    testing.AssertEqStr(crypto.Md5Hex(""), "d41d8cd98f00b204e9800998ecf8427e")
+    testing.AssertEqStr(crypto.Md5Hex("abc"), "900150983cd24fb0d6963f7d28e17f72")
+    testing.AssertEqStr(crypto.Md5Hex("message digest"), "f96b697d7cb7938d525a2f31aaf161d0")
+    testing.AssertEqStr(crypto.Md5Hex("The quick brown fox jumps over the lazy dog"), "9e107d9d372bb6826bd81d3542a419d6")
+end
+
+func test_sha1():
+    testing.AssertEqStr(crypto.Sha1Hex(""), "da39a3ee5e6b4b0d3255bfef95601890afd80709")
+    testing.AssertEqStr(crypto.Sha1Hex("abc"), "a9993e364706816aba3e25717850c26c9cd0d89d")
+    testing.AssertEqStr(crypto.Sha1Hex("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"), "84983e441c3bd26ebaae4aa1f95129e5e54670f1")
+    // the form the WebSocket handshake needs
+    testing.AssertEqStr(crypto.Sha1Base64("abc"), "qZk+NkcGgWq6PiVxeFDCbJzQ2J0=")
+end
+
+func test_sha256():
+    testing.AssertEqStr(crypto.Sha256Hex(""), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+    testing.AssertEqStr(crypto.Sha256Hex("abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+    testing.AssertEqStr(crypto.Sha256Hex("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"), "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1")
+end
+
+func test_sha512():
+    testing.AssertEqStr(crypto.Sha512Hex("abc"), "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f")
+    testing.AssertEqStr(crypto.Sha512Hex(""), "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e")
+end
+
+// A digest changes completely for a one bit input change, and the length
+// is fixed no matter how long the input is.
+func test_digest_shape():
+    testing.AssertEqInt(crypto.Md5Hex("x").len(), 32)
+    testing.AssertEqInt(crypto.Sha1Hex("x").len(), 40)
+    testing.AssertEqInt(crypto.Sha256Hex("x").len(), 64)
+    testing.AssertEqInt(crypto.Sha512Hex("x").len(), 128)
+    mut long := ""
+    repeat 500: long = long.concat("salam") end
+    testing.AssertEqInt(crypto.Sha256Hex(long).len(), 64)
+    testing.AssertNeStr(crypto.Sha256Hex("abc"), crypto.Sha256Hex("abd"))
+end
+
+func test_hmac():
+    fox := "The quick brown fox jumps over the lazy dog"
+    testing.AssertEqStr(crypto.HmacSha256Hex("key", fox), "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8")
+    testing.AssertEqStr(crypto.HmacSha512Hex("key", fox), "b42af09057bac1e2d41708e48a902e09b5ff7f12ab428a4fe86653c73dd248fb82f948a549f7b791a5b41915ee4d1ec3935357e4e2317250d0372afa2ebeeb3a")
+    // the key is part of the input: a different key is a different tag
+    testing.AssertNeStr(crypto.HmacSha256Hex("key1", fox), crypto.HmacSha256Hex("key2", fox))
+end
+
+// RFC 6070 style vectors, with the low iteration counts so the test
+// stays fast.
+func test_pbkdf2():
+    testing.AssertEqStr(crypto.Pbkdf2HmacSha256Hex("password", "salt", 1, 32), "120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b")
+    testing.AssertEqStr(crypto.Pbkdf2HmacSha256Hex("password", "salt", 2, 32), "ae4d0c95af6b46d32d0adff928f06dd02a303f8ef3c251dfd6e2d85a95474c43")
+    // the derived key length is honoured
+    testing.AssertEqInt(crypto.Pbkdf2HmacSha256Hex("password", "salt", 1, 16).len(), 32)
+end
+
+// A stored password is salted, so hashing the same password twice must
+// not produce the same record, and both must still verify.
+func test_password():
+    a := crypto.HashPassword("correct horse")
+    b := crypto.HashPassword("correct horse")
+    testing.AssertNeStr(a, b)
+    testing.AssertTrue(str.StartsWith(a, "pbkdf2-sha256$"))
+    testing.AssertTrue(crypto.VerifyPassword("correct horse", a))
+    testing.AssertTrue(crypto.VerifyPassword("correct horse", b))
+    testing.AssertFalse(crypto.VerifyPassword("wrong horse", a))
+    testing.AssertFalse(crypto.VerifyPassword("", a))
+    // a record that is not in the expected shape must not verify
+    testing.AssertFalse(crypto.VerifyPassword("correct horse", "garbage"))
+end
+
+func test_secret_equals():
+    testing.AssertTrue(crypto.SecretEquals("abc", "abc"))
+    testing.AssertTrue(crypto.SecretEquals("", ""))
+    testing.AssertFalse(crypto.SecretEquals("abc", "abd"))
+    testing.AssertFalse(crypto.SecretEquals("abc", "ab"))
+    testing.AssertFalse(crypto.SecretEquals("abc", ""))
+end
+
+// RandomHex takes a byte count and returns two hex characters per byte.
+func test_random():
+    testing.AssertEqInt(crypto.RandomHex(16).len(), 32)
+    testing.AssertEqInt(crypto.RandomHex(1).len(), 2)
+    testing.AssertEqInt(crypto.RandomHex(0).len(), 0)
+    testing.AssertEqInt(crypto.RandomToken(8).len(), 16)
+    testing.AssertNeStr(crypto.RandomHex(16), crypto.RandomHex(16))
+end
+
+// The non cryptographic hashes behind HashMap: equal inputs must agree,
+// which is the property the map depends on.
+func test_fast_hash():
+    testing.AssertTrue(crypto.HashStr("abc") == crypto.HashStr("abc"))
+    testing.AssertTrue(crypto.HashStr("abc") != crypto.HashStr("abd"))
+    testing.AssertTrue(crypto.HashInt(42 as u64) == crypto.HashInt(42 as u64))
+    testing.AssertTrue(crypto.HashInt(1 as u64) != crypto.HashInt(2 as u64))
+end
+
+func main:
+    test_md5()
+    test_sha1()
+    test_sha256()
+    test_sha512()
+    test_digest_shape()
+    test_hmac()
+    test_pbkdf2()
+    test_password()
+    test_secret_equals()
+    test_random()
+    test_fast_hash()
+    testing.Summary()
+    ret 0
+end

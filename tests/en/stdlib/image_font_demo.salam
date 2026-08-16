@@ -1,0 +1,758 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Regression test for std/image's TrueType support (truetype.salam,
+// ttf_glyph.salam, glyph_raster.salam, text_font.salam).
+//
+// The font under test is BUILT BY THIS FILE, byte by byte: a real, valid
+// .ttf with head/maxp/hhea/hmtx/cmap/loca/glyf tables and three glyphs
+// whose outlines are exactly known - a square, a square with a square
+// hole, and a triangle. That is what makes the rasterizer assertable
+// (a filled square has to be filled, its hole has to stay empty, the
+// triangle's diagonal has to be anti-aliased) without shipping a binary
+// font file or depending on whichever fonts the test machine happens to
+// have installed.
+//
+// The system font, when there is one, is exercised too - but through
+// assertions of the form "if it loaded, it must be sane", so the number
+// of assertions is the same on a machine with fonts and one without.
+
+package main
+
+import image
+import compress
+import archive
+import testing
+import str
+import os
+import filepath
+
+const UPEM := 1000
+const NUM_GLYPHS := 4
+const TTF_NUM_TABLES := 7
+
+// ------------------------------------------------------- font file builder
+
+func be16(b &: compress.ByteBuf, v: int):
+    compress.BufPush(b, (v >> 8) & 255)
+    compress.BufPush(b, v & 255)
+end
+
+func be32(b &: compress.ByteBuf, v: int):
+    be16(b, (v >> 16) & 0xFFFF)
+    be16(b, v & 0xFFFF)
+end
+
+func pad4(n: int): int:
+    ret ((n + 3) / 4) * 4
+end
+
+func pad_to4(b &: compress.ByteBuf):
+    until (b.len % 4) != 0:
+        compress.BufPush(b, 0)
+    end
+end
+
+// One simple glyph: every point on-curve, every coordinate written as a
+// plain 16-bit delta (the format's short/same encodings are optional
+// compressions of exactly this, so the decoder's long path is what gets
+// exercised here and its short path is what real fonts exercise).
+func build_glyph(xs &: Vector<int>, ys &: Vector<int>, ends &: Vector<int>): compress.ByteBuf:
+    mut g := compress.NewByteBuf()
+    n := xs.len()
+    mut minx := xs.get(0)
+    mut maxx := xs.get(0)
+    mut miny := ys.get(0)
+    mut maxy := ys.get(0)
+    mut i := 1
+    until i < n:
+        if xs.get(i) < minx: minx = xs.get(i) end
+        if xs.get(i) > maxx: maxx = xs.get(i) end
+        if ys.get(i) < miny: miny = ys.get(i) end
+        if ys.get(i) > maxy: maxy = ys.get(i) end
+        i += 1
+    end
+    be16(g, ends.len())
+    be16(g, minx & 0xFFFF)
+    be16(g, miny & 0xFFFF)
+    be16(g, maxx & 0xFFFF)
+    be16(g, maxy & 0xFFFF)
+    mut k := 0
+    until k < ends.len():
+        be16(g, ends.get(k))
+        k += 1
+    end
+    be16(g, 0)
+    mut p := 0
+    until p < n:
+        // 0x01 = on-curve, no short/same bits: the next two arrays are
+        // signed 16-bit deltas.
+        compress.BufPush(g, 1)
+        p += 1
+    end
+    mut prev := 0
+    mut a := 0
+    until a < n:
+        be16(g, (xs.get(a) - prev) & 0xFFFF)
+        prev = xs.get(a)
+        a += 1
+    end
+    prev = 0
+    mut b := 0
+    until b < n:
+        be16(g, (ys.get(b) - prev) & 0xFFFF)
+        prev = ys.get(b)
+        b += 1
+    end
+    pad_to4(g)
+    ret g
+end
+
+func push_pt(xs &: Vector<int>, ys &: Vector<int>, x: int, y: int):
+    xs.push(x)
+    ys.push(y)
+end
+
+// gid 1: a solid square, 100..700 x 0..700.
+func glyph_square(): compress.ByteBuf:
+    mut xs := Vector {} as Vector<int>
+    mut ys := Vector {} as Vector<int>
+    mut ends := Vector {} as Vector<int>
+    push_pt(xs, ys, 100, 0)
+    push_pt(xs, ys, 700, 0)
+    push_pt(xs, ys, 700, 700)
+    push_pt(xs, ys, 100, 700)
+    ends.push(3)
+    out := build_glyph(xs, ys, ends)
+    xs.free()
+    ys.free()
+    ends.free()
+    ret out
+end
+
+// gid 2: a square ring - an outer contour with an inner one wound the
+// other way, which is how every 'o' in every font makes its hole and the
+// only thing that tells a nonzero-winding fill from an even-odd one.
+func glyph_ring(): compress.ByteBuf:
+    mut xs := Vector {} as Vector<int>
+    mut ys := Vector {} as Vector<int>
+    mut ends := Vector {} as Vector<int>
+    push_pt(xs, ys, 100, 0)
+    push_pt(xs, ys, 900, 0)
+    push_pt(xs, ys, 900, 800)
+    push_pt(xs, ys, 100, 800)
+    ends.push(3)
+    push_pt(xs, ys, 300, 200)
+    push_pt(xs, ys, 300, 600)
+    push_pt(xs, ys, 700, 600)
+    push_pt(xs, ys, 700, 200)
+    ends.push(7)
+    out := build_glyph(xs, ys, ends)
+    xs.free()
+    ys.free()
+    ends.free()
+    ret out
+end
+
+// gid 3: a triangle, for the anti-aliased diagonal.
+func glyph_triangle(): compress.ByteBuf:
+    mut xs := Vector {} as Vector<int>
+    mut ys := Vector {} as Vector<int>
+    mut ends := Vector {} as Vector<int>
+    push_pt(xs, ys, 0, 0)
+    push_pt(xs, ys, 800, 0)
+    push_pt(xs, ys, 400, 800)
+    ends.push(2)
+    out := build_glyph(xs, ys, ends)
+    xs.free()
+    ys.free()
+    ends.free()
+    ret out
+end
+
+func build_head(): compress.ByteBuf:
+    mut t := compress.NewByteBuf()
+    be32(t, 0x00010000)
+    be32(t, 0x00010000)
+    be32(t, 0)
+    be32(t, 0x5F0F3CF5)
+    be16(t, 0)
+    be16(t, UPEM)
+    be32(t, 0)
+    be32(t, 0)
+    be32(t, 0)
+    be32(t, 0)
+    be16(t, 0)
+    be16(t, 0)
+    be16(t, 900)
+    be16(t, 800)
+    be16(t, 0)
+    be16(t, 8)
+    be16(t, 2)
+    // indexToLocFormat = 0: 16-bit loca offsets, halved.
+    be16(t, 0)
+    be16(t, 0)
+    ret t
+end
+
+func build_maxp(): compress.ByteBuf:
+    mut t := compress.NewByteBuf()
+    be32(t, 0x00010000)
+    be16(t, NUM_GLYPHS)
+    mut i := 0
+    until i < 13:
+        be16(t, 0)
+        i += 1
+    end
+    ret t
+end
+
+func build_hhea(): compress.ByteBuf:
+    mut t := compress.NewByteBuf()
+    be32(t, 0x00010000)
+    be16(t, 800)
+    be16(t, (0 - 200) & 0xFFFF)
+    be16(t, 100)
+    be16(t, 1000)
+    be16(t, 0)
+    be16(t, 0)
+    be16(t, 900)
+    be16(t, 1)
+    be16(t, 0)
+    be16(t, 0)
+    mut i := 0
+    until i < 4:
+        be16(t, 0)
+        i += 1
+    end
+    be16(t, 0)
+    be16(t, NUM_GLYPHS)
+    ret t
+end
+
+func build_hmtx(): compress.ByteBuf:
+    mut t := compress.NewByteBuf()
+    be16(t, 500)
+    be16(t, 0)
+    be16(t, 800)
+    be16(t, 100)
+    be16(t, 1000)
+    be16(t, 100)
+    be16(t, 900)
+    be16(t, 0)
+    ret t
+end
+
+// A (3,1) format 4 subtable mapping 'A'..'C' to glyphs 1..3 through a
+// single idDelta segment, plus the 0xFFFF terminator segment the format
+// requires.
+func build_cmap(): compress.ByteBuf:
+    mut t := compress.NewByteBuf()
+    be16(t, 0)
+    be16(t, 1)
+    be16(t, 3)
+    be16(t, 1)
+    be32(t, 12)
+    be16(t, 4)
+    be16(t, 32)
+    be16(t, 0)
+    be16(t, 4)
+    be16(t, 4)
+    be16(t, 1)
+    be16(t, 0)
+    be16(t, 0x43)
+    be16(t, 0xFFFF)
+    be16(t, 0)
+    be16(t, 0x41)
+    be16(t, 0xFFFF)
+    be16(t, (0 - 64) & 0xFFFF)
+    be16(t, 1)
+    be16(t, 0)
+    be16(t, 0)
+    ret t
+end
+
+func build_glyf(loca &: compress.ByteBuf): compress.ByteBuf:
+    mut t := compress.NewByteBuf()
+    // gid 0 (.notdef) is empty: loca[0] == loca[1], the standard way a
+    // font says "no outline" for both .notdef and every space character.
+    be16(loca, 0)
+    be16(loca, 0)
+    sq := glyph_square()
+    compress.BufPushBuf(t, sq)
+    compress.BufFree(sq)
+    be16(loca, t.len / 2)
+    rg := glyph_ring()
+    compress.BufPushBuf(t, rg)
+    compress.BufFree(rg)
+    be16(loca, t.len / 2)
+    tr := glyph_triangle()
+    compress.BufPushBuf(t, tr)
+    compress.BufFree(tr)
+    be16(loca, t.len / 2)
+    ret t
+end
+
+func put_record(out &: compress.ByteBuf, tag: int, off: int, len: int):
+    be32(out, tag)
+    be32(out, 0)
+    be32(out, off)
+    be32(out, len)
+end
+
+func build_ttf(): compress.ByteBuf:
+    mut loca := compress.NewByteBuf()
+    glyf := build_glyf(loca)
+    cmap := build_cmap()
+    head := build_head()
+    hhea := build_hhea()
+    hmtx := build_hmtx()
+    maxp := build_maxp()
+
+    mut off := 12 + 16 * TTF_NUM_TABLES
+    off_cmap := off
+    off = off + pad4(cmap.len)
+    off_glyf := off
+    off = off + pad4(glyf.len)
+    off_head := off
+    off = off + pad4(head.len)
+    off_hhea := off
+    off = off + pad4(hhea.len)
+    off_hmtx := off
+    off = off + pad4(hmtx.len)
+    off_loca := off
+    off = off + pad4(loca.len)
+    off_maxp := off
+
+    mut out := compress.NewByteBuf()
+    be32(out, 0x00010000)
+    be16(out, TTF_NUM_TABLES)
+    be16(out, 64)
+    be16(out, 2)
+    be16(out, 48)
+    // Records are in tag order, which for these seven tables is also
+    // alphabetical - the spec requires sorted records, and a reader that
+    // binary-searches them (this one scans) would depend on it.
+    put_record(out, 0x636D6170, off_cmap, cmap.len)
+    put_record(out, 0x676C7966, off_glyf, glyf.len)
+    put_record(out, 0x68656164, off_head, head.len)
+    put_record(out, 0x68686561, off_hhea, hhea.len)
+    put_record(out, 0x686D7478, off_hmtx, hmtx.len)
+    put_record(out, 0x6C6F6361, off_loca, loca.len)
+    put_record(out, 0x6D617870, off_maxp, maxp.len)
+
+    compress.BufPushBuf(out, cmap)
+    pad_to4(out)
+    compress.BufPushBuf(out, glyf)
+    pad_to4(out)
+    compress.BufPushBuf(out, head)
+    pad_to4(out)
+    compress.BufPushBuf(out, hhea)
+    pad_to4(out)
+    compress.BufPushBuf(out, hmtx)
+    pad_to4(out)
+    compress.BufPushBuf(out, loca)
+    pad_to4(out)
+    compress.BufPushBuf(out, maxp)
+    pad_to4(out)
+
+    compress.BufFree(cmap)
+    compress.BufFree(glyf)
+    compress.BufFree(head)
+    compress.BufFree(hhea)
+    compress.BufFree(hmtx)
+    compress.BufFree(loca)
+    compress.BufFree(maxp)
+    ret out
+end
+
+// ------------------------------------------------------------- assertions
+
+func is_ink(img: image.Image, x: int, y: int): bool:
+    ret image.Luminance(image.GetPixel(img, x, y)) < 128
+end
+
+func check_parse(ttf: compress.ByteBuf):
+    mut ok := false
+    f := image.ParseFont(ttf.data, ttf.len, ok)
+    testing.AssertTrue(ok)
+    testing.AssertTrue(image.FontValid(f))
+    testing.AssertEqInt(image.UnitsPerEm(f), UPEM)
+    testing.AssertEqInt(image.NumGlyphs(f), NUM_GLYPHS)
+
+    // 100px per em over a 1000-unit em is exactly 0.1 px per unit.
+    testing.AssertEqFloat(image.ScaleFactor(f, 100.0), 0.1, 0.0000001)
+    testing.AssertEqFloat(image.AscentPixels(f, 100.0), 80.0, 0.0001)
+    testing.AssertEqFloat(image.DescentPixels(f, 100.0), 0.0 - 20.0, 0.0001)
+    testing.AssertEqFloat(image.LineHeightPixels(f, 100.0), 110.0, 0.0001)
+
+    testing.AssertEqInt(image.GlyphIndex(f, 65), 1)
+    testing.AssertEqInt(image.GlyphIndex(f, 66), 2)
+    testing.AssertEqInt(image.GlyphIndex(f, 67), 3)
+    // Anything the cmap does not cover falls to .notdef, including the
+    // 0xFFFF the terminator segment maps and a codepoint past the BMP.
+    testing.AssertEqInt(image.GlyphIndex(f, 90), 0)
+    testing.AssertEqInt(image.GlyphIndex(f, 0xFFFF), 0)
+    testing.AssertEqInt(image.GlyphIndex(f, 0x1F600), 0)
+
+    testing.AssertEqInt(image.GlyphAdvance(f, 0), 500)
+    testing.AssertEqInt(image.GlyphAdvance(f, 1), 800)
+    testing.AssertEqInt(image.GlyphAdvance(f, 2), 1000)
+    testing.AssertEqInt(image.GlyphAdvance(f, 3), 900)
+    // Past the last glyph the advance repeats rather than reading off
+    // the end of hmtx.
+    testing.AssertEqInt(image.GlyphAdvance(f, 99), 900)
+    // No kern table in this font: 0, never a guess.
+    testing.AssertEqInt(image.KernAdvance(f, 1, 2), 0)
+
+    testing.AssertFalse(image.GlyphHasOutline(f, 0))
+    testing.AssertTrue(image.GlyphHasOutline(f, 1))
+    testing.AssertFalse(image.GlyphHasOutline(f, 99))
+
+    mut x0 := 0
+    mut y0 := 0
+    mut x1 := 0
+    mut y1 := 0
+    testing.AssertTrue(image.GlyphBox(f, 1, x0, y0, x1, y1))
+    testing.AssertEqInt(x0, 100)
+    testing.AssertEqInt(y0, 0)
+    testing.AssertEqInt(x1, 700)
+    testing.AssertEqInt(y1, 700)
+    testing.AssertFalse(image.GlyphBox(f, 0, x0, y0, x1, y1))
+    testing.AssertEqInt(x1, 0)
+
+    // Advance widths, not ink widths: 'A' is 800 units wide at 0.1 px
+    // per unit, and three of them are three advances.
+    testing.AssertEqFloat(image.TextWidthTTF(f, "A", 100.0), 80.0, 0.0001)
+    testing.AssertEqFloat(image.TextWidthTTF(f, "ABC", 100.0), 270.0, 0.0001)
+    testing.AssertEqFloat(image.TextWidthTTF(f, "", 100.0), 0.0, 0.0001)
+    mut tracked := image.TextStyle {}
+    tracked.size = 100.0
+    tracked.tracking = 5.0
+    testing.AssertEqFloat(image.TextWidthStyled(f, "ABC", tracked), 285.0, 0.0001)
+
+    image.FreeFont(f)
+    testing.AssertFalse(image.FontValid(f))
+end
+
+func check_render_square(ttf: compress.ByteBuf):
+    mut ok := false
+    f := image.ParseFont(ttf.data, ttf.len, ok)
+    mut img := image.NewFilled(100, 110, image.RGB(255, 255, 255))
+    // Baseline at y = 100: the square spans 100..700 in x and 0..700 in
+    // y in font units, so at 0.1 px/unit it lands at x 10..70 and
+    // y 30..100 on the canvas.
+    adv := image.DrawTextTTF(img, 0.0, 100.0, "A", image.RGB(0, 0, 0), f, 100.0)
+    testing.AssertEqFloat(adv, 80.0, 0.0001)
+    testing.AssertTrue(is_ink(img, 40, 60))
+    testing.AssertTrue(is_ink(img, 12, 98))
+    testing.AssertTrue(is_ink(img, 68, 32))
+    testing.AssertFalse(is_ink(img, 5, 60))
+    testing.AssertFalse(is_ink(img, 75, 60))
+    testing.AssertFalse(is_ink(img, 40, 25))
+    testing.AssertFalse(is_ink(img, 40, 105))
+
+    // The edges are exact, not blurred: the square's sides fall on whole
+    // pixel boundaries, so the pixel outside stays pure white.
+    outside := image.GetPixel(img, 9, 60)
+    testing.AssertEqInt(outside.r as int, 255)
+    inside := image.GetPixel(img, 11, 60)
+    testing.AssertEqInt(inside.r as int, 0)
+
+    // Subpixel placement moves the coverage, it does not snap: half a
+    // pixel to the right leaves the first column half covered.
+    mut sub := image.NewFilled(100, 110, image.RGB(255, 255, 255))
+    image.DrawTextTTF(sub, 0.5, 100.0, "A", image.RGB(0, 0, 0), f, 100.0)
+    half := image.GetPixel(sub, 10, 60)
+    testing.AssertTrue((half.r as int) > 100 && (half.r as int) < 160)
+    image.Free(sub)
+
+    // A glyph the font has no outline for (a space, .notdef) draws
+    // nothing but still advances.
+    mut blank := image.NewFilled(40, 40, image.RGB(255, 255, 255))
+    notdef_adv := image.DrawTextTTF(blank, 0.0, 30.0, "Z", image.RGB(0, 0, 0), f, 100.0)
+    testing.AssertEqFloat(notdef_adv, 50.0, 0.0001)
+    testing.AssertFalse(is_ink(blank, 20, 20))
+    image.Free(blank)
+
+    image.Free(img)
+    image.FreeFont(f)
+end
+
+func check_render_ring(ttf: compress.ByteBuf):
+    mut ok := false
+    f := image.ParseFont(ttf.data, ttf.len, ok)
+    mut img := image.NewFilled(120, 120, image.RGB(255, 255, 255))
+    // 'B' is the ring: outer 100..900 x 0..800, hole 300..700 x 200..600.
+    image.DrawTextTTF(img, 0.0, 100.0, "B", image.RGB(0, 0, 0), f, 100.0)
+    testing.AssertTrue(is_ink(img, 20, 60))
+    testing.AssertTrue(is_ink(img, 80, 60))
+    testing.AssertTrue(is_ink(img, 50, 25))
+    testing.AssertTrue(is_ink(img, 50, 95))
+    // The hole is the whole point: nonzero winding cancels the reversed
+    // inner contour, so the middle stays paper-white.
+    testing.AssertFalse(is_ink(img, 50, 60))
+    testing.AssertFalse(is_ink(img, 35, 45))
+    testing.AssertFalse(is_ink(img, 65, 75))
+    image.Free(img)
+    image.FreeFont(f)
+end
+
+func check_render_triangle(ttf: compress.ByteBuf):
+    mut ok := false
+    f := image.ParseFont(ttf.data, ttf.len, ok)
+    mut img := image.NewFilled(120, 120, image.RGB(255, 255, 255))
+    // Triangle (0,0) (800,0) (400,800) at 0.1 px/unit with the baseline
+    // at y = 100: apex at (40, 20), base from (0,100) to (80,100).
+    image.DrawTextTTF(img, 0.0, 100.0, "C", image.RGB(0, 0, 0), f, 100.0)
+    testing.AssertTrue(is_ink(img, 40, 90))
+    testing.AssertTrue(is_ink(img, 40, 30))
+    testing.AssertFalse(is_ink(img, 5, 30))
+    testing.AssertFalse(is_ink(img, 75, 30))
+    // Anti-aliasing: the two diagonals cross whole rows of pixels
+    // partially, so the image has to contain a band of intermediate
+    // greys and not just black and white.
+    mut partial := 0
+    mut y := 0
+    until y < img.height:
+        mut x := 0
+        until x < img.width:
+            v := (image.GetPixel(img, x, y)).r as int
+            if v > 25 && v < 230:
+                partial += 1
+            end
+            x += 1
+        end
+        y += 1
+    end
+    testing.AssertTrue(partial > 40)
+    image.Free(img)
+    image.FreeFont(f)
+end
+
+func check_styles(ttf: compress.ByteBuf):
+    mut ok := false
+    f := image.ParseFont(ttf.data, ttf.len, ok)
+
+    // Rotating a quarter turn counter-clockwise about the pen origin
+    // takes the square from "right of and above the origin" to "left of
+    // and above it", so drawing at (80, 80) puts it back on canvas.
+    mut rot := image.NewFilled(100, 100, image.RGB(255, 255, 255))
+    mut st := image.TextStyle {}
+    st.size = 100.0
+    st.rotate = 1.5707963
+    image.DrawTextStyled(rot, 80.0, 80.0, "A", image.RGB(0, 0, 0), f, st)
+    testing.AssertTrue(is_ink(rot, 40, 40))
+    testing.AssertFalse(is_ink(rot, 90, 90))
+    image.Free(rot)
+
+    // Slant leans the top of the glyph to the right without moving the
+    // baseline end of it.
+    mut ital := image.NewFilled(140, 120, image.RGB(255, 255, 255))
+    mut sk := image.TextStyle {}
+    sk.size = 100.0
+    sk.skew = 0.5
+    image.DrawTextStyled(ital, 0.0, 100.0, "A", image.RGB(0, 0, 0), f, sk)
+    // The square spans x 10..70 at the baseline whatever the slant; a
+    // shear of 0.5 pushes its top (65 units up, y = 35) 32px to the
+    // right, so x = 95 is ink up there and paper down at the baseline.
+    testing.AssertTrue(is_ink(ital, 15, 98))
+    testing.AssertTrue(is_ink(ital, 95, 35))
+    testing.AssertFalse(is_ink(ital, 95, 98))
+    image.Free(ital)
+
+    // Drawing by glyph index skips the cmap: glyph 3 is the triangle,
+    // whatever codepoint may or may not map to it.
+    mut byidx := image.NewFilled(100, 110, image.RGB(255, 255, 255))
+    mut plain := image.TextStyle {}
+    plain.size = 100.0
+    image.DrawGlyphStyled(byidx, 3, 0.0, 100.0, image.RGB(0, 0, 0), f, plain)
+    testing.AssertTrue(is_ink(byidx, 40, 90))
+    image.Free(byidx)
+
+    // Codepoint drawing returns the advance so a caller can keep its own
+    // pen, which is what per-character effects need.
+    mut bycp := image.NewFilled(100, 110, image.RGB(255, 255, 255))
+    cp_adv := image.DrawCodepointStyled(bycp, 66, 0.0, 100.0, image.RGB(0, 0, 0), f, plain)
+    testing.AssertEqFloat(cp_adv, 100.0, 0.0001)
+    testing.AssertTrue(is_ink(bycp, 20, 60))
+    image.Free(bycp)
+
+    // Half-off-canvas text clips instead of writing out of bounds.
+    mut clipped := image.NewFilled(30, 30, image.RGB(255, 255, 255))
+    image.DrawTextTTF(clipped, 0.0 - 20.0, 100.0, "A", image.RGB(0, 0, 0), f, 100.0)
+    testing.AssertFalse(is_ink(clipped, 15, 15))
+    image.DrawTextTTF(clipped, 0.0 - 5.0, 25.0, "A", image.RGB(0, 0, 0), f, 20.0)
+    testing.AssertTrue(is_ink(clipped, 3, 20))
+    image.Free(clipped)
+
+    image.FreeFont(f)
+end
+
+func check_bad_fonts(ttf: compress.ByteBuf):
+    // Not a font at all.
+    mut ok1 := true
+    bad := image.ParseFont("this is not a font at all" as void*, 25, ok1)
+    testing.AssertFalse(ok1)
+    testing.AssertFalse(image.FontValid(bad))
+    testing.AssertEqInt(image.UnitsPerEm(bad), 0)
+    testing.AssertEqInt(image.GlyphIndex(bad, 65), 0)
+    testing.AssertEqFloat(image.ScaleFactor(bad, 100.0), 0.0, 0.0001)
+
+    // Drawing with an invalid font is a no-op that reports a zero
+    // advance, never a crash.
+    mut img := image.NewFilled(40, 40, image.RGB(255, 255, 255))
+    testing.AssertEqFloat(image.DrawTextTTF(img, 0.0, 30.0, "A", image.RGB(0, 0, 0), bad, 20.0), 0.0, 0.0001)
+    testing.AssertFalse(is_ink(img, 20, 20))
+    testing.AssertEqFloat(image.TextWidthTTF(bad, "A", 20.0), 0.0, 0.0001)
+    image.Free(img)
+    image.FreeFont(bad)
+
+    // Truncated: a valid header with the tables cut off.
+    mut ok2 := true
+    trunc := image.ParseFont(ttf.data, 40, ok2)
+    testing.AssertFalse(ok2)
+    testing.AssertFalse(image.FontValid(trunc))
+    image.FreeFont(trunc)
+
+    // Empty and null input.
+    mut ok3 := true
+    empty := image.ParseFont(null, 0, ok3)
+    testing.AssertFalse(ok3)
+    image.FreeFont(empty)
+
+    // A .ttf is a collection of exactly one face: any other index is a
+    // failure, not a silent fallback to face 0.
+    mut ok4 := true
+    idx := image.ParseFontIndex(ttf.data, ttf.len, 3, ok4)
+    testing.AssertFalse(ok4)
+    image.FreeFont(idx)
+
+    // A missing file reports through `ok`, like every other loader here.
+    mut ok5 := true
+    missing := image.LoadFont("definitely_not_a_font_file.ttf", ok5)
+    testing.AssertFalse(ok5)
+    image.FreeFont(missing)
+
+    // 'OTTO' is a real font this package cannot rasterize, and saying so
+    // is more useful than "not a font".
+    mut otto := compress.NewByteBuf()
+    compress.BufPush(otto, 0x4F)
+    compress.BufPush(otto, 0x54)
+    compress.BufPush(otto, 0x54)
+    compress.BufPush(otto, 0x4F)
+    mut z := 0
+    until z < 12:
+        compress.BufPush(otto, 0)
+        z += 1
+    end
+    testing.AssertTrue(image.IsCFFFont(otto.data, otto.len))
+    mut ok6 := true
+    cff := image.ParseFont(otto.data, otto.len, ok6)
+    testing.AssertFalse(ok6)
+    image.FreeFont(cff)
+    compress.BufFree(otto)
+    testing.AssertFalse(image.IsCFFFont(ttf.data, ttf.len))
+end
+
+func check_file_roundtrip(ttf: compress.ByteBuf, tmpdir: str):
+    path := filepath.Join(tmpdir, "synthetic.ttf")
+    testing.AssertTrue(archive.WriteBinaryFileBuf(path, ttf))
+    mut ok := false
+    f := image.LoadFont(path, ok)
+    testing.AssertTrue(ok)
+    testing.AssertEqInt(image.UnitsPerEm(f), UPEM)
+
+    // The whole point of a font: draw with it and get an image out.
+    mut img := image.NewFilled(300, 140, image.RGB(255, 255, 255))
+    w := image.DrawTextTTF(img, 10.0, 110.0, "ABC", image.RGB(20, 40, 120), f, 120.0)
+    testing.AssertTrue(w > 300.0)
+    png := filepath.Join(tmpdir, "synthetic.png")
+    testing.AssertTrue(image.Save(img, png))
+    mut load_ok := false
+    back := image.Open(png, load_ok)
+    testing.AssertTrue(load_ok)
+    testing.AssertEqFloat(image.MeanAbsError(img, back), 0.0, 0.001)
+    image.Free(back)
+    image.Free(img)
+    image.FreeFont(f)
+end
+
+// The one part that depends on the machine. Every assertion is written
+// as "no system font, or a sane one", so the count is identical whether
+// or not this host has fonts installed.
+func check_system_font:
+    path := image.FindSystemFont()
+    mut ok := false
+    f := image.LoadSystemFont(ok)
+    testing.AssertTrue(!ok || str.Len(path) > 0)
+    testing.AssertTrue(!ok || image.FontValid(f))
+    testing.AssertTrue(!ok || image.UnitsPerEm(f) > 0)
+    testing.AssertTrue(!ok || image.NumGlyphs(f) > 1)
+    testing.AssertTrue(!ok || image.AscentPixels(f, 32.0) > 0.0)
+    testing.AssertTrue(!ok || image.GlyphIndex(f, 65) > 0)
+
+    mut img := image.NewFilled(320, 60, image.RGB(255, 255, 255))
+    width := image.DrawTextTTF(img, 8.0, 44.0, "Salam Language!", image.RGB(0, 0, 0), f, 30.0)
+    mut ink := 0
+    mut y := 0
+    until y < img.height:
+        mut x := 0
+        until x < img.width:
+            if is_ink(img, x, y):
+                ink += 1
+            end
+            x += 1
+        end
+        y += 1
+    end
+    testing.AssertTrue(!ok || ink > 100)
+    testing.AssertTrue(!ok || width > 50.0)
+    // Measuring and drawing have to agree, or centered text is not.
+    testing.AssertEqFloat(width, image.TextWidthTTF(f, "Salam Language!", 30.0), 0.0001)
+    image.Free(img)
+    image.FreeFont(f)
+end
+
+func main:
+    ttf := build_ttf()
+    println "built synthetic ttf"
+
+    println "parse"
+    check_parse(ttf)
+    println "render square"
+    check_render_square(ttf)
+    println "render ring"
+    check_render_ring(ttf)
+    println "render triangle"
+    check_render_triangle(ttf)
+    println "styles"
+    check_styles(ttf)
+    println "bad fonts"
+    check_bad_fonts(ttf)
+
+    tmpdir := filepath.Join(os.TempDir(), "salam_font_test")
+    os.MkdirAll(tmpdir)
+    println "file roundtrip"
+    check_file_roundtrip(ttf, tmpdir)
+    os.RemoveAll(tmpdir)
+
+    println "system font"
+    check_system_font()
+
+    compress.BufFree(ttf)
+    println "done"
+    os.Exit(testing.Summary())
+    ret 0
+end

@@ -22,6 +22,17 @@
 #include "token/token.h"
 #include "xml/xml.h"
 
+/* Placeholder the parser stores as a declaration's or an identifier's name
+ * once it has already reported why the real name could not be read. Later
+ * phases must stay silent about it: a second diagnostic quoting "<error>"
+ * only buries the one that explained the problem. */
+#define SALAM_ERR_NAME "<error>"
+
+SAL_INLINE bool ast_name_is_err(const char *name)
+{
+    return name && strcmp(name, SALAM_ERR_NAME) == 0;
+}
+
 typedef enum {
     AST_PROGRAM = 0,
     AST_IMPORT,

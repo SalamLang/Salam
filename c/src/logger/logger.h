@@ -59,6 +59,12 @@ void logger_add_diag_source(logger_t *lg, const char *file, const char *src_text
 void logger_log(logger_t *lg, phase_t phase, log_level_t level, const char *file,
                 const src_span_t *span, const char *fmt, ...);
 
+/* Same as logger_log, plus a trailing "= help: ..." line on the rendered
+ * diagnostic. `help` is emitted verbatim, so callers translate it themselves
+ * (it usually carries a user-supplied name and has to be formatted first). */
+void logger_log_help(logger_t *lg, phase_t phase, log_level_t level, const char *file,
+                     const src_span_t *span, const char *help, const char *fmt, ...);
+
 bool log_level_from_string(const char *s, log_level_t *out);
 
 const char *log_level_name(log_level_t level);
@@ -86,5 +92,8 @@ const char *log_phase_name(phase_t phase);
 
 #define LOG_E_AT(lg, ph, file, span, ...)                                                \
     logger_log((lg), (ph), LOG_ERROR, (file), &(span), __VA_ARGS__)
+
+#define LOG_E_AT_HELP(lg, ph, file, span, help, ...)                                     \
+    logger_log_help((lg), (ph), LOG_ERROR, (file), &(span), (help), __VA_ARGS__)
 
 #endif /* SALAM_LOGGER_LOGGER_H */

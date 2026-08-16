@@ -36,11 +36,10 @@
 #include "semantic/sema_derive_core.h"
 #include "semantic/sema_derive_json_internal.h"
 
-
 void jd_fail(sb_t *b, sema_t *s, const char *ind, const char *msg, const char *pos)
 {
-    sb_printf(b, "%sret _derr(" JD_ERR ", " JD_ERRP ", %s, %s)\n", ind,
-              jd_quote(s, msg), pos);
+    sb_printf(b, "%sret _derr(" JD_ERR ", " JD_ERRP ", %s, %s)\n", ind, jd_quote(s, msg),
+              pos);
 }
 
 bool jd_int_bounds(const type_t *t, long long *lo, long long *hi)
@@ -106,14 +105,17 @@ static bool dec_scalar(sema_t *s, sb_t *b, jd_ctx_t *c, type_t *t, const char *l
         if (t->kind == TY_BOOL)
             sb_printf(b, "%s%s = _dgbool(%s, 0, %s2)\n", ind, lval, raw, q);
         else if (type_is_float(t))
-            sb_printf(b, "%s%s = _dgflt(%s, 0, %s2) as %s\n", ind, lval, raw, q, spelling);
+            sb_printf(b, "%s%s = _dgflt(%s, 0, %s2) as %s\n", ind, lval, raw, q,
+                      spelling);
         else if (jd_is_unsigned(t))
             sb_printf(b, "%s%s = _dguint(%s, 0, %s2) as %s\n", ind, lval, raw, q,
                       spelling);
         else
-            sb_printf(b, "%s%s = _dgint(%s, 0, %s2) as %s\n", ind, lval, raw, q, spelling);
+            sb_printf(b, "%s%s = _dgint(%s, 0, %s2) as %s\n", ind, lval, raw, q,
+                      spelling);
         sb_printf(b, "%sif %s2 < 0:\n", ind, q);
-        jd_fail(b, s, jd_fmt(s, "%s" JIND, ind), "quoted value is not well formed", JD_POS);
+        jd_fail(b, s, jd_fmt(s, "%s" JIND, ind), "quoted value is not well formed",
+                JD_POS);
         sb_printf(b, "%send\n", ind);
         sb_printf(b, "%s" JD_POS " = %s\n", ind, q);
         return true;
@@ -130,22 +132,24 @@ static bool dec_scalar(sema_t *s, sb_t *b, jd_ctx_t *c, type_t *t, const char *l
     else if (jd_is_unsigned(t))
         read = jd_fmt(s, "_dguint(" JD_TEXT ", " JD_POS ", %s) as %s", q, spelling);
     else if (jd_int_bounds(t, &lo, &hi))
-        read = jd_fmt(s, "_drange(_dgint(" JD_TEXT ", " JD_POS ", %s), %lld, %lld, %s) as %s",
-                      q, lo, hi, q, spelling);
+        read = jd_fmt(
+            s, "_drange(_dgint(" JD_TEXT ", " JD_POS ", %s), %lld, %lld, %s) as %s", q,
+            lo, hi, q, spelling);
     else if (type_is_integer(t))
         read = jd_fmt(s, "_dgint(" JD_TEXT ", " JD_POS ", %s) as %s", q, spelling);
     else
         return false;
 
     if (jd_is_unsigned(t) && jd_int_bounds(t, &lo, &hi))
-        read = jd_fmt(s, "_drange(_dguint(" JD_TEXT ", " JD_POS ", %s) as i64, %lld, %lld, "
-                         "%s) as %s",
+        read = jd_fmt(s,
+                      "_drange(_dguint(" JD_TEXT ", " JD_POS ", %s) as i64, %lld, %lld, "
+                      "%s) as %s",
                       q, lo, hi, q, spelling);
 
     sb_printf(b, "%s%s = %s\n", ind, lval, read);
     sb_printf(b, "%sif %s < 0:\n", ind, q);
     jd_fail(b, s, jd_fmt(s, "%s" JIND, ind), "value does not match the expected type",
-         JD_POS);
+            JD_POS);
     sb_printf(b, "%send\n", ind);
     sb_printf(b, "%s" JD_POS " = %s\n", ind, q);
     return true;
@@ -195,8 +199,9 @@ static bool dec_nested(sema_t *s, sb_t *b, jd_ctx_t *c, type_t *t, const char *l
     const char *fn = sema_derive_json_dec(s, t, home, span);
     const char *q = jd_fresh(s, c, "q");
     if (!fn) return false;
-    sb_printf(b, "%s%s := %s(" JD_TEXT ", " JD_POS ", %s, " JD_ERR ", " JD_ERRP
-                 ", " JD_STRICT ")\n",
+    sb_printf(b,
+              "%s%s := %s(" JD_TEXT ", " JD_POS ", %s, " JD_ERR ", " JD_ERRP
+              ", " JD_STRICT ")\n",
               ind, q, fn, lval);
     sb_printf(b, "%sif %s < 0: ret -1 end\n", ind, q);
     sb_printf(b, "%s" JD_POS " = %s\n", ind, q);
@@ -223,15 +228,15 @@ static bool dec_ptr(sema_t *s, sb_t *b, jd_ctx_t *c, type_t *t, const char *lval
     sb_printf(b, "%selse:\n", ind);
     sb_printf(b, "%s%s = _dalloc(sizeof(%s)) as %s*\n", deep, lval, spelling, spelling);
     if (!jd_dec_value(s, b, c, t->pointee, jd_fmt(s, "(%s)[0]", lval), deep, NULL, home,
-                   span))
+                      span))
         return false;
     sb_printf(b, "%send\n", ind);
     return true;
 }
 
 bool jd_dec_value(sema_t *s, sb_t *b, jd_ctx_t *c, type_t *t, const char *lval,
-                      const char *ind, const json_attr_t *at, scope_t *home,
-                      const src_span_t *span)
+                  const char *ind, const json_attr_t *at, scope_t *home,
+                  const src_span_t *span)
 {
     if (!t) return false;
     if (jd_is_scalar(t)) return dec_scalar(s, b, c, t, lval, ind, at);
@@ -240,4 +245,3 @@ bool jd_dec_value(sema_t *s, sb_t *b, jd_ctx_t *c, type_t *t, const char *lval,
     if (t->kind == TY_PTR) return dec_ptr(s, b, c, t, lval, ind, home, span);
     return dec_nested(s, b, c, t, lval, ind, home, span);
 }
-

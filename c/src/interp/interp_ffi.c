@@ -723,8 +723,7 @@ value_t call_native_extern(interp_t *I, ast_node_t *call, ast_node_t *decl, valu
     int64_t r = f(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]);
 
     if (!rts) return val_null();
-    if (rts[strlen(rts) - 1] == '*')
-        return interp_ptr_value(I, (void *)(intptr_t)r, rts);
+    if (rts[strlen(rts) - 1] == '*') return interp_ptr_value(I, (void *)(intptr_t)r, rts);
     char rbase[96];
     base_typename(rts, rbase, sizeof rbase);
     if (!strcmp(rbase, "bool")) return val_bool(r != 0);

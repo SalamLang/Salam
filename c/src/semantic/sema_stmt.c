@@ -930,7 +930,9 @@ void sema_check_block(sema_t *s, ast_node_t *block)
         size_t i = 0;
         for (; i < sc->symbols.len; i++) {
             symbol_t *v = (symbol_t *)sc->symbols.data[i];
-            if (sema_check_unused_loop_bind(s, v))
+            if (ast_name_is_err(v->name))
+                ; /* name unreadable, already reported by the parser */
+            else if (sema_check_unused_loop_bind(s, v))
                 ; /* reported (or excused) as a loop binding */
             else if (v->kind == SYM_VAR && !v->used && v->decl && v->name &&
                      v->name[0] != '_')

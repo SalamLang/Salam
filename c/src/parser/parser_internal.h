@@ -62,6 +62,14 @@ void p_skip_terminators(parser_t *p);
 
 void p_error(parser_t *p, const char *msg);
 
+/* True when the token under the cursor is a word the language has claimed and
+ * so can never be an identifier. */
+bool p_at_reserved_word(const parser_t *p);
+
+/* Reports the token under the cursor as a reserved word used where a name was
+ * expected, with a "pick a different name" help line. Does not advance. */
+void p_reserved_word_error(parser_t *p);
+
 void p_sync(parser_t *p);
 
 ast_node_t *p_mk(parser_t *p, ast_kind_t k);

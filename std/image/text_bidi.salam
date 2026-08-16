@@ -1,0 +1,378 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package image
+
+// Bidirectional reordering: turning text stored in logical order (the
+// order it is typed and read) into the visual order it is drawn in.
+//
+// Persian and Arabic run right to left, but the numbers and Latin words
+// inside them still run left to right, so "قیمت 250 تومان" is three runs
+// in two directions. A renderer that draws codepoints in storage order
+// gets that backwards. This file resolves an embedding level per
+// character and then reverses the runs, after which the whole line can
+// be drawn left to right like any other.
+//
+// This is UAX #9's algorithm reduced to what a single-line label needs:
+// the paragraph direction (P2/P3), the weak rules that matter in
+// practice (W1 marks, W2/W3 Arabic numbers, W7 European numbers after
+// Latin), neutral resolution (N1/N2), the implicit levels (I1/I2), the
+// trailing-whitespace reset (L1) and the run reversal (L2). Left out:
+// the explicit embedding controls (RLE/LRE/PDF/RLI/LRI/FSI - deprecated
+// or rare in labels), paragraph splitting, and line breaking. Text that
+// uses none of those - which is nearly all text that fits on one line -
+// comes out identical to a full implementation.
+//
+// Shaping runs BEFORE this (see arabic_shape.salam): joining depends on
+// logical neighbours, reordering on resolved levels.
+
+@en "TextDirAuto"
+@fa "جهت متن خودکار"
+@ar "اتجاه النص تلقائي"
+pub const TextDirAuto := 0
+
+@en "TextDirLTR"
+@fa "جهت متن چپ به راست"
+@ar "اتجاه النص يسار إلى يمين"
+pub const TextDirLTR := 1
+
+@en "TextDirRTL"
+@fa "جهت متن راست به چپ"
+@ar "اتجاه النص يمين إلى يسار"
+pub const TextDirRTL := 2
+
+const _BC_L := 0
+const _BC_R := 1
+const _BC_AL := 2
+const _BC_EN := 3
+const _BC_AN := 4
+const _BC_NSM := 5
+const _BC_WS := 6
+const _BC_ON := 7
+
+func _bidi_is_rtl_class(c: int): bool:
+    ret c == _BC_R || c == _BC_AL
+end
+
+// The Unicode bidi class of a codepoint, coarse enough for one line of
+// text: strong left, strong right (Hebrew and friends), strong Arabic,
+// the two kinds of number, combining marks, whitespace, and everything
+// else as neutral.
+func _bidi_class(cp: int): int:
+    if cp == 0x20 || cp == 0x09 || cp == 0x0A || cp == 0x0D || cp == 0x0C: ret _BC_WS end
+    if cp >= 0x2000 && cp <= 0x200A: ret _BC_WS end
+    if cp == 0x3000 || cp == 0x00A0: ret _BC_WS end
+    if cp >= 0x30 && cp <= 0x39: ret _BC_EN end
+    if _arabic_transparent(cp): ret _BC_NSM end
+    // Arabic-Indic digits are AN; the extended (Persian) ones are EN,
+    // which is what keeps a Persian number reading left to right.
+    if cp >= 0x0660 && cp <= 0x0669: ret _BC_AN end
+    if cp == 0x066B || cp == 0x066C: ret _BC_AN end
+    if cp >= 0x06F0 && cp <= 0x06F9: ret _BC_EN end
+    // Arabic punctuation is neutral, not strong: a comma between two
+    // Persian words has to follow them, not force a direction.
+    if cp == 0x060C || cp == 0x061B || cp == 0x061F || cp == 0x06D4: ret _BC_ON end
+    if cp >= 0x0600 && cp <= 0x06FF: ret _BC_AL end
+    if cp >= 0x0750 && cp <= 0x077F: ret _BC_AL end
+    if cp >= 0x08A0 && cp <= 0x08FF: ret _BC_AL end
+    if cp >= 0xFB50 && cp <= 0xFDFF: ret _BC_AL end
+    if cp >= 0xFE70 && cp <= 0xFEFF: ret _BC_AL end
+    if cp >= 0x0590 && cp <= 0x05FF: ret _BC_R end
+    if cp >= 0x07C0 && cp <= 0x089F: ret _BC_R end
+    if cp >= 0xFB1D && cp <= 0xFB4F: ret _BC_R end
+    if cp >= 0x21 && cp <= 0x2F: ret _BC_ON end
+    if cp >= 0x3A && cp <= 0x40: ret _BC_ON end
+    if cp >= 0x5B && cp <= 0x60: ret _BC_ON end
+    if cp >= 0x7B && cp <= 0x7E: ret _BC_ON end
+    if cp >= 0x00A1 && cp <= 0x00BF: ret _BC_ON end
+    if cp >= 0x2010 && cp <= 0x205E: ret _BC_ON end
+    if cp >= 0x20A0 && cp <= 0x20CF: ret _BC_ON end
+    ret _BC_L
+end
+
+func _bidi_classes(cps &: Vector<int>, classes &: Vector<int>):
+    mut i := 0
+    until i < cps.len():
+        classes.push(_bidi_class(cps.get(i)))
+        i += 1
+    end
+end
+
+// W1/W2/W3/W7: a mark inherits the class before it, a European number
+// after Arabic text becomes an Arabic number, Arabic letters become
+// plain strong-right, and a European number after Latin text becomes
+// Latin so "abc123" stays one run.
+func _bidi_weak_rules(classes &: Vector<int>, base: int):
+    mut prev := _BC_L
+    if base == 1:
+        prev = _BC_R
+    end
+    mut last_strong := prev
+    mut i := 0
+    until i < classes.len():
+        mut c := classes.get(i)
+        if c == _BC_NSM:
+            c = prev
+        end
+        if c == _BC_EN && last_strong == _BC_AL:
+            c = _BC_AN
+        end
+        if c == _BC_EN && last_strong == _BC_L:
+            c = _BC_L
+        end
+        if c == _BC_L || c == _BC_R || c == _BC_AL:
+            last_strong = c
+        end
+        if c == _BC_AL:
+            c = _BC_R
+        end
+        classes.set(i, c)
+        prev = c
+        i += 1
+    end
+end
+
+// I1/I2: levels for the strong and numeric classes. Numbers always end
+// up on an even level above their surroundings, which is what makes a
+// number read left to right inside a right-to-left sentence.
+func _bidi_implicit_level(c: int, base: int): int:
+    if base == 1:
+        if c == _BC_R: ret 1 end
+        ret 2
+    end
+    if c == _BC_R: ret 1 end
+    if c == _BC_EN || c == _BC_AN: ret 2 end
+    ret 0
+end
+
+// The direction a neutral run should follow: the class on each side,
+// with numbers counting as right-to-left (N1) and the paragraph
+// direction where the two disagree or the run touches an edge (N2).
+func _bidi_side_class(classes &: Vector<int>, i: int, base: int, forward: bool): int:
+    mut k := i
+    until k >= 0 && k < classes.len():
+        c := classes.get(k)
+        if c == _BC_L: ret _BC_L end
+        if c == _BC_R || c == _BC_EN || c == _BC_AN: ret _BC_R end
+        if forward:
+            k += 1
+        else:
+            k -= 1
+        end
+    end
+    if base == 1: ret _BC_R end
+    ret _BC_L
+end
+
+func _bidi_is_neutral(c: int): bool:
+    ret c == _BC_WS || c == _BC_ON
+end
+
+func _bidi_levels(cps &: Vector<int>, base: int, levels &: Vector<int>):
+    mut classes := Vector {} as Vector<int>
+    _bidi_classes(cps, classes)
+    _bidi_weak_rules(classes, base)
+    mut i := 0
+    until i < classes.len():
+        c := classes.get(i)
+        if _bidi_is_neutral(c):
+            before := _bidi_side_class(classes, i - 1, base, false)
+            after := _bidi_side_class(classes, i + 1, base, true)
+            if before == after:
+                levels.push(_bidi_implicit_level(before, base))
+            else:
+                levels.push(base)
+            end
+        else:
+            levels.push(_bidi_implicit_level(c, base))
+        end
+        i += 1
+    end
+    // L1: whitespace at the end of the line goes back to the paragraph
+    // level, so a trailing space never drags the line's last run with
+    // it when the runs are reversed.
+    mut k := levels.len() - 1
+    until k >= 0:
+        if !_bidi_is_neutral(classes.get(k)):
+            break
+        end
+        levels.set(k, base)
+        k -= 1
+    end
+    classes.free()
+end
+
+func _bidi_reverse_range(cps &: Vector<int>, lo: int, hi: int):
+    mut a := lo
+    mut b := hi
+    until a < b:
+        tmp := cps.get(a)
+        cps.set(a, cps.get(b))
+        cps.set(b, tmp)
+        a += 1
+        b -= 1
+    end
+end
+
+// L2: from the highest level down to 1, reverse every run at that level
+// or above. The runs are found in the original level array on purpose -
+// a reversal at a higher level only permutes characters inside a range
+// whose levels are all above the next one down, so which positions
+// belong to a run never changes.
+func _bidi_reorder(cps &: Vector<int>, levels &: Vector<int>):
+    mut max_level := 0
+    mut i := 0
+    until i < levels.len():
+        if levels.get(i) > max_level:
+            max_level = levels.get(i)
+        end
+        i += 1
+    end
+    mut lvl := max_level
+    until lvl >= 1:
+        mut k := 0
+        until k < levels.len():
+            if levels.get(k) >= lvl:
+                mut e := k
+                until e + 1 < levels.len() && levels.get(e + 1) >= lvl:
+                    e += 1
+                end
+                _bidi_reverse_range(cps, k, e)
+                k = e + 1
+            else:
+                k += 1
+            end
+        end
+        lvl -= 1
+    end
+end
+
+// Mirrored characters: a parenthesis in right-to-left text points the
+// other way, because it is stored by meaning (opening/closing) and drawn
+// by shape.
+func _bidi_mirror(cp: int): int:
+    if cp == 0x28: ret 0x29 end
+    if cp == 0x29: ret 0x28 end
+    if cp == 0x5B: ret 0x5D end
+    if cp == 0x5D: ret 0x5B end
+    if cp == 0x7B: ret 0x7D end
+    if cp == 0x7D: ret 0x7B end
+    if cp == 0x3C: ret 0x3E end
+    if cp == 0x3E: ret 0x3C end
+    if cp == 0x00AB: ret 0x00BB end
+    if cp == 0x00BB: ret 0x00AB end
+    if cp == 0x2039: ret 0x203A end
+    if cp == 0x203A: ret 0x2039 end
+    ret cp
+end
+
+func _bidi_apply_mirroring(cps &: Vector<int>, levels &: Vector<int>):
+    mut i := 0
+    until i < cps.len():
+        if (levels.get(i) % 2) == 1:
+            cps.set(i, _bidi_mirror(cps.get(i)))
+        end
+        i += 1
+    end
+end
+
+func _bidi_has_rtl(cps &: Vector<int>): bool:
+    mut i := 0
+    until i < cps.len():
+        if _bidi_is_rtl_class(_bidi_class(cps.get(i))):
+            ret true
+        end
+        i += 1
+    end
+    ret false
+end
+
+// P2/P3: the paragraph direction is the direction of the first strong
+// character, and left-to-right when there is none.
+func _bidi_base_level(cps &: Vector<int>, dir: int): int:
+    if dir == TextDirRTL: ret 1 end
+    if dir == TextDirLTR: ret 0 end
+    mut i := 0
+    until i < cps.len():
+        c := _bidi_class(cps.get(i))
+        if _bidi_is_rtl_class(c): ret 1 end
+        if c == _BC_L: ret 0 end
+        i += 1
+    end
+    ret 0
+end
+
+// Reorders a codepoint sequence in place, and reports whether anything
+// moved. `dir` is TextDirAuto/LTR/RTL.
+func _bidi_visual(cps &: Vector<int>, dir: int): bool:
+    base := _bidi_base_level(cps, dir)
+    if base == 0 && !_bidi_has_rtl(cps):
+        ret false
+    end
+    mut levels := Vector {} as Vector<int>
+    _bidi_levels(cps, base, levels)
+    _bidi_apply_mirroring(cps, levels)
+    _bidi_reorder(cps, levels)
+    levels.free()
+    ret true
+end
+
+// True when the text contains any right-to-left character, i.e. when
+// direction is something the caller has to think about at all.
+@en "IsRTLText"
+@fa "متن راست به چپ است"
+@ar "النص من اليمين لليسار"
+pub func IsRTLText(text: str): bool:
+    mut cps := Vector {} as Vector<int>
+    _utf8_decode_all(text, cps)
+    out := _bidi_has_rtl(cps)
+    cps.free()
+    ret out
+end
+
+// The paragraph direction the bidi algorithm would pick for this text:
+// TextDirRTL if its first strong character is right-to-left, otherwise
+// TextDirLTR.
+@en "BaseDirection"
+@fa "جهت پایه"
+@ar "الاتجاه الأساسي"
+pub func BaseDirection(text: str): int:
+    mut cps := Vector {} as Vector<int>
+    _utf8_decode_all(text, cps)
+    base := _bidi_base_level(cps, TextDirAuto)
+    cps.free()
+    if base == 1:
+        ret TextDirRTL
+    end
+    ret TextDirLTR
+end
+
+// Shaping and reordering applied: the string in the order it is drawn,
+// left to right, by a renderer that knows nothing about direction. This
+// is exactly what DrawTextStyled does internally, exposed so a caller
+// can inspect it, feed it to another renderer, or test it.
+@en "ToVisualOrder"
+@fa "به ترتیب نمایشی"
+@ar "إلى الترتيب المرئي"
+pub func ToVisualOrder(text: str, dir: int): str:
+    mut logical := Vector {} as Vector<int>
+    mut shaped := Vector {} as Vector<int>
+    _utf8_decode_all(text, logical)
+    _shape_arabic(logical, shaped)
+    _bidi_visual(shaped, dir)
+    out := _utf8_encode_all(shaped)
+    logical.free()
+    shaped.free()
+    ret out
+end

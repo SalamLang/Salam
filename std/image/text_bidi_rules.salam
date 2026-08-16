@@ -1,0 +1,176 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package image
+
+// Bidi character classes and the weak rules (UAX #9 W1-W7) - the first
+// half of resolving a line's direction, and the half that is pure
+// bookkeeping over one array of classes.
+//
+// Every character starts with a class from its codepoint (this file's
+// _bidi_class), and the weak rules then rewrite the classes that depend
+// on context rather than on the character itself: a combining mark takes
+// the class of what it sits on, a digit takes its flavour from the
+// script before it, and the separators and signs around a number either
+// join it or fall back to being neutral. What comes out is an array in
+// which only strong classes and neutrals remain, which is what
+// text_bidi.salam's level assignment expects.
+//
+// The classes are the ones the algorithm actually distinguishes, not the
+// full Unicode set: strong left, strong right, strong Arabic, the two
+// kinds of number, marks, whitespace, neutrals, and the three
+// number-adjacent classes. Anything not listed is left-to-right, which
+// is right for Latin, Greek, Cyrillic and the CJK scripts alike.
+
+// The Unicode bidi class of a codepoint, coarse enough for one line of
+// text: strong left, strong right (Hebrew and friends), strong Arabic,
+// the two kinds of number, combining marks, whitespace, and everything
+// else as neutral.
+func _bidi_class(cp: int): int:
+    if cp == 0x20 || cp == 0x09 || cp == 0x0A || cp == 0x0D || cp == 0x0C: ret _BC_WS end
+    if cp >= 0x2000 && cp <= 0x200A: ret _BC_WS end
+    if cp == 0x3000 || cp == 0x00A0: ret _BC_WS end
+    if cp >= 0x30 && cp <= 0x39: ret _BC_EN end
+    if _arabic_transparent(cp): ret _BC_NSM end
+    // Number separators, signs and terminators. On their own these are
+    // neutral; between or beside digits they join the number, which is
+    // what keeps "18:30" and "1,250" from being torn into two runs that
+    // then reverse independently.
+    if cp == 0x2C || cp == 0x2E || cp == 0x2F || cp == 0x3A: ret _BC_CS end
+    if cp == 0x060C: ret _BC_CS end
+    if cp == 0x2B || cp == 0x2D: ret _BC_ES end
+    if cp == 0x23 || cp == 0x24 || cp == 0x25 || cp == 0x00B0: ret _BC_ET end
+    if cp == 0x066A: ret _BC_ET end
+    if cp >= 0x20A0 && cp <= 0x20CF: ret _BC_ET end
+    // Arabic-Indic digits are AN; the extended (Persian) ones are EN,
+    // which is what keeps a Persian number reading left to right.
+    if cp >= 0x0660 && cp <= 0x0669: ret _BC_AN end
+    if cp == 0x066B || cp == 0x066C: ret _BC_AN end
+    if cp >= 0x06F0 && cp <= 0x06F9: ret _BC_EN end
+    // Arabic punctuation is neutral, not strong: a comma between two
+    // Persian words has to follow them, not force a direction.
+    if cp == 0x061B || cp == 0x061F || cp == 0x06D4: ret _BC_ON end
+    if cp >= 0x0600 && cp <= 0x06FF: ret _BC_AL end
+    if cp >= 0x0750 && cp <= 0x077F: ret _BC_AL end
+    if cp >= 0x08A0 && cp <= 0x08FF: ret _BC_AL end
+    if cp >= 0xFB50 && cp <= 0xFDFF: ret _BC_AL end
+    if cp >= 0xFE70 && cp <= 0xFEFF: ret _BC_AL end
+    if cp >= 0x0590 && cp <= 0x05FF: ret _BC_R end
+    if cp >= 0x07C0 && cp <= 0x089F: ret _BC_R end
+    if cp >= 0xFB1D && cp <= 0xFB4F: ret _BC_R end
+    if cp >= 0x21 && cp <= 0x2F: ret _BC_ON end
+    if cp >= 0x3A && cp <= 0x40: ret _BC_ON end
+    if cp >= 0x5B && cp <= 0x60: ret _BC_ON end
+    if cp >= 0x7B && cp <= 0x7E: ret _BC_ON end
+    if cp >= 0x00A1 && cp <= 0x00BF: ret _BC_ON end
+    if cp >= 0x2010 && cp <= 0x205E: ret _BC_ON end
+    if cp >= 0x20A0 && cp <= 0x20CF: ret _BC_ON end
+    ret _BC_L
+end
+
+func _bidi_classes(cps &: Vector<int>, classes &: Vector<int>):
+    mut i := 0
+    until i < cps.len():
+        classes.push(_bidi_class(cps.get(i)))
+        i += 1
+    end
+end
+
+// The class after position `i`, skipping a run of `skip` (used by W5,
+// where a whole run of terminators looks at what follows it).
+func _bidi_next_class(classes &: Vector<int>, i: int, skip: int): int:
+    mut k := i + 1
+    until k < classes.len():
+        c := classes.get(k)
+        if c != skip:
+            ret c
+        end
+        k += 1
+    end
+    ret _BC_ON
+end
+
+// W1..W7: a mark inherits the class before it (W1); a European number
+// after Arabic text becomes an Arabic number (W2); Arabic letters become
+// plain strong-right (W3); a separator between two numbers joins them,
+// so "18:30" and "1,250" stay one run (W4); a terminator beside a
+// European number joins it, so "%" stays with the digits (W5); every
+// separator or terminator that did not join a number is just neutral
+// (W6); and a European number after Latin text becomes Latin so
+// "abc123" is one run (W7).
+func _bidi_weak_rules(classes &: Vector<int>, base: int):
+    mut prev := _BC_L
+    if base == 1:
+        prev = _BC_R
+    end
+    mut last_strong := prev
+    mut i := 0
+    until i < classes.len():
+        mut c := classes.get(i)
+        if c == _BC_NSM:
+            c = prev
+        end
+        if c == _BC_EN && last_strong == _BC_AL:
+            c = _BC_AN
+        end
+        if c == _BC_L || c == _BC_R || c == _BC_AL:
+            last_strong = c
+        end
+        if c == _BC_AL:
+            c = _BC_R
+        end
+        if c == _BC_CS || c == _BC_ES:
+            nxt := _bidi_next_class(classes, i, 0 - 1)
+            mut joined := nxt
+            // The next character has not been through W2 yet, so a
+            // European digit after Arabic text has to be read as the
+            // Arabic number it is about to become.
+            if joined == _BC_EN && last_strong == _BC_AL:
+                joined = _BC_AN
+            end
+            if prev == _BC_EN && joined == _BC_EN:
+                c = _BC_EN
+            end
+            if c == _BC_CS && prev == _BC_AN && joined == _BC_AN:
+                c = _BC_AN
+            end
+        end
+        if c == _BC_ET:
+            if prev == _BC_EN:
+                c = _BC_EN
+            else if _bidi_next_class(classes, i, _BC_ET) == _BC_EN && last_strong != _BC_AL:
+                c = _BC_EN
+            end
+        end
+        if c == _BC_CS || c == _BC_ES || c == _BC_ET:
+            c = _BC_ON
+        end
+        classes.set(i, c)
+        prev = c
+        i += 1
+    end
+    _bidi_rule_w7(classes, base)
+end
+
+// W7, as its own pass because it has to run after W5. A percent sign at
+// the end of "89%" joins the number while the number is still European
+// (W5); only then does the whole run become Latin because the last
+// strong character before it was (W7). Folding the two together turns
+// that trailing sign back into a neutral, and a neutral at the end of a
+// right-to-left line jumps to the other end of it.
+func _bidi_rule_w7(classes &: Vector<int>, base: int):
+    mut last_strong := _BC_L
+    if base == 1:
+        last_strong = _BC_R
+    end

@@ -257,7 +257,7 @@ static void parse_headers(struct conn *c, const char *end_of_headers)
         c->status = atoi(c->hdr + 9);
 
     const char *cl = hdr_find(c->hdr, hl, "\ncontent-length:");
-    const char *te = hdr_find(c->hdr, hl, "\ntransfer-encoding:");
+    const char *xfer_enc = hdr_find(c->hdr, hl, "\ntransfer-encoding:");
     const char *cn = hdr_find(c->hdr, hl, "\nconnection:");
 
     if (cn) {
@@ -266,8 +266,8 @@ static void parse_headers(struct conn *c, const char *end_of_headers)
             p++;
         if (strncasecmp(p, "close", 5) == 0) c->will_close = 1;
     }
-    if (te &&
-        hdr_find(te, 40 < (size_t)(c->hdr + hl - te) ? 40 : (size_t)(c->hdr + hl - te),
+    if (xfer_enc &&
+        hdr_find(xfer_enc, 40 < (size_t)(c->hdr + hl - xfer_enc) ? 40 : (size_t)(c->hdr + hl - xfer_enc),
                  "chunked")) {
         c->mode = BODY_CHUNKED;
         c->chunk_need_size = 1;

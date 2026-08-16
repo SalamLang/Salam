@@ -1,0 +1,180 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "dotenv"
+@fa "پرونده محیط"
+@ar "ملف بیئة"
+package dotenv
+
+import str
+import collections
+
+// dotenv owns the .env FILE FORMAT and nothing else: no process
+// environment, no configuration model, no file layering. Keeping it to
+// the format alone is what lets both of its callers reuse it without a
+// dependency cycle:
+//
+//   std/encoding/dotenv   parse, expand and serialize the format  (here)
+//   std/config            flat key/value model; .env support delegates here
+//   std/env               process environment; applies a Doc to it
+//
+// That is the same split std/config already uses for YAML, where it
+// calls std/encoding/yaml rather than carrying a second parser.
+//
+// Doc is a flat, ORDERED key/value list. Order is load-bearing: a .env
+// file is read top to bottom and a later entry may reference an earlier
+// one during expansion, so a hash map would lose the only information
+// that makes expansion well defined.
+
+// Per-entry parse hint. Single-quoted values are taken verbatim, so they
+// must never be run through variable expansion; everything else may be.
+const _LITERAL := 0
+const _EXPANDABLE := 1
+
+@en "Doc"
+@fa "سند"
+@ar "وثیقة"
+pub struct Doc:
+    pub keys: Vector<str> = Vector {}
+    pub vals: Vector<str> = Vector {}
+    pub flags: Vector<int> = Vector {}
+end
+
+inline pure func _bp(s: str): i8*: ret (s as void*) as i8* end
+
+inline pure func _ub(bp: i8*, i: int): int:
+    mut v := bp[i] as int
+    if v < 0: v = v + 256 end
+    ret v
+end
+
+func _find(d &: Doc, key: str): int:
+    repeat d.keys.len() with i:
+        if d.keys.get(i) == key: ret i end
+    end
+    ret 0 - 1
+end
+
+// Last assignment wins, which is what every .env reader does and what
+// makes layering one file over another work.
+func _push(d &: Doc, key: str, val: str, flag: int):
+    idx := _find(d, key)
+    if idx >= 0:
+        d.vals.set(idx, val)
+        d.flags.set(idx, flag)
+    else:
+        d.keys.push(key)
+        d.vals.push(val)
+        d.flags.push(flag)
+    end
+end
+
+@en "New"
+@fa "جدید"
+@ar "جدید"
+pub func New(): Doc:
+    ret Doc {}
+end
+
+@en "Len"
+@fa "طول"
+@ar "طول"
+pub func Len(d &: Doc): int: ret d.keys.len() end
+
+@en "Has"
+@fa "دارد"
+@ar "یملک"
+pub func Has(d &: Doc, key: str): bool: ret _find(d, key) >= 0 end
+
+@en "Get"
+@fa "دریافت"
+@ar "جلب"
+pub func Get(d &: Doc, key: str): str:
+    idx := _find(d, key)
+    if idx < 0: ret "" end
+    ret d.vals.get(idx)
+end
+
+@en "GetOr"
+@fa "دریافت یا"
+@ar "جلب أو"
+pub func GetOr(d &: Doc, key: str, def: str): str:
+    idx := _find(d, key)
+    if idx < 0: ret def end
+    ret d.vals.get(idx)
+end
+
+// A value set through the API is already final, so it is marked literal
+// and a later ExpandDoc will not reinterpret a '$' inside it.
+@en "Set"
+@fa "تنظیم"
+@ar "تعیین"
+pub func Set(d &: Doc, key: str, val: str):
+    _push(d, key, val, _LITERAL)
+end
+
+@en "Remove"
+@fa "حذف"
+@ar "إزالة"
+pub func Remove(d &: Doc, key: str): bool:
+    idx := _find(d, key)
+    if idx < 0: ret false end
+    d.keys.remove_at(idx)
+    d.vals.remove_at(idx)
+    d.flags.remove_at(idx)
+    ret true
+end
+
+@en "KeyAt"
+@fa "کلید در"
+@ar "مفتاح عند"
+pub func KeyAt(d &: Doc, i: int): str:
+    if i < 0 || i >= d.keys.len(): ret "" end
+    ret d.keys.get(i)
+end
+
+@en "ValueAt"
+@fa "مقدار در"
+@ar "قیمة عند"
+pub func ValueAt(d &: Doc, i: int): str:
+    if i < 0 || i >= d.vals.len(): ret "" end
+    ret d.vals.get(i)
+end
+
+@en "Keys"
+@fa "کلیدها"
+@ar "المفاتیح"
+pub func Keys(d &: Doc): Vector<str>:
+    ret collections.clone(d.keys)
+end
+
+// Copies every entry of src over dst, src winning on conflicts. This is
+// how a .env.local is layered on top of a .env.
+@en "MergeInto"
+@fa "ادغام در"
+@ar "دمج فی"
+pub func MergeInto(dst &: Doc, src &: Doc):
+    repeat src.keys.len() with i:
+        _push(dst, src.keys.get(i), src.vals.get(i), src.flags.get(i))
+    end
+end
+
+@en "Free"
+@fa "آزادسازی"
+@ar "تحریر"
+pub func Free(d &: Doc):
+    d.keys.free()
+    d.vals.free()
+    d.flags.free()
+end

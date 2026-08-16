@@ -124,11 +124,13 @@ static void check_link(sema_t *s, ast_node_t *d)
 
 void sema_collect(sema_t *s, ast_node_t *program)
 {
+    const char *save_file = s->file;
     {
         size_t i = 0;
         for (; i < program->list.len; i++) {
             ast_node_t *d = (ast_node_t *)program->list.data[i];
             if (d->synthetic) continue;
+            sema_use_decl_file(s, d);
             if (d->kind == AST_STRUCT_DEF) {
                 symbol_t *sym = symbol_new(s->a, SYM_STRUCT, d->name);
                 sym->decl = d;
@@ -183,6 +185,7 @@ void sema_collect(sema_t *s, ast_node_t *program)
         for (; i < program->list.len; i++) {
             ast_node_t *d = (ast_node_t *)program->list.data[i];
             if (d->synthetic) continue;
+            sema_use_decl_file(s, d);
             switch (d->kind) {
             case AST_LINK:
                 check_link(s, d);
@@ -350,6 +353,7 @@ void sema_collect(sema_t *s, ast_node_t *program)
             }
         }
     }
+    s->file = save_file;
 }
 
 static func_sig_t *find_sig(symbol_t *fsym, ast_node_t *decl)
@@ -564,6 +568,7 @@ void sema_check_unused_funcs(sema_t *s)
         }
     }
     if (!has_entry) return;
+    const char *save_file = s->file;
     size_t i = 0;
     for (; i < s->global->symbols.len; i++) {
         symbol_t *f = (symbol_t *)s->global->symbols.data[i];
@@ -571,15 +576,18 @@ void sema_check_unused_funcs(sema_t *s)
         if (!f->decl || f->decl->synthetic || f->decl->is_extern) continue;
         if (!f->name || f->name[0] == '_' || ast_name_is_err(f->name)) continue;
         if (strcmp(f->name, "main") == 0 || strcmp(f->name, entry) == 0) continue;
+        sema_use_decl_file(s, f->decl);
         SERR(s, 66, &f->decl->span,
              "unused function '%s' (call it, mark it 'pub', or prefix its name with "
              "'_')",
              f->name);
     }
+    s->file = save_file;
 }
 
 static void check_toplevel(sema_t *s, ast_node_t *d)
 {
+    const char *save_file = sema_use_decl_file(s, d);
     switch (d->kind) {
     case AST_FUNC_DEF: {
         symbol_t *fsym = scope_lookup_local(s->global, d->name);
@@ -649,6 +657,7 @@ static void check_toplevel(sema_t *s, ast_node_t *d)
     default:
         break;
     }
+    s->file = save_file;
 }
 
 static void lint_lang_types(sema_t *s, ast_node_t *n)
@@ -683,13 +692,16 @@ static void lint_lang_types(sema_t *s, ast_node_t *n)
 void sema_check_pass(sema_t *s, ast_node_t *program)
 {
     {
+        const char *save_file = s->file;
         size_t i = 0;
         for (; i < program->list.len; i++) {
             ast_node_t *d = (ast_node_t *)program->list.data[i];
             d->origin_lang = s->lang;
             if (d->synthetic) continue;
+            sema_use_decl_file(s, d);
             lint_lang_types(s, d);
         }
+        s->file = save_file;
     }
     /* A top-level `const NAME := <expr>` (no type annotation) leaves its symbol's
      * type NULL after sema_collect(); sema_check_var_decl() below is what fills

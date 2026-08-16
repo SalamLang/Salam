@@ -725,6 +725,170 @@ func check_system_font:
     image.FreeFont(f)
 end
 
+// Measuring, with a font whose every outline is known exactly: the
+// square glyph spans 100..700 x 0..700 font units, so at 100px per em
+// over a 1000-unit em its ink is exactly 60 x 70 pixels, 10px right of
+// the pen and 70px above the baseline.
+func check_measure(ttf: compress.ByteBuf):
+    mut ok := false
+    f := image.ParseFont(ttf.data, ttf.len, ok)
+    mut st := image.TextStyle {}
+    st.size = 100.0
+
+    mut x0 := 0.0
+    mut y0 := 0.0
+    mut x1 := 0.0
+    mut y1 := 0.0
+    testing.AssertTrue(image.TextBounds(f, "A", st, x0, y0, x1, y1))
+    testing.AssertEqFloat(x0, 10.0, 0.0001)
+    testing.AssertEqFloat(x1, 70.0, 0.0001)
+    testing.AssertEqFloat(y0, 0.0 - 70.0, 0.0001)
+    testing.AssertEqFloat(y1, 0.0, 0.0001)
+
+    // Ink is not advance: the pen moves 80px per 'A' while its mark is
+    // 60px wide, and the difference is exactly the side bearings.
+    testing.AssertEqFloat(image.TextInkWidth(f, "A", st), 60.0, 0.0001)
+    testing.AssertEqFloat(image.TextInkHeight(f, "A", st), 70.0, 0.0001)
+    testing.AssertEqFloat(image.TextWidthStyled(f, "A", st), 80.0, 0.0001)
+
+    // Two of them: one advance apart, so the ink runs from the first
+    // glyph's left edge to the second's right edge.
+    testing.AssertEqFloat(image.TextInkWidth(f, "AA", st), 140.0, 0.0001)
+    testing.AssertEqFloat(image.TextInkHeight(f, "AA", st), 70.0, 0.0001)
+    // 'B' is taller and starts one 'A' advance in.
+    testing.AssertEqFloat(image.TextInkWidth(f, "AB", st), 160.0, 0.0001)
+    testing.AssertEqFloat(image.TextInkHeight(f, "AB", st), 80.0, 0.0001)
+
+    mut w := 0.0
+    mut h := 0.0
+    testing.AssertTrue(image.TextInkSize(f, "A", st, w, h))
+    testing.AssertEqFloat(w, 60.0, 0.0001)
+    testing.AssertEqFloat(h, 70.0, 0.0001)
+
+    // Text with nothing to draw reports that, rather than a zero-sized
+    // box at the origin that a caller would center on.
+    testing.AssertFalse(image.TextBounds(f, "", st, x0, y0, x1, y1))
+    testing.AssertFalse(image.TextBounds(f, "Z", st, x0, y0, x1, y1))
+    testing.AssertEqFloat(image.TextInkWidth(f, "Z", st), 0.0, 0.0001)
+    testing.AssertFalse(image.TextInkSize(f, "", st, w, h))
+
+    // Ink scales with the em size, exactly.
+    mut half := image.TextStyle {}
+    half.size = 50.0
+    testing.AssertEqFloat(image.TextInkWidth(f, "A", half), 30.0, 0.0001)
+
+    // Fitting: ink width is 0.6 * size, so 120px of ink needs 200px of
+    // em. Adding a height limit of 35px (ink height is 0.7 * size)
+    // brings it down to 50, since a fit has to satisfy both.
+    testing.AssertEqFloat(image.FitSizeToWidth(f, "A", st, 120.0, 1000.0), 200.0, 0.01)
+    testing.AssertEqFloat(image.FitSizeToBox(f, "A", st, 120.0, 35.0, 1000.0), 50.0, 0.01)
+    testing.AssertEqFloat(image.FitSizeToBox(f, "A", st, 0.0, 35.0, 1000.0), 50.0, 0.01)
+    // max_size is a cap, not a target: a short string does not grow past
+    // it however much room there is.
+    testing.AssertEqFloat(image.FitSizeToWidth(f, "A", st, 10000.0, 80.0), 80.0, 0.01)
+    // A fit that measures nothing (no ink) reports 0 rather than looping
+    // toward an ever-larger size.
+    testing.AssertEqFloat(image.FitSizeToWidth(f, "Z", st, 100.0, 500.0), 500.0, 0.01)
+    testing.AssertEqFloat(image.FitSizeToBox(f, "A", st, 0.0, 0.0, 500.0), 0.0, 0.01)
+
+    // A fitted size, measured back, really does fill the target.
+    fitted_size := image.FitSizeToWidth(f, "AB", st, 250.0, 1000.0)
+    mut fitted := image.TextStyle {}
+    fitted.size = fitted_size
+    testing.AssertEqFloat(image.TextInkWidth(f, "AB", fitted), 250.0, 0.01)
+
+    image.FreeFont(f)
+end
+
+// Placement: the same known square, put where a caller asked for it.
+func check_layout(ttf: compress.ByteBuf):
+    mut ok := false
+    f := image.ParseFont(ttf.data, ttf.len, ok)
+    mut st := image.TextStyle {}
+    st.size = 100.0
+
+    // Centered on (50, 50): a 60x70 mark, so x 20..80 and y 15..85.
+    mut img := image.NewFilled(100, 100, image.RGB(255, 255, 255))
+    image.DrawTextCentered(img, 50.0, 50.0, "A", image.RGB(0, 0, 0), f, st)
+    testing.AssertTrue(is_ink(img, 50, 50))
+    testing.AssertTrue(is_ink(img, 25, 20))
+    testing.AssertTrue(is_ink(img, 75, 80))
+    testing.AssertFalse(is_ink(img, 15, 50))
+    testing.AssertFalse(is_ink(img, 85, 50))
+    testing.AssertFalse(is_ink(img, 50, 10))
+    testing.AssertFalse(is_ink(img, 50, 90))
+    image.Free(img)
+
+    // Centering on the whole image is the same placement.
+    mut centered := image.NewFilled(100, 100, image.RGB(255, 255, 255))
+    image.DrawTextCenteredIn(centered, "A", image.RGB(0, 0, 0), f, st)
+    testing.AssertTrue(is_ink(centered, 50, 50))
+    testing.AssertFalse(is_ink(centered, 15, 50))
+    image.Free(centered)
+
+    // Right-aligned in the full-width box: the ink ends at the box's
+    // right edge, so the left third is empty.
+    mut right := image.NewFilled(100, 100, image.RGB(255, 255, 255))
+    image.DrawTextInBox(right, 0.0, 0.0, 100.0, 100.0, "A", image.RGB(0, 0, 0), f, st, image.TextAlignRight, image.TextVAlignMiddle)
+    testing.AssertTrue(is_ink(right, 95, 50))
+    testing.AssertFalse(is_ink(right, 35, 50))
+    image.Free(right)
+
+    // Left-aligned puts the ink against the left edge, side bearing and
+    // all: the first column is covered, the last is not.
+    mut left := image.NewFilled(100, 100, image.RGB(255, 255, 255))
+    image.DrawTextInBox(left, 0.0, 0.0, 100.0, 100.0, "A", image.RGB(0, 0, 0), f, st, image.TextAlignLeft, image.TextVAlignTop)
+    testing.AssertTrue(is_ink(left, 2, 5))
+    testing.AssertFalse(is_ink(left, 95, 50))
+    testing.AssertFalse(is_ink(left, 30, 80))
+    image.Free(left)
+
+    // Bottom-aligned: ink against the bottom edge instead.
+    mut bottom := image.NewFilled(100, 100, image.RGB(255, 255, 255))
+    image.DrawTextInBox(bottom, 0.0, 0.0, 100.0, 100.0, "A", image.RGB(0, 0, 0), f, st, image.TextAlignCenter, image.TextVAlignBottom)
+    testing.AssertTrue(is_ink(bottom, 50, 97))
+    testing.AssertFalse(is_ink(bottom, 50, 20))
+    image.Free(bottom)
+
+    // Baseline alignment ignores the ink box and puts the baseline on
+    // the bottom edge, which is what lines up runs of different heights.
+    mut base := image.NewFilled(100, 100, image.RGB(255, 255, 255))
+    image.DrawTextInBox(base, 0.0, 0.0, 100.0, 100.0, "A", image.RGB(0, 0, 0), f, st, image.TextAlignLeft, image.TextVAlignBaseline)
+    testing.AssertTrue(is_ink(base, 12, 98))
+    image.Free(base)
+
+    // Fit-and-center: 'A' is 6 units wide for every 7 tall, so filling a
+    // square box is limited by height - 100px of ink height needs a
+    // 142.9px em - and the result is centered in what is left.
+    mut fit := image.NewFilled(100, 100, image.RGB(255, 255, 255))
+    used := image.DrawTextFitBox(fit, 0.0, 0.0, 100.0, 100.0, "A", image.RGB(0, 0, 0), f, st, 1.0, 1000.0)
+    testing.AssertEqFloat(used, 142.857, 0.01)
+    testing.AssertTrue(is_ink(fit, 50, 50))
+    testing.AssertTrue(is_ink(fit, 50, 2))
+    testing.AssertTrue(is_ink(fit, 50, 97))
+    testing.AssertFalse(is_ink(fit, 3, 50))
+    image.Free(fit)
+
+    // The same call with a fill ratio leaves a margin all round.
+    mut inset := image.NewFilled(100, 100, image.RGB(255, 255, 255))
+    inset_size := image.DrawTextFitImage(inset, "A", image.RGB(0, 0, 0), f, st, 0.5, 1000.0)
+    testing.AssertEqFloat(inset_size, 71.43, 0.01)
+    testing.AssertTrue(is_ink(inset, 50, 50))
+    testing.AssertFalse(is_ink(inset, 50, 10))
+    image.Free(inset)
+
+    // An invalid font draws nothing and reports it, at every level of
+    // the layout API.
+    mut none := image.NewFilled(40, 40, image.RGB(255, 255, 255))
+    bad := image.Font {}
+    testing.AssertEqFloat(image.DrawTextCentered(none, 20.0, 20.0, "A", image.RGB(0, 0, 0), bad, st), 0.0, 0.0001)
+    testing.AssertEqFloat(image.DrawTextFitImage(none, "A", image.RGB(0, 0, 0), bad, st, 0.9, 100.0), 0.0, 0.0001)
+    testing.AssertFalse(is_ink(none, 20, 20))
+    image.Free(none)
+
+    image.FreeFont(f)
+end
+
 func main:
     ttf := build_ttf()
     println "built synthetic ttf"
@@ -739,6 +903,10 @@ func main:
     check_render_triangle(ttf)
     println "styles"
     check_styles(ttf)
+    println "measure"
+    check_measure(ttf)
+    println "layout"
+    check_layout(ttf)
     println "bad fonts"
     check_bad_fonts(ttf)
 

@@ -295,3 +295,18 @@ void sema_check_shadows_func(sema_t *s, const char *name, const src_span_t *span
     if (f && f->kind == SYM_FUNC)
         SERR(s, 90, span, "'%s' is already the name of a function in this file", name);
 }
+
+/*
+ * The files of a multi-file package are parsed separately and merged into a
+ * single program, so a top-level node's line number only makes sense against
+ * the file it was parsed from. Following that file here is what keeps a
+ * sibling file's diagnostics from being reported against the package's anchor
+ * file, where they would quote an unrelated source line. Returns the previous
+ * file for the caller to restore.
+ */
+const char *sema_use_decl_file(sema_t *s, const ast_node_t *d)
+{
+    const char *save = s->file;
+    if (d && d->src_file) s->file = d->src_file;
+    return save;
+}

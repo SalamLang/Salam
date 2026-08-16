@@ -95,6 +95,13 @@ typedef struct ast_node ast_node_t;
 struct ast_node {
     ast_kind_t kind;
     src_span_t span;
+    /* Source file this top-level node was parsed from, stamped by parser_run.
+     * The files of a multi-file package are merged into one program, so the
+     * span alone cannot say which file a line number belongs to; sema follows
+     * this while checking so a sibling file's diagnostics stop being reported
+     * against the package's anchor file. NULL on nodes below the top level and
+     * on synthetic ones - those inherit whatever file is current. */
+    const char *src_file;
     const char *name;
     token_value_t value;
     token_kind_t op;

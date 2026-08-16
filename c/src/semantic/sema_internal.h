@@ -100,6 +100,8 @@ ast_node_t *sema_pure_fn(sema_t *s);
 
 void sema_check_shadows_func(sema_t *s, const char *name, const src_span_t *span);
 
+const char *sema_use_decl_file(sema_t *s, const ast_node_t *d);
+
 type_t *sema_err_ty(sema_t *s);
 
 type_t *sema_decorate(sema_t *s, ast_node_t *n, type_t *t);

@@ -276,6 +276,12 @@ bool parser_run(arena_t *a, logger_t *log, const token_stream_t *toks,
     p.log = log;
     LOG_I(log, PH_PARSER, "parsing %zu tokens", p.count);
     ast_node_t *prog = parse_program(&p);
+    prog->src_file = p.file;
+    {
+        size_t i = 0;
+        for (; i < prog->list.len; i++)
+            ((ast_node_t *)prog->list.data[i])->src_file = p.file;
+    }
     *out_program = prog;
     LOG_I(log, PH_PARSER, "parse complete: %zu top-level defs%s", prog->list.len,
           p.had_error ? i18n_tr(" (with errors)") : "");

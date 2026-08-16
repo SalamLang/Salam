@@ -995,11 +995,15 @@ static void load_import_file(sema_t *s, ast_node_t *imp)
 static void load_imports(sema_t *s, ast_node_t *program)
 {
     {
+        const char *save_file = s->file;
         size_t i = 0;
         for (; i < program->list.len; i++) {
             ast_node_t *d = (ast_node_t *)program->list.data[i];
-            if (d->kind == AST_IMPORT) load_import_file(s, d);
+            if (d->kind != AST_IMPORT) continue;
+            sema_use_decl_file(s, d);
+            load_import_file(s, d);
         }
+        s->file = save_file;
     }
 }
 
@@ -1019,10 +1023,12 @@ void sema_check_unused_imports(sema_t *s)
         }
     }
     if (!has_entry) return;
+    const char *save_file = s->file;
     size_t i = 0;
     for (; i < s->program->list.len; i++) {
         ast_node_t *imp = (ast_node_t *)s->program->list.data[i];
         if (imp->kind != AST_IMPORT) continue;
+        sema_use_decl_file(s, imp);
         const char *spec = import_spec_of(imp);
         if (!spec) continue;
         const char *local = norm_ident(s->a, import_local_name(s->a, imp, spec));
@@ -1033,6 +1039,7 @@ void sema_check_unused_imports(sema_t *s)
              "unused import '%s' (use one of its members, or prefix the name with '_')",
              local);
     }
+    s->file = save_file;
 }
 
 void sema_load_prelude(sema_t *s)

@@ -21,68 +21,152 @@ import mem
 import sync
 
 /*
- * A bounded, many-to-many message queue: a fixed ring buffer guarded by one
- * mutex, with a condition variable on each side so a blocked sender or
- * receiver costs nothing while it waits.
+ * A many-to-many message queue in two flavours, chosen by the capacity passed
+ * to init:
+ *
+ *   init(n) with n >= 1  - buffered. A send lands in the ring buffer and
+ *                          returns; it only blocks when the buffer is full.
+ *   init(0)              - rendezvous. A send does not return until a
+ *                          receiver has actually taken the value, so the two
+ *                          threads meet rather than queue.
  *
  * Every field that carries state is a pointer, so copying a Chan copies a
  * *reference* to one channel rather than duplicating it. That is what lets a
  * channel reach a worker at all: it can sit in a global, or in a struct handed
  * to spawn(f, arg), and both sides still talk to the same queue.
- *
- * Capacity is always at least 1 - there is no unbuffered rendezvous channel
- * here, so a send lands in the buffer and returns rather than waiting for a
- * receiver to arrive.
  */
 @en "Chan"
 @fa "کانال"
 @ar "قناة"
 pub struct Chan<T>:
-    // cap + 1 slots: the last one is never written, so it stays at the zeroed
-    // value AllocateZeroed gave it and can be returned by a failed receive -
-    // salam has no way to spell "the zero value of T" otherwise.
+    /*
+     * One slot past the usable ones: the extra is never written, so it keeps
+     * the zeroed value AllocateZeroed gave it and can be returned by a failed
+     * receive - salam has no way to spell "the zero value of T" otherwise.
+     * Buffered channels ring over 0..cap-1; a rendezvous channel hands off
+     * through slot 0. Either way `zidx` is the untouched one.
+     */
     pub buf: T* = null
-    // [0] head, [1] tail, [2] count, [3] closed
+    // [0] head, [1] tail, [2] count, [3] closed, [4] send tickets issued,
+    // [5] send tickets consumed by a receiver.
     pub ctl: i64* = null
     pub cap: i64 = 0
+    pub zidx: i64 = 0
     pub mu: sync.Mutex = sync.Mutex {}
     pub not_empty: sync.CondVar = sync.CondVar {}
     pub not_full: sync.CondVar = sync.CondVar {}
+    // Rendezvous only: raised when a receiver has taken a handed-off value.
+    pub taken: sync.CondVar = sync.CondVar {}
 
     @en "init"
     @fa "مقداردهی"
     @ar "تهيئة"
     pub func init(capacity: i64):
         mut n := capacity
-        if n < 1: n = 1 end
+        if n < 0: n = 0 end
         this.cap = n
-        this.buf = mem.AllocateZeroed(((n + 1) * (sizeof(T) as i64)) as u64) as T*
-        c := mem.AllocateZeroed(32 as u64) as i64*
-        this.ctl = c
+        mut slots := n + 1
+        if n == 0: slots = 2 end
+        this.zidx = slots - 1
+        this.buf = mem.AllocateZeroed((slots * (sizeof(T) as i64)) as u64) as T*
+        this.ctl = mem.AllocateZeroed(64 as u64) as i64*
         this.mu = sync.NewMutex()
         this.not_empty = sync.NewCondVar()
         this.not_full = sync.NewCondVar()
+        this.taken = sync.NewCondVar()
     end
 
     /*
-     * Blocks while the buffer is full. Returns false if the channel was
-     * closed - by this or another thread - rather than aborting, so a
-     * producer that loses a race with Close can simply stop.
+     * Buffered: blocks while full. Rendezvous: parks until a receiver takes
+     * the value. Returns false if the channel was closed - by this or another
+     * thread - rather than aborting, so a producer that loses a race with
+     * Close can simply stop.
      */
     @en "send"
     @fa "فرستادن"
     @ar "إرسال"
     pub func send(v: T): bool:
+        ret this.send_deadline(v, 0 as i64, false)
+    end
+
+    /*
+     * Gives up after `ms` milliseconds and returns false. For a rendezvous
+     * channel the deadline covers the whole handoff, so a value that no
+     * receiver claimed in time is retracted rather than left in the slot.
+     */
+    @en "send_timeout"
+    @fa "فرستادن با مهلت"
+    @ar "إرسال بمهلة"
+    pub func send_timeout(v: T, ms: i64): bool:
+        ret this.send_deadline(v, ms, true)
+    end
+
+    pub func send_deadline(v: T, ms: i64, timed: bool): bool:
         c := this.ctl
         b := this.buf
         sync.Lock(this.mu)
-        until c[3] == 0 && c[2] >= this.cap:
-            sync.WaitCond(this.not_full, this.mu)
+        deadline := sync.NowMs() + ms
+        mut expired := false
+
+        // Phase one is the same for both flavours: wait for room. A
+        // rendezvous channel has room exactly when its single slot is free.
+        mut room := this.cap
+        if this.cap == 0: room = 1 end
+        until c[3] == 0 && c[2] >= room && !expired:
+            if timed:
+                left := deadline - sync.NowMs()
+                if left <= 0:
+                    expired = true
+                else:
+                    _ := sync.WaitCondTimeout(this.not_full, this.mu, left)
+                end
+            else:
+                sync.WaitCond(this.not_full, this.mu)
+            end
         end
-        if c[3] != 0:
+        if c[3] != 0 || expired:
             sync.Unlock(this.mu)
             ret false
         end
+
+        if this.cap == 0:
+            /*
+             * The ticket is what makes the handoff safe. Waiting on "the slot
+             * is empty again" is not enough: a second sender can refill it
+             * between the receiver emptying it and this thread waking, and
+             * this send would then wait for a value that was already
+             * delivered. Waiting for `tickets consumed >= my ticket` instead
+             * is immune to that.
+             */
+            b[0] = v
+            c[2] = 1
+            mine := c[4] + 1
+            c[4] = mine
+            sync.Signal(this.not_empty)
+            until c[3] == 0 && c[5] < mine && !expired:
+                if timed:
+                    left := deadline - sync.NowMs()
+                    if left <= 0:
+                        expired = true
+                    else:
+                        _ := sync.WaitCondTimeout(this.taken, this.mu, left)
+                    end
+                else:
+                    sync.WaitCond(this.taken, this.mu)
+                end
+            end
+            if c[5] < mine:
+                // Closed, or ran out of time, before anyone took it: take the
+                // value back so no receiver can pick it up after we gave up.
+                c[2] = 0
+                sync.Signal(this.not_full)
+                sync.Unlock(this.mu)
+                ret false
+            end
+            sync.Unlock(this.mu)
+            ret true
+        end
+
         b[c[1]] = v
         c[1] = (c[1] + 1) % this.cap
         c[2] = c[2] + 1
@@ -92,29 +176,65 @@ pub struct Chan<T>:
     end
 
     /*
-     * Blocks while the buffer is empty and the channel is open. `ok` is false
-     * exactly when the channel is closed *and* drained, which is the signal a
-     * consumer loop should stop on - a closed channel still hands out
-     * everything already queued before it starts reporting false.
+     * Blocks while the channel is empty and open. `ok` is false exactly when
+     * the channel is closed *and* drained, which is the signal a consumer loop
+     * should stop on - a closed channel still hands out everything already
+     * queued before it starts reporting false.
      */
     @en "recv"
     @fa "دریافت"
     @ar "استقبال"
     pub func recv(ok &: bool): T:
+        ret this.recv_deadline(ok, 0 as i64, false)
+    end
+
+    /*
+     * `ok` is false if nothing arrived within `ms` - which covers both "timed
+     * out" and "closed and drained". Call is_closed() to tell those apart.
+     */
+    @en "recv_timeout"
+    @fa "دریافت با مهلت"
+    @ar "استقبال بمهلة"
+    pub func recv_timeout(ok &: bool, ms: i64): T:
+        ret this.recv_deadline(ok, ms, true)
+    end
+
+    pub func recv_deadline(ok &: bool, ms: i64, timed: bool): T:
         c := this.ctl
         b := this.buf
         sync.Lock(this.mu)
-        until c[3] == 0 && c[2] <= 0:
-            sync.WaitCond(this.not_empty, this.mu)
+        deadline := sync.NowMs() + ms
+        mut expired := false
+        until c[3] == 0 && c[2] <= 0 && !expired:
+            if timed:
+                left := deadline - sync.NowMs()
+                if left <= 0:
+                    expired = true
+                else:
+                    _ := sync.WaitCondTimeout(this.not_empty, this.mu, left)
+                end
+            else:
+                sync.WaitCond(this.not_empty, this.mu)
+            end
         end
         if c[2] <= 0:
             ok = false
             sync.Unlock(this.mu)
-            ret b[this.cap]
+            ret b[this.zidx]
         end
-        v := b[c[0]]
-        c[0] = (c[0] + 1) % this.cap
-        c[2] = c[2] - 1
+
+        mut v := b[c[0]]
+        if this.cap == 0:
+            v = b[0]
+            c[2] = 0
+            // Consume the sender's ticket and wake it; broadcast because the
+            // waiting senders each have to re-check their own ticket.
+            c[5] = c[5] + 1
+            sync.Broadcast(this.taken)
+        else:
+            c[0] = (c[0] + 1) % this.cap
+            c[2] = c[2] - 1
+        end
         ok = true
         sync.Signal(this.not_full)
         sync.Unlock(this.mu)
@@ -125,6 +245,12 @@ pub struct Chan<T>:
     @fa "تلاش برای فرستادن"
     @ar "محاولة إرسال"
     pub func try_send(v: T): bool:
+        // A rendezvous send cannot complete without a receiver already
+        // parked, and there is no way to know that without waiting, so the
+        // non-blocking form is only meaningful on a buffered channel.
+        if this.cap == 0:
+            ret false
+        end
         c := this.ctl
         b := this.buf
         sync.Lock(this.mu)
@@ -150,11 +276,18 @@ pub struct Chan<T>:
         if c[2] <= 0:
             ok = false
             sync.Unlock(this.mu)
-            ret b[this.cap]
+            ret b[this.zidx]
         end
-        v := b[c[0]]
-        c[0] = (c[0] + 1) % this.cap
-        c[2] = c[2] - 1
+        mut v := b[c[0]]
+        if this.cap == 0:
+            v = b[0]
+            c[2] = 0
+            c[5] = c[5] + 1
+            sync.Broadcast(this.taken)
+        else:
+            c[0] = (c[0] + 1) % this.cap
+            c[2] = c[2] - 1
+        end
         ok = true
         sync.Signal(this.not_full)
         sync.Unlock(this.mu)
@@ -162,9 +295,10 @@ pub struct Chan<T>:
     end
 
     /*
-     * Broadcasts on both sides: every blocked sender has to wake to learn it
-     * should give up, and every blocked receiver has to wake to drain what is
-     * left and then see ok = false. Closing twice is harmless.
+     * Broadcasts on all three sides: every blocked sender has to wake to learn
+     * it should give up, every blocked receiver has to wake to drain what is
+     * left and then see ok = false, and a rendezvous sender parked mid-handoff
+     * has to wake to retract its value. Closing twice is harmless.
      */
     @en "close"
     @fa "بستن"
@@ -175,6 +309,7 @@ pub struct Chan<T>:
         c[3] = 1
         sync.Broadcast(this.not_empty)
         sync.Broadcast(this.not_full)
+        sync.Broadcast(this.taken)
         sync.Unlock(this.mu)
     end
 
@@ -214,6 +349,7 @@ pub struct Chan<T>:
     @fa "آزادسازی"
     @ar "تحرير"
     pub func free():
+        sync.DestroyCondVar(this.taken)
         sync.DestroyCondVar(this.not_full)
         sync.DestroyCondVar(this.not_empty)
         sync.Destroy(this.mu)

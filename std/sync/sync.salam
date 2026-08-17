@@ -45,6 +45,7 @@ if SALAM_OS_WINDOWS:
         func SleepConditionVariableCS(cv: void*, cs: void*, ms: int): int
         func WakeConditionVariable(cv: void*)
         func WakeAllConditionVariable(cv: void*)
+        func GetTickCount64(): u64
         func Sleep(ms: int)
     end
 else:
@@ -55,6 +56,8 @@ else:
         func pthread_mutex_destroy(mutex: void*): int
         func pthread_cond_init(cond: void*, attr: void*): int
         func pthread_cond_wait(cond: void*, mutex: void*): int
+        func pthread_cond_timedwait(cond: void*, mutex: void*, abstime: void*): int
+        func clock_gettime(clk: int, ts: void*): int
         func pthread_cond_signal(cond: void*): int
         func pthread_cond_broadcast(cond: void*): int
         func pthread_cond_destroy(cond: void*): int
@@ -157,6 +160,14 @@ if SALAM_OS_WINDOWS:
         SleepConditionVariableCS(c, m, 0 - 1)
     end
 
+    // Non-zero means the predicate may have changed; zero means it timed out
+    // (or failed, which for a caller re-testing its predicate is the same).
+    func cond_timedwait(c: void*, m: void*, ms: i64): bool:
+        ret SleepConditionVariableCS(c, m, ms as int) == 0
+    end
+
+    func now_ms_os(): i64: ret GetTickCount64() as i64 end
+
     func cond_signal(c: void*): WakeConditionVariable(c) end
 
     func cond_broadcast(c: void*): WakeAllConditionVariable(c) end
@@ -195,6 +206,66 @@ else:
 
     func cond_wait(c: void*, m: void*):
         pthread_cond_wait(c, m)
+    end
+
+    /*
+     * struct timespec is two native words - 8 bytes each on a 64-bit target,
+     * 4 on a 32-bit one. Writing i64s into the 32-bit layout would scribble
+     * tv_sec straight over tv_nsec, so the width is picked from the pointer
+     * size. Both arms type-check on every target and the dead one folds away.
+     */
+    func ts_read_sec(ts: void*): i64:
+        if sizeof(void*) == 8:
+            q := ts as i64*
+            ret q[0]
+        end
+        q32 := ts as i32*
+        ret q32[0] as i64
+    end
+
+    func ts_read_nsec(ts: void*): i64:
+        if sizeof(void*) == 8:
+            q := ts as i64*
+            ret q[1]
+        end
+        q32 := ts as i32*
+        ret q32[1] as i64
+    end
+
+    func ts_write(ts: void*, sec: i64, nsec: i64):
+        if sizeof(void*) == 8:
+            q := ts as i64*
+            q[0] = sec
+            q[1] = nsec
+            ret
+        end
+        q32 := ts as i32*
+        q32[0] = sec as i32
+        q32[1] = nsec as i32
+    end
+
+    /*
+     * pthread_cond_timedwait wants an *absolute* CLOCK_REALTIME deadline, not
+     * a duration, so `ms` is folded into the current time first. Carrying the
+     * nanosecond overflow into seconds matters: a tv_nsec of 1e9 or more is
+     * rejected outright with EINVAL and the wait would not block at all.
+     */
+    func cond_timedwait(c: void*, m: void*, ms: i64): bool:
+        ts := mem.AllocateZeroed(32 as u64)
+        clock_gettime(0, ts)
+        total := ts_read_nsec(ts) + (ms % 1000) * 1000000
+        ts_write(ts, ts_read_sec(ts) + (ms / 1000) + (total / 1000000000), total % 1000000000)
+        rc := pthread_cond_timedwait(c, m, ts)
+        mem.Free(ts)
+        ret rc != 0
+    end
+
+    func now_ms_os(): i64:
+        ts := mem.AllocateZeroed(32 as u64)
+        clock_gettime(0, ts)
+        ms := ts_read_sec(ts) * 1000 + ts_read_nsec(ts) / 1000000
+        mem.Free(ts)
+        ret ms
     end
 
     func cond_signal(c: void*): pthread_cond_signal(c) end
@@ -257,6 +328,39 @@ pub func NewCondVar(): CondVar: ret CondVar { handle = cond_new() } end
 @fa "انتظار شرط"
 @ar "انتظار شرطي"
 pub func WaitCond(cv: CondVar, m: Mutex): cond_wait(cv.handle, m.handle) end
+
+/*
+ * Waits at most `ms` milliseconds and reports whether it gave up. A false
+ * return does NOT mean the predicate became true - a spurious wakeup returns
+ * false too - so the shape of a timed wait is still a loop, just one that also
+ * watches the clock:
+ *
+ *   deadline := sync.NowMs() + ms
+ *   until !pred() && !timed_out:
+ *       left := deadline - sync.NowMs()
+ *       if left <= 0: timed_out = true
+ *       else: timed_out = sync.WaitCondTimeout(cv, mu, left) end
+ *   end
+ *
+ * Recomputing the remaining time each pass is what keeps the total bounded:
+ * passing the full `ms` again after every wakeup would let a steady trickle of
+ * signals extend the wait indefinitely.
+ */
+@en "WaitCondTimeout"
+@fa "انتظار شرط با مهلت"
+@ar "انتظار شرطي بمهلة"
+pub func WaitCondTimeout(cv: CondVar, m: Mutex, ms: i64): bool:
+    ret cond_timedwait(cv.handle, m.handle, ms)
+end
+
+/*
+ * Milliseconds from an unspecified epoch - only differences are meaningful.
+ * Use it to compute deadlines and remaining time, not to tell the date.
+ */
+@en "NowMs"
+@fa "اکنون میلی ثانیه"
+@ar "الآن بالمللي ثانية"
+pub func NowMs(): i64: ret now_ms_os() end
 
 @en "Signal"
 @fa "اعلام"

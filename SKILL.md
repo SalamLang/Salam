@@ -908,22 +908,26 @@ sync.Wait(wg)  sync.Destroy(lock)  sync.DestroyWaitGroup(wg)
 pointer, because it travels through the OS's single thread-argument slot.
 Without it a worker can only reach globals.
 
-Rest of `sync`: `CondVar` (`NewCondVar`/`WaitCond`/`Signal`/`Broadcast` - always
-re-test your predicate in an `until` loop, wakeups can be spurious), `RWMutex`
-(`RLock`/`RUnlock`/`WLock`/`WUnlock`, writer-preferring), `Semaphore`
-(`Acquire`/`TryAcquire`/`Release`), `Once` (`Do(o, () => ... end)`), `SleepMs`.
+Rest of `sync`: `CondVar` (`NewCondVar`/`WaitCond`/`WaitCondTimeout`/`Signal`/
+`Broadcast` - always re-test your predicate in an `until` loop, wakeups can be
+spurious), `RWMutex` (`RLock`/`RUnlock`/`WLock`/`WUnlock`, writer-preferring),
+`Semaphore` (`Acquire`/`TryAcquire`/`Release`), `Once` (`Do(o, () => ... end)`),
+`SleepMs`, `NowMs` (unspecified epoch - only differences mean anything).
 Everything blocks on a condition variable rather than polling.
 
 ```salam
 import chan
 import pool
 import atomic
+import ctx
 
-mut jobs := chan.Chan {} as chan.Chan<i64>   // bounded queue, cap >= 1
-jobs.init(64 as i64)
+mut jobs := chan.Chan {} as chan.Chan<i64>
+jobs.init(64 as i64)                          // n >= 1 buffered, 0 = rendezvous
 jobs.send(v)                                  // blocks while full; false if closed
 mut ok := true
 v := jobs.recv(ok)                            // ok = false once closed AND drained
+v2 := jobs.recv_timeout(ok, 500 as i64)       // ok = false: timed out OR closed
+jobs.send_timeout(v, 500 as i64)              // false if it could not be delivered
 jobs.close()   jobs.free()                    // also: try_send/try_recv/len/is_closed
 
 pool.ParallelFor(n, 8 as i64, (i: i64): body(i) end)   // self-scheduling workers
@@ -934,10 +938,24 @@ mut hits := atomic.NewI64(0 as i64)
 _ := atomic.Add(hits, 1 as i64)               // Load/Store/Swap/CompareAndSwap
 mut stop := atomic.NewFlag(false)
 if atomic.TestAndSet(stop): /* exactly one caller wins */ end
+
+root := ctx.Background()                      // free the root LAST
+job := ctx.WithTimeout(root, 5000 as i64)     // or WithCancel / WithDeadline
+until ctx.IsDone(job):  _ := ctx.Wait(job, 100 as i64)  end
+ctx.Cancel(job)   ctx.Err(job)                // "" | "cancelled" | "deadline exceeded"
+ctx.Free(job)   ctx.Free(root)
 ```
 
+`init(0)` makes a rendezvous channel: `send` does not return until a receiver
+takes the value, so the two threads meet instead of queueing. `try_send` is
+always false on one - there is no way to know a receiver is parked without
+waiting.
+
+A `ctx` tree shares one lock; cancelling any node finishes everything below it,
+and a child's deadline can only shorten what it inherits, never extend it.
+
 `atomic` is lock-based, not lock-free - correct semantics, mutex-level cost.
-There is no `async`/`await` and no unbuffered rendezvous channel.
+There is no `async`/`await`.
 
 **Conditional compilation** (a top-level or inline `if` on a compile-time
 constant). Predefined: `SALAM_OS_WINDOWS/MAC/LINUX/UNIX/FREEBSD/ANDROID/WASM`,

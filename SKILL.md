@@ -572,6 +572,30 @@ Sha512Bytes` (+ streaming `Sha256New/Update/Final`), HMAC
 - **`time`**: `Now NowMillis NowMicros NowNanos Sleep(ms) Format FormatISO
 FormatDate FormatTime Year Month Day Hour Minute Second Weekday Since Until
 ElapsedMs`; `DateTime` type.
+  - **`Duration`** - a span carried as nanoseconds so it cannot be read back in
+    the wrong unit; prefer it to the bare-integer functions above. Build with
+    `Nanoseconds Microseconds Milliseconds Seconds Minutes Hours Days SecondsF
+ZeroDuration`, read with the methods `nanos micros millis secs seconds minutes
+hours days`, combine with `add sub mul div ratio neg abs truncate round`,
+    compare with `cmp less equals is_zero is_negative`. `FormatDuration` writes
+    Go-style text ("1h30m0s", "1.5s", "150ms") and `ParseDuration`/
+    `ParseDurationOr` read it back (`DurationResult { ok, value }`). Bridges:
+    `SleepFor SinceDuration DurationBetween AddDuration`.
+  - **Parsing** (the inverse of every formatter): `ParseISO` (ISO 8601/RFC 3339,
+    with or without an offset), `ParseISOIn ParseISOOr ParseHTTPDate` (RFC
+    1123/850/asctime) and `ParseFormat(pattern, s)` (strftime-style `%Y %m %d %H
+%M %S %f %b %B %a %A %z %Z %%`), all returning `TimeResult { ok, epoch, nanos }`.
+    Also `FormatISOUTC` and `FormatRFC3339` (which write an offset, so they
+    round-trip from any machine - `FormatISO` does not), plus `FromLocalParts`
+    (libc `mktime`, DST-correct) / `FromUTCParts` (portable `timegm`) and
+    `LocalOffsetMinutesAt`. An unzoned string is read as **local** time.
+  - **Timers** (all on the monotonic clock): `NewTimer` → `Timer` with
+    `expired remaining wait reset stop`; `NewTicker` → `Ticker` with
+    `fired wait remaining reset stop advance` + a `dropped` count (a slow loop
+    body drops missed ticks instead of firing them back-to-back). Callback
+    helpers `AfterFunc Every RepeatEvery WaitUntil` - note a lambda captures
+    enclosing locals **by value**, so callbacks share state through top-level
+    `mut` globals, exactly like `spawn` workers.
 - **`calendar`**: Gregorian/`Jalali` (Persian solar hijri)/`Hijri` (Islamic
   tabular lunar) dates, all pivoting through one Julian Day Number so any
   pair converts directly: `GregorianToJalali JalaliToGregorian
@@ -584,12 +608,30 @@ WeekdayName{En,Fa,Ar} Compare{Gregorian,Jalali,Hijri}`. Reading the system
   you already have (mode 2): `Epoch{ToGregorian,ToJalali,ToHijri,ToClockTime}`,
   `{Gregorian,Jalali,Hijri}ToUnixUTC`, `Format{Gregorian,Jalali,Hijri}`
   `FormatClockTime FormatJalaliLongFa FormatHijriLongAr/Fa
-FormatGregorianLongEn`. Fixed-UTC-offset `TimeZone` (no IANA tzdata):
-  `TZUTC TZTehran TZKabul TZRiyadh TZDubai TZIstanbul TZLondon TZNewYork
-TZTokyo FixedOffsetZone`, plus DST-aware `TZLocal`/`LocalOffsetMinutes` (asks
-  the OS via `time`'s libc `localtime()`); `WallClock{Gregorian,Jalali,Hijri,
-Time} ZonedGregorianToEpoch ConvertZoned{Gregorian,Time}` convert a date/time
-  between zones. `GregorianDate JalaliDate HijriDate ClockTime` types.
+FormatGregorianLongEn`. `GregorianDate JalaliDate HijriDate ClockTime` types.
+  - **Date arithmetic**, per calendar: `AddDays{...} AddWeeks{...}
+AddMonths{...} AddYears{...} DaysBetween{...} StartOfMonth{...}
+EndOfMonth{...}` for each of `Gregorian`/`Jalali`/`Hijri`, plus
+    `DaysIn{Gregorian,Jalali}Year Weekday{Gregorian,Jalali,Hijri}
+NextWeekdayOnOrAfter`. Days are exact and reversible; **months and years
+    clamp** to the last valid day (2024-01-31 + 1 month = 2024-02-29), so month
+    arithmetic is deliberately not reversible.
+  - **Real IANA timezones** (`Zone`), read from the host's tzdata at runtime -
+    use these for any zone that observes DST: `LoadZone(name) LocalZone
+FreeZone` (a `Zone` owns memory: `defer calendar.FreeZone(z)`), then
+    `ZoneOffsetSeconds ZoneOffsetMinutes ZoneIsDST ZoneAbbrevAt`. `TimeZoneAt(z,
+epoch)` snapshots a `Zone` into the fixed `TimeZone` below, and `ZoneAt(name,
+epoch)` does load-read-free in one call. `ZonedToEpoch` is the DST-aware
+    local→UTC inverse. Where there is no tzdata (Windows) `LoadZone` returns
+    `ok = false` and `TimeZoneAt` degrades to the fixed table.
+  - Fixed-UTC-offset `TimeZone`: `TZUTC TZTehran TZKabul TZRiyadh TZDubai
+TZIstanbul TZLondon TZNewYork TZTokyo FixedOffsetZone`, plus DST-aware
+    `TZLocal`/`LocalOffsetMinutes` (asks the OS via `time`'s libc
+    `localtime()`); `WallClock{Gregorian,Jalali,Hijri,Time}
+ZonedGregorianToEpoch ConvertZoned{Gregorian,Time}` convert a date/time between
+    zones. ⚠ These are **standard-time** constants: `TZLondon` is UTC+0 and
+    `TZNewYork` UTC-5 all year, which is the wrong offset for the months those
+    zones are on summer time - prefer `ZoneAt("Europe/London", epoch)`.
 - **`mem`**: `Allocate AllocateZeroed AllocateArray Reallocate Free Copy Set
 MemMove`; leak tooling `CheckLeaks LiveBytes AllocCount`.
 - **`testing`**: `AssertTrue AssertFalse AssertEqInt AssertEqStr AssertEqFloat

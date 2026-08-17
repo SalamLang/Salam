@@ -1,0 +1,188 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// std/time's Duration: a span carried as nanoseconds so it can never be
+// read back in the wrong unit. Everything here is fixed-input arithmetic,
+// so it is fully deterministic - the clock is never consulted.
+package main
+
+import testing
+import time
+
+func test_constructors_agree():
+    // Every constructor is the same span expressed differently.
+    testing.AssertEqInt64(time.Seconds(1).nanos(), 1000000000 as i64)
+    testing.AssertEqInt64(time.Milliseconds(1000).nanos(), time.Seconds(1).nanos())
+    testing.AssertEqInt64(time.Microseconds(1000000).nanos(), time.Seconds(1).nanos())
+    testing.AssertEqInt64(time.Nanoseconds(1000000000).nanos(), time.Seconds(1).nanos())
+    testing.AssertEqInt64(time.Minutes(1).nanos(), time.Seconds(60).nanos())
+    testing.AssertEqInt64(time.Hours(1).nanos(), time.Minutes(60).nanos())
+    testing.AssertEqInt64(time.Days(1).nanos(), time.Hours(24).nanos())
+    testing.AssertEqInt64(time.ZeroDuration().nanos(), 0 as i64)
+end
+
+func test_accessors_convert_down():
+    d := time.Milliseconds(1500)
+    testing.AssertEqInt64(d.nanos(), 1500000000 as i64)
+    testing.AssertEqInt64(d.micros(), 1500000 as i64)
+    testing.AssertEqInt64(d.millis(), 1500 as i64)
+    // secs() truncates toward zero; seconds() keeps the fraction.
+    testing.AssertEqInt64(d.secs(), 1 as i64)
+    testing.AssertEqFloat(d.seconds(), 1.5, 0.000001)
+    testing.AssertEqFloat(time.Minutes(90).hours(), 1.5, 0.000001)
+    testing.AssertEqFloat(time.Hours(36).days(), 1.5, 0.000001)
+    testing.AssertEqFloat(time.Seconds(90).minutes(), 1.5, 0.000001)
+end
+
+func test_arithmetic():
+    a := time.Seconds(30)
+    b := time.Seconds(45)
+    testing.AssertEqInt64(a.add(b).secs(), 75 as i64)
+    testing.AssertEqInt64(a.sub(b).secs(), 0 - 15 as i64)
+    testing.AssertEqInt64(a.mul(3).secs(), 90 as i64)
+    testing.AssertEqInt64(b.div(3).secs(), 15 as i64)
+    // Dividing by zero yields zero rather than trapping: there are no
+    // exceptions to catch.
+    testing.AssertEqInt64(b.div(0).nanos(), 0 as i64)
+    testing.AssertEqInt64(time.Minutes(5).ratio(time.Seconds(30)), 10 as i64)
+    testing.AssertEqInt64(time.Minutes(5).ratio(time.ZeroDuration()), 0 as i64)
+end
+
+func test_sign_and_compare():
+    neg := time.Seconds(0 - 30)
+    testing.AssertTrue(neg.is_negative())
+    testing.AssertFalse(neg.is_zero())
+    testing.AssertTrue(time.ZeroDuration().is_zero())
+    testing.AssertEqInt64(neg.abs().secs(), 30 as i64)
+    testing.AssertEqInt64(neg.neg().secs(), 30 as i64)
+    testing.AssertEqInt(time.Seconds(1).cmp(time.Seconds(2)), 0 - 1)
+    testing.AssertEqInt(time.Seconds(2).cmp(time.Seconds(1)), 1)
+    testing.AssertEqInt(time.Seconds(2).cmp(time.Seconds(2)), 0)
+    testing.AssertTrue(time.Seconds(1).less(time.Seconds(2)))
+    testing.AssertTrue(time.Seconds(2).equals(time.Milliseconds(2000)))
+end
+
+func test_truncate_and_round():
+    d := time.Milliseconds(1750)
+    testing.AssertEqInt64(d.truncate(time.Seconds(1)).millis(), 1000 as i64)
+    testing.AssertEqInt64(d.round(time.Seconds(1)).millis(), 2000 as i64)
+    testing.AssertEqInt64(time.Milliseconds(1250).round(time.Seconds(1)).millis(), 1000 as i64)
+    // Exactly half rounds away from zero, in both directions.
+    testing.AssertEqInt64(time.Milliseconds(1500).round(time.Seconds(1)).millis(), 2000 as i64)
+    testing.AssertEqInt64(time.Milliseconds(0 - 1500).round(time.Seconds(1)).millis(), 0 - 2000 as i64)
+    testing.AssertEqInt64(time.Milliseconds(0 - 1750).truncate(time.Seconds(1)).millis(), 0 - 1000 as i64)
+    // A zero or negative modulus leaves the value alone.
+    testing.AssertEqInt64(d.truncate(time.ZeroDuration()).millis(), 1750 as i64)
+    testing.AssertEqInt64(d.round(time.ZeroDuration()).millis(), 1750 as i64)
+end
+
+func test_format():
+    testing.AssertEqStr(time.FormatDuration(time.ZeroDuration()), "0s")
+    testing.AssertEqStr(time.FormatDuration(time.Nanoseconds(500)), "500ns")
+    testing.AssertEqStr(time.FormatDuration(time.Nanoseconds(1500)), "1.5us")
+    testing.AssertEqStr(time.FormatDuration(time.Microseconds(1500)), "1.5ms")
+    testing.AssertEqStr(time.FormatDuration(time.Milliseconds(150)), "150ms")
+    testing.AssertEqStr(time.FormatDuration(time.Milliseconds(1500)), "1.5s")
+    testing.AssertEqStr(time.FormatDuration(time.Seconds(150)), "2m30s")
+    testing.AssertEqStr(time.FormatDuration(time.Hours(1)), "1h0m0s")
+    testing.AssertEqStr(time.FormatDuration(time.Minutes(90)), "1h30m0s")
+    testing.AssertEqStr(time.FormatDuration(time.Seconds(0 - 150)), "-2m30s")
+    // A struct's own to_str() is what `println d` uses.
+    testing.AssertEqStr(time.Milliseconds(1500).to_str(), "1.5s")
+end
+
+func test_parse():
+    a := time.ParseDuration("1h30m")
+    testing.AssertTrue(a.ok)
+    testing.AssertEqInt64(a.value.nanos(), time.Minutes(90).nanos())
+
+    b := time.ParseDuration("-2.5s")
+    testing.AssertTrue(b.ok)
+    testing.AssertEqInt64(b.value.millis(), 0 - 2500 as i64)
+
+    c := time.ParseDuration("150ms")
+    testing.AssertTrue(c.ok)
+    testing.AssertEqInt64(c.value.millis(), 150 as i64)
+
+    d := time.ParseDuration("1h30m10.5s")
+    testing.AssertTrue(d.ok)
+    testing.AssertEqInt64(d.value.millis(), 5410500 as i64)
+
+    // A bare zero needs no unit; every other unitless number is an error.
+    z := time.ParseDuration("0")
+    testing.AssertTrue(z.ok)
+    testing.AssertEqInt64(z.value.nanos(), 0 as i64)
+
+    // The µs and us spellings mean the same thing.
+    testing.AssertEqInt64(time.ParseDuration("5us").value.nanos(), time.Microseconds(5).nanos())
+    testing.AssertEqInt64(time.ParseDuration("5µs").value.nanos(), time.Microseconds(5).nanos())
+    testing.AssertEqInt64(time.ParseDuration("2d").value.nanos(), time.Days(2).nanos())
+    testing.AssertEqInt64(time.ParseDuration("+90s").value.secs(), 90 as i64)
+end
+
+func test_parse_rejects():
+    testing.AssertFalse(time.ParseDuration("").ok)
+    testing.AssertFalse(time.ParseDuration("bogus").ok)
+    testing.AssertFalse(time.ParseDuration("100").ok)
+    testing.AssertFalse(time.ParseDuration("s").ok)
+    testing.AssertFalse(time.ParseDuration("1x").ok)
+    testing.AssertFalse(time.ParseDuration("-").ok)
+    testing.AssertFalse(time.ParseDuration("1.s").ok)
+    // ParseDurationOr swaps a failure for the caller's default.
+    testing.AssertEqInt64(time.ParseDurationOr("nope", time.Seconds(7)).secs(), 7 as i64)
+    testing.AssertEqInt64(time.ParseDurationOr("2m", time.Seconds(7)).secs(), 120 as i64)
+end
+
+func test_format_parse_roundtrip():
+    // Everything FormatDuration writes, ParseDuration reads back exactly.
+    mut cases := Vector {} as Vector<i64>
+    defer cases.free()
+    cases.push(0 as i64)
+    cases.push(500 as i64)
+    cases.push(1500 as i64)
+    cases.push(1500000 as i64)
+    cases.push(1500000000 as i64)
+    cases.push(150000000000 as i64)
+    cases.push(5410500000000 as i64)
+    cases.push(0 - 150000000000 as i64)
+    repeat cases.len() with i:
+        d := time.Nanoseconds(cases.get(i))
+        back := time.ParseDuration(time.FormatDuration(d))
+        testing.AssertTrue(back.ok)
+        testing.AssertEqInt64(back.value.nanos(), d.nanos())
+    end
+end
+
+func test_epoch_bridges():
+    // DurationBetween/AddDuration join Duration to the epoch-second world.
+    testing.AssertEqInt64(time.DurationBetween(1000 as i64, 400 as i64).secs(), 600 as i64)
+    testing.AssertEqInt64(time.AddDuration(1000 as i64, time.Minutes(2)), 1120 as i64)
+    // Sub-second parts truncate: the epoch has one-second resolution.
+    testing.AssertEqInt64(time.AddDuration(1000 as i64, time.Milliseconds(1500)), 1001 as i64)
+end
+
+func main:
+    test_constructors_agree()
+    test_accessors_convert_down()
+    test_arithmetic()
+    test_sign_and_compare()
+    test_truncate_and_round()
+    test_format()
+    test_parse()
+    test_parse_rejects()
+    test_format_parse_roundtrip()
+    test_epoch_bridges()
+    testing.Summary()
+    ret 0
+end

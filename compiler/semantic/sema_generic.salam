@@ -70,14 +70,21 @@ func g_subst(a &: at.Ast, nid: int, params: Vector<str>, args: Vector<int>):
             ccid := at.Clone(a, args.get(pi))
             cc := at.Get(a, ccid)
             mut nv := at.Get(a, nid)
-            ptr := nv.is_pointer || cc.is_pointer
+            // Stars ACCUMULATE. `T*` instantiated with T = `Edge*` is
+            // Edge**, not Edge*: OR-ing the two booleans used to collapse
+            // every pointer-of-pointer to one level.
+            cc_depth := cc.ptr_depth != 0 ? cc.ptr_depth : (cc.is_pointer ? 1 : 0)
+            n_depth := nv.ptr_depth != 0 ? nv.ptr_depth : (nv.is_pointer ? 1 : 0)
+            depth := n_depth + cc_depth
             nv.name = cc.name
             nv.list.free()
             nv.list = Vector {} as Vector<int>
             repeat cc.list.len() with k:
                 nv.list.push(cc.list.get(k))
             end
-            nv.is_pointer = ptr
+            nv.ptr_depth = depth
+            nv.is_pointer = depth > 0
+            nv.elem_ptr_depth += cc.elem_ptr_depth
             nv.is_dyn = cc.is_dyn
             // The resolved type comes along whole only where the occurrence
             // is the bare parameter. `T*` or `T[4]` stands for a different
@@ -88,9 +95,9 @@ func g_subst(a &: at.Ast, nid: int, params: Vector<str>, args: Vector<int>):
             // "unknown type 'cmod_Row'"). The base is only usable when the
             // argument node is itself undecorated; `T[4]` with T = `Foo[3]`
             // has to merge dims, and cc.sema_type is the whole array there.
-            if ptr == cc.is_pointer && nv.dims.len() == 0:
+            if n_depth == 0 && nv.dims.len() == 0 && nv.elem_ptr_depth == 0:
                 nv.sema_type = cc.sema_type
-            else !cc.is_pointer && cc.dims.len() == 0:
+            else cc_depth == 0 && cc.dims.len() == 0 && cc.elem_ptr_depth == 0:
                 nv.sema_base_type = cc.sema_type
             end
             mut merged := Vector {} as Vector<int>
@@ -147,6 +154,7 @@ func g_type_to_ast_bare(s &: Sema, a &: at.Ast, t: int, sp: co.SrcSpan): int:
     if v.kind == TY_PTR && v.pointee >= 0:
         p := g_type_to_ast(s, a, v.pointee, sp)
         mut pv := at.Get(a, p)
+        pv.ptr_depth += 1
         pv.is_pointer = true
         at.Put(a, p, pv)
         ret p

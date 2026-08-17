@@ -116,18 +116,23 @@ func base_ctype(base: str, found &: bool): str:
     ret base
 end
 
-// parse_typestr - cap mirrors the caller's base[] buffer size.
-// Bug-compat: only ONE trailing '*' is stripped; the ']' search is
-// unbounded (strchr) while the '[' walk is bounded by the star-stripped len.
-func parse_typestr(
-    ts: str, cap: int, base &: str, ptr &: bool, dims &: Vector<int>
+// parse_typestr_ex - cap mirrors the caller's base[] buffer size, plus the
+// star count that belongs to an array's ELEMENT type: "Edge*[6]" yields
+// base "Edge", dims {6}, ptr false, eptr 1.
+func parse_typestr_ex(
+    ts: str, cap: int, base &: str, ptr &: bool, dims &: Vector<int>, eptr &: int, pdepth &: int
 ):
     ptr = false
+    eptr = 0
+    pdepth = 0
     dims.clear()
     tslen := str.Len(ts)
     mut n := tslen
-    if n > 0 && byte_at(ts, n - 1) == 42:
+    // Stars nest: Vector<Edge*> lays its data pointer out as "Edge**", so
+    // the whole trailing run is counted rather than just the last one.
+    until n > 0 && byte_at(ts, n - 1) == 42:
         ptr = true
+        pdepth += 1
         n -= 1
     end
     mut lb := 0 - 1
@@ -142,6 +147,18 @@ func parse_typestr(
     mut blen := n
     if lb >= 0:
         blen = lb
+    end
+    // An array OF pointers spells its stars between the element name and
+    // the first '[' - "Edge*[6]" is six Edge*, not a pointer to anything.
+    // They have to come off `base` here: everything downstream feeds the
+    // base through cg_cident, which would hex-escape the '*' into a type
+    // name that was never declared. The count travels out via eptr so
+    // callers can put the stars back on the element type.
+    until blen > 0 && byte_at(ts, blen - 1) == 42:
+        blen -= 1
+        eptr += 1
+    end
+    if lb >= 0:
         mut p := lb
         until p < n && byte_at(ts, p) == 91:
             mut rb := 0 - 1
@@ -173,6 +190,14 @@ func parse_typestr(
         blen = cap - 1
     end
     base = str.Substr(ts, 0, blen)
+end
+
+func parse_typestr(
+    ts: str, cap: int, base &: str, ptr &: bool, dims &: Vector<int>
+):
+    mut eptr := 0
+    mut pdepth := 0
+    parse_typestr_ex(ts, cap, base, ptr, dims, eptr, pdepth)
 end
 
 func cg_is_int_typestr(ts: str): bool:
@@ -415,20 +440,71 @@ func cg_ctype(ts: str): str:
     mut ptr := false
     mut dims := Vector {} as Vector<int>
     defer dims.free()
-    parse_typestr(ts, 96, base, ptr, dims)
+    mut eptr := 0
+    mut pdepth := 0
+    parse_typestr_ex(ts, 96, base, ptr, dims, eptr, pdepth)
     mut found := false
     mut bc := base_ctype(base, found)
     if !found:
         bc = cg_cident(base)
     end
-    ndims := dims.len()
-    if ndims > 0:
+    until eptr > 0:
+        bc = bc + "*"
+        eptr -= 1
+    end
+    if dims.len() > 0:
         ret bc + "*"
     end
-    if ptr:
-        ret bc + "*"
+    until pdepth > 0:
+        bc = bc + "*"
+        pdepth -= 1
     end
     ret bc
+end
+
+// The C spelling of an array type with no declarator attached -
+// "int32_t[3]" - which is what a compound literal needs in front of its
+// braces. "" for anything that is not a plain array of a nameable element
+// type, so callers can fall back to the bare brace form.
+func cg_array_ctype(ts: str): str:
+    if str.Len(ts) == 0 || cg_is_slice_ts(ts) || str.StartsWith(ts, "Variant<") || str.StartsWith(ts, "dyn ") || str.StartsWith(ts, "func("):
+        ret ""
+    end
+    mut base := ""
+    mut ptr := false
+    mut dims := Vector {} as Vector<int>
+    defer dims.free()
+    mut eptr := 0
+    mut pdepth := 0
+    parse_typestr_ex(ts, 96, base, ptr, dims, eptr, pdepth)
+    if dims.len() == 0 || ptr:
+        ret ""
+    end
+    mut found := false
+    mut bc := base_ctype(base, found)
+    if !found:
+        bc = cg_cident(base)
+    end
+    until eptr > 0:
+        bc = bc + "*"
+        eptr -= 1
+    end
+    mut b := co.SbNew()
+    co.SbPuts(b, bc)
+    mut zero := false
+    repeat dims.len() with di:
+        d := dims.get(di)
+        if d == 0:
+            zero = true
+        end
+        co.SbPuts(b, "[" + d + "]")
+    end
+    r := co.SbCstr(b)
+    co.SbFree(b)
+    if zero:
+        ret ""
+    end
+    ret r
 end
 
 func cg_decl(ts: str, name: str): str:
@@ -462,11 +538,17 @@ func cg_decl(ts: str, name: str): str:
     mut ptr := false
     mut dims := Vector {} as Vector<int>
     defer dims.free()
-    parse_typestr(ts, 96, base, ptr, dims)
+    mut eptr := 0
+    mut pdepth := 0
+    parse_typestr_ex(ts, 96, base, ptr, dims, eptr, pdepth)
     mut found := false
     mut bc := base_ctype(base, found)
     if !found:
         bc = cg_cident(base)
+    end
+    until eptr > 0:
+        bc = bc + "*"
+        eptr -= 1
     end
     cname := cg_cident(name)
     if dims.len() > 0:
@@ -481,8 +563,9 @@ func cg_decl(ts: str, name: str): str:
         co.SbFree(b)
         ret r
     end
-    if ptr:
-        ret bc + "* " + cname
+    until pdepth > 0:
+        bc = bc + "*"
+        pdepth -= 1
     end
     ret bc + " " + cname
 end

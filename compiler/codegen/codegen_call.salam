@@ -74,7 +74,7 @@ func call_emit_arg(
         end
     end
     if !arg_is_ref:
-        mut e := cg_expr(g, s, a, argid)
+        mut e := cg_expr_value(g, s, a, argid)
         if cg_needs_fparg(s, a, sig, i, argid, nextid):
             mut mac := "SALAM_FPARG_D"
             if str.Equals(cg_param_ctype(s, a, sig, i, argid), "float"):
@@ -221,11 +221,16 @@ end
 // not touch salam_ob (that buffer is not synchronised), but it needs the flush
 // just as much; leaving it out is what made a threaded program's output look
 // like it was being dropped rather than merely buffered.
-func cg_order_stdout(g &: Cg, printf_expr: str): str:
+// `pre` holds the argument temporaries (see cg_lower_print) and must stay in
+// front of the call that consumes them. It is emitted before the flush as
+// well as before the printf: an argument may itself print, and its output
+// belongs ahead of this statement's, which only holds if it is evaluated
+// before the buffer is flushed.
+func cg_order_stdout(g &: Cg, pre: str, printf_expr: str): str:
     if !g.single_threaded:
-        ret "({ " + printf_expr + "; fflush(0); })"
+        ret "({ " + pre + printf_expr + "; fflush(0); })"
     end
-    ret "({ salam_out_flush(); " + printf_expr + "; fflush(0); })"
+    ret "({ " + pre + "salam_out_flush(); " + printf_expr + "; fflush(0); })"
 end
 
 func cg_lower_print(
@@ -256,8 +261,15 @@ func cg_lower_print(
         end
         co.SbFree(raw)
     end
+    mut nseq := 0
+    repeat segs.len() with ic:
+        if segs.get(ic).kind != PF_LIT:
+            nseq += 1
+        end
+    end
     mut fb := co.SbNew()
     mut ab := co.SbNew()
+    mut pre := co.SbNew()
     repeat segs.len() with i2:
         sg2 := segs.get(i2)
         if sg2.kind == PF_LIT:
@@ -275,6 +287,7 @@ func cg_lower_print(
         end
         e := cg_expr(g, s, a, sg2.expr)
         mut av := ""
+        mut aty := "const char*"
         if sg2.kind == PF_CHAR:
             co.SbPuts(fb, "%s")
             av = "salam_char_from_code(" + e + ")"
@@ -284,38 +297,65 @@ func cg_lower_print(
         else sg2.kind == PF_F64:
             co.SbPuts(fb, pf_spec_impl(sg2.kind))
             av = "(double)(" + e + ")"
+            aty = "double"
         else sg2.kind == PF_U32:
             co.SbPuts(fb, pf_spec_impl(sg2.kind))
             av = "(unsigned)(" + e + ")"
+            aty = "unsigned"
         else sg2.kind == PF_I64:
             co.SbPuts(fb, pf_spec_impl(sg2.kind))
             av = "(long long)(" + e + ")"
+            aty = "long long"
         else sg2.kind == PF_U64:
             co.SbPuts(fb, pf_spec_impl(sg2.kind))
             av = "(unsigned long long)(" + e + ")"
+            aty = "unsigned long long"
         else sg2.kind == PF_SIZE:
             co.SbPuts(fb, pf_spec_impl(sg2.kind))
             av = "(size_t)(" + e + ")"
+            aty = "size_t"
         else sg2.kind == PF_I32:
             co.SbPuts(fb, pf_spec_impl(sg2.kind))
             av = "(int)(" + e + ")"
+            aty = "int"
         else:
             co.SbPuts(fb, pf_spec_impl(sg2.kind))
             av = e
+        end
+        // Bind to a temporary rather than passing the expression straight to
+        // printf. C leaves the order in which call arguments are evaluated
+        // unspecified, so `println c(), c(), c(), c()` over a counter
+        // closure printed "4 3 2 1" under gcc (right to left) and "1 2 3 4"
+        // under tcc (left to right) - the same program, two answers.
+        // Declarations inside a statement expression are sequenced, so
+        // emitting one per argument pins evaluation to source order on every
+        // compiler. Only done when there is more than one argument to
+        // evaluate: a single one cannot be misordered, and this keeps the
+        // common `println x` unchanged. The stderr path is always bound,
+        // whatever the count: it names the argument list twice (once to
+        // size the buffer with a null snprintf, once to fill it), so an
+        // argument with a side effect would run twice otherwise.
+        if nseq > 1 || err:
+            g.tmpn += 1
+            pi := g.tmpn
+            co.SbPuts(pre, aty + " __pa" + co.I64Toa(pi as i64) + " = " + av + "; ")
+            av = "__pa" + co.I64Toa(pi as i64)
         end
         co.SbPuts(ab, ", ")
         co.SbPuts(ab, av)
     end
     cfmt := cg_cescape(co.SbCstr(fb))
     al := co.SbCstr(ab)
+    prestr := co.SbCstr(pre)
     co.SbFree(fb)
     co.SbFree(ab)
+    co.SbFree(pre)
     if err:
         ret cg_order_stdout(
-            g, "({ int32_t __ern = snprintf((void*)0, (uint64_t)0, " + cfmt + al + "); char *__erb = __ern > 0 ? (char*)" + CG_MEM_ALLOC + "((uint64_t)__ern + 1) : (char*)0; if (__erb) snprintf(__erb, " + "(uint64_t)__ern + 1, " + cfmt + al + "); if (__erb) { int64_t __err_r = (int64_t)SALAM_RAW_WRITE(2, " + "__erb, __ern); (void)__err_r; } })"
+            g, prestr, "({ int32_t __ern = snprintf((void*)0, (uint64_t)0, " + cfmt + al + "); char *__erb = __ern > 0 ? (char*)" + CG_MEM_ALLOC + "((uint64_t)__ern + 1) : (char*)0; if (__erb) snprintf(__erb, " + "(uint64_t)__ern + 1, " + cfmt + al + "); if (__erb) { int64_t __err_r = (int64_t)SALAM_RAW_WRITE(2, " + "__erb, __ern); (void)__err_r; } })"
         )
     end
-    ret cg_order_stdout(g, "printf(" + cfmt + al + ")")
+    ret cg_order_stdout(g, prestr, "printf(" + cfmt + al + ")")
 end
 
 func call_ident(
@@ -460,7 +500,7 @@ func call_ident(
             if i > 0:
                 co.SbPuts(b, ", ")
             end
-            co.SbPuts(b, cg_expr(g, s, a, cn.list.get(i)))
+            co.SbPuts(b, cg_expr_value(g, s, a, cn.list.get(i)))
         end
         co.SbPutc(b, 41)
         r := co.SbCstr(b)

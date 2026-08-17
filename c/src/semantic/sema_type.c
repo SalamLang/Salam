@@ -13,6 +13,7 @@
  */
 
 #include "core/prelude.h"
+#include "core/sal_format.h"
 #include "semantic/sema_internal.h"
 
 static type_t *ty(sema_t *s, type_kind_t k)
@@ -73,8 +74,8 @@ static size_t resolve_array_dim(sema_t *s, ast_node_t *dim)
 /*
  * Wrap a resolved base in whatever the type node's suffixes asked for, in the
  * one order that makes both spellings mean what they read as:
- *   Edge*[6]  ->  is_elem_pointer, so the star binds first: array of pointers
- *   Edge[6]*  ->  is_pointer, so the star binds last: pointer to the array
+ *   Edge*[6]  ->  elem_ptr_depth, so the star binds first: array of pointers
+ *   Edge[6]*  ->  ptr_depth, so the star binds last: pointer to the array
  * Every branch of sema_resolve_type routes through here; branches that used to
  * apply only is_pointer silently dropped the dims of a type like
  * `pkg.Type[3]`.
@@ -127,8 +128,7 @@ type_t *sema_resolve_type(sema_t *s, ast_node_t *tnode)
         /* Name the type after the interface itself, never after the spelling
          * used at this site, so "Connection" and "db.Connection" agree. */
         const char *iname = iface->name;
-        if (iface->pkgname && iface->pkgname[0] &&
-            strcmp(iface->pkgname, "main") != 0) {
+        if (iface->pkgname && iface->pkgname[0] && strcmp(iface->pkgname, "main") != 0) {
             char buf[512];
             sal_snprintf(buf, sizeof buf, "%s_%s", iface->pkgname, iface->name);
             iname = arena_strdup(s->a, buf);

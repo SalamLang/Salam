@@ -145,7 +145,14 @@ static const char *cg_vardecl_inline(cg_t *cg, ast_node_t *n)
                          struct_by_name(cg, ts) != NULL);
 
     bool already_const = (strncmp(cg_ctype(cg, ts), "const ", 6) == 0);
-    const char *prefix = (n->is_mut || is_ref || already_const) ? "" : "const ";
+    /* A function value is excluded for the same reason an array is (see the
+     * box in cg_emit_globals): it reaches a callee as a plain `void*` that the
+     * callee may write through, and C makes writing through a pointer to a
+     * const object undefined. `f := (n: int) => n * 2` passed to a
+     * `func (int) int` parameter was a discarded-qualifiers diagnostic
+     * reporting exactly that. */
+    const char *prefix =
+        (n->is_mut || is_ref || already_const || type_is_callable(ts)) ? "" : "const ";
     if (n->a) return cg_fmt(cg, "%s%s = %s", prefix, decl, cg_expr(cg, n->a));
 
     /* No initializer. Sema rejects every read that no assignment precedes, but
@@ -217,7 +224,10 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
         const char *cts = n->type_str ? n->type_str : "int32_t";
         const char *decl = cg_decl(cg, cts, n->name);
         local_add(cg, n->name);
-        const char *cpfx = (strncmp(cg_ctype(cg, cts), "const ", 6) == 0) ? "" : "const ";
+        const char *cpfx =
+            (strncmp(cg_ctype(cg, cts), "const ", 6) == 0 || type_is_callable(cts))
+                ? ""
+                : "const ";
         cg_line(cg, "%s%s = %s;", cpfx, decl, cg_expr(cg, n->a));
         break;
     }

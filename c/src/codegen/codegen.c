@@ -155,8 +155,13 @@ static void emit_globals(cg_t *cg, ast_node_t *program)
                  * can never alias, so they keep the qualifier (and .rodata).
                  * codegen_header.c's extern declaration must agree, or the
                  * definition and the declaration conflict.
+                 *
+                 * A function value is excluded for the same reason: it lowers
+                 * to the closure environment pointer, which a callee takes as
+                 * a plain `void*`.
                  */
-                bool want_const = (d->kind == AST_CONST_DECL) && !is_array;
+                bool want_const =
+                    (d->kind == AST_CONST_DECL) && !is_array && !type_is_callable(ts);
                 bool gct_const =
                     want_const && (strncmp(cg_ctype(cg, ts), "const ", 6) == 0);
                 const char *pfx = (want_const && !gct_const) ? "const " : "";

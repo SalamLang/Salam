@@ -163,6 +163,18 @@ static const char *base_ctype(const char *base)
     return base;
 }
 
+/*
+ * A lambda, closure or function value. All of them lower to the `void*` that
+ * carries the closure environment, which matters beyond the C spelling: a
+ * callee takes that pointer as a plain `void*` and may write through it (a
+ * counter closure updates the state it captured), so such a binding must not
+ * be const-qualified even when the Salam name is immutable.
+ */
+bool type_is_callable(const char *ts)
+{
+    return ts && (!strncmp(ts, "func(", 5) || !strncmp(ts, "externfunc(", 11));
+}
+
 void parse_typestr_ex(const char *ts, char *base, size_t cap, bool *ptr, vec_t *dims,
                       arena_t *a, int *elem_ptr, int *ptr_depth)
 {
@@ -438,7 +450,7 @@ const char *cg_ctype(cg_t *cg, const char *ts)
         iface[il] = 0;
         return cg_fmt(cg, "_Salam_dyn_%s%s", cg_cident(cg, iface), suf ? "*" : "");
     }
-    if (!strncmp(ts, "func(", 5) || !strncmp(ts, "externfunc(", 11)) return "void*";
+    if (type_is_callable(ts)) return "void*";
     char base[96];
     bool ptr;
     int eptr, pdepth;

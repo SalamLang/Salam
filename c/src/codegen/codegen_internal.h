@@ -173,6 +173,10 @@ const char *func_cast_params_env(cg_t *cg, const char *ts);
 
 bool type_is_byval_agg(const type_t *t);
 
+/* A `func(...)`/`externfunc(...)` type string - a value that lowers to the
+ * closure environment pointer. */
+bool type_is_callable(const char *ts);
+
 /* Resolves "Iface" and the cross-package "pkg.Iface" alike. */
 symbol_t *cg_iface_sym(cg_t *cg, const char *name);
 

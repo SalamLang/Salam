@@ -536,9 +536,13 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
                 n->type_str && (n->type_str[0] == 'u' || !strcmp(n->type_str, "size"));
             if (!uns && u > 9223372036854775807ULL) {
                 long long v = (long long)u;
-                return v == (-9223372036854775807LL - 1LL)
-                           ? "(-9223372036854775807LL - 1LL)"
-                           : cg_fmt(cg, "(%lldLL)", v);
+                if (v == (-9223372036854775807LL - 1LL))
+                    return "(-9223372036854775807LL - 1LL)";
+                /* Suffix only what genuinely needs 64 bits, exactly as the
+                 * unsigned branch below does: a bare (-7) is an int, so
+                 * passing it to a prototype declared int - libc's abs(),
+                 * say - no longer trips clang's -Wabsolute-value. */
+                return cg_fmt(cg, "(%lld%s)", v, v < -2147483647LL ? "LL" : "");
             }
             {
                 const char *suf = u > 9223372036854775807ULL ? "ULL"

@@ -26,7 +26,7 @@ func cg_emit_lambda(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
     mut pb := co.SbNew()
     co.SbPuts(pb, "void *__envp")
     repeat nn.list.len() with i:
-        p := at.Get(a, nn.list.get(i)[0])
+        p := at.Get(a, nn.list.get(i))
         co.SbPuts(pb, ", ")
         co.SbPuts(pb, cg_decl(p.type_str, p.name))
     end
@@ -36,7 +36,7 @@ func cg_emit_lambda(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
         mut st := co.SbNew()
         co.SbPuts(st, "typedef struct { void *fn;")
         repeat ncap with i2:
-            c := at.Get(a, nn.captures.get(i2)[0])
+            c := at.Get(a, nn.captures.get(i2))
             co.SbPuts(st, " " + cg_decl(c.type_str, c.name) + ";")
         end
         co.SbPuts(st, " } " + name + "_env;\n")
@@ -44,7 +44,7 @@ func cg_emit_lambda(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
         co.SbFree(st)
         outd(g, "static void *" + name + "_make(")
         repeat ncap with i3:
-            c2 := at.Get(a, nn.captures.get(i3)[0])
+            c2 := at.Get(a, nn.captures.get(i3))
             if i3 > 0:
                 outd(g, ", ")
             end
@@ -57,6 +57,7 @@ func cg_emit_lambda(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
     saved_indent := g.indent
     saved_locals := g.locals
     saved_defers := g.fn_defers
+    saved_dmark := g.loop_dmark
     saved_sret := g.cur_sret
     saved_is_main := g.cur_is_main
     saved_struct := g.cur_struct
@@ -65,6 +66,8 @@ func cg_emit_lambda(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
     g.indent = 0
     g.locals = Vector {} as Vector<str>
     g.fn_defers = Vector {} as Vector<int>
+    // The loop marks index fn_defers, which the lambda body restarts.
+    g.loop_dmark = Vector {} as Vector<int>
     g.cur_sret = false
     // A lambda body is its own C function, never `int main` - a bare `ret`
     // in it is a real `return;`.
@@ -72,7 +75,7 @@ func cg_emit_lambda(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
     g.cur_struct = 0
     g.cur_lambda = n
     repeat nn.list.len() with i4:
-        local_add(g, at.Get(a, nn.list.get(i4)[0]).name)
+        local_add(g, at.Get(a, nn.list.get(i4)).name)
     end
     cg_line(g, "static " + cret + " " + name + "(" + ps + ") {")
     g.indent += 1
@@ -93,7 +96,7 @@ func cg_emit_lambda(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
     if ncap > 0:
         mut mp := co.SbNew()
         repeat ncap with i5:
-            c3 := at.Get(a, nn.captures.get(i5)[0])
+            c3 := at.Get(a, nn.captures.get(i5))
             if i5 > 0:
                 co.SbPuts(mp, ", ")
             end
@@ -108,7 +111,7 @@ func cg_emit_lambda(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
         )
         cg_line(g, "e->fn = (void*)&" + name + ";")
         repeat ncap with i6:
-            c4 := at.Get(a, nn.captures.get(i6)[0])
+            c4 := at.Get(a, nn.captures.get(i6))
             cg_line(
                 g, "e->" + cg_cident(c4.name) + " = " + cg_cident(c4.name) + ";"
             )
@@ -126,10 +129,13 @@ func cg_emit_lambda(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
     defer inner_locals.free()
     mut inner_defers := g.fn_defers
     defer inner_defers.free()
+    mut inner_dmark := g.loop_dmark
+    defer inner_dmark.free()
     g.cur = saved_cur
     g.indent = saved_indent
     g.locals = saved_locals
     g.fn_defers = saved_defers
+    g.loop_dmark = saved_dmark
     g.cur_sret = saved_sret
     g.cur_is_main = saved_is_main
     g.cur_struct = saved_struct
@@ -149,7 +155,7 @@ func cg_lambda_value(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
         if i > 0:
             co.SbPuts(ab, ", ")
         end
-        co.SbPuts(ab, cg_expr(g, s, a, nn.captures.get(i)[0]))
+        co.SbPuts(ab, cg_expr(g, s, a, nn.captures.get(i)))
     end
     args := co.SbCstr(ab)
     co.SbFree(ab)
@@ -173,7 +179,7 @@ func cg_lift_walk(g &: Cg, s &: sm.Sema, a &: at.Ast, node: int):
     cg_lift_walk(g, s, a, nn.c)
     cg_lift_walk(g, s, a, nn.d)
     repeat nn.list.len() with i:
-        cg_lift_walk(g, s, a, nn.list.get(i)[0])
+        cg_lift_walk(g, s, a, nn.list.get(i))
     end
 end
 
@@ -336,6 +342,7 @@ pub func Run(
     cg_header_impl(g, s, a, program)
     emit_instances_header(g, s, a, program)
     emit_inline_header(g, s, a, program)
+    outh(g, "void " + cg_module_init_name(module_name) + "(void);\n")
     outh(g, "\n#endif\n")
     out(g, `#include "` + CG_MOD_PREFIX + module_name + ".h\"\n\n")
     cg_emit_dyn_vtables_impl(g, s)
@@ -347,6 +354,7 @@ pub func Run(
         outc(g, 10)
     end
     emit_globals(g, s, a, program)
+    emit_module_init(g, s, a, program)
     if co.SbLen(g.blamf) > (0 as i64):
         out(g, co.SbCstr(g.blamf))
         outc(g, 10)

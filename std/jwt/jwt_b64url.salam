@@ -1,0 +1,119 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package jwt
+
+// base64url without padding (RFC 4648 §5), the encoding every JWS segment
+// uses. std/encoding has base64 proper; this is the URL alphabet on top of
+// it, plus the strictness a token parser needs.
+//
+// Decoding is deliberately intolerant. A JWS segment that contains "+", "/",
+// "=" or whitespace is not a lenient encoder's output, it is either a bug or
+// somebody probing the parser, and accepting it invites the class of attack
+// where two different encodings of the same bytes both verify. Anything
+// outside [A-Za-z0-9-_] is rejected, as is a length that cannot be a whole
+// number of base64 quanta.
+
+inline pure func _bp(s: str): i8*: ret (s as void*) as i8* end
+
+inline pure func _ub(bp: i8*, i: int): int:
+    mut v := bp[i] as int
+    if v < 0: v = v + 256 end
+    ret v
+end
+
+pure func _b64url_ok(code: int): bool:
+    if code >= 65 && code <= 90: ret true end
+    if code >= 97 && code <= 122: ret true end
+    if code >= 48 && code <= 57: ret true end
+    ret code == 45 || code == 95
+end
+
+// Standard base64 -> URL alphabet, dropping the padding.
+func _to_url_alphabet(s: str): str:
+    n := s.len()
+    bp := _bp(s)
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    repeat n with i:
+        code := _ub(bp, i)
+        if code == 43:
+            str.BufAppendChar(sb, 45)
+        else code == 47:
+            str.BufAppendChar(sb, 95)
+        else code != 61:
+            str.BufAppendChar(sb, code)
+        end
+    end
+    out := str.BufStr(sb)
+    ret out
+end
+
+@en "B64UrlEncodeBytes"
+@fa "کدگذاری شصت و چهار نشانی بایت"
+@ar "ترمیز ستیني عنواني بایتات"
+pub func B64UrlEncodeBytes(p: void*, n: int): str:
+    std64 := encoding.Base64EncodeBytes(p, n)
+    ret _to_url_alphabet(std64)
+end
+
+@en "B64UrlEncode"
+@fa "کدگذاری شصت و چهار نشانی"
+@ar "ترمیز ستیني عنواني"
+pub func B64UrlEncode(s: str): str:
+    ret B64UrlEncodeBytes(s as void*, s.len())
+end
+
+// Decode to text. `ok` is false for any character outside the URL alphabet
+// or a truncated quantum.
+//
+// LIMITATION: the result is a `str`, so a decoded 0x00 byte would truncate
+// it. That is fine for what this is used for - a JWS header and payload are
+// JSON text, where 0x00 cannot appear - and it is why signatures are compared
+// in their encoded form instead of being decoded to bytes.
+@en "B64UrlDecode"
+@fa "کدگشایی شصت و چهار نشانی"
+@ar "فك ترمیز ستیني عنواني"
+pub func B64UrlDecode(s: str, ok &: bool): str:
+    ok = false
+    n := s.len()
+    if n % 4 == 1: ret "" end
+    bp := _bp(s)
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    repeat n with i:
+        code := _ub(bp, i)
+        if !_b64url_ok(code):
+            ret ""
+        end
+        if code == 45:
+            str.BufAppendChar(sb, 43)
+        else code == 95:
+            str.BufAppendChar(sb, 47)
+        else:
+            str.BufAppendChar(sb, code)
+        end
+    end
+    // Base64DecodeStrict wants whole quanta, so put the padding back.
+    pad := (4 - (n % 4)) % 4
+    repeat pad:
+        str.BufAppendChar(sb, 61)
+    end
+    padded := str.BufStr(sb)
+    mut good := false
+    out := encoding.Base64DecodeStrict(padded, good)
+    ok = good
+    if !good: ret "" end
+    ret out
+end

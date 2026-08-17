@@ -91,14 +91,31 @@ const char *cg_op(token_kind_t k)
     }
 }
 
-static bool cg_is_str_ts(const char *ts)
+/*
+ * A string-backed enum's C representation is `const char *` (hdr_enums), so
+ * for every purpose codegen cares about (== via strcmp, string coercion) it
+ * has to be treated exactly like str/uchar - only its *name* ("Color") isn't
+ * literally "str". Int/float-backed enums need no such translation: their C
+ * representation already behaves correctly under the plain C operators the
+ * generic fallbacks emit (a real C `enum` for int, a `double` for float).
+ */
+static bool cg_ts_is_string_enum(cg_t *cg, const char *ts)
 {
-    return ts && (!strcmp(ts, "str") || !strcmp(ts, "uchar"));
+    symbol_t *esym;
+    if (!ts || !cg->sem) return false;
+    esym = scope_lookup_local(cg->sem->global, ts);
+    return esym && esym->kind == SYM_ENUM && esym->enum_val_kind == TV_STRING;
+}
+
+static bool cg_is_str_ts(cg_t *cg, const char *ts)
+{
+    return ts &&
+           (!strcmp(ts, "str") || !strcmp(ts, "uchar") || cg_ts_is_string_enum(cg, ts));
 }
 
 const char *cg_str_operand(cg_t *cg, ast_node_t *n)
 {
-    if (cg_is_str_ts(n->type_str)) return cg_expr(cg, n);
+    if (cg_is_str_ts(cg, n->type_str)) return cg_expr(cg, n);
     return cg_fmt(cg, "salam_tostr_%s(%s)", prim_suffix(print_tag(n->type_str)),
                   cg_expr(cg, n));
 }
@@ -175,7 +192,7 @@ const char *cg_match_arm_cond(cg_t *cg, ast_node_t *arm, const char *subj_var,
             if (is_variant)
                 sb_puts(&b,
                         cg_fmt(cg, "((%s).tag == %d)", subj_var, (int)pat->value.as.i));
-            else if (cg_is_str_ts(subj_ts))
+            else if (cg_is_str_ts(cg, subj_ts))
                 sb_puts(&b, cg_fmt(cg, "(strcmp(%s, %s) == 0)", subj_var,
                                    cg_expr(cg, pat->a)));
             else
@@ -452,6 +469,61 @@ static const char *cg_struct_lit(cg_t *cg, ast_node_t *n)
     return r;
 }
 
+/*
+ * The C symbol a function name denotes, as a void*. Shared by `&f` and by a
+ * bare function name read as a value. An extern keeps its declared C name -
+ * it is not one of ours to mangle.
+ */
+static const char *cg_func_addr(cg_t *cg, ast_node_t *n)
+{
+    symbol_t *fsym = scope_lookup(cg->sem->global, n->name);
+    const char *home_pkg = NULL;
+    if (!fsym && cg->cur_fn_home) {
+        symbol_t *hs = scope_lookup(cg->cur_fn_home, n->name);
+        if (hs && hs->kind == SYM_FUNC) {
+            fsym = hs;
+            home_pkg = hs->pkgname;
+        }
+    }
+    if (!fsym && cg->cur_struct && cg->cur_struct->home) {
+        symbol_t *hs = scope_lookup(cg->cur_struct->home, n->name);
+        if (hs && hs->kind == SYM_FUNC) {
+            fsym = hs;
+            home_pkg = hs->pkgname;
+        }
+    }
+    func_sig_t *sig =
+        (fsym && fsym->overloads.len == 1) ? (func_sig_t *)fsym->overloads.data[0] : NULL;
+    bool is_extern_fn = sig && sig->decl && sig->decl->is_extern;
+    vec_t empty;
+    vec_init(&empty);
+    const char *raw = is_extern_fn ? n->name
+                                   : cg_mangle_in(cg, home_pkg ? home_pkg : cg->pkg, NULL,
+                                                  n->name, sig ? &sig->params : &empty);
+    return cg_fmt(cg, "((void*)(&%s))", raw);
+}
+
+/*
+ * An array literal lowers to a braced list, which C accepts only as an
+ * initializer. Anywhere a real expression is wanted - a call argument, a
+ * returned value, a ternary arm - it has to be the compound literal
+ * "(int32_t[3]){1, 2, 3}" instead, or the emitted C does not parse at all
+ * ("expected expression before '{' token").
+ *
+ * Deliberately opt-in per slot rather than applied inside cg_expr: a compound
+ * literal is not a constant expression, so a file-scope initializer must keep
+ * the bare braced form. Any value slot not converted yet simply behaves as it
+ * always has.
+ */
+const char *cg_expr_value(cg_t *cg, ast_node_t *n)
+{
+    if (n && n->kind == AST_ARRAY_LIT) {
+        const char *at = cg_array_ctype(cg, n->type_str);
+        if (at) return cg_fmt(cg, "(%s)%s", at, cg_expr(cg, n));
+    }
+    return cg_expr(cg, n);
+}
+
 const char *cg_expr(cg_t *cg, ast_node_t *n)
 {
     if (!n) return "0";
@@ -464,9 +536,13 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
                 n->type_str && (n->type_str[0] == 'u' || !strcmp(n->type_str, "size"));
             if (!uns && u > 9223372036854775807ULL) {
                 long long v = (long long)u;
-                return v == (-9223372036854775807LL - 1LL)
-                           ? "(-9223372036854775807LL - 1LL)"
-                           : cg_fmt(cg, "(%lldLL)", v);
+                if (v == (-9223372036854775807LL - 1LL))
+                    return "(-9223372036854775807LL - 1LL)";
+                /* Suffix only what genuinely needs 64 bits, exactly as the
+                 * unsigned branch below does: a bare (-7) is an int, so
+                 * passing it to a prototype declared int - libc's abs(),
+                 * say - no longer trips clang's -Wabsolute-value. */
+                return cg_fmt(cg, "(%lld%s)", v, v < -2147483647LL ? "LL" : "");
             }
             {
                 const char *suf = u > 9223372036854775807ULL ? "ULL"
@@ -500,6 +576,8 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
             return "0";
         }
     case AST_IDENTIFIER:
+        /* A bare function name read as a value: its address, as an i64. */
+        if (n->func_value) return cg_fmt(cg, "(int64_t)%s", cg_func_addr(cg, n));
 
         if (cg->cur_lambda) {
             vec_t *caps = &cg->cur_lambda->captures;
@@ -520,35 +598,8 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
                 return cg_fmt(cg, "this->%s", cg_cident(cg, n->name));
         }
         return cg_cident(cg, n->name);
-    case AST_FUNC_ADDR: {
-        symbol_t *fsym = scope_lookup(cg->sem->global, n->name);
-        const char *home_pkg = NULL;
-        if (!fsym && cg->cur_fn_home) {
-            symbol_t *hs = scope_lookup(cg->cur_fn_home, n->name);
-            if (hs && hs->kind == SYM_FUNC) {
-                fsym = hs;
-                home_pkg = hs->pkgname;
-            }
-        }
-        if (!fsym && cg->cur_struct && cg->cur_struct->home) {
-            symbol_t *hs = scope_lookup(cg->cur_struct->home, n->name);
-            if (hs && hs->kind == SYM_FUNC) {
-                fsym = hs;
-                home_pkg = hs->pkgname;
-            }
-        }
-        func_sig_t *sig = (fsym && fsym->overloads.len == 1)
-                              ? (func_sig_t *)fsym->overloads.data[0]
-                              : NULL;
-        bool is_extern_fn = sig && sig->decl && sig->decl->is_extern;
-        vec_t empty;
-        vec_init(&empty);
-        const char *raw = is_extern_fn
-                              ? n->name
-                              : cg_mangle_in(cg, home_pkg ? home_pkg : cg->pkg, NULL,
-                                             n->name, sig ? &sig->params : &empty);
-        return cg_fmt(cg, "((void*)(&%s))", raw);
-    }
+    case AST_FUNC_ADDR:
+        return cg_func_addr(cg, n);
     case AST_THIS:
         return "this";
     case AST_BINARY: {
@@ -572,15 +623,15 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
         }
 
         if (n->op == TK_PLUS &&
-            (cg_is_str_ts(n->a->type_str) || cg_is_str_ts(n->b->type_str))) {
+            (cg_is_str_ts(cg, n->a->type_str) || cg_is_str_ts(cg, n->b->type_str))) {
             const char *sa = cg_str_operand(cg, n->a);
             const char *sb = cg_str_operand(cg, n->b);
             return cg_fmt(cg, "salam_strcat(%s, %s)", sa, sb);
         }
 
         if (n->op == TK_STAR &&
-            (cg_is_str_ts(n->a->type_str) || cg_is_str_ts(n->b->type_str))) {
-            bool a_str = cg_is_str_ts(n->a->type_str);
+            (cg_is_str_ts(cg, n->a->type_str) || cg_is_str_ts(cg, n->b->type_str))) {
+            bool a_str = cg_is_str_ts(cg, n->a->type_str);
             ast_node_t *sop = a_str ? n->a : n->b;
             ast_node_t *nop = a_str ? n->b : n->a;
             const char *sv = cg_expr(cg, sop);
@@ -588,7 +639,7 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
             return cg_fmt(cg, "salam_str_repeat(%s, (int32_t)(%s))", sv, nv);
         }
 
-        if (cg_is_str_ts(n->a->type_str) && cg_is_str_ts(n->b->type_str)) {
+        if (cg_is_str_ts(cg, n->a->type_str) && cg_is_str_ts(cg, n->b->type_str)) {
             const char *op = NULL;
             switch (n->op) {
             case TK_EQ:
@@ -755,6 +806,17 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
     case AST_MEMBER: {
         if (n->a && n->a->kind == AST_IDENTIFIER && !local_known(cg, n->a->name)) {
             symbol_t *e = scope_lookup(cg->sem->global, n->a->name);
+            /*
+             * A synthesized enum-derive body (sema_derive_enum.c) is checked
+             * against its enum's own home scope, so an unqualified "Kind"
+             * inside it resolves fine at the semantic layer even when Kind
+             * lives in a non-main package - but this lookup only ever
+             * searches the global scope, so it needs the same cur_fn_home
+             * fallback codegen_call.c already uses for free-function calls
+             * inside such bodies, or it silently fails to find Kind here.
+             */
+            if ((!e || e->kind != SYM_ENUM) && cg->cur_fn_home)
+                e = scope_lookup(cg->cur_fn_home, n->a->name);
             if (e && e->kind == SYM_ENUM)
                 return cg_fmt(cg, "%s_%s", cg_cident(cg, e->name),
                               cg_cident(cg, n->name));
@@ -764,6 +826,26 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
                 if (m && m->kind == SYM_CONST && m->decl && m->decl->a)
                     return cg_expr(cg, m->decl->a);
                 if (m && m->decl && m->decl->a) return cg_expr(cg, m->decl->a);
+            }
+        }
+        /*
+         * pkg.EnumName.Member: n->a is itself pkg.EnumName (an AST_MEMBER,
+         * not a bare identifier - see the matching sema fix in
+         * check_member/sema_expr.c for why the parser always builds this as
+         * a plain left-associative chain). Without this, n->a falls to the
+         * generic cg_expr(cg, n->a) below, which has no idea "pkg.EnumName"
+         * denotes a type and just emits the two names joined by literal
+         * dots, verbatim, into invalid C.
+         */
+        if (n->a && n->a->kind == AST_MEMBER && n->a->a &&
+            n->a->a->kind == AST_IDENTIFIER && !local_known(cg, n->a->a->name)) {
+            symbol_t *pk = scope_lookup(cg->sem->global, n->a->a->name);
+            if (!pk && cg->cur_fn_home) pk = scope_lookup(cg->cur_fn_home, n->a->a->name);
+            if (pk && pk->kind == SYM_PACKAGE) {
+                symbol_t *e = scope_lookup_local(pk->members, n->a->name);
+                if (e && e->kind == SYM_ENUM)
+                    return cg_fmt(cg, "%s_%s", cg_cident(cg, e->name),
+                                  cg_cident(cg, n->name));
             }
         }
         const char *objts = n->a->type_str ? n->a->type_str : "";

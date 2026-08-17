@@ -74,7 +74,16 @@ typedef enum {
     PTR_U64,
     PTR_F32,
     PTR_F64,
+    /* One byte each, matching what the C backend lays down. Without their own
+     * kinds they fell to PTR_OPAQUE, whose load and store are pointer-sized:
+     * a Vector<bool> allocates one byte per element and every write ran eight
+     * bytes past it, corrupting the heap. */
+    PTR_BOOL,
+    PTR_CHAR,
     PTR_STR,
+    /* Points at a struct laid out in real memory: `tname` names the type and
+     * interp_memlayout.c turns the bytes into a value and back. */
+    PTR_STRUCT,
     PTR_OPAQUE
 } ptr_elem_t;
 
@@ -99,6 +108,7 @@ struct module;
 typedef struct {
     void *addr;
     ptr_elem_t elem;
+    const char *tname; /* PTR_STRUCT only: the pointee's type name */
 } sptr_t;
 
 struct value {
@@ -287,6 +297,7 @@ SAL_INLINE value_t val_ptr(void *addr, ptr_elem_t elem)
     v.ity = ITY_NONE;
     v.as.ptr.addr = addr;
     v.as.ptr.elem = elem;
+    v.as.ptr.tname = NULL;
     return v;
 }
 
@@ -310,6 +321,8 @@ SAL_INLINE size_t ptr_elem_size(ptr_elem_t elem)
     switch (elem) {
     case PTR_I8:
     case PTR_U8:
+    case PTR_BOOL:
+    case PTR_CHAR:
         return 1;
     case PTR_I16:
     case PTR_U16:

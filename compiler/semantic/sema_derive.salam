@@ -1,0 +1,338 @@
+package semantic
+
+import str
+import co "../sal_core.salam"
+import at "../ast.salam"
+import lg "../logger.salam"
+import lp "../langpack.salam"
+import tok "../token.salam"
+import src "../source.salam"
+import lx "../lexer/lexer.salam"
+import ps "../parser/parser.salam"
+
+// ===== sema_derive_str.c =====
+//
+// `println p` on a struct, an array, a Vector or a HashMap.
+//
+// printf has no spelling for an aggregate, so the value is turned into a
+// string first: this pass writes a `func _strof_T(_v: T): str` that appends
+// every field or element to a buffer, installs it in the program being
+// analysed, and rewrites the print argument into a call to it. A field that
+// is itself an aggregate gets its own function, derived on the way through,
+// so a Vector of structs nests without any of this knowing how deep it goes.
+//
+// The function is generated as Salam source and put through the lexer and
+// parser, rather than assembled as AST by hand. Two reasons: what a printed
+// value looks like is then readable in one place instead of spread over node
+// constructors, and the result is an ordinary synthetic top-level
+// declaration - exactly what a generic instantiation is - so the C, LLVM, JS
+// and interpreter backends emit it without knowing this pass exists.
+//
+// PORT-NOTE: the C keeps a vec of derived_t{scope,name,decl}; here that is
+// the three parallel vectors Sema.derived_scopes/_names/_decls.
+
+// Identifier characters for a type's key: `Vector<str>` -> `Vector_str`,
+// `Point[3]` -> `Point_a3`, `geo.Point` -> `geo_Point`. Only has to be
+// injective enough that two different types never collide.
+func derive_key(ts: str): str:
+    mut out := ""
+    repeat str.Len(ts) with i:
+        b := byte_at(ts, i)
+        if b == 60 || b == 44 || b == 46 || b == 95:
+            out = out + "_"
+        else b == 91:
+            out = out + "_a"
+        else b == 42:
+            out = out + "_p"
+        // '>', ']' and ' ' carry no information once the opener is encoded.
+        else b != 62 && b != 93 && b != 32:
+            out = out + ts.substr(i, 1)
+        end
+    end
+    ret out
+end
+
+func derive_name(s &: Sema, t: int): str:
+    ret "_strof_" + derive_key(type_to_string(s, t))
+end
+
+// True when this scope already has (or is midway through) deriving `name`.
+// The registry is the authority rather than a scope lookup: a user function
+// that happens to be called `_strof_Point` must not be mistaken for one of
+// ours.
+func derive_registry_find(s &: Sema, name: str): int:
+    repeat s.derived_names.len() with i:
+        if s.derived_scopes.get(i) == s.global && str.Equals(s.derived_names.get(i), name):
+            ret i + 1
+        end
+    end
+    ret 0
+end
+
+// sema_is_derived_decl - is this pending declaration one of ours?
+func derive_is_decl(s &: Sema, did: int): bool:
+    repeat s.derived_decls.len() with i:
+        if s.derived_decls.get(i) == did:
+            ret true
+        end
+    end
+    ret false
+end
+
+func derive_registry_claim(s &: Sema, name: str):
+    s.derived_scopes.push(s.global)
+    s.derived_names.push(name)
+    s.derived_decls.push(0)
+end
+
+func derive_registry_drop(s &: Sema, slot: int):
+    if slot <= 0:
+        ret
+    end
+    mut j := slot
+    until j < s.derived_names.len():
+        s.derived_scopes.set(j - 1, s.derived_scopes.get(j))
+        s.derived_names.set(j - 1, s.derived_names.get(j))
+        s.derived_decls.set(j - 1, s.derived_decls.get(j))
+        j += 1
+    end
+    _p1 := s.derived_scopes.pop()
+    _p2 := s.derived_names.pop()
+    _p3 := s.derived_decls.pop()
+end
+
+func derive_parse(s &: Sema, a &: at.Ast, text: str, path: str): int:
+    mut sf := src.New()
+    sf.path = path
+    sf.text = text
+    sf.len = text.len()
+    mut s_log := s.log
+    lg.AddDiagSource(s_log, path, sf.text, sf.len)
+    s.log = s_log
+    pack := lp.Load("en")
+    mut toks := tok.StreamNew(path)
+    ok := lx.Run(s.log, pack, sf, toks)
+    mut prog := 0
+    if ok:
+        _ps := ps.Run(s.log, toks, a, prog)
+    end
+    tok.StreamFree(toks)
+    ret prog
+end
+
+// derive_home_of - the scope, at or above `from`, that declares `probe`; the
+// way the JSON derive finds std/encoding/json without hardcoding a package
+// name. 0 when no scope on the chain has it.
+func derive_home_of(s &: Sema, from: int, probe: str): int:
+    mut sc := from
+    until sc != 0:
+        if scope_lookup_local(s, sc, probe) != 0:
+            ret sc
+        end
+        sc = scope_at(s, sc).parent
+    end
+    ret 0
+end
+
+// derive_pkg_name_of - the name of the package a scope is the body of, or ""
+// Stamped onto synthetic declarations so the interpreter can run them against
+// the right module environment.
+func derive_pkg_name_of(s &: Sema, sc: int): str:
+    if sc == 0 || s.global == 0:
+        ret ""
+    end
+    g := scope_at(s, s.global)
+    repeat g.symbols.len() with i:
+        pk := sym_at(s, g.symbols.get(i))
+        if pk.kind == SYM_PACKAGE && pk.members == sc:
+            if str.Len(pk.pkgname) > 0:
+                ret pk.pkgname
+            end
+            ret pk.name
+        end
+    end
+    // The search above only finds a package the scope being analysed imported
+    // by name. std/collections is not one of those: sema_load_prelude pulls it
+    // in behind the programmer's back, so a `Vector<T>` instantiated from
+    // inside another package had no home recorded, and the interpreter then
+    // resolved its methods against the *using* package's environment
+    // ("undefined variable 'mem'" from Vector.reserve). load_package labels
+    // every package scope with its package name, which answers the question
+    // regardless of who imported whom - including for the package currently
+    // being analysed, whose own scope is s.global. The program's global scope
+    // carries no label, so it still answers "" there.
+    scv := scope_at(s, sc)
+    if scv.kind == SCOPE_GLOBAL && str.Len(scv.label) > 0:
+        ret scv.label
+    end
+    ret ""
+end
+
+// A derived body has to see two things at once: the program's own
+// declarations (the struct being encoded) and the runtime layer of the module
+// the codec belongs to (its private _d* helpers). Those live in separate scope
+// trees - a package is analysed on its own and merged in as a symbol, so its
+// scope's ancestors are its own globals, not the program's.
+//
+// The bridge is a scope holding the module's symbols with the program's global
+// scope as its parent, so a lookup finds the helper first and the user's types
+// straight after.
+func derive_bridge_for(s &: Sema, home: int): int:
+    if home == 0:
+        ret 0
+    end
+    if s.derive_bridge_home == home && s.derive_bridge_global == s.global:
+        ret s.derive_bridge
+    end
+    sc := scope_new(s, SCOPE_BLOCK, s.global)
+    mut scv := scope_at(s, sc)
+    scv.label = "<derive>"
+    scope_put(s, sc, scv)
+    hv := scope_at(s, home)
+    repeat hv.symbols.len() with i:
+        _d := scope_define(s, sc, hv.symbols.get(i))
+    end
+    s.derive_bridge_home = home
+    s.derive_bridge_global = s.global
+    s.derive_bridge = sc
+    ret sc
+end
+
+// Register one parsed `func` as a synthetic top-level of the program being
+// analysed: AST into the program list, symbol into the global scope,
+// declaration onto the pending queue so its body is checked with everything
+// else instantiation produces.
+func derive_install_fn(s &: Sema, a &: at.Ast, did: int, home: int, pkg: str):
+    mut d := at.Get(a, did)
+    d.synthetic = true
+    d.origin_lang = "en"
+    d.home_pkg = pkg
+    at.Put(a, did, d)
+    at.AddChild(a, s.program, did)
+    fsym := get_or_make_func(s, s.global, at.Get(a, did).name, SYM_FUNC)
+    mut fv := sym_at(s, fsym)
+    if home != 0:
+        fv.home = home
+    else fv.home == 0:
+        fv.home = s.global
+    end
+    fv.used = true
+    sym_put(s, fsym, fv)
+    sig := build_sig(s, a, did, 0)
+    mut fv2 := sym_at(s, fsym)
+    fv2.overloads.push(sig)
+    sym_put(s, fsym, fv2)
+    s.pending.push(did)
+end
+
+// Signature types resolve against the global scope in English: a local named
+// after the struct must not shadow it, and `Vector` must not be held to the
+// Farsi spelling rule that applies to what the user typed.
+func derive_install_all(s &: Sema, a &: at.Ast, prog: int, want: str, home0: int): int:
+    save_cur := s.cur
+    save_lang := s.lang
+    pkg := derive_pkg_name_of(s, home0)
+    home := derive_bridge_for(s, home0)
+    if home != 0:
+        s.cur = home
+    else:
+        s.cur = s.global
+    end
+    s.lang = "en"
+    mut found := 0
+    mut i := 0
+    until i < at.ChildCount(a, prog):
+        did := at.Child(a, prog, i)
+        i += 1
+        d := at.Get(a, did)
+        if d.kind == at.AST_FUNC_DEF && str.Len(d.name) > 0:
+            derive_install_fn(s, a, did, home, pkg)
+            if str.Equals(d.name, want):
+                found = did
+            end
+        end
+    end
+    s.cur = save_cur
+    s.lang = save_lang
+    ret found
+end
+
+// Derive `func _strof_<T>(_v: T): str` for an aggregate the user asked to
+// print, and hand back its name. "" when the type has no printable form (the
+// caller then reports the ordinary "cannot print" error).
+func derive_stringify(s &: Sema, a &: at.Ast, t: int, sp: co.SrcSpan): str:
+    if t < 0 || s.program == 0:
+        ret ""
+    end
+    fname := derive_name(s, t)
+    if derive_registry_find(s, fname) != 0:
+        ret fname
+    end
+    if scope_lookup_local(s, s.global, fname) != 0:
+        ret ""
+    end
+    // Claimed before the body is generated: a struct holding a Vector of
+    // itself asks for this same function again from inside derive_fn_source,
+    // and has to be told it already exists rather than recurse forever.
+    derive_registry_claim(s, fname)
+    text := derive_fn_source(s, a, t, fname, sp)
+    if str.Len(text) == 0:
+        derive_registry_drop(s, derive_registry_find(s, fname))
+        ret ""
+    end
+    prog := derive_parse(s, a, text, "<derived>")
+    mut fn := 0
+    if prog != 0:
+        fn = derive_install_all(s, a, prog, fname, 0)
+    end
+    if fn == 0:
+        derive_registry_drop(s, derive_registry_find(s, fname))
+        ret ""
+    end
+    slot := derive_registry_find(s, fname)
+    s.derived_decls.set(slot - 1, fn)
+    ret fname
+end
+
+// Replace print argument `i` with a call to a stringify function derived for
+// its type, so `println p` becomes `println _strof_Point(p)` and the rest of
+// the pipeline sees an ordinary str. False when the type has no derivable
+// form; the caller then reports "cannot print".
+func derive_print_arg(s &: Sema, a &: at.Ast, callid: int, i: int, t: int): bool:
+    if i >= at.ChildCount(a, callid):
+        ret false
+    end
+    arg := at.Child(a, callid, i)
+    if arg == 0:
+        ret false
+    end
+    sp := span_of(a, arg)
+    fname := derive_stringify(s, a, t, sp)
+    if str.Len(fname) == 0:
+        ret false
+    end
+    wrap := at.NewNode(a, at.AST_CALL)
+    callee := at.NewNode(a, at.AST_IDENTIFIER)
+    at.SetName(a, callee, fname)
+    at.SetSpan(
+        a, callee, sp.begin.line, sp.begin.col, sp.begin.index, sp.finish.line, sp.finish.col,
+        sp.finish.index, sp.length
+    )
+    at.SetSpan(
+        a, wrap, sp.begin.line, sp.begin.col, sp.begin.index, sp.finish.line, sp.finish.col,
+        sp.finish.index, sp.length
+    )
+    mut cv := at.Get(a, callee)
+    cv.synthetic = true
+    at.Put(a, callee, cv)
+    mut wv := at.Get(a, wrap)
+    wv.synthetic = true
+    wv.a = callee
+    at.Put(a, wrap, wv)
+    at.AddChild(a, wrap, arg)
+    _d := sema_decorate(s, a, wrap, sema_ty(s, TY_STR))
+    mut cn := at.Get(a, callid)
+    cn.list.set(i, wrap)
+    at.Put(a, callid, cn)
+    ret true
+end

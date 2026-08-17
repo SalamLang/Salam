@@ -1,0 +1,371 @@
+package semantic
+
+import str
+import co "../sal_core.salam"
+import at "../ast.salam"
+
+// ===== sema_derive_emit.c =====
+//
+// The Salam source of a derived stringify function. See sema_derive.salam
+// for why this is text rather than hand-built AST.
+//
+// What a printed value looks like:
+//
+//   struct       Point {x = 10, y = 15}
+//   array/vector [1, 2, 3]
+//   hashmap      {"a": 1, "b": 2}
+//   nested str   "ali"          (quoted, so an empty element is visible)
+//   pointer      null | <ptr>   (never followed - a cycle would not end)
+//
+// A struct that defines `to_str(): str` gets that called instead, so a type
+// can present itself however it likes.
+//
+// PORT-NOTE: the C threads an sb_t down the emitters; here each one returns
+// the text it produced and the caller concatenates. "" is the C NULL.
+
+// Locals the generated bodies use. Underscore-prefixed so they never collide
+// with a field or a package name, and so the unused-name rules let them be.
+const DV_PARAM := "_v"
+const DV_BUF := "_sb"
+const DV_IND := "    "
+
+func derive_is_plain(s &: Sema, t: int): bool:
+    k := ty_at(s, t).kind
+    if k == TY_BOOL || k == TY_CHAR || k == TY_UCHAR:
+        ret true
+    end
+    ret type_is_numeric(s, t)
+end
+
+// The first overload of `sym.name` taking `nparams` arguments, 0 if none.
+func derive_method_sig(s &: Sema, sym: int, name: str, nparams: int): int:
+    members := sym_at(s, sym).members
+    if members == 0:
+        ret 0
+    end
+    m := scope_lookup_local(s, members, name)
+    if m == 0 || sym_at(s, m).kind != SYM_METHOD:
+        ret 0
+    end
+    ov := sym_at(s, m).overloads
+    repeat ov.len() with i:
+        sid := ov.get(i)
+        if sig_at(s, sid).params.len() == nparams:
+            ret sid
+        end
+    end
+    ret 0
+end
+
+func derive_user_to_str(s &: Sema, sym: int): bool:
+    sid := derive_method_sig(s, sym, "to_str", 0)
+    if sid == 0:
+        ret false
+    end
+    rt := sig_at(s, sid).ret_type
+    ret rt >= 0 && ty_at(s, rt).kind == TY_STR
+end
+
+// A struct that behaves like a sequence - `len()`/`size()` plus `get(int)`.
+// Recognised by shape rather than by name so std/collections' Vector, Deque,
+// LinkedList and anything a user writes the same way all print as `[...]`
+// instead of exposing the buffer and capacity behind them. Returns the
+// counting method's name, "" when the struct is not one.
+func derive_seq_count(s &: Sema, sym: int): str:
+    names := ["len", "size"]
+    repeat 2 with i:
+        sid := derive_method_sig(s, sym, names[i], 0)
+        if sid != 0:
+            rt := sig_at(s, sid).ret_type
+            if rt >= 0 && type_is_integer(s, rt):
+                ret names[i]
+            end
+        end
+    end
+    ret ""
+end
+
+// The element type behind `get(int)`, TYPE_NONE when there is no such method.
+func derive_seq_elem(s &: Sema, sym: int): int:
+    sid := derive_method_sig(s, sym, "get", 1)
+    if sid == 0:
+        ret TYPE_NONE
+    end
+    g := sig_at(s, sid)
+    if !type_is_integer(s, g.params.get(0)):
+        ret TYPE_NONE
+    end
+    ret g.ret_type
+end
+
+// The same for a keyed container: `iter()` handing back a cursor that answers
+// has_next/key/value/next, which is what std/collections' HashMap offers.
+// Returns the cursor's SymId, 0 when the struct is not one.
+func derive_map_cursor(s &: Sema, sym: int): int:
+    it := derive_method_sig(s, sym, "iter", 0)
+    if it == 0:
+        ret 0
+    end
+    cur := struct_sym_of(s, sig_at(s, it).ret_type)
+    if cur == 0:
+        ret 0
+    end
+    hn := derive_method_sig(s, cur, "has_next", 0)
+    if hn == 0 || ty_at(s, sig_at(s, hn).ret_type).kind != TY_BOOL:
+        ret 0
+    end
+    if derive_method_sig(s, cur, "key", 0) == 0 || derive_method_sig(s, cur, "value", 0) == 0:
+        ret 0
+    end
+    if derive_method_sig(s, cur, "next", 0) == 0:
+        ret 0
+    end
+    ret cur
+end
+
+// ---------------------------------------------------------------- spelling
+
+// The package alias `sym` is reachable under, "" when it is not exported.
+func derive_pkg_qualified(s &: Sema, sym: int): str:
+    name := sym_at(s, sym).name
+    syms := scope_at(s, s.global).symbols
+    repeat syms.len() with i:
+        pk := syms.get(i)
+        pkv := sym_at(s, pk)
+        if pkv.kind == SYM_PACKAGE && pkv.members != 0 && str.Len(pkv.name) > 0:
+            if scope_lookup_local(s, pkv.members, name) == sym:
+                if !sym_at(s, sym).is_pub:
+                    ret ""
+                end
+                ret pkv.name + "." + name
+            end
+        end
+    end
+    ret ""
+end
+
+func derive_struct_spelling(s &: Sema, sym: int): str:
+    if sym == 0:
+        ret ""
+    end
+    name := sym_at(s, sym).name
+    if str.Len(name) == 0:
+        ret ""
+    end
+    if scope_lookup(s, s.global, name) == sym:
+        ret name
+    end
+    ret derive_pkg_qualified(s, sym)
+end
+
+func derive_array_spelling(s &: Sema, t: int): str:
+    mut dims := ""
+    mut cur := t
+    until ty_at(s, cur).kind == TY_ARRAY:
+        dims = dims + "[" + ty_at(s, cur).length + "]"
+        cur = ty_at(s, cur).elem
+    end
+    base := derive_type_spelling(s, cur)
+    if str.Len(base) == 0:
+        ret ""
+    end
+    ret base + dims
+end
+
+// How `t` is written in source, resolvable from the printing package's global
+// scope - "i32", "Vector<str>", "geo.Point", "Point[3]". "" when the type has
+// no such spelling (a struct another package keeps private, a function type,
+// a variant) and the print has to stay an error.
+func derive_type_spelling(s &: Sema, t: int): str:
+    if t < 0:
+        ret ""
+    end
+    v := ty_at(s, t)
+    if derive_is_plain(s, t) || v.kind == TY_STR:
+        ret type_to_string(s, t)
+    end
+    if v.kind == TY_ENUM || v.kind == TY_STRUCT:
+        ret derive_struct_spelling(s, v.decl)
+    end
+    if v.kind == TY_PTR:
+        inner := derive_type_spelling(s, v.pointee)
+        ret str.Len(inner) == 0 ? "" : inner + "*"
+    end
+    if v.kind == TY_ARRAY:
+        ret derive_array_spelling(s, t)
+    end
+    if v.kind == TY_SLICE:
+        e := derive_type_spelling(s, v.elem)
+        ret str.Len(e) == 0 ? "" : e + "[:]"
+    end
+    if v.kind == TY_VEC:
+        e2 := derive_type_spelling(s, v.elem)
+        ret str.Len(e2) == 0 ? "" : "Vector<" + e2 + ">"
+    end
+    if v.kind == TY_MAP:
+        k := derive_type_spelling(s, v.key)
+        val := derive_type_spelling(s, v.elem)
+        if str.Len(k) == 0 || str.Len(val) == 0:
+            ret ""
+        end
+        ret "HashMap<" + k + ", " + val + ">"
+    end
+    ret ""
+end
+
+// ------------------------------------------------------------- one value
+
+// Statements appending the rendering of the Salam expression `expr` (of type
+// `t`) to DV_BUF.
+//
+// Never fails. A member no function can be derived for - a file handle, a
+// closure, a struct another package keeps private - renders as `<its type>`
+// rather than costing the whole struct its printability: seeing the other
+// nine fields of a ten-field struct beats being told to print them by hand.
+func derive_append(s &: Sema, a &: at.Ast, t: int, expr: str, sp: co.SrcSpan): str:
+    if t < 0:
+        ret ""
+    end
+    lead := DV_IND + DV_BUF + " = " + DV_BUF + " + "
+    if derive_is_plain(s, t):
+        ret lead + "(" + expr + ")\n"
+    end
+    k := ty_at(s, t).kind
+    if k == TY_STR:
+        ret lead + "\"\\\"\" + (" + expr + ") + \"\\\"\"\n"
+    end
+    if k == TY_ENUM:
+        ret lead + "((" + expr + ") as i64)\n"
+    end
+    if k == TY_PTR:
+        ret DV_IND + "if (" + expr + ") == null: " + DV_BUF + " = " + DV_BUF + " + \"null\"\n" + DV_IND +
+            "else: " + DV_BUF + " = " + DV_BUF + " + \"<ptr>\" end\n"
+    end
+    fn := derive_stringify(s, a, t, sp)
+    if str.Len(fn) == 0:
+        ret lead + "\"<" + type_to_string(s, t) + ">\"\n"
+    end
+    ret lead + fn + "(" + expr + ")\n"
+end
+
+// ---------------------------------------------------------------- bodies
+
+// What the struct calls itself in the printed text. A generic instance is
+// named `Box_i32` internally; it is shown as the `Box<i32>` the programmer
+// wrote instead.
+func derive_display_name(s &: Sema, sym: int): str:
+    v := sym_at(s, sym)
+    if str.Len(v.generic_base) == 0 || v.generic_args.len() == 0:
+        ret v.name
+    end
+    mut out := v.generic_base + "<"
+    repeat v.generic_args.len() with i:
+        if i > 0:
+            out = out + ", "
+        end
+        out = out + type_to_string(s, v.generic_args.get(i))
+    end
+    ret out + ">"
+end
+
+func derive_body_struct(s &: Sema, a &: at.Ast, t: int, sp: co.SrcSpan): str:
+    sym := ty_at(s, t).decl
+    mut out := DV_IND + "mut " + DV_BUF + " := \"" + derive_display_name(s, sym) + " {\"\n"
+    mut first := true
+    fields := scope_at(s, sym_at(s, sym).members).symbols
+    repeat fields.len() with i:
+        f := fields.get(i)
+        fv := sym_at(s, f)
+        if fv.kind == SYM_FIELD:
+            sep := first ? "" : ", "
+            out = out + DV_IND + DV_BUF + " = " + DV_BUF + " + \"" + sep + fv.name + " = \"\n"
+            out = out + derive_append(s, a, fv.ty, DV_PARAM + "." + fv.name, sp)
+            first = false
+        end
+    end
+    ret out + DV_IND + DV_BUF + " = " + DV_BUF + " + \"}\"\n"
+end
+
+// Vector, fixed array and slice all render as `[a, b, c]`; they differ only
+// in how the count and an element are spelled.
+func derive_body_seq(s &: Sema, a &: at.Ast, elem: int, count: str, item: str, sp: co.SrcSpan): str:
+    mut out := DV_IND + "mut " + DV_BUF + " := \"[\"\n"
+    out = out + DV_IND + "mut _i := 0\n"
+    out = out + DV_IND + "until _i < " + count + ":\n"
+    out = out + DV_IND + DV_IND + "if _i > 0: " + DV_BUF + " = " + DV_BUF + " + \", \" end\n"
+    out = out + DV_IND + derive_append(s, a, elem, item, sp)
+    out = out + DV_IND + DV_IND + "_i = _i + 1\n"
+    out = out + DV_IND + "end\n"
+    ret out + DV_IND + DV_BUF + " = " + DV_BUF + " + \"]\"\n"
+end
+
+func derive_body_map(s &: Sema, a &: at.Ast, key: int, val: int, sp: co.SrcSpan): str:
+    mut out := DV_IND + "mut " + DV_BUF + " := \"{\"\n"
+    out = out + DV_IND + "mut _n := 0\n"
+    out = out + DV_IND + "mut _it := " + DV_PARAM + ".iter()\n"
+    out = out + DV_IND + "until _it.has_next():\n"
+    out = out + DV_IND + DV_IND + "if _n > 0: " + DV_BUF + " = " + DV_BUF + " + \", \" end\n"
+    out = out + DV_IND + derive_append(s, a, key, "_it.key()", sp)
+    out = out + DV_IND + DV_IND + DV_BUF + " = " + DV_BUF + " + \": \"\n"
+    out = out + DV_IND + derive_append(s, a, val, "_it.value()", sp)
+    out = out + DV_IND + DV_IND + "_n = _n + 1\n"
+    out = out + DV_IND + DV_IND + "_it.next()\n"
+    out = out + DV_IND + "end\n"
+    ret out + DV_IND + DV_BUF + " = " + DV_BUF + " + \"}\"\n"
+end
+
+func derive_body_of_struct(s &: Sema, a &: at.Ast, t: int, sp: co.SrcSpan): str:
+    sym := ty_at(s, t).decl
+    if derive_user_to_str(s, sym):
+        ret DV_IND + "mut " + DV_BUF + " := " + DV_PARAM + ".to_str()\n"
+    end
+    cur := derive_map_cursor(s, sym)
+    if cur != 0:
+        k := sig_at(s, derive_method_sig(s, cur, "key", 0)).ret_type
+        v := sig_at(s, derive_method_sig(s, cur, "value", 0)).ret_type
+        ret derive_body_map(s, a, k, v, sp)
+    end
+    count := derive_seq_count(s, sym)
+    elem := derive_seq_elem(s, sym)
+    if str.Len(count) > 0 && elem != TYPE_NONE:
+        ret derive_body_seq(s, a, elem, DV_PARAM + "." + count + "()", DV_PARAM + ".get(_i)", sp)
+    end
+    ret derive_body_struct(s, a, t, sp)
+end
+
+func derive_body_of(s &: Sema, a &: at.Ast, t: int, sp: co.SrcSpan): str:
+    k := ty_at(s, t).kind
+    if k == TY_STRUCT:
+        ret derive_body_of_struct(s, a, t, sp)
+    end
+    if k == TY_VEC:
+        ret derive_body_seq(
+            s, a, ty_at(s, t).elem, DV_PARAM + ".len()", DV_PARAM + ".get(_i)", sp
+        )
+    end
+    if k == TY_ARRAY || k == TY_SLICE:
+        ret derive_body_seq(
+            s, a, ty_at(s, t).elem, "len(" + DV_PARAM + ")", DV_PARAM + "[_i]", sp
+        )
+    end
+    if k == TY_MAP:
+        ret derive_body_map(s, a, ty_at(s, t).key, ty_at(s, t).elem, sp)
+    end
+    ret ""
+end
+
+// The full `func <fname>(_v: T): str: ... end` text for `t`, or "" when the
+// type has no spelling. Nested aggregates are derived on the way through, so
+// this may install further functions before it returns.
+func derive_fn_source(s &: Sema, a &: at.Ast, t: int, fname: str, sp: co.SrcSpan): str:
+    spelling := derive_type_spelling(s, t)
+    if str.Len(spelling) == 0:
+        ret ""
+    end
+    body := derive_body_of(s, a, t, sp)
+    if str.Len(body) == 0:
+        ret ""
+    end
+    ret "func " + fname + "(" + DV_PARAM + ": " + spelling + "): str:\n" + body + DV_IND + "ret " + DV_BUF +
+        "\nend\n"
+end

@@ -38,6 +38,37 @@ static bool tk_is_arith(token_kind_t k)
            k == TK_PERCENT;
 }
 
+/* Whether `a`'s type can genuinely change depending on the cast's target
+ * type (via the `s->expected` hint the AST_CAST case feeds it, or the
+ * equivalent hint sema_check_var_decl feeds a `name := <expr> as Type`
+ * initializer it unwraps into a plain declared-type binding). For these
+ * kinds, `a`'s checked type naturally comes out equal to the cast target
+ * even when the cast is meaningful (e.g. `1 as i64` picks i64 precisely
+ * because of the hint), so an equal-type result there must not be flagged
+ * as a useless cast. Everything else already has a fixed type before the
+ * cast is applied, so casting it to that same type is always useless. */
+bool sema_cast_target_is_context_dependent(const ast_node_t *a, const type_t *target)
+{
+    if (!a) return false;
+    switch (a->kind) {
+    case AST_ARRAY_LIT:
+        /* check_array_lit only consults the expected element type for an
+         * empty literal or a 'dyn' element slot; a non-empty literal of
+         * any other element type infers its shape purely from its
+         * elements, so the cast target never changes the outcome there. */
+        if (a->list.len == 0) return true;
+        return target && target->kind == TY_ARRAY && target->elem &&
+               target->elem->kind == TY_DYN;
+    case AST_STRUCT_LIT:
+    case AST_CALL:
+        return true;
+    case AST_LITERAL:
+        return a->op == TK_INT || a->op == TK_FLOAT;
+    default:
+        return false;
+    }
+}
+
 bool sema_tk_is_bitwise(token_kind_t k)
 {
     return k == TK_AMP || k == TK_PIPE || k == TK_CARET || k == TK_SHL || k == TK_SHR;
@@ -204,7 +235,7 @@ static type_t *check_binary(sema_t *s, ast_node_t *n)
     }
     if (op == TK_POWER) {
         if (!type_is_numeric(l) || !type_is_numeric(r))
-            SERR(s, 21, &n->span, "operator '**' requires numeric operands");
+            SERR(s, 21, &n->span, "operator '^^' requires numeric operands");
         return decorate(s, n, ty(s, TY_F64));
     }
     if (op == TK_AND || op == TK_OR) {
@@ -321,6 +352,43 @@ static type_t *check_ternary(sema_t *s, ast_node_t *n)
     return decorate(s, n, err_ty(s));
 }
 
+/*
+ * Shared by `&f` and by a bare function name read as a value. Both need one
+ * unambiguous, non-generic target: a generic function has no code until it is
+ * instantiated, and an overload set gives no way to say which body was meant.
+ */
+static bool func_addr_target_ok(sema_t *s, symbol_t *sym, ast_node_t *n)
+{
+    if (sym->overloads.len == 0 ||
+        (sym->overloads.len == 1 && ((func_sig_t *)sym->overloads.data[0])->decl &&
+         ((func_sig_t *)sym->overloads.data[0])->decl->typarams.len > 0)) {
+        SERR(s, 73, &n->span, "cannot take the address of generic function '%s'",
+             n->name);
+        return false;
+    }
+    if (sym->overloads.len > 1) {
+        SERR(s, 74, &n->span,
+             "function '%s' is ambiguous as a value (%zu overloads exist)", n->name,
+             sym->overloads.len);
+        return false;
+    }
+    return true;
+}
+
+/*
+ * `n` is a `.Member` access whose object already denotes an enum type
+ * (`sy`) rather than a value of it - either a bare `EnumName` identifier, or
+ * (via the package-qualified branch below) `pkg.EnumName`. Shared so both
+ * shapes resolve identically instead of duplicating the member lookup.
+ */
+static type_t *resolve_enum_member(sema_t *s, ast_node_t *n, symbol_t *sy)
+{
+    decorate(s, n->a, sy->type);
+    symbol_t *m = sy->members ? scope_lookup_local(sy->members, n->name) : NULL;
+    if (!m) SERR(s, 16, &n->span, "enum '%s' has no member '%s'", sy->name, n->name);
+    return decorate(s, n, sy->type);
+}
+
 static type_t *check_member(sema_t *s, ast_node_t *n)
 {
     if (n->a && n->a->kind == AST_IDENTIFIER) {
@@ -344,6 +412,19 @@ static type_t *check_member(sema_t *s, ast_node_t *n)
                      pk->name, n->name);
                 return decorate(s, n, err_ty(s));
             }
+            if (m->kind == SYM_ENUM || m->kind == SYM_STRUCT) {
+                /*
+                 * `pkg.EnumName` or `pkg.StructName` alone: a bare reference
+                 * to the type itself, not a value - the same rule the
+                 * unqualified case enforces (below, and at the SYM_ENUM
+                 * check further down in sema_check_expr's AST_IDENTIFIER
+                 * case). A caller writing `pkg.EnumName.Member` reaches it
+                 * through the branch below instead, which recognizes this
+                 * exact shape one level up before ever landing here.
+                 */
+                SERR(s, 1, &n->span, "type '%s.%s' used as a value", pk->name, n->name);
+                return decorate(s, n, err_ty(s));
+            }
             decorate(s, n->a, pk->type);
             return decorate(s, n, m->type);
         }
@@ -351,14 +432,25 @@ static type_t *check_member(sema_t *s, ast_node_t *n)
 
     if (n->a && n->a->kind == AST_IDENTIFIER) {
         symbol_t *sy = scope_lookup(s->cur, n->a->name);
-        if (sy && sy->kind == SYM_ENUM) {
-            decorate(s, n->a, sy->type);
-            symbol_t *m = sy->members ? scope_lookup_local(sy->members, n->name) : NULL;
-            if (!m)
-                SERR(s, 16, &n->span, "enum '%s' has no member '%s'", sy->name, n->name);
-            return decorate(s, n, sy->type);
+        if (sy && sy->kind == SYM_ENUM) return resolve_enum_member(s, n, sy);
+    }
+
+    /*
+     * `pkg.EnumName.Member`: `n->a` is itself `pkg.EnumName`, an AST_MEMBER
+     * node (the parser has no 3-level lookahead, so this always builds as a
+     * plain left-associative member chain). Recognize that shape here,
+     * before the generic sema_check_expr(s, n->a) fallback below would
+     * otherwise evaluate `pkg.EnumName` as if it were a value and fail.
+     */
+    if (n->a && n->a->kind == AST_MEMBER && n->a->a && n->a->a->kind == AST_IDENTIFIER) {
+        symbol_t *pk = scope_lookup(s->cur, n->a->a->name);
+        if (pk && pk->kind == SYM_PACKAGE) {
+            n->a->name = pkg_member_canon(s, pk, n->a->name, &n->a->span);
+            symbol_t *m = scope_lookup_local(pk->members, n->a->name);
+            if (m && m->kind == SYM_ENUM) return resolve_enum_member(s, n, m);
         }
     }
+
     type_t *objt = sema_check_expr(s, n->a);
     if (type_is_error(objt)) return decorate(s, n, err_ty(s));
     symbol_t *ssym = struct_sym_of(objt);
@@ -377,7 +469,7 @@ static type_t *check_member(sema_t *s, ast_node_t *n)
         SERR(s, 17, &n->span, "method '%s' used as a value (call it)", n->name);
         return decorate(s, n, err_ty(s));
     }
-    if (!f->is_pub && struct_sym_of(s->self_type) != ssym)
+    if (!f->is_pub && struct_sym_of(s->self_type) != ssym && !s->in_derive)
         SERR(s, 17, &n->span, "field '%s' is private in struct '%s' (mark it 'pub')",
              n->name, ssym->name);
     return decorate(s, n, f->type);
@@ -437,6 +529,9 @@ type_t *sema_check_expr(sema_t *s, ast_node_t *n)
         return decorate(s, n, t);
     }
     case AST_IDENTIFIER: {
+        /* The parser already reported why this name could not be read; a
+         * follow-up "unknown identifier '<error>'" would only bury it. */
+        if (ast_name_is_err(n->name)) return decorate(s, n, err_ty(s));
         symbol_t *sym = scope_lookup(s->cur, n->name);
         if (!sym) {
             const char *c = local_canon(s, n->name, &n->span);
@@ -447,16 +542,33 @@ type_t *sema_check_expr(sema_t *s, ast_node_t *n)
         }
         if (!sym) {
             bool is_str;
-            if (salam_builtin_global_const(n->name, n, &is_str))
-                return decorate(s, n, is_str ? ty(s, TY_STR) : ty(s, TY_I32));
+            /* The node has been rewritten into a literal in place, so the
+             * literal arm above types it - a -d constant then gets exactly
+             * the type the same text written in the source would have,
+             * f64 and bool included. */
+            if (salam_builtin_global_const(s->a, n->name, n, &is_str))
+                return sema_check_expr(s, n);
         }
         if (!sym) {
             SERR(s, 1, &n->span, "unknown identifier '%s'", n->name);
             return decorate(s, n, err_ty(s));
         }
-        if (sym->kind == SYM_FUNC || sym->kind == SYM_METHOD) {
-            SERR(s, 1, &n->span, "function '%s' used as a value", n->name);
+        if (sym->kind == SYM_METHOD) {
+            SERR(s, 1, &n->span, "method '%s' used as a value (call it)", n->name);
             return decorate(s, n, err_ty(s));
+        }
+        /*
+         * A free function read as a value decays to its address, typed i64 -
+         * the handler-slot ABI std/net/router and friends take. `&f` is the
+         * other spelling and still yields a void*, for the C-callback casts
+         * in std/webview.
+         */
+        if (sym->kind == SYM_FUNC) {
+            if (!func_addr_target_ok(s, sym, n)) return decorate(s, n, err_ty(s));
+            sym->used = true;
+            dce_mark_root(s->pkg, sym->name);
+            n->func_value = true;
+            return decorate(s, n, ty(s, TY_I64));
         }
         if (sym->kind == SYM_STRUCT || sym->kind == SYM_ENUM) {
             SERR(s, 1, &n->span, "type '%s' used as a value", n->name);
@@ -472,6 +584,7 @@ type_t *sema_check_expr(sema_t *s, ast_node_t *n)
         return decorate(s, n, sym->type);
     }
     case AST_FUNC_ADDR: {
+        if (ast_name_is_err(n->name)) return decorate(s, n, err_ty(s));
         symbol_t *sym = scope_lookup(s->cur, n->name);
         if (!sym) {
             const char *c = local_canon(s, n->name, &n->span);
@@ -494,19 +607,7 @@ type_t *sema_check_expr(sema_t *s, ast_node_t *n)
                  n->name);
             return decorate(s, n, err_ty(s));
         }
-        if (sym->overloads.len == 0 ||
-            (sym->overloads.len == 1 && ((func_sig_t *)sym->overloads.data[0])->decl &&
-             ((func_sig_t *)sym->overloads.data[0])->decl->typarams.len > 0)) {
-            SERR(s, 73, &n->span, "cannot take the address of generic function '%s'",
-                 n->name);
-            return decorate(s, n, err_ty(s));
-        }
-        if (sym->overloads.len > 1) {
-            SERR(s, 74, &n->span,
-                 "function '%s' is ambiguous for '&' (%zu overloads exist)", n->name,
-                 sym->overloads.len);
-            return decorate(s, n, err_ty(s));
-        }
+        if (!func_addr_target_ok(s, sym, n)) return decorate(s, n, err_ty(s));
         sym->used = true;
         dce_mark_root(s->pkg, sym->name);
         return decorate(s, n, type_ptr(s->tc, ty(s, TY_VOID)));
@@ -602,7 +703,14 @@ type_t *sema_check_expr(sema_t *s, ast_node_t *n)
         type_t *o = sema_check_expr(s, n->a);
         s->expected = NULL;
         if (!target) return decorate(s, n, o);
-        if (type_assignable(target, o)) return decorate(s, n, target);
+        if (type_assignable(target, o)) {
+            if (!type_is_error(o) && !s->in_derive && type_equiv(target, o) &&
+                !sema_cast_target_is_context_dependent(n->a, target))
+                SERR(s, 93, &n->span,
+                     "useless cast: this expression already has type '%s'",
+                     type_to_string(s->tc, target));
+            return decorate(s, n, target);
+        }
         if (!type_castable(target, o))
             SERR(s, 23, &n->span, "cannot cast '%s' to '%s'", type_to_string(s->tc, o),
                  type_to_string(s->tc, target));

@@ -104,7 +104,7 @@ end
 
 // ll_to_ptr
 func to_ptr(v &: Lv, s &: sm.Sema, a &: at.Ast, val: Llv): str:
-    if is_ptr_ts(val.ts) || is_str(val.ts) || str.Equals(val.ts, "null"):
+    if is_ptr_ts(val.ts) || is_str(s, val.ts) || str.Equals(val.ts, "null"):
         ret val.ref
     end
     r := new_tmp(v)
@@ -116,7 +116,7 @@ end
 func str_operand(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): str:
     node := at.Get(a, n)
     ts := node.type_str
-    if str.Len(ts) > 0 && is_str(ts):
+    if str.Len(ts) > 0 && is_str(s, ts):
         ret lv_expr(v, s, a, n).ref
     end
     val := lv_expr(v, s, a, n)
@@ -163,8 +163,8 @@ func binary_string(
     node := at.Get(a, n)
     an := at.Get(a, node.a)
     bn := at.Get(a, node.b)
-    as2 := str.Len(an.type_str) > 0 && is_str(an.type_str)
-    bs2 := str.Len(bn.type_str) > 0 && is_str(bn.type_str)
+    as2 := str.Len(an.type_str) > 0 && is_str(s, an.type_str)
+    bs2 := str.Len(bn.type_str) > 0 && is_str(s, bn.type_str)
     if op == tok.TK_PLUS && (as2 || bs2):
         l := str_operand(v, s, a, node.a)
         r2 := str_operand(v, s, a, node.b)
@@ -280,7 +280,7 @@ func pick_arity(s &: sm.Sema, symid: int, want: int): int:
     sy := sm.SymAt(s, symid)
     mut i := 0
     until i < sy.overloads.len():
-        sigid := sy.overloads.get(i)[0]
+        sigid := sy.overloads.get(i)
         if sm.SigAt(s, sigid).params.len() == want:
             ret sigid
         end
@@ -318,7 +318,7 @@ func op_call(
     mut argsb := "ptr " + recvref
     if rhs != 0:
         sg := sm.SigAt(s, sig)
-        mut pts := sg.params.len() > 0 ? sm.ToString(s, sg.params.get(0)[0]) : ""
+        mut pts := sg.params.len() > 0 ? sm.ToString(s, sg.params.get(0)) : ""
         rv := lv_expr(v, s, a, rhs)
         if str.Len(pts) == 0:
             pts = rv.ts
@@ -367,8 +367,8 @@ func lv_index_set(v &: Lv, s &: sm.Sema, a &: at.Ast, idx: int, value: int): boo
     an := at.Get(a, idxn.a)
     recv := is_ptr_ts(an.type_str) ? lv_expr(v, s, a, idxn.a).ref : lv_addr_of(v, s, a, idxn.a).ptr
     sg := sm.SigAt(s, sig)
-    p0 := sm.ToString(s, sg.params.get(0)[0])
-    p1 := sm.ToString(s, sg.params.get(1)[0])
+    p0 := sm.ToString(s, sg.params.get(0))
+    p1 := sm.ToString(s, sg.params.get(1))
     iv := conv(v, s, a, lv_expr(v, s, a, idxn.b), p0)
     vv := conv(v, s, a, lv_expr(v, s, a, value), p1)
     fname := mangle(v, s, sname2, "operator_index_set", sig)
@@ -536,7 +536,7 @@ func lv_incdec(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     addr := lv_addr_of(v, s, a, tgt)
     ts := addr.ts
     oldv := new_tmp(v)
-    emit(v, oldv + " = load " + ty_of(v, s, a, ts) + ", ptr " + addr.ptr)
+    emit(v, oldv + " = load " + ty_of(v, s, a, ts) + ", ptr " + addr.ptr + addr.tbaa)
     flt := is_float(ts)
     step := flt ? "1.0" : "1"
     ik := node.op == tok.TK_PLUS_PLUS ? tok.TK_PLUS : tok.TK_MINUS
@@ -544,7 +544,7 @@ func lv_incdec(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     newv := new_tmp(v)
     nw2 := nowrap_flag(v, ik, flt, is_signed_ts(ts))
     emit(v, newv + " = " + op2 + nw2 + " " + ty_of(v, s, a, ts) + " " + oldv + ", " + step)
-    emit(v, "store " + ty_of(v, s, a, ts) + " " + newv + ", ptr " + addr.ptr)
+    emit(v, "store " + ty_of(v, s, a, ts) + " " + newv + ", ptr " + addr.ptr + addr.tbaa)
     ret make_llv(node.is_prefix ? newv : oldv, ts)
 end
 
@@ -565,7 +565,7 @@ func lv_lower_print(
         mut all_lit := true
         mut i := 0
         until i < segs.len() && all_lit:
-            if segs.get(i)[0].kind != cg.PF_LIT:
+            if segs.get(i).kind != cg.PF_LIT:
                 all_lit = false
             end
             i += 1
@@ -574,7 +574,7 @@ func lv_lower_print(
             mut raw := co.SbNew()
             mut j := 0
             until j < segs.len():
-                co.SbPuts(raw, segs.get(j)[0].text)
+                co.SbPuts(raw, segs.get(j).text)
                 j += 1
             end
             rawlen := co.SbLen(raw)
@@ -594,7 +594,7 @@ func lv_lower_print(
     mut argsb := co.SbNew()
     mut k := 0
     until k < segs.len():
-        sg := segs.get(k)[0]
+        sg := segs.get(k)
         if sg.kind == cg.PF_LIT:
             tn := str.Len(sg.text)
             mut ti := 0

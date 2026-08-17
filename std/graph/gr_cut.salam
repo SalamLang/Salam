@@ -1,0 +1,426 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package graph
+
+// Global cuts, connectivity numbers, and matchings.
+//
+// The four are one family of results. Menger's theorem says the number of
+// edge-disjoint s-t paths equals the size of the smallest s-t edge cut, and
+// the vertex version says the same for internally disjoint paths and vertex
+// cuts, which is why both connectivity numbers here are computed as maximum
+// flows. Konig's theorem says that in a bipartite graph the largest matching
+// equals the smallest vertex cover, which is why the cover falls out of the
+// matching with one alternating search.
+//
+//   GlobalMinCut         Stoer-Wagner, undirected, weighted     O(n^3)
+//   EdgeConnectivity     smallest number of edges to disconnect
+//   VertexConnectivity   smallest number of nodes to disconnect
+//   BipartiteMatching    Kuhn's augmenting paths                O(n m)
+
+func _sw_matrix(g &: Graph): Matrix:
+    mut w := NewMatrix(g.n, g.n)
+    repeat g.size() with e:
+        u := g.edge_from(e)
+        v := g.edge_to(e)
+        if u != v:
+            w.add_at(u, v, g.edge_weight(e))
+            w.add_at(v, u, g.edge_weight(e))
+        end
+    end
+    ret w
+end
+
+// One minimum cut phase: grow a set A by always adding the node most tightly
+// connected to it. The last node added is separated from the rest by exactly
+// the weight it accumulated, giving one candidate cut, and it is then merged
+// into the node added before it.
+func _sw_phase(w &: Matrix, active &: Vector<int>, wsum &: Vector<f64>, added &: Vector<bool>): f64:
+    k := active.len()
+    FillBool(added, w.rows, false)
+    FillFloat(wsum, w.rows, 0.0)
+    mut prev := GRAPH_NONE
+    mut last := GRAPH_NONE
+    repeat k:
+        sel := _sw_select(active, wsum, added)
+        added.set(sel, true)
+        prev = last
+        last = sel
+        _sw_absorb(w, active, wsum, added, sel)
+    end
+    cut := wsum.get(last)
+    _sw_merge(w, active, prev, last)
+    ret cut
+end
+
+func _sw_select(active: Vector<int>, wsum: Vector<f64>, added: Vector<bool>): int:
+    mut best := GRAPH_NONE
+    repeat active.len() with i:
+        v := active.get(i)
+        if added.get(v) == false:
+            if best == GRAPH_NONE: best = v
+            else wsum.get(v) > wsum.get(best): best = v
+            end
+        end
+    end
+    ret best
+end
+
+func _sw_absorb(w &: Matrix, active: Vector<int>, wsum &: Vector<f64>, added: Vector<bool>, sel: int):
+    repeat active.len() with i:
+        v := active.get(i)
+        if added.get(v) == false: wsum.set(v, wsum.get(v) + w.at(sel, v)) end
+    end
+end
+
+func _sw_merge(w &: Matrix, active &: Vector<int>, prev: int, last: int):
+    if prev == GRAPH_NONE: ret end
+    repeat active.len() with i:
+        v := active.get(i)
+        if v != last:
+            if v != prev:
+                w.set(prev, v, w.at(prev, v) + w.at(last, v))
+                w.set(v, prev, w.at(prev, v))
+            end
+        end
+    end
+    mut keep := Vector {} as Vector<int>
+    repeat active.len() with i:
+        v := active.get(i)
+        if v != last: keep.push(v) end
+    end
+    active.clear()
+    repeat keep.len() with i: active.push(keep.get(i)) end
+    defer keep.free()
+end
+
+// The split network for vertex connectivity: node v becomes v_in = v and
+// v_out = v + n joined by an arc of capacity 1, so a unit of flow through v
+// costs the one arc that represents v itself. Edges get infinite capacity,
+// which forces every cut to consist of node arcs, i.e. of nodes.
+func _split_net(g &: Graph): FlowNet:
+    n := g.n
+    mut f := NewFlowNet(2 * n)
+    repeat n with v: f.add_arc(v, v + n, 1.0) end
+    repeat g.size() with e:
+        u := g.edge_from(e)
+        v := g.edge_to(e)
+        f.add_arc(u + n, v, GRAPH_INF)
+        if g.directed == false: f.add_arc(v + n, u, GRAPH_INF) end
+    end
+    ret f
+end
+
+func _unit_net(g &: Graph): FlowNet:
+    mut f := NewFlowNet(g.n)
+    repeat g.size() with e:
+        u := g.edge_from(e)
+        v := g.edge_to(e)
+        if g.directed: f.add_arc(u, v, 1.0)
+        else: f.add_edge(u, v, 1.0)
+        end
+    end
+    ret f
+end
+
+// Kuhn's augmenting path search. `seen` guards the right-hand nodes so each
+// is tried once per augmentation; finding a free right node, or one whose
+// partner can be rematched, flips the whole alternating path at once.
+func _kuhn_try(g &: Graph, u: int, seen &: Vector<bool>, mate &: Vector<int>): bool:
+    mut k := g.adj_start(u)
+    stop := g.adj_stop(u)
+    until k < stop:
+        v := g.adj_node(k)
+        if seen.get(v) == false:
+            seen.set(v, true)
+            if _kuhn_take(g, u, v, seen, mate): ret true end
+        end
+        k += 1
+    end
+    ret false
+end
+
+func _kuhn_take(g &: Graph, u: int, v: int, seen &: Vector<bool>, mate &: Vector<int>): bool:
+    w := mate.get(v)
+    if w == GRAPH_NONE:
+        mate.set(v, u)
+        mate.set(u, v)
+        ret true
+    end
+    if _kuhn_try(g, w, seen, mate):
+        mate.set(v, u)
+        mate.set(u, v)
+        ret true
+    end
+    ret false
+end
+
+func _matching_run(g &: Graph, color: Vector<int>, mate &: Vector<int>): int:
+    FillInt(mate, g.n, GRAPH_NONE)
+    mut seen := Vector {} as Vector<bool>
+    defer seen.free()
+    mut count := 0
+    repeat g.n with u:
+        if _needs_match(color, mate, u):
+            FillBool(seen, g.n, false)
+            if _kuhn_try(g, u, seen, mate): count += 1 end
+        end
+    end
+    ret count
+end
+
+func _needs_match(color: Vector<int>, mate: Vector<int>, u: int): bool:
+    if color.get(u) != 0: ret false end
+    ret mate.get(u) == GRAPH_NONE
+end
+
+// The alternating reachability set Konig's theorem needs: everything you can
+// get to from an unmatched left node by alternating unmatched and matched
+// edges.
+func _alternating_reach(g &: Graph, color: Vector<int>, mate: Vector<int>, seen &: Vector<bool>):
+    FillBool(seen, g.n, false)
+    mut q := Vector {} as Vector<int>
+    defer q.free()
+    repeat g.n with u:
+        if color.get(u) == 0:
+            if mate.get(u) == GRAPH_NONE:
+                seen.set(u, true)
+                q.push(u)
+            end
+        end
+    end
+    mut head := 0
+    until head < q.len():
+        u := q.get(head)
+        head += 1
+        _alternating_step(g, color, mate, seen, q, u)
+    end
+end
+
+func _alternating_step(g &: Graph, color: Vector<int>, mate: Vector<int>, seen &: Vector<bool>, q &: Vector<int>, u: int):
+    mut k := g.adj_start(u)
+    stop := g.adj_stop(u)
+    until k < stop:
+        v := g.adj_node(k)
+        ok := color.get(u) == 0
+        matched := mate.get(u) == v
+        if ok != matched:
+            if seen.get(v) == false:
+                seen.set(v, true)
+                q.push(v)
+            end
+        end
+        k += 1
+    end
+end
+
+func _cover_from(g &: Graph, color: Vector<int>, seen: Vector<bool>, cover &: Vector<bool>): int:
+    mut count := 0
+    repeat g.n with u:
+        left := color.get(u) == 0
+        mut take := seen.get(u)
+        if left: take = seen.get(u) == false end
+        if take:
+            if g.degree(u) > 0:
+                cover.set(u, true)
+                count += 1
+            end
+        end
+    end
+    ret count
+end
+
+func _kappa_row(s &: Graph, f &: FlowNet, a: int, best &: int):
+    repeat s.n with b:
+        if a != b:
+            if s.has_edge(a, b) == false:
+                f.reset()
+                v := MaxFlow(f, a + s.n, b)
+                if v < (best as f64): best = v as int end
+            end
+        end
+    end
+end
+
+func _directed_edge_connectivity(g &: Graph): int:
+    mut f := _unit_net(g)
+    mut best := GRAPH_INF
+    repeat g.n with t:
+        if t != 0:
+            f.reset()
+            a := MaxFlow(f, 0, t)
+            if a < best: best = a end
+            f.reset()
+            b := MaxFlow(f, t, 0)
+            if b < best: best = b end
+        end
+    end
+    defer f.free()
+    if best >= GRAPH_INF: ret 0 end
+    ret (best + 0.5) as int
+end
+
+// Stoer-Wagner: the minimum weight of a cut separating the graph into two
+// non-empty sides, over all such cuts. No source or sink, no flow: n-1
+// minimum cut phases, each merging two nodes, and the answer is the smallest
+// phase cut seen. Returns 0 for a disconnected graph, which is correct.
+@en "GlobalMinCut"
+@fa "کمینه برش سراسری"
+@ar "أدنى قطع شامل"
+pub func GlobalMinCut(g &: Graph): f64:
+    if g.n < 2: ret 0.0 end
+    mut w := _sw_matrix(g)
+    mut active := Vector {} as Vector<int>
+    defer active.free()
+    mut wsum := Vector {} as Vector<f64>
+    defer wsum.free()
+    mut added := Vector {} as Vector<bool>
+    defer added.free()
+    Iota(active, g.n)
+    mut best := GRAPH_INF
+    until active.len() > 1:
+        cut := _sw_phase(w, active, wsum, added)
+        if cut < best: best = cut end
+    end
+    defer w.free()
+    ret best
+end
+
+// The smallest number of edges whose removal disconnects the graph, i.e. the
+// edge connectivity lambda(G). By Menger this is also the largest number of
+// edge-disjoint paths between the closest-connected pair of nodes.
+@en "EdgeConnectivity"
+@fa "همبندی یالی"
+@ar "اتصال الأضلاع"
+pub func EdgeConnectivity(g &: Graph): int:
+    if g.n < 2: ret 0 end
+    if g.directed: ret _directed_edge_connectivity(g) end
+    mut u := Clone(g)
+    repeat u.size() with e: u.set_weight(e, 1.0) end
+    v := GlobalMinCut(u)
+    defer u.free()
+    if v >= GRAPH_INF: ret 0 end
+    ret (v + 0.5) as int
+end
+
+// The smallest number of nodes whose removal disconnects the graph, the
+// vertex connectivity kappa(G). A complete graph cannot be disconnected at
+// all, so by convention it is n-1.
+@en "VertexConnectivity"
+@fa "همبندی رأسی"
+@ar "اتصال الرؤوس"
+pub func VertexConnectivity(g &: Graph): int:
+    if g.n < 2: ret 0 end
+    if IsConnected(g) == false: ret 0 end
+    mut s := Simplify(g)
+    mut best := s.n - 1
+    mut f := _split_net(s)
+    repeat s.n with a:
+        _kappa_row(s, f, a, best)
+    end
+    defer f.free()
+    defer s.free()
+    ret best
+end
+
+// Maximum matching in a bipartite graph, by Kuhn's algorithm. `mate` gets the
+// partner of every node (GRAPH_NONE when unmatched) in both directions.
+// GRAPH_NONE comes back as the count when the graph is not bipartite, since
+// maximum matching in a general graph needs blossoms and is not this
+// algorithm.
+@en "BipartiteMatching"
+@fa "جورسازی دوبخشی"
+@ar "تزاوج ثنائي"
+pub func BipartiteMatching(g &: Graph, mate &: Vector<int>): int:
+    mut color := Vector {} as Vector<int>
+    defer color.free()
+    if IsBipartite(g, color) == false: ret GRAPH_NONE end
+    repeat g.n with u:
+        if color.get(u) == GRAPH_NONE: color.set(u, 0) end
+    end
+    if g.directed == false: ret _matching_run(g, color, mate) end
+    mut ug := ToUndirected(g)
+    c := _matching_run(ug, color, mate)
+    defer ug.free()
+    ret c
+end
+
+// A greedy maximal matching: no edge can be added to it, though it may be
+// smaller than the maximum. Works on any graph and is always at least half
+// the maximum, which is why it is the standard cheap approximation.
+@en "MaximalMatching"
+@fa "جورسازی بیشینه‌ای"
+@ar "تزاوج أعظمي"
+pub func MaximalMatching(g &: Graph, mate &: Vector<int>): int:
+    FillInt(mate, g.n, GRAPH_NONE)
+    mut count := 0
+    repeat g.size() with e:
+        u := g.edge_from(e)
+        v := g.edge_to(e)
+        if u != v:
+            if mate.get(u) == GRAPH_NONE:
+                if mate.get(v) == GRAPH_NONE:
+                    mate.set(u, v)
+                    mate.set(v, u)
+                    count += 1
+                end
+            end
+        end
+    end
+    ret count
+end
+
+// Konig's theorem in code: on a bipartite graph the minimum vertex cover is
+// the left nodes NOT reachable by an alternating path from an unmatched left
+// node, plus the right nodes that ARE. Its size equals the maximum matching.
+@en "MinimumVertexCover"
+@fa "کمینه پوشش رأسی"
+@ar "أدنى غطاء رؤوس"
+pub func MinimumVertexCover(g &: Graph, cover &: Vector<bool>): int:
+    mut color := Vector {} as Vector<int>
+    defer color.free()
+    FillBool(cover, g.n, false)
+    if IsBipartite(g, color) == false: ret GRAPH_NONE end
+    repeat g.n with u:
+        if color.get(u) == GRAPH_NONE: color.set(u, 0) end
+    end
+    mut mate := Vector {} as Vector<int>
+    defer mate.free()
+    _matching_run(g, color, mate)
+    mut seen := Vector {} as Vector<bool>
+    defer seen.free()
+    _alternating_reach(g, color, mate, seen)
+    ret _cover_from(g, color, seen, cover)
+end
+
+// The complement of a minimum vertex cover, which on a bipartite graph is a
+// maximum independent set (Konig again, via Gallai's identity).
+@en "MaximumIndependentSetBipartite"
+@fa "بیشینه مجموعه مستقل دوبخشی"
+@ar "أكبر مجموعة مستقلة ثنائية"
+pub func MaximumIndependentSetBipartite(g &: Graph, pick &: Vector<bool>): int:
+    mut cover := Vector {} as Vector<bool>
+    defer cover.free()
+    c := MinimumVertexCover(g, cover)
+    if c == GRAPH_NONE: ret GRAPH_NONE end
+    FillBool(pick, g.n, false)
+    mut count := 0
+    repeat g.n with u:
+        if cover.get(u) == false:
+            pick.set(u, true)
+            count += 1
+        end
+    end
+    ret count
+end

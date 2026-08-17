@@ -111,8 +111,8 @@ pub func FuncParamsOf(ts: str): Vector<str>:
 end
 
 // ll_zero
-pub func ZeroOf(ts: str): str:
-    ret zero_of(ts)
+pub func ZeroOf(s &: sm.Sema, ts: str): str:
+    ret zero_of(s, ts)
 end
 
 // ll_is_int / ll_is_signed
@@ -230,7 +230,7 @@ pub func LocalFind(v &: Lv, name: str): int:
 end
 
 pub func LocalAt(v &: Lv, i: int): LvVar:
-    ret v.locals.get(i)[0]
+    ret v.locals.get(i)
 end
 
 pub func GlobalFind(v &: Lv, name: str): int:
@@ -238,7 +238,7 @@ pub func GlobalFind(v &: Lv, name: str): int:
 end
 
 pub func GlobalAt(v &: Lv, i: int): LvVar:
-    ret v.globals.get(i)[0]
+    ret v.globals.get(i)
 end
 
 // ll_box_variant / ll_unwrap_variant over (ref, ts) text.
@@ -438,6 +438,12 @@ pub func RunOpts(
     out_g(v, "\n")
     emit_prologue(v)
     emit_struct_types(v, s, a, program)
+    // Before the rt-essentials block: ensure_fn on salam_panic emits a
+    // DISubprogram, and without the DIFile/DICompileUnit nodes it references
+    // the module prints "(null)" scopes that LLVM rejects.
+    if v.debug:
+        debug_init(v, src_path)
+    end
     // rt essentials from the core package (salam_panic / salam_idx)
     mut core_pk := 0
     mut p := 0
@@ -458,7 +464,7 @@ pub func RunOpts(
             if fs != 0:
                 fsym := sm.SymAt(s, fs)
                 if fsym.kind == sm.SYM_FUNC && fsym.overloads.len() > 0:
-                    sigid := fsym.overloads.get(0)[0]
+                    sigid := fsym.overloads.get(0)
                     d := sm.SigAt(s, sigid).decl
                     mut skip := false
                     if d != 0:
@@ -476,8 +482,31 @@ pub func RunOpts(
     end
     emit_externs(v, s, a)
     emit_globals(v, s, a, program)
-    if v.debug:
-        debug_init(v, src_path)
+    // A global whose initialiser is not a constant becomes a store replayed at
+    // the top of the entry function, and a package's only get onto that list
+    // once the package has been touched. Touching is otherwise lazy - it
+    // happens while lowering the first call into the package, which is
+    // *inside* the entry function's body, by which point the store list has
+    // already been emitted. The initialiser was silently dropped, so
+    // `mut g := pkg.New()` in an imported package stayed zero. Packages that
+    // declare one are pulled in up front; the rest stay lazy.
+    repeat sm.PackageCount(s) with pi:
+        pkid := sm.PackageAt(s, pi)
+        pky := sm.SymAt(s, pkid)
+        if pky.decl != 0:
+            repeat at.ChildCount(a, pky.decl) with pj:
+                gd := at.Child(a, pky.decl, pj)
+                gn := at.Get(a, gd)
+                if gn.kind != at.AST_VAR_DECL && gn.kind != at.AST_CONST_DECL:
+                    continue
+                end
+                if gn.a == 0 || at.KindOf(a, gn.a) == at.AST_LITERAL:
+                    continue
+                end
+                touch_pkg(v, s, a, pkid)
+                break
+            end
+        end
     end
     emit_impls(v, s, a)
     lg.Log(
@@ -488,9 +517,7 @@ pub func RunOpts(
         toplevel(v, s, a, at.Child(a, program, i))
         i += 1
     end
-    if v.debug:
-        debug_finalize(v)
-    end
+    debug_finalize(v)
     if co.SbLen(v.bhg) > (0 as i64):
         out_g(v, "; on-demand runtime helpers\n")
         out_g(v, co.SbCstr(v.bhg))

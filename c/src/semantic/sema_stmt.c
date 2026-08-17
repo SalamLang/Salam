@@ -123,21 +123,49 @@ void sema_check_pure_write(sema_t *s, ast_node_t *target, const src_span_t *span
              fn->name, root->name);
 }
 
+/*
+ * E059 for a name the loop itself introduced. A loop binding exists to be
+ * read; when nothing reads it the honest fix is to drop it (`repeat 20000:`
+ * rather than `repeat 20000 with _i:`), so the '_' prefix that excuses an
+ * ordinary local does not apply here. The one exception is the bare name
+ * "_": `each (key, value)` has no form that omits the key, so "_" is the
+ * discard that lets a map be iterated for its values alone.
+ *
+ * Returns true when the symbol was a loop binding, reported or not, so the
+ * caller can skip the ordinary rules for it.
+ */
+bool sema_check_unused_loop_bind(sema_t *s, symbol_t *v)
+{
+    if (!v->loop_bind || v->kind != SYM_VAR || !v->decl || !v->name) return false;
+    if (v->used || strcmp(v->name, "_") == 0) return true;
+    SERR(s, 59, &v->decl->span,
+         "unused loop variable '%s': drop the binding, or name it '_' where the "
+         "loop needs one",
+         v->name);
+    return true;
+}
+
 static void define_local(sema_t *s, ast_node_t *decl, sym_kind_t kind, type_t *t)
 {
     symbol_t *sym = symbol_new(s->a, kind, decl->name);
     sym->type = t;
     sym->is_mut = decl->is_mut;
+    sym->loop_bind = decl->loop_bind;
     sym->decl = decl;
+    sema_check_shadows_func(s, decl->name, &decl->span);
     if (scope_define(s->a, s->cur, sym))
         SERR(s, 1, &decl->span, "redefinition of '%s'", decl->name);
 }
 
 type_t *sema_check_var_decl(sema_t *s, ast_node_t *n)
 {
+    src_span_t cast_span;
+    bool cast_sugar = false;
     if (!n->type && n->a && n->a->kind == AST_CAST && n->a->type &&
         (n->a->a->kind == AST_ARRAY_LIT || n->a->a->kind == AST_STRUCT_LIT ||
          n->a->a->kind == AST_LITERAL)) {
+        cast_sugar = true;
+        cast_span = n->a->span;
         n->type = n->a->type;
         n->a = n->a->a;
     }
@@ -176,6 +204,11 @@ type_t *sema_check_var_decl(sema_t *s, ast_node_t *n)
          n->a->kind == AST_MATCH))
         s->expected = declared;
     type_t *initt = n->a ? sema_check_expr(s, n->a) : NULL;
+    if (cast_sugar && declared && initt && !type_is_error(initt) && !s->in_derive &&
+        type_equiv(declared, initt) &&
+        !sema_cast_target_is_context_dependent(n->a, declared))
+        SERR(s, 93, &cast_span, "useless cast: this expression already has type '%s'",
+             type_to_string(s->tc, declared));
     type_t *t;
     if (declared && initt) {
         if (!type_assignable(declared, initt))
@@ -230,6 +263,18 @@ static ast_node_t *ea_decl(sema_t *s, const char *name, ast_node_t *init, bool i
     n->name = name;
     n->a = init;
     n->is_mut = is_mut;
+    return n;
+}
+
+/* The same, for the two bindings the user actually wrote after `each`: they
+ * carry loop_bind so the unused check holds them to the loop rule rather
+ * than the ordinary-local one. The `__ea`/`__ei` decls around them are the
+ * lowering's own and stay unmarked. */
+static ast_node_t *ea_bind(sema_t *s, const char *name, ast_node_t *init,
+                           const src_span_t *sp)
+{
+    ast_node_t *n = ea_decl(s, name, init, false, sp);
+    n->loop_bind = true;
     return n;
 }
 
@@ -352,11 +397,10 @@ static void check_each(sema_t *s, ast_node_t *n)
             {
                 ast_node_t *blk = ea_node(s, AST_BLOCK, &sp);
                 ast_add(s->a, blk,
-                        ea_decl(s, keyname, ea_mcall(s, itn, "key", NULL, &sp), false,
+                        ea_bind(s, keyname, ea_mcall(s, itn, "key", NULL, &sp),
                                 n->c ? &n->c->span : &sp));
                 ast_add(s->a, blk,
-                        ea_decl(s, valname, ea_mcall(s, itn, "value", NULL, &sp), false,
-                                &sp));
+                        ea_bind(s, valname, ea_mcall(s, itn, "value", NULL, &sp), &sp));
                 {
                     size_t i = 0;
                     for (; i < body->list.len; i++)
@@ -395,18 +439,16 @@ static void check_each(sema_t *s, ast_node_t *n)
                 ast_node_t *blk = ea_node(s, AST_BLOCK, &sp);
                 if (keyname)
                     ast_add(s->a, blk,
-                            ea_decl(s, keyname, ea_ident(s, idx, &sp), false,
+                            ea_bind(s, keyname, ea_ident(s, idx, &sp),
                                     n->c ? &n->c->span : &sp));
                 {
                     ast_node_t *elem;
                     if (vec_like)
-                        elem = ea_index(
-                            s, ea_mcall(s, seq, "get", ea_ident(s, idx, &sp), &sp),
-                            ea_int(s, 0, &sp), &sp);
+                        elem = ea_mcall(s, seq, "get", ea_ident(s, idx, &sp), &sp);
                     else
                         elem = ea_index(s, ea_ident(s, seq, &sp), ea_ident(s, idx, &sp),
                                         &sp);
-                    ast_add(s->a, blk, ea_decl(s, valname, elem, false, &sp));
+                    ast_add(s->a, blk, ea_bind(s, valname, elem, &sp));
                 }
                 {
                     size_t i = 0;
@@ -445,6 +487,7 @@ static void check_stmt(sema_t *s, ast_node_t *n)
             sym->has_ival = true;
             sym->ival = (long long)n->a->value.as.i;
         }
+        sema_check_shadows_func(s, n->name, &n->span);
         if (scope_define(s->a, s->cur, sym))
             SERR(s, 1, &n->span, "redefinition of '%s'", n->name);
         break;
@@ -523,7 +566,7 @@ static void check_stmt(sema_t *s, ast_node_t *n)
             if (base_op == TK_POWER) {
                 type_t *pow_res = type_prim(s->tc, TY_F64);
                 if (!type_is_numeric(tt) || !type_is_numeric(vt)) {
-                    SERR(s, 21, &n->span, "operator '**' requires numeric operands");
+                    SERR(s, 21, &n->span, "operator '^^' requires numeric operands");
                     op_valid = false;
                 } else if (!type_assignable(tt, pow_res)) {
                     SERR(s, 2, &n->span, "cannot assign '%s' to '%s'",
@@ -659,18 +702,24 @@ static void check_stmt(sema_t *s, ast_node_t *n)
         type_t *ivty = ty(s, iv_need64 ? TY_I64 : TY_I32);
         sema_decorate(s, n, ivty);
         scope_t *saved = s->cur;
+        symbol_t *iv = NULL;
         if (n->name) {
             scope_t *sc = scope_new(s->a, SCOPE_BLOCK, s->cur);
-            symbol_t *iv = symbol_new(s->a, SYM_VAR, n->name);
+            iv = symbol_new(s->a, SYM_VAR, n->name);
             iv->type = ivty;
             iv->is_mut = false;
             iv->decl = n;
+            iv->loop_bind = true;
             scope_define(s->a, sc, iv);
             s->cur = sc;
         }
         s->loop_depth++;
         check_stmt(s, n->b);
         s->loop_depth--;
+        /* The index lives in a scope of its own, which sema_check_block never
+         * walks - so the unused check has to happen here, once the body has
+         * had its chance to read it. */
+        if (iv && !s->relax_unused) sema_check_unused_loop_bind(s, iv);
         s->cur = saved;
         break;
     }
@@ -890,7 +939,12 @@ void sema_check_block(sema_t *s, ast_node_t *block)
         size_t i = 0;
         for (; i < sc->symbols.len; i++) {
             symbol_t *v = (symbol_t *)sc->symbols.data[i];
-            if (v->kind == SYM_VAR && !v->used && v->decl && v->name && v->name[0] != '_')
+            if (ast_name_is_err(v->name))
+                ; /* name unreadable, already reported by the parser */
+            else if (sema_check_unused_loop_bind(s, v))
+                ; /* reported (or excused) as a loop binding */
+            else if (v->kind == SYM_VAR && !v->used && v->decl && v->name &&
+                     v->name[0] != '_')
                 SERR(s, 59, &v->decl->span,
                      "unused variable '%s' (prefix with '_' if intentional)", v->name);
             else if (v->kind == SYM_VAR && v->is_mut && !v->mutated && v->decl &&

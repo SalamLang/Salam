@@ -46,9 +46,21 @@ endif
 CPPFLAGS ?= -Isrc
 CPPFLAGS += -DSALAM_STDLIB_PREFIX='"$(DATADIR)"'
 
+# The repo's VERSION file is the single source of truth for the release
+# number: build_info.h no longer carries a copy to bump alongside it, so a
+# build that cannot read the file reports "0.0.0-dev" rather than a stale
+# literal that looks authoritative.
+SALAM_VERSION := $(shell cat ../VERSION 2>/dev/null || cat $(CURDIR)/../VERSION 2>/dev/null)
+ifneq ($(SALAM_VERSION),)
+  CPPFLAGS += -DSALAM_VERSION='"$(SALAM_VERSION)"'
+endif
+
 GIT             := git
 SALAM_GIT_COMMIT := $(shell $(GIT) rev-parse --short HEAD 2>/dev/null)
-SALAM_GIT_DATE   := $(shell $(GIT) show -s --format=%ci HEAD 2>/dev/null)
+# Strict ISO 8601 (%cI): no spaces, so the same value survives being passed
+# through compiler/tools/bash/bootstrap.sh's word-split flag list to the
+# selfhost build. Both compilers report the commit date in this shape.
+SALAM_GIT_DATE   := $(shell $(GIT) show -s --format=%cI HEAD 2>/dev/null)
 SALAM_GIT_DIRTY  := $(shell test -n "$$($(GIT) status --porcelain 2>/dev/null)" && echo '-dirty')
 ifneq ($(SALAM_GIT_COMMIT),)
   CPPFLAGS += -DSALAM_GIT_COMMIT='"$(SALAM_GIT_COMMIT)"' \

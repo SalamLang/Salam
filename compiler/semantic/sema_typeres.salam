@@ -66,40 +66,83 @@ end
 
 // sema_resolve_type - AST type node -> TypeId. Mutates the node's name to
 // its canonical (English) form like the C, and decorates type_str.
+// apply_type_suffixes - wrap a resolved base in whatever the type node's
+// suffixes asked for, in the one order that makes both spellings mean what
+// they read as: "Edge*[6]" is elem_ptr_depth, so the star binds first (array
+// of pointers); "Edge[6]*" is ptr_depth, so the star binds last (pointer to
+// the array). Every branch of sema_resolve_type routes through here.
+func apply_type_suffixes(s &: Sema, a &: at.Ast, tnode: int, base0: int): int:
+    tn := at.Get(a, tnode)
+    mut base := base0
+    mut k := tn.elem_ptr_depth
+    until k > 0:
+        base = type_ptr(s, base)
+        k -= 1
+    end
+    mut i := tn.dims.len()
+    until i > 0:
+        i -= 1
+        base = type_array(s, base, resolve_array_dim(s, a, tn.dims.get(i)))
+    end
+    if tn.is_slice:
+        base = type_slice(s, base)
+    end
+    // is_pointer without a depth is a node the generic machinery or a
+    // desugaring built by hand; treat it as one level.
+    mut pk := tn.ptr_depth
+    if pk == 0 && tn.is_pointer:
+        pk = 1
+    end
+    until pk > 0:
+        base = type_ptr(s, base)
+        pk -= 1
+    end
+    ret base
+end
+
 func sema_resolve_type(s &: Sema, a &: at.Ast, tnode: int): int:
     if tnode == 0:
         ret sema_ty(s, TY_VOID)
     end
     tn := at.Get(a, tnode)
+    // A type the generic machinery resolved in the caller's scope and is
+    // carrying into a package's scope, where the name would not resolve. See
+    // at.Node.sema_type.
+    if tn.sema_type >= 0:
+        ret tn.sema_type
+    end
     sp := span_of(a, tnode)
     mut base := 0
 
     if tn.is_dyn:
-        iface := scope_lookup(s, s.cur, tn.name)
-        mut ok := iface != 0
-        if ok:
-            if sym_at(s, iface).kind != SYM_INTERFACE:
-                ok = false
-            end
-        end
-        if !ok:
-            serr(
-                s, 1, sp, co.Format1(
-                    i18.Tr("'%s' is not an interface (required after 'dyn')"), co.ArgStr(tn.name)
+        mut why := ""
+        iface := sema_lookup_iface(s, a, tn.name, sp, why)
+        if iface == 0:
+            if str.Len(why) > 0:
+                serr(
+                    s, 1, sp, co.Format2(
+                        i18.Tr("'%s' after 'dyn': %s"), co.ArgStr(tn.name), co.ArgStr(why)
+                    )
                 )
-            )
+            else:
+                serr(
+                    s, 1, sp, co.Format1(
+                        i18.Tr("'%s' is not an interface (required after 'dyn')"), co.ArgStr(tn.name)
+                    )
+                )
+            end
             ret sema_err_ty(s)
         end
-        mut dt := type_dyn(s, iface, tn.name)
-        mut di := tn.dims.len()
-        until di > 0:
-            di -= 1
-            dt = type_array(s, dt, resolve_array_dim(s, a, tn.dims.get(di)[0]))
+        // Name the type after the interface itself, never after the
+        // spelling used at this site, so "Connection" and "db.Connection"
+        // agree.
+        ifv := sym_at(s, iface)
+        mut iname := ifv.name
+        if str.Len(ifv.pkgname) > 0 && !str.Equals(ifv.pkgname, "main"):
+            iname = ifv.pkgname + "_" + ifv.name
         end
-        if tn.is_pointer:
-            dt = type_ptr(s, dt)
-        end
-        ret dt
+        dt := type_dyn(s, iface, iname)
+        ret apply_type_suffixes(s, a, tnode, dt)
     end
 
     mut name := tn.name
@@ -173,16 +216,10 @@ func sema_resolve_type(s &: Sema, a &: at.Ast, tnode: int): int:
             else:
                 base = sema_err_ty(s)
             end
-            if tn.is_pointer:
-                base = type_ptr(s, base)
-            end
-            ret base
+            ret apply_type_suffixes(s, a, tnode, base)
         end
         base = tsv.ty
-        if tn.is_pointer:
-            base = type_ptr(s, base)
-        end
-        ret base
+        ret apply_type_suffixes(s, a, tnode, base)
     end
 
     if str.Len(name) > 0 && type_prim_kind_from_name(name, "") < 0:
@@ -197,7 +234,7 @@ func sema_resolve_type(s &: Sema, a &: at.Ast, tnode: int): int:
     if str.Len(name) > 0 && str.Equals(name, "func"):
         mut ptypes := Vector {} as Vector<int>
         repeat tn.list.len() with fi:
-            ptypes.push(sema_resolve_type(s, a, tn.list.get(fi)[0]))
+            ptypes.push(sema_resolve_type(s, a, tn.list.get(fi)))
         end
         mut ret_t := sema_ty(s, TY_VOID)
         if tn.ty != 0:
@@ -210,9 +247,7 @@ func sema_resolve_type(s &: Sema, a &: at.Ast, tnode: int): int:
             bt.length = 1 as i64
             ty_put(s, base, bt)
         end
-        if tn.is_pointer:
-            base = type_ptr(s, base)
-        end
+        base = apply_type_suffixes(s, a, tnode, base)
         sema_decorate(s, a, tnode, base)
         ret base
     end
@@ -222,7 +257,12 @@ func sema_resolve_type(s &: Sema, a &: at.Ast, tnode: int): int:
         pkk = type_prim_kind_from_name(name, "")
     end
 
-    if str.Len(name) > 0 && str.Equals(name, "File"):
+    if tn.sema_base_type >= 0:
+        // `T*`/`T[N]` in a template the generic machinery substituted into.
+        // The name would not resolve here; the base already did, in the scope
+        // that named it. See at.Node.sema_base_type.
+        base = tn.sema_base_type
+    else str.Len(name) > 0 && str.Equals(name, "File"):
         base = type_file(s)
     else str.Len(name) > 0 && str.Equals(name, "Variant"):
         if tn.list.len() < 2:
@@ -239,7 +279,7 @@ func sema_resolve_type(s &: Sema, a &: at.Ast, tnode: int): int:
                 vn = 64
             end
             repeat vn with vi:
-                m := sema_resolve_type(s, a, tn.list.get(vi)[0])
+                m := sema_resolve_type(s, a, tn.list.get(vi))
                 if m >= 0:
                     if ty_at(s, m).kind == TY_VARIANT:
                         serr(
@@ -321,17 +361,7 @@ func sema_resolve_type(s &: Sema, a &: at.Ast, tnode: int): int:
         end
     end
 
-    mut ai := tn.dims.len()
-    until ai > 0:
-        ai -= 1
-        base = type_array(s, base, resolve_array_dim(s, a, tn.dims.get(ai)[0]))
-    end
-    if tn.is_slice:
-        base = type_slice(s, base)
-    end
-    if tn.is_pointer:
-        base = type_ptr(s, base)
-    end
+    base = apply_type_suffixes(s, a, tnode, base)
     sema_decorate(s, a, tnode, base)
     ret base
 end

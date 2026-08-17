@@ -9,20 +9,64 @@ import sm "../semantic/semantic.salam"
 
 // ===== codegen_header.c =====
 
+// The stem the driver names an import's generated module after: the base
+// name of the resolved file with its extension dropped, which is what
+// driver_build turns into salam_mod_<stem>.c/.h/.o. "" when the import cannot
+// be resolved, which the caller treats as "nothing to emit" - a missing import
+// is already a semantic error by the time codegen runs.
+func cg_import_module(a &: at.Ast, did: int): str:
+    d := at.Get(a, did)
+    mut p := d.name
+    if d.value_kind == tok.TV_STRING && str.Len(d.value_str) > 0:
+        p = d.value_str
+    end
+    if str.Len(p) == 0:
+        ret ""
+    end
+    mut resolved := d.type_str
+    if str.Len(resolved) == 0:
+        resolved = sm.ResolveImport("", p)
+    end
+    if str.Len(resolved) == 0:
+        ret ""
+    end
+    stem := str.Len(resolved) - str.Len(pth.PathBase(resolved))
+    rl := str.Len(resolved)
+    mut k := 0
+    mut b := co.SbNew()
+    mut q := stem
+    until q < rl && k < 127:
+        c := byte_at(resolved, q)
+        if c == 46:
+            break
+        end
+        co.SbPutc(b, c)
+        k += 1
+        q += 1
+    end
+    basev := co.SbCstr(b)
+    co.SbFree(b)
+    ret basev
+end
+
+func cg_module_init_name(module_name: str): str:
+    ret CG_MOD_PREFIX + cg_cident(module_name) + "_init"
+end
+
 func vec_collect_one(g &: Cg, ts: str):
     if str.Len(ts) == 0:
         ret
     end
     if str.StartsWith(ts, "Vector<"):
         repeat g.vec_types.len() with i:
-            if str.Equals(g.vec_types.get(i)[0], ts):
+            if str.Equals(g.vec_types.get(i), ts):
                 ret
             end
         end
         g.vec_types.push(ts)
     else str.StartsWith(ts, "Variant<"):
         repeat g.variant_types.len() with i2:
-            if str.Equals(g.variant_types.get(i2)[0], ts):
+            if str.Equals(g.variant_types.get(i2), ts):
                 ret
             end
         end
@@ -42,17 +86,17 @@ func vec_collect(g &: Cg, a &: at.Ast, id: int):
     vec_collect(g, a, n.c)
     vec_collect(g, a, n.d)
     repeat n.list.len() with i:
-        vec_collect(g, a, n.list.get(i)[0])
+        vec_collect(g, a, n.list.get(i))
     end
     repeat n.dims.len() with i2:
-        vec_collect(g, a, n.dims.get(i2)[0])
+        vec_collect(g, a, n.dims.get(i2))
     end
 end
 
 func vec_collect_types(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
     prog := at.Get(a, program)
     repeat prog.list.len() with i:
-        d := at.Get(a, prog.list.get(i)[0])
+        d := at.Get(a, prog.list.get(i))
         if d.kind != at.AST_STRUCT_DEF:
             continue
         end
@@ -63,7 +107,7 @@ func vec_collect_types(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
         members := sm.SymAt(s, ssym).members
         msc := sm.ScopeAt(s, members)
         repeat msc.symbols.len() with j:
-            f := sm.SymAt(s, msc.symbols.get(j)[0])
+            f := sm.SymAt(s, msc.symbols.get(j))
             if f.kind == sm.SYM_FIELD && f.ty != sm.TYPE_NONE:
                 vec_collect_one(g, sm.ToString(s, f.ty))
             end
@@ -73,14 +117,22 @@ end
 
 func dyn_set_add(setv &: Vector<str>, s2: str):
     repeat setv.len() with i:
-        if str.Equals(setv.get(i)[0], s2):
+        if str.Equals(setv.get(i), s2):
             ret
         end
     end
     setv.push(s2)
 end
 
-func dyn_collect(g &: Cg, a &: at.Ast, id: int):
+func cg_iface_canon_name(s &: sm.Sema, sym: int): str:
+    symv := sm.SymAt(s, sym)
+    if str.Len(symv.pkgname) > 0 && !str.Equals(symv.pkgname, "main"):
+        ret symv.pkgname + "_" + symv.name
+    end
+    ret symv.name
+end
+
+func dyn_collect(g &: Cg, s &: sm.Sema, a &: at.Ast, id: int):
     if id == 0:
         ret
     end
@@ -93,7 +145,13 @@ func dyn_collect(g &: Cg, a &: at.Ast, id: int):
         )
     end
     if n.kind == at.AST_TYPE && n.is_dyn && str.Len(n.name) > 0:
-        dyn_set_add(g.dyn_ifaces, n.name)
+        // A type node carries the name as written ("Rows", "db.Rows");
+        // every other route here carries the canonical one the type
+        // string uses. Register the canonical form or the interface gets
+        // two typedefs, only one of which the rest of the module refers
+        // to.
+        isym3 := cg_iface_sym(s, n.name)
+        dyn_set_add(g.dyn_ifaces, isym3 != 0 ? cg_iface_canon_name(s, isym3) : n.name)
     end
     if n.kind == at.AST_CAST && str.StartsWith(n.type_str, "dyn ") && n.a != 0:
         an := at.Get(a, n.a)
@@ -108,16 +166,16 @@ func dyn_collect(g &: Cg, a &: at.Ast, id: int):
             dyn_set_add(g.dyn_impls, pair)
         end
     end
-    dyn_collect(g, a, n.ty)
-    dyn_collect(g, a, n.a)
-    dyn_collect(g, a, n.b)
-    dyn_collect(g, a, n.c)
-    dyn_collect(g, a, n.d)
+    dyn_collect(g, s, a, n.ty)
+    dyn_collect(g, s, a, n.a)
+    dyn_collect(g, s, a, n.b)
+    dyn_collect(g, s, a, n.c)
+    dyn_collect(g, s, a, n.d)
     repeat n.list.len() with i:
-        dyn_collect(g, a, n.list.get(i)[0])
+        dyn_collect(g, s, a, n.list.get(i))
     end
     repeat n.dims.len() with i2:
-        dyn_collect(g, a, n.dims.get(i2)[0])
+        dyn_collect(g, s, a, n.dims.get(i2))
     end
 end
 
@@ -129,14 +187,14 @@ func dyn_match_sig(s &: sm.Sema, cm: int, want: int): int:
     cs := sm.SymAt(s, cm)
     wsig := sm.SigAt(s, want)
     repeat cs.overloads.len() with k:
-        h := cs.overloads.get(k)[0]
+        h := cs.overloads.get(k)
         hsig := sm.SigAt(s, h)
         if hsig.params.len() != wsig.params.len():
             continue
         end
         mut ok := true
         repeat wsig.params.len() with p:
-            if !sm.Equiv(s, hsig.params.get(p)[0], wsig.params.get(p)[0]):
+            if !sm.Equiv(s, hsig.params.get(p), wsig.params.get(p)):
                 ok = false
                 break
             end
@@ -146,17 +204,68 @@ func dyn_match_sig(s &: sm.Sema, cm: int, want: int): int:
         end
     end
     if cs.overloads.len() > 0:
-        ret cs.overloads.get(0)[0]
+        ret cs.overloads.get(0)
     end
     ret 0
 end
 
+// A type name that reaches codegen is canonical: a struct or interface
+// declared in package `db` is named "db_Connection" no matter which file
+// names it, and only a main-module declaration keeps its bare name
+// (sema_decl.salam). So a symbol has to be found by that canonical name,
+// which for anything outside the main module means walking the packages -
+// it is not in the global scope under that spelling.
+func cg_canon_sym(s &: sm.Sema, name: str, kind: int): int:
+    if str.Len(name) == 0:
+        ret 0
+    end
+    mut sym := sm.Lookup(s, s.global, name)
+    if sym != 0 && sm.SymAt(s, sym).kind == kind:
+        ret sym
+    end
+    repeat sm.PackageCount(s) with p:
+        pk := sm.PackageAt(s, p)
+        pkv := sm.SymAt(s, pk)
+        if pkv.kind != sm.SYM_PACKAGE || pkv.members == 0:
+            continue
+        end
+        msc := sm.ScopeAt(s, pkv.members)
+        repeat msc.symbols.len() with i:
+            sym = msc.symbols.get(i)
+            symv := sm.SymAt(s, sym)
+            if symv.kind != kind || str.Len(symv.name) == 0:
+                continue
+            end
+            if symv.ty != sm.TYPE_NONE && str.Equals(sm.TypeAt(s, symv.ty).name, name):
+                ret sym
+            end
+            if str.Len(symv.pkgname) == 0:
+                continue
+            end
+            if str.Equals(symv.pkgname + "_" + symv.name, name):
+                ret sym
+            end
+        end
+    end
+    ret 0
+end
+
+func cg_iface_sym(s &: sm.Sema, name: str): int:
+    ret cg_canon_sym(s, name, sm.SYM_INTERFACE)
+end
+
+// The concrete side of an impl pair is canonical too: a driver struct in
+// another package reaches here as "drv_DB".
+func cg_struct_sym(s &: sm.Sema, name: str): int:
+    ret cg_canon_sym(s, name, sm.SYM_STRUCT)
+end
+
 func cg_emit_dyn_types(g &: Cg, s &: sm.Sema):
     repeat g.dyn_ifaces.len() with i:
-        iname := g.dyn_ifaces.get(i)[0]
+        iname := g.dyn_ifaces.get(i)
         ci := cg_cident(iname)
-        isym := sm.Lookup(s, s.global, iname)
-        if isym == 0 || sm.SymAt(s, isym).kind != sm.SYM_INTERFACE:
+        isym := cg_iface_sym(s, iname)
+        if isym == 0:
             continue
         end
         outh(
@@ -166,22 +275,30 @@ func cg_emit_dyn_types(g &: Cg, s &: sm.Sema):
         imembers := sm.SymAt(s, isym).members
         isc := sm.ScopeAt(s, imembers)
         repeat isc.symbols.len() with m:
-            ms := sm.SymAt(s, isc.symbols.get(m)[0])
+            ms := sm.SymAt(s, isc.symbols.get(m))
             if ms.kind != sm.SYM_METHOD || ms.overloads.len() == 0:
                 continue
             end
-            sig := sm.SigAt(s, ms.overloads.get(0)[0])
+            sig := sm.SigAt(s, ms.overloads.get(0))
+            // An aggregate return lowers to an out-parameter here just as it
+            // does for a plain function (func_signature), so the slot has
+            // to be typed `void (*)(void*, ..., R*)`.
+            sret := type_is_byval_agg(s, sig.ret_type)
+            rc := cg_ctype(sm.ToString(s, sig.ret_type))
             outh(
-                g, "    " + cg_ctype(sm.ToString(s, sig.ret_type)) + " (*" + cg_cident(ms.name) + ")(void*"
+                g, "    " + (sret ? "void" : rc) + " (*" + cg_cident(ms.name) + ")(void*"
             )
             repeat sig.params.len() with p:
                 outh(
                     g, ", " + cg_ctype(
                         sm.ToString(
-                            s, sig.params.get(p)[0]
+                            s, sig.params.get(p)
                         )
                     )
                 )
+            end
+            if sret:
+                outh(g, ", " + rc + "*")
             end
             outh(g, ");\n")
         end
@@ -196,7 +313,7 @@ end
 // cg_emit_dyn_vtables - writes to the C sink (callers keep cur == CG_OUT_C).
 func cg_emit_dyn_vtables_impl(g &: Cg, s &: sm.Sema):
     repeat g.dyn_impls.len() with i:
-        pair := g.dyn_impls.get(i)[0]
+        pair := g.dyn_impls.get(i)
         bar := str.IndexOf(pair, "|")
         if bar < 0:
             continue
@@ -205,40 +322,54 @@ func cg_emit_dyn_vtables_impl(g &: Cg, s &: sm.Sema):
         cnamev := str.Substr(pair, bar + 1, str.Len(pair) - bar - 1)
         ci := cg_cident(iname)
         cc2 := cg_cident(cnamev)
-        isym := sm.Lookup(s, s.global, iname)
-        csym := sm.Lookup(s, s.global, cnamev)
-        if isym == 0 || sm.SymAt(s, isym).kind != sm.SYM_INTERFACE || csym == 0 || sm.SymAt(s, csym).kind != sm.SYM_STRUCT:
+        isym := cg_iface_sym(s, iname)
+        csym := cg_struct_sym(s, cnamev)
+        if isym == 0 || csym == 0:
             continue
         end
         imembers := sm.SymAt(s, isym).members
         isc := sm.ScopeAt(s, imembers)
         repeat isc.symbols.len() with m:
-            ms := sm.SymAt(s, isc.symbols.get(m)[0])
+            ms := sm.SymAt(s, isc.symbols.get(m))
             if ms.kind != sm.SYM_METHOD || ms.overloads.len() == 0:
                 continue
             end
-            isig := ms.overloads.get(0)[0]
+            isig := ms.overloads.get(0)
             cm := sm.LookupLocal(s, sm.SymAt(s, csym).members, ms.name)
             csig := dyn_match_sig(s, cm, isig)
             if csig == 0:
                 continue
             end
-            mangled := cg_mangle(
-                g, s, sm.SymAt(s, csym).name, ms.name, sm.SigAt(s, csig).params
+            // Through cg_mangle_method, not cg_mangle: the method belongs
+            // to the struct's own package, which is not the module being
+            // emitted when a driver in another package is boxed into an
+            // interface here.
+            mangled := cg_mangle_method(
+                g, s, sm.SymAt(s, csym).name, csym, ms.name, sm.SigAt(s, csig).params
             )
             isigv := sm.SigAt(s, isig)
             rets := cg_ctype(sm.ToString(s, isigv.ret_type))
             mut ps := co.SbNew()
             mut asb := co.SbNew()
             repeat isigv.params.len() with p:
-                pt := cg_ctype(sm.ToString(s, isigv.params.get(p)[0]))
+                pt := cg_ctype(sm.ToString(s, isigv.params.get(p)))
                 co.SbPuts(ps, ", " + pt + " __a" + p)
                 co.SbPuts(asb, ", __a" + p)
             end
             isvoid := isigv.ret_type != sm.TYPE_NONE && sm.TypeAt(s, isigv.ret_type).kind == sm.TY_VOID
-            out(
-                g, "static " + rets + " _Salam_thunk_" + ci + "_" + cc2 + "_" + cg_cident(ms.name) + "(void* self" + co.SbCstr(ps) + "){ " + (isvoid ? "" : "return ") + mangled + "((" + cc2 + "*)self" + co.SbCstr(asb) + "); }\n"
-            )
+            // The callee is `void f(C*, ..., R* __ret)` when it returns an
+            // aggregate, so the thunk cannot `return f(...)` - it takes the
+            // caller's out-pointer and hands it straight on.
+            sret2 := type_is_byval_agg(s, isigv.ret_type)
+            if sret2:
+                out(
+                    g, "static void _Salam_thunk_" + ci + "_" + cc2 + "_" + cg_cident(ms.name) + "(void* self" + co.SbCstr(ps) + ", " + rets + "* __ret){ " + mangled + "((" + cc2 + "*)self" + co.SbCstr(asb) + ", __ret); }\n"
+                )
+            else:
+                out(
+                    g, "static " + rets + " _Salam_thunk_" + ci + "_" + cc2 + "_" + cg_cident(ms.name) + "(void* self" + co.SbCstr(ps) + "){ " + (isvoid ? "" : "return ") + mangled + "((" + cc2 + "*)self" + co.SbCstr(asb) + "); }\n"
+                )
+            end
             co.SbFree(ps)
             co.SbFree(asb)
         end
@@ -247,7 +378,7 @@ func cg_emit_dyn_vtables_impl(g &: Cg, s &: sm.Sema):
         )
         mut first := true
         repeat isc.symbols.len() with m2:
-            ms2 := sm.SymAt(s, isc.symbols.get(m2)[0])
+            ms2 := sm.SymAt(s, isc.symbols.get(m2))
             if ms2.kind != sm.SYM_METHOD || ms2.overloads.len() == 0:
                 continue
             end
@@ -285,7 +416,7 @@ func variant_emit_typedef(g &: Cg, ts: str):
     )
     outh(g, "typedef struct { int32_t tag; union {")
     repeat members.len() with i:
-        outh(g, " " + cg_decl(members.get(i)[0], "v" + i) + ";")
+        outh(g, " " + cg_decl(members.get(i), "v" + i) + ";")
     end
     outh(g, " } payload; } " + cn + ";\n")
     outh(g, "#endif\n")
@@ -308,7 +439,13 @@ func vec_emit(g &: Cg, ts: str):
         g, "static " + ec + " " + cn + "_pop(" + cn + "* v){ return " + "v->data[--v->len]; }\n"
     )
     outh(
-        g, "static " + ec + "* " + cn + "_get(" + cn + "* v, int32_t i){ " + "if(i<0||i>=v->len) return (" + ec + "*)0; return " + "&v->data[i]; }\n"
+        g, "static " + ec + " " + cn + "_get(" + cn + "* v, int32_t i){ " + "if(i<0||i>=v->len) salam_panic(\"Vector.get: index out of " + "bounds\"); return v->data[i]; }\n"
+    )
+    // What get returned before it started handing back the element itself.
+    // Out of range stays a null pointer rather than a panic: this is the
+    // escape hatch, and code that reaches for it can check.
+    outh(
+        g, "static " + ec + "* " + cn + "_ref(" + cn + "* v, int32_t i){ " + "if(i<0||i>=v->len) return (" + ec + "*)0; return " + "&v->data[i]; }\n"
     )
     outh(
         g, "static void " + cn + "_set(" + cn + "* v, int32_t i, " + ec + " x){ if(i<0) return; " + cn + "_grow(v, i+1); if(i>=v->len) " + "v->len=i+1; v->data[i]=x; }\n"
@@ -381,7 +518,7 @@ func hdr_prelude(g &: Cg, a &: at.Ast, program: int):
     // its own functions. Whatever those instantiated bodies call therefore has
     // to be visible from the very top of any module header, not from mem's.
     outh(
-        g, "#ifndef SALAM_RT_TYPES_DEFINED\n#define " + "SALAM_RT_TYPES_DEFINED\n" + "typedef struct salam_file salam_file;\n" + "typedef struct salam_map salam_map;\n" + "typedef struct salam_map_iter salam_map_iter;\n" + "typedef struct { void* data; int64_t len; } salam_slice;\n" + "extern int64_t salam_idx(int64_t, int64_t);\n" + "extern SALAM_NORET void salam_panic(const char* msg);\n" + "void* " + CG_MEM_ALLOC + "(uint64_t size);\n" + "void* " + CG_MEM_ALLOC_ZEROED + "(uint64_t size);\n" + "void* " + CG_MEM_REALLOC + "(void* ptr, uint64_t size);\n" + "void " + CG_MEM_FREE + "(void* ptr);\n" + "static inline void salam_slice_new(salam_slice* out, void* " + "b, int64_t lo, int64_t hi, int64_t esz)" + "{ out->data=(void*)((char*)b+(lo)*(esz)); " + "out->len=(hi)-(lo); }\n" + "static inline void salam_slice_sub(salam_slice* out, " + "salam_slice b, int64_t lo, int64_t hi, int has_hi, int64_t " + "esz)" + "{ if(!has_hi) hi=b.len; " + "out->data=(void*)((char*)b.data+(lo)*(esz)); " + "out->len=(hi)-(lo); }\n" + "static inline void* salam_slice_at(salam_slice s, int64_t i, " + "int64_t esz, int sf)" + "{ return " + "(void*)((char*)s.data+(sf?salam_idx(i,s.len):i)*(esz)); }\n" + "typedef void (*salam_thread_fn)(void);\n" + "#endif\n"
+        g, "#ifndef SALAM_RT_TYPES_DEFINED\n#define " + "SALAM_RT_TYPES_DEFINED\n" + "typedef struct salam_file salam_file;\n" + "typedef struct salam_map salam_map;\n" + "typedef struct salam_map_iter salam_map_iter;\n" + "typedef struct { void* data; int64_t len; } salam_slice;\n" + "extern int64_t salam_idx(int64_t, int64_t);\n" + "extern SALAM_NORET void salam_panic(const char* msg);\n" + "extern uint64_t salam_hash_int(uint64_t x);\n" + "extern uint64_t salam_str_hash(const char* s);\n" + "void* " + CG_MEM_ALLOC + "(uint64_t size);\n" + "void* " + CG_MEM_ALLOC_ZEROED + "(uint64_t size);\n" + "void* " + CG_MEM_REALLOC + "(void* ptr, uint64_t size);\n" + "void " + CG_MEM_FREE + "(void* ptr);\n" + "static inline void salam_slice_new(salam_slice* out, void* " + "b, int64_t lo, int64_t hi, int64_t esz)" + "{ out->data=(void*)((char*)b+(lo)*(esz)); " + "out->len=(hi)-(lo); }\n" + "static inline void salam_slice_sub(salam_slice* out, " + "salam_slice b, int64_t lo, int64_t hi, int has_hi, int64_t " + "esz)" + "{ if(!has_hi) hi=b.len; " + "out->data=(void*)((char*)b.data+(lo)*(esz)); " + "out->len=(hi)-(lo); }\n" + "static inline void* salam_slice_at(salam_slice s, int64_t i, " + "int64_t esz, int sf)" + "{ return " + "(void*)((char*)s.data+(sf?salam_idx(i,s.len):i)*(esz)); }\n" + "typedef void (*salam_thread_fn)(void);\n" + "typedef void (*salam_thread_arg_fn)(void*);\n" + "#endif\n"
     )
     // std/ modules (mem, str, thread, sync, webview, ...) declare their own
     // CRT/WinAPI extern funcs (e.g. strlen, WaitForSingleObject) using
@@ -424,54 +561,83 @@ func hdr_prelude(g &: Cg, a &: at.Ast, program: int):
     end
     prog := at.Get(a, program)
     repeat prog.list.len() with i:
-        d := at.Get(a, prog.list.get(i)[0])
+        d := at.Get(a, prog.list.get(i))
         if d.kind != at.AST_IMPORT:
             continue
         end
-        mut p := d.name
-        if d.value_kind == tok.TV_STRING && str.Len(d.value_str) > 0:
-            p = d.value_str
-        end
-        if str.Len(p) == 0:
+        basev := cg_import_module(a, prog.list.get(i))
+        if str.Len(basev) == 0:
             continue
         end
-        mut resolved := d.type_str
-        if str.Len(resolved) == 0:
-            resolved = sm.ResolveImport("", p)
-        end
-        stem := str.Len(resolved) - str.Len(pth.PathBase(resolved))
-        // char base[128] clamp kept.
-        rl := str.Len(resolved)
-        mut k := 0
-        mut b := co.SbNew()
-        mut q := stem
-        until q < rl && k < 127:
-            c := byte_at(resolved, q)
-            if c == 46:
-                break
-            end
-            co.SbPutc(b, c)
-            k += 1
-            q += 1
-        end
-        basev := co.SbCstr(b)
-        co.SbFree(b)
         outh(g, `#include "` + CG_MOD_PREFIX + basev + ".h\"\n")
     end
     outh(g, "\n")
 end
 
-func hdr_enums(g &: Cg, a &: at.Ast, program: int):
+func hdr_enums(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
     prog := at.Get(a, program)
     repeat prog.list.len() with i:
-        d := at.Get(a, prog.list.get(i)[0])
+        d := at.Get(a, prog.list.get(i))
         if d.kind != at.AST_ENUM_DEF:
+            continue
+        end
+        esym := sm.LookupLocal(s, s.global, d.name)
+        backing := esym != 0 ? sm.SymAt(s, esym).enum_val_kind : tok.TV_INT
+        // The type's own C name is package-mangled for a non-main package
+        // (sema_decl.salam's AST_ENUM_DEF pre-pass), matching what cg_ctype
+        // already produces for a variable/param declared with this enum's
+        // type - so the typedef itself has to use that name too, or
+        // "unknown type name" follows the moment anything outside this
+        // enum's own package refers to it. The *member constant* names stay
+        // on the short, unmangled prefix (d.name): same-package reads
+        // (cg_expr's AST_MEMBER case) already rely on that, unchanged here.
+        mut tname := d.name
+        if esym != 0:
+            esv := sm.SymAt(s, esym)
+            if esv.ty != sm.TYPE_NONE:
+                etn := sm.TypeAt(s, esv.ty).name
+                if str.Len(etn) > 0:
+                    tname = etn
+                end
+            end
+        end
+        // A C `enum` can only ever hold integers, so a string/float backed
+        // enum can't become one - it's emitted as one `static const`
+        // declaration per member instead. Either way the member-read site
+        // (cg_expr's AST_MEMBER case) just emits the bare identifier
+        // `Enum_Member`, so it doesn't care which of these two forms
+        // declared it.
+        if backing != tok.TV_INT:
+            // Other codegen sites resolve the type name "Color" straight to
+            // a C type via typedef (variable decls, params, struct fields) -
+            // without a C `enum` to supply that, a plain typedef to the
+            // backing C type keeps "Color" valid.
+            outh(
+                g, "typedef " + (backing == tok.TV_STRING ? "const char *" : "double") + " " + cg_cident(tname) + ";\n"
+            )
+            repeat d.list.len() with j:
+                m := at.Get(a, d.list.get(j))
+                mut lit := "0"
+                if m.a != 0:
+                    ma := at.Get(a, m.a)
+                    if ma.kind == at.AST_LITERAL:
+                        if backing == tok.TV_STRING:
+                            lit = cg_cescape(ma.value_str)
+                        else if backing == tok.TV_FLOAT:
+                            lit = co.Format1("%.17g", co.ArgFloat(ma.value_float))
+                        end
+                    end
+                end
+                outh(
+                    g, "static const " + cg_cident(tname) + " " + cg_cident(d.name) + "_" + cg_cident(m.name) + " = " + lit + ";\n"
+                )
+            end
             continue
         end
         outh(g, "typedef enum {")
         mut next := 0 as i64
         repeat d.list.len() with j:
-            m := at.Get(a, d.list.get(j)[0])
+            m := at.Get(a, d.list.get(j))
             if m.a != 0:
                 ma := at.Get(a, m.a)
                 if ma.kind == at.AST_LITERAL && ma.value_kind == tok.TV_INT:
@@ -483,14 +649,14 @@ func hdr_enums(g &: Cg, a &: at.Ast, program: int):
             )
             next += 1 as i64
         end
-        outh(g, " } " + cg_cident(d.name) + ";\n")
+        outh(g, " } " + cg_cident(tname) + ";\n")
     end
 end
 
 func hdr_struct_fwd(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
     prog := at.Get(a, program)
     repeat prog.list.len() with i:
-        d := at.Get(a, prog.list.get(i)[0])
+        d := at.Get(a, prog.list.get(i))
         if d.kind != at.AST_STRUCT_DEF:
             continue
         end
@@ -527,7 +693,7 @@ func hdr_struct_fwd_imports(g &: Cg, s &: sm.Sema, a &: at.Ast):
         end
         psc := sm.ScopeAt(s, pkv.members)
         repeat psc.symbols.len() with i:
-            sv := sm.SymAt(s, psc.symbols.get(i)[0])
+            sv := sm.SymAt(s, psc.symbols.get(i))
             if sv.kind != sm.SYM_STRUCT || sv.ty == sm.TYPE_NONE:
                 continue
             end
@@ -554,7 +720,7 @@ func emit_struct_def(g &: Cg, s &: sm.Sema, ssym: int, gcn: str):
     mut nfields := 0
     msc := sm.ScopeAt(s, sm.SymAt(s, ssym).members)
     repeat msc.symbols.len() with j:
-        f := sm.SymAt(s, msc.symbols.get(j)[0])
+        f := sm.SymAt(s, msc.symbols.get(j))
         if f.kind != sm.SYM_FIELD:
             continue
         end
@@ -588,7 +754,7 @@ func hdr_struct_visit_dep(
 ):
     n := gcns.len()
     repeat n with k:
-        if k != self && str.Equals(dep, gcns.get(k)[0]):
+        if k != self && str.Equals(dep, gcns.get(k)):
             hdr_struct_visit(g, s, k, syms, gcns, state)
         end
     end
@@ -599,7 +765,7 @@ func hdr_variant_field_deps(
 ):
     vtv := sm.TypeAt(s, vt)
     repeat vtv.params.len() with m:
-        dep := struct_dep_cname(s, vtv.params.get(m)[0])
+        dep := struct_dep_cname(s, vtv.params.get(m))
         if str.Len(dep) > 0:
             hdr_struct_visit_dep(g, s, dep, self, syms, gcns, state)
         end
@@ -610,14 +776,14 @@ end
 func hdr_struct_visit(
     g &: Cg, s &: sm.Sema, i: int, syms: Vector<int>, gcns: Vector<str>, state &: Vector<int>
 ):
-    if state.get(i)[0] != 0:
+    if state.get(i) != 0:
         ret
     end
     state.set(i, 1)
-    ssym := syms.get(i)[0]
+    ssym := syms.get(i)
     msc := sm.ScopeAt(s, sm.SymAt(s, ssym).members)
     repeat msc.symbols.len() with j:
-        f := sm.SymAt(s, msc.symbols.get(j)[0])
+        f := sm.SymAt(s, msc.symbols.get(j))
         if f.kind != sm.SYM_FIELD:
             continue
         end
@@ -630,7 +796,7 @@ func hdr_struct_visit(
             hdr_struct_visit_dep(g, s, dep, i, syms, gcns, state)
         end
     end
-    emit_struct_def(g, s, ssym, gcns.get(i)[0])
+    emit_struct_def(g, s, ssym, gcns.get(i))
     state.set(i, 2)
 end
 
@@ -643,7 +809,7 @@ func hdr_structs(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
     defer state.free()
     prog := at.Get(a, program)
     repeat prog.list.len() with i:
-        d := at.Get(a, prog.list.get(i)[0])
+        d := at.Get(a, prog.list.get(i))
         if d.kind != at.AST_STRUCT_DEF:
             continue
         end
@@ -674,7 +840,7 @@ end
 func hdr_aliases(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
     prog := at.Get(a, program)
     repeat prog.list.len() with i:
-        d := at.Get(a, prog.list.get(i)[0])
+        d := at.Get(a, prog.list.get(i))
         if d.kind != at.AST_TYPE_ALIAS:
             continue
         end
@@ -736,7 +902,7 @@ func is_wellknown_libc_name(name: str): bool:
         // guard is the only way the two can agree.
         "CreateFileA", "WriteFile", "Arc", "BeginPath", "FillRect", "LineTo",
         "RoundRect", "LoadImage", "GetProp", "SetProp",
-    ] as str[73]
+    ]
     // names.len(), never a literal: a hand-written bound silently stops
     // guarding the tail entries the next time a name is appended.
     repeat names.len() with i:
@@ -765,7 +931,7 @@ func is_libm_name(name: str): bool:
     names := [
         "sqrt", "sin", "cos", "tan", "asin", "acos", "atan", "atan2",
         "log", "log10", "exp", "floor", "ceil", "fabs", "fmod"
-    ] as str[15]
+    ]
     repeat names.len() with i:
         if str.Equals(names[i], name):
             ret true
@@ -799,7 +965,7 @@ func is_stdio_name(name: str): bool:
         "fdopen", "fileno", "fseeko", "ftello", "getdelim", "getline",
         "pclose", "popen",
         "_fdopen", "_fileno", "_fseeki64", "_ftelli64", "_pclose", "_popen"
-    ] as str[56]
+    ]
     repeat names.len() with i:
         if str.Equals(names[i], name):
             ret true
@@ -888,7 +1054,7 @@ func is_wide_libc_name(name: str): bool:
         "ntohs", "WSAStartup",
         // wincrypt.h, same story - std/tls' native root-store reader
         "CertOpenSystemStoreA", "CertEnumCertificatesInStore", "CertCloseStore",
-    ] as str[27]
+    ]
     repeat names.len() with i:
         if str.Equals(names[i], name):
             ret true
@@ -900,7 +1066,7 @@ end
 func hdr_externs(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
     prog := at.Get(a, program)
     repeat prog.list.len() with i:
-        did := prog.list.get(i)[0]
+        did := prog.list.get(i)
         d := at.Get(a, did)
         if !d.is_extern:
             continue
@@ -938,7 +1104,7 @@ end
 func hdr_globals(g &: Cg, a &: at.Ast, program: int):
     prog := at.Get(a, program)
     repeat prog.list.len() with i:
-        d := at.Get(a, prog.list.get(i)[0])
+        d := at.Get(a, prog.list.get(i))
         pkgmod := !str.Equals(g.pkg, "main")
         if d.kind != at.AST_CONST_DECL && d.kind != at.AST_VAR_DECL:
             continue
@@ -953,7 +1119,10 @@ func hdr_globals(g &: Cg, a &: at.Ast, program: int):
         // !is_array matches emit_globals in codegen_core - see the comment
         // there for why an array global cannot carry the qualifier. The two
         // must agree or the extern and the definition conflict.
-        want_const := !can_defer && !is_array && (d.kind == at.AST_CONST_DECL || !d.is_mut)
+        // !is_array and !type_is_callable match emit_globals in
+        // codegen_core.salam - the two must agree or the extern and the
+        // definition conflict.
+        want_const := !can_defer && !is_array && !type_is_callable(ts) && (d.kind == at.AST_CONST_DECL || !d.is_mut)
         gct_const := want_const && str.StartsWith(cg_ctype(ts), "const ")
         pfx := (want_const && !gct_const) ? "const " : ""
         outh(g, "extern " + pfx + decl + ";\n")
@@ -964,7 +1133,7 @@ end
 func hdr_prototypes(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
     prog := at.Get(a, program)
     repeat prog.list.len() with i:
-        did := prog.list.get(i)[0]
+        did := prog.list.get(i)
         d := at.Get(a, did)
         pkgmod := !str.Equals(g.pkg, "main")
         if d.typarams.len() > 0:
@@ -988,7 +1157,7 @@ func hdr_prototypes(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
                 continue
             end
             repeat d.list.len() with j:
-                mid := d.list.get(j)[0]
+                mid := d.list.get(j)
                 m := at.Get(a, mid)
                 if m.kind != at.AST_FUNC_DEF:
                     continue
@@ -1018,19 +1187,19 @@ end
 func hdr_impl_prototypes(g &: Cg, s &: sm.Sema, a &: at.Ast):
     gsc := sm.ScopeAt(s, s.global)
     repeat gsc.symbols.len() with i:
-        oid := gsc.symbols.get(i)[0]
+        oid := gsc.symbols.get(i)
         owner := sm.SymAt(s, oid)
         if owner.kind != sm.SYM_TYPEIMPL || owner.members == 0:
             continue
         end
         msc := sm.ScopeAt(s, owner.members)
         repeat msc.symbols.len() with j:
-            m := sm.SymAt(s, msc.symbols.get(j)[0])
+            m := sm.SymAt(s, msc.symbols.get(j))
             if m.kind != sm.SYM_METHOD:
                 continue
             end
             repeat m.overloads.len() with k:
-                sig := m.overloads.get(k)[0]
+                sig := m.overloads.get(k)
                 if sig != 0 && sm.SigAt(s, sig).decl != 0:
                     outh(
                         g, func_signature(
@@ -1045,26 +1214,26 @@ end
 
 func cg_header_impl(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
     hdr_prelude(g, a, program)
-    hdr_enums(g, a, program)
+    hdr_enums(g, s, a, program)
     hdr_struct_fwd(g, s, a, program)
     hdr_struct_fwd_imports(g, s, a)
-    dyn_collect(g, a, program)
+    dyn_collect(g, s, a, program)
     cg_emit_dyn_types(g, s)
     outh(g, "\n")
     vec_collect(g, a, program)
     vec_collect_types(g, s, a, program)
     repeat g.vec_types.len() with i:
-        vec_emit_typedef(g, g.vec_types.get(i)[0])
+        vec_emit_typedef(g, g.vec_types.get(i))
     end
     outh(g, "\n")
     hdr_structs(g, s, a, program)
     hdr_aliases(g, s, a, program)
     repeat g.variant_types.len() with i2:
-        variant_emit_typedef(g, g.variant_types.get(i2)[0])
+        variant_emit_typedef(g, g.variant_types.get(i2))
     end
     outh(g, "\n")
     repeat g.vec_types.len() with i3:
-        vec_emit(g, g.vec_types.get(i3)[0])
+        vec_emit(g, g.vec_types.get(i3))
     end
     outh(g, "\n")
     hdr_externs(g, s, a, program)

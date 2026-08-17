@@ -1,0 +1,321 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package matrix
+
+import math
+
+// The statistics of a data matrix, and the decompositions built on them.
+//
+// The convention throughout: rows are observations, columns are variables.
+// That is what every statistics package assumes and what makes an n x p data
+// matrix produce a p x p covariance matrix rather than an n x n one, which
+// for a thousand samples of three variables is the difference between a 3x3
+// answer and a million-entry mistake.
+//
+// Covariance is computed from centred data as X_c^T X_c / (n-1), never from
+// the expanded form E[XY] - E[X]E[Y]. The two are algebraically identical and
+// numerically nothing alike: on variables with a large mean and small
+// variance the expanded form subtracts two nearly equal large numbers, and
+// can return a covariance matrix that is not even positive semidefinite,
+// which then makes Cholesky fail on a matrix that mathematically cannot fail.
+//
+// PCA is done on the covariance matrix through the symmetric eigensolver.
+// Doing it through the SVD of the centred data is the more accurate route
+// (it avoids forming a product that squares the condition number), and
+// PCAFromSVD is here for that; the covariance route is kept because it is
+// what the components are defined as, and because when p is much smaller than
+// n it is far cheaper.
+
+@en "PCA"
+@fa "تحلیل مولفه اصلی"
+@ar "تحليل المكونات الرئيسية"
+pub struct PCA:
+    pub components: Matrix = Matrix {}
+    pub variances: Matrix = Matrix {}
+    pub center: Matrix = Matrix {}
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free():
+        this.components.free()
+        this.variances.free()
+        this.center.free()
+    end
+end
+
+func _column_mean(x &: Matrix, j: int): f64:
+    if x.rows == 0: ret 0.0 end
+    mut s := 0.0
+    repeat x.rows with i: s += x.at(i, j) end
+    ret s / (x.rows as f64)
+end
+
+func _column_sd(x &: Matrix, j: int, mu: f64, denom: f64): f64:
+    mut s := 0.0
+    repeat x.rows with i:
+        d := x.at(i, j) - mu
+        s += d * d
+    end
+    if denom <= 0.0: ret 0.0 end
+    ret math.Sqrt(s / denom)
+end
+
+func _denom(n: int, sample: bool): f64:
+    if sample: ret (n - 1) as f64 end
+    ret n as f64
+end
+
+func _scale_column(r &: Matrix, x &: Matrix, j: int, d: f64):
+    sd := _column_sd(x, j, _column_mean(x, j), d)
+    if sd == 0.0: ret end
+    repeat r.rows with i: r.mul_at(i, j, 1.0 / sd) end
+end
+
+func _corr_entry(c &: Matrix, i: int, j: int):
+    if i == j: ret end
+    di := math.Sqrt(math.Abs(c.at(i, i)))
+    dj := math.Sqrt(math.Abs(c.at(j, j)))
+    if di == 0.0 || dj == 0.0:
+        c.set(i, j, 0.0)
+        ret
+    end
+    c.set(i, j, c.at(i, j) / (di * dj))
+end
+
+func _unit_diagonal(c &: Matrix):
+    repeat c.min_dim() with i:
+        if c.at(i, i) != 0.0: c.set(i, i, 1.0) end
+    end
+end
+
+// A singular value of the centred data relates to the variance along that
+// component by sigma^2 / (n - 1).
+func _sv_to_var(s &: Matrix, n: int): Matrix:
+    mut r := Clone(s)
+    d := _denom(n, true)
+    repeat r.count() with k:
+        v := r.a.get(k)
+        mut out := 0.0
+        if d > 0.0: out = v * v / d end
+        r.a.set(k, out)
+    end
+    ret r
+end
+
+func _center_with(x &: Matrix, mu &: Matrix): Matrix:
+    mut r := Clone(x)
+    repeat x.rows with i:
+        repeat x.cols with j: r.add_at(i, j, 0.0 - mu.a.get(j)) end
+    end
+    ret r
+end
+
+// Subtracts the mean of each column, so every column of the result sums to
+// zero. The first step of covariance, of PCA and of any regression with an
+// intercept.
+@en "CenterColumns"
+@fa "مرکزی‌سازی ستون‌ها"
+@ar "توسيط الأعمدة"
+pub func CenterColumns(x &: Matrix): Matrix:
+    mut r := Clone(x)
+    repeat x.cols with j:
+        mu := _column_mean(x, j)
+        repeat x.rows with i: r.add_at(i, j, 0.0 - mu) end
+    end
+    ret r
+end
+
+// The column means, as a row vector.
+@en "ColumnMeans"
+@fa "میانگین ستون‌ها"
+@ar "متوسطات الأعمدة"
+pub func ColumnMeans(x &: Matrix): Matrix:
+    mut r := Zeros(1, x.cols)
+    repeat x.cols with j: r.set(0, j, _column_mean(x, j)) end
+    ret r
+end
+
+// The column standard deviations, as a row vector.
+@en "ColumnStds"
+@fa "انحراف معیار ستون‌ها"
+@ar "انحرافات الأعمدة"
+pub func ColumnStds(x &: Matrix, sample: bool): Matrix:
+    d := _denom(x.rows, sample)
+    mut r := Zeros(1, x.cols)
+    repeat x.cols with j:
+        r.set(0, j, _column_sd(x, j, _column_mean(x, j), d))
+    end
+    ret r
+end
+
+// Centred and scaled to unit variance: the z-score of every entry. What makes
+// variables measured in different units comparable, and what PCA needs when
+// the variables have incommensurable scales (otherwise the component with the
+// largest units wins, whatever the data says).
+@en "Standardize"
+@fa "استانداردسازی"
+@ar "توحيد"
+pub func Standardize(x &: Matrix, sample: bool): Matrix:
+    d := _denom(x.rows, sample)
+    mut r := CenterColumns(x)
+    repeat x.cols with j: _scale_column(r, x, j, d) end
+    ret r
+end
+
+// The p x p covariance matrix of an n x p data matrix. Symmetric positive
+// semidefinite by construction, since it is a Gram matrix of the centred
+// data.
+@en "Covariance"
+@fa "کوواریانس"
+@ar "تباين مشترك"
+pub func Covariance(x &: Matrix, sample: bool): Matrix:
+    d := _denom(x.rows, sample)
+    if d <= 0.0: ret Zeros(x.cols, x.cols) end
+    mut c := CenterColumns(x)
+    mut g := Gram(c)
+    ScaleInPlace(g, 1.0 / d)
+    defer c.free()
+    ret g
+end
+
+// The correlation matrix: covariance rescaled so every diagonal entry is 1.
+// Unitless, bounded in [-1, 1], and the right thing to look at when the
+// variables are not measured on the same scale.
+@en "Correlation"
+@fa "همبستگی"
+@ar "ارتباط"
+pub func Correlation(x &: Matrix): Matrix:
+    mut c := Covariance(x, true)
+    repeat c.rows with i:
+        repeat c.cols with j: _corr_entry(c, i, j) end
+    end
+    _unit_diagonal(c)
+    ret c
+end
+
+// Principal component analysis: the orthogonal directions of greatest
+// variance, in descending order.
+//
+// `components` holds them as columns, `variances` the variance along each,
+// and `center` the column means that were removed. The k-th component is the
+// direction of largest variance orthogonal to the first k-1, which is exactly
+// what the eigenvectors of the covariance matrix are, and by Eckart-Young the
+// first k of them also give the best rank-k approximation to the data.
+@en "PCAFit"
+@fa "برازش مولفه اصلی"
+@ar "ملاءمة المكونات الرئيسية"
+pub func PCAFit(x &: Matrix): PCA:
+    mut p := PCA {}
+    p.center = ColumnMeans(x)
+    mut cov := Covariance(x, true)
+    mut e := EigSym(cov)
+    p.components = Clone(e.vectors)
+    p.variances = Clone(e.values)
+    defer e.free()
+    defer cov.free()
+    ret p
+end
+
+// PCA through the SVD of the centred data, which is the numerically better
+// route: it never forms X^T X, so it does not square the condition number,
+// and the singular values give the standard deviations directly. The one to
+// prefer when the data is nearly collinear.
+@en "PCAFromSVD"
+@fa "مولفه اصلی از تجزیه تکین"
+@ar "المكونات الرئيسية من التحليل المفرد"
+pub func PCAFromSVD(x &: Matrix): PCA:
+    mut p := PCA {}
+    p.center = ColumnMeans(x)
+    mut c := CenterColumns(x)
+    mut f := SVDecompose(c)
+    p.components = Clone(f.v)
+    p.variances = _sv_to_var(f.s, x.rows)
+    defer f.free()
+    defer c.free()
+    ret p
+end
+// Projects data onto the first k components, the dimensionality reduction
+// that PCA exists for.
+@en "PCATransform"
+@fa "تبدیل مولفه اصلی"
+@ar "تحويل المكونات الرئيسية"
+pub func PCATransform(p &: PCA, x &: Matrix, k: int): Matrix:
+    mut n := k
+    if n > p.components.cols: n = p.components.cols end
+    mut c := _center_with(x, p.center)
+    mut basis := SubMatrix(p.components, 0, 0, p.components.rows, n)
+    r := MatMul(c, basis)
+    defer c.free()
+    defer basis.free()
+    ret r
+end
+
+// The share of total variance each component accounts for. The number that
+// answers "how many components do I need", and the one always plotted as a
+// scree curve.
+@en "ExplainedVariance"
+@fa "واریانس تبیین‌شده"
+@ar "التباين المفسر"
+pub func ExplainedVariance(p &: PCA): Matrix:
+    mut total := 0.0
+    repeat p.variances.count() with k: total += p.variances.a.get(k) end
+    mut r := Clone(p.variances)
+    if total <= 0.0: ret r end
+    ScaleInPlace(r, 1.0 / total)
+    ret r
+end
+
+// Ordinary least squares with an intercept: fits y = b0 + b1 x1 + ... and
+// returns the coefficients as a column, intercept first.
+//
+// Solved by QR on the design matrix, not by inverting X^T X. The normal
+// equations square the condition number of X, which on collinear predictors
+// (the usual reason a regression is interesting and the usual reason it is
+// hard) is the difference between an answer and noise.
+@en "LinearRegression"
+@fa "رگرسیون خطی"
+@ar "انحدار خطي"
+pub func LinearRegression(x &: Matrix, y &: Matrix): Matrix:
+    if x.rows != y.rows || y.cols != 1: ret Zeros(0, 0) end
+    mut ones := Full(x.rows, 1, 1.0)
+    mut design := HStack(ones, x)
+    beta := LeastSquares(design, y)
+    defer ones.free()
+    defer design.free()
+    ret beta
+end
+
+// The coefficient of determination R^2: the fraction of the variance in y
+// that the fitted values account for. 1 is a perfect fit, 0 is no better than
+// predicting the mean, and a negative value means worse than the mean, which
+// a model without an intercept can manage.
+@en "RSquared"
+@fa "آر دو"
+@ar "معامل التحديد"
+pub func RSquared(y &: Matrix, fitted &: Matrix): f64:
+    if y.count() != fitted.count(): ret 0.0 end
+    mu := Mean(y)
+    mut ss_res := 0.0
+    mut ss_tot := 0.0
+    repeat y.count() with k:
+        d := y.a.get(k) - fitted.a.get(k)
+        t := y.a.get(k) - mu
+        ss_res += d * d
+        ss_tot += t * t
+    end
+    if ss_tot == 0.0: ret 0.0 end
+    ret 1.0 - ss_res / ss_tot
+end

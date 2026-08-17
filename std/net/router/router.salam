@@ -27,8 +27,8 @@ package router
 // then copies `Match.params` into its own request context itself -
 // cleaner layering, and Dispatch/_try_match are independently testable.
 //
-// Handlers are stored as raw function pointers (`fn: i64`, via Salam's
-// `funcptr(...)`), the same convention std/web used - Salam has no
+// Handlers are stored as raw function pointers (`fn: i64`; a bare
+// function name decays to one), the same convention std/web used - Salam has no
 // closures, so there is no way to capture per-group middleware/prefix
 // state in a builder object the way Express/Go routers do. "Group"
 // below is therefore a plain string-prefixing helper, not a sub-router
@@ -66,6 +66,12 @@ pub struct Route:
     pub method: str = ""
     pub pattern: str = ""
     pub fn: i64 = 0
+    // 0 literal, 1 has a ":param", 2 has a "*" - computed once when the
+    // route is registered rather than re-derived from the pattern on every
+    // request. Dispatch used to call _specificity (two substring searches)
+    // for every route, on every level, on every request: with a dozen
+    // routes that is seventy-odd string scans to answer one GET.
+    pub spec: int = 0
 end
 
 @en "Router"
@@ -92,7 +98,7 @@ func _param_get(p: ParamList, key: str): str:
     n := p.items.len()
     mut i := 0
     until i < n:
-        kv := p.items.get(i)[0]
+        kv := p.items.get(i)
         if kv.key == key: ret kv.value end
         i += 1
     end
@@ -148,6 +154,17 @@ func _try_match(pattern: str, path: str, out_params &: ParamList): bool:
     ret pi == plen && pp == pathlen
 end
 
+// The one place a Route is built, so `spec` cannot be forgotten. Every
+// registration helper goes through here.
+func _add(r &: Router, method: str, pattern: str, fn: i64):
+    mut rt := Route {}
+    rt.method = method
+    rt.pattern = pattern
+    rt.fn = fn
+    rt.spec = _specificity(pattern)
+    r.routes.push(rt)
+end
+
 @en "NewRouter"
 @fa "مسیریاب جدید"
 @ar "موجه جدید"
@@ -158,35 +175,65 @@ end
 @en "Get"
 @fa "دریافت"
 @ar "جلب"
-pub func Get(r &: Router, path: str, fn: i64): r.routes.push(Route { method = "GET", pattern = path, fn = fn }) end
+pub func Get(r &: Router, path: str, fn: i64): _add(r, "GET", path, fn) end
 
 @en "Post"
 @fa "ارسال"
 @ar "إرسال"
-pub func Post(r &: Router, path: str, fn: i64): r.routes.push(Route { method = "POST", pattern = path, fn = fn }) end
+pub func Post(r &: Router, path: str, fn: i64): _add(r, "POST", path, fn) end
 
 @en "Put"
 @fa "قراردادن"
 @ar "وضع"
-pub func Put(r &: Router, path: str, fn: i64): r.routes.push(Route { method = "PUT", pattern = path, fn = fn }) end
+pub func Put(r &: Router, path: str, fn: i64): _add(r, "PUT", path, fn) end
 
 @en "Delete"
 @fa "حذف"
 @ar "حذف"
-pub func Delete(r &: Router, path: str, fn: i64): r.routes.push(Route { method = "DELETE", pattern = path, fn = fn }) end
+pub func Delete(r &: Router, path: str, fn: i64): _add(r, "DELETE", path, fn) end
 
 @en "Route"
 @fa "مسیر مسیریابی"
 @ar "مسار توجیه"
 pub func Route(r &: Router, method: str, path: str, fn: i64):
-    r.routes.push(Route { method = method, pattern = path, fn = fn })
+    _add(r, method, path, fn)
+end
+
+@en "Patch"
+@fa "وصله"
+@ar "تصحیح"
+pub func Patch(r &: Router, path: str, fn: i64): _add(r, "PATCH", path, fn) end
+
+@en "Head"
+@fa "سر"
+@ar "رأس"
+pub func Head(r &: Router, path: str, fn: i64): _add(r, "HEAD", path, fn) end
+
+@en "Options"
+@fa "گزینه ها"
+@ar "خیارات"
+pub func Options(r &: Router, path: str, fn: i64): _add(r, "OPTIONS", path, fn) end
+
+// Any method at all, for the ones without a helper above.
+//
+// This is what `Route` should be, and callers outside the package have to
+// use this name instead: `Route` is also the name of the struct declared in
+// this file, and the type wins the lookup, so `router.Route(...)` from
+// another package resolves to the struct and fails. Renaming the struct
+// would break every program that names the type, so the function gets the
+// second name.
+@en "Method"
+@fa "روش"
+@ar "طریقة"
+pub func Method(r &: Router, method: str, path: str, fn: i64):
+    _add(r, method, path, fn)
 end
 
 @en "Group"
 @fa "گروه"
 @ar "مجموعة"
 pub func Group(r &: Router, prefix: str, method: str, path: str, fn: i64):
-    r.routes.push(Route { method = method, pattern = prefix + path, fn = fn })
+    _add(r, method, prefix + path, fn)
 end
 
 @en "Static"
@@ -215,27 +262,48 @@ end
 @en "Dispatch"
 @fa "اعزام"
 @ar "إرسال"
+// One pass, not three. The old shape walked the whole route table once per
+// specificity level and recomputed each pattern's level as it went; static
+// beats param beats wildcard is preserved here by keeping the best match
+// seen and only considering routes that could improve on it, which gives
+// the same answer for the same reason without the extra passes.
+//
+// The literal case also skips _try_match entirely: a pattern with no ":"
+// and no "*" matches a path exactly when the two strings are equal, and a
+// string compare does in one call what that character loop does in a
+// hundred, allocating nothing. Since nothing outranks a literal, the first
+// literal hit ends the search.
 pub func Dispatch(r: Router, method: str, path: str): Match:
     n := r.routes.len()
-    mut level := 0
-    until level <= 2:
-        mut i := 0
-        until i < n:
-            route := r.routes.get(i)[0]
-            if route.method == method && _specificity(route.pattern) == level:
+    mut m := Match {}
+    mut best := 3
+    mut i := 0
+    until i < n:
+        route := r.routes.get(i)
+        if route.method == method && route.spec < best:
+            if route.spec == 0:
+                if route.pattern == path:
+                    // A param route may already have matched and be holding
+                    // captures this literal is about to make irrelevant.
+                    m.params.items.free()
+                    m.params = ParamList {}
+                    m.matched = true
+                    m.fn = route.fn
+                    ret m
+                end
+            else:
                 mut params := ParamList {}
-                ok := _try_match(route.pattern, path, params)
-                if ok:
-                    mut m := Match {}
+                if _try_match(route.pattern, path, params):
                     m.matched = true
                     m.fn = route.fn
                     m.params = params
-                    ret m
+                    best = route.spec
+                else:
+                    params.items.free()
                 end
             end
-            i += 1
         end
-        level += 1
+        i += 1
     end
-    ret Match {}
+    ret m
 end

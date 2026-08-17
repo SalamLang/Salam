@@ -1,0 +1,135 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import testing
+import encoding
+import mem
+
+// Base64, hex and percent encoding from std/encoding, checked against
+// the RFC 4648 vectors rather than against themselves, so a round trip
+// that is wrong in both directions cannot pass.
+
+func test_base64_vectors():
+    testing.AssertEqStr(encoding.Base64Encode(""), "")
+    testing.AssertEqStr(encoding.Base64Encode("f"), "Zg==")
+    testing.AssertEqStr(encoding.Base64Encode("fo"), "Zm8=")
+    testing.AssertEqStr(encoding.Base64Encode("foo"), "Zm9v")
+    testing.AssertEqStr(encoding.Base64Encode("foob"), "Zm9vYg==")
+    testing.AssertEqStr(encoding.Base64Encode("fooba"), "Zm9vYmE=")
+    testing.AssertEqStr(encoding.Base64Encode("foobar"), "Zm9vYmFy")
+    testing.AssertEqStr(encoding.Base64Encode("Hello, World!"), "SGVsbG8sIFdvcmxkIQ==")
+end
+
+func test_base64_decode():
+    testing.AssertEqStr(encoding.Base64Decode("Zg=="), "f")
+    testing.AssertEqStr(encoding.Base64Decode("Zm8="), "fo")
+    testing.AssertEqStr(encoding.Base64Decode("Zm9vYmFy"), "foobar")
+    testing.AssertEqStr(encoding.Base64Decode(""), "")
+    // every encoder wraps long lines, so whitespace has to be tolerated
+    testing.AssertEqStr(encoding.Base64Decode("Zm9v\nYmFy"), "foobar")
+    testing.AssertEqStr(encoding.Base64Decode("Zm9v YmFy"), "foobar")
+end
+
+func test_base64_roundtrip():
+    mut s := ""
+    repeat 40:
+        s = s.concat("ab-")
+        testing.AssertEqStr(encoding.Base64Decode(encoding.Base64Encode(s)), s)
+    end
+end
+
+// The lenient decoder skips anything it does not recognise, which is
+// wrong for anything security relevant. The strict one reports instead.
+func test_base64_strict():
+    mut ok := false
+    testing.AssertEqStr(encoding.Base64DecodeStrict("Zm9vYmFy", ok), "foobar")
+    testing.AssertTrue(ok)
+    testing.AssertEqStr(encoding.Base64DecodeStrict("Zg==", ok), "f")
+    testing.AssertTrue(ok)
+    // wrapped input is still valid
+    encoding.Base64DecodeStrict("Zm9v\nYmFy", ok)
+    testing.AssertTrue(ok)
+    // a character outside the alphabet is rejected, not skipped
+    encoding.Base64DecodeStrict("Zm9*YmFy", ok)
+    testing.AssertFalse(ok)
+    // so is data after the padding
+    encoding.Base64DecodeStrict("Zg==Zg==", ok)
+    testing.AssertFalse(ok)
+    // and a length that is not a whole number of quanta
+    encoding.Base64DecodeStrict("Zm9vY", ok)
+    testing.AssertFalse(ok)
+end
+
+// The str returning decoders cannot carry a 0x00 byte. This is the form
+// to use for keys, certificates and compressed blobs.
+func test_base64_bytes():
+    mut ok := false
+    buf := mem.AllocateZeroed(64 as u64)
+    n := encoding.Base64DecodeBytes("Zm9vYmFy", buf, 64, ok)
+    testing.AssertTrue(ok)
+    testing.AssertEqInt(n, 6)
+    // AAAA is four zero bytes, which no str based decoder could return
+    z := encoding.Base64DecodeBytes("AAAA", buf, 64, ok)
+    testing.AssertTrue(ok)
+    testing.AssertEqInt(z, 3)
+    // a buffer that cannot hold the result fails rather than overflowing
+    encoding.Base64DecodeBytes("Zm9vYmFy", buf, 2, ok)
+    testing.AssertFalse(ok)
+    mem.Free(buf)
+end
+
+func test_hex():
+    testing.AssertEqStr(encoding.HexEncode(""), "")
+    testing.AssertEqStr(encoding.HexEncode("abc"), "616263")
+    testing.AssertEqStr(encoding.HexEncode("foobar"), "666f6f626172")
+    testing.AssertEqStr(encoding.HexDecode("616263"), "abc")
+    testing.AssertEqStr(encoding.HexDecode("666f6f626172"), "foobar")
+    testing.AssertEqStr(encoding.HexDecode(""), "")
+    // decoding stops at the first byte that is not a hex digit
+    testing.AssertEqStr(encoding.HexDecode("6162zz"), "ab")
+    testing.AssertEqInt(encoding.HexVal("0"), 0)
+    testing.AssertEqInt(encoding.HexVal("9"), 9)
+    testing.AssertEqInt(encoding.HexVal("a"), 10)
+    testing.AssertEqInt(encoding.HexVal("F"), 15)
+    testing.AssertEqInt(encoding.HexVal("g"), 0 - 1)
+end
+
+func test_url():
+    // unreserved characters are left exactly as they are
+    testing.AssertEqStr(encoding.URLEncode("safe-._~09AZaz"), "safe-._~09AZaz")
+    testing.AssertEqStr(encoding.URLEncode("a b"), "a%20b")
+    testing.AssertEqStr(encoding.URLEncode("a/b?c=d&e"), "a%2Fb%3Fc%3Dd%26e")
+    testing.AssertEqStr(encoding.URLEncode(""), "")
+    testing.AssertEqStr(encoding.URLDecode("a%20b"), "a b")
+    // '+' is the form encoded spelling of a space
+    testing.AssertEqStr(encoding.URLDecode("a+b"), "a b")
+    testing.AssertEqStr(encoding.URLDecode("a%2Fb"), "a/b")
+    // a stray percent that cannot be a valid escape is kept verbatim
+    testing.AssertEqStr(encoding.URLDecode("100%"), "100%")
+    testing.AssertEqStr(encoding.URLDecode(encoding.URLEncode("x y/z?q=1")), "x y/z?q=1")
+end
+
+func main:
+    test_base64_vectors()
+    test_base64_decode()
+    test_base64_roundtrip()
+    test_base64_strict()
+    test_base64_bytes()
+    test_hex()
+    test_url()
+    testing.Summary()
+    ret 0
+end

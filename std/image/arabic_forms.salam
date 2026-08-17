@@ -1,0 +1,222 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package image
+
+// The Arabic contextual-forms table: which codepoint draws a letter in
+// each of its four shapes.
+//
+// An Arabic letter is written differently depending on what it joins to:
+// isolated, initial (joins the letter after it), medial (joins on both
+// sides) or final (joins the letter before it). Unicode encodes those
+// shapes as separate codepoints in the Arabic Presentation Forms blocks
+// (U+FB50..U+FDFF and U+FE70..U+FEFF), and every font that supports
+// Arabic maps them - which is what makes shaping possible here without
+// implementing OpenType GSUB.
+//
+// The table below is generated from the Unicode character database's own
+// <isolated>/<final>/<initial>/<medial> decompositions, not typed by
+// hand. It relies on one fact those decompositions make true: a letter's
+// forms are consecutive codepoints, in the order isolated, final,
+// initial, medial. So one entry per letter - where its forms start, and
+// how many there are - encodes the whole thing:
+//
+//   count 4  a dual-joining letter (all four shapes)
+//   count 2  a right-joining letter: it joins the letter before it but
+//            never the one after (alef, dal, reh, waw and friends), so
+//            it only has isolated and final
+//   count 1  a non-joining letter (hamza) with a single shape
+//
+// U+0649 (alef maksura) is the one letter whose four forms are not
+// consecutive, and it is handled ahead of the table in _arabic_shaped.
+//
+// The joining behavior needed by the shaper falls straight out of the
+// same number: count 4 means dual-joining, count 2 right-joining,
+// anything else non-joining. That is why there is no second table.
+
+// Requested shapes, in the order the forms are laid out.
+const _AR_ISOLATED := 0
+const _AR_FINAL := 1
+const _AR_INITIAL := 2
+const _AR_MEDIAL := 3
+
+// Where a letter's presentation forms start, and how many follow. 0 for
+// anything that has none (Latin, digits, punctuation, the marks).
+func _arabic_form_base(cp: int, count &: int): int:
+    count = 0
+    // The lam-alef ligatures the shaper produces are letters in their
+    // own right from here on: right-joining, isolated then final, so
+    // they answer this question the same way alef does.
+    if cp == 0xFEF5 || cp == 0xFEF7 || cp == 0xFEF9 || cp == 0xFEFB:
+        count = 2
+        ret cp
+    end
+    if cp < 0x0621 || cp > 0x06D3:
+        ret 0
+    end
+    if cp == 0x0621: count = 1 ret 0xFE80 end   // hamza
+    if cp == 0x0622: count = 2 ret 0xFE81 end   // alef with madda above
+    if cp == 0x0623: count = 2 ret 0xFE83 end   // alef with hamza above
+    if cp == 0x0624: count = 2 ret 0xFE85 end   // waw with hamza above
+    if cp == 0x0625: count = 2 ret 0xFE87 end   // alef with hamza below
+    if cp == 0x0626: count = 4 ret 0xFE89 end   // yeh with hamza above
+    if cp == 0x0627: count = 2 ret 0xFE8D end   // alef
+    if cp == 0x0628: count = 4 ret 0xFE8F end   // beh
+    if cp == 0x0629: count = 2 ret 0xFE93 end   // teh-marbuta
+    if cp == 0x062A: count = 4 ret 0xFE95 end   // teh-taa
+    if cp == 0x062B: count = 4 ret 0xFE99 end   // theh
+    if cp == 0x062C: count = 4 ret 0xFE9D end   // jeem
+    if cp == 0x062D: count = 4 ret 0xFEA1 end   // hah
+    if cp == 0x062E: count = 4 ret 0xFEA5 end   // khah
+    if cp == 0x062F: count = 2 ret 0xFEA9 end   // dal
+    if cp == 0x0630: count = 2 ret 0xFEAB end   // thal
+    if cp == 0x0631: count = 2 ret 0xFEAD end   // reh
+    if cp == 0x0632: count = 2 ret 0xFEAF end   // zain
+    if cp == 0x0633: count = 4 ret 0xFEB1 end   // seen
+    if cp == 0x0634: count = 4 ret 0xFEB5 end   // sheen
+    if cp == 0x0635: count = 4 ret 0xFEB9 end   // sad
+    if cp == 0x0636: count = 4 ret 0xFEBD end   // dad
+    if cp == 0x0637: count = 4 ret 0xFEC1 end   // tah
+    if cp == 0x0638: count = 4 ret 0xFEC5 end   // zah
+    if cp == 0x0639: count = 4 ret 0xFEC9 end   // ain
+    if cp == 0x063A: count = 4 ret 0xFECD end   // ghain
+    if cp == 0x0641: count = 4 ret 0xFED1 end   // feh
+    if cp == 0x0642: count = 4 ret 0xFED5 end   // qaf
+    if cp == 0x0643: count = 4 ret 0xFED9 end   // kaf
+    if cp == 0x0644: count = 4 ret 0xFEDD end   // lam
+    if cp == 0x0645: count = 4 ret 0xFEE1 end   // meem
+    if cp == 0x0646: count = 4 ret 0xFEE5 end   // noon
+    if cp == 0x0647: count = 4 ret 0xFEE9 end   // heh
+    if cp == 0x0648: count = 2 ret 0xFEED end   // waw
+    if cp == 0x064A: count = 4 ret 0xFEF1 end   // yeh
+    if cp == 0x0671: count = 2 ret 0xFB50 end   // alef wasla
+    if cp == 0x0677: count = 1 ret 0xFBDD end   // u with hamza above
+    if cp == 0x0679: count = 4 ret 0xFB66 end   // tteh
+    if cp == 0x067A: count = 4 ret 0xFB5E end   // tteheh
+    if cp == 0x067B: count = 4 ret 0xFB52 end   // beeh
+    if cp == 0x067E: count = 4 ret 0xFB56 end   // peh
+    if cp == 0x067F: count = 4 ret 0xFB62 end   // teheh
+    if cp == 0x0680: count = 4 ret 0xFB5A end   // beheh
+    if cp == 0x0683: count = 4 ret 0xFB76 end   // nyeh
+    if cp == 0x0684: count = 4 ret 0xFB72 end   // dyeh
+    if cp == 0x0686: count = 4 ret 0xFB7A end   // tcheh
+    if cp == 0x0687: count = 4 ret 0xFB7E end   // tcheheh
+    if cp == 0x0688: count = 2 ret 0xFB88 end   // ddal
+    if cp == 0x068C: count = 2 ret 0xFB84 end   // dahal
+    if cp == 0x068D: count = 2 ret 0xFB82 end   // ddahal
+    if cp == 0x068E: count = 2 ret 0xFB86 end   // dul
+    if cp == 0x0691: count = 2 ret 0xFB8C end   // rreh
+    if cp == 0x0698: count = 2 ret 0xFB8A end   // jeh
+    if cp == 0x06A4: count = 4 ret 0xFB6A end   // veh
+    if cp == 0x06A6: count = 4 ret 0xFB6E end   // peheh
+    if cp == 0x06A9: count = 4 ret 0xFB8E end   // keheh
+    if cp == 0x06AD: count = 4 ret 0xFBD3 end   // ng
+    if cp == 0x06AF: count = 4 ret 0xFB92 end   // gaf
+    if cp == 0x06B1: count = 4 ret 0xFB9A end   // ngoeh
+    if cp == 0x06B3: count = 4 ret 0xFB96 end   // gueh
+    if cp == 0x06BA: count = 2 ret 0xFB9E end   // noon ghunna
+    if cp == 0x06BB: count = 4 ret 0xFBA0 end   // rnoon
+    if cp == 0x06BE: count = 4 ret 0xFBAA end   // heh doachashmee
+    if cp == 0x06C0: count = 2 ret 0xFBA4 end   // heh with yeh above
+    if cp == 0x06C1: count = 4 ret 0xFBA6 end   // heh goal
+    if cp == 0x06C5: count = 2 ret 0xFBE0 end   // kirghiz oe
+    if cp == 0x06C6: count = 2 ret 0xFBD9 end   // oe
+    if cp == 0x06C7: count = 2 ret 0xFBD7 end   // u
+    if cp == 0x06C8: count = 2 ret 0xFBDB end   // yu
+    if cp == 0x06C9: count = 2 ret 0xFBE2 end   // kirghiz yu
+    if cp == 0x06CB: count = 2 ret 0xFBDE end   // ve
+    if cp == 0x06CC: count = 4 ret 0xFBFC end   // farsi yeh
+    if cp == 0x06D0: count = 4 ret 0xFBE4 end   // e
+    if cp == 0x06D2: count = 2 ret 0xFBAE end   // yeh barree
+    if cp == 0x06D3: count = 2 ret 0xFBB0 end   // yeh barree with hamza above
+    ret 0
+end
+
+// How many sides a letter can join on: 2 = both (dual-joining), 1 =
+// only to the letter before it (right-joining), 0 = neither. Tatweel,
+// the kashida that stretches a join, joins on both sides without being
+// a letter.
+func _arabic_join_count(cp: int): int:
+    if cp == 0x0640:
+        ret 2
+    end
+    mut count := 0
+    _arabic_form_base(cp, count)
+    if count == 4: ret 2 end
+    if count == 2: ret 1 end
+    ret 0
+end
+
+// Combining marks (harakat, hamza above, Hebrew points, the generic
+// combining block) are transparent to joining: a letter joins straight
+// through them to the next real letter.
+func _arabic_transparent(cp: int): bool:
+    if cp >= 0x0610 && cp <= 0x061A: ret true end
+    if cp >= 0x064B && cp <= 0x065F: ret true end
+    if cp == 0x0670: ret true end
+    if cp >= 0x06D6 && cp <= 0x06DC: ret true end
+    if cp >= 0x06DF && cp <= 0x06E4: ret true end
+    if cp >= 0x06E7 && cp <= 0x06E8: ret true end
+    if cp >= 0x06EA && cp <= 0x06ED: ret true end
+    if cp >= 0x0300 && cp <= 0x036F: ret true end
+    if cp >= 0x0591 && cp <= 0x05BD: ret true end
+    if cp == 0x05BF || cp == 0x05C1 || cp == 0x05C2: ret true end
+    if cp == 0x05C4 || cp == 0x05C5 || cp == 0x05C7: ret true end
+    if cp == 0x200D: ret true end
+    ret false
+end
+
+// The shape of `cp` in the requested form, or `cp` itself when the
+// letter has no such form. A right-joining letter asked for a medial
+// shape gets its final one and one asked for an initial shape gets its
+// isolated one, which is exactly what the join it cannot make means.
+func _arabic_shaped(cp: int, form: int): int:
+    // Alef maksura: isolated/final sit in Forms-B and initial/medial in
+    // Forms-A, the one letter Unicode did not keep together.
+    if cp == 0x0649:
+        if form == _AR_INITIAL: ret 0xFBE8 end
+        if form == _AR_MEDIAL: ret 0xFBE9 end
+        if form == _AR_FINAL: ret 0xFEF0 end
+        ret 0xFEEF
+    end
+    mut count := 0
+    base := _arabic_form_base(cp, count)
+    if base == 0 || count == 0:
+        ret cp
+    end
+    mut want := form
+    if want >= count:
+        if want == _AR_MEDIAL: want = _AR_FINAL end
+        if want == _AR_INITIAL: want = _AR_ISOLATED end
+    end
+    if want >= count:
+        want = _AR_ISOLATED
+    end
+    ret base + want
+end
+
+// Lam followed by one of the four alefs is a required ligature in
+// Arabic script - not an optional nicety, and the only mandatory one
+// this shaper implements. Returns the ligature's isolated form, or 0 if
+// the pair is not one; the final form is always the next codepoint up.
+func _arabic_lam_alef(lam: int, alef: int): int:
+    if lam != 0x0644:
+        ret 0
+    end
+    if alef == 0x0622: ret 0xFEF5 end
+    if alef == 0x0623: ret 0xFEF7 end
+    if alef == 0x0625: ret 0xFEF9 end
+    if alef == 0x0627: ret 0xFEFB end
+    ret 0
+end

@@ -1,0 +1,265 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package matrix
+
+import math
+
+// Norms, and the condition numbers built on them.
+//
+// The Frobenius norm is computed by scaling, not by summing squares directly.
+// A matrix holding entries around 1e200 is perfectly representable and its
+// norm is perfectly representable, but sum(x^2) overflows to infinity on the
+// way there and returns inf for a finite answer; entries around 1e-200
+// underflow to zero and return 0. Dividing through by the largest magnitude
+// first costs one extra pass and makes the function correct over the whole
+// range of f64 instead of the middle third of it.
+//
+// Which norm to reach for:
+//
+//   - Norm1 and NormInf are the cheap ones, O(n^2), and they are what error
+//     bounds and condition estimates are usually stated in.
+//   - NormFrobenius is also O(n^2) and is the one that comes from an inner
+//     product, so it is the norm to use when the question is really about
+//     least squares or about distance between matrices.
+//   - Norm2, the spectral norm, is the tightest and the honest one for
+//     conditioning, and it costs an SVD. That is why it is not the default.
+//
+// The condition number is the amplification factor: cond(A) = |A| |A^-1|
+// bounds how much a relative error in b can grow in the solution of Ax = b.
+// A cond of 10^k means expect to lose k digits, which is the single most
+// useful number to know about a matrix before trusting anything computed
+// from it.
+
+func _abs_max(x &: Matrix): f64:
+    mut m := 0.0
+    repeat x.count() with k:
+        v := math.Abs(x.a.get(k))
+        if v > m: m = v end
+    end
+    ret m
+end
+
+func _scaled_sumsq(x &: Matrix, scale: f64): f64:
+    mut s := 0.0
+    repeat x.count() with k:
+        t := x.a.get(k) / scale
+        s += t * t
+    end
+    ret s
+end
+
+func _col_abs_sum(x &: Matrix, j: int): f64:
+    mut s := 0.0
+    repeat x.rows with i: s += math.Abs(x.at(i, j)) end
+    ret s
+end
+
+func _row_abs_sum(x &: Matrix, i: int): f64:
+    mut s := 0.0
+    repeat x.cols with j: s += math.Abs(x.at(i, j)) end
+    ret s
+end
+
+func _unit_row(r &: Matrix, i: int):
+    mut s := 0.0
+    repeat r.cols with j: s += r.at(i, j) * r.at(i, j) end
+    if s <= 0.0: ret end
+    inv := 1.0 / math.Sqrt(s)
+    repeat r.cols with j: r.mul_at(i, j, inv) end
+end
+
+func _unit_col(r &: Matrix, j: int):
+    mut s := 0.0
+    repeat r.rows with i: s += r.at(i, j) * r.at(i, j) end
+    if s <= 0.0: ret end
+    inv := 1.0 / math.Sqrt(s)
+    repeat r.rows with i: r.mul_at(i, j, inv) end
+end
+
+// sqrt(sum of squares), the Euclidean norm of the matrix read as one long
+// vector. Overflow-safe, see the note above.
+@en "NormFrobenius"
+@fa "نرم فروبنیوس"
+@ar "معيار فروبينيوس"
+pub func NormFrobenius(x &: Matrix): f64:
+    m := _abs_max(x)
+    if m == 0.0: ret 0.0 end
+    ret m * math.Sqrt(_scaled_sumsq(x, m))
+end
+
+// The maximum absolute column sum, the operator norm induced by the vector
+// 1-norm.
+@en "Norm1"
+@fa "نرم یک"
+@ar "معيار واحد"
+pub func Norm1(x &: Matrix): f64:
+    mut b := 0.0
+    repeat x.cols with j:
+        s := _col_abs_sum(x, j)
+        if s > b: b = s end
+    end
+    ret b
+end
+
+// The maximum absolute row sum, the operator norm induced by the vector
+// infinity norm.
+@en "NormInf"
+@fa "نرم بی‌نهایت"
+@ar "معيار لانهائي"
+pub func NormInf(x &: Matrix): f64:
+    mut b := 0.0
+    repeat x.rows with i:
+        s := _row_abs_sum(x, i)
+        if s > b: b = s end
+    end
+    ret b
+end
+
+// The largest absolute entry. Convenient, and worth flagging: unlike the
+// three above it is not submultiplicative, so |AB| <= |A||B| can fail for it.
+@en "NormMax"
+@fa "نرم بیشینه"
+@ar "معيار أكبر"
+pub func NormMax(x &: Matrix): f64: ret _abs_max(x) end
+
+// The spectral norm: the largest singular value, and the true operator norm
+// under the Euclidean vector norm. Costs an SVD.
+@en "Norm2"
+@fa "نرم دو"
+@ar "معيار طيفي"
+pub func Norm2(x &: Matrix): f64:
+    mut s := SingularValues(x)
+    mut v := 0.0
+    if s.count() > 0: v = s.a.get(0) end
+    defer s.free()
+    ret v
+end
+
+// The nuclear (trace) norm: the sum of the singular values. The convex
+// relaxation of rank, which is what makes it the objective in low-rank
+// matrix completion.
+@en "NormNuclear"
+@fa "نرم هسته‌ای"
+@ar "معيار نووي"
+pub func NormNuclear(x &: Matrix): f64:
+    mut s := SingularValues(x)
+    mut t := 0.0
+    repeat s.count() with k: t += s.a.get(k) end
+    defer s.free()
+    ret t
+end
+
+// The entrywise p-norm of a vector, read flat. p = 1 is the taxicab norm,
+// p = 2 the Euclidean, and anything above about 30 is numerically the
+// infinity norm.
+@en "VecNorm"
+@fa "نرم بردار"
+@ar "معيار متجه"
+pub func VecNorm(x &: Matrix, p: f64): f64:
+    if p <= 0.0: ret _abs_max(x) end
+    if p == 2.0: ret NormFrobenius(x) end
+    m := _abs_max(x)
+    if m == 0.0: ret 0.0 end
+    mut s := 0.0
+    repeat x.count() with k: s += math.Pow(math.Abs(x.a.get(k)) / m, p) end
+    ret m * math.Pow(s, 1.0 / p)
+end
+
+// The Frobenius distance |X - Y|, the metric that turns the space of
+// matrices of a given shape into a Euclidean space.
+@en "Distance"
+@fa "فاصله"
+@ar "مسافة"
+pub func Distance(x &: Matrix, y &: Matrix): f64:
+    if x.same_shape(y) == false: ret 0.0 end
+    mut d := Sub(x, y)
+    v := NormFrobenius(d)
+    defer d.free()
+    ret v
+end
+
+// X / |X|, so the result has unit Frobenius norm. A zero matrix is returned
+// unchanged rather than divided by zero.
+@en "Normalize"
+@fa "بهنجارسازی"
+@ar "تسوية"
+pub func Normalize(x &: Matrix): Matrix:
+    n := NormFrobenius(x)
+    if n == 0.0: ret Clone(x) end
+    ret Scale(x, 1.0 / n)
+end
+
+// Each row scaled to unit Euclidean length. Zero rows stay zero.
+@en "NormalizeRows"
+@fa "بهنجارسازی سطرها"
+@ar "تسوية الصفوف"
+pub func NormalizeRows(x &: Matrix): Matrix:
+    mut r := Clone(x)
+    repeat x.rows with i: _unit_row(r, i) end
+    ret r
+end
+
+// Each column scaled to unit Euclidean length.
+@en "NormalizeCols"
+@fa "بهنجارسازی ستون‌ها"
+@ar "تسوية الأعمدة"
+pub func NormalizeCols(x &: Matrix): Matrix:
+    mut r := Clone(x)
+    repeat x.cols with j: _unit_col(r, j) end
+    ret r
+end
+
+// cond_1(A) = |A|_1 |A^-1|_1. A singular matrix gives MAT_INF.
+@en "Cond1"
+@fa "شرط یک"
+@ar "حالة واحد"
+pub func Cond1(x &: Matrix): f64:
+    mut inv := Inverse(x)
+    if inv.is_empty(): ret MAT_INF end
+    c := Norm1(x) * Norm1(inv)
+    defer inv.free()
+    ret c
+end
+
+@en "CondInf"
+@fa "شرط بی‌نهایت"
+@ar "حالة لانهائية"
+pub func CondInf(x &: Matrix): f64:
+    mut inv := Inverse(x)
+    if inv.is_empty(): ret MAT_INF end
+    c := NormInf(x) * NormInf(inv)
+    defer inv.free()
+    ret c
+end
+
+// cond_2(A), the ratio of largest to smallest singular value. The one to
+// quote: it needs no inverse, it is defined for rectangular matrices, and it
+// is exactly the worst-case amplification of relative error.
+@en "Cond2"
+@fa "شرط دو"
+@ar "حالة طيفية"
+pub func Cond2(x &: Matrix): f64:
+    mut s := SingularValues(x)
+    n := s.count()
+    if n == 0:
+        s.free()
+        ret MAT_INF
+    end
+    hi := s.a.get(0)
+    lo := s.a.get(n - 1)
+    defer s.free()
+    if lo <= 0.0: ret MAT_INF end
+    ret hi / lo
+end

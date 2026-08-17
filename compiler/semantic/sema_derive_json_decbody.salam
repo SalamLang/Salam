@@ -1,0 +1,263 @@
+package semantic
+
+import str
+import co "../sal_core.salam"
+import at "../ast.salam"
+
+// ===== sema_derive_json_dec.c, the container bodies =====
+//
+// Split from sema_derive_json_dec.salam only for length; the scalar readers
+// and the shared object walk live there.
+
+// A fresh local of type `t`, zeroed the way its kind allows. A growable
+// container has no in-place slot to hand out before the element exists, so
+// every element and every map value is decoded through one of these first.
+func jd_dec_temp(s &: Sema, t: int, name: str, ind: str): str:
+    spelling := derive_type_spelling(s, t)
+    if str.Len(spelling) == 0:
+        ret ""
+    end
+    k := ty_at(s, t).kind
+    if k == TY_STR:
+        ret ind + "mut " + name + " := \"\"\n"
+    end
+    if k == TY_PTR:
+        ret ind + "mut " + name + " := null as " + spelling + "\n"
+    end
+    if jd_is_scalar(s, t) || k == TY_ENUM:
+        ret ind + "mut " + name + " := 0 as " + spelling + "\n"
+    end
+    ret ind + "mut " + name + " := " + spelling + " {}\n"
+end
+
+// ---------------------------------------------------------------- struct
+
+func jd_dec_field_arm(
+    s &: Sema, a &: at.Ast, f: int, keyvar: str, first: bool, ctr &: int, home: int,
+    sp: co.SrcSpan
+): str:
+    fa := jd_attr_of(s, a, f, sp)
+    if !fa.ok:
+        ret ""
+    end
+    ind := JIND + JIND + JIND
+    deep := ind + JIND
+    flag := "_f" + ctr
+    fv := sym_at(s, f)
+    val := jd_dec_value(s, a, fv.ty, JD_OUT + "." + fv.name, deep, ctr, fa.as_string, home, sp)
+    if str.Len(val) == 0:
+        // Naming the field is the whole diagnostic: "cannot decode 'Config'"
+        // leaves the reader to find which of its twelve members has no JSON
+        // form.
+        jd_field_err(s, a, f, fv.ty, sp)
+        ret ""
+    end
+    head := first ? "if" : "else"
+    mut out := ind + head + " " + keyvar + " == " + jd_quote(fa.name) + ":\n"
+    out = out + deep + "if " + flag + " && " + JD_STRICT + ":\n"
+    out = out + jd_fail(deep + JIND, "duplicate key '" + fa.name + "'", JD_POS)
+    out = out + deep + "end\n" + deep + flag + " = true\n"
+    ret out + val
+end
+
+// The if/else chain over a struct's fields, collecting the seen-flag for each
+// and the wire name of each one a strict decode has to find.
+func jd_dec_struct_keys(
+    s &: Sema, a &: at.Ast, sym: int, keyvar: str, ctr &: int, flags &: Vector<str>,
+    needs &: Vector<str>, home: int, sp: co.SrcSpan
+): str:
+    mems := scope_at(s, sym_at(s, sym).members).symbols
+    mut out := ""
+    mut first := true
+    repeat mems.len() with i:
+        f := mems.get(i)
+        if sym_at(s, f).kind == SYM_FIELD:
+            fa := jd_attr_of(s, a, f, sp)
+            if !fa.ok:
+                ret ""
+            end
+            if !fa.skip:
+                ctr += 1
+                flags.push("_f" + ctr)
+                needs.push(fa.optional ? "" : fa.name)
+                arm := jd_dec_field_arm(s, a, f, keyvar, first, ctr, home, sp)
+                if str.Len(arm) == 0:
+                    ret ""
+                end
+                out = out + arm
+                first = false
+            end
+        end
+    end
+    ret jd_dec_struct_tail(out, first)
+end
+
+// A struct with no decodable field still has to consume the object's
+// contents, or the caller sees a key it cannot place.
+func jd_dec_struct_tail(arms: str, first: bool): str:
+    ind := JIND + JIND + JIND
+    if first:
+        ret jd_dec_unknown(ind, ind + JIND)
+    end
+    ret arms + ind + "else:\n" + jd_dec_unknown(ind + JIND, ind + JIND + JIND) + ind + "end\n"
+end
+
+func jd_dec_struct(
+    s &: Sema, a &: at.Ast, t: int, ctr &: int, home: int, sp: co.SrcSpan
+): str:
+    sym := ty_at(s, t).decl
+    if sym == 0 || sym_at(s, sym).members == 0:
+        ret ""
+    end
+    keyvar := jd_fresh(ctr, "k")
+    ke := jd_fresh(ctr, "q")
+    mut flags := Vector {} as Vector<str>
+    mut needs := Vector {} as Vector<str>
+    body := jd_dec_struct_keys(s, a, sym, keyvar, ctr, flags, needs, home, sp)
+    if str.Len(body) == 0:
+        ret ""
+    end
+    mut out := ""
+    repeat flags.len() with i:
+        out = out + JIND + "mut " + flags.get(i) + " := false\n"
+    end
+    out = out + jd_dec_object(keyvar, body, ke)
+    ret out + jd_dec_missing(flags, needs)
+end
+
+func jd_dec_missing(flags: Vector<str>, needs: Vector<str>): str:
+    mut out := ""
+    repeat needs.len() with i:
+        want := needs.get(i)
+        if str.Len(want) > 0:
+            out = out + JIND + "if " + JD_STRICT + " && " + flags.get(i) + " == false:\n"
+            out = out + jd_fail(JIND + JIND, "missing key '" + want + "'", JD_START)
+            out = out + JIND + "end\n"
+        end
+    end
+    ret out
+end
+
+// ------------------------------------------------------------- map, array
+
+func jd_dec_map(
+    s &: Sema, a &: at.Ast, key: int, val: int, ctr &: int, home: int, sp: co.SrcSpan
+): str:
+    if key < 0:
+        ret ""
+    end
+    kk := ty_at(s, key).kind
+    if kk != TY_STR && kk != TY_UCHAR:
+        ret ""
+    end
+    keyvar := jd_fresh(ctr, "k")
+    ke := jd_fresh(ctr, "q")
+    tmp := jd_fresh(ctr, "t")
+    ind := JIND + JIND + JIND
+    decl := jd_dec_temp(s, val, tmp, ind)
+    body := jd_dec_value(s, a, val, tmp, ind, ctr, false, home, sp)
+    if str.Len(decl) == 0 || str.Len(body) == 0:
+        ret ""
+    end
+    put := ind + JD_OUT + ".put(" + keyvar + ", " + tmp + ")\n"
+    ret jd_dec_object(keyvar, decl + body + put, ke)
+end
+
+// An array: open bracket, values until the close.
+func jd_dec_seq(
+    s &: Sema, a &: at.Ast, elem: int, push: str, ctr &: int, home: int, sp: co.SrcSpan
+): str:
+    tmp := jd_fresh(ctr, "t")
+    i3 := JIND + JIND + JIND
+    decl := jd_dec_temp(s, elem, tmp, i3)
+    body := jd_dec_value(s, a, elem, tmp, i3, ctr, false, home, sp)
+    if str.Len(decl) == 0 || str.Len(body) == 0:
+        ret ""
+    end
+    mut out := JIND + JD_POS + " = _dws(" + JD_TEXT + ", " + JD_START + ")\n"
+    out = out + JIND + "if _dbyte(" + JD_TEXT + ", " + JD_POS + ") != 91:\n"
+    out = out + jd_fail(JIND + JIND, "expected '['", JD_POS) + JIND + "end\n"
+    out = out + JIND + JD_POS + " = _dws(" + JD_TEXT + ", " + JD_POS + " + 1)\n"
+    out = out + JIND + "if _dbyte(" + JD_TEXT + ", " + JD_POS + ") == 93:\n"
+    out = out + JIND + JIND + JD_POS + " = " + JD_POS + " + 1\n" + JIND + "else:\n"
+    out = out + JIND + JIND + "until true:\n" + decl + body
+    out = out + i3 + push + "(" + tmp + ")\n"
+    ret out + jd_dec_close(i3, 93, "expected ',' or ']'")
+end
+
+// ---------------------------------------------------------------- source
+
+// A type that spells itself: hand it the raw text of its own value and let it
+// say whether it liked it.
+func jd_dec_from_json(ctr &: int): str:
+    q := jd_fresh(ctr, "q")
+    mut out := JIND + q + " := _dskip(" + JD_TEXT + ", " + JD_START + ")\n"
+    out = out + JIND + "if " + q + " < 0:\n"
+    out = out + jd_fail(JIND + JIND, "value is not well formed", JD_START) + JIND + "end\n"
+    out = out + JIND + JD_POS + " = _dws(" + JD_TEXT + ", " + JD_START + ")\n"
+    slice := JD_TEXT + ".substr(" + JD_POS + ", " + q + " - " + JD_POS + ")"
+    out = out + JIND + "if " + JD_OUT + ".from_json(" + slice + ") == false:\n"
+    out = out + jd_fail(JIND + JIND, "value rejected by from_json", JD_START) + JIND + "end\n"
+    ret out + JIND + JD_POS + " = " + q + "\n"
+end
+
+func jd_dec_of_struct(
+    s &: Sema, a &: at.Ast, t: int, ctr &: int, home: int, sp: co.SrcSpan
+): str:
+    sym := ty_at(s, t).decl
+    fj := derive_method_sig(s, sym, "from_json", 1)
+    if fj != 0 && ty_at(s, sig_at(s, fj).ret_type).kind == TY_BOOL:
+        ret jd_dec_from_json(ctr)
+    end
+    cur := derive_map_cursor(s, sym)
+    if cur != 0 && derive_method_sig(s, sym, "put", 2) != 0:
+        kt := sig_at(s, derive_method_sig(s, cur, "key", 0)).ret_type
+        vt := sig_at(s, derive_method_sig(s, cur, "value", 0)).ret_type
+        ret jd_dec_map(s, a, kt, vt, ctr, home, sp)
+    end
+    elem := derive_seq_elem(s, sym)
+    if str.Len(derive_seq_count(s, sym)) > 0 && elem >= 0:
+        if derive_method_sig(s, sym, "push", 1) == 0:
+            ret ""
+        end
+        ret jd_dec_seq(s, a, elem, JD_OUT + ".push", ctr, home, sp)
+    end
+    ret jd_dec_struct(s, a, t, ctr, home, sp)
+end
+
+func jd_dec_body(
+    s &: Sema, a &: at.Ast, t: int, ctr &: int, home: int, sp: co.SrcSpan
+): str:
+    v := ty_at(s, t)
+    if v.kind == TY_STRUCT:
+        ret jd_dec_of_struct(s, a, t, ctr, home, sp)
+    end
+    if v.kind == TY_VEC:
+        ret jd_dec_seq(s, a, v.elem, JD_OUT + ".push", ctr, home, sp)
+    end
+    if v.kind == TY_MAP:
+        ret jd_dec_map(s, a, v.key, v.elem, ctr, home, sp)
+    end
+    lead := JIND + JD_POS + " = _dws(" + JD_TEXT + ", " + JD_START + ")\n"
+    body := jd_dec_value(s, a, t, JD_OUT, JIND, ctr, false, home, sp)
+    ret str.Len(body) == 0 ? "" : lead + body
+end
+
+func jd_dec_source(
+    s &: Sema, a &: at.Ast, t: int, fname: str, home: int, sp: co.SrcSpan
+): str:
+    spelling := derive_type_spelling(s, t)
+    if str.Len(spelling) == 0:
+        ret ""
+    end
+    mut ctr := 0
+    body := jd_dec_body(s, a, t, ctr, home, sp)
+    if str.Len(body) == 0:
+        ret ""
+    end
+    mut out := "func " + fname + "(" + JD_TEXT + ": str, " + JD_START + ": int, "
+    out = out + JD_OUT + " &: " + spelling + ", " + JD_ERR + " &: str, "
+    out = out + JD_ERRP + " &: int, " + JD_STRICT + ": bool): int:\n"
+    out = out + JIND + "mut " + JD_POS + " := " + JD_START + "\n" + body
+    ret out + JIND + "ret " + JD_POS + "\nend\n"
+end

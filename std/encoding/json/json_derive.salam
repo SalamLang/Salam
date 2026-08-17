@@ -1,0 +1,128 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package json
+
+import conv
+import str
+
+
+// Runtime layer for the compiler-derived JSON codecs.
+//
+// `json.Marshal(v)` and `json.Unmarshal(text, out, err)` are lowered by sema
+// into a pair of generated functions per concrete type (see
+// c/src/semantic/sema_derive_json.c). Those functions are installed with this
+// module as their home scope, so they call everything below unqualified and
+// nothing here has to be part of the public API.
+//
+// Everything is written so a generated caller needs no imports and no type
+// spelling of its own: builders are produced and consumed by handle, and every
+// scanner reports failure through an `endpos` of -1 rather than a sentinel
+// value that a caller would have to know how to recognise.
+
+// ---------------------------------------------------------------- encoding
+
+// _dnew, _dadd, _dfin - the builder trio a generated encoder is written
+// around. _dfin takes the finished text and releases the buffer in one step,
+// so generated bodies need no `defer` (which only works at function top level
+// anyway, and a derived encoder for a nested type is all loops).
+func _dnew(): str.StringBuilder:
+    ret str.NewBuilder()
+end
+
+func _dadd(b &: str.StringBuilder, s: str):
+    str.BufAppend(b, s)
+end
+
+func _dfin(b &: str.StringBuilder): str:
+    out := str.BufStr(b)
+    str.BufFree(b)
+    ret out
+end
+
+// _dqs - a JSON string literal, quotes included. Escape() in json.salam
+// covers the five characters JSON names; a document is only valid if every
+// other control character is escaped too, which is what the \u00xx tail here
+// is for.
+func _dqs(s: str): str:
+    l := s.len()
+    bp := _bp(s)
+    mut sb := str.NewBuilder()
+    repeat l with i:
+        code := _ub(bp, i)
+        if code == 34:
+            str.BufAppend(sb, "\\\"")
+        else code == 92:
+            str.BufAppend(sb, "\\\\")
+        else code == 10:
+            str.BufAppend(sb, "\\n")
+        else code == 9:
+            str.BufAppend(sb, "\\t")
+        else code == 13:
+            str.BufAppend(sb, "\\r")
+        else code == 8:
+            str.BufAppend(sb, "\\b")
+        else code == 12:
+            str.BufAppend(sb, "\\f")
+        else code < 32:
+            str.BufAppend(sb, "\\u00")
+            str.BufAppendChar(sb, _dhex(code / 16))
+            str.BufAppendChar(sb, _dhex(code % 16))
+        else:
+            str.BufAppendChar(sb, code)
+        end
+    end
+    body := str.BufStr(sb)
+    str.BufFree(sb)
+    ret "\"" + body + "\""
+end
+
+func _dhex(n: int): int:
+    if n < 10: ret 48 + n end
+    ret 87 + n
+end
+
+func _di(n: i64): str:
+    ret conv.FormatInt(n)
+end
+
+func _du(n: u64): str:
+    ret conv.FormatUint(n)
+end
+
+// _df - JSON has no spelling for an infinity or a NaN, and a document
+// containing one cannot be parsed back by anything. They encode as null,
+// which every decoder accepts, rather than as text that silently produces a
+// broken payload.
+func _df(x: f64): str:
+    if x != x: ret "null" end
+    if x > 1.7976931348623157e308: ret "null" end
+    if x < -1.7976931348623157e308: ret "null" end
+    ret conv.FormatFloat(x)
+end
+
+func _db(v: bool): str:
+    if v: ret "true" end
+    ret "false"
+end
+
+// _dch - a `char` is one codepoint, and JSON's only spelling for one is a
+// one-character string.
+func _dch(code: int): str:
+    mut sb := str.NewBuilder()
+    str.BufAppendChar(sb, code)
+    one := str.BufStr(sb)
+    str.BufFree(sb)
+    ret _dqs(one)
+end

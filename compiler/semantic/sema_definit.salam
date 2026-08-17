@@ -55,7 +55,7 @@ func di_find(d &: Di, name: str): int:
     mut i := d.vars.len()
     until i > 0:
         i -= 1
-        if d.vars.get(i)[0].name == name:
+        if d.vars.get(i).name == name:
             ret i
         end
     end
@@ -69,7 +69,7 @@ func di_drop_to(d &: Di, mark: int):
 end
 
 func di_set_inited(d &: Di, idx: int, v: bool):
-    mut e := d.vars.get(idx)[0]
+    mut e := d.vars.get(idx)
     e.inited = v
     d.vars.set(idx, e)
 end
@@ -86,7 +86,7 @@ func di_is_filled(d &: Di, name: str): bool:
         ret false
     end
     repeat d.filled.len() with i:
-        if d.filled.get(i)[0] == name:
+        if d.filled.get(i) == name:
             ret true
         end
     end
@@ -153,10 +153,10 @@ func di_read(s &: Sema, d &: Di, a &: at.Ast, nid: int):
     if idx < 0:
         ret
     end
-    if d.vars.get(idx)[0].inited:
+    if d.vars.get(idx).inited:
         ret
     end
-    line := at.Get(a, d.vars.get(idx)[0].decl).begin_line as u64
+    line := at.Get(a, d.vars.get(idx).decl).begin_line as u64
     serr(
         s, 89, span_of(a, nid), co.Format2(
             i18.Tr("'%s' is read before it is given a value (declared on line %u); give it a value with ':=', or assign to it on every path that reaches here"),
@@ -172,7 +172,7 @@ end
 func di_snap(d &: Di, n: int): Vector<int>:
     mut out := Vector {} as Vector<int>
     repeat n with i:
-        if d.vars.get(i)[0].inited:
+        if d.vars.get(i).inited:
             out.push(1)
         else:
             out.push(0)
@@ -183,7 +183,7 @@ end
 
 func di_load(d &: Di, buf &: Vector<int>, n: int):
     repeat n with i:
-        di_set_inited(d, i, buf.get(i)[0] != 0)
+        di_set_inited(d, i, buf.get(i) != 0)
     end
 end
 
@@ -203,34 +203,36 @@ func di_if(s &: Sema, d &: Di, a &: at.Ast, nid: int):
     di_expr(s, d, a, n.a)
     nv := d.vars.len()
     mut base := di_snap(d, nv)
-    th := di_arm(s, d, a, n.b, base, nv)
+    mut th := di_arm(s, d, a, n.b, base, nv)
     th_live := !sema_stmt_terminates(s, a, n.b)
-    mut el := di_snap(d, 0)
+    mut el := Vector {} as Vector<int>
     mut el_live := true
     if n.c != 0:
         el = di_arm(s, d, a, n.c, base, nv)
         el_live = !sema_stmt_terminates(s, a, n.c)
     else:
         // The implicit empty else assigns nothing.
-        el = di_snap(d, 0)
         repeat nv with i:
-            el.push(base.get(i)[0])
+            el.push(base.get(i))
         end
     end
     di_load(d, base, nv)
     repeat nv with i:
         mut got := false
         if th_live && el_live:
-            got = th.get(i)[0] != 0 && el.get(i)[0] != 0
+            got = th.get(i) != 0 && el.get(i) != 0
         else if th_live:
-            got = th.get(i)[0] != 0
+            got = th.get(i) != 0
         else if el_live:
-            got = el.get(i)[0] != 0
+            got = el.get(i) != 0
         end
         if got:
             di_set_inited(d, i, true)
         end
     end
+    base.free()
+    th.free()
+    el.free()
 end
 
 func di_match(s &: Sema, d &: Di, a &: at.Ast, nid: int):
@@ -239,7 +241,7 @@ func di_match(s &: Sema, d &: Di, a &: at.Ast, nid: int):
     nv := d.vars.len()
     mut base := di_snap(d, nv)
     mut acc := di_snap(d, 0)
-    repeat nv with i:
+    repeat nv:
         acc.push(1)
     end
     mut has_else := false
@@ -250,26 +252,29 @@ func di_match(s &: Sema, d &: Di, a &: at.Ast, nid: int):
         if at.Get(a, arm).op == tok.TK_KW_ELSE:
             has_else = true
         end
-        st := di_arm(s, d, a, body, base, nv)
+        mut st := di_arm(s, d, a, body, base, nv)
         if !sema_stmt_terminates(s, a, body):
             any_live = true
             repeat nv with k:
-                if st.get(k)[0] == 0:
+                if st.get(k) == 0:
                     acc.set(k, 0)
                 end
             end
         end
+        st.free()
     end
     di_load(d, base, nv)
     // Without an else arm the match may match nothing, so nothing it assigns
     // is guaranteed.
     if has_else && any_live:
         repeat nv with i:
-            if acc.get(i)[0] != 0:
+            if acc.get(i) != 0:
                 di_set_inited(d, i, true)
             end
         end
     end
+    base.free()
+    acc.free()
 end
 
 // The body of a loop may run zero times, so whatever it assigns is not
@@ -284,6 +289,7 @@ func di_loop(s &: Sema, d &: Di, a &: at.Ast, cond: int, body: int, post: int):
     di_stmt(s, d, a, post)
     di_drop_to(d, nv)
     di_load(d, base, nv)
+    base.free()
 end
 
 func di_for(s &: Sema, d &: Di, a &: at.Ast, nid: int):
@@ -309,9 +315,27 @@ func di_call(s &: Sema, d &: Di, a &: at.Ast, nid: int):
     di_expr(s, d, a, at.Get(a, nid).a)
     repeat at.ChildCount(a, nid) with i:
         arg := at.Child(a, nid, i)
-        if arg != 0 && at.KindOf(a, arg) == at.AST_IDENTIFIER && at.Get(a, arg).ref_arg:
-            // A `&:` parameter: the callee writes it.
-            di_mark(d, at.Get(a, arg).name)
+        if arg != 0 && at.Get(a, arg).ref_arg:
+            // A `&:` parameter: the callee writes it. Through a projection
+            // (`f(rows[0])`, `f(h.k)`) only the subscripts are reads, the same
+            // rule di_assign applies to `rows[0] = v`.
+            mut root := arg
+            mut rk := at.KindOf(a, root)
+            until rk == at.AST_MEMBER || rk == at.AST_INDEX || rk == at.AST_SLICE:
+                rn := at.Get(a, root)
+                di_expr(s, d, a, rn.b)
+                di_expr(s, d, a, rn.c)
+                root = rn.a
+                if root == 0:
+                    break
+                end
+                rk = at.KindOf(a, root)
+            end
+            if root != 0 && at.KindOf(a, root) == at.AST_IDENTIFIER:
+                di_mark(d, at.Get(a, root).name)
+            else:
+                di_expr(s, d, a, root)
+            end
         else:
             di_expr(s, d, a, arg)
         end
@@ -441,4 +465,8 @@ pub func SemaCheckDefiniteInit(s &: Sema, a &: at.Ast, fnid: int):
     mut d := Di {}
     di_scan_filled(d, a, body)
     di_stmt(s, d, a, body)
+    // Both vectors hold borrowed AST names, so the storage is all there is to
+    // release. Without this every checked function left two blocks behind.
+    d.vars.free()
+    d.filled.free()
 end

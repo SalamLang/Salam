@@ -13,7 +13,7 @@ func lv_addr_of(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): LvAddr:
         nm := at.Get(a, n).name
         li := local_find(v, nm)
         if li >= 0:
-            lvar := v.locals.get(li)[0]
+            lvar := v.locals.get(li)
             mut r := LvAddr {}
             r.ptr = lvar.ptr
             r.ts = lvar.ts
@@ -23,7 +23,7 @@ func lv_addr_of(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): LvAddr:
             capn := at.Get(a, v.cur_lambda)
             mut ci := 0
             until ci < capn.captures.len():
-                c := at.Get(a, capn.captures.get(ci)[0])
+                c := at.Get(a, capn.captures.get(ci))
                 if str.Equals(c.name, nm):
                     rr := new_tmp(v)
                     emit(
@@ -50,12 +50,13 @@ func lv_addr_of(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): LvAddr:
                 mut ra2 := LvAddr {}
                 ra2.ptr = rr2
                 ra2.ts = fts
+                ra2.tbaa = tbaa_suffix(v, s, fts, true)
                 ret ra2
             end
         end
         gi := global_find(v, nm)
         if gi >= 0:
-            gv := v.globals.get(gi)[0]
+            gv := v.globals.get(gi)
             mut ra3 := LvAddr {}
             ra3.ptr = gv.ptr
             ra3.ts = gv.ts
@@ -88,7 +89,7 @@ func lv_addr_of(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): LvAddr:
             touch_pkg(v, s, a, tpk)
             tgf := global_find(v, nm)
             if tgf >= 0:
-                tgvar := v.globals.get(tgf)[0]
+                tgvar := v.globals.get(tgf)
                 mut ra5 := LvAddr {}
                 ra5.ptr = tgvar.ptr
                 ra5.ts = tgvar.ts
@@ -117,7 +118,7 @@ func lv_addr_of(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): LvAddr:
                     emit_globals(v, s, a, pgy.decl)
                     pgf := global_find(v, nm)
                     if pgf >= 0:
-                        pgv := v.globals.get(pgf)[0]
+                        pgv := v.globals.get(pgf)
                         mut ra6 := LvAddr {}
                         ra6.ptr = pgv.ptr
                         ra6.ts = pgv.ts
@@ -185,6 +186,7 @@ func member_addr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): LvAddr:
     mut ra2 := LvAddr {}
     ra2.ptr = r
     ra2.ts = fts
+    ra2.tbaa = tbaa_suffix(v, s, fts, true)
     ret ra2
 end
 
@@ -205,6 +207,7 @@ func index_addr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): LvAddr:
         mut ra := LvAddr {}
         ra.ptr = r
         ra.ts = ets
+        ra.tbaa = tbaa_suffix(v, s, ets, false)
         ret ra
     end
     // `s[i]` on a str. A str IS the pointer, so this indexes the value, not
@@ -237,7 +240,43 @@ func index_addr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): LvAddr:
         mut ra2 := LvAddr {}
         ra2.ptr = r2
         ra2.ts = ets2
+        ra2.tbaa = tbaa_suffix(v, s, ets2, false)
         ret ra2
+    end
+    // `v[i]` on a Vector. The elements do not live in the Vector struct,
+    // they hang off its `data: T*` field (field 0 of
+    // { data, count, capacity } - see std/collections/vector.salam), so the
+    // address is: step to field 0, load the buffer, then index THAT by the
+    // element type. Falling through to the array path below instead emitted
+    // `getelementptr %struct.Vector__P, ptr %v, i64 0, i64 %i`, which lli
+    // rejects outright ("invalid getelementptr indices"): a struct can only
+    // be indexed by a constant field number, never by a runtime value. This
+    // is the address form, so it also covers `v[i] = x` and `v[i].f`, none
+    // of which the value-side operator_index call can express.
+    ss4 := struct_sym(v, s, a, ots)
+    if ss4 != 0:
+        mut fs4 := 0
+        didx := field_index(s, ss4, "data", fs4)
+        if didx >= 0 && fs4 != 0 && sm.TypeAt(s, sm.SymAt(s, fs4).ty).kind == sm.TY_PTR:
+            ets4 := sm.ToString(s, sm.TypeAt(s, sm.SymAt(s, fs4).ty).pointee)
+            vb := lv_addr_of(v, s, a, nn.a)
+            dp := new_tmp(v)
+            data4 := new_tmp(v)
+            vidx := conv(v, s, a, lv_expr(v, s, a, nn.b), "i64")
+            emit(
+                v, dp + " = getelementptr inbounds " + struct_ltype(ots) + ", ptr " + vb.ptr + ", i32 0, i32 " + co.I64Toa(didx as i64)
+            )
+            emit(v, data4 + " = load ptr, ptr " + dp)
+            vr := new_tmp(v)
+            emit(
+                v, vr + " = getelementptr inbounds " + ty_of(v, s, a, ets4) + ", ptr " + data4 + ", i64 " + vidx
+            )
+            mut ra4b := LvAddr {}
+            ra4b.ptr = vr
+            ra4b.ts = ets4
+            ra4b.tbaa = tbaa_suffix(v, s, ets4, false)
+            ret ra4b
+        end
     end
     b2 := lv_addr_of(v, s, a, nn.a)
     ets3 := array_elem(ots)
@@ -249,6 +288,7 @@ func index_addr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): LvAddr:
     mut ra3 := LvAddr {}
     ra3.ptr = r3
     ra3.ts = ets3
+    ra3.tbaa = tbaa_suffix(v, s, ets3, false)
     ret ra3
 end
 
@@ -256,7 +296,7 @@ end
 func load_addr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     addr := lv_addr_of(v, s, a, n)
     r := new_tmp(v)
-    emit(v, r + " = load " + ty_of(v, s, a, addr.ts) + ", ptr " + addr.ptr)
+    emit(v, r + " = load " + ty_of(v, s, a, addr.ts) + ", ptr " + addr.ptr + addr.tbaa)
     ret make_llv(r, addr.ts)
 end
 
@@ -277,15 +317,15 @@ func lv_struct_lit(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     fsyms := sm.ScopeAt(s, sm.SymAt(s, ss).members).symbols
     mut i := 0
     until i < fsyms.len():
-        f := sm.SymAt(s, fsyms.get(i)[0])
+        f := sm.SymAt(s, fsyms.get(i))
         if f.kind == sm.SYM_FIELD:
             fts := sm.ToString(s, f.ty)
             mut prov := 0
             mut j := 0
             until j < nn.list.len():
-                fi := at.Get(a, nn.list.get(j)[0])
+                fi := at.Get(a, nn.list.get(j))
                 if prov == 0 && str.Len(fi.name) > 0 && str.Equals(fi.name, f.name):
-                    prov = nn.list.get(j)[0]
+                    prov = nn.list.get(j)
                 end
                 j += 1
             end
@@ -295,7 +335,7 @@ func lv_struct_lit(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
             else f.decl != 0 && at.Get(a, f.decl).a != 0:
                 val = conv(v, s, a, lv_expr(v, s, a, at.Get(a, f.decl).a), fts)
             else:
-                val = zero_of(fts)
+                val = zero_of(s, fts)
             end
             r := new_tmp(v)
             emit(
@@ -323,7 +363,7 @@ func lv_array_lit(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     mut cur := "zeroinitializer"
     mut i := 0
     until i < nn.list.len():
-        vv := conv(v, s, a, lv_expr(v, s, a, nn.list.get(i)[0]), ety)
+        vv := conv(v, s, a, lv_expr(v, s, a, nn.list.get(i)), ety)
         r := new_tmp(v)
         emit(
             v, r + " = insertvalue " + aty + " " + cur + ", " + lety + " " + vv + ", " + co.I64Toa(i as i64)
@@ -402,8 +442,8 @@ func lv_lambda_value(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     emit(v, "store ptr @" + name + ", ptr " + f0)
     mut i := 0
     until i < ncap:
-        c := at.Get(a, node.captures.get(i)[0])
-        cv := lv_expr(v, s, a, node.captures.get(i)[0])
+        c := at.Get(a, node.captures.get(i))
+        cv := lv_expr(v, s, a, node.captures.get(i))
         fp := new_tmp(v)
         emit(
             v, fp + " = getelementptr inbounds " + envty + ", ptr " + env + ", i32 0, i32 " + co.I64Toa((i + 1) as i64)
@@ -454,7 +494,7 @@ func match_pat_eq(
     v &: Lv, s &: sm.Sema, a &: at.Ast, subj: Llv, pat_head: int
 ): str:
     pv := lv_expr(v, s, a, pat_head)
-    if is_str(subj.ts):
+    if is_str(s, subj.ts):
         c := new_tmp(v)
         r := new_tmp(v)
         emit(v, c + " = call i32 @strcmp(ptr " + subj.ref + ", ptr " + pv.ref + ")")
@@ -499,7 +539,7 @@ func lv_match_arm_cond(
     mut acc := ""
     mut i := 0
     until i < armn.list.len():
-        pat := at.Get(a, armn.list.get(i)[0])
+        pat := at.Get(a, armn.list.get(i))
         mut c := ""
         if is_variant:
             c = match_variant_tag_cond(v, s, a, subj, pat.value_int as int)
@@ -537,7 +577,7 @@ func lv_match_expr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     v.match_merge_block = endL
     mut i := 0
     until i < nn.list.len():
-        arm := nn.list.get(i)[0]
+        arm := nn.list.get(i)
         cond := lv_match_arm_cond(v, s, a, arm, subj, is_variant)
         bodyL := new_lbl(v, "marm")
         nextL := (i + 1 < nn.list.len()) ? new_lbl(v, "mnext") : fallbackL
@@ -596,7 +636,7 @@ func sizeof_arg_ts(a &: at.Ast, n: int): str:
     if !str.Equals(at.Get(a, nn.a).name, "sizeof"):
         ret ""
     end
-    ret at.Get(a, nn.list.get(0)[0]).type_str
+    ret at.Get(a, nn.list.get(0)).type_str
 end
 
 // ll_elem_index - `idx * sizeof(T)` (either order) where T is `want`, the
@@ -628,7 +668,7 @@ func gep_from_int_add(
     v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, to_ts: str, out &: str
 ): bool:
     node := at.Get(a, n)
-    if !is_ptr_ts(to_ts) || is_str(to_ts):
+    if !is_ptr_ts(to_ts) || is_str(s, to_ts):
         ret false
     end
     if node.a == 0 || at.KindOf(a, node.a) != at.AST_BINARY:
@@ -663,7 +703,7 @@ func gep_from_int_add(
     mut idx := elem_index(a, bin.b, pointee)
 
     p := lv_expr(v, s, a, base.a)
-    ptr_base := is_ptr_ts(p.ts) || is_str(p.ts)
+    ptr_base := is_ptr_ts(p.ts) || is_str(s, p.ts)
     // Evaluate the offset operand exactly once: the index alone when a typed
     // GEP is on the table, the whole `idx * sizeof(T)` otherwise.
     mut off := lv_expr(v, s, a, (ptr_base && idx != 0) ? idx : bin.b)
@@ -722,6 +762,35 @@ func gep_from_int_add(
 end
 
 // ll_expr
+// The LLVM symbol a function name denotes, without the leading '@', or "" on
+// error. Shared by `&f`, by a bare function name read as a value, and by
+// spawn(f).
+//
+// ensure_fn runs unconditionally, the way call_user does it: is_extern decides
+// the *name* (an extern keeps its own), never whether the callee needs
+// emitting. An `extern:` block function with a body is a Salam function that
+// merely keeps an unmangled symbol so it can be handed to C as a callback -
+// std/webview's `&salam_com_addref` COM vtable slots are the whole reason the
+// form exists - and skipping it here left `@salam_com_addref` with neither a
+// declare nor a define anywhere in the module ("use of undefined value").
+func lv_func_symbol(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, name: str): str:
+    fsym := sym_of(v, s, a, name)
+    if fsym == 0 || sm.SymAt(s, fsym).kind != sm.SYM_FUNC || sm.SymAt(s, fsym).overloads.len() != 1:
+        lv_error(v, a, n, "cannot take the address of '" + name + "'")
+        ret ""
+    end
+    sig := sm.SymAt(s, fsym).overloads.get(0)
+    if sm.SigAt(s, sig).decl == 0:
+        lv_error(v, a, n, "cannot take the address of '" + name + "'")
+        ret ""
+    end
+    ensure_fn(v, s, a, sm.SigAt(s, sig).decl, 0, v.pkg_scope)
+    if at.Get(a, sm.SigAt(s, sig).decl).is_extern:
+        ret name
+    end
+    ret mangle(v, s, "", name, sig)
+end
+
 func lv_expr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     if n == 0:
         ret make_llv("0", "i32")
@@ -732,29 +801,26 @@ func lv_expr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
         ret lv_literal(v, a, n)
     end
     if k == at.AST_IDENTIFIER:
+        // A bare function name read as a value: its address, as an i64.
+        if node.func_value:
+            fvsym := lv_func_symbol(v, s, a, n, node.name)
+            if str.Len(fvsym) == 0:
+                ret poison("i64")
+            end
+            rfv := new_tmp(v)
+            emit(v, rfv + " = ptrtoint ptr @" + fvsym + " to i64")
+            ret make_llv(rfv, "i64")
+        end
         addr := lv_addr_of(v, s, a, n)
         r := new_tmp(v)
         emit(v, r + " = load " + ty_of(v, s, a, addr.ts) + ", ptr " + addr.ptr)
         ret make_llv(r, addr.ts)
     end
     if k == at.AST_FUNC_ADDR:
-        fsym := sym_of(v, s, a, node.name)
-        if fsym == 0 || sm.SymAt(s, fsym).kind != sm.SYM_FUNC || sm.SymAt(s, fsym).overloads.len() != 1:
-            lv_error(v, a, n, "cannot take the address of '" + node.name + "'")
+        fname := lv_func_symbol(v, s, a, n, node.name)
+        if str.Len(fname) == 0:
             ret poison(str.Len(node.type_str) > 0 ? node.type_str : "ptr")
         end
-        sig := sm.SymAt(s, fsym).overloads.get(0)[0]
-        is_ext := sm.SigAt(s, sig).decl != 0 && at.Get(a, sm.SigAt(s, sig).decl).is_extern
-        // Unconditionally, the way call_user does it: is_ext decides the
-        // *name* (an extern keeps its own), never whether the callee needs
-        // emitting. An `extern:` block function with a body is a Salam
-        // function that merely keeps an unmangled symbol so it can be handed
-        // to C as a callback - std/webview's `&salam_com_addref` COM vtable
-        // slots are the whole reason the form exists - and skipping it here
-        // left `@salam_com_addref` with neither a declare nor a define
-        // anywhere in the module ("use of undefined value").
-        ensure_fn(v, s, a, sm.SigAt(s, sig).decl, 0, v.pkg_scope)
-        fname := is_ext ? node.name : mangle(v, s, "", node.name, sig)
         ret make_llv("@" + fname, "void*")
     end
     if k == at.AST_THIS:
@@ -849,7 +915,7 @@ func lv_expr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
             if e != 0:
                 m := sm.LookupLocal(s, sm.SymAt(s, e).members, node.name)
                 if m != 0 && sm.SymAt(s, m).kind == sm.SYM_ENUM_MEMBER:
-                    ret make_llv(co.I64Toa(sm.SymAt(s, m).enum_value), "i32")
+                    ret enum_member_value(v, s, m)
                 end
             end
             pk2 := sym_of(v, s, a, at.Get(a, node.a).name)
@@ -857,6 +923,22 @@ func lv_expr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
                 mut pv := Llv {}
                 if pkg_value(v, s, a, n, pk2, pv):
                     ret pv
+                end
+            end
+        end
+        // pkg.EnumName.Member: node.a is itself pkg.EnumName, an
+        // AST_MEMBER - see the matching fix in check_member/sema_expr.salam
+        // for why the parser always builds this as a plain
+        // left-associative chain. enum_sym/sym_of already search every
+        // known package's scope, so this can look the enum straight up by
+        // its own name (node.a's name, e.g. "Kind") without needing to
+        // separately resolve "pkg" at all.
+        if node.a != 0 && at.KindOf(a, node.a) == at.AST_MEMBER:
+            e2 := enum_sym(v, s, a, at.Get(a, node.a).name)
+            if e2 != 0:
+                m2 := sm.LookupLocal(s, sm.SymAt(s, e2).members, node.name)
+                if m2 != 0 && sm.SymAt(s, m2).kind == sm.SYM_ENUM_MEMBER:
+                    ret enum_member_value(v, s, m2)
                 end
             end
         end

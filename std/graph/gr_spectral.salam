@@ -1,0 +1,154 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package graph
+import math
+
+// Determinants and spectra: the numbers that come out of a graph's matrices
+// rather than the matrices themselves.
+//
+// The adjacency spectrum bounds the chromatic number and brackets the average
+// and maximum degree. The Laplacian spectrum is richer: the multiplicity of
+// eigenvalue 0 is the number of connected components, the second smallest is
+// Fiedler's algebraic connectivity, and by the matrix-tree theorem the
+// product of the nonzero eigenvalues over n is the number of spanning trees.
+//
+// Eigenvalues come from cyclic Jacobi rotation, which is exact to machine
+// precision on symmetric input and has no failure mode to check for.
+
+// Gaussian elimination with partial pivoting. Also the workhorse behind the
+// matrix-tree theorem below.
+@en "Determinant"
+@fa "دترمینان"
+@ar "محدد"
+pub func Determinant(x &: Matrix): f64:
+    n := x.rows
+    mut m := _matrix_copy(x)
+    mut det := 1.0
+    repeat n with c:
+        p := _pivot(m, c, n)
+        if p == GRAPH_NONE:
+            m.free()
+            ret 0.0
+        end
+        if p != c:
+            _swap_rows(m, p, c, n)
+            det = 0.0 - det
+        end
+        det = det * m.at(c, c)
+        _eliminate(m, c, n)
+    end
+    defer m.free()
+    ret det
+end
+
+// Kirchhoff's matrix-tree theorem: the number of spanning trees equals any
+// cofactor of the Laplacian. Zero for a disconnected graph, which is the
+// correct answer rather than an error.
+@en "SpanningTreeCount"
+@fa "شمار درخت پوشا"
+@ar "عدد الأشجار الممتدة"
+pub func SpanningTreeCount(g &: Graph): f64:
+    if g.n == 0: ret 0.0 end
+    if g.n == 1: ret 1.0 end
+    mut u := ToUndirected(g)
+    mut l := LaplacianMatrix(u)
+    mut minor := NewMatrix(g.n - 1, g.n - 1)
+    repeat g.n - 1 with i:
+        repeat g.n - 1 with j: minor.set(i, j, l.at(i + 1, j + 1)) end
+    end
+    d := Determinant(minor)
+    defer minor.free()
+    defer l.free()
+    defer u.free()
+    ret math.Round(d)
+end
+
+// Eigenvalues of a symmetric matrix by cyclic Jacobi rotation, returned in
+// ascending order. Jacobi is slower than a tridiagonal QR for large n but it
+// is short, has no failure modes on symmetric input, and reaches machine
+// precision, which is what matters for spectra we then compare.
+@en "SymmetricEigenvalues"
+@fa "مقادیر ویژه متقارن"
+@ar "القيم الذاتية المتماثلة"
+pub func SymmetricEigenvalues(x &: Matrix): Vector<f64>:
+    n := x.rows
+    mut m := _matrix_copy(x)
+    mut sweep := 0
+    until sweep < 60:
+        off := _off_diagonal(m, n)
+        if off < 0.000000000001: break end
+        _jacobi_sweep(m, n)
+        sweep += 1
+    end
+    mut out := Vector {} as Vector<f64>
+    repeat n with i: out.push(m.at(i, i)) end
+    defer m.free()
+    _sort_floats(out)
+    ret out
+end
+
+@en "AdjacencySpectrum"
+@fa "طیف مجاورت"
+@ar "طيف الجوار"
+pub func AdjacencySpectrum(g &: Graph): Vector<f64>:
+    mut a := AdjacencyMatrix(g)
+    s := SymmetricEigenvalues(a)
+    defer a.free()
+    ret s
+end
+
+@en "LaplacianSpectrum"
+@fa "طیف لاپلاس"
+@ar "طيف لابلاس"
+pub func LaplacianSpectrum(g &: Graph): Vector<f64>:
+    mut u := ToUndirected(g)
+    mut l := LaplacianMatrix(u)
+    s := SymmetricEigenvalues(l)
+    defer l.free()
+    defer u.free()
+    ret s
+end
+
+// The largest adjacency eigenvalue. It sits between the average and the
+// maximum degree, and for a connected graph it is simple with a positive
+// eigenvector (Perron-Frobenius), which is what eigenvector centrality uses.
+@en "SpectralRadius"
+@fa "شعاع طیفی"
+@ar "نصف قطر طيفي"
+pub func SpectralRadius(g &: Graph): f64:
+    mut s := AdjacencySpectrum(g)
+    mut best := 0.0
+    repeat s.len() with i:
+        v := math.Abs(s.get(i))
+        if v > best: best = v end
+    end
+    defer s.free()
+    ret best
+end
+
+// Fiedler's algebraic connectivity: the second smallest Laplacian eigenvalue.
+// It is zero exactly when the graph is disconnected, and it lower bounds both
+// the vertex and the edge connectivity.
+@en "AlgebraicConnectivity"
+@fa "همبندی جبری"
+@ar "الاتصال الجبري"
+pub func AlgebraicConnectivity(g &: Graph): f64:
+    if g.n < 2: ret 0.0 end
+    mut s := LaplacianSpectrum(g)
+    v := s.get(1)
+    defer s.free()
+    if v < 0.0: ret 0.0 end
+    ret v
+end

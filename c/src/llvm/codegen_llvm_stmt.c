@@ -14,13 +14,33 @@
 
 #include "llvm/codegen_llvm_internal.h"
 
-static void ll_emit_defers(ll_t *ll)
+/*
+ * `defer` is scoped to the block it is written in: every nested block records
+ * the defer-stack depth it started at and replays anything registered above
+ * that mark on the way out, so a defer naming a block-local is lowered while
+ * that local's alloca is still a live name. `ret` replays the whole stack.
+ * See the long note in codegen/codegen_stmt.c.
+ */
+static void ll_emit_defers_from(ll_t *ll, size_t mark)
 {
     {
         size_t i = ll->defers.len;
-        for (; i > 0; i--)
+        for (; i > mark; i--)
             ll_stmt(ll, (ast_node_t *)ll->defers.data[i - 1]);
     }
+}
+
+static void ll_emit_defers(ll_t *ll)
+{
+    ll_emit_defers_from(ll, 0);
+}
+
+/* break/continue jump over the end of the loop body, so they run what the
+ * body registered before branching. ll_stmt is a no-op once the block has a
+ * terminator, so a body that ends in `ret` never emits these twice. */
+static void ll_emit_loop_exit_defers(ll_t *ll)
+{
+    if (ll->nloop > 0) ll_emit_defers_from(ll, ll->loop_dmark[ll->nloop - 1]);
 }
 
 void ll_emit_return(ll_t *ll, ast_node_t *value)
@@ -66,7 +86,7 @@ void ll_emit_return(ll_t *ll, ast_node_t *value)
      * aggregate - `ret %struct.xml__XMLNode 0`. Emit the type's own zero. */
     if (!value) {
         ll_emit_defers(ll);
-        ll_emit_term(ll, "ret %s %s", ll_ty(ll, ll->ret_ts), ll_zero(ll->ret_ts));
+        ll_emit_term(ll, "ret %s %s", ll_ty(ll, ll->ret_ts), ll_zero(ll, ll->ret_ts));
         return;
     }
     const char *v = ll_conv(ll, ll_expr(ll, value), ll->ret_ts);
@@ -89,7 +109,7 @@ static void ll_vardecl(ll_t *ll, ast_node_t *n)
      * read that no assignment precedes, but a `&:` parameter the callee only
      * writes on some paths would still leave this indeterminate, so zero it -
      * the C and JS backends do the same. */
-    ll_emit(ll, "store %s %s, ptr %s", ll_ty(ll, ts), ll_zero(ts), ptr);
+    ll_emit(ll, "store %s %s, ptr %s", ll_ty(ll, ts), ll_zero(ll, ts), ptr);
 }
 
 static token_kind_t ll_compound_base(token_kind_t k)
@@ -153,17 +173,20 @@ void ll_assign(ll_t *ll, ast_node_t *n)
         bin.type_str = ts;
         rhs = ll_conv(ll, ll_binary(ll, &bin), ts);
     }
-    ll_emit(ll, "store %s %s, ptr %s", ll_ty(ll, ts), rhs, a.ptr);
+    ll_emit(ll, "store %s %s, ptr %s%s", ll_ty(ll, ts), rhs, a.ptr, a.tbaa ? a.tbaa : "");
 }
 
 static void ll_stmts_scoped(ll_t *ll, ast_node_t *block)
 {
     size_t mark = ll->locals.len;
+    size_t dmark = ll->defers.len;
     {
         size_t i = 0;
         for (; i < block->list.len; i++)
             ll_stmt(ll, (ast_node_t *)block->list.data[i]);
     }
+    ll_emit_defers_from(ll, dmark);
+    ll->defers.len = dmark;
     ll->locals.len = mark;
 }
 
@@ -232,6 +255,7 @@ static void ll_while(ll_t *ll, ast_node_t *n)
     }
     ll->brk[ll->nloop] = endL;
     ll->cont[ll->nloop] = condL;
+    ll->loop_dmark[ll->nloop] = ll->defers.len;
     ll->nloop++;
     ll_stmts_scoped(ll, n->b);
     ll->nloop--;
@@ -262,6 +286,7 @@ static void ll_for(ll_t *ll, ast_node_t *n)
     }
     ll->brk[ll->nloop] = endL;
     ll->cont[ll->nloop] = stepL;
+    ll->loop_dmark[ll->nloop] = ll->defers.len;
     ll->nloop++;
     ll_stmts_scoped(ll, n->d);
     ll->nloop--;
@@ -375,6 +400,7 @@ static void ll_repeat(ll_t *ll, ast_node_t *n)
     }
     ll->brk[ll->nloop] = endL;
     ll->cont[ll->nloop] = stepL;
+    ll->loop_dmark[ll->nloop] = ll->defers.len;
     ll->nloop++;
     ll_stmts_scoped(ll, n->b);
     ll->nloop--;
@@ -437,9 +463,11 @@ void ll_stmt(ll_t *ll, ast_node_t *n)
         vec_push(ll->a, &ll->defers, n->a);
         break;
     case AST_BREAK:
+        ll_emit_loop_exit_defers(ll);
         if (ll->nloop) ll_emit_term(ll, "br label %%%s", ll->brk[ll->nloop - 1]);
         break;
     case AST_CONTINUE:
+        ll_emit_loop_exit_defers(ll);
         if (ll->nloop) ll_emit_term(ll, "br label %%%s", ll->cont[ll->nloop - 1]);
         break;
     default:

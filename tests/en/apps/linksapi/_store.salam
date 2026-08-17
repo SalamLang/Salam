@@ -1,0 +1,404 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package store
+
+// SQL for the link shortener.
+//
+// THE HOT PATH IS THE POINT
+//
+// Every other query in these examples runs a handful of times a minute. The
+// redirect runs on every visit, and it is the one that has to stay cheap:
+//
+//   1 SELECT by a unique index   ->  the target URL
+//   1 UPDATE ... clicks + 1      ->  the counter
+//   1 INSERT into click_log      ->  the detail
+//
+// No transaction. If the log INSERT fails, a visitor still gets where they
+// were going, and one row of analytics is worth less than one redirect. That
+// is a deliberate choice about which half is allowed to fail, and it is the
+// kind of choice worth writing down next to the code that makes it.
+//
+// The counter uses `clicks = clicks + 1` rather than a read and a write, so
+// two visits in the same millisecond both count. Reading the value into the
+// program and writing it back is the version that loses clicks.
+
+import os
+import str
+import conv
+import db.mysql
+import encoding.json
+
+const ER_DUP_ENTRY := 1062
+const LINK_COLS := "id, code, target, clicks, disabled, created_at"
+
+// Connection settings, read once at startup and never written again. Sharing
+// them across threads is safe precisely because nothing mutates them after
+// Configure returns.
+mut _host := "127.0.0.1"
+mut _port := 3306
+mut _user := "root"
+mut _pass := ""
+mut _name := "salam_links"
+
+// One request's connection.
+//
+// It holds the raw handle rather than a mysql.Database, and _db() rebuilds
+// the struct on the way into the driver. That is a workaround, not a design:
+// a struct field whose DEFAULT is a struct from another package makes the C
+// backend emit the type name without its module prefix - (Database){0}
+// instead of (mysql__Database){0} - and the generated C does not compile.
+// A pointer field with a null default has no such problem.
+pub struct Conn:
+    pub handle: void* = null
+    pub ok: bool = false
+    pub err: str = ""
+end
+
+pub struct User:
+    pub id: i64 = 0
+    pub email: str = ""
+    pub hash: str = ""
+end
+
+pub struct Link:
+    pub id: i64 = 0
+    pub target: str = ""
+    pub disabled: bool = false
+end
+
+// The driver handle, rebuilt from the raw pointer. See Conn above.
+func _db(c: Conn): mysql.Database:
+    ret mysql.Database { handle = c.handle }
+end
+
+func _quote(c: Conn, s: str): str:
+    ret "'".concat(mysql.Escape(_db(c), s)).concat("'")
+end
+
+func _num(v: i64): str:
+    ret conv.FormatInt(v)
+end
+
+func _env(name: str, fallback: str): str:
+    v := os.Env(name)
+    if v.len() == 0: ret fallback end
+    ret v
+end
+
+func _exec(c: Conn, sql: str, err &: str): bool:
+    err = ""
+    if mysql.Exec(_db(c), sql) != 0:
+        err = mysql.Error(_db(c))
+        ret false
+    end
+    ret true
+end
+
+func _scalar(c: Conn, sql: str): i64:
+    mut res := mysql.Query(_db(c), sql)
+    if !mysql.QueryOk(res): ret 0 as i64 end
+    mut v := 0 as i64
+    if mysql.Next(res): v = mysql.Int64(res, 0) end
+    mysql.Finish(res)
+    ret v
+end
+
+func _link_json(res: mysql.Result): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppend(sb, `{"id":`)
+    str.BufAppend(sb, mysql.Text(res, 0))
+    str.BufAppend(sb, `,"code":`)
+    str.BufAppend(sb, json.Str(mysql.Text(res, 1)))
+    str.BufAppend(sb, `,"target":`)
+    str.BufAppend(sb, json.Str(mysql.Text(res, 2)))
+    str.BufAppend(sb, `,"clicks":`)
+    str.BufAppend(sb, mysql.Text(res, 3))
+    str.BufAppend(sb, `,"disabled":`)
+    if mysql.Int(res, 4) == 1:
+        str.BufAppend(sb, "true")
+    else:
+        str.BufAppend(sb, "false")
+    end
+    str.BufAppend(sb, `,"created_at":`)
+    str.BufAppend(sb, json.Str(mysql.Text(res, 5)))
+    str.BufAppendChar(sb, 125)
+    out := str.BufStr(sb)
+    ret out
+end
+
+// ---------------------------------------------------------------- connection
+
+// Read the settings and prove they work, once, from main. Returns false with
+// a reason rather than letting every request discover the problem separately.
+pub func Configure(err &: str): bool:
+    err = ""
+    if !mysql.LibraryInit():
+        err = "cannot initialise the MariaDB client library"
+        ret false
+    end
+    _host = _env("DB_HOST", "127.0.0.1")
+    _port = _env("DB_PORT", "3306").to_int()
+    _user = _env("DB_USER", "root")
+    // No default. A password compiled into a program is a password in the
+    // repository, and a default of "" hides a missing one until production.
+    _pass = os.Env("DB_PASS")
+    _name = _env("DB_NAME", "salam_links")
+    probe := Connect()
+    if !probe.ok:
+        err = probe.err
+        ret false
+    end
+    Close(probe)
+    ret true
+end
+
+// One connection, for one request, on the thread that will use it.
+pub func Connect(): Conn:
+    mut c := Conn {}
+    // Per-thread driver state. Cheap after the first call on a thread, and
+    // required before any other libmariadb call from it.
+    _t := mysql.ThreadInit()
+    d := mysql.Open(_host, _user, _pass, _name, _port)
+    if !mysql.Ok(d):
+        c.err = mysql.Error(d)
+        // Even a failed handle has to be closed: mysql_init allocated it.
+        mysql.Close(d)
+        ret c
+    end
+    // Tell the server the connection speaks utf8mb4, or a 4-byte character
+    // arrives mangled no matter what the column says.
+    _x := mysql.SetCharset(d, "utf8mb4")
+    c.handle = d.handle
+    c.ok = true
+    ret c
+end
+
+pub func Close(c: Conn):
+    if c.handle != null: mysql.Close(_db(c)) end
+end
+
+pub func Ok(c: Conn): bool:
+    ret c.ok
+end
+
+pub func Err(c: Conn): str:
+    ret c.err
+end
+
+// Release the calling thread's driver state. A request thread does not need
+// it - the thread dies with the request - but a long-lived worker that stops
+// using the database should.
+pub func ThreadDone():
+    mysql.ThreadEnd()
+end
+
+pub func Shutdown():
+    mysql.LibraryEnd()
+end
+
+// A string, escaped and quoted, ready to drop into SQL. Takes the connection
+// because escaping depends on its character set.
+pub func Q(c: Conn, s: str): str:
+    ret _quote(c, s)
+end
+
+// A number, as SQL text. Going through i64 means a caller cannot smuggle
+// anything but digits into the statement.
+pub func N(v: i64): str:
+    ret _num(v)
+end
+
+// ---------------------------------------------------------------- users
+
+pub func CreateUser(c: Conn, email: str, hash: str, err &: str): i64:
+    mut sql := "INSERT INTO users (email, pass_hash) VALUES ("
+    sql = sql.concat(_quote(c, email)).concat(", ").concat(_quote(c, hash)).concat(")")
+    if !_exec(c, sql, err): ret 0 as i64 end
+    ret mysql.LastInsertId(_db(c))
+end
+
+pub func FindUser(c: Conn, email: str): User:
+    mut u := User {}
+    mut sql := "SELECT id, email, pass_hash FROM users WHERE email = "
+    sql = sql.concat(_quote(c, email)).concat(" LIMIT 1")
+    mut res := mysql.Query(_db(c), sql)
+    if !mysql.QueryOk(res): ret u end
+    if mysql.Next(res):
+        u.id = mysql.Int64(res, 0)
+        u.email = mysql.Text(res, 1)
+        u.hash = mysql.Text(res, 2)
+    end
+    mysql.Finish(res)
+    ret u
+end
+
+// ---------------------------------------------------------------- redirect
+
+// The hot path: one indexed lookup. A disabled link still resolves so the
+// caller can answer 410 Gone rather than 404 - the code WAS a link.
+pub func Resolve(c: Conn, code: str): Link:
+    mut l := Link {}
+    mut sql := "SELECT id, target, disabled FROM links WHERE code = "
+    sql = sql.concat(_quote(c, code)).concat(" LIMIT 1")
+    mut res := mysql.Query(_db(c), sql)
+    if !mysql.QueryOk(res): ret l end
+    if mysql.Next(res):
+        l.id = mysql.Int64(res, 0)
+        l.target = mysql.Text(res, 1)
+        l.disabled = mysql.Int(res, 2) == 1
+    end
+    mysql.Finish(res)
+    ret l
+end
+
+// Called after the redirect has been written. Failures are logged and
+// swallowed on purpose - see the file header.
+pub func RecordClick(c: Conn, link_id: i64, referrer: str):
+    mut err := ""
+    bump := "UPDATE links SET clicks = clicks + 1 WHERE id = ".concat(_num(link_id))
+    if !_exec(c, bump, err): println "[db] click counter: ", err end
+    mut ins := "INSERT INTO click_log (link_id, referrer) VALUES (".concat(_num(link_id))
+    if referrer.len() > 0:
+        ins = ins.concat(", ").concat(_quote(c, referrer)).concat(")")
+    else:
+        ins = ins.concat(", NULL)")
+    end
+    if !_exec(c, ins, err): println "[db] click log: ", err end
+end
+
+// ---------------------------------------------------------------- links
+
+// "" on success, "taken" when the code is already in use. Like the votes
+// table in pollsapi, the UNIQUE index is the check: two requests asking for
+// the same custom code cannot both win.
+pub func CreateLink(c: Conn, owner_id: i64, code: str, target: str, err &: str): str:
+    mut sql := "INSERT INTO links (owner_id, code, target) VALUES ("
+    sql = sql.concat(_num(owner_id)).concat(", ").concat(_quote(c, code)).concat(", ").concat(_quote(c, target)).concat(")")
+    if _exec(c, sql, err): ret "" end
+    if mysql.Errno(_db(c)) == ER_DUP_ENTRY: ret "taken" end
+    ret "db"
+end
+
+pub func OwnerOf(c: Conn, code: str): i64:
+    ret _scalar(c, "SELECT owner_id FROM links WHERE code = ".concat(_quote(c, code)))
+end
+
+pub func GetLink(c: Conn, code: str): str:
+    mut sql := "SELECT ".concat(LINK_COLS).concat(" FROM links WHERE code = ")
+    sql = sql.concat(_quote(c, code)).concat(" LIMIT 1")
+    mut res := mysql.Query(_db(c), sql)
+    if !mysql.QueryOk(res): ret "" end
+    mut out := ""
+    if mysql.Next(res): out = _link_json(res) end
+    mysql.Finish(res)
+    ret out
+end
+
+pub func MyLinks(c: Conn, owner_id: i64, limit: int, offset: int): str:
+    mut sql := "SELECT ".concat(LINK_COLS).concat(" FROM links WHERE owner_id = ").concat(_num(owner_id))
+    sql = sql.concat(" ORDER BY id DESC LIMIT ").concat(_num(limit as i64))
+    sql = sql.concat(" OFFSET ").concat(_num(offset as i64))
+    mut res := mysql.Query(_db(c), sql)
+    if !mysql.QueryOk(res): ret "[]" end
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppendChar(sb, 91)
+    mut n := 0
+    until mysql.Next(res):
+        if n > 0: str.BufAppendChar(sb, 44) end
+        str.BufAppend(sb, _link_json(res))
+        n += 1
+    end
+    str.BufAppendChar(sb, 93)
+    mysql.Finish(res)
+    out := str.BufStr(sb)
+    ret out
+end
+
+pub func SetDisabled(c: Conn, code: str, owner_id: i64, disabled: bool, err &: str): bool:
+    mut flag := "0"
+    if disabled: flag = "1" end
+    mut sql := "UPDATE links SET disabled = ".concat(flag).concat(" WHERE code = ").concat(_quote(c, code))
+    sql = sql.concat(" AND owner_id = ").concat(_num(owner_id))
+    if !_exec(c, sql, err): ret false end
+    ret true
+end
+
+pub func DeleteLink(c: Conn, code: str, owner_id: i64, err &: str): bool:
+    mut sql := "DELETE FROM links WHERE code = ".concat(_quote(c, code))
+    sql = sql.concat(" AND owner_id = ").concat(_num(owner_id))
+    if !_exec(c, sql, err): ret false end
+    ret mysql.AffectedRows(_db(c)) > 0 as i64
+end
+
+// ---------------------------------------------------------------- stats
+
+// Clicks per day for the last `days` days, newest first. This is the query
+// the click_log exists for; the counter on `links` cannot answer it.
+pub func DailyStats(c: Conn, link_id: i64, days: int): str:
+    mut sql := "SELECT DATE(clicked_at) AS day, COUNT(*) FROM click_log"
+    sql = sql.concat(" WHERE link_id = ").concat(_num(link_id))
+    sql = sql.concat(" AND clicked_at >= DATE_SUB(CURDATE(), INTERVAL ").concat(_num(days as i64)).concat(" DAY)")
+    sql = sql.concat(" GROUP BY day ORDER BY day DESC")
+    mut res := mysql.Query(_db(c), sql)
+    if !mysql.QueryOk(res): ret "[]" end
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppendChar(sb, 91)
+    mut n := 0
+    until mysql.Next(res):
+        if n > 0: str.BufAppendChar(sb, 44) end
+        str.BufAppend(sb, `{"day":`)
+        str.BufAppend(sb, json.Str(mysql.Text(res, 0)))
+        str.BufAppend(sb, `,"clicks":`)
+        str.BufAppend(sb, mysql.Text(res, 1))
+        str.BufAppendChar(sb, 125)
+        n += 1
+    end
+    str.BufAppendChar(sb, 93)
+    mysql.Finish(res)
+    out := str.BufStr(sb)
+    ret out
+end
+
+pub func TopReferrers(c: Conn, link_id: i64, limit: int): str:
+    mut sql := "SELECT COALESCE(referrer, '(direct)') AS src, COUNT(*) FROM click_log"
+    sql = sql.concat(" WHERE link_id = ").concat(_num(link_id))
+    sql = sql.concat(" GROUP BY src ORDER BY COUNT(*) DESC LIMIT ").concat(_num(limit as i64))
+    mut res := mysql.Query(_db(c), sql)
+    if !mysql.QueryOk(res): ret "[]" end
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppendChar(sb, 91)
+    mut n := 0
+    until mysql.Next(res):
+        if n > 0: str.BufAppendChar(sb, 44) end
+        str.BufAppend(sb, `{"referrer":`)
+        str.BufAppend(sb, json.Str(mysql.Text(res, 0)))
+        str.BufAppend(sb, `,"clicks":`)
+        str.BufAppend(sb, mysql.Text(res, 1))
+        str.BufAppendChar(sb, 125)
+        n += 1
+    end
+    str.BufAppendChar(sb, 93)
+    mysql.Finish(res)
+    out := str.BufStr(sb)
+    ret out
+end
+
+pub func CodeExists(c: Conn, code: str): bool:
+    ret _scalar(c, "SELECT COUNT(*) FROM links WHERE code = ".concat(_quote(c, code))) > 0 as i64
+end

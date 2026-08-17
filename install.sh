@@ -212,6 +212,15 @@ fi
 binary="$extract_dir/salam-${platform}/salam"
 [ -f "$binary" ] || binary="$(find "$extract_dir" -type f -name salam | head -n 1)"
 [ -f "$binary" ] || die "could not find 'salam' binary inside $ASSET"
+# RUN-ME.txt inside the archive calls this a "self-contained toolchain" -
+# true when the binary and std/ sit side by side, which is only the case
+# for someone extracting the zip and running ./salam in place. Installing
+# just the binary onto PATH breaks that unless std/ is copied along with
+# it: every "import os" is otherwise a standard-library-not-found error,
+# since the compiler looks for a std/ directory next to its own binary
+# (among other places - see resolve_stdlib_root in the compiler source),
+# and nothing else in this script ever puts one there.
+std_src="$(dirname "$binary")/std"
 
 if [ -z "$INSTALL_DIR" ]; then
     INSTALL_DIR="$HOME/.salam/bin"
@@ -219,6 +228,14 @@ fi
 mkdir -p "$INSTALL_DIR"
 cp "$binary" "$INSTALL_DIR/salam"
 chmod +x "$INSTALL_DIR/salam"
+
+if [ -d "$std_src" ]; then
+    rm -rf "$INSTALL_DIR/std"
+    cp -R "$std_src" "$INSTALL_DIR/std"
+    log "Installed: $INSTALL_DIR/std"
+else
+    log "warning: no std/ directory found inside $ASSET - the compiler will not find the standard library"
+fi
 
 log "Installed: $INSTALL_DIR/salam"
 "$INSTALL_DIR/salam" version >&2 2>/dev/null || true

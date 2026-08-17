@@ -25,7 +25,7 @@ func jsg_call_args(
         if i > 0:
             str.BufAppend(b, ", ")
         end
-        str.BufAppend(b, jsg_expr_p(g, s, a, cv.list.get(i)[0], 0))
+        str.BufAppend(b, jsg_expr_p(g, s, a, cv.list.get(i), 0))
         i += 1
     end
     if sig != 0:
@@ -36,7 +36,7 @@ func jsg_call_args(
             mut emitted := nargs
             mut i2 := nargs
             until i2 < np:
-                pv := at.Get(a, dv.list.get(i2)[0])
+                pv := at.Get(a, dv.list.get(i2))
                 if pv.a == 0:
                     i2 += 1
                     continue
@@ -55,13 +55,101 @@ func jsg_call_args(
     ret r
 end
 
+// Assemble a call, boxing any `&:` argument in a one-element array and
+// writing its mutated value back into the caller's variable afterward - JS
+// has no address-of for a primitive, so passing one by reference needs an
+// object both sides can share (the callee reads/writes it via `[0]`, see
+// the `n.is_ref` branch in jsg_expr_p's AST_IDENTIFIER case). Only a call
+// whose signature actually has a `&:` parameter pays for this; the
+// overwhelmingly common case falls through to the plain single-expression
+// form, unchanged from before.
+//
+// `recv`, when non-empty, is a pre-rendered receiver expression emitted
+// before the argument list (the method-call form, `recv.fn(args)` written
+// as `fn(recv, args)` in the output's flat-function style). "" is the C
+// NULL for "no receiver", matching this file's convention elsewhere.
+func jsg_call_finish(
+    g &: Jg, s &: sm.Sema, a &: at.Ast, call: int, sig: int, fn_expr: str, recv: str
+): str:
+    cv := at.Get(a, call)
+    decl := sig != 0 ? sm.SigAt(s, sig).decl : 0
+    mut any_ref := false
+    if decl != 0:
+        mut i := 0
+        until i < cv.list.len() && i < at.Get(a, decl).list.len():
+            p := at.Get(a, at.Get(a, decl).list.get(i))
+            argv := at.Get(a, cv.list.get(i))
+            if p.kind == at.AST_PARAM && p.is_ref && argv.kind == at.AST_IDENTIFIER:
+                any_ref = true
+                break
+            end
+            i += 1
+        end
+    end
+    if !any_ref:
+        as_ := jsg_call_args(g, s, a, call, sig)
+        sep := (str.Len(recv) > 0 && str.Len(as_) > 0) ? ", " : ""
+        ret fn_expr + "(" + recv + sep + as_ + ")"
+    end
+    rvar := jsg_fresh(g, "__r")
+    mut pre := str.NewBuilder()
+    mut argb := str.NewBuilder()
+    mut post := str.NewBuilder()
+    if str.Len(recv) > 0:
+        str.BufAppend(argb, recv)
+    end
+    mut i2 := 0
+    until i2 < cv.list.len():
+        mut p2 := 0
+        if decl != 0 && i2 < at.Get(a, decl).list.len():
+            p2 = at.Get(a, decl).list.get(i2)
+        end
+        argid := cv.list.get(i2)
+        argv2 := at.Get(a, argid)
+        if i2 > 0 || str.Len(recv) > 0:
+            str.BufAppend(argb, ", ")
+        end
+        if p2 != 0 && at.Get(a, p2).kind == at.AST_PARAM && at.Get(a, p2).is_ref && argv2.kind == at.AST_IDENTIFIER:
+            box := jsg_fresh(g, "__ref")
+            str.BufAppend(pre, "const " + box + " = [" + jsg_expr_p(g, s, a, argid, 0) + "]; ")
+            str.BufAppend(argb, box)
+            str.BufAppend(post, " " + jsg_expr_p(g, s, a, argid, 0) + " = " + box + "[0];")
+        else:
+            str.BufAppend(argb, jsg_expr_p(g, s, a, argid, 0))
+        end
+        i2 += 1
+    end
+    if decl != 0:
+        dv := at.Get(a, decl)
+        np := dv.list.len()
+        mut i3 := cv.list.len()
+        until i3 < np:
+            param3 := at.Get(a, dv.list.get(i3))
+            if param3.a == 0:
+                i3 += 1
+                continue
+            end
+            if i3 > 0 || str.Len(recv) > 0:
+                str.BufAppend(argb, ", ")
+            end
+            str.BufAppend(argb, jsg_expr_p(g, s, a, param3.a, 0))
+            i3 += 1
+        end
+    end
+    r := "(() => { " + str.BufStr(pre) + "const " + rvar + " = " + fn_expr + "(" + str.BufStr(argb) + ");" + str.BufStr(post) + " return " + rvar + "; })()"
+    str.BufFree(pre)
+    str.BufFree(argb)
+    str.BufFree(post)
+    ret r
+end
+
 // static const char *jsg_handler_base(...)
 func jsg_handler_base(a &: at.Ast, extname: str, args: Vector<int>): str:
     mut ev := ""
     n := args.len()
     mut i := 0
     until i < n:
-        aid := args.get(i)[0]
+        aid := args.get(i)
         if jsg_is_str_lit(a, aid):
             vs := at.Get(a, aid).value_str
             if str.Len(vs) > 0:
@@ -130,7 +218,7 @@ func jsg_emit_extern_call(
     nargs := args.len()
     mut i := 0
     until i < nargs && i < 12:
-        aid := args.get(i)[0]
+        aid := args.get(i)
         if jsg_should_hoist(a, aid):
             name := jsg_fresh(g, jsg_handler_base(a, extname, args))
             _lv := jsg_local(g, name, false)
@@ -151,7 +239,7 @@ func jsg_emit_extern_call(
             if i2 > 0:
                 str.BufAppend(b, ", ")
             end
-            str.BufAppend(b, rendered.get(i2)[0])
+            str.BufAppend(b, rendered.get(i2))
             i2 += 1
         end
         str.BufAppendChar(b, 41) // ')'
@@ -184,13 +272,13 @@ func jsg_emit_extern_call(
                 if k > start:
                     str.BufAppend(b2, ", ")
                 end
-                str.BufAppend(b2, rendered.get(k)[0])
+                str.BufAppend(b2, rendered.get(k))
                 k += 1
             end
         else c2 >= 48 && c2 <= 57:
             idx := c2 - 48
             if idx < nargs && idx < 12:
-                str.BufAppend(b2, rendered.get(idx)[0])
+                str.BufAppend(b2, rendered.get(idx))
             else:
                 str.BufAppend(b2, "undefined")
             end
@@ -224,7 +312,7 @@ func jsg_try_inline(
     if bodyv.kind != at.AST_BLOCK || bodyv.list.len() != 1:
         ret ""
     end
-    st := bodyv.list.get(0)[0]
+    st := bodyv.list.get(0)
     stv := at.Get(a, st)
     if stv.kind != at.AST_RETURN && stv.kind != at.AST_EXPR_STMT:
         ret ""
@@ -256,7 +344,7 @@ func jsg_try_inline(
         if esv.kind != sm.SYM_FUNC || esv.overloads.len() != 1:
             ret ""
         end
-        esig := esv.overloads.get(0)[0]
+        esig := esv.overloads.get(0)
         if esig == 0:
             ret ""
         end
@@ -277,7 +365,7 @@ func jsg_try_inline(
     ninner := innerv.list.len()
     mut k := 0
     until k < ninner:
-        argv := at.Get(a, innerv.list.get(k)[0])
+        argv := at.Get(a, innerv.list.get(k))
         if argv.kind != at.AST_IDENTIFIER || str.Len(argv.name) == 0:
             map.free()
             used.free()
@@ -286,8 +374,8 @@ func jsg_try_inline(
         mut found := false
         mut i := 0
         until i < nparams:
-            pv := at.Get(a, dv.list.get(i)[0])
-            if str.Len(pv.name) > 0 && str.Equals(pv.name, argv.name) && used.get(i)[0] == 0:
+            pv := at.Get(a, dv.list.get(i))
+            if str.Len(pv.name) > 0 && str.Equals(pv.name, argv.name) && used.get(i) == 0:
                 map.push(i)
                 used.set(i, 1)
                 found = true
@@ -304,7 +392,7 @@ func jsg_try_inline(
     end
     mut i2 := 0
     until i2 < nparams:
-        if used.get(i2)[0] == 0:
+        if used.get(i2) == 0:
             map.free()
             used.free()
             ret ""
@@ -315,9 +403,9 @@ func jsg_try_inline(
     mut i3 := 0
     until i3 < nparams:
         if i3 < callv.list.len():
-            outer.push(callv.list.get(i3)[0])
+            outer.push(callv.list.get(i3))
         else:
-            pv3 := at.Get(a, dv.list.get(i3)[0])
+            pv3 := at.Get(a, dv.list.get(i3))
             if pv3.a == 0:
                 map.free()
                 used.free()
@@ -331,7 +419,7 @@ func jsg_try_inline(
     mut slots := Vector {} as Vector<int>
     mut k2 := 0
     until k2 < ninner:
-        slots.push(outer.get(map.get(k2)[0])[0])
+        slots.push(outer.get(map.get(k2)))
         k2 += 1
     end
     result := jsg_emit_extern_call(g, s, a, calleev.name, slots)
@@ -350,7 +438,7 @@ func jsg_call_extern_direct(
     cnt := nv.list.len()
     mut i := 0
     until i < cnt && i < 12:
-        args.push(nv.list.get(i)[0])
+        args.push(nv.list.get(i))
         i += 1
     end
     result := jsg_emit_extern_call(g, s, a, name, args)
@@ -368,7 +456,7 @@ func jsg_print(g &: Jg, s &: sm.Sema, a &: at.Ast, n: int, err: bool): str:
         if i > 0:
             str.BufAppend(b, ", ")
         end
-        str.BufAppend(b, jsg_expr_p(g, s, a, nv.list.get(i)[0], 0))
+        str.BufAppend(b, jsg_expr_p(g, s, a, nv.list.get(i), 0))
         i += 1
     end
     str.BufAppendChar(b, 41) // ')'
@@ -393,37 +481,11 @@ func jsg_call_ident(
     if str.Equals(nm, "lang"):
         ret `"` + i18.Lang() + `"`
     end
-    if str.Equals(nm, "funcptr") && nv.list.len() == 1:
-        fnid := nv.list.get(0)[0]
-        fnv := at.Get(a, fnid)
-        fsym := sm.Lookup(s, s.global, fnv.name)
-        if fsym != 0:
-            fsv := sm.SymAt(s, fsym)
-            if fsv.overloads.len() > 0:
-                sig := fsv.overloads.get(0)[0]
-                mut d_ext := false
-                mut d_syn := false
-                if sig != 0:
-                    d := sm.SigAt(s, sig).decl
-                    if d != 0:
-                        dv := at.Get(a, d)
-                        d_ext = dv.is_extern
-                        d_syn = dv.synthetic
-                    end
-                end
-                ret jsg_fn_name(
-                    g, s, str.Len(fsv.pkgname) > 0 ? fsv.pkgname : g.pkg, "", fnv.name, fsym, sig, d_ext,
-                    d_syn
-                )
-            end
-        end
-        ret cg_cident(fnv.name)
-    end
     if str.Equals(nm, "callhandler") && nv.list.len() == 2:
-        ret jsg_expr_p(g, s, a, nv.list.get(0)[0], JSP_MEMBER) + "(" + jsg_expr_p(g, s, a, nv.list.get(1)[0], 0) + ")"
+        ret jsg_expr_p(g, s, a, nv.list.get(0), JSP_MEMBER) + "(" + jsg_expr_p(g, s, a, nv.list.get(1), 0) + ")"
     end
     if str.Equals(nm, "len") && nv.list.len() == 1:
-        arg := nv.list.get(0)[0]
+        arg := nv.list.get(0)
         klen := at.StrLitLen(a, arg)
         if klen >= 0:
             ret co.I64Toa(klen)
@@ -431,16 +493,44 @@ func jsg_call_ident(
         ret jsg_expr_p(g, s, a, arg, JSP_MEMBER) + ".length"
     end
     if str.Equals(nm, "char_code") && nv.list.len() == 1:
-        ret jsg_expr_p(g, s, a, nv.list.get(0)[0], JSP_MEMBER) + ".charCodeAt(0)"
+        ret jsg_expr_p(g, s, a, nv.list.get(0), JSP_MEMBER) + ".charCodeAt(0)"
     end
     if sm.Lookup(s, s.global, nm) == 0:
         if str.Equals(nm, "hash") && nv.list.len() == 1:
-            a0 := nv.list.get(0)[0]
+            a0 := nv.list.get(0)
             ats := at.Get(a, a0).type_str
             if str.Equals(ats, "str"):
                 ret "salam_str_hash(" + jsg_expr_p(g, s, a, a0, 0) + ")"
             end
             ret "salam_hash_int(" + jsg_expr_p(g, s, a, a0, 0) + ")"
+        end
+        /*
+         * The atomic intrinsics are plain reads and writes here. That is not
+         * a shortcut: the JS target has no threads at all - spawn is
+         * unsupported a few lines below - so a single cell can never be
+         * touched concurrently and every one of these is already indivisible.
+         * The arrow functions exist only to evaluate each operand exactly
+         * once, the way the C and LLVM lowerings do.
+         */
+        if sm.AtomicArity(nm) > 0 && nv.list.len() == sm.AtomicArity(nm) && sm.Lookup(
+            s, s.global, nm
+        ) == 0:
+            pj := jsg_expr_p(g, s, a, nv.list.get(0), 0)
+            if str.Equals(nm, "atomic_load"):
+                ret "(" + pj + ")[0]"
+            end
+            vj := jsg_expr_p(g, s, a, nv.list.get(1), 0)
+            if str.Equals(nm, "atomic_store"):
+                ret "((a,b)=>{a[0]=b;})(" + pj + "," + vj + ")"
+            end
+            if str.Equals(nm, "atomic_add"):
+                ret "((a,b)=>{a[0]=a[0]+b;return a[0];})(" + pj + "," + vj + ")"
+            end
+            if str.Equals(nm, "atomic_swap"):
+                ret "((a,b)=>{const o=a[0];a[0]=b;return o;})(" + pj + "," + vj + ")"
+            end
+            dj := jsg_expr_p(g, s, a, nv.list.get(2), 0)
+            ret "((a,e,d)=>{if(a[0]===e){a[0]=d;return true;}return false;})(" + pj + "," + vj + "," + dj + ")"
         end
         if str.Equals(nm, "sizeof") || str.Equals(nm, "spawn") || str.Equals(nm, "args") || str.Equals(nm, "listdir"):
             ret jsg_unsupported(g, nm)
@@ -517,7 +607,7 @@ func jsg_call_ident(
     else:
         fnname = jsg_ident(nm)
     end
-    ret fnname + "(" + jsg_call_args(g, s, a, n, sig) + ")"
+    ret jsg_call_finish(g, s, a, n, sig, fnname, "")
 end
 
 func jsg_call_pkg(
@@ -547,7 +637,7 @@ func jsg_call_pkg(
     name := jsg_fn_name(
         g, s, pkv.pkgname, "", calleev.name, fn, sig, false, inst
     )
-    ret name + "(" + jsg_call_args(g, s, a, n, sig) + ")"
+    ret jsg_call_finish(g, s, a, n, sig, name, "")
 end
 
 func jsg_call_array(
@@ -571,8 +661,8 @@ func jsg_call_str(
     end
     nv := at.Get(a, n)
     recv := jsg_expr_p(g, s, a, obj, JSP_MEMBER)
-    a0 := nv.list.len() > 0 ? jsg_expr_p(g, s, a, nv.list.get(0)[0], 0) : "0"
-    a1 := nv.list.len() > 1 ? jsg_expr_p(g, s, a, nv.list.get(1)[0], 0) : "0"
+    a0 := nv.list.len() > 0 ? jsg_expr_p(g, s, a, nv.list.get(0), 0) : "0"
+    a1 := nv.list.len() > 1 ? jsg_expr_p(g, s, a, nv.list.get(1), 0) : "0"
     if str.Equals(m, "len"):
         ret recv + ".length"
     end
@@ -630,16 +720,24 @@ func jsg_call_method(
             spkg = pn
         end
     end
-    mut d_syn := false
-    if sig != 0:
+    // jsg_function computes this same function's *definition*-side name with
+    // is_instance = (owner has generic_base) || fn.synthetic - a generic
+    // instantiation like Vector_str counts even when the individual
+    // method's own AST_FUNC_DEF was never marked synthetic (only the struct
+    // instantiation itself was). Checking sig.decl.synthetic alone here
+    // missed that case, so a call to any Vector<T> (or other generic
+    // struct) method computed a different name than its definition and
+    // referenced a function that was never actually emitted under that
+    // name.
+    mut d_syn := ssym != 0 && str.Len(sm.SymAt(s, ssym).generic_base) > 0
+    if !d_syn && sig != 0:
         d := sm.SigAt(s, sig).decl
         if d != 0:
             d_syn = at.Get(a, d).synthetic
         end
     end
     fn := jsg_fn_name(g, s, spkg, sname, calleev.name, msym, sig, false, d_syn)
-    as_ := jsg_call_args(g, s, a, n, sig)
-    ret fn + "(" + jsg_expr_p(g, s, a, obj, 0) + (str.Len(as_) > 0 ? ", " : "") + as_ + ")"
+    ret jsg_call_finish(g, s, a, n, sig, fn, jsg_expr_p(g, s, a, obj, 0))
 end
 
 func jsg_call_impl(
@@ -655,8 +753,7 @@ func jsg_call_impl(
     else:
         fn = jsg_ident(cg_cident(objts) + "_" + calleev.name)
     end
-    as_ := jsg_call_args(g, s, a, n, sig)
-    ret fn + "(" + jsg_expr_p(g, s, a, obj, 0) + (str.Len(as_) > 0 ? ", " : "") + as_ + ")"
+    ret jsg_call_finish(g, s, a, n, sig, fn, jsg_expr_p(g, s, a, obj, 0))
 end
 
 func jsg_call_member(

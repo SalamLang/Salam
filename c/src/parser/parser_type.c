@@ -36,19 +36,70 @@ static void parse_array_dims(parser_t *p, ast_node_t *n)
     }
 }
 
+/*
+ * A run of stars after the dims. Only single stars: "T**" reaches the parser
+ * as ONE power token, and re-reading that as two levels would have to be
+ * undone again by the formatter, which reflows '**' as a binary operator.
+ * A pointer-to-pointer is therefore still unspellable in source; the depth
+ * machinery below exists for the types generic substitution BUILDS, where
+ * Vector<Edge*> genuinely needs an Edge** for its data pointer.
+ */
 static void parse_ptr_suffix(parser_t *p, ast_node_t *n)
 {
-    if (p_match(p, TK_STAR)) n->is_pointer = true;
+    while (p_match(p, TK_STAR)) {
+        n->is_pointer = true;
+        n->ptr_depth++;
+    }
 }
 
+static bool p_at_star_run(parser_t *p, size_t k)
+{
+    return p_peekn(p, k)->kind == TK_STAR;
+}
+
+/*
+ * Both sides of the dims are legal and they mean different types:
+ * "Edge*[6]" is six pointers, "Edge[6]*" is one pointer to an array of six.
+ * Which side each star sat on is counted separately so sema can apply
+ * type_ptr before or after wrapping in type_array.
+ */
+static void parse_ptr_and_dims(parser_t *p, ast_node_t *n)
+{
+    while (p_at_star_run(p, 0)) {
+        /* Only the run of stars that a '[' follows belongs to the element;
+         * once the dims are behind us the rest are ordinary suffixes. */
+        size_t k = 1;
+        while (p_at_star_run(p, k))
+            k++;
+        if (p_peekn(p, k)->kind != TK_LBRACKET) break;
+        n->elem_ptr_depth++;
+        p_advance(p);
+    }
+    parse_array_dims(p, n);
+    parse_ptr_suffix(p, n);
+}
+
+/*
+ * `dyn Iface`, and `dyn pkg.Iface` for an interface declared in another
+ * package - the same qualified spelling parse_type_named() accepts for a
+ * struct, so `dyn db.Connection` reads like the `db.Connection` beside it.
+ */
 static ast_node_t *parse_type_dyn(parser_t *p, ast_node_t *n)
 {
     p_advance(p);
     n->is_dyn = true;
     n->name = p_peek(p)->lexeme;
     p_advance(p);
-    parse_array_dims(p, n);
-    parse_ptr_suffix(p, n);
+    if (p_at(p, TK_DOT) && p_peek2(p)->kind == TK_IDENT) {
+        p_advance(p);
+        const char *pkg = n->name, *ty = p_peek(p)->lexeme;
+        p_advance(p);
+        size_t ln = strlen(pkg) + strlen(ty) + 2;
+        char *q = (char *)arena_alloc(p->a, ln);
+        sal_snprintf(q, ln, "%s.%s", pkg, ty);
+        n->name = q;
+    }
+    parse_ptr_and_dims(p, n);
     p_fin(p, n);
     return n;
 }
@@ -88,8 +139,7 @@ static ast_node_t *parse_type_named(parser_t *p, ast_node_t *n)
             ast_add(p->a, n, parse_type(p));
         p_close_angle(p, "'>' to close type arguments");
     }
-    parse_array_dims(p, n);
-    parse_ptr_suffix(p, n);
+    parse_ptr_and_dims(p, n);
     p_fin(p, n);
     return n;
 }

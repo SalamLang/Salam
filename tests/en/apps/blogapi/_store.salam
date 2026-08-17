@@ -1,0 +1,451 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package store
+
+// SQL for the blog API. Same shape as todoapi/_store.salam: Q() and N() are
+// the only ways a value becomes SQL text.
+//
+// The difference from the todo API is that ownership is NOT part of every
+// WHERE clause here. A blog post is public, and an admin can edit anyone's;
+// so a post is fetched by id first and main.salam decides who may touch it.
+// That is the more dangerous arrangement of the two, which is why the owner
+// id travels with every row this file returns - the caller cannot make the
+// decision without it.
+
+import os
+import str
+import conv
+import db.mysql
+import encoding.json
+
+const POST_COLS := "p.id, p.slug, p.title, p.body, p.published, p.published_at, p.created_at, p.author_id, u.email"
+
+// Connection settings, read once at startup and never written again. Sharing
+// them across threads is safe precisely because nothing mutates them after
+// Configure returns.
+mut _host := "127.0.0.1"
+mut _port := 3306
+mut _user := "root"
+mut _pass := ""
+mut _name := "salam_blog"
+
+// One request's connection.
+//
+// It holds the raw handle rather than a mysql.Database, and _db() rebuilds
+// the struct on the way into the driver. That is a workaround, not a design:
+// a struct field whose DEFAULT is a struct from another package makes the C
+// backend emit the type name without its module prefix - (Database){0}
+// instead of (mysql__Database){0} - and the generated C does not compile.
+// A pointer field with a null default has no such problem.
+pub struct Conn:
+    pub handle: void* = null
+    pub ok: bool = false
+    pub err: str = ""
+end
+
+pub struct User:
+    pub id: i64 = 0
+    pub email: str = ""
+    pub hash: str = ""
+    pub role: str = ""
+end
+
+pub struct Post:
+    pub id: i64 = 0
+    pub author_id: i64 = 0
+    pub published: bool = false
+    pub json: str = ""
+end
+
+// The driver handle, rebuilt from the raw pointer. See Conn above.
+func _db(c: Conn): mysql.Database:
+    ret mysql.Database { handle = c.handle }
+end
+
+func _quote(c: Conn, s: str): str:
+    ret "'".concat(mysql.Escape(_db(c), s)).concat("'")
+end
+
+func _num(v: i64): str:
+    ret conv.FormatInt(v)
+end
+
+func _env(name: str, fallback: str): str:
+    v := os.Env(name)
+    if v.len() == 0: ret fallback end
+    ret v
+end
+
+func _exec(c: Conn, sql: str, err &: str): bool:
+    err = ""
+    if mysql.Exec(_db(c), sql) != 0:
+        err = mysql.Error(_db(c))
+        ret false
+    end
+    ret true
+end
+
+func _scalar(c: Conn, sql: str): i64:
+    mut res := mysql.Query(_db(c), sql)
+    if !mysql.QueryOk(res): ret 0 as i64 end
+    mut v := 0 as i64
+    if mysql.Next(res): v = mysql.Int64(res, 0) end
+    mysql.Finish(res)
+    ret v
+end
+
+func _text_or_null(res: mysql.Result, col: int): str:
+    if mysql.IsNull(res, col): ret "null" end
+    ret json.Str(mysql.Text(res, col))
+end
+
+func _bool_json(res: mysql.Result, col: int): str:
+    if mysql.Int(res, col) == 1: ret "true" end
+    ret "false"
+end
+
+// Column order follows POST_COLS. `body` is dropped from list responses by
+// the `with_body` flag - a list of twenty articles should not ship twenty
+// article bodies.
+func _post_json(res: mysql.Result, with_body: bool): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppend(sb, `{"id":`)
+    str.BufAppend(sb, mysql.Text(res, 0))
+    str.BufAppend(sb, `,"slug":`)
+    str.BufAppend(sb, json.Str(mysql.Text(res, 1)))
+    str.BufAppend(sb, `,"title":`)
+    str.BufAppend(sb, json.Str(mysql.Text(res, 2)))
+    if with_body:
+        str.BufAppend(sb, `,"body":`)
+        str.BufAppend(sb, json.Str(mysql.Text(res, 3)))
+    end
+    str.BufAppend(sb, `,"published":`)
+    str.BufAppend(sb, _bool_json(res, 4))
+    str.BufAppend(sb, `,"published_at":`)
+    str.BufAppend(sb, _text_or_null(res, 5))
+    str.BufAppend(sb, `,"created_at":`)
+    str.BufAppend(sb, json.Str(mysql.Text(res, 6)))
+    str.BufAppend(sb, `,"author":`)
+    str.BufAppend(sb, json.Str(mysql.Text(res, 8)))
+    str.BufAppendChar(sb, 125)
+    out := str.BufStr(sb)
+    ret out
+end
+
+func _read_post(res: mysql.Result, with_body: bool): Post:
+    mut p := Post {}
+    p.id = mysql.Int64(res, 0)
+    p.author_id = mysql.Int64(res, 7)
+    p.published = mysql.Int(res, 4) == 1
+    p.json = _post_json(res, with_body)
+    ret p
+end
+
+func _comment_json(res: mysql.Result): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppend(sb, `{"id":`)
+    str.BufAppend(sb, mysql.Text(res, 0))
+    str.BufAppend(sb, `,"body":`)
+    str.BufAppend(sb, json.Str(mysql.Text(res, 1)))
+    str.BufAppend(sb, `,"created_at":`)
+    str.BufAppend(sb, json.Str(mysql.Text(res, 2)))
+    str.BufAppend(sb, `,"author":`)
+    str.BufAppend(sb, json.Str(mysql.Text(res, 3)))
+    str.BufAppendChar(sb, 125)
+    out := str.BufStr(sb)
+    ret out
+end
+
+func _post_array(c: Conn, sql: str): str:
+    mut res := mysql.Query(_db(c), sql)
+    if !mysql.QueryOk(res): ret "[]" end
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppendChar(sb, 91)
+    mut n := 0
+    until mysql.Next(res):
+        if n > 0: str.BufAppendChar(sb, 44) end
+        str.BufAppend(sb, _post_json(res, false))
+        n += 1
+    end
+    str.BufAppendChar(sb, 93)
+    mysql.Finish(res)
+    out := str.BufStr(sb)
+    ret out
+end
+
+func _one_post(c: Conn, sql: str): Post:
+    mut p := Post {}
+    mut res := mysql.Query(_db(c), sql)
+    if !mysql.QueryOk(res): ret p end
+    if mysql.Next(res): p = _read_post(res, true) end
+    mysql.Finish(res)
+    ret p
+end
+
+// ---------------------------------------------------------------- connection
+
+// Read the settings and prove they work, once, from main. Returns false with
+// a reason rather than letting every request discover the problem separately.
+pub func Configure(err &: str): bool:
+    err = ""
+    if !mysql.LibraryInit():
+        err = "cannot initialise the MariaDB client library"
+        ret false
+    end
+    _host = _env("DB_HOST", "127.0.0.1")
+    _port = _env("DB_PORT", "3306").to_int()
+    _user = _env("DB_USER", "root")
+    // No default. A password compiled into a program is a password in the
+    // repository, and a default of "" hides a missing one until production.
+    _pass = os.Env("DB_PASS")
+    _name = _env("DB_NAME", "salam_blog")
+    probe := Connect()
+    if !probe.ok:
+        err = probe.err
+        ret false
+    end
+    Close(probe)
+    ret true
+end
+
+// One connection, for one request, on the thread that will use it.
+pub func Connect(): Conn:
+    mut c := Conn {}
+    // Per-thread driver state. Cheap after the first call on a thread, and
+    // required before any other libmariadb call from it.
+    _t := mysql.ThreadInit()
+    d := mysql.Open(_host, _user, _pass, _name, _port)
+    if !mysql.Ok(d):
+        c.err = mysql.Error(d)
+        // Even a failed handle has to be closed: mysql_init allocated it.
+        mysql.Close(d)
+        ret c
+    end
+    // Tell the server the connection speaks utf8mb4, or a 4-byte character
+    // arrives mangled no matter what the column says.
+    _x := mysql.SetCharset(d, "utf8mb4")
+    c.handle = d.handle
+    c.ok = true
+    ret c
+end
+
+pub func Close(c: Conn):
+    if c.handle != null: mysql.Close(_db(c)) end
+end
+
+pub func Ok(c: Conn): bool:
+    ret c.ok
+end
+
+pub func Err(c: Conn): str:
+    ret c.err
+end
+
+// Release the calling thread's driver state. A request thread does not need
+// it - the thread dies with the request - but a long-lived worker that stops
+// using the database should.
+pub func ThreadDone():
+    mysql.ThreadEnd()
+end
+
+pub func Shutdown():
+    mysql.LibraryEnd()
+end
+
+// A string, escaped and quoted, ready to drop into SQL. Takes the connection
+// because escaping depends on its character set.
+pub func Q(c: Conn, s: str): str:
+    ret _quote(c, s)
+end
+
+// A number, as SQL text. Going through i64 means a caller cannot smuggle
+// anything but digits into the statement.
+pub func N(v: i64): str:
+    ret _num(v)
+end
+
+// ---------------------------------------------------------------- users
+pub func CreateUser(c: Conn, email: str, hash: str, role: str, err &: str): i64:
+    mut sql := "INSERT INTO users (email, pass_hash, role) VALUES ("
+    sql = sql.concat(_quote(c, email)).concat(", ").concat(_quote(c, hash)).concat(", ").concat(_quote(c, role)).concat(")")
+    if !_exec(c, sql, err): ret 0 as i64 end
+    ret mysql.LastInsertId(_db(c))
+end
+
+pub func FindUser(c: Conn, email: str): User:
+    mut u := User {}
+    mut sql := "SELECT id, email, pass_hash, role FROM users WHERE email = "
+    sql = sql.concat(_quote(c, email)).concat(" LIMIT 1")
+    mut res := mysql.Query(_db(c), sql)
+    if !mysql.QueryOk(res): ret u end
+    if mysql.Next(res):
+        u.id = mysql.Int64(res, 0)
+        u.email = mysql.Text(res, 1)
+        u.hash = mysql.Text(res, 2)
+        u.role = mysql.Text(res, 3)
+    end
+    mysql.Finish(res)
+    ret u
+end
+
+// The role in the token is a snapshot from login time. This re-reads it from
+// the database for anything destructive, so demoting an admin takes effect
+// on the next request rather than when their token happens to expire.
+pub func RoleOf(c: Conn, user_id: i64): str:
+    sql := "SELECT role FROM users WHERE id = ".concat(_num(user_id)).concat(" LIMIT 1")
+    mut res := mysql.Query(_db(c), sql)
+    if !mysql.QueryOk(res): ret "" end
+    mut role := ""
+    if mysql.Next(res): role = mysql.Text(res, 0) end
+    mysql.Finish(res)
+    ret role
+end
+
+// ---------------------------------------------------------------- posts
+
+// The public list: published only, newest first. `q` searches title and body.
+pub func ListPublished(c: Conn, q: str, limit: int, offset: int): str:
+    mut sql := "SELECT ".concat(POST_COLS)
+    sql = sql.concat(" FROM posts p JOIN users u ON u.id = p.author_id WHERE p.published = 1")
+    if q.len() > 0:
+        // LIKE with the wildcards added AFTER escaping, so a caller cannot
+        // inject a pattern - only their own text is searched for.
+        like := _quote(c, "%".concat(q).concat("%"))
+        sql = sql.concat(" AND (p.title LIKE ").concat(like).concat(" OR p.body LIKE ").concat(like).concat(")")
+    end
+    sql = sql.concat(" ORDER BY p.published_at DESC, p.id DESC")
+    sql = sql.concat(" LIMIT ").concat(_num(limit as i64)).concat(" OFFSET ").concat(_num(offset as i64))
+    ret _post_array(c, sql)
+end
+
+// An author's own posts, drafts included.
+pub func ListByAuthor(c: Conn, author_id: i64, limit: int, offset: int): str:
+    mut sql := "SELECT ".concat(POST_COLS)
+    sql = sql.concat(" FROM posts p JOIN users u ON u.id = p.author_id WHERE p.author_id = ")
+    sql = sql.concat(_num(author_id)).concat(" ORDER BY p.created_at DESC")
+    sql = sql.concat(" LIMIT ").concat(_num(limit as i64)).concat(" OFFSET ").concat(_num(offset as i64))
+    ret _post_array(c, sql)
+end
+
+pub func CountPublished(c: Conn, q: str): i64:
+    mut sql := "SELECT COUNT(*) FROM posts p WHERE p.published = 1"
+    if q.len() > 0:
+        like := _quote(c, "%".concat(q).concat("%"))
+        sql = sql.concat(" AND (p.title LIKE ").concat(like).concat(" OR p.body LIKE ").concat(like).concat(")")
+    end
+    ret _scalar(c, sql)
+end
+
+// Post.id is 0 when there is no such row. The returned Post carries
+// author_id and published so the caller can decide who is allowed to see or
+// change it - see main.salam's may_edit.
+pub func PostBySlug(c: Conn, slug: str): Post:
+    mut sql := "SELECT ".concat(POST_COLS)
+    sql = sql.concat(" FROM posts p JOIN users u ON u.id = p.author_id WHERE p.slug = ")
+    sql = sql.concat(_quote(c, slug)).concat(" LIMIT 1")
+    ret _one_post(c, sql)
+end
+
+pub func PostById(c: Conn, id: i64): Post:
+    mut sql := "SELECT ".concat(POST_COLS)
+    sql = sql.concat(" FROM posts p JOIN users u ON u.id = p.author_id WHERE p.id = ")
+    sql = sql.concat(_num(id)).concat(" LIMIT 1")
+    ret _one_post(c, sql)
+end
+
+pub func SlugTaken(c: Conn, slug: str): bool:
+    sql := "SELECT COUNT(*) FROM posts WHERE slug = ".concat(_quote(c, slug))
+    ret _scalar(c, sql) > 0 as i64
+end
+
+pub func CreatePost(c: Conn, author_id: i64, slug: str, title: str, body: str, err &: str): i64:
+    mut sql := "INSERT INTO posts (author_id, slug, title, body) VALUES ("
+    sql = sql.concat(_num(author_id)).concat(", ").concat(_quote(c, slug)).concat(", ")
+    sql = sql.concat(_quote(c, title)).concat(", ").concat(_quote(c, body)).concat(")")
+    if !_exec(c, sql, err): ret 0 as i64 end
+    ret mysql.LastInsertId(_db(c))
+end
+
+pub func UpdatePost(c: Conn, id: i64, set: str, err &: str): bool:
+    err = ""
+    if set.len() == 0: ret false end
+    sql := "UPDATE posts SET ".concat(set).concat(" WHERE id = ").concat(_num(id))
+    ret _exec(c, sql, err)
+end
+
+// Publishing stamps published_at once. COALESCE keeps the original date if a
+// post is unpublished and published again - the archive should not claim the
+// article is new.
+pub func PublishPost(c: Conn, id: i64, err &: str): bool:
+    mut sql := "UPDATE posts SET published = 1, published_at = COALESCE(published_at, NOW())"
+    sql = sql.concat(" WHERE id = ").concat(_num(id))
+    ret _exec(c, sql, err)
+end
+
+pub func UnpublishPost(c: Conn, id: i64, err &: str): bool:
+    sql := "UPDATE posts SET published = 0 WHERE id = ".concat(_num(id))
+    ret _exec(c, sql, err)
+end
+
+pub func DeletePost(c: Conn, id: i64, err &: str): bool:
+    sql := "DELETE FROM posts WHERE id = ".concat(_num(id))
+    if !_exec(c, sql, err): ret false end
+    ret mysql.AffectedRows(_db(c)) > 0 as i64
+end
+
+// ---------------------------------------------------------------- comments
+
+pub func ListComments(c: Conn, post_id: i64, limit: int): str:
+    mut sql := "SELECT c.id, c.body, c.created_at, u.email FROM comments c"
+    sql = sql.concat(" JOIN users u ON u.id = c.author_id WHERE c.post_id = ").concat(_num(post_id))
+    sql = sql.concat(" ORDER BY c.id ASC LIMIT ").concat(_num(limit as i64))
+    mut res := mysql.Query(_db(c), sql)
+    if !mysql.QueryOk(res): ret "[]" end
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppendChar(sb, 91)
+    mut n := 0
+    until mysql.Next(res):
+        if n > 0: str.BufAppendChar(sb, 44) end
+        str.BufAppend(sb, _comment_json(res))
+        n += 1
+    end
+    str.BufAppendChar(sb, 93)
+    mysql.Finish(res)
+    out := str.BufStr(sb)
+    ret out
+end
+
+pub func AddComment(c: Conn, post_id: i64, author_id: i64, body: str, err &: str): i64:
+    mut sql := "INSERT INTO comments (post_id, author_id, body) VALUES ("
+    sql = sql.concat(_num(post_id)).concat(", ").concat(_num(author_id)).concat(", ").concat(_quote(c, body)).concat(")")
+    if !_exec(c, sql, err): ret 0 as i64 end
+    ret mysql.LastInsertId(_db(c))
+end
+
+// Returns the comment's author so main.salam can apply the owner-or-admin
+// rule. 0 means there is no such comment.
+pub func CommentAuthor(c: Conn, id: i64): i64:
+    ret _scalar(c, "SELECT author_id FROM comments WHERE id = ".concat(_num(id)))
+end
+
+pub func DeleteComment(c: Conn, id: i64, err &: str): bool:
+    sql := "DELETE FROM comments WHERE id = ".concat(_num(id))
+    if !_exec(c, sql, err): ret false end
+    ret mysql.AffectedRows(_db(c)) > 0 as i64
+end

@@ -1,0 +1,173 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package image
+
+// Placing text: centering, aligning inside a rectangle, and sizing it
+// to fill one.
+//
+// DrawTextStyled draws from a pen position, which is the right primitive
+// and the wrong thing to call when what you mean is "in the middle" -
+// getting there by hand means measuring the ink box, halving it, and
+// remembering that the pen sits on the baseline rather than at the top
+// left. These functions do that arithmetic once, correctly, using the
+// same measurement the drawing path uses.
+//
+// Every function here takes the same box the rest of the package uses:
+// (x, y) is the top-left corner and (w, h) the size, in pixels. Vertical
+// placement is by ink, not by font metrics, so a line of digits and a
+// line with a descender are each centered on what you can actually see.
+// Pass TextVAlignBaseline when you want the font's own baseline
+// placement instead - that is the one to use when several runs have to
+// sit on the same line.
+//
+// Single-line only. Wrapping needs a break algorithm and a decision
+// about what to do when nothing fits, and neither belongs in a function
+// that cannot report failure.
+
+@en "TextAlignLeft"
+@fa "چیدمان متن چپ"
+@ar "محاذاة النص لليسار"
+pub const TextAlignLeft := 0
+
+@en "TextAlignCenter"
+@fa "چیدمان متن وسط"
+@ar "محاذاة النص للوسط"
+pub const TextAlignCenter := 1
+
+@en "TextAlignRight"
+@fa "چیدمان متن راست"
+@ar "محاذاة النص لليمين"
+pub const TextAlignRight := 2
+
+@en "TextVAlignTop"
+@fa "چیدمان عمودی بالا"
+@ar "محاذاة عمودية للأعلى"
+pub const TextVAlignTop := 0
+
+@en "TextVAlignMiddle"
+@fa "چیدمان عمودی وسط"
+@ar "محاذاة عمودية للوسط"
+pub const TextVAlignMiddle := 1
+
+@en "TextVAlignBottom"
+@fa "چیدمان عمودی پایین"
+@ar "محاذاة عمودية للأسفل"
+pub const TextVAlignBottom := 2
+
+@en "TextVAlignBaseline"
+@fa "چیدمان عمودی خط پایه"
+@ar "محاذاة عمودية لخط الأساس"
+pub const TextVAlignBaseline := 3
+
+// Where the pen has to start for the ink box [b0, b1] to sit at `align`
+// inside [start, start + span]. Left/top alignment is not simply
+// `start`: the first glyph has a side bearing, and an italic or rotated
+// one can lean past its own origin, so the box's own offset is always
+// subtracted.
+func _align_pen(start: f64, span: f64, b0: f64, b1: f64, align: int): f64:
+    if align == TextAlignCenter:
+        ret start + (span - (b1 - b0)) * 0.5 - b0
+    end
+    if align == TextAlignRight:
+        ret start + span - (b1 - b0) - b0
+    end
+    ret start - b0
+end
+
+// Draws `text` with the CENTER of its ink box at (cx, cy) - the one
+// placement people mean by "centered" and the one that is annoying to
+// compute by hand. Returns the pen advance, as the other draw functions
+// do.
+@en "DrawTextCentered"
+@fa "نوشتن متن وسط‌چین"
+@ar "اكتب نصا في الوسط"
+pub func DrawTextCentered(img &: Image, cx: f64, cy: f64, text: str, col: Color, f: Font, st: TextStyle): f64:
+    mut x0 := 0.0
+    mut y0 := 0.0
+    mut x1 := 0.0
+    mut y1 := 0.0
+    if !TextBounds(f, text, st, x0, y0, x1, y1):
+        ret 0.0
+    end
+    px := cx - (x0 + x1) * 0.5
+    py := cy - (y0 + y1) * 0.5
+    ret DrawTextStyled(img, px, py, text, col, f, st)
+end
+
+// Centers `text` on the whole image, horizontally and vertically.
+@en "DrawTextCenteredIn"
+@fa "نوشتن متن وسط تصویر"
+@ar "اكتب نصا في وسط الصورة"
+pub func DrawTextCenteredIn(img &: Image, text: str, col: Color, f: Font, st: TextStyle): f64:
+    ret DrawTextCentered(img, (img.width as f64) * 0.5, (img.height as f64) * 0.5, text, col, f, st)
+end
+
+// Draws `text` aligned inside the rectangle (x, y, w, h). `halign` is
+// one of TextAlignLeft/Center/Right and `valign` one of
+// TextVAlignTop/Middle/Bottom/Baseline (which puts the BASELINE at
+// y + h rather than fitting the ink).
+@en "DrawTextInBox"
+@fa "نوشتن متن در کادر"
+@ar "اكتب نصا في صندوق"
+pub func DrawTextInBox(img &: Image, x: f64, y: f64, w: f64, h: f64, text: str, col: Color, f: Font, st: TextStyle, halign: int, valign: int): f64:
+    mut x0 := 0.0
+    mut y0 := 0.0
+    mut x1 := 0.0
+    mut y1 := 0.0
+    if !TextBounds(f, text, st, x0, y0, x1, y1):
+        ret 0.0
+    end
+    px := _align_pen(x, w, x0, x1, halign)
+    mut py := y + h
+    if valign != TextVAlignBaseline:
+        py = _align_pen(y, h, y0, y1, valign)
+    end
+    ret DrawTextStyled(img, px, py, text, col, f, st)
+end
+
+// Sizes `text` to fill `fill` of the rectangle (0.9 for the usual "fill
+// 90% of it"), centers it there, and draws it. Returns the em size it
+// chose, so a caller can reuse it for a second line or report it.
+//
+// `st.size` is ignored - that is the whole point - but everything else
+// in the style (rotation, slant, tracking, direction) is honored and
+// taken into account while measuring. `max_size` caps the result for
+// short strings, which would otherwise grow without limit.
+@en "DrawTextFitBox"
+@fa "نوشتن متن جا‌شده در کادر"
+@ar "اكتب نصا ملائما للصندوق"
+pub func DrawTextFitBox(img &: Image, x: f64, y: f64, w: f64, h: f64, text: str, col: Color, f: Font, st: TextStyle, fill: f64, max_size: f64): f64:
+    mut ratio := fill
+    if ratio <= 0.0:
+        ratio = 1.0
+    end
+    size := FitSizeToBox(f, text, st, w * ratio, h * ratio, max_size)
+    if size <= 0.0:
+        ret 0.0
+    end
+    mut fitted := st
+    fitted.size = size
+    DrawTextCentered(img, x + w * 0.5, y + h * 0.5, text, col, f, fitted)
+    ret size
+end
+
+// DrawTextFitBox over the whole image - the "make this caption as big as
+// it can be" call.
+@en "DrawTextFitImage"
+@fa "نوشتن متن جا‌شده در تصویر"
+@ar "اكتب نصا ملائما للصورة"
+pub func DrawTextFitImage(img &: Image, text: str, col: Color, f: Font, st: TextStyle, fill: f64, max_size: f64): f64:
+    ret DrawTextFitBox(img, 0.0, 0.0, img.width as f64, img.height as f64, text, col, f, st, fill, max_size)
+end

@@ -37,6 +37,7 @@
 #include "parser/parser.h"
 #include "ast/ast.h"
 #include "semantic/sema.h"
+#include "semantic/builtins.h"
 #include "interp/interp.h"
 #include "condcomp/condcomp.h"
 #include "xml/xml.h"
@@ -432,9 +433,13 @@ static void fmt_one_file(fmt_ctx_t *c, const char *path)
     const langpack_t *pack = langpack_detect(a, src, c->pack);
 
     const source_file_t *fmt_input = src;
+    /* Function-scope: fmt_input may alias reordered.data, which has to stay
+     * alive until fmt_source() below is done with it - and be freed on every
+     * exit path after that, since an sb_t owns malloc'd memory the arena
+     * knows nothing about. */
+    sb_t reordered;
+    sb_init(&reordered);
     if (c->fix_order) {
-        sb_t reordered;
-        sb_init(&reordered);
         vec_t notes;
         vec_init(&notes);
         if (fmt_reorder_toplevel(a, c->log, pack, src, path, &reordered, &notes)) {
@@ -457,6 +462,7 @@ static void fmt_one_file(fmt_ctx_t *c, const char *path)
               i18n_tr("cannot format '%s': fix the lexical errors first"), path);
         c->errors++;
         sb_free(&sb);
+        sb_free(&reordered);
         arena_free(a);
         return;
     }
@@ -465,6 +471,7 @@ static void fmt_one_file(fmt_ctx_t *c, const char *path)
     if (!changed) {
         c->ok++;
         sb_free(&sb);
+        sb_free(&reordered);
         arena_free(a);
         return;
     }
@@ -484,6 +491,7 @@ static void fmt_one_file(fmt_ctx_t *c, const char *path)
         }
     }
     sb_free(&sb);
+    sb_free(&reordered);
     arena_free(a);
 }
 
@@ -612,6 +620,10 @@ static int driver_main_inner(int argc, char **argv)
         g_time_trace = opt.time_trace;
     }
     i18n_set_lang(opt.lang);
+    /* Once, here, rather than at each of the eight places that build a
+     * conditional-compilation table: -d constants are resolved by name
+     * during sema and every subcommand that runs sema needs the same set. */
+    salam_builtin_set_consts(opt.consts, opt.nconsts);
     salam_set_stdlib_root(opt.stdlib_path);
     layout_schema_init(salam_get_stdlib_root());
 

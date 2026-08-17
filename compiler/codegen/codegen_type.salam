@@ -94,13 +94,32 @@ func cg_cident(name: str): str:
     if is_digit_b(byte_at(name, 0)):
         co.SbPutc(b, 95)
     end
+    // A LEADING underscore is copied through as one, not doubled. C reserves
+    // every identifier starting with "__" for the implementation, and gcc
+    // really does use that space: on x86-64 it predefines __k8 as an
+    // architecture macro, so Salam's `_k8` (the ordinary "declared but
+    // unused" spelling) became C's `__k8` and expanded to `1`. Interior
+    // underscores still double, so the mangling stays one-to-one:
+    // `_a_b` -> `_a__b`, while `a_b` -> `a__b`.
     mut j := 0
+    if byte_at(name, 0) == 95:
+        co.SbPutc(b, 95)
+        j = 1
+    end
     until j < n:
         cg_put_ident_byte(b, byte_at(name, j))
         j += 1
     end
     r := co.SbCstr(b)
     co.SbFree(b)
+    // Copying the leading underscore through as one lets a name land exactly
+    // on a C keyword that the doubling used to step over: `_Bool` came out as
+    // `__Bool` before, and as plain `_Bool` now - "two or more data types in
+    // declaration specifiers". The suffix is the same escape the all-alnum
+    // path above already applies to `int`, `while` and friends.
+    if cg_is_c_keyword(r):
+        ret r + "_"
+    end
     ret r
 end
 
@@ -116,18 +135,32 @@ func base_ctype(base: str, found &: bool): str:
     ret base
 end
 
-// parse_typestr - cap mirrors the caller's base[] buffer size.
-// Bug-compat: only ONE trailing '*' is stripped; the ']' search is
-// unbounded (strchr) while the '[' walk is bounded by the star-stripped len.
-func parse_typestr(
-    ts: str, cap: int, base &: str, ptr &: bool, dims &: Vector<int>
+// A lambda, closure or function value. All of them lower to the `void*` that
+// carries the closure environment, which matters beyond the C spelling: a
+// callee takes that pointer as a plain `void*` and may write through it (a
+// counter closure updates the state it captured), so such a binding must not
+// be const-qualified even when the Salam name is immutable.
+func type_is_callable(ts: str): bool:
+    ret str.StartsWith(ts, "func(") || str.StartsWith(ts, "externfunc(")
+end
+
+// parse_typestr_ex - cap mirrors the caller's base[] buffer size, plus the
+// star count that belongs to an array's ELEMENT type: "Edge*[6]" yields
+// base "Edge", dims {6}, ptr false, eptr 1.
+func parse_typestr_ex(
+    ts: str, cap: int, base &: str, ptr &: bool, dims &: Vector<int>, eptr &: int, pdepth &: int
 ):
     ptr = false
+    eptr = 0
+    pdepth = 0
     dims.clear()
     tslen := str.Len(ts)
     mut n := tslen
-    if n > 0 && byte_at(ts, n - 1) == 42:
+    // Stars nest: Vector<Edge*> lays its data pointer out as "Edge**", so
+    // the whole trailing run is counted rather than just the last one.
+    until n > 0 && byte_at(ts, n - 1) == 42:
         ptr = true
+        pdepth += 1
         n -= 1
     end
     mut lb := 0 - 1
@@ -142,6 +175,18 @@ func parse_typestr(
     mut blen := n
     if lb >= 0:
         blen = lb
+    end
+    // An array OF pointers spells its stars between the element name and
+    // the first '[' - "Edge*[6]" is six Edge*, not a pointer to anything.
+    // They have to come off `base` here: everything downstream feeds the
+    // base through cg_cident, which would hex-escape the '*' into a type
+    // name that was never declared. The count travels out via eptr so
+    // callers can put the stars back on the element type.
+    until blen > 0 && byte_at(ts, blen - 1) == 42:
+        blen -= 1
+        eptr += 1
+    end
+    if lb >= 0:
         mut p := lb
         until p < n && byte_at(ts, p) == 91:
             mut rb := 0 - 1
@@ -173,6 +218,14 @@ func parse_typestr(
         blen = cap - 1
     end
     base = str.Substr(ts, 0, blen)
+end
+
+func parse_typestr(
+    ts: str, cap: int, base &: str, ptr &: bool, dims &: Vector<int>
+):
+    mut eptr := 0
+    mut pdepth := 0
+    parse_typestr_ex(ts, cap, base, ptr, dims, eptr, pdepth)
 end
 
 func cg_is_int_typestr(ts: str): bool:
@@ -348,7 +401,7 @@ func cg_variant_cname(ts: str): str:
     co.SbPuts(b, "_Salam_variant")
     repeat members.len() with i:
         co.SbPutc(b, 95)
-        co.SbPuts(b, cg_vec_code_str(members.get(i)[0]))
+        co.SbPuts(b, cg_vec_code_str(members.get(i)))
     end
     r := co.SbCstr(b)
     co.SbFree(b)
@@ -360,7 +413,7 @@ func cg_variant_tag_of(variant_ts: str, member_ts: str): int:
     defer members.free()
     mut r := 0 - 1
     repeat members.len() with i:
-        if r < 0 && str.Equals(members.get(i)[0], member_ts):
+        if r < 0 && str.Equals(members.get(i), member_ts):
             r = i
         end
     end
@@ -408,27 +461,78 @@ func cg_ctype(ts: str): str:
         iface := str.Substr(ts, 4, il)
         ret "_Salam_dyn_" + cg_cident(iface) + (suf >= 0 ? "*" : "")
     end
-    if str.StartsWith(ts, "func(") || str.StartsWith(ts, "externfunc("):
+    if type_is_callable(ts):
         ret "void*"
     end
     mut base := ""
     mut ptr := false
     mut dims := Vector {} as Vector<int>
     defer dims.free()
-    parse_typestr(ts, 96, base, ptr, dims)
+    mut eptr := 0
+    mut pdepth := 0
+    parse_typestr_ex(ts, 96, base, ptr, dims, eptr, pdepth)
     mut found := false
     mut bc := base_ctype(base, found)
     if !found:
         bc = cg_cident(base)
     end
-    ndims := dims.len()
-    if ndims > 0:
+    until eptr > 0:
+        bc = bc + "*"
+        eptr -= 1
+    end
+    if dims.len() > 0:
         ret bc + "*"
     end
-    if ptr:
-        ret bc + "*"
+    until pdepth > 0:
+        bc = bc + "*"
+        pdepth -= 1
     end
     ret bc
+end
+
+// The C spelling of an array type with no declarator attached -
+// "int32_t[3]" - which is what a compound literal needs in front of its
+// braces. "" for anything that is not a plain array of a nameable element
+// type, so callers can fall back to the bare brace form.
+func cg_array_ctype(ts: str): str:
+    if str.Len(ts) == 0 || cg_is_slice_ts(ts) || str.StartsWith(ts, "Variant<") || str.StartsWith(ts, "dyn ") || str.StartsWith(ts, "func("):
+        ret ""
+    end
+    mut base := ""
+    mut ptr := false
+    mut dims := Vector {} as Vector<int>
+    defer dims.free()
+    mut eptr := 0
+    mut pdepth := 0
+    parse_typestr_ex(ts, 96, base, ptr, dims, eptr, pdepth)
+    if dims.len() == 0 || ptr:
+        ret ""
+    end
+    mut found := false
+    mut bc := base_ctype(base, found)
+    if !found:
+        bc = cg_cident(base)
+    end
+    until eptr > 0:
+        bc = bc + "*"
+        eptr -= 1
+    end
+    mut b := co.SbNew()
+    co.SbPuts(b, bc)
+    mut zero := false
+    repeat dims.len() with di:
+        d := dims.get(di)
+        if d == 0:
+            zero = true
+        end
+        co.SbPuts(b, "[" + d + "]")
+    end
+    r := co.SbCstr(b)
+    co.SbFree(b)
+    if zero:
+        ret ""
+    end
+    ret r
 end
 
 func cg_decl(ts: str, name: str): str:
@@ -462,11 +566,17 @@ func cg_decl(ts: str, name: str): str:
     mut ptr := false
     mut dims := Vector {} as Vector<int>
     defer dims.free()
-    parse_typestr(ts, 96, base, ptr, dims)
+    mut eptr := 0
+    mut pdepth := 0
+    parse_typestr_ex(ts, 96, base, ptr, dims, eptr, pdepth)
     mut found := false
     mut bc := base_ctype(base, found)
     if !found:
         bc = cg_cident(base)
+    end
+    until eptr > 0:
+        bc = bc + "*"
+        eptr -= 1
     end
     cname := cg_cident(name)
     if dims.len() > 0:
@@ -475,14 +585,15 @@ func cg_decl(ts: str, name: str): str:
         co.SbPutc(b, 32)
         co.SbPuts(b, cname)
         repeat dims.len() with i:
-            co.SbPuts(b, "[" + dims.get(i)[0] + "]")
+            co.SbPuts(b, "[" + dims.get(i) + "]")
         end
         r := co.SbCstr(b)
         co.SbFree(b)
         ret r
     end
-    if ptr:
-        ret bc + "* " + cname
+    until pdepth > 0:
+        bc = bc + "*"
+        pdepth -= 1
     end
     ret bc + " " + cname
 end
@@ -518,7 +629,7 @@ func cg_mangle_in(
     co.SbPuts(b, cg_cident(fname))
     repeat params.len() with i:
         co.SbPutc(b, 95)
-        co.SbPuts(b, type_code(s, params.get(i)[0]))
+        co.SbPuts(b, type_code(s, params.get(i)))
     end
     r := co.SbCstr(b)
     co.SbFree(b)

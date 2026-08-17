@@ -1,0 +1,220 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Unicode normalization: the four forms of UAX #15.
+//
+// The problem these solve is that the same text has more than one spelling.
+// "é" is either one code point or two; a Persian letter carrying two harakat
+// can have them stored in either order; and Arabic text extracted from a PDF
+// often arrives as presentation forms - the isolated, initial, medial and
+// final shapes - instead of plain letters. None of these compare equal as
+// bytes, and none of them should be treated as different words.
+//
+// Which form to use:
+//
+//   NFC  - compose. The right default for storing and comparing text, and
+//          what the web platform expects.
+//   NFD  - decompose. Useful when you want to strip marks, since after NFD
+//          every mark is its own code point.
+//   NFKC - compose, after folding compatibility differences away. This is the
+//          one that turns Arabic presentation forms back into letters and
+//          normalizes the ligature lam-alef. Lossy on purpose.
+//   NFKD - decompose, likewise.
+//
+// The K forms discard distinctions the author may have meant - superscripts
+// become ordinary digits, ﬁ becomes fi - so they belong in a search index or a
+// comparison key, not in the copy you store and hand back to the user.
+//
+// Not implemented: normalization is not a collation. Two strings that compare
+// equal after NFC are the same text, but ordering normalized strings still
+// orders them by code point rather than by any language's alphabet.
+
+package str
+
+// Sorts combining marks into canonical order: a stable sort by combining
+// class, leaving base characters (class 0) fixed.
+//
+// Insertion sort rather than anything cleverer, because the runs are tiny - a
+// base character with more than three marks is rare even in heavily voweled
+// Arabic - and because insertion sort is stable, which the algorithm requires.
+// A mark only moves back over marks of strictly greater class, so marks of
+// equal class keep the order the author typed them in.
+func _canonical_order(buf &: Vector<int>):
+    n := buf.len()
+    mut i := 1
+    until i < n:
+        cp := buf.get(i)
+        cc := unicode.CombiningClass(cp)
+        if cc != 0:
+            mut j := i - 1
+            until j >= 0 && unicode.CombiningClass(buf.get(j)) > cc:
+                buf.set(j + 1, buf.get(j))
+                j -= 1
+            end
+            buf.set(j + 1, cp)
+        end
+        i += 1
+    end
+end
+
+// Decomposes `s` into code points and puts them in canonical order. `compat`
+// selects the compatibility decomposition (NFKD) over the canonical one (NFD).
+func _decompose(s: str, compat: bool): Vector<int>:
+    out := Vector {} as Vector<int>
+    n := s.len()
+    bp := _bp(s)
+    mut i := 0
+    mut cp := 0
+    until i < n:
+        i = _decode_at(bp, n, i, cp)
+        // Malformed input becomes U+FFFD rather than vanishing, so the output
+        // still stands in one-to-one for what was read.
+        if cp < 0: cp = 0xFFFD end
+        mut count := unicode.DecompLen(cp)
+        if compat: count = unicode.CompatDecompLen(cp) end
+        mut k := 0
+        until k < count:
+            if compat:
+                out.push(unicode.CompatDecompAt(cp, k))
+            else:
+                out.push(unicode.DecompAt(cp, k))
+            end
+            k += 1
+        end
+    end
+    _canonical_order(out)
+    ret out
+end
+
+// Canonical composition, the second half of NFC. Walks the decomposed
+// sequence keeping track of the last starter, and folds each following
+// character into it when the pair composes and nothing blocks them.
+//
+// A character is blocked from the starter when something between them has a
+// combining class greater than or equal to its own - that is what
+// `last_class < ch_class` tests. `last_class == 0` lets a mark compose with
+// the starter directly next to it. Getting this wrong composes across a mark
+// that should have separated the two, which is why the condition is written
+// out rather than folded into the loop.
+func _compose_canonical(buf: Vector<int>): Vector<int>:
+    out := Vector {} as Vector<int>
+    n := buf.len()
+    if n == 0: ret out end
+
+    mut starter_pos := 0
+    mut starter := buf.get(0)
+    out.push(starter)
+
+    // A sequence that opens with a combining mark has no starter to compose
+    // into. 256 is above every real combining class, so the blocking test
+    // below fails for everything until a genuine starter arrives.
+    mut last_class := unicode.CombiningClass(starter)
+    if last_class != 0: last_class = 256 end
+
+    mut pos := 1
+    until pos < n:
+        ch := buf.get(pos)
+        ch_class := unicode.CombiningClass(ch)
+        composite := unicode.Compose(starter, ch)
+        if composite >= 0 && (last_class < ch_class || last_class == 0):
+            out.set(starter_pos, composite)
+            starter = composite
+        else:
+            if ch_class == 0:
+                starter_pos = out.len()
+                starter = ch
+            end
+            last_class = ch_class
+            out.push(ch)
+        end
+        pos += 1
+    end
+    ret out
+end
+
+// Encodes a code point sequence back into a UTF-8 string.
+func _cps_to_str(cps: Vector<int>): str:
+    mut sb := NewBuilder()
+    defer BufFree(sb)
+    repeat cps.len() with i:
+        BufAppendCp(sb, cps.get(i))
+    end
+    ret BufStr(sb)
+end
+
+@en "NFD"
+@fa "تجزیه متعارف"
+@ar "تفکیک قیاسي"
+// Canonical decomposition. Every precomposed character is split into its base
+// and marks, and the marks are put in canonical order.
+//
+// After NFD each combining mark stands alone, which is what makes this the
+// form to use when stripping marks - removing every code point for which
+// IsMark is true leaves the bare letters.
+pub func NFD(s: str): str:
+    cps := _decompose(s, false)
+    defer cps.free()
+    ret _cps_to_str(cps)
+end
+
+@en "NFC"
+@fa "ترکیب متعارف"
+@ar "ترکیب قیاسي"
+// Canonical composition: decompose, order the marks, then recombine what can
+// be recombined. The default form for storing and comparing text.
+pub func NFC(s: str): str:
+    d := _decompose(s, false)
+    defer d.free()
+    c := _compose_canonical(d)
+    defer c.free()
+    ret _cps_to_str(c)
+end
+
+@en "NFKD"
+@fa "تجزیه سازگاری"
+@ar "تفکیک التوافق"
+// Compatibility decomposition. Like NFD, but also replaces characters that
+// are formatting variants of others: Arabic presentation forms become plain
+// letters, the ligature ﬁ becomes fi, superscripts become ordinary digits.
+//
+// Lossy by design - do not store the result in place of the original.
+pub func NFKD(s: str): str:
+    cps := _decompose(s, true)
+    defer cps.free()
+    ret _cps_to_str(cps)
+end
+
+@en "NFKC"
+@fa "ترکیب سازگاری"
+@ar "ترکیب التوافق"
+// Compatibility composition. The form to build a search key or a comparison
+// key from, because it collapses the widest set of spellings of the same
+// text; lossy for the same reason.
+pub func NFKC(s: str): str:
+    d := _decompose(s, true)
+    defer d.free()
+    c := _compose_canonical(d)
+    defer c.free()
+    ret _cps_to_str(c)
+end
+
+@en "IsNFC"
+@fa "متعارف است"
+@ar "قیاسي"
+// Whether `s` is already in NFC, checked by normalizing and comparing. Useful
+// to avoid rewriting text that does not need it; it is not cheaper than
+// calling NFC, only cheaper than the write that would follow.
+pub func IsNFC(s: str): bool:
+    ret NFC(s) == s
+end

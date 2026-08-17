@@ -85,6 +85,14 @@ bool fmt_need_space(const token_t *pt, const token_t *ct, bool prev_unary)
 bool fmt_is_prefix(token_kind_t k, const token_t *prev)
 {
     if (k == TK_NOT || k == TK_TILDE) return true;
+    /*
+     * A star right after another star continues a pointer suffix ("int**"),
+     * it does not begin a new prefix operand. Treating it as a prefix marked
+     * the run as unary, and the following token was then glued on with no
+     * space: "int** = null" reformatted to "int**= null", which no longer
+     * lexes ('*=' where a field type was expected).
+     */
+    if (k == TK_STAR && prev && prev->kind == TK_STAR) return false;
     if (k == TK_MINUS || k == TK_STAR || k == TK_AMP)
         return prev == NULL || !fmt_is_value_end(prev->kind);
     if (k == TK_PLUS_PLUS || k == TK_MINUS_MINUS)

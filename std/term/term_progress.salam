@@ -1,0 +1,387 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package term
+
+import str
+import time
+
+// Progress bars and spinners, plus the two number formatters (FormatBytes,
+// FormatDuration) that anything reporting progress ends up needing.
+//
+// Rendering is separated from drawing, as it is everywhere else in this
+// package: BarRender and SpinnerFrame are pure and return a string, while
+// BarDraw/BarSet/SpinnerTick put it on the screen. The tests exercise the
+// pure half, so bar layout is checked without a terminal.
+//
+// REDIRECTED OUTPUT IS HANDLED FOR YOU. A bar redraws itself with a
+// carriage return, which is meaningless in a log file - so when stdout is
+// not a terminal the intermediate draws are skipped entirely and
+// BarFinish/SpinnerStop write one plain, escape-free summary line. A build
+// script does not need to know whether it is on a terminal to avoid
+// producing ten thousand lines of half-drawn bar.
+
+// The 1024-based unit names FormatBytes counts through.
+const _UNIT_KB := 1
+const _UNIT_MB := 2
+const _UNIT_GB := 3
+const _UNIT_TB := 4
+
+// ------------------------------------------------------------------- types
+
+@en "Bar"
+@fa "نوار پیشرفت"
+@ar "شریط التقدم"
+pub struct Bar:
+    pub total: int = 100
+    pub current: int = 0
+    // 0 means "work it out from the terminal width at each draw", which is
+    // what keeps a bar the right size when the window is resized mid-run.
+    pub width: int = 0
+    pub label: str = ""
+    pub fill: str = "#"
+    pub head: str = ""
+    pub empty: str = "-"
+    // An SGR code (term.FgGreen, ...) for the filled part; 0 leaves it plain.
+    pub color: int = 0
+    pub show_percent: bool = true
+    pub show_count: bool = false
+    pub show_eta: bool = false
+    pub hide_cursor: bool = true
+    pub start_ms: i64 = 0
+    pub drawn: bool = false
+    pub done: bool = false
+end
+
+@en "Spinner"
+@fa "چرخنده"
+@ar "دوار"
+pub struct Spinner:
+    pub frames: Vector<str> = Vector {}
+    pub idx: int = 0
+    pub label: str = ""
+    pub color: int = 0
+    pub drawn: bool = false
+end
+
+// --------------------------------------------------------------- internals
+
+// Whether the locale says the terminal reads UTF-8, which decides between
+// the block-drawing characters and a plain ASCII fallback. Guessing wrong
+// towards ASCII costs a little beauty; guessing wrong the other way fills
+// the screen with replacement characters.
+func _unicode_ok(): bool:
+    if str.Contains(_env("LC_ALL"), "UTF-8") || str.Contains(_env("LC_ALL"), "utf8"): ret true end
+    if str.Contains(_env("LC_CTYPE"), "UTF-8") || str.Contains(_env("LC_CTYPE"), "utf8"): ret true end
+    if str.Contains(_env("LANG"), "UTF-8") || str.Contains(_env("LANG"), "utf8"): ret true end
+    ret false
+end
+
+func _two(n: i64): str:
+    if n < 10: ret "0" + str.FromInt(n) end
+    ret str.FromInt(n)
+end
+
+func _unit_name(u: int): str:
+    if u == _UNIT_KB: ret "KB" end
+    if u == _UNIT_MB: ret "MB" end
+    if u == _UNIT_GB: ret "GB" end
+    if u == _UNIT_TB: ret "TB" end
+    ret "PB"
+end
+
+func _digits(n: int): int:
+    mut v := n
+    if v < 0: v = 0 - v end
+    mut d := 1
+    until v >= 10:
+        v = v / 10
+        d += 1
+    end
+    ret d
+end
+
+// How many cells the bar itself gets: the terminal width, less everything
+// printed around it. The floor of 8 keeps a bar recognisable in a narrow
+// window, and the ceiling of 80 stops it becoming a stripe across an
+// ultra-wide one.
+func _bar_cells(b &: Bar): int:
+    if b.width > 0: ret b.width end
+    mut avail := Cols() - Width(b.label) - 4
+    if b.show_percent: avail -= 5 end
+    if b.show_count: avail -= 2 * _digits(b.total) + 2 end
+    if b.show_eta: avail -= 12 end
+    if avail < 8: ret 8 end
+    if avail > 80: ret 80 end
+    ret avail
+end
+
+func _bar_pct(b &: Bar): int:
+    if b.total <= 0: ret 0 end
+    mut p := (b.current * 100) / b.total
+    if p < 0: p = 0 end
+    if p > 100: p = 100 end
+    ret p
+end
+
+// Time left, estimated from the average rate so far. Deliberately absent
+// until some work has been done: an ETA computed from a single sample is
+// noise, and showing "eta 4h" one tick into a job that takes a second is
+// worse than showing nothing.
+func _bar_eta(b &: Bar): str:
+    if b.current <= 0 || b.total <= 0: ret "--" end
+    if b.current >= b.total: ret "0s" end
+    elapsed := time.MonoMillis() - b.start_ms
+    if elapsed <= 0: ret "--" end
+    left := (b.total - b.current) as i64
+    ret FormatDuration((elapsed * left) / (b.current as i64))
+end
+
+// ------------------------------------------------------------- formatting
+
+@en "FormatDuration"
+@fa "قالب‌بندی مدت"
+@ar "تنسیق المدة"
+pub func FormatDuration(ms: i64): str:
+    if ms <= 0: ret "0s" end
+    secs := ms / 1000
+    if secs < 10:
+        // Sub-10-second times get a tenth, because whole seconds there are
+        // too coarse to show anything moving.
+        ret str.FromInt(secs) + "." + str.FromInt((ms % 1000) / 100) + "s"
+    end
+    if secs < 60: ret str.FromInt(secs) + "s" end
+    mins := secs / 60
+    if mins < 60: ret str.FromInt(mins) + "m " + _two(secs % 60) + "s" end
+    hours := mins / 60
+    ret str.FromInt(hours) + "h " + _two(mins % 60) + "m"
+end
+
+// Binary units (1 KB = 1024 B), which is what a file size or a transfer
+// rate on a terminal is nearly always taken to mean.
+@en "FormatBytes"
+@fa "قالب‌بندی بایت"
+@ar "تنسیق البایت"
+pub func FormatBytes(n: i64): str:
+    if n < 0: ret "0 B" end
+    if n < 1024: ret str.FromInt(n) + " B" end
+    mut v := n
+    mut unit := 0
+    // Stop while v is still in [1024, 1024*1024) so the division below has
+    // a remainder to turn into the decimal place.
+    until v >= 1024 * 1024 && unit < 4:
+        v = v / 1024
+        unit += 1
+    end
+    unit += 1
+    ret str.FromInt(v / 1024) + "." + str.FromInt(((v % 1024) * 10) / 1024) + " " + _unit_name(unit)
+end
+
+// ------------------------------------------------------------------- bars
+
+@en "NewBar"
+@fa "نوار جدید"
+@ar "شریط جدید"
+pub func NewBar(total: int, label: str): Bar:
+    mut b := Bar { total = total, label = label, start_ms = time.MonoMillis() }
+    if _unicode_ok():
+        b.fill = "█"
+        b.empty = "░"
+    end
+    ret b
+end
+
+// BarRender is the whole line, without the carriage return that puts it back
+// at the start - so it can also be printed as an ordinary line, logged, or
+// measured with Width.
+@en "BarRender"
+@fa "ترسیم نوار"
+@ar "رسم الشریط"
+pub func BarRender(b &: Bar): str:
+    cells := _bar_cells(b)
+    mut filled := 0
+    if b.total > 0: filled = (cells * b.current) / b.total end
+    if filled < 0: filled = 0 end
+    if filled > cells: filled = cells end
+    rest := cells - filled
+    mut body := ""
+    if b.head.len() > 0 && filled > 0 && rest > 0:
+        body = str.Repeat(b.fill, filled - 1) + b.head
+    else:
+        body = str.Repeat(b.fill, filled)
+    end
+    if b.color != 0: body = Paint(body, Sgr(b.color)) end
+    body = body + str.Repeat(b.empty, rest)
+    mut out := str.NewBuilder()
+    defer str.BufFree(out)
+    if b.label.len() > 0:
+        str.BufAppend(out, b.label)
+        str.BufAppend(out, " ")
+    end
+    str.BufAppend(out, "[")
+    str.BufAppend(out, body)
+    str.BufAppend(out, "]")
+    if b.show_percent:
+        str.BufAppend(out, " ")
+        str.BufAppend(out, PadLeft(str.FromInt(_bar_pct(b) as i64) + "%", 4))
+    end
+    if b.show_count:
+        str.BufAppend(out, " ")
+        str.BufAppend(out, str.FromInt(b.current as i64))
+        str.BufAppend(out, "/")
+        str.BufAppend(out, str.FromInt(b.total as i64))
+    end
+    if b.show_eta:
+        str.BufAppend(out, " eta ")
+        str.BufAppend(out, _bar_eta(b))
+    end
+    line := str.BufStr(out)
+    ret line
+end
+
+// BarDraw repaints the bar in place. Off a terminal it does nothing at all -
+// see the note at the top of this file.
+@en "BarDraw"
+@fa "کشیدن نوار"
+@ar "عرض الشریط"
+pub func BarDraw(b &: Bar):
+    if !IsTerminal(): ret end
+    if b.hide_cursor && !b.drawn: Write(SeqHideCursor()) end
+    b.drawn = true
+    Emit(SeqResetLine() + BarRender(b))
+end
+
+@en "BarSet"
+@fa "تنظیم نوار"
+@ar "ضبط الشریط"
+pub func BarSet(b &: Bar, n: int):
+    b.current = n
+    if b.current < 0: b.current = 0 end
+    if b.current > b.total: b.current = b.total end
+    BarDraw(b)
+end
+
+@en "BarAdd"
+@fa "افزودن به نوار"
+@ar "زیادة الشریط"
+pub func BarAdd(b &: Bar, delta: int): BarSet(b, b.current + delta) end
+
+// BarFinish completes the bar, restores the cursor and moves to a new line,
+// so whatever the program prints next starts cleanly. Call it exactly once,
+// including on the paths where the work ended early.
+@en "BarFinish"
+@fa "پایان نوار"
+@ar "إنهاء الشریط"
+pub func BarFinish(b &: Bar):
+    b.current = b.total
+    b.done = true
+    if IsTerminal():
+        Write(SeqResetLine())
+        Write(BarRender(b))
+        if b.hide_cursor && b.drawn: Write(SeqShowCursor()) end
+    else:
+        // One plain line for the log, with no escapes in it.
+        Write(Strip(BarRender(b)))
+    end
+    Write("\n")
+    Flush()
+end
+
+// --------------------------------------------------------------- spinners
+
+@en "NewSpinner"
+@fa "چرخنده جدید"
+@ar "دوار جدید"
+pub func NewSpinner(label: str): Spinner:
+    mut s := Spinner { label = label }
+    if _unicode_ok():
+        // The braille cycle: ten frames that read as continuous rotation.
+        each f in ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]:
+            s.frames.push(f)
+        end
+    else:
+        each f in ["|", "/", "-", "\\"]:
+            s.frames.push(f)
+        end
+    end
+    ret s
+end
+
+@en "NewSpinnerFrames"
+@fa "چرخنده با قاب‌ها"
+@ar "دوار بإطارات"
+pub func NewSpinnerFrames(label: str, frames: Vector<str>): Spinner:
+    mut s := Spinner { label = label }
+    each f in frames:
+        s.frames.push(f)
+    end
+    ret s
+end
+
+@en "SpinnerFrame"
+@fa "قاب چرخنده"
+@ar "إطار الدوار"
+pub func SpinnerFrame(s &: Spinner): str:
+    n := s.frames.len()
+    if n == 0: ret "" end
+    ret s.frames.get(s.idx % n)
+end
+
+// SpinnerTick draws the current frame and advances to the next one. Call it
+// from whatever loop is doing the work, or on a timer.
+@en "SpinnerTick"
+@fa "تیک چرخنده"
+@ar "نبضة الدوار"
+pub func SpinnerTick(s &: Spinner):
+    if s.frames.len() == 0: ret end
+    if IsTerminal():
+        mut frame := SpinnerFrame(s)
+        if s.color != 0: frame = Paint(frame, Sgr(s.color)) end
+        s.drawn = true
+        mut line := SeqResetLine() + frame
+        if s.label.len() > 0: line = line + " " + s.label end
+        Emit(line)
+    end
+    s.idx += 1
+    if s.idx >= s.frames.len(): s.idx = 0 end
+end
+
+// SpinnerStop wipes the spinner line and leaves `final` in its place - the
+// "done" or "failed" message that replaces the animation.
+@en "SpinnerStop"
+@fa "توقف چرخنده"
+@ar "إیقاف الدوار"
+pub func SpinnerStop(s &: Spinner, final: str):
+    if IsTerminal() && s.drawn:
+        Write(SeqResetLine())
+    end
+    if final.len() > 0:
+        if IsTerminal():
+            Write(final)
+        else:
+            Write(Strip(final))
+        end
+        Write("\n")
+    end
+    s.drawn = false
+    Flush()
+end
+
+// The frames are heap-allocated; free them when the spinner is done with.
+@en "SpinnerFree"
+@fa "آزادسازی چرخنده"
+@ar "تحریر الدوار"
+pub func SpinnerFree(s &: Spinner):
+    s.frames.free()
+end

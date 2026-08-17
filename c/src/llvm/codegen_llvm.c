@@ -614,6 +614,10 @@ llvm_output_t *codegen_llvm_run_opts(arena_t *a, logger_t *log, ast_node_t *prog
     sb_puts(&g, "\n");
     ll_emit_prologue(&ll);
     ll_emit_struct_types(&ll, program);
+    /* Before the rt-essentials block: ensure_fn on salam_panic emits a
+     * DISubprogram, and without the DIFile/DICompileUnit nodes it references
+     * the module prints "(null)" scopes that LLVM rejects. */
+    if (ll.debug) ll_debug_init(&ll, src_path);
     {
         static const char *const rt_essentials[] = {"salam_panic", "salam_idx", NULL};
         symbol_t *core_pk = NULL;
@@ -650,7 +654,31 @@ llvm_output_t *codegen_llvm_run_opts(arena_t *a, logger_t *log, ast_node_t *prog
     }
     ll_emit_externs(&ll);
     ll_emit_globals(&ll, program);
-    if (ll.debug) ll_debug_init(&ll, src_path);
+    /*
+     * A global whose initialiser is not a constant becomes a store replayed at
+     * the top of the entry function (ll_emit_global_inits), and a package's
+     * only get onto that list once the package has been touched. Touching is
+     * otherwise lazy - it happens while lowering the first call into the
+     * package, which is *inside* the entry function's body, by which point the
+     * store list has already been emitted. The initialiser was silently
+     * dropped, so `mut g := pkg.New()` in an imported package stayed zero.
+     * Packages that declare one are pulled in up front; the rest stay lazy.
+     */
+    {
+        size_t i = 0;
+        for (; i < sem->packages.len; i++) {
+            symbol_t *pk = (symbol_t *)sem->packages.data[i];
+            size_t k = 0;
+            if (!pk || !pk->decl) continue;
+            for (; k < pk->decl->list.len; k++) {
+                ast_node_t *d = (ast_node_t *)pk->decl->list.data[k];
+                if (d->kind != AST_VAR_DECL && d->kind != AST_CONST_DECL) continue;
+                if (!d->a || d->a->kind == AST_LITERAL) continue;
+                ll_touch_pkg(&ll, pk);
+                break;
+            }
+        }
+    }
     ll_emit_impls(&ll);
     LOG_I(log, PH_CODEGEN, "generating LLVM IR for module '%s'%s", module,
           ll.debug ? i18n_tr(" (+debug info)") : "");
@@ -659,7 +687,7 @@ llvm_output_t *codegen_llvm_run_opts(arena_t *a, logger_t *log, ast_node_t *prog
         for (; i < program->list.len; i++)
             ll_toplevel(&ll, (ast_node_t *)program->list.data[i]);
     }
-    if (ll.debug) ll_debug_finalize(&ll);
+    ll_debug_finalize(&ll);
     if (hg.len > 0) {
         sb_puts(&g, "; on-demand runtime helpers\n");
         sb_puts(&g, sb_cstr(&hg));

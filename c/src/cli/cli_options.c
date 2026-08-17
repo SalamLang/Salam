@@ -25,6 +25,57 @@ const char *cli_opt_value(const char *arg, const char *key)
     return NULL;
 }
 
+/*
+ * -dNAME / -dNAME=VALUE names are held to SCREAMING_SNAKE_CASE: an upper-case
+ * letter or '_' first, then upper-case letters, digits and '_'. The point is
+ * that a build-injected constant reads as one at every use site, so a
+ * lower-case name is rejected rather than quietly accepted, and '-' - which
+ * would not lex as an identifier at all - gets a message of its own instead
+ * of the generic complaint.
+ */
+static bool cli_check_const_name(const char *def)
+{
+    size_t i = 0;
+    size_t n = 0;
+    while (def[n] && def[n] != '=')
+        n++;
+    if (n == 0) {
+        fprintf(stderr, "%s",
+                i18n_tr("salam: -d needs a constant name (-dNAME=VALUE)\n"));
+        return false;
+    }
+    for (; i < n; i++) {
+        char c = def[i];
+        bool upper = c >= 'A' && c <= 'Z';
+        bool digit = c >= '0' && c <= '9';
+        if (upper || c == '_' || (digit && i > 0)) continue;
+        if (c == '-') {
+            fprintf(stderr,
+                    i18n_tr("salam: '-' is not allowed in a -d constant name "
+                            "('%.*s'); use '_'\n"),
+                    (int)n, def);
+            return false;
+        }
+        fprintf(stderr,
+                i18n_tr("salam: -d constant name '%.*s' must be upper case "
+                        "(A-Z, 0-9 and '_', not starting with a digit)\n"),
+                (int)n, def);
+        return false;
+    }
+    return true;
+}
+
+static bool cli_add_const(const char *def, options_t *out)
+{
+    if (!cli_check_const_name(def)) return false;
+    if (out->nconsts >= SALAM_MAX_INPUTS) {
+        fprintf(stderr, "%s", i18n_tr("salam: too many -d constant definitions\n"));
+        return false;
+    }
+    out->consts[out->nconsts++] = def;
+    return true;
+}
+
 static bool cli_positional(const char *arg, options_t *out)
 {
     switch (out->command) {
@@ -164,6 +215,8 @@ bool cli_parse_options(int argc, char **argv, int start, options_t *out)
                 out->fmt_check = true;
             } else if (strcmp(arg, "--fix-order") == 0) {
                 out->fmt_fix_order = true;
+            } else if (strcmp(arg, "--no-fix-order") == 0) {
+                out->fmt_fix_order = false;
             } else if (strcmp(arg, "--minify") == 0) {
                 out->fmt_minify = true;
             } else if (strcmp(arg, "-r") == 0 || strcmp(arg, "--recursive") == 0) {
@@ -239,12 +292,16 @@ bool cli_parse_options(int argc, char **argv, int start, options_t *out)
                     return false;
                 }
                 out->exports[out->nexports++] = val;
+            } else if ((val = cli_opt_value(arg, "--const")) != NULL) {
+                if (!cli_add_const(val, out)) return false;
             } else if (strncmp(arg, "-D", 2) == 0 && arg[2]) {
                 if (out->ndefines >= SALAM_MAX_INPUTS) {
                     fprintf(stderr, "%s", i18n_tr("salam: too many macro definitions\n"));
                     return false;
                 }
                 out->defines[out->ndefines++] = arg + 2;
+            } else if (strncmp(arg, "-d", 2) == 0 && arg[2]) {
+                if (!cli_add_const(arg + 2, out)) return false;
             } else if (strcmp(arg, "--emit-tokens-xml") == 0) {
                 out->emit_tokens_xml = true;
             } else if (strcmp(arg, "--emit-ast-xml") == 0) {

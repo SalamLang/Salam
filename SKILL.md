@@ -8,7 +8,7 @@ description: >-
   "Salam" (the programming language / زبان سلام), a `.salam` file, "convert/port/
   rewrite X to Salam", "rewrite the compiler in Salam", the Salam layout DSL, or
   building with the `salam` compiler. This is the authoritative, up-to-date
-  reference for Salam's current syntax, its 44-package standard library, its
+  reference for Salam's current syntax, its 64-package standard library, its
   strict compiler rules, the layout DSL, and porting low-level C. The tutorial
   books under `books/` are OUT OF DATE. Trust this file, `std/`, and
   `tests/en/` instead.
@@ -94,10 +94,46 @@ const MAX := 100         // compile-time constant
 `:=` declares (immutable by default). Reassigning a non-`mut` variable is a
 **compile error**. `mut` makes it reassignable; `const` is a compile-time value.
 
+### Printing
+
+`print`/`println` (stdout) and `printerr`/`printerrln` (stderr) take
+comma-separated arguments and space-join them. They are statements, not calls:
+never wrap the whole argument list in parentheses.
+
+Any **struct, array, slice, `Vector` or `HashMap`** can be printed directly:
+the compiler derives a stringify function for the type and prints what it
+returns, recursing into fields and elements.
+
+```salam
+struct Point:  x: int  y: int  end
+
+p := Point {x = 10, y = 15}
+println p                                   // Point {x = 10, y = 15}
+println [p, Point {x = 20, y = 25}] as Point[2]
+                                            // [Point {x = 10, y = 15}, Point {x = 20, y = 25}]
+println ["ali", "reza"] as str[2]           // ["ali", "reza"]
+```
+
+Rules worth knowing:
+
+- Nested `str` values are quoted (`"ali"`) so an empty one stays visible; a
+  top-level `println s` on a `str` is unquoted as always.
+- A `HashMap` prints as `{"a": 1, "b": 2}`; iteration order is the map's.
+- Every field is shown, `pub` or not - the derived function is compiler-written
+  and is not held to the privacy rule.
+- Pointer fields print as `null` or `<ptr>`; they are never followed, so a
+  cyclic structure still terminates. Enum fields print as their integer value.
+- Give a struct `pub func to_str(): str` to control its own rendering; the
+  derived function calls that instead.
+- Anything with no derivable form (a `File` handle, a function value) is still
+  the old error, and inside a struct renders as `<its type>`.
+
 ### Operators
 
-`+ - * / %`, `**` (power, float result), `== != < > <= >=`, `&& || !`, ternary
-`cond ? a : b`, compound `+= -= *= /= %= **=`, `++`/`--`. Integer `/` **truncates**.
+`+ - * / %`, `^^` (power, float result), `== != < > <= >=`, `&& || !`, ternary
+`cond ? a : b`, compound `+= -= *= /= %= ^^=`, `++`/`--`. Integer `/` **truncates**.
+**`*` is only multiplication and the pointer suffix** - power is `^^` (as in D) so
+that `T**` stays spellable; `^` on its own remains bitwise XOR.
 **Bitwise operators** (integer operands only): `& | ^ ~` and shifts `<< >>`, with
 compound forms `&= |= ^= <<= >>=`. Precedence follows C: shifts bind tighter than
 comparisons; `&` tighter than `^` tighter than `|`, all looser than `==`
@@ -112,7 +148,8 @@ else x == 0:  println "zero"          // "else <cond>" is else-if
 else:  println "negative"
 end
 
-until i < n:  i = i + 1  end          // ⚠ "until" IS "while"; read the box below
+while i < n:  i = i + 1  end          // loops WHILE the condition holds
+until i < n:  i = i + 1  end          // ⚠ same loop, older name; read the box below
 repeat 3:  println "hi"  end          // do 3 times
 repeat n with i:  println i  end      // i = 0 .. n-1
 repeat 1 to 5:  ...  end              // 1..5 inclusive
@@ -127,17 +164,21 @@ each (i, x) in xs:  println i, x  end // index + value (or (key,value) for a map
 > ### ⚠ `until` means `while`. Never negate a ported condition.
 >
 > `until C:` runs its body **while `C` is true** and stops when `C` becomes
-> false. It is not a do-until and not a "loop until C happens". When porting a
-> loop from C/Python/JS/Go, **copy the condition verbatim**:
+> false. It is not a do-until and not a "loop until C happens". **`while` is
+> the same keyword under a name that says so** - `while C:` and `until C:` are
+> one loop, and new code should prefer `while`. (The Persian `تاوقتی` and
+> Arabic `بينما` spellings already read correctly; only the English `until`
+> invites the wrong reading.) When porting a loop from C/Python/JS/Go, **copy
+> the condition verbatim**:
 >
 > | source loop              | Salam                                 | NOT                                                 |
 > | ------------------------ | ------------------------------------- | --------------------------------------------------- |
-> | `while (v != 0)`         | `until v != 0:`                       | ~~`until v == 0:`~~                                 |
-> | `while (i < n)`          | `until i < n:`                        | ~~`until i >= n:`~~                                 |
-> | `while (v)` (truthy int) | `until v != 0:`                       | ~~`until v:`~~ (no truthiness; needs a real `bool`) |
-> | `while (p)` (pointer)    | `until p != null:`                    | ~~`until p == null:`~~                              |
-> | `for (;;)`               | `until true:` + `break`               |                                                     |
-> | `do { B } while (c);`    | `until true: B  if !c: break end end` |                                                     |
+> | `while (v != 0)`         | `while v != 0:`                       | ~~`while v == 0:`~~                                 |
+> | `while (i < n)`          | `while i < n:`                        | ~~`while i >= n:`~~                                 |
+> | `while (v)` (truthy int) | `while v != 0:`                       | ~~`while v:`~~ (no truthiness; needs a real `bool`) |
+> | `while (p)` (pointer)    | `while p != null:`                    | ~~`while p == null:`~~                              |
+> | `for (;;)`               | `while true:` + `break`               |                                                     |
+> | `do { B } while (c);`    | `while true: B  if !c: break end end` |                                                     |
 >
 > **An inverted `until` fails silently.** `until v == 0:` with a nonzero `v`
 > runs **zero times** and produces no error, so the function just returns its
@@ -167,7 +208,9 @@ end
   `func make counter()`, `func is weekend(d: Day)`, `pet name: str`. A call is
   `is weekend(d)`; a field access `dog.pet name`.
 - **Modifiers**: `pub inline noinline pure noret deprecated` (combine freely),
-  e.g. `pub inline pure func Area(w: f64, h: f64): f64: ret w * h end`.
+  e.g. `pub inline pure func Area(w: f64, h: f64): f64: ret w * h end`. They
+  work on struct methods too, in the same order:
+  `pub inline func len(): int: ret this.count end`.
 - **Reference parameters** (`name &: Type`) pass by reference so the callee can
   mutate the caller's value (in/out params, and to avoid copying big structs):
 
@@ -183,11 +226,14 @@ end
 - **Closures/lambdas** are first-class typed values: `(x: int) => x * 2`, or a
   block form `(): n = n + 1  ret n  end`. Function-typed parameters/vars:
   `func () int`, `func (int, int) bool`.
-  - **A bare named function is _not_ a value**. `apply(inc, 3)` fails with
-    "function used as a value." To pass behavior, use a **lambda**
-    (`apply((x: int) => inc(x), 3)`), or, for C-style callback registries whose
-    slot is an untyped pointer (`i64`/`void*`, e.g. the `web` router), take the
-    address with **`funcptr(fn)`** or **`&fn`**: `web.Get(r, "/", funcptr(home))`.
+  - **A bare named function decays to its address**, typed `i64` - the slot
+    C-style callback registries take (e.g. the `web` router):
+    `web.Get(r, "/", home)`. For a `void*` slot, or to cast to a typed C
+    function pointer, use **`&fn`** instead. For a _typed_ Salam callback
+    (`func (int) int`), pass a **lambda**: `apply((x: int) => inc(x), 3)`.
+  - **A variable may not reuse a function's name.** With a bare name being a
+    value, `test := 5` next to `func test` is rejected (E090), in both
+    directions, so an identifier always means exactly one thing.
 
 ---
 
@@ -320,7 +366,7 @@ null pointer. Used with FFI and `mem`: `p := mem.Allocate(8 as u64) as i64*`;
 
 ```salam
 func Max<T>(a: T, b: T): T:  if a > b: ret a end  ret b  end   // generic function
-struct Stack<T>:  pub items: T[16] = [...]  pub count: int = 0  end  // generic struct
+struct Stack<T>:  pub items: Vector<T> = Vector {}  pub count: int = 0  end  // generic struct
 
 interface Shape:
     func area(): f64
@@ -367,8 +413,10 @@ an exact signature, grep the package file.
 Reverse Repeat Concat Substr Split Join Fields Chars CharAt Contains Find
 IndexOf IndexFrom LastIndex Count StartsWith EndsWith Equals EqualFold Compare
 Replace Len CharCount FromInt(i64) FromFloat(f64) ToInt ToFloat IsEmpty
-IsDigit IsAlpha IsSpace`; plus a `StringBuilder` (`NewBuilder`, `BufAppend`,
-  `BufAppendInt`, `BufStr`, `BufFree`).
+IsDigit IsAlpha IsSpace ToEnglishDigits ToPersianDigits ToArabicDigits
+DigitValue IsAnyDigit IsPersianDigit IsArabicDigit HasEnglishDigits
+HasPersianDigits HasArabicDigits`; plus a `StringBuilder` (`NewBuilder`,
+  `BufAppend`, `BufAppendInt`, `BufStr`, `BufFree`).
 - **`fmt`**: `Sprintf(tmpl, Vector<str>)` (`{}` placeholders), `Fprintf`,
   `PadLeft PadRight Center`. (`fmt.Int`, `fmt.Float`, `fmt.Bool` build the string
   args you pass to `Sprintf`.)
@@ -382,14 +430,70 @@ IsDigit IsAlpha IsSpace`; plus a `StringBuilder` (`NewBuilder`, `BufAppend`,
 Sin Cos Tan Asin Acos Atan Atan2 Sinh Cosh Tanh Floor Ceil Round Trunc Abs
 Sign Min Max ClampF Lerp Radians Degrees Mod IsNaN IsInf NaN Inf`; integer:
   `MinI MaxI AbsI ClampI Gcd Lcm Factorial Pow10` (+ `*I64` variants).
+- **`bigint`**: arbitrary-precision signed integers, one `Int` type (sign +
+  base-2^32 magnitude). Build: `Zero One FromInt FromUint Parse ParseBase
+ParseOr FromBytes Clone`; inspect: `Sign IsZero BitLen Bit IsOdd IsEven Cmp
+CmpAbs Equals Less Greater Min Max`; arithmetic: `Add Sub Mul Sqr Neg Abs
+AddInt SubInt MulInt Shl Shr`; division in **both** conventions - `DivMod Div
+Rem` truncate toward zero (matching Salam's `/` and `%`), `FloorDivMod
+FloorDiv FloorMod` round toward minus infinity, and `Mod` always lands in
+  `[0, |m|)`; number theory `Pow Pow10 ModExp Gcd Lcm ExtGcd ModInverse Sqrt
+Factorial`; two's-complement bitwise `And Or Xor AndNot Not PopCount
+TrailingZeros`; out: `ToStr ToStrBase ToHex ToInt ToIntClamped ToFloat ToBytes
+ByteLen`. In-place forms (`Set SetInt AddTo SubFrom MulBy AddIntTo MulIntBy
+NegateIn ShlBy ShrBy`) mutate `x &: Int` and free the old value, for loops that
+  should not allocate per iteration. **Every returning function hands over a
+  fresh value the caller frees** (`defer x.free()`); operands are taken by
+  value and are never mutated, so `Mul(x, x)` is fine. Not constant-time - for
+  a secret exponent use the blinded routine in `std/ssh/bigint.salam`.
+- **`decimal`**: exact fixed-point decimal - **this is the money type**. A
+  `Dec` is a `bigint.Int` plus a scale, so `0.1 + 0.2` is exactly `0.3` and
+  nothing overflows. Build: `Zero FromInt FromScaled(1999, 2)` → 19.99 `New
+Parse ParseOr FromFloat` (lossy, documented); `Add Sub Mul` are **exact and
+  never round** (Add/Sub take the larger scale, Mul the sum); `Div` cannot be,
+  so it requires a scale _and_ a `Rounding` mode - `Div DivRound DivInt Pow
+MulInt AddInt SubInt Percent Sum`. Rounding: `Rounding.{Down,Up,Floor,Ceil,
+HalfUp,HalfDown,HalfEven}` with `Rescale Round`(HalfEven) `RoundHalfUp
+Truncate Trim`. Compare `Cmp Equals Less Greater Min Max Sign IsZero
+IsNegative Scale Unscaled` (1.0 equals 1.00). Out: `ToStr` (**always plain
+  notation, never exponential**) `ToStrFixed FormatGrouped ToInt ToFloat`.
+  Money splitting that cannot lose a cent: `Split(total, n)` and
+  `Allocate(total, ratios)` guarantee the parts sum back to the total exactly
+  (100.00 by 3 → 33.34, 33.33, 33.33); free the result with `FreeAll`.
 - **`rand`**: `Seed SeedAuto Int Int32 IntN IntRange FloatRange Float Bool
 BoolP Choice{Int,Str,Char} Shuffle{Int,Str} Alpha Alnum Digit Text UUID Hash`.
 - **`stats`**: descriptive statistics helpers.
+- **`matrix`**: dense linear algebra over `f64`, row-major, one `Matrix` type
+  for matrices and vectors alike. Construct: `Zeros Ones Full Eye EyeOffset
+Diag FromArray RowVector ColVector Arange Linspace Logspace Clone`. Elementwise:
+  `Add Sub MulElem DivElem Scale Neg Combine AddScaled` (+ `...InPlace`),
+  broadcast via `AddRowVector AddColVector MulRowVector MulColVector`, ufuncs
+  `Abs Sqrt Exp Log Sin Cos Round Sign Clip PowElem Chop`. Products: `MatMul
+(tiled) TransposeMul MulTranspose Gram MatVec VecMat Dot Outer Kron MatPow
+Trace Cross3`. Shape: `Reshape Flatten Row Col SubMatrix Minor Delete/Insert
+Row/Col SwapRows Diagonal Triu Tril HStack VStack BlockDiag Rot90 Roll Tile
+Pad`. Reduce: `Sum Mean Min Max Var Std Median ArgMin/Max Row/ColSums
+Row/ColMeans CumSumRows`. Norms: `NormFrobenius Norm1 NormInf Norm2
+NormNuclear Cond1 CondInf Cond2 Normalize`. Factor: `Decompose(LU) Det
+LogAbsDet Solve Inverse Adjugate QRDecompose LeastSquares Orthonormalize
+Cholesky SolveSPD LDLDecompose Inertia SVDecompose SingularValues MatrixRank
+PseudoInverse NullSpace ColumnSpace LowRankApprox EigSym EigVals Hessenberg
+CharPoly`. Also `RREF NullSpaceExact SolveGeneral`, matrix functions `Expm
+Sqrtm MatrixSign PolyEval CayleyHamilton LogmSym`, iterative `SolveJacobi
+SolveGaussSeidel SolveSOR SolveCG PowerIteration Rayleigh`, statistics
+  `Covariance Correlation Standardize PCAFit LinearRegression RSquared`,
+  predicates `IsSymmetric IsOrthogonal IsPositiveDefinite IsToeplitz ...`,
+  named matrices `Hilbert Vandermonde Toeplitz Circulant Companion Pascal
+Rotation2D/3D Householder Givens Random RandomSPD RandomOrthogonal`, and
+  printing `ToString ToStringPrec Print PrintLabeled ToCSV`. Shape errors
+  return a `0x0` matrix rather than panicking.
 
 ### I/O, OS, filesystem
 
 - **`io`**: `ReadFile WriteFile AppendFile Lines WriteLines Input Read Write
-ReadAll Readline Seek Close Copy EPrint EPrintln`.
+ReadAll Readline Seek Close Copy EPrint EPrintln Flush`. `println` already
+  gets each line out to a redirected stdout on its own; `io.Flush()` is for
+  output written by linked C code, which keeps its own buffer.
 - **`os`**: `Args Env Cwd Chdir Exit Pid Run RunCapture Output Exists IsDir
 FileSize Stat ReadFile WriteFile AppendFile Copy CopyTree Move Remove RemoveAll
 Mkdir MkdirAll Rmdir ListDir ListDirs Walk TempDir Open`.
@@ -398,10 +502,62 @@ Mkdir MkdirAll Rmdir ListDir ListDirs Walk TempDir Open`.
 Positional Usage`), **`config`**, **`log`** (`Info Warn Error Debug` + `*f`
   variants, `SetLevel ToFile ToStderr`).
 
+### Terminal & TUI
+
+- **`term`**: everything ANSI. **Never hand-roll `\x1b[` sequences** - this
+  package is the one place they belong.
+  - Terminal: `IsTTY IsTerminal Size Cols Rows` (`WinSize`), `Write WriteErr
+Emit Flush Bell SetTitle EnableAnsi` (Windows virtual-terminal mode).
+  - Raw mode: `MakeRaw` (no echo, no line editing, no signals) / `MakeCbreak`
+    (unechoed keys, Ctrl-C still interrupts) / `Restore`, returning a
+    `TermState`. **Always `defer term.Restore(st)` on the next line** - exiting
+    without it leaves the user's shell in raw mode.
+  - Colour: `Red Green Yellow Blue Magenta Cyan White Gray Bright* On* Bold Dim
+Italic Underline Inverse Strike Style Paint Color256 OnColor256 RGB OnRGB`,
+    plus `Sgr Seq{Fg,Bg}256 Seq{Fg,Bg}RGB` for raw sequences. All of them
+    honour `SetColorMode(ColorAuto|ColorAlways|ColorNever)`, and ColorAuto
+    obeys `NO_COLOR`/`CLICOLOR_FORCE`/`TERM=dumb`/isatty - so ONE code path
+    serves both a terminal and a pipe. Capability probes: `SupportsColor
+Supports256Color SupportsTrueColor`.
+  - Escape-aware strings: `Strip Width Truncate PadRight PadLeft Center`. Use
+    these, not `str.Len`/`fmt.PadRight`, on anything that may carry escapes -
+    byte length counts an invisible `\x1b[31m` as five columns and misaligns
+    every coloured table.
+  - Cursor/screen, each as a pure `Seq*` builder plus a write-now twin:
+    `MoveTo Up Down Left Right Column Home NextLine PrevLine Save/RestoreCursor
+Hide/ShowCursor ClearScreen ClearLine ClearToLineEnd ClearBelow ResetLine
+Scroll{Up,Down} Insert/DeleteLines SetScrollRegion Enter/ExitAltScreen
+Enable/DisableMouse`. Build with `Seq*` and write once per frame; a
+    non-positive count yields `""` (terminals read `CSI 0A` as 1).
+  - Input: `Decode DecodeMouse` (pure, over the bytes a terminal sent - test
+    key handling with no tty), `ReadKey GetKey ReadByte KeyReady ReadPassword`,
+    `Key`/`MouseEvent`, `Key*` codes (`KeyUp KeyF1+n KeyChar` + `ctrl/alt/shift`).
+  - Progress: `NewBar BarRender BarSet BarAdd BarDraw BarFinish` and
+    `NewSpinner NewSpinnerFrames SpinnerFrame SpinnerTick SpinnerStop
+SpinnerFree`, plus `FormatBytes FormatDuration`. Off a terminal the redraws
+    are skipped and one plain escape-free line is written, so a build script
+    needs no `if IsTerminal()` of its own.
+
+```salam
+import term
+func main:
+    mut st := term.MakeCbreak(term.StdinFd)
+    defer _ok := term.Restore(st)
+    term.Emit(term.SeqHideCursor() + term.SeqClearScreen() + term.SeqMoveTo(1, 1))
+    println term.Bold(term.Green("ready")), term.Dim("(q to quit)")
+    until true:
+        k := term.ReadKey()
+        if k.code == term.KeyChar && k.ch == "q": break end
+        if k.code == term.KeyUp: println "up" end
+    end
+    term.ShowCursor()
+end
+```
+
 ### Collections (heap-allocated: call `.free()`, idiom `defer x.free()`)
 
-- **`Vector<T>`** (built-in; also `import collections`): `push pop get(i)[0]
-set(i,x) len is_empty first last insert remove_at reserve clear iter free`;
+- **`Vector<T>`** (built-in; also `import collections`): `push pop get(i)
+ref(i) set(i,x) len is_empty first last insert remove_at reserve clear iter free`;
   index via `v[i]` (read) / `v[i] = x` (write); free functions `contains index_of
 count_of slice clone reverse swap extend`.
 - **`HashMap<K,V>`**: `put(k,v) get(k) has(k) remove(k) size is_empty
@@ -426,14 +582,88 @@ Str`.
 - **`encoding`**: `Base64Encode Base64Decode HexEncode HexDecode URLEncode
 URLDecode`.
 - **`regex`**: `Compile Match Find Replace ReplaceAll` (`Regex` handle) and
-  one-shot `MatchStr FindStr ReplaceStr ReplaceAllStr`.
-- **`crypto`**: `sha1 sha256 sha512 hmac pbkdf2 random`.
+  one-shot `MatchStr FindStr ReplaceStr ReplaceAllStr`. Captures: `FindMatch`
+  returns a `MatchResult` value (`.ok .start .stop .count`) to read with
+  `Group GroupStart GroupEnd GroupOk GroupByName GroupIndex GroupCount`, plus
+  `FindSubmatch FindAll FindAllN FindAllMatches Split SplitN` (all
+  `Vector`-returning, so `defer v.free()`) and `$1`/`${name}` rewriting with
+  `Expand ReplaceExpand ReplaceAllExpand`; `IsValid` checks a pattern. Syntax:
+  `. [] \d \w \s \D \W \S ^ $ | (…) (?:…) (?<name>…) (?P<name>…) * + ? {n,m}`
+  and the lazy `*? +? ?? {n,m}?`; no lookaround (an unsupported pattern is
+  invalid, and never matches).
+- **`crypto`**: `Sha1Hex Sha256Hex Sha512Hex Md5Hex`, `Sha256Bytes/Sha384Bytes/
+Sha512Bytes` (+ streaming `Sha256New/Update/Final`), HMAC
+  `HmacSha256Hex/HmacSha384Hex/HmacSha512Hex` and the byte-oriented
+  `HmacSha256Bytes/HmacSha384Bytes/HmacSha512Bytes` (write into a caller
+  buffer) / `HmacSha256Raw/HmacSha384Raw/HmacSha512Raw` (pointer+length, for
+  binary keys), `HashPassword VerifyPassword Pbkdf2HmacSha256Hex`,
+  `RandomHex RandomToken RandomBytes`.
 
 ### Time, memory, testing
 
 - **`time`**: `Now NowMillis NowMicros NowNanos Sleep(ms) Format FormatISO
 FormatDate FormatTime Year Month Day Hour Minute Second Weekday Since Until
 ElapsedMs`; `DateTime` type.
+  - **`Duration`** - a span carried as nanoseconds so it cannot be read back in
+    the wrong unit; prefer it to the bare-integer functions above. Build with
+    `Nanoseconds Microseconds Milliseconds Seconds Minutes Hours Days SecondsF
+ZeroDuration`, read with the methods `nanos micros millis secs seconds minutes
+hours days`, combine with `add sub mul div ratio neg abs truncate round`,
+    compare with `cmp less equals is_zero is_negative`. `FormatDuration` writes
+    Go-style text ("1h30m0s", "1.5s", "150ms") and `ParseDuration`/
+    `ParseDurationOr` read it back (`DurationResult { ok, value }`). Bridges:
+    `SleepFor SinceDuration DurationBetween AddDuration`.
+  - **Parsing** (the inverse of every formatter): `ParseISO` (ISO 8601/RFC 3339,
+    with or without an offset), `ParseISOIn ParseISOOr ParseHTTPDate` (RFC
+    1123/850/asctime) and `ParseFormat(pattern, s)` (strftime-style `%Y %m %d %H
+%M %S %f %b %B %a %A %z %Z %%`), all returning `TimeResult { ok, epoch, nanos }`.
+    Also `FormatISOUTC` and `FormatRFC3339` (which write an offset, so they
+    round-trip from any machine - `FormatISO` does not), plus `FromLocalParts`
+    (libc `mktime`, DST-correct) / `FromUTCParts` (portable `timegm`) and
+    `LocalOffsetMinutesAt`. An unzoned string is read as **local** time.
+  - **Timers** (all on the monotonic clock): `NewTimer` → `Timer` with
+    `expired remaining wait reset stop`; `NewTicker` → `Ticker` with
+    `fired wait remaining reset stop advance` + a `dropped` count (a slow loop
+    body drops missed ticks instead of firing them back-to-back). Callback
+    helpers `AfterFunc Every RepeatEvery WaitUntil` - note a lambda captures
+    enclosing locals **by value**, so callbacks share state through top-level
+    `mut` globals, exactly like `spawn` workers.
+- **`calendar`**: Gregorian/`Jalali` (Persian solar hijri)/`Hijri` (Islamic
+  tabular lunar) dates, all pivoting through one Julian Day Number so any
+  pair converts directly: `GregorianToJalali JalaliToGregorian
+GregorianToHijri HijriToGregorian JalaliToHijri HijriToJalali` +
+  `*ToJDN`/`JDNTo*` per calendar. Per-calendar: `IsLeap{Gregorian,Jalali,Hijri}
+DaysIn{Gregorian,Jalali,Hijri}Month IsValid{Gregorian,Jalali,Hijri}Date
+{Gregorian,Jalali,Hijri}MonthName{En,Fa,Ar} Weekday JalaliWeekday
+WeekdayName{En,Fa,Ar} Compare{Gregorian,Jalali,Hijri}`. Reading the system
+  clock (mode 1): `Today{Gregorian,Jalali,Hijri} NowClockTime`. From a value
+  you already have (mode 2): `Epoch{ToGregorian,ToJalali,ToHijri,ToClockTime}`,
+  `{Gregorian,Jalali,Hijri}ToUnixUTC`, `Format{Gregorian,Jalali,Hijri}`
+  `FormatClockTime FormatJalaliLongFa FormatHijriLongAr/Fa
+FormatGregorianLongEn`. `GregorianDate JalaliDate HijriDate ClockTime` types.
+  - **Date arithmetic**, per calendar: `AddDays{...} AddWeeks{...}
+AddMonths{...} AddYears{...} DaysBetween{...} StartOfMonth{...}
+EndOfMonth{...}` for each of `Gregorian`/`Jalali`/`Hijri`, plus
+    `DaysIn{Gregorian,Jalali}Year Weekday{Gregorian,Jalali,Hijri}
+NextWeekdayOnOrAfter`. Days are exact and reversible; **months and years
+    clamp** to the last valid day (2024-01-31 + 1 month = 2024-02-29), so month
+    arithmetic is deliberately not reversible.
+  - **Real IANA timezones** (`Zone`), read from the host's tzdata at runtime -
+    use these for any zone that observes DST: `LoadZone(name) LocalZone
+FreeZone` (a `Zone` owns memory: `defer calendar.FreeZone(z)`), then
+    `ZoneOffsetSeconds ZoneOffsetMinutes ZoneIsDST ZoneAbbrevAt`. `TimeZoneAt(z,
+epoch)` snapshots a `Zone` into the fixed `TimeZone` below, and `ZoneAt(name,
+epoch)` does load-read-free in one call. `ZonedToEpoch` is the DST-aware
+    local→UTC inverse. Where there is no tzdata (Windows) `LoadZone` returns
+    `ok = false` and `TimeZoneAt` degrades to the fixed table.
+  - Fixed-UTC-offset `TimeZone`: `TZUTC TZTehran TZKabul TZRiyadh TZDubai
+TZIstanbul TZLondon TZNewYork TZTokyo FixedOffsetZone`, plus DST-aware
+    `TZLocal`/`LocalOffsetMinutes` (asks the OS via `time`'s libc
+    `localtime()`); `WallClock{Gregorian,Jalali,Hijri,Time}
+ZonedGregorianToEpoch ConvertZoned{Gregorian,Time}` convert a date/time between
+    zones. ⚠ These are **standard-time** constants: `TZLondon` is UTC+0 and
+    `TZNewYork` UTC-5 all year, which is the wrong offset for the months those
+    zones are on summer time - prefer `ZoneAt("Europe/London", epoch)`.
 - **`mem`**: `Allocate AllocateZeroed AllocateArray Reallocate Free Copy Set
 MemMove`; leak tooling `CheckLeaks LiveBytes AllocCount`.
 - **`testing`**: `AssertTrue AssertFalse AssertEqInt AssertEqStr AssertEqFloat
@@ -446,7 +676,7 @@ AssertEqBool AssertContains AssertNil AssertNotNil AssertMsg Summary()` (call
   custom `HashMap<str,str>` headers),
   `NewHeaders NewClient Ok GetHeader Headers WithQuery CookieMap`;
   response has `.status`, `.body`.
-- **`web`** (server framework): `NewRouter Get/Post/Put/Delete(r, path, funcptr(fn))
+- **`web`** (server framework): `NewRouter Get/Post/Put/Delete(r, path, fn)
 NewServer(port) Use Run Static`; handler `func h(ctx: i64)` uses
   `Ctx_html Ctx_json Ctx_text Ctx_param Ctx_query Ctx_form Ctx_body Ctx_method
 Ctx_status Ctx_set_header Ctx_redirect`. Also a canvas/DOM JS-interop surface.
@@ -454,11 +684,110 @@ Ctx_status Ctx_set_header Ctx_redirect`. Also a canvas/DOM JS-interop surface.
   **`ssl`**, **`net`**, **`dom`**/**`console`** (browser/JS targets),
   **`webview`**/**`webview_cef`** (desktop windows).
 
-### Databases (`import db.<engine>`)
+### JWT and API route protection
+
+- **`jwt`**: JSON Web Tokens (RFC 7519/7515) over HMAC-SHA2, and the HTTP
+  layer that uses them - one package, because the HTTP half is only useful
+  with the token half and dead-code elimination means a CLI that merely signs
+  a token links none of it.
+  - Tokens: `NewClaims SetStr/SetInt/SetBool/SetRaw ExpiresIn NotBeforeIn
+ClaimsJSON`; `Sign SignHS256/384/512 SignWithKid SignJSON SignatureOf`;
+    `Verify VerifyHS256 IsValid DefaultOptions OptionsFor`; `Decode` (parses,
+    verifies **nothing**); claim readers `Str Int Bool Raw Has ListHas
+HasScope HasAudience SecondsRemaining`; `ErrorText IsSupportedAlg`; error
+    codes `JWT_OK JWT_ERR_*`. `Options` carries the policy (`alg issuer
+audience subject leeway now require_exp/nbf/iat/sub/jti`). **`alg` comes
+    from `Options`, never from the token**; `"none"` and RS*/ES* are rejected
+    (no asymmetric support).
+  - HTTP (needs `net.http` + `net.router`): `NewGuard` bundles the secret with
+    an `Options`; `Require RequireScope RequireClaim RequireSubject` verify at
+    the top of a handler and, on failure, write the 401/403 themselves and
+    return false. Also `Check` (verify, write nothing), `ParseBearer
+BearerToken TokenFrom Unauthorized MissingCredential Forbidden`, issuing
+    (`Issue IssueFor IssuePair`) and cookies (`SetSessionCookie
+SetSessionCookieInsecure ClearSessionCookie`).
+
+Passwords and secrets live in **`crypto`**, not here: `HashPassword`
+`VerifyPassword` (PBKDF2-HMAC-SHA256), `SecretEquals` (constant-time compare),
+`RandomHex`.
+
+```salam
+func guard(): jwt.Guard:
+    mut g := jwt.NewGuard(os.Env("API_SECRET"))
+    g.opts.issuer = "api.example.com"
+    ret g
+end
+
+func me(ctx: i64):
+    mut t := jwt.Token { }
+    if !jwt.Require(ctx, guard(), t): ret end     // 401 already written
+    http.Ctx_json(ctx, `{"sub":"` + t.claims.sub + `"}`)
+end
+```
+
+Worked examples: `tests/en/apps/auth/` (seven programs), the five REST APIs in
+`tests/en/apps/*api/`, and `tests/en/webframework/authapi.salam`. Package
+tests: `tests/en/stdlib/jwt_demo.salam`.
+
+### Databases (`import db`, `import db.<engine>`)
+
+**`db` itself** is the engine-independent layer: three interfaces plus helpers
+that work on any driver. Take a `dyn db.Connection` and the same code runs on
+any engine (`tests/en/db/shared_iface.salam` runs one function against sqlite
+and postgres and expects identical output).
+
+- `interface Connection`: `Kind Ok Ping Exec Query Begin LastInsertId Changes
+Error Quote Close`
+- `interface Rows`: `Ok Next ColumnCount ColumnName ColumnType IsNull Text Int
+Int64 Float Close` - forward-only, so the loop is `until r.Next():`, and
+  `Close()` is required
+- `interface Tx`: `Ok Exec Query Commit Rollback`
+- Helpers: `QueryInt QueryInt64 QueryFloat QueryText CountRows Run RunAll InTx
+QuoteLiteral`; constants `SQLITE MYSQL POSTGRES` and `TYPE_NULL TYPE_INT
+TYPE_FLOAT TYPE_TEXT TYPE_BLOB`
+- **Pool** (`NewPool Add Acquire Leased Conn Release Size Idle InUse DropDead
+CloseAll Free`): a fixed set of connections leased one at a time. It holds
+  connections you opened; it is not a factory. No locking of its own.
+- **Migrations** (`NewMigrator NewMigratorIn AddMigration MigrationCount
+EnsureTable SchemaVersion IsApplied PendingCount MigrateUp Rollback MigrateTo
+FreeMigrator SplitStatements`): each step runs in a transaction with the row
+  recording it; steps split on `;` outside quotes, since MySQL rejects
+  multi-statement queries.
+
+Each driver keeps its own full surface, and `Conn(d)` boxes one as a
+`dyn db.Connection`:
 
 - **`db.sqlite`**:
-  `Available Version Open Ok Exec Query Next Text Int Finish Prepare BindText Reset LastInsertId Changes QueryInt Close`.
-- **`db.mysql`**, **`db.redis`** (`connect strings hashes lists sets pubsub`).
+  `Available Version Open Ok Exec Query Next Text Int Finish Prepare BindText Reset LastInsertId Changes QueryInt Close Conn`.
+- **`db.postgres`** (libpq): `Available ClientVersion ServerVersion Open OpenFull Ok Ping Reset Close Error Exec ExecCount Query Quote QueryInt QueryText DatabaseName UserName HostName Port Conn`. Placeholders are `$1, $2`, not `?`. There is **no last insert id** - use `INSERT ... RETURNING id`; `LastInsertId()` goes through `lastval()` and is 0 when the session has used no sequence. Results are materialised, so every `Rows` must be closed.
+- **`db.mysql`** (MariaDB/MySQL): `Open Ok Close Ping Error Errno Exec Query QueryOk Next Finish Text Int Int64 Float IsNull ColumnCount RowCount ColumnName AffectedRows LastInsertId Begin Commit Rollback Autocommit Escape SetCharset SelectDB QueryInt QueryText Conn`. This API hands every value over as text, so `ColumnType` answers `TYPE_TEXT` where the others report the column's own type; DDL commits implicitly, so `Tx.Rollback()` cannot undo it. **Threading**: a connection
+  cannot be used by two threads at once (it segfaults, it does not error), so
+  a threaded server gives each request its own connection. Call
+  `LibraryInit()` once from `main` before any thread starts, and `ThreadInit()`
+  from each thread before its first query - `tests/en/apps/*api/_store.salam`
+  is the worked example.
+- **`db.redis`** (`connect strings hashes lists sets pubsub`).
+
+```salam
+import db
+import db.sqlite
+
+func count(c: dyn db.Connection): int:
+    ret db.QueryInt(c, "SELECT COUNT(*) FROM users")
+end
+
+func main:
+    d := sqlite.Open("app.db")
+    defer sqlite.Close(d)
+    c := sqlite.Conn(d)
+    mut m := db.NewMigrator() defer db.FreeMigrator(m)
+    db.AddMigration(m, 1, "users",
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT NOT NULL)",
+        "DROP TABLE users")
+    db.MigrateUp(m, c)
+    println count(c)
+end
+```
 
 ---
 
@@ -469,7 +798,8 @@ naive port into compile errors (each corresponds to a case in
 `tests/en/errors/`):
 
 1. **`until <cond>` loops WHILE the condition is true.** It is Salam's `while`,
-   not a do-until. `until i < n:` iterates for `i` from small to `n`; the C
+   not a do-until - and `while <cond>` is accepted as the same keyword, which
+   is what new code should say. `until i < n:` iterates for `i` from small to `n`; the C
    `while (v != 0)` is `until v != 0:`, **not** `until v == 0:`. This is the
    single most common porting mistake, and it is _silent_: an inverted
    condition runs the body zero times with no diagnostic (only a literal
@@ -519,7 +849,7 @@ General mapping that applies to all source languages:
 | subtype polymorphism         | `dyn Interface` (dynamic) or `<T: Interface>` (static)                           |
 | generics / templates         | `<T>`, `struct Box<T>`, `func F<T>(…)`                                           |
 | dict / map / object          | `HashMap<K,V>` (`put/get/has`)                                                   |
-| list / array / vector        | `Vector<T>` (`push/get(i)[0]/set/len`) or fixed `T[n]`                           |
+| list / array / vector        | `Vector<T>` (`push/get(i)/set/len`) or fixed `T[n]`                              |
 | set                          | `Set<T>`                                                                         |
 | tuple / record               | small `struct`, or `Pair`, or `Variant` for sum types                            |
 | string ops                   | `str.*` package + `+` concatenation + `len()`                                    |
@@ -528,8 +858,8 @@ General mapping that applies to all source languages:
 | lambda / closure             | `(x: int) => expr` or block lambda; type `func (…) R`                            |
 | enum / union                 | `enum` (C-like) or `Variant<…>` (tagged union)                                   |
 | module / package / import    | `package name` + `import pkg` (only `pub` exported)                              |
-| free function                | top-level `func`; take its address with `funcptr(fn)`                            |
-| `while`                      | **`until`** (same meaning!)                                                      |
+| free function                | top-level `func`; a bare name is its address (`i64`), `&fn` is a `void*`         |
+| `while`                      | **`while`** (or `until` - one keyword, two spellings)                            |
 | `for i in range(n)`          | `repeat n with i:`                                                               |
 | `for x in xs`                | `each x in xs:`                                                                  |
 | destructor / cleanup         | `defer x.free()`                                                                 |
@@ -617,11 +947,73 @@ import sync
 mut lock := sync.NewMutex()
 mut wg := sync.NewWaitGroup()
 sync.Add(wg, 1 as i64)
-t := spawn(worker)                    // start a thread from a func value
+t := spawn(worker)                    // worker takes no arguments
+t2 := spawn(work_on, job)             // ... or exactly one POINTER argument
 join(t)                               // wait for it
 sync.Lock(lock)  /* critical section */  sync.Unlock(lock)
 sync.Wait(wg)  sync.Destroy(lock)  sync.DestroyWaitGroup(wg)
 ```
+
+`spawn(f, arg)` is how a thread gets its own data; `arg`'s type must be a
+pointer, because it travels through the OS's single thread-argument slot.
+Without it a worker can only reach globals.
+
+Rest of `sync`: `CondVar` (`NewCondVar`/`WaitCond`/`WaitCondTimeout`/`Signal`/
+`Broadcast` - always re-test your predicate in an `until` loop, wakeups can be
+spurious), `RWMutex` (`RLock`/`RUnlock`/`WLock`/`WUnlock`, writer-preferring),
+`Semaphore` (`Acquire`/`TryAcquire`/`Release`), `Once` (`Do(o, () => ... end)`),
+`SleepMs`, `NowMs` (unspecified epoch - only differences mean anything).
+Everything blocks on a condition variable rather than polling.
+
+```salam
+import chan
+import pool
+import atomic
+import ctx
+
+mut jobs := chan.Chan {} as chan.Chan<i64>
+jobs.init(64 as i64)                          // n >= 1 buffered, 0 = rendezvous
+jobs.send(v)                                  // blocks while full; false if closed
+mut ok := true
+v := jobs.recv(ok)                            // ok = false once closed AND drained
+v2 := jobs.recv_timeout(ok, 500 as i64)       // ok = false: timed out OR closed
+jobs.send_timeout(v, 500 as i64)              // false if it could not be delivered
+jobs.close()   jobs.free()                    // also: try_send/try_recv/len/is_closed
+
+pool.ParallelFor(n, 8 as i64, (i: i64): body(i) end)   // self-scheduling workers
+pool.ParallelForAuto(n, (i: i64): body(i) end)         // one worker per CPU
+pool.CPUCount()
+
+mut hits := atomic.NewI64(0 as i64)
+_ := atomic.Add(hits, 1 as i64)               // Load/Store/Swap/CompareAndSwap
+mut stop := atomic.NewFlag(false)
+if atomic.TestAndSet(stop): /* exactly one caller wins */ end
+
+root := ctx.Background()                      // free the root LAST
+job := ctx.WithTimeout(root, 5000 as i64)     // or WithCancel / WithDeadline
+until ctx.IsDone(job):  _ := ctx.Wait(job, 100 as i64)  end
+ctx.Cancel(job)   ctx.Err(job)                // "" | "cancelled" | "deadline exceeded"
+ctx.Free(job)   ctx.Free(root)
+```
+
+`init(0)` makes a rendezvous channel: `send` does not return until a receiver
+takes the value, so the two threads meet instead of queueing. `try_send` is
+always false on one - there is no way to know a receiver is parked without
+waiting.
+
+A `ctx` tree shares one lock; cancelling any node finishes everything below it,
+and a child's deadline can only shorten what it inherits, never extend it.
+
+`atomic` is lock-free everywhere except tcc. `atomic_load/store/add/swap/cas`
+are **language intrinsics** on an `i64*` cell (a `__atomic_*` builtin in the C
+backend, a real `atomicrmw`/`cmpxchg` in LLVM, both seq*cst; plain reads and
+writes in JS, which has no threads). `atomic_add` returns the value \_after* the
+add, `atomic_swap` the value before it. tcc 0.9.27 has neither the `__atomic`
+nor the `__sync` family, so under `SALAM_CC_TCC` the `atomic` package falls
+back to a mutex per cell - same semantics, higher cost, invisible to callers.
+A declared function of the same name shadows an intrinsic.
+
+There is no `async`/`await`.
 
 **Conditional compilation** (a top-level or inline `if` on a compile-time
 constant). Predefined: `SALAM_OS_WINDOWS/MAC/LINUX/UNIX/FREEBSD/ANDROID/WASM`,
@@ -794,40 +1186,40 @@ two closing angle brackets, not a shift.
 
 ### 12.2 C construct → Salam
 
-| C                                           | Salam                                                                                              |
-| ------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `typedef struct { … } T;`                   | `struct T: … end` (fields default private → add `pub`)                                             |
-| `union { … }` / tagged union                | **`Variant<A, B, …>`**, narrowed by `match` on type patterns                                       |
-| `enum { A, B=5 }`                           | `enum E: A, B = 5 end`                                                                             |
-| `#define NAME 3` (const)                    | `const NAME := 3`                                                                                  |
-| `#define MAX(a,b) …` (macro fn)             | `inline func Max(a: int, b: int): int: … end`                                                      |
-| `#ifdef` / `#if` / platform `#ifdef _WIN32` | `@if`-style top-level `if SALAM_OS_WINDOWS:` on compile-time constants (§8)                        |
-| `#include "x.h"` / header+source split      | `package` + `import`; export with `pub` (no headers)                                               |
-| function pointer `int (*f)(int)`            | typed value `func (int) int` (pass a lambda); or `funcptr`/`&fn` for `void*`/`i64` callback tables |
-| `void*` / `char*` / `T*`                    | `void*` / `str` or `u8*` / `T*`; deref `p[0]`; `null`                                              |
-| `malloc/calloc/realloc/free`                | `mem.Allocate / AllocateZeroed / Reallocate / Free`                                                |
-| `memcpy/memset/memmove`                     | `mem.Copy / mem.Set / mem.MemMove`                                                                 |
-| `strlen/strcmp/strcpy/strcat`               | `str.Len / str.Compare / str.Clone / str.Concat` (+ `StringBuilder`)                               |
-| growable array / `realloc` buffer           | `Vector<T>` (`push/get(i)[0]/set/len`), remember `.free()`                                         |
-| hash table (symbol table)                   | `HashMap<K, V>`                                                                                    |
-| `switch (x) { case … }`                     | `match x: … end`                                                                                   |
-| `goto`                                      | not available; restructure with functions/flags/loops                                              |
-| `break` / `continue`                        | `break` / `continue` (same, innermost loop only)                                                   |
-| `while (c)`                                 | **`until c:`** with the same condition, **never negated** (`while (v != 0)` → `until v != 0:`)     |
-| `while (v)` / `while (p)` (truthy)          | `until v != 0:` / `until p != null:` (Salam has no truthiness)                                     |
-| `do { B } while (c);`                       | `until true: B  if !c: break end end`                                                              |
-| `for (;;)`                                  | `until true:` + `break`                                                                            |
-| `for (i = 0; i < n; i++)`                   | `repeat n with i:` (i = 0 .. n-1)                                                                  |
-| `for (i = n; i >= 1; i--)`                  | `repeat n to 1 with i:` (descending; guard `n >= 1`, see §2)                                       |
-| `for (i = 0; i < n; i += 2)`                | `repeat 0 to n - 1 by 2 with i:` (`by` is always positive)                                         |
-| variadic `f(int, ...)`                      | only in `extern`/FFI; pure Salam passes a `Vector`                                                 |
-| `static` file-local                         | default (package-private); top level, not `pub`                                                    |
-| `static`/global mutable state               | top-level `mut` globals are allowed (`mut g_count := 0`)                                           |
-| `const T x`                                 | `const NAME := …` (compile-time) or an immutable `:=` binding                                      |
-| `errno` / return-code error handling        | `bool` / `Option<T>` / sentinel + an error record/struct                                           |
-| `assert()`                                  | `import testing` (`AssertTrue`, …) or an explicit `if … : print + os.Exit`                         |
-| `int8_t … uint64_t`, `size_t`               | `i8…i64`, `u8…u64` (use `u64` for sizes/counts)                                                    |
-| bitfields / flag enums                      | bitwise ops on an integer (`flags & MASK`, §12.1), or a small struct of `bool`s                    |
+| C                                           | Salam                                                                                                |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `typedef struct { … } T;`                   | `struct T: … end` (fields default private → add `pub`)                                               |
+| `union { … }` / tagged union                | **`Variant<A, B, …>`**, narrowed by `match` on type patterns                                         |
+| `enum { A, B=5 }`                           | `enum E: A, B = 5 end`                                                                               |
+| `#define NAME 3` (const)                    | `const NAME := 3`                                                                                    |
+| `#define MAX(a,b) …` (macro fn)             | `inline func Max(a: int, b: int): int: … end`                                                        |
+| `#ifdef` / `#if` / platform `#ifdef _WIN32` | `@if`-style top-level `if SALAM_OS_WINDOWS:` on compile-time constants (§8)                          |
+| `#include "x.h"` / header+source split      | `package` + `import`; export with `pub` (no headers)                                                 |
+| function pointer `int (*f)(int)`            | typed value `func (int) int` (pass a lambda); or a bare `fn`/`&fn` for `i64`/`void*` callback tables |
+| `void*` / `char*` / `T*`                    | `void*` / `str` or `u8*` / `T*`; deref `p[0]`; `null`                                                |
+| `malloc/calloc/realloc/free`                | `mem.Allocate / AllocateZeroed / Reallocate / Free`                                                  |
+| `memcpy/memset/memmove`                     | `mem.Copy / mem.Set / mem.MemMove`                                                                   |
+| `strlen/strcmp/strcpy/strcat`               | `str.Len / str.Compare / str.Clone / str.Concat` (+ `StringBuilder`)                                 |
+| growable array / `realloc` buffer           | `Vector<T>` (`push/get(i)/set/len`), remember `.free()`                                              |
+| hash table (symbol table)                   | `HashMap<K, V>`                                                                                      |
+| `switch (x) { case … }`                     | `match x: … end`                                                                                     |
+| `goto`                                      | not available; restructure with functions/flags/loops                                                |
+| `break` / `continue`                        | `break` / `continue` (same, innermost loop only)                                                     |
+| `while (c)`                                 | **`while c:`** with the same condition, **never negated** (`while (v != 0)` → `while v != 0:`)       |
+| `while (v)` / `while (p)` (truthy)          | `until v != 0:` / `until p != null:` (Salam has no truthiness)                                       |
+| `do { B } while (c);`                       | `until true: B  if !c: break end end`                                                                |
+| `for (;;)`                                  | `until true:` + `break`                                                                              |
+| `for (i = 0; i < n; i++)`                   | `repeat n with i:` (i = 0 .. n-1)                                                                    |
+| `for (i = n; i >= 1; i--)`                  | `repeat n to 1 with i:` (descending; guard `n >= 1`, see §2)                                         |
+| `for (i = 0; i < n; i += 2)`                | `repeat 0 to n - 1 by 2 with i:` (`by` is always positive)                                           |
+| variadic `f(int, ...)`                      | only in `extern`/FFI; pure Salam passes a `Vector`                                                   |
+| `static` file-local                         | default (package-private); top level, not `pub`                                                      |
+| `static`/global mutable state               | top-level `mut` globals are allowed (`mut g_count := 0`)                                             |
+| `const T x`                                 | `const NAME := …` (compile-time) or an immutable `:=` binding                                        |
+| `errno` / return-code error handling        | `bool` / `Option<T>` / sentinel + an error record/struct                                             |
+| `assert()`                                  | `import testing` (`AssertTrue`, …) or an explicit `if … : print + os.Exit`                           |
+| `int8_t … uint64_t`, `size_t`               | `i8…i64`, `u8…u64` (use `u64` for sizes/counts)                                                      |
+| bitfields / flag enums                      | bitwise ops on an integer (`flags & MASK`, §12.1), or a small struct of `bool`s                      |
 
 ### 12.3 Building blocks the compiler needs (all in Salam today)
 

@@ -39,6 +39,36 @@ import x "../xml.salam"
 import sm "../semantic/semantic.salam"
 
 // Builds a bare AST_TYPE node with a name.
+// co.VERSION's "maj.min.pat" as maj*10000 + min*100 + pat - a second,
+// independent reading of the same string the builtin derives its
+// SALAM_VERSION_CODE from.
+func expected_version_code(): int:
+    v := co.VERSION
+    n := str.Len(v)
+    mut field := 0
+    mut acc := 0
+    mut code := 0
+    mut i := 0
+    until i <= n:
+        c := i < n ? co.ByteAt(v, i) : 46 // a trailing '.' closes the last field
+        if c >= 48 && c <= 57:
+            acc = acc * 10 + (c - 48)
+        else c == 46 && field < 3:
+            mut scale := 10000
+            repeat field:
+                scale = scale / 100
+            end
+            code = code + acc * scale
+            acc = 0
+            field += 1
+        else:
+            break
+        end
+        i += 1
+    end
+    ret code
+end
+
 func type_node(a &: at.Ast, name: str): int:
     id := at.NewNode(a, at.AST_TYPE)
     at.SetName(a, id, name)
@@ -168,7 +198,7 @@ func test_5b():
     msv := sm.SymAt(s1, sm.LookupLocal(s1, ptv.members, "sum"))
     testing.AssertEqInt(msv.kind, sm.SYM_METHOD)
     testing.AssertEqInt(msv.overloads.len(), 1)
-    sg1 := sm.SigAt(s1, msv.overloads.get(0)[0])
+    sg1 := sm.SigAt(s1, msv.overloads.get(0))
     testing.AssertEqInt(sg1.ret_type, sm.TY_I32)
     testing.AssertEqStr(sg1.mangled, "S_Point_sum__void")
     testing.AssertEqInt(sg1.owner, pt)
@@ -204,12 +234,12 @@ func test_5b():
     testing.AssertEqInt(adv.kind, sm.SYM_FUNC)
     testing.AssertEqInt(adv.overloads.len(), 2)
     testing.AssertEqStr(
-        sm.SigAt(s1, adv.overloads.get(0)[0]).mangled, "add__i32_i32"
+        sm.SigAt(s1, adv.overloads.get(0)).mangled, "add__i32_i32"
     )
     testing.AssertEqStr(
-        sm.SigAt(s1, adv.overloads.get(1)[0]).mangled, "add__f64_f64"
+        sm.SigAt(s1, adv.overloads.get(1)).mangled, "add__f64_f64"
     )
-    testing.AssertEqInt(sm.SigAt(s1, adv.overloads.get(0)[0]).required, 2)
+    testing.AssertEqInt(sm.SigAt(s1, adv.overloads.get(0)).required, 2)
     testing.AssertTrue(sm.SymAt(s1, sm.LookupLocal(s1, s1.global, "Twice")).is_pub)
 
     // interface + impl-on-primitive (impl@i32 owner symbol)
@@ -217,7 +247,7 @@ func test_5b():
     testing.AssertEqInt(shv.kind, sm.SYM_INTERFACE)
     arm := sm.SymAt(s1, sm.LookupLocal(s1, shv.members, "area"))
     testing.AssertEqInt(arm.kind, sm.SYM_METHOD)
-    testing.AssertEqInt(sm.SigAt(s1, arm.overloads.get(0)[0]).ret_type, sm.TY_F64)
+    testing.AssertEqInt(sm.SigAt(s1, arm.overloads.get(0)).ret_type, sm.TY_F64)
     imo := sm.LookupLocal(s1, s1.global, sm.ImplOwnerKey("i32"))
     testing.AssertTrue(imo != 0)
     imv := sm.SymAt(s1, imo)
@@ -392,8 +422,8 @@ func test_5b():
     pf := sm.PackageFiles(tmp + "/pkgd/pkgd.salam")
     defer pf.free()
     testing.AssertEqInt(pf.len(), 2)
-    testing.AssertEqStr(pf.get(0)[0], tmp + "/pkgd/pkgd.salam")
-    testing.AssertEqStr(pf.get(1)[0], tmp + "/pkgd/extra.salam")
+    testing.AssertEqStr(pf.get(0), tmp + "/pkgd/pkgd.salam")
+    testing.AssertEqStr(pf.get(1), tmp + "/pkgd/extra.salam")
     // no merge when the file stem does not match its directory name
     pf2 := sm.PackageFiles(tmp + "/decl.salam")
     defer pf2.free()
@@ -503,23 +533,24 @@ func test_5c():
     testing.AssertEqStr(sm.ToString(s20, viv.ty), "Vector_i32")
     testing.AssertEqStr(viv.generic_base, "Vector")
     testing.AssertEqInt(viv.generic_args.len(), 1)
-    testing.AssertEqInt(viv.generic_args.get(0)[0], sm.TY_I32)
+    testing.AssertEqInt(viv.generic_args.get(0), sm.TY_I32)
     // instance member types (cross-checked against C --emit-symbol-xml)
     pushm := sm.SymAt(s20, sm.LookupLocal(s20, viv.members, "push"))
-    psig := sm.SigAt(s20, pushm.overloads.get(0)[0])
+    psig := sm.SigAt(s20, pushm.overloads.get(0))
     testing.AssertEqStr(psig.mangled, "S_Vector_i32_push__i32")
     testing.AssertEqInt(psig.ret_type, sm.TY_VOID)
-    testing.AssertEqInt(psig.params.get(0)[0], sm.TY_I32)
+    testing.AssertEqInt(psig.params.get(0), sm.TY_I32)
     popm := sm.SymAt(s20, sm.LookupLocal(s20, viv.members, "pop"))
-    popsig := sm.SigAt(s20, popm.overloads.get(0)[0])
+    popsig := sm.SigAt(s20, popm.overloads.get(0))
     testing.AssertEqStr(popsig.mangled, "S_Vector_i32_pop__void")
     testing.AssertEqInt(popsig.ret_type, sm.TY_I32)
     getm := sm.SymAt(s20, sm.LookupLocal(s20, viv.members, "get"))
-    getsig := sm.SigAt(s20, getm.overloads.get(0)[0])
-    testing.AssertEqStr(sm.ToString(s20, getsig.ret_type), "i32*")
+    getsig := sm.SigAt(s20, getm.overloads.get(0))
+    // Vector<T>.get returns T by value; it is ref() that hands back a T*.
+    testing.AssertEqStr(sm.ToString(s20, getsig.ret_type), "i32")
     lenm := sm.SymAt(s20, sm.LookupLocal(s20, viv.members, "len"))
     testing.AssertEqInt(
-        sm.SigAt(s20, lenm.overloads.get(0)[0]).ret_type, sm.TY_I32
+        sm.SigAt(s20, lenm.overloads.get(0)).ret_type, sm.TY_I32
     )
     fldm := sm.SymAt(s20, sm.LookupLocal(s20, viv.members, "data"))
     testing.AssertEqInt(fldm.kind, sm.SYM_FIELD)
@@ -530,17 +561,17 @@ func test_5c():
     testing.AssertTrue(hi != 0)
     hiv := sm.SymAt(s20, hi)
     putm := sm.SymAt(s20, sm.LookupLocal(s20, hiv.members, "put"))
-    putsig := sm.SigAt(s20, putm.overloads.get(0)[0])
+    putsig := sm.SigAt(s20, putm.overloads.get(0))
     testing.AssertEqStr(putsig.mangled, "S_HashMap_str_i32_put__s_i32")
-    testing.AssertEqInt(putsig.params.get(0)[0], sm.TY_STR)
-    testing.AssertEqInt(putsig.params.get(1)[0], sm.TY_I32)
+    testing.AssertEqInt(putsig.params.get(0), sm.TY_STR)
+    testing.AssertEqInt(putsig.params.get(1), sm.TY_I32)
     testing.AssertEqInt(putsig.ret_type, sm.TY_VOID)
 
     // parameter mangling now names the instance (the 5b report's
     // vuse__Vector_i32 note)
     vum := sm.SymAt(s20, sm.LookupLocal(s20, s20.global, "vuse"))
     testing.AssertEqStr(
-        sm.SigAt(s20, vum.overloads.get(0)[0]).mangled, "vuse__Vector_i32"
+        sm.SigAt(s20, vum.overloads.get(0)).mangled, "vuse__Vector_i32"
     )
 
     // generic FUNCTION instantiation via a call site (default argument)
@@ -550,7 +581,7 @@ func test_5c():
     testing.AssertTrue(idi != 0)
     idv := sm.SymAt(s20, idi)
     testing.AssertEqInt(idv.kind, sm.SYM_FUNC)
-    idsig := sm.SigAt(s20, idv.overloads.get(0)[0])
+    idsig := sm.SigAt(s20, idv.overloads.get(0))
     testing.AssertEqStr(idsig.mangled, "identity_i32__i32")
     testing.AssertEqInt(idsig.ret_type, sm.TY_I32)
 
@@ -1395,11 +1426,11 @@ func main:
     sm.AddOverload(s, fsym, sg2)
     fsv := sm.SymAt(s, fsym)
     testing.AssertEqInt(fsv.overloads.len(), 2)
-    testing.AssertEqInt(fsv.overloads.get(0)[0], sg1)
-    testing.AssertEqInt(fsv.overloads.get(1)[0], sg2)
+    testing.AssertEqInt(fsv.overloads.get(0), sg1)
+    testing.AssertEqInt(fsv.overloads.get(1), sg2)
     back := sm.SigAt(s, sg1)
     testing.AssertEqInt(back.params.len(), 2)
-    testing.AssertEqInt(back.params.get(1)[0], sm.TY_I32)
+    testing.AssertEqInt(back.params.get(1), sm.TY_I32)
     testing.AssertEqInt(back.ret_type, sm.TY_I32)
     back2 := sm.SigAt(s, sg2)
     testing.AssertEqInt(back2.ret_type, sm.TY_F64)
@@ -1464,9 +1495,10 @@ func main:
     testing.AssertEqInt(n2v.kind, at.AST_LITERAL)
     testing.AssertEqInt(n2v.op, tok.TK_INT)
     testing.AssertEqInt(n2v.value_kind, tok.TV_INT)
-    // major*10000 + minor*100 + patch, derived from co.VERSION - bump with
-    // the VERSION file ("0.2.9" -> 209).
-    testing.AssertEqInt(n2v.value_int as int, 209)
+    // major*10000 + minor*100 + patch, derived from co.VERSION. Computed here
+    // rather than written out, so the assertion tracks the repo's VERSION
+    // file instead of needing a bump alongside every release.
+    testing.AssertEqInt(n2v.value_int as int, expected_version_code())
     n3 := at.NewNode(a, at.AST_IDENTIFIER)
     ok3 := sm.BuiltinGlobalConst(a, n3, "SOMETHING_ELSE", isstr)
     testing.AssertFalse(ok3)

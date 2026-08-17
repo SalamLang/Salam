@@ -1,0 +1,376 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package graph
+
+// Network flow: maximum flow, minimum cut, and minimum cost flow, over the
+// residual network defined in gr_flownet.salam.
+//
+//   MaxFlow              Dinic, level graph plus blocking flow   O(n^2 m)
+//   MaxFlowEdmondsKarp   augment along a shortest path each time O(n m^2)
+//   MinCut               the cut that certifies a maximum flow
+//   MinCostFlow          successive shortest paths by cost
+//
+// MaxFlow leaves the residual capacities in place, which is what makes the
+// minimum cut readable afterwards: the nodes still reachable from the source
+// form one side, by the max-flow min-cut theorem. Call FlowNet.reset to run a
+// second flow over the same network.
+
+func _dinic_bfs(f &: FlowNet, s: int, t: int, level &: Vector<int>): bool:
+    FillInt(level, f.n, GRAPH_NONE)
+    mut q := Vector {} as Vector<int>
+    defer q.free()
+    level.set(s, 0)
+    q.push(s)
+    mut head := 0
+    until head < q.len():
+        u := q.get(head)
+        head += 1
+        mut e := f.head.get(u)
+        until e != GRAPH_NONE:
+            _dinic_visit(f, u, e, level, q)
+            e = f.nxt.get(e)
+        end
+    end
+    ret level.get(t) != GRAPH_NONE
+end
+
+func _dinic_visit(f &: FlowNet, u: int, e: int, level &: Vector<int>, q &: Vector<int>):
+    v := f.to.get(e)
+    if f.cap.get(e) <= 0.0: ret end
+    if level.get(v) != GRAPH_NONE: ret end
+    level.set(v, level.get(u) + 1)
+    q.push(v)
+end
+
+// Advance u's current-arc cursor to the next arc that is both admissible in
+// the level graph and has capacity left. Arcs skipped here are skipped for
+// the rest of the phase, which is what keeps Dinic at O(n^2 m).
+func _dinic_step(f &: FlowNet, u: int, level &: Vector<int>, iter &: Vector<int>): int:
+    mut e := iter.get(u)
+    until e != GRAPH_NONE:
+        v := f.to.get(e)
+        if f.cap.get(e) > 0.0:
+            if level.get(v) == level.get(u) + 1: ret e end
+        end
+        e = f.nxt.get(e)
+        iter.set(u, e)
+    end
+    ret GRAPH_NONE
+end
+
+func _apply_path(f &: FlowNet, path: Vector<int>): f64:
+    mut bottleneck := GRAPH_INF
+    repeat path.len() with i:
+        c := f.cap.get(path.get(i))
+        if c < bottleneck: bottleneck = c end
+    end
+    repeat path.len() with i:
+        e := path.get(i)
+        f.cap.set(e, f.cap.get(e) - bottleneck)
+        r := e ^ 1
+        f.cap.set(r, f.cap.get(r) + bottleneck)
+    end
+    ret bottleneck
+end
+
+// One augmenting path in the current level graph, or 0 when the phase is
+// exhausted. Retreating marks the dead end unreachable and rewinds the
+// parent's cursor past the arc that led here.
+func _dinic_path(f &: FlowNet, s: int, t: int, level &: Vector<int>, iter &: Vector<int>): f64:
+    mut path := Vector {} as Vector<int>
+    defer path.free()
+    mut u := s
+    mut result := 0.0
+    until true:
+        if u == t:
+            result = _apply_path(f, path)
+            break
+        end
+        e := _dinic_step(f, u, level, iter)
+        if e != GRAPH_NONE:
+            path.push(e)
+            u = f.to.get(e)
+        else:
+            if u == s: break end
+            level.set(u, GRAPH_NONE)
+            back := path.pop()
+            u = f.to.get(back ^ 1)
+            iter.set(u, f.nxt.get(iter.get(u)))
+        end
+    end
+    ret result
+end
+
+func _ek_bfs(f &: FlowNet, s: int, t: int, via &: Vector<int>): bool:
+    FillInt(via, f.n, GRAPH_NONE)
+    mut seen := Vector {} as Vector<bool>
+    defer seen.free()
+    FillBool(seen, f.n, false)
+    mut q := Vector {} as Vector<int>
+    defer q.free()
+    seen.set(s, true)
+    q.push(s)
+    mut head := 0
+    until head < q.len():
+        u := q.get(head)
+        head += 1
+        mut e := f.head.get(u)
+        until e != GRAPH_NONE:
+            _ek_visit(f, e, seen, via, q)
+            e = f.nxt.get(e)
+        end
+    end
+    ret seen.get(t)
+end
+
+func _ek_visit(f &: FlowNet, e: int, seen &: Vector<bool>, via &: Vector<int>, q &: Vector<int>):
+    v := f.to.get(e)
+    if f.cap.get(e) <= 0.0: ret end
+    if seen.get(v): ret end
+    seen.set(v, true)
+    via.set(v, e)
+    q.push(v)
+end
+
+func _ek_augment(f &: FlowNet, s: int, t: int, via: Vector<int>): f64:
+    mut path := Vector {} as Vector<int>
+    defer path.free()
+    mut u := t
+    until u != s:
+        e := via.get(u)
+        path.push(e)
+        u = f.to.get(e ^ 1)
+    end
+    ret _apply_path(f, path)
+end
+
+// Bellman-Ford over the residual arcs, which is what min cost flow needs:
+// residual reverse arcs carry negative cost, so Dijkstra does not apply
+// without potentials.
+func _spfa(f &: FlowNet, s: int, t: int, dist &: Vector<f64>, via &: Vector<int>): bool:
+    FillFloat(dist, f.n, GRAPH_INF)
+    FillInt(via, f.n, GRAPH_NONE)
+    dist.set(s, 0.0)
+    mut round := 0
+    until round < f.n:
+        if _spfa_pass(f, dist, via) == false: break end
+        round += 1
+    end
+    ret dist.get(t) < GRAPH_INF
+end
+
+func _spfa_pass(f &: FlowNet, dist &: Vector<f64>, via &: Vector<int>): bool:
+    mut changed := false
+    repeat f.n with u:
+        if dist.get(u) < GRAPH_INF:
+            mut e := f.head.get(u)
+            until e != GRAPH_NONE:
+                if _spfa_relax(f, u, e, dist, via): changed = true end
+                e = f.nxt.get(e)
+            end
+        end
+    end
+    ret changed
+end
+
+func _spfa_relax(f &: FlowNet, u: int, e: int, dist &: Vector<f64>, via &: Vector<int>): bool:
+    if f.cap.get(e) <= 0.0: ret false end
+    v := f.to.get(e)
+    new_dist := dist.get(u) + f.cost.get(e)
+    if new_dist < dist.get(v):
+        dist.set(v, new_dist)
+        via.set(v, e)
+        ret true
+    end
+    ret false
+end
+
+func _residual_side(f &: FlowNet, s: int, side &: Vector<bool>):
+    FillBool(side, f.n, false)
+    mut q := Vector {} as Vector<int>
+    defer q.free()
+    side.set(s, true)
+    q.push(s)
+    mut head := 0
+    until head < q.len():
+        u := q.get(head)
+        head += 1
+        mut e := f.head.get(u)
+        until e != GRAPH_NONE:
+            v := f.to.get(e)
+            if f.cap.get(e) > 0.0:
+                if side.get(v) == false:
+                    side.set(v, true)
+                    q.push(v)
+                end
+            end
+            e = f.nxt.get(e)
+        end
+    end
+end
+
+func _mcf_augment(f &: FlowNet, s: int, t: int, via: Vector<int>, room: f64): f64:
+    mut path := Vector {} as Vector<int>
+    defer path.free()
+    mut u := t
+    mut bottleneck := room
+    until u != s:
+        e := via.get(u)
+        if f.cap.get(e) < bottleneck: bottleneck = f.cap.get(e) end
+        path.push(e)
+        u = f.to.get(e ^ 1)
+    end
+    repeat path.len() with i:
+        e := path.get(i)
+        f.cap.set(e, f.cap.get(e) - bottleneck)
+        r := e ^ 1
+        f.cap.set(r, f.cap.get(r) + bottleneck)
+    end
+    ret bottleneck
+end
+
+@en "NewFlowNet"
+@fa "شبکه شار نو"
+@ar "شبكة تدفق جديدة"
+pub func NewFlowNet(n: int): FlowNet:
+    mut f := FlowNet { }
+    f.n = n
+    FillInt(f.head, n, GRAPH_NONE)
+    ret f
+end
+
+// Read a Graph as a flow network, taking edge weights as capacities. An
+// undirected edge becomes capacity in both directions, a directed one an arc
+// with a zero reverse.
+@en "FlowFromGraph"
+@fa "شار از گراف"
+@ar "تدفق من بيان"
+pub func FlowFromGraph(g &: Graph): FlowNet:
+    mut f := NewFlowNet(g.n)
+    repeat g.size() with e:
+        if g.directed: f.add_arc(g.edge_from(e), g.edge_to(e), g.edge_weight(e))
+        else: f.add_edge(g.edge_from(e), g.edge_to(e), g.edge_weight(e))
+        end
+    end
+    ret f
+end
+
+// Dinic's algorithm: repeatedly build the level graph by breadth-first
+// search, then saturate it with a blocking flow. O(n^2 m) in general, O(m
+// sqrt(m)) on unit capacities, and in practice the one to reach for.
+@en "MaxFlow"
+@fa "بیشینه شار"
+@ar "أقصى تدفق"
+pub func MaxFlow(f &: FlowNet, s: int, t: int): f64:
+    mut level := Vector {} as Vector<int>
+    defer level.free()
+    mut iter := Vector {} as Vector<int>
+    defer iter.free()
+    mut total := 0.0
+    if s == t: ret 0.0 end
+    FillInt(iter, f.n, GRAPH_NONE)
+    until _dinic_bfs(f, s, t, level):
+        repeat f.n with u: iter.set(u, f.head.get(u)) end
+        mut aug := _dinic_path(f, s, t, level, iter)
+        until aug > 0.0:
+            total += aug
+            aug = _dinic_path(f, s, t, level, iter)
+        end
+    end
+    ret total
+end
+
+// Edmonds-Karp: augment along a shortest path in edges, every time. Slower
+// than Dinic (O(n m^2)) but it is the algorithm the proof is written about,
+// and it cross-checks Dinic on the same network.
+@en "MaxFlowEdmondsKarp"
+@fa "بیشینه شار ادموندز-کارپ"
+@ar "أقصى تدفق إدموندز-كارب"
+pub func MaxFlowEdmondsKarp(f &: FlowNet, s: int, t: int): f64:
+    mut via := Vector {} as Vector<int>
+    defer via.free()
+    mut total := 0.0
+    if s == t: ret 0.0 end
+    until _ek_bfs(f, s, t, via):
+        total += _ek_augment(f, s, t, via)
+    end
+    ret total
+end
+
+// Maximum flow value and the cut that certifies it: `side` is true for the
+// nodes reachable from s in the residual network, and the arcs crossing from
+// true to false are saturated. Their total capacity equals the flow, which
+// is the max-flow min-cut theorem.
+@en "MinCut"
+@fa "کمینه برش"
+@ar "أدنى قطع"
+pub func MinCut(f &: FlowNet, s: int, t: int, side &: Vector<bool>): f64:
+    v := MaxFlow(f, s, t)
+    _residual_side(f, s, side)
+    ret v
+end
+
+@en "MaxFlowValue"
+@fa "مقدار بیشینه شار"
+@ar "قيمة أقصى تدفق"
+pub func MaxFlowValue(g &: Graph, s: int, t: int): f64:
+    mut f := FlowFromGraph(g)
+    v := MaxFlow(f, s, t)
+    defer f.free()
+    ret v
+end
+
+// The minimum s-t cut of a Graph, as the set of edge ids that cross it.
+@en "MinCutEdges"
+@fa "یال‌های کمینه برش"
+@ar "أضلاع أدنى قطع"
+pub func MinCutEdges(g &: Graph, s: int, t: int, cut &: Vector<int>): f64:
+    mut f := FlowFromGraph(g)
+    mut side := Vector {} as Vector<bool>
+    defer side.free()
+    v := MinCut(f, s, t, side)
+    cut.clear()
+    repeat g.size() with e:
+        a := side.get(g.edge_from(e))
+        b := side.get(g.edge_to(e))
+        if a != b: cut.push(e) end
+    end
+    defer f.free()
+    ret v
+end
+
+// Minimum cost flow of exactly `want` units (or as much as can be shipped),
+// by successive shortest paths. Returns the total cost and reports the flow
+// actually sent in `sent`. Costs may be negative on residual arcs, so the
+// path search is Bellman-Ford rather than Dijkstra.
+@en "MinCostFlow"
+@fa "شار کم‌هزینه"
+@ar "تدفق بأقل تكلفة"
+pub func MinCostFlow(f &: FlowNet, s: int, t: int, want: f64, sent &: f64): f64:
+    mut dist := Vector {} as Vector<f64>
+    defer dist.free()
+    mut via := Vector {} as Vector<int>
+    defer via.free()
+    mut total := 0.0
+    sent = 0.0
+    until _spfa(f, s, t, dist, via):
+        if sent >= want: break end
+        pushed := _mcf_augment(f, s, t, via, want - sent)
+        if pushed <= 0.0: break end
+        sent = sent + pushed
+        total += pushed * dist.get(t)
+    end
+    ret total
+end

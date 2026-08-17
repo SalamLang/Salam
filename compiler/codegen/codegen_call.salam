@@ -11,7 +11,7 @@ import sm "../semantic/semantic.salam"
 func arg_at(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int, i: int): str:
     cn := at.Get(a, n)
     if cn.list.len() > i:
-        ret cg_expr(g, s, a, cn.list.get(i)[0])
+        ret cg_expr(g, s, a, cn.list.get(i))
     end
     ret "0"
 end
@@ -20,7 +20,7 @@ end
 // when the callee has no signature (closures, raw function pointers).
 func cg_param_ctype(s &: sm.Sema, a &: at.Ast, sig: int, i: int, argid: int): str:
     if sig != 0 && i < sm.SigAt(s, sig).params.len():
-        ret cg_ctype(sm.ToString(s, sm.SigAt(s, sig).params.get(i)[0]))
+        ret cg_ctype(sm.ToString(s, sm.SigAt(s, sig).params.get(i)))
     end
     if argid != 0:
         ret cg_ctype(at.Get(a, argid).type_str)
@@ -70,11 +70,11 @@ func call_emit_arg(
     if sig != 0 && sdecl != 0:
         dn := at.Get(a, sdecl)
         if i < dn.list.len():
-            arg_is_ref = at.Get(a, dn.list.get(i)[0]).is_ref
+            arg_is_ref = at.Get(a, dn.list.get(i)).is_ref
         end
     end
     if !arg_is_ref:
-        mut e := cg_expr(g, s, a, argid)
+        mut e := cg_expr_value(g, s, a, argid)
         if cg_needs_fparg(s, a, sig, i, argid, nextid):
             mut mac := "SALAM_FPARG_D"
             if str.Equals(cg_param_ctype(s, a, sig, i, argid), "float"):
@@ -102,7 +102,7 @@ func call_emit_arg(
     end
     if i < sv.params.len():
         co.SbPuts(
-            b, "(" + cg_ctype(sm.ToString(s, sv.params.get(i)[0])) + "*)" + ref_c
+            b, "(" + cg_ctype(sm.ToString(s, sv.params.get(i))) + "*)" + ref_c
         )
     else:
         co.SbPuts(b, ref_c)
@@ -120,10 +120,10 @@ func cg_fill_defaults(
     mut emitted := emitted0
     mut i := at.Get(a, call).list.len()
     until i < np:
-        p := at.Get(a, dn.list.get(i)[0])
+        p := at.Get(a, dn.list.get(i))
         mut nextid := 0
         if i + 1 < np:
-            nextid = at.Get(a, dn.list.get(i + 1)[0]).a
+            nextid = at.Get(a, dn.list.get(i + 1)).a
         end
         if p.a != 0:
             if emitted > 0:
@@ -141,10 +141,10 @@ func call_args(g &: Cg, s &: sm.Sema, a &: at.Ast, call: int, sig: int): str:
     mut b := co.SbNew()
     cn := at.Get(a, call)
     repeat cn.list.len() with i:
-        argid := cn.list.get(i)[0]
+        argid := cn.list.get(i)
         mut nextid := 0
         if i + 1 < cn.list.len():
-            nextid = cn.list.get(i + 1)[0]
+            nextid = cn.list.get(i + 1)
         end
         if i > 0:
             co.SbPuts(b, ", ")
@@ -165,10 +165,10 @@ func call_args_lead(
     repeat cn.list.len() with i:
         mut nextid := 0
         if i + 1 < cn.list.len():
-            nextid = cn.list.get(i + 1)[0]
+            nextid = cn.list.get(i + 1)
         end
         co.SbPuts(b, ", ")
-        call_emit_arg(g, s, a, b, cn.list.get(i)[0], sig, i, nextid)
+        call_emit_arg(g, s, a, b, cn.list.get(i), sig, i, nextid)
     end
     cg_fill_defaults(g, s, a, b, call, sig, 1)
     r := co.SbCstr(b)
@@ -212,11 +212,25 @@ func call_raw_ptr(
     ret "((" + cret + "(*)" + cps + ")(" + cg_expr(g, s, a, callee) + "))(" + args + ")"
 end
 
-func cg_order_stdout(g &: Cg, printf_expr: str): str:
+// The fflush is not about ordering against salam_ob - it is what makes a
+// printed line reach a redirected stdout at all. The C runtime line-buffers a
+// terminal and fully buffers a file or a pipe, so without it every daemon,
+// container and systemd unit held its log lines in libc's buffer until the
+// buffer filled or the process exited normally - which for a server that runs
+// until it is killed is never. A module that spawns threads deliberately does
+// not touch salam_ob (that buffer is not synchronised), but it needs the flush
+// just as much; leaving it out is what made a threaded program's output look
+// like it was being dropped rather than merely buffered.
+// `pre` holds the argument temporaries (see cg_lower_print) and must stay in
+// front of the call that consumes them. It is emitted before the flush as
+// well as before the printf: an argument may itself print, and its output
+// belongs ahead of this statement's, which only holds if it is evaluated
+// before the buffer is flushed.
+func cg_order_stdout(g &: Cg, pre: str, printf_expr: str): str:
     if !g.single_threaded:
-        ret printf_expr
+        ret "({ " + pre + printf_expr + "; fflush(0); })"
     end
-    ret "({ salam_out_flush(); " + printf_expr + "; fflush(0); })"
+    ret "({ " + pre + "salam_out_flush(); " + printf_expr + "; fflush(0); })"
 end
 
 func cg_lower_print(
@@ -232,7 +246,7 @@ func cg_lower_print(
         mut all_lit := true
         mut raw := co.SbNew()
         repeat segs.len() with i:
-            sg := segs.get(i)[0]
+            sg := segs.get(i)
             if sg.kind != PF_LIT:
                 all_lit = false
                 break
@@ -247,10 +261,17 @@ func cg_lower_print(
         end
         co.SbFree(raw)
     end
+    mut nseq := 0
+    repeat segs.len() with ic:
+        if segs.get(ic).kind != PF_LIT:
+            nseq += 1
+        end
+    end
     mut fb := co.SbNew()
     mut ab := co.SbNew()
+    mut pre := co.SbNew()
     repeat segs.len() with i2:
-        sg2 := segs.get(i2)[0]
+        sg2 := segs.get(i2)
         if sg2.kind == PF_LIT:
             tn := str.Len(sg2.text)
             mut ti := 0
@@ -266,6 +287,7 @@ func cg_lower_print(
         end
         e := cg_expr(g, s, a, sg2.expr)
         mut av := ""
+        mut aty := "const char*"
         if sg2.kind == PF_CHAR:
             co.SbPuts(fb, "%s")
             av = "salam_char_from_code(" + e + ")"
@@ -275,38 +297,65 @@ func cg_lower_print(
         else sg2.kind == PF_F64:
             co.SbPuts(fb, pf_spec_impl(sg2.kind))
             av = "(double)(" + e + ")"
+            aty = "double"
         else sg2.kind == PF_U32:
             co.SbPuts(fb, pf_spec_impl(sg2.kind))
             av = "(unsigned)(" + e + ")"
+            aty = "unsigned"
         else sg2.kind == PF_I64:
             co.SbPuts(fb, pf_spec_impl(sg2.kind))
             av = "(long long)(" + e + ")"
+            aty = "long long"
         else sg2.kind == PF_U64:
             co.SbPuts(fb, pf_spec_impl(sg2.kind))
             av = "(unsigned long long)(" + e + ")"
+            aty = "unsigned long long"
         else sg2.kind == PF_SIZE:
             co.SbPuts(fb, pf_spec_impl(sg2.kind))
             av = "(size_t)(" + e + ")"
+            aty = "size_t"
         else sg2.kind == PF_I32:
             co.SbPuts(fb, pf_spec_impl(sg2.kind))
             av = "(int)(" + e + ")"
+            aty = "int"
         else:
             co.SbPuts(fb, pf_spec_impl(sg2.kind))
             av = e
+        end
+        // Bind to a temporary rather than passing the expression straight to
+        // printf. C leaves the order in which call arguments are evaluated
+        // unspecified, so `println c(), c(), c(), c()` over a counter
+        // closure printed "4 3 2 1" under gcc (right to left) and "1 2 3 4"
+        // under tcc (left to right) - the same program, two answers.
+        // Declarations inside a statement expression are sequenced, so
+        // emitting one per argument pins evaluation to source order on every
+        // compiler. Only done when there is more than one argument to
+        // evaluate: a single one cannot be misordered, and this keeps the
+        // common `println x` unchanged. The stderr path is always bound,
+        // whatever the count: it names the argument list twice (once to
+        // size the buffer with a null snprintf, once to fill it), so an
+        // argument with a side effect would run twice otherwise.
+        if nseq > 1 || err:
+            g.tmpn += 1
+            pi := g.tmpn
+            co.SbPuts(pre, aty + " __pa" + co.I64Toa(pi as i64) + " = " + av + "; ")
+            av = "__pa" + co.I64Toa(pi as i64)
         end
         co.SbPuts(ab, ", ")
         co.SbPuts(ab, av)
     end
     cfmt := cg_cescape(co.SbCstr(fb))
     al := co.SbCstr(ab)
+    prestr := co.SbCstr(pre)
     co.SbFree(fb)
     co.SbFree(ab)
+    co.SbFree(pre)
     if err:
         ret cg_order_stdout(
-            g, "({ int32_t __ern = snprintf((void*)0, (uint64_t)0, " + cfmt + al + "); char *__erb = __ern > 0 ? (char*)" + CG_MEM_ALLOC + "((uint64_t)__ern + 1) : (char*)0; if (__erb) snprintf(__erb, " + "(uint64_t)__ern + 1, " + cfmt + al + "); if (__erb) { int64_t __err_r = (int64_t)SALAM_RAW_WRITE(2, " + "__erb, __ern); (void)__err_r; } })"
+            g, prestr, "({ int32_t __ern = snprintf((void*)0, (uint64_t)0, " + cfmt + al + "); char *__erb = __ern > 0 ? (char*)" + CG_MEM_ALLOC + "((uint64_t)__ern + 1) : (char*)0; if (__erb) snprintf(__erb, " + "(uint64_t)__ern + 1, " + cfmt + al + "); if (__erb) { int64_t __err_r = (int64_t)SALAM_RAW_WRITE(2, " + "__erb, __ern); (void)__err_r; } })"
         )
     end
-    ret cg_order_stdout(g, "printf(" + cfmt + al + ")")
+    ret cg_order_stdout(g, prestr, "printf(" + cfmt + al + ")")
 end
 
 func call_ident(
@@ -314,8 +363,8 @@ func call_ident(
 ): str:
     cn := at.Get(a, n)
     nm := at.Get(a, callee).name
-    if str.Equals(nm, "spawn") && cn.list.len() == 1:
-        fnn := at.Get(a, cn.list.get(0)[0])
+    if str.Equals(nm, "spawn") && (cn.list.len() == 1 || cn.list.len() == 2):
+        fnn := at.Get(a, cn.list.get(0))
         fsym := sm.Lookup(s, s.global, fnn.name)
         mut mangled := fnn.name
         if fsym != 0:
@@ -323,30 +372,62 @@ func call_ident(
             mangled = cg_mangle(g, s, "", fnn.name, empty)
             empty.free()
         end
+        // The mangled name carries the callee's declared parameter types, so
+        // the one-argument overload has to be located and its own params used
+        // as the key - the empty list would name the no-argument function.
+        if cn.list.len() == 2:
+            if fsym != 0:
+                fsv := sm.SymAt(s, fsym)
+                repeat fsv.overloads.len() with oi:
+                    sg := sm.SigAt(s, fsv.overloads.get(oi))
+                    if sg.params.len() == 1:
+                        mangled = cg_mangle(g, s, "", fnn.name, sg.params)
+                    end
+                end
+            end
+            argx := cg_expr(g, s, a, cn.list.get(1))
+            ret "salam_thread_spawn_arg((salam_thread_arg_fn)" + mangled + ", (void*)(" + argx + "))"
+        end
         ret "salam_thread_spawn((salam_thread_fn)" + mangled + ")"
     end
-    if str.Equals(nm, "funcptr") && cn.list.len() == 1:
-        fnn2 := at.Get(a, cn.list.get(0)[0])
-        fsym2 := sm.Lookup(s, s.global, fnn2.name)
-        mut mangled2 := fnn2.name
-        if fsym2 != 0 && sm.SymAt(s, fsym2).overloads.len() > 0:
-            sig0 := sm.SymAt(s, fsym2).overloads.get(0)[0]
-            // An extern keeps its declared C name - it is not ours to
-            // mangle. Without this, funcptr() on a libc extern emits a
-            // symbol that exists nowhere: `funcptr(printf)` in
-            // std/llvm/orc.salam became `_Salam_llvm_printf_str`.
-            decl0 := sm.SigAt(s, sig0).decl
-            if decl0 == 0 || !at.Get(a, decl0).is_extern:
-                mangled2 = cg_mangle(
-                    g, s, "", fnn2.name, sm.SigAt(s, sig0).params
-                )
-            end
+    /*
+     * Atomic intrinsics. 5 is __ATOMIC_SEQ_CST spelled as its value so no
+     * header has to be reachable from generated code. gcc and clang expand
+     * every one of these to a single instruction; tcc 0.9.27 has none of them
+     * (it treats the name as an implicit declaration and then fails to link),
+     * which is why std/atomic keeps a mutex implementation behind
+     * SALAM_CC_TCC rather than relying on these.
+     */
+    if sm.AtomicArity(nm) > 0 && cn.list.len() == sm.AtomicArity(nm) && sm.Lookup(
+        s, s.global, nm
+    ) == 0:
+        pexp := cg_expr(g, s, a, cn.list.get(0))
+        if str.Equals(nm, "atomic_load"):
+            ret "__atomic_load_n(" + pexp + ", 5)"
         end
-        ret "(int64_t)(void*)" + mangled2
+        vexp := cg_expr(g, s, a, cn.list.get(1))
+        if str.Equals(nm, "atomic_store"):
+            ret "__atomic_store_n(" + pexp + ", (int64_t)(" + vexp + "), 5)"
+        end
+        if str.Equals(nm, "atomic_add"):
+            ret "__atomic_add_fetch(" + pexp + ", (int64_t)(" + vexp + "), 5)"
+        end
+        if str.Equals(nm, "atomic_swap"):
+            ret "__atomic_exchange_n(" + pexp + ", (int64_t)(" + vexp + "), 5)"
+        end
+        /*
+         * compare_exchange needs a writable `expected`, and salam's is an
+         * rvalue - bind it to a temporary. The weak flag is 0: a spurious
+         * failure would make a caller's retry loop spin for no reason.
+         */
+        g.tmpn += 1
+        et := g.tmpn
+        dexp := cg_expr(g, s, a, cn.list.get(2))
+        ret "({ int64_t __ae" + et + " = (int64_t)(" + vexp + "); __atomic_compare_exchange_n(" + pexp + ", &__ae" + et + ", (int64_t)(" + dexp + "), 0, 5, 5); })"
     end
     if str.Equals(nm, "callhandler") && cn.list.len() == 2:
-        fnp := cg_expr(g, s, a, cn.list.get(0)[0])
-        argx := cg_expr(g, s, a, cn.list.get(1)[0])
+        fnp := cg_expr(g, s, a, cn.list.get(0))
+        argx := cg_expr(g, s, a, cn.list.get(1))
         ret "((void(*)(int64_t))(intptr_t)(" + fnp + "))((int64_t)(" + argx + "))"
     end
     is_print := str.Equals(nm, "print")
@@ -372,18 +453,18 @@ func call_ident(
     end
     if str.Equals(nm, "listdir") && cn.list.len() == 1:
         cnv2 := cg_ctype(str.Len(cn.type_str) > 0 ? cn.type_str : "Vector_str")
-        argx2 := cg_expr(g, s, a, cn.list.get(0)[0])
+        argx2 := cg_expr(g, s, a, cn.list.get(0))
         g.tmpn += 1
         t2 := g.tmpn
         ret "({ int32_t __vn" + t2 + "; const char** __vd" + t2 + " = salam_os_listdir(" + argx2 + ", &__vn" + t2 + "); (" + cnv2 + "){ __vd" + t2 + ", __vn" + t2 + ", __vn" + t2 + " }; })"
     end
     if str.Equals(nm, "sizeof") && cn.list.len() == 1:
-        opn := at.Get(a, cn.list.get(0)[0])
+        opn := at.Get(a, cn.list.get(0))
         ret "(size_t)sizeof(" + cg_ctype(opn.type_str) + ")"
     end
     if sm.Lookup(s, s.global, nm) == 0:
         if str.Equals(nm, "hash") && cn.list.len() == 1:
-            hid := cn.list.get(0)[0]
+            hid := cn.list.get(0)
             ats := at.Get(a, hid).type_str
             if str.Equals(ats, "str"):
                 ret "salam_str_hash(" + cg_expr(g, s, a, hid) + ")"
@@ -392,7 +473,7 @@ func call_ident(
         end
     end
     if str.Equals(nm, "len") && cn.list.len() == 1:
-        argid := cn.list.get(0)[0]
+        argid := cn.list.get(0)
         argn := at.Get(a, argid)
         if cg_is_slice_ts(argn.type_str):
             ret "(int32_t)(" + cg_expr(g, s, a, argid) + ").len"
@@ -407,7 +488,7 @@ func call_ident(
         ret "(int32_t)strlen(" + cg_expr(g, s, a, argid) + ")"
     end
     if str.Equals(nm, "char_code") && cn.list.len() == 1:
-        ret "(int32_t)(unsigned char)(" + cg_expr(g, s, a, cn.list.get(0)[0]) + ")[0]"
+        ret "(int32_t)(unsigned char)(" + cg_expr(g, s, a, cn.list.get(0)) + ")[0]"
     end
     bi := sm.BuiltinLookup(nm)
     fsym0 := sm.Lookup(s, s.global, nm)
@@ -419,7 +500,7 @@ func call_ident(
             if i > 0:
                 co.SbPuts(b, ", ")
             end
-            co.SbPuts(b, cg_expr(g, s, a, cn.list.get(i)[0]))
+            co.SbPuts(b, cg_expr_value(g, s, a, cn.list.get(i)))
         end
         co.SbPutc(b, 41)
         r := co.SbCstr(b)
@@ -496,6 +577,30 @@ func call_pkg(
     ret mangled + "(" + args + ")"
 end
 
+// The declared return type of `method` on the interface behind a "dyn
+// Iface" (or "dyn Iface*", or the qualified "dyn pkg.Iface") receiver type
+// string. sm.TYPE_NONE when anything along the way does not resolve, which
+// the caller reads as "not an aggregate" and falls back to the plain call
+// shape.
+func dyn_method_ret(s &: sm.Sema, objts: str, method: str): int:
+    if !str.StartsWith(objts, "dyn "):
+        ret sm.TYPE_NONE
+    end
+    mut name := str.Substr(objts, 4, str.Len(objts) - 4)
+    until str.Len(name) > 0 && str.EndsWith(name, "*"):
+        name = str.Substr(name, 0, str.Len(name) - 1)
+    end
+    isym := cg_iface_sym(s, name)
+    if isym == 0 || sm.SymAt(s, isym).members == 0:
+        ret sm.TYPE_NONE
+    end
+    ms := sm.LookupLocal(s, sm.SymAt(s, isym).members, method)
+    if ms == 0 || sm.SymAt(s, ms).kind != sm.SYM_METHOD || sm.SymAt(s, ms).overloads.len() == 0:
+        ret sm.TYPE_NONE
+    end
+    ret sm.SigAt(s, sm.SymAt(s, ms).overloads.get(0)).ret_type
+end
+
 func call_dyn(
     g &: Cg, s &: sm.Sema, a &: at.Ast, n: int, obj: int, callee: int, objts: str
 ): str:
@@ -510,6 +615,17 @@ func call_dyn(
         ret "({ " + dynct + " __dv" + t + " = (" + recv + "); " + CG_MEM_FREE + "(__dv" + t + acc + "data); })"
     end
     asv := call_args_lead(g, s, a, n, 0)
+    // A vtable slot whose method returns an aggregate is `void (*)(..., R*)`,
+    // matching the sret lowering every other call path uses, so the result
+    // has to be caught in a temporary and yielded from the statement
+    // expression rather than taken as the call's value.
+    ret2 := dyn_method_ret(s, objts, mname)
+    if type_is_byval_agg(s, ret2):
+        rc := cg_ctype(sm.ToString(s, ret2))
+        g.tmpn += 1
+        r := g.tmpn
+        ret "({ " + dynct + " __dv" + t + " = (" + recv + "); " + rc + " __s" + r + "; __dv" + t + acc + "vtable->" + cg_cident(mname) + "(__dv" + t + acc + "data" + asv + ", &__s" + r + "); __s" + r + "; })"
+    end
     ret "({ " + dynct + " __dv" + t + " = (" + recv + "); __dv" + t + acc + "vtable->" + cg_cident(mname) + "(__dv" + t + acc + "data" + asv + "); })"
 end
 

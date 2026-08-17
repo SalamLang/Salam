@@ -54,6 +54,21 @@ typedef struct {
     scope_t *prelude;
     bool prelude_tried;
     bool in_pkg;
+    /* Set while the pending-instantiation loop is running. A generic body is
+     * a clone of a template from whatever package declared it, re-checked
+     * against the *instantiating* package's globals - so its locals are not
+     * something the programmer of this package wrote, and must not be held to
+     * this package's name-collision rule. Without this, a local named `out`
+     * in std/collections' Vector.remove_at reported a collision in every
+     * package that happened to declare a function called `out`. */
+    bool in_generic_inst;
+    /* Stringify functions derived for `println <aggregate>`: derived_t*, see
+     * sema_derive_str.c. Shared across every package this run analyses; each
+     * entry names the scope it was installed in. */
+    vec_t derived;
+    /* Set while one of those bodies is being checked. It reads every field of
+     * the struct it prints, private ones included. */
+    bool in_derive;
     bool relax_unused;
     bool requal;
     int each_n;
@@ -67,6 +82,33 @@ typedef struct {
     ast_node_t *ret;
     type_t *type;
 } match_yield_t;
+
+/*
+ * Everything in sema_t that describes *where in a body the checker currently
+ * is*, as opposed to which program it is checking. Loading a package restarts
+ * checking from the top of another file, and that can happen from the middle
+ * of an expression (sema_load_prelude), so this has to be parked and put back
+ * around the nested run.
+ */
+typedef struct {
+    scope_t *gen_pkg;
+    type_t *self_type;
+    func_sig_t *cur_func;
+    type_t *expected;
+    lambda_ctx_t *lam;
+    int loop_depth;
+    int each_n;
+    int match_arm_depth;
+    type_t *match_yield_expected;
+    vec_t *match_yield_collect;
+    bool in_generic_inst;
+    bool in_derive;
+    bool requal;
+} sema_ctx_t;
+
+void sema_ctx_save(const sema_t *s, sema_ctx_t *out);
+void sema_ctx_reset(sema_t *s);
+void sema_ctx_restore(sema_t *s, const sema_ctx_t *saved);
 
 void sema_load_prelude(sema_t *s);
 
@@ -82,6 +124,10 @@ void sema_load_prelude(sema_t *s);
 type_t *sema_ty(sema_t *s, type_kind_t k);
 
 ast_node_t *sema_pure_fn(sema_t *s);
+
+void sema_check_shadows_func(sema_t *s, const char *name, const src_span_t *span);
+
+const char *sema_use_decl_file(sema_t *s, const ast_node_t *d);
 
 type_t *sema_err_ty(sema_t *s);
 
@@ -100,6 +146,9 @@ const char *pkg_member_canon(sema_t *s, symbol_t *pk, const char *name,
                              const src_span_t *span);
 
 const char *local_canon(sema_t *s, const char *name, const src_span_t *span);
+
+symbol_t *sema_lookup_iface(sema_t *s, const char *name, const src_span_t *span,
+                            const char **why);
 
 const char *intrinsic_type_canon(const char *name);
 
@@ -164,6 +213,8 @@ type_t *sema_try_op_overload(sema_t *s, ast_node_t *n, symbol_t *ssym, const cha
 
 bool sema_type_is_stringable(type_t *t);
 
+bool sema_cast_target_is_context_dependent(const ast_node_t *a, const type_t *target);
+
 typedef enum { LV_OK, LV_NOT_LVALUE, LV_CONST, LV_IMMUTABLE } lvalue_verdict_t;
 
 lvalue_verdict_t sema_classify_write(sema_t *s, ast_node_t *n, symbol_t **root_out);
@@ -190,6 +241,8 @@ bool defined_within(scope_t *start, scope_t *boundary, const char *name);
 void record_capture(sema_t *s, ast_node_t *id, type_t *t);
 
 void sema_check_block(sema_t *s, ast_node_t *block);
+
+bool sema_check_unused_loop_bind(sema_t *s, symbol_t *v);
 
 bool sema_stmt_terminates(sema_t *s, ast_node_t *node);
 

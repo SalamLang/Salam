@@ -99,6 +99,20 @@ void p_error(parser_t *p, const char *msg)
     p->panic = true;
 }
 
+/* p_error's sibling for messages that already name the offending token, so
+ * appending "(near '...')" would only repeat it. `msg` and `help` are emitted
+ * verbatim - the caller has already translated and formatted both. */
+static void p_error_verbatim(parser_t *p, const char *help, const char *msg)
+{
+    if (p->panic) return;
+    const token_t *t = p_peek(p);
+
+    LOG_E_AT_HELP(p->log, PH_PARSER, p->file, t->span, help, "%s", msg);
+    if (!p->had_error && t->kind == TK_EOF) p->err_at_eof = true;
+    p->had_error = true;
+    p->panic = true;
+}
+
 bool p_expect(parser_t *p, token_kind_t k, const char *what)
 {
     if (p_at(p, k)) {
@@ -184,13 +198,27 @@ void p_term(parser_t *p)
     if (p_at(p, TK_STMT_END)) p_advance(p);
 }
 
-static bool p_at_reserved_word(parser_t *p)
+bool p_at_reserved_word(const parser_t *p)
 {
     const token_t *t = p_peek(p);
     if (tk_is_keyword(t->kind)) return true;
     if (t->kind == TK_AND || t->kind == TK_OR)
         return t->lexeme && (unsigned char)t->lexeme[0] >= 0x80;
     return false;
+}
+
+void p_reserved_word_error(parser_t *p)
+{
+    const token_t *t = p_peek(p);
+    const char *word = (t->lexeme && *t->lexeme) ? t->lexeme : "<eof>";
+    char msg[256], help[256];
+
+    sal_snprintf(msg, sizeof(msg),
+                 i18n_tr("'%s' is a reserved word, so it cannot be used as a name"),
+                 word);
+    sal_snprintf(help, sizeof(help), i18n_tr("pick a different name, for example '%s_'"),
+                 word);
+    p_error_verbatim(p, help, msg);
 }
 
 const char *p_name(parser_t *p, const char *what)
@@ -201,16 +229,12 @@ const char *p_name(parser_t *p, const char *what)
         return s;
     }
     if (p_at_reserved_word(p)) {
-        char buf[160];
-        sal_snprintf(buf, sizeof(buf),
-                     i18n_tr("%s (reserved word cannot be used as a name)"),
-                     i18n_tr(what));
-        p_error(p, buf);
+        p_reserved_word_error(p);
         p_advance(p);
-        return "<error>";
+        return SALAM_ERR_NAME;
     }
     p_error(p, what);
-    return "<error>";
+    return SALAM_ERR_NAME;
 }
 
 const char *p_member_name(parser_t *p, const char *what)
@@ -227,7 +251,7 @@ const char *p_member_name(parser_t *p, const char *what)
 ast_node_t *p_error_node(parser_t *p)
 {
     ast_node_t *n = p_mk(p, AST_IDENTIFIER);
-    n->name = "<error>";
+    n->name = SALAM_ERR_NAME;
     p_fin(p, n);
     return n;
 }
@@ -396,7 +420,7 @@ bool p_try_return_type(parser_t *p, ast_node_t **out_type)
     bool save_had_error = p->had_error;
     p->panic = true;
     ast_node_t *t = parse_type(p);
-    bool valid_name = t->name && strcmp(t->name, "<error>") != 0;
+    bool valid_name = t->name && !ast_name_is_err(t->name);
     if (valid_name && (p_at(p, TK_COLON) || p_at(p, TK_STMT_END) || p_at_eof(p))) {
         p->panic = save_panic;
         *out_type = t;

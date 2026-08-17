@@ -122,6 +122,16 @@ if [ "${1:-}" = "--worker" ]; then
         rm -rf "$jobdir"
     }
     wk_expect() {
+        # SALAM_TEST_TIMEOUT was documented in the header but never read; the
+        # cap was a hardcoded 20s. That is fine for an example program and far
+        # too short for the port binaries, which each run a whole compiler
+        # pipeline over their fixtures - semantic_test alone takes ~30s. They
+        # were being killed mid-run and reported as "missing expected: 0
+        # failed", i.e. a timeout wearing a wrong-output disguise.
+        case "$label" in
+        port/*) exp_tmo="${SALAM_TEST_TIMEOUT:-300}" ;;
+        *) exp_tmo="${SALAM_TEST_TIMEOUT:-20}" ;;
+        esac
         jobdir="$WORK/exjob_${jobid}_$$"
         mkdir -p "$jobdir"
         exe="$jobdir/a.exe"
@@ -140,7 +150,7 @@ if [ "${1:-}" = "--worker" ]; then
         produced=0
         if [ -x "$exe" ]; then
             produced=1
-            got=$(tmo 20 "$exe" </dev/null 2>&1 | tr -d '\r')
+            got=$(tmo "$exp_tmo" "$exe" </dev/null 2>&1 | tr -d '\r')
         else
             html="$jobdir/a.html"
             wtry=1
@@ -509,18 +519,30 @@ collect_example_dir() {
             name="${rel%.salam}"
             base="tests/$lang/$dir/$name"
             exp="$(pick_expect "$base")"
+            # Decided once, then applied to BOTH job kinds. It used to be
+            # computed inside the .expect branch, which left a marked test
+            # that ships a .out (interop/*/redis_demo) with an ungated build
+            # job - and a host without Redis cannot even LINK that one, since
+            # -lhiredis is missing too, so it failed the suite instead of
+            # skipping. That is precisely what the marker file exists to
+            # prevent. Tests carrying only a marker and no expectation still
+            # queue nothing and report nothing, exactly as before.
+            skip=""
+            if [ -f "$base.redis" ] && [ "${REDIS_OK:-0}" != "1" ]; then
+                skip="requires a Redis server on 127.0.0.1:6379"
+            elif [ -f "$base.network" ] && [ "${SALAM_TEST_NETWORK:-0}" != "1" ]; then
+                skip="requires live network; set SALAM_TEST_NETWORK=1"
+            elif [ -f "$base.interactive" ] && [ "${SALAM_TEST_INTERACTIVE:-0}" != "1" ]; then
+                skip="opens a modal window; set SALAM_TEST_INTERACTIVE=1 on a desktop session"
+            fi
             if [ -f "$exp" ]; then
-                add_job build "$dir/$lang/$name" "$f" "$lang" "$exp"
+                if [ -n "$skip" ]; then
+                    note_result "SKIP $dir/$lang/$name ($skip)" "$dir/$lang/$name"
+                else
+                    add_job build "$dir/$lang/$name" "$f" "$lang" "$exp"
+                fi
             fi
             if [ -f "$base.expect" ]; then
-                skip=""
-                if [ -f "$base.redis" ] && [ "${REDIS_OK:-0}" != "1" ]; then
-                    skip="requires a Redis server on 127.0.0.1:6379"
-                elif [ -f "$base.network" ] && [ "${SALAM_TEST_NETWORK:-0}" != "1" ]; then
-                    skip="requires live network; set SALAM_TEST_NETWORK=1"
-                elif [ -f "$base.interactive" ] && [ "${SALAM_TEST_INTERACTIVE:-0}" != "1" ]; then
-                    skip="opens a modal window; set SALAM_TEST_INTERACTIVE=1 on a desktop session"
-                fi
                 if [ -n "$skip" ]; then
                     note_result "SKIP $dir/$lang/$name ($skip)" "$dir/$lang/$name"
                 else
@@ -546,6 +568,14 @@ if want general; then
             exp="$(pick_expect "tests/$lang/general/$name")"
             [ -f "$exp" ] || continue
             def=$(grep -o 'DEFINE: [A-Za-z0-9_]*' "$f" | sed 's/DEFINE: /-D/' | tr '\n' ' ')
+            # `// CONST: NAME=VALUE` -> `-dNAME=VALUE`, the value-carrying
+            # sibling of DEFINE (a bare NAME is the flag's valueless form).
+            # [!-~] is "printable, not a space": a value may not contain one,
+            # because the whole flag list travels as a single tab-separated
+            # jobs.tsv field and is word-split back apart in the worker.
+            # Quotes are kept literal on purpose - `-dTAG="0.3"` is how a
+            # numeric-looking constant is pinned to str.
+            def="$def$(grep -o 'CONST: [!-~]*' "$f" | sed 's/CONST: /-d/' | tr '\n' ' ')"
             add_job build "general/$lang/$name" "$f" "$lang" "$exp" "${def:--}"
         done
     done
@@ -559,19 +589,36 @@ if want db; then
             break
         }
     done
+    # One archive holds every engine mock (mysql, postgres); each is a stand-in
+    # for a client library CI has no server for, implemented over sqlite3.
     mockc=""
+    pgmockc=""
     for lang in $LANGS; do
         [ -f "tests/$lang/db/mysql_mock.c" ] && {
             mockc="tests/$lang/db/mysql_mock.c"
             break
         }
     done
+    for lang in $LANGS; do
+        [ -f "tests/$lang/db/postgres_mock.c" ] && {
+            pgmockc="tests/$lang/db/postgres_mock.c"
+            break
+        }
+    done
     dbok=0
     if [ -n "$DBCC" ] && [ -n "$mockc" ] && command -v ar >/dev/null 2>&1; then
         mkdir -p "$WORK/dbwork/.work"
-        if "$DBCC" -c "$mockc" -o "$WORK/dbwork/.work/mysql_mock.o" >/dev/null 2>&1 &&
-            ar rcs "$WORK/dbwork/.work/libsalammock.a" "$WORK/dbwork/.work/mysql_mock.o" >/dev/null 2>&1; then
-            dbok=1
+        mockobjs="$WORK/dbwork/.work/mysql_mock.o"
+        if "$DBCC" -c "$mockc" -o "$WORK/dbwork/.work/mysql_mock.o" >/dev/null 2>&1; then
+            if [ -n "$pgmockc" ] &&
+                "$DBCC" -c "$pgmockc" -o "$WORK/dbwork/.work/postgres_mock.o" \
+                    >/dev/null 2>&1; then
+                mockobjs="$mockobjs $WORK/dbwork/.work/postgres_mock.o"
+            fi
+            # shellcheck disable=SC2086
+            if ar rcs "$WORK/dbwork/.work/libsalammock.a" $mockobjs >/dev/null 2>&1; then
+                dbok=1
+            fi
         fi
     fi
     for lang in $LANGS; do
@@ -828,7 +875,9 @@ TIMEREPORT_EOF
     }
 
     tr_json="$tr_dir/report.json"
-    (cd "$tr_dir" && "$SALAM" build --time-report=json tiny.salam >/dev/null 2>"$tr_json")
+    # SALAM_ABS, not SALAM: the default is the relative ./salam and this runs
+    # from $tr_dir, where that name does not exist (the build exited 127).
+    (cd "$tr_dir" && "$SALAM_ABS" build --time-report=json tiny.salam >/dev/null 2>"$tr_json")
     tr_rc=$?
     tr_line=$(grep '"schema":"salam.timereport.v1"' "$tr_json" | head -1)
     if [ "$tr_rc" -ne 0 ]; then
@@ -857,7 +906,7 @@ TIMEREPORT_EOF
     fi
 
     # --time-trace writes a Chrome Trace Event array the same run.
-    (cd "$tr_dir" && "$SALAM" build --time-trace=trace.json tiny.salam >/dev/null 2>&1)
+    (cd "$tr_dir" && "$SALAM_ABS" build --time-trace=trace.json tiny.salam >/dev/null 2>&1)
     if [ -s "$tr_dir/trace.json" ] && grep -q '"ph":"X"' "$tr_dir/trace.json"; then
         note_result "PASS timereport/trace" "timereport/trace"
     else

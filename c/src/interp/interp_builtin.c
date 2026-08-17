@@ -114,13 +114,16 @@ value_t do_input(interp_t *I)
     return val_str(arena_strndup(I->a, buf, n));
 }
 
-value_t call_module_func(interp_t *I, ast_node_t *call, module_t *mod, const char *fn,
-                         value_t *args, size_t nargs)
+value_t call_module_func(interp_t *I, env_t *env, ast_node_t *call, module_t *mod,
+                         const char *fn, value_t *args, size_t nargs)
 {
     binding_t *b = env_find_local(mod->env, fn);
+    value_t r;
     if (!b || b->val.kind != VAL_FUNC)
         rt_error(I, call, "package '%s' has no exported function '%s'", mod->name, fn);
-    return call_func(I, b->val.as.fn->fn, b->val.as.fn->env, NULL, args, nargs);
+    r = call_func(I, b->val.as.fn->fn, b->val.as.fn->env, NULL, args, nargs);
+    interp_writeback_refs(I, env, call, b->val.as.fn->fn, args, nargs);
+    return r;
 }
 
 typedef value_t (*intrinsic_fn)(interp_t *I, ast_node_t *call, value_t *a, size_t n);
@@ -300,6 +303,17 @@ value_t call_builtin_method(interp_t *I, ast_node_t *call, value_t recv,
             return a->data[--a->len];
         }
         if (!strcmp(method, "get")) {
+            int64_t i = to_int(a0);
+            if (i < 0 || (size_t)i >= a->len)
+                rt_error(I, call, "vector index %lld out of range (len %zu)",
+                         (long long)i, a->len);
+            return a->data[i];
+        }
+        /* The address form. There are no addresses in the tree walker, so it
+         * is the same one-element box get used to return: v.ref(i)[0] reads
+         * the element, and a write through it lands in the box, exactly as
+         * v.get(i)[0] = x always did here. */
+        if (!strcmp(method, "ref")) {
             int64_t i = to_int(a0);
             if (i < 0 || (size_t)i >= a->len)
                 rt_error(I, call, "vector index %lld out of range (len %zu)",

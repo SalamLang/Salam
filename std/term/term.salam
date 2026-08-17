@@ -1,0 +1,574 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "term"
+@fa "پایانه"
+@ar "طرفیة"
+package term
+
+import str
+import mem
+
+// The terminal itself: is one attached, how big is it, how much colour does
+// it admit, and how do we take it out of cooked mode. Everything that just
+// *renders* an escape sequence lives in this package's other files -
+// term_color.salam (SGR), term_cursor.salam (cursor/screen), term_key.salam
+// (decoding input), term_progress.salam (bars and spinners) - and all of
+// them route their bytes through Write/Flush here.
+//
+// Two output styles are exported side by side, because a CLI wants both:
+//
+//   - `Seq*` functions RETURN the escape string, so several can be glued
+//     together with `+` (or a str.StringBuilder) and written in one syscall.
+//     They are pure, and so they are what the tests assert on.
+//   - the same name without `Seq` WRITES and flushes immediately, which is
+//     what you want for "hide the cursor, then do a slow thing".
+//
+// Colour helpers additionally honour SetColorMode, so a program whose output
+// is redirected into a file does not fill it with SGR noise.
+//
+// PLATFORM SUPPORT. The POSIX path (termios + TIOCGWINSZ + isatty) is the
+// one exercised here, under a real pty. The Windows path (GetConsoleMode /
+// SetConsoleMode / GetConsoleScreenBufferInfo) is written against the
+// documented API but has NOT been run on a real console.
+
+extern:
+    func printf(fmt: str, ...): int
+    // Declared by <stdio.h>/<stdlib.h>/<string.h> in every generated module,
+    // so these declarations emit no C of their own.
+    func fflush(stream: void*): int
+    func getenv(name: str): void*
+    func memset(ptr: void*, val: int, n: u64): void*
+end
+
+if SALAM_OS_WINDOWS:
+    extern:
+        func _isatty(fd: int): int
+        func _write(fd: int, buf: void*, n: u32): int
+        func GetStdHandle(which: int): void*
+        func GetConsoleMode(h: void*, mode: void*): int
+        func SetConsoleMode(h: void*, mode: int): int
+        func GetConsoleScreenBufferInfo(h: void*, info: void*): int
+    end
+else:
+    extern:
+        func isatty(fd: int): int
+        func write(fd: int, buf: void*, n: u64): i64
+        func ioctl(fd: int, req: u64, arg: void*): int
+        func tcgetattr(fd: int, t: void*): int
+        func tcsetattr(fd: int, act: int, t: void*): int
+        // POSIX-2008; present in glibc, musl, macOS and the BSDs. It clears
+        // the whole cooked-mode flag set in one call, which is a great deal
+        // safer than open-coding four bitmasks whose values differ per libc.
+        func cfmakeraw(t: void*)
+    end
+end
+
+// ---------------------------------------------------------------- constants
+
+@en "StdinFd"
+@fa "شناسه ورودی"
+@ar "معرف الإدخال"
+pub const StdinFd := 0
+
+@en "StdoutFd"
+@fa "شناسه خروجی"
+@ar "معرف الإخراج"
+pub const StdoutFd := 1
+
+@en "StderrFd"
+@fa "شناسه خطا"
+@ar "معرف الخطأ"
+pub const StderrFd := 2
+
+@en "Esc"
+@fa "گریز"
+@ar "هروب"
+pub const Esc := "\x1b"
+
+@en "Csi"
+@fa "آغازگر دنباله"
+@ar "بادئة التسلسل"
+pub const Csi := "\x1b["
+
+@en "ColorAuto"
+@fa "رنگ خودکار"
+@ar "لون تلقائي"
+pub const ColorAuto := 0
+
+@en "ColorAlways"
+@fa "رنگ همیشه"
+@ar "لون دائما"
+pub const ColorAlways := 1
+
+@en "ColorNever"
+@fa "بدون رنگ"
+@ar "بدون لون"
+pub const ColorNever := 2
+
+// TCSAFLUSH: apply on the next drain, discarding unread input. The value is
+// 2 on Linux, macOS and the BSDs alike.
+const _TCSAFLUSH := 2
+
+// 128 bytes is comfortably above every real struct termios (Linux 60,
+// macOS 72, FreeBSD 44). The buffer is only ever handed straight back to
+// tcsetattr, so over-allocating costs nothing while under-allocating would
+// let libc write past the end of it.
+const _TERMIOS_CAP := 128
+
+const _TIOCGWINSZ_LINUX := 0x5413
+const _TIOCGWINSZ_BSD := 0x40087468
+
+// ECHO happens to be 0x8 in both the Linux and BSD lineages; ICANON does not
+// agree and is picked per platform by _icanon_bit below.
+const _ECHO := 0x8
+
+// _color_mode is the caller's policy (ColorAuto unless SetColorMode says
+// otherwise); _color_auto caches what auto-detection decided, so the
+// getenv+isatty probe runs once per process rather than once per painted
+// word. 0 = not yet probed, 1 = colour, 2 = no colour.
+mut _color_mode := 0
+mut _color_auto := 0
+
+// ------------------------------------------------------------------- types
+
+// What Restore needs to put the terminal back exactly as it was found.
+// On POSIX `saved` owns a heap copy of the original `struct termios`; on
+// Windows it stays null and the two console modes carry the state instead.
+@en "TermState"
+@fa "وضعیت پایانه"
+@ar "حالة الطرفیة"
+pub struct TermState:
+    pub fd: int = 0
+    pub saved: void* = null
+    pub mode_in: int = 0
+    pub mode_out: int = 0
+    pub ok: bool = false
+end
+
+@en "WinSize"
+@fa "اندازه پنجره"
+@ar "حجم النافذة"
+pub struct WinSize:
+    pub cols: int = 80
+    pub rows: int = 24
+end
+
+// --------------------------------------------------------------- internals
+
+func _env(name: str): str:
+    v := getenv(name)
+    if v == null: ret "" end
+    ret str.Clone(v as str)
+end
+
+// struct termios is not layout-compatible across the POSIX platforms, so
+// every field this package touches is reached through an offset chosen here.
+//
+//   Linux/glibc: tcflag_t is 4 bytes; c_iflag c_oflag c_cflag c_lflag at
+//     0/4/8/12, c_line at 16, c_cc[32] at 17 (VTIME=5, VMIN=6).
+//   macOS: the four flags are `unsigned long` (8 bytes) at 0/8/16/24, and
+//     c_cc[20] starts at 32 (VMIN=16, VTIME=17).
+//   FreeBSD: 4-byte flags at 0/4/8/12 as on Linux, but the BSD c_cc[20]
+//     layout at 16 (VMIN=16, VTIME=17).
+//
+// c_lflag is read and written through an `int*` on purpose. On macOS that
+// touches only the low 4 bytes of an 8-byte field, which is exactly right:
+// every flag cleared here lives in the low 32 bits, and the high half is
+// left untouched rather than truncated away.
+func _lflag_off(): int:
+    if SALAM_OS_MAC: ret 24 end
+    ret 12
+end
+
+func _vmin_off(): int:
+    if SALAM_OS_MAC: ret 48 end // c_cc at 32 + VMIN 16
+    if SALAM_OS_BSD: ret 32 end // c_cc at 16 + VMIN 16
+    ret 23 // Linux: c_cc at 17 + VMIN 6
+end
+
+func _vtime_off(): int:
+    if SALAM_OS_MAC: ret 49 end // c_cc at 32 + VTIME 17
+    if SALAM_OS_BSD: ret 33 end // c_cc at 16 + VTIME 17
+    ret 22 // Linux: c_cc at 17 + VTIME 5
+end
+
+func _icanon_bit(): int:
+    if SALAM_OS_MAC || SALAM_OS_BSD: ret 0x100 end
+    ret 0x2
+end
+
+func _winsz_req(): u64:
+    if SALAM_OS_MAC || SALAM_OS_BSD: ret _TIOCGWINSZ_BSD as u64 end
+    ret _TIOCGWINSZ_LINUX as u64
+end
+
+// Windows std handle ids (STD_INPUT_HANDLE = -10, STD_OUTPUT_HANDLE = -11,
+// STD_ERROR_HANDLE = -12). `_fd` carries the leading underscore because off
+// Windows the whole body compiles away and the parameter goes unread.
+func _win_handle(_fd: int): void*:
+    if SALAM_OS_WINDOWS:
+        if _fd == StdinFd: ret GetStdHandle(0 - 10) end
+        if _fd == StderrFd: ret GetStdHandle(0 - 12) end
+        ret GetStdHandle(0 - 11)
+    end
+    ret null
+end
+
+func _win_mode(_fd: int): int:
+    if SALAM_OS_WINDOWS:
+        h := _win_handle(_fd)
+        if h == null: ret 0 end
+        buf := mem.Allocate(8 as u64)
+        defer mem.Free(buf)
+        memset(buf, 0, 8 as u64)
+        if GetConsoleMode(h, buf) == 0: ret 0 end
+        p := buf as int*
+        ret p[0]
+    end
+    ret 0
+end
+
+// The de-facto contract every modern CLI implements:
+//   NO_COLOR set (to anything at all, even "") -> never colour  [no-color.org]
+//   CLICOLOR_FORCE set and not "0"             -> always colour
+//   TERM=dumb, or stdout is not a tty          -> no colour
+func _detect_color(): bool:
+    if getenv("NO_COLOR") != null: ret false end
+    force := _env("CLICOLOR_FORCE")
+    if force.len() > 0 && force != "0": ret true end
+    if _env("TERM") == "dumb": ret false end
+    ret IsTTY(StdoutFd)
+end
+
+// _set_mode is MakeRaw and MakeCbreak in one: `full` picks cfmakeraw (no
+// echo, no line editing, no signals, no CR/LF translation - a full-screen
+// app's mode) over cbreak (unbuffered keys, no echo, but Ctrl-C still
+// interrupts - what a prompt or a menu wants).
+func _set_mode(fd: int, full: bool): TermState:
+    mut st := TermState { fd = fd }
+    if SALAM_OS_WINDOWS:
+        h := _win_handle(fd)
+        if h == null: ret st end
+        st.mode_in = _win_mode(fd)
+        st.mode_out = _win_mode(StdoutFd)
+        // Clear ENABLE_LINE_INPUT (0x2) and ENABLE_ECHO_INPUT (0x4); drop
+        // ENABLE_PROCESSED_INPUT (0x1) as well for full raw, so that Ctrl-C
+        // arrives as a keystroke, and add ENABLE_VIRTUAL_TERMINAL_INPUT
+        // (0x200) so the arrow keys report the same escape sequences they do
+        // everywhere else.
+        mut m := st.mode_in & ~(0x2 | 0x4)
+        if full: m = m & ~0x1 end
+        m = m | 0x200
+        if SetConsoleMode(h, m) == 0: ret st end
+        _vt := EnableAnsi()
+        st.ok = true
+        ret st
+    else:
+        saved := mem.Allocate(_TERMIOS_CAP as u64)
+        memset(saved, 0, _TERMIOS_CAP as u64)
+        if tcgetattr(fd, saved) != 0:
+            // Not a terminal (a pipe, a CI runner): hand back an ok=false
+            // state, which Restore will correctly decline to act on.
+            mem.Free(saved)
+            ret st
+        end
+        work := mem.Allocate(_TERMIOS_CAP as u64)
+        defer mem.Free(work)
+        mem.Copy(work, saved, _TERMIOS_CAP as u64)
+        if full:
+            cfmakeraw(work)
+        else:
+            lf := ((work as i64) + _lflag_off()) as int*
+            lf[0] = lf[0] & ~(_ECHO | _icanon_bit())
+        end
+        // VMIN=1/VTIME=0: a read blocks until exactly one byte is available.
+        // cfmakeraw already arranges this, but cbreak mode has to say so.
+        vmin := ((work as i64) + _vmin_off()) as i8*
+        vtime := ((work as i64) + _vtime_off()) as i8*
+        vmin[0] = 1 as i8
+        vtime[0] = 0 as i8
+        if tcsetattr(fd, _TCSAFLUSH, work) != 0:
+            mem.Free(saved)
+            ret st
+        end
+        st.saved = saved
+        st.ok = true
+        ret st
+    end
+end
+
+// ------------------------------------------------------------------- output
+
+// Write goes through printf deliberately: `print`/`println` are printf too,
+// so escape sequences and ordinary program output share one stdio buffer and
+// can never arrive out of order. A raw write(2) here would reorder them.
+@en "Write"
+@fa "نوشتن"
+@ar "کتابة"
+pub func Write(s: str):
+    _n := printf("%s", s)
+end
+
+@en "WriteErr"
+@fa "نوشتن خطا"
+@ar "کتابة خطأ"
+pub func WriteErr(s: str):
+    if SALAM_OS_WINDOWS:
+        _n := _write(StderrFd, s as void*, s.len() as u32)
+    else:
+        _n := write(StderrFd, s as void*, s.len() as u64)
+    end
+end
+
+@en "Flush"
+@fa "تخلیه"
+@ar "تفریغ"
+pub func Flush():
+    _r := fflush(null as void*)
+end
+
+// Emit is what every non-`Seq` helper in this package is built from: put the
+// sequence into the stdout buffer and push it out at once. A control sequence
+// is a request to a terminal that is watching in real time, so leaving one
+// sitting in a buffer until the next newline defeats the point.
+@en "Emit"
+@fa "فرستادن"
+@ar "إرسال"
+pub func Emit(s: str):
+    Write(s)
+    Flush()
+end
+
+// ---------------------------------------------------------------- detection
+
+@en "IsTTY"
+@fa "پایانه است"
+@ar "هل طرفیة"
+pub func IsTTY(fd: int): bool:
+    if SALAM_OS_WINDOWS:
+        ret _isatty(fd) != 0
+    else:
+        ret isatty(fd) != 0
+    end
+end
+
+@en "IsTerminal"
+@fa "پایانه دارد"
+@ar "متصل بطرفیة"
+pub func IsTerminal(): bool: ret IsTTY(StdoutFd) end
+
+// Size asks the operating system first and believes the environment only if
+// there is no kernel answer - COLUMNS/LINES are frequently stale (they are
+// not re-exported when the window is resized), so they are a fallback for
+// pipes and CI, not a source of truth.
+@en "Size"
+@fa "اندازه"
+@ar "حجم"
+pub func Size(): WinSize:
+    mut out := WinSize {}
+    if SALAM_OS_WINDOWS:
+        h := _win_handle(StdoutFd)
+        if h != null:
+            // CONSOLE_SCREEN_BUFFER_INFO: dwSize(4) dwCursorPosition(4)
+            // wAttributes(2) srWindow{Left,Top,Right,Bottom}(8, at offset 10)
+            // dwMaximumWindowSize(4). The window rect, not dwSize, is the
+            // visible area - dwSize is the scrollback buffer.
+            info := mem.Allocate(32 as u64)
+            defer mem.Free(info)
+            memset(info, 0, 32 as u64)
+            if GetConsoleScreenBufferInfo(h, info) != 0:
+                base := info as i64
+                left := ((base + 10) as i16*)[0] as int
+                top := ((base + 12) as i16*)[0] as int
+                right := ((base + 14) as i16*)[0] as int
+                bottom := ((base + 16) as i16*)[0] as int
+                c := right - left + 1
+                r := bottom - top + 1
+                if c > 0 && r > 0:
+                    out.cols = c
+                    out.rows = r
+                    ret out
+                end
+            end
+        end
+    else:
+        // struct winsize { u16 ws_row; ws_col; ws_xpixel; ws_ypixel; }
+        ws := mem.Allocate(16 as u64)
+        defer mem.Free(ws)
+        req := _winsz_req()
+        // stdout first, then stderr, then stdin: a program whose stdout is
+        // piped into `less` still has a terminal on the other two, and that
+        // width is the one worth wrapping to.
+        mut fd := StdoutFd
+        until fd <= StderrFd:
+            memset(ws, 0, 16 as u64)
+            if ioctl(fd, req, ws) == 0:
+                p := ws as u16*
+                r := p[0] as int
+                c := p[1] as int
+                if c > 0 && r > 0:
+                    out.cols = c
+                    out.rows = r
+                    ret out
+                end
+            end
+            fd += 1
+        end
+    end
+    envc := str.ToInt(_env("COLUMNS"))
+    envr := str.ToInt(_env("LINES"))
+    if envc > 0: out.cols = envc end
+    if envr > 0: out.rows = envr end
+    ret out
+end
+
+@en "Cols"
+@fa "ستون ها"
+@ar "أعمدة"
+pub func Cols(): int:
+    s := Size()
+    ret s.cols
+end
+
+@en "Rows"
+@fa "سطرها"
+@ar "صفوف"
+pub func Rows(): int:
+    s := Size()
+    ret s.rows
+end
+
+// ----------------------------------------------------------- colour support
+
+@en "SetColorMode"
+@fa "تنظیم حالت رنگ"
+@ar "ضبط وضع اللون"
+pub func SetColorMode(mode: int):
+    _color_mode = mode
+end
+
+@en "ColorMode"
+@fa "حالت رنگ"
+@ar "وضع اللون"
+pub func ColorMode(): int: ret _color_mode end
+
+@en "SupportsColor"
+@fa "رنگ پشتیبانی می‌شود"
+@ar "یدعم اللون"
+pub func SupportsColor(): bool:
+    if _color_mode == ColorAlways: ret true end
+    if _color_mode == ColorNever: ret false end
+    if _color_auto == 0:
+        if _detect_color():
+            _color_auto = 1
+        else:
+            _color_auto = 2
+        end
+    end
+    ret _color_auto == 1
+end
+
+// 256-colour and 24-bit are reported independently of SupportsColor's policy
+// gate on purpose: they answer "what can this terminal render", while
+// SupportsColor answers "should this program colour its output at all".
+@en "Supports256Color"
+@fa "رنگ ۲۵۶ پشتیبانی می‌شود"
+@ar "یدعم ۲۵۶ لونا"
+pub func Supports256Color(): bool:
+    if str.Contains(_env("TERM"), "256color"): ret true end
+    if _env("COLORTERM").len() > 0: ret true end
+    ret false
+end
+
+@en "SupportsTrueColor"
+@fa "رنگ کامل پشتیبانی می‌شود"
+@ar "یدعم اللون الکامل"
+pub func SupportsTrueColor(): bool:
+    ct := _env("COLORTERM")
+    ret ct == "truecolor" || ct == "24bit"
+end
+
+// Windows consoles only interpret ANSI once ENABLE_VIRTUAL_TERMINAL_PROCESSING
+// (0x4) is switched on; everywhere else it already holds. Call this once at
+// start-up - it is a no-op off Windows, and reports whether ANSI can be used.
+@en "EnableAnsi"
+@fa "فعال‌سازی انسی"
+@ar "تفعیل أنسي"
+pub func EnableAnsi(): bool:
+    if SALAM_OS_WINDOWS:
+        h := _win_handle(StdoutFd)
+        if h == null: ret false end
+        ret SetConsoleMode(h, _win_mode(StdoutFd) | 0x4) != 0
+    end
+    ret true
+end
+
+// ----------------------------------------------------------------- raw mode
+
+// MakeRaw hands the program every keystroke unprocessed - no echo, no line
+// editing, and no Ctrl-C/Ctrl-Z signals. ALWAYS pair it with Restore, via a
+// `defer term.Restore(st)` on the very next line: a program that exits
+// without restoring leaves the user's shell in raw mode.
+@en "MakeRaw"
+@fa "حالت خام"
+@ar "الوضع الخام"
+pub func MakeRaw(fd: int): TermState: ret _set_mode(fd, true) end
+
+// MakeCbreak is the gentler half: keys arrive immediately and unechoed, but
+// the terminal still turns Ctrl-C into an interrupt. This is the right mode
+// for a single-key prompt, a menu, or a pager.
+@en "MakeCbreak"
+@fa "حالت نیمه‌خام"
+@ar "وضع نصف خام"
+pub func MakeCbreak(fd: int): TermState: ret _set_mode(fd, false) end
+
+@en "Restore"
+@fa "بازگردانی"
+@ar "استعادة"
+pub func Restore(st &: TermState): bool:
+    if !st.ok: ret false end
+    mut done := false
+    if SALAM_OS_WINDOWS:
+        h := _win_handle(st.fd)
+        if h != null: done = SetConsoleMode(h, st.mode_in) != 0 end
+    else:
+        if st.saved != null:
+            done = tcsetattr(st.fd, _TCSAFLUSH, st.saved) == 0
+            mem.Free(st.saved)
+            st.saved = null
+        end
+    end
+    st.ok = false
+    ret done
+end
+
+// ------------------------------------------------------------ odds and ends
+
+@en "Bell"
+@fa "زنگ"
+@ar "جرس"
+pub func Bell(): Emit("\x07") end
+
+// OSC 0 sets both the window and the icon title. Terminals that do not know
+// the sequence swallow it, so this is safe to call unconditionally.
+@en "SeqTitle"
+@fa "دنباله عنوان"
+@ar "تسلسل العنوان"
+pub func SeqTitle(title: str): str: ret Esc + "]0;" + title + "\x07" end
+
+@en "SetTitle"
+@fa "تنظیم عنوان"
+@ar "ضبط العنوان"
+pub func SetTitle(title: str): Emit(SeqTitle(title)) end

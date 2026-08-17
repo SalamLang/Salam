@@ -24,7 +24,7 @@ func emit_lambda(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     mut et := co.SbNew()
     co.SbPuts(et, envty + " = type { ptr")
     repeat ncap with ci:
-        cap := at.Get(a, node.captures.get(ci)[0])
+        cap := at.Get(a, node.captures.get(ci))
         co.SbPuts(et, ", " + ty_of(v, s, a, cap.type_str))
     end
     co.SbPuts(et, " }\n")
@@ -45,11 +45,13 @@ func emit_lambda(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     // Same reasoning as the function emitter: a lambda body is
     // emitted nested inside whatever was being lowered, so the outer
     // loops' live break/continue targets must survive it.
+    mut saved_dmk2 := Vector {} as Vector<int>
     mut saved_brk2 := Vector {} as Vector<str>
     mut saved_cont2 := Vector {} as Vector<str>
     repeat saved_nloop with sbi2:
-        saved_brk2.push(v.brk.get(sbi2)[0])
-        saved_cont2.push(v.cont.get(sbi2)[0])
+        saved_brk2.push(v.brk.get(sbi2))
+        saved_cont2.push(v.cont.get(sbi2))
+        saved_dmk2.push(v.loop_dmark.get(sbi2))
     end
     saved_main := v.is_main
     saved_term := v.term
@@ -92,7 +94,7 @@ func emit_lambda(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
         hdr, "define internal " + ty_of(v, s, a, rts) + " @" + name + "(ptr noundef %env"
     )
     repeat at.ChildCount(a, n) with i:
-        p := at.Get(a, node.list.get(i)[0])
+        p := at.Get(a, node.list.get(i))
         if p.is_ref:
             co.SbPuts(hdr, ", ptr %arg" + co.I64Toa(i as i64))
         else:
@@ -106,7 +108,7 @@ func emit_lambda(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     co.SbFree(hdr)
 
     repeat at.ChildCount(a, n) with i2:
-        p2 := at.Get(a, node.list.get(i2)[0])
+        p2 := at.Get(a, node.list.get(i2))
         if p2.is_ref:
             local_add(v, p2.name, "%arg" + co.I64Toa(i2 as i64), p2.type_str)
         else:
@@ -140,11 +142,13 @@ func emit_lambda(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     v.lbl = saved_lbl
     v.nloop = saved_nloop
     repeat saved_nloop with rbi2:
-        v.brk.set(rbi2, saved_brk2.get(rbi2)[0])
-        v.cont.set(rbi2, saved_cont2.get(rbi2)[0])
+        v.brk.set(rbi2, saved_brk2.get(rbi2))
+        v.cont.set(rbi2, saved_cont2.get(rbi2))
+        v.loop_dmark.set(rbi2, saved_dmk2.get(rbi2))
     end
-    saved_brk2.free()
-    saved_cont2.free()
+    defer saved_brk2.free()
+    defer saved_dmk2.free()
+    defer saved_cont2.free()
     v.is_main = saved_main
     v.term = saved_term
     v.ret_ts = saved_ret
@@ -246,7 +250,7 @@ func const_agg(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, out2 &: str): bool:
         mut i := 0
         until i < node.list.len() && okall:
             mut vtext := ""
-            if !const_value(v, s, a, node.list.get(i)[0], vtext):
+            if !const_value(v, s, a, node.list.get(i), vtext):
                 okall = false
             else:
                 if i != 0:
@@ -279,14 +283,14 @@ func const_agg(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, out2 &: str): bool:
         fsyms := sm.ScopeAt(s, sm.SymAt(s, ss).members).symbols
         mut fi := 0
         until fi < fsyms.len() && okall2:
-            f := sm.SymAt(s, fsyms.get(fi)[0])
+            f := sm.SymAt(s, fsyms.get(fi))
             if f.kind == sm.SYM_FIELD:
                 fts := sm.ToString(s, f.ty)
                 mut prov := 0
                 repeat node.list.len() with j:
-                    fld := at.Get(a, node.list.get(j)[0])
+                    fld := at.Get(a, node.list.get(j))
                     if prov == 0 && str.Len(fld.name) > 0 && str.Equals(fld.name, f.name):
-                        prov = node.list.get(j)[0]
+                        prov = node.list.get(j)
                     end
                 end
                 mut vtext2 := ""
@@ -299,7 +303,7 @@ func const_agg(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, out2 &: str): bool:
                         okall2 = false
                     end
                 else:
-                    vtext2 = zero_of(fts)
+                    vtext2 = zero_of(s, fts)
                 end
                 if okall2:
                     flety := ty_of(v, s, a, fts)
@@ -371,7 +375,7 @@ func emit_globals(v &: Lv, s &: sm.Sema, a &: at.Ast, program: int):
             if dn.a != 0 && const_value(v, s, a, dn.a, cv):
                 init = cv
             else:
-                init = zero_of(ts)
+                init = zero_of(s, ts)
                 if dn.a != 0:
                     v.gdefer.push(d)
                 end
@@ -403,7 +407,7 @@ func extern_seen(v &: Lv, name: str): bool:
         end
     end
     repeat v.extern_names.len() with i:
-        if str.Equals(name, v.extern_names.get(i)[0]):
+        if str.Equals(name, v.extern_names.get(i)):
             ret true
         end
     end
@@ -436,7 +440,7 @@ func body_sig_for(s &: sm.Sema, a &: at.Ast, name: str, owner &: int): int:
         ov := sm.SymAt(s, fs).overloads
         mut o := 0
         until o < ov.len():
-            sgid := ov.get(o)[0]
+            sgid := ov.get(o)
             o += 1
             d := sm.SigAt(s, sgid).decl
             // `is_extern` too, not just "has a body": the point of this
@@ -471,7 +475,7 @@ func declare_extern(v &: Lv, s &: sm.Sema, a &: at.Ast, name: str, sigid: int):
         ret
     end
     repeat v.emitted.len() with ke:
-        if str.Equals(name, v.emitted.get(ke)[0]):
+        if str.Equals(name, v.emitted.get(ke)):
             ret
         end
     end
@@ -498,7 +502,7 @@ func declare_extern(v &: Lv, s &: sm.Sema, a &: at.Ast, name: str, sigid: int):
         end
         co.SbPuts(
             b, ty_of(
-                v, s, a, sm.ToString(s, sg.params.get(j)[0])
+                v, s, a, sm.ToString(s, sg.params.get(j))
             )
         )
     end
@@ -521,12 +525,12 @@ end
 func emit_externs_in(v &: Lv, s &: sm.Sema, a &: at.Ast, gsc: int):
     syms := sm.ScopeAt(s, gsc).symbols
     repeat syms.len() with i:
-        symid := syms.get(i)[0]
+        symid := syms.get(i)
         sy := sm.SymAt(s, symid)
         mut skip := sy.kind != sm.SYM_FUNC || sy.overloads.len() == 0
         mut sigid := 0
         if !skip:
-            sigid = sy.overloads.get(0)[0]
+            sigid = sy.overloads.get(0)
             d := sm.SigAt(s, sigid).decl
             if d == 0:
                 skip = true
@@ -558,7 +562,7 @@ func touch_pkg(v &: Lv, s &: sm.Sema, a &: at.Ast, pk: int):
         ret
     end
     repeat v.pkg_touched.len() with i:
-        if v.pkg_touched.get(i)[0] == pk:
+        if v.pkg_touched.get(i) == pk:
             ret
         end
     end
@@ -594,11 +598,11 @@ end
 // ll_emit_global_inits - runs at the top of main().
 func emit_global_inits(v &: Lv, s &: sm.Sema, a &: at.Ast):
     repeat v.gdefer.len() with i:
-        d := v.gdefer.get(i)[0]
+        d := v.gdefer.get(i)
         dn := at.Get(a, d)
         gi := global_find(v, dn.name)
         if gi >= 0:
-            g := v.globals.get(gi)[0]
+            g := v.globals.get(gi)
             val := conv(v, s, a, lv_expr(v, s, a, dn.a), g.ts)
             emit(
                 v, "store " + ty_of(v, s, a, g.ts) + " " + val + ", ptr " + g.ptr

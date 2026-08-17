@@ -1,0 +1,206 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/matrix: Gauss-Jordan elimination, and the structure of a solution set.
+
+import matrix
+import testing
+
+func mk(r: int, c: int, base: f64): matrix.Matrix:
+    mut m := matrix.Zeros(r, c)
+    repeat m.count() with k: m.a.set(k, base + (k as f64)) end
+    ret m
+end
+
+func check_rref():
+    // [[1,2,3],[4,5,6],[7,8,9]] reduces to [[1,0,-1],[0,1,2],[0,0,0]]
+    mut a := mk(3, 3, 1.0)
+    mut r := matrix.RREF(a)
+    testing.AssertEqFloat(r.at(0, 0), 1.0, 0.000001)
+    testing.AssertEqFloat(r.at(0, 1), 0.0, 0.000001)
+    testing.AssertEqFloat(r.at(0, 2), 0.0 - 1.0, 0.000001)
+    testing.AssertEqFloat(r.at(1, 1), 1.0, 0.000001)
+    testing.AssertEqFloat(r.at(1, 2), 2.0, 0.000001)
+    testing.AssertEqFloat(r.at(2, 0), 0.0, 0.000001)
+    testing.AssertEqFloat(r.at(2, 2), 0.0, 0.000001)
+
+    // The RREF of an invertible matrix is the identity
+    mut e := matrix.Eye(3)
+    mut spd := matrix.RandomSPD(3, 5)
+    mut ri := matrix.RREF(spd)
+    testing.AssertTrue(matrix.AllClose(ri, e, 0.000001))
+
+    // Row echelon form stops at zeros below the pivots
+    mut ref := matrix.RowEchelon(a)
+    testing.AssertTrue(matrix.IsUpperTriangular(ref, 0.000001))
+
+    defer a.free()
+    defer r.free()
+    defer e.free()
+    defer spd.free()
+    defer ri.free()
+    defer ref.free()
+end
+
+func check_rank_and_pivots():
+    mut a := mk(3, 3, 1.0)
+    testing.AssertEqInt(matrix.RankExact(a), 2)
+    testing.AssertEqInt(matrix.Nullity(a), 1)
+    // Rank plus nullity is the column count
+    testing.AssertEqInt(matrix.RankExact(a) + matrix.Nullity(a), a.cols)
+    // And it agrees with the SVD's answer on a well-scaled matrix
+    testing.AssertEqInt(matrix.RankExact(a), matrix.MatrixRank(a, 0.0))
+
+    mut piv := matrix.PivotColumns(a)
+    testing.AssertEqInt(piv.cols, 2)
+    testing.AssertEqFloat(piv.at(0, 0), 0.0, 0.000001)
+    testing.AssertEqFloat(piv.at(0, 1), 1.0, 0.000001)
+
+    mut e := matrix.Eye(4)
+    testing.AssertEqInt(matrix.RankExact(e), 4)
+    testing.AssertEqInt(matrix.Nullity(e), 0)
+
+    mut z := matrix.Zeros(3, 3)
+    testing.AssertEqInt(matrix.RankExact(z), 0)
+    testing.AssertEqInt(matrix.Nullity(z), 3)
+
+    defer a.free()
+    defer piv.free()
+    defer e.free()
+    defer z.free()
+end
+
+func check_nullspace():
+    // The null space of [[1,2,3],[4,5,6],[7,8,9]] is spanned by (1,-2,1)
+    mut a := mk(3, 3, 1.0)
+    mut ns := matrix.NullSpaceExact(a)
+    testing.AssertEqInt(ns.rows, 3)
+    testing.AssertEqInt(ns.cols, 1)
+    // The free variable is set to 1, so the basis vector is exactly (1,-2,1)
+    testing.AssertEqFloat(ns.at(0, 0), 1.0, 0.000001)
+    testing.AssertEqFloat(ns.at(1, 0), 0.0 - 2.0, 0.000001)
+    testing.AssertEqFloat(ns.at(2, 0), 1.0, 0.000001)
+
+    // A n = 0
+    mut an := matrix.MatMul(a, ns)
+    testing.AssertTrue(matrix.IsZero(an, 0.000001))
+
+    // A wide matrix has at least cols - rows free variables
+    mut wide := mk(2, 4, 1.0)
+    mut wns := matrix.NullSpaceExact(wide)
+    testing.AssertEqInt(wns.cols, 2)
+    mut wan := matrix.MatMul(wide, wns)
+    testing.AssertTrue(matrix.IsZero(wan, 0.000001))
+
+    // A full-rank square matrix has only the trivial null space
+    mut e := matrix.Eye(3)
+    mut none := matrix.NullSpaceExact(e)
+    testing.AssertEqInt(none.cols, 0)
+
+    defer a.free()
+    defer ns.free()
+    defer an.free()
+    defer wide.free()
+    defer wns.free()
+    defer wan.free()
+    defer e.free()
+    defer none.free()
+end
+
+func check_column_space():
+    // The independent columns are the pivot ones, returned as they were
+    mut a := mk(3, 3, 1.0)
+    mut cs := matrix.ColumnSpaceExact(a)
+    testing.AssertEqInt(cs.rows, 3)
+    testing.AssertEqInt(cs.cols, 2)
+    // Column 0 of the result is column 0 of A, unmodified
+    testing.AssertEqFloat(cs.at(0, 0), 1.0, 0.000001)
+    testing.AssertEqFloat(cs.at(1, 0), 4.0, 0.000001)
+    testing.AssertEqFloat(cs.at(0, 1), 2.0, 0.000001)
+
+    defer a.free()
+    defer cs.free()
+end
+
+func check_solve_general():
+    // A consistent square system
+    mut a := matrix.Zeros(2, 2)
+    a.set(0, 0, 2.0)
+    a.set(0, 1, 1.0)
+    a.set(1, 0, 1.0)
+    a.set(1, 1, 3.0)
+    mut b := matrix.Zeros(2, 1)
+    b.set(0, 0, 5.0)
+    b.set(1, 0, 10.0)
+    testing.AssertTrue(matrix.IsConsistent(a, b))
+    mut x := matrix.SolveGeneral(a, b)
+    testing.AssertEqFloat(x.at(0, 0), 1.0, 0.000001)
+    testing.AssertEqFloat(x.at(1, 0), 3.0, 0.000001)
+
+    // An underdetermined but consistent system: one particular solution, with
+    // the free variables set to zero.
+    mut w := mk(2, 3, 1.0)
+    mut wb := matrix.Zeros(2, 1)
+    wb.set(0, 0, 6.0)
+    wb.set(1, 0, 15.0)
+    testing.AssertTrue(matrix.IsConsistent(w, wb))
+    mut wx := matrix.SolveGeneral(w, wb)
+    testing.AssertEqInt(wx.rows, 3)
+    mut r := matrix.Residual(w, wx, wb)
+    testing.AssertEqFloat(matrix.NormFrobenius(r), 0.0, 0.000001)
+
+    // Adding any null space vector gives another solution
+    mut ns := matrix.NullSpaceExact(w)
+    mut alt := matrix.Add(wx, ns)
+    mut r2 := matrix.Residual(w, alt, wb)
+    testing.AssertEqFloat(matrix.NormFrobenius(r2), 0.0, 0.000001)
+
+    // An inconsistent system is detected and refused
+    mut sing := matrix.Zeros(2, 2)
+    sing.set(0, 0, 1.0)
+    sing.set(0, 1, 2.0)
+    sing.set(1, 0, 2.0)
+    sing.set(1, 1, 4.0)
+    mut ib := matrix.Zeros(2, 1)
+    ib.set(0, 0, 1.0)
+    ib.set(1, 0, 5.0)
+    testing.AssertFalse(matrix.IsConsistent(sing, ib))
+    mut none := matrix.SolveGeneral(sing, ib)
+    testing.AssertTrue(none.is_empty())
+
+    defer a.free()
+    defer b.free()
+    defer x.free()
+    defer w.free()
+    defer wb.free()
+    defer wx.free()
+    defer r.free()
+    defer ns.free()
+    defer alt.free()
+    defer r2.free()
+    defer sing.free()
+    defer ib.free()
+    defer none.free()
+end
+
+func main:
+    check_rref()
+    check_rank_and_pivots()
+    check_nullspace()
+    check_column_space()
+    check_solve_general()
+    ret testing.Summary()
+end

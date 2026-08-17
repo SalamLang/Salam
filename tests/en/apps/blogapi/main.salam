@@ -1,0 +1,574 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// A blog API: public reading, authenticated writing, roles, and comments.
+//
+//   POST   /auth/register            {email, password}
+//   POST   /auth/login               -> access + refresh
+//   POST   /auth/refresh
+//   GET    /posts                    ?q=&limit=&offset=      (public)
+//   GET    /posts/:slug              (public; a draft only for its author)
+//   GET    /posts/:slug/comments     (public)
+//   GET    /api/posts/mine           drafts included
+//   POST   /api/posts                {title, body}           -> a draft
+//   PATCH  /api/posts/:id            {title?, body?}         author or admin
+//   POST   /api/posts/:id/publish    author or admin
+//   POST   /api/posts/:id/unpublish  author or admin
+//   DELETE /api/posts/:id            admin only
+//   POST   /api/posts/:id/comments   {body}                  any signed-in user
+//   DELETE /api/comments/:id         comment author or admin
+//   GET    /health
+//
+// WHAT THIS ONE IS ABOUT
+//
+// The todo API had one rule - "it is yours or it does not exist". A blog has
+// three overlapping ones, and they are what most real APIs actually look like:
+//
+//   public       anyone can read a published post
+//   ownership    only the author can edit their own draft
+//   role         an admin can edit anyone's, and only an admin can delete
+//
+// So authorisation cannot live in the WHERE clause here. The store returns
+// each post with its author_id, and may_edit(conn) below is the single place
+// that decides. One function, called by every route that changes something.
+//
+// The role is read from the DATABASE, not from the token, on every check.
+// A role claim is a snapshot from login time: putting it in the token means
+// a demoted admin keeps their powers until it expires. One indexed lookup
+// per write is a good trade for revocation that takes effect immediately.
+
+import os
+import crypto
+import jwt
+import str
+import conv
+import net.http
+import net.router
+import encoding.json
+import store "_store.salam"
+
+const PORT := 8091
+const ACCESS_TTL := 3600
+const REFRESH_TTL := 604800
+const MAX_PAGE := 50
+
+func secret(): str:
+    s := os.Env("JWT_SECRET")
+    if s.len() > 0: ret s end
+    ret "dev-only-secret-change-me"
+end
+
+func guard(): jwt.Guard:
+    mut g := jwt.NewGuard(secret())
+    g.opts.issuer = "blog.salam"
+    g.opts.require_exp = true
+    // Half a minute of tolerance on exp/nbf/iat. Not politeness: two
+    // machines never agree on the time to the second, and without it a
+    // token minted a moment ago can be refused as "issued in the future".
+    g.opts.leeway = 30 as i64
+    ret g
+end
+
+// ---------------------------------------------------------------- helpers
+
+func send(ctx: i64, code: int, body: str):
+    http.Ctx_status(ctx, code)
+    http.Ctx_set_header(ctx, "Access-Control-Allow-Origin", "*")
+    http.Ctx_json(ctx, body)
+end
+
+func fail(ctx: i64, code: int, message: str):
+    send(ctx, code, `{"error":`.concat(json.Str(message)).concat("}"))
+end
+
+func db_fail(ctx: i64, where: str, err: str):
+    println "[db] ", where, ": ", err
+    fail(ctx, 500, "database error")
+end
+
+// A connection for this request, or a 503 and false. Every handler that
+// touches the database starts with this and pairs it with `defer
+// store.Close(conn)` - the connection belongs to this request and to this
+// thread, and it goes away when the handler returns however it returns.
+func db(ctx: i64, c &: store.Conn): bool:
+    conn := store.Connect()
+    if !store.Ok(conn):
+        println "[db] connect: ", store.Err(conn)
+        fail(ctx, 503, "database unavailable")
+        ret false
+    end
+    c = conn
+    ret true
+end
+
+func caller(ctx: i64): i64:
+    mut t := jwt.Token {}
+    if !jwt.Require(ctx, guard(), t): ret 0 as i64 end
+    ret t.claims.sub.to_int() as i64
+end
+
+// The authorisation rule, in one place. `admin` is re-read per call.
+func may_edit(conn: store.Conn, user_id: i64, post: store.Post): bool:
+    if post.author_id == user_id: ret true end
+    ret store.RoleOf(conn, user_id) == "admin"
+end
+
+func is_admin(conn: store.Conn, user_id: i64): bool:
+    ret store.RoleOf(conn, user_id) == "admin"
+end
+
+func int_param(ctx: i64, name: str, fallback: int, max: int): int:
+    raw := http.Ctx_query(ctx, name)
+    if raw.len() == 0: ret fallback end
+    v := raw.to_int()
+    if v < 0: ret fallback end
+    if v > max: ret max end
+    ret v
+end
+
+func path_id(ctx: i64): i64:
+    ret http.Ctx_param(ctx, "id").to_int() as i64
+end
+
+// "Hello, World!" -> "hello-world". Only [a-z0-9-] survives, because a slug
+// ends up in a URL and in a log file and in somebody's terminal.
+func slugify(title: str): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    n := title.len()
+    mut last_dash := true
+    repeat n with i:
+        c := title.substr(i, 1)
+        if (c >= "a" && c <= "z") || (c >= "0" && c <= "9"):
+            str.BufAppend(sb, c)
+            last_dash = false
+        else c >= "A" && c <= "Z":
+            str.BufAppend(sb, c.lower())
+            last_dash = false
+        else:
+            if !last_dash:
+                str.BufAppend(sb, "-")
+                last_dash = true
+            end
+        end
+    end
+    out := str.BufStr(sb)
+    trimmed := trim_dashes(out)
+    // A title with no ASCII letters at all - "سلام دنیا" - slugifies to
+    // nothing, so it gets a generic stem and the uniquifier below does the
+    // rest. Transliterating instead would be a whole library.
+    if trimmed.len() == 0: ret "post" end
+    if trimmed.len() > 120: ret trimmed.substr(0, 120) end
+    ret trimmed
+end
+
+func trim_dashes(s: str): str:
+    mut a := 0
+    mut b := s.len()
+    until a < b && s.substr(a, 1) == "-":
+        a += 1
+    end
+    until b > a && s.substr(b - 1, 1) == "-":
+        b -= 1
+    end
+    ret s.substr(a, b - a)
+end
+
+// The UNIQUE index is the real guard against a duplicate slug; this just
+// keeps the common case from turning into an error the user has to read.
+func unique_slug(conn: store.Conn, stem: str): str:
+    if !store.SlugTaken(conn, stem): ret stem end
+    mut n := 2
+    until n < 500:
+        candidate := stem.concat("-").concat(conv.FormatInt(n as i64))
+        if !store.SlugTaken(conn, candidate): ret candidate end
+        n += 1
+    end
+    ret stem.concat("-").concat(crypto.RandomHex(4))
+end
+
+// ---------------------------------------------------------------- auth
+
+func register(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
+    body := http.Ctx_body(ctx)
+    email := json.Get(body, "email").trim().lower()
+    password := json.Get(body, "password")
+    if email.len() < 3 || email.find("@") < 0:
+        fail(ctx, 400, "a valid email is required")
+        ret
+    end
+    if password.len() < 8:
+        fail(ctx, 400, "password must be at least 8 characters")
+        ret
+    end
+    if store.FindUser(conn, email).id != 0 as i64:
+        fail(ctx, 409, "that email is already registered")
+        ret
+    end
+    // Everyone registers as an author. There is deliberately no way to ask
+    // for "admin" over HTTP: that is an UPDATE somebody runs by hand.
+    mut err := ""
+    id := store.CreateUser(conn, email, crypto.HashPassword(password), "author", err)
+    if id == 0 as i64:
+        db_fail(ctx, "create user", err)
+        ret
+    end
+    send(ctx, 201, `{"id":`.concat(conv.FormatInt(id)).concat(`,"email":`).concat(json.Str(email)).concat(`,"role":"author"}`))
+end
+
+func issue(user_id: i64, kind: str, ttl: int, err &: int): str:
+    mut c := jwt.NewClaims()
+    c.sub = conv.FormatInt(user_id)
+    jwt.SetStr(c, "kind", kind)
+    ret jwt.Issue(guard(), c, ttl as i64, err)
+end
+
+func login(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
+    body := http.Ctx_body(ctx)
+    u := store.FindUser(conn, json.Get(body, "email").trim().lower())
+    mut stored := u.hash
+    if stored.len() == 0: stored = crypto.HashPassword("_no_such_user_") end
+    ok := crypto.VerifyPassword(json.Get(body, "password"), stored)
+    if u.id == 0 as i64 || !ok:
+        fail(ctx, 401, "invalid email or password")
+        ret
+    end
+    mut err := 0
+    access := issue(u.id, "access", ACCESS_TTL, err)
+    refresh_tok := issue(u.id, "refresh", REFRESH_TTL, err)
+    if err != jwt.JWT_OK:
+        fail(ctx, 500, "could not issue tokens")
+        ret
+    end
+    send(ctx, 200, `{"access":`.concat(json.Str(access)).concat(`,"refresh":`).concat(json.Str(refresh_tok)).concat(`,"role":`).concat(json.Str(u.role)).concat("}"))
+end
+
+func refresh(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
+    mut t := jwt.Token {}
+    if !jwt.Require(ctx, guard(), t): ret end
+    if jwt.Str(t, "kind") != "refresh":
+        jwt.Forbidden(ctx, "this route needs a refresh token")
+        ret
+    end
+    mut err := 0
+    access := issue(t.claims.sub.to_int() as i64, "access", ACCESS_TTL, err)
+    send(ctx, 200, `{"access":`.concat(json.Str(access)).concat("}"))
+end
+
+// ---------------------------------------------------------------- public
+
+func list_posts(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
+    q := http.Ctx_query(ctx, "q")
+    limit := int_param(ctx, "limit", 10, MAX_PAGE)
+    offset := int_param(ctx, "offset", 0, 100000)
+    items := store.ListPublished(conn, q, limit, offset)
+    total := store.CountPublished(conn, q)
+    send(ctx, 200, `{"items":`.concat(items).concat(`,"total":`).concat(conv.FormatInt(total)).concat(`,"limit":`).concat(conv.FormatInt(limit as i64)).concat(`,"offset":`).concat(conv.FormatInt(offset as i64)).concat("}"))
+end
+
+// Public, but a draft is visible only to someone allowed to edit it. That is
+// why this route reads the token when there is one and ignores its absence.
+func get_post(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
+    p := store.PostBySlug(conn, http.Ctx_param(ctx, "slug"))
+    if p.id == 0 as i64:
+        fail(ctx, 404, "no such post")
+        ret
+    end
+    if !p.published && !viewer_may_edit(conn, ctx, p):
+        // 404, not 403: an unpublished URL should not confirm it exists.
+        fail(ctx, 404, "no such post")
+        ret
+    end
+    send(ctx, 200, p.json)
+end
+
+// jwt.Check verifies if a token is present and says nothing if it is not.
+func viewer_may_edit(conn: store.Conn, ctx: i64, p: store.Post): bool:
+    mut err := 0
+    t := jwt.Check(ctx, guard(), err)
+    if err != jwt.JWT_OK: ret false end
+    ret may_edit(conn, t.claims.sub.to_int() as i64, p)
+end
+
+func list_comments(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
+    p := store.PostBySlug(conn, http.Ctx_param(ctx, "slug"))
+    if p.id == 0 as i64 || !p.published:
+        fail(ctx, 404, "no such post")
+        ret
+    end
+    send(ctx, 200, store.ListComments(conn, p.id, 200))
+end
+
+// ---------------------------------------------------------------- writing
+
+func my_posts(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
+    uid := caller(ctx)
+    if uid == 0 as i64: ret end
+    limit := int_param(ctx, "limit", 20, MAX_PAGE)
+    offset := int_param(ctx, "offset", 0, 100000)
+    send(ctx, 200, store.ListByAuthor(conn, uid, limit, offset))
+end
+
+func create_post(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
+    uid := caller(ctx)
+    if uid == 0 as i64: ret end
+    body := http.Ctx_body(ctx)
+    title := json.Get(body, "title").trim()
+    text := json.Get(body, "body")
+    if title.len() == 0 || title.len() > 255:
+        fail(ctx, 400, "title is required (255 bytes max)")
+        ret
+    end
+    if text.len() == 0:
+        fail(ctx, 400, "body is required")
+        ret
+    end
+    mut err := ""
+    id := store.CreatePost(conn, uid, unique_slug(conn, slugify(title)), title, text, err)
+    if id == 0 as i64:
+        db_fail(ctx, "create post", err)
+        ret
+    end
+    p := store.PostById(conn, id)
+    http.Ctx_set_header(ctx, "Location", "/api/posts/".concat(conv.FormatInt(id)))
+    send(ctx, 201, p.json)
+end
+
+// Fetch, then authorise, then act. Every write route below is this shape.
+func load_for_edit(conn: store.Conn, ctx: i64, p &: store.Post): bool:
+    uid := caller(ctx)
+    if uid == 0 as i64: ret false end
+    post := store.PostById(conn, path_id(ctx))
+    if post.id == 0 as i64:
+        fail(ctx, 404, "no such post")
+        ret false
+    end
+    if !may_edit(conn, uid, post):
+        jwt.Forbidden(ctx, "not your post")
+        ret false
+    end
+    p = post
+    ret true
+end
+
+func update_post(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
+    mut p := store.Post {}
+    if !load_for_edit(conn, ctx, p): ret end
+    body := http.Ctx_body(ctx)
+    mut set := ""
+    if json.Has(body, "title"):
+        title := json.Get(body, "title").trim()
+        if title.len() == 0:
+            fail(ctx, 400, "title cannot be empty")
+            ret
+        end
+        set = "title = ".concat(store.Q(conn, title))
+    end
+    if json.Has(body, "body"):
+        clause := "body = ".concat(store.Q(conn, json.Get(body, "body")))
+        if set.len() == 0: set = clause else:
+            set = set.concat(", ").concat(clause)
+        end
+    end
+    if set.len() == 0:
+        fail(ctx, 400, "nothing to update")
+        ret
+    end
+    // The slug is deliberately NOT regenerated when the title changes: a
+    // published URL that moves is a broken link everywhere it was shared.
+    mut err := ""
+    if !store.UpdatePost(conn, p.id, set, err):
+        db_fail(ctx, "update post", err)
+        ret
+    end
+    send(ctx, 200, store.PostById(conn, p.id).json)
+end
+
+func publish_post(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
+    mut p := store.Post {}
+    if !load_for_edit(conn, ctx, p): ret end
+    mut err := ""
+    if !store.PublishPost(conn, p.id, err):
+        db_fail(ctx, "publish", err)
+        ret
+    end
+    send(ctx, 200, store.PostById(conn, p.id).json)
+end
+
+func unpublish_post(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
+    mut p := store.Post {}
+    if !load_for_edit(conn, ctx, p): ret end
+    mut err := ""
+    if !store.UnpublishPost(conn, p.id, err):
+        db_fail(ctx, "unpublish", err)
+        ret
+    end
+    send(ctx, 200, store.PostById(conn, p.id).json)
+end
+
+// Deleting is the one thing an author cannot do to their own post: it takes
+// the comments with it, so it is an admin decision.
+func delete_post(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
+    uid := caller(ctx)
+    if uid == 0 as i64: ret end
+    if !is_admin(conn, uid):
+        jwt.Forbidden(ctx, "only an admin can delete a post")
+        ret
+    end
+    mut err := ""
+    gone := store.DeletePost(conn, path_id(ctx), err)
+    if err.len() > 0:
+        db_fail(ctx, "delete post", err)
+        ret
+    end
+    if !gone:
+        fail(ctx, 404, "no such post")
+        ret
+    end
+    send(ctx, 200, `{"deleted":true}`)
+end
+
+// ---------------------------------------------------------------- comments
+
+func add_comment(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
+    uid := caller(ctx)
+    if uid == 0 as i64: ret end
+    p := store.PostById(conn, path_id(ctx))
+    if p.id == 0 as i64 || !p.published:
+        fail(ctx, 404, "no such post")
+        ret
+    end
+    text := json.Get(http.Ctx_body(ctx), "body").trim()
+    if text.len() == 0:
+        fail(ctx, 400, "body is required")
+        ret
+    end
+    if text.len() > 2000:
+        fail(ctx, 400, "comment is too long (2000 bytes max)")
+        ret
+    end
+    mut err := ""
+    id := store.AddComment(conn, p.id, uid, text, err)
+    if id == 0 as i64:
+        db_fail(ctx, "add comment", err)
+        ret
+    end
+    send(ctx, 201, `{"id":`.concat(conv.FormatInt(id)).concat(`,"post_id":`).concat(conv.FormatInt(p.id)).concat("}"))
+end
+
+func delete_comment(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
+    uid := caller(ctx)
+    if uid == 0 as i64: ret end
+    id := path_id(ctx)
+    owner := store.CommentAuthor(conn, id)
+    if owner == 0 as i64:
+        fail(ctx, 404, "no such comment")
+        ret
+    end
+    if owner != uid && !is_admin(conn, uid):
+        jwt.Forbidden(ctx, "not your comment")
+        ret
+    end
+    mut err := ""
+    if !store.DeleteComment(conn, id, err):
+        db_fail(ctx, "delete comment", err)
+        ret
+    end
+    send(ctx, 200, `{"deleted":true}`)
+end
+
+func health(ctx: i64):
+    send(ctx, 200, `{"status":"ok","service":"blog"}`)
+end
+
+func main:
+    // Reads the settings, initialises the client library, and proves the
+    // credentials work by opening one connection and closing it again. After
+    // this returns, no connection is held: each request makes its own.
+    //
+    // The library init has to happen here, on the main thread, before any
+    // request thread exists - see _store.salam's header.
+    mut err := ""
+    if !store.Configure(err):
+        println "cannot reach the database: ", err
+        println "set DB_HOST / DB_PORT / DB_USER / DB_PASS / DB_NAME, then load schema.sql"
+        ret 1
+    end
+    defer store.Shutdown()
+    mut r := router.NewRouter()
+    router.Post(r, "/auth/register", register)
+    router.Post(r, "/auth/login", login)
+    router.Post(r, "/auth/refresh", refresh)
+    router.Get(r, "/posts", list_posts)
+    router.Get(r, "/posts/:slug", get_post)
+    router.Get(r, "/posts/:slug/comments", list_comments)
+    router.Get(r, "/api/posts/mine", my_posts)
+    router.Post(r, "/api/posts", create_post)
+    router.Patch(r, "/api/posts/:id", update_post)
+    router.Post(r, "/api/posts/:id/publish", publish_post)
+    router.Post(r, "/api/posts/:id/unpublish", unpublish_post)
+    router.Post(r, "/api/posts/:id/comments", add_comment)
+    router.Delete(r, "/api/posts/:id", delete_post)
+    router.Delete(r, "/api/comments/:id", delete_comment)
+    router.Get(r, "/health", health)
+    mut s := http.NewServer(PORT)
+    http.Use(s, r)
+    println "blog API on http://localhost:8091"
+    http.Run(s)
+    ret 0
+end

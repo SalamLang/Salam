@@ -86,7 +86,33 @@ salam obj app.salam
 
 # pass a compile-time flag (for conditional compilation)
 salam build app.salam -DDEBUG
+
+# define a compile-time constant the program reads by name
+salam build app.salam -dMAX_USERS=500 -dBUILD_TAG=nightly
 ```
+
+`-D` and `-d` are different tools. `-DNAME` sets a conditional-compilation
+flag, which is only legal in an `if` condition. `-dNAME=VALUE` defines a
+constant, as if the source had written `const NAME := VALUE` at top level:
+
+```salam
+func main:
+    println MAX_USERS       // 500, an integer
+    println BUILD_TAG       // "nightly", a string
+end
+```
+
+The name must be upper case (`A-Z`, `0-9` and `_`; `-` is not allowed), so a
+build-injected constant reads as one wherever it appears. The value is taken
+as an integer, a float, `true`/`false`, or otherwise a string; wrap it in
+quotes to force the string reading (`-dVERSION="1.20"`). A bare `-dNAME`
+means `true`. A constant declared in the source wins over one defined here.
+
+The compiler's own build info is available under the same mechanism, with no
+flag needed: `SALAM_VERSION`, `SALAM_VERSION_CODE`, `SALAM_GIT_COMMIT`,
+`SALAM_GIT_DATE`, `SALAM_GIT_DIRTY`, and `SALAM_BUILD_DATE` - the last being
+the moment your program was compiled, so a binary can print its own build
+stamp.
 
 ### Project entry file: `salam.salam`
 

@@ -23,7 +23,7 @@ func interp_match_arm(
         if subj.kind == VAL_VARIANT:
             if subj.id != 0:
                 pn := at.Get(a, pat)
-                vv := ip.variants.get(subj.id)[0]
+                vv := ip.variants.get(subj.id)
                 if (pn.value_int as i64) == (vv.tag as i64):
                     ret true
                 end
@@ -55,6 +55,23 @@ func interp_find_match_arm(
         end
     end
     ret 0
+end
+
+// The expression a `a.b.c` chain hangs off, with the fields peeled away.
+func member_chain_root(a &: at.Ast, n: int): int:
+    mut cur := n
+    until at.KindOf(a, cur) == at.AST_MEMBER:
+        cur = at.Get(a, cur).a
+    end
+    ret cur
+end
+
+// The pointer an ILOC_PTR stands for, rebuilt as a Value so the struct-aware
+// load/store pair can see its element type.
+func loc_ptr_value(loc &: Loc): Value:
+    mut pv := val_ptr(loc.pa, loc.pe)
+    pv.s = loc.pts
+    ret pv
 end
 
 // interp_resolve_loc - classify an assignment target.
@@ -95,9 +112,37 @@ func interp_resolve_loc(ip &: Interp, a &: at.Ast, env: int, target: int): Loc:
     end
 
     if tn.kind == at.AST_MEMBER:
+        // Only a chain rooted in an index can name a place in real memory, and
+        // offering anything else would cost an extra evaluation for nothing.
+        if at.KindOf(a, member_chain_root(a, target)) == at.AST_INDEX:
+            mut maddr := 0 as i64
+            mut mts := ""
+            if interp_mem_lvalue(ip, a, env, target, maddr, mts):
+                loc.kind = ILOC_MEM
+                loc.mem = maddr
+                loc.mem_ts = mts
+                ret loc
+            end
+            if ip.failed:
+                ret loc
+            end
+        end
         obj := eval(ip, a, env, tn.a)
         if ip.failed:
             ret loc
+        end
+        // `p.f = v` on a pointer-to-struct writes the pointed-at bytes. The
+        // chain-rooted-in-an-index test above misses this shape, and without
+        // it the store would land in a copy of the struct and be lost.
+        if obj.kind == VAL_PTR:
+            mut paddr := 0 as i64
+            mut pts := ""
+            if interp_mem_ptr_field(ip, a, obj, tn.name, paddr, pts):
+                loc.kind = ILOC_MEM
+                loc.mem = paddr
+                loc.mem_ts = pts
+                ret loc
+            end
         end
         if obj.kind != VAL_STRUCT:
             rt_error(ip, a, target, i18.Tr("cannot assign to member of non-struct"))
@@ -110,7 +155,7 @@ func interp_resolve_loc(ip &: Interp, a &: at.Ast, env: int, target: int): Loc:
             loc.field_idx = fi2
             ret loc
         end
-        stv := ip.sts.get(obj.id)[0]
+        stv := ip.sts.get(obj.id)
         rt_error(
             ip, a, target, co.Format2(
                 i18.Tr("struct '%s' has no field '%s'"), co.ArgStr(stv.type_name), co.ArgStr(tn.name)
@@ -125,7 +170,7 @@ func interp_resolve_loc(ip &: Interp, a &: at.Ast, env: int, target: int): Loc:
             ret loc
         end
         if av.kind == VAL_STRUCT:
-            stv2 := ip.sts.get(av.id)[0]
+            stv2 := ip.sts.get(av.id)
             set_m := struct_method(a, stv2.def, "operator_index_set")
             if set_m != 0:
                 loc.kind = ILOC_OPIDX
@@ -160,6 +205,7 @@ func interp_resolve_loc(ip &: Interp, a &: at.Ast, env: int, target: int): Loc:
             loc.kind = ILOC_PTR
             loc.pa = av.pa
             loc.pe = av.pe
+            loc.pts = av.s
             loc.idx = to_int(eval(ip, a, env, tn.b))
             ret loc
         end
@@ -176,14 +222,17 @@ func interp_loc_get(ip &: Interp, a &: at.Ast, loc &: Loc): Value:
         ret env_slot_val(ip, loc.env, loc.slot)
     end
     if loc.kind == ILOC_FIELD:
-        s := ip.sts.get(loc.obj.id)[0]
-        ret s.fvals.get(loc.field_idx)[0]
+        s := ip.sts.get(loc.obj.id)
+        ret s.fvals.get(loc.field_idx)
     end
     if loc.kind == ILOC_ARR:
         ret arr_get(ip, loc.arr, loc.idx as int)
     end
     if loc.kind == ILOC_PTR:
-        ret ptr_load(loc.pa, loc.pe, loc.idx)
+        ret mem_ptr_load(ip, a, loc_ptr_value(loc), loc.idx)
+    end
+    if loc.kind == ILOC_MEM:
+        ret interp_mem_load(ip, a, loc.mem, loc.mem_ts)
     end
     // ILOC_OPIDX
     if loc.get_m != 0:
@@ -214,7 +263,11 @@ func interp_loc_set(ip &: Interp, a &: at.Ast, loc &: Loc, v: Value):
         ret
     end
     if loc.kind == ILOC_PTR:
-        ptr_store(loc.pa, loc.pe, loc.idx, v)
+        mem_ptr_store(ip, a, loc_ptr_value(loc), loc.idx, v)
+        ret
+    end
+    if loc.kind == ILOC_MEM:
+        interp_mem_store(ip, a, loc.mem, loc.mem_ts, v)
         ret
     end
     // ILOC_OPIDX
@@ -265,6 +318,20 @@ func rep_num(
     ret false
 end
 
+// Run `owner`'s statements in a fresh child scope and flush the defers that
+// scope registered on the way out. This is the shape every construct that
+// opens a block wants: a block, a taken `if` branch, a match arm, one pass of
+// a loop body. See run_defers_from for why the flush belongs here.
+func exec_scoped(
+    ip &: Interp, a &: at.Ast, env: int, fr &: Frame, owner: int, retv &: Value
+): int:
+    c := env_new(ip, env)
+    dmark := fr.defer_stmts.len()
+    f := exec_list(ip, a, c, fr, owner, retv)
+    run_defers_from(ip, a, fr, dmark)
+    ret f
+end
+
 // exec_stmt (interp_stmt.c) - returns a FLOW_* code; cooperative unwinding
 // makes every loop exit when ip.failed is set (the C longjmp'd instead).
 func exec_stmt(
@@ -278,8 +345,7 @@ func exec_stmt(
     k := node.kind
 
     if k == at.AST_BLOCK:
-        child := env_new(ip, env)
-        ret exec_list(ip, a, child, fr, n, retv)
+        ret exec_scoped(ip, a, env, fr, n, retv)
     end
     if k == at.AST_VAR_DECL || k == at.AST_CONST_DECL:
         mut v := val_null()
@@ -356,15 +422,13 @@ func exec_stmt(
             ret pf4
         end
         if cond:
-            c := env_new(ip, env)
-            ret exec_list(ip, a, c, fr, node.b, retv)
+            ret exec_scoped(ip, a, env, fr, node.b, retv)
         end
         if node.c != 0:
             if at.KindOf(a, node.c) == at.AST_IF:
                 ret exec_stmt(ip, a, env, fr, node.c, retv)
             end
-            c2 := env_new(ip, env)
-            ret exec_list(ip, a, c2, fr, node.c, retv)
+            ret exec_scoped(ip, a, env, fr, node.c, retv)
         end
         ret FLOW_NORMAL
     end
@@ -386,8 +450,7 @@ func exec_stmt(
             if !cond:
                 break
             end
-            c := env_new(ip, env)
-            f := exec_list(ip, a, c, fr, node.b, retv)
+            f := exec_scoped(ip, a, env, fr, node.b, retv)
             if f == FLOW_RETURN:
                 ret f
             end
@@ -453,7 +516,9 @@ func exec_stmt(
             if str.Len(node.name) != 0:
                 env_define(ip, c, node.name, val_int(kk))
             end
+            dmark := fr.defer_stmts.len()
             f := exec_list(ip, a, c, fr, node.b, retv)
+            run_defers_from(ip, a, fr, dmark)
             if f == FLOW_RETURN:
                 ret f
             end
@@ -492,8 +557,7 @@ func exec_stmt(
             if !cond:
                 break
             end
-            c := env_new(ip, loop)
-            f := exec_list(ip, a, c, fr, node.d, retv)
+            f := exec_scoped(ip, a, loop, fr, node.d, retv)
             if f == FLOW_RETURN:
                 ret f
             end
@@ -518,8 +582,7 @@ func exec_stmt(
         if arm == 0 || ip.failed:
             ret FLOW_NORMAL
         end
-        c := env_new(ip, env)
-        ret exec_list(ip, a, c, fr, at.Get(a, arm).b, retv)
+        ret exec_scoped(ip, a, env, fr, at.Get(a, arm).b, retv)
     end
     if k == at.AST_RETURN:
         if node.a != 0:

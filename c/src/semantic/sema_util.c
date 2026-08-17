@@ -13,6 +13,7 @@
  */
 
 #include "core/prelude.h"
+#include "core/sal_format.h"
 #include "semantic/sema_internal.h"
 #include "i18n/i18n.h"
 
@@ -107,6 +108,7 @@ static const intrinsic_name_t k_intrinsic_methods[] = {
     {"بیفزا", "أضف", "push"},
     {"دربیاور", "أخرج", "pop"},
     {"بگیر", "احصل", "get"},
+    {"ارجاع", "مرجع", "ref"},
     {"بنشان", "عين", "set"},
     {"طول", "طول", "len"},
     {"ظرفیت", "سعة", "cap"},
@@ -271,9 +273,117 @@ const char *local_canon(sema_t *s, const char *name, const src_span_t *span)
     return scope_member_canon(s, s->global, name, span);
 }
 
+/*
+ * Resolve an interface named either bare ("Shape") or qualified
+ * ("db.Connection"), which is what `dyn ...`, a type-parameter bound and
+ * `impl ... on ...` each need. A qualified name has to go through the package's
+ * member scope so the @en/@fa/@ar spellings canonicalize, and it must be `pub`
+ * to be nameable from outside - the same two rules sema_resolve_type() applies
+ * to a qualified struct.
+ *
+ * Returns NULL when the name does not resolve to an interface; `*why` is then
+ * set to a caller-independent reason, so each caller can keep its own wording
+ * ("required after 'dyn'", "bound on type parameter 'T'", ...).
+ */
+symbol_t *sema_lookup_iface(sema_t *s, const char *name, const src_span_t *span,
+                            const char **why)
+{
+    const char *dot = name ? strchr(name, '.') : NULL;
+    if (why) *why = NULL;
+    if (!name) return NULL;
+
+    if (!dot) {
+        symbol_t *sym = scope_lookup(s->cur, name);
+        if (!sym) sym = scope_lookup(s->global, name);
+        if (sym && sym->kind == SYM_INTERFACE) return sym;
+        /*
+         * Also the canonical "pkg_Iface" spelling. A `dyn` type is named after
+         * its interface's package (sema_resolve_type), so the interface bound
+         * that a dyn slot checks a concrete value against arrives in that form,
+         * with no package symbol in scope to split on.
+         */
+        {
+            /* pkg_cache is a flat [path, symbol] pair list; the symbols are
+             * the odd entries. */
+            size_t p = 1;
+            for (; s->pkg_cache && p < s->pkg_cache->len; p += 2) {
+                symbol_t *pk = (symbol_t *)s->pkg_cache->data[p];
+                size_t i;
+                if (!pk || pk->kind != SYM_PACKAGE || !pk->members) continue;
+                i = 0;
+                for (; i < pk->members->symbols.len; i++) {
+                    char canon[512];
+                    symbol_t *m = (symbol_t *)pk->members->symbols.data[i];
+                    if (!m || m->kind != SYM_INTERFACE || !m->name) continue;
+                    if (!m->pkgname || !m->pkgname[0]) continue;
+                    sal_snprintf(canon, sizeof canon, "%s_%s", m->pkgname, m->name);
+                    if (!strcmp(canon, name)) return m;
+                }
+            }
+        }
+        return NULL;
+    }
+
+    {
+        char pname[64];
+        size_t pl = (size_t)(dot - name);
+        if (pl >= sizeof(pname)) pl = sizeof(pname) - 1;
+        memcpy(pname, name, pl);
+        pname[pl] = 0;
+        symbol_t *pk = scope_lookup(s->cur, pname);
+        if (!pk) pk = scope_lookup(s->global, pname);
+        if (!pk || pk->kind != SYM_PACKAGE) {
+            if (why) *why = "unknown package";
+            return NULL;
+        }
+        {
+            const char *mname = pkg_member_canon(s, pk, dot + 1, span);
+            symbol_t *sym = scope_lookup_local(pk->members, mname);
+            if (!sym || sym->kind != SYM_INTERFACE) return NULL;
+            if (!sym->is_pub) {
+                if (why) *why = "not exported (mark it 'pub')";
+                return NULL;
+            }
+            return sym;
+        }
+    }
+}
+
 ast_node_t *sema_pure_fn(sema_t *s)
 {
     if (s->cur_func && s->cur_func->decl && s->cur_func->decl->is_pure)
         return s->cur_func->decl;
     return NULL;
+}
+
+/*
+ * A variable, parameter or constant may not reuse a function's name. Since a
+ * bare function name is now a value (its address), a local of the same name
+ * would silently take the name over for the rest of its scope and a reader
+ * could no longer tell which of the two an identifier meant. Only free
+ * functions are checked: methods live in a struct's member scope and are only
+ * ever reachable through a receiver, so they cannot be shadowed this way.
+ */
+void sema_check_shadows_func(sema_t *s, const char *name, const src_span_t *span)
+{
+    symbol_t *f;
+    if (!name || !name[0] || s->in_generic_inst) return;
+    f = scope_lookup_local(s->global, name);
+    if (f && f->kind == SYM_FUNC)
+        SERR(s, 90, span, "'%s' is already the name of a function in this file", name);
+}
+
+/*
+ * The files of a multi-file package are parsed separately and merged into a
+ * single program, so a top-level node's line number only makes sense against
+ * the file it was parsed from. Following that file here is what keeps a
+ * sibling file's diagnostics from being reported against the package's anchor
+ * file, where they would quote an unrelated source line. Returns the previous
+ * file for the caller to restore.
+ */
+const char *sema_use_decl_file(sema_t *s, const ast_node_t *d)
+{
+    const char *save = s->file;
+    if (d && d->src_file) s->file = d->src_file;
+    return save;
 }

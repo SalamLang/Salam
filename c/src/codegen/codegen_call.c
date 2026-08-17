@@ -66,7 +66,7 @@ static void cg_emit_call_arg(cg_t *cg, sb_t *b, ast_node_t *arg, func_sig_t *sig
     bool arg_is_ref = sig && sig->decl && i < sig->decl->list.len &&
                       ((ast_node_t *)sig->decl->list.data[i])->is_ref;
     if (!arg_is_ref) {
-        const char *e = cg_expr(cg, arg);
+        const char *e = cg_expr_value(cg, arg);
         if (cg_needs_fparg(cg, sig, i, arg, next))
             e = cg_fmt(cg, "%s(%s)",
                        strcmp(cg_param_ctype(cg, sig, i, arg), "float") == 0
@@ -187,12 +187,22 @@ static const char *call_raw_ptr(cg_t *cg, ast_node_t *n, ast_node_t *callee)
  */
 static const char *cg_order_stdout(cg_t *cg, const char *pre, const char *printf_expr)
 {
-    if (!pre || !pre[0])
-        return cg->single_threaded
-                   ? cg_fmt(cg, "({ salam_out_flush(); %s; fflush(0); })", printf_expr)
-                   : printf_expr;
-    if (!cg->single_threaded) return cg_fmt(cg, "({ %s%s; })", pre, printf_expr);
-    return cg_fmt(cg, "({ %ssalam_out_flush(); %s; fflush(0); })", pre, printf_expr);
+    /*
+     * The fflush is not about ordering against salam_ob - it is what makes a
+     * printed line reach a redirected stdout at all. The C runtime
+     * line-buffers a terminal and fully buffers a file or a pipe, so without
+     * it every daemon, container and systemd unit held its log lines in libc's
+     * buffer until the buffer filled or the process exited normally - which
+     * for a server that runs until it is killed is never. A module that spawns
+     * threads deliberately does not touch salam_ob (that buffer is not
+     * synchronised), but it needs the flush just as much; leaving it out is
+     * what made a threaded program's output look like it was being dropped
+     * rather than merely buffered.
+     */
+    const char *lead = (pre && pre[0]) ? pre : "";
+    if (!cg->single_threaded)
+        return cg_fmt(cg, "({ %s%s; fflush(0); })", lead, printf_expr);
+    return cg_fmt(cg, "({ %ssalam_out_flush(); %s; fflush(0); })", lead, printf_expr);
 }
 
 static const char *cg_lower_print(cg_t *cg, ast_node_t *n, bool nl, int err)
@@ -359,35 +369,68 @@ static const char *cg_lower_print(cg_t *cg, ast_node_t *n, bool nl, int err)
 static const char *call_ident(cg_t *cg, ast_node_t *n, ast_node_t *callee)
 {
     const char *nm = callee->name;
-    if (!strcmp(nm, "spawn") && n->list.len == 1) {
+    if (!strcmp(nm, "spawn") && (n->list.len == 1 || n->list.len == 2)) {
         ast_node_t *fn = (ast_node_t *)n->list.data[0];
         symbol_t *fsym = scope_lookup(cg->sem->global, fn->name);
         vec_t empty;
         vec_init(&empty);
         const char *mangled = fsym ? cg_mangle(cg, NULL, fn->name, &empty) : fn->name;
+        /*
+         * The mangled name carries the callee's declared parameter types, so
+         * the one-argument overload has to be located and its own params used
+         * as the key - `empty` would name the no-argument function instead.
+         */
+        if (n->list.len == 2) {
+            ast_node_t *an = (ast_node_t *)n->list.data[1];
+            size_t i = 0;
+            for (; fsym && i < fsym->overloads.len; i++) {
+                func_sig_t *sig = (func_sig_t *)fsym->overloads.data[i];
+                if (sig->params.len != 1) continue;
+                if (sig->ret && sig->ret->kind != TY_VOID) continue;
+                mangled = cg_mangle(cg, NULL, fn->name, &sig->params);
+                break;
+            }
+            return cg_fmt(cg,
+                          "salam_thread_spawn_arg((salam_thread_arg_fn)%s, (void*)(%s))",
+                          mangled, cg_expr(cg, an));
+        }
         return cg_fmt(cg, "salam_thread_spawn((salam_thread_fn)%s)", mangled);
     }
-    if (!strcmp(nm, "funcptr") && n->list.len == 1) {
-        ast_node_t *fn = (ast_node_t *)n->list.data[0];
-        symbol_t *fsym = scope_lookup(cg->sem->global, fn->name);
-        const char *mangled;
-        if (fsym && fsym->overloads.len > 0) {
-            func_sig_t *sig = (func_sig_t *)fsym->overloads.data[0];
+    /*
+     * Atomic intrinsics. 5 is __ATOMIC_SEQ_CST spelled as its value so no
+     * header has to be reachable from generated code. gcc and clang expand
+     * every one of these to a single instruction on the targets salam builds
+     * for; tcc 0.9.27 has none of them (it treats the name as an implicit
+     * declaration and then fails to link), which is why std/atomic keeps a
+     * mutex implementation behind SALAM_CC_TCC rather than relying on these.
+     */
+    if (salam_atomic_arity(nm) && (int)n->list.len == salam_atomic_arity(nm) &&
+        !scope_lookup(cg->sem->global, nm)) {
+        const char *p = cg_expr(cg, (ast_node_t *)n->list.data[0]);
+        if (!strcmp(nm, "atomic_load")) return cg_fmt(cg, "__atomic_load_n(%s, 5)", p);
+        {
+            const char *v = cg_expr(cg, (ast_node_t *)n->list.data[1]);
+            if (!strcmp(nm, "atomic_store"))
+                return cg_fmt(cg, "__atomic_store_n(%s, (int64_t)(%s), 5)", p, v);
+            if (!strcmp(nm, "atomic_add"))
+                return cg_fmt(cg, "__atomic_add_fetch(%s, (int64_t)(%s), 5)", p, v);
+            if (!strcmp(nm, "atomic_swap"))
+                return cg_fmt(cg, "__atomic_exchange_n(%s, (int64_t)(%s), 5)", p, v);
             /*
-             * An extern keeps its declared C name - it is not one of ours
-             * to mangle. Without this, funcptr() on a libc extern emitted
-             * a mangled symbol that exists nowhere: `funcptr(printf)` in
-             * std/llvm/orc.salam became `_Salam_llvm_printf_str` and the
-             * link failed with "undeclared". Matches how ll_call_user and
-             * the LLVM backend's funcptr lowering both treat externs.
+             * compare_exchange needs a writable `expected`, and salam's is an
+             * rvalue - bind it to a temporary. The weak flag is 0: a spurious
+             * failure would make a caller's retry loop spin for no reason.
              */
-            mangled = (sig->decl && sig->decl->is_extern)
-                          ? fn->name
-                          : cg_mangle(cg, NULL, fn->name, &sig->params);
-        } else {
-            mangled = fn->name;
+            {
+                int t = ++cg->tmpn;
+                const char *d = cg_expr(cg, (ast_node_t *)n->list.data[2]);
+                return cg_fmt(cg,
+                              "({ int64_t __ae%d = (int64_t)(%s); "
+                              "__atomic_compare_exchange_n(%s, &__ae%d, (int64_t)(%s), "
+                              "0, 5, 5); })",
+                              t, v, p, t, d);
+            }
         }
-        return cg_fmt(cg, "(int64_t)(void*)%s", mangled);
     }
     if (!strcmp(nm, "callhandler") && n->list.len == 2) {
         const char *fnp = cg_expr(cg, (ast_node_t *)n->list.data[0]);
@@ -467,7 +510,7 @@ static const char *call_ident(cg_t *cg, ast_node_t *n, ast_node_t *callee)
             size_t i = 0;
             for (; i < n->list.len; i++) {
                 if (i) sb_puts(&b, ", ");
-                sb_puts(&b, cg_expr(cg, (ast_node_t *)n->list.data[i]));
+                sb_puts(&b, cg_expr_value(cg, (ast_node_t *)n->list.data[i]));
             }
         }
         sb_putc(&b, ')');
@@ -524,6 +567,32 @@ static const char *call_pkg(cg_t *cg, ast_node_t *n, symbol_t *pk, ast_node_t *c
     return cg_fmt(cg, "%s(%s)", mangled, args);
 }
 
+/*
+ * The declared return type of `method` on the interface behind a "dyn Iface"
+ * (or "dyn Iface*", or the qualified "dyn pkg.Iface") receiver type string.
+ * NULL when anything along the way does not resolve, which the caller reads as
+ * "not an aggregate" and falls back to the plain call shape.
+ */
+static type_t *dyn_method_ret(cg_t *cg, const char *objts, const char *method)
+{
+    char name[128];
+    size_t len;
+    symbol_t *isym, *ms;
+    if (!objts || strncmp(objts, "dyn ", 4)) return NULL;
+    objts += 4;
+    len = strlen(objts);
+    while (len && objts[len - 1] == '*')
+        len--;
+    if (len >= sizeof(name)) return NULL;
+    memcpy(name, objts, len);
+    name[len] = 0;
+    isym = cg_iface_sym(cg, name);
+    if (!isym || !isym->members) return NULL;
+    ms = scope_lookup_local(isym->members, method);
+    if (!ms || ms->kind != SYM_METHOD || !ms->overloads.len) return NULL;
+    return ((func_sig_t *)ms->overloads.data[0])->ret;
+}
+
 static const char *call_dyn(cg_t *cg, ast_node_t *n, ast_node_t *obj, ast_node_t *callee,
                             const char *objts)
 {
@@ -536,6 +605,24 @@ static const char *call_dyn(cg_t *cg, ast_node_t *n, ast_node_t *obj, ast_node_t
         return cg_fmt(cg, "({ %s __dv%d = (%s); " SALAM_MEM_FREE "(__dv%d%sdata); })",
                       dynct, t, recv, t, acc);
     const char *as = call_args_lead(cg, n, NULL);
+    /*
+     * A vtable slot whose method returns an aggregate is `void (*)(..., R*)`,
+     * matching the sret lowering every other call path uses, so the result has
+     * to be caught in a temporary and yielded from the statement expression
+     * rather than taken as the call's value.
+     */
+    {
+        type_t *ret = dyn_method_ret(cg, objts, callee->name);
+        if (type_is_byval_agg(ret)) {
+            const char *rc = cg_ctype(cg, type_to_string(cg->sem->tc, ret));
+            int r = ++cg->tmpn;
+            return cg_fmt(cg,
+                          "({ %s __dv%d = (%s); %s __s%d; "
+                          "__dv%d%svtable->%s(__dv%d%sdata%s, &__s%d); __s%d; })",
+                          dynct, t, recv, rc, r, t, acc, cg_cident(cg, callee->name), t,
+                          acc, as, r, r);
+        }
+    }
     return cg_fmt(cg, "({ %s __dv%d = (%s); __dv%d%svtable->%s(__dv%d%sdata%s); })",
                   dynct, t, recv, t, acc, cg_cident(cg, callee->name), t, acc, as);
 }

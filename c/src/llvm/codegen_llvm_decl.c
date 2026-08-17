@@ -156,7 +156,8 @@ const char *ll_mangle_in(ll_t *ll, const char *pkg, const char *owner, const cha
 
 /*
  * The package in scope right now. Every call site that reaches a free
- * function through the current scope (a same-package call, funcptr/&f) is
+ * function through the current scope (a same-package call, a bare name read
+ * as a value, &f) is
  * emitting into the same package the callee was declared in, so the
  * definition in ll_function and those calls agree on the name.
  * ll_call_pkg is the exception - it resolves through another package's
@@ -345,12 +346,14 @@ void ll_function(ll_t *ll, ast_node_t *fn, symbol_t *owner)
      * undefined value '%L4_wcond'"). Only the entries actually live for
      * the outer function need preserving.
      */
+    size_t saved_dmark[64];
     const char *saved_brk[64], *saved_cont[64];
     {
         int bi = 0;
         for (; bi < saved_nloop && bi < 64; bi++) {
             saved_brk[bi] = ll->brk[bi];
             saved_cont[bi] = ll->cont[bi];
+            saved_dmark[bi] = ll->loop_dmark[bi];
         }
     }
     bool saved_main = ll->is_main, saved_byval = ll->self_byval, saved_term = ll->term;
@@ -446,6 +449,7 @@ void ll_function(ll_t *ll, ast_node_t *fn, symbol_t *owner)
         for (; bi < saved_nloop && bi < 64; bi++) {
             ll->brk[bi] = saved_brk[bi];
             ll->cont[bi] = saved_cont[bi];
+            ll->loop_dmark[bi] = saved_dmark[bi];
         }
     }
     ll->is_main = saved_main;
@@ -682,12 +686,14 @@ void ll_emit_lambda(ll_t *ll, ast_node_t *n)
      * undefined value '%L4_wcond'"). Only the entries actually live for
      * the outer function need preserving.
      */
+    size_t saved_dmark[64];
     const char *saved_brk[64], *saved_cont[64];
     {
         int bi = 0;
         for (; bi < saved_nloop && bi < 64; bi++) {
             saved_brk[bi] = ll->brk[bi];
             saved_cont[bi] = ll->cont[bi];
+            saved_dmark[bi] = ll->loop_dmark[bi];
         }
     }
     bool saved_main = ll->is_main, saved_term = ll->term;
@@ -771,6 +777,7 @@ void ll_emit_lambda(ll_t *ll, ast_node_t *n)
         for (; bi < saved_nloop && bi < 64; bi++) {
             ll->brk[bi] = saved_brk[bi];
             ll->cont[bi] = saved_cont[bi];
+            ll->loop_dmark[bi] = saved_dmark[bi];
         }
     }
     ll->is_main = saved_main;
@@ -896,7 +903,7 @@ static bool ll_const_agg(ll_t *ll, ast_node_t *n, const char **out)
                         return false;
                     }
                 } else {
-                    v = ll_zero(fts);
+                    v = ll_zero(ll, fts);
                 }
                 const char *flety = ll_ty(ll, fts);
                 if (idx) sb_puts(&b, ", ");
@@ -961,7 +968,7 @@ void ll_emit_globals(ll_t *ll, ast_node_t *program)
             if (d->a && ll_const_value(ll, d->a, &cv)) {
                 init = cv;
             } else {
-                init = ll_zero(ts);
+                init = ll_zero(ll, ts);
                 if (d->a) vec_push(ll->a, &ll->gdefer, d);
             }
             sb_puts(ll->g, ll_fmt(ll, "%s = internal global %s %s\n", gref, lty, init));

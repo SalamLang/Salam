@@ -20,16 +20,32 @@ package sync
 import mem
 
 if SALAM_OS_UNIX:
-    link dynamic "pthread"
-    // todo
+    if !defined(SALAM_CC_TCC):
+        link dynamic "pthread"
+    end
 end
 
+/*
+ * Windows locks are CRITICAL_SECTIONs rather than CreateMutexA handles.
+ * A kernel mutex works for plain Lock/Unlock, but no condition variable can
+ * wait on one - SleepConditionVariableCS wants a CRITICAL_SECTION - and every
+ * blocking primitive below (WaitGroup, RWMutex, Semaphore, channels) is built
+ * on a condition variable. A CRITICAL_SECTION is also recursive and
+ * process-local, exactly like the mutex it replaces, so Lock/Unlock keep their
+ * old behaviour; it is merely far cheaper, since an uncontended acquire never
+ * enters the kernel at all.
+ */
 if SALAM_OS_WINDOWS:
     extern:
-        func CreateMutexA(attr: void*, init_owned: int, name: void*): void*
-        func WaitForSingleObject(handle: void*, milliseconds: int): int
-        func ReleaseMutex(handle: void*): int
-        func CloseHandle(handle: void*): int
+        func InitializeCriticalSection(cs: void*)
+        func EnterCriticalSection(cs: void*)
+        func LeaveCriticalSection(cs: void*)
+        func DeleteCriticalSection(cs: void*)
+        func InitializeConditionVariable(cv: void*)
+        func SleepConditionVariableCS(cv: void*, cs: void*, ms: int): int
+        func WakeConditionVariable(cv: void*)
+        func WakeAllConditionVariable(cv: void*)
+        func GetTickCount64(): u64
         func Sleep(ms: int)
     end
 else:
@@ -38,14 +54,39 @@ else:
         func pthread_mutex_lock(mutex: void*): int
         func pthread_mutex_unlock(mutex: void*): int
         func pthread_mutex_destroy(mutex: void*): int
+        func pthread_cond_init(cond: void*, attr: void*): int
+        func pthread_cond_wait(cond: void*, mutex: void*): int
+        func pthread_cond_timedwait(cond: void*, mutex: void*, abstime: void*): int
+        func clock_gettime(clk: int, ts: void*): int
+        func pthread_cond_signal(cond: void*): int
+        func pthread_cond_broadcast(cond: void*): int
+        func pthread_cond_destroy(cond: void*): int
         func usleep(us: u32): int
     end
 end
+
+/*
+ * Sized by the largest layout across the platforms this builds for rather
+ * than by sizeof, which salam cannot take of an opaque C type: pthread_mutex_t
+ * is 40 bytes on glibc x86-64, 48 on aarch64, 64 on some BSDs; pthread_cond_t
+ * is 48 nearly everywhere; a CRITICAL_SECTION is 40 on x64. Over-allocating a
+ * few dozen bytes per lock costs nothing and removes a whole class of
+ * platform-specific corruption.
+ */
+const MUTEX_BYTES := 128
+const COND_BYTES := 128
 
 @en "Mutex"
 @fa "قفل"
 @ar "قفل"
 pub struct Mutex:
+    pub handle: void* = null
+end
+
+@en "CondVar"
+@fa "متغیر شرط"
+@ar "متغير شرطي"
+pub struct CondVar:
     pub handle: void* = null
 end
 
@@ -55,31 +96,89 @@ end
 pub struct WaitGroup:
     pub counter: i64* = null
     pub mu: void* = null
+    pub cv: void* = null
+end
+
+@en "RWMutex"
+@fa "قفل خواندن نوشتن"
+@ar "قفل قراءة كتابة"
+pub struct RWMutex:
+    // state[0] = active readers, state[1] = 1 while a writer holds the lock,
+    // state[2] = writers waiting (readers yield to them, so writers cannot
+    // starve under a steady stream of readers).
+    pub state: i64* = null
+    pub mu: void* = null
+    pub cv: void* = null
+end
+
+@en "Semaphore"
+@fa "نشانگر"
+@ar "إشارة"
+pub struct Semaphore:
+    pub permits: i64* = null
+    pub mu: void* = null
+    pub cv: void* = null
+end
+
+@en "Once"
+@fa "یک بار"
+@ar "مرة واحدة"
+pub struct Once:
+    pub done: i64* = null
+    pub mu: void* = null
 end
 
 if SALAM_OS_WINDOWS:
     func mutex_new(): void*:
-        ret CreateMutexA(null, 0, null)
+        m := mem.Allocate(MUTEX_BYTES as u64)
+        InitializeCriticalSection(m)
+        ret m
     end
 
     func mutex_lock(h: void*): int:
-        if WaitForSingleObject(h, 0 - 1) == 0: ret 0 end
-        ret 0 - 1
+        EnterCriticalSection(h)
+        ret 0
     end
 
     func mutex_unlock(h: void*): int:
-        if ReleaseMutex(h) != 0: ret 0 end
-        ret 0 - 1
+        LeaveCriticalSection(h)
+        ret 0
     end
 
     func mutex_free(h: void*):
-        CloseHandle(h)
+        DeleteCriticalSection(h)
+        mem.Free(h)
     end
+
+    func cond_new(): void*:
+        c := mem.Allocate(COND_BYTES as u64)
+        InitializeConditionVariable(c)
+        ret c
+    end
+
+    func cond_wait(c: void*, m: void*):
+        SleepConditionVariableCS(c, m, 0 - 1)
+    end
+
+    // Non-zero means the predicate may have changed; zero means it timed out
+    // (or failed, which for a caller re-testing its predicate is the same).
+    func cond_timedwait(c: void*, m: void*, ms: i64): bool:
+        ret SleepConditionVariableCS(c, m, ms as int) == 0
+    end
+
+    func now_ms_os(): i64: ret GetTickCount64() as i64 end
+
+    func cond_signal(c: void*): WakeConditionVariable(c) end
+
+    func cond_broadcast(c: void*): WakeAllConditionVariable(c) end
+
+    // A CONDITION_VARIABLE owns no resources and has no matching Delete call.
+    func cond_free(c: void*): mem.Free(c) end
 
     func _sync_sleep_ms(ms: int): Sleep(ms) end
 else:
     func mutex_new(): void*:
-        m := mem.Allocate(80 as u64)
+        m := mem.Allocate(MUTEX_BYTES as u64)
         pthread_mutex_init(m, null)
         ret m
     end
@@ -97,6 +196,85 @@ else:
     func mutex_free(h: void*):
         pthread_mutex_destroy(h)
         mem.Free(h)
+    end
+
+    func cond_new(): void*:
+        c := mem.Allocate(COND_BYTES as u64)
+        pthread_cond_init(c, null)
+        ret c
+    end
+
+    func cond_wait(c: void*, m: void*):
+        pthread_cond_wait(c, m)
+    end
+
+    /*
+     * struct timespec is two native words - 8 bytes each on a 64-bit target,
+     * 4 on a 32-bit one. Writing i64s into the 32-bit layout would scribble
+     * tv_sec straight over tv_nsec, so the width is picked from the pointer
+     * size. Both arms type-check on every target and the dead one folds away.
+     */
+    func ts_read_sec(ts: void*): i64:
+        if sizeof(void*) == 8:
+            q := ts as i64*
+            ret q[0]
+        end
+        q32 := ts as i32*
+        ret q32[0] as i64
+    end
+
+    func ts_read_nsec(ts: void*): i64:
+        if sizeof(void*) == 8:
+            q := ts as i64*
+            ret q[1]
+        end
+        q32 := ts as i32*
+        ret q32[1] as i64
+    end
+
+    func ts_write(ts: void*, sec: i64, nsec: i64):
+        if sizeof(void*) == 8:
+            q := ts as i64*
+            q[0] = sec
+            q[1] = nsec
+            ret
+        end
+        q32 := ts as i32*
+        q32[0] = sec as i32
+        q32[1] = nsec as i32
+    end
+
+    /*
+     * pthread_cond_timedwait wants an *absolute* CLOCK_REALTIME deadline, not
+     * a duration, so `ms` is folded into the current time first. Carrying the
+     * nanosecond overflow into seconds matters: a tv_nsec of 1e9 or more is
+     * rejected outright with EINVAL and the wait would not block at all.
+     */
+    func cond_timedwait(c: void*, m: void*, ms: i64): bool:
+        ts := mem.AllocateZeroed(32 as u64)
+        clock_gettime(0, ts)
+        total := ts_read_nsec(ts) + (ms % 1000) * 1000000
+        ts_write(ts, ts_read_sec(ts) + (ms / 1000) + (total / 1000000000), total % 1000000000)
+        rc := pthread_cond_timedwait(c, m, ts)
+        mem.Free(ts)
+        ret rc != 0
+    end
+
+    func now_ms_os(): i64:
+        ts := mem.AllocateZeroed(32 as u64)
+        clock_gettime(0, ts)
+        ms := ts_read_sec(ts) * 1000 + ts_read_nsec(ts) / 1000000
+        mem.Free(ts)
+        ret ms
+    end
+
+    func cond_signal(c: void*): pthread_cond_signal(c) end
+
+    func cond_broadcast(c: void*): pthread_cond_broadcast(c) end
+
+    func cond_free(c: void*):
+        pthread_cond_destroy(c)
+        mem.Free(c)
     end
 
     func _sync_sleep_ms(ms: int):
@@ -124,13 +302,92 @@ pub func Unlock(m: Mutex): int: ret mutex_unlock(m.handle) end
 @ar "تدمیر"
 pub func Destroy(m: Mutex): mutex_free(m.handle) end
 
+// Not named Sleep: on Windows that is the extern declared above, and the two
+// would collide in this package's namespace.
+@en "SleepMs"
+@fa "خواب میلی ثانیه"
+@ar "نوم بالمللي ثانية"
+pub func SleepMs(ms: int): _sync_sleep_ms(ms) end
+
+// ---------------------------------------------------------------------------
+// Condition variable
+// ---------------------------------------------------------------------------
+
+@en "NewCondVar"
+@fa "متغیر شرط جدید"
+@ar "متغير شرطي جديد"
+pub func NewCondVar(): CondVar: ret CondVar { handle = cond_new() } end
+
+/*
+ * Wait atomically releases `m` and blocks; on return `m` is held again. Both
+ * platforms allow a *spurious* wakeup, so every caller in this file - and
+ * every caller outside it - has to re-test its predicate in a loop rather than
+ * assume that waking means the condition became true.
+ */
+@en "WaitCond"
+@fa "انتظار شرط"
+@ar "انتظار شرطي"
+pub func WaitCond(cv: CondVar, m: Mutex): cond_wait(cv.handle, m.handle) end
+
+/*
+ * Waits at most `ms` milliseconds and reports whether it gave up. A false
+ * return does NOT mean the predicate became true - a spurious wakeup returns
+ * false too - so the shape of a timed wait is still a loop, just one that also
+ * watches the clock:
+ *
+ *   deadline := sync.NowMs() + ms
+ *   until !pred() && !timed_out:
+ *       left := deadline - sync.NowMs()
+ *       if left <= 0: timed_out = true
+ *       else: timed_out = sync.WaitCondTimeout(cv, mu, left) end
+ *   end
+ *
+ * Recomputing the remaining time each pass is what keeps the total bounded:
+ * passing the full `ms` again after every wakeup would let a steady trickle of
+ * signals extend the wait indefinitely.
+ */
+@en "WaitCondTimeout"
+@fa "انتظار شرط با مهلت"
+@ar "انتظار شرطي بمهلة"
+pub func WaitCondTimeout(cv: CondVar, m: Mutex, ms: i64): bool:
+    ret cond_timedwait(cv.handle, m.handle, ms)
+end
+
+/*
+ * Milliseconds from an unspecified epoch - only differences are meaningful.
+ * Use it to compute deadlines and remaining time, not to tell the date.
+ */
+@en "NowMs"
+@fa "اکنون میلی ثانیه"
+@ar "الآن بالمللي ثانية"
+pub func NowMs(): i64: ret now_ms_os() end
+
+@en "Signal"
+@fa "اعلام"
+@ar "إشعار"
+pub func Signal(cv: CondVar): cond_signal(cv.handle) end
+
+@en "Broadcast"
+@fa "اعلام همگانی"
+@ar "إشعار عام"
+pub func Broadcast(cv: CondVar): cond_broadcast(cv.handle) end
+
+@en "DestroyCondVar"
+@fa "نابودسازی متغیر شرط"
+@ar "تدمير المتغير الشرطي"
+pub func DestroyCondVar(cv: CondVar): cond_free(cv.handle) end
+
+// ---------------------------------------------------------------------------
+// WaitGroup
+// ---------------------------------------------------------------------------
+
 @en "NewWaitGroup"
 @fa "گروه انتظار جدید"
 @ar "مجموعة انتظار جدیدة"
 pub func NewWaitGroup(): WaitGroup:
     c := mem.Allocate(8 as u64) as i64*
     c[0] = 0
-    ret WaitGroup { counter = c, mu = mutex_new() }
+    ret WaitGroup { counter = c, mu = mutex_new(), cv = cond_new() }
 end
 
 @en "Add"
@@ -140,6 +397,7 @@ pub func Add(wg: WaitGroup, delta: i64):
     c := wg.counter
     mutex_lock(wg.mu)
     c[0] = c[0] + delta
+    if c[0] <= 0: cond_broadcast(wg.cv) end
     mutex_unlock(wg.mu)
 end
 
@@ -150,16 +408,28 @@ pub func Done(wg: WaitGroup):
     c := wg.counter
     mutex_lock(wg.mu)
     c[0] = c[0] - 1
+    if c[0] <= 0: cond_broadcast(wg.cv) end
     mutex_unlock(wg.mu)
 end
 
+/*
+ * Blocks on the condition variable instead of polling. The old implementation
+ * re-read the counter through a bare pointer every millisecond, which was
+ * correct only by accident: it worked because the sleep call in the loop body
+ * was opaque to the C optimiser and forced a reload. Waiting properly also
+ * makes the wakeup immediate rather than up to a millisecond late, which
+ * matters once a program joins thousands of small tasks.
+ */
 @en "Wait"
 @fa "انتظار"
 @ar "انتظار"
 pub func Wait(wg: WaitGroup):
-    until wg.counter[0] > 0:
-        _sync_sleep_ms(1)
+    c := wg.counter
+    mutex_lock(wg.mu)
+    until c[0] > 0:
+        cond_wait(wg.cv, wg.mu)
     end
+    mutex_unlock(wg.mu)
 end
 
 @en "DestroyWaitGroup"
@@ -167,5 +437,183 @@ end
 @ar "تدمیر مجموعة انتظار"
 pub func DestroyWaitGroup(wg: WaitGroup):
     mem.Free(wg.counter as void*)
+    cond_free(wg.cv)
     mutex_free(wg.mu)
+end
+
+// ---------------------------------------------------------------------------
+// Reader/writer lock
+// ---------------------------------------------------------------------------
+
+@en "NewRWMutex"
+@fa "قفل خواندن نوشتن جدید"
+@ar "قفل قراءة كتابة جديد"
+pub func NewRWMutex(): RWMutex:
+    s := mem.Allocate(24 as u64) as i64*
+    s[0] = 0
+    s[1] = 0
+    s[2] = 0
+    ret RWMutex { state = s, mu = mutex_new(), cv = cond_new() }
+end
+
+@en "RLock"
+@fa "قفل خواندن"
+@ar "قفل قراءة"
+pub func RLock(rw: RWMutex):
+    s := rw.state
+    mutex_lock(rw.mu)
+    // Yielding to waiting writers is what keeps a writer from starving while
+    // readers hand the lock to one another without it ever hitting zero.
+    until s[1] != 0 || s[2] > 0:
+        cond_wait(rw.cv, rw.mu)
+    end
+    s[0] = s[0] + 1
+    mutex_unlock(rw.mu)
+end
+
+@en "RUnlock"
+@fa "باز کردن قفل خواندن"
+@ar "فتح قفل القراءة"
+pub func RUnlock(rw: RWMutex):
+    s := rw.state
+    mutex_lock(rw.mu)
+    s[0] = s[0] - 1
+    if s[0] <= 0: cond_broadcast(rw.cv) end
+    mutex_unlock(rw.mu)
+end
+
+@en "WLock"
+@fa "قفل نوشتن"
+@ar "قفل كتابة"
+pub func WLock(rw: RWMutex):
+    s := rw.state
+    mutex_lock(rw.mu)
+    s[2] = s[2] + 1
+    until s[1] != 0 || s[0] > 0:
+        cond_wait(rw.cv, rw.mu)
+    end
+    s[2] = s[2] - 1
+    s[1] = 1
+    mutex_unlock(rw.mu)
+end
+
+@en "WUnlock"
+@fa "باز کردن قفل نوشتن"
+@ar "فتح قفل الكتابة"
+pub func WUnlock(rw: RWMutex):
+    s := rw.state
+    mutex_lock(rw.mu)
+    s[1] = 0
+    cond_broadcast(rw.cv)
+    mutex_unlock(rw.mu)
+end
+
+@en "DestroyRWMutex"
+@fa "نابودسازی قفل خواندن نوشتن"
+@ar "تدمير قفل القراءة والكتابة"
+pub func DestroyRWMutex(rw: RWMutex):
+    mem.Free(rw.state as void*)
+    cond_free(rw.cv)
+    mutex_free(rw.mu)
+end
+
+// ---------------------------------------------------------------------------
+// Counting semaphore
+// ---------------------------------------------------------------------------
+
+@en "NewSemaphore"
+@fa "نشانگر جدید"
+@ar "إشارة جديدة"
+pub func NewSemaphore(permits: i64): Semaphore:
+    p := mem.Allocate(8 as u64) as i64*
+    p[0] = permits
+    ret Semaphore { permits = p, mu = mutex_new(), cv = cond_new() }
+end
+
+@en "Acquire"
+@fa "گرفتن"
+@ar "اکتساب"
+pub func Acquire(sem: Semaphore):
+    p := sem.permits
+    mutex_lock(sem.mu)
+    until p[0] <= 0:
+        cond_wait(sem.cv, sem.mu)
+    end
+    p[0] = p[0] - 1
+    mutex_unlock(sem.mu)
+end
+
+@en "TryAcquire"
+@fa "تلاش برای گرفتن"
+@ar "محاولة اکتساب"
+pub func TryAcquire(sem: Semaphore): bool:
+    p := sem.permits
+    mutex_lock(sem.mu)
+    mut got := false
+    if p[0] > 0:
+        p[0] = p[0] - 1
+        got = true
+    end
+    mutex_unlock(sem.mu)
+    ret got
+end
+
+@en "Release"
+@fa "رها کردن"
+@ar "إطلاق"
+pub func Release(sem: Semaphore):
+    p := sem.permits
+    mutex_lock(sem.mu)
+    p[0] = p[0] + 1
+    cond_signal(sem.cv)
+    mutex_unlock(sem.mu)
+end
+
+@en "DestroySemaphore"
+@fa "نابودسازی نشانگر"
+@ar "تدمير الإشارة"
+pub func DestroySemaphore(sem: Semaphore):
+    mem.Free(sem.permits as void*)
+    cond_free(sem.cv)
+    mutex_free(sem.mu)
+end
+
+// ---------------------------------------------------------------------------
+// Once
+// ---------------------------------------------------------------------------
+
+@en "NewOnce"
+@fa "یک بار جدید"
+@ar "مرة واحدة جديدة"
+pub func NewOnce(): Once:
+    d := mem.Allocate(8 as u64) as i64*
+    d[0] = 0
+    ret Once { done = d, mu = mutex_new() }
+end
+
+/*
+ * The flag is set only after f returns, and the lock is held across the call,
+ * so a second thread arriving mid-initialisation blocks until the first has
+ * finished rather than racing past a half-built value. f must therefore not
+ * call Do on the same Once, which would deadlock.
+ */
+@en "Do"
+@fa "انجام"
+@ar "تنفيذ"
+pub func Do(o: Once, f: func ()):
+    d := o.done
+    mutex_lock(o.mu)
+    if d[0] == 0:
+        f()
+        d[0] = 1
+    end
+    mutex_unlock(o.mu)
+end
+
+@en "DestroyOnce"
+@fa "نابودسازی یک بار"
+@ar "تدمير مرة واحدة"
+pub func DestroyOnce(o: Once):
+    mem.Free(o.done as void*)
+    mutex_free(o.mu)
 end

@@ -15,7 +15,7 @@ func find_sig(s &: Sema, fsym: int, decl: int): int:
     end
     fv := sym_at(s, fsym)
     repeat fv.overloads.len() with i:
-        sgid := fv.overloads.get(i)[0]
+        sgid := fv.overloads.get(i)
         if sig_at(s, sgid).decl == decl:
             ret sgid
         end
@@ -66,7 +66,7 @@ func check_function(s &: Sema, a &: at.Ast, fnid: int, owner: int, sigid: int):
     end
     if fn.is_pure:
         repeat fn.list.len() with pi:
-            prm := at.Get(a, fn.list.get(pi)[0])
+            prm := at.Get(a, fn.list.get(pi))
             if prm.kind == at.AST_PARAM && prm.is_ref:
                 serr(
                     s, 12, fsp, co.Format2(
@@ -109,7 +109,7 @@ func check_function(s &: Sema, a &: at.Ast, fnid: int, owner: int, sigid: int):
     end
     mut seen_default := false
     repeat fn.list.len() with di:
-        pid := fn.list.get(di)[0]
+        pid := fn.list.get(di)
         param := at.Get(a, pid)
         if param.a == 0:
             if seen_default:
@@ -135,7 +135,7 @@ func check_function(s &: Sema, a &: at.Ast, fnid: int, owner: int, sigid: int):
         if sigid != 0:
             sgd := sig_at(s, sigid)
             if di < sgd.params.len():
-                pt = sgd.params.get(di)[0]
+                pt = sgd.params.get(di)
                 have_sig_pt = true
             end
         end
@@ -177,7 +177,7 @@ func check_function(s &: Sema, a &: at.Ast, fnid: int, owner: int, sigid: int):
         s.self_type = TYPE_NONE
     end
     repeat fn.list.len() with pi2:
-        pid2 := fn.list.get(pi2)[0]
+        pid2 := fn.list.get(pi2)
         param2 := at.Get(a, pid2)
         psym := symbol_new(s, SYM_PARAM, param2.name)
         mut pv2 := TYPE_NONE
@@ -185,7 +185,7 @@ func check_function(s &: Sema, a &: at.Ast, fnid: int, owner: int, sigid: int):
         if sigid != 0:
             sge := sig_at(s, sigid)
             if pi2 < sge.params.len():
-                pv2 = sge.params.get(pi2)[0]
+                pv2 = sge.params.get(pi2)
                 have2 = true
             end
         end
@@ -198,6 +198,7 @@ func check_function(s &: Sema, a &: at.Ast, fnid: int, owner: int, sigid: int):
         pvv.is_ref = param2.is_ref
         pvv.decl = pid2
         sym_put(s, psym, pvv)
+        sema_check_shadows_func(s, param2.name, span_of(a, pid2))
         if scope_define(s, sc, psym) != 0:
             serr(
                 s, 1, span_of(a, pid2), co.Format1(
@@ -311,7 +312,7 @@ func sema_check_unused_funcs(s &: Sema, a &: at.Ast):
     gsc := scope_at(s, s.global)
     mut has_entry := false
     repeat gsc.symbols.len() with i:
-        f := sym_at(s, gsc.symbols.get(i)[0])
+        f := sym_at(s, gsc.symbols.get(i))
         if f.kind == SYM_FUNC && str.Len(f.name) > 0 && (str.Equals(f.name, "main") || str.Equals(f.name, entry)):
             has_entry = true
             break
@@ -320,8 +321,9 @@ func sema_check_unused_funcs(s &: Sema, a &: at.Ast):
     if !has_entry:
         ret
     end
+    save_file := s.file
     repeat gsc.symbols.len() with i2:
-        f2 := sym_at(s, gsc.symbols.get(i2)[0])
+        f2 := sym_at(s, gsc.symbols.get(i2))
         if f2.kind != SYM_FUNC || f2.used || f2.is_pub:
             continue
         end
@@ -332,12 +334,13 @@ func sema_check_unused_funcs(s &: Sema, a &: at.Ast):
         if dn.synthetic || dn.is_extern:
             continue
         end
-        if str.Len(f2.name) == 0 || byte_at(f2.name, 0) == 95:
+        if str.Len(f2.name) == 0 || byte_at(f2.name, 0) == 95 || at.NameIsErr(f2.name):
             continue
         end
         if str.Equals(f2.name, "main") || str.Equals(f2.name, entry):
             continue
         end
+        _sfu := sema_use_decl_file(s, a, f2.decl)
         serr(
             s, 66, span_of(a, f2.decl), co.Format1(
                 i18.Tr("unused function '%s' (call it, mark it 'pub', or prefix its name with '_')"),
@@ -345,10 +348,20 @@ func sema_check_unused_funcs(s &: Sema, a &: at.Ast):
             )
         )
     end
+    s.file = save_file
 end
 
-// check_toplevel - per-declaration checking pass.
+// check_toplevel - per-declaration checking pass. The wrapper points every
+// diagnostic the body raises at the file this declaration was parsed from
+// (see sema_use_decl_file); check_toplevel_body has early returns, so the
+// restore cannot live inside it.
 func check_toplevel(s &: Sema, a &: at.Ast, did: int):
+    save_file := sema_use_decl_file(s, a, did)
+    check_toplevel_body(s, a, did)
+    s.file = save_file
+end
+
+func check_toplevel_body(s &: Sema, a &: at.Ast, did: int):
     d := at.Get(a, did)
     if d.kind == at.AST_FUNC_DEF:
         fsym := scope_lookup_local(s, s.global, d.name)
@@ -359,7 +372,7 @@ func check_toplevel(s &: Sema, a &: at.Ast, did: int):
             ret
         end
         repeat d.list.len() with j:
-            mid := d.list.get(j)[0]
+            mid := d.list.get(j)
             m := at.Get(a, mid)
             if m.kind == at.AST_FUNC_DEF:
                 msym := scope_lookup_local(s, sym_at(s, ssym).members, m.name)
@@ -377,7 +390,7 @@ func check_toplevel(s &: Sema, a &: at.Ast, did: int):
                     mak := at.KindOf(a, m.a)
                     if f != 0 && mak == at.AST_STRUCT_LIT && ftv >= 0 && ty_at(s, ftv).kind == TY_STRUCT:
                         s.expected = ftv
-                    else f != 0 && mak == at.AST_LITERAL:
+                    else f != 0 && (mak == at.AST_LITERAL || mak == at.AST_ARRAY_LIT):
                         s.expected = ftv
                     end
                     vt = sema_check_expr(s, a, m.a)
@@ -404,7 +417,7 @@ func check_toplevel(s &: Sema, a &: at.Ast, did: int):
             ret
         end
         repeat d.list.len() with j2:
-            mid2 := d.list.get(j2)[0]
+            mid2 := d.list.get(j2)
             if at.KindOf(a, mid2) != at.AST_FUNC_DEF:
                 continue
             end
@@ -448,10 +461,10 @@ func lint_lang_types(s &: Sema, a &: at.Ast, nid: int):
     lint_lang_types(s, a, n.c)
     lint_lang_types(s, a, n.d)
     repeat n.list.len() with i:
-        lint_lang_types(s, a, n.list.get(i)[0])
+        lint_lang_types(s, a, n.list.get(i))
     end
     repeat n.dims.len() with i2:
-        lint_lang_types(s, a, n.dims.get(i2)[0])
+        lint_lang_types(s, a, n.dims.get(i2))
     end
 end
 
@@ -461,6 +474,7 @@ func sema_check_pass(s &: Sema, a &: at.Ast, program: int):
     // 5c note: live child reads - generic instantiation appends synthetic
     // instances to the program list while the second loop runs (they are
     // skipped there and handled through s.pending, like the C).
+    save_file := s.file
     mut i := 0
     until i < at.ChildCount(a, program):
         did := at.Child(a, program, i)
@@ -471,8 +485,10 @@ func sema_check_pass(s &: Sema, a &: at.Ast, program: int):
         if d.synthetic:
             continue
         end
+        _sfl := sema_use_decl_file(s, a, did)
         lint_lang_types(s, a, did)
     end
+    s.file = save_file
     // A top-level `const NAME := <expr>` (no type annotation) leaves its
     // symbol's type TYPE_NONE after sema_collect(); sema_check_var_decl()
     // (inside check_toplevel) is what fills it in. Package files are merged
@@ -511,15 +527,20 @@ func sema_check_pass(s &: Sema, a &: at.Ast, program: int):
         check_toplevel(s, a, did2)
     end
     mut pi := 0
+    save_gi := s.in_generic_inst
+    s.in_generic_inst = true
     until pi < s.pending.len():
-        did3 := s.pending.get(pi)[0]
+        did3 := s.pending.get(pi)
         save_lang := s.lang
         ol := at.Get(a, did3).origin_lang
         if str.Len(ol) > 0:
             s.lang = ol
         end
+        s.in_derive = derive_is_decl(s, did3)
         check_toplevel(s, a, did3)
+        s.in_derive = false
         s.lang = save_lang
         pi += 1
     end
+    s.in_generic_inst = save_gi
 end

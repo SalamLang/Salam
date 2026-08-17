@@ -54,7 +54,11 @@ func func_signature(
     end
     pkgmod := !str.Equals(g.pkg, "main")
     exported := (owner != 0 || fn.is_extern || fn.is_pub || pkgmod) && !is_instance
-    inl := fn.is_inline && !fn.is_extern && owner == 0 && (fn.is_pub || !pkgmod)
+    // Struct methods take `inline` on the same terms as free functions: a pub
+    // one is exported as a body in the header, a private one only stays inline
+    // where nothing links against it. Generic instances are static inline
+    // already, so is_instance covers those.
+    inl := fn.is_inline && !fn.is_extern && (fn.is_pub || !pkgmod)
     mut b := co.SbNew()
     if is_instance || inl:
         co.SbPuts(b, "static inline ")
@@ -65,7 +69,15 @@ func func_signature(
         if fn.is_noinline:
             co.SbPuts(b, "SALAM_NOINLINE ")
         end
-        if fn.is_pure:
+        // Not on an sret function. Returning an aggregate by value lowers to
+        // a `void f(..., T* __ret)` that writes through the caller's
+        // pointer, and gcc rejects __attribute__((pure)) on anything
+        // returning void ("'pure' attribute on function returning 'void'",
+        // an error under -Werror=attributes) - correctly, because a pure
+        // function's only effect is its return value and this one has none.
+        // The Salam-level promise is unaffected: `pure` is enforced by sema,
+        // this only decides whether the C compiler is told about it.
+        if fn.is_pure && !sret:
             co.SbPuts(b, "SALAM_PURE ")
         end
         if fn.is_deprecated:
@@ -86,8 +98,8 @@ func func_signature(
         first = false
     end
     repeat fn.list.len() with i:
-        p := at.Get(a, fn.list.get(i)[0])
-        pts := sm.ToString(s, sig.params.get(i)[0])
+        p := at.Get(a, fn.list.get(i))
+        pts := sm.ToString(s, sig.params.get(i))
         if !first:
             co.SbPuts(b, ", ")
         end
@@ -132,8 +144,8 @@ func cg_extern_proto(s &: sm.Sema, a &: at.Ast, fnid: int, sigid: int): str:
     co.SbPuts(b, rets + " " + fn.name + "(")
     mut first := true
     repeat fn.list.len() with i:
-        p := at.Get(a, fn.list.get(i)[0])
-        pts := sm.ToString(s, sig.params.get(i)[0])
+        p := at.Get(a, fn.list.get(i))
+        pts := sm.ToString(s, sig.params.get(i))
         if !first:
             co.SbPuts(b, ", ")
         end
@@ -183,7 +195,7 @@ func cg_fallthrough_ret(g &: Cg, s &: sm.Sema, a &: at.Ast, fnid: int, sig: int)
     if fn.a != 0:
         body := at.Get(a, fn.a)
         if body.list.len() > 0:
-            last := at.Get(a, body.list.get(body.list.len() - 1)[0])
+            last := at.Get(a, body.list.get(body.list.len() - 1))
             if last.kind == at.AST_RETURN:
                 ret
             end
@@ -221,10 +233,13 @@ func cg_function(g &: Cg, s &: sm.Sema, a &: at.Ast, fnid: int, owner: int):
         local_add(g, "this")
     end
     repeat fn.list.len() with i:
-        local_add(g, at.Get(a, fn.list.get(i)[0]).name)
+        local_add(g, at.Get(a, fn.list.get(i)).name)
     end
     saved_defers := g.fn_defers
+    saved_dmark := g.loop_dmark
     g.fn_defers = Vector {} as Vector<int>
+    // The loop marks index fn_defers, which this function restarts.
+    g.loop_dmark = Vector {} as Vector<int>
     cg_source_line(g, span_of(a, fnid))
     if is_main && g.is_gui_mode:
         out(g, "#ifdef _WIN32\n")
@@ -251,9 +266,9 @@ func cg_function(g &: Cg, s &: sm.Sema, a &: at.Ast, fnid: int, owner: int):
             cg_line(g, "salam_set_args(argc, argv);")
             cg_line(g, "#endif")
         end
-        repeat g.deferred.len() with i2:
-            cg_line(g, g.deferred.get(i2)[0])
-        end
+        // Runs this module's own non-constant global initialisers and, ahead
+        // of them, every imported module's. See emit_module_init.
+        cg_line(g, cg_module_init_name(g.module) + "();")
     end
     if fn.a != 0:
         cg_block(g, s, a, fn.a)
@@ -274,5 +289,8 @@ func cg_function(g &: Cg, s &: sm.Sema, a &: at.Ast, fnid: int, owner: int):
     // The C leaked the inner arena vec on restore; the port frees it.
     mut inner := g.fn_defers
     defer inner.free()
+    mut inner_dmark := g.loop_dmark
+    defer inner_dmark.free()
     g.fn_defers = saved_defers
+    g.loop_dmark = saved_dmark
 end

@@ -19,29 +19,31 @@ package collections
 @ar "قائمة"
 pub struct Vector<T>:
     pub data: T* = null
-    pub _len: int = 0
-    pub _cap: int = 0
+    // Private: outside code goes through len() and cap(), one-line accessors
+    // that both backends inline back into the same field read.
+    count: int = 0
+    capacity: int = 0
 
     @en "reserve"
     @fa "رزرو"
     @ar "حجز"
     pub func reserve(need: int):
-        if need <= this._cap: ret end
-        mut c := this._cap
+        if need <= this.capacity: ret end
+        mut c := this.capacity
         if c == 0: c = 4 end
         until c < need: c = c * 2 end
         this.data = mem.Reallocate(this.data as void*, (c as u64) * sizeof(T)) as T*
-        this._cap = c
+        this.capacity = c
     end
 
     @en "push"
     @fa "افزودن"
     @ar "إضافة"
     pub func push(x: T):
-        this.reserve(this._len + 1)
+        this.reserve(this.count + 1)
         d := this.data
-        d[this._len] = x
-        this._len += 1
+        d[this.count] = x
+        this.count += 1
     end
 
     @en "pop"
@@ -49,26 +51,49 @@ pub struct Vector<T>:
     @ar "سحب"
     pub func pop(): T:
         if SALAM_SAFE:
-            if this._len <= 0: salam_panic("Vector.pop: empty") end
+            if this.count <= 0: salam_panic("Vector.pop: empty") end
         end
-        this._len -= 1
+        this.count -= 1
         d := this.data
-        ret d[this._len]
+        ret d[this.count]
     end
 
     @en "get"
     @fa "دریافت"
     @ar "جلب"
-    pub func get(i: int): T*:
+    pub func get(i: int): T:
         if SALAM_SAFE:
-            // One unsigned compare covers both ends: _len is never negative, so
+            // One unsigned compare covers both ends: count is never negative, so
             // a negative i reinterprets as a huge u32 and fails the same test.
             // Two compares cost more than the extra instruction suggests - they
             // keep LLVM from folding the guard into the loop's own exit test.
-            if (i as u32) >= (this._len as u32):
+            if (i as u32) >= (this.count as u32):
                 salam_panic("Vector.get: index out of bounds")
             end
         end
+        d := this.data
+        ret d[i]
+    end
+
+    // The address of an element, for the two things a value cannot do: write
+    // one field of a struct element in place, and hand a stored element to
+    // something that takes a pointer. get used to be this, so where older
+    // code derefed a get with a trailing index, the spelling is now
+    // v.ref(i) followed by that same index.
+    //
+    // The pointer is only valid until the next push/reserve/zeros/free: those
+    // reallocate and every earlier ref dangles.
+    @en "ref"
+    @fa "ارجاع"
+    @ar "مرجع"
+    pub func ref(i: int): T*:
+        if SALAM_SAFE:
+            if (i as u32) >= (this.count as u32):
+                salam_panic("Vector.ref: index out of bounds")
+            end
+        end
+        // Address arithmetic, not &d[i]: the cast pair is what the LLVM
+        // backend folds into a getelementptr (see the GEP peephole).
         ret (this.data as i64 + (i as i64) * (sizeof(T) as i64)) as T*
     end
 
@@ -77,7 +102,7 @@ pub struct Vector<T>:
     //
     // Growing here put a realloc on a path inside every loop that writes a
     // vector, and that one call is enough to stop LLVM proving `data` and
-    // `_len` unchanged across an iteration: bounds checks stay, loop-invariant
+    // `count` unchanged across an iteration: bounds checks stay, loop-invariant
     // element loads are reloaded every time, and stores are never forwarded.
     // Splitting the two meanings apart is worth up to half the instructions in
     // a DP kernel.
@@ -92,7 +117,7 @@ pub struct Vector<T>:
     @ar "تعیین"
     pub func set(i: int, x: T):
         if SALAM_SAFE:
-            if (i as u32) >= (this._len as u32):
+            if (i as u32) >= (this.count as u32):
                 salam_panic("Vector.set: index out of bounds")
             end
         end
@@ -109,9 +134,9 @@ pub struct Vector<T>:
         if SALAM_SAFE:
             if i < 0: salam_panic("Vector.resize_set: negative index") end
         end
-        if i >= this._len:
+        if i >= this.count:
             this.reserve(i + 1)
-            this._len = i + 1
+            this.count = i + 1
         end
         d := this.data
         d[i] = x
@@ -143,56 +168,56 @@ pub struct Vector<T>:
         if n <= 0: ret end
         if this.data != null: mem.Free(this.data as void*) end
         this.data = mem.AllocateZeroed((n as u64) * sizeof(T)) as T*
-        this._cap = n
-        this._len = n
+        this.capacity = n
+        this.count = n
     end
 
     @en "len"
     @fa "طول"
     @ar "طول"
-    pub func len(): int: ret this._len end
+    pub func len(): int: ret this.count end
 
     @en "cap"
     @fa "ظرفیت"
     @ar "سعة"
-    pub func cap(): int: ret this._cap end
+    pub func cap(): int: ret this.capacity end
 
     @en "is_empty"
     @fa "خالی است"
     @ar "فارغ"
-    pub func is_empty(): bool: ret this._len == 0 end
+    pub func is_empty(): bool: ret this.count == 0 end
 
     @en "first"
     @fa "اول"
     @ar "أول"
-    pub func first(): T: ret this.get(0)[0] end
+    pub func first(): T: ret this.get(0) end
 
     @en "last"
     @fa "آخر"
     @ar "أخیر"
-    pub func last(): T: ret this.get(this._len - 1)[0] end
+    pub func last(): T: ret this.get(this.count - 1) end
 
     @en "clear"
     @fa "پاک‌سازی"
     @ar "مسح"
-    pub func clear(): this._len = 0 end
+    pub func clear(): this.count = 0 end
 
     @en "insert"
     @fa "درج"
     @ar "إدراج"
     pub func insert(i: int, x: T):
         if SALAM_SAFE:
-            if i < 0 || i > this._len: salam_panic("Vector.insert: index out of bounds") end
+            if i < 0 || i > this.count: salam_panic("Vector.insert: index out of bounds") end
         end
-        this.reserve(this._len + 1)
+        this.reserve(this.count + 1)
         d := this.data
-        mut j := this._len
+        mut j := this.count
         until j > i:
             d[j] = d[j - 1]
             j -= 1
         end
         d[i] = x
-        this._len += 1
+        this.count += 1
     end
 
     @en "remove_at"
@@ -200,16 +225,16 @@ pub struct Vector<T>:
     @ar "إزالة عند"
     pub func remove_at(i: int): T:
         if SALAM_SAFE:
-            if i < 0 || i >= this._len: salam_panic("Vector.remove_at: index out of bounds") end
+            if i < 0 || i >= this.count: salam_panic("Vector.remove_at: index out of bounds") end
         end
         d := this.data
         out := d[i]
         mut j := i
-        until j < this._len - 1:
+        until j < this.count - 1:
             d[j] = d[j + 1]
             j += 1
         end
-        this._len -= 1
+        this.count -= 1
         ret out
     end
 
@@ -217,7 +242,7 @@ pub struct Vector<T>:
     @fa "عملگر اندیس"
     @ar "عامل الفهرسة"
     pub func operator_index(i: int): T:
-        ret this.get(i)[0]
+        ret this.get(i)
     end
 
     @en "operator_index_set"
@@ -232,7 +257,7 @@ pub struct Vector<T>:
     @ar "مكرر"
     pub func iter(): VectorIter<T>:
         it := VectorIter {} as VectorIter<T> it.data = this.data
-        it.len = this._len
+        it.len = this.count
         it.pos = 0
         ret it
     end
@@ -243,8 +268,8 @@ pub struct Vector<T>:
     pub func free():
         if this.data != null: mem.Free(this.data as void*) end
         this.data = null
-        this._len = 0
-        this._cap = 0
+        this.count = 0
+        this.capacity = 0
     end
 end
 

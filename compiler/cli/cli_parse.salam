@@ -43,7 +43,7 @@ func parse_indent_width(val: str, out &: int): bool:
     mut i := 0
     until i < n:
         code := byte_at(val, i)
-        if !str.IsDigit(code):
+        if !str.IsAsciiDigit(code):
             ret false
         end
         num = num * 10 + (code - 48)
@@ -70,7 +70,7 @@ func parse_timeout_ms(val: str, out &: int): bool:
     mut i := 0
     until i < n:
         code := byte_at(val, i)
-        if !str.IsDigit(code):
+        if !str.IsAsciiDigit(code):
             ret false
         end
         num = num * 10 + (code - 48)
@@ -93,7 +93,7 @@ func parse_port(val: str, out &: int): bool:
     mut i := 0
     until i < n:
         code := byte_at(val, i)
-        if !str.IsDigit(code):
+        if !str.IsAsciiDigit(code):
             ret false
         end
         num = num * 10 + (code - 48)
@@ -103,6 +103,60 @@ func parse_port(val: str, out &: int): bool:
         ret false
     end
     out = num
+    ret true
+end
+
+// cli_options.c's cli_check_const_name: -dNAME / -dNAME=VALUE names are held
+// to SCREAMING_SNAKE_CASE - an upper-case letter or '_' first, then upper
+// case, digits and '_'. A build-injected constant should read as one at
+// every use site, so a lower-case name is rejected rather than quietly
+// accepted, and '-', which would not lex as an identifier at all, gets a
+// message of its own.
+func check_const_name(def: str): bool:
+    total := str.Len(def)
+    mut n := 0
+    until n < total && byte_at(def, n) != 61: // '='
+        n += 1
+    end
+    if n == 0:
+        io.EPrintln(i18.Tr("salam: -d needs a constant name (-dNAME=VALUE)"))
+        ret false
+    end
+    name := str.Substr(def, 0, n)
+    mut i := 0
+    until i < n:
+        code := byte_at(def, i)
+        upper := code >= 65 && code <= 90 // 'A'..'Z'
+        digit := code >= 48 && code <= 57 // '0'..'9'
+        if !upper && code != 95 && !(digit && i > 0): // '_'
+            if code == 45: // '-'
+                io.EPrintln(
+                    co.Format1(
+                        i18.Tr("salam: '-' is not allowed in a -d constant name ('%s'); use '_'"),
+                        co.ArgStr(name)
+                    )
+                )
+            else:
+                io.EPrintln(
+                    co.Format1(
+                        i18.Tr("salam: -d constant name '%s' must be upper case (A-Z, 0-9 and '_', not starting with a digit)"),
+                        co.ArgStr(name)
+                    )
+                )
+            end
+            ret false
+        end
+        i += 1
+    end
+    ret true
+end
+
+// cli_options.c's cli_add_const.
+func add_const(def: str, out &: dr.Dr): bool:
+    if !check_const_name(def):
+        ret false
+    end
+    out.consts.push(def)
     ret true
 end
 
@@ -205,7 +259,7 @@ func dispatch_command(args: Vector<str>, out &: dr.Dr): int:
     n := args.len()
     mut cmd := ""
     if n > 1:
-        cmd = args.get(1)[0]
+        cmd = args.get(1)
     end
     if str.Len(cmd) == 0:
         out.command = dr.CMD_HELP
@@ -262,7 +316,7 @@ func dispatch_command(args: Vector<str>, out &: dr.Dr): int:
         out.command = dr.CMD_SERVE
         start = 2
     else str.Equals(cmd, "layout"):
-        if n > 2 && str.Equals(args.get(2)[0], "build"):
+        if n > 2 && str.Equals(args.get(2), "build"):
             out.command = dr.CMD_LAYOUT_BUILD
             start = 3
         else:
@@ -270,10 +324,10 @@ func dispatch_command(args: Vector<str>, out &: dr.Dr): int:
             start = 2
         end
     else str.Equals(cmd, "cli"):
-        if n > 2 && str.Equals(args.get(2)[0], "build"):
+        if n > 2 && str.Equals(args.get(2), "build"):
             out.command = dr.CMD_BUILD
             start = 3
-        else n > 2 && str.Equals(args.get(2)[0], "obj"):
+        else n > 2 && str.Equals(args.get(2), "obj"):
             out.command = dr.CMD_OBJ
             start = 3
         else:
@@ -297,7 +351,7 @@ func parse_options(args: Vector<str>, start: int, out &: dr.Dr): bool:
     n := args.len()
     mut i := start
     until i < n:
-        arg := args.get(i)[0]
+        arg := args.get(i)
         mut val := ""
         if str.Equals(arg, "--keep-c"):
             out.keep_c = true
@@ -361,6 +415,8 @@ func parse_options(args: Vector<str>, start: int, out &: dr.Dr): bool:
             out.fmt_check = true
         else str.Equals(arg, "--fix-order"):
             out.fmt_fix_order = true
+        else str.Equals(arg, "--no-fix-order"):
+            out.fmt_fix_order = false
         else str.Equals(arg, "--minify"):
             out.fmt_minify = true
         else str.Equals(arg, "-r") || str.Equals(arg, "--recursive"):
@@ -411,7 +467,7 @@ func parse_options(args: Vector<str>, start: int, out &: dr.Dr): bool:
                 ret false
             end
             i += 1
-            out.output = args.get(i)[0]
+            out.output = args.get(i)
         else opt_value(arg, "--backend", val):
             out.backend = val
         else opt_value(arg, "--libpath", val):
@@ -431,6 +487,14 @@ func parse_options(args: Vector<str>, start: int, out &: dr.Dr): bool:
             out.defines.push(val)
         else str.StartsWith(arg, "-D") && str.Len(arg) > 2:
             out.defines.push(str.Substr(arg, 2, str.Len(arg) - 2))
+        else opt_value(arg, "--const", val):
+            if !add_const(val, out):
+                ret false
+            end
+        else str.StartsWith(arg, "-d") && str.Len(arg) > 2:
+            if !add_const(str.Substr(arg, 2, str.Len(arg) - 2), out):
+                ret false
+            end
         else opt_value(arg, "--export", val):
             out.exports.push(val)
         else str.Equals(arg, "--emit-tokens-xml"):

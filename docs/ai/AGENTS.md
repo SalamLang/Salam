@@ -62,6 +62,17 @@ Salam fails the build on unused imports, variables and functions.
 
 Add imports only as you use them.
 
+Loop bindings are stricter: a `_` prefix does not excuse them, because the
+fix is to drop the binding rather than rename it. Write `repeat 20000:`, not
+`repeat 20000 with _i:`. The one escape is the bare name `_`, for the
+`each (key, value)` form that has no way to omit a binding:
+
+```salam
+each (_, value) in scores:   // iterate for the values alone
+    total = total + value
+end
+```
+
 ## 4. Bindings
 
 ```salam
@@ -126,7 +137,7 @@ out := str.BufStr(sb)
 ```salam
 v := Vector {} as Vector<str>
 v.push("a")
-first := v.get(0)[0]                       // get() returns a slot; [0] reads it
+first := v.get(0)                          // get() returns the element; v.ref(0) is its address
 m := HashMap {} as HashMap<str, int>
 ```
 
@@ -212,7 +223,7 @@ advice. Each one silently produces wrong behaviour rather than a diagnostic.
   code with `salam build`/`salam run`, never `salam exec`.
 
 - **`os.Args()` has a broken generic type.** Binding any element to a local
-  (`a := argv.get(1)[0]`) corrupts semantic analysis or crashes the compiler.
+  (`a := argv.get(1)`) corrupts semantic analysis or crashes the compiler.
   Pass argv-derived values _inline_ as call arguments only.
 
 - **Enum values cannot cross a package boundary.** A `pub enum`'s members are

@@ -95,6 +95,16 @@ pub const CMD_OBJ := 2
 // can fall back to the C backend on exactly this case and still surface
 // real errors (bad source, failed link) unchanged.
 pub const RC_LLVM_UNSUPPORTED := 7
+// Distinct exit code for "codegen was fine, producing the executable was
+// not". The in-process lld links against the bundled static musl sysroot,
+// which has none of the host's shared libraries - a program that links
+// -lsqlite3 or -lgtk-3 finds them through the C backend's host toolchain and
+// nowhere else. build_impl retries those through the C backend so defaulting
+// to LLVM does not un-build programs that built before. Mirrors the C's
+// SALAM_RC_LLVM_LINK_FAILED; without it every in-process LLVM failure came
+// back as a bare error and this compiler, unlike the C one, had no fallback
+// at all.
+pub const RC_LLVM_LINK_FAILED := 8
 
 pub const CMD_LLVM := 3
 pub const CMD_JS := 4
@@ -148,7 +158,7 @@ k_dr_js_prelude_names := [
     "sqrt", "cbrt", "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "exp", "log", "log2", "log10",
     "floor", "ceil", "round", "trunc", "hypot", "fabs", "pow", "fmod", "__sal_loop", "__sal_tone", "__sal_img",
     "__sal_rrect", "__sal_lsget_i", "__sal_lsget_s", "__sal_lsset", "__sal_touch"
-] as str[35]
+]
 
 k_dr_js_prelude_texts := [
     "function salam_panic(message) {\n    throw new Error(\"Salam panic: \" + String(message));\n}\n",
@@ -169,7 +179,7 @@ k_dr_js_prelude_texts := [
     "function __sal_lsget_s(k) {\n    try {\n        return String(localStorage.getItem(k) || \"\");\n    } catch (e) {\n        console.warn(\"__sal_lsget_s: localStorage read failed\", e);\n        return \"\";\n    }\n}\n",
     "function __sal_lsset(k, v) {\n    try {\n        localStorage.setItem(k, String(v));\n    } catch (e) {\n        console.warn(\"__sal_lsset: localStorage write failed\", e);\n    }\n}\n",
     "function __sal_touch(ev, axis) {\n    const t = (ev.changedTouches && ev.changedTouches[0]) || ev;\n    return Number((axis ? t.clientY : t.clientX) || 0);\n}\n"
-] as str[35]
+]
 
 pub type Command = int
 
@@ -223,7 +233,7 @@ pub struct Dr:
         pub fmt_recursive: bool = false
         pub fmt_tabs: bool = false
         pub fmt_indent_width: int = 4
-        pub fmt_fix_order: bool = false
+        pub fmt_fix_order: bool = true
         pub fmt_minify: bool = false
         pub debug_info: bool = false
         pub asan: bool = false
@@ -245,6 +255,13 @@ pub struct Dr:
         // this only if it was still empty, matching opt->exe_path[0]=='\0').
         pub exe_path: str = ""
         pub defines: Vector<str> = Vector {}
+        // -dNAME=VALUE (or --const=NAME=VALUE), repeatable: a compile-time
+        // constant the program reads by name, as if the source had declared
+        // `const NAME := VALUE` at top level. Separate from defines above,
+        // which feeds the conditional-compilation table and is only legal in
+        // an `if` condition. Entries are raw "NAME=VALUE" strings whose name
+        // the parser has already held to SCREAMING_SNAKE_CASE.
+        pub consts: Vector<str> = Vector {}
         // --export=FnName:CName (repeatable): keep a normally-DCE'd top-level
         // pub func alive and emit it under the literal C name instead of the
         // usual mangled one. For embedding a hand-picked API surface (e.g. the

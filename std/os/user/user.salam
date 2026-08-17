@@ -24,6 +24,32 @@ if SALAM_OS_WINDOWS == false:
     extern:
         func getuid(): int
         func getgid(): int
+        func getpwuid(uid: int): void*
+    end
+
+    // The account name from the password database.
+    //
+    // $USER and $LOGNAME are conveniences the login shell sets, not
+    // guarantees: a process started by a container entrypoint, cron, a
+    // systemd unit or most CI runners has neither, and Username() used to
+    // return "" there. This is the authoritative answer, so it is the last
+    // resort rather than the first - the environment still wins, which is
+    // what lets `USER=deploy ./app` be honoured.
+    func _pw_name(): str:
+        pw := getpwuid(getuid())
+        if pw == null: ret "" end
+        // pw_name is the first member of struct passwd in every libc that
+        // ships one (glibc, musl, the BSDs, macOS), so reading the leading
+        // pointer avoids depending on the rest of the layout, which does
+        // differ between them.
+        //
+        // Read twice through single-pointer views rather than once through
+        // a `void**`: Salam lexes `**` as the power operator, so a
+        // pointer-to-pointer type cannot currently be spelled at all.
+        words := pw as i64*
+        if words[0] == 0: ret "" end
+        slots := pw as str*
+        ret slots[0]
     end
 end
 
@@ -36,7 +62,9 @@ pub func Username(): str:
     else:
         u := os.Env("USER")
         if u.len() > 0: ret u end
-        ret os.Env("LOGNAME")
+        l := os.Env("LOGNAME")
+        if l.len() > 0: ret l end
+        ret _pw_name()
     end
 end
 

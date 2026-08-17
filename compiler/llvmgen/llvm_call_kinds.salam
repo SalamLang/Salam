@@ -33,7 +33,7 @@ func call_str(
         ret true
     end
     if str.Equals(m, "concat") && na == 1:
-        arg0 := lv_expr(v, s, a, nn.list.get(0)[0]).ref
+        arg0 := lv_expr(v, s, a, nn.list.get(0)).ref
         r = new_tmp(v)
         need(v, LV_H_STRCAT)
         emit(
@@ -43,8 +43,8 @@ func call_str(
         ret true
     end
     if str.Equals(m, "substr") && na == 2:
-        st := conv(v, s, a, lv_expr(v, s, a, nn.list.get(0)[0]), "i32")
-        ln := conv(v, s, a, lv_expr(v, s, a, nn.list.get(1)[0]), "i32")
+        st := conv(v, s, a, lv_expr(v, s, a, nn.list.get(0)), "i32")
+        ln := conv(v, s, a, lv_expr(v, s, a, nn.list.get(1)), "i32")
         r = new_tmp(v)
         need(v, LV_H_SUBSTR)
         emit(
@@ -77,7 +77,7 @@ func call_str(
     if (
         str.Equals(m, "find") || str.Equals(m, "search") || str.Equals(m, "indexOf")
     ) && na == 1:
-        arg1 := lv_expr(v, s, a, nn.list.get(0)[0]).ref
+        arg1 := lv_expr(v, s, a, nn.list.get(0)).ref
         p := new_tmp(v)
         pi := new_tmp(v)
         ri := new_tmp(v)
@@ -110,7 +110,7 @@ func call_str(
         ret true
     end
     if str.Equals(m, "repeat") && na == 1:
-        cnt := conv(v, s, a, lv_expr(v, s, a, nn.list.get(0)[0]), "i32")
+        cnt := conv(v, s, a, lv_expr(v, s, a, nn.list.get(0)), "i32")
         r = new_tmp(v)
         need(v, LV_H_REPEAT)
         emit(
@@ -169,11 +169,11 @@ func call_dyn(
     isyms := sm.ScopeAt(s, sm.SymAt(s, isym).members).symbols
     mut m := 0
     until m < isyms.len():
-        im := sm.SymAt(s, isyms.get(m)[0])
+        im := sm.SymAt(s, isyms.get(m))
         if im.kind == sm.SYM_METHOD && im.overloads.len() > 0:
             if str.Equals(im.name, mname):
                 slot = idx
-                msig = im.overloads.get(0)[0]
+                msig = im.overloads.get(0)
                 break
             end
             idx += 1
@@ -213,10 +213,10 @@ func call_dyn(
     nn := at.Get(a, n)
     mut i := 0
     until i < nn.list.len():
-        argi := nn.list.get(i)[0]
+        argi := nn.list.get(i)
         val := lv_expr(v, s, a, argi)
         msig_ok := msig != 0 && i < sm.SigAt(s, msig).params.len()
-        pt := msig_ok ? sm.ToString(s, sm.SigAt(s, msig).params.get(i)[0]) : val.ts
+        pt := msig_ok ? sm.ToString(s, sm.SigAt(s, msig).params.get(i)) : val.ts
         co.SbPuts(ab, ", " + ty_of(v, s, a, pt) + " " + conv(v, s, a, val, pt))
         i += 1
     end
@@ -372,8 +372,8 @@ func call_indirect(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, callee: int): Llv
     nn := at.Get(a, n)
     mut i := 0
     until i < nn.list.len():
-        val := lv_expr(v, s, a, nn.list.get(i)[0])
-        pt := i < pts.len() ? pts.get(i)[0] : val.ts
+        val := lv_expr(v, s, a, nn.list.get(i))
+        pt := i < pts.len() ? pts.get(i) : val.ts
         co.SbPuts(ab, ", " + ty_of(v, s, a, pt) + " " + conv(v, s, a, val, pt))
         i += 1
     end
@@ -417,10 +417,10 @@ func call_raw_ptr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, callee: int): Llv:
     mut ab := co.SbNew()
     mut i := 0
     until i < nn.list.len():
-        av := lv_expr(v, s, a, nn.list.get(i)[0])
+        av := lv_expr(v, s, a, nn.list.get(i))
         mut pt := av.ts
         if i < pts.len():
-            pt = pts.get(i)[0]
+            pt = pts.get(i)
         end
         if i > 0:
             co.SbPuts(ab, ", ")
@@ -445,11 +445,11 @@ func call_intrinsic(
 ): bool:
     nn := at.Get(a, n)
     na := nn.list.len()
-    a0 := na > 0 ? nn.list.get(0)[0] : 0
+    a0 := na > 0 ? nn.list.get(0) : 0
     mut r := ""
     if str.Equals(nm, "hash") && na == 1:
         r = new_tmp(v)
-        if is_str(at.Get(a, a0).type_str):
+        if is_str(s, at.Get(a, a0).type_str):
             need(v, LV_H_STRHASH)
             emit(
                 v, r + " = call i64 @salam_ll_strhash(ptr " + lv_expr(v, s, a, a0).ref + ")"
@@ -500,32 +500,26 @@ func call_intrinsic(
         out2 = make_llv(strconst(v, i18.Lang()), "str")
         ret true
     end
-    // funcptr(f)/spawn(f) take a *function name*, not a value, so the
-    // argument is lowered to the mangled symbol's address rather than
-    // through lv_expr. spawn additionally hands that address to the thread
-    // runtime. Mirrors call_ident() in the C backend.
-    if (str.Equals(nm, "funcptr") || str.Equals(nm, "spawn")) && na == 1 && at.KindOf(a, a0) == at.AST_IDENTIFIER:
-        fs2 := sym_of(v, s, a, at.Get(a, a0).name)
-        if fs2 == 0 || sm.SymAt(s, fs2).kind != sm.SYM_FUNC || sm.SymAt(s, fs2).overloads.len() == 0:
-            ret false
+    // spawn(f) takes a *function name*, not a value, so the argument is
+    // lowered to the mangled symbol's address rather than through lv_expr,
+    // then handed to the thread runtime. Mirrors call_ident() in the C
+    // backend.
+    if str.Equals(nm, "spawn") && (na == 1 || na == 2) && at.KindOf(a, a0) == at.AST_IDENTIFIER:
+        // spawn(f, arg) routes through a second runtime entry point that
+        // forwards the payload to pthread_create; the payload is already
+        // known to be a pointer, so it only needs widening to `ptr`.
+        mut rt := "salam_thread_spawn"
+        if na == 2:
+            rt = "salam_thread_spawn_arg"
         end
-        fsig := sm.SymAt(s, fs2).overloads.get(0)[0]
-        if sm.SigAt(s, fsig).decl == 0:
+        symn := lv_func_symbol(v, s, a, a0, at.Get(a, a0).name)
+        if str.Len(symn) == 0:
             ret false
-        end
-        ensure_fn(v, s, a, sm.SigAt(s, fsig).decl, 0, v.pkg_scope)
-        mut symn := at.Get(a, a0).name
-        if !at.Get(a, sm.SigAt(s, fsig).decl).is_extern:
-            symn = mangle(v, s, "", at.Get(a, a0).name, fsig)
         end
         r = new_tmp(v)
         emit(v, r + " = ptrtoint ptr @" + symn + " to i64")
-        if str.Equals(nm, "funcptr"):
-            out2 = make_llv(r, "i64")
-            ret true
-        end
         mut spk := 0
-        ssig := runtime_fn(s, "salam_thread_spawn", spk)
+        ssig := runtime_fn(s, rt, spk)
         if ssig == 0 || sm.SigAt(s, ssig).decl == 0:
             ret false
         end
@@ -534,14 +528,62 @@ func call_intrinsic(
         h := new_tmp(v)
         emit(v, h + " = inttoptr i64 " + r + " to ptr")
         r2 := new_tmp(v)
-        emit(v, r2 + " = call i64 @salam_thread_spawn(ptr " + h + ")")
+        if na == 2:
+            ap := conv(v, s, a, lv_expr(v, s, a, nn.list.get(1)), "ptr")
+            emit(v, r2 + " = call i64 @" + rt + "(ptr " + h + ", ptr " + ap + ")")
+        else:
+            emit(v, r2 + " = call i64 @" + rt + "(ptr " + h + ")")
+        end
         out2 = make_llv(r2, "i64")
+        ret true
+    end
+    // Atomic intrinsics, lowered to real instructions rather than a call.
+    // seq_cst throughout, matching what the C backend asks __atomic_* for.
+    if sm.AtomicArity(nm) > 0 && na == sm.AtomicArity(nm) && sm.Lookup(s, s.global, nm) == 0:
+        pv := conv(v, s, a, lv_expr(v, s, a, a0), "ptr")
+        if str.Equals(nm, "atomic_load"):
+            r = new_tmp(v)
+            emit(v, r + " = load atomic i64, ptr " + pv + " seq_cst, align 8")
+            out2 = make_llv(r, "i64")
+            ret true
+        end
+        vv := conv(v, s, a, lv_expr(v, s, a, nn.list.get(1)), "i64")
+        if str.Equals(nm, "atomic_store"):
+            emit(v, "store atomic i64 " + vv + ", ptr " + pv + " seq_cst, align 8")
+            out2 = make_llv("0", "void")
+            ret true
+        end
+        if str.Equals(nm, "atomic_add"):
+            // atomicrmw yields the value from *before* the operation; salam's
+            // atomic_add is defined to return the new one.
+            ov := new_tmp(v)
+            emit(v, ov + " = atomicrmw add ptr " + pv + ", i64 " + vv + " seq_cst")
+            r = new_tmp(v)
+            emit(v, r + " = add i64 " + ov + ", " + vv)
+            out2 = make_llv(r, "i64")
+            ret true
+        end
+        if str.Equals(nm, "atomic_swap"):
+            r = new_tmp(v)
+            emit(v, r + " = atomicrmw xchg ptr " + pv + ", i64 " + vv + " seq_cst")
+            out2 = make_llv(r, "i64")
+            ret true
+        end
+        // cmpxchg returns { value, success }; only the flag is wanted.
+        dv := conv(v, s, a, lv_expr(v, s, a, nn.list.get(2)), "i64")
+        pair := new_tmp(v)
+        emit(
+            v, pair + " = cmpxchg ptr " + pv + ", i64 " + vv + ", i64 " + dv + " seq_cst seq_cst"
+        )
+        r = new_tmp(v)
+        emit(v, r + " = extractvalue { i64, i1 } " + pair + ", 1")
+        out2 = make_llv(r, "bool")
         ret true
     end
     // callhandler(fp, arg) - an indirect call through an integer-encoded
     // function pointer, the shape the layout/webview callbacks use.
     if str.Equals(nm, "callhandler") && na == 2:
-        a1 := nn.list.get(1)[0]
+        a1 := nn.list.get(1)
         fp := new_tmp(v)
         emit(v, fp + " = inttoptr i64 " + conv(v, s, a, lv_expr(v, s, a, a0), "i64") + " to ptr")
         emit(v, "call void " + fp + "(i64 " + conv(v, s, a, lv_expr(v, s, a, a1), "i64") + ")")
@@ -594,7 +636,7 @@ func lv_call(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
             ret call_len(v, s, a, n)
         end
         if str.Equals(nm, "sizeof") && nn.list.len() == 1:
-            t := at.Get(a, nn.list.get(0)[0]).type_str
+            t := at.Get(a, nn.list.get(0)).type_str
             szp := new_tmp(v)
             sz := new_tmp(v)
             emit(

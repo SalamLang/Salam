@@ -105,19 +105,32 @@ async function testTransport() {
   ]);
 
   const lines = raw.split("\n").filter((l) => l.length > 0);
-  check("every stdout line is a complete JSON message", lines.every((l) => {
-    try {
-      JSON.parse(l);
-      return true;
-    } catch {
-      return false;
-    }
-  }));
-  check("notifications produce no reply", lines.length === 2, `got ${lines.length} lines`);
+  check(
+    "every stdout line is a complete JSON message",
+    lines.every((l) => {
+      try {
+        JSON.parse(l);
+        return true;
+      } catch {
+        return false;
+      }
+    }),
+  );
+  check(
+    "notifications produce no reply",
+    lines.length === 2,
+    `got ${lines.length} lines`,
+  );
 
   const msgs = parseLines(raw);
-  check("responses echo their request id", msgs[0].id === 1 && msgs[1].id === 2);
-  check("responses carry jsonrpc 2.0", msgs.every((m) => m.jsonrpc === "2.0"));
+  check(
+    "responses echo their request id",
+    msgs[0].id === 1 && msgs[1].id === 2,
+  );
+  check(
+    "responses carry jsonrpc 2.0",
+    msgs.every((m) => m.jsonrpc === "2.0"),
+  );
 }
 
 // --- modern era --------------------------------------------------------
@@ -125,43 +138,87 @@ async function testTransport() {
 async function testModern() {
   console.log("modern era (2026-07-28)");
   const { raw } = await converse([
-    { jsonrpc: "2.0", id: 1, method: "server/discover", params: { _meta: meta } },
+    {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "server/discover",
+      params: { _meta: meta },
+    },
     { jsonrpc: "2.0", id: 2, method: "tools/list", params: { _meta: meta } },
-    { jsonrpc: "2.0", id: 3, method: "resources/list", params: { _meta: meta } },
+    {
+      jsonrpc: "2.0",
+      id: 3,
+      method: "resources/list",
+      params: { _meta: meta },
+    },
     {
       jsonrpc: "2.0",
       id: 4,
       method: "ping",
-      params: { _meta: { "io.modelcontextprotocol/protocolVersion": "1900-01-01" } },
+      params: {
+        _meta: { "io.modelcontextprotocol/protocolVersion": "1900-01-01" },
+      },
     },
-    { jsonrpc: "2.0", id: 5, method: "no/such/method", params: { _meta: meta } },
+    {
+      jsonrpc: "2.0",
+      id: 5,
+      method: "no/such/method",
+      params: { _meta: meta },
+    },
   ]);
   const [discover, tools, resources, badVersion, unknown] = parseLines(raw);
 
-  check("server/discover advertises the modern version",
-    discover.result.supportedVersions.includes(MODERN));
-  check("server/discover reports serverInfo",
-    typeof discover.result._meta?.["io.modelcontextprotocol/serverInfo"]?.name === "string");
-  check("server/discover declares tools + resources",
-    !!discover.result.capabilities.tools && !!discover.result.capabilities.resources);
-  check("modern results are tagged complete", discover.result.resultType === "complete");
+  check(
+    "server/discover advertises the modern version",
+    discover.result.supportedVersions.includes(MODERN),
+  );
+  check(
+    "server/discover reports serverInfo",
+    typeof discover.result._meta?.["io.modelcontextprotocol/serverInfo"]
+      ?.name === "string",
+  );
+  check(
+    "server/discover declares tools + resources",
+    !!discover.result.capabilities.tools &&
+      !!discover.result.capabilities.resources,
+  );
+  check(
+    "modern results are tagged complete",
+    discover.result.resultType === "complete",
+  );
 
-  check("tools/list returns the full catalog", tools.result.tools.length >= 14,
-    `got ${tools.result.tools?.length}`);
-  check("every tool has a valid object inputSchema",
-    tools.result.tools.every((t) => t.inputSchema?.type === "object"));
-  check("every tool has name, title and description",
-    tools.result.tools.every((t) => t.name && t.title && t.description));
-  check("tool names match the MCP charset",
-    tools.result.tools.every((t) => /^[A-Za-z0-9_.-]{1,128}$/.test(t.name)));
-  check("resources/list returns entries with uri + mimeType",
+  check(
+    "tools/list returns the full catalog",
+    tools.result.tools.length >= 14,
+    `got ${tools.result.tools?.length}`,
+  );
+  check(
+    "every tool has a valid object inputSchema",
+    tools.result.tools.every((t) => t.inputSchema?.type === "object"),
+  );
+  check(
+    "every tool has name, title and description",
+    tools.result.tools.every((t) => t.name && t.title && t.description),
+  );
+  check(
+    "tool names match the MCP charset",
+    tools.result.tools.every((t) => /^[A-Za-z0-9_.-]{1,128}$/.test(t.name)),
+  );
+  check(
+    "resources/list returns entries with uri + mimeType",
     resources.result.resources.length >= 3 &&
-      resources.result.resources.every((r) => r.uri && r.mimeType));
+      resources.result.resources.every((r) => r.uri && r.mimeType),
+  );
 
-  check("unsupported version returns -32022", badVersion.error?.code === -32022);
-  check("version error lists supported versions",
+  check(
+    "unsupported version returns -32022",
+    badVersion.error?.code === -32022,
+  );
+  check(
+    "version error lists supported versions",
     Array.isArray(badVersion.error?.data?.supported) &&
-      badVersion.error.data.supported.includes(MODERN));
+      badVersion.error.data.supported.includes(MODERN),
+  );
   check("unknown method returns -32601", unknown.error?.code === -32601);
 }
 
@@ -185,12 +242,24 @@ async function testLegacy() {
   ]);
   const [init, tools] = parseLines(raw);
 
-  check("initialize echoes the requested protocol version",
-    init.result.protocolVersion === "2025-06-18", init.result?.protocolVersion);
-  check("initialize returns serverInfo", typeof init.result.serverInfo?.name === "string");
+  check(
+    "initialize echoes the requested protocol version",
+    init.result.protocolVersion === "2025-06-18",
+    init.result?.protocolVersion,
+  );
+  check(
+    "initialize returns serverInfo",
+    typeof init.result.serverInfo?.name === "string",
+  );
   check("legacy results omit resultType", init.result.resultType === undefined);
-  check("legacy tools/list omits resultType", tools.result.resultType === undefined);
-  check("legacy tools/list still returns tools", tools.result.tools.length >= 14);
+  check(
+    "legacy tools/list omits resultType",
+    tools.result.resultType === undefined,
+  );
+  check(
+    "legacy tools/list still returns tools",
+    tools.result.tools.length >= 14,
+  );
 }
 
 // --- tool behaviour ----------------------------------------------------
@@ -213,29 +282,49 @@ async function testTools() {
     call(6, "no_such_tool", {}),
     call(7, "salam_keywords", {}),
   ]);
-  const [pkgs, symbols, broken, ok, traversal, unknownTool, keywords] = parseLines(raw);
+  const [pkgs, symbols, broken, ok, traversal, unknownTool, keywords] =
+    parseLines(raw);
 
-  check("stdlib packages are discovered", pkgs.result.structuredContent.length > 20,
-    `got ${pkgs.result.structuredContent?.length}`);
-  check("stdlib packages exclude non-importable dirs",
-    !pkgs.result.structuredContent.includes("excel_bak"));
-  check("symbol lookup finds a known declaration",
-    symbols.result.content[0].text.includes("TrimPrefix"));
+  check(
+    "stdlib packages are discovered",
+    pkgs.result.structuredContent.length > 20,
+    `got ${pkgs.result.structuredContent?.length}`,
+  );
+  check(
+    "stdlib packages exclude non-importable dirs",
+    !pkgs.result.structuredContent.includes("excel_bak"),
+  );
+  check(
+    "symbol lookup finds a known declaration",
+    symbols.result.content[0].text.includes("TrimPrefix"),
+  );
 
   check("a broken file reports isError", broken.result.isError === true);
-  check("a broken file yields structured diagnostics",
+  check(
+    "a broken file yields structured diagnostics",
     Array.isArray(broken.result.structuredContent?.diagnostics) &&
-      broken.result.structuredContent.diagnostics.length > 0);
-  check("diagnostics carry line, column and code",
+      broken.result.structuredContent.diagnostics.length > 0,
+  );
+  check(
+    "diagnostics carry line, column and code",
     broken.result.structuredContent.diagnostics.every(
-      (d) => typeof d.line === "number" && typeof d.column === "number" && d.code));
+      (d) =>
+        typeof d.line === "number" && typeof d.column === "number" && d.code,
+    ),
+  );
 
-  check("a valid file reports success", ok.result.isError === false, ok.result.content[0].text);
+  check(
+    "a valid file reports success",
+    ok.result.isError === false,
+    ok.result.content[0].text,
+  );
   check("path traversal is refused", traversal.result.isError === true);
   check("unknown tool is a protocol error", unknownTool.error?.code === -32601);
-  check("keyword table covers all three languages",
+  check(
+    "keyword table covers all three languages",
     keywords.result.content[0].text.includes("english") &&
-      keywords.result.content[0].text.includes("persian"));
+      keywords.result.content[0].text.includes("persian"),
+  );
 }
 
 // --- resources ---------------------------------------------------------
@@ -258,18 +347,28 @@ async function testResources() {
   ]);
   const [index, missing] = parseLines(raw);
 
-  check("stdlib index is served as JSON",
-    index.result.contents[0].mimeType === "application/json");
+  check(
+    "stdlib index is served as JSON",
+    index.result.contents[0].mimeType === "application/json",
+  );
   const parsed = JSON.parse(index.result.contents[0].text);
-  check("stdlib index maps packages to declarations",
+  check(
+    "stdlib index maps packages to declarations",
     Object.keys(parsed.packages).length > 20 &&
-      Array.isArray(parsed.packages.str));
+      Array.isArray(parsed.packages.str),
+  );
   check("missing resource returns -32602", missing.error?.code === -32602);
 }
 
 // --- runner ------------------------------------------------------------
 
-const suites = [testTransport, testModern, testLegacy, testTools, testResources];
+const suites = [
+  testTransport,
+  testModern,
+  testLegacy,
+  testTools,
+  testResources,
+];
 for (const suite of suites) {
   await suite();
 }

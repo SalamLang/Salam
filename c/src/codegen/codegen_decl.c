@@ -42,8 +42,11 @@ const char *func_signature(cg_t *cg, ast_node_t *fn, symbol_t *owner, func_sig_t
     bool pkgmod = cg->pkg && strcmp(cg->pkg, "main") != 0;
     bool exported =
         (owner != NULL || fn->is_extern || fn->is_pub || pkgmod) && !is_instance;
-    bool inl =
-        fn->is_inline && !fn->is_extern && owner == NULL && (fn->is_pub || !pkgmod);
+    /* Struct methods take `inline` on the same terms as free functions: a pub
+       one is exported as a body in the header, a private one only stays inline
+       where nothing links against it. Generic instances are static inline
+       already, so is_instance covers those. */
+    bool inl = fn->is_inline && !fn->is_extern && (fn->is_pub || !pkgmod);
     sb_t b;
     sb_init(&b);
     if (is_instance || inl)
@@ -52,7 +55,17 @@ const char *func_signature(cg_t *cg, ast_node_t *fn, symbol_t *owner, func_sig_t
         sb_puts(&b, "static ");
     if (!fn->is_extern) {
         if (fn->is_noinline) sb_puts(&b, "SALAM_NOINLINE ");
-        if (fn->is_pure) sb_puts(&b, "SALAM_PURE ");
+        /*
+         * Not on an sret function. Returning an aggregate by value lowers to a
+         * `void f(..., T* __ret)` that writes through the caller's pointer,
+         * and gcc rejects __attribute__((pure)) on anything returning void
+         * ("'pure' attribute on function returning 'void'", an error under
+         * -Werror=attributes) - correctly, because a pure function's only
+         * effect is its return value and this one has none. The Salam-level
+         * promise is unaffected: `pure` is enforced by sema, this only decides
+         * whether the C compiler is told about it.
+         */
+        if (fn->is_pure && !sret) sb_puts(&b, "SALAM_PURE ");
         if (fn->is_deprecated) sb_puts(&b, "SALAM_DEPRECATED ");
     }
     if (fn->is_noret) sb_puts(&b, "SALAM_NORET ");
@@ -185,7 +198,9 @@ void cg_function(cg_t *cg, ast_node_t *fn, symbol_t *owner)
             local_add(cg, ((ast_node_t *)fn->list.data[i])->name);
     }
     vec_t saved_defers = cg->fn_defers;
+    int saved_nloop = cg->nloop;
     vec_init(&cg->fn_defers);
+    cg->nloop = 0;
     cg_source_line(cg, &fn->span);
 
     if (is_main && cg->is_gui_mode) {
@@ -213,11 +228,9 @@ void cg_function(cg_t *cg, ast_node_t *fn, symbol_t *owner)
             cg_line(cg, "salam_set_args(argc, argv);");
             cg_line(cg, "#endif");
         }
-        {
-            size_t i = 0;
-            for (; i < cg->deferred.len; i++)
-                cg_line(cg, "%s", (const char *)cg->deferred.data[i]);
-        }
+        /* Runs this module's own non-constant global initialisers and, ahead
+         * of them, every imported module's. See emit_module_init. */
+        cg_line(cg, "%s();", cg_module_init_name(cg, cg->module));
     }
     if (fn->a) cg_block(cg, fn->a);
     cg_emit_defers(cg);
@@ -232,4 +245,5 @@ void cg_function(cg_t *cg, ast_node_t *fn, symbol_t *owner)
     cg->cur_fn_home = NULL;
     cg->cur_sret = false;
     cg->fn_defers = saved_defers;
+    cg->nloop = saved_nloop;
 }

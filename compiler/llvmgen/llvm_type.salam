@@ -2,6 +2,7 @@ package llvmgen
 
 import str
 import co "../sal_core.salam"
+import tok "../token.salam"
 import at "../ast.salam"
 import sm "../semantic/semantic.salam"
 
@@ -242,7 +243,7 @@ func variant_tag_of(variant_ts: str, member_ts: str): int:
     mut members := variant_members(variant_ts)
     defer members.free()
     repeat members.len() with i:
-        if str.Equals(members.get(i)[0], member_ts):
+        if str.Equals(members.get(i), member_ts):
             ret i
         end
     end
@@ -298,7 +299,7 @@ func variant_cname(ts: str): str:
     co.SbPuts(b, "%_Salam_variant")
     repeat members.len() with i:
         co.SbPutc(b, 95)
-        put_type_code(b, members.get(i)[0])
+        put_type_code(b, members.get(i))
     end
     r := co.SbCstr(b)
     co.SbFree(b)
@@ -321,7 +322,7 @@ func struct_layout(
     members := sm.SymAt(s, ssym).members
     syms := sm.ScopeAt(s, members).symbols
     repeat syms.len() with j:
-        f := sm.SymAt(s, syms.get(j)[0])
+        f := sm.SymAt(s, syms.get(j))
         if f.kind == sm.SYM_FIELD:
             mut fsz := 0 as i64
             mut fal := 0 as i64
@@ -355,7 +356,7 @@ func variant_layout_size(
     repeat members.len() with i:
         mut sz := 0 as i64
         mut al := 0 as i64
-        type_layout(v, s, a, members.get(i)[0], sz, al)
+        type_layout(v, s, a, members.get(i), sz, al)
         if sz > maxsz:
             maxsz = sz
         end
@@ -380,7 +381,7 @@ func type_layout(
         out_align = p
     else str.StartsWith(ts, "Variant<"):
         variant_layout_size(v, s, a, ts, out_size, out_align)
-    else is_str(ts) || is_ptr_ts(ts):
+    else is_str(s, ts) || is_ptr_ts(ts):
         out_size = p
         out_align = p
     else is_slice(ts):
@@ -421,7 +422,7 @@ end
 func ensure_variant_type(v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str):
     cn := variant_cname(ts)
     repeat v.emitted.len() with i:
-        if str.Equals(cn, v.emitted.get(i)[0]):
+        if str.Equals(cn, v.emitted.get(i)):
             ret
         end
     end
@@ -522,7 +523,7 @@ func scan_mangled(s &: sm.Sema, sc: int, name: str): int:
     end
     syms := sm.ScopeAt(s, sc).symbols
     repeat syms.len() with i:
-        sid := syms.get(i)[0]
+        sid := syms.get(i)
         sy := sm.SymAt(s, sid)
         if sy.kind == sm.SYM_STRUCT || sy.kind == sm.SYM_ENUM:
             if sy.ty != sm.TYPE_NONE:
@@ -562,7 +563,7 @@ func scope_holds(s &: sm.Sema, sc: int, want: int): bool:
     end
     syms := sm.ScopeAt(s, sc).symbols
     repeat syms.len() with i:
-        if syms.get(i)[0] == want:
+        if syms.get(i) == want:
             ret true
         end
     end
@@ -612,7 +613,7 @@ func field_index(s &: sm.Sema, ssym: int, field: str, out_field &: int): int:
     members := sm.SymAt(s, ssym).members
     syms := sm.ScopeAt(s, members).symbols
     repeat syms.len() with i:
-        fid := syms.get(i)[0]
+        fid := syms.get(i)
         f := sm.SymAt(s, fid)
         if f.kind == sm.SYM_FIELD:
             if str.Equals(f.name, field):
@@ -726,8 +727,8 @@ func func_params(ts: str): Vector<str>:
 end
 
 // ll_zero
-func zero_of(ts: str): str:
-    if is_str(ts) || is_ptr_ts(ts):
+func zero_of(s &: sm.Sema, ts: str): str:
+    if is_str(s, ts) || is_ptr_ts(ts):
         ret "null"
     end
     if is_bool(ts):
@@ -760,7 +761,7 @@ func ty_of(v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str): str:
         ensure_variant_type(v, s, a, ts)
         ret variant_cname(ts)
     end
-    if is_str(ts):
+    if is_str(s, ts):
         ret "ptr"
     end
     if is_ptr_ts(ts):
@@ -784,10 +785,28 @@ func ty_of(v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str): str:
     if struct_sym(v, s, a, ts) != 0:
         ret struct_ltype(ts)
     end
-    if enum_sym(v, s, a, ts) != 0:
+    esym := enum_sym(v, s, a, ts)
+    if esym != 0:
+        if sm.SymAt(s, esym).enum_val_kind == tok.TV_FLOAT:
+            ret "double"
+        end
+        // TV_STRING already returned "ptr" above via is_str.
         ret "i32"
     end
     ret "ptr"
+end
+
+// An enum with no explicit backing (or an int one) still behaves as i32
+// everywhere in this backend; a float/string-backed one instead behaves as
+// its backing type, per ty_of/enum_member_value above.
+func enum_backed_int(v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str): bool:
+    e := enum_sym(v, s, a, ts)
+    ret e != 0 && sm.SymAt(s, e).enum_val_kind != tok.TV_STRING && sm.SymAt(s, e).enum_val_kind != tok.TV_FLOAT
+end
+
+func enum_backed_float(v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str): bool:
+    e := enum_sym(v, s, a, ts)
+    ret e != 0 && sm.SymAt(s, e).enum_val_kind == tok.TV_FLOAT
 end
 
 // ll_conv - value conversion; the temp is allocated exactly where the C
@@ -802,12 +821,21 @@ func conv(v &: Lv, s &: sm.Sema, a &: at.Ast, val: Llv, to_ts: str): str:
             v, s, a, val, str.Substr(to_ts, 4, str.Len(to_ts) - 4)
         )
     end
-    fi := is_int_ts(from)
-    ff := is_float(from)
-    fp := is_str(from) || is_ptr_ts(from)
-    ti := is_int_ts(to_ts)
-    tf := is_float(to_ts)
-    tp := is_str(to_ts) || is_ptr_ts(to_ts)
+    // An int/no-value enum is an i32 everywhere else in this backend (ty_of
+    // returns "i32" for one, and int_bits falls through to 32), but
+    // is_int_ts only knows the builtin spellings - so an enum-typed operand
+    // matched none of the branches below and fell out of the bottom
+    // UNCONVERTED. `println` of a struct with an enum field then emitted a
+    // `load i32` feeding `call ptr @salam_ll_i64str(i64 %t)`, which is not
+    // valid IR at all. A float/string-backed enum instead joins the
+    // float/string classes, so it converts (and gets compared) exactly like
+    // its backing type.
+    fi := is_int_ts(from) || enum_backed_int(v, s, a, from)
+    ff := is_float(from) || enum_backed_float(v, s, a, from)
+    fp := is_str(s, from) || is_ptr_ts(from)
+    ti := is_int_ts(to_ts) || enum_backed_int(v, s, a, to_ts)
+    tf := is_float(to_ts) || enum_backed_float(v, s, a, to_ts)
+    tp := is_str(s, to_ts) || is_ptr_ts(to_ts)
     lf := ty_of(v, s, a, from)
     lt := ty_of(v, s, a, to_ts)
     r := new_tmp(v)

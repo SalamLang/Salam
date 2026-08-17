@@ -7,12 +7,84 @@ import sm "../semantic/semantic.salam"
 
 // ===== codegen_stmt.c =====
 
+// `defer` is scoped to the block it is written in, not to the whole function.
+// The registration list is still one flat per-function stack, but every nested
+// block remembers its depth on entry and flushes back down to it on the way
+// out, so a defer that names a block-local sees that name in scope:
+//
+//     if cond:
+//         mut v := ...
+//         defer v.free()     // emitted here, at the closing brace
+//     end                    // - not at function exit, where v is gone
+//
+// That also makes the cleanup conditional (it only runs when the branch runs)
+// and makes a defer in a loop body run once per iteration, which is what the
+// interpreter does by registering defers as it reaches them.
+//
+// `ret` still flushes the whole stack, since it leaves every open block.
+func cg_emit_defers_from(g &: Cg, s &: sm.Sema, a &: at.Ast, mark: int):
+    mut i := g.fn_defers.len()
+    until i > mark:
+        cg_stmt(g, s, a, g.fn_defers.get(i - 1))
+        i -= 1
+    end
+end
+
 // cg_emit_defers - flush g.fn_defers LIFO (without popping).
 func cg_emit_defers(g &: Cg, s &: sm.Sema, a &: at.Ast):
-    mut i := g.fn_defers.len()
-    until i > 0:
-        cg_stmt(g, s, a, g.fn_defers.get(i - 1)[0])
-        i -= 1
+    cg_emit_defers_from(g, s, a, 0)
+end
+
+func defers_trunc(g &: Cg, mark: int):
+    until g.fn_defers.len() > mark:
+        _dropped := g.fn_defers.pop()
+    end
+end
+
+// A block whose last statement jumps has already emitted its defers on that
+// path (ret flushes everything, break/continue flush back to the loop mark),
+// so a second copy at the closing brace would be dead code.
+func cg_list_terminates(a &: at.Ast, blockid: int): bool:
+    bn := at.Get(a, blockid)
+    n := bn.list.len()
+    if n == 0:
+        ret false
+    end
+    k := at.KindOf(a, bn.list.get(n - 1))
+    ret k == at.AST_RETURN || k == at.AST_BREAK || k == at.AST_CONTINUE
+end
+
+// Emit the statements of a nested block, then its own defers, then drop them.
+func cg_scoped_stmts(g &: Cg, s &: sm.Sema, a &: at.Ast, blockid: int):
+    lmark := g.locals.len()
+    dmark := g.fn_defers.len()
+    bn := at.Get(a, blockid)
+    repeat bn.list.len() with i:
+        cg_stmt(g, s, a, bn.list.get(i))
+    end
+    if cg_list_terminates(a, blockid) == false:
+        cg_emit_defers_from(g, s, a, dmark)
+    end
+    defers_trunc(g, dmark)
+    locals_trunc(g, lmark)
+end
+
+// Loop bodies additionally record their defer depth so that break/continue,
+// which skip the end of the body, still run what the body registered.
+func cg_loop_push(g &: Cg):
+    g.loop_dmark.push(g.fn_defers.len())
+end
+
+func cg_loop_pop(g &: Cg):
+    if g.loop_dmark.len() > 0:
+        _dropped := g.loop_dmark.pop()
+    end
+end
+
+func cg_emit_loop_exit_defers(g &: Cg, s &: sm.Sema, a &: at.Ast):
+    n := g.loop_dmark.len()
+    if n > 0:
+        cg_emit_defers_from(g, s, a, g.loop_dmark.get(n - 1))
     end
 end
 
@@ -72,7 +144,7 @@ func cg_vardecl_inline(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
     local_add(g, nn.name)
     is_ref := str.IndexOf(ts, "[") >= 0 || str.EndsWith(ts, "*") || struct_by_name(s, ts) != 0
     already_const := str.StartsWith(cg_ctype(ts), "const ")
-    prefix := (nn.is_mut || is_ref || already_const) ? "" : "const "
+    prefix := (nn.is_mut || is_ref || already_const || type_is_callable(ts)) ? "" : "const "
     if nn.a != 0:
         ret prefix + decl + " = " + cg_expr(g, s, a, nn.a)
     end
@@ -123,19 +195,28 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
             an := at.Get(a, nn.a)
             repeat an.list.len() with i:
                 cg_line(
-                    g, cg_cident(nn.name) + "[" + i + "] = " + cg_expr(g, s, a, an.list.get(i)[0]) + ";"
+                    g, cg_cident(nn.name) + "[" + i + "] = " + cg_expr(g, s, a, an.list.get(i)) + ";"
                 )
             end
             ret
         end
         cg_line(g, cg_vardecl_inline(g, s, a, n) + ";")
+        // A leading underscore is how Salam spells "declared on purpose,
+        // never read", which is what stops sema's unused-name rule firing.
+        // The C compiler has no way to know that, so gcc and clang report
+        // -Wunused-variable for exactly the bindings the author already
+        // marked as deliberate. Carry the intent across, as the C codegen
+        // does - without this the two backends disagree on every `_x := ...`.
+        if str.Len(nn.name) > 0 && byte_at(nn.name, 0) == 95:
+            cg_line(g, "(void)" + cg_cident(nn.name) + ";")
+        end
         ret
     end
     if k == at.AST_CONST_DECL:
         cts := str.Len(nn.type_str) > 0 ? nn.type_str : "int32_t"
         decl := cg_decl(cts, nn.name)
         local_add(g, nn.name)
-        cpfx := str.StartsWith(cg_ctype(cts), "const ") ? "" : "const "
+        cpfx := (str.StartsWith(cg_ctype(cts), "const ") || type_is_callable(cts)) ? "" : "const "
         cg_line(g, cpfx + decl + " = " + cg_expr(g, s, a, nn.a) + ";")
         ret
     end
@@ -248,7 +329,7 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
         if str.Len(g.match_result_tmp) > 0:
             if nn.a != 0:
                 cg_line(
-                    g, g.match_result_tmp + " = (" + g.match_result_ctype + ")(" + cg_expr(g, s, a, nn.a) + "); goto " + g.match_end_label + ";"
+                    g, g.match_result_tmp + " = (" + g.match_result_ctype + ")(" + cg_expr_value(g, s, a, nn.a) + "); goto " + g.match_end_label + ";"
                 )
             else:
                 cg_line(g, "goto " + g.match_end_label + ";")
@@ -256,7 +337,7 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
             ret
         end
         if nn.a != 0 && g.fn_defers.len() > 0:
-            expr := cg_expr(g, s, a, nn.a)
+            expr := cg_expr_value(g, s, a, nn.a)
             r_ts := at.Get(a, nn.a).type_str
             g.tmpn += 1
             t := g.tmpn
@@ -272,10 +353,10 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
             end
         else nn.a != 0 && g.cur_sret:
             cg_emit_defers(g, s, a)
-            cg_line(g, "*__ret = (" + cg_expr(g, s, a, nn.a) + "); return;")
+            cg_line(g, "*__ret = (" + cg_expr_value(g, s, a, nn.a) + "); return;")
         else nn.a != 0:
             cg_emit_defers(g, s, a)
-            cg_line(g, "return " + cg_expr(g, s, a, nn.a) + ";")
+            cg_line(g, "return " + cg_expr_value(g, s, a, nn.a) + ";")
         else:
             cg_emit_defers(g, s, a)
             // `func main:` has no declared return type but is emitted as C's
@@ -304,16 +385,11 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
             g, cg_ctype(str.Len(subj_ts) > 0 ? subj_ts : "int32_t") + " " + subj_var + " = (" + cg_expr(g, s, a, nn.a) + ");"
         )
         repeat nn.list.len() with i:
-            armid := nn.list.get(i)[0]
+            armid := nn.list.get(i)
             cond := cg_unparen(cg_match_arm_cond(g, s, a, armid, subj_var, subj_ts))
             cg_line(g, (i > 0 ? "} else " : "") + "if (" + cond + ") {")
             g.indent += 1
-            mark := g.locals.len()
-            bn := at.Get(a, at.Get(a, armid).b)
-            repeat bn.list.len() with j:
-                cg_stmt(g, s, a, bn.list.get(j)[0])
-            end
-            locals_trunc(g, mark)
+            cg_scoped_stmts(g, s, a, at.Get(a, armid).b)
             g.indent -= 1
         end
         if nn.list.len() > 0:
@@ -324,22 +400,19 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
         ret
     end
     if k == at.AST_BREAK:
+        cg_emit_loop_exit_defers(g, s, a)
         cg_line(g, "break;")
         ret
     end
     if k == at.AST_CONTINUE:
+        cg_emit_loop_exit_defers(g, s, a)
         cg_line(g, "continue;")
         ret
     end
     if k == at.AST_IF:
         cg_line(g, "if (" + cg_cond(g, s, a, nn.a) + ") {")
         g.indent += 1
-        mark := g.locals.len()
-        bn := at.Get(a, nn.b)
-        repeat bn.list.len() with i:
-            cg_stmt(g, s, a, bn.list.get(i)[0])
-        end
-        locals_trunc(g, mark)
+        cg_scoped_stmts(g, s, a, nn.b)
         g.indent -= 1
         if nn.c != 0 && at.KindOf(a, nn.c) == at.AST_IF:
             cg_indent(g)
@@ -347,12 +420,7 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
             en := at.Get(a, nn.c)
             out(g, "if (" + cg_cond(g, s, a, en.a) + ") {\n")
             g.indent += 1
-            mark2 := g.locals.len()
-            ebn := at.Get(a, en.b)
-            repeat ebn.list.len() with i2:
-                cg_stmt(g, s, a, ebn.list.get(i2)[0])
-            end
-            locals_trunc(g, mark2)
+            cg_scoped_stmts(g, s, a, en.b)
             g.indent -= 1
             if en.c != 0:
                 cg_line(g, "} else {")
@@ -364,12 +432,7 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
         else nn.c != 0:
             cg_line(g, "} else {")
             g.indent += 1
-            mark3 := g.locals.len()
-            en2 := at.Get(a, nn.c)
-            repeat en2.list.len() with i3:
-                cg_stmt(g, s, a, en2.list.get(i3)[0])
-            end
-            locals_trunc(g, mark3)
+            cg_scoped_stmts(g, s, a, nn.c)
             g.indent -= 1
             cg_line(g, "}")
         else:
@@ -380,12 +443,9 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
     if k == at.AST_UNTIL:
         cg_line(g, "while (" + cg_cond(g, s, a, nn.a) + ") {")
         g.indent += 1
-        mark := g.locals.len()
-        bn := at.Get(a, nn.b)
-        repeat bn.list.len() with i:
-            cg_stmt(g, s, a, bn.list.get(i)[0])
-        end
-        locals_trunc(g, mark)
+        cg_loop_push(g)
+        cg_scoped_stmts(g, s, a, nn.b)
+        cg_loop_pop(g)
         g.indent -= 1
         cg_line(g, "}")
         ret
@@ -409,19 +469,26 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
             )
         end
         g.indent += 1
+        cg_loop_push(g)
         mark := g.locals.len()
         if str.Len(nn.name) > 0:
             ivct := cg_ctype(str.Len(nn.type_str) > 0 ? nn.type_str : "i32")
             cg_line(
                 g, "const " + ivct + " " + cg_cident(nn.name) + " = (" + ivct + ")__rep" + t + ";"
             )
+            // `repeat n with i:` may legitimately ignore i - the count is the
+            // point and the binding is there for the cases that do use it - so
+            // the declaration alone draws -Wunused-variable from gcc and
+            // clang. Salam's own unused-name rule does not apply to a loop
+            // binding, so this cannot be pushed back to the source. (void) is
+            // the portable way to say "declared on purpose";
+            // __attribute__((unused)) is not available on tcc.
+            cg_line(g, "(void)" + cg_cident(nn.name) + ";")
             local_add(g, nn.name)
         end
-        bn := at.Get(a, nn.b)
-        repeat bn.list.len() with i:
-            cg_stmt(g, s, a, bn.list.get(i)[0])
-        end
+        cg_scoped_stmts(g, s, a, nn.b)
         locals_trunc(g, mark)
+        cg_loop_pop(g)
         g.indent -= 1
         cg_line(g, "}")
         ret
@@ -442,10 +509,9 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
         end
         cg_line(g, "for (" + init + "; " + cond + "; " + post + ") {")
         g.indent += 1
-        dn := at.Get(a, nn.d)
-        repeat dn.list.len() with i:
-            cg_stmt(g, s, a, dn.list.get(i)[0])
-        end
+        cg_loop_push(g)
+        cg_scoped_stmts(g, s, a, nn.d)
+        cg_loop_pop(g)
         g.indent -= 1
         cg_line(g, "}")
         locals_trunc(g, mark)
@@ -454,10 +520,5 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
 end
 
 func cg_block(g &: Cg, s &: sm.Sema, a &: at.Ast, block: int):
-    mark := g.locals.len()
-    bn := at.Get(a, block)
-    repeat bn.list.len() with i:
-        cg_stmt(g, s, a, bn.list.get(i)[0])
-    end
-    locals_trunc(g, mark)
+    cg_scoped_stmts(g, s, a, block)
 end

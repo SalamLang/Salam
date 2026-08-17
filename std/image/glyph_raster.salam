@@ -1,0 +1,369 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package image
+
+import math
+
+// Anti-aliased scanline rasterizer for glyph outlines: contour points
+// (from ttf_glyph.salam) -> straight edges -> per-pixel coverage ->
+// blended pixels.
+//
+// Coverage is exact horizontally and sampled vertically: each pixel row
+// is crossed by _TTF_SUBSAMPLES sub-scanlines, and every filled span a
+// sub-scanline produces contributes its exact fractional width to the
+// pixels it touches (a span covering 0.3 of a pixel adds 0.3 of that
+// sub-scanline's weight). Sampling both axes instead would need 16x the
+// samples for the same quality on the near-vertical stems that dominate
+// text; being exact in x is what makes 4 rows enough.
+//
+// Insides are decided by the nonzero winding rule, which is the one
+// TrueType is defined in terms of: outer contours run clockwise and
+// inner ones (the hole in an 'o') counter-clockwise, so their windings
+// cancel. An even-odd fill would agree on letters and disagree on any
+// glyph whose contours overlap.
+//
+// Nothing here is glyph-specific below _build_edges - it fills an
+// arbitrary set of closed contours - but it is deliberately not exposed
+// as a general polygon filler yet: that would mean a public point-list
+// type, and draw.salam's aliased primitives are what the rest of the
+// package is built on.
+
+const _TTF_SUBSAMPLES := 4
+
+// A directed edge, always stored top-to-bottom (y0 < y1) with `dir`
+// remembering which way the contour actually ran, since that sign is
+// what the winding count adds up.
+struct _Edge:
+    pub x0: f64 = 0.0
+    pub y0: f64 = 0.0
+    pub x1: f64 = 0.0
+    pub y1: f64 = 0.0
+    pub dir: int = 0
+end
+
+struct _Cross:
+    pub x: f64 = 0.0
+    pub dir: int = 0
+end
+
+func _ttf_clampi(v: int, lo: int, hi: int): int:
+    if v < lo: ret lo end
+    if v > hi: ret hi end
+    ret v
+end
+
+// Horizontal edges are dropped rather than stored: a scanline can never
+// cross one (the crossing test is half-open in y), and keeping them
+// would only add a divide-by-zero to the intersection math.
+func _edge_push(edges &: Vector<_Edge>, x0: f64, y0: f64, x1: f64, y1: f64):
+    if y0 == y1:
+        ret
+    end
+    mut e := _Edge {}
+    if y0 < y1:
+        e.x0 = x0
+        e.y0 = y0
+        e.x1 = x1
+        e.y1 = y1
+        e.dir = 1
+    else:
+        e.x0 = x1
+        e.y0 = y1
+        e.x1 = x0
+        e.y1 = y0
+        e.dir = 0 - 1
+    end
+    edges.push(e)
+end
+
+// Flattens one quadratic Bezier into line segments. The segment count
+// follows the control polygon's length in pixels, so a 6px 'o' costs a
+// handful of edges and a 200px one stays smooth, without a fixed count
+// that is wrong at both ends.
+func _quad_to(edges &: Vector<_Edge>, x0: f64, y0: f64, cx: f64, cy: f64, x1: f64, y1: f64):
+    d := math.Abs(cx - x0) + math.Abs(cy - y0) + math.Abs(x1 - cx) + math.Abs(y1 - cy)
+    mut n := 2 + (d / 3.0) as int
+    if n > 32:
+        n = 32
+    end
+    mut px := x0
+    mut py := y0
+    mut i := 1
+    until i <= n:
+        t := (i as f64) / (n as f64)
+        mt := 1.0 - t
+        qx := mt * mt * x0 + 2.0 * mt * t * cx + t * t * x1
+        qy := mt * mt * y0 + 2.0 * mt * t * cy + t * t * y1
+        _edge_push(edges, px, py, qx, qy)
+        px = qx
+        py = qy
+        i += 1
+    end
+end
+
+// Walks one contour (points [s, e)) and emits its edges.
+//
+// The start point is the first on-curve point, and TrueType allows a
+// contour to have none at all in the corners of a rounded rectangle -
+// hence the three-way choice: start at point 0 if it is on-curve, else
+// at the last point if that one is, else at the implied midpoint
+// between them.
+func _contour_edges(pts &: Vector<_GlyphPoint>, s: int, e: int, edges &: Vector<_Edge>):
+    if e - s < 2:
+        ret
+    end
+    p0 := pts.get(s)
+    plast := pts.get(e - 1)
+    mut startx := 0.0
+    mut starty := 0.0
+    mut lo := s
+    mut hi := e - 1
+    if p0.on:
+        startx = p0.x
+        starty = p0.y
+        lo = s + 1
+    else if plast.on:
+        startx = plast.x
+        starty = plast.y
+        hi = e - 2
+    else:
+        startx = (p0.x + plast.x) * 0.5
+        starty = (p0.y + plast.y) * 0.5
+    end
+    mut cx := startx
+    mut cy := starty
+    mut ctrlx := 0.0
+    mut ctrly := 0.0
+    mut have_ctrl := false
+    mut i := lo
+    until i <= hi:
+        p := pts.get(i)
+        if p.on:
+            if have_ctrl:
+                _quad_to(edges, cx, cy, ctrlx, ctrly, p.x, p.y)
+                have_ctrl = false
+            else:
+                _edge_push(edges, cx, cy, p.x, p.y)
+            end
+            cx = p.x
+            cy = p.y
+        else:
+            // Two off-curve points in a row imply an on-curve point
+            // halfway between them - the compact form every font uses
+            // for a long smooth curve.
+            if have_ctrl:
+                mx := (ctrlx + p.x) * 0.5
+                my := (ctrly + p.y) * 0.5
+                _quad_to(edges, cx, cy, ctrlx, ctrly, mx, my)
+                cx = mx
+                cy = my
+            end
+            ctrlx = p.x
+            ctrly = p.y
+            have_ctrl = true
+        end
+        i += 1
+    end
+    if have_ctrl:
+        _quad_to(edges, cx, cy, ctrlx, ctrly, startx, starty)
+    else:
+        _edge_push(edges, cx, cy, startx, starty)
+    end
+end
+
+func _build_edges(pts &: Vector<_GlyphPoint>, ends &: Vector<int>, edges &: Vector<_Edge>):
+    mut s := 0
+    mut k := 0
+    until k < ends.len():
+        e := ends.get(k)
+        if e > s && e <= pts.len():
+            _contour_edges(pts, s, e, edges)
+        end
+        s = e
+        k += 1
+    end
+end
+
+// Every edge crossing one sub-scanline, kept sorted by x. Insertion sort
+// rather than a general sort: a glyph rarely has more than a dozen
+// crossings on one scanline and they arrive nearly in order already.
+func _scan_crossings(edges &: Vector<_Edge>, sy: f64, out &: Vector<_Cross>):
+    n := edges.len()
+    mut i := 0
+    until i < n:
+        e := edges.get(i)
+        if sy >= e.y0 && sy < e.y1:
+            mut cr := _Cross {}
+            cr.x = e.x0 + (sy - e.y0) * (e.x1 - e.x0) / (e.y1 - e.y0)
+            cr.dir = e.dir
+            out.push(cr)
+            mut j := out.len() - 1
+            until j > 0:
+                prev := out.get(j - 1)
+                if prev.x <= cr.x:
+                    break
+                end
+                out.set(j, prev)
+                out.set(j - 1, cr)
+                j -= 1
+            end
+        end
+        i += 1
+    end
+end
+
+// Adds `weight` of coverage over [xa, xb) to the row accumulator, with
+// the two partially-covered end pixels getting their exact fraction.
+func _add_span(acc &: Vector<f64>, xoff: int, w: int, xa: f64, xb: f64, weight: f64):
+    mut a := xa - (xoff as f64)
+    mut b := xb - (xoff as f64)
+    if a < 0.0:
+        a = 0.0
+    end
+    if b > (w as f64):
+        b = w as f64
+    end
+    if b <= a:
+        ret
+    end
+    ia := a as int
+    mut ib := b as int
+    if ib >= w:
+        ib = w - 1
+    end
+    if ia >= w || ib < ia:
+        ret
+    end
+    if ia == ib:
+        acc.set(ia, acc.get(ia) + (b - a) * weight)
+        ret
+    end
+    acc.set(ia, acc.get(ia) + (((ia + 1) as f64) - a) * weight)
+    mut i := ia + 1
+    until i < ib:
+        acc.set(i, acc.get(i) + weight)
+        i += 1
+    end
+    acc.set(ib, acc.get(ib) + (b - (ib as f64)) * weight)
+end
+
+// Nonzero winding: a span is inside from the crossing that takes the
+// winding count away from zero until the one that brings it back.
+func _accumulate_spans(xs &: Vector<_Cross>, acc &: Vector<f64>, xoff: int, w: int, weight: f64):
+    mut wind := 0
+    mut spanx := 0.0
+    mut i := 0
+    until i < xs.len():
+        cr := xs.get(i)
+        prev := wind
+        wind += cr.dir
+        if prev == 0 && wind != 0:
+            spanx = cr.x
+        else if prev != 0 && wind == 0:
+            _add_span(acc, xoff, w, spanx, cr.x, weight)
+        end
+        i += 1
+    end
+end
+
+func _blit_coverage(img &: Image, acc &: Vector<f64>, xoff: int, w: int, py: int, c: Color):
+    ca := c.a as int
+    mut i := 0
+    until i < w:
+        mut cov := acc.get(i)
+        if cov > 0.002:
+            if cov > 1.0:
+                cov = 1.0
+            end
+            alpha := ((ca as f64) * cov + 0.5) as int
+            if alpha > 0:
+                BlendPixel(img, xoff + i, py, RGBA(c.r as int, c.g as int, c.b as int, alpha))
+            end
+        end
+        i += 1
+    end
+end
+
+func _fill_edges(img &: Image, edges &: Vector<_Edge>, c: Color):
+    n := edges.len()
+    if n == 0 || img.pixels == null:
+        ret
+    end
+    mut minx := 1.0e30
+    mut maxx := 0.0 - 1.0e30
+    mut miny := 1.0e30
+    mut maxy := 0.0 - 1.0e30
+    mut i := 0
+    until i < n:
+        e := edges.get(i)
+        if e.x0 < minx: minx = e.x0 end
+        if e.x1 < minx: minx = e.x1 end
+        if e.x0 > maxx: maxx = e.x0 end
+        if e.x1 > maxx: maxx = e.x1 end
+        if e.y0 < miny: miny = e.y0 end
+        if e.y1 > maxy: maxy = e.y1 end
+        i += 1
+    end
+    x0 := _ttf_clampi(math.Floor(minx) as int, 0, img.width)
+    x1 := _ttf_clampi((math.Floor(maxx) as int) + 1, 0, img.width)
+    y0 := _ttf_clampi(math.Floor(miny) as int, 0, img.height)
+    y1 := _ttf_clampi((math.Floor(maxy) as int) + 1, 0, img.height)
+    if x1 <= x0 || y1 <= y0:
+        ret
+    end
+    w := x1 - x0
+    step := 1.0 / (_TTF_SUBSAMPLES as f64)
+    mut acc := Vector {} as Vector<f64>
+    acc.zeros(w)
+    mut xs := Vector {} as Vector<_Cross>
+    mut py := y0
+    until py < y1:
+        mut k := 0
+        until k < w:
+            acc.set(k, 0.0)
+            k += 1
+        end
+        mut s := 0
+        until s < _TTF_SUBSAMPLES:
+            sy := (py as f64) + ((s as f64) + 0.5) * step
+            xs.clear()
+            _scan_crossings(edges, sy, xs)
+            _accumulate_spans(xs, acc, x0, w, step)
+            s += 1
+        end
+        _blit_coverage(img, acc, x0, w, py, c)
+        py += 1
+    end
+    acc.free()
+    xs.free()
+end
+
+// Draws one glyph under an arbitrary 2x3 device transform (see
+// ttf_glyph.salam for what a..dy mean). Everything public that draws
+// text funnels through here.
+func _draw_glyph_xform(img &: Image, f: Font, glyph: int, a: f64, b: f64, c: f64, d: f64, dx: f64, dy: f64, col: Color):
+    if !FontValid(f) || img.pixels == null:
+        ret
+    end
+    mut pts := Vector {} as Vector<_GlyphPoint>
+    mut ends := Vector {} as Vector<int>
+    mut edges := Vector {} as Vector<_Edge>
+    _ttf_append_glyph(f, glyph, a, b, c, d, dx, dy, pts, ends, 0)
+    _build_edges(pts, ends, edges)
+    _fill_edges(img, edges, col)
+    pts.free()
+    ends.free()
+    edges.free()
+end

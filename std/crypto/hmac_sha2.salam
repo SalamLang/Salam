@@ -1,0 +1,203 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package crypto
+
+// HMAC (RFC 2104) over the SHA-2 family, byte-oriented.
+//
+// hmac.salam already had HmacSha256Hex, but a hex string is the wrong
+// currency for anything that has to put a MAC on the wire: JWS signatures,
+// AWS SigV4, webhook signatures and HKDF all want the raw digest, and the
+// only way back from hex is a decode that a `str` cannot carry (a 0x00 byte
+// truncates it). So these write into a caller buffer instead, and the hex
+// forms are a thin wrapper on top.
+//
+// The other half of the reason this file exists is SHA-384 and SHA-512.
+// HS384/HS512 tokens are ordinary in the wild, and the SHA-512 family has a
+// 128-byte block, so the pad handling is not a constant the SHA-256 code
+// could be reused with.
+//
+// Everything here runs through sha2.salam's streaming API, so the message is
+// never copied next to the pad. NOTE: like the rest of sha2.salam, this needs
+// the compiled backend - `salam exec` does not implement unsigned wraparound.
+
+const HMAC_IPAD_BYTE := 0x36
+const HMAC_OPAD_BYTE := 0x5C
+
+pure func _hmac_block_size(variant: int): int:
+    if variant == 256: ret 64 end
+    ret 128
+end
+
+pure func _hmac_digest_size(variant: int): int:
+    if variant == 256: ret 32 end
+    if variant == 384: ret 48 end
+    ret 64
+end
+
+func _hmac_hash_once(variant: int, p: void*, n: int, out: void*):
+    if variant == 256:
+        Sha256Bytes(p, n, out)
+    else variant == 384:
+        Sha384Bytes(p, n, out)
+    else:
+        Sha512Bytes(p, n, out)
+    end
+end
+
+// Build the two padded key blocks. A key longer than the block is replaced by
+// its own digest first (RFC 2104 §2); a shorter one is zero-padded, which the
+// zeroed allocation already did.
+func _hmac_pads(key: void*, klen: int, variant: int, ipad: void*, opad: void*):
+    bs := _hmac_block_size(variant)
+    kb := mem.AllocateZeroed(bs as u64)
+    defer mem.Free(kb)
+    if klen > bs:
+        _hmac_hash_once(variant, key, klen, kb)
+    else:
+        mem.Copy(kb, key, klen as u64)
+    end
+    repeat bs with i:
+        b := _bget(kb, i)
+        _bput(ipad, i, b ^ HMAC_IPAD_BYTE)
+        _bput(opad, i, b ^ HMAC_OPAD_BYTE)
+    end
+end
+
+func _hmac_sha256_raw(key: void*, klen: int, msg: void*, mlen: int, out: void*):
+    ipad := mem.AllocateZeroed(64 as u64)
+    defer mem.Free(ipad)
+    opad := mem.AllocateZeroed(64 as u64)
+    defer mem.Free(opad)
+    _hmac_pads(key, klen, 256, ipad, opad)
+    inner := mem.Allocate(32 as u64)
+    defer mem.Free(inner)
+    mut si := Sha256New()
+    Sha256Update(si, ipad, 64)
+    Sha256Update(si, msg, mlen)
+    Sha256Final(si, inner)
+    mut so := Sha256New()
+    Sha256Update(so, opad, 64)
+    Sha256Update(so, inner, 32)
+    Sha256Final(so, out)
+end
+
+func _hmac_sha512_raw(variant: int, key: void*, klen: int, msg: void*, mlen: int, out: void*):
+    ds := _hmac_digest_size(variant)
+    ipad := mem.AllocateZeroed(128 as u64)
+    defer mem.Free(ipad)
+    opad := mem.AllocateZeroed(128 as u64)
+    defer mem.Free(opad)
+    _hmac_pads(key, klen, variant, ipad, opad)
+    inner := mem.Allocate(64 as u64)
+    defer mem.Free(inner)
+    mut si := _hmac_sha512_state(variant)
+    Sha512Update(si, ipad, 128)
+    Sha512Update(si, msg, mlen)
+    Sha512Final(si, inner)
+    mut so := _hmac_sha512_state(variant)
+    Sha512Update(so, opad, 128)
+    Sha512Update(so, inner, ds)
+    Sha512Final(so, out)
+end
+
+func _hmac_sha512_state(variant: int): Sha512:
+    if variant == 384: ret Sha384New() end
+    ret Sha512New()
+end
+
+func _hmac_raw(variant: int, key: void*, klen: int, msg: void*, mlen: int, out: void*):
+    if variant == 256:
+        _hmac_sha256_raw(key, klen, msg, mlen, out)
+    else:
+        _hmac_sha512_raw(variant, key, klen, msg, mlen, out)
+    end
+end
+
+func _hmac_hex(variant: int, key: str, msg: str): str:
+    n := _hmac_digest_size(variant)
+    out := mem.Allocate(n as u64)
+    defer mem.Free(out)
+    _hmac_raw(variant, key as void*, key.len(), msg as void*, msg.len(), out)
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    repeat n with i:
+        str.BufAppend(sb, _hex_byte(_bget(out, i)))
+    end
+    hex := str.BufStr(sb)
+    ret hex
+end
+
+// ---------------------------------------------------------------- public API
+//
+// The *Raw forms take pointers and lengths, so a key or message holding 0x00
+// is handled correctly; the str forms are the convenience wrapper for the
+// common case where both are text. `out` must have room for the digest: 32
+// bytes for SHA-256, 48 for SHA-384, 64 for SHA-512.
+
+@en "HmacSha256Raw"
+@fa "اچ مک شا۲۵۶ خام"
+@ar "اتش ماك شا٢٥٦ خام"
+pub func HmacSha256Raw(key: void*, klen: int, msg: void*, mlen: int, out: void*):
+    _hmac_sha256_raw(key, klen, msg, mlen, out)
+end
+
+@en "HmacSha384Raw"
+@fa "اچ مک شا۳۸۴ خام"
+@ar "اتش ماك شا٣٨٤ خام"
+pub func HmacSha384Raw(key: void*, klen: int, msg: void*, mlen: int, out: void*):
+    _hmac_sha512_raw(384, key, klen, msg, mlen, out)
+end
+
+@en "HmacSha512Raw"
+@fa "اچ مک شا۵۱۲ خام"
+@ar "اتش ماك شا٥١٢ خام"
+pub func HmacSha512Raw(key: void*, klen: int, msg: void*, mlen: int, out: void*):
+    _hmac_sha512_raw(512, key, klen, msg, mlen, out)
+end
+
+@en "HmacSha256Bytes"
+@fa "اچ مک شا۲۵۶ بایت"
+@ar "اتش ماك شا٢٥٦ بایتات"
+pub func HmacSha256Bytes(key: str, msg: str, out: void*):
+    _hmac_sha256_raw(key as void*, key.len(), msg as void*, msg.len(), out)
+end
+
+@en "HmacSha384Bytes"
+@fa "اچ مک شا۳۸۴ بایت"
+@ar "اتش ماك شا٣٨٤ بایتات"
+pub func HmacSha384Bytes(key: str, msg: str, out: void*):
+    _hmac_sha512_raw(384, key as void*, key.len(), msg as void*, msg.len(), out)
+end
+
+@en "HmacSha512Bytes"
+@fa "اچ مک شا۵۱۲ بایت"
+@ar "اتش ماك شا٥١٢ بایتات"
+pub func HmacSha512Bytes(key: str, msg: str, out: void*):
+    _hmac_sha512_raw(512, key as void*, key.len(), msg as void*, msg.len(), out)
+end
+
+@en "HmacSha384Hex"
+@fa "اچ مک شا۳۸۴ شانزدهی"
+@ar "اتش ماك شا٣٨٤ سداسی"
+pub func HmacSha384Hex(key: str, msg: str): str:
+    ret _hmac_hex(384, key, msg)
+end
+
+@en "HmacSha512Hex"
+@fa "اچ مک شا۵۱۲ شانزدهی"
+@ar "اتش ماك شا٥١٢ سداسی"
+pub func HmacSha512Hex(key: str, msg: str): str:
+    ret _hmac_hex(512, key, msg)
+end

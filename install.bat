@@ -104,6 +104,16 @@ if exist "%EXTRACT_DIR%\salam-%PLATFORM%\tcc" (
   xcopy /e /i /y /q "%EXTRACT_DIR%\salam-%PLATFORM%\tcc" "%INSTALL_DIR%\tcc" >nul
 )
 
+rem The compiler looks for a std\ directory next to its own binary (among
+rem other places); without this, every "import os" fails with "standard
+rem library package not found" once salam.exe is on PATH but std\ was left
+rem behind in the extracted archive.
+if exist "%EXTRACT_DIR%\salam-%PLATFORM%\std" (
+  xcopy /e /i /y /q "%EXTRACT_DIR%\salam-%PLATFORM%\std" "%INSTALL_DIR%\std" >nul
+) else (
+  echo warning: no std\ directory found inside %ASSET% - the compiler will not find the standard library
+)
+
 echo Installed: %INSTALL_DIR%\salam.exe
 "%INSTALL_DIR%\salam.exe" version 2>nul
 

@@ -424,7 +424,12 @@ static ast_node_t *parse_field(parser_t *p)
     if (!n->name) return NULL;
     n->type = parse_type_anno(p);
     if (p_match(p, TK_ASSIGN)) n->a = parse_expr(p);
-    p_term(p);
+    /* Leave the terminator alone once the default expression has failed:
+     * parse_struct calls p_sync next, and p_sync skips to the terminator
+     * AFTER the cursor. Eating this one here would send it to the following
+     * field's terminator instead, silently dropping that whole field - the
+     * error then surfaces as "no field 'b'" on code that is perfectly fine. */
+    if (!p->panic) p_term(p);
     p_fin(p, n);
     return n;
 }

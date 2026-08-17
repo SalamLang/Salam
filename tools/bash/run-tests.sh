@@ -579,19 +579,36 @@ if want db; then
             break
         }
     done
+    # One archive holds every engine mock (mysql, postgres); each is a stand-in
+    # for a client library CI has no server for, implemented over sqlite3.
     mockc=""
+    pgmockc=""
     for lang in $LANGS; do
         [ -f "tests/$lang/db/mysql_mock.c" ] && {
             mockc="tests/$lang/db/mysql_mock.c"
             break
         }
     done
+    for lang in $LANGS; do
+        [ -f "tests/$lang/db/postgres_mock.c" ] && {
+            pgmockc="tests/$lang/db/postgres_mock.c"
+            break
+        }
+    done
     dbok=0
     if [ -n "$DBCC" ] && [ -n "$mockc" ] && command -v ar >/dev/null 2>&1; then
         mkdir -p "$WORK/dbwork/.work"
-        if "$DBCC" -c "$mockc" -o "$WORK/dbwork/.work/mysql_mock.o" >/dev/null 2>&1 &&
-            ar rcs "$WORK/dbwork/.work/libsalammock.a" "$WORK/dbwork/.work/mysql_mock.o" >/dev/null 2>&1; then
-            dbok=1
+        mockobjs="$WORK/dbwork/.work/mysql_mock.o"
+        if "$DBCC" -c "$mockc" -o "$WORK/dbwork/.work/mysql_mock.o" >/dev/null 2>&1; then
+            if [ -n "$pgmockc" ] &&
+                "$DBCC" -c "$pgmockc" -o "$WORK/dbwork/.work/postgres_mock.o" \
+                    >/dev/null 2>&1; then
+                mockobjs="$mockobjs $WORK/dbwork/.work/postgres_mock.o"
+            fi
+            # shellcheck disable=SC2086
+            if ar rcs "$WORK/dbwork/.work/libsalammock.a" $mockobjs >/dev/null 2>&1; then
+                dbok=1
+            fi
         fi
     fi
     for lang in $LANGS; do

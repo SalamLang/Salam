@@ -310,9 +310,25 @@ static bool hoist_package(const char *text, size_t len, const token_stream_t *to
     return true;
 }
 
+/*
+ * Within a phase, private declarations sort before public ones, so the public
+ * surface of a file collects at the end of its group.
+ *
+ * The language only *requires* this of functions (check_pub_order rejects a
+ * private function after a pub one). Types are not required to be ordered that
+ * way, but the same reading habit applies to them - a caller scanning for what
+ * a file exports should find the pub structs, enums and interfaces together -
+ * and reordering them is safe because declaration order carries no meaning for
+ * types: a struct may hold, by value, another declared further down.
+ *
+ * Consts and vars are deliberately left alone. Splitting those would separate
+ * a private constant from the public one it is derived from, and unlike types
+ * they read as one table rather than as an API surface.
+ */
 static int item_sort_key(const ord_item_t *it)
 {
-    int secondary = (it->phase == AST_ORDER_FUNC && it->node->is_pub) ? 1 : 0;
+    bool splits = it->phase == AST_ORDER_FUNC || it->phase == AST_ORDER_TYPEDEF;
+    int secondary = (splits && it->node->is_pub) ? 1 : 0;
     return (int)it->phase * 2 + secondary;
 }
 

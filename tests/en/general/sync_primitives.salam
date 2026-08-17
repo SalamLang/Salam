@@ -1,0 +1,114 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import sync
+
+mut wg := sync.NewWaitGroup()
+mut rw := sync.NewRWMutex()
+mut sem := sync.NewSemaphore(2 as i64)
+mut once := sync.NewOnce()
+
+mut shared := 0 as i64
+mut reads := 0 as i64
+mut reads_mu := sync.NewMutex()
+mut once_runs := 0 as i64
+mut live := 0 as i64
+mut peak := 0 as i64
+mut peak_mu := sync.NewMutex()
+
+// Writers bump the shared value under the write lock; readers only ever
+// observe a value the writers left behind, never a half-applied one.
+func writer():
+    repeat 200:
+        sync.WLock(rw)
+        shared = shared + 1
+        sync.WUnlock(rw)
+    end
+    sync.Done(wg)
+end
+
+func reader():
+    repeat 200:
+        sync.RLock(rw)
+        seen := shared
+        sync.RUnlock(rw)
+        if seen >= 0:
+            sync.Lock(reads_mu)
+            reads = reads + 1
+            sync.Unlock(reads_mu)
+        end
+    end
+    sync.Done(wg)
+end
+
+// The semaphore has 2 permits, so `live` must never be observed above 2.
+func limited():
+    repeat 100:
+        sync.Acquire(sem)
+        sync.Lock(peak_mu)
+        live = live + 1
+        if live > peak: peak = live end
+        sync.Unlock(peak_mu)
+
+        sync.Lock(peak_mu)
+        live = live - 1
+        sync.Unlock(peak_mu)
+        sync.Release(sem)
+    end
+    sync.Done(wg)
+end
+
+func init_once():
+    once_runs = once_runs + 1
+end
+
+func racer():
+    repeat 50:
+        sync.Do(once, (): init_once() end)
+    end
+    sync.Done(wg)
+end
+
+func main:
+    sync.Add(wg, 8 as i64)
+    t1 := spawn(writer)
+    t2 := spawn(writer)
+    t3 := spawn(reader)
+    t4 := spawn(reader)
+    t5 := spawn(limited)
+    t6 := spawn(limited)
+    t7 := spawn(racer)
+    t8 := spawn(racer)
+    sync.Wait(wg)
+    join(t1)
+    join(t2)
+    join(t3)
+    join(t4)
+    join(t5)
+    join(t6)
+    join(t7)
+    join(t8)
+
+    println "shared:", shared
+    println "reads:", reads
+    println "once:", once_runs
+    println "peak<=2:", peak <= 2
+
+    sync.DestroyWaitGroup(wg)
+    sync.DestroyRWMutex(rw)
+    sync.DestroySemaphore(sem)
+    sync.DestroyOnce(once)
+    sync.Destroy(reads_mu)
+    sync.Destroy(peak_mu)
+end

@@ -897,11 +897,47 @@ import sync
 mut lock := sync.NewMutex()
 mut wg := sync.NewWaitGroup()
 sync.Add(wg, 1 as i64)
-t := spawn(worker)                    // start a thread from a func value
+t := spawn(worker)                    // worker takes no arguments
+t2 := spawn(work_on, job)             // ... or exactly one POINTER argument
 join(t)                               // wait for it
 sync.Lock(lock)  /* critical section */  sync.Unlock(lock)
 sync.Wait(wg)  sync.Destroy(lock)  sync.DestroyWaitGroup(wg)
 ```
+
+`spawn(f, arg)` is how a thread gets its own data; `arg`'s type must be a
+pointer, because it travels through the OS's single thread-argument slot.
+Without it a worker can only reach globals.
+
+Rest of `sync`: `CondVar` (`NewCondVar`/`WaitCond`/`Signal`/`Broadcast` - always
+re-test your predicate in an `until` loop, wakeups can be spurious), `RWMutex`
+(`RLock`/`RUnlock`/`WLock`/`WUnlock`, writer-preferring), `Semaphore`
+(`Acquire`/`TryAcquire`/`Release`), `Once` (`Do(o, () => ... end)`), `SleepMs`.
+Everything blocks on a condition variable rather than polling.
+
+```salam
+import chan
+import pool
+import atomic
+
+mut jobs := chan.Chan {} as chan.Chan<i64>   // bounded queue, cap >= 1
+jobs.init(64 as i64)
+jobs.send(v)                                  // blocks while full; false if closed
+mut ok := true
+v := jobs.recv(ok)                            // ok = false once closed AND drained
+jobs.close()   jobs.free()                    // also: try_send/try_recv/len/is_closed
+
+pool.ParallelFor(n, 8 as i64, (i: i64): body(i) end)   // self-scheduling workers
+pool.ParallelForAuto(n, (i: i64): body(i) end)         // one worker per CPU
+pool.CPUCount()
+
+mut hits := atomic.NewI64(0 as i64)
+_ := atomic.Add(hits, 1 as i64)               // Load/Store/Swap/CompareAndSwap
+mut stop := atomic.NewFlag(false)
+if atomic.TestAndSet(stop): /* exactly one caller wins */ end
+```
+
+`atomic` is lock-based, not lock-free - correct semantics, mutex-level cost.
+There is no `async`/`await` and no unbuffered rendezvous channel.
 
 **Conditional compilation** (a top-level or inline `if` on a compile-time
 constant). Predefined: `SALAM_OS_WINDOWS/MAC/LINUX/UNIX/FREEBSD/ANDROID/WASM`,

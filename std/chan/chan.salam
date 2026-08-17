@@ -1,0 +1,223 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "chan"
+@fa "کانال"
+@ar "قناة"
+package chan
+
+import mem
+import sync
+
+/*
+ * A bounded, many-to-many message queue: a fixed ring buffer guarded by one
+ * mutex, with a condition variable on each side so a blocked sender or
+ * receiver costs nothing while it waits.
+ *
+ * Every field that carries state is a pointer, so copying a Chan copies a
+ * *reference* to one channel rather than duplicating it. That is what lets a
+ * channel reach a worker at all: it can sit in a global, or in a struct handed
+ * to spawn(f, arg), and both sides still talk to the same queue.
+ *
+ * Capacity is always at least 1 - there is no unbuffered rendezvous channel
+ * here, so a send lands in the buffer and returns rather than waiting for a
+ * receiver to arrive.
+ */
+@en "Chan"
+@fa "کانال"
+@ar "قناة"
+pub struct Chan<T>:
+    // cap + 1 slots: the last one is never written, so it stays at the zeroed
+    // value AllocateZeroed gave it and can be returned by a failed receive -
+    // salam has no way to spell "the zero value of T" otherwise.
+    pub buf: T* = null
+    // [0] head, [1] tail, [2] count, [3] closed
+    pub ctl: i64* = null
+    pub cap: i64 = 0
+    pub mu: sync.Mutex = sync.Mutex {}
+    pub not_empty: sync.CondVar = sync.CondVar {}
+    pub not_full: sync.CondVar = sync.CondVar {}
+
+    @en "init"
+    @fa "مقداردهی"
+    @ar "تهيئة"
+    pub func init(capacity: i64):
+        mut n := capacity
+        if n < 1: n = 1 end
+        this.cap = n
+        this.buf = mem.AllocateZeroed(((n + 1) * (sizeof(T) as i64)) as u64) as T*
+        c := mem.AllocateZeroed(32 as u64) as i64*
+        this.ctl = c
+        this.mu = sync.NewMutex()
+        this.not_empty = sync.NewCondVar()
+        this.not_full = sync.NewCondVar()
+    end
+
+    /*
+     * Blocks while the buffer is full. Returns false if the channel was
+     * closed - by this or another thread - rather than aborting, so a
+     * producer that loses a race with Close can simply stop.
+     */
+    @en "send"
+    @fa "فرستادن"
+    @ar "إرسال"
+    pub func send(v: T): bool:
+        c := this.ctl
+        b := this.buf
+        sync.Lock(this.mu)
+        until c[3] == 0 && c[2] >= this.cap:
+            sync.WaitCond(this.not_full, this.mu)
+        end
+        if c[3] != 0:
+            sync.Unlock(this.mu)
+            ret false
+        end
+        b[c[1]] = v
+        c[1] = (c[1] + 1) % this.cap
+        c[2] = c[2] + 1
+        sync.Signal(this.not_empty)
+        sync.Unlock(this.mu)
+        ret true
+    end
+
+    /*
+     * Blocks while the buffer is empty and the channel is open. `ok` is false
+     * exactly when the channel is closed *and* drained, which is the signal a
+     * consumer loop should stop on - a closed channel still hands out
+     * everything already queued before it starts reporting false.
+     */
+    @en "recv"
+    @fa "دریافت"
+    @ar "استقبال"
+    pub func recv(ok &: bool): T:
+        c := this.ctl
+        b := this.buf
+        sync.Lock(this.mu)
+        until c[3] == 0 && c[2] <= 0:
+            sync.WaitCond(this.not_empty, this.mu)
+        end
+        if c[2] <= 0:
+            ok = false
+            sync.Unlock(this.mu)
+            ret b[this.cap]
+        end
+        v := b[c[0]]
+        c[0] = (c[0] + 1) % this.cap
+        c[2] = c[2] - 1
+        ok = true
+        sync.Signal(this.not_full)
+        sync.Unlock(this.mu)
+        ret v
+    end
+
+    @en "try_send"
+    @fa "تلاش برای فرستادن"
+    @ar "محاولة إرسال"
+    pub func try_send(v: T): bool:
+        c := this.ctl
+        b := this.buf
+        sync.Lock(this.mu)
+        if c[3] != 0 || c[2] >= this.cap:
+            sync.Unlock(this.mu)
+            ret false
+        end
+        b[c[1]] = v
+        c[1] = (c[1] + 1) % this.cap
+        c[2] = c[2] + 1
+        sync.Signal(this.not_empty)
+        sync.Unlock(this.mu)
+        ret true
+    end
+
+    @en "try_recv"
+    @fa "تلاش برای دریافت"
+    @ar "محاولة استقبال"
+    pub func try_recv(ok &: bool): T:
+        c := this.ctl
+        b := this.buf
+        sync.Lock(this.mu)
+        if c[2] <= 0:
+            ok = false
+            sync.Unlock(this.mu)
+            ret b[this.cap]
+        end
+        v := b[c[0]]
+        c[0] = (c[0] + 1) % this.cap
+        c[2] = c[2] - 1
+        ok = true
+        sync.Signal(this.not_full)
+        sync.Unlock(this.mu)
+        ret v
+    end
+
+    /*
+     * Broadcasts on both sides: every blocked sender has to wake to learn it
+     * should give up, and every blocked receiver has to wake to drain what is
+     * left and then see ok = false. Closing twice is harmless.
+     */
+    @en "close"
+    @fa "بستن"
+    @ar "إغلاق"
+    pub func close():
+        c := this.ctl
+        sync.Lock(this.mu)
+        c[3] = 1
+        sync.Broadcast(this.not_empty)
+        sync.Broadcast(this.not_full)
+        sync.Unlock(this.mu)
+    end
+
+    @en "is_closed"
+    @fa "بسته است"
+    @ar "مغلقة"
+    pub func is_closed(): bool:
+        c := this.ctl
+        sync.Lock(this.mu)
+        v := c[3] != 0
+        sync.Unlock(this.mu)
+        ret v
+    end
+
+    @en "len"
+    @fa "طول"
+    @ar "طول"
+    pub func len(): i64:
+        c := this.ctl
+        sync.Lock(this.mu)
+        v := c[2]
+        sync.Unlock(this.mu)
+        ret v
+    end
+
+    @en "capacity"
+    @fa "ظرفیت"
+    @ar "سعة"
+    pub func capacity(): i64: ret this.cap end
+
+    /*
+     * Only safe once every thread that touches the channel has been joined -
+     * freeing the mutex out from under a blocked receiver is not something
+     * this can defend against.
+     */
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free():
+        sync.DestroyCondVar(this.not_full)
+        sync.DestroyCondVar(this.not_empty)
+        sync.Destroy(this.mu)
+        mem.Free(this.ctl as void*)
+        mem.Free(this.buf as void*)
+    end
+end

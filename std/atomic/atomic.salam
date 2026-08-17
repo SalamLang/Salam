@@ -1,0 +1,205 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "atomic"
+@fa "اتمی"
+@ar "ذري"
+package atomic
+
+import mem
+import sync
+
+/*
+ * Atomic cells with the usual load/store/add/swap/compare-and-swap surface.
+ *
+ * These are *lock-based*, not lock-free: each cell owns a mutex and every
+ * operation takes it. The observable semantics are the ones you would expect
+ * from real atomics - each operation is indivisible, and the lock supplies the
+ * ordering that makes a value written by one thread visible to the next - but
+ * the cost is a mutex acquire rather than a single CPU instruction, so a cell
+ * on a hot inner loop will not perform like a hardware atomic.
+ *
+ * The reason it is written this way is portability: salam lowers to C (gcc,
+ * clang and tcc), to LLVM IR and to JavaScript, and tcc 0.9.27 has no atomic
+ * builtins at all. Turning these into single instructions is a compiler-side
+ * change - the entry points below are the interface it would slot in behind,
+ * so code written against them today does not have to change when it lands.
+ *
+ * A cell is a handle: copying it copies a reference to the same underlying
+ * value, which is what lets one live in a global or travel to a worker inside
+ * a struct passed to spawn(f, arg).
+ */
+@en "I64"
+@fa "صحیح۶۴"
+@ar "صحيح٦٤"
+pub struct I64:
+    pub cell: i64* = null
+    pub mu: sync.Mutex = sync.Mutex {}
+end
+
+@en "Flag"
+@fa "پرچم"
+@ar "راية"
+pub struct Flag:
+    pub cell: i64* = null
+    pub mu: sync.Mutex = sync.Mutex {}
+end
+
+@en "NewI64"
+@fa "صحیح۶۴ جدید"
+@ar "صحيح٦٤ جديد"
+pub func NewI64(v: i64): I64:
+    c := mem.AllocateZeroed(8 as u64) as i64*
+    c[0] = v
+    ret I64 { cell = c, mu = sync.NewMutex() }
+end
+
+@en "Load"
+@fa "بارگذاری"
+@ar "تحميل"
+pub func Load(a: I64): i64:
+    c := a.cell
+    sync.Lock(a.mu)
+    v := c[0]
+    sync.Unlock(a.mu)
+    ret v
+end
+
+@en "Store"
+@fa "ذخیره"
+@ar "تخزين"
+pub func Store(a: I64, v: i64):
+    c := a.cell
+    sync.Lock(a.mu)
+    c[0] = v
+    sync.Unlock(a.mu)
+end
+
+// Returns the value *after* the addition, so a counter can both increment and
+// learn its own ticket number in one indivisible step.
+@en "Add"
+@fa "افزودن"
+@ar "إضافة"
+pub func Add(a: I64, delta: i64): i64:
+    c := a.cell
+    sync.Lock(a.mu)
+    c[0] = c[0] + delta
+    v := c[0]
+    sync.Unlock(a.mu)
+    ret v
+end
+
+@en "Swap"
+@fa "تعویض"
+@ar "تبديل"
+pub func Swap(a: I64, v: i64): i64:
+    c := a.cell
+    sync.Lock(a.mu)
+    old := c[0]
+    c[0] = v
+    sync.Unlock(a.mu)
+    ret old
+end
+
+/*
+ * Sets the cell to `next` only if it currently holds `expected`, reporting
+ * whether it did. This is the primitive the others cannot express: it lets a
+ * caller build a retry loop that is safe against another thread changing the
+ * value in between the read and the write.
+ */
+@en "CompareAndSwap"
+@fa "مقایسه و تعویض"
+@ar "مقارنة وتبديل"
+pub func CompareAndSwap(a: I64, expected: i64, next: i64): bool:
+    c := a.cell
+    sync.Lock(a.mu)
+    mut won := false
+    if c[0] == expected:
+        c[0] = next
+        won = true
+    end
+    sync.Unlock(a.mu)
+    ret won
+end
+
+@en "DestroyI64"
+@fa "نابودسازی صحیح۶۴"
+@ar "تدمير صحيح٦٤"
+pub func DestroyI64(a: I64):
+    mem.Free(a.cell as void*)
+    sync.Destroy(a.mu)
+end
+
+@en "NewFlag"
+@fa "پرچم جدید"
+@ar "راية جديدة"
+pub func NewFlag(v: bool): Flag:
+    c := mem.AllocateZeroed(8 as u64) as i64*
+    if v: c[0] = 1 end
+    ret Flag { cell = c, mu = sync.NewMutex() }
+end
+
+@en "Get"
+@fa "گرفتن"
+@ar "جلب"
+pub func Get(f: Flag): bool:
+    c := f.cell
+    sync.Lock(f.mu)
+    v := c[0] != 0
+    sync.Unlock(f.mu)
+    ret v
+end
+
+@en "Set"
+@fa "تنظیم"
+@ar "ضبط"
+pub func Set(f: Flag, v: bool):
+    c := f.cell
+    sync.Lock(f.mu)
+    if v:
+        c[0] = 1
+    else:
+        c[0] = 0
+    end
+    sync.Unlock(f.mu)
+end
+
+/*
+ * Raises the flag and reports whether this call is the one that raised it.
+ * Exactly one caller ever sees true, which is what makes it usable as a
+ * cancellation signal: the winner runs the shutdown path, everyone else
+ * silently observes that it is already under way.
+ */
+@en "TestAndSet"
+@fa "آزمون و تنظیم"
+@ar "اختبار وضبط"
+pub func TestAndSet(f: Flag): bool:
+    c := f.cell
+    sync.Lock(f.mu)
+    mut first := false
+    if c[0] == 0:
+        c[0] = 1
+        first = true
+    end
+    sync.Unlock(f.mu)
+    ret first
+end
+
+@en "DestroyFlag"
+@fa "نابودسازی پرچم"
+@ar "تدمير الراية"
+pub func DestroyFlag(f: Flag):
+    mem.Free(f.cell as void*)
+    sync.Destroy(f.mu)
+end

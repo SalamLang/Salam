@@ -1,0 +1,465 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Duration: a signed span of time carried as nanoseconds, so a value can
+// never be read back in the wrong unit.
+//
+// The rest of this package predates it and speaks in bare integers whose
+// unit lives only in the function name - Sleep takes milliseconds, Since
+// returns seconds, SinceNanos returns nanoseconds, SinceMs returns
+// fractional milliseconds. Passing any one of those to any other compiles
+// cleanly and is wrong by a factor of a thousand or a million. Duration is
+// the type-safe replacement: build one with a named constructor, read it
+// back with a named accessor, and the unit is checked rather than assumed.
+//
+//     d := time.Milliseconds(1500)
+//     println d.seconds()          // 1.5
+//     println d                    // 1.5s
+//     time.SleepFor(d)
+//
+// Range is +/- 292 years; beyond that nanoseconds overflow i64. For civil
+// spans longer than that - or for any "same time tomorrow" arithmetic that
+// must survive a DST jump - use std/calendar's date arithmetic instead,
+// which counts days on the calendar rather than seconds on the clock.
+package time
+
+import conv
+
+// Nanoseconds per unit. Days are exactly 24h here; see the note on Days().
+const _NS_PER_US := 1000 as i64
+const _NS_PER_MS := 1000000 as i64
+const _NS_PER_SEC := 1000000000 as i64
+const _NS_PER_MIN := 60000000000 as i64
+const _NS_PER_HOUR := 3600000000000 as i64
+const _NS_PER_DAY := 86400000000000 as i64
+
+@en "Duration"
+@fa "مدت"
+@ar "مدة"
+pub struct Duration:
+    // Nanoseconds. Public so a Duration can be stored/serialized, but
+    // prefer the accessors below - reading this field is the one place the
+    // unit is implicit again.
+    pub ns: i64 = 0
+
+    @en "nanos"
+    @fa "نانوثانیه"
+    @ar "نانو ثانیة"
+    pub inline pure func nanos(): i64: ret this.ns end
+
+    @en "micros"
+    @fa "میکروثانیه"
+    @ar "میکرو ثانیة"
+    pub inline pure func micros(): i64: ret this.ns / _NS_PER_US end
+
+    @en "millis"
+    @fa "میلی‌ثانیه"
+    @ar "میلی ثانیة"
+    pub inline pure func millis(): i64: ret this.ns / _NS_PER_MS end
+
+    // Whole seconds, truncated toward zero. Use seconds() for the exact
+    // fractional value.
+    @en "secs"
+    @fa "ثانیه‌های کامل"
+    @ar "ثوان کاملة"
+    pub inline pure func secs(): i64: ret this.ns / _NS_PER_SEC end
+
+    @en "seconds"
+    @fa "ثانیه"
+    @ar "ثانیة"
+    pub inline pure func seconds(): f64: ret (this.ns as f64) / 1000000000.0 end
+
+    @en "minutes"
+    @fa "دقیقه"
+    @ar "دقیقة"
+    pub inline pure func minutes(): f64: ret (this.ns as f64) / 60000000000.0 end
+
+    @en "hours"
+    @fa "ساعت"
+    @ar "ساعة"
+    pub inline pure func hours(): f64: ret (this.ns as f64) / 3600000000000.0 end
+
+    @en "days"
+    @fa "روز"
+    @ar "یوم"
+    pub inline pure func days(): f64: ret (this.ns as f64) / 86400000000000.0 end
+
+    @en "add"
+    @fa "جمع"
+    @ar "جمع"
+    pub inline pure func add(o: Duration): Duration: ret Duration { ns = this.ns + o.ns } end
+
+    @en "sub"
+    @fa "تفریق"
+    @ar "طرح"
+    pub inline pure func sub(o: Duration): Duration: ret Duration { ns = this.ns - o.ns } end
+
+    @en "mul"
+    @fa "ضرب"
+    @ar "ضرب"
+    pub inline pure func mul(k: i64): Duration: ret Duration { ns = this.ns * k } end
+
+    // Integer division, truncating. Dividing by zero yields a zero Duration
+    // rather than trapping, matching the "no exceptions" rule.
+    @en "div"
+    @fa "تقسیم"
+    @ar "قسمة"
+    pub inline pure func div(k: i64): Duration:
+        if k == 0: ret Duration { ns = 0 } end
+        ret Duration { ns = this.ns / k }
+    end
+
+    // How many whole `o`s fit in this Duration - the unit-safe way to ask
+    // "how many 30-second slots is this?".
+    @en "ratio"
+    @fa "نسبت"
+    @ar "نسبة"
+    pub inline pure func ratio(o: Duration): i64:
+        if o.ns == 0: ret 0 end
+        ret this.ns / o.ns
+    end
+
+    @en "neg"
+    @fa "منفی"
+    @ar "سالب"
+    pub inline pure func neg(): Duration: ret Duration { ns = 0 - this.ns } end
+
+    @en "abs"
+    @fa "قدرمطلق"
+    @ar "مطلق"
+    pub inline pure func abs(): Duration:
+        if this.ns < 0: ret Duration { ns = 0 - this.ns } end
+        ret Duration { ns = this.ns }
+    end
+
+    @en "is_zero"
+    @fa "صفر است"
+    @ar "صفر"
+    pub inline pure func is_zero(): bool: ret this.ns == 0 end
+
+    @en "is_negative"
+    @fa "منفی است"
+    @ar "سالب"
+    pub inline pure func is_negative(): bool: ret this.ns < 0 end
+
+    @en "cmp"
+    @fa "مقایسه"
+    @ar "مقارنة"
+    pub inline pure func cmp(o: Duration): int:
+        if this.ns < o.ns: ret 0 - 1 end
+        if this.ns > o.ns: ret 1 end
+        ret 0
+    end
+
+    @en "less"
+    @fa "کمتر"
+    @ar "أصغر"
+    pub inline pure func less(o: Duration): bool: ret this.ns < o.ns end
+
+    @en "equals"
+    @fa "برابر"
+    @ar "یساوی"
+    pub inline pure func equals(o: Duration): bool: ret this.ns == o.ns end
+
+    // Round toward zero to a multiple of `m` (e.g. truncate to whole
+    // seconds with d.truncate(time.Seconds(1))).
+    @en "truncate"
+    @fa "برش"
+    @ar "قص"
+    pub pure func truncate(m: Duration): Duration:
+        if m.ns <= 0: ret Duration { ns = this.ns } end
+        ret Duration { ns = this.ns - this.ns % m.ns }
+    end
+
+    // Round to the nearest multiple of `m`, halves away from zero.
+    @en "round"
+    @fa "گرد کردن"
+    @ar "تقریب"
+    pub pure func round(m: Duration): Duration:
+        if m.ns <= 0: ret Duration { ns = this.ns } end
+        r := this.ns % m.ns
+        if r < 0:
+            if (0 - r) * 2 >= m.ns: ret Duration { ns = this.ns - r - m.ns } end
+            ret Duration { ns = this.ns - r }
+        end
+        if r * 2 >= m.ns: ret Duration { ns = this.ns - r + m.ns } end
+        ret Duration { ns = this.ns - r }
+    end
+
+    // Makes `println d` print "1.5s" instead of the raw field. The compiler
+    // routes its derived stringify through this.
+    @en "to_str"
+    @fa "به رشته"
+    @ar "إلى نص"
+    pub func to_str(): str: ret FormatDuration(Duration { ns = this.ns }) end
+end
+
+// A parse outcome. There is no Result type in Salam and a sentinel
+// Duration would be indistinguishable from a real one, so failure is a
+// separate flag - check `ok` before trusting `value`.
+@en "DurationResult"
+@fa "نتیجه مدت"
+@ar "نتیجة المدة"
+pub struct DurationResult:
+    pub ok: bool = false
+    pub value: Duration = Duration { ns = 0 }
+end
+
+// -- internals ------------------------------------------------------------
+
+inline pure func _dbp(s: str): i8*: ret (s as void*) as i8* end
+
+inline pure func _dub(bp: i8*, i: int): int:
+    mut v := bp[i] as int
+    if v < 0: v = v + 256 end
+    ret v
+end
+
+inline pure func _isDigitByte(c: int): bool: ret c >= 48 && c <= 57 end
+
+// The fractional part of `rem` (which is < 10^digits) as ".ddd" with
+// trailing zeros removed, or "" when it is zero.
+func _fracStr(rem: i64, digits: int): str:
+    if rem == 0: ret "" end
+    mut s := conv.FormatInt(rem)
+    until s.len() < digits:
+        s = "0" + s
+    end
+    mut e := s.len()
+    until e > 0 && s.substr(e - 1, 1) == "0":
+        e -= 1
+    end
+    ret "." + s.substr(0, e)
+end
+
+func _unitNanos(u: str): i64:
+    if u == "ns": ret 1 as i64 end
+    if u == "us": ret _NS_PER_US end
+    if u == "µs": ret _NS_PER_US end
+    if u == "μs": ret _NS_PER_US end
+    if u == "ms": ret _NS_PER_MS end
+    if u == "s": ret _NS_PER_SEC end
+    if u == "m": ret _NS_PER_MIN end
+    if u == "h": ret _NS_PER_HOUR end
+    if u == "d": ret _NS_PER_DAY end
+    ret 0 as i64
+end
+
+// -- constructors ---------------------------------------------------------
+
+@en "Nanoseconds"
+@fa "نانوثانیه‌ها"
+@ar "نانو ثوان"
+pub inline pure func Nanoseconds(n: i64): Duration: ret Duration { ns = n } end
+
+@en "Microseconds"
+@fa "میکروثانیه‌ها"
+@ar "میکرو ثوان"
+pub inline pure func Microseconds(n: i64): Duration: ret Duration { ns = n * _NS_PER_US } end
+
+@en "Milliseconds"
+@fa "میلی‌ثانیه‌ها"
+@ar "میلی ثوان"
+pub inline pure func Milliseconds(n: i64): Duration: ret Duration { ns = n * _NS_PER_MS } end
+
+@en "Seconds"
+@fa "ثانیه‌ها"
+@ar "ثوان"
+pub inline pure func Seconds(n: i64): Duration: ret Duration { ns = n * _NS_PER_SEC } end
+
+@en "Minutes"
+@fa "دقیقه‌ها"
+@ar "دقائق"
+pub inline pure func Minutes(n: i64): Duration: ret Duration { ns = n * _NS_PER_MIN } end
+
+@en "Hours"
+@fa "ساعت‌ها"
+@ar "ساعات"
+pub inline pure func Hours(n: i64): Duration: ret Duration { ns = n * _NS_PER_HOUR } end
+
+// A Duration day is exactly 24 hours. Real calendar days are 23 or 25 hours
+// on DST boundaries, so "tomorrow at the same wall-clock time" is
+// calendar.AddDaysGregorian, not epoch + Days(1).
+@en "Days"
+@fa "روزها"
+@ar "أیام"
+pub inline pure func Days(n: i64): Duration: ret Duration { ns = n * _NS_PER_DAY } end
+
+@en "SecondsF"
+@fa "ثانیه اعشاری"
+@ar "ثوان عشریة"
+pub inline pure func SecondsF(x: f64): Duration: ret Duration { ns = (x * 1000000000.0) as i64 } end
+
+@en "ZeroDuration"
+@fa "مدت صفر"
+@ar "مدة صفریة"
+pub inline pure func ZeroDuration(): Duration: ret Duration { ns = 0 } end
+
+// -- formatting -----------------------------------------------------------
+
+// Go-style: "0s", "1.5s", "150ms", "2m30s", "1h0m0s", "-2.5us".
+@en "FormatDuration"
+@fa "قالب مدت"
+@ar "تنسیق المدة"
+pub func FormatDuration(d: Duration): str:
+    if d.ns == 0: ret "0s" end
+    mut sign := ""
+    mut v := d.ns
+    if v < 0:
+        sign = "-"
+        v = 0 - v
+    end
+    if v < _NS_PER_US: ret sign + conv.FormatInt(v) + "ns" end
+    if v < _NS_PER_MS:
+        ret sign + conv.FormatInt(v / _NS_PER_US) + _fracStr(v % _NS_PER_US, 3) + "us"
+    end
+    if v < _NS_PER_SEC:
+        ret sign + conv.FormatInt(v / _NS_PER_MS) + _fracStr(v % _NS_PER_MS, 6) + "ms"
+    end
+    secs := v / _NS_PER_SEC
+    frac := _fracStr(v % _NS_PER_SEC, 9)
+    if secs < 60: ret sign + conv.FormatInt(secs) + frac + "s" end
+    if secs < 3600:
+        ret sign + conv.FormatInt(secs / 60) + "m" + conv.FormatInt(secs % 60) + frac + "s"
+    end
+    h := secs / 3600
+    m := (secs % 3600) / 60
+    s := secs % 60
+    ret sign + conv.FormatInt(h) + "h" + conv.FormatInt(m) + "m" + conv.FormatInt(s) + frac + "s"
+end
+
+// -- parsing --------------------------------------------------------------
+
+// Parses "1h30m", "-2.5s", "150ms", "1h30m10.5s", "0". Accepts a leading
+// sign, then one or more <number><unit> groups with no separators. Units:
+// ns, us (also µs/μs), ms, s, m, h, d. A bare "0" is accepted as zero; any
+// other unitless number is an error.
+@en "ParseDuration"
+@fa "تجزیه مدت"
+@ar "تحلیل المدة"
+pub func ParseDuration(s: str): DurationResult:
+    n := s.len()
+    bad := DurationResult { ok = false, value = Duration { ns = 0 } }
+    if n == 0: ret bad end
+    bp := _dbp(s)
+    mut i := 0
+    mut neg := false
+    c0 := _dub(bp, 0)
+    if c0 == 45:
+        neg = true
+        i = 1
+    else c0 == 43:
+        i = 1
+    end
+    if i >= n: ret bad end
+    if s.substr(i, n - i) == "0": ret DurationResult { ok = true, value = Duration { ns = 0 } } end
+    mut total := 0 as i64
+    mut groups := 0
+    until i < n:
+        // integer part
+        mut whole := 0 as i64
+        mut digits := 0
+        until i < n && _isDigitByte(_dub(bp, i)):
+            whole = whole * 10 + ((_dub(bp, i) - 48) as i64)
+            digits += 1
+            i += 1
+        end
+        // Fractional part, kept as a scaled numerator so the whole thing
+        // stays in integer arithmetic (0.5s must be exactly 500ms).
+        mut fracNum := 0 as i64
+        mut fracDen := 1 as i64
+        if i < n && _dub(bp, i) == 46:
+            i += 1
+            mut fdigits := 0
+            until i < n && _isDigitByte(_dub(bp, i)):
+                // Digits past the 9th are below nanosecond resolution and
+                // would overflow the denominator, so they are skipped.
+                if fdigits < 9:
+                    fracNum = fracNum * 10 + ((_dub(bp, i) - 48) as i64)
+                    fracDen = fracDen * 10
+                    fdigits += 1
+                end
+                i += 1
+            end
+            digits = digits + fdigits
+        end
+        if digits == 0: ret bad end
+        // Unit: the run of bytes up to the next digit.
+        us := i
+        until i < n && !_isDigitByte(_dub(bp, i)):
+            i += 1
+        end
+        if i == us: ret bad end
+        unitNs := _unitNanos(s.substr(us, i - us))
+        if unitNs == 0: ret bad end
+        total = total + whole * unitNs + (fracNum * unitNs) / fracDen
+        groups += 1
+    end
+    if groups == 0: ret bad end
+    if neg: total = 0 - total end
+    ret DurationResult { ok = true, value = Duration { ns = total } }
+end
+
+// ParseDuration with a fallback instead of a flag, for config defaults.
+@en "ParseDurationOr"
+@fa "تجزیه مدت یا"
+@ar "تحلیل المدة أو"
+pub func ParseDurationOr(s: str, fallback: Duration): Duration:
+    r := ParseDuration(s)
+    if r.ok: ret r.value end
+    ret fallback
+end
+
+// -- bridges to the rest of the package -----------------------------------
+
+// Sleep for a Duration. A negative or zero span is a no-op; anything under
+// a millisecond still yields for the shortest sleep available, so a polling
+// loop cannot spin.
+@en "SleepFor"
+@fa "خواب به مدت"
+@ar "نوم لمدة"
+pub func SleepFor(d: Duration):
+    if d.ns <= 0: ret end
+    ms := d.ns / _NS_PER_MS
+    if ms > 0:
+        sleep_ms(ms as int)
+        ret
+    end
+    sleep_ms(1)
+end
+
+// Elapsed monotonic time since a MonoNanos() reading, as a Duration.
+@en "SinceDuration"
+@fa "مدت از"
+@ar "المدة منذ"
+pub func SinceDuration(start_ns: i64): Duration:
+    ret Duration { ns = _mono_ns() - start_ns }
+end
+
+// The span between two epoch-second timestamps, as a Duration.
+@en "DurationBetween"
+@fa "مدت بین"
+@ar "المدة بین"
+pub inline pure func DurationBetween(later: i64, earlier: i64): Duration:
+    ret Duration { ns = (later - earlier) * _NS_PER_SEC }
+end
+
+// Shift an epoch-second timestamp by a Duration. Sub-second parts are
+// truncated, since the epoch itself has one-second resolution.
+@en "AddDuration"
+@fa "افزودن مدت"
+@ar "إضافة مدة"
+pub inline pure func AddDuration(epoch: i64, d: Duration): i64:
+    ret epoch + d.ns / _NS_PER_SEC
+end

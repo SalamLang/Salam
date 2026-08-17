@@ -155,7 +155,12 @@ const char *cg_cident(cg_t *cg, const char *name)
     }
     const char *r = arena_strdup(cg->a, sb_cstr(&b));
     sb_free(&b);
-    return r;
+    /* Copying the leading underscore through as one lets a name land exactly
+     * on a C keyword that the doubling used to step over: `_Bool` came out as
+     * `__Bool` before, and as plain `_Bool` now - "two or more data types in
+     * declaration specifiers". The suffix is the same escape the all-alnum
+     * path above already applies to `int`, `while` and friends. */
+    return cg_is_c_keyword(r) ? cg_fmt(cg, "%s_", r) : r;
 }
 
 static const char *base_ctype(const char *base)

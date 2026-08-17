@@ -12,55 +12,55 @@ import sm "../semantic/semantic.salam"
 func lv_vardecl(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     node := at.Get(a, n)
     ts := str.Len(node.type_str) > 0 ? node.type_str : "i32"
-    ptr2 := "%v." + safe_name(node.name) + "." + co.I64Toa(v.tmp as i64)
+    slot := "%v." + safe_name(node.name) + "." + co.I64Toa(v.tmp as i64)
     v.tmp += 1
-    emit_alloca(v, ptr2 + " = alloca " + ty_of(v, s, a, ts))
-    local_add(v, node.name, ptr2, ts)
+    emit_alloca(v, slot + " = alloca " + ty_of(v, s, a, ts))
+    local_add(v, node.name, slot, ts)
     if node.a != 0:
-        vv := conv(v, s, a, lv_expr(v, s, a, node.a), ts)
-        emit(v, "store " + ty_of(v, s, a, ts) + " " + vv + ", ptr " + ptr2)
+        init_val := conv(v, s, a, lv_expr(v, s, a, node.a), ts)
+        emit(v, "store " + ty_of(v, s, a, ts) + " " + init_val + ", ptr " + slot)
         ret
     end
     // No initializer: a bare alloca reads back as undef. Sema rejects every
     // read that no assignment precedes, but a `&:` parameter the callee only
     // writes on some paths would still leave this indeterminate, so zero it -
     // the C and JS backends do the same.
-    emit(v, "store " + ty_of(v, s, a, ts) + " " + zero_of(s, ts) + ", ptr " + ptr2)
+    emit(v, "store " + ty_of(v, s, a, ts) + " " + zero_of(s, ts) + ", ptr " + slot)
 end
 
 // ll_compound_base
-func compound_base(k: int): int:
-    if k == tok.TK_PLUS_EQ:
+func compound_base(op: int): int:
+    if op == tok.TK_PLUS_EQ:
         ret tok.TK_PLUS
     end
-    if k == tok.TK_MINUS_EQ:
+    if op == tok.TK_MINUS_EQ:
         ret tok.TK_MINUS
     end
-    if k == tok.TK_STAR_EQ:
+    if op == tok.TK_STAR_EQ:
         ret tok.TK_STAR
     end
-    if k == tok.TK_SLASH_EQ:
+    if op == tok.TK_SLASH_EQ:
         ret tok.TK_SLASH
     end
-    if k == tok.TK_PERCENT_EQ:
+    if op == tok.TK_PERCENT_EQ:
         ret tok.TK_PERCENT
     end
-    if k == tok.TK_POWER_EQ:
+    if op == tok.TK_POWER_EQ:
         ret tok.TK_POWER
     end
-    if k == tok.TK_AMP_EQ:
+    if op == tok.TK_AMP_EQ:
         ret tok.TK_AMP
     end
-    if k == tok.TK_PIPE_EQ:
+    if op == tok.TK_PIPE_EQ:
         ret tok.TK_PIPE
     end
-    if k == tok.TK_CARET_EQ:
+    if op == tok.TK_CARET_EQ:
         ret tok.TK_CARET
     end
-    if k == tok.TK_SHL_EQ:
+    if op == tok.TK_SHL_EQ:
         ret tok.TK_SHL
     end
-    if k == tok.TK_SHR_EQ:
+    if op == tok.TK_SHR_EQ:
         ret tok.TK_SHR
     end
     ret tok.TK_EOF
@@ -69,36 +69,36 @@ end
 // ll_assign
 func lv_assign(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     node := at.Get(a, n)
-    tgt := node.a
-    tk := tgt != 0 ? at.KindOf(a, tgt) : 0 - 1
-    if tgt == 0 || (
-        tk != at.AST_IDENTIFIER && tk != at.AST_MEMBER && tk != at.AST_INDEX
+    target := node.a
+    target_kind := target != 0 ? at.KindOf(a, target) : 0 - 1
+    if target == 0 || (
+        target_kind != at.AST_IDENTIFIER && target_kind != at.AST_MEMBER && target_kind != at.AST_INDEX
     ):
         lv_error(v, a, n, "assignment to a non-lvalue")
         ret
     end
 
-    if node.op == tok.TK_ASSIGN && tk == at.AST_INDEX && lv_index_set(v, s, a, tgt, node.b):
+    if node.op == tok.TK_ASSIGN && target_kind == at.AST_INDEX && lv_index_set(v, s, a, target, node.b):
         ret
     end
-    addr := lv_addr_of(v, s, a, tgt)
+    addr := lv_addr_of(v, s, a, target)
     ts := addr.ts
     mut rhs := ""
     if node.op == tok.TK_ASSIGN:
         rhs = conv(v, s, a, lv_expr(v, s, a, node.b), ts)
     else:
-        base := compound_base(node.op)
-        if base == tok.TK_EOF:
+        base_op := compound_base(node.op)
+        if base_op == tok.TK_EOF:
             lv_error(v, a, n, "compound assignment operator")
             ret
         end
         bin := at.NewNode(a, at.AST_BINARY)
-        at.SetOp(a, bin, base)
+        at.SetOp(a, bin, base_op)
         at.SetTypeStr(a, bin, ts)
-        mut bn := at.Get(a, bin)
-        bn.a = tgt
-        bn.b = node.b
-        at.Put(a, bin, bn)
+        mut bin_node := at.Get(a, bin)
+        bin_node.a = target
+        bin_node.b = node.b
+        at.Put(a, bin, bin_node)
         rhs = conv(v, s, a, lv_binary(v, s, a, bin), ts)
     end
     emit(v, "store " + ty_of(v, s, a, ts) + " " + rhs + ", ptr " + addr.ptr + addr.tbaa)
@@ -113,17 +113,17 @@ end
 
 // ll_stmts_scoped
 func stmts_scoped(v &: Lv, s &: sm.Sema, a &: at.Ast, block: int):
-    mark := v.locals.len()
-    dmark := v.defers.len()
-    bn := at.Get(a, block)
+    locals_mark := v.locals.len()
+    defers_mark := v.defers.len()
+    block_node := at.Get(a, block)
     mut i := 0
-    until i < bn.list.len():
-        lv_stmt(v, s, a, bn.list.get(i))
+    until i < block_node.list.len():
+        lv_stmt(v, s, a, block_node.list.get(i))
         i += 1
     end
-    emit_defers_from(v, s, a, dmark)
-    defers_trunc(v, dmark)
-    locals_trunc(v, mark)
+    emit_defers_from(v, s, a, defers_mark)
+    defers_trunc(v, defers_mark)
+    locals_trunc(v, locals_mark)
 end
 
 // ll_if
@@ -153,16 +153,16 @@ end
 func lv_match_stmt(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     node := at.Get(a, n)
     if node.list.len() == 0:
-        _discard := lv_expr(v, s, a, node.a)
+        _unused_subject := lv_expr(v, s, a, node.a)
         ret
     end
-    subj := lv_expr(v, s, a, node.a)
-    is_variant := str.StartsWith(subj.ts, "Variant<")
+    subject := lv_expr(v, s, a, node.a)
+    is_variant := str.StartsWith(subject.ts, "Variant<")
     endL := new_lbl(v, "mend")
     mut i := 0
     until i < node.list.len():
         arm := node.list.get(i)
-        cond := lv_match_arm_cond(v, s, a, arm, subj, is_variant)
+        cond := lv_match_arm_cond(v, s, a, arm, subject, is_variant)
         bodyL := new_lbl(v, "marm")
         nextL := (i + 1 < node.list.len()) ? new_lbl(v, "mnext") : endL
         emit_term(v, "br i1 " + cond + ", label %" + bodyL + ", label %" + nextL)
@@ -175,14 +175,14 @@ func lv_match_stmt(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
 end
 
 // loop-stack push (see the file header for the protocol).
-func loop_push(v &: Lv, brklbl: str, contlbl: str):
+func loop_push(v &: Lv, break_lbl: str, continue_lbl: str):
     if v.brk.len() == v.nloop:
-        v.brk.push(brklbl)
-        v.cont.push(contlbl)
+        v.brk.push(break_lbl)
+        v.cont.push(continue_lbl)
         v.loop_dmark.push(v.defers.len())
     else:
-        v.brk.set(v.nloop, brklbl)
-        v.cont.set(v.nloop, contlbl)
+        v.brk.set(v.nloop, break_lbl)
+        v.cont.set(v.nloop, continue_lbl)
         v.loop_dmark.set(v.nloop, v.defers.len())
     end
     v.nloop += 1
@@ -214,7 +214,7 @@ end
 // ll_for
 func lv_for(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     node := at.Get(a, n)
-    mark := v.locals.len()
+    locals_mark := v.locals.len()
     if node.a != 0:
         lv_stmt(v, s, a, node.a)
     end
@@ -234,7 +234,7 @@ func lv_for(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     emit_label(v, bodyL)
     if v.nloop >= 64:
         lv_error(v, a, n, "loop nesting too deep")
-        locals_trunc(v, mark)
+        locals_trunc(v, locals_mark)
         ret
     end
     loop_push(v, endL, stepL)
@@ -247,11 +247,11 @@ func lv_for(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     end
     emit_term(v, "br label %" + condL)
     emit_label(v, endL)
-    locals_trunc(v, mark)
+    locals_trunc(v, locals_mark)
 end
 
 // ll_const_i64
-func const_i64(a &: at.Ast, n: int, out2 &: i64): bool:
+func const_i64(a &: at.Ast, n: int, out &: i64): bool:
     if n == 0:
         ret false
     end
@@ -259,73 +259,73 @@ func const_i64(a &: at.Ast, n: int, out2 &: i64): bool:
     if node.kind != at.AST_LITERAL || node.op != tok.TK_INT:
         ret false
     end
-    out2 = node.value_int as i64
+    out = node.value_int as i64
     ret true
 end
 
 // ll_repeat
 func lv_repeat(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     node := at.Get(a, n)
-    mut initv := ""
-    mut boundv := ""
-    mut stepv := ""
-    mut dir := ""
-    mut static_dir := false
-    mut static_up := false
+    mut start_val := ""
+    mut bound_val := ""
+    mut step_val := ""
+    mut going_up := "" // runtime i1: start <= bound, when the direction is not known here
+    mut dir_is_static := false
+    mut counts_up := false
     if node.c != 0:
-        mut ci := 0 as i64
-        mut cb := 0 as i64
-        if const_i64(a, node.a, ci) && const_i64(a, node.c, cb):
-            static_dir = true
-            static_up = ci <= cb
-            initv = co.I64Toa(ci)
-            boundv = co.I64Toa(cb)
+        mut const_start := 0 as i64
+        mut const_bound := 0 as i64
+        if const_i64(a, node.a, const_start) && const_i64(a, node.c, const_bound):
+            dir_is_static = true
+            counts_up = const_start <= const_bound
+            start_val = co.I64Toa(const_start)
+            bound_val = co.I64Toa(const_bound)
             if node.d == 0:
-                stepv = static_up ? "1" : "-1"
+                step_val = counts_up ? "1" : "-1"
             else:
-                mut cs := 0 as i64
-                if const_i64(a, node.d, cs):
-                    stepv = co.I64Toa(static_up ? cs : (0 as i64) - cs)
+                mut const_step := 0 as i64
+                if const_i64(a, node.d, const_step):
+                    step_val = co.I64Toa(counts_up ? const_step : (0 as i64) - const_step)
                 else:
-                    raw := conv(v, s, a, lv_expr(v, s, a, node.d), "i64")
-                    if static_up:
-                        stepv = raw
+                    step_expr := conv(v, s, a, lv_expr(v, s, a, node.d), "i64")
+                    if counts_up:
+                        step_val = step_expr
                     else:
-                        stepv = new_tmp(v)
-                        emit(v, stepv + " = sub i64 0, " + raw)
+                        step_val = new_tmp(v)
+                        emit(v, step_val + " = sub i64 0, " + step_expr)
                     end
                 end
             end
         else:
-            initv = conv(v, s, a, lv_expr(v, s, a, node.a), "i64")
-            boundv = conv(v, s, a, lv_expr(v, s, a, node.c), "i64")
-            raw2 := node.d != 0 ? conv(v, s, a, lv_expr(v, s, a, node.d), "i64") : "1"
-            neg := new_tmp(v)
-            dir = new_tmp(v)
-            emit(v, dir + " = icmp sle i64 " + initv + ", " + boundv)
-            emit(v, neg + " = sub i64 0, " + raw2)
-            stepv = new_tmp(v)
+            start_val = conv(v, s, a, lv_expr(v, s, a, node.a), "i64")
+            bound_val = conv(v, s, a, lv_expr(v, s, a, node.c), "i64")
+            up_step := node.d != 0 ? conv(v, s, a, lv_expr(v, s, a, node.d), "i64") : "1"
+            down_step := new_tmp(v)
+            going_up = new_tmp(v)
+            emit(v, going_up + " = icmp sle i64 " + start_val + ", " + bound_val)
+            emit(v, down_step + " = sub i64 0, " + up_step)
+            step_val = new_tmp(v)
             emit(
-                v, stepv + " = select i1 " + dir + ", i64 " + raw2 + ", i64 " + neg
+                v, step_val + " = select i1 " + going_up + ", i64 " + up_step + ", i64 " + down_step
             )
         end
     else:
-        initv = "0"
-        boundv = conv(v, s, a, lv_expr(v, s, a, node.a), "i64")
-        stepv = "1"
+        start_val = "0"
+        bound_val = conv(v, s, a, lv_expr(v, s, a, node.a), "i64")
+        step_val = "1"
     end
-    ctr := new_tmp(v)
-    emit_alloca(v, ctr + " = alloca i64")
-    emit(v, "store i64 " + initv + ", ptr " + ctr)
-    mark := v.locals.len()
-    mut bindp := ""
-    iv_is64 := str.Len(node.type_str) > 0 && str.Equals(node.type_str, "i64")
-    ivty := iv_is64 ? "i64" : "i32"
+    counter := new_tmp(v)
+    emit_alloca(v, counter + " = alloca i64")
+    emit(v, "store i64 " + start_val + ", ptr " + counter)
+    locals_mark := v.locals.len()
+    mut bind_slot := ""
+    bind_is_i64 := str.Len(node.type_str) > 0 && str.Equals(node.type_str, "i64")
+    bind_ty := bind_is_i64 ? "i64" : "i32"
     if str.Len(node.name) > 0:
-        bindp = "%v." + safe_name(node.name) + "." + co.I64Toa(v.tmp as i64)
+        bind_slot = "%v." + safe_name(node.name) + "." + co.I64Toa(v.tmp as i64)
         v.tmp += 1
-        emit_alloca(v, bindp + " = alloca " + ivty)
-        local_add(v, node.name, bindp, ivty)
+        emit_alloca(v, bind_slot + " = alloca " + bind_ty)
+        local_add(v, node.name, bind_slot, bind_ty)
     end
     condL := new_lbl(v, "rcond")
     bodyL := new_lbl(v, "rbody")
@@ -333,39 +333,39 @@ func lv_repeat(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     endL := new_lbl(v, "rend")
     emit_term(v, "br label %" + condL)
     emit_label(v, condL)
-    cv := new_tmp(v)
-    emit(v, cv + " = load i64, ptr " + ctr)
+    cur := new_tmp(v)
+    emit(v, cur + " = load i64, ptr " + counter)
     mut cmp := ""
-    if node.c != 0 && static_dir:
+    if node.c != 0 && dir_is_static:
         cmp = new_tmp(v)
         emit(
-            v, cmp + " = icmp " + (static_up ? "sle" : "sge") + " i64 " + cv + ", " + boundv
+            v, cmp + " = icmp " + (counts_up ? "sle" : "sge") + " i64 " + cur + ", " + bound_val
         )
     else node.c != 0:
-        le := new_tmp(v)
-        ge := new_tmp(v)
-        emit(v, le + " = icmp sle i64 " + cv + ", " + boundv)
-        emit(v, ge + " = icmp sge i64 " + cv + ", " + boundv)
+        at_or_below := new_tmp(v)
+        at_or_above := new_tmp(v)
+        emit(v, at_or_below + " = icmp sle i64 " + cur + ", " + bound_val)
+        emit(v, at_or_above + " = icmp sge i64 " + cur + ", " + bound_val)
         cmp = new_tmp(v)
-        emit(v, cmp + " = select i1 " + dir + ", i1 " + le + ", i1 " + ge)
+        emit(v, cmp + " = select i1 " + going_up + ", i1 " + at_or_below + ", i1 " + at_or_above)
     else:
         cmp = new_tmp(v)
-        emit(v, cmp + " = icmp slt i64 " + cv + ", " + boundv)
+        emit(v, cmp + " = icmp slt i64 " + cur + ", " + bound_val)
     end
     emit_term(v, "br i1 " + cmp + ", label %" + bodyL + ", label %" + endL)
     emit_label(v, bodyL)
-    if str.Len(bindp) > 0:
-        if iv_is64:
-            emit(v, "store i64 " + cv + ", ptr " + bindp)
+    if str.Len(bind_slot) > 0:
+        if bind_is_i64:
+            emit(v, "store i64 " + cur + ", ptr " + bind_slot)
         else:
-            cvt := new_tmp(v)
-            emit(v, cvt + " = trunc i64 " + cv + " to i32")
-            emit(v, "store i32 " + cvt + ", ptr " + bindp)
+            narrowed := new_tmp(v)
+            emit(v, narrowed + " = trunc i64 " + cur + " to i32")
+            emit(v, "store i32 " + narrowed + ", ptr " + bind_slot)
         end
     end
     if v.nloop >= 64:
         lv_error(v, a, n, "loop nesting too deep")
-        locals_trunc(v, mark)
+        locals_trunc(v, locals_mark)
         ret
     end
     loop_push(v, endL, stepL)
@@ -373,14 +373,14 @@ func lv_repeat(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     v.nloop -= 1
     emit_term(v, "br label %" + stepL)
     emit_label(v, stepL)
-    cv2 := new_tmp(v)
-    emit(v, cv2 + " = load i64, ptr " + ctr)
-    inc := new_tmp(v)
-    emit(v, inc + " = add i64 " + cv2 + ", " + stepv)
-    emit(v, "store i64 " + inc + ", ptr " + ctr)
+    cur_at_step := new_tmp(v)
+    emit(v, cur_at_step + " = load i64, ptr " + counter)
+    next := new_tmp(v)
+    emit(v, next + " = add i64 " + cur_at_step + ", " + step_val)
+    emit(v, "store i64 " + next + ", ptr " + counter)
     emit_term(v, "br label %" + condL)
     emit_label(v, endL)
-    locals_trunc(v, mark)
+    locals_trunc(v, locals_mark)
 end
 
 // ll_stmt
@@ -410,11 +410,11 @@ func lv_stmt(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
         ret
     end
     if k == at.AST_EXPR_STMT:
-        _discard := lv_expr(v, s, a, node.a)
+        _unused_value := lv_expr(v, s, a, node.a)
         ret
     end
     if k == at.AST_INCDEC:
-        _discard2 := lv_expr(v, s, a, n)
+        _unused_incdec := lv_expr(v, s, a, n)
         ret
     end
     if k == at.AST_RETURN:

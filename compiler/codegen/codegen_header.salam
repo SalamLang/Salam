@@ -9,6 +9,50 @@ import sm "../semantic/semantic.salam"
 
 // ===== codegen_header.c =====
 
+// The stem the driver names an import's generated module after: the base
+// name of the resolved file with its extension dropped, which is what
+// driver_build turns into salam_mod_<stem>.c/.h/.o. "" when the import cannot
+// be resolved, which the caller treats as "nothing to emit" - a missing import
+// is already a semantic error by the time codegen runs.
+func cg_import_module(a &: at.Ast, did: int): str:
+    d := at.Get(a, did)
+    mut p := d.name
+    if d.value_kind == tok.TV_STRING && str.Len(d.value_str) > 0:
+        p = d.value_str
+    end
+    if str.Len(p) == 0:
+        ret ""
+    end
+    mut resolved := d.type_str
+    if str.Len(resolved) == 0:
+        resolved = sm.ResolveImport("", p)
+    end
+    if str.Len(resolved) == 0:
+        ret ""
+    end
+    stem := str.Len(resolved) - str.Len(pth.PathBase(resolved))
+    rl := str.Len(resolved)
+    mut k := 0
+    mut b := co.SbNew()
+    mut q := stem
+    until q < rl && k < 127:
+        c := byte_at(resolved, q)
+        if c == 46:
+            break
+        end
+        co.SbPutc(b, c)
+        k += 1
+        q += 1
+    end
+    basev := co.SbCstr(b)
+    co.SbFree(b)
+    ret basev
+end
+
+func cg_module_init_name(module_name: str): str:
+    ret CG_MOD_PREFIX + cg_cident(module_name) + "_init"
+end
+
 func vec_collect_one(g &: Cg, ts: str):
     if str.Len(ts) == 0:
         ret
@@ -434,34 +478,10 @@ func hdr_prelude(g &: Cg, a &: at.Ast, program: int):
         if d.kind != at.AST_IMPORT:
             continue
         end
-        mut p := d.name
-        if d.value_kind == tok.TV_STRING && str.Len(d.value_str) > 0:
-            p = d.value_str
-        end
-        if str.Len(p) == 0:
+        basev := cg_import_module(a, prog.list.get(i))
+        if str.Len(basev) == 0:
             continue
         end
-        mut resolved := d.type_str
-        if str.Len(resolved) == 0:
-            resolved = sm.ResolveImport("", p)
-        end
-        stem := str.Len(resolved) - str.Len(pth.PathBase(resolved))
-        // char base[128] clamp kept.
-        rl := str.Len(resolved)
-        mut k := 0
-        mut b := co.SbNew()
-        mut q := stem
-        until q < rl && k < 127:
-            c := byte_at(resolved, q)
-            if c == 46:
-                break
-            end
-            co.SbPutc(b, c)
-            k += 1
-            q += 1
-        end
-        basev := co.SbCstr(b)
-        co.SbFree(b)
         outh(g, `#include "` + CG_MOD_PREFIX + basev + ".h\"\n")
     end
     outh(g, "\n")

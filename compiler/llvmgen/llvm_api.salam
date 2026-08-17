@@ -482,6 +482,32 @@ pub func RunOpts(
     end
     emit_externs(v, s, a)
     emit_globals(v, s, a, program)
+    // A global whose initialiser is not a constant becomes a store replayed at
+    // the top of the entry function, and a package's only get onto that list
+    // once the package has been touched. Touching is otherwise lazy - it
+    // happens while lowering the first call into the package, which is
+    // *inside* the entry function's body, by which point the store list has
+    // already been emitted. The initialiser was silently dropped, so
+    // `mut g := pkg.New()` in an imported package stayed zero. Packages that
+    // declare one are pulled in up front; the rest stay lazy.
+    repeat sm.PackageCount(s) with pi:
+        pkid := sm.PackageAt(s, pi)
+        pky := sm.SymAt(s, pkid)
+        if pky.decl != 0:
+            repeat at.ChildCount(a, pky.decl) with pj:
+                gd := at.Child(a, pky.decl, pj)
+                gn := at.Get(a, gd)
+                if gn.kind != at.AST_VAR_DECL && gn.kind != at.AST_CONST_DECL:
+                    continue
+                end
+                if gn.a == 0 || at.KindOf(a, gn.a) == at.AST_LITERAL:
+                    continue
+                end
+                touch_pkg(v, s, a, pkid)
+                break
+            end
+        end
+    end
     emit_impls(v, s, a)
     lg.Log(
         lgr, lg.PH_CODEGEN, lg.LOG_INFO, "generating LLVM IR for module '" + module_name + "'" + (v.debug ? i18.Tr(" (+debug info)") : "")

@@ -79,12 +79,19 @@ func g_subst(a &: at.Ast, nid: int, params: Vector<str>, args: Vector<int>):
             end
             nv.is_pointer = ptr
             nv.is_dyn = cc.is_dyn
-            // The resolved type comes along only where the occurrence is the
-            // bare parameter. `T*` or `T[4]` in the template is a different
-            // type from what the caller resolved, and has to go back through
-            // the ordinary path.
+            // The resolved type comes along whole only where the occurrence
+            // is the bare parameter. `T*` or `T[4]` stands for a different
+            // type than what the caller resolved, so only the base travels and
+            // sema_resolve_type re-applies the `*`/`[N]` - going back through
+            // the name would fail for any argument the template's own package
+            // cannot see (`Vector<Row>` over a struct from another package:
+            // "unknown type 'cmod_Row'"). The base is only usable when the
+            // argument node is itself undecorated; `T[4]` with T = `Foo[3]`
+            // has to merge dims, and cc.sema_type is the whole array there.
             if ptr == cc.is_pointer && nv.dims.len() == 0:
                 nv.sema_type = cc.sema_type
+            else !cc.is_pointer && cc.dims.len() == 0:
+                nv.sema_base_type = cc.sema_type
             end
             mut merged := Vector {} as Vector<int>
             repeat cc.dims.len() with k2:
@@ -388,7 +395,7 @@ func g_instantiate_func(
     iv.synthetic = true
     // The clone is checked against the declaring package's scope, so its body
     // may name that package's private functions. See at.Node.home_pkg.
-    iv.home_pkg = derive_pkg_name_of(s, s.gen_pkg)
+    iv.home_pkg = derive_pkg_name_of(s, s.gen_pkg != 0 ? s.gen_pkg : s.global)
     at.Put(a, inst, iv)
     g_subst(a, inst, tn.typarams, targ_nodes)
     mut iv2 := at.Get(a, inst)

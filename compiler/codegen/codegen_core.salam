@@ -48,6 +48,46 @@ func emit_private_protos(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
     out(g, "\n")
 end
 
+// A global whose initialiser is not a constant is emitted as a plain
+// definition plus a separate assignment, because C only accepts a constant
+// expression there. Those assignments used to be replayed at the top of `main`
+// and nowhere else, which meant they ran for the main module only: a
+// `mut g_cat := catalog.New()` in an imported package stayed zeroed, and the
+// first read of it failed a long way from the cause ("Vector.get: index out of
+// bounds") with nothing to say the initialiser had never run.
+//
+// Every module gets one of these instead, and runs its imports' first, so the
+// graph comes up bottom-up before main's body starts. The flag is set before
+// the recursion, not after, so an import cycle terminates rather than
+// recursing forever - the same trade C++ makes for static initialisation.
+func emit_module_init(g &: Cg, _s &: sm.Sema, a &: at.Ast, program: int):
+    out(g, "void " + cg_module_init_name(g.module) + "(void) {\n")
+    out(g, "    static int __salam_init_done = 0;\n")
+    out(g, "    if (__salam_init_done) return;\n")
+    out(g, "    __salam_init_done = 1;\n")
+    // std/core is every module's dependency without appearing in anyone's
+    // import list - the header includes its header on the same terms.
+    if !str.Equals(g.module, "core"):
+        out(g, "    " + cg_module_init_name("core") + "();\n")
+    end
+    prog := at.Get(a, program)
+    repeat prog.list.len() with i:
+        did := prog.list.get(i)
+        if at.KindOf(a, did) != at.AST_IMPORT:
+            continue
+        end
+        basev := cg_import_module(a, did)
+        if str.Len(basev) == 0:
+            continue
+        end
+        out(g, "    " + cg_module_init_name(basev) + "();\n")
+    end
+    repeat g.deferred.len() with j:
+        out(g, "    " + g.deferred.get(j) + "\n")
+    end
+    out(g, "}\n\n")
+end
+
 func emit_globals(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
     prog := at.Get(a, program)
     repeat prog.list.len() with i:

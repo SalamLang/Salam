@@ -470,8 +470,9 @@ func collect_decls(ip &: Interp, a &: at.Ast, program: int):
                 register_method_envs(ip, a, d, ip.globals)
             end
         else dn.kind == at.AST_CONST_DECL || dn.kind == at.AST_VAR_DECL:
-            v := dn.a != 0 ? eval(ip, a, ip.globals, dn.a) : val_null()
-            env_define(ip, ip.globals, dn.name, v)
+            // The initialiser is not run here - interp_eval_globals does it,
+            // once the rest of the program exists. See there.
+            env_define(ip, ip.globals, dn.name, val_null())
             if ip.failed:
                 ret
             end
@@ -498,6 +499,21 @@ func collect_module_funcs(ip &: Interp, a &: at.Ast, mid: int, prog: int):
                 env_define(ip, md.env, dn.name, mk_closure(ip, d, md.env))
             end
         else dn.kind == at.AST_STRUCT_DEF:
+            // A package's struct keeps its short name on the declaration but
+            // its *type* is named <pkg>_<name>, and a type string is what the
+            // walker has in hand wherever it has to lay a value out in memory
+            // - the element type of a Vector<T> above all. Looking only under
+            // the short name left `Vector<pkg.Row>.get(i)` reading the bytes
+            // back as an opaque box, so the result was not a struct and any
+            // field access on it failed with "cannot access member".
+            if str.Len(dn.name) != 0 && str.Len(md.name) != 0 && !str.Equals(md.name, "main"):
+                qual := md.name + "_" + dn.name
+                if find_struct(ip, qual) == 0:
+                    mut tq := ip.tab_structs
+                    itab_put(tq, qual, d)
+                    ip.tab_structs = tq
+                end
+            end
             if find_struct(ip, dn.name) == 0:
                 ip.structs.push(d)
                 if str.Len(dn.name) != 0:
@@ -550,10 +566,8 @@ func eval_module_consts(ip &: Interp, a &: at.Ast, mid: int, prog: int):
     repeat at.ChildCount(a, prog) with i:
         d := at.Child(a, prog, i)
         dn := at.Get(a, d)
-        if dn.kind == at.AST_CONST_DECL || dn.kind == at.AST_VAR_DECL:
-            env_define(
-                ip, md.env, dn.name, dn.a != 0 ? eval(ip, a, md.env, dn.a) : val_null()
-            )
+        if (dn.kind == at.AST_CONST_DECL || dn.kind == at.AST_VAR_DECL) && dn.a != 0:
+            env_define(ip, md.env, dn.name, eval(ip, a, md.env, dn.a))
             if ip.failed:
                 ret
             end
@@ -602,16 +616,46 @@ func build_modules(ip &: Interp, a &: at.Ast, sem &: sm.Sema):
         end
     end
     wire_imports(ip, sem, ip.globals, sem.global)
-    repeat npk with i3:
-        pkid3 := sm.PackageAt(sem, i3)
-        pk3 := sm.SymAt(sem, pkid3)
-        name3 := pkg_name_of(a, sem, pkid3)
-        mid3 := str.Len(name3) != 0 ? find_module(ip, name3) : 0
-        if mid3 != 0 && pk3.decl != 0:
-            eval_module_consts(ip, a, mid3, pk3.decl)
+end
+
+// Run every global initialiser, packages first and the program last.
+//
+// Deliberately its own pass, after collect_decls, build_modules and the
+// generic/synthetic fixups: an initialiser is an arbitrary expression and may
+// call anything the program defines, but the declaration-order rules put
+// globals *above* the functions of their own file (E085), so evaluating one
+// while its file is still being collected reached a function that did not
+// exist yet - `mut g_cat := catalog.New()` failed with "call to undefined
+// function 'New'", or, across a module boundary, quietly left the global at
+// its zero value and surfaced much later as "Vector.get: index out of bounds".
+// The compiled backends run the same initialisers from salam_mod_<m>_init();
+// this is the walker's equivalent.
+func interp_eval_globals(ip &: Interp, a &: at.Ast, sem &: sm.Sema, program: int):
+    npk := sm.PackageCount(sem)
+    repeat npk with i:
+        pkid := sm.PackageAt(sem, i)
+        pk := sm.SymAt(sem, pkid)
+        name := pkg_name_of(a, sem, pkid)
+        mid := str.Len(name) != 0 ? find_module(ip, name) : 0
+        if mid != 0 && pk.decl != 0:
+            eval_module_consts(ip, a, mid, pk.decl)
             if ip.failed:
                 ret
             end
+        end
+    end
+    repeat at.ChildCount(a, program) with j:
+        d := at.Child(a, program, j)
+        dn := at.Get(a, d)
+        if dn.kind != at.AST_CONST_DECL && dn.kind != at.AST_VAR_DECL:
+            continue
+        end
+        if dn.a == 0:
+            continue
+        end
+        env_define(ip, ip.globals, dn.name, eval(ip, a, ip.globals, dn.a))
+        if ip.failed:
+            ret
         end
     end
 end
@@ -624,6 +668,20 @@ func fixup_generic_envs_in(
         dn := at.Get(a, d)
         if !dn.synthetic || str.Len(dn.name) == 0 || find_def_env(ip, d) != 0:
             continue
+        end
+        // The instance records the package whose scope its body was checked
+        // in, which is exactly the environment its methods have to resolve
+        // against. Preferred over the symbol search below because an instance
+        // created while checking an imported package is defined in *that*
+        // package's scope, not the program's, so the lookup misses it and a
+        // `Vector<int>` first named inside a package kept an environment with
+        // no `mem` in it ("undefined variable 'mem'" from Vector.reserve).
+        if str.Len(dn.home_pkg) != 0:
+            hm := find_module(ip, dn.home_pkg)
+            if hm != 0:
+                register_method_envs(ip, a, d, ip.mods.get(hm).env)
+                continue
+            end
         end
         symid := sm.Lookup(sem, sem.global, dn.name)
         if symid == 0:

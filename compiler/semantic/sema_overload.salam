@@ -204,14 +204,31 @@ func mark_ref_args(s &: Sema, a &: at.Ast, call: int, sigid: int):
             argid := at.Child(a, call, i)
             if argid != 0:
                 mut arg := at.Get(a, argid)
-                if arg.kind == at.AST_IDENTIFIER && str.Len(arg.name) > 0:
-                    arg.ref_arg = true
-                    at.Put(a, argid, arg)
-                    symid := scope_lookup(s, s.cur, arg.name)
-                    if symid != 0:
-                        mut sv := sym_at(s, symid)
-                        sv.mutated = true
-                        sym_put(s, symid, sv)
+                arg.ref_arg = true
+                at.Put(a, argid, arg)
+                // `f(h.k)` and `f(rows[0])` are writes through a projection,
+                // exactly as `h.k = ...` is: the variable they hang off is
+                // mutated, and (sema_definit) it counts as given a value.
+                // Stamping only bare identifiers meant `f(arr[1])` was read as
+                // a *read* of an as-yet-unassigned `arr` and rejected (E089).
+                mut root := argid
+                mut rk := at.KindOf(a, root)
+                until rk == at.AST_MEMBER || rk == at.AST_INDEX || rk == at.AST_SLICE:
+                    root = at.Get(a, root).a
+                    if root == 0:
+                        break
+                    end
+                    rk = at.KindOf(a, root)
+                end
+                if root != 0 && at.KindOf(a, root) == at.AST_IDENTIFIER:
+                    rname := at.Get(a, root).name
+                    if str.Len(rname) > 0:
+                        symid := scope_lookup(s, s.cur, rname)
+                        if symid != 0:
+                            mut sv := sym_at(s, symid)
+                            sv.mutated = true
+                            sym_put(s, symid, sv)
+                        end
                     end
                 end
             end

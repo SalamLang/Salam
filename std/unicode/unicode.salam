@@ -54,6 +54,22 @@ pub const MaxCodePoint := 0x10FFFF
 // every fast path below tests against it.
 const _ASCII_MAX := 0x7F
 
+// Hangul syllables are composed and decomposed by arithmetic, not by table.
+// The 11172 syllables in U+AC00..U+D7A3 are a regular product of 19 leading
+// jamo, 21 vowels and 28 trailing jamo, so tabling them would add ~11000
+// decomposition entries and ~800 grapheme-break ranges to no purpose. The
+// decomposition, composition and grapheme-break functions below all
+// special-case this range. Constants are from UAX #15 section 3.12.
+pub const HangulSBase := 0xAC00
+pub const HangulLBase := 0x1100
+pub const HangulVBase := 0x1161
+pub const HangulTBase := 0x11A7
+pub const HangulLCount := 19
+pub const HangulVCount := 21
+pub const HangulTCount := 28
+pub const HangulNCount := 588
+pub const HangulSCount := 11172
+
 // ---------------------------------------------------------------------------
 // table search
 // ---------------------------------------------------------------------------
@@ -97,14 +113,21 @@ pure func _case_map(los: int[:], his: int[:], strides: int[:], deltas: int[:], c
     ret cp + deltas[i]
 end
 
+// Row of a table keyed by an exact sorted code point column, or -1 when cp is
+// absent. The decomposition and full-fold tables are all shaped this way: a
+// sorted key column plus parallel offset/length columns into a flat sequence.
+pure func _keyed_index(keys: int[:], cp: int): int:
+    i := _floor_index(keys, cp)
+    if i < 0: ret -1 end
+    if keys[i] != cp: ret -1 end
+    ret i
+end
+
 // Row of the full-fold table describing cp, or -1 when cp folds to a single
 // code point (which is all but 104 of them).
 pure func _fold_full_index(cp: int): int:
     if cp <= _ASCII_MAX: ret -1 end
-    i := _floor_index(_FOLDF_CP[:], cp)
-    if i < 0: ret -1 end
-    if _FOLDF_CP[i] != cp: ret -1 end
-    ret i
+    ret _keyed_index(_FOLDF_CP[:], cp)
 end
 
 // ---------------------------------------------------------------------------
@@ -392,4 +415,163 @@ pub pure func FullFoldAt(cp: int, k: int): int:
     if i < 0: ret ToFold(cp) end
     if k < 0 || k >= _FOLDF_LEN[i]: ret ToFold(cp) end
     ret _FOLDF_SEQ[_FOLDF_OFF[i] + k]
+end
+
+// ---------------------------------------------------------------------------
+// normalization primitives
+// ---------------------------------------------------------------------------
+
+@en "CombiningClass"
+@fa "رده ترکیبی"
+@ar "رتبة الترکیب"
+// The canonical combining class of cp, 0 for a base character.
+//
+// This is what canonical ordering sorts by. When a base letter carries several
+// marks, their order in memory is not fixed by the writer - a Persian word
+// typed with a fatha before a shadda and the same word typed the other way
+// round are different byte sequences - and normalization puts them in a
+// defined order so the two compare equal. Marks of class 0 and marks of equal
+// class are never reordered relative to each other.
+pub pure func CombiningClass(cp: int): int:
+    i := _floor_index(_CCC_LO[:], cp)
+    if i < 0: ret 0 end
+    if cp > _CCC_HI[i]: ret 0 end
+    ret _CCC_VAL[i]
+end
+
+@en "DecompLen"
+@fa "طول تجزیه"
+@ar "طول التفکیک"
+// How many code points cp decomposes to canonically: 1 when it does not
+// decompose at all.
+pub pure func DecompLen(cp: int): int:
+    if cp >= HangulSBase && cp < HangulSBase + HangulSCount:
+        if (cp - HangulSBase) % HangulTCount == 0: ret 2 end
+        ret 3
+    end
+    i := _keyed_index(_NFD_CP[:], cp)
+    if i < 0: ret 1 end
+    ret _NFD_LEN[i]
+end
+
+@en "DecompAt"
+@fa "تجزیه در"
+@ar "التفکیک عند"
+// Code point k of the canonical decomposition of cp, for k below
+// DecompLen(cp). The stored decompositions are already fully expanded, so the
+// result never decomposes again and a caller needs no recursion.
+pub pure func DecompAt(cp: int, k: int): int:
+    if cp >= HangulSBase && cp < HangulSBase + HangulSCount:
+        sidx := cp - HangulSBase
+        if k == 0: ret HangulLBase + sidx / HangulNCount end
+        if k == 1: ret HangulVBase + (sidx % HangulNCount) / HangulTCount end
+        if k == 2 && sidx % HangulTCount != 0: ret HangulTBase + sidx % HangulTCount end
+        ret cp
+    end
+    i := _keyed_index(_NFD_CP[:], cp)
+    if i < 0: ret cp end
+    if k < 0 || k >= _NFD_LEN[i]: ret cp end
+    ret _NFD_SEQ[_NFD_OFF[i] + k]
+end
+
+@en "CompatDecompLen"
+@fa "طول تجزیه سازگاری"
+@ar "طول تفکیک التوافق"
+// How many code points cp decomposes to under compatibility decomposition.
+//
+// This is the wider decomposition, and for Arabic and Persian it is the
+// useful one: the presentation forms in U+FB50..U+FDFF and U+FE70..U+FEFF -
+// the isolated, initial, medial and final letter shapes that some documents
+// and PDF extractions store literally - only reduce to plain letters here.
+// The Arabic ligature lam-alef ﻻ decomposes to two code points this way and
+// not at all canonically.
+pub pure func CompatDecompLen(cp: int): int:
+    if cp >= HangulSBase && cp < HangulSBase + HangulSCount:
+        ret DecompLen(cp)
+    end
+    i := _keyed_index(_NFKD_CP[:], cp)
+    if i < 0: ret 1 end
+    ret _NFKD_LEN[i]
+end
+
+@en "CompatDecompAt"
+@fa "تجزیه سازگاری در"
+@ar "تفکیک التوافق عند"
+// Code point k of the compatibility decomposition of cp.
+pub pure func CompatDecompAt(cp: int, k: int): int:
+    if cp >= HangulSBase && cp < HangulSBase + HangulSCount:
+        ret DecompAt(cp, k)
+    end
+    i := _keyed_index(_NFKD_CP[:], cp)
+    if i < 0: ret cp end
+    if k < 0 || k >= _NFKD_LEN[i]: ret cp end
+    ret _NFKD_SEQ[_NFKD_OFF[i] + k]
+end
+
+@en "Compose"
+@fa "ترکیب"
+@ar "ترکیب"
+// The single code point that the pair (a, b) composes to, or -1 if they do
+// not compose.
+//
+// Not every pair that decomposes will compose back: Unicode lists composition
+// exclusions for pairs where round-tripping would erase a distinction the
+// source made on purpose, and those are absent from the table. Hangul
+// composes arithmetically rather than by lookup.
+pub pure func Compose(a: int, b: int): int:
+    lidx := a - HangulLBase
+    if lidx >= 0 && lidx < HangulLCount:
+        vidx := b - HangulVBase
+        if vidx >= 0 && vidx < HangulVCount:
+            ret HangulSBase + (lidx * HangulVCount + vidx) * HangulTCount
+        end
+    end
+    sidx := a - HangulSBase
+    if sidx >= 0 && sidx < HangulSCount && sidx % HangulTCount == 0:
+        tidx := b - HangulTBase
+        if tidx > 0 && tidx < HangulTCount: ret a + tidx end
+    end
+    mut i := _floor_index(_COMP_A[:], a)
+    if i < 0: ret 0 - 1 end
+    if _COMP_A[i] != a: ret 0 - 1 end
+    // _floor_index lands on the LAST row for this starter; the rows for one
+    // starter are contiguous and there are at most nineteen of them, so
+    // walking back over them costs less than a second binary search.
+    until i >= 0 && _COMP_A[i] == a:
+        if _COMP_B[i] == b: ret _COMP_CP[i] end
+        i -= 1
+    end
+    ret 0 - 1
+end
+
+@en "GraphemeBreak"
+@fa "شکست خوشه"
+@ar "فاصل العنقود"
+// The Grapheme_Cluster_Break class of cp, as one of the Gcb* constants.
+// Callers normally want str.Graphemes rather than this.
+pub pure func GraphemeBreak(cp: int): int:
+    if cp >= HangulSBase && cp < HangulSBase + HangulSCount:
+        if (cp - HangulSBase) % HangulTCount == 0: ret GcbLV end
+        ret GcbLVT
+    end
+    i := _floor_index(_GCB_LO[:], cp)
+    if i < 0: ret GcbOther end
+    if cp > _GCB_HI[i]: ret GcbOther end
+    ret _GCB_ID[i]
+end
+
+@en "ConjunctBreak"
+@fa "شکست پیوند"
+@ar "فاصل الوصل"
+// The Indic_Conjunct_Break class of cp, as one of the Incb* constants.
+//
+// Needed by one segmentation rule, GB9c: a consonant joined to a following
+// consonant through a virama forms a conjunct, and the whole of it is one
+// grapheme cluster. Without this, Devanagari क्त would count and cut as three
+// characters instead of the one a reader sees.
+pub pure func ConjunctBreak(cp: int): int:
+    i := _floor_index(_INCB_LO[:], cp)
+    if i < 0: ret IncbNone end
+    if cp > _INCB_HI[i]: ret IncbNone end
+    ret _INCB_ID[i]
 end

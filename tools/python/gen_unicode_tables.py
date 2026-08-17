@@ -6,12 +6,16 @@ mechanically from the UCD text files listed in FILES below, so the file is
 generated rather than hand-maintained. Editing tables.salam directly is a
 mistake - change this script and re-run it instead.
 
-The four inputs and what each one contributes:
+The inputs and what each one contributes:
 
-    UnicodeData.txt           general category, simple upper/lower/title
-    CaseFolding.txt           simple (C+S) and full (C+F) case folding
-    PropList.txt              White_Space
-    DerivedCoreProperties.txt Alphabetic
+    UnicodeData.txt              general category, simple upper/lower/title,
+                                 canonical combining class, decompositions
+    CaseFolding.txt              simple (C+S) and full (C+F) case folding
+    PropList.txt                 White_Space
+    DerivedCoreProperties.txt    Alphabetic
+    DerivedNormalizationProps.txt composition exclusions
+    auxiliary/GraphemeBreakProperty.txt  Grapheme_Cluster_Break
+    emoji/emoji-data.txt         Extended_Pictographic
 
 Everything is emitted as sorted range tables so lookups are a binary search
 over a few thousand entries rather than a 1.1M-entry array. Categories are
@@ -43,12 +47,47 @@ import urllib.request
 
 UCD_VERSION = "16.0.0"
 UCD_BASE = "https://www.unicode.org/Public/%s/ucd" % UCD_VERSION
-FILES = (
-    "UnicodeData.txt",
-    "CaseFolding.txt",
-    "PropList.txt",
-    "DerivedCoreProperties.txt",
+# Remote path relative to UCD_BASE -> local filename in the cache. Two of these
+# live in subdirectories of the UCD, so the mapping cannot be implied.
+FILES = {
+    "UnicodeData.txt": "UnicodeData.txt",
+    "CaseFolding.txt": "CaseFolding.txt",
+    "PropList.txt": "PropList.txt",
+    "DerivedCoreProperties.txt": "DerivedCoreProperties.txt",
+    "DerivedNormalizationProps.txt": "DerivedNormalizationProps.txt",
+    "auxiliary/GraphemeBreakProperty.txt": "GraphemeBreakProperty.txt",
+    "emoji/emoji-data.txt": "emoji-data.txt",
+}
+
+# Hangul is composed and decomposed by arithmetic rather than by table - the
+# 11172 syllables are a regular product of 19 leading jamo, 21 vowels and 28
+# trailing jamo. Tabling them would add ~11000 decomposition entries and ~800
+# grapheme-break ranges for no benefit, so the runtime special-cases this range
+# instead. Constants are from UAX #15 section 3.12.
+HANGUL_SBASE = 0xAC00
+HANGUL_LBASE = 0x1100
+HANGUL_VBASE = 0x1161
+HANGUL_TBASE = 0x11A7
+HANGUL_LCOUNT = 19
+HANGUL_VCOUNT = 21
+HANGUL_TCOUNT = 28
+HANGUL_NCOUNT = HANGUL_VCOUNT * HANGUL_TCOUNT
+HANGUL_SCOUNT = HANGUL_LCOUNT * HANGUL_NCOUNT
+
+# Grapheme_Cluster_Break classes, in the order UAX #29 lists them. Other is 0
+# so that an unlisted code point falls into it by default. LV and LVT are
+# absent: they are exactly the Hangul syllable block and are derived
+# arithmetically, as above.
+GRAPHEME_CLASSES = (
+    "Other", "CR", "LF", "Control", "Extend", "ZWJ", "Regional_Indicator",
+    "Prepend", "SpacingMark", "L", "V", "T", "LV", "LVT", "Extended_Pictographic",
 )
+GRAPHEME_ID = {name: i for i, name in enumerate(GRAPHEME_CLASSES)}
+
+# Indic_Conjunct_Break values. None is 0 and is the default for anything the
+# property does not list.
+INCB_CLASSES = ("None", "Consonant", "Extend", "Linker")
+INCB_ID = {name: i for i, name in enumerate(INCB_CLASSES)}
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
@@ -99,12 +138,12 @@ def ucd_path(name):
 
 def fetch():
     os.makedirs(CACHE, exist_ok=True)
-    for name in FILES:
-        url = "%s/%s" % (UCD_BASE, name)
+    for remote, local in FILES.items():
+        url = "%s/%s" % (UCD_BASE, remote)
         sys.stderr.write("fetching %s\n" % url)
         with urllib.request.urlopen(url) as r:
             data = r.read()
-        with open(ucd_path(name), "wb") as f:
+        with open(ucd_path(local), "wb") as f:
             f.write(data)
 
 
@@ -123,10 +162,12 @@ def read_lines(name):
 
 
 def parse_unicode_data():
-    """-> (categories, upper, lower, title)
+    """-> (categories, upper, lower, title, ccc, canon, compat)
 
     categories is a {cp: category} style range list built as (lo, hi, cat)
-    triples; the case maps are {cp: mapped_cp} dicts of the simple mappings.
+    triples; the case maps are {cp: mapped_cp} dicts of the simple mappings;
+    ccc is {cp: canonical_combining_class} for the non-zero classes; canon and
+    compat are the one-step decomposition mappings, {cp: [cps]}.
 
     UnicodeData.txt lists large uniform blocks (CJK, Hangul, the private use
     areas) as a First/Last pair of lines rather than one line per code point,
@@ -134,6 +175,7 @@ def parse_unicode_data():
     """
     ranges = []
     upper, lower, title = {}, {}, {}
+    ccc, canon, compat = {}, {}, {}
     pending_first = None
 
     for line in read_lines("UnicodeData.txt"):
@@ -152,6 +194,16 @@ def parse_unicode_data():
             continue
 
         ranges.append((cp, cp, cat))
+        if f[3] != "0":
+            ccc[cp] = int(f[3])
+        if f[5]:
+            # A decomposition tagged <compat>, <font>, <isolated> and so on is
+            # a compatibility mapping; an untagged one is canonical. Only the
+            # canonical mappings take part in NFC/NFD.
+            if f[5].startswith("<"):
+                compat[cp] = [int(x, 16) for x in f[5].split(">", 1)[1].split()]
+            else:
+                canon[cp] = [int(x, 16) for x in f[5].split()]
         if f[12]:
             upper[cp] = int(f[12], 16)
         if f[13]:
@@ -162,7 +214,126 @@ def parse_unicode_data():
     if pending_first is not None:
         sys.exit("unterminated range starting at U+%04X" % pending_first[0])
 
-    return merge_cat_ranges(ranges), upper, lower, title
+    return merge_cat_ranges(ranges), upper, lower, title, ccc, canon, compat
+
+
+def expand_decompositions(canon, compat):
+    """-> (full_canon, full_compat)
+
+    Applies each decomposition to its own result until nothing decomposes
+    further, so the emitted tables hold fully decomposed forms. Doing the
+    recursion here means the runtime never has to: one table lookup per code
+    point produces the final answer, and a bug in the fixpoint shows up when
+    this script runs rather than deep inside a normalization loop.
+
+    Canonical decomposition never mixes in a compatibility mapping, so the two
+    fixpoints are computed over different tables: full_canon closes over canon
+    alone, full_compat over both (a compatibility decomposition may expose a
+    canonical one and vice versa).
+    """
+    def fixpoint(cp, table, depth=0):
+        if depth > 32:
+            sys.exit("decomposition of U+%04X does not terminate" % cp)
+        d = table.get(cp)
+        if d is None:
+            return [cp]
+        out = []
+        for c in d:
+            out.extend(fixpoint(c, table, depth + 1))
+        return out
+
+    both = dict(canon)
+    both.update(compat)
+    full_canon = {cp: fixpoint(cp, canon) for cp in canon}
+    full_compat = {cp: fixpoint(cp, both) for cp in both}
+    return full_canon, full_compat
+
+
+def composition_pairs(canon, exclusions):
+    """-> sorted [(starter, combining, composed)]
+
+    The NFC composition table is the canonical decomposition table read
+    backwards, restricted to the two-code-point mappings and with the
+    composition exclusions removed. A code point is excluded when composing it
+    back would undo a distinction the source made deliberately - the Hebrew
+    and Arabic ligature forms, the precomposed Cyrillic that Unicode later
+    decided was a mistake, and the singleton decompositions.
+    """
+    out = []
+    for cp, d in canon.items():
+        if len(d) == 2 and cp not in exclusions:
+            out.append((d[0], d[1], cp))
+    out.sort()
+    return out
+
+
+def parse_incb():
+    """-> sorted, merged [(lo, hi, class_id)] for Indic_Conjunct_Break.
+
+    A three-valued property (Consonant, Extend, Linker) written in
+    DerivedCoreProperties.txt as `range ; InCB ; value`, so it needs its own
+    parser rather than parse_prop's two-field form. It exists for one rule:
+    UAX #29's GB9c, which holds a Devanagari conjunct such as क्त together as a
+    single grapheme cluster instead of breaking it at the virama.
+    """
+    ranges = []
+    for line in read_lines("DerivedCoreProperties.txt"):
+        f = [p.strip() for p in line.split(";")]
+        if len(f) < 3 or f[1] != "InCB":
+            continue
+        if f[2] not in INCB_ID:
+            sys.exit("unknown Indic_Conjunct_Break value %r" % f[2])
+        span = f[0].split("..")
+        lo = int(span[0], 16)
+        hi = int(span[1], 16) if len(span) > 1 else lo
+        ranges.append((lo, hi, INCB_ID[f[2]]))
+
+    ranges.sort()
+    merged = []
+    for lo, hi, cid in ranges:
+        if merged and merged[-1][2] == cid and merged[-1][1] + 1 >= lo:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], hi), cid)
+        else:
+            merged.append((lo, hi, cid))
+    return merged
+
+
+def parse_grapheme_break():
+    """-> sorted, merged [(lo, hi, class_id)] for Grapheme_Cluster_Break.
+
+    Extended_Pictographic comes from a different file (emoji-data.txt) but is
+    needed by the same rule set - UAX #29's GB11 keeps an emoji joined to a
+    following emoji by ZWJ in one cluster - so it is folded in here as another
+    class. The Hangul LV and LVT classes are dropped: they cover exactly the
+    syllable block and the runtime derives them arithmetically.
+    """
+    ranges = []
+    for line in read_lines("GraphemeBreakProperty.txt"):
+        f = [p.strip() for p in line.split(";")]
+        if len(f) < 2 or f[1] in ("LV", "LVT"):
+            continue
+        if f[1] not in GRAPHEME_ID:
+            sys.exit("unknown Grapheme_Cluster_Break class %r" % f[1])
+        span = f[0].split("..")
+        lo = int(span[0], 16)
+        hi = int(span[1], 16) if len(span) > 1 else lo
+        ranges.append((lo, hi, GRAPHEME_ID[f[1]]))
+
+    for lo, hi in parse_prop("emoji-data.txt", "Extended_Pictographic"):
+        ranges.append((lo, hi, GRAPHEME_ID["Extended_Pictographic"]))
+
+    ranges.sort()
+    for a, b in zip(ranges, ranges[1:]):
+        if b[0] <= a[1]:
+            sys.exit("overlapping grapheme break ranges at U+%04X" % b[0])
+
+    merged = []
+    for lo, hi, cid in ranges:
+        if merged and merged[-1][2] == cid and merged[-1][1] + 1 == lo:
+            merged[-1] = (merged[-1][0], hi, cid)
+        else:
+            merged.append((lo, hi, cid))
+    return merged
 
 
 def merge_cat_ranges(ranges):
@@ -226,6 +397,22 @@ def parse_prop(filename, wanted):
 # --------------------------------------------------------------------------
 # compression
 # --------------------------------------------------------------------------
+
+def value_ranges(mapping):
+    """Compress {cp: value} into maximal (lo, hi, value) runs of consecutive
+    code points sharing a value."""
+    items = sorted(mapping.items())
+    out = []
+    i, n = 0, len(items)
+    while i < n:
+        cp, v = items[i]
+        j = i
+        while j + 1 < n and items[j + 1][0] == items[j][0] + 1 and items[j + 1][1] == v:
+            j += 1
+        out.append((cp, items[j][0], v))
+        i = j + 1
+    return out
+
 
 def case_ranges(mapping):
     """Compress {cp: mapped} into (lo, hi, stride, delta) runs.
@@ -298,7 +485,8 @@ class Emitter:
         return "\n".join(self.parts).rstrip() + "\n"
 
 
-def build(cats, upper, lower, title, fold_simple, fold_full, spaces, alpha):
+def build(cats, upper, lower, title, fold_simple, fold_full, spaces, alpha,
+          ccc, full_canon, full_compat, comp, gcb, incb):
     e = Emitter()
     e.raw(BANNER)
     e.blank()
@@ -437,6 +625,124 @@ def build(cats, upper, lower, title, fold_simple, fold_full, spaces, alpha):
     e.ints("_ALPHA_LO", [r[0] for r in alpha])
     e.blank()
     e.ints("_ALPHA_HI", [r[1] for r in alpha])
+    e.blank()
+
+    # ---- combining class --------------------------------------------------
+    ccc_runs = value_ranges(ccc)
+    e.comment(
+        "Canonical combining class, as %d (lo, hi, class) runs covering the %d\n"
+        "code points whose class is not zero. Everything absent is class 0.\n"
+        "\n"
+        "This is the key to canonical ordering: when several marks follow one\n"
+        "base character, normalization sorts them by this number, so that a\n"
+        "Persian word written with its harakat in one order compares equal to\n"
+        "the same word with them typed in another. Marks of class 0, and any\n"
+        "two marks of equal class, are never reordered relative to each other." %
+        (len(ccc_runs), len(ccc))
+    )
+    e.ints("_CCC_LO", [r[0] for r in ccc_runs])
+    e.blank()
+    e.ints("_CCC_HI", [r[1] for r in ccc_runs])
+    e.blank()
+    e.ints("_CCC_VAL", [r[2] for r in ccc_runs])
+    e.blank()
+
+    # ---- decompositions ---------------------------------------------------
+    for prefix, table, human, extra in (
+        ("_NFD", full_canon, "Canonical",
+         "These are the mappings NFD and NFC use. Each is stored fully\n"
+         "expanded, so no entry here decomposes any further."),
+        ("_NFKD", full_compat, "Compatibility",
+         "These add the mappings NFKD and NFKC use on top of the canonical\n"
+         "ones. For Arabic and Persian this is the table that matters most:\n"
+         "the presentation forms in U+FB50..U+FDFF and U+FE70..U+FEFF - the\n"
+         "isolated, initial, medial and final shapes that some sources store\n"
+         "literally instead of letting the renderer choose - decompose back to\n"
+         "the plain letters here, and nowhere else."),
+    ):
+        items = sorted(table.items())
+        seq, offs, lens = [], [], []
+        for _, cps in items:
+            offs.append(len(seq))
+            lens.append(len(cps))
+            seq.extend(cps)
+        e.comment(
+            "%s decomposition: %d code points expanding to %d in total, at\n"
+            "most %d each.\n"
+            "\n"
+            "%s\n"
+            "\n"
+            "Hangul is not in this table. Its %d syllables decompose by\n"
+            "arithmetic instead - see the Hangul constants in unicode.salam." %
+            (human, len(items), len(seq), max(lens), extra, HANGUL_SCOUNT)
+        )
+        e.ints("%s_CP" % prefix, [cp for cp, _ in items])
+        e.blank()
+        e.ints("%s_OFF" % prefix, offs)
+        e.blank()
+        e.ints("%s_LEN" % prefix, lens)
+        e.blank()
+        e.ints("%s_SEQ" % prefix, seq)
+        e.blank()
+
+    # ---- composition ------------------------------------------------------
+    e.comment(
+        "Canonical composition: %d (starter, combining) pairs that recombine\n"
+        "into a single code point. This is the decomposition table read\n"
+        "backwards, minus the composition exclusions - the pairs Unicode says\n"
+        "must stay apart even though they decomposed.\n"
+        "\n"
+        "Sorted by starter and then by the combining mark, so a lookup binary\n"
+        "searches _COMP_A for the starter and then scans that starter's short\n"
+        "run for the mark." % len(comp)
+    )
+    e.ints("_COMP_A", [c[0] for c in comp])
+    e.blank()
+    e.ints("_COMP_B", [c[1] for c in comp])
+    e.blank()
+    e.ints("_COMP_CP", [c[2] for c in comp])
+    e.blank()
+
+    # ---- grapheme cluster break -------------------------------------------
+    e.comment("Grapheme_Cluster_Break class ids, used by the segmenter in str.")
+    for name in GRAPHEME_CLASSES:
+        e.raw("pub const Gcb%s := %d" % (name.replace("_", ""), GRAPHEME_ID[name]))
+    e.blank()
+
+    e.comment(
+        "Grapheme_Cluster_Break, as %d (lo, hi, class) ranges. Code points not\n"
+        "listed are GcbOther. The Hangul LV and LVT classes are absent and are\n"
+        "derived arithmetically, which is why this is ~800 ranges smaller than\n"
+        "GraphemeBreakProperty.txt.\n"
+        "\n"
+        "This is what lets text be counted and cut by what a reader sees as\n"
+        "one character rather than by code point: an Arabic letter followed by\n"
+        "two harakat is three code points and one grapheme cluster." % len(gcb)
+    )
+    e.ints("_GCB_LO", [r[0] for r in gcb])
+    e.blank()
+    e.ints("_GCB_HI", [r[1] for r in gcb])
+    e.blank()
+    e.ints("_GCB_ID", [r[2] for r in gcb])
+    e.blank()
+
+    # ---- indic conjunct break ---------------------------------------------
+    e.comment("Indic_Conjunct_Break class ids, used by GB9c in the segmenter.")
+    for name in INCB_CLASSES:
+        e.raw("pub const Incb%s := %d" % (name, INCB_ID[name]))
+    e.blank()
+
+    e.comment(
+        "Indic_Conjunct_Break, as %d (lo, hi, class) ranges; anything absent is\n"
+        "IncbNone. This drives one rule, GB9c, which keeps a consonant joined\n"
+        "to a following consonant by a virama in the same grapheme cluster -\n"
+        "so Devanagari क्त counts as one character rather than three." % len(incb)
+    )
+    e.ints("_INCB_LO", [r[0] for r in incb])
+    e.blank()
+    e.ints("_INCB_HI", [r[1] for r in incb])
+    e.blank()
+    e.ints("_INCB_ID", [r[2] for r in incb])
 
     return e.text()
 
@@ -451,26 +757,39 @@ def main():
     if args.fetch:
         fetch()
 
-    cats, upper, lower, title = parse_unicode_data()
+    cats, upper, lower, title, ccc, canon, compat = parse_unicode_data()
     fold_simple, fold_full = parse_case_folding()
     spaces = parse_prop("PropList.txt", "White_Space")
     alpha = parse_prop("DerivedCoreProperties.txt", "Alphabetic")
+    exclusions = set()
+    for lo, hi in parse_prop("DerivedNormalizationProps.txt",
+                             "Full_Composition_Exclusion"):
+        exclusions.update(range(lo, hi + 1))
+    full_canon, full_compat = expand_decompositions(canon, compat)
+    comp = composition_pairs(canon, exclusions)
+    gcb = parse_grapheme_break()
+    incb = parse_incb()
 
-    text = build(cats, upper, lower, title, fold_simple, fold_full, spaces, alpha)
+    text = build(cats, upper, lower, title, fold_simple, fold_full, spaces, alpha,
+                 ccc, full_canon, full_compat, comp, gcb, incb)
 
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     with open(args.out, "w", encoding="utf-8") as f:
         f.write(text)
 
     sys.stderr.write(
-        "wrote %s (UCD %s): %d category ranges, %d/%d/%d/%d case runs, "
-        "%d full folds, %d space ranges, %d alphabetic ranges\n"
+        "wrote %s (UCD %s):\n"
+        "  %d category ranges, %d/%d/%d/%d case runs, %d full folds\n"
+        "  %d space ranges, %d alphabetic ranges, %d combining-class runs\n"
+        "  %d canonical and %d compatibility decompositions\n"
+        "  %d composition pairs, %d grapheme-break and %d conjunct-break ranges\n"
         % (
             os.path.relpath(args.out, ROOT), UCD_VERSION,
             len([c for c in cats if c[2] != "Cn"]),
             len(case_ranges(upper)), len(case_ranges(lower)),
             len(case_ranges(title)), len(case_ranges(fold_simple)),
-            len(fold_full), len(spaces), len(alpha),
+            len(fold_full), len(spaces), len(alpha), len(value_ranges(ccc)),
+            len(full_canon), len(full_compat), len(comp), len(gcb), len(incb),
         )
     )
 

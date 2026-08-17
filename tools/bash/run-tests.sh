@@ -509,18 +509,30 @@ collect_example_dir() {
             name="${rel%.salam}"
             base="tests/$lang/$dir/$name"
             exp="$(pick_expect "$base")"
+            # Decided once, then applied to BOTH job kinds. It used to be
+            # computed inside the .expect branch, which left a marked test
+            # that ships a .out (interop/*/redis_demo) with an ungated build
+            # job - and a host without Redis cannot even LINK that one, since
+            # -lhiredis is missing too, so it failed the suite instead of
+            # skipping. That is precisely what the marker file exists to
+            # prevent. Tests carrying only a marker and no expectation still
+            # queue nothing and report nothing, exactly as before.
+            skip=""
+            if [ -f "$base.redis" ] && [ "${REDIS_OK:-0}" != "1" ]; then
+                skip="requires a Redis server on 127.0.0.1:6379"
+            elif [ -f "$base.network" ] && [ "${SALAM_TEST_NETWORK:-0}" != "1" ]; then
+                skip="requires live network; set SALAM_TEST_NETWORK=1"
+            elif [ -f "$base.interactive" ] && [ "${SALAM_TEST_INTERACTIVE:-0}" != "1" ]; then
+                skip="opens a modal window; set SALAM_TEST_INTERACTIVE=1 on a desktop session"
+            fi
             if [ -f "$exp" ]; then
-                add_job build "$dir/$lang/$name" "$f" "$lang" "$exp"
+                if [ -n "$skip" ]; then
+                    note_result "SKIP $dir/$lang/$name ($skip)" "$dir/$lang/$name"
+                else
+                    add_job build "$dir/$lang/$name" "$f" "$lang" "$exp"
+                fi
             fi
             if [ -f "$base.expect" ]; then
-                skip=""
-                if [ -f "$base.redis" ] && [ "${REDIS_OK:-0}" != "1" ]; then
-                    skip="requires a Redis server on 127.0.0.1:6379"
-                elif [ -f "$base.network" ] && [ "${SALAM_TEST_NETWORK:-0}" != "1" ]; then
-                    skip="requires live network; set SALAM_TEST_NETWORK=1"
-                elif [ -f "$base.interactive" ] && [ "${SALAM_TEST_INTERACTIVE:-0}" != "1" ]; then
-                    skip="opens a modal window; set SALAM_TEST_INTERACTIVE=1 on a desktop session"
-                fi
                 if [ -n "$skip" ]; then
                     note_result "SKIP $dir/$lang/$name ($skip)" "$dir/$lang/$name"
                 else

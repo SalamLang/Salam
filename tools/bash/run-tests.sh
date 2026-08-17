@@ -865,7 +865,9 @@ TIMEREPORT_EOF
     }
 
     tr_json="$tr_dir/report.json"
-    (cd "$tr_dir" && "$SALAM" build --time-report=json tiny.salam >/dev/null 2>"$tr_json")
+    # SALAM_ABS, not SALAM: the default is the relative ./salam and this runs
+    # from $tr_dir, where that name does not exist (the build exited 127).
+    (cd "$tr_dir" && "$SALAM_ABS" build --time-report=json tiny.salam >/dev/null 2>"$tr_json")
     tr_rc=$?
     tr_line=$(grep '"schema":"salam.timereport.v1"' "$tr_json" | head -1)
     if [ "$tr_rc" -ne 0 ]; then
@@ -894,7 +896,7 @@ TIMEREPORT_EOF
     fi
 
     # --time-trace writes a Chrome Trace Event array the same run.
-    (cd "$tr_dir" && "$SALAM" build --time-trace=trace.json tiny.salam >/dev/null 2>&1)
+    (cd "$tr_dir" && "$SALAM_ABS" build --time-trace=trace.json tiny.salam >/dev/null 2>&1)
     if [ -s "$tr_dir/trace.json" ] && grep -q '"ph":"X"' "$tr_dir/trace.json"; then
         note_result "PASS timereport/trace" "timereport/trace"
     else

@@ -8,7 +8,7 @@ description: >-
   "Salam" (the programming language / زبان سلام), a `.salam` file, "convert/port/
   rewrite X to Salam", "rewrite the compiler in Salam", the Salam layout DSL, or
   building with the `salam` compiler. This is the authoritative, up-to-date
-  reference for Salam's current syntax, its 44-package standard library, its
+  reference for Salam's current syntax, its 64-package standard library, its
   strict compiler rules, the layout DSL, and porting low-level C. The tutorial
   books under `books/` are OUT OF DATE. Trust this file, `std/`, and
   `tests/en/` instead.

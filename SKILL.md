@@ -366,7 +366,7 @@ null pointer. Used with FFI and `mem`: `p := mem.Allocate(8 as u64) as i64*`;
 
 ```salam
 func Max<T>(a: T, b: T): T:  if a > b: ret a end  ret b  end   // generic function
-struct Stack<T>:  pub items: T[16] = [...]  pub count: int = 0  end  // generic struct
+struct Stack<T>:  pub items: Vector<T> = Vector {}  pub count: int = 0  end  // generic struct
 
 interface Shape:
     func area(): f64
@@ -1006,8 +1006,8 @@ and a child's deadline can only shorten what it inherits, never extend it.
 
 `atomic` is lock-free everywhere except tcc. `atomic_load/store/add/swap/cas`
 are **language intrinsics** on an `i64*` cell (a `__atomic_*` builtin in the C
-backend, a real `atomicrmw`/`cmpxchg` in LLVM, both seq_cst; plain reads and
-writes in JS, which has no threads). `atomic_add` returns the value *after* the
+backend, a real `atomicrmw`/`cmpxchg` in LLVM, both seq*cst; plain reads and
+writes in JS, which has no threads). `atomic_add` returns the value \_after* the
 add, `atomic_swap` the value before it. tcc 0.9.27 has neither the `__atomic`
 nor the `__sync` family, so under `SALAM_CC_TCC` the `atomic` package falls
 back to a mutex per cell - same semantics, higher cost, invisible to callers.

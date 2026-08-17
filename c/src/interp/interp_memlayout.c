@@ -407,6 +407,24 @@ static bool field_place(interp_t *I, unsigned char *base, ast_node_t *sd,
  * expression, which is why only a chain rooted in an index is ever offered
  * here (see interp_resolve_loc).
  */
+/*
+ * The slot a field occupies inside an already-evaluated struct pointer, so
+ * `p.left` reaches the same bytes as `p[0].left`. The compiled backends have
+ * always read a bare struct pointer that way; the interpreter demanded a real
+ * VAL_STRUCT and refused anything else ("cannot access member 'key'"), which
+ * is what stopped every heap-node tree and adjacency list from running under
+ * `salam exec`. The value is passed in rather than re-derived, so nothing is
+ * evaluated a second time.
+ */
+bool interp_mem_ptr_field(interp_t *I, value_t v, const char *name, void **addr,
+                          const char **ts)
+{
+    ast_node_t *sd = NULL;
+    if (v.kind != VAL_PTR || v.as.ptr.elem != PTR_STRUCT || !v.as.ptr.addr) return false;
+    if (slot_kind(I, v.as.ptr.tname, &sd) != SLOT_STRUCT || !sd) return false;
+    return field_place(I, (unsigned char *)v.as.ptr.addr, sd, name, addr, ts);
+}
+
 bool interp_mem_lvalue(interp_t *I, env_t *env, ast_node_t *n, void **addr,
                        const char **ts)
 {

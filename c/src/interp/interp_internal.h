@@ -275,6 +275,10 @@ void *interp_ptr_elem_addr(interp_t *I, sptr_t p, int64_t idx);
 bool interp_mem_lvalue(interp_t *I, env_t *env, ast_node_t *n, void **addr,
                        const char **ts);
 
+/* Field slot inside an already-evaluated struct pointer: `p.f` is `p[0].f`. */
+bool interp_mem_ptr_field(interp_t *I, value_t v, const char *name, void **addr,
+                          const char **ts);
+
 value_t default_for_type(interp_t *I, const char *ts);
 
 value_t arith(interp_t *I, ast_node_t *n, token_kind_t op, value_t a, value_t b);

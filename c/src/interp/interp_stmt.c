@@ -87,6 +87,11 @@ iloc_t interp_resolve_loc(interp_t *I, env_t *env, ast_node_t *target)
             return loc;
         }
         obj = eval(I, env, target->a);
+        if (obj.kind == VAL_PTR &&
+            interp_mem_ptr_field(I, obj, target->name, &loc.mem, &loc.mem_ts)) {
+            loc.kind = ILOC_MEM;
+            return loc;
+        }
         if (obj.kind != VAL_STRUCT)
             rt_error(I, target, "cannot assign to member of non-struct");
         {

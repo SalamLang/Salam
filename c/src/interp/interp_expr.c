@@ -637,6 +637,12 @@ static value_t eval_node(interp_t *I, env_t *env, ast_node_t *n)
             rt_error(I, n, "struct '%s' has no field '%s'", recv.as.st->type_name,
                      n->name);
         }
+        if (recv.kind == VAL_PTR) {
+            void *fa = NULL;
+            const char *fts = NULL;
+            if (interp_mem_ptr_field(I, recv, n->name, &fa, &fts))
+                return interp_mem_load(I, fa, fts);
+        }
         rt_error(I, n, "cannot access member '%s'", n->name);
     }
     case AST_INDEX: {

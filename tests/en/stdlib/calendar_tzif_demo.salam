@@ -92,6 +92,52 @@ func test_zones_without_dst():
     expect_dst("Asia/Tehran", t2021, true)
 end
 
+func test_dst_flag_is_not_decided_by_offset_alone():
+    // Regression: Argentina has TWO types that are both "-03" at -10800 and
+    // differ only in the DST flag - one from 1999-2000, when its daylight
+    // time was -03 and standard was -04, and one for standard time since
+    // 2009. Its last explicit transition is in 2009, so everything after
+    // comes from the POSIX footer; matching that footer on offset and
+    // abbreviation alone picks the 1999 daylight type and reports DST for
+    // every instant from 2009 onward. zdump and libc both say isdst=0.
+    ba := "America/Argentina/Buenos_Aires"
+    jun2009 := calendar.GregorianToUnixUTC(calendar.GregorianDate { year = 2009, month = 6, day = 1 }, 0, 0, 0)
+    jan2009 := calendar.GregorianToUnixUTC(calendar.GregorianDate { year = 2009, month = 1, day = 1 }, 0, 0, 0)
+    jan2025 := calendar.GregorianToUnixUTC(calendar.GregorianDate { year = 2025, month = 1, day = 1 }, 0, 0, 0)
+    jan2040 := calendar.GregorianToUnixUTC(calendar.GregorianDate { year = 2040, month = 1, day = 1 }, 0, 0, 0)
+    // Before it abolished DST: genuinely on daylight time at -02.
+    expect_zone(ba, jan2009, 0 - 120, "-02")
+    expect_dst(ba, jan2009, true)
+    // After: standard time at -03, and NOT daylight time.
+    expect_zone(ba, jun2009, 0 - 180, "-03")
+    expect_dst(ba, jun2009, false)
+    expect_zone(ba, jan2025, 0 - 180, "-03")
+    expect_dst(ba, jan2025, false)
+    // And the same once the footer rule is the only thing left.
+    expect_zone(ba, jan2040, 0 - 180, "-03")
+    expect_dst(ba, jan2040, false)
+end
+
+func test_malformed_files_are_refused():
+    // A zone name that resolves to a directory rather than a TZif file:
+    // fopen succeeds on Unix, the read does not, and LoadZone must report
+    // failure instead of interpreting whatever came back.
+    mut dir := calendar.LoadZone("America")
+    testing.AssertFalse(dir.ok)
+    calendar.FreeZone(dir)
+    mut dir2 := calendar.LoadZone("Etc")
+    testing.AssertFalse(dir2.ok)
+    calendar.FreeZone(dir2)
+    // Regression: the six header counts are unsigned 32-bit on the wire and
+    // every later bounds check is signed, so a corrupt count above 2^31
+    // used to arrive as a negative int, drive the second header to a
+    // negative offset and read wild memory. Corrupt files must be rejected,
+    // never followed.
+    mut bad := calendar.LoadZone("zzz.not.a.zone")
+    testing.AssertFalse(bad.ok)
+    calendar.FreeZone(bad)
+end
+
 func test_posix_footer_rule_covers_the_far_future():
     // A TZif file lists explicit transitions only to about 2037; past that
     // the footer's recurring rule has to be applied, or every date in 2040
@@ -233,6 +279,8 @@ func main:
     test_northern_dst()
     test_southern_dst_is_inverted()
     test_zones_without_dst()
+    test_dst_flag_is_not_decided_by_offset_alone()
+    test_malformed_files_are_refused()
     test_posix_footer_rule_covers_the_far_future()
     test_historical_transitions()
     test_timezone_at_bridges_to_the_fixed_api()

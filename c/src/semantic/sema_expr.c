@@ -235,7 +235,7 @@ static type_t *check_binary(sema_t *s, ast_node_t *n)
     }
     if (op == TK_POWER) {
         if (!type_is_numeric(l) || !type_is_numeric(r))
-            SERR(s, 21, &n->span, "operator '**' requires numeric operands");
+            SERR(s, 21, &n->span, "operator '^^' requires numeric operands");
         return decorate(s, n, ty(s, TY_F64));
     }
     if (op == TK_AND || op == TK_OR) {
@@ -706,7 +706,8 @@ type_t *sema_check_expr(sema_t *s, ast_node_t *n)
         if (type_assignable(target, o)) {
             if (!type_is_error(o) && !s->in_derive && type_equiv(target, o) &&
                 !sema_cast_target_is_context_dependent(n->a, target))
-                SERR(s, 93, &n->span, "useless cast: this expression already has type '%s'",
+                SERR(s, 93, &n->span,
+                     "useless cast: this expression already has type '%s'",
                      type_to_string(s->tc, target));
             return decorate(s, n, target);
         }

@@ -566,7 +566,7 @@ static void check_stmt(sema_t *s, ast_node_t *n)
             if (base_op == TK_POWER) {
                 type_t *pow_res = type_prim(s->tc, TY_F64);
                 if (!type_is_numeric(tt) || !type_is_numeric(vt)) {
-                    SERR(s, 21, &n->span, "operator '**' requires numeric operands");
+                    SERR(s, 21, &n->span, "operator '^^' requires numeric operands");
                     op_valid = false;
                 } else if (!type_assignable(tt, pow_res)) {
                     SERR(s, 2, &n->span, "cannot assign '%s' to '%s'",

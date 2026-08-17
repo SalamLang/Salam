@@ -130,8 +130,10 @@ Rules worth knowing:
 
 ### Operators
 
-`+ - * / %`, `**` (power, float result), `== != < > <= >=`, `&& || !`, ternary
-`cond ? a : b`, compound `+= -= *= /= %= **=`, `++`/`--`. Integer `/` **truncates**.
+`+ - * / %`, `^^` (power, float result), `== != < > <= >=`, `&& || !`, ternary
+`cond ? a : b`, compound `+= -= *= /= %= ^^=`, `++`/`--`. Integer `/` **truncates**.
+**`*` is only multiplication and the pointer suffix** - power is `^^` (as in D) so
+that `T**` stays spellable; `^` on its own remains bitwise XOR.
 **Bitwise operators** (integer operands only): `& | ^ ~` and shifts `<< >>`, with
 compound forms `&= |= ^= <<= >>=`. Precedence follows C: shifts bind tighter than
 comparisons; `&` tighter than `^` tighter than `|`, all looser than `==`

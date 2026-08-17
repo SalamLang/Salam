@@ -92,6 +92,34 @@ func test_dir_of():
     testing.AssertEqStr(dr.DirOf("/x/y/z.salam"), "/x/y")
 end
 
+// ExeSuffix/ExeName: the executable extension follows the TARGET, not the
+// build host. A Windows triple gets ".exe" (appended to an explicit
+// --output too, unless it already carries it), every other triple - and a
+// non-Windows host with no --target at all - gets the bare name.
+func test_exe_name():
+    testing.AssertEqStr(dr.ExeSuffix("x86_64-w64-windows-gnu"), ".exe")
+    testing.AssertEqStr(dr.ExeSuffix("i686-w64-mingw32"), ".exe")
+    testing.AssertEqStr(dr.ExeSuffix("wasm32-wasi"), "")
+    testing.AssertEqStr(dr.ExeSuffix("aarch64-apple-darwin"), "")
+    testing.AssertEqStr(dr.ExeSuffix("x86_64-unknown-linux-gnu"), "")
+    testing.AssertEqStr(dr.ExeName("hello", "x86_64-w64-windows-gnu"), "hello.exe")
+    testing.AssertEqStr(dr.ExeName("hello.exe", "x86_64-w64-windows-gnu"), "hello.exe")
+    testing.AssertEqStr(dr.ExeName("hello.EXE", "x86_64-pc-windows-msvc"), "hello.EXE")
+    testing.AssertEqStr(dr.ExeName("out/prog", "i686-w64-mingw32"), "out/prog.exe")
+    testing.AssertEqStr(dr.ExeName("hello", "wasm32-wasi"), "hello")
+    // A name the caller typed is never rewritten for a non-Windows target,
+    // ".exe" and all.
+    testing.AssertEqStr(dr.ExeName("hello.exe", "aarch64-apple-darwin"), "hello.exe")
+    // Empty triple = this host, so the answer is the host's own convention.
+    if SALAM_OS_WINDOWS:
+        testing.AssertEqStr(dr.ExeSuffix(""), ".exe")
+        testing.AssertEqStr(dr.ExeName("hello", ""), "hello.exe")
+    else:
+        testing.AssertEqStr(dr.ExeSuffix(""), "")
+        testing.AssertEqStr(dr.ExeName("hello", ""), "hello")
+    end
+end
+
 func test_resolve_color():
     testing.AssertTrue(dr.ResolveColor(1))
     testing.AssertFalse(dr.ResolveColor(0))
@@ -308,7 +336,15 @@ func test_debug_memcheck_guards():
     defer opt3.defines.free()
     opt3.inputs.push("compiler/tests_port/tmp_dr/dt_llvm_hello.salam")
     testing.AssertEqStr(opt3.cc, "tcc")
-    testing.AssertEqInt(dr.Memcheck(opt3), 2) // tcc can't do ASan
+    // The tcc guard is deliberately conditional: tcc cannot instrument for
+    // ASan, but the binary it emits is fine for Valgrind to watch, so Memcheck
+    // only refuses when there is no Valgrind to fall back on. Asserting it
+    // where Valgrind exists would build and execute a program, which this
+    // test does not want to do -- so the guard is checked in the one
+    // configuration that reaches it.
+    if os.Run("valgrind --version > /dev/null 2>&1") != 0:
+        testing.AssertEqInt(dr.Memcheck(opt3), 2) // no ASan and no Valgrind
+    end
 end
 
 // embed_sysroot.c's MaterializeSysroot - no real embedded sysroot blob
@@ -345,6 +381,7 @@ func main:
     test_option_defaults()
     test_module_of()
     test_dir_of()
+    test_exe_name()
     test_resolve_color()
     test_build_missing_input()
     test_exec_missing_input()

@@ -158,6 +158,22 @@ bool ll_is_slice_ts(const char *ts)
     return ts && !strncmp(ts, "slice<", 6);
 }
 
+bool ll_is_vec_ts(const char *ts)
+{
+    return ts && !strncmp(ts, "Vector<", 7);
+}
+
+/* Element type of a Vector<...> typestring, matching cg_vec_elem: the text
+   between the outermost angle brackets, so nested generics survive. */
+const char *ll_vec_elem_ts(ll_t *ll, const char *ts)
+{
+    if (!ts) return "i32";
+    const char *lt = strchr(ts, '<');
+    const char *gt = strrchr(ts, '>');
+    if (!lt || !gt || gt <= lt) return "i32";
+    return arena_strndup(ll->a, lt + 1, (size_t)(gt - lt - 1));
+}
+
 const char *ll_slice_elem(ll_t *ll, const char *ts)
 {
     if (!ts) return "i32";

@@ -151,7 +151,8 @@ SAL_INLINE bool ll_is_str(ll_t *ll, const char *ts)
     if (!strcmp(ts, "str") || !strcmp(ts, "uchar")) return true;
     if (ll->sem) {
         symbol_t *esym = scope_lookup_local(ll->sem->global, ts);
-        if (esym && esym->kind == SYM_ENUM && esym->enum_val_kind == TV_STRING) return true;
+        if (esym && esym->kind == SYM_ENUM && esym->enum_val_kind == TV_STRING)
+            return true;
     }
     return false;
 }
@@ -227,6 +228,10 @@ long ll_array_dim(const char *ts);
 const char *ll_array_elem(ll_t *ll, const char *ts);
 
 bool ll_is_slice_ts(const char *ts);
+
+bool ll_is_vec_ts(const char *ts);
+
+const char *ll_vec_elem_ts(ll_t *ll, const char *ts);
 
 bool ll_is_extern_fn_ts(const char *ts);
 

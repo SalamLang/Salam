@@ -974,7 +974,8 @@ static llv_t ll_enum_member_value(ll_t *ll, symbol_t *m)
         return (llv_t){ll_fp_text(ll, buf), "f64"};
     }
     case TV_STRING:
-        return (llv_t){ll_strconst(ll, m->enum_value_str ? m->enum_value_str : ""), "str"};
+        return (llv_t){ll_strconst(ll, m->enum_value_str ? m->enum_value_str : ""),
+                       "str"};
     default:
         return (llv_t){ll_fmt(ll, "%lld", (long long)m->enum_value), "i32"};
     }
@@ -1764,6 +1765,38 @@ static ll_addr_t ll_index_addr(ll_t *ll, ast_node_t *n)
                 base, idx);
         return (ll_addr_t){r, ets, ll_tbaa_suffix(ll, ets, false)};
     }
+    /*
+     * `v[i]` on a Vector. The elements do not live in the Vector struct, they
+     * hang off its `data: T*` field (field 0 of
+     * { data, count, capacity } - see std/collections/vector.salam), so the
+     * address is: step to field 0, load the buffer, then index THAT by the
+     * element type. Falling through to the array path below instead emitted
+     * `getelementptr %struct.Vector__P, ptr %v, i64 0, i64 %i`, which lli
+     * rejects outright ("invalid getelementptr indices"): a struct can only
+     * be indexed by a constant field number, never by a runtime value. This
+     * is the address form, so it also covers `v[i] = x` and `v[i].f`, none of
+     * which the value-side operator_index call can express.
+     */
+    {
+        const char *sn = NULL;
+        symbol_t *ss = ll_op_struct(ll, ots, &sn);
+        symbol_t *fs = NULL;
+        int didx = ss ? ll_field_index(ss, "data", &fs) : -1;
+        if (didx >= 0 && fs && fs->type && fs->type->kind == TY_PTR) {
+            const char *ets = type_to_string(ll->sem->tc, fs->type->pointee);
+            ll_addr_t vb = ll_addr_of(ll, n->a);
+            const char *dp = ll_new_tmp(ll);
+            const char *data = ll_new_tmp(ll);
+            const char *vidx = ll_conv(ll, ll_expr(ll, n->b), "i64");
+            const char *vr = ll_new_tmp(ll);
+            ll_emit(ll, "%s = getelementptr inbounds %s, ptr %s, i32 0, i32 %d", dp,
+                    ll_struct_ltype(ll, ots), vb.ptr, didx);
+            ll_emit(ll, "%s = load ptr, ptr %s", data, dp);
+            ll_emit(ll, "%s = getelementptr inbounds %s, ptr %s, i64 %s", vr,
+                    ll_ty(ll, ets), data, vidx);
+            return (ll_addr_t){vr, ets, ll_tbaa_suffix(ll, ets, false)};
+        }
+    }
     ll_addr_t b = ll_addr_of(ll, n->a);
     const char *ets = ll_array_elem(ll, ots);
     const char *idx = ll_conv(ll, ll_expr(ll, n->b), "i64");
@@ -2271,6 +2304,22 @@ llv_t ll_expr(ll_t *ll, ast_node_t *n)
                 symbol_t *pk = ll_sym(ll, n->a->name);
                 if (pk && pk->kind == SYM_PACKAGE && ll_pkg_value(ll, n, pk, &pv))
                     return pv;
+            }
+        }
+        /*
+         * pkg.EnumName.Member: n->a is itself pkg.EnumName, an AST_MEMBER -
+         * see the matching fix in check_member/sema_expr.c for why the
+         * parser always builds this as a plain left-associative chain.
+         * ll_enum_sym/ll_sym already search every known package's scope
+         * when a name isn't found globally (ll_sym_plain), so this can look
+         * the enum straight up by its own name (n->a->name, e.g. "Kind")
+         * without needing to separately resolve "pkg" at all.
+         */
+        if (n->a && n->a->kind == AST_MEMBER) {
+            symbol_t *e = ll_enum_sym(ll, n->a->name);
+            if (e) {
+                symbol_t *m = scope_lookup_local(e->members, n->name);
+                if (m && m->kind == SYM_ENUM_MEMBER) return ll_enum_member_value(ll, m);
             }
         }
         return ll_load_addr(ll, n);

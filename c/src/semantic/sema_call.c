@@ -528,8 +528,7 @@ type_t *check_call(sema_t *s, ast_node_t *n)
             }
         }
         decorate(s, callee, ty(s, TY_VOID));
-        if (!strcmp(callee->name, "atomic_store"))
-            return decorate(s, n, ty(s, TY_VOID));
+        if (!strcmp(callee->name, "atomic_store")) return decorate(s, n, ty(s, TY_VOID));
         if (!strcmp(callee->name, "atomic_cas")) return decorate(s, n, ty(s, TY_BOOL));
         return decorate(s, n, ty(s, TY_I64));
     }

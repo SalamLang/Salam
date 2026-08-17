@@ -1006,8 +1006,8 @@ static const char *jsg_call_ident(jg_t *g, ast_node_t *n, ast_node_t *callee)
                 if (!strcmp(nm, "atomic_add"))
                     return cg_fmt(cg, "((a,b)=>{a[0]=a[0]+b;return a[0];})(%s,%s)", p, v);
                 if (!strcmp(nm, "atomic_swap"))
-                    return cg_fmt(
-                        cg, "((a,b)=>{const o=a[0];a[0]=b;return o;})(%s,%s)", p, v);
+                    return cg_fmt(cg, "((a,b)=>{const o=a[0];a[0]=b;return o;})(%s,%s)",
+                                  p, v);
                 {
                     const char *d = jsg_expr_p(g, (ast_node_t *)n->list.data[2], 0);
                     return cg_fmt(cg,

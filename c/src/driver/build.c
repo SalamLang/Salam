@@ -397,6 +397,55 @@ const char *driver_page_stem(arena_t *a, const char *path)
     return module;
 }
 
+/*
+ * An empty triple is not "not Windows", it is "no --target=, so the target
+ * is this host". Both other readings are wrong in one direction: taking it
+ * for "not Windows" costs a native Windows build its .exe (cmd.exe matches
+ * on PATHEXT and refuses to launch an extensionless binary), while assuming
+ * Windows unconditionally - what the C backend used to do - hands every
+ * Linux and macOS build a meaningless "hello.exe".
+ */
+bool driver_target_is_windows(const char *t)
+{
+    if (!t || !t[0]) {
+#if defined(_WIN32)
+        return true;
+#else
+        return false;
+#endif
+    }
+    return strstr(t, "windows") || strstr(t, "mingw") || strstr(t, "win32");
+}
+
+const char *driver_exe_suffix(const char *triple)
+{
+    return driver_target_is_windows(triple) ? ".exe" : "";
+}
+
+const char *driver_exe_name(arena_t *a, const char *name, const char *triple)
+{
+    const char *ext = driver_exe_suffix(triple);
+    size_t n = strlen(name), e = strlen(ext);
+    if (e == 0) return name;
+    /* Case-insensitive: Windows resolves "prog.EXE" and "prog.exe" to the
+       same file, so a caller who spelled it in caps already named an
+       executable and must not get "prog.EXE.exe" back. */
+    if (n >= e) {
+        size_t i = 0;
+        bool same = true;
+        for (; i < e && same; i++)
+            same =
+                tolower((unsigned char)name[n - e + i]) == tolower((unsigned char)ext[i]);
+        if (same) return name;
+    }
+    {
+        size_t cap = n + e + 1;
+        char *o = (char *)arena_alloc(a, cap);
+        sal_snprintf(o, cap, "%s%s", name, ext);
+        return o;
+    }
+}
+
 /* driver.c's list_salam_files, generalized to an arbitrary directory (still
  * bare filenames when dir=="." for backward compat with that cwd-only
  * caller; dir-prefixed otherwise) - no recursion either way. */
@@ -1479,16 +1528,17 @@ int driver_build(options_t *opt)
         } else
             LOG_I(log, PH_DRIVER, "produced object files (.o)");
     } else {
-        const char *output = opt->output;
-        if (!output) {
-            const char *stem = opt->input_count > 0
-                                   ? driver_output_stem(arena, opt->inputs[0])
-                                   : first_module;
-            size_t ocap = strlen(stem) + 5;
-            char *o = (char *)arena_alloc(arena, ocap);
-            sal_snprintf(o, ocap, "%s.exe", stem);
-            output = o;
-        }
+        /* This backend only ever builds for the host - driver_build() sends
+           every --target= to the LLVM one - so the extension question is
+           "is this host Windows", which is what driver_exe_name() answers
+           for the empty triple. A caller-supplied --output goes through it
+           too, so nobody ends up with a Windows binary cmd.exe won't run. */
+        const char *output =
+            opt->output
+                ? opt->output
+                : (opt->input_count > 0 ? driver_output_stem(arena, opt->inputs[0])
+                                        : first_module);
+        output = driver_exe_name(arena, output, opt->llvm_target);
 #ifdef _WIN32
         const char *lm = use_tcc ? " -lmsvcrt" : (strstr(opt->cc, "clang") ? "" : " -lm");
 #else

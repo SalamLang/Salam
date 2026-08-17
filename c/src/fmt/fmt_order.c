@@ -300,8 +300,8 @@ static bool hoist_package(const char *text, size_t len, const token_stream_t *to
         /* Skip the blank line the moved block left behind. */
         {
             size_t after = uend;
-            while (after < len && (text[after] == ' ' || text[after] == '\t' ||
-                                   text[after] == '\r'))
+            while (after < len &&
+                   (text[after] == ' ' || text[after] == '\t' || text[after] == '\r'))
                 after++;
             if (after < len && text[after] == '\n') after++;
             sb_append_bytes(out, text + after, len - after);
@@ -365,8 +365,7 @@ bool fmt_reorder_toplevel(arena_t *a, logger_t *log, const langpack_t *pack,
         sb_t hoisted;
         sb_init(&hoisted);
         if (hoist_package(text, len, toks, &hoisted)) {
-            source_file_t *hsrc =
-                (source_file_t *)arena_alloc(a, sizeof(source_file_t));
+            source_file_t *hsrc = (source_file_t *)arena_alloc(a, sizeof(source_file_t));
             token_stream_t *htoks = NULL;
             hsrc->path = src->path;
             hsrc->text = arena_strdup(a, sb_cstr(&hoisted));

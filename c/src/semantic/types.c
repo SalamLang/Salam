@@ -395,8 +395,7 @@ static bool type_implicit(const type_t *src, const type_t *dst)
      * the null element case - a general element-wise rule would also let
      * i32[3] pass for i64[3], which is not a reinterpretable layout. */
     if (src->kind == TY_ARRAY && dst->kind == TY_ARRAY && src->length == dst->length &&
-        src->elem && dst->elem && src->elem->kind == TY_NULL &&
-        dst->elem->kind == TY_PTR)
+        src->elem && dst->elem && src->elem->kind == TY_NULL && dst->elem->kind == TY_PTR)
         return true;
     if (src->kind == TY_ENUM) {
         if (src->enum_val_kind == TV_STRING && dst->kind == TY_STR) return true;

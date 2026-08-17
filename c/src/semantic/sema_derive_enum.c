@@ -34,7 +34,7 @@
 
 static const char *derive_one(sema_t *s, type_t *t, const char *prefix,
                               const char *(*body)(sema_t *, type_t *, symbol_t *,
-                                                   const char *))
+                                                  const char *))
 {
     symbol_t *esym;
     const char *fname;

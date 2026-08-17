@@ -13,6 +13,7 @@
  */
 
 #include "codegen/codegen_internal.h"
+#include "core/sal_path.h"
 
 static bool detect_gui_imports(ast_node_t *program)
 {
@@ -48,6 +49,79 @@ static void emit_private_protos(cg_t *cg, ast_node_t *program)
         }
     }
     sb_puts(cg->c, "\n");
+}
+
+/*
+ * The stem the driver names an import's generated module after: the base name
+ * of the resolved file with its extension dropped, which is what driver_build
+ * turns into salam_mod_<stem>.c/.h/.o. NULL when the import cannot be
+ * resolved, which the caller treats as "nothing to emit" - a missing import is
+ * already a semantic error by the time codegen runs.
+ */
+const char *cg_import_module(cg_t *cg, ast_node_t *d)
+{
+    const char *p =
+        (d->value.kind == TV_STRING && d->value.as.s) ? d->value.as.s : d->name;
+    const char *resolved, *stem;
+    char base[128];
+    size_t k = 0;
+    if (!p) return NULL;
+    resolved = d->type_str ? d->type_str : salam_resolve_import(cg->a, "", p);
+    if (!resolved) return NULL;
+    stem = sal_path_base(resolved);
+    for (; stem[k] && stem[k] != '.' && k < sizeof(base) - 1; k++)
+        base[k] = stem[k];
+    base[k] = 0;
+    return arena_strdup(cg->a, base);
+}
+
+const char *cg_module_init_name(cg_t *cg, const char *module)
+{
+    return cg_fmt(cg, "%s%s_init", SALAM_MOD_PREFIX, cg_cident(cg, module));
+}
+
+/*
+ * A global whose initialiser is not a constant is emitted as a plain
+ * definition plus a separate assignment, because C only accepts a constant
+ * expression there. Those assignments used to be replayed at the top of `main`
+ * and nowhere else, which meant they ran for the main module only: a
+ * `mut g_cat := catalog.New()` in an imported package stayed zeroed, and the
+ * first read of it failed a long way from the cause ("Vector.get: index out of
+ * bounds") with nothing to say the initialiser had never run.
+ *
+ * Every module gets one of these instead, and runs its imports' first, so the
+ * graph comes up bottom-up before main's body starts. The flag is set before
+ * the recursion, not after, so an import cycle terminates rather than recursing
+ * forever - the same trade C++ makes for static initialisation.
+ */
+static void emit_module_init(cg_t *cg, ast_node_t *program)
+{
+    const char *fn = cg_module_init_name(cg, cg->module);
+    sb_puts(cg->c, cg_fmt(cg, "void %s(void) {\n", fn));
+    sb_puts(cg->c, "    static int __salam_init_done = 0;\n"
+                   "    if (__salam_init_done) return;\n"
+                   "    __salam_init_done = 1;\n");
+    /* std/core is every module's dependency without appearing in anyone's
+     * import list - cg_header includes its header on the same terms. */
+    if (strcmp(cg->module, "core") != 0)
+        sb_puts(cg->c, cg_fmt(cg, "    %s();\n", cg_module_init_name(cg, "core")));
+    {
+        size_t i = 0;
+        for (; i < program->list.len; i++) {
+            ast_node_t *d = (ast_node_t *)program->list.data[i];
+            const char *base;
+            if (d->kind != AST_IMPORT) continue;
+            base = cg_import_module(cg, d);
+            if (!base) continue;
+            sb_puts(cg->c, cg_fmt(cg, "    %s();\n", cg_module_init_name(cg, base)));
+        }
+    }
+    {
+        size_t i = 0;
+        for (; i < cg->deferred.len; i++)
+            sb_puts(cg->c, cg_fmt(cg, "    %s\n", (const char *)cg->deferred.data[i]));
+    }
+    sb_puts(cg->c, "}\n\n");
 }
 
 static void emit_globals(cg_t *cg, ast_node_t *program)
@@ -604,6 +678,7 @@ codegen_output_t *codegen_run(arena_t *a, logger_t *log, ast_node_t *program,
     cg_header(&cg, program);
     emit_instances_header(&cg, program);
     emit_inline_header(&cg, program);
+    sb_puts(&h, cg_fmt(&cg, "void %s(void);\n", cg_module_init_name(&cg, module)));
     sb_puts(&h, "\n#endif\n");
     sb_puts(&c, cg_fmt(&cg, "#include \"%s%s.h\"\n\n", SALAM_MOD_PREFIX, module));
 
@@ -617,6 +692,7 @@ codegen_output_t *codegen_run(arena_t *a, logger_t *log, ast_node_t *program,
         sb_putc(&c, '\n');
     }
     emit_globals(&cg, program);
+    emit_module_init(&cg, program);
 
     if (lamf.len) {
         sb_puts(&c, sb_cstr(&lamf));

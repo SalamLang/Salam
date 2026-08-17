@@ -569,21 +569,8 @@ static void hdr_prelude(cg_t *cg, ast_node_t *program, sb_t *h)
         for (; i < program->list.len; i++) {
             ast_node_t *d = (ast_node_t *)program->list.data[i];
             if (d->kind == AST_IMPORT) {
-                const char *p = (d->value.kind == TV_STRING && d->value.as.s)
-                                    ? d->value.as.s
-                                    : d->name;
-                if (!p) continue;
-                const char *resolved =
-                    d->type_str ? d->type_str : salam_resolve_import(cg->a, "", p);
-                const char *stem = sal_path_base(resolved);
-                char base[128];
-                size_t k = 0;
-                {
-                    const char *q = stem;
-                    for (; *q && *q != '.' && k < sizeof(base) - 1; q++)
-                        base[k++] = *q;
-                }
-                base[k] = 0;
+                const char *base = cg_import_module(cg, d);
+                if (!base) continue;
                 sb_puts(h, cg_fmt(cg, "#include \"%s%s.h\"\n", SALAM_MOD_PREFIX, base));
             }
         }

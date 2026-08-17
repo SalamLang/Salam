@@ -180,6 +180,10 @@ func_sig_t *pick_op_overload(cg_t *cg, symbol_t *msym, size_t want_nparams);
 
 bool cg_addressable(const ast_node_t *n);
 
+const char *cg_import_module(cg_t *cg, ast_node_t *d);
+
+const char *cg_module_init_name(cg_t *cg, const char *module);
+
 symbol_t *cg_struct_of(cg_t *cg, const char *ts, char *sname, size_t cap);
 
 const char *cg_op(token_kind_t k);

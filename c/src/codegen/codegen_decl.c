@@ -218,11 +218,9 @@ void cg_function(cg_t *cg, ast_node_t *fn, symbol_t *owner)
             cg_line(cg, "salam_set_args(argc, argv);");
             cg_line(cg, "#endif");
         }
-        {
-            size_t i = 0;
-            for (; i < cg->deferred.len; i++)
-                cg_line(cg, "%s", (const char *)cg->deferred.data[i]);
-        }
+        /* Runs this module's own non-constant global initialisers and, ahead
+         * of them, every imported module's. See emit_module_init. */
+        cg_line(cg, "%s();", cg_module_init_name(cg, cg->module));
     }
     if (fn->a) cg_block(cg, fn->a);
     cg_emit_defers(cg);

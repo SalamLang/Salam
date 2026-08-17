@@ -496,6 +496,24 @@ func hdr_enums(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
         end
         esym := sm.LookupLocal(s, s.global, d.name)
         backing := esym != 0 ? sm.SymAt(s, esym).enum_val_kind : tok.TV_INT
+        // The type's own C name is package-mangled for a non-main package
+        // (sema_decl.salam's AST_ENUM_DEF pre-pass), matching what cg_ctype
+        // already produces for a variable/param declared with this enum's
+        // type - so the typedef itself has to use that name too, or
+        // "unknown type name" follows the moment anything outside this
+        // enum's own package refers to it. The *member constant* names stay
+        // on the short, unmangled prefix (d.name): same-package reads
+        // (cg_expr's AST_MEMBER case) already rely on that, unchanged here.
+        mut tname := d.name
+        if esym != 0:
+            esv := sm.SymAt(s, esym)
+            if esv.ty != sm.TYPE_NONE:
+                etn := sm.TypeAt(s, esv.ty).name
+                if str.Len(etn) > 0:
+                    tname = etn
+                end
+            end
+        end
         // A C `enum` can only ever hold integers, so a string/float backed
         // enum can't become one - it's emitted as one `static const`
         // declaration per member instead. Either way the member-read site
@@ -508,7 +526,7 @@ func hdr_enums(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
             // without a C `enum` to supply that, a plain typedef to the
             // backing C type keeps "Color" valid.
             outh(
-                g, "typedef " + (backing == tok.TV_STRING ? "const char *" : "double") + " " + cg_cident(d.name) + ";\n"
+                g, "typedef " + (backing == tok.TV_STRING ? "const char *" : "double") + " " + cg_cident(tname) + ";\n"
             )
             repeat d.list.len() with j:
                 m := at.Get(a, d.list.get(j))
@@ -524,7 +542,7 @@ func hdr_enums(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
                     end
                 end
                 outh(
-                    g, "static const " + cg_cident(d.name) + " " + cg_cident(d.name) + "_" + cg_cident(m.name) + " = " + lit + ";\n"
+                    g, "static const " + cg_cident(tname) + " " + cg_cident(d.name) + "_" + cg_cident(m.name) + " = " + lit + ";\n"
                 )
             end
             continue
@@ -544,7 +562,7 @@ func hdr_enums(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
             )
             next += 1 as i64
         end
-        outh(g, " } " + cg_cident(d.name) + ";\n")
+        outh(g, " } " + cg_cident(tname) + ";\n")
     end
 end
 

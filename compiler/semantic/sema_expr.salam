@@ -392,6 +392,29 @@ func check_ternary(s &: Sema, a &: at.Ast, nid: int): int:
     ret sema_decorate(s, a, nid, sema_err_ty(s))
 end
 
+// `nid` is a `.Member` access whose object already denotes an enum type
+// (`sy`) rather than a value of it - either a bare `EnumName` identifier, or
+// (via the package-qualified branch below) `pkg.EnumName`. Shared so both
+// shapes resolve identically instead of duplicating the member lookup.
+func resolve_enum_member(s &: Sema, a &: at.Ast, nid: int, sy: int): int:
+    n := at.Get(a, nid)
+    sp := span_of(a, nid)
+    syv := sym_at(s, sy)
+    _de := sema_decorate(s, a, n.a, syv.ty)
+    mut m2 := 0
+    if syv.members != 0:
+        m2 = scope_lookup_local(s, syv.members, n.name)
+    end
+    if m2 == 0:
+        serr(
+            s, 16, sp, co.Format2(
+                i18.Tr("enum '%s' has no member '%s'"), co.ArgStr(syv.name), co.ArgStr(n.name)
+            )
+        )
+    end
+    ret sema_decorate(s, a, nid, syv.ty)
+end
+
 func check_member(s &: Sema, a &: at.Ast, nid: int): int:
     n := at.Get(a, nid)
     sp := span_of(a, nid)
@@ -428,6 +451,20 @@ func check_member(s &: Sema, a &: at.Ast, nid: int): int:
                 )
                 ret sema_decorate(s, a, nid, sema_err_ty(s))
             end
+            // `pkg.EnumName` or `pkg.StructName` alone: a bare reference to
+            // the type itself, not a value - the same rule the unqualified
+            // case enforces below. A caller writing `pkg.EnumName.Member`
+            // reaches it through the branch further below instead, which
+            // recognizes this exact shape one level up before ever landing
+            // here.
+            if mv.kind == SYM_ENUM || mv.kind == SYM_STRUCT:
+                serr(
+                    s, 1, sp, co.Format2(
+                        i18.Tr("type '%s.%s' used as a value"), co.ArgStr(pkv.name), co.ArgStr(mname)
+                    )
+                )
+                ret sema_decorate(s, a, nid, sema_err_ty(s))
+            end
             _da := sema_decorate(s, a, n.a, pkv.ty)
             ret sema_decorate(s, a, nid, mv.ty)
         end
@@ -436,22 +473,31 @@ func check_member(s &: Sema, a &: at.Ast, nid: int): int:
     if n.a != 0 && at.KindOf(a, n.a) == at.AST_IDENTIFIER:
         sy := scope_lookup(s, s.cur, at.Get(a, n.a).name)
         if sy != 0 && sym_at(s, sy).kind == SYM_ENUM:
-            syv := sym_at(s, sy)
-            _de := sema_decorate(s, a, n.a, syv.ty)
-            mut m2 := 0
-            if syv.members != 0:
-                m2 = scope_lookup_local(s, syv.members, n.name)
-            end
-            if m2 == 0:
-                serr(
-                    s, 16, sp, co.Format2(
-                        i18.Tr("enum '%s' has no member '%s'"), co.ArgStr(syv.name), co.ArgStr(n.name)
-                    )
-                )
-            end
-            ret sema_decorate(s, a, nid, syv.ty)
+            ret resolve_enum_member(s, a, nid, sy)
         end
     end
+
+    // `pkg.EnumName.Member`: `n.a` is itself `pkg.EnumName`, an AST_MEMBER
+    // node (the parser has no 3-level lookahead, so this always builds as a
+    // plain left-associative member chain). Recognize that shape here,
+    // before the generic sema_check_expr(s, a, n.a) fallback below would
+    // otherwise evaluate `pkg.EnumName` as if it were a value and fail.
+    if n.a != 0 && at.KindOf(a, n.a) == at.AST_MEMBER:
+        an := at.Get(a, n.a)
+        if an.a != 0 && at.KindOf(a, an.a) == at.AST_IDENTIFIER:
+            pk2 := scope_lookup(s, s.cur, at.Get(a, an.a).name)
+            if pk2 != 0 && sym_at(s, pk2).kind == SYM_PACKAGE:
+                pk2v := sym_at(s, pk2)
+                mname2 := pkg_member_canon(s, a, pk2, an.name, span_of(a, n.a))
+                at.SetName(a, n.a, mname2)
+                m3 := scope_lookup_local(s, pk2v.members, mname2)
+                if m3 != 0 && sym_at(s, m3).kind == SYM_ENUM:
+                    ret resolve_enum_member(s, a, nid, m3)
+                end
+            end
+        end
+    end
+
     objt := sema_check_expr(s, a, n.a)
     if type_is_error(s, objt):
         ret sema_decorate(s, a, nid, sema_err_ty(s))

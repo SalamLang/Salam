@@ -649,57 +649,75 @@ func eval_node(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
     if k == at.AST_MEMBER:
         obj := node.a
         onn := at.Get(a, obj)
+        // pkg.EnumName.Member: obj is itself pkg.EnumName, an AST_MEMBER
+        // (obj.a = "pkg", obj.name = "Kind") rather than a bare identifier -
+        // find_enum is one flat, package-agnostic table, so the lookup
+        // below is identical either way; this only widens which shapes
+        // reach it. Without it, obj falls to the eval(...) below, which
+        // evaluates "pkg.Kind" as an ordinary module-member read and fails
+        // with "package has no member 'Kind'" (enums aren't registered as
+        // module env bindings).
+        mut obj_is_pkg_qualified := false
+        if onn.kind == at.AST_MEMBER && onn.a != 0 && at.KindOf(a, onn.a) == at.AST_IDENTIFIER:
+            mut pw := 0
+            pslot := env_find(ip, env, at.Get(a, onn.a).name, pw)
+            if pslot >= 0:
+                pv := env_slot_val(ip, pw, pslot)
+                obj_is_pkg_qualified = pv.kind == VAL_MODULE
+            end
+        end
+        mut bare_unbound := false
         if onn.kind == at.AST_IDENTIFIER:
-            mut ew := 0
-            if env_find(ip, env, onn.name, ew) < 0:
-                edef := find_enum(ip, onn.name)
-                if edef != 0:
-                    // Mirrors sema_decl.salam's AST_ENUM_DEF handling: the
-                    // first member with a literal initializer fixes the
-                    // enum's backing kind (TV_INT if none has one); int
-                    // members auto-increment, string/float members carry
-                    // their own literal value directly (sema already
-                    // rejects a string/float-backed member with no
-                    // initializer, so this always resolves for a program
-                    // that passed sema).
-                    mut backing := tok.TV_INT
-                    repeat at.ChildCount(a, edef) with bi:
-                        bm := at.Get(a, at.Child(a, edef, bi))
-                        if bm.a != 0 && at.Get(a, bm.a).kind == at.AST_LITERAL:
-                            backing = at.Get(a, bm.a).value_kind
-                            break
-                        end
+            mut ew0 := 0
+            bare_unbound = env_find(ip, env, onn.name, ew0) < 0
+        end
+        if bare_unbound || obj_is_pkg_qualified:
+            edef := find_enum(ip, onn.name)
+            if edef != 0:
+                // Mirrors sema_decl.salam's AST_ENUM_DEF handling: the
+                // first member with a literal initializer fixes the enum's
+                // backing kind (TV_INT if none has one); int members
+                // auto-increment, string/float members carry their own
+                // literal value directly (sema already rejects a
+                // string/float-backed member with no initializer, so this
+                // always resolves for a program that passed sema).
+                mut backing := tok.TV_INT
+                repeat at.ChildCount(a, edef) with bi:
+                    bm := at.Get(a, at.Child(a, edef, bi))
+                    if bm.a != 0 && at.Get(a, bm.a).kind == at.AST_LITERAL:
+                        backing = at.Get(a, bm.a).value_kind
+                        break
                     end
-                    mut next := 0 as i64
-                    repeat at.ChildCount(a, edef) with i:
-                        m := at.Child(a, edef, i)
-                        mn := at.Get(a, m)
-                        mut val := val_int(next)
-                        if mn.a != 0 && at.Get(a, mn.a).kind == at.AST_LITERAL && at.Get(a, mn.a).value_kind == backing:
-                            man := at.Get(a, mn.a)
-                            if backing == tok.TV_FLOAT:
-                                val = val_float(man.value_float)
-                            else if backing == tok.TV_STRING:
-                                val = val_str(man.value_str)
-                            else:
-                                next = man.value_int as i64
-                                val = val_int(next)
-                            end
-                        end
-                        if str.Len(mn.name) != 0 && str.Equals(mn.name, node.name):
-                            ret val
-                        end
-                        if backing == tok.TV_INT:
-                            next += 1 as i64
-                        end
-                    end
-                    rt_error(
-                        ip, a, n, co.Format2(
-                            i18.Tr("enum '%s' has no member '%s'"), co.ArgStr(onn.name), co.ArgStr(node.name)
-                        )
-                    )
-                    ret val_null()
                 end
+                mut next := 0 as i64
+                repeat at.ChildCount(a, edef) with i:
+                    m := at.Child(a, edef, i)
+                    mn := at.Get(a, m)
+                    mut val := val_int(next)
+                    if mn.a != 0 && at.Get(a, mn.a).kind == at.AST_LITERAL && at.Get(a, mn.a).value_kind == backing:
+                        man := at.Get(a, mn.a)
+                        if backing == tok.TV_FLOAT:
+                            val = val_float(man.value_float)
+                        else if backing == tok.TV_STRING:
+                            val = val_str(man.value_str)
+                        else:
+                            next = man.value_int as i64
+                            val = val_int(next)
+                        end
+                    end
+                    if str.Len(mn.name) != 0 && str.Equals(mn.name, node.name):
+                        ret val
+                    end
+                    if backing == tok.TV_INT:
+                        next += 1 as i64
+                    end
+                end
+                rt_error(
+                    ip, a, n, co.Format2(
+                        i18.Tr("enum '%s' has no member '%s'"), co.ArgStr(onn.name), co.ArgStr(node.name)
+                    )
+                )
+                ret val_null()
             end
         end
         recv := eval(ip, a, env, obj)

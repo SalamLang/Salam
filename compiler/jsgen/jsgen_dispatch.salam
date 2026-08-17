@@ -174,6 +174,20 @@ func jsg_match_expr(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int): str:
     ret "(() => {\n" + body + "})()"
 end
 
+// An enum member's JS value, in its backing type. JS strings/numbers are
+// value types compared by content with ===, so unlike C/LLVM no separate
+// comparison codegen is needed once the member itself is right.
+func jsg_enum_member_value(s &: sm.Sema, m: int): str:
+    mv := sm.SymAt(s, m)
+    if mv.enum_val_kind == tok.TV_FLOAT:
+        ret co.Format1("%.17g", co.ArgFloat(mv.enum_value_f))
+    end
+    if mv.enum_val_kind == tok.TV_STRING:
+        ret jsg_escape(mv.enum_value_str)
+    end
+    ret co.I64Toa(mv.enum_value)
+end
+
 func jsg_expr_p(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, minprec: int): str:
     if id == 0:
         ret "0"
@@ -424,24 +438,23 @@ func jsg_expr_p(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, minprec: int): str:
         if n.a != 0:
             av := at.Get(a, n.a)
             if av.kind == at.AST_IDENTIFIER && !local_known(g, av.name):
-                e := sm.Lookup(s, s.global, av.name)
+                mut e := sm.Lookup(s, s.global, av.name)
+                // Same reasoning as codegen_expr.salam's matching fallback:
+                // a synthesized enum-derive body is checked against its
+                // enum's home scope (sema), so an unqualified enum name
+                // inside it can be package-scoped - this lookup only
+                // searches the global scope by default and needs the same
+                // cur_fn_home fallback used for free-function calls in such
+                // bodies.
+                if (e == 0 || sm.SymAt(s, e).kind != sm.SYM_ENUM) && g.cur_fn_home != 0:
+                    e = sm.Lookup(s, g.cur_fn_home, av.name)
+                end
                 if e != 0:
                     ev := sm.SymAt(s, e)
                     if ev.kind == sm.SYM_ENUM && ev.members != 0:
                         m := sm.LookupLocal(s, ev.members, n.name)
                         if m != 0:
-                            // JS strings/numbers are value types compared by
-                            // content with ===, so unlike C/LLVM no separate
-                            // comparison codegen is needed once the member
-                            // itself is right.
-                            mv := sm.SymAt(s, m)
-                            if mv.enum_val_kind == tok.TV_FLOAT:
-                                ret co.Format1("%.17g", co.ArgFloat(mv.enum_value_f))
-                            end
-                            if mv.enum_val_kind == tok.TV_STRING:
-                                ret jsg_escape(mv.enum_value_str)
-                            end
-                            ret co.I64Toa(mv.enum_value)
+                            ret jsg_enum_member_value(s, m)
                         end
                     end
                     if ev.kind == sm.SYM_PACKAGE && ev.members != 0:
@@ -460,6 +473,29 @@ func jsg_expr_p(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, minprec: int): str:
                                     g, s, a, at.Get(a, m2v.decl).a, minprec
                                 )
                             end
+                        end
+                    end
+                end
+            end
+            // pkg.EnumName.Member: n.a is itself pkg.EnumName, an
+            // AST_MEMBER - see the matching fix in check_member/
+            // sema_expr.salam for why the parser always builds this as a
+            // plain left-associative chain. Without this, n.a falls to the
+            // generic fallback below, which has no idea "pkg.EnumName"
+            // denotes a type and emits it as a literal (and nonexistent) JS
+            // property access.
+            if av.kind == at.AST_MEMBER && av.a != 0 && at.KindOf(a, av.a) == at.AST_IDENTIFIER && !local_known(g, at.Get(a, av.a).name):
+                pkname2 := at.Get(a, av.a).name
+                mut pk4 := sm.Lookup(s, s.global, pkname2)
+                if pk4 == 0 && g.cur_fn_home != 0:
+                    pk4 = sm.Lookup(s, g.cur_fn_home, pkname2)
+                end
+                if pk4 != 0 && sm.SymAt(s, pk4).kind == sm.SYM_PACKAGE:
+                    e3 := sm.LookupLocal(s, sm.SymAt(s, pk4).members, av.name)
+                    if e3 != 0 && sm.SymAt(s, e3).kind == sm.SYM_ENUM && sm.SymAt(s, e3).members != 0:
+                        m4 := sm.LookupLocal(s, sm.SymAt(s, e3).members, n.name)
+                        if m4 != 0:
+                            ret jsg_enum_member_value(s, m4)
                         end
                     end
                 end

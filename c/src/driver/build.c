@@ -1239,6 +1239,36 @@ int driver_build(options_t *opt)
         }
     }
 
+    /*
+     * Two files claiming one package name is not something the language can
+     * express: everything a package exports is mangled as _Salam_<pkg>_<name>
+     * and its generated unit is salam_mod_<stem>.c, so a local `config.salam`
+     * next to std/config produced one .c file overwriting the other and two
+     * different `_Salam_config_New`s in one link. What reached the programmer
+     * was a C compiler complaining about an incomplete type in code they did
+     * not write. Say it here instead, where both paths are known.
+     */
+    {
+        int i = 0;
+        for (; i < nb; i++) {
+            int j = i + 1;
+            if (!b_programs[i]) continue;
+            for (; j < nb; j++) {
+                if (!b_programs[j]) continue;
+                if (strcmp(b_srcpath[i], b_srcpath[j]) == 0) continue;
+                if (strcmp(b_pkg[i], b_pkg[j]) != 0 &&
+                    strcmp(b_module[i], b_module[j]) != 0)
+                    continue;
+                LOG_E(log, PH_DRIVER,
+                      i18n_tr("package name '%s' is claimed by two different files "
+                              "('%s' and '%s'); rename one of them"),
+                      strcmp(b_pkg[i], b_pkg[j]) == 0 ? b_pkg[i] : b_module[i],
+                      b_srcpath[i], b_srcpath[j]);
+                all_ok = false;
+            }
+        }
+    }
+
     dce_finish();
 
     {

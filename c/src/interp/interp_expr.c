@@ -239,6 +239,41 @@ static void export_ref_params(interp_t *I, ast_node_t *fn, env_t *env, value_t *
 }
 
 /*
+ * A field or element the walker holds as a value rather than as bytes -
+ * `f(s.key)`, `f(rows[0])` - is still a place the callee's `&:` result has to
+ * land in, and interp_resolve_loc would reach it, but that function reports a
+ * shape it cannot place as a runtime error. Here a shape that is not a place
+ * simply has nowhere to write, so this resolves the two cases that are and
+ * says no to everything else. `pkg.Global` is deliberately among the no's:
+ * the base evaluates to a module, not a struct, and the walker has never
+ * supported assigning through it.
+ */
+static bool writeback_value_place(interp_t *I, env_t *env, ast_node_t *arg, value_t v)
+{
+    if (arg->kind == AST_MEMBER && arg->a && arg->name) {
+        value_t obj = eval(I, env, arg->a);
+        size_t i = 0;
+        if (obj.kind != VAL_STRUCT) return false;
+        for (; i < obj.as.st->nfields; i++)
+            if (strcmp(obj.as.st->fields[i].name, arg->name) == 0) {
+                obj.as.st->fields[i].val = v;
+                return true;
+            }
+        return false;
+    }
+    if (arg->kind == AST_INDEX && arg->a && arg->b) {
+        value_t base = eval(I, env, arg->a);
+        int64_t idx;
+        if (base.kind != VAL_ARRAY) return false;
+        idx = to_int(eval(I, env, arg->b));
+        if (idx < 0 || (size_t)idx >= base.as.arr->len) return false;
+        base.as.arr->data[idx] = v;
+        return true;
+    }
+    return false;
+}
+
+/*
  * The other half: put what the callee left in a `&:` parameter back where the
  * caller passed it from. A plain variable is the common case; an argument like
  * `(_o.next)[0]`, which the derived JSON decoder passes to decode into the
@@ -257,15 +292,17 @@ void interp_writeback_refs(interp_t *I, env_t *env, ast_node_t *call, ast_node_t
             if (b) b->val = args[i];
             continue;
         }
-        /* Otherwise only a place in real memory is written back, and only
-         * when it resolves: an argument that is not a place at all (a
-         * temporary) has nowhere to receive the value, and reporting that
-         * here would turn code the walker used to run into a runtime error. */
+        /* Otherwise only a place is written back, and only when it
+         * resolves: an argument that is not a place at all (a temporary) has
+         * nowhere to receive the value, and reporting that here would turn
+         * code the walker used to run into a runtime error. */
         {
             void *addr = NULL;
             const char *ts = NULL;
             if (interp_mem_lvalue(I, env, arg, &addr, &ts))
                 interp_mem_store(I, addr, ts, args[i]);
+            else
+                (void)writeback_value_place(I, env, arg, args[i]);
         }
     }
 }

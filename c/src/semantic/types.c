@@ -390,6 +390,14 @@ static bool type_implicit(const type_t *src, const type_t *dst)
 {
     if (!src || !dst) return false;
     if (src->kind == TY_NULL && dst->kind == TY_PTR) return true;
+    /* `[null, null, null]` types as null[3] on its own; every element still
+     * converts to a pointer, so it fills any T*[3]. Deliberately limited to
+     * the null element case - a general element-wise rule would also let
+     * i32[3] pass for i64[3], which is not a reinterpretable layout. */
+    if (src->kind == TY_ARRAY && dst->kind == TY_ARRAY && src->length == dst->length &&
+        src->elem && dst->elem && src->elem->kind == TY_NULL &&
+        dst->elem->kind == TY_PTR)
+        return true;
     if (src->kind == TY_ENUM) {
         if (src->enum_val_kind == TV_STRING && dst->kind == TY_STR) return true;
         if (src->enum_val_kind == TV_FLOAT &&
@@ -425,6 +433,9 @@ bool type_castable(const type_t *dst, const type_t *src)
 {
     if (type_is_error(dst) || type_is_error(src)) return true;
     if (type_equiv(dst, src)) return true;
+    /* Anything that converts on its own is certainly castable; spelling the
+     * conversion out with `as` must never be the stricter of the two. */
+    if (type_implicit(src, dst)) return true;
     if (dst->kind == TY_PTR && src->kind == TY_PTR) return true;
 
     if ((dst->kind == TY_STR && src->kind == TY_PTR) ||

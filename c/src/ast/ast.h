@@ -107,6 +107,10 @@ struct ast_node {
     token_kind_t op;
     bool is_mut;
     bool is_pointer;
+    /* AST_TYPE only: the star sat BEFORE the dims ("Edge*[6]"), so it belongs
+     * to the element type - an array of pointers, not a pointer to an array
+     * ("Edge[6]*", which is what is_pointer records). */
+    bool is_elem_pointer;
     bool synthetic;
     bool file_boundary; /* first top-level node merged in from a package file;
                          * resets per-file top-level ordering checks */

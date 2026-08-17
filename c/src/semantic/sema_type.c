@@ -70,6 +70,30 @@ static size_t resolve_array_dim(sema_t *s, ast_node_t *dim)
     return 0;
 }
 
+/*
+ * Wrap a resolved base in whatever the type node's suffixes asked for, in the
+ * one order that makes both spellings mean what they read as:
+ *   Edge*[6]  ->  is_elem_pointer, so the star binds first: array of pointers
+ *   Edge[6]*  ->  is_pointer, so the star binds last: pointer to the array
+ * Every branch of sema_resolve_type routes through here; branches that used to
+ * apply only is_pointer silently dropped the dims of a type like
+ * `pkg.Type[3]`.
+ */
+static type_t *apply_type_suffixes(sema_t *s, ast_node_t *tnode, type_t *base)
+{
+    if (tnode->is_elem_pointer) base = type_ptr(s->tc, base);
+    {
+        size_t i = tnode->dims.len;
+        for (; i-- > 0;) {
+            ast_node_t *dim = (ast_node_t *)tnode->dims.data[i];
+            base = type_array(s->tc, base, resolve_array_dim(s, dim));
+        }
+    }
+    if (tnode->is_slice) base = type_slice(s->tc, base);
+    if (tnode->is_pointer) base = type_ptr(s->tc, base);
+    return base;
+}
+
 type_t *sema_resolve_type(sema_t *s, ast_node_t *tnode)
 {
     if (!tnode) return ty(s, TY_VOID);
@@ -87,15 +111,7 @@ type_t *sema_resolve_type(sema_t *s, ast_node_t *tnode)
             return err_ty(s);
         }
         type_t *dt = type_dyn(s->tc, iface, tnode->name);
-        {
-            size_t i = tnode->dims.len;
-            for (; i-- > 0;) {
-                ast_node_t *dim = (ast_node_t *)tnode->dims.data[i];
-                dt = type_array(s->tc, dt, resolve_array_dim(s, dim));
-            }
-        }
-        if (tnode->is_pointer) dt = type_ptr(s->tc, dt);
-        return dt;
+        return apply_type_suffixes(s, tnode, dt);
     }
 
     const char *dot = tnode->name ? strchr(tnode->name, '.') : NULL;
@@ -141,12 +157,10 @@ type_t *sema_resolve_type(sema_t *s, ast_node_t *tnode)
             s->cur = save_cur;
             s->gen_pkg = save_gp;
             base = inst ? inst->type : err_ty(s);
-            if (tnode->is_pointer) base = type_ptr(s->tc, base);
-            return base;
+            return apply_type_suffixes(s, tnode, base);
         }
         base = tsym->type;
-        if (tnode->is_pointer) base = type_ptr(s->tc, base);
-        return base;
+        return apply_type_suffixes(s, tnode, base);
     }
 
     if (tnode->name && type_prim_kind_from_name(tnode->name, NULL) < 0) {
@@ -167,7 +181,7 @@ type_t *sema_resolve_type(sema_t *s, ast_node_t *tnode)
         type_t *ret = tnode->type ? sema_resolve_type(s, tnode->type) : ty(s, TY_VOID);
         base = type_func(s->tc, ret, &ptypes);
         if (tnode->is_extern) base->length = 1;
-        if (tnode->is_pointer) base = type_ptr(s->tc, base);
+        base = apply_type_suffixes(s, tnode, base);
         decorate(s, tnode, base);
         return base;
     }
@@ -245,15 +259,7 @@ type_t *sema_resolve_type(sema_t *s, ast_node_t *tnode)
         }
     }
 
-    {
-        size_t i = tnode->dims.len;
-        for (; i-- > 0;) {
-            ast_node_t *dim = (ast_node_t *)tnode->dims.data[i];
-            base = type_array(s->tc, base, resolve_array_dim(s, dim));
-        }
-    }
-    if (tnode->is_slice) base = type_slice(s->tc, base);
-    if (tnode->is_pointer) base = type_ptr(s->tc, base);
+    base = apply_type_suffixes(s, tnode, base);
     decorate(s, tnode, base);
     return base;
 }

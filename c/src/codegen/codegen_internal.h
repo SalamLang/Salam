@@ -114,6 +114,11 @@ void cg_put_ident_byte(sb_t *b, unsigned char c);
 void parse_typestr(const char *ts, char *base, size_t cap, bool *ptr, vec_t *dims,
                    arena_t *a);
 
+/* parse_typestr plus the star count that belongs to an array's ELEMENT type:
+   "Edge*[6]" yields base "Edge", dims {6}, ptr false, elem_ptr 1. */
+void parse_typestr_ex(const char *ts, char *base, size_t cap, bool *ptr, vec_t *dims,
+                      arena_t *a, int *elem_ptr);
+
 bool cg_is_int_typestr(const char *ts);
 
 bool cg_is_unsigned_typestr(const char *ts);

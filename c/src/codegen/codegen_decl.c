@@ -55,7 +55,17 @@ const char *func_signature(cg_t *cg, ast_node_t *fn, symbol_t *owner, func_sig_t
         sb_puts(&b, "static ");
     if (!fn->is_extern) {
         if (fn->is_noinline) sb_puts(&b, "SALAM_NOINLINE ");
-        if (fn->is_pure) sb_puts(&b, "SALAM_PURE ");
+        /*
+         * Not on an sret function. Returning an aggregate by value lowers to a
+         * `void f(..., T* __ret)` that writes through the caller's pointer,
+         * and gcc rejects __attribute__((pure)) on anything returning void
+         * ("'pure' attribute on function returning 'void'", an error under
+         * -Werror=attributes) - correctly, because a pure function's only
+         * effect is its return value and this one has none. The Salam-level
+         * promise is unaffected: `pure` is enforced by sema, this only decides
+         * whether the C compiler is told about it.
+         */
+        if (fn->is_pure && !sret) sb_puts(&b, "SALAM_PURE ");
         if (fn->is_deprecated) sb_puts(&b, "SALAM_DEPRECATED ");
     }
     if (fn->is_noret) sb_puts(&b, "SALAM_NORET ");

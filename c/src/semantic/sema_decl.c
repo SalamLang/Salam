@@ -677,7 +677,8 @@ static void check_toplevel(sema_t *s, ast_node_t *d)
                         if (f && m->a->kind == AST_STRUCT_LIT && f->type &&
                             f->type->kind == TY_STRUCT)
                             s->expected = f->type;
-                        else if (f && m->a->kind == AST_LITERAL)
+                        else if (f && (m->a->kind == AST_LITERAL ||
+                                       m->a->kind == AST_ARRAY_LIT))
                             s->expected = f->type;
                         vt = sema_check_expr(s, m->a);
                     }

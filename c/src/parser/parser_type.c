@@ -41,14 +41,35 @@ static void parse_ptr_suffix(parser_t *p, ast_node_t *n)
     if (p_match(p, TK_STAR)) n->is_pointer = true;
 }
 
+/*
+ * Both sides of the dims are legal and they mean different types:
+ * "Edge*[6]" is six pointers, "Edge[6]*" is one pointer to an array of six.
+ * Which side the star sat on is recorded so sema can apply type_ptr before
+ * or after wrapping in type_array.
+ *
+ * The pre-dims form is only taken when a '[' actually follows, so a stray
+ * second star ("T**") still reaches the caller unconsumed and is reported
+ * there rather than being silently folded into one level.
+ */
+static void parse_ptr_and_dims(parser_t *p, ast_node_t *n)
+{
+    if (p_at(p, TK_STAR) && p_peek2(p)->kind == TK_LBRACKET) {
+        p_advance(p);
+        n->is_elem_pointer = true;
+        parse_array_dims(p, n);
+        return;
+    }
+    parse_array_dims(p, n);
+    parse_ptr_suffix(p, n);
+}
+
 static ast_node_t *parse_type_dyn(parser_t *p, ast_node_t *n)
 {
     p_advance(p);
     n->is_dyn = true;
     n->name = p_peek(p)->lexeme;
     p_advance(p);
-    parse_array_dims(p, n);
-    parse_ptr_suffix(p, n);
+    parse_ptr_and_dims(p, n);
     p_fin(p, n);
     return n;
 }
@@ -88,8 +109,7 @@ static ast_node_t *parse_type_named(parser_t *p, ast_node_t *n)
             ast_add(p->a, n, parse_type(p));
         p_close_angle(p, "'>' to close type arguments");
     }
-    parse_array_dims(p, n);
-    parse_ptr_suffix(p, n);
+    parse_ptr_and_dims(p, n);
     p_fin(p, n);
     return n;
 }

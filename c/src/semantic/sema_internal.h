@@ -83,6 +83,33 @@ typedef struct {
     type_t *type;
 } match_yield_t;
 
+/*
+ * Everything in sema_t that describes *where in a body the checker currently
+ * is*, as opposed to which program it is checking. Loading a package restarts
+ * checking from the top of another file, and that can happen from the middle
+ * of an expression (sema_load_prelude), so this has to be parked and put back
+ * around the nested run.
+ */
+typedef struct {
+    scope_t *gen_pkg;
+    type_t *self_type;
+    func_sig_t *cur_func;
+    type_t *expected;
+    lambda_ctx_t *lam;
+    int loop_depth;
+    int each_n;
+    int match_arm_depth;
+    type_t *match_yield_expected;
+    vec_t *match_yield_collect;
+    bool in_generic_inst;
+    bool in_derive;
+    bool requal;
+} sema_ctx_t;
+
+void sema_ctx_save(const sema_t *s, sema_ctx_t *out);
+void sema_ctx_reset(sema_t *s);
+void sema_ctx_restore(sema_t *s, const sema_ctx_t *saved);
+
 void sema_load_prelude(sema_t *s);
 
 #define SERR(s, code, span, ...)                                                         \

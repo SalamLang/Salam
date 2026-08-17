@@ -841,6 +841,57 @@ static symbol_t *pkg_cache_get(sema_t *s, const char *path)
     return NULL;
 }
 
+void sema_ctx_save(const sema_t *s, sema_ctx_t *out)
+{
+    out->gen_pkg = s->gen_pkg;
+    out->self_type = s->self_type;
+    out->cur_func = s->cur_func;
+    out->expected = s->expected;
+    out->lam = s->lam;
+    out->loop_depth = s->loop_depth;
+    out->each_n = s->each_n;
+    out->match_arm_depth = s->match_arm_depth;
+    out->match_yield_expected = s->match_yield_expected;
+    out->match_yield_collect = s->match_yield_collect;
+    out->in_generic_inst = s->in_generic_inst;
+    out->in_derive = s->in_derive;
+    out->requal = s->requal;
+}
+
+void sema_ctx_reset(sema_t *s)
+{
+    s->gen_pkg = NULL;
+    s->self_type = NULL;
+    s->cur_func = NULL;
+    s->expected = NULL;
+    s->lam = NULL;
+    s->loop_depth = 0;
+    s->each_n = 0;
+    s->match_arm_depth = 0;
+    s->match_yield_expected = NULL;
+    s->match_yield_collect = NULL;
+    s->in_generic_inst = false;
+    s->in_derive = false;
+    s->requal = false;
+}
+
+void sema_ctx_restore(sema_t *s, const sema_ctx_t *saved)
+{
+    s->gen_pkg = saved->gen_pkg;
+    s->self_type = saved->self_type;
+    s->cur_func = saved->cur_func;
+    s->expected = saved->expected;
+    s->lam = saved->lam;
+    s->loop_depth = saved->loop_depth;
+    s->each_n = saved->each_n;
+    s->match_arm_depth = saved->match_arm_depth;
+    s->match_yield_expected = saved->match_yield_expected;
+    s->match_yield_collect = saved->match_yield_collect;
+    s->in_generic_inst = saved->in_generic_inst;
+    s->in_derive = saved->in_derive;
+    s->requal = saved->requal;
+}
+
 static symbol_t *load_package(sema_t *s, const char *path, ast_node_t *imp)
 {
     symbol_t *cached = pkg_cache_get(s, path);
@@ -898,6 +949,18 @@ static symbol_t *load_package(sema_t *s, const char *path, ast_node_t *imp)
     ast_node_t *save_prog = s->program;
     vec_t save_pending = s->pending;
     bool save_in_pkg = s->in_pkg;
+    /* A package is not only loaded from load_imports() at the top of a run:
+     * sema_load_prelude() pulls std/collections in lazily, from wherever the
+     * first `Vector<T>` happens to appear - which is in the middle of checking
+     * some other package's function body. Everything describing that position
+     * has to be parked for the duration, or the loaded package inherits it.
+     * `gen_pkg` was the expensive one: a generic instantiated while checking
+     * the loaded package got `home` = the *importing* package's scope, so its
+     * body was re-checked against a scope where the template's own package -
+     * `Vector` itself - is not visible. See sema_ctx_t. */
+    sema_ctx_t save_ctx;
+    sema_ctx_save(s, &save_ctx);
+    sema_ctx_reset(s);
     s->in_pkg = true;
     s->global = pkgscope;
     s->cur = pkgscope;
@@ -921,6 +984,7 @@ static symbol_t *load_package(sema_t *s, const char *path, ast_node_t *imp)
     s->file = save_file;
     s->program = save_prog;
     s->pending = save_pending;
+    sema_ctx_restore(s, &save_ctx);
     symbol_t *pk = symbol_new(s->a, SYM_PACKAGE, prog->name);
     pk->members = pkgscope;
     pk->pkgname = prog->name ? prog->name : "main";

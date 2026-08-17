@@ -2,6 +2,30 @@ plugins {
     alias(libs.plugins.android.application)
 }
 
+// The repo-root VERSION file is the single source of truth for every Salam
+// artifact, so the app reads its version from there instead of carrying a
+// second copy that silently drifts. CI can still override either value with
+// -PappVersionName / -PappVersionCode (see _reusable-android-build.yml).
+val repoVersionFile = rootProject.projectDir.parentFile.resolve("VERSION")
+val repoVersionName =
+    repoVersionFile
+        .takeIf { it.isFile }
+        ?.readText()
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+        ?: error("VERSION file is missing or empty: ${repoVersionFile.absolutePath}")
+
+// 0.3.0 -> 300. Play requires a monotonically increasing integer; this stays
+// ordered as long as minor and patch stay below 100. Any pre-release suffix
+// (0.3.0-rc1) is ignored - it does not change the ordering.
+fun versionCodeOf(name: String): Int {
+    val parts =
+        Regex("""^(\d+)\.(\d+)(?:\.(\d+))?""").find(name)
+            ?: error("VERSION '$name' is not a semantic version (expected MAJOR.MINOR[.PATCH])")
+    val (major, minor, patch) = parts.destructured
+    return major.toInt() * 10000 + minor.toInt() * 100 + (patch.toIntOrNull() ?: 0)
+}
+
 android {
     namespace = "ir.salamlang.app"
     compileSdk {
@@ -15,8 +39,10 @@ android {
         applicationId = "ir.salamlang.app"
         minSdk = 24
         targetSdk = 36
-        versionCode = project.findProperty("appVersionCode")?.toString()?.toIntOrNull() ?: 1
-        versionName = project.findProperty("appVersionName")?.toString() ?: "1.0"
+        versionCode =
+            project.findProperty("appVersionCode")?.toString()?.toIntOrNull()
+                ?: versionCodeOf(repoVersionName)
+        versionName = project.findProperty("appVersionName")?.toString() ?: repoVersionName
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

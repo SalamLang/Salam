@@ -13,6 +13,7 @@
  */
 
 #include "core/prelude.h"
+#include "core/sal_format.h"
 #include "semantic/sema_internal.h"
 #include "i18n/i18n.h"
 

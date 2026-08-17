@@ -76,6 +76,13 @@ static void vec_collect_types(cg_t *cg, ast_node_t *program)
     }
 }
 
+static const char *cg_iface_canon_name(cg_t *cg, symbol_t *sym)
+{
+    if (sym->pkgname && sym->pkgname[0] && strcmp(sym->pkgname, "main") != 0)
+        return cg_fmt(cg, "%s_%s", sym->pkgname, sym->name);
+    return sym->name;
+}
+
 static void dyn_set_add(cg_t *cg, vec_t *set, const char *s)
 {
     {
@@ -91,8 +98,14 @@ static void dyn_collect(cg_t *cg, ast_node_t *n)
     if (!n) return;
     if (n->type_str && !strncmp(n->type_str, "dyn ", 4))
         dyn_set_add(cg, &cg->dyn_ifaces, n->type_str + 4);
-    if (n->kind == AST_TYPE && n->is_dyn && n->name)
-        dyn_set_add(cg, &cg->dyn_ifaces, n->name);
+    if (n->kind == AST_TYPE && n->is_dyn && n->name) {
+        /* A type node carries the name as written ("Rows", "db.Rows"); every
+         * other route here carries the canonical one the type string uses.
+         * Register the canonical form or the interface gets two typedefs, only
+         * one of which the rest of the module refers to. */
+        symbol_t *is = cg_iface_sym(cg, n->name);
+        dyn_set_add(cg, &cg->dyn_ifaces, is ? cg_iface_canon_name(cg, is) : n->name);
+    }
     if (n->kind == AST_CAST && n->type_str && !strncmp(n->type_str, "dyn ", 4) && n->a &&
         n->a->type_str) {
         const char *iface = n->type_str + 4;
@@ -150,12 +163,33 @@ static func_sig_t *dyn_match_sig(symbol_t *cm, func_sig_t *want)
  * main module means walking the packages - it is not in the global scope under
  * that spelling.
  */
+static bool cg_canon_is(symbol_t *sym, const char *name)
+{
+    char canon[512];
+    if (sym->type && sym->type->name && !strcmp(sym->type->name, name)) return true;
+    if (!sym->pkgname || !sym->pkgname[0]) return false;
+    sal_snprintf(canon, sizeof canon, "%s_%s", sym->pkgname, sym->name);
+    return !strcmp(canon, name);
+}
+
 static symbol_t *cg_canon_sym(cg_t *cg, const char *name, sym_kind_t kind)
 {
     symbol_t *sym;
     if (!name) return NULL;
     sym = scope_lookup(cg->sem->global, name);
     if (sym && sym->kind == kind) return sym;
+    /* The module being compiled is not in the package list, and its own
+     * declarations sit in the global scope under their bare names - so a
+     * package's interface referred to from inside that same package arrives
+     * canonical ("db_Rows") and has to be matched that way too. */
+    {
+        size_t i = 0;
+        for (; i < cg->sem->global->symbols.len; i++) {
+            sym = (symbol_t *)cg->sem->global->symbols.data[i];
+            if (!sym || sym->kind != kind || !sym->name) continue;
+            if (cg_canon_is(sym, name)) return sym;
+        }
+    }
     {
         size_t p = 0;
         for (; p < cg->sem->packages.len; p++) {

@@ -144,7 +144,7 @@ func cg_vardecl_inline(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
     local_add(g, nn.name)
     is_ref := str.IndexOf(ts, "[") >= 0 || str.EndsWith(ts, "*") || struct_by_name(s, ts) != 0
     already_const := str.StartsWith(cg_ctype(ts), "const ")
-    prefix := (nn.is_mut || is_ref || already_const) ? "" : "const "
+    prefix := (nn.is_mut || is_ref || already_const || type_is_callable(ts)) ? "" : "const "
     if nn.a != 0:
         ret prefix + decl + " = " + cg_expr(g, s, a, nn.a)
     end
@@ -201,13 +201,22 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
             ret
         end
         cg_line(g, cg_vardecl_inline(g, s, a, n) + ";")
+        // A leading underscore is how Salam spells "declared on purpose,
+        // never read", which is what stops sema's unused-name rule firing.
+        // The C compiler has no way to know that, so gcc and clang report
+        // -Wunused-variable for exactly the bindings the author already
+        // marked as deliberate. Carry the intent across, as the C codegen
+        // does - without this the two backends disagree on every `_x := ...`.
+        if str.Len(nn.name) > 0 && byte_at(nn.name, 0) == 95:
+            cg_line(g, "(void)" + cg_cident(nn.name) + ";")
+        end
         ret
     end
     if k == at.AST_CONST_DECL:
         cts := str.Len(nn.type_str) > 0 ? nn.type_str : "int32_t"
         decl := cg_decl(cts, nn.name)
         local_add(g, nn.name)
-        cpfx := str.StartsWith(cg_ctype(cts), "const ") ? "" : "const "
+        cpfx := (str.StartsWith(cg_ctype(cts), "const ") || type_is_callable(cts)) ? "" : "const "
         cg_line(g, cpfx + decl + " = " + cg_expr(g, s, a, nn.a) + ";")
         ret
     end

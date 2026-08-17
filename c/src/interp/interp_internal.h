@@ -329,4 +329,6 @@ value_t call_builtin_method(interp_t *I, ast_node_t *call, value_t recv,
 
 void build_modules(interp_t *I, ast_node_t *program);
 
+void interp_eval_globals(interp_t *I, ast_node_t *program);
+
 #endif /* SALAM_INTERP_INTERNAL_H */

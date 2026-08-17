@@ -455,6 +455,49 @@ const char *cg_ctype(cg_t *cg, const char *ts)
     return bc;
 }
 
+/*
+ * The C spelling of an array type with no declarator attached - "int32_t[3]"
+ * - which is what a compound literal needs in front of its braces. NULL for
+ * anything that is not a plain array of a nameable element type, so callers
+ * can fall back to the bare brace form.
+ */
+const char *cg_array_ctype(cg_t *cg, const char *ts)
+{
+    char base[96];
+    bool ptr;
+    int eptr, pdepth;
+    vec_t dims;
+    if (!ts || !*ts || cg_is_slice_ts(ts) || !strncmp(ts, "Variant<", 8) ||
+        !strncmp(ts, "dyn ", 4) || !strncmp(ts, "func(", 5))
+        return NULL;
+    parse_typestr_ex(ts, base, sizeof(base), &ptr, &dims, cg->a, &eptr, &pdepth);
+    if (!dims.len || ptr) return NULL;
+    {
+        const char *bc = base_ctype(base);
+        sb_t s;
+        size_t i = 0;
+        const char *r;
+        if (bc == base) bc = arena_strdup(cg->a, cg_cident(cg, base));
+        for (; eptr > 0; eptr--)
+            bc = cg_fmt(cg, "%s*", bc);
+        sb_init(&s);
+        sb_puts(&s, bc);
+        for (i = 0; i < dims.len; i++) {
+            char b[32];
+            size_t d = *(size_t *)dims.data[i];
+            if (!d) {
+                sb_free(&s);
+                return NULL;
+            }
+            sal_snprintf(b, sizeof(b), "[%zu]", d);
+            sb_puts(&s, b);
+        }
+        r = arena_strdup(cg->a, sb_cstr(&s));
+        sb_free(&s);
+        return r;
+    }
+}
+
 const char *cg_decl(cg_t *cg, const char *ts, const char *name)
 {
     if (cg_is_slice_ts(ts)) return cg_fmt(cg, "salam_slice %s", cg_cident(cg, name));

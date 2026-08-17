@@ -145,6 +145,14 @@ const char *cg_ctype(cg_t *cg, const char *ts);
 
 const char *cg_decl(cg_t *cg, const char *ts, const char *name);
 
+/* "int32_t[3]" for a plain array typestring, else NULL. See cg_expr_value. */
+const char *cg_array_ctype(cg_t *cg, const char *ts);
+
+/* cg_expr, but for a slot that needs a C *expression*. An array literal emits
+   a bare "{1, 2, 3}", which is only an initializer; in a value position it has
+   to become the compound literal "(int32_t[3]){1, 2, 3}". */
+const char *cg_expr_value(cg_t *cg, ast_node_t *n);
+
 const char *cg_mangle_in(cg_t *cg, const char *pkg, const char *struct_name,
                          const char *fn, vec_t *params);
 
@@ -164,6 +172,9 @@ const char *raw_cast_params(cg_t *cg, const char *ts);
 const char *func_cast_params_env(cg_t *cg, const char *ts);
 
 bool type_is_byval_agg(const type_t *t);
+
+/* Resolves "Iface" and the cross-package "pkg.Iface" alike. */
+symbol_t *cg_iface_sym(cg_t *cg, const char *name);
 
 long array_size_of(const char *ts);
 

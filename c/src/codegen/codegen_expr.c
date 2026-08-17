@@ -109,7 +109,8 @@ static bool cg_ts_is_string_enum(cg_t *cg, const char *ts)
 
 static bool cg_is_str_ts(cg_t *cg, const char *ts)
 {
-    return ts && (!strcmp(ts, "str") || !strcmp(ts, "uchar") || cg_ts_is_string_enum(cg, ts));
+    return ts &&
+           (!strcmp(ts, "str") || !strcmp(ts, "uchar") || cg_ts_is_string_enum(cg, ts));
 }
 
 const char *cg_str_operand(cg_t *cg, ast_node_t *n)
@@ -502,6 +503,27 @@ static const char *cg_func_addr(cg_t *cg, ast_node_t *n)
     return cg_fmt(cg, "((void*)(&%s))", raw);
 }
 
+/*
+ * An array literal lowers to a braced list, which C accepts only as an
+ * initializer. Anywhere a real expression is wanted - a call argument, a
+ * returned value, a ternary arm - it has to be the compound literal
+ * "(int32_t[3]){1, 2, 3}" instead, or the emitted C does not parse at all
+ * ("expected expression before '{' token").
+ *
+ * Deliberately opt-in per slot rather than applied inside cg_expr: a compound
+ * literal is not a constant expression, so a file-scope initializer must keep
+ * the bare braced form. Any value slot not converted yet simply behaves as it
+ * always has.
+ */
+const char *cg_expr_value(cg_t *cg, ast_node_t *n)
+{
+    if (n && n->kind == AST_ARRAY_LIT) {
+        const char *at = cg_array_ctype(cg, n->type_str);
+        if (at) return cg_fmt(cg, "(%s)%s", at, cg_expr(cg, n));
+    }
+    return cg_expr(cg, n);
+}
+
 const char *cg_expr(cg_t *cg, ast_node_t *n)
 {
     if (!n) return "0";
@@ -780,6 +802,17 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
     case AST_MEMBER: {
         if (n->a && n->a->kind == AST_IDENTIFIER && !local_known(cg, n->a->name)) {
             symbol_t *e = scope_lookup(cg->sem->global, n->a->name);
+            /*
+             * A synthesized enum-derive body (sema_derive_enum.c) is checked
+             * against its enum's own home scope, so an unqualified "Kind"
+             * inside it resolves fine at the semantic layer even when Kind
+             * lives in a non-main package - but this lookup only ever
+             * searches the global scope, so it needs the same cur_fn_home
+             * fallback codegen_call.c already uses for free-function calls
+             * inside such bodies, or it silently fails to find Kind here.
+             */
+            if ((!e || e->kind != SYM_ENUM) && cg->cur_fn_home)
+                e = scope_lookup(cg->cur_fn_home, n->a->name);
             if (e && e->kind == SYM_ENUM)
                 return cg_fmt(cg, "%s_%s", cg_cident(cg, e->name),
                               cg_cident(cg, n->name));
@@ -789,6 +822,26 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
                 if (m && m->kind == SYM_CONST && m->decl && m->decl->a)
                     return cg_expr(cg, m->decl->a);
                 if (m && m->decl && m->decl->a) return cg_expr(cg, m->decl->a);
+            }
+        }
+        /*
+         * pkg.EnumName.Member: n->a is itself pkg.EnumName (an AST_MEMBER,
+         * not a bare identifier - see the matching sema fix in
+         * check_member/sema_expr.c for why the parser always builds this as
+         * a plain left-associative chain). Without this, n->a falls to the
+         * generic cg_expr(cg, n->a) below, which has no idea "pkg.EnumName"
+         * denotes a type and just emits the two names joined by literal
+         * dots, verbatim, into invalid C.
+         */
+        if (n->a && n->a->kind == AST_MEMBER && n->a->a &&
+            n->a->a->kind == AST_IDENTIFIER && !local_known(cg, n->a->a->name)) {
+            symbol_t *pk = scope_lookup(cg->sem->global, n->a->a->name);
+            if (!pk && cg->cur_fn_home) pk = scope_lookup(cg->cur_fn_home, n->a->a->name);
+            if (pk && pk->kind == SYM_PACKAGE) {
+                symbol_t *e = scope_lookup_local(pk->members, n->a->name);
+                if (e && e->kind == SYM_ENUM)
+                    return cg_fmt(cg, "%s_%s", cg_cident(cg, e->name),
+                                  cg_cident(cg, n->name));
             }
         }
         const char *objts = n->a->type_str ? n->a->type_str : "";

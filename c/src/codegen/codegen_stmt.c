@@ -321,13 +321,14 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
         if (cg->match_result_tmp) {
             if (n->a)
                 cg_line(cg, "%s = (%s)(%s); goto %s;", cg->match_result_tmp,
-                        cg->match_result_ctype, cg_expr(cg, n->a), cg->match_end_label);
+                        cg->match_result_ctype, cg_expr_value(cg, n->a),
+                        cg->match_end_label);
             else
                 cg_line(cg, "goto %s;", cg->match_end_label);
             break;
         }
         if (n->a && cg->fn_defers.len > 0) {
-            const char *expr = cg_expr(cg, n->a);
+            const char *expr = cg_expr_value(cg, n->a);
             const char *ts = n->a->type_str;
             int t = ++cg->tmpn;
             const char *tmp = cg_fmt(cg, "__retv%d", t);
@@ -339,10 +340,10 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
                 cg_line(cg, "return %s;", tmp);
         } else if (n->a && cg->cur_sret) {
             cg_emit_defers(cg);
-            cg_line(cg, "*__ret = (%s); return;", cg_expr(cg, n->a));
+            cg_line(cg, "*__ret = (%s); return;", cg_expr_value(cg, n->a));
         } else if (n->a) {
             cg_emit_defers(cg);
-            cg_line(cg, "return %s;", cg_expr(cg, n->a));
+            cg_line(cg, "return %s;", cg_expr_value(cg, n->a));
         } else {
             cg_emit_defers(cg);
             /*

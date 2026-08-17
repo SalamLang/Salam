@@ -66,7 +66,7 @@ static void cg_emit_call_arg(cg_t *cg, sb_t *b, ast_node_t *arg, func_sig_t *sig
     bool arg_is_ref = sig && sig->decl && i < sig->decl->list.len &&
                       ((ast_node_t *)sig->decl->list.data[i])->is_ref;
     if (!arg_is_ref) {
-        const char *e = cg_expr(cg, arg);
+        const char *e = cg_expr_value(cg, arg);
         if (cg_needs_fparg(cg, sig, i, arg, next))
             e = cg_fmt(cg, "%s(%s)",
                        strcmp(cg_param_ctype(cg, sig, i, arg), "float") == 0
@@ -474,7 +474,7 @@ static const char *call_ident(cg_t *cg, ast_node_t *n, ast_node_t *callee)
             size_t i = 0;
             for (; i < n->list.len; i++) {
                 if (i) sb_puts(&b, ", ");
-                sb_puts(&b, cg_expr(cg, (ast_node_t *)n->list.data[i]));
+                sb_puts(&b, cg_expr_value(cg, (ast_node_t *)n->list.data[i]));
             }
         }
         sb_putc(&b, ')');
@@ -531,6 +531,32 @@ static const char *call_pkg(cg_t *cg, ast_node_t *n, symbol_t *pk, ast_node_t *c
     return cg_fmt(cg, "%s(%s)", mangled, args);
 }
 
+/*
+ * The declared return type of `method` on the interface behind a "dyn Iface"
+ * (or "dyn Iface*", or the qualified "dyn pkg.Iface") receiver type string.
+ * NULL when anything along the way does not resolve, which the caller reads as
+ * "not an aggregate" and falls back to the plain call shape.
+ */
+static type_t *dyn_method_ret(cg_t *cg, const char *objts, const char *method)
+{
+    char name[128];
+    size_t len;
+    symbol_t *isym, *ms;
+    if (!objts || strncmp(objts, "dyn ", 4)) return NULL;
+    objts += 4;
+    len = strlen(objts);
+    while (len && objts[len - 1] == '*')
+        len--;
+    if (len >= sizeof(name)) return NULL;
+    memcpy(name, objts, len);
+    name[len] = 0;
+    isym = cg_iface_sym(cg, name);
+    if (!isym || !isym->members) return NULL;
+    ms = scope_lookup_local(isym->members, method);
+    if (!ms || ms->kind != SYM_METHOD || !ms->overloads.len) return NULL;
+    return ((func_sig_t *)ms->overloads.data[0])->ret;
+}
+
 static const char *call_dyn(cg_t *cg, ast_node_t *n, ast_node_t *obj, ast_node_t *callee,
                             const char *objts)
 {
@@ -543,6 +569,24 @@ static const char *call_dyn(cg_t *cg, ast_node_t *n, ast_node_t *obj, ast_node_t
         return cg_fmt(cg, "({ %s __dv%d = (%s); " SALAM_MEM_FREE "(__dv%d%sdata); })",
                       dynct, t, recv, t, acc);
     const char *as = call_args_lead(cg, n, NULL);
+    /*
+     * A vtable slot whose method returns an aggregate is `void (*)(..., R*)`,
+     * matching the sret lowering every other call path uses, so the result has
+     * to be caught in a temporary and yielded from the statement expression
+     * rather than taken as the call's value.
+     */
+    {
+        type_t *ret = dyn_method_ret(cg, objts, callee->name);
+        if (type_is_byval_agg(ret)) {
+            const char *rc = cg_ctype(cg, type_to_string(cg->sem->tc, ret));
+            int r = ++cg->tmpn;
+            return cg_fmt(cg,
+                          "({ %s __dv%d = (%s); %s __s%d; "
+                          "__dv%d%svtable->%s(__dv%d%sdata%s, &__s%d); __s%d; })",
+                          dynct, t, recv, rc, r, t, acc, cg_cident(cg, callee->name), t,
+                          acc, as, r, r);
+        }
+    }
     return cg_fmt(cg, "({ %s __dv%d = (%s); __dv%d%svtable->%s(__dv%d%sdata%s); })",
                   dynct, t, recv, t, acc, cg_cident(cg, callee->name), t, acc, as);
 }

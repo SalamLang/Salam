@@ -1,0 +1,240 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Tailored normalization for Arabic-script text - Persian, Arabic and Urdu.
+//
+// This package is deliberately NOT derived from the Unicode Character
+// Database, and that is the whole point of it existing separately from
+// std/unicode.
+//
+// The single most common defect in Persian text is that the same word is
+// spelled with different code points depending on which keyboard typed it.
+// Arabic kaf ك U+0643 and Persian keheh ک U+06A9 look identical in almost
+// every font; so do Arabic yeh ي U+064A and Farsi yeh ی U+06CC. Persian
+// orthography wants the second of each pair, but Arabic keyboards, older
+// software and copied-in text produce the first, and the two do not compare
+// equal. A user searching for "کتاب" does not find the "كتاب" in the database.
+//
+// Unicode will not fix this for you. ک and ك are distinct letters, not case
+// variants and not compatibility variants: NFKC leaves them exactly as they
+// are, and it is right to, because in an Arabic document ك is correct and
+// rewriting it to ک would be an error. The decision is about language, not
+// about characters, so it has to be made by the caller - which is why every
+// transformation here is a flag rather than something applied by default.
+//
+// Use Normalize with explicit flags when you are cleaning text you will store.
+// Use SearchKey when you are building a comparison or index key you will throw
+// away. Do not store the output of SearchKey: it discards harakat, hamza
+// carriers and the difference between ه and ة, all of which carry meaning.
+
+@en "arabic"
+@fa "عربی"
+@ar "عربي"
+package arabic
+
+import str
+import unicode
+
+// Fold the Arabic letter forms to their Persian counterparts: ك to ک, ي to ی,
+// and alef maksura ى to ی. Near-lossless for Persian text, where the Arabic
+// forms are almost always a typing artifact - and wrong for Arabic text, where
+// they are the correct letters.
+pub const FoldLetters := 1
+
+// Remove the harakat: fatha, kasra, damma, shadda, sukun, tanwin and the
+// Quranic annotation marks. They are optional in ordinary prose and usually
+// absent, so text that has them will not match text that does not.
+pub const StripHarakat := 2
+
+// Remove tatweel (kashida) U+0640, the elongation character. It carries no
+// meaning at all - it stretches a joining letter for justification - so
+// removing it is safe for anything except reproducing the original layout.
+pub const StripTatweel := 4
+
+// Convert Arabic-Indic ٠-٩ and Persian ۰-۹ digits to ASCII.
+pub const FoldDigits := 8
+
+// Fold the hamza-carrying alefs أ إ آ ٱ to bare alef ا. Lossy: it discards a
+// real orthographic distinction, and in Arabic it can merge distinct words.
+// Useful in a search key, wrong in stored text.
+pub const FoldAlef := 16
+
+// Fold teh marbuta ة to heh ه. Lossy in the same way, and more so in Arabic,
+// where the two mark different grammatical forms.
+pub const FoldTehMarbuta := 32
+
+// Remove ZERO WIDTH NON-JOINER. Lossy for Persian: ZWNJ is orthography, not
+// decoration, and "می‌رود" without it becomes the misspelling "میرود". Only
+// reasonable inside a comparison key, where the two should match.
+pub const StripZWNJ := 64
+
+// Apply compatibility decomposition first, so that Arabic presentation forms -
+// the isolated, initial, medial and final shapes in U+FB50..U+FDFF and
+// U+FE70..U+FEFF that PDF extraction and older software emit - become plain
+// letters before anything else is done to them.
+pub const FoldPresentation := 128
+
+const _TATWEEL := 0x0640
+
+// ---------------------------------------------------------------------------
+// mapping
+// ---------------------------------------------------------------------------
+
+// Maps one code point under `flags`, or returns -1 to delete it.
+pure func _map_cp(cp: int, flags: int): int:
+    if (flags / StripTatweel) % 2 == 1 && cp == _TATWEEL: ret 0 - 1 end
+    if (flags / StripHarakat) % 2 == 1 && IsHaraka(cp): ret 0 - 1 end
+    if (flags / StripZWNJ) % 2 == 1 && cp == unicode.ZWNJ: ret 0 - 1 end
+
+    if (flags / FoldLetters) % 2 == 1:
+        // Arabic kaf and yeh, plus alef maksura, to their Persian forms.
+        if cp == 0x0643: ret 0x06A9 end
+        if cp == 0x064A: ret 0x06CC end
+        if cp == 0x0649: ret 0x06CC end
+        // Urdu and Sindhi yeh variants land on the same letter.
+        if cp == 0x06D2: ret 0x06CC end
+        if cp == 0x06D3: ret 0x06CC end
+        // Keheh variants used by other Arabic-script languages.
+        if cp == 0x06AA: ret 0x06A9 end
+        if cp == 0x06AB: ret 0x06A9 end
+    end
+
+    if (flags / FoldAlef) % 2 == 1:
+        // Madda, hamza above, hamza below and wasla all reduce to bare alef.
+        if cp == 0x0622 || cp == 0x0623 || cp == 0x0625 || cp == 0x0671: ret 0x0627 end
+    end
+
+    if (flags / FoldTehMarbuta) % 2 == 1:
+        if cp == 0x0629: ret 0x0647 end
+    end
+
+    ret cp
+end
+
+// ---------------------------------------------------------------------------
+// predicates
+// ---------------------------------------------------------------------------
+
+@en "IsArabicScript"
+@fa "خط عربی است"
+@ar "خط عربي"
+// Whether cp belongs to the Arabic script.
+//
+// Marks shared with other scripts have Script=Inherited rather than Arabic, so
+// they are counted here too when they are one of the Arabic harakat - a
+// caller asking this question about a fatha means yes.
+pub pure func IsArabicScript(cp: int): bool:
+    if unicode.Script(cp) == unicode.ScriptArabic: ret true end
+    ret IsHaraka(cp)
+end
+
+@en "IsHaraka"
+@fa "اعراب است"
+@ar "حرکة"
+// Whether cp is an Arabic diacritic.
+//
+// The ranges are listed explicitly rather than derived, because the UCD has no
+// single property that means "Arabic diacritic": the marks are category Mn but
+// their script is Inherited, which is also true of marks belonging to entirely
+// unrelated scripts. These are the Arabic blocks' own marks.
+pub pure func IsHaraka(cp: int): bool:
+    if cp >= 0x0610 && cp <= 0x061A: ret true end
+    if cp >= 0x064B && cp <= 0x065F: ret true end
+    if cp == 0x0670: ret true end
+    if cp >= 0x06D6 && cp <= 0x06DC: ret true end
+    if cp >= 0x06DF && cp <= 0x06E4: ret true end
+    if cp >= 0x06E7 && cp <= 0x06E8: ret true end
+    if cp >= 0x06EA && cp <= 0x06ED: ret true end
+    if cp >= 0x08D3 && cp <= 0x08FF: ret true end
+    ret false
+end
+
+@en "IsTatweel"
+@fa "کشیده است"
+@ar "تطویل"
+// Whether cp is the tatweel (kashida) elongation character.
+pub inline pure func IsTatweel(cp: int): bool:
+    ret cp == _TATWEEL
+end
+
+@en "Normalize"
+@fa "هنجارسازی"
+@ar "تطبیع"
+// Applies the selected transformations to `s`.
+//
+// Flags combine by addition: Normalize(s, arabic.FoldLetters +
+// arabic.StripTatweel). Nothing happens that was not asked for, because every
+// one of these choices is wrong for some language that uses this script.
+pub func Normalize(s: str, flags: int): str:
+    mut subject := s
+    if (flags / FoldPresentation) % 2 == 1:
+        subject = str.NFKC(s)
+    end
+    if (flags / FoldDigits) % 2 == 1:
+        subject = str.ToEnglishDigits(subject)
+    end
+
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    n := subject.len()
+    mut i := 0
+    mut cp := 0
+    until i < n:
+        i = str.CodePointAt(subject, i, cp)
+        if cp < 0: cp = 0xFFFD end
+        out := _map_cp(cp, flags)
+        if out >= 0: str.BufAppendCp(sb, out) end
+    end
+    ret str.BufStr(sb)
+end
+
+@en "NormalizePersian"
+@fa "هنجارسازی فارسی"
+@ar "تطبیع فارسي"
+// The conservative cleanup for text that will be stored: Arabic letter forms
+// folded to their Persian counterparts, tatweel removed, presentation forms
+// resolved.
+//
+// This is safe for Persian in the sense that it does not change how the text
+// reads or what it means - it fixes spellings that were already meant to be
+// the Persian letters. It is NOT safe for Arabic, where ك and ي are correct
+// and this would corrupt them.
+pub func NormalizePersian(s: str): str:
+    ret Normalize(s, FoldPresentation + FoldLetters + StripTatweel)
+end
+
+@en "SearchKey"
+@fa "کلید جستجو"
+@ar "مفتاح البحث"
+// An aggressive comparison key: everything folded, marks removed, digits and
+// case flattened.
+//
+// The result is for matching only. It has thrown away harakat, hamza carriers,
+// the ه/ة distinction and ZWNJ, so it cannot be shown to a user or written
+// back to storage - but it is what makes a search for "کتاب" find "كِتَاب" and
+// "ﻛﺘﺎﺏ".
+pub func SearchKey(s: str): str:
+    folded := Normalize(s, FoldPresentation + FoldLetters + StripHarakat
+        + StripTatweel + FoldDigits + FoldAlef + FoldTehMarbuta + StripZWNJ)
+    ret str.Lower(folded)
+end
+
+@en "EqualLoose"
+@fa "برابر تقریبی"
+@ar "یساوي تقریبا"
+// Whether `a` and `b` are the same text once spelling variants are folded
+// away. Equivalent to comparing their SearchKeys.
+pub func EqualLoose(a: str, b: str): bool:
+    ret SearchKey(a) == SearchKey(b)
+end

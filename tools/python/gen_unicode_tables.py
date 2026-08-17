@@ -57,6 +57,9 @@ FILES = {
     "DerivedNormalizationProps.txt": "DerivedNormalizationProps.txt",
     "auxiliary/GraphemeBreakProperty.txt": "GraphemeBreakProperty.txt",
     "emoji/emoji-data.txt": "emoji-data.txt",
+    "extracted/DerivedBidiClass.txt": "DerivedBidiClass.txt",
+    "BidiBrackets.txt": "BidiBrackets.txt",
+    "Scripts.txt": "Scripts.txt",
 }
 
 # Hangul is composed and decomposed by arithmetic rather than by table - the
@@ -88,6 +91,30 @@ GRAPHEME_ID = {name: i for i, name in enumerate(GRAPHEME_CLASSES)}
 # property does not list.
 INCB_CLASSES = ("None", "Consonant", "Extend", "Linker")
 INCB_ID = {name: i for i, name in enumerate(INCB_CLASSES)}
+
+# Bidi_Class values, grouped so that the algorithm's repeated "is this one of
+# the explicit formatting codes" tests become range checks. L is 0 and is the
+# implicit value for everything the table does not list.
+BIDI_CLASSES = (
+    "L", "R", "AL",                          # strong
+    "EN", "ES", "ET", "AN", "CS", "NSM", "BN",  # weak
+    "B", "S", "WS", "ON",                    # neutral
+    "LRE", "RLE", "LRO", "RLO", "PDF",       # explicit embedding/override
+    "LRI", "RLI", "FSI", "PDI",              # explicit isolate
+)
+BIDI_ID = {name: i for i, name in enumerate(BIDI_CLASSES)}
+BIDI_LONG = {
+    "Left_To_Right": "L", "Right_To_Left": "R", "Arabic_Letter": "AL",
+    "European_Number": "EN", "European_Separator": "ES",
+    "European_Terminator": "ET", "Arabic_Number": "AN",
+    "Common_Separator": "CS", "Nonspacing_Mark": "NSM", "Boundary_Neutral": "BN",
+    "Paragraph_Separator": "B", "Segment_Separator": "S", "White_Space": "WS",
+    "Other_Neutral": "ON",
+}
+
+# Bidi_Paired_Bracket_Type, for rule N0.
+PBT_CLASSES = ("None", "Open", "Close")
+PBT_ID = {name: i for i, name in enumerate(PBT_CLASSES)}
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
@@ -263,6 +290,110 @@ def composition_pairs(canon, exclusions):
     for cp, d in canon.items():
         if len(d) == 2 and cp not in exclusions:
             out.append((d[0], d[1], cp))
+    out.sort()
+    return out
+
+
+def parse_scripts():
+    """-> (script_names, sorted merged [(lo, hi, script_id)])
+
+    The Script property. Unknown is 0 and is the default, so only the assigned
+    ranges are emitted.
+
+    This is what lets a question like "is this Arabic script" be asked properly
+    instead of by testing block ranges. Arabic script is spread over the main
+    block, the supplement, the extended blocks and both presentation-form
+    blocks, and those blocks also hold code points that are not Arabic script -
+    so a block test is wrong in both directions.
+    """
+    names = ["Unknown"]
+    index = {"Unknown": 0}
+    ranges = []
+    for line in read_lines("Scripts.txt"):
+        f = [p.strip() for p in line.split(";")]
+        if len(f) < 2:
+            continue
+        if f[1] not in index:
+            index[f[1]] = len(names)
+            names.append(f[1])
+        span = f[0].split("..")
+        lo = int(span[0], 16)
+        hi = int(span[1], 16) if len(span) > 1 else lo
+        ranges.append((lo, hi, index[f[1]]))
+    ranges.sort()
+    merged = []
+    for lo, hi, sid in ranges:
+        if merged and merged[-1][2] == sid and merged[-1][1] + 1 >= lo:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], hi), sid)
+        else:
+            merged.append((lo, hi, sid))
+    return names, merged
+
+
+def parse_bidi_class():
+    """-> sorted, merged [(lo, hi, class_id)] for Bidi_Class, excluding L.
+
+    Bidi_Class cannot be read as "listed value, else default L". Unassigned
+    code points inside the Hebrew, Arabic, Thaana and related blocks default to
+    R or AL rather than L, and DerivedBidiClass.txt states those defaults only
+    in @missing comment lines - which the normal reader strips. Getting this
+    wrong makes unassigned code points in an Arabic block behave as
+    left-to-right, which shows up as text that reorders correctly today and
+    incorrectly the next time Unicode assigns a character in that block.
+
+    So the map is built in layers: the file-wide default, then each block
+    default, then the explicit data lines on top. L is the implicit answer for
+    anything not emitted.
+    """
+    default_ranges = []
+    with open(ucd_path("DerivedBidiClass.txt"), encoding="utf-8") as f:
+        for line in f:
+            if "@missing:" not in line:
+                continue
+            spec = line.split("@missing:", 1)[1].strip()
+            span, name = [p.strip() for p in spec.split(";")]
+            if name not in BIDI_LONG:
+                sys.exit("unknown Bidi_Class default %r" % name)
+            lo, hi = span.split("..")
+            default_ranges.append((int(lo, 16), int(hi, 16), BIDI_LONG[name]))
+    if not default_ranges:
+        sys.exit("DerivedBidiClass.txt has no @missing defaults")
+
+    bc = {}
+    for lo, hi, name in default_ranges:
+        for cp in range(lo, hi + 1):
+            bc[cp] = name
+    for line in read_lines("DerivedBidiClass.txt"):
+        f = [p.strip() for p in line.split(";")]
+        if len(f) < 2:
+            continue
+        if f[1] not in BIDI_ID:
+            sys.exit("unknown Bidi_Class %r" % f[1])
+        span = f[0].split("..")
+        lo = int(span[0], 16)
+        hi = int(span[1], 16) if len(span) > 1 else lo
+        for cp in range(lo, hi + 1):
+            bc[cp] = f[1]
+
+    non_default = {cp: v for cp, v in bc.items() if v != "L"}
+    return [(lo, hi, BIDI_ID[v]) for lo, hi, v in value_ranges(non_default)]
+
+
+def parse_brackets():
+    """-> sorted [(cp, paired_cp, type_id)] from BidiBrackets.txt.
+
+    Rule N0 matches a bracket against its pair inside one isolating run
+    sequence, so both halves of the mapping are needed.
+    """
+    out = []
+    for line in read_lines("BidiBrackets.txt"):
+        f = [p.strip() for p in line.split(";")]
+        if len(f) < 3:
+            continue
+        kind = {"o": PBT_ID["Open"], "c": PBT_ID["Close"]}.get(f[2])
+        if kind is None:
+            sys.exit("unknown Bidi_Paired_Bracket_Type %r" % f[2])
+        out.append((int(f[0], 16), int(f[1], 16), kind))
     out.sort()
     return out
 
@@ -486,7 +617,8 @@ class Emitter:
 
 
 def build(cats, upper, lower, title, fold_simple, fold_full, spaces, alpha,
-          ccc, full_canon, full_compat, comp, gcb, incb):
+          ccc, full_canon, full_compat, comp, gcb, incb, bidi, brackets,
+          script_names, scripts):
     e = Emitter()
     e.raw(BANNER)
     e.blank()
@@ -743,6 +875,74 @@ def build(cats, upper, lower, title, fold_simple, fold_full, spaces, alpha,
     e.ints("_INCB_HI", [r[1] for r in incb])
     e.blank()
     e.ints("_INCB_ID", [r[2] for r in incb])
+    e.blank()
+
+    # ---- bidi -------------------------------------------------------------
+    e.comment(
+        "Bidi_Class ids. Grouped by kind so the bidirectional algorithm's\n"
+        "repeated \"is this an explicit formatting code\" tests are range\n"
+        "checks: the embedding and override codes are BcLRE..BcPDF and the\n"
+        "isolate codes are BcLRI..BcPDI."
+    )
+    for name in BIDI_CLASSES:
+        e.raw("pub const Bc%s := %d" % (name, BIDI_ID[name]))
+    e.blank()
+
+    e.comment(
+        "Bidi_Class, as %d (lo, hi, class) ranges. Anything absent is BcL.\n"
+        "\n"
+        "The absent-means-L rule holds only because the block defaults are\n"
+        "baked in here: unassigned code points in the Hebrew and Arabic blocks\n"
+        "are R and AL respectively, and they appear as explicit ranges below\n"
+        "even though no character is assigned to them yet." % len(bidi)
+    )
+    e.ints("_BIDI_LO", [r[0] for r in bidi])
+    e.blank()
+    e.ints("_BIDI_HI", [r[1] for r in bidi])
+    e.blank()
+    e.ints("_BIDI_ID", [r[2] for r in bidi])
+    e.blank()
+
+    e.comment("Bidi_Paired_Bracket_Type ids, for rule N0.")
+    for name in PBT_CLASSES:
+        e.raw("pub const Pbt%s := %d" % (name, PBT_ID[name]))
+    e.blank()
+
+    e.comment(
+        "Bidi_Paired_Bracket: the %d bracket code points, each with the code\n"
+        "point it pairs with and whether it opens or closes. Rule N0 uses this\n"
+        "to give both halves of a bracket pair the same direction, so that\n"
+        "\"(سلام)\" does not come out with its parentheses facing the wrong way." % len(brackets)
+    )
+    e.ints("_BRACKET_CP", [b[0] for b in brackets])
+    e.blank()
+    e.ints("_BRACKET_PAIR", [b[1] for b in brackets])
+    e.blank()
+    e.ints("_BRACKET_TYPE", [b[2] for b in brackets])
+    e.blank()
+
+    # ---- scripts ----------------------------------------------------------
+    e.comment(
+        "Script ids. ScriptUnknown is 0 and is what an unassigned code point\n"
+        "answers. Only the scripts this version defines are listed."
+    )
+    for i, name in enumerate(script_names):
+        e.raw("pub const Script%s := %d" % (name.replace("_", ""), i))
+    e.blank()
+
+    e.comment("Script names, indexed by the ids above.")
+    e.strings("_SCRIPT_NAMES", script_names, per_line=4)
+    e.blank()
+
+    e.comment(
+        "The Script property, as %d (lo, hi, script) ranges. Anything absent is\n"
+        "ScriptUnknown." % len(scripts)
+    )
+    e.ints("_SCRIPT_LO", [r[0] for r in scripts])
+    e.blank()
+    e.ints("_SCRIPT_HI", [r[1] for r in scripts])
+    e.blank()
+    e.ints("_SCRIPT_ID", [r[2] for r in scripts])
 
     return e.text()
 
@@ -769,9 +969,13 @@ def main():
     comp = composition_pairs(canon, exclusions)
     gcb = parse_grapheme_break()
     incb = parse_incb()
+    bidi = parse_bidi_class()
+    brackets = parse_brackets()
+    script_names, scripts = parse_scripts()
 
     text = build(cats, upper, lower, title, fold_simple, fold_full, spaces, alpha,
-                 ccc, full_canon, full_compat, comp, gcb, incb)
+                 ccc, full_canon, full_compat, comp, gcb, incb, bidi, brackets,
+                 script_names, scripts)
 
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     with open(args.out, "w", encoding="utf-8") as f:
@@ -783,6 +987,7 @@ def main():
         "  %d space ranges, %d alphabetic ranges, %d combining-class runs\n"
         "  %d canonical and %d compatibility decompositions\n"
         "  %d composition pairs, %d grapheme-break and %d conjunct-break ranges\n"
+        "  %d bidi-class ranges, %d bracket pairs, %d script ranges\n"
         % (
             os.path.relpath(args.out, ROOT), UCD_VERSION,
             len([c for c in cats if c[2] != "Cn"]),
@@ -790,6 +995,7 @@ def main():
             len(case_ranges(title)), len(case_ranges(fold_simple)),
             len(fold_full), len(spaces), len(alpha), len(value_ranges(ccc)),
             len(full_canon), len(full_compat), len(comp), len(gcb), len(incb),
+            len(bidi), len(brackets), len(scripts),
         )
     )
 

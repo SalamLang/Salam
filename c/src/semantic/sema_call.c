@@ -174,11 +174,22 @@ static void mark_ref_args(sema_t *s, ast_node_t *call, func_sig_t *sig)
     for (; i < call->list.len && i < sig->decl->list.len; i++) {
         ast_node_t *p = (ast_node_t *)sig->decl->list.data[i];
         ast_node_t *arg = (ast_node_t *)call->list.data[i];
-        if (p->kind != AST_PARAM || !p->is_ref) continue;
-        if (arg && arg->kind == AST_IDENTIFIER && arg->name) {
-            symbol_t *sym = scope_lookup(s->cur, arg->name);
-            arg->ref_arg = true;
-            if (sym) sym->mutated = true;
+        if (p->kind != AST_PARAM || !p->is_ref || !arg) continue;
+        arg->ref_arg = true;
+        /* `f(h.k)` and `f(rows[0])` are writes through a projection, exactly
+         * as `h.k = ...` is: the variable they hang off is mutated, and
+         * (sema_definit) it counts as given a value. Stamping only bare
+         * identifiers meant `f(arr[1])` was read as a *read* of an
+         * as-yet-unassigned `arr` and rejected with E089. */
+        {
+            ast_node_t *root = arg;
+            while (root && (root->kind == AST_MEMBER || root->kind == AST_INDEX ||
+                            root->kind == AST_SLICE))
+                root = root->a;
+            if (root && root->kind == AST_IDENTIFIER && root->name) {
+                symbol_t *sym = scope_lookup(s->cur, root->name);
+                if (sym) sym->mutated = true;
+            }
         }
     }
 }

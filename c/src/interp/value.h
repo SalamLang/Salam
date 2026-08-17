@@ -74,6 +74,12 @@ typedef enum {
     PTR_U64,
     PTR_F32,
     PTR_F64,
+    /* One byte each, matching what the C backend lays down. Without their own
+     * kinds they fell to PTR_OPAQUE, whose load and store are pointer-sized:
+     * a Vector<bool> allocates one byte per element and every write ran eight
+     * bytes past it, corrupting the heap. */
+    PTR_BOOL,
+    PTR_CHAR,
     PTR_STR,
     /* Points at a struct laid out in real memory: `tname` names the type and
      * interp_memlayout.c turns the bytes into a value and back. */
@@ -315,6 +321,8 @@ SAL_INLINE size_t ptr_elem_size(ptr_elem_t elem)
     switch (elem) {
     case PTR_I8:
     case PTR_U8:
+    case PTR_BOOL:
+    case PTR_CHAR:
         return 1;
     case PTR_I16:
     case PTR_U16:

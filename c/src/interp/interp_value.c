@@ -468,6 +468,8 @@ ptr_elem_t ptr_elem_from_typestr(const char *ts)
     if (!strcmp(base, "u64") || !strcmp(base, "size")) return PTR_U64;
     if (!strcmp(base, "f32")) return PTR_F32;
     if (!strcmp(base, "f64")) return PTR_F64;
+    if (!strcmp(base, "bool")) return PTR_BOOL;
+    if (!strcmp(base, "char")) return PTR_CHAR;
     if (!strcmp(base, "str")) return PTR_STR;
     return PTR_OPAQUE;
 }
@@ -497,6 +499,10 @@ value_t ptr_load(interp_t *I, sptr_t p, int64_t idx)
         return val_float((double)((float *)p.addr)[idx]);
     case PTR_F64:
         return val_float(((double *)p.addr)[idx]);
+    case PTR_BOOL:
+        return val_bool(((unsigned char *)p.addr)[idx] != 0);
+    case PTR_CHAR:
+        return val_char((int64_t)((unsigned char *)p.addr)[idx]);
     case PTR_STR: {
         /* A zeroed slot is the empty string, not a null char* that the next
          * strlen would fault on: it matches what an uninitialized `str`
@@ -545,6 +551,12 @@ void ptr_store(interp_t *I, sptr_t p, int64_t idx, value_t v)
         break;
     case PTR_F64:
         ((double *)p.addr)[idx] = to_float(v);
+        break;
+    case PTR_BOOL:
+        ((unsigned char *)p.addr)[idx] = to_bool(v) ? 1 : 0;
+        break;
+    case PTR_CHAR:
+        ((unsigned char *)p.addr)[idx] = (unsigned char)to_int(v);
         break;
     case PTR_STR:
         ((const char **)p.addr)[idx] = v.kind == VAL_STR ? v.as.s : "";

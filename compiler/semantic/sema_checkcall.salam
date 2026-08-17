@@ -2,8 +2,97 @@ package semantic
 
 import str
 import co "../sal_core.salam"
+import tok "../token.salam"
 import at "../ast.salam"
 import i18 "../i18n.salam"
+
+// `Color.FromString(name, ok)`, `Color.Names()`, `Color.Count()` - the three
+// "static" operations on an enum *type* (as opposed to `.name()`, on an
+// enum *value*, handled in the TY_ENUM branch of the builtin-method cascade
+// in check_call). Without this branch, `Color` as the object of a call falls
+// through to the generic AST_MEMBER path, which evaluates it as an ordinary
+// expression and rejects it with "type 'Color' used as a value" (the same
+// error `Color` alone, unqualified, already gets) before ever looking at
+// what member was being called.
+//
+// FromString/Names are one call each into sema_derive_enum.salam, mirroring
+// check_json_builtin's rewrite-to-a-real-function dance. Count needs no
+// derived function - the member count is known right here, so the whole
+// call node is folded straight to an int literal (same idea as a `sizeof`
+// result, just for a value already sitting in the symbol table).
+func check_enum_static_call(
+    s &: Sema, a &: at.Ast, n: int, callee: int, esym: int, argtypes: Vector<int>, sp: co.SrcSpan
+): int:
+    m := at.Get(a, callee).name
+    _de := sema_decorate(s, a, at.Get(a, callee).a, sym_at(s, esym).ty)
+
+    if str.Equals(m, "Count"):
+        if argtypes.len() != 0:
+            serr(s, 12, sp, i18.Tr("Count() takes no arguments"))
+        end
+        mems := scope_at(s, sym_at(s, esym).members).symbols
+        mut cnt := 0
+        repeat mems.len() with i:
+            if sym_at(s, mems.get(i)).kind == SYM_ENUM_MEMBER:
+                cnt += 1
+            end
+        end
+        mut nv := at.Get(a, n)
+        nv.kind = at.AST_LITERAL
+        nv.op = tok.TK_INT
+        nv.value_kind = tok.TV_INT
+        nv.value_int = cnt as u64
+        nv.a = 0
+        nv.b = 0
+        nv.synthetic = false
+        at.Put(a, n, nv)
+        ret sema_decorate(s, a, n, sema_ty(s, TY_I32))
+    end
+
+    if str.Equals(m, "FromString") || str.Equals(m, "Names"):
+        is_fs := str.Equals(m, "FromString")
+        et := sym_at(s, esym).ty
+        fn := is_fs ? sema_derive_enum_fromstring(s, a, et) : sema_derive_enum_names(s, a, et)
+        if str.Len(fn) == 0:
+            ret sema_decorate(s, a, n, sema_err_ty(s))
+        end
+        if is_fs && (
+            argtypes.len() != 2 || ty_at(s, argtypes.get(0)).kind != TY_STR || ty_at(s, argtypes.get(1)).kind != TY_BOOL
+        ):
+            serr(s, 12, sp, i18.Tr("FromString(name, ok) takes a str and a bool ref"))
+        end
+        if !is_fs && argtypes.len() != 0:
+            serr(s, 12, sp, i18.Tr("Names() takes no arguments"))
+        end
+        mut cv := at.Get(a, callee)
+        cv.kind = at.AST_IDENTIFIER
+        cv.name = fn
+        cv.synthetic = true
+        at.Put(a, callee, cv)
+        _df := sema_decorate(s, a, callee, sema_ty(s, TY_VOID))
+        fsym := scope_lookup_local(s, s.global, fn)
+        mut sig := 0
+        if fsym != 0:
+            mut fv := sym_at(s, fsym)
+            fv.used = true
+            sym_put(s, fsym, fv)
+            if fv.overloads.len() > 0:
+                sig = fv.overloads.get(0)
+            end
+        end
+        dce_mark_root(s.pkg, fn)
+        mark_ref_args(s, a, n, sig)
+        rt := sig != 0 ? sig_ret_or_err(s, sig) : et
+        ret sema_decorate(s, a, n, rt)
+    end
+
+    serr(
+        s, 16, sp, co.Format2(
+            i18.Tr("enum '%s' has no member '%s'"), co.ArgStr(sym_at(s, esym).name), co.ArgStr(m)
+        )
+    )
+    ret sema_decorate(s, a, n, sema_err_ty(s))
+end
 
 // check_call - the whole call checker (special forms, function values,
 // print-family builtins, overloads, generics, package calls, intrinsic
@@ -446,6 +535,9 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
                 s, a, n, g_localize_instance(s, a, sig_ret_or_err(s, sig3), sp)
             )
         end
+        if pk != 0 && sym_at(s, pk).kind == SYM_ENUM:
+            ret check_enum_static_call(s, a, n, callee, pk, argtypes, sp)
+        end
     end
 
     if ckind == at.AST_MEMBER:
@@ -648,6 +740,58 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
             end
             serr(
                 s, 17, sp, co.Format1(i18.Tr("File has no method '%s'"), co.ArgStr(m4))
+            )
+            ret sema_decorate(s, a, n, sema_err_ty(s))
+        end
+
+        if ov.kind == TY_ENUM:
+            m0 := at.Get(a, callee).name
+            _de0 := sema_decorate(s, a, callee, objt)
+            if str.Equals(m0, "name"):
+                if argtypes.len() != 0:
+                    serr(s, 12, sp, i18.Tr("name() takes no arguments"))
+                end
+                fn0 := sema_derive_enum_name(s, a, objt)
+                if str.Len(fn0) == 0:
+                    ret sema_decorate(s, a, n, sema_err_ty(s))
+                end
+                // The receiver becomes the derived function's sole argument
+                // - it was already type-checked above as callee.a, so
+                // splice it into the argument list the way a UFCS call
+                // would.
+                recv0 := at.Get(a, callee).a
+                mut cv0 := at.Get(a, callee)
+                cv0.kind = at.AST_IDENTIFIER
+                cv0.name = fn0
+                cv0.synthetic = true
+                at.Put(a, callee, cv0)
+                _de1 := sema_decorate(s, a, callee, sema_ty(s, TY_VOID))
+                fsym0 := scope_lookup_local(s, s.global, fn0)
+                mut sig0 := 0
+                if fsym0 != 0:
+                    mut fv0 := sym_at(s, fsym0)
+                    fv0.used = true
+                    sym_put(s, fsym0, fv0)
+                    if fv0.overloads.len() > 0:
+                        sig0 = fv0.overloads.get(0)
+                    end
+                end
+                dce_mark_root(s.pkg, fn0)
+                mut newargs0 := Vector {} as Vector<int>
+                newargs0.push(recv0)
+                mut nv0 := at.Get(a, n)
+                nv0.list.free()
+                nv0.list = newargs0
+                at.Put(a, n, nv0)
+                rt0 := sig0 != 0 ? sig_ret_or_err(s, sig0) : sema_ty(s, TY_STR)
+                ret sema_decorate(s, a, n, rt0)
+            end
+            ric0 := try_impl_call(s, a, n, callee, objt, argtypes)
+            if ric0 != TYPE_NONE:
+                ret ric0
+            end
+            serr(
+                s, 17, sp, co.Format1(i18.Tr("enum has no method '%s'"), co.ArgStr(m0))
             )
             ret sema_decorate(s, a, n, sema_err_ty(s))
         end

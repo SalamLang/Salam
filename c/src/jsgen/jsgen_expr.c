@@ -606,6 +606,88 @@ const char *jsg_call_args(jg_t *g, ast_node_t *call, func_sig_t *sig)
     }
 }
 
+/*
+ * Assemble a call, boxing any `&:` argument in a one-element array and
+ * writing its mutated value back into the caller's variable afterward - JS
+ * has no address-of for a primitive, so passing one by reference needs an
+ * object both sides can share (the callee reads/writes it via `[0]`, see
+ * the `n->is_ref` branch in jsg_expr's AST_IDENTIFIER case). Only a call
+ * whose signature actually has a `&:` parameter pays for this; the
+ * overwhelmingly common case falls through to the plain single-expression
+ * form, unchanged from before.
+ *
+ * `recv`, when not NULL, is a pre-rendered receiver expression emitted
+ * before the argument list (the method-call form, `recv.fn(args)` written
+ * as `fn(recv, args)` in the output's flat-function style).
+ */
+static const char *jsg_call_finish(jg_t *g, ast_node_t *call, func_sig_t *sig,
+                                   const char *fn_expr, const char *recv)
+{
+    cg_t *cg = &g->cg;
+    bool any_ref = false;
+    if (sig && sig->decl) {
+        size_t i = 0;
+        for (; i < call->list.len && i < sig->decl->list.len; i++) {
+            ast_node_t *p = (ast_node_t *)sig->decl->list.data[i];
+            ast_node_t *arg = (ast_node_t *)call->list.data[i];
+            if (p->kind == AST_PARAM && p->is_ref && arg && arg->kind == AST_IDENTIFIER) {
+                any_ref = true;
+                break;
+            }
+        }
+    }
+    if (!any_ref) {
+        const char *as = jsg_call_args(g, call, sig);
+        return cg_fmt(cg, "%s(%s%s%s)", fn_expr, recv ? recv : "",
+                      (recv && as[0]) ? ", " : "", as);
+    }
+    {
+        sb_t pre, argb, post;
+        const char *rvar = jsg_fresh(g, "__r");
+        const char *r;
+        sb_init(&pre);
+        sb_init(&argb);
+        sb_init(&post);
+        if (recv) sb_puts(&argb, recv);
+        {
+            size_t i = 0;
+            for (; i < call->list.len; i++) {
+                ast_node_t *p = i < sig->decl->list.len
+                                    ? (ast_node_t *)sig->decl->list.data[i]
+                                    : NULL;
+                ast_node_t *arg = (ast_node_t *)call->list.data[i];
+                if (i || recv) sb_puts(&argb, ", ");
+                if (p && p->kind == AST_PARAM && p->is_ref && arg &&
+                    arg->kind == AST_IDENTIFIER) {
+                    const char *box = jsg_fresh(g, "__ref");
+                    sb_puts(&pre,
+                            cg_fmt(cg, "const %s = [%s]; ", box, jsg_expr_p(g, arg, 0)));
+                    sb_puts(&argb, box);
+                    sb_puts(&post, cg_fmt(cg, " %s = %s[0];", jsg_expr_p(g, arg, 0), box));
+                } else {
+                    sb_puts(&argb, jsg_expr_p(g, arg, 0));
+                }
+            }
+        }
+        if (sig->decl) {
+            size_t np = sig->decl->list.len;
+            size_t i = call->list.len;
+            for (; i < np; i++) {
+                ast_node_t *param = (ast_node_t *)sig->decl->list.data[i];
+                if (!param->a) continue;
+                if (i || recv) sb_puts(&argb, ", ");
+                sb_puts(&argb, jsg_expr_p(g, param->a, 0));
+            }
+        }
+        r = cg_fmt(cg, "(() => { %sconst %s = %s(%s);%s return %s; })()", sb_cstr(&pre),
+                   rvar, fn_expr, sb_cstr(&argb), sb_cstr(&post), rvar);
+        sb_free(&pre);
+        sb_free(&argb);
+        sb_free(&post);
+        return r;
+    }
+}
+
 static const char *jsg_handler_base(jg_t *g, const char *extname, ast_node_t **args,
                                     size_t nargs)
 {
@@ -936,7 +1018,7 @@ static const char *jsg_call_ident(jg_t *g, ast_node_t *n, ast_node_t *callee)
                 const char *fn = sig ? jsg_fn_name(g, home_pkg ? home_pkg : cg->pkg, NULL,
                                                    nm, fsym, sig, false, inst_fn)
                                      : jsg_ident(g, nm);
-                return cg_fmt(cg, "%s(%s)", fn, jsg_call_args(g, n, sig));
+                return jsg_call_finish(g, n, sig, fn, NULL);
             }
         }
     }
@@ -957,7 +1039,7 @@ static const char *jsg_call_pkg(jg_t *g, ast_node_t *n, symbol_t *pk, ast_node_t
         bool inst = sig && sig->decl && sig->decl->synthetic;
         const char *name =
             jsg_fn_name(g, pk->pkgname, NULL, callee->name, fn, sig, false, inst);
-        return cg_fmt(cg, "%s(%s)", name, jsg_call_args(g, n, sig));
+        return jsg_call_finish(g, n, sig, name, NULL);
     }
 }
 
@@ -1012,10 +1094,20 @@ static const char *jsg_call_method(jg_t *g, ast_node_t *n, ast_node_t *obj,
     symbol_t *msym = ssym ? scope_lookup_local(ssym->members, callee->name) : NULL;
     func_sig_t *sig = msym ? pick_overload(cg, msym, n) : NULL;
     const char *spkg = (ssym && ssym->pkgname) ? ssym->pkgname : cg->pkg;
-    const char *fn = jsg_fn_name(g, spkg, sname, callee->name, msym, sig, false,
-                                 sig && sig->decl && sig->decl->synthetic);
-    const char *as = jsg_call_args(g, n, sig);
-    return cg_fmt(cg, "%s(%s%s%s)", fn, jsg_expr_p(g, obj, 0), as[0] ? ", " : "", as);
+    /*
+     * jsg_function computes this same function's *definition*-side name with
+     * `is_instance = (owner && owner->generic_base) || fn->synthetic` - a
+     * generic instantiation like Vector_str counts even when the individual
+     * method's own AST_FUNC_DEF was never marked synthetic (only the struct
+     * instantiation itself was). Checking sig->decl->synthetic alone here
+     * missed that case, so a call to any Vector<T> (or other generic struct)
+     * method computed a different name than its definition and referenced a
+     * function that was never actually emitted under that name.
+     */
+    bool is_instance =
+        (ssym && ssym->generic_base) || (sig && sig->decl && sig->decl->synthetic);
+    const char *fn = jsg_fn_name(g, spkg, sname, callee->name, msym, sig, false, is_instance);
+    return jsg_call_finish(g, n, sig, fn, jsg_expr_p(g, obj, 0));
 }
 
 static const char *jsg_call_impl(jg_t *g, ast_node_t *n, ast_node_t *obj,
@@ -1031,8 +1123,7 @@ static const char *jsg_call_impl(jg_t *g, ast_node_t *n, ast_node_t *obj,
             (msym && msym->overloads.len > 1 && sig)
                 ? cg_mangle_ti(cg, objts, callee->name, &sig->params)
                 : jsg_ident(g, cg_fmt(cg, "%s_%s", cg_cident(cg, objts), callee->name));
-        const char *as = jsg_call_args(g, n, sig);
-        return cg_fmt(cg, "%s(%s%s%s)", fn, jsg_expr_p(g, obj, 0), as[0] ? ", " : "", as);
+        return jsg_call_finish(g, n, sig, fn, jsg_expr_p(g, obj, 0));
     }
 }
 
@@ -1458,6 +1549,11 @@ const char *jsg_expr_p(jg_t *g, ast_node_t *n, int minprec)
             return "0";
         }
     case AST_IDENTIFIER:
+        /* A `&:` parameter is passed as a one-element box (see jsg_function
+         * and jsg_call_finish) - JS has no address-of for a primitive, so
+         * every read of it inside the function unwraps the box instead. */
+        if (n->is_ref && local_known(cg, n->name))
+            return cg_fmt(cg, "%s[0]", jsg_local_ref(g, n->name));
         if (local_known(cg, n->name)) return jsg_local_ref(g, n->name);
         if (cg->cur_struct && cg->cur_struct->members) {
             symbol_t *f = scope_lookup_local(cg->cur_struct->members, n->name);

@@ -375,6 +375,20 @@ static bool func_addr_target_ok(sema_t *s, symbol_t *sym, ast_node_t *n)
     return true;
 }
 
+/*
+ * `n` is a `.Member` access whose object already denotes an enum type
+ * (`sy`) rather than a value of it - either a bare `EnumName` identifier, or
+ * (via the package-qualified branch below) `pkg.EnumName`. Shared so both
+ * shapes resolve identically instead of duplicating the member lookup.
+ */
+static type_t *resolve_enum_member(sema_t *s, ast_node_t *n, symbol_t *sy)
+{
+    decorate(s, n->a, sy->type);
+    symbol_t *m = sy->members ? scope_lookup_local(sy->members, n->name) : NULL;
+    if (!m) SERR(s, 16, &n->span, "enum '%s' has no member '%s'", sy->name, n->name);
+    return decorate(s, n, sy->type);
+}
+
 static type_t *check_member(sema_t *s, ast_node_t *n)
 {
     if (n->a && n->a->kind == AST_IDENTIFIER) {
@@ -398,6 +412,19 @@ static type_t *check_member(sema_t *s, ast_node_t *n)
                      pk->name, n->name);
                 return decorate(s, n, err_ty(s));
             }
+            if (m->kind == SYM_ENUM || m->kind == SYM_STRUCT) {
+                /*
+                 * `pkg.EnumName` or `pkg.StructName` alone: a bare reference
+                 * to the type itself, not a value - the same rule the
+                 * unqualified case enforces (below, and at the SYM_ENUM
+                 * check further down in sema_check_expr's AST_IDENTIFIER
+                 * case). A caller writing `pkg.EnumName.Member` reaches it
+                 * through the branch below instead, which recognizes this
+                 * exact shape one level up before ever landing here.
+                 */
+                SERR(s, 1, &n->span, "type '%s.%s' used as a value", pk->name, n->name);
+                return decorate(s, n, err_ty(s));
+            }
             decorate(s, n->a, pk->type);
             return decorate(s, n, m->type);
         }
@@ -405,14 +432,25 @@ static type_t *check_member(sema_t *s, ast_node_t *n)
 
     if (n->a && n->a->kind == AST_IDENTIFIER) {
         symbol_t *sy = scope_lookup(s->cur, n->a->name);
-        if (sy && sy->kind == SYM_ENUM) {
-            decorate(s, n->a, sy->type);
-            symbol_t *m = sy->members ? scope_lookup_local(sy->members, n->name) : NULL;
-            if (!m)
-                SERR(s, 16, &n->span, "enum '%s' has no member '%s'", sy->name, n->name);
-            return decorate(s, n, sy->type);
+        if (sy && sy->kind == SYM_ENUM) return resolve_enum_member(s, n, sy);
+    }
+
+    /*
+     * `pkg.EnumName.Member`: `n->a` is itself `pkg.EnumName`, an AST_MEMBER
+     * node (the parser has no 3-level lookahead, so this always builds as a
+     * plain left-associative member chain). Recognize that shape here,
+     * before the generic sema_check_expr(s, n->a) fallback below would
+     * otherwise evaluate `pkg.EnumName` as if it were a value and fail.
+     */
+    if (n->a && n->a->kind == AST_MEMBER && n->a->a && n->a->a->kind == AST_IDENTIFIER) {
+        symbol_t *pk = scope_lookup(s->cur, n->a->a->name);
+        if (pk && pk->kind == SYM_PACKAGE) {
+            n->a->name = pkg_member_canon(s, pk, n->a->name, &n->a->span);
+            symbol_t *m = scope_lookup_local(pk->members, n->a->name);
+            if (m && m->kind == SYM_ENUM) return resolve_enum_member(s, n, m);
         }
     }
+
     type_t *objt = sema_check_expr(s, n->a);
     if (type_is_error(objt)) return decorate(s, n, err_ty(s));
     symbol_t *ssym = struct_sym_of(objt);

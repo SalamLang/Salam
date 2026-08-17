@@ -209,6 +209,12 @@ func jsg_expr_p(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, minprec: int): str:
         ret "0"
     end
     if n.kind == at.AST_IDENTIFIER:
+        // A `&:` parameter is passed as a one-element box (see jsg_function
+        // and jsg_call_finish) - JS has no address-of for a primitive, so
+        // every read of it inside the function unwraps the box instead.
+        if n.is_ref && local_known(g, n.name):
+            ret jsg_local_ref(g, n.name) + "[0]"
+        end
         if local_known(g, n.name):
             ret jsg_local_ref(g, n.name)
         end
@@ -424,7 +430,18 @@ func jsg_expr_p(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, minprec: int): str:
                     if ev.kind == sm.SYM_ENUM && ev.members != 0:
                         m := sm.LookupLocal(s, ev.members, n.name)
                         if m != 0:
-                            ret co.I64Toa(sm.SymAt(s, m).enum_value)
+                            // JS strings/numbers are value types compared by
+                            // content with ===, so unlike C/LLVM no separate
+                            // comparison codegen is needed once the member
+                            // itself is right.
+                            mv := sm.SymAt(s, m)
+                            if mv.enum_val_kind == tok.TV_FLOAT:
+                                ret co.Format1("%.17g", co.ArgFloat(mv.enum_value_f))
+                            end
+                            if mv.enum_val_kind == tok.TV_STRING:
+                                ret jsg_escape(mv.enum_value_str)
+                            end
+                            ret co.I64Toa(mv.enum_value)
                         end
                     end
                     if ev.kind == sm.SYM_PACKAGE && ev.members != 0:

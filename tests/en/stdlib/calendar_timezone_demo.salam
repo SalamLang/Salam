@@ -1,0 +1,123 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import testing
+import calendar
+
+func test_zone_presets():
+    testing.AssertEqStr(calendar.TZUTC().name, "UTC")
+    testing.AssertEqInt(calendar.TZUTC().offset_minutes, 0)
+    testing.AssertEqInt(calendar.TZTehran().offset_minutes, 210)
+    testing.AssertEqInt(calendar.TZKabul().offset_minutes, 270)
+    testing.AssertEqInt(calendar.TZRiyadh().offset_minutes, 180)
+    testing.AssertEqInt(calendar.TZDubai().offset_minutes, 240)
+    testing.AssertEqInt(calendar.TZTokyo().offset_minutes, 540)
+    testing.AssertEqInt(calendar.TZNewYork().offset_minutes, 0 - 300)
+
+    custom := calendar.FixedOffsetZone("Test/Zone", 0 - 90)
+    testing.AssertEqStr(custom.name, "Test/Zone")
+    testing.AssertEqInt(custom.offset_minutes, 0 - 90)
+end
+
+func test_wall_clock_at_utc():
+    // At the UTC zone, the wall clock is just the epoch's own calendar date
+    // and time-of-day - the zero case every offset math bug would show up in.
+    epoch := 0 as i64
+    g := calendar.WallClockGregorian(epoch, calendar.TZUTC())
+    testing.AssertEqInt(g.year, 1970)
+    testing.AssertEqInt(g.month, 1)
+    testing.AssertEqInt(g.day, 1)
+    t := calendar.WallClockTime(epoch, calendar.TZUTC())
+    testing.AssertEqInt(t.hour, 0)
+    testing.AssertEqInt(t.minute, 0)
+    testing.AssertEqInt(t.second, 0)
+end
+
+func test_wall_clock_offsets():
+    // 2024-03-20 12:00:00 UTC.
+    epoch := calendar.GregorianToUnixUTC(calendar.GregorianDate { year = 2024, month = 3, day = 20 }, 12, 0, 0)
+
+    tehran := calendar.WallClockTime(epoch, calendar.TZTehran())
+    testing.AssertEqInt(tehran.hour, 15)
+    testing.AssertEqInt(tehran.minute, 30)
+    tehranDate := calendar.WallClockGregorian(epoch, calendar.TZTehran())
+    testing.AssertEqInt(tehranDate.day, 20)
+
+    tokyo := calendar.WallClockTime(epoch, calendar.TZTokyo())
+    testing.AssertEqInt(tokyo.hour, 21)
+    testing.AssertEqInt(tokyo.minute, 0)
+
+    // New York (UTC-5, fixed): 12:00 - 5:00 = 07:00, same day.
+    ny := calendar.WallClockTime(epoch, calendar.TZNewYork())
+    testing.AssertEqInt(ny.hour, 7)
+    nyDate := calendar.WallClockGregorian(epoch, calendar.TZNewYork())
+    testing.AssertEqInt(nyDate.day, 20)
+end
+
+func test_day_rollover_across_zones():
+    // 23:00 in Tehran (UTC+3:30) is 04:30 the *next* day in Tokyo (UTC+9),
+    // since the gap between the two offsets (5h30m) pushes past midnight.
+    d := calendar.GregorianDate { year = 2024, month = 3, day = 20 }
+    t := calendar.ClockTime { hour = 23, minute = 0, second = 0 }
+    convD := calendar.ConvertZonedGregorian(d, t, calendar.TZTehran(), calendar.TZTokyo())
+    convT := calendar.ConvertZonedTime(d, t, calendar.TZTehran(), calendar.TZTokyo())
+    testing.AssertEqInt(convD.year, 2024)
+    testing.AssertEqInt(convD.month, 3)
+    testing.AssertEqInt(convD.day, 21)
+    testing.AssertEqInt(convT.hour, 4)
+    testing.AssertEqInt(convT.minute, 30)
+end
+
+func test_zoned_epoch_roundtrip():
+    d := calendar.GregorianDate { year = 2024, month = 3, day = 20 }
+    t := calendar.ClockTime { hour = 15, minute = 30, second = 0 }
+    epoch := calendar.ZonedGregorianToEpoch(d, t, calendar.TZTehran())
+    // 15:30 Tehran (UTC+3:30) is 12:00 UTC the same day.
+    testing.AssertEqInt64(epoch, calendar.GregorianToUnixUTC(calendar.GregorianDate { year = 2024, month = 3, day = 20 }, 12, 0, 0))
+
+    back := calendar.WallClockGregorian(epoch, calendar.TZTehran())
+    backT := calendar.WallClockTime(epoch, calendar.TZTehran())
+    testing.AssertEqInt(back.day, d.day)
+    testing.AssertEqInt(backT.hour, t.hour)
+    testing.AssertEqInt(backT.minute, t.minute)
+end
+
+// LocalOffsetMinutes/TZLocal depend on the host's real timezone database,
+// so - like calendar_now_demo.salam's OS-clock tests - this checks the
+// invariant (a valid, quarter-hour-aligned UTC offset) rather than a fixed
+// value that would only hold on one particular host.
+func test_local_offset_is_sane():
+    now := 1710936000 as i64
+    offset := calendar.LocalOffsetMinutes(now)
+    testing.AssertTrue(offset >= 0 - 720)
+    testing.AssertTrue(offset <= 840)
+    testing.AssertEqInt(offset - (offset / 15) * 15, 0)
+
+    local := calendar.TZLocal(now)
+    testing.AssertEqInt(local.offset_minutes, offset)
+    testing.AssertEqStr(local.name, "Local")
+end
+
+func main:
+    test_zone_presets()
+    test_wall_clock_at_utc()
+    test_wall_clock_offsets()
+    test_day_rollover_across_zones()
+    test_zoned_epoch_roundtrip()
+    test_local_offset_is_sane()
+    testing.Summary()
+    ret 0
+end

@@ -505,6 +505,24 @@ Sha512Bytes` (+ streaming `Sha256New/Update/Final`), HMAC
 - **`time`**: `Now NowMillis NowMicros NowNanos Sleep(ms) Format FormatISO
 FormatDate FormatTime Year Month Day Hour Minute Second Weekday Since Until
 ElapsedMs`; `DateTime` type.
+- **`calendar`**: Gregorian/`Jalali` (Persian solar hijri)/`Hijri` (Islamic
+  tabular lunar) dates, all pivoting through one Julian Day Number so any
+  pair converts directly: `GregorianToJalali JalaliToGregorian
+GregorianToHijri HijriToGregorian JalaliToHijri HijriToJalali` +
+  `*ToJDN`/`JDNTo*` per calendar. Per-calendar: `IsLeap{Gregorian,Jalali,Hijri}
+DaysIn{Gregorian,Jalali,Hijri}Month IsValid{Gregorian,Jalali,Hijri}Date
+{Gregorian,Jalali,Hijri}MonthName{En,Fa,Ar} Weekday JalaliWeekday
+WeekdayName{En,Fa,Ar} Compare{Gregorian,Jalali,Hijri}`. Reading the system
+  clock (mode 1): `Today{Gregorian,Jalali,Hijri} NowClockTime`. From a value
+  you already have (mode 2): `Epoch{ToGregorian,ToJalali,ToHijri,ToClockTime}`,
+  `{Gregorian,Jalali,Hijri}ToUnixUTC`, `Format{Gregorian,Jalali,Hijri}`
+  `FormatClockTime FormatJalaliLongFa FormatHijriLongAr/Fa
+FormatGregorianLongEn`. Fixed-UTC-offset `TimeZone` (no IANA tzdata):
+  `TZUTC TZTehran TZKabul TZRiyadh TZDubai TZIstanbul TZLondon TZNewYork
+TZTokyo FixedOffsetZone`, plus DST-aware `TZLocal`/`LocalOffsetMinutes` (asks
+  the OS via `time`'s libc `localtime()`); `WallClock{Gregorian,Jalali,Hijri,
+Time} ZonedGregorianToEpoch ConvertZoned{Gregorian,Time}` convert a date/time
+  between zones. `GregorianDate JalaliDate HijriDate ClockTime` types.
 - **`mem`**: `Allocate AllocateZeroed AllocateArray Reallocate Free Copy Set
 MemMove`; leak tooling `CheckLeaks LiveBytes AllocCount`.
 - **`testing`**: `AssertTrue AssertFalse AssertEqInt AssertEqStr AssertEqFloat

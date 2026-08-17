@@ -165,7 +165,7 @@ func len_of(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, arg: int): Llv:
     if str.Len(ts) > 0 && idx_byte(ts, 91) >= 0:
         ret make_llv(co.I64Toa(array_dim(ts)), "i32")
     end
-    if str.Len(ts) == 0 || !is_str(ts):
+    if str.Len(ts) == 0 || !is_str(s, ts):
         lv_error(v, a, n, "len() of an unsupported type")
         ret poison("i32")
     end
@@ -401,6 +401,24 @@ func call_file(
     ret false
 end
 
+// An enum member's LLVM value, in its backing type: an i32 immediate for
+// int (unchanged), a float immediate for float, or the same deduplicated
+// global-string reference an ordinary string literal would get for string -
+// strconst hands back the identical @.str.N for equal content, so two reads
+// of the same member (or of an equal-valued member elsewhere) are pointer-
+// identical without that being load-bearing for ==, which still goes
+// through binary_string's strcmp like any other str comparison.
+func enum_member_value(v &: Lv, s &: sm.Sema, m: int): Llv:
+    mv := sm.SymAt(s, m)
+    if mv.enum_val_kind == tok.TV_FLOAT:
+        ret make_llv(fp_text(co.Format1("%.17g", co.ArgFloat(mv.enum_value_f))), "f64")
+    end
+    if mv.enum_val_kind == tok.TV_STRING:
+        ret make_llv(strconst(v, mv.enum_value_str), "str")
+    end
+    ret make_llv(co.I64Toa(mv.enum_value), "i32")
+end
+
 // ll_pkg_value - `pkg.NAME` where NAME is a package-level const/var or an
 // enum member the package exports: the non-call half of package-qualified
 // access, which previously fell through to member_addr and reported the
@@ -421,7 +439,7 @@ func pkg_value(
     end
     mk := sm.SymAt(s, m).kind
     if mk == sm.SYM_ENUM_MEMBER:
-        out2 = make_llv(co.I64Toa(sm.SymAt(s, m).enum_value), "i32")
+        out2 = enum_member_value(v, s, m)
         ret true
     end
     if mk != sm.SYM_CONST && mk != sm.SYM_VAR:

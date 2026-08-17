@@ -106,13 +106,27 @@ func cg_op(k: int): str:
     ret "?"
 end
 
-func cg_is_str_ts(ts: str): bool:
-    ret str.Equals(ts, "str") || str.Equals(ts, "uchar")
+// A string-backed enum's C representation is `const char *` (hdr_enums), so
+// for every purpose codegen cares about (== via strcmp, string coercion) it
+// has to be treated exactly like str/uchar - only its *name* ("Color") isn't
+// literally "str". Int/float-backed enums need no such translation: their C
+// representation already behaves correctly under the plain C operators the
+// generic fallbacks emit (a real C `enum` for int, a `double` for float).
+func cg_ts_is_string_enum(s &: sm.Sema, ts: str): bool:
+    if str.Len(ts) == 0:
+        ret false
+    end
+    esym := sm.LookupLocal(s, s.global, ts)
+    ret esym != 0 && sm.SymAt(s, esym).kind == sm.SYM_ENUM && sm.SymAt(s, esym).enum_val_kind == tok.TV_STRING
+end
+
+func cg_is_str_ts(s &: sm.Sema, ts: str): bool:
+    ret str.Equals(ts, "str") || str.Equals(ts, "uchar") || cg_ts_is_string_enum(s, ts)
 end
 
 func cg_str_operand(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
     nn := at.Get(a, n)
-    if cg_is_str_ts(nn.type_str):
+    if cg_is_str_ts(s, nn.type_str):
         ret cg_expr(g, s, a, n)
     end
     ret "salam_tostr_" + prim_suffix(print_tag(nn.type_str)) + "(" + cg_expr(g, s, a, n) + ")"
@@ -184,7 +198,7 @@ func cg_match_arm_cond(
                 co.SbPuts(
                     b, "((" + subj_var + ").tag == " + (patn.value_int as int) + ")"
                 )
-            else cg_is_str_ts(subj_ts):
+            else cg_is_str_ts(s, subj_ts):
                 co.SbPuts(
                     b, "(strcmp(" + subj_var + ", " + cg_expr(g, s, a, patn.a) + ") == 0)"
                 )
@@ -649,20 +663,20 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
             eb := cg_expr(g, s, a, nn.b)
             ret "pow(SALAM_FPARG_D((double)(" + ea + ")), (double)(" + eb + "))"
         end
-        if nn.op == tok.TK_PLUS && (cg_is_str_ts(an.type_str) || cg_is_str_ts(bn.type_str)):
+        if nn.op == tok.TK_PLUS && (cg_is_str_ts(s, an.type_str) || cg_is_str_ts(s, bn.type_str)):
             oa := cg_str_operand(g, s, a, nn.a)
             ob := cg_str_operand(g, s, a, nn.b)
             ret "salam_strcat(" + oa + ", " + ob + ")"
         end
-        if nn.op == tok.TK_STAR && (cg_is_str_ts(an.type_str) || cg_is_str_ts(bn.type_str)):
-            a_str := cg_is_str_ts(an.type_str)
+        if nn.op == tok.TK_STAR && (cg_is_str_ts(s, an.type_str) || cg_is_str_ts(s, bn.type_str)):
+            a_str := cg_is_str_ts(s, an.type_str)
             sop := a_str ? nn.a : nn.b
             nop := a_str ? nn.b : nn.a
             es := cg_expr(g, s, a, sop)
             en := cg_expr(g, s, a, nop)
             ret "salam_str_repeat(" + es + ", (int32_t)(" + en + "))"
         end
-        if cg_is_str_ts(an.type_str) && cg_is_str_ts(bn.type_str):
+        if cg_is_str_ts(s, an.type_str) && cg_is_str_ts(s, bn.type_str):
             mut opv := ""
             if nn.op == tok.TK_EQ:
                 opv = "=="

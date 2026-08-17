@@ -467,11 +467,46 @@ func hdr_prelude(g &: Cg, a &: at.Ast, program: int):
     outh(g, "\n")
 end
 
-func hdr_enums(g &: Cg, a &: at.Ast, program: int):
+func hdr_enums(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
     prog := at.Get(a, program)
     repeat prog.list.len() with i:
         d := at.Get(a, prog.list.get(i))
         if d.kind != at.AST_ENUM_DEF:
+            continue
+        end
+        esym := sm.LookupLocal(s, s.global, d.name)
+        backing := esym != 0 ? sm.SymAt(s, esym).enum_val_kind : tok.TV_INT
+        // A C `enum` can only ever hold integers, so a string/float backed
+        // enum can't become one - it's emitted as one `static const`
+        // declaration per member instead. Either way the member-read site
+        // (cg_expr's AST_MEMBER case) just emits the bare identifier
+        // `Enum_Member`, so it doesn't care which of these two forms
+        // declared it.
+        if backing != tok.TV_INT:
+            // Other codegen sites resolve the type name "Color" straight to
+            // a C type via typedef (variable decls, params, struct fields) -
+            // without a C `enum` to supply that, a plain typedef to the
+            // backing C type keeps "Color" valid.
+            outh(
+                g, "typedef " + (backing == tok.TV_STRING ? "const char *" : "double") + " " + cg_cident(d.name) + ";\n"
+            )
+            repeat d.list.len() with j:
+                m := at.Get(a, d.list.get(j))
+                mut lit := "0"
+                if m.a != 0:
+                    ma := at.Get(a, m.a)
+                    if ma.kind == at.AST_LITERAL:
+                        if backing == tok.TV_STRING:
+                            lit = cg_cescape(ma.value_str)
+                        else if backing == tok.TV_FLOAT:
+                            lit = co.Format1("%.17g", co.ArgFloat(ma.value_float))
+                        end
+                    end
+                end
+                outh(
+                    g, "static const " + cg_cident(d.name) + " " + cg_cident(d.name) + "_" + cg_cident(m.name) + " = " + lit + ";\n"
+                )
+            end
             continue
         end
         outh(g, "typedef enum {")
@@ -742,7 +777,7 @@ func is_wellknown_libc_name(name: str): bool:
         // guard is the only way the two can agree.
         "CreateFileA", "WriteFile", "Arc", "BeginPath", "FillRect", "LineTo",
         "RoundRect", "LoadImage", "GetProp", "SetProp",
-    ] as str[73]
+    ]
     // names.len(), never a literal: a hand-written bound silently stops
     // guarding the tail entries the next time a name is appended.
     repeat names.len() with i:
@@ -771,7 +806,7 @@ func is_libm_name(name: str): bool:
     names := [
         "sqrt", "sin", "cos", "tan", "asin", "acos", "atan", "atan2",
         "log", "log10", "exp", "floor", "ceil", "fabs", "fmod"
-    ] as str[15]
+    ]
     repeat names.len() with i:
         if str.Equals(names[i], name):
             ret true
@@ -805,7 +840,7 @@ func is_stdio_name(name: str): bool:
         "fdopen", "fileno", "fseeko", "ftello", "getdelim", "getline",
         "pclose", "popen",
         "_fdopen", "_fileno", "_fseeki64", "_ftelli64", "_pclose", "_popen"
-    ] as str[56]
+    ]
     repeat names.len() with i:
         if str.Equals(names[i], name):
             ret true
@@ -894,7 +929,7 @@ func is_wide_libc_name(name: str): bool:
         "ntohs", "WSAStartup",
         // wincrypt.h, same story - std/tls' native root-store reader
         "CertOpenSystemStoreA", "CertEnumCertificatesInStore", "CertCloseStore",
-    ] as str[27]
+    ]
     repeat names.len() with i:
         if str.Equals(names[i], name):
             ret true
@@ -1051,7 +1086,7 @@ end
 
 func cg_header_impl(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
     hdr_prelude(g, a, program)
-    hdr_enums(g, a, program)
+    hdr_enums(g, s, a, program)
     hdr_struct_fwd(g, s, a, program)
     hdr_struct_fwd_imports(g, s, a)
     dyn_collect(g, a, program)

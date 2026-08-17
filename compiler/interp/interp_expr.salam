@@ -58,7 +58,7 @@ func do_listdir(ip &: Interp, a &: at.Ast, call: int, patharg: Value): Value:
     cl := ip.closures.get(ef.id)
     r := call_func(ip, a, cl.fn, cl.env, false, val_null(), cargs)
     cip := cntp as i32*
-    cnt := cip[0] as int
+    cnt := cip[0]
     mem.Free(cntp)
     out := arr_new(ip, cnt > 0 ? cnt : 4)
     if !ip.failed && r.kind == VAL_PTR && r.pa != (0 as i64) && cnt > 0:
@@ -654,20 +654,44 @@ func eval_node(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
             if env_find(ip, env, onn.name, ew) < 0:
                 edef := find_enum(ip, onn.name)
                 if edef != 0:
-                    mut val := 0 as i64
+                    // Mirrors sema_decl.salam's AST_ENUM_DEF handling: the
+                    // first member with a literal initializer fixes the
+                    // enum's backing kind (TV_INT if none has one); int
+                    // members auto-increment, string/float members carry
+                    // their own literal value directly (sema already
+                    // rejects a string/float-backed member with no
+                    // initializer, so this always resolves for a program
+                    // that passed sema).
+                    mut backing := tok.TV_INT
+                    repeat at.ChildCount(a, edef) with bi:
+                        bm := at.Get(a, at.Child(a, edef, bi))
+                        if bm.a != 0 && at.Get(a, bm.a).kind == at.AST_LITERAL:
+                            backing = at.Get(a, bm.a).value_kind
+                            break
+                        end
+                    end
+                    mut next := 0 as i64
                     repeat at.ChildCount(a, edef) with i:
                         m := at.Child(a, edef, i)
                         mn := at.Get(a, m)
-                        if mn.a != 0:
-                            val = to_int(eval(ip, a, ip.globals, mn.a))
-                            if ip.failed:
-                                ret val_null()
+                        mut val := val_int(next)
+                        if mn.a != 0 && at.Get(a, mn.a).kind == at.AST_LITERAL && at.Get(a, mn.a).value_kind == backing:
+                            man := at.Get(a, mn.a)
+                            if backing == tok.TV_FLOAT:
+                                val = val_float(man.value_float)
+                            else if backing == tok.TV_STRING:
+                                val = val_str(man.value_str)
+                            else:
+                                next = man.value_int as i64
+                                val = val_int(next)
                             end
                         end
                         if str.Len(mn.name) != 0 && str.Equals(mn.name, node.name):
-                            ret val_int(val)
+                            ret val
                         end
-                        val += 1 as i64
+                        if backing == tok.TV_INT:
+                            next += 1 as i64
+                        end
                     end
                     rt_error(
                         ip, a, n, co.Format2(

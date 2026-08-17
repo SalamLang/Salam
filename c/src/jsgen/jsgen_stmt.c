@@ -577,11 +577,11 @@ void jsg_function(jg_t *g, ast_node_t *fn, symbol_t *owner)
                 size_t i = 0;
                 for (; i < fn->list.len; i++) {
                     ast_node_t *p = (ast_node_t *)fn->list.data[i];
-                    if (p->is_ref)
-                        LOG_W(cg->log, PH_CODEGEN,
-                              "js backend: reference parameter '%s' of '%s' is passed "
-                              "by value",
-                              p->name, fn->name);
+                    /* A `&:` param arrives as a one-element box (jsg_call_finish
+                     * builds it at every call site); the parameter name binds
+                     * to that box itself, and every read/write of it in the
+                     * body goes through the `n->is_ref` branch in jsg_expr's
+                     * AST_IDENTIFIER case, which unwraps via `[0]`. */
                     if (owner || i) sb_puts(&params, ", ");
                     sb_puts(&params, jsg_local(g, p->name, false));
                 }

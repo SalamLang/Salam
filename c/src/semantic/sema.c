@@ -477,12 +477,33 @@ static int g_seg_alias_n = -1;
 static char g_seg_alias_root[512] = "";
 static arena_t *g_seg_alias_arena = NULL;
 
+/*
+ * Where the `package` declaration starts, as the first line whose opening word
+ * it is. A plain strstr() for "package " finds the word in prose too - a doc
+ * comment that says "its own package (db.sqlite, ...)" above the declaration
+ * used to close the annotation window before the @fa/@ar lines, silently
+ * costing that package its Persian and Arabic names.
+ */
+static const char *find_pkg_decl(const char *txt)
+{
+    const char *p = txt;
+    while (p && *p) {
+        const char *q = p;
+        while (*q == ' ' || *q == '\t')
+            q++;
+        if (!strncmp(q, "package ", 8) || !strncmp(q, "package\t", 8)) return q;
+        p = strchr(p, '\n');
+        if (p) p++;
+    }
+    return NULL;
+}
+
 static void index_pkg_file(arena_t *a, const char *path, const char *canon)
 {
     source_file_t *src = source_load(a, path);
     if (!src) return;
     const char *txt = src->text;
-    const char *pkg = strstr(txt, "package ");
+    const char *pkg = find_pkg_decl(txt);
     size_t limit = pkg ? (size_t)(pkg - txt) : src->len;
     {
         size_t i = 0;

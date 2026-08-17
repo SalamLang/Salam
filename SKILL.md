@@ -146,7 +146,8 @@ else x == 0:  println "zero"          // "else <cond>" is else-if
 else:  println "negative"
 end
 
-until i < n:  i = i + 1  end          // ⚠ "until" IS "while"; read the box below
+while i < n:  i = i + 1  end          // loops WHILE the condition holds
+until i < n:  i = i + 1  end          // ⚠ same loop, older name; read the box below
 repeat 3:  println "hi"  end          // do 3 times
 repeat n with i:  println i  end      // i = 0 .. n-1
 repeat 1 to 5:  ...  end              // 1..5 inclusive
@@ -161,17 +162,21 @@ each (i, x) in xs:  println i, x  end // index + value (or (key,value) for a map
 > ### ⚠ `until` means `while`. Never negate a ported condition.
 >
 > `until C:` runs its body **while `C` is true** and stops when `C` becomes
-> false. It is not a do-until and not a "loop until C happens". When porting a
-> loop from C/Python/JS/Go, **copy the condition verbatim**:
+> false. It is not a do-until and not a "loop until C happens". **`while` is
+> the same keyword under a name that says so** - `while C:` and `until C:` are
+> one loop, and new code should prefer `while`. (The Persian `تاوقتی` and
+> Arabic `بينما` spellings already read correctly; only the English `until`
+> invites the wrong reading.) When porting a loop from C/Python/JS/Go, **copy
+> the condition verbatim**:
 >
 > | source loop              | Salam                                 | NOT                                                 |
 > | ------------------------ | ------------------------------------- | --------------------------------------------------- |
-> | `while (v != 0)`         | `until v != 0:`                       | ~~`until v == 0:`~~                                 |
-> | `while (i < n)`          | `until i < n:`                        | ~~`until i >= n:`~~                                 |
-> | `while (v)` (truthy int) | `until v != 0:`                       | ~~`until v:`~~ (no truthiness; needs a real `bool`) |
-> | `while (p)` (pointer)    | `until p != null:`                    | ~~`until p == null:`~~                              |
-> | `for (;;)`               | `until true:` + `break`               |                                                     |
-> | `do { B } while (c);`    | `until true: B  if !c: break end end` |                                                     |
+> | `while (v != 0)`         | `while v != 0:`                       | ~~`while v == 0:`~~                                 |
+> | `while (i < n)`          | `while i < n:`                        | ~~`while i >= n:`~~                                 |
+> | `while (v)` (truthy int) | `while v != 0:`                       | ~~`while v:`~~ (no truthiness; needs a real `bool`) |
+> | `while (p)` (pointer)    | `while p != null:`                    | ~~`while p == null:`~~                              |
+> | `for (;;)`               | `while true:` + `break`               |                                                     |
+> | `do { B } while (c);`    | `while true: B  if !c: break end end` |                                                     |
 >
 > **An inverted `until` fails silently.** `until v == 0:` with a nonzero `v`
 > runs **zero times** and produces no error, so the function just returns its
@@ -454,7 +459,9 @@ Rotation2D/3D Householder Givens Random RandomSPD RandomOrthogonal`, and
 ### I/O, OS, filesystem
 
 - **`io`**: `ReadFile WriteFile AppendFile Lines WriteLines Input Read Write
-ReadAll Readline Seek Close Copy EPrint EPrintln`.
+ReadAll Readline Seek Close Copy EPrint EPrintln Flush`. `println` already
+gets each line out to a redirected stdout on its own; `io.Flush()` is for
+output written by linked C code, which keeps its own buffer.
 - **`os`**: `Args Env Cwd Chdir Exit Pid Run RunCapture Output Exists IsDir
 FileSize Stat ReadFile WriteFile AppendFile Copy CopyTree Move Remove RemoveAll
 Mkdir MkdirAll Rmdir ListDir ListDirs Walk TempDir Open`.
@@ -609,7 +616,8 @@ naive port into compile errors (each corresponds to a case in
 `tests/en/errors/`):
 
 1. **`until <cond>` loops WHILE the condition is true.** It is Salam's `while`,
-   not a do-until. `until i < n:` iterates for `i` from small to `n`; the C
+   not a do-until - and `while <cond>` is accepted as the same keyword, which
+   is what new code should say. `until i < n:` iterates for `i` from small to `n`; the C
    `while (v != 0)` is `until v != 0:`, **not** `until v == 0:`. This is the
    single most common porting mistake, and it is _silent_: an inverted
    condition runs the body zero times with no diagnostic (only a literal
@@ -669,7 +677,7 @@ General mapping that applies to all source languages:
 | enum / union                 | `enum` (C-like) or `Variant<…>` (tagged union)                                   |
 | module / package / import    | `package name` + `import pkg` (only `pub` exported)                              |
 | free function                | top-level `func`; a bare name is its address (`i64`), `&fn` is a `void*`         |
-| `while`                      | **`until`** (same meaning!)                                                      |
+| `while`                      | **`while`** (or `until` - one keyword, two spellings)                            |
 | `for i in range(n)`          | `repeat n with i:`                                                               |
 | `for x in xs`                | `each x in xs:`                                                                  |
 | destructor / cleanup         | `defer x.free()`                                                                 |
@@ -953,7 +961,7 @@ two closing angle brackets, not a shift.
 | `switch (x) { case … }`                     | `match x: … end`                                                                                     |
 | `goto`                                      | not available; restructure with functions/flags/loops                                                |
 | `break` / `continue`                        | `break` / `continue` (same, innermost loop only)                                                     |
-| `while (c)`                                 | **`until c:`** with the same condition, **never negated** (`while (v != 0)` → `until v != 0:`)       |
+| `while (c)`                                 | **`while c:`** with the same condition, **never negated** (`while (v != 0)` → `while v != 0:`)       |
 | `while (v)` / `while (p)` (truthy)          | `until v != 0:` / `until p != null:` (Salam has no truthiness)                                       |
 | `do { B } while (c);`                       | `until true: B  if !c: break end end`                                                                |
 | `for (;;)`                                  | `until true:` + `break`                                                                              |

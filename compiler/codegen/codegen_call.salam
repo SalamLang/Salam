@@ -350,6 +350,41 @@ func call_ident(
         end
         ret "salam_thread_spawn((salam_thread_fn)" + mangled + ")"
     end
+    /*
+     * Atomic intrinsics. 5 is __ATOMIC_SEQ_CST spelled as its value so no
+     * header has to be reachable from generated code. gcc and clang expand
+     * every one of these to a single instruction; tcc 0.9.27 has none of them
+     * (it treats the name as an implicit declaration and then fails to link),
+     * which is why std/atomic keeps a mutex implementation behind
+     * SALAM_CC_TCC rather than relying on these.
+     */
+    if sm.AtomicArity(nm) > 0 && cn.list.len() == sm.AtomicArity(nm) && sm.Lookup(
+        s, s.global, nm
+    ) == 0:
+        pexp := cg_expr(g, s, a, cn.list.get(0))
+        if str.Equals(nm, "atomic_load"):
+            ret "__atomic_load_n(" + pexp + ", 5)"
+        end
+        vexp := cg_expr(g, s, a, cn.list.get(1))
+        if str.Equals(nm, "atomic_store"):
+            ret "__atomic_store_n(" + pexp + ", (int64_t)(" + vexp + "), 5)"
+        end
+        if str.Equals(nm, "atomic_add"):
+            ret "__atomic_add_fetch(" + pexp + ", (int64_t)(" + vexp + "), 5)"
+        end
+        if str.Equals(nm, "atomic_swap"):
+            ret "__atomic_exchange_n(" + pexp + ", (int64_t)(" + vexp + "), 5)"
+        end
+        /*
+         * compare_exchange needs a writable `expected`, and salam's is an
+         * rvalue - bind it to a temporary. The weak flag is 0: a spurious
+         * failure would make a caller's retry loop spin for no reason.
+         */
+        g.tmpn += 1
+        et := g.tmpn
+        dexp := cg_expr(g, s, a, cn.list.get(2))
+        ret "({ int64_t __ae" + et + " = (int64_t)(" + vexp + "); __atomic_compare_exchange_n(" + pexp + ", &__ae" + et + ", (int64_t)(" + dexp + "), 0, 5, 5); })"
+    end
     if str.Equals(nm, "callhandler") && cn.list.len() == 2:
         fnp := cg_expr(g, s, a, cn.list.get(0))
         argx := cg_expr(g, s, a, cn.list.get(1))

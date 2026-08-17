@@ -537,6 +537,49 @@ func call_intrinsic(
         out2 = make_llv(r2, "i64")
         ret true
     end
+    // Atomic intrinsics, lowered to real instructions rather than a call.
+    // seq_cst throughout, matching what the C backend asks __atomic_* for.
+    if sm.AtomicArity(nm) > 0 && na == sm.AtomicArity(nm) && sm.Lookup(s, s.global, nm) == 0:
+        pv := conv(v, s, a, lv_expr(v, s, a, a0), "ptr")
+        if str.Equals(nm, "atomic_load"):
+            r = new_tmp(v)
+            emit(v, r + " = load atomic i64, ptr " + pv + " seq_cst, align 8")
+            out2 = make_llv(r, "i64")
+            ret true
+        end
+        vv := conv(v, s, a, lv_expr(v, s, a, nn.list.get(1)), "i64")
+        if str.Equals(nm, "atomic_store"):
+            emit(v, "store atomic i64 " + vv + ", ptr " + pv + " seq_cst, align 8")
+            out2 = make_llv("0", "void")
+            ret true
+        end
+        if str.Equals(nm, "atomic_add"):
+            // atomicrmw yields the value from *before* the operation; salam's
+            // atomic_add is defined to return the new one.
+            ov := new_tmp(v)
+            emit(v, ov + " = atomicrmw add ptr " + pv + ", i64 " + vv + " seq_cst")
+            r = new_tmp(v)
+            emit(v, r + " = add i64 " + ov + ", " + vv)
+            out2 = make_llv(r, "i64")
+            ret true
+        end
+        if str.Equals(nm, "atomic_swap"):
+            r = new_tmp(v)
+            emit(v, r + " = atomicrmw xchg ptr " + pv + ", i64 " + vv + " seq_cst")
+            out2 = make_llv(r, "i64")
+            ret true
+        end
+        // cmpxchg returns { value, success }; only the flag is wanted.
+        dv := conv(v, s, a, lv_expr(v, s, a, nn.list.get(2)), "i64")
+        pair := new_tmp(v)
+        emit(
+            v, pair + " = cmpxchg ptr " + pv + ", i64 " + vv + ", i64 " + dv + " seq_cst seq_cst"
+        )
+        r = new_tmp(v)
+        emit(v, r + " = extractvalue { i64, i1 } " + pair + ", 1")
+        out2 = make_llv(r, "bool")
+        ret true
+    end
     // callhandler(fp, arg) - an indirect call through an integer-encoded
     // function pointer, the shape the layout/webview callbacks use.
     if str.Equals(nm, "callhandler") && na == 2:

@@ -195,6 +195,57 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
         ret sema_decorate(s, a, n, sema_ty(s, TY_I64))
     end
 
+    /*
+     * The atomic intrinsics on an i64 cell. They are recognised here rather
+     * than declared in a package because each backend lowers them to
+     * something it has no other way to spell - a __atomic_* builtin in C, an
+     * atomicrmw/cmpxchg instruction in LLVM - and no callable symbol exists
+     * for them at all. A user function of the same name wins: the lookup
+     * below defers to any real declaration in scope, so these names are only
+     * magic when nothing else claims them.
+     */
+    if ckind == at.AST_IDENTIFIER && atomic_arity(at.Get(a, callee).name) > 0 && scope_lookup(
+        s, s.cur, at.Get(a, callee).name
+    ) == 0:
+        aname := at.Get(a, callee).name
+        want := atomic_arity(aname)
+        if at.ChildCount(a, n) != want:
+            serr(
+                s, 12, sp, co.Format4(
+                    i18.Tr("'%s' expects %zu argument%s, got %zu"), co.ArgStr(aname),
+                    co.ArgUint(want as u64), co.ArgStr(plural_suffix(want)),
+                    co.ArgUint(at.ChildCount(a, n) as u64)
+                )
+            )
+            ret sema_decorate(s, a, n, sema_ty(s, TY_I64))
+        end
+        cellty := type_ptr(s, sema_ty(s, TY_I64))
+        repeat at.ChildCount(a, n) with ai:
+            aty := sema_check_expr(s, a, at.Child(a, n, ai))
+            mut wty := sema_ty(s, TY_I64)
+            if ai == 0:
+                wty = cellty
+            end
+            if aty != TYPE_NONE && !type_assignable(s, wty, aty):
+                serr(
+                    s, 12, sp, co.Format3(
+                        i18.Tr("argument %zu: cannot pass '%s' to '%s'"),
+                        co.ArgUint((ai + 1) as u64), co.ArgStr(type_to_string(s, aty)),
+                        co.ArgStr(type_to_string(s, wty))
+                    )
+                )
+            end
+        end
+        _da := sema_decorate(s, a, callee, sema_ty(s, TY_VOID))
+        if str.Equals(aname, "atomic_store"):
+            ret sema_decorate(s, a, n, sema_ty(s, TY_VOID))
+        end
+        if str.Equals(aname, "atomic_cas"):
+            ret sema_decorate(s, a, n, sema_ty(s, TY_BOOL))
+        end
+        ret sema_decorate(s, a, n, sema_ty(s, TY_I64))
+    end
+
     if ckind == at.AST_IDENTIFIER && str.Equals(at.Get(a, callee).name, "callhandler"):
         if at.ChildCount(a, n) != 2:
             serr(

@@ -499,6 +499,41 @@ type_t *check_call(sema_t *s, ast_node_t *n)
         return decorate(s, n, ty(s, TY_I64));
     }
 
+    /*
+     * The atomic intrinsics on an i64 cell. They are recognised here rather
+     * than declared in a package because each backend lowers them to
+     * something it has no other way to spell - a __atomic_* builtin in C,
+     * an atomicrmw/cmpxchg instruction in LLVM - and no callable symbol
+     * exists for them at all. A user function of the same name wins: the
+     * lookup below defers to any real declaration in scope, so these names
+     * are only magic when nothing else claims them.
+     */
+    if (callee && callee->kind == AST_IDENTIFIER && salam_atomic_arity(callee->name) &&
+        !scope_lookup(s->cur, callee->name)) {
+        int want = salam_atomic_arity(callee->name);
+        if ((int)n->list.len != want) {
+            SERR(s, 12, &n->span, "'%s' expects %zu argument%s, got %zu", callee->name,
+                 (size_t)want, plural_suffix((size_t)want), n->list.len);
+            return decorate(s, n, ty(s, TY_I64));
+        }
+        {
+            type_t *cell = type_ptr(s->tc, ty(s, TY_I64));
+            size_t i = 0;
+            for (; i < n->list.len; i++) {
+                type_t *at = sema_check_expr(s, (ast_node_t *)n->list.data[i]);
+                type_t *wt = i == 0 ? cell : ty(s, TY_I64);
+                if (at && !type_assignable(wt, at))
+                    SERR(s, 12, &n->span, "argument %zu: cannot pass '%s' to '%s'", i + 1,
+                         type_to_string(s->tc, at), type_to_string(s->tc, wt));
+            }
+        }
+        decorate(s, callee, ty(s, TY_VOID));
+        if (!strcmp(callee->name, "atomic_store"))
+            return decorate(s, n, ty(s, TY_VOID));
+        if (!strcmp(callee->name, "atomic_cas")) return decorate(s, n, ty(s, TY_BOOL));
+        return decorate(s, n, ty(s, TY_I64));
+    }
+
     if (callee && callee->kind == AST_IDENTIFIER &&
         strcmp(callee->name, "callhandler") == 0) {
         if (n->list.len != 2) {

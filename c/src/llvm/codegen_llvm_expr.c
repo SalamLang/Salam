@@ -1516,6 +1516,57 @@ static bool ll_call_intrinsic(ll_t *ll, ast_node_t *n, const char *nm, llv_t *ou
             return true;
         }
     }
+    /*
+     * Atomic intrinsics, lowered to real instructions rather than a call.
+     * seq_cst throughout, matching what the C backend asks __atomic_* for.
+     */
+    if (salam_atomic_arity(nm) && (int)na == salam_atomic_arity(nm) &&
+        !scope_lookup(ll->sem->global, nm)) {
+        const char *p = ll_conv(ll, ll_expr(ll, a0), "ptr");
+        if (!strcmp(nm, "atomic_load")) {
+            r = ll_new_tmp(ll);
+            ll_emit(ll, "%s = load atomic i64, ptr %s seq_cst, align 8", r, p);
+            *out = (llv_t){r, "i64"};
+            return true;
+        }
+        {
+            const char *v =
+                ll_conv(ll, ll_expr(ll, (ast_node_t *)n->list.data[1]), "i64");
+            if (!strcmp(nm, "atomic_store")) {
+                ll_emit(ll, "store atomic i64 %s, ptr %s seq_cst, align 8", v, p);
+                *out = (llv_t){"0", "void"};
+                return true;
+            }
+            if (!strcmp(nm, "atomic_add")) {
+                /* atomicrmw yields the value from *before* the operation;
+                 * salam's atomic_add is defined to return the new one. */
+                const char *o = ll_new_tmp(ll);
+                ll_emit(ll, "%s = atomicrmw add ptr %s, i64 %s seq_cst", o, p, v);
+                r = ll_new_tmp(ll);
+                ll_emit(ll, "%s = add i64 %s, %s", r, o, v);
+                *out = (llv_t){r, "i64"};
+                return true;
+            }
+            if (!strcmp(nm, "atomic_swap")) {
+                r = ll_new_tmp(ll);
+                ll_emit(ll, "%s = atomicrmw xchg ptr %s, i64 %s seq_cst", r, p, v);
+                *out = (llv_t){r, "i64"};
+                return true;
+            }
+            {
+                /* cmpxchg returns { value, success }; only the flag is wanted. */
+                const char *d =
+                    ll_conv(ll, ll_expr(ll, (ast_node_t *)n->list.data[2]), "i64");
+                const char *pair = ll_new_tmp(ll);
+                ll_emit(ll, "%s = cmpxchg ptr %s, i64 %s, i64 %s seq_cst seq_cst", pair,
+                        p, v, d);
+                r = ll_new_tmp(ll);
+                ll_emit(ll, "%s = extractvalue { i64, i1 } %s, 1", r, pair);
+                *out = (llv_t){r, "bool"};
+                return true;
+            }
+        }
+    }
     /* callhandler(fp, arg) - an indirect call through an integer-encoded
      * function pointer, the shape the layout/webview callbacks use. */
     if (!strcmp(nm, "callhandler") && na == 2) {

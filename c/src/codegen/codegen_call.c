@@ -396,6 +396,42 @@ static const char *call_ident(cg_t *cg, ast_node_t *n, ast_node_t *callee)
         }
         return cg_fmt(cg, "salam_thread_spawn((salam_thread_fn)%s)", mangled);
     }
+    /*
+     * Atomic intrinsics. 5 is __ATOMIC_SEQ_CST spelled as its value so no
+     * header has to be reachable from generated code. gcc and clang expand
+     * every one of these to a single instruction on the targets salam builds
+     * for; tcc 0.9.27 has none of them (it treats the name as an implicit
+     * declaration and then fails to link), which is why std/atomic keeps a
+     * mutex implementation behind SALAM_CC_TCC rather than relying on these.
+     */
+    if (salam_atomic_arity(nm) && (int)n->list.len == salam_atomic_arity(nm) &&
+        !scope_lookup(cg->sem->global, nm)) {
+        const char *p = cg_expr(cg, (ast_node_t *)n->list.data[0]);
+        if (!strcmp(nm, "atomic_load")) return cg_fmt(cg, "__atomic_load_n(%s, 5)", p);
+        {
+            const char *v = cg_expr(cg, (ast_node_t *)n->list.data[1]);
+            if (!strcmp(nm, "atomic_store"))
+                return cg_fmt(cg, "__atomic_store_n(%s, (int64_t)(%s), 5)", p, v);
+            if (!strcmp(nm, "atomic_add"))
+                return cg_fmt(cg, "__atomic_add_fetch(%s, (int64_t)(%s), 5)", p, v);
+            if (!strcmp(nm, "atomic_swap"))
+                return cg_fmt(cg, "__atomic_exchange_n(%s, (int64_t)(%s), 5)", p, v);
+            /*
+             * compare_exchange needs a writable `expected`, and salam's is an
+             * rvalue - bind it to a temporary. The weak flag is 0: a spurious
+             * failure would make a caller's retry loop spin for no reason.
+             */
+            {
+                int t = ++cg->tmpn;
+                const char *d = cg_expr(cg, (ast_node_t *)n->list.data[2]);
+                return cg_fmt(cg,
+                              "({ int64_t __ae%d = (int64_t)(%s); "
+                              "__atomic_compare_exchange_n(%s, &__ae%d, (int64_t)(%s), "
+                              "0, 5, 5); })",
+                              t, v, p, t, d);
+            }
+        }
+    }
     if (!strcmp(nm, "callhandler") && n->list.len == 2) {
         const char *fnp = cg_expr(cg, (ast_node_t *)n->list.data[0]);
         const char *arg = cg_expr(cg, (ast_node_t *)n->list.data[1]);

@@ -987,6 +987,36 @@ static const char *jsg_call_ident(jg_t *g, ast_node_t *n, ast_node_t *callee)
                 return cg_fmt(cg, "salam_str_hash(%s)", jsg_expr_p(g, a0, 0));
             return cg_fmt(cg, "salam_hash_int(%s)", jsg_expr_p(g, a0, 0));
         }
+        /*
+         * The atomic intrinsics are plain reads and writes here. That is not
+         * a shortcut: the JS target has no threads at all - spawn is
+         * unsupported a line below - so a single cell can never be touched
+         * concurrently and every one of these is already indivisible. The
+         * arrow functions exist only to evaluate each operand exactly once,
+         * the way the C and LLVM lowerings do.
+         */
+        if (salam_atomic_arity(nm) && (int)n->list.len == salam_atomic_arity(nm) &&
+            !scope_lookup(cg->sem->global, nm)) {
+            const char *p = jsg_expr_p(g, (ast_node_t *)n->list.data[0], 0);
+            if (!strcmp(nm, "atomic_load")) return cg_fmt(cg, "(%s)[0]", p);
+            {
+                const char *v = jsg_expr_p(g, (ast_node_t *)n->list.data[1], 0);
+                if (!strcmp(nm, "atomic_store"))
+                    return cg_fmt(cg, "((a,b)=>{a[0]=b;})(%s,%s)", p, v);
+                if (!strcmp(nm, "atomic_add"))
+                    return cg_fmt(cg, "((a,b)=>{a[0]=a[0]+b;return a[0];})(%s,%s)", p, v);
+                if (!strcmp(nm, "atomic_swap"))
+                    return cg_fmt(
+                        cg, "((a,b)=>{const o=a[0];a[0]=b;return o;})(%s,%s)", p, v);
+                {
+                    const char *d = jsg_expr_p(g, (ast_node_t *)n->list.data[2], 0);
+                    return cg_fmt(cg,
+                                  "((a,e,d)=>{if(a[0]===e){a[0]=d;return true;}"
+                                  "return false;})(%s,%s,%s)",
+                                  p, v, d);
+                }
+            }
+        }
         if (!strcmp(nm, "sizeof") || !strcmp(nm, "spawn") || !strcmp(nm, "args") ||
             !strcmp(nm, "listdir"))
             return jsg_unsupported(g, nm);

@@ -135,6 +135,21 @@ const char *cg_cident(cg_t *cg, const char *name)
     if (isdigit((unsigned char)name[0])) sb_putc(&b, '_');
     {
         const unsigned char *p = (const unsigned char *)name;
+        /*
+         * A LEADING underscore is copied through as one, not doubled. C
+         * reserves every identifier starting with "__" for the
+         * implementation, and gcc really does use that space: on x86-64 it
+         * predefines __k8 as an architecture macro, so Salam's `_k8` (the
+         * ordinary "declared but unused" spelling) became C's `__k8` and
+         * expanded to `1` - "expected identifier before numeric constant",
+         * which took out compiler/tests_port/interp_test.salam entirely.
+         * Interior underscores still double, so the mangling stays
+         * one-to-one: `_a_b` -> `_a__b`, while `a_b` -> `a__b`.
+         */
+        if (*p == '_') {
+            sb_putc(&b, '_');
+            p++;
+        }
         for (; *p; p++)
             cg_put_ident_byte(&b, *p);
     }

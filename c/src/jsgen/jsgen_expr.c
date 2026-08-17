@@ -620,6 +620,25 @@ const char *jsg_call_args(jg_t *g, ast_node_t *call, func_sig_t *sig)
  * before the argument list (the method-call form, `recv.fn(args)` written
  * as `fn(recv, args)` in the output's flat-function style).
  */
+/* An enum member's JS value, in its backing type. JS strings/numbers are
+ * value types compared by content with ===, so unlike C/LLVM no separate
+ * comparison codegen is needed once the member itself is right. */
+static const char *jsg_enum_member_value(jg_t *g, symbol_t *m)
+{
+    cg_t *cg = &g->cg;
+    switch (m->enum_val_kind) {
+    case TV_FLOAT: {
+        char buf[64];
+        sal_snprintf(buf, sizeof buf, "%.17g", m->enum_value_f);
+        return cg_fmt(cg, "%s", buf);
+    }
+    case TV_STRING:
+        return jsg_escape(g, m->enum_value_str ? m->enum_value_str : "");
+    default:
+        return cg_fmt(cg, "%lld", (long long)m->enum_value);
+    }
+}
+
 static const char *jsg_call_finish(jg_t *g, ast_node_t *call, func_sig_t *sig,
                                    const char *fn_expr, const char *recv)
 {
@@ -663,7 +682,8 @@ static const char *jsg_call_finish(jg_t *g, ast_node_t *call, func_sig_t *sig,
                     sb_puts(&pre,
                             cg_fmt(cg, "const %s = [%s]; ", box, jsg_expr_p(g, arg, 0)));
                     sb_puts(&argb, box);
-                    sb_puts(&post, cg_fmt(cg, " %s = %s[0];", jsg_expr_p(g, arg, 0), box));
+                    sb_puts(&post,
+                            cg_fmt(cg, " %s = %s[0];", jsg_expr_p(g, arg, 0), box));
                 } else {
                     sb_puts(&argb, jsg_expr_p(g, arg, 0));
                 }
@@ -1106,7 +1126,8 @@ static const char *jsg_call_method(jg_t *g, ast_node_t *n, ast_node_t *obj,
      */
     bool is_instance =
         (ssym && ssym->generic_base) || (sig && sig->decl && sig->decl->synthetic);
-    const char *fn = jsg_fn_name(g, spkg, sname, callee->name, msym, sig, false, is_instance);
+    const char *fn =
+        jsg_fn_name(g, spkg, sname, callee->name, msym, sig, false, is_instance);
     return jsg_call_finish(g, n, sig, fn, jsg_expr_p(g, obj, 0));
 }
 
@@ -1730,24 +1751,17 @@ const char *jsg_expr_p(jg_t *g, ast_node_t *n, int minprec)
     case AST_MEMBER: {
         if (n->a && n->a->kind == AST_IDENTIFIER && !local_known(cg, n->a->name)) {
             symbol_t *e = scope_lookup(cg->sem->global, n->a->name);
+            /* Same reasoning as codegen_expr.c's matching fallback: a
+             * synthesized enum-derive body is checked against its enum's
+             * home scope (sema), so an unqualified enum name inside it can
+             * be package-scoped - this lookup only searches the global
+             * scope by default and needs the same cur_fn_home fallback used
+             * for free-function calls in such bodies. */
+            if ((!e || e->kind != SYM_ENUM) && cg->cur_fn_home)
+                e = scope_lookup(cg->cur_fn_home, n->a->name);
             if (e && e->kind == SYM_ENUM && e->members) {
                 symbol_t *m = scope_lookup_local(e->members, n->name);
-                if (m) {
-                    /* JS strings/numbers are value types compared by content
-                     * with ===, so unlike C/LLVM no separate comparison
-                     * codegen is needed once the member itself is right. */
-                    switch (m->enum_val_kind) {
-                    case TV_FLOAT: {
-                        char buf[64];
-                        sal_snprintf(buf, sizeof buf, "%.17g", m->enum_value_f);
-                        return cg_fmt(cg, "%s", buf);
-                    }
-                    case TV_STRING:
-                        return jsg_escape(g, m->enum_value_str ? m->enum_value_str : "");
-                    default:
-                        return cg_fmt(cg, "%lld", (long long)m->enum_value);
-                    }
-                }
+                if (m) return jsg_enum_member_value(g, m);
             }
             if (e && e->kind == SYM_PACKAGE) {
                 symbol_t *m = scope_lookup_local(e->members, n->name);
@@ -1757,6 +1771,26 @@ const char *jsg_expr_p(jg_t *g, ast_node_t *n, int minprec)
                                           n->name);
                 }
                 if (m && m->decl && m->decl->a) return jsg_expr_p(g, m->decl->a, minprec);
+            }
+        }
+        /*
+         * pkg.EnumName.Member: n->a is itself pkg.EnumName, an AST_MEMBER -
+         * see the matching fix in check_member/sema_expr.c for why the
+         * parser always builds this as a plain left-associative chain.
+         * Without this, n->a falls to the generic fallback below, which has
+         * no idea "pkg.EnumName" denotes a type and emits it as a literal
+         * (and nonexistent) JS property access.
+         */
+        if (n->a && n->a->kind == AST_MEMBER && n->a->a &&
+            n->a->a->kind == AST_IDENTIFIER && !local_known(cg, n->a->a->name)) {
+            symbol_t *pk = scope_lookup(cg->sem->global, n->a->a->name);
+            if (!pk && cg->cur_fn_home) pk = scope_lookup(cg->cur_fn_home, n->a->a->name);
+            if (pk && pk->kind == SYM_PACKAGE) {
+                symbol_t *e = scope_lookup_local(pk->members, n->a->name);
+                if (e && e->kind == SYM_ENUM && e->members) {
+                    symbol_t *m = scope_lookup_local(e->members, n->name);
+                    if (m) return jsg_enum_member_value(g, m);
+                }
             }
         }
         return cg_fmt(cg, "%s.%s", jsg_expr_p(g, n->a, JSP_MEMBER),

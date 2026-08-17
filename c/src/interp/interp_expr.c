@@ -552,7 +552,23 @@ static value_t eval_node(interp_t *I, env_t *env, ast_node_t *n)
         return eval_call(I, env, n);
     case AST_MEMBER: {
         ast_node_t *obj = n->a;
-        if (obj->kind == AST_IDENTIFIER && !env_find(env, obj->name)) {
+        /*
+         * pkg.EnumName.Member: obj is itself pkg.EnumName, an AST_MEMBER
+         * (obj->a = "pkg", obj->name = "Kind") rather than a bare
+         * identifier - I->tab_enums is one flat, package-agnostic table
+         * (interp.c:332), so the lookup below is identical either way; this
+         * only widens which shapes reach it. Without it, obj falls to the
+         * eval(I, env, obj) below, which evaluates "pkg.Kind" as an ordinary
+         * module-member read and fails with "package has no member 'Kind'"
+         * (enums aren't registered as module env bindings).
+         */
+        bool obj_is_pkg_qualified = false;
+        if (obj->kind == AST_MEMBER && obj->a && obj->a->kind == AST_IDENTIFIER) {
+            binding_t *pkgb = env_find(env, obj->a->name);
+            obj_is_pkg_qualified = pkgb && pkgb->val.kind == VAL_MODULE;
+        }
+        if ((obj->kind == AST_IDENTIFIER && !env_find(env, obj->name)) ||
+            obj_is_pkg_qualified) {
             ast_node_t *edef = find_enum(I, obj->name);
             if (edef) {
                 /*

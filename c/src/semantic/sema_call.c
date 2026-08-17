@@ -344,8 +344,9 @@ static type_t *check_enum_static_call(sema_t *s, ast_node_t *n, ast_node_t *call
         symbol_t *fsym;
         func_sig_t *sig;
         if (!fn) return decorate(s, n, err_ty(s));
-        if (is_fs && (argtypes->len != 2 || ((type_t *)argtypes->data[0])->kind != TY_STR ||
-                      ((type_t *)argtypes->data[1])->kind != TY_BOOL))
+        if (is_fs &&
+            (argtypes->len != 2 || ((type_t *)argtypes->data[0])->kind != TY_STR ||
+             ((type_t *)argtypes->data[1])->kind != TY_BOOL))
             SERR(s, 12, &n->span, "FromString(name, ok) takes a str and a bool ref");
         if (!is_fs && argtypes->len != 0)
             SERR(s, 12, &n->span, "Names() takes no arguments");
@@ -481,8 +482,9 @@ type_t *check_call(sema_t *s, ast_node_t *n)
         }
         if (!ok) {
             if (!has_arg)
-                SERR(s, 12, &n->span,
-                     "spawn requires a function taking no arguments and returning nothing");
+                SERR(
+                    s, 12, &n->span,
+                    "spawn requires a function taking no arguments and returning nothing");
             else if (!want)
                 SERR(s, 12, &n->span,
                      "spawn(func, arg) requires a function taking one pointer argument "
@@ -804,6 +806,26 @@ type_t *check_call(sema_t *s, ast_node_t *n)
         }
         if (pk && pk->kind == SYM_ENUM)
             return check_enum_static_call(s, n, callee, pk, &argtypes);
+    }
+
+    /*
+     * pkg.EnumName.FromString(...) / .Names() / .Count(): callee->a is
+     * itself pkg.EnumName, an AST_MEMBER (the parser never builds a 3-level
+     * chain directly - see the matching fix in check_member/sema_expr.c).
+     * Recognize that shape here and hand the resolved enum symbol to the
+     * same check_enum_static_call the unqualified case above uses - it's
+     * already agnostic to how the symbol was found.
+     */
+    if (callee && callee->kind == AST_MEMBER && callee->a &&
+        callee->a->kind == AST_MEMBER && callee->a->a &&
+        callee->a->a->kind == AST_IDENTIFIER) {
+        symbol_t *pk = scope_lookup(s->cur, callee->a->a->name);
+        if (pk && pk->kind == SYM_PACKAGE) {
+            callee->a->name = pkg_member_canon(s, pk, callee->a->name, &callee->a->span);
+            symbol_t *m = scope_lookup_local(pk->members, callee->a->name);
+            if (m && m->kind == SYM_ENUM)
+                return check_enum_static_call(s, n, callee, m, &argtypes);
+        }
     }
 
     if (callee && callee->kind == AST_MEMBER) {

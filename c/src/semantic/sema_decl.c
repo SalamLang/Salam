@@ -179,6 +179,7 @@ void sema_collect(sema_t *s, ast_node_t *program)
                 }
                 sym->type = type_enum(s->tc, sym, c_enum_name);
                 sym->members = scope_new(s->a, SCOPE_STRUCT, s->global);
+                sym->home = s->global;
                 if (scope_define(s->a, s->global, sym))
                     SERR(s, 1, &d->span, "redefinition of '%s'", d->name);
             } else if (d->kind == AST_TYPE_ALIAS) {

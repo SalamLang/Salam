@@ -1,0 +1,574 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package term
+
+import str
+
+// SGR: colours and text attributes, plus the escape-aware string helpers
+// (Strip, Width, PadRight, Truncate) that ordinary str/fmt functions get
+// wrong the moment a string contains an escape sequence.
+//
+// Every colouring function is gated on SupportsColor(), so the SAME code
+// prints colour on a terminal and clean text into a pipe or a log file.
+// Reach for the `Seq*` functions when you want the raw sequence regardless.
+//
+// Nesting composes correctly: Paint rewrites any reset already inside the
+// text so that an inner colour hands control back to the outer one instead
+// of cancelling it, which is what makes Bold(Red("x") + " y") come out with
+// " y" still bold.
+//
+// WIDTH IS COUNTED IN CODEPOINTS. Width/PadRight/Truncate ignore escape
+// sequences (that is their whole point) but do not implement East-Asian
+// wide-character or combining-mark rules, so a CJK or emoji column will be
+// narrower on screen than the count suggests.
+
+// ------------------------------------------------------------------ codes
+
+@en "Reset"
+@fa "بازنشانی"
+@ar "إعادة ضبط"
+pub const Reset := "\x1b[0m"
+
+@en "StyleBold"
+@fa "سبک ضخیم"
+@ar "نمط عریض"
+pub const StyleBold := 1
+
+@en "StyleDim"
+@fa "سبک کم‌رنگ"
+@ar "نمط خافت"
+pub const StyleDim := 2
+
+@en "StyleItalic"
+@fa "سبک کج"
+@ar "نمط مائل"
+pub const StyleItalic := 3
+
+@en "StyleUnderline"
+@fa "سبک زیرخط"
+@ar "نمط مسطر"
+pub const StyleUnderline := 4
+
+@en "StyleBlink"
+@fa "سبک چشمک"
+@ar "نمط وامض"
+pub const StyleBlink := 5
+
+@en "StyleReverse"
+@fa "سبک وارونه"
+@ar "نمط معکوس"
+pub const StyleReverse := 7
+
+@en "StyleHidden"
+@fa "سبک پنهان"
+@ar "نمط مخفي"
+pub const StyleHidden := 8
+
+@en "StyleStrike"
+@fa "سبک خط‌خورده"
+@ar "نمط مشطوب"
+pub const StyleStrike := 9
+
+@en "FgBlack"
+@fa "پیش‌زمینه سیاه"
+@ar "مقدمة سوداء"
+pub const FgBlack := 30
+
+@en "FgRed"
+@fa "پیش‌زمینه قرمز"
+@ar "مقدمة حمراء"
+pub const FgRed := 31
+
+@en "FgGreen"
+@fa "پیش‌زمینه سبز"
+@ar "مقدمة خضراء"
+pub const FgGreen := 32
+
+@en "FgYellow"
+@fa "پیش‌زمینه زرد"
+@ar "مقدمة صفراء"
+pub const FgYellow := 33
+
+@en "FgBlue"
+@fa "پیش‌زمینه آبی"
+@ar "مقدمة زرقاء"
+pub const FgBlue := 34
+
+@en "FgMagenta"
+@fa "پیش‌زمینه ارغوانی"
+@ar "مقدمة أرجوانیة"
+pub const FgMagenta := 35
+
+@en "FgCyan"
+@fa "پیش‌زمینه فیروزه‌ای"
+@ar "مقدمة سماویة"
+pub const FgCyan := 36
+
+@en "FgWhite"
+@fa "پیش‌زمینه سفید"
+@ar "مقدمة بیضاء"
+pub const FgWhite := 37
+
+@en "FgDefault"
+@fa "پیش‌زمینه پیش‌فرض"
+@ar "مقدمة افتراضیة"
+pub const FgDefault := 39
+
+@en "BgBlack"
+@fa "پس‌زمینه سیاه"
+@ar "خلفیة سوداء"
+pub const BgBlack := 40
+
+@en "BgRed"
+@fa "پس‌زمینه قرمز"
+@ar "خلفیة حمراء"
+pub const BgRed := 41
+
+@en "BgGreen"
+@fa "پس‌زمینه سبز"
+@ar "خلفیة خضراء"
+pub const BgGreen := 42
+
+@en "BgYellow"
+@fa "پس‌زمینه زرد"
+@ar "خلفیة صفراء"
+pub const BgYellow := 43
+
+@en "BgBlue"
+@fa "پس‌زمینه آبی"
+@ar "خلفیة زرقاء"
+pub const BgBlue := 44
+
+@en "BgMagenta"
+@fa "پس‌زمینه ارغوانی"
+@ar "خلفیة أرجوانیة"
+pub const BgMagenta := 45
+
+@en "BgCyan"
+@fa "پس‌زمینه فیروزه‌ای"
+@ar "خلفیة سماویة"
+pub const BgCyan := 46
+
+@en "BgWhite"
+@fa "پس‌زمینه سفید"
+@ar "خلفیة بیضاء"
+pub const BgWhite := 47
+
+@en "BgDefault"
+@fa "پس‌زمینه پیش‌فرض"
+@ar "خلفیة افتراضیة"
+pub const BgDefault := 49
+
+// The bright ("aixterm") pairs, 90-97 and 100-107. Prefer these to
+// bold-plus-colour: bold is a font weight and terminals are free to render
+// it without brightening anything.
+@en "FgBright"
+@fa "افزونه روشن"
+@ar "إزاحة ساطعة"
+pub const FgBright := 60
+
+// -------------------------------------------------------------- internals
+
+inline pure func _bp(s: str): i8*: ret (s as void*) as i8* end
+
+// A str byte as 0..255. Salam's i8 is signed, so the high half arrives
+// negative and has to be folded back up before it is compared to a byte.
+inline pure func _ub(bp: i8*, i: int): int:
+    v := bp[i] as int
+    if v < 0: ret v + 256 end
+    ret v
+end
+
+// Index just past the escape sequence that starts at `i` (which must be an
+// ESC). Handles the three shapes that actually turn up in terminal output:
+//   CSI  ESC [ ... final byte in 0x40..0x7E   (colours, cursor moves)
+//   OSC  ESC ] ... BEL, or ESC \              (window titles, hyperlinks)
+//   two-byte  ESC <one byte>                  (charset selection, ESC 7/8)
+// An unterminated sequence consumes the rest of the string, which is the
+// only reading that cannot loop forever.
+func _esc_end(s: str, i: int, n: int): int:
+    bp := _bp(s)
+    if i + 1 >= n: ret n end
+    k := _ub(bp, i + 1)
+    if k == 91:                                   // '['
+        mut j := i + 2
+        until j < n:
+            c := _ub(bp, j)
+            if c >= 0x40 && c <= 0x7E: ret j + 1 end
+            j += 1
+        end
+        ret n
+    end
+    if k == 93:                                   // ']'
+        mut j := i + 2
+        until j < n:
+            c := _ub(bp, j)
+            if c == 7: ret j + 1 end              // BEL
+            if c == 27 && j + 1 < n && _ub(bp, j + 1) == 92: ret j + 2 end   // ESC '\'
+            j += 1
+        end
+        ret n
+    end
+    ret i + 2
+end
+
+// ------------------------------------------------------------- raw sequences
+
+// Sgr builds one Select-Graphic-Rendition sequence. It is never gated on
+// colour support - it is the primitive the gated helpers are made of.
+@en "Sgr"
+@fa "دنباله نمایش"
+@ar "تسلسل العرض"
+pub func Sgr(code: int): str: ret Csi + str.FromInt(code as i64) + "m" end
+
+@en "SeqFg256"
+@fa "دنباله پیش‌زمینه ۲۵۶"
+@ar "تسلسل مقدمة ۲۵۶"
+pub func SeqFg256(n: int): str: ret Csi + "38;5;" + str.FromInt(n as i64) + "m" end
+
+@en "SeqBg256"
+@fa "دنباله پس‌زمینه ۲۵۶"
+@ar "تسلسل خلفیة ۲۵۶"
+pub func SeqBg256(n: int): str: ret Csi + "48;5;" + str.FromInt(n as i64) + "m" end
+
+@en "SeqFgRGB"
+@fa "دنباله پیش‌زمینه آراگابی"
+@ar "تسلسل مقدمة آر‌جي‌بي"
+pub func SeqFgRGB(r: int, g: int, b: int): str:
+    ret Csi + "38;2;" + str.FromInt(r as i64) + ";" + str.FromInt(g as i64) + ";" + str.FromInt(b as i64) + "m"
+end
+
+@en "SeqBgRGB"
+@fa "دنباله پس‌زمینه آراگابی"
+@ar "تسلسل خلفیة آر‌جي‌بي"
+pub func SeqBgRGB(r: int, g: int, b: int): str:
+    ret Csi + "48;2;" + str.FromInt(r as i64) + ";" + str.FromInt(g as i64) + ";" + str.FromInt(b as i64) + "m"
+end
+
+// --------------------------------------------------------------- painting
+
+// Paint is the one place colour is actually applied, and the only one that
+// consults SupportsColor - every named helper below is a call to it.
+//
+// The str.Replace is what makes nesting work. Text that already carries a
+// reset (because it was painted first) would otherwise cancel the outer
+// style at that point and leave the remainder plain; re-arming `prefix`
+// after each inner reset hands the outer style back instead.
+@en "Paint"
+@fa "رنگ‌آمیزی"
+@ar "تلوین"
+pub func Paint(s: str, prefix: str): str:
+    if !SupportsColor(): ret s end
+    if s.len() == 0: ret s end
+    mut body := s
+    if str.Contains(s, Reset): body = str.Replace(s, Reset, Reset + prefix) end
+    ret prefix + body + Reset
+end
+
+// Style applies a bare SGR code, e.g. Style(s, term.StyleUnderline).
+@en "Style"
+@fa "سبک"
+@ar "نمط"
+pub func Style(s: str, code: int): str: ret Paint(s, Sgr(code)) end
+
+@en "Bold"
+@fa "ضخیم"
+@ar "عریض"
+pub func Bold(s: str): str: ret Style(s, StyleBold) end
+
+@en "Dim"
+@fa "کم‌رنگ"
+@ar "خافت"
+pub func Dim(s: str): str: ret Style(s, StyleDim) end
+
+@en "Italic"
+@fa "کج"
+@ar "مائل"
+pub func Italic(s: str): str: ret Style(s, StyleItalic) end
+
+@en "Underline"
+@fa "زیرخط"
+@ar "مسطر"
+pub func Underline(s: str): str: ret Style(s, StyleUnderline) end
+
+@en "Blink"
+@fa "چشمک"
+@ar "وامض"
+pub func Blink(s: str): str: ret Style(s, StyleBlink) end
+
+@en "Inverse"
+@fa "وارونه"
+@ar "معکوس"
+pub func Inverse(s: str): str: ret Style(s, StyleReverse) end
+
+@en "Hidden"
+@fa "پنهان"
+@ar "مخفي"
+pub func Hidden(s: str): str: ret Style(s, StyleHidden) end
+
+@en "Strike"
+@fa "خط‌خورده"
+@ar "مشطوب"
+pub func Strike(s: str): str: ret Style(s, StyleStrike) end
+
+@en "Black"
+@fa "سیاه"
+@ar "أسود"
+pub func Black(s: str): str: ret Style(s, FgBlack) end
+
+@en "Red"
+@fa "قرمز"
+@ar "أحمر"
+pub func Red(s: str): str: ret Style(s, FgRed) end
+
+@en "Green"
+@fa "سبز"
+@ar "أخضر"
+pub func Green(s: str): str: ret Style(s, FgGreen) end
+
+@en "Yellow"
+@fa "زرد"
+@ar "أصفر"
+pub func Yellow(s: str): str: ret Style(s, FgYellow) end
+
+@en "Blue"
+@fa "آبی"
+@ar "أزرق"
+pub func Blue(s: str): str: ret Style(s, FgBlue) end
+
+@en "Magenta"
+@fa "ارغوانی"
+@ar "أرجواني"
+pub func Magenta(s: str): str: ret Style(s, FgMagenta) end
+
+@en "Cyan"
+@fa "فیروزه‌ای"
+@ar "سماوي"
+pub func Cyan(s: str): str: ret Style(s, FgCyan) end
+
+@en "White"
+@fa "سفید"
+@ar "أبیض"
+pub func White(s: str): str: ret Style(s, FgWhite) end
+
+@en "Gray"
+@fa "خاکستری"
+@ar "رمادي"
+pub func Gray(s: str): str: ret Style(s, FgBlack + FgBright) end
+
+@en "BrightRed"
+@fa "قرمز روشن"
+@ar "أحمر ساطع"
+pub func BrightRed(s: str): str: ret Style(s, FgRed + FgBright) end
+
+@en "BrightGreen"
+@fa "سبز روشن"
+@ar "أخضر ساطع"
+pub func BrightGreen(s: str): str: ret Style(s, FgGreen + FgBright) end
+
+@en "BrightYellow"
+@fa "زرد روشن"
+@ar "أصفر ساطع"
+pub func BrightYellow(s: str): str: ret Style(s, FgYellow + FgBright) end
+
+@en "BrightBlue"
+@fa "آبی روشن"
+@ar "أزرق ساطع"
+pub func BrightBlue(s: str): str: ret Style(s, FgBlue + FgBright) end
+
+@en "BrightMagenta"
+@fa "ارغوانی روشن"
+@ar "أرجواني ساطع"
+pub func BrightMagenta(s: str): str: ret Style(s, FgMagenta + FgBright) end
+
+@en "BrightCyan"
+@fa "فیروزه‌ای روشن"
+@ar "سماوي ساطع"
+pub func BrightCyan(s: str): str: ret Style(s, FgCyan + FgBright) end
+
+@en "BrightWhite"
+@fa "سفید روشن"
+@ar "أبیض ساطع"
+pub func BrightWhite(s: str): str: ret Style(s, FgWhite + FgBright) end
+
+@en "OnRed"
+@fa "زمینه قرمز"
+@ar "علی أحمر"
+pub func OnRed(s: str): str: ret Style(s, BgRed) end
+
+@en "OnGreen"
+@fa "زمینه سبز"
+@ar "علی أخضر"
+pub func OnGreen(s: str): str: ret Style(s, BgGreen) end
+
+@en "OnYellow"
+@fa "زمینه زرد"
+@ar "علی أصفر"
+pub func OnYellow(s: str): str: ret Style(s, BgYellow) end
+
+@en "OnBlue"
+@fa "زمینه آبی"
+@ar "علی أزرق"
+pub func OnBlue(s: str): str: ret Style(s, BgBlue) end
+
+@en "OnMagenta"
+@fa "زمینه ارغوانی"
+@ar "علی أرجواني"
+pub func OnMagenta(s: str): str: ret Style(s, BgMagenta) end
+
+@en "OnCyan"
+@fa "زمینه فیروزه‌ای"
+@ar "علی سماوي"
+pub func OnCyan(s: str): str: ret Style(s, BgCyan) end
+
+@en "OnWhite"
+@fa "زمینه سفید"
+@ar "علی أبیض"
+pub func OnWhite(s: str): str: ret Style(s, BgWhite) end
+
+// The 256-colour cube: 0-7 standard, 8-15 bright, 16-231 a 6x6x6 RGB cube,
+// 232-255 a 24-step grey ramp.
+@en "Color256"
+@fa "رنگ ۲۵۶"
+@ar "لون ۲۵۶"
+pub func Color256(s: str, n: int): str: ret Paint(s, SeqFg256(n)) end
+
+@en "OnColor256"
+@fa "زمینه رنگ ۲۵۶"
+@ar "خلفیة لون ۲۵۶"
+pub func OnColor256(s: str, n: int): str: ret Paint(s, SeqBg256(n)) end
+
+@en "RGB"
+@fa "آراگابی"
+@ar "آر‌جي‌بي"
+pub func RGB(s: str, r: int, g: int, b: int): str: ret Paint(s, SeqFgRGB(r, g, b)) end
+
+@en "OnRGB"
+@fa "زمینه آراگابی"
+@ar "خلفیة آر‌جي‌بي"
+pub func OnRGB(s: str, r: int, g: int, b: int): str: ret Paint(s, SeqBgRGB(r, g, b)) end
+
+// ------------------------------------------------- escape-aware string work
+
+// Strip removes every escape sequence, leaving the text a user would see.
+// This is what to write into a log file, and what to measure a column with.
+@en "Strip"
+@fa "پاک‌سازی"
+@ar "تجرید"
+pub func Strip(s: str): str:
+    n := s.len()
+    bp := _bp(s)
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    mut i := 0
+    until i < n:
+        if _ub(bp, i) == 27:
+            i = _esc_end(s, i, n)
+        else:
+            str.BufAppendChar(b, _ub(bp, i))
+            i += 1
+        end
+    end
+    out := str.BufStr(b)
+    ret out
+end
+
+// Width is the visible width in codepoints: escape sequences count for
+// nothing, and a multi-byte character counts once (not once per byte, which
+// is what str.Len would say and why fmt.PadRight misaligns coloured tables).
+@en "Width"
+@fa "پهنا"
+@ar "عرض"
+pub func Width(s: str): int:
+    n := s.len()
+    bp := _bp(s)
+    mut count := 0
+    mut i := 0
+    until i < n:
+        if _ub(bp, i) == 27:
+            i = _esc_end(s, i, n)
+        else:
+            i += str.CharLen(_ub(bp, i))
+            count += 1
+        end
+    end
+    ret count
+end
+
+// Truncate cuts to `n` visible codepoints, carrying every escape sequence
+// through so the styling that was in force still applies to what remains,
+// and closing with a reset if anything was left open.
+@en "Truncate"
+@fa "کوتاه‌سازی"
+@ar "اقتطاع"
+pub func Truncate(s: str, n: int): str:
+    if n <= 0: ret "" end
+    if Width(s) <= n: ret s end
+    total := s.len()
+    bp := _bp(s)
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    mut styled := false
+    mut count := 0
+    mut i := 0
+    until i < total && count < n:
+        if _ub(bp, i) == 27:
+            e := _esc_end(s, i, total)
+            str.BufAppend(b, str.Substr(s, i, e - i))
+            styled = true
+            i = e
+        else:
+            w := str.CharLen(_ub(bp, i))
+            str.BufAppend(b, str.Substr(s, i, w))
+            i += w
+            count += 1
+        end
+    end
+    if styled: str.BufAppend(b, Reset) end
+    out := str.BufStr(b)
+    ret out
+end
+
+// PadRight/PadLeft/Center measure with Width instead of byte length, which
+// is the difference between a table that lines up once its cells are
+// coloured and one that does not. fmt.PadRight is the right choice for
+// plain text; these are for text that may carry escapes.
+@en "PadRight"
+@fa "پرکردن راست"
+@ar "حشو یمین"
+pub func PadRight(s: str, n: int): str:
+    w := Width(s)
+    if w >= n: ret s end
+    ret s + str.Repeat(" ", n - w)
+end
+
+@en "PadLeft"
+@fa "پرکردن چپ"
+@ar "حشو یسار"
+pub func PadLeft(s: str, n: int): str:
+    w := Width(s)
+    if w >= n: ret s end
+    ret str.Repeat(" ", n - w) + s
+end
+
+@en "Center"
+@fa "وسط‌چین"
+@ar "توسیط"
+pub func Center(s: str, n: int): str:
+    w := Width(s)
+    if w >= n: ret s end
+    left := (n - w) / 2
+    ret str.Repeat(" ", left) + s + str.Repeat(" ", n - w - left)
+end

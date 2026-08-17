@@ -48,6 +48,12 @@ const _NS_PER_DAY := 86400000000000 as i64
 // letting a too-large span wrap into a wrong - often negative - answer.
 const _I64_MAX := 9223372036854775807 as i64
 
+// Smallest i64, written as an expression because the literal itself is
+// out of range for the type. It is the one value whose negation wraps back
+// to itself, so abs/neg/round/format each handle it explicitly rather than
+// quietly returning a positive number for a negative span.
+const _I64_MIN := 0 - _I64_MAX - 1
+
 @en "Duration"
 @fa "مدت"
 @ar "مدة"
@@ -134,15 +140,22 @@ pub struct Duration:
         ret this.ns / o.ns
     end
 
+    // Saturates at the largest Duration rather than wrapping: the smallest
+    // i64 has no positive counterpart, so negating it would return the same
+    // negative value and silently break the caller's sign assumption.
     @en "neg"
     @fa "منفی"
     @ar "سالب"
-    pub inline pure func neg(): Duration: ret Duration { ns = 0 - this.ns } end
+    pub inline pure func neg(): Duration:
+        if this.ns == _I64_MIN: ret Duration { ns = _I64_MAX } end
+        ret Duration { ns = 0 - this.ns }
+    end
 
     @en "abs"
     @fa "قدرمطلق"
     @ar "مطلق"
     pub inline pure func abs(): Duration:
+        if this.ns == _I64_MIN: ret Duration { ns = _I64_MAX } end
         if this.ns < 0: ret Duration { ns = 0 - this.ns } end
         ret Duration { ns = this.ns }
     end
@@ -190,15 +203,27 @@ pub struct Duration:
     @en "round"
     @fa "گرد کردن"
     @ar "تقریب"
+    // Rounding away from zero can leave the i64 range, so the step is only
+    // taken when it fits; otherwise the value stays truncated. Comparisons
+    // are written as `r >= m - r` rather than `r * 2 >= m` because doubling
+    // a remainder near the range limit overflows on its own.
     pub pure func round(m: Duration): Duration:
         if m.ns <= 0: ret Duration { ns = this.ns } end
         r := this.ns % m.ns
+        down := this.ns - r
         if r < 0:
-            if (0 - r) * 2 >= m.ns: ret Duration { ns = this.ns - r - m.ns } end
-            ret Duration { ns = this.ns - r }
+            nr := 0 - r
+            if nr >= m.ns - nr:
+                if down < _I64_MIN + m.ns: ret Duration { ns = down } end
+                ret Duration { ns = down - m.ns }
+            end
+            ret Duration { ns = down }
         end
-        if r * 2 >= m.ns: ret Duration { ns = this.ns - r + m.ns } end
-        ret Duration { ns = this.ns - r }
+        if r >= m.ns - r:
+            if down > _I64_MAX - m.ns: ret Duration { ns = down } end
+            ret Duration { ns = down + m.ns }
+        end
+        ret Duration { ns = down }
     end
 
     // Makes `println d` print "1.5s" instead of the raw field. The compiler
@@ -318,6 +343,10 @@ pub inline pure func ZeroDuration(): Duration: ret Duration { ns = 0 } end
 @ar "تنسیق المدة"
 pub func FormatDuration(d: Duration): str:
     if d.ns == 0: ret "0s" end
+    // The smallest i64 is its own negation, so the usual "strip the sign
+    // and format the magnitude" path would print a second minus and emit
+    // text that ParseDuration then refuses. Spelled out instead.
+    if d.ns == _I64_MIN: ret "-2562047h47m16.854775808s" end
     mut sign := ""
     mut v := d.ns
     if v < 0:
@@ -349,6 +378,16 @@ end
 // sign, then one or more <number><unit> groups with no separators. Units:
 // ns, us (also µs/μs), ms, s, m, h, d. A bare "0" is accepted as zero; any
 // other unitless number is an error.
+//
+// A span that does not fit in an i64 is REJECTED rather than wrapped: the
+// text comes from config files, environment variables and headers, and a
+// silently wrapped value turns a mistyped timeout negative.
+//
+// One asymmetry follows from that. The smallest Duration formats as
+// "-2562047h47m16.854775808s", whose magnitude is one past the largest
+// i64, so parsing it back reports ok = false. That is the single value in
+// the range which does not round-trip, and it fails closed - the caller
+// sees a refusal, never a wrong number.
 @en "ParseDuration"
 @fa "تجزیه مدت"
 @ar "تحلیل المدة"

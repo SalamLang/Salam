@@ -2,10 +2,6 @@ plugins {
     alias(libs.plugins.android.application)
 }
 
-// The repo-root VERSION file is the single source of truth for every Salam
-// artifact, so the app reads its version from there instead of carrying a
-// second copy that silently drifts. CI can still override either value with
-// -PappVersionName / -PappVersionCode (see _reusable-android-build.yml).
 val repoVersionFile = rootProject.projectDir.parentFile.resolve("VERSION")
 val repoVersionName =
     repoVersionFile
@@ -15,9 +11,6 @@ val repoVersionName =
         ?.takeIf { it.isNotEmpty() }
         ?: error("VERSION file is missing or empty: ${repoVersionFile.absolutePath}")
 
-// 0.3.0 -> 300. Play requires a monotonically increasing integer; this stays
-// ordered as long as minor and patch stay below 100. Any pre-release suffix
-// (0.3.0-rc1) is ignored - it does not change the ordering.
 fun versionCodeOf(name: String): Int {
     val parts =
         Regex("""^(\d+)\.(\d+)(?:\.(\d+))?""").find(name)
@@ -84,9 +77,6 @@ android {
         buildConfig = false
     }
 
-    // The app UI itself only ships Persian + English strings; without this,
-    // every dependency (AppCompat/Material/etc.) bundles its translations
-    // for ~70 locales into the APK.
     androidResources {
         localeFilters += setOf("fa", "en")
     }

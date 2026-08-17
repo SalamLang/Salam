@@ -22,20 +22,19 @@ import conv
 import io
 import collections
 import encoding.yaml
+import encoding.envfile
 
+// A flat, ORDERED key to value model, whatever the source format was.
+// Order is what lets FormatINI group sections and FormatEnv reproduce a
+// file in the order it was written; the OrderedMap underneath keeps that
+// order while still resolving a key without scanning the whole config,
+// which matters once a flattened YAML document runs to hundreds of
+// dotted keys.
 @en "Config"
 @fa "پیکربندی"
 @ar "إعداد"
 pub struct Config:
-    pub keys: Vector<str> = Vector {}
-    pub vals: Vector<str> = Vector {}
-end
-
-func _find(c &: Config, key: str): int:
-    repeat c.keys.len() with i:
-        if c.keys.get(i) == key: ret i end
-    end
-    ret 0 - 1
+    pub m: collections.OrderedMap = collections.OrderedMap {}
 end
 
 func _yaml_flatten(out &: Config, text: str, path: str):
@@ -54,46 +53,32 @@ func _yaml_flatten(out &: Config, text: str, path: str):
     end
 end
 
-func _unquote(v: str): str:
-    n := v.len()
-    if n >= 2:
-        first := v.substr(0, 1)
-        last := v.substr(n - 1, 1)
-        if (first == `"` && last == `"`) || (first == "'" && last == "'"):
-            ret v.substr(1, n - 2)
-        end
-    end
-    ret v
-end
-
-func _is_quoted(v: str): bool:
-    n := v.len()
-    if n < 2: ret false end
-    first := v.substr(0, 1)
-    ret first == `"` || first == "'"
-end
-
-func _strip_inline_comment(v: str): str:
-    n := v.len()
-    repeat n with i:
-        if i == 0: continue end
-        ch := v.substr(i, 1)
-        if (ch == "#" || ch == ";") && v.substr(i - 1, 1) == " ":
-            ret str.TrimRight(v.substr(0, i))
-        end
-    end
-    ret v
-end
-
+// INI and .env agree on how a scalar is written: optional quotes, an
+// inline comment after whitespace, surrounding space ignored. Rather
+// than keep a second implementation of those rules here, both go through
+// encoding.envfile, which owns them. The `true` says INI also lets ';'
+// open an inline comment, which .env does not.
 func _parse_value(raw: str): str:
-    t := str.Trim(raw)
-    if _is_quoted(t):
-        q := t.substr(0, 1)
-        closing := str.IndexFrom(t, q, 1)
-        if closing > 0: ret t.substr(1, closing - 1) end
-        ret t
+    ret envfile.ParseScalarEx(raw, true)
+end
+
+// Config and envfile.Doc are the same shape (flat, ordered, string to
+// string), so converting is a copy. These keep the .env format handling
+// in one place while Config stays the model the rest of std talks to.
+func _from_doc(d &: envfile.Doc): Config:
+    mut out := Config {}
+    repeat envfile.Len(d) with i:
+        Set(out, envfile.KeyAt(d, i), envfile.ValueAt(d, i))
     end
-    ret _unquote(_strip_inline_comment(t))
+    ret out
+end
+
+func _to_doc(c &: Config): envfile.Doc:
+    mut d := envfile.New()
+    repeat c.m.len() with i:
+        envfile.Set(d, c.m.key_at(i), c.m.val_at(i))
+    end
+    ret d
 end
 
 func _section_of(key: str): str:
@@ -108,17 +93,6 @@ func _name_of(key: str): str:
     ret key.substr(dot + 1, key.len() - dot - 1)
 end
 
-func _needs_quotes(v: str): bool:
-    if v.len() == 0: ret false end
-    if str.Trim(v) != v: ret true end
-    ret str.Contains(v, " ") || str.Contains(v, "#") || str.Contains(v, ";")
-end
-
-func _format_value(v: str): str:
-    if _needs_quotes(v): ret `"`.concat(v).concat(`"`) end
-    ret v
-end
-
 @en "New"
 @fa "جدید"
 @ar "جدید"
@@ -129,100 +103,81 @@ end
 @en "Len"
 @fa "طول"
 @ar "طول"
-pub func Len(c &: Config): int: ret c.keys.len() end
+pub func Len(c &: Config): int: ret c.m.len() end
 
 @en "Has"
 @fa "دارد"
 @ar "یملک"
-pub func Has(c &: Config, key: str): bool: ret _find(c, key) >= 0 end
+pub func Has(c &: Config, key: str): bool: ret c.m.has(key) end
 
 @en "Set"
 @fa "تنظیم"
 @ar "تعیین"
 pub func Set(c &: Config, key: str, val: str):
-    idx := _find(c, key)
-    if idx >= 0:
-        c.vals.set(idx, val)
-    else:
-        c.keys.push(key)
-        c.vals.push(val)
-    end
+    c.m.set(key, val)
 end
 
 @en "Get"
 @fa "دریافت"
 @ar "جلب"
-pub func Get(c &: Config, key: str): str:
-    idx := _find(c, key)
-    if idx < 0: ret "" end
-    ret c.vals.get(idx)
-end
+pub func Get(c &: Config, key: str): str: ret c.m.get(key) end
 
 @en "GetOr"
 @fa "دریافت یا"
 @ar "جلب أو"
-pub func GetOr(c &: Config, key: str, def: str): str:
-    idx := _find(c, key)
-    if idx < 0: ret def end
-    ret c.vals.get(idx)
-end
+pub func GetOr(c &: Config, key: str, def: str): str: ret c.m.get_or(key, def) end
 
 @en "GetInt"
 @fa "دریافت صحیح"
 @ar "جلب صحیح"
 pub func GetInt(c &: Config, key: str, def: i64): i64:
-    idx := _find(c, key)
-    if idx < 0: ret def end
-    ret conv.ParseInt(c.vals.get(idx))
+    i := c.m.index_of(key)
+    if i < 0: ret def end
+    ret conv.ParseInt(c.m.val_at(i))
 end
 
 @en "GetFloat"
 @fa "دریافت اعشاری"
 @ar "جلب عشری"
 pub func GetFloat(c &: Config, key: str, def: f64): f64:
-    idx := _find(c, key)
-    if idx < 0: ret def end
-    ret conv.ParseFloat(c.vals.get(idx))
+    i := c.m.index_of(key)
+    if i < 0: ret def end
+    ret conv.ParseFloat(c.m.val_at(i))
 end
 
 @en "GetBool"
 @fa "دریافت منطقی"
 @ar "جلب منطقی"
 pub func GetBool(c &: Config, key: str, def: bool): bool:
-    idx := _find(c, key)
-    if idx < 0: ret def end
-    ret conv.ParseBool(c.vals.get(idx))
+    i := c.m.index_of(key)
+    if i < 0: ret def end
+    ret conv.ParseBool(c.m.val_at(i))
 end
 
 @en "Remove"
 @fa "حذف"
 @ar "إزالة"
 pub func Remove(c &: Config, key: str): bool:
-    idx := _find(c, key)
-    if idx < 0: ret false end
-    c.keys.remove_at(idx)
-    c.vals.remove_at(idx)
-    ret true
+    ret c.m.remove(key) >= 0
 end
 
 @en "Keys"
 @fa "کلیدها"
 @ar "المفاتیح"
 pub func Keys(c &: Config): Vector<str>:
-    ret collections.clone(c.keys)
+    ret c.m.clone_keys()
 end
 
 @en "Section"
 @fa "بخش"
 @ar "قسم"
 pub func Section(c &: Config, name: str): Config:
-    out := Config {}
+    mut out := Config {}
     prefix := name.concat(".")
-    repeat c.keys.len() with i:
-        k := c.keys.get(i)
+    repeat c.m.len() with i:
+        k := c.m.key_at(i)
         if str.StartsWith(k, prefix):
-            out.keys.push(k.substr(prefix.len(), k.len() - prefix.len()))
-            out.vals.push(c.vals.get(i))
+            Set(out, k.substr(prefix.len(), k.len() - prefix.len()), c.m.val_at(i))
         end
     end
     ret out
@@ -237,12 +192,11 @@ end
 @ar "دمج"
 pub func Merge(base &: Config, override &: Config): Config:
     mut out := Config {}
-    repeat base.keys.len() with i:
-        out.keys.push(base.keys.get(i))
-        out.vals.push(base.vals.get(i))
+    repeat base.m.len() with i:
+        Set(out, base.m.key_at(i), base.m.val_at(i))
     end
-    repeat override.keys.len() with i:
-        Set(out, override.keys.get(i), override.vals.get(i))
+    repeat override.m.len() with i:
+        Set(out, override.m.key_at(i), override.m.val_at(i))
     end
     ret out
 end
@@ -251,8 +205,7 @@ end
 @fa "آزادسازی"
 @ar "تحریر"
 pub func Free(c &: Config):
-    c.keys.free()
-    c.vals.free()
+    c.m.free()
 end
 
 @en "ParseINI"
@@ -286,26 +239,18 @@ pub func ParseINI(text: str): Config:
     ret out
 end
 
+// ParseEnv reads .env text through encoding.envfile rather than a loop of
+// its own, so Config picks up the whole format for free: quoted values
+// that span lines, escapes, and ${VAR} references resolved against
+// earlier entries. To resolve against the real process environment as
+// well, load through std/env instead, which supplies that layer.
 @en "ParseEnv"
 @fa "تجزیه محیط"
 @ar "تحلیل بیئة"
 pub func ParseEnv(text: str): Config:
-    mut out := Config {}
-    lines := text.split("\n")
-    defer lines.free()
-    repeat lines.len() with i:
-        mut line := str.Trim(lines.get(i))
-        if line.len() > 0 && str.StartsWith(line, "#") == false:
-            line = str.TrimPrefix(line, "export ")
-            eq := line.find("=")
-            if eq > 0:
-                key := str.Trim(line.substr(0, eq))
-                val := _parse_value(line.substr(eq + 1, line.len() - eq - 1))
-                Set(out, key, val)
-            end
-        end
-    end
-    ret out
+    mut d := envfile.Parse(text)
+    defer envfile.Free(d)
+    ret _from_doc(d)
 end
 
 // ParseYAML flattens a YAML document into dotted keys (nested maps become
@@ -347,29 +292,29 @@ end
 pub func FormatINI(c &: Config): str:
     mut b := str.NewBuilder()
     defer str.BufFree(b)
-    repeat c.keys.len() with i:
-        k := c.keys.get(i)
+    repeat c.m.len() with i:
+        k := c.m.key_at(i)
         if _section_of(k) == "":
             str.BufAppend(b, k)
             str.BufAppend(b, " = ")
-            str.BufAppend(b, _format_value(c.vals.get(i)))
+            str.BufAppend(b, envfile.Quote(c.m.val_at(i)))
             str.BufAppend(b, "\n")
         end
     end
     done := Vector {} as Vector<str> defer done.free()
-    repeat c.keys.len() with i:
-        sec := _section_of(c.keys.get(i))
+    repeat c.m.len() with i:
+        sec := _section_of(c.m.key_at(i))
         if sec != "" && collections.contains(done, sec) == false:
             done.push(sec)
             str.BufAppend(b, "[")
             str.BufAppend(b, sec)
             str.BufAppend(b, "]\n")
-            repeat c.keys.len() with j:
-                kj := c.keys.get(j)
+            repeat c.m.len() with j:
+                kj := c.m.key_at(j)
                 if _section_of(kj) == sec:
                     str.BufAppend(b, _name_of(kj))
                     str.BufAppend(b, " = ")
-                    str.BufAppend(b, _format_value(c.vals.get(j)))
+                    str.BufAppend(b, envfile.Quote(c.m.val_at(j)))
                     str.BufAppend(b, "\n")
                 end
             end
@@ -383,14 +328,18 @@ end
 @fa "قالب محیط"
 @ar "تنسیق بیئة"
 pub func FormatEnv(c &: Config): str:
-    mut b := str.NewBuilder()
-    defer str.BufFree(b)
-    repeat c.keys.len() with i:
-        str.BufAppend(b, c.keys.get(i))
-        str.BufAppend(b, "=")
-        str.BufAppend(b, _format_value(c.vals.get(i)))
-        str.BufAppend(b, "\n")
-    end
-    out := str.BufStr(b)
-    ret out
+    mut d := _to_doc(c)
+    defer envfile.Free(d)
+    ret envfile.Format(d)
+end
+
+// Same as FormatEnv with an 'export ' on every line, for a file meant to
+// be sourced by a shell.
+@en "FormatEnvExport"
+@fa "قالب محیط صادراتی"
+@ar "تنسیق بیئة تصدیر"
+pub func FormatEnvExport(c &: Config): str:
+    mut d := _to_doc(c)
+    defer envfile.Free(d)
+    ret envfile.FormatExport(d)
 end

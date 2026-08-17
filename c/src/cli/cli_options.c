@@ -215,6 +215,8 @@ bool cli_parse_options(int argc, char **argv, int start, options_t *out)
                 out->fmt_check = true;
             } else if (strcmp(arg, "--fix-order") == 0) {
                 out->fmt_fix_order = true;
+            } else if (strcmp(arg, "--no-fix-order") == 0) {
+                out->fmt_fix_order = false;
             } else if (strcmp(arg, "--minify") == 0) {
                 out->fmt_minify = true;
             } else if (strcmp(arg, "-r") == 0 || strcmp(arg, "--recursive") == 0) {

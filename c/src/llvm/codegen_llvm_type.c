@@ -158,6 +158,22 @@ bool ll_is_slice_ts(const char *ts)
     return ts && !strncmp(ts, "slice<", 6);
 }
 
+bool ll_is_vec_ts(const char *ts)
+{
+    return ts && !strncmp(ts, "Vector<", 7);
+}
+
+/* Element type of a Vector<...> typestring, matching cg_vec_elem: the text
+   between the outermost angle brackets, so nested generics survive. */
+const char *ll_vec_elem_ts(ll_t *ll, const char *ts)
+{
+    if (!ts) return "i32";
+    const char *lt = strchr(ts, '<');
+    const char *gt = strrchr(ts, '>');
+    if (!lt || !gt || gt <= lt) return "i32";
+    return arena_strndup(ll->a, lt + 1, (size_t)(gt - lt - 1));
+}
+
 const char *ll_slice_elem(ll_t *ll, const char *ts)
 {
     if (!ts) return "i32";
@@ -355,7 +371,7 @@ void ll_type_layout(ll_t *ll, const char *ts, size_t *out_size, size_t *out_alig
         *out_align = p;
     } else if (!strncmp(ts, "Variant<", 8)) {
         ll_variant_layout_size(ll, ts, out_size, out_align);
-    } else if (ll_is_str(ts) || ll_is_ptr_ts(ts)) {
+    } else if (ll_is_str(ll, ts) || ll_is_ptr_ts(ts)) {
         *out_size = p;
         *out_align = p;
     } else if (ll_is_slice_ts(ts)) {
@@ -629,9 +645,9 @@ void ll_func_params(ll_t *ll, const char *ts, vec_t *out)
     }
 }
 
-const char *ll_zero(const char *ts)
+const char *ll_zero(ll_t *ll, const char *ts)
 {
-    if (ll_is_str(ts) || ll_is_ptr_ts(ts)) return "null";
+    if (ll_is_str(ll, ts) || ll_is_ptr_ts(ts)) return "null";
     if (ll_is_bool(ts)) return "false";
     if (ll_is_float(ts)) return "0.0";
     if (ll_is_int(ts)) return "0";
@@ -654,7 +670,7 @@ const char *ll_ty(ll_t *ll, const char *ts)
         ll_ensure_variant_type(ll, ts);
         return ll_variant_cname(ll, ts);
     }
-    if (ll_is_str(ts)) return "ptr";
+    if (ll_is_str(ll, ts)) return "ptr";
     if (ll_is_ptr_ts(ts)) return "ptr";
     if (ll_is_slice_ts(ts)) return "{ ptr, i64 }";
     if (strchr(ts, '['))
@@ -664,9 +680,31 @@ const char *ll_ty(ll_t *ll, const char *ts)
     if (!strcmp(ts, "f64")) return "double";
     if (ll_is_int(ts)) return ll_fmt(ll, "i%d", ll_int_bits(ll, ts));
     if (ll_struct_sym(ll, ts)) return ll_struct_ltype(ll, ts);
-    if (ll_enum_sym(ll, ts)) return "i32";
+    {
+        symbol_t *esym = ll_enum_sym(ll, ts);
+        if (esym) {
+            if (esym->enum_val_kind == TV_FLOAT) return "double";
+            /* TV_STRING already returned "ptr" above via ll_is_str. */
+            return "i32";
+        }
+    }
 
     return "ptr";
+}
+
+/* An enum with no explicit backing (or an int one) still behaves as i32
+ * everywhere in this backend; a float/string-backed one instead behaves as
+ * its backing type, per ll_ty/ll_enum_member_value above. */
+static bool ll_enum_backed_int(ll_t *ll, const char *ts)
+{
+    symbol_t *e = ll_enum_sym(ll, ts);
+    return e && e->enum_val_kind != TV_STRING && e->enum_val_kind != TV_FLOAT;
+}
+
+static bool ll_enum_backed_float(ll_t *ll, const char *ts)
+{
+    symbol_t *e = ll_enum_sym(ll, ts);
+    return e && e->enum_val_kind == TV_FLOAT;
 }
 
 const char *ll_conv(ll_t *ll, llv_t v, const char *to_ts)
@@ -677,21 +715,25 @@ const char *ll_conv(ll_t *ll, llv_t v, const char *to_ts)
     if (to_ts && !strncmp(to_ts, "dyn ", 4) && ll_struct_sym(ll, from))
         return ll_box_dyn(ll, v, to_ts + 4);
     /*
-     * An enum is an i32 everywhere else in this backend (ll_ty returns "i32"
-     * for one, and ll_int_bits falls through to 32), but ll_is_int only knows
-     * the builtin spellings - so an enum-typed operand matched none of the
-     * branches below and fell out of the bottom UNCONVERTED. `println` of a
-     * struct with an enum field then emitted
+     * An int/no-value enum is an i32 everywhere else in this backend (ll_ty
+     * returns "i32" for one, and ll_int_bits falls through to 32), but
+     * ll_is_int only knows the builtin spellings - so an enum-typed operand
+     * matched none of the branches below and fell out of the bottom
+     * UNCONVERTED. `println` of a struct with an enum field then emitted
      *   %t5 = load i32, ptr %t4
      *   %t7 = call ptr @salam_ll_i64str(i64 %t5)
      * which is not valid IR at all. The C compiler hid it by falling back to
      * the C backend for the whole file; a self-hosted compiler with
      * in-process LLVM has no such fallback and simply failed the build.
+     * A float/string-backed enum instead joins the float/string classes, so
+     * it converts (and gets compared) exactly like its backing type.
      */
-    bool fi = ll_is_int(from) || ll_enum_sym(ll, from), ff = ll_is_float(from),
-         fp = ll_is_str(from) || ll_is_ptr_ts(from);
-    bool ti = ll_is_int(to_ts) || ll_enum_sym(ll, to_ts), tf = ll_is_float(to_ts),
-         tp = ll_is_str(to_ts) || ll_is_ptr_ts(to_ts);
+    bool fi = ll_is_int(from) || ll_enum_backed_int(ll, from),
+         ff = ll_is_float(from) || ll_enum_backed_float(ll, from),
+         fp = ll_is_str(ll, from) || ll_is_ptr_ts(from);
+    bool ti = ll_is_int(to_ts) || ll_enum_backed_int(ll, to_ts),
+         tf = ll_is_float(to_ts) || ll_enum_backed_float(ll, to_ts),
+         tp = ll_is_str(ll, to_ts) || ll_is_ptr_ts(to_ts);
     const char *lf = ll_ty(ll, from), *lt = ll_ty(ll, to_ts);
     const char *r = ll_new_tmp(ll);
     if (fi && ti) {

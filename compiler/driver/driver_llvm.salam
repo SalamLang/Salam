@@ -12,127 +12,127 @@ import cc "../condcomp.salam"
 import sm "../semantic/semantic.salam"
 import lv "../llvmgen/llvmgen.salam"
 
-    func triple_is_windows(t: str): bool:
-        ret str.Contains(t, "windows") || str.Contains(t, "mingw") || str.Contains(t, "win32")
+// default_output - module + extension for the requested llvm output mode
+// when the caller didn't pass --output. triple_is_windows (driver_path.salam)
+// rather than a plain "is the triple empty" test: an empty triple means "no
+// --target=", so the target is this host, and reading it as "not Windows"
+// would cost every native Windows build its .exe - bash still execs an
+// extensionless binary, cmd.exe matches on PATHEXT and refuses to.
+func default_llvm_output(module: str, mode: int, triple: str): str:
+    win := triple_is_windows(triple)
+    msvc := str.Contains(triple, "msvc")
+    mut ext := ".ll"
+    if mode == lv.LV_OUT_ASM:
+        ext = ".s"
+    else mode == lv.LV_OUT_OBJ:
+        ext = msvc ? ".obj" : ".o"
+    else mode == lv.LV_OUT_BITCODE:
+        ext = ".bc"
+    else mode == lv.LV_OUT_EXEC:
+        ext = win ? ".exe" : ""
+    else:
+        ext = ".ll"
     end
+    ret module + ext
+end
 
-    // default_output - module + extension for the requested llvm output mode
-    // when the caller didn't pass --output.
-    func default_llvm_output(module: str, mode: int, triple: str): str:
-        win := triple_is_windows(triple)
-        msvc := str.Contains(triple, "msvc")
-        mut ext := ".ll"
-        if mode == lv.LV_OUT_ASM:
-            ext = ".s"
-        else mode == lv.LV_OUT_OBJ:
-            ext = msvc ? ".obj" : ".o"
-        else mode == lv.LV_OUT_BITCODE:
-            ext = ".bc"
-        else mode == lv.LV_OUT_EXEC:
-            ext = win ? ".exe" : ""
-        else:
-            ext = ".ll"
-        end
-        ret module + ext
+// ll_add_link (link table dedup shared by ll_scan_links). Vector<str> has
+// no cap, unlike the C's fixed SALAM_MAX_INPUTS arrays (see PORTING.md).
+func ll_add_link(links &: Vector<str>, kinds &: Vector<str>, lib: str, kind: str):
+    if str.Len(lib) == 0:
+        ret
     end
-
-    // ll_add_link (link table dedup shared by ll_scan_links). Vector<str> has
-    // no cap, unlike the C's fixed SALAM_MAX_INPUTS arrays (see PORTING.md).
-    func ll_add_link(links &: Vector<str>, kinds &: Vector<str>, lib: str, kind: str):
-        if str.Len(lib) == 0:
-            ret
-        end
-        mut seen := false
-        repeat links.len() with i:
-            if str.Equals(links.get(i), lib):
-                seen = true
-            end
-        end
-        if !seen:
-            links.push(lib)
-            kinds.push(kind)
+    mut seen := false
+    repeat links.len() with i:
+        if str.Equals(links.get(i), lib):
+            seen = true
         end
     end
+    if !seen:
+        links.push(lib)
+        kinds.push(kind)
+    end
+end
 
-    // ll_scan_links - every AST_LINK at this program's top level.
-    func ll_scan_links(a &: at.Ast, prog: int, links &: Vector<str>, kinds &: Vector<str>):
-        pn := at.Get(a, prog)
-        repeat pn.list.len() with i:
-            d := at.Get(a, pn.list.get(i))
-            if d.kind == at.AST_LINK:
-                mut lib := ""
-                if d.value_kind == tok.TV_STRING:
-                    lib = d.value_str
-                end
-                ll_add_link(links, kinds, lib, d.name)
+// ll_scan_links - every AST_LINK at this program's top level.
+func ll_scan_links(a &: at.Ast, prog: int, links &: Vector<str>, kinds &: Vector<str>):
+    pn := at.Get(a, prog)
+    repeat pn.list.len() with i:
+        d := at.Get(a, pn.list.get(i))
+        if d.kind == at.AST_LINK:
+            mut lib := ""
+            if d.value_kind == tok.TV_STRING:
+                lib = d.value_str
             end
+            ll_add_link(links, kinds, lib, d.name)
         end
     end
+end
 
-    // ll_enqueue_imports - every AST_IMPORT's resolved path, appended to `work`
-    // if not already present (dedup, same as build_impl's own work-list).
-    func ll_enqueue_imports(a &: at.Ast, prog: int, dir: str, lang: str, work &: Vector<str>):
-        pn := at.Get(a, prog)
-        repeat pn.list.len() with i:
-            d := at.Get(a, pn.list.get(i))
-            if d.kind != at.AST_IMPORT:
-                continue
-            end
-            mut ipath := d.type_str
-            if str.Len(ipath) == 0:
-                ipath = sm.ResolveImportNode(a, dir, pn.list.get(i), lang)
-            end
-            if str.Len(ipath) == 0:
-                continue
-            end
-            mut known := false
-            repeat work.len() with j:
-                if str.Equals(work.get(j), ipath):
-                    known = true
-                end
-            end
-            if !known:
-                work.push(ipath)
+// ll_enqueue_imports - every AST_IMPORT's resolved path, appended to `work`
+// if not already present (dedup, same as build_impl's own work-list).
+func ll_enqueue_imports(a &: at.Ast, prog: int, dir: str, lang: str, work &: Vector<str>):
+    pn := at.Get(a, prog)
+    repeat pn.list.len() with i:
+        d := at.Get(a, pn.list.get(i))
+        if d.kind != at.AST_IMPORT:
+            continue
+        end
+        mut ipath := d.type_str
+        if str.Len(ipath) == 0:
+            ipath = sm.ResolveImportNode(a, dir, pn.list.get(i), lang)
+        end
+        if str.Len(ipath) == 0:
+            continue
+        end
+        mut known := false
+        repeat work.len() with j:
+            if str.Equals(work.get(j), ipath):
+                known = true
             end
         end
+        if !known:
+            work.push(ipath)
+        end
     end
+end
 
-    // ll_gather_links - driver/llvm_build.c's link/import scan: the main
-    // program's own AST_LINK nodes, plus a lex/parse/prune-only (no sema) BFS
-    // over its transitive imports collecting theirs too. Feeds
-    // lv.Options.link_libs/link_kinds for the CMD_LLVM --exec/native-output
-    // path. No 256-file cap/drop-warning (see PORTING.md's Vector<str>-instead-
-    // of-fixed-array precedent) - every reachable import is scanned.
-    func ll_gather_links(
-        lgr: lg.Logger, pack: lp.Langpack, main_path: str, a &: at.Ast, main_prog: int, main_lang: str,
-        table: cc.Table, links &: Vector<str>, kinds &: Vector<str>
-    ):
-        ll_scan_links(a, main_prog, links, kinds)
-        mut work := Vector {} as Vector<str>
-        defer work.free()
-        ll_enqueue_imports(a, main_prog, dir_of(main_path), main_lang, work)
-        mut wi := 0
-        until wi < work.len():
-            path := work.get(wi)
-            mut sf := src.New()
-            if !src.Load(path, sf):
-                wi += 1
-                continue
-            end
-            lg.AddDiagSource(lgr, path, sf.text, sf.len)
-            mp := lx.Detect(sf, pack)
-            mut toks := tok.StreamNew(path)
-            _lok := lx.Run(lgr, mp, sf, toks)
-            mut aa := at.NewAst()
-            mut prog2 := 0
-            _pok := ps.Run(lgr, toks, aa, prog2)
-            tok.StreamFree(toks)
-            _ck := cc.PruneProgram(aa, lgr, path, table, prog2)
-            ll_scan_links(aa, prog2, links, kinds)
-            ll_enqueue_imports(aa, prog2, dir_of(path), lp.Code(mp), work)
-            at.FreeAst(aa)
+// ll_gather_links - driver/llvm_build.c's link/import scan: the main
+// program's own AST_LINK nodes, plus a lex/parse/prune-only (no sema) BFS
+// over its transitive imports collecting theirs too. Feeds
+// lv.Options.link_libs/link_kinds for the CMD_LLVM --exec/native-output
+// path. No 256-file cap/drop-warning (see PORTING.md's Vector<str>-instead-
+// of-fixed-array precedent) - every reachable import is scanned.
+func ll_gather_links(
+    lgr: lg.Logger, pack: lp.Langpack, main_path: str, a &: at.Ast, main_prog: int, main_lang: str,
+    table: cc.Table, links &: Vector<str>, kinds &: Vector<str>
+):
+    ll_scan_links(a, main_prog, links, kinds)
+    mut work := Vector {} as Vector<str>
+    defer work.free()
+    ll_enqueue_imports(a, main_prog, dir_of(main_path), main_lang, work)
+    mut wi := 0
+    until wi < work.len():
+        path := work.get(wi)
+        mut sf := src.New()
+        if !src.Load(path, sf):
             wi += 1
+            continue
         end
+        lg.AddDiagSource(lgr, path, sf.text, sf.len)
+        mp := lx.Detect(sf, pack)
+        mut toks := tok.StreamNew(path)
+        _lok := lx.Run(lgr, mp, sf, toks)
+        mut aa := at.NewAst()
+        mut prog2 := 0
+        _pok := ps.Run(lgr, toks, aa, prog2)
+        tok.StreamFree(toks)
+        _ck := cc.PruneProgram(aa, lgr, path, table, prog2)
+        ll_scan_links(aa, prog2, links, kinds)
+        ll_enqueue_imports(aa, prog2, dir_of(path), lp.Code(mp), work)
+        at.FreeAst(aa)
+        wi += 1
     end
+end
 
-    // ===== driver/js_build.c (stage 8b) =====
+// ===== driver/js_build.c (stage 8b) =====

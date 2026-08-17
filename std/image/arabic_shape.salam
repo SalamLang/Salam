@@ -1,0 +1,154 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package image
+
+// Arabic contextual shaping: picking each letter's isolated, initial,
+// medial or final form from the letters around it.
+//
+// This is what makes Persian and Arabic text readable rather than a row
+// of disconnected letters. It runs in LOGICAL order (before any bidi
+// reordering) because joining is a property of what a letter is written
+// next to in the language, not of where it lands on the line.
+//
+// Two passes, in the order the script requires:
+//
+//   1. Lam followed by alef is a mandatory ligature - the pair is one
+//      written shape - so it is merged into a single character first.
+//      Doing it before the form pass is what lets the ligature then take
+//      its own final form when a letter joins it from the right.
+//   2. Each letter looks at its nearest non-transparent neighbours
+//      (combining marks are skipped, since a letter joins straight
+//      through a harakat) and takes the form those neighbours allow.
+//
+// A letter joins to the letter after it only if it is dual-joining, and
+// to the letter before it only if that one is dual-joining - which is
+// why alef, dal, reh, zain, waw and their relatives break a word into
+// two joined runs.
+//
+// What this does NOT do: OpenType GSUB. Fonts express the same shaping
+// through `init`/`medi`/`fina` lookups, and a font that ships those but
+// no presentation-form codepoints (rare - Vazirmatn, Tahoma, Arial,
+// Segoe UI and Times all ship both) would come out unshaped rather than
+// wrong. Optional aesthetic ligatures and GPOS mark positioning are not
+// implemented either, so stacked harakat sit at their default place.
+
+// Index of the nearest non-transparent codepoint before `i`, or -1.
+func _shape_prev_index(cps &: Vector<int>, i: int): int:
+    mut k := i - 1
+    until k >= 0:
+        if !_arabic_transparent(cps.get(k)):
+            ret k
+        end
+        k -= 1
+    end
+    ret -1
+end
+
+func _shape_next_index(cps &: Vector<int>, i: int): int:
+    mut k := i + 1
+    until k < cps.len():
+        if !_arabic_transparent(cps.get(k)):
+            ret k
+        end
+        k += 1
+    end
+    ret -1
+end
+
+// Merges every lam + alef pair into its single ligature character.
+func _shape_merge_ligatures(src &: Vector<int>, out &: Vector<int>):
+    n := src.len()
+    mut i := 0
+    until i < n:
+        cp := src.get(i)
+        mut merged := false
+        if cp == 0x0644:
+            j := _shape_next_index(src, i)
+            if j >= 0:
+                lig := _arabic_lam_alef(cp, src.get(j))
+                if lig != 0:
+                    out.push(lig)
+                    // Any marks between the two letters follow the
+                    // ligature rather than being dropped.
+                    mut k := i + 1
+                    until k < j:
+                        out.push(src.get(k))
+                        k += 1
+                    end
+                    i = j + 1
+                    merged = true
+                end
+            end
+        end
+        if !merged:
+            out.push(cp)
+            i += 1
+        end
+    end
+end
+
+func _shape_form_at(cps &: Vector<int>, i: int): int:
+    cp := cps.get(i)
+    if _arabic_join_count(cp) == 0:
+        ret _AR_ISOLATED
+    end
+    p := _shape_prev_index(cps, i)
+    n := _shape_next_index(cps, i)
+    // A letter takes a joined form on its right side when the letter
+    // before it is dual-joining, and on its left side when it is itself
+    // dual-joining and the next letter can be joined at all.
+    joined_prev := p >= 0 && _arabic_join_count(cps.get(p)) == 2
+    joined_next := n >= 0 && _arabic_join_count(cp) == 2 && _arabic_join_count(cps.get(n)) >= 1
+    if joined_prev && joined_next: ret _AR_MEDIAL end
+    if joined_next: ret _AR_INITIAL end
+    if joined_prev: ret _AR_FINAL end
+    ret _AR_ISOLATED
+end
+
+// Shapes `src` (logical order) into `out` (logical order, presentation
+// forms). Forms are decided from the unshaped text, so the pass reads
+// `merged` and writes `out` rather than working in place.
+func _shape_arabic(src &: Vector<int>, out &: Vector<int>):
+    mut merged := Vector {} as Vector<int>
+    _shape_merge_ligatures(src, merged)
+    mut i := 0
+    until i < merged.len():
+        // Non-joining characters (Latin, digits, marks, hamza) come out
+        // of _shape_form_at as isolated, and _arabic_shaped leaves
+        // anything with no forms alone, so there is no special case for
+        // "not Arabic" here.
+        out.push(_arabic_shaped(merged.get(i), _shape_form_at(merged, i)))
+        i += 1
+    end
+    merged.free()
+end
+
+// Contextual forms applied, still in logical order - the string a
+// shaping-unaware renderer needs in order to draw joined Arabic, and the
+// half of the pipeline that has nothing to do with direction. Text with
+// no Arabic in it comes back unchanged.
+@en "ShapeArabic"
+@fa "شکل‌دهی عربی"
+@ar "تشكيل عربي"
+pub func ShapeArabic(text: str): str:
+    mut src := Vector {} as Vector<int>
+    mut out := Vector {} as Vector<int>
+    _utf8_decode_all(text, src)
+    _shape_arabic(src, out)
+    s := _utf8_encode_all(out)
+    src.free()
+    out.free()
+    ret s
+end

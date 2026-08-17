@@ -58,6 +58,20 @@ int driver_resolve_dir_layout(arena_t *arena, logger_t *log, langpack_t *pack,
  * executable is named after its directory instead. */
 const char *driver_output_stem(arena_t *a, const char *path);
 
+/* True when `triple` targets Windows. An empty or NULL triple means "no
+ * --target= was given", i.e. the target is this host. */
+bool driver_target_is_windows(const char *triple);
+
+/* Executable filename extension for `triple`: ".exe" for a Windows target
+ * (whatever the build host is), "" for every other one. */
+const char *driver_exe_suffix(const char *triple);
+
+/* `name` spelled as an executable filename for `triple`: a Windows target
+ * gets ".exe" appended unless the name already carries it, every other
+ * target keeps `name` verbatim. Applied to an explicit --output=NAME too,
+ * so a cross-build to Windows still writes something cmd.exe can launch. */
+const char *driver_exe_name(arena_t *a, const char *name, const char *triple);
+
 /* Stem for a default web/layout output name: the page file's module
  * name, except the fixed project entry file salam.salam, whose page is
  * the site's landing page - index.html, the name every web server

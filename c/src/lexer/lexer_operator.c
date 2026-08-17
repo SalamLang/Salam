@@ -99,13 +99,15 @@ void lx_scan_op(lx_t *L)
         else
             k = lx_match(L, '=') ? TK_MINUS_EQ : TK_MINUS;
         break;
+    /*
+     * '*' is multiplication and the pointer suffix, nothing else. Power used
+     * to be '**', which made `Edge**` unspellable: the lexer folded the stars
+     * into one token before the parser could see a type. Power now spells
+     * '^^' (as in D, which faced the same clash), so a run of stars is always
+     * just stars.
+     */
     case '*':
-        if (lx_match(L, '*'))
-            k = lx_match(L, '=') ? TK_POWER_EQ : TK_POWER;
-        else if (lx_match(L, '='))
-            k = TK_STAR_EQ;
-        else
-            k = TK_STAR;
+        k = lx_match(L, '=') ? TK_STAR_EQ : TK_STAR;
         break;
     case '/':
         k = lx_match(L, '=') ? TK_SLASH_EQ : TK_SLASH;
@@ -148,8 +150,12 @@ void lx_scan_op(lx_t *L)
         else
             k = lx_match(L, '=') ? TK_PIPE_EQ : TK_PIPE;
         break;
+    /* '^' stays bitwise XOR, as in C; doubled it is power. */
     case '^':
-        k = lx_match(L, '=') ? TK_CARET_EQ : TK_CARET;
+        if (lx_match(L, '^'))
+            k = lx_match(L, '=') ? TK_POWER_EQ : TK_POWER;
+        else
+            k = lx_match(L, '=') ? TK_CARET_EQ : TK_CARET;
         break;
     case '~':
         k = TK_TILDE;

@@ -884,6 +884,8 @@ func sema_check_block(s &: Sema, a &: at.Ast, block: int):
         v := sym_at(s, scv.symbols.get(si))
         if s.relax_unused:
             _skip := 0
+        else at.NameIsErr(v.name):
+            _skip0 := 0 // name unreadable, already reported by the parser
         else check_unused_loop_bind(s, a, v):
             _skip2 := 0 // reported (or excused) as a loop binding
         else v.kind == SYM_VAR && !v.used && v.decl != 0 && str.Len(v.name) > 0 && byte_at(v.name, 0) != 95:
@@ -911,12 +913,16 @@ end
 func sema_check_var_decl(s &: Sema, a &: at.Ast, nid: int): int:
     sp := span_of(a, nid)
     mut n := at.Get(a, nid)
+    mut cast_sugar := false
+    mut cast_span := sp
     if n.ty == 0 && n.a != 0 && at.KindOf(a, n.a) == at.AST_CAST:
         cv := at.Get(a, n.a)
         ck := at.KindOf(a, cv.a)
         if cv.ty != 0 && (
             ck == at.AST_ARRAY_LIT || ck == at.AST_STRUCT_LIT || ck == at.AST_LITERAL
         ):
+            cast_sugar = true
+            cast_span = span_of(a, n.a)
             n.ty = cv.ty
             n.a = cv.a
             at.Put(a, nid, n)
@@ -964,6 +970,13 @@ func sema_check_var_decl(s &: Sema, a &: at.Ast, nid: int): int:
     mut initt := TYPE_NONE
     if n.a != 0:
         initt = sema_check_expr(s, a, n.a)
+    end
+    if cast_sugar && declared >= 0 && initt >= 0 && !type_is_error(s, initt) && !s.in_derive && type_equiv(s, declared, initt) && !sema_cast_target_is_context_dependent(s, a, n.a, declared):
+        serr(
+            s, 93, cast_span, co.Format1(
+                i18.Tr("useless cast: this expression already has type '%s'"), co.ArgStr(type_to_string(s, declared))
+            )
+        )
     end
     mut t := TYPE_NONE
     if declared >= 0 && initt >= 0:

@@ -35,7 +35,8 @@ static void logger_write_timestamp(FILE *sink)
 }
 
 static void logger_emit_rich(logger_t *lg, log_level_t level, const char *file,
-                             const src_span_t *span, const char *fmt, va_list ap)
+                             const src_span_t *span, const char *help, const char *fmt,
+                             va_list ap)
 {
     char msg_buf[640];
     sal_vsnprintf(msg_buf, sizeof(msg_buf), fmt, ap);
@@ -65,12 +66,12 @@ static void logger_emit_rich(logger_t *lg, log_level_t level, const char *file,
         }
     }
     diag_render(lg->sink, diag_level, code, is_error, file, span, use_text, use_len, body,
-                NULL, lg->diag_style, lg->diag_format, lg->color);
+                help, lg->diag_style, lg->diag_format, lg->color);
 }
 
 static void logger_emit_plain(logger_t *lg, phase_t phase, log_level_t level,
-                              const char *file, const src_span_t *span, const char *fmt,
-                              va_list ap)
+                              const char *file, const src_span_t *span, const char *help,
+                              const char *fmt, va_list ap)
 {
     if (lg->timestamps) logger_write_timestamp(lg->sink);
     if (lg->color) {
@@ -86,6 +87,18 @@ static void logger_emit_plain(logger_t *lg, phase_t phase, log_level_t level,
         fprintf(lg->sink, " (%s:%u:%u)", file, span->begin.line, span->begin.col);
     }
     fputc('\n', lg->sink);
+    if (help) fprintf(lg->sink, "  %s: %s\n", i18n_tr("help"), help);
+}
+
+static void logger_dispatch(logger_t *lg, phase_t phase, log_level_t level,
+                            const char *file, const src_span_t *span, const char *help,
+                            const char *fmt, va_list ap)
+{
+    if (lg->diag_rich && file && span && (level == LOG_ERROR || level == LOG_WARN)) {
+        logger_emit_rich(lg, level, file, span, help, fmt, ap);
+    } else {
+        logger_emit_plain(lg, phase, level, file, span, help, fmt, ap);
+    }
 }
 
 void logger_log(logger_t *lg, phase_t phase, log_level_t level, const char *file,
@@ -94,10 +107,16 @@ void logger_log(logger_t *lg, phase_t phase, log_level_t level, const char *file
     if (level < lg->min_level || lg->min_level == LOG_OFF) return;
     va_list ap;
     va_start(ap, fmt);
-    if (lg->diag_rich && file && span && (level == LOG_ERROR || level == LOG_WARN)) {
-        logger_emit_rich(lg, level, file, span, fmt, ap);
-    } else {
-        logger_emit_plain(lg, phase, level, file, span, fmt, ap);
-    }
+    logger_dispatch(lg, phase, level, file, span, NULL, fmt, ap);
+    va_end(ap);
+}
+
+void logger_log_help(logger_t *lg, phase_t phase, log_level_t level, const char *file,
+                     const src_span_t *span, const char *help, const char *fmt, ...)
+{
+    if (level < lg->min_level || lg->min_level == LOG_OFF) return;
+    va_list ap;
+    va_start(ap, fmt);
+    logger_dispatch(lg, phase, level, file, span, help, fmt, ap);
     va_end(ap);
 }

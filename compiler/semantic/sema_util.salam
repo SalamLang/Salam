@@ -288,6 +288,77 @@ func local_canon(s &: Sema, a &: at.Ast, name: str, sp: co.SrcSpan): str:
     ret scope_member_canon(s, a, s.global, name, sp)
 end
 
+// sema_lookup_iface - resolve an interface named either bare ("Shape") or
+// qualified ("db.Connection"), which is what `dyn ...`, a type-parameter
+// bound and `impl ... on ...` each need. A qualified name has to go through
+// the package's member scope so the @en/@fa/@ar spellings canonicalize, and
+// it must be `pub` to be nameable from outside - the same two rules
+// sema_resolve_type applies to a qualified struct.
+//
+// Returns 0 when the name does not resolve to an interface; `why` is then
+// set to a caller-independent reason, so each caller can keep its own
+// wording ("required after 'dyn'", "bound on type parameter 'T'", ...).
+func sema_lookup_iface(s &: Sema, a &: at.Ast, name: str, sp: co.SrcSpan, why &: str): int:
+    why = ""
+    if str.Len(name) == 0:
+        ret 0
+    end
+    dot := str.IndexOf(name, ".")
+    if dot < 0:
+        mut sym := scope_lookup(s, s.cur, name)
+        if sym == 0:
+            sym = scope_lookup(s, s.global, name)
+        end
+        if sym != 0 && sym_at(s, sym).kind == SYM_INTERFACE:
+            ret sym
+        end
+        // Also the canonical "pkg_Iface" spelling. A `dyn` type is named
+        // after its interface's package (sema_resolve_type), so the
+        // interface bound that a dyn slot checks a concrete value against
+        // arrives in that form, with no package symbol in scope to split on.
+        mut p := 0
+        until p < PackageCount(s):
+            pk := PackageAt(s, p)
+            pkv := sym_at(s, pk)
+            if pkv.kind == SYM_PACKAGE && pkv.members != 0:
+                syms := scope_at(s, pkv.members).symbols
+                mut i := 0
+                until i < syms.len():
+                    m := sym_at(s, syms.get(i))
+                    if m.kind == SYM_INTERFACE && str.Len(m.name) > 0 && str.Len(m.pkgname) > 0:
+                        if str.Equals(m.pkgname + "_" + m.name, name):
+                            ret syms.get(i)
+                        end
+                    end
+                    i += 1
+                end
+            end
+            p += 1
+        end
+        ret 0
+    end
+    pname := str.Substr(name, 0, dot)
+    tname := str.Substr(name, dot + 1, str.Len(name) - dot - 1)
+    mut pk2 := scope_lookup(s, s.cur, pname)
+    if pk2 == 0:
+        pk2 = scope_lookup(s, s.global, pname)
+    end
+    if pk2 == 0 || sym_at(s, pk2).kind != SYM_PACKAGE:
+        why = "unknown package"
+        ret 0
+    end
+    mname := pkg_member_canon(s, a, pk2, tname, sp)
+    sym2 := scope_lookup_local(s, sym_at(s, pk2).members, mname)
+    if sym2 == 0 || sym_at(s, sym2).kind != SYM_INTERFACE:
+        ret 0
+    end
+    if !sym_at(s, sym2).is_pub:
+        why = "not exported (mark it 'pub')"
+        ret 0
+    end
+    ret sym2
+end
+
 // sema_check_shadows_func - a variable, parameter or constant may not reuse a
 // function's name. Since a bare function name is now a value (its address), a
 // local of the same name would silently take the name over for the rest of its
@@ -332,4 +403,21 @@ func sema_pure_fn(s &: Sema, a &: at.Ast): int:
         end
     end
     ret 0
+end
+
+// sema_use_decl_file: the files of a multi-file package are parsed separately
+// and merged into a single program, so a top-level node's line number only
+// makes sense against the file it was parsed from. Following that file here is
+// what keeps a sibling file's diagnostics from being reported against the
+// package's anchor file, where they would quote an unrelated source line.
+// Returns the previous file for the caller to restore.
+func sema_use_decl_file(s &: Sema, a &: at.Ast, did: int): str:
+    save := s.file
+    if did != 0:
+        f := at.Get(a, did).src_file
+        if str.Len(f) > 0:
+            s.file = f
+        end
+    end
+    ret save
 end

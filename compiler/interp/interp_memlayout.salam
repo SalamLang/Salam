@@ -1,0 +1,461 @@
+package interp
+
+import str
+import at "../ast.salam"
+
+// Port of c/src/interp/interp_memlayout.c - raw memory <-> interpreter values.
+//
+// The tree walker runs std's own Salam containers, so a Vector<T> really does
+// allocate `count * sizeof(T)` bytes and index them. For a scalar T that is a
+// plain typed load. For a struct T the bytes have to hold the fields
+// themselves, laid out exactly the way interp_sizeof_typename measures them:
+// the stride the Salam code computes and the stride the walker reads are the
+// same number, so one layout has to answer both.
+//
+// A value with no byte image at all (an array, a closure, an iterator) is kept
+// in ip.mem_boxes and referenced from the slot by a tagged token, never by a
+// pointer: an uninitialized slot then reads back as null instead of following
+// whatever the allocator left there.
+
+const SLOT_I8 := 0
+const SLOT_I16 := 1
+const SLOT_I32 := 2
+const SLOT_I64 := 3
+const SLOT_U8 := 4
+const SLOT_U16 := 5
+const SLOT_U32 := 6
+const SLOT_U64 := 7
+const SLOT_F32 := 8
+const SLOT_F64 := 9
+const SLOT_BOOL := 10
+const SLOT_CHAR := 11
+const SLOT_STR := 12
+const SLOT_PTR := 13
+const SLOT_STRUCT := 14
+const SLOT_BOX := 15
+
+// Tag in the top 16 bits of a box token, so a slot holding anything else
+// (zero, a small integer, a stale pointer) fails the check and reads null.
+const MEM_BOX_TAG := 21314 as i64 // 0x5342
+const MEM_BOX_SHIFT := 48
+
+func field_type_str(a &: at.Ast, f: int): str:
+    fn := at.Get(a, f)
+    if fn.ty == 0:
+        ret ""
+    end
+    ret at.Get(a, fn.ty).type_str
+end
+
+// slot_kind - one classifier behind sizeof, alignof, load and store, so the
+// four can never disagree about a type's byte image.
+func slot_kind(ip &: Interp, ts: str): int:
+    n := str.Len(ts)
+    if n == 0:
+        ret SLOT_BOX
+    end
+    if byte_at(ts, n - 1) == 42:
+        ret SLOT_PTR
+    end
+    if str.Equals(ts, "i8"):
+        ret SLOT_I8
+    end
+    if str.Equals(ts, "i16"):
+        ret SLOT_I16
+    end
+    if str.Equals(ts, "i32"):
+        ret SLOT_I32
+    end
+    if str.Equals(ts, "i64"):
+        ret SLOT_I64
+    end
+    if str.Equals(ts, "u8"):
+        ret SLOT_U8
+    end
+    if str.Equals(ts, "u16"):
+        ret SLOT_U16
+    end
+    if str.Equals(ts, "u32"):
+        ret SLOT_U32
+    end
+    if str.Equals(ts, "u64"):
+        ret SLOT_U64
+    end
+    if str.Equals(ts, "f32"):
+        ret SLOT_F32
+    end
+    if str.Equals(ts, "f64"):
+        ret SLOT_F64
+    end
+    if str.Equals(ts, "bool"):
+        ret SLOT_BOOL
+    end
+    if str.Equals(ts, "char"):
+        ret SLOT_CHAR
+    end
+    if str.Equals(ts, "str"):
+        ret SLOT_STR
+    end
+    if find_struct(ip, ts) != 0:
+        ret SLOT_STRUCT
+    end
+    ret SLOT_BOX
+end
+
+func slot_align(k: int): i64:
+    if k == SLOT_I8 || k == SLOT_U8 || k == SLOT_BOOL || k == SLOT_CHAR:
+        ret 1 as i64
+    end
+    if k == SLOT_I16 || k == SLOT_U16:
+        ret 2 as i64
+    end
+    if k == SLOT_I32 || k == SLOT_U32 || k == SLOT_F32:
+        ret 4 as i64
+    end
+    ret 8 as i64
+end
+
+func interp_alignof_typename(ip &: Interp, a &: at.Ast, ts: str): i64:
+    k := slot_kind(ip, ts)
+    if k != SLOT_STRUCT:
+        ret slot_align(k)
+    end
+    sd := find_struct(ip, ts)
+    mut maxalign := 1 as i64
+    repeat at.ChildCount(a, sd) with i:
+        f := at.Child(a, sd, i)
+        if at.KindOf(a, f) == at.AST_FIELD:
+            al := interp_alignof_typename(ip, a, field_type_str(a, f))
+            if al > maxalign:
+                maxalign = al
+            end
+        end
+    end
+    ret maxalign
+end
+
+// Round `off` up to where a field of type `ts` starts, so every walk over a
+// struct's bytes advances identically.
+func field_offset(ip &: Interp, a &: at.Ast, ts: str, off: i64): i64:
+    al := interp_alignof_typename(ip, a, ts)
+    ret (off + al - (1 as i64)) & (~(al - (1 as i64)))
+end
+
+func struct_size(ip &: Interp, a &: at.Ast, sd: int): i64:
+    mut off := 0 as i64
+    mut maxalign := 1 as i64
+    repeat at.ChildCount(a, sd) with i:
+        f := at.Child(a, sd, i)
+        if at.KindOf(a, f) == at.AST_FIELD:
+            fts := field_type_str(a, f)
+            al := interp_alignof_typename(ip, a, fts)
+            off = field_offset(ip, a, fts, off)
+            off += interp_sizeof_typename(ip, a, fts)
+            if al > maxalign:
+                maxalign = al
+            end
+        end
+    end
+    off = (off + maxalign - (1 as i64)) & (~(maxalign - (1 as i64)))
+    ret off != (0 as i64) ? off : (8 as i64)
+end
+
+func interp_sizeof_typename(ip &: Interp, a &: at.Ast, ts: str): i64:
+    k := slot_kind(ip, ts)
+    // Every slot the walker stores directly is as wide as it is aligned; only
+    // a struct has to be measured field by field.
+    if k == SLOT_STRUCT:
+        ret struct_size(ip, a, find_struct(ip, ts))
+    end
+    ret slot_align(k)
+end
+
+func count_fields(a &: at.Ast, sd: int): int:
+    mut n := 0
+    repeat at.ChildCount(a, sd) with i:
+        if at.KindOf(a, at.Child(a, sd, i)) == at.AST_FIELD:
+            n += 1
+        end
+    end
+    ret n
+end
+
+func box_write(ip &: Interp, v: Value): i64:
+    ip.mem_boxes.push(v)
+    ret (MEM_BOX_TAG << MEM_BOX_SHIFT) | (ip.mem_boxes.len() as i64)
+end
+
+func box_read(ip &: Interp, tok: i64): Value:
+    idx := tok & (0xFFFFFFFFFFFF as i64)
+    if (tok >> MEM_BOX_SHIFT) != MEM_BOX_TAG:
+        ret val_null()
+    end
+    if idx == (0 as i64) || idx > (ip.mem_boxes.len() as i64):
+        ret val_null()
+    end
+    ret ip.mem_boxes.get((idx as int) - 1)
+end
+
+func struct_load(ip &: Interp, a &: at.Ast, base: i64, sd: int): Value:
+    sdn := at.Get(a, sd)
+    sv := mk_struct(ip, sdn.name, sd, count_fields(a, sd))
+    mut off := 0 as i64
+    mut fi := 0
+    repeat at.ChildCount(a, sd) with i:
+        f := at.Child(a, sd, i)
+        if at.KindOf(a, f) == at.AST_FIELD:
+            fts := field_type_str(a, f)
+            off = field_offset(ip, a, fts, off)
+            fv := interp_mem_load(ip, a, base + off, fts)
+            st_field_set(ip, sv.id, fi, at.Get(a, f).name, fv)
+            off += interp_sizeof_typename(ip, a, fts)
+            fi += 1
+        end
+    end
+    ret sv
+end
+
+func field_of(ip &: Interp, v: Value, name: str): Value:
+    if v.kind != VAL_STRUCT:
+        ret val_null()
+    end
+    i := st_find_field(ip, v.id, name)
+    if i < 0:
+        ret val_null()
+    end
+    ret ip.sts.get(v.id).fvals.get(i)
+end
+
+func struct_store(ip &: Interp, a &: at.Ast, base: i64, sd: int, v: Value):
+    mut off := 0 as i64
+    repeat at.ChildCount(a, sd) with i:
+        f := at.Child(a, sd, i)
+        if at.KindOf(a, f) == at.AST_FIELD:
+            fts := field_type_str(a, f)
+            off = field_offset(ip, a, fts, off)
+            // A field the source value does not carry - a null assignment, or
+            // a value of a different shape - is written as its zero rather
+            // than left holding whatever the allocator handed back.
+            fv := field_of(ip, v, at.Get(a, f).name)
+            interp_mem_store(ip, a, base + off, fts, fv)
+            off += interp_sizeof_typename(ip, a, fts)
+        end
+    end
+end
+
+func interp_mem_load(ip &: Interp, a &: at.Ast, addr: i64, ts: str): Value:
+    k := slot_kind(ip, ts)
+    if k == SLOT_STRUCT:
+        ret struct_load(ip, a, addr, find_struct(ip, ts))
+    end
+    if k == SLOT_BOOL:
+        pb := addr as u8*
+        ret val_bool(pb[0] != (0 as u8))
+    end
+    if k == SLOT_CHAR:
+        pc := addr as u8*
+        ret val_char(pc[0] as i64)
+    end
+    if k == SLOT_PTR:
+        pp := addr as i64*
+        ret interp_ptr_value(ip, pp[0], ts)
+    end
+    if k == SLOT_BOX:
+        pk := addr as i64*
+        ret box_read(ip, pk[0])
+    end
+    ret ptr_load(addr, mem_ptr_elem(k), 0 as i64)
+end
+
+func interp_mem_store(ip &: Interp, a &: at.Ast, addr: i64, ts: str, v: Value):
+    k := slot_kind(ip, ts)
+    if k == SLOT_STRUCT:
+        struct_store(ip, a, addr, find_struct(ip, ts), v)
+        ret
+    end
+    if k == SLOT_BOOL:
+        pb := addr as u8*
+        pb[0] = to_bool(v) ? (1 as u8) : (0 as u8)
+        ret
+    end
+    if k == SLOT_CHAR:
+        pc := addr as u8*
+        pc[0] = to_int(v) as u8
+        ret
+    end
+    if k == SLOT_PTR:
+        pp := addr as i64*
+        pp[0] = v.kind == VAL_PTR ? v.pa : to_int(v)
+        ret
+    end
+    if k == SLOT_BOX:
+        pk := addr as i64*
+        pk[0] = box_write(ip, v)
+        ret
+    end
+    ptr_store(addr, mem_ptr_elem(k), 0 as i64, v)
+end
+
+// The PTR_* kind that reads and writes a scalar slot the same way.
+func mem_ptr_elem(k: int): int:
+    if k == SLOT_I8:
+        ret PTR_I8
+    end
+    if k == SLOT_I16:
+        ret PTR_I16
+    end
+    if k == SLOT_I32:
+        ret PTR_I32
+    end
+    if k == SLOT_I64:
+        ret PTR_I64
+    end
+    if k == SLOT_U8:
+        ret PTR_U8
+    end
+    if k == SLOT_U16:
+        ret PTR_U16
+    end
+    if k == SLOT_U32:
+        ret PTR_U32
+    end
+    if k == SLOT_U64:
+        ret PTR_U64
+    end
+    if k == SLOT_F32:
+        ret PTR_F32
+    end
+    if k == SLOT_F64:
+        ret PTR_F64
+    end
+    if k == SLOT_STR:
+        ret PTR_STR
+    end
+    ret PTR_OPAQUE
+end
+
+// Count the trailing '*'s of a type string. `Tag*` points at a struct the
+// walker can lay out; `Tag**` points at a pointer, which is one opaque word.
+func star_count(ts: str): int:
+    mut n := str.Len(ts)
+    mut stars := 0
+    until n > 0 && byte_at(ts, n - 1) == 42:
+        stars += 1
+        n -= 1
+    end
+    ret stars
+end
+
+// A VAL_PTR for `addr`, given the pointer type it was cast to. PTR_STRUCT
+// carries the pointee's name in `s`, which VAL_PTR does not otherwise use.
+func interp_ptr_value(ip &: Interp, addr: i64, ts: str): Value:
+    elem := ptr_elem_from_typestr(ts)
+    if elem != PTR_OPAQUE || star_count(ts) != 1:
+        ret val_ptr(addr, elem)
+    end
+    pointee := str.TrimRight(str.Substr(ts, 0, str.Len(ts) - 1))
+    if str.Len(pointee) == 0 || find_struct(ip, pointee) == 0:
+        ret val_ptr(addr, elem)
+    end
+    mut v := val_ptr(addr, PTR_STRUCT)
+    v.s = pointee
+    ret v
+end
+
+func interp_ptr_elem_addr(ip &: Interp, a &: at.Ast, pv: Value, idx: i64): i64:
+    ret pv.pa + idx * interp_sizeof_typename(ip, a, pv.s)
+end
+
+// ptr_load / ptr_store with a struct element type folded in; the scalar kinds
+// go straight through to the FFI-level pair in interp_valops.salam.
+func mem_ptr_load(ip &: Interp, a &: at.Ast, pv: Value, idx: i64): Value:
+    if pv.pe == PTR_STRUCT:
+        ret interp_mem_load(ip, a, interp_ptr_elem_addr(ip, a, pv, idx), pv.s)
+    end
+    ret ptr_load(pv.pa, pv.pe, idx)
+end
+
+func mem_ptr_store(ip &: Interp, a &: at.Ast, pv: Value, idx: i64, v: Value):
+    if pv.pe == PTR_STRUCT:
+        interp_mem_store(ip, a, interp_ptr_elem_addr(ip, a, pv, idx), pv.s, v)
+        ret
+    end
+    ptr_store(pv.pa, pv.pe, idx, v)
+end
+
+func field_place(
+    ip &: Interp, a &: at.Ast, base: i64, sd: int, name: str, addr &: i64, ts &: str
+): bool:
+    mut off := 0 as i64
+    repeat at.ChildCount(a, sd) with i:
+        f := at.Child(a, sd, i)
+        if at.KindOf(a, f) == at.AST_FIELD:
+            fts := field_type_str(a, f)
+            off = field_offset(ip, a, fts, off)
+            if str.Equals(at.Get(a, f).name, name):
+                addr = base + off
+                ts = fts
+                ret true
+            end
+            off += interp_sizeof_typename(ip, a, fts)
+        end
+    end
+    ret false
+end
+
+// interp_mem_ptr_field (interp_memlayout.c) - address and type of field
+// `name` inside the struct `v` points at. This is what lets `p.f` read
+// through a pointer without the longhand `p[0].f`; a heap-node walk like
+// `root.key` is the shape that needs it.
+func interp_mem_ptr_field(
+    ip &: Interp, a &: at.Ast, v: Value, name: str, addr &: i64, ts &: str
+): bool:
+    if v.kind != VAL_PTR || v.pe != PTR_STRUCT || v.pa == (0 as i64):
+        ret false
+    end
+    if slot_kind(ip, v.s) != SLOT_STRUCT:
+        ret false
+    end
+    ret field_place(ip, a, v.pa, find_struct(ip, v.s), name, addr, ts)
+end
+
+// True when `n` names a place inside real memory: `p[i]` through a pointer to
+// a struct, and any field chain below it. Assigning to one of those has to
+// reach the bytes, because the value a load produced is a copy - a write to
+// `v.ref(i)[0].name` would otherwise land in the copy and be lost with no
+// diagnostic.
+//
+// Returning false costs the caller one repeated evaluation of the indexed
+// expression, which is why only a chain rooted in an index is ever offered
+// here (see interp_resolve_loc).
+func interp_mem_lvalue(
+    ip &: Interp, a &: at.Ast, env: int, n: int, addr &: i64, ts &: str
+): bool:
+    k := at.KindOf(a, n)
+    node := at.Get(a, n)
+    if k == at.AST_INDEX:
+        base := eval(ip, a, env, node.a)
+        if ip.failed || base.kind != VAL_PTR || base.pe != PTR_STRUCT || base.pa == (0 as i64):
+            ret false
+        end
+        iv := eval(ip, a, env, node.b)
+        if ip.failed:
+            ret false
+        end
+        addr = interp_ptr_elem_addr(ip, a, base, to_int(iv))
+        ts = base.s
+        ret true
+    end
+    if k == at.AST_MEMBER:
+        mut baddr := 0 as i64
+        mut bts := ""
+        if interp_mem_lvalue(ip, a, env, node.a, baddr, bts) == false:
+            ret false
+        end
+        if slot_kind(ip, bts) != SLOT_STRUCT:
+            ret false
+        end
+        ret field_place(ip, a, baddr, find_struct(ip, bts), node.name, addr, ts)
+    end
+    ret false
+end

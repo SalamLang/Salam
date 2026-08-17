@@ -36,15 +36,14 @@ static const char *plural_suffix(int n)
     return n == 1 ? "" : "s";
 }
 
-static bool triple_is_windows(const char *t)
-{
-    return t && (strstr(t, "windows") || strstr(t, "mingw") || strstr(t, "win32"));
-}
-
 static const char *default_output(arena_t *a, const char *module, llvm_output_mode_t m,
                                   const char *triple)
 {
-    bool win = triple_is_windows(triple);
+    /* driver_target_is_windows(), not a plain "is the triple empty" test:
+       an empty triple means "no --target=", so it is this host, and reading
+       it as "not Windows" would cost every native Windows build its .exe -
+       bash still execs an extensionless binary, cmd.exe refuses to. */
+    bool win = driver_target_is_windows(triple);
     bool msvc = triple && strstr(triple, "msvc");
     const char *ext = ".ll";
     switch (m) {
@@ -339,6 +338,13 @@ int driver_llvm(options_t *opt)
                             ? opt->output
                             : default_output(arena, driver_output_stem(arena, opt->input),
                                              o.output_mode, opt->llvm_target);
+        /* A caller-named executable still has to be launchable on the
+           target: `--target=x86_64-w64-windows-gnu -o hello` writes
+           hello.exe from a Linux host, while a non-Windows target keeps the
+           name exactly as typed. Executables only - an -o for .o/.ll/.s
+           names that artifact and nothing is appended to it. */
+        if (opt->output && o.output_mode == LLVM_OUT_EXEC)
+            o.output_file = driver_exe_name(arena, o.output_file, opt->llvm_target);
         rc = salam_llvm_toolchain(log, llpath, &o);
         if (!opt->keep_c) remove(llpath);
         if (rc == 0) {

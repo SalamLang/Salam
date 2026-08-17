@@ -79,7 +79,16 @@ struct symbol_t {
     ast_node_t *decl;
     vec_t overloads;
     scope_t *members;
+    /*
+     * enum_val_kind is TV_INT/TV_FLOAT/TV_STRING (never TV_NONE/TV_CHAR/
+     * TV_BOOL). On a SYM_ENUM_MEMBER it's that member's value; on the
+     * SYM_ENUM itself it's the whole enum's backing kind (every member
+     * agrees, enforced at declaration time), defaulting to TV_INT.
+     */
+    token_value_kind_t enum_val_kind;
     long long enum_value;
+    double enum_value_f;
+    const char *enum_value_str;
     bool has_ival;
     long long ival;
     const char *pkgname;

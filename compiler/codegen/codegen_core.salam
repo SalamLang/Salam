@@ -48,6 +48,46 @@ func emit_private_protos(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
     out(g, "\n")
 end
 
+// A global whose initialiser is not a constant is emitted as a plain
+// definition plus a separate assignment, because C only accepts a constant
+// expression there. Those assignments used to be replayed at the top of `main`
+// and nowhere else, which meant they ran for the main module only: a
+// `mut g_cat := catalog.New()` in an imported package stayed zeroed, and the
+// first read of it failed a long way from the cause ("Vector.get: index out of
+// bounds") with nothing to say the initialiser had never run.
+//
+// Every module gets one of these instead, and runs its imports' first, so the
+// graph comes up bottom-up before main's body starts. The flag is set before
+// the recursion, not after, so an import cycle terminates rather than
+// recursing forever - the same trade C++ makes for static initialisation.
+func emit_module_init(g &: Cg, _s &: sm.Sema, a &: at.Ast, program: int):
+    out(g, "void " + cg_module_init_name(g.module) + "(void) {\n")
+    out(g, "    static int __salam_init_done = 0;\n")
+    out(g, "    if (__salam_init_done) return;\n")
+    out(g, "    __salam_init_done = 1;\n")
+    // std/core is every module's dependency without appearing in anyone's
+    // import list - the header includes its header on the same terms.
+    if !str.Equals(g.module, "core"):
+        out(g, "    " + cg_module_init_name("core") + "();\n")
+    end
+    prog := at.Get(a, program)
+    repeat prog.list.len() with i:
+        did := prog.list.get(i)
+        if at.KindOf(a, did) != at.AST_IMPORT:
+            continue
+        end
+        basev := cg_import_module(a, did)
+        if str.Len(basev) == 0:
+            continue
+        end
+        out(g, "    " + cg_module_init_name(basev) + "();\n")
+    end
+    repeat g.deferred.len() with j:
+        out(g, "    " + g.deferred.get(j) + "\n")
+    end
+    out(g, "}\n\n")
+end
+
 func emit_globals(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
     prog := at.Get(a, program)
     repeat prog.list.len() with i:
@@ -77,7 +117,10 @@ func emit_globals(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
             // never alias, so they keep the qualifier (and .rodata).
             // codegen_header's extern declaration must agree, or the
             // definition and the declaration conflict.
-            want_const := d.kind == at.AST_CONST_DECL && !is_array
+            // A function value is excluded for the same reason an array is:
+            // it lowers to the closure environment pointer, which a callee
+            // takes as a plain `void*`.
+            want_const := d.kind == at.AST_CONST_DECL && !is_array && !type_is_callable(ts)
             gct_const := want_const && str.StartsWith(cg_ctype(ts), "const ")
             pfx := (want_const && !gct_const) ? "const " : ""
             if d.a != 0:
@@ -230,6 +273,40 @@ func inl_body_exportable(
     ret true
 end
 
+// A `pub inline` body is copied into the header, so it may only name things
+// every includer can also see. One that reaches for a module-private symbol
+// loses the inline rather than the compile.
+func demote_if_nonexportable(g &: Cg, s &: sm.Sema, a &: at.Ast, fid: int):
+    f := at.Get(a, fid)
+    mut names := Vector {} as Vector<str>
+    inl_collect_locals(a, names, fid)
+    if !inl_body_exportable(s, a, names, f.a):
+        mut fn2 := at.Get(a, fid)
+        fn2.is_inline = false
+        at.Put(a, fid, fn2)
+        lg.Log(
+            g.log, lg.PH_CODEGEN, lg.LOG_INFO, "inline '" + f.name + "' uses module-private symbols; " + "emitting it as a regular function"
+        )
+    end
+    names.free()
+end
+
+// Methods of a generic struct are already emitted `static inline` once per
+// instantiation, so `inline` on them is a no-op rather than a header export.
+func demote_struct_inlines(g &: Cg, s &: sm.Sema, a &: at.Ast, did: int):
+    d := at.Get(a, did)
+    if d.typarams.len() > 0 || d.synthetic:
+        ret
+    end
+    repeat d.list.len() with j:
+        mid := d.list.get(j)
+        m := at.Get(a, mid)
+        if m.kind == at.AST_FUNC_DEF && m.is_inline && m.is_pub && !m.is_extern:
+            demote_if_nonexportable(g, s, a, mid)
+        end
+    end
+end
+
 func demote_nonexportable_inlines(
     g &: Cg, s &: sm.Sema, a &: at.Ast, program: int
 ):
@@ -237,6 +314,10 @@ func demote_nonexportable_inlines(
     repeat prog.list.len() with i:
         did := prog.list.get(i)
         d := at.Get(a, did)
+        if d.kind == at.AST_STRUCT_DEF:
+            demote_struct_inlines(g, s, a, did)
+            continue
+        end
         if d.kind != at.AST_FUNC_DEF || !d.is_inline:
             continue
         end
@@ -252,17 +333,29 @@ func demote_nonexportable_inlines(
         if !d.is_pub:
             continue
         end
-        mut names := Vector {} as Vector<str>
-        inl_collect_locals(a, names, did)
-        if !inl_body_exportable(s, a, names, d.a):
-            mut dn2 := at.Get(a, did)
-            dn2.is_inline = false
-            at.Put(a, did, dn2)
-            lg.Log(
-                g.log, lg.PH_CODEGEN, lg.LOG_INFO, "inline '" + d.name + "' uses module-private symbols; " + "emitting it as a regular function"
-            )
+        demote_if_nonexportable(g, s, a, did)
+    end
+end
+
+func is_header_inline(a &: at.Ast, fid: int): bool:
+    f := at.Get(a, fid)
+    ret f.kind == at.AST_FUNC_DEF && f.is_inline && f.is_pub && !f.is_extern && f.typarams.len() == 0 && !f.synthetic && f.a != 0
+end
+
+func emit_struct_inline_bodies(g &: Cg, s &: sm.Sema, a &: at.Ast, did: int):
+    d := at.Get(a, did)
+    if d.typarams.len() > 0 || d.synthetic:
+        ret
+    end
+    ssym := sm.LookupLocal(s, s.global, d.name)
+    if ssym == 0:
+        ret
+    end
+    repeat d.list.len() with j:
+        mid := d.list.get(j)
+        if is_header_inline(a, mid):
+            cg_function(g, s, a, mid, ssym)
         end
-        names.free()
     end
 end
 
@@ -273,13 +366,13 @@ func emit_inline_header(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
     repeat prog.list.len() with i:
         did := prog.list.get(i)
         d := at.Get(a, did)
-        if d.kind != at.AST_FUNC_DEF || !d.is_inline || !d.is_pub:
+        if d.kind == at.AST_STRUCT_DEF:
+            emit_struct_inline_bodies(g, s, a, did)
             continue
         end
-        if d.typarams.len() > 0 || d.synthetic || d.is_extern || d.a == 0:
-            continue
+        if is_header_inline(a, did):
+            cg_function(g, s, a, did, 0)
         end
-        cg_function(g, s, a, did, 0)
     end
     g.cur = save
 end
@@ -307,7 +400,10 @@ func emit_function_bodies(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
             ssym := sm.LookupLocal(s, s.global, d.name)
             repeat d.list.len() with j:
                 mid := d.list.get(j)
-                if at.KindOf(a, mid) == at.AST_FUNC_DEF:
+                m := at.Get(a, mid)
+                // pub inline methods already have their body in the header,
+                // same as pub inline free functions above.
+                if m.kind == at.AST_FUNC_DEF && !(m.is_inline && m.is_pub):
                     cg_function(g, s, a, mid, ssym)
                 end
             end
@@ -596,6 +692,7 @@ func cg_free(g &: Cg):
     g.dyn_impls.free()
     g.deferred.free()
     g.fn_defers.free()
+    g.loop_dmark.free()
 end
 
 // ===========================================================================
@@ -631,7 +728,7 @@ func sb_take(b &: str.StringBuilder, mark: i64): str:
     end
     full := str.BufStr(b)
     r := str.Substr(full, mark as int, (total - mark) as int)
-    b._len = mark
+    b.len = mark
     ret r
 end
 

@@ -103,7 +103,7 @@ static bool ll_is_cmp(token_kind_t k)
 
 static const char *ll_to_ptr(ll_t *ll, llv_t v)
 {
-    if (ll_is_ptr_ts(v.ts) || ll_is_str(v.ts) || !strcmp(v.ts, "null")) return v.ref;
+    if (ll_is_ptr_ts(v.ts) || ll_is_str(ll, v.ts) || !strcmp(v.ts, "null")) return v.ref;
     const char *r = ll_new_tmp(ll);
     ll_emit(ll, "%s = inttoptr %s %s to ptr", r, ll_ty(ll, v.ts), v.ref);
     return r;
@@ -112,7 +112,7 @@ static const char *ll_to_ptr(ll_t *ll, llv_t v)
 static const char *ll_str_operand(ll_t *ll, ast_node_t *n)
 {
     const char *ts = n->type_str;
-    if (ts && ll_is_str(ts)) return ll_expr(ll, n).ref;
+    if (ts && ll_is_str(ll, ts)) return ll_expr(ll, n).ref;
     llv_t v = ll_expr(ll, n);
     const char *r = ll_new_tmp(ll);
     if (ll_is_bool(ts)) {
@@ -145,8 +145,8 @@ static const char *ll_str_operand(ll_t *ll, ast_node_t *n)
 
 static bool ll_binary_string(ll_t *ll, ast_node_t *n, token_kind_t op, llv_t *out)
 {
-    bool as = n->a->type_str && ll_is_str(n->a->type_str);
-    bool bs = n->b->type_str && ll_is_str(n->b->type_str);
+    bool as = n->a->type_str && ll_is_str(ll, n->a->type_str);
+    bool bs = n->b->type_str && ll_is_str(ll, n->b->type_str);
     if (op == TK_PLUS && (as || bs)) {
         const char *L = ll_str_operand(ll, n->a), *R = ll_str_operand(ll, n->b);
         const char *r = ll_new_tmp(ll);
@@ -582,7 +582,7 @@ static void ll_lower_print(ll_t *ll, ast_node_t *n, bool nl, int err)
                 sb_cstr(&args));
     } else {
         ll_emit(ll, "%s = call i32 (ptr, ...) @printf(ptr %s%s)", t, f, sb_cstr(&args));
-        if (buffered) {
+        {
             /*
              * fflush(NULL) flushes every open output stream, which is all
              * this needs: push the printf line out to fd 1 before the next
@@ -592,6 +592,13 @@ static void ll_lower_print(ll_t *ll, ast_node_t *n, bool nl, int err)
              * left unresolved there and took the whole module down with it,
              * which is why every formatted print failed on macOS while
              * literal-only ones worked.
+             *
+             * Unconditional, not gated on `buffered`: the other half of what
+             * it does is defeat the C runtime's full buffering of a redirected
+             * stdout, and a module that spawns threads (or any module at all
+             * on Windows, where single_threaded is forced off) needs that just
+             * as much as a single-threaded one. Without it a server's log
+             * reached its file only when the process exited.
              */
             const char *t2 = ll_new_tmp(ll);
             ll_emit(ll, "%s = call i32 @fflush(ptr null)", t2);
@@ -744,7 +751,7 @@ static llv_t ll_len_of(ll_t *ll, ast_node_t *n, ast_node_t *arg)
         return (llv_t){ll_conv(ll, (llv_t){l, "i64"}, "i32"), "i32"};
     }
     if (ts && strchr(ts, '[')) return (llv_t){ll_fmt(ll, "%ld", ll_array_dim(ts)), "i32"};
-    if (!ts || !ll_is_str(ts)) {
+    if (!ts || !ll_is_str(ll, ts)) {
         ll_error(ll, n, "len() of an unsupported type");
         return ll_poison("i32");
     }
@@ -874,7 +881,7 @@ static bool ll_call_runtime(ll_t *ll, ast_node_t *n, const char *rtname, ast_nod
 /*
  * Builtins that hand back a freshly allocated `const char**` plus an
  * out-param element count, which the surface language sees as a
- * Vector<str>. Vector<T> is { data: T*, _len: int, _cap: int } (see
+ * Vector<str>. Vector<T> is { data: T*, count: int, capacity: int } (see
  * std/collections/vector.salam), so cap is filled with the same count as
  * len - the buffer is exactly sized and never grown in place, matching
  * what the C backend's call_ident/call_str build for the same runtimes.
@@ -949,6 +956,31 @@ static bool ll_call_file(ll_t *ll, ast_node_t *n, ast_node_t *obj, const char *m
  * that package's globals and registers them in ll->globals, so the
  * ll_global_find below can only succeed afterwards.
  */
+/*
+ * An enum member's LLVM value, in its backing type: an i32 immediate for
+ * int (unchanged), a float immediate for float, or the same deduplicated
+ * global-string reference an ordinary string literal would get for string -
+ * ll_strconst hands back the identical @.str.N for equal content, so two
+ * reads of the same member (or of an equal-valued member elsewhere) are
+ * pointer-identical without that being load-bearing for ==, which still
+ * goes through ll_binary_string's strcmp like any other str comparison.
+ */
+static llv_t ll_enum_member_value(ll_t *ll, symbol_t *m)
+{
+    switch (m->enum_val_kind) {
+    case TV_FLOAT: {
+        char buf[64];
+        sal_snprintf(buf, sizeof buf, "%.17g", m->enum_value_f);
+        return (llv_t){ll_fp_text(ll, buf), "f64"};
+    }
+    case TV_STRING:
+        return (llv_t){ll_strconst(ll, m->enum_value_str ? m->enum_value_str : ""),
+                       "str"};
+    default:
+        return (llv_t){ll_fmt(ll, "%lld", (long long)m->enum_value), "i32"};
+    }
+}
+
 static bool ll_pkg_value(ll_t *ll, ast_node_t *n, symbol_t *pk, llv_t *out)
 {
     symbol_t *m;
@@ -958,7 +990,7 @@ static bool ll_pkg_value(ll_t *ll, ast_node_t *n, symbol_t *pk, llv_t *out)
     m = scope_lookup_local(pk->members, n->name);
     if (!m) return false;
     if (m->kind == SYM_ENUM_MEMBER) {
-        *out = (llv_t){ll_fmt(ll, "%lld", (long long)m->enum_value), "i32"};
+        *out = ll_enum_member_value(ll, m);
         return true;
     }
     if (m->kind != SYM_CONST && m->kind != SYM_VAR) return false;
@@ -1401,7 +1433,7 @@ static bool ll_call_intrinsic(ll_t *ll, ast_node_t *n, const char *nm, llv_t *ou
     const char *r;
     if (!strcmp(nm, "hash") && na == 1) {
         r = ll_new_tmp(ll);
-        if (ll_is_str(a0->type_str)) {
+        if (ll_is_str(ll, a0->type_str)) {
             ll_need(ll, LL_H_STRHASH);
             ll_emit(ll, "%s = call i64 @salam_ll_strhash(ptr %s)", r,
                     ll_expr(ll, a0).ref);
@@ -1451,24 +1483,88 @@ static bool ll_call_intrinsic(ll_t *ll, ast_node_t *n, const char *nm, llv_t *ou
      * then handed to the thread runtime. Mirrors call_ident() in the C
      * backend.
      */
-    if (!strcmp(nm, "spawn") && na == 1 && a0->kind == AST_IDENTIFIER) {
+    if (!strcmp(nm, "spawn") && (na == 1 || na == 2) && a0->kind == AST_IDENTIFIER) {
+        /*
+         * spawn(f, arg) routes through a second runtime entry point that
+         * forwards the payload to pthread_create; the payload is already
+         * known to be a pointer, so it only needs widening to `ptr`.
+         */
+        const char *rt = na == 2 ? "salam_thread_spawn_arg" : "salam_thread_spawn";
         const char *sym = ll_func_symbol(ll, a0);
         if (!sym) return false;
         r = ll_new_tmp(ll);
         ll_emit(ll, "%s = ptrtoint ptr @%s to i64", r, sym);
         {
             symbol_t *pk = NULL;
-            func_sig_t *sp = ll_runtime_fn(ll, "salam_thread_spawn", &pk);
+            func_sig_t *sp = ll_runtime_fn(ll, rt, &pk);
             const char *h;
             if (!sp || !sp->decl) return false;
             ll_touch_pkg_named(ll, pk->pkgname);
             ll_ensure_fn(ll, sp->decl, NULL, pk->members);
             h = ll_new_tmp(ll);
             ll_emit(ll, "%s = inttoptr i64 %s to ptr", h, r);
-            r = ll_new_tmp(ll);
-            ll_emit(ll, "%s = call i64 @salam_thread_spawn(ptr %s)", r, h);
+            if (na == 2) {
+                const char *ap =
+                    ll_conv(ll, ll_expr(ll, (ast_node_t *)n->list.data[1]), "ptr");
+                r = ll_new_tmp(ll);
+                ll_emit(ll, "%s = call i64 @%s(ptr %s, ptr %s)", r, rt, h, ap);
+            } else {
+                r = ll_new_tmp(ll);
+                ll_emit(ll, "%s = call i64 @%s(ptr %s)", r, rt, h);
+            }
             *out = (llv_t){r, "i64"};
             return true;
+        }
+    }
+    /*
+     * Atomic intrinsics, lowered to real instructions rather than a call.
+     * seq_cst throughout, matching what the C backend asks __atomic_* for.
+     */
+    if (salam_atomic_arity(nm) && (int)na == salam_atomic_arity(nm) &&
+        !scope_lookup(ll->sem->global, nm)) {
+        const char *p = ll_conv(ll, ll_expr(ll, a0), "ptr");
+        if (!strcmp(nm, "atomic_load")) {
+            r = ll_new_tmp(ll);
+            ll_emit(ll, "%s = load atomic i64, ptr %s seq_cst, align 8", r, p);
+            *out = (llv_t){r, "i64"};
+            return true;
+        }
+        {
+            const char *v =
+                ll_conv(ll, ll_expr(ll, (ast_node_t *)n->list.data[1]), "i64");
+            if (!strcmp(nm, "atomic_store")) {
+                ll_emit(ll, "store atomic i64 %s, ptr %s seq_cst, align 8", v, p);
+                *out = (llv_t){"0", "void"};
+                return true;
+            }
+            if (!strcmp(nm, "atomic_add")) {
+                /* atomicrmw yields the value from *before* the operation;
+                 * salam's atomic_add is defined to return the new one. */
+                const char *o = ll_new_tmp(ll);
+                ll_emit(ll, "%s = atomicrmw add ptr %s, i64 %s seq_cst", o, p, v);
+                r = ll_new_tmp(ll);
+                ll_emit(ll, "%s = add i64 %s, %s", r, o, v);
+                *out = (llv_t){r, "i64"};
+                return true;
+            }
+            if (!strcmp(nm, "atomic_swap")) {
+                r = ll_new_tmp(ll);
+                ll_emit(ll, "%s = atomicrmw xchg ptr %s, i64 %s seq_cst", r, p, v);
+                *out = (llv_t){r, "i64"};
+                return true;
+            }
+            {
+                /* cmpxchg returns { value, success }; only the flag is wanted. */
+                const char *d =
+                    ll_conv(ll, ll_expr(ll, (ast_node_t *)n->list.data[2]), "i64");
+                const char *pair = ll_new_tmp(ll);
+                ll_emit(ll, "%s = cmpxchg ptr %s, i64 %s, i64 %s seq_cst seq_cst", pair,
+                        p, v, d);
+                r = ll_new_tmp(ll);
+                ll_emit(ll, "%s = extractvalue { i64, i1 } %s, 1", r, pair);
+                *out = (llv_t){r, "bool"};
+                return true;
+            }
         }
     }
     /* callhandler(fp, arg) - an indirect call through an integer-encoded
@@ -1720,6 +1816,38 @@ static ll_addr_t ll_index_addr(ll_t *ll, ast_node_t *n)
                 base, idx);
         return (ll_addr_t){r, ets, ll_tbaa_suffix(ll, ets, false)};
     }
+    /*
+     * `v[i]` on a Vector. The elements do not live in the Vector struct, they
+     * hang off its `data: T*` field (field 0 of
+     * { data, count, capacity } - see std/collections/vector.salam), so the
+     * address is: step to field 0, load the buffer, then index THAT by the
+     * element type. Falling through to the array path below instead emitted
+     * `getelementptr %struct.Vector__P, ptr %v, i64 0, i64 %i`, which lli
+     * rejects outright ("invalid getelementptr indices"): a struct can only
+     * be indexed by a constant field number, never by a runtime value. This
+     * is the address form, so it also covers `v[i] = x` and `v[i].f`, none of
+     * which the value-side operator_index call can express.
+     */
+    {
+        const char *sn = NULL;
+        symbol_t *ss = ll_op_struct(ll, ots, &sn);
+        symbol_t *fs = NULL;
+        int didx = ss ? ll_field_index(ss, "data", &fs) : -1;
+        if (didx >= 0 && fs && fs->type && fs->type->kind == TY_PTR) {
+            const char *ets = type_to_string(ll->sem->tc, fs->type->pointee);
+            ll_addr_t vb = ll_addr_of(ll, n->a);
+            const char *dp = ll_new_tmp(ll);
+            const char *data = ll_new_tmp(ll);
+            const char *vidx = ll_conv(ll, ll_expr(ll, n->b), "i64");
+            const char *vr = ll_new_tmp(ll);
+            ll_emit(ll, "%s = getelementptr inbounds %s, ptr %s, i32 0, i32 %d", dp,
+                    ll_struct_ltype(ll, ots), vb.ptr, didx);
+            ll_emit(ll, "%s = load ptr, ptr %s", data, dp);
+            ll_emit(ll, "%s = getelementptr inbounds %s, ptr %s, i64 %s", vr,
+                    ll_ty(ll, ets), data, vidx);
+            return (ll_addr_t){vr, ets, ll_tbaa_suffix(ll, ets, false)};
+        }
+    }
     ll_addr_t b = ll_addr_of(ll, n->a);
     const char *ets = ll_array_elem(ll, ots);
     const char *idx = ll_conv(ll, ll_expr(ll, n->b), "i64");
@@ -1770,7 +1898,7 @@ static llv_t ll_struct_lit(ll_t *ll, ast_node_t *n)
             const char *val =
                 prov ? ll_conv(ll, ll_expr(ll, prov->a), fts)
                      : (f->decl && f->decl->a ? ll_conv(ll, ll_expr(ll, f->decl->a), fts)
-                                              : ll_zero(fts));
+                                              : ll_zero(ll, fts));
             const char *r = ll_new_tmp(ll);
             ll_emit(ll, "%s = insertvalue %s %s, %s %s, %d", r, sty, cur, ll_ty(ll, fts),
                     val, idx);
@@ -1902,7 +2030,7 @@ static llv_t ll_literal(ll_t *ll, ast_node_t *n)
 static const char *ll_match_pat_eq(ll_t *ll, llv_t subj, ast_node_t *pat_head)
 {
     llv_t pv = ll_expr(ll, pat_head);
-    if (ll_is_str(subj.ts)) {
+    if (ll_is_str(ll, subj.ts)) {
         const char *c = ll_new_tmp(ll);
         const char *r = ll_new_tmp(ll);
         ll_emit(ll, "%s = call i32 @strcmp(ptr %s, ptr %s)", c, subj.ref, pv.ref);
@@ -2052,7 +2180,7 @@ static ast_node_t *ll_elem_index(ast_node_t *n, const char *want)
 static bool ll_gep_from_int_add(ll_t *ll, ast_node_t *n, const char *to, const char **out)
 {
     ast_node_t *bin = n->a;
-    if (!ll_is_ptr_ts(to) || ll_is_str(to)) return false;
+    if (!ll_is_ptr_ts(to) || ll_is_str(ll, to)) return false;
     if (!bin || bin->kind != AST_BINARY) return false;
     if (bin->op != TK_PLUS && bin->op != TK_MINUS) return false;
 
@@ -2077,7 +2205,7 @@ static bool ll_gep_from_int_add(ll_t *ll, ast_node_t *n, const char *to, const c
     ast_node_t *idx = pointee[0] ? ll_elem_index(bin->b, pointee) : NULL;
 
     llv_t p = ll_expr(ll, base->a);
-    bool ptr_base = ll_is_ptr_ts(p.ts) || ll_is_str(p.ts);
+    bool ptr_base = ll_is_ptr_ts(p.ts) || ll_is_str(ll, p.ts);
     /* Evaluate the offset operand exactly once: the index alone when a typed
      * GEP is on the table, the whole `idx * sizeof(T)` otherwise. */
     llv_t off = ll_expr(ll, (ptr_base && idx) ? idx : bin->b);
@@ -2220,14 +2348,29 @@ llv_t ll_expr(ll_t *ll, ast_node_t *n)
             symbol_t *e = ll_enum_sym(ll, n->a->name);
             if (e) {
                 symbol_t *m = scope_lookup_local(e->members, n->name);
-                if (m && m->kind == SYM_ENUM_MEMBER)
-                    return (llv_t){ll_fmt(ll, "%lld", (long long)m->enum_value), "i32"};
+                if (m && m->kind == SYM_ENUM_MEMBER) return ll_enum_member_value(ll, m);
             }
             {
                 llv_t pv;
                 symbol_t *pk = ll_sym(ll, n->a->name);
                 if (pk && pk->kind == SYM_PACKAGE && ll_pkg_value(ll, n, pk, &pv))
                     return pv;
+            }
+        }
+        /*
+         * pkg.EnumName.Member: n->a is itself pkg.EnumName, an AST_MEMBER -
+         * see the matching fix in check_member/sema_expr.c for why the
+         * parser always builds this as a plain left-associative chain.
+         * ll_enum_sym/ll_sym already search every known package's scope
+         * when a name isn't found globally (ll_sym_plain), so this can look
+         * the enum straight up by its own name (n->a->name, e.g. "Kind")
+         * without needing to separately resolve "pkg" at all.
+         */
+        if (n->a && n->a->kind == AST_MEMBER) {
+            symbol_t *e = ll_enum_sym(ll, n->a->name);
+            if (e) {
+                symbol_t *m = scope_lookup_local(e->members, n->name);
+                if (m && m->kind == SYM_ENUM_MEMBER) return ll_enum_member_value(ll, m);
             }
         }
         return ll_load_addr(ll, n);

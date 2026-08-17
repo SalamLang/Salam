@@ -1,0 +1,225 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// calendar: Gregorian, Jalali (Persian/Solar Hijri) and Hijri (Islamic
+// lunar) dates, all pivoting through one shared Julian Day Number so any
+// calendar can convert to any other with a single subtraction-free trip
+// through JDN space (see convert.salam). This file holds the shared
+// scaffolding: the three date structs, the JDN <-> Gregorian conversion
+// (Fliegel & Van Flandern's pure-integer algorithm), and Gregorian
+// calendar arithmetic. jalali.salam and hijri.salam hold the other two
+// calendars' JDN conversions; convert.salam composes all three plus the
+// "read the system clock" entry points; timezone.salam adds fixed-offset
+// timezones and wall-clock conversion.
+@en "calendar"
+@fa "تقویم"
+@ar "التقویم"
+package calendar
+
+import time
+
+// JDN of 1970-01-01, the Unix epoch.
+const _UNIX_EPOCH_JDN := 2440588 as i64
+const _SECONDS_PER_DAY := 86400 as i64
+
+const _GREG_MONTH_DAYS := [
+    31 as int, 28 as int, 31 as int, 30 as int, 31 as int, 30 as int
+    31 as int, 31 as int, 30 as int, 31 as int, 30 as int, 31 as int
+]
+
+const _WEEKDAY_NAMES_EN := [
+    "Sunday", "Monday", "Tuesday", "Wednesday"
+    "Thursday", "Friday", "Saturday"
+]
+
+const _WEEKDAY_NAMES_FA := [
+    "یکشنبه", "دوشنبه", "سه‌شنبه", "چهارشنبه"
+    "پنجشنبه", "جمعه", "شنبه"
+]
+
+const _WEEKDAY_NAMES_AR := [
+    "الأحد", "الإثنین", "الثلاثاء", "الأربعاء"
+    "الخمیس", "الجمعة", "السبت"
+]
+
+const _GREG_MONTH_NAMES_EN := [
+    "January", "February", "March", "April"
+    "May", "June", "July", "August"
+    "September", "October", "November", "December"
+]
+
+@en "GregorianDate"
+@fa "تاریخ میلادی"
+@ar "التاریخ المیلادی"
+pub struct GregorianDate:
+    pub year: int = 1970
+    pub month: int = 1
+    pub day: int = 1
+end
+
+@en "JalaliDate"
+@fa "تاریخ جلالی"
+@ar "التاریخ الجلالیة"
+pub struct JalaliDate:
+    pub year: int = 1
+    pub month: int = 1
+    pub day: int = 1
+end
+
+@en "HijriDate"
+@fa "تاریخ هجری قمری"
+@ar "التاریخ الهجری"
+pub struct HijriDate:
+    pub year: int = 1
+    pub month: int = 1
+    pub day: int = 1
+end
+
+@en "ClockTime"
+@fa "زمان ساعت"
+@ar "وقت الساعة"
+pub struct ClockTime:
+    pub hour: int = 0
+    pub minute: int = 0
+    pub second: int = 0
+end
+
+// Truncating divide/modulo, i.e. exactly what Salam's native `/` already
+// does - named wrappers kept only because the reference algorithms below
+// (Borkowski's Jalali paper, the Fliegel-Van Flandern Gregorian<->JDN
+// routine, the tabular-Islamic Wikipedia formulas) are all written in
+// terms of a `div`/`mod` pair with this exact truncate-toward-zero
+// behavior. Every call site below only ever feeds non-negative operands
+// for any date in the supported year range, so this coincides with floor
+// division anyway - but matching the reference algorithms' own div/mod
+// literally is what makes this port checkable line-by-line against them.
+pure func _fdiv(a: i64, b: i64): i64: ret a / b end
+
+pure func _fmod(a: i64, b: i64): i64: ret a - (a / b) * b end
+
+// True floor division/modulo (mod result always has the sign of `b`).
+// Needed only for epoch math in timezone.salam, where the Unix time can
+// be negative (any date before 1970-01-01).
+pure func _floordiv(a: i64, b: i64): i64:
+    q := a / b
+    r := a - q * b
+    if r != 0 && (r < 0) != (b < 0):
+        ret q - 1
+    end
+    ret q
+end
+
+pure func _floormod(a: i64, b: i64): i64:
+    ret a - _floordiv(a, b) * b
+end
+
+// Gregorian date <-> Julian Day Number (the day count used as this
+// package's universal pivot). This is the Fliegel & Van Flandern integer
+// algorithm ("A Machine Algorithm for Processing Calendar Dates", CACM
+// 1968), also used by PHP's ext/calendar; verified here against Python's
+// `datetime` proleptic Gregorian calendar (round-trips exactly) for every
+// day from 700-01-01 to 2200-12-31, and spot-checked at the well-known
+// anchors JDN(1970-01-01)=2440588 and JDN(2000-01-01)=2451545.
+@en "GregorianToJDN"
+@fa "میلادی به روز ژولیانی"
+@ar "میلادی إلى الیوم الجولیانی"
+pub func GregorianToJDN(d: GregorianDate): i64:
+    y := d.year as i64
+    m := d.month as i64
+    day := d.day as i64
+    a := _fdiv(m - 8, 6)
+    mut jdn := _fdiv((y + a + 100100) * 1461, 4) + _fdiv(153 * _fmod(m + 9, 12) + 2, 5) + day - 34840408
+    jdn = jdn - _fdiv(_fdiv(y + 100100 + a, 100) * 3, 4) + 752
+    ret jdn
+end
+
+@en "JDNToGregorian"
+@fa "روز ژولیانی به میلادی"
+@ar "الیوم الجولیانی إلى میلادی"
+pub func JDNToGregorian(jdn: i64): GregorianDate:
+    mut j := 4 * jdn + 139361631
+    j = j + _fdiv(_fdiv(4 * jdn + 183187720, 146097) * 3, 4) * 4 - 3908
+    i := _fdiv(_fmod(j, 1461), 4) * 5 + 308
+    d := _fdiv(_fmod(i, 153), 5) + 1
+    m := _fmod(_fdiv(i, 153), 12) + 1
+    y := _fdiv(j, 1461) - 100100 + _fdiv(8 - m, 6)
+    ret GregorianDate { year = y as int, month = m as int, day = d as int }
+end
+
+@en "IsLeapGregorian"
+@fa "سال کبیسه میلادی"
+@ar "سنة کبیسة میلادیة"
+pub inline pure func IsLeapGregorian(year: int): bool:
+    ret (_fmod(year as i64, 4) == 0 && _fmod(year as i64, 100) != 0) || _fmod(year as i64, 400) == 0
+end
+
+@en "DaysInGregorianMonth"
+@fa "روزهای ماه میلادی"
+@ar "أیام الشهر المیلادی"
+pub func DaysInGregorianMonth(year: int, month: int): int:
+    if month == 2 && IsLeapGregorian(year): ret 29 end
+    ret _GREG_MONTH_DAYS[month - 1]
+end
+
+@en "IsValidGregorianDate"
+@fa "تاریخ میلادی معتبر است"
+@ar "تاریخ میلادی صالحة"
+pub func IsValidGregorianDate(year: int, month: int, day: int): bool:
+    if month < 1 || month > 12: ret false end
+    if day < 1: ret false end
+    ret day <= DaysInGregorianMonth(year, month)
+end
+
+// Day of the week for a JDN: 0=Sunday .. 6=Saturday, matching std/time's
+// tm_wday convention. JDN 0 (Jan 1, 4713 BCE proleptic Julian, noon) was
+// a Monday, which is where the "+1" comes from; verified against the
+// known facts that JDN 2440588 (1970-01-01) is a Thursday(4) and JDN
+// 2451545 (2000-01-01) is a Saturday(6).
+@en "Weekday"
+@fa "روز هفته"
+@ar "یوم الأسبوع"
+pub inline pure func Weekday(jdn: i64): int:
+    ret _fmod(jdn + 1, 7) as int
+end
+
+@en "WeekdayNameEn"
+@fa "نام روز هفته انگلیسی"
+@ar "اسم یوم الأسبوع بالإنجلیزیة"
+pub func WeekdayNameEn(weekday: int): str: ret _WEEKDAY_NAMES_EN[weekday] end
+
+@en "WeekdayNameFa"
+@fa "نام روز هفته فارسی"
+@ar "اسم یوم الأسبوع بالفارسیة"
+pub func WeekdayNameFa(weekday: int): str: ret _WEEKDAY_NAMES_FA[weekday] end
+
+@en "WeekdayNameAr"
+@fa "نام روز هفته عربی"
+@ar "اسم یوم الأسبوع بالعربیة"
+pub func WeekdayNameAr(weekday: int): str: ret _WEEKDAY_NAMES_AR[weekday] end
+
+@en "GregorianMonthNameEn"
+@fa "نام ماه میلادی"
+@ar "اسم الشهر المیلادی"
+pub func GregorianMonthNameEn(month: int): str: ret _GREG_MONTH_NAMES_EN[month - 1] end
+
+@en "CompareGregorian"
+@fa "مقایسه تاریخ میلادی"
+@ar "مقارنة التاریخ المیلادی"
+pub func CompareGregorian(a: GregorianDate, b: GregorianDate): int:
+    da := GregorianToJDN(a)
+    db := GregorianToJDN(b)
+    if da < db: ret 0 - 1 end
+    if da > db: ret 1 end
+    ret 0
+end

@@ -34,8 +34,15 @@ pub struct QueryValues:
     pub items: Vector<str> = Vector {}
 end
 
+// `order` records the keys in the order they were first seen, and Encode
+// walks it rather than the map. Without it the output came back in hash
+// bucket order, so decoding a query string and encoding it again
+// reshuffled the parameters: unpleasant to read, and wrong for anything
+// that signs or caches on the exact URL text. `data` still holds the
+// values, so the multi-value lookups stay O(1).
 pub struct QueryMap:
     pub data: HashMap<str, QueryValues> = HashMap {} as HashMap<str, QueryValues>
+    pub order: Vector<str> = Vector {}
 end
 
 inline pure func _bp(s: str): i8*: ret (s as void*) as i8* end
@@ -121,7 +128,11 @@ pub func DecodeWith(qs: str, opts: QueryOptions): QueryMap:
         val := _decode_component(rawVal, opts.space_as_plus)
 
         mut qv := QueryValues {}
-        if out.data.has(key): qv = out.data.get(key) end
+        if out.data.has(key):
+            qv = out.data.get(key)
+        else:
+            out.order.push(key)
+        end
         qv.items.push(val)
         out.data.put(key, qv)
     end
@@ -132,13 +143,17 @@ pub func Decode(qs: str): QueryMap:
     ret DecodeWith(qs, QueryOptions {})
 end
 
+// Emits parameters in the order their keys were first seen, so decoding
+// a query string and encoding it again gives back the same text.
 pub func EncodeWith(values: QueryMap, opts: QueryOptions): str:
     mut out := str.NewBuilder()
-    mut it := values.data.iter()
     mut first := true
-    until it.has_next():
-        k := it.key()
-        qv := it.value()
+    mut i := 0
+    until i < values.order.len():
+        k := values.order.get(i)
+        i += 1
+        if values.data.has(k) == false: continue end
+        qv := values.data.get(k)
         mut j := 0
         until j < qv.items.len():
             if !first: str.BufAppendChar(out, 38) end
@@ -148,7 +163,6 @@ pub func EncodeWith(values: QueryMap, opts: QueryOptions): str:
             str.BufAppend(out, _encode_component(qv.items.get(j), opts.space_as_plus))
             j += 1
         end
-        it.next()
     end
     ret str.BufStr(out)
 end
@@ -178,13 +192,69 @@ pub func Size(m: QueryMap): int: ret m.data.size() end
 
 pub func Add(values &: QueryMap, key: str, val: str):
     mut qv := QueryValues {}
-    if values.data.has(key): qv = values.data.get(key) end
+    if values.data.has(key):
+        qv = values.data.get(key)
+    else:
+        values.order.push(key)
+    end
     qv.items.push(val)
     values.data.put(key, qv)
 end
 
+// Replaces every value for `key`, keeping the position it already had so
+// that overwriting a parameter does not move it to the end of the URL.
 pub func Set(values &: QueryMap, key: str, val: str):
     mut qv := QueryValues {}
     qv.items.push(val)
+    if values.data.has(key) == false: values.order.push(key) end
     values.data.put(key, qv)
+end
+
+// The keys, in the order they appear when encoded. This is what makes it
+// possible to walk a query string without knowing its parameters in
+// advance, which in turn is what Remove and any filtering needs.
+pub func Keys(values: QueryMap): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    mut i := 0
+    until i < values.order.len():
+        out.push(values.order.get(i))
+        i += 1
+    end
+    ret out
+end
+
+// Drops a parameter and every value it had. Returns false when there was
+// nothing to drop.
+pub func Remove(values &: QueryMap, key: str): bool:
+    if values.data.has(key) == false: ret false end
+    values.data.remove(key)
+    mut i := 0
+    until i < values.order.len():
+        if values.order.get(i) == key:
+            values.order.remove_at(i)
+            ret true
+        end
+        i += 1
+    end
+    ret true
+end
+
+// Keeps only the listed parameters, dropping everything else. The usual
+// way to strip tracking parameters off a URL without having to name them
+// all.
+pub func Retain(values &: QueryMap, keep: Vector<str>):
+    ks := Keys(values)
+    defer ks.free()
+    mut i := 0
+    until i < ks.len():
+        k := ks.get(i)
+        mut found := false
+        mut j := 0
+        until j < keep.len():
+            if keep.get(j) == k: found = true end
+            j += 1
+        end
+        if found == false: Remove(values, k) end
+        i += 1
+    end
 end

@@ -13,6 +13,7 @@
  */
 
 #include "codegen/codegen_internal.h"
+#include "core/sal_path.h"
 
 static bool detect_gui_imports(ast_node_t *program)
 {
@@ -50,6 +51,79 @@ static void emit_private_protos(cg_t *cg, ast_node_t *program)
     sb_puts(cg->c, "\n");
 }
 
+/*
+ * The stem the driver names an import's generated module after: the base name
+ * of the resolved file with its extension dropped, which is what driver_build
+ * turns into salam_mod_<stem>.c/.h/.o. NULL when the import cannot be
+ * resolved, which the caller treats as "nothing to emit" - a missing import is
+ * already a semantic error by the time codegen runs.
+ */
+const char *cg_import_module(cg_t *cg, ast_node_t *d)
+{
+    const char *p =
+        (d->value.kind == TV_STRING && d->value.as.s) ? d->value.as.s : d->name;
+    const char *resolved, *stem;
+    char base[128];
+    size_t k = 0;
+    if (!p) return NULL;
+    resolved = d->type_str ? d->type_str : salam_resolve_import(cg->a, "", p);
+    if (!resolved) return NULL;
+    stem = sal_path_base(resolved);
+    for (; stem[k] && stem[k] != '.' && k < sizeof(base) - 1; k++)
+        base[k] = stem[k];
+    base[k] = 0;
+    return arena_strdup(cg->a, base);
+}
+
+const char *cg_module_init_name(cg_t *cg, const char *module)
+{
+    return cg_fmt(cg, "%s%s_init", SALAM_MOD_PREFIX, cg_cident(cg, module));
+}
+
+/*
+ * A global whose initialiser is not a constant is emitted as a plain
+ * definition plus a separate assignment, because C only accepts a constant
+ * expression there. Those assignments used to be replayed at the top of `main`
+ * and nowhere else, which meant they ran for the main module only: a
+ * `mut g_cat := catalog.New()` in an imported package stayed zeroed, and the
+ * first read of it failed a long way from the cause ("Vector.get: index out of
+ * bounds") with nothing to say the initialiser had never run.
+ *
+ * Every module gets one of these instead, and runs its imports' first, so the
+ * graph comes up bottom-up before main's body starts. The flag is set before
+ * the recursion, not after, so an import cycle terminates rather than recursing
+ * forever - the same trade C++ makes for static initialisation.
+ */
+static void emit_module_init(cg_t *cg, ast_node_t *program)
+{
+    const char *fn = cg_module_init_name(cg, cg->module);
+    sb_puts(cg->c, cg_fmt(cg, "void %s(void) {\n", fn));
+    sb_puts(cg->c, "    static int __salam_init_done = 0;\n"
+                   "    if (__salam_init_done) return;\n"
+                   "    __salam_init_done = 1;\n");
+    /* std/core is every module's dependency without appearing in anyone's
+     * import list - cg_header includes its header on the same terms. */
+    if (strcmp(cg->module, "core") != 0)
+        sb_puts(cg->c, cg_fmt(cg, "    %s();\n", cg_module_init_name(cg, "core")));
+    {
+        size_t i = 0;
+        for (; i < program->list.len; i++) {
+            ast_node_t *d = (ast_node_t *)program->list.data[i];
+            const char *base;
+            if (d->kind != AST_IMPORT) continue;
+            base = cg_import_module(cg, d);
+            if (!base) continue;
+            sb_puts(cg->c, cg_fmt(cg, "    %s();\n", cg_module_init_name(cg, base)));
+        }
+    }
+    {
+        size_t i = 0;
+        for (; i < cg->deferred.len; i++)
+            sb_puts(cg->c, cg_fmt(cg, "    %s\n", (const char *)cg->deferred.data[i]));
+    }
+    sb_puts(cg->c, "}\n\n");
+}
+
 static void emit_globals(cg_t *cg, ast_node_t *program)
 {
     {
@@ -81,8 +155,13 @@ static void emit_globals(cg_t *cg, ast_node_t *program)
                  * can never alias, so they keep the qualifier (and .rodata).
                  * codegen_header.c's extern declaration must agree, or the
                  * definition and the declaration conflict.
+                 *
+                 * A function value is excluded for the same reason: it lowers
+                 * to the closure environment pointer, which a callee takes as
+                 * a plain `void*`.
                  */
-                bool want_const = (d->kind == AST_CONST_DECL) && !is_array;
+                bool want_const =
+                    (d->kind == AST_CONST_DECL) && !is_array && !type_is_callable(ts);
                 bool gct_const =
                     want_const && (strncmp(cg_ctype(cg, ts), "const ", 6) == 0);
                 const char *pfx = (want_const && !gct_const) ? "const " : "";
@@ -209,11 +288,46 @@ static bool inl_body_exportable(cg_t *cg, vec_t *names, ast_node_t *n)
     return true;
 }
 
+/*
+ * A `pub inline` body is copied into the header, so it may only name things
+ * every includer can also see. One that reaches for a module-private symbol
+ * loses the inline rather than the compile.
+ */
+static void demote_if_nonexportable(cg_t *cg, ast_node_t *fn)
+{
+    vec_t names;
+    vec_init(&names);
+    inl_collect_locals(cg, &names, fn);
+    if (inl_body_exportable(cg, &names, fn->a)) return;
+    fn->is_inline = false;
+    LOG_I(cg->log, PH_CODEGEN,
+          "inline '%s' uses module-private symbols; emitting it as a regular function",
+          fn->name);
+}
+
+/* Methods of a generic struct are already emitted `static inline` once per
+ * instantiation, so `inline` on them is a no-op rather than a header export. */
+static void demote_struct_inlines(cg_t *cg, ast_node_t *d)
+{
+    size_t j = 0;
+    if (d->typarams.len > 0 || d->synthetic) return;
+    for (; j < d->list.len; j++) {
+        ast_node_t *m = (ast_node_t *)d->list.data[j];
+        if (m->kind != AST_FUNC_DEF || !m->is_inline || !m->is_pub) continue;
+        if (m->is_extern) continue;
+        demote_if_nonexportable(cg, m);
+    }
+}
+
 static void demote_nonexportable_inlines(cg_t *cg, ast_node_t *program)
 {
     size_t i = 0;
     for (; i < program->list.len; i++) {
         ast_node_t *d = (ast_node_t *)program->list.data[i];
+        if (d->kind == AST_STRUCT_DEF) {
+            demote_struct_inlines(cg, d);
+            continue;
+        }
         if (d->kind != AST_FUNC_DEF || !d->is_inline) continue;
         if (d->typarams.len > 0 || d->synthetic || d->is_extern) continue;
         if (strcmp(d->name, cg->entry) == 0) {
@@ -221,18 +335,26 @@ static void demote_nonexportable_inlines(cg_t *cg, ast_node_t *program)
             continue;
         }
         if (!d->is_pub) continue;
-        {
-            vec_t names;
-            vec_init(&names);
-            inl_collect_locals(cg, &names, d);
-            if (!inl_body_exportable(cg, &names, d->a)) {
-                d->is_inline = false;
-                LOG_I(cg->log, PH_CODEGEN,
-                      "inline '%s' uses module-private symbols; emitting it as a "
-                      "regular function",
-                      d->name);
-            }
-        }
+        demote_if_nonexportable(cg, d);
+    }
+}
+
+static bool is_header_inline(ast_node_t *fn)
+{
+    return fn->kind == AST_FUNC_DEF && fn->is_inline && fn->is_pub && !fn->is_extern &&
+           fn->typarams.len == 0 && !fn->synthetic && fn->a != NULL;
+}
+
+static void emit_struct_inline_bodies(cg_t *cg, ast_node_t *d)
+{
+    symbol_t *ssym;
+    size_t j = 0;
+    if (d->typarams.len > 0 || d->synthetic) return;
+    ssym = scope_lookup_local(cg->sem->global, d->name);
+    if (!ssym) return;
+    for (; j < d->list.len; j++) {
+        ast_node_t *m = (ast_node_t *)d->list.data[j];
+        if (is_header_inline(m)) cg_function(cg, m, ssym);
     }
 }
 
@@ -244,9 +366,11 @@ static void emit_inline_header(cg_t *cg, ast_node_t *program)
         size_t i = 0;
         for (; i < program->list.len; i++) {
             ast_node_t *d = (ast_node_t *)program->list.data[i];
-            if (d->kind != AST_FUNC_DEF || !d->is_inline || !d->is_pub) continue;
-            if (d->typarams.len > 0 || d->synthetic || d->is_extern || !d->a) continue;
-            cg_function(cg, d, NULL);
+            if (d->kind == AST_STRUCT_DEF) {
+                emit_struct_inline_bodies(cg, d);
+                continue;
+            }
+            if (is_header_inline(d)) cg_function(cg, d, NULL);
         }
     }
     cg->c = savec;
@@ -270,7 +394,11 @@ static void emit_function_bodies(cg_t *cg, ast_node_t *program)
                     size_t j = 0;
                     for (; j < d->list.len; j++) {
                         ast_node_t *m = (ast_node_t *)d->list.data[j];
-                        if (m->kind == AST_FUNC_DEF) cg_function(cg, m, ssym);
+                        if (m->kind != AST_FUNC_DEF) continue;
+                        /* pub inline methods already have their body in the
+                           header, same as pub inline free functions above. */
+                        if (m->is_inline && m->is_pub) continue;
+                        cg_function(cg, m, ssym);
                     }
                 }
             } else if (d->kind == AST_LAYOUT_BLOCK) {
@@ -539,6 +667,7 @@ codegen_output_t *codegen_run(arena_t *a, logger_t *log, ast_node_t *program,
     vec_init(&cg.dyn_impls);
     vec_init(&cg.deferred);
     vec_init(&cg.fn_defers);
+    cg.nloop = 0;
     sb_t h, c, lamd, lamf;
     sb_init(&h);
     sb_init(&c);
@@ -554,6 +683,7 @@ codegen_output_t *codegen_run(arena_t *a, logger_t *log, ast_node_t *program,
     cg_header(&cg, program);
     emit_instances_header(&cg, program);
     emit_inline_header(&cg, program);
+    sb_puts(&h, cg_fmt(&cg, "void %s(void);\n", cg_module_init_name(&cg, module)));
     sb_puts(&h, "\n#endif\n");
     sb_puts(&c, cg_fmt(&cg, "#include \"%s%s.h\"\n\n", SALAM_MOD_PREFIX, module));
 
@@ -567,6 +697,7 @@ codegen_output_t *codegen_run(arena_t *a, logger_t *log, ast_node_t *program,
         sb_putc(&c, '\n');
     }
     emit_globals(&cg, program);
+    emit_module_init(&cg, program);
 
     if (lamf.len) {
         sb_puts(&c, sb_cstr(&lamf));

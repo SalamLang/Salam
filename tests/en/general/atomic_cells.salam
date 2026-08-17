@@ -1,0 +1,67 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import atomic
+import pool
+
+mut counter := atomic.NewI64(0 as i64)
+mut cancelled := atomic.NewFlag(false)
+mut winners := atomic.NewI64(0 as i64)
+mut cas_wins := atomic.NewI64(0 as i64)
+
+// Runs on 8 threads: the total is only reliable if Add really is indivisible,
+// and exactly one of the 4000 calls may win TestAndSet.
+func tick(_i: i64):
+    _ := atomic.Add(counter, 1 as i64)
+    if atomic.TestAndSet(cancelled):
+        _2 := atomic.Add(winners, 1 as i64)
+    end
+end
+
+// A compare-and-swap retry loop: every call must eventually land its
+// increment, so the number of successes equals the number of calls.
+func cas_bump(_i: i64):
+    mut done := false
+    until !done:
+        old := atomic.Load(cas_wins)
+        if atomic.CompareAndSwap(cas_wins, old, old + 1):
+            done = true
+        end
+    end
+end
+
+func main:
+    pool.ParallelFor(4000 as i64, 8 as i64, (i: i64): tick(i) end)
+
+    println "counter:", atomic.Load(counter)
+    println "flag:", atomic.Get(cancelled)
+    println "one winner:", atomic.Load(winners) == 1
+
+    pool.ParallelFor(200 as i64, 4 as i64, (i: i64): cas_bump(i) end)
+    println "cas:", atomic.Load(cas_wins)
+
+    // Sequenced into separate statements on purpose: argument evaluation order
+    // is not specified, so a Swap and a Load in one argument list would be
+    // testing the compiler's ordering rather than the cell's behaviour.
+    atomic.Store(counter, 7 as i64)
+    old := atomic.Swap(counter, 9 as i64)
+    now := atomic.Load(counter)
+    println "store/swap:", old, now
+    println "cas miss:", atomic.CompareAndSwap(counter, 1 as i64, 2 as i64)
+
+    atomic.DestroyI64(counter)
+    atomic.DestroyI64(winners)
+    atomic.DestroyI64(cas_wins)
+    atomic.DestroyFlag(cancelled)
+end

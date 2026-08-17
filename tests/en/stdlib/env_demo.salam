@@ -1,0 +1,163 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import testing
+import env
+
+// std/env is the process environment: reading it, writing it, and the
+// small amount of policy that sits on top (masking a secret, naming the
+// deployment profile). Loading a .env file into it is covered by
+// tests/en/stdlib/envfile_demo.
+//
+// Every variable here is prefixed SALAM_ED_ and removed again, so the
+// test leaves the environment as it found it.
+
+func test_get_set():
+    env.Unset("SALAM_ED_A")
+    testing.AssertFalse(env.Has("SALAM_ED_A"))
+    // an unset variable reads as empty rather than as a null
+    testing.AssertEqStr(env.Get("SALAM_ED_A"), "")
+    testing.AssertEqStr(env.GetOr("SALAM_ED_A", "fallback"), "fallback")
+
+    testing.AssertTrue(env.Set("SALAM_ED_A", "hello"))
+    testing.AssertTrue(env.Has("SALAM_ED_A"))
+    testing.AssertEqStr(env.Get("SALAM_ED_A"), "hello")
+    testing.AssertEqStr(env.GetOr("SALAM_ED_A", "fallback"), "hello")
+
+    // overwriting replaces
+    env.Set("SALAM_ED_A", "world")
+    testing.AssertEqStr(env.Get("SALAM_ED_A"), "world")
+    // values with spaces and punctuation survive the round trip
+    env.Set("SALAM_ED_A", "a b/c:d=e")
+    testing.AssertEqStr(env.Get("SALAM_ED_A"), "a b/c:d=e")
+
+    testing.AssertTrue(env.Unset("SALAM_ED_A"))
+    testing.AssertFalse(env.Has("SALAM_ED_A"))
+end
+
+func test_typed():
+    env.Set("SALAM_ED_PORT", "8080")
+    env.Set("SALAM_ED_RATIO", "0.25")
+    env.Set("SALAM_ED_FLAG", "true")
+    testing.AssertEqInt64(env.GetInt("SALAM_ED_PORT", 0 as i64), 8080 as i64)
+    testing.AssertEqFloat(env.GetFloat("SALAM_ED_RATIO", 0.0), 0.25, 0.0001)
+    testing.AssertTrue(env.GetBool("SALAM_ED_FLAG", false))
+    // an unset variable takes the default instead of parsing empty text
+    testing.AssertEqInt64(env.GetInt("SALAM_ED_NONE", 42 as i64), 42 as i64)
+    testing.AssertEqFloat(env.GetFloat("SALAM_ED_NONE", 1.5), 1.5, 0.0001)
+    testing.AssertTrue(env.GetBool("SALAM_ED_NONE", true))
+    testing.AssertFalse(env.GetBool("SALAM_ED_NONE", false))
+    env.Unset("SALAM_ED_PORT")
+    env.Unset("SALAM_ED_RATIO")
+    env.Unset("SALAM_ED_FLAG")
+end
+
+// Masking exists so a secret can be logged without being disclosed. A
+// short value gives nothing away at all; a longer one keeps just enough
+// to recognise which key it was.
+func test_mask():
+    testing.AssertEqStr(env.Mask(""), "")
+    testing.AssertEqStr(env.Mask("abc"), "***")
+    testing.AssertEqStr(env.Mask("12345678"), "********")
+    testing.AssertEqStr(env.Mask("123456789"), "12****89")
+    testing.AssertEqStr(env.Mask("AKIA1234567890ABCD"), "AK****CD")
+    // the mask never contains the middle of the secret
+    testing.AssertEqInt(env.Mask("supersecretvalue").find("secret"), 0 - 1)
+
+    env.Set("SALAM_ED_TOKEN", "AKIA1234567890ABCD")
+    testing.AssertEqStr(env.GetMasked("SALAM_ED_TOKEN"), "AK****CD")
+    env.Unset("SALAM_ED_TOKEN")
+    testing.AssertEqStr(env.GetMasked("SALAM_ED_TOKEN"), "")
+end
+
+// Profile is read from the first of SALAM_ENV, APP_ENV, ENV that is set,
+// and is lowercased so "Production" and "production" agree.
+func test_profile():
+    env.Unset("SALAM_ENV")
+    env.Unset("APP_ENV")
+    env.Unset("ENV")
+    testing.AssertEqStr(env.Profile(), "development")
+    testing.AssertTrue(env.IsDevelopment())
+    testing.AssertFalse(env.IsProduction())
+
+    env.Set("ENV", "test")
+    testing.AssertEqStr(env.Profile(), "test")
+    testing.AssertTrue(env.IsTest())
+
+    // APP_ENV outranks ENV
+    env.Set("APP_ENV", "staging")
+    testing.AssertEqStr(env.Profile(), "staging")
+    testing.AssertTrue(env.IsStaging())
+    testing.AssertFalse(env.IsTest())
+
+    // and SALAM_ENV outranks both
+    env.Set("SALAM_ENV", "PRODUCTION")
+    testing.AssertEqStr(env.Profile(), "production")
+    testing.AssertTrue(env.IsProduction())
+    testing.AssertFalse(env.IsStaging())
+
+    // the short spellings count too
+    env.Set("SALAM_ENV", "prod")
+    testing.AssertTrue(env.IsProduction())
+    env.Set("SALAM_ENV", "dev")
+    testing.AssertTrue(env.IsDevelopment())
+    env.Set("SALAM_ENV", "testing")
+    testing.AssertTrue(env.IsTest())
+
+    env.Unset("SALAM_ENV")
+    env.Unset("APP_ENV")
+    env.Unset("ENV")
+    testing.AssertEqStr(env.Profile(), "development")
+end
+
+// Expansion against the real environment, for text that did not come
+// from a .env file at all.
+func test_expand():
+    env.Set("SALAM_ED_HOME", "/srv/app")
+    testing.AssertEqStr(env.Expand("$SALAM_ED_HOME/logs"), "/srv/app/logs")
+    testing.AssertEqStr(env.Expand("${SALAM_ED_HOME}/logs"), "/srv/app/logs")
+    testing.AssertEqStr(env.Expand("no variables here"), "no variables here")
+    // an unset name with no default disappears
+    testing.AssertEqStr(env.Expand("[${SALAM_ED_ABSENT}]"), "[]")
+    testing.AssertEqStr(env.Expand("${SALAM_ED_ABSENT:-default}"), "default")
+    // text that merely contains a dollar is left alone
+    testing.AssertEqStr(env.Expand("costs $5"), "costs $5")
+    env.Unset("SALAM_ED_HOME")
+end
+
+// LoadText applies a document without touching the filesystem, and
+// without overriding what is already set.
+func test_load_text():
+    env.Unset("SALAM_ED_NEW")
+    env.Set("SALAM_ED_KEPT", "original")
+    n := env.LoadText("SALAM_ED_NEW=fresh\nSALAM_ED_KEPT=ignored\n")
+    testing.AssertEqInt(n, 1)
+    testing.AssertEqStr(env.Get("SALAM_ED_NEW"), "fresh")
+    testing.AssertEqStr(env.Get("SALAM_ED_KEPT"), "original")
+    env.Unset("SALAM_ED_NEW")
+    env.Unset("SALAM_ED_KEPT")
+end
+
+func main:
+    test_get_set()
+    test_typed()
+    test_mask()
+    test_profile()
+    test_expand()
+    test_load_text()
+    testing.Summary()
+    ret 0
+end

@@ -215,6 +215,23 @@ type_t *check_array_lit(sema_t *s, ast_node_t *n)
                 SERR(s, 56, &n->span, "array elements have incompatible types");
         }
     }
+    /* `[null, null]` where a T*[2] is wanted: null carries no element type of
+     * its own, so take the expected one rather than settling on null[2] and
+     * making every use site re-derive the conversion. With nothing to take it
+     * from, null[N] is not a type anything can hold - it used to reach the
+     * backend and emit "null blanks[2];" - so it is refused here, alongside
+     * the empty-array case that cannot infer an element type either. */
+    if (elem && elem->kind == TY_NULL) {
+        if (exp_elem && exp_elem->kind == TY_PTR)
+            elem = exp_elem;
+        else {
+            SERR(s, 52, &n->span,
+                 "cannot infer the element type of an array of nulls; annotate the "
+                 "target, e.g. 'slots: T*[%zu]'",
+                 n->list.len);
+            return decorate(s, n, err_ty(s));
+        }
+    }
     return decorate(s, n, type_array(s->tc, elem, n->list.len));
 }
 

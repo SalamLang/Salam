@@ -1,0 +1,275 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package bigint
+
+// Exponentiation, the Euclidean family, and integer roots.
+//
+// ModExp is the reason a general bignum belongs in the standard library at
+// all. Three private copies of it already exist in this tree -- std/tls's RSA
+// signature check, std/ssh's RSA host key, std/ssh's Diffie-Hellman -- each
+// grown to fit one caller and none of them reachable from a user program.
+// This is the same operation with no protocol wrapped around it.
+//
+// A REMINDER ABOUT SECRETS. The square-and-multiply below branches on the
+// exponent's bits and the reduction after each step is data dependent, so the
+// time it takes leaks the exponent. That is fine for a public exponent (an RSA
+// verification, e = 65537) and fatal for a private one (an RSA decryption, a
+// Diffie-Hellman secret). The blinded routine in std/ssh/bigint.salam is what
+// the secret-exponent case needs, and it stays there deliberately.
+
+// Halves a value that is known to be non-negative, which is the one shift the
+// Newton iteration below needs and lets it skip Shr's sign handling.
+func _half(x: Int): Int: ret _ushr(x, 1) end
+
+@en "Pow"
+@fa "توان"
+@ar "أس"
+pub func Pow(x: Int, e: int): Int:
+    if e < 0: ret Int {} end
+    if e == 0: ret One() end
+    mut result := One()
+    mut base := x.clone()
+    mut n := e
+    while n > 0:
+        if (n & 1) == 1:
+            t := Mul(result, base)
+            result.free()
+            result = t
+        end
+        n = n >> 1
+        if n > 0:
+            sq := Sqr(base)
+            base.free()
+            base = sq
+        end
+    end
+    base.free()
+    ret result
+end
+
+// 10^n, the scale factor every fixed-point decimal is built on. Worth its own
+// entry point because std/decimal asks for one on nearly every operation.
+@en "Pow10"
+@fa "توان ده"
+@ar "أس عشرة"
+pub func Pow10(n: int): Int:
+    if n < 0: ret Int {} end
+    mut r := One()
+    mut k := n
+    // Nine digits at a time is one limb-sized multiply per step instead of
+    // nine, and 10^9 is the largest power of ten a u32 holds.
+    while k >= 9:
+        t := _umul_add_small(r, 1000000000 as u32, 0 as u32)
+        r.free()
+        r = t
+        k -= 9
+    end
+    if k > 0:
+        mut m := 1 as u32
+        repeat k: m = m * (10 as u32) end
+        t := _umul_add_small(r, m, 0 as u32)
+        r.free()
+        r = t
+    end
+    ret r
+end
+
+// base^e mod |m|, with the result in [0, |m|). Returns zero when the modulus
+// is zero or the exponent is negative -- a negative exponent needs a modular
+// inverse, which is ModInverse's job and not silently this one's.
+@en "ModExp"
+@fa "توان پیمانه‌ای"
+@ar "أس تعديلي"
+pub func ModExp(base: Int, e: Int, m: Int): Int:
+    if m.is_zero() || e.neg: ret Int {} end
+    mut mm := Abs(m)
+    mut one := One()
+    // Seeding through Mod rather than with a bare 1 is what makes a modulus of
+    // 1 answer 0 for every input, including e == 0, with no special case.
+    mut result := Mod(one, mm)
+    one.free()
+    mut b := Mod(base, mm)
+    mut i := e.bit_len() - 1
+    while i >= 0:
+        sq := Sqr(result)
+        result.free()
+        result = Mod(sq, mm)
+        sq.free()
+        if Bit(e, i) == 1:
+            p := Mul(result, b)
+            result.free()
+            result = Mod(p, mm)
+            p.free()
+        end
+        i -= 1
+    end
+    b.free()
+    mm.free()
+    ret result
+end
+
+// The greatest common divisor of |a| and |b|, so it is never negative;
+// Gcd(0, 0) is 0.
+@en "Gcd"
+@fa "ب م م"
+@ar "قاسم مشترك أكبر"
+pub func Gcd(a: Int, b: Int): Int:
+    mut x := Abs(a)
+    mut y := Abs(b)
+    while !y.is_zero():
+        r := Mod(x, y)
+        x.free()
+        x = y
+        y = r
+    end
+    y.free()
+    ret x
+end
+
+// The least common multiple of |a| and |b|; zero if either is zero.
+@en "Lcm"
+@fa "ک م م"
+@ar "مضاعف مشترك أصغر"
+pub func Lcm(a: Int, b: Int): Int:
+    if a.is_zero() || b.is_zero(): ret Int {} end
+    mut g := Gcd(a, b)
+    mut d := Div(a, g)
+    g.free()
+    mut p := Mul(d, b)
+    d.free()
+    r := Abs(p)
+    p.free()
+    ret r
+end
+
+// The extended Euclidean algorithm: returns g = gcd(|a|, |b|) and writes the
+// Bezout coefficients, so that a*x + b*y == g exactly.
+@en "ExtGcd"
+@fa "ب م م گسترده"
+@ar "قاسم مشترك ممتد"
+pub func ExtGcd(a: Int, b: Int, x &: Int, y &: Int): Int:
+    mut old_r := Abs(a)
+    mut r := Abs(b)
+    mut old_s := One()
+    mut s := Int {}
+    mut old_t := Int {}
+    mut t := One()
+    while !r.is_zero():
+        q := Div(old_r, r)
+        qr := Mul(q, r)
+        nr := Sub(old_r, qr)
+        qr.free()
+        old_r.free()
+        old_r = r
+        r = nr
+        qs := Mul(q, s)
+        ns := Sub(old_s, qs)
+        qs.free()
+        old_s.free()
+        old_s = s
+        s = ns
+        qt := Mul(q, t)
+        nt := Sub(old_t, qt)
+        qt.free()
+        old_t.free()
+        old_t = t
+        t = nt
+        q.free()
+    end
+    r.free()
+    s.free()
+    t.free()
+    // The recurrence solved it for the magnitudes; flip a coefficient back for
+    // each operand that was actually negative.
+    if a.neg: NegateIn(old_s) end
+    if b.neg: NegateIn(old_t) end
+    _replace(x, old_s)
+    _replace(y, old_t)
+    ret old_r
+end
+
+// The inverse of a modulo |m|, in [0, |m|). Sets ok = false and returns zero
+// when a and m share a factor, which is when no inverse exists.
+@en "ModInverse"
+@fa "وارون پیمانه‌ای"
+@ar "معكوس تعديلي"
+pub func ModInverse(a: Int, m: Int, ok &: bool): Int:
+    ok = false
+    if m.is_zero(): ret Int {} end
+    mut mm := Abs(m)
+    mut x := Int {}
+    mut y := Int {}
+    mut g := ExtGcd(a, mm, x, y)
+    y.free()
+    one := EqualsInt(g, 1 as i64)
+    g.free()
+    if !one:
+        x.free()
+        mm.free()
+        ret Int {}
+    end
+    r := Mod(x, mm)
+    x.free()
+    mm.free()
+    ok = true
+    ret r
+end
+
+// floor(sqrt(x)) by Newton's method, which converges from above: each step
+// halves the error, and the first guess that stops decreasing is the answer.
+// Returns zero for a negative x rather than pretending to have an imaginary
+// result.
+@en "Sqrt"
+@fa "جذر"
+@ar "جذر"
+pub func Sqrt(x: Int): Int:
+    if x.neg || x.is_zero(): ret Int {} end
+    bl := x.bit_len()
+    if bl <= 2: ret One() end
+    mut one := One()
+    // 2^ceil(bits/2) is the smallest power of two at or above sqrt(x), which
+    // is the standard starting point for the descent.
+    mut a := Shl(one, (bl + 1) / 2)
+    one.free()
+    while true:
+        d := Div(x, a)
+        sum := Add(a, d)
+        d.free()
+        b := _half(sum)
+        sum.free()
+        if Cmp(b, a) >= 0:
+            b.free()
+            break
+        end
+        a.free()
+        a = b
+    end
+    ret a
+end
+
+// n! for n >= 0; anything negative gives zero.
+@en "Factorial"
+@fa "فاکتوریل"
+@ar "مضروب"
+pub func Factorial(n: int): Int:
+    if n < 0: ret Int {} end
+    mut r := One()
+    mut i := 2
+    while i <= n:
+        MulIntBy(r, i as i64)
+        i += 1
+    end
+    ret r
+end

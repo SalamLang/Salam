@@ -479,11 +479,11 @@ no external toolchain involved.
 Both surfaced only once std/llvm was compiled into a real program, and both
 affect **both** backends.
 
-### 1. `defer` on a binding declared inside a loop body (open)
+### 1. `defer` on a binding declared inside a loop body (fixed)
 
-`SKILL.md` documents defer as running at _scope_ exit. Both backends emit
+`SKILL.md` documents defer as running at _scope_ exit. Both backends emitted
 every defer at _function_ exit (`cg->fn_defers`, `ll->defers`), so a defer on
-a loop-local binding lands in the function epilogue where that binding is out
+a loop-local binding landed in the function epilogue where that binding is out
 of scope. 20-line repro:
 
 ```salam
@@ -497,11 +497,19 @@ end
 - C backend: `error: 'entries' undeclared`
 - LLVM backend: `address of an unknown identifier 'entries'`
 
-This also accounts for part of the remaining `address of an unknown
-identifier` bucket in the sweep. Not fixed here: making defers block-scoped
-is a language-semantics change with stdlib-wide blast radius and wants its
-own change with tests. `std/llvm/linker.salam` was rewritten to free
+This also accounted for part of the remaining `address of an unknown
+identifier` bucket in the sweep. `std/llvm/linker.salam` was rewritten to free
 explicitly instead, with a comment pointing here.
+
+Fixed since, in a change of its own: every nested block now records the
+defer-stack depth it started at and replays back down to that mark on the way
+out, so the cleanup is emitted where the binding is still in scope. `ret`
+still replays the whole stack; `break` and `continue` replay back to the
+enclosing loop body's mark instead of skipping its cleanup. That also makes a
+defer in an untaken branch not run at all, and a defer in a loop body run once
+per iteration - both of which the interpreter already did, since it registers
+defers as it reaches them. All four backends (C, LLVM, JS, interpreter) share
+the rule; `tests/en/general/defer_scope.salam` pins it.
 
 ### 2. Taking an extern's address mangled the symbol (fixed)
 

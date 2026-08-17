@@ -70,11 +70,131 @@ extern:
     func mysql_get_server_info(conn: void*): str
 end
 import mem
+import db
+// The methods on Database/Result/Txn below are what makes this driver a
+// `db.Connection`; the free functions further down are MySQL's full surface
+// and stay the direct way to use it on its own. Both work on the same handles.
+
 @en "Database"
 @fa "پایگاه داده"
 @ar "قاعدة بیانات"
 pub struct Database:
     pub handle: void* = null
+
+    @en "Kind"
+    @fa "نوع"
+    @ar "نوع"
+    pub func Kind(): str: ret db.MYSQL end
+
+    @en "Ok"
+    @fa "معتبر"
+    @ar "صالح"
+    pub func Ok(): bool: ret this.handle != null end
+
+    @en "Ping"
+    @fa "پینگ"
+    @ar "بینغ"
+    pub func Ping(): bool:
+        if this.handle == null:
+            ret false
+        end
+        ret mysql_ping(this.handle) == 0
+    end
+
+    @en "Exec"
+    @fa "اجرا"
+    @ar "تنفیذ"
+    pub func Exec(sql: str): int:
+        if this.handle == null:
+            ret -1
+        end
+        if mysql_query(this.handle, sql) != 0:
+            ret -1
+        end
+        // A statement that returned rows still holds them on the connection;
+        // dropping them here keeps the session usable for the next query.
+        res := mysql_store_result(this.handle)
+        if res != null:
+            mysql_free_result(res)
+        end
+        ret 0
+    end
+
+    @en "Query"
+    @fa "پرسمان"
+    @ar "استعلام"
+    pub func Query(sql: str): dyn db.Rows:
+        if this.handle == null:
+            ret Result { handle = null }
+        end
+        if mysql_query(this.handle, sql) != 0:
+            ret Result { handle = null }
+        end
+        ret Result { handle = mysql_store_result(this.handle) }
+    end
+
+    @en "Begin"
+    @fa "شروع تراکنش"
+    @ar "بدء المعاملة"
+    pub func Begin(): dyn db.Tx:
+        if this.Exec("START TRANSACTION") != 0:
+            ret Txn { handle = null }
+        end
+        ret Txn { handle = this.handle }
+    end
+
+    @en "LastInsertId"
+    @fa "شناسه آخرین درج"
+    @ar "معرف آخر إدراج"
+    pub func LastInsertId(): i64:
+        if this.handle == null:
+            ret 0
+        end
+        ret mysql_insert_id(this.handle) as i64
+    end
+
+    @en "Changes"
+    @fa "تعداد تغییرات"
+    @ar "تغییرات"
+    pub func Changes(): i64:
+        if this.handle == null:
+            ret 0
+        end
+        ret mysql_affected_rows(this.handle) as i64
+    end
+
+    @en "Error"
+    @fa "خطا"
+    @ar "خطأ"
+    pub func Error(): str:
+        if this.handle == null:
+            ret "no connection"
+        end
+        ret str.Clone(mysql_error(this.handle))
+    end
+
+    // mysql_real_escape_string is charset-aware but escapes the body only, so
+    // the quotes are added here to make a complete literal.
+    @en "Quote"
+    @fa "نقل قول"
+    @ar "اقتباس"
+    pub func Quote(s: str): str:
+        if this.handle == null:
+            ret db.QuoteLiteral(s)
+        end
+        ret "'" + Escape(Database { handle = this.handle }, s) + "'"
+    end
+
+    @en "Close"
+    @fa "بستن"
+    @ar "إغلاق"
+    pub func Close(): int:
+        if this.handle == null:
+            ret -1
+        end
+        mysql_close(this.handle)
+        ret 0
+    end
 end
 
 @en "Result"
@@ -83,6 +203,176 @@ end
 pub struct Result:
     pub handle: void* = null
     pub row: void* = null
+
+    @en "Ok"
+    @fa "معتبر"
+    @ar "صالح"
+    pub func Ok(): bool: ret this.handle != null end
+
+    @en "Next"
+    @fa "بعدی"
+    @ar "التالی"
+    pub func Next(): bool:
+        if this.handle == null:
+            ret false
+        end
+        this.row = mysql_fetch_row(this.handle)
+        ret this.row != null
+    end
+
+    @en "ColumnCount"
+    @fa "تعداد ستون"
+    @ar "عدد الأعمدة"
+    pub func ColumnCount(): int:
+        if this.handle == null:
+            ret 0
+        end
+        ret mysql_num_fields(this.handle) as int
+    end
+
+    // These mirror the free functions of the same name below. They cannot
+    // simply call them: inside a method a bare `Text(...)` binds to the
+    // method, not to the package-level function.
+    @en "ColumnName"
+    @fa "نام ستون"
+    @ar "اسم العمود"
+    pub func ColumnName(col: int): str:
+        if this.handle == null:
+            ret ""
+        end
+        fld := mysql_fetch_field_direct(this.handle, col as u32)
+        if fld == null:
+            ret ""
+        end
+        fptrs := fld as i64*
+        namep := fptrs[0]
+        if namep == 0:
+            ret ""
+        end
+        ret str.Clone(namep as void* as str)
+    end
+
+    // MySQL hands every value over as text on this API, so a column's type is
+    // reported as TEXT unless the value is NULL.
+    @en "ColumnType"
+    @fa "نوع ستون"
+    @ar "نوع العمود"
+    pub func ColumnType(col: int): int:
+        if this.IsNull(col):
+            ret db.TYPE_NULL
+        end
+        ret db.TYPE_TEXT
+    end
+
+    @en "IsNull"
+    @fa "خالی است"
+    @ar "فارغ"
+    pub func IsNull(col: int): bool:
+        ret _cell(Result { handle = this.handle, row = this.row }, col) == 0
+    end
+
+    @en "Text"
+    @fa "متن"
+    @ar "نص"
+    pub func Text(col: int): str:
+        cell := _cell(Result { handle = this.handle, row = this.row }, col)
+        if cell == 0:
+            ret ""
+        end
+        ret str.Clone(cell as void* as str)
+    end
+
+    @en "Int"
+    @fa "عدد صحیح"
+    @ar "عدد صحیح"
+    pub func Int(col: int): int: ret this.Int64(col) as int end
+
+    @en "Int64"
+    @fa "عدد صحیح۶۴"
+    @ar "عدد صحیح٦٤"
+    pub func Int64(col: int): i64:
+        cell := _cell(Result { handle = this.handle, row = this.row }, col)
+        if cell == 0:
+            ret 0
+        end
+        ret conv.ParseInt(cell as void* as str)
+    end
+
+    @en "Float"
+    @fa "عدد اعشار"
+    @ar "عدد عشری"
+    pub func Float(col: int): f64:
+        cell := _cell(Result { handle = this.handle, row = this.row }, col)
+        if cell == 0:
+            ret 0.0
+        end
+        s := cell as void* as str
+        ret s.to_float()
+    end
+
+    @en "Close"
+    @fa "بستن"
+    @ar "إغلاق"
+    pub func Close(): int:
+        if this.handle == null:
+            ret -1
+        end
+        mysql_free_result(this.handle)
+        this.handle = null
+        ret 0
+    end
+end
+
+// A transaction opened by Database.Begin(). MySQL commits DDL implicitly, so
+// a step that alters the schema cannot be rolled back by Rollback().
+@en "Txn"
+@fa "تراکنش"
+@ar "معاملة"
+pub struct Txn:
+    pub handle: void* = null
+
+    @en "Ok"
+    @fa "معتبر"
+    @ar "صالح"
+    pub func Ok(): bool: ret this.handle != null end
+
+    @en "Exec"
+    @fa "اجرا"
+    @ar "تنفیذ"
+    pub func Exec(sql: str): int:
+        d := Database { handle = this.handle }
+        ret d.Exec(sql)
+    end
+
+    @en "Query"
+    @fa "پرسمان"
+    @ar "استعلام"
+    pub func Query(sql: str): dyn db.Rows:
+        d := Database { handle = this.handle }
+        ret d.Query(sql)
+    end
+
+    @en "Commit"
+    @fa "ثبت تراکنش"
+    @ar "تثبیت المعاملة"
+    pub func Commit(): int:
+        if this.handle == null:
+            ret -1
+        end
+        d := Database { handle = this.handle }
+        ret d.Exec("COMMIT")
+    end
+
+    @en "Rollback"
+    @fa "بازگردانی"
+    @ar "تراجع"
+    pub func Rollback(): int:
+        if this.handle == null:
+            ret -1
+        end
+        d := Database { handle = this.handle }
+        ret d.Exec("ROLLBACK")
+    end
 end
 
 func _cell(res: Result, col: int): i64:
@@ -514,4 +804,12 @@ end
 @ar "إنهاء الخیط"
 pub func ThreadEnd():
     mysql_thread_end()
+end
+
+// Box an open connection as the engine-independent connection type.
+@en "Conn"
+@fa "اتصال"
+@ar "اتصال"
+pub func Conn(d: Database): dyn db.Connection:
+    ret d
 end

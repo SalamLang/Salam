@@ -1,0 +1,218 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// std/time's timers and tickers, all of which run on the monotonic clock.
+//
+// Timing tests are only as reliable as the machine running them, so the
+// assertions here are one-sided wherever they can be: a wait must never
+// finish EARLY (that would be a real bug), while the upper bounds are
+// deliberately loose, because an overloaded CI box can pause a process for
+// a long time without anything being wrong. The logical properties -
+// tick dropping, non-blocking polls, stopped timers - are exact.
+package main
+
+import testing
+import time
+
+// Callbacks cannot write to the caller's locals - a lambda captures them
+// by value - so counters shared with a callback live at top level, the
+// same way a spawned thread's do.
+mut every_calls := 0
+mut repeat_calls := 0
+mut probe_calls := 0
+mut after_calls := 0
+
+func test_timer_basics():
+    mut t := time.NewTimer(time.Milliseconds(40))
+    testing.AssertTrue(t.active)
+    testing.AssertFalse(t.expired())
+    // Time left is bounded by the span it was created with.
+    testing.AssertTrue(t.remaining().millis() <= 40)
+    testing.AssertFalse(t.remaining().is_zero())
+    start := time.MonoNanos()
+    t.wait()
+    waited := time.SinceDuration(start)
+    // Must not return early; the ceiling is generous on purpose.
+    testing.AssertTrue(waited.millis() >= 38)
+    testing.AssertTrue(waited.millis() < 5000)
+    testing.AssertTrue(t.expired())
+    testing.AssertTrue(t.remaining().is_zero())
+end
+
+func test_timer_stop_and_reset():
+    mut t := time.NewTimer(time.Milliseconds(1))
+    time.SleepFor(time.Milliseconds(5))
+    testing.AssertTrue(t.expired())
+    // A stopped timer never reports expired and never blocks.
+    t.stop()
+    testing.AssertFalse(t.active)
+    testing.AssertFalse(t.expired())
+    testing.AssertTrue(t.remaining().is_zero())
+    t.wait()
+    // Reset revives it with a fresh span.
+    t.reset(time.Seconds(30))
+    testing.AssertTrue(t.active)
+    testing.AssertFalse(t.expired())
+    testing.AssertTrue(t.remaining().secs() >= 29)
+end
+
+func test_already_expired_timer():
+    // A zero or negative span yields an already-expired timer rather than
+    // one that never fires.
+    zero := time.NewTimer(time.ZeroDuration())
+    testing.AssertTrue(zero.expired())
+    neg := time.NewTimer(time.Milliseconds(0 - 5))
+    testing.AssertTrue(neg.expired())
+    // Waiting on one returns immediately.
+    start := time.MonoNanos()
+    neg.wait()
+    testing.AssertTrue(time.SinceDuration(start).millis() < 2000)
+end
+
+func test_ticker_cadence():
+    start := time.MonoNanos()
+    mut tk := time.NewTicker(time.Milliseconds(20))
+    testing.AssertTrue(tk.active)
+    mut n := 0
+    repeat 5:
+        tk.wait()
+        n += 1
+    end
+    el := time.SinceDuration(start)
+    testing.AssertEqInt(n, 5)
+    // Five 20ms ticks cannot take less than 100ms.
+    testing.AssertTrue(el.millis() >= 95)
+    testing.AssertTrue(el.millis() < 10000)
+    // Nothing was missed, so nothing was dropped.
+    testing.AssertEqInt64(tk.dropped, 0 as i64)
+end
+
+func test_ticker_drops_missed_ticks():
+    // A body slower than the interval must not queue up ticks and then
+    // fire them back-to-back; the missed ones are dropped and counted.
+    mut tk := time.NewTicker(time.Milliseconds(10))
+    start := time.MonoNanos()
+    repeat 3:
+        tk.wait()
+        time.SleepFor(time.Milliseconds(40))
+    end
+    el := time.SinceDuration(start)
+    testing.AssertTrue(tk.dropped > 0 as i64)
+    // Three iterations of a 40ms body: about 130ms, not 3 stacked ticks
+    // returning instantly.
+    testing.AssertTrue(el.millis() >= 120)
+end
+
+func test_ticker_poll_is_non_blocking():
+    mut tk := time.NewTicker(time.Milliseconds(30))
+    // Nothing is due yet, and asking must not block.
+    start := time.MonoNanos()
+    testing.AssertFalse(tk.fired())
+    testing.AssertTrue(time.SinceDuration(start).millis() < 2000)
+    testing.AssertTrue(tk.remaining().millis() <= 30)
+    time.SleepFor(time.Milliseconds(45))
+    // Exactly one tick is delivered, then it re-arms.
+    testing.AssertTrue(tk.fired())
+    testing.AssertFalse(tk.fired())
+end
+
+func test_ticker_stop_and_reset():
+    mut tk := time.NewTicker(time.Milliseconds(5))
+    tk.stop()
+    testing.AssertFalse(tk.active)
+    time.SleepFor(time.Milliseconds(15))
+    // A stopped ticker never fires and never blocks.
+    testing.AssertFalse(tk.fired())
+    testing.AssertTrue(tk.remaining().is_zero())
+    tk.wait()
+    tk.reset(time.Seconds(10))
+    testing.AssertTrue(tk.active)
+    testing.AssertEqInt64(tk.dropped, 0 as i64)
+    testing.AssertTrue(tk.remaining().secs() >= 9)
+end
+
+func test_zero_interval_cannot_spin():
+    // A misconfigured interval must produce an inert ticker, not a busy
+    // loop that pins a core.
+    mut zero := time.NewTicker(time.ZeroDuration())
+    testing.AssertFalse(zero.active)
+    testing.AssertFalse(zero.fired())
+    zero.wait()
+    mut neg := time.NewTicker(time.Milliseconds(0 - 10))
+    testing.AssertFalse(neg.active)
+    testing.AssertFalse(neg.fired())
+end
+
+func test_callback_helpers():
+    // Every stops as soon as the callback returns false.
+    ran := time.Every(time.Milliseconds(5), (): every_calls = every_calls + 1 ret every_calls < 4 end)
+    testing.AssertEqInt64(ran, 4 as i64)
+    testing.AssertEqInt(every_calls, 4)
+
+    time.RepeatEvery(time.Milliseconds(5), 3, (): repeat_calls = repeat_calls + 1 end)
+    testing.AssertEqInt(repeat_calls, 3)
+    // A non-positive count does nothing at all.
+    time.RepeatEvery(time.Milliseconds(5), 0, (): repeat_calls = repeat_calls + 1 end)
+    testing.AssertEqInt(repeat_calls, 3)
+
+    time.AfterFunc(time.Milliseconds(10), (): after_calls = after_calls + 1 end)
+    testing.AssertEqInt(after_calls, 1)
+end
+
+func test_wait_until():
+    // Met before the limit.
+    met := time.WaitUntil((): probe_calls = probe_calls + 1 ret probe_calls >= 3 end, time.Milliseconds(5), time.Seconds(5))
+    testing.AssertTrue(met)
+    testing.AssertEqInt(probe_calls, 3)
+
+    // Times out, and takes at least the limit to do so.
+    start := time.MonoNanos()
+    missed := time.WaitUntil((): ret false end, time.Milliseconds(5), time.Milliseconds(50))
+    el := time.SinceDuration(start)
+    testing.AssertFalse(missed)
+    testing.AssertTrue(el.millis() >= 45)
+
+    // A condition that is already true costs nothing and never sleeps.
+    start2 := time.MonoNanos()
+    quick := time.WaitUntil((): ret true end, time.Seconds(30), time.Seconds(30))
+    testing.AssertTrue(quick)
+    testing.AssertTrue(time.SinceDuration(start2).millis() < 2000)
+end
+
+func test_monotonic_clock_never_goes_backwards():
+    // The property the whole file rests on: these deadlines must survive a
+    // wall-clock adjustment, which only a monotonic source does.
+    mut prev := time.MonoNanos()
+    repeat 200:
+        now := time.MonoNanos()
+        testing.AssertTrue(now >= prev)
+        prev = now
+    end
+end
+
+func main:
+    test_timer_basics()
+    test_timer_stop_and_reset()
+    test_already_expired_timer()
+    test_ticker_cadence()
+    test_ticker_drops_missed_ticks()
+    test_ticker_poll_is_non_blocking()
+    test_ticker_stop_and_reset()
+    test_zero_interval_cannot_spin()
+    test_callback_helpers()
+    test_wait_until()
+    test_monotonic_clock_never_goes_backwards()
+    testing.Summary()
+    ret 0
+end

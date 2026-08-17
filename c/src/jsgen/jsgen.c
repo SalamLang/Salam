@@ -164,6 +164,7 @@ jsgen_output_t *jsgen_run(arena_t *a, logger_t *log, ast_node_t *program,
     vec_init(&g.cg.dyn_impls);
     vec_init(&g.cg.deferred);
     vec_init(&g.cg.fn_defers);
+    g.cg.nloop = 0;
     vec_init(&g.local_muts);
     vec_init(&g.local_emit);
     vec_init(&g.taken);

@@ -120,7 +120,7 @@ k_ast_names := [
     "This", "Call", "MemberAccess", "ArrayAccess", "SliceExpr", "TernaryExpr", "Lambda", "ArrayLiteral",
     "StructLiteral", "FieldInit", "Type", "LayoutBlock", "LayoutElement", "LayoutAttribute", "LayoutComponent",
     "MatchExpr", "MatchArm", "MatchPattern", "VariantBox", "VariantUnwrap"
-] as str[53]
+]
 
 // ast_kind_t / node handle (see file header for why not an enum / pointer).
 pub type AstKind = int
@@ -137,6 +137,13 @@ pub struct Node:
     pub end_col: u32 = 0 as u32
     pub end_index: u32 = 0 as u32
     pub length: u32 = 0 as u32
+    // Source file this top-level node was parsed from, stamped by parser.Run.
+    // The files of a multi-file package are merged into one program, so the
+    // span alone cannot say which file a line number belongs to; sema follows
+    // this while checking so a sibling file's diagnostics stop being reported
+    // against the package's anchor file. "" on nodes below the top level and
+    // on synthetic ones - those inherit whatever file is current.
+    pub src_file: str = ""
     pub name: str = ""
     // token_value_t value (union flattened; TV_CHAR codepoint in value_int)
     pub value_kind: int = 0 // tok.TV_NONE
@@ -146,7 +153,16 @@ pub struct Node:
     pub value_bool: bool = false
     pub op: int = 0 // token_kind_t (tok.TK_*)
     pub is_mut: bool = false
+    // Shorthand for ptr_depth > 0, kept in sync by every writer so the many
+    // readers that only ask "is this a pointer at all" keep working.
     pub is_pointer: bool = false
+    // AST_TYPE only: stars written AFTER the dims ("Edge[6]**" -> 2), i.e. a
+    // pointer TO the array. Generic substitution SUMS this with the
+    // argument's own depth: "T*" with T = "Edge*" is Edge**.
+    pub ptr_depth: int = 0
+    // ...and stars written BEFORE the dims ("Edge**[6]" -> 2), which belong
+    // to the ELEMENT type: an array of pointers, not a pointer to an array.
+    pub elem_ptr_depth: int = 0
     pub synthetic: bool = false
     pub file_boundary: bool = false
     pub is_extern: bool = false
@@ -187,6 +203,31 @@ pub struct Node:
     pub aliases: Vector<str> = Vector {} // vec_t aliases (names)
     pub captures: Vector<int> = Vector {} // vec_t captures (NodeIds)
     pub type_str: str = ""
+    // On an AST_TYPE the generic machinery built rather than parsed: the type
+    // id it already stands for. A type argument is resolved in the caller's
+    // scope but substituted into a template that is checked in the declaring
+    // package's scope, and a package's scope cannot see the caller's
+    // declarations - so a round trip through the name would lose a
+    // user-defined struct handed to a stdlib generic ("unknown type 'User'"
+    // from inside std/encoding/json). Carrying the resolved type across that
+    // switch is what keeps `json.Marshal(user)` and `option.Some(user)`
+    // working. -1 on everything the parser produced.
+    pub sema_type: int = -1
+    // The same trick one level down, for an occurrence that decorates the type
+    // parameter rather than naming it bare: `T*`, `T[4]`. Substituting `T` =
+    // `Row` there cannot reuse the argument's resolved type - the node stands
+    // for `Row*`, not `Row` - but resolving the name again is exactly what
+    // fails, because `Row` belongs to a package the template's scope cannot
+    // see. So the *base* travels instead and sema_resolve_type applies this
+    // node's own `*` and `[N]` on top of it. -1 unless g_subst set it.
+    pub sema_base_type: int = -1
+    // On a synthetic top-level function - a generic instantiation or a derived
+    // codec - the package whose scope its body was checked inside. Its name is
+    // global, but the names it calls are that package's, private ones
+    // included. The interpreter keeps one environment per module, so without
+    // this a body would be looked up against the program's globals and its own
+    // module's helpers would be missing.
+    pub home_pkg: str = ""
     pub origin_lang: str = ""
 end
 
@@ -327,6 +368,15 @@ pub func SetName(a &: Ast, id: NodeId, name: str):
     a.nodes.set(id, n)
 end
 
+// SALAM_ERR_NAME / ast_name_is_err: the placeholder the parser stores as a
+// declaration's or an identifier's name once it has already reported why the
+// real name could not be read. Later phases must stay silent about it: a
+// second diagnostic quoting "<error>" only buries the one that explained the
+// problem.
+pub func NameIsErr(name: str): bool:
+    ret str.Equals(name, "<error>")
+end
+
 pub func SetOp(a &: Ast, id: NodeId, op: int):
     mut n := a.nodes.get(id)
     n.op = op
@@ -386,6 +436,20 @@ end
 pub func ChildCount(a: Ast, id: NodeId): int:
     n := a.nodes.get(id)
     ret n.list.len()
+end
+
+// Stamps a parsed program and every one of its top-level nodes with the file
+// they came from, so the merge into a package program cannot lose it.
+pub func StampSrcFile(a &: Ast, prog: NodeId, file: str):
+    mut p := a.nodes.get(prog)
+    p.src_file = file
+    a.nodes.set(prog, p)
+    repeat ChildCount(a, prog) with i:
+        cid := Child(a, prog, i)
+        mut c := a.nodes.get(cid)
+        c.src_file = file
+        a.nodes.set(cid, c)
+    end
 end
 
 pub func AddDim(a &: Ast, id: NodeId, dim: NodeId):

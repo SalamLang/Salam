@@ -13,6 +13,7 @@
  */
 
 #include "core/prelude.h"
+#include "core/sal_format.h"
 #include "semantic/sema_internal.h"
 
 static type_t *ty(sema_t *s, type_kind_t k)
@@ -70,28 +71,72 @@ static size_t resolve_array_dim(sema_t *s, ast_node_t *dim)
     return 0;
 }
 
+/*
+ * Wrap a resolved base in whatever the type node's suffixes asked for, in the
+ * one order that makes both spellings mean what they read as:
+ *   Edge*[6]  ->  elem_ptr_depth, so the star binds first: array of pointers
+ *   Edge[6]*  ->  ptr_depth, so the star binds last: pointer to the array
+ * Every branch of sema_resolve_type routes through here; branches that used to
+ * apply only is_pointer silently dropped the dims of a type like
+ * `pkg.Type[3]`.
+ */
+static type_t *apply_type_suffixes(sema_t *s, ast_node_t *tnode, type_t *base)
+{
+    {
+        int k = tnode->elem_ptr_depth;
+        for (; k > 0; k--)
+            base = type_ptr(s->tc, base);
+    }
+    {
+        size_t i = tnode->dims.len;
+        for (; i-- > 0;) {
+            ast_node_t *dim = (ast_node_t *)tnode->dims.data[i];
+            base = type_array(s->tc, base, resolve_array_dim(s, dim));
+        }
+    }
+    if (tnode->is_slice) base = type_slice(s->tc, base);
+    {
+        /* is_pointer without a depth is a node the generic machinery or a
+         * desugaring built by hand; treat it as one level. */
+        int k = tnode->ptr_depth ? tnode->ptr_depth : (tnode->is_pointer ? 1 : 0);
+        for (; k > 0; k--)
+            base = type_ptr(s->tc, base);
+    }
+    return base;
+}
+
 type_t *sema_resolve_type(sema_t *s, ast_node_t *tnode)
 {
     if (!tnode) return ty(s, TY_VOID);
+    /* A type the generic machinery resolved in the caller's scope and is
+     * carrying into a package's scope, where the name would not resolve. See
+     * ast_node_t::sema_type. */
+    if (tnode->sema_type) return (type_t *)tnode->sema_type;
     type_t *base;
 
     if (tnode->is_dyn) {
-        symbol_t *iface = scope_lookup(s->cur, tnode->name);
-        if (!iface || iface->kind != SYM_INTERFACE) {
-            SERR(s, 1, &tnode->span, "'%s' is not an interface (required after 'dyn')",
-                 tnode->name);
+        const char *why = NULL;
+        symbol_t *iface = sema_lookup_iface(s, tnode->name, &tnode->span, &why);
+        if (!iface) {
+            if (why)
+                SERR(s, 1, &tnode->span, "'%s' after 'dyn': %s", tnode->name, why);
+            else
+                SERR(s, 1, &tnode->span,
+                     "'%s' is not an interface (required after 'dyn')", tnode->name);
             return err_ty(s);
         }
-        type_t *dt = type_dyn(s->tc, iface, tnode->name);
-        {
-            size_t i = tnode->dims.len;
-            for (; i-- > 0;) {
-                ast_node_t *dim = (ast_node_t *)tnode->dims.data[i];
-                dt = type_array(s->tc, dt, resolve_array_dim(s, dim));
-            }
+        /* Name the type after the interface itself, never after the spelling
+         * used at this site, so "Connection" and "db.Connection" agree. */
+        const char *iname = iface->name;
+        if (iface->pkgname && iface->pkgname[0] && strcmp(iface->pkgname, "main") != 0) {
+            char buf[512];
+            sal_snprintf(buf, sizeof buf, "%s_%s", iface->pkgname, iface->name);
+            iname = arena_strdup(s->a, buf);
         }
-        if (tnode->is_pointer) dt = type_ptr(s->tc, dt);
-        return dt;
+        {
+            type_t *dt = type_dyn(s->tc, iface, iname);
+            return apply_type_suffixes(s, tnode, dt);
+        }
     }
 
     const char *dot = tnode->name ? strchr(tnode->name, '.') : NULL;
@@ -137,12 +182,10 @@ type_t *sema_resolve_type(sema_t *s, ast_node_t *tnode)
             s->cur = save_cur;
             s->gen_pkg = save_gp;
             base = inst ? inst->type : err_ty(s);
-            if (tnode->is_pointer) base = type_ptr(s->tc, base);
-            return base;
+            return apply_type_suffixes(s, tnode, base);
         }
         base = tsym->type;
-        if (tnode->is_pointer) base = type_ptr(s->tc, base);
-        return base;
+        return apply_type_suffixes(s, tnode, base);
     }
 
     if (tnode->name && type_prim_kind_from_name(tnode->name, NULL) < 0) {
@@ -163,13 +206,18 @@ type_t *sema_resolve_type(sema_t *s, ast_node_t *tnode)
         type_t *ret = tnode->type ? sema_resolve_type(s, tnode->type) : ty(s, TY_VOID);
         base = type_func(s->tc, ret, &ptypes);
         if (tnode->is_extern) base->length = 1;
-        if (tnode->is_pointer) base = type_ptr(s->tc, base);
+        base = apply_type_suffixes(s, tnode, base);
         decorate(s, tnode, base);
         return base;
     }
     int pk = tnode->name ? type_prim_kind_from_name(tnode->name, NULL) : -1;
 
-    if (tnode->name && strcmp(tnode->name, "File") == 0) {
+    if (tnode->sema_base_type) {
+        /* `T*`/`T[N]` in a template the generic machinery substituted into.
+         * The name would not resolve here; the base already did, in the scope
+         * that named it. See ast_node_t::sema_base_type. */
+        base = (type_t *)tnode->sema_base_type;
+    } else if (tnode->name && strcmp(tnode->name, "File") == 0) {
         base = type_file(s->tc);
     } else if (tnode->name && strcmp(tnode->name, "Variant") == 0) {
         if (tnode->list.len < 2) {
@@ -236,15 +284,7 @@ type_t *sema_resolve_type(sema_t *s, ast_node_t *tnode)
         }
     }
 
-    {
-        size_t i = tnode->dims.len;
-        for (; i-- > 0;) {
-            ast_node_t *dim = (ast_node_t *)tnode->dims.data[i];
-            base = type_array(s->tc, base, resolve_array_dim(s, dim));
-        }
-    }
-    if (tnode->is_slice) base = type_slice(s->tc, base);
-    if (tnode->is_pointer) base = type_ptr(s->tc, base);
+    base = apply_type_suffixes(s, tnode, base);
     decorate(s, tnode, base);
     return base;
 }

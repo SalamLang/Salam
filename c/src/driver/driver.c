@@ -433,9 +433,13 @@ static void fmt_one_file(fmt_ctx_t *c, const char *path)
     const langpack_t *pack = langpack_detect(a, src, c->pack);
 
     const source_file_t *fmt_input = src;
+    /* Function-scope: fmt_input may alias reordered.data, which has to stay
+     * alive until fmt_source() below is done with it - and be freed on every
+     * exit path after that, since an sb_t owns malloc'd memory the arena
+     * knows nothing about. */
+    sb_t reordered;
+    sb_init(&reordered);
     if (c->fix_order) {
-        sb_t reordered;
-        sb_init(&reordered);
         vec_t notes;
         vec_init(&notes);
         if (fmt_reorder_toplevel(a, c->log, pack, src, path, &reordered, &notes)) {
@@ -458,6 +462,7 @@ static void fmt_one_file(fmt_ctx_t *c, const char *path)
               i18n_tr("cannot format '%s': fix the lexical errors first"), path);
         c->errors++;
         sb_free(&sb);
+        sb_free(&reordered);
         arena_free(a);
         return;
     }
@@ -466,6 +471,7 @@ static void fmt_one_file(fmt_ctx_t *c, const char *path)
     if (!changed) {
         c->ok++;
         sb_free(&sb);
+        sb_free(&reordered);
         arena_free(a);
         return;
     }
@@ -485,6 +491,7 @@ static void fmt_one_file(fmt_ctx_t *c, const char *path)
         }
     }
     sb_free(&sb);
+    sb_free(&reordered);
     arena_free(a);
 }
 

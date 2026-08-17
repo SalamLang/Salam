@@ -83,6 +83,56 @@ import fs
         ret module
     end
 
+    // driver/build.c driver_target_is_windows. An empty triple is not "not
+    // Windows", it is "no --target=, so the target is this host". Both other
+    // readings are wrong in one direction: taking it for "not Windows" costs
+    // a native Windows build its .exe (cmd.exe matches on PATHEXT and
+    // refuses to launch an extensionless binary), while assuming Windows
+    // unconditionally - what the C backend used to do - hands every Linux
+    // and macOS build a meaningless "hello.exe".
+    func triple_is_windows(t: str): bool:
+        // if/else, not a bare `if` with a trailing `ret false`: condcomp prunes
+        // the untaken branch, so on Windows that form leaves `ret true` followed
+        // by dead code and the compiler rejects itself with E070.
+        if str.Len(t) == 0:
+            if SALAM_OS_WINDOWS:
+                ret true
+            else:
+                ret false
+            end
+        end
+        ret str.Contains(t, "windows") || str.Contains(t, "mingw") || str.Contains(t, "win32")
+    end
+
+    // driver/build.c driver_exe_suffix - executable filename extension for
+    // `triple`: ".exe" for a Windows target (whatever the build host is),
+    // "" for every other one.
+    func exe_suffix_for(triple: str): str:
+        if triple_is_windows(triple):
+            ret ".exe"
+        end
+        ret ""
+    end
+
+    // driver/build.c driver_exe_name - `name` spelled as an executable
+    // filename for `triple`: a Windows target gets ".exe" appended unless the
+    // name already carries it, every other target keeps `name` verbatim.
+    // Applied to an explicit --output=NAME too, so a cross-build to Windows
+    // still writes something cmd.exe can launch.
+    func exe_name_for(name: str, triple: str): str:
+        ext := exe_suffix_for(triple)
+        if str.Len(ext) == 0:
+            ret name
+        end
+        // Case-insensitive: Windows resolves "prog.EXE" and "prog.exe" to the
+        // same file, so a caller who spelled it in caps already named an
+        // executable and must not get "prog.EXE.exe" back.
+        if str.EndsWith(str.Lower(name), ext):
+            ret name
+        end
+        ret name + ext
+    end
+
     // driver/build.c write_file (fflush/fsync dropped - os.WriteFile already
     // opens+writes+closes in one call; no partial-write scenario to guard).
     func write_file(lgr: lg.Logger, path: str, content: str): bool:

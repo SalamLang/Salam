@@ -100,6 +100,7 @@ typedef struct {
     vec_t extern_fns;
     vec_t extern_decls;
     vec_t def_envs;
+    vec_t mem_boxes; /* value_t* kept alive for slots with no byte image */
     itab_t tab_funcs;
     itab_t tab_structs;
     itab_t tab_enums;
@@ -131,21 +132,24 @@ typedef enum {
     ILOC_FIELD,
     ILOC_ARR,
     ILOC_PTR,
+    ILOC_MEM,
     ILOC_OPIDX,
 } iloc_kind_t;
 
 typedef struct {
     iloc_kind_t kind;
     ast_node_t *target;
-    binding_t *b;      /* ILOC_VAR */
-    value_t obj;       /* ILOC_FIELD / ILOC_OPIDX: the struct value */
-    size_t field_idx;  /* ILOC_FIELD */
-    sarray_t *arr;     /* ILOC_ARR */
-    int64_t idx;       /* ILOC_ARR / ILOC_PTR */
-    sptr_t ptr;        /* ILOC_PTR */
-    value_t key;       /* ILOC_OPIDX */
-    ast_node_t *get_m; /* ILOC_OPIDX */
-    ast_node_t *set_m; /* ILOC_OPIDX */
+    binding_t *b;       /* ILOC_VAR */
+    value_t obj;        /* ILOC_FIELD / ILOC_OPIDX: the struct value */
+    size_t field_idx;   /* ILOC_FIELD */
+    sarray_t *arr;      /* ILOC_ARR */
+    int64_t idx;        /* ILOC_ARR / ILOC_PTR */
+    sptr_t ptr;         /* ILOC_PTR */
+    void *mem;          /* ILOC_MEM: the field's address in real memory */
+    const char *mem_ts; /* ILOC_MEM: its declared type */
+    value_t key;        /* ILOC_OPIDX */
+    ast_node_t *get_m;  /* ILOC_OPIDX */
+    ast_node_t *set_m;  /* ILOC_OPIDX */
 } iloc_t;
 
 #define INTERP_MAX_DEPTH 1000
@@ -250,9 +254,30 @@ int_ty_t int_ty_common(int_ty_t a, int_ty_t b);
 
 value_t coerce_int_ty(value_t v, int_ty_t t);
 
-value_t ptr_load(sptr_t p, int64_t idx);
+value_t ptr_load(interp_t *I, sptr_t p, int64_t idx);
 
-void ptr_store(sptr_t p, int64_t idx, value_t v);
+void ptr_store(interp_t *I, sptr_t p, int64_t idx, value_t v);
+
+int64_t interp_sizeof_typename(interp_t *I, const char *ts);
+
+int64_t interp_alignof_typename(interp_t *I, const char *ts);
+
+value_t interp_mem_load(interp_t *I, void *addr, const char *ts);
+
+void interp_mem_store(interp_t *I, void *addr, const char *ts, value_t v);
+
+sptr_t interp_ptr_from_typestr(interp_t *I, void *addr, const char *ts);
+
+value_t interp_ptr_value(interp_t *I, void *addr, const char *ts);
+
+void *interp_ptr_elem_addr(interp_t *I, sptr_t p, int64_t idx);
+
+bool interp_mem_lvalue(interp_t *I, env_t *env, ast_node_t *n, void **addr,
+                       const char **ts);
+
+/* Field slot inside an already-evaluated struct pointer: `p.f` is `p[0].f`. */
+bool interp_mem_ptr_field(interp_t *I, value_t v, const char *name, void **addr,
+                          const char **ts);
 
 value_t default_for_type(interp_t *I, const char *ts);
 
@@ -284,6 +309,8 @@ flow_t exec_stmt(interp_t *I, env_t *env, frame_t *fr, ast_node_t *n, value_t *r
 
 flow_t exec_list(interp_t *I, env_t *env, frame_t *fr, vec_t *list, value_t *ret);
 
+void run_defers_from(interp_t *I, frame_t *fr, size_t mark);
+
 bool interp_match_arm(interp_t *I, env_t *env, ast_node_t *arm, value_t subj);
 
 ast_node_t *interp_find_match_arm(interp_t *I, env_t *env, ast_node_t *n, value_t subj);
@@ -292,8 +319,11 @@ void do_print(interp_t *I, env_t *env, ast_node_t *call, bool newline, bool to_e
 
 value_t do_input(interp_t *I);
 
-value_t call_module_func(interp_t *I, ast_node_t *call, module_t *mod, const char *fn,
-                         value_t *args, size_t nargs);
+value_t call_module_func(interp_t *I, env_t *env, ast_node_t *call, module_t *mod,
+                         const char *fn, value_t *args, size_t nargs);
+
+void interp_writeback_refs(interp_t *I, env_t *env, ast_node_t *call, ast_node_t *fn,
+                           value_t *args, size_t nargs);
 
 value_t call_intrinsic(interp_t *I, ast_node_t *call, const char *name, value_t *args,
                        size_t nargs, bool *handled);
@@ -302,5 +332,7 @@ value_t call_builtin_method(interp_t *I, ast_node_t *call, value_t recv,
                             const char *method, value_t *args, size_t nargs);
 
 void build_modules(interp_t *I, ast_node_t *program);
+
+void interp_eval_globals(interp_t *I, ast_node_t *program);
 
 #endif /* SALAM_INTERP_INTERNAL_H */

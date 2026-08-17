@@ -28,6 +28,13 @@ typedef struct {
 
 const salam_builtin_t *salam_builtin_lookup(const char *name);
 
+/*
+ * Argument count for atomic_load/store/add/swap/cas, or 0 for any other
+ * name. Shared by the semantic pass and every backend so the set of
+ * intrinsics is described in exactly one place.
+ */
+int salam_atomic_arity(const char *name);
+
 bool salam_builtin_global_const(arena_t *a, const char *name, ast_node_t *n,
                                 bool *is_str);
 

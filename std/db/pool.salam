@@ -1,0 +1,201 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// A fixed set of connections, handed out one at a time.
+//
+// A connection cannot be used by two threads at once - db.mysql segfaults
+// rather than erroring when it is - so a threaded server gives each request
+// its own. That is what a pool is for: open N connections up front, lease one
+// per request, and put it back.
+//
+//     pool := db.NewPool(4) defer pool.Free()
+//     mut i := 0
+//     until i < 4:
+//         db.Add(pool, sqlite.Conn(sqlite.Open("app.db")))
+//         i = i + 1
+//     end
+//
+//     lease := db.Acquire(pool)
+//     if db.Leased(lease):
+//         c := db.Conn(pool, lease)
+//         c.Exec("INSERT INTO hits DEFAULT VALUES")
+//         db.Release(pool, lease)
+//     end
+//
+// The pool is deliberately NOT a connection factory: it holds connections the
+// caller opened, because only the caller knows the engine and its credentials.
+//
+// This is a plain data structure with no locking of its own. Guard Acquire and
+// Release with a mutex if several threads share one pool.
+
+package db
+
+// A lease is an index into the pool, or NO_LEASE when none was free. It is
+// what Release needs back, so it travels with the connection.
+@en "NO_LEASE"
+@fa "بدون اجاره"
+@ar "بدون إعارة"
+pub const NO_LEASE := -1
+
+@en "Pool"
+@fa "استخر"
+@ar "مجمع"
+pub struct Pool:
+    pub conns: Vector<dyn Connection>
+    // Parallel to conns: 1 while a connection is leased out, 0 when free.
+    pub taken: Vector<int>
+    pub limit: int = 0
+end
+
+@en "NewPool"
+@fa "استخر جدید"
+@ar "مجمع جدید"
+pub func NewPool(limit: int): Pool:
+    ret Pool {
+        conns = Vector {} as Vector<dyn Connection>
+        taken = Vector {} as Vector<int>
+        limit = limit
+    }
+end
+
+// Put an open connection into the pool. Reports false when the pool is already
+// at its limit, in which case the caller still owns the connection.
+@en "Add"
+@fa "افزودن"
+@ar "أضف"
+pub func Add(p &: Pool, c: dyn Connection): bool:
+    if p.limit > 0 && p.conns.len() >= p.limit:
+        ret false
+    end
+    p.conns.push(c)
+    p.taken.push(0)
+    ret true
+end
+
+// Lease the first free connection, or NO_LEASE when every one is out.
+@en "Acquire"
+@fa "گرفتن"
+@ar "استحواذ"
+pub func Acquire(p &: Pool): int:
+    mut i := 0
+    until i < p.conns.len():
+        if p.taken.get(i) == 0:
+            p.taken.set(i, 1)
+            ret i
+        end
+        i = i + 1
+    end
+    ret NO_LEASE
+end
+
+// True when Acquire handed back a usable lease.
+@en "Leased"
+@fa "اجاره شده"
+@ar "معار"
+pub func Leased(lease: int): bool: ret lease != NO_LEASE end
+
+// The connection a lease refers to. Only valid between Acquire and Release.
+@en "Conn"
+@fa "اتصال"
+@ar "اتصال"
+pub func Conn(p: Pool, lease: int): dyn Connection:
+    ret p.conns.get(lease)
+end
+
+// Hand a leased connection back. Releasing a lease that is not out, or one
+// that was never valid, does nothing.
+@en "Release"
+@fa "رهاکردن"
+@ar "حرر"
+pub func Release(p &: Pool, lease: int):
+    if lease < 0 || lease >= p.taken.len():
+        ret
+    end
+    p.taken.set(lease, 0)
+end
+
+// How many connections the pool holds.
+@en "Size"
+@fa "اندازه"
+@ar "حجم"
+pub func Size(p: Pool): int: ret p.conns.len() end
+
+// How many are free to lease right now.
+@en "Idle"
+@fa "بیکار"
+@ar "خامل"
+pub func Idle(p: Pool): int:
+    mut n := 0
+    mut i := 0
+    until i < p.taken.len():
+        if p.taken.get(i) == 0:
+            n = n + 1
+        end
+        i = i + 1
+    end
+    ret n
+end
+
+// How many are leased out right now.
+@en "InUse"
+@fa "در استفاده"
+@ar "قید الاستخدام"
+pub func InUse(p: Pool): int: ret Size(p) - Idle(p) end
+
+// Drop every connection whose Ping() fails, so a pool that has been idle past
+// the server's timeout does not hand out dead sessions. Reports how many were
+// removed. Leased connections are left alone - their holder is using them.
+@en "DropDead"
+@fa "حذف مرده ها"
+@ar "احذف المیتة"
+pub func DropDead(p &: Pool): int:
+    mut removed := 0
+    mut i := 0
+    until i < p.conns.len():
+        if p.taken.get(i) == 0 && !p.conns.get(i).Ping():
+            p.conns.get(i).Close()
+            _dropped := p.conns.remove_at(i)
+            _flag := p.taken.remove_at(i)
+            removed = removed + 1
+        else:
+            i = i + 1
+        end
+    end
+    ret removed
+end
+
+// Close every connection and empty the pool. The Vectors stay allocated; call
+// Free() when the pool itself is done with.
+@en "CloseAll"
+@fa "بستن همه"
+@ar "أغلق الكل"
+pub func CloseAll(p &: Pool):
+    mut i := 0
+    until i < p.conns.len():
+        p.conns.get(i).Close()
+        i = i + 1
+    end
+    p.conns.clear()
+    p.taken.clear()
+end
+
+// Close everything and release the pool's own memory.
+@en "Free"
+@fa "آزادکردن"
+@ar "تحریر"
+pub func Free(p &: Pool):
+    CloseAll(p)
+    p.conns.free()
+    p.taken.free()
+end

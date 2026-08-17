@@ -181,6 +181,20 @@ static int64_t nf_fclose(int64_t a0, int64_t a1, int64_t a2, int64_t a3, int64_t
     (void)a7;
     return (int64_t)fclose((FILE *)(intptr_t)a0);
 }
+/* NULL, the C89 spelling of "every open output stream", is the argument
+ * io.Flush() passes and the one that matters here. */
+static int64_t nf_fflush(int64_t a0, int64_t a1, int64_t a2, int64_t a3, int64_t a4,
+                         int64_t a5, int64_t a6, int64_t a7)
+{
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    (void)a4;
+    (void)a5;
+    (void)a6;
+    (void)a7;
+    return (int64_t)fflush((FILE *)(intptr_t)a0);
+}
 static int64_t nf_fseek(int64_t a0, int64_t a1, int64_t a2, int64_t a3, int64_t a4,
                         int64_t a5, int64_t a6, int64_t a7)
 {
@@ -611,6 +625,7 @@ static const native_sym_t NATIVE_SYMS[] = {
     {"rename", nf_rename},
     {"fopen", nf_fopen},
     {"fclose", nf_fclose},
+    {"fflush", nf_fflush},
     {"fseek", nf_fseek},
     {"ftell", nf_ftell},
     {"fread", nf_fread},
@@ -723,8 +738,7 @@ value_t call_native_extern(interp_t *I, ast_node_t *call, ast_node_t *decl, valu
     int64_t r = f(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]);
 
     if (!rts) return val_null();
-    if (rts[strlen(rts) - 1] == '*')
-        return val_ptr((void *)(intptr_t)r, ptr_elem_from_typestr(rts));
+    if (rts[strlen(rts) - 1] == '*') return interp_ptr_value(I, (void *)(intptr_t)r, rts);
     char rbase[96];
     base_typename(rts, rbase, sizeof rbase);
     if (!strcmp(rbase, "bool")) return val_bool(r != 0);

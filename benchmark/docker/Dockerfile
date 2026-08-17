@@ -27,6 +27,7 @@ RUN --mount=type=cache,target=/var/cache/apk,sharing=locked \
             cargo \
             go \
             python3 \
+            py3-numpy \
             bash \
             git \
             coreutils \
@@ -61,7 +62,8 @@ RUN set -eux; \
     done
 
 RUN { gcc --version; g++ --version; rustc --version; go version; \
-      python3 --version; php --version; tcc -v || true; \
+      python3 --version; python3 -c 'import numpy; print("numpy", numpy.__version__)'; \
+      php --version; tcc -v || true; \
       clang-${LLVM_VERSION} --version; } | tee /etc/bench-toolchain-versions.txt
 
 ARG SALAM_UID=1000

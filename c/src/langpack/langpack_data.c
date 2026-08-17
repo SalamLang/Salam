@@ -64,6 +64,21 @@ const kw_entry_t k_lang_en[] = {
     {TK_KW_IN, "in"},
     {TK_KW_WITH, "with"},
     {TK_KW_MATCH, "match"},
+    /*
+     * `while` is the same keyword under the name that says what it does. The
+     * loop runs its body *while* the condition holds, which is what the
+     * Persian (تاوقتی, "as long as") and Arabic (بينما, "while") spellings
+     * already say and what the English one does not: reading `until c:` as
+     * "loop until c becomes true" inverts every condition, and an inverted
+     * condition is not an error - the loop just runs zero times, silently.
+     *
+     * Listed after `until` on purpose: langpack_spelling takes the first entry
+     * for a kind, so `until` stays the canonical spelling for diagnostics and
+     * for anything that renders a keyword from the AST. The formatter
+     * reproduces the token's own lexeme, so a file that says `while` keeps
+     * saying it.
+     */
+    {TK_KW_UNTIL, "while"},
     {TK_EOF, NULL},
 };
 static const kw_entry_t k_lang_fa[] = {

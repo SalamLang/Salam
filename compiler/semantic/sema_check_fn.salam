@@ -321,6 +321,7 @@ func sema_check_unused_funcs(s &: Sema, a &: at.Ast):
     if !has_entry:
         ret
     end
+    save_file := s.file
     repeat gsc.symbols.len() with i2:
         f2 := sym_at(s, gsc.symbols.get(i2))
         if f2.kind != SYM_FUNC || f2.used || f2.is_pub:
@@ -333,12 +334,13 @@ func sema_check_unused_funcs(s &: Sema, a &: at.Ast):
         if dn.synthetic || dn.is_extern:
             continue
         end
-        if str.Len(f2.name) == 0 || byte_at(f2.name, 0) == 95:
+        if str.Len(f2.name) == 0 || byte_at(f2.name, 0) == 95 || at.NameIsErr(f2.name):
             continue
         end
         if str.Equals(f2.name, "main") || str.Equals(f2.name, entry):
             continue
         end
+        _sfu := sema_use_decl_file(s, a, f2.decl)
         serr(
             s, 66, span_of(a, f2.decl), co.Format1(
                 i18.Tr("unused function '%s' (call it, mark it 'pub', or prefix its name with '_')"),
@@ -346,10 +348,20 @@ func sema_check_unused_funcs(s &: Sema, a &: at.Ast):
             )
         )
     end
+    s.file = save_file
 end
 
-// check_toplevel - per-declaration checking pass.
+// check_toplevel - per-declaration checking pass. The wrapper points every
+// diagnostic the body raises at the file this declaration was parsed from
+// (see sema_use_decl_file); check_toplevel_body has early returns, so the
+// restore cannot live inside it.
 func check_toplevel(s &: Sema, a &: at.Ast, did: int):
+    save_file := sema_use_decl_file(s, a, did)
+    check_toplevel_body(s, a, did)
+    s.file = save_file
+end
+
+func check_toplevel_body(s &: Sema, a &: at.Ast, did: int):
     d := at.Get(a, did)
     if d.kind == at.AST_FUNC_DEF:
         fsym := scope_lookup_local(s, s.global, d.name)
@@ -378,7 +390,7 @@ func check_toplevel(s &: Sema, a &: at.Ast, did: int):
                     mak := at.KindOf(a, m.a)
                     if f != 0 && mak == at.AST_STRUCT_LIT && ftv >= 0 && ty_at(s, ftv).kind == TY_STRUCT:
                         s.expected = ftv
-                    else f != 0 && mak == at.AST_LITERAL:
+                    else f != 0 && (mak == at.AST_LITERAL || mak == at.AST_ARRAY_LIT):
                         s.expected = ftv
                     end
                     vt = sema_check_expr(s, a, m.a)
@@ -462,6 +474,7 @@ func sema_check_pass(s &: Sema, a &: at.Ast, program: int):
     // 5c note: live child reads - generic instantiation appends synthetic
     // instances to the program list while the second loop runs (they are
     // skipped there and handled through s.pending, like the C).
+    save_file := s.file
     mut i := 0
     until i < at.ChildCount(a, program):
         did := at.Child(a, program, i)
@@ -472,8 +485,10 @@ func sema_check_pass(s &: Sema, a &: at.Ast, program: int):
         if d.synthetic:
             continue
         end
+        _sfl := sema_use_decl_file(s, a, did)
         lint_lang_types(s, a, did)
     end
+    s.file = save_file
     // A top-level `const NAME := <expr>` (no type annotation) leaves its
     // symbol's type TYPE_NONE after sema_collect(); sema_check_var_decl()
     // (inside check_toplevel) is what fills it in. Package files are merged

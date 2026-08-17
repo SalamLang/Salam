@@ -198,11 +198,11 @@ void diag_render_rust(FILE *sink, const char *level, int code, bool is_error,
     write_gutter(sink, 0, num_width, color);
     fputc('\n', sink);
 
-    if (help) {
-        write_gutter(sink, 0, num_width, color);
-        fprintf(sink, " %s= %s:%s %s\n", color ? A_GREEN : "", i18n_tr("help"), reset,
-                help);
-    }
+    /* Aligns the '=' under the gutter's '|' rather than after it, so the help
+     * line reads as a footnote to the snippet instead of a source line. */
+    if (help)
+        fprintf(sink, "%*s %s= %s:%s %s\n", num_width, "", color ? A_GREEN : "",
+                i18n_tr("help"), reset, help);
 }
 
 void diag_render_gcc(FILE *sink, const char *level, int code, bool is_error,

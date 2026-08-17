@@ -42,7 +42,7 @@ int driver_debug(options_t *opt)
     } else {
         char stem[256];
         sal_path_stem_buf(opt->inputs[0], stem, sizeof(stem));
-        sal_snprintf(exe, sizeof(exe), "%s.exe", stem);
+        sal_snprintf(exe, sizeof(exe), "%s%s", stem, driver_exe_suffix(opt->llvm_target));
         opt->output = exe;
     }
     int rc = driver_build(opt);
@@ -127,16 +127,32 @@ int driver_memcheck(options_t *opt)
         return 2;
     }
 
-    if (strstr(opt->cc, "tcc")) {
+    /* Which checker gets the process is decided here, before the build, and
+       exactly one of them does. AddressSanitizer and Valgrind each replace the
+       allocator, and an ASan-instrumented binary run under Valgrind aborts on
+       startup with "ASan runtime does not come first in initial library list"
+       having checked nothing at all - which is what this command used to do
+       whenever both were available. Valgrind wins where it exists, because it
+       also reports reads of uninitialised memory and ASan does not. */
+    bool use_valgrind = false;
+#if !defined(_WIN32)
+    use_valgrind = system("valgrind --version > /dev/null 2>&1") == 0;
+#endif
+
+    /* tcc cannot instrument for ASan, but it emits a perfectly good binary for
+       Valgrind to watch, so it is only a hard stop when ASan is the plan. */
+    if (!use_valgrind && strstr(opt->cc, "tcc")) {
         fprintf(stderr,
-                "salam memcheck: tcc does not support AddressSanitizer.\n"
+                "salam memcheck: tcc does not support AddressSanitizer, and no\n"
+                "  Valgrind was found to check the binary instead.\n"
                 "  Use --cc=gcc or --cc=clang:\n"
-                "    salam memcheck %s --cc=gcc\n",
+                "    salam memcheck %s --cc=gcc\n"
+                "  or install Valgrind: sudo apt-get install valgrind\n",
                 opt->inputs[0]);
         return 2;
     }
     opt->debug_info = true;
-    opt->asan = true;
+    opt->asan = !use_valgrind;
     if (!opt->safe) {
         opt->safe = true;
         if (opt->ndefines < SALAM_MAX_INPUTS)
@@ -150,36 +166,50 @@ int driver_memcheck(options_t *opt)
     } else {
         char stem[256];
         sal_path_stem_buf(opt->inputs[0], stem, sizeof(stem));
-        sal_snprintf(exe, sizeof(exe), "%s.exe", stem);
+        sal_snprintf(exe, sizeof(exe), "%s%s", stem, driver_exe_suffix(opt->llvm_target));
         opt->output = exe;
     }
     fprintf(stdout,
-            "salam memcheck: building with AddressSanitizer + debug symbols...\n");
+            use_valgrind
+                ? "salam memcheck: building with debug symbols for Valgrind...\n"
+                : "salam memcheck: building with AddressSanitizer + debug symbols...\n");
     fflush(stdout);
     int rc = driver_build(opt);
     if (rc != 0) return rc;
-    const char *target = opt->exe_path[0] ? opt->exe_path : exe;
+    const char *built = opt->exe_path[0] ? opt->exe_path : exe;
+    /* Spell a bare name as "./name" before handing it to the shell. Without
+       the prefix the shell looks the binary up on $PATH, which does not
+       include the current directory on POSIX, so a build that landed in the
+       working directory fails with "valgrind: app: command not found" rather
+       than running. driver_run guards the same way; cmd.exe searches the
+       working directory itself, so Windows needs nothing. */
+    char target[600];
+#if defined(_WIN32)
+    sal_snprintf(target, sizeof target, "%s", built);
+#else
+    if (strchr(built, '/'))
+        sal_snprintf(target, sizeof target, "%s", built);
+    else
+        sal_snprintf(target, sizeof target, "./%s", built);
+#endif
     sb_t cmd;
     sb_init(&cmd);
-#if defined(_WIN32)
-
-    fprintf(stdout, "salam memcheck: Valgrind is not available on Windows.\n"
-                    "  Running binary with ASAN error reporting...\n\n");
-    sb_put_shell_arg(&cmd, target);
-#else
-
-    if (system("valgrind --version > /dev/null 2>&1") == 0) {
+    if (use_valgrind) {
         fprintf(stdout, "salam memcheck: running under Valgrind...\n\n");
         sb_puts(&cmd, "valgrind --leak-check=full --track-origins=yes "
                       "--show-leak-kinds=all --error-exitcode=1 ");
         sb_put_shell_arg(&cmd, target);
     } else {
+#if defined(_WIN32)
+        fprintf(stdout, "salam memcheck: Valgrind is not available on Windows.\n"
+                        "  Running binary with ASAN error reporting...\n\n");
+#else
         fprintf(stdout,
                 "salam memcheck: valgrind not found; running with ASAN error reporting.\n"
                 "  (Install: sudo apt-get install valgrind)\n\n");
+#endif
         sb_put_shell_arg(&cmd, target);
     }
-#endif
     fflush(stdout);
     rc = system(sb_cstr(&cmd));
     sb_free(&cmd);

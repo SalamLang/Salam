@@ -1,0 +1,180 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package bigint
+
+// Bitwise operations, defined on the two's-complement view of the value.
+//
+// This is the one place where the sign-magnitude storage has to be looked
+// through rather than at. And, Or, Xor and Not here mean what they mean on a
+// machine integer of unbounded width: a negative number behaves as though it
+// were written with infinitely many leading 1 bits, so And(-1, x) is x and
+// Not(x) is -x-1 for every x, exactly as on an i64.
+//
+// The trick that makes it a loop instead of a case analysis: for a negative x,
+// the two's-complement limbs are the bitwise complement of |x| - 1. So each
+// operand is prepared once (|x|, or |x|-1 when negative), read through a
+// complement when negative, and limbs past the top read as 0 or as all-ones
+// according to the sign. The result's own sign is the same operation applied
+// to the two sign bits, and a negative result is converted back to a magnitude
+// with the usual complement-and-increment.
+//
+// Bit(x, i) in bigint.salam reads the *magnitude* instead, which is the other
+// useful question and deliberately a different one.
+
+const _OP_AND := 0
+const _OP_OR := 1
+const _OP_XOR := 2
+const _OP_ANDNOT := 3
+
+func _op_u32(a: u32, b: u32, op: int): u32:
+    if op == _OP_AND: ret a & b end
+    if op == _OP_OR: ret a | b end
+    if op == _OP_XOR: ret a ^ b end
+    ret a & (~b)
+end
+
+func _op_bool(a: bool, b: bool, op: int): bool:
+    if op == _OP_AND: ret a && b end
+    if op == _OP_OR: ret a || b end
+    if op == _OP_XOR: ret a != b end
+    ret a && !b
+end
+
+// |x| for a non-negative x, |x| - 1 for a negative one: the value whose
+// complement gives the two's-complement limbs.
+func _tc_prep(x: Int): Int:
+    if !x.neg: ret Abs(x) end
+    mut one := One()
+    mut ax := Abs(x)
+    r := _usub(ax, one)
+    ax.free()
+    one.free()
+    ret r
+end
+
+// Limb i of the infinite two's-complement expansion, so a loop may run past
+// either operand's top limb and still read the correct sign extension.
+func _tc_limb(p: Int, neg: bool, i: int): u32:
+    v := _at(p, i)
+    if neg: ret ~v end
+    ret v
+end
+
+func _bitop(a: Int, b: Int, op: int): Int:
+    mut pa := _tc_prep(a)
+    mut pb := _tc_prep(b)
+    mut n := pa.mag.len()
+    if pb.mag.len() > n: n = pb.mag.len() end
+    // One limb of headroom. A negative result is negated in place at the end,
+    // and -2^32 -- whose limbs within the operands' own width are all zero --
+    // needs that extra limb to come back as a magnitude.
+    n += 1
+
+    rneg := _op_bool(a.neg, b.neg, op)
+    mut r := _blank(n)
+    repeat n with i:
+        r.mag.set(i, _op_u32(_tc_limb(pa, a.neg, i), _tc_limb(pb, b.neg, i), op))
+    end
+    pa.free()
+    pb.free()
+
+    if rneg:
+        // Back from two's complement to a magnitude: ~r + 1.
+        mut carry := 1 as u64
+        repeat n with i:
+            t := ((~r.mag.get(i)) as u64) + carry
+            r.mag.set(i, (t & _LOW_MASK) as u32)
+            carry = t >> 32
+        end
+        if carry != 0 as u64: r.mag.push(carry as u32) end
+        r.neg = true
+    end
+    _norm(r)
+    ret r
+end
+
+@en "And"
+@fa "و بیتی"
+@ar "و بتي"
+pub func And(a: Int, b: Int): Int: ret _bitop(a, b, _OP_AND) end
+
+@en "Or"
+@fa "یا بیتی"
+@ar "أو بتي"
+pub func Or(a: Int, b: Int): Int: ret _bitop(a, b, _OP_OR) end
+
+@en "Xor"
+@fa "یای انحصاری"
+@ar "أو حصري"
+pub func Xor(a: Int, b: Int): Int: ret _bitop(a, b, _OP_XOR) end
+
+// a & ~b, the "clear these bits" operation, without materializing ~b -- which
+// for a positive b would be an infinitely wide negative number.
+@en "AndNot"
+@fa "و نقیض"
+@ar "و ليس"
+pub func AndNot(a: Int, b: Int): Int: ret _bitop(a, b, _OP_ANDNOT) end
+
+// ~x, which on two's complement is exactly -x-1.
+@en "Not"
+@fa "نقیض بیتی"
+@ar "ليس بتي"
+pub func Not(x: Int): Int:
+    mut one := One()
+    defer one.free()
+    mut s := Add(x, one)
+    NegateIn(s)
+    ret s
+end
+
+// The number of 1 bits in |x|, its population count. Reads the magnitude, so
+// it is finite for a negative x instead of the infinite count the two's
+// complement view would give.
+@en "PopCount"
+@fa "شمار یک‌ها"
+@ar "عدد الآحاد"
+pub func PopCount(x: Int): int:
+    mut c := 0
+    repeat x.mag.len() with i:
+        mut v := x.mag.get(i)
+        while v != 0 as u32:
+            v = v & (v - (1 as u32))
+            c += 1
+        end
+    end
+    ret c
+end
+
+// Index of the lowest set bit of |x|, or -1 for zero: how many times x divides
+// by two, which is what the binary GCD and the odd-part extraction want.
+@en "TrailingZeros"
+@fa "صفرهای پایانی"
+@ar "أصفار لاحقة"
+pub func TrailingZeros(x: Int): int:
+    if x.is_zero(): ret 0 - 1 end
+    repeat x.mag.len() with i:
+        v := x.mag.get(i)
+        if v != 0 as u32:
+            mut k := 0
+            mut t := v
+            while (t & (1 as u32)) == 0 as u32:
+                t = t >> 1
+                k += 1
+            end
+            ret i * _LIMB_BITS + k
+        end
+    end
+    ret 0 - 1
+end

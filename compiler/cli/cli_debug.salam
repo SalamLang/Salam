@@ -20,7 +20,7 @@ func debug_cmd(opt &: dr.Dr): int:
     end
     mut exe := opt.output
     if str.Len(exe) == 0:
-        exe = path_stem(opt.inputs.get(0)) + ".exe"
+        exe = path_stem(opt.inputs.get(0)) + dr.ExeSuffix(opt.llvm_target)
         opt.output = exe
     end
     rc := dr.Build(opt)
@@ -81,47 +81,83 @@ func memcheck_cmd(opt &: dr.Dr): int:
         io.EPrintln("salam memcheck: no input file")
         ret 2
     end
-    if str.Contains(opt.cc, "tcc"):
-        io.EPrintln("salam memcheck: tcc does not support AddressSanitizer.")
+    // Which checker gets the process is decided here, before the build, and
+    // exactly one of them does. AddressSanitizer and Valgrind each replace the
+    // allocator, and an ASan-instrumented binary run under Valgrind aborts on
+    // startup with "ASan runtime does not come first in initial library list"
+    // having checked nothing at all - which is what this command used to do
+    // whenever both were available. Valgrind wins where it exists, because it
+    // also reports reads of uninitialised memory and ASan does not.
+    mut use_valgrind := false
+    if !SALAM_OS_WINDOWS:
+        use_valgrind = os.Run("valgrind --version > /dev/null 2>&1") == 0
+    end
+
+    // tcc cannot instrument for ASan, but it emits a perfectly good binary for
+    // Valgrind to watch, so it is only a hard stop when ASan is the plan.
+    if !use_valgrind && str.Contains(opt.cc, "tcc"):
+        io.EPrintln("salam memcheck: tcc does not support AddressSanitizer, and no")
+        io.EPrintln("  Valgrind was found to check the binary instead.")
         io.EPrintln("  Use --cc=gcc or --cc=clang:")
         io.EPrintln("    salam memcheck " + opt.inputs.get(0) + " --cc=gcc")
+        io.EPrintln("  or install Valgrind: sudo apt-get install valgrind")
         ret 2
     end
     opt.debug_info = true
-    opt.asan = true
+    opt.asan = !use_valgrind
     if !opt.safe:
         opt.safe = true
         opt.defines.push("SALAM_SAFE")
     end
     mut exe := opt.output
     if str.Len(exe) == 0:
-        exe = path_stem(opt.inputs.get(0)) + ".exe"
+        exe = path_stem(opt.inputs.get(0)) + dr.ExeSuffix(opt.llvm_target)
         opt.output = exe
     end
-    println "salam memcheck: building with AddressSanitizer + debug symbols..."
+    if use_valgrind:
+        println "salam memcheck: building with debug symbols for Valgrind..."
+    else:
+        println "salam memcheck: building with AddressSanitizer + debug symbols..."
+    end
     rc := dr.Build(opt)
     if rc != 0:
         ret rc
     end
-    target := str.Len(opt.exe_path) > 0 ? opt.exe_path : exe
-    mut cmd := ""
+    built := str.Len(opt.exe_path) > 0 ? opt.exe_path : exe
+    // Spell a bare name as "./name" before handing it to the shell. Without
+    // the prefix the shell looks the binary up on $PATH, which does not
+    // include the current directory on POSIX, so a build that landed in the
+    // working directory fails with "valgrind: app: command not found" rather
+    // than running. Run() guards the same way; cmd.exe searches the working
+    // directory itself, so Windows needs nothing.
+    // SALAM_OS_WINDOWS is a compile-time constant and only reads as a whole
+    // condition, so the platform test and the path test are nested rather than
+    // combined; assigning in every branch keeps `mut` justified on both.
+    mut target := ""
     if SALAM_OS_WINDOWS:
-        println "salam memcheck: Valgrind is not available on Windows."
-        println "  Running binary with ASAN error reporting..."
-        println ""
-        cmd = shell_arg(target)
+        target = built
     else:
-        probe := os.Run("valgrind --version > /dev/null 2>&1")
-        if probe == 0:
-            println "salam memcheck: running under Valgrind..."
-            println ""
-            cmd = "valgrind --leak-check=full --track-origins=yes --show-leak-kinds=all " + "--error-exitcode=1 " + shell_arg(target)
+        if str.Contains(built, "/"):
+            target = built
+        else:
+            target = "./" + built
+        end
+    end
+    mut cmd := ""
+    if use_valgrind:
+        println "salam memcheck: running under Valgrind..."
+        println ""
+        cmd = "valgrind --leak-check=full --track-origins=yes --show-leak-kinds=all " + "--error-exitcode=1 " + shell_arg(target)
+    else:
+        if SALAM_OS_WINDOWS:
+            println "salam memcheck: Valgrind is not available on Windows."
+            println "  Running binary with ASAN error reporting..."
         else:
             println "salam memcheck: valgrind not found; running with ASAN error reporting."
             println "  (Install: sudo apt-get install valgrind)"
-            println ""
-            cmd = shell_arg(target)
         end
+        println ""
+        cmd = shell_arg(target)
     end
     run_rc := os.Run(cmd)
     if run_rc == 0:

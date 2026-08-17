@@ -14,6 +14,38 @@ import i18 "../i18n.salam"
 // check_unused_params (plus the dce hooks further down).
 // ===========================================================================
 
+// sema_cast_target_is_context_dependent - whether `aid`'s type can genuinely
+// change depending on the cast's target type (via the `s.expected` hint the
+// AST_CAST case feeds it). For these kinds, the checked type naturally comes
+// out equal to the cast target even when the cast is meaningful (e.g.
+// `1 as i64` picks i64 precisely because of the hint), so an equal-type
+// result there must not be flagged as a useless cast. Everything else
+// already has a fixed type before the cast is applied, so casting it to
+// that same type is always useless.
+func sema_cast_target_is_context_dependent(s &: Sema, a &: at.Ast, aid: int, target: int): bool:
+    if aid == 0:
+        ret false
+    end
+    an := at.Get(a, aid)
+    if an.kind == at.AST_ARRAY_LIT:
+        // check_array_lit only consults the expected element type for an
+        // empty literal or a 'dyn' element slot; a non-empty literal of any
+        // other element type infers its shape purely from its elements, so
+        // the cast target never changes the outcome there.
+        if at.ChildCount(a, aid) == 0:
+            ret true
+        end
+        ret target >= 0 && ty_at(s, target).kind == TY_ARRAY && ty_at(s, target).elem >= 0 && ty_at(s, ty_at(s, target).elem).kind == TY_DYN
+    end
+    if an.kind == at.AST_STRUCT_LIT || an.kind == at.AST_CALL:
+        ret true
+    end
+    if an.kind == at.AST_LITERAL:
+        ret an.op == tok.TK_INT || an.op == tok.TK_FLOAT
+    end
+    ret false
+end
+
 // func_addr_target_ok (sema_expr.c) - shared by `&f` and by a bare function
 // name read as a value. Both need one unambiguous, non-generic target: a
 // generic function has no code until it is instantiated, and an overload set
@@ -92,6 +124,11 @@ func sema_check_expr(s &: Sema, a &: at.Ast, nid: int): int:
     end
     if k == at.AST_IDENTIFIER:
         mut name := at.Get(a, nid).name
+        // The parser already reported why this name could not be read; a
+        // follow-up "unknown identifier '<error>'" would only bury it.
+        if at.NameIsErr(name):
+            ret sema_decorate(s, a, nid, sema_err_ty(s))
+        end
         mut sym := scope_lookup(s, s.cur, name)
         if sym == 0:
             c := local_canon(s, a, name, sp)
@@ -169,6 +206,9 @@ func sema_check_expr(s &: Sema, a &: at.Ast, nid: int): int:
     end
     if k == at.AST_FUNC_ADDR:
         mut fname := at.Get(a, nid).name
+        if at.NameIsErr(fname):
+            ret sema_decorate(s, a, nid, sema_err_ty(s))
+        end
         mut fsym := scope_lookup(s, s.cur, fname)
         if fsym == 0:
             c2 := local_canon(s, a, fname, sp)
@@ -329,6 +369,13 @@ func sema_check_expr(s &: Sema, a &: at.Ast, nid: int): int:
             ret sema_decorate(s, a, nid, o3)
         end
         if type_assignable(s, target, o3):
+            if !type_is_error(s, o3) && !s.in_derive && type_equiv(s, target, o3) && !sema_cast_target_is_context_dependent(s, a, n4.a, target):
+                serr(
+                    s, 93, sp, co.Format1(
+                        i18.Tr("useless cast: this expression already has type '%s'"), co.ArgStr(type_to_string(s, target))
+                    )
+                )
+            end
             ret sema_decorate(s, a, nid, target)
         end
         if !type_castable(s, target, o3):

@@ -106,13 +106,27 @@ func cg_op(k: int): str:
     ret "?"
 end
 
-func cg_is_str_ts(ts: str): bool:
-    ret str.Equals(ts, "str") || str.Equals(ts, "uchar")
+// A string-backed enum's C representation is `const char *` (hdr_enums), so
+// for every purpose codegen cares about (== via strcmp, string coercion) it
+// has to be treated exactly like str/uchar - only its *name* ("Color") isn't
+// literally "str". Int/float-backed enums need no such translation: their C
+// representation already behaves correctly under the plain C operators the
+// generic fallbacks emit (a real C `enum` for int, a `double` for float).
+func cg_ts_is_string_enum(s &: sm.Sema, ts: str): bool:
+    if str.Len(ts) == 0:
+        ret false
+    end
+    esym := sm.LookupLocal(s, s.global, ts)
+    ret esym != 0 && sm.SymAt(s, esym).kind == sm.SYM_ENUM && sm.SymAt(s, esym).enum_val_kind == tok.TV_STRING
+end
+
+func cg_is_str_ts(s &: sm.Sema, ts: str): bool:
+    ret str.Equals(ts, "str") || str.Equals(ts, "uchar") || cg_ts_is_string_enum(s, ts)
 end
 
 func cg_str_operand(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
     nn := at.Get(a, n)
-    if cg_is_str_ts(nn.type_str):
+    if cg_is_str_ts(s, nn.type_str):
         ret cg_expr(g, s, a, n)
     end
     ret "salam_tostr_" + prim_suffix(print_tag(nn.type_str)) + "(" + cg_expr(g, s, a, n) + ")"
@@ -184,7 +198,7 @@ func cg_match_arm_cond(
                 co.SbPuts(
                     b, "((" + subj_var + ").tag == " + (patn.value_int as int) + ")"
                 )
-            else cg_is_str_ts(subj_ts):
+            else cg_is_str_ts(s, subj_ts):
                 co.SbPuts(
                     b, "(strcmp(" + subj_var + ", " + cg_expr(g, s, a, patn.a) + ") == 0)"
                 )
@@ -524,6 +538,24 @@ func cg_func_addr(g &: Cg, s &: sm.Sema, a &: at.Ast, name: str): str:
     ret "((void*)(&" + raw + "))"
 end
 
+// An array literal lowers to a braced list, which C accepts only as an
+// initializer. Anywhere a real expression is wanted - a call argument, a
+// returned value, a ternary arm - it has to be the compound literal
+// "(int32_t[3]){1, 2, 3}" instead, or the emitted C does not parse at all.
+//
+// Deliberately opt-in per slot rather than applied inside cg_expr: a
+// compound literal is not a constant expression, so a file-scope
+// initializer must keep the bare braced form.
+func cg_expr_value(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
+    if n != 0 && at.KindOf(a, n) == at.AST_ARRAY_LIT:
+        act := cg_array_ctype(at.Get(a, n).type_str)
+        if str.Len(act) > 0:
+            ret "(" + act + ")" + cg_expr(g, s, a, n)
+        end
+    end
+    ret cg_expr(g, s, a, n)
+end
+
 func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
     if n == 0:
         ret "0"
@@ -540,7 +572,16 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
                 if u == imax + (1 as u64):
                     ret "(-9223372036854775807LL - 1LL)"
                 end
-                ret "(" + co.I64Toa(u as i64) + "LL)"
+                // Suffix only what genuinely needs 64 bits, exactly as the
+                // unsigned branch below does: a bare (-7) is an int, so
+                // passing it to a prototype declared int - libc's abs(),
+                // say - no longer trips clang's -Wabsolute-value.
+                v := u as i64
+                mut nsuf := ""
+                if v < (0 - 2147483647):
+                    nsuf = "LL"
+                end
+                ret "(" + co.I64Toa(v) + nsuf + ")"
             end
             mut suf := ""
             if u > imax:
@@ -649,20 +690,20 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
             eb := cg_expr(g, s, a, nn.b)
             ret "pow(SALAM_FPARG_D((double)(" + ea + ")), (double)(" + eb + "))"
         end
-        if nn.op == tok.TK_PLUS && (cg_is_str_ts(an.type_str) || cg_is_str_ts(bn.type_str)):
+        if nn.op == tok.TK_PLUS && (cg_is_str_ts(s, an.type_str) || cg_is_str_ts(s, bn.type_str)):
             oa := cg_str_operand(g, s, a, nn.a)
             ob := cg_str_operand(g, s, a, nn.b)
             ret "salam_strcat(" + oa + ", " + ob + ")"
         end
-        if nn.op == tok.TK_STAR && (cg_is_str_ts(an.type_str) || cg_is_str_ts(bn.type_str)):
-            a_str := cg_is_str_ts(an.type_str)
+        if nn.op == tok.TK_STAR && (cg_is_str_ts(s, an.type_str) || cg_is_str_ts(s, bn.type_str)):
+            a_str := cg_is_str_ts(s, an.type_str)
             sop := a_str ? nn.a : nn.b
             nop := a_str ? nn.b : nn.a
             es := cg_expr(g, s, a, sop)
             en := cg_expr(g, s, a, nop)
             ret "salam_str_repeat(" + es + ", (int32_t)(" + en + "))"
         end
-        if cg_is_str_ts(an.type_str) && cg_is_str_ts(bn.type_str):
+        if cg_is_str_ts(s, an.type_str) && cg_is_str_ts(s, bn.type_str):
             mut opv := ""
             if nn.op == tok.TK_EQ:
                 opv = "=="
@@ -817,7 +858,17 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
     if k == at.AST_MEMBER:
         an2 := at.Get(a, nn.a)
         if nn.a != 0 && an2.kind == at.AST_IDENTIFIER && !local_known(g, an2.name):
-            e := sm.Lookup(s, s.global, an2.name)
+            mut e := sm.Lookup(s, s.global, an2.name)
+            // A synthesized enum-derive body is checked against its enum's
+            // home scope (sema), so an unqualified "Kind" inside it resolves
+            // fine at the semantic layer even when Kind lives in a non-main
+            // package - but this lookup only ever searches the global
+            // scope, so it needs the same cur_fn_home fallback used
+            // elsewhere for free-function calls inside such bodies, or it
+            // silently fails to find Kind here.
+            if (e == 0 || sm.SymAt(s, e).kind != sm.SYM_ENUM) && g.cur_fn_home != 0:
+                e = sm.Lookup(s, g.cur_fn_home, an2.name)
+            end
             if e != 0 && sm.SymAt(s, e).kind == sm.SYM_ENUM:
                 ret cg_cident(sm.SymAt(s, e).name) + "_" + cg_cident(nn.name)
             end
@@ -831,6 +882,26 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
                     if ms.decl != 0 && at.Get(a, ms.decl).a != 0:
                         ret cg_expr(g, s, a, at.Get(a, ms.decl).a)
                     end
+                end
+            end
+        end
+        // pkg.EnumName.Member: n.a is itself pkg.EnumName (an AST_MEMBER,
+        // not a bare identifier - see the matching sema fix in
+        // check_member/sema_expr.salam for why the parser always builds
+        // this as a plain left-associative chain). Without this, n.a falls
+        // to the generic cg_expr(g, s, a, n.a) below, which has no idea
+        // "pkg.EnumName" denotes a type and just emits the two names joined
+        // by literal dots, verbatim, into invalid C.
+        if nn.a != 0 && an2.kind == at.AST_MEMBER && an2.a != 0 && at.KindOf(a, an2.a) == at.AST_IDENTIFIER && !local_known(g, at.Get(a, an2.a).name):
+            pkname := at.Get(a, an2.a).name
+            mut pk := sm.Lookup(s, s.global, pkname)
+            if pk == 0 && g.cur_fn_home != 0:
+                pk = sm.Lookup(s, g.cur_fn_home, pkname)
+            end
+            if pk != 0 && sm.SymAt(s, pk).kind == sm.SYM_PACKAGE:
+                e2 := sm.LookupLocal(s, sm.SymAt(s, pk).members, an2.name)
+                if e2 != 0 && sm.SymAt(s, e2).kind == sm.SYM_ENUM:
+                    ret cg_cident(sm.SymAt(s, e2).name) + "_" + cg_cident(nn.name)
                 end
             end
         end

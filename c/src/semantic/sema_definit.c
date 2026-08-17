@@ -283,8 +283,22 @@ static void di_call(di_t *d, ast_node_t *n)
     di_expr(d, n->a);
     for (; i < n->list.len; i++) {
         ast_node_t *arg = (ast_node_t *)n->list.data[i];
-        if (arg && arg->kind == AST_IDENTIFIER && arg->ref_arg) {
-            di_mark(d, arg->name); /* a `&:` parameter: the callee writes it */
+        if (arg && arg->ref_arg) {
+            /* A `&:` parameter: the callee writes it. Through a projection
+             * (`f(rows[0])`, `f(h.k)`) only the subscripts are reads, the
+             * same rule di_assign applies to `rows[0] = v`. */
+            ast_node_t *root = arg;
+            while (root && (root->kind == AST_MEMBER || root->kind == AST_INDEX ||
+                            root->kind == AST_SLICE)) {
+                di_expr(d, root->b);
+                di_expr(d, root->c);
+                root = root->a;
+            }
+            if (root && root->kind == AST_IDENTIFIER) {
+                di_mark(d, root->name);
+                continue;
+            }
+            di_expr(d, root);
             continue;
         }
         di_expr(d, arg);

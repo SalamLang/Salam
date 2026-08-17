@@ -1,0 +1,137 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package image
+
+import str
+
+// UTF-8 <-> codepoints, for the text pipeline.
+//
+// Everything above this file works on codepoints, not bytes: a shaper
+// has to look at the letter before and after, and a bidi reorder moves
+// whole characters around, neither of which a byte string supports.
+// A `str` is NUL-terminated UTF-8, so these four functions are the only
+// place the byte encoding is dealt with.
+//
+// Decoding never fails: a truncated sequence or a stray continuation
+// byte becomes U+FFFD and advances one byte, so a malformed string
+// still terminates and still draws something.
+
+func _utf8_next(bp: u8*, n: int, i: int, cp &: int): int:
+    b0 := bp[i] as int
+    if b0 < 0x80:
+        cp = b0
+        ret i + 1
+    end
+    if (b0 & 0xE0) == 0xC0 && i + 1 < n:
+        cp = ((b0 & 0x1F) << 6) | ((bp[i + 1] as int) & 0x3F)
+        ret i + 2
+    end
+    if (b0 & 0xF0) == 0xE0 && i + 2 < n:
+        cp = ((b0 & 0x0F) << 12) | (((bp[i + 1] as int) & 0x3F) << 6) | ((bp[i + 2] as int) & 0x3F)
+        ret i + 3
+    end
+    if (b0 & 0xF8) == 0xF0 && i + 3 < n:
+        cp = ((b0 & 0x07) << 18) | (((bp[i + 1] as int) & 0x3F) << 12) | (((bp[i + 2] as int) & 0x3F) << 6) | ((bp[i + 3] as int) & 0x3F)
+        ret i + 4
+    end
+    cp = 0xFFFD
+    ret i + 1
+end
+
+func _utf8_decode_all(text: str, out &: Vector<int>):
+    n := str.Len(text)
+    bp := text as u8*
+    mut i := 0
+    until i < n:
+        mut cp := 0
+        i = _utf8_next(bp, n, i, cp)
+        out.push(cp)
+    end
+end
+
+func _utf8_append(b &: str.StringBuilder, cp: int):
+    if cp < 0x80:
+        str.BufAppendChar(b, cp)
+        ret
+    end
+    if cp < 0x800:
+        str.BufAppendChar(b, 0xC0 | (cp >> 6))
+        str.BufAppendChar(b, 0x80 | (cp & 0x3F))
+        ret
+    end
+    if cp < 0x10000:
+        str.BufAppendChar(b, 0xE0 | (cp >> 12))
+        str.BufAppendChar(b, 0x80 | ((cp >> 6) & 0x3F))
+        str.BufAppendChar(b, 0x80 | (cp & 0x3F))
+        ret
+    end
+    str.BufAppendChar(b, 0xF0 | (cp >> 18))
+    str.BufAppendChar(b, 0x80 | ((cp >> 12) & 0x3F))
+    str.BufAppendChar(b, 0x80 | ((cp >> 6) & 0x3F))
+    str.BufAppendChar(b, 0x80 | (cp & 0x3F))
+end
+
+// Characters that must never put a mark on the canvas and must never
+// advance the pen, however the font maps them.
+//
+// The zero-width formatting characters are the ones that matter: a
+// Persian word like برنامه‌نویسی is written with a zero-width
+// non-joiner in the middle of it, and a font that has no glyph for
+// U+200C - which is most of them, since it is not supposed to be drawn -
+// falls back to .notdef and puts a box in the middle of the word. The
+// bidi controls, the byte order mark and the C0 controls are here for
+// the same reason: they are instructions, not letters.
+//
+// This runs after shaping, so a joiner has already done its job of
+// breaking or forcing a join by the time it is dropped.
+func _text_drawable(cp: int): bool:
+    if cp < 0x20: ret false end
+    if cp == 0x7F: ret false end
+    if cp == 0x00AD: ret false end
+    if cp >= 0x200B && cp <= 0x200F: ret false end
+    if cp >= 0x202A && cp <= 0x202E: ret false end
+    if cp >= 0x2060 && cp <= 0x2064: ret false end
+    if cp >= 0x2066 && cp <= 0x2069: ret false end
+    if cp == 0xFEFF: ret false end
+    ret true
+end
+
+func _text_drop_invisible(cps &: Vector<int>):
+    mut w := 0
+    mut i := 0
+    until i < cps.len():
+        cp := cps.get(i)
+        if _text_drawable(cp):
+            cps.set(w, cp)
+            w += 1
+        end
+        i += 1
+    end
+    until cps.len() > w:
+        cps.pop()
+    end
+end
+
+func _utf8_encode_all(cps &: Vector<int>): str:
+    mut b := str.NewBuilder()
+    mut i := 0
+    until i < cps.len():
+        _utf8_append(b, cps.get(i))
+        i += 1
+    end
+    out := str.BufStr(b)
+    str.BufFree(b)
+    ret out
+end

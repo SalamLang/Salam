@@ -11,6 +11,25 @@ import i18 "../i18n.salam"
 // ===== sema_decl.c =====
 // ===========================================================================
 
+func tv_kind_name(k: int): str:
+    if k == tok.TV_INT:
+        ret "int"
+    end
+    if k == tok.TV_FLOAT:
+        ret "float"
+    end
+    if k == tok.TV_STRING:
+        ret "string"
+    end
+    if k == tok.TV_CHAR:
+        ret "char"
+    end
+    if k == tok.TV_BOOL:
+        ret "bool"
+    end
+    ret "?"
+end
+
 // block_has_valued_ret - true when any non-lambda descendant is `ret <expr>`.
 func block_has_valued_ret(a &: at.Ast, nid: int): bool:
     if nid == 0:
@@ -112,7 +131,7 @@ func link_spec_is_path(spec: str): bool:
             ret true
         end
     end
-    exts := [".a", ".so", ".dll", ".lib", ".dylib"] as str[5]
+    exts := [".a", ".so", ".dll", ".lib", ".dylib"]
     n := str.Len(spec)
     repeat 5 with j:
         el := str.Len(exts[j])
@@ -171,6 +190,7 @@ end
 // at.Child/ChildCount - a snapshot Vector header would dangle on realloc.
 // Appended instances are synthetic and skipped, exactly like the C.
 func sema_collect(s &: Sema, a &: at.Ast, program: int):
+    save_file := s.file
     mut i := 0
     until i < at.ChildCount(a, program):
         did := at.Child(a, program, i)
@@ -179,6 +199,7 @@ func sema_collect(s &: Sema, a &: at.Ast, program: int):
         if d.synthetic:
             continue
         end
+        _sf1 := sema_use_decl_file(s, a, did)
         if d.kind == at.AST_STRUCT_DEF:
             sym := symbol_new(s, SYM_STRUCT, d.name)
             mut c_type_name := d.name
@@ -214,6 +235,7 @@ func sema_collect(s &: Sema, a &: at.Ast, program: int):
             sv2.is_pub = d.is_pub
             sv2.ty = type_enum(s, sym2, c_enum_name)
             sv2.members = members2
+            sv2.home = s.global
             sym_put(s, sym2, sv2)
             if scope_define(s, s.global, sym2) != 0:
                 serr(
@@ -237,6 +259,13 @@ func sema_collect(s &: Sema, a &: at.Ast, program: int):
             sv4.decl = did
             sv4.is_pub = d.is_pub
             sv4.members = members4
+            // Same package qualification a struct gets above, and for the
+            // same reason: `dyn Connection` written inside package db and
+            // `dyn db.Connection` written by an importer must name ONE
+            // type, or each spelling would get its own vtable struct in C
+            // and a value boxed on one side would not dispatch on the
+            // other.
+            sv4.pkgname = s.pkg
             sym_put(s, sym4, sv4)
             if scope_define(s, s.global, sym4) != 0:
                 serr(
@@ -254,6 +283,7 @@ func sema_collect(s &: Sema, a &: at.Ast, program: int):
         if d.synthetic:
             continue
         end
+        _sf2 := sema_use_decl_file(s, a, did)
         if d.kind == at.AST_LINK:
             check_link(s, a, did)
         else d.kind == at.AST_TYPE_ALIAS:
@@ -373,17 +403,22 @@ func sema_collect(s &: Sema, a &: at.Ast, program: int):
                 sym_put(s, owner, ov)
                 _od := scope_define(s, s.global, owner)
             end
-            iface := scope_lookup(s, s.global, d.name)
-            mut iface_ok := iface != 0
-            if iface_ok && sym_at(s, iface).kind != SYM_INTERFACE:
-                iface_ok = false
-            end
-            if !iface_ok:
-                serr(
-                    s, 1, span_of(a, did), co.Format1(
-                        i18.Tr("'%s' in `impl ... on ...` is not an interface"), co.ArgStr(d.name)
+            mut why := ""
+            iface := sema_lookup_iface(s, a, d.name, span_of(a, did), why)
+            if iface == 0:
+                if str.Len(why) > 0:
+                    serr(
+                        s, 1, span_of(a, did), co.Format2(
+                            i18.Tr("'%s' in `impl ... on ...`: %s"), co.ArgStr(d.name), co.ArgStr(why)
+                        )
                     )
-                )
+                else:
+                    serr(
+                        s, 1, span_of(a, did), co.Format1(
+                            i18.Tr("'%s' in `impl ... on ...` is not an interface"), co.ArgStr(d.name)
+                        )
+                    )
+                end
             end
             repeat d.list.len() with j3:
                 mid3 := d.list.get(j3)
@@ -415,22 +450,64 @@ func sema_collect(s &: Sema, a &: at.Ast, program: int):
             if esym == 0 || sym_at(s, esym).members == 0:
                 continue
             end
+            // The first member with an initializer fixes this enum's
+            // backing kind (TV_INT if none has one, preserving the default
+            // 0/1/2... auto-increment). Every later member's initializer,
+            // if any, must agree with it - an enum is either all-int,
+            // all-string, or all-float, never mixed.
+            mut backing := tok.TV_INT
+            repeat d.list.len() with jb:
+                mb := at.Get(a, d.list.get(jb))
+                if mb.a != 0 && at.Get(a, mb.a).kind == at.AST_LITERAL:
+                    backing = at.Get(a, mb.a).value_kind
+                    break
+                end
+            end
+            mut esv := sym_at(s, esym)
+            esv.enum_val_kind = backing
+            sym_put(s, esym, esv)
+            if esv.ty != 0:
+                mut ety := ty_at(s, esv.ty)
+                ety.enum_val_kind = backing
+                ty_put(s, esv.ty, ety)
+            end
             mut next := 0 as i64
             repeat d.list.len() with j4:
                 mid4 := d.list.get(j4)
                 m4 := at.Get(a, mid4)
                 em := symbol_new(s, SYM_ENUM_MEMBER, m4.name)
-                if m4.a != 0:
-                    ma := at.Get(a, m4.a)
-                    if ma.kind == at.AST_LITERAL && ma.value_kind == tok.TV_INT:
-                        next = ma.value_int as i64
-                    end
-                end
                 mut ev := sym_at(s, em)
-                ev.enum_value = next
+                ev.enum_val_kind = backing
+                if m4.a != 0 && at.Get(a, m4.a).kind == at.AST_LITERAL:
+                    ma := at.Get(a, m4.a)
+                    if ma.value_kind != backing:
+                        serr(
+                            s, 91, span_of(a, mid4), co.Format4(
+                                i18.Tr("enum '%s' is %s-backed; member '%s' cannot use a %s value"),
+                                co.ArgStr(d.name), co.ArgStr(tv_kind_name(backing)), co.ArgStr(m4.name), co.ArgStr(tv_kind_name(ma.value_kind))
+                            )
+                        )
+                    else if backing == tok.TV_INT:
+                        next = ma.value_int as i64
+                    else if backing == tok.TV_FLOAT:
+                        ev.enum_value_f = ma.value_float
+                    else if backing == tok.TV_STRING:
+                        ev.enum_value_str = ma.value_str
+                    end
+                else if backing != tok.TV_INT:
+                    serr(
+                        s, 92, span_of(a, mid4), co.Format3(
+                            i18.Tr("member '%s' of %s-backed enum '%s' needs an explicit value"),
+                            co.ArgStr(m4.name), co.ArgStr(tv_kind_name(backing)), co.ArgStr(d.name)
+                        )
+                    )
+                end
+                if backing == tok.TV_INT:
+                    ev.enum_value = next
+                    next = next + (1 as i64)
+                end
                 ev.ty = sym_at(s, esym).ty
                 sym_put(s, em, ev)
-                next = next + (1 as i64)
                 if scope_define(s, sym_at(s, esym).members, em) != 0:
                     serr(
                         s, 1, span_of(a, mid4), co.Format1(
@@ -505,4 +582,5 @@ func sema_collect(s &: Sema, a &: at.Ast, program: int):
             end
         end
     end
+    s.file = save_file
 end

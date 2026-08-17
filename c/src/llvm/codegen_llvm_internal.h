@@ -87,6 +87,9 @@ typedef struct {
     bool is_main;
     const char *brk[64];
     const char *cont[64];
+    /* Defer-stack depth at the start of each enclosing loop body, so break and
+     * continue can replay that body's defers before branching away. */
+    size_t loop_dmark[64];
     int nloop;
     vec_t defers;
     const char *self_ts;
@@ -134,9 +137,24 @@ typedef struct {
     const char *match_merge_block;
 } ll_t;
 
-SAL_INLINE bool ll_is_str(const char *ts)
+/*
+ * A string-backed enum's LLVM representation is a `ptr` (ll_enum_member_value
+ * hands back the same deduplicated global an ordinary string literal would
+ * get), so it needs to be treated exactly like str/uchar wherever that
+ * representation matters (== via strcmp, string coercion) - only its *name*
+ * ("Color") isn't literally "str". Int/float-backed enums need no such
+ * translation.
+ */
+SAL_INLINE bool ll_is_str(ll_t *ll, const char *ts)
 {
-    return ts && (!strcmp(ts, "str") || !strcmp(ts, "uchar"));
+    if (!ts) return false;
+    if (!strcmp(ts, "str") || !strcmp(ts, "uchar")) return true;
+    if (ll->sem) {
+        symbol_t *esym = scope_lookup_local(ll->sem->global, ts);
+        if (esym && esym->kind == SYM_ENUM && esym->enum_val_kind == TV_STRING)
+            return true;
+    }
+    return false;
 }
 
 SAL_INLINE bool ll_is_bool(const char *ts)
@@ -211,6 +229,10 @@ const char *ll_array_elem(ll_t *ll, const char *ts);
 
 bool ll_is_slice_ts(const char *ts);
 
+bool ll_is_vec_ts(const char *ts);
+
+const char *ll_vec_elem_ts(ll_t *ll, const char *ts);
+
 bool ll_is_extern_fn_ts(const char *ts);
 
 bool ll_is_any_fn_ts(const char *ts);
@@ -238,7 +260,7 @@ symbol_t *ll_enum_sym(ll_t *ll, const char *name);
 
 int ll_field_index(symbol_t *ssym, const char *field, symbol_t **out_field);
 
-const char *ll_zero(const char *ts);
+const char *ll_zero(ll_t *ll, const char *ts);
 const char *ll_fp_text(ll_t *ll, const char *v);
 
 const char *ll_func_ret(ll_t *ll, const char *ts);

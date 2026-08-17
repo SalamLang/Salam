@@ -502,10 +502,11 @@ static void collect_decls(interp_t *I, ast_node_t *program)
                  * left declarations like `mut buf: f64[N]` unusable, because
                  * indexing null is not an lvalue: `buf[i] = x` failed with
                  * "value is not index-assignable" even though the C and LLVM
-                 * backends both zero-fill the array. */
-                value_t v =
-                    d->a ? eval(I, I->globals, d->a) : default_for_type(I, d->type_str);
-                env_define(I, I->globals, d->name, v);
+                 * backends both zero-fill the array.
+                 *
+                 * The initialiser is not run here - interp_eval_globals does
+                 * it, once the rest of the program exists. See there. */
+                env_define(I, I->globals, d->name, default_for_type(I, d->type_str));
                 break;
             }
             default:
@@ -521,6 +522,29 @@ static void collect_decls(interp_t *I, ast_node_t *program)
             if (f->name && !env_find_local(I->globals, f->name))
                 env_define(I, I->globals, f->name, mk_closure(I, f, I->globals));
         }
+    }
+}
+
+/*
+ * A generic instance or a derived codec has a global name but a package's
+ * body: it is reachable from anywhere, and resolves the names it calls -
+ * private ones included - inside the module it was cloned or generated from.
+ * Its closure is built before the modules exist, so the environment is
+ * corrected here, once they do.
+ */
+static void rehome_synthetic_funcs(interp_t *I)
+{
+    size_t i = 0;
+    for (; i < I->funcs.len; i++) {
+        ast_node_t *f = (ast_node_t *)I->funcs.data[i];
+        module_t *home;
+        binding_t *b;
+        if (!f->name || !f->home_pkg) continue;
+        home = find_module(I, f->home_pkg);
+        if (!home) continue;
+        b = env_find_local(I->globals, f->name);
+        if (b && b->val.kind == VAL_FUNC && b->val.as.fn->fn == f)
+            b->val.as.fn->env = home->env;
     }
 }
 
@@ -540,13 +564,29 @@ static void collect_module_funcs(interp_t *I, module_t *mod, ast_node_t *prog)
                     env_define(I, mod->env, d->name, mk_closure(I, d, mod->env));
                 break;
 
-            case AST_STRUCT_DEF:
+            case AST_STRUCT_DEF: {
+                /*
+                 * A package's struct keeps its short name on the declaration
+                 * but its *type* is named <pkg>_<name> (sema_decl.c's
+                 * AST_STRUCT_DEF pre-pass), and a type string is what the
+                 * walker has in hand wherever it has to lay a value out in
+                 * memory - the element type of a Vector<T> above all. Looking
+                 * only under the short name left `Vector<pkg.Row>.get(i)`
+                 * reading the bytes back as an opaque box, so the result was
+                 * not a struct and any field access on it failed with
+                 * "cannot access member". Register both spellings.
+                 */
+                const char *qual = NULL;
+                if (d->name && mod->name && strcmp(mod->name, "main") != 0)
+                    qual = afmt(I, "%s_%s", mod->name, d->name);
+                if (qual && !find_struct(I, qual)) itab_put(I, &I->tab_structs, qual, d);
                 if (!find_struct(I, d->name)) {
                     vec_push(I->a, &I->structs, d);
                     if (d->name) itab_put(I, &I->tab_structs, d->name, d);
                     if (!d->synthetic) register_method_envs(I, d, mod->env);
                 }
                 break;
+            }
             case AST_ENUM_DEF:
                 if (!find_enum(I, d->name)) {
                     vec_push(I->a, &I->enums, d);
@@ -556,6 +596,22 @@ static void collect_module_funcs(interp_t *I, module_t *mod, ast_node_t *prog)
             case AST_IMPL_DEF:
                 vec_push(I->a, &I->impls, d);
                 if (!d->synthetic) register_method_envs(I, d, mod->env);
+                break;
+            /* A module's own constants and globals belong to its environment
+             * too. Without them a function in one file of a package could not
+             * see a `pub const` declared in a sibling ("undefined variable
+             * 'KindNone'"), which every compiled backend resolves fine.
+             *
+             * Only the name is bound here, never the initialiser's value:
+             * this pass is what makes the module's functions callable, and a
+             * global is required to be declared above them (E085), so
+             * `mut g := compute()` would be evaluated before `compute` exists
+             * ("call to undefined function 'compute'"). eval_module_consts
+             * runs the initialisers once every module is complete. */
+            case AST_CONST_DECL:
+            case AST_VAR_DECL:
+                if (d->name && !env_find_local(mod->env, d->name))
+                    env_define(I, mod->env, d->name, default_for_type(I, d->type_str));
                 break;
             default:
                 break;
@@ -584,9 +640,8 @@ static void eval_module_consts(interp_t *I, module_t *mod, ast_node_t *prog)
         size_t i = 0;
         for (; i < prog->list.len; i++) {
             ast_node_t *d = (ast_node_t *)prog->list.data[i];
-            if (d->kind == AST_CONST_DECL || d->kind == AST_VAR_DECL)
-                env_define(I, mod->env, d->name,
-                           d->a ? eval(I, mod->env, d->a) : val_null());
+            if ((d->kind == AST_CONST_DECL || d->kind == AST_VAR_DECL) && d->a)
+                env_define(I, mod->env, d->name, eval(I, mod->env, d->a));
         }
     }
 }
@@ -604,12 +659,19 @@ void build_modules(interp_t *I, ast_node_t *program)
             symbol_t *pk = (symbol_t *)pkgs->data[i];
             const char *name =
                 pk->pkgname ? pk->pkgname : (pk->decl ? pk->decl->name : NULL);
-            if (!name || !pk->decl || find_module(I, name)) continue;
-            module_t *mod = (module_t *)arena_alloc(I->a, sizeof *mod);
-            mod->name = name;
-            mod->env = env_new(I, NULL);
-            vec_push(I->a, &I->modules, mod);
-            itab_put(I, &I->tab_modules, name, mod);
+            if (!name || !pk->decl) continue;
+            /* A package spread over several files arrives as one entry per
+             * file. They share one environment: a helper in a sibling file is
+             * as reachable as one in the anchor, which is what every other
+             * backend already does. */
+            module_t *mod = find_module(I, name);
+            if (!mod) {
+                mod = (module_t *)arena_alloc(I->a, sizeof *mod);
+                mod->name = name;
+                mod->env = env_new(I, NULL);
+                vec_push(I->a, &I->modules, mod);
+                itab_put(I, &I->tab_modules, name, mod);
+            }
             collect_module_funcs(I, mod, pk->decl);
         }
     }
@@ -625,8 +687,27 @@ void build_modules(interp_t *I, ast_node_t *program)
         }
     }
     wire_imports(I, I->globals, sem->global);
+}
 
-    {
+/*
+ * Run every global initialiser, packages first and the program last.
+ *
+ * Deliberately its own pass, after collect_decls, build_modules and the
+ * generic/synthetic fixups: an initialiser is an arbitrary expression and may
+ * call anything the program defines, but the declaration-order rules put
+ * globals *above* the functions of their own file (E085), so evaluating one
+ * while its file is still being collected reached a function that did not
+ * exist yet - `mut g_cat := catalog.New()` failed with "call to undefined
+ * function 'New'", or, across a module boundary, quietly left the global at
+ * its zero value and surfaced much later as "Vector.get: index out of
+ * bounds". The compiled backends run the same initialisers from
+ * salam_mod_<m>_init(); this is the walker's equivalent.
+ */
+void interp_eval_globals(interp_t *I, ast_node_t *program)
+{
+    sema_result_t *sem = I->sem;
+    if (sem) {
+        vec_t *pkgs = &sem->packages;
         size_t i = 0;
         for (; i < pkgs->len; i++) {
             symbol_t *pk = (symbol_t *)pkgs->data[i];
@@ -634,6 +715,15 @@ void build_modules(interp_t *I, ast_node_t *program)
                 pk->pkgname ? pk->pkgname : (pk->decl ? pk->decl->name : NULL);
             module_t *mod = name ? find_module(I, name) : NULL;
             if (mod && pk->decl) eval_module_consts(I, mod, pk->decl);
+        }
+    }
+    {
+        size_t i = 0;
+        for (; i < program->list.len; i++) {
+            ast_node_t *d = (ast_node_t *)program->list.data[i];
+            if (d->kind != AST_CONST_DECL && d->kind != AST_VAR_DECL) continue;
+            if (!d->a) continue;
+            env_define(I, I->globals, d->name, eval(I, I->globals, d->a));
         }
     }
 }
@@ -644,6 +734,20 @@ static void fixup_generic_envs_in(interp_t *I, vec_t *defs)
     for (; i < defs->len; i++) {
         ast_node_t *d = (ast_node_t *)defs->data[i];
         if (!d->synthetic || !d->name || find_def_env(I, d)) continue;
+        /* The instance records the package whose scope its body was checked
+         * in, which is exactly the environment its methods have to resolve
+         * against. Preferred over the symbol search below because an instance
+         * created while checking an imported package is defined in *that*
+         * package's scope, not the program's, so the lookup misses it and a
+         * `Vector<int>` first named inside a package kept an environment with
+         * no `mem` in it ("undefined variable 'mem'" from Vector.reserve). */
+        if (d->home_pkg) {
+            module_t *home = find_module(I, d->home_pkg);
+            if (home) {
+                register_method_envs(I, d, home->env);
+                continue;
+            }
+        }
         symbol_t *sym = I->sem ? scope_lookup(I->sem->global, d->name) : NULL;
         if (!sym || !sym->generic_base) continue;
         size_t j = 0;
@@ -707,6 +811,8 @@ int interp_run(arena_t *a, logger_t *log, ast_node_t *program, sema_result_t *se
     collect_decls(&I, program);
     build_modules(&I, program);
     fixup_generic_envs(&I);
+    rehome_synthetic_funcs(&I);
+    interp_eval_globals(&I, program);
     ast_node_t *main_fn = find_func(&I, entry, (size_t)-1);
     if (!main_fn) {
         LOG_E(log, PH_DRIVER, i18n_tr("no entry point: define a '%s' function"), entry);

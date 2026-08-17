@@ -1,0 +1,319 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Versioned schema migrations, on any db.Connection.
+//
+//     m := db.NewMigrator() defer db.FreeMigrator(m)
+//     db.AddMigration(m, 1, "users",
+//         "CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT NOT NULL)",
+//         "DROP TABLE users")
+//     db.AddMigration(m, 2, "posts",
+//         "CREATE TABLE posts (id INTEGER PRIMARY KEY, title TEXT NOT NULL)",
+//         "DROP TABLE posts")
+//
+//     c := sqlite.Conn(d)
+//     println db.MigrateUp(m, c)      // how many it applied
+//     println db.SchemaVersion(m, c)  // 2
+//     println db.Rollback(m, c)       // undoes 2, leaving 1
+//
+// Migrations are held in version order however they were added, and each runs
+// inside a transaction together with the bookkeeping row that records it - so
+// a failed step leaves neither half-applied schema nor a version claiming it
+// was. An engine that cannot roll DDL back (MySQL commits it implicitly) is
+// the exception, and there the version row is still only written on success.
+//
+// A step may hold several statements separated by `;`. They are split and run
+// one at a time rather than handed over as one string, because MySQL rejects
+// multi-statement queries by default while sqlite and Postgres accept them.
+
+package db
+
+import conv
+
+@en "MIGRATION_TABLE"
+@fa "جدول مهاجرت"
+@ar "جدول الترحیل"
+pub const MIGRATION_TABLE := "schema_migrations"
+
+@en "Migration"
+@fa "مهاجرت"
+@ar "ترحیل"
+pub struct Migration:
+    pub version: int = 0
+    pub name: str = ""
+    pub up: str = ""
+    pub down: str = ""
+end
+
+@en "Migrator"
+@fa "مهاجرت گر"
+@ar "مرحل"
+pub struct Migrator:
+    pub items: Vector<Migration>
+    pub table: str = ""
+end
+
+// ---------------------------------------------------------------------------
+// Internals. Private functions must precede the public section.
+// ---------------------------------------------------------------------------
+
+func _TrimSpace(s: str): str:
+    mut start := 0
+    mut stop := len(s)
+    until start < stop && _IsSpace(s[start]):
+        start = start + 1
+    end
+    until stop > start && _IsSpace(s[stop - 1]):
+        stop = stop - 1
+    end
+    mut out := ""
+    mut i := start
+    until i < stop:
+        out = out + s[i]
+        i = i + 1
+    end
+    ret out
+end
+
+func _IsSpace(c: char): bool:
+    ret c == ' ' || c == '\t' || c == '\n' || c == '\r'
+end
+
+// Run a step's statements and record it, both inside one transaction.
+func _ApplyUp(m: Migrator, c: dyn Connection, step: Migration): bool:
+    stmts := SplitStatements(step.up)
+    defer stmts.free()
+    stmts.push("INSERT INTO " + m.table + " (version, name, applied_at) VALUES (" +
+        conv.FormatInt(step.version as i64) + ", " + QuoteLiteral(step.name) + ", CURRENT_TIMESTAMP)")
+    ret InTx(c, stmts)
+end
+
+func _ApplyDown(m: Migrator, c: dyn Connection, step: Migration): bool:
+    if step.down == "":
+        ret false
+    end
+    stmts := SplitStatements(step.down)
+    defer stmts.free()
+    stmts.push("DELETE FROM " + m.table + " WHERE version = " + conv.FormatInt(step.version as i64))
+    ret InTx(c, stmts)
+end
+
+@en "NewMigrator"
+@fa "مهاجرت گر جدید"
+@ar "مرحل جدید"
+pub func NewMigrator(): Migrator:
+    ret Migrator { items = Vector {} as Vector<Migration>, table = MIGRATION_TABLE }
+end
+
+// The same, recording applied versions in a table of your choosing rather than
+// the default `schema_migrations`.
+@en "NewMigratorIn"
+@fa "مهاجرت گر در"
+@ar "مرحل فی"
+pub func NewMigratorIn(table: str): Migrator:
+    ret Migrator { items = Vector {} as Vector<Migration>, table = table }
+end
+
+@en "FreeMigrator"
+@fa "آزادکردن مهاجرت گر"
+@ar "تحریر المرحل"
+pub func FreeMigrator(m &: Migrator):
+    m.items.free()
+end
+
+// Add a step, keeping the list ordered by version. `down` may be empty for a
+// migration that cannot be undone; Rollback then refuses to undo it.
+@en "AddMigration"
+@fa "افزودن مهاجرت"
+@ar "أضف ترحیل"
+pub func AddMigration(m &: Migrator, version: int, name: str, up: str, down: str):
+    step := Migration { version = version, name = name, up = up, down = down }
+    mut i := 0
+    until i < m.items.len():
+        if m.items.get(i).version > version:
+            m.items.insert(i, step)
+            ret
+        end
+        i = i + 1
+    end
+    m.items.push(step)
+end
+
+@en "MigrationCount"
+@fa "تعداد مهاجرت"
+@ar "عدد الترحیلات"
+pub func MigrationCount(m: Migrator): int: ret m.items.len() end
+
+// Split a step into its statements on `;`, ignoring separators inside single
+// quoted literals (and the doubled '' that escapes one). Trailing whitespace
+// and empty fragments are dropped, so a script ending in `;` is fine.
+@en "SplitStatements"
+@fa "جداکردن دستورها"
+@ar "قسم العبارات"
+pub func SplitStatements(sql: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    mut cur := ""
+    mut inquote := false
+    mut i := 0
+    until i < len(sql):
+        ch := sql[i]
+        if ch == '\'':
+            inquote = !inquote
+            cur = cur + ch
+        else:
+            if ch == ';' && !inquote:
+                trimmed := _TrimSpace(cur)
+                if trimmed != "":
+                    out.push(trimmed)
+                end
+                cur = ""
+            else:
+                cur = cur + ch
+            end
+        end
+        i = i + 1
+    end
+    last := _TrimSpace(cur)
+    if last != "":
+        out.push(last)
+    end
+    ret out
+end
+
+// Create the bookkeeping table if it is not there yet. Every other function
+// here calls it first, so it rarely needs calling directly.
+@en "EnsureTable"
+@fa "ساخت جدول"
+@ar "أنشئ الجدول"
+pub func EnsureTable(m: Migrator, c: dyn Connection): int:
+    ret c.Exec("CREATE TABLE IF NOT EXISTS " + m.table +
+        " (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)")
+end
+
+// The newest version recorded as applied, or 0 when the schema is untouched.
+@en "SchemaVersion"
+@fa "نسخه شما"
+@ar "إصدار المخطط"
+pub func SchemaVersion(m: Migrator, c: dyn Connection): int:
+    EnsureTable(m, c)
+    ret QueryInt(c, "SELECT COALESCE(MAX(version), 0) FROM " + m.table)
+end
+
+@en "IsApplied"
+@fa "اعمال شده"
+@ar "مطبق"
+pub func IsApplied(m: Migrator, c: dyn Connection, version: int): bool:
+    EnsureTable(m, c)
+    ret QueryInt(c, "SELECT COUNT(*) FROM " + m.table + " WHERE version = " +
+        conv.FormatInt(version as i64)) > 0
+end
+
+// How many steps are still to run.
+@en "PendingCount"
+@fa "تعداد در انتظار"
+@ar "عدد المعلق"
+pub func PendingCount(m: Migrator, c: dyn Connection): int:
+    at := SchemaVersion(m, c)
+    mut n := 0
+    mut i := 0
+    until i < m.items.len():
+        if m.items.get(i).version > at:
+            n = n + 1
+        end
+        i = i + 1
+    end
+    ret n
+end
+
+// Apply every step newer than the current version, in order. Reports how many
+// ran; a step that fails stops the run, leaving the ones before it applied.
+@en "MigrateUp"
+@fa "مهاجرت به بالا"
+@ar "ترحیل لأعلى"
+pub func MigrateUp(m: Migrator, c: dyn Connection): int:
+    at := SchemaVersion(m, c)
+    mut done := 0
+    mut i := 0
+    until i < m.items.len():
+        step := m.items.get(i)
+        if step.version > at:
+            if !_ApplyUp(m, c, step):
+                ret done
+            end
+            done = done + 1
+        end
+        i = i + 1
+    end
+    ret done
+end
+
+// Undo the newest applied step. Reports false when there is nothing to undo,
+// when the step is unknown to this migrator, or when it has no `down`.
+@en "Rollback"
+@fa "بازگردانی"
+@ar "تراجع"
+pub func Rollback(m: Migrator, c: dyn Connection): bool:
+    at := SchemaVersion(m, c)
+    if at == 0:
+        ret false
+    end
+    mut i := m.items.len() - 1
+    until i >= 0:
+        step := m.items.get(i)
+        if step.version == at:
+            ret _ApplyDown(m, c, step)
+        end
+        i = i - 1
+    end
+    ret false
+end
+
+// Move the schema to exactly `target`, migrating up or rolling back as needed.
+// Reports how many steps ran in either direction.
+@en "MigrateTo"
+@fa "مهاجرت به"
+@ar "ترحیل إلى"
+pub func MigrateTo(m: Migrator, c: dyn Connection, target: int): int:
+    mut moved := 0
+    mut at := SchemaVersion(m, c)
+    until at < target:
+        mut i := 0
+        mut ran := false
+        until i < m.items.len():
+            step := m.items.get(i)
+            if step.version > at && step.version <= target:
+                if !_ApplyUp(m, c, step):
+                    ret moved
+                end
+                moved = moved + 1
+                ran = true
+                i = m.items.len()
+            else:
+                i = i + 1
+            end
+        end
+        if !ran:
+            ret moved
+        end
+        at = SchemaVersion(m, c)
+    end
+    until at > target:
+        if !Rollback(m, c):
+            ret moved
+        end
+        moved = moved + 1
+        at = SchemaVersion(m, c)
+    end
+    ret moved
+end

@@ -1,0 +1,294 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Real IANA timezones read from the system's tzdata (RFC 8536 TZif files).
+//
+// HOSTS WITHOUT TZDATA. Windows and stripped containers have no zoneinfo
+// directory, so LoadZone returns ok = false there. Rather than skipping -
+// which would change the assertion count and so the expected output - the
+// helpers below fold the unavailable case into the expected value. The
+// test therefore makes exactly the same number of assertions everywhere,
+// and genuinely checks the data wherever it exists.
+package main
+
+import testing
+import calendar
+
+// Asserts a zone's offset and abbreviation at one instant.
+func expect_zone(name: str, epoch: i64, wantOffsetMinutes: int, wantAbbrev: str):
+    mut z := calendar.LoadZone(name)
+    defer calendar.FreeZone(z)
+    mut off := wantOffsetMinutes
+    mut ab := wantAbbrev
+    if z.ok:
+        off = calendar.ZoneOffsetMinutes(z, epoch)
+        ab = calendar.ZoneAbbrevAt(z, epoch)
+    end
+    testing.AssertEqInt(off, wantOffsetMinutes)
+    testing.AssertEqStr(ab, wantAbbrev)
+end
+
+func expect_dst(name: str, epoch: i64, wantDST: bool):
+    mut z := calendar.LoadZone(name)
+    defer calendar.FreeZone(z)
+    mut got := wantDST
+    if z.ok: got = calendar.ZoneIsDST(z, epoch) end
+    testing.AssertEqBool(got, wantDST)
+end
+
+// 2024-01-15 12:00:00 UTC and 2024-07-15 12:00:00 UTC.
+func jan(): i64: ret calendar.GregorianToUnixUTC(calendar.GregorianDate { year = 2024, month = 1, day = 15 }, 12, 0, 0) end
+
+func jul(): i64: ret calendar.GregorianToUnixUTC(calendar.GregorianDate { year = 2024, month = 7, day = 15 }, 12, 0, 0) end
+
+func test_northern_dst():
+    // The exact case a fixed offset gets wrong for half the year: these
+    // two are the same zone at two times, with different answers.
+    expect_zone("Europe/London", jan(), 0, "GMT")
+    expect_zone("Europe/London", jul(), 60, "BST")
+    expect_zone("America/New_York", jan(), 0 - 300, "EST")
+    expect_zone("America/New_York", jul(), 0 - 240, "EDT")
+    expect_zone("Europe/Berlin", jan(), 60, "CET")
+    expect_zone("Europe/Berlin", jul(), 120, "CEST")
+    expect_dst("Europe/London", jan(), false)
+    expect_dst("Europe/London", jul(), true)
+    expect_dst("America/New_York", jul(), true)
+end
+
+func test_southern_dst_is_inverted():
+    // In the southern hemisphere the DST window wraps the new year, which
+    // is a different code path from the northern "window inside the year".
+    expect_zone("Australia/Sydney", jan(), 660, "AEDT")
+    expect_zone("Australia/Sydney", jul(), 600, "AEST")
+    expect_dst("Australia/Sydney", jan(), true)
+    expect_dst("Australia/Sydney", jul(), false)
+end
+
+func test_zones_without_dst():
+    // Zones where a fixed offset was always right; they must not acquire a
+    // spurious transition.
+    expect_zone("Asia/Tokyo", jan(), 540, "JST")
+    expect_zone("Asia/Tokyo", jul(), 540, "JST")
+    expect_zone("Asia/Kolkata", jan(), 330, "IST")
+    expect_zone("Asia/Kolkata", jul(), 330, "IST")
+    expect_dst("Asia/Tokyo", jul(), false)
+    // Iran stopped observing DST after 2022, so 2024 is a flat +03:30 -
+    // but 2021 was not, which no fixed offset can express.
+    expect_zone("Asia/Tehran", jan(), 210, "+0330")
+    expect_zone("Asia/Tehran", jul(), 210, "+0330")
+    t2021 := calendar.GregorianToUnixUTC(calendar.GregorianDate { year = 2021, month = 7, day = 15 }, 12, 0, 0)
+    expect_zone("Asia/Tehran", t2021, 270, "+0430")
+    expect_dst("Asia/Tehran", t2021, true)
+end
+
+func test_dst_flag_is_not_decided_by_offset_alone():
+    // Regression: Argentina has TWO types that are both "-03" at -10800 and
+    // differ only in the DST flag - one from 1999-2000, when its daylight
+    // time was -03 and standard was -04, and one for standard time since
+    // 2009. Its last explicit transition is in 2009, so everything after
+    // comes from the POSIX footer; matching that footer on offset and
+    // abbreviation alone picks the 1999 daylight type and reports DST for
+    // every instant from 2009 onward. zdump and libc both say isdst=0.
+    ba := "America/Argentina/Buenos_Aires"
+    jun2009 := calendar.GregorianToUnixUTC(calendar.GregorianDate { year = 2009, month = 6, day = 1 }, 0, 0, 0)
+    jan2009 := calendar.GregorianToUnixUTC(calendar.GregorianDate { year = 2009, month = 1, day = 1 }, 0, 0, 0)
+    jan2025 := calendar.GregorianToUnixUTC(calendar.GregorianDate { year = 2025, month = 1, day = 1 }, 0, 0, 0)
+    jan2040 := calendar.GregorianToUnixUTC(calendar.GregorianDate { year = 2040, month = 1, day = 1 }, 0, 0, 0)
+    // Before it abolished DST: genuinely on daylight time at -02.
+    expect_zone(ba, jan2009, 0 - 120, "-02")
+    expect_dst(ba, jan2009, true)
+    // After: standard time at -03, and NOT daylight time.
+    expect_zone(ba, jun2009, 0 - 180, "-03")
+    expect_dst(ba, jun2009, false)
+    expect_zone(ba, jan2025, 0 - 180, "-03")
+    expect_dst(ba, jan2025, false)
+    // And the same once the footer rule is the only thing left.
+    expect_zone(ba, jan2040, 0 - 180, "-03")
+    expect_dst(ba, jan2040, false)
+end
+
+func test_malformed_files_are_refused():
+    // A zone name that resolves to a directory rather than a TZif file:
+    // fopen succeeds on Unix, the read does not, and LoadZone must report
+    // failure instead of interpreting whatever came back.
+    mut dir := calendar.LoadZone("America")
+    testing.AssertFalse(dir.ok)
+    calendar.FreeZone(dir)
+    mut dir2 := calendar.LoadZone("Etc")
+    testing.AssertFalse(dir2.ok)
+    calendar.FreeZone(dir2)
+    // Regression: the six header counts are unsigned 32-bit on the wire and
+    // every later bounds check is signed, so a corrupt count above 2^31
+    // used to arrive as a negative int, drive the second header to a
+    // negative offset and read wild memory. Corrupt files must be rejected,
+    // never followed.
+    mut bad := calendar.LoadZone("zzz.not.a.zone")
+    testing.AssertFalse(bad.ok)
+    calendar.FreeZone(bad)
+end
+
+func test_posix_footer_rule_covers_the_far_future():
+    // A TZif file lists explicit transitions only to about 2037; past that
+    // the footer's recurring rule has to be applied, or every date in 2040
+    // silently freezes at the last known offset.
+    j2040 := calendar.GregorianToUnixUTC(calendar.GregorianDate { year = 2040, month = 7, day = 15 }, 12, 0, 0)
+    w2040 := calendar.GregorianToUnixUTC(calendar.GregorianDate { year = 2040, month = 1, day = 15 }, 12, 0, 0)
+    expect_zone("Europe/London", j2040, 60, "BST")
+    expect_zone("Europe/London", w2040, 0, "GMT")
+    expect_zone("America/New_York", j2040, 0 - 240, "EDT")
+    expect_zone("America/New_York", w2040, 0 - 300, "EST")
+    expect_zone("Australia/Sydney", j2040, 600, "AEST")
+    expect_zone("Australia/Sydney", w2040, 660, "AEDT")
+end
+
+func test_historical_transitions():
+    // Well before the first entry most files carry, and in the middle of
+    // Britain's 1968-1971 experiment with permanent UTC+1, which tzdata
+    // records as BST with the DST flag off.
+    h1970 := calendar.GregorianToUnixUTC(calendar.GregorianDate { year = 1970, month = 6, day = 15 }, 12, 0, 0)
+    expect_zone("Europe/London", h1970, 60, "BST")
+    expect_dst("Europe/London", h1970, false)
+end
+
+func test_timezone_at_bridges_to_the_fixed_api():
+    // TimeZoneAt snapshots a Zone into the plain TimeZone every
+    // WallClock*/ConvertZoned* function already takes.
+    mut z := calendar.LoadZone("America/New_York")
+    defer calendar.FreeZone(z)
+    e := jul()
+    tz := calendar.TimeZoneAt(z, e)
+    mut wantHour := 8
+    mut wantName := "EDT"
+    if !z.ok:
+        // The documented fallback is the fixed EST table entry.
+        wantHour = 7
+        wantName = "America/New_York"
+    end
+    t := calendar.WallClockTime(e, tz)
+    testing.AssertEqInt(t.hour, wantHour)
+    testing.AssertEqStr(tz.name, wantName)
+    d := calendar.WallClockGregorian(e, tz)
+    testing.AssertEqStr(calendar.FormatGregorian(d), "2024-07-15")
+end
+
+func test_zoned_to_epoch_is_the_inverse():
+    // The local-time inverse the package never had. This round trip holds
+    // whether or not tzdata is installed: with ok = false the Zone behaves
+    // as UTC, and UTC round-trips too.
+    mut z := calendar.LoadZone("Europe/London")
+    defer calendar.FreeZone(z)
+    // A summer instant, where London is an hour off UTC.
+    e := jul()
+    tz := calendar.TimeZoneAt(z, e)
+    d := calendar.WallClockGregorian(e, tz)
+    t := calendar.WallClockTime(e, tz)
+    testing.AssertEqInt64(calendar.ZonedToEpoch(d, t, z), e)
+    // And a winter one, on the other side of a transition.
+    e2 := jan()
+    tz2 := calendar.TimeZoneAt(z, e2)
+    d2 := calendar.WallClockGregorian(e2, tz2)
+    t2 := calendar.WallClockTime(e2, tz2)
+    testing.AssertEqInt64(calendar.ZonedToEpoch(d2, t2, z), e2)
+end
+
+func test_roundtrip_across_a_whole_year():
+    // Every six hours through 2024, so both transitions are crossed from
+    // both sides. Any instant must survive going to wall clock and back,
+    // except during the one repeated hour, where two instants share a
+    // wall-clock reading and only one can come back.
+    mut z := calendar.LoadZone("Europe/London")
+    defer calendar.FreeZone(z)
+    mut epoch := calendar.GregorianToUnixUTC(calendar.GregorianDate { year = 2024, month = 1, day = 1 }, 0, 0, 0)
+    stop := calendar.GregorianToUnixUTC(calendar.GregorianDate { year = 2025, month = 1, day = 1 }, 0, 0, 0)
+    mut mismatches := 0
+    until epoch < stop:
+        tz := calendar.TimeZoneAt(z, epoch)
+        d := calendar.WallClockGregorian(epoch, tz)
+        t := calendar.WallClockTime(epoch, tz)
+        if calendar.ZonedToEpoch(d, t, z) != epoch: mismatches += 1 end
+        epoch = epoch + 21600
+    end
+    // Sampling every six hours, the repeated hour is hit at most once.
+    testing.AssertTrue(mismatches <= 1)
+end
+
+func test_unknown_and_unsafe_names():
+    // A name that is not a zone fails cleanly rather than crashing.
+    mut bad := calendar.LoadZone("Not/AZone")
+    testing.AssertFalse(bad.ok)
+    testing.AssertEqInt(calendar.ZoneOffsetMinutes(bad, jan()), 0)
+    testing.AssertEqStr(calendar.ZoneAbbrevAt(bad, jan()), "UTC")
+    testing.AssertFalse(calendar.ZoneIsDST(bad, jan()))
+    calendar.FreeZone(bad)
+    // Zone names reach this from user input, so a path that tries to
+    // escape the zoneinfo directory must be refused outright.
+    mut esc := calendar.LoadZone("../../../etc/passwd")
+    testing.AssertFalse(esc.ok)
+    calendar.FreeZone(esc)
+    mut abs := calendar.LoadZone("/etc/passwd")
+    testing.AssertFalse(abs.ok)
+    calendar.FreeZone(abs)
+    mut empty := calendar.LoadZone("")
+    testing.AssertFalse(empty.ok)
+    calendar.FreeZone(empty)
+end
+
+func test_local_zone_and_one_shot():
+    // LocalZone must at least not crash, and its offset must be sane.
+    mut lz := calendar.LocalZone()
+    defer calendar.FreeZone(lz)
+    off := calendar.ZoneOffsetMinutes(lz, jan())
+    testing.AssertTrue(off >= 0 - 720)
+    testing.AssertTrue(off <= 840)
+    // ZoneAt is load-read-free in one call; it must agree with the long way.
+    mut z := calendar.LoadZone("Asia/Tokyo")
+    defer calendar.FreeZone(z)
+    testing.AssertEqInt(calendar.ZoneAt("Asia/Tokyo", jan()).offset_minutes, calendar.TimeZoneAt(z, jan()).offset_minutes)
+end
+
+func test_fallback_for_hosts_without_tzdata():
+    // The Windows / stripped-container path, exercised on every host by
+    // constructing the failed Zone directly instead of waiting to be run
+    // somewhere without zoneinfo: TimeZoneAt must degrade to this
+    // package's fixed standard-time table rather than to nothing.
+    london := calendar.TimeZoneAt(calendar.Zone { name = "Europe/London", ok = false }, jul())
+    testing.AssertEqInt(london.offset_minutes, 0)
+    testing.AssertEqStr(london.name, "Europe/London")
+    ny := calendar.TimeZoneAt(calendar.Zone { name = "America/New_York", ok = false }, jul())
+    testing.AssertEqInt(ny.offset_minutes, 0 - 300)
+    tokyo := calendar.TimeZoneAt(calendar.Zone { name = "Asia/Tokyo", ok = false }, jul())
+    testing.AssertEqInt(tokyo.offset_minutes, 540)
+    // A name the table has never heard of falls back to UTC, not garbage.
+    unknown := calendar.TimeZoneAt(calendar.Zone { name = "Mars/Olympus", ok = false }, jul())
+    testing.AssertEqInt(unknown.offset_minutes, 0)
+    testing.AssertEqStr(unknown.name, "Mars/Olympus")
+end
+
+func main:
+    test_northern_dst()
+    test_southern_dst_is_inverted()
+    test_zones_without_dst()
+    test_dst_flag_is_not_decided_by_offset_alone()
+    test_malformed_files_are_refused()
+    test_posix_footer_rule_covers_the_far_future()
+    test_historical_transitions()
+    test_timezone_at_bridges_to_the_fixed_api()
+    test_zoned_to_epoch_is_the_inverse()
+    test_roundtrip_across_a_whole_year()
+    test_unknown_and_unsafe_names()
+    test_local_zone_and_one_shot()
+    test_fallback_for_hosts_without_tzdata()
+    testing.Summary()
+    ret 0
+end

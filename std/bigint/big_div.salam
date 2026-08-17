@@ -1,0 +1,319 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package bigint
+
+// Division: Knuth's algorithm D, and the two signed conventions built on it.
+//
+// TWO DIVISIONS, ON PURPOSE. Every language has to pick what -7 / 2 means, and
+// both answers are useful, so both are here under names that say which is
+// which:
+//
+//   DivMod      truncates toward zero. q = -3, r = -1. The remainder carries
+//               the sign of the *dividend*, and this matches Salam's own `/`
+//               and `%` on machine integers, so mixed code agrees with itself.
+//
+//   FloorDivMod rounds toward minus infinity. q = -4, r = 1. The remainder
+//               carries the sign of the *divisor* and is never negative for a
+//               positive one, which is what modular arithmetic, calendars, and
+//               bucketing want.
+//
+// Both satisfy a = q*b + r exactly, and both return false rather than trapping
+// when the divisor is zero -- Salam has no exceptions, so a caller that cares
+// checks the bool and a caller that does not gets a defined 0/0 instead of a
+// crash.
+//
+// WHY ALGORITHM D. The obvious alternative is bit-serial shift-and-subtract,
+// which is what the private bignums under std/tls and std/ssh use: it is 30
+// lines and needs no proof. But it costs one pass per *bit*, so dividing a
+// 2048-bit number is 2048 subtractions where algorithm D does 64 limb steps.
+// A signature verifier does ~18 reductions per handshake and never notices;
+// a decimal printer divides once per 9 digits and very much does.
+
+// 2^32, as the u64 that the limb arithmetic below compares and wraps against.
+const _BASE := 0x100000000 as u64
+
+// Grows x's magnitude to exactly n limbs. The working buffers inside the long
+// division are indexed past their significant end, so they must keep their
+// leading zeros -- which is why nothing here calls _norm on them until the end.
+func _pad_to(x &: Int, n: int):
+    while x.mag.len() < n: x.mag.push(0 as u32) end
+end
+
+// |a| divided by |b|, unsigned, writing the quotient to q and the remainder to
+// r. b must be nonzero; the signed wrappers below check that first.
+func _udivmod(a: Int, b: Int, q &: Int, r &: Int):
+    na := a.mag.len()
+    nb := b.mag.len()
+
+    // |a| < |b|: the quotient is zero and the whole dividend is left over.
+    if _ucmp(a, b) < 0:
+        _replace(q, Int {})
+        _replace(r, Abs(a))
+        ret
+    end
+
+    // One limb of divisor is a single pass with a u64 accumulator.
+    if nb == 1:
+        mut rem := 0 as u32
+        _replace(q, _udivmod_small(a, b.mag.get(0), rem))
+        mut rr := Int {}
+        if rem != 0 as u32: rr.mag.push(rem) end
+        _replace(r, rr)
+        ret
+    end
+
+    n := nb
+    m := na - nb
+
+    // D1, normalize. Shifting both operands left until the divisor's top bit
+    // is set is what makes the qhat estimate below provably off by at most 2;
+    // it does not change the quotient, and the remainder is shifted back at
+    // the end.
+    s := _LIMB_BITS - _bit_width(b.mag.get(nb - 1))
+    mut vn := _ushl(b, s)
+    defer vn.free()
+    _pad_to(vn, n)
+    mut un := _ushl(a, s)
+    defer un.free()
+    _pad_to(un, na + 1)
+
+    vtop := vn.mag.get(n - 1) as u64
+    vsec := vn.mag.get(n - 2) as u64
+
+    mut qq := _blank(m + 1)
+    mut j := m
+    while j >= 0:
+        // D3, estimate one quotient limb from the top two limbs of what is
+        // left over the top limb of the divisor.
+        num := ((un.mag.get(j + n) as u64) << 32) | (un.mag.get(j + n - 1) as u64)
+        mut qhat := num / vtop
+        mut rhat := num % vtop
+
+        // Correct the estimate down while it is provably too big. The first
+        // test has to come first and short-circuit: once qhat is below the
+        // base, qhat * vsec is a u32 x u32 product and cannot overflow, but
+        // the unclamped estimate can reach 2^32 exactly.
+        mut again := true
+        while again:
+            again = false
+            if qhat >= _BASE || qhat * vsec > (rhat << 32) + (un.mag.get(j + n - 2) as u64):
+                qhat -= 1 as u64
+                rhat += vtop
+                if rhat < _BASE: again = true end
+            end
+        end
+
+        // D4, un[j..j+n] -= qhat * vn. Carry is the multiply's overflow and
+        // borrow is the subtract's; they are tracked apart so every value
+        // stays unsigned and no arithmetic right shift is needed.
+        mut carry := 0 as u64
+        mut borrow := 0 as u64
+        repeat n with i:
+            p := qhat * (vn.mag.get(i) as u64) + carry
+            carry = p >> 32
+            plo := (p & _LOW_MASK) + borrow
+            cur := un.mag.get(i + j) as u64
+            if cur >= plo:
+                un.mag.set(i + j, (cur - plo) as u32)
+                borrow = 0 as u64
+            else:
+                un.mag.set(i + j, ((cur + _BASE) - plo) as u32)
+                borrow = 1 as u64
+            end
+        end
+
+        top := un.mag.get(j + n) as u64
+        sub := carry + borrow
+        if top >= sub:
+            un.mag.set(j + n, (top - sub) as u32)
+        else:
+            // D6, add back. The estimate was one too large -- which happens
+            // for approximately 2 in 2^32 of steps, so this branch is nearly
+            // dead code and still has to be exactly right.
+            un.mag.set(j + n, ((top + _BASE) - sub) as u32)
+            qhat -= 1 as u64
+            mut c := 0 as u64
+            repeat n with i:
+                t := (un.mag.get(i + j) as u64) + (vn.mag.get(i) as u64) + c
+                un.mag.set(i + j, (t & _LOW_MASK) as u32)
+                c = t >> 32
+            end
+            // This carry out cancels the borrow that the subtract left in the
+            // top limb, so it is dropped rather than propagated.
+            un.mag.set(j + n, ((un.mag.get(j + n) as u64) + c) as u32)
+        end
+
+        qq.mag.set(j, qhat as u32)
+        j -= 1
+    end
+
+    _norm(qq)
+    _replace(q, qq)
+
+    // D8, unnormalize: the remainder is the low n limbs, shifted back by s.
+    mut rr := _blank(n)
+    repeat n with i: rr.mag.set(i, un.mag.get(i)) end
+    _norm(rr)
+    rs := _ushr(rr, s)
+    rr.free()
+    _replace(r, rs)
+end
+
+// ---------------------------------------------------------------------------
+// Truncated division -- quotient toward zero, remainder signed like a
+// ---------------------------------------------------------------------------
+
+@en "DivMod"
+@fa "تقسیم و باقیمانده"
+@ar "قسمة وباقي"
+pub func DivMod(a: Int, b: Int, q &: Int, r &: Int): bool:
+    if b.is_zero():
+        _replace(q, Int {})
+        _replace(r, Int {})
+        ret false
+    end
+    _udivmod(a, b, q, r)
+    q.neg = a.neg != b.neg
+    r.neg = a.neg
+    _norm(q)
+    _norm(r)
+    ret true
+end
+
+@en "Div"
+@fa "تقسیم"
+@ar "قسمة"
+pub func Div(a: Int, b: Int): Int:
+    mut q := Int {}
+    mut r := Int {}
+    _ok := DivMod(a, b, q, r)
+    r.free()
+    ret q
+end
+
+// The truncated remainder, which takes the sign of a. For a result that is
+// never negative use Mod.
+@en "Rem"
+@fa "باقیمانده"
+@ar "باقي"
+pub func Rem(a: Int, b: Int): Int:
+    mut q := Int {}
+    mut r := Int {}
+    _ok := DivMod(a, b, q, r)
+    q.free()
+    ret r
+end
+
+// ---------------------------------------------------------------------------
+// Floored division -- quotient toward minus infinity, remainder signed like b
+// ---------------------------------------------------------------------------
+
+@en "FloorDivMod"
+@fa "تقسیم کف و باقیمانده"
+@ar "قسمة أرضية وباقي"
+pub func FloorDivMod(a: Int, b: Int, q &: Int, r &: Int): bool:
+    if !DivMod(a, b, q, r): ret false end
+    // The two conventions differ in exactly one case: a nonzero remainder
+    // whose sign disagrees with the divisor. Then the truncated quotient is
+    // one too high and the remainder one divisor short.
+    if !r.is_zero() && (a.neg != b.neg):
+        mut one := One()
+        defer one.free()
+        _replace(q, Sub(q, one))
+        _replace(r, Add(r, b))
+    end
+    ret true
+end
+
+@en "FloorDiv"
+@fa "تقسیم کف"
+@ar "قسمة أرضية"
+pub func FloorDiv(a: Int, b: Int): Int:
+    mut q := Int {}
+    mut r := Int {}
+    _ok := FloorDivMod(a, b, q, r)
+    r.free()
+    ret q
+end
+
+@en "FloorMod"
+@fa "باقیمانده کف"
+@ar "باقي أرضي"
+pub func FloorMod(a: Int, b: Int): Int:
+    mut q := Int {}
+    mut r := Int {}
+    _ok := FloorDivMod(a, b, q, r)
+    q.free()
+    ret r
+end
+
+// a reduced into [0, |m|), the representative modular arithmetic wants. Unlike
+// FloorMod this ignores the sign of the modulus, so Mod(x, -7) and Mod(x, 7)
+// agree.
+@en "Mod"
+@fa "پیمانه"
+@ar "تعديل"
+pub func Mod(a: Int, m: Int): Int:
+    if m.is_zero(): ret Int {} end
+    mut q := Int {}
+    defer q.free()
+    mut r := Int {}
+    _udivmod(a, m, q, r)
+    if a.neg && !r.is_zero():
+        mut am := Abs(m)
+        defer am.free()
+        _replace(r, _usub(am, r))
+    end
+    r.neg = false
+    _norm(r)
+    ret r
+end
+
+// ---------------------------------------------------------------------------
+// Division by a machine integer
+// ---------------------------------------------------------------------------
+
+// Truncated division by v, with the remainder -- which fits an i64 whenever v
+// does -- written to rem. Returns a zero quotient on v == 0.
+@en "DivModInt"
+@fa "تقسیم صحیح"
+@ar "قسمة صحيح"
+pub func DivModInt(a: Int, v: i64, rem &: i64): Int:
+    mut b := FromInt(v)
+    defer b.free()
+    mut q := Int {}
+    mut r := Int {}
+    defer r.free()
+    if !DivMod(a, b, q, r):
+        rem = 0 as i64
+        ret q
+    end
+    mut ok := true
+    rem = ToInt(r, ok)
+    ret q
+end
+
+// a mod v as a machine integer in [0, |v|), or 0 when v is zero.
+@en "ModInt"
+@fa "پیمانه صحیح"
+@ar "تعديل صحيح"
+pub func ModInt(a: Int, v: i64): i64:
+    mut m := FromInt(v)
+    defer m.free()
+    mut r := Mod(a, m)
+    defer r.free()
+    mut ok := true
+    ret ToInt(r, ok)
+end

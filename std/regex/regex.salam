@@ -12,12 +12,20 @@
  *
  */
 
+// Whole-match API: does it match, where does it match, replace it. The parts
+// that read submatches out of a match live in capture.salam, and the engine
+// itself in engine.salam.
+//
+// Supported syntax: literals, . [abc] [^a-z] [\w.] \d \w \s \D \W \S \n \t \r,
+// anchors ^ $, groups (…) (?:…) (?<name>…) (?P<name>…), alternation a|b,
+// quantifiers * + ? {n} {n,} {n,m} and their lazy *? +? ?? {n,m}? forms.
+// A pattern outside that syntax is invalid rather than literal: check one with
+// IsValid, since Match on an invalid pattern is simply false.
+
 @en "regex"
 @fa "عبارت باقاعده"
 @ar "تعبیر نمطی"
 package regex
-
-mut _re_last_end := -1
 
 @en "Regex"
 @fa "عبارت باقاعده"
@@ -26,160 +34,18 @@ pub struct Regex:
     pub pattern: str = ""
 end
 
-inline pure func _bp(s: str): i8*: ret (s as void*) as i8* end
-
-inline pure func _ub(bp: i8*, i: int): int:
-    mut v := bp[i] as int
-    if v < 0: v = v + 256 end
-    ret v
-end
-
-pure func _re_atom_len(pat: str, pi: int): int:
-    pl := pat.len()
-    if pi >= pl: ret 1 end
-    pp := _bp(pat)
-    c := _ub(pp, pi)
-    if c == 92:
-        if pi + 1 < pl: ret 2 end
-        ret 1
-    else c == 91:
-        mut q := pi + 1
-        if q < pl && _ub(pp, q) == 94: q = q + 1 end
-        if q < pl && _ub(pp, q) == 93: q = q + 1 end
-        until q < pl && _ub(pp, q) != 93:
-            q += 1
-        end
-        if q < pl && _ub(pp, q) == 93:
-            ret q - pi + 1
-        end
-        ret q - pi
-    else:
-        ret 1
-    end
-end
-
-pure func _re_atom_match(pat: str, pi: int, cc: int): bool:
-    pl := pat.len()
-    if pi >= pl: ret false end
-    pp := _bp(pat)
-    pc := _ub(pp, pi)
-    if pc == 92:
-        if pi + 1 >= pl: ret false end
-        ec := _ub(pp, pi + 1)
-        if ec == 100: ret cc >= 48 && cc <= 57
-        else ec == 119:
-            ret (cc >= 97 && cc <= 122) || (cc >= 65 && cc <= 90) || (cc >= 48 && cc <= 57) || cc == 95
-        else ec == 115: ret cc == 32 || cc == 9 || cc == 10 || cc == 13
-        else:
-            ret cc == ec
-        end
-    else pc == 91:
-        mut q := pi + 1
-        mut neg := false
-        mut found := false
-        if q < pl && _ub(pp, q) == 94:
-            neg = true
-            q += 1
-        end
-        until q < pl && _ub(pp, q) != 93:
-            if q + 2 < pl && _ub(pp, q + 1) == 45 && _ub(pp, q + 2) != 93:
-                lo := _ub(pp, q)
-                hi := _ub(pp, q + 2)
-                if cc >= lo && cc <= hi: found = true end
-                q += 3
-            else:
-                if cc == _ub(pp, q): found = true end
-                q += 1
-            end
-        end
-        if neg: ret !found end
-        ret found
-    else pc == 46:
-        ret true
-    else:
-        ret cc == pc
-    end
-end
-
-pure func _re_here(pat: str, pi: int, text: str, si: int): int:
-    pl := pat.len()
-    tl := text.len()
-    if pi >= pl: ret si end
-    pp := _bp(pat)
-    tp := _bp(text)
-    pc := _ub(pp, pi)
-    if pc == 36 && pi + 1 >= pl:
-        if si >= tl: ret si end
-        ret -1
-    end
-    alen := _re_atom_len(pat, pi)
-    qi := pi + alen
-    mut quant := 0
-    if qi < pl: quant = _ub(pp, qi) end
-    if quant == 42:
-        mut count := 0
-        until si + count < tl && _re_atom_match(pat, pi, _ub(tp, si + count)):
-            count += 1
-        end
-        mut n := count
-        until n >= 0:
-            r := _re_here(pat, qi + 1, text, si + n)
-            if r >= 0: ret r end
-            n -= 1
-        end
-        ret -1
-    else quant == 43:
-        mut count := 0
-        until si + count < tl && _re_atom_match(pat, pi, _ub(tp, si + count)):
-            count += 1
-        end
-        mut n := count
-        until n >= 1:
-            r := _re_here(pat, qi + 1, text, si + n)
-            if r >= 0: ret r end
-            n -= 1
-        end
-        ret -1
-    else quant == 63:
-        if si < tl && _re_atom_match(pat, pi, _ub(tp, si)):
-            r := _re_here(pat, qi + 1, text, si + 1)
-            if r >= 0: ret r end
-        end
-        ret _re_here(pat, qi + 1, text, si)
-    end
-    if si < tl && _re_atom_match(pat, pi, _ub(tp, si)):
-        ret _re_here(pat, qi, text, si + 1)
-    end
-    ret -1
-end
-
-func _re_search(pat: str, text: str): int:
-    pl := pat.len()
-    tl := text.len()
-    mut pi := 0
-    mut anchored := false
-    if pi < pl && _ub(_bp(pat), pi) == 94:
-        anchored = true
-        pi += 1
-    end
-    mut si := 0
-    until si <= tl:
-        e := _re_here(pat, pi, text, si)
-        if e >= 0:
-            _re_last_end = e
-            ret si
-        end
-        if anchored: ret -1 end
-        si += 1
-    end
-    ret -1
-end
-
 @en "Compile"
 @fa "کامپایل"
 @ar "تجمیع"
 pub func Compile(pattern: str): Regex:
     ret Regex { pattern = pattern }
+end
+
+@en "IsValid"
+@fa "معتبر است"
+@ar "صالح"
+pub func IsValid(pattern: str): bool:
+    ret _re_compile(pattern)
 end
 
 @en "Match"

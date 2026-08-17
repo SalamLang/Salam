@@ -1,0 +1,121 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package image
+
+// Font metrics: the numbers a layout needs, in font units and in pixels.
+//
+// Everything a font measures is in design units on its own em grid (see
+// UnitsPerEm), so a size in pixels is only ever one multiplication away -
+// ScaleFactor is that multiplier and every ...Pixels function here is
+// the same measurement already multiplied by it. Keeping both forms
+// avoids the two mistakes this pairing usually causes: rounding to whole
+// pixels too early, and mixing a font-unit advance into a pixel pen
+// position.
+
+// Font units -> pixels for text drawn at `size` pixels per em, the size
+// a word processor calls "N point" at 96dpi.
+@en "ScaleFactor"
+@fa "ضریب مقیاس"
+@ar "معامل القياس"
+pub func ScaleFactor(f: Font, size: f64): f64:
+    if f.units_per_em <= 0:
+        ret 0.0
+    end
+    ret size / (f.units_per_em as f64)
+end
+
+@en "AscentPixels"
+@fa "صعود پیکسلی"
+@ar "الصعود بالبكسل"
+pub func AscentPixels(f: Font, size: f64): f64:
+    ret (f.ascent as f64) * ScaleFactor(f, size)
+end
+
+// Negative, matching the font's own sign convention (it points below the
+// baseline) - the height of a line is ascent - descent + line gap.
+@en "DescentPixels"
+@fa "نزول پیکسلی"
+@ar "النزول بالبكسل"
+pub func DescentPixels(f: Font, size: f64): f64:
+    ret (f.descent as f64) * ScaleFactor(f, size)
+end
+
+@en "LineHeightPixels"
+@fa "ارتفاع خط پیکسلی"
+@ar "ارتفاع السطر بالبكسل"
+pub func LineHeightPixels(f: Font, size: f64): f64:
+    ret ((f.ascent - f.descent + f.line_gap) as f64) * ScaleFactor(f, size)
+end
+
+// Horizontal advance of a glyph in font units. hmtx stores one entry per
+// glyph up to numberOfHMetrics and then a single shared advance for
+// every monospaced tail glyph, which is the case this folds in.
+@en "GlyphAdvance"
+@fa "پیشروی نویسه"
+@ar "تقدم الرسم"
+pub func GlyphAdvance(f: Font, glyph: int): int:
+    if f.hmtx == 0 || f.num_hmetrics <= 0 || glyph < 0:
+        ret 0
+    end
+    mut i := glyph
+    if i >= f.num_hmetrics:
+        i = f.num_hmetrics - 1
+    end
+    ret _ttf_u16(f.data, f.size, f.hmtx + i * 4)
+end
+
+// Pair kerning in font units (negative pulls the pair closer), read from
+// the legacy `kern` table's format 0 subtable - the one every TrueType
+// font that kerns at all still ships. GPOS-only kerning (OpenType) is
+// not read, so this returns 0 there rather than a wrong number.
+@en "KernAdvance"
+@fa "کرنینگ"
+@ar "التقنين"
+pub func KernAdvance(f: Font, glyph1: int, glyph2: int): int:
+    if f.kern == 0 || glyph1 <= 0 || glyph2 <= 0:
+        ret 0
+    end
+    // Only a format 0 (ordered pair list), horizontal subtable is read;
+    // coverage bit 0 set + format byte 0 in the high byte of `coverage`.
+    if _ttf_u16(f.data, f.size, f.kern + 2) < 1:
+        ret 0
+    end
+    coverage := _ttf_u16(f.data, f.size, f.kern + 8)
+    if (coverage & 0xFF00) != 0 || (coverage & 1) == 0:
+        ret 0
+    end
+    npairs := _ttf_u16(f.data, f.size, f.kern + 10)
+    key := (glyph1 << 16) | glyph2
+    base := f.kern + 18
+    mut lo := 0
+    mut hi := npairs
+    until lo < hi:
+        mid := (lo + hi) / 2
+        rec := base + mid * 6
+        // Rebuilt from two u16 reads rather than one u32 so the packed
+        // key can never touch the sign bit of an int.
+        k := (_ttf_u16(f.data, f.size, rec) << 16) | _ttf_u16(f.data, f.size, rec + 2)
+        if key < k:
+            hi = mid
+        else:
+            if key > k:
+                lo = mid + 1
+            else:
+                ret _ttf_i16(f.data, f.size, rec + 4)
+            end
+        end
+    end
+    ret 0
+end

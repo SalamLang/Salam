@@ -1,0 +1,558 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "bigint"
+@fa "عدد بزرگ"
+@ar "عدد كبير"
+package bigint
+
+// Arbitrary-precision signed integers.
+//
+// One type, Int, carries every result: a sign flag plus a magnitude held as a
+// little-endian Vector<u32> in base 2^32. Limb 0 is the least significant, the
+// top limb is never zero, and zero itself is the empty vector with neg = false
+// -- so there is exactly one representation of every value and Cmp never has
+// to special-case a negative zero.
+//
+// Base 2^32 rather than 2^64 because every partial product has to fit in a
+// wider type to carry, and u64 is the widest integer Salam has. A u32 x u32
+// product is exactly a u64, so the inner loops need no compiler intrinsics
+// and no 128-bit emulation.
+//
+// OWNERSHIP. Nothing here is reference counted. Every function that returns an
+// Int hands over a fresh heap allocation and the caller frees it:
+//
+//     mut a := bigint.Parse("120000000000000000000000", ok)
+//     defer a.free()
+//     mut b := bigint.MulInt(a, 3)
+//     defer b.free()
+//
+// Functions take their operands **by value** and never free or mutate them, so
+// an argument may be a temporary and the same Int may appear twice in one call
+// (Mul(x, x) squares correctly). Passing by value copies the sign and the
+// vector handle, not the limbs.
+//
+// The in-place forms -- AddTo, SubFrom, MulBy, ... -- take `x &: Int` and
+// replace x's contents, freeing the old limbs for you. Use them in a loop to
+// keep the allocation count flat.
+//
+// THREAD MODEL: an Int is a plain value with no shared state, so two threads
+// may read the same Int concurrently. Mutating one from two threads is a data
+// race, as with any Vector.
+//
+// NOT CONSTANT TIME. Division, comparison, and ModExp all branch and shift on
+// operand values. This library is for arithmetic -- money, counters, exact
+// integer math -- not for guarding secrets. Code that must not leak a secret
+// exponent through timing needs a hardened, blinded routine of its own; see
+// std/ssh/bigint.salam for one.
+//
+// COST. Add and Sub are linear; Mul is schoolbook O(n*m); DivMod is Knuth
+// algorithm D, O(n*m); ToStr and Parse are O(n^2) in the limb count. Those are
+// the right complexities up to the few-thousand-bit range this is built for.
+
+// Limbs are base 2^32, so a limb index shifts by this many bits.
+const _LIMB_BITS := 32
+
+// Low 32 bits of a u64, the mask that splits a partial product into the limb
+// that stays and the carry that moves on.
+const _LOW_MASK := 0xFFFFFFFF as u64
+
+@en "Int"
+@fa "صحیح"
+@ar "صحيح"
+pub struct Int:
+    // True only when the value is strictly negative: zero is never signed.
+    pub neg: bool = false
+
+    // Magnitude, base 2^32, least-significant limb first, no leading zeros.
+    pub mag: Vector<u32> = Vector {}
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free(): this.mag.free() end
+
+    @en "is_zero"
+    @fa "صفر است"
+    @ar "صفر"
+    pub func is_zero(): bool: ret this.mag.len() == 0 end
+
+    // -1, 0 or +1, the sign as a number you can multiply by.
+    @en "sign"
+    @fa "علامت"
+    @ar "إشارة"
+    pub func sign(): int:
+        if this.mag.len() == 0: ret 0 end
+        if this.neg: ret 0 - 1 end
+        ret 1
+    end
+
+    @en "is_odd"
+    @fa "فرد است"
+    @ar "فردي"
+    pub func is_odd(): bool:
+        if this.mag.len() == 0: ret false end
+        ret (this.mag.get(0) & (1 as u32)) != 0 as u32
+    end
+
+    @en "is_even"
+    @fa "زوج است"
+    @ar "زوجي"
+    pub func is_even(): bool: ret !this.is_odd() end
+
+    // Position of the highest set bit plus one; zero has bit length 0.
+    @en "bit_len"
+    @fa "طول بیت"
+    @ar "طول البت"
+    pub func bit_len(): int:
+        n := this.mag.len()
+        if n == 0: ret 0 end
+        ret (n - 1) * _LIMB_BITS + _bit_width(this.mag.get(n - 1))
+    end
+
+    // Number of limbs, which is what the cost of every operation scales with.
+    @en "limb_count"
+    @fa "شمار لخت"
+    @ar "عدد الأطراف"
+    pub func limb_count(): int: ret this.mag.len() end
+
+    @en "clone"
+    @fa "همانند"
+    @ar "استنساخ"
+    pub func clone(): Int:
+        mut r := Int {}
+        r.neg = this.neg
+        n := this.mag.len()
+        r.mag.reserve(n)
+        repeat n with i: r.mag.push(this.mag.get(i)) end
+        ret r
+    end
+
+    // Decimal, with a leading '-' when negative. This is what `println x`
+    // prints, since the compiler routes a derived stringify through to_str.
+    // `this[0]` is the receiver read back as a value: inside a method `this`
+    // is a pointer, and ToStrBase takes its operand by value.
+    @en "to_str"
+    @fa "به رشته"
+    @ar "إلى نص"
+    pub func to_str(): str: ret ToStrBase(this[0], 10) end
+end
+
+// ---------------------------------------------------------------------------
+// Internal limb helpers
+// ---------------------------------------------------------------------------
+
+// Bits needed to write v, i.e. 32 minus its count of leading zeros.
+func _bit_width(v: u32): int:
+    mut x := v
+    mut n := 0
+    while x != 0 as u32:
+        n += 1
+        x = x >> 1
+    end
+    ret n
+end
+
+// Drops leading zero limbs and clears the sign of a magnitude that turned out
+// to be zero, restoring the one-representation-per-value invariant that every
+// other routine here assumes.
+func _norm(x &: Int):
+    mut n := x.mag.len()
+    while n > 0 && x.mag.get(n - 1) == 0 as u32:
+        n -= 1
+    end
+    while x.mag.len() > n:
+        _dropped := x.mag.pop()
+    end
+    if n == 0: x.neg = false end
+end
+
+// A magnitude of n zero limbs, ready to be written into by index.
+func _blank(n: int): Int:
+    mut r := Int {}
+    if n > 0: r.mag.zeros(n) end
+    ret r
+end
+
+// Reads limb i, treating everything past the top as zero, so the add and
+// compare loops can run to the longer operand's length without a guard.
+func _at(x: Int, i: int): u32:
+    if i >= x.mag.len(): ret 0 as u32 end
+    ret x.mag.get(i)
+end
+
+// Compares magnitudes only, ignoring both signs: -1, 0 or +1.
+func _ucmp(a: Int, b: Int): int:
+    na := a.mag.len()
+    nb := b.mag.len()
+    if na != nb:
+        if na < nb: ret 0 - 1 end
+        ret 1
+    end
+    mut i := na - 1
+    while i >= 0:
+        av := a.mag.get(i)
+        bv := b.mag.get(i)
+        if av != bv:
+            if av < bv: ret 0 - 1 end
+            ret 1
+        end
+        i -= 1
+    end
+    ret 0
+end
+
+// |a| + |b|, unsigned.
+func _uadd(a: Int, b: Int): Int:
+    na := a.mag.len()
+    nb := b.mag.len()
+    mut n := na
+    if nb > n: n = nb end
+    mut r := _blank(n + 1)
+    mut carry := 0 as u64
+    repeat n with i:
+        s := (_at(a, i) as u64) + (_at(b, i) as u64) + carry
+        r.mag.set(i, (s & _LOW_MASK) as u32)
+        carry = s >> 32
+    end
+    r.mag.set(n, carry as u32)
+    _norm(r)
+    ret r
+end
+
+// |a| - |b|, unsigned, and the caller must have checked |a| >= |b|. A smaller
+// `a` would borrow past the top limb and wrap into a huge positive result
+// rather than reporting anything, so every signed path above compares first.
+func _usub(a: Int, b: Int): Int:
+    na := a.mag.len()
+    mut r := _blank(na)
+    mut borrow := 0 as u64
+    repeat na with i:
+        av := a.mag.get(i) as u64
+        bv := (_at(b, i) as u64) + borrow
+        if av >= bv:
+            r.mag.set(i, (av - bv) as u32)
+            borrow = 0 as u64
+        else:
+            r.mag.set(i, ((av + 0x100000000 as u64) - bv) as u32)
+            borrow = 1 as u64
+        end
+    end
+    _norm(r)
+    ret r
+end
+
+// |a| * |b|, schoolbook. Each step is a u32 x u32 product plus two u32-sized
+// addends, whose maximum is (2^32-1)^2 + 2*(2^32-1) = 2^64 - 1, so the u64
+// accumulator cannot overflow and no second carry chain is needed.
+func _umul(a: Int, b: Int): Int:
+    na := a.mag.len()
+    nb := b.mag.len()
+    if na == 0 || nb == 0: ret Int {} end
+    mut r := _blank(na + nb)
+    repeat na with i:
+        av := a.mag.get(i) as u64
+        if av != 0 as u64:
+            mut carry := 0 as u64
+            repeat nb with j:
+                cur := (r.mag.get(i + j) as u64) + av * (b.mag.get(j) as u64) + carry
+                r.mag.set(i + j, (cur & _LOW_MASK) as u32)
+                carry = cur >> 32
+            end
+            r.mag.set(i + nb, carry as u32)
+        end
+    end
+    _norm(r)
+    ret r
+end
+
+// |x| * m + add, with m and add single limbs. The workhorse behind Parse and
+// the small-operand fast paths; same overflow argument as _umul.
+func _umul_add_small(x: Int, m: u32, add: u32): Int:
+    n := x.mag.len()
+    mut r := _blank(n + 1)
+    mut carry := add as u64
+    repeat n with i:
+        cur := (x.mag.get(i) as u64) * (m as u64) + carry
+        r.mag.set(i, (cur & _LOW_MASK) as u32)
+        carry = cur >> 32
+    end
+    r.mag.set(n, carry as u32)
+    _norm(r)
+    ret r
+end
+
+// |x| / d and |x| % d for a single-limb d, which is the shape ToStrBase needs
+// and the n == 1 base case of the long division. d must not be zero.
+func _udivmod_small(x: Int, d: u32, rem &: u32): Int:
+    n := x.mag.len()
+    mut q := _blank(n)
+    mut r := 0 as u64
+    mut i := n - 1
+    dv := d as u64
+    while i >= 0:
+        cur := (r << 32) | (x.mag.get(i) as u64)
+        q.mag.set(i, (cur / dv) as u32)
+        r = cur % dv
+        i -= 1
+    end
+    rem = r as u32
+    _norm(q)
+    ret q
+end
+
+// |x| << k bits, unsigned.
+func _ushl(x: Int, k: int): Int:
+    n := x.mag.len()
+    if n == 0 || k <= 0:
+        mut c := x.clone()
+        c.neg = false
+        ret c
+    end
+    limbs := k / _LIMB_BITS
+    bits := k % _LIMB_BITS
+    mut r := _blank(n + limbs + 1)
+    if bits == 0:
+        repeat n with i: r.mag.set(i + limbs, x.mag.get(i)) end
+    else:
+        mut carry := 0 as u32
+        repeat n with i:
+            v := x.mag.get(i)
+            r.mag.set(i + limbs, (v << bits) | carry)
+            carry = v >> (_LIMB_BITS - bits)
+        end
+        r.mag.set(n + limbs, carry)
+    end
+    _norm(r)
+    ret r
+end
+
+// |x| >> k bits, unsigned: bits shifted off the bottom are discarded.
+func _ushr(x: Int, k: int): Int:
+    n := x.mag.len()
+    limbs := k / _LIMB_BITS
+    if n == 0 || k <= 0:
+        mut c := x.clone()
+        c.neg = false
+        ret c
+    end
+    if limbs >= n: ret Int {} end
+    bits := k % _LIMB_BITS
+    keep := n - limbs
+    mut r := _blank(keep)
+    if bits == 0:
+        repeat keep with i: r.mag.set(i, x.mag.get(i + limbs)) end
+    else:
+        repeat keep with i:
+            mut v := x.mag.get(i + limbs) >> bits
+            if i + limbs + 1 < n:
+                v = v | (x.mag.get(i + limbs + 1) << (_LIMB_BITS - bits))
+            end
+            r.mag.set(i, v)
+        end
+    end
+    _norm(r)
+    ret r
+end
+
+// True when any of the low k bits of |x| is set, which is how the shift-right
+// paths below decide whether a negative value lost a fraction and has to round
+// one further toward minus infinity.
+func _has_low_bits(x: Int, k: int): bool:
+    if k <= 0: ret false end
+    limbs := k / _LIMB_BITS
+    bits := k % _LIMB_BITS
+    n := x.mag.len()
+    mut i := 0
+    while i < limbs && i < n:
+        if x.mag.get(i) != 0 as u32: ret true end
+        i += 1
+    end
+    if bits > 0 && limbs < n:
+        mask := ((1 as u32) << bits) - (1 as u32)
+        if (x.mag.get(limbs) & mask) != 0 as u32: ret true end
+    end
+    ret false
+end
+
+// Replaces x with src's value, freeing what x held. The in-place operations
+// all funnel through here so ownership stays in one place.
+func _replace(x &: Int, src: Int):
+    x.mag.free()
+    x.neg = src.neg
+    x.mag = src.mag
+end
+
+// ---------------------------------------------------------------------------
+// Construction
+// ---------------------------------------------------------------------------
+
+@en "Zero"
+@fa "صفر"
+@ar "صفر"
+pub func Zero(): Int: ret Int {} end
+
+@en "One"
+@fa "یک"
+@ar "واحد"
+pub func One(): Int: ret FromInt(1 as i64) end
+
+@en "FromInt"
+@fa "از صحیح"
+@ar "من صحيح"
+pub func FromInt(v: i64): Int:
+    mut r := Int {}
+    if v == 0 as i64: ret r end
+    // The magnitude is taken in u64 rather than by negating in i64, so the
+    // most negative i64 -- whose positive counterpart does not exist -- still
+    // converts exactly instead of wrapping back to itself.
+    mut u := v as u64
+    if v < 0 as i64:
+        r.neg = true
+        u = (0 as u64) - (v as u64)
+    end
+    lo := (u & _LOW_MASK) as u32
+    hi := (u >> 32) as u32
+    r.mag.push(lo)
+    if hi != 0 as u32: r.mag.push(hi) end
+    _norm(r)
+    ret r
+end
+
+@en "FromUint"
+@fa "از صحیح بی‌علامت"
+@ar "من صحيح موجب"
+pub func FromUint(v: u64): Int:
+    mut r := Int {}
+    if v == 0 as u64: ret r end
+    r.mag.push((v & _LOW_MASK) as u32)
+    hi := (v >> 32) as u32
+    if hi != 0 as u32: r.mag.push(hi) end
+    _norm(r)
+    ret r
+end
+
+@en "Clone"
+@fa "همانند"
+@ar "استنساخ"
+pub func Clone(x: Int): Int: ret x.clone() end
+
+@en "Free"
+@fa "آزادسازی"
+@ar "تحرير"
+pub func Free(x &: Int): x.mag.free() end
+
+// ---------------------------------------------------------------------------
+// Inspection and comparison
+// ---------------------------------------------------------------------------
+
+@en "IsZero"
+@fa "صفر است"
+@ar "صفر"
+pub func IsZero(x: Int): bool: ret x.is_zero() end
+
+@en "Sign"
+@fa "علامت"
+@ar "إشارة"
+pub func Sign(x: Int): int: ret x.sign() end
+
+@en "BitLen"
+@fa "طول بیت"
+@ar "طول البت"
+pub func BitLen(x: Int): int: ret x.bit_len() end
+
+// Bit i of |x|, counting from 0 at the least significant end. Note this reads
+// the *magnitude*, not a two's-complement encoding, so Bit(-1, 0) is 1 because
+// |-1| is 1. The bitwise operators in big_bits.salam are the ones that take
+// the two's-complement view.
+@en "Bit"
+@fa "بیت"
+@ar "بت"
+pub func Bit(x: Int, i: int): int:
+    if i < 0: ret 0 end
+    limb := i / _LIMB_BITS
+    if limb >= x.mag.len(): ret 0 end
+    ret ((x.mag.get(limb) >> (i % _LIMB_BITS)) & (1 as u32)) as int
+end
+
+@en "IsOdd"
+@fa "فرد است"
+@ar "فردي"
+pub func IsOdd(x: Int): bool: ret x.is_odd() end
+
+@en "IsEven"
+@fa "زوج است"
+@ar "زوجي"
+pub func IsEven(x: Int): bool: ret x.is_even() end
+
+// -1, 0 or +1 as a < b, a == b or a > b.
+@en "Cmp"
+@fa "مقایسه"
+@ar "مقارنة"
+pub func Cmp(a: Int, b: Int): int:
+    if a.neg != b.neg:
+        if a.neg: ret 0 - 1 end
+        ret 1
+    end
+    c := _ucmp(a, b)
+    if a.neg: ret 0 - c end
+    ret c
+end
+
+// Compares |a| against |b|, which is the ordering Div and Mod branch on.
+@en "CmpAbs"
+@fa "مقایسه قدرمطلق"
+@ar "مقارنة مطلقة"
+pub func CmpAbs(a: Int, b: Int): int: ret _ucmp(a, b) end
+
+@en "Equals"
+@fa "برابر است"
+@ar "يساوي"
+pub func Equals(a: Int, b: Int): bool: ret Cmp(a, b) == 0 end
+
+@en "Less"
+@fa "کمتر است"
+@ar "أصغر"
+pub func Less(a: Int, b: Int): bool: ret Cmp(a, b) < 0 end
+
+@en "Greater"
+@fa "بیشتر است"
+@ar "أكبر"
+pub func Greater(a: Int, b: Int): bool: ret Cmp(a, b) > 0 end
+
+@en "Min"
+@fa "کمینه"
+@ar "أصغر"
+pub func Min(a: Int, b: Int): Int:
+    if Cmp(a, b) <= 0: ret a.clone() end
+    ret b.clone()
+end
+
+@en "Max"
+@fa "بیشینه"
+@ar "أكبر"
+pub func Max(a: Int, b: Int): Int:
+    if Cmp(a, b) >= 0: ret a.clone() end
+    ret b.clone()
+end
+
+// Equality against a machine integer, without building an Int for it.
+@en "EqualsInt"
+@fa "برابر صحیح است"
+@ar "يساوي صحيحا"
+pub func EqualsInt(a: Int, v: i64): bool:
+    mut b := FromInt(v)
+    defer b.free()
+    ret Cmp(a, b) == 0
+end

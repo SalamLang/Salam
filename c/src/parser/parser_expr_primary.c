@@ -149,9 +149,17 @@ ast_node_t *parse_primary(parser_t *p)
         return n;
     }
     default: {
-        p_error(p, "expected an expression");
+        /* A reserved word here is nearly always a variable the author named
+         * after a keyword ('by := ...', 'if by < y0:'), so say that instead of
+         * the generic "expected an expression". 'end' and 'else' are excluded:
+         * reaching them means an operand went missing before a block closed,
+         * which has nothing to do with naming. */
+        if (p_at_reserved_word(p) && !p_at(p, TK_KW_END) && !p_at(p, TK_KW_ELSE))
+            p_reserved_word_error(p);
+        else
+            p_error(p, "expected an expression");
         ast_node_t *n = p_mk(p, AST_IDENTIFIER);
-        n->name = "<error>";
+        n->name = SALAM_ERR_NAME;
         if (!p_at_eof(p)) p_advance(p);
         p_fin(p, n);
         return n;

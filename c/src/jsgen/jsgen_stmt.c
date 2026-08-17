@@ -14,13 +14,52 @@
 
 #include "jsgen/jsgen_internal.h"
 
-void jsg_emit_defers(jg_t *g)
+/*
+ * `defer` is scoped to its block, matching the C and LLVM backends - see the
+ * note in codegen/codegen_stmt.c. It matters just as much here: a `let`
+ * declared inside an `if` is not in scope at the end of the function, so a
+ * function-exit replay would emit a ReferenceError.
+ */
+static void jsg_emit_defers_from(jg_t *g, size_t mark)
 {
     {
         size_t i = g->cg.fn_defers.len;
-        for (; i > 0; i--)
+        for (; i > mark; i--)
             jsg_stmt(g, (ast_node_t *)g->cg.fn_defers.data[i - 1]);
     }
+}
+
+void jsg_emit_defers(jg_t *g)
+{
+    jsg_emit_defers_from(g, 0);
+}
+
+static bool jsg_list_terminates(const vec_t *list)
+{
+    ast_node_t *last;
+    if (!list->len) return false;
+    last = (ast_node_t *)list->data[list->len - 1];
+    return last && (last->kind == AST_RETURN || last->kind == AST_BREAK ||
+                    last->kind == AST_CONTINUE);
+}
+
+static void jsg_loop_push(jg_t *g)
+{
+    cg_t *cg = &g->cg;
+    if (cg->nloop < CG_MAX_LOOP_DEPTH) cg->loop_dmark[cg->nloop] = cg->fn_defers.len;
+    cg->nloop++;
+}
+
+static void jsg_loop_pop(jg_t *g)
+{
+    if (g->cg.nloop > 0) g->cg.nloop--;
+}
+
+static void jsg_emit_loop_exit_defers(jg_t *g)
+{
+    cg_t *cg = &g->cg;
+    if (cg->nloop > 0 && cg->nloop <= CG_MAX_LOOP_DEPTH)
+        jsg_emit_defers_from(g, cg->loop_dmark[cg->nloop - 1]);
 }
 
 static const char *jsg_vardecl_inline(jg_t *g, ast_node_t *n)
@@ -120,11 +159,14 @@ static const char *jsg_stmt_expr(jg_t *g, ast_node_t *e)
 static void jsg_stmt_list(jg_t *g, ast_node_t *block)
 {
     size_t m = g->cg.locals.len;
+    size_t dmark = g->cg.fn_defers.len;
     {
         size_t i = 0;
         for (; i < block->list.len; i++)
             jsg_stmt(g, (ast_node_t *)block->list.data[i]);
     }
+    if (!jsg_list_terminates(&block->list)) jsg_emit_defers_from(g, dmark);
+    g->cg.fn_defers.len = dmark;
     jsg_scope_reset(g, m);
 }
 
@@ -225,11 +267,9 @@ static void jsg_repeat(jg_t *g, ast_node_t *n)
         }
     }
     cg->indent++;
-    {
-        size_t i = 0;
-        for (; i < n->b->list.len; i++)
-            jsg_stmt(g, (ast_node_t *)n->b->list.data[i]);
-    }
+    jsg_loop_push(g);
+    jsg_stmt_list(g, n->b);
+    jsg_loop_pop(g);
     cg->indent--;
     cg_line(cg, "}");
     jsg_scope_reset(g, m);
@@ -377,9 +417,11 @@ void jsg_stmt(jg_t *g, ast_node_t *n)
         }
         break;
     case AST_BREAK:
+        jsg_emit_loop_exit_defers(g);
         cg_line(cg, "break;");
         break;
     case AST_CONTINUE:
+        jsg_emit_loop_exit_defers(g);
         cg_line(cg, "continue;");
         break;
     case AST_MATCH: {
@@ -436,7 +478,9 @@ void jsg_stmt(jg_t *g, ast_node_t *n)
     case AST_UNTIL:
         cg_line(cg, "while (%s) {", jsg_expr(g, n->a));
         cg->indent++;
+        jsg_loop_push(g);
         jsg_stmt_list(g, n->b);
+        jsg_loop_pop(g);
         cg->indent--;
         cg_line(cg, "}");
         break;
@@ -455,11 +499,9 @@ void jsg_stmt(jg_t *g, ast_node_t *n)
             cg_line(cg, "for (const %s of %s) {", jsg_local(g, n->name, false), it);
         }
         cg->indent++;
-        {
-            size_t i = 0;
-            for (; i < n->b->list.len; i++)
-                jsg_stmt(g, (ast_node_t *)n->b->list.data[i]);
-        }
+        jsg_loop_push(g);
+        jsg_stmt_list(g, n->b);
+        jsg_loop_pop(g);
         cg->indent--;
         cg_line(cg, "}");
         jsg_scope_reset(g, m);
@@ -472,11 +514,9 @@ void jsg_stmt(jg_t *g, ast_node_t *n)
         const char *post = n->c ? jsg_simple_inline(g, n->c) : "";
         cg_line(cg, "for (%s; %s; %s) {", init, cond, post);
         cg->indent++;
-        {
-            size_t i = 0;
-            for (; i < n->d->list.len; i++)
-                jsg_stmt(g, (ast_node_t *)n->d->list.data[i]);
-        }
+        jsg_loop_push(g);
+        jsg_stmt_list(g, n->d);
+        jsg_loop_pop(g);
         cg->indent--;
         cg_line(cg, "}");
         jsg_scope_reset(g, mark);
@@ -524,8 +564,10 @@ void jsg_function(jg_t *g, ast_node_t *fn, symbol_t *owner)
         g->fn_used_names.len = 0;
         {
             vec_t saved_defers = cg->fn_defers;
+            int saved_nloop = cg->nloop;
             sb_t params;
             vec_init(&cg->fn_defers);
+            cg->nloop = 0;
             sb_init(&params);
             if (owner) {
                 sb_puts(&params, "__self");
@@ -535,11 +577,11 @@ void jsg_function(jg_t *g, ast_node_t *fn, symbol_t *owner)
                 size_t i = 0;
                 for (; i < fn->list.len; i++) {
                     ast_node_t *p = (ast_node_t *)fn->list.data[i];
-                    if (p->is_ref)
-                        LOG_W(cg->log, PH_CODEGEN,
-                              "js backend: reference parameter '%s' of '%s' is passed "
-                              "by value",
-                              p->name, fn->name);
+                    /* A `&:` param arrives as a one-element box (jsg_call_finish
+                     * builds it at every call site); the parameter name binds
+                     * to that box itself, and every read/write of it in the
+                     * body goes through the `n->is_ref` branch in jsg_expr's
+                     * AST_IDENTIFIER case, which unwraps via `[0]`. */
                     if (owner || i) sb_puts(&params, ", ");
                     sb_puts(&params, jsg_local(g, p->name, false));
                 }
@@ -552,6 +594,7 @@ void jsg_function(jg_t *g, ast_node_t *fn, symbol_t *owner)
             cg->indent--;
             cg_line(cg, "}");
             cg->fn_defers = saved_defers;
+            cg->nloop = saved_nloop;
         }
         cg->cur_struct = NULL;
         cg->cur_fn_home = NULL;

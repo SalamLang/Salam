@@ -1,0 +1,178 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import testing
+import encoding.url
+
+// Taking a URL apart: scheme, credentials, host, port, path, query,
+// fragment, and then the host itself into subdomain, registrable domain
+// and public suffix.
+
+func test_full_url():
+    u := url.Parse("https://user:pw@shop.example.co.uk:8443/cart/item%20one?a=1&b=2#checkout")
+    testing.AssertEqStr(u.scheme, "https")
+    testing.AssertEqStr(u.userinfo, "user:pw")
+    testing.AssertEqStr(u.host, "shop.example.co.uk")
+    testing.AssertEqInt(u.port, 8443)
+    // the path stays percent encoded, exactly as it arrived
+    testing.AssertEqStr(u.path, "/cart/item%20one")
+    testing.AssertEqStr(url.DecodedPath(u), "/cart/item one")
+    testing.AssertEqStr(u.raw_query, "a=1&b=2")
+    testing.AssertEqStr(u.fragment, "checkout")
+    testing.AssertEqStr(url.DecodedUserinfo(u), "user:pw")
+    testing.AssertEqStr(url.HostPort(u), "shop.example.co.uk:8443")
+    testing.AssertEqStr(url.Hostname(u), "shop.example.co.uk")
+end
+
+func test_minimal_urls():
+    a := url.Parse("http://example.com")
+    testing.AssertEqStr(a.scheme, "http")
+    testing.AssertEqStr(a.host, "example.com")
+    // no port in the text means no port, not a guessed default
+    testing.AssertEqInt(a.port, 0)
+    testing.AssertEqStr(a.path, "")
+    testing.AssertEqStr(url.HostPort(a), "example.com")
+
+    b := url.Parse("https://example.com/")
+    testing.AssertEqStr(b.path, "/")
+
+    // a bare path with no authority at all
+    c := url.Parse("/just/a/path?x=1")
+    testing.AssertEqStr(c.scheme, "")
+    testing.AssertEqStr(c.host, "")
+    testing.AssertEqStr(c.path, "/just/a/path")
+    testing.AssertEqStr(c.raw_query, "x=1")
+end
+
+// The whole point of splitting a host: which site is this, and what sits
+// in front of it.
+func test_host_parts():
+    a := url.Parse("https://www.example.com/x")
+    testing.AssertEqStr(url.Subdomain(a), "www")
+    testing.AssertEqStr(url.Domain(a), "example.com")
+    testing.AssertEqStr(url.PublicSuffix(a), "com")
+
+    // no subdomain at all
+    b := url.Parse("https://example.com")
+    testing.AssertEqStr(url.Subdomain(b), "")
+    testing.AssertEqStr(url.Domain(b), "example.com")
+
+    // several levels of subdomain come back whole
+    c := url.Parse("https://a.b.c.example.org/x")
+    testing.AssertEqStr(url.Subdomain(c), "a.b.c")
+    testing.AssertEqStr(url.Domain(c), "example.org")
+    testing.AssertEqStr(url.PublicSuffix(c), "org")
+end
+
+// A two label public suffix cannot be found by counting dots:
+// example.co.uk is one site, not a subdomain of co.uk.
+func test_multi_label_suffix():
+    a := url.Parse("https://example.co.uk/")
+    testing.AssertEqStr(url.PublicSuffix(a), "co.uk")
+    testing.AssertEqStr(url.Domain(a), "example.co.uk")
+    testing.AssertEqStr(url.Subdomain(a), "")
+
+    b := url.Parse("https://shop.example.co.uk/")
+    testing.AssertEqStr(url.Domain(b), "example.co.uk")
+    testing.AssertEqStr(url.Subdomain(b), "shop")
+
+    c := url.Parse("https://a.b.example.com.au/")
+    testing.AssertEqStr(url.PublicSuffix(c), "com.au")
+    testing.AssertEqStr(url.Domain(c), "example.com.au")
+    testing.AssertEqStr(url.Subdomain(c), "a.b")
+
+    // and a single label suffix is not mistaken for one of them
+    d := url.Parse("https://uk.example.com/")
+    testing.AssertEqStr(url.PublicSuffix(d), "com")
+    testing.AssertEqStr(url.Domain(d), "example.com")
+    testing.AssertEqStr(url.Subdomain(d), "uk")
+end
+
+// Neither a domain nor a subdomain means anything for a literal address
+// or a single label name, so those come back whole.
+func test_hosts_without_domains():
+    ip := url.Parse("http://192.168.1.10:8080/status")
+    testing.AssertTrue(url.IsIP(ip))
+    testing.AssertEqStr(url.Domain(ip), "192.168.1.10")
+    testing.AssertEqStr(url.Subdomain(ip), "")
+    testing.AssertEqStr(url.PublicSuffix(ip), "")
+    testing.AssertEqInt(ip.port, 8080)
+
+    v6 := url.Parse("http://[2001:db8::1]:9000/x")
+    testing.AssertTrue(url.IsIP(v6))
+    testing.AssertEqStr(v6.host, "2001:db8::1")
+    testing.AssertEqInt(v6.port, 9000)
+    // the brackets come back when it is written out again
+    testing.AssertEqStr(url.HostPort(v6), "[2001:db8::1]:9000")
+
+    local := url.Parse("http://localhost:3000/")
+    testing.AssertFalse(url.IsIP(local))
+    testing.AssertEqStr(url.Domain(local), "localhost")
+    testing.AssertEqStr(url.Subdomain(local), "")
+    testing.AssertEqStr(url.PublicSuffix(local), "")
+
+    // four labels that are not all numeric are a name, not an address
+    named := url.Parse("http://a.b.c.d/")
+    testing.AssertFalse(url.IsIP(named))
+end
+
+func test_labels():
+    u := url.Parse("https://a.b.example.com/")
+    ls := url.Labels(u)
+    defer ls.free()
+    testing.AssertEqInt(ls.len(), 4)
+    testing.AssertEqStr(ls.get(0), "a")
+    testing.AssertEqStr(ls.get(3), "com")
+end
+
+// Rebuilding the text has to give back what was parsed, or none of the
+// editing functions could be trusted.
+func test_string_roundtrip():
+    raw := "https://user@example.com:8443/a/b?x=1&y=2#f"
+    testing.AssertEqStr(url.String(url.Parse(raw)), raw)
+    testing.AssertEqStr(url.String(url.Parse("http://example.com/")), "http://example.com/")
+    testing.AssertEqStr(url.String(url.Parse("/local/path?q=1")), "/local/path?q=1")
+    testing.AssertEqStr(url.String(url.Parse("https://[2001:db8::1]/x")), "https://[2001:db8::1]/x")
+end
+
+func test_join():
+    base := url.Parse("https://example.com/docs/guide/intro.html")
+    // root relative replaces the whole path
+    testing.AssertEqStr(url.String(url.Join(base, "/other")), "https://example.com/other")
+    // plain relative resolves against the directory
+    testing.AssertEqStr(url.String(url.Join(base, "next.html")), "https://example.com/docs/guide/next.html")
+    // an absolute reference wins outright
+    testing.AssertEqStr(url.String(url.Join(base, "http://other.org/x")), "http://other.org/x")
+    // scheme relative keeps the scheme it was resolved against
+    testing.AssertEqStr(url.String(url.Join(base, "//cdn.example.com/a.js")), "https://cdn.example.com/a.js")
+    // a relative reference drops the base query and fragment
+    j := url.Join(url.Parse("https://example.com/a/b?old=1#frag"), "c")
+    testing.AssertEqStr(j.raw_query, "")
+    testing.AssertEqStr(j.fragment, "")
+end
+
+func main:
+    test_full_url()
+    test_minimal_urls()
+    test_host_parts()
+    test_multi_label_suffix()
+    test_hosts_without_domains()
+    test_labels()
+    test_string_roundtrip()
+    test_join()
+    testing.Summary()
+    ret 0
+end

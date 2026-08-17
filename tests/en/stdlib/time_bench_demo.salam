@@ -1,0 +1,127 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// The practical "benchmark a function" workflow: read the MONOTONIC clock
+// (time.MonoNanos) before and after the call, then read the duration back
+// in whichever unit is convenient - nanoseconds, microseconds, milliseconds
+// or seconds - via time.Elapsed*/time.Since*. See mono_clock_demo.salam for
+// the lower-level guarantees of the monotonic clock itself (never goes
+// backwards, measures sub-millisecond regions); this file is about the unit
+// conversions and the timing-a-function pattern built on top of it.
+//
+// time.Now() is Unix time in whole SECONDS (the POSIX definition); for a
+// timestamp at higher resolution, still anchored to the Unix epoch, use
+// time.NowMillis/NowMicros/NowNanos - those are wall-clock reads (right for
+// "what time is it"), not the monotonic clock (right for "how long did that
+// take"). Nothing here asserts a specific duration; timings are
+// machine-dependent, so these check unit-conversion consistency instead.
+package main
+
+import testing
+import time
+import math
+
+func work(n: int): int:
+    mut i := 0
+    mut s := 0
+    until i < n:
+        s = s + (i % 7)
+        i += 1
+    end
+    ret s
+end
+
+// time.Now() (seconds) and time.NowMillis() (milliseconds) read the same
+// Unix-epoch wall clock at different resolutions, so one divided down must
+// land within a second or two of the other.
+func test_now_seconds_vs_millis():
+    secs := time.Now()
+    millis := time.NowMillis()
+    diff := millis / 1000 - secs
+    testing.AssertTrue(diff >= 0 - 2)
+    testing.AssertTrue(diff <= 2)
+    testing.AssertTrue(time.NowMicros() > millis)
+    testing.AssertTrue(time.NowNanos() > time.NowMicros())
+end
+
+// Benchmarking a function: read the monotonic clock before/after the call,
+// then read the same duration back in every unit at once.
+func test_benchmark_a_function():
+    t0 := time.MonoNanos()
+    _sink := work(500000)
+    t1 := time.MonoNanos()
+
+    ns := t1 - t0
+    us := time.ElapsedUs(t0, t1)
+    ms := time.ElapsedMs(t0, t1)
+    sec := time.ElapsedSec(t0, t1)
+
+    testing.AssertTrue(ns > 0)
+    // Same duration, three scales down from nanoseconds - each must land
+    // within a small tolerance of the others once converted back to ns,
+    // since ns is an integer and us/ms/sec are floats.
+    testing.AssertTrue(math.Abs(us * 1000.0 - (ns as f64)) < 1000.0)
+    testing.AssertTrue(math.Abs(ms * 1000000.0 - (ns as f64)) < 1000000.0)
+    testing.AssertTrue(math.Abs(sec * 1000000000.0 - (ns as f64)) < 1000000000.0)
+end
+
+// SinceNanos/SinceUs/SinceMs/SinceSec are the "just tell me how long since
+// t0" shorthand for ElapsedNanos/Us/Ms/Sec(t0, MonoNanos()) - handy when
+// there is no separate "end" timestamp to keep around.
+func test_since_unit_conversions():
+    t0 := time.MonoNanos()
+    _sink := work(500000)
+
+    ns := time.SinceNanos(t0)
+    us := time.SinceUs(t0)
+    ms := time.SinceMs(t0)
+    sec := time.SinceSec(t0)
+
+    testing.AssertTrue(ns > 0)
+    testing.AssertTrue(us > 0.0)
+    testing.AssertTrue(ms >= 0.0)
+    testing.AssertTrue(sec >= 0.0)
+    // Later reads (seconds, the coarsest) can only be >= earlier ones scaled
+    // down, since each call re-reads the clock a little later than the last.
+    testing.AssertTrue(sec * 1000.0 <= ms + 1.0)
+    testing.AssertTrue(ms * 1000.0 <= us + 1.0)
+    testing.AssertTrue(us * 1000.0 <= (ns as f64) + 1000000.0)
+end
+
+// Averaging several runs (a common benchmarking technique to smooth out
+// noise) - time N calls together, then divide.
+func test_average_over_repeated_calls():
+    iterations := 20
+    t0 := time.MonoNanos()
+    mut i := 0
+    mut total := 0
+    until i < iterations:
+        total = total + work(20000)
+        i += 1
+    end
+    t1 := time.MonoNanos()
+
+    avg_ms := time.ElapsedMs(t0, t1) / (iterations as f64)
+    testing.AssertTrue(avg_ms >= 0.0)
+    testing.AssertTrue(total >= 0)
+end
+
+func main:
+    test_now_seconds_vs_millis()
+    test_benchmark_a_function()
+    test_since_unit_conversions()
+    test_average_over_repeated_calls()
+    testing.Summary()
+    ret 0
+end

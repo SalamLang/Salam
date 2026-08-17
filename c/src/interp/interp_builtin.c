@@ -114,13 +114,16 @@ value_t do_input(interp_t *I)
     return val_str(arena_strndup(I->a, buf, n));
 }
 
-value_t call_module_func(interp_t *I, ast_node_t *call, module_t *mod, const char *fn,
-                         value_t *args, size_t nargs)
+value_t call_module_func(interp_t *I, env_t *env, ast_node_t *call, module_t *mod,
+                         const char *fn, value_t *args, size_t nargs)
 {
     binding_t *b = env_find_local(mod->env, fn);
+    value_t r;
     if (!b || b->val.kind != VAL_FUNC)
         rt_error(I, call, "package '%s' has no exported function '%s'", mod->name, fn);
-    return call_func(I, b->val.as.fn->fn, b->val.as.fn->env, NULL, args, nargs);
+    r = call_func(I, b->val.as.fn->fn, b->val.as.fn->env, NULL, args, nargs);
+    interp_writeback_refs(I, env, call, b->val.as.fn->fn, args, nargs);
+    return r;
 }
 
 typedef value_t (*intrinsic_fn)(interp_t *I, ast_node_t *call, value_t *a, size_t n);

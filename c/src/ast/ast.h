@@ -22,6 +22,17 @@
 #include "token/token.h"
 #include "xml/xml.h"
 
+/* Placeholder the parser stores as a declaration's or an identifier's name
+ * once it has already reported why the real name could not be read. Later
+ * phases must stay silent about it: a second diagnostic quoting "<error>"
+ * only buries the one that explained the problem. */
+#define SALAM_ERR_NAME "<error>"
+
+SAL_INLINE bool ast_name_is_err(const char *name)
+{
+    return name && strcmp(name, SALAM_ERR_NAME) == 0;
+}
+
 typedef enum {
     AST_PROGRAM = 0,
     AST_IMPORT,
@@ -84,11 +95,28 @@ typedef struct ast_node ast_node_t;
 struct ast_node {
     ast_kind_t kind;
     src_span_t span;
+    /* Source file this top-level node was parsed from, stamped by parser_run.
+     * The files of a multi-file package are merged into one program, so the
+     * span alone cannot say which file a line number belongs to; sema follows
+     * this while checking so a sibling file's diagnostics stop being reported
+     * against the package's anchor file. NULL on nodes below the top level and
+     * on synthetic ones - those inherit whatever file is current. */
+    const char *src_file;
     const char *name;
     token_value_t value;
     token_kind_t op;
     bool is_mut;
+    /* Shorthand for ptr_depth > 0, kept in sync by every writer so the many
+     * readers that only ask "is this a pointer at all" keep working. */
     bool is_pointer;
+    /* AST_TYPE only: stars written AFTER the dims ("Edge[6]**" -> 2), i.e. a
+     * pointer TO the array. Generic substitution SUMS this with the argument's
+     * own depth: "T*" with T = "Edge*" is Edge**, and ORing booleans silently
+     * flattened it back to Edge*. */
+    int ptr_depth;
+    /* ...and stars written BEFORE the dims ("Edge**[6]" -> 2), which belong to
+     * the ELEMENT type: an array of pointers, not a pointer to an array. */
+    int elem_ptr_depth;
     bool synthetic;
     bool file_boundary; /* first top-level node merged in from a package file;
                          * resets per-file top-level ordering checks */
@@ -127,6 +155,39 @@ struct ast_node {
     vec_t aliases;
     vec_t captures;
     const char *type_str;
+    /*
+     * On an AST_TYPE the generic machinery built rather than parsed: the
+     * type_t it already stands for. A type argument is resolved in the
+     * caller's scope but substituted into a template that is checked in the
+     * declaring package's scope, and a package's scope cannot see the
+     * caller's declarations - so a round trip through the name would lose a
+     * user-defined struct handed to a stdlib generic ("unknown type 'User'"
+     * from inside std/encoding/json). Carrying the resolved type across that
+     * switch is what keeps `json.Marshal(user)` and `option.Some(user)`
+     * working. NULL on everything the parser produced. Void so ast.h stays
+     * free of the semantic layer; sema_resolve_type is the only reader.
+     */
+    void *sema_type;
+    /*
+     * The same trick one level down, for an occurrence that decorates the type
+     * parameter rather than naming it bare: `T*`, `T[4]`. Substituting `T` =
+     * `Row` there cannot reuse the argument's resolved type - the node stands
+     * for `Row*`, not `Row` - but resolving the name again is exactly what
+     * fails, because `Row` belongs to a package the template's scope cannot
+     * see. So the *base* travels instead and sema_resolve_type applies this
+     * node's own `*` and `[N]` on top of it. NULL unless g_subst set it.
+     */
+    void *sema_base_type;
+    /*
+     * On a synthetic top-level function - a generic instantiation or a derived
+     * codec - the package whose scope its body was checked inside. Its name is
+     * global, but the names it calls are that package's, private ones
+     * included. The interpreter keeps one environment per module, so without
+     * this a body would be looked up against the program's globals and its own
+     * module's helpers would be missing ("call to undefined function
+     * '_dnew'"). NULL for everything else.
+     */
+    const char *home_pkg;
     const char *origin_lang;
     /* Interpreter-only inline cache for identifier lookups; ignored by every
      * other consumer of the AST. Resolving a name meant walking the scope

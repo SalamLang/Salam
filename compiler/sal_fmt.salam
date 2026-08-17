@@ -49,6 +49,8 @@ import src "source.salam"
 import tok "token.salam"
 import lg "logger.salam"
 import lx "lexer/lexer.salam"
+import ps "parser/parser.salam"
+import at "ast.salam"
 
 // fmt_internal.h / fmt.c
 pub const FMT_INDENT_WIDTH := 4
@@ -57,6 +59,14 @@ const FMT_MAX_BLOCK := 256
 const FMT_WRAP_WIDTH := 100
 
 // fmt_style_t
+// ord_item_t
+struct OrdItem:
+    pub node: int = 0
+    pub phase: int = 0
+    pub ustart: int = 0
+    pub uend: int = 0
+end
+
 pub struct FmtStyle:
     pub tabs: bool = false
     pub width: int = 0
@@ -100,6 +110,9 @@ end
 
 // ===== fmt_rules.c =====
 // fmt_is_value_end
+// core/sb.c byte access, spelled the way every other ported file spells it.
+inline func byte_at(s: str, i: int): int: ret co.ByteAt(s, i) end
+
 func is_value_end(k: int): bool:
     ret k == tok.TK_IDENT || k == tok.TK_INT || k == tok.TK_FLOAT || k == tok.TK_STRING || k == tok.TK_TRIPLE_STRING || k == tok.TK_RAW_STRING || k == tok.TK_CHAR || k == tok.TK_UTF8_CHAR || k == tok.TK_RPAREN || k == tok.TK_RBRACKET || k == tok.TK_RBRACE || k == tok.TK_KW_TRUE || k == tok.TK_KW_FALSE || k == tok.TK_KW_NULL || k == tok.TK_KW_THIS
 end
@@ -599,6 +612,378 @@ func step_state_after(
     end
 end
 
+// ===== port of compiler/src/fmt/fmt_order.c =====
+func ord_is_modifier_kind(k: int): bool:
+    ret k == tok.TK_KW_PUB || k == tok.TK_KW_DEPRECATED || k == tok.TK_KW_INLINE || k == tok.TK_KW_NOINLINE || k == tok.TK_KW_PURE || k == tok.TK_KW_NORET
+end
+
+// Right-trim trailing whitespace/newlines from a raw [start,end) range.
+func ord_rtrim_end(text: str, start: int, end0: int): int:
+    mut e := end0
+    until e > start:
+        c := byte_at(text, e - 1)
+        if c != 32 && c != 9 && c != 13 && c != 10:
+            break
+        end
+        e -= 1
+    end
+    ret e
+end
+
+func ord_line_is_blank(text: str, a: int, b: int): bool:
+    mut i := a
+    until i < b:
+        c := byte_at(text, i)
+        if c != 32 && c != 9 && c != 13:
+            ret false
+        end
+        i += 1
+    end
+    ret true
+end
+
+/*
+ * True if the line [a,b) is a '//' comment or an '@lang "..."' annotation
+ * line. Sets maybe_block if the line looks like it could open or close a block
+ * comment - the caller treats that as "don't know, don't touch" rather than
+ * guessing where the comment really begins.
+ */
+func ord_line_is_comment_or_meta(text: str, a: int, b: int, maybe_block &: bool): bool:
+    mut i := a
+    until i < b && (byte_at(text, i) == 32 || byte_at(text, i) == 9):
+        i += 1
+    end
+    if i + 1 < b && byte_at(text, i) == 47 && byte_at(text, i + 1) == 47:
+        ret true
+    end
+    if i < b && byte_at(text, i) == 64:
+        ret true
+    end
+    mut j := a
+    until j + 1 < b:
+        if (byte_at(text, j) == 47 && byte_at(text, j + 1) == 42) || (byte_at(text, j) == 42 && byte_at(text, j + 1) == 47):
+            maybe_block = true
+            ret false
+        end
+        j += 1
+    end
+    ret false
+end
+
+func ord_prev_line_start(text: str, pos: int): int:
+    if pos < 2:
+        ret 0
+    end
+    mut i := pos - 1
+    if byte_at(text, i) != 10:
+        ret pos
+    end
+    if i == 0:
+        ret 0
+    end
+    i -= 1
+    until i > 0 && byte_at(text, i - 1) != 10:
+        i -= 1
+    end
+    ret i
+end
+
+/*
+ * Walk backward from `begin` (a line start) over a blank-line-free run of
+ * immediately preceding comment/@meta lines, so those travel with the
+ * declaration when it moves. Stops at the first blank or non-trivia line.
+ */
+func ord_scan_leading_trivia(text: str, begin: int, bail &: bool): int:
+    mut cur := begin
+    until true:
+        if cur == 0:
+            break
+        end
+        pstart := ord_prev_line_start(text, cur)
+        pend := cur - 1
+        if ord_line_is_blank(text, pstart, pend):
+            break
+        end
+        mut maybe_block := false
+        if !ord_line_is_comment_or_meta(text, pstart, pend, maybe_block):
+            if maybe_block:
+                bail = true
+            end
+            break
+        end
+        if pstart == cur:
+            break
+        end
+        cur = pstart
+    end
+    ret cur
+end
+
+// Extend forward past a trailing same-line '// comment' so it is not orphaned
+// when the declaration in front of it moves.
+func ord_extend_trailing_comment(text: str, len0: int, end0: int): int:
+    mut i := end0
+    until i < len0 && (byte_at(text, i) == 32 || byte_at(text, i) == 9):
+        i += 1
+    end
+    if i + 1 < len0 && byte_at(text, i) == 47 && byte_at(text, i + 1) == 47:
+        until i < len0 && byte_at(text, i) != 10:
+            i += 1
+        end
+        ret i
+    end
+    ret end0
+end
+
+func ord_is_entry_point(a &: at.Ast, d: int, entry: str): bool:
+    n := at.Get(a, d)
+    if d == 0 || n.kind != at.AST_FUNC_DEF || str.Len(n.name) == 0:
+        ret false
+    end
+    if str.Equals(n.name, "main"):
+        ret true
+    end
+    ret str.Len(entry) > 0 && str.Equals(n.name, entry)
+end
+
+func ord_is_movable(a &: at.Ast, d: int, entry: str): bool:
+    if d == 0:
+        ret false
+    end
+    n := at.Get(a, d)
+    if n.synthetic:
+        ret false
+    end
+    // Member of an 'extern: end' block; no wrapper span exists to relocate
+    // it out of.
+    if n.is_extern:
+        ret false
+    end
+    /*
+     * The entry point is conventionally last regardless of visibility and is
+     * exempt from the pub-ordering rule - matching check_pub_order's own
+     * exemption - so it is never relocated either.
+     */
+    if ord_is_entry_point(a, d, entry):
+        ret false
+    end
+    ret at.ToplevelOrderPhase(a, d) != at.AST_ORDER_NONE
+end
+
+func ord_adjusted_begin(toks: tok.TokenStream, tok_idx: int): int:
+    mut i := tok_idx
+    until i > 0 && ord_is_modifier_kind(tok.StreamAt(toks, i - 1).kind):
+        i -= 1
+    end
+    ret tok.StreamAt(toks, i).begin_index as int
+end
+
+/*
+ * An AST_IMPORT node's span starts *after* its 'import' keyword, because the
+ * parser consumes the keyword before building any entry - unlike AST_LINK,
+ * whose node is created while the cursor still sits on 'link'. On top of that
+ * one `import "a" "b" "c"` statement yields three sibling nodes sharing that
+ * single keyword.
+ *
+ * Both fall out of one observation: an entry begins a new import *statement*
+ * exactly when the token in front of it is the keyword. That identifies the
+ * statement's true start, and every following entry that is not so preceded is
+ * a continuation to fold into the same movable unit.
+ */
+func ord_import_starts_statement(toks: tok.TokenStream, tok_idx: int): bool:
+    ret tok_idx > 0 && tok.StreamAt(toks, tok_idx - 1).kind == tok.TK_KW_IMPORT
+end
+
+func ord_find_token_for_begin(toks: tok.TokenStream, cursor &: int, begin_index: int): int:
+    n := tok.StreamCount(toks)
+    mut i := cursor
+    until i < n:
+        if (tok.StreamAt(toks, i).begin_index as int) == begin_index:
+            cursor = i
+            ret i
+        end
+        i += 1
+    end
+    ret n
+end
+
+/*
+ * Within a phase, private declarations sort before public ones, so the public
+ * surface of a file collects at the end of its group.
+ *
+ * The language only *requires* this of functions (check_pub_order rejects a
+ * private function after a pub one). Types are not required to be ordered that
+ * way, but the same reading habit applies to them - a caller scanning for what
+ * a file exports should find the pub structs, enums and interfaces together -
+ * and reordering them is safe because declaration order carries no meaning for
+ * types: a struct may hold, by value, another declared further down.
+ *
+ * Consts and vars are deliberately left alone. Splitting those would separate
+ * a private constant from the public one it is derived from, and unlike types
+ * they read as one table rather than as an API surface.
+ */
+func ord_sort_key(a &: at.Ast, it: OrdItem): int:
+    splits := it.phase == at.AST_ORDER_FUNC || it.phase == at.AST_ORDER_TYPEDEF
+    mut secondary := 0
+    if splits && at.Get(a, it.node).is_pub:
+        secondary = 1
+    end
+    ret it.phase * 2 + secondary
+end
+
+// Stable insertion sort (small n, and stability is what keeps declarations in
+// their original relative order inside one phase).
+func ord_stable_sort(a &: at.Ast, items &: Vector<OrdItem>):
+    n := items.len()
+    mut i := 1
+    until i < n:
+        key := items.get(i)
+        kkey := ord_sort_key(a, key)
+        mut j := i
+        until j > 0 && ord_sort_key(a, items.get(j - 1)) > kkey:
+            items.set(j, items.get(j - 1))
+            j -= 1
+        end
+        items.set(j, key)
+        i += 1
+    end
+end
+
+/*
+ * Hoist a misplaced `package` line to the top of the file.
+ *
+ * This one cannot be done with the rest: a package below the first statement
+ * is rejected by the *parser* ("only as the very first statement"), so there
+ * is no tree left to reorder. It therefore runs on the token stream, before
+ * any parse is attempted, and rewrites the text so the parse can succeed.
+ *
+ * Only `@meta` annotations may legitimately precede a package declaration, so
+ * anything else in front of the keyword means it is misplaced.
+ */
+func ord_hoist_package(text: str, len0: int, toks: tok.TokenStream, out &: str.StringBuilder): bool:
+    n := tok.StreamCount(toks)
+    mut kw := n
+    mut i := 0
+    until i < n:
+        k := tok.StreamAt(toks, i).kind
+        if k == tok.TK_KW_PACKAGE:
+            kw = i
+            break
+        end
+        if k != tok.TK_META && k != tok.TK_STMT_END && k != tok.TK_EOF:
+            // A real statement came first - any package below it is misplaced.
+            mut j := i
+            until j < n:
+                if tok.StreamAt(toks, j).kind == tok.TK_KW_PACKAGE:
+                    kw = j
+                    break
+                end
+                j += 1
+            end
+            break
+        end
+        i += 1
+    end
+    if kw >= n:
+        ret false
+    end
+    // Already ahead of everything but annotations: nothing to do.
+    mut only_meta := true
+    mut m := 0
+    until m < kw:
+        k2 := tok.StreamAt(toks, m).kind
+        if k2 != tok.TK_META && k2 != tok.TK_STMT_END:
+            only_meta = false
+            break
+        end
+        m += 1
+    end
+    if only_meta:
+        ret false
+    end
+    if kw + 1 >= n:
+        ret false
+    end
+    mut bail := false
+    ustart := ord_scan_leading_trivia(text, tok.StreamAt(toks, kw).begin_index as int, bail)
+    if bail:
+        ret false
+    end
+    mut uend := tok.StreamAt(toks, kw + 1).end_index as int
+    uend = ord_rtrim_end(text, ustart, uend)
+    uend = ord_extend_trailing_comment(text, len0, uend)
+    if uend <= ustart:
+        ret false
+    end
+    /*
+     * Insert in front of the first real declaration rather than at byte 0: a
+     * file normally opens with a licence banner, and a package line shoved
+     * above that reads as though it belongs to nothing. The banner is a block
+     * comment, which ord_scan_leading_trivia deliberately refuses to walk
+     * into, so the first declaration's own leading `//` comments are the
+     * boundary - the package lands after the banner and before that
+     * declaration's comment, where a hand-written one would.
+     */
+    /*
+     * Skip a leading block-comment banner, if there is one. It cannot be found
+     * by walking backward from the first declaration the way everything else
+     * here does: ord_scan_leading_trivia refuses to enter a block comment on
+     * purpose, so it stops at the banner rather than stepping over it.
+     * Scanning forward from the top instead is unambiguous - the banner is
+     * whatever block comment the file opens with.
+     */
+    mut ins := 0
+    mut p := 0
+    until p < len0 && (byte_at(text, p) == 32 || byte_at(text, p) == 9 || byte_at(text, p) == 13 || byte_at(text, p) == 10):
+        p += 1
+    end
+    if p + 1 < len0 && byte_at(text, p) == 47 && byte_at(text, p + 1) == 42:
+        mut q := p + 2
+        until q + 1 < len0 && !(byte_at(text, q) == 42 && byte_at(text, q + 1) == 47):
+            q += 1
+        end
+        if q + 1 < len0:
+            q += 2
+            until q < len0 && byte_at(text, q) != 10:
+                q += 1
+            end
+            if q < len0:
+                q += 1
+            end
+            until q < len0 && (byte_at(text, q) == 13 || byte_at(text, q) == 10):
+                q += 1
+            end
+            if q < ustart:
+                ins = q
+            end
+        end
+    end
+    co.SbPuts(out, str.Substr(text, 0, ins))
+    co.SbPuts(out, str.Substr(text, ustart, uend - ustart))
+    co.SbPuts(out, "\n\n")
+    co.SbPuts(out, str.Substr(text, ins, ustart - ins))
+    // Skip the blank line the moved block left behind.
+    mut after := uend
+    until after < len0 && (byte_at(text, after) == 32 || byte_at(text, after) == 9 || byte_at(text, after) == 13):
+        after += 1
+    end
+    if after < len0 && byte_at(text, after) == 10:
+        after += 1
+    end
+    co.SbPuts(out, str.Substr(text, after, len0 - after))
+    ret true
+end
+
+func ord_push(items &: Vector<OrdItem>, node: int, phase: int, ustart: int, uend: int):
+    items.push(OrdItem { node = node, phase = phase, ustart = ustart, uend = uend })
+end
+
+/*
+ * fmt_reorder_toplevel - rewrite `sfile` with its top-level declarations in
+ * canonical order, writing the result to `out`. Returns false (and copies the
+ * text through unchanged) when the file cannot be lexed or parsed.
+ */
+
 // ---------------------------------------------------------------------------
 // Public API (E088: pub section last)
 // ---------------------------------------------------------------------------
@@ -696,5 +1081,200 @@ pub func Source(
     end
     Tokens(toks, style, out)
     tok.StreamFree(toks)
+    ret true
+end
+
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+/*
+ * fmt_reorder_toplevel - rewrite `sfile` with its top-level declarations in
+ * canonical order, writing the result to `out`. Returns false (and copies the
+ * text through unchanged) when the file cannot be lexed or parsed.
+ */
+pub func ReorderToplevel(
+    lgr: lg.Logger, pack: int, sfile: src.SourceFile, entry: str, out &: str.StringBuilder
+): bool:
+    mut text := sfile.text
+    mut len0 := sfile.len
+
+    mut toks := tok.StreamNew(sfile.path)
+    if !lx.Run(lgr, pack, sfile, toks):
+        co.SbPuts(out, text)
+        tok.StreamFree(toks)
+        ret false
+    end
+
+    /*
+     * Runs before the parse, not after: a misplaced package is a *parse*
+     * error, so leaving it in place would mean there is no tree to reorder and
+     * every other fix in this file would be skipped too.
+     */
+    mut hoisted := co.SbNew()
+    if ord_hoist_package(text, len0, toks, hoisted):
+        htext := co.SbCstr(hoisted)
+        mut hfile := src.New()
+        hfile.path = sfile.path
+        hfile.text = htext
+        hfile.len = str.Len(htext)
+        mut htoks := tok.StreamNew(sfile.path)
+        if lx.Run(lgr, pack, hfile, htoks):
+            tok.StreamFree(toks)
+            toks = htoks
+            text = htext
+            len0 = str.Len(htext)
+        else:
+            tok.StreamFree(htoks)
+        end
+    end
+    co.SbFree(hoisted)
+
+    mut a := at.NewAst()
+    mut program := 0
+    if !ps.Run(lgr, toks, a, program) || program == 0:
+        co.SbPuts(out, text)
+        tok.StreamFree(toks)
+        at.FreeAst(a)
+        ret false
+    end
+
+    /*
+     * Build the flat sequence of top-level "slots": either a movable
+     * declaration with its true, trivia-inclusive text span, or a barrier
+     * (extern member, top-level 'if', the entry point, or anything this scan
+     * cannot confidently classify) that always stays exactly where it is.
+     */
+    mut items := Vector {} as Vector<OrdItem>
+    prog := at.Get(a, program)
+    mut tok_cursor := 0
+    repeat prog.list.len() with li:
+        d := prog.list.get(li)
+        if d == 0 || at.Get(a, d).synthetic:
+            continue
+        end
+        if !ord_is_movable(a, d, entry):
+            ord_push(items, d, at.AST_ORDER_NONE, 0, 0)
+            continue
+        end
+        tok_idx := ord_find_token_for_begin(toks, tok_cursor, at.Get(a, d).begin_index as int)
+        if tok_idx >= tok.StreamCount(toks):
+            ord_push(items, d, at.AST_ORDER_NONE, 0, 0)
+            continue
+        end
+        if at.Get(a, d).kind == at.AST_IMPORT && !ord_import_starts_statement(toks, tok_idx):
+            /*
+             * A continuation entry of `import "a" "b"`: it has no keyword of
+             * its own, so it cannot be a unit. Stretch the statement's unit
+             * over it instead, and let it travel as one piece.
+             */
+            if items.len() > 0 && items.get(items.len() - 1).phase == at.AST_ORDER_IMPORT:
+                mut prev := items.get(items.len() - 1)
+                mut e := ord_rtrim_end(text, prev.ustart, at.Get(a, d).end_index as int)
+                e = ord_extend_trailing_comment(text, len0, e)
+                if e > prev.uend:
+                    prev.uend = e
+                    items.set(items.len() - 1, prev)
+                end
+                continue
+            end
+            ord_push(items, d, at.AST_ORDER_NONE, 0, 0)
+            continue
+        end
+        mut adj_begin := ord_adjusted_begin(toks, tok_idx)
+        if at.Get(a, d).kind == at.AST_IMPORT:
+            adj_begin = tok.StreamAt(toks, tok_idx - 1).begin_index as int
+        end
+        mut bail := false
+        ustart := ord_scan_leading_trivia(text, adj_begin, bail)
+        if bail:
+            ord_push(items, d, at.AST_ORDER_NONE, 0, 0)
+            continue
+        end
+        /*
+         * A node's end can land at column 1 of the FOLLOWING line (a
+         * statement-terminator artifact), which would otherwise make this
+         * item's extracted text quietly swallow the blank line separating it
+         * from whatever comes next. Normalise back to its own content first.
+         */
+        mut uend := ord_rtrim_end(text, ustart, at.Get(a, d).end_index as int)
+        uend = ord_extend_trailing_comment(text, len0, uend)
+        ord_push(items, d, at.ToplevelOrderPhase(a, d), ustart, uend)
+    end
+
+    /*
+     * Walk maximal runs of movable items, reordering each run in place -
+     * verbatim text, never touching anything outside a run that actually needs
+     * to change.
+     */
+    mut result := co.SbNew()
+    mut cursor := 0
+    mut r := 0
+    until r < items.len():
+        if items.get(r).phase == at.AST_ORDER_NONE:
+            r += 1
+            continue
+        end
+        run_start := r
+        mut run_end := r
+        until run_end + 1 < items.len() && items.get(run_end + 1).phase != at.AST_ORDER_NONE:
+            run_end += 1
+        end
+        run_len := run_end - run_start + 1
+
+        mut sorted := Vector {} as Vector<OrdItem>
+        mut k := 0
+        until k < run_len:
+            sorted.push(items.get(run_start + k))
+            k += 1
+        end
+        ord_stable_sort(a, sorted)
+
+        mut changed := false
+        mut c2 := 0
+        until c2 < run_len:
+            if sorted.get(c2).node != items.get(run_start + c2).node:
+                changed = true
+                break
+            end
+            c2 += 1
+        end
+
+        if changed:
+            region_start := items.get(run_start).ustart
+            region_end := items.get(run_end).uend
+            co.SbPuts(result, str.Substr(text, cursor, region_start - cursor))
+            mut w := 0
+            until w < run_len:
+                pstart := sorted.get(w).ustart
+                pend := ord_rtrim_end(text, pstart, sorted.get(w).uend)
+                co.SbPuts(result, str.Substr(text, pstart, pend - pstart))
+                if w + 1 < run_len:
+                    co.SbPuts(result, "\n\n")
+                end
+                w += 1
+            end
+            cursor = region_end
+        end
+        sorted.free()
+        r = run_end + 1
+    end
+    co.SbPuts(result, str.Substr(text, cursor, len0 - cursor))
+
+    co.SbPuts(out, co.SbCstr(result))
+    co.SbFree(result)
+    items.free()
+    tok.StreamFree(toks)
+    at.FreeAst(a)
     ret true
 end

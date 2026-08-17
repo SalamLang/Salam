@@ -1,0 +1,83 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import chan
+import sync
+
+mut jobs := chan.Chan {} as chan.Chan<i64>
+mut results := chan.Chan {} as chan.Chan<i64>
+mut wg := sync.NewWaitGroup()
+
+// Three consumers share one job channel; each squares what it pulls and
+// pushes the answer onto a second channel. The close on `jobs` is what ends
+// them - a drained closed channel reports ok = false.
+func worker():
+    mut ok := true
+    until true:
+        v := jobs.recv(ok)
+        if !ok: break end
+        results.send(v * v)
+    end
+    sync.Done(wg)
+end
+
+func main:
+    jobs.init(4 as i64)
+    results.init(64 as i64)
+
+    sync.Add(wg, 3 as i64)
+    t1 := spawn(worker)
+    t2 := spawn(worker)
+    t3 := spawn(worker)
+
+    mut i := 1 as i64
+    until i <= 20:
+        jobs.send(i)
+        i = i + 1
+    end
+    jobs.close()
+
+    sync.Wait(wg)
+    join(t1)
+    join(t2)
+    join(t3)
+    results.close()
+
+    // Every job must have produced exactly one result, whichever worker took
+    // it, so the sum is order-independent.
+    mut total := 0 as i64
+    mut n := 0 as i64
+    mut ok := true
+    until true:
+        v := results.recv(ok)
+        if !ok: break end
+        total = total + v
+        n = n + 1
+    end
+
+    println "count:", n
+    println "total:", total
+    println "drained:", jobs.len(), results.len()
+    println "closed:", jobs.is_closed()
+    println "cap:", jobs.capacity()
+
+    mut ok2 := true
+    _ := results.try_recv(ok2)
+    println "try_recv empty:", ok2
+    println "send after close:", jobs.send(1 as i64)
+
+    sync.DestroyWaitGroup(wg)
+    jobs.free()
+    results.free()
+end

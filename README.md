@@ -119,7 +119,8 @@ compiled programs are self-contained and link only `-lm` (`-lmsvcrt` with tcc).
 
 ```sh
 # general language -> native executable
-salam build app.salam --output=app.exe         # then ./app.exe
+salam build app.salam                          # -> app (app.exe on Windows)
+salam build app.salam --output=myapp           # then ./myapp
 salam cli build app.salam --keep-c             # optional 'cli' prefix; keep generated C
 salam obj app.salam                            # compile to .o only
 
@@ -163,7 +164,8 @@ architectures using the **LLVM backend**. Pass a full LLVM target triple with
 through LLVM (`clang`/`llc`) instead of the default C backend, so `--cc` and
 `--keep-c` no longer apply. The output name follows the target's conventions
 (`.exe` for Windows, `.obj` for MSVC objects, none for ELF), and `--output`
-overrides it as usual.
+overrides it as usual - except that a Windows target still gets `.exe`
+appended to a name that lacks it, so the binary stays launchable there.
 
 ```sh
 # Windows executable from Linux (MinGW target)

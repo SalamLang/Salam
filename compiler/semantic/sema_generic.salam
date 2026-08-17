@@ -70,15 +70,36 @@ func g_subst(a &: at.Ast, nid: int, params: Vector<str>, args: Vector<int>):
             ccid := at.Clone(a, args.get(pi))
             cc := at.Get(a, ccid)
             mut nv := at.Get(a, nid)
-            ptr := nv.is_pointer || cc.is_pointer
+            // Stars ACCUMULATE. `T*` instantiated with T = `Edge*` is
+            // Edge**, not Edge*: OR-ing the two booleans used to collapse
+            // every pointer-of-pointer to one level.
+            cc_depth := cc.ptr_depth != 0 ? cc.ptr_depth : (cc.is_pointer ? 1 : 0)
+            n_depth := nv.ptr_depth != 0 ? nv.ptr_depth : (nv.is_pointer ? 1 : 0)
+            depth := n_depth + cc_depth
             nv.name = cc.name
             nv.list.free()
             nv.list = Vector {} as Vector<int>
             repeat cc.list.len() with k:
                 nv.list.push(cc.list.get(k))
             end
-            nv.is_pointer = ptr
+            nv.ptr_depth = depth
+            nv.is_pointer = depth > 0
+            nv.elem_ptr_depth += cc.elem_ptr_depth
             nv.is_dyn = cc.is_dyn
+            // The resolved type comes along whole only where the occurrence
+            // is the bare parameter. `T*` or `T[4]` stands for a different
+            // type than what the caller resolved, so only the base travels and
+            // sema_resolve_type re-applies the `*`/`[N]` - going back through
+            // the name would fail for any argument the template's own package
+            // cannot see (`Vector<Row>` over a struct from another package:
+            // "unknown type 'cmod_Row'"). The base is only usable when the
+            // argument node is itself undecorated; `T[4]` with T = `Foo[3]`
+            // has to merge dims, and cc.sema_type is the whole array there.
+            if n_depth == 0 && nv.dims.len() == 0 && nv.elem_ptr_depth == 0:
+                nv.sema_type = cc.sema_type
+            else cc_depth == 0 && cc.dims.len() == 0 && cc.elem_ptr_depth == 0:
+                nv.sema_base_type = cc.sema_type
+            end
             mut merged := Vector {} as Vector<int>
             repeat cc.dims.len() with k2:
                 merged.push(cc.dims.get(k2))
@@ -105,7 +126,22 @@ func g_instance_name(s &: Sema, base: str, argtypes: Vector<int>): str:
 end
 
 // g_type_to_ast - synthesizes an AST_TYPE node describing `t`.
+// The name is kept for diagnostics and for the instance's mangled name, but
+// the resolved type travels with the node: the template is checked inside the
+// package that declared it, and that scope cannot see a struct the caller
+// declared. Without this a stdlib generic could only ever be instantiated with
+// a built-in type.
 func g_type_to_ast(s &: Sema, a &: at.Ast, t: int, sp: co.SrcSpan): int:
+    nid := g_type_to_ast_bare(s, a, t, sp)
+    if t >= 0:
+        mut nv := at.Get(a, nid)
+        nv.sema_type = t
+        at.Put(a, nid, nv)
+    end
+    ret nid
+end
+
+func g_type_to_ast_bare(s &: Sema, a &: at.Ast, t: int, sp: co.SrcSpan): int:
     nid := new_node_at(a, at.AST_TYPE, sp)
     mut nv := at.Get(a, nid)
     nv.synthetic = true
@@ -118,6 +154,7 @@ func g_type_to_ast(s &: Sema, a &: at.Ast, t: int, sp: co.SrcSpan): int:
     if v.kind == TY_PTR && v.pointee >= 0:
         p := g_type_to_ast(s, a, v.pointee, sp)
         mut pv := at.Get(a, p)
+        pv.ptr_depth += 1
         pv.is_pointer = true
         at.Put(a, p, pv)
         ret p
@@ -142,18 +179,24 @@ end
 func iface_satisfied(
     s &: Sema, _a &: at.Ast, concrete: int, iface_name: str, tparam: str, sp: co.SrcSpan
 ): bool:
-    iface := scope_lookup(s, s.global, iface_name)
-    mut iface_ok := iface != 0
-    if iface_ok && sym_at(s, iface).kind != SYM_INTERFACE:
-        iface_ok = false
-    end
-    if !iface_ok:
-        serr(
-            s, 1, sp, co.Format2(
-                i18.Tr("bound '%s' on type parameter '%s' is not an interface"), co.ArgStr(iface_name),
-                co.ArgStr(tparam)
+    mut why := ""
+    iface := sema_lookup_iface(s, _a, iface_name, sp, why)
+    if iface == 0:
+        if str.Len(why) > 0:
+            serr(
+                s, 1, sp, co.Format3(
+                    i18.Tr("bound '%s' on type parameter '%s': %s"), co.ArgStr(iface_name),
+                    co.ArgStr(tparam), co.ArgStr(why)
+                )
             )
-        )
+        else:
+            serr(
+                s, 1, sp, co.Format2(
+                    i18.Tr("bound '%s' on type parameter '%s' is not an interface"), co.ArgStr(iface_name),
+                    co.ArgStr(tparam)
+                )
+            )
+        end
         ret false
     end
     mut members := 0
@@ -364,6 +407,9 @@ func g_instantiate_func(
     mut iv := at.Get(a, inst)
     iv.name = iname
     iv.synthetic = true
+    // The clone is checked against the declaring package's scope, so its body
+    // may name that package's private functions. See at.Node.home_pkg.
+    iv.home_pkg = derive_pkg_name_of(s, s.gen_pkg != 0 ? s.gen_pkg : s.global)
     at.Put(a, inst, iv)
     g_subst(a, inst, tn.typarams, targ_nodes)
     mut iv2 := at.Get(a, inst)

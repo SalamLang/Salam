@@ -59,7 +59,7 @@ ast_node_t *parse_var_decl(parser_t *p)
     ast_node_t *n = p_mk(p, AST_VAR_DECL);
     n->is_mut = p_match(p, TK_KW_MUT);
     n->name = parse_decl_name(p);
-    if (!n->name) n->name = "<error>";
+    if (!n->name) n->name = SALAM_ERR_NAME;
     parse_decl_tail(p, n);
     p_fin(p, n);
     return n;
@@ -71,7 +71,7 @@ ast_node_t *parse_bare_var_decl(parser_t *p)
     ast_node_t *n = p_mk(p, AST_VAR_DECL);
     n->is_mut = false;
     n->name = parse_decl_name(p);
-    if (!n->name) n->name = "<error>";
+    if (!n->name) n->name = SALAM_ERR_NAME;
     parse_decl_tail(p, n);
     p_fin(p, n);
     return n;

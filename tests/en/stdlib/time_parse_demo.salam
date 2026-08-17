@@ -1,0 +1,225 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// std/time's parsers, the inverse of its formatters.
+//
+// Every absolute expectation here uses a timestamp that carries its own
+// zone ("...Z" or "...+05:30"), so the result does not depend on where the
+// suite runs. The unzoned cases - which are read as local time by design -
+// are checked as ROUND TRIPS instead, which hold in any timezone.
+package main
+
+import testing
+import time
+
+func test_parse_iso_with_zone():
+    // 2024-03-15T14:30:45Z.
+    a := time.ParseISO("2024-03-15T14:30:45Z")
+    testing.AssertTrue(a.ok)
+    testing.AssertEqInt64(a.epoch, 1710513045 as i64)
+    // The same instant written from three other zones.
+    b := time.ParseISO("2024-03-15T20:00:45+05:30")
+    testing.AssertEqInt64(b.epoch, 1710513045 as i64)
+    c := time.ParseISO("2024-03-15T06:30:45-08:00")
+    testing.AssertEqInt64(c.epoch, 1710513045 as i64)
+    // A compact offset with no colon, and a lone-hour offset.
+    d := time.ParseISO("2024-03-15T20:00:45+0530")
+    testing.AssertEqInt64(d.epoch, 1710513045 as i64)
+    e := time.ParseISO("2024-03-15T15:30:45+01")
+    testing.AssertEqInt64(e.epoch, 1710513045 as i64)
+    // Lowercase t and z are legal ISO 8601.
+    f := time.ParseISO("2024-03-15t14:30:45z")
+    testing.AssertEqInt64(f.epoch, 1710513045 as i64)
+    // Surrounding whitespace is tolerated.
+    g := time.ParseISO("  2024-03-15T14:30:45Z  ")
+    testing.AssertEqInt64(g.epoch, 1710513045 as i64)
+end
+
+func test_parse_iso_shapes():
+    // Seconds are optional.
+    a := time.ParseISO("2024-03-15T14:30Z")
+    testing.AssertTrue(a.ok)
+    testing.AssertEqInt64(a.epoch, 1710513000 as i64)
+    // Fractional seconds are captured, not discarded, but do not move the
+    // epoch, which has one-second resolution.
+    b := time.ParseISO("2024-03-15T14:30:45.250Z")
+    testing.AssertEqInt64(b.epoch, 1710513045 as i64)
+    testing.AssertEqInt(b.nanos, 250000000)
+    c := time.ParseISO("2024-03-15T14:30:45.000000001Z")
+    testing.AssertEqInt(c.nanos, 1)
+    // A comma is the other ISO 8601 decimal mark.
+    d := time.ParseISO("2024-03-15T14:30:45,5Z")
+    testing.AssertEqInt(d.nanos, 500000000)
+    // Pre-epoch instants are ordinary negative numbers.
+    e := time.ParseISO("1969-07-20T20:17:40Z")
+    testing.AssertTrue(e.ok)
+    testing.AssertEqInt64(e.epoch, 0 - 14182940 as i64)
+    // A leap second is clamped into the minute rather than rejected.
+    f := time.ParseISO("2016-12-31T23:59:60Z")
+    testing.AssertTrue(f.ok)
+end
+
+func test_parse_iso_rejects():
+    testing.AssertFalse(time.ParseISO("").ok)
+    testing.AssertFalse(time.ParseISO("nonsense").ok)
+    testing.AssertFalse(time.ParseISO("2024-13-01T00:00:00Z").ok)
+    testing.AssertFalse(time.ParseISO("2024-03-32T00:00:00Z").ok)
+    testing.AssertFalse(time.ParseISO("2024-03-15T25:00:00Z").ok)
+    testing.AssertFalse(time.ParseISO("2024-03-15T14:61:00Z").ok)
+    // Trailing junk must not be silently ignored.
+    testing.AssertFalse(time.ParseISO("2024-03-15T14:30:45Zjunk").ok)
+    testing.AssertFalse(time.ParseISO("2024-03-15T14:30:45+99:00").ok)
+    testing.AssertFalse(time.ParseISO("2024-3-15T14:30:45Z").ok)
+    testing.AssertFalse(time.ParseISO("2024/03/15").ok)
+    testing.AssertFalse(time.ParseISO("2024-03-15T14:30:45.Z").ok)
+    // ParseISOOr hands back the caller's default instead of a flag.
+    testing.AssertEqInt64(time.ParseISOOr("bad", 42 as i64), 42 as i64)
+    testing.AssertEqInt64(time.ParseISOOr("2024-03-15T14:30:45Z", 42 as i64), 1710513045 as i64)
+end
+
+func test_parse_iso_in_offset():
+    // An unzoned string pinned to an explicit offset.
+    a := time.ParseISOIn("2024-03-15T20:00:45", 330)
+    testing.AssertTrue(a.ok)
+    testing.AssertEqInt64(a.epoch, 1710513045 as i64)
+    // An offset already in the text wins over the supplied one.
+    b := time.ParseISOIn("2024-03-15T14:30:45Z", 330)
+    testing.AssertEqInt64(b.epoch, 1710513045 as i64)
+end
+
+func test_parse_http_date():
+    // The three formats RFC 7231 requires a client to understand, all
+    // naming the same instant. Always UTC.
+    want := 1623233894 as i64
+    a := time.ParseHTTPDate("Wed, 09 Jun 2021 10:18:14 GMT")
+    testing.AssertTrue(a.ok)
+    testing.AssertEqInt64(a.epoch, want)
+    b := time.ParseHTTPDate("Wednesday, 09-Jun-21 10:18:14 GMT")
+    testing.AssertTrue(b.ok)
+    testing.AssertEqInt64(b.epoch, want)
+    c := time.ParseHTTPDate("Wed Jun  9 10:18:14 2021")
+    testing.AssertTrue(c.ok)
+    testing.AssertEqInt64(c.epoch, want)
+    // A two-digit year is read the POSIX way: 0-68 is 20xx, 69-99 is 19xx.
+    d := time.ParseHTTPDate("Sun, 01-Jan-95 00:00:00 GMT")
+    testing.AssertTrue(d.ok)
+    testing.AssertEqInt64(d.epoch, 788918400 as i64)
+    testing.AssertFalse(time.ParseHTTPDate("Wed, 09 Xxx 2021 10:18:14 GMT").ok)
+    testing.AssertFalse(time.ParseHTTPDate("").ok)
+end
+
+func test_parse_format():
+    a := time.ParseFormat("%Y-%m-%dT%H:%M:%S%z", "2024-03-15T14:30:45Z")
+    testing.AssertTrue(a.ok)
+    testing.AssertEqInt64(a.epoch, 1710513045 as i64)
+    b := time.ParseFormat("%d/%m/%Y %H:%M:%S %z", "15/03/2024 14:30:45 +0000")
+    testing.AssertEqInt64(b.epoch, 1710513045 as i64)
+    // Month names, long and short, and a zone name.
+    c := time.ParseFormat("%b %d %Y %H:%M:%S %Z", "Mar 15 2024 14:30:45 UTC")
+    testing.AssertEqInt64(c.epoch, 1710513045 as i64)
+    d := time.ParseFormat("%A, %B %d %Y %H:%M:%S %Z", "Friday, March 15 2024 14:30:45 GMT")
+    testing.AssertEqInt64(d.epoch, 1710513045 as i64)
+    // A literal percent, and no separators at all.
+    e := time.ParseFormat("%Y%m%d%H%M%S%z", "20240315143045Z")
+    testing.AssertEqInt64(e.epoch, 1710513045 as i64)
+    f := time.ParseFormat("100%% %Y %z", "100% 2024 Z")
+    testing.AssertTrue(f.ok)
+    // A two-digit year, and fractional seconds.
+    g := time.ParseFormat("%y-%m-%d %z", "24-03-15 Z")
+    testing.AssertTrue(g.ok)
+    testing.AssertEqInt64(g.epoch, 1710460800 as i64)
+    h := time.ParseFormat("%H:%M:%S.%f", "00:00:00.125")
+    testing.AssertEqInt(h.nanos, 125000000)
+    // Mismatched literals and unknown directives are errors, and trailing
+    // input is never ignored.
+    testing.AssertFalse(time.ParseFormat("%Y-%m-%d", "2024/03/15").ok)
+    testing.AssertFalse(time.ParseFormat("%Q", "x").ok)
+    testing.AssertFalse(time.ParseFormat("%Y", "2024junk").ok)
+end
+
+func test_roundtrip_every_formatter():
+    // The property the library was missing: anything it writes, it reads.
+    // These hold in any timezone, which is why they are round trips rather
+    // than fixed expectations.
+    mut stamps := Vector {} as Vector<i64>
+    defer stamps.free()
+    stamps.push(0 as i64)
+    stamps.push(1710513045 as i64)
+    stamps.push(time.Now())
+    stamps.push(0 - 14182940 as i64)
+    stamps.push(2000000000 as i64)
+    repeat stamps.len() with i:
+        e := stamps.get(i)
+        // Unzoned local text, read back as local time.
+        r1 := time.ParseISO(time.FormatISO(e))
+        testing.AssertTrue(r1.ok)
+        testing.AssertEqInt64(r1.epoch, e)
+        // The space-separated Format() spelling.
+        r2 := time.ParseISO(time.Format(e))
+        testing.AssertEqInt64(r2.epoch, e)
+        // Zoned forms, which are unambiguous anywhere.
+        r3 := time.ParseISO(time.FormatRFC3339(e))
+        testing.AssertEqInt64(r3.epoch, e)
+        r4 := time.ParseISO(time.FormatISOUTC(e))
+        testing.AssertEqInt64(r4.epoch, e)
+        r5 := time.ParseHTTPDate(time.FormatHTTPDate(e))
+        testing.AssertEqInt64(r5.epoch, e)
+        // A date with no time reads back as that day's local midnight.
+        r6 := time.ParseISO(time.FormatDate(e))
+        testing.AssertTrue(r6.ok)
+        testing.AssertEqInt(time.Day(r6.epoch), time.Day(e))
+    end
+end
+
+func test_utc_and_local_parts():
+    // FromUTCParts is the portable timegm this package never had.
+    testing.AssertEqInt64(time.FromUTCParts(2024, 3, 15, 14, 30, 45), 1710513045 as i64)
+    testing.AssertEqInt64(time.FromUTCParts(1970, 1, 1, 0, 0, 0), 0 as i64)
+    testing.AssertEqInt64(time.FromUTCParts(1969, 7, 20, 20, 17, 40), 0 - 14182940 as i64)
+    testing.AssertEqStr(time.FormatISOUTC(time.FromUTCParts(2024, 3, 15, 14, 30, 45)), "2024-03-15T14:30:45Z")
+    // FromLocalParts is the inverse of Year/Month/Day/Hour/Minute/Second,
+    // whatever the host zone is, so this round trip holds everywhere.
+    e := time.FromLocalParts(2024, 3, 15, 14, 30, 45)
+    testing.AssertEqInt(time.Year(e), 2024)
+    testing.AssertEqInt(time.Month(e), 3)
+    testing.AssertEqInt(time.Day(e), 15)
+    testing.AssertEqInt(time.Hour(e), 14)
+    testing.AssertEqInt(time.Minute(e), 30)
+    testing.AssertEqInt(time.Second(e), 45)
+end
+
+func test_local_offset_is_consistent():
+    // The offset must agree with the difference the formatters imply, in
+    // whatever zone this runs, and must be a whole number of minutes.
+    now := time.Now()
+    off := time.LocalOffsetMinutesAt(now)
+    testing.AssertTrue(off >= 0 - 720)
+    testing.AssertTrue(off <= 840)
+    local := time.FromUTCParts(time.Year(now), time.Month(now), time.Day(now), time.Hour(now), time.Minute(now), time.Second(now))
+    testing.AssertEqInt64(local - now, (off as i64) * 60)
+end
+
+func main:
+    test_parse_iso_with_zone()
+    test_parse_iso_shapes()
+    test_parse_iso_rejects()
+    test_parse_iso_in_offset()
+    test_parse_http_date()
+    test_parse_format()
+    test_roundtrip_every_formatter()
+    test_utc_and_local_parts()
+    test_local_offset_is_consistent()
+    testing.Summary()
+    ret 0
+end

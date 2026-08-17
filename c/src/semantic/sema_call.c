@@ -14,7 +14,10 @@
 
 #include "core/prelude.h"
 #include "semantic/sema_internal.h"
+#include "semantic/sema_derive_core.h"
+#include "semantic/sema_derive_json.h"
 #include "semantic/sema_derive_str.h"
+#include "semantic/sema_derive_enum.h"
 #include "semantic/builtins.h"
 #include "semantic/dce.h"
 
@@ -171,11 +174,22 @@ static void mark_ref_args(sema_t *s, ast_node_t *call, func_sig_t *sig)
     for (; i < call->list.len && i < sig->decl->list.len; i++) {
         ast_node_t *p = (ast_node_t *)sig->decl->list.data[i];
         ast_node_t *arg = (ast_node_t *)call->list.data[i];
-        if (p->kind != AST_PARAM || !p->is_ref) continue;
-        if (arg && arg->kind == AST_IDENTIFIER && arg->name) {
-            symbol_t *sym = scope_lookup(s->cur, arg->name);
-            arg->ref_arg = true;
-            if (sym) sym->mutated = true;
+        if (p->kind != AST_PARAM || !p->is_ref || !arg) continue;
+        arg->ref_arg = true;
+        /* `f(h.k)` and `f(rows[0])` are writes through a projection, exactly
+         * as `h.k = ...` is: the variable they hang off is mutated, and
+         * (sema_definit) it counts as given a value. Stamping only bare
+         * identifiers meant `f(arr[1])` was read as a *read* of an
+         * as-yet-unassigned `arr` and rejected with E089. */
+        {
+            ast_node_t *root = arg;
+            while (root && (root->kind == AST_MEMBER || root->kind == AST_INDEX ||
+                            root->kind == AST_SLICE))
+                root = root->a;
+            if (root && root->kind == AST_IDENTIFIER && root->name) {
+                symbol_t *sym = scope_lookup(s->cur, root->name);
+                if (sym) sym->mutated = true;
+            }
         }
     }
 }
@@ -269,6 +283,150 @@ static bool print_derived(sema_t *s, ast_node_t *call, size_t i, type_t *at)
     return true;
 }
 
+/*
+ * `jsonenc(v)` and `jsondec(text, from, out, err, errpos, strict)`: the two
+ * hooks std/encoding/json's generic Marshal and Unmarshal are written around.
+ *
+ * They are recognised by name here, the way `sizeof` is, rather than declared
+ * anywhere. By the time one is checked the wrapper has been monomorphised, so
+ * the type parameter is concrete and a codec can be derived for it
+ * (sema_derive_json.c). The call is then rewritten to name that codec and the
+ * rest of the pipeline sees an ordinary call.
+ *
+ * Reaching either from outside that module is an error: the generated bodies
+ * are checked inside its scope and call its private runtime layer, so there is
+ * nowhere else they would resolve.
+ */
+/*
+ * `Color.FromString(name, ok)`, `Color.Names()`, `Color.Count()` - the three
+ * "static" operations on an enum *type* (as opposed to `.name()`, on an
+ * enum *value*, handled in the TY_ENUM branch of the builtin-method cascade
+ * below). Without this branch, `Color` as the object of a call falls through
+ * to the generic AST_MEMBER path, which evaluates it as an ordinary
+ * expression and rejects it with "type 'Color' used as a value" (the same
+ * error `Color` alone, unqualified, already gets) before ever looking at
+ * what member was being called.
+ *
+ * FromString/Names are one call each into the sema_derive_enum.c machinery,
+ * mirroring check_json_builtin's rewrite-to-a-real-function dance. Count
+ * needs no derived function - the member count is known right here, so the
+ * whole call node is folded straight to an int literal (same idea as a
+ * `sizeof` result, just for a value already sitting in the symbol table).
+ */
+static type_t *check_enum_static_call(sema_t *s, ast_node_t *n, ast_node_t *callee,
+                                      symbol_t *esym, vec_t *argtypes)
+{
+    const char *m = callee->name;
+    decorate(s, callee->a, esym->type);
+
+    if (!strcmp(m, "Count")) {
+        size_t cnt = 0;
+        size_t i = 0;
+        if (argtypes->len != 0) SERR(s, 12, &n->span, "Count() takes no arguments");
+        for (; i < esym->members->symbols.len; i++)
+            if (((symbol_t *)esym->members->symbols.data[i])->kind == SYM_ENUM_MEMBER)
+                cnt++;
+        n->kind = AST_LITERAL;
+        n->op = TK_INT;
+        n->value.slen = 0;
+        n->value.kind = TV_INT;
+        n->value.as.i = (uint64_t)cnt;
+        n->a = NULL;
+        n->b = NULL;
+        n->synthetic = false;
+        return decorate(s, n, ty(s, TY_I32));
+    }
+
+    if (!strcmp(m, "FromString") || !strcmp(m, "Names")) {
+        bool is_fs = !strcmp(m, "FromString");
+        const char *fn = is_fs ? sema_derive_enum_fromstring(s, esym->type, &n->span)
+                               : sema_derive_enum_names(s, esym->type, &n->span);
+        symbol_t *fsym;
+        func_sig_t *sig;
+        if (!fn) return decorate(s, n, err_ty(s));
+        if (is_fs &&
+            (argtypes->len != 2 || ((type_t *)argtypes->data[0])->kind != TY_STR ||
+             ((type_t *)argtypes->data[1])->kind != TY_BOOL))
+            SERR(s, 12, &n->span, "FromString(name, ok) takes a str and a bool ref");
+        if (!is_fs && argtypes->len != 0)
+            SERR(s, 12, &n->span, "Names() takes no arguments");
+        callee->kind = AST_IDENTIFIER;
+        callee->name = fn;
+        callee->synthetic = true;
+        decorate(s, callee, ty(s, TY_VOID));
+        fsym = scope_lookup_local(s->global, fn);
+        sig = (fsym && fsym->overloads.len > 0) ? (func_sig_t *)fsym->overloads.data[0]
+                                                : NULL;
+        if (fsym) fsym->used = true;
+        dce_mark_root(s->pkg, fn);
+        mark_ref_args(s, n, sig);
+        return decorate(s, n, sig && sig->ret ? sig->ret : esym->type);
+    }
+
+    SERR(s, 16, &n->span, "enum '%s' has no member '%s'", esym->name, m);
+    return decorate(s, n, err_ty(s));
+}
+
+static type_t *check_json_builtin(sema_t *s, ast_node_t *n, bool enc)
+{
+    ast_node_t *callee = n->a;
+    size_t want = enc ? 1 : 6;
+    size_t ti = enc ? 0 : 2;
+    scope_t *home;
+    type_t *at;
+    const char *fn;
+    symbol_t *fsym;
+    func_sig_t *sig;
+    size_t i = 0;
+
+    if (n->list.len != want) {
+        SERR(s, 12, &n->span, "'%s' takes %zu argument%s", enc ? "jsonenc" : "jsondec",
+             want, want == 1 ? "" : "s");
+        return decorate(s, n, ty(s, enc ? TY_STR : TY_I32));
+    }
+    at = NULL;
+    for (; i < n->list.len; i++) {
+        type_t *t = sema_check_expr(s, (ast_node_t *)n->list.data[i]);
+        if (i == ti) at = t;
+    }
+
+    home = derive_home_of(s->cur, enc ? "_dqs" : "_dgstr");
+    if (!home) {
+        SERR(s, 12, &n->span,
+             "'%s' is internal to std/encoding/json; use json.%s instead",
+             enc ? "jsonenc" : "jsondec", enc ? "Marshal" : "Unmarshal");
+        return decorate(s, n, ty(s, enc ? TY_STR : TY_I32));
+    }
+
+    {
+        size_t before = s->diag->errors;
+        fn = enc ? sema_derive_json_enc(s, at, home, &n->span)
+                 : sema_derive_json_dec(s, at, home, &n->span);
+        if (!fn) {
+            /* The emitters name the member that has no JSON form, and point at
+             * it. This call's own span is inside the monomorphised wrapper, so
+             * it would point at std/encoding/json rather than at anything the
+             * programmer wrote - only worth printing when nothing better was
+             * said. */
+            if (s->diag->errors == before)
+                SERR(s, 2, &n->span, "cannot %s a value of type '%s' as JSON",
+                     enc ? "encode" : "decode", at ? type_to_string(s->tc, at) : "?");
+            return decorate(s, n, ty(s, enc ? TY_STR : TY_I32));
+        }
+    }
+
+    callee->name = fn;
+    callee->synthetic = true;
+    decorate(s, callee, ty(s, TY_VOID));
+    fsym = scope_lookup_local(s->global, fn);
+    sig =
+        (fsym && fsym->overloads.len > 0) ? (func_sig_t *)fsym->overloads.data[0] : NULL;
+    if (fsym) fsym->used = true;
+    dce_mark_root(s->pkg, fn);
+    mark_ref_args(s, n, sig);
+    return decorate(s, n, sig && sig->ret ? sig->ret : ty(s, enc ? TY_STR : TY_I32));
+}
+
 type_t *check_call(sema_t *s, ast_node_t *n)
 {
     ast_node_t *callee = n->a;
@@ -278,8 +436,18 @@ type_t *check_call(sema_t *s, ast_node_t *n)
     if (callee && callee->kind == AST_IDENTIFIER) check_pure_builtin(s, n, callee->name);
 
     if (callee && callee->kind == AST_IDENTIFIER && strcmp(callee->name, "spawn") == 0) {
-        if (n->list.len != 1 || ((ast_node_t *)n->list.data[0])->kind != AST_IDENTIFIER) {
-            SERR(s, 12, &n->span, "spawn(func) takes a single function name");
+        /*
+         * Two shapes: spawn(f) for a thread that talks to the world through
+         * globals, and spawn(f, arg) which hands the new thread one pointer.
+         * The payload is a pointer rather than any type because it travels
+         * through pthread_create's void* / _beginthreadex's arg slot, and a
+         * pointer is the only thing guaranteed to fit there unchanged.
+         */
+        bool has_arg = n->list.len == 2;
+        if ((n->list.len != 1 && n->list.len != 2) ||
+            ((ast_node_t *)n->list.data[0])->kind != AST_IDENTIFIER) {
+            SERR(s, 12, &n->span,
+                 "spawn(func) or spawn(func, arg) takes a function name first");
             return decorate(s, n, ty(s, TY_I64));
         }
         ast_node_t *fn = (ast_node_t *)n->list.data[0];
@@ -290,20 +458,78 @@ type_t *check_call(sema_t *s, ast_node_t *n)
         }
         fsym->used = true;
         dce_mark_root(s->pkg, fn->name);
+        type_t *argt = has_arg ? sema_check_expr(s, (ast_node_t *)n->list.data[1]) : NULL;
         bool ok = false;
+        /* Remembered only to name a concrete type in the mismatch message. */
+        type_t *want = NULL;
         {
             size_t i = 0;
             for (; i < fsym->overloads.len; i++) {
                 func_sig_t *sig = (func_sig_t *)fsym->overloads.data[i];
-                if (sig->params.len == 0 && sig->ret && sig->ret->kind == TY_VOID)
-                    ok = true;
+                if (!sig->ret || sig->ret->kind != TY_VOID) continue;
+                if (!has_arg) {
+                    if (sig->params.len == 0) ok = true;
+                    continue;
+                }
+                if (sig->params.len != 1) continue;
+                {
+                    type_t *p = (type_t *)sig->params.data[0];
+                    if (p->kind != TY_PTR) continue;
+                    if (!want) want = p;
+                    if (argt && type_assignable(p, argt)) ok = true;
+                }
             }
         }
-        if (!ok)
-            SERR(s, 12, &n->span,
-                 "spawn requires a function taking no arguments and returning nothing");
+        if (!ok) {
+            if (!has_arg)
+                SERR(
+                    s, 12, &n->span,
+                    "spawn requires a function taking no arguments and returning nothing");
+            else if (!want)
+                SERR(s, 12, &n->span,
+                     "spawn(func, arg) requires a function taking one pointer argument "
+                     "and returning nothing");
+            else
+                SERR(s, 12, &n->span, "spawn argument: cannot pass '%s' to '%s'",
+                     argt ? type_to_string(s->tc, argt) : "?",
+                     type_to_string(s->tc, want));
+        }
         decorate(s, fn, ty(s, TY_VOID));
         decorate(s, callee, ty(s, TY_VOID));
+        return decorate(s, n, ty(s, TY_I64));
+    }
+
+    /*
+     * The atomic intrinsics on an i64 cell. They are recognised here rather
+     * than declared in a package because each backend lowers them to
+     * something it has no other way to spell - a __atomic_* builtin in C,
+     * an atomicrmw/cmpxchg instruction in LLVM - and no callable symbol
+     * exists for them at all. A user function of the same name wins: the
+     * lookup below defers to any real declaration in scope, so these names
+     * are only magic when nothing else claims them.
+     */
+    if (callee && callee->kind == AST_IDENTIFIER && salam_atomic_arity(callee->name) &&
+        !scope_lookup(s->cur, callee->name)) {
+        int want = salam_atomic_arity(callee->name);
+        if ((int)n->list.len != want) {
+            SERR(s, 12, &n->span, "'%s' expects %zu argument%s, got %zu", callee->name,
+                 (size_t)want, plural_suffix((size_t)want), n->list.len);
+            return decorate(s, n, ty(s, TY_I64));
+        }
+        {
+            type_t *cell = type_ptr(s->tc, ty(s, TY_I64));
+            size_t i = 0;
+            for (; i < n->list.len; i++) {
+                type_t *at = sema_check_expr(s, (ast_node_t *)n->list.data[i]);
+                type_t *wt = i == 0 ? cell : ty(s, TY_I64);
+                if (at && !type_assignable(wt, at))
+                    SERR(s, 12, &n->span, "argument %zu: cannot pass '%s' to '%s'", i + 1,
+                         type_to_string(s->tc, at), type_to_string(s->tc, wt));
+            }
+        }
+        decorate(s, callee, ty(s, TY_VOID));
+        if (!strcmp(callee->name, "atomic_store")) return decorate(s, n, ty(s, TY_VOID));
+        if (!strcmp(callee->name, "atomic_cas")) return decorate(s, n, ty(s, TY_BOOL));
         return decorate(s, n, ty(s, TY_I64));
     }
 
@@ -331,6 +557,10 @@ type_t *check_call(sema_t *s, ast_node_t *n)
         decorate(s, callee, ty(s, TY_VOID));
         return decorate(s, n, ty(s, TY_SIZE));
     }
+
+    if (callee && callee->kind == AST_IDENTIFIER &&
+        (strcmp(callee->name, "jsonenc") == 0 || strcmp(callee->name, "jsondec") == 0))
+        return check_json_builtin(s, n, strcmp(callee->name, "jsonenc") == 0);
 
     vec_t argtypes;
     vec_init(&argtypes);
@@ -608,6 +838,28 @@ type_t *check_call(sema_t *s, ast_node_t *n)
             return decorate(s, n,
                             sig ? g_localize_instance(s, sig->ret, &n->span) : err_ty(s));
         }
+        if (pk && pk->kind == SYM_ENUM)
+            return check_enum_static_call(s, n, callee, pk, &argtypes);
+    }
+
+    /*
+     * pkg.EnumName.FromString(...) / .Names() / .Count(): callee->a is
+     * itself pkg.EnumName, an AST_MEMBER (the parser never builds a 3-level
+     * chain directly - see the matching fix in check_member/sema_expr.c).
+     * Recognize that shape here and hand the resolved enum symbol to the
+     * same check_enum_static_call the unqualified case above uses - it's
+     * already agnostic to how the symbol was found.
+     */
+    if (callee && callee->kind == AST_MEMBER && callee->a &&
+        callee->a->kind == AST_MEMBER && callee->a->a &&
+        callee->a->a->kind == AST_IDENTIFIER) {
+        symbol_t *pk = scope_lookup(s->cur, callee->a->a->name);
+        if (pk && pk->kind == SYM_PACKAGE) {
+            callee->a->name = pkg_member_canon(s, pk, callee->a->name, &callee->a->span);
+            symbol_t *m = scope_lookup_local(pk->members, callee->a->name);
+            if (m && m->kind == SYM_ENUM)
+                return check_enum_static_call(s, n, callee, m, &argtypes);
+        }
     }
 
     if (callee && callee->kind == AST_MEMBER) {
@@ -745,6 +997,45 @@ type_t *check_call(sema_t *s, ast_node_t *n)
             }
             if (!strcmp(m, "close")) return decorate(s, n, ty(s, TY_VOID));
             SERR(s, 17, &n->span, "File has no method '%s'", m);
+            return decorate(s, n, err_ty(s));
+        }
+
+        if (objt->kind == TY_ENUM) {
+            const char *m = callee->name;
+            decorate(s, callee, objt);
+            if (!strcmp(m, "name")) {
+                const char *fn;
+                symbol_t *fsym;
+                func_sig_t *sig;
+                if (argtypes.len != 0) SERR(s, 12, &n->span, "name() takes no arguments");
+                fn = sema_derive_enum_name(s, objt, &n->span);
+                if (!fn) return decorate(s, n, err_ty(s));
+                callee->kind = AST_IDENTIFIER;
+                callee->name = fn;
+                callee->synthetic = true;
+                decorate(s, callee, ty(s, TY_VOID));
+                fsym = scope_lookup_local(s->global, fn);
+                sig = (fsym && fsym->overloads.len > 0)
+                          ? (func_sig_t *)fsym->overloads.data[0]
+                          : NULL;
+                if (fsym) fsym->used = true;
+                dce_mark_root(s->pkg, fn);
+                /* The receiver becomes the derived function's sole argument -
+                 * it was already type-checked above as callee->a, so splice
+                 * it into the argument list the way a UFCS call would. */
+                {
+                    vec_t args;
+                    vec_init(&args);
+                    vec_push(s->a, &args, callee->a);
+                    n->list = args;
+                }
+                return decorate(s, n, sig && sig->ret ? sig->ret : ty(s, TY_STR));
+            }
+            {
+                type_t *r = try_impl_call(s, n, callee, objt, &argtypes);
+                if (r) return r;
+            }
+            SERR(s, 17, &n->span, "enum has no method '%s'", m);
             return decorate(s, n, err_ty(s));
         }
 

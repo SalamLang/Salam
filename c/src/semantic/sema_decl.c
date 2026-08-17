@@ -25,6 +25,24 @@ static type_t *ty(sema_t *s, type_kind_t k)
     return sema_ty(s, k);
 }
 
+static const char *tv_kind_name(token_value_kind_t k)
+{
+    switch (k) {
+    case TV_INT:
+        return "int";
+    case TV_FLOAT:
+        return "float";
+    case TV_STRING:
+        return "string";
+    case TV_CHAR:
+        return "char";
+    case TV_BOOL:
+        return "bool";
+    default:
+        return "?";
+    }
+}
+
 static bool block_has_valued_ret(const ast_node_t *n)
 {
     if (!n) return false;
@@ -124,11 +142,13 @@ static void check_link(sema_t *s, ast_node_t *d)
 
 void sema_collect(sema_t *s, ast_node_t *program)
 {
+    const char *save_file = s->file;
     {
         size_t i = 0;
         for (; i < program->list.len; i++) {
             ast_node_t *d = (ast_node_t *)program->list.data[i];
             if (d->synthetic) continue;
+            sema_use_decl_file(s, d);
             if (d->kind == AST_STRUCT_DEF) {
                 symbol_t *sym = symbol_new(s->a, SYM_STRUCT, d->name);
                 sym->decl = d;
@@ -159,6 +179,7 @@ void sema_collect(sema_t *s, ast_node_t *program)
                 }
                 sym->type = type_enum(s->tc, sym, c_enum_name);
                 sym->members = scope_new(s->a, SCOPE_STRUCT, s->global);
+                sym->home = s->global;
                 if (scope_define(s->a, s->global, sym))
                     SERR(s, 1, &d->span, "redefinition of '%s'", d->name);
             } else if (d->kind == AST_TYPE_ALIAS) {
@@ -170,6 +191,12 @@ void sema_collect(sema_t *s, ast_node_t *program)
                 symbol_t *sym = symbol_new(s->a, SYM_INTERFACE, d->name);
                 sym->decl = d;
                 sym->is_pub = d->is_pub;
+                /* Same package qualification a struct gets above, and for the
+                 * same reason: `dyn Connection` written inside package db and
+                 * `dyn db.Connection` written by an importer must name ONE type,
+                 * or each spelling would get its own vtable struct in C and a
+                 * value boxed on one side would not dispatch on the other. */
+                sym->pkgname = s->pkg;
                 sym->members = scope_new(s->a, SCOPE_STRUCT, s->global);
                 sym->members->label = d->name;
                 if (scope_define(s->a, s->global, sym))
@@ -183,6 +210,7 @@ void sema_collect(sema_t *s, ast_node_t *program)
         for (; i < program->list.len; i++) {
             ast_node_t *d = (ast_node_t *)program->list.data[i];
             if (d->synthetic) continue;
+            sema_use_decl_file(s, d);
             switch (d->kind) {
             case AST_LINK:
                 check_link(s, d);
@@ -265,10 +293,16 @@ void sema_collect(sema_t *s, ast_node_t *program)
                     owner->members->label = ts;
                     scope_define(s->a, s->global, owner);
                 }
-                symbol_t *iface = scope_lookup(s->global, d->name);
-                if (!iface || iface->kind != SYM_INTERFACE)
-                    SERR(s, 1, &d->span, "'%s' in `impl ... on ...` is not an interface",
-                         d->name);
+                const char *why = NULL;
+                symbol_t *iface = sema_lookup_iface(s, d->name, &d->span, &why);
+                if (!iface) {
+                    if (why)
+                        SERR(s, 1, &d->span, "'%s' in `impl ... on ...`: %s", d->name,
+                             why);
+                    else
+                        SERR(s, 1, &d->span,
+                             "'%s' in `impl ... on ...` is not an interface", d->name);
+                }
                 {
                     size_t j = 0;
                     for (; j < d->list.len; j++) {
@@ -288,16 +322,62 @@ void sema_collect(sema_t *s, ast_node_t *program)
                     SERR(s, 58, &d->span, "empty enum '%s' (declare at least one member)",
                          d->name);
                 symbol_t *sym = scope_lookup_local(s->global, d->name);
+                /*
+                 * The first member with an initializer fixes this enum's
+                 * backing kind (TV_INT if none has one, preserving the
+                 * default 0/1/2... auto-increment). Every later member's
+                 * initializer, if any, must agree with it - an enum is
+                 * either all-int, all-string, or all-float, never mixed.
+                 */
+                token_value_kind_t backing = TV_INT;
+                {
+                    size_t j = 0;
+                    for (; j < d->list.len; j++) {
+                        ast_node_t *m = (ast_node_t *)d->list.data[j];
+                        if (m->a && m->a->kind == AST_LITERAL) {
+                            backing = m->a->value.kind;
+                            break;
+                        }
+                    }
+                }
+                sym->enum_val_kind = backing;
+                if (sym->type) sym->type->enum_val_kind = backing;
                 long long next = 0;
                 {
                     size_t j = 0;
                     for (; j < d->list.len; j++) {
                         ast_node_t *m = (ast_node_t *)d->list.data[j];
                         symbol_t *em = symbol_new(s->a, SYM_ENUM_MEMBER, m->name);
-                        if (m->a && m->a->kind == AST_LITERAL &&
-                            m->a->value.kind == TV_INT)
-                            next = (long long)m->a->value.as.i;
-                        em->enum_value = next++;
+                        em->enum_val_kind = backing;
+                        if (m->a && m->a->kind == AST_LITERAL) {
+                            if (m->a->value.kind != backing) {
+                                SERR(s, 91, &m->span,
+                                     "enum '%s' is %s-backed; member '%s' cannot use a "
+                                     "%s value",
+                                     d->name, tv_kind_name(backing), m->name,
+                                     tv_kind_name(m->a->value.kind));
+                            } else
+                                switch (backing) {
+                                case TV_INT:
+                                    next = (long long)m->a->value.as.i;
+                                    break;
+                                case TV_FLOAT:
+                                    em->enum_value_f = m->a->value.as.f;
+                                    break;
+                                case TV_STRING:
+                                    em->enum_value_str =
+                                        arena_strdup(s->a, m->a->value.as.s);
+                                    break;
+                                default:
+                                    break;
+                                }
+                        } else if (backing != TV_INT) {
+                            SERR(s, 92, &m->span,
+                                 "member '%s' of %s-backed enum '%s' needs an explicit "
+                                 "value",
+                                 m->name, tv_kind_name(backing), d->name);
+                        }
+                        if (backing == TV_INT) em->enum_value = next++;
                         em->type = sym->type;
                         if (scope_define(s->a, sym->members, em))
                             SERR(s, 1, &m->span, "duplicate enum member '%s'", m->name);
@@ -350,6 +430,7 @@ void sema_collect(sema_t *s, ast_node_t *program)
             }
         }
     }
+    s->file = save_file;
 }
 
 static func_sig_t *find_sig(symbol_t *fsym, ast_node_t *decl)
@@ -523,7 +604,8 @@ static void check_function(sema_t *s, ast_node_t *fn, symbol_t *owner, func_sig_
             for (; i < sc->symbols.len; i++) {
                 symbol_t *p = (symbol_t *)sc->symbols.data[i];
                 if (p->kind == SYM_PARAM && !p->used && p->decl && p->name &&
-                    p->name[0] != '_' && strcmp(p->name, "this") != 0)
+                    p->name[0] != '_' && !ast_name_is_err(p->name) &&
+                    strcmp(p->name, "this") != 0)
                     SERR(s, 62, &p->decl->span,
                          "unused parameter '%s' (prefix with '_' if intentional)",
                          p->name);
@@ -563,22 +645,26 @@ void sema_check_unused_funcs(sema_t *s)
         }
     }
     if (!has_entry) return;
+    const char *save_file = s->file;
     size_t i = 0;
     for (; i < s->global->symbols.len; i++) {
         symbol_t *f = (symbol_t *)s->global->symbols.data[i];
         if (f->kind != SYM_FUNC || f->used || f->is_pub) continue;
         if (!f->decl || f->decl->synthetic || f->decl->is_extern) continue;
-        if (!f->name || f->name[0] == '_') continue;
+        if (!f->name || f->name[0] == '_' || ast_name_is_err(f->name)) continue;
         if (strcmp(f->name, "main") == 0 || strcmp(f->name, entry) == 0) continue;
+        sema_use_decl_file(s, f->decl);
         SERR(s, 66, &f->decl->span,
              "unused function '%s' (call it, mark it 'pub', or prefix its name with "
              "'_')",
              f->name);
     }
+    s->file = save_file;
 }
 
 static void check_toplevel(sema_t *s, ast_node_t *d)
 {
+    const char *save_file = sema_use_decl_file(s, d);
     switch (d->kind) {
     case AST_FUNC_DEF: {
         symbol_t *fsym = scope_lookup_local(s->global, d->name);
@@ -604,7 +690,8 @@ static void check_toplevel(sema_t *s, ast_node_t *d)
                         if (f && m->a->kind == AST_STRUCT_LIT && f->type &&
                             f->type->kind == TY_STRUCT)
                             s->expected = f->type;
-                        else if (f && m->a->kind == AST_LITERAL)
+                        else if (f && (m->a->kind == AST_LITERAL ||
+                                       m->a->kind == AST_ARRAY_LIT))
                             s->expected = f->type;
                         vt = sema_check_expr(s, m->a);
                     }
@@ -648,6 +735,7 @@ static void check_toplevel(sema_t *s, ast_node_t *d)
     default:
         break;
     }
+    s->file = save_file;
 }
 
 static void lint_lang_types(sema_t *s, ast_node_t *n)
@@ -682,13 +770,16 @@ static void lint_lang_types(sema_t *s, ast_node_t *n)
 void sema_check_pass(sema_t *s, ast_node_t *program)
 {
     {
+        const char *save_file = s->file;
         size_t i = 0;
         for (; i < program->list.len; i++) {
             ast_node_t *d = (ast_node_t *)program->list.data[i];
             d->origin_lang = s->lang;
             if (d->synthetic) continue;
+            sema_use_decl_file(s, d);
             lint_lang_types(s, d);
         }
+        s->file = save_file;
     }
     /* A top-level `const NAME := <expr>` (no type annotation) leaves its symbol's
      * type NULL after sema_collect(); sema_check_var_decl() below is what fills

@@ -1,0 +1,184 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// A Persian event card, drawn with std/image alone: right-to-left text,
+// a headline sized to fill its box, centered lines, right- and
+// left-aligned rows, and Latin text mixed into Persian sentences.
+//
+// The three things this exists to show:
+//
+//   1. RTL is automatic. DrawTextStyled shapes Arabic letters into their
+//      contextual forms and reorders the line for direction on its own,
+//      so drawing Persian is the same call as drawing English. The
+//      numbers inside a Persian sentence still read left to right,
+//      because the bidi algorithm says so and not because this program
+//      arranged it.
+//   2. Text is measured, not guessed. Every line here is placed by
+//      DrawTextCentered / DrawTextInBox and the headline is sized by
+//      DrawTextFitBox, all of which measure the real ink box of the real
+//      glyphs first - no font-size constant tuned by eye.
+//   3. It degrades honestly. Persian needs a font that has Persian in
+//      it; FindArabicFont checks coverage rather than a file name, and
+//      when the machine has none the card is drawn in English instead of
+//      a row of empty boxes. Point $SALAM_FONT_ARABIC at any font (the
+//      free Vazirmatn is a good one) to see the Persian version.
+//
+// Checked against a `.expect` (every listed line must appear) rather than a
+// `.out` (whole output must match). Everything printed after the font is
+// found varies by machine - the font path, whether it covers Persian, where
+// the temp file landed - and a machine with no font at all stops before any
+// of it. The bidi results above the font check are what hold everywhere, and
+// they are what the expectation asserts.
+
+package main
+
+import image
+import os
+import filepath
+
+const CARD_W := 700
+const CARD_H := 420
+
+const TITLE_FA := "دعوت‌نامه"
+const HEAD_FA := "کارگاه زبان برنامه‌نویسی سلام"
+const WHEN_FA := "پنج‌شنبه ۲۵ مرداد - ساعت ۱۸:۳۰"
+const WHERE_FA := "تهران، خیابان آزادی، پلاک 120"
+const NOTE_FA := "ورود برای همه آزاد است (ظرفیت 250 نفر)"
+
+const TITLE_EN := "Invitation"
+const HEAD_EN := "Salam Programming Language Workshop"
+const WHEN_EN := "Thursday, August 16 - 18:30"
+const WHERE_EN := "Tehran, Azadi Street, No. 120"
+const NOTE_EN := "Open to everyone (250 seats)"
+
+func paint_background(img &: image.Image):
+    top := image.RGB(252, 251, 248)
+    bottom := image.RGB(232, 238, 246)
+    mut y := 0
+    until y < img.height:
+        t := (y as f64) / ((img.height - 1) as f64)
+        image.DrawLine(img, 0, y, img.width - 1, y, image.LerpColor(top, bottom, t))
+        y += 1
+    end
+    // A double border, and a band behind the headline.
+    image.DrawRect(img, 0, 0, img.width, img.height, image.RGB(60, 80, 110))
+    image.DrawRect(img, 6, 6, img.width - 12, img.height - 12, image.RGB(150, 170, 195))
+    image.DrawRectFilled(img, 40, 120, img.width - 80, 84, image.RGBA(60, 80, 110, 22))
+end
+
+func draw_card(img &: image.Image, f: image.Font, title: str, head: str, when_line: str, where_line: str, note: str): f64:
+    ink := image.RGB(28, 34, 52)
+    accent := image.RGB(150, 40, 60)
+
+    // Title: centered on the card's own width, at a fixed size.
+    mut big := image.TextStyle {}
+    big.size = 44.0
+    image.DrawTextCentered(img, (img.width as f64) * 0.5, 70.0, title, accent, f, big)
+
+    // Headline: whatever size makes it fill 92% of the band, measured
+    // rather than assumed - the Persian and English versions of this
+    // string are wildly different lengths and both have to fit.
+    style := image.TextStyle {}
+    used := image.DrawTextFitBox(img, 40.0, 120.0, (img.width - 80) as f64, 84.0, head, ink, f, style, 0.92, 60.0)
+
+    // Body rows: the text aligns to the side its language reads from, so
+    // the same code lays out a Persian card and an English one.
+    mut body := image.TextStyle {}
+    body.size = 26.0
+    mut align := image.TextAlignRight
+    if image.BaseDirection(head) == image.TextDirLTR:
+        align = image.TextAlignLeft
+    end
+    image.DrawTextInBox(img, 60.0, 230.0, (img.width - 120) as f64, 40.0, when_line, ink, f, body, align, image.TextVAlignMiddle)
+    image.DrawTextInBox(img, 60.0, 275.0, (img.width - 120) as f64, 40.0, where_line, ink, f, body, align, image.TextVAlignMiddle)
+
+    mut small := image.TextStyle {}
+    small.size = 20.0
+    image.DrawTextCentered(img, (img.width as f64) * 0.5, 345.0, note, image.RGB(90, 100, 120), f, small)
+
+    // A footer in the other direction entirely, on the same card.
+    mut foot := image.TextStyle {}
+    foot.size = 16.0
+    foot.tracking = 1.5
+    image.DrawTextInBox(img, 40.0, 375.0, (img.width - 80) as f64, 24.0, "salam-lang.org", image.RGB(120, 130, 150), f, foot, image.TextAlignLeft, image.TextVAlignMiddle)
+    image.DrawTextInBox(img, 40.0, 375.0, (img.width - 80) as f64, 24.0, "std/image", image.RGB(120, 130, 150), f, foot, image.TextAlignRight, image.TextVAlignMiddle)
+    ret used
+end
+
+func main:
+    // The text pipeline is pure: these answers are the same on every
+    // machine, font or no font.
+    if image.IsRTLText(HEAD_FA):
+        println "persian is rtl: yes"
+    end
+    if image.BaseDirection(HEAD_FA) == image.TextDirRTL:
+        println "persian base: rtl"
+    end
+    if image.BaseDirection(HEAD_EN) == image.TextDirLTR:
+        println "english base: ltr"
+    end
+    // Shaping changes the string (letters become contextual forms) and
+    // reordering changes it again - neither is a no-op for Persian.
+    if image.ShapeArabic(HEAD_FA) != HEAD_FA:
+        println "shaping applied: yes"
+    end
+    if image.ToVisualOrder(HEAD_FA, image.TextDirAuto) != image.ShapeArabic(HEAD_FA):
+        println "reordered: yes"
+    end
+    if image.ToVisualOrder(HEAD_EN, image.TextDirAuto) == HEAD_EN:
+        println "latin untouched: yes"
+    end
+
+    arabic_path := image.FindArabicFont()
+    mut font_ok := false
+    mut font := image.LoadFont(arabic_path, font_ok)
+    persian := font_ok
+    if !font_ok:
+        // No Persian-capable font here: fall back to any font at all,
+        // and to the English text that one can actually draw.
+        font = image.LoadSystemFont(font_ok)
+    end
+    if !font_ok:
+        println "no usable font on this machine"
+        ret 0
+    end
+    println "font: " + image.FindSystemFont()
+
+    mut img := image.New(CARD_W, CARD_H)
+    paint_background(img)
+    mut used := 0.0
+    if persian:
+        println "language: persian"
+        used = draw_card(img, font, TITLE_FA, HEAD_FA, WHEN_FA, WHERE_FA, NOTE_FA)
+    else:
+        println "language: english (no persian-capable font found)"
+        used = draw_card(img, font, TITLE_EN, HEAD_EN, WHEN_EN, WHERE_EN, NOTE_EN)
+    end
+    // The headline was sized to fit, so it is never wider than its band.
+    if used > 0.0:
+        println "headline sized: ok"
+    end
+
+    outdir := filepath.Join(os.TempDir(), "salam_rtl_card")
+    os.MkdirAll(outdir)
+    png_path := filepath.Join(outdir, "card.png")
+    if image.Save(img, png_path):
+        println "saved png: ok"
+    end
+    println "file: " + png_path
+
+    image.Free(img)
+    image.FreeFont(font)
+    ret 0
+end

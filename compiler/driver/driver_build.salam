@@ -129,7 +129,8 @@ import pf "../prof_self.salam"
         // per-object cache below, so this only applies to a real `salam
         // build` producing one executable.
         if opt.command == CMD_BUILD && !opt.force:
-            predicted_output := str.Len(opt.output) > 0 ? opt.output : output_stem_of(opt.inputs.get(0)) + ".exe"
+            predicted_name := str.Len(opt.output) > 0 ? opt.output : output_stem_of(opt.inputs.get(0))
+            predicted_output := exe_name_for(predicted_name, opt.llvm_target)
             sig0 := build_signature(opt)
             if build_up_to_date(scratch, sig0, predicted_output):
                 lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "up to date: " + predicted_output)
@@ -196,7 +197,7 @@ import pf "../prof_self.salam"
             // importing it stops compiling. The $PATH pass still exists for
             // the case it was added for - an install that ships no toolchain
             // at all, most notably a plain source checkout.
-            ladder := ["clang", "gcc", "tcc"] as str[3]
+            ladder := ["clang", "gcc", "tcc"]
             repeat ladder.len() with i:
                 if !found:
                     found = sm.FindBundledTool(ladder[i], resolved)
@@ -523,6 +524,34 @@ import pf "../prof_self.salam"
             wi += 1
         end
 
+        // Two files claiming one package name is not something the language
+        // can express: everything a package exports is mangled as
+        // _Salam_<pkg>_<name> and its generated unit is salam_mod_<stem>.c, so
+        // a local `config.salam` next to std/config produced one .c file
+        // overwriting the other and two different `_Salam_config_New`s in one
+        // link. What reached the programmer was a C compiler complaining about
+        // an incomplete type in code they did not write. Say it here instead,
+        // where both paths are known.
+        repeat w_prog.len() with ci:
+            mut cj := ci + 1
+            until cj < w_prog.len():
+                same_pkg := str.Equals(w_pkg.get(ci), w_pkg.get(cj))
+                same_mod := str.Equals(w_module.get(ci), w_module.get(cj))
+                if !str.Equals(w_path.get(ci), w_path.get(cj)) && (same_pkg || same_mod):
+                    lg.Log(
+                        lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format3(
+                            i18.Tr(
+                                "package name '%s' is claimed by two different files ('%s' and '%s'); rename one of them"
+                            ), co.ArgStr(same_pkg ? w_pkg.get(ci) : w_module.get(ci)),
+                            co.ArgStr(w_path.get(ci)), co.ArgStr(w_path.get(cj))
+                        )
+                    )
+                    all_ok = false
+                end
+                cj += 1
+            end
+        end
+
         sm.DceFinish()
 
         repeat w_prog.len() with bi:
@@ -719,12 +748,18 @@ import pf "../prof_self.salam"
         else:
             mut output := opt.output
             if str.Len(output) == 0:
-                // Not first_module + ".exe": the fixed project entry file
-                // salam.salam names the executable after its directory
-                // (see output_stem_of), and this must agree with
+                // Not first_module: the fixed project entry file salam.salam
+                // names the executable after its directory (see
+                // output_stem_of), and this must agree with
                 // build_up_to_date's predicted_output above.
-                output = output_stem_of(opt.inputs.get(0)) + ".exe"
+                output = output_stem_of(opt.inputs.get(0))
             end
+            // This backend only ever builds for the host - build_impl sends
+            // every --target= to the LLVM one - so the extension question is
+            // "is this host Windows", which is what exe_name_for answers for
+            // the empty triple. An explicit --output goes through it too, so
+            // nobody ends up with a Windows binary cmd.exe won't run.
+            output = exe_name_for(output, opt.llvm_target)
             mut lm := " -lm"
             if SALAM_OS_WINDOWS:
                 if use_tcc:

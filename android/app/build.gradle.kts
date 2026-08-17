@@ -2,6 +2,23 @@ plugins {
     alias(libs.plugins.android.application)
 }
 
+val repoVersionFile = rootProject.projectDir.parentFile.resolve("VERSION")
+val repoVersionName =
+    repoVersionFile
+        .takeIf { it.isFile }
+        ?.readText()
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+        ?: error("VERSION file is missing or empty: ${repoVersionFile.absolutePath}")
+
+fun versionCodeOf(name: String): Int {
+    val parts =
+        Regex("""^(\d+)\.(\d+)(?:\.(\d+))?""").find(name)
+            ?: error("VERSION '$name' is not a semantic version (expected MAJOR.MINOR[.PATCH])")
+    val (major, minor, patch) = parts.destructured
+    return major.toInt() * 10000 + minor.toInt() * 100 + (patch.toIntOrNull() ?: 0)
+}
+
 android {
     namespace = "ir.salamlang.app"
     compileSdk {
@@ -15,8 +32,10 @@ android {
         applicationId = "ir.salamlang.app"
         minSdk = 24
         targetSdk = 36
-        versionCode = project.findProperty("appVersionCode")?.toString()?.toIntOrNull() ?: 1
-        versionName = project.findProperty("appVersionName")?.toString() ?: "1.0"
+        versionCode =
+            project.findProperty("appVersionCode")?.toString()?.toIntOrNull()
+                ?: versionCodeOf(repoVersionName)
+        versionName = project.findProperty("appVersionName")?.toString() ?: repoVersionName
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -35,7 +54,8 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
@@ -53,6 +73,28 @@ android {
         targetCompatibility = JavaVersion.VERSION_11
     }
 
+    buildFeatures {
+        buildConfig = false
+    }
+
+    androidResources {
+        localeFilters += setOf("fa", "en")
+    }
+
+    packaging {
+        resources {
+            excludes += setOf(
+                "META-INF/*.version",
+                "META-INF/DEPENDENCIES",
+                "META-INF/LICENSE*",
+                "META-INF/NOTICE*",
+                "META-INF/*.kotlin_module",
+                "kotlin/**",
+                "DebugProbesKt.bin",
+            )
+        }
+    }
+
     lint {
         checkReleaseBuilds = false
         abortOnError = false
@@ -61,10 +103,7 @@ android {
 
 dependencies {
     implementation(libs.androidx.core.ktx)
-    implementation(libs.androidx.appcompat)
-    implementation(libs.material)
     implementation(libs.androidx.activity)
-    implementation(libs.androidx.constraintlayout)
     implementation(libs.androidx.core.splashscreen)
     implementation(libs.androidx.webkit)
     testImplementation(libs.junit)

@@ -135,12 +135,32 @@ const char *cg_cident(cg_t *cg, const char *name)
     if (isdigit((unsigned char)name[0])) sb_putc(&b, '_');
     {
         const unsigned char *p = (const unsigned char *)name;
+        /*
+         * A LEADING underscore is copied through as one, not doubled. C
+         * reserves every identifier starting with "__" for the
+         * implementation, and gcc really does use that space: on x86-64 it
+         * predefines __k8 as an architecture macro, so Salam's `_k8` (the
+         * ordinary "declared but unused" spelling) became C's `__k8` and
+         * expanded to `1` - "expected identifier before numeric constant",
+         * which took out compiler/tests_port/interp_test.salam entirely.
+         * Interior underscores still double, so the mangling stays
+         * one-to-one: `_a_b` -> `_a__b`, while `a_b` -> `a__b`.
+         */
+        if (*p == '_') {
+            sb_putc(&b, '_');
+            p++;
+        }
         for (; *p; p++)
             cg_put_ident_byte(&b, *p);
     }
     const char *r = arena_strdup(cg->a, sb_cstr(&b));
     sb_free(&b);
-    return r;
+    /* Copying the leading underscore through as one lets a name land exactly
+     * on a C keyword that the doubling used to step over: `_Bool` came out as
+     * `__Bool` before, and as plain `_Bool` now - "two or more data types in
+     * declaration specifiers". The suffix is the same escape the all-alnum
+     * path above already applies to `int`, `while` and friends. */
+    return cg_is_c_keyword(r) ? cg_fmt(cg, "%s_", r) : r;
 }
 
 static const char *base_ctype(const char *base)
@@ -163,20 +183,49 @@ static const char *base_ctype(const char *base)
     return base;
 }
 
-void parse_typestr(const char *ts, char *base, size_t cap, bool *ptr, vec_t *dims,
-                   arena_t *a)
+/*
+ * A lambda, closure or function value. All of them lower to the `void*` that
+ * carries the closure environment, which matters beyond the C spelling: a
+ * callee takes that pointer as a plain `void*` and may write through it (a
+ * counter closure updates the state it captured), so such a binding must not
+ * be const-qualified even when the Salam name is immutable.
+ */
+bool type_is_callable(const char *ts)
+{
+    return ts && (!strncmp(ts, "func(", 5) || !strncmp(ts, "externfunc(", 11));
+}
+
+void parse_typestr_ex(const char *ts, char *base, size_t cap, bool *ptr, vec_t *dims,
+                      arena_t *a, int *elem_ptr, int *ptr_depth)
 {
     *ptr = false;
+    if (elem_ptr) *elem_ptr = 0;
+    if (ptr_depth) *ptr_depth = 0;
     if (dims) vec_init(dims);
     size_t len = strlen(ts);
 
-    if (len && ts[len - 1] == '*') {
+    /* Stars nest: Vector<Edge*> lays its data pointer out as "Edge**", so the
+     * whole trailing run is counted rather than just the last one. */
+    while (len && ts[len - 1] == '*') {
         *ptr = true;
+        if (ptr_depth) (*ptr_depth)++;
         len--;
     }
 
     const char *lb = memchr(ts, '[', len);
     size_t blen = lb ? (size_t)(lb - ts) : len;
+    /*
+     * An array OF pointers spells its stars between the element name and
+     * the first '[' - "Edge*[6]" is six Edge*, not a pointer to anything.
+     * They have to come off `base` here: everything downstream feeds the
+     * base through cg_cident, which would hex-escape the '*' into a type
+     * name ("Edge_2a") that was never declared. The count travels out via
+     * elem_ptr so callers can put the stars back on the element type.
+     */
+    while (blen && ts[blen - 1] == '*') {
+        blen--;
+        if (elem_ptr) (*elem_ptr)++;
+    }
     if (lb && dims) {
         const char *p = lb;
         while (p < ts + len && *p == '[') {
@@ -197,6 +246,12 @@ void parse_typestr(const char *ts, char *base, size_t cap, bool *ptr, vec_t *dim
     if (blen >= cap) blen = cap - 1;
     memcpy(base, ts, blen);
     base[blen] = 0;
+}
+
+void parse_typestr(const char *ts, char *base, size_t cap, bool *ptr, vec_t *dims,
+                   arena_t *a)
+{
+    parse_typestr_ex(ts, base, cap, ptr, dims, a, NULL, NULL);
 }
 
 bool cg_is_int_typestr(const char *ts)
@@ -415,17 +470,64 @@ const char *cg_ctype(cg_t *cg, const char *ts)
         iface[il] = 0;
         return cg_fmt(cg, "_Salam_dyn_%s%s", cg_cident(cg, iface), suf ? "*" : "");
     }
-    if (!strncmp(ts, "func(", 5) || !strncmp(ts, "externfunc(", 11)) return "void*";
+    if (type_is_callable(ts)) return "void*";
     char base[96];
     bool ptr;
+    int eptr, pdepth;
     vec_t dims;
-    parse_typestr(ts, base, sizeof(base), &ptr, &dims, cg->a);
+    parse_typestr_ex(ts, base, sizeof(base), &ptr, &dims, cg->a, &eptr, &pdepth);
     const char *bc = base_ctype(base);
 
     if (bc == base) bc = arena_strdup(cg->a, cg_cident(cg, base));
+    for (; eptr > 0; eptr--)
+        bc = cg_fmt(cg, "%s*", bc);
     if (dims.len) return cg_fmt(cg, "%s*", bc);
-    if (ptr) return cg_fmt(cg, "%s*", bc);
+    for (; pdepth > 0; pdepth--)
+        bc = cg_fmt(cg, "%s*", bc);
     return bc;
+}
+
+/*
+ * The C spelling of an array type with no declarator attached - "int32_t[3]"
+ * - which is what a compound literal needs in front of its braces. NULL for
+ * anything that is not a plain array of a nameable element type, so callers
+ * can fall back to the bare brace form.
+ */
+const char *cg_array_ctype(cg_t *cg, const char *ts)
+{
+    char base[96];
+    bool ptr;
+    int eptr, pdepth;
+    vec_t dims;
+    if (!ts || !*ts || cg_is_slice_ts(ts) || !strncmp(ts, "Variant<", 8) ||
+        !strncmp(ts, "dyn ", 4) || !strncmp(ts, "func(", 5))
+        return NULL;
+    parse_typestr_ex(ts, base, sizeof(base), &ptr, &dims, cg->a, &eptr, &pdepth);
+    if (!dims.len || ptr) return NULL;
+    {
+        const char *bc = base_ctype(base);
+        sb_t s;
+        size_t i = 0;
+        const char *r;
+        if (bc == base) bc = arena_strdup(cg->a, cg_cident(cg, base));
+        for (; eptr > 0; eptr--)
+            bc = cg_fmt(cg, "%s*", bc);
+        sb_init(&s);
+        sb_puts(&s, bc);
+        for (i = 0; i < dims.len; i++) {
+            char b[32];
+            size_t d = *(size_t *)dims.data[i];
+            if (!d) {
+                sb_free(&s);
+                return NULL;
+            }
+            sal_snprintf(b, sizeof(b), "[%zu]", d);
+            sb_puts(&s, b);
+        }
+        r = arena_strdup(cg->a, sb_cstr(&s));
+        sb_free(&s);
+        return r;
+    }
 }
 
 const char *cg_decl(cg_t *cg, const char *ts, const char *name)
@@ -449,10 +551,13 @@ const char *cg_decl(cg_t *cg, const char *ts, const char *name)
         return cg_fmt(cg, "void* %s", cg_cident(cg, name));
     char base[96];
     bool ptr;
+    int eptr, pdepth;
     vec_t dims;
-    parse_typestr(ts, base, sizeof(base), &ptr, &dims, cg->a);
+    parse_typestr_ex(ts, base, sizeof(base), &ptr, &dims, cg->a, &eptr, &pdepth);
     const char *bc = base_ctype(base);
     if (bc == base) bc = arena_strdup(cg->a, cg_cident(cg, base));
+    for (; eptr > 0; eptr--)
+        bc = cg_fmt(cg, "%s*", bc);
     name = cg_cident(cg, name);
     if (dims.len) {
         sb_t s;
@@ -472,7 +577,8 @@ const char *cg_decl(cg_t *cg, const char *ts, const char *name)
         sb_free(&s);
         return r;
     }
-    if (ptr) return cg_fmt(cg, "%s* %s", bc, name);
+    for (; pdepth > 0; pdepth--)
+        bc = cg_fmt(cg, "%s*", bc);
     return cg_fmt(cg, "%s %s", bc, name);
 }
 

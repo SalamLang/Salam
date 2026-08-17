@@ -1,0 +1,186 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import testing
+import encoding.url
+import encoding.query
+
+// Editing the query string of a URL and writing the URL back out.
+//
+// The thing that makes this usable is that the parameter order survives:
+// decoding a query string and encoding it again gives back the same
+// text, so removing one parameter changes only that parameter and the
+// rest of the URL is untouched.
+
+func test_read_params():
+    u := url.Parse("https://example.com/search?q=salam&page=2&lang=en")
+    q := url.Query(u)
+    testing.AssertEqStr(query.Get(u.raw_query, "q"), "salam")
+    testing.AssertEqStr(query.Get(u.raw_query, "page"), "2")
+    testing.AssertEqInt(query.Size(q), 3)
+    names := url.ParamNames(u)
+    defer names.free()
+    // the names come back in the order they appear in the URL
+    testing.AssertEqInt(names.len(), 3)
+    testing.AssertEqStr(names.get(0), "q")
+    testing.AssertEqStr(names.get(1), "page")
+    testing.AssertEqStr(names.get(2), "lang")
+end
+
+// Decode then encode has to be the identity, or every edit below would
+// quietly reshuffle the URL.
+func test_order_is_stable():
+    qs := "z=1&a=2&m=3&b=4"
+    testing.AssertEqStr(query.Encode(query.Decode(qs)), qs)
+    u := url.Parse("https://example.com/p?z=1&a=2&m=3")
+    mut same := u
+    url.SetParam(same, "z", "1")
+    testing.AssertEqStr(url.String(same), "https://example.com/p?z=1&a=2&m=3")
+end
+
+// The case the whole thing exists for: drop one parameter, hand back the
+// URL as a string.
+func test_remove_one_param():
+    mut u := url.Parse("https://example.com/search?q=salam&utm_source=news&page=2")
+    testing.AssertTrue(url.RemoveParam(u, "utm_source"))
+    testing.AssertEqStr(url.String(u), "https://example.com/search?q=salam&page=2")
+    // removing something that is not there changes nothing
+    testing.AssertFalse(url.RemoveParam(u, "absent"))
+    testing.AssertEqStr(url.String(u), "https://example.com/search?q=salam&page=2")
+    // removing the last one leaves no '?' behind
+    url.RemoveParam(u, "q")
+    url.RemoveParam(u, "page")
+    testing.AssertEqStr(u.raw_query, "")
+    testing.AssertEqStr(url.String(u), "https://example.com/search")
+end
+
+func test_clear_query():
+    mut u := url.Parse("https://example.com/a/b?x=1&y=2#keep")
+    url.ClearQuery(u)
+    testing.AssertEqStr(u.raw_query, "")
+    // the fragment and everything else survive
+    testing.AssertEqStr(url.String(u), "https://example.com/a/b#keep")
+end
+
+// Stripping tracking parameters without having to name each one.
+func test_keep_only():
+    mut u := url.Parse("https://shop.example.com/p/42?id=42&utm_source=x&utm_medium=y&ref=z&colour=red")
+    mut keep := Vector {} as Vector<str>
+    defer keep.free()
+    keep.push("id")
+    keep.push("colour")
+    url.KeepParams(u, keep)
+    testing.AssertEqStr(url.String(u), "https://shop.example.com/p/42?id=42&colour=red")
+end
+
+func test_set_param():
+    mut u := url.Parse("https://example.com/?page=1&sort=asc")
+    // replacing keeps the parameter where it was
+    url.SetParam(u, "page", "7")
+    testing.AssertEqStr(url.String(u), "https://example.com/?page=7&sort=asc")
+    // a new parameter goes on the end
+    url.SetParam(u, "limit", "50")
+    testing.AssertEqStr(url.String(u), "https://example.com/?page=7&sort=asc&limit=50")
+    // and on a URL that had no query at all
+    mut bare := url.Parse("https://example.com/x")
+    url.SetParam(bare, "a", "1")
+    testing.AssertEqStr(url.String(bare), "https://example.com/x?a=1")
+end
+
+// A repeated key keeps all of its values, and removing it removes them
+// all at once.
+func test_multi_value():
+    u := url.Parse("https://example.com/?tag=a&tag=b&tag=c&other=1")
+    vals := query.GetAll(u.raw_query, "tag")
+    testing.AssertEqInt(vals.len(), 3)
+    testing.AssertEqStr(vals.get(0), "a")
+    testing.AssertEqStr(vals.get(2), "c")
+    // Size counts distinct keys, not values
+    testing.AssertEqInt(query.Size(url.Query(u)), 2)
+    mut m := u
+    url.RemoveParam(m, "tag")
+    testing.AssertEqStr(url.String(m), "https://example.com/?other=1")
+end
+
+// Values are decoded on the way in and re-encoded on the way out, so a
+// parameter holding a space or a separator survives an edit.
+func test_encoded_values():
+    mut u := url.Parse("https://example.com/s?q=salam+lang&f=a%26b&drop=1")
+    testing.AssertEqStr(query.Get(u.raw_query, "q"), "salam lang")
+    testing.AssertEqStr(query.Get(u.raw_query, "f"), "a&b")
+    url.RemoveParam(u, "drop")
+    // the surviving values keep their meaning after the rewrite
+    testing.AssertEqStr(query.Get(u.raw_query, "q"), "salam lang")
+    testing.AssertEqStr(query.Get(u.raw_query, "f"), "a&b")
+    // and the separator inside a value is still escaped, not literal,
+    // which is what stops it splitting into a parameter of its own
+    testing.AssertContains(u.raw_query, "a%26b")
+    testing.AssertEqInt(query.Size(url.Query(u)), 2)
+end
+
+// Working on the QueryMap directly, for callers not holding a URL.
+func test_query_map_api():
+    mut q := query.Decode("a=1&b=2&c=3")
+    testing.AssertTrue(query.Remove(q, "b"))
+    testing.AssertFalse(query.Remove(q, "b"))
+    testing.AssertEqStr(query.Encode(q), "a=1&c=3")
+    ks := query.Keys(q)
+    defer ks.free()
+    testing.AssertEqInt(ks.len(), 2)
+    testing.AssertEqStr(ks.get(0), "a")
+
+    mut built := query.NewQueryMap()
+    query.Add(built, "x", "1")
+    query.Add(built, "x", "2")
+    query.Add(built, "y", "3")
+    testing.AssertEqStr(query.Encode(built), "x=1&x=2&y=3")
+    query.Set(built, "x", "9")
+    // Set replaces every value but holds the position
+    testing.AssertEqStr(query.Encode(built), "x=9&y=3")
+
+    mut empty := query.NewQueryMap()
+    testing.AssertEqStr(query.Encode(empty), "")
+    testing.AssertFalse(query.Remove(empty, "nothing"))
+end
+
+// The path, fragment and host must not be disturbed by query editing.
+func test_rest_of_url_untouched():
+    mut u := url.Parse("https://user@a.b.example.co.uk:8443/deep/path%20x?keep=1&drop=2#frag")
+    url.RemoveParam(u, "drop")
+    testing.AssertEqStr(u.scheme, "https")
+    testing.AssertEqStr(u.userinfo, "user")
+    testing.AssertEqStr(u.host, "a.b.example.co.uk")
+    testing.AssertEqInt(u.port, 8443)
+    testing.AssertEqStr(u.path, "/deep/path%20x")
+    testing.AssertEqStr(u.fragment, "frag")
+    testing.AssertEqStr(url.Domain(u), "example.co.uk")
+    testing.AssertEqStr(url.String(u), "https://user@a.b.example.co.uk:8443/deep/path%20x?keep=1#frag")
+end
+
+func main:
+    test_read_params()
+    test_order_is_stable()
+    test_remove_one_param()
+    test_clear_query()
+    test_keep_only()
+    test_set_param()
+    test_multi_value()
+    test_encoded_values()
+    test_query_map_api()
+    test_rest_of_url_untouched()
+    testing.Summary()
+    ret 0
+end

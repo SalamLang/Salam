@@ -606,6 +606,108 @@ const char *jsg_call_args(jg_t *g, ast_node_t *call, func_sig_t *sig)
     }
 }
 
+/*
+ * Assemble a call, boxing any `&:` argument in a one-element array and
+ * writing its mutated value back into the caller's variable afterward - JS
+ * has no address-of for a primitive, so passing one by reference needs an
+ * object both sides can share (the callee reads/writes it via `[0]`, see
+ * the `n->is_ref` branch in jsg_expr's AST_IDENTIFIER case). Only a call
+ * whose signature actually has a `&:` parameter pays for this; the
+ * overwhelmingly common case falls through to the plain single-expression
+ * form, unchanged from before.
+ *
+ * `recv`, when not NULL, is a pre-rendered receiver expression emitted
+ * before the argument list (the method-call form, `recv.fn(args)` written
+ * as `fn(recv, args)` in the output's flat-function style).
+ */
+/* An enum member's JS value, in its backing type. JS strings/numbers are
+ * value types compared by content with ===, so unlike C/LLVM no separate
+ * comparison codegen is needed once the member itself is right. */
+static const char *jsg_enum_member_value(jg_t *g, symbol_t *m)
+{
+    cg_t *cg = &g->cg;
+    switch (m->enum_val_kind) {
+    case TV_FLOAT: {
+        char buf[64];
+        sal_snprintf(buf, sizeof buf, "%.17g", m->enum_value_f);
+        return cg_fmt(cg, "%s", buf);
+    }
+    case TV_STRING:
+        return jsg_escape(g, m->enum_value_str ? m->enum_value_str : "");
+    default:
+        return cg_fmt(cg, "%lld", (long long)m->enum_value);
+    }
+}
+
+static const char *jsg_call_finish(jg_t *g, ast_node_t *call, func_sig_t *sig,
+                                   const char *fn_expr, const char *recv)
+{
+    cg_t *cg = &g->cg;
+    bool any_ref = false;
+    if (sig && sig->decl) {
+        size_t i = 0;
+        for (; i < call->list.len && i < sig->decl->list.len; i++) {
+            ast_node_t *p = (ast_node_t *)sig->decl->list.data[i];
+            ast_node_t *arg = (ast_node_t *)call->list.data[i];
+            if (p->kind == AST_PARAM && p->is_ref && arg && arg->kind == AST_IDENTIFIER) {
+                any_ref = true;
+                break;
+            }
+        }
+    }
+    if (!any_ref) {
+        const char *as = jsg_call_args(g, call, sig);
+        return cg_fmt(cg, "%s(%s%s%s)", fn_expr, recv ? recv : "",
+                      (recv && as[0]) ? ", " : "", as);
+    }
+    {
+        sb_t pre, argb, post;
+        const char *rvar = jsg_fresh(g, "__r");
+        const char *r;
+        sb_init(&pre);
+        sb_init(&argb);
+        sb_init(&post);
+        if (recv) sb_puts(&argb, recv);
+        {
+            size_t i = 0;
+            for (; i < call->list.len; i++) {
+                ast_node_t *p = i < sig->decl->list.len
+                                    ? (ast_node_t *)sig->decl->list.data[i]
+                                    : NULL;
+                ast_node_t *arg = (ast_node_t *)call->list.data[i];
+                if (i || recv) sb_puts(&argb, ", ");
+                if (p && p->kind == AST_PARAM && p->is_ref && arg &&
+                    arg->kind == AST_IDENTIFIER) {
+                    const char *box = jsg_fresh(g, "__ref");
+                    sb_puts(&pre,
+                            cg_fmt(cg, "const %s = [%s]; ", box, jsg_expr_p(g, arg, 0)));
+                    sb_puts(&argb, box);
+                    sb_puts(&post,
+                            cg_fmt(cg, " %s = %s[0];", jsg_expr_p(g, arg, 0), box));
+                } else {
+                    sb_puts(&argb, jsg_expr_p(g, arg, 0));
+                }
+            }
+        }
+        if (sig->decl) {
+            size_t np = sig->decl->list.len;
+            size_t i = call->list.len;
+            for (; i < np; i++) {
+                ast_node_t *param = (ast_node_t *)sig->decl->list.data[i];
+                if (!param->a) continue;
+                if (i || recv) sb_puts(&argb, ", ");
+                sb_puts(&argb, jsg_expr_p(g, param->a, 0));
+            }
+        }
+        r = cg_fmt(cg, "(() => { %sconst %s = %s(%s);%s return %s; })()", sb_cstr(&pre),
+                   rvar, fn_expr, sb_cstr(&argb), sb_cstr(&post), rvar);
+        sb_free(&pre);
+        sb_free(&argb);
+        sb_free(&post);
+        return r;
+    }
+}
+
 static const char *jsg_handler_base(jg_t *g, const char *extname, ast_node_t **args,
                                     size_t nargs)
 {
@@ -885,6 +987,36 @@ static const char *jsg_call_ident(jg_t *g, ast_node_t *n, ast_node_t *callee)
                 return cg_fmt(cg, "salam_str_hash(%s)", jsg_expr_p(g, a0, 0));
             return cg_fmt(cg, "salam_hash_int(%s)", jsg_expr_p(g, a0, 0));
         }
+        /*
+         * The atomic intrinsics are plain reads and writes here. That is not
+         * a shortcut: the JS target has no threads at all - spawn is
+         * unsupported a line below - so a single cell can never be touched
+         * concurrently and every one of these is already indivisible. The
+         * arrow functions exist only to evaluate each operand exactly once,
+         * the way the C and LLVM lowerings do.
+         */
+        if (salam_atomic_arity(nm) && (int)n->list.len == salam_atomic_arity(nm) &&
+            !scope_lookup(cg->sem->global, nm)) {
+            const char *p = jsg_expr_p(g, (ast_node_t *)n->list.data[0], 0);
+            if (!strcmp(nm, "atomic_load")) return cg_fmt(cg, "(%s)[0]", p);
+            {
+                const char *v = jsg_expr_p(g, (ast_node_t *)n->list.data[1], 0);
+                if (!strcmp(nm, "atomic_store"))
+                    return cg_fmt(cg, "((a,b)=>{a[0]=b;})(%s,%s)", p, v);
+                if (!strcmp(nm, "atomic_add"))
+                    return cg_fmt(cg, "((a,b)=>{a[0]=a[0]+b;return a[0];})(%s,%s)", p, v);
+                if (!strcmp(nm, "atomic_swap"))
+                    return cg_fmt(cg, "((a,b)=>{const o=a[0];a[0]=b;return o;})(%s,%s)",
+                                  p, v);
+                {
+                    const char *d = jsg_expr_p(g, (ast_node_t *)n->list.data[2], 0);
+                    return cg_fmt(cg,
+                                  "((a,e,d)=>{if(a[0]===e){a[0]=d;return true;}"
+                                  "return false;})(%s,%s,%s)",
+                                  p, v, d);
+                }
+            }
+        }
         if (!strcmp(nm, "sizeof") || !strcmp(nm, "spawn") || !strcmp(nm, "args") ||
             !strcmp(nm, "listdir"))
             return jsg_unsupported(g, nm);
@@ -936,7 +1068,7 @@ static const char *jsg_call_ident(jg_t *g, ast_node_t *n, ast_node_t *callee)
                 const char *fn = sig ? jsg_fn_name(g, home_pkg ? home_pkg : cg->pkg, NULL,
                                                    nm, fsym, sig, false, inst_fn)
                                      : jsg_ident(g, nm);
-                return cg_fmt(cg, "%s(%s)", fn, jsg_call_args(g, n, sig));
+                return jsg_call_finish(g, n, sig, fn, NULL);
             }
         }
     }
@@ -957,7 +1089,7 @@ static const char *jsg_call_pkg(jg_t *g, ast_node_t *n, symbol_t *pk, ast_node_t
         bool inst = sig && sig->decl && sig->decl->synthetic;
         const char *name =
             jsg_fn_name(g, pk->pkgname, NULL, callee->name, fn, sig, false, inst);
-        return cg_fmt(cg, "%s(%s)", name, jsg_call_args(g, n, sig));
+        return jsg_call_finish(g, n, sig, name, NULL);
     }
 }
 
@@ -1012,10 +1144,21 @@ static const char *jsg_call_method(jg_t *g, ast_node_t *n, ast_node_t *obj,
     symbol_t *msym = ssym ? scope_lookup_local(ssym->members, callee->name) : NULL;
     func_sig_t *sig = msym ? pick_overload(cg, msym, n) : NULL;
     const char *spkg = (ssym && ssym->pkgname) ? ssym->pkgname : cg->pkg;
-    const char *fn = jsg_fn_name(g, spkg, sname, callee->name, msym, sig, false,
-                                 sig && sig->decl && sig->decl->synthetic);
-    const char *as = jsg_call_args(g, n, sig);
-    return cg_fmt(cg, "%s(%s%s%s)", fn, jsg_expr_p(g, obj, 0), as[0] ? ", " : "", as);
+    /*
+     * jsg_function computes this same function's *definition*-side name with
+     * `is_instance = (owner && owner->generic_base) || fn->synthetic` - a
+     * generic instantiation like Vector_str counts even when the individual
+     * method's own AST_FUNC_DEF was never marked synthetic (only the struct
+     * instantiation itself was). Checking sig->decl->synthetic alone here
+     * missed that case, so a call to any Vector<T> (or other generic struct)
+     * method computed a different name than its definition and referenced a
+     * function that was never actually emitted under that name.
+     */
+    bool is_instance =
+        (ssym && ssym->generic_base) || (sig && sig->decl && sig->decl->synthetic);
+    const char *fn =
+        jsg_fn_name(g, spkg, sname, callee->name, msym, sig, false, is_instance);
+    return jsg_call_finish(g, n, sig, fn, jsg_expr_p(g, obj, 0));
 }
 
 static const char *jsg_call_impl(jg_t *g, ast_node_t *n, ast_node_t *obj,
@@ -1031,8 +1174,7 @@ static const char *jsg_call_impl(jg_t *g, ast_node_t *n, ast_node_t *obj,
             (msym && msym->overloads.len > 1 && sig)
                 ? cg_mangle_ti(cg, objts, callee->name, &sig->params)
                 : jsg_ident(g, cg_fmt(cg, "%s_%s", cg_cident(cg, objts), callee->name));
-        const char *as = jsg_call_args(g, n, sig);
-        return cg_fmt(cg, "%s(%s%s%s)", fn, jsg_expr_p(g, obj, 0), as[0] ? ", " : "", as);
+        return jsg_call_finish(g, n, sig, fn, jsg_expr_p(g, obj, 0));
     }
 }
 
@@ -1137,7 +1279,9 @@ static const char *jsg_lambda(jg_t *g, ast_node_t *n)
         const char *core;
         size_t mark = cg->locals.len;
         vec_t saved_defers = cg->fn_defers;
+        int saved_nloop = cg->nloop;
         vec_init(&cg->fn_defers);
+        cg->nloop = 0;
         if (!plain) {
             size_t i = 0;
             for (; i < n->captures.len; i++) {
@@ -1202,6 +1346,7 @@ static const char *jsg_lambda(jg_t *g, ast_node_t *n)
         }
         jsg_scope_reset(g, mark);
         cg->fn_defers = saved_defers;
+        cg->nloop = saved_nloop;
         if (!plain)
             core =
                 cg_fmt(cg, "((%s) => %s)(%s)", sb_cstr(&caps), core, sb_cstr(&capvals));
@@ -1455,6 +1600,11 @@ const char *jsg_expr_p(jg_t *g, ast_node_t *n, int minprec)
             return "0";
         }
     case AST_IDENTIFIER:
+        /* A `&:` parameter is passed as a one-element box (see jsg_function
+         * and jsg_call_finish) - JS has no address-of for a primitive, so
+         * every read of it inside the function unwraps the box instead. */
+        if (n->is_ref && local_known(cg, n->name))
+            return cg_fmt(cg, "%s[0]", jsg_local_ref(g, n->name));
         if (local_known(cg, n->name)) return jsg_local_ref(g, n->name);
         if (cg->cur_struct && cg->cur_struct->members) {
             symbol_t *f = scope_lookup_local(cg->cur_struct->members, n->name);
@@ -1631,9 +1781,17 @@ const char *jsg_expr_p(jg_t *g, ast_node_t *n, int minprec)
     case AST_MEMBER: {
         if (n->a && n->a->kind == AST_IDENTIFIER && !local_known(cg, n->a->name)) {
             symbol_t *e = scope_lookup(cg->sem->global, n->a->name);
+            /* Same reasoning as codegen_expr.c's matching fallback: a
+             * synthesized enum-derive body is checked against its enum's
+             * home scope (sema), so an unqualified enum name inside it can
+             * be package-scoped - this lookup only searches the global
+             * scope by default and needs the same cur_fn_home fallback used
+             * for free-function calls in such bodies. */
+            if ((!e || e->kind != SYM_ENUM) && cg->cur_fn_home)
+                e = scope_lookup(cg->cur_fn_home, n->a->name);
             if (e && e->kind == SYM_ENUM && e->members) {
                 symbol_t *m = scope_lookup_local(e->members, n->name);
-                if (m) return cg_fmt(cg, "%lld", (long long)m->enum_value);
+                if (m) return jsg_enum_member_value(g, m);
             }
             if (e && e->kind == SYM_PACKAGE) {
                 symbol_t *m = scope_lookup_local(e->members, n->name);
@@ -1643,6 +1801,26 @@ const char *jsg_expr_p(jg_t *g, ast_node_t *n, int minprec)
                                           n->name);
                 }
                 if (m && m->decl && m->decl->a) return jsg_expr_p(g, m->decl->a, minprec);
+            }
+        }
+        /*
+         * pkg.EnumName.Member: n->a is itself pkg.EnumName, an AST_MEMBER -
+         * see the matching fix in check_member/sema_expr.c for why the
+         * parser always builds this as a plain left-associative chain.
+         * Without this, n->a falls to the generic fallback below, which has
+         * no idea "pkg.EnumName" denotes a type and emits it as a literal
+         * (and nonexistent) JS property access.
+         */
+        if (n->a && n->a->kind == AST_MEMBER && n->a->a &&
+            n->a->a->kind == AST_IDENTIFIER && !local_known(cg, n->a->a->name)) {
+            symbol_t *pk = scope_lookup(cg->sem->global, n->a->a->name);
+            if (!pk && cg->cur_fn_home) pk = scope_lookup(cg->cur_fn_home, n->a->a->name);
+            if (pk && pk->kind == SYM_PACKAGE) {
+                symbol_t *e = scope_lookup_local(pk->members, n->a->name);
+                if (e && e->kind == SYM_ENUM && e->members) {
+                    symbol_t *m = scope_lookup_local(e->members, n->name);
+                    if (m) return jsg_enum_member_value(g, m);
+                }
             }
         }
         return cg_fmt(cg, "%s.%s", jsg_expr_p(g, n->a, JSP_MEMBER),

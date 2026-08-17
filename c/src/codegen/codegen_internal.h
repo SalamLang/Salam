@@ -21,6 +21,8 @@
 #include "semantic/symbol.h"
 #include "semantic/types.h"
 
+#define CG_MAX_LOOP_DEPTH 64
+
 typedef struct {
     arena_t *a;
     logger_t *log;
@@ -60,6 +62,12 @@ typedef struct {
     const char *entry;
     vec_t deferred;
     vec_t fn_defers;
+    /* Defer-stack depth at the start of each enclosing loop body, so break and
+     * continue can run that body's defers before jumping over its closing
+     * brace. Deeper nesting than this simply keeps the old behaviour (the
+     * loop's own defers are skipped on those paths) rather than misfiring. */
+    size_t loop_dmark[CG_MAX_LOOP_DEPTH];
+    int nloop;
     sb_t *lam_decls;
     sb_t *lam_defs;
     int lam_n;
@@ -106,6 +114,11 @@ void cg_put_ident_byte(sb_t *b, unsigned char c);
 void parse_typestr(const char *ts, char *base, size_t cap, bool *ptr, vec_t *dims,
                    arena_t *a);
 
+/* parse_typestr plus the star count that belongs to an array's ELEMENT type:
+   "Edge*[6]" yields base "Edge", dims {6}, ptr false, elem_ptr 1. */
+void parse_typestr_ex(const char *ts, char *base, size_t cap, bool *ptr, vec_t *dims,
+                      arena_t *a, int *elem_ptr, int *ptr_depth);
+
 bool cg_is_int_typestr(const char *ts);
 
 bool cg_is_unsigned_typestr(const char *ts);
@@ -132,6 +145,14 @@ const char *cg_ctype(cg_t *cg, const char *ts);
 
 const char *cg_decl(cg_t *cg, const char *ts, const char *name);
 
+/* "int32_t[3]" for a plain array typestring, else NULL. See cg_expr_value. */
+const char *cg_array_ctype(cg_t *cg, const char *ts);
+
+/* cg_expr, but for a slot that needs a C *expression*. An array literal emits
+   a bare "{1, 2, 3}", which is only an initializer; in a value position it has
+   to become the compound literal "(int32_t[3]){1, 2, 3}". */
+const char *cg_expr_value(cg_t *cg, ast_node_t *n);
+
 const char *cg_mangle_in(cg_t *cg, const char *pkg, const char *struct_name,
                          const char *fn, vec_t *params);
 
@@ -152,6 +173,13 @@ const char *func_cast_params_env(cg_t *cg, const char *ts);
 
 bool type_is_byval_agg(const type_t *t);
 
+/* A `func(...)`/`externfunc(...)` type string - a value that lowers to the
+ * closure environment pointer. */
+bool type_is_callable(const char *ts);
+
+/* Resolves "Iface" and the cross-package "pkg.Iface" alike. */
+symbol_t *cg_iface_sym(cg_t *cg, const char *name);
+
 long array_size_of(const char *ts);
 
 int print_tag(const char *ts);
@@ -171,6 +199,10 @@ token_kind_t cg_compound_base(token_kind_t k);
 func_sig_t *pick_op_overload(cg_t *cg, symbol_t *msym, size_t want_nparams);
 
 bool cg_addressable(const ast_node_t *n);
+
+const char *cg_import_module(cg_t *cg, ast_node_t *d);
+
+const char *cg_module_init_name(cg_t *cg, const char *module);
 
 symbol_t *cg_struct_of(cg_t *cg, const char *ts, char *sname, size_t cap);
 
@@ -195,6 +227,10 @@ const char *cg_match_arm_cond(cg_t *cg, ast_node_t *arm, const char *subj_var,
 const char *cg_unparen(cg_t *cg, const char *s);
 
 void cg_emit_defers(cg_t *cg);
+
+void cg_emit_defers_from(cg_t *cg, size_t mark);
+
+void cg_scoped_stmts(cg_t *cg, vec_t *list);
 
 void cg_stmt(cg_t *cg, ast_node_t *n);
 

@@ -1,0 +1,329 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package image
+
+import str
+import os
+import math
+
+// Drawing text with a loaded TrueType font - the public half of the font
+// support. truetype.salam loads the file, ttf_glyph.salam decodes the
+// outlines, glyph_raster.salam turns them into pixels; this file is the
+// part callers actually touch. Measuring and box placement live next
+// door in text_measure.salam and text_layout.salam.
+//
+// Coordinates are f64 and `y` is the BASELINE, not the top of the text -
+// the same convention every text API from PostScript to Cairo uses, and
+// the only one that lines up glyphs of different heights. To place text
+// by its top edge instead, add AscentPixels(f, size) to y. Subpixel
+// positions are honored: the rasterizer's coverage is computed from the
+// real outline position, so text at x = 10.5 is not the same pixels as
+// text at x = 10.
+//
+// Every string is run through the same pipeline before a single glyph is
+// drawn (_text_to_visual): decode UTF-8, apply Arabic contextual shaping,
+// then reorder for direction. That is what makes Persian, Arabic and
+// mixed text come out right without the caller doing anything - see
+// arabic_shape.salam and text_bidi.salam - and it is a no-op for text
+// that has no right-to-left character in it.
+//
+// Two entry points, both returning the pen advance in pixels so a caller
+// can lay out the next run:
+//
+//   DrawTextTTF     - upright text at a size, the 90% case
+//   DrawTextStyled  - the same plus per-glyph rotation, slant, tracking,
+//                     direction and optional kerning (see TextStyle)
+//
+// A TextStyle's rotation turns each glyph about its own origin while the
+// pen keeps advancing horizontally. That is deliberate: it is what a
+// captcha, a wavy label or a "bouncing" caption wants. Rotating a whole
+// line as a unit is a different operation - draw it into its own Image
+// and rotate that.
+//
+// The bitmap DrawText in bitmap_font.salam stays exactly as it was: it
+// needs no font file, so it remains the right choice for a watermark or
+// a debug label in a program that must not depend on one.
+
+// How text is laid out and shaped. Defaults give plain upright text at
+// 16px with kerning and shaping on, so `TextStyle { size = 48.0 }` is a
+// complete style.
+@en "TextStyle"
+@fa "سبک متن"
+@ar "نمط النص"
+pub struct TextStyle:
+    // Em size in pixels - the "72pt" of a 72px line, not the height of
+    // any particular letter.
+    pub size: f64 = 16.0
+    // Per-glyph rotation in radians, counter-clockwise, about the
+    // glyph's own origin on the baseline.
+    pub rotate: f64 = 0.0
+    // Horizontal shear, as the tangent of the slant angle: 0.2 is a
+    // convincing synthetic italic, negative leans the other way.
+    pub skew: f64 = 0.0
+    // Extra pixels added to every advance (letter-spacing). Negative
+    // tightens.
+    pub tracking: f64 = 0.0
+    // Apply the font's own pair kerning where it has any.
+    pub kern: bool = true
+    // TextDirAuto (from the first strong character), TextDirLTR or
+    // TextDirRTL. Only affects text that mixes directions or is all
+    // neutral - "12 (34)" reads differently in a Persian paragraph than
+    // in an English one.
+    pub dir: int = 0
+    // Arabic shaping + bidi reordering. On by default; turn it off only
+    // to draw a string that is already in visual order (one that came
+    // out of ToVisualOrder, say).
+    pub shape: bool = true
+end
+
+// The device matrix for a style: font units (y up) -> pixels (y down),
+// with the slant applied before the rotation so a rotated italic still
+// looks italic rather than sheared along the screen axis.
+func _style_matrix(f: Font, st: TextStyle, a &: f64, b &: f64, c &: f64, d &: f64):
+    s := ScaleFactor(f, st.size)
+    co := math.Cos(st.rotate)
+    si := math.Sin(st.rotate)
+    a = s * co
+    b = 0.0 - s * si
+    c = s * (co * st.skew - si)
+    d = 0.0 - s * (si * st.skew + co)
+end
+
+// UTF-8 bytes in, drawable codepoints out: shaped and reordered unless
+// the style asks for the raw sequence. Everything that draws or measures
+// text starts here, so a measurement can never disagree with what was
+// drawn.
+func _text_to_visual(text: str, st: TextStyle, out &: Vector<int>):
+    if !st.shape:
+        _utf8_decode_all(text, out)
+        _text_drop_invisible(out)
+        ret
+    end
+    mut logical := Vector {} as Vector<int>
+    _utf8_decode_all(text, logical)
+    _shape_arabic(logical, out)
+    _bidi_visual(out, st.dir)
+    // Last, not first: a zero-width joiner has to be there while the
+    // shaper and the bidi rules look at it, and gone before anything
+    // tries to draw it.
+    _text_drop_invisible(out)
+    logical.free()
+end
+
+// The shared layout loop: walks a visual-order codepoint sequence,
+// advancing the pen and calling back into the rasterizer when there is
+// an image to draw into. `img` is a null-pixel Image when measuring.
+func _draw_visual(img &: Image, x: f64, y: f64, cps &: Vector<int>, col: Color, f: Font, st: TextStyle, draw: bool): f64:
+    scale := ScaleFactor(f, st.size)
+    mut a := 0.0
+    mut b := 0.0
+    mut c := 0.0
+    mut d := 0.0
+    _style_matrix(f, st, a, b, c, d)
+    mut pen := x
+    mut prev := 0
+    mut i := 0
+    until i < cps.len():
+        glyph := GlyphIndex(f, cps.get(i))
+        if st.kern && prev != 0:
+            pen += (KernAdvance(f, prev, glyph) as f64) * scale
+        end
+        if draw:
+            _draw_glyph_xform(img, f, glyph, a, b, c, d, pen, y, col)
+        end
+        pen += (GlyphAdvance(f, glyph) as f64) * scale + st.tracking
+        prev = glyph
+        i += 1
+    end
+    ret pen - x
+end
+
+func _try_font_path(cur: str, candidate: str): str:
+    if str.Len(cur) > 0:
+        ret cur
+    end
+    if str.Len(candidate) > 0 && os.Exists(candidate):
+        ret candidate
+    end
+    ret cur
+end
+
+// Draws a single glyph by index, with its origin (the pen position on
+// the baseline) at (x, y). Callers that already know the glyph - a
+// layout engine, or code drawing the same character repeatedly - save
+// the cmap lookup this way.
+@en "DrawGlyphStyled"
+@fa "رسم نویسه با سبک"
+@ar "ارسم رسما بنمط"
+pub func DrawGlyphStyled(img &: Image, glyph: int, x: f64, y: f64, col: Color, f: Font, st: TextStyle):
+    mut a := 0.0
+    mut b := 0.0
+    mut c := 0.0
+    mut d := 0.0
+    _style_matrix(f, st, a, b, c, d)
+    _draw_glyph_xform(img, f, glyph, a, b, c, d, x, y, col)
+end
+
+// Draws one Unicode codepoint and returns its advance in pixels, so a
+// caller placing characters individually (along a curve, at random
+// angles, one color each) can keep its own pen. No shaping happens here:
+// a lone codepoint has no neighbours to join to.
+@en "DrawCodepointStyled"
+@fa "رسم کدنقطه با سبک"
+@ar "ارسم نقطة ترميز بنمط"
+pub func DrawCodepointStyled(img &: Image, codepoint: int, x: f64, y: f64, col: Color, f: Font, st: TextStyle): f64:
+    if !FontValid(f):
+        ret 0.0
+    end
+    glyph := GlyphIndex(f, codepoint)
+    DrawGlyphStyled(img, glyph, x, y, col, f, st)
+    ret (GlyphAdvance(f, glyph) as f64) * ScaleFactor(f, st.size) + st.tracking
+end
+
+// Draws `text` (UTF-8) with its baseline start at (x, y) and returns the
+// total advance, i.e. where the next run would begin. Right-to-left text
+// is reordered first, so (x, y) is always the left end of the drawn line
+// whatever direction it reads in.
+@en "DrawTextStyled"
+@fa "نوشتن متن با سبک"
+@ar "اكتب نصا بنمط"
+pub func DrawTextStyled(img &: Image, x: f64, y: f64, text: str, col: Color, f: Font, st: TextStyle): f64:
+    if !FontValid(f):
+        ret 0.0
+    end
+    mut cps := Vector {} as Vector<int>
+    _text_to_visual(text, st, cps)
+    w := _draw_visual(img, x, y, cps, col, f, st, true)
+    cps.free()
+    ret w
+end
+
+// Upright text at `size` pixels per em, kerned - the short form of
+// DrawTextStyled for the common case.
+@en "DrawTextTTF"
+@fa "نوشتن متن قلم"
+@ar "اكتب نص الخط"
+pub func DrawTextTTF(img &: Image, x: f64, y: f64, text: str, col: Color, f: Font, size: f64): f64:
+    ret DrawTextStyled(img, x, y, text, col, f, TextStyle { size = size })
+end
+
+// Advance width of `text` in pixels, without drawing it: the distance
+// the pen travels, which is what to use for laying out one run after
+// another. For the size of the ink itself - what "center this" and "make
+// this fill the banner" need - see TextBounds in text_measure.salam.
+@en "TextWidthStyled"
+@fa "عرض متن با سبک"
+@ar "عرض النص بنمط"
+pub func TextWidthStyled(f: Font, text: str, st: TextStyle): f64:
+    if !FontValid(f):
+        ret 0.0
+    end
+    mut cps := Vector {} as Vector<int>
+    _text_to_visual(text, st, cps)
+    mut scratch := New(0, 0)
+    w := _draw_visual(scratch, 0.0, 0.0, cps, RGB(0, 0, 0), f, st, false)
+    cps.free()
+    ret w
+end
+
+@en "TextWidthTTF"
+@fa "عرض متن قلم"
+@ar "عرض نص الخط"
+pub func TextWidthTTF(f: Font, text: str, size: f64): f64:
+    ret TextWidthStyled(f, text, TextStyle { size = size })
+end
+
+// Path of a sans-serif TrueType font on this machine, or "" if none of
+// the usual ones is present. Checked in order: $SALAM_FONT, then the
+// stock Windows / macOS / Linux faces, then the Windows fonts a WSL
+// session can see through /mnt/c.
+//
+// This is a convenience for demos and tools, not a font manager: it
+// answers "give me something to draw with", not "find the font named
+// X". A program that cares which typeface it uses should ship one and
+// name its path.
+@en "FindSystemFont"
+@fa "یافتن قلم سیستم"
+@ar "ابحث عن خط النظام"
+pub func FindSystemFont(): str:
+    mut p := _try_font_path("", os.Env("SALAM_FONT"))
+    p = _try_font_path(p, "C:/Windows/Fonts/arial.ttf")
+    p = _try_font_path(p, "C:/Windows/Fonts/segoeui.ttf")
+    p = _try_font_path(p, "C:/Windows/Fonts/tahoma.ttf")
+    p = _try_font_path(p, "C:/Windows/Fonts/verdana.ttf")
+    p = _try_font_path(p, "C:/Windows/Fonts/consola.ttf")
+    p = _try_font_path(p, "/System/Library/Fonts/Supplemental/Arial.ttf")
+    p = _try_font_path(p, "/System/Library/Fonts/Supplemental/Verdana.ttf")
+    p = _try_font_path(p, "/Library/Fonts/Arial.ttf")
+    p = _try_font_path(p, "/System/Library/Fonts/Helvetica.ttc")
+    p = _try_font_path(p, "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
+    p = _try_font_path(p, "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf")
+    p = _try_font_path(p, "/usr/share/fonts/truetype/freefont/FreeSans.ttf")
+    p = _try_font_path(p, "/usr/share/fonts/TTF/DejaVuSans.ttf")
+    p = _try_font_path(p, "/usr/share/fonts/dejavu/DejaVuSans.ttf")
+    p = _try_font_path(p, "/usr/share/fonts/liberation-sans/LiberationSans-Regular.ttf")
+    p = _try_font_path(p, "/mnt/c/Windows/Fonts/arial.ttf")
+    p = _try_font_path(p, "/mnt/c/Windows/Fonts/segoeui.ttf")
+    ret p
+end
+
+// The first font on this machine that can draw Arabic script (Persian,
+// Arabic, Urdu), or "" if there is none. $SALAM_FONT_ARABIC and
+// $SALAM_FONT are tried first, so a program can ship Vazirmatn or any
+// other face and point at it without touching the code.
+//
+// A path is only accepted when the font really covers the script: the
+// stock Linux faces (DejaVu, Liberation, FreeSans) do not, and returning
+// one of those would draw a line of empty boxes instead of saying "no".
+@en "FindArabicFont"
+@fa "یافتن قلم عربی"
+@ar "ابحث عن خط عربي"
+pub func FindArabicFont(): str:
+    mut p := _try_font_path("", os.Env("SALAM_FONT_ARABIC"))
+    p = _try_font_path(p, os.Env("SALAM_FONT"))
+    p = _try_font_path(p, "C:/Windows/Fonts/tahoma.ttf")
+    p = _try_font_path(p, "C:/Windows/Fonts/segoeui.ttf")
+    p = _try_font_path(p, "C:/Windows/Fonts/arial.ttf")
+    p = _try_font_path(p, "/System/Library/Fonts/Supplemental/Arial.ttf")
+    p = _try_font_path(p, "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
+    p = _try_font_path(p, "/mnt/c/Windows/Fonts/tahoma.ttf")
+    if str.Len(p) == 0:
+        ret ""
+    end
+    mut ok := false
+    probe := LoadFont(p, ok)
+    // Beh (U+0628) and its initial form: a font that has neither cannot
+    // draw joined Arabic, whatever its file name suggests.
+    covers := ok && GlyphIndex(probe, 0x0628) != 0 && GlyphIndex(probe, 0xFE91) != 0
+    FreeFont(probe)
+    if !covers:
+        ret ""
+    end
+    ret p
+end
+
+// FindSystemFont + LoadFont in one call; `ok` is false when there is no
+// system font to load, exactly as if the path had not existed.
+@en "LoadSystemFont"
+@fa "بارگذاری قلم سیستم"
+@ar "تحميل خط النظام"
+pub func LoadSystemFont(ok &: bool): Font:
+    path := FindSystemFont()
+    if str.Len(path) == 0:
+        ok = false
+        ret Font {}
+    end
+    ret LoadFont(path, ok)
+end

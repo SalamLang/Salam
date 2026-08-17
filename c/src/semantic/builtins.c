@@ -22,6 +22,24 @@ static const salam_builtin_t k_builtins[] = {
     {"strcmp", "strcmp", 2, "i32", "str"},
     {"join", "salam_thread_join", 1, "void", "i64"},
 };
+/*
+ * Argument count for an atomic intrinsic, or 0 when the name is not one.
+ * They are kept out of k_builtins because that table describes a call whose
+ * arguments all share one type, and these mix a cell pointer with i64
+ * operands. Every backend special-cases them anyway - there is no runtime
+ * function to name.
+ */
+int salam_atomic_arity(const char *name)
+{
+    if (!name) return 0;
+    if (!strcmp(name, "atomic_load")) return 1;
+    if (!strcmp(name, "atomic_store")) return 2;
+    if (!strcmp(name, "atomic_add")) return 2;
+    if (!strcmp(name, "atomic_swap")) return 2;
+    if (!strcmp(name, "atomic_cas")) return 3;
+    return 0;
+}
+
 const salam_builtin_t *salam_builtin_lookup(const char *name)
 {
     {

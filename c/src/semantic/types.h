@@ -18,6 +18,7 @@
 #include "core/prelude.h"
 #include "core/arena.h"
 #include "core/vec.h"
+#include "token/token.h"
 
 typedef enum {
     TY_ERROR = 0,
@@ -63,6 +64,12 @@ struct type_t {
     void *decl;
     const char *name;
     vec_t params;
+    /* TY_ENUM only: this enum's backing kind (TV_INT/TV_FLOAT/TV_STRING).
+     * Set to TV_INT when the type is first created and overwritten once
+     * the enum's member list has been walked (sema_decl.c AST_ENUM_DEF).
+     * Lives here, not just on the SYM_ENUM symbol, so types.c/codegen can
+     * read it without depending on symbol.h. */
+    token_value_kind_t enum_val_kind;
 };
 
 typedef struct {

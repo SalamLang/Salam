@@ -1,0 +1,150 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import config
+import env
+import os
+import io
+import fs.path
+import str
+
+// A twelve factor style configuration loader, written the way a real
+// service would: committed defaults in YAML, deployment overrides in
+// INI, secrets and per machine settings in .env files, and the real
+// process environment on top of everything.
+//
+// The point of the example is the precedence, which runs lowest to
+// highest:
+//
+//   defaults.yaml   committed, safe to read in a pull request
+//   config.ini      per deployment, still committed
+//   .env            per machine, not committed
+//   .env.<profile>  per profile, e.g. .env.production
+//   real environment  whatever the container or CI actually exported
+//
+// Each layer is a std/config Config, and Merge folds them in order. The
+// .env files go through std/env so that a ${VAR} in one of them can
+// refer to a value an earlier layer already set.
+
+func write_project(dir: str):
+    mut y := "app:\n"
+    y = y.concat("  name: myservice\n")
+    y = y.concat("  port: 3000\n")
+    y = y.concat("  debug: true\n")
+    y = y.concat("db:\n")
+    y = y.concat("  host: localhost\n")
+    y = y.concat("  port: 5432\n")
+    io.WriteFile(path.Join(dir, "defaults.yaml"), y)
+
+    mut i := "; deployment overrides, committed\n"
+    i = i.concat("[app]\n")
+    i = i.concat("debug = false\n")
+    i = i.concat("[db]\n")
+    i = i.concat("host = db.internal ; the private network name\n")
+    io.WriteFile(path.Join(dir, "config.ini"), i)
+
+    mut e := "# not committed\n"
+    e = e.concat("APP_PORT=9090\n")
+    e = e.concat("DB_USER=service\n")
+    io.WriteFile(path.Join(dir, ".env"), e)
+
+    mut p := "API_TOKEN=AKIA1234567890ABCD\n"
+    // a later layer may build on a value an earlier one defined
+    p = p.concat("DB_DSN=postgres://${DB_USER}@db.internal:5432\n")
+    io.WriteFile(path.Join(dir, ".env.production"), p)
+end
+
+// The two committed layers, merged lowest first.
+func file_layers(dir: str): config.Config:
+    mut defaults := config.LoadYAML(path.Join(dir, "defaults.yaml"))
+    defer config.Free(defaults)
+    mut overrides := config.LoadINI(path.Join(dir, "config.ini"))
+    defer config.Free(overrides)
+    ret config.Merge(defaults, overrides)
+end
+
+// Reads a setting, letting an environment variable win over the file
+// layers. This is the whole of the "environment beats config" rule.
+func setting(c &: config.Config, key: str, envname: str): str:
+    if env.Has(envname): ret env.Get(envname) end
+    ret config.Get(c, key)
+end
+
+func report(c &: config.Config):
+    print "profile:  "
+    println env.Profile()
+    print "app.name: "
+    println setting(c, "app.name", "APP_NAME")
+    print "app.port: "
+    println setting(c, "app.port", "APP_PORT")
+    print "debug:    "
+    println setting(c, "app.debug", "APP_DEBUG")
+    print "db.host:  "
+    println setting(c, "db.host", "DB_HOST")
+    print "db.port:  "
+    println setting(c, "db.port", "DB_PORT")
+    print "db.user:  "
+    println setting(c, "db.user", "DB_USER")
+    print "db.dsn:   "
+    println setting(c, "db.dsn", "DB_DSN")
+    // a secret is reported masked, never in full
+    print "token:    "
+    println env.GetMasked("API_TOKEN")
+end
+
+func cleanup(dir: str):
+    env.Unset("APP_PORT")
+    env.Unset("DB_USER")
+    env.Unset("DB_DSN")
+    env.Unset("API_TOKEN")
+    env.Unset("SALAM_ENV")
+    os.RemoveAll(dir)
+end
+
+func main:
+    dir := path.Join(os.TempDir(), "salam_layered_config_demo")
+    os.RemoveAll(dir)
+    os.Mkdir(dir)
+    write_project(dir)
+
+    // pick the profile before loading, since it selects .env.<profile>
+    env.Set("SALAM_ENV", "production")
+    env.Unset("APP_PORT")
+    env.Unset("DB_USER")
+    env.Unset("DB_DSN")
+    env.Unset("API_TOKEN")
+
+    applied := env.LoadProfile(dir)
+    print "loaded from .env files: "
+    println applied
+
+    mut cfg := file_layers(dir)
+    defer config.Free(cfg)
+    report(cfg)
+
+    // the INI layer beat the YAML default, and the YAML value survived
+    // where no later layer mentioned it
+    println "--"
+    print "yaml default kept: "
+    println str.Equals(config.Get(cfg, "db.port"), "5432")
+    print "ini override won:  "
+    println str.Equals(config.Get(cfg, "db.host"), "db.internal")
+    print "env override won:  "
+    println str.Equals(setting(cfg, "app.port", "APP_PORT"), "9090")
+
+    cleanup(dir)
+    ret 0
+end

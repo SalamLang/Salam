@@ -1,0 +1,349 @@
+package semantic
+
+import str
+import co "../sal_core.salam"
+import at "../ast.salam"
+
+// ===== sema_derive_json_enc.c =====
+//
+// The Salam source of a derived JSON encoder.
+//
+// What a value encodes to:
+//
+//   struct        {"x":10,"y":15}
+//   vector/array  [1,2,3]
+//   hashmap       {"a":1}          (string or integer keys)
+//   enum          "Red"            (the member's name, its number if unnamed)
+//   pointer       null, or the pointee
+//   char          "x"              (a one-character string)
+//   f64 inf/nan   null             (JSON cannot spell either)
+//
+// A struct that defines `to_json(): str` gets that called instead, so a type
+// with a wire format of its own - a date, a money amount, an id - can present
+// itself however it likes.
+
+func jd_add(ind: str, arg: str): str:
+    ret ind + "_dadd(" + JV_BUF + ", " + arg + ")\n"
+end
+
+// The scalar conversion for `t`, as a call on `expr`, or "" when the type is
+// not one the runtime layer has a direct spelling for.
+func jd_scalar_call(s &: Sema, t: int, expr: str): str:
+    k := ty_at(s, t).kind
+    if k == TY_STR || k == TY_UCHAR:
+        ret "_dqs(" + expr + ")"
+    end
+    if k == TY_BOOL:
+        ret "_db(" + expr + ")"
+    end
+    if k == TY_CHAR:
+        ret "_dch((" + expr + ") as int)"
+    end
+    if type_is_float(s, t):
+        ret "_df((" + expr + ") as f64)"
+    end
+    if type_is_integer(s, t):
+        if jd_is_unsigned(s, t):
+            ret "_du((" + expr + ") as u64)"
+        end
+        ret "_di((" + expr + ") as i64)"
+    end
+    ret ""
+end
+
+// `@json "" "string"`: the scalar goes out as a JSON string. Wide 64-bit ids
+// that a JavaScript client would round off are the usual reason.
+func jd_maybe_stringify(s &: Sema, t: int, call: str, at_string: bool): str:
+    if !at_string:
+        ret call
+    end
+    k := ty_at(s, t).kind
+    if k == TY_STR || k == TY_UCHAR:
+        ret call
+    end
+    ret "_dqs(" + call + ")"
+end
+
+func jd_enc_enum(s &: Sema, t: int, expr: str, ind: str): str:
+    sym := ty_at(s, t).decl
+    if sym == 0 || sym_at(s, sym).members == 0:
+        ret ""
+    end
+    mems := scope_at(s, sym_at(s, sym).members).symbols
+    mut out := ""
+    mut first := true
+    repeat mems.len() with i:
+        m := sym_at(s, mems.get(i))
+        if m.kind == SYM_ENUM_MEMBER:
+            head := first ? "if" : "else"
+            out = out + ind + head + " (" + expr + ") as i64 == " + m.enum_value + ":\n"
+            out = out + jd_add(ind + JIND, jd_quote(jd_quote(m.name)))
+            first = false
+        end
+    end
+    if first:
+        ret ""
+    end
+    // A value outside the declared members still has to produce valid JSON;
+    // its number is the only lossless thing left to write.
+    out = out + ind + "else:\n"
+    out = out + jd_add(ind + JIND, "_di((" + expr + ") as i64)")
+    ret out + ind + "end\n"
+end
+
+func jd_enc_ptr(
+    s &: Sema, a &: at.Ast, t: int, expr: str, ind: str, home: int, sp: co.SrcSpan
+): str:
+    deep := ind + JIND
+    inner := jd_enc_value(s, a, ty_at(s, t).pointee, "(" + expr + ")[0]", deep, false, home, sp)
+    if str.Len(inner) == 0:
+        ret ""
+    end
+    mut out := ind + "if (" + expr + ") == null:\n"
+    out = out + jd_add(deep, "\"null\"")
+    out = out + ind + "else:\n" + inner
+    ret out + ind + "end\n"
+end
+
+// Statements appending the JSON for `expr` (of type `t`) to JV_BUF. "" when
+// the type has no JSON form.
+func jd_enc_value(
+    s &: Sema, a &: at.Ast, t: int, expr: str, ind: str, as_string: bool, home: int,
+    sp: co.SrcSpan
+): str:
+    if t < 0:
+        ret ""
+    end
+    call := jd_scalar_call(s, t, expr)
+    if str.Len(call) > 0:
+        ret jd_add(ind, jd_maybe_stringify(s, t, call, as_string))
+    end
+    if as_string:
+        ret ""
+    end
+    k := ty_at(s, t).kind
+    if k == TY_ENUM:
+        ret jd_enc_enum(s, t, expr, ind)
+    end
+    if k == TY_PTR:
+        ret jd_enc_ptr(s, a, t, expr, ind, home, sp)
+    end
+    fn := derive_json_enc(s, a, t, home, sp)
+    if str.Len(fn) == 0:
+        ret ""
+    end
+    ret jd_add(ind, fn + "(" + expr + ")")
+end
+
+// ------------------------------------------------------------- omitempty
+
+// The test that decides whether an `omitempty` field is written at all, or ""
+// for a type with no meaningful empty value (a struct, a fixed array) - those
+// are always written.
+func jd_empty_test(s &: Sema, t: int, expr: str): str:
+    if t < 0:
+        ret ""
+    end
+    k := ty_at(s, t).kind
+    if k == TY_STR || k == TY_UCHAR || k == TY_VEC:
+        ret "(" + expr + ").len() > 0"
+    end
+    if k == TY_BOOL:
+        ret expr
+    end
+    if k == TY_PTR:
+        ret "(" + expr + ") != null"
+    end
+    if type_is_float(s, t):
+        ret "(" + expr + ") as f64 != 0.0"
+    end
+    if k == TY_ENUM || k == TY_CHAR || type_is_integer(s, t):
+        ret "(" + expr + ") as i64 != 0"
+    end
+    if k == TY_MAP:
+        ret "(" + expr + ").size() > 0"
+    end
+    if k == TY_STRUCT:
+        ret jd_empty_test_struct(s, ty_at(s, t).decl, expr)
+    end
+    ret ""
+end
+
+func jd_empty_test_struct(s &: Sema, sym: int, expr: str): str:
+    if sym == 0:
+        ret ""
+    end
+    if derive_map_cursor(s, sym) != 0:
+        ret "(" + expr + ").size() > 0"
+    end
+    count := derive_seq_count(s, sym)
+    if str.Len(count) > 0 && derive_seq_elem(s, sym) >= 0:
+        ret "(" + expr + ")." + count + "() > 0"
+    end
+    ret ""
+end
+
+// ---------------------------------------------------------------- bodies
+
+func jd_enc_field(
+    s &: Sema, a &: at.Ast, f: int, home: int, sp: co.SrcSpan
+): str:
+    fa := jd_attr_of(s, a, f, sp)
+    if !fa.ok:
+        ret ""
+    end
+    if fa.skip:
+        ret JIND
+    end
+    fv := sym_at(s, f)
+    expr := JV_PARAM + "." + fv.name
+    test := fa.omitempty ? jd_empty_test(s, fv.ty, expr) : ""
+    ind := str.Len(test) > 0 ? JIND + JIND : JIND
+    val := jd_enc_value(s, a, fv.ty, expr, ind, fa.as_string, home, sp)
+    if str.Len(val) == 0:
+        // Naming the field is the whole diagnostic: "cannot encode 'Config'"
+        // leaves the reader to find which of its twelve members has no JSON
+        // form.
+        jd_field_err(s, a, f, fv.ty, sp)
+        ret ""
+    end
+    mut out := str.Len(test) > 0 ? JIND + "if " + test + ":\n" : ""
+    out = out + ind + "if _n > 0: _dadd(" + JV_BUF + ", \",\") end\n"
+    out = out + ind + "_n = _n + 1\n"
+    out = out + jd_add(ind, jd_quote("\"" + fa.name + "\":")) + val
+    ret str.Len(test) > 0 ? out + JIND + "end\n" : out
+end
+
+func jd_enc_struct(s &: Sema, a &: at.Ast, t: int, home: int, sp: co.SrcSpan): str:
+    sym := ty_at(s, t).decl
+    mems := sym_at(s, sym).members == 0 ? Vector {} as Vector<int>
+        : scope_at(s, sym_at(s, sym).members).symbols
+    mut nfields := 0
+    repeat mems.len() with i:
+        if sym_at(s, mems.get(i)).kind == SYM_FIELD:
+            nfields += 1
+        end
+    end
+    mut out := jd_add(JIND, "\"{\"")
+    if nfields == 0:
+        ret out + jd_add(JIND, "\"}\"")
+    end
+    out = out + JIND + "mut _n := 0\n"
+    repeat mems.len() with j:
+        f := mems.get(j)
+        if sym_at(s, f).kind == SYM_FIELD:
+            part := jd_enc_field(s, a, f, home, sp)
+            if str.Len(part) == 0:
+                ret ""
+            end
+            out = out + (str.Equals(part, JIND) ? "" : part)
+        end
+    end
+    ret out + jd_add(JIND, "\"}\"")
+end
+
+func jd_enc_seq(
+    s &: Sema, a &: at.Ast, elem: int, count: str, item: str, home: int, sp: co.SrcSpan
+): str:
+    val := jd_enc_value(s, a, elem, item, JIND + JIND, false, home, sp)
+    if str.Len(val) == 0:
+        ret ""
+    end
+    mut out := jd_add(JIND, "\"[\"")
+    out = out + JIND + "mut _i := 0\n"
+    out = out + JIND + "until _i < " + count + ":\n"
+    out = out + JIND + JIND + "if _i > 0: _dadd(" + JV_BUF + ", \",\") end\n"
+    out = out + val + JIND + JIND + "_i = _i + 1\n" + JIND + "end\n"
+    ret out + jd_add(JIND, "\"]\"")
+end
+
+// An object key is text. A string key is written as it stands; an integer key
+// is written as its digits, which is what every other language's JSON map
+// encoder does and what a decoder can read back. Anything else has no key
+// spelling and the type is not encodable.
+func jd_key_expr(s &: Sema, key: int): str:
+    if key < 0:
+        ret ""
+    end
+    k := ty_at(s, key).kind
+    if k == TY_STR || k == TY_UCHAR:
+        ret "_dqs(_it.key())"
+    end
+    if type_is_integer(s, key):
+        ret "_dqs(_di(_it.key() as i64))"
+    end
+    ret ""
+end
+
+func jd_enc_map(
+    s &: Sema, a &: at.Ast, key: int, val: int, home: int, sp: co.SrcSpan
+): str:
+    ke := jd_key_expr(s, key)
+    body := jd_enc_value(s, a, val, "_it.value()", JIND + JIND, false, home, sp)
+    if str.Len(ke) == 0 || str.Len(body) == 0:
+        ret ""
+    end
+    mut out := jd_add(JIND, "\"{\"") + JIND + "mut _n := 0\n"
+    out = out + JIND + "mut _it := " + JV_PARAM + ".iter()\n"
+    out = out + JIND + "until _it.has_next():\n"
+    out = out + JIND + JIND + "if _n > 0: _dadd(" + JV_BUF + ", \",\") end\n"
+    out = out + jd_add(JIND + JIND, ke) + jd_add(JIND + JIND, "\":\"") + body
+    out = out + JIND + JIND + "_n = _n + 1\n" + JIND + JIND + "_it.next()\n"
+    ret out + JIND + "end\n" + jd_add(JIND, "\"}\"")
+end
+
+func jd_enc_of_struct(s &: Sema, a &: at.Ast, t: int, home: int, sp: co.SrcSpan): str:
+    sym := ty_at(s, t).decl
+    sid := derive_method_sig(s, sym, "to_json", 0)
+    if sid != 0 && ty_at(s, sig_at(s, sid).ret_type).kind == TY_STR:
+        ret jd_add(JIND, JV_PARAM + ".to_json()")
+    end
+    cur := derive_map_cursor(s, sym)
+    if cur != 0:
+        kt := sig_at(s, derive_method_sig(s, cur, "key", 0)).ret_type
+        vt := sig_at(s, derive_method_sig(s, cur, "value", 0)).ret_type
+        ret jd_enc_map(s, a, kt, vt, home, sp)
+    end
+    count := derive_seq_count(s, sym)
+    elem := derive_seq_elem(s, sym)
+    if str.Len(count) > 0 && elem >= 0:
+        ret jd_enc_seq(
+            s, a, elem, JV_PARAM + "." + count + "()", JV_PARAM + ".get(_i)", home, sp
+        )
+    end
+    ret jd_enc_struct(s, a, t, home, sp)
+end
+
+func jd_enc_body(s &: Sema, a &: at.Ast, t: int, home: int, sp: co.SrcSpan): str:
+    v := ty_at(s, t)
+    if v.kind == TY_STRUCT:
+        ret jd_enc_of_struct(s, a, t, home, sp)
+    end
+    if v.kind == TY_VEC:
+        ret jd_enc_seq(s, a, v.elem, JV_PARAM + ".len()", JV_PARAM + ".get(_i)", home, sp)
+    end
+    if v.kind == TY_ARRAY || v.kind == TY_SLICE:
+        ret jd_enc_seq(s, a, v.elem, "len(" + JV_PARAM + ")", JV_PARAM + "[_i]", home, sp)
+    end
+    if v.kind == TY_MAP:
+        ret jd_enc_map(s, a, v.key, v.elem, home, sp)
+    end
+    // A scalar at the top: `json.Marshal(42)` is a JSON document.
+    ret jd_enc_value(s, a, t, JV_PARAM, JIND, false, home, sp)
+end
+
+func jd_enc_source(
+    s &: Sema, a &: at.Ast, t: int, fname: str, home: int, sp: co.SrcSpan
+): str:
+    spelling := derive_type_spelling(s, t)
+    if str.Len(spelling) == 0:
+        ret ""
+    end
+    body := jd_enc_body(s, a, t, home, sp)
+    if str.Len(body) == 0:
+        ret ""
+    end
+    mut out := "func " + fname + "(" + JV_PARAM + ": " + spelling + "): str:\n"
+    out = out + JIND + "mut " + JV_BUF + " := _dnew()\n" + body
+    ret out + JIND + "ret _dfin(" + JV_BUF + ")\nend\n"
+end

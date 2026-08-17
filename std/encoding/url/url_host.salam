@@ -1,0 +1,215 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package url
+
+import str
+import encoding.query
+
+// Taking a host apart, and editing a query string in place.
+//
+// Parse gives you the host as one string. The questions people actually
+// ask of it ("which site is this", "is this a subdomain of that") need
+// it split into a registrable domain and whatever sits in front, and
+// that split cannot be done by counting dots: "example.co.uk" is one
+// site with a two label suffix, "foo.example.com" is a subdomain of one
+// with a single label suffix.
+
+// Two label public suffixes, kept as a space delimited set with a space
+// at each end so a lookup is one substring search.
+//
+// HONEST LIMIT: this is a heuristic, not the Public Suffix List. The
+// real list has thousands of entries, changes over time, and includes
+// private suffixes like "github.io" where "user.github.io" is its own
+// site. What is here covers the country second level domains that come
+// up in practice. Anything where a wrong answer is a security problem,
+// cookie scope or origin comparison above all, needs the real list and
+// should not use these three functions.
+const _SUFFIX2 := " co.uk ac.uk gov.uk org.uk net.uk sch.uk ltd.uk plc.uk me.uk com.au net.au org.au edu.au gov.au id.au co.nz net.nz org.nz govt.nz ac.nz co.za org.za web.za com.br net.br org.br gov.br edu.br com.cn net.cn org.cn gov.cn edu.cn com.mx org.mx net.mx com.ar net.ar org.ar com.tr net.tr org.tr gov.tr co.jp ne.jp or.jp ac.jp go.jp co.kr or.kr ne.kr go.kr co.in net.in org.in gov.in ac.in com.sg com.hk org.hk com.tw com.my org.my com.ph com.vn co.il org.il com.pk com.eg com.sa com.ua co.id or.id com.ng com.gh co.ke co.th in.th com.pe com.co com.ec com.uy com.py com.bo com.ve "
+
+func _is_suffix2(s: str): bool:
+    ret str.Contains(_SUFFIX2, " ".concat(s).concat(" "))
+end
+
+// ASCII digits only, deliberately. This decides whether a host label looks
+// like part of a dotted-quad address, and a host is defined over ASCII: a
+// label of Persian digits is a name, not a number, and treating "۱۲۷" as 127
+// would let two spellings of an address disagree.
+func _all_digits(s: str): bool:
+    if s.len() == 0: ret false end
+    bp := _bp(s)
+    repeat s.len() with i:
+        if str.IsAsciiDigit(_ub(bp, i)) == false: ret false end
+    end
+    ret true
+end
+
+// Joins labels[start .. endx) back together with dots.
+func _join_range(labels: Vector<str>, start: int, endx: int): str:
+    mut out := ""
+    mut i := start
+    until i < endx:
+        if i > start: out = out.concat(".") end
+        out = out.concat(labels.get(i))
+        i += 1
+    end
+    ret out
+end
+
+// How many trailing labels form the public suffix: two when the last two
+// are a known country second level pair, otherwise one.
+func _suffix_len(labels: Vector<str>): int:
+    n := labels.len()
+    if n >= 3:
+        last2 := labels.get(n - 2).concat(".").concat(labels.get(n - 1))
+        if _is_suffix2(last2): ret 2 end
+    end
+    ret 1
+end
+
+func _rebuild_query(u &: URL, q: query.QueryMap):
+    u.raw_query = query.Encode(q)
+end
+
+// The host with no port and no IPv6 brackets, which is how Parse already
+// stores it. Named so callers do not have to know that.
+@en "Hostname"
+@fa "نام میزبان"
+@ar "اسم المضیف"
+pub func Hostname(u: URL): str:
+    ret u.host
+end
+
+// True when the host is a literal address rather than a name. Neither
+// domain nor subdomain means anything for one, so the callers below hand
+// back the address whole instead of slicing it.
+@en "IsIP"
+@fa "نشانی عددی است"
+@ar "عنوان رقمی"
+pub func IsIP(u: URL): bool:
+    if u.host.len() == 0: ret false end
+    // an unbracketed colon in the stored host can only be IPv6
+    if u.host.find(":") >= 0: ret true end
+    parts := u.host.split(".")
+    defer parts.free()
+    if parts.len() != 4: ret false end
+    mut ok := true
+    repeat parts.len() with i:
+        if _all_digits(parts.get(i)) == false: ok = false end
+    end
+    ret ok
+end
+
+@en "Labels"
+@fa "برچسب‌های میزبان"
+@ar "مقاطع المضیف"
+pub func Labels(u: URL): Vector<str>:
+    ret u.host.split(".")
+end
+
+// The public suffix: "com" for example.com, "co.uk" for example.co.uk.
+// Empty for an IP literal or a single label host such as "localhost".
+@en "PublicSuffix"
+@fa "پسوند عمومی"
+@ar "اللاحقة العامة"
+pub func PublicSuffix(u: URL): str:
+    if IsIP(u): ret "" end
+    labels := u.host.split(".")
+    defer labels.free()
+    n := labels.len()
+    if n < 2: ret "" end
+    ret _join_range(labels, n - _suffix_len(labels), n)
+end
+
+// The registrable domain: the public suffix plus the one label in front
+// of it. "www.shop.example.co.uk" gives "example.co.uk". An IP literal
+// or a single label host is returned unchanged.
+@en "Domain"
+@fa "دامنه"
+@ar "النطاق"
+pub func Domain(u: URL): str:
+    if IsIP(u): ret u.host end
+    labels := u.host.split(".")
+    defer labels.free()
+    n := labels.len()
+    if n < 2: ret u.host end
+    take := _suffix_len(labels) + 1
+    if n <= take: ret u.host end
+    ret _join_range(labels, n - take, n)
+end
+
+// Everything to the left of the registrable domain, empty when there is
+// nothing there. "www.shop.example.co.uk" gives "www.shop".
+@en "Subdomain"
+@fa "زیردامنه"
+@ar "النطاق الفرعی"
+pub func Subdomain(u: URL): str:
+    if IsIP(u): ret "" end
+    labels := u.host.split(".")
+    defer labels.free()
+    n := labels.len()
+    take := _suffix_len(labels) + 1
+    if n <= take: ret "" end
+    ret _join_range(labels, 0, n - take)
+end
+
+// Drops one query parameter and rewrites the query string. Returns false
+// when the URL did not have it.
+@en "RemoveParam"
+@fa "حذف پارامتر"
+@ar "إزالة معامل"
+pub func RemoveParam(u &: URL, key: str): bool:
+    mut q := query.Decode(u.raw_query)
+    ok := query.Remove(q, key)
+    _rebuild_query(u, q)
+    ret ok
+end
+
+// Sets a parameter, replacing any values it already had and keeping its
+// position in the query string.
+@en "SetParam"
+@fa "تنظیم پارامتر"
+@ar "تعیین معامل"
+pub func SetParam(u &: URL, key: str, val: str):
+    mut q := query.Decode(u.raw_query)
+    query.Set(q, key, val)
+    _rebuild_query(u, q)
+end
+
+// Keeps only the listed parameters. The short way to strip tracking
+// parameters without naming every one of them.
+@en "KeepParams"
+@fa "نگه داشتن پارامترها"
+@ar "إبقاء المعاملات"
+pub func KeepParams(u &: URL, keep: Vector<str>):
+    mut q := query.Decode(u.raw_query)
+    query.Retain(q, keep)
+    _rebuild_query(u, q)
+end
+
+// Removes the query string entirely.
+@en "ClearQuery"
+@fa "پاک کردن پرس‌وجو"
+@ar "مسح الاستعلام"
+pub func ClearQuery(u &: URL):
+    u.raw_query = ""
+end
+
+@en "ParamNames"
+@fa "نام پارامترها"
+@ar "أسماء المعاملات"
+pub func ParamNames(u: URL): Vector<str>:
+    q := query.Decode(u.raw_query)
+    ret query.Keys(q)
+end

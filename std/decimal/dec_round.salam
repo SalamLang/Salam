@@ -1,0 +1,147 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package decimal
+
+import bigint
+
+// Rounding: one decision function, and the scale changes built on it.
+//
+// Every rounding in this package -- dropping digits with Rescale, and the
+// inexact quotient in Div -- is the same question: given a truncated quotient
+// q and a nonzero remainder r, does the magnitude go up by one? _div_round
+// answers it once, so the seven modes are implemented in exactly one place and
+// Div and Rescale cannot drift apart.
+//
+// The comparison is 2*|r| against |den|, which is "is the discarded part more
+// than, exactly, or less than half an ulp" without ever leaving integers.
+
+// The rounded quotient of num/den under the given mode. A zero divisor gives
+// zero, matching bigint.Div.
+func _div_round(num: bigint.Int, den: bigint.Int, mode: Rounding): bigint.Int:
+    mut q := bigint.Int {}
+    mut r := bigint.Int {}
+    if !bigint.DivMod(num, den, q, r):
+        r.free()
+        ret q
+    end
+    if r.is_zero():
+        r.free()
+        ret q
+    end
+
+    // Which way "away from zero" points. Read from the operands rather than
+    // from q, because a quotient that truncated to zero still has a direction:
+    // -1/10 rounds to -1 under Up, not to +1.
+    neg := (num.sign() * den.sign()) < 0
+
+    mut ar := bigint.Abs(r)
+    r.free()
+    mut twice := bigint.Shl(ar, 1)
+    ar.free()
+    mut ad := bigint.Abs(den)
+    // < 0 below half, == 0 exactly half, > 0 above half.
+    c := bigint.Cmp(twice, ad)
+    twice.free()
+    ad.free()
+
+    mut bump := false
+    if mode == Rounding.Up: bump = true
+    else mode == Rounding.Ceil: bump = !neg
+    else mode == Rounding.Floor: bump = neg
+    else mode == Rounding.HalfUp: bump = c >= 0
+    else mode == Rounding.HalfDown: bump = c > 0
+    else mode == Rounding.HalfEven:
+        if c > 0: bump = true
+        else c == 0: bump = bigint.IsOdd(q)
+        end
+    end
+
+    if bump:
+        mut one := bigint.FromInt(1 as i64)
+        if neg: bigint.NegateIn(one) end
+        nq := bigint.Add(q, one)
+        one.free()
+        q.free()
+        q = nq
+    end
+    ret q
+end
+
+// d at exactly the given scale. Increasing the scale is exact -- it appends
+// zeros; decreasing it drops digits and rounds them under `mode`. A negative
+// scale is treated as 0.
+@en "Rescale"
+@fa "تغییر مقیاس"
+@ar "تغيير المقياس"
+pub func Rescale(d: Dec, scale: int, mode: Rounding): Dec:
+    mut sc := scale
+    if sc < 0: sc = 0 end
+    if sc >= d.scale:
+        ret _adopt(_shift10(d.unscaled, sc - d.scale), sc)
+    end
+    mut den := bigint.Pow10(d.scale - sc)
+    q := _div_round(d.unscaled, den, mode)
+    den.free()
+    ret _adopt(q, sc)
+end
+
+// d rounded to `scale` decimal places, banker's rounding. The default for
+// money: ties go to the even neighbour, so a long run of roundings does not
+// drift upward the way HalfUp does.
+@en "Round"
+@fa "گردکردن"
+@ar "تقريب"
+pub func Round(d: Dec, scale: int): Dec: ret Rescale(d, scale, Rounding.HalfEven) end
+
+// d rounded to `scale` places, ties away from zero -- what a printed receipt
+// usually shows, and what a person means by "round to the nearest cent".
+@en "RoundHalfUp"
+@fa "گردکردن نیم بالا"
+@ar "تقريب نصف لأعلى"
+pub func RoundHalfUp(d: Dec, scale: int): Dec: ret Rescale(d, scale, Rounding.HalfUp) end
+
+// d cut to `scale` places, discarding the rest. Never rounds up, in either
+// direction.
+@en "Truncate"
+@fa "بریدن"
+@ar "بتر"
+pub func Truncate(d: Dec, scale: int): Dec: ret Rescale(d, scale, Rounding.Down) end
+
+// The smallest scale that represents d exactly: 1.2500 becomes 1.25, and
+// 0.00 becomes 0. The value is unchanged, only its scale is.
+@en "Trim"
+@fa "پیراستن"
+@ar "تشذيب"
+pub func Trim(d: Dec): Dec:
+    mut u := d.unscaled.clone()
+    mut sc := d.scale
+    mut ten := bigint.FromInt(10 as i64)
+    while sc > 0:
+        mut q := bigint.Int {}
+        mut r := bigint.Int {}
+        _ok := bigint.DivMod(u, ten, q, r)
+        divisible := r.is_zero()
+        r.free()
+        if !divisible:
+            q.free()
+            break
+        end
+        u.free()
+        u = q
+        sc -= 1
+    end
+    ten.free()
+    ret _adopt(u, sc)
+end

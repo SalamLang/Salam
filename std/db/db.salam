@@ -12,7 +12,307 @@
  *
  */
 
+// The engine-independent surface every driver under db/ implements.
+//
+// A driver still exposes its own package (db.sqlite, db.postgres, db.mysql)
+// with everything that engine can do; these three interfaces are the subset
+// they agree on, so code that only needs "a database" can take a
+// `dyn db.Connection` and run against any of them:
+//
+//     import db
+//     import db.sqlite
+//
+//     func count(c: dyn db.Connection): int:
+//         r := c.Query("SELECT COUNT(*) FROM users")
+//         mut n := 0
+//         if r.Next(): n = r.Int(0) end
+//         r.Close()
+//         ret n
+//     end
+//
+//     func main:
+//         d := sqlite.Open(":memory:")
+//         println count(sqlite.Conn(d))
+//     end
+//
+// Errors follow the stdlib convention rather than exceptions: a status is 0
+// for success and -1 for failure, a query hands back rows whose Ok() is false,
+// and Error() carries the engine's own message.
+
 @en "db"
 @fa "دیتابیس"
 @ar "قاعدة بیانات"
 package db
+
+// ---------------------------------------------------------------------------
+// Driver identifiers, as returned by Connection.Kind().
+// ---------------------------------------------------------------------------
+
+@en "SQLITE"
+@fa "اس کیو لایت"
+@ar "اس کیو لایت"
+pub const SQLITE := "sqlite"
+
+@en "MYSQL"
+@fa "مای اس کیو ال"
+@ar "مای اس کیو ال"
+pub const MYSQL := "mysql"
+
+@en "POSTGRES"
+@fa "پستگرس"
+@ar "بوستغرس"
+pub const POSTGRES := "postgres"
+
+// ---------------------------------------------------------------------------
+// Column types, as returned by Rows.ColumnType(). An engine that does not
+// report a type for a column says TEXT, which is always safe to read.
+// ---------------------------------------------------------------------------
+
+@en "TYPE_NULL"
+@fa "نوع خالی"
+@ar "نوع فارغ"
+pub const TYPE_NULL := 0
+
+@en "TYPE_INT"
+@fa "نوع صحیح"
+@ar "نوع صحیح"
+pub const TYPE_INT := 1
+
+@en "TYPE_FLOAT"
+@fa "نوع اعشاری"
+@ar "نوع عشري"
+pub const TYPE_FLOAT := 2
+
+@en "TYPE_TEXT"
+@fa "نوع متن"
+@ar "نوع نص"
+pub const TYPE_TEXT := 3
+
+@en "TYPE_BLOB"
+@fa "نوع دودویی"
+@ar "نوع ثنائي"
+pub const TYPE_BLOB := 4
+
+// ---------------------------------------------------------------------------
+// Rows - a forward-only cursor over a result set.
+//
+// Next() advances and reports whether a row is now current, so the loop is
+// always `until r.Next():`. Column accessors are 0-based and total: reading a
+// column that is out of range, NULL, or of another type yields that type's
+// zero value ("" / 0 / 0.0) instead of failing.
+//
+// Close() must be called exactly once, whether or not the rows were drained.
+// ---------------------------------------------------------------------------
+
+@en "Rows"
+@fa "ردیف ها"
+@ar "صفوف"
+pub interface Rows:
+    func Ok(): bool
+    func Next(): bool
+    func ColumnCount(): int
+    func ColumnName(col: int): str
+    func ColumnType(col: int): int
+    func IsNull(col: int): bool
+    func Text(col: int): str
+    func Int(col: int): int
+    func Int64(col: int): i64
+    func Float(col: int): f64
+    func Close(): int
+end
+
+// ---------------------------------------------------------------------------
+// Tx - a transaction in progress, handed back by Connection.Begin().
+//
+// Exactly one of Commit()/Rollback() ends it. Statements run through the Tx
+// rather than the Connection so that the two cannot be mixed up by accident,
+// though both reach the same underlying session.
+// ---------------------------------------------------------------------------
+
+@en "Tx"
+@fa "تراکنش"
+@ar "معاملة"
+pub interface Tx:
+    func Ok(): bool
+    func Exec(sql: str): int
+    func Query(sql: str): dyn Rows
+    func Commit(): int
+    func Rollback(): int
+end
+
+// ---------------------------------------------------------------------------
+// Connection - one open session with a database.
+//
+// A connection is NOT safe to share between threads; give each thread its own
+// (db.mysql documents the same rule, where sharing segfaults rather than
+// erroring).
+// ---------------------------------------------------------------------------
+
+@en "Connection"
+@fa "اتصال"
+@ar "اتصال"
+pub interface Connection:
+    func Kind(): str
+    func Ok(): bool
+    func Ping(): bool
+    func Exec(sql: str): int
+    func Query(sql: str): dyn Rows
+    func Begin(): dyn Tx
+    func LastInsertId(): i64
+    func Changes(): i64
+    func Error(): str
+    func Quote(s: str): str
+    func Close(): int
+end
+
+// ---------------------------------------------------------------------------
+// Helpers that work on any driver, written once here rather than N times.
+// ---------------------------------------------------------------------------
+
+@en "QueryInt"
+@fa "پرسمان عدد"
+@ar "استعلام عدد"
+pub func QueryInt(c: dyn Connection, sql: str): int:
+    r := c.Query(sql)
+    mut out := 0
+    if r.Ok():
+        if r.Next():
+            out = r.Int(0)
+        end
+        r.Close()
+    end
+    ret out
+end
+
+@en "QueryInt64"
+@fa "پرسمان عدد۶۴"
+@ar "استعلام عدد٦٤"
+pub func QueryInt64(c: dyn Connection, sql: str): i64:
+    r := c.Query(sql)
+    mut out := 0 as i64
+    if r.Ok():
+        if r.Next():
+            out = r.Int64(0)
+        end
+        r.Close()
+    end
+    ret out
+end
+
+@en "QueryFloat"
+@fa "پرسمان اعشار"
+@ar "استعلام عشري"
+pub func QueryFloat(c: dyn Connection, sql: str): f64:
+    r := c.Query(sql)
+    mut out := 0.0
+    if r.Ok():
+        if r.Next():
+            out = r.Float(0)
+        end
+        r.Close()
+    end
+    ret out
+end
+
+@en "QueryText"
+@fa "پرسمان متن"
+@ar "استعلام نص"
+pub func QueryText(c: dyn Connection, sql: str): str:
+    r := c.Query(sql)
+    mut out := ""
+    if r.Ok():
+        if r.Next():
+            out = r.Text(0)
+        end
+        r.Close()
+    end
+    ret out
+end
+
+// Number of rows a query returns, counted by walking it. Cheaper engine-side
+// counts exist (SELECT COUNT(*)); this is for a result set already in hand.
+@en "CountRows"
+@fa "شمارش ردیف ها"
+@ar "عد الصفوف"
+pub func CountRows(c: dyn Connection, sql: str): int:
+    r := c.Query(sql)
+    mut n := 0
+    if r.Ok():
+        until r.Next():
+            n = n + 1
+        end
+        r.Close()
+    end
+    ret n
+end
+
+// True when the statement ran. A convenience for the common `if !db.Run(...)`
+// shape, since Exec's 0/-1 reads backwards at a glance.
+@en "Run"
+@fa "اجرا کن"
+@ar "شغل"
+pub func Run(c: dyn Connection, sql: str): bool:
+    ret c.Exec(sql) == 0
+end
+
+// Every statement in `stmts`, stopping at the first failure and reporting how
+// many ran. Used by the migrator to apply a multi-statement step.
+@en "RunAll"
+@fa "اجرای همه"
+@ar "شغل الكل"
+pub func RunAll(c: dyn Connection, stmts: Vector<str>): int:
+    mut done := 0
+    mut i := 0
+    until i < stmts.len():
+        if c.Exec(stmts.get(i)) != 0:
+            ret done
+        end
+        done = done + 1
+        i = i + 1
+    end
+    ret done
+end
+
+// Run a whole unit of work in one transaction, committing when every statement
+// succeeded and rolling back at the first that did not. Reports whether it
+// committed.
+@en "InTx"
+@fa "در تراکنش"
+@ar "في معاملة"
+pub func InTx(c: dyn Connection, stmts: Vector<str>): bool:
+    t := c.Begin()
+    if !t.Ok():
+        ret false
+    end
+    mut i := 0
+    until i < stmts.len():
+        if t.Exec(stmts.get(i)) != 0:
+            t.Rollback()
+            ret false
+        end
+        i = i + 1
+    end
+    ret t.Commit() == 0
+end
+
+// Wrap a value as a single-quoted SQL literal, doubling any embedded quote.
+// A driver's own Quote() is preferred where the engine offers a real escaper
+// (db.mysql and db.postgres both do, and both are charset-aware); this is the
+// portable fallback and what db.sqlite uses.
+@en "QuoteLiteral"
+@fa "نقل قول"
+@ar "اقتباس"
+pub func QuoteLiteral(s: str): str:
+    mut out := "'"
+    mut i := 0
+    until i < len(s):
+        ch := s[i]
+        if ch == '\'':
+            out = out + "''"
+        else:
+            out = out + ch
+        end
+        i = i + 1
+    end
+    ret out + "'"
+end

@@ -14,6 +14,9 @@
 
 #include "interp/interp_internal.h"
 
+static value_t invoke(interp_t *I, env_t *env, ast_node_t *call, ast_node_t *fn,
+                      env_t *defenv, value_t *thisv, value_t *args, size_t nargs);
+
 static value_t *eval_args(interp_t *I, env_t *env, ast_node_t *call, size_t *outn)
 {
     size_t n = call->list.len;
@@ -28,7 +31,20 @@ static value_t *eval_args(interp_t *I, env_t *env, ast_node_t *call, size_t *out
     return args;
 }
 
-static int64_t interp_sizeof_typename(interp_t *I, const char *ts);
+/*
+ * The scope a struct's own declarations live in. A struct declared inside a
+ * package resolves the names in its field defaults there, and a generic
+ * instance cloned from one inherits that scope through fixup_generic_envs_in;
+ * everything else belongs to the program.
+ */
+static env_t *struct_home_env(interp_t *I, ast_node_t *sdef)
+{
+    env_t *e = find_def_env(I, sdef);
+    module_t *home;
+    if (e) return e;
+    home = sdef->home_pkg ? find_module(I, sdef->home_pkg) : NULL;
+    return home ? home->env : I->globals;
+}
 
 static value_t do_listdir(interp_t *I, ast_node_t *call, value_t patharg)
 {
@@ -45,72 +61,6 @@ static value_t do_listdir(interp_t *I, ast_node_t *call, value_t patharg)
             array_push(I, out, val_str(arena_strdup(I->a, arr[i] ? arr[i] : "")));
     }
     return mk_array(I, out);
-}
-
-static int64_t interp_alignof_typename(interp_t *I, const char *ts)
-{
-    if (!ts || !*ts) return 8;
-    size_t len = strlen(ts);
-    if (ts[len - 1] == '*') return 8;
-    if (!strcmp(ts, "i8") || !strcmp(ts, "u8") || !strcmp(ts, "bool") ||
-        !strcmp(ts, "char"))
-        return 1;
-    if (!strcmp(ts, "i16") || !strcmp(ts, "u16")) return 2;
-    if (!strcmp(ts, "i32") || !strcmp(ts, "u32") || !strcmp(ts, "f32")) return 4;
-    if (!strcmp(ts, "i64") || !strcmp(ts, "u64") || !strcmp(ts, "f64") ||
-        !strcmp(ts, "str"))
-        return 8;
-    ast_node_t *sd = find_struct(I, ts);
-    if (sd) {
-        int64_t maxalign = 1;
-        {
-            size_t i = 0;
-            for (; i < sd->list.len; i++) {
-                ast_node_t *f = (ast_node_t *)sd->list.data[i];
-                if (f->kind != AST_FIELD) continue;
-                int64_t al =
-                    interp_alignof_typename(I, f->type ? f->type->type_str : NULL);
-                if (al > maxalign) maxalign = al;
-            }
-        }
-        return maxalign;
-    }
-    return 8;
-}
-
-static int64_t interp_sizeof_typename(interp_t *I, const char *ts)
-{
-    if (!ts || !*ts) return 8;
-    size_t len = strlen(ts);
-    if (ts[len - 1] == '*') return 8;
-    if (!strcmp(ts, "i8") || !strcmp(ts, "u8") || !strcmp(ts, "bool") ||
-        !strcmp(ts, "char"))
-        return 1;
-    if (!strcmp(ts, "i16") || !strcmp(ts, "u16")) return 2;
-    if (!strcmp(ts, "i32") || !strcmp(ts, "u32") || !strcmp(ts, "f32")) return 4;
-    if (!strcmp(ts, "i64") || !strcmp(ts, "u64") || !strcmp(ts, "f64") ||
-        !strcmp(ts, "str"))
-        return 8;
-    ast_node_t *sd = find_struct(I, ts);
-    if (sd) {
-        int64_t off = 0, maxalign = 1;
-        {
-            size_t i = 0;
-            for (; i < sd->list.len; i++) {
-                ast_node_t *f = (ast_node_t *)sd->list.data[i];
-                if (f->kind != AST_FIELD) continue;
-                const char *fts = f->type ? f->type->type_str : NULL;
-                int64_t sz = interp_sizeof_typename(I, fts);
-                int64_t al = interp_alignof_typename(I, fts);
-                off = (off + al - 1) & ~(al - 1);
-                off += sz;
-                if (al > maxalign) maxalign = al;
-            }
-        }
-        off = (off + maxalign - 1) & ~(maxalign - 1);
-        return off ? off : 8;
-    }
-    return 8;
 }
 
 static value_t eval_call(interp_t *I, env_t *env, ast_node_t *n)
@@ -181,12 +131,19 @@ static value_t eval_call(interp_t *I, env_t *env, ast_node_t *n)
 
         binding_t *b = env_find(env, nm);
         if (b && b->val.kind == VAL_FUNC)
-            return call_func(I, b->val.as.fn->fn, b->val.as.fn->env, NULL, args, na);
+            return invoke(I, env, n, b->val.as.fn->fn, b->val.as.fn->env, NULL, args, na);
         ast_node_t *fn = find_func(I, nm, na);
-        if (fn) return call_func(I, fn, I->globals, NULL, args, na);
+        if (fn) {
+            /* A generic instance or a derived codec carries a global name but
+             * a package's body: the names it calls, private ones included,
+             * are that module's. Running it against the program's globals
+             * instead loses them ("call to undefined function '_dnew'"). */
+            module_t *hm = fn->home_pkg ? find_module(I, fn->home_pkg) : NULL;
+            return invoke(I, env, n, fn, hm ? hm->env : I->globals, NULL, args, na);
+        }
 
         value_t *ef = find_extern_fn(I, nm);
-        if (ef) return call_func(I, ef->as.fn->fn, ef->as.fn->env, NULL, args, na);
+        if (ef) return invoke(I, env, n, ef->as.fn->fn, ef->as.fn->env, NULL, args, na);
 
         bool handled;
         value_t ir = call_intrinsic(I, n, nm, args, na, &handled);
@@ -207,7 +164,7 @@ static value_t eval_call(interp_t *I, env_t *env, ast_node_t *n)
             if (mb && mb->val.kind == VAL_MODULE) {
                 size_t na;
                 value_t *args = eval_args(I, env, n, &na);
-                return call_module_func(I, n, mb->val.as.mod, method, args, na);
+                return call_module_func(I, env, n, mb->val.as.mod, method, args, na);
             }
         }
         value_t recv = eval(I, env, obj);
@@ -220,7 +177,7 @@ static value_t eval_call(interp_t *I, env_t *env, ast_node_t *n)
             if (!m) m = struct_method(recv.as.st->def, method);
             if (m) {
                 env_t *denv = find_def_env(I, m);
-                return call_func(I, m, denv ? denv : I->globals, &recv, args, na);
+                return invoke(I, env, n, m, denv ? denv : I->globals, &recv, args, na);
             }
 
             {
@@ -229,7 +186,8 @@ static value_t eval_call(interp_t *I, env_t *env, ast_node_t *n)
                     if (strcmp(recv.as.st->fields[i].name, method) == 0 &&
                         recv.as.st->fields[i].val.kind == VAL_FUNC) {
                         value_t fv = recv.as.st->fields[i].val;
-                        return call_func(I, fv.as.fn->fn, fv.as.fn->env, NULL, args, na);
+                        return invoke(I, env, n, fv.as.fn->fn, fv.as.fn->env, NULL, args,
+                                      na);
                     }
             }
             rt_error(I, n, "struct '%s' has no method '%s'", recv.as.st->type_name,
@@ -240,7 +198,7 @@ static value_t eval_call(interp_t *I, env_t *env, ast_node_t *n)
             ast_node_t *im = find_impl_method(I, obj->type_str, method, na);
             if (im) {
                 env_t *denv = find_def_env(I, im);
-                return call_func(I, im, denv ? denv : I->globals, &recv, args, na);
+                return invoke(I, env, n, im, denv ? denv : I->globals, &recv, args, na);
             }
         }
         return call_builtin_method(I, n, recv, method, args, na);
@@ -250,10 +208,113 @@ static value_t eval_call(interp_t *I, env_t *env, ast_node_t *n)
     if (fv.kind == VAL_FUNC) {
         size_t na;
         value_t *args = eval_args(I, env, n, &na);
-        return call_func(I, fv.as.fn->fn, fv.as.fn->env, NULL, args, na);
+        return invoke(I, env, n, fv.as.fn->fn, fv.as.fn->env, NULL, args, na);
     }
     rt_error(I, n, "value is not callable");
     return val_null();
+}
+
+/*
+ * A `&:` parameter is a reference: what the callee leaves in it belongs to the
+ * caller. The walker has no addresses to bind, so the two halves of that are
+ * copy-in (the ordinary argument binding) and copy-out - here, and then
+ * interp_writeback_refs at the call site.
+ *
+ * Without it a whole-value write to a reference parameter went nowhere:
+ * `err = encerr.ErrUnexpectedToken(...)` in json.Unmarshal, and every
+ * `_dgstr(s, p, q)`-style out parameter under it, all reported success while
+ * leaving the caller's variable untouched.
+ */
+static void export_ref_params(interp_t *I, ast_node_t *fn, env_t *env, value_t *args,
+                              size_t nargs)
+{
+    size_t i = 0;
+    for (; i < fn->list.len && i < nargs; i++) {
+        ast_node_t *p = (ast_node_t *)fn->list.data[i];
+        binding_t *b;
+        if (!p->is_ref || !p->name) continue;
+        b = env_find_local(env, p->name);
+        if (b) args[i] = b->val;
+    }
+}
+
+/*
+ * A field or element the walker holds as a value rather than as bytes -
+ * `f(s.key)`, `f(rows[0])` - is still a place the callee's `&:` result has to
+ * land in, and interp_resolve_loc would reach it, but that function reports a
+ * shape it cannot place as a runtime error. Here a shape that is not a place
+ * simply has nowhere to write, so this resolves the two cases that are and
+ * says no to everything else. `pkg.Global` is deliberately among the no's:
+ * the base evaluates to a module, not a struct, and the walker has never
+ * supported assigning through it.
+ */
+static bool writeback_value_place(interp_t *I, env_t *env, ast_node_t *arg, value_t v)
+{
+    if (arg->kind == AST_MEMBER && arg->a && arg->name) {
+        value_t obj = eval(I, env, arg->a);
+        size_t i = 0;
+        if (obj.kind != VAL_STRUCT) return false;
+        for (; i < obj.as.st->nfields; i++)
+            if (strcmp(obj.as.st->fields[i].name, arg->name) == 0) {
+                obj.as.st->fields[i].val = v;
+                return true;
+            }
+        return false;
+    }
+    if (arg->kind == AST_INDEX && arg->a && arg->b) {
+        value_t base = eval(I, env, arg->a);
+        int64_t idx;
+        if (base.kind != VAL_ARRAY) return false;
+        idx = to_int(eval(I, env, arg->b));
+        if (idx < 0 || (size_t)idx >= base.as.arr->len) return false;
+        base.as.arr->data[idx] = v;
+        return true;
+    }
+    return false;
+}
+
+/*
+ * The other half: put what the callee left in a `&:` parameter back where the
+ * caller passed it from. A plain variable is the common case; an argument like
+ * `(_o.next)[0]`, which the derived JSON decoder passes to decode into the
+ * memory a pointer field owns, is written straight to those bytes.
+ */
+void interp_writeback_refs(interp_t *I, env_t *env, ast_node_t *call, ast_node_t *fn,
+                           value_t *args, size_t nargs)
+{
+    size_t i = 0;
+    for (; i < call->list.len && i < fn->list.len && i < nargs; i++) {
+        ast_node_t *p = (ast_node_t *)fn->list.data[i];
+        ast_node_t *arg = (ast_node_t *)call->list.data[i];
+        if (!p->is_ref) continue;
+        if (arg->kind == AST_IDENTIFIER && arg->name) {
+            binding_t *b = env_find(env, arg->name);
+            if (b) b->val = args[i];
+            continue;
+        }
+        /* Otherwise only a place is written back, and only when it
+         * resolves: an argument that is not a place at all (a temporary) has
+         * nowhere to receive the value, and reporting that here would turn
+         * code the walker used to run into a runtime error. */
+        {
+            void *addr = NULL;
+            const char *ts = NULL;
+            if (interp_mem_lvalue(I, env, arg, &addr, &ts))
+                interp_mem_store(I, addr, ts, args[i]);
+            else
+                (void)writeback_value_place(I, env, arg, args[i]);
+        }
+    }
+}
+
+/* A call from source, where the argument list is still around to write back
+ * through. Calls the walker makes on its own behalf use call_func directly. */
+static value_t invoke(interp_t *I, env_t *env, ast_node_t *call, ast_node_t *fn,
+                      env_t *defenv, value_t *thisv, value_t *args, size_t nargs)
+{
+    value_t r = call_func(I, fn, defenv, thisv, args, nargs);
+    interp_writeback_refs(I, env, call, fn, args, nargs);
+    return r;
 }
 
 value_t call_func(interp_t *I, ast_node_t *fn, env_t *defenv, value_t *thisv,
@@ -283,16 +344,8 @@ value_t call_func(interp_t *I, ast_node_t *fn, env_t *defenv, value_t *thisv,
     I->match_expr_depth = 0;
     if (fn->a) exec_list(I, env, &fr, &fn->a->list, &ret);
     I->match_expr_depth = saved_med;
-    {
-        size_t i = fr.defers.len;
-        for (; i > 0; i--) {
-            defer_t *d = (defer_t *)fr.defers.data[i - 1];
-            value_t dummy = val_null();
-            frame_t inner;
-            vec_init(&inner.defers);
-            exec_stmt(I, d->env, &inner, d->stmt, &dummy);
-        }
-    }
+    run_defers_from(I, &fr, 0);
+    export_ref_params(I, fn, env, args, nargs);
     I->depth--;
     /* Deliberately after the defers ran: they execute in scopes parented to
      * this one, so it has to stay valid until they are done. */
@@ -316,16 +369,7 @@ static value_t eval_match(interp_t *I, env_t *env, ast_node_t *n)
         f = exec_list(I, c, &fr, &arm->b->list, &val);
         I->match_expr_depth = saved_depth;
         if (f == FLOW_BREAK || f == FLOW_CONTINUE) I->pending_flow = f;
-        {
-            size_t i = fr.defers.len;
-            for (; i > 0; i--) {
-                defer_t *d = (defer_t *)fr.defers.data[i - 1];
-                value_t dummy = val_null();
-                frame_t inner;
-                vec_init(&inner.defers);
-                exec_stmt(I, d->env, &inner, d->stmt, &dummy);
-            }
-        }
+        run_defers_from(I, &fr, 0);
         return val;
     }
 }
@@ -482,7 +526,7 @@ static value_t eval_node(interp_t *I, env_t *env, ast_node_t *n)
         bool tptr = ts && *ts && ts[strlen(ts) - 1] == '*';
         if (tptr) {
             void *addr = a.kind == VAL_STR ? (void *)a.as.s : (void *)(intptr_t)to_int(a);
-            return val_ptr(addr, ptr_elem_from_typestr(ts));
+            return interp_ptr_value(I, addr, ts);
         }
         char base[96];
         base_typename(ts, base, sizeof base);
@@ -508,16 +552,70 @@ static value_t eval_node(interp_t *I, env_t *env, ast_node_t *n)
         return eval_call(I, env, n);
     case AST_MEMBER: {
         ast_node_t *obj = n->a;
-        if (obj->kind == AST_IDENTIFIER && !env_find(env, obj->name)) {
+        /*
+         * pkg.EnumName.Member: obj is itself pkg.EnumName, an AST_MEMBER
+         * (obj->a = "pkg", obj->name = "Kind") rather than a bare
+         * identifier - I->tab_enums is one flat, package-agnostic table
+         * (interp.c:332), so the lookup below is identical either way; this
+         * only widens which shapes reach it. Without it, obj falls to the
+         * eval(I, env, obj) below, which evaluates "pkg.Kind" as an ordinary
+         * module-member read and fails with "package has no member 'Kind'"
+         * (enums aren't registered as module env bindings).
+         */
+        bool obj_is_pkg_qualified = false;
+        if (obj->kind == AST_MEMBER && obj->a && obj->a->kind == AST_IDENTIFIER) {
+            binding_t *pkgb = env_find(env, obj->a->name);
+            obj_is_pkg_qualified = pkgb && pkgb->val.kind == VAL_MODULE;
+        }
+        if ((obj->kind == AST_IDENTIFIER && !env_find(env, obj->name)) ||
+            obj_is_pkg_qualified) {
             ast_node_t *edef = find_enum(I, obj->name);
             if (edef) {
+                /*
+                 * Mirrors sema_decl.c's AST_ENUM_DEF handling: the first
+                 * member with a literal initializer fixes the enum's
+                 * backing kind (TV_INT if none has one); int members
+                 * auto-increment, string/float members carry their own
+                 * literal value directly (sema already rejects a
+                 * string/float-backed member with no initializer, so this
+                 * always resolves for a program that passed sema).
+                 */
+                token_value_kind_t backing = TV_INT;
                 {
-                    size_t i = 0, val = 0;
-                    for (; i < edef->list.len; i++, val++) {
+                    size_t i = 0;
+                    for (; i < edef->list.len; i++) {
                         ast_node_t *m = (ast_node_t *)edef->list.data[i];
-                        if (m->a) val = (size_t)to_int(eval(I, I->globals, m->a));
-                        if (m->name && strcmp(m->name, n->name) == 0)
-                            return val_int((int64_t)val);
+                        if (m->a && m->a->kind == AST_LITERAL) {
+                            backing = m->a->value.kind;
+                            break;
+                        }
+                    }
+                }
+                {
+                    size_t i = 0;
+                    int64_t next = 0;
+                    for (; i < edef->list.len; i++) {
+                        ast_node_t *m = (ast_node_t *)edef->list.data[i];
+                        value_t val;
+                        if (m->a && m->a->kind == AST_LITERAL &&
+                            m->a->value.kind == backing) {
+                            switch (backing) {
+                            case TV_FLOAT:
+                                val = val_float(m->a->value.as.f);
+                                break;
+                            case TV_STRING:
+                                val = val_str(m->a->value.as.s);
+                                break;
+                            default:
+                                next = (int64_t)m->a->value.as.i;
+                                val = val_int(next);
+                                break;
+                            }
+                        } else {
+                            val = val_int(next);
+                        }
+                        if (m->name && strcmp(m->name, n->name) == 0) return val;
+                        if (backing == TV_INT) next++;
                     }
                 }
                 rt_error(I, n, "enum '%s' has no member '%s'", obj->name, n->name);
@@ -538,6 +636,12 @@ static value_t eval_node(interp_t *I, env_t *env, ast_node_t *n)
             }
             rt_error(I, n, "struct '%s' has no field '%s'", recv.as.st->type_name,
                      n->name);
+        }
+        if (recv.kind == VAL_PTR) {
+            void *fa = NULL;
+            const char *fts = NULL;
+            if (interp_mem_ptr_field(I, recv, n->name, &fa, &fts))
+                return interp_mem_load(I, fa, fts);
         }
         rt_error(I, n, "cannot access member '%s'", n->name);
     }
@@ -567,7 +671,7 @@ static value_t eval_node(interp_t *I, env_t *env, ast_node_t *n)
         }
         if (a.kind == VAL_PTR) {
             if (!a.as.ptr.addr) rt_error(I, n, "dereference of a null pointer");
-            return ptr_load(a.as.ptr, to_int(idx));
+            return ptr_load(I, a.as.ptr, to_int(idx));
         }
 
         if (to_int(idx) == 0) return a;
@@ -599,6 +703,10 @@ static value_t eval_node(interp_t *I, env_t *env, ast_node_t *n)
                 if (((ast_node_t *)sdef->list.data[i])->kind == AST_FIELD) nf++;
         }
         value_t sv = mk_struct(I, sdef->name, sdef, nf);
+        /* Field defaults are written in the package that declares the struct,
+         * so they resolve there: `pub kind: int = KindNone` reads a constant
+         * of encerr's own module, which the program's globals never hold. */
+        env_t *fenv = struct_home_env(I, sdef);
         size_t fi = 0;
         {
             size_t i = 0;
@@ -617,7 +725,7 @@ static value_t eval_node(interp_t *I, env_t *env, ast_node_t *n)
                     }
                 }
                 value_t fv = provided ? eval(I, env, provided->a)
-                                      : (f->a ? eval(I, I->globals, f->a) : val_null());
+                                      : (f->a ? eval(I, fenv, f->a) : val_null());
                 sv.as.st->fields[fi].name = f->name;
                 sv.as.st->fields[fi].val = fv;
                 fi++;

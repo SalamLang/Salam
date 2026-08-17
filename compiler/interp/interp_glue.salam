@@ -61,8 +61,135 @@ func call_func(
         inner.defer_stmts.free()
         inner.defer_envs.free()
     end
+    export_ref_params(ip, a, fnnode, env, args)
     ip.depth -= 1
     ret retv
+end
+
+// The other half: put what the callee left in a `&:` parameter back where the
+// caller passed it from. A plain variable is the common case; an argument like
+// `(_o.next)[0]`, which the derived JSON decoder passes to decode into the
+// memory a pointer field owns, is written straight to those bytes.
+// A field or element the walker holds as a value rather than as bytes -
+// `f(s.key)`, `f(rows[0])` - is still a place the callee's `&:` result has to
+// land in. A shape that is not a place simply has nowhere to write, so this
+// resolves the two cases that are and says no to everything else.
+// `pkg.Global` is deliberately among the no's: the base evaluates to a module,
+// not a struct, and the walker has never supported assigning through it.
+func writeback_value_place(
+    ip &: Interp, a &: at.Ast, env: int, arg: int, v: Value
+): bool:
+    an := at.Get(a, arg)
+    if an.kind == at.AST_MEMBER && an.a != 0 && str.Len(an.name) != 0:
+        obj := eval(ip, a, env, an.a)
+        if ip.failed:
+            ret false
+        end
+        if obj.kind != VAL_STRUCT:
+            ret false
+        end
+        mut sv := ip.sts.get(obj.id)
+        repeat sv.fnames.len() with fi:
+            if str.Equals(sv.fnames.get(fi), an.name):
+                sv.fvals.set(fi, v)
+                ip.sts.set(obj.id, sv)
+                ret true
+            end
+        end
+        ret false
+    end
+    if an.kind == at.AST_INDEX && an.a != 0 && an.b != 0:
+        base := eval(ip, a, env, an.a)
+        if ip.failed:
+            ret false
+        end
+        if base.kind != VAL_ARRAY:
+            ret false
+        end
+        idx := to_int(eval(ip, a, env, an.b))
+        if ip.failed:
+            ret false
+        end
+        mut av := ip.arrs.get(base.id)
+        if idx < (0 as i64) || idx >= (av.items.len() as i64):
+            ret false
+        end
+        av.items.set(idx as int, v)
+        ip.arrs.set(base.id, av)
+        ret true
+    end
+    ret false
+end
+
+func interp_writeback_refs(
+    ip &: Interp, a &: at.Ast, env: int, call: int, fnnode: int, args: Vector<Value>
+):
+    repeat at.ChildCount(a, fnnode) with i:
+        p := at.Child(a, fnnode, i)
+        pn := at.Get(a, p)
+        if pn.is_ref && i < args.len() && i < at.ChildCount(a, call):
+            arg := at.Child(a, call, i)
+            k := at.KindOf(a, arg)
+            if k == at.AST_IDENTIFIER:
+                mut where := 0
+                slot := env_find(ip, env, at.Get(a, arg).name, where)
+                if slot >= 0:
+                    env_slot_set(ip, where, slot, args.get(i))
+                end
+            else k == at.AST_INDEX || k == at.AST_MEMBER:
+                // Otherwise only a place is written back, and only when it
+                // resolves: an argument that is not a place at all (a
+                // temporary) has nowhere to receive the value, and reporting
+                // that here would turn code the walker used to run into a
+                // runtime error.
+                mut maddr := 0 as i64
+                mut mts := ""
+                if interp_mem_lvalue(ip, a, env, arg, maddr, mts):
+                    interp_mem_store(ip, a, maddr, mts, args.get(i))
+                else:
+                    _wb := writeback_value_place(ip, a, env, arg, args.get(i))
+                end
+            end
+        end
+    end
+end
+
+// A call from source, where the argument list is still around to write back
+// through. Calls the walker makes on its own behalf use call_func directly.
+func invoke(
+    ip &: Interp, a &: at.Ast, env: int, call: int, fnnode: int, defenv: int,
+    has_this: bool, thisv: Value, args: Vector<Value>
+): Value:
+    r := call_func(ip, a, fnnode, defenv, has_this, thisv, args)
+    if ip.failed:
+        ret r
+    end
+    interp_writeback_refs(ip, a, env, call, fnnode, args)
+    ret r
+end
+
+// A `&:` parameter is a reference: what the callee leaves in it belongs to the
+// caller. The walker has no addresses to bind, so the two halves of that are
+// copy-in (the ordinary argument binding in call_func) and copy-out - here,
+// and then interp_writeback_refs at the call site.
+//
+// Without it a whole-value write to a reference parameter went nowhere:
+// `err = encerr.ErrUnexpectedToken(...)` in json.Unmarshal, and every
+// `_dgstr(s, p, q)`-style out parameter under it, all reported success while
+// leaving the caller's variable untouched.
+func export_ref_params(
+    ip &: Interp, a &: at.Ast, fnnode: int, env: int, args: Vector<Value>
+):
+    repeat at.ChildCount(a, fnnode) with i:
+        p := at.Child(a, fnnode, i)
+        pn := at.Get(a, p)
+        if pn.is_ref && i < args.len():
+            slot := env_find_local(ip, env, pn.name)
+            if slot >= 0:
+                args.set(i, env_slot_val(ip, env, slot))
+            end
+        end
+    end
 end
 
 // exec_list (interp_stmt.c) - executes `owner`'s child list; cooperative

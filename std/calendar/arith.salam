@@ -1,0 +1,269 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Calendar arithmetic: "three days from now", "this time next month",
+// "how many days until Nowruz". Every calendar gets the same four
+// operations (AddDays / AddWeeks / AddMonths / AddYears) plus the
+// month/year boundary helpers and a day count between two dates.
+//
+// DAY ARITHMETIC is exact: it happens in JDN space, so it crosses month,
+// year and leap-day boundaries with no special cases and no possibility of
+// landing on a date that does not exist.
+//
+// MONTH AND YEAR ARITHMETIC CLAMPS, because it has to: there is no
+// 31st of February, and no 30th of Esfand outside a Jalali leap year. The
+// convention here is the same one Python's dateutil, Java's java.time and
+// PHP's DateTime (with its "relative month" fix) all settle on - keep the
+// month, pull the day back to the last valid day of that month:
+//
+//     2024-01-31 + 1 month  ->  2024-02-29   (leap year)
+//     2023-01-31 + 1 month  ->  2023-02-28
+//     2024-02-29 + 1 year   ->  2025-02-28
+//
+// This makes month arithmetic non-reversible - adding a month and then
+// subtracting one does not always return the original date - which is a
+// property of civil calendars, not of this implementation. When you need a
+// reversible span, count days.
+//
+// All of this is pure date math on the calendar itself. It knows nothing
+// about clocks or timezones: adding a day here always advances the date by
+// exactly one, which is what "same time tomorrow" should mean even on the
+// 23- or 25-hour days that DST creates. Adding 86400 seconds to an epoch
+// does NOT do that; see tzif.salam.
+package calendar
+
+// Shifts a (year, month) pair by `n` months, with month numbered 1..12 in
+// every calendar this package supports. Uses floor division so that going
+// backwards past January lands on the previous year rather than truncating
+// toward zero.
+func _shiftMonth(year: int, month: int, n: int): GregorianDate:
+    total := (year as i64) * 12 + ((month - 1) as i64) + (n as i64)
+    y := _floordiv(total, 12)
+    m := _floormod(total, 12) + 1
+    // Reuses GregorianDate purely as a (year, month) carrier; the caller
+    // supplies the day after clamping it against its own calendar.
+    ret GregorianDate { year = y as int, month = m as int, day = 1 }
+end
+
+// -- Gregorian ------------------------------------------------------------
+
+@en "AddDaysGregorian"
+@fa "افزودن روز میلادی"
+@ar "إضافة أیام میلادی"
+pub func AddDaysGregorian(d: GregorianDate, n: int): GregorianDate:
+    ret JDNToGregorian(GregorianToJDN(d) + (n as i64))
+end
+
+@en "AddWeeksGregorian"
+@fa "افزودن هفته میلادی"
+@ar "إضافة أسابیع میلادی"
+pub func AddWeeksGregorian(d: GregorianDate, n: int): GregorianDate:
+    ret AddDaysGregorian(d, n * 7)
+end
+
+@en "AddMonthsGregorian"
+@fa "افزودن ماه میلادی"
+@ar "إضافة أشهر میلادی"
+pub func AddMonthsGregorian(d: GregorianDate, n: int): GregorianDate:
+    ym := _shiftMonth(d.year, d.month, n)
+    mut day := d.day
+    last := DaysInGregorianMonth(ym.year, ym.month)
+    if day > last: day = last end
+    ret GregorianDate { year = ym.year, month = ym.month, day = day }
+end
+
+@en "AddYearsGregorian"
+@fa "افزودن سال میلادی"
+@ar "إضافة سنوات میلادی"
+pub func AddYearsGregorian(d: GregorianDate, n: int): GregorianDate:
+    ret AddMonthsGregorian(d, n * 12)
+end
+
+@en "DaysBetweenGregorian"
+@fa "روزهای بین میلادی"
+@ar "الأیام بین تاریخین میلادیین"
+pub func DaysBetweenGregorian(from: GregorianDate, toDate: GregorianDate): i64:
+    ret GregorianToJDN(toDate) - GregorianToJDN(from)
+end
+
+@en "StartOfMonthGregorian"
+@fa "آغاز ماه میلادی"
+@ar "بدایة الشهر المیلادی"
+pub func StartOfMonthGregorian(d: GregorianDate): GregorianDate:
+    ret GregorianDate { year = d.year, month = d.month, day = 1 }
+end
+
+@en "EndOfMonthGregorian"
+@fa "پایان ماه میلادی"
+@ar "نهایة الشهر المیلادی"
+pub func EndOfMonthGregorian(d: GregorianDate): GregorianDate:
+    ret GregorianDate { year = d.year, month = d.month, day = DaysInGregorianMonth(d.year, d.month) }
+end
+
+@en "DaysInGregorianYear"
+@fa "روزهای سال میلادی"
+@ar "أیام السنة المیلادیة"
+pub func DaysInGregorianYear(year: int): int:
+    if IsLeapGregorian(year): ret 366 end
+    ret 365
+end
+
+// -- Jalali ---------------------------------------------------------------
+
+@en "AddDaysJalali"
+@fa "افزودن روز جلالی"
+@ar "إضافة أیام جلالی"
+pub func AddDaysJalali(d: JalaliDate, n: int): JalaliDate:
+    ret JDNToJalali(JalaliToJDN(d) + (n as i64))
+end
+
+@en "AddWeeksJalali"
+@fa "افزودن هفته جلالی"
+@ar "إضافة أسابیع جلالی"
+pub func AddWeeksJalali(d: JalaliDate, n: int): JalaliDate:
+    ret AddDaysJalali(d, n * 7)
+end
+
+@en "AddMonthsJalali"
+@fa "افزودن ماه جلالی"
+@ar "إضافة أشهر جلالی"
+pub func AddMonthsJalali(d: JalaliDate, n: int): JalaliDate:
+    ym := _shiftMonth(d.year, d.month, n)
+    mut day := d.day
+    last := DaysInJalaliMonth(ym.year, ym.month)
+    if day > last: day = last end
+    ret JalaliDate { year = ym.year, month = ym.month, day = day }
+end
+
+@en "AddYearsJalali"
+@fa "افزودن سال جلالی"
+@ar "إضافة سنوات جلالی"
+pub func AddYearsJalali(d: JalaliDate, n: int): JalaliDate:
+    ret AddMonthsJalali(d, n * 12)
+end
+
+@en "DaysBetweenJalali"
+@fa "روزهای بین جلالی"
+@ar "الأیام بین تاریخین جلالیین"
+pub func DaysBetweenJalali(from: JalaliDate, toDate: JalaliDate): i64:
+    ret JalaliToJDN(toDate) - JalaliToJDN(from)
+end
+
+@en "StartOfMonthJalali"
+@fa "آغاز ماه جلالی"
+@ar "بدایة الشهر الجلالی"
+pub func StartOfMonthJalali(d: JalaliDate): JalaliDate:
+    ret JalaliDate { year = d.year, month = d.month, day = 1 }
+end
+
+@en "EndOfMonthJalali"
+@fa "پایان ماه جلالی"
+@ar "نهایة الشهر الجلالی"
+pub func EndOfMonthJalali(d: JalaliDate): JalaliDate:
+    ret JalaliDate { year = d.year, month = d.month, day = DaysInJalaliMonth(d.year, d.month) }
+end
+
+@en "DaysInJalaliYear"
+@fa "روزهای سال جلالی"
+@ar "أیام السنة الجلالیة"
+pub func DaysInJalaliYear(year: int): int:
+    if IsLeapJalali(year): ret 366 end
+    ret 365
+end
+
+// -- Hijri ----------------------------------------------------------------
+
+@en "AddDaysHijri"
+@fa "افزودن روز هجری"
+@ar "إضافة أیام هجری"
+pub func AddDaysHijri(d: HijriDate, n: int): HijriDate:
+    ret JDNToHijri(HijriToJDN(d) + (n as i64))
+end
+
+@en "AddWeeksHijri"
+@fa "افزودن هفته هجری"
+@ar "إضافة أسابیع هجری"
+pub func AddWeeksHijri(d: HijriDate, n: int): HijriDate:
+    ret AddDaysHijri(d, n * 7)
+end
+
+@en "AddMonthsHijri"
+@fa "افزودن ماه هجری"
+@ar "إضافة أشهر هجری"
+pub func AddMonthsHijri(d: HijriDate, n: int): HijriDate:
+    ym := _shiftMonth(d.year, d.month, n)
+    mut day := d.day
+    last := DaysInHijriMonth(ym.year, ym.month)
+    if day > last: day = last end
+    ret HijriDate { year = ym.year, month = ym.month, day = day }
+end
+
+@en "AddYearsHijri"
+@fa "افزودن سال هجری"
+@ar "إضافة سنوات هجری"
+pub func AddYearsHijri(d: HijriDate, n: int): HijriDate:
+    ret AddMonthsHijri(d, n * 12)
+end
+
+@en "DaysBetweenHijri"
+@fa "روزهای بین هجری"
+@ar "الأیام بین تاریخین هجریین"
+pub func DaysBetweenHijri(from: HijriDate, toDate: HijriDate): i64:
+    ret HijriToJDN(toDate) - HijriToJDN(from)
+end
+
+@en "StartOfMonthHijri"
+@fa "آغاز ماه هجری"
+@ar "بدایة الشهر الهجری"
+pub func StartOfMonthHijri(d: HijriDate): HijriDate:
+    ret HijriDate { year = d.year, month = d.month, day = 1 }
+end
+
+@en "EndOfMonthHijri"
+@fa "پایان ماه هجری"
+@ar "نهایة الشهر الهجری"
+pub func EndOfMonthHijri(d: HijriDate): HijriDate:
+    ret HijriDate { year = d.year, month = d.month, day = DaysInHijriMonth(d.year, d.month) }
+end
+
+// -- weekday helpers ------------------------------------------------------
+
+// Weekday of a date in each calendar (0=Sunday .. 6=Saturday), saving the
+// caller a manual trip through JDN.
+@en "WeekdayGregorian"
+@fa "روز هفته میلادی"
+@ar "یوم الأسبوع المیلادی"
+pub func WeekdayGregorian(d: GregorianDate): int: ret Weekday(GregorianToJDN(d)) end
+
+@en "WeekdayJalali"
+@fa "روز هفته جلالی"
+@ar "یوم الأسبوع الجلالی"
+pub func WeekdayJalali(d: JalaliDate): int: ret Weekday(JalaliToJDN(d)) end
+
+@en "WeekdayHijri"
+@fa "روز هفته هجری"
+@ar "یوم الأسبوع الهجری"
+pub func WeekdayHijri(d: HijriDate): int: ret Weekday(HijriToJDN(d)) end
+
+// The next date on or after `d` that falls on `weekday` (0=Sunday). Useful
+// for "the first Friday of the month" style rules - and used by tzif.salam
+// to resolve POSIX DST rules like "the last Sunday in March".
+@en "NextWeekdayOnOrAfter"
+@fa "روز هفته بعدی"
+@ar "یوم الأسبوع التالی"
+pub func NextWeekdayOnOrAfter(d: GregorianDate, weekday: int): GregorianDate:
+    jdn := GregorianToJDN(d)
+    delta := _floormod((weekday as i64) - (Weekday(jdn) as i64), 7)
+    ret JDNToGregorian(jdn + delta)
+end

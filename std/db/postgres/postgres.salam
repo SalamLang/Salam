@@ -1,0 +1,710 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// PostgreSQL, over libpq.
+//
+//     import db
+//     import db.postgres
+//
+//     func main:
+//         c := postgres.Open("host=127.0.0.1 user=app dbname=app")
+//         if !postgres.Ok(c):
+//             println postgres.Error(c)
+//             ret
+//         end
+//         defer postgres.Close(c)
+//         println db.QueryInt(postgres.Conn(c), "SELECT COUNT(*) FROM users")
+//     end
+//
+// Unlike sqlite's cursor, libpq materialises a whole result before returning
+// it, so Rows here walks an array that is already in memory and Close() frees
+// it. Every result MUST be closed; libpq will not reclaim it otherwise.
+//
+// Two Postgres-specific notes for anyone porting from another engine:
+//
+//   - There is no "last insert id". A sequence is per-table, and the portable
+//     way to learn a new row's id is `INSERT ... RETURNING id`. LastInsertId()
+//     is implemented against `lastval()` so the shared db.Connection surface
+//     works, but it reports the last sequence touched *by this session* and is
+//     0 when none has been.
+//   - Placeholders are $1, $2, ... rather than ?.
+
+@en "postgres"
+@fa "پستگرس"
+@ar "بوستغرس"
+package postgres
+
+if !SALAM_DB_MOCK:
+    link dynamic "pq"
+end
+
+import str
+import conv
+import db
+
+extern:
+    func PQconnectdb(conninfo: str): void*
+    func PQstatus(conn: void*): int
+    func PQfinish(conn: void*)
+    func PQreset(conn: void*)
+    func PQerrorMessage(conn: void*): str
+    func PQexec(conn: void*, query: str): void*
+    func PQresultStatus(res: void*): int
+    func PQresultErrorMessage(res: void*): str
+    func PQntuples(res: void*): int
+    func PQnfields(res: void*): int
+    func PQfname(res: void*, col: int): str
+    func PQftype(res: void*, col: int): u32
+    func PQgetvalue(res: void*, row: int, col: int): void*
+    func PQgetisnull(res: void*, row: int, col: int): int
+    func PQcmdTuples(res: void*): str
+    func PQclear(res: void*)
+    func PQlibVersion(): int
+    func PQserverVersion(conn: void*): int
+    func PQescapeLiteral(conn: void*, s: str, length: u64): void*
+    func PQfreemem(p: void*)
+    func PQdb(conn: void*): str
+    func PQuser(conn: void*): str
+    func PQhost(conn: void*): str
+    func PQport(conn: void*): str
+end
+
+// PQstatus
+const CONNECTION_OK := 0
+
+// PQresultStatus
+const PGRES_EMPTY_QUERY := 0
+const PGRES_COMMAND_OK := 1
+const PGRES_TUPLES_OK := 2
+
+// Type OIDs from pg_type, enough to answer ColumnType(); everything else
+// reads correctly as text.
+const OID_BOOL := 16
+const OID_BYTEA := 17
+const OID_INT8 := 20
+const OID_INT2 := 21
+const OID_INT4 := 23
+const OID_FLOAT4 := 700
+const OID_FLOAT8 := 701
+const OID_NUMERIC := 1700
+
+// ---------------------------------------------------------------------------
+// Connection
+// ---------------------------------------------------------------------------
+
+@en "Database"
+@fa "پایگاه داده"
+@ar "قاعدة بیانات"
+pub struct Database:
+    pub handle: void* = null
+    // Rows touched by the most recent Exec through this connection. libpq
+    // reports the count per-result rather than per-connection, so it is
+    // captured as each statement runs and Changes() reads it back.
+    pub affected: i64 = 0
+
+    @en "Kind"
+    @fa "نوع"
+    @ar "نوع"
+    pub func Kind(): str: ret db.POSTGRES end
+
+    @en "Ok"
+    @fa "معتبر"
+    @ar "صالح"
+    pub func Ok(): bool:
+        if this.handle == null:
+            ret false
+        end
+        ret PQstatus(this.handle) == CONNECTION_OK
+    end
+
+    @en "Ping"
+    @fa "پینگ"
+    @ar "بینغ"
+    pub func Ping(): bool:
+        if this.handle == null:
+            ret false
+        end
+        if PQstatus(this.handle) != CONNECTION_OK:
+            ret false
+        end
+        res := PQexec(this.handle, "SELECT 1")
+        if res == null:
+            ret false
+        end
+        good := PQresultStatus(res) == PGRES_TUPLES_OK
+        PQclear(res)
+        ret good
+    end
+
+    @en "Exec"
+    @fa "اجرا"
+    @ar "تنفیذ"
+    pub func Exec(sql: str): int:
+        this.affected = 0
+        if this.handle == null:
+            ret -1
+        end
+        res := PQexec(this.handle, sql)
+        if res == null:
+            ret -1
+        end
+        st := PQresultStatus(res)
+        if st == PGRES_COMMAND_OK || st == PGRES_TUPLES_OK:
+            n := str.Clone(PQcmdTuples(res))
+            if n != "":
+                this.affected = conv.ParseInt(n)
+            end
+        end
+        PQclear(res)
+        if st == PGRES_COMMAND_OK || st == PGRES_TUPLES_OK || st == PGRES_EMPTY_QUERY:
+            ret 0
+        end
+        ret -1
+    end
+
+    @en "Query"
+    @fa "پرسمان"
+    @ar "استعلام"
+    pub func Query(sql: str): dyn db.Rows:
+        if this.handle == null:
+            ret Rows { handle = null }
+        end
+        res := PQexec(this.handle, sql)
+        if res == null:
+            ret Rows { handle = null }
+        end
+        if PQresultStatus(res) != PGRES_TUPLES_OK:
+            PQclear(res)
+            ret Rows { handle = null }
+        end
+        ret Rows { handle = res, row = -1, count = PQntuples(res) }
+    end
+
+    @en "Begin"
+    @fa "شروع تراکنش"
+    @ar "بدء المعاملة"
+    pub func Begin(): dyn db.Tx:
+        if this.Exec("BEGIN") != 0:
+            ret Txn { handle = null }
+        end
+        ret Txn { handle = this.handle }
+    end
+
+    // Postgres has no per-connection insert id; this asks the session for the
+    // value its last sequence produced. It is 0 when the session has not used
+    // one, and `INSERT ... RETURNING id` is the reliable alternative.
+    @en "LastInsertId"
+    @fa "شناسه آخرین درج"
+    @ar "معرف آخر إدراج"
+    pub func LastInsertId(): i64:
+        if this.handle == null:
+            ret 0
+        end
+        res := PQexec(this.handle, "SELECT lastval()")
+        if res == null:
+            ret 0
+        end
+        mut out := 0 as i64
+        if PQresultStatus(res) == PGRES_TUPLES_OK && PQntuples(res) > 0:
+            p := PQgetvalue(res, 0, 0)
+            if p != null:
+                out = conv.ParseInt(p as str)
+            end
+        end
+        PQclear(res)
+        ret out
+    end
+
+    @en "Changes"
+    @fa "تعداد تغییرات"
+    @ar "تغییرات"
+    pub func Changes(): i64: ret this.affected end
+
+    @en "Error"
+    @fa "خطا"
+    @ar "خطأ"
+    pub func Error(): str:
+        if this.handle == null:
+            ret "no connection"
+        end
+        ret str.Clone(PQerrorMessage(this.handle))
+    end
+
+    // libpq's own escaper: charset-aware and it adds the surrounding quotes,
+    // so the result is a complete literal.
+    @en "Quote"
+    @fa "نقل قول"
+    @ar "اقتباس"
+    pub func Quote(s: str): str:
+        if this.handle == null:
+            ret db.QuoteLiteral(s)
+        end
+        p := PQescapeLiteral(this.handle, s, len(s) as u64)
+        if p == null:
+            ret db.QuoteLiteral(s)
+        end
+        out := str.Clone(p as str)
+        PQfreemem(p)
+        ret out
+    end
+
+    @en "Close"
+    @fa "بستن"
+    @ar "إغلاق"
+    pub func Close(): int:
+        if this.handle == null:
+            ret -1
+        end
+        PQfinish(this.handle)
+        ret 0
+    end
+end
+
+// ---------------------------------------------------------------------------
+// Rows - a materialised result set
+// ---------------------------------------------------------------------------
+
+@en "Rows"
+@fa "ردیف ها"
+@ar "صفوف"
+pub struct Rows:
+    pub handle: void* = null
+    pub row: int = -1
+    pub count: int = 0
+
+    @en "Ok"
+    @fa "معتبر"
+    @ar "صالح"
+    pub func Ok(): bool: ret this.handle != null end
+
+    @en "Next"
+    @fa "بعدی"
+    @ar "التالی"
+    pub func Next(): bool:
+        if this.handle == null:
+            ret false
+        end
+        if this.row + 1 < this.count:
+            this.row = this.row + 1
+            ret true
+        end
+        ret false
+    end
+
+    @en "ColumnCount"
+    @fa "تعداد ستون"
+    @ar "عدد الأعمدة"
+    pub func ColumnCount(): int:
+        if this.handle == null:
+            ret 0
+        end
+        ret PQnfields(this.handle)
+    end
+
+    @en "RowCount"
+    @fa "تعداد ردیف"
+    @ar "عدد الصفوف"
+    pub func RowCount(): int: ret this.count end
+
+    @en "ColumnName"
+    @fa "نام ستون"
+    @ar "اسم العمود"
+    pub func ColumnName(col: int): str:
+        if this.handle == null:
+            ret ""
+        end
+        ret str.Clone(PQfname(this.handle, col))
+    end
+
+    // The column's declared type, except that a NULL value reports TYPE_NULL -
+    // which is what db.sqlite does, since its types are per-value.
+    @en "ColumnType"
+    @fa "نوع ستون"
+    @ar "نوع العمود"
+    pub func ColumnType(col: int): int:
+        if this.handle == null || this.row < 0:
+            ret db.TYPE_NULL
+        end
+        if PQgetisnull(this.handle, this.row, col) != 0:
+            ret db.TYPE_NULL
+        end
+        oid := PQftype(this.handle, col) as int
+        if oid == OID_INT2 || oid == OID_INT4 || oid == OID_INT8 || oid == OID_BOOL:
+            ret db.TYPE_INT
+        end
+        if oid == OID_FLOAT4 || oid == OID_FLOAT8 || oid == OID_NUMERIC:
+            ret db.TYPE_FLOAT
+        end
+        if oid == OID_BYTEA:
+            ret db.TYPE_BLOB
+        end
+        ret db.TYPE_TEXT
+    end
+
+    @en "IsNull"
+    @fa "خالی است"
+    @ar "خالی هو"
+    pub func IsNull(col: int): bool:
+        if this.handle == null || this.row < 0:
+            ret true
+        end
+        ret PQgetisnull(this.handle, this.row, col) != 0
+    end
+
+    @en "Text"
+    @fa "متن"
+    @ar "نص"
+    pub func Text(col: int): str:
+        if this.handle == null || this.row < 0:
+            ret ""
+        end
+        if PQgetisnull(this.handle, this.row, col) != 0:
+            ret ""
+        end
+        p := PQgetvalue(this.handle, this.row, col)
+        if p == null:
+            ret ""
+        end
+        ret str.Clone(p as str)
+    end
+
+    // libpq hands every value back as text, so the numeric accessors parse.
+    // A value that is not a number reads as 0 rather than failing, matching
+    // the other drivers.
+    @en "Int"
+    @fa "عدد صحیح"
+    @ar "عدد صحیح"
+    pub func Int(col: int): int: ret this.Int64(col) as int end
+
+    @en "Int64"
+    @fa "عدد صحیح۶۴"
+    @ar "عدد صحیح٦٤"
+    pub func Int64(col: int): i64:
+        s := this.Text(col)
+        if s == "":
+            ret 0
+        end
+        // Postgres spells a boolean "t"/"f"; read those as 1/0 so a bool
+        // column answers Int() the way every other engine's does.
+        if s == "t":
+            ret 1
+        end
+        if s == "f":
+            ret 0
+        end
+        ret conv.ParseInt(s)
+    end
+
+    @en "Float"
+    @fa "عدد اعشار"
+    @ar "عدد عشری"
+    pub func Float(col: int): f64:
+        s := this.Text(col)
+        if s == "":
+            ret 0.0
+        end
+        ret conv.ParseFloat(s)
+    end
+
+    @en "Close"
+    @fa "بستن"
+    @ar "إغلاق"
+    pub func Close(): int:
+        if this.handle == null:
+            ret -1
+        end
+        PQclear(this.handle)
+        this.handle = null
+        ret 0
+    end
+end
+
+// ---------------------------------------------------------------------------
+// Transactions
+// ---------------------------------------------------------------------------
+
+@en "Txn"
+@fa "تراکنش"
+@ar "معاملة"
+pub struct Txn:
+    pub handle: void* = null
+
+    @en "Ok"
+    @fa "معتبر"
+    @ar "صالح"
+    pub func Ok(): bool: ret this.handle != null end
+
+    @en "Exec"
+    @fa "اجرا"
+    @ar "تنفیذ"
+    pub func Exec(sql: str): int:
+        d := Database { handle = this.handle }
+        ret d.Exec(sql)
+    end
+
+    @en "Query"
+    @fa "پرسمان"
+    @ar "استعلام"
+    pub func Query(sql: str): dyn db.Rows:
+        d := Database { handle = this.handle }
+        ret d.Query(sql)
+    end
+
+    @en "Commit"
+    @fa "ثبت تراکنش"
+    @ar "تثبیت المعاملة"
+    pub func Commit(): int:
+        if this.handle == null:
+            ret -1
+        end
+        d := Database { handle = this.handle }
+        ret d.Exec("COMMIT")
+    end
+
+    @en "Rollback"
+    @fa "بازگردانی"
+    @ar "تراجع"
+    pub func Rollback(): int:
+        if this.handle == null:
+            ret -1
+        end
+        d := Database { handle = this.handle }
+        ret d.Exec("ROLLBACK")
+    end
+end
+
+// ---------------------------------------------------------------------------
+// Package-level surface, matching db.sqlite and db.mysql
+// ---------------------------------------------------------------------------
+
+@en "Available"
+@fa "در دسترس"
+@ar "متوفر"
+pub func Available(): bool: ret true end
+
+// libpq's version as a single number, e.g. 160002 for 16.2.
+@en "ClientVersion"
+@fa "نسخه کلاینت"
+@ar "إصدار العمیل"
+pub func ClientVersion(): int: ret PQlibVersion() end
+
+@en "ServerVersion"
+@fa "نسخه سرور"
+@ar "إصدار الخادم"
+pub func ServerVersion(d: Database): int:
+    if d.handle == null:
+        ret 0
+    end
+    ret PQserverVersion(d.handle)
+end
+
+// Open a connection from a libpq conninfo string, e.g.
+// "host=127.0.0.1 port=5432 user=app password=secret dbname=app". A URI
+// ("postgresql://user@host/db") is accepted by libpq too.
+//
+// This always returns a Database; check Ok() and read Error() when it is
+// false, since a failed connection still carries libpq's message.
+@en "Open"
+@fa "بازکردن"
+@ar "فتح"
+pub func Open(conninfo: str): Database:
+    ret Database { handle = PQconnectdb(conninfo) }
+end
+
+// The same, assembled from parts for callers that have them separately.
+@en "OpenFull"
+@fa "بازکردن کامل"
+@ar "فتح كامل"
+pub func OpenFull(host: str, port: int, user: str, pass: str, dbname: str): Database:
+    mut ci := ""
+    if host != "":
+        ci = ci + "host=" + host + " "
+    end
+    if port > 0:
+        ci = ci + "port=" + conv.FormatInt(port as i64) + " "
+    end
+    if user != "":
+        ci = ci + "user=" + user + " "
+    end
+    if pass != "":
+        ci = ci + "password=" + pass + " "
+    end
+    if dbname != "":
+        ci = ci + "dbname=" + dbname
+    end
+    ret Open(ci)
+end
+
+@en "Ok"
+@fa "معتبر"
+@ar "صالح"
+pub func Ok(d: Database): bool: ret d.Ok() end
+
+@en "Ping"
+@fa "پینگ"
+@ar "بینغ"
+pub func Ping(d: Database): bool: ret d.Ping() end
+
+// Drop the connection and open a fresh one with the same parameters, which is
+// how libpq recovers a session the server closed.
+@en "Reset"
+@fa "بازنشانی"
+@ar "إعادة تعیین"
+pub func Reset(d: Database):
+    if d.handle != null:
+        PQreset(d.handle)
+    end
+end
+
+@en "Close"
+@fa "بستن"
+@ar "إغلاق"
+pub func Close(d: Database): int: ret d.Close() end
+
+@en "Error"
+@fa "خطا"
+@ar "خطأ"
+pub func Error(d: Database): str: ret d.Error() end
+
+@en "Exec"
+@fa "اجرا"
+@ar "تنفیذ"
+pub func Exec(d: Database, sql: str): int: ret d.Exec(sql) end
+
+// Exec, reporting the number of rows the statement touched instead of a
+// status - the count libpq returns in PQcmdTuples. -1 marks a failure.
+@en "ExecCount"
+@fa "اجرا با شمارش"
+@ar "تنفیذ مع عد"
+pub func ExecCount(d: Database, sql: str): i64:
+    if d.handle == null:
+        ret -1
+    end
+    res := PQexec(d.handle, sql)
+    if res == null:
+        ret -1
+    end
+    st := PQresultStatus(res)
+    if st != PGRES_COMMAND_OK && st != PGRES_TUPLES_OK:
+        PQclear(res)
+        ret -1
+    end
+    n := str.Clone(PQcmdTuples(res))
+    PQclear(res)
+    if n == "":
+        ret 0
+    end
+    ret conv.ParseInt(n)
+end
+
+@en "Query"
+@fa "پرسمان"
+@ar "استعلام"
+pub func Query(d: Database, sql: str): Rows:
+    if d.handle == null:
+        ret Rows { handle = null }
+    end
+    res := PQexec(d.handle, sql)
+    if res == null:
+        ret Rows { handle = null }
+    end
+    if PQresultStatus(res) != PGRES_TUPLES_OK:
+        PQclear(res)
+        ret Rows { handle = null }
+    end
+    ret Rows { handle = res, row = -1, count = PQntuples(res) }
+end
+
+@en "Quote"
+@fa "نقل قول"
+@ar "اقتباس"
+pub func Quote(d: Database, s: str): str: ret d.Quote(s) end
+
+@en "DatabaseName"
+@fa "نام پایگاه داده"
+@ar "اسم قاعدة البیانات"
+pub func DatabaseName(d: Database): str:
+    if d.handle == null:
+        ret ""
+    end
+    ret str.Clone(PQdb(d.handle))
+end
+
+@en "UserName"
+@fa "نام کاربر"
+@ar "اسم المستخدم"
+pub func UserName(d: Database): str:
+    if d.handle == null:
+        ret ""
+    end
+    ret str.Clone(PQuser(d.handle))
+end
+
+@en "HostName"
+@fa "نام میزبان"
+@ar "اسم المضیف"
+pub func HostName(d: Database): str:
+    if d.handle == null:
+        ret ""
+    end
+    ret str.Clone(PQhost(d.handle))
+end
+
+@en "Port"
+@fa "درگاه"
+@ar "منفذ"
+pub func Port(d: Database): str:
+    if d.handle == null:
+        ret ""
+    end
+    ret str.Clone(PQport(d.handle))
+end
+
+@en "QueryInt"
+@fa "پرسمان عدد"
+@ar "استعلام عدد"
+pub func QueryInt(d: Database, sql: str): int:
+    r := Query(d, sql)
+    mut out := 0
+    if r.Ok():
+        if r.Next():
+            out = r.Int(0)
+        end
+        r.Close()
+    end
+    ret out
+end
+
+@en "QueryText"
+@fa "پرسمان متن"
+@ar "استعلام نص"
+pub func QueryText(d: Database, sql: str): str:
+    r := Query(d, sql)
+    mut out := ""
+    if r.Ok():
+        if r.Next():
+            out = r.Text(0)
+        end
+        r.Close()
+    end
+    ret out
+end
+
+// Box an open connection as the engine-independent connection type.
+@en "Conn"
+@fa "اتصال"
+@ar "اتصال"
+pub func Conn(d: Database): dyn db.Connection:
+    ret d
+end

@@ -470,6 +470,58 @@ Mkdir MkdirAll Rmdir ListDir ListDirs Walk TempDir Open`.
 Positional Usage`), **`config`**, **`log`** (`Info Warn Error Debug` + `*f`
   variants, `SetLevel ToFile ToStderr`).
 
+### Terminal & TUI
+
+- **`term`**: everything ANSI. **Never hand-roll `\x1b[` sequences** - this
+  package is the one place they belong.
+  - Terminal: `IsTTY IsTerminal Size Cols Rows` (`WinSize`), `Write WriteErr
+Emit Flush Bell SetTitle EnableAnsi` (Windows virtual-terminal mode).
+  - Raw mode: `MakeRaw` (no echo, no line editing, no signals) / `MakeCbreak`
+    (unechoed keys, Ctrl-C still interrupts) / `Restore`, returning a
+    `TermState`. **Always `defer term.Restore(st)` on the next line** - exiting
+    without it leaves the user's shell in raw mode.
+  - Colour: `Red Green Yellow Blue Magenta Cyan White Gray Bright* On* Bold Dim
+Italic Underline Inverse Strike Style Paint Color256 OnColor256 RGB OnRGB`,
+    plus `Sgr Seq{Fg,Bg}256 Seq{Fg,Bg}RGB` for raw sequences. All of them
+    honour `SetColorMode(ColorAuto|ColorAlways|ColorNever)`, and ColorAuto
+    obeys `NO_COLOR`/`CLICOLOR_FORCE`/`TERM=dumb`/isatty - so ONE code path
+    serves both a terminal and a pipe. Capability probes: `SupportsColor
+Supports256Color SupportsTrueColor`.
+  - Escape-aware strings: `Strip Width Truncate PadRight PadLeft Center`. Use
+    these, not `str.Len`/`fmt.PadRight`, on anything that may carry escapes -
+    byte length counts an invisible `\x1b[31m` as five columns and misaligns
+    every coloured table.
+  - Cursor/screen, each as a pure `Seq*` builder plus a write-now twin:
+    `MoveTo Up Down Left Right Column Home NextLine PrevLine Save/RestoreCursor
+Hide/ShowCursor ClearScreen ClearLine ClearToLineEnd ClearBelow ResetLine
+Scroll{Up,Down} Insert/DeleteLines SetScrollRegion Enter/ExitAltScreen
+Enable/DisableMouse`. Build with `Seq*` and write once per frame; a
+    non-positive count yields `""` (terminals read `CSI 0A` as 1).
+  - Input: `Decode DecodeMouse` (pure, over the bytes a terminal sent - test
+    key handling with no tty), `ReadKey GetKey ReadByte KeyReady ReadPassword`,
+    `Key`/`MouseEvent`, `Key*` codes (`KeyUp KeyF1+n KeyChar` + `ctrl/alt/shift`).
+  - Progress: `NewBar BarRender BarSet BarAdd BarDraw BarFinish` and
+    `NewSpinner NewSpinnerFrames SpinnerFrame SpinnerTick SpinnerStop
+SpinnerFree`, plus `FormatBytes FormatDuration`. Off a terminal the redraws
+    are skipped and one plain escape-free line is written, so a build script
+    needs no `if IsTerminal()` of its own.
+
+```salam
+import term
+func main:
+    mut st := term.MakeCbreak(term.StdinFd)
+    defer _ok := term.Restore(st)
+    term.Emit(term.SeqHideCursor() + term.SeqClearScreen() + term.SeqMoveTo(1, 1))
+    println term.Bold(term.Green("ready")), term.Dim("(q to quit)")
+    until true:
+        k := term.ReadKey()
+        if k.code == term.KeyChar && k.ch == "q": break end
+        if k.code == term.KeyUp: println "up" end
+    end
+    term.ShowCursor()
+end
+```
+
 ### Collections (heap-allocated: call `.free()`, idiom `defer x.free()`)
 
 - **`Vector<T>`** (built-in; also `import collections`): `push pop get(i)
@@ -498,7 +550,15 @@ Str`.
 - **`encoding`**: `Base64Encode Base64Decode HexEncode HexDecode URLEncode
 URLDecode`.
 - **`regex`**: `Compile Match Find Replace ReplaceAll` (`Regex` handle) and
-  one-shot `MatchStr FindStr ReplaceStr ReplaceAllStr`.
+  one-shot `MatchStr FindStr ReplaceStr ReplaceAllStr`. Captures: `FindMatch`
+  returns a `MatchResult` value (`.ok .start .stop .count`) to read with
+  `Group GroupStart GroupEnd GroupOk GroupByName GroupIndex GroupCount`, plus
+  `FindSubmatch FindAll FindAllN FindAllMatches Split SplitN` (all
+  `Vector`-returning, so `defer v.free()`) and `$1`/`${name}` rewriting with
+  `Expand ReplaceExpand ReplaceAllExpand`; `IsValid` checks a pattern. Syntax:
+  `. [] \d \w \s \D \W \S ^ $ | (…) (?:…) (?<name>…) (?P<name>…) * + ? {n,m}`
+  and the lazy `*? +? ?? {n,m}?`; no lookaround (an unsupported pattern is
+  invalid, and never matches).
 - **`crypto`**: `Sha1Hex Sha256Hex Sha512Hex Md5Hex`, `Sha256Bytes/Sha384Bytes/
 Sha512Bytes` (+ streaming `Sha256New/Update/Final`), HMAC
   `HmacSha256Hex/HmacSha384Hex/HmacSha512Hex` and the byte-oriented

@@ -18,6 +18,7 @@
 package sqlite
 
 import str
+import db
 
 link dynamic "sqlite3"
 
@@ -47,11 +48,117 @@ extern:
     func sqlite3_libversion(): str
 end
 
+// The methods on Database/Rows/Txn below are what makes this driver a
+// `db.Connection`; the free functions further down are the engine's full
+// surface and stay the direct way to use sqlite on its own. Both operate on
+// the same handles, so they can be mixed.
+
 @en "Database"
 @fa "پایگاه داده"
 @ar "قاعدة بیانات"
 pub struct Database:
     pub handle: void* = null
+
+    @en "Kind"
+    @fa "نوع"
+    @ar "نوع"
+    pub func Kind(): str: ret db.SQLITE end
+
+    @en "Ok"
+    @fa "معتبر"
+    @ar "صالح"
+    pub func Ok(): bool: ret this.handle != null end
+
+    @en "Ping"
+    @fa "پینگ"
+    @ar "بینغ"
+    pub func Ping(): bool: ret this.handle != null end
+
+    @en "Exec"
+    @fa "اجرا"
+    @ar "تنفیذ"
+    pub func Exec(sql: str): int:
+        if this.handle == null:
+            ret -1
+        end
+        if sqlite3_exec(this.handle, sql, null, null, null) == 0:
+            ret 0
+        end
+        ret -1
+    end
+
+    @en "Query"
+    @fa "پرسمان"
+    @ar "استعلام"
+    pub func Query(sql: str): dyn db.Rows:
+        if this.handle == null:
+            ret Rows { handle = null }
+        end
+        mut st := null as void*
+        sqlite3_prepare_v2(this.handle, sql, -1, st, null)
+        ret Rows { handle = st }
+    end
+
+    @en "Begin"
+    @fa "شروع تراکنش"
+    @ar "بدء المعاملة"
+    pub func Begin(): dyn db.Tx:
+        if this.handle == null:
+            ret Txn { handle = null }
+        end
+        if sqlite3_exec(this.handle, "BEGIN", null, null, null) != 0:
+            ret Txn { handle = null }
+        end
+        ret Txn { handle = this.handle }
+    end
+
+    @en "LastInsertId"
+    @fa "شناسه آخرین درج"
+    @ar "معرف آخر إدراج"
+    pub func LastInsertId(): i64:
+        if this.handle == null:
+            ret 0
+        end
+        ret sqlite3_last_insert_rowid(this.handle)
+    end
+
+    @en "Changes"
+    @fa "تعداد تغییرات"
+    @ar "تغییرات"
+    pub func Changes(): i64:
+        if this.handle == null:
+            ret 0
+        end
+        ret sqlite3_changes(this.handle) as i64
+    end
+
+    @en "Error"
+    @fa "خطا"
+    @ar "خطأ"
+    pub func Error(): str:
+        if this.handle == null:
+            ret "no database"
+        end
+        ret str.Clone(sqlite3_errmsg(this.handle))
+    end
+
+    // sqlite has no connection-aware escaper of its own, so this is the
+    // portable doubling rule. Bound parameters (Prepare/BindText) remain the
+    // better choice wherever the statement can be prepared.
+    @en "Quote"
+    @fa "نقل قول"
+    @ar "اقتباس"
+    pub func Quote(s: str): str: ret db.QuoteLiteral(s) end
+
+    @en "Close"
+    @fa "بستن"
+    @ar "إغلاق"
+    pub func Close(): int:
+        if this.handle == null:
+            ret -1
+        end
+        ret sqlite3_close(this.handle)
+    end
 end
 
 @en "Rows"
@@ -59,6 +166,198 @@ end
 @ar "صفوف"
 pub struct Rows:
     pub handle: void* = null
+
+    @en "Ok"
+    @fa "معتبر"
+    @ar "صالح"
+    pub func Ok(): bool: ret this.handle != null end
+
+    @en "Next"
+    @fa "بعدی"
+    @ar "التالی"
+    pub func Next(): bool:
+        if this.handle == null:
+            ret false
+        end
+        ret sqlite3_step(this.handle) == 100
+    end
+
+    @en "ColumnCount"
+    @fa "تعداد ستون"
+    @ar "عدد الأعمدة"
+    pub func ColumnCount(): int:
+        if this.handle == null:
+            ret 0
+        end
+        ret sqlite3_column_count(this.handle)
+    end
+
+    @en "ColumnName"
+    @fa "نام ستون"
+    @ar "اسم العمود"
+    pub func ColumnName(col: int): str:
+        if this.handle == null:
+            ret ""
+        end
+        ret str.Clone(sqlite3_column_name(this.handle, col))
+    end
+
+    // sqlite numbers its types INTEGER=1 FLOAT=2 TEXT=3 BLOB=4 NULL=5; db puts
+    // NULL at 0 and keeps the rest in the same order.
+    @en "ColumnType"
+    @fa "نوع ستون"
+    @ar "نوع العمود"
+    pub func ColumnType(col: int): int:
+        if this.handle == null:
+            ret db.TYPE_NULL
+        end
+        t := sqlite3_column_type(this.handle, col)
+        if t == 5:
+            ret db.TYPE_NULL
+        end
+        ret t
+    end
+
+    @en "IsNull"
+    @fa "خالی است"
+    @ar "خالی هو"
+    pub func IsNull(col: int): bool:
+        if this.handle == null:
+            ret true
+        end
+        ret sqlite3_column_type(this.handle, col) == 5
+    end
+
+    @en "Text"
+    @fa "متن"
+    @ar "نص"
+    pub func Text(col: int): str:
+        if this.handle == null:
+            ret ""
+        end
+        p := sqlite3_column_text(this.handle, col)
+        if p == null:
+            ret ""
+        end
+        ret str.Clone(p as str)
+    end
+
+    @en "Int"
+    @fa "عدد صحیح"
+    @ar "عدد صحیح"
+    pub func Int(col: int): int:
+        if this.handle == null:
+            ret 0
+        end
+        ret sqlite3_column_int(this.handle, col)
+    end
+
+    @en "Int64"
+    @fa "عدد صحیح۶۴"
+    @ar "عدد صحیح٦٤"
+    pub func Int64(col: int): i64:
+        if this.handle == null:
+            ret 0
+        end
+        ret sqlite3_column_int64(this.handle, col)
+    end
+
+    @en "Float"
+    @fa "عدد اعشار"
+    @ar "عدد عشری"
+    pub func Float(col: int): f64:
+        if this.handle == null:
+            ret 0.0
+        end
+        ret sqlite3_column_double(this.handle, col)
+    end
+
+    @en "Close"
+    @fa "بستن"
+    @ar "إغلاق"
+    pub func Close(): int:
+        if this.handle == null:
+            ret -1
+        end
+        if sqlite3_finalize(this.handle) == 0:
+            ret 0
+        end
+        ret -1
+    end
+end
+
+// A transaction opened by Database.Begin(). It holds the same connection
+// handle - sqlite has one implicit transaction per connection - so it is only
+// valid until it is committed or rolled back.
+@en "Txn"
+@fa "تراکنش"
+@ar "معاملة"
+pub struct Txn:
+    pub handle: void* = null
+
+    @en "Ok"
+    @fa "معتبر"
+    @ar "صالح"
+    pub func Ok(): bool: ret this.handle != null end
+
+    @en "Exec"
+    @fa "اجرا"
+    @ar "تنفیذ"
+    pub func Exec(sql: str): int:
+        if this.handle == null:
+            ret -1
+        end
+        if sqlite3_exec(this.handle, sql, null, null, null) == 0:
+            ret 0
+        end
+        ret -1
+    end
+
+    @en "Query"
+    @fa "پرسمان"
+    @ar "استعلام"
+    pub func Query(sql: str): dyn db.Rows:
+        if this.handle == null:
+            ret Rows { handle = null }
+        end
+        mut st := null as void*
+        sqlite3_prepare_v2(this.handle, sql, -1, st, null)
+        ret Rows { handle = st }
+    end
+
+    @en "Commit"
+    @fa "ثبت تراکنش"
+    @ar "تثبیت المعاملة"
+    pub func Commit(): int:
+        if this.handle == null:
+            ret -1
+        end
+        if sqlite3_exec(this.handle, "COMMIT", null, null, null) == 0:
+            ret 0
+        end
+        ret -1
+    end
+
+    @en "Rollback"
+    @fa "بازگردانی"
+    @ar "تراجع"
+    pub func Rollback(): int:
+        if this.handle == null:
+            ret -1
+        end
+        if sqlite3_exec(this.handle, "ROLLBACK", null, null, null) == 0:
+            ret 0
+        end
+        ret -1
+    end
+end
+
+// Box an open database as the engine-independent connection type.
+@en "Conn"
+@fa "اتصال"
+@ar "اتصال"
+pub func Conn(d: Database): dyn db.Connection:
+    ret d
 end
 
 @en "Available"

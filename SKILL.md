@@ -449,7 +449,7 @@ NegateIn ShlBy ShrBy`) mutate `x &: Int` and free the old value, for loops that
   nothing overflows. Build: `Zero FromInt FromScaled(1999, 2)` → 19.99 `New
 Parse ParseOr FromFloat` (lossy, documented); `Add Sub Mul` are **exact and
   never round** (Add/Sub take the larger scale, Mul the sum); `Div` cannot be,
-  so it requires a scale *and* a `Rounding` mode - `Div DivRound DivInt Pow
+  so it requires a scale _and_ a `Rounding` mode - `Div DivRound DivInt Pow
 MulInt AddInt SubInt Percent Sum`. Rounding: `Rounding.{Down,Up,Floor,Ceil,
 HalfUp,HalfDown,HalfEven}` with `Rescale Round`(HalfEven) `RoundHalfUp
 Truncate Trim`. Compare `Cmp Equals Less Greater Min Max Sign IsZero
@@ -490,8 +490,8 @@ Rotation2D/3D Householder Givens Random RandomSPD RandomOrthogonal`, and
 
 - **`io`**: `ReadFile WriteFile AppendFile Lines WriteLines Input Read Write
 ReadAll Readline Seek Close Copy EPrint EPrintln Flush`. `println` already
-gets each line out to a redirected stdout on its own; `io.Flush()` is for
-output written by linked C code, which keeps its own buffer.
+  gets each line out to a redirected stdout on its own; `io.Flush()` is for
+  output written by linked C code, which keeps its own buffer.
 - **`os`**: `Args Env Cwd Chdir Exit Pid Run RunCapture Output Exists IsDir
 FileSize Stat ReadFile WriteFile AppendFile Copy CopyTree Move Remove RemoveAll
 Mkdir MkdirAll Rmdir ListDir ListDirs Walk TempDir Open`.
@@ -727,10 +727,37 @@ Worked examples: `tests/en/apps/auth/` (seven programs), the five REST APIs in
 `tests/en/apps/*api/`, and `tests/en/webframework/authapi.salam`. Package
 tests: `tests/en/stdlib/jwt_demo.salam`.
 
-### Databases (`import db.<engine>`)
+### Databases (`import db`, `import db.<engine>`)
+
+**`db` itself** is the engine-independent layer: three interfaces plus helpers
+that work on any driver. Take a `dyn db.Connection` and the same code runs on
+any engine (`tests/en/db/shared_iface.salam` runs one function against sqlite
+and postgres and expects identical output).
+
+- `interface Connection`: `Kind Ok Ping Exec Query Begin LastInsertId Changes
+Error Quote Close`
+- `interface Rows`: `Ok Next ColumnCount ColumnName ColumnType IsNull Text Int
+Int64 Float Close` - forward-only, so the loop is `until r.Next():`, and
+  `Close()` is required
+- `interface Tx`: `Ok Exec Query Commit Rollback`
+- Helpers: `QueryInt QueryInt64 QueryFloat QueryText CountRows Run RunAll InTx
+QuoteLiteral`; constants `SQLITE MYSQL POSTGRES` and `TYPE_NULL TYPE_INT
+TYPE_FLOAT TYPE_TEXT TYPE_BLOB`
+- **Pool** (`NewPool Add Acquire Leased Conn Release Size Idle InUse DropDead
+CloseAll Free`): a fixed set of connections leased one at a time. It holds
+  connections you opened; it is not a factory. No locking of its own.
+- **Migrations** (`NewMigrator NewMigratorIn AddMigration MigrationCount
+EnsureTable SchemaVersion IsApplied PendingCount MigrateUp Rollback MigrateTo
+FreeMigrator SplitStatements`): each step runs in a transaction with the row
+  recording it; steps split on `;` outside quotes, since MySQL rejects
+  multi-statement queries.
+
+Each driver keeps its own full surface, and `Conn(d)` boxes one as a
+`dyn db.Connection`:
 
 - **`db.sqlite`**:
-  `Available Version Open Ok Exec Query Next Text Int Finish Prepare BindText Reset LastInsertId Changes QueryInt Close`.
+  `Available Version Open Ok Exec Query Next Text Int Finish Prepare BindText Reset LastInsertId Changes QueryInt Close Conn`.
+- **`db.postgres`** (libpq): `Available ClientVersion ServerVersion Open OpenFull Ok Ping Reset Close Error Exec ExecCount Query Quote QueryInt QueryText DatabaseName UserName HostName Port Conn`. Placeholders are `$1, $2`, not `?`. There is **no last insert id** - use `INSERT ... RETURNING id`; `LastInsertId()` goes through `lastval()` and is 0 when the session has used no sequence. Results are materialised, so every `Rows` must be closed.
 - **`db.mysql`** (MariaDB/MySQL): `Open Ok Close Ping Error Errno Exec Query QueryOk Next Finish Text Int Int64 Float IsNull ColumnCount RowCount ColumnName AffectedRows LastInsertId Begin Commit Rollback Autocommit Escape SetCharset SelectDB QueryInt QueryText`. **Threading**: a connection
   cannot be used by two threads at once (it segfaults, it does not error), so
   a threaded server gives each request its own connection. Call
@@ -738,6 +765,27 @@ tests: `tests/en/stdlib/jwt_demo.salam`.
   from each thread before its first query - `tests/en/apps/*api/_store.salam`
   is the worked example.
 - **`db.redis`** (`connect strings hashes lists sets pubsub`).
+
+```salam
+import db
+import db.sqlite
+
+func count(c: dyn db.Connection): int:
+    ret db.QueryInt(c, "SELECT COUNT(*) FROM users")
+end
+
+func main:
+    d := sqlite.Open("app.db")
+    defer sqlite.Close(d)
+    c := sqlite.Conn(d)
+    mut m := db.NewMigrator() defer db.FreeMigrator(m)
+    db.AddMigration(m, 1, "users",
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT NOT NULL)",
+        "DROP TABLE users")
+    db.MigrateUp(m, c)
+    println count(c)
+end
+```
 
 ---
 

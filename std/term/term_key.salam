@@ -1,0 +1,517 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package term
+
+import str
+import mem
+
+// Reading the keyboard: one keystroke at a time, with the escape sequences
+// terminals send for arrows, function keys, Home/End and the mouse turned
+// back into something a program can switch on.
+//
+// The decoding half is deliberately separated from the reading half.
+// Decode(seq) and DecodeMouse(seq) are pure functions over the bytes a
+// terminal sent, so they can be tested without a terminal at all - which is
+// what the test suite does - while ReadKey/GetKey do the I/O around them.
+//
+// ReadKey requires the terminal to already be in raw or cbreak mode (see
+// MakeRaw/MakeCbreak): in the default cooked mode the kernel holds every
+// keystroke until Enter, so nothing arrives to decode. GetKey is the
+// convenience wrapper that enters cbreak, reads one key, and restores.
+//
+// THE LONE-ESCAPE PROBLEM. Pressing Escape sends one byte; pressing an
+// arrow sends that same byte followed by more. Nothing in the protocol
+// distinguishes them, so - as every terminal library does - ReadKey waits
+// EscDelayMs for a follow-up byte and calls it a bare Escape if none comes.
+//
+// PLATFORM SUPPORT. The POSIX path (read + poll) is what runs here. The
+// Windows path uses _read and _kbhit and has NOT been exercised on a real
+// console.
+
+// memset is declared once for the package in term.salam; <string.h> is in
+// every generated module, so it needs no second declaration here.
+if SALAM_OS_WINDOWS:
+    extern:
+        func _read(fd: int, buf: void*, n: u32): int
+        func _kbhit(): int
+    end
+else:
+    extern:
+        func read(fd: int, buf: void*, n: u64): i64
+        func poll(fds: void*, nfds: u64, timeout: int): int
+    end
+end
+
+// ---------------------------------------------------------------- key codes
+
+@en "KeyUnknown"
+@fa "کلید ناشناخته"
+@ar "مفتاح مجهول"
+pub const KeyUnknown := 0
+
+// A printable key: `ch` carries the character (a whole UTF-8 codepoint, so
+// a Persian or Arabic keystroke arrives intact, not as its first byte).
+@en "KeyChar"
+@fa "کلید نویسه"
+@ar "مفتاح حرف"
+pub const KeyChar := 1
+
+@en "KeyEnter"
+@fa "کلید ورود"
+@ar "مفتاح إدخال"
+pub const KeyEnter := 2
+
+@en "KeyTab"
+@fa "کلید تب"
+@ar "مفتاح جدولة"
+pub const KeyTab := 3
+
+@en "KeyBackspace"
+@fa "کلید پس‌بر"
+@ar "مفتاح مسح للخلف"
+pub const KeyBackspace := 4
+
+@en "KeyEscape"
+@fa "کلید گریز"
+@ar "مفتاح هروب"
+pub const KeyEscape := 5
+
+@en "KeySpace"
+@fa "کلید فاصله"
+@ar "مفتاح مسافة"
+pub const KeySpace := 6
+
+@en "KeyEOF"
+@fa "کلید پایان"
+@ar "مفتاح نهایة"
+pub const KeyEOF := 7
+
+@en "KeyUp"
+@fa "کلید بالا"
+@ar "مفتاح أعلی"
+pub const KeyUp := 10
+
+@en "KeyDown"
+@fa "کلید پایین"
+@ar "مفتاح أسفل"
+pub const KeyDown := 11
+
+@en "KeyRight"
+@fa "کلید راست"
+@ar "مفتاح یمین"
+pub const KeyRight := 12
+
+@en "KeyLeft"
+@fa "کلید چپ"
+@ar "مفتاح یسار"
+pub const KeyLeft := 13
+
+@en "KeyHome"
+@fa "کلید خانه"
+@ar "مفتاح البدایة"
+pub const KeyHome := 14
+
+@en "KeyEnd"
+@fa "کلید پایان خط"
+@ar "مفتاح النهایة"
+pub const KeyEnd := 15
+
+@en "KeyPageUp"
+@fa "کلید صفحه بالا"
+@ar "مفتاح صفحة أعلی"
+pub const KeyPageUp := 16
+
+@en "KeyPageDown"
+@fa "کلید صفحه پایین"
+@ar "مفتاح صفحة أسفل"
+pub const KeyPageDown := 17
+
+@en "KeyInsert"
+@fa "کلید درج"
+@ar "مفتاح إدراج"
+pub const KeyInsert := 18
+
+@en "KeyDelete"
+@fa "کلید حذف"
+@ar "مفتاح حذف"
+pub const KeyDelete := 19
+
+// F1..F12 are KeyF1 + (n - 1), so a caller can test a range.
+@en "KeyF1"
+@fa "کلید اف۱"
+@ar "مفتاح إف۱"
+pub const KeyF1 := 30
+
+@en "KeyMouse"
+@fa "رویداد موشواره"
+@ar "حدث الفأرة"
+pub const KeyMouse := 50
+
+// How long a lone ESC waits for the rest of a possible escape sequence.
+// 50ms is the usual compromise: long enough that a local terminal's arrow
+// key never splits in two, short enough that Escape still feels instant.
+@en "EscDelayMs"
+@fa "تاخیر گریز"
+@ar "تأخیر الهروب"
+pub const EscDelayMs := 50
+
+// ------------------------------------------------------------------- types
+
+@en "Key"
+@fa "کلید"
+@ar "مفتاح"
+pub struct Key:
+    pub code: int = 0
+    pub ch: str = ""
+    pub ctrl: bool = false
+    pub alt: bool = false
+    pub shift: bool = false
+    pub raw: str = ""
+end
+
+@en "MouseEvent"
+@fa "رویداد موشواره"
+@ar "حدث الفأرة"
+pub struct MouseEvent:
+    pub button: int = 0
+    pub col: int = 0
+    pub row: int = 0
+    pub pressed: bool = false
+    pub motion: bool = false
+    pub ok: bool = false
+end
+
+// --------------------------------------------------------------- internals
+
+// The idx-th ';'-separated decimal in s[from:to), or 0 when it is absent or
+// empty - which matches how terminals treat an omitted parameter. Written
+// as a scan rather than a str.Split so that decoding a keystroke allocates
+// nothing at all.
+func _param_at(s: str, start: int, stop: int, idx: int): int:
+    bp := _bp(s)
+    mut seen := 0
+    mut value := 0
+    mut i := start
+    until i < stop:
+        c := _ub(bp, i)
+        if c == 59:                        // ';'
+            if seen == idx: ret value end
+            seen += 1
+            value = 0
+        else c >= 48 && c <= 57:            // '0'..'9'
+            value = value * 10 + (c - 48)
+        end
+        i += 1
+    end
+    if seen == idx: ret value end
+    ret 0
+end
+
+// xterm's modifier parameter is a 1-based bitmask: 1 plain, 2 shift,
+// 3 alt, 5 ctrl, 8 ctrl+alt+shift.
+func _apply_mods(k &: Key, m: int):
+    if m <= 1: ret end
+    bits := m - 1
+    if (bits & 1) != 0: k.shift = true end
+    if (bits & 2) != 0: k.alt = true end
+    if (bits & 4) != 0: k.ctrl = true end
+end
+
+// The final letter of an arrow/Home/End sequence, shared by the CSI ("[")
+// and SS3 ("O") forms.
+func _letter_key(c: int): int:
+    if c == 65: ret KeyUp end        // 'A'
+    if c == 66: ret KeyDown end      // 'B'
+    if c == 67: ret KeyRight end     // 'C'
+    if c == 68: ret KeyLeft end      // 'D'
+    if c == 70: ret KeyEnd end       // 'F'
+    if c == 72: ret KeyHome end      // 'H'
+    ret KeyUnknown
+end
+
+// The "CSI <n> ~" family, where the number names the key.
+func _tilde_key(n: int): int:
+    if n == 1: ret KeyHome end
+    if n == 2: ret KeyInsert end
+    if n == 3: ret KeyDelete end
+    if n == 4: ret KeyEnd end
+    if n == 5: ret KeyPageUp end
+    if n == 6: ret KeyPageDown end
+    if n == 7: ret KeyHome end
+    if n == 8: ret KeyEnd end
+    if n >= 11 && n <= 15: ret KeyF1 + (n - 11) end        // F1..F5
+    if n >= 17 && n <= 21: ret KeyF1 + (n - 17) + 5 end    // F6..F10
+    if n == 23: ret KeyF1 + 10 end                          // F11
+    if n == 24: ret KeyF1 + 11 end                          // F12
+    ret KeyUnknown
+end
+
+// A single byte that arrived on its own: control codes below 32, printable
+// ASCII, and DEL. Ctrl-letter combinations are byte 1..26, which is exactly
+// the letter's position in the alphabet - so Ctrl-C is byte 3.
+func _decode_byte(b: int): Key:
+    mut k := Key { code = KeyUnknown }
+    if b == 13 || b == 10: k.code = KeyEnter ret k end
+    if b == 9: k.code = KeyTab ret k end
+    if b == 127 || b == 8: k.code = KeyBackspace ret k end
+    if b == 27: k.code = KeyEscape ret k end
+    if b == 32: k.code = KeySpace k.ch = " " ret k end
+    if b == 0: k.code = KeyChar k.ctrl = true k.ch = " " ret k end
+    if b < 27:
+        // Ctrl-A .. Ctrl-Z, minus the four handled above.
+        k.code = KeyChar
+        k.ctrl = true
+        k.ch = char_from_code(96 + b)      // 1 -> 'a'
+        ret k
+    end
+    if b < 32:
+        k.code = KeyChar
+        k.ctrl = true
+        k.ch = char_from_code(b + 64)      // 28 -> '\'
+        ret k
+    end
+    k.code = KeyChar
+    k.ch = char_from_code(b)
+    ret k
+end
+
+// Is there input waiting? POSIX asks poll(); Windows asks _kbhit(), which
+// takes no timeout, so the wait there is a single immediate check.
+func _ready(_timeout_ms: int): bool:
+    if SALAM_OS_WINDOWS:
+        ret _kbhit() != 0
+    else:
+        // struct pollfd { int fd; short events; short revents; }
+        pfd := mem.Allocate(8 as u64)
+        defer mem.Free(pfd)
+        memset(pfd, 0, 8 as u64)
+        fdp := pfd as int*
+        fdp[0] = StdinFd
+        evp := ((pfd as i64) + 4) as i16*
+        evp[0] = 1 as i16                   // POLLIN
+        ret poll(pfd, 1 as u64, _timeout_ms) > 0
+    end
+end
+
+// ------------------------------------------------------------------ decode
+
+// Decode turns the bytes of one keystroke into a Key. It accepts a single
+// byte, an "ESC <char>" alt combination, or a full CSI/SS3 sequence, and is
+// pure - which is what makes the key handling of a full-screen program
+// testable without a terminal.
+@en "Decode"
+@fa "رمزگشایی"
+@ar "فك الترمیز"
+pub func Decode(seq: str): Key:
+    n := seq.len()
+    if n == 0:
+        ret Key { code = KeyUnknown }
+    end
+    bp := _bp(seq)
+    if n == 1:
+        mut one := _decode_byte(_ub(bp, 0))
+        one.raw = seq
+        ret one
+    end
+    if _ub(bp, 0) != 27:
+        // A multi-byte UTF-8 character: report the whole codepoint.
+        ret Key { code = KeyChar, ch = seq, raw = seq }
+    end
+    second := _ub(bp, 1)
+    if second != 91 && second != 79:        // not '[' and not 'O' -> Alt+key
+        mut alt := _decode_byte(second)
+        if n > 2: alt.ch = str.Substr(seq, 1, n - 1) end
+        alt.alt = true
+        alt.raw = seq
+        ret alt
+    end
+    final := _ub(bp, n - 1)
+    if second == 79:
+        // SS3: ESC O P..S are F1..F4, ESC O A..D the arrows in application
+        // cursor mode (which is what a terminal sends inside vi, less, ...).
+        mut k := Key { raw = seq }
+        if final >= 80 && final <= 83:      // 'P'..'S'
+            k.code = KeyF1 + (final - 80)
+        else:
+            k.code = _letter_key(final)
+        end
+        ret k
+    end
+    // CSI. A '<' immediately after it means this is a mouse report.
+    if _ub(bp, 2) == 60:
+        ret Key { code = KeyMouse, raw = seq }
+    end
+    mut k := Key { raw = seq }
+    if final == 126:                        // '~'
+        k.code = _tilde_key(_param_at(seq, 2, n - 1, 0))
+        _apply_mods(k, _param_at(seq, 2, n - 1, 1))
+        ret k
+    end
+    k.code = _letter_key(final)
+    // "CSI 1 ; 5 A" is Ctrl+Up: the first parameter is a placeholder and
+    // the second carries the modifiers.
+    _apply_mods(k, _param_at(seq, 2, n - 1, 1))
+    ret k
+end
+
+// DecodeMouse reads an SGR mouse report, "ESC [ < b ; col ; row M" for a
+// press and the same ending in 'm' for a release. Only the SGR encoding is
+// accepted: the older X10 form cannot express a column past 223, which is
+// why SeqEnableMouse asks for this one.
+@en "DecodeMouse"
+@fa "رمزگشایی موشواره"
+@ar "فك ترمیز الفأرة"
+pub func DecodeMouse(seq: str): MouseEvent:
+    mut ev := MouseEvent {}
+    n := seq.len()
+    if n < 6: ret ev end
+    bp := _bp(seq)
+    if _ub(bp, 0) != 27 || _ub(bp, 1) != 91 || _ub(bp, 2) != 60: ret ev end
+    final := _ub(bp, n - 1)
+    if final != 77 && final != 109: ret ev end          // 'M' / 'm'
+    b := _param_at(seq, 3, n - 1, 0)
+    ev.col = _param_at(seq, 3, n - 1, 1)
+    ev.row = _param_at(seq, 3, n - 1, 2)
+    // Bit 5 (32) marks a motion report; the low two bits pick the button.
+    ev.motion = (b & 32) != 0
+    ev.button = b & 3
+    ev.pressed = final == 77
+    ev.ok = true
+    ret ev
+end
+
+// -------------------------------------------------------------------- input
+
+// One raw byte from stdin, or -1 at end of input. The terminal must already
+// be in raw or cbreak mode for this to return before the user hits Enter.
+@en "ReadByte"
+@fa "خواندن بایت"
+@ar "قراءة بایت"
+pub func ReadByte(): int:
+    buf := mem.Allocate(2 as u64)
+    defer mem.Free(buf)
+    memset(buf, 0, 2 as u64)
+    mut got := 0
+    if SALAM_OS_WINDOWS:
+        got = _read(StdinFd, buf, 1 as u32)
+    else:
+        got = read(StdinFd, buf, 1 as u64) as int
+    end
+    if got <= 0: ret 0 - 1 end
+    p := buf as i8*
+    v := p[0] as int
+    if v < 0: ret v + 256 end
+    ret v
+end
+
+@en "KeyReady"
+@fa "کلید آماده"
+@ar "المفتاح جاهز"
+pub func KeyReady(timeout_ms: int): bool: ret _ready(timeout_ms) end
+
+// ReadKey blocks for one keystroke and decodes it. The terminal must be in
+// raw or cbreak mode; use GetKey if you would rather not manage that.
+@en "ReadKey"
+@fa "خواندن کلید"
+@ar "قراءة مفتاح"
+pub func ReadKey(): Key:
+    first := ReadByte()
+    if first < 0: ret Key { code = KeyEOF } end
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    str.BufAppendChar(b, first)
+    if first == 27:
+        // A lone Escape is indistinguishable from the start of a sequence
+        // until the follow-up byte does or does not arrive.
+        if !_ready(EscDelayMs): ret Key { code = KeyEscape, raw = Esc } end
+        second := ReadByte()
+        if second < 0: ret Key { code = KeyEscape, raw = Esc } end
+        str.BufAppendChar(b, second)
+        if second == 91 || second == 79:
+            // Consume up to the final byte of the CSI/SS3 sequence. SS3
+            // takes exactly one more byte; CSI runs until a byte in
+            // 0x40..0x7E, which is also how a mouse report ends ('M'/'m').
+            mut done := second == 79
+            until !done:
+                c := ReadByte()
+                if c < 0: break end
+                str.BufAppendChar(b, c)
+                if c >= 0x40 && c <= 0x7E: done = true end
+            end
+        end
+    else first >= 0xC0:
+        // A UTF-8 lead byte: pull in the continuation bytes so `ch` is a
+        // whole character rather than a broken fragment.
+        mut extra := str.CharLen(first) - 1
+        until extra > 0:
+            c := ReadByte()
+            if c < 0: break end
+            str.BufAppendChar(b, c)
+            extra -= 1
+        end
+    end
+    seq := str.BufStr(b)
+    ret Decode(seq)
+end
+
+// GetKey is ReadKey with the mode handling done for you: enter cbreak, read
+// one key, restore. Ctrl-C still interrupts, which is what a menu or a
+// "press any key" prompt wants.
+@en "GetKey"
+@fa "گرفتن کلید"
+@ar "أخذ مفتاح"
+pub func GetKey(): Key:
+    mut st := MakeCbreak(StdinFd)
+    defer _restored := Restore(st)
+    if !st.ok:
+        // No terminal (a pipe, a CI runner): a blocking read still gives
+        // back whatever was piped in, one byte at a time.
+        ret ReadKey()
+    end
+    ret ReadKey()
+end
+
+// ReadPassword prompts and reads a line with echo switched off, so the
+// typed secret never appears on screen or in a terminal recording.
+// Falls back to a plain read when there is no terminal to silence.
+@en "ReadPassword"
+@fa "خواندن گذرواژه"
+@ar "قراءة کلمة السر"
+pub func ReadPassword(prompt: str): str:
+    Write(prompt)
+    Flush()
+    mut st := MakeCbreak(StdinFd)
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    until true:
+        c := ReadByte()
+        if c < 0 || c == 13 || c == 10: break end
+        if c == 3:
+            // Ctrl-C: hand back nothing rather than a half-typed secret.
+            str.BufReset(b)
+            break
+        end
+        if c == 127 || c == 8:
+            if str.BufLen(b) > 0: b.len -= 1 end
+            continue
+        end
+        str.BufAppendChar(b, c)
+    end
+    _restored := Restore(st)
+    Write("\n")
+    Flush()
+    out := str.BufStr(b)
+    ret out
+end

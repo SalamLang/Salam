@@ -36,28 +36,53 @@ static void parse_array_dims(parser_t *p, ast_node_t *n)
     }
 }
 
+/*
+ * A run of stars. "T**" arrives as ONE token - the lexer folds it into the
+ * power operator - so where a pointer type is unambiguous that token counts
+ * as two levels. Only inside a ':' annotation, though: after a cast the very
+ * same token is arithmetic, and `a as f64 ** 2` means (a as f64) ** 2.
+ */
+/*
+ * A run of stars after the dims. Only single stars: "T**" reaches the parser
+ * as ONE power token, and re-reading that as two levels would have to be
+ * undone again by the formatter, which reflows '**' as a binary operator.
+ * A pointer-to-pointer is therefore still unspellable in source; the depth
+ * machinery below exists for the types generic substitution BUILDS, where
+ * Vector<Edge*> genuinely needs an Edge** for its data pointer.
+ */
 static void parse_ptr_suffix(parser_t *p, ast_node_t *n)
 {
-    if (p_match(p, TK_STAR)) n->is_pointer = true;
+    while (p_match(p, TK_STAR)) {
+        n->is_pointer = true;
+        n->ptr_depth++;
+    }
+}
+
+static bool p_at_star_run(parser_t *p, size_t k)
+{
+    return p_peekn(p, k)->kind == TK_STAR;
 }
 
 /*
  * Both sides of the dims are legal and they mean different types:
  * "Edge*[6]" is six pointers, "Edge[6]*" is one pointer to an array of six.
- * Which side the star sat on is recorded so sema can apply type_ptr before
- * or after wrapping in type_array.
+ * Which side each star sat on is counted separately so sema can apply
+ * type_ptr before or after wrapping in type_array.
  *
- * The pre-dims form is only taken when a '[' actually follows, so a stray
- * second star ("T**") still reaches the caller unconsumed and is reported
- * there rather than being silently folded into one level.
+ * Stars repeat: "u8**" is a pointer to a pointer, the shape C APIs take for
+ * an out-parameter or an argv-style list.
  */
 static void parse_ptr_and_dims(parser_t *p, ast_node_t *n)
 {
-    if (p_at(p, TK_STAR) && p_peek2(p)->kind == TK_LBRACKET) {
+    while (p_at_star_run(p, 0)) {
+        /* Only the run of stars that a '[' follows belongs to the element;
+         * once the dims are behind us the rest are ordinary suffixes. */
+        size_t k = 1;
+        while (p_at_star_run(p, k))
+            k++;
+        if (p_peekn(p, k)->kind != TK_LBRACKET) break;
+        n->elem_ptr_depth++;
         p_advance(p);
-        n->is_elem_pointer = true;
-        parse_array_dims(p, n);
-        return;
     }
     parse_array_dims(p, n);
     parse_ptr_suffix(p, n);

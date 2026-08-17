@@ -117,7 +117,7 @@ void parse_typestr(const char *ts, char *base, size_t cap, bool *ptr, vec_t *dim
 /* parse_typestr plus the star count that belongs to an array's ELEMENT type:
    "Edge*[6]" yields base "Edge", dims {6}, ptr false, elem_ptr 1. */
 void parse_typestr_ex(const char *ts, char *base, size_t cap, bool *ptr, vec_t *dims,
-                      arena_t *a, int *elem_ptr);
+                      arena_t *a, int *elem_ptr, int *ptr_depth);
 
 bool cg_is_int_typestr(const char *ts);
 

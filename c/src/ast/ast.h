@@ -106,11 +106,17 @@ struct ast_node {
     token_value_t value;
     token_kind_t op;
     bool is_mut;
+    /* Shorthand for ptr_depth > 0, kept in sync by every writer so the many
+     * readers that only ask "is this a pointer at all" keep working. */
     bool is_pointer;
-    /* AST_TYPE only: the star sat BEFORE the dims ("Edge*[6]"), so it belongs
-     * to the element type - an array of pointers, not a pointer to an array
-     * ("Edge[6]*", which is what is_pointer records). */
-    bool is_elem_pointer;
+    /* AST_TYPE only: stars written AFTER the dims ("Edge[6]**" -> 2), i.e. a
+     * pointer TO the array. Generic substitution SUMS this with the argument's
+     * own depth: "T*" with T = "Edge*" is Edge**, and ORing booleans silently
+     * flattened it back to Edge*. */
+    int ptr_depth;
+    /* ...and stars written BEFORE the dims ("Edge**[6]" -> 2), which belong to
+     * the ELEMENT type: an array of pointers, not a pointer to an array. */
+    int elem_ptr_depth;
     bool synthetic;
     bool file_boundary; /* first top-level node merged in from a package file;
                          * resets per-file top-level ordering checks */

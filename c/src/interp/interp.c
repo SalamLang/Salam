@@ -564,13 +564,29 @@ static void collect_module_funcs(interp_t *I, module_t *mod, ast_node_t *prog)
                     env_define(I, mod->env, d->name, mk_closure(I, d, mod->env));
                 break;
 
-            case AST_STRUCT_DEF:
+            case AST_STRUCT_DEF: {
+                /*
+                 * A package's struct keeps its short name on the declaration
+                 * but its *type* is named <pkg>_<name> (sema_decl.c's
+                 * AST_STRUCT_DEF pre-pass), and a type string is what the
+                 * walker has in hand wherever it has to lay a value out in
+                 * memory - the element type of a Vector<T> above all. Looking
+                 * only under the short name left `Vector<pkg.Row>.get(i)`
+                 * reading the bytes back as an opaque box, so the result was
+                 * not a struct and any field access on it failed with
+                 * "cannot access member". Register both spellings.
+                 */
+                const char *qual = NULL;
+                if (d->name && mod->name && strcmp(mod->name, "main") != 0)
+                    qual = afmt(I, "%s_%s", mod->name, d->name);
+                if (qual && !find_struct(I, qual)) itab_put(I, &I->tab_structs, qual, d);
                 if (!find_struct(I, d->name)) {
                     vec_push(I->a, &I->structs, d);
                     if (d->name) itab_put(I, &I->tab_structs, d->name, d);
                     if (!d->synthetic) register_method_envs(I, d, mod->env);
                 }
                 break;
+            }
             case AST_ENUM_DEF:
                 if (!find_enum(I, d->name)) {
                     vec_push(I->a, &I->enums, d);

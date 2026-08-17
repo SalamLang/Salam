@@ -81,7 +81,11 @@ static size_t resolve_array_dim(sema_t *s, ast_node_t *dim)
  */
 static type_t *apply_type_suffixes(sema_t *s, ast_node_t *tnode, type_t *base)
 {
-    if (tnode->is_elem_pointer) base = type_ptr(s->tc, base);
+    {
+        int k = tnode->elem_ptr_depth;
+        for (; k > 0; k--)
+            base = type_ptr(s->tc, base);
+    }
     {
         size_t i = tnode->dims.len;
         for (; i-- > 0;) {
@@ -90,7 +94,13 @@ static type_t *apply_type_suffixes(sema_t *s, ast_node_t *tnode, type_t *base)
         }
     }
     if (tnode->is_slice) base = type_slice(s->tc, base);
-    if (tnode->is_pointer) base = type_ptr(s->tc, base);
+    {
+        /* is_pointer without a depth is a node the generic machinery or a
+         * desugaring built by hand; treat it as one level. */
+        int k = tnode->ptr_depth ? tnode->ptr_depth : (tnode->is_pointer ? 1 : 0);
+        for (; k > 0; k--)
+            base = type_ptr(s->tc, base);
+    }
     return base;
 }
 

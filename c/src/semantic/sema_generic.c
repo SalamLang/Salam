@@ -76,10 +76,22 @@ static void g_subst(arena_t *a, ast_node_t *n, vec_t *params, vec_t *args)
             for (; i < params->len; i++) {
                 if (strcmp(n->name, (const char *)params->data[i]) != 0) continue;
                 ast_node_t *cc = ast_clone(a, (const ast_node_t *)args->data[i]);
-                bool ptr = n->is_pointer || cc->is_pointer;
+                /*
+                 * Stars ACCUMULATE. `T*` instantiated with T = `Edge*` is
+                 * Edge**, not Edge*: this used to OR the two booleans, so
+                 * every pointer-of-pointer collapsed to one level and
+                 * Vector<Edge*> failed to check its own std/ body
+                 * ("cannot assign 'Edge*' to 'Edge'" inside vector.salam,
+                 * where the data pointer is a T*).
+                 */
+                int cc_depth = cc->ptr_depth ? cc->ptr_depth : (cc->is_pointer ? 1 : 0);
+                int n_depth = n->ptr_depth ? n->ptr_depth : (n->is_pointer ? 1 : 0);
+                int depth = n_depth + cc_depth;
                 n->name = cc->name;
                 n->list = cc->list;
-                n->is_pointer = ptr;
+                n->ptr_depth = depth;
+                n->is_pointer = depth > 0;
+                n->elem_ptr_depth += cc->elem_ptr_depth;
                 n->is_dyn = cc->is_dyn;
                 /* The resolved type comes along whole only where the
                  * occurrence is the bare parameter. `T*` or `T[4]` stands for
@@ -91,9 +103,10 @@ static void g_subst(arena_t *a, ast_node_t *n, vec_t *params, vec_t *args)
                  * The base is only usable when the argument node is itself
                  * undecorated; `T[4]` with T = `Foo[3]` has to merge dims, and
                  * cc->sema_type is the whole array there, not the element. */
-                if (ptr == cc->is_pointer && n->dims.len == 0)
+                if (n_depth == 0 && n->dims.len == 0 && n->elem_ptr_depth == 0)
                     n->sema_type = cc->sema_type;
-                else if (!cc->is_pointer && cc->dims.len == 0)
+                else if (cc_depth == 0 && cc->dims.len == 0 &&
+                         cc->elem_ptr_depth == 0)
                     n->sema_base_type = cc->sema_type;
                 vec_t merged;
                 vec_init(&merged);
@@ -141,6 +154,7 @@ static ast_node_t *g_type_to_ast_bare(sema_t *s, type_t *t, const src_span_t *sp
     }
     if (t->kind == TY_PTR && t->pointee) {
         n = g_type_to_ast_bare(s, t->pointee, span);
+        n->ptr_depth++;
         n->is_pointer = true;
         return n;
     }

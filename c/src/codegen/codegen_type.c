@@ -164,15 +164,19 @@ static const char *base_ctype(const char *base)
 }
 
 void parse_typestr_ex(const char *ts, char *base, size_t cap, bool *ptr, vec_t *dims,
-                      arena_t *a, int *elem_ptr)
+                      arena_t *a, int *elem_ptr, int *ptr_depth)
 {
     *ptr = false;
     if (elem_ptr) *elem_ptr = 0;
+    if (ptr_depth) *ptr_depth = 0;
     if (dims) vec_init(dims);
     size_t len = strlen(ts);
 
-    if (len && ts[len - 1] == '*') {
+    /* Stars nest: Vector<Edge*> lays its data pointer out as "Edge**", so the
+     * whole trailing run is counted rather than just the last one. */
+    while (len && ts[len - 1] == '*') {
         *ptr = true;
+        if (ptr_depth) (*ptr_depth)++;
         len--;
     }
 
@@ -215,7 +219,7 @@ void parse_typestr_ex(const char *ts, char *base, size_t cap, bool *ptr, vec_t *
 void parse_typestr(const char *ts, char *base, size_t cap, bool *ptr, vec_t *dims,
                    arena_t *a)
 {
-    parse_typestr_ex(ts, base, cap, ptr, dims, a, NULL);
+    parse_typestr_ex(ts, base, cap, ptr, dims, a, NULL, NULL);
 }
 
 bool cg_is_int_typestr(const char *ts)
@@ -437,16 +441,17 @@ const char *cg_ctype(cg_t *cg, const char *ts)
     if (!strncmp(ts, "func(", 5) || !strncmp(ts, "externfunc(", 11)) return "void*";
     char base[96];
     bool ptr;
-    int eptr;
+    int eptr, pdepth;
     vec_t dims;
-    parse_typestr_ex(ts, base, sizeof(base), &ptr, &dims, cg->a, &eptr);
+    parse_typestr_ex(ts, base, sizeof(base), &ptr, &dims, cg->a, &eptr, &pdepth);
     const char *bc = base_ctype(base);
 
     if (bc == base) bc = arena_strdup(cg->a, cg_cident(cg, base));
     for (; eptr > 0; eptr--)
         bc = cg_fmt(cg, "%s*", bc);
     if (dims.len) return cg_fmt(cg, "%s*", bc);
-    if (ptr) return cg_fmt(cg, "%s*", bc);
+    for (; pdepth > 0; pdepth--)
+        bc = cg_fmt(cg, "%s*", bc);
     return bc;
 }
 
@@ -471,9 +476,9 @@ const char *cg_decl(cg_t *cg, const char *ts, const char *name)
         return cg_fmt(cg, "void* %s", cg_cident(cg, name));
     char base[96];
     bool ptr;
-    int eptr;
+    int eptr, pdepth;
     vec_t dims;
-    parse_typestr_ex(ts, base, sizeof(base), &ptr, &dims, cg->a, &eptr);
+    parse_typestr_ex(ts, base, sizeof(base), &ptr, &dims, cg->a, &eptr, &pdepth);
     const char *bc = base_ctype(base);
     if (bc == base) bc = arena_strdup(cg->a, cg_cident(cg, base));
     for (; eptr > 0; eptr--)
@@ -497,7 +502,8 @@ const char *cg_decl(cg_t *cg, const char *ts, const char *name)
         sb_free(&s);
         return r;
     }
-    if (ptr) return cg_fmt(cg, "%s* %s", bc, name);
+    for (; pdepth > 0; pdepth--)
+        bc = cg_fmt(cg, "%s*", bc);
     return cg_fmt(cg, "%s %s", bc, name);
 }
 

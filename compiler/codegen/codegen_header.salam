@@ -124,7 +124,15 @@ func dyn_set_add(setv &: Vector<str>, s2: str):
     setv.push(s2)
 end
 
-func dyn_collect(g &: Cg, a &: at.Ast, id: int):
+func cg_iface_canon_name(s &: sm.Sema, sym: int): str:
+    symv := sm.SymAt(s, sym)
+    if str.Len(symv.pkgname) > 0 && !str.Equals(symv.pkgname, "main"):
+        ret symv.pkgname + "_" + symv.name
+    end
+    ret symv.name
+end
+
+func dyn_collect(g &: Cg, s &: sm.Sema, a &: at.Ast, id: int):
     if id == 0:
         ret
     end
@@ -137,7 +145,13 @@ func dyn_collect(g &: Cg, a &: at.Ast, id: int):
         )
     end
     if n.kind == at.AST_TYPE && n.is_dyn && str.Len(n.name) > 0:
-        dyn_set_add(g.dyn_ifaces, n.name)
+        // A type node carries the name as written ("Rows", "db.Rows");
+        // every other route here carries the canonical one the type
+        // string uses. Register the canonical form or the interface gets
+        // two typedefs, only one of which the rest of the module refers
+        // to.
+        isym3 := cg_iface_sym(s, n.name)
+        dyn_set_add(g.dyn_ifaces, isym3 != 0 ? cg_iface_canon_name(s, isym3) : n.name)
     end
     if n.kind == at.AST_CAST && str.StartsWith(n.type_str, "dyn ") && n.a != 0:
         an := at.Get(a, n.a)
@@ -152,16 +166,16 @@ func dyn_collect(g &: Cg, a &: at.Ast, id: int):
             dyn_set_add(g.dyn_impls, pair)
         end
     end
-    dyn_collect(g, a, n.ty)
-    dyn_collect(g, a, n.a)
-    dyn_collect(g, a, n.b)
-    dyn_collect(g, a, n.c)
-    dyn_collect(g, a, n.d)
+    dyn_collect(g, s, a, n.ty)
+    dyn_collect(g, s, a, n.a)
+    dyn_collect(g, s, a, n.b)
+    dyn_collect(g, s, a, n.c)
+    dyn_collect(g, s, a, n.d)
     repeat n.list.len() with i:
-        dyn_collect(g, a, n.list.get(i))
+        dyn_collect(g, s, a, n.list.get(i))
     end
     repeat n.dims.len() with i2:
-        dyn_collect(g, a, n.dims.get(i2))
+        dyn_collect(g, s, a, n.dims.get(i2))
     end
 end
 
@@ -195,12 +209,63 @@ func dyn_match_sig(s &: sm.Sema, cm: int, want: int): int:
     ret 0
 end
 
+// A type name that reaches codegen is canonical: a struct or interface
+// declared in package `db` is named "db_Connection" no matter which file
+// names it, and only a main-module declaration keeps its bare name
+// (sema_decl.salam). So a symbol has to be found by that canonical name,
+// which for anything outside the main module means walking the packages -
+// it is not in the global scope under that spelling.
+func cg_canon_sym(s &: sm.Sema, name: str, kind: int): int:
+    if str.Len(name) == 0:
+        ret 0
+    end
+    mut sym := sm.Lookup(s, s.global, name)
+    if sym != 0 && sm.SymAt(s, sym).kind == kind:
+        ret sym
+    end
+    repeat sm.PackageCount(s) with p:
+        pk := sm.PackageAt(s, p)
+        pkv := sm.SymAt(s, pk)
+        if pkv.kind != sm.SYM_PACKAGE || pkv.members == 0:
+            continue
+        end
+        msc := sm.ScopeAt(s, pkv.members)
+        repeat msc.symbols.len() with i:
+            sym = msc.symbols.get(i)
+            symv := sm.SymAt(s, sym)
+            if symv.kind != kind || str.Len(symv.name) == 0:
+                continue
+            end
+            if symv.ty != sm.TYPE_NONE && str.Equals(sm.TypeAt(s, symv.ty).name, name):
+                ret sym
+            end
+            if str.Len(symv.pkgname) == 0:
+                continue
+            end
+            if str.Equals(symv.pkgname + "_" + symv.name, name):
+                ret sym
+            end
+        end
+    end
+    ret 0
+end
+
+func cg_iface_sym(s &: sm.Sema, name: str): int:
+    ret cg_canon_sym(s, name, sm.SYM_INTERFACE)
+end
+
+// The concrete side of an impl pair is canonical too: a driver struct in
+// another package reaches here as "drv_DB".
+func cg_struct_sym(s &: sm.Sema, name: str): int:
+    ret cg_canon_sym(s, name, sm.SYM_STRUCT)
+end
+
 func cg_emit_dyn_types(g &: Cg, s &: sm.Sema):
     repeat g.dyn_ifaces.len() with i:
         iname := g.dyn_ifaces.get(i)
         ci := cg_cident(iname)
-        isym := sm.Lookup(s, s.global, iname)
-        if isym == 0 || sm.SymAt(s, isym).kind != sm.SYM_INTERFACE:
+        isym := cg_iface_sym(s, iname)
+        if isym == 0:
             continue
         end
         outh(
@@ -215,8 +280,13 @@ func cg_emit_dyn_types(g &: Cg, s &: sm.Sema):
                 continue
             end
             sig := sm.SigAt(s, ms.overloads.get(0))
+            // An aggregate return lowers to an out-parameter here just as it
+            // does for a plain function (func_signature), so the slot has
+            // to be typed `void (*)(void*, ..., R*)`.
+            sret := type_is_byval_agg(s, sig.ret_type)
+            rc := cg_ctype(sm.ToString(s, sig.ret_type))
             outh(
-                g, "    " + cg_ctype(sm.ToString(s, sig.ret_type)) + " (*" + cg_cident(ms.name) + ")(void*"
+                g, "    " + (sret ? "void" : rc) + " (*" + cg_cident(ms.name) + ")(void*"
             )
             repeat sig.params.len() with p:
                 outh(
@@ -226,6 +296,9 @@ func cg_emit_dyn_types(g &: Cg, s &: sm.Sema):
                         )
                     )
                 )
+            end
+            if sret:
+                outh(g, ", " + rc + "*")
             end
             outh(g, ");\n")
         end
@@ -249,9 +322,9 @@ func cg_emit_dyn_vtables_impl(g &: Cg, s &: sm.Sema):
         cnamev := str.Substr(pair, bar + 1, str.Len(pair) - bar - 1)
         ci := cg_cident(iname)
         cc2 := cg_cident(cnamev)
-        isym := sm.Lookup(s, s.global, iname)
-        csym := sm.Lookup(s, s.global, cnamev)
-        if isym == 0 || sm.SymAt(s, isym).kind != sm.SYM_INTERFACE || csym == 0 || sm.SymAt(s, csym).kind != sm.SYM_STRUCT:
+        isym := cg_iface_sym(s, iname)
+        csym := cg_struct_sym(s, cnamev)
+        if isym == 0 || csym == 0:
             continue
         end
         imembers := sm.SymAt(s, isym).members
@@ -267,8 +340,12 @@ func cg_emit_dyn_vtables_impl(g &: Cg, s &: sm.Sema):
             if csig == 0:
                 continue
             end
-            mangled := cg_mangle(
-                g, s, sm.SymAt(s, csym).name, ms.name, sm.SigAt(s, csig).params
+            // Through cg_mangle_method, not cg_mangle: the method belongs
+            // to the struct's own package, which is not the module being
+            // emitted when a driver in another package is boxed into an
+            // interface here.
+            mangled := cg_mangle_method(
+                g, s, sm.SymAt(s, csym).name, csym, ms.name, sm.SigAt(s, csig).params
             )
             isigv := sm.SigAt(s, isig)
             rets := cg_ctype(sm.ToString(s, isigv.ret_type))
@@ -280,9 +357,19 @@ func cg_emit_dyn_vtables_impl(g &: Cg, s &: sm.Sema):
                 co.SbPuts(asb, ", __a" + p)
             end
             isvoid := isigv.ret_type != sm.TYPE_NONE && sm.TypeAt(s, isigv.ret_type).kind == sm.TY_VOID
-            out(
-                g, "static " + rets + " _Salam_thunk_" + ci + "_" + cc2 + "_" + cg_cident(ms.name) + "(void* self" + co.SbCstr(ps) + "){ " + (isvoid ? "" : "return ") + mangled + "((" + cc2 + "*)self" + co.SbCstr(asb) + "); }\n"
-            )
+            // The callee is `void f(C*, ..., R* __ret)` when it returns an
+            // aggregate, so the thunk cannot `return f(...)` - it takes the
+            // caller's out-pointer and hands it straight on.
+            sret2 := type_is_byval_agg(s, isigv.ret_type)
+            if sret2:
+                out(
+                    g, "static void _Salam_thunk_" + ci + "_" + cc2 + "_" + cg_cident(ms.name) + "(void* self" + co.SbCstr(ps) + ", " + rets + "* __ret){ " + mangled + "((" + cc2 + "*)self" + co.SbCstr(asb) + ", __ret); }\n"
+                )
+            else:
+                out(
+                    g, "static " + rets + " _Salam_thunk_" + ci + "_" + cc2 + "_" + cg_cident(ms.name) + "(void* self" + co.SbCstr(ps) + "){ " + (isvoid ? "" : "return ") + mangled + "((" + cc2 + "*)self" + co.SbCstr(asb) + "); }\n"
+                )
+            end
             co.SbFree(ps)
             co.SbFree(asb)
         end
@@ -1127,7 +1214,7 @@ func cg_header_impl(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
     hdr_enums(g, s, a, program)
     hdr_struct_fwd(g, s, a, program)
     hdr_struct_fwd_imports(g, s, a)
-    dyn_collect(g, a, program)
+    dyn_collect(g, s, a, program)
     cg_emit_dyn_types(g, s)
     outh(g, "\n")
     vec_collect(g, a, program)

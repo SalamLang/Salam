@@ -577,6 +577,30 @@ func call_pkg(
     ret mangled + "(" + args + ")"
 end
 
+// The declared return type of `method` on the interface behind a "dyn
+// Iface" (or "dyn Iface*", or the qualified "dyn pkg.Iface") receiver type
+// string. sm.TYPE_NONE when anything along the way does not resolve, which
+// the caller reads as "not an aggregate" and falls back to the plain call
+// shape.
+func dyn_method_ret(s &: sm.Sema, objts: str, method: str): int:
+    if !str.StartsWith(objts, "dyn "):
+        ret sm.TYPE_NONE
+    end
+    mut name := str.Substr(objts, 4, str.Len(objts) - 4)
+    until str.Len(name) > 0 && str.EndsWith(name, "*"):
+        name = str.Substr(name, 0, str.Len(name) - 1)
+    end
+    isym := cg_iface_sym(s, name)
+    if isym == 0 || sm.SymAt(s, isym).members == 0:
+        ret sm.TYPE_NONE
+    end
+    ms := sm.LookupLocal(s, sm.SymAt(s, isym).members, method)
+    if ms == 0 || sm.SymAt(s, ms).kind != sm.SYM_METHOD || sm.SymAt(s, ms).overloads.len() == 0:
+        ret sm.TYPE_NONE
+    end
+    ret sm.SigAt(s, sm.SymAt(s, ms).overloads.get(0)).ret_type
+end
+
 func call_dyn(
     g &: Cg, s &: sm.Sema, a &: at.Ast, n: int, obj: int, callee: int, objts: str
 ): str:
@@ -591,6 +615,17 @@ func call_dyn(
         ret "({ " + dynct + " __dv" + t + " = (" + recv + "); " + CG_MEM_FREE + "(__dv" + t + acc + "data); })"
     end
     asv := call_args_lead(g, s, a, n, 0)
+    // A vtable slot whose method returns an aggregate is `void (*)(..., R*)`,
+    // matching the sret lowering every other call path uses, so the result
+    // has to be caught in a temporary and yielded from the statement
+    // expression rather than taken as the call's value.
+    ret2 := dyn_method_ret(s, objts, mname)
+    if type_is_byval_agg(s, ret2):
+        rc := cg_ctype(sm.ToString(s, ret2))
+        g.tmpn += 1
+        r := g.tmpn
+        ret "({ " + dynct + " __dv" + t + " = (" + recv + "); " + rc + " __s" + r + "; __dv" + t + acc + "vtable->" + cg_cident(mname) + "(__dv" + t + acc + "data" + asv + ", &__s" + r + "); __s" + r + "; })"
+    end
     ret "({ " + dynct + " __dv" + t + " = (" + recv + "); __dv" + t + acc + "vtable->" + cg_cident(mname) + "(__dv" + t + acc + "data" + asv + "); })"
 end
 

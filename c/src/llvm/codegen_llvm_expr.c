@@ -582,7 +582,7 @@ static void ll_lower_print(ll_t *ll, ast_node_t *n, bool nl, int err)
                 sb_cstr(&args));
     } else {
         ll_emit(ll, "%s = call i32 (ptr, ...) @printf(ptr %s%s)", t, f, sb_cstr(&args));
-        if (buffered) {
+        {
             /*
              * fflush(NULL) flushes every open output stream, which is all
              * this needs: push the printf line out to fd 1 before the next
@@ -592,6 +592,13 @@ static void ll_lower_print(ll_t *ll, ast_node_t *n, bool nl, int err)
              * left unresolved there and took the whole module down with it,
              * which is why every formatted print failed on macOS while
              * literal-only ones worked.
+             *
+             * Unconditional, not gated on `buffered`: the other half of what
+             * it does is defeat the C runtime's full buffering of a redirected
+             * stdout, and a module that spawns threads (or any module at all
+             * on Windows, where single_threaded is forced off) needs that just
+             * as much as a single-threaded one. Without it a server's log
+             * reached its file only when the process exited.
              */
             const char *t2 = ll_new_tmp(ll);
             ll_emit(ll, "%s = call i32 @fflush(ptr null)", t2);

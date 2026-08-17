@@ -187,12 +187,22 @@ static const char *call_raw_ptr(cg_t *cg, ast_node_t *n, ast_node_t *callee)
  */
 static const char *cg_order_stdout(cg_t *cg, const char *pre, const char *printf_expr)
 {
-    if (!pre || !pre[0])
-        return cg->single_threaded
-                   ? cg_fmt(cg, "({ salam_out_flush(); %s; fflush(0); })", printf_expr)
-                   : printf_expr;
-    if (!cg->single_threaded) return cg_fmt(cg, "({ %s%s; })", pre, printf_expr);
-    return cg_fmt(cg, "({ %ssalam_out_flush(); %s; fflush(0); })", pre, printf_expr);
+    /*
+     * The fflush is not about ordering against salam_ob - it is what makes a
+     * printed line reach a redirected stdout at all. The C runtime
+     * line-buffers a terminal and fully buffers a file or a pipe, so without
+     * it every daemon, container and systemd unit held its log lines in libc's
+     * buffer until the buffer filled or the process exited normally - which
+     * for a server that runs until it is killed is never. A module that spawns
+     * threads deliberately does not touch salam_ob (that buffer is not
+     * synchronised), but it needs the flush just as much; leaving it out is
+     * what made a threaded program's output look like it was being dropped
+     * rather than merely buffered.
+     */
+    const char *lead = (pre && pre[0]) ? pre : "";
+    if (!cg->single_threaded)
+        return cg_fmt(cg, "({ %s%s; fflush(0); })", lead, printf_expr);
+    return cg_fmt(cg, "({ %ssalam_out_flush(); %s; fflush(0); })", lead, printf_expr);
 }
 
 static const char *cg_lower_print(cg_t *cg, ast_node_t *n, bool nl, int err)

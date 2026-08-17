@@ -428,6 +428,36 @@ HasPersianDigits HasArabicDigits`; plus a `StringBuilder` (`NewBuilder`,
 Sin Cos Tan Asin Acos Atan Atan2 Sinh Cosh Tanh Floor Ceil Round Trunc Abs
 Sign Min Max ClampF Lerp Radians Degrees Mod IsNaN IsInf NaN Inf`; integer:
   `MinI MaxI AbsI ClampI Gcd Lcm Factorial Pow10` (+ `*I64` variants).
+- **`bigint`**: arbitrary-precision signed integers, one `Int` type (sign +
+  base-2^32 magnitude). Build: `Zero One FromInt FromUint Parse ParseBase
+ParseOr FromBytes Clone`; inspect: `Sign IsZero BitLen Bit IsOdd IsEven Cmp
+CmpAbs Equals Less Greater Min Max`; arithmetic: `Add Sub Mul Sqr Neg Abs
+AddInt SubInt MulInt Shl Shr`; division in **both** conventions - `DivMod Div
+Rem` truncate toward zero (matching Salam's `/` and `%`), `FloorDivMod
+FloorDiv FloorMod` round toward minus infinity, and `Mod` always lands in
+  `[0, |m|)`; number theory `Pow Pow10 ModExp Gcd Lcm ExtGcd ModInverse Sqrt
+Factorial`; two's-complement bitwise `And Or Xor AndNot Not PopCount
+TrailingZeros`; out: `ToStr ToStrBase ToHex ToInt ToIntClamped ToFloat ToBytes
+ByteLen`. In-place forms (`Set SetInt AddTo SubFrom MulBy AddIntTo MulIntBy
+NegateIn ShlBy ShrBy`) mutate `x &: Int` and free the old value, for loops that
+  should not allocate per iteration. **Every returning function hands over a
+  fresh value the caller frees** (`defer x.free()`); operands are taken by
+  value and are never mutated, so `Mul(x, x)` is fine. Not constant-time - for
+  a secret exponent use the blinded routine in `std/ssh/bigint.salam`.
+- **`decimal`**: exact fixed-point decimal - **this is the money type**. A
+  `Dec` is a `bigint.Int` plus a scale, so `0.1 + 0.2` is exactly `0.3` and
+  nothing overflows. Build: `Zero FromInt FromScaled(1999, 2)` → 19.99 `New
+Parse ParseOr FromFloat` (lossy, documented); `Add Sub Mul` are **exact and
+  never round** (Add/Sub take the larger scale, Mul the sum); `Div` cannot be,
+  so it requires a scale *and* a `Rounding` mode - `Div DivRound DivInt Pow
+MulInt AddInt SubInt Percent Sum`. Rounding: `Rounding.{Down,Up,Floor,Ceil,
+HalfUp,HalfDown,HalfEven}` with `Rescale Round`(HalfEven) `RoundHalfUp
+Truncate Trim`. Compare `Cmp Equals Less Greater Min Max Sign IsZero
+IsNegative Scale Unscaled` (1.0 equals 1.00). Out: `ToStr` (**always plain
+  notation, never exponential**) `ToStrFixed FormatGrouped ToInt ToFloat`.
+  Money splitting that cannot lose a cent: `Split(total, n)` and
+  `Allocate(total, ratios)` guarantee the parts sum back to the total exactly
+  (100.00 by 3 → 33.34, 33.33, 33.33); free the result with `FreeAll`.
 - **`rand`**: `Seed SeedAuto Int Int32 IntN IntRange FloatRange Float Bool
 BoolP Choice{Int,Str,Char} Shuffle{Int,Str} Alpha Alnum Digit Text UUID Hash`.
 - **`stats`**: descriptive statistics helpers.

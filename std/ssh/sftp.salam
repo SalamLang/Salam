@@ -125,37 +125,37 @@ end
 // same import-workaround treatment for no benefit here - a plain read
 // loop to EOF is all this needs).
 func _read_file_bytes(path: str): Buf:
-    f := fopen(path, "rb")
-    if f == null:
+    stream := fopen(path, "rb")
+    if stream == null:
         ret NewBuf(0)
     end
-    mut out := NewBuf(_RAW_IO_CHUNK)
+    mut contents := NewBuf(_RAW_IO_CHUNK)
     mut chunk := NewBuf(_RAW_IO_CHUNK)
     BufPutZeros(chunk, _RAW_IO_CHUNK)
     mut reading := true
     until reading:
-        got := fread(chunk.p, 1 as u64, _RAW_IO_CHUNK as u64, f)
-        if got == (0 as u64):
+        n_read := fread(chunk.p, 1 as u64, _RAW_IO_CHUNK as u64, stream)
+        if n_read == (0 as u64):
             reading = false
         else:
-            BufPutBytes(out, chunk.p, got as int)
-            if got < (_RAW_IO_CHUNK as u64):
+            BufPutBytes(contents, chunk.p, n_read as int)
+            if n_read < (_RAW_IO_CHUNK as u64):
                 reading = false
             end
         end
     end
     FreeBuf(chunk)
-    fclose(f)
-    ret out
+    fclose(stream)
+    ret contents
 end
 
-func _write_file_bytes(path: str, p: void*, n: int): bool:
-    f := fopen(path, "wb")
-    if f == null:
+func _write_file_bytes(path: str, bytes: void*, n: int): bool:
+    stream := fopen(path, "wb")
+    if stream == null:
         ret false
     end
-    written := fwrite(p, 1 as u64, n as u64, f)
-    fclose(f)
+    written := fwrite(bytes, 1 as u64, n as u64, stream)
+    fclose(stream)
     ret written == (n as u64)
 end
 
@@ -206,29 +206,30 @@ func _sftp_read_packet(t &: Transport, sftp &: Sftp): SftpPacket:
     if sftp.ch.stdout.len < 4:
         ret SftpPacket {}
     end
-    plen := ((_bget(sftp.ch.stdout.p, 0) as u32) << (24 as u32)) | ((_bget(sftp.ch.stdout.p, 1) as u32) << (16 as u32)) | ((_bget(sftp.ch.stdout.p, 2) as u32) << (8 as u32)) | (_bget(sftp.ch.stdout.p, 3) as u32)
-    total := 4 + (plen as int)
-    until sftp.ch.stdout.len < total && steps < 200000:
+    // Length prefix counts the type byte plus the body, not itself.
+    payload_len := ((_bget(sftp.ch.stdout.p, 0) as u32) << (24 as u32)) | ((_bget(sftp.ch.stdout.p, 1) as u32) << (16 as u32)) | ((_bget(sftp.ch.stdout.p, 2) as u32) << (8 as u32)) | (_bget(sftp.ch.stdout.p, 3) as u32)
+    packet_len := 4 + (payload_len as int)
+    until sftp.ch.stdout.len < packet_len && steps < 200000:
         code := _channel_pump_step(t, sftp.ch)
         if code == (0 - 1) || code == 3:
             ret SftpPacket {}
         end
         steps += 1
     end
-    if sftp.ch.stdout.len < total:
+    if sftp.ch.stdout.len < packet_len:
         ret SftpPacket {}
     end
     msgtype := _bget(sftp.ch.stdout.p, 4)
-    mut body := NewBuf(plen as int - 1)
-    BufPutBytes(body, (sftp.ch.stdout.p as i64 + 5) as void*, (plen as int) - 1)
-    _buf_consume_front(sftp.ch.stdout, total)
+    mut body := NewBuf(payload_len as int - 1)
+    BufPutBytes(body, (sftp.ch.stdout.p as i64 + 5) as void*, (payload_len as int) - 1)
+    _buf_consume_front(sftp.ch.stdout, packet_len)
 
-    mut p := SftpPacket {}
-    p.msgtype = msgtype
-    p.bodybuf = body
-    p.body = ReaderFromBuf(body)
-    p.ok = true
-    ret p
+    mut pkt := SftpPacket {}
+    pkt.msgtype = msgtype
+    pkt.bodybuf = body
+    pkt.body = ReaderFromBuf(body)
+    pkt.ok = true
+    ret pkt
 end
 
 func _sftp_expect_status_ok(t &: Transport, sftp &: Sftp): bool:
@@ -333,13 +334,13 @@ pub func SftpOpen(client &: Client): Sftp:
     end
     FreeBuf(extra)
 
-    mut initbody := NewBuf(4)
-    BufPutUint32(initbody, 3 as u32)
-    if !_sftp_send(client.transport, sftp, SSH_FXP_INIT, initbody):
-        FreeBuf(initbody)
+    mut init_body := NewBuf(4)
+    BufPutUint32(init_body, 3 as u32) // SFTP protocol version
+    if !_sftp_send(client.transport, sftp, SSH_FXP_INIT, init_body):
+        FreeBuf(init_body)
         ret sftp
     end
-    FreeBuf(initbody)
+    FreeBuf(init_body)
 
     pkt := _sftp_read_packet(client.transport, sftp)
     if pkt.ok && pkt.msgtype == SSH_FXP_VERSION:
@@ -359,19 +360,19 @@ pub func SftpClose(client &: Client, sftp &: Sftp):
     sftp.ok = false
 end
 
-// Uploads local file `localpath` to `remotepath`, creating/truncating it.
+// Uploads local file `local_path` to `remote_path`, creating/truncating it.
 @en "Upload"
 @fa "بارگذاری"
 @ar "رفع"
-pub func Upload(client &: Client, sftp &: Sftp, localpath: str, remotepath: str): bool:
-    if !os.Exists(localpath):
+pub func Upload(client &: Client, sftp &: Sftp, local_path: str, remote_path: str): bool:
+    if !os.Exists(local_path):
         ret false
     end
-    handle := _sftp_open_handle(client.transport, sftp, remotepath, (SSH_FXF_WRITE | SSH_FXF_CREAT | SSH_FXF_TRUNC) as u32)
+    handle := _sftp_open_handle(client.transport, sftp, remote_path, (SSH_FXF_WRITE | SSH_FXF_CREAT | SSH_FXF_TRUNC) as u32)
     if handle.len == 0:
         ret false
     end
-    content := _read_file_bytes(localpath)
+    content := _read_file_bytes(local_path)
     total := content.len
     mut offset := 0 as u64
     mut ok := true
@@ -401,16 +402,16 @@ pub func Upload(client &: Client, sftp &: Sftp, localpath: str, remotepath: str)
     ret ok
 end
 
-// Downloads `remotepath` to local file `localpath`.
+// Downloads `remote_path` to local file `local_path`.
 @en "Download"
 @fa "دانلود"
 @ar "تنزيل"
-pub func Download(client &: Client, sftp &: Sftp, remotepath: str, localpath: str): bool:
-    handle := _sftp_open_handle(client.transport, sftp, remotepath, SSH_FXF_READ as u32)
+pub func Download(client &: Client, sftp &: Sftp, remote_path: str, local_path: str): bool:
+    handle := _sftp_open_handle(client.transport, sftp, remote_path, SSH_FXF_READ as u32)
     if handle.len == 0:
         ret false
     end
-    mut out := NewBuf(65536)
+    mut downloaded := NewBuf(_RAW_IO_CHUNK)
     mut offset := 0 as u64
     mut done := false
     mut ok := true
@@ -432,9 +433,8 @@ pub func Download(client &: Client, sftp &: Sftp, remotepath: str, localpath: st
         else if pkt.msgtype == SSH_FXP_STATUS:
             mut r := pkt.body
             _rid := RGetUint32(r)
-            code := RGetUint32(r)
+            _status_code := RGetUint32(r)
             done = true // SSH_FX_EOF (or any status here) ends the transfer
-            _unused_code := code
             FreeBuf(pkt.bodybuf)
         else if pkt.msgtype == SSH_FXP_DATA:
             mut r := pkt.body
@@ -443,7 +443,7 @@ pub func Download(client &: Client, sftp &: Sftp, remotepath: str, localpath: st
             if r.bad:
                 ok = false
             else:
-                BufPutBytes(out, data.p, data.len)
+                BufPutBytes(downloaded, data.p, data.len)
                 offset = offset + (data.len as u64)
                 if data.len == 0:
                     done = true
@@ -458,9 +458,9 @@ pub func Download(client &: Client, sftp &: Sftp, remotepath: str, localpath: st
     _sftp_close_handle(client.transport, sftp, handle)
     FreeBuf(handle)
     if ok:
-        ok = _write_file_bytes(localpath, out.p, out.len)
+        ok = _write_file_bytes(local_path, downloaded.p, downloaded.len)
     end
-    FreeBuf(out)
+    FreeBuf(downloaded)
     ret ok
 end
 
@@ -516,12 +516,12 @@ end
 @en "Rename"
 @fa "تغییر نام"
 @ar "إعادة تسمية"
-pub func Rename(client &: Client, sftp &: Sftp, oldpath: str, newpath: str): bool:
+pub func Rename(client &: Client, sftp &: Sftp, old_path: str, new_path: str): bool:
     id := _sftp_alloc_id(sftp)
-    mut body := NewBuf(32 + oldpath.len() + newpath.len())
+    mut body := NewBuf(32 + old_path.len() + new_path.len())
     BufPutUint32(body, id)
-    BufPutStringStr(body, oldpath)
-    BufPutStringStr(body, newpath)
+    BufPutStringStr(body, old_path)
+    BufPutStringStr(body, new_path)
     ok := _sftp_send(client.transport, sftp, SSH_FXP_RENAME, body)
     FreeBuf(body)
     if !ok:
@@ -580,7 +580,7 @@ end
 @fa "لیست پوشه"
 @ar "قائمة المجلد"
 pub func ListDir(client &: Client, sftp &: Sftp, path: str): Vector<SftpFileInfo>:
-    mut out := Vector {} as Vector<SftpFileInfo>
+    mut entries := Vector {} as Vector<SftpFileInfo>
     id := _sftp_alloc_id(sftp)
     mut body := NewBuf(16 + path.len())
     BufPutUint32(body, id)
@@ -588,27 +588,27 @@ pub func ListDir(client &: Client, sftp &: Sftp, path: str): Vector<SftpFileInfo
     ok := _sftp_send(client.transport, sftp, SSH_FXP_OPENDIR, body)
     FreeBuf(body)
     if !ok:
-        ret out
+        ret entries
     end
-    pkt0 := _sftp_read_packet(client.transport, sftp)
-    if !pkt0.ok || pkt0.msgtype != SSH_FXP_HANDLE:
-        FreeBuf(pkt0.bodybuf)
-        ret out
+    open_pkt := _sftp_read_packet(client.transport, sftp)
+    if !open_pkt.ok || open_pkt.msgtype != SSH_FXP_HANDLE:
+        FreeBuf(open_pkt.bodybuf)
+        ret entries
     end
-    mut r0 := pkt0.body
-    _rid0 := RGetUint32(r0)
-    handle := RGetStringCopy(r0)
-    FreeBuf(pkt0.bodybuf)
+    mut open_reader := open_pkt.body
+    _open_rid := RGetUint32(open_reader)
+    handle := RGetStringCopy(open_reader)
+    FreeBuf(open_pkt.bodybuf)
 
     mut done := false
     until !done:
-        rid := _sftp_alloc_id(sftp)
-        mut rbody := NewBuf(8 + handle.len)
-        BufPutUint32(rbody, rid)
-        BufPutStringBuf(rbody, handle)
-        rok := _sftp_send(client.transport, sftp, SSH_FXP_READDIR, rbody)
-        FreeBuf(rbody)
-        if !rok:
+        read_id := _sftp_alloc_id(sftp)
+        mut read_body := NewBuf(8 + handle.len)
+        BufPutUint32(read_body, read_id)
+        BufPutStringBuf(read_body, handle)
+        read_ok := _sftp_send(client.transport, sftp, SSH_FXP_READDIR, read_body)
+        FreeBuf(read_body)
+        if !read_ok:
             done = true
             continue
         end
@@ -631,13 +631,13 @@ pub func ListDir(client &: Client, sftp &: Sftp, path: str): Vector<SftpFileInfo
         _rid := RGetUint32(r)
         count := RGetUint32(r) as int
         repeat count:
-            fname := RGetStringAsStr(r)
+            entry_name := RGetStringAsStr(r)
             _longname := RGetStringAsStr(r)
             info := _sftp_parse_attrs(r)
-            if !str.Equals(fname, ".") && !str.Equals(fname, ".."):
-                mut fi := info
-                fi.name = fname
-                out.push(fi)
+            if !str.Equals(entry_name, ".") && !str.Equals(entry_name, ".."):
+                mut entry := info
+                entry.name = entry_name
+                entries.push(entry)
             end
         end
         FreeBuf(pkt.bodybuf)
@@ -645,5 +645,5 @@ pub func ListDir(client &: Client, sftp &: Sftp, path: str): Vector<SftpFileInfo
 
     _sftp_close_handle(client.transport, sftp, handle)
     FreeBuf(handle)
-    ret out
+    ret entries
 end

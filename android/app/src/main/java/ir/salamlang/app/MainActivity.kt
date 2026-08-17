@@ -24,8 +24,10 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.view.animation.DecelerateInterpolator
 import android.widget.Button
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.ProgressBar
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
@@ -45,6 +47,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var errorView: View
     private lateinit var retryButton: Button
     private lateinit var splashOverlay: View
+    private lateinit var splashLogo: ImageView
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val splashTimeoutRunnable = Runnable { hideSplash() }
@@ -87,6 +90,7 @@ class MainActivity : ComponentActivity() {
         setupInsets()
         setupWebView()
         setupBackNavigation()
+        animateSplashEntrance()
         retryButton.setOnClickListener { reload() }
 
         val restored =
@@ -105,6 +109,22 @@ class MainActivity : ComponentActivity() {
         errorView = findViewById(R.id.errorView)
         retryButton = findViewById(R.id.retryButton)
         splashOverlay = findViewById(R.id.splashOverlay)
+        splashLogo = findViewById(R.id.splashLogo)
+    }
+
+    private fun animateSplashEntrance() {
+        splashLogo.alpha = 0f
+        splashLogo.scaleX = 0.85f
+        splashLogo.scaleY = 0.85f
+        splashLogo
+            .animate()
+            .alpha(1f)
+            .scaleX(1f)
+            .scaleY(1f)
+            .setStartDelay(60L)
+            .setDuration(280L)
+            .setInterpolator(DecelerateInterpolator())
+            .start()
     }
 
     private fun setupSystemBars() {

@@ -147,6 +147,9 @@ const char *pkg_member_canon(sema_t *s, symbol_t *pk, const char *name,
 
 const char *local_canon(sema_t *s, const char *name, const src_span_t *span);
 
+symbol_t *sema_lookup_iface(sema_t *s, const char *name, const src_span_t *span,
+                            const char **why);
+
 const char *intrinsic_type_canon(const char *name);
 
 const char *intrinsic_method_canon(const char *name);

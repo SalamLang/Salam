@@ -114,14 +114,29 @@ type_t *sema_resolve_type(sema_t *s, ast_node_t *tnode)
     type_t *base;
 
     if (tnode->is_dyn) {
-        symbol_t *iface = scope_lookup(s->cur, tnode->name);
-        if (!iface || iface->kind != SYM_INTERFACE) {
-            SERR(s, 1, &tnode->span, "'%s' is not an interface (required after 'dyn')",
-                 tnode->name);
+        const char *why = NULL;
+        symbol_t *iface = sema_lookup_iface(s, tnode->name, &tnode->span, &why);
+        if (!iface) {
+            if (why)
+                SERR(s, 1, &tnode->span, "'%s' after 'dyn': %s", tnode->name, why);
+            else
+                SERR(s, 1, &tnode->span,
+                     "'%s' is not an interface (required after 'dyn')", tnode->name);
             return err_ty(s);
         }
-        type_t *dt = type_dyn(s->tc, iface, tnode->name);
-        return apply_type_suffixes(s, tnode, dt);
+        /* Name the type after the interface itself, never after the spelling
+         * used at this site, so "Connection" and "db.Connection" agree. */
+        const char *iname = iface->name;
+        if (iface->pkgname && iface->pkgname[0] &&
+            strcmp(iface->pkgname, "main") != 0) {
+            char buf[512];
+            sal_snprintf(buf, sizeof buf, "%s_%s", iface->pkgname, iface->name);
+            iname = arena_strdup(s->a, buf);
+        }
+        {
+            type_t *dt = type_dyn(s->tc, iface, iname);
+            return apply_type_suffixes(s, tnode, dt);
+        }
     }
 
     const char *dot = tnode->name ? strchr(tnode->name, '.') : NULL;

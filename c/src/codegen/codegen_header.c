@@ -142,6 +142,54 @@ static func_sig_t *dyn_match_sig(symbol_t *cm, func_sig_t *want)
     return cm->overloads.len ? (func_sig_t *)cm->overloads.data[0] : NULL;
 }
 
+/*
+ * A type name that reaches codegen is canonical: a struct or interface declared
+ * in package `db` is named "db_Connection" no matter which file names it, and
+ * only a main-module declaration keeps its bare name (see sema_decl.c). So a
+ * symbol has to be found by that canonical name, which for anything outside the
+ * main module means walking the packages - it is not in the global scope under
+ * that spelling.
+ */
+static symbol_t *cg_canon_sym(cg_t *cg, const char *name, sym_kind_t kind)
+{
+    symbol_t *sym;
+    if (!name) return NULL;
+    sym = scope_lookup(cg->sem->global, name);
+    if (sym && sym->kind == kind) return sym;
+    {
+        size_t p = 0;
+        for (; p < cg->sem->packages.len; p++) {
+            symbol_t *pk = (symbol_t *)cg->sem->packages.data[p];
+            size_t i;
+            if (!pk || pk->kind != SYM_PACKAGE || !pk->members) continue;
+            i = 0;
+            for (; i < pk->members->symbols.len; i++) {
+                char canon[512];
+                sym = (symbol_t *)pk->members->symbols.data[i];
+                if (!sym || sym->kind != kind || !sym->name) continue;
+                if (sym->type && sym->type->name && !strcmp(sym->type->name, name))
+                    return sym;
+                if (!sym->pkgname || !sym->pkgname[0]) continue;
+                sal_snprintf(canon, sizeof canon, "%s_%s", sym->pkgname, sym->name);
+                if (!strcmp(canon, name)) return sym;
+            }
+        }
+    }
+    return NULL;
+}
+
+symbol_t *cg_iface_sym(cg_t *cg, const char *name)
+{
+    return cg_canon_sym(cg, name, SYM_INTERFACE);
+}
+
+/* The concrete side of an impl pair is canonical too: a driver struct in
+ * another package reaches here as "drv_DB". */
+static symbol_t *cg_struct_sym(cg_t *cg, const char *name)
+{
+    return cg_canon_sym(cg, name, SYM_STRUCT);
+}
+
 static void cg_emit_dyn_types(cg_t *cg, sb_t *h)
 {
     {
@@ -149,8 +197,8 @@ static void cg_emit_dyn_types(cg_t *cg, sb_t *h)
         for (; i < cg->dyn_ifaces.len; i++) {
             const char *I = (const char *)cg->dyn_ifaces.data[i];
             const char *cI = cg_cident(cg, I);
-            symbol_t *isym = scope_lookup(cg->sem->global, I);
-            if (!isym || isym->kind != SYM_INTERFACE) continue;
+            symbol_t *isym = cg_iface_sym(cg, I);
+            if (!isym) continue;
             sb_puts(h,
                     cg_fmt(cg,
                            "#ifndef SALAM_DYN_%s_DEFINED\n#define SALAM_DYN_%s_DEFINED\n",
@@ -162,8 +210,12 @@ static void cg_emit_dyn_types(cg_t *cg, sb_t *h)
                     symbol_t *ms = (symbol_t *)isym->members->symbols.data[m];
                     if (ms->kind != SYM_METHOD || !ms->overloads.len) continue;
                     func_sig_t *sig = (func_sig_t *)ms->overloads.data[0];
-                    sb_puts(h, cg_fmt(cg, "    %s (*%s)(void*",
-                                      cg_ctype(cg, type_to_string(cg->sem->tc, sig->ret)),
+                    /* An aggregate return lowers to an out-parameter here just
+                     * as it does for a plain function (see func_signature), so
+                     * the slot has to be typed `void (*)(void*, ..., R*)`. */
+                    bool sret = type_is_byval_agg(sig->ret);
+                    const char *rc = cg_ctype(cg, type_to_string(cg->sem->tc, sig->ret));
+                    sb_puts(h, cg_fmt(cg, "    %s (*%s)(void*", sret ? "void" : rc,
                                       cg_cident(cg, ms->name)));
                     {
                         size_t p = 0;
@@ -175,6 +227,7 @@ static void cg_emit_dyn_types(cg_t *cg, sb_t *h)
                                                         cg->sem->tc,
                                                         (type_t *)sig->params.data[p]))));
                     }
+                    if (sret) sb_puts(h, cg_fmt(cg, ", %s*", rc));
                     sb_puts(h, ");\n");
                 }
             }
@@ -200,10 +253,9 @@ void cg_emit_dyn_vtables(cg_t *cg, sb_t *c)
             *bar = 0;
             const char *I = buf, *C = bar + 1;
             const char *cI = cg_cident(cg, I), *cC = cg_cident(cg, C);
-            symbol_t *isym = scope_lookup(cg->sem->global, I);
-            symbol_t *csym = scope_lookup(cg->sem->global, C);
-            if (!isym || isym->kind != SYM_INTERFACE || !csym || csym->kind != SYM_STRUCT)
-                continue;
+            symbol_t *isym = cg_iface_sym(cg, I);
+            symbol_t *csym = cg_struct_sym(cg, C);
+            if (!isym || !csym) continue;
             {
                 size_t m = 0;
                 for (; m < isym->members->symbols.len; m++) {
@@ -213,8 +265,12 @@ void cg_emit_dyn_vtables(cg_t *cg, sb_t *c)
                     symbol_t *cm = scope_lookup_local(csym->members, ms->name);
                     func_sig_t *csig = dyn_match_sig(cm, isig);
                     if (!csig) continue;
+                    /* Through cg_mangle_method, not cg_mangle: the method
+                     * belongs to the struct's own package, which is not the
+                     * module being emitted when a driver in another package is
+                     * boxed into an interface here. */
                     const char *mangled =
-                        cg_mangle(cg, csym->name, ms->name, &csig->params);
+                        cg_mangle_method(cg, csym->name, csym, ms->name, &csig->params);
                     const char *ret =
                         cg_ctype(cg, type_to_string(cg->sem->tc, isig->ret));
                     sb_t ps;
@@ -232,12 +288,27 @@ void cg_emit_dyn_vtables(cg_t *cg, sb_t *c)
                         }
                     }
                     bool isvoid = isig->ret && isig->ret->kind == TY_VOID;
-                    sb_puts(c,
-                            cg_fmt(cg,
-                                   "static %s _Salam_thunk_%s_%s_%s(void* self%s){ "
-                                   "%s%s((%s*)self%s); }\n",
-                                   ret, cI, cC, cg_cident(cg, ms->name), sb_cstr(&ps),
-                                   isvoid ? "" : "return ", mangled, cC, sb_cstr(&as)));
+                    bool sret = type_is_byval_agg(isig->ret);
+                    /*
+                     * The callee is `void f(C*, ..., R* __ret)` when it returns
+                     * an aggregate, so the thunk cannot `return f(...)` - it
+                     * takes the caller's out-pointer and hands it straight on.
+                     */
+                    if (sret)
+                        sb_puts(c,
+                                cg_fmt(cg,
+                                       "static void _Salam_thunk_%s_%s_%s(void* "
+                                       "self%s, %s* __ret){ %s((%s*)self%s, __ret); }\n",
+                                       cI, cC, cg_cident(cg, ms->name), sb_cstr(&ps), ret,
+                                       mangled, cC, sb_cstr(&as)));
+                    else
+                        sb_puts(c,
+                                cg_fmt(cg,
+                                       "static %s _Salam_thunk_%s_%s_%s(void* self%s){ "
+                                       "%s%s((%s*)self%s); }\n",
+                                       ret, cI, cC, cg_cident(cg, ms->name), sb_cstr(&ps),
+                                       isvoid ? "" : "return ", mangled, cC,
+                                       sb_cstr(&as)));
                     sb_free(&ps);
                     sb_free(&as);
                 }
@@ -589,6 +660,19 @@ static void hdr_enums(cg_t *cg, ast_node_t *program, sb_t *h)
             symbol_t *esym = scope_lookup_local(cg->sem->global, d->name);
             token_value_kind_t backing = esym ? esym->enum_val_kind : TV_INT;
             /*
+             * The type's own C name is package-mangled for a non-main
+             * package (sema_decl.c's AST_ENUM_DEF pre-pass), matching what
+             * cg_ctype/type_to_string already produce for a variable/param
+             * declared with this enum's type - so the typedef itself has to
+             * use that name too, or "unknown type name" follows the moment
+             * anything outside this enum's own package refers to it. The
+             * *member constant* names stay on the short, unmangled prefix
+             * (d->name): same-package reads (cg_expr's AST_MEMBER case)
+             * already rely on that, unchanged here.
+             */
+            const char *tname =
+                esym && esym->type && esym->type->name ? esym->type->name : d->name;
+            /*
              * A C `enum` can only ever hold integers, so a string/float
              * backed enum can't become one - it's emitted as one `static
              * const` declaration per member instead. Either way the member-
@@ -605,14 +689,15 @@ static void hdr_enums(cg_t *cg, ast_node_t *program, sb_t *h)
                  */
                 sb_puts(h, cg_fmt(cg, "typedef %s %s;\n",
                                   backing == TV_STRING ? "const char *" : "double",
-                                  cg_cident(cg, d->name)));
+                                  cg_cident(cg, tname)));
                 size_t j = 0;
                 for (; j < d->list.len; j++) {
                     ast_node_t *m = (ast_node_t *)d->list.data[j];
                     const char *lit = "0";
                     if (m->a && m->a->kind == AST_LITERAL) {
                         if (backing == TV_STRING)
-                            lit = cg_cescape(cg, m->a->value.as.s ? m->a->value.as.s : "");
+                            lit =
+                                cg_cescape(cg, m->a->value.as.s ? m->a->value.as.s : "");
                         else if (backing == TV_FLOAT) {
                             char buf[64];
                             sal_snprintf(buf, sizeof buf, "%.17g", m->a->value.as.f);
@@ -620,7 +705,7 @@ static void hdr_enums(cg_t *cg, ast_node_t *program, sb_t *h)
                         }
                     }
                     sb_puts(h, cg_fmt(cg, "static const %s %s_%s = %s;\n",
-                                      cg_cident(cg, d->name), cg_cident(cg, d->name),
+                                      cg_cident(cg, tname), cg_cident(cg, d->name),
                                       cg_cident(cg, m->name), lit));
                 }
                 continue;
@@ -639,7 +724,7 @@ static void hdr_enums(cg_t *cg, ast_node_t *program, sb_t *h)
                     next++;
                 }
             }
-            sb_puts(h, cg_fmt(cg, " } %s;\n", cg_cident(cg, d->name)));
+            sb_puts(h, cg_fmt(cg, " } %s;\n", cg_cident(cg, tname)));
         }
     }
 }

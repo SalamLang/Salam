@@ -191,6 +191,12 @@ void sema_collect(sema_t *s, ast_node_t *program)
                 symbol_t *sym = symbol_new(s->a, SYM_INTERFACE, d->name);
                 sym->decl = d;
                 sym->is_pub = d->is_pub;
+                /* Same package qualification a struct gets above, and for the
+                 * same reason: `dyn Connection` written inside package db and
+                 * `dyn db.Connection` written by an importer must name ONE type,
+                 * or each spelling would get its own vtable struct in C and a
+                 * value boxed on one side would not dispatch on the other. */
+                sym->pkgname = s->pkg;
                 sym->members = scope_new(s->a, SCOPE_STRUCT, s->global);
                 sym->members->label = d->name;
                 if (scope_define(s->a, s->global, sym))
@@ -287,10 +293,16 @@ void sema_collect(sema_t *s, ast_node_t *program)
                     owner->members->label = ts;
                     scope_define(s->a, s->global, owner);
                 }
-                symbol_t *iface = scope_lookup(s->global, d->name);
-                if (!iface || iface->kind != SYM_INTERFACE)
-                    SERR(s, 1, &d->span, "'%s' in `impl ... on ...` is not an interface",
-                         d->name);
+                const char *why = NULL;
+                symbol_t *iface = sema_lookup_iface(s, d->name, &d->span, &why);
+                if (!iface) {
+                    if (why)
+                        SERR(s, 1, &d->span, "'%s' in `impl ... on ...`: %s", d->name,
+                             why);
+                    else
+                        SERR(s, 1, &d->span,
+                             "'%s' in `impl ... on ...` is not an interface", d->name);
+                }
                 {
                     size_t j = 0;
                     for (; j < d->list.len; j++) {

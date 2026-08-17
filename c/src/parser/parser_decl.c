@@ -274,9 +274,20 @@ static void parse_typarams(parser_t *p, ast_node_t *n)
         if (!tp) break;
         vec_push(p->a, &n->typarams, CONST_CAST(tp));
         const char *bound = NULL;
-        if (p_match(p, TK_COLON))
+        if (p_match(p, TK_COLON)) {
             bound =
                 p_name(p, "expected an interface name after ':' in type parameter bound");
+            /* `<T: pkg.Iface>` - an interface owned by another package. */
+            if (bound && p_at(p, TK_DOT) && p_peek2(p)->kind == TK_IDENT) {
+                p_advance(p);
+                const char *ty = p_peek(p)->lexeme;
+                p_advance(p);
+                size_t ln = strlen(bound) + strlen(ty) + 2;
+                char *q = (char *)arena_alloc(p->a, ln);
+                sal_snprintf(q, ln, "%s.%s", bound, ty);
+                bound = q;
+            }
+        }
         vec_push(p->a, &n->typaram_bounds, CONST_CAST(bound));
     } while (p_match(p, TK_COMMA));
     p_close_angle(p, "'>' to close type parameters");
@@ -333,6 +344,16 @@ static ast_node_t *parse_impl(parser_t *p)
     ast_node_t *n = p_mk(p, AST_IMPL_DEF);
     p_advance(p);
     n->name = p_name(p, "expected interface name after 'impl'");
+    /* `impl pkg.Iface on T` - an interface owned by another package. */
+    if (n->name && p_at(p, TK_DOT) && p_peek2(p)->kind == TK_IDENT) {
+        p_advance(p);
+        const char *pkg = n->name, *ty = p_peek(p)->lexeme;
+        p_advance(p);
+        size_t ln = strlen(pkg) + strlen(ty) + 2;
+        char *q = (char *)arena_alloc(p->a, ln);
+        sal_snprintf(q, ln, "%s.%s", pkg, ty);
+        n->name = q;
+    }
     p_expect(p, TK_KW_ON, "'on' after interface name in impl block");
     n->type = parse_type(p);
     p_expect(p, TK_COLON, "':' after impl target type");

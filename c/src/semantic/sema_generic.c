@@ -105,8 +105,7 @@ static void g_subst(arena_t *a, ast_node_t *n, vec_t *params, vec_t *args)
                  * cc->sema_type is the whole array there, not the element. */
                 if (n_depth == 0 && n->dims.len == 0 && n->elem_ptr_depth == 0)
                     n->sema_type = cc->sema_type;
-                else if (cc_depth == 0 && cc->dims.len == 0 &&
-                         cc->elem_ptr_depth == 0)
+                else if (cc_depth == 0 && cc->dims.len == 0 && cc->elem_ptr_depth == 0)
                     n->sema_base_type = cc->sema_type;
                 vec_t merged;
                 vec_init(&merged);
@@ -190,10 +189,15 @@ static ast_node_t *g_type_to_ast(sema_t *s, type_t *t, const src_span_t *span)
 static bool iface_satisfied(sema_t *s, type_t *concrete, const char *iface_name,
                             const char *tparam, const src_span_t *span)
 {
-    symbol_t *iface = scope_lookup(s->global, iface_name);
-    if (!iface || iface->kind != SYM_INTERFACE) {
-        SERR(s, 1, span, "bound '%s' on type parameter '%s' is not an interface",
-             iface_name, tparam);
+    const char *why = NULL;
+    symbol_t *iface = sema_lookup_iface(s, iface_name, span, &why);
+    if (!iface) {
+        if (why)
+            SERR(s, 1, span, "bound '%s' on type parameter '%s': %s", iface_name, tparam,
+                 why);
+        else
+            SERR(s, 1, span, "bound '%s' on type parameter '%s' is not an interface",
+                 iface_name, tparam);
         return false;
     }
 

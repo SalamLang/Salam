@@ -577,6 +577,17 @@ static void hdr_prelude(cg_t *cg, ast_node_t *program, sb_t *h)
                 * instantiated bodies call therefore has to be visible from the
                 * very top of any module header, not from mem's.
                 */
+               /*
+                * The two hash entry points are here for the same reason as the
+                * allocators below: HashMap<K,V>'s instantiated `index` calls
+                * salam_hash_int, and the instantiation lands in the header of
+                * whichever module first uses the map - salam_mod_compress.h,
+                * say - which is reached long before crypto.h declares them.
+                * Without this the C compiler sees an implicit declaration and
+                * gcc 14+/clang reject it outright.
+                */
+               "extern uint64_t salam_hash_int(uint64_t x);\n"
+               "extern uint64_t salam_str_hash(const char* s);\n"
                "void* " SALAM_MEM_ALLOC "(uint64_t size);\n"
                "void* " SALAM_MEM_ALLOC_ZEROED "(uint64_t size);\n"
                "void* " SALAM_MEM_REALLOC "(void* ptr, uint64_t size);\n"

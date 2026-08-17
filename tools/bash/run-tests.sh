@@ -122,6 +122,16 @@ if [ "${1:-}" = "--worker" ]; then
         rm -rf "$jobdir"
     }
     wk_expect() {
+        # SALAM_TEST_TIMEOUT was documented in the header but never read; the
+        # cap was a hardcoded 20s. That is fine for an example program and far
+        # too short for the port binaries, which each run a whole compiler
+        # pipeline over their fixtures - semantic_test alone takes ~30s. They
+        # were being killed mid-run and reported as "missing expected: 0
+        # failed", i.e. a timeout wearing a wrong-output disguise.
+        case "$label" in
+        port/*) exp_tmo="${SALAM_TEST_TIMEOUT:-300}" ;;
+        *) exp_tmo="${SALAM_TEST_TIMEOUT:-20}" ;;
+        esac
         jobdir="$WORK/exjob_${jobid}_$$"
         mkdir -p "$jobdir"
         exe="$jobdir/a.exe"
@@ -140,7 +150,7 @@ if [ "${1:-}" = "--worker" ]; then
         produced=0
         if [ -x "$exe" ]; then
             produced=1
-            got=$(tmo 20 "$exe" </dev/null 2>&1 | tr -d '\r')
+            got=$(tmo "$exp_tmo" "$exe" </dev/null 2>&1 | tr -d '\r')
         else
             html="$jobdir/a.html"
             wtry=1

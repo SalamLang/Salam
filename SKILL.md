@@ -758,7 +758,7 @@ Each driver keeps its own full surface, and `Conn(d)` boxes one as a
 - **`db.sqlite`**:
   `Available Version Open Ok Exec Query Next Text Int Finish Prepare BindText Reset LastInsertId Changes QueryInt Close Conn`.
 - **`db.postgres`** (libpq): `Available ClientVersion ServerVersion Open OpenFull Ok Ping Reset Close Error Exec ExecCount Query Quote QueryInt QueryText DatabaseName UserName HostName Port Conn`. Placeholders are `$1, $2`, not `?`. There is **no last insert id** - use `INSERT ... RETURNING id`; `LastInsertId()` goes through `lastval()` and is 0 when the session has used no sequence. Results are materialised, so every `Rows` must be closed.
-- **`db.mysql`** (MariaDB/MySQL): `Open Ok Close Ping Error Errno Exec Query QueryOk Next Finish Text Int Int64 Float IsNull ColumnCount RowCount ColumnName AffectedRows LastInsertId Begin Commit Rollback Autocommit Escape SetCharset SelectDB QueryInt QueryText`. **Threading**: a connection
+- **`db.mysql`** (MariaDB/MySQL): `Open Ok Close Ping Error Errno Exec Query QueryOk Next Finish Text Int Int64 Float IsNull ColumnCount RowCount ColumnName AffectedRows LastInsertId Begin Commit Rollback Autocommit Escape SetCharset SelectDB QueryInt QueryText Conn`. This API hands every value over as text, so `ColumnType` answers `TYPE_TEXT` where the others report the column's own type; DDL commits implicitly, so `Tx.Rollback()` cannot undo it. **Threading**: a connection
   cannot be used by two threads at once (it segfaults, it does not error), so
   a threaded server gives each request its own connection. Call
   `LibraryInit()` once from `main` before any thread starts, and `ThreadInit()`
@@ -1002,7 +1002,15 @@ waiting.
 A `ctx` tree shares one lock; cancelling any node finishes everything below it,
 and a child's deadline can only shorten what it inherits, never extend it.
 
-`atomic` is lock-based, not lock-free - correct semantics, mutex-level cost.
+`atomic` is lock-free everywhere except tcc. `atomic_load/store/add/swap/cas`
+are **language intrinsics** on an `i64*` cell (a `__atomic_*` builtin in the C
+backend, a real `atomicrmw`/`cmpxchg` in LLVM, both seq_cst; plain reads and
+writes in JS, which has no threads). `atomic_add` returns the value *after* the
+add, `atomic_swap` the value before it. tcc 0.9.27 has neither the `__atomic`
+nor the `__sync` family, so under `SALAM_CC_TCC` the `atomic` package falls
+back to a mutex per cell - same semantics, higher cost, invisible to callers.
+A declared function of the same name shadows an intrinsic.
+
 There is no `async`/`await`.
 
 **Conditional compilation** (a top-level or inline `if` on a compile-time

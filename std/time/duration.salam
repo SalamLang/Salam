@@ -44,6 +44,10 @@ const _NS_PER_MIN := 60000000000 as i64
 const _NS_PER_HOUR := 3600000000000 as i64
 const _NS_PER_DAY := 86400000000000 as i64
 
+// Largest i64. ParseDuration checks every step against this rather than
+// letting a too-large span wrap into a wrong - often negative - answer.
+const _I64_MAX := 9223372036854775807 as i64
+
 @en "Duration"
 @fa "مدت"
 @ar "مدة"
@@ -367,11 +371,16 @@ pub func ParseDuration(s: str): DurationResult:
     mut total := 0 as i64
     mut groups := 0
     until i < n:
-        // integer part
+        // Integer part. Every step is checked before it happens: a span
+        // that does not fit in an i64 has to be reported as unparseable,
+        // because wrapping it silently turns "999999999999999999999h" into
+        // a NEGATIVE duration, and a negative timeout does not sleep.
         mut whole := 0 as i64
         mut digits := 0
         until i < n && _isDigitByte(_dub(bp, i)):
-            whole = whole * 10 + ((_dub(bp, i) - 48) as i64)
+            dv := (_dub(bp, i) - 48) as i64
+            if whole > (_I64_MAX - dv) / 10: ret bad end
+            whole = whole * 10 + dv
             digits += 1
             i += 1
         end
@@ -406,7 +415,20 @@ pub func ParseDuration(s: str): DurationResult:
         if i == us: ret bad end
         unitNs := _unitNanos(s.substr(us, i - us))
         if unitNs == 0: ret bad end
-        total = total + whole * unitNs + (fracNum * unitNs) / fracDen
+        if whole > _I64_MAX / unitNs: ret bad end
+        // The fraction divides the UNIT before multiplying by the numerator.
+        // The obvious `fracNum * unitNs / fracDen` overflows on its own for
+        // a long fraction of a large unit - "0.999999999d" is 999999999 x
+        // 86400000000000, which is 8.6e22 and wraps - even though the
+        // result comfortably fits. Splitting the unit into quotient and
+        // remainder keeps both products inside i64 with no loss.
+        q := unitNs / fracDen
+        r := unitNs % fracDen
+        fpart := fracNum * q + (fracNum * r) / fracDen
+        part := whole * unitNs
+        if part > _I64_MAX - fpart: ret bad end
+        if total > _I64_MAX - (part + fpart): ret bad end
+        total = total + part + fpart
         groups += 1
     end
     if groups == 0: ret bad end

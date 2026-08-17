@@ -144,6 +144,36 @@ func test_parse_rejects():
     testing.AssertEqInt64(time.ParseDurationOr("2m", time.Seconds(7)).secs(), 120 as i64)
 end
 
+func test_parse_rejects_overflow():
+    // Regression: the digits come from runtime text - a config value, an
+    // env var, an HTTP header - so nothing at compile time can bound them.
+    // Accumulating unchecked wrapped "999999999999999999999h" into a
+    // NEGATIVE duration and still reported ok, which turns a mistyped
+    // timeout into one that never sleeps.
+    testing.AssertFalse(time.ParseDuration("999999999999999999999h").ok)
+    testing.AssertFalse(time.ParseDuration("10000000000000s").ok)
+    testing.AssertFalse(time.ParseDuration("100000000000000000000000ns").ok)
+    testing.AssertFalse(time.ParseDuration("1000000000000d").ok)
+    // One past i64 max, and an overflow reached by accumulating groups
+    // rather than by a single number.
+    testing.AssertFalse(time.ParseDuration("9223372036854775808ns").ok)
+    testing.AssertFalse(time.ParseDuration("9223372036854775807ns1ns").ok)
+    // The boundary itself still parses, exactly.
+    top := time.ParseDuration("9223372036854775807ns")
+    testing.AssertTrue(top.ok)
+    testing.AssertEqInt64(top.value.nanos(), 9223372036854775807 as i64)
+    big := time.ParseDuration("2562047h")
+    testing.AssertTrue(big.ok)
+    testing.AssertEqInt64(big.value.nanos(), 9223369200000000000 as i64)
+    // A long fraction of a large unit: the numerator alone would be 8.6e22
+    // and wrap, though the result fits comfortably.
+    frac := time.ParseDuration("0.999999999d")
+    testing.AssertTrue(frac.ok)
+    testing.AssertEqInt64(frac.value.nanos(), 86399999913600 as i64)
+    // A rejected parse must leave the fallback in place, not a wrapped value.
+    testing.AssertEqInt64(time.ParseDurationOr("999999999999999999999h", time.Seconds(30)).secs(), 30 as i64)
+end
+
 func test_format_parse_roundtrip():
     // Everything FormatDuration writes, ParseDuration reads back exactly.
     mut cases := Vector {} as Vector<i64>
@@ -181,6 +211,7 @@ func main:
     test_format()
     test_parse()
     test_parse_rejects()
+    test_parse_rejects_overflow()
     test_format_parse_roundtrip()
     test_epoch_bridges()
     testing.Summary()

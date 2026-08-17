@@ -243,6 +243,41 @@ func index_addr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): LvAddr:
         ra2.tbaa = tbaa_suffix(v, s, ets2, false)
         ret ra2
     end
+    // `v[i]` on a Vector. The elements do not live in the Vector struct,
+    // they hang off its `data: T*` field (field 0 of
+    // { data, count, capacity } - see std/collections/vector.salam), so the
+    // address is: step to field 0, load the buffer, then index THAT by the
+    // element type. Falling through to the array path below instead emitted
+    // `getelementptr %struct.Vector__P, ptr %v, i64 0, i64 %i`, which lli
+    // rejects outright ("invalid getelementptr indices"): a struct can only
+    // be indexed by a constant field number, never by a runtime value. This
+    // is the address form, so it also covers `v[i] = x` and `v[i].f`, none
+    // of which the value-side operator_index call can express.
+    ss4 := struct_sym(v, s, a, ots)
+    if ss4 != 0:
+        mut fs4 := 0
+        didx := field_index(s, ss4, "data", fs4)
+        if didx >= 0 && fs4 != 0 && sm.TypeAt(s, sm.SymAt(s, fs4).ty).kind == sm.TY_PTR:
+            ets4 := sm.ToString(s, sm.TypeAt(s, sm.SymAt(s, fs4).ty).pointee)
+            vb := lv_addr_of(v, s, a, nn.a)
+            dp := new_tmp(v)
+            data4 := new_tmp(v)
+            vidx := conv(v, s, a, lv_expr(v, s, a, nn.b), "i64")
+            emit(
+                v, dp + " = getelementptr inbounds " + struct_ltype(ots) + ", ptr " + vb.ptr + ", i32 0, i32 " + co.I64Toa(didx as i64)
+            )
+            emit(v, data4 + " = load ptr, ptr " + dp)
+            vr := new_tmp(v)
+            emit(
+                v, vr + " = getelementptr inbounds " + ty_of(v, s, a, ets4) + ", ptr " + data4 + ", i64 " + vidx
+            )
+            mut ra4b := LvAddr {}
+            ra4b.ptr = vr
+            ra4b.ts = ets4
+            ra4b.tbaa = tbaa_suffix(v, s, ets4, false)
+            ret ra4b
+        end
+    end
     b2 := lv_addr_of(v, s, a, nn.a)
     ets3 := array_elem(ots)
     idxv3 := conv(v, s, a, lv_expr(v, s, a, nn.b), "i64")

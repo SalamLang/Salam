@@ -1482,22 +1482,35 @@ static bool ll_call_intrinsic(ll_t *ll, ast_node_t *n, const char *nm, llv_t *ou
      * then handed to the thread runtime. Mirrors call_ident() in the C
      * backend.
      */
-    if (!strcmp(nm, "spawn") && na == 1 && a0->kind == AST_IDENTIFIER) {
+    if (!strcmp(nm, "spawn") && (na == 1 || na == 2) && a0->kind == AST_IDENTIFIER) {
+        /*
+         * spawn(f, arg) routes through a second runtime entry point that
+         * forwards the payload to pthread_create; the payload is already
+         * known to be a pointer, so it only needs widening to `ptr`.
+         */
+        const char *rt = na == 2 ? "salam_thread_spawn_arg" : "salam_thread_spawn";
         const char *sym = ll_func_symbol(ll, a0);
         if (!sym) return false;
         r = ll_new_tmp(ll);
         ll_emit(ll, "%s = ptrtoint ptr @%s to i64", r, sym);
         {
             symbol_t *pk = NULL;
-            func_sig_t *sp = ll_runtime_fn(ll, "salam_thread_spawn", &pk);
+            func_sig_t *sp = ll_runtime_fn(ll, rt, &pk);
             const char *h;
             if (!sp || !sp->decl) return false;
             ll_touch_pkg_named(ll, pk->pkgname);
             ll_ensure_fn(ll, sp->decl, NULL, pk->members);
             h = ll_new_tmp(ll);
             ll_emit(ll, "%s = inttoptr i64 %s to ptr", h, r);
-            r = ll_new_tmp(ll);
-            ll_emit(ll, "%s = call i64 @salam_thread_spawn(ptr %s)", r, h);
+            if (na == 2) {
+                const char *ap =
+                    ll_conv(ll, ll_expr(ll, (ast_node_t *)n->list.data[1]), "ptr");
+                r = ll_new_tmp(ll);
+                ll_emit(ll, "%s = call i64 @%s(ptr %s, ptr %s)", r, rt, h, ap);
+            } else {
+                r = ll_new_tmp(ll);
+                ll_emit(ll, "%s = call i64 @%s(ptr %s)", r, rt, h);
+            }
             *out = (llv_t){r, "i64"};
             return true;
         }

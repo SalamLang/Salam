@@ -369,12 +369,31 @@ static const char *cg_lower_print(cg_t *cg, ast_node_t *n, bool nl, int err)
 static const char *call_ident(cg_t *cg, ast_node_t *n, ast_node_t *callee)
 {
     const char *nm = callee->name;
-    if (!strcmp(nm, "spawn") && n->list.len == 1) {
+    if (!strcmp(nm, "spawn") && (n->list.len == 1 || n->list.len == 2)) {
         ast_node_t *fn = (ast_node_t *)n->list.data[0];
         symbol_t *fsym = scope_lookup(cg->sem->global, fn->name);
         vec_t empty;
         vec_init(&empty);
         const char *mangled = fsym ? cg_mangle(cg, NULL, fn->name, &empty) : fn->name;
+        /*
+         * The mangled name carries the callee's declared parameter types, so
+         * the one-argument overload has to be located and its own params used
+         * as the key - `empty` would name the no-argument function instead.
+         */
+        if (n->list.len == 2) {
+            ast_node_t *an = (ast_node_t *)n->list.data[1];
+            size_t i = 0;
+            for (; fsym && i < fsym->overloads.len; i++) {
+                func_sig_t *sig = (func_sig_t *)fsym->overloads.data[i];
+                if (sig->params.len != 1) continue;
+                if (sig->ret && sig->ret->kind != TY_VOID) continue;
+                mangled = cg_mangle(cg, NULL, fn->name, &sig->params);
+                break;
+            }
+            return cg_fmt(cg,
+                          "salam_thread_spawn_arg((salam_thread_arg_fn)%s, (void*)(%s))",
+                          mangled, cg_expr(cg, an));
+        }
         return cg_fmt(cg, "salam_thread_spawn((salam_thread_fn)%s)", mangled);
     }
     if (!strcmp(nm, "callhandler") && n->list.len == 2) {

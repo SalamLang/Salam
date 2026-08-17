@@ -504,7 +504,14 @@ func call_intrinsic(
     // lowered to the mangled symbol's address rather than through lv_expr,
     // then handed to the thread runtime. Mirrors call_ident() in the C
     // backend.
-    if str.Equals(nm, "spawn") && na == 1 && at.KindOf(a, a0) == at.AST_IDENTIFIER:
+    if str.Equals(nm, "spawn") && (na == 1 || na == 2) && at.KindOf(a, a0) == at.AST_IDENTIFIER:
+        // spawn(f, arg) routes through a second runtime entry point that
+        // forwards the payload to pthread_create; the payload is already
+        // known to be a pointer, so it only needs widening to `ptr`.
+        mut rt := "salam_thread_spawn"
+        if na == 2:
+            rt = "salam_thread_spawn_arg"
+        end
         symn := lv_func_symbol(v, s, a, a0, at.Get(a, a0).name)
         if str.Len(symn) == 0:
             ret false
@@ -512,7 +519,7 @@ func call_intrinsic(
         r = new_tmp(v)
         emit(v, r + " = ptrtoint ptr @" + symn + " to i64")
         mut spk := 0
-        ssig := runtime_fn(s, "salam_thread_spawn", spk)
+        ssig := runtime_fn(s, rt, spk)
         if ssig == 0 || sm.SigAt(s, ssig).decl == 0:
             ret false
         end
@@ -521,7 +528,12 @@ func call_intrinsic(
         h := new_tmp(v)
         emit(v, h + " = inttoptr i64 " + r + " to ptr")
         r2 := new_tmp(v)
-        emit(v, r2 + " = call i64 @salam_thread_spawn(ptr " + h + ")")
+        if na == 2:
+            ap := conv(v, s, a, lv_expr(v, s, a, nn.list.get(1)), "ptr")
+            emit(v, r2 + " = call i64 @" + rt + "(ptr " + h + ", ptr " + ap + ")")
+        else:
+            emit(v, r2 + " = call i64 @" + rt + "(ptr " + h + ")")
+        end
         out2 = make_llv(r2, "i64")
         ret true
     end

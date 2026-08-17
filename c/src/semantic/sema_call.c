@@ -435,8 +435,18 @@ type_t *check_call(sema_t *s, ast_node_t *n)
     if (callee && callee->kind == AST_IDENTIFIER) check_pure_builtin(s, n, callee->name);
 
     if (callee && callee->kind == AST_IDENTIFIER && strcmp(callee->name, "spawn") == 0) {
-        if (n->list.len != 1 || ((ast_node_t *)n->list.data[0])->kind != AST_IDENTIFIER) {
-            SERR(s, 12, &n->span, "spawn(func) takes a single function name");
+        /*
+         * Two shapes: spawn(f) for a thread that talks to the world through
+         * globals, and spawn(f, arg) which hands the new thread one pointer.
+         * The payload is a pointer rather than any type because it travels
+         * through pthread_create's void* / _beginthreadex's arg slot, and a
+         * pointer is the only thing guaranteed to fit there unchanged.
+         */
+        bool has_arg = n->list.len == 2;
+        if ((n->list.len != 1 && n->list.len != 2) ||
+            ((ast_node_t *)n->list.data[0])->kind != AST_IDENTIFIER) {
+            SERR(s, 12, &n->span,
+                 "spawn(func) or spawn(func, arg) takes a function name first");
             return decorate(s, n, ty(s, TY_I64));
         }
         ast_node_t *fn = (ast_node_t *)n->list.data[0];
@@ -447,18 +457,41 @@ type_t *check_call(sema_t *s, ast_node_t *n)
         }
         fsym->used = true;
         dce_mark_root(s->pkg, fn->name);
+        type_t *argt = has_arg ? sema_check_expr(s, (ast_node_t *)n->list.data[1]) : NULL;
         bool ok = false;
+        /* Remembered only to name a concrete type in the mismatch message. */
+        type_t *want = NULL;
         {
             size_t i = 0;
             for (; i < fsym->overloads.len; i++) {
                 func_sig_t *sig = (func_sig_t *)fsym->overloads.data[i];
-                if (sig->params.len == 0 && sig->ret && sig->ret->kind == TY_VOID)
-                    ok = true;
+                if (!sig->ret || sig->ret->kind != TY_VOID) continue;
+                if (!has_arg) {
+                    if (sig->params.len == 0) ok = true;
+                    continue;
+                }
+                if (sig->params.len != 1) continue;
+                {
+                    type_t *p = (type_t *)sig->params.data[0];
+                    if (p->kind != TY_PTR) continue;
+                    if (!want) want = p;
+                    if (argt && type_assignable(p, argt)) ok = true;
+                }
             }
         }
-        if (!ok)
-            SERR(s, 12, &n->span,
-                 "spawn requires a function taking no arguments and returning nothing");
+        if (!ok) {
+            if (!has_arg)
+                SERR(s, 12, &n->span,
+                     "spawn requires a function taking no arguments and returning nothing");
+            else if (!want)
+                SERR(s, 12, &n->span,
+                     "spawn(func, arg) requires a function taking one pointer argument "
+                     "and returning nothing");
+            else
+                SERR(s, 12, &n->span, "spawn argument: cannot pass '%s' to '%s'",
+                     argt ? type_to_string(s->tc, argt) : "?",
+                     type_to_string(s->tc, want));
+        }
         decorate(s, fn, ty(s, TY_VOID));
         decorate(s, callee, ty(s, TY_VOID));
         return decorate(s, n, ty(s, TY_I64));

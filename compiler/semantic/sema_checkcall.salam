@@ -112,8 +112,15 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
     end
 
     if ckind == at.AST_IDENTIFIER && str.Equals(at.Get(a, callee).name, "spawn"):
-        if at.ChildCount(a, n) != 1 || at.KindOf(a, at.Child(a, n, 0)) != at.AST_IDENTIFIER:
-            serr(s, 12, sp, i18.Tr("spawn(func) takes a single function name"))
+        // Two shapes: spawn(f) for a thread that talks to the world through
+        // globals, and spawn(f, arg) which hands the new thread one pointer.
+        // The payload is a pointer rather than any type because it travels
+        // through pthread_create's void* / _beginthreadex's arg slot, and a
+        // pointer is the only thing guaranteed to fit there unchanged.
+        nargs := at.ChildCount(a, n)
+        has_arg := nargs == 2
+        if (nargs != 1 && nargs != 2) || at.KindOf(a, at.Child(a, n, 0)) != at.AST_IDENTIFIER:
+            serr(s, 12, sp, i18.Tr("spawn(func) or spawn(func, arg) takes a function name first"))
             ret sema_decorate(s, a, n, sema_ty(s, TY_I64))
         end
         fnid := at.Child(a, n, 0)
@@ -135,18 +142,53 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
         fsv.used = true
         sym_put(s, fsym, fsv)
         dce_mark_root(s.pkg, fname)
+        mut argt := TYPE_NONE
+        if has_arg:
+            argt = sema_check_expr(s, a, at.Child(a, n, 1))
+        end
         mut sok := false
+        // Remembered only to name a concrete type in the mismatch message.
+        mut want := TYPE_NONE
         fsv2 := sym_at(s, fsym)
         repeat fsv2.overloads.len() with i:
             sg := sig_at(s, fsv2.overloads.get(i))
-            if sg.params.len() == 0 && sg.ret_type >= 0 && ty_at(s, sg.ret_type).kind == TY_VOID:
-                sok = true
+            if sg.ret_type >= 0 && ty_at(s, sg.ret_type).kind == TY_VOID:
+                if !has_arg:
+                    if sg.params.len() == 0:
+                        sok = true
+                    end
+                else:
+                    if sg.params.len() == 1 && ty_at(s, sg.params.get(0)).kind == TY_PTR:
+                        if want == TYPE_NONE:
+                            want = sg.params.get(0)
+                        end
+                        if argt != TYPE_NONE && type_assignable(s, sg.params.get(0), argt):
+                            sok = true
+                        end
+                    end
+                end
             end
         end
         if !sok:
-            serr(
-                s, 12, sp, i18.Tr("spawn requires a function taking no arguments and returning nothing")
-            )
+            if !has_arg:
+                serr(
+                    s, 12, sp, i18.Tr("spawn requires a function taking no arguments and returning nothing")
+                )
+            else:
+                if want == TYPE_NONE:
+                    serr(
+                        s, 12, sp,
+                        i18.Tr("spawn(func, arg) requires a function taking one pointer argument and returning nothing")
+                    )
+                else:
+                    serr(
+                        s, 12, sp, co.Format2(
+                            i18.Tr("spawn argument: cannot pass '%s' to '%s'"),
+                            co.ArgStr(type_to_string(s, argt)), co.ArgStr(type_to_string(s, want))
+                        )
+                    )
+                end
+            end
         end
         _d1 := sema_decorate(s, a, fnid, sema_ty(s, TY_VOID))
         _d2 := sema_decorate(s, a, callee, sema_ty(s, TY_VOID))

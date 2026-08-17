@@ -173,7 +173,12 @@ type_t *sema_resolve_type(sema_t *s, ast_node_t *tnode)
     }
     int pk = tnode->name ? type_prim_kind_from_name(tnode->name, NULL) : -1;
 
-    if (tnode->name && strcmp(tnode->name, "File") == 0) {
+    if (tnode->sema_base_type) {
+        /* `T*`/`T[N]` in a template the generic machinery substituted into.
+         * The name would not resolve here; the base already did, in the scope
+         * that named it. See ast_node_t::sema_base_type. */
+        base = (type_t *)tnode->sema_base_type;
+    } else if (tnode->name && strcmp(tnode->name, "File") == 0) {
         base = type_file(s->tc);
     } else if (tnode->name && strcmp(tnode->name, "Variant") == 0) {
         if (tnode->list.len < 2) {

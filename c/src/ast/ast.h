@@ -159,6 +159,16 @@ struct ast_node {
      */
     void *sema_type;
     /*
+     * The same trick one level down, for an occurrence that decorates the type
+     * parameter rather than naming it bare: `T*`, `T[4]`. Substituting `T` =
+     * `Row` there cannot reuse the argument's resolved type - the node stands
+     * for `Row*`, not `Row` - but resolving the name again is exactly what
+     * fails, because `Row` belongs to a package the template's scope cannot
+     * see. So the *base* travels instead and sema_resolve_type applies this
+     * node's own `*` and `[N]` on top of it. NULL unless g_subst set it.
+     */
+    void *sema_base_type;
+    /*
      * On a synthetic top-level function - a generic instantiation or a derived
      * codec - the package whose scope its body was checked inside. Its name is
      * global, but the names it calls are that package's, private ones

@@ -132,6 +132,19 @@ const char *derive_pkg_name_of(sema_t *s, scope_t *scope)
         if (pk->kind != SYM_PACKAGE || pk->members != scope) continue;
         return pk->pkgname ? pk->pkgname : pk->name;
     }
+    /*
+     * The search above only finds a package the scope being analysed imported
+     * by name. std/collections is not one of those: sema_load_prelude pulls it
+     * in behind the programmer's back, so a `Vector<T>` instantiated from
+     * inside another package had no home recorded, and the interpreter then
+     * resolved its methods against the *using* package's environment
+     * ("undefined variable 'mem'" from Vector.reserve). load_package labels
+     * every package scope with its package name, which answers the question
+     * regardless of who imported whom - including for the package currently
+     * being analysed, whose own scope is s->global. The program's global scope
+     * carries no label, so it still answers NULL there.
+     */
+    if (scope->kind == SCOPE_GLOBAL && scope->label) return scope->label;
     return NULL;
 }
 

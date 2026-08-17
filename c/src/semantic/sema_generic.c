@@ -81,12 +81,20 @@ static void g_subst(arena_t *a, ast_node_t *n, vec_t *params, vec_t *args)
                 n->list = cc->list;
                 n->is_pointer = ptr;
                 n->is_dyn = cc->is_dyn;
-                /* The resolved type comes along only where the occurrence is
-                 * the bare parameter. `T*` or `T[4]` in the template is a
-                 * different type from what the caller resolved, and has to go
-                 * back through the ordinary path. */
+                /* The resolved type comes along whole only where the
+                 * occurrence is the bare parameter. `T*` or `T[4]` stands for
+                 * a different type than what the caller resolved, so only the
+                 * base travels and sema_resolve_type re-applies the `*`/`[N]`
+                 * - going back through the name would fail for any argument
+                 * the template's own package cannot see (`Vector<Row>` over a
+                 * struct from another package: "unknown type 'cmod_Row'").
+                 * The base is only usable when the argument node is itself
+                 * undecorated; `T[4]` with T = `Foo[3]` has to merge dims, and
+                 * cc->sema_type is the whole array there, not the element. */
                 if (ptr == cc->is_pointer && n->dims.len == 0)
                     n->sema_type = cc->sema_type;
+                else if (!cc->is_pointer && cc->dims.len == 0)
+                    n->sema_base_type = cc->sema_type;
                 vec_t merged;
                 vec_init(&merged);
                 {
@@ -339,7 +347,7 @@ symbol_t *g_instantiate_struct(sema_t *s, ast_node_t *tmpl, vec_t *targ_nodes,
         /* The clone is checked against the declaring package's scope, so its
          * body may name that package's private functions. See
          * ast_node_t::home_pkg. */
-        inst->home_pkg = derive_pkg_name_of(s, s->gen_pkg);
+        inst->home_pkg = derive_pkg_name_of(s, s->gen_pkg ? s->gen_pkg : s->global);
         g_subst(s->a, inst, &tmpl->typarams, targ_nodes);
         inst->typarams.len = 0;
         vec_push(s->a, &s->program->list, inst);
@@ -413,7 +421,7 @@ static symbol_t *g_instantiate_func(sema_t *s, ast_node_t *tmpl, vec_t *targ_nod
         /* The clone is checked against the declaring package's scope, so its
          * body may name that package's private functions. See
          * ast_node_t::home_pkg. */
-        inst->home_pkg = derive_pkg_name_of(s, s->gen_pkg);
+        inst->home_pkg = derive_pkg_name_of(s, s->gen_pkg ? s->gen_pkg : s->global);
         g_subst(s->a, inst, &tmpl->typarams, targ_nodes);
         inst->typarams.len = 0;
         vec_push(s->a, &s->program->list, inst);

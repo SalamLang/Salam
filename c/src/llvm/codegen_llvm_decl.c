@@ -508,7 +508,7 @@ static void ll_ensure_vtbl(ll_t *ll, const char *iface, const char *concrete)
             if (!strcmp(name, (const char *)ll->emitted.data[i])) return;
     }
     vec_push(ll->a, &ll->emitted, CONST_CAST(name));
-    symbol_t *isym = ll_sym(ll, iface), *csym = ll_sym(ll, concrete);
+    symbol_t *isym = ll_iface_sym(ll, iface), *csym = ll_sym(ll, concrete);
     if (!isym || isym->kind != SYM_INTERFACE || !csym || !csym->members) return;
     sb_t slots;
     sb_init(&slots);
@@ -525,8 +525,18 @@ static void ll_ensure_vtbl(ll_t *ll, const char *iface, const char *concrete)
             if (n) sb_puts(&slots, ", ");
             if (csig) {
                 ll_ensure_fn(ll, csig->decl, csym, ll->pkg_scope);
-                sb_puts(&slots,
-                        ll_fmt(ll, "ptr @%s", ll_mangle(ll, concrete, im->name, csig)));
+                /*
+                 * Mangle on the struct's DECLARED name, the way ll_function
+                 * names the definition it just ensured - not on `concrete`,
+                 * which is the mangled type string. The two agree for a type
+                 * in the main module ("Circle"), and diverge for one a
+                 * package owns: the body is emitted as @salam_Fixed_Get_i32
+                 * while the slot asked for @salam_ifacedriver__Fixed_Get_i32,
+                 * leaving the vtable pointing at a symbol the module never
+                 * defines.
+                 */
+                sb_puts(&slots, ll_fmt(ll, "ptr @%s",
+                                       ll_mangle(ll, csym->name, im->name, csig)));
             } else {
                 sb_puts(&slots, "ptr null");
             }

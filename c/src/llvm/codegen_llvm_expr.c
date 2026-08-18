@@ -1137,7 +1137,7 @@ static llv_t ll_call_dyn(ll_t *ll, ast_node_t *n, ast_node_t *obj, const char *i
             ib[k++] = *p;
     }
     ib[k] = 0;
-    symbol_t *isym = ll_sym(ll, ib);
+    symbol_t *isym = ll_iface_sym(ll, ib);
     if (!isym || isym->kind != SYM_INTERFACE) {
         ll_error(ll, n, "dynamic call on non-interface '%s'", ib);
         return ll_poison(n->type_str);

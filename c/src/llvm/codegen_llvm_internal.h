@@ -252,6 +252,9 @@ void ll_type_layout(ll_t *ll, const char *ts, size_t *out_size, size_t *out_alig
 int ll_variant_tag_of(const char *variant_ts, const char *member_ts);
 
 symbol_t *ll_sym(ll_t *ll, const char *name);
+/* Like ll_sym, but resolves the canonical "pkg_Iface" spelling of an
+ * interface that ll_sym cannot reach. */
+symbol_t *ll_iface_sym(ll_t *ll, const char *name);
 
 symbol_t *ll_struct_sym(ll_t *ll, const char *name);
 scope_t *ll_scope_of(ll_t *ll, symbol_t *want);

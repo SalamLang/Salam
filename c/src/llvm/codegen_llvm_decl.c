@@ -535,8 +535,8 @@ static void ll_ensure_vtbl(ll_t *ll, const char *iface, const char *concrete)
                  * leaving the vtable pointing at a symbol the module never
                  * defines.
                  */
-                sb_puts(&slots, ll_fmt(ll, "ptr @%s",
-                                       ll_mangle(ll, csym->name, im->name, csig)));
+                sb_puts(&slots,
+                        ll_fmt(ll, "ptr @%s", ll_mangle(ll, csym->name, im->name, csig)));
             } else {
                 sb_puts(&slots, "ptr null");
             }

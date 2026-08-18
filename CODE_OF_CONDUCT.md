@@ -32,8 +32,7 @@ Community leaders are responsible for clarifying and enforcing these standards a
 
 Violations can be reported by:
 
-- 📧 Opening a private issue on GitHub.
-- 💬 Reaching out directly to a maintainer on [Discord](https://discord.gg/HfY3QHDPdv) or [Telegram](https://t.me/SalamProgrammingLanguage).
+- 💬 Reaching out directly to a maintainer on [Discord](https://discord.gg/HfY3QHDPdv) or [Telegram](https://t.me/SalamProgrammingLanguage) via direct message.
 
 All reports will be handled with discretion and confidentiality. Community leaders who do not follow or enforce this Code of Conduct in good faith may face temporary or permanent repercussions.
 

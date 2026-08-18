@@ -967,9 +967,35 @@ jobs:
           # Emits <XWRAP>/<triple>/<triple>-{gcc,ar,ranlib} (plain shebang
           # scripts, exec'd fine by MSYS-native perl/make via their normal
           # #! handling) plus a <triple>-gcc.bat twin (for native mingw-w64
-          # cmake.exe, which cannot run a shebang script) - both wrapping
-          # the same "clang -target <triple> -isystem <sysroot>/include"
-          # invocation. Prints the wrapper dir's POSIX path on stdout.
+          # cmake.exe, which cannot run a shebang script). Prints the wrapper
+          # dir's POSIX path on stdout.
+          #
+          # Only the .bat carries link flags, and deliberately so. The shebang
+          # pair is used by sqlite3/hiredis (compile + ar, never a link) and by
+          # openssl's `make build_libs` (static libs only), all of which work
+          # as they are; the .bat is used by exactly one caller, mariadb's
+          # CMake, which is the only thing here that links an executable.
+          #
+          #   -fuse-ld=lld  clang otherwise resolves plain `ld` off PATH, which
+          #                 on this runner is MSYS2's mingw ld - a PE-only
+          #                 linker. Its very first act is CMakeTestCCompiler's
+          #                 try-compile, and it died there with "unrecognised
+          #                 emulation mode: elf_i386 / Supported emulations:
+          #                 i386pep i386pe", so CMake declared the compiler
+          #                 broken and every musl target lost its static
+          #                 mariadb. lld links ELF for all four.
+          #   -B/-L         these sysroots are flat - crt1.o, crti.o, crtn.o,
+          #                 libc.a and libgcc.a sit directly in <sysroot> (see
+          #                 tools/bash/fetch-musl-sysroots.sh), nowhere clang
+          #                 looks by default. Without -B it emits a bare
+          #                 "crt1.o" the linker cannot resolve.
+          #   -static       nothing but .a files was staged, so a dynamic link
+          #                 has nothing to find.
+          #
+          # The .bat also needs a Windows-shaped sysroot path: it is read by
+          # native cmake.exe/clang.exe, which take a leading /c/... as
+          # drive-relative rather than as the MSYS mount. Same reasoning as
+          # LLVM_AR_WIN/LLVM_RANLIB_WIN above.
           make_musl_wrapper() {
             triple="$1"; sr="$2"
             d="$XWRAP/$triple"; mkdir -p "$d"
@@ -978,8 +1004,9 @@ jobs:
             printf '#!/bin/sh\nexec llvm-ar "$@"\n' >"$d/$triple-ar"
             printf '#!/bin/sh\nexec llvm-ranlib "$@"\n' >"$d/$triple-ranlib"
             chmod +x "$d/$triple-gcc" "$d/$triple-ar" "$d/$triple-ranlib"
-            printf '@echo off\r\nclang -target %s -isystem "%s/include" %%*\r\n' "$triple" "$sr" \
-              >"$d/$triple-gcc.bat"
+            srw=$(cygpath -m "$sr" 2>/dev/null || printf '%s' "$sr")
+            printf '@echo off\r\nclang -target %s -isystem "%s/include" -fuse-ld=lld -static -B"%s" -L"%s" %%*\r\n' \
+              "$triple" "$srw" "$srw" "$srw" >"$d/$triple-gcc.bat"
             printf '%s\n' "$d"
           }
 

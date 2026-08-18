@@ -40,8 +40,6 @@ version is pinned by UCD_VERSION; bumping it and re-running with --fetch is the
 whole upgrade procedure.
 """
 
-import argparse
-
 # This is a code generator: one pass reads the UCD and one function writes
 # every table in tables.salam in the order the file declares them. That shape
 # is the point - the emit order IS the output - so the size and argument-count
@@ -51,6 +49,7 @@ import argparse
 # pylint: disable=too-many-lines,too-many-arguments,too-many-positional-arguments
 # pylint: disable=too-many-locals,too-many-statements,consider-using-f-string
 
+import argparse
 import os
 import sys
 import urllib.request

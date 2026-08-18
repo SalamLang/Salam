@@ -168,6 +168,33 @@ const char *ll_mangle(ll_t *ll, const char *owner, const char *fn, func_sig_t *s
     return ll_mangle_in(ll, ll_pkg_of_scope(ll, ll->pkg_scope), owner, fn, sig);
 }
 
+/*
+ * A method's owner, spelled the one way every side of the call agrees on.
+ *
+ * It used to be the struct's DECLARED name, so `pa.Input.free` and
+ * `pb.Input.free` both mangled to @salam_Input_free: one body was emitted and
+ * every call to either bound to it. The bodies read `this` at their own
+ * struct's field offsets, so a call that got the wrong one loaded whatever
+ * happened to sit at that offset in the other layout - which is how a
+ * `Vector<i64>` receiver came out eight bytes past its real address and
+ * free() was handed the {count, cap} pair as if it were the data pointer.
+ * The C backend never had this: cg_mangle_method has always folded the
+ * owner's package into the name.
+ *
+ * The canonical type name is unique by construction and is exactly what a
+ * receiver's type_str already carries, so call sites can derive it without
+ * knowing anything the declared name did not already tell them.
+ */
+const char *ll_owner_key(ll_t *ll, symbol_t *osym)
+{
+    if (!osym) return NULL;
+    if (osym->type) {
+        const char *ts = type_to_string(ll->sem->tc, osym->type);
+        if (ts && ts[0]) return ts;
+    }
+    return osym->name;
+}
+
 func_sig_t *ll_pick_overload(ll_t *ll, symbol_t *sym, ast_node_t *call)
 {
     func_sig_t *arity = NULL;
@@ -316,7 +343,7 @@ void ll_function(ll_t *ll, ast_node_t *fn, symbol_t *owner)
     const char *fname = is_impl ? ll_mangle_ti(ll, recv_ts, fn->name, sig)
                         : (!owner && fn->is_extern)
                             ? fn->name
-                            : ll_mangle(ll, owner ? owner->name : NULL, fn->name, sig);
+                            : ll_mangle(ll, ll_owner_key(ll, owner), fn->name, sig);
     const char *recv_param = !owner    ? NULL
                              : is_impl ? ll_fmt(ll, "%s %%this", ll_ty(ll, recv_ts))
                                        : "ptr noundef %this";
@@ -535,8 +562,9 @@ static void ll_ensure_vtbl(ll_t *ll, const char *iface, const char *concrete)
                  * leaving the vtable pointing at a symbol the module never
                  * defines.
                  */
-                sb_puts(&slots,
-                        ll_fmt(ll, "ptr @%s", ll_mangle(ll, csym->name, im->name, csig)));
+                sb_puts(&slots, ll_fmt(ll, "ptr @%s",
+                                       ll_mangle(ll, ll_owner_key(ll, csym), im->name,
+                                                 csig)));
             } else {
                 sb_puts(&slots, "ptr null");
             }

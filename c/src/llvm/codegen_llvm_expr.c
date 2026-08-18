@@ -236,12 +236,15 @@ static symbol_t *ll_op_struct(ll_t *ll, const char *ts, const char **sname)
     if (!ts) return NULL;
     *sname = ll_is_ptr_ts(ts) ? arena_strndup(ll->a, ts, strlen(ts) - 1) : ts;
     symbol_t *ss = ll_struct_sym(ll, *sname);
-    /* Mangle by the struct symbol's own name, never by the spelling at the
-     * use site. ll_ensure_fn emits the body through ll_function(.., ss),
-     * which mangles with ss->name, so a receiver whose type_str carries the
-     * package ("excel.FileMeta") would call @salam_excel__FileMeta_free
-     * while the definition landed as @salam_FileMeta_free. */
-    if (ss && ss->name) *sname = ss->name;
+    /* Mangle by the struct symbol's canonical type name, never by the
+     * spelling at the use site: ll_ensure_fn emits the body through
+     * ll_function(.., ss), which uses ll_owner_key, and the two have to
+     * agree. Resolving the symbol first also normalises a receiver whose
+     * type_str was written some other way. */
+    if (ss) {
+        const char *k = ll_owner_key(ll, ss);
+        if (k) *sname = k;
+    }
     return ss;
 }
 
@@ -1325,10 +1328,11 @@ static llv_t ll_call_method(ll_t *ll, ast_node_t *n, ast_node_t *callee)
         func_sig_t *sig = ll_pick_overload(ll, ms, n);
         ll_ensure_fn(ll, sig->decl, ss, ll_owner_scope(ll, ss));
         const char *recv = isptr ? ll_expr(ll, obj).ref : ll_addr_of(ll, obj).ptr;
-        /* ss->name, not sname: see ll_op_struct. A package-qualified
-         * receiver type would otherwise call a symbol nothing defines. */
+        /* ll_owner_key(ss), not sname: see ll_op_struct. The receiver's
+         * spelling at the use site is not what the body was named with. */
+        const char *okey = ll_owner_key(ll, ss);
         return ll_emit_call(ll, n, sig, ll_fmt(ll, "ptr %s", recv),
-                            ll_mangle(ll, ss->name ? ss->name : sname, mname, sig),
+                            ll_mangle(ll, okey ? okey : sname, mname, sig),
                             type_to_string(ll->sem->tc, sig->ret));
     }
 

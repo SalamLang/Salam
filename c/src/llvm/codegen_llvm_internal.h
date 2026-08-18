@@ -304,6 +304,10 @@ void ll_block_top(ll_t *ll, ast_node_t *block);
 void ll_emit_return(ll_t *ll, ast_node_t *value);
 
 const char *ll_mangle(ll_t *ll, const char *owner, const char *fn, func_sig_t *sig);
+
+/* The owner spelling every method mangling must agree on: the struct's
+ * canonical "pkg_Name" type name, not its declared "Name". */
+const char *ll_owner_key(ll_t *ll, symbol_t *osym);
 const char *ll_mangle_in(ll_t *ll, const char *pkg, const char *owner, const char *fn,
                          func_sig_t *sig);
 const char *ll_pkg_of_scope(ll_t *ll, scope_t *sc);

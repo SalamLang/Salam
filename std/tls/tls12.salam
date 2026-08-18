@@ -131,6 +131,37 @@ end
 //
 // The signature covers client_random || server_random || the ECDHParams above,
 // which is why those bytes are captured verbatim rather than re-encoded.
+// A fresh ECDHE keypair on `cv`, replacing whatever the ClientHello
+// pre-generated. The scalar has to be a valid private key - non-zero and below
+// the group order - which a random draw misses only with negligible
+// probability, so a few retries is a complete answer rather than a loop that
+// can spin.
+func _tls12_gen_ec_key(h &: Handshake, cv: Curve): bool:
+    mut x := _newbuf(cv.nb)
+    defer _buf_free(x)
+    mut y := _newbuf(cv.nb)
+    defer _buf_free(y)
+    mut tries := 0
+    until tries < 8:
+        tries += 1
+        _bufreset(x)
+        _bufreset(y)
+        _putzeros(x, cv.nb)
+        _putzeros(y, cv.nb)
+        _bufreset(h.ecpriv)
+        _putzeros(h.ecpriv, cv.nb)
+        crypto.RandomBytes(h.ecpriv.p, cv.nb)
+        if _ec_base_mul(cv, h.ecpriv.p, x.p, y.p):
+            _bufreset(h.ecpub)
+            _put8(h.ecpub, 4)
+            _putbuf(h.ecpub, x)
+            _putbuf(h.ecpub, y)
+            ret !h.ecpub.bad && !h.ecpriv.bad
+        end
+    end
+    ret false
+end
+
 func _tls12_parse_ske(h &: Handshake, msg: Reader): bool:
     mut r := msg
     ctype := _rd8(r)
@@ -192,6 +223,17 @@ func _tls12_parse_ske(h &: Handshake, msg: Reader): bool:
         mut cv := _curve_p256()
         if group == GROUP_SECP384R1:
             cv = _curve_p384()
+        end
+        // The ClientHello can only pre-generate one EC keypair, and it picks
+        // P-256; a server that answers on P-384 needs a P-384 one. Reusing the
+        // P-256 pair read a 48-byte scalar out of a 32-byte buffer and then
+        // sent a 65-byte P-256 point as the ClientKeyExchange, so our shared
+        // secret and the point we published described different keys. The
+        // server's first look at that was our Finished, which it rejected by
+        // dropping the connection - a "connection closed during handshake"
+        // against every host that prefers secp384r1.
+        if !_tls12_gen_ec_key(h, cv):
+            ret _hs_fail(h, "could not generate a key on the server's curve")
         end
         repeat point.len with i:
             _put8(peer, _rdat(point, i))

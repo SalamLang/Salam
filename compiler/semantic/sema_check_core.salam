@@ -209,6 +209,54 @@ func sema_check_expr(s &: Sema, a &: at.Ast, nid: int): int:
         if at.NameIsErr(fname):
             ret sema_decorate(s, a, nid, sema_err_ty(s))
         end
+        // `&pkg.f` - the package identifier the parser parked in n.a.
+        pkgid := at.Get(a, nid).a
+        if pkgid != 0 && at.KindOf(a, pkgid) == at.AST_IDENTIFIER:
+            pname := at.Get(a, pkgid).name
+            pk := scope_lookup(s, s.cur, pname)
+            if pk == 0 || sym_at(s, pk).kind != SYM_PACKAGE:
+                serr(
+                    s, 1, sp, co.Format3(
+                        i18.Tr("unknown package '%s' in '&%s.%s'"), co.ArgStr(pname),
+                        co.ArgStr(pname), co.ArgStr(fname)
+                    )
+                )
+                ret sema_decorate(s, a, nid, sema_err_ty(s))
+            end
+            pkv2 := sym_at(s, pk)
+            fname = pkg_member_canon(s, a, pk, fname, sp)
+            at.SetName(a, nid, fname)
+            m3 := scope_lookup_local(s, pkv2.members, fname)
+            if m3 == 0 || sym_at(s, m3).kind != SYM_FUNC:
+                serr(
+                    s, 72, sp, co.Format2(
+                        i18.Tr("'&%s.%s' requires a function"), co.ArgStr(pkv2.name), co.ArgStr(fname)
+                    )
+                )
+                ret sema_decorate(s, a, nid, sema_err_ty(s))
+            end
+            mv3 := sym_at(s, m3)
+            if !mv3.is_pub:
+                serr(
+                    s, 17, sp, co.Format2(
+                        i18.Tr("'%s' is not exported by package '%s' (mark it 'pub')"), co.ArgStr(fname),
+                        co.ArgStr(pkv2.name)
+                    )
+                )
+                ret sema_decorate(s, a, nid, sema_err_ty(s))
+            end
+            if !func_addr_target_ok(s, a, m3, fname, sp):
+                ret sema_decorate(s, a, nid, sema_err_ty(s))
+            end
+            mut mv3u := sym_at(s, m3)
+            mv3u.used = true
+            sym_put(s, m3, mv3u)
+            dce_mark_root(
+                str.Len(mv3u.pkgname) > 0 ? mv3u.pkgname : pkv2.name, mv3u.name
+            )
+            _dpa := sema_decorate(s, a, pkgid, pkv2.ty)
+            ret sema_decorate(s, a, nid, type_ptr(s, sema_ty(s, TY_VOID)))
+        end
         mut fsym := scope_lookup(s, s.cur, fname)
         if fsym == 0:
             c2 := local_canon(s, a, fname, sp)

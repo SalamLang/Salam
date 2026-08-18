@@ -122,6 +122,35 @@ func mangle(v &: Lv, s &: sm.Sema, owner: str, fn_name: str, sig: int): str:
     ret mangle_in(v, s, pkg_of_scope(s, v.pkg_scope), owner, fn_name, sig)
 end
 
+// A method's owner, spelled the one way every side of the call agrees on.
+//
+// It used to be the struct's DECLARED name, so `pa.Input.free` and
+// `pb.Input.free` both mangled to @salam_Input_free: one body was emitted and
+// every call to either bound to it. The bodies read `this` at their own
+// struct's field offsets, so a call that got the wrong one loaded whatever
+// happened to sit at that offset in the other layout - which is how a
+// `Vector<i64>` receiver came out eight bytes past its real address and free()
+// was handed the {count, cap} pair as if it were the data pointer. The C
+// backend never had this: cg_mangle_method has always folded the owner's
+// package into the name.
+//
+// The canonical type name is unique by construction and is exactly what a
+// receiver's type_str already carries, so call sites can derive it without
+// knowing anything the declared name did not already tell them.
+func owner_key(s &: sm.Sema, osym: int): str:
+    if osym == 0:
+        ret ""
+    end
+    ov := sm.SymAt(s, osym)
+    if ov.ty != sm.TYPE_NONE:
+        ts := sm.ToString(s, ov.ty)
+        if str.Len(ts) > 0:
+            ret ts
+        end
+    end
+    ret ov.name
+end
+
 // ll_pick_overload - first exact arg-typestring match; else first
 // arity-compatible; else overload 0.
 func pick_overload(
@@ -317,7 +346,7 @@ func emit_function(v &: Lv, s &: sm.Sema, a &: at.Ast, fn: int, owner: int):
         fname = fnode.name
     else:
         fname = mangle(
-            v, s, owner != 0 ? sm.SymAt(s, owner).name : "", fnode.name, sig
+            v, s, owner != 0 ? owner_key(s, owner) : "", fnode.name, sig
         )
     end
     mut recv_param := ""
@@ -549,7 +578,7 @@ func ensure_vtbl(
                 ensure_fn(v, s, a, sm.SigAt(s, csig).decl, csym, v.pkg_scope)
                 co.SbPuts(
                     slots, "ptr @" + mangle(
-                        v, s, concrete, im.name, csig
+                        v, s, owner_key(s, csym), im.name, csig
                     )
                 )
             else:

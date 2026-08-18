@@ -63,6 +63,10 @@ end
 
 mut _g_http_status := 0
 mut _g_http_headers := ""
+// Why the last request produced no response, when it produced none. A failed
+// TLS handshake and a server that answered with nothing both left status 0 and
+// an empty body, with no way for a caller to tell them apart.
+mut _g_http_error := ""
 
 @en "Response"
 @fa "پاسخ"
@@ -71,6 +75,10 @@ pub struct Response:
     pub status: int = 0
     pub body: str = ""
     pub head: str = ""
+    // Empty on any response that came back from the server, including a 500.
+    // Non-empty only when the request never got one: DNS, connect, or - most
+    // often - the TLS handshake. See Error().
+    pub err: str = ""
 end
 
 @en "Client"
@@ -566,6 +574,7 @@ else:
             end
         end
         if u.host.len() == 0:
+            _g_http_error = "no host in URL '" + url_str + "'"
             ret ""
         end
         req := _build_request(method, u, headers, body)
@@ -575,6 +584,7 @@ else:
             cfg := tls.NewConfig(u.host)
             mut c := tls.Dial(u.host, port, cfg)
             if !tls.ConnOk(c):
+                _g_http_error = "TLS: " + tls.ConnError(c)
                 tls.Close(c)
                 ret ""
             end
@@ -584,6 +594,7 @@ else:
         else:
             s := rawsock.Connect(u.host, port)
             if !rawsock.Ok(s):
+                _g_http_error = "could not connect to " + u.host + ":" + port
                 ret ""
             end
             rawsock.Send(s, req)
@@ -627,10 +638,10 @@ func _parse_response(req: str): Response:
     sep_pos := req.find("\r\n\r\n")
     if sep_pos >= 0:
         _g_http_headers = req.substr(0, sep_pos + 4)
-        ret Response { status = _g_http_status, body = req.substr(sep_pos + 4, req.len() - sep_pos - 4), head = _g_http_headers }
+        ret Response { status = _g_http_status, body = req.substr(sep_pos + 4, req.len() - sep_pos - 4), head = _g_http_headers, err = _g_http_error }
     end
     _g_http_headers = ""
-    ret Response { status = _g_http_status, body = req, head = "" }
+    ret Response { status = _g_http_status, body = req, head = "", err = _g_http_error }
 end
 
 func serialize(headers: HashMap<str, str>): str:
@@ -646,6 +657,7 @@ end
 func send(method: str, url_str: str, header_block: str, body: str): Response:
     _g_http_status = 0
     _g_http_headers = ""
+    _g_http_error = ""
     mut effective_headers := header_block
     if body.len() > 0:
         if header_block.find("Content-Type") < 0:
@@ -724,6 +736,16 @@ end
 @ar "متن"
 pub func Body(r: Response): str:
     ret r.body
+end
+
+@en "Error"
+@fa "خطا"
+@ar "خطأ"
+// Why no response arrived, or "" when one did. `Status(r) == 0` on its own
+// cannot tell a refused connection or a failed TLS handshake from a server
+// that closed without writing a status line; this can.
+pub func Error(r: Response): str:
+    ret r.err
 end
 
 @en "Headers"

@@ -34,6 +34,13 @@ typedef struct {
     vec_t locals;
     symbol_t *cur_struct;
     scope_t *cur_fn_home;
+    /* While a struct literal is filling in a field's DEFAULT expression, the
+     * scope that expression was written in - the declaring module's global
+     * scope, which is not this module's when the struct came from a package.
+     * `pub category: int = ERR_EXECUTION` in std/graphql is emitted at every
+     * construction site, so the global it names has to be spelled the way its
+     * own package defines it. Only cg_global_ref reads this. */
+    scope_t *cur_lit_home;
     bool safe;
     bool debug_info;
     bool single_threaded;
@@ -144,6 +151,16 @@ void cg_slice_elem(const char *ts, char *ebuf, size_t cap);
 const char *cg_ctype(cg_t *cg, const char *ts);
 
 const char *cg_decl(cg_t *cg, const char *ts, const char *name);
+
+/* cg_decl over an already-mangled C name (see cg_global_cname). */
+const char *cg_decl_cn(cg_t *cg, const char *ts, const char *name);
+
+/* The C name of a module-level global declared in package `pkg`. */
+const char *cg_global_cname(cg_t *cg, const char *pkg, const char *name);
+
+/* The C name to read `name` by, when it is not a local: the mangled global
+ * spelling if it resolves to a module-level global, else cg_cident(name). */
+const char *cg_global_ref(cg_t *cg, const char *name);
 
 /* "int32_t[3]" for a plain array typestring, else NULL. See cg_expr_value. */
 const char *cg_array_ctype(cg_t *cg, const char *ts);

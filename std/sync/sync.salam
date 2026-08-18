@@ -36,16 +36,15 @@ end
  * enters the kernel at all.
  */
 if SALAM_OS_WINDOWS:
+    link dynamic "kernel32"
     extern:
         func InitializeCriticalSection(cs: void*)
         func EnterCriticalSection(cs: void*)
         func LeaveCriticalSection(cs: void*)
         func DeleteCriticalSection(cs: void*)
-        func InitializeConditionVariable(cv: void*)
-        func SleepConditionVariableCS(cv: void*, cs: void*, ms: int): int
-        func WakeConditionVariable(cv: void*)
-        func WakeAllConditionVariable(cv: void*)
-        func GetTickCount64(): u64
+        func GetModuleHandleA(name: str): void*
+        func GetProcAddress(mod: void*, name: str): void*
+        func GetTickCount(): u32
         func Sleep(ms: int)
     end
 else:
@@ -75,6 +74,34 @@ end
  */
 const MUTEX_BYTES := 128
 const COND_BYTES := 128
+
+/*
+ * CONDITION_VARIABLE and GetTickCount64 are Vista-era, and the import
+ * definitions bundled with the TinyCC commit this repo pins predate them:
+ * win32/lib/kernel32.def carries InitializeCriticalSection but not one
+ * ConditionVariable name, so declaring them as ordinary externs fails the
+ * link outright under the C backend ("unresolved reference to
+ * 'InitializeConditionVariable'") - which is what broke general/en/net_loopback
+ * on the Windows release gate. GetModuleHandleA and GetProcAddress ARE in the
+ * def, so go through those instead; same functions, same semantics, only the
+ * way the address is obtained changes. c/src/core/timer.c already resolves
+ * K32GetProcessMemoryInfo this way.
+ *
+ * Resolved here rather than on first use: a package global with a
+ * non-constant initialiser is stored before the entry function runs, so these
+ * are set before any thread exists and there is no lazy-init race to reason
+ * about in what is, after all, the threading library. Globals must also
+ * precede every type and function definition in a file (E085), which is why
+ * they sit up here rather than beside the code that uses them.
+ */
+if SALAM_OS_WINDOWS:
+    _k32 := GetModuleHandleA("kernel32.dll")
+    _cv_init_fn := GetProcAddress(_k32, "InitializeConditionVariable")
+    _cv_sleep_fn := GetProcAddress(_k32, "SleepConditionVariableCS")
+    _cv_wake_fn := GetProcAddress(_k32, "WakeConditionVariable")
+    _cv_wake_all_fn := GetProcAddress(_k32, "WakeAllConditionVariable")
+    _tick64_fn := GetProcAddress(_k32, "GetTickCount64")
+end
 
 @en "Mutex"
 @fa "قفل"
@@ -150,27 +177,72 @@ if SALAM_OS_WINDOWS:
         mem.Free(h)
     end
 
+    // Calls go through the _cv_*_fn pointers resolved at the top of this
+    // file; see the comment there for why they are not plain externs.
     func cond_new(): void*:
         c := mem.Allocate(COND_BYTES as u64)
-        InitializeConditionVariable(c)
+        if _cv_init_fn != null:
+            f := _cv_init_fn as extern func (void*) void
+            f(c)
+        end
         ret c
     end
 
+    /*
+     * The fallbacks below cover the case where the host has no
+     * CONDITION_VARIABLE at all (pre-Vista, or a stripped kernel32). Dropping
+     * the lock, sleeping a moment and retaking it is a legal - if slow -
+     * condition wait: every caller in this file re-tests its predicate in a
+     * loop, because a spurious wakeup is permitted on every platform, so a
+     * wakeup that carries no information is safe. Correct and slow beats a
+     * null call through.
+     */
     func cond_wait(c: void*, m: void*):
-        SleepConditionVariableCS(c, m, 0 - 1)
+        if _cv_sleep_fn == null:
+            LeaveCriticalSection(m)
+            Sleep(1)
+            EnterCriticalSection(m)
+            ret
+        end
+        f := _cv_sleep_fn as extern func (void*, void*, int) int
+        f(c, m, 0 - 1)
     end
 
     // Non-zero means the predicate may have changed; zero means it timed out
     // (or failed, which for a caller re-testing its predicate is the same).
     func cond_timedwait(c: void*, m: void*, ms: i64): bool:
-        ret SleepConditionVariableCS(c, m, ms as int) == 0
+        if _cv_sleep_fn == null:
+            LeaveCriticalSection(m)
+            mut nap := ms
+            if nap > 1: nap = 1 end
+            if nap < 0: nap = 0 end
+            Sleep(nap as int)
+            EnterCriticalSection(m)
+            ret false
+        end
+        f := _cv_sleep_fn as extern func (void*, void*, int) int
+        ret f(c, m, ms as int) == 0
     end
 
-    func now_ms_os(): i64: ret GetTickCount64() as i64 end
+    // GetTickCount wraps every 49.7 days; GetTickCount64 does not, so prefer
+    // it and keep the 32-bit call only as the fallback.
+    func now_ms_os(): i64:
+        if _tick64_fn == null: ret GetTickCount() as i64 end
+        f := _tick64_fn as extern func () u64
+        ret f() as i64
+    end
 
-    func cond_signal(c: void*): WakeConditionVariable(c) end
+    func cond_signal(c: void*):
+        if _cv_wake_fn == null: ret end
+        f := _cv_wake_fn as extern func (void*) void
+        f(c)
+    end
 
-    func cond_broadcast(c: void*): WakeAllConditionVariable(c) end
+    func cond_broadcast(c: void*):
+        if _cv_wake_all_fn == null: ret end
+        f := _cv_wake_all_fn as extern func (void*) void
+        f(c)
+    end
 
     // A CONDITION_VARIABLE owns no resources and has no matching Delete call.
     func cond_free(c: void*): mem.Free(c) end

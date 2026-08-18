@@ -1254,7 +1254,8 @@ static void hdr_globals(cg_t *cg, ast_node_t *program, sb_t *h)
             if (d->kind != AST_CONST_DECL && d->kind != AST_VAR_DECL) continue;
             if (d->is_extern || (!d->is_pub && !pkgmod)) continue;
             const char *ts = d->type_str ? d->type_str : "int32_t";
-            const char *decl = cg_decl(cg, ts, d->name);
+            /* Must match emit_globals' spelling exactly (cg_global_cname). */
+            const char *decl = cg_decl_cn(cg, ts, cg_global_cname(cg, cg->pkg, d->name));
             bool is_array = ts && strchr(ts, '[');
             bool can_defer =
                 d->kind == AST_VAR_DECL && d->a && d->a->kind != AST_LITERAL && !is_array;

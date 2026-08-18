@@ -273,3 +273,17 @@ lvar_t *ll_global_find(ll_t *ll, const char *name)
     }
     return NULL;
 }
+
+lvar_t *ll_global_find_in(ll_t *ll, const char *pkg, const char *name)
+{
+    {
+        size_t i = 0;
+        for (; i < ll->globals.len; i++) {
+            lvar_t *v = (lvar_t *)ll->globals.data[i];
+            if (strcmp(v->name, name)) continue;
+            if (pkg && v->pkg && strcmp(pkg, v->pkg)) continue;
+            return v;
+        }
+    }
+    return NULL;
+}

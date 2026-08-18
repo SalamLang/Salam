@@ -233,10 +233,10 @@ See the [Docker section in the main README](../README.md#-docker--docker-compose
 
 ## 🧩 Editor Support
 
-| Editor                    | Extension                                                                                                                                             |
-| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Visual Studio Code**    | [salam-programming-language](https://marketplace.visualstudio.com/items?itemName=salamlanguage.salam-programming-language) — syntax highlighting      |
-| **Web Playground**        | [salamlang.github.io/Salam](https://salamlang.github.io/Salam/) — no install needed                                                                  |
+| Editor                 | Extension                                                                                                                                        |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Visual Studio Code** | [salam-programming-language](https://marketplace.visualstudio.com/items?itemName=salamlanguage.salam-programming-language) — syntax highlighting |
+| **Web Playground**     | [salamlang.github.io/Salam](https://salamlang.github.io/Salam/) — no install needed                                                              |
 
 ## 📚 Where to Go Next
 

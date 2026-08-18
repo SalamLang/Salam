@@ -1005,7 +1005,7 @@ A `ctx` tree shares one lock; cancelling any node finishes everything below it,
 and a child's deadline can only shorten what it inherits, never extend it.
 
 `atomic` is lock-free everywhere except tcc. `atomic_load/store/add/swap/cas`
-are **language intrinsics** on an `i64*` cell (a `__atomic_*` builtin in the C
+are **language intrinsics** on an `i64*` cell (a `__atomic_*` built-in in the C
 backend, a real `atomicrmw`/`cmpxchg` in LLVM, both seq*cst; plain reads and
 writes in JS, which has no threads). `atomic_add` returns the value \_after* the
 add, `atomic_swap` the value before it. tcc 0.9.27 has neither the `__atomic`

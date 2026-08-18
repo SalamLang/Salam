@@ -40,13 +40,22 @@ version is pinned by UCD_VERSION; bumping it and re-running with --fetch is the
 whole upgrade procedure.
 """
 
+# This is a code generator: one pass reads the UCD and one function writes
+# every table in tables.salam in the order the file declares them. That shape
+# is the point - the emit order IS the output - so the size and argument-count
+# checks below describe the job rather than a problem to refactor away. The
+# remaining %-formats are multi-line wrapped comment text, where an f-string
+# would mean prefixing every continuation fragment.
+# pylint: disable=too-many-lines,too-many-arguments,too-many-positional-arguments
+# pylint: disable=too-many-locals,too-many-statements,consider-using-f-string
+
 import argparse
 import os
 import sys
 import urllib.request
 
 UCD_VERSION = "16.0.0"
-UCD_BASE = "https://www.unicode.org/Public/%s/ucd" % UCD_VERSION
+UCD_BASE = f"https://www.unicode.org/Public/{UCD_VERSION}/ucd"
 # Remote path relative to UCD_BASE -> local filename in the cache. Two of these
 # live in subdirectories of the UCD, so the mapping cannot be implied.
 FILES = {
@@ -82,8 +91,21 @@ HANGUL_SCOUNT = HANGUL_LCOUNT * HANGUL_NCOUNT
 # absent: they are exactly the Hangul syllable block and are derived
 # arithmetically, as above.
 GRAPHEME_CLASSES = (
-    "Other", "CR", "LF", "Control", "Extend", "ZWJ", "Regional_Indicator",
-    "Prepend", "SpacingMark", "L", "V", "T", "LV", "LVT", "Extended_Pictographic",
+    "Other",
+    "CR",
+    "LF",
+    "Control",
+    "Extend",
+    "ZWJ",
+    "Regional_Indicator",
+    "Prepend",
+    "SpacingMark",
+    "L",
+    "V",
+    "T",
+    "LV",
+    "LVT",
+    "Extended_Pictographic",
 )
 GRAPHEME_ID = {name: i for i, name in enumerate(GRAPHEME_CLASSES)}
 
@@ -96,19 +118,45 @@ INCB_ID = {name: i for i, name in enumerate(INCB_CLASSES)}
 # the explicit formatting codes" tests become range checks. L is 0 and is the
 # implicit value for everything the table does not list.
 BIDI_CLASSES = (
-    "L", "R", "AL",                          # strong
-    "EN", "ES", "ET", "AN", "CS", "NSM", "BN",  # weak
-    "B", "S", "WS", "ON",                    # neutral
-    "LRE", "RLE", "LRO", "RLO", "PDF",       # explicit embedding/override
-    "LRI", "RLI", "FSI", "PDI",              # explicit isolate
+    "L",
+    "R",
+    "AL",  # strong
+    "EN",
+    "ES",
+    "ET",
+    "AN",
+    "CS",
+    "NSM",
+    "BN",  # weak
+    "B",
+    "S",
+    "WS",
+    "ON",  # neutral
+    "LRE",
+    "RLE",
+    "LRO",
+    "RLO",
+    "PDF",  # explicit embedding/override
+    "LRI",
+    "RLI",
+    "FSI",
+    "PDI",  # explicit isolate
 )
 BIDI_ID = {name: i for i, name in enumerate(BIDI_CLASSES)}
 BIDI_LONG = {
-    "Left_To_Right": "L", "Right_To_Left": "R", "Arabic_Letter": "AL",
-    "European_Number": "EN", "European_Separator": "ES",
-    "European_Terminator": "ET", "Arabic_Number": "AN",
-    "Common_Separator": "CS", "Nonspacing_Mark": "NSM", "Boundary_Neutral": "BN",
-    "Paragraph_Separator": "B", "Segment_Separator": "S", "White_Space": "WS",
+    "Left_To_Right": "L",
+    "Right_To_Left": "R",
+    "Arabic_Letter": "AL",
+    "European_Number": "EN",
+    "European_Separator": "ES",
+    "European_Terminator": "ET",
+    "Arabic_Number": "AN",
+    "Common_Separator": "CS",
+    "Nonspacing_Mark": "NSM",
+    "Boundary_Neutral": "BN",
+    "Paragraph_Separator": "B",
+    "Segment_Separator": "S",
+    "White_Space": "WS",
     "Other_Neutral": "ON",
 }
 
@@ -129,13 +177,36 @@ MAX_CP = 0x110000
 # is `id >= CatMn && id <= CatMe`, and so on) instead of a chain of equality
 # tests. Cn sorts last so that "unassigned" is also the largest id.
 CATEGORIES = (
-    "Lu", "Ll", "Lt", "Lm", "Lo",
-    "Mn", "Mc", "Me",
-    "Nd", "Nl", "No",
-    "Pc", "Pd", "Ps", "Pe", "Pi", "Pf", "Po",
-    "Sm", "Sc", "Sk", "So",
-    "Zs", "Zl", "Zp",
-    "Cc", "Cf", "Cs", "Co", "Cn",
+    "Lu",
+    "Ll",
+    "Lt",
+    "Lm",
+    "Lo",
+    "Mn",
+    "Mc",
+    "Me",
+    "Nd",
+    "Nl",
+    "No",
+    "Pc",
+    "Pd",
+    "Ps",
+    "Pe",
+    "Pi",
+    "Pf",
+    "Po",
+    "Sm",
+    "Sc",
+    "Sk",
+    "So",
+    "Zs",
+    "Zl",
+    "Zp",
+    "Cc",
+    "Cf",
+    "Cs",
+    "Co",
+    "Cn",
 )
 CAT_ID = {name: i for i, name in enumerate(CATEGORIES)}
 
@@ -159,6 +230,7 @@ BANNER = """/*
 # input
 # --------------------------------------------------------------------------
 
+
 def ucd_path(name):
     return os.path.join(CACHE, name)
 
@@ -166,8 +238,8 @@ def ucd_path(name):
 def fetch():
     os.makedirs(CACHE, exist_ok=True)
     for remote, local in FILES.items():
-        url = "%s/%s" % (UCD_BASE, remote)
-        sys.stderr.write("fetching %s\n" % url)
+        url = f"{UCD_BASE}/{remote}"
+        sys.stderr.write(f"fetching {url}\n")
         with urllib.request.urlopen(url) as r:
             data = r.read()
         with open(ucd_path(local), "wb") as f:
@@ -178,8 +250,7 @@ def read_lines(name):
     path = ucd_path(name)
     if not os.path.exists(path):
         sys.exit(
-            "missing %s\nRun with --fetch to download the UCD %s files."
-            % (path, UCD_VERSION)
+            f"missing {path}\nRun with --fetch to download the UCD {UCD_VERSION} files."
         )
     with open(path, encoding="utf-8") as f:
         for line in f:
@@ -215,7 +286,7 @@ def parse_unicode_data():
             continue
         if name.endswith(", Last>"):
             if pending_first is None or pending_first[1] != cat:
-                sys.exit("unpaired range terminator at U+%04X" % cp)
+                sys.exit(f"unpaired range terminator at U+{cp:04X}")
             ranges.append((pending_first[0], cp, cat))
             pending_first = None
             continue
@@ -239,7 +310,7 @@ def parse_unicode_data():
             title[cp] = int(f[14], 16)
 
     if pending_first is not None:
-        sys.exit("unterminated range starting at U+%04X" % pending_first[0])
+        sys.exit(f"unterminated range starting at U+{pending_first[0]:04X}")
 
     return merge_cat_ranges(ranges), upper, lower, title, ccc, canon, compat
 
@@ -258,9 +329,10 @@ def expand_decompositions(canon, compat):
     alone, full_compat over both (a compatibility decomposition may expose a
     canonical one and vice versa).
     """
+
     def fixpoint(cp, table, depth=0):
         if depth > 32:
-            sys.exit("decomposition of U+%04X does not terminate" % cp)
+            sys.exit(f"decomposition of U+{cp:04X} does not terminate")
         d = table.get(cp)
         if d is None:
             return [cp]
@@ -353,7 +425,7 @@ def parse_bidi_class():
             spec = line.split("@missing:", 1)[1].strip()
             span, name = [p.strip() for p in spec.split(";")]
             if name not in BIDI_LONG:
-                sys.exit("unknown Bidi_Class default %r" % name)
+                sys.exit(f"unknown Bidi_Class default {name!r}")
             lo, hi = span.split("..")
             default_ranges.append((int(lo, 16), int(hi, 16), BIDI_LONG[name]))
     if not default_ranges:
@@ -368,7 +440,7 @@ def parse_bidi_class():
         if len(f) < 2:
             continue
         if f[1] not in BIDI_ID:
-            sys.exit("unknown Bidi_Class %r" % f[1])
+            sys.exit(f"unknown Bidi_Class {f[1]!r}")
         span = f[0].split("..")
         lo = int(span[0], 16)
         hi = int(span[1], 16) if len(span) > 1 else lo
@@ -392,7 +464,7 @@ def parse_brackets():
             continue
         kind = {"o": PBT_ID["Open"], "c": PBT_ID["Close"]}.get(f[2])
         if kind is None:
-            sys.exit("unknown Bidi_Paired_Bracket_Type %r" % f[2])
+            sys.exit(f"unknown Bidi_Paired_Bracket_Type {f[2]!r}")
         out.append((int(f[0], 16), int(f[1], 16), kind))
     out.sort()
     return out
@@ -413,7 +485,7 @@ def parse_incb():
         if len(f) < 3 or f[1] != "InCB":
             continue
         if f[2] not in INCB_ID:
-            sys.exit("unknown Indic_Conjunct_Break value %r" % f[2])
+            sys.exit(f"unknown Indic_Conjunct_Break value {f[2]!r}")
         span = f[0].split("..")
         lo = int(span[0], 16)
         hi = int(span[1], 16) if len(span) > 1 else lo
@@ -444,7 +516,7 @@ def parse_grapheme_break():
         if len(f) < 2 or f[1] in ("LV", "LVT"):
             continue
         if f[1] not in GRAPHEME_ID:
-            sys.exit("unknown Grapheme_Cluster_Break class %r" % f[1])
+            sys.exit(f"unknown Grapheme_Cluster_Break class {f[1]!r}")
         span = f[0].split("..")
         lo = int(span[0], 16)
         hi = int(span[1], 16) if len(span) > 1 else lo
@@ -456,7 +528,7 @@ def parse_grapheme_break():
     ranges.sort()
     for a, b in zip(ranges, ranges[1:]):
         if b[0] <= a[1]:
-            sys.exit("overlapping grapheme break ranges at U+%04X" % b[0])
+            sys.exit(f"overlapping grapheme break ranges at U+{b[0]:04X}")
 
     merged = []
     for lo, hi, cid in ranges:
@@ -497,7 +569,7 @@ def parse_case_folding():
         cps = [int(x, 16) for x in mapping.split()]
         if status in ("C", "S"):
             if len(cps) != 1:
-                sys.exit("non-simple mapping for status %s at U+%04X" % (status, cp))
+                sys.exit(f"non-simple mapping for status {status} at U+{cp:04X}")
             simple[cp] = cps[0]
         if status in ("C", "F") and len(cps) > 1:
             full[cp] = cps
@@ -528,6 +600,7 @@ def parse_prop(filename, wanted):
 # --------------------------------------------------------------------------
 # compression
 # --------------------------------------------------------------------------
+
 
 def value_ranges(mapping):
     """Compress {cp: value} into maximal (lo, hi, value) runs of consecutive
@@ -580,7 +653,10 @@ def case_ranges(mapping):
 # output
 # --------------------------------------------------------------------------
 
+
 class Emitter:
+    """Accumulates the lines of tables.salam and joins them at the end."""
+
     def __init__(self):
         self.parts = []
 
@@ -596,19 +672,19 @@ class Emitter:
 
     def ints(self, name, values, per_line=8):
         if not values:
-            sys.exit("refusing to emit empty table %s" % name)
-        self.parts.append("const %s := [" % name)
+            sys.exit(f"refusing to emit empty table {name}")
+        self.parts.append(f"const {name} := [")
         for i in range(0, len(values), per_line):
-            row = ", ".join(str(v) for v in values[i:i + per_line])
+            row = ", ".join(str(v) for v in values[i : i + per_line])
             self.parts.append("    " + row)
         self.parts.append("]")
 
     def strings(self, name, values, per_line=6):
         if not values:
-            sys.exit("refusing to emit empty table %s" % name)
-        self.parts.append("const %s := [" % name)
+            sys.exit(f"refusing to emit empty table {name}")
+        self.parts.append(f"const {name} := [")
         for i in range(0, len(values), per_line):
-            row = ", ".join('"%s"' % v for v in values[i:i + per_line])
+            row = ", ".join(f'"{v}"' for v in values[i : i + per_line])
             self.parts.append("    " + row)
         self.parts.append("]")
 
@@ -616,9 +692,26 @@ class Emitter:
         return "\n".join(self.parts).rstrip() + "\n"
 
 
-def build(cats, upper, lower, title, fold_simple, fold_full, spaces, alpha,
-          ccc, full_canon, full_compat, comp, gcb, incb, bidi, brackets,
-          script_names, scripts):
+def build(
+    cats,
+    upper,
+    lower,
+    title,
+    fold_simple,
+    fold_full,
+    spaces,
+    alpha,
+    ccc,
+    full_canon,
+    full_compat,
+    comp,
+    gcb,
+    incb,
+    bidi,
+    brackets,
+    script_names,
+    scripts,
+):
     e = Emitter()
     e.raw(BANNER)
     e.blank()
@@ -626,12 +719,12 @@ def build(cats, upper, lower, title, fold_simple, fold_full, spaces, alpha,
         "GENERATED FILE - DO NOT EDIT.\n"
         "\n"
         "Produced by tools/python/gen_unicode_tables.py from the Unicode\n"
-        "Character Database version %s. To change anything here, edit that\n"
+        f"Character Database version {UCD_VERSION}. To change anything here, edit that\n"
         "script and re-run it; hand edits are lost on the next regeneration.\n"
         "\n"
         "The lookup functions that read these tables live in unicode.salam.\n"
         "Every table is sorted by its first column so all of them can be\n"
-        "searched with the same binary search." % UCD_VERSION
+        "searched with the same binary search."
     )
     e.blank()
     e.raw("package unicode")
@@ -641,7 +734,7 @@ def build(cats, upper, lower, title, fold_simple, fold_full, spaces, alpha,
         "The Unicode version these tables were generated from, as a string so\n"
         "a program can report it without the compiler folding it into a number."
     )
-    e.raw('pub const Version := "%s"' % UCD_VERSION)
+    e.raw(f'pub const Version := "{UCD_VERSION}"')
     e.blank()
 
     e.comment(
@@ -672,8 +765,8 @@ def build(cats, upper, lower, title, fold_simple, fold_full, spaces, alpha,
         "Assigned code point ranges and their general category, sorted and\n"
         "non-overlapping. Unassigned code points are simply absent: %d ranges\n"
         "cover the whole of Unicode %s, which is far smaller than storing a\n"
-        "category for each of the %d code points in the space." %
-        (len(assigned), UCD_VERSION, MAX_CP)
+        "category for each of the %d code points in the space."
+        % (len(assigned), UCD_VERSION, MAX_CP)
     )
     e.ints("_CAT_LO", [r[0] for r in assigned])
     e.blank()
@@ -683,25 +776,26 @@ def build(cats, upper, lower, title, fold_simple, fold_full, spaces, alpha,
     e.blank()
 
     # ---- case mappings ----------------------------------------------------
-    for label, mapping, prefix, human in (
-        ("uppercase", upper, "_UP", "simple uppercase"),
-        ("lowercase", lower, "_LOW", "simple lowercase"),
-        ("titlecase", title, "_TITLE", "simple titlecase"),
-        ("fold", fold_simple, "_FOLD", "simple case folding"),
+    for mapping, prefix, human in (
+        (upper, "_UP", "simple uppercase"),
+        (lower, "_LOW", "simple lowercase"),
+        (title, "_TITLE", "simple titlecase"),
+        (fold_simple, "_FOLD", "simple case folding"),
     ):
         rs = case_ranges(mapping)
         e.comment(
             "%s: %d mappings compressed into %d (lo, hi, stride, delta) runs.\n"
             "A code point cp in a run maps to cp + delta when\n"
-            "(cp - lo) is a multiple of stride." % (human.capitalize(), len(mapping), len(rs))
+            "(cp - lo) is a multiple of stride."
+            % (human.capitalize(), len(mapping), len(rs))
         )
-        e.ints("%s_LO" % prefix, [r[0] for r in rs])
+        e.ints(f"{prefix}_LO", [r[0] for r in rs])
         e.blank()
-        e.ints("%s_HI" % prefix, [r[1] for r in rs])
+        e.ints(f"{prefix}_HI", [r[1] for r in rs])
         e.blank()
-        e.ints("%s_STRIDE" % prefix, [r[2] for r in rs])
+        e.ints(f"{prefix}_STRIDE", [r[2] for r in rs])
         e.blank()
-        e.ints("%s_DELTA" % prefix, [r[3] for r in rs])
+        e.ints(f"{prefix}_DELTA", [r[3] for r in rs])
         e.blank()
 
     # ---- full folding -----------------------------------------------------
@@ -713,7 +807,7 @@ def build(cats, upper, lower, title, fold_simple, fold_full, spaces, alpha,
         seq.extend(cps)
     e.comment(
         "Full case folding for the %d code points whose fold is longer than one\n"
-        "code point - German sharp s folds to \"ss\", the ligatures fold to their\n"
+        'code point - German sharp s folds to "ss", the ligatures fold to their\n'
         "component letters, and a handful of Greek and Armenian forms expand\n"
         "similarly. These are why case-insensitive comparison cannot be done\n"
         "byte for byte or even code point for code point: the two sides can\n"
@@ -737,8 +831,8 @@ def build(cats, upper, lower, title, fold_simple, fold_full, spaces, alpha,
     # ---- properties -------------------------------------------------------
     e.comment(
         "The White_Space property from PropList.txt (%d ranges). This is the\n"
-        "authoritative answer to \"is this a space\" and is deliberately not the\n"
-        "same as \"category Z\": it adds the ASCII controls tab through carriage\n"
+        'authoritative answer to "is this a space" and is deliberately not the\n'
+        'same as "category Z": it adds the ASCII controls tab through carriage\n'
         "return and NEL, and it excludes ZERO WIDTH NON-JOINER and friends,\n"
         "which are format characters rather than spaces." % len(spaces)
     )
@@ -752,7 +846,7 @@ def build(cats, upper, lower, title, fold_simple, fold_full, spaces, alpha,
         "Broader than category L: it also takes in letter numbers, the marks\n"
         "that carry vowels in Indic and Arabic script, and other code points\n"
         "with Other_Alphabetic. This, not L alone, is what a caller asking\n"
-        "\"is this a letter\" almost always means." % len(alpha)
+        '"is this a letter" almost always means.' % len(alpha)
     )
     e.ints("_ALPHA_LO", [r[0] for r in alpha])
     e.blank()
@@ -769,8 +863,8 @@ def build(cats, upper, lower, title, fold_simple, fold_full, spaces, alpha,
         "base character, normalization sorts them by this number, so that a\n"
         "Persian word written with its harakat in one order compares equal to\n"
         "the same word with them typed in another. Marks of class 0, and any\n"
-        "two marks of equal class, are never reordered relative to each other." %
-        (len(ccc_runs), len(ccc))
+        "two marks of equal class, are never reordered relative to each other."
+        % (len(ccc_runs), len(ccc))
     )
     e.ints("_CCC_LO", [r[0] for r in ccc_runs])
     e.blank()
@@ -781,16 +875,24 @@ def build(cats, upper, lower, title, fold_simple, fold_full, spaces, alpha,
 
     # ---- decompositions ---------------------------------------------------
     for prefix, table, human, extra in (
-        ("_NFD", full_canon, "Canonical",
-         "These are the mappings NFD and NFC use. Each is stored fully\n"
-         "expanded, so no entry here decomposes any further."),
-        ("_NFKD", full_compat, "Compatibility",
-         "These add the mappings NFKD and NFKC use on top of the canonical\n"
-         "ones. For Arabic and Persian this is the table that matters most:\n"
-         "the presentation forms in U+FB50..U+FDFF and U+FE70..U+FEFF - the\n"
-         "isolated, initial, medial and final shapes that some sources store\n"
-         "literally instead of letting the renderer choose - decompose back to\n"
-         "the plain letters here, and nowhere else."),
+        (
+            "_NFD",
+            full_canon,
+            "Canonical",
+            "These are the mappings NFD and NFC use. Each is stored fully\n"
+            "expanded, so no entry here decomposes any further.",
+        ),
+        (
+            "_NFKD",
+            full_compat,
+            "Compatibility",
+            "These add the mappings NFKD and NFKC use on top of the canonical\n"
+            "ones. For Arabic and Persian this is the table that matters most:\n"
+            "the presentation forms in U+FB50..U+FDFF and U+FE70..U+FEFF - the\n"
+            "isolated, initial, medial and final shapes that some sources store\n"
+            "literally instead of letting the renderer choose - decompose back to\n"
+            "the plain letters here, and nowhere else.",
+        ),
     ):
         items = sorted(table.items())
         seq, offs, lens = [], [], []
@@ -805,16 +907,16 @@ def build(cats, upper, lower, title, fold_simple, fold_full, spaces, alpha,
             "%s\n"
             "\n"
             "Hangul is not in this table. Its %d syllables decompose by\n"
-            "arithmetic instead - see the Hangul constants in unicode.salam." %
-            (human, len(items), len(seq), max(lens), extra, HANGUL_SCOUNT)
+            "arithmetic instead - see the Hangul constants in unicode.salam."
+            % (human, len(items), len(seq), max(lens), extra, HANGUL_SCOUNT)
         )
-        e.ints("%s_CP" % prefix, [cp for cp, _ in items])
+        e.ints(f"{prefix}_CP", [cp for cp, _ in items])
         e.blank()
-        e.ints("%s_OFF" % prefix, offs)
+        e.ints(f"{prefix}_OFF", offs)
         e.blank()
-        e.ints("%s_LEN" % prefix, lens)
+        e.ints(f"{prefix}_LEN", lens)
         e.blank()
-        e.ints("%s_SEQ" % prefix, seq)
+        e.ints(f"{prefix}_SEQ", seq)
         e.blank()
 
     # ---- composition ------------------------------------------------------
@@ -880,7 +982,7 @@ def build(cats, upper, lower, title, fold_simple, fold_full, spaces, alpha,
     # ---- bidi -------------------------------------------------------------
     e.comment(
         "Bidi_Class ids. Grouped by kind so the bidirectional algorithm's\n"
-        "repeated \"is this an explicit formatting code\" tests are range\n"
+        'repeated "is this an explicit formatting code" tests are range\n'
         "checks: the embedding and override codes are BcLRE..BcPDF and the\n"
         "isolate codes are BcLRI..BcPDI."
     )
@@ -912,7 +1014,8 @@ def build(cats, upper, lower, title, fold_simple, fold_full, spaces, alpha,
         "Bidi_Paired_Bracket: the %d bracket code points, each with the code\n"
         "point it pairs with and whether it opens or closes. Rule N0 uses this\n"
         "to give both halves of a bracket pair the same direction, so that\n"
-        "\"(سلام)\" does not come out with its parentheses facing the wrong way." % len(brackets)
+        '"(سلام)" does not come out with its parentheses facing the wrong way.'
+        % len(brackets)
     )
     e.ints("_BRACKET_CP", [b[0] for b in brackets])
     e.blank()
@@ -949,9 +1052,12 @@ def build(cats, upper, lower, title, fold_simple, fold_full, spaces, alpha,
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--fetch", action="store_true",
-                    help="download the UCD files into the cache before generating")
-    ap.add_argument("--out", default=OUT, help="output path (default: %s)" % OUT)
+    ap.add_argument(
+        "--fetch",
+        action="store_true",
+        help="download the UCD files into the cache before generating",
+    )
+    ap.add_argument("--out", default=OUT, help=f"output path (default: {OUT})")
     args = ap.parse_args()
 
     if args.fetch:
@@ -962,8 +1068,9 @@ def main():
     spaces = parse_prop("PropList.txt", "White_Space")
     alpha = parse_prop("DerivedCoreProperties.txt", "Alphabetic")
     exclusions = set()
-    for lo, hi in parse_prop("DerivedNormalizationProps.txt",
-                             "Full_Composition_Exclusion"):
+    for lo, hi in parse_prop(
+        "DerivedNormalizationProps.txt", "Full_Composition_Exclusion"
+    ):
         exclusions.update(range(lo, hi + 1))
     full_canon, full_compat = expand_decompositions(canon, compat)
     comp = composition_pairs(canon, exclusions)
@@ -973,9 +1080,26 @@ def main():
     brackets = parse_brackets()
     script_names, scripts = parse_scripts()
 
-    text = build(cats, upper, lower, title, fold_simple, fold_full, spaces, alpha,
-                 ccc, full_canon, full_compat, comp, gcb, incb, bidi, brackets,
-                 script_names, scripts)
+    text = build(
+        cats,
+        upper,
+        lower,
+        title,
+        fold_simple,
+        fold_full,
+        spaces,
+        alpha,
+        ccc,
+        full_canon,
+        full_compat,
+        comp,
+        gcb,
+        incb,
+        bidi,
+        brackets,
+        script_names,
+        scripts,
+    )
 
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     with open(args.out, "w", encoding="utf-8") as f:
@@ -989,13 +1113,25 @@ def main():
         "  %d composition pairs, %d grapheme-break and %d conjunct-break ranges\n"
         "  %d bidi-class ranges, %d bracket pairs, %d script ranges\n"
         % (
-            os.path.relpath(args.out, ROOT), UCD_VERSION,
+            os.path.relpath(args.out, ROOT),
+            UCD_VERSION,
             len([c for c in cats if c[2] != "Cn"]),
-            len(case_ranges(upper)), len(case_ranges(lower)),
-            len(case_ranges(title)), len(case_ranges(fold_simple)),
-            len(fold_full), len(spaces), len(alpha), len(value_ranges(ccc)),
-            len(full_canon), len(full_compat), len(comp), len(gcb), len(incb),
-            len(bidi), len(brackets), len(scripts),
+            len(case_ranges(upper)),
+            len(case_ranges(lower)),
+            len(case_ranges(title)),
+            len(case_ranges(fold_simple)),
+            len(fold_full),
+            len(spaces),
+            len(alpha),
+            len(value_ranges(ccc)),
+            len(full_canon),
+            len(full_compat),
+            len(comp),
+            len(gcb),
+            len(incb),
+            len(bidi),
+            len(brackets),
+            len(scripts),
         )
     )
 

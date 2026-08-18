@@ -507,6 +507,50 @@ symbol_t *ll_sym(ll_t *ll, const char *name)
     return s;
 }
 
+/*
+ * Resolve an interface by the canonical "pkg_Iface" spelling.
+ *
+ * That is how a `dyn` type names its interface (sema_resolve_type), so it is
+ * the form the dynamic-call and vtable paths see - and the form ll_sym cannot
+ * resolve: ll_sym_plain matches on the *declared* name ("Store"), which finds
+ * the right symbol only when no other package declares that name, and
+ * ll_scan_mangled walks struct/enum symbols exclusively. An interface owned by
+ * one package and used from another therefore reached codegen as "dynamic call
+ * on non-interface 'ifacestore_Store'", and ll_ensure_vtbl quietly emitted no
+ * vtable for it.
+ *
+ * Rebuild the canonical name from each package member's own pkgname, exactly
+ * as sema_lookup_iface does for the same spelling.
+ */
+symbol_t *ll_iface_sym(ll_t *ll, const char *name)
+{
+    if (!name) return NULL;
+    {
+        symbol_t *s = ll_sym(ll, name);
+        if (s && s->kind == SYM_INTERFACE) return s;
+    }
+    {
+        size_t p = 0;
+        for (; p < ll->sem->packages.len; p++) {
+            symbol_t *pk = (symbol_t *)ll->sem->packages.data[p];
+            size_t i = 0;
+            if (!pk || pk->kind != SYM_PACKAGE || !pk->members) continue;
+            for (; i < pk->members->symbols.len; i++) {
+                char canon[512];
+                symbol_t *m = (symbol_t *)pk->members->symbols.data[i];
+                if (!m || m->kind != SYM_INTERFACE || !m->name) continue;
+                if (!m->pkgname || !m->pkgname[0]) continue;
+                sal_snprintf(canon, sizeof canon, "%s_%s", m->pkgname, m->name);
+                if (!strcmp(canon, name)) {
+                    ll_touch_pkg(ll, pk);
+                    return m;
+                }
+            }
+        }
+    }
+    return NULL;
+}
+
 symbol_t *ll_struct_sym(ll_t *ll, const char *name)
 {
     symbol_t *s = ll_sym(ll, name);

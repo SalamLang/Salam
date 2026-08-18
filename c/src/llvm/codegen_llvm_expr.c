@@ -236,12 +236,15 @@ static symbol_t *ll_op_struct(ll_t *ll, const char *ts, const char **sname)
     if (!ts) return NULL;
     *sname = ll_is_ptr_ts(ts) ? arena_strndup(ll->a, ts, strlen(ts) - 1) : ts;
     symbol_t *ss = ll_struct_sym(ll, *sname);
-    /* Mangle by the struct symbol's own name, never by the spelling at the
-     * use site. ll_ensure_fn emits the body through ll_function(.., ss),
-     * which mangles with ss->name, so a receiver whose type_str carries the
-     * package ("excel.FileMeta") would call @salam_excel__FileMeta_free
-     * while the definition landed as @salam_FileMeta_free. */
-    if (ss && ss->name) *sname = ss->name;
+    /* Mangle by the struct symbol's canonical type name, never by the
+     * spelling at the use site: ll_ensure_fn emits the body through
+     * ll_function(.., ss), which uses ll_owner_key, and the two have to
+     * agree. Resolving the symbol first also normalises a receiver whose
+     * type_str was written some other way. */
+    if (ss) {
+        const char *k = ll_owner_key(ll, ss);
+        if (k) *sname = k;
+    }
     return ss;
 }
 
@@ -659,8 +662,22 @@ static void ll_fill_defaults(ll_t *ll, sb_t *ab, ast_node_t *n, func_sig_t *sig,
  */
 static const char *ll_func_symbol(ll_t *ll, ast_node_t *n)
 {
-    symbol_t *fsym = ll_sym(ll, n->name);
+    symbol_t *fsym = NULL;
+    symbol_t *pk = NULL;
     func_sig_t *sig;
+    /* `pkg.f` as a value: the function is in the package's member scope and
+     * mangles with the package that declared it, not the reading one. */
+    if (n->a && n->a->kind == AST_IDENTIFIER) {
+        symbol_t *p = ll_sym(ll, n->a->name);
+        if (p && p->kind == SYM_PACKAGE && p->members) {
+            symbol_t *m = scope_lookup_local(p->members, n->name);
+            if (m && m->kind == SYM_FUNC) {
+                fsym = m;
+                pk = p;
+            }
+        }
+    }
+    if (!fsym) fsym = ll_sym(ll, n->name);
     if (!fsym || fsym->kind != SYM_FUNC || fsym->overloads.len != 1) {
         ll_error(ll, n, "cannot take the address of '%s'", n->name);
         return NULL;
@@ -669,6 +686,16 @@ static const char *ll_func_symbol(ll_t *ll, ast_node_t *n)
     if (!sig->decl) {
         ll_error(ll, n, "cannot take the address of '%s'", n->name);
         return NULL;
+    }
+    if (pk) {
+        const char *sym;
+        scope_t *saved = ll->pkg_scope;
+        ll_touch_pkg(ll, pk);
+        ll->pkg_scope = pk->members;
+        ll_ensure_fn(ll, sig->decl, NULL, pk->members);
+        sym = sig->decl->is_extern ? n->name : ll_mangle(ll, NULL, n->name, sig);
+        ll->pkg_scope = saved;
+        return sym;
     }
     ll_ensure_fn(ll, sig->decl, NULL, ll->pkg_scope);
     return sig->decl->is_extern ? n->name : ll_mangle(ll, NULL, n->name, sig);
@@ -995,7 +1022,7 @@ static bool ll_pkg_value(ll_t *ll, ast_node_t *n, symbol_t *pk, llv_t *out)
     }
     if (m->kind != SYM_CONST && m->kind != SYM_VAR) return false;
     ll_touch_pkg_named(ll, pk->pkgname);
-    g = ll_global_find(ll, n->name);
+    g = ll_global_find_in(ll, pk->pkgname, n->name);
     if (!g) return false;
     r = ll_new_tmp(ll);
     ll_emit(ll, "%s = load %s, ptr %s", r, ll_ty(ll, g->ts), g->ptr);
@@ -1137,7 +1164,7 @@ static llv_t ll_call_dyn(ll_t *ll, ast_node_t *n, ast_node_t *obj, const char *i
             ib[k++] = *p;
     }
     ib[k] = 0;
-    symbol_t *isym = ll_sym(ll, ib);
+    symbol_t *isym = ll_iface_sym(ll, ib);
     if (!isym || isym->kind != SYM_INTERFACE) {
         ll_error(ll, n, "dynamic call on non-interface '%s'", ib);
         return ll_poison(n->type_str);
@@ -1301,10 +1328,11 @@ static llv_t ll_call_method(ll_t *ll, ast_node_t *n, ast_node_t *callee)
         func_sig_t *sig = ll_pick_overload(ll, ms, n);
         ll_ensure_fn(ll, sig->decl, ss, ll_owner_scope(ll, ss));
         const char *recv = isptr ? ll_expr(ll, obj).ref : ll_addr_of(ll, obj).ptr;
-        /* ss->name, not sname: see ll_op_struct. A package-qualified
-         * receiver type would otherwise call a symbol nothing defines. */
+        /* ll_owner_key(ss), not sname: see ll_op_struct. The receiver's
+         * spelling at the use site is not what the body was named with. */
+        const char *okey = ll_owner_key(ll, ss);
         return ll_emit_call(ll, n, sig, ll_fmt(ll, "ptr %s", recv),
-                            ll_mangle(ll, ss->name ? ss->name : sname, mname, sig),
+                            ll_mangle(ll, okey ? okey : sname, mname, sig),
                             type_to_string(ll->sem->tc, sig->ret));
     }
 
@@ -1676,7 +1704,14 @@ ll_addr_t ll_addr_of(ll_t *ll, ast_node_t *n)
                 return (ll_addr_t){r, fts, ll_tbaa_suffix(ll, fts, true)};
             }
         }
-        lvar_t *g = ll_global_find(ll, n->name);
+        /*
+         * The enclosing function's own package first. An unqualified name can
+         * only mean this package's global (or an extern, which carries no
+         * package), so a same-named global in some other package must not win
+         * the lookup just by having been emitted earlier.
+         */
+        const char *curpkg = ll_pkg_of_scope(ll, ll->pkg_scope);
+        lvar_t *g = ll_global_find_in(ll, curpkg ? curpkg : "main", n->name);
         if (g) return (ll_addr_t){g->ptr, g->ts, NULL};
         /*
          * A package-level global reached from a function of that same
@@ -1694,7 +1729,7 @@ ll_addr_t ll_addr_of(ll_t *ll, ast_node_t *n)
                 gv = scope_lookup_local(pk->members, n->name);
                 if (!gv || (gv->kind != SYM_VAR && gv->kind != SYM_CONST)) continue;
                 ll_touch_pkg(ll, pk);
-                g = ll_global_find(ll, n->name);
+                g = ll_global_find_in(ll, pk->pkgname, n->name);
                 if (g) return (ll_addr_t){g->ptr, g->ts, NULL};
             }
         }
@@ -1729,11 +1764,17 @@ ll_addr_t ll_addr_of(ll_t *ll, ast_node_t *n)
                  * actually resolves the name, and it is safe to repeat now
                  * that ll_emit_globals skips names it has already emitted.
                  */
+                scope_t *saved = ll->pkg_scope;
+                ll->pkg_scope = pk->members;
                 ll_emit_globals(ll, pk->decl);
-                g = ll_global_find(ll, n->name);
+                ll->pkg_scope = saved;
+                g = ll_global_find_in(ll, pk->pkgname, n->name);
                 if (g) return (ll_addr_t){g->ptr, g->ts, NULL};
             }
         }
+        /* Last chance: an extern global, which belongs to no package. */
+        g = ll_global_find(ll, n->name);
+        if (g) return (ll_addr_t){g->ptr, g->ts, NULL};
         ll_error(ll, n, "address of an unknown identifier '%s'", n->name);
         return (ll_addr_t){"null", n->type_str ? n->type_str : "i32", NULL};
     }
@@ -2344,6 +2385,15 @@ llv_t ll_expr(ll_t *ll, ast_node_t *n)
     case AST_CALL:
         return ll_call(ll, n);
     case AST_MEMBER: {
+        /* `pkg.f` read as a value (sema set func_value): its address, i64. */
+        if (n->func_value) {
+            const char *sym = ll_func_symbol(ll, n);
+            const char *r;
+            if (!sym) return ll_poison("i64");
+            r = ll_new_tmp(ll);
+            ll_emit(ll, "%s = ptrtoint ptr @%s to i64", r, sym);
+            return (llv_t){r, "i64"};
+        }
         if (n->a && n->a->kind == AST_IDENTIFIER) {
             symbol_t *e = ll_enum_sym(ll, n->a->name);
             if (e) {

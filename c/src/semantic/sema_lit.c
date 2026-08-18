@@ -109,7 +109,16 @@ static symbol_t *resolve_pkg_struct_lit(sema_t *s, ast_node_t *n, const char *do
              tname, pname);
         return NULL;
     }
-    n->name = tname;
+    /*
+     * The canonical "pkg_Name", not the bare "Name". Every backend resolves a
+     * struct literal by the name left here, and a bare name is resolved by
+     * first match: with `alpha.Input` and `beta.Input` both imported, a
+     * `beta.Input { b = "y" }` bound to alpha's struct, took alpha's field
+     * defaults, and silently dropped `b = "y"` because alpha has no such
+     * field. It only surfaced as a C error because the two shapes happened to
+     * be incompatible; where they agree, it compiled and produced wrong data.
+     */
+    n->name = (tsym->type && tsym->type->name) ? tsym->type->name : tname;
     return tsym;
 }
 

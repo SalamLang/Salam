@@ -168,6 +168,33 @@ const char *ll_mangle(ll_t *ll, const char *owner, const char *fn, func_sig_t *s
     return ll_mangle_in(ll, ll_pkg_of_scope(ll, ll->pkg_scope), owner, fn, sig);
 }
 
+/*
+ * A method's owner, spelled the one way every side of the call agrees on.
+ *
+ * It used to be the struct's DECLARED name, so `pa.Input.free` and
+ * `pb.Input.free` both mangled to @salam_Input_free: one body was emitted and
+ * every call to either bound to it. The bodies read `this` at their own
+ * struct's field offsets, so a call that got the wrong one loaded whatever
+ * happened to sit at that offset in the other layout - which is how a
+ * `Vector<i64>` receiver came out eight bytes past its real address and
+ * free() was handed the {count, cap} pair as if it were the data pointer.
+ * The C backend never had this: cg_mangle_method has always folded the
+ * owner's package into the name.
+ *
+ * The canonical type name is unique by construction and is exactly what a
+ * receiver's type_str already carries, so call sites can derive it without
+ * knowing anything the declared name did not already tell them.
+ */
+const char *ll_owner_key(ll_t *ll, symbol_t *osym)
+{
+    if (!osym) return NULL;
+    if (osym->type) {
+        const char *ts = type_to_string(ll->sem->tc, osym->type);
+        if (ts && ts[0]) return ts;
+    }
+    return osym->name;
+}
+
 func_sig_t *ll_pick_overload(ll_t *ll, symbol_t *sym, ast_node_t *call)
 {
     func_sig_t *arity = NULL;
@@ -316,7 +343,7 @@ void ll_function(ll_t *ll, ast_node_t *fn, symbol_t *owner)
     const char *fname = is_impl ? ll_mangle_ti(ll, recv_ts, fn->name, sig)
                         : (!owner && fn->is_extern)
                             ? fn->name
-                            : ll_mangle(ll, owner ? owner->name : NULL, fn->name, sig);
+                            : ll_mangle(ll, ll_owner_key(ll, owner), fn->name, sig);
     const char *recv_param = !owner    ? NULL
                              : is_impl ? ll_fmt(ll, "%s %%this", ll_ty(ll, recv_ts))
                                        : "ptr noundef %this";
@@ -508,7 +535,7 @@ static void ll_ensure_vtbl(ll_t *ll, const char *iface, const char *concrete)
             if (!strcmp(name, (const char *)ll->emitted.data[i])) return;
     }
     vec_push(ll->a, &ll->emitted, CONST_CAST(name));
-    symbol_t *isym = ll_sym(ll, iface), *csym = ll_sym(ll, concrete);
+    symbol_t *isym = ll_iface_sym(ll, iface), *csym = ll_sym(ll, concrete);
     if (!isym || isym->kind != SYM_INTERFACE || !csym || !csym->members) return;
     sb_t slots;
     sb_init(&slots);
@@ -525,8 +552,19 @@ static void ll_ensure_vtbl(ll_t *ll, const char *iface, const char *concrete)
             if (n) sb_puts(&slots, ", ");
             if (csig) {
                 ll_ensure_fn(ll, csig->decl, csym, ll->pkg_scope);
+                /*
+                 * Mangle on the struct's DECLARED name, the way ll_function
+                 * names the definition it just ensured - not on `concrete`,
+                 * which is the mangled type string. The two agree for a type
+                 * in the main module ("Circle"), and diverge for one a
+                 * package owns: the body is emitted as @salam_Fixed_Get_i32
+                 * while the slot asked for @salam_ifacedriver__Fixed_Get_i32,
+                 * leaving the vtable pointing at a symbol the module never
+                 * defines.
+                 */
                 sb_puts(&slots,
-                        ll_fmt(ll, "ptr @%s", ll_mangle(ll, concrete, im->name, csig)));
+                        ll_fmt(ll, "ptr @%s",
+                               ll_mangle(ll, ll_owner_key(ll, csym), im->name, csig)));
             } else {
                 sb_puts(&slots, "ptr null");
             }
@@ -927,6 +965,16 @@ static bool ll_const_agg(ll_t *ll, ast_node_t *n, const char **out)
 void ll_emit_globals(ll_t *ll, ast_node_t *program)
 {
     int any = 0;
+    /*
+     * Every global carries the package it was declared in. The LLVM backend
+     * puts the whole program in one module, so without that the second
+     * package to declare a `COLS` was skipped as "already emitted" and both
+     * packages then read the first one's storage - the same collision the C
+     * backend reported as a duplicate definition at link time, except here it
+     * linked and quietly returned the wrong value.
+     */
+    const char *pkg = ll_pkg_of_scope(ll, ll->pkg_scope);
+    if (!pkg) pkg = "main";
     {
         size_t i = 0;
         for (; i < program->list.len; i++) {
@@ -936,7 +984,7 @@ void ll_emit_globals(ll_t *ll, ast_node_t *program)
              * duplicate definition in the module. This lets the function be
              * called again for a package whose globals may or may not have
              * been emitted already, which ll_addr_of relies on. */
-            if (ll_global_find(ll, d->name)) continue;
+            if (ll_global_find_in(ll, pkg, d->name)) continue;
             /*
              * An extern *variable* - POSIX `environ`, which std/os/process
              * declares in its non-Windows branch. ll_emit_externs_in only
@@ -955,27 +1003,35 @@ void ll_emit_globals(ll_t *ll, ast_node_t *program)
                 ev->name = d->name;
                 ev->ptr = eref;
                 ev->ts = ets;
+                /* No package: it is the one object everyone links against. */
+                ev->pkg = NULL;
+                ev->init = NULL;
                 vec_push(ll->a, &ll->globals, ev);
                 any = 1;
                 continue;
             }
             const char *ts = d->type_str ? d->type_str : "i32";
-            const char *gref =
-                ll_fmt(ll, "@g.%s", ll_struct_ltype(ll, d->name) + strlen("%struct."));
+            const char *gref = ll_fmt(ll, "@g.%s.%s", pkg,
+                                      ll_struct_ltype(ll, d->name) + strlen("%struct."));
             const char *lty = ll_ty(ll, ts);
             const char *init;
             const char *cv;
-            if (d->a && ll_const_value(ll, d->a, &cv)) {
-                init = cv;
-            } else {
-                init = ll_zero(ll, ts);
-                if (d->a) vec_push(ll->a, &ll->gdefer, d);
-            }
-            sb_puts(ll->g, ll_fmt(ll, "%s = internal global %s %s\n", gref, lty, init));
             lvar_t *gv = (lvar_t *)arena_alloc(ll->a, sizeof *gv);
             gv->name = d->name;
             gv->ptr = gref;
             gv->ts = ts;
+            gv->pkg = pkg;
+            gv->init = NULL;
+            if (d->a && ll_const_value(ll, d->a, &cv)) {
+                init = cv;
+            } else {
+                init = ll_zero(ll, ts);
+                if (d->a) {
+                    gv->init = d->a;
+                    vec_push(ll->a, &ll->gdefer, gv);
+                }
+            }
+            sb_puts(ll->g, ll_fmt(ll, "%s = internal global %s %s\n", gref, lty, init));
             vec_push(ll->a, &ll->globals, gv);
             any = 1;
         }
@@ -1158,10 +1214,13 @@ void ll_emit_global_inits(ll_t *ll)
     {
         size_t i = 0;
         for (; i < ll->gdefer.len; i++) {
-            ast_node_t *d = (ast_node_t *)ll->gdefer.data[i];
-            lvar_t *g = ll_global_find(ll, d->name);
-            if (!g) continue;
-            const char *v = ll_conv(ll, ll_expr(ll, d->a), g->ts);
+            /* The lvar itself, not a name to look back up: two packages can
+             * have a global of the same name and the lookup would pick one
+             * of them at random. */
+            lvar_t *g = (lvar_t *)ll->gdefer.data[i];
+            const char *v;
+            if (!g || !g->init) continue;
+            v = ll_conv(ll, ll_expr(ll, g->init), g->ts);
             ll_emit(ll, "store %s %s, ptr %s", ll_ty(ll, g->ts), v, g->ptr);
         }
     }

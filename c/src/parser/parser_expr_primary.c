@@ -133,6 +133,18 @@ ast_node_t *parse_primary(parser_t *p)
         ast_node_t *n = p_mk(p, AST_FUNC_ADDR);
         p_advance(p);
         n->name = p_name(p, "expected a function name after '&'");
+        /* `&pkg.f`. Without this the '&' bound to the package identifier
+         * alone and the '.f' became a member access on it, which reported
+         * "'&pkg' requires a function". The package goes in `n->a`, the same
+         * shape a member access has, so the backends resolve both alike. */
+        if (p_at(p, TK_DOT) && p_peek2(p)->kind == TK_IDENT) {
+            ast_node_t *pkg = p_mk(p, AST_IDENTIFIER);
+            pkg->name = n->name;
+            p_fin(p, pkg);
+            p_advance(p);
+            n->name = p_name(p, "expected a function name after '&'");
+            n->a = pkg;
+        }
         p_fin(p, n);
         return n;
     }

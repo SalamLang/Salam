@@ -422,9 +422,16 @@ static const char *cg_struct_lit(cg_t *cg, ast_node_t *n)
                     }
                 }
             }
-            val = provided                  ? cg_expr(cg, provided->a)
-                  : (f->decl && f->decl->a) ? cg_expr(cg, f->decl->a)
-                                            : NULL;
+            if (provided) {
+                val = cg_expr(cg, provided->a);
+            } else if (f->decl && f->decl->a) {
+                scope_t *save_lit = cg->cur_lit_home;
+                cg->cur_lit_home = ssym->home;
+                val = cg_expr(cg, f->decl->a);
+                cg->cur_lit_home = save_lit;
+            } else {
+                val = NULL;
+            }
             if (!val) continue;
             if (cg_val_needs_hoist(val)) {
                 cg_sl_post_t *pf =
@@ -470,14 +477,60 @@ static const char *cg_struct_lit(cg_t *cg, ast_node_t *n)
 }
 
 /*
+ * The C spelling of a name that is not a local: a module-level global carries
+ * its package (cg_global_cname), anything else is the bare identifier. The
+ * cur_fn_home / cur_struct->home fallbacks mirror cg_func_addr - a generic
+ * body instantiated into another module is emitted with that module's global
+ * scope, so its own package's globals are only reachable through its home.
+ *
+ * An `extern` global keeps its declared C name; it names an object somebody
+ * else defined.
+ */
+const char *cg_global_ref(cg_t *cg, const char *name)
+{
+    symbol_t *g = scope_lookup(cg->sem->global, name);
+    if (!g || (g->kind != SYM_VAR && g->kind != SYM_CONST)) {
+        scope_t *homes[3];
+        size_t hi = 0;
+        g = NULL;
+        homes[0] = cg->cur_lit_home;
+        homes[1] = cg->cur_fn_home;
+        homes[2] = cg->cur_struct ? cg->cur_struct->home : NULL;
+        for (; hi < 3 && !g; hi++) {
+            symbol_t *hs = homes[hi] ? scope_lookup(homes[hi], name) : NULL;
+            if (hs && (hs->kind == SYM_VAR || hs->kind == SYM_CONST)) g = hs;
+        }
+    }
+    if (!g) return cg_cident(cg, name);
+    if (g->decl && g->decl->is_extern) return cg_cident(cg, name);
+    return cg_global_cname(cg, g->pkgname, name);
+}
+
+/*
  * The C symbol a function name denotes, as a void*. Shared by `&f` and by a
  * bare function name read as a value. An extern keeps its declared C name -
  * it is not one of ours to mangle.
  */
 static const char *cg_func_addr(cg_t *cg, ast_node_t *n)
 {
-    symbol_t *fsym = scope_lookup(cg->sem->global, n->name);
+    symbol_t *fsym;
     const char *home_pkg = NULL;
+    /* `pkg.f` as a value: the function lives in the package's member scope,
+     * not in this module's global one, and mangles with the package it was
+     * declared in rather than the one doing the reading. */
+    if (n->a && n->a->kind == AST_IDENTIFIER) {
+        symbol_t *pk = scope_lookup(cg->sem->global, n->a->name);
+        if (!pk && cg->cur_fn_home) pk = scope_lookup(cg->cur_fn_home, n->a->name);
+        if (pk && pk->kind == SYM_PACKAGE && pk->members) {
+            symbol_t *m = scope_lookup_local(pk->members, n->name);
+            if (m && m->kind == SYM_FUNC) {
+                fsym = m;
+                home_pkg = m->pkgname ? m->pkgname : pk->pkgname;
+                goto have_sym;
+            }
+        }
+    }
+    fsym = scope_lookup(cg->sem->global, n->name);
     if (!fsym && cg->cur_fn_home) {
         symbol_t *hs = scope_lookup(cg->cur_fn_home, n->name);
         if (hs && hs->kind == SYM_FUNC) {
@@ -492,6 +545,7 @@ static const char *cg_func_addr(cg_t *cg, ast_node_t *n)
             home_pkg = hs->pkgname;
         }
     }
+have_sym:;
     func_sig_t *sig =
         (fsym && fsym->overloads.len == 1) ? (func_sig_t *)fsym->overloads.data[0] : NULL;
     bool is_extern_fn = sig && sig->decl && sig->decl->is_extern;
@@ -597,7 +651,7 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
             if (f && f->kind == SYM_FIELD)
                 return cg_fmt(cg, "this->%s", cg_cident(cg, n->name));
         }
-        return cg_cident(cg, n->name);
+        return cg_global_ref(cg, n->name);
     case AST_FUNC_ADDR:
         return cg_func_addr(cg, n);
     case AST_THIS:
@@ -804,6 +858,8 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
     case AST_CALL:
         return cg_call(cg, n);
     case AST_MEMBER: {
+        /* `pkg.f` read as a value (sema set func_value): its address. */
+        if (n->func_value) return cg_fmt(cg, "(int64_t)%s", cg_func_addr(cg, n));
         if (n->a && n->a->kind == AST_IDENTIFIER && !local_known(cg, n->a->name)) {
             symbol_t *e = scope_lookup(cg->sem->global, n->a->name);
             /*

@@ -133,15 +133,16 @@ static void emit_globals(cg_t *cg, ast_node_t *program)
             if (d->kind != AST_CONST_DECL && d->kind != AST_VAR_DECL) continue;
             if (d->is_extern) continue;
             const char *ts = d->type_str ? d->type_str : "int32_t";
-            const char *decl = cg_decl(cg, ts, d->name);
+            /* Package-qualified, so two modules can each declare `COLS`. */
+            const char *gname = cg_global_cname(cg, cg->pkg, d->name);
+            const char *decl = cg_decl_cn(cg, ts, gname);
             bool is_array = ts && strchr(ts, '[');
             bool can_defer =
                 d->kind == AST_VAR_DECL && d->a && d->a->kind != AST_LITERAL && !is_array;
             if (can_defer) {
                 sb_puts(cg->c, cg_fmt(cg, "%s;\n", decl));
                 vec_push(cg->a, &cg->deferred,
-                         CONST_CAST(cg_fmt(cg, "%s = %s;", cg_cident(cg, d->name),
-                                           cg_expr(cg, d->a))));
+                         CONST_CAST(cg_fmt(cg, "%s = %s;", gname, cg_expr(cg, d->a))));
             } else {
                 /*
                  * Arrays are excluded on purpose. A Salam array parameter is

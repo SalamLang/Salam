@@ -169,10 +169,9 @@ func _dgstr(s: str, i: int, endpos &: int): str:
             else e == 114: str.BufAppendChar(sb, 13)
             else e == 116: str.BufAppendChar(sb, 9)
             else e == 117:
-                code := _dhex4(s, p + 1)
-                if code < 0: break end
-                str.BufAppendChar(sb, code)
-                p += 4
+                q := _dcp(s, p, sb)
+                if q < 0: break end
+                p = q
             else:
                 str.BufFree(sb)
                 endpos = -1
@@ -220,6 +219,38 @@ func _dhexval(c: int): int:
     if c >= 97 && c <= 102: ret c - 87 end
     if c >= 65 && c <= 70: ret c - 55 end
     ret -1
+end
+
+// _dcp - resolves the \uXXXX escape whose 'u' sits at `p` and appends the code
+// point it denotes as UTF-8. Returns the index of the last byte consumed, or
+// -1 when the four hex digits are not there.
+//
+// Python's json.dumps and PHP's json_encode escape every non-ASCII character
+// by default, so this - not the raw-UTF-8 path - is what a Salam service
+// actually receives from such a client. Appending the value as a single byte
+// truncated each code point to its low byte, so U+0645 arrived as 'E' and a
+// Persian name reached the database as mojibake with no error anywhere.
+//
+// A code point past the BMP is written as a UTF-16 surrogate pair
+// (`\uD83D\uDE00`), so a high surrogate looks ahead for its low half and
+// joins the two. A surrogate that stays unpaired is not a code point at all;
+// it becomes U+FFFD rather than the CESU-8 that encoding it on its own would
+// produce.
+func _dcp(s: str, p: int, sb &: str.StringBuilder): int:
+    hi := _dhex4(s, p + 1)
+    if hi < 0: ret -1 end
+    mut q := p + 4
+    mut cp := hi
+    if hi >= 0xD800 && hi <= 0xDBFF && _dbyte(s, q + 1) == 92 && _dbyte(s, q + 2) == 117:
+        lo := _dhex4(s, q + 3)
+        if lo >= 0xDC00 && lo <= 0xDFFF:
+            cp = 0x10000 + ((hi - 0xD800) * 0x400) + (lo - 0xDC00)
+            q = q + 6
+        end
+    end
+    if cp >= 0xD800 && cp <= 0xDFFF: cp = 0xFFFD end
+    str.BufAppendCp(sb, cp)
+    ret q
 end
 
 // _dpint - digits to i64, by hand. str.to_int() is 32 bits wide, so an id

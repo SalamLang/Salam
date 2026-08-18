@@ -42,6 +42,14 @@ typedef struct {
     const char *name;
     const char *ptr;
     const char *ts;
+    /* Set on module-level globals: the package that declared this one, so two
+     * packages can each have a `COLS` without the second silently binding to
+     * the first's storage. NULL on function locals and on extern globals,
+     * which name one object the whole program shares. */
+    const char *pkg;
+    /* A module-level global whose initialiser is not an LLVM constant: the
+     * expression, replayed by ll_emit_global_inits. */
+    ast_node_t *init;
 } lvar_t;
 
 typedef struct {
@@ -203,6 +211,11 @@ lvar_t *ll_local_find(ll_t *ll, const char *name);
 
 lvar_t *ll_global_find(ll_t *ll, const char *name);
 
+/* ll_global_find restricted to the package that declared the global.
+ * A NULL `pkg` on either side matches anything, which is what keeps
+ * extern globals (shared by the whole program) reachable. */
+lvar_t *ll_global_find_in(ll_t *ll, const char *pkg, const char *name);
+
 int ll_int_bits(ll_t *ll, const char *ts);
 
 int ll_target_ptr_bits(const char *triple);
@@ -252,6 +265,9 @@ void ll_type_layout(ll_t *ll, const char *ts, size_t *out_size, size_t *out_alig
 int ll_variant_tag_of(const char *variant_ts, const char *member_ts);
 
 symbol_t *ll_sym(ll_t *ll, const char *name);
+/* Like ll_sym, but resolves the canonical "pkg_Iface" spelling of an
+ * interface that ll_sym cannot reach. */
+symbol_t *ll_iface_sym(ll_t *ll, const char *name);
 
 symbol_t *ll_struct_sym(ll_t *ll, const char *name);
 scope_t *ll_scope_of(ll_t *ll, symbol_t *want);
@@ -288,6 +304,10 @@ void ll_block_top(ll_t *ll, ast_node_t *block);
 void ll_emit_return(ll_t *ll, ast_node_t *value);
 
 const char *ll_mangle(ll_t *ll, const char *owner, const char *fn, func_sig_t *sig);
+
+/* The owner spelling every method mangling must agree on: the struct's
+ * canonical "pkg_Name" type name, not its declared "Name". */
+const char *ll_owner_key(ll_t *ll, symbol_t *osym);
 const char *ll_mangle_in(ll_t *ll, const char *pkg, const char *owner, const char *fn,
                          func_sig_t *sig);
 const char *ll_pkg_of_scope(ll_t *ll, scope_t *sc);

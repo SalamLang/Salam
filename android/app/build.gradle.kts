@@ -83,15 +83,16 @@ android {
 
     packaging {
         resources {
-            excludes += setOf(
-                "META-INF/*.version",
-                "META-INF/DEPENDENCIES",
-                "META-INF/LICENSE*",
-                "META-INF/NOTICE*",
-                "META-INF/*.kotlin_module",
-                "kotlin/**",
-                "DebugProbesKt.bin",
-            )
+            excludes +=
+                setOf(
+                    "META-INF/*.version",
+                    "META-INF/DEPENDENCIES",
+                    "META-INF/LICENSE*",
+                    "META-INF/NOTICE*",
+                    "META-INF/*.kotlin_module",
+                    "kotlin/**",
+                    "DebugProbesKt.bin",
+                )
         }
     }
 

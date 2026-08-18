@@ -78,25 +78,39 @@ end
 
 // SinceNanos/SinceUs/SinceMs/SinceSec are the "just tell me how long since
 // t0" shorthand for ElapsedNanos/Us/Ms/Sec(t0, MonoNanos()) - handy when
-// there is no separate "end" timestamp to keep around.
+// there is no separate "end" timestamp to keep around. Each one reads the
+// clock itself, so two of them never see the same instant.
 func test_since_unit_conversions():
     t0 := time.MonoNanos()
     _sink := work(500000)
 
-    ns := time.SinceNanos(t0)
+    // Every Since* call re-reads the clock, so the four reads below are four
+    // different instants and comparing two of them against each other can
+    // only ever be a race. Bracket them with a plain SinceNanos read on each
+    // side instead: whatever each Since* read, it happened at or after "lo"
+    // and at or before "hi", so converting it back to nanoseconds has to land
+    // inside [lo, hi] no matter how long the scheduler stalls in between.
+    // That pins the conversion factors exactly and cannot go flaky.
+    lo := time.SinceNanos(t0)
     us := time.SinceUs(t0)
     ms := time.SinceMs(t0)
     sec := time.SinceSec(t0)
+    hi := time.SinceNanos(t0)
 
-    testing.AssertTrue(ns > 0)
+    testing.AssertTrue(lo > 0)
     testing.AssertTrue(us > 0.0)
     testing.AssertTrue(ms >= 0.0)
     testing.AssertTrue(sec >= 0.0)
-    // Later reads (seconds, the coarsest) can only be >= earlier ones scaled
-    // down, since each call re-reads the clock a little later than the last.
-    testing.AssertTrue(sec * 1000.0 <= ms + 1.0)
-    testing.AssertTrue(ms * 1000.0 <= us + 1.0)
-    testing.AssertTrue(us * 1000.0 <= (ns as f64) + 1000000.0)
+    testing.AssertTrue(hi >= lo)
+    // The 1.0 ns of slack is for the float round-trip only (f64 keeps ~15
+    // significant digits, so scaling a nanosecond count down and back up is
+    // exact to far better than a nanosecond), not for timing wobble.
+    testing.AssertTrue(us * 1000.0 >= (lo as f64) - 1.0)
+    testing.AssertTrue(us * 1000.0 <= (hi as f64) + 1.0)
+    testing.AssertTrue(ms * 1000000.0 >= (lo as f64) - 1.0)
+    testing.AssertTrue(ms * 1000000.0 <= (hi as f64) + 1.0)
+    testing.AssertTrue(sec * 1000000000.0 >= (lo as f64) - 1.0)
+    testing.AssertTrue(sec * 1000000000.0 <= (hi as f64) + 1.0)
 end
 
 // Averaging several runs (a common benchmarking technique to smooth out

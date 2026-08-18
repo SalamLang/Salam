@@ -147,6 +147,56 @@ pure func _utcEpoch(y: int, mo: int, d: int, h: int, mi: int, s: int): i64:
     ret _daysFromCivil(y, mo, d) * 86400 + (h as i64) * 3600 + (mi as i64) * 60 + (s as i64)
 end
 
+// Floor modulo, the companion to _pfloordiv.
+pure func _pfloormod(a: i64, b: i64): i64:
+    ret a - _pfloordiv(a, b) * b
+end
+
+// Epoch seconds -> civil UTC fields: the exact inverse of _daysFromCivil
+// (Hinnant's civil_from_days), read out one `struct tm` field at a time so
+// it can stand in for gmtime().
+//
+// This REPLACES libc gmtime rather than merely backing it up. The MSVC CRT
+// cannot represent a negative time_t and returns NULL for every pre-1970
+// instant, so on Windows those came back as all-zero fields - Year() 1900,
+// Month() 1, Day() 0 - and the text the formatters then wrote no longer
+// parsed. The arithmetic here is proleptic Gregorian and defined for every
+// i64: it agrees with glibc across the range glibc handles, and keeps
+// working outside it.
+//
+// `idx` is the C struct tm field order: 0 sec, 1 min, 2 hour, 3 mday,
+// 4 mon (0-11), 5 year (since 1900), 6 wday (0 = Sunday), 7 yday (0-based).
+pure func _gmFieldPure(epoch: i64, idx: int): int:
+    days := _pfloordiv(epoch, 86400)
+    // Floored, so this is the seconds into the day and never negative.
+    secs := epoch - days * 86400
+    if idx == 0: ret (secs % 60) as int end
+    if idx == 1: ret ((secs / 60) % 60) as int end
+    if idx == 2: ret (secs / 3600) as int end
+    // 1970-01-01 was a Thursday, so day 0 is weekday 4.
+    if idx == 6: ret _pfloormod(days + 4, 7) as int end
+
+    // Shift the era so the year starts in March and the leap day lands at
+    // the end of it, which is what removes every special case below.
+    z := days + 719468
+    era := _pfloordiv(z, 146097)
+    doe := z - era * 146097
+    yoe := (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365
+    doy := doe - (365 * yoe + yoe / 4 - yoe / 100)
+    mp := (5 * doy + 2) / 153
+    d := doy - (153 * mp + 2) / 5 + 1
+    mut m := mp + 3
+    if mp >= 10: m = mp - 9 end
+    mut y := yoe + era * 400
+    if m <= 2: y = y + 1 end
+
+    if idx == 3: ret d as int end
+    if idx == 4: ret (m - 1) as int end
+    if idx == 5: ret (y - 1900) as int end
+    if idx == 7: ret (days - _daysFromCivil(y as int, 1, 1)) as int end
+    ret 0
+end
+
 // Local wall-clock fields -> epoch seconds, via libc mktime, so the host's
 // real DST rules decide. tm_isdst = -1 asks mktime to work out for itself
 // whether DST was in force, which is what makes a repeated or skipped hour

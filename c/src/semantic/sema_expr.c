@@ -408,9 +408,19 @@ static type_t *check_member(sema_t *s, ast_node_t *n)
                 return decorate(s, n, err_ty(s));
             }
             if (m->kind == SYM_FUNC) {
-                SERR(s, 17, &n->span, "function '%s.%s' used as a value (call it)",
-                     pk->name, n->name);
-                return decorate(s, n, err_ty(s));
+                /*
+                 * `pkg.f` read as a value decays to its address, typed i64 -
+                 * exactly what a bare `f` in the current package does. It used
+                 * to be rejected outright, so every function a router or any
+                 * other handler table points at had to live in the same file
+                 * as the table.
+                 */
+                if (!func_addr_target_ok(s, m, n)) return decorate(s, n, err_ty(s));
+                m->used = true;
+                dce_mark_root(m->pkgname ? m->pkgname : pk->name, m->name);
+                decorate(s, n->a, pk->type);
+                n->func_value = true;
+                return decorate(s, n, ty(s, TY_I64));
             }
             if (m->kind == SYM_ENUM || m->kind == SYM_STRUCT) {
                 /*
@@ -585,6 +595,33 @@ type_t *sema_check_expr(sema_t *s, ast_node_t *n)
     }
     case AST_FUNC_ADDR: {
         if (ast_name_is_err(n->name)) return decorate(s, n, err_ty(s));
+        /* `&pkg.f` - the package identifier the parser parked in n->a. */
+        if (n->a && n->a->kind == AST_IDENTIFIER) {
+            symbol_t *pk = scope_lookup(s->cur, n->a->name);
+            symbol_t *m;
+            if (!pk || pk->kind != SYM_PACKAGE) {
+                SERR(s, 1, &n->span, "unknown package '%s' in '&%s.%s'", n->a->name,
+                     n->a->name, n->name);
+                return decorate(s, n, err_ty(s));
+            }
+            n->name = pkg_member_canon(s, pk, n->name, &n->span);
+            m = scope_lookup_local(pk->members, n->name);
+            if (!m || m->kind != SYM_FUNC) {
+                SERR(s, 72, &n->span, "'&%s.%s' requires a function", pk->name, n->name);
+                return decorate(s, n, err_ty(s));
+            }
+            if (!m->is_pub) {
+                SERR(s, 17, &n->span,
+                     "'%s' is not exported by package '%s' (mark it 'pub')", n->name,
+                     pk->name);
+                return decorate(s, n, err_ty(s));
+            }
+            if (!func_addr_target_ok(s, m, n)) return decorate(s, n, err_ty(s));
+            m->used = true;
+            dce_mark_root(m->pkgname ? m->pkgname : pk->name, m->name);
+            decorate(s, n->a, pk->type);
+            return decorate(s, n, type_ptr(s->tc, ty(s, TY_VOID)));
+        }
         symbol_t *sym = scope_lookup(s->cur, n->name);
         if (!sym) {
             const char *c = local_canon(s, n->name, &n->span);

@@ -450,7 +450,10 @@ func cg_struct_lit(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
                 val = cg_expr(g, s, a, at.Get(a, provided).a)
                 has_val = true
             else f.decl != 0 && at.Get(a, f.decl).a != 0:
+                save_lit := g.cur_lit_home
+                g.cur_lit_home = sm.SymAt(s, ssym).home
                 val = cg_expr(g, s, a, at.Get(a, f.decl).a)
+                g.cur_lit_home = save_lit
                 has_val = true
             end
             if !has_val:
@@ -503,6 +506,82 @@ end
 // it is not ours to mangle; without this a libc extern emits a symbol that
 // exists nowhere (`printf` in std/llvm/orc.salam became
 // `_Salam_llvm_printf_str`).
+// The C spelling of a name that is not a local: a module-level global carries
+// its package (cg_global_cname), anything else is the bare identifier. The
+// cur_lit_home / cur_fn_home / cur_struct fallbacks mirror cg_func_addr - a
+// generic body instantiated into another module is emitted with that module's
+// global scope, so its own package's globals are only reachable through its
+// home.
+//
+// An `extern` global keeps its declared C name; it names an object somebody
+// else defined.
+func cg_global_ref(g &: Cg, s &: sm.Sema, a &: at.Ast, name: str): str:
+    mut gsym := sm.Lookup(s, s.global, name)
+    if gsym != 0:
+        gk := sm.SymAt(s, gsym).kind
+        if gk != sm.SYM_VAR && gk != sm.SYM_CONST:
+            gsym = 0
+        end
+    end
+    mut homes := Vector {} as Vector<int>
+    defer homes.free()
+    homes.push(g.cur_lit_home)
+    homes.push(g.cur_fn_home)
+    homes.push(g.cur_struct != 0 ? sm.SymAt(s, g.cur_struct).home : 0)
+    repeat homes.len() with i:
+        if gsym == 0 && homes.get(i) != 0:
+            hs := sm.Lookup(s, homes.get(i), name)
+            if hs != 0 && (sm.SymAt(s, hs).kind == sm.SYM_VAR || sm.SymAt(s, hs).kind == sm.SYM_CONST):
+                gsym = hs
+            end
+        end
+    end
+    if gsym == 0:
+        ret cg_cident(name)
+    end
+    gv := sm.SymAt(s, gsym)
+    if gv.decl != 0 && at.Get(a, gv.decl).is_extern:
+        ret cg_cident(name)
+    end
+    ret cg_global_cname(gv.pkgname, name)
+end
+
+// `pkg.f` as a value: the function lives in the package's member scope, not in
+// this module's global one, and mangles with the package it was declared in
+// rather than the one doing the reading. `pkgid` is the AST_IDENTIFIER naming
+// the package (0 when the reference was unqualified).
+func cg_func_addr_pkg(g &: Cg, s &: sm.Sema, a &: at.Ast, pkgid: int, name: str): str:
+    if pkgid != 0 && at.KindOf(a, pkgid) == at.AST_IDENTIFIER:
+        pname := at.Get(a, pkgid).name
+        mut pk := sm.Lookup(s, s.global, pname)
+        if pk == 0 && g.cur_fn_home != 0:
+            pk = sm.Lookup(s, g.cur_fn_home, pname)
+        end
+        if pk != 0 && sm.SymAt(s, pk).kind == sm.SYM_PACKAGE && sm.SymAt(s, pk).members != 0:
+            m := sm.LookupLocal(s, sm.SymAt(s, pk).members, name)
+            if m != 0 && sm.SymAt(s, m).kind == sm.SYM_FUNC:
+                mv := sm.SymAt(s, m)
+                mut msig := 0
+                if mv.overloads.len() == 1:
+                    msig = mv.overloads.get(0)
+                end
+                if msig != 0 && sm.SigAt(s, msig).decl != 0 && at.Get(a, sm.SigAt(s, msig).decl).is_extern:
+                    ret "((void*)(&" + name + "))"
+                end
+                mpkg := str.Len(mv.pkgname) > 0 ? mv.pkgname : sm.SymAt(s, pk).pkgname
+                if msig != 0:
+                    ret "((void*)(&" + cg_mangle_in(s, mpkg, "", name, sm.SigAt(s, msig).params) + "))"
+                end
+                mut mempty := Vector {} as Vector<int>
+                mraw := cg_mangle_in(s, mpkg, "", name, mempty)
+                mempty.free()
+                ret "((void*)(&" + mraw + "))"
+            end
+        end
+    end
+    ret cg_func_addr(g, s, a, name)
+end
+
 func cg_func_addr(g &: Cg, s &: sm.Sema, a &: at.Ast, name: str): str:
     mut fsym := sm.Lookup(s, s.global, name)
     mut home_pkg := ""
@@ -655,10 +734,10 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
                 ret "this->" + cg_cident(nn.name)
             end
         end
-        ret cg_cident(nn.name)
+        ret cg_global_ref(g, s, a, nn.name)
     end
     if k == at.AST_FUNC_ADDR:
-        ret cg_func_addr(g, s, a, nn.name)
+        ret cg_func_addr_pkg(g, s, a, nn.a, nn.name)
     end
     if k == at.AST_THIS:
         ret "this"
@@ -856,6 +935,10 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
         ret cg_call(g, s, a, n)
     end
     if k == at.AST_MEMBER:
+        // `pkg.f` read as a value (sema set func_value): its address.
+        if nn.func_value:
+            ret "(int64_t)" + cg_func_addr_pkg(g, s, a, nn.a, nn.name)
+        end
         an2 := at.Get(a, nn.a)
         if nn.a != 0 && an2.kind == at.AST_IDENTIFIER && !local_known(g, an2.name):
             mut e := sm.Lookup(s, s.global, an2.name)

@@ -1114,10 +1114,26 @@ jobs:
             # shellcheck disable=SC2086
             # -DCMAKE_COMPILE_WARNING_AS_ERROR=OFF: see the Linux job's copy
             # of build_mariadb for why this is load-bearing on musl targets.
+            #
+            # WITH_CURL=OFF is not enough to keep curl out: CMakeLists.txt:74
+            # runs FIND_PACKAGE(CURL) unconditionally, before it ever looks at
+            # the option. On this runner that finds MSYS2's CURLConfig.cmake,
+            # which find_dependency(Brotli)'s its way into a FindBrotli.cmake
+            # that calls pkg_check_modules - a command that only exists once
+            # FindPkgConfig has been loaded, and ssl_args deliberately sets
+            # CMAKE_DISABLE_FIND_PACKAGE_PkgConfig=ON to stop FindOpenSSL
+            # resolving the wrong OpenSSL. So the two settings collided:
+            # "Unknown CMake command pkg_check_modules", and every musl target
+            # lost its mariadb again. Disabling the CURL lookup outright is
+            # what WITH_CURL=OFF was asking for anyway.
+            #
+            # This only surfaced once the cross compiler could link at all -
+            # before that CMake stopped at its own compiler check.
             if ( cd "$mb_dir" \
                  && cmake /tmp/mariadb-src -G "MSYS Makefiles" -DCMAKE_BUILD_TYPE=Release \
                       -DCMAKE_COMPILE_WARNING_AS_ERROR=OFF \
-                      -DWITH_UNIT_TESTS=OFF -DWITH_CURL=OFF $ssl_args $extra_args \
+                      -DWITH_UNIT_TESTS=OFF -DWITH_CURL=OFF \
+                      -DCMAKE_DISABLE_FIND_PACKAGE_CURL=ON $ssl_args $extra_args \
                  && cmake --build . --target mariadbclient -j"$(nproc)" ) \
                  >"$mb_dir.log" 2>&1; then
               LIB=$(find "$mb_dir" -name "libmariadbclient.a" | head -1)

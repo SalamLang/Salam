@@ -267,7 +267,9 @@ static void parse_headers(struct conn *c, const char *end_of_headers)
         if (strncasecmp(p, "close", 5) == 0) c->will_close = 1;
     }
     if (xfer_enc &&
-        hdr_find(xfer_enc, 40 < (size_t)(c->hdr + hl - xfer_enc) ? 40 : (size_t)(c->hdr + hl - xfer_enc),
+        hdr_find(xfer_enc,
+                 40 < (size_t)(c->hdr + hl - xfer_enc) ? 40
+                                                       : (size_t)(c->hdr + hl - xfer_enc),
                  "chunked")) {
         c->mode = BODY_CHUNKED;
         c->chunk_need_size = 1;

@@ -73,9 +73,9 @@ typedef struct {
     int status;
     int ntuples;
     int nfields;
-    char **names;   /* nfields */
+    char **names;        /* nfields */
     unsigned int *types; /* nfields */
-    char **cells;   /* ntuples * nfields, NULL for SQL NULL */
+    char **cells;        /* ntuples * nfields, NULL for SQL NULL */
     char cmdtuples[32];
     char errbuf[512];
 } PgResult;

@@ -659,8 +659,22 @@ static void ll_fill_defaults(ll_t *ll, sb_t *ab, ast_node_t *n, func_sig_t *sig,
  */
 static const char *ll_func_symbol(ll_t *ll, ast_node_t *n)
 {
-    symbol_t *fsym = ll_sym(ll, n->name);
+    symbol_t *fsym = NULL;
+    symbol_t *pk = NULL;
     func_sig_t *sig;
+    /* `pkg.f` as a value: the function is in the package's member scope and
+     * mangles with the package that declared it, not the reading one. */
+    if (n->a && n->a->kind == AST_IDENTIFIER) {
+        symbol_t *p = ll_sym(ll, n->a->name);
+        if (p && p->kind == SYM_PACKAGE && p->members) {
+            symbol_t *m = scope_lookup_local(p->members, n->name);
+            if (m && m->kind == SYM_FUNC) {
+                fsym = m;
+                pk = p;
+            }
+        }
+    }
+    if (!fsym) fsym = ll_sym(ll, n->name);
     if (!fsym || fsym->kind != SYM_FUNC || fsym->overloads.len != 1) {
         ll_error(ll, n, "cannot take the address of '%s'", n->name);
         return NULL;
@@ -669,6 +683,16 @@ static const char *ll_func_symbol(ll_t *ll, ast_node_t *n)
     if (!sig->decl) {
         ll_error(ll, n, "cannot take the address of '%s'", n->name);
         return NULL;
+    }
+    if (pk) {
+        const char *sym;
+        scope_t *saved = ll->pkg_scope;
+        ll_touch_pkg(ll, pk);
+        ll->pkg_scope = pk->members;
+        ll_ensure_fn(ll, sig->decl, NULL, pk->members);
+        sym = sig->decl->is_extern ? n->name : ll_mangle(ll, NULL, n->name, sig);
+        ll->pkg_scope = saved;
+        return sym;
     }
     ll_ensure_fn(ll, sig->decl, NULL, ll->pkg_scope);
     return sig->decl->is_extern ? n->name : ll_mangle(ll, NULL, n->name, sig);
@@ -2357,6 +2381,15 @@ llv_t ll_expr(ll_t *ll, ast_node_t *n)
     case AST_CALL:
         return ll_call(ll, n);
     case AST_MEMBER: {
+        /* `pkg.f` read as a value (sema set func_value): its address, i64. */
+        if (n->func_value) {
+            const char *sym = ll_func_symbol(ll, n);
+            const char *r;
+            if (!sym) return ll_poison("i64");
+            r = ll_new_tmp(ll);
+            ll_emit(ll, "%s = ptrtoint ptr @%s to i64", r, sym);
+            return (llv_t){r, "i64"};
+        }
         if (n->a && n->a->kind == AST_IDENTIFIER) {
             symbol_t *e = ll_enum_sym(ll, n->a->name);
             if (e) {

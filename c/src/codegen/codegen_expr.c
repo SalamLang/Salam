@@ -513,8 +513,24 @@ const char *cg_global_ref(cg_t *cg, const char *name)
  */
 static const char *cg_func_addr(cg_t *cg, ast_node_t *n)
 {
-    symbol_t *fsym = scope_lookup(cg->sem->global, n->name);
+    symbol_t *fsym;
     const char *home_pkg = NULL;
+    /* `pkg.f` as a value: the function lives in the package's member scope,
+     * not in this module's global one, and mangles with the package it was
+     * declared in rather than the one doing the reading. */
+    if (n->a && n->a->kind == AST_IDENTIFIER) {
+        symbol_t *pk = scope_lookup(cg->sem->global, n->a->name);
+        if (!pk && cg->cur_fn_home) pk = scope_lookup(cg->cur_fn_home, n->a->name);
+        if (pk && pk->kind == SYM_PACKAGE && pk->members) {
+            symbol_t *m = scope_lookup_local(pk->members, n->name);
+            if (m && m->kind == SYM_FUNC) {
+                fsym = m;
+                home_pkg = m->pkgname ? m->pkgname : pk->pkgname;
+                goto have_sym;
+            }
+        }
+    }
+    fsym = scope_lookup(cg->sem->global, n->name);
     if (!fsym && cg->cur_fn_home) {
         symbol_t *hs = scope_lookup(cg->cur_fn_home, n->name);
         if (hs && hs->kind == SYM_FUNC) {
@@ -529,6 +545,7 @@ static const char *cg_func_addr(cg_t *cg, ast_node_t *n)
             home_pkg = hs->pkgname;
         }
     }
+have_sym:;
     func_sig_t *sig =
         (fsym && fsym->overloads.len == 1) ? (func_sig_t *)fsym->overloads.data[0] : NULL;
     bool is_extern_fn = sig && sig->decl && sig->decl->is_extern;
@@ -841,6 +858,8 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
     case AST_CALL:
         return cg_call(cg, n);
     case AST_MEMBER: {
+        /* `pkg.f` read as a value (sema set func_value): its address. */
+        if (n->func_value) return cg_fmt(cg, "(int64_t)%s", cg_func_addr(cg, n));
         if (n->a && n->a->kind == AST_IDENTIFIER && !local_known(cg, n->a->name)) {
             symbol_t *e = scope_lookup(cg->sem->global, n->a->name);
             /*

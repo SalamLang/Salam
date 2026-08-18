@@ -108,11 +108,11 @@ can never block the release of the core 64-bit platforms.
 
 ## ✅ Recommendation
 
-| Goal                            | Recommendation                                                                                   |
-| ------------------------------- | ------------------------------------------------------------------------------------------------ |
-| 🎯 Targeting 32-bit programs    | Use `salam build` (C backend). Correct and complete on every platform today.                     |
-| 🔬 LLVM pipeline on 32-bit      | Pass an explicit `--target=` (e.g. `i686-linux-gnu`, `armv7-linux-gnueabihf`, `wasm32-wasi`) so the IR is emitted with the right `usize` width. |
-| 🏎️ 64-bit users                 | Nothing changes.                                                                                 |
+| Goal                         | Recommendation                                                                                                                                  |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| 🎯 Targeting 32-bit programs | Use `salam build` (C backend). Correct and complete on every platform today.                                                                    |
+| 🔬 LLVM pipeline on 32-bit   | Pass an explicit `--target=` (e.g. `i686-linux-gnu`, `armv7-linux-gnueabihf`, `wasm32-wasi`) so the IR is emitted with the right `usize` width. |
+| 🏎️ 64-bit users              | Nothing changes.                                                                                                                                |
 
 ## 🔗 Related
 

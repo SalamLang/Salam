@@ -1,25 +1,43 @@
 # 🚀 Getting Started with Salam
 
-## What is Salam?
+## 🌍 What is Salam?
 
-**Salam** (سلام - _peace_) is a statically typed, compiled, general-purpose systems programming language designed to be efficient, readable, and inclusive.
+**Salam** (سلام — _peace_) is a statically typed, compiled, general-purpose systems programming language designed to be efficient, readable, and inclusive.
 
-- Write code in **English**, **Persian (فارسی)**, or **Arabic (العربية)**.
-- The general language transpiles to C and compiles to a native executable.
-- A built-in **layout DSL** compiles `.salam` files directly to HTML, CSS, and JavaScript.
-- Runs in the browser via the [web playground](https://salamlang.github.io/Salam/).
+- ✏️ Write code in **English**, **Persian (فارسی)**, or **Arabic (العربية)**.
+- ⚡ The general language transpiles to C and compiles to a native executable.
+- 🌐 A built-in **layout DSL** compiles `.salam` files directly to HTML, CSS, and JavaScript.
+- 🔗 Runs in the browser via the [web playground](https://salamlang.github.io/Salam/).
 
 ## ✅ Prerequisites
 
 | Requirement                        | Notes                                                                                                                 |
 | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | A C compiler                       | [**tcc**](https://bellard.org/tcc/) (bundled, fast), [gcc](https://gcc.gnu.org/), or [clang](https://clang.llvm.org/) |
-| [CMake](https://cmake.org/) ≥ 3.15 | Optional - needed for the CMake build and test suite                                                                  |
+| [CMake](https://cmake.org/) ≥ 3.15 | Optional — needed for the CMake build and test suite                                                                  |
 | [Git](https://git-scm.com/)        | To clone the repository                                                                                               |
 
 No other runtime or library is required. `salam build` inlines a small C runtime into every generated file, so programs link only `-lm`.
 
-## 🔨 Build the compiler
+## ⚡ Quick Install
+
+The fastest way to get `salam` on your machine:
+
+**GNU/Linux & macOS:**
+
+```sh
+{ curl -fsSL https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.sh || wget -qO- https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.sh; } | sh && export PATH="$HOME/.salam/bin:$PATH"
+```
+
+**Windows:**
+
+```bat
+powershell -NoProfile -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; (New-Object Net.WebClient).DownloadFile('https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.bat','%TEMP%\salam-install.bat')" && call "%TEMP%\salam-install.bat" && set "PATH=%USERPROFILE%\.salam\bin;%PATH%"
+```
+
+Or download a pre-built binary from [GitHub Releases](https://github.com/SalamLang/Salam/releases).
+
+## 🔨 Build the Compiler from Source
 
 The compiler source lives in [`compiler/`](../compiler/). All build commands are run from that directory.
 
@@ -27,7 +45,7 @@ The compiler source lives in [`compiler/`](../compiler/). All build commands are
 cd compiler
 ```
 
-### Quick build (tcc)
+### ⚡ Quick build (tcc)
 
 ```sh
 sh tools/bash/build-compiler.sh   # produces ./salam
@@ -35,7 +53,7 @@ sh tools/bash/build-compiler.sh   # produces ./salam
 
 The `salam` binary is also copied to the repository root.
 
-### CMake build (with tests)
+### 🏗️ CMake build (with tests)
 
 ```sh
 cmake -B build
@@ -43,7 +61,7 @@ cmake --build build
 ctest --test-dir build   # run the test suite
 ```
 
-### Makefile build
+### 🔧 Makefile build
 
 ```sh
 make   # release build -> ../salam at the repo root
@@ -72,7 +90,7 @@ Expected output:
 Hello, World!
 ```
 
-## 🏗️ Compiling a program with `salam build`
+## 🏗️ Compiling a Program with `salam build`
 
 ```sh
 # compile to a native executable
@@ -110,14 +128,14 @@ means `true`. A constant declared in the source wins over one defined here.
 
 The compiler's own build info is available under the same mechanism, with no
 flag needed: `SALAM_VERSION`, `SALAM_VERSION_CODE`, `SALAM_GIT_COMMIT`,
-`SALAM_GIT_DATE`, `SALAM_GIT_DIRTY`, and `SALAM_BUILD_DATE` - the last being
+`SALAM_GIT_DATE`, `SALAM_GIT_DIRTY`, and `SALAM_BUILD_DATE` — the last being
 the moment your program was compiled, so a binary can print its own build
 stamp.
 
-### Project entry file: `salam.salam`
+### 📁 Project entry file: `salam.salam`
 
 Passing a single file always compiles exactly that file. When you pass a
-**directory** instead - or nothing at all - the compiler builds "the project
+**directory** instead — or nothing at all — the compiler builds "the project
 in that directory", and the fixed filename `salam.salam` is the project's
 entry file:
 
@@ -177,7 +195,7 @@ salam format app.salam --tabs
 salam format app.salam --lang=fa
 ```
 
-## 🌐 Layout DSL - compile to HTML/CSS/JS
+## 🌐 Layout DSL — compile to HTML/CSS/JS
 
 Salam includes a built-in DSL for describing web layouts.
 
@@ -199,11 +217,33 @@ salam cli      # general-language REPL
 salam layout   # layout DSL REPL
 ```
 
-## 📚 Where to go next
+## 🐳 Docker
+
+Run the compiler in Docker without a local toolchain:
+
+```sh
+# production image — compile any .salam file
+docker compose -f compiler/docker/docker-compose.yml run --rm prod build app.salam --output=app
+
+# development mode — live-rebuild on source changes
+docker compose -f compiler/docker/docker-compose.yml up dev
+```
+
+See the [Docker section in the main README](../README.md#-docker--docker-compose) for full details.
+
+## 🧩 Editor Support
+
+| Editor                    | Extension                                                                                                                                             |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Visual Studio Code**    | [salam-programming-language](https://marketplace.visualstudio.com/items?itemName=salamlanguage.salam-programming-language) — syntax highlighting      |
+| **Web Playground**        | [salamlang.github.io/Salam](https://salamlang.github.io/Salam/) — no install needed                                                                  |
+
+## 📚 Where to Go Next
 
 | Resource                                                                                                                     | Description                                                     |
 | ---------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
-| [Web Playground](https://salamlang.github.io/Salam/)                                                                         | Try Salam in your browser - no install needed                   |
+| [Web Playground](https://salamlang.github.io/Salam/)                                                                         | Try Salam in your browser — no install needed                   |
+| [GitHub Releases](https://github.com/SalamLang/Salam/releases)                                                               | Pre-built binaries for Linux, macOS, and Windows                |
 | [Examples](../tests/en/)                                                                                                     | Ready-to-run programs covering basics, types, stdlib, and more  |
 | [Editor readme](../editor/README.md)                                                                                         | How the WebAssembly playground is built and served              |
 | [Platform & word-size support](PLATFORMS.md)                                                                                 | 32-bit vs 64-bit, C backend vs LLVM backend, release matrix     |

@@ -142,7 +142,7 @@ static bool cli_is_float_lit(const char *v)
 /*
  * Classify the text after '='. Numbers and booleans are recognised so
  * `-dAGE=22` is an integer the way it reads; everything else is a string,
- * which is why `-dVERSION=0.3.0` stays text (strtod stops at the second dot,
+ * which is why `-dVERSION=0.3.1` stays text (strtod stops at the second dot,
  * so it is not a float). Wrapping the value in double quotes forces the
  * string reading for the cases that would otherwise look numeric.
  */

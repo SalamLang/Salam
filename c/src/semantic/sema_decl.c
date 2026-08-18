@@ -416,6 +416,12 @@ void sema_collect(sema_t *s, ast_node_t *program)
                 g->is_mut = d->is_mut;
                 g->is_pub = d->is_pub;
                 g->decl = d;
+                /* codegen spells a module-level global with its package baked
+                 * in, so it has to know which package that was - a generic
+                 * body emitted into another module reads globals through its
+                 * home scope, not the module being compiled. */
+                g->pkgname = s->pkg;
+                g->home = s->global;
                 if (d->kind == AST_CONST_DECL && d->a && d->a->kind == AST_LITERAL &&
                     d->a->value.kind == TV_INT) {
                     g->has_ival = true;

@@ -995,7 +995,7 @@ static bool ll_pkg_value(ll_t *ll, ast_node_t *n, symbol_t *pk, llv_t *out)
     }
     if (m->kind != SYM_CONST && m->kind != SYM_VAR) return false;
     ll_touch_pkg_named(ll, pk->pkgname);
-    g = ll_global_find(ll, n->name);
+    g = ll_global_find_in(ll, pk->pkgname, n->name);
     if (!g) return false;
     r = ll_new_tmp(ll);
     ll_emit(ll, "%s = load %s, ptr %s", r, ll_ty(ll, g->ts), g->ptr);
@@ -1676,7 +1676,14 @@ ll_addr_t ll_addr_of(ll_t *ll, ast_node_t *n)
                 return (ll_addr_t){r, fts, ll_tbaa_suffix(ll, fts, true)};
             }
         }
-        lvar_t *g = ll_global_find(ll, n->name);
+        /*
+         * The enclosing function's own package first. An unqualified name can
+         * only mean this package's global (or an extern, which carries no
+         * package), so a same-named global in some other package must not win
+         * the lookup just by having been emitted earlier.
+         */
+        const char *curpkg = ll_pkg_of_scope(ll, ll->pkg_scope);
+        lvar_t *g = ll_global_find_in(ll, curpkg ? curpkg : "main", n->name);
         if (g) return (ll_addr_t){g->ptr, g->ts, NULL};
         /*
          * A package-level global reached from a function of that same
@@ -1694,7 +1701,7 @@ ll_addr_t ll_addr_of(ll_t *ll, ast_node_t *n)
                 gv = scope_lookup_local(pk->members, n->name);
                 if (!gv || (gv->kind != SYM_VAR && gv->kind != SYM_CONST)) continue;
                 ll_touch_pkg(ll, pk);
-                g = ll_global_find(ll, n->name);
+                g = ll_global_find_in(ll, pk->pkgname, n->name);
                 if (g) return (ll_addr_t){g->ptr, g->ts, NULL};
             }
         }
@@ -1729,11 +1736,17 @@ ll_addr_t ll_addr_of(ll_t *ll, ast_node_t *n)
                  * actually resolves the name, and it is safe to repeat now
                  * that ll_emit_globals skips names it has already emitted.
                  */
+                scope_t *saved = ll->pkg_scope;
+                ll->pkg_scope = pk->members;
                 ll_emit_globals(ll, pk->decl);
-                g = ll_global_find(ll, n->name);
+                ll->pkg_scope = saved;
+                g = ll_global_find_in(ll, pk->pkgname, n->name);
                 if (g) return (ll_addr_t){g->ptr, g->ts, NULL};
             }
         }
+        /* Last chance: an extern global, which belongs to no package. */
+        g = ll_global_find(ll, n->name);
+        if (g) return (ll_addr_t){g->ptr, g->ts, NULL};
         ll_error(ll, n, "address of an unknown identifier '%s'", n->name);
         return (ll_addr_t){"null", n->type_str ? n->type_str : "i32", NULL};
     }

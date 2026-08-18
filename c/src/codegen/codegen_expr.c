@@ -422,9 +422,16 @@ static const char *cg_struct_lit(cg_t *cg, ast_node_t *n)
                     }
                 }
             }
-            val = provided                  ? cg_expr(cg, provided->a)
-                  : (f->decl && f->decl->a) ? cg_expr(cg, f->decl->a)
-                                            : NULL;
+            if (provided) {
+                val = cg_expr(cg, provided->a);
+            } else if (f->decl && f->decl->a) {
+                scope_t *save_lit = cg->cur_lit_home;
+                cg->cur_lit_home = ssym->home;
+                val = cg_expr(cg, f->decl->a);
+                cg->cur_lit_home = save_lit;
+            } else {
+                val = NULL;
+            }
             if (!val) continue;
             if (cg_val_needs_hoist(val)) {
                 cg_sl_post_t *pf =
@@ -467,6 +474,36 @@ static const char *cg_struct_lit(cg_t *cg, ast_node_t *n)
     }
     sb_free(&inl);
     return r;
+}
+
+/*
+ * The C spelling of a name that is not a local: a module-level global carries
+ * its package (cg_global_cname), anything else is the bare identifier. The
+ * cur_fn_home / cur_struct->home fallbacks mirror cg_func_addr - a generic
+ * body instantiated into another module is emitted with that module's global
+ * scope, so its own package's globals are only reachable through its home.
+ *
+ * An `extern` global keeps its declared C name; it names an object somebody
+ * else defined.
+ */
+const char *cg_global_ref(cg_t *cg, const char *name)
+{
+    symbol_t *g = scope_lookup(cg->sem->global, name);
+    if (!g || (g->kind != SYM_VAR && g->kind != SYM_CONST)) {
+        scope_t *homes[3];
+        size_t hi = 0;
+        g = NULL;
+        homes[0] = cg->cur_lit_home;
+        homes[1] = cg->cur_fn_home;
+        homes[2] = cg->cur_struct ? cg->cur_struct->home : NULL;
+        for (; hi < 3 && !g; hi++) {
+            symbol_t *hs = homes[hi] ? scope_lookup(homes[hi], name) : NULL;
+            if (hs && (hs->kind == SYM_VAR || hs->kind == SYM_CONST)) g = hs;
+        }
+    }
+    if (!g) return cg_cident(cg, name);
+    if (g->decl && g->decl->is_extern) return cg_cident(cg, name);
+    return cg_global_cname(cg, g->pkgname, name);
 }
 
 /*
@@ -597,7 +634,7 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
             if (f && f->kind == SYM_FIELD)
                 return cg_fmt(cg, "this->%s", cg_cident(cg, n->name));
         }
-        return cg_cident(cg, n->name);
+        return cg_global_ref(cg, n->name);
     case AST_FUNC_ADDR:
         return cg_func_addr(cg, n);
     case AST_THIS:

@@ -42,6 +42,14 @@ typedef struct {
     const char *name;
     const char *ptr;
     const char *ts;
+    /* Set on module-level globals: the package that declared this one, so two
+     * packages can each have a `COLS` without the second silently binding to
+     * the first's storage. NULL on function locals and on extern globals,
+     * which name one object the whole program shares. */
+    const char *pkg;
+    /* A module-level global whose initialiser is not an LLVM constant: the
+     * expression, replayed by ll_emit_global_inits. */
+    ast_node_t *init;
 } lvar_t;
 
 typedef struct {
@@ -202,6 +210,11 @@ void ll_local_add(ll_t *ll, const char *name, const char *ptr, const char *ts);
 lvar_t *ll_local_find(ll_t *ll, const char *name);
 
 lvar_t *ll_global_find(ll_t *ll, const char *name);
+
+/* ll_global_find restricted to the package that declared the global.
+ * A NULL `pkg` on either side matches anything, which is what keeps
+ * extern globals (shared by the whole program) reachable. */
+lvar_t *ll_global_find_in(ll_t *ll, const char *pkg, const char *name);
 
 int ll_int_bits(ll_t *ll, const char *ts);
 

@@ -937,6 +937,16 @@ static bool ll_const_agg(ll_t *ll, ast_node_t *n, const char **out)
 void ll_emit_globals(ll_t *ll, ast_node_t *program)
 {
     int any = 0;
+    /*
+     * Every global carries the package it was declared in. The LLVM backend
+     * puts the whole program in one module, so without that the second
+     * package to declare a `COLS` was skipped as "already emitted" and both
+     * packages then read the first one's storage - the same collision the C
+     * backend reported as a duplicate definition at link time, except here it
+     * linked and quietly returned the wrong value.
+     */
+    const char *pkg = ll_pkg_of_scope(ll, ll->pkg_scope);
+    if (!pkg) pkg = "main";
     {
         size_t i = 0;
         for (; i < program->list.len; i++) {
@@ -946,7 +956,7 @@ void ll_emit_globals(ll_t *ll, ast_node_t *program)
              * duplicate definition in the module. This lets the function be
              * called again for a package whose globals may or may not have
              * been emitted already, which ll_addr_of relies on. */
-            if (ll_global_find(ll, d->name)) continue;
+            if (ll_global_find_in(ll, pkg, d->name)) continue;
             /*
              * An extern *variable* - POSIX `environ`, which std/os/process
              * declares in its non-Windows branch. ll_emit_externs_in only
@@ -965,27 +975,36 @@ void ll_emit_globals(ll_t *ll, ast_node_t *program)
                 ev->name = d->name;
                 ev->ptr = eref;
                 ev->ts = ets;
+                /* No package: it is the one object everyone links against. */
+                ev->pkg = NULL;
+                ev->init = NULL;
                 vec_push(ll->a, &ll->globals, ev);
                 any = 1;
                 continue;
             }
             const char *ts = d->type_str ? d->type_str : "i32";
             const char *gref =
-                ll_fmt(ll, "@g.%s", ll_struct_ltype(ll, d->name) + strlen("%struct."));
+                ll_fmt(ll, "@g.%s.%s", pkg,
+                       ll_struct_ltype(ll, d->name) + strlen("%struct."));
             const char *lty = ll_ty(ll, ts);
             const char *init;
             const char *cv;
-            if (d->a && ll_const_value(ll, d->a, &cv)) {
-                init = cv;
-            } else {
-                init = ll_zero(ll, ts);
-                if (d->a) vec_push(ll->a, &ll->gdefer, d);
-            }
-            sb_puts(ll->g, ll_fmt(ll, "%s = internal global %s %s\n", gref, lty, init));
             lvar_t *gv = (lvar_t *)arena_alloc(ll->a, sizeof *gv);
             gv->name = d->name;
             gv->ptr = gref;
             gv->ts = ts;
+            gv->pkg = pkg;
+            gv->init = NULL;
+            if (d->a && ll_const_value(ll, d->a, &cv)) {
+                init = cv;
+            } else {
+                init = ll_zero(ll, ts);
+                if (d->a) {
+                    gv->init = d->a;
+                    vec_push(ll->a, &ll->gdefer, gv);
+                }
+            }
+            sb_puts(ll->g, ll_fmt(ll, "%s = internal global %s %s\n", gref, lty, init));
             vec_push(ll->a, &ll->globals, gv);
             any = 1;
         }
@@ -1168,10 +1187,13 @@ void ll_emit_global_inits(ll_t *ll)
     {
         size_t i = 0;
         for (; i < ll->gdefer.len; i++) {
-            ast_node_t *d = (ast_node_t *)ll->gdefer.data[i];
-            lvar_t *g = ll_global_find(ll, d->name);
-            if (!g) continue;
-            const char *v = ll_conv(ll, ll_expr(ll, d->a), g->ts);
+            /* The lvar itself, not a name to look back up: two packages can
+             * have a global of the same name and the lookup would pick one
+             * of them at random. */
+            lvar_t *g = (lvar_t *)ll->gdefer.data[i];
+            const char *v;
+            if (!g || !g->init) continue;
+            v = ll_conv(ll, ll_expr(ll, g->init), g->ts);
             ll_emit(ll, "store %s %s, ptr %s", ll_ty(ll, g->ts), v, g->ptr);
         }
     }

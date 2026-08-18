@@ -530,11 +530,39 @@ const char *cg_array_ctype(cg_t *cg, const char *ts)
     }
 }
 
+/*
+ * The C name of a module-level global. Functions and types have carried their
+ * package since the beginning; globals went out under their bare Salam name,
+ * so two modules that each declared `const COLS` produced two `COLS` objects
+ * in one flat C namespace and the link failed with "multiple definition" -
+ * even when neither was `pub`, and even for std's own `excel.FormatUnknown`
+ * against `image.FormatUnknown`, which is why no program could import both.
+ *
+ * `pkg` is the package the global was declared in, not necessarily the module
+ * being emitted: a generic body instantiated in another module still reads
+ * its home package's globals, and must name them the same way that package
+ * defined them.
+ */
+const char *cg_global_cname(cg_t *cg, const char *pkg, const char *name)
+{
+    return cg_fmt(cg, "_Salam_g_%s_%s", cg_cident(cg, (pkg && *pkg) ? pkg : "main"),
+                  cg_cident(cg, name));
+}
+
 const char *cg_decl(cg_t *cg, const char *ts, const char *name)
 {
-    if (cg_is_slice_ts(ts)) return cg_fmt(cg, "salam_slice %s", cg_cident(cg, name));
+    return cg_decl_cn(cg, ts, cg_cident(cg, name));
+}
+
+/* cg_decl over a name that is already a C identifier. A module-level global
+ * is spelled with its package baked in (cg_global_cname), and that spelling
+ * must not go through cg_cident a second time - the encoder doubles interior
+ * underscores, so the definition and the extern would disagree. */
+const char *cg_decl_cn(cg_t *cg, const char *ts, const char *name)
+{
+    if (cg_is_slice_ts(ts)) return cg_fmt(cg, "salam_slice %s", name);
     if (!strncmp(ts, "Variant<", 8))
-        return cg_fmt(cg, "%s %s", cg_variant_cname(cg, ts), cg_cident(cg, name));
+        return cg_fmt(cg, "%s %s", cg_variant_cname(cg, ts), name);
     if (!strncmp(ts, "dyn ", 4)) {
         const char *suf = strpbrk(ts + 4, "[*");
         char iface[96];
@@ -545,10 +573,10 @@ const char *cg_decl(cg_t *cg, const char *ts, const char *name)
         const char *star = (suf && *suf == '*') ? "*" : "";
         const char *dims = (suf && *suf == '[') ? suf : "";
         return cg_fmt(cg, "_Salam_dyn_%s%s %s%s", cg_cident(cg, iface), star,
-                      cg_cident(cg, name), dims);
+                      name, dims);
     }
     if (!strncmp(ts, "func(", 5) || !strncmp(ts, "externfunc(", 11))
-        return cg_fmt(cg, "void* %s", cg_cident(cg, name));
+        return cg_fmt(cg, "void* %s", name);
     char base[96];
     bool ptr;
     int eptr, pdepth;
@@ -558,7 +586,6 @@ const char *cg_decl(cg_t *cg, const char *ts, const char *name)
     if (bc == base) bc = arena_strdup(cg->a, cg_cident(cg, base));
     for (; eptr > 0; eptr--)
         bc = cg_fmt(cg, "%s*", bc);
-    name = cg_cident(cg, name);
     if (dims.len) {
         sb_t s;
         sb_init(&s);

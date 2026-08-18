@@ -62,9 +62,16 @@ runs:
           api="https://api.github.com/repos/${repo}/releases/latest"
           auth=()
           [ -n "${GH_TOKEN:-}" ] && auth=(-H "Authorization: Bearer ${GH_TOKEN}")
-          tag=$(curl -fsSL "${auth[@]}" -H "Accept: application/vnd.github+json" "$api" \
-                | grep -m1 '"tag_name"' \
-                | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')
+          # Fetch first, parse second. Piping curl straight into `grep -m1`
+          # has grep close the pipe the moment it matches - tag_name is near
+          # the top of the response, while a release with a dozen assets is
+          # hundreds of KB - so curl dies with "(23) Failure writing output
+          # to destination" and `set -o pipefail` takes the whole step with
+          # it. Nothing downstream of curl exits early now.
+          body=$(curl -fsSL "${auth[@]}" -H "Accept: application/vnd.github+json" "$api")
+          tag=$(printf '%s\n' "$body" \
+                | sed -nE 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' \
+                | sed -n '1p')
           if [ -z "$tag" ]; then
             echo "::error::Could not resolve the latest Salam release from ${api}" >&2
             exit 1

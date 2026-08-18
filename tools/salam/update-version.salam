@@ -1,0 +1,261 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Keeps every copy of the release version in step with the VERSION file.
+//
+//   salam run tools/salam/update-version.salam 0.3.2   bump to 0.3.2
+//   salam run tools/salam/update-version.salam sync    re-apply VERSION as-is
+//   salam run tools/salam/update-version.salam check   verify, change nothing
+//
+// The modes are bare words, not --flags: `salam run` reads anything starting
+// with "-" as one of its own build options, so a --check never reaches the
+// program. Both spellings are accepted for a compiled binary, where the
+// question does not arise.
+//
+// `check` is what CI runs on every pull request, and it is the reason the
+// site table below is a table rather than a series of ad-hoc edits: the
+// updater and the checker read the same list, so a site cannot be bumped by
+// one and forgotten by the other.
+//
+// Each site is matched by the text immediately around the version rather than
+// by replacing the version string wherever it appears in the file. That is
+// deliberate. bun.lock alone carries "0.3.13" and "0.3.24" for unrelated
+// packages, and a blind replace of "0.3.1" would quietly turn those into
+// "0.3.23" - which is exactly the kind of edit nobody reviews closely.
+//
+// A site whose anchor has gone missing is a hard error, never a skip. The
+// previous version of this tool skipped silently, and its path list had
+// rotted to the point where most entries no longer existed.
+//
+// Deliberately NOT tracked - these mention a version as illustration, and
+// pinning them to the current release would be churn with no meaning:
+//   c/src/semantic/builtins.c, compiler/semantic/sema_builtins.salam
+//       "-dVERSION=0.3.1" in a comment about how -d parses its value
+//   compiler/tools/selfhost-leak-budget.txt
+//       a historical note about what 0.3.1 added
+//   std/net/http/ctx_internal.salam
+//       sample Server:/X-Powered-By: headers in a comment
+//   tools/salam/gen-std-index.salam
+//       a --version example in a usage comment
+//   .github/workflows/_reusable-android-build.yml
+//       "(e.g. 0.3.1)" in an input description
+//   .github/workflows/compiler-selfhost.yml
+//       SEED_MIN is a capability floor - the oldest release that can seed
+//       stage 0 - not the current version. It only moves when a language
+//       change makes older seeds unusable, and its own comment says the c/
+//       fallback no-ops "once SEED_MIN is published". Bumping it every
+//       release would keep that temporary fallback alive forever.
+package main
+
+import os
+import str
+
+const VERSION_FILE := "VERSION"
+
+// One place the release version is written. `prefix`/`suffix` are the exact
+// text bracketing it on that line.
+struct Site:
+    pub path: str = ""
+    pub prefix: str = ""
+    pub suffix: str = ""
+end
+
+func sites(): Vector<Site>:
+    mut v := Vector {} as Vector<Site>
+    v.push(Site { path = "pyproject.toml", prefix = "version = \"", suffix = "\"" })
+    v.push(Site { path = "extensions/vscode/package.json", prefix = "\"version\": \"", suffix = "\"" })
+    v.push(Site { path = "tools/mcp/claude-plugin/.claude-plugin/plugin.json", prefix = "\"version\": \"", suffix = "\"" })
+    // The transcript of running `salam version`, so the anchor carries the
+    // command line above it - a bare "salam " matches four other shell
+    // examples in the same chapter.
+    v.push(Site { path = "books/en/intro-programming/chapters/01-getting-started.tex", prefix = "$ salam version\nsalam ", suffix = "\n" })
+    v.push(Site { path = "docs/PROFILING.md", prefix = "\"salam_version\": \"", suffix = "\"" })
+    ret v
+end
+
+// A dotted run of digits, e.g. 0.3.2. Rejects anything else so a typo cannot
+// be written into ten files at once.
+func is_valid_version(v: str): bool:
+    if v.len() == 0: ret false end
+    parts := str.Split(v, ".")
+    defer parts.free()
+    if parts.len() < 2: ret false end
+    mut ok := true
+    each part in parts:
+        if part.len() == 0:
+            ok = false
+        else:
+            repeat part.len() with i:
+                c := part.substr(i, 1)
+                if c < "0" || c > "9": ok = false end
+            end
+        end
+    end
+    ret ok
+end
+
+// The version `s` holds between prefix and suffix, or "" when the anchor is
+// absent. Empty means "this file no longer looks the way the table says".
+func read_at(s: str, prefix: str, suffix: str): str:
+    at := s.find(prefix)
+    if at < 0: ret "" end
+    from := at + prefix.len()
+    rest := s.substr(from, s.len() - from)
+    end_at := rest.find(suffix)
+    if end_at < 0: ret "" end
+    ret rest.substr(0, end_at)
+end
+
+func write_at(s: str, prefix: str, suffix: str, v: str): str:
+    at := s.find(prefix)
+    if at < 0: ret s end
+    from := at + prefix.len()
+    rest := s.substr(from, s.len() - from)
+    end_at := rest.find(suffix)
+    if end_at < 0: ret s end
+    tail_from := from + end_at
+    ret s.substr(0, from) + v + s.substr(tail_from, s.len() - tail_from)
+end
+
+func read_version_file(): str:
+    if os.Exists(VERSION_FILE) == false:
+        println "error:", VERSION_FILE, "not found - run this from the repository root"
+        os.Exit(1)
+    end
+    ret str.Trim(os.ReadFile(VERSION_FILE))
+end
+
+// Reports every site that disagrees with `want`. Returns the number of
+// problems so the caller can pick an exit code.
+func check_all(want: str): int:
+    mut bad := 0
+    all := sites()
+    defer all.free()
+    each site in all:
+        if os.Exists(site.path) == false:
+            println "  MISSING FILE  ", site.path
+            bad = bad + 1
+        else:
+            body := os.ReadFile(site.path)
+            got := read_at(body, site.prefix, site.suffix)
+            if got.len() == 0:
+                println "  NO ANCHOR     ", site.path, "- expected", site.prefix, "(the file changed shape; fix the table in this script)"
+                bad = bad + 1
+            else:
+                if got == want:
+                    println "  ok            ", site.path
+                else:
+                    println "  MISMATCH      ", site.path, "- has", got, "want", want
+                    bad = bad + 1
+                end
+            end
+        end
+    end
+    ret bad
+end
+
+func sync_all(want: str): int:
+    mut changed := 0
+    all := sites()
+    defer all.free()
+    each site in all:
+        if os.Exists(site.path) == false:
+            println "  MISSING FILE  ", site.path
+        else:
+            body := os.ReadFile(site.path)
+            got := read_at(body, site.prefix, site.suffix)
+            if got.len() == 0:
+                println "  NO ANCHOR     ", site.path, "- expected", site.prefix
+            else:
+                if got == want:
+                    println "  ok            ", site.path
+                else:
+                    _n := os.WriteFile(site.path, write_at(body, site.prefix, site.suffix, want))
+                    println "  updated       ", site.path, got, "->", want
+                    changed = changed + 1
+                end
+            end
+        end
+    end
+    ret changed
+end
+
+func usage():
+    println "usage: salam run tools/salam/update-version.salam <new-version|sync|check>"
+    println ""
+    println "  <new-version>  write it to VERSION, then update every other site"
+    println "  sync           leave VERSION alone, bring the other sites to it"
+    println "  check          report disagreements and exit 1; changes nothing"
+end
+
+func main:
+    args := os.Args()
+    defer args.free()
+    if args.len() < 2:
+        usage()
+        os.Exit(1)
+    end
+
+    mode := args.get(1)
+
+    if mode == "check" || mode == "--check":
+        want := read_version_file()
+        println "checking every version site against", VERSION_FILE, "=", want
+        println ""
+        bad := check_all(want)
+        println ""
+        if bad == 0:
+            println "all version sites agree on", want
+            ret 0
+        end
+        println bad, "site(s) disagree with", VERSION_FILE
+        println "run: salam run tools/salam/update-version.salam sync"
+        os.Exit(1)
+    end
+
+    if mode == "sync" || mode == "--sync":
+        want := read_version_file()
+        println "syncing every version site to", VERSION_FILE, "=", want
+        println ""
+        changed := sync_all(want)
+        println ""
+        println changed, "file(s) updated"
+        ret 0
+    end
+
+    if is_valid_version(mode) == false:
+        println "error: invalid version", mode, "- expected dotted digits, e.g. 0.3.2"
+        println ""
+        usage()
+        os.Exit(1)
+    end
+
+    old := read_version_file()
+    if old == mode:
+        println "already at", mode, "- checking the other sites anyway"
+        println ""
+        bad := check_all(mode)
+        if bad > 0: os.Exit(1) end
+        ret 0
+    end
+
+    println "bumping", old, "->", mode
+    println ""
+    _n := os.WriteFile(VERSION_FILE, mode + "\n")
+    println "  updated       ", VERSION_FILE, old, "->", mode
+    changed := sync_all(mode)
+    println ""
+    println changed + 1, "file(s) updated"
+    ret 0
+end

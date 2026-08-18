@@ -71,7 +71,7 @@ tools/mcp/build.sh
 export PATH="$PWD:$PATH"   # add salam-mcp to PATH for Claude Code plugin
 ```
 
-**Windows** — build from the repo root (requires `salam` on PATH):
+**Windows** — build from the repository root (requires `salam` on PATH):
 
 ```bat
 tools\mcp\build.bat

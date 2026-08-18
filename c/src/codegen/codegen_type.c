@@ -572,8 +572,7 @@ const char *cg_decl_cn(cg_t *cg, const char *ts, const char *name)
         iface[il] = 0;
         const char *star = (suf && *suf == '*') ? "*" : "";
         const char *dims = (suf && *suf == '[') ? suf : "";
-        return cg_fmt(cg, "_Salam_dyn_%s%s %s%s", cg_cident(cg, iface), star,
-                      name, dims);
+        return cg_fmt(cg, "_Salam_dyn_%s%s %s%s", cg_cident(cg, iface), star, name, dims);
     }
     if (!strncmp(ts, "func(", 5) || !strncmp(ts, "externfunc(", 11))
         return cg_fmt(cg, "void* %s", name);

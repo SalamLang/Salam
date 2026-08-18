@@ -983,9 +983,8 @@ void ll_emit_globals(ll_t *ll, ast_node_t *program)
                 continue;
             }
             const char *ts = d->type_str ? d->type_str : "i32";
-            const char *gref =
-                ll_fmt(ll, "@g.%s.%s", pkg,
-                       ll_struct_ltype(ll, d->name) + strlen("%struct."));
+            const char *gref = ll_fmt(ll, "@g.%s.%s", pkg,
+                                      ll_struct_ltype(ll, d->name) + strlen("%struct."));
             const char *lty = ll_ty(ll, ts);
             const char *init;
             const char *cv;

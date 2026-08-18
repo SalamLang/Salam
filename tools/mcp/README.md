@@ -1,4 +1,4 @@
-# salam-mcp
+# 🤖 salam-mcp
 
 A [Model Context Protocol](https://modelcontextprotocol.io) server for the
 Salam programming language, **written in Salam**.
@@ -13,7 +13,7 @@ Because it is a single native binary with no runtime dependencies, anyone who
 has `salam` can run it. There is no Node, Python or package manager in the
 loop.
 
-## Build
+## 🔨 Build
 
 ```sh
 tools/mcp/build.sh            # -> ./salam-mcp
@@ -23,7 +23,7 @@ Build it with the compiler from this checkout, not an installed one. An older
 `salam` on `PATH` parses some flags differently and the server then fails in
 ways that look like server bugs.
 
-## Wire it up
+## 🔌 Wire it up
 
 `.mcp.json` in the repository root already configures it for anything that
 reads project-scoped MCP config (Claude Code included), so building the binary
@@ -46,7 +46,7 @@ Any other MCP client:
 }
 ```
 
-### Environment
+### 🌍 Environment Variables
 
 | Variable         | Default                                        | Purpose                              |
 | ---------------- | ---------------------------------------------- | ------------------------------------ |
@@ -62,9 +62,26 @@ than as a version error.
 On Windows, point `command` at `salam-mcp.exe`. Process spawning does not add
 the extension for you.
 
-## Tools
+### 🖥️ Platform-specific setup
 
-### Compiler
+**macOS / Linux** — build and add to PATH:
+
+```sh
+tools/mcp/build.sh
+export PATH="$PWD:$PATH"   # add salam-mcp to PATH for Claude Code plugin
+```
+
+**Windows** — build from the repo root (requires `salam` on PATH):
+
+```bat
+tools\mcp\build.bat
+```
+
+Then point `command` in your MCP config at the full path to `salam-mcp.exe`.
+
+## 🛠️ Tools
+
+### 🔧 Compiler
 
 | Tool           | Use it for                                                              |
 | -------------- | ----------------------------------------------------------------------- |
@@ -74,7 +91,7 @@ the extension for you.
 | `salam_exec`   | Interpret without a C toolchain (not trustworthy for unsigned maths)    |
 | `salam_format` | Report formatting drift; never rewrites files                           |
 
-### Inspection
+### 🔬 Inspection
 
 | Tool            | Use it for                                            |
 | --------------- | ----------------------------------------------------- |
@@ -83,7 +100,7 @@ the extension for you.
 | `salam_js`      | Compile to browser-ready JavaScript                   |
 | `salam_version` | Version, commit and build date of the driven compiler |
 
-### Standard library and examples
+### 📚 Standard library and examples
 
 | Tool                    | Use it for                                       |
 | ----------------------- | ------------------------------------------------ |
@@ -93,7 +110,7 @@ the extension for you.
 | `salam_read_source`     | Read a line-numbered slice of any workspace file |
 | `salam_keywords`        | English/Persian/Arabic keyword table             |
 
-## Resources
+## 📖 Resources
 
 | URI                         | Contents                                                       |
 | --------------------------- | -------------------------------------------------------------- |
@@ -101,7 +118,7 @@ the extension for you.
 | `salam://stdlib/index.json` | Every package mapped to its public declarations, computed live |
 | `salam://guide/llms.txt`    | Orientation entry point                                        |
 
-## Safety
+## 🔒 Safety
 
 The server is **read-only**: it never writes to the workspace. Build artifacts
 go to temp paths and are deleted, and `salam_format` always runs with
@@ -110,7 +127,7 @@ go to temp paths and are deleted, and `salam_format` always runs with
 Paths from a tool call are validated rather than escaped; anything containing
 shell metacharacters or `..` is refused outright.
 
-## Protocol
+## 📡 Protocol
 
 Implements MCP **2026-07-28** and is **dual-era**: a client that opens with the
 legacy `initialize` handshake gets legacy semantics (protocol versions
@@ -123,7 +140,7 @@ spec requires.
 Transport is stdio: one JSON-RPC message per line, nothing but MCP messages on
 stdout, logging on stderr, and the process exits when stdin closes.
 
-## Tests
+## 🧪 Tests
 
 ```sh
 node tools/mcp/tests/protocol_test.mjs ./salam-mcp "$PWD"
@@ -133,7 +150,7 @@ Spawns real server processes and asserts on the wire format: framing,
 dual-era negotiation, error codes, structured diagnostics, path-traversal
 refusal. CI runs this on every change to `tools/mcp/`, `docs/ai/` or `std/`.
 
-## Regenerating the committed stdlib index
+## 🔄 Regenerating the committed stdlib index
 
 `docs/ai/stdlib-index.json` is generated from `std/`. After changing the
 standard library:
@@ -144,7 +161,7 @@ tools/mcp/gen-index.sh
 
 CI fails if the committed copy has drifted.
 
-## Layout
+## 📁 Layout
 
 | File                  | Role                                                       |
 | --------------------- | ---------------------------------------------------------- |
@@ -163,3 +180,11 @@ Two implementation notes worth knowing, both documented at the top of the file
 that works around them: the server avoids `str.Split` (it can segfault on its
 last element on gcc-linked builds) and avoids `os.shell.Run` (it deadlocks when
 a child outfills the pipe buffer, which compiler dumps routinely do).
+
+## 🔗 Links
+
+- [Model Context Protocol](https://modelcontextprotocol.io) — protocol specification
+- [Claude Code](https://claude.ai/code) — the primary MCP client for Salam development
+- [Salam Playground](https://salamlang.github.io/Salam/) — try Salam in your browser
+- [Discord](https://discord.gg/HfY3QHDPdv) — real-time community chat
+- [Telegram](https://t.me/SalamProgrammingLanguage) — community on Telegram

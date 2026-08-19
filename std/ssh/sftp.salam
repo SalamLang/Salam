@@ -692,8 +692,12 @@ end
 @fa "حذف همه"
 @ar "حذف الکل"
 pub func RemoveAll(client &: Client, sftp &: Sftp, path: str): bool:
-    info := Stat(client, sftp, path)
-    if !info.is_dir:
+    // Lstat, not Stat: Stat follows the link, so a link to a directory
+    // would be walked and its TARGET emptied before the link itself was
+    // ever unlinked.
+    info := Lstat(client, sftp, path)
+    is_link := (info.permissions & (0xF000 as u32)) == (0xA000 as u32)
+    if is_link || !info.is_dir:
         ret Remove(client, sftp, path)
     end
     entries := ListDir(client, sftp, path)
@@ -702,7 +706,10 @@ pub func RemoveAll(client &: Client, sftp &: Sftp, path: str): bool:
     each e in entries:
         if e.name != "." && e.name != "..":
             child := path + "/" + e.name
-            if e.is_dir:
+            // ListDir's attrs come from the readdir response, which does
+            // not follow links either, but re-checking keeps the decision
+            // in one place.
+            if e.is_dir && !IsLink(client, sftp, child):
                 if !RemoveAll(client, sftp, child): ok = false end
             else:
                 if !Remove(client, sftp, child): ok = false end
@@ -725,7 +732,10 @@ pub func DownloadDir(client &: Client, sftp &: Sftp, remote_path: str, local_pat
     defer entries.free()
     mut ok := true
     each e in entries:
-        if e.name != "." && e.name != "..":
+        // A name is joined onto a local path, so anything that is not one
+        // ordinary component - "..", or something containing a separator -
+        // could write outside local_path. Server-supplied, so dropped.
+        if e.name != "." && e.name != ".." && e.name.find("/") < 0 && e.name.len() > 0:
             rchild := remote_path + "/" + e.name
             lchild := filepath.Join(local_path, e.name)
             if e.is_dir:
@@ -760,4 +770,44 @@ pub func UploadDir(client &: Client, sftp &: Sftp, local_path: str, remote_path:
         end
     end
     ret ok
+end
+
+// Like Stat, but does not follow a symbolic link: it reports the link
+// itself. SSH_FXP_STAT resolves the target, which makes a link to a
+// directory indistinguishable from that directory - and anything that
+// then recurses is walking the target's contents by mistake.
+@en "SftpLstat"
+@fa "وضعیت پیوند"
+@ar "حالة الارتباط"
+pub func Lstat(client &: Client, sftp &: Sftp, path: str): SftpFileInfo:
+    id := _sftp_alloc_id(sftp)
+    mut body := NewBuf(16 + path.len())
+    BufPutUint32(body, id)
+    BufPutStringStr(body, path)
+    ok := _sftp_send(client.transport, sftp, SSH_FXP_LSTAT, body)
+    FreeBuf(body)
+    if !ok:
+        ret SftpFileInfo {}
+    end
+    pkt := _sftp_read_packet(client.transport, sftp)
+    if !pkt.ok || pkt.msgtype != SSH_FXP_ATTRS:
+        FreeBuf(pkt.bodybuf)
+        ret SftpFileInfo {}
+    end
+    mut r := pkt.body
+    _rid := RGetUint32(r)
+    mut info := _sftp_parse_attrs(r)
+    FreeBuf(pkt.bodybuf)
+    info.name = path
+    ret info
+end
+
+// True when `path` is itself a symbolic link. POSIX S_IFLNK, in hex for
+// the same reason _sftp_parse_attrs writes S_IFDIR that way.
+@en "SftpIsLink"
+@fa "پیوند است"
+@ar "هل هو ارتباط"
+pub func IsLink(client &: Client, sftp &: Sftp, path: str): bool:
+    info := Lstat(client, sftp, path)
+    ret (info.permissions & (0xF000 as u32)) == (0xA000 as u32)
 end

@@ -18,6 +18,7 @@
 package ftp
 
 import net.tcp
+import tls
 import conv
 import str
 import filepath
@@ -44,6 +45,12 @@ import fs.dir
 // Prefer sftp (std/ssh) wherever the far end offers it - FTP sends the
 // password in the clear and needs a second port open. This package is for
 // the servers that offer nothing else.
+
+// A tls.Conn cannot be a struct field (the same codegen limitation
+// net/websocket and net/email document), so a secured connection lives in
+// this table and the struct carries its index. Slots are never reused:
+// an FTPS session is long-lived and the table is one pointer per session.
+mut _tls_slots := Vector {} as Vector<tls.Conn>
 
 @en "FileInfo"
 @fa "اطلاعات پرونده"
@@ -75,6 +82,24 @@ pub struct Client:
     pub rxbuf: str = ""
     pub last_reply: str = ""
     pub last_code: int = 0
+    // Control channel is under TLS (after AUTH TLS).
+    pub secure: bool = false
+    pub tls_idx: int = 0 - 1
+    // PROT P accepted, so data connections get TLS too. Kept separate
+    // from `secure`: RFC 4217 allows a protected control channel with a
+    // cleartext data channel, and some servers still only offer that.
+    pub prot_p: bool = false
+    // The config AuthTLS was given, reused for every data connection so
+    // both channels are validated the same way.
+    pub tls_cfg: tls.Config = tls.Config {}
+end
+
+// A data connection, which is TLS or not independently of the control one.
+struct DataConn:
+    pub conn: tcp.Conn = tcp.Conn {}
+    pub tls_idx: int = 0 - 1
+    pub secure: bool = false
+    pub ok: bool = false
 end
 
 // ============================================================ internals
@@ -104,7 +129,14 @@ func _is_final(line: str): bool:
 end
 
 func _fill(c &: Client): bool:
-    chunk := tcp.Read(c.conn, 4096)
+    mut chunk := ""
+    if c.secure:
+        mut tc := _tls_slots.get(c.tls_idx)
+        chunk = tls.Read(tc, 4096)
+        _tls_slots.set(c.tls_idx, tc)
+    else:
+        chunk = tcp.Read(c.conn, 4096)
+    end
     if chunk.len() == 0: ret false end
     c.rxbuf += chunk
     ret true
@@ -152,6 +184,12 @@ func _read_reply(c &: Client): int:
 end
 
 func _send(c &: Client, line: str): int:
+    if c.secure:
+        mut tc := _tls_slots.get(c.tls_idx)
+        n := tls.Write(tc, line + "\r\n")
+        _tls_slots.set(c.tls_idx, tc)
+        ret n
+    end
     ret tcp.Write(c.conn, line + "\r\n")
 end
 
@@ -254,7 +292,7 @@ end
 
 // One LIST line -> FileInfo. Handles the Unix `ls -l` layout every real
 // server emits, and the older MSDOS/IIS one. Returns a FileInfo whose
-// name is "" when the line is a total/blank/unparseable header.
+// name is "" when the line is a total/blank/unparsable header.
 func _parse_list_line(line: str): FileInfo:
     mut fi := FileInfo {}
     t := str.Trim(line)
@@ -299,34 +337,80 @@ end
 // Opens the data connection for the next transfer. EPSV first: it is the
 // only one of the two that works over IPv6, and a server that does not
 // know it answers 5xx harmlessly, leaving PASV as the fallback.
-func _data_open(c &: Client): tcp.Conn:
-    mut dc := tcp.Conn {}
+func _data_open(c &: Client): DataConn:
+    mut d := DataConn {}
+    mut raw := tcp.Conn {}
     if _good(_cmd(c, "EPSV")) && c.last_code == 229:
         port := _parse_epsv(c.last_reply)
         if port > 0:
-            dc = tcp.Dial(c.host, port)
-            if tcp.ConnOk(dc): ret dc end
+            raw = tcp.Dial(c.host, port)
         end
     end
-    if _cmd(c, "PASV") == 227:
+    if !tcp.ConnOk(raw) && _cmd(c, "PASV") == 227:
         addr := _parse_pasv(c.last_reply)
         if addr.len() > 0:
             sep := addr.find(":")
             host := addr.substr(0, sep)
             port := addr.substr(sep + 1, addr.len() - sep - 1).to_int()
-            dc = tcp.Dial(host, port)
+            raw = tcp.Dial(host, port)
         end
     end
-    ret dc
+    if !tcp.ConnOk(raw): ret d end
+    if c.prot_p:
+        // PROT P: the data channel gets its own TLS session. The server
+        // name is the one dialled, so a cert is checked against the host
+        // the user actually asked for.
+        tc := tcp.UpgradeTLS(raw, c.tls_cfg)
+        if !tls.ConnOk(tc): ret d end
+        _tls_slots.push(tc)
+        d.tls_idx = _tls_slots.len() - 1
+        d.secure = true
+        d.ok = true
+        ret d
+    end
+    d.conn = raw
+    d.ok = true
+    ret d
+end
+
+func _data_read(d &: DataConn, max: int): str:
+    if d.secure:
+        mut tc := _tls_slots.get(d.tls_idx)
+        chunk := tls.Read(tc, max)
+        _tls_slots.set(d.tls_idx, tc)
+        ret chunk
+    end
+    ret tcp.Read(d.conn, max)
+end
+
+func _data_write(d &: DataConn, payload: str): int:
+    if d.secure:
+        mut tc := _tls_slots.get(d.tls_idx)
+        n := tls.Write(tc, payload)
+        _tls_slots.set(d.tls_idx, tc)
+        ret n
+    end
+    ret tcp.Write(d.conn, payload)
+end
+
+func _data_close(d &: DataConn):
+    if d.secure:
+        mut tc := _tls_slots.get(d.tls_idx)
+        tls.Close(tc)
+        _tls_slots.set(d.tls_idx, tc)
+    else:
+        tcp.Close(d.conn)
+    end
+    d.ok = false
 end
 
 // Reads the data connection until the server closes it, which is how FTP
 // signals end-of-transfer - there is no length header anywhere.
-func _drain(dc: tcp.Conn): str:
+func _drain(d &: DataConn): str:
     mut out := ""
     mut more := true
     until more:
-        chunk := tcp.Read(dc, 8192)
+        chunk := _data_read(d, 8192)
         if chunk.len() == 0:
             more = false
         else:
@@ -340,31 +424,31 @@ end
 // the payload. The trailing 226/250 on the control socket has to be read
 // too, or it would be mistaken for the next command's reply.
 func _xfer_in(c &: Client, command: str): str:
-    dc := _data_open(c)
-    if !tcp.ConnOk(dc): ret "" end
+    mut dc := _data_open(c)
+    if !dc.ok: ret "" end
     code := _cmd(c, command)
     if !_good(code):
-        tcp.Close(dc)
+        _data_close(dc)
         ret ""
     end
     body := _drain(dc)
-    tcp.Close(dc)
+    _data_close(dc)
     _read_reply(c)
     ret body
 
 end
 
 func _xfer_out(c &: Client, command: str, payload: str): bool:
-    dc := _data_open(c)
-    if !tcp.ConnOk(dc): ret false end
+    mut dc := _data_open(c)
+    if !dc.ok: ret false end
     code := _cmd(c, command)
     if !_good(code):
-        tcp.Close(dc)
+        _data_close(dc)
         ret false
     end
     mut sent := 0
-    if payload.len() > 0: sent = tcp.Write(dc, payload) end
-    tcp.Close(dc)
+    if payload.len() > 0: sent = _data_write(dc, payload) end
+    _data_close(dc)
     final := _read_reply(c)
     ret _good(final) && (payload.len() == 0 || sent > 0)
 end
@@ -393,6 +477,80 @@ pub func Dial(host: str, port: int): Client:
     ret c
 end
 
+// Upgrades an already-dialled connection to TLS (RFC 4217, "explicit"
+// FTPS - the only form still standardised; the old implicit-on-port-990
+// variant never was). Call it before Login, which is the entire point:
+// plain FTP would otherwise put the password on the wire in the clear.
+//
+// PBSZ 0 then PROT P asks for the data connections to be protected too.
+// A server may refuse just that part, in which case the control channel
+// stays encrypted and transfers do not - so prot_p records what was
+// actually agreed rather than what was asked for.
+@en "AuthTLS"
+@fa "ارتقا به تی‌ال‌اس"
+@ar "الترقیة إلی TLS"
+pub func AuthTLSWith(c &: Client, cfg: tls.Config): bool:
+    if !c.ok || c.secure: ret false end
+    if _cmd(c, "AUTH TLS") != 234: ret false end
+    c.tls_cfg = cfg
+    tc := tcp.UpgradeTLS(c.conn, cfg)
+    if !tls.ConnOk(tc): ret false end
+    _tls_slots.push(tc)
+    c.tls_idx = _tls_slots.len() - 1
+    c.secure = true
+    // Anything buffered was read before the handshake and cannot belong
+    // to the encrypted stream.
+    c.rxbuf = ""
+    if _cmd(c, "PBSZ 0") == 200:
+        c.prot_p = _cmd(c, "PROT P") == 200
+    end
+    ret true
+end
+
+// AuthTLSWith using the default trust store, which is what almost every
+// caller wants. Use AuthTLSWith directly to pin a certificate, point at a
+// private CA (Config.ca_file), or reach a test server.
+@en "AuthTLS"
+@fa "احراز تی‌ال‌اس"
+@ar "مصادقة TLS"
+pub func AuthTLS(c &: Client): bool:
+    ret AuthTLSWith(c, tls.NewConfig(c.host))
+end
+
+// Dial + AuthTLS, which is how an FTPS session almost always starts.
+@en "DialTLS"
+@fa "اتصال امن"
+@ar "اتصال آمن"
+pub func DialTLS(host: str, port: int): Client:
+    mut c := Dial(host, port)
+    if !c.ok: ret c end
+    if !AuthTLS(c): c.ok = false end
+    ret c
+end
+
+// DialTLS with a caller-supplied TLS config.
+@en "DialTLSWith"
+@fa "اتصال امن با تنظیمات"
+@ar "اتصال آمن بإعدادات"
+pub func DialTLSWith(host: str, port: int, cfg: tls.Config): Client:
+    mut c := Dial(host, port)
+    if !c.ok: ret c end
+    if !AuthTLSWith(c, cfg): c.ok = false end
+    ret c
+end
+
+// True when the control channel is encrypted.
+@en "Secure"
+@fa "امن"
+@ar "آمن"
+pub func Secure(c: Client): bool: ret c.secure end
+
+// True when transfers are encrypted too (PROT P was accepted).
+@en "SecureData"
+@fa "داده امن"
+@ar "بیانات آمنة"
+pub func SecureData(c: Client): bool: ret c.prot_p end
+
 @en "Login"
 @fa "ورود"
 @ar "تسجیل الدخول"
@@ -411,8 +569,17 @@ end
 @ar "إنهاء"
 pub func Quit(c &: Client):
     if tcp.ConnOk(c.conn):
-        _cmd(c, "QUIT")
-        tcp.Close(c.conn)
+        // The reply is read and discarded on purpose: a server may answer
+        // 221 and close, or just close, and neither is worth failing on.
+        _bye := _cmd(c, "QUIT")
+        if c.secure:
+            mut tc := _tls_slots.get(c.tls_idx)
+            tls.Close(tc)
+            _tls_slots.set(c.tls_idx, tc)
+            c.secure = false
+        else:
+            tcp.Close(c.conn)
+        end
     end
     c.ok = false
 end

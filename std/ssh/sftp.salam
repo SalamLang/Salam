@@ -18,6 +18,8 @@ import os
 import mem
 import str
 import fs
+import fs.dir
+import filepath
 
 // SFTP version 3 (draft-ietf-secsh-filexfer-02) file transfer, the version
 // essentially every server still speaks (OpenSSH's sftp-server has offered
@@ -646,4 +648,116 @@ pub func ListDir(client &: Client, sftp &: Sftp, path: str): Vector<SftpFileInfo
     _sftp_close_handle(client.transport, sftp, handle)
     FreeBuf(handle)
     ret entries
+end
+
+// SFTP has no opcode for any of the four below: the protocol works one
+// path at a time, so a caller wanting a whole tree had to write the walk
+// itself. These do it once, here.
+
+@en "SftpMkdirAll"
+@fa "ساخت مسیر کامل"
+@ar "إنشاء المسار کاملا"
+pub func MkdirAll(client &: Client, sftp &: Sftp, path: str): bool:
+    parts := str.Split(path, "/")
+    defer parts.free()
+    absolute := path.len() > 0 && path.substr(0, 1) == "/"
+    mut cur := ""
+    each part in parts:
+        if part.len() > 0:
+            if cur.len() == 0:
+                if absolute:
+                    cur = "/" + part
+                else:
+                    cur = part
+                end
+            else:
+                cur = cur + "/" + part
+            end
+            // An existing component is not a failure - that is the whole
+            // difference from Mkdir - so the result is judged by what is
+            // there afterwards, not by this call.
+            if !Exists(client, sftp, cur):
+                Mkdir(client, sftp, cur)
+            end
+        end
+    end
+    info := Stat(client, sftp, path)
+    ret info.is_dir
+end
+
+// Removes `path` whatever it is: a file, or a directory and everything
+// beneath it. Depth first, because a directory cannot be removed until
+// it is empty.
+@en "SftpRemoveAll"
+@fa "حذف همه"
+@ar "حذف الکل"
+pub func RemoveAll(client &: Client, sftp &: Sftp, path: str): bool:
+    info := Stat(client, sftp, path)
+    if !info.is_dir:
+        ret Remove(client, sftp, path)
+    end
+    entries := ListDir(client, sftp, path)
+    defer entries.free()
+    mut ok := true
+    each e in entries:
+        if e.name != "." && e.name != "..":
+            child := path + "/" + e.name
+            if e.is_dir:
+                if !RemoveAll(client, sftp, child): ok = false end
+            else:
+                if !Remove(client, sftp, child): ok = false end
+            end
+        end
+    end
+    if !Rmdir(client, sftp, path): ok = false end
+    ret ok
+end
+
+// Copies a whole remote directory into `local_path`, creating it and
+// every subdirectory. Returns false if any one file failed, having still
+// copied the others.
+@en "SftpDownloadDir"
+@fa "دریافت پوشه"
+@ar "تنزیل مجلد"
+pub func DownloadDir(client &: Client, sftp &: Sftp, remote_path: str, local_path: str): bool:
+    dir.MkdirAll(local_path)
+    entries := ListDir(client, sftp, remote_path)
+    defer entries.free()
+    mut ok := true
+    each e in entries:
+        if e.name != "." && e.name != "..":
+            rchild := remote_path + "/" + e.name
+            lchild := filepath.Join(local_path, e.name)
+            if e.is_dir:
+                if !DownloadDir(client, sftp, rchild, lchild): ok = false end
+            else:
+                if !Download(client, sftp, rchild, lchild): ok = false end
+            end
+        end
+    end
+    ret ok
+end
+
+// Copies a whole local directory to `remote_path`, creating it and every
+// subdirectory.
+@en "SftpUploadDir"
+@fa "ارسال پوشه"
+@ar "رفع مجلد"
+pub func UploadDir(client &: Client, sftp &: Sftp, local_path: str, remote_path: str): bool:
+    MkdirAll(client, sftp, remote_path)
+    names := os.ListDir(local_path)
+    defer names.free()
+    mut ok := true
+    each name in names:
+        if name != "." && name != "..":
+            lchild := filepath.Join(local_path, name)
+            rchild := remote_path + "/" + name
+            if os.IsDir(lchild):
+                if !UploadDir(client, sftp, lchild, rchild): ok = false end
+            else:
+                if !Upload(client, sftp, lchild, rchild): ok = false end
+            end
+        end
+    end
+    ret ok
 end

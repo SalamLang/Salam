@@ -330,7 +330,9 @@ class MainActivity : ComponentActivity() {
         // WebView itself, which cannot open them.
         private fun routeUrl(url: Uri): Boolean =
             when (url.scheme?.lowercase()) {
-                "https" -> false
+                "https" -> {
+                    false
+                }
 
                 // android:usesCleartextTraffic="false" is only honoured from API 23, so on 21
                 // and 22 nothing stops a plain http navigation. Refusing it here ourselves keeps

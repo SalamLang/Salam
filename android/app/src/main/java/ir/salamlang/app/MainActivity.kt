@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -31,6 +32,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.RequiresApi
 import androidx.core.net.toUri
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.core.view.ViewCompat
@@ -328,7 +330,15 @@ class MainActivity : ComponentActivity() {
         // WebView itself, which cannot open them.
         private fun routeUrl(url: Uri): Boolean =
             when (url.scheme?.lowercase()) {
-                "http", "https" -> false
+                "https" -> false
+
+                // android:usesCleartextTraffic="false" is only honoured from API 23, so on 21
+                // and 22 nothing stops a plain http navigation. Refusing it here ourselves keeps
+                // one behaviour across the whole supported range.
+                "http" -> {
+                    Log.w(TAG, "blocked cleartext navigation: $url")
+                    true
+                }
 
                 else -> {
                     openExternally(url)
@@ -362,6 +372,9 @@ class MainActivity : ComponentActivity() {
             hideSplash()
         }
 
+        // The framework only dispatches this form from API 23 up; the legacy overload below
+        // covers 21 and 22. WebResourceError itself is API 23, hence the annotation.
+        @RequiresApi(Build.VERSION_CODES.M)
         override fun onReceivedError(
             view: WebView,
             request: WebResourceRequest,
@@ -393,6 +406,9 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        // API 23 and up only. Before 23 WebView never surfaced http status codes to the
+        // client at all, so there is nothing to fall back to; a 4xx or 5xx page just renders
+        // as the server sent it. Nothing here touches an API above 21, so no annotation.
         override fun onReceivedHttpError(
             view: WebView,
             request: WebResourceRequest,

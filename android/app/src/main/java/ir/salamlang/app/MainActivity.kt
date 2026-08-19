@@ -1,6 +1,5 @@
 package ir.salamlang.app
 
-import android.Manifest
 import android.annotation.SuppressLint
 import android.content.ActivityNotFoundException
 import android.content.Intent
@@ -17,7 +16,6 @@ import android.view.ViewGroup
 import android.view.animation.DecelerateInterpolator
 import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
-import android.webkit.GeolocationPermissions
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
@@ -33,7 +31,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.core.view.ViewCompat
@@ -53,22 +50,9 @@ class MainActivity : ComponentActivity() {
     private val splashTimeoutRunnable = Runnable { hideSplash() }
     private var splashHidden = false
 
-    private var geolocationOrigin: String? = null
-    private var geolocationCallback: GeolocationPermissions.Callback? = null
-
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
 
     private var popupWebView: WebView? = null
-
-    private val locationPermissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
-            val granted =
-                result[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
-                    result[Manifest.permission.ACCESS_COARSE_LOCATION] == true
-            geolocationCallback?.invoke(geolocationOrigin.orEmpty(), granted, false)
-            geolocationCallback = null
-            geolocationOrigin = null
-        }
 
     private val fileChooserLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -147,7 +131,6 @@ class MainActivity : ComponentActivity() {
         settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
-            setGeolocationEnabled(true)
             javaScriptCanOpenWindowsAutomatically = true
             setSupportMultipleWindows(true)
             loadWithOverviewMode = true
@@ -240,15 +223,6 @@ class MainActivity : ComponentActivity() {
             },
         )
     }
-
-    private fun hasLocationPermission(): Boolean =
-        ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) ==
-            PackageManager.PERMISSION_GRANTED ||
-            ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.ACCESS_COARSE_LOCATION,
-            ) ==
-            PackageManager.PERMISSION_GRANTED
 
     private fun hideSplash() {
         if (splashHidden) return
@@ -411,24 +385,6 @@ class MainActivity : ComponentActivity() {
                 "console[${message.messageLevel()}]: ${message.message()} (${message.sourceId()}:${message.lineNumber()})",
             )
             return true
-        }
-
-        override fun onGeolocationPermissionsShowPrompt(
-            origin: String,
-            callback: GeolocationPermissions.Callback,
-        ) {
-            if (hasLocationPermission()) {
-                callback.invoke(origin, true, false)
-            } else {
-                geolocationOrigin = origin
-                geolocationCallback = callback
-                locationPermissionLauncher.launch(
-                    arrayOf(
-                        Manifest.permission.ACCESS_FINE_LOCATION,
-                        Manifest.permission.ACCESS_COARSE_LOCATION,
-                    ),
-                )
-            }
         }
 
         override fun onShowFileChooser(

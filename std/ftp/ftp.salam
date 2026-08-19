@@ -1,0 +1,1230 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "ftp"
+@fa "اف‌تی‌پی"
+@ar "بروتوکول نقل الملفات"
+package ftp
+
+import net.tcp
+import tls
+import conv
+import mem
+import str
+import filepath
+import fs.file
+import fs.dir
+
+// An FTP client (RFC 959), plus the extensions everyone actually relies on:
+// EPSV (RFC 2428) so it works over IPv6, SIZE and MDTM (RFC 3659), and the
+// recursive walks the protocol itself has no opcode for.
+//
+// FTP splits itself over two sockets. Commands and replies go over the
+// control connection, which stays open for the session; every transfer -
+// a file, or even a directory listing - opens a second, one-shot data
+// connection. This client only ever asks the server to open that port
+// (passive mode). The alternative, active mode, has the SERVER dial back
+// to the client, which no NAT built after about 1995 permits, so it is
+// deliberately absent.
+//
+// A reply is a 3-digit code and some text, and it may span lines: the
+// non-final lines put '-' after the code, the last one a space. That is
+// the only reliable terminator, because a continuation line is free to
+// begin with three digits of its own.
+//
+// Prefer sftp (std/ssh) wherever the far end offers it - FTP sends the
+// password in the clear and needs a second port open. This package is for
+// the servers that offer nothing else.
+
+// Local file I/O goes through fopen/fread/fwrite rather than std/io's
+// str-based helpers: a Salam str stops at the first 0x00, so anything
+// that is not plain text would be silently truncated on its way to or
+// from disk. The wire side is byte-based for the same reason.
+extern:
+    func fopen(path: str, mode: str): void*
+    func fclose(stream: void*): int
+    func fread(ptr: void*, size: u64, nmemb: u64, stream: void*): u64
+    func fwrite(ptr: void*, size: u64, nmemb: u64, stream: void*): u64
+end
+
+// A tls.Conn cannot be a struct field (the same codegen limitation
+// net/websocket and net/email document), so a secured connection lives in
+// this table and the struct carries its index. Slots are never reused:
+// an FTPS session is long-lived and the table is one pointer per session.
+mut _tls_slots := Vector {} as Vector<tls.Conn>
+
+@en "FileInfo"
+@fa "اطلاعات پرونده"
+@ar "معلومات الملف"
+pub struct FileInfo:
+    pub name: str = ""
+    pub size: i64 = 0 as i64
+    pub is_dir: bool = false
+    pub is_link: bool = false
+    // Verbatim from LIST ("rwxr-xr-x"), or "" when the listing format
+    // carries no mode column.
+    pub mode: str = ""
+    // Verbatim date text from LIST. Server formats vary far too much to
+    // parse into a timestamp; ModTime() asks the server instead.
+    pub raw_date: str = ""
+end
+
+@en "Client"
+@fa "کارخواه"
+@ar "عمیل"
+pub struct Client:
+    pub conn: tcp.Conn = tcp.Conn {}
+    pub ok: bool = false
+    pub host: str = ""
+    pub port: int = 21
+    // Bytes read off the control socket that have not been handed out as a
+    // line yet. A reply can arrive split across reads, or two replies can
+    // land in one, so leftovers have to survive between calls.
+    pub rxbuf: str = ""
+    pub last_reply: str = ""
+    pub last_code: int = 0
+    // Control channel is under TLS (after AUTH TLS).
+    pub secure: bool = false
+    pub tls_idx: int = 0 - 1
+    // PROT P accepted, so data connections get TLS too. Kept separate
+    // from `secure`: RFC 4217 allows a protected control channel with a
+    // cleartext data channel, and some servers still only offer that.
+    pub prot_p: bool = false
+    // The config AuthTLS was given, reused for every data connection so
+    // both channels are validated the same way.
+    pub tls_cfg: tls.Config = tls.Config {}
+end
+
+// A data connection, which is TLS or not independently of the control one.
+struct DataConn:
+    pub conn: tcp.Conn = tcp.Conn {}
+    pub tls_idx: int = 0 - 1
+    pub secure: bool = false
+    pub ok: bool = false
+end
+
+// ============================================================ internals
+
+// A growable byte buffer. Every transfer body travels through one of
+// these, so a payload's length is carried explicitly instead of being
+// inferred from a terminator that binary data is free to contain.
+struct Bytes:
+    pub p: void* = null
+    pub len: int = 0
+    pub cap: int = 0
+end
+
+func _bytes_new(cap: int): Bytes:
+    mut b := Bytes {}
+    mut want := cap
+    if want < 1024: want = 1024 end
+    b.p = mem.Allocate(want as u64)
+    b.cap = want
+    b.len = 0
+    ret b
+end
+
+func _bytes_grow(b &: Bytes, need: int):
+    if b.len + need <= b.cap: ret end
+    mut want := b.cap * 2
+    until want < b.len + need:
+        want = want * 2
+    end
+    b.p = mem.Reallocate(b.p, want as u64)
+    b.cap = want
+end
+
+func _bytes_append(b &: Bytes, src: void*, n: int):
+    if n <= 0: ret end
+    _bytes_grow(b, n)
+    dst := ((b.p as i64) + (b.len as i64)) as void*
+    mem.Copy(dst, src, n as u64)
+    b.len = b.len + n
+end
+
+func _bytes_free(b &: Bytes):
+    if b.p != null: mem.Free(b.p) end
+    b.p = null
+    b.len = 0
+    b.cap = 0
+end
+
+
+func _is_digits(s: str, from: int, n: int): bool:
+    if s.len() < from + n: ret false end
+    mut ok := true
+    repeat n with i:
+        ch := s.substr(from + i, 1)
+        if ch < "0" || ch > "9": ok = false end
+    end
+    ret ok
+end
+
+func _code_of(line: str): int:
+    if !_is_digits(line, 0, 3): ret 0 end
+    ret line.substr(0, 3).to_int()
+end
+
+// A reply ends on "NNN " - three digits then a space. A continuation line
+// uses '-' there, which is what stops "230-Welcome to 220 Industries"
+// from being read as the end of the reply.
+func _is_final(line: str): bool:
+    if line.len() < 4: ret false end
+    if !_is_digits(line, 0, 3): ret false end
+    ret line.substr(3, 1) == " "
+end
+
+func _fill(c &: Client): bool:
+    mut chunk := ""
+    if c.secure:
+        mut tc := _tls_slots.get(c.tls_idx)
+        chunk = tls.Read(tc, 4096)
+        _tls_slots.set(c.tls_idx, tc)
+    else:
+        chunk = tcp.Read(c.conn, 4096)
+    end
+    if chunk.len() == 0: ret false end
+    c.rxbuf += chunk
+    ret true
+end
+
+func _read_line(c &: Client): str:
+    mut idx := c.rxbuf.find("\r\n")
+    mut spin := 0
+    until idx < 0 && spin < 400:
+        if !_fill(c):
+            spin = 400
+        else:
+            idx = c.rxbuf.find("\r\n")
+            spin += 1
+        end
+    end
+    if idx < 0:
+        line := c.rxbuf
+        c.rxbuf = ""
+        ret line
+    end
+    line := c.rxbuf.substr(0, idx)
+    c.rxbuf = c.rxbuf.substr(idx + 2, c.rxbuf.len() - idx - 2)
+    ret line
+end
+
+func _read_reply(c &: Client): int:
+    mut full := ""
+    mut done := false
+    mut guard := 0
+    // A multi-line reply ends on "NNN " carrying the SAME code it opened
+    // with (RFC 959 4.2). Accepting any "NNN " would let an intermediate
+    // line that happens to look like one end the reply early, leaving the
+    // real terminator in the buffer to be misread as the next command's
+    // answer - and every reply after that is then off by one.
+    mut opened := 0
+    until !done && guard < 2000:
+        line := _read_line(c)
+        if guard == 0: opened = _code_of(line) end
+        if full.len() > 0: full += "\r\n" end
+        full += line
+        if line.len() == 0:
+            done = true
+        else _is_final(line) && _code_of(line) == opened:
+            done = true
+        end
+        guard += 1
+    end
+    c.last_reply = full
+    c.last_code = _code_of(full)
+    ret c.last_code
+end
+
+func _send(c &: Client, line: str): int:
+    if c.secure:
+        mut tc := _tls_slots.get(c.tls_idx)
+        n := tls.Write(tc, line + "\r\n")
+        _tls_slots.set(c.tls_idx, tc)
+        ret n
+    end
+    ret tcp.Write(c.conn, line + "\r\n")
+end
+
+// Refuses a command carrying CR or LF. Paths, usernames and passwords
+// are all interpolated into these lines, so without this a value holding
+// "\r\n" would end the command and have whatever follows executed as
+// another one.
+func _cmd(c &: Client, line: str): int:
+    if line.find("\r") >= 0 || line.find("\n") >= 0:
+        c.last_reply = "500 refused locally: command contains CR or LF"
+        c.last_code = 500
+        ret 500
+    end
+    _send(c, line)
+    ret _read_reply(c)
+end
+
+func _good(code: int): bool:
+    ret code >= 100 && code < 400
+end
+
+// Splits on runs of spaces/tabs and drops the empties, which is what
+// every LIST format needs and what a plain split on " " does not give.
+func _fields(s: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    mut cur := ""
+    repeat s.len() with i:
+        ch := s.substr(i, 1)
+        if ch == " " || ch == "\t":
+            if cur.len() > 0:
+                out.push(cur)
+                cur = ""
+            end
+        else:
+            cur += ch
+        end
+    end
+    if cur.len() > 0: out.push(cur) end
+    ret out
+end
+
+// Byte offset just past the nth whitespace-separated field, so a name
+// containing spaces can be taken verbatim from the original line rather
+// than rebuilt from split pieces.
+func _skip_fields(s: str, n: int): int:
+    mut pos := 0
+    mut seen := 0
+    until seen < n && pos < s.len():
+        until pos < s.len() && (s.substr(pos, 1) == " " || s.substr(pos, 1) == "\t"):
+            pos += 1
+        end
+        if pos >= s.len(): ret pos end
+        until pos < s.len() && s.substr(pos, 1) != " " && s.substr(pos, 1) != "\t":
+            pos += 1
+        end
+        seen += 1
+    end
+    until pos < s.len() && (s.substr(pos, 1) == " " || s.substr(pos, 1) == "\t"):
+        pos += 1
+    end
+    ret pos
+end
+
+// "227 Entering Passive Mode (h1,h2,h3,h4,p1,p2)" -> "h1.h2.h3.h4:port".
+// Returns "" when the reply does not carry a usable address.
+func _parse_pasv(reply: str): str:
+    open_at := reply.find("(")
+    if open_at < 0: ret "" end
+    rest := reply.substr(open_at + 1, reply.len() - open_at - 1)
+    close_at := rest.find(")")
+    if close_at < 0: ret "" end
+    inner := rest.substr(0, close_at)
+    parts := str.Split(inner, ",")
+    defer parts.free()
+    if parts.len() < 6: ret "" end
+    mut host := ""
+    repeat 4 with i:
+        if i > 0: host += "." end
+        host += str.Trim(parts.get(i))
+    end
+    hi := str.Trim(parts.get(4)).to_int()
+    lo := str.Trim(parts.get(5)).to_int()
+    port := hi * 256 + lo
+    if port <= 0 || port > 65535: ret "" end
+    ret host + ":" + conv.FormatInt(port as i64)
+end
+
+// "229 Entering Extended Passive Mode (|||6446|)" -> 6446, else 0. EPSV
+// only ever returns a port; the host is the one already connected to.
+func _parse_epsv(reply: str): int:
+    open_at := reply.find("(")
+    if open_at < 0: ret 0 end
+    rest := reply.substr(open_at + 1, reply.len() - open_at - 1)
+    close_at := rest.find(")")
+    if close_at < 0: ret 0 end
+    inner := rest.substr(0, close_at)
+    if inner.len() == 0: ret 0 end
+    // RFC 2428 lets the server pick the delimiter; it is simply the first
+    // character inside the parentheses. Assuming '|' rejects a valid
+    // "(!!!6446!)" and drops the session back to IPv4-only PASV.
+    delim := inner.substr(0, 1)
+    parts := str.Split(inner, delim)
+    defer parts.free()
+    mut port := 0
+    each p in parts:
+        t := str.Trim(p)
+        if t.len() > 0 && _is_digits(t, 0, t.len()):
+            port = t.to_int()
+        end
+    end
+    if port <= 0 || port > 65535: ret 0 end
+    ret port
+end
+
+// One LIST line -> FileInfo. Handles the Unix `ls -l` layout every real
+// server emits, and the older MSDOS/IIS one. Returns a FileInfo whose
+// name is "" when the line is a total/blank/unparsable header.
+func _parse_list_line(line: str): FileInfo:
+    mut fi := FileInfo {}
+    t := str.Trim(line)
+    if t.len() == 0: ret fi end
+    f := _fields(t)
+    defer f.free()
+    if f.len() < 4: ret fi end
+
+    first := f.get(0)
+    // MSDOS/IIS: "08-19-26  10:00AM       <DIR>          name"
+    if first.len() >= 8 && first.find("-") == 2:
+        fi.raw_date = first + " " + f.get(1)
+        third := f.get(2)
+        if third == "<DIR>":
+            fi.is_dir = true
+        else:
+            fi.size = third.to_int() as i64
+        end
+        at := _skip_fields(t, 3)
+        if at < t.len(): fi.name = str.Trim(t.substr(at, t.len() - at)) end
+        ret fi
+    end
+
+    // Unix: "-rw-r--r--  1 owner group  1234 Aug 19 10:00 name"
+    if first.len() < 10 || f.len() < 9: ret fi end
+    kind := first.substr(0, 1)
+    fi.is_dir = kind == "d"
+    fi.is_link = kind == "l"
+    fi.mode = first.substr(1, first.len() - 1)
+    fi.size = f.get(4).to_int() as i64
+    fi.raw_date = f.get(5) + " " + f.get(6) + " " + f.get(7)
+    at := _skip_fields(t, 8)
+    mut name := ""
+    if at < t.len(): name = str.Trim(t.substr(at, t.len() - at)) end
+    // "link -> target": the entry is the name on the left.
+    arrow := name.find(" -> ")
+    if fi.is_link && arrow > 0: name = name.substr(0, arrow) end
+    fi.name = name
+    ret fi
+end
+
+// Opens the data connection for the next transfer. EPSV first: it is the
+// only one of the two that works over IPv6, and a server that does not
+// know it answers 5xx harmlessly, leaving PASV as the fallback.
+func _data_open(c &: Client): DataConn:
+    mut d := DataConn {}
+    mut raw := tcp.Conn {}
+    if _good(_cmd(c, "EPSV")) && c.last_code == 229:
+        port := _parse_epsv(c.last_reply)
+        if port > 0:
+            raw = tcp.Dial(c.host, port)
+        end
+    end
+    if !tcp.ConnOk(raw) && _cmd(c, "PASV") == 227:
+        addr := _parse_pasv(c.last_reply)
+        if addr.len() > 0:
+            sep := addr.find(":")
+            port := addr.substr(sep + 1, addr.len() - sep - 1).to_int()
+            // Only the port is taken. PASV also names a host, and honouring
+            // it would let a server point this client at any address it
+            // likes - the FTP bounce attack, and an SSRF primitive for
+            // anything that hands a URL to this package. The data
+            // connection goes back to the host we chose to talk to.
+            raw = tcp.Dial(c.host, port)
+        end
+    end
+    if !tcp.ConnOk(raw): ret d end
+    if c.prot_p:
+        // PROT P: the data channel gets its own TLS session. The server
+        // name is the one dialled, so a cert is checked against the host
+        // the user actually asked for.
+        tc := tcp.UpgradeTLS(raw, c.tls_cfg)
+        if !tls.ConnOk(tc): ret d end
+        _tls_slots.push(tc)
+        d.tls_idx = _tls_slots.len() - 1
+        d.secure = true
+        d.ok = true
+        ret d
+    end
+    d.conn = raw
+    d.ok = true
+    ret d
+end
+
+func _data_read(d &: DataConn, max: int): str:
+    if d.secure:
+        mut tc := _tls_slots.get(d.tls_idx)
+        chunk := tls.Read(tc, max)
+        _tls_slots.set(d.tls_idx, tc)
+        ret chunk
+    end
+    ret tcp.Read(d.conn, max)
+end
+
+func _data_write(d &: DataConn, payload: str): int:
+    if d.secure:
+        mut tc := _tls_slots.get(d.tls_idx)
+        n := tls.Write(tc, payload)
+        _tls_slots.set(d.tls_idx, tc)
+        ret n
+    end
+    ret tcp.Write(d.conn, payload)
+end
+
+func _data_read_bytes(d &: DataConn, buf: void*, max: int): int:
+    if d.secure:
+        mut tc := _tls_slots.get(d.tls_idx)
+        n := tls.ReadBytes(tc, buf, max)
+        _tls_slots.set(d.tls_idx, tc)
+        ret n
+    end
+    ret tcp.ReadBytes(d.conn, buf, max)
+end
+
+func _data_write_bytes(d &: DataConn, ptr: void*, n: int): int:
+    if d.secure:
+        mut tc := _tls_slots.get(d.tls_idx)
+        w := tls.WriteBytes(tc, ptr, n)
+        _tls_slots.set(d.tls_idx, tc)
+        ret w
+    end
+    ret tcp.WriteBytes(d.conn, ptr, n)
+end
+
+// Reads the data connection to EOF as bytes. Unlike _drain this carries
+// the length explicitly, so a payload containing 0x00 survives.
+func _drain_bytes(d &: DataConn): Bytes:
+    mut out := _bytes_new(16384)
+    chunk := mem.Allocate(16384 as u64)
+    mut more := true
+    until more:
+        n := _data_read_bytes(d, chunk, 16384)
+        if n <= 0:
+            more = false
+        else:
+            _bytes_append(out, chunk, n)
+        end
+    end
+    mem.Free(chunk)
+    ret out
+end
+
+func _data_close(d &: DataConn):
+    if d.secure:
+        mut tc := _tls_slots.get(d.tls_idx)
+        tls.Close(tc)
+        _tls_slots.set(d.tls_idx, tc)
+    else:
+        tcp.Close(d.conn)
+    end
+    d.ok = false
+end
+
+// Reads the data connection until the server closes it, which is how FTP
+// signals end-of-transfer - there is no length header anywhere.
+func _drain(d &: DataConn): str:
+    mut out := ""
+    mut more := true
+    until more:
+        chunk := _data_read(d, 8192)
+        if chunk.len() == 0:
+            more = false
+        else:
+            out += chunk
+        end
+    end
+    ret out
+end
+
+// Runs a command whose payload arrives on a data connection, and returns
+// the payload. The trailing 226/250 on the control socket has to be read
+// too, or it would be mistaken for the next command's reply.
+func _xfer_in(c &: Client, command: str): str:
+    mut dc := _data_open(c)
+    if !dc.ok: ret "" end
+    code := _cmd(c, command)
+    if !_good(code):
+        _data_close(dc)
+        ret ""
+    end
+    body := _drain(dc)
+    _data_close(dc)
+    _read_reply(c)
+    ret body
+
+end
+
+func _xfer_out(c &: Client, command: str, payload: str): bool:
+    mut dc := _data_open(c)
+    if !dc.ok: ret false end
+    code := _cmd(c, command)
+    if !_good(code):
+        _data_close(dc)
+        ret false
+    end
+    mut sent := 0
+    if payload.len() > 0: sent = _data_write(dc, payload) end
+    _data_close(dc)
+    final := _read_reply(c)
+    ret _good(final) && (payload.len() == 0 || sent > 0)
+end
+
+// The byte-safe twin of _xfer_in: same protocol dance, length-carrying
+// result. Callers must _bytes_free the result.
+func _xfer_in_bytes(c &: Client, command: str): Bytes:
+    mut dc := _data_open(c)
+    if !dc.ok: ret _bytes_new(0) end
+    code := _cmd(c, command)
+    if !_good(code):
+        _data_close(dc)
+        ret _bytes_new(0)
+    end
+    body := _drain_bytes(dc)
+    _data_close(dc)
+    _read_reply(c)
+    ret body
+end
+
+func _xfer_out_bytes(c &: Client, command: str, ptr: void*, n: int): bool:
+    mut dc := _data_open(c)
+    if !dc.ok: ret false end
+    code := _cmd(c, command)
+    if !_good(code):
+        _data_close(dc)
+        ret false
+    end
+    mut sent := 0
+    if n > 0: sent = _data_write_bytes(dc, ptr, n) end
+    _data_close(dc)
+    final := _read_reply(c)
+    ret _good(final) && (n == 0 || sent == n)
+end
+
+// True when `name` is one ordinary path component. Listing entries come
+// from the server, and joining one straight onto a local directory lets
+// a name like "../../etc/cron.d/x" write wherever it likes. Anything
+// that is not a plain component is dropped rather than sanitised - a
+// server sending one is not a case worth guessing the intent of.
+func _safe_component(name: str): bool:
+    if name.len() == 0: ret false end
+    if name == "." || name == "..": ret false end
+    if name.find("/") >= 0: ret false end
+    if name.find("\\") >= 0: ret false end
+    ret true
+end
+
+func _remote_join(base: str, name: str): str:
+    if base.len() == 0: ret name end
+    if base.substr(base.len() - 1, 1) == "/": ret base + name end
+    ret base + "/" + name
+end
+
+// ========================================================== public API
+
+// --- session ---------------------------------------------------------
+
+@en "Dial"
+@fa "اتصال"
+@ar "اتصال"
+pub func Dial(host: str, port: int): Client:
+    mut c := Client {}
+    c.host = host
+    c.port = port
+    c.conn = tcp.Dial(host, port)
+    if !tcp.ConnOk(c.conn): ret c end
+    // The server greets first; a 220 means it is ready to take commands.
+    c.ok = _read_reply(c) == 220
+    ret c
+end
+
+// Upgrades an already-dialled connection to TLS (RFC 4217, "explicit"
+// FTPS - the only form still standardised; the old implicit-on-port-990
+// variant never was). Call it before Login, which is the entire point:
+// plain FTP would otherwise put the password on the wire in the clear.
+//
+// PBSZ 0 then PROT P asks for the data connections to be protected too.
+// A server may refuse just that part, in which case the control channel
+// stays encrypted and transfers do not - so prot_p records what was
+// actually agreed rather than what was asked for.
+@en "AuthTLS"
+@fa "ارتقا به تی‌ال‌اس"
+@ar "الترقیة إلی TLS"
+pub func AuthTLSWith(c &: Client, cfg: tls.Config): bool:
+    if !c.ok || c.secure: ret false end
+    if _cmd(c, "AUTH TLS") != 234: ret false end
+    c.tls_cfg = cfg
+    tc := tcp.UpgradeTLS(c.conn, cfg)
+    if !tls.ConnOk(tc): ret false end
+    _tls_slots.push(tc)
+    c.tls_idx = _tls_slots.len() - 1
+    c.secure = true
+    // Anything buffered was read before the handshake and cannot belong
+    // to the encrypted stream.
+    c.rxbuf = ""
+    if _cmd(c, "PBSZ 0") == 200:
+        c.prot_p = _cmd(c, "PROT P") == 200
+    end
+    ret true
+end
+
+// AuthTLSWith using the default trust store, which is what almost every
+// caller wants. Use AuthTLSWith directly to pin a certificate, point at a
+// private CA (Config.ca_file), or reach a test server.
+@en "AuthTLS"
+@fa "احراز تی‌ال‌اس"
+@ar "مصادقة TLS"
+pub func AuthTLS(c &: Client): bool:
+    ret AuthTLSWith(c, tls.NewConfig(c.host))
+end
+
+// Dial + AuthTLS, which is how an FTPS session almost always starts.
+@en "DialTLS"
+@fa "اتصال امن"
+@ar "اتصال آمن"
+pub func DialTLS(host: str, port: int): Client:
+    mut c := Dial(host, port)
+    if !c.ok: ret c end
+    if !AuthTLS(c): c.ok = false end
+    ret c
+end
+
+// DialTLS with a caller-supplied TLS config.
+@en "DialTLSWith"
+@fa "اتصال امن با تنظیمات"
+@ar "اتصال آمن بإعدادات"
+pub func DialTLSWith(host: str, port: int, cfg: tls.Config): Client:
+    mut c := Dial(host, port)
+    if !c.ok: ret c end
+    if !AuthTLSWith(c, cfg): c.ok = false end
+    ret c
+end
+
+// True when the control channel is encrypted.
+@en "Secure"
+@fa "امن"
+@ar "آمن"
+pub func Secure(c: Client): bool: ret c.secure end
+
+// True when transfers are encrypted too (PROT P was accepted).
+@en "SecureData"
+@fa "داده امن"
+@ar "بیانات آمنة"
+pub func SecureData(c: Client): bool: ret c.prot_p end
+
+@en "Login"
+@fa "ورود"
+@ar "تسجیل الدخول"
+pub func Login(c &: Client, user: str, password: str): bool:
+    if !c.ok: ret false end
+    code := _cmd(c, "USER " + user)
+    // 230 = logged in with no password at all (anonymous servers do this).
+    if code == 230: ret true end
+    // 331 = password wanted. Anything else is a refusal.
+    if code != 331: ret false end
+    ret _cmd(c, "PASS " + password) == 230
+end
+
+@en "Quit"
+@fa "خروج"
+@ar "إنهاء"
+pub func Quit(c &: Client):
+    if tcp.ConnOk(c.conn):
+        // The reply is read and discarded on purpose: a server may answer
+        // 221 and close, or just close, and neither is worth failing on.
+        _bye := _cmd(c, "QUIT")
+        if c.secure:
+            mut tc := _tls_slots.get(c.tls_idx)
+            tls.Close(tc)
+            _tls_slots.set(c.tls_idx, tc)
+            c.secure = false
+        else:
+            tcp.Close(c.conn)
+        end
+    end
+    c.ok = false
+end
+
+@en "Close"
+@fa "بستن"
+@ar "إغلاق"
+pub func Close(c &: Client):
+    Quit(c)
+end
+
+@en "Ok"
+@fa "سالم"
+@ar "جاهز"
+pub func Ok(c: Client): bool: ret c.ok end
+
+@en "LastReply"
+@fa "آخرین پاسخ"
+@ar "آخر رد"
+pub func LastReply(c: Client): str: ret c.last_reply end
+
+@en "LastCode"
+@fa "آخرین کد"
+@ar "آخر رمز"
+pub func LastCode(c: Client): int: ret c.last_code end
+
+// Sends a raw command and returns its reply code, for anything this
+// package does not wrap (SITE CHMOD, OPTS UTF8 ON, ...).
+@en "Command"
+@fa "فرمان"
+@ar "أمر"
+pub func Command(c &: Client, line: str): int: ret _cmd(c, line) end
+
+@en "Noop"
+@fa "بی‌کار"
+@ar "بدون عمل"
+pub func Noop(c &: Client): bool: ret _cmd(c, "NOOP") == 200 end
+
+@en "System"
+@fa "سامانه"
+@ar "النظام"
+pub func System(c &: Client): str:
+    if _cmd(c, "SYST") != 215: ret "" end
+    ret c.last_reply
+end
+
+@en "Features"
+@fa "قابلیت‌ها"
+@ar "الممیزات"
+pub func Features(c &: Client): str:
+    if !_good(_cmd(c, "FEAT")): ret "" end
+    ret c.last_reply
+end
+
+// --- transfer mode ---------------------------------------------------
+
+// Binary (TYPE I). Anything that is not plain text must go through this,
+// and it is what every function below assumes.
+@en "Binary"
+@fa "دودویی"
+@ar "ثنائي"
+pub func Binary(c &: Client): bool: ret _cmd(c, "TYPE I") == 200 end
+
+// Text (TYPE A). The server may rewrite line endings to its own
+// convention, so use it only for text you want translated.
+@en "Ascii"
+@fa "متنی"
+@ar "نصي"
+pub func Ascii(c &: Client): bool: ret _cmd(c, "TYPE A") == 200 end
+
+// --- directories -----------------------------------------------------
+
+@en "Pwd"
+@fa "مسیر جاری"
+@ar "المسار الحالي"
+pub func Pwd(c &: Client): str:
+    if _cmd(c, "PWD") != 257: ret "" end
+    // 257 "/some/dir" is current directory - the path is inside the quotes.
+    q := c.last_reply.find("\"")
+    if q < 0: ret "" end
+    rest := c.last_reply.substr(q + 1, c.last_reply.len() - q - 1)
+    q2 := rest.find("\"")
+    if q2 < 0: ret "" end
+    ret rest.substr(0, q2)
+end
+
+@en "Cwd"
+@fa "تغییر مسیر"
+@ar "تغییر المسار"
+pub func Cwd(c &: Client, path: str): bool: ret _cmd(c, "CWD " + path) == 250 end
+
+@en "CdUp"
+@fa "یک سطح بالا"
+@ar "للأعلی"
+pub func CdUp(c &: Client): bool:
+    code := _cmd(c, "CDUP")
+    ret code == 250 || code == 200
+end
+
+@en "Mkdir"
+@fa "ساخت پوشه"
+@ar "إنشاء مجلد"
+pub func Mkdir(c &: Client, path: str): bool: ret _cmd(c, "MKD " + path) == 257 end
+
+@en "Rmdir"
+@fa "حذف پوشه"
+@ar "حذف مجلد"
+pub func Rmdir(c &: Client, path: str): bool: ret _cmd(c, "RMD " + path) == 250 end
+
+// Creates every missing component of `path`, and reports success when the
+// whole path exists afterwards - a component that already exists is not
+// an error, which is the difference from Mkdir.
+@en "MkdirAll"
+@fa "ساخت مسیر کامل"
+@ar "إنشاء المسار کاملا"
+pub func MkdirAll(c &: Client, path: str): bool:
+    parts := str.Split(path, "/")
+    defer parts.free()
+    mut cur := ""
+    if path.len() > 0 && path.substr(0, 1) == "/": cur = "" end
+    mut ok := true
+    each part in parts:
+        if part.len() > 0:
+            cur = _remote_join(cur, part)
+            if path.substr(0, 1) == "/" && cur.substr(0, 1) != "/": cur = "/" + cur end
+            if !IsDir(c, cur): Mkdir(c, cur) end
+        end
+    end
+    ok = IsDir(c, path)
+    ret ok
+end
+
+// --- listing ---------------------------------------------------------
+
+// Raw LIST output, one server-formatted line per entry. Useful when the
+// server's format is not one List() understands.
+@en "ListRaw"
+@fa "فهرست خام"
+@ar "قائمة خام"
+pub func ListRaw(c &: Client, path: str): str:
+    mut command := "LIST"
+    if path.len() > 0: command = "LIST " + path end
+    ret _xfer_in(c, command)
+end
+
+// Parsed directory listing. "." and ".." are dropped: they are an artefact
+// of the listing, not entries a caller ever wants to walk into.
+@en "List"
+@fa "فهرست"
+@ar "قائمة"
+pub func List(c &: Client, path: str): Vector<FileInfo>:
+    mut out := Vector {} as Vector<FileInfo>
+    body := ListRaw(c, path)
+    if body.len() == 0: ret out end
+    lines := str.Split(body, "\n")
+    defer lines.free()
+    each line in lines:
+        fi := _parse_list_line(line)
+        if fi.name.len() > 0 && fi.name != "." && fi.name != "..":
+            out.push(fi)
+        end
+    end
+    ret out
+end
+
+// Bare names (NLST). Cheaper than List when the metadata is not needed,
+// and the one listing every server formats identically.
+@en "NameList"
+@fa "فهرست نام‌ها"
+@ar "قائمة الأسماء"
+pub func NameList(c &: Client, path: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    mut command := "NLST"
+    if path.len() > 0: command = "NLST " + path end
+    body := _xfer_in(c, command)
+    if body.len() == 0: ret out end
+    lines := str.Split(body, "\n")
+    defer lines.free()
+    each line in lines:
+        t := str.Trim(line)
+        if t.len() > 0 && t != "." && t != "..": out.push(t) end
+    end
+    ret out
+end
+
+// --- metadata --------------------------------------------------------
+
+// Size in bytes, or -1. Requires TYPE I on most servers, since in TYPE A
+// the size after line-ending translation is not knowable up front.
+@en "Size"
+@fa "اندازه"
+@ar "الحجم"
+pub func Size(c &: Client, path: str): i64:
+    if _cmd(c, "SIZE " + path) != 213: ret 0 - 1 as i64 end
+    f := _fields(c.last_reply)
+    defer f.free()
+    if f.len() < 2: ret 0 - 1 as i64 end
+    ret f.get(1).to_int() as i64
+end
+
+// Modification time as the server's own "YYYYMMDDhhmmss" (UTC), or "".
+@en "ModTime"
+@fa "زمان تغییر"
+@ar "وقت التعدیل"
+pub func ModTime(c &: Client, path: str): str:
+    if _cmd(c, "MDTM " + path) != 213: ret "" end
+    f := _fields(c.last_reply)
+    defer f.free()
+    if f.len() < 2: ret "" end
+    ret f.get(1)
+end
+
+// True when `path` is a directory, tested by asking the server to enter
+// it and stepping back - CWD is the one probe every server implements.
+@en "IsDir"
+@fa "پوشه است"
+@ar "هل هو مجلد"
+pub func IsDir(c &: Client, path: str): bool:
+    here := Pwd(c)
+    if !Cwd(c, path): ret false end
+    if here.len() > 0: Cwd(c, here) end
+    ret true
+end
+
+// True when `path` is a symbolic link, judged from its parent's listing
+// because FTP has no lstat. False when the parent cannot be listed, which
+// is the safe answer: callers use this to decide NOT to recurse.
+@en "IsLink"
+@fa "پیوند است"
+@ar "هل هو ارتباط"
+pub func IsLink(c &: Client, path: str): bool:
+    mut slash := 0 - 1
+    repeat path.len() with i:
+        if path.substr(i, 1) == "/": slash = i end
+    end
+    mut parent := ""
+    mut name := path
+    if slash >= 0:
+        parent = path.substr(0, slash)
+        name = path.substr(slash + 1, path.len() - slash - 1)
+        if parent.len() == 0: parent = "/" end
+    end
+    if name.len() == 0: ret false end
+    entries := List(c, parent)
+    defer entries.free()
+    mut found := false
+    each e in entries:
+        if e.name == name && e.is_link: found = true end
+    end
+    ret found
+end
+
+@en "Exists"
+@fa "وجود دارد"
+@ar "موجود"
+pub func Exists(c &: Client, path: str): bool:
+    if Size(c, path) >= (0 as i64): ret true end
+    ret IsDir(c, path)
+end
+
+// --- reading and writing ---------------------------------------------
+
+// Whole remote file as a string, without touching local disk.
+@en "Read"
+@fa "خواندن"
+@ar "قراءة"
+pub func Read(c &: Client, remote: str): str:
+    ret _xfer_in(c, "RETR " + remote)
+end
+
+// Writes `data` to `remote`, replacing it if it exists.
+@en "Write"
+@fa "نوشتن"
+@ar "کتابة"
+pub func Write(c &: Client, remote: str, data: str): bool:
+    ret _xfer_out(c, "STOR " + remote, data)
+end
+
+// Appends to `remote`, creating it when absent.
+@en "Append"
+@fa "افزودن"
+@ar "إلحاق"
+pub func Append(c &: Client, remote: str, data: str): bool:
+    ret _xfer_out(c, "APPE " + remote, data)
+end
+
+@en "Download"
+@fa "دریافت"
+@ar "تنزیل"
+pub func Download(c &: Client, remote: str, local: str): bool:
+    mut body := _xfer_in_bytes(c, "RETR " + remote)
+    if !_good(c.last_code):
+        _bytes_free(body)
+        ret false
+    end
+    out := fopen(local, "wb")
+    if out == null:
+        _bytes_free(body)
+        ret false
+    end
+    mut wrote := 0 as u64
+    if body.len > 0:
+        wrote = fwrite(body.p, 1 as u64, body.len as u64, out)
+    end
+    fclose(out)
+    ok := wrote == (body.len as u64)
+    _bytes_free(body)
+    ret ok
+end
+
+@en "Upload"
+@fa "ارسال"
+@ar "رفع"
+pub func Upload(c &: Client, local: str, remote: str): bool:
+    src := fopen(local, "rb")
+    // An unreadable source is a failure, not an empty upload - str-based
+    // file reads cannot tell those apart, which is half of why this path
+    // does its own I/O.
+    if src == null: ret false end
+    mut buf := _bytes_new(65536)
+    chunk := mem.Allocate(65536 as u64)
+    mut more := true
+    until more:
+        n := fread(chunk, 1 as u64, 65536 as u64, src)
+        if n == (0 as u64):
+            more = false
+        else:
+            _bytes_append(buf, chunk, n as int)
+        end
+    end
+    mem.Free(chunk)
+    fclose(src)
+    ok := _xfer_out_bytes(c, "STOR " + remote, buf.p, buf.len)
+    _bytes_free(buf)
+    ret ok
+end
+
+// --- removing and moving ---------------------------------------------
+
+@en "Delete"
+@fa "حذف"
+@ar "حذف"
+pub func Delete(c &: Client, path: str): bool: ret _cmd(c, "DELE " + path) == 250 end
+
+// Move or rename, on the server, without moving any bytes. This is FTP's
+// "cut and paste": RNFR names the source, RNTO the destination.
+@en "Rename"
+@fa "تغییر نام"
+@ar "إعادة تسمیة"
+pub func Rename(c &: Client, from_path: str, to_path: str): bool:
+    if _cmd(c, "RNFR " + from_path) != 350: ret false end
+    ret _cmd(c, "RNTO " + to_path) == 250
+end
+
+@en "Move"
+@fa "انتقال"
+@ar "نقل"
+pub func Move(c &: Client, from_path: str, to_path: str): bool:
+    ret Rename(c, from_path, to_path)
+end
+
+// Deletes `path` whatever it is: a file, or a directory and everything
+// under it. FTP has no recursive delete, so this walks the tree itself,
+// depth first - a directory cannot be removed until it is empty.
+@en "RemoveAll"
+@fa "حذف همه"
+@ar "حذف الکل"
+pub func RemoveAll(c &: Client, path: str): bool:
+    // IsDir probes with CWD, which follows a symlink - so on a link to a
+    // directory this would walk into the target and delete ITS contents
+    // before RMD failed on the link. Ask the parent listing what `path`
+    // itself is first; LIST reports a link as a link.
+    if IsLink(c, path): ret Delete(c, path) end
+    if !IsDir(c, path): ret Delete(c, path) end
+    entries := List(c, path)
+    defer entries.free()
+    mut ok := true
+    each e in entries:
+        child := _remote_join(path, e.name)
+        // e.is_link wins over e.is_dir: LIST marks a link 'l' whatever it
+        // points at, so a link is unlinked rather than followed.
+        if e.is_dir && !e.is_link:
+            if !RemoveAll(c, child): ok = false end
+        else:
+            if !Delete(c, child): ok = false end
+        end
+    end
+    if !Rmdir(c, path): ok = false end
+    ret ok
+end
+
+// --- recursive transfers ---------------------------------------------
+
+// Downloads a whole remote directory into `local`, creating it and every
+// subdirectory. Returns false if any single file failed, having still
+// copied the rest.
+@en "DownloadDir"
+@fa "دریافت پوشه"
+@ar "تنزیل مجلد"
+pub func DownloadDir(c &: Client, remote: str, local: str): bool:
+    dir.MkdirAll(local)
+    entries := List(c, remote)
+    defer entries.free()
+    mut ok := true
+    each e in entries:
+        if !_safe_component(e.name):
+            // Counted as a failure so the caller learns the copy is not
+            // complete, rather than silently getting fewer files.
+            ok = false
+            continue
+        end
+        rchild := _remote_join(remote, e.name)
+        lchild := filepath.Join(local, e.name)
+        if e.is_dir:
+            if !DownloadDir(c, rchild, lchild): ok = false end
+        else e.is_link:
+            // A link's target is the server's business. Following it
+            // would copy whatever it points at - possibly outside the
+            // tree being fetched - so links are skipped, not resolved.
+            ok = ok
+        else:
+            if !Download(c, rchild, lchild): ok = false end
+        end
+    end
+    ret ok
+end
+
+// Uploads a whole local directory into `remote`, creating it and every
+// subdirectory.
+@en "UploadDir"
+@fa "ارسال پوشه"
+@ar "رفع مجلد"
+pub func UploadDir(c &: Client, local: str, remote: str): bool:
+    MkdirAll(c, remote)
+    names := dir.List(local)
+    defer names.free()
+    mut ok := true
+    each name in names:
+        if !_safe_component(name):
+            ok = false
+            continue
+        end
+        lchild := filepath.Join(local, name)
+        rchild := _remote_join(remote, name)
+        if dir.IsDir(lchild):
+            if !UploadDir(c, lchild, rchild): ok = false end
+        else:
+            if !Upload(c, lchild, rchild): ok = false end
+        end
+    end
+    ret ok
+end
+
+// --- pure helpers, exposed because they are useful and testable -------
+
+// The 3-digit code at the head of a reply line, or 0.
+@en "ReplyCode"
+@fa "کد پاسخ"
+@ar "رمز الرد"
+pub func ReplyCode(line: str): int: ret _code_of(line) end
+
+// True when this line terminates a (possibly multi-line) reply.
+@en "IsFinalLine"
+@fa "خط پایانی است"
+@ar "السطر الأخیر"
+pub func IsFinalLine(line: str): bool: ret _is_final(line) end
+
+// "227 ... (h1,h2,h3,h4,p1,p2)" -> "host:port", or "".
+@en "ParsePasv"
+@fa "تحلیل پسیو"
+@ar "تحلیل الوضع السلبي"
+pub func ParsePasv(reply: str): str: ret _parse_pasv(reply) end
+
+// "229 ... (|||port|)" -> port, or 0.
+@en "ParseEpsv"
+@fa "تحلیل پسیو گسترده"
+@ar "تحلیل الوضع الممتد"
+pub func ParseEpsv(reply: str): int: ret _parse_epsv(reply) end
+
+// One LIST line -> FileInfo. name is "" when the line carries no entry.
+@en "ParseListLine"
+@fa "تحلیل خط فهرست"
+@ar "تحلیل سطر القائمة"
+pub func ParseListLine(line: str): FileInfo: ret _parse_list_line(line) end

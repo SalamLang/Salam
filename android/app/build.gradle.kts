@@ -30,7 +30,7 @@ android {
 
     defaultConfig {
         applicationId = "ir.salamlang.app"
-        minSdk = 24
+        minSdk = 21
         targetSdk = 36
         versionCode =
             project.findProperty("appVersionCode")?.toString()?.toIntOrNull()
@@ -106,7 +106,6 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity)
     implementation(libs.androidx.core.splashscreen)
-    implementation(libs.androidx.webkit)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

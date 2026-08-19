@@ -320,22 +320,38 @@ class MainActivity : ComponentActivity() {
     }
 
     private inner class SalamWebViewClient : WebViewClient() {
-        override fun shouldOverrideUrlLoading(
-            view: WebView,
-            request: WebResourceRequest,
-        ): Boolean {
-            val url = request.url
-            Log.d(TAG, "shouldOverride: $url (mainFrame=${request.isForMainFrame})")
-            return when (url.scheme?.lowercase()) {
-                "http", "https" -> {
-                    false
-                }
+        // Both spellings delegate here so the two can never drift apart.
+        // The framework calls exactly one of them: the request-based
+        // override only exists from API 24, so on 21-23 the deprecated
+        // String form below is the only one that ever fires - without it
+        // those releases would hand tel:/mailto:/intent: links to the
+        // WebView itself, which cannot open them.
+        private fun routeUrl(url: Uri): Boolean =
+            when (url.scheme?.lowercase()) {
+                "http", "https" -> false
 
                 else -> {
                     openExternally(url)
                     true
                 }
             }
+
+        override fun shouldOverrideUrlLoading(
+            view: WebView,
+            request: WebResourceRequest,
+        ): Boolean {
+            Log.d(TAG, "shouldOverride: ${request.url} (mainFrame=${request.isForMainFrame})")
+            return routeUrl(request.url)
+        }
+
+        @Deprecated("Superseded by the WebResourceRequest form on API 24+; kept for 21-23.")
+        override fun shouldOverrideUrlLoading(
+            view: WebView,
+            url: String?,
+        ): Boolean {
+            Log.d(TAG, "shouldOverride (legacy): $url")
+            if (url == null) return false
+            return routeUrl(url.toUri())
         }
 
         override fun onPageFinished(
@@ -356,6 +372,23 @@ class MainActivity : ComponentActivity() {
                 "onReceivedError: ${request.url} code=${error.errorCode} '${error.description}' mainFrame=${request.isForMainFrame}",
             )
             if (request.isForMainFrame && view === webView) {
+                showError()
+            }
+        }
+
+        // The request-based form above starts at API 23, so on 21-22 this
+        // is what reports a failed load. It has no isForMainFrame: the
+        // older callback is only raised for the main frame anyway, which
+        // is exactly the case that should show the retry screen.
+        @Deprecated("Superseded by the WebResourceRequest form on API 23+; kept for 21-22.")
+        override fun onReceivedError(
+            view: WebView,
+            errorCode: Int,
+            description: String?,
+            failingUrl: String?,
+        ) {
+            Log.w(TAG, "onReceivedError (legacy): $failingUrl code=$errorCode '$description'")
+            if (view === webView) {
                 showError()
             }
         }

@@ -1,0 +1,102 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// std/ftp's wire parsing, which is the part of an FTP client that can be
+// checked without a server on the other end: reply framing, the two
+// passive-mode replies, and the directory-listing formats.
+//
+// The transfer functions themselves are exercised against a real FTP
+// server by hand (see the package header); what a test can pin down here
+// is the parsing, including the cases a given server may never produce.
+package main
+
+import testing
+import ftp
+
+// A reply ends on "NNN ", continues on "NNN-". Getting this wrong hangs a
+// client forever, or truncates a multi-line reply.
+func test_reply_framing():
+    testing.AssertEqInt(ftp.ReplyCode("220 ready"), 220)
+    testing.AssertEqInt(ftp.ReplyCode("550 no such file"), 550)
+    testing.AssertEqInt(ftp.ReplyCode("xx0 nonsense"), 0)
+    testing.AssertEqInt(ftp.ReplyCode("22"), 0)
+    testing.AssertTrue(ftp.IsFinalLine("230 done"))
+    testing.AssertFalse(ftp.IsFinalLine("230-more to come"))
+    // The trap: a continuation line whose text begins with three digits.
+    testing.AssertFalse(ftp.IsFinalLine("230-220 is a fine number"))
+    testing.AssertFalse(ftp.IsFinalLine("ok"))
+end
+
+// PASV answers with the address split into six decimal bytes; the port is
+// the last two recombined as p1*256+p2.
+func test_pasv():
+    pasv := ftp.ParsePasv("227 Entering Passive Mode (192,168,1,1,19,137)")
+    testing.AssertEqStr(pasv, "192.168.1.1:5001")
+    testing.AssertEqStr(ftp.ParsePasv("227 Entering Passive Mode (10,0,0,7,0,21)"), "10.0.0.7:21")
+    testing.AssertEqStr(ftp.ParsePasv("227 no parens at all"), "")
+    testing.AssertEqStr(ftp.ParsePasv("227 (1,2,3)"), "")
+end
+
+// EPSV returns only a port - the host is the one already connected to,
+// which is what makes it work over IPv6 where PASV's four bytes cannot.
+func test_epsv():
+    testing.AssertEqInt(ftp.ParseEpsv("229 Entering Extended Passive Mode (|||6446|)"), 6446)
+    testing.AssertEqInt(ftp.ParseEpsv("229 Entering Extended Passive Mode (|||21|)"), 21)
+    testing.AssertEqInt(ftp.ParseEpsv("229 nothing here"), 0)
+end
+
+// The Unix `ls -l` listing every real server emits.
+func test_list_unix():
+    f := ftp.ParseListLine("-rw-r--r--    1 ftp      ftp          1234 Aug 19 10:00 notes.txt")
+    testing.AssertEqStr(f.name, "notes.txt")
+    testing.AssertEqInt64(f.size, 1234 as i64)
+    testing.AssertFalse(f.is_dir)
+    testing.AssertEqStr(f.mode, "rw-r--r--")
+
+    d := ftp.ParseListLine("drwxr-xr-x    2 ftp      ftp          4096 Aug 19 10:00 my docs")
+    testing.AssertTrue(d.is_dir)
+    // A name is taken verbatim from the line, so an inner space survives.
+    testing.AssertEqStr(d.name, "my docs")
+
+    l := ftp.ParseListLine("lrwxrwxrwx    1 ftp ftp    7 Aug 19 10:00 cur -> /srv/2026")
+    testing.AssertTrue(l.is_link)
+    // The entry is the link, not its target.
+    testing.AssertEqStr(l.name, "cur")
+
+    // Neither of these is an entry.
+    testing.AssertEqStr(ftp.ParseListLine("total 8").name, "")
+    testing.AssertEqStr(ftp.ParseListLine("").name, "")
+end
+
+// The older MSDOS/IIS listing, still what some Windows servers send.
+func test_list_msdos():
+    d := ftp.ParseListLine("08-19-26  10:00AM       <DIR>          uploads")
+    testing.AssertTrue(d.is_dir)
+    testing.AssertEqStr(d.name, "uploads")
+
+    f := ftp.ParseListLine("08-19-26  10:00AM             4321 report.pdf")
+    testing.AssertFalse(f.is_dir)
+    testing.AssertEqInt64(f.size, 4321 as i64)
+    testing.AssertEqStr(f.name, "report.pdf")
+end
+
+func main:
+    test_reply_framing()
+    test_pasv()
+    test_epsv()
+    test_list_unix()
+    test_list_msdos()
+    testing.Summary()
+    ret 0
+end

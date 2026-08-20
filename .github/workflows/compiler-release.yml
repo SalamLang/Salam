@@ -2012,8 +2012,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y musl-tools musl-dev mingw-w64
-          make -C c stage-sysroots
-          ls -la c/build/release/sysroots
+          sh tools/bash/stage-sysroots.sh --out="$GITHUB_WORKSPACE/sysroots"
+          ls -la sysroots
       - name: Cache ccache (Linux i686)
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -2068,8 +2068,8 @@ jobs:
               # invisible - salam version just printed "unknown").
               git config --global --add safe.directory /work
               ccache --max-size=300M >/dev/null 2>&1 || true
-              MUSL_SR=/work/c/build/release/sysroots/x86_64-linux-musl
-              MINGW_SR=/work/c/build/release/sysroots/x86_64-w64-mingw32
+              MUSL_SR=/work/sysroots/x86_64-linux-musl
+              MINGW_SR=/work/sysroots/x86_64-w64-mingw32
               if make -j"$(nproc)" \
                    WITH_LLVM=1 WITH_LLD=1 LLVM_LINK_STATIC=1 \
                    LLVM_CONFIG=llvm-config-21 CC="ccache gcc" CXX="ccache g++" \
@@ -2167,7 +2167,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y musl-tools musl-dev mingw-w64
-          make -C c stage-sysroots
+          sh tools/bash/stage-sysroots.sh --out="$GITHUB_WORKSPACE/sysroots"
       - name: Set up QEMU (armhf containers need user-mode emulation; i386 doesn't)
         uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
         with:
@@ -2206,8 +2206,8 @@ jobs:
               # erroring.
               git config --global --add safe.directory /work
               ccache --max-size=300M >/dev/null 2>&1 || true
-              MUSL_SR=/work/c/build/release/sysroots/x86_64-linux-musl
-              MINGW_SR=/work/c/build/release/sysroots/x86_64-w64-mingw32
+              MUSL_SR=/work/sysroots/x86_64-linux-musl
+              MINGW_SR=/work/sysroots/x86_64-w64-mingw32
               if make -j"$(nproc)" \
                    WITH_LLVM=1 WITH_LLD=1 LLVM_LINK_STATIC=1 \
                    LLVM_CONFIG=llvm-config-21 CC="ccache gcc" CXX="ccache g++" \
@@ -2377,27 +2377,25 @@ jobs:
           key: ccache-linux-aarch64-${{ github.run_id }}
           restore-keys: |
             ccache-linux-aarch64-
+      - name: Install a seed compiler
+        uses: ./.github/actions/setup-salam
+
       - name: Build the flagship self-contained salam (LLVM + LLD + sysroots)
         run: |
-          export CCACHE_DIR="$HOME/.ccache"; ccache --max-size=800M >/dev/null 2>&1 || true
-          if make -C c -j"$(nproc)" \
-               WITH_LLVM=1 WITH_LLD=1 LLVM_LINK_STATIC=1 LLVM_CONFIG=llvm-config-22 \
-               CC="ccache gcc" CXX="ccache g++" \
-               SALAM_EMBED_MUSL_DIR="${SALAM_EMBED_MUSL_DIR:-}" \
-               SALAM_EMBED_MUSL_AARCH64_DIR="${SALAM_EMBED_MUSL_AARCH64_DIR:-}" \
-               SALAM_EMBED_MUSL_I686_DIR="${SALAM_EMBED_MUSL_I686_DIR:-}" \
-               SALAM_EMBED_MUSL_ARM_DIR="${SALAM_EMBED_MUSL_ARM_DIR:-}" \
-               SALAM_EMBED_MINGW_DIR="${SALAM_EMBED_MINGW_DIR:-}"; then
-            echo "SELF_CONTAINED=1" >> "$GITHUB_ENV"
-            echo "Built flagship self-contained salam."
-          else
-            echo "::warning::self-contained (LLD) build failed; falling back to embedded-LLVM-only."
-            make -C c clean
-            make -C c -j"$(nproc)" \
-              WITH_LLVM=1 LLVM_LINK_STATIC=1 LLVM_CONFIG=llvm-config-22 CC="ccache gcc"
-            echo "SELF_CONTAINED=0" >> "$GITHUB_ENV"
-          fi
-          ccache --show-stats 2>/dev/null | head -5 || true
+          set -eu
+          sh tools/bash/stage-sysroots.sh --musl-arch aarch64 \
+            --out="$GITHUB_WORKSPACE/sysroots"
+          sh std/llvm/native/build.sh --llvm-config llvm-config-22 \
+            --out "$GITHUB_WORKSPACE"
+          sh tools/bash/build-embed.sh --out "$GITHUB_WORKSPACE" \
+            --musl-x86_64 "${SALAM_EMBED_MUSL_DIR:-}" \
+            --musl-aarch64 "${SALAM_EMBED_MUSL_AARCH64_DIR:-$GITHUB_WORKSPACE/sysroots/aarch64-linux-musl}" \
+            --musl-i686 "${SALAM_EMBED_MUSL_I686_DIR:-}" \
+            --musl-arm "${SALAM_EMBED_MUSL_ARM_DIR:-}" \
+            --mingw-x86_64 "${SALAM_EMBED_MINGW_DIR:-$GITHUB_WORKSPACE/sysroots/x86_64-w64-mingw32}"
+          sh tools/bash/build-selfhost.sh \
+            --llvm="$GITHUB_WORKSPACE" --embed="$GITHUB_WORKSPACE"
+          echo "SELF_CONTAINED=1" >> "$GITHUB_ENV"
           ./salam version
       - name: Smoke-test the backend (and cross-compile with a scrubbed PATH)
         run: |

@@ -130,7 +130,22 @@ set -- "$@" "-dSALAM_GIT_DATE=\"$STAMP_DATE\"" "-dSALAM_GIT_DIRTY=\"$STAMP_DIRTY
 echo "seed   : $SEED ($("$SEED" version 2>/dev/null | head -1))"
 echo "output : $OUT"
 
-"$SEED" build "$ROOT/compiler/main.salam" --output="$OUT" "$@"
+# Two stages when the result has to carry embedded blobs, one otherwise.
+# driver_embed.salam declares the blobs as extern *variables*, and a seed older
+# than 0.3.5 mangles those names (interior underscores get doubled), so it can
+# compile the compiler but not one that links them. Building a plain stage 1
+# first and letting IT build the real thing sidesteps the seed's age entirely -
+# the same reason bootstrap.sh lets the seed decide only what stage 1 gets.
+if [ -n "$EMBED_DIR" ]; then
+    echo "stage 1: a plain compiler, to build the embedded one with"
+    "$SEED" build "$ROOT/compiler/main.salam" --output="$OUT.stage1"
+    BUILDER=$OUT.stage1
+else
+    BUILDER=$SEED
+fi
+
+"$BUILDER" build "$ROOT/compiler/main.salam" --output="$OUT" "$@"
+rm -f "$OUT.stage1"
 
 [ -x "$OUT" ] || {
     echo "error: no binary at $OUT after the build" >&2

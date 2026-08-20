@@ -30,6 +30,8 @@ RUN --mount=type=cache,target=/var/cache/apk,sharing=locked \
             py3-numpy \
             bash \
             git \
+            curl \
+            unzip \
             coreutils \
             sqlite-dev \
             sqlite-static \
@@ -75,10 +77,16 @@ ENV GOCACHE=/tmp/go-cache GOPATH=/tmp/go CARGO_HOME=/tmp/cargo
 WORKDIR /repo
 
 FROM toolchain AS salam-builder
-COPY c /repo/c
-WORKDIR /repo/c
-RUN make -j"$(nproc)"
+# The compiler is written in Salam, so building it needs one. The seed is a
+# released binary, fetched here rather than built - `make -C c` is gone.
+ARG SALAM_SEED_SLUG=linux
+COPY tools /repo/tools
+COPY compiler /repo/compiler
+COPY std /repo/std
+COPY VERSION /repo/VERSION
 WORKDIR /repo
+RUN sh tools/bash/fetch-seed.sh --slug "${SALAM_SEED_SLUG}" --out /repo/seed \
+    && sh tools/bash/build-selfhost.sh --seed=/repo/seed/salam --output=/repo/salam
 RUN /repo/salam version
 
 FROM toolchain AS bench

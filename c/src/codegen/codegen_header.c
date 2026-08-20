@@ -1237,7 +1237,13 @@ static void hdr_externs(cg_t *cg, ast_node_t *program, sb_t *h)
                 if (guard) sb_puts(h, "#endif\n");
             } else if (d->kind == AST_VAR_DECL) {
                 const char *ts = d->type_str ? d->type_str : "int32_t";
-                sb_puts(h, cg_fmt(cg, "extern %s;\n", cg_decl(cg, ts, d->name)));
+                /* cg_decl_cn, not cg_decl: an extern names a symbol defined
+                 * outside Salam, so it has to be spelled exactly as written.
+                 * cg_cident doubles interior underscores, which turned
+                 * `salam_embed_musl` into `salam__embed__musl` and left the
+                 * link undefined. Extern FUNCTIONS already went out raw; only
+                 * the variable form was encoded. */
+                sb_puts(h, cg_fmt(cg, "extern %s;\n", cg_decl_cn(cg, ts, d->name)));
             }
         }
     }

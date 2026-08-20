@@ -32,6 +32,12 @@ MUSL_I686=
 MUSL_ARM=
 MINGW_X86_64=
 MINGW_I686=
+HOSTLIBS=
+XL_X86_64_MUSL=
+XL_AARCH64_MUSL=
+XL_I686_MUSL=
+XL_ARM_MUSL=
+XL_X86_64_MINGW=
 
 while [ $# -gt 0 ]; do
     case $1 in
@@ -61,6 +67,30 @@ while [ $# -gt 0 ]; do
         ;;
     --mingw-i686)
         MINGW_I686=$2
+        shift 2
+        ;;
+    --hostlibs)
+        HOSTLIBS=$2
+        shift 2
+        ;;
+    --extralibs-x86_64-musl)
+        XL_X86_64_MUSL=$2
+        shift 2
+        ;;
+    --extralibs-aarch64-musl)
+        XL_AARCH64_MUSL=$2
+        shift 2
+        ;;
+    --extralibs-i686-musl)
+        XL_I686_MUSL=$2
+        shift 2
+        ;;
+    --extralibs-arm-musl)
+        XL_ARM_MUSL=$2
+        shift 2
+        ;;
+    --extralibs-x86_64-mingw)
+        XL_X86_64_MINGW=$2
         shift 2
         ;;
     -h | --help)
@@ -120,6 +150,17 @@ emit musl_i686 "$MUSL_I686"
 emit musl_arm "$MUSL_ARM"
 emit mingw_x86_64 "$MINGW_X86_64"
 emit mingw_i686 "$MINGW_I686"
+
+# The static third-party libraries (sqlite3, openssl, hiredis, mariadb) that
+# `link dynamic "sqlite3"` and friends resolve against, so a program using them
+# links without the user installing dev packages. hostlibs is this machine's
+# own set; the extralibs_* are per cross target.
+emit hostlibs "$HOSTLIBS"
+emit extralibs_x86_64_linux_musl "$XL_X86_64_MUSL"
+emit extralibs_aarch64_linux_musl "$XL_AARCH64_MUSL"
+emit extralibs_i686_linux_musl "$XL_I686_MUSL"
+emit extralibs_arm_linux_musleabihf "$XL_ARM_MUSL"
+emit extralibs_x86_64_w64_windows_gnu "$XL_X86_64_MINGW"
 
 $CC -c "$S" -o "$WORK/embed.o"
 rm -f "$OUT/libsalam_embed.a"

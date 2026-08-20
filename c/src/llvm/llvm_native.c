@@ -21,7 +21,7 @@
 #include <stdlib.h>
 
 #ifdef SALAM_HAVE_LLD
-#  include "llvm/lld_link.h"
+#  include "lld_link.h"
 #  if !defined(_WIN32)
 #    include <dirent.h>
 #  endif

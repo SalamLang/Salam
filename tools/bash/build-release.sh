@@ -25,7 +25,7 @@ stamp_version "pyproject.toml" \
     "s/^version = \"[^\"]*\"/version = \"$VERSION\"/"
 
 echo ">> building compiler ($CC)"
-sh tools/bash/build-compiler.sh
+sh tools/bash/build-selfhost.sh
 echo ">> staging $DIST"
 rm -rf "$DIST"
 mkdir -p "$DIST/bin" "$DIST/doc" "$DIST/tests"

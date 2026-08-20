@@ -23,6 +23,8 @@ import testing
 import os
 import io
 import str
+import mem
+import co "../sal_core.salam"
 
 func test_command_consts():
     testing.AssertEqInt(dr.CMD_INSPECT, 0)
@@ -350,32 +352,62 @@ func test_debug_memcheck_guards():
     end
 end
 
-// embed_sysroot.c's MaterializeSysroot - no real embedded sysroot blob
-// exists anywhere in this repo to test against (see the module's own
-// header note: unreachable without SALAM_HAVE_LLVM, ported for source
-// fidelity only). A full build-a-tar/parse-it-back test isn't possible with
-// `str` (see the PORT-NOTE on test_materialize_sysroot below), so only the
-// short-tar fast-path is verified.
+// embed_sysroot.c's MaterializeSysroot. This used to be scoped down to the
+// short-tar fast path, because MaterializeSysroot took the archive as a `str`
+// and Salam's `str` ends at the first NUL - which a USTAR archive is full of.
+// It now takes a pointer and a length, so a real archive can be built in
+// memory here, unpacked, and read back, NUL bytes and all.
+func tar_put(buf: u8*, off: int, text: str):
+    mut i := 0
+    until i < str.Len(text):
+        buf[off + i] = co.ByteAt(text, i) as u8
+        i += 1
+    end
+end
 
-// PORT-NOTE (pre-existing, found post-restructure, unrelated to the path
-// move): Salam's `str` is NUL-terminated C-string-backed - str.Len()/BufStr
-// truncate at the first embedded 0x00 byte (verified directly: appending
-// "AB" + NUL + "CD" and reading back via str.BufStr/str.Len yields length 2,
-// not 5). A real USTAR tar archive is full of NUL padding bytes, so it can
-// never survive a round-trip through `str` intact - this makes a full
-// build-a-tar-in-a-str/parse-it-back test impossible to write faithfully
-// with the current `str` type (would need a byte-safe Vector<u8> buffer
-// type throughout MaterializeSysroot/untar to fix properly, which is a
-// bigger change than this test file should make unilaterally). This is not
-// a driver.salam regression: MaterializeSysroot/untar are themselves only
-// reachable behind SALAM_HAVE_LLVM (unset in this build), so the module's
-// own header already documents this path as "ported for source fidelity
-// only" - dead code today, not exercised by any real build. Scoped down to
-// what CAN be verified without embedded NULs: the short-tar fast-path.
+// One USTAR header plus a data block, for a file whose contents deliberately
+// carry an embedded NUL.
+func build_tar(len_out &: int): void*:
+    total := 512 * 3
+    p := mem.AllocateZeroed(total as u64)
+    b := p as u8*
+    tar_put(b, 0, "probe.bin")
+    tar_put(b, 100, "0000644")      // mode
+    tar_put(b, 124, "00000000005")  // size: 5 bytes
+    b[156] = 48 as u8               // typeflag '0', a regular file
+    tar_put(b, 257, "ustar")
+    mut c := 0
+    until c < 8:
+        b[148 + c] = 32 as u8       // checksum field, spaces so tar_oct skips it
+        c += 1
+    end
+    b[512] = 65 as u8   // 'A'
+    b[513] = 0 as u8    // NUL - the byte a str could never carry
+    b[514] = 66 as u8   // 'B'
+    b[515] = 0 as u8
+    b[516] = 67 as u8   // 'C'
+    len_out = total
+    ret p
+end
+
 func test_materialize_sysroot():
     mut out := ""
-    ok := dr.MaterializeSysroot("dt_test_sysroot", "too short", out)
-    testing.AssertFalse(ok) // str.Len(tar) < 512 -> false, no NUL bytes involved
+    ok := dr.MaterializeSysroot("dt_test_sysroot", null as void*, 0 as i64, out)
+    testing.AssertFalse(ok) // null blob, and a length under one header block
+
+    mut n := 0
+    p := build_tar(n)
+    mut dir := ""
+    ok2 := dr.MaterializeSysroot("dt_probe", p, n as i64, dir)
+    mem.Free(p)
+    testing.AssertTrue(ok2)
+
+    f := dir + "/probe.bin"
+    testing.AssertTrue(os.Exists(f))
+    // Five bytes, not one: a write that went through `str` would stop at the
+    // NUL at offset 1, which is the whole reason this path takes a pointer.
+    testing.AssertEqInt64(os.FileSize(f), 5 as i64)
+    _rm := os.RemoveAll(dir)
 end
 
 func main:

@@ -35,6 +35,14 @@ SRCDIRS := core source condcomp logger xml diag i18n langpack        \
            layout fmt doc cli driver minify
 
 SRCS     := $(filter-out src/salam.c, $(wildcard $(addsuffix /*.c, $(addprefix src/,$(SRCDIRS)))))
+
+# The native LLVM/LLD shim moved out to std/llvm/native/: those six files are
+# the only C/C++ that cannot be written in Salam (LLVM exposes
+# InitializeAllTargets and friends as macros, and LLD has no C API at all),
+# so they outlive this directory and now live beside the std/llvm bindings
+# that declare them. Picked up explicitly here because the wildcard above no
+# longer sees them.
+SHIM_DIR := ../std/llvm/native
 MAIN_SRC := src/salam.c
 
 ifeq ($(BUILD),debug)
@@ -141,7 +149,7 @@ ifeq ($(WITH_LLD),1)
   override WITH_LLVM := 1
   CPPFLAGS += -DSALAM_HAVE_LLD
   LLD_LIBS := -llldMinGW -llldELF -llldCOFF -llldMachO -llldWasm -llldCommon -lz -lzstd
-  LLD_SRCS := src/llvm/lld_link.cc
+  LLD_SRCS := $(SHIM_DIR)/lld_link.cc
   # MSYS2's mingw-w64-x86_64-lld/-llvm packages ship their static archives
   # built as if always consumed alongside the shared libLLVM-*.dll/libxml2
   # DLL, so those archives reach the demangler and libxml2 through
@@ -336,8 +344,10 @@ BUILD_DIR ?= build/$(BUILD)
 #
 CONFIG_STAMP := $(BUILD_DIR)/.config-stamp
 
-OBJS      := $(SRCS:src/%.c=$(BUILD_DIR)/%.o)
-CXXOBJS   := $(LLD_SRCS:src/%.cc=$(BUILD_DIR)/%.o)
+SHIM_OBJS := $(BUILD_DIR)/llvm/orc_call.o $(BUILD_DIR)/llvm/lld_stub.o
+OBJS      := $(SRCS:src/%.c=$(BUILD_DIR)/%.o) $(SHIM_OBJS)
+CPPFLAGS  += -I$(SHIM_DIR)
+CXXOBJS   := $(LLD_SRCS:$(SHIM_DIR)/%.cc=$(BUILD_DIR)/llvm/%.o)
 MAIN_OBJ  := $(MAIN_SRC:src/%.c=$(BUILD_DIR)/%.o)
 DEPS      := $(OBJS:.o=.d) $(MAIN_OBJ:.o=.d)
 
@@ -440,9 +450,23 @@ $(BUILD_DIR)/embed/hostlibs.o:
 	printf '.section .rodata\n.global salam_embed_hostlibs\nsalam_embed_hostlibs:\n.incbin "%s"\n.global salam_embed_hostlibs_end\nsalam_embed_hostlibs_end:\n' "$(BUILD_DIR)/embed/hostlibs.tar" > $(BUILD_DIR)/embed/hostlibs.S
 	$(CC) -c $(BUILD_DIR)/embed/hostlibs.S -o $@
 
-$(BUILD_DIR)/llvm/win_lld_demangle_shim.o: src/llvm/win_lld_demangle_shim.S
+$(BUILD_DIR)/llvm/win_lld_demangle_shim.o: $(SHIM_DIR)/win_lld_demangle_shim.S
 	@mkdir -p $(BUILD_DIR)/llvm
 	$(CC) -c $< -o $@
+
+# Explicit rules for the two shim .c files, since the $(BUILD_DIR)/%.o
+# pattern rule only matches sources under src/.
+$(BUILD_DIR)/llvm/orc_call.o: $(SHIM_DIR)/orc_call.c $(CONFIG_STAMP)
+	@mkdir -p $(BUILD_DIR)/llvm
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(SHIM_DIR) -c $< -o $@
+
+$(BUILD_DIR)/llvm/lld_stub.o: $(SHIM_DIR)/lld_stub.c $(CONFIG_STAMP)
+	@mkdir -p $(BUILD_DIR)/llvm
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(SHIM_DIR) -c $< -o $@
+
+$(BUILD_DIR)/llvm/lld_link.o: $(SHIM_DIR)/lld_link.cc $(CONFIG_STAMP)
+	@mkdir -p $(BUILD_DIR)/llvm
+	$(CXX) $(CPPFLAGS) $(LLVM_CXXFLAGS) $(CXXFLAGS) -I$(SHIM_DIR) -c $< -o $@
 
 .PHONY: all test dist clean debug install uninstall stage-sysroots self-contained
 

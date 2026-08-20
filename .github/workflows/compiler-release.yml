@@ -1434,6 +1434,16 @@ jobs:
             --extralibs-aarch64-musl "${SALAM_EMBED_EXTRALIBS_AARCH64_LINUX_MUSL_DIR:-}" \
             --extralibs-i686-musl "${SALAM_EMBED_EXTRALIBS_I686_LINUX_MUSL_DIR:-}" \
             --extralibs-arm-musl "${SALAM_EMBED_EXTRALIBS_ARM_LINUX_MUSLEABIHF_DIR:-}"
+          # The old make line passed EXTRA_LDFLAGS="-static -static-libgcc
+          # -static-libstdc++", and dropping them is what produced
+          # "duplicate section .rdata$_ZTSSt9exception has different size":
+          # the merged LLVM archive and MSYS2's libstdc++ disagree about the
+          # same comdat unless gcc supplies its own copy. There is no
+          # --ldflags on the driver, so they ride in on a cc wrapper.
+          printf '#!/bin/sh\nexec gcc "$@" -static -static-libgcc -static-libstdc++\n' \
+            > /tmp/cc-static
+          chmod +x /tmp/cc-static
+
           # --seed by path, not through PATH: this step runs under MSYS2 bash,
           # and the Windows-style directory setup-salam appends to GITHUB_PATH
           # is not something an MSYS shell resolves, so `command -v salam`
@@ -1441,7 +1451,8 @@ jobs:
           sh tools/bash/build-selfhost.sh \
             --seed="$(cygpath -u '${{ steps.seed.outputs.salam }}')" \
             --llvm="$GITHUB_WORKSPACE" --embed="$GITHUB_WORKSPACE" \
-            --output="$GITHUB_WORKSPACE/salam.exe"
+            --output="$GITHUB_WORKSPACE/salam.exe" \
+            -- --cc=/tmp/cc-static
           if [ -n "$MINGW_ARG" ]; then
             echo "SELF_CONTAINED=1" >> "$GITHUB_ENV"
           else
@@ -1892,6 +1903,17 @@ jobs:
           # Without it the link came back with every Win32 import undefined
           # (_GetStdHandle, _EnterCriticalSection, ...).
           export SALAM_SYSROOTS=/tmp/llvm-mingw
+          # llvm-mingw carries compiler-rt where a gcc-built mingw carries
+          # libgcc, so -lgcc/-lgcc_eh find nothing and the link stops there.
+          # Point the two names at what this toolchain actually has: the
+          # builtins archive for libgcc, and an empty one for libgcc_eh, since
+          # unwinding here comes from libunwind rather than libgcc_eh.
+          mgw_lib=/tmp/llvm-mingw/i686-w64-mingw32/lib
+          if [ -d "$mgw_lib" ]; then
+            rt=$(find /tmp/llvm-mingw -name 'libclang_rt.builtins-i386.a' 2>/dev/null | head -1)
+            [ -n "$rt" ] && [ ! -f "$mgw_lib/libgcc.a" ] && cp "$rt" "$mgw_lib/libgcc.a"
+            [ -f "$mgw_lib/libgcc_eh.a" ] || "$TC/llvm-ar" rcs "$mgw_lib/libgcc_eh.a"
+          fi
           if sh tools/bash/build-selfhost.sh --llvm="$GITHUB_WORKSPACE" \
             --output="$GITHUB_WORKSPACE/salam.exe" \
             -- --target=i686-w64-windows-gnu; then

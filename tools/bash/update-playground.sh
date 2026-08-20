@@ -43,8 +43,8 @@ if command -v taskkill >/dev/null 2>&1; then
     taskkill //F //IM salam.exe >/dev/null 2>&1 || true
 fi
 if [ "$WASM_ONLY" -eq 0 ] || [ "$SELFHOST" -eq 1 ]; then
-    echo "==> Building native compiler (tools/bash/build-compiler.sh) ..."
-    sh tools/bash/build-compiler.sh
+    echo "==> Building native compiler (tools/bash/build-selfhost.sh) ..."
+    sh tools/bash/build-selfhost.sh
 fi
 if [ "$SELFHOST" -eq 1 ]; then
     echo "==> Bootstrapping the self-hosted compiler (compiler/tools/bash/bootstrap.sh) ..."

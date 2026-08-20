@@ -749,7 +749,7 @@ if want llvm; then
                 add_job llvm "llvm/$lang/$name" "$f" "$lang" "$exp"
             done
         elif [ "$prc" -ge 128 ]; then
-            note_result "FAIL llvm/$lang/* (salam crashed on probe, signal $((prc - 128)); rebuild salam via tools/build-compiler.sh)" "llvm/$lang/all"
+            note_result "FAIL llvm/$lang/* (salam crashed on probe, signal $((prc - 128)); rebuild salam via tools/bash/build-selfhost.sh)" "llvm/$lang/all"
         else
             note_result "SKIP llvm/$lang/* (LLVM toolchain unavailable: 'salam llvm --jit' probe failed)" "llvm/$lang/all"
         fi

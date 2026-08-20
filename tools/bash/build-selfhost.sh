@@ -80,8 +80,11 @@ if [ -z "$SEED" ]; then
     SEED=$(command -v salam 2>/dev/null || true)
 fi
 [ -n "$SEED" ] || {
-    echo "error: no seed compiler. Install one with .github/actions/setup-salam," >&2
-    echo "       put a released salam on PATH, or pass --seed /path/to/salam." >&2
+    echo "error: no seed compiler on PATH." >&2
+    echo "  The compiler is written in Salam, so building it needs a Salam." >&2
+    echo "  Install a released one:  sh install.sh" >&2
+    echo "  Or point at one:         --seed /path/to/salam  (or \$SALAM_SEED)" >&2
+    echo "  In CI:                   uses: ./.github/actions/setup-salam" >&2
     exit 1
 }
 

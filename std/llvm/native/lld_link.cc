@@ -12,7 +12,7 @@
  *
  */
 
-#include "llvm/lld_link.h"
+#include "lld_link.h"
 
 #include "lld/Common/Driver.h"
 #include "llvm/Support/raw_ostream.h"

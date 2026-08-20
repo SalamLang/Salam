@@ -1746,6 +1746,9 @@ jobs:
     name: Build Salam for Windows (32-bit / i686, cross-compiled static LLVM+LLD)
     runs-on: ubuntu-latest
     continue-on-error: true
+    # The cross build is driven by the Linux binary this run just produced,
+    # not by the released seed - see "Use this run's Linux salam" below.
+    needs: build-linux
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1847,8 +1850,21 @@ jobs:
           restore-keys: |
             ccache-win-i686-v3-
 
-      - name: Install a seed compiler
-        uses: ./.github/actions/setup-salam
+      # The compiler that emits the i686 Windows code has to be one built
+      # from THIS commit, not the last release: a published seed carries the
+      # codegen it was released with, so any fix on the way to a working
+      # 32-bit Windows binary (the -alternatename aliases that resolve the
+      # stdcall-decorated Win32 imports, for one) would sit unused until the
+      # next release, and the job would keep failing for a bug already fixed
+      # in the tree. build-linux has already produced exactly such a
+      # compiler, with LLVM and LLD embedded, so use it directly.
+      - name: Use this run's Linux salam as the cross-compiler
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: salam-linux
+          path: /tmp/host-salam
+      - name: Make it executable
+        run: chmod +x /tmp/host-salam/salam
 
       - name: Build 32-bit salam.exe (cross-compiled, embedded static LLVM+LLD, best-effort)
         run: |
@@ -1928,7 +1944,8 @@ jobs:
               "$TC/llvm-ar" rcs "$mgw_lib/libgcc_eh.a"
             fi
           fi
-          if sh tools/bash/build-selfhost.sh --llvm="$GITHUB_WORKSPACE" \
+          if sh tools/bash/build-selfhost.sh --seed=/tmp/host-salam/salam \
+            --llvm="$GITHUB_WORKSPACE" \
             --output="$GITHUB_WORKSPACE/salam.exe" \
             -- --target=i686-w64-windows-gnu \
             --libpath="$mgw_lib"; then
@@ -1936,7 +1953,7 @@ jobs:
             echo "Built cross-compiled salam.exe with embedded LLVM+LLD."
           else
             echo "::warning::cross build with LLVM failed; retrying without it."
-            sh tools/bash/build-selfhost.sh \
+            sh tools/bash/build-selfhost.sh --seed=/tmp/host-salam/salam \
               --output="$GITHUB_WORKSPACE/salam.exe" \
               -- --target=i686-w64-windows-gnu --libpath="$mgw_lib"
             echo "SELF_CONTAINED=0" >> "$GITHUB_ENV"

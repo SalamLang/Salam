@@ -805,11 +805,23 @@ jobs:
           # skip every target anyway. LLVM only.
           sh std/llvm/native/build.sh \
             --llvm-config "$LLVM_PREFIX/bin/llvm-config" --out "$GITHUB_WORKSPACE"
-          # Homebrew's zstd/zlib sit outside the default link path, and the
-          # merged archive references them; the old Makefile passed the same
-          # directory as EXTRA_LDFLAGS.
+          # zstd is the one library neither the SDK nor the default search
+          # path provides; it comes from Homebrew. Pointing -L at brew's lib
+          # finds the *dylib*, and a release that links /opt/homebrew/... dies
+          # on any Mac without that exact formula - which the self-containment
+          # check below is there to catch. Apple's linker has no -Bstatic, and
+          # picks the .dylib whenever both sit in one directory, so the archive
+          # gets a directory of its own instead. Same thing c/Makefile did with
+          # its MACOS_ZSTD_A.
+          mkdir -p "$GITHUB_WORKSPACE/maclibs"
+          zstd_a="$(brew --prefix zstd)/lib/libzstd.a"
+          if [ -f "$zstd_a" ]; then
+            cp "$zstd_a" "$GITHUB_WORKSPACE/maclibs/"
+          else
+            echo "::warning::no static libzstd in $(brew --prefix zstd)/lib; the link will fall back to the dylib"
+          fi
           sh tools/bash/build-selfhost.sh --llvm="$GITHUB_WORKSPACE" \
-            -- --libpath="$(brew --prefix)/lib"
+            -- --libpath="$GITHUB_WORKSPACE/maclibs" --libpath="$(brew --prefix)/lib"
           ./salam version
       # The Linux and Windows jobs already refuse to ship a binary that
       # imports a third-party library; macOS had no such gate, and 0.2.7
@@ -2041,7 +2053,7 @@ jobs:
           # so 21 is the newest release that still targets 32-bit hosts at
           # all; 22+ tracks amd64/arm64 only (see the 64-bit jobs above).
           docker run --rm --platform=linux/386 \
-            -v "$PWD:/work" -w /work/c \
+            -v "$PWD:/work" -w /work \
             -v /tmp/ccache-i686:/root/.ccache \
             -e CCACHE_DIR=/root/.ccache \
             i386/debian:sid bash -euxc '
@@ -2202,7 +2214,7 @@ jobs:
           # 32-bit hosts at all (LLVM stopped shipping 32-bit Windows
           # installers at v22: github.com/ScoopInstaller/Main/issues/7685).
           docker run --rm --platform=linux/arm/v7 \
-            -v "$PWD:/work" -w /work/c \
+            -v "$PWD:/work" -w /work \
             -v /tmp/ccache-armhf:/root/.ccache \
             -e CCACHE_DIR=/root/.ccache \
             arm32v7/debian:sid bash -euxc '

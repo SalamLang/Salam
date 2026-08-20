@@ -141,7 +141,12 @@ echo "output : $OUT"
 # the same reason bootstrap.sh lets the seed decide only what stage 1 gets.
 if [ -n "$EMBED_DIR" ]; then
     echo "stage 1: a plain compiler, to build the embedded one with"
-    "$SEED" build "$ROOT/compiler/main.salam" --output="$OUT.stage1"
+    # --backend=c on purpose. Stage 1 is throwaway - it only has to be a
+    # working compiler for one build - so it takes the conservative path
+    # rather than depending on the seed's LLVM codegen. On i686 that
+    # dependency was not hypothetical: the seed's LLVM backend produced a
+    # stage 1 that linked fine and segfaulted the moment it ran.
+    "$SEED" build --backend=c "$ROOT/compiler/main.salam" --output="$OUT.stage1"
     BUILDER=$OUT.stage1
 else
     BUILDER=$SEED

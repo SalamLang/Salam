@@ -89,7 +89,7 @@ After building the compiler (see the [Build section in the readme](README.md#bui
 
 ```bash
 cd compiler
-sh tools/bash/build-compiler.sh   # quick build -> ./salam
+sh tools/bash/build-selfhost.sh   # quick build -> ./salam
 ```
 
 Or with CMake:

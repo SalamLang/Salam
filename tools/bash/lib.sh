@@ -16,9 +16,9 @@ salam_ensure_compiler() {
     [ -x "$SALAM" ] && return 0
     echo "building salam..." >&2
     if [ "${1:-}" = "--quiet" ]; then
-        sh tools/bash/build-compiler.sh >/dev/null 2>&1
+        sh tools/bash/build-selfhost.sh >/dev/null 2>&1
     else
-        sh tools/bash/build-compiler.sh
+        sh tools/bash/build-selfhost.sh
     fi
     SALAM=./salam
 }

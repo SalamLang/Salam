@@ -163,10 +163,10 @@ case "${SALAM_WITH_LLVM:-auto}" in
         LLVM_FLAGS="-DSALAM_HAVE_LLVM --libpath=$LLVM_LIBDIR"
         LLVM_STATE="static in-process ($LLVM_LIBDIR/libsalam_llvm.a)"
     elif [ "${SALAM_WITH_LLVM:-auto}" = auto ]; then
-        LLVM_STATE="off (no $LLVM_LIBDIR/libsalam_llvm.a; build it with 'make -C c libsalam-llvm WITH_LLVM=1 WITH_LLD=1')"
+        LLVM_STATE="off (no $LLVM_LIBDIR/libsalam_llvm.a; build it with 'sh std/llvm/native/build.sh')"
     else
         echo "error: SALAM_WITH_LLVM=${SALAM_WITH_LLVM} but $LLVM_LIBDIR/libsalam_llvm.a is missing." >&2
-        echo "       Build it with: make -C c libsalam-llvm WITH_LLVM=1 WITH_LLD=1" >&2
+        echo "       Build it with: sh std/llvm/native/build.sh" >&2
         exit 2
     fi
     ;;
@@ -372,7 +372,7 @@ while [ "$stage" -le "$STAGES" ]; do
             echo "      mem function nothing declared yet - an implicit declaration of" >&2
             echo "      _Salam_mem_AllocateZeroed_u64 that gcc 16 and clang reject." >&2
             echo "hint: use a 0.2.9 or newer seed, or build one from this checkout" >&2
-            echo "      with 'make -C c' and pass ./salam." >&2
+            echo "      with 'sh tools/bash/build-selfhost.sh' and pass ./salam." >&2
         fi
         exit 1
     }

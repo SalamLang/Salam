@@ -48,7 +48,7 @@ cd compiler
 ### ⚡ Quick build (tcc)
 
 ```sh
-sh tools/bash/build-compiler.sh   # produces ./salam
+sh tools/bash/build-selfhost.sh   # produces ./salam
 ```
 
 The `salam` binary is also copied to the repository root.

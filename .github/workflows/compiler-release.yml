@@ -111,11 +111,24 @@ jobs:
           key: ccache-linux-${{ github.run_id }}
           restore-keys: |
             ccache-linux-
-      - name: Cache static third-party libs (sqlite3 + hiredis + openssl + mariadb, per --target=)
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      # Restore/save split rather than a plain actions/cache: a cache entry is
+      # only ever written when its key MISSES, so one immutable key freezes
+      # whatever the very first run happened to produce. Any run that staged
+      # only part of the target set (a musl sysroot fetch that failed, a
+      # cross-toolchain download that 404'd) pins that partial set forever -
+      # every later run then hits the stale entry, rebuilds the missing libs
+      # from scratch, and cannot store them because the key already exists.
+      # Keying on run_id and restoring by prefix lets each run start from the
+      # newest entry and save a more complete one, so the cache converges
+      # instead of freezing. The save is skipped when nothing was built, so a
+      # fully-cached run does not re-upload an identical entry.
+      - name: Restore static third-party libs (sqlite3 + hiredis + openssl + mariadb, per --target=)
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: /tmp/extralibs
-          key: extralibs-sqlite3-3530400-hiredis-v1.4.0-openssl-3.6.3-mariadb-v3.4.9-v2
+          key: extralibs-sqlite3-3530400-hiredis-v1.4.0-openssl-3.6.3-mariadb-v3.4.9-v2-${{ github.run_id }}
+          restore-keys: |
+            extralibs-sqlite3-3530400-hiredis-v1.4.0-openssl-3.6.3-mariadb-v3.4.9-v2-
       # Static libsqlite3.a/libhiredis.a/libssl.a/libcrypto.a/libmariadb.a per
       # supported --target= triple, embedded into salam itself (see
       # SALAM_EMBED_EXTRALIBS_*_DIR below and c/src/llvm/llvm_native.c's
@@ -132,9 +145,23 @@ jobs:
       # the aarch64/i686/arm cross-toolchain - a real, ~100MB fetch - only
       # gets downloaded once per target rather than once per library.
       - name: Build static third-party libs for all --target= triples
+        id: extralibs
         run: |
           set -eu
           mkdir -p /tmp/extralibs
+          # Cheap content fingerprint, compared again at the end of this
+          # step, so the save below only runs when something was actually
+          # built. The set of paths is signal enough: every need_build*
+          # gate below builds only when its .a is missing, so anything
+          # built necessarily adds a file. Deliberately no `find -printf`
+          # (a GNU extension): if it were unsupported the error would be
+          # swallowed, both fingerprints would come back empty and equal,
+          # and the cache would silently never be saved again.
+          fingerprint() {
+            find "$1" -type f 2>/dev/null \
+              | LC_ALL=C sort | sha256sum | cut -d' ' -f1
+          }
+          EXTRALIBS_BEFORE=$(fingerprint /tmp/extralibs)
           TARGETS="x86_64-linux-musl aarch64-linux-musl i686-linux-musl arm-linux-musleabihf x86_64-w64-windows-gnu hostlibs"
           need_build() { [ ! -f "/tmp/extralibs/$2/lib$1.a" ]; }
           any_needed() { for t in $TARGETS; do need_build "$1" "$t" && return 0; done; return 1; }
@@ -503,6 +530,24 @@ jobs:
             var="SALAM_EMBED_EXTRALIBS_$(echo "$target" | tr 'a-z-' 'A-Z_')_DIR"
             echo "${var}=/tmp/extralibs/$target" >> "$GITHUB_ENV"
           done
+
+          # Fail safe towards saving: an empty fingerprint means the
+          # helper itself broke, and skipping the save on that would
+          # quietly reintroduce the very staleness this replaced.
+          EXTRALIBS_AFTER=$(fingerprint /tmp/extralibs)
+          if [ -n "$EXTRALIBS_AFTER" ] && [ "$EXTRALIBS_BEFORE" = "$EXTRALIBS_AFTER" ]; then
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            echo 'static libs fully cached; skipping cache save'
+          else
+            echo 'changed=true' >> "$GITHUB_OUTPUT"
+            echo 'static libs changed; a fresh cache entry will be saved'
+          fi
+      - name: Save static third-party libs (sqlite3 + hiredis + openssl + mariadb, per --target=)
+        if: steps.extralibs.outputs.changed == 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /tmp/extralibs
+          key: extralibs-sqlite3-3530400-hiredis-v1.4.0-openssl-3.6.3-mariadb-v3.4.9-v2-${{ github.run_id }}
       - name: Build the flagship self-contained salam (LLVM + LLD + sysroots)
         run: |
           export CCACHE_DIR="$HOME/.ccache"; ccache --max-size=800M >/dev/null 2>&1 || true
@@ -887,11 +932,18 @@ jobs:
         # cross-compiles them with clang against exactly these sysroots.
         run: sh tools/bash/fetch-musl-sysroots.sh --out /c/muslcc --headers
 
-      - name: Cache static third-party libs (sqlite3 + hiredis + openssl + mariadb, per --target=)
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      # Same restore/save split as the Linux job above, and for the same
+      # reason - see that step's comment. This job is where it bit hardest:
+      # the 4 linux-musl targets it cross-builds depend on sysroots staged a
+      # step earlier, so the entry written by the first run predated them and
+      # every run since rebuilt sqlite3/hiredis for all 4 from scratch.
+      - name: Restore static third-party libs (sqlite3 + hiredis + openssl + mariadb, per --target=)
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: C:\extralibs
-          key: extralibs-sqlite3-3530400-hiredis-v1.4.0-openssl-3.6.3-mariadb-v3.4.9-win-v3
+          key: extralibs-sqlite3-3530400-hiredis-v1.4.0-openssl-3.6.3-mariadb-v3.4.9-win-v3-${{ github.run_id }}
+          restore-keys: |
+            extralibs-sqlite3-3530400-hiredis-v1.4.0-openssl-3.6.3-mariadb-v3.4.9-win-v3-
       # Windows counterpart of the Linux job's identically-named step - see
       # its comment for the overall rationale. x86_64-w64-windows-gnu (this
       # job's own native target) is built via the native MSYS2 gcc, same as
@@ -917,6 +969,7 @@ jobs:
       # file: any single library/target failing just warns and is skipped,
       # never fails the job.
       - name: Build static third-party libs for x86_64-w64-windows-gnu + linux-musl targets
+        id: extralibs
         shell: 'C:\msys64\usr\bin\bash.exe --login -eo pipefail "{0}"'
         env:
           MSYSTEM: MINGW64
@@ -924,6 +977,15 @@ jobs:
         run: |
           set -eu
           pacman -Sy --noconfirm --needed git unzip >/dev/null
+
+          # See the Linux job's identical fingerprint helper: it decides
+          # whether the save step below has anything new worth uploading.
+          mkdir -p /c/extralibs
+          fingerprint() {
+            find "$1" -type f 2>/dev/null \
+              | LC_ALL=C sort | sha256sum | cut -d' ' -f1
+          }
+          EXTRALIBS_BEFORE=$(fingerprint /c/extralibs)
 
           # need_build/need_build_openssl take the target triple as their
           # last argument (unlike this step's previous windows-gnu-only
@@ -1203,6 +1265,25 @@ jobs:
             var="SALAM_EMBED_EXTRALIBS_$(echo "$triple" | tr 'a-z-' 'A-Z_')_DIR"
             echo "${var}=C:/extralibs/$triple" >> "$GITHUB_ENV"
           done
+
+          # Fail safe towards saving: an empty fingerprint means the
+          # helper itself broke, and skipping the save on that would
+          # quietly reintroduce the very staleness this replaced.
+          EXTRALIBS_AFTER=$(fingerprint /c/extralibs)
+          if [ -n "$EXTRALIBS_AFTER" ] && [ "$EXTRALIBS_BEFORE" = "$EXTRALIBS_AFTER" ]; then
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            echo 'static libs fully cached; skipping cache save'
+          else
+            echo 'changed=true' >> "$GITHUB_OUTPUT"
+            echo 'static libs changed; a fresh cache entry will be saved'
+          fi
+
+      - name: Save static third-party libs (sqlite3 + hiredis + openssl + mariadb, per --target=)
+        if: steps.extralibs.outputs.changed == 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: C:\extralibs
+          key: extralibs-sqlite3-3530400-hiredis-v1.4.0-openssl-3.6.3-mariadb-v3.4.9-win-v3-${{ github.run_id }}
 
       - name: Build salam.exe (embedded LLVM; best-effort LLD + mingw/musl sysroots)
         shell: 'C:\msys64\usr\bin\bash.exe --login -eo pipefail "{0}"'

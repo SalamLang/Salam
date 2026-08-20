@@ -39,7 +39,7 @@
  * undefined core symbols. Keep this file dependency-free.
  */
 
-#include "llvm/lld_link.h"
+#include "lld_link.h"
 
 #ifdef SALAM_HAVE_LLD
 

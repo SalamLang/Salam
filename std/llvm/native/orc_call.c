@@ -12,7 +12,7 @@
  *
  */
 
-#include "llvm/orc_call.h"
+#include "orc_call.h"
 
 int salam_orc_call_main(int64_t addr)
 {

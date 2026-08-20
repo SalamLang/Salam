@@ -502,7 +502,8 @@ const char *cg_global_ref(cg_t *cg, const char *name)
         }
     }
     if (!g) return cg_cident(cg, name);
-    if (g->decl && g->decl->is_extern) return cg_cident(cg, name);
+    /* Raw, for the same reason the header declares it raw. */
+    if (g->decl && g->decl->is_extern) return name;
     return cg_global_cname(cg, g->pkgname, name);
 }
 

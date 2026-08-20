@@ -1440,9 +1440,13 @@ jobs:
           # the merged LLVM archive and MSYS2's libstdc++ disagree about the
           # same comdat unless gcc supplies its own copy. There is no
           # --ldflags on the driver, so they ride in on a cc wrapper.
-          printf '#!/bin/sh\nexec gcc "$@" -static -static-libgcc -static-libstdc++\n' \
-            > /tmp/cc-static
-          chmod +x /tmp/cc-static
+          # A .bat, not a shell script: the driver spawns the C compiler as a
+          # native Windows command, and cmd cannot run a shebang. A shell
+          # wrapper came back as "'C:/msys64/tmp/cc-static' is not recognized
+          # as an internal or external command". c/Makefile's own musl wrapper
+          # emitted a .bat twin for exactly this reason.
+          printf '@echo off\r\ngcc %%* -static -static-libgcc -static-libstdc++\r\n' \
+            > /tmp/cc-static.bat
 
           # --seed by path, not through PATH: this step runs under MSYS2 bash,
           # and the Windows-style directory setup-salam appends to GITHUB_PATH
@@ -1452,7 +1456,7 @@ jobs:
             --seed="$(cygpath -u '${{ steps.seed.outputs.salam }}')" \
             --llvm="$GITHUB_WORKSPACE" --embed="$GITHUB_WORKSPACE" \
             --output="$GITHUB_WORKSPACE/salam.exe" \
-            -- --cc=/tmp/cc-static
+            -- --cc="$(cygpath -m /tmp/cc-static.bat)"
           if [ -n "$MINGW_ARG" ]; then
             echo "SELF_CONTAINED=1" >> "$GITHUB_ENV"
           else
@@ -1908,22 +1912,33 @@ jobs:
           # Point the two names at what this toolchain actually has: the
           # builtins archive for libgcc, and an empty one for libgcc_eh, since
           # unwinding here comes from libunwind rather than libgcc_eh.
+          # The sysroot is found by name, but its import libraries (kernel32,
+          # user32, ...) still have to be on the link's -L list, which is why
+          # _GetFileType and friends came back undefined even with the sysroot
+          # detected.
           mgw_lib=/tmp/llvm-mingw/i686-w64-mingw32/lib
           if [ -d "$mgw_lib" ]; then
             rt=$(find /tmp/llvm-mingw -name 'libclang_rt.builtins-i386.a' 2>/dev/null | head -1)
-            [ -n "$rt" ] && [ ! -f "$mgw_lib/libgcc.a" ] && cp "$rt" "$mgw_lib/libgcc.a"
-            [ -f "$mgw_lib/libgcc_eh.a" ] || "$TC/llvm-ar" rcs "$mgw_lib/libgcc_eh.a"
+            # Written as ifs, not && chains: under `set -e` a chain whose first
+            # test is false takes the whole step down with it.
+            if [ -n "$rt" ] && [ ! -f "$mgw_lib/libgcc.a" ]; then
+              cp "$rt" "$mgw_lib/libgcc.a"
+            fi
+            if [ ! -f "$mgw_lib/libgcc_eh.a" ]; then
+              "$TC/llvm-ar" rcs "$mgw_lib/libgcc_eh.a"
+            fi
           fi
           if sh tools/bash/build-selfhost.sh --llvm="$GITHUB_WORKSPACE" \
             --output="$GITHUB_WORKSPACE/salam.exe" \
-            -- --target=i686-w64-windows-gnu; then
+            -- --target=i686-w64-windows-gnu \
+            --libpath="$mgw_lib"; then
             echo "SELF_CONTAINED=1" >> "$GITHUB_ENV"
             echo "Built cross-compiled salam.exe with embedded LLVM+LLD."
           else
             echo "::warning::cross build with LLVM failed; retrying without it."
             sh tools/bash/build-selfhost.sh \
               --output="$GITHUB_WORKSPACE/salam.exe" \
-              -- --target=i686-w64-windows-gnu
+              -- --target=i686-w64-windows-gnu --libpath="$mgw_lib"
             echo "SELF_CONTAINED=0" >> "$GITHUB_ENV"
           fi
           file salam.exe

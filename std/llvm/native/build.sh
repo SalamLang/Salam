@@ -54,6 +54,12 @@ command -v "$LLVM_CONFIG" >/dev/null 2>&1 || {
 LIBDIR=$($LLVM_CONFIG --libdir 2>/dev/null || true)
 BINDIR=$($LLVM_CONFIG --bindir 2>/dev/null || true)
 : "${AR:=$(command -v "$BINDIR/llvm-ar" 2>/dev/null || command -v llvm-ar 2>/dev/null || command -v ar)}"
+# LLD_PREFIX is the spelling c/Makefile took, and the selfhost workflow still
+# sets it; its archives live in <prefix>/lib. Accepted here so that contract
+# survives the Makefile.
+if [ -z "${LLD_EXTRA_LIBDIR:-}" ] && [ -n "${LLD_PREFIX:-}" ]; then
+    LLD_EXTRA_LIBDIR="$LLD_PREFIX/lib"
+fi
 SEARCH="$LIBDIR ${LLD_EXTRA_LIBDIR:-}"
 
 # LLD is a separate package on most hosts, and its archives are the only

@@ -723,21 +723,51 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Cache Homebrew downloads
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - name: Restore Homebrew downloads
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/Library/Caches/Homebrew/downloads
           key: brew-dl-${{ runner.arch }}-${{ github.run_id }}
           restore-keys: |
             brew-dl-${{ runner.arch }}-
       - name: Install dependencies (static LLVM)
+        id: brewdeps
         env:
           HOMEBREW_NO_AUTO_UPDATE: '1'
           HOMEBREW_NO_INSTALL_CLEANUP: '1'
         run: |
+          # Same restore/save reasoning as the static-libs cache: keep the
+          # rolling run_id key, but only upload when the download set
+          # actually moved. A plain actions/cache stores a new copy of the
+          # whole thing on every single run, and these entries are big
+          # enough that the duplicates alone were evicting other caches.
+          # shasum, not sha256sum: macOS ships the former in the base
+          # system and has no coreutils, so sha256sum is simply absent.
+          fingerprint() {
+            find "$1" -type f 2>/dev/null \
+              | LC_ALL=C sort | shasum -a 256 | cut -d' ' -f1
+          }
+          mkdir -p "$HOME/Library/Caches/Homebrew/downloads"
+          PKGS_BEFORE=$(fingerprint "$HOME/Library/Caches/Homebrew/downloads")
+
           brew untap aws/tap || true
           brew install llvm@22 ccache
           "$(brew --prefix llvm@22)/bin/llvm-config" --version
+
+          PKGS_AFTER=$(fingerprint "$HOME/Library/Caches/Homebrew/downloads")
+          if [ -n "$PKGS_AFTER" ] && [ "$PKGS_BEFORE" = "$PKGS_AFTER" ]; then
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            echo 'download cache unchanged; skipping cache save'
+          else
+            echo 'changed=true' >> "$GITHUB_OUTPUT"
+            echo 'download cache changed; a fresh entry will be saved'
+          fi
+      - name: Save Homebrew downloads
+        if: steps.brewdeps.outputs.changed == 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/Library/Caches/Homebrew/downloads
+          key: brew-dl-${{ runner.arch }}-${{ github.run_id }}
       - name: Cache ccache (macOS)
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -863,8 +893,8 @@ jobs:
             Write-Host "::warning::Could not configure Windows Defender exclusions: $_"
           }
 
-      - name: Cache MSYS2 packages
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - name: Restore MSYS2 packages
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: C:\msys64\var\cache\pacman\pkg
           key: msys2-mingw64-pkgs-${{ github.run_id }}
@@ -872,11 +902,24 @@ jobs:
             msys2-mingw64-pkgs-
 
       - name: Install MINGW64 toolchain + static LLVM + LLD
+        id: msys2deps
         shell: 'C:\msys64\usr\bin\bash.exe --login -eo pipefail "{0}"'
         env:
           MSYSTEM: MINGW64
           CHERE_INVOKING: '1'
         run: |
+          # Same restore/save reasoning as the static-libs cache: keep the
+          # rolling run_id key, but only upload when the package set
+          # actually moved. A plain actions/cache stored a fresh ~300MB
+          # copy on every run, and those duplicates alone were evicting
+          # other caches out of the repo's 10GB budget.
+          fingerprint() {
+            find "$1" -type f 2>/dev/null \
+              | LC_ALL=C sort | sha256sum | cut -d' ' -f1
+          }
+          mkdir -p /c/msys64/var/cache/pacman/pkg
+          PKGS_BEFORE=$(fingerprint /c/msys64/var/cache/pacman/pkg)
+
           # clang here is a genuine multi-target cross-compiler frontend
           # (unlike gcc, it needs no target-native binary to compile - only
           # target headers via -isystem) - used below to build sqlite3/
@@ -897,6 +940,22 @@ jobs:
           gcc --version | head -1
           llvm-config --version
           clang --version | head -1
+
+          PKGS_AFTER=$(fingerprint /c/msys64/var/cache/pacman/pkg)
+          if [ -n "$PKGS_AFTER" ] && [ "$PKGS_BEFORE" = "$PKGS_AFTER" ]; then
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            echo 'pacman package cache unchanged; skipping cache save'
+          else
+            echo 'changed=true' >> "$GITHUB_OUTPUT"
+            echo 'pacman package cache changed; a fresh entry will be saved'
+          fi
+
+      - name: Save MSYS2 packages
+        if: steps.msys2deps.outputs.changed == 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: C:\msys64\var\cache\pacman\pkg
+          key: msys2-mingw64-pkgs-${{ github.run_id }}
 
       - name: Cache ccache (Windows)
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

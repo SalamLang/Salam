@@ -815,13 +815,14 @@ jobs:
           # its MACOS_ZSTD_A.
           mkdir -p "$GITHUB_WORKSPACE/maclibs"
           zstd_a="$(brew --prefix zstd)/lib/libzstd.a"
-          if [ -f "$zstd_a" ]; then
-            cp "$zstd_a" "$GITHUB_WORKSPACE/maclibs/"
-          else
-            echo "::warning::no static libzstd in $(brew --prefix zstd)/lib; the link will fall back to the dylib"
-          fi
+          [ -f "$zstd_a" ] || {
+            echo "::error::no static libzstd at $zstd_a - the only other thing -lzstd" >&2
+            echo "  could resolve to is the dylib, which the check below rejects." >&2
+            exit 1
+          }
+          cp "$zstd_a" "$GITHUB_WORKSPACE/maclibs/"
           sh tools/bash/build-selfhost.sh --llvm="$GITHUB_WORKSPACE" \
-            -- --libpath="$GITHUB_WORKSPACE/maclibs" --libpath="$(brew --prefix)/lib"
+            -- --libpath="$GITHUB_WORKSPACE/maclibs"
           ./salam version
       # The Linux and Windows jobs already refuse to ship a binary that
       # imports a third-party library; macOS had no such gate, and 0.2.7
@@ -1879,6 +1880,12 @@ jobs:
             sh std/llvm/native/build.sh --llvm-config /tmp/fake-llvm-config \
             --out "$GITHUB_WORKSPACE"
 
+          # llvm-mingw lays its target libraries out as <root>/<triple>/lib,
+          # which is exactly the shape $SALAM_SYSROOTS is searched with, so
+          # pointing at the root is enough to resolve kernel32 and friends.
+          # Without it the link came back with every Win32 import undefined
+          # (_GetStdHandle, _EnterCriticalSection, ...).
+          export SALAM_SYSROOTS=/tmp/llvm-mingw
           if sh tools/bash/build-selfhost.sh --llvm="$GITHUB_WORKSPACE" \
             --output="$GITHUB_WORKSPACE/salam.exe" \
             -- --target=i686-w64-windows-gnu; then

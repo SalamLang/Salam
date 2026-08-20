@@ -104,6 +104,29 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+# A pointer is 4 bytes on a 32-bit target and 8 on a 64-bit one, and `.quad`
+# against a symbol simply cannot be relocated in a 32-bit object - the i386 and
+# armhf jobs failed with "cannot represent relocation type BFD_RELOC_64". The
+# length stays .quad either way: Salam reads it as an i64, and a difference
+# between two symbols in one section is resolved at assembly time rather than
+# through a relocation.
+case "$($CC -dumpmachine 2>/dev/null)" in
+i?86-* | arm-* | armv7*-* | armhf-* | powerpc-* | mips-* | mipsel-*) PTR=.long ;;
+*) PTR=.quad ;;
+esac
+
+# The assembler on MSYS2 is a native Windows binary and cannot resolve an MSYS
+# path like /tmp/tmp.XXXX, so every .incbin came back as "file not found" while
+# the .S itself opened fine. Only paths that go INTO the generated assembly get
+# converted; the ones this shell uses stay as they are.
+to_native_path() {
+    if command -v cygpath >/dev/null 2>&1; then
+        cygpath -m "$1"
+    else
+        printf '%s' "$1"
+    fi
+}
+
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT INT TERM
 mkdir -p "$OUT"
@@ -121,11 +144,11 @@ emit() {
         {
             printf '.section .rodata\n'
             printf '%s_data:\n' "$stem"
-            printf '.incbin "%s/%s.tar"\n' "$WORK" "$stem"
+            printf '.incbin "%s"\n' "$(to_native_path "$WORK/$stem.tar")"
             printf '%s_end:\n' "$stem"
             printf '.section .data\n'
             printf '.globl salam_embed_%s_ptr\n' "$stem"
-            printf 'salam_embed_%s_ptr: .quad %s_data\n' "$stem" "$stem"
+            printf 'salam_embed_%s_ptr: %s %s_data\n' "$stem" "$PTR" "$stem"
             printf '.globl salam_embed_%s_len\n' "$stem"
             printf 'salam_embed_%s_len: .quad %s_end - %s_data\n' "$stem" "$stem" "$stem"
         } >>"$S"
@@ -137,7 +160,7 @@ emit() {
         {
             printf '.section .data\n'
             printf '.globl salam_embed_%s_ptr\n' "$stem"
-            printf 'salam_embed_%s_ptr: .quad 0\n' "$stem"
+            printf 'salam_embed_%s_ptr: %s 0\n' "$stem" "$PTR"
             printf '.globl salam_embed_%s_len\n' "$stem"
             printf 'salam_embed_%s_len: .quad 0\n' "$stem"
         } >>"$S"

@@ -79,7 +79,7 @@ echo "staged minified stdlib preload image at $STD_MIN"
 # those exact names: a `func` with a body inside an `extern:` block survives
 # DCE and keeps its unmangled symbol, which is Salam's EMSCRIPTEN_KEEPALIVE.
 rm -rf .salam-build
-"$SALAM" build --backend=c --keep-c compiler/main.salam \
+"$SALAM" build --backend=c --keep-c compiler/wasm_main.salam \
     --output=.wasm-build/host-salam --log-level=warn >/dev/null 2>&1 || true
 SRCS=$(find .salam-build -name '*.c' | sort | tr '\n' ' ')
 [ -n "$SRCS" ] || {

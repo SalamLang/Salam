@@ -1431,15 +1431,37 @@ jobs:
       # - eight years and a win64 float-argument miscompile behind mob. It
       # installs straight into the bundle at salam-windows/tcc, the same path
       # the zip used to unpack to, so everything downstream is unchanged.
+      # The build is entirely determined by the pinned commit and the script
+      # driving it, so it is worth caching rather than repeating every run:
+      # a clone of tinycc's history plus a full compile, for a bundle that
+      # comes out byte-for-byte the same. Keyed on both files so moving the
+      # pin or changing the build invalidates it; the install prefix is a
+      # fixed path under the workspace, which matters because configure
+      # bakes it into the binary, so restoring it elsewhere would not work.
+      # The staging step below runs `tcc.exe -v` on whatever lands here, so
+      # a restored bundle still has to prove it runs.
+      - name: Restore bundled tcc
+        id: tccbundle
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: salam-windows/tcc
+          key: tcc-bundle-windows-x86_64-${{ hashFiles('tools/ci/tinycc-ref.txt', 'tools/ci/build-tcc.sh') }}-v1
       # MSYS2 rather than the `shell: bash` the staging step below uses:
       # building tcc needs gcc and make, which Git Bash does not have.
       - name: Build bundled tcc from the pinned TinyCC commit
+        if: steps.tccbundle.outputs.cache-hit != 'true'
         shell: 'C:\msys64\usr\bin\bash.exe --login -eo pipefail "{0}"'
         env:
           MSYSTEM: MINGW64
           CHERE_INVOKING: '1'
         run: |
           sh tools/ci/build-tcc.sh "$(pwd)/salam-windows/tcc"
+      - name: Save bundled tcc
+        if: steps.tccbundle.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: salam-windows/tcc
+          key: tcc-bundle-windows-x86_64-${{ hashFiles('tools/ci/tinycc-ref.txt', 'tools/ci/build-tcc.sh') }}-v1
 
       - name: Stage self-contained bundle
         shell: bash
@@ -1856,6 +1878,15 @@ jobs:
           fi
           echo "OK: salam.exe imports only Windows system DLLs."
 
+      # Same reasoning as the x86_64 bundle above, with its own key: this
+      # cross-build runs on a Linux runner and produces an i686 PE, so it
+      # must never share an entry with a native build on the same runner.
+      - name: Restore bundled tcc (i686 cross)
+        id: tccbundle
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: salam-windows-i686/tcc
+          key: tcc-bundle-windows-i686-cross-${{ hashFiles('tools/ci/tinycc-ref.txt', 'tools/ci/build-tcc.sh') }}-v1
       - name: Stage 32-bit bundle
         run: |
           set -eu
@@ -1871,9 +1902,19 @@ jobs:
           # native i686 runner to build it on. build-tcc.sh reads the target
           # name (i386-win32) back out of those two flags and builds the
           # runtime with a host-native tcc of its own - see the script.
-          CROSS_PREFIX=/tmp/llvm-mingw/bin/i686-w64-mingw32- \
-          TCC_CONFIGURE_EXTRA="--targetos=WIN32 --cpu=i386" \
-            sh tools/ci/build-tcc.sh "$(pwd)/$DIST/tcc"
+          # A tcc.exe with no libtcc1.a beside it links nothing, so both have
+          # to be there before the cached bundle counts as usable. The build
+          # is all-or-nothing and the save only runs after it succeeds, so a
+          # half-written entry should not exist; this just makes one
+          # self-heal instead of shipping a bundle that cannot compile.
+          if [ -f "$DIST/tcc/tcc.exe" ] \
+             && [ -n "$(find "$DIST/tcc" -name libtcc1.a 2>/dev/null | head -1)" ]; then
+            echo "reusing cached tcc bundle at $DIST/tcc"
+          else
+            CROSS_PREFIX=/tmp/llvm-mingw/bin/i686-w64-mingw32- \
+            TCC_CONFIGURE_EXTRA="--targetos=WIN32 --cpu=i386" \
+              sh tools/ci/build-tcc.sh "$(pwd)/$DIST/tcc"
+          fi
           file "$DIST/tcc/tcc.exe"
           cp README.md LICENSE "$DIST/" 2>/dev/null || true
           {
@@ -1906,6 +1947,12 @@ jobs:
           } > "$DIST/RUN-ME.txt"
           echo "bundle contents:"; ls -la "$DIST"
 
+      - name: Save bundled tcc (i686 cross)
+        if: steps.tccbundle.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: salam-windows-i686/tcc
+          key: tcc-bundle-windows-i686-cross-${{ hashFiles('tools/ci/tinycc-ref.txt', 'tools/ci/build-tcc.sh') }}-v1
       - name: Smoke-test the 32-bit build (format checks only - can't execute an i686 PE on this Linux host)
         run: |
           set -e

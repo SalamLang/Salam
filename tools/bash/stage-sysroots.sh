@@ -78,13 +78,14 @@ fi
 # Where these live differs by host: a Linux cross-build keeps them under
 # /usr/<triple>, an MSYS2 host directly in /mingw64/lib. Both are searched so
 # this works natively on Windows too.
-MINGW_CRT="crt2.o dllcrt2.o libmingw32.a libmingwex.a libmoldname.a libmsvcrt.a
-           libadvapi32.a libshell32.a libuser32.a libkernel32.a"
+MINGW_CRT="crt2.o dllcrt2.o libmingw32.a libmingwex.a libmoldname.a"
+MINGW_CRT="$MINGW_CRT libmsvcrt.a libadvapi32.a libshell32.a"
+MINGW_CRT="$MINGW_CRT libuser32.a libkernel32.a"
 # Beyond the bare CRT: what `link dynamic "ws2_32"` and friends resolve against.
-MINGW_EXTRA="libws2_32.a libgdi32.a libole32.a liboleaut32.a libuuid.a
-             libcomdlg32.a libwinspool.a libpsapi.a libiphlpapi.a
-             libcrypt32.a libbcrypt.a libsecur32.a libwinmm.a
-             libversion.a libnetapi32.a libuserenv.a libdbghelp.a"
+MINGW_EXTRA="libws2_32.a libgdi32.a libole32.a liboleaut32.a libuuid.a"
+MINGW_EXTRA="$MINGW_EXTRA libcomdlg32.a libwinspool.a libpsapi.a libiphlpapi.a"
+MINGW_EXTRA="$MINGW_EXTRA libcrypt32.a libbcrypt.a libsecur32.a libwinmm.a"
+MINGW_EXTRA="$MINGW_EXTRA libversion.a libnetapi32.a libuserenv.a libdbghelp.a"
 
 stage_mingw() {
     arch=$1

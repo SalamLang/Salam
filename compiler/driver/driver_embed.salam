@@ -1,0 +1,102 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Embedded sysroots - the self-hosted half of what c/Makefile's embed_musl_arch
+// and embed_mingw_arch macros produce.
+//
+// tools/bash/build-embed.sh tars a staged sysroot, emits a tiny .S that
+// .incbin's it and exports a pointer and a length, and archives the result as
+// libsalam_embed.a. A build that links that archive defines the matching
+// SALAM_HAVE_EMBED_* macro, and the arms below become reachable; a build that
+// does not gets the else arm, an empty answer, and the ordinary
+// $SALAM_SYSROOTS / system-package lookup carries on as before.
+//
+// Pointer + length rather than a str on purpose: tar data is full of NUL bytes
+// and Salam's str ends at the first one. See MaterializeSysroot.
+package driver
+
+import str
+
+// One gate, not one per target, and it sits at the top level: a custom -D macro
+// is only folded by condcomp in a plain top-level `if`, never inside a function
+// body (the built-in SALAM_OS_* flags are the ones that work anywhere). Same
+// shape llvm_bridge.salam uses for SALAM_HAVE_LLVM.
+//
+// The archive always defines all six pairs, zero-filled for any target that was
+// not staged, so this side never has to know which ones are real.
+if SALAM_HAVE_EMBED:
+    link static "salam_embed"
+
+    extern:
+        salam_embed_musl_x86_64_ptr: void*
+        salam_embed_musl_x86_64_len: i64
+        salam_embed_musl_aarch64_ptr: void*
+        salam_embed_musl_aarch64_len: i64
+        salam_embed_musl_i686_ptr: void*
+        salam_embed_musl_i686_len: i64
+        salam_embed_musl_arm_ptr: void*
+        salam_embed_musl_arm_len: i64
+        salam_embed_mingw_x86_64_ptr: void*
+        salam_embed_mingw_x86_64_len: i64
+        salam_embed_mingw_i686_ptr: void*
+        salam_embed_mingw_i686_len: i64
+    end
+
+    // The blob for a sysroot directory name, if this binary carries one.
+    // `name` is the spelling FindSysroot uses (x86_64-w64-mingw32,
+    // x86_64-linux-musl, ...).
+    func embedded_blob(name: str, ptr &: void*, len &: i64): bool:
+        if str.Equals(name, "x86_64-linux-musl"):
+            ptr = salam_embed_musl_x86_64_ptr
+            len = salam_embed_musl_x86_64_len
+        else str.Equals(name, "aarch64-linux-musl"):
+            ptr = salam_embed_musl_aarch64_ptr
+            len = salam_embed_musl_aarch64_len
+        else str.Equals(name, "i686-linux-musl"):
+            ptr = salam_embed_musl_i686_ptr
+            len = salam_embed_musl_i686_len
+        else str.Equals(name, "arm-linux-musleabihf"):
+            ptr = salam_embed_musl_arm_ptr
+            len = salam_embed_musl_arm_len
+        else str.Equals(name, "x86_64-w64-mingw32"):
+            ptr = salam_embed_mingw_x86_64_ptr
+            len = salam_embed_mingw_x86_64_len
+        else str.Equals(name, "i686-w64-mingw32"):
+            ptr = salam_embed_mingw_i686_ptr
+            len = salam_embed_mingw_i686_len
+        else:
+            ret false
+        end
+        ret ptr != null && len > (0 as i64)
+    end
+
+    // EmbeddedSysroot - unpacks this binary's own copy of `name` into the cache
+    // and hands back the directory, or false when it carries none. Called only
+    // after the ordinary lookup came up empty, so an explicit $SALAM_SYSROOTS
+    // or a system package still wins.
+    pub func EmbeddedSysroot(name: str, out &: str): bool:
+        mut p := null as void*
+        mut n := 0 as i64
+        if !embedded_blob(name, p, n):
+            ret false
+        end
+        ret MaterializeSysroot(name, p, n, out)
+    end
+else:
+    // No embedded sysroots in this build; the caller falls through to
+    // $SALAM_SYSROOTS and the system packages exactly as before.
+    pub func EmbeddedSysroot(_name: str, _out &: str): bool:
+        ret false
+    end
+end

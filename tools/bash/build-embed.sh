@@ -1,0 +1,98 @@
+#!/bin/sh
+# Builds libsalam_embed.a: the sysroot tarballs a self-contained salam carries
+# inside itself, so `--target=` cross-compiles without the user installing a
+# musl or mingw toolchain.
+#
+# This is c/Makefile's embed_musl_arch/embed_mingw_arch macros as a standalone
+# script. Same trick: tar the staged sysroot, emit a .S that .incbin's it, and
+# assemble. It exports a pointer and a length per target rather than the C's
+# start/end symbol pair, because Salam has no address-of on an extern.
+#
+# Every target gets a symbol pair whether or not it was staged; the ones that
+# were not come out as a null pointer and a zero length, which is what
+# driver_embed.salam reads as "nothing embedded for this one". That keeps the
+# compiler side free of per-target conditionals.
+#
+# Usage:
+#   tools/bash/build-embed.sh --out DIR [--musl-x86_64 DIR] [--musl-aarch64 DIR]
+#                             [--musl-i686 DIR] [--musl-arm DIR]
+#                             [--mingw-x86_64 DIR] [--mingw-i686 DIR]
+#
+# Build the compiler with -DSALAM_HAVE_EMBED --libpath=DIR to link it.
+
+set -eu
+
+OUT=$(pwd)
+: "${CC:=cc}"
+: "${AR:=ar}"
+
+MUSL_X86_64=; MUSL_AARCH64=; MUSL_I686=; MUSL_ARM=
+MINGW_X86_64=; MINGW_I686=
+
+while [ $# -gt 0 ]; do
+    case $1 in
+    --out) OUT=$2; shift 2 ;;
+    --musl-x86_64) MUSL_X86_64=$2; shift 2 ;;
+    --musl-aarch64) MUSL_AARCH64=$2; shift 2 ;;
+    --musl-i686) MUSL_I686=$2; shift 2 ;;
+    --musl-arm) MUSL_ARM=$2; shift 2 ;;
+    --mingw-x86_64) MINGW_X86_64=$2; shift 2 ;;
+    --mingw-i686) MINGW_I686=$2; shift 2 ;;
+    -h | --help) sed -n '2,22p' "$0"; exit 0 ;;
+    *) echo "unknown argument: $1" >&2; exit 2 ;;
+    esac
+done
+
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT INT TERM
+mkdir -p "$OUT"
+
+S=$WORK/embed.S
+: > "$S"
+staged=0
+
+# emit <symbol-stem> <sysroot-dir>
+emit() {
+    stem=$1
+    dir=$2
+    if [ -n "$dir" ] && [ -d "$dir" ]; then
+        tar cf "$WORK/$stem.tar" -C "$dir" .
+        {
+            printf '.section .rodata\n'
+            printf '%s_data:\n' "$stem"
+            printf '.incbin "%s/%s.tar"\n' "$WORK" "$stem"
+            printf '%s_end:\n' "$stem"
+            printf '.section .data\n'
+            printf '.globl salam_embed_%s_ptr\n' "$stem"
+            printf 'salam_embed_%s_ptr: .quad %s_data\n' "$stem" "$stem"
+            printf '.globl salam_embed_%s_len\n' "$stem"
+            printf 'salam_embed_%s_len: .quad %s_end - %s_data\n' "$stem" "$stem" "$stem"
+        } >> "$S"
+        echo "  embedded $stem ($(wc -c < "$WORK/$stem.tar") bytes) from $dir"
+        staged=$((staged + 1))
+    else
+        # Absent target: a null pointer and a zero length, so the compiler side
+        # needs no per-target conditional.
+        {
+            printf '.section .data\n'
+            printf '.globl salam_embed_%s_ptr\n' "$stem"
+            printf 'salam_embed_%s_ptr: .quad 0\n' "$stem"
+            printf '.globl salam_embed_%s_len\n' "$stem"
+            printf 'salam_embed_%s_len: .quad 0\n' "$stem"
+        } >> "$S"
+    fi
+}
+
+emit musl_x86_64 "$MUSL_X86_64"
+emit musl_aarch64 "$MUSL_AARCH64"
+emit musl_i686 "$MUSL_I686"
+emit musl_arm "$MUSL_ARM"
+emit mingw_x86_64 "$MINGW_X86_64"
+emit mingw_i686 "$MINGW_I686"
+
+$CC -c "$S" -o "$WORK/embed.o"
+rm -f "$OUT/libsalam_embed.a"
+$AR rcs "$OUT/libsalam_embed.a" "$WORK/embed.o"
+
+echo "Built $OUT/libsalam_embed.a ($staged target(s) embedded)"
+echo "  link it with: salam build -DSALAM_HAVE_EMBED --libpath=$OUT ..."

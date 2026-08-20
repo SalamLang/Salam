@@ -268,7 +268,19 @@ func call_method(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, callee: int): Llv:
         ret len_of(v, s, a, n, obj)
     end
 
-    if objn.kind == at.AST_IDENTIFIER:
+    // Package-qualified call (`str.Equals(...)`). Gated on the receiver having
+    // no value type of its own, and the gate has to cover BOTH lookups below:
+    // sym_of searches the global scope and then every loaded package, so a
+    // function-local whose name matches a package's - `mut map := Vector {} as
+    // Vector<int>` in jsgen_call.salam, against std/map's `package map` -
+    // resolved to the package, and its `map.push(...)` came back as "package
+    // function 'push' not found". A package identifier carries no value type,
+    // so requiring an empty/<null> type separates the two cleanly. sema types a
+    // real value and leaves only the unresolved package case as "<null>";
+    // keying off the codegen-time locals list instead was wrong, since a local
+    // declared in an enclosing block is not always registered yet at the call
+    // site.
+    if objn.kind == at.AST_IDENTIFIER && (str.Len(ots) == 0 || str.Equals(ots, "<null>")):
         pk := sym_of(v, s, a, objn.name)
         if pk != 0 && sm.SymAt(s, pk).kind == sm.SYM_PACKAGE:
             ret call_pkg(v, s, a, n, pk, mname)
@@ -277,23 +289,14 @@ func call_method(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, callee: int): Llv:
         // is also an extern function's - std/time is `package time` and
         // declares `extern func time(...)` - can resolve to the function
         // instead, leaving `time.FormatDate(...)` reported as a method on
-        // type '<null>'. Only consulted when the receiver is not a value
-        // in scope, so a local shadowing a package name still wins.
-        // Gated on the receiver having no type of its own. sema types a
-        // real value (`map.free()` where `map` is a local HashMap, and
-        // std/map is also `package map`) and leaves only the unresolved
-        // package case as "<null>" - keying off the codegen-time locals
-        // list instead was wrong, since a local declared in an enclosing
-        // block is not always registered yet at the call site.
-        if str.Len(ots) == 0 || str.Equals(ots, "<null>"):
-            mut pi := 0
-            until pi < sm.PackageCount(s):
-                cand := sm.PackageAt(s, pi)
-                if cand != 0 && str.Equals(sm.SymAt(s, cand).pkgname, objn.name):
-                    ret call_pkg(v, s, a, n, cand, mname)
-                end
-                pi += 1
+        // type '<null>'.
+        mut pi := 0
+        until pi < sm.PackageCount(s):
+            cand := sm.PackageAt(s, pi)
+            if cand != 0 && str.Equals(sm.SymAt(s, cand).pkgname, objn.name):
+                ret call_pkg(v, s, a, n, cand, mname)
             end
+            pi += 1
         end
     end
 

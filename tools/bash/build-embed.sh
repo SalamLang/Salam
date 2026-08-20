@@ -26,20 +26,51 @@ OUT=$(pwd)
 : "${CC:=cc}"
 : "${AR:=ar}"
 
-MUSL_X86_64=; MUSL_AARCH64=; MUSL_I686=; MUSL_ARM=
-MINGW_X86_64=; MINGW_I686=
+MUSL_X86_64=
+MUSL_AARCH64=
+MUSL_I686=
+MUSL_ARM=
+MINGW_X86_64=
+MINGW_I686=
 
 while [ $# -gt 0 ]; do
     case $1 in
-    --out) OUT=$2; shift 2 ;;
-    --musl-x86_64) MUSL_X86_64=$2; shift 2 ;;
-    --musl-aarch64) MUSL_AARCH64=$2; shift 2 ;;
-    --musl-i686) MUSL_I686=$2; shift 2 ;;
-    --musl-arm) MUSL_ARM=$2; shift 2 ;;
-    --mingw-x86_64) MINGW_X86_64=$2; shift 2 ;;
-    --mingw-i686) MINGW_I686=$2; shift 2 ;;
-    -h | --help) sed -n '2,22p' "$0"; exit 0 ;;
-    *) echo "unknown argument: $1" >&2; exit 2 ;;
+    --out)
+        OUT=$2
+        shift 2
+        ;;
+    --musl-x86_64)
+        MUSL_X86_64=$2
+        shift 2
+        ;;
+    --musl-aarch64)
+        MUSL_AARCH64=$2
+        shift 2
+        ;;
+    --musl-i686)
+        MUSL_I686=$2
+        shift 2
+        ;;
+    --musl-arm)
+        MUSL_ARM=$2
+        shift 2
+        ;;
+    --mingw-x86_64)
+        MINGW_X86_64=$2
+        shift 2
+        ;;
+    --mingw-i686)
+        MINGW_I686=$2
+        shift 2
+        ;;
+    -h | --help)
+        sed -n '2,22p' "$0"
+        exit 0
+        ;;
+    *)
+        echo "unknown argument: $1" >&2
+        exit 2
+        ;;
     esac
 done
 
@@ -48,7 +79,7 @@ trap 'rm -rf "$WORK"' EXIT INT TERM
 mkdir -p "$OUT"
 
 S=$WORK/embed.S
-: > "$S"
+: >"$S"
 staged=0
 
 # emit <symbol-stem> <sysroot-dir>
@@ -67,8 +98,8 @@ emit() {
             printf 'salam_embed_%s_ptr: .quad %s_data\n' "$stem" "$stem"
             printf '.globl salam_embed_%s_len\n' "$stem"
             printf 'salam_embed_%s_len: .quad %s_end - %s_data\n' "$stem" "$stem" "$stem"
-        } >> "$S"
-        echo "  embedded $stem ($(wc -c < "$WORK/$stem.tar") bytes) from $dir"
+        } >>"$S"
+        echo "  embedded $stem ($(wc -c <"$WORK/$stem.tar") bytes) from $dir"
         staged=$((staged + 1))
     else
         # Absent target: a null pointer and a zero length, so the compiler side
@@ -79,7 +110,7 @@ emit() {
             printf 'salam_embed_%s_ptr: .quad 0\n' "$stem"
             printf '.globl salam_embed_%s_len\n' "$stem"
             printf 'salam_embed_%s_len: .quad 0\n' "$stem"
-        } >> "$S"
+        } >>"$S"
     fi
 }
 

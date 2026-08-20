@@ -30,8 +30,14 @@ LLVM_CONFIG=${LLVM_CONFIG:-llvm-config}
 
 while [ $# -gt 0 ]; do
     case $1 in
-    --out) OUT=$2; shift 2 ;;
-    --llvm-config) LLVM_CONFIG=$2; shift 2 ;;
+    --out)
+        OUT=$2
+        shift 2
+        ;;
+    --llvm-config)
+        LLVM_CONFIG=$2
+        shift 2
+        ;;
     -h | --help)
         sed -n '2,$ {
             /^#/ !q
@@ -39,7 +45,10 @@ while [ $# -gt 0 ]; do
         }' "$0"
         exit 0
         ;;
-    *) echo "unknown argument: $1" >&2; exit 2 ;;
+    *)
+        echo "unknown argument: $1" >&2
+        exit 2
+        ;;
     esac
 done
 
@@ -67,7 +76,10 @@ SEARCH="$LIBDIR ${LLD_EXTRA_LIBDIR:-}"
 # stub keeps std/llvm resolving and the compiler links through the host cc.
 find_lib() {
     for d in $SEARCH; do
-        [ -f "$d/$1" ] && { printf '%s\n' "$d/$1"; return 0; }
+        [ -f "$d/$1" ] && {
+            printf '%s\n' "$d/$1"
+            return 0
+        }
     done
     return 1
 }
@@ -141,9 +153,9 @@ esac
 
 MRI=$WORK/mri
 mkdir -p "$OUT"
-: > "$MRI"
-echo "create $OUT/libsalam_llvm.a" >> "$MRI"
-for o in $SHIMS; do echo "addmod $o" >> "$MRI"; done
+: >"$MRI"
+echo "create $OUT/libsalam_llvm.a" >>"$MRI"
+for o in $SHIMS; do echo "addmod $o" >>"$MRI"; done
 
 # A host can have llvm-config and the headers and still have no static
 # components at all (a shared-only LLVM package). Left unchecked, every
@@ -151,7 +163,7 @@ for o in $SHIMS; do echo "addmod $o" >> "$MRI"; done
 # script prints "Built" - which is how std/llvm ends up failing at link time
 # on a build that reported success. So the component list has to actually
 # come back, and the archives it names have to actually be found.
-if ! LLVM_LIBS=$($LLVM_CONFIG --link-static --libs all 2> "$WORK/libs.err"); then
+if ! LLVM_LIBS=$($LLVM_CONFIG --link-static --libs all 2>"$WORK/libs.err"); then
     echo "error: $LLVM_CONFIG --link-static --libs all failed:" >&2
     sed 's/^/       /' "$WORK/libs.err" >&2
     exit 1
@@ -170,7 +182,7 @@ missing_llvm=
 for l in $LLVM_LIBS $(for x in $LLD_LIBS; do echo "-l$x"; done); do
     case "$l" in -l*) nm="lib${l#-l}.a" ;; *) continue ;; esac
     if a=$(find_lib "$nm"); then
-        echo "addlib $a" >> "$MRI"
+        echo "addlib $a" >>"$MRI"
         n=$((n + 1))
     else
         case "$nm" in
@@ -208,11 +220,11 @@ if [ "$n" = 0 ]; then
     echo "       $OUT/libsalam_llvm.a" >&2
     exit 1
 fi
-printf 'save\nend\n' >> "$MRI"
+printf 'save\nend\n' >>"$MRI"
 
 echo "merging $n LLVM/lld archives + salam shims -> $OUT/libsalam_llvm.a"
 rm -f "$OUT/libsalam_llvm.a"
-"$AR" -M < "$MRI"
+"$AR" -M <"$MRI"
 
 echo "Built $OUT/libsalam_llvm.a"
 echo "  std/llvm then links with: link static \"salam_llvm\""

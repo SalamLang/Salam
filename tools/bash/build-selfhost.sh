@@ -28,17 +28,51 @@ EXTRA=
 
 while [ $# -gt 0 ]; do
     case $1 in
-    --output=*) OUT=${1#*=}; shift ;;
-    --seed=*) SEED=${1#*=}; shift ;;
-    --llvm=*) LLVM_DIR=${1#*=}; shift ;;
-    --embed=*) EMBED_DIR=${1#*=}; shift ;;
-    --output) OUT=$2; shift 2 ;;
-    --seed) SEED=$2; shift 2 ;;
-    --llvm) LLVM_DIR=$2; shift 2 ;;
-    --embed) EMBED_DIR=$2; shift 2 ;;
-    --) shift; EXTRA="$*"; break ;;
-    -h | --help) sed -n '2,20p' "$0"; exit 0 ;;
-    *) echo "unknown argument: $1" >&2; exit 2 ;;
+    --output=*)
+        OUT=${1#*=}
+        shift
+        ;;
+    --seed=*)
+        SEED=${1#*=}
+        shift
+        ;;
+    --llvm=*)
+        LLVM_DIR=${1#*=}
+        shift
+        ;;
+    --embed=*)
+        EMBED_DIR=${1#*=}
+        shift
+        ;;
+    --output)
+        OUT=$2
+        shift 2
+        ;;
+    --seed)
+        SEED=$2
+        shift 2
+        ;;
+    --llvm)
+        LLVM_DIR=$2
+        shift 2
+        ;;
+    --embed)
+        EMBED_DIR=$2
+        shift 2
+        ;;
+    --)
+        shift
+        EXTRA="$*"
+        break
+        ;;
+    -h | --help)
+        sed -n '2,20p' "$0"
+        exit 0
+        ;;
+    *)
+        echo "unknown argument: $1" >&2
+        exit 2
+        ;;
     esac
 done
 

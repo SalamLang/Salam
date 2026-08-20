@@ -63,15 +63,23 @@ export SALAM_STD="$ROOT/std"
 # where its libsalam_llvm.a lives; -DSALAM_HAVE_EMBED does the same for the
 # sysroot blobs in libsalam_embed.a. Both are opt-in: without them the
 # compiler still builds, it just shells out to cc and finds sysroots on disk.
-FLAGS=
-[ -n "$LLVM_DIR" ] && FLAGS="$FLAGS -DSALAM_HAVE_LLVM --libpath=$LLVM_DIR"
-[ -n "$EMBED_DIR" ] && FLAGS="$FLAGS -DSALAM_HAVE_EMBED --libpath=$EMBED_DIR"
+# Flags are accumulated as positional parameters rather than one string: the
+# build-info values are quoted so a two-component version like "0.3" stays a
+# string constant rather than reading as a number, and those quotes have to
+# survive as characters instead of being re-split by the shell.
+set --
 
-# compiler/sal_core.salam reads these as compile-time constants, so without
-# them the result inherits the *seed's* build info - a released binary's
-# version number instead of this checkout's. Same stamping bootstrap.sh does.
-# %cI, not %ci: the flags are word-split on the way to the build command, and
-# a date with spaces in it would arrive as four arguments.
+# -DSALAM_HAVE_LLVM makes llvm_bridge.salam import std/llvm, and --libpath is
+# where its libsalam_llvm.a lives; -DSALAM_HAVE_EMBED does the same for the
+# sysroot blobs in libsalam_embed.a. Both are opt-in: without them the compiler
+# still builds, it just shells out to cc and finds sysroots on disk.
+[ -n "$LLVM_DIR" ] && set -- "$@" -DSALAM_HAVE_LLVM "--libpath=$LLVM_DIR"
+[ -n "$EMBED_DIR" ] && set -- "$@" -DSALAM_HAVE_EMBED "--libpath=$EMBED_DIR"
+
+# compiler/sal_core.salam reads these as compile-time constants, so without them
+# the result inherits the *seed's* build info - a released binary's version
+# number instead of this checkout's. Same stamping bootstrap.sh does. %cI, not
+# %ci, so the date carries no spaces.
 STAMP_VERSION="$(cat "$ROOT/VERSION" 2>/dev/null || echo 0.0.0-dev)"
 STAMP_COMMIT="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 STAMP_DATE="$(git -C "$ROOT" show -s --format=%cI HEAD 2>/dev/null || echo unknown)"
@@ -79,15 +87,16 @@ STAMP_DIRTY=
 if [ -n "$(git -C "$ROOT" status --porcelain 2>/dev/null)" ]; then
     STAMP_DIRTY=-dirty
 fi
-FLAGS="$FLAGS -dSALAM_VERSION=\"$STAMP_VERSION\" -dSALAM_GIT_COMMIT=\"$STAMP_COMMIT\""
-FLAGS="$FLAGS -dSALAM_GIT_DATE=\"$STAMP_DATE\" -dSALAM_GIT_DIRTY=\"$STAMP_DIRTY\""
+set -- "$@" "-dSALAM_VERSION=\"$STAMP_VERSION\"" "-dSALAM_GIT_COMMIT=\"$STAMP_COMMIT\""
+set -- "$@" "-dSALAM_GIT_DATE=\"$STAMP_DATE\"" "-dSALAM_GIT_DIRTY=\"$STAMP_DIRTY\""
+
+# shellcheck disable=SC2086 # a caller-supplied flag list; splitting is wanted
+[ -n "$EXTRA" ] && set -- "$@" $EXTRA
 
 echo "seed   : $SEED ($("$SEED" version 2>/dev/null | head -1))"
 echo "output : $OUT"
-[ -n "$FLAGS" ] && echo "flags  :$FLAGS"
 
-# shellcheck disable=SC2086
-"$SEED" build "$ROOT/compiler/main.salam" --output="$OUT" $FLAGS $EXTRA
+"$SEED" build "$ROOT/compiler/main.salam" --output="$OUT" "$@"
 
 [ -x "$OUT" ] || {
     echo "error: no binary at $OUT after the build" >&2

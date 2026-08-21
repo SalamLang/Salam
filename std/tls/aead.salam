@@ -1,0 +1,306 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package tls
+
+// Application-facing crypto: ECDH over P-256, HKDF-SHA256, and AES-256-GCM.
+//
+// This package already implements all three for its own handshake, but kept
+// them private and pointer-shaped. An application that wants to encrypt its
+// own protocol - a WebSocket channel inside TLS, a sealed cookie, a token
+// envelope - had to either reimplement them or reach into private symbols.
+//
+// Everything here takes and returns **base64 text**. Not because base64 is
+// cheap, but because a Salam `str` is NUL-terminated: binary that happens to
+// contain a zero byte cannot survive in one. Base64 is also what a protocol
+// carries anyway, so in practice this removes a conversion rather than adding
+// one. Keys, nonces, ciphertext and shared secrets are all base64; plaintext
+// is a `str` because it is text by the time it gets here.
+//
+// The pairing is the same one WebCrypto offers a browser, so a Salam server
+// and a JavaScript client can speak the same sealed protocol:
+//
+//     ECDH P-256  ->  HKDF-SHA256  ->  AES-256-GCM
+//
+// See tests/en/stdlib/aead_demo.salam for a worked round trip.
+
+import encoding
+import crypto
+
+// P-256 SubjectPublicKeyInfo, the 26 bytes before the point. The structure is
+// fixed for this one curve (an AlgorithmIdentifier naming id-ecPublicKey and
+// prime256v1, then a BIT STRING header), so it is a constant rather than an
+// ASN.1 encoder: 91 bytes total, always.
+const SPKI_P256_PREFIX := "3059301306072a8648ce3d020106082a8648ce3d030107034200"
+const SPKI_P256_LEN := 91
+const P256_POINT_LEN := 65
+const P256_SCALAR_LEN := 32
+const GCM_TAG_LEN := 16
+const GCM_NONCE_LEN := 12
+const AES256_KEY_LEN := 32
+
+// _hexval - one hex digit, or -1.
+func _hexval(c: int): int:
+    if c >= 48 && c <= 57: ret c - 48 end
+    if c >= 97 && c <= 102: ret c - 87 end
+    if c >= 65 && c <= 70: ret c - 55 end
+    ret 0 - 1
+end
+
+// _hex_into - decodes `hex` into `dst` at `off`, answering the byte count or
+// -1. Used only for the SPKI prefix constant, which is why it is this small.
+func _hex_into(hex: str, dst: void*, off: int): int:
+    n := hex.len()
+    if n % 2 != 0: ret 0 - 1 end
+    mut i := 0
+    while i < n:
+        hi := _hexval(hex[i] as int)
+        lo := _hexval(hex[i + 1] as int)
+        if hi < 0 || lo < 0: ret 0 - 1 end
+        _bput(dst, off + i / 2, hi * 16 + lo)
+        i += 2
+    end
+    ret n / 2
+end
+
+// _decode - base64 text into a fresh buffer of exactly `want` bytes, or a bad
+// buffer when the input is malformed or the wrong size. Every length check in
+// this file funnels through here, so a caller cannot pass a 31-byte key.
+func _decode(b64: str, want: int): Buf:
+    mut out := _newbuf(want + 16)
+    if out.bad: ret out end
+    _putzeros(out, want + 16)
+    mut ok := true
+    n := encoding.Base64DecodeBytes(b64, out.p, want + 16, ok)
+    if !ok || n != want:
+        out.bad = true
+        ret out
+    end
+    out.len = want
+    ret out
+end
+
+// _decode_any - the same without a fixed size, for ciphertext.
+func _decode_any(b64: str): Buf:
+    cap := b64.len() + 16
+    mut out := _newbuf(cap)
+    if out.bad: ret out end
+    _putzeros(out, cap)
+    mut ok := true
+    n := encoding.Base64DecodeBytes(b64, out.p, cap, ok)
+    if !ok || n < 0:
+        out.bad = true
+        ret out
+    end
+    out.len = n
+    ret out
+end
+
+// _spki_wrap - an uncompressed point as a base64 SubjectPublicKeyInfo, the
+// form createPublicKey() and WebCrypto's importKey("spki") both expect.
+func _spki_wrap(point: void*): str:
+    mut der := _newbuf(SPKI_P256_LEN)
+    defer _buf_free(der)
+    _putzeros(der, SPKI_P256_LEN)
+    if _hex_into(SPKI_P256_PREFIX, der.p, 0) < 0: ret "" end
+    mem.Copy(_bufptr(der, SPKI_P256_LEN - P256_POINT_LEN), point, P256_POINT_LEN as u64)
+    ret encoding.Base64EncodeBytes(der.p, SPKI_P256_LEN)
+end
+
+// _spki_point - the reverse: the 65-byte point inside a peer's SPKI key.
+// Refuses anything that is not exactly this curve's encoding, which is what
+// turns a hostile key into a rejection instead of an arithmetic surprise.
+func _spki_point(spki_b64: str, out &: Buf): bool:
+    mut der := _decode(spki_b64, SPKI_P256_LEN)
+    defer _buf_free(der)
+    if der.bad: ret false end
+    mut want := _newbuf(SPKI_P256_LEN)
+    defer _buf_free(want)
+    _putzeros(want, SPKI_P256_LEN)
+    if _hex_into(SPKI_P256_PREFIX, want.p, 0) < 0: ret false end
+    if !_cteq(der.p, want.p, SPKI_P256_LEN - P256_POINT_LEN): ret false end
+    if _bget(der.p, SPKI_P256_LEN - P256_POINT_LEN) != 4: ret false end
+    _putraw(out, _bufptr(der, SPKI_P256_LEN - P256_POINT_LEN), P256_POINT_LEN)
+    ret true
+end
+
+// _aes_from - an AES-256 key schedule from base64 key material.
+func _aes_from(key_b64: str, ok &: bool): Aes:
+    mut key := _decode(key_b64, AES256_KEY_LEN)
+    defer _buf_wipe(key)
+    if key.bad:
+        ok = false
+        ret Aes {}
+    end
+    ok = true
+    ret _aes_init(key.p, AES256_KEY_LEN)
+end
+
+// _public_of - the SPKI public key for a scalar, or "" when the scalar is not
+// a valid private key for this curve.
+func _public_of(cv: Curve, scalar: void*): str:
+    mut point := _newbuf(P256_POINT_LEN)
+    defer _buf_free(point)
+    _putzeros(point, P256_POINT_LEN)
+    _bput(point.p, 0, 4)
+    if !_ec_base_mul(cv, scalar, _bufptr(point, 1), _bufptr(point, 1 + P256_SCALAR_LEN)):
+        ret ""
+    end
+    ret _spki_wrap(point.p)
+end
+
+// EcdhP256Generate - a fresh ephemeral key pair.
+//
+// `priv` is the 32-byte scalar and `pub_spki` its public point in SPKI DER,
+// both base64. The scalar is drawn until it lands in [1, n-1]; a random 32-byte
+// value is outside that range with probability around 2^-32, so this retries
+// approximately never but must still be able to.
+pub func EcdhP256Generate(priv &: str, pub_spki &: str): bool:
+    cv := _curve_p256()
+    mut attempt := 0
+    while attempt < 8:
+        candidate := crypto.RandomHex(P256_SCALAR_LEN)
+        mut scalar := _newbuf(P256_SCALAR_LEN)
+        _putzeros(scalar, P256_SCALAR_LEN)
+        if _hex_into(candidate, scalar.p, 0) == P256_SCALAR_LEN:
+            spki := _public_of(cv, scalar.p)
+            if spki.len() > 0:
+                priv = encoding.Base64EncodeBytes(scalar.p, P256_SCALAR_LEN)
+                pub_spki = spki
+                _buf_wipe(scalar)
+                ret true
+            end
+        end
+        _buf_wipe(scalar)
+        attempt += 1
+    end
+    ret false
+end
+
+// EcdhP256Shared - the shared secret with a peer, base64, 32 bytes.
+//
+// A point that is not on the curve is refused here rather than multiplied,
+// which is what makes an invalid-curve attack a failed handshake instead of a
+// leaked private key.
+pub func EcdhP256Shared(priv_b64: str, peer_spki_b64: str, ok &: bool): str:
+    ok = false
+    mut scalar := _decode(priv_b64, P256_SCALAR_LEN)
+    defer _buf_wipe(scalar)
+    if scalar.bad: ret "" end
+    mut point := _newbuf(P256_POINT_LEN)
+    defer _buf_free(point)
+    if !_spki_point(peer_spki_b64, point): ret "" end
+    mut secret := _newbuf(P256_SCALAR_LEN)
+    defer _buf_wipe(secret)
+    _putzeros(secret, P256_SCALAR_LEN)
+    if !_ec_ecdh(_curve_p256(), scalar.p, point.p, P256_POINT_LEN, secret.p): ret "" end
+    ok = true
+    ret encoding.Base64EncodeBytes(secret.p, P256_SCALAR_LEN)
+end
+
+// HkdfSha256 - RFC 5869 extract-then-expand, `out_len` bytes, base64.
+//
+// `info` is the label that separates one derived key from another: two keys
+// from the same secret and salt differ only because their labels do, which is
+// how a protocol gives each direction its own key.
+pub func HkdfSha256(ikm_b64: str, salt_b64: str, info: str, out_len: int, ok &: bool): str:
+    ok = false
+    mut ikm := _decode_any(ikm_b64)
+    defer _buf_wipe(ikm)
+    mut salt := _decode_any(salt_b64)
+    defer _buf_free(salt)
+    if ikm.bad || salt.bad || out_len <= 0: ret "" end
+    mut prk := _newbuf(32)
+    defer _buf_wipe(prk)
+    _putzeros(prk, 32)
+    _hkdf_extract(HASH_SHA256, salt.p, salt.len, ikm.p, ikm.len, prk.p)
+    mut out := _newbuf(out_len)
+    defer _buf_wipe(out)
+    _putzeros(out, out_len)
+    mut label := _newbuf(info.len() + 1)
+    defer _buf_free(label)
+    _putstr(label, info)
+    if !_hkdf_expand(HASH_SHA256, prk.p, 32, label.p, info.len(), out.p, out_len): ret "" end
+    ok = true
+    ret encoding.Base64EncodeBytes(out.p, out_len)
+end
+
+// AesGcmSeal - encrypts `plaintext` under a 32-byte key and 12-byte nonce.
+//
+// The 16-byte tag is appended to the ciphertext, which is the layout
+// WebCrypto's AES-GCM both produces and expects. A nonce must never repeat
+// under one key; deriving it from a frame counter is the usual way to be sure.
+pub func AesGcmSeal(key_b64: str, nonce_b64: str, plaintext: str, ok &: bool): str:
+    ok = false
+    mut aes_ok := false
+    a := _aes_from(key_b64, aes_ok)
+    mut nonce := _decode(nonce_b64, GCM_NONCE_LEN)
+    defer _buf_free(nonce)
+    if !aes_ok || nonce.bad: ret "" end
+    n := plaintext.len()
+    mut pt := _newbuf(n + 1)
+    defer _buf_wipe(pt)
+    _putstr(pt, plaintext)
+    mut out := _newbuf(n + GCM_TAG_LEN)
+    defer _buf_free(out)
+    _putzeros(out, n + GCM_TAG_LEN)
+    _gcm_seal(a, nonce.p, null, 0, pt.p, out.p, n, _bufptr(out, n))
+    ok = true
+    ret encoding.Base64EncodeBytes(out.p, n + GCM_TAG_LEN)
+end
+
+// AesGcmOpen - the inverse. `ok` is false for anything that does not
+// authenticate: a tampered payload, a replayed nonce, a truncated envelope.
+//
+// The failure is deliberately indistinguishable between those cases. A peer
+// learns that it failed and never why, because the difference is exactly what
+// a padding-oracle style attack needs.
+pub func AesGcmOpen(key_b64: str, nonce_b64: str, sealed_b64: str, ok &: bool): str:
+    ok = false
+    mut aes_ok := false
+    a := _aes_from(key_b64, aes_ok)
+    mut nonce := _decode(nonce_b64, GCM_NONCE_LEN)
+    defer _buf_free(nonce)
+    mut sealed := _decode_any(sealed_b64)
+    defer _buf_free(sealed)
+    if !aes_ok || nonce.bad || sealed.bad || sealed.len <= GCM_TAG_LEN: ret "" end
+    n := sealed.len - GCM_TAG_LEN
+    mut pt := _newbuf(n + 1)
+    defer _buf_wipe(pt)
+    _putzeros(pt, n + 1)
+    if !_gcm_open(a, nonce.p, null, 0, sealed.p, n, _bufptr(sealed, n), pt.p): ret "" end
+    ok = true
+    ret _bufstr(pt)
+end
+
+// GcmNonce - a 12-byte nonce from a counter: four zero bytes then a 64-bit
+// big-endian value. Sequential frames therefore never collide, and the counter
+// is also what a receiver checks to reject a replay.
+pub func GcmNonce(counter: i64): str:
+    mut n := _newbuf(GCM_NONCE_LEN)
+    defer _buf_free(n)
+    _putzeros(n, 4)
+    _put64(n, counter as u64)
+    ret encoding.Base64EncodeBytes(n.p, GCM_NONCE_LEN)
+end
+
+// RandomSalt - `n` random bytes, base64. The salt half of an HKDF exchange.
+pub func RandomSalt(n: int): str:
+    mut b := _newbuf(n)
+    defer _buf_free(b)
+    _putzeros(b, n)
+    hex := crypto.RandomHex(n)
+    if _hex_into(hex, b.p, 0) != n: ret "" end
+    ret encoding.Base64EncodeBytes(b.p, n)
+end

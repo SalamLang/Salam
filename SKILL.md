@@ -574,9 +574,17 @@ LowerBound UpperBound Min Max Reverse Swap` + named algorithms
 
 ### Data formats
 
-- **`json`**: `Valid Get GetInt GetFloat Has Minify Indent Escape
-Object(members) Array(items) Member/MemberInt/MemberBool/MemberFloat/MemberRaw
-Str`.
+- **`json`** (`import encoding.json`): `Valid Get GetInt GetFloat Has Keys
+Minify Indent Escape Object(members) Array(items)
+Member/MemberInt/MemberBool/MemberFloat/MemberRaw Str`. Typed codecs the
+  compiler derives per type: `Marshal(v) MarshalIndent Unmarshal(text, out,
+err) UnmarshalLenient`, with `@json "wire"` to rename a field, `@json "-"` to
+  drop it, and `@json "" "omitempty"/"optional"/"string"` for the rest.
+  `Schema(v)` derives the same type's **JSON Schema** (2020-12, `$defs` +
+  `$ref`, so a self-referential type works) from the same declaration and the
+  same markers - the argument is a value only because that is how a generic
+  binds, and nothing reads it. `SchemaEnvelope`/`SchemaMerge` are the two
+  halves for callers that want the definitions separately.
 - **`yaml`**: parse/query/encode/dump. **`csv`**: `ReadLine(str): Vector<str>`,
   `WriteLine(Vector<str>): str`.
 - **`encoding`**: `Base64Encode Base64Decode HexEncode HexDecode URLEncode
@@ -677,9 +685,25 @@ AssertEqBool AssertContains AssertNil AssertNotNil AssertMsg Summary()` (call
   `NewHeaders NewClient Ok GetHeader Headers WithQuery CookieMap`;
   response has `.status`, `.body`.
 - **`web`** (server framework): `NewRouter Get/Post/Put/Delete(r, path, fn)
-NewServer(port) Use Run Static`; handler `func h(ctx: i64)` uses
+NewServer(port) Use Run Static`; `RunBackground(s)` returns once the port is
+  bound and accepts on its own thread, so one process can run several servers,
+  each with its own router; handler `func h(ctx: i64)` uses
   `Ctx_html Ctx_json Ctx_text Ctx_param Ctx_query Ctx_form Ctx_body Ctx_method
 Ctx_status Ctx_set_header Ctx_redirect`. Also a canvas/DOM JS-interop surface.
+- **`net.http.swagger`** (OpenAPI + a documentation page): `New(title, version)
+Describe Server Contact License BearerAuth ApiKeyAuth`; `Scan(doc, router)`
+  lists every registered route (`:id` becomes a `{id}` path parameter, `*`
+  becomes a catch-all), then `At(doc, method, pattern)` selects one and
+  `Summary Details Tag OperationId Deprecated Secure Query QueryTyped Header
+Cookie PathParam` describe it. `Accepts(doc, desc, NewTodo {})` and
+  `Returns(doc, 200, desc, Todo {})` take a **value and read its type**, so
+  the payload schemas come from the struct declarations by the same compiler
+  pass that derives `json.Marshal`'s encoder; `ReturnsNothing` for a 204.
+  Output: `Spec SpecIndent WriteSpec`. Serving: `Mount(doc, r, "/docs")` on
+  the API's own server, or `Serve(doc, port)` on a port of its own (returns
+  once bound, runs on its own thread). `MountSpec`/`ServeSpec`/`SpecFromFile`
+  render an OpenAPI document from anywhere; `Page(title, spec_url)` is the
+  page itself, self-contained with no CDN.
 - **`tcp`** (`Bind Accept Read Write Close Ok ConnOk`), **`socket`** (WebSocket),
   **`ssl`**, **`net`**, **`dom`**/**`console`** (browser/JS targets),
   **`webview`**/**`webview_cef`** (desktop windows).

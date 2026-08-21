@@ -1,0 +1,225 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// swaggerapi - the routes describe themselves.
+//
+// A links API, with an OpenAPI document built from the same two things the
+// program already has: the router, and the types the handlers exchange.
+// Nothing here writes a schema by hand.
+//
+//   swagger.Scan(doc, r)                   every route, from the router
+//   swagger.Accepts(doc, "...", NewLink {}) the request body, from the type
+//   swagger.Returns(doc, 200, "...", page)  the response, from the type
+//
+// Add a field to `Link`, rename one with `@json`, mark one `omitempty`, and
+// the document changes with it - because the schema and the encoder come out
+// of the same declaration in the same compiler pass. What is left to write by
+// hand is the prose: a summary, what a 404 means, what `?status=` accepts.
+//
+// The last section is the part a browser would see. It is printed rather than
+// served so the output is reproducible; `swagger.Mount(doc, r, "/docs")` and
+// `swagger.Serve(doc, 8091)` are the two lines that put it on a port, and
+// tests/en/general/swagger_serve.salam exercises both.
+
+import net.router
+import net.http.swagger
+import encoding.json
+
+enum Status:
+    Active
+    Broken
+end
+
+struct Link:
+    @json "" "string"
+    pub id: i64 = 0 as i64
+    pub url: str = ""
+    // The wire name and the field name differ on purpose, and the document
+    // has to follow the wire, not the field.
+    @json "page_title"
+    pub title: str = ""
+    pub status: Status = Status.Active
+    // Optional on the way in, left out when empty on the way out - so it is
+    // not in the schema's `required` list either.
+    @json "" "omitempty"
+    pub note: str = ""
+    pub tags: Vector<str> = Vector {}
+    // Not part of the API at all.
+    @json "-"
+    pub owner_id: i64 = 0 as i64
+end
+
+struct NewLink:
+    pub url: str = ""
+    @json "page_title"
+    pub title: str = ""
+    @json "" "omitempty"
+    pub note: str = ""
+end
+
+struct Page:
+    pub total: int = 0
+    pub items: Vector<Link> = Vector {}
+end
+
+struct Problem:
+    pub error: str = ""
+    pub detail: str = ""
+end
+
+// The handlers. What they do is beside the point here; what matters is that
+// the document below names these exact routes because the router does.
+func list_links(_ctx: i64): ret end
+func create_link(_ctx: i64): ret end
+func get_link(_ctx: i64): ret end
+func delete_link(_ctx: i64): ret end
+func health(_ctx: i64): ret end
+
+func routes(): router.Router:
+    mut r := router.NewRouter()
+    router.Get(r, "/api/links", list_links)
+    router.Post(r, "/api/links", create_link)
+    router.Get(r, "/api/links/:id", get_link)
+    router.Delete(r, "/api/links/:id", delete_link)
+    router.Get(r, "/health", health)
+    ret r
+end
+
+func document(r: router.Router): swagger.Doc:
+    mut doc := swagger.New("Links API", "2.1.0")
+    swagger.Describe(doc, "Save a link, find it later.")
+    swagger.Server(doc, "https://links.example.test", "production")
+    swagger.Server(doc, "http://127.0.0.1:8090", "local")
+    swagger.Contact(doc, "Links team", "", "links@example.test")
+    swagger.License(doc, "MIT", "https://opensource.org/license/mit")
+    swagger.BearerAuth(doc, "bearer", "JWT")
+
+    // Every route the server will actually dispatch, whether or not anything
+    // below has something to say about it.
+    swagger.Scan(doc, r)
+
+    _1 := swagger.At(doc, "GET", "/api/links")
+    swagger.Tag(doc, "links")
+    swagger.Summary(doc, "List links")
+    swagger.Details(doc, "Newest first. Use limit and offset to page.")
+    swagger.Query(doc, "status", "active, broken, or all (the default)", false)
+    swagger.QueryTyped(doc, "limit", "how many to return, at most 100", false, 0)
+    swagger.QueryTyped(doc, "offset", "how many to skip", false, 0)
+    swagger.Returns(doc, 200, "one page of links", Page {})
+
+    _2 := swagger.At(doc, "POST", "/api/links")
+    swagger.Tag(doc, "links")
+    swagger.Summary(doc, "Save a link")
+    swagger.Secure(doc, "bearer")
+    swagger.Accepts(doc, "the link to save", NewLink {})
+    swagger.Returns(doc, 201, "the link, with the id it was given", Link {})
+    swagger.Returns(doc, 422, "the url was not a url", Problem {})
+
+    _3 := swagger.At(doc, "GET", "/api/links/:id")
+    swagger.Tag(doc, "links")
+    swagger.Summary(doc, "One link")
+    swagger.PathParam(doc, "id", "the link's id")
+    swagger.Returns(doc, 200, "the link", Link {})
+    swagger.Returns(doc, 404, "no link with that id", Problem {})
+
+    _4 := swagger.At(doc, "DELETE", "/api/links/:id")
+    swagger.Tag(doc, "links")
+    swagger.Summary(doc, "Forget a link")
+    swagger.Secure(doc, "bearer")
+    swagger.PathParam(doc, "id", "the link's id")
+    swagger.ReturnsNothing(doc, 204, "gone")
+
+    ret doc
+end
+
+func show_paths(spec: str):
+    paths := json.Get(spec, "paths")
+    keys := json.Keys(paths)
+    defer keys.free()
+    repeat keys.len() with i:
+        path := keys.get(i)
+        methods := json.Keys(json.Get(paths, path))
+        defer methods.free()
+        repeat methods.len() with j:
+            m := methods.get(j)
+            op := json.Get(json.Get(paths, path), m)
+            summary := json.Get(op, "summary")
+            mut line := "  ".concat(m.upper()).concat(" ").concat(path)
+            if summary.len() > 0:
+                line = line.concat("  -  ").concat(summary)
+            end
+            println line
+        end
+    end
+end
+
+func show_schemas(spec: str):
+    schemas := json.Get(json.Get(spec, "components"), "schemas")
+    names := json.Keys(schemas)
+    defer names.free()
+    repeat names.len() with i:
+        name := names.get(i)
+        body := json.Get(schemas, name)
+        props := json.Keys(json.Get(body, "properties"))
+        defer props.free()
+        mut line := "  ".concat(name).concat(": ")
+        if props.len() == 0:
+            // An enum has members rather than properties.
+            line = line.concat(json.Get(body, "enum"))
+        end
+        repeat props.len() with j:
+            if j > 0:
+                line = line.concat(" ")
+            end
+            line = line.concat(props.get(j))
+        end
+        println line
+    end
+end
+
+func main:
+    r := routes()
+    doc := document(r)
+    spec := swagger.Spec(doc)
+
+    println "== the routes, read out of the router =="
+    show_paths(spec)
+
+    println ""
+    println "== the schemas, read out of the types =="
+    show_schemas(spec)
+
+    println ""
+    println "== what the compiler derived for Link =="
+    // `id` is sent as a string, `title` travels as `page_title`, `note` is
+    // absent from `required` because it is omitempty, and `owner_id` is not
+    // there at all. Every one of those comes from the `@json` markers on the
+    // struct, not from anything in this file.
+    println json.Get(json.Get(json.Get(spec, "components"), "schemas"), "Link")
+
+    println ""
+    println "== the request body of POST /api/links =="
+    post := json.Get(json.Get(json.Get(spec, "paths"), "/api/links"), "post")
+    println json.Get(post, "requestBody")
+    println json.Get(post, "security")
+
+    println ""
+    println "== a route nobody described is still in the document =="
+    println json.Get(json.Get(json.Get(spec, "paths"), "/health"), "get")
+
+    println ""
+    println "== the document is valid JSON and says so =="
+    println json.Valid(spec)
+    println json.Get(spec, "openapi")
+end

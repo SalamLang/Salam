@@ -663,15 +663,51 @@ func kind_of_keyword(k: int): int:
     ret RS_STMT
 end
 
-// repl_classify - which bucket does `line` (the first line of a typed
-// block) belong to, and what does it define? `name` gets the defined
+// `text` with any leading `@lang "..."` marker lines removed. A marker
+// line is one whose first non-blank byte is '@'; blank lines between a
+// marker and its definition go with them.
+func after_metas(text: str): str:
+    n := str.Len(text)
+    mut i := 0
+    until i < n:
+        ls := skip_ws(text, i)
+        if ls >= n:
+            ret ""
+        end
+        if byte_at(text, ls) != 64:
+            ret str.Substr(text, i, n - i)
+        end
+        // Skip to just past this line's newline.
+        mut e := ls
+        until e < n && byte_at(text, e) != 10:
+            e += 1
+        end
+        if e >= n:
+            ret ""
+        end
+        i = e + 1
+    end
+    ret ""
+end
+
+// repl_classify - which bucket does `text` (the first line of a turn, or
+// the whole block once it has been read) belong to, and what does it
+// define? `name` gets the defined
 // symbol, or the trimmed line itself when the entry names nothing a later
 // redefinition could match on. Keywords are read through `pack`, so an
 // fa/ar session classifies exactly like an en one.
-func classify(pack: int, line: str, name &: str): int:
+func classify(pack: int, text: str, name &: str): int:
+    // `@en "Name"` markers belong to the definition under them, so they
+    // are stepped over here - and a turn that is nothing but markers is
+    // still a definition, one whose first line has not been typed yet.
+    line := after_metas(text)
     mut p := skip_ws(line, 0)
     name = ""
     ln := str.Len(line)
+    if ln == 0:
+        name = line_as_name(text)
+        ret RS_DEF
+    end
     if p + 1 < ln && byte_at(line, p) == 47 && (
         byte_at(line, p + 1) == 47 || byte_at(line, p + 1) == 42
     ):
@@ -1538,13 +1574,17 @@ pub func Run(opt &: dr.Dr): int:
             // inside main) is decided by its first line. A layout block
             // is top-level whatever `layout` classifies as.
             mut name := ""
-            kind := classify(pack, line, name)
+            first_kind := classify(pack, line, name)
             mut blk_ok := true
-            block := read_block(pack, line, !is_layout && kind == RS_STMT, blk_ok)
+            block := read_block(pack, line, !is_layout && first_kind == RS_STMT, blk_ok)
             if blk_ok:
                 if is_layout:
                     layout_turn(opt, pack, line, block)
                 else:
+                    // Read again off the whole block: a turn that opens
+                    // with `@en "..."` markers names what it defines on a
+                    // later line, which only the finished block has.
+                    kind := classify(pack, block, name)
                     if kind != RS_STMT:
                         turn_def(opt, ses, pack, kind, name, block)
                     else ses.has_main:

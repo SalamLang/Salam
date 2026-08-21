@@ -107,12 +107,17 @@ done
 # A pointer is 4 bytes on a 32-bit target and 8 on a 64-bit one, and `.quad`
 # against a symbol simply cannot be relocated in a 32-bit object - the i386 and
 # armhf jobs failed with "cannot represent relocation type BFD_RELOC_64". The
-# length stays .quad either way: Salam reads it as an i64, and a difference
-# between two symbols in one section is resolved at assembly time rather than
-# through a relocation. That i64 then needs .balign 8 of its own, because a
-# 4-byte .long pointer ahead of it would otherwise leave it 4-byte aligned -
-# harmless on x86, a fault on armhf, where a 64-bit load wants its natural
-# alignment.
+# length stays .quad either way, because Salam reads it as an i64 - but as a
+# literal count from wc, NOT as `end - data`. A .quad holding a difference of
+# two symbols came out with its low word right and 0xffffffff in its high
+# word on armhf, so the mingw sysroot reported a length of -4279074816 and
+# never unpacked; the musl one survived only because its data symbol sits at
+# offset 0, which makes the difference degenerate. The script already knows
+# the byte count, so nothing has to be relocated or folded at all.
+#
+# The i64 still needs .balign 8 of its own, because a 4-byte .long pointer
+# ahead of it would otherwise leave it 4-byte aligned - harmless on x86, a
+# fault on armhf, where a 64-bit load wants its natural alignment.
 case "$($CC -dumpmachine 2>/dev/null)" in
 i?86-* | arm-* | armv7*-* | armhf-* | powerpc-* | mips-* | mipsel-*) PTR=.long ;;
 *) PTR=.quad ;;
@@ -144,6 +149,7 @@ emit() {
     dir=$2
     if [ -n "$dir" ] && [ -d "$dir" ]; then
         tar cf "$WORK/$stem.tar" -C "$dir" .
+        bytes=$(wc -c <"$WORK/$stem.tar" | tr -d ' ')
         {
             printf '.section .rodata\n'
             printf '%s_data:\n' "$stem"
@@ -155,7 +161,7 @@ emit() {
             printf 'salam_embed_%s_ptr: %s %s_data\n' "$stem" "$PTR" "$stem"
             printf '.balign 8\n'
             printf '.globl salam_embed_%s_len\n' "$stem"
-            printf 'salam_embed_%s_len: .quad %s_end - %s_data\n' "$stem" "$stem" "$stem"
+            printf 'salam_embed_%s_len: .quad %s\n' "$stem" "$bytes"
         } >>"$S"
         echo "  embedded $stem ($(wc -c <"$WORK/$stem.tar") bytes) from $dir"
         staged=$((staged + 1))

@@ -173,6 +173,47 @@ func test_build_syncs_input_with_inputs():
     testing.AssertEqStr(opt.input, missing)
 end
 
+// Building a directory when several of its files define `main`: the one
+// named after the entry wins, so a project can keep a second entry beside
+// its real one instead of the directory refusing to resolve at all.
+func test_dir_entry_prefers_named_file():
+    dir := "compiler/tests_port/tmp_dr/entrypick"
+    os.MkdirAll(dir)
+    _w1 := io.WriteFile(dir + "/main.salam", "func main:\n    println 1\nend\n")
+    _w2 := io.WriteFile(dir + "/wasm_main.salam", "func main:\n    println 2\nend\n")
+    mut opt := dr.NewOptions()
+    defer opt.inputs.free()
+    defer opt.run_args.free()
+    defer opt.defines.free()
+    opt.inputs.push(dir)
+    opt.output = "compiler/tests_port/tmp_dr/entrypick_out"
+    opt.backend = "c"
+    rc := dr.Build(opt)
+    testing.AssertEqInt(rc, 0)
+    testing.AssertEqStr(opt.input, dir + "/main.salam")
+    _r1 := os.RemoveAll(dir)
+    _r2 := os.Remove("compiler/tests_port/tmp_dr/entrypick_out")
+end
+
+// ...and when none of them is named after the entry there is still nothing
+// to prefer, so the directory stays ambiguous and the build fails.
+func test_dir_entry_still_ambiguous_without_a_named_file():
+    dir := "compiler/tests_port/tmp_dr/entrytie"
+    os.MkdirAll(dir)
+    _w1 := io.WriteFile(dir + "/one.salam", "func main:\n    println 1\nend\n")
+    _w2 := io.WriteFile(dir + "/two.salam", "func main:\n    println 2\nend\n")
+    mut opt := dr.NewOptions()
+    defer opt.inputs.free()
+    defer opt.run_args.free()
+    defer opt.defines.free()
+    opt.inputs.push(dir)
+    opt.output = "compiler/tests_port/tmp_dr/entrytie_out"
+    opt.backend = "c"
+    rc := dr.Build(opt)
+    testing.AssertTrue(rc != 0)
+    _r1 := os.RemoveAll(dir)
+end
+
 // Exec() with a nonexistent input also fails cleanly (rc == 2, matching
 // driver_interp's "cannot read source file" -> exit 2).
 func test_exec_missing_input():
@@ -439,6 +480,8 @@ func main:
     test_resolve_color()
     test_build_missing_input()
     test_build_syncs_input_with_inputs()
+    test_dir_entry_prefers_named_file()
+    test_dir_entry_still_ambiguous_without_a_named_file()
     test_exec_missing_input()
     test_backends_report_failure_on_no_input()
     test_llvm_real_program()

@@ -617,6 +617,12 @@ function Save-Url {
         [bool]$Quiet
     )
 
+    if (@($script:Methods).Count -eq 0) {
+        Fail ("this machine cannot download over HTTPS - PowerShell, BITS and " +
+            "certutil all failed. Fetch a release archive by hand from " +
+            "https://github.com/$Repo/releases")
+    }
+
     $errors = @()
 
     foreach ($method in @($script:Methods)) {
@@ -629,14 +635,14 @@ function Save-Url {
         }
         elseif ($method -eq "bits") {
             if (!$Quiet) {
-                Write-Info "retrying the download through BITS..."
+                Write-Info "trying BITS..."
             }
 
             $result = Invoke-BitsDownload -Url $Url -Destination $Destination
         }
         else {
             if (!$Quiet) {
-                Write-Info "retrying the download through certutil..."
+                Write-Info "trying certutil..."
             }
 
             $result = Invoke-CertUtilDownload -Url $Url -Destination $Destination
@@ -1154,7 +1160,7 @@ function Add-BinDirToPath {
         # below and anything the user runs next already sees it.
         $processPath = "$env:PATH"
 
-        if (($processPath -split ";" | Where-Object {
+        if (@($processPath -split ";" | Where-Object {
                     $_.Trim().TrimEnd("\") -ieq $target
                 }).Count -eq 0) {
             $env:PATH = $processPath.TrimEnd(";") + ";" + $BinDir
@@ -1298,7 +1304,17 @@ catch {
 
 $isDefaultDir = ($InstallDir.TrimEnd("\") -ieq $defaultDir.TrimEnd("\"))
 
-$script:WorkDir = Join-Path $env:TEMP `
+$tempRoot = $env:TEMP
+
+if ($null -eq $tempRoot -or "$tempRoot".Trim() -eq "") {
+    $tempRoot = $env:TMP
+}
+
+if ($null -eq $tempRoot -or "$tempRoot".Trim() -eq "") {
+    $tempRoot = $homeDir
+}
+
+$script:WorkDir = Join-Path $tempRoot `
     ("salam-install-" + [Guid]::NewGuid().ToString("N"))
 
 $archive = Join-Path $script:WorkDir "salam.zip"
@@ -1366,7 +1382,9 @@ try {
             $url = "https://github.com/$Repo/releases/download/$tag/$asset"
 
             if (!$stepAnnounced) {
-                Write-Step "Downloading $asset"
+                # Named generically: which asset this ends up being is
+                # only settled once one of the candidates answers.
+                Write-Step "Downloading the release archive"
                 $stepAnnounced = $true
             }
 
@@ -1505,7 +1523,11 @@ try {
         & $exe version
     }
     catch {
-        Write-Warn "could not run salam.exe: $($_.Exception.Message)"
+        # Only the first line: PowerShell appends the offending script
+        # line and a caret to native failures, which says nothing here.
+        $reason = ("$($_.Exception.Message)" -split "`n")[0]
+
+        Write-Warn "could not run salam.exe: $reason"
     }
 
     $ErrorActionPreference = "Stop"

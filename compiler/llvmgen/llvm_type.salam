@@ -515,8 +515,14 @@ func sym_qualified(v &: Lv, s &: sm.Sema, a &: at.Ast, name: str): int:
     ret r
 end
 
-// ll_scan_mangled - find a struct/enum in `sc` by its *mangled* type name
-// ("rawsock_Socket") rather than by its declared name ("Socket").
+// ll_scan_mangled - find a struct/enum/interface in `sc` by its *mangled*
+// type name ("rawsock_Socket") rather than by its declared name ("Socket").
+//
+// Interfaces belong here for the same reason structs do. Leaving them out
+// meant `dyn pkg.Iface` never resolved: the type string reaching call_dyn
+// is the mangled "ifacestore_Store", the scan skipped every SYM_INTERFACE,
+// and the backend gave up with "dynamic call on non-interface" on source
+// the C backend compiles. It cost the whole db/ interface suite.
 func scan_mangled(s &: sm.Sema, sc: int, name: str): int:
     if sc == 0:
         ret 0
@@ -525,7 +531,14 @@ func scan_mangled(s &: sm.Sema, sc: int, name: str): int:
     repeat syms.len() with i:
         sid := syms.get(i)
         sy := sm.SymAt(s, sid)
-        if sy.kind == sm.SYM_STRUCT || sy.kind == sm.SYM_ENUM:
+        if sy.kind == sm.SYM_INTERFACE:
+            // An interface symbol carries no `ty` - sema gives it a
+            // members scope and a pkgname instead - so its mangled name is
+            // rebuilt the way sema_typeres builds it.
+            if str.Len(sy.pkgname) > 0 && str.Equals(sy.pkgname + "_" + sy.name, name):
+                ret sid
+            end
+        else sy.kind == sm.SYM_STRUCT || sy.kind == sm.SYM_ENUM:
             if sy.ty != sm.TYPE_NONE:
                 if str.Equals(sm.ToString(s, sy.ty), name):
                     ret sid

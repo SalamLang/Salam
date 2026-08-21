@@ -465,3 +465,45 @@ pub func P256Verify(pub_point_b64: str, digest_b64: str, sig_b64: str): bool:
     ret _ecdsa_p256_verify(digest.p, digest.len, sig.p, _bufptr(sig, 32),
         point.p, P256_POINT_LEN)
 end
+
+// ---------------------------------------------------------------- RS256
+
+// RsaSignPkcs1Sha256 - an RSASSA-PKCS1-v1_5 signature over a SHA-256 digest,
+// base64.
+//
+// This is what "RS256" means in JOSE, and RS256 is what a Google service
+// account signs its OAuth2 assertion with - so any program talking to a Google
+// API needs exactly this and has no other way to get it. The key is a PEM,
+// which is the form a service-account JSON file carries it in.
+//
+// The signature is blinded: a fresh random value per call, unblinded
+// afterwards, so the timing of the private-key operation does not depend on
+// the key. See rsa_sign.salam.
+pub func RsaSignPkcs1Sha256(pem: str, digest_b64: str, ok &: bool): str:
+    ok = false
+    mut key := ParsePrivateKeyPEM(pem)
+    defer FreePrivateKey(key)
+    if !key.ok || key.rsa_n.len == 0: ret "" end
+    mut digest := _decode(digest_b64, 32)
+    defer _buf_free(digest)
+    if digest.bad: ret "" end
+    mut sig := _newbuf(key.rsa_n.len)
+    defer _buf_free(sig)
+    _putzeros(sig, key.rsa_n.len)
+    if !_rsa_sign_pkcs1(HASH_SHA256, digest.p, key.rsa_n, key.rsa_e, key.rsa_d,
+        key.rsa_phi, sig.p):
+        ret ""
+    end
+    ok = true
+    ret encoding.Base64EncodeBytes(sig.p, key.rsa_n.len)
+end
+
+// RsaKeyBits - the modulus size of a PEM private key, or 0 when it is not an
+// RSA key. Lets a caller refuse a key too short to be worth signing with,
+// before it discovers that from a rejected request.
+pub func RsaKeyBits(pem: str): int:
+    mut key := ParsePrivateKeyPEM(pem)
+    defer FreePrivateKey(key)
+    if !key.ok: ret 0 end
+    ret key.rsa_n.len * 8
+end

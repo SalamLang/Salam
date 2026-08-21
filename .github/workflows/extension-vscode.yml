@@ -48,6 +48,19 @@ jobs:
         with:
           persist-credentials: false
 
+      # The compiler is written in Salam, so building it needs one. Used to
+      # come from `make -C c`; that is gone, so a released binary seeds it.
+      # add-to-path: false on purpose. The extension is written against the
+      # compiler in this tree, and a released seed lags it - with both on PATH
+      # the seed won and `salam js src/extension.salam` came back with 135
+      # semantic errors. The seed is passed to the build by path instead, so
+      # the only salam on PATH is the one built below.
+      - name: Install a seed compiler
+        id: seed
+        uses: ./.github/actions/setup-salam
+        with:
+          add-to-path: 'false'
+
       # Built from this checkout rather than installed from the last release:
       # the extension is written against the compiler in this tree, and a
       # published build lags it. This is the cheap C build (a few seconds),
@@ -55,7 +68,7 @@ jobs:
       - name: Build the salam compiler from source
         run: |
           set -eu
-          sh tools/bash/build-selfhost.sh
+          sh tools/bash/build-selfhost.sh --seed="${{ steps.seed.outputs.salam }}"
           ./salam version
           pwd >> "$GITHUB_PATH"
 
@@ -67,10 +80,20 @@ jobs:
       - name: Install workspace dependencies
         run: bun install --frozen-lockfile
 
+      # SALAM_STD because these run from extensions/vscode: a self-hosted salam
+      # has no stdlib compiled into it and no salam.cfg beside it there, so it
+      # reported every std package missing ("standard library package 'node'
+      # not found") and that read as 135 errors in the extension source.
       - name: Compile the extension
         working-directory: extensions/vscode
+        env:
+          SALAM_STD: ${{ github.workspace }}/std
         run: |
           set -eu
+          # salam js will not create a missing parent directory, and out/ is
+          # gitignored, so a fresh checkout has none. package.json's scripts do
+          # this themselves; this step calls the compiler directly and has to.
+          mkdir -p out
           salam js src/extension.salam --output=out/extension.js
           [ -s out/extension.js ] || { echo "::error::out/extension.js is empty or missing"; exit 1; }
           ls -l out/extension.js
@@ -78,6 +101,8 @@ jobs:
       - name: Package
         id: pack
         working-directory: extensions/vscode
+        env:
+          SALAM_STD: ${{ github.workspace }}/std
         run: |
           set -eu
           version=$(node -p "require('./package.json').version")

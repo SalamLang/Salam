@@ -117,20 +117,35 @@ func _hits_in(file_path: str, query: str, cap: int): Vector<str>:
 end
 
 // Pulls one {TK_..., "word"} table out of the compiler's langpack source.
+// The keyword spellings for one language, read out of the self-hosted
+// langpack's parallel arrays (k_kw_spell_en / _fa / _ar). Used to parse the C
+// compiler's kw_entry_t rows, which no longer exist; the data is the same, the
+// shape is a plain Salam array literal now.
 func _kw_table(src: str, array_name: str): Vector<str>:
     out := Vector {} as Vector<str>
     start := src.find(array_name)
     if start < 0: ret out end
     rest := src.substr(start, src.len() - start)
-    stop := rest.find("};")
-    mut body := rest
-    if stop > 0: body = rest.substr(0, stop) end
-    lines := mcptxt.Lines(body)
+    open_b := rest.find("[")
+    if open_b < 0: ret out end
+    stop := rest.find("]")
+    if stop < 0: ret out end
+    body := rest.substr(open_b + 1, stop - open_b - 1)
     mut i := 0
-    until i < lines.len():
-        ln := lines.get(i).trim()
-        if str.StartsWith(ln, "{TK_"):
-            out.push(_kw_pair(ln))
+    mut cur := ""
+    mut inside := false
+    until i < body.len():
+        c := body.substr(i, 1)
+        if str.Equals(c, "\""):
+            if inside:
+                if cur.len() > 0: out.push(cur) end
+                cur = ""
+                inside = false
+            else:
+                inside = true
+            end
+        else inside:
+            cur = cur.concat(c)
         end
         i += 1
     end
@@ -148,7 +163,7 @@ func _kw_pair(ln: str): str:
 end
 
 func _langpack_src(): str:
-    p := path.Join(mcpexec.Root(), "c/src/langpack/langpack_data.c")
+    p := path.Join(mcpexec.Root(), "compiler/langpack.salam")
     ret file.ReadText(p)
 end
 
@@ -159,9 +174,11 @@ func _word(pair: str): str:
 end
 
 func _row(en: Vector<str>, fa: Vector<str>, ar: Vector<str>, i: int): str:
+    // The spellings arrive bare now, not as "TK_x<tab>spelling" rows, so the
+    // token column is the English spelling and no splitting is needed.
     mut line := en.get(i)
-    if i < fa.len(): line = line.concat("\t").concat(_word(fa.get(i))) end
-    if i < ar.len(): line = line.concat("\t").concat(_word(ar.get(i))) end
+    if i < fa.len(): line = line.concat("\t").concat(fa.get(i)) end
+    if i < ar.len(): line = line.concat("\t").concat(ar.get(i)) end
     ret line
 end
 
@@ -274,9 +291,9 @@ pub func Keywords(): mcpout.ToolResult:
     if src.len() == 0:
         ret mcpout.Failure("langpack source not readable; set SALAM_MCP_ROOT to the Salam checkout.")
     end
-    en := _kw_table(src, "k_lang_en[]")
-    fa := _kw_table(src, "k_lang_fa[]")
-    ar := _kw_table(src, "k_lang_ar[]")
+    en := _kw_table(src, "k_kw_spell_en :=")
+    fa := _kw_table(src, "k_kw_spell_fa :=")
+    ar := _kw_table(src, "k_kw_spell_ar :=")
     mut rows := Vector {} as Vector<str>
     rows.push("token\tenglish\tpersian\tarabic")
     mut i := 0

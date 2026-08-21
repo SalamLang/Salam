@@ -19,7 +19,9 @@ import net.router
 import net.http.swagger
 import encoding.json
 
+@doc "one item on the list"
 struct Todo:
+    @doc "assigned when the todo is created"
     pub id: i64 = 0 as i64
     pub title: str = ""
     @json "" "omitempty"
@@ -36,6 +38,7 @@ func get_todo(_ctx: i64): ret end
 func delete_todo(_ctx: i64): ret end
 func health(_ctx: i64): ret end
 func any_file(_ctx: i64): ret end
+func export_csv(_ctx: i64): ret end
 
 func build(): swagger.Doc:
     mut r := router.NewRouter()
@@ -45,6 +48,7 @@ func build(): swagger.Doc:
     router.Delete(r, "/api/todos/:id", delete_todo)
     router.Get(r, "/health", health)
     router.Get(r, "/files/*", any_file)
+    router.Get(r, "/api/todos.csv", export_csv)
 
     mut doc := swagger.New("Todo API", "1.4.0")
     swagger.Describe(doc, "A todo list over HTTP.")
@@ -78,6 +82,14 @@ func build(): swagger.Doc:
     swagger.Tag(doc, "todos")
     swagger.Deprecated(doc)
     swagger.ReturnsNothing(doc, 204, "gone")
+
+    // Not every payload is JSON, and a document that says it is would be
+    // wrong about this one.
+    _e := swagger.At(doc, "GET", "/api/todos.csv")
+    swagger.Tag(doc, "export")
+    swagger.Summary(doc, "Every todo, as a spreadsheet")
+    swagger.ReturnsRaw(doc, 200, "one row per todo", "text/csv", swagger.TEXT_SCHEMA)
+    swagger.ReturnsFile(doc, 503, "the export is still running", "image/png")
 
     ret doc
 end
@@ -124,6 +136,35 @@ func main:
     println json.Get(json.Get(json.Get(paths, "/api/todos"), "post"), "requestBody")
     println json.Get(json.Get(json.Get(paths, "/api/todos"), "post"), "security")
     println json.Get(json.Get(json.Get(paths, "/api/todos/{id}"), "delete"), "deprecated")
+
+    println json.Get(json.Get(json.Get(paths, "/api/todos.csv"), "get"), "responses")
+
+    // The document says what is wrong with it, and what is merely missing.
+    probs := swagger.Problems(doc)
+    defer probs.free()
+    println probs.len()
+    undoc := swagger.Undocumented(doc)
+    defer undoc.free()
+    repeat undoc.len() with u:
+        println undoc.get(u)
+    end
+
+    // A document with real mistakes in it: a scheme nobody declared, a body
+    // on a method that cannot carry one, a status that is not one, and two
+    // operations claiming one operationId.
+    mut bad := swagger.New("Bad", "1")
+    _e1 := swagger.Route(bad, "GET", "/a")
+    swagger.Secure(bad, "ghost")
+    swagger.Accepts(bad, "nope", Todo {})
+    swagger.Returns(bad, 999, "not a status", Todo {})
+    _e2 := swagger.Route(bad, "POST", "/b")
+    swagger.OperationId(bad, "get_a")
+    bad_problems := swagger.Problems(bad)
+    defer bad_problems.free()
+    repeat bad_problems.len() with b:
+        println bad_problems.get(b)
+    end
+    swagger.Free(bad)
 
     // At on a route that is not there selects nothing, and the calls that
     // follow it change nothing - rather than landing on whichever route was

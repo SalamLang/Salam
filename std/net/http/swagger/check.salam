@@ -1,0 +1,224 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package swagger
+
+// What is wrong with the document, and what is merely missing from it.
+//
+//     problems := swagger.Problems(doc)
+//     repeat problems.len() with i: println problems.get(i) end
+//
+// Two lists, because they are two different kinds of news.
+//
+// `Problems` is for things that make the document wrong: a `Secure("bearer")`
+// naming a scheme nobody declared, two operations claiming one operationId, a
+// GET with a request body. Every one of them is a typo whose only symptom is
+// a generated client that does not compile, or a reader misled about what the
+// API accepts - none of them is visible by looking at the page.
+//
+// `Undocumented` is for the routes that are in the document because Scan put
+// them there and have nothing said about them. That is not an error; a new
+// route starts that way. It is worth printing at startup, or asserting on in
+// a test when a project decides every route must be described before it
+// ships.
+//
+// Neither is called for you. A library that refused to serve a document with
+// a problem in it would be a library that takes a service down over a typo in
+// its documentation.
+
+import str
+import conv
+
+func _op_label(o: Op): str:
+    ret o.method.concat(" ").concat(o.pattern)
+end
+
+func _has_scheme(d: Doc, name: str): bool:
+    repeat d.schemes.len() with i:
+        if str.Equals(d.schemes.get(i).name, name):
+            ret true
+        end
+    end
+    ret false
+end
+
+func _param_named(o: Op, name: str, loc: str): bool:
+    repeat o.params.len() with i:
+        p := o.params.get(i)
+        if str.Equals(p.name, name) && str.Equals(p.loc, loc):
+            ret true
+        end
+    end
+    ret false
+end
+
+func _op_id_of(o: Op): str:
+    ret o.op_id.len() > 0 ? o.op_id : _default_op_id(o.method, o.pattern)
+end
+
+// A method that carries no request body. OpenAPI allows one on any method and
+// several servers accept one on DELETE, but a body on GET or HEAD is ignored
+// by every intermediary between the client and the handler, so a document
+// that promises one is promising something that will not arrive.
+func _bodyless(method: str): bool:
+    ret str.Equals(method, "GET") || str.Equals(method, "HEAD")
+end
+
+func _check_security(d: Doc, o: Op, out &: Vector<str>):
+    repeat o.security.len() with i:
+        name := o.security.get(i)
+        if !_has_scheme(d, name):
+            out.push(
+                _op_label(o).concat(": needs security scheme '").concat(name)
+                    .concat("', which no BearerAuth or ApiKeyAuth declared")
+            )
+        end
+    end
+end
+
+// Every `:name` in the pattern has to be a path parameter, and every path
+// parameter has to be in the pattern. Route keeps both true; a Doc assembled
+// by hand, or one whose route was renamed after it was described, may not.
+func _check_path_params(o: Op, out &: Vector<str>):
+    declared := _path_params(o.pattern)
+    defer declared.free()
+    repeat declared.len() with i:
+        name := declared.get(i).name
+        if !_param_named(o, name, "path"):
+            out.push(
+                _op_label(o).concat(": the path has '{").concat(name)
+                    .concat("}' but the operation does not declare it")
+            )
+        end
+    end
+    repeat o.params.len() with j:
+        p := o.params.get(j)
+        if !str.Equals(p.loc, "path"):
+            continue
+        end
+        mut found := false
+        repeat declared.len() with k:
+            if str.Equals(declared.get(k).name, p.name):
+                found = true
+            end
+        end
+        if !found:
+            out.push(
+                _op_label(o).concat(": declares path parameter '").concat(p.name)
+                    .concat("', which the path does not contain")
+            )
+        end
+        if !p.required:
+            out.push(
+                _op_label(o).concat(": path parameter '").concat(p.name)
+                    .concat("' is optional, and a path parameter cannot be")
+            )
+        end
+    end
+end
+
+func _check_replies(o: Op, out &: Vector<str>):
+    repeat o.replies.len() with i:
+        code := o.replies.get(i).code
+        if code < 100 || code > 599:
+            out.push(
+                _op_label(o).concat(": ").concat(conv.FormatInt(code as i64))
+                    .concat(" is not an HTTP status code")
+            )
+        end
+    end
+end
+
+// ---------------------------------------------------------------- public
+
+// Everything wrong with the document, one line each. Empty when there is
+// nothing to say.
+@en "Problems"
+@fa "مشکلات"
+@ar "مشاكل"
+pub func Problems(d: Doc): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    if d.title.len() == 0:
+        out.push("the document has no title")
+    end
+    if d.version.len() == 0:
+        out.push("the document has no version")
+    end
+    mut ids := Vector {} as Vector<str>
+    defer ids.free()
+    repeat d.ops.len() with i:
+        o := d.ops.get(i)
+        _check_security(d, o, out)
+        _check_path_params(o, out)
+        _check_replies(o, out)
+        if o.body_schema.len() > 0 && _bodyless(o.method):
+            out.push(
+                _op_label(o).concat(
+                    ": has a request body, and nothing between the client and the"
+                        + " handler will carry one on this method"
+                )
+            )
+        end
+        id := _op_id_of(o)
+        repeat ids.len() with j:
+            if str.Equals(ids.get(j), id):
+                out.push(
+                    _op_label(o).concat(": operationId '").concat(id)
+                        .concat("' is already used by another operation")
+                )
+            end
+        end
+        ids.push(id)
+    end
+    ret out
+end
+
+// The routes in the document that nobody has described: no summary, no
+// details, and no response beyond the default one Spec fills in.
+@en "Undocumented"
+@fa "توضیح داده نشده"
+@ar "غیر موثق"
+pub func Undocumented(d: Doc): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    repeat d.ops.len() with i:
+        o := d.ops.get(i)
+        if o.summary.len() == 0 && o.description.len() == 0 && o.replies.len() == 0:
+            out.push(_op_label(o))
+        end
+    end
+    ret out
+end
+
+// Release the vectors a Doc holds. A program that builds one document and
+// serves it until it exits does not need this - the document lives as long as
+// the process - but a test that builds many, or a tool that reads a directory
+// of them, does.
+@en "Free"
+@fa "آزاد سازی"
+@ar "تحریر"
+pub func Free(d &: Doc):
+    repeat d.ops.len() with i:
+        mut o := d.ops.get(i)
+        o.tags.free()
+        o.params.free()
+        o.replies.free()
+        o.security.free()
+    end
+    d.ops.free()
+    d.servers.free()
+    d.server_notes.free()
+    d.defs.free()
+    d.schemes.free()
+    d.cur = 0 - 1
+end

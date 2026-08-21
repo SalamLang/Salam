@@ -156,6 +156,7 @@ a { color: var(--accent); }
   <input id="q" type="search" placeholder="Filter by path, method or summary">
   <label for="auth">Auth</label>
   <input id="auth" type="text" placeholder="Bearer token" style="flex:0 1 14rem">
+  <button id="expand" class="ghost" type="button">Expand all</button>
 </div>
 <main id="main"></main>
 <footer>Rendered by Salam <code>net/http/swagger</code> &mdash;
@@ -342,11 +343,21 @@ function statusClass(code) {
 }
 
 function jsonSchemaOf(holder) {
+  var b = bodyOf(holder);
+  return b ? b.schema : null;
+}
+
+// The one representation of a request or response body this page shows: JSON
+// when the operation offers it, otherwise whatever it does offer. The media
+// type comes back too, because a body that is a PNG or a form is a different
+// thing to send than the same schema in JSON would be.
+function bodyOf(holder) {
   if (!holder || !holder.content) return null;
   var c = holder.content;
-  var key = Object.keys(c).filter(function (k) { return k.indexOf("json") >= 0; })[0];
-  if (!key) key = Object.keys(c)[0];
-  return key ? c[key].schema : null;
+  var keys = Object.keys(c);
+  if (!keys.length) return null;
+  var key = keys.filter(function (k) { return k.indexOf("json") >= 0; })[0] || keys[0];
+  return { type: key, schema: c[key] ? c[key].schema : null };
 }
 
 function paramTable(params) {
@@ -395,7 +406,9 @@ function tryBox(method, path, op) {
     wrap.appendChild(grid);
   }
   var bodyArea = null;
-  var bodySchema = jsonSchemaOf(op.requestBody);
+  var reqBody = bodyOf(op.requestBody);
+  var bodySchema = reqBody ? reqBody.schema : null;
+  var bodyType = (reqBody && reqBody.type) || "application/json";
   if (bodySchema) {
     bodyArea = el("textarea");
     var s = sample(bodySchema);
@@ -404,12 +417,16 @@ function tryBox(method, path, op) {
   }
   var row = el("div", "try");
   var go = el("button", null, "Send");
+  var copy = el("button", "ghost", "Copy as curl");
   var out = el("div", "out");
   row.appendChild(go);
+  row.appendChild(copy);
   wrap.appendChild(row);
   wrap.appendChild(out);
 
-  go.onclick = function () {
+  // One place decides what the request is, so the curl the page prints is the
+  // request the page sends and not a second guess at it.
+  function compose() {
     var url = path;
     var qs = [];
     var headers = {};
@@ -419,47 +436,105 @@ function tryBox(method, path, op) {
       if (p.in === "path") url = url.split("{" + p.name + "}").join(encodeURIComponent(v));
       else if (p.in === "query") qs.push(encodeURIComponent(p.name) + "=" + encodeURIComponent(v));
       else if (p.in === "header") headers[p.name] = v;
+      else if (p.in === "cookie") {
+        headers["Cookie"] = (headers["Cookie"] ? headers["Cookie"] + "; " : "")
+          + p.name + "=" + v;
+      }
     });
     var base = document.getElementById("srv").value || "";
     if (base.charAt(base.length - 1) === "/") base = base.slice(0, -1);
     var full = base + url + (qs.length ? "?" + qs.join("&") : "");
     var tok = document.getElementById("auth").value.trim();
     if (tok) headers["Authorization"] = tok.indexOf(" ") > 0 ? tok : "Bearer " + tok;
-    var init = { method: method.toUpperCase(), headers: headers };
-    if (bodyArea && bodyArea.value.trim()) {
-      headers["Content-Type"] = "application/json";
-      init.body = bodyArea.value;
+    var body = bodyArea && bodyArea.value.trim() ? bodyArea.value : null;
+    if (body !== null) headers["Content-Type"] = bodyType;
+    return { url: full, method: method.toUpperCase(), headers: headers, body: body };
+  }
+
+  // Single quotes, with the shell's own escape for a single quote inside one.
+  // Nothing else needs escaping between them.
+  function shq(v) {
+    return "'" + String(v).split("'").join("'\\''") + "'";
+  }
+
+  function asCurl(req) {
+    var parts = ["curl"];
+    if (req.method !== "GET") parts.push("-X " + req.method);
+    parts.push(shq(req.url));
+    Object.keys(req.headers).forEach(function (k) {
+      parts.push("-H " + shq(k + ": " + req.headers[k]));
+    });
+    if (req.body !== null) parts.push("--data " + shq(req.body));
+    return parts.join(" \\\n  ");
+  }
+
+  copy.onclick = function () {
+    var text = asCurl(compose());
+    out.textContent = "";
+    var pre = el("pre", null, text);
+    out.appendChild(pre);
+    // The clipboard needs a secure context, and a documentation page is as
+    // often on plain http as not - so the command is on the page either way,
+    // and copying it is the bonus rather than the mechanism.
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () {
+        out.appendChild(el("div", "note", "copied to the clipboard"));
+      }, function () {});
     }
+  };
+
+  go.onclick = function () {
+    var req = compose();
     out.textContent = "";
     out.appendChild(el("div", "note", "sending..."));
-    fetch(full, init).then(function (res) {
-      return res.text().then(function (text) { return { res: res, text: text }; });
-    }).then(function (r) {
-      out.textContent = "";
-      var line = el("div");
-      line.appendChild(el("span", "status " + statusClass(r.res.status), r.res.status));
-      line.appendChild(document.createTextNode(" " + r.res.statusText));
-      out.appendChild(line);
-      var pre = el("pre");
-      try { pre.textContent = JSON.stringify(JSON.parse(r.text), null, 2); }
-      catch (e) { pre.textContent = r.text; }
-      out.appendChild(pre);
-    }).catch(function (e) {
-      out.textContent = "";
-      out.appendChild(el("div", "req", "request failed: " + e.message));
-      out.appendChild(el("div", "note",
-        "A cross-origin request needs the API to send Access-Control-Allow-Origin."));
-    });
+    fetch(req.url, { method: req.method, headers: req.headers, body: req.body })
+      .then(function (res) {
+        return res.text().then(function (text) { return { res: res, text: text }; });
+      }).then(function (r) {
+        out.textContent = "";
+        var line = el("div");
+        line.appendChild(el("span", "status " + statusClass(r.res.status), r.res.status));
+        line.appendChild(document.createTextNode(" " + r.res.statusText));
+        var ct = r.res.headers.get("content-type");
+        if (ct) line.appendChild(el("span", "note", "   " + ct));
+        out.appendChild(line);
+        var pre = el("pre");
+        try { pre.textContent = JSON.stringify(JSON.parse(r.text), null, 2); }
+        catch (e) { pre.textContent = r.text; }
+        out.appendChild(pre);
+      }).catch(function (e) {
+        out.textContent = "";
+        out.appendChild(el("div", "req", "request failed: " + e.message));
+        out.appendChild(el("div", "note",
+          "A cross-origin request needs the API to send Access-Control-Allow-Origin."));
+      });
   };
   return wrap;
 }
 
+// A stable id for one operation, so a link to it survives a reload and can be
+// pasted into a chat: "#op-get-api-todos-id".
+function opAnchor(path, method) {
+  return "op-" + (method + path).toLowerCase().replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
 function opCard(path, method, op) {
   var d = el("details", "op");
+  d.id = opAnchor(path, method);
   var sm = el("summary");
   sm.appendChild(el("span", "m " + method, method.toUpperCase()));
   sm.appendChild(el("span", "path" + (op.deprecated ? " dep" : ""), path));
   if (op.summary) sm.appendChild(el("span", "sum", op.summary));
+  // Opening an operation puts it in the address bar; closing it takes it out
+  // again, so the URL always names what is actually open.
+  d.addEventListener("toggle", function () {
+    if (d.open) {
+      if (location.hash !== "#" + d.id) history.replaceState(null, "", "#" + d.id);
+    } else if (location.hash === "#" + d.id) {
+      history.replaceState(null, "", location.pathname + location.search);
+    }
+  });
   d.appendChild(sm);
 
   var b = el("div", "body");
@@ -473,12 +548,13 @@ function opCard(path, method, op) {
     b.appendChild(el("h3", null, "Parameters"));
     b.appendChild(paramTable(op.parameters));
   }
-  var reqSchema = jsonSchemaOf(op.requestBody);
-  if (reqSchema) {
+  var req = bodyOf(op.requestBody);
+  if (req && req.schema) {
     b.appendChild(el("h3", null,
       "Request body" + (op.requestBody.required === false ? " (optional)" : "")));
     if (op.requestBody.description) b.appendChild(el("p", "note", op.requestBody.description));
-    b.appendChild(schemaTree(reqSchema));
+    b.appendChild(el("div", "note mono", req.type));
+    b.appendChild(schemaTree(req.schema));
   }
   var responses = op.responses || {};
   var codes = Object.keys(responses);
@@ -492,8 +568,11 @@ function opCard(path, method, op) {
       head.appendChild(el("span", "status " + statusClass(code), code));
       head.appendChild(document.createTextNode(" " + (r.description || "")));
       row.appendChild(head);
-      var rs = jsonSchemaOf(r);
-      if (rs) row.appendChild(schemaTree(rs));
+      var rb = bodyOf(r);
+      if (rb && rb.schema) {
+        if (rb.type !== "application/json") row.appendChild(el("div", "note mono", rb.type));
+        row.appendChild(schemaTree(rb.schema));
+      }
       b.appendChild(row);
     });
   }
@@ -514,6 +593,17 @@ function collect() {
     });
   });
   return out;
+}
+
+// The operation named in the address bar, opened and scrolled to. Runs after
+// every render, because rendering rebuilds the cards and a filter that hides
+// the named one should simply leave nothing to open.
+function openFromHash() {
+  if (!location.hash) return;
+  var target = document.getElementById(location.hash.slice(1));
+  if (!target) return;
+  target.open = true;
+  target.scrollIntoView({ block: "start" });
 }
 
 function render() {
@@ -582,12 +672,23 @@ document.getElementById("q").addEventListener("input", function () {
   if (spec) render();
 });
 
+// One button rather than two: what it does next is whatever is not already
+// the case, which is also what its label says.
+document.getElementById("expand").addEventListener("click", function () {
+  var all = document.querySelectorAll("details.op");
+  var anyClosed = false;
+  all.forEach(function (d) { if (!d.open) anyClosed = true; });
+  all.forEach(function (d) { d.open = anyClosed; });
+  this.textContent = anyClosed ? "Collapse all" : "Expand all";
+});
+
 fetch(SPEC_URL).then(function (r) {
   if (!r.ok) throw new Error("HTTP " + r.status);
   return r.json();
 }).then(function (doc) {
   spec = doc;
   render();
+  openFromHash();
 }).catch(function (e) {
   var main = document.getElementById("main");
   main.textContent = "";

@@ -106,6 +106,85 @@ func js_title_of(s &: Sema, t: int): str:
     ret sym_at(s, sym).name
 end
 
+// ------------------------------------------------------------------ @doc
+
+// The `@doc` text on a declaration, "" when it has none.
+//
+//     struct User:
+//         @doc "the name they signed up with"
+//         pub name: str = ""
+//         @doc "when they signed up," "as a Unix timestamp"
+//         pub joined: i64 = 0 as i64
+//     end
+//
+// A schema without prose is a list of field names a reader has to guess at,
+// and prose kept somewhere else is prose that goes stale. `@doc` puts it on
+// the field, where whoever changes the field is looking, and it reaches the
+// documentation from there without passing through anything a person has to
+// remember to update.
+//
+// Read off `aliases`, the same list `@json`/`@en`/`@fa` land in - so this
+// needs no parser change, and a `@doc` on something that has no schema is
+// simply text nothing reads.
+//
+// A marker's values join with a space, so a long sentence can be split across
+// lines the way the rest of the source is. It has to be one marker with
+// several values - the parser rejects a second `@doc` on the same definition,
+// and says so.
+func js_doc_of(s &: Sema, a &: at.Ast, sym: int): str:
+    if sym == 0:
+        ret ""
+    end
+    decl := sym_at(s, sym).decl
+    if decl == 0:
+        ret ""
+    end
+    al := at.Get(a, decl).aliases
+    mut out := ""
+    mut i := 0
+    until i + 1 < al.len():
+        key := al.get(i)
+        val := al.get(i + 1)
+        i += 2
+        if !str.Equals(key, "doc") || str.Len(val) == 0:
+            continue
+        end
+        if str.Len(out) > 0:
+            out = out + " "
+        end
+        out = out + val
+    end
+    ret out
+end
+
+// `,"description":"..."` for a declaration that has a `@doc`, "" otherwise.
+// Written as a suffix because every caller has already opened its object and
+// wants this last, where a reader of the JSON expects prose to be.
+func js_doc_member(s &: Sema, a &: at.Ast, sym: int): str:
+    text := js_doc_of(s, a, sym)
+    if str.Len(text) == 0:
+        ret ""
+    end
+    ret ",\"description\":" + js_qs(text)
+end
+
+// The same, for a schema that is finished: `{"type":"string"}` becomes
+// `{"type":"string","description":"..."}`. Used for a field, where the type's
+// own schema is built before it is known which field is asking.
+func js_with_doc(body: str, doc_member: str): str:
+    if str.Len(doc_member) == 0 || str.Len(body) < 2:
+        ret body
+    end
+    // A `$ref` is the one place a sibling keyword cannot go: under OpenAPI
+    // 3.1 it can, but plenty of readers still follow the 3.0 rule that a
+    // `$ref` object's other members are ignored. Wrapping in an `allOf` of
+    // one says the same thing in a way both read.
+    if str.Len(body) > 8 && str.Equals(body.substr(1, 6), "\"$ref\""):
+        ret "{\"allOf\":[" + body + "]" + doc_member + "}"
+    end
+    ret body.substr(0, str.Len(body) - 1) + doc_member + "}"
+end
+
 // --------------------------------------------------------------- strings
 
 func js_hex(n: int): str:
@@ -187,7 +266,7 @@ end
 // An enum encodes as its member's name, so its schema is the list of those
 // names. A value outside the declared set still encodes, as its number, which
 // is why the schema does not also say `"type":"string"`.
-func js_enum(s &: Sema, t: int, d &: SchemaDefs): str:
+func js_enum(s &: Sema, a &: at.Ast, t: int, d &: SchemaDefs): str:
     sym := ty_at(s, t).decl
     if sym == 0 || sym_at(s, sym).members == 0:
         ret ""
@@ -215,7 +294,10 @@ func js_enum(s &: Sema, t: int, d &: SchemaDefs): str:
     name := js_defs_name_for(s, t)
     d.names.push(name)
     d.types.push(t)
-    d.bodies.push("{\"title\":" + js_qs(js_title_of(s, t)) + ",\"enum\":[" + names + "]}")
+    d.bodies.push(
+        "{\"title\":" + js_qs(js_title_of(s, t)) + js_doc_member(s, a, sym)
+            + ",\"enum\":[" + names + "]}"
+    )
     ret "{\"$ref\":\"#/$defs/" + name + "\"}"
 end
 
@@ -292,6 +374,7 @@ func js_field(
         jd_field_err(s, a, f, fv.ty, sp)
         ret ""
     end
+    body = js_with_doc(body, js_doc_member(s, a, f))
     // jd_attr_option already turns `omitempty` into `optional`, so one test
     // covers both: a field the encoder may leave out is not one a reader can
     // count on being there.
@@ -330,7 +413,9 @@ func js_struct_body(
             end
         end
     end
-    mut out := "{\"title\":" + js_qs(title) + ",\"type\":\"object\",\"properties\":{" + props + "}"
+    mut out := "{\"title\":" + js_qs(title)
+    out = out + js_doc_member(s, a, sym)
+    out = out + ",\"type\":\"object\",\"properties\":{" + props + "}"
     if required.len() > 0:
         out = out + ",\"required\":["
         repeat required.len() with j:
@@ -406,7 +491,7 @@ func js_schema(s &: Sema, a &: at.Ast, t: int, d &: SchemaDefs, sp: co.SrcSpan):
     end
     v := ty_at(s, t)
     if v.kind == TY_ENUM:
-        ret js_enum(s, t, d)
+        ret js_enum(s, a, t, d)
     end
     if v.kind == TY_PTR:
         ret js_ptr(s, a, t, d, sp)

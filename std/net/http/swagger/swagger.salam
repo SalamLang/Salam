@@ -80,6 +80,37 @@ import str
 const _DEFS_PREFIX := "#/$defs/"
 const _COMP_PREFIX := "#/components/schemas/"
 
+@en "JSON_TYPE"
+@fa "نوع جیسون"
+@ar "نوع جیسون"
+pub const JSON_TYPE := "application/json"
+
+@en "TEXT_TYPE"
+@fa "نوع متن"
+@ar "نوع نص"
+pub const TEXT_TYPE := "text/plain; charset=utf-8"
+
+@en "HTML_TYPE"
+@fa "نوع اچ تی ام ال"
+@ar "نوع إتش تی إم إل"
+pub const HTML_TYPE := "text/html; charset=utf-8"
+
+@en "FORM_TYPE"
+@fa "نوع فرم"
+@ar "نوع استمارة"
+pub const FORM_TYPE := "application/x-www-form-urlencoded"
+
+@en "TEXT_SCHEMA"
+@fa "طرحواره متن"
+@ar "مخطط نص"
+pub const TEXT_SCHEMA := "{\"type\":\"string\"}"
+
+// What OpenAPI calls a stream of bytes.
+@en "BINARY_SCHEMA"
+@fa "طرحواره دودویی"
+@ar "مخطط ثنائي"
+pub const BINARY_SCHEMA := "{\"type\":\"string\",\"format\":\"binary\"}"
+
 @en "Param"
 @fa "پارامتر"
 @ar "معامل"
@@ -100,6 +131,11 @@ pub struct Reply:
     pub description: str = ""
     // "" for a response with no body, such as a 204.
     pub schema: str = ""
+    // The media type the schema describes. Not every response is JSON: a
+    // report is a CSV, an avatar is a PNG, an error page is HTML, and a
+    // document that calls all of them application/json is wrong about every
+    // one of them.
+    pub content_type: str = "application/json"
 end
 
 @en "Scheme"
@@ -133,6 +169,7 @@ pub struct Op:
     pub body_schema: str = ""
     pub body_description: str = ""
     pub body_required: bool = true
+    pub body_content_type: str = "application/json"
 end
 
 // One entry of `components/schemas`. `name` is the key a `$ref` points at -
@@ -239,6 +276,19 @@ func _put_param(d &: Doc, name: str, loc: str, description: str, required: bool,
     })
 end
 
+func _put_body(d &: Doc, description: str, schema: str, content_type: str, required: bool):
+    i := _cur(d)
+    if i < 0:
+        ret
+    end
+    mut o := d.ops.get(i)
+    o.body_schema = schema
+    o.body_description = description
+    o.body_content_type = content_type
+    o.body_required = required
+    d.ops.set(i, o)
+end
+
 func _set_param(d &: Doc, p: Param):
     i := _cur(d)
     if i < 0:
@@ -256,13 +306,16 @@ func _set_param(d &: Doc, p: Param):
     d.ops.set(i, o)
 end
 
-func _add_reply(d &: Doc, code: int, description: str, schema: str):
+func _add_reply(d &: Doc, code: int, description: str, schema: str, content_type: str):
     i := _cur(d)
     if i < 0:
         ret
     end
     mut o := d.ops.get(i)
-    r := Reply { code = code, description = description, schema = schema }
+    r := Reply {
+        code = code, description = description, schema = schema,
+        content_type = content_type
+    }
     repeat o.replies.len() with j:
         if o.replies.get(j).code == code:
             o.replies.set(j, r)
@@ -507,16 +560,7 @@ end
 @fa "می پذیرد"
 @ar "یقبل"
 pub func Accepts<T>(d &: Doc, description: str, sample: T):
-    i := _cur(d)
-    if i < 0:
-        ret
-    end
-    schema := _absorb(d, json.SchemaEnvelope(sample))
-    mut o := d.ops.get(i)
-    o.body_schema = schema
-    o.body_description = description
-    o.body_required = true
-    d.ops.set(i, o)
+    _put_body(d, description, _absorb(d, json.SchemaEnvelope(sample)), JSON_TYPE, true)
 end
 
 // The same, for a body the caller may leave out.
@@ -524,14 +568,27 @@ end
 @fa "می پذیرد اختیاری"
 @ar "یقبل اختیاري"
 pub func AcceptsOptional<T>(d &: Doc, description: str, sample: T):
-    Accepts(d, description, sample)
-    i := _cur(d)
-    if i < 0:
-        ret
-    end
-    mut o := d.ops.get(i)
-    o.body_required = false
-    d.ops.set(i, o)
+    _put_body(d, description, _absorb(d, json.SchemaEnvelope(sample)), JSON_TYPE, false)
+end
+
+// A body this package cannot derive a schema for, because it is not a Salam
+// value: a form, an uploaded file, a CSV a caller pastes in. `content_type`
+// is the media type and `schema` is a raw JSON Schema - `TEXT_SCHEMA` and
+// `BINARY_SCHEMA` cover the usual two.
+@en "AcceptsRaw"
+@fa "می پذیرد خام"
+@ar "یقبل خام"
+pub func AcceptsRaw(d &: Doc, description: str, content_type: str, schema: str, required: bool):
+    _put_body(d, description, schema, content_type, required)
+end
+
+// A form post: the same fields the type declares, sent as
+// application/x-www-form-urlencoded instead of JSON.
+@en "AcceptsForm"
+@fa "می پذیرد فرم"
+@ar "یقبل استمارة"
+pub func AcceptsForm<T>(d &: Doc, description: str, sample: T):
+    _put_body(d, description, _absorb(d, json.SchemaEnvelope(sample)), FORM_TYPE, true)
 end
 
 // A response, as a value of the type the handler encodes into it.
@@ -539,7 +596,39 @@ end
 @fa "برمی گرداند"
 @ar "یرجع"
 pub func Returns<T>(d &: Doc, code: int, description: str, sample: T):
-    _add_reply(d, code, description, _absorb(d, json.SchemaEnvelope(sample)))
+    _add_reply(d, code, description, _absorb(d, json.SchemaEnvelope(sample)), JSON_TYPE)
+end
+
+// A response whose body is not JSON. `TEXT_SCHEMA` and `BINARY_SCHEMA` are
+// the two schemas most of these want.
+@en "ReturnsRaw"
+@fa "برمی گرداند خام"
+@ar "یرجع خام"
+pub func ReturnsRaw(d &: Doc, code: int, description: str, content_type: str, schema: str):
+    _add_reply(d, code, description, schema, content_type)
+end
+
+@en "ReturnsText"
+@fa "برمی گرداند متن"
+@ar "یرجع نصا"
+pub func ReturnsText(d &: Doc, code: int, description: str):
+    _add_reply(d, code, description, TEXT_SCHEMA, TEXT_TYPE)
+end
+
+@en "ReturnsHtml"
+@fa "برمی گرداند اچ تی ام ال"
+@ar "یرجع إتش تی إم إل"
+pub func ReturnsHtml(d &: Doc, code: int, description: str):
+    _add_reply(d, code, description, TEXT_SCHEMA, HTML_TYPE)
+end
+
+// A file: an image, a PDF, a zip. `content_type` is what it is;
+// "application/octet-stream" when the server does not commit to one.
+@en "ReturnsFile"
+@fa "برمی گرداند پرونده"
+@ar "یرجع ملفا"
+pub func ReturnsFile(d &: Doc, code: int, description: str, content_type: str):
+    _add_reply(d, code, description, BINARY_SCHEMA, content_type)
 end
 
 // A response with no body: a 204, or a 302 that is all Location header.
@@ -547,5 +636,5 @@ end
 @fa "بدون بدنه برمی گرداند"
 @ar "یرجع بلا متن"
 pub func ReturnsNothing(d &: Doc, code: int, description: str):
-    _add_reply(d, code, description, "")
+    _add_reply(d, code, description, "", "")
 end

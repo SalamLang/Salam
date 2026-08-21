@@ -77,28 +77,33 @@ func js_defs_find(d &: SchemaDefs, t: int): int:
     ret 0 - 1
 end
 
-func js_defs_name_used(d &: SchemaDefs, name: str): bool:
-    repeat d.names.len() with i:
-        if str.Equals(d.names.get(i), name):
-            ret true
-        end
-    end
-    ret false
+// What `#/$defs/...` calls this type: the key of its fully qualified
+// spelling, so `Point` in this package is "Point" and `geo.Point` is
+// "geo_Point".
+//
+// Never the bare declaration name, however unambiguous it looks from here.
+// Two `Config` structs in two packages are two schemas, and one document
+// calling both of them "Config" would describe one of them wrongly. Trying to
+// use the short name "when nothing else claims it" does not work either: the
+// type table fills in as types are reached, so whether a second `Config` is
+// visible yet depends on which schema was derived first, and the same type
+// would be named differently in two documents from one program. That is
+// exactly the property net/http/swagger relies on when it merges the defs of
+// many separate `jsonschema` calls into one `components/schemas`.
+//
+// The declaration's own short name is not lost - it goes in `title`, which is
+// what a documentation UI shows.
+func js_defs_name_for(s &: Sema, t: int): str:
+    ret derive_key(type_to_string(s, t))
 end
 
-// What `#/$defs/...` calls this type: the struct's own name when nothing else
-// has claimed it, otherwise the package-qualified key - two `Config` structs
-// from different packages are two schemas and must not share one entry.
-func js_defs_name_for(s &: Sema, d &: SchemaDefs, t: int): str:
+// The name to show for this type, as written in its declaration.
+func js_title_of(s &: Sema, t: int): str:
     sym := ty_at(s, t).decl
-    mut base := ""
-    if sym != 0:
-        base = sym_at(s, sym).name
+    if sym == 0:
+        ret type_to_string(s, t)
     end
-    if str.Len(base) > 0 && !js_defs_name_used(d, base):
-        ret base
-    end
-    ret derive_key(type_to_string(s, t))
+    ret sym_at(s, sym).name
 end
 
 // --------------------------------------------------------------- strings
@@ -207,10 +212,10 @@ func js_enum(s &: Sema, t: int, d &: SchemaDefs): str:
     if n == 0:
         ret ""
     end
-    name := js_defs_name_for(s, d, t)
+    name := js_defs_name_for(s, t)
     d.names.push(name)
     d.types.push(t)
-    d.bodies.push("{\"title\":" + js_qs(name) + ",\"enum\":[" + names + "]}")
+    d.bodies.push("{\"title\":" + js_qs(js_title_of(s, t)) + ",\"enum\":[" + names + "]}")
     ret "{\"$ref\":\"#/$defs/" + name + "\"}"
 end
 
@@ -300,7 +305,7 @@ end
 // because the derived decoder is strict - an unknown key is an error there -
 // and the schema should not promise more than the codec accepts.
 func js_struct_body(
-    s &: Sema, a &: at.Ast, t: int, name: str, d &: SchemaDefs, sp: co.SrcSpan
+    s &: Sema, a &: at.Ast, t: int, title: str, d &: SchemaDefs, sp: co.SrcSpan
 ): str:
     sym := ty_at(s, t).decl
     mems := sym_at(s, sym).members == 0 ? Vector {} as Vector<int>
@@ -325,7 +330,7 @@ func js_struct_body(
             end
         end
     end
-    mut out := "{\"title\":" + js_qs(name) + ",\"type\":\"object\",\"properties\":{" + props + "}"
+    mut out := "{\"title\":" + js_qs(title) + ",\"type\":\"object\",\"properties\":{" + props + "}"
     if required.len() > 0:
         out = out + ",\"required\":["
         repeat required.len() with j:
@@ -348,12 +353,12 @@ func js_struct(s &: Sema, a &: at.Ast, t: int, d &: SchemaDefs, sp: co.SrcSpan):
     if hit >= 0:
         ret "{\"$ref\":\"#/$defs/" + d.names.get(hit) + "\"}"
     end
-    name := js_defs_name_for(s, d, t)
+    name := js_defs_name_for(s, t)
     slot := d.names.len()
     d.names.push(name)
     d.types.push(t)
     d.bodies.push("")
-    body := js_struct_body(s, a, t, name, d, sp)
+    body := js_struct_body(s, a, t, js_title_of(s, t), d, sp)
     if str.Len(body) == 0:
         ret ""
     end

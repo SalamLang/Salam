@@ -79,8 +79,19 @@ echo "staged minified stdlib preload image at $STD_MIN"
 # those exact names: a `func` with a body inside an `extern:` block survives
 # DCE and keeps its unmangled symbol, which is Salam's EMSCRIPTEN_KEEPALIVE.
 rm -rf .salam-build
-"$SALAM" build --backend=c --keep-c compiler/wasm_main.salam \
-    --output=.wasm-build/host-salam --log-level=warn >/dev/null 2>&1 || true
+#
+# --target so the condcomp table is built for wasm rather than for this
+# host. Without it a Linux runner prunes every SALAM_OS_WASM arm and keeps
+# the Linux ones, so os.Platform() answered "linux" in the browser and
+# std/fs compiled in its getdents64 path - which emscripten cannot even
+# link ("wasm-ld: undefined symbol: syscall").
+#
+# --emit-c rather than swallowing a link failure: the old `|| true` hid
+# front-end errors too, and since the driver keeps the C it did manage to
+# generate, a half-emitted source set would sail past the find below and
+# reach emcc looking complete.
+"$SALAM" build --backend=c --emit-c --target=wasm32-unknown-emscripten \
+    compiler/wasm_main.salam --output=.wasm-build/host-salam --log-level=warn
 SRCS=$(find .salam-build -name '*.c' | sort | tr '\n' ' ')
 [ -n "$SRCS" ] || {
     echo "no generated C in .salam-build; the compiler build produced nothing" >&2

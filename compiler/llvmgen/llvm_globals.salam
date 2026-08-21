@@ -479,50 +479,25 @@ func body_sig_for(s &: sm.Sema, a &: at.Ast, name: str, owner &: int): int:
     ret 0 - 1
 end
 
-// stdcall_alias_for - the "-alternatename:_F=_F@N" a 32-bit Windows link
-// needs for one extern function, or "" when it needs none.
+// StdcallCc - " x86_stdcallcc" for an extern that is a Win32 API on a
+// 32-bit Windows target, "" otherwise. See k_lv_win32_stdcall in
+// llvmgen.salam for why this is a table and how it was checked.
 //
-// Win32 APIs are stdcall on i386, so kernel32 & co. export them decorated
-// (`_GetFileType@4`, verified with nm on libkernel32.a) while the plain
-// `extern func GetFileType(...)` this compiler emits references the bare
-// `_GetFileType`. On x86_64 there is no decoration and the two coincide,
-// which is why only the 32-bit Windows build ever broke - it stopped with
-// every Win32 import undefined.
-//
-// The alias is emitted for EVERY extern, not just the ones that turn out to
-// be stdcall, because nothing in the source says which is which. That costs
-// nothing: `-alternatename` is consulted only for a symbol that is still
-// undefined once everything has been scanned, so a cdecl extern like fopen
-// resolves normally and its alias is never looked at. It is the same idea
-// as GNU ld's --enable-stdcall-fixup, except it names the exact symbol
-// instead of searching, and unlike that flag it works under lld, which does
-// no stdcall fixup of its own (checked against lld 21 in mingw mode).
-//
-// A variadic extern is cdecl by definition and gets no alias.
-func stdcall_alias_for(v &: Lv, s &: sm.Sema, a &: at.Ast, name: str, sg &: sm.Sig): str:
+// Both the `declare` and every call site have to carry it: the convention
+// decides who pops the arguments, and disagreeing on that is what left the
+// i686 stack eight bytes out after the first Win32 call. Emitting it also
+// makes LLVM's mangler append the @N byte count, which is the decoration
+// kernel32's import library exports the function under.
+func StdcallCc(v &: Lv, name: str): str:
     if !target_is_windows_of(v.triple) || target_ptr_bits_of(v.triple) != 32:
         ret ""
     end
-    if sg.variadic:
-        ret ""
-    end
-    mut bytes := 0
-    repeat sg.params.len() with j:
-        t := ty_of(v, s, a, sm.ToString(s, sg.params.get(j)))
-        if str.Equals(t, "i64") || str.Equals(t, "double"):
-            bytes += 8
-        else str.Equals(t, "ptr") || str.Equals(t, "i32") || str.Equals(t, "i16") || str.Equals(t, "i8") || str.Equals(t, "i1") || str.Equals(t, "float"):
-            // Everything narrower than a word is passed in a whole stack
-            // slot, so it counts as 4.
-            bytes += 4
-        else:
-            // An aggregate passed by value has no simple byte count; rather
-            // than guess a wrong @N, emit no alias at all.
-            ret ""
+    repeat k_lv_win32_stdcall.len() with i:
+        if str.Equals(name, k_lv_win32_stdcall[i]):
+            ret " x86_stdcallcc"
         end
     end
-    dec := "_" + name + "@" + co.I64Toa(bytes as i64)
-    ret "-alternatename:_" + name + "=" + dec
+    ret ""
 end
 
 // ll_declare_extern - one bodyless `extern func` -> one `declare` line,
@@ -556,14 +531,10 @@ func declare_extern(v &: Lv, s &: sm.Sema, a &: at.Ast, name: str, sigid: int):
         ret
     end
     v.extern_names.push(name)
-    alias := stdcall_alias_for(v, s, a, name, sg)
-    if str.Len(alias) > 0:
-        v.extern_stdcall.push(alias)
-    end
     dn2 := at.Get(a, sg.decl)
     mut b := co.SbNew()
     co.SbPuts(
-        b, "declare " + ty_of(v, s, a, sm.ToString(s, sg.ret_type)) + " @" + name + "("
+        b, "declare" + StdcallCc(v, name) + " " + ty_of(v, s, a, sm.ToString(s, sg.ret_type)) + " @" + name + "("
     )
     repeat sg.params.len() with j:
         if j != 0:

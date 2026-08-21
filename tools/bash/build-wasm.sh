@@ -78,6 +78,10 @@ echo "staged minified stdlib preload image at $STD_MIN"
 # compiler/sal_web.salam already exports salam_web_run_app and friends under
 # those exact names: a `func` with a body inside an `extern:` block survives
 # DCE and keeps its unmangled symbol, which is Salam's EMSCRIPTEN_KEEPALIVE.
+#
+# compiler/main.salam, not a separate wasm_main.salam: the browser entry is
+# the SALAM_OS_WASM arm of that one file, which the --target below selects
+# along with everything else wasm.
 rm -rf .salam-build
 #
 # --target so the condcomp table is built for wasm rather than for this
@@ -91,7 +95,7 @@ rm -rf .salam-build
 # generate, a half-emitted source set would sail past the find below and
 # reach emcc looking complete.
 "$SALAM" build --backend=c --emit-c --target=wasm32-unknown-emscripten \
-    compiler/wasm_main.salam --output=.wasm-build/host-salam --log-level=warn
+    compiler/main.salam --output=.wasm-build/host-salam --log-level=warn
 SRCS=$(find .salam-build -name '*.c' | sort | tr '\n' ' ')
 [ -n "$SRCS" ] || {
     echo "no generated C in .salam-build; the compiler build produced nothing" >&2

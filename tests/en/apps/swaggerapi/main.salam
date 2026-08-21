@@ -24,8 +24,12 @@
 //
 // Add a field to `Link`, rename one with `@json`, mark one `omitempty`, and
 // the document changes with it - because the schema and the encoder come out
-// of the same declaration in the same compiler pass. What is left to write by
-// hand is the prose: a summary, what a 404 means, what `?status=` accepts.
+// of the same declaration in the same compiler pass. A `@doc` on the field
+// travels the same way, so what a field means is written once, next to the
+// field, and read by whoever opens the documentation.
+//
+// What is left to write by hand is the prose that is not about a type: a
+// summary, what a 404 means, what `?status=` accepts.
 //
 // The last section is the part a browser would see. It is printed rather than
 // served so the output is reproducible; `swagger.Mount(doc, r, "/docs")` and
@@ -36,31 +40,40 @@ import net.router
 import net.http.swagger
 import encoding.json
 
+@doc "whether the link still resolves"
 enum Status:
     Active
     Broken
 end
 
+@doc "a saved link, as the API hands it back"
 struct Link:
+    @doc "assigned when the link is saved," "and never reused"
     @json "" "string"
     pub id: i64 = 0 as i64
+    @doc "where the link points"
     pub url: str = ""
     // The wire name and the field name differ on purpose, and the document
     // has to follow the wire, not the field.
+    @doc "the page's own title, as it was when the link was saved"
     @json "page_title"
     pub title: str = ""
     pub status: Status = Status.Active
     // Optional on the way in, left out when empty on the way out - so it is
     // not in the schema's `required` list either.
+    @doc "whatever the saver wanted to remember about it"
     @json "" "omitempty"
     pub note: str = ""
+    @doc "free-form labels, for finding it again"
     pub tags: Vector<str> = Vector {}
     // Not part of the API at all.
     @json "-"
     pub owner_id: i64 = 0 as i64
 end
 
+@doc "what a client sends to save one"
 struct NewLink:
+    @doc "where the link points"
     pub url: str = ""
     @json "page_title"
     pub title: str = ""
@@ -68,13 +81,18 @@ struct NewLink:
     pub note: str = ""
 end
 
+@doc "one page of results, and how many there are in total"
 struct Page:
+    @doc "how many links match, ignoring limit and offset"
     pub total: int = 0
     pub items: Vector<Link> = Vector {}
 end
 
+@doc "what went wrong, when something did"
 struct Problem:
+    @doc "a short machine-readable name for the failure"
     pub error: str = ""
+    @doc "a sentence a person can act on"
     pub detail: str = ""
 end
 
@@ -124,6 +142,7 @@ func document(r: router.Router): swagger.Doc:
     swagger.Secure(doc, "bearer")
     swagger.Accepts(doc, "the link to save", NewLink {})
     swagger.Returns(doc, 201, "the link, with the id it was given", Link {})
+    swagger.ReturnsHeader(doc, 201, "Location", "where the saved link now lives")
     swagger.Returns(doc, 422, "the url was not a url", Problem {})
 
     _3 := swagger.At(doc, "GET", "/api/links/:id")
@@ -207,6 +226,22 @@ func main:
     // there at all. Every one of those comes from the `@json` markers on the
     // struct, not from anything in this file.
     println json.Get(json.Get(json.Get(spec, "components"), "schemas"), "Link")
+
+    println ""
+    println "== a response that names a header =="
+    created := json.Get(json.Get(json.Get(json.Get(spec, "paths"), "/api/links"), "post"), "responses")
+    println json.Get(json.Get(created, "201"), "headers")
+
+    println ""
+    println "== what the check has to say about it =="
+    probs := swagger.Problems(doc)
+    defer probs.free()
+    println probs.len()
+    undoc := swagger.Undocumented(doc)
+    defer undoc.free()
+    repeat undoc.len() with i:
+        println "  undescribed: ", undoc.get(i)
+    end
 
     println ""
     println "== the request body of POST /api/links =="

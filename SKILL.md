@@ -583,8 +583,12 @@ err) UnmarshalLenient`, with `@json "wire"` to rename a field, `@json "-"` to
   `Schema(v)` derives the same type's **JSON Schema** (2020-12, `$defs` +
   `$ref`, so a self-referential type works) from the same declaration and the
   same markers - the argument is a value only because that is how a generic
-  binds, and nothing reads it. `SchemaEnvelope`/`SchemaMerge` are the two
-  halves for callers that want the definitions separately.
+  binds, and nothing reads it. A `@doc "..."` marker on a struct, an enum or
+  a field becomes that schema's `description`, so what a field means is
+  written once next to the field (several values on one marker join with a
+  space: `@doc "a" "b"`; a second `@doc` on the same definition is an error).
+  `SchemaEnvelope`/`SchemaMerge` are the two halves for callers that want the
+  definitions separately.
 - **`yaml`**: parse/query/encode/dump. **`csv`**: `ReadLine(str): Vector<str>`,
   `WriteLine(Vector<str>): str`.
 - **`encoding`**: `Base64Encode Base64Decode HexEncode HexDecode URLEncode
@@ -698,12 +702,20 @@ Describe Server Contact License BearerAuth ApiKeyAuth`; `Scan(doc, router)`
 Cookie PathParam` describe it. `Accepts(doc, desc, NewTodo {})` and
   `Returns(doc, 200, desc, Todo {})` take a **value and read its type**, so
   the payload schemas come from the struct declarations by the same compiler
-  pass that derives `json.Marshal`'s encoder; `ReturnsNothing` for a 204.
-  Output: `Spec SpecIndent WriteSpec`. Serving: `Mount(doc, r, "/docs")` on
-  the API's own server, or `Serve(doc, port)` on a port of its own (returns
-  once bound, runs on its own thread). `MountSpec`/`ServeSpec`/`SpecFromFile`
-  render an OpenAPI document from anywhere; `Page(title, spec_url)` is the
-  page itself, self-contained with no CDN.
+  pass that derives `json.Marshal`'s encoder. Not-JSON payloads:
+  `ReturnsText ReturnsHtml ReturnsFile(code, desc, "image/png") ReturnsRaw
+AcceptsForm AcceptsRaw`, with `TEXT_SCHEMA BINARY_SCHEMA JSON_TYPE TEXT_TYPE
+HTML_TYPE FORM_TYPE` as the usual arguments; `ReturnsNothing` for a 204, and
+  `ReturnsHeader(code, "Location", desc)` for a header worth naming.
+  Output: `Spec SpecIndent WriteSpec`. `Problems(doc)` lists what is wrong
+  with the document (a security scheme nobody declared, a duplicate
+  operationId, a body on a GET) and `Undocumented(doc)` lists the routes
+  nobody has described - print them at startup, or assert on them in a test;
+  `Free(doc)` releases it. Serving: `Mount(doc, r, "/docs")` on the API's own
+  server, or `Serve(doc, port)` on a port of its own (returns once bound,
+  runs on its own thread). `MountSpec`/`ServeSpec`/`SpecFromFile` render an
+  OpenAPI document from anywhere; `Page(title, spec_url)` is the page itself,
+  self-contained with no CDN - an empty `spec_url` means "next to this page".
 - **`tcp`** (`Bind Accept Read Write Close Ok ConnOk`), **`socket`** (WebSocket),
   **`ssl`**, **`net`**, **`dom`**/**`console`** (browser/JS targets),
   **`webview`**/**`webview_cef`** (desktop windows).

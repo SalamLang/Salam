@@ -408,6 +408,32 @@ func jsg_expr_p(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, minprec: int): str:
         if str.Equals(dts, sts):
             ret jsg_expr_p(g, s, a, n.a, minprec)
         end
+        // A str seen through a byte pointer, and back (jsg_is_byte_ptr_ts).
+        if jsg_is_byte_ptr_ts(dts) && str.Equals(sts, "str"):
+            ret "__sal_bytes(" + jsg_expr_p(g, s, a, n.a, 0) + ")"
+        end
+        if str.Equals(dts, "str") && jsg_is_byte_ptr_ts(sts):
+            ret "__sal_str(" + jsg_expr_p(g, s, a, n.a, 0) + ")"
+        end
+        // `(p as u64) + k` cast back to a pointer: C's pointer arithmetic,
+        // which std uses to take a slice of a string's bytes. A Uint8Array
+        // says exactly that - a view starting k bytes in.
+        if jsg_is_byte_ptr_ts(dts):
+            pa := jsg_ptr_add(g, s, a, id)
+            if str.Len(pa) > 0:
+                ret pa
+            end
+        end
+        // A pointer to anything wider than a byte cannot ride on the byte
+        // array a pointer is here: indexing it would step one byte at a
+        // time and quietly answer wrong. std's SHA-1 builds its message
+        // schedule that way (`mem.Allocate(80 * 8) as i64*`), and a wrong
+        // hash is worse than a refusal.
+        if str.EndsWith(dts, "*") && !jsg_is_byte_ptr_ts(dts) && jsg_is_byte_ptr_ts(
+            sts
+        ):
+            ret jsg_unsupported(g, "pointer to " + str.Substr(dts, 0, str.Len(dts) - 1))
+        end
         if str.StartsWith(dts, "dyn "):
             if str.StartsWith(sts, "dyn "):
                 ret jsg_expr_p(g, s, a, n.a, minprec)

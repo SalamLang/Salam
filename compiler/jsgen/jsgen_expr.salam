@@ -131,6 +131,13 @@ func jsg_local(g &: Jg, name: str, is_mut: bool): str:
     else:
         emitted = jsg_ident(name)
     end
+    // A JS name a binding still in scope already answers to cannot be
+    // reused: `let i = i` reads the declaration being initialised, not the
+    // one outside it, and throws. The `each` lowering runs into this when
+    // its own counter and the loop's key binding are spelled the same.
+    if jsg_emit_taken(g, emitted):
+        emitted = jsg_fresh(g, emitted)
+    end
     local_add(g, name)
     g.local_muts.push(is_mut ? 1 : 0)
     g.local_emit.push(emitted)
@@ -171,12 +178,18 @@ func jsg_local_is_mut(g &: Jg, name: str): bool:
     ret true
 end
 
+// A name no local answers to yet - by its Salam name, by a name already
+// handed out in this function, or by the JS name a local is emitted under.
+// That last one matters because two different Salam names can otherwise be
+// given the same JS one (a synthetic loop counter and a user binding).
 func jsg_fresh(g &: Jg, base: str): str:
     safe := jsg_ident(base)
     mut i := 1
     until true:
         cand := i == 1 ? safe : safe + co.I64Toa(i as i64)
-        if !local_known(g, cand) && !name_in_strvec(g.fn_used_names, cand):
+        if !local_known(g, cand) && !name_in_strvec(
+            g.fn_used_names, cand
+        ) && !jsg_emit_taken(g, cand):
             g.fn_used_names.push(cand)
             ret cand
         end
@@ -288,6 +301,32 @@ func jsg_template_text(b &: str.StringBuilder, s: str):
 end
 
 // ts "" = C NULL
+// A cast to a byte pointer whose operand is `<pointer as int> + offset`,
+// rendered as the view that starts there. "" when the cast is not that
+// shape. See jsg_ptr_operand.
+func jsg_ptr_add(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int): str:
+    inner := at.Get(a, id).a
+    if inner == 0 || at.KindOf(a, inner) != at.AST_BINARY:
+        ret ""
+    end
+    bn := at.Get(a, inner)
+    if bn.op != tok.TK_PLUS:
+        ret ""
+    end
+    mut base := jsg_ptr_operand(a, bn.a)
+    mut off := bn.b
+    if base == 0:
+        base = jsg_ptr_operand(a, bn.b)
+        off = bn.a
+    end
+    if base == 0:
+        ret ""
+    end
+    ret "__sal_ptradd(" + jsg_expr_p(g, s, a, base, JSP_MEMBER) + ", " + jsg_expr_p(
+        g, s, a, off, 0
+    ) + ")"
+end
+
 func jsg_zero(s &: sm.Sema, ts: str): str:
     if str.Len(ts) == 0:
         ret "0"

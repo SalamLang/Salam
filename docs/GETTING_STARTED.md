@@ -29,10 +29,28 @@ The fastest way to get `salam` on your machine:
 { curl -fsSL https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.sh || wget -qO- https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.sh; } | sh && export PATH="$HOME/.salam/bin:$PATH"
 ```
 
-**Windows:**
+**Windows** (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.ps1 -OutFile "$env:TEMP\salam-install.ps1"; powershell -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\salam-install.ps1"
+```
+
+Or from `cmd.exe`:
 
 ```bat
-powershell -NoProfile -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; (New-Object Net.WebClient).DownloadFile('https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.bat','%TEMP%\salam-install.bat')" && call "%TEMP%\salam-install.bat" && set "PATH=%USERPROFILE%\.salam\bin;%PATH%"
+curl -fsSLo "%TEMP%\salam-install.bat" https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.bat && "%TEMP%\salam-install.bat"
+```
+
+Both land in `%USERPROFILE%\.salam\bin` and put that directory on your user
+PATH; open a new terminal afterwards so the change is visible. `--dir DIR`
+installs somewhere else, `--version X.Y.Z` picks an exact release, and
+`--no-modify-path` leaves PATH untouched.
+
+On Windows 7 and 8, where `curl.exe` and `irm` do not exist yet, bootstrap
+with `certutil` instead:
+
+```bat
+certutil -urlcache -split -f https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.bat "%TEMP%\salam-install.bat" && "%TEMP%\salam-install.bat"
 ```
 
 Or download a pre-built binary from [GitHub Releases](https://github.com/SalamLang/Salam/releases).

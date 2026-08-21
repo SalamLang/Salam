@@ -57,6 +57,55 @@ func _is_package(root: str, name: str): bool:
     ret file.Exists(path.Join(path.Join(root, name), name.concat(".salam")))
 end
 
+// Appends every importable package under `dir_path` by its dotted import
+// name, then descends into each one. `encoding.json` is a package in its own
+// right, not a corner of `encoding`, and that is the name an `import` line
+// spells - so that is the name the listing gives back.
+func _collect_pkgs(out &: Vector<str>, dir_path: str, prefix: str):
+    names := mcptxt.Sorted(dir.ListDirs(dir_path))
+    mut i := 0
+    until i < names.len():
+        n := names.get(i)
+        if !str.StartsWith(n, ".") && _is_package(dir_path, n):
+            mut full := n
+            if prefix.len() > 0: full = prefix.concat(".").concat(n) end
+            out.push(full)
+            _collect_pkgs(out, path.Join(dir_path, n), full)
+        end
+        i += 1
+    end
+end
+
+// Turns an import name into the directory holding it: `encoding.json` lives
+// at std/encoding/json. Joining a segment at a time leaves the separator to
+// the platform instead of baking '/' into the path.
+func _pkg_dir(root: str, pkg: str): str:
+    parts := str.Split(pkg, ".")
+    mut p := root
+    mut i := 0
+    until i < parts.len():
+        p = path.Join(p, parts.get(i))
+        i += 1
+    end
+    ret p
+end
+
+// The sources of one package: the .salam files directly in its directory.
+// Descending further would answer for the nested packages too, which have
+// their own names and answer for themselves.
+func _pkg_sources(pkg_dir: str): Vector<str>:
+    out := Vector {} as Vector<str>
+    if !dir.Exists(pkg_dir): ret out end
+    names := mcptxt.Sorted(dir.List(pkg_dir))
+    mut i := 0
+    until i < names.len():
+        n := names.get(i)
+        if _is_salam(n): out.push(path.Join(pkg_dir, n)) end
+        i += 1
+    end
+    ret out
+end
+
 // Every .salam file under a directory, recursively, in a stable order.
 // dir.Walk follows the filesystem, so sorting is what keeps symbol and
 // example listings identical across machines.
@@ -187,20 +236,15 @@ end
 @en "Packages"
 @fa "بسته‌ها"
 @ar "الحزم"
-// Every importable std package, read from the tree rather than hardcoded.
+// Every importable std package, read from the tree rather than hardcoded,
+// nested ones included under the dotted name an `import` line would use.
 pub func Packages(): mcpout.ToolResult:
     root := _std_root()
     if !dir.Exists(root):
         ret mcpout.Failure("stdlib not found at ".concat(root).concat(" - set SALAM_STD or SALAM_MCP_ROOT."))
     end
-    names := mcptxt.Sorted(dir.ListDirs(root))
     mut items := Vector {} as Vector<str>
-    mut i := 0
-    until i < names.len():
-        n := names.get(i)
-        if !str.StartsWith(n, ".") && _is_package(root, n): items.push(n) end
-        i += 1
-    end
+    _collect_pkgs(items, root, "")
     body := "Importable std packages (".concat(str.FromInt(items.len())).concat("):\n\n").concat(mcpout.Bullets(items))
     ret mcpout.Rich(body, mcpout.StrArray(items), false)
 end
@@ -212,9 +256,9 @@ end
 // tool that stops a model inventing function names.
 pub func Symbols(pkg: str, query: str): mcpout.ToolResult:
     if !mcpexec.SafePath(pkg): ret mcpout.Failure("unsupported package name: ".concat(pkg)) end
-    root := path.Join(_std_root(), pkg)
+    root := _pkg_dir(_std_root(), pkg)
     if !dir.Exists(root): ret mcpout.Failure("no such std package: ".concat(pkg)) end
-    files := _sources(root)
+    files := _pkg_sources(root)
     mut all := Vector {} as Vector<str>
     mut i := 0
     until i < files.len():
@@ -227,9 +271,9 @@ pub func Symbols(pkg: str, query: str): mcpout.ToolResult:
         i += 1
     end
     if all.len() == 0:
-        ret mcpout.Text("No public declarations matched in std/".concat(pkg).concat("."))
+        ret mcpout.Text("No public declarations matched in std/".concat(str.Replace(pkg, ".", "/")).concat("."))
     end
-    body := "Public declarations in std/".concat(pkg).concat(" (").concat(str.FromInt(all.len())).concat("):\n\n").concat(mcpout.Bullets(all))
+    body := "Public declarations in std/".concat(str.Replace(pkg, ".", "/")).concat(" (").concat(str.FromInt(all.len())).concat("):\n\n").concat(mcpout.Bullets(all))
     ret mcpout.Rich(body, mcpout.StrArray(all), false)
 end
 

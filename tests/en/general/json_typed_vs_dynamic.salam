@@ -1,0 +1,192 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// The two JSON APIs, and where the line between them falls.
+//
+//   json.Marshal / json.Unmarshal   a codec the compiler derives for one
+//                                   concrete type, at compile time
+//   json.Encode / json.Decode       a tree of value.Value, decided at run time
+//
+// Marshal is the one to reach for. It is shorter, it is checked, a field
+// added to the struct appears on the wire without touching any of this, and
+// there is no allocation-tagged tree in the middle. Everything below the
+// first section is the remainder: documents whose shape is not a Salam type,
+// and so cannot be the T of a Marshal<T>.
+//
+// Object key order out of a HashMap is not fixed, so every whole-object
+// encode here goes through sort_keys and every key walk sorts first.
+
+import encoding.json
+import encoding.value
+import encoding.encerr
+import sort
+
+struct Point:
+    pub x: int = 0
+    pub y: int = 0
+end
+
+// A shape known at compile time: the typed codec covers it end to end, and
+// the dynamic tree would only be a longer way to write the same thing.
+func known_shape():
+    p := Point { x = 3, y = 4 }
+    println json.Marshal(p)
+
+    mut back := Point {}
+    mut e := encerr.NoError()
+    println json.Unmarshal("{\"x\":3,\"y\":4}", back, e)
+    println back.x + back.y
+
+    // The same document assembled by hand through the dynamic API. It agrees
+    // once the spacing is normalised - the tree encoder writes `"x": 3`, the
+    // derived one writes `"x":3` - and that is the point: this is the code
+    // Marshal saves you from writing.
+    mut obj := value.NewValueObject()
+    value.ObjectSet(obj, "x", value.ValueInt(3 as i64))
+    value.ObjectSet(obj, "y", value.ValueInt(4 as i64))
+    dyn := json.Encode(obj, json.JSONOptions { sort_keys = true })
+    println dyn
+    println json.Minify(dyn) == json.Marshal(p)
+    value.ValueFree(obj)
+end
+
+// Reason 1: the keys are not known until the document arrives. No struct can
+// declare them, so there is no T to derive a codec for.
+func unknown_keys():
+    text := `{"retries":3,"region":"eu","debug":true}`
+    mut e := encerr.NoError()
+    v := json.Decode(text, e)
+    println encerr.IsError(e)
+
+    keys := value.ObjectKeys(v)
+    sort.Sort(keys)
+    repeat keys.len() with i:
+        k := keys.get(i)
+        print k
+        print "="
+        println value.ToDebugString(value.ObjectGet(v, k))
+    end
+    value.ValueFree(v)
+end
+
+// Reason 2: an array whose elements do not share a type. Vector<T> has one T;
+// this document does not.
+func heterogeneous():
+    mut e := encerr.NoError()
+    v := json.Decode(`[1,"two",true,null,{"k":1}]`, e)
+    println value.ArrayLen(v)
+    repeat value.ArrayLen(v) with i:
+        item := value.ArrayGet(v, i)
+        if value.IsInt(item):
+            println "int"
+        else value.IsString(item):
+            println "str"
+        else value.IsBool(item):
+            println "bool"
+        else value.IsNull(item):
+            println "null"
+        else:
+            println "object"
+        end
+    end
+    value.ValueFree(v)
+end
+
+// Reason 3: a transform that does not care what the document holds. Redacting
+// every key called "password" at any depth is one function over the tree; as
+// typed code it would be one function per struct that might contain one.
+func redact(v &: value.Value):
+    if value.IsObject(v):
+        keys := value.ObjectKeys(v)
+        repeat keys.len() with i:
+            k := keys.get(i)
+            if k == "password":
+                value.ObjectSet(v, k, value.ValueString("***"))
+            else:
+                mut child := value.ObjectGet(v, k)
+                redact(child)
+                value.ObjectSet(v, k, child)
+            end
+        end
+    else value.IsArray(v):
+        repeat value.ArrayLen(v) with i:
+            mut item := value.ArrayGet(v, i)
+            redact(item)
+            value.ArraySet(v, i, item)
+        end
+    end
+end
+
+func generic_walk():
+    mut e := encerr.NoError()
+    mut v := json.Decode(`{"user":{"name":"ali","password":"s3cret"},"hosts":[{"password":"pw"}]}`, e)
+    redact(v)
+    println json.Encode(v, json.JSONOptions { sort_keys = true })
+    value.ValueFree(v)
+end
+
+// Reason 4: fields you must carry through untouched. Unmarshal is strict and
+// rejects a key the struct does not declare; the lenient form accepts the
+// document but drops the key, so it cannot come back out again.
+func passthrough():
+    text := `{"x":1,"y":2,"note":"keep me"}`
+    mut p := Point {}
+    mut e := encerr.NoError()
+    println json.Unmarshal(text, p, e)
+    println e.message
+    mut e2 := encerr.NoError()
+    println json.UnmarshalLenient(text, p, e2)
+    println json.Marshal(p)
+
+    // Through the tree instead, the unknown key survives the round trip.
+    mut e3 := encerr.NoError()
+    mut v := json.Decode(text, e3)
+    value.ObjectSet(v, "x", value.ValueInt(10 as i64))
+    println json.Encode(v, json.JSONOptions { sort_keys = true })
+    value.ValueFree(v)
+end
+
+// The two meeting in the middle: decode the envelope dynamically because its
+// shape varies, then hand the one subtree that does have a type to the
+// derived decoder.
+func bridge():
+    text := `{"kind":"point","payload":{"x":7,"y":8}}`
+    mut e := encerr.NoError()
+    v := json.Decode(text, e)
+    kind := value.AsString(value.ObjectGet(v, "kind"))
+    println kind
+    if kind == "point":
+        inner := json.EncodeDefault(value.ObjectGet(v, "payload"))
+        mut p := Point {}
+        mut pe := encerr.NoError()
+        println json.Unmarshal(inner, p, pe)
+        println p.x * p.y
+    end
+    value.ValueFree(v)
+end
+
+func main:
+    println "-- known shape --"
+    known_shape()
+    println "-- unknown keys --"
+    unknown_keys()
+    println "-- heterogeneous --"
+    heterogeneous()
+    println "-- generic walk --"
+    generic_walk()
+    println "-- passthrough --"
+    passthrough()
+    println "-- bridge --"
+    bridge()
+end

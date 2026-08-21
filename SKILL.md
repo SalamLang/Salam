@@ -574,12 +574,14 @@ LowerBound UpperBound Min Max Reverse Swap` + named algorithms
 
 ### Data formats
 
-- **`json`** (`import encoding.json`): `Valid Get GetInt GetFloat Has Keys
-Minify Indent Escape Object(members) Array(items)
-Member/MemberInt/MemberBool/MemberFloat/MemberRaw Str`. Typed codecs the
-  compiler derives per type: `Marshal(v) MarshalIndent Unmarshal(text, out,
-err) UnmarshalLenient`, with `@json "wire"` to rename a field, `@json "-"` to
-  drop it, and `@json "" "omitempty"/"optional"/"string"` for the rest.
+- **`json`** (`import encoding.json`):
+  `Valid Get GetInt GetFloat Has Keys Minify Indent Escape`
+  `Object(members) Array(items)`
+  `Member/MemberInt/MemberBool/MemberFloat/MemberRaw Str`. Typed codecs the
+  compiler derives per type:
+  `Marshal(v) MarshalIndent Unmarshal(text, out, err) UnmarshalLenient`,
+  with `@json "wire"` to rename a field, `@json "-"` to drop it, and
+  `@json "" "omitempty"/"optional"/"string"` for the rest.
   `Schema(v)` derives the same type's **JSON Schema** (2020-12, `$defs` +
   `$ref`, so a self-referential type works) from the same declaration and the
   same markers - the argument is a value only because that is how a generic
@@ -694,18 +696,21 @@ NewServer(port) Use Run Static`; `RunBackground(s)` returns once the port is
   each with its own router; handler `func h(ctx: i64)` uses
   `Ctx_html Ctx_json Ctx_text Ctx_param Ctx_query Ctx_form Ctx_body Ctx_method
 Ctx_status Ctx_set_header Ctx_redirect`. Also a canvas/DOM JS-interop surface.
-- **`net.http.swagger`** (OpenAPI + a documentation page): `New(title, version)
-Describe Server Contact License BearerAuth ApiKeyAuth`; `Scan(doc, router)`
-  lists every registered route (`:id` becomes a `{id}` path parameter, `*`
-  becomes a catch-all), then `At(doc, method, pattern)` selects one and
-  `Summary Details Tag OperationId Deprecated Secure Query QueryTyped QueryEnum
-Header Cookie PathParam` describe it. `Accepts(doc, desc, NewTodo {})` and
-  `Returns(doc, 200, desc, Todo {})` take a **value and read its type**, so
-  the payload schemas come from the struct declarations by the same compiler
-  pass that derives `json.Marshal`'s encoder. Not-JSON payloads:
-  `ReturnsText ReturnsHtml ReturnsFile(code, desc, "image/png") ReturnsRaw
-AcceptsForm AcceptsRaw`, with `TEXT_SCHEMA BINARY_SCHEMA JSON_TYPE TEXT_TYPE
-HTML_TYPE FORM_TYPE` as the usual arguments; `ReturnsNothing` for a 204, and
+- **`net.http.swagger`** (OpenAPI + a documentation page):
+  `New(title, version) Describe Server Contact License BearerAuth ApiKeyAuth`;
+  `Scan(doc, router)` lists every registered route (`:id` becomes a `{id}`
+  path parameter, `*` becomes a catch-all), then
+  `At(doc, method, pattern)` selects one and
+  `Summary Details Tag OperationId Deprecated Secure Query QueryTyped`
+  `QueryEnum Header Cookie PathParam` describe it.
+  `Accepts(doc, desc, NewTodo {})` and `Returns(doc, 200, desc, Todo {})`
+  take a **value and read its type**, so the payload schemas come from the
+  struct declarations by the same compiler pass that derives
+  `json.Marshal`'s encoder. Not-JSON payloads:
+  `ReturnsText ReturnsHtml ReturnsFile(code, desc, "image/png") ReturnsRaw`
+  `AcceptsForm AcceptsRaw`, with
+  `TEXT_SCHEMA BINARY_SCHEMA JSON_TYPE TEXT_TYPE HTML_TYPE FORM_TYPE` as the
+  usual arguments; `ReturnsNothing` for a 204, and
   `ReturnsHeader(code, "Location", desc)` for a header worth naming.
   Output: `Spec SpecIndent WriteSpec`. `Problems(doc)` lists what is wrong
   with the document (a security scheme nobody declared, a duplicate
@@ -713,9 +718,9 @@ HTML_TYPE FORM_TYPE` as the usual arguments; `ReturnsNothing` for a 204, and
   has described, and `Missing(doc, r)` lists the routes the router will serve
   that the document does not mention at all (the usual cause: `Mount` ran
   before the last `router.Get`) - print them at startup, or assert on them in
-  a test; `Free(doc)` releases it. Serving: `Mount(doc, r, "/docs")` on the API's own
-  server, or `Serve(doc, port)` on a port of its own (returns once bound,
-  runs on its own thread). `MountSpec`/`ServeSpec`/`SpecFromFile` render an
+  a test; `Free(doc)` releases it. Serving: `Mount(doc, r, "/docs")` on the
+  server the API already runs on, or `Serve(doc, port)` on a port of its own
+  (returns once bound, runs on its own thread). `MountSpec`/`ServeSpec`/`SpecFromFile` render an
   OpenAPI document from anywhere; `Page(title, spec_url)` is the page itself,
   self-contained with no CDN - an empty `spec_url` means "next to this page".
 - **`tcp`** (`Bind Accept Read Write Close Ok ConnOk`), **`socket`** (WebSocket),

@@ -405,6 +405,78 @@ func cc_cond_has_ref(a: at.Ast, id: int): bool:
     ret false
 end
 
+// cc_lvalue_root - the identifier an assignment target hangs off, walking
+// through the member/index chain the way sema's analyze_lvalue does. 0 when
+// the target bottoms out in something that is not a plain name.
+func cc_lvalue_root(a &: at.Ast, id: int): int:
+    mut cur := id
+    until cur != 0:
+        k := at.KindOf(a, cur)
+        if k == at.AST_IDENTIFIER:
+            ret cur
+        end
+        if k != at.AST_MEMBER && k != at.AST_INDEX && k != at.AST_SLICE:
+            ret 0
+        end
+        cur = at.Get(a, cur).a
+    end
+    ret 0
+end
+
+// cc_note_write - records the root of a write target as assigned-in-pruned-code.
+func cc_note_write(a &: at.Ast, file: str, target: int):
+    r := cc_lvalue_root(a, target)
+    if r != 0:
+        at.NotePruned(a, file, at.Get(a, r).name, true)
+    end
+end
+
+// cc_note_pruned - walks a subtree that is about to be dropped and records
+// every name it mentions (Ast.pruned_names), marking the ones it writes to.
+// Without this, the lints that fire at the end of sema see a variable whose
+// only assignment, or a function whose only call, lived in the branch this
+// host folds away, and report it as unused or never-mutated - a hard error on
+// source that is correct for the other host. The write set mirrors the four
+// things sema itself counts as a mutation: assignment targets, ++/--, the
+// receiver of a method call, and any bare identifier handed to a call (the
+// callee's `&:` parameters are not known this early, so every argument name
+// is treated as one).
+func cc_note_pruned(a &: at.Ast, file: str, id: int):
+    if id == 0:
+        ret
+    end
+    n := at.Get(a, id)
+    at.NotePruned(a, file, n.name, false)
+    if n.kind == at.AST_ASSIGN || n.kind == at.AST_INCDEC:
+        cc_note_write(a, file, n.a)
+    end
+    if n.kind == at.AST_CALL:
+        if at.KindOf(a, n.a) == at.AST_MEMBER:
+            cc_note_write(a, file, at.Get(a, n.a).a)
+        end
+        repeat at.ChildCount(a, id) with ai:
+            arg := at.Child(a, id, ai)
+            if arg != 0 && at.KindOf(a, arg) == at.AST_IDENTIFIER:
+                at.NotePruned(a, file, at.Get(a, arg).name, true)
+            end
+        end
+    end
+    cc_note_pruned(a, file, n.ty)
+    cc_note_pruned(a, file, n.a)
+    cc_note_pruned(a, file, n.b)
+    cc_note_pruned(a, file, n.c)
+    cc_note_pruned(a, file, n.d)
+    repeat at.ChildCount(a, id) with i0:
+        cc_note_pruned(a, file, at.Child(a, id, i0))
+    end
+    repeat at.DimCount(a, id) with i1:
+        cc_note_pruned(a, file, at.Dim(a, id, i1))
+    end
+    repeat at.CaptureCount(a, id) with i2:
+        cc_note_pruned(a, file, at.Capture(a, id, i2))
+    end
+end
+
 // cc_resolve_if - returns the surviving node id (0 = whole if pruned away).
 func cc_resolve_if(
     a &: at.Ast, log: lg.Logger, file: str, t: Table, id: int, top_level: bool, ok &: bool
@@ -416,6 +488,7 @@ func cc_resolve_if(
     end
     if r.ok:
         taken := r.bval ? n.b : n.c
+        cc_note_pruned(a, file, r.bval ? n.c : n.b)
         if taken == 0:
             ret 0
         end

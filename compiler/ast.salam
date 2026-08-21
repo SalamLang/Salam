@@ -234,6 +234,24 @@ end
 // Node storage: all nodes of one tree, indexed by NodeId (0 = sentinel/none).
 pub struct Ast:
     pub nodes: Vector<Node> = Vector {}
+    // Names that condcomp dropped along with a dead branch, and the subset of
+    // them that the dropped code wrote to. Pruning runs before sema, so a
+    // variable only assigned - or a function only called - inside the branch
+    // this host folds away has no reference left to find by the time the
+    // unused/never-mutated lints run, and E059/E062/E066/E069 fire on code
+    // that is perfectly live on the other host. Sema consults these before
+    // raising one of those four. Names rather than node ids because the nodes
+    // are gone by then; that costs some precision (a same-named symbol
+    // elsewhere in the module is excused too), which only ever silences a
+    // lint, never accepts a program the checker would otherwise reject.
+    pub pruned_names: Vector<str> = Vector {}
+    // The file each pruned_names/pruned_writes entry came from, parallel to
+    // them. Without it a name matched across the whole build: a parameter
+    // called 'b' got no E062 because some condcomp branch in some other file
+    // of std happened to mention a 'b'.
+    pub pruned_files: Vector<str> = Vector {}
+    pub pruned_write_files: Vector<str> = Vector {}
+    pub pruned_writes: Vector<str> = Vector {}
 end
 
 // ===== ast_xml.c (private helpers) =====
@@ -319,6 +337,10 @@ pub func FreeAst(a &: Ast):
         n.captures.free()
     end
     a.nodes.free()
+    a.pruned_names.free()
+    a.pruned_files.free()
+    a.pruned_write_files.free()
+    a.pruned_writes.free()
 end
 
 // Number of node slots, including the id-0 sentinel.
@@ -450,6 +472,73 @@ pub func StampSrcFile(a &: Ast, prog: NodeId, file: str):
         c.src_file = file
         a.nodes.set(cid, c)
     end
+end
+
+// Records `name` as having been mentioned in code condcomp pruned away, and
+// (with `wrote`) as having been assigned there. See Ast.pruned_names.
+pub func NotePruned(a &: Ast, file: str, name: str, wrote: bool):
+    if str.Len(name) == 0:
+        ret
+    end
+    mut seen := false
+    repeat a.pruned_names.len() with i:
+        if str.Equals(a.pruned_names.get(i), name) && str.Equals(a.pruned_files.get(i), file):
+            seen = true
+            break
+        end
+    end
+    if !seen:
+        a.pruned_names.push(name)
+        a.pruned_files.push(file)
+    end
+    if !wrote:
+        ret
+    end
+    repeat a.pruned_writes.len() with j:
+        if str.Equals(a.pruned_writes.get(j), name) && str.Equals(a.pruned_write_files.get(j), file):
+            ret
+        end
+    end
+    a.pruned_writes.push(name)
+    a.pruned_write_files.push(file)
+end
+
+// Whether `name` was mentioned in code condcomp pruned out of `file`.
+//
+// Scoped to one file, because that is the scope the lints it guards work
+// in: a variable's uses and a parameter's uses are inside the function that
+// declares them. Matching bare names across the whole build meant one
+// pruned mention of a short name anywhere in std silently switched E059,
+// E062 and E069 off for every symbol of that name in the program.
+pub func WasPruned(a: Ast, file: str, name: str): bool:
+    repeat a.pruned_names.len() with i:
+        if str.Equals(a.pruned_names.get(i), name) && str.Equals(a.pruned_files.get(i), file):
+            ret true
+        end
+    end
+    ret false
+end
+
+// Whether `name` was mentioned in pruned code ANYWHERE in the build. Only
+// E066 wants this: a function can have its single call site in a branch
+// another file folded away, so that lint really is program-wide.
+pub func WasPrunedAnywhere(a: Ast, name: str): bool:
+    repeat a.pruned_names.len() with i:
+        if str.Equals(a.pruned_names.get(i), name):
+            ret true
+        end
+    end
+    ret false
+end
+
+// Whether pruned-away code in `file` assigned to `name`.
+pub func WasPrunedWrite(a: Ast, file: str, name: str): bool:
+    repeat a.pruned_writes.len() with i:
+        if str.Equals(a.pruned_writes.get(i), name) && str.Equals(a.pruned_write_files.get(i), file):
+            ret true
+        end
+    end
+    ret false
 end
 
 pub func AddDim(a &: Ast, id: NodeId, dim: NodeId):

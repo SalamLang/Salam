@@ -52,6 +52,29 @@ else:
         func readdir(d: void*): void*
         func closedir(d: void*): int
     end
+    if SALAM_OS_LINUX || SALAM_OS_ANDROID:
+        // dirfd on the DIR* opendir already returns, rather than open/close:
+        // fs already has Open/Close of its own for files, and a second pair
+        // of externs by those names collides with them. opendir does not
+        // read any entries until the first readdir, so the descriptor is
+        // still at offset zero when getdents64 takes over.
+        extern:
+            func dirfd(d: void*): int
+        end
+        // syscall() is `long syscall(long, ...)`, and `long` is the pointer
+        // width - so the argument types have to change with it. Declared
+        // non-variadic: integer arguments land in the same registers either
+        // way on x86, x86_64, arm and aarch64.
+        if SALAM_ARCH_X64 || SALAM_ARCH_ARM64:
+            extern:
+                func syscall(nr: i64, a: i64, b: i64, c: i64): i64
+            end
+        else:
+            extern:
+                func syscall(nr: int, a: int, b: int, c: int): int
+            end
+        end
+    end
 end
 
 if SALAM_OS_WINDOWS:
@@ -65,6 +88,11 @@ else:
         func popen(cmd: str, mode: str): void*
         func pclose(fp: void*): int
     end
+end
+
+func _byte_at(base: void*, off: i64): int:
+    p := ((base as i64) + off) as u8*
+    ret p[0] as int
 end
 
 func _strptr(s: str): i64:
@@ -186,46 +214,117 @@ if SALAM_OS_WINDOWS:
         end
     end
 else:
-    if SALAM_OS_MAC:
-        func _dname_off(): i64: ret 21 end
-    else SALAM_OS_BSD:
-        func _dname_off(): i64: ret 24 end
-    else:
-        // 19 only holds where dirent's d_ino and d_off are 8 bytes each.
-        // On 32-bit glibc, plain `readdir` is the non-LFS one: 4 + 4 + 2 + 1
-        // puts d_name at 11, measured with offsetof in an i386 container.
-        // Reading the name 8 bytes late there handed str.EndsWith an
-        // address past the entry, which segfaulted.
-        func _dname_off(): i64:
-            if sizeof(void*) == 4: ret 11 end
-            ret 19
+    // Linux reads directories through getdents64 rather than readdir.
+    //
+    // readdir is the wrong door on a 32-bit glibc. <dirent.h> there
+    // redirects it to readdir64 (Debian armhf builds with
+    // _FILE_OFFSET_BITS=64), but the generated C declares the function
+    // itself and never includes that header, so what actually got called was
+    // the non-LFS readdir - which returns NULL with EOVERFLOW the moment a
+    // directory holds an inode number wider than 32 bits, as an overlayfs
+    // one does. listdir then reported every directory as empty, imports
+    // resolved to nothing, and the build died with "package 'str' has no
+    // exported function 'NewBuilder'" on armhf. i386 happened to have small
+    // inodes and got away with it.
+    //
+    // Going through the syscall sidesteps the whole libc question, and the
+    // kernel's linux_dirent64 has one fixed shape on every architecture:
+    // d_ino(8) d_off(8) d_reclen(2) d_type(1) then the name at 19. No
+    // per-platform offset table, no probing. The syscall numbers below were
+    // read out of <sys/syscall.h> on each architecture rather than recalled.
+    if SALAM_OS_LINUX || SALAM_OS_ANDROID:
+        // if/else, not a run of early returns: condcomp folds the arch
+        // test to a constant, and a `ret` under an always-true `if` makes
+        // everything after it unreachable (E070).
+        if SALAM_ARCH_X86:
+            func _gd_nr(): i64: ret 220 as i64 end
+        else SALAM_ARCH_ARM64:
+            func _gd_nr(): i64: ret 61 as i64 end
+        else:
+            func _gd_nr(): i64: ret 217 as i64 end
         end
-    end
-    extern:
-        func salam_os_listdir(path: str, out_count: void*): void*:
-            oc := out_count as int*
-            mut arr := null as void*
-            mut n := 0
-            cap_box := mem.AllocateZeroed(4 as u64)
-            off := _dname_off()
-            d := opendir(path)
-            if d != null:
-                mut e := readdir(d)
-                until e != null:
-                    np := ((e as i64) + off) as void*
-                    nm := np as str
-                    if _ld_skip(nm) == false:
-                        arr = _ld_push(arr, n, cap_box, nm)
-                        n += 1
-                    end
-                    e = readdir(d)
-                end
-                closedir(d)
+
+        if SALAM_ARCH_X64 || SALAM_ARCH_ARM64:
+            func _getdents(fd: int, buf: void*, cap: int): i64:
+                ret syscall(_gd_nr(), fd as i64, buf as i64, cap as i64)
             end
-            mem.Free(cap_box)
-            if arr == null: arr = mem.Allocate(8 as u64) end
-            oc[0] = n
-            ret arr
+        else:
+            func _getdents(fd: int, buf: void*, cap: int): i64:
+                ret syscall(_gd_nr() as int, fd, (buf as i64) as int, cap) as i64
+            end
+        end
+
+        extern:
+            func salam_os_listdir(path: str, out_count: void*): void*:
+                oc := out_count as int*
+                mut arr := null as void*
+                mut n := 0
+                cap_box := mem.AllocateZeroed(4 as u64)
+                dp := opendir(path)
+                if dp != null:
+                    fd := dirfd(dp)
+                    bcap := 32768
+                    buf := mem.Allocate(bcap as u64)
+                    mut got := _getdents(fd, buf, bcap)
+                    until got > (0 as i64):
+                        mut p := 0 as i64
+                        until p < got:
+                            rl := (_byte_at(buf, p + (16 as i64)) + _byte_at(buf, p + (17 as i64)) * 256) as i64
+                            if rl < (1 as i64):
+                                break
+                            end
+                            nm := (((buf as i64) + p + (19 as i64)) as void*) as str
+                            if _ld_skip(nm) == false:
+                                arr = _ld_push(arr, n, cap_box, nm)
+                                n += 1
+                            end
+                            p += rl
+                        end
+                        got = _getdents(fd, buf, bcap)
+                    end
+                    mem.Free(buf)
+                    closedir(dp)
+                end
+                mem.Free(cap_box)
+                if arr == null: arr = mem.Allocate(sizeof(str) as u64) end
+                oc[0] = n
+                ret arr
+            end
+        end
+    else:
+        // macOS and the BSDs keep readdir: their struct dirent is already
+        // 64-bit clean, and each has its own d_name offset.
+        if SALAM_OS_MAC:
+            func _dname_off(): i64: ret 21 end
+        else:
+            func _dname_off(): i64: ret 24 end
+        end
+        extern:
+            func salam_os_listdir(path: str, out_count: void*): void*:
+                oc := out_count as int*
+                mut arr := null as void*
+                mut n := 0
+                cap_box := mem.AllocateZeroed(4 as u64)
+                off := _dname_off()
+                d := opendir(path)
+                if d != null:
+                    mut e := readdir(d)
+                    until e != null:
+                        np := ((e as i64) + off) as void*
+                        nm := np as str
+                        if _ld_skip(nm) == false:
+                            arr = _ld_push(arr, n, cap_box, nm)
+                            n += 1
+                        end
+                        e = readdir(d)
+                    end
+                    closedir(d)
+                end
+                mem.Free(cap_box)
+                if arr == null: arr = mem.Allocate(sizeof(str) as u64) end
+                oc[0] = n
+                ret arr
+            end
         end
     end
 end

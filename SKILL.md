@@ -720,8 +720,9 @@ Ctx_status Ctx_set_header Ctx_redirect`. Also a canvas/DOM JS-interop surface.
   before the last `router.Get`) - print them at startup, or assert on them in
   a test; `Free(doc)` releases it. Serving: `Mount(doc, r, "/docs")` on the
   server the API already runs on, or `Serve(doc, port)` on a port of its own
-  (returns once bound, runs on its own thread). `MountSpec`/`ServeSpec`/`SpecFromFile` render an
-  OpenAPI document from anywhere; `Page(title, spec_url)` is the page itself,
+  (returns once bound, runs on its own thread).
+  `MountSpec`/`ServeSpec`/`SpecFromFile` render an OpenAPI document from
+  anywhere; `Page(title, spec_url)` is the page itself,
   self-contained with no CDN - an empty `spec_url` means "next to this page".
 - **`tcp`** (`Bind Accept Read Write Close Ok ConnOk`), **`socket`** (WebSocket),
   **`ssl`**, **`net`**, **`dom`**/**`console`** (browser/JS targets),

@@ -85,7 +85,11 @@ if [ "${1:-}" = "--worker" ]; then
         # and runs the session from there, and :save writes there too.
         jobdir="$WORK/repljob_${jobid}_$$"
         mkdir -p "$jobdir"
-        got=$( (cd "$jobdir" && tmo "${SALAM_TEST_TIMEOUT:-180}" "$SALAM_ABS" cli --lang="$lang" --no-color --log-level=error <"$fabs" 2>&1) | tr -d '\r')
+        # 600s, not the 180 this started with: every turn of a session shells
+        # out to a whole build, and eight workers compiling at once stretch
+        # each of those. At 180 the section passed when run alone and timed
+        # out inside a full run.
+        got=$( (cd "$jobdir" && tmo "${SALAM_TEST_TIMEOUT:-600}" "$SALAM_ABS" cli --lang="$lang" --no-color --log-level=error <"$fabs" 2>&1) | tr -d '\r')
         rm -rf "$jobdir"
         wk_check "$expabs" "$got"
     }

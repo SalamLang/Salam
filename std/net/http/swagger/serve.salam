@@ -50,23 +50,64 @@ struct _Mount:
     pub spec_path: str = ""
     pub title: str = ""
     pub spec: str = ""
+    // The port Serve bound, or 0 for a mount on a router the caller owns -
+    // that one answers on whatever port its server ends up listening on, so
+    // it matches any.
+    pub port: int = 0
 end
 
-// The mount whose UI path is exactly `path`, or -1.
-func _ui_at(path: str): int:
-    repeat _mounts.len() with i:
-        m := _mounts.get(i)
-        if str.Equals(m.prefix, path) || str.Equals(m.prefix.concat("/"), path):
-            ret i
+// Two documents can be mounted at the same path - `Serve(a, 8091)` and
+// `Serve(b, 8092)` both put a page at "/" - so the path alone does not say
+// which one a request wants. The port it arrived on does, and the Host header
+// carries it.
+func _host_port(host: str): int:
+    colon := str.LastIndex(host, ":")
+    if colon < 0 || colon == host.len() - 1:
+        ret 0
+    end
+    tail := host.substr(colon + 1, host.len() - colon - 1)
+    // A bare IPv6 literal is all colons and hex - "[::1]" has a last colon
+    // with no port after it - so the tail has to be digits before it can be
+    // read as one.
+    repeat tail.len() with i:
+        c := tail.substr(i, 1)
+        if c < "0" || c > "9":
+            ret 0
         end
     end
-    ret 0 - 1
+    ret tail.to_int()
 end
 
-func _spec_at(path: str): int:
-    repeat _mounts.len() with i:
-        if str.Equals(_mounts.get(i).spec_path, path):
-            ret i
+func _path_matches(m: _Mount, path: str, want_spec: bool): bool:
+    if want_spec:
+        ret str.Equals(m.spec_path, path)
+    end
+    ret str.Equals(m.prefix, path) || str.Equals(m.prefix.concat("/"), path)
+end
+
+// The mount this request wants: the one bound to the port it arrived on if
+// there is one, then a router mount (which answers on any port), then - for a
+// Host header that carried no port, such as a request through a proxy on 80 -
+// whichever matched the path first.
+func _mount_for(path: str, host: str, want_spec: bool): int:
+    port := _host_port(host)
+    if port > 0:
+        repeat _mounts.len() with i:
+            m := _mounts.get(i)
+            if m.port == port && _path_matches(m, path, want_spec):
+                ret i
+            end
+        end
+    end
+    repeat _mounts.len() with j:
+        m2 := _mounts.get(j)
+        if m2.port == 0 && _path_matches(m2, path, want_spec):
+            ret j
+        end
+    end
+    repeat _mounts.len() with k:
+        if _path_matches(_mounts.get(k), path, want_spec):
+            ret k
         end
     end
     ret 0 - 1
@@ -112,18 +153,21 @@ func _relative_spec_url(prefix: str): str:
     ret leaf.concat("/openapi.json")
 end
 
-func _register(prefix: str, title: str, spec: str): int:
+func _register(prefix: str, port: int, title: str, spec: str): int:
     p := _clean_prefix(prefix)
-    sp := _spec_path_for(p)
+    entry := _Mount {
+        prefix = p, spec_path = _spec_path_for(p), title = title, spec = spec, port = port
+    }
     repeat _mounts.len() with i:
-        if str.Equals(_mounts.get(i).prefix, p):
-            // Remounting the same prefix replaces what is there rather than
+        m := _mounts.get(i)
+        if str.Equals(m.prefix, p) && m.port == port:
+            // Remounting the same place replaces what is there rather than
             // adding a second entry the lookups would never reach.
-            _mounts.set(i, _Mount { prefix = p, spec_path = sp, title = title, spec = spec })
+            _mounts.set(i, entry)
             ret i
         end
     end
-    _mounts.push(_Mount { prefix = p, spec_path = sp, title = title, spec = spec })
+    _mounts.push(entry)
     ret _mounts.len() - 1
 end
 
@@ -131,7 +175,7 @@ end
 // on a router, and both find their document by the path of the request that
 // reached them.
 func _handle_ui(ctx: i64):
-    i := _ui_at(http.Ctx_path(ctx))
+    i := _mount_for(http.Ctx_path(ctx), http.Ctx_header(ctx, "Host"), false)
     if i < 0:
         http.Ctx_status(ctx, 404)
         http.Ctx_text(ctx, "404 Not Found")
@@ -142,7 +186,7 @@ func _handle_ui(ctx: i64):
 end
 
 func _handle_spec(ctx: i64):
-    i := _spec_at(http.Ctx_path(ctx))
+    i := _mount_for(http.Ctx_path(ctx), http.Ctx_header(ctx, "Host"), true)
     if i < 0:
         http.Ctx_status(ctx, 404)
         http.Ctx_json(ctx, "{\"error\":\"not found\"}")
@@ -186,7 +230,7 @@ end
 @fa "نصب"
 @ar "تركیب"
 pub func Mount(d: Doc, r &: router.Router, prefix: str):
-    _reg := _register(prefix, d.title, Spec(d))
+    _reg := _register(prefix, 0, d.title, Spec(d))
     _mount_routes(r, prefix)
 end
 
@@ -196,7 +240,7 @@ end
 @fa "نصب مشخصات"
 @ar "تركیب المواصفات"
 pub func MountSpec(spec: str, title: str, r &: router.Router, prefix: str):
-    _reg := _register(prefix, title, spec)
+    _reg := _register(prefix, 0, title, spec)
     _mount_routes(r, prefix)
 end
 
@@ -216,7 +260,7 @@ end
 @fa "سرو"
 @ar "خدمة"
 pub func Serve(d: Doc, port: int): bool:
-    _reg := _register("/", d.title, Spec(d))
+    _reg := _register("/", port, d.title, Spec(d))
     ret _serve_on("/", port)
 end
 
@@ -225,7 +269,7 @@ end
 @fa "سرو مشخصات"
 @ar "خدمة المواصفات"
 pub func ServeSpec(spec: str, title: str, port: int): bool:
-    _reg := _register("/", title, spec)
+    _reg := _register("/", port, title, spec)
     ret _serve_on("/", port)
 end
 

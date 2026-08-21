@@ -1,12 +1,12 @@
 package ir.salamlang.app
 
-import android.Manifest
 import android.annotation.SuppressLint
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -14,9 +14,9 @@ import android.os.Message
 import android.util.Log
 import android.view.View
 import android.view.ViewGroup
+import android.view.animation.DecelerateInterpolator
 import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
-import android.webkit.GeolocationPermissions
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
@@ -24,7 +24,6 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import android.view.animation.DecelerateInterpolator
 import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.ImageView
@@ -33,7 +32,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.core.content.ContextCompat
+import androidx.annotation.RequiresApi
 import androidx.core.net.toUri
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.core.view.ViewCompat
@@ -53,22 +52,9 @@ class MainActivity : ComponentActivity() {
     private val splashTimeoutRunnable = Runnable { hideSplash() }
     private var splashHidden = false
 
-    private var geolocationOrigin: String? = null
-    private var geolocationCallback: GeolocationPermissions.Callback? = null
-
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
 
     private var popupWebView: WebView? = null
-
-    private val locationPermissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
-            val granted =
-                result[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
-                    result[Manifest.permission.ACCESS_COARSE_LOCATION] == true
-            geolocationCallback?.invoke(geolocationOrigin.orEmpty(), granted, false)
-            geolocationCallback = null
-            geolocationOrigin = null
-        }
 
     private val fileChooserLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -147,7 +133,6 @@ class MainActivity : ComponentActivity() {
         settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
-            setGeolocationEnabled(true)
             javaScriptCanOpenWindowsAutomatically = true
             setSupportMultipleWindows(true)
             loadWithOverviewMode = true
@@ -240,15 +225,6 @@ class MainActivity : ComponentActivity() {
             },
         )
     }
-
-    private fun hasLocationPermission(): Boolean =
-        ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) ==
-            PackageManager.PERMISSION_GRANTED ||
-            ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.ACCESS_COARSE_LOCATION,
-            ) ==
-            PackageManager.PERMISSION_GRANTED
 
     private fun hideSplash() {
         if (splashHidden) return
@@ -346,15 +322,24 @@ class MainActivity : ComponentActivity() {
     }
 
     private inner class SalamWebViewClient : WebViewClient() {
-        override fun shouldOverrideUrlLoading(
-            view: WebView,
-            request: WebResourceRequest,
-        ): Boolean {
-            val url = request.url
-            Log.d(TAG, "shouldOverride: $url (mainFrame=${request.isForMainFrame})")
-            return when (url.scheme?.lowercase()) {
-                "http", "https" -> {
+        // Both spellings delegate here so the two can never drift apart.
+        // The framework calls exactly one of them: the request-based
+        // override only exists from API 24, so on 21-23 the deprecated
+        // String form below is the only one that ever fires - without it
+        // those releases would hand tel:/mailto:/intent: links to the
+        // WebView itself, which cannot open them.
+        private fun routeUrl(url: Uri): Boolean =
+            when (url.scheme?.lowercase()) {
+                "https" -> {
                     false
+                }
+
+                // android:usesCleartextTraffic="false" is only honoured from API 23, so on 21
+                // and 22 nothing stops a plain http navigation. Refusing it here ourselves keeps
+                // one behaviour across the whole supported range.
+                "http" -> {
+                    Log.w(TAG, "blocked cleartext navigation: $url")
+                    true
                 }
 
                 else -> {
@@ -362,6 +347,23 @@ class MainActivity : ComponentActivity() {
                     true
                 }
             }
+
+        override fun shouldOverrideUrlLoading(
+            view: WebView,
+            request: WebResourceRequest,
+        ): Boolean {
+            Log.d(TAG, "shouldOverride: ${request.url} (mainFrame=${request.isForMainFrame})")
+            return routeUrl(request.url)
+        }
+
+        @Deprecated("Superseded by the WebResourceRequest form on API 24+; kept for 21-23.")
+        override fun shouldOverrideUrlLoading(
+            view: WebView,
+            url: String?,
+        ): Boolean {
+            Log.d(TAG, "shouldOverride (legacy): $url")
+            if (url == null) return false
+            return routeUrl(url.toUri())
         }
 
         override fun onPageFinished(
@@ -372,6 +374,9 @@ class MainActivity : ComponentActivity() {
             hideSplash()
         }
 
+        // The framework only dispatches this form from API 23 up; the legacy overload below
+        // covers 21 and 22. WebResourceError itself is API 23, hence the annotation.
+        @RequiresApi(Build.VERSION_CODES.M)
         override fun onReceivedError(
             view: WebView,
             request: WebResourceRequest,
@@ -386,6 +391,26 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        // The request-based form above starts at API 23, so on 21-22 this
+        // is what reports a failed load. It has no isForMainFrame: the
+        // older callback is only raised for the main frame anyway, which
+        // is exactly the case that should show the retry screen.
+        @Deprecated("Superseded by the WebResourceRequest form on API 23+; kept for 21-22.")
+        override fun onReceivedError(
+            view: WebView,
+            errorCode: Int,
+            description: String?,
+            failingUrl: String?,
+        ) {
+            Log.w(TAG, "onReceivedError (legacy): $failingUrl code=$errorCode '$description'")
+            if (view === webView) {
+                showError()
+            }
+        }
+
+        // API 23 and up only. Before 23 WebView never surfaced http status codes to the
+        // client at all, so there is nothing to fall back to; a 4xx or 5xx page just renders
+        // as the server sent it. Nothing here touches an API above 21, so no annotation.
         override fun onReceivedHttpError(
             view: WebView,
             request: WebResourceRequest,
@@ -411,24 +436,6 @@ class MainActivity : ComponentActivity() {
                 "console[${message.messageLevel()}]: ${message.message()} (${message.sourceId()}:${message.lineNumber()})",
             )
             return true
-        }
-
-        override fun onGeolocationPermissionsShowPrompt(
-            origin: String,
-            callback: GeolocationPermissions.Callback,
-        ) {
-            if (hasLocationPermission()) {
-                callback.invoke(origin, true, false)
-            } else {
-                geolocationOrigin = origin
-                geolocationCallback = callback
-                locationPermissionLauncher.launch(
-                    arrayOf(
-                        Manifest.permission.ACCESS_FINE_LOCATION,
-                        Manifest.permission.ACCESS_COARSE_LOCATION,
-                    ),
-                )
-            }
         }
 
         override fun onShowFileChooser(

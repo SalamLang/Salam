@@ -219,7 +219,7 @@ jobs:
           # First release that collapses "seg/../", forward-declares the
           # cross-package callees of a generic instantiation, and lowers
           # `each` over a Vector to a value-returning get.
-          SEED_MIN: '0.3.0'
+          SEED_MIN: '0.3.1'
         run: |
           set -eu
           newest=$(printf '%s\n%s\n' "$SEED_MIN" "$SEED_VERSION" |
@@ -229,19 +229,15 @@ jobs:
             echo "SALAM_SEED=$HOME/.salam/bin/salam" >> "$GITHUB_ENV"
             exit 0
           fi
-          echo "::warning::seed $SEED_VERSION predates $SEED_MIN and cannot" \
-            "resolve compiler/'s ../ imports - building stage 0 from c/ instead"
-          # WITH_LLVM=0: stage 0 only has to lower compiler/main.salam
-          # through the C backend, and bootstrap.sh hands the LLVM flags to
-          # stage 2 onwards anyway. Left to default, the Makefile would link
-          # in whatever llvm-config the runner happens to have - minutes of
-          # link time and a dependency on system libs, for nothing.
-          make -C c WITH_LLVM=0 WITH_LLD=0 \
-            -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)"
-          "$GITHUB_WORKSPACE/salam" version > stage0-version.txt
-          head -1 stage0-version.txt
-          rm -f stage0-version.txt
-          echo "SALAM_SEED=$GITHUB_WORKSPACE/salam" >> "$GITHUB_ENV"
+          # This used to fall back to `make -C c`, which no longer exists.
+          # There is no other way to get a stage 0: the compiler is written in
+          # its own language, and a seed older than SEED_MIN cannot resolve
+          # compiler/'s ../ imports. Failing loudly beats bootstrapping from
+          # something that cannot parse the sources.
+          echo "::error::seed $SEED_VERSION predates $SEED_MIN and cannot resolve" \
+            "compiler/'s ../ imports. Publish a $SEED_MIN or newer release, or" \
+            "point SALAM_SEED at a newer binary."
+          exit 1
 
       # Static in-process LLVM/LLD for the self-hosted compiler, so stage2
       # lowers IR itself instead of shelling out to a clang/lld the user
@@ -274,9 +270,8 @@ jobs:
         with:
           path: libsalam_llvm.a
           key: >-
-            salam-llvm-a-${{ matrix.os }}-llvm22-${{ hashFiles('c/Makefile',
-            'c/src/llvm/**', 'c/src/core/*.h', 'c/src/semantic/*.h',
-            'c/src/i18n/*.h', 'c/src/logger/*.h', 'c/src/diag/*.h') }}
+            salam-llvm-a-${{ matrix.os }}-llvm22-${{ hashFiles(
+            'std/llvm/native/**') }}
 
       # Only useful on a miss, and only for the handful of objects that are
       # actually compiled (orc_call.c, lld_stub.c, lld_link.cc); the bulk of
@@ -408,10 +403,12 @@ jobs:
             ;;
           esac
           echo "lld: ${LLD_ARGS:-(autodetect)}"
+          # LLD_ARGS carried the Makefile's WITH_LLD/LLD_EXTRA_LIBDIR pair;
+          # the script takes them as environment instead.
           # shellcheck disable=SC2086 # deliberately unquoted: empty = omit
-          if make -C c libsalam-llvm -j2 WITH_LLVM=1 $LLD_ARGS \
-            LLVM_LINK_STATIC=1 LLVM_CONFIG="$LLVM_CONFIG" \
-            CC="$C_COMPILER" CXX="$CXX_COMPILER"; then
+          if env $LLD_ARGS CC="$C_COMPILER" CXX="$CXX_COMPILER" \
+            sh std/llvm/native/build.sh --llvm-config "$LLVM_CONFIG" \
+            --out "$GITHUB_WORKSPACE"; then
             # The merged archive carries LLVM's own DWARF, which nothing here
             # ever reads: it describes LLVM's internals, not the user program
             # being compiled. Dropping it is the single biggest lever on this

@@ -92,7 +92,7 @@ build_salam() {
     fi
     [ -n "${SALAM_BIN:-}" ] && [ -x "$SALAM_BIN" ] ||
         {
-            echo "no salam binary (run: make -C c)" >&2
+            echo "no salam binary (run: sh tools/bash/build-selfhost.sh)" >&2
             exit 1
         }
     say "building httpbench with $SALAM_BIN"

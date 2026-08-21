@@ -54,7 +54,15 @@ func lv_addr_of(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): LvAddr:
                 ret ra2
             end
         end
-        gi := global_find(v, nm)
+        // The enclosing function's own package first. An unqualified name can
+        // only mean this package's global (or an extern, which carries no
+        // package), so a same-named global in some other package must not win
+        // the lookup just by having been emitted earlier.
+        mut curpkg := pkg_of_scope(s, v.pkg_scope)
+        if str.Len(curpkg) == 0:
+            curpkg = "main"
+        end
+        gi := global_find_in(v, curpkg, nm)
         if gi >= 0:
             gv := v.globals.get(gi)
             mut ra3 := LvAddr {}
@@ -87,7 +95,7 @@ func lv_addr_of(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): LvAddr:
                 continue
             end
             touch_pkg(v, s, a, tpk)
-            tgf := global_find(v, nm)
+            tgf := global_find_in(v, sm.SymAt(s, tpk).pkgname, nm)
             if tgf >= 0:
                 tgvar := v.globals.get(tgf)
                 mut ra5 := LvAddr {}
@@ -115,8 +123,11 @@ func lv_addr_of(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): LvAddr:
             if pgk != 0:
                 pgy := sm.SymAt(s, pgk)
                 if pgy.kind == sm.SYM_PACKAGE && pgy.decl != 0:
+                    saved_ps := v.pkg_scope
+                    v.pkg_scope = pgy.members
                     emit_globals(v, s, a, pgy.decl)
-                    pgf := global_find(v, nm)
+                    v.pkg_scope = saved_ps
+                    pgf := global_find_in(v, pgy.pkgname, nm)
                     if pgf >= 0:
                         pgv := v.globals.get(pgf)
                         mut ra6 := LvAddr {}
@@ -127,6 +138,15 @@ func lv_addr_of(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): LvAddr:
                 end
             end
             pgi += 1
+        end
+        // Last chance: an extern global, which belongs to no package.
+        xgi := global_find(v, nm)
+        if xgi >= 0:
+            xgv := v.globals.get(xgi)
+            mut ra7 := LvAddr {}
+            ra7.ptr = xgv.ptr
+            ra7.ts = xgv.ts
+            ret ra7
         end
         lv_error(v, a, n, "address of an unknown identifier '" + nm + "'")
         mut ra4 := LvAddr {}
@@ -774,6 +794,30 @@ end
 // form exists - and skipping it here left `@salam_com_addref` with neither a
 // declare nor a define anywhere in the module ("use of undefined value").
 func lv_func_symbol(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, name: str): str:
+    // `pkg.f` as a value: the function is in the package's member scope and
+    // mangles with the package that declared it, not the reading one.
+    pkgid := at.Get(a, n).a
+    if pkgid != 0 && at.KindOf(a, pkgid) == at.AST_IDENTIFIER:
+        pk := sym_of(v, s, a, at.Get(a, pkgid).name)
+        if pk != 0 && sm.SymAt(s, pk).kind == sm.SYM_PACKAGE && sm.SymAt(s, pk).members != 0:
+            m := sm.LookupLocal(s, sm.SymAt(s, pk).members, name)
+            if m != 0 && sm.SymAt(s, m).kind == sm.SYM_FUNC && sm.SymAt(s, m).overloads.len() == 1:
+                msig := sm.SymAt(s, m).overloads.get(0)
+                if msig != 0 && sm.SigAt(s, msig).decl != 0:
+                    saved := v.pkg_scope
+                    touch_pkg(v, s, a, pk)
+                    v.pkg_scope = sm.SymAt(s, pk).members
+                    ensure_fn(v, s, a, sm.SigAt(s, msig).decl, 0, sm.SymAt(s, pk).members)
+                    mut msym := name
+                    if !at.Get(a, sm.SigAt(s, msig).decl).is_extern:
+                        msym = mangle(v, s, "", name, msig)
+                    end
+                    v.pkg_scope = saved
+                    ret msym
+                end
+            end
+        end
+    end
     fsym := sym_of(v, s, a, name)
     if fsym == 0 || sm.SymAt(s, fsym).kind != sm.SYM_FUNC || sm.SymAt(s, fsym).overloads.len() != 1:
         lv_error(v, a, n, "cannot take the address of '" + name + "'")
@@ -910,6 +954,16 @@ func lv_expr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
         ret lv_call(v, s, a, n)
     end
     if k == at.AST_MEMBER:
+        // `pkg.f` read as a value (sema set func_value): its address, i64.
+        if node.func_value:
+            mfsym := lv_func_symbol(v, s, a, n, node.name)
+            if str.Len(mfsym) == 0:
+                ret poison("i64")
+            end
+            rmf := new_tmp(v)
+            emit(v, rmf + " = ptrtoint ptr @" + mfsym + " to i64")
+            ret make_llv(rmf, "i64")
+        end
         if node.a != 0 && at.KindOf(a, node.a) == at.AST_IDENTIFIER:
             e := enum_sym(v, s, a, at.Get(a, node.a).name)
             if e != 0:

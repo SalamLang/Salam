@@ -77,7 +77,13 @@ import pf "../prof_self.salam"
         // driver_llvm_build(opt);` - NOT a bare driver_llvm call (that would
         // skip setting llvm_emit from opt->command). LlvmBuild (below, in the
         // public section) is that wrapper.
-        if str.Len(opt.llvm_target) > 0:
+        // ...unless the C backend was asked for by name. `--backend=c
+        // --target=X` then means "emit C conditioned for X", which is how
+        // the wasm build gets browser code: emcc compiles the result, and
+        // without the triple the condcomp table would be built from the
+        // HOST's defines and every SALAM_OS_WASM arm would be pruned away
+        // on a Linux runner.
+        if str.Len(opt.llvm_target) > 0 && !str.Equals(opt.backend, "c"):
             ret LlvmBuild(opt)
         end
 
@@ -275,6 +281,19 @@ import pf "../prof_self.salam"
         defer links.free()
         defer link_kinds.free()
 
+        // The static third-party libs this binary carries for its own host, so
+        // `link dynamic "sqlite3"` and friends resolve without the user having
+        // installed the dev packages. Added to lib_paths once, ahead of both
+        // link-command builders below; an explicit --libpath still wins,
+        // since those are emitted first. This path is native-only - a
+        // --target= build is redirected to the LLVM driver long before here,
+        // which picks the matching per-target set instead.
+        mut hostlibs := ""
+        if EmbeddedExtralibs("", hostlibs):
+            opt.lib_paths.push(hostlibs)
+            lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "using embedded static third-party libs: " + hostlibs)
+        end
+
         mut defs := Vector {} as Vector<str>
         defer defs.free()
         repeat opt.defines.len() with di0:
@@ -366,7 +385,7 @@ import pf "../prof_self.salam"
                 continue
             end
 
-            table := cc.TableBuild("", defs)
+            table := cc.TableBuild(opt.llvm_target, defs)
             modpack := lx.Detect(sf, pack)
             modentry := lp.Entry(modpack)
 
@@ -504,6 +523,12 @@ import pf "../prof_self.salam"
                 if str.Len(ipath) == 0:
                     continue
                 end
+                // Normalized before the dedupe, not after: the same file can
+                // be reached as `std/mem/mem.salam` from one importer and
+                // `./std/mem/mem.salam` from another, and comparing the raw
+                // spellings queued it twice - two identical modules on the
+                // link line, and every global in them "multiple definition".
+                ipath = pth.PathNormalize(ipath)
                 mut known := false
                 repeat work.len() with wj:
                     if str.Equals(work.get(wj), ipath):
@@ -657,6 +682,12 @@ import pf "../prof_self.salam"
                 end
             end
             ret 1
+        end
+
+        // --emit-c stops here: the sources are on disk and a host C compiler
+        // has no business trying to build them for a foreign target.
+        if opt.emit_c:
+            ret 0
         end
 
         mut crc := 0

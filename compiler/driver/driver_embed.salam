@@ -1,0 +1,189 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Embedded sysroots - the self-hosted half of what c/Makefile's embed_musl_arch
+// and embed_mingw_arch macros produce.
+//
+// tools/bash/build-embed.sh tars a staged sysroot, emits a tiny .S that
+// .incbin's it and exports a pointer and a length, and archives the result as
+// libsalam_embed.a. A build that links that archive defines the matching
+// SALAM_HAVE_EMBED_* macro, and the arms below become reachable; a build that
+// does not gets the else arm, an empty answer, and the ordinary
+// $SALAM_SYSROOTS / system-package lookup carries on as before.
+//
+// Pointer + length rather than a str on purpose: tar data is full of NUL bytes
+// and Salam's str ends at the first one. See MaterializeSysroot.
+package driver
+
+import str
+
+// One gate, not one per target, and it sits at the top level: a custom -D macro
+// is only folded by condcomp in a plain top-level `if`, never inside a function
+// body (the built-in SALAM_OS_* flags are the ones that work anywhere). Same
+// shape llvm_bridge.salam uses for SALAM_HAVE_LLVM.
+//
+// The archive always defines all six pairs, zero-filled for any target that was
+// not staged, so this side never has to know which ones are real.
+if SALAM_HAVE_EMBED:
+    link static "salam_embed"
+
+    extern:
+        salam_embed_musl_x86_64_ptr: void*
+        salam_embed_musl_x86_64_len: i64
+        salam_embed_musl_aarch64_ptr: void*
+        salam_embed_musl_aarch64_len: i64
+        salam_embed_musl_i686_ptr: void*
+        salam_embed_musl_i686_len: i64
+        salam_embed_musl_arm_ptr: void*
+        salam_embed_musl_arm_len: i64
+        salam_embed_mingw_x86_64_ptr: void*
+        salam_embed_mingw_x86_64_len: i64
+        salam_embed_mingw_i686_ptr: void*
+        salam_embed_mingw_i686_len: i64
+        salam_embed_hostlibs_ptr: void*
+        salam_embed_hostlibs_len: i64
+        salam_embed_extralibs_x86_64_linux_musl_ptr: void*
+        salam_embed_extralibs_x86_64_linux_musl_len: i64
+        salam_embed_extralibs_aarch64_linux_musl_ptr: void*
+        salam_embed_extralibs_aarch64_linux_musl_len: i64
+        salam_embed_extralibs_i686_linux_musl_ptr: void*
+        salam_embed_extralibs_i686_linux_musl_len: i64
+        salam_embed_extralibs_arm_linux_musleabihf_ptr: void*
+        salam_embed_extralibs_arm_linux_musleabihf_len: i64
+        salam_embed_extralibs_x86_64_w64_windows_gnu_ptr: void*
+        salam_embed_extralibs_x86_64_w64_windows_gnu_len: i64
+    end
+
+    // The blob for a sysroot directory name, if this binary carries one.
+    // `name` is the spelling FindSysroot uses (x86_64-w64-mingw32,
+    // x86_64-linux-musl, ...).
+    func embedded_blob(name: str, ptr &: void*, len &: i64): bool:
+        if str.Equals(name, "x86_64-linux-musl"):
+            ptr = salam_embed_musl_x86_64_ptr
+            len = salam_embed_musl_x86_64_len
+        else str.Equals(name, "aarch64-linux-musl"):
+            ptr = salam_embed_musl_aarch64_ptr
+            len = salam_embed_musl_aarch64_len
+        else str.Equals(name, "i686-linux-musl"):
+            ptr = salam_embed_musl_i686_ptr
+            len = salam_embed_musl_i686_len
+        else str.Equals(name, "arm-linux-musleabihf"):
+            ptr = salam_embed_musl_arm_ptr
+            len = salam_embed_musl_arm_len
+        else str.Equals(name, "x86_64-w64-mingw32"):
+            ptr = salam_embed_mingw_x86_64_ptr
+            len = salam_embed_mingw_x86_64_len
+        else str.Equals(name, "i686-w64-mingw32"):
+            ptr = salam_embed_mingw_i686_ptr
+            len = salam_embed_mingw_i686_len
+        else str.Equals(name, "hostlibs"):
+            ptr = salam_embed_hostlibs_ptr
+            len = salam_embed_hostlibs_len
+        else str.Equals(name, "extralibs-x86_64-linux-musl"):
+            ptr = salam_embed_extralibs_x86_64_linux_musl_ptr
+            len = salam_embed_extralibs_x86_64_linux_musl_len
+        else str.Equals(name, "extralibs-aarch64-linux-musl"):
+            ptr = salam_embed_extralibs_aarch64_linux_musl_ptr
+            len = salam_embed_extralibs_aarch64_linux_musl_len
+        else str.Equals(name, "extralibs-i686-linux-musl"):
+            ptr = salam_embed_extralibs_i686_linux_musl_ptr
+            len = salam_embed_extralibs_i686_linux_musl_len
+        else str.Equals(name, "extralibs-arm-linux-musleabihf"):
+            ptr = salam_embed_extralibs_arm_linux_musleabihf_ptr
+            len = salam_embed_extralibs_arm_linux_musleabihf_len
+        else str.Equals(name, "extralibs-x86_64-w64-windows-gnu"):
+            ptr = salam_embed_extralibs_x86_64_w64_windows_gnu_ptr
+            len = salam_embed_extralibs_x86_64_w64_windows_gnu_len
+        else:
+            ret false
+        end
+        ret ptr != null && len > (0 as i64)
+    end
+
+    // The sysroot directory name a target triple maps to. mingw spellings come
+    // from sema (the same ones FindSysroot looks up on disk); musl ones are
+    // built here, because a musl sysroot is resolved further down in
+    // std/llvm/linker.salam rather than by FindSysroot, and that path only
+    // ever sees an already-resolved directory.
+    func sysroot_name(triple: str): str:
+        if str.Contains(triple, "linux-musl") || str.Contains(triple, "musleabihf"):
+            if str.Contains(triple, "aarch64") || str.Contains(triple, "arm64"):
+                ret "aarch64-linux-musl"
+            end
+            if str.Contains(triple, "musleabihf") || str.Contains(triple, "armv7"):
+                ret "arm-linux-musleabihf"
+            end
+            if str.Contains(triple, "i686") || str.Contains(triple, "i386"):
+                ret "i686-linux-musl"
+            end
+            ret "x86_64-linux-musl"
+        end
+        ret ""
+    end
+
+    // EmbeddedSysroot - unpacks this binary's own copy of `name` into the cache
+    // and hands back the directory, or false when it carries none. Called only
+    // after the ordinary lookup came up empty, so an explicit $SALAM_SYSROOTS
+    // or a system package still wins.
+    pub func EmbeddedSysroot(name: str, out &: str): bool:
+        mut p := null as void*
+        mut n := 0 as i64
+        if !embedded_blob(name, p, n):
+            ret false
+        end
+        ret MaterializeSysroot(name, p, n, out)
+    end
+
+    // EmbeddedSysrootFor - the embedded sysroot for a triple, mingw or musl.
+    pub func EmbeddedSysrootFor(triple: str, mingw_name: str, out &: str): bool:
+        if str.Len(mingw_name) > 0 && EmbeddedSysroot(mingw_name, out):
+            ret true
+        end
+        musl := sysroot_name(triple)
+        if str.Len(musl) > 0:
+            ret EmbeddedSysroot(musl, out)
+        end
+        ret false
+    end
+
+    // EmbeddedExtralibs - the static sqlite3/openssl/hiredis/mariadb set for a
+    // target, or for this host when `triple` is empty. Unpacked into the cache
+    // and handed back as a directory the caller adds to the link's -L list.
+    pub func EmbeddedExtralibs(triple: str, out &: str): bool:
+        mut name := "hostlibs"
+        if str.Len(triple) > 0:
+            name = "extralibs-" + triple
+        end
+        mut p := null as void*
+        mut n := 0 as i64
+        if !embedded_blob(name, p, n):
+            ret false
+        end
+        ret MaterializeSysroot(name, p, n, out)
+    end
+else:
+    // No embedded sysroots in this build; the caller falls through to
+    // $SALAM_SYSROOTS and the system packages exactly as before.
+    pub func EmbeddedSysroot(_name: str, _out &: str): bool:
+        ret false
+    end
+
+    pub func EmbeddedExtralibs(_triple: str, _out &: str): bool:
+        ret false
+    end
+
+    pub func EmbeddedSysrootFor(_triple: str, _mingw_name: str, _out &: str): bool:
+        ret false
+    end
+end

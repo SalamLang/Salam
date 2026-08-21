@@ -57,7 +57,7 @@ mkdir -p "$OUT_DIR"
 # and blank lines while leaving the token stream identical (verified across
 # all stdlib files), worth another ~500 KB the browser would download and
 # then discard, since the lexer drops that trivia anyway.
-STD_MIN="$(pwd)/c/build/std-min"
+STD_MIN="$(pwd)/.wasm-build/std-min"
 rm -rf "$STD_MIN"
 mkdir -p "$STD_MIN"
 (
@@ -69,17 +69,41 @@ mkdir -p "$STD_MIN"
 )
 "$SALAM" format --minify -r "$STD_MIN" >/dev/null
 echo "staged minified stdlib preload image at $STD_MIN"
-SRC_DIRS="core source logger xml condcomp token langpack i18n lexer ast parser
-        diag semantic interp layout minify codegen llvm jsgen web"
-SRCS=""
-for d in $SRC_DIRS; do SRCS="$SRCS c/src/$d/*.c"; done
-# js_build.c only, not all of src/driver: it is the bundler that turns jsgen's
-# per-module output into one runnable program (prelude, globals, entry call),
-# which is exactly what salam_web_compile_js needs. The rest of the driver
-# shells out to a C toolchain and has no meaning in the browser.
-SRCS="$SRCS c/src/driver/js_build.c"
+
+# The compiler is Salam now, so the C emcc compiles is what the C backend
+# emits rather than a hand-written src tree. --keep-c leaves those units in
+# .salam-build; the link it also attempts is for this host and irrelevant
+# here, so its failure is not an error.
+#
+# compiler/sal_web.salam already exports salam_web_run_app and friends under
+# those exact names: a `func` with a body inside an `extern:` block survives
+# DCE and keeps its unmangled symbol, which is Salam's EMSCRIPTEN_KEEPALIVE.
+rm -rf .salam-build
+#
+# --target so the condcomp table is built for wasm rather than for this
+# host. Without it a Linux runner prunes every SALAM_OS_WASM arm and keeps
+# the Linux ones, so os.Platform() answered "linux" in the browser and
+# std/fs compiled in its getdents64 path - which emscripten cannot even
+# link ("wasm-ld: undefined symbol: syscall").
+#
+# --emit-c rather than swallowing a link failure: the old `|| true` hid
+# front-end errors too, and since the driver keeps the C it did manage to
+# generate, a half-emitted source set would sail past the find below and
+# reach emcc looking complete.
+"$SALAM" build --backend=c --emit-c --target=wasm32-unknown-emscripten \
+    compiler/wasm_main.salam --output=.wasm-build/host-salam --log-level=warn
+SRCS=$(find .salam-build -name '*.c' | sort | tr '\n' ' ')
+[ -n "$SRCS" ] || {
+    echo "no generated C in .salam-build; the compiler build produced nothing" >&2
+    exit 1
+}
+
+# salam_web_compile_js is not in this list: it was a C-only entry point and
+# the self-hosted sal_web.salam has no counterpart. editor/app.salam cwraps
+# run_app, build_layout, emit and syntax_ok and never asked for it; JS output
+# comes through Emit()'s phase argument.
 # shellcheck disable=SC2086
-"$EMCC" -O2 -Ic/src $SRCS \
+"$EMCC" -O2 -I.salam-build $SRCS \
     -o "$OUT_DIR/salam-wa.js" \
     --preload-file "$STD_MIN"@/std \
     -s MODULARIZE=0 \
@@ -90,7 +114,7 @@ SRCS="$SRCS c/src/driver/js_build.c"
     -s EXIT_RUNTIME=0 \
     -s IGNORE_MISSING_MAIN=1 \
     -s FILESYSTEM=1 \
-    -s EXPORTED_FUNCTIONS="['_salam_web_run_app','_salam_web_compile_js','_salam_web_build_layout','_salam_web_emit','_salam_web_syntax_ok','_salam_web_version','_malloc','_free']" \
+    -s EXPORTED_FUNCTIONS="['_salam_web_run_app','_salam_web_build_layout','_salam_web_emit','_salam_web_syntax_ok','_salam_web_version','_malloc','_free']" \
     -s EXPORTED_RUNTIME_METHODS="['ccall','cwrap','UTF8ToString','stringToUTF8','lengthBytesUTF8','FS']"
 echo "built $OUT_DIR/salam-wa.js (+ .wasm, .data)"
 "$SALAM" web "$OUT_DIR/page.salam" --output="$OUT_DIR/index.html"

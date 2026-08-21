@@ -111,14 +111,27 @@ jobs:
           key: ccache-linux-${{ github.run_id }}
           restore-keys: |
             ccache-linux-
-      - name: Cache static third-party libs (sqlite3 + hiredis + openssl + mariadb, per --target=)
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      # Restore/save split rather than a plain actions/cache: a cache entry is
+      # only ever written when its key MISSES, so one immutable key freezes
+      # whatever the very first run happened to produce. Any run that staged
+      # only part of the target set (a musl sysroot fetch that failed, a
+      # cross-toolchain download that 404'd) pins that partial set forever -
+      # every later run then hits the stale entry, rebuilds the missing libs
+      # from scratch, and cannot store them because the key already exists.
+      # Keying on run_id and restoring by prefix lets each run start from the
+      # newest entry and save a more complete one, so the cache converges
+      # instead of freezing. The save is skipped when nothing was built, so a
+      # fully-cached run does not re-upload an identical entry.
+      - name: Restore static third-party libs (sqlite3 + hiredis + openssl + mariadb, per --target=)
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: /tmp/extralibs
-          key: extralibs-sqlite3-3530400-hiredis-v1.4.0-openssl-3.6.3-mariadb-v3.4.9-v2
+          key: extralibs-sqlite3-3530400-hiredis-v1.4.0-openssl-3.6.3-mariadb-v3.4.9-v2-${{ github.run_id }}
+          restore-keys: |
+            extralibs-sqlite3-3530400-hiredis-v1.4.0-openssl-3.6.3-mariadb-v3.4.9-v2-
       # Static libsqlite3.a/libhiredis.a/libssl.a/libcrypto.a/libmariadb.a per
       # supported --target= triple, embedded into salam itself (see
-      # SALAM_EMBED_EXTRALIBS_*_DIR below and c/src/llvm/llvm_native.c's
+      # SALAM_EMBED_EXTRALIBS_*_DIR below and compiler/driver/driver_embed.salam's
       # salam_try_embed_extralibs_{musl,mingw}) so `link dynamic "sqlite3"`/
       # `link dynamic "hiredis"`/`link dynamic "ssl"`+`link dynamic "crypto"`/
       # `link dynamic "mariadb"` resolve to a bundled static archive on any
@@ -132,9 +145,23 @@ jobs:
       # the aarch64/i686/arm cross-toolchain - a real, ~100MB fetch - only
       # gets downloaded once per target rather than once per library.
       - name: Build static third-party libs for all --target= triples
+        id: extralibs
         run: |
           set -eu
           mkdir -p /tmp/extralibs
+          # Cheap content fingerprint, compared again at the end of this
+          # step, so the save below only runs when something was actually
+          # built. The set of paths is signal enough: every need_build*
+          # gate below builds only when its .a is missing, so anything
+          # built necessarily adds a file. Deliberately no `find -printf`
+          # (a GNU extension): if it were unsupported the error would be
+          # swallowed, both fingerprints would come back empty and equal,
+          # and the cache would silently never be saved again.
+          fingerprint() {
+            find "$1" -type f 2>/dev/null \
+              | LC_ALL=C sort | sha256sum | cut -d' ' -f1
+          }
+          EXTRALIBS_BEFORE=$(fingerprint /tmp/extralibs)
           TARGETS="x86_64-linux-musl aarch64-linux-musl i686-linux-musl arm-linux-musleabihf x86_64-w64-windows-gnu hostlibs"
           need_build() { [ ! -f "/tmp/extralibs/$2/lib$1.a" ]; }
           any_needed() { for t in $TARGETS; do need_build "$1" "$t" && return 0; done; return 1; }
@@ -236,7 +263,7 @@ jobs:
           # "openssl-root" build_openssl() staged above via OPENSSL_ROOT_DIR.
           # The project's own CMake install step renames the static lib to
           # libmariadb.a via a symlink, but salam's embed extraction (a
-          # deliberately tiny custom untar, see c/src/driver/embed_sysroot.c)
+          # deliberately tiny custom untar, see compiler/driver/driver_sysroot.salam)
           # does not support symlinks, so the rename is done here with a
           # plain copy instead.
           if any_needed mariadb; then
@@ -394,8 +421,8 @@ jobs:
           build_all x86_64-w64-windows-gnu x86_64-w64-mingw32-gcc x86_64-w64-mingw32-ar
           # "hostlibs" isn't a --target= triple - it's this runner's own
           # native glibc host (ubuntu-latest), for SALAM_EMBED_HOSTLIBS_DIR
-          # (same-host, no --target= builds - see c/src/driver/build.c and
-          # c/src/llvm/llvm_native.c). Genuinely separate from the
+          # (same-host, no --target= builds - see compiler/driver/driver_build.salam
+          # and compiler/driver/driver_embed.salam). Genuinely separate from the
           # x86_64-linux-musl build above: this runner links glibc
           # natively, not musl, so it needs its own glibc-linked .a files.
           build_all hostlibs gcc ar
@@ -503,32 +530,68 @@ jobs:
             var="SALAM_EMBED_EXTRALIBS_$(echo "$target" | tr 'a-z-' 'A-Z_')_DIR"
             echo "${var}=/tmp/extralibs/$target" >> "$GITHUB_ENV"
           done
+
+          # Fail safe towards saving: an empty fingerprint means the
+          # helper itself broke, and skipping the save on that would
+          # quietly reintroduce the very staleness this replaced.
+          EXTRALIBS_AFTER=$(fingerprint /tmp/extralibs)
+          if [ -n "$EXTRALIBS_AFTER" ] && [ "$EXTRALIBS_BEFORE" = "$EXTRALIBS_AFTER" ]; then
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            echo 'static libs fully cached; skipping cache save'
+          else
+            echo 'changed=true' >> "$GITHUB_OUTPUT"
+            echo 'static libs changed; a fresh cache entry will be saved'
+          fi
+      - name: Save static third-party libs (sqlite3 + hiredis + openssl + mariadb, per --target=)
+        if: steps.extralibs.outputs.changed == 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /tmp/extralibs
+          key: extralibs-sqlite3-3530400-hiredis-v1.4.0-openssl-3.6.3-mariadb-v3.4.9-v2-${{ github.run_id }}
+      # The compiler is written in its own language, so building it needs one:
+      # the last published release. Everything it produces from here is this
+      # checkout's sources, and build-selfhost.sh stamps this checkout's
+      # VERSION onto the result rather than letting the seed's leak through.
+      - name: Install a seed compiler
+        uses: ./.github/actions/setup-salam
+
+      # Built by the compiler itself now, not by make -C c. Three pieces:
+      # stage-sysroots collects this host's musl/mingw CRTs, build-embed turns
+      # those plus the per-target static third-party libs into libsalam_embed.a,
+      # and std/llvm/native/build.sh produces the libsalam_llvm.a that carries
+      # in-process LLVM and LLD. The compiler then links all three in.
+      - name: Stage the musl and mingw sysroots
+        run: sh tools/bash/stage-sysroots.sh --out="$GITHUB_WORKSPACE/sysroots"
+
+      - name: Build libsalam_llvm.a (in-process LLVM + LLD)
+        run: sh std/llvm/native/build.sh --llvm-config llvm-config-22 --out "$GITHUB_WORKSPACE"
+
+      - name: Build libsalam_embed.a (sysroots + static third-party libs)
+        run: |
+          set -eu
+          sr="$GITHUB_WORKSPACE/sysroots"
+          sh tools/bash/build-embed.sh --out "$GITHUB_WORKSPACE" \
+            --musl-x86_64 "$sr/x86_64-linux-musl" \
+            --musl-aarch64 "${SALAM_EMBED_MUSL_AARCH64_DIR:-}" \
+            --musl-i686 "${SALAM_EMBED_MUSL_I686_DIR:-}" \
+            --musl-arm "${SALAM_EMBED_MUSL_ARM_DIR:-}" \
+            --mingw-x86_64 "$sr/x86_64-w64-mingw32" \
+            --mingw-i686 "$sr/i686-w64-mingw32" \
+            --hostlibs "${SALAM_EMBED_HOSTLIBS_DIR:-}" \
+            --extralibs-x86_64-musl "${SALAM_EMBED_EXTRALIBS_X86_64_LINUX_MUSL_DIR:-}" \
+            --extralibs-aarch64-musl "${SALAM_EMBED_EXTRALIBS_AARCH64_LINUX_MUSL_DIR:-}" \
+            --extralibs-i686-musl "${SALAM_EMBED_EXTRALIBS_I686_LINUX_MUSL_DIR:-}" \
+            --extralibs-arm-musl "${SALAM_EMBED_EXTRALIBS_ARM_LINUX_MUSLEABIHF_DIR:-}" \
+            --extralibs-x86_64-mingw "${SALAM_EMBED_EXTRALIBS_X86_64_W64_WINDOWS_GNU_DIR:-}"
+
       - name: Build the flagship self-contained salam (LLVM + LLD + sysroots)
         run: |
-          export CCACHE_DIR="$HOME/.ccache"; ccache --max-size=800M >/dev/null 2>&1 || true
-          if make -C c self-contained -j"$(nproc)" \
-               CC="ccache gcc" CXX="ccache g++" LLVM_CONFIG=llvm-config-22 \
-               SALAM_EMBED_MUSL_AARCH64_DIR="${SALAM_EMBED_MUSL_AARCH64_DIR:-}" \
-               SALAM_EMBED_MUSL_I686_DIR="${SALAM_EMBED_MUSL_I686_DIR:-}" \
-               SALAM_EMBED_MUSL_ARM_DIR="${SALAM_EMBED_MUSL_ARM_DIR:-}" \
-               SALAM_EMBED_EXTRALIBS_X86_64_LINUX_MUSL_DIR="${SALAM_EMBED_EXTRALIBS_X86_64_LINUX_MUSL_DIR:-}" \
-               SALAM_EMBED_EXTRALIBS_AARCH64_LINUX_MUSL_DIR="${SALAM_EMBED_EXTRALIBS_AARCH64_LINUX_MUSL_DIR:-}" \
-               SALAM_EMBED_EXTRALIBS_I686_LINUX_MUSL_DIR="${SALAM_EMBED_EXTRALIBS_I686_LINUX_MUSL_DIR:-}" \
-               SALAM_EMBED_EXTRALIBS_ARM_LINUX_MUSLEABIHF_DIR="${SALAM_EMBED_EXTRALIBS_ARM_LINUX_MUSLEABIHF_DIR:-}" \
-               SALAM_EMBED_EXTRALIBS_X86_64_W64_WINDOWS_GNU_DIR="${SALAM_EMBED_EXTRALIBS_X86_64_W64_WINDOWS_GNU_DIR:-}" \
-               SALAM_EMBED_HOSTLIBS_DIR="${SALAM_EMBED_HOSTLIBS_DIR:-}"; then
-            echo "SELF_CONTAINED=1" >> "$GITHUB_ENV"
-            echo "Built flagship self-contained salam."
-          else
-            echo "::warning::self-contained (LLD) build failed; falling back to embedded-LLVM-only."
-            make -C c clean
-            make -C c -j"$(nproc)" \
-              WITH_LLVM=1 LLVM_LINK_STATIC=1 LLVM_CONFIG=llvm-config-22 CC="ccache gcc" \
-              EXTRA_LDFLAGS="-static-libgcc -static-libstdc++"
-            echo "SELF_CONTAINED=0" >> "$GITHUB_ENV"
-          fi
-          ccache --show-stats 2>/dev/null | head -5 || true
+          set -eu
+          sh tools/bash/build-selfhost.sh \
+            --llvm="$GITHUB_WORKSPACE" --embed="$GITHUB_WORKSPACE"
+          echo "SELF_CONTAINED=1" >> "$GITHUB_ENV"
           ./salam version
+
       - name: Smoke-test the backend (and cross-compile with a scrubbed PATH)
         run: |
           export SALAM_STD="$PWD/std"
@@ -678,21 +741,51 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Cache Homebrew downloads
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - name: Restore Homebrew downloads
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/Library/Caches/Homebrew/downloads
           key: brew-dl-${{ runner.arch }}-${{ github.run_id }}
           restore-keys: |
             brew-dl-${{ runner.arch }}-
       - name: Install dependencies (static LLVM)
+        id: brewdeps
         env:
           HOMEBREW_NO_AUTO_UPDATE: '1'
           HOMEBREW_NO_INSTALL_CLEANUP: '1'
         run: |
+          # Same restore/save reasoning as the static-libs cache: keep the
+          # rolling run_id key, but only upload when the download set
+          # actually moved. A plain actions/cache stores a new copy of the
+          # whole thing on every single run, and these entries are big
+          # enough that the duplicates alone were evicting other caches.
+          # shasum, not sha256sum: macOS ships the former in the base
+          # system and has no coreutils, so sha256sum is simply absent.
+          fingerprint() {
+            find "$1" -type f 2>/dev/null \
+              | LC_ALL=C sort | shasum -a 256 | cut -d' ' -f1
+          }
+          mkdir -p "$HOME/Library/Caches/Homebrew/downloads"
+          PKGS_BEFORE=$(fingerprint "$HOME/Library/Caches/Homebrew/downloads")
+
           brew untap aws/tap || true
           brew install llvm@22 ccache
           "$(brew --prefix llvm@22)/bin/llvm-config" --version
+
+          PKGS_AFTER=$(fingerprint "$HOME/Library/Caches/Homebrew/downloads")
+          if [ -n "$PKGS_AFTER" ] && [ "$PKGS_BEFORE" = "$PKGS_AFTER" ]; then
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            echo 'download cache unchanged; skipping cache save'
+          else
+            echo 'changed=true' >> "$GITHUB_OUTPUT"
+            echo 'download cache changed; a fresh entry will be saved'
+          fi
+      - name: Save Homebrew downloads
+        if: steps.brewdeps.outputs.changed == 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/Library/Caches/Homebrew/downloads
+          key: brew-dl-${{ runner.arch }}-${{ github.run_id }}
       - name: Cache ccache (macOS)
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -700,16 +793,36 @@ jobs:
           key: ccache-macos-${{ github.run_id }}
           restore-keys: |
             ccache-macos-
+      - name: Install a seed compiler
+        uses: ./.github/actions/setup-salam
+
       - name: Build salam for macOS (embedded static LLVM)
         run: |
-          export CCACHE_DIR="$HOME/.ccache"; ccache --max-size=500M >/dev/null 2>&1 || true
+          set -eu
           LLVM_PREFIX="$(brew --prefix llvm@22)"
-          make -C c -j"$(sysctl -n hw.ncpu)" \
-            WITH_LLVM=1 LLVM_LINK_STATIC=1 \
-            LLVM_CONFIG="$LLVM_PREFIX/bin/llvm-config" CC="ccache clang" \
-            LLVM_CXXLIB=-lc++ \
-            EXTRA_LDFLAGS="-L$(brew --prefix)/lib"
-          ccache --show-stats 2>/dev/null | head -5 || true
+          # No sysroot staging here: a macOS runner has neither musl nor
+          # mingw, so there is nothing to embed and stage-sysroots would
+          # skip every target anyway. LLVM only.
+          sh std/llvm/native/build.sh \
+            --llvm-config "$LLVM_PREFIX/bin/llvm-config" --out "$GITHUB_WORKSPACE"
+          # zstd is the one library neither the SDK nor the default search
+          # path provides; it comes from Homebrew. Pointing -L at brew's lib
+          # finds the *dylib*, and a release that links /opt/homebrew/... dies
+          # on any Mac without that exact formula - which the self-containment
+          # check below is there to catch. Apple's linker has no -Bstatic, and
+          # picks the .dylib whenever both sit in one directory, so the archive
+          # gets a directory of its own instead. Same thing c/Makefile did with
+          # its MACOS_ZSTD_A.
+          mkdir -p "$GITHUB_WORKSPACE/maclibs"
+          zstd_a="$(brew --prefix zstd)/lib/libzstd.a"
+          [ -f "$zstd_a" ] || {
+            echo "::error::no static libzstd at $zstd_a - the only other thing -lzstd" >&2
+            echo "  could resolve to is the dylib, which the check below rejects." >&2
+            exit 1
+          }
+          cp "$zstd_a" "$GITHUB_WORKSPACE/maclibs/"
+          sh tools/bash/build-selfhost.sh --llvm="$GITHUB_WORKSPACE" \
+            -- --libpath="$GITHUB_WORKSPACE/maclibs"
           ./salam version
       # The Linux and Windows jobs already refuse to ship a binary that
       # imports a third-party library; macOS had no such gate, and 0.2.7
@@ -733,7 +846,7 @@ jobs:
             echo ""
             echo "These are Homebrew Cellar paths, usually versioned. dyld aborts at"
             echo "startup on any machine without that exact formula version installed."
-            echo "Either drop the library (see the -lz3 note in c/Makefile) or link its"
+            echo "Either drop the library, or link its"
             echo "static archive instead of the dylib."
             exit 1
           fi
@@ -818,8 +931,8 @@ jobs:
             Write-Host "::warning::Could not configure Windows Defender exclusions: $_"
           }
 
-      - name: Cache MSYS2 packages
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - name: Restore MSYS2 packages
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: C:\msys64\var\cache\pacman\pkg
           key: msys2-mingw64-pkgs-${{ github.run_id }}
@@ -827,11 +940,24 @@ jobs:
             msys2-mingw64-pkgs-
 
       - name: Install MINGW64 toolchain + static LLVM + LLD
+        id: msys2deps
         shell: 'C:\msys64\usr\bin\bash.exe --login -eo pipefail "{0}"'
         env:
           MSYSTEM: MINGW64
           CHERE_INVOKING: '1'
         run: |
+          # Same restore/save reasoning as the static-libs cache: keep the
+          # rolling run_id key, but only upload when the package set
+          # actually moved. A plain actions/cache stored a fresh ~300MB
+          # copy on every run, and those duplicates alone were evicting
+          # other caches out of the repo's 10GB budget.
+          fingerprint() {
+            find "$1" -type f 2>/dev/null \
+              | LC_ALL=C sort | sha256sum | cut -d' ' -f1
+          }
+          mkdir -p /c/msys64/var/cache/pacman/pkg
+          PKGS_BEFORE=$(fingerprint /c/msys64/var/cache/pacman/pkg)
+
           # clang here is a genuine multi-target cross-compiler frontend
           # (unlike gcc, it needs no target-native binary to compile - only
           # target headers via -isystem) - used below to build sqlite3/
@@ -853,6 +979,22 @@ jobs:
           llvm-config --version
           clang --version | head -1
 
+          PKGS_AFTER=$(fingerprint /c/msys64/var/cache/pacman/pkg)
+          if [ -n "$PKGS_AFTER" ] && [ "$PKGS_BEFORE" = "$PKGS_AFTER" ]; then
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            echo 'pacman package cache unchanged; skipping cache save'
+          else
+            echo 'changed=true' >> "$GITHUB_OUTPUT"
+            echo 'pacman package cache changed; a fresh entry will be saved'
+          fi
+
+      - name: Save MSYS2 packages
+        if: steps.msys2deps.outputs.changed == 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: C:\msys64\var\cache\pacman\pkg
+          key: msys2-mingw64-pkgs-${{ github.run_id }}
+
       - name: Cache ccache (Windows)
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -869,9 +1011,13 @@ jobs:
             C:\muslcc\sr-aarch64
             C:\muslcc\sr-i686
             C:\muslcc\sr-arm
-          key: musl-embed-sysroots-win-v2-${{ github.run_id }}
+          # v3: the staged sysroots gained crtbeginT.o/crtend.o/libgcc_eh.a,
+          # which clang needs to link statically here. A restored v2 cache
+          # has only the old five files and fetch-musl-sysroots.sh would
+          # reuse it as-is, so the key has to move for them to appear.
+          key: musl-embed-sysroots-win-v3-${{ github.run_id }}
           restore-keys: |
-            musl-embed-sysroots-win-v2-
+            musl-embed-sysroots-win-v3-
 
       - name: Fetch cross musl sysroots (x86_64 + aarch64 + i686 + armhf) for embedding
         shell: 'C:\msys64\usr\bin\bash.exe --login -eo pipefail "{0}"'
@@ -883,11 +1029,18 @@ jobs:
         # cross-compiles them with clang against exactly these sysroots.
         run: sh tools/bash/fetch-musl-sysroots.sh --out /c/muslcc --headers
 
-      - name: Cache static third-party libs (sqlite3 + hiredis + openssl + mariadb, per --target=)
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      # Same restore/save split as the Linux job above, and for the same
+      # reason - see that step's comment. This job is where it bit hardest:
+      # the 4 linux-musl targets it cross-builds depend on sysroots staged a
+      # step earlier, so the entry written by the first run predated them and
+      # every run since rebuilt sqlite3/hiredis for all 4 from scratch.
+      - name: Restore static third-party libs (sqlite3 + hiredis + openssl + mariadb, per --target=)
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: C:\extralibs
-          key: extralibs-sqlite3-3530400-hiredis-v1.4.0-openssl-3.6.3-mariadb-v3.4.9-win-v3
+          key: extralibs-sqlite3-3530400-hiredis-v1.4.0-openssl-3.6.3-mariadb-v3.4.9-win-v3-${{ github.run_id }}
+          restore-keys: |
+            extralibs-sqlite3-3530400-hiredis-v1.4.0-openssl-3.6.3-mariadb-v3.4.9-win-v3-
       # Windows counterpart of the Linux job's identically-named step - see
       # its comment for the overall rationale. x86_64-w64-windows-gnu (this
       # job's own native target) is built via the native MSYS2 gcc, same as
@@ -913,6 +1066,7 @@ jobs:
       # file: any single library/target failing just warns and is skipped,
       # never fails the job.
       - name: Build static third-party libs for x86_64-w64-windows-gnu + linux-musl targets
+        id: extralibs
         shell: 'C:\msys64\usr\bin\bash.exe --login -eo pipefail "{0}"'
         env:
           MSYSTEM: MINGW64
@@ -920,6 +1074,15 @@ jobs:
         run: |
           set -eu
           pacman -Sy --noconfirm --needed git unzip >/dev/null
+
+          # See the Linux job's identical fingerprint helper: it decides
+          # whether the save step below has anything new worth uploading.
+          mkdir -p /c/extralibs
+          fingerprint() {
+            find "$1" -type f 2>/dev/null \
+              | LC_ALL=C sort | sha256sum | cut -d' ' -f1
+          }
+          EXTRALIBS_BEFORE=$(fingerprint /c/extralibs)
 
           # need_build/need_build_openssl take the target triple as their
           # last argument (unlike this step's previous windows-gnu-only
@@ -967,9 +1130,35 @@ jobs:
           # Emits <XWRAP>/<triple>/<triple>-{gcc,ar,ranlib} (plain shebang
           # scripts, exec'd fine by MSYS-native perl/make via their normal
           # #! handling) plus a <triple>-gcc.bat twin (for native mingw-w64
-          # cmake.exe, which cannot run a shebang script) - both wrapping
-          # the same "clang -target <triple> -isystem <sysroot>/include"
-          # invocation. Prints the wrapper dir's POSIX path on stdout.
+          # cmake.exe, which cannot run a shebang script). Prints the wrapper
+          # dir's POSIX path on stdout.
+          #
+          # Only the .bat carries link flags, and deliberately so. The shebang
+          # pair is used by sqlite3/hiredis (compile + ar, never a link) and by
+          # openssl's `make build_libs` (static libs only), all of which work
+          # as they are; the .bat is used by exactly one caller, mariadb's
+          # CMake, which is the only thing here that links an executable.
+          #
+          #   -fuse-ld=lld  clang otherwise resolves plain `ld` off PATH, which
+          #                 on this runner is MSYS2's mingw ld - a PE-only
+          #                 linker. Its very first act is CMakeTestCCompiler's
+          #                 try-compile, and it died there with "unrecognised
+          #                 emulation mode: elf_i386 / Supported emulations:
+          #                 i386pep i386pe", so CMake declared the compiler
+          #                 broken and every musl target lost its static
+          #                 mariadb. lld links ELF for all four.
+          #   -B/-L         these sysroots are flat - crt1.o, crti.o, crtn.o,
+          #                 libc.a and libgcc.a sit directly in <sysroot> (see
+          #                 tools/bash/fetch-musl-sysroots.sh), nowhere clang
+          #                 looks by default. Without -B it emits a bare
+          #                 "crt1.o" the linker cannot resolve.
+          #   -static       nothing but .a files was staged, so a dynamic link
+          #                 has nothing to find.
+          #
+          # The .bat also needs a Windows-shaped sysroot path: it is read by
+          # native cmake.exe/clang.exe, which take a leading /c/... as
+          # drive-relative rather than as the MSYS mount. Same reasoning as
+          # LLVM_AR_WIN/LLVM_RANLIB_WIN above.
           make_musl_wrapper() {
             triple="$1"; sr="$2"
             d="$XWRAP/$triple"; mkdir -p "$d"
@@ -978,8 +1167,9 @@ jobs:
             printf '#!/bin/sh\nexec llvm-ar "$@"\n' >"$d/$triple-ar"
             printf '#!/bin/sh\nexec llvm-ranlib "$@"\n' >"$d/$triple-ranlib"
             chmod +x "$d/$triple-gcc" "$d/$triple-ar" "$d/$triple-ranlib"
-            printf '@echo off\r\nclang -target %s -isystem "%s/include" %%*\r\n' "$triple" "$sr" \
-              >"$d/$triple-gcc.bat"
+            srw=$(cygpath -m "$sr" 2>/dev/null || printf '%s' "$sr")
+            printf '@echo off\r\nclang -target %s -isystem "%s/include" -fuse-ld=lld -static -B"%s" -L"%s" %%*\r\n' \
+              "$triple" "$srw" "$srw" "$srw" >"$d/$triple-gcc.bat"
             printf '%s\n' "$d"
           }
 
@@ -1083,10 +1273,26 @@ jobs:
             # shellcheck disable=SC2086
             # -DCMAKE_COMPILE_WARNING_AS_ERROR=OFF: see the Linux job's copy
             # of build_mariadb for why this is load-bearing on musl targets.
+            #
+            # WITH_CURL=OFF is not enough to keep curl out: CMakeLists.txt:74
+            # runs FIND_PACKAGE(CURL) unconditionally, before it ever looks at
+            # the option. On this runner that finds MSYS2's CURLConfig.cmake,
+            # which find_dependency(Brotli)'s its way into a FindBrotli.cmake
+            # that calls pkg_check_modules - a command that only exists once
+            # FindPkgConfig has been loaded, and ssl_args deliberately sets
+            # CMAKE_DISABLE_FIND_PACKAGE_PkgConfig=ON to stop FindOpenSSL
+            # resolving the wrong OpenSSL. So the two settings collided:
+            # "Unknown CMake command pkg_check_modules", and every musl target
+            # lost its mariadb again. Disabling the CURL lookup outright is
+            # what WITH_CURL=OFF was asking for anyway.
+            #
+            # This only surfaced once the cross compiler could link at all -
+            # before that CMake stopped at its own compiler check.
             if ( cd "$mb_dir" \
                  && cmake /tmp/mariadb-src -G "MSYS Makefiles" -DCMAKE_BUILD_TYPE=Release \
                       -DCMAKE_COMPILE_WARNING_AS_ERROR=OFF \
-                      -DWITH_UNIT_TESTS=OFF -DWITH_CURL=OFF $ssl_args $extra_args \
+                      -DWITH_UNIT_TESTS=OFF -DWITH_CURL=OFF \
+                      -DCMAKE_DISABLE_FIND_PACKAGE_CURL=ON $ssl_args $extra_args \
                  && cmake --build . --target mariadbclient -j"$(nproc)" ) \
                  >"$mb_dir.log" 2>&1; then
               LIB=$(find "$mb_dir" -name "libmariadbclient.a" | head -1)
@@ -1157,68 +1363,110 @@ jobs:
             echo "${var}=C:/extralibs/$triple" >> "$GITHUB_ENV"
           done
 
+          # Fail safe towards saving: an empty fingerprint means the
+          # helper itself broke, and skipping the save on that would
+          # quietly reintroduce the very staleness this replaced.
+          EXTRALIBS_AFTER=$(fingerprint /c/extralibs)
+          if [ -n "$EXTRALIBS_AFTER" ] && [ "$EXTRALIBS_BEFORE" = "$EXTRALIBS_AFTER" ]; then
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            echo 'static libs fully cached; skipping cache save'
+          else
+            echo 'changed=true' >> "$GITHUB_OUTPUT"
+            echo 'static libs changed; a fresh cache entry will be saved'
+          fi
+
+      - name: Save static third-party libs (sqlite3 + hiredis + openssl + mariadb, per --target=)
+        if: steps.extralibs.outputs.changed == 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: C:\extralibs
+          key: extralibs-sqlite3-3530400-hiredis-v1.4.0-openssl-3.6.3-mariadb-v3.4.9-win-v3-${{ github.run_id }}
+
+      - name: Install a seed compiler
+        id: seed
+        uses: ./.github/actions/setup-salam
+
       - name: Build salam.exe (embedded LLVM; best-effort LLD + mingw/musl sysroots)
         shell: 'C:\msys64\usr\bin\bash.exe --login -eo pipefail "{0}"'
         env:
           MSYSTEM: MINGW64
           CHERE_INVOKING: '1'
           CCACHE_DIR: 'C:/ccache-win64'
+          # Through the environment rather than expanded into the script:
+          # zizmor flags a ${{ }} inside a run block as a template-injection
+          # site, and it is right that the shell should never see the value
+          # as source text.
+          SEED_PATH: ${{ steps.seed.outputs.salam }}
         run: |
-          ccache --max-size=500M >/dev/null 2>&1 || true
-          SR=/tmp/mingw-sr/lib; mkdir -p "$SR"
+          set -eu
+          SR=/tmp/mingw-sr/lib
+          mkdir -p "$SR"
           # Search the whole /mingw64 tree by basename instead of assuming a
           # fixed subdirectory layout - MSYS2 has shuffled crt/gcc-runtime
           # paths across gcc bumps before, and a hardcoded path silently
-          # degrades this to the non-self-contained fallback build.
-          embed_ok=1
+          # degrades this to a build with no embedded sysroot.
+          # stage-sysroots.sh is not used here for the same reason: its search
+          # list is fixed directories, which is right on Linux and wrong on a
+          # runner whose layout moves.
           missing=""
           for x in crt2.o dllcrt2.o libmingw32.a libmingwex.a libmoldname.a \
-                   libmsvcrt.a libadvapi32.a libshell32.a libuser32.a libkernel32.a \
-                   crtbegin.o crtend.o libgcc.a libgcc_eh.a; do
+            libmsvcrt.a libadvapi32.a libshell32.a libuser32.a libkernel32.a \
+            crtbegin.o crtend.o libgcc.a libgcc_eh.a; do
             f=$(find /mingw64 -name "$x" 2>/dev/null | head -1)
             if [ -n "$f" ]; then
               cp "$f" "$SR/"
             else
-              embed_ok=0; missing="$missing $x"
+              missing="$missing $x"
             fi
           done
-          [ "$embed_ok" = 1 ] || echo "::warning::mingw sysroot assembly incomplete, missing:$missing"
-          built=0
-          if [ "$embed_ok" = 1 ]; then
-            echo "Attempting flagship build (embedded LLVM + in-process LLD + mingw/musl sysroots)."
-            if make -C c -j2 \
-                 WITH_LLVM=1 WITH_LLD=1 LLVM_LINK_STATIC=1 LLVM_CONFIG=llvm-config \
-                 CC="ccache gcc" CXX="ccache g++" \
-                 SALAM_EMBED_MINGW_DIR=/tmp/mingw-sr \
-                 SALAM_EMBED_MUSL_DIR="${SALAM_EMBED_MUSL_DIR:-}" \
-                 SALAM_EMBED_MUSL_AARCH64_DIR="${SALAM_EMBED_MUSL_AARCH64_DIR:-}" \
-                 SALAM_EMBED_MUSL_I686_DIR="${SALAM_EMBED_MUSL_I686_DIR:-}" \
-                 SALAM_EMBED_MUSL_ARM_DIR="${SALAM_EMBED_MUSL_ARM_DIR:-}" \
-                 SALAM_EMBED_EXTRALIBS_X86_64_W64_WINDOWS_GNU_DIR="${SALAM_EMBED_EXTRALIBS_X86_64_W64_WINDOWS_GNU_DIR:-}" \
-                 SALAM_EMBED_EXTRALIBS_X86_64_LINUX_MUSL_DIR="${SALAM_EMBED_EXTRALIBS_X86_64_LINUX_MUSL_DIR:-}" \
-                 SALAM_EMBED_EXTRALIBS_AARCH64_LINUX_MUSL_DIR="${SALAM_EMBED_EXTRALIBS_AARCH64_LINUX_MUSL_DIR:-}" \
-                 SALAM_EMBED_EXTRALIBS_I686_LINUX_MUSL_DIR="${SALAM_EMBED_EXTRALIBS_I686_LINUX_MUSL_DIR:-}" \
-                 SALAM_EMBED_EXTRALIBS_ARM_LINUX_MUSLEABIHF_DIR="${SALAM_EMBED_EXTRALIBS_ARM_LINUX_MUSLEABIHF_DIR:-}" \
-                 SALAM_EMBED_HOSTLIBS_DIR="${SALAM_EMBED_HOSTLIBS_DIR:-}" \
-                 EXTRA_LDFLAGS="-static -static-libgcc -static-libstdc++"; then
-              built=1
-              echo "SELF_CONTAINED=1" >> "$GITHUB_ENV"
-              echo "Flagship self-contained salam.exe built."
-            else
-              echo "::warning::LLD/embedded-sysroot build failed; falling back to embedded-LLVM-only."
-              make -C c clean
-            fi
+          if [ -n "$missing" ]; then
+            echo "::warning::mingw sysroot assembly incomplete, missing:$missing"
+            MINGW_ARG=""
           else
-            echo "::warning::could not assemble mingw sysroot; building embedded-LLVM-only."
+            MINGW_ARG=/tmp/mingw-sr
           fi
-          if [ "$built" != 1 ]; then
-            make -C c -j2 \
-              WITH_LLVM=1 LLVM_LINK_STATIC=1 LLVM_CONFIG=llvm-config CC="ccache gcc" \
-              EXTRA_LDFLAGS="-static -static-libgcc -static-libstdc++"
+
+          sh std/llvm/native/build.sh --llvm-config llvm-config --out "$GITHUB_WORKSPACE"
+          sh tools/bash/build-embed.sh --out "$GITHUB_WORKSPACE" \
+            --mingw-x86_64 "$MINGW_ARG" \
+            --musl-x86_64 "${SALAM_EMBED_MUSL_DIR:-}" \
+            --musl-aarch64 "${SALAM_EMBED_MUSL_AARCH64_DIR:-}" \
+            --musl-i686 "${SALAM_EMBED_MUSL_I686_DIR:-}" \
+            --musl-arm "${SALAM_EMBED_MUSL_ARM_DIR:-}" \
+            --hostlibs "${SALAM_EMBED_HOSTLIBS_DIR:-}" \
+            --extralibs-x86_64-mingw "${SALAM_EMBED_EXTRALIBS_X86_64_W64_WINDOWS_GNU_DIR:-}" \
+            --extralibs-x86_64-musl "${SALAM_EMBED_EXTRALIBS_X86_64_LINUX_MUSL_DIR:-}" \
+            --extralibs-aarch64-musl "${SALAM_EMBED_EXTRALIBS_AARCH64_LINUX_MUSL_DIR:-}" \
+            --extralibs-i686-musl "${SALAM_EMBED_EXTRALIBS_I686_LINUX_MUSL_DIR:-}" \
+            --extralibs-arm-musl "${SALAM_EMBED_EXTRALIBS_ARM_LINUX_MUSLEABIHF_DIR:-}"
+          # The old make line passed EXTRA_LDFLAGS="-static -static-libgcc
+          # -static-libstdc++", and dropping them is what produced
+          # "duplicate section .rdata$_ZTSSt9exception has different size":
+          # the merged LLVM archive and MSYS2's libstdc++ disagree about the
+          # same comdat unless gcc supplies its own copy. There is no
+          # --ldflags on the driver, so they ride in on a cc wrapper.
+          # A .bat, not a shell script: the driver spawns the C compiler as a
+          # native Windows command, and cmd cannot run a shebang. A shell
+          # wrapper came back as "'C:/msys64/tmp/cc-static' is not recognized
+          # as an internal or external command". c/Makefile's own musl wrapper
+          # emitted a .bat twin for exactly this reason.
+          printf '@echo off\r\ngcc %%* -static -static-libgcc -static-libstdc++\r\n' \
+            > /tmp/cc-static.bat
+
+          # --seed by path, not through PATH: this step runs under MSYS2 bash,
+          # and the Windows-style directory setup-salam appends to GITHUB_PATH
+          # is not something an MSYS shell resolves, so `command -v salam`
+          # found nothing and the build stopped with "no seed compiler".
+          sh tools/bash/build-selfhost.sh \
+            --seed="$(cygpath -u "$SEED_PATH")" \
+            --llvm="$GITHUB_WORKSPACE" --embed="$GITHUB_WORKSPACE" \
+            --output="$GITHUB_WORKSPACE/salam.exe" \
+            -- --cc="$(cygpath -m /tmp/cc-static.bat)"
+          if [ -n "$MINGW_ARG" ]; then
+            echo "SELF_CONTAINED=1" >> "$GITHUB_ENV"
+          else
             echo "SELF_CONTAINED=0" >> "$GITHUB_ENV"
           fi
-          ccache --show-stats 2>/dev/null | head -5 || true
-          test -f salam.exe || mv salam salam.exe
           ./salam.exe version
 
       - name: Verify salam.exe is self-contained (no third-party DLLs)
@@ -1244,15 +1492,37 @@ jobs:
       # - eight years and a win64 float-argument miscompile behind mob. It
       # installs straight into the bundle at salam-windows/tcc, the same path
       # the zip used to unpack to, so everything downstream is unchanged.
+      # The build is entirely determined by the pinned commit and the script
+      # driving it, so it is worth caching rather than repeating every run:
+      # a clone of tinycc's history plus a full compile, for a bundle that
+      # comes out byte-for-byte the same. Keyed on both files so moving the
+      # pin or changing the build invalidates it; the install prefix is a
+      # fixed path under the workspace, which matters because configure
+      # bakes it into the binary, so restoring it elsewhere would not work.
+      # The staging step below runs `tcc.exe -v` on whatever lands here, so
+      # a restored bundle still has to prove it runs.
+      - name: Restore bundled tcc
+        id: tccbundle
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: salam-windows/tcc
+          key: tcc-bundle-windows-x86_64-${{ hashFiles('tools/ci/tinycc-ref.txt', 'tools/ci/build-tcc.sh') }}-v1
       # MSYS2 rather than the `shell: bash` the staging step below uses:
       # building tcc needs gcc and make, which Git Bash does not have.
       - name: Build bundled tcc from the pinned TinyCC commit
+        if: steps.tccbundle.outputs.cache-hit != 'true'
         shell: 'C:\msys64\usr\bin\bash.exe --login -eo pipefail "{0}"'
         env:
           MSYSTEM: MINGW64
           CHERE_INVOKING: '1'
         run: |
           sh tools/ci/build-tcc.sh "$(pwd)/salam-windows/tcc"
+      - name: Save bundled tcc
+        if: steps.tccbundle.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: salam-windows/tcc
+          key: tcc-bundle-windows-x86_64-${{ hashFiles('tools/ci/tinycc-ref.txt', 'tools/ci/build-tcc.sh') }}-v1
 
       - name: Stage self-contained bundle
         shell: bash
@@ -1481,6 +1751,9 @@ jobs:
     name: Build Salam for Windows (32-bit / i686, cross-compiled static LLVM+LLD)
     runs-on: ubuntu-latest
     continue-on-error: true
+    # The cross build is driven by the Linux binary this run just produced,
+    # not by the released seed - see "Use this run's Linux salam" below.
+    needs: build-linux
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1582,11 +1855,26 @@ jobs:
           restore-keys: |
             ccache-win-i686-v3-
 
+      # The compiler that emits the i686 Windows code has to be one built
+      # from THIS commit, not the last release: a published seed carries the
+      # codegen it was released with, so any fix on the way to a working
+      # 32-bit Windows binary (the -alternatename aliases that resolve the
+      # stdcall-decorated Win32 imports, for one) would sit unused until the
+      # next release, and the job would keep failing for a bug already fixed
+      # in the tree. build-linux has already produced exactly such a
+      # compiler, with LLVM and LLD embedded, so use it directly.
+      - name: Use this run's Linux salam as the cross-compiler
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: salam-linux
+          path: /tmp/host-salam
+      - name: Make it executable
+        run: chmod +x /tmp/host-salam/salam
+
       - name: Build 32-bit salam.exe (cross-compiled, embedded static LLVM+LLD, best-effort)
         run: |
           set -eu
           TC=/tmp/llvm-mingw/bin
-          LLVM_ROOT=/tmp/llvm-i686-install
           export CCACHE_DIR=/tmp/ccache-i686; mkdir -p "$CCACHE_DIR"
           which ccache >/dev/null 2>&1 || sudo apt-get install -y ccache
           ccache --max-size=500M >/dev/null 2>&1 || true
@@ -1606,6 +1894,8 @@ jobs:
           for arg in "$@"; do
             case "$arg" in
               --includedir) echo "$INCDIR" ;;
+              --libdir) echo "$LIBDIR" ;;
+              --bindir) echo "/tmp/llvm-mingw/bin" ;;
               --version) echo "22.1.8" ;;
               --ldflags) echo "-L$LIBDIR" ;;
               --system-libs) echo "-lpsapi -lshell32 -lole32 -luuid -ladvapi32 -lws2_32 -lversion -lntdll -lshlwapi -luser32" ;;
@@ -1624,33 +1914,55 @@ jobs:
           FAKE_LLVM_CONFIG_EOF
           chmod +x /tmp/fake-llvm-config
 
-          built=0
-          if [ -d "$LLVM_ROOT/lib" ]; then
-            if make -C c -j"$(nproc)" \
-                 WITH_LLVM=1 WITH_LLD=1 LLVM_LINK_STATIC=1 \
-                 LLVM_CONFIG=/tmp/fake-llvm-config \
-                 LLVM_CXXLIB=-lc++ \
-                 LLD_LIBS="-llldMinGW -llldELF -llldCOFF -llldMachO -llldWasm -llldCommon" \
-                 CC="ccache $TC/i686-w64-mingw32-clang" CXX="ccache $TC/i686-w64-mingw32-clang++" \
-                 EXTRA_LDFLAGS="-static"; then
-              built=1
-              echo "SELF_CONTAINED=1" >> "$GITHUB_ENV"
-              echo "Built cross-compiled, fully static salam.exe with embedded LLVM+LLD."
-            else
-              echo "::warning::cross-compiled LLVM+LLD build failed; falling back to tcc-only (no LLVM)."
+          # Cross-compiling the compiler itself: the seed runs here, on x86_64
+          # Linux, and emits an i686 Windows PE. The archive it links has to be
+          # built for the target too, which is what the cross LLVM above is.
+          WITH_LLD=1 AR="$TC/llvm-ar" CC="$TC/i686-w64-mingw32-clang" \
+            CXX="$TC/i686-w64-mingw32-clang++" \
+            sh std/llvm/native/build.sh --llvm-config /tmp/fake-llvm-config \
+            --out "$GITHUB_WORKSPACE"
+
+          # llvm-mingw lays its target libraries out as <root>/<triple>/lib,
+          # which is exactly the shape $SALAM_SYSROOTS is searched with, so
+          # pointing at the root is enough to resolve kernel32 and friends.
+          # Without it the link came back with every Win32 import undefined
+          # (_GetStdHandle, _EnterCriticalSection, ...).
+          export SALAM_SYSROOTS=/tmp/llvm-mingw
+          # llvm-mingw carries compiler-rt where a gcc-built mingw carries
+          # libgcc, so -lgcc/-lgcc_eh find nothing and the link stops there.
+          # Point the two names at what this toolchain actually has: the
+          # builtins archive for libgcc, and an empty one for libgcc_eh, since
+          # unwinding here comes from libunwind rather than libgcc_eh.
+          # The sysroot is found by name, but its import libraries (kernel32,
+          # user32, ...) still have to be on the link's -L list, which is why
+          # _GetFileType and friends came back undefined even with the sysroot
+          # detected.
+          mgw_lib=/tmp/llvm-mingw/i686-w64-mingw32/lib
+          if [ -d "$mgw_lib" ]; then
+            rt=$(find /tmp/llvm-mingw -name 'libclang_rt.builtins-i386.a' 2>/dev/null | head -1)
+            # Written as ifs, not && chains: under `set -e` a chain whose first
+            # test is false takes the whole step down with it.
+            if [ -n "$rt" ] && [ ! -f "$mgw_lib/libgcc.a" ]; then
+              cp "$rt" "$mgw_lib/libgcc.a"
             fi
-          else
-            echo "::warning::no cross-built LLVM available; falling back to tcc-only (no LLVM)."
+            if [ ! -f "$mgw_lib/libgcc_eh.a" ]; then
+              "$TC/llvm-ar" rcs "$mgw_lib/libgcc_eh.a"
+            fi
           fi
-          if [ "$built" != 1 ]; then
-            make -C c clean
-            make -C c -j"$(nproc)" \
-              WITH_LLVM=0 CC="ccache $TC/i686-w64-mingw32-clang" \
-              EXTRA_LDFLAGS="-static"
+          if sh tools/bash/build-selfhost.sh --seed=/tmp/host-salam/salam \
+            --llvm="$GITHUB_WORKSPACE" \
+            --output="$GITHUB_WORKSPACE/salam.exe" \
+            -- --target=i686-w64-windows-gnu \
+            --libpath="$mgw_lib"; then
+            echo "SELF_CONTAINED=1" >> "$GITHUB_ENV"
+            echo "Built cross-compiled salam.exe with embedded LLVM+LLD."
+          else
+            echo "::warning::cross build with LLVM failed; retrying without it."
+            sh tools/bash/build-selfhost.sh --seed=/tmp/host-salam/salam \
+              --output="$GITHUB_WORKSPACE/salam.exe" \
+              -- --target=i686-w64-windows-gnu --libpath="$mgw_lib"
             echo "SELF_CONTAINED=0" >> "$GITHUB_ENV"
           fi
-          ccache --show-stats 2>/dev/null | head -5 || true
-          test -f salam.exe || mv salam salam.exe
           file salam.exe
 
       - name: Verify salam.exe is self-contained (no third-party DLLs)
@@ -1669,6 +1981,15 @@ jobs:
           fi
           echo "OK: salam.exe imports only Windows system DLLs."
 
+      # Same reasoning as the x86_64 bundle above, with its own key: this
+      # cross-build runs on a Linux runner and produces an i686 PE, so it
+      # must never share an entry with a native build on the same runner.
+      - name: Restore bundled tcc (i686 cross)
+        id: tccbundle
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: salam-windows-i686/tcc
+          key: tcc-bundle-windows-i686-cross-${{ hashFiles('tools/ci/tinycc-ref.txt', 'tools/ci/build-tcc.sh') }}-v1
       - name: Stage 32-bit bundle
         run: |
           set -eu
@@ -1684,9 +2005,19 @@ jobs:
           # native i686 runner to build it on. build-tcc.sh reads the target
           # name (i386-win32) back out of those two flags and builds the
           # runtime with a host-native tcc of its own - see the script.
-          CROSS_PREFIX=/tmp/llvm-mingw/bin/i686-w64-mingw32- \
-          TCC_CONFIGURE_EXTRA="--targetos=WIN32 --cpu=i386" \
-            sh tools/ci/build-tcc.sh "$(pwd)/$DIST/tcc"
+          # A tcc.exe with no libtcc1.a beside it links nothing, so both have
+          # to be there before the cached bundle counts as usable. The build
+          # is all-or-nothing and the save only runs after it succeeds, so a
+          # half-written entry should not exist; this just makes one
+          # self-heal instead of shipping a bundle that cannot compile.
+          if [ -f "$DIST/tcc/tcc.exe" ] \
+             && [ -n "$(find "$DIST/tcc" -name libtcc1.a 2>/dev/null | head -1)" ]; then
+            echo "reusing cached tcc bundle at $DIST/tcc"
+          else
+            CROSS_PREFIX=/tmp/llvm-mingw/bin/i686-w64-mingw32- \
+            TCC_CONFIGURE_EXTRA="--targetos=WIN32 --cpu=i386" \
+              sh tools/ci/build-tcc.sh "$(pwd)/$DIST/tcc"
+          fi
           file "$DIST/tcc/tcc.exe"
           cp README.md LICENSE "$DIST/" 2>/dev/null || true
           {
@@ -1719,6 +2050,12 @@ jobs:
           } > "$DIST/RUN-ME.txt"
           echo "bundle contents:"; ls -la "$DIST"
 
+      - name: Save bundled tcc (i686 cross)
+        if: steps.tccbundle.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: salam-windows-i686/tcc
+          key: tcc-bundle-windows-i686-cross-${{ hashFiles('tools/ci/tinycc-ref.txt', 'tools/ci/build-tcc.sh') }}-v1
       - name: Smoke-test the 32-bit build (format checks only - can't execute an i686 PE on this Linux host)
         run: |
           set -e
@@ -1760,8 +2097,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y musl-tools musl-dev mingw-w64
-          make -C c stage-sysroots
-          ls -la c/build/release/sysroots
+          sh tools/bash/stage-sysroots.sh --out="$GITHUB_WORKSPACE/sysroots"
+          ls -la sysroots
       - name: Cache ccache (Linux i686)
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -1769,6 +2106,13 @@ jobs:
           key: ccache-linux-i686-v2-${{ github.run_id }}
           restore-keys: |
             ccache-linux-i686-v2-
+      # setup-salam installs the runner's own architecture, which is the
+      # wrong one for a compile that happens inside a foreign-arch
+      # container. This puts the matching release beside the checkout so
+      # the container can use it as its seed.
+      - name: Fetch a seed compiler for the container
+        run: sh tools/bash/fetch-seed.sh --slug linux-i686 --out "$GITHUB_WORKSPACE/seed"
+
       - name: Build + smoke-test inside an i386/debian container (native - no QEMU needed for i386 on amd64)
         run: |
           set -eu
@@ -1781,7 +2125,7 @@ jobs:
           # so 21 is the newest release that still targets 32-bit hosts at
           # all; 22+ tracks amd64/arm64 only (see the 64-bit jobs above).
           docker run --rm --platform=linux/386 \
-            -v "$PWD:/work" -w /work/c \
+            -v "$PWD:/work" -w /work \
             -v /tmp/ccache-i686:/root/.ccache \
             -e CCACHE_DIR=/root/.ccache \
             i386/debian:sid bash -euxc '
@@ -1816,20 +2160,16 @@ jobs:
               # invisible - salam version just printed "unknown").
               git config --global --add safe.directory /work
               ccache --max-size=300M >/dev/null 2>&1 || true
-              MUSL_SR=/work/c/build/release/sysroots/x86_64-linux-musl
-              MINGW_SR=/work/c/build/release/sysroots/x86_64-w64-mingw32
-              if make -j"$(nproc)" \
-                   WITH_LLVM=1 WITH_LLD=1 LLVM_LINK_STATIC=1 \
-                   LLVM_CONFIG=llvm-config-21 CC="ccache gcc" CXX="ccache g++" \
-                   SALAM_EMBED_MUSL_DIR="$MUSL_SR" SALAM_EMBED_MINGW_DIR="$MINGW_SR"; then
-                echo 1 > /work/.self_contained
-              else
-                echo "::warning::self-contained (LLD) i686 build failed; falling back to embedded-LLVM-only."
-                make clean
-                make -j"$(nproc)" WITH_LLVM=1 LLVM_LINK_STATIC=1 LLVM_CONFIG=llvm-config-21 CC="ccache gcc"
-                echo 0 > /work/.self_contained
-              fi
-              ccache --show-stats 2>/dev/null | head -5 || true
+              MUSL_SR=/work/sysroots/x86_64-linux-musl
+              MINGW_SR=/work/sysroots/x86_64-w64-mingw32
+              sh std/llvm/native/build.sh --llvm-config llvm-config-21 --out /work
+              sh tools/bash/build-embed.sh --out /work \
+                --musl-x86_64 "$MUSL_SR" --mingw-x86_64 "$MINGW_SR"
+              # The seed runs in here, not on the host, so it has to be built for
+              # the same architecture as this container - fetched by the step above.
+              sh tools/bash/build-selfhost.sh --seed=/work/seed/salam \
+                --llvm=/work --embed=/work --output=/work/salam
+              echo 1 > /work/.self_contained
               file /work/salam
               /work/salam version
               export SALAM_STD=/work/std
@@ -1915,7 +2255,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y musl-tools musl-dev mingw-w64
-          make -C c stage-sysroots
+          sh tools/bash/stage-sysroots.sh --out="$GITHUB_WORKSPACE/sysroots"
       - name: Set up QEMU (armhf containers need user-mode emulation; i386 doesn't)
         uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
         with:
@@ -1927,6 +2267,13 @@ jobs:
           key: ccache-linux-armhf-v2-${{ github.run_id }}
           restore-keys: |
             ccache-linux-armhf-v2-
+      # setup-salam installs the runner's own architecture, which is the
+      # wrong one for a compile that happens inside a foreign-arch
+      # container. This puts the matching release beside the checkout so
+      # the container can use it as its seed.
+      - name: Fetch a seed compiler for the container
+        run: sh tools/bash/fetch-seed.sh --slug linux-armhf --out "$GITHUB_WORKSPACE/seed"
+
       - name: Build + smoke-test inside an arm32v7/debian container (QEMU-emulated compile - slower)
         run: |
           set -eu
@@ -1939,7 +2286,7 @@ jobs:
           # 32-bit hosts at all (LLVM stopped shipping 32-bit Windows
           # installers at v22: github.com/ScoopInstaller/Main/issues/7685).
           docker run --rm --platform=linux/arm/v7 \
-            -v "$PWD:/work" -w /work/c \
+            -v "$PWD:/work" -w /work \
             -v /tmp/ccache-armhf:/root/.ccache \
             -e CCACHE_DIR=/root/.ccache \
             arm32v7/debian:sid bash -euxc '
@@ -1954,20 +2301,16 @@ jobs:
               # erroring.
               git config --global --add safe.directory /work
               ccache --max-size=300M >/dev/null 2>&1 || true
-              MUSL_SR=/work/c/build/release/sysroots/x86_64-linux-musl
-              MINGW_SR=/work/c/build/release/sysroots/x86_64-w64-mingw32
-              if make -j"$(nproc)" \
-                   WITH_LLVM=1 WITH_LLD=1 LLVM_LINK_STATIC=1 \
-                   LLVM_CONFIG=llvm-config-21 CC="ccache gcc" CXX="ccache g++" \
-                   SALAM_EMBED_MUSL_DIR="$MUSL_SR" SALAM_EMBED_MINGW_DIR="$MINGW_SR"; then
-                echo 1 > /work/.self_contained
-              else
-                echo "::warning::self-contained (LLD) armhf build failed; falling back to embedded-LLVM-only."
-                make clean
-                make -j"$(nproc)" WITH_LLVM=1 LLVM_LINK_STATIC=1 LLVM_CONFIG=llvm-config-21 CC="ccache gcc"
-                echo 0 > /work/.self_contained
-              fi
-              ccache --show-stats 2>/dev/null | head -5 || true
+              MUSL_SR=/work/sysroots/x86_64-linux-musl
+              MINGW_SR=/work/sysroots/x86_64-w64-mingw32
+              sh std/llvm/native/build.sh --llvm-config llvm-config-21 --out /work
+              sh tools/bash/build-embed.sh --out /work \
+                --musl-x86_64 "$MUSL_SR" --mingw-x86_64 "$MINGW_SR"
+              # The seed runs in here, not on the host, so it has to be built for
+              # the same architecture as this container - fetched by the step above.
+              sh tools/bash/build-selfhost.sh --seed=/work/seed/salam \
+                --llvm=/work --embed=/work --output=/work/salam
+              echo 1 > /work/.self_contained
               file /work/salam
               /work/salam version
               export SALAM_STD=/work/std
@@ -2125,27 +2468,25 @@ jobs:
           key: ccache-linux-aarch64-${{ github.run_id }}
           restore-keys: |
             ccache-linux-aarch64-
+      - name: Install a seed compiler
+        uses: ./.github/actions/setup-salam
+
       - name: Build the flagship self-contained salam (LLVM + LLD + sysroots)
         run: |
-          export CCACHE_DIR="$HOME/.ccache"; ccache --max-size=800M >/dev/null 2>&1 || true
-          if make -C c -j"$(nproc)" \
-               WITH_LLVM=1 WITH_LLD=1 LLVM_LINK_STATIC=1 LLVM_CONFIG=llvm-config-22 \
-               CC="ccache gcc" CXX="ccache g++" \
-               SALAM_EMBED_MUSL_DIR="${SALAM_EMBED_MUSL_DIR:-}" \
-               SALAM_EMBED_MUSL_AARCH64_DIR="${SALAM_EMBED_MUSL_AARCH64_DIR:-}" \
-               SALAM_EMBED_MUSL_I686_DIR="${SALAM_EMBED_MUSL_I686_DIR:-}" \
-               SALAM_EMBED_MUSL_ARM_DIR="${SALAM_EMBED_MUSL_ARM_DIR:-}" \
-               SALAM_EMBED_MINGW_DIR="${SALAM_EMBED_MINGW_DIR:-}"; then
-            echo "SELF_CONTAINED=1" >> "$GITHUB_ENV"
-            echo "Built flagship self-contained salam."
-          else
-            echo "::warning::self-contained (LLD) build failed; falling back to embedded-LLVM-only."
-            make -C c clean
-            make -C c -j"$(nproc)" \
-              WITH_LLVM=1 LLVM_LINK_STATIC=1 LLVM_CONFIG=llvm-config-22 CC="ccache gcc"
-            echo "SELF_CONTAINED=0" >> "$GITHUB_ENV"
-          fi
-          ccache --show-stats 2>/dev/null | head -5 || true
+          set -eu
+          sh tools/bash/stage-sysroots.sh --musl-arch aarch64 \
+            --out="$GITHUB_WORKSPACE/sysroots"
+          sh std/llvm/native/build.sh --llvm-config llvm-config-22 \
+            --out "$GITHUB_WORKSPACE"
+          sh tools/bash/build-embed.sh --out "$GITHUB_WORKSPACE" \
+            --musl-x86_64 "${SALAM_EMBED_MUSL_DIR:-}" \
+            --musl-aarch64 "${SALAM_EMBED_MUSL_AARCH64_DIR:-$GITHUB_WORKSPACE/sysroots/aarch64-linux-musl}" \
+            --musl-i686 "${SALAM_EMBED_MUSL_I686_DIR:-}" \
+            --musl-arm "${SALAM_EMBED_MUSL_ARM_DIR:-}" \
+            --mingw-x86_64 "${SALAM_EMBED_MINGW_DIR:-$GITHUB_WORKSPACE/sysroots/x86_64-w64-mingw32}"
+          sh tools/bash/build-selfhost.sh \
+            --llvm="$GITHUB_WORKSPACE" --embed="$GITHUB_WORKSPACE"
+          echo "SELF_CONTAINED=1" >> "$GITHUB_ENV"
           ./salam version
       - name: Smoke-test the backend (and cross-compile with a scrubbed PATH)
         run: |
@@ -2437,6 +2778,44 @@ jobs:
           [ -f ./release-linux-aarch64/salam ]    && mv ./release-linux-aarch64/salam    ./release/salam-linux-aarch64    || true
           [ -f ./release-linux-armhf/salam ]      && mv ./release-linux-armhf/salam      ./release/salam-linux-armhf      || true
           echo "release/ now contains:"; ls -la ./release
+
+      # The machine-readable std/ index the MCP server and the editor tooling
+      # read. It is committed, and mcp-server.yml fails the build when it
+      # drifts from std/, so the copy checked out here is the one that matches
+      # this tag. Publishing it per-release means consumers can pin a version
+      # instead of pointing a raw URL at a branch that keeps moving.
+      - name: Stage the stdlib index
+        run: |
+          set -eu
+          src=docs/ai/stdlib-index.json
+          [ -f "$src" ] || { echo "::error::$src is missing"; exit 1; }
+          mkdir -p ./release
+          cp "$src" "./release/salam-${VERSION}-stdlib-index.json"
+          ls -l "./release/salam-${VERSION}-stdlib-index.json"
+
+      # The browsable counterpart of the index above: one self-contained page
+      # for the whole standard library, generated by this release's own
+      # compiler rather than a stale one. `salam doc` exits 1 when a source
+      # file will not parse - deliberately, so silently missing entries are
+      # not the only clue - but it still writes the page, so that is surfaced
+      # as a warning rather than taken as a reason to hold the whole release.
+      # A missing page is a real failure and does stop it.
+      - name: Generate the stdlib documentation page
+        run: |
+          set -eu
+          out="./release/salam-${VERSION}-stdlib-doc.html"
+          chmod +x ./release/salam-linux
+          rc=0
+          ./release/salam-linux doc std --output="$out" || rc=$?
+          if [ ! -s "$out" ]; then
+            echo "::error::salam doc produced no page at $out (exit $rc)"
+            exit 1
+          fi
+          if [ "$rc" -ne 0 ]; then
+            echo "::warning::salam doc exited $rc; some std/ files did not parse"
+            echo "::warning::and their declarations are missing from the page"
+          fi
+          ls -l "$out"
       # - name: Post Linux release file to SERVER_VERSIONS_API
       #   env:
       #     SERVER_VERSIONS_API: ${{ secrets.SERVER_VERSIONS_API }}
@@ -2499,6 +2878,8 @@ jobs:
             # release/salam-linux-aarch64
             # release/salam-linux-armhf
             release/salam-*.zip
+            release/salam-*-stdlib-index.json
+            release/salam-*-stdlib-doc.html
             release/salam-application-*.aab
             release/salam-application-*.apk
           )

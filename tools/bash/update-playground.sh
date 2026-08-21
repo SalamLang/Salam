@@ -43,8 +43,8 @@ if command -v taskkill >/dev/null 2>&1; then
     taskkill //F //IM salam.exe >/dev/null 2>&1 || true
 fi
 if [ "$WASM_ONLY" -eq 0 ] || [ "$SELFHOST" -eq 1 ]; then
-    echo "==> Building native compiler (tools/bash/build-compiler.sh) ..."
-    sh tools/bash/build-compiler.sh
+    echo "==> Building native compiler (tools/bash/build-selfhost.sh) ..."
+    sh tools/bash/build-selfhost.sh
 fi
 if [ "$SELFHOST" -eq 1 ]; then
     echo "==> Bootstrapping the self-hosted compiler (compiler/tools/bash/bootstrap.sh) ..."
@@ -75,7 +75,7 @@ for f in editor/salam-wa.js editor/salam-wa.wasm editor/salam-wa.data; do
     fi
 done
 echo "==> Exported entry points:"
-for sym in _salam_web_run_app _salam_web_compile_js _salam_web_build_layout _salam_web_emit _salam_web_syntax_ok; do
+for sym in _salam_web_run_app _salam_web_build_layout _salam_web_emit _salam_web_syntax_ok; do
     if grep -q "$sym" editor/salam-wa.js 2>/dev/null; then
         echo "    ok   $sym"
     else echo "    WARN missing $sym" >&2; fi

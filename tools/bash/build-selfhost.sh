@@ -1,0 +1,162 @@
+#!/bin/sh
+# Builds the self-hosted compiler: compiler/main.salam, compiled by a seed
+# salam, producing a salam binary.
+#
+# This is what replaced `make -C c`. The seed is an already-built compiler -
+# in CI, the released binary .github/actions/setup-salam installs; locally,
+# whatever `salam` is on PATH. It has to be SEED_MIN (0.3.1) or newer, since
+# older releases cannot resolve compiler/'s `../` imports.
+#
+# For a three-stage bootstrap with a fixpoint check, use
+# compiler/tools/bash/bootstrap.sh instead. This is the one-stage version, for
+# jobs that just need a working compiler.
+#
+# Usage:
+#   tools/bash/build-selfhost.sh [--output FILE] [--seed PROG] [--llvm DIR]
+#                                [--embed DIR] [-- <extra salam build args>]
+#
+# Env:
+#   SALAM_SEED   same as --seed
+
+set -eu
+
+OUT=$(pwd)/salam
+SEED=${SALAM_SEED:-}
+LLVM_DIR=
+EMBED_DIR=
+EXTRA=
+
+while [ $# -gt 0 ]; do
+    case $1 in
+    --output=*)
+        OUT=${1#*=}
+        shift
+        ;;
+    --seed=*)
+        SEED=${1#*=}
+        shift
+        ;;
+    --llvm=*)
+        LLVM_DIR=${1#*=}
+        shift
+        ;;
+    --embed=*)
+        EMBED_DIR=${1#*=}
+        shift
+        ;;
+    --output)
+        OUT=$2
+        shift 2
+        ;;
+    --seed)
+        SEED=$2
+        shift 2
+        ;;
+    --llvm)
+        LLVM_DIR=$2
+        shift 2
+        ;;
+    --embed)
+        EMBED_DIR=$2
+        shift 2
+        ;;
+    --)
+        shift
+        EXTRA="$*"
+        break
+        ;;
+    -h | --help)
+        sed -n '2,20p' "$0"
+        exit 0
+        ;;
+    *)
+        echo "unknown argument: $1" >&2
+        exit 2
+        ;;
+    esac
+done
+
+if [ -z "$SEED" ]; then
+    SEED=$(command -v salam 2>/dev/null || true)
+fi
+[ -n "$SEED" ] || {
+    echo "error: no seed compiler on PATH." >&2
+    echo "  The compiler is written in Salam, so building it needs a Salam." >&2
+    echo "  Install a released one:  sh install.sh" >&2
+    echo "  Or point at one:         --seed /path/to/salam  (or \$SALAM_SEED)" >&2
+    echo "  In CI:                   uses: ./.github/actions/setup-salam" >&2
+    exit 1
+}
+
+ROOT=$(cd "$(dirname "$0")/../.." && pwd)
+
+# This checkout's std, not the seed's. A released seed sits next to its own
+# std/ and resolves there by default, which both builds the compiler against
+# a stale stdlib and trips "package name 'mem' is claimed by two different
+# files" when both trees are reachable. bootstrap.sh exports the same.
+export SALAM_STD="$ROOT/std"
+
+# -DSALAM_HAVE_LLVM makes llvm_bridge.salam import std/llvm, and --libpath is
+# where its libsalam_llvm.a lives; -DSALAM_HAVE_EMBED does the same for the
+# sysroot blobs in libsalam_embed.a. Both are opt-in: without them the
+# compiler still builds, it just shells out to cc and finds sysroots on disk.
+# Flags are accumulated as positional parameters rather than one string: the
+# build-info values are quoted so a two-component version like "0.3" stays a
+# string constant rather than reading as a number, and those quotes have to
+# survive as characters instead of being re-split by the shell.
+set --
+
+# -DSALAM_HAVE_LLVM makes llvm_bridge.salam import std/llvm, and --libpath is
+# where its libsalam_llvm.a lives; -DSALAM_HAVE_EMBED does the same for the
+# sysroot blobs in libsalam_embed.a. Both are opt-in: without them the compiler
+# still builds, it just shells out to cc and finds sysroots on disk.
+[ -n "$LLVM_DIR" ] && set -- "$@" -DSALAM_HAVE_LLVM "--libpath=$LLVM_DIR"
+[ -n "$EMBED_DIR" ] && set -- "$@" -DSALAM_HAVE_EMBED "--libpath=$EMBED_DIR"
+
+# compiler/sal_core.salam reads these as compile-time constants, so without them
+# the result inherits the *seed's* build info - a released binary's version
+# number instead of this checkout's. Same stamping bootstrap.sh does. %cI, not
+# %ci, so the date carries no spaces.
+STAMP_VERSION="$(cat "$ROOT/VERSION" 2>/dev/null || echo 0.0.0-dev)"
+STAMP_COMMIT="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+STAMP_DATE="$(git -C "$ROOT" show -s --format=%cI HEAD 2>/dev/null || echo unknown)"
+STAMP_DIRTY=
+if [ -n "$(git -C "$ROOT" status --porcelain 2>/dev/null)" ]; then
+    STAMP_DIRTY=-dirty
+fi
+set -- "$@" "-dSALAM_VERSION=\"$STAMP_VERSION\"" "-dSALAM_GIT_COMMIT=\"$STAMP_COMMIT\""
+set -- "$@" "-dSALAM_GIT_DATE=\"$STAMP_DATE\"" "-dSALAM_GIT_DIRTY=\"$STAMP_DIRTY\""
+
+# shellcheck disable=SC2086 # a caller-supplied flag list; splitting is wanted
+[ -n "$EXTRA" ] && set -- "$@" $EXTRA
+
+echo "seed   : $SEED ($("$SEED" version 2>/dev/null | head -1))"
+echo "output : $OUT"
+
+# Two stages when the result has to carry embedded blobs, one otherwise.
+# driver_embed.salam declares the blobs as extern *variables*, and a seed older
+# than 0.3.5 mangles those names (interior underscores get doubled), so it can
+# compile the compiler but not one that links them. Building a plain stage 1
+# first and letting IT build the real thing sidesteps the seed's age entirely -
+# the same reason bootstrap.sh lets the seed decide only what stage 1 gets.
+if [ -n "$EMBED_DIR" ]; then
+    echo "stage 1: a plain compiler, to build the embedded one with"
+    # --backend=c on purpose. Stage 1 is throwaway - it only has to be a
+    # working compiler for one build - so it takes the conservative path
+    # rather than depending on the seed's LLVM codegen. On i686 that
+    # dependency was not hypothetical: the seed's LLVM backend produced a
+    # stage 1 that linked fine and segfaulted the moment it ran.
+    "$SEED" build --backend=c "$ROOT/compiler/main.salam" --output="$OUT.stage1"
+    BUILDER=$OUT.stage1
+else
+    BUILDER=$SEED
+fi
+
+"$BUILDER" build "$ROOT/compiler/main.salam" --output="$OUT" "$@"
+rm -f "$OUT.stage1"
+
+[ -x "$OUT" ] || {
+    echo "error: no binary at $OUT after the build" >&2
+    exit 1
+}
+"$OUT" version | head -1

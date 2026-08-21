@@ -24,8 +24,8 @@ on:
     branches: [main]
   pull_request:
     paths:
-      - 'c/src/llvm/**'
-      - 'c/src/semantic/**'
+      - 'std/llvm/native/**'
+      - 'compiler/semantic/**'
       - 'compiler/llvmgen/**'
       - 'compiler/semantic/**'
       - 'std/**'
@@ -49,26 +49,38 @@ jobs:
         with:
           persist-credentials: false
 
+      # LLVM 22 from apt.llvm.org, the same version the release builds
+      # against - not the distro default, which this used to track. std/llvm
+      # calls ORC C entry points that only exist from LLVM 20 on
+      # (LLVMOrcCreateNewThreadSafeContextFromLLVMContext among them), so on
+      # Ubuntu's 18.1 the link fails on symbols the API simply did not have
+      # yet. Gating against a version we do not ship tests nothing useful.
       - name: Install LLVM and lld
         run: |
+          set -eu
+          wget -qO llvm.sh https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 22
           sudo apt-get update
-          sudo apt-get install -y llvm-dev liblld-dev libzstd-dev zlib1g-dev
-          # libpolly-N-dev is not optional, and this workflow was the only one
-          # omitting it (compiler-release, compiler-selfhost and
-          # lint-memory-leaks all install it explicitly). Ubuntu's llvm-N-dev
-          # advertises Polly through `llvm-config --libs all` AND builds
-          # libLLVMLTO.a against it, while shipping libPolly.a in a separate
-          # package - so without it the link fails whichever way the Makefile
-          # jumps: keeping -lPolly gives "cannot find -lPolly", dropping it
-          # gives "undefined reference to getPollyPluginInfo()".
-          #
-          # The version is derived rather than pinned because this job
-          # deliberately tracks the distro's default llvm-dev.
-          v="$(llvm-config --version | cut -d. -f1)"
-          sudo apt-get install -y "libpolly-$v-dev"
+          # libpolly is not optional: llvm-N-dev advertises Polly through
+          # `llvm-config --libs all` and builds libLLVMLTO.a against it, while
+          # shipping libPolly.a separately - without it the link fails either
+          # way, on -lPolly or on getPollyPluginInfo().
+          sudo apt-get install -y llvm-22-dev liblld-22-dev libpolly-22-dev \
+            libzstd-dev zlib1g-dev libtinfo-dev libxml2-dev
 
-      - name: Build the C compiler with LLVM in-process
-        run: make -C c -j"$(nproc)" WITH_LLVM=1 WITH_LLD=1
+      - name: Install a seed compiler
+        uses: ./.github/actions/setup-salam
+
+      # The archive std/llvm links against, built from the native shim plus
+      # every static LLVM/LLD archive on the runner.
+      - name: Build libsalam_llvm.a
+        run: |
+          sh std/llvm/native/build.sh --llvm-config llvm-config-22 \
+            --out "$GITHUB_WORKSPACE"
+
+      - name: Build the compiler with LLVM in-process
+        run: sh tools/bash/build-selfhost.sh --llvm="$GITHUB_WORKSPACE"
 
       - name: Backend must compile the whole corpus
         run: |

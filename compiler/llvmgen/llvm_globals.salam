@@ -336,6 +336,16 @@ end
 // ll_emit_globals
 func emit_globals(v &: Lv, s &: sm.Sema, a &: at.Ast, program: int):
     mut any := false
+    // Every global carries the package it was declared in. The LLVM backend
+    // puts the whole program in one module, so without that the second package
+    // to declare a `COLS` was skipped as "already emitted" and both packages
+    // then read the first one's storage - the same collision the C backend
+    // reported as a duplicate definition at link time, except here it linked
+    // and quietly returned the wrong value.
+    mut gpkg := pkg_of_scope(s, v.pkg_scope)
+    if str.Len(gpkg) == 0:
+        gpkg = "main"
+    end
     mut i := 0
     until i < at.ChildCount(a, program):
         d := at.Child(a, program, i)
@@ -345,7 +355,7 @@ func emit_globals(v &: Lv, s &: sm.Sema, a &: at.Ast, program: int):
         // duplicate definition in the module. This lets the function be
         // called again for a package whose globals may or may not have been
         // emitted already, which lv_addr_of relies on.
-        if !skip && global_find(v, dn.name) >= 0:
+        if !skip && global_find_in(v, gpkg, dn.name) >= 0:
             skip = true
         end
         // An extern *variable* - POSIX `environ`, which std/os/process
@@ -362,29 +372,38 @@ func emit_globals(v &: Lv, s &: sm.Sema, a &: at.Ast, program: int):
             ev.name = dn.name
             ev.ptr = eref
             ev.ts = ets
+            // No package: it is the one object everyone links against.
+            ev.pkg = ""
+            ev.init = 0
             v.globals.push(ev)
             any = true
             skip = true
         end
         if !skip:
             ts := str.Len(dn.type_str) > 0 ? dn.type_str : "i32"
-            gref := "@g." + str.TrimPrefix(struct_ltype(dn.name), "%struct.")
+            gref := "@g." + gpkg + "." + str.TrimPrefix(struct_ltype(dn.name), "%struct.")
             lty := ty_of(v, s, a, ts)
             mut init := ""
             mut cv := ""
+            mut gv := LvVar {}
+            gv.name = dn.name
+            gv.ptr = gref
+            gv.ts = ts
+            gv.pkg = gpkg
+            gv.init = 0
             if dn.a != 0 && const_value(v, s, a, dn.a, cv):
                 init = cv
             else:
                 init = zero_of(s, ts)
                 if dn.a != 0:
-                    v.gdefer.push(d)
+                    gv.init = dn.a
+                    // The index of the entry pushed just below, not a name to
+                    // look back up: two packages can have a global of the same
+                    // name and the lookup would pick one of them at random.
+                    v.gdefer.push(v.globals.len())
                 end
             end
             out_g(v, gref + " = internal global " + lty + " " + init + "\n")
-            mut gv := LvVar {}
-            gv.name = dn.name
-            gv.ptr = gref
-            gv.ts = ts
             v.globals.push(gv)
             any = true
         end
@@ -460,6 +479,27 @@ func body_sig_for(s &: sm.Sema, a &: at.Ast, name: str, owner &: int): int:
     ret 0 - 1
 end
 
+// StdcallCc - " x86_stdcallcc" for an extern that is a Win32 API on a
+// 32-bit Windows target, "" otherwise. See k_lv_win32_stdcall in
+// llvmgen.salam for why this is a table and how it was checked.
+//
+// Both the `declare` and every call site have to carry it: the convention
+// decides who pops the arguments, and disagreeing on that is what left the
+// i686 stack eight bytes out after the first Win32 call. Emitting it also
+// makes LLVM's mangler append the @N byte count, which is the decoration
+// kernel32's import library exports the function under.
+func StdcallCc(v &: Lv, name: str): str:
+    if !target_is_windows_of(v.triple) || target_ptr_bits_of(v.triple) != 32:
+        ret ""
+    end
+    repeat k_lv_win32_stdcall.len() with i:
+        if str.Equals(name, k_lv_win32_stdcall[i]):
+            ret " x86_stdcallcc"
+        end
+    end
+    ret ""
+end
+
 // ll_declare_extern - one bodyless `extern func` -> one `declare` line,
 // de-duplicated against everything already declared or defined.
 //
@@ -494,7 +534,7 @@ func declare_extern(v &: Lv, s &: sm.Sema, a &: at.Ast, name: str, sigid: int):
     dn2 := at.Get(a, sg.decl)
     mut b := co.SbNew()
     co.SbPuts(
-        b, "declare " + ty_of(v, s, a, sm.ToString(s, sg.ret_type)) + " @" + name + "("
+        b, "declare" + StdcallCc(v, name) + " " + ty_of(v, s, a, sm.ToString(s, sg.ret_type)) + " @" + name + "("
     )
     repeat sg.params.len() with j:
         if j != 0:
@@ -598,15 +638,15 @@ end
 // ll_emit_global_inits - runs at the top of main().
 func emit_global_inits(v &: Lv, s &: sm.Sema, a &: at.Ast):
     repeat v.gdefer.len() with i:
-        d := v.gdefer.get(i)
-        dn := at.Get(a, d)
-        gi := global_find(v, dn.name)
-        if gi >= 0:
+        gi := v.gdefer.get(i)
+        if gi >= 0 && gi < v.globals.len():
             g := v.globals.get(gi)
-            val := conv(v, s, a, lv_expr(v, s, a, dn.a), g.ts)
-            emit(
-                v, "store " + ty_of(v, s, a, g.ts) + " " + val + ", ptr " + g.ptr
-            )
+            if g.init != 0:
+                val := conv(v, s, a, lv_expr(v, s, a, g.init), g.ts)
+                emit(
+                    v, "store " + ty_of(v, s, a, g.ts) + " " + val + ", ptr " + g.ptr
+                )
+            end
         end
     end
 end

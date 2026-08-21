@@ -30,6 +30,8 @@ RUN --mount=type=cache,target=/var/cache/apk,sharing=locked \
             py3-numpy \
             bash \
             git \
+            curl \
+            unzip \
             coreutils \
             sqlite-dev \
             sqlite-static \
@@ -74,11 +76,27 @@ RUN addgroup -g "${SALAM_GID}" salam \
 ENV GOCACHE=/tmp/go-cache GOPATH=/tmp/go CARGO_HOME=/tmp/cargo
 WORKDIR /repo
 
-FROM toolchain AS salam-builder
-COPY c /repo/c
-WORKDIR /repo/c
-RUN make -j"$(nproc)"
+# A glibc base, not the Alpine toolchain stage: the published seed is
+# glibc-linked and will not run under musl at all - gcompat does not carry
+# libxml2 or the __isoc23_* symbols it needs. So the compiler is built here and
+# emitted for x86_64-linux-musl, which is static and runs in the bench stage.
+# The seed carries its own musl sysroot, so no cross toolchain is installed.
+FROM debian:stable-slim AS salam-builder
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates curl unzip gcc libc6-dev git libxml2 \
+    && rm -rf /var/lib/apt/lists/*
+ARG SALAM_SEED_SLUG=linux
+COPY tools /repo/tools
+COPY compiler /repo/compiler
+COPY std /repo/std
+COPY VERSION /repo/VERSION
 WORKDIR /repo
+RUN sh tools/bash/fetch-seed.sh --slug "${SALAM_SEED_SLUG}" --out /repo/seed \
+    && sh tools/bash/build-selfhost.sh --seed=/repo/seed/salam \
+    --output=/repo/salam -- --target=x86_64-linux-musl
+# Proof it is the static musl binary the bench stage needs, not a glibc one
+# that would die there the same way the seed does.
 RUN /repo/salam version
 
 FROM toolchain AS bench

@@ -219,6 +219,55 @@ k_lv_ints := [
 
 k_lv_uns := ["u8", "u16", "u32", "u64", "size"]
 
+// Win32 APIs are stdcall on i386, and that is not only a name-decoration
+// question: the callee pops the arguments. A call emitted with the default
+// C convention pops them a second time, so the very first GetConsoleMode
+// left ESP eight bytes high and the 32-bit Windows binary walked off its
+// own stack. Marking the declaration and the call x86_stdcallcc fixes the
+// convention, and LLVM's mangler then appends the @N byte count on its own,
+// which is also what makes the symbol match kernel32's _GetConsoleMode@8.
+//
+// A table because nothing in the source says which convention an extern
+// uses, and a `stdcall` keyword could not be used in std until a seed that
+// parses it ships.
+//
+// Derived rather than hand-listed, after a hand-listed one shipped without
+// GetFileType and the 32-bit Windows link came back undefined on it: every
+// function name declared anywhere in this tree was tested against the i686
+// mingw-w64 import libraries with nm, and a name is here exactly when they
+// define _Name@N and do NOT define a bare _Name. That is the condition
+// under which the undecorated reference could not link at all, so it is
+// also the condition under which the extern has to be stdcall.
+//
+// It is why the socket calls are on the list. On Windows send, recv,
+// socket and friends come from ws2_32 and are stdcall; on Linux they are
+// cdecl libc. The table is only consulted for a 32-bit Windows target, so
+// both readings stay correct. fopen, malloc and strlen are absent because
+// the import libraries define them undecorated, which is the same test.
+//
+// A missing name fails loudly at link time as an undefined symbol rather
+// than silently corrupting a stack, which is how the first version's gap
+// surfaced. CreateCoreWebView2EnvironmentWithOptions is the one entry nm
+// could not weigh in on - it lives in the WebView2 SDK, not in the mingw
+// import libraries - and it is stdcall by the same Win32 convention.
+k_lv_win32_stdcall := [
+    "CertCloseStore", "CertEnumCertificatesInStore", "CertOpenSystemStoreA", "CloseHandle",
+    "CreateCoreWebView2EnvironmentWithOptions", "CreateFileA", "CreateProcessA", "CreateWindowExA", "DebugBreak",
+    "DeleteCriticalSection", "DestroyWindow", "DispatchMessageA", "EnterCriticalSection", "FindClose",
+    "FindFirstFileA", "FindNextFileA", "GetConsoleMode", "GetConsoleScreenBufferInfo", "GetCurrentDirectoryA",
+    "GetCurrentProcess", "GetExitCodeProcess", "GetFileAttributesA", "GetFileAttributesExA", "GetFileType",
+    "GetLastError", "GetModuleHandleA", "GetProcAddress", "GetProcessTimes", "GetStdHandle", "GetSystemInfo",
+    "GetSystemTimeAsFileTime", "GetTickCount", "InitializeCriticalSection", "IsWindow", "LeaveCriticalSection",
+    "MoveFileExA", "MultiByteToWideChar", "PeekMessageA", "QueryPerformanceCounter", "QueryPerformanceFrequency",
+    "ReadConsoleInputA", "SetConsoleMode", "SetWindowPos", "SetWindowTextA", "Sleep", "SleepEx",
+    "TerminateProcess", "TranslateMessage", "WSAPoll", "WSAStartup", "WaitForSingleObject", "WideCharToMultiByte",
+    "WinHttpAddRequestHeaders", "WinHttpCloseHandle", "WinHttpConnect", "WinHttpOpen", "WinHttpOpenRequest",
+    "WinHttpQueryHeaders", "WinHttpReadData", "WinHttpReceiveResponse", "WinHttpSendRequest", "accept", "bind",
+    "closesocket", "connect", "freeaddrinfo", "getaddrinfo", "gethostbyname", "getsockname", "htons", "inet_ntoa",
+    "ioctlsocket", "listen", "ntohs", "poll", "recv", "recvfrom", "send", "sendto", "setsockopt", "shutdown",
+    "socket"
+]
+
 // ll_extern_seen's prologue[] (codegen_llvm_decl.c), order kept.
 k_lv_prologue_externs := [
     "printf", "dprintf", "strlen", "strcmp", "malloc", "memcpy", "realloc", "free", "memmove", "abort",
@@ -281,6 +330,14 @@ pub struct LvVar:
     pub name: str = ""
     pub ptr: str = ""
     pub ts: str = ""
+    // Set on module-level globals: the package that declared this one, so two
+    // packages can each have a `COLS` without the second silently binding to
+    // the first's storage. "" on function locals and on extern globals, which
+    // name one object the whole program shares.
+    pub pkg: str = ""
+    // A module-level global whose initialiser is not an LLVM constant: the
+    // expression node, replayed by emit_global_inits.
+    pub init: int = 0
 end
 
 // lstr_t - an interned string constant.
@@ -320,7 +377,7 @@ pub struct Lv:
     pub this_ref: str = ""
     pub self_byval: bool = false
     pub globals: Vector<LvVar> = Vector {}
-    pub gdefer: Vector<int> = Vector {} // at.NodeIds of runtime-init decls
+    pub gdefer: Vector<int> = Vector {} // indices into `globals`
     pub extern_names: Vector<str> = Vector {}
     pub pkg_scope: int = 0 // sm ScopeId (0 = C NULL)
     pub emitted: Vector<str> = Vector {}

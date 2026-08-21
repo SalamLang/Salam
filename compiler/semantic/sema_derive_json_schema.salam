@@ -1,0 +1,596 @@
+package semantic
+
+import str
+import co "../sal_core.salam"
+import at "../ast.salam"
+import dg "../diag.salam"
+
+// ===== sema_derive_json_schema.c =====
+//
+// `jsonschema(v)`: the JSON Schema of `v`'s type, as a string.
+//
+// The third member of the json derive family, next to jsonenc/jsondec. Where
+// those write code that moves values, this one writes down what the encoder
+// would have produced - the same fields, the same wire names, the same
+// `@json` markers - so a description of a type's JSON form cannot drift from
+// the codec that implements it. Both come out of one struct declaration, in
+// the same pass, through the same attribute reader.
+//
+// The result is entirely known at compile time, so the generated function is
+// a single `ret "<document>"`:
+//
+//     func _jsonschema_User(_v: User): str:
+//         ret "{\"defs\":{...},\"schema\":{\"$ref\":\"#/$defs/User\"}}"
+//     end
+//
+// The parameter is there only so the call has somewhere to put its argument;
+// nothing reads it. Going through a function rather than folding the call
+// into a literal keeps this pass inside the machinery the other derives
+// already use - parse, install, and every backend emits it without knowing
+// this pass exists.
+//
+// THE ENVELOPE
+//
+// The document is two members, always in this order:
+//
+//     {"defs": {"User": {...}, "Address": {...}}, "schema": {...}}
+//
+// `schema` is the type's own schema and `defs` is every named struct and enum
+// it reached, referenced from `schema` as `#/$defs/Name`. They are handed over
+// separately rather than pre-merged because the two consumers want them in
+// different places: json.Schema splices `defs` back in as `$defs` and hands
+// out a standalone JSON Schema document, while net/http/swagger hoists them
+// into `components/schemas` and rewrites the ref prefix. Merging here would
+// only make one of the two take the document apart again.
+//
+// Recursion terminates because a named type is registered in `defs` before
+// its own body is built: a struct holding a Vector of itself asks for its own
+// schema from inside its field loop and gets the `$ref` back.
+
+// ------------------------------------------------------------- the $defs
+
+// What a `@json "-"` field returns, since "" already means "no JSON form".
+const JS_SKIP := "-"
+
+// Named struct and enum schemas collected on the way down, and the types they
+// came from. `names` is what a `$ref` spells; `bodies` is the schema text,
+// filled in after the entry is claimed so recursion has something to point at.
+struct SchemaDefs:
+    pub names: Vector<str> = Vector {}
+    pub bodies: Vector<str> = Vector {}
+    pub types: Vector<int> = Vector {}
+end
+
+func js_defs_free(d &: SchemaDefs):
+    d.names.free()
+    d.bodies.free()
+    d.types.free()
+end
+
+// The slot this type already occupies, or -1.
+func js_defs_find(d &: SchemaDefs, t: int): int:
+    repeat d.types.len() with i:
+        if d.types.get(i) == t:
+            ret i
+        end
+    end
+    ret 0 - 1
+end
+
+// What `#/$defs/...` calls this type: the key of its fully qualified
+// spelling, so `Point` in this package is "Point" and `geo.Point` is
+// "geo_Point".
+//
+// Never the bare declaration name, however unambiguous it looks from here.
+// Two `Config` structs in two packages are two schemas, and one document
+// calling both of them "Config" would describe one of them wrongly. Trying to
+// use the short name "when nothing else claims it" does not work either: the
+// type table fills in as types are reached, so whether a second `Config` is
+// visible yet depends on which schema was derived first, and the same type
+// would be named differently in two documents from one program. That is
+// exactly the property net/http/swagger relies on when it merges the defs of
+// many separate `jsonschema` calls into one `components/schemas`.
+//
+// The declaration's own short name is not lost - it goes in `title`, which is
+// what a documentation UI shows.
+func js_defs_name_for(s &: Sema, t: int): str:
+    ret derive_key(type_to_string(s, t))
+end
+
+// The name to show for this type, as written in its declaration.
+func js_title_of(s &: Sema, t: int): str:
+    sym := ty_at(s, t).decl
+    if sym == 0:
+        ret type_to_string(s, t)
+    end
+    ret sym_at(s, sym).name
+end
+
+// ------------------------------------------------------------------ @doc
+
+// The `@doc` text on a declaration, "" when it has none.
+//
+//     struct User:
+//         @doc "the name they signed up with"
+//         pub name: str = ""
+//         @doc "when they signed up," "as a Unix timestamp"
+//         pub joined: i64 = 0 as i64
+//     end
+//
+// A schema without prose is a list of field names a reader has to guess at,
+// and prose kept somewhere else is prose that goes stale. `@doc` puts it on
+// the field, where whoever changes the field is looking, and it reaches the
+// documentation from there without passing through anything a person has to
+// remember to update.
+//
+// Read off `aliases`, the same list `@json`/`@en`/`@fa` land in - so this
+// needs no parser change, and a `@doc` on something that has no schema is
+// simply text nothing reads.
+//
+// A marker's values join with a space, so a long sentence can be split across
+// lines the way the rest of the source is. It has to be one marker with
+// several values - the parser rejects a second `@doc` on the same definition,
+// and says so.
+func js_doc_of(s &: Sema, a &: at.Ast, sym: int): str:
+    if sym == 0:
+        ret ""
+    end
+    decl := sym_at(s, sym).decl
+    if decl == 0:
+        ret ""
+    end
+    al := at.Get(a, decl).aliases
+    mut out := ""
+    mut i := 0
+    until i + 1 < al.len():
+        key := al.get(i)
+        val := al.get(i + 1)
+        i += 2
+        if !str.Equals(key, "doc") || str.Len(val) == 0:
+            continue
+        end
+        if str.Len(out) > 0:
+            out = out + " "
+        end
+        out = out + val
+    end
+    ret out
+end
+
+// `,"description":"..."` for a declaration that has a `@doc`, "" otherwise.
+// Written as a suffix because every caller has already opened its object and
+// wants this last, where a reader of the JSON expects prose to be.
+func js_doc_member(s &: Sema, a &: at.Ast, sym: int): str:
+    text := js_doc_of(s, a, sym)
+    if str.Len(text) == 0:
+        ret ""
+    end
+    ret ",\"description\":" + js_qs(text)
+end
+
+// The same, for a schema that is finished: `{"type":"string"}` becomes
+// `{"type":"string","description":"..."}`. Used for a field, where the type's
+// own schema is built before it is known which field is asking.
+func js_with_doc(body: str, doc_member: str): str:
+    if str.Len(doc_member) == 0 || str.Len(body) < 2:
+        ret body
+    end
+    // A `$ref` is the one place a sibling keyword cannot go: under OpenAPI
+    // 3.1 it can, but plenty of readers still follow the 3.0 rule that a
+    // `$ref` object's other members are ignored. Wrapping in an `allOf` of
+    // one says the same thing in a way both read.
+    if str.Len(body) > 8 && str.Equals(body.substr(1, 6), "\"$ref\""):
+        ret "{\"allOf\":[" + body + "]" + doc_member + "}"
+    end
+    ret body.substr(0, str.Len(body) - 1) + doc_member + "}"
+end
+
+// --------------------------------------------------------------- strings
+
+func js_hex(n: int): str:
+    digits := "0123456789abcdef"
+    ret digits.substr(n, 1)
+end
+
+// `text` as a JSON string literal. Every control character is escaped, not
+// only the five JSON names: the result is embedded in generated Salam source,
+// where a raw newline would end the string literal it sits in.
+func js_qs(text: str): str:
+    mut out := "\""
+    repeat str.Len(text) with i:
+        b := byte_at(text, i)
+        if b == 34:
+            out = out + "\\\""
+        else b == 92:
+            out = out + "\\\\"
+        else b == 10:
+            out = out + "\\n"
+        else b == 13:
+            out = out + "\\r"
+        else b == 9:
+            out = out + "\\t"
+        else b < 32:
+            out = out + "\\u00" + js_hex(b / 16) + js_hex(b % 16)
+        else:
+            out = out + text.substr(i, 1)
+        end
+    end
+    ret out + "\""
+end
+
+func js_member(key: str, raw: str): str:
+    ret js_qs(key) + ":" + raw
+end
+
+// --------------------------------------------------------------- scalars
+
+// The OpenAPI type/format pair for a number, so a client generator can tell an
+// i64 - which JavaScript cannot hold exactly - from an i32.
+func js_number(s &: Sema, t: int): str:
+    k := ty_at(s, t).kind
+    if k == TY_F32:
+        ret "{\"type\":\"number\",\"format\":\"float\"}"
+    end
+    if k == TY_F64:
+        ret "{\"type\":\"number\",\"format\":\"double\"}"
+    end
+    wide := k == TY_I64 || k == TY_U64 || k == TY_SIZE
+    mut out := "{\"type\":\"integer\",\"format\":" + (wide ? "\"int64\"" : "\"int32\"")
+    if jd_is_unsigned(s, t):
+        out = out + ",\"minimum\":0"
+    end
+    ret out + "}"
+end
+
+// A schema for the types the encoder writes without help, "" for anything
+// else. Mirrors jd_scalar_call one branch for one branch.
+func js_scalar(s &: Sema, t: int): str:
+    k := ty_at(s, t).kind
+    if k == TY_STR || k == TY_UCHAR:
+        ret "{\"type\":\"string\"}"
+    end
+    if k == TY_BOOL:
+        ret "{\"type\":\"boolean\"}"
+    end
+    if k == TY_CHAR:
+        ret "{\"type\":\"string\",\"minLength\":1,\"maxLength\":1}"
+    end
+    if type_is_numeric(s, t):
+        ret js_number(s, t)
+    end
+    ret ""
+end
+
+// ----------------------------------------------------------------- enums
+
+// An enum encodes as its member's name, so its schema is the list of those
+// names. A value outside the declared set still encodes, as its number, which
+// is why the schema does not also say `"type":"string"`.
+func js_enum(s &: Sema, a &: at.Ast, t: int, d &: SchemaDefs): str:
+    sym := ty_at(s, t).decl
+    if sym == 0 || sym_at(s, sym).members == 0:
+        ret ""
+    end
+    hit := js_defs_find(d, t)
+    if hit >= 0:
+        ret "{\"$ref\":\"#/$defs/" + d.names.get(hit) + "\"}"
+    end
+    mems := scope_at(s, sym_at(s, sym).members).symbols
+    mut names := ""
+    mut n := 0
+    repeat mems.len() with i:
+        m := sym_at(s, mems.get(i))
+        if m.kind == SYM_ENUM_MEMBER:
+            if n > 0:
+                names = names + ","
+            end
+            names = names + js_qs(m.name)
+            n += 1
+        end
+    end
+    if n == 0:
+        ret ""
+    end
+    name := js_defs_name_for(s, t)
+    d.names.push(name)
+    d.types.push(t)
+    d.bodies.push(
+        "{\"title\":" + js_qs(js_title_of(s, t)) + js_doc_member(s, a, sym)
+            + ",\"enum\":[" + names + "]}"
+    )
+    ret "{\"$ref\":\"#/$defs/" + name + "\"}"
+end
+
+// ------------------------------------------------------------ composites
+
+func js_array(item: str, exact: str): str:
+    mut out := "{\"type\":\"array\",\"items\":" + item
+    if str.Len(exact) > 0:
+        out = out + ",\"minItems\":" + exact + ",\"maxItems\":" + exact
+    end
+    ret out + "}"
+end
+
+// A HashMap is a JSON object whose keys are not known ahead of time, which is
+// what `additionalProperties` describes. An integer key is written as its
+// digits by the encoder, and `propertyNames` records that so a reader knows
+// the keys are numbers in string clothing rather than free text.
+func js_map(s &: Sema, a &: at.Ast, key: int, val: int, d &: SchemaDefs, sp: co.SrcSpan): str:
+    kk := ty_at(s, key).kind
+    if kk != TY_STR && kk != TY_UCHAR && !type_is_integer(s, key):
+        ret ""
+    end
+    body := js_schema(s, a, val, d, sp)
+    if str.Len(body) == 0:
+        ret ""
+    end
+    mut out := "{\"type\":\"object\",\"additionalProperties\":" + body
+    if type_is_integer(s, key):
+        out = out + ",\"propertyNames\":{\"pattern\":\"^-?[0-9]+$\"}"
+    end
+    ret out + "}"
+end
+
+// A pointer encodes as `null` or as its pointee, and JSON Schema spells that
+// as a two-branch anyOf. OpenAPI 3.1 reads it the same way.
+func js_ptr(s &: Sema, a &: at.Ast, t: int, d &: SchemaDefs, sp: co.SrcSpan): str:
+    inner := js_schema(s, a, ty_at(s, t).pointee, d, sp)
+    if str.Len(inner) == 0:
+        ret ""
+    end
+    ret "{\"anyOf\":[" + inner + ",{\"type\":\"null\"}]}"
+end
+
+// ---------------------------------------------------------------- fields
+
+// One `"wire_name": <schema>` pair, after pushing the name onto `required`
+// unless the field is allowed to be missing. "" when the field has no JSON
+// form, having named it in a diagnostic first; JS_SKIP for a `@json "-"`
+// field, which the caller drops.
+func js_field(
+    s &: Sema, a &: at.Ast, f: int, d &: SchemaDefs, required &: Vector<str>, sp: co.SrcSpan
+): str:
+    fa := jd_attr_of(s, a, f, sp)
+    if !fa.ok:
+        ret ""
+    end
+    if fa.skip:
+        ret JS_SKIP
+    end
+    fv := sym_at(s, f)
+    mut body := ""
+    if fa.as_string:
+        // `@json "" "string"` sends the scalar quoted, so that - not the
+        // number behind it - is what a reader of this schema will see.
+        if !jd_is_scalar(s, fv.ty):
+            jd_field_err(s, a, f, fv.ty, sp)
+            ret ""
+        end
+        body = "{\"type\":\"string\"}"
+    else:
+        body = js_schema(s, a, fv.ty, d, sp)
+    end
+    if str.Len(body) == 0:
+        jd_field_err(s, a, f, fv.ty, sp)
+        ret ""
+    end
+    body = js_with_doc(body, js_doc_member(s, a, f))
+    // jd_attr_option already turns `omitempty` into `optional`, so one test
+    // covers both: a field the encoder may leave out is not one a reader can
+    // count on being there.
+    if !fa.optional:
+        required.push(fa.name)
+    end
+    ret js_member(fa.name, body)
+end
+
+// The object schema for a plain struct. `additionalProperties` is false
+// because the derived decoder is strict - an unknown key is an error there -
+// and the schema should not promise more than the codec accepts.
+func js_struct_body(
+    s &: Sema, a &: at.Ast, t: int, title: str, d &: SchemaDefs, sp: co.SrcSpan
+): str:
+    sym := ty_at(s, t).decl
+    mems := sym_at(s, sym).members == 0 ? Vector {} as Vector<int>
+        : scope_at(s, sym_at(s, sym).members).symbols
+    mut required := Vector {} as Vector<str>
+    defer required.free()
+    mut props := ""
+    mut n := 0
+    repeat mems.len() with i:
+        f := mems.get(i)
+        if sym_at(s, f).kind == SYM_FIELD:
+            part := js_field(s, a, f, d, required, sp)
+            if str.Len(part) == 0:
+                ret ""
+            end
+            if !str.Equals(part, JS_SKIP):
+                if n > 0:
+                    props = props + ","
+                end
+                props = props + part
+                n += 1
+            end
+        end
+    end
+    mut out := "{\"title\":" + js_qs(title)
+    out = out + js_doc_member(s, a, sym)
+    out = out + ",\"type\":\"object\",\"properties\":{" + props + "}"
+    if required.len() > 0:
+        out = out + ",\"required\":["
+        repeat required.len() with j:
+            if j > 0:
+                out = out + ","
+            end
+            out = out + js_qs(required.get(j))
+        end
+        out = out + "]"
+    end
+    ret out + ",\"additionalProperties\":false}"
+end
+
+// A named struct: claim the `$defs` slot first, then build the body. Anything
+// the body reaches that comes back around to this type finds the slot already
+// there and gets a `$ref`, which is what stops a self-referential struct from
+// recursing forever.
+func js_struct(s &: Sema, a &: at.Ast, t: int, d &: SchemaDefs, sp: co.SrcSpan): str:
+    hit := js_defs_find(d, t)
+    if hit >= 0:
+        ret "{\"$ref\":\"#/$defs/" + d.names.get(hit) + "\"}"
+    end
+    name := js_defs_name_for(s, t)
+    slot := d.names.len()
+    d.names.push(name)
+    d.types.push(t)
+    d.bodies.push("")
+    body := js_struct_body(s, a, t, js_title_of(s, t), d, sp)
+    if str.Len(body) == 0:
+        ret ""
+    end
+    d.bodies.set(slot, body)
+    ret "{\"$ref\":\"#/$defs/" + name + "\"}"
+end
+
+// A struct that is really a container, or one that presents a wire form of
+// its own. The three cases jd_enc_of_struct handles, answered the same way it
+// answers them so the schema keeps describing what the encoder writes.
+func js_of_struct(s &: Sema, a &: at.Ast, t: int, d &: SchemaDefs, sp: co.SrcSpan): str:
+    sym := ty_at(s, t).decl
+    sid := derive_method_sig(s, sym, "to_json", 0)
+    if sid != 0 && ty_at(s, sig_at(s, sid).ret_type).kind == TY_STR:
+        // The type writes its own JSON and nothing here can see what shape
+        // that is. An empty schema accepts anything, which is honest; the
+        // title says whose it is so a reader knows where to look.
+        ret "{\"title\":" + js_qs(sym_at(s, sym).name) + "}"
+    end
+    cur := derive_map_cursor(s, sym)
+    if cur != 0:
+        kt := sig_at(s, derive_method_sig(s, cur, "key", 0)).ret_type
+        vt := sig_at(s, derive_method_sig(s, cur, "value", 0)).ret_type
+        ret js_map(s, a, kt, vt, d, sp)
+    end
+    count := derive_seq_count(s, sym)
+    elem := derive_seq_elem(s, sym)
+    if str.Len(count) > 0 && elem >= 0:
+        item := js_schema(s, a, elem, d, sp)
+        ret str.Len(item) == 0 ? "" : js_array(item, "")
+    end
+    ret js_struct(s, a, t, d, sp)
+end
+
+// The schema for one type, "" when the type has no JSON form. The shape of
+// this function follows jd_enc_body/jd_enc_value: every branch that encodes
+// there describes itself here, and every branch that fails there fails here.
+func js_schema(s &: Sema, a &: at.Ast, t: int, d &: SchemaDefs, sp: co.SrcSpan): str:
+    if t < 0:
+        ret ""
+    end
+    plain := js_scalar(s, t)
+    if str.Len(plain) > 0:
+        ret plain
+    end
+    v := ty_at(s, t)
+    if v.kind == TY_ENUM:
+        ret js_enum(s, a, t, d)
+    end
+    if v.kind == TY_PTR:
+        ret js_ptr(s, a, t, d, sp)
+    end
+    if v.kind == TY_STRUCT:
+        ret js_of_struct(s, a, t, d, sp)
+    end
+    if v.kind == TY_VEC || v.kind == TY_SLICE:
+        item := js_schema(s, a, v.elem, d, sp)
+        ret str.Len(item) == 0 ? "" : js_array(item, "")
+    end
+    if v.kind == TY_ARRAY:
+        item2 := js_schema(s, a, v.elem, d, sp)
+        ret str.Len(item2) == 0 ? "" : js_array(item2, "" + v.length)
+    end
+    if v.kind == TY_MAP:
+        ret js_map(s, a, v.key, v.elem, d, sp)
+    end
+    ret ""
+end
+
+// ---------------------------------------------------------------- driver
+
+// The whole document: the type's own schema, and every named schema it
+// reached along the way.
+func js_document(s &: Sema, a &: at.Ast, t: int, sp: co.SrcSpan): str:
+    mut d := SchemaDefs {}
+    defer js_defs_free(d)
+    root := js_schema(s, a, t, d, sp)
+    if str.Len(root) == 0:
+        ret ""
+    end
+    mut defs := ""
+    repeat d.names.len() with i:
+        if i > 0:
+            defs = defs + ","
+        end
+        defs = defs + js_member(d.names.get(i), d.bodies.get(i))
+    end
+    ret "{\"defs\":{" + defs + "},\"schema\":" + root + "}"
+end
+
+func js_source(s &: Sema, a &: at.Ast, t: int, fname: str, sp: co.SrcSpan): str:
+    spelling := derive_type_spelling(s, t)
+    if str.Len(spelling) == 0:
+        ret ""
+    end
+    doc := js_document(s, a, t, sp)
+    if str.Len(doc) == 0:
+        ret ""
+    end
+    out := "func " + fname + "(" + JV_PARAM + ": " + spelling + "): str:\n"
+    ret out + JIND + "ret " + jd_quote(doc) + "\nend\n"
+end
+
+func derive_json_schema(s &: Sema, a &: at.Ast, t: int, home: int, sp: co.SrcSpan): str:
+    if t < 0 || s.program == 0:
+        ret ""
+    end
+    fname := derive_json_name(s, "_jsonschema_", t)
+    if derive_registry_find(s, fname) != 0:
+        ret fname
+    end
+    if scope_lookup_local(s, s.global, fname) != 0:
+        ret ""
+    end
+    derive_registry_claim(s, fname)
+    ret derive_json_finish(s, a, js_source(s, a, t, fname, sp), fname, home)
+end
+
+// `jsonschema(v)`, the hook std/encoding/json's generic Schema is written
+// around. Recognised by name in sema_checkcall the way jsonenc is, and
+// reachable only from inside that module for the same reason: the function it
+// generates is installed in that module's scope.
+func check_json_schema_builtin(s &: Sema, a &: at.Ast, n: int, sp: co.SrcSpan): int:
+    fallback := sema_ty(s, TY_STR)
+    if at.ChildCount(a, n) != 1:
+        serr(s, 12, sp, "'jsonschema' takes 1 arguments")
+        ret sema_decorate(s, a, n, fallback)
+    end
+    argt := sema_check_expr(s, a, at.Child(a, n, 0))
+    home := derive_home_of(s, s.cur, "_dqs")
+    if home == 0:
+        serr(
+            s, 12, sp,
+            "'jsonschema' is internal to std/encoding/json; use json.Schema instead"
+        )
+        ret sema_decorate(s, a, n, fallback)
+    end
+    before := dg.ErrorCount(s.diag)
+    fname := derive_json_schema(s, a, argt, home, sp)
+    if str.Len(fname) == 0:
+        if dg.ErrorCount(s.diag) == before:
+            serr(
+                s, 2, sp,
+                "cannot describe a value of type '" + type_to_string(s, argt) + "' as JSON"
+            )
+        end
+        ret sema_decorate(s, a, n, fallback)
+    end
+    ret check_json_bind(s, a, n, fname, fallback)
+end

@@ -63,13 +63,42 @@ pub const SERVER_VERSION := SALAM_VERSION
 // Bytes per socket read; one buffer per connection, reused per request.
 const _RD_CHUNK := 65536
 
+// How many listeners one process may run, and the split point of the packed
+// (slot, fd) pair their connection threads are started with: the slot index
+// sits above bit 32, the file descriptor below it. See "the server table".
+const _SRV_MAX := 8
+const _SRV_SHIFT := 32 as i64
+const _SRV_MASK := 4294967295 as i64
+
 mut _reqctx_size := 0 as i64
-mut _current_router := router.NewRouter()
-mut _hide_tokens := false
-mut _access_log := false
-mut _current_tls_cfg := tls.NewServerConfig("", "")
 mut _keepalive_idle_ms := 5000
 mut _keepalive_max_reqs := 100000
+
+// ------------------------------------------------------- the server table
+//
+// One process, several listeners. There used to be a single `_current_router`
+// global that Run() wrote before its accept loop and every handler thread
+// read; a second Run() in the same process overwrote it, and both listeners
+// then dispatched through whichever router started last. That is not an
+// exotic case - an API on 8080 with its OpenAPI docs on 8081 (see
+// net/http/swagger) is two servers, and so is a health endpoint on a port a
+// load balancer can reach but the internet cannot.
+//
+// So a server's settings live in a slot, and the slot index travels with the
+// connection: Run packs it into the high half of the i64 it hands the
+// connection thread, next to the accepted file descriptor. Nothing is looked
+// up per request that was not already known when the listener started.
+//
+// The vectors are filled to _SRV_MAX once, on the first Run, and never grow
+// again - Run only `set`s. That matters because handler threads read this
+// table without a lock: a push that reallocated the backing buffer while a
+// thread was reading through it would be a use-after-free, whereas a slot
+// written before its own listener exists is read by nobody until then.
+mut _srv_routers := Vector {} as Vector<router.Router>
+mut _srv_hide := Vector {} as Vector<bool>
+mut _srv_log := Vector {} as Vector<bool>
+mut _srv_tls := Vector {} as Vector<tls.ServerConfig>
+mut _srv_count := 0
 
 @en "Context"
 @fa "زمینه"
@@ -125,6 +154,48 @@ end
 // before the first real request can reach _safe_static_path, avoids
 // hitting that gap on live traffic. Cheap and process-wide: this needs to
 // run exactly once, not once per connection/thread.
+func _srv_init():
+    if _srv_routers.len() > 0:
+        ret
+    end
+    repeat _SRV_MAX with _:
+        _srv_routers.push(router.NewRouter())
+        _srv_hide.push(false)
+        _srv_log.push(false)
+        _srv_tls.push(tls.NewServerConfig("", ""))
+    end
+end
+
+// Claim a slot for a server about to start listening. Past _SRV_MAX the last
+// slot is reused rather than the call failing: a ninth listener is already a
+// misconfiguration, and sharing a slot degrades to the old single-router
+// behaviour instead of dropping the server on the floor.
+func _srv_claim(r: router.Router, hide: bool, log: bool): int:
+    _srv_init()
+    mut slot := _srv_count
+    if slot >= _SRV_MAX:
+        slot = _SRV_MAX - 1
+    else:
+        _srv_count += 1
+    end
+    _srv_routers.set(slot, r)
+    _srv_hide.set(slot, hide)
+    _srv_log.set(slot, log)
+    ret slot
+end
+
+func _srv_pack(slot: int, fd: i64): i64:
+    ret (slot as i64 << _SRV_SHIFT) | fd
+end
+
+func _srv_slot_of(packed: i64): int:
+    ret (packed >> _SRV_SHIFT) as int
+end
+
+func _srv_fd_of(packed: i64): i64:
+    ret packed & _SRV_MASK
+end
+
 func _warm_up_split():
     junk := "a/b".split("/")
     defer junk.free()
@@ -396,6 +467,19 @@ func _server_header(hide: bool): str:
     ret "Salam/".concat(SERVER_VERSION)
 end
 
+// Whether the handler already set a header of its own by this name. Header
+// names are case-insensitive, so a handler that wrote "content-type" has to
+// count as having written "Content-Type" - anything else sends the header
+// twice, which is what a client of this server used to get on every JSON
+// response that also named a charset.
+func _has_header(ctx: i64, name: str): bool:
+    n := salam_ctx_kv_n(ctx, 2)
+    repeat n with i:
+        if str.EqualFold(salam_ctx_kv_key(ctx, 2, i), name): ret true end
+    end
+    ret false
+end
+
 // "200 OK" without a heap allocation. The old path called conv.FormatInt to
 // turn the number into digits and mime.StatusText to look up the reason
 // phrase, then concatenated both, for every response. These four cover
@@ -433,10 +517,18 @@ func _fill_response(b &: str.StringBuilder, ctx: i64, hide: bool, keep: bool):
     else:
         str.BufAppend(b, "\r\nConnection: close")
     end
+    shdr := _server_header(hide)
     str.BufAppend(b, "\r\nServer: ")
-    str.BufAppend(b, _server_header(hide))
+    str.BufAppend(b, shdr)
+    // X-Powered-By is the header an operator reads to find out what answered.
+    // A proxy in front of the service is free to rewrite Server, and most do;
+    // almost none touch this one, so a Salam service says its own name twice.
+    if _has_header(ctx, "X-Powered-By") == false:
+        str.BufAppend(b, "\r\nX-Powered-By: ")
+        str.BufAppend(b, shdr)
+    end
     str.BufAppend(b, "\r\n")
-    if ct.len() > 0:
+    if ct.len() > 0 && _has_header(ctx, "Content-Type") == false:
         str.BufAppend(b, "Content-Type: ")
         str.BufAppend(b, ct)
         str.BufAppend(b, "\r\n")
@@ -612,6 +704,8 @@ func _send_file(fd: i64, path: str, ct: str, server_hdr: str, keep: bool): int:
         str.BufAppend(hb, "\r\nConnection: close\r\nServer: ")
     end
     str.BufAppend(hb, server_hdr)
+    str.BufAppend(hb, "\r\nX-Powered-By: ")
+    str.BufAppend(hb, server_hdr)
     str.BufAppend(hb, "\r\n\r\n")
     hdr := str.BufStr(hb)
     str.BufFree(hb)
@@ -766,8 +860,8 @@ func _insertion_sort_strs(v &: Vector<str>):
     end
 end
 
-func _log_access(method: str, path: str, status: int):
-    if _access_log == false: ret end
+func _log_access(slot: int, method: str, path: str, status: int):
+    if _srv_log.get(slot) == false: ret end
     println method, path, "->", status
 end
 
@@ -777,7 +871,7 @@ end
 // straight to the transport and there is nothing left to send).
 // Serves one request and writes its response. Sets `keep` to whether the
 // connection may be reused afterwards; the caller owns the socket either way.
-func _serve_request(fd: i64, req: str, keep &: bool): bool:
+func _serve_request(slot: int, fd: i64, req: str, keep &: bool): bool:
     if req.len() == 0:
         keep = false
         ret false
@@ -785,8 +879,8 @@ func _serve_request(fd: i64, req: str, keep &: bool): bool:
     ctx := salam_ctx_new(fd)
     _parse_http(ctx, req)
     keep = _rc(ctx).keep_alive
-    r := _current_router
-    hide := _hide_tokens
+    r := _srv_routers.get(slot)
+    hide := _srv_hide.get(slot)
     shdr := _server_header(hide)
     mut static_handled := false
     if r.has_static:
@@ -826,7 +920,7 @@ func _serve_request(fd: i64, req: str, keep &: bool): bool:
             salam_ctx_set(ctx, 5, "404 Not Found")
         end
     end
-    _log_access(salam_ctx_get(ctx, 0), salam_ctx_get(ctx, 1), salam_ctx_get_status(ctx))
+    _log_access(slot, salam_ctx_get(ctx, 0), salam_ctx_get(ctx, 1), salam_ctx_get_status(ctx))
     if salam_ctx_is_sent(ctx) == 0:
         mut b := str.NewBuilder()
         _fill_response(b, ctx, hide, keep)
@@ -852,7 +946,9 @@ end
 // with until the client's next request - which the client will not send
 // until it has this response. Nagle plus delayed ACK turns that standoff
 // into tens of milliseconds of latency on an otherwise idle link.
-func _web_conn_handler(fd: i64):
+func _web_conn_handler(packed: i64):
+    slot := _srv_slot_of(packed)
+    fd := _srv_fd_of(packed)
     sock := rawsock.FromFd(fd)
     rawsock.SetNoDelay(sock, true)
     rawsock.SetTimeout(sock, _keepalive_idle_ms)
@@ -863,7 +959,7 @@ func _web_conn_handler(fd: i64):
         req := _read_request(fd, scratch, pending)
         if req.len() == 0: break end
         mut keep := true
-        if _serve_request(fd, req, keep) == false: break end
+        if _serve_request(slot, fd, req, keep) == false: break end
         served += 1
         if keep == false || served >= _keepalive_max_reqs: break end
     end
@@ -889,8 +985,10 @@ end
 // factoring it out cleanly needs the static-file decision separated
 // from the static-file I/O, which is a slightly bigger refactor than
 // this pass covers. Keep both branches in sync by hand until then.
-func _web_tls_conn_handler(fd: i64):
-    mut c := tls.WrapServer(fd, _current_tls_cfg)
+func _web_tls_conn_handler(packed: i64):
+    slot := _srv_slot_of(packed)
+    fd := _srv_fd_of(packed)
+    mut c := tls.WrapServer(fd, _srv_tls.get(slot))
     if !tls.ConnOk(c):
         tls.Close(c)
         ret
@@ -903,8 +1001,8 @@ func _web_tls_conn_handler(fd: i64):
     ctx := salam_ctx_new(fd)
     defer salam_ctx_free(ctx)
     _parse_http(ctx, req)
-    r := _current_router
-    hide := _hide_tokens
+    r := _srv_routers.get(slot)
+    hide := _srv_hide.get(slot)
     shdr := _server_header(hide)
     mut static_handled := false
     if r.has_static:
@@ -942,7 +1040,7 @@ func _web_tls_conn_handler(fd: i64):
             salam_ctx_set(ctx, 5, "404 Not Found")
         end
     end
-    _log_access(salam_ctx_get(ctx, 0), salam_ctx_get(ctx, 1), salam_ctx_get_status(ctx))
+    _log_access(slot, salam_ctx_get(ctx, 0), salam_ctx_get(ctx, 1), salam_ctx_get_status(ctx))
     if salam_ctx_is_sent(ctx) == 0:
         resp := _build_response(ctx, hide)
         tls.Write(c, resp)
@@ -965,6 +1063,8 @@ func _tls_send_file(c &: tls.Conn, path: str, ct: str, server_hdr: str):
     hdr = hdr.concat("\r\nContent-Type: ")
     hdr = hdr.concat(ct)
     hdr = hdr.concat("\r\nConnection: close\r\nServer: ")
+    hdr = hdr.concat(server_hdr)
+    hdr = hdr.concat("\r\nX-Powered-By: ")
     hdr = hdr.concat(server_hdr)
     hdr = hdr.concat("\r\n\r\n")
     tls.Write(c, hdr)

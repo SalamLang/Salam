@@ -39,6 +39,9 @@ extern:
     // Must match the declaration in Salam's generated C prelude exactly:
     // extern int snprintf(char *buf, uint64_t size, const char *fmt, ...);
     func snprintf(buf: char*, cap: u64, fmt: str, ...): int
+    // For FmtF64's round-trip test - the only correctly-rounded reader
+    // available here.
+    func strtod(s: str, endptr: void*): f64
 end
 
 // ===== port of c/src/core/timer.c (externs; bodies at the end of this file)
@@ -323,6 +326,42 @@ func c_format_f64(
     end
     mem.Free(buf)
     ret out
+end
+
+// One "%.Ng" rendering of `v`.
+func fmt_g(v: f64, prec: int): str:
+    cap := 64 as u64
+    buf := mem.Allocate(cap)
+    n := snprintf(buf as char*, cap, "%." + str.FromInt(prec as i64) + "g", v)
+    mut out := ""
+    if n > 0:
+        out = str.Clone(buf as str)
+    end
+    mem.Free(buf)
+    ret out
+end
+
+// FmtF64 - the shortest text that reads back as exactly this double: 15
+// significant digits, then 16, then 17, the first that survives strtod.
+// The compile-time twin of std/text's salam_fmt_f64, for the constant
+// folding that writes a float literal straight into a print's format
+// string; the two have to agree, or the same value would print differently
+// depending on whether the compiler could see it.
+pub func FmtF64(v: f64): str:
+    // printf spells a negative NaN "-nan" on glibc; the sign of a NaN is
+    // not information this language shows.
+    if v != v:
+        ret "nan"
+    end
+    mut prec := 15
+    until prec <= 17:
+        sv := fmt_g(v, prec)
+        if prec == 17 || strtod(sv, null) == v:
+            ret sv
+        end
+        prec += 1
+    end
+    ret ""
 end
 
 // ===== prelude.h =====

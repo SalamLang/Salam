@@ -1,0 +1,114 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package aws
+
+// AWS Signature Version 4, and the S3 object API built on it.
+//
+// The signing half is generic: SignRequest() will sign a request for any AWS
+// service, and S3 is simply the first caller. The S3 half is deliberately the
+// small part of the API that an application actually uses - put an object, get
+// it back, delete it, ask whether it is there, and hand a browser a URL that
+// works for the next few minutes without giving it a credential.
+//
+// It works against S3 itself and against the S3-compatible services that
+// matter in practice: MinIO, Cloudflare R2, Backblaze B2, Wasabi, Ceph. What
+// differs between them is addressing, which is the `path_style` flag.
+//
+// Two things this package does NOT do, both on purpose:
+//
+//   * It does not stream. An object is a buffer, and a multi-gigabyte upload
+//     wants multipart, which is a different API with a different failure model.
+//   * It does not manage credentials. There is no instance-metadata lookup and
+//     no profile file; a Config is filled in by the caller, which is what makes
+//     it testable and what keeps a surprise network call out of a signing
+//     function.
+//
+// See tests/en/stdlib/aws_demo.salam.
+
+pub const SERVICE_S3 := "s3"
+pub const ALGORITHM := "AWS4-HMAC-SHA256"
+
+// The hash of an empty body, which every GET, HEAD and DELETE signs over.
+// Precomputed because it never changes and appears in every such request.
+pub const EMPTY_SHA256 := "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+// The literal S3 accepts instead of a body hash when the payload is not to be
+// hashed. Only valid over HTTPS, where the transport already protects it.
+pub const UNSIGNED_PAYLOAD := "UNSIGNED-PAYLOAD"
+
+// Config - where the objects are and who is asking.
+//
+// `endpoint` carries the scheme and host and nothing else:
+// "https://s3.eu-central-1.amazonaws.com", "http://127.0.0.1:9000" for a local
+// MinIO. The bucket is added by the addressing mode rather than being written
+// into the endpoint, so one Config can be reused across buckets by copying it.
+pub struct Config:
+    pub endpoint: str = ""
+    pub region: str = "us-east-1"
+    pub bucket: str = ""
+    pub access_key: str = ""
+    pub secret_key: str = ""
+    // Set for temporary credentials from STS or an instance role. Travels as
+    // X-Amz-Security-Token and is part of the signature.
+    pub session_token: str = ""
+    // Path style puts the bucket in the path (host/bucket/key); virtual-host
+    // style puts it in the hostname (bucket.host/key). AWS has deprecated path
+    // style for new buckets; every self-hosted alternative requires it, which
+    // is why it is the default here.
+    pub path_style: bool = true
+    pub service: str = "s3"
+    // Seconds a signature is honoured for. Only presigned URLs carry one; a
+    // signed header is checked against its own timestamp.
+    pub expires: int = 900
+end
+
+// Result - one operation's outcome.
+//
+// `ok` is the only field to test. A failure carries a status when the service
+// answered and zero when it never did, and `error` is either the service's own
+// message or this package's reason for not asking.
+pub struct Result:
+    pub ok: bool = false
+    pub status: int = 0
+    pub body: str = ""
+    pub etag: str = ""
+    pub length: i64 = 0
+    pub error: str = ""
+end
+
+// NewConfig - a Config with the two things that have no sensible default.
+pub func NewConfig(endpoint: str, bucket: str): Config:
+    ret Config { endpoint = endpoint, bucket = bucket }
+end
+
+// WithCredentials - the same Config with keys attached, so a caller can build
+// one in a single expression.
+pub func WithCredentials(cfg: Config, access_key: str, secret_key: str): Config:
+    mut out := cfg
+    out.access_key = access_key
+    out.secret_key = secret_key
+    ret out
+end
+
+// Configured - whether a Config has everything a request needs. Checked before
+// signing, so a missing key is a clear refusal rather than a 403 from AWS.
+pub func Configured(cfg: Config): bool:
+    if cfg.endpoint.len() == 0 || cfg.bucket.len() == 0: ret false end
+    ret cfg.access_key.len() > 0 && cfg.secret_key.len() > 0
+end
+
+pub func Failure(reason: str): Result:
+    ret Result { ok = false, error = reason }
+end

@@ -108,6 +108,19 @@ lld_includedir() {
 }
 
 WORK=$(mktemp -d)
+
+# llvm-ar on MSYS2 is a native Windows binary reading an MRI script full of
+# paths this shell writes. It cannot resolve an MSYS path like /tmp/tmp.XXXX,
+# so every "addmod" line came back as "No such file or directory". Everything
+# that goes INTO the script gets converted; everything used by the shell itself
+# stays as it is.
+to_ar_path() {
+    if command -v cygpath >/dev/null 2>&1; then
+        cygpath -m "$1"
+    else
+        printf '%s' "$1"
+    fi
+}
 trap 'rm -rf "$WORK"' EXIT INT TERM
 
 echo "llvm-config : $LLVM_CONFIG ($($LLVM_CONFIG --version))"
@@ -154,8 +167,8 @@ esac
 MRI=$WORK/mri
 mkdir -p "$OUT"
 : >"$MRI"
-echo "create $OUT/libsalam_llvm.a" >>"$MRI"
-for o in $SHIMS; do echo "addmod $o" >>"$MRI"; done
+echo "create $(to_ar_path "$OUT/libsalam_llvm.a")" >>"$MRI"
+for o in $SHIMS; do echo "addmod $(to_ar_path "$o")" >>"$MRI"; done
 
 # A host can have llvm-config and the headers and still have no static
 # components at all (a shared-only LLVM package). Left unchecked, every
@@ -182,7 +195,7 @@ missing_llvm=
 for l in $LLVM_LIBS $(for x in $LLD_LIBS; do echo "-l$x"; done); do
     case "$l" in -l*) nm="lib${l#-l}.a" ;; *) continue ;; esac
     if a=$(find_lib "$nm"); then
-        echo "addlib $a" >>"$MRI"
+        echo "addlib $(to_ar_path "$a")" >>"$MRI"
         n=$((n + 1))
     else
         case "$nm" in

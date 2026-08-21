@@ -17,6 +17,33 @@ import co "../sal_core.salam"
 import pf "../prof_self.salam"
 import lv "../llvmgen/llvmgen.salam"
 
+// native_link_triple - the triple a build with NO --target actually links
+// for, but only where that link needs a sysroot to succeed.
+//
+// On Windows the native path goes through LinkMingw, which wants the same
+// x86_64-w64-mingw32 tree a cross build does. The sysroot lookup below used
+// to run only when --target was given, so a native Windows build never
+// resolved one - not the bundled tree, not the one compiled into the binary
+// - and LinkMingw fell back to the hardcoded /usr/x86_64-w64-mingw32, which
+// does not exist on Windows. Every file then failed the in-process LLVM
+// step and quietly fell back to the C backend, so a self-contained
+// salam.exe was shipping with LLVM and LLD embedded and never using them.
+// It only became visible when a test needed something tcc cannot compile.
+//
+// Empty everywhere else: those hosts link natively without a sysroot, and
+// an empty triple skips the lookup exactly as before.
+if SALAM_OS_WINDOWS:
+    if SALAM_ARCH_X86:
+        func native_link_triple(): str: ret "i686-w64-windows-gnu" end
+    else SALAM_ARCH_ARM64:
+        func native_link_triple(): str: ret "aarch64-w64-windows-gnu" end
+    else:
+        func native_link_triple(): str: ret "x86_64-w64-windows-gnu" end
+    end
+else:
+    func native_link_triple(): str: ret "" end
+end
+
     // driver_llvm (driver/llvm_build.c) - single-file lex/parse/prune/sema ->
     // lv.RunOpts (IR text) -> write <module>.ll -> lv.NativeRun (the toolchain
     // shell-out; see llvm.salam's stage-C notes on why NativeRun, not a direct
@@ -125,9 +152,13 @@ import lv "../llvmgen/llvmgen.salam"
             o.link_libs = links
             o.link_kinds = kinds
             o.nlink = links.len()
-            if str.Len(opt.llvm_target) > 0:
+            mut sr_triple := opt.llvm_target
+            if str.Len(sr_triple) == 0:
+                sr_triple = native_link_triple()
+            end
+            if str.Len(sr_triple) > 0:
                 mut sr := ""
-                if sm.FindSysroot(opt.llvm_target, sr):
+                if sm.FindSysroot(sr_triple, sr):
                     o.sysroot = sr
                     lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "using bundled sysroot: " + sr)
                 else:
@@ -136,7 +167,7 @@ import lv "../llvmgen/llvmgen.salam"
                     // that. Deliberately last, so $SALAM_SYSROOTS or a system
                     // package still wins over the embedded copy.
                     mut esr := ""
-                    if EmbeddedSysrootFor(opt.llvm_target, sm.SysrootSubdir(opt.llvm_target), esr):
+                    if EmbeddedSysrootFor(sr_triple, sm.SysrootSubdir(sr_triple), esr):
                         o.sysroot = esr
                         lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "using embedded sysroot: " + esr)
                     end

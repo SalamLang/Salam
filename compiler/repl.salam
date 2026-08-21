@@ -719,8 +719,14 @@ end
 // An `=` that assigns, as opposed to one inside ==, !=, <=, >=, +=, and
 // friends. Struct literals (`Vec2 { x = 1 }`) count as assignment here,
 // which only costs them the echo.
+//
+// ':' is NOT in this list, unlike in the C: there the ':' of `x := 1`
+// disqualified a binding from counting as an assignment, so every binding
+// turn was probed as `println x := 1` first - a wasted front-end pass, and
+// one that threw away any adjustment turn_stmt had already made to the
+// text (see the `mut` carry-over there).
 func assign_prev_byte(c: int): bool:
-    ret c == 61 || c == 33 || c == 60 || c == 62 || c == 43 || c == 45 || c == 42 || c == 47 || c == 37 || c == 38 || c == 124 || c == 94 || c == 58 || c == 126
+    ret c == 61 || c == 33 || c == 60 || c == 62 || c == 43 || c == 45 || c == 42 || c == 47 || c == 37 || c == 38 || c == 124 || c == 94 || c == 126
 end
 
 func has_assignment(s: str, from: int): bool:
@@ -813,6 +819,21 @@ end
 func no_cand(): Entry:
     e := Entry {}
     ret e
+end
+
+func starts_with_mut(pack: int, text: str): bool:
+    p := skip_ws(text, 0)
+    n := word_len(text, p)
+    ret n > 0 && word_kind(pack, text, p, n) == tok.TK_KW_MUT
+end
+
+// `mut` in front of `text`, keeping its indentation.
+func with_mut(pack: int, text: str): str:
+    kw := lp.Spelling(pack, tok.TK_KW_MUT)
+    p := skip_ws(text, 0)
+    ret str.Substr(text, 0, p) + (str.Len(kw) > 0 ? kw : "mut") + " " + str.Substr(
+        text, p, str.Len(text) - p
+    )
 end
 
 func session_defines(s &: Session, name: str): bool:
@@ -1009,12 +1030,27 @@ end
 // `end`s by hand - what this used to do - miscounted the moment a function
 // took a typed parameter or named a return type, and the prompt then
 // swallowed everything typed after it.
-func incomplete(pack: int, src_text: str): bool:
+func incomplete(pack: int, src_text: str, as_stmt: bool): bool:
+    // A statement is only legal inside a function, so it is probed inside
+    // one - with a closing `end` appended. That `end` absorbs exactly the
+    // one the block still owes: `each v in xs:` on its own leaves main
+    // open (more input owed), while a block the user already closed
+    // parses whole (the turn is finished). Probing a statement at top
+    // level instead - what this did first - failed with "expected a
+    // top-level definition", which is not an end-of-input error, so every
+    // multi-line `if`/`each`/`until` ended after its first line.
+    mut probe := src_text
+    if as_stmt:
+        kw_func := lp.Spelling(pack, tok.TK_KW_FUNC)
+        probe = (str.Len(kw_func) > 0 ? kw_func : "func") + " " + lp.Entry(
+            pack
+        ) + ":\n" + src_text + lp.EndSpelling(pack) + "\n"
+    end
     lgr := lg.New(lg.LOG_OFF, false)
     mut sf := src.New()
     sf.path = "<repl>"
-    sf.text = src_text
-    sf.len = str.Len(src_text)
+    sf.text = probe
+    sf.len = str.Len(probe)
     mut toks := tok.StreamNew(sf.path)
     mut a := at.NewAst()
     mut more := false
@@ -1027,14 +1063,16 @@ func incomplete(pack: int, src_text: str): bool:
 end
 
 // repl_read_block - reads continuation lines until the turn parses (or
-// input ends). `ok` is false when the user abandoned the block with
+// input ends). `as_stmt` picks the framing incomplete() probes in: the
+// first line has already been classified by then, so the two callers know
+// which one this turn is. `ok` is false when the user abandoned the block with
 // `:abort` - without that escape a block that can never be completed (a
 // typo in the word that closes it) would hold the prompt forever.
-func read_block(pack: int, first: str, ok &: bool): str:
+func read_block(pack: int, first: str, as_stmt: bool, ok &: bool): str:
     mut block := first + "\n"
     mut cont_ok := true
     ok = true
-    until incomplete(pack, block) && cont_ok:
+    until incomplete(pack, block, as_stmt) && cont_ok:
         cont := readline("  ... ", cont_ok)
         if cont_ok:
             if str.Equals(cont, ":abort"):
@@ -1088,6 +1126,24 @@ func compile_check(opt &: dr.Dr, pack: int, test_src: str, quiet: bool): bool:
     ret ok && pok && cok && sok
 end
 
+// What system() reported, in the words the user thinks in. libc hands
+// back a wait status on POSIX - exit code 3 arrives as 768 - and the C
+// printed that raw number, so a program that exited 3 said "exited with
+// 768". Windows' system() returns the code itself.
+func exit_note(rc: int): str:
+    if SALAM_OS_WINDOWS:
+        ret "[program exited with " + co.I64Toa(rc as i64) + "]"
+    end
+    if rc < 0:
+        ret "[could not run the program]"
+    end
+    sig := rc & 127
+    if sig != 0:
+        ret "[program killed by signal " + co.I64Toa(sig as i64) + "]"
+    end
+    ret "[program exited with " + co.I64Toa(((rc / 256) & 255) as i64) + "]"
+end
+
 // repl_emit_output - prints what this run added. Everything the session
 // printed on earlier turns comes out again byte for byte, so the common
 // prefix is replay and only the tail is news; a program whose output
@@ -1109,8 +1165,9 @@ end
 // note on why this is simpler AND more complete than the C's hand-rolled
 // RT_PKGS mini-linker). `opt` is mutated in place (inputs/output/command),
 // matching dr.Run()'s own established idiom of repurposing its `&: Dr` for
-// a one-shot sub-build. `replay` is true for a turn (show only what the
-// newest statement added) and false for an explicit :run (show all of it).
+// a one-shot sub-build. `replay` is true for a turn - the run is captured
+// so only what the newest statement added is printed - and false for an
+// explicit :run, which hands the program the terminal itself.
 func exec_session(opt &: dr.Dr, full_src: str, replay: bool): int:
     // Same "INFO is too noisy for a one-shot run" bump dr.Run() itself
     // applies before build_impl, so `:run`/a bare statement doesn't spam
@@ -1142,7 +1199,7 @@ func exec_session(opt &: dr.Dr, full_src: str, replay: bool): int:
     if rc == 0:
         exe := str.Len(opt.exe_path) > 0 ? opt.exe_path : tmp_exe
         mut cmdb := str.NewBuilder()
-        if SALAM_OS_WINDOWS:
+        if SALAM_OS_WINDOWS && replay:
             // cmd.exe strips the outermost quote pair off everything after
             // /c, so the whole redirected command needs one more pair
             // around it for a temp path with a space in it to survive.
@@ -1159,30 +1216,40 @@ func exec_session(opt &: dr.Dr, full_src: str, replay: bool): int:
             end
         end
         str.BufAppendChar(cmdb, 34)
-        str.BufAppend(cmdb, " > ")
-        str.BufAppendChar(cmdb, 34)
-        str.BufAppend(cmdb, tmp_out)
-        str.BufAppendChar(cmdb, 34)
-        str.BufAppend(cmdb, " 2>&1")
-        if SALAM_OS_WINDOWS:
+        if replay:
+            str.BufAppend(cmdb, " > ")
             str.BufAppendChar(cmdb, 34)
+            str.BufAppend(cmdb, tmp_out)
+            str.BufAppendChar(cmdb, 34)
+            str.BufAppend(cmdb, " 2>&1")
+            if SALAM_OS_WINDOWS:
+                str.BufAppendChar(cmdb, 34)
+            end
         end
         cmdtext := str.BufStr(cmdb)
         str.BufFree(cmdb)
+        io.Flush()
         rc = system(cmdtext)
-        out := io.ReadFile(tmp_out)
         if replay:
+            out := io.ReadFile(tmp_out)
             emit_output(out)
+            if rc == 0:
+                g_last_out = out
+                g_has_last = true
+            end
+            _r0 := os.Remove(tmp_out)
         else:
-            print out
+            // An explicit :run keeps the program's own stdout and stdin -
+            // a loop prints as it goes and `input()` can still ask a
+            // question, neither of which survives a redirect to a file.
+            // The cost is that this run's output was never read here, so
+            // the next turn has no prefix to replay and shows everything.
+            g_last_out = ""
+            g_has_last = false
         end
-        if rc == 0:
-            g_last_out = out
-            g_has_last = true
-        else:
-            println "[program exited with " + co.I64Toa(rc as i64) + "]"
+        if rc != 0:
+            println exit_note(rc)
         end
-        _r0 := os.Remove(tmp_out)
         _r2 := os.Remove(str.Len(opt.exe_path) > 0 ? opt.exe_path : tmp_exe)
     end
     _r1 := os.Remove(tmp_src)
@@ -1236,10 +1303,20 @@ end
 // keep it only if all three worked.
 func turn_stmt(opt &: dr.Dr, s &: Session, pack: int, block: str):
     mut cand := Entry { kind = RS_STMT, name = "", text = block }
+    // Re-binding a name the session already bound `mut` keeps the `mut`:
+    // the statements typed in between may well assign to it, and losing
+    // their right to do so is not what "x is 5 now" asked for.
+    old_i := stmt_replace_index(s, pack, block)
+    if old_i >= 0 && starts_with_mut(pack, s.stmts.get(old_i)) && !starts_with_mut(
+        pack, block
+    ):
+        cand.text = with_mut(pack, block)
+    end
     if is_expr_line(pack, block):
+        plain := cand.text
         cand.text = echo_wrap(pack, block)
         if !compile_check(opt, pack, render(s, pack, cand, true), true):
-            cand.text = block
+            cand.text = plain
         end
     end
     // Analyze before building, the same gate a def already goes through. A
@@ -1437,8 +1514,14 @@ pub func Run(opt &: dr.Dr): int:
             println "session cleared."
             hist_push(line)
         else str.Equals(line, ":defs"):
-            text := render(ses, pack, no_cand(), false)
-            print str.Len(text) > 0 ? text : "(empty)\n"
+            // render() always writes at least the synthesized main, so
+            // "nothing typed yet" has to be recognized before it, not
+            // from the rendered text being empty (it never is).
+            if ses.defs.len() == 0 && ses.stmts.len() == 0:
+                println "(empty)"
+            else:
+                print render(ses, pack, no_cand(), false)
+            end
             hist_push(line)
         else str.Equals(line, ":undo"):
             println session_undo(ses) ? "dropped the last statement." : "no statement to drop."
@@ -1450,14 +1533,18 @@ pub func Run(opt &: dr.Dr): int:
             cmd_run(opt, ses, pack, is_layout)
             hist_push(line)
         else:
+            // Classified before the block is read: which framing the
+            // turn completes in (a top-level definition, or a statement
+            // inside main) is decided by its first line. A layout block
+            // is top-level whatever `layout` classifies as.
+            mut name := ""
+            kind := classify(pack, line, name)
             mut blk_ok := true
-            block := read_block(pack, line, blk_ok)
+            block := read_block(pack, line, !is_layout && kind == RS_STMT, blk_ok)
             if blk_ok:
                 if is_layout:
                     layout_turn(opt, pack, line, block)
                 else:
-                    mut name := ""
-                    kind := classify(pack, line, name)
                     if kind != RS_STMT:
                         turn_def(opt, ses, pack, kind, name, block)
                     else ses.has_main:

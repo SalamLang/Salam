@@ -168,7 +168,15 @@ a { color: var(--accent); }
 // how Mount and Serve leave it: the page is at /docs, /docs/ or /, and only
 // the page itself knows which of those it was actually fetched as.
 var SPEC_URL = "__SPEC_JS__";
-if (!SPEC_URL) SPEC_URL = location.pathname.replace(/\/+$/, "") + "/openapi.json";
+if (!SPEC_URL) {
+  var here = location.pathname.replace(/\/+$/, "");
+  // "/docs" and "/docs/" are directories and the spec sits under them;
+  // "/docs/index.html" is a file and the spec sits beside it. A dot in the
+  // last segment is what tells the two apart, which is the same guess a
+  // browser makes when it resolves a relative link.
+  if (/\/[^\/]*\.[^\/]*$/.test(here)) here = here.replace(/\/[^\/]*$/, "");
+  SPEC_URL = here + "/openapi.json";
+}
 var spec = null;
 
 function el(tag, cls, text) {
@@ -380,7 +388,12 @@ function paramTable(params) {
     tr.appendChild(td);
     tr.appendChild(el("td", "note", p.in));
     tr.appendChild(el("td", "ty mono", typeName(p.schema)));
-    tr.appendChild(el("td", "note", p.description || ""));
+    var note = el("td", "note", p.description || "");
+    var choices = deref(p.schema || {}).enum;
+    if (choices && choices.length) {
+      note.appendChild(el("div", null, "one of: " + choices.join(", ")));
+    }
+    tr.appendChild(note);
     t.appendChild(tr);
   });
   return t;
@@ -395,10 +408,26 @@ function tryBox(method, path, op) {
   if (params.length) {
     var grid = el("div", "try");
     params.forEach(function (p) {
-      var i = el("input");
-      i.type = "text";
-      i.placeholder = p.name + (p.required ? " *" : "");
-      i.size = 12;
+      var choices = deref(p.schema || {}).enum;
+      var i;
+      if (choices && choices.length) {
+        // A parameter with a fixed set of values is a menu. The blank first
+        // option is "do not send this at all", which is a different request
+        // from sending the first value.
+        i = el("select");
+        i.appendChild(el("option", null, p.required ? "choose" : "(omit)"));
+        i.firstChild.value = "";
+        choices.forEach(function (c) {
+          var o = el("option", null, String(c));
+          o.value = String(c);
+          i.appendChild(o);
+        });
+      } else {
+        i = el("input");
+        i.type = "text";
+        i.placeholder = p.name + (p.required ? " *" : "");
+        i.size = 12;
+      }
       inputs[p.in + ":" + p.name] = i;
       var lab = el("label", null, p.name);
       lab.style.display = "inline-flex";
@@ -737,7 +766,9 @@ end
 // for "next to this page" - the page then derives it from the address it was
 // loaded from, which is the only thing that gets `/docs` and `/docs/` right
 // and survives a reverse proxy mounting the service under another prefix.
-// Mount and Serve both leave it empty.
+// Mount and Serve both leave it empty, and a page written to
+// `somewhere/index.html` and served as a static file finds `openapi.json`
+// beside it. Pass a URL when the document lives somewhere else entirely.
 @en "Page"
 @fa "صفحه"
 @ar "صفحة"

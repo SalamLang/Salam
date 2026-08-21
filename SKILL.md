@@ -698,8 +698,8 @@ Ctx_status Ctx_set_header Ctx_redirect`. Also a canvas/DOM JS-interop surface.
 Describe Server Contact License BearerAuth ApiKeyAuth`; `Scan(doc, router)`
   lists every registered route (`:id` becomes a `{id}` path parameter, `*`
   becomes a catch-all), then `At(doc, method, pattern)` selects one and
-  `Summary Details Tag OperationId Deprecated Secure Query QueryTyped Header
-Cookie PathParam` describe it. `Accepts(doc, desc, NewTodo {})` and
+  `Summary Details Tag OperationId Deprecated Secure Query QueryTyped QueryEnum
+Header Cookie PathParam` describe it. `Accepts(doc, desc, NewTodo {})` and
   `Returns(doc, 200, desc, Todo {})` take a **value and read its type**, so
   the payload schemas come from the struct declarations by the same compiler
   pass that derives `json.Marshal`'s encoder. Not-JSON payloads:

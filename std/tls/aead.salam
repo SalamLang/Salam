@@ -48,6 +48,7 @@ const P256_POINT_LEN := 65
 const P256_SCALAR_LEN := 32
 const GCM_TAG_LEN := 16
 const GCM_NONCE_LEN := 12
+const AES128_KEY_LEN := 16
 const AES256_KEY_LEN := 32
 
 // _hexval - one hex digit, or -1.
@@ -135,16 +136,21 @@ func _spki_point(spki_b64: str, out &: Buf): bool:
     ret true
 end
 
-// _aes_from - an AES-256 key schedule from base64 key material.
+// _aes_from - a key schedule from base64 key material.
+//
+// The length decides the variant: sixteen bytes is AES-128, thirty-two is
+// AES-256. Both are needed - AES-256-GCM for a protocol you control both ends
+// of, AES-128-GCM because RFC 8188 and therefore Web Push specify exactly that
+// and nothing else.
 func _aes_from(key_b64: str, ok &: bool): Aes:
-    mut key := _decode(key_b64, AES256_KEY_LEN)
+    mut key := _decode_any(key_b64)
     defer _buf_wipe(key)
-    if key.bad:
+    if key.bad || (key.len != AES128_KEY_LEN && key.len != AES256_KEY_LEN):
         ok = false
         ret Aes {}
     end
     ok = true
-    ret _aes_init(key.p, AES256_KEY_LEN)
+    ret _aes_init(key.p, key.len)
 end
 
 // _public_of - the SPKI public key for a scalar, or "" when the scalar is not
@@ -303,4 +309,159 @@ pub func RandomSalt(n: int): str:
     hex := crypto.RandomHex(n)
     if _hex_into(hex, b.p, 0) != n: ret "" end
     ret encoding.Base64EncodeBytes(b.p, n)
+end
+
+// ---------------------------------------------------------------- raw points
+
+// EcdhP256PublicPoint - the uncompressed point for a private key, base64.
+//
+// SPKI is what a TLS peer and Node's createPublicKey expect; a raw point is
+// what the Web Push and WebCrypto "raw" formats use. Both are the same key,
+// and which one a protocol asks for is not something a caller should have to
+// re-derive with an ASN.1 encoder.
+pub func EcdhP256PublicPoint(priv_b64: str): str:
+    mut scalar := _decode(priv_b64, P256_SCALAR_LEN)
+    defer _buf_wipe(scalar)
+    if scalar.bad: ret "" end
+    mut point := _newbuf(P256_POINT_LEN)
+    defer _buf_free(point)
+    _putzeros(point, P256_POINT_LEN)
+    _bput(point.p, 0, 4)
+    if !_ec_base_mul(_curve_p256(), scalar.p, _bufptr(point, 1),
+        _bufptr(point, 1 + P256_SCALAR_LEN)):
+        ret ""
+    end
+    ret encoding.Base64EncodeBytes(point.p, P256_POINT_LEN)
+end
+
+// EcdhP256SharedPoint - the shared secret with a peer given as a raw
+// uncompressed point rather than SPKI.
+//
+// A point that is not on the curve is refused here rather than multiplied,
+// which is what makes an invalid-curve attack a failed exchange instead of a
+// leaked private key.
+pub func EcdhP256SharedPoint(priv_b64: str, peer_point_b64: str, ok &: bool): str:
+    ok = false
+    mut scalar := _decode(priv_b64, P256_SCALAR_LEN)
+    defer _buf_wipe(scalar)
+    mut point := _decode(peer_point_b64, P256_POINT_LEN)
+    defer _buf_free(point)
+    if scalar.bad || point.bad || _bget(point.p, 0) != 4: ret "" end
+    mut secret := _newbuf(P256_SCALAR_LEN)
+    defer _buf_wipe(secret)
+    _putzeros(secret, P256_SCALAR_LEN)
+    if !_ec_ecdh(_curve_p256(), scalar.p, point.p, P256_POINT_LEN, secret.p): ret "" end
+    ok = true
+    ret encoding.Base64EncodeBytes(secret.p, P256_SCALAR_LEN)
+end
+
+// ---------------------------------------------------------------- key schedule
+
+// HkdfSha256Raw - HKDF with an `info` that may contain any byte.
+//
+// The text form is enough for a label a programmer wrote. It is not enough for
+// RFC 8291, whose info strings embed NUL bytes and two 65-byte public keys, so
+// this takes the info base64 encoded like everything else here.
+pub func HkdfSha256Raw(ikm_b64: str, salt_b64: str, info_b64: str, out_len: int,
+    ok &: bool): str:
+    ok = false
+    mut ikm := _decode_any(ikm_b64)
+    defer _buf_wipe(ikm)
+    mut salt := _decode_any(salt_b64)
+    defer _buf_free(salt)
+    mut info := _decode_any(info_b64)
+    defer _buf_free(info)
+    if ikm.bad || salt.bad || info.bad || out_len <= 0: ret "" end
+    mut prk := _newbuf(32)
+    defer _buf_wipe(prk)
+    _putzeros(prk, 32)
+    _hkdf_extract(HASH_SHA256, salt.p, salt.len, ikm.p, ikm.len, prk.p)
+    mut out := _newbuf(out_len)
+    defer _buf_wipe(out)
+    _putzeros(out, out_len)
+    if !_hkdf_expand(HASH_SHA256, prk.p, 32, info.p, info.len, out.p, out_len): ret "" end
+    ok = true
+    ret encoding.Base64EncodeBytes(out.p, out_len)
+end
+
+// ---------------------------------------------------------------- binary AEAD
+
+// AesGcmSealBytes - the same as AesGcmSeal for a plaintext that is not text.
+// Takes and returns base64, so a payload with a zero byte in it survives.
+pub func AesGcmSealBytes(key_b64: str, nonce_b64: str, plaintext_b64: str,
+    ok &: bool): str:
+    ok = false
+    mut aes_ok := false
+    a := _aes_from(key_b64, aes_ok)
+    mut nonce := _decode(nonce_b64, GCM_NONCE_LEN)
+    defer _buf_free(nonce)
+    mut pt := _decode_any(plaintext_b64)
+    defer _buf_wipe(pt)
+    if !aes_ok || nonce.bad || pt.bad: ret "" end
+    mut out := _newbuf(pt.len + GCM_TAG_LEN)
+    defer _buf_free(out)
+    _putzeros(out, pt.len + GCM_TAG_LEN)
+    _gcm_seal(a, nonce.p, null, 0, pt.p, out.p, pt.len, _bufptr(out, pt.len))
+    ok = true
+    ret encoding.Base64EncodeBytes(out.p, pt.len + GCM_TAG_LEN)
+end
+
+// AesGcmOpenBytes - the inverse, answering base64 plaintext.
+pub func AesGcmOpenBytes(key_b64: str, nonce_b64: str, sealed_b64: str, ok &: bool): str:
+    ok = false
+    mut aes_ok := false
+    a := _aes_from(key_b64, aes_ok)
+    mut nonce := _decode(nonce_b64, GCM_NONCE_LEN)
+    defer _buf_free(nonce)
+    mut sealed := _decode_any(sealed_b64)
+    defer _buf_free(sealed)
+    if !aes_ok || nonce.bad || sealed.bad || sealed.len <= GCM_TAG_LEN: ret "" end
+    n := sealed.len - GCM_TAG_LEN
+    mut pt := _newbuf(n)
+    defer _buf_wipe(pt)
+    _putzeros(pt, n)
+    if !_gcm_open(a, nonce.p, null, 0, sealed.p, n, _bufptr(sealed, n), pt.p): ret "" end
+    ok = true
+    ret encoding.Base64EncodeBytes(pt.p, n)
+end
+
+// ---------------------------------------------------------------- ES256
+
+// P256Sign - an ECDSA-SHA256 signature over a digest, as r||s.
+//
+// Sixty-four raw bytes rather than the DER the TLS handshake uses, because
+// that is the form JOSE specifies for ES256 - which is what a VAPID header and
+// every other JWS carries.
+//
+// Deterministic, per RFC 6979: the nonce comes from the key and the message,
+// so signing twice gives the same answer and a weak random source cannot leak
+// the private key the way a repeated k would.
+pub func P256Sign(priv_b64: str, digest_b64: str, ok &: bool): str:
+    ok = false
+    mut scalar := _decode(priv_b64, P256_SCALAR_LEN)
+    defer _buf_wipe(scalar)
+    mut digest := _decode_any(digest_b64)
+    defer _buf_free(digest)
+    if scalar.bad || digest.bad: ret "" end
+    mut sig := _newbuf(64)
+    defer _buf_free(sig)
+    _putzeros(sig, 64)
+    if !_ecdsa_p256_sign(scalar.p, digest.p, digest.len, sig.p, _bufptr(sig, 32)):
+        ret ""
+    end
+    ok = true
+    ret encoding.Base64EncodeBytes(sig.p, 64)
+end
+
+// P256Verify - the counterpart, over a raw uncompressed public point.
+pub func P256Verify(pub_point_b64: str, digest_b64: str, sig_b64: str): bool:
+    mut point := _decode(pub_point_b64, P256_POINT_LEN)
+    defer _buf_free(point)
+    mut digest := _decode_any(digest_b64)
+    defer _buf_free(digest)
+    mut sig := _decode(sig_b64, 64)
+    defer _buf_free(sig)
+    if point.bad || digest.bad || sig.bad: ret false end
+    ret _ecdsa_p256_verify(digest.p, digest.len, sig.p, _bufptr(sig, 32),
+        point.p, P256_POINT_LEN)
 end

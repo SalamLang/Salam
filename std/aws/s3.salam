@@ -32,11 +32,12 @@ import str
 import conv
 import time
 import crypto
+import net.httpx
 
 // _host_of - the hostname a request is addressed to, which depends on the
 // addressing mode. Virtual-host style puts the bucket in the name; path style
 // leaves it in the path.
-func _host_of(cfg: Config, ep: Endpoint): str:
+func _host_of(cfg: Config, ep: httpx.Endpoint): str:
     mut host := ep.host
     if !cfg.path_style: host = cfg.bucket + "." + ep.host end
     if (ep.secure && ep.port != 443) || (!ep.secure && ep.port != 80):
@@ -111,15 +112,15 @@ func _head(method: str, path: str, host: str, s: Signed, content_type: str,
 end
 
 // _result - a wire Response as the caller's Result.
-func _result(r: Response): Result:
+func _result(r: httpx.Response): Result:
     if r.error.len() > 0: ret Result { status = r.status, error = r.error } end
     mut out := Result {
         ok = r.ok,
         status = r.status,
         body = r.body,
-        etag = HeaderValue(r.head, "ETag")
+        etag = httpx.HeaderValue(r.head, "ETag")
     }
-    length := HeaderValue(r.head, "Content-Length")
+    length := httpx.HeaderValue(r.head, "Content-Length")
     if length.len() > 0: out.length = length.to_int() as i64 end
     if !r.ok: out.error = _service_error(r) end
     ret out
@@ -129,7 +130,7 @@ end
 // status when there is none. Parsed by hand because pulling in an XML parser
 // for one element that is always present and never nested is not a trade worth
 // making.
-func _service_error(r: Response): str:
+func _service_error(r: httpx.Response): str:
     at := r.body.find("<Message>")
     if at < 0: ret "the object store answered " + r.status end
     stop := str.IndexFrom(r.body, "</Message>", at)
@@ -141,7 +142,7 @@ end
 func _request(cfg: Config, method: str, key: str, body: void*, n: int,
     content_type: str): Result:
     if !Configured(cfg): ret Failure("the object store is not configured") end
-    ep := ParseEndpoint(cfg.endpoint)
+    ep := httpx.ParseEndpoint(cfg.endpoint)
     if !ep.ok: ret Failure("the endpoint could not be parsed: " + cfg.endpoint) end
     host := _host_of(cfg, ep)
     path := _path_of(cfg, key)
@@ -153,7 +154,7 @@ func _request(cfg: Config, method: str, key: str, body: void*, n: int,
     s := SignRequest(cfg, method, path, "", canonical, signed, payload_hash, time.Now())
     if !s.ok: ret Failure("the request could not be signed") end
     head := _head(method, path, host, s, content_type, n, cfg.session_token)
-    ret _result(Send(ep, head, body, n))
+    ret _result(httpx.Send(ep, head, body, n))
 end
 
 // _presign_query - the signed query string. Its parameters are in the order
@@ -171,7 +172,7 @@ func _presign_query(cfg: Config, amz_date: str, expires: int): str:
     ret out
 end
 
-func _origin(ep: Endpoint, host: str): str:
+func _origin(ep: httpx.Endpoint, host: str): str:
     if ep.secure: ret "https://" + host end
     ret "http://" + host
 end
@@ -226,7 +227,7 @@ end
 pub func S3PresignAt(cfg: Config, method: str, key: str, expires: int,
     epoch_seconds: i64): str:
     if !Configured(cfg): ret "" end
-    ep := ParseEndpoint(cfg.endpoint)
+    ep := httpx.ParseEndpoint(cfg.endpoint)
     if !ep.ok: ret "" end
     host := _host_of(cfg, ep)
     path := _path_of(cfg, key)
@@ -241,7 +242,7 @@ end
 // S3Url - the plain, unsigned URL of an object. Only useful for a bucket that
 // is public; a private one answers 403, which is the point.
 pub func S3Url(cfg: Config, key: str): str:
-    ep := ParseEndpoint(cfg.endpoint)
+    ep := httpx.ParseEndpoint(cfg.endpoint)
     if !ep.ok: ret "" end
     ret _origin(ep, _host_of(cfg, ep)) + _path_of(cfg, key)
 end

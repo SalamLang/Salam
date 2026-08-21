@@ -46,15 +46,9 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-# GitHub's REST API budgets anonymous callers per source IP, and shared CI
-# runners exhaust that budget between them - the call then answers 403 for
-# everyone on that IP. A token moves it onto the far larger authenticated
-# budget; GitHub Actions exposes one as github.token. Only ever sent to
-# api.github.com so it cannot leak to a release download or a redirect.
 API_TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
 
 fetch_to_stdout() {
-    # $1 = URL
     auth=""
     case "$1" in
     https://api.github.com/*)
@@ -80,29 +74,18 @@ fetch_to_stdout() {
     fi
 }
 
-# Newest release tag first, one per line. Empty output means neither source
-# answered.
 list_release_tags() {
     json="$(fetch_to_stdout "https://api.github.com/repos/${REPO}/releases?per_page=10" 2>/dev/null || true)"
     found_tags="$(printf '%s' "$json" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')"
     if [ -z "$found_tags" ]; then
-        # The API is rate-limited and unauthenticated CI runners routinely
-        # hit 403 on it. The releases feed is served by github.com itself
-        # and carries no such limit, so it keeps the installer working.
         log "  releases API unavailable, falling back to the Atom feed"
         atom="$(fetch_to_stdout "https://github.com/${REPO}/releases.atom" 2>/dev/null || true)"
         found_tags="$(printf '%s' "$atom" | sed -n 's#.*/releases/tag/\([^"]*\)".*#\1#p')"
     fi
-    # Nightlies are prereleases and their assets carry the plain version
-    # (salam-0.2.9-linux.zip under a v0.2.9-nightly-<date> tag), so they can
-    # never match the name built from the tag below - dropping them here just
-    # skips a guaranteed-failed download attempt. Filtered by name because
-    # the Atom fallback carries no prerelease flag to filter on.
     printf '%s\n' "$found_tags" | grep -v nightly || true
 }
 
 fetch_to_file() {
-    # $1 = URL, $2 = output path
     if command -v curl >/dev/null 2>&1; then
         curl -fL --retry 3 --retry-delay 2 -o "$2" "$1"
     elif command -v wget >/dev/null 2>&1; then
@@ -212,14 +195,6 @@ fi
 binary="$extract_dir/salam-${platform}/salam"
 [ -f "$binary" ] || binary="$(find "$extract_dir" -type f -name salam | head -n 1)"
 [ -f "$binary" ] || die "could not find 'salam' binary inside $ASSET"
-# RUN-ME.txt inside the archive calls this a "self-contained toolchain" -
-# true when the binary and std/ sit side by side, which is only the case
-# for someone extracting the zip and running ./salam in place. Installing
-# just the binary onto PATH breaks that unless std/ is copied along with
-# it: every "import os" is otherwise a standard-library-not-found error,
-# since the compiler looks for a std/ directory next to its own binary
-# (among other places - see resolve_stdlib_root in the compiler source),
-# and nothing else in this script ever puts one there.
 std_src="$(dirname "$binary")/std"
 
 if [ -z "$INSTALL_DIR" ]; then

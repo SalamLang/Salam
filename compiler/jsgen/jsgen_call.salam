@@ -714,6 +714,78 @@ func jsg_call_str(
     ret "0"
 end
 
+// Vector<T> is the prelude's own struct, and its Salam source grows itself
+// with realloc() over sizeof(T) bytes - none of which a browser has. Rather
+// than emulate a heap, this backend represents a Vector as the JS array it
+// already resembles and answers its methods with the array's own: the
+// struct's body is then never reached, and anything written on top of the
+// methods (vector_ops' contains/slice/extend, `each v in xs`, an iterator)
+// follows for free.
+//
+// The receiver is rendered once and reused, so a method whose lowering
+// mentions it twice gets it through a prelude helper instead of evaluating
+// it twice.
+func jsg_call_vec(
+    g &: Jg, s &: sm.Sema, a &: at.Ast, n: int, obj: int, callee: int
+): str:
+    m := at.Get(a, callee).name
+    nv := at.Get(a, n)
+    recv := jsg_expr_p(g, s, a, obj, JSP_MEMBER)
+    a0 := nv.list.len() > 0 ? jsg_expr_p(g, s, a, nv.list.get(0), 0) : "0"
+    a1 := nv.list.len() > 1 ? jsg_expr_p(g, s, a, nv.list.get(1), 0) : "0"
+    if str.Equals(m, "len") || str.Equals(m, "cap"):
+        ret recv + ".length"
+    end
+    if str.Equals(m, "push"):
+        ret recv + ".push(" + a0 + ")"
+    end
+    if str.Equals(m, "pop"):
+        ret recv + ".pop()"
+    end
+    if str.Equals(m, "get") || str.Equals(m, "operator_index"):
+        ret recv + "[" + a0 + "]"
+    end
+    if str.Equals(m, "set") || str.Equals(m, "operator_index_set"):
+        ret "(" + recv + "[" + a0 + "] = " + a1 + ")"
+    end
+    if str.Equals(m, "resize_set"):
+        ret "__sal_vset(" + recv + ", " + a0 + ", " + a1 + ")"
+    end
+    if str.Equals(m, "is_empty"):
+        ret "(" + recv + ".length === 0)"
+    end
+    if str.Equals(m, "first"):
+        ret recv + "[0]"
+    end
+    if str.Equals(m, "last"):
+        ret "__sal_vlast(" + recv + ")"
+    end
+    if str.Equals(m, "clear"):
+        ret "__sal_vclear(" + recv + ")"
+    end
+    if str.Equals(m, "insert"):
+        ret recv + ".splice(" + a0 + ", 0, " + a1 + ")"
+    end
+    if str.Equals(m, "remove_at"):
+        ret "__sal_vremove(" + recv + ", " + a0 + ")"
+    end
+    if str.Equals(m, "zeros"):
+        ret "__sal_vzeros(" + recv + ", " + a0 + ")"
+    end
+    if str.Equals(m, "ref"):
+        ret "__sal_vref(" + recv + ", " + a0 + ")"
+    end
+    if str.Equals(m, "iter"):
+        ret "__sal_viter(" + recv + ")"
+    end
+    // reserve() only promises capacity, and a JS array needs none; free()
+    // hands memory back to a collector that was never asked for any.
+    if str.Equals(m, "reserve") || str.Equals(m, "free"):
+        ret "undefined"
+    end
+    ret jsg_unsupported(g, "Vector." + m)
+end
+
 func jsg_call_method(
     g &: Jg, s &: sm.Sema, a &: at.Ast, n: int, obj: int, callee: int, objts: str
 ): str:
@@ -811,6 +883,9 @@ func jsg_call_member(
     end
     if cg_is_slice_ts(objts) || has_bracket(objts):
         ret jsg_call_array(g, s, a, obj, callee)
+    end
+    if cg_is_vector_ts(s, objts):
+        ret jsg_call_vec(g, s, a, n, obj, callee)
     end
     ret jsg_call_method(g, s, a, n, obj, callee, objts)
 end

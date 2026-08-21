@@ -1,0 +1,220 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package aws
+
+// The HTTP transport, with binary bodies.
+//
+// std/net/http builds a whole request as one `str` and writes it. A `str` is
+// NUL-terminated, so that client cannot carry an image, a video, or anything
+// else with a zero byte in it - which is most of what an object store is for.
+//
+// This is the smallest thing that fixes it: write the header block as text,
+// then write the body as bytes, over the same tcp and tls connections the rest
+// of the standard library uses. It handles exactly what S3 needs - one
+// request, one response, no keep-alive, no chunking on the way out - and
+// deliberately nothing more.
+
+import mem
+import str
+import tls
+import net.tcp
+
+const READ_CHUNK := 16384
+const MAX_RESPONSE := 33554432
+
+// Response - one answer. `body` is text because every S3 response this package
+// makes is either XML, empty, or an object the caller asked for as text; GetBytes
+// hands binary back through a buffer instead.
+pub struct Response:
+    pub status: int = 0
+    pub head: str = ""
+    pub body: str = ""
+    pub ok: bool = false
+    pub error: str = ""
+end
+
+// Endpoint - a URL split into the parts a connection needs.
+pub struct Endpoint:
+    pub host: str = ""
+    pub port: int = 443
+    pub secure: bool = true
+    pub ok: bool = false
+end
+
+// _status_of - the code out of a status line.
+func _status_of(head: str): int:
+    sp := head.find(" ")
+    if sp < 0: ret 0 end
+    ret head.substr(sp + 1, 3).to_int()
+end
+
+// _split - the head and body of a response that has already been read.
+func _split(raw: str, out &: Response):
+    sep := raw.find("\r\n\r\n")
+    if sep < 0:
+        out.head = raw
+        ret
+    end
+    out.head = raw.substr(0, sep + 4)
+    out.body = raw.substr(sep + 4, raw.len() - sep - 4)
+end
+
+// _read_plain - a response over a plain socket, up to the ceiling. Reading to
+// the close is enough because this transport never asks for keep-alive.
+func _read_plain(c: tcp.Conn): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    mut total := 0
+    mut chunk := tcp.Read(c, READ_CHUNK)
+    while chunk.len() > 0 && total < MAX_RESPONSE:
+        str.BufAppend(sb, chunk)
+        total += chunk.len()
+        chunk = tcp.Read(c, READ_CHUNK)
+    end
+    ret str.BufStr(sb)
+end
+
+func _read_tls(c &: tls.Conn): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    mut total := 0
+    mut chunk := tls.Read(c, READ_CHUNK)
+    while chunk.len() > 0 && total < MAX_RESPONSE:
+        str.BufAppend(sb, chunk)
+        total += chunk.len()
+        chunk = tls.Read(c, READ_CHUNK)
+    end
+    ret str.BufStr(sb)
+end
+
+// _send_plain - head then body, over an unencrypted connection.
+func _send_plain(ep: Endpoint, head: str, body: void*, n: int): Response:
+    c := tcp.Dial(ep.host, ep.port)
+    if !tcp.ConnOk(c):
+        ret Response { error = "could not connect to " + ep.host + ":" + ep.port }
+    end
+    defer tcp.Close(c)
+    if tcp.Write(c, head) < 0: ret Response { error = "could not send the request" } end
+    if n > 0 && tcp.WriteBytes(c, body, n) < 0:
+        ret Response { error = "could not send the body" }
+    end
+    ret _finish(_read_plain(c))
+end
+
+func _send_tls(ep: Endpoint, head: str, body: void*, n: int): Response:
+    cfg := tls.NewConfig(ep.host)
+    mut c := tls.Dial(ep.host, ep.port, cfg)
+    if !tls.ConnOk(c):
+        e := tls.ConnError(c)
+        tls.Close(c)
+        ret Response { error = "TLS: " + e }
+    end
+    defer tls.Close(c)
+    if tls.Write(c, head) < 0: ret Response { error = "could not send the request" } end
+    if n > 0 && tls.WriteBytes(c, body, n) < 0:
+        ret Response { error = "could not send the body" }
+    end
+    ret _finish(_read_tls(c))
+end
+
+func _finish(raw: str): Response:
+    if raw.len() == 0: ret Response { error = "the server closed without answering" } end
+    mut out := Response {}
+    _split(raw, out)
+    out.status = _status_of(out.head)
+    out.ok = out.status >= 200 && out.status < 300
+    ret out
+end
+
+func _trim_value(head: str, start: int, stop: int): str:
+    mut e := stop
+    if e < 0 || e > head.len(): e = head.len() end
+    if e <= start: ret "" end
+    ret str.Trim(head.substr(start, e - start))
+end
+
+// ParseEndpoint - "https://host:port" into its parts. Only the scheme and
+// authority; a path in the endpoint is a configuration mistake rather than
+// something to support, because the path is the object key.
+pub func ParseEndpoint(endpoint: str): Endpoint:
+    mut rest := endpoint
+    mut secure := true
+    mut port := 443
+    if str.StartsWith(rest, "https://"): rest = rest.substr(8, rest.len() - 8)
+    else str.StartsWith(rest, "http://"):
+        rest = rest.substr(7, rest.len() - 7)
+        secure = false
+        port = 80
+    else: ret Endpoint {}
+    end
+    slash := rest.find("/")
+    if slash >= 0: rest = rest.substr(0, slash) end
+    colon := rest.find(":")
+    if colon >= 0:
+        port = rest.substr(colon + 1, rest.len() - colon - 1).to_int()
+        rest = rest.substr(0, colon)
+    end
+    if rest.len() == 0: ret Endpoint {} end
+    ret Endpoint { host = rest, port = port, secure = secure, ok = true }
+end
+
+// Send - one request with a binary body.
+//
+// `head` is the complete request line and header block, terminated by a blank
+// line; `body` and `n` are the bytes that follow it. Pass null and 0 for a
+// request with no body.
+pub func Send(ep: Endpoint, head: str, body: void*, n: int): Response:
+    if !ep.ok: ret Response { error = "the endpoint could not be parsed" } end
+    if ep.secure: ret _send_tls(ep, head, body, n) end
+    ret _send_plain(ep, head, body, n)
+end
+
+// SendText - the same for a body that is text.
+pub func SendText(ep: Endpoint, head: str, body: str): Response:
+    if body.len() == 0: ret Send(ep, head, null, 0) end
+    ret Send(ep, head, body as void*, body.len())
+end
+
+// HeaderValue - one header out of a response, case-insensitively. Returns ""
+// when it is absent.
+pub func HeaderValue(head: str, name: str): str:
+    lower := head.lower()
+    needle := "\r\n" + name.lower() + ":"
+    at := lower.find(needle)
+    if at < 0: ret "" end
+    start := at + needle.len()
+    ret _trim_value(head, start, str.IndexFrom(lower, "\r\n", start))
+end
+
+// CopyOut - a response body into a fresh buffer, for a caller that wants the
+// bytes rather than the text. Text is what came off the wire, so a body with a
+// NUL in it is already truncated by the time it gets here - which is why
+// GetBytes reads its own length from Content-Length and warns when they
+// disagree rather than silently handing back a short object.
+pub func CopyOut(body: str, out_len &: int): void*:
+    n := body.len()
+    if n == 0:
+        out_len = 0
+        ret null
+    end
+    ptr := mem.Allocate(n as u64)
+    if ptr == null:
+        out_len = 0
+        ret null
+    end
+    mem.Copy(ptr, body as void*, n as u64)
+    out_len = n
+    ret ptr
+end

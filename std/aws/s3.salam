@@ -1,0 +1,254 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package aws
+
+// The S3 object API.
+//
+// Five operations and a presigner. That is the whole of what an application
+// does with an object store day to day, and everything else S3 offers - bucket
+// policy, lifecycle, versioning, replication - is an operations concern rather
+// than an application one.
+//
+// The presigner is the important one. A presigned URL lets a browser upload to
+// or download from S3 directly, so the bytes never pass through the
+// application at all: no proxy hop, no memory, and no reason for the server to
+// be on the path of a two-gigabyte video. The application still decides who
+// gets a URL, which is the part that matters.
+
+import mem
+import str
+import conv
+import time
+import crypto
+
+// _host_of - the hostname a request is addressed to, which depends on the
+// addressing mode. Virtual-host style puts the bucket in the name; path style
+// leaves it in the path.
+func _host_of(cfg: Config, ep: Endpoint): str:
+    mut host := ep.host
+    if !cfg.path_style: host = cfg.bucket + "." + ep.host end
+    if (ep.secure && ep.port != 443) || (!ep.secure && ep.port != 80):
+        host = host + ":" + ep.port
+    end
+    ret host
+end
+
+// _path_of - the request path, the other half of the addressing decision.
+func _path_of(cfg: Config, key: str): str:
+    if cfg.path_style: ret "/" + cfg.bucket + EncodeKey(key) end
+    ret EncodeKey(key)
+end
+
+// _canonical - the header block a signature covers, and the matching list.
+//
+// The order is not stylistic: canonical headers are sorted by name, and these
+// four are already in order, which is why they can be built by concatenation
+// rather than sorted at runtime.
+func _canonical(host: str, amz_date: str, payload_hash: str, content_type: str,
+    session_token: str, signed &: str): str:
+    mut block := "host:" + host + "\n"
+    signed = "host"
+    if content_type.len() > 0:
+        block = block + "content-type:" + content_type + "\n"
+        signed = signed + ";content-type"
+    end
+    block = block + "x-amz-content-sha256:" + payload_hash + "\n"
+    signed = signed + ";x-amz-content-sha256"
+    block = block + "x-amz-date:" + amz_date + "\n"
+    signed = signed + ";x-amz-date"
+    if session_token.len() > 0:
+        block = block + "x-amz-security-token:" + session_token + "\n"
+        signed = signed + ";x-amz-security-token"
+    end
+    ret _reorder(block, signed, content_type.len() > 0)
+end
+
+// _reorder - content-type sorts before host, so the block built above needs
+// its first two lines swapped when a content type is present. Doing it here
+// keeps the builder readable and the canonical form correct.
+func _reorder(block: str, signed &: str, has_content_type: bool): str:
+    if !has_content_type: ret block end
+    lines := block.split("\n")
+    defer lines.free()
+    if lines.len() < 2: ret block end
+    mut out := lines.get(1) + "\n" + lines.get(0) + "\n"
+    mut i := 2
+    while i < lines.len():
+        if lines.get(i).len() > 0: out = out + lines.get(i) + "\n" end
+        i += 1
+    end
+    signed = str.Replace(signed, "host;content-type", "content-type;host")
+    ret out
+end
+
+// _head - the request line and headers, ready to write.
+func _head(method: str, path: str, host: str, s: Signed, content_type: str,
+    length: int, session_token: str): str:
+    mut out := method + " " + path + " HTTP/1.1\r\n"
+    out = out + "Host: " + host + "\r\n"
+    if content_type.len() > 0: out = out + "Content-Type: " + content_type + "\r\n" end
+    out = out + "x-amz-content-sha256: " + s.payload_hash + "\r\n"
+    out = out + "x-amz-date: " + s.amz_date + "\r\n"
+    if session_token.len() > 0:
+        out = out + "x-amz-security-token: " + session_token + "\r\n"
+    end
+    out = out + "Authorization: " + s.authorization + "\r\n"
+    out = out + "Content-Length: " + length + "\r\n"
+    out = out + "Connection: close\r\n\r\n"
+    ret out
+end
+
+// _result - a wire Response as the caller's Result.
+func _result(r: Response): Result:
+    if r.error.len() > 0: ret Result { status = r.status, error = r.error } end
+    mut out := Result {
+        ok = r.ok,
+        status = r.status,
+        body = r.body,
+        etag = HeaderValue(r.head, "ETag")
+    }
+    length := HeaderValue(r.head, "Content-Length")
+    if length.len() > 0: out.length = length.to_int() as i64 end
+    if !r.ok: out.error = _service_error(r) end
+    ret out
+end
+
+// _service_error - the <Message> S3 returns in its XML error body, or the bare
+// status when there is none. Parsed by hand because pulling in an XML parser
+// for one element that is always present and never nested is not a trade worth
+// making.
+func _service_error(r: Response): str:
+    at := r.body.find("<Message>")
+    if at < 0: ret "the object store answered " + r.status end
+    stop := str.IndexFrom(r.body, "</Message>", at)
+    if stop < 0: ret "the object store answered " + r.status end
+    ret r.body.substr(at + 9, stop - at - 9)
+end
+
+// _request - the shared body of every operation.
+func _request(cfg: Config, method: str, key: str, body: void*, n: int,
+    content_type: str): Result:
+    if !Configured(cfg): ret Failure("the object store is not configured") end
+    ep := ParseEndpoint(cfg.endpoint)
+    if !ep.ok: ret Failure("the endpoint could not be parsed: " + cfg.endpoint) end
+    host := _host_of(cfg, ep)
+    path := _path_of(cfg, key)
+    mut payload_hash := EMPTY_SHA256
+    if n > 0: payload_hash = Sha256Bytes(body, n) end
+    mut signed := ""
+    canonical := _canonical(host, AmzDate(time.Now()), payload_hash, content_type,
+        cfg.session_token, signed)
+    s := SignRequest(cfg, method, path, "", canonical, signed, payload_hash, time.Now())
+    if !s.ok: ret Failure("the request could not be signed") end
+    head := _head(method, path, host, s, content_type, n, cfg.session_token)
+    ret _result(Send(ep, head, body, n))
+end
+
+// _presign_query - the signed query string. Its parameters are in the order
+// AWS sorts them, which is what makes it reproducible on the far side.
+func _presign_query(cfg: Config, amz_date: str, expires: int): str:
+    credential := cfg.access_key + "/" + Scope(DateStamp(amz_date), cfg.region, cfg.service)
+    mut out := "X-Amz-Algorithm=" + ALGORITHM +
+        "&X-Amz-Credential=" + UriEncode(credential, false) +
+        "&X-Amz-Date=" + amz_date +
+        "&X-Amz-Expires=" + expires +
+        "&X-Amz-SignedHeaders=host"
+    if cfg.session_token.len() > 0:
+        out = out + "&X-Amz-Security-Token=" + UriEncode(cfg.session_token, false)
+    end
+    ret out
+end
+
+func _origin(ep: Endpoint, host: str): str:
+    if ep.secure: ret "https://" + host end
+    ret "http://" + host
+end
+
+// S3PutBytes - stores an object from a buffer. The one operation that needs a
+// binary body, and the reason wire.salam exists.
+pub func S3PutBytes(cfg: Config, key: str, body: void*, n: int, content_type: str): Result:
+    ret _request(cfg, "PUT", key, body, n, content_type)
+end
+
+// S3Put - stores an object from text.
+pub func S3Put(cfg: Config, key: str, body: str, content_type: str): Result:
+    if body.len() == 0: ret _request(cfg, "PUT", key, null, 0, content_type) end
+    ret _request(cfg, "PUT", key, body as void*, body.len(), content_type)
+end
+
+// S3Get - fetches an object. The body arrives as text, so this is for objects
+// that are text: manifests, JSON, configuration. Use a presigned URL for
+// anything a browser should download.
+pub func S3Get(cfg: Config, key: str): Result:
+    ret _request(cfg, "GET", key, null, 0, "")
+end
+
+// S3Head - whether an object exists, and how large it is, without moving it.
+pub func S3Head(cfg: Config, key: str): Result:
+    ret _request(cfg, "HEAD", key, null, 0, "")
+end
+
+pub func S3Delete(cfg: Config, key: str): Result:
+    ret _request(cfg, "DELETE", key, null, 0, "")
+end
+
+// S3Exists - the question S3Head is usually asked. A missing object is a 404
+// rather than an error, so this answers false instead of failing.
+pub func S3Exists(cfg: Config, key: str): bool:
+    ret S3Head(cfg, key).ok
+end
+
+// S3Presign - a URL that works, without a credential, for `expires` seconds.
+//
+// This is how an application should move large objects: hand the browser a URL
+// and let it talk to S3 directly. The signature covers the method, so a URL
+// minted for GET cannot be used to PUT, and it covers the expiry, so it stops
+// working on its own.
+pub func S3Presign(cfg: Config, method: str, key: str, expires: int): str:
+    ret S3PresignAt(cfg, method, key, expires, time.Now())
+end
+
+// S3PresignAt - the same, anchored to a given instant rather than now. Exists
+// so a signature can be reproduced: a test can check one against a known
+// vector, and a caller minting a batch can give them all one expiry.
+pub func S3PresignAt(cfg: Config, method: str, key: str, expires: int,
+    epoch_seconds: i64): str:
+    if !Configured(cfg): ret "" end
+    ep := ParseEndpoint(cfg.endpoint)
+    if !ep.ok: ret "" end
+    host := _host_of(cfg, ep)
+    path := _path_of(cfg, key)
+    now := epoch_seconds
+    amz_date := AmzDate(now)
+    query := _presign_query(cfg, amz_date, expires)
+    signature := SignQuery(cfg, method, path, query, host, now)
+    if signature.len() == 0: ret "" end
+    ret _origin(ep, host) + path + "?" + query + "&X-Amz-Signature=" + signature
+end
+
+// S3Url - the plain, unsigned URL of an object. Only useful for a bucket that
+// is public; a private one answers 403, which is the point.
+pub func S3Url(cfg: Config, key: str): str:
+    ep := ParseEndpoint(cfg.endpoint)
+    if !ep.ok: ret "" end
+    ret _origin(ep, _host_of(cfg, ep)) + _path_of(cfg, key)
+end
+
+// S3ContentHash - the fingerprint an application keys deduplication on. Not
+// S3's ETag: that is a multipart-dependent value the service chooses, and it
+// is not a hash of the content for anything uploaded in parts.
+pub func S3ContentHash(body: void*, n: int): str:
+    ret Sha256Bytes(body, n)
+end

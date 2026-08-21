@@ -36,31 +36,54 @@ func _q(s: str): str:
     ret json.Str(s)
 end
 
-func _kv(key: str, value: str): str:
-    ret _q(key).concat(":").concat(_q(value))
-end
-
-func _kraw(key: str, raw: str): str:
-    ret _q(key).concat(":").concat(raw)
-end
-
-func _join(parts: Vector<str>): str:
-    mut out := ""
-    repeat parts.len() with i:
-        if i > 0:
-            out = out.concat(",")
-        end
-        out = out.concat(parts.get(i))
-    end
+// Every helper below goes through a builder rather than through `+`.
+//
+// A Salam string is immutable, so `out = out.concat(part)` in a loop copies
+// everything written so far on every iteration and abandons the previous
+// copy - quadratic time, and one leaked allocation per member, on a function
+// that runs once per object in the document. A builder appends into one
+// growing buffer and hands the finished text over once.
+func _finish(b &: str.StringBuilder): str:
+    out := str.BufStr(b)
+    str.BufFree(b)
     ret out
 end
 
+func _kv(key: str, value: str): str:
+    mut b := str.NewBuilder()
+    str.BufAppend(b, _q(key))
+    str.BufAppend(b, ":")
+    str.BufAppend(b, _q(value))
+    ret _finish(b)
+end
+
+func _kraw(key: str, raw: str): str:
+    mut b := str.NewBuilder()
+    str.BufAppend(b, _q(key))
+    str.BufAppend(b, ":")
+    str.BufAppend(b, raw)
+    ret _finish(b)
+end
+
+func _wrap(open: str, parts: Vector<str>, close: str): str:
+    mut b := str.NewBuilder()
+    str.BufAppend(b, open)
+    repeat parts.len() with i:
+        if i > 0:
+            str.BufAppend(b, ",")
+        end
+        str.BufAppend(b, parts.get(i))
+    end
+    str.BufAppend(b, close)
+    ret _finish(b)
+end
+
 func _obj(parts: Vector<str>): str:
-    ret "{".concat(_join(parts)).concat("}")
+    ret _wrap("{", parts, "}")
 end
 
 func _arr(parts: Vector<str>): str:
-    ret "[".concat(_join(parts)).concat("]")
+    ret _wrap("[", parts, "]")
 end
 
 // A string member, left out entirely when empty. OpenAPI treats a missing
@@ -121,8 +144,13 @@ func _param(p: Param): str:
 end
 
 func _content(content_type: str, schema: str): str:
-    ct := content_type.len() > 0 ? content_type : JSON_TYPE
-    ret "{".concat(_q(ct)).concat(":{\"schema\":").concat(schema).concat("}}")
+    mut b := str.NewBuilder()
+    str.BufAppend(b, "{")
+    str.BufAppend(b, _q(content_type.len() > 0 ? content_type : JSON_TYPE))
+    str.BufAppend(b, ":{\"schema\":")
+    str.BufAppend(b, schema)
+    str.BufAppend(b, "}}")
+    ret _finish(b)
 end
 
 func _replies(o: Op): str:

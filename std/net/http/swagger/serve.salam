@@ -52,9 +52,25 @@ mut _mounts := Vector {} as Vector<_Mount>
 
 struct _Mount:
     pub prefix: str = ""
+    // `prefix` with a trailing slash, because "/docs" and "/docs/" are the
+    // same page and the comparison happens on every request. Joined once
+    // here rather than per mount per request.
+    pub prefix_slash: str = ""
     pub spec_path: str = ""
     pub title: str = ""
     pub spec: str = ""
+    // The rendered page. Like the spec it depends on nothing a request
+    // carries, so it is built once at mount time: a handler that rebuilt it
+    // would allocate a fresh twenty-kilobyte copy of the template on every
+    // hit and drop the previous one.
+    //
+    // The page is handed an empty spec URL and works out where its own
+    // document is from the address it was loaded from. Nothing here could do
+    // that as well - "/docs" and "/docs/" are the same page and would need
+    // different relative URLs, and a reverse proxy mounting the service
+    // under another prefix makes any absolute path this process could write
+    // wrong.
+    pub page: str = ""
     // The port Serve bound, or 0 for a mount on a router the caller owns -
     // that one answers on whatever port its server ends up listening on, so
     // it matches any.
@@ -87,7 +103,7 @@ func _path_matches(m: _Mount, path: str, want_spec: bool): bool:
     if want_spec:
         ret str.Equals(m.spec_path, path)
     end
-    ret str.Equals(m.prefix, path) || str.Equals(m.prefix.concat("/"), path)
+    ret str.Equals(m.prefix, path) || str.Equals(m.prefix_slash, path)
 end
 
 // The mount this request wants: the one bound to the port it arrived on if
@@ -145,7 +161,8 @@ end
 func _register(prefix: str, port: int, title: str, spec: str): int:
     p := _clean_prefix(prefix)
     entry := _Mount {
-        prefix = p, spec_path = _spec_path_for(p), title = title, spec = spec, port = port
+        prefix = p, prefix_slash = p.concat("/"), spec_path = _spec_path_for(p),
+        title = title, spec = spec, page = Page(title, ""), port = port
     }
     repeat _mounts.len() with i:
         m := _mounts.get(i)
@@ -170,17 +187,12 @@ func _handle_ui(ctx: i64):
         http.Ctx_text(ctx, "404 Not Found")
         ret
     end
-    // "" rather than a URL: the page works out where its own spec is, from
-    // the address it was loaded from. Nothing here can do that as well -
-    // "/docs" and "/docs/" are the same page and would need different
-    // relative URLs, and a reverse proxy that mounts the whole service under
-    // another prefix makes any absolute path this process could write wrong.
     // The document is baked into the binary, so a cached copy of this page
     // outlives the deploy that changed the API it describes. Revalidating is
     // one conditional request against a local server, and being wrong about
     // what an API accepts costs more than that.
     http.Ctx_set_header(ctx, "Cache-Control", "no-cache")
-    http.Ctx_html(ctx, Page(_mounts.get(i).title, ""))
+    http.Ctx_html(ctx, _mounts.get(i).page)
 end
 
 func _handle_spec(ctx: i64):

@@ -468,11 +468,23 @@ func jsg_call_extern_direct(
     ret result
 end
 
-func jsg_print(g &: Jg, s &: sm.Sema, a &: at.Ast, n: int, err: bool): str:
+// print/println through __sal_out, not console.log: console.log ends every
+// call with a newline, so `print` (which must not) split one line into
+// several. Several arguments are joined with a space, which is what
+// console.log did and what the compiled backends do.
+func jsg_print(
+    g &: Jg, s &: sm.Sema, a &: at.Ast, n: int, err: bool, nl: bool
+): str:
     mut b := str.NewBuilder()
-    str.BufAppend(b, err ? "console.error(" : "console.log(")
+    str.BufAppend(b, "__sal_out(")
     nv := at.Get(a, n)
     cnt := nv.list.len()
+    if cnt == 0:
+        str.BufAppend(b, `""`)
+    end
+    if cnt > 1:
+        str.BufAppendChar(b, 91) // '['
+    end
     mut i := 0
     until i < cnt:
         if i > 0:
@@ -493,6 +505,10 @@ func jsg_print(g &: Jg, s &: sm.Sema, a &: at.Ast, n: int, err: bool): str:
         end
         i += 1
     end
+    if cnt > 1:
+        str.BufAppend(b, `].join(" ")`)
+    end
+    str.BufAppend(b, ", " + (nl ? "true" : "false") + ", " + (err ? "true" : "false"))
     str.BufAppendChar(b, 41) // ')'
     r := str.BufStr(b)
     str.BufFree(b)
@@ -507,7 +523,11 @@ func jsg_call_ident(
     is_print := str.Equals(nm, "print") || str.Equals(nm, "println")
     is_printerr := str.Equals(nm, "printerr") || str.Equals(nm, "printerrln")
     if is_print || is_printerr:
-        ret jsg_print(g, s, a, n, is_printerr)
+        ret jsg_print(
+            g, s, a, n, is_printerr, str.Equals(nm, "println") || str.Equals(
+                nm, "printerrln"
+            )
+        )
     end
     if str.Equals(nm, "input"):
         ret "salam_input()"
@@ -951,11 +971,130 @@ func jsg_call_mapiter(
     ret jsg_unsupported(g, "MapIter." + m)
 end
 
+// The interface a `dyn ...` type names. An interface from another package
+// reaches codegen with the package folded into the name -
+// "ifacestore_Store" - so a global lookup misses it and the packages are
+// searched the way struct_by_name searches them for a struct.
+func jsg_iface_sym(s &: sm.Sema, name: str): int:
+    direct := sm.Lookup(s, s.global, name)
+    if direct != 0:
+        ret direct
+    end
+    gsc := sm.ScopeAt(s, s.global)
+    mut i := 0
+    until i < gsc.symbols.len():
+        pv := sm.SymAt(s, gsc.symbols.get(i))
+        i += 1
+        if pv.kind != sm.SYM_PACKAGE || pv.members == 0:
+            continue
+        end
+        msc := sm.ScopeAt(s, pv.members)
+        mut j := 0
+        until j < msc.symbols.len():
+            sy := msc.symbols.get(j)
+            sv := sm.SymAt(s, sy)
+            j += 1
+            if sv.members == 0:
+                continue
+            end
+            if str.Equals(sv.name, name) || str.Equals(
+                str.Len(pv.pkgname) > 0 ? pv.pkgname + "_" + sv.name : sv.name, name
+            ):
+                ret sy
+            end
+        end
+    end
+    ret 0
+end
+
+// `x as dyn Iface` - the fat pointer the C backend builds out of a heap
+// copy and a vtable is an object here: the value under __d, and one
+// property per interface method bound to the concrete implementation.
+// jsg_call_dyn below calls through it, so dispatch stays dynamic without
+// a vtable to lay out.
+func jsg_dyn_box(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, dts: str): str:
+    n := at.Get(a, id)
+    iface := str.Substr(dts, 4, str.Len(dts) - 4)
+    concrete := n.a != 0 ? at.Get(a, n.a).type_str : ""
+    isym := jsg_iface_sym(s, iface)
+    if isym == 0 || sm.SymAt(s, isym).members == 0 || str.Len(concrete) == 0:
+        ret jsg_unsupported(g, "dyn cast")
+    end
+    // The methods come from the concrete struct when there is one, and
+    // from `impl Iface on <type>` when the concrete type is not a struct.
+    mut sname := ""
+    ssym := cg_struct_of(s, concrete, sname)
+    impl_sym := sm.Lookup(s, s.global, sm.ImplOwnerKey(concrete))
+    if ssym == 0 && impl_sym == 0:
+        ret jsg_unsupported(g, "dyn cast")
+    end
+    mut b := str.NewBuilder()
+    str.BufAppend(b, "{ __d: " + jsg_expr_p(g, s, a, n.a, 0))
+    imems := sm.ScopeAt(s, sm.SymAt(s, isym).members)
+    mut i := 0
+    until i < imems.symbols.len():
+        msym0 := imems.symbols.get(i)
+        mv := sm.SymAt(s, msym0)
+        i += 1
+        if mv.kind != sm.SYM_METHOD && mv.kind != sm.SYM_FUNC:
+            continue
+        end
+        mut fn := ""
+        if ssym != 0:
+            csym := sm.LookupLocal(s, sm.SymAt(s, ssym).members, mv.name)
+            if csym == 0:
+                continue
+            end
+            csig := sm.SymAt(s, csym).overloads.len() > 0 ? sm.SymAt(s, csym).overloads.get(
+                0
+            ) : 0
+            spkg := str.Len(sm.SymAt(s, ssym).pkgname) > 0 ? sm.SymAt(s, ssym).pkgname : g.pkg
+            d_syn := str.Len(sm.SymAt(s, ssym).generic_base) > 0
+            // The struct's OWN name, not the spelling at the use site: a
+            // struct from another package reaches here as
+            // "ifacedriver_Memory" while its methods were defined under
+            // "Memory", and the two names have to agree.
+            fn = jsg_fn_name(
+                g, s, spkg, sm.SymAt(s, ssym).name, mv.name, csym, csig, false, d_syn
+            )
+        else:
+            isym2 := sm.SymAt(s, impl_sym)
+            if isym2.members == 0 || sm.LookupLocal(s, isym2.members, mv.name) == 0:
+                continue
+            end
+            fn = jsg_ident(cg_cident(concrete) + "_" + mv.name)
+        end
+        str.BufAppend(b, ", " + cg_cident(mv.name) + ": " + fn)
+    end
+    str.BufAppend(b, " }")
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret "(" + r + ")"
+end
+
+// A call through a `dyn Iface` value: the box knows which function each of
+// the interface's methods resolves to, and carries the receiver under __d.
+func jsg_call_dyn(
+    g &: Jg, s &: sm.Sema, a &: at.Ast, n: int, obj: int, callee: int
+): str:
+    recv := jsg_expr_p(g, s, a, obj, 0)
+    m := cg_cident(at.Get(a, callee).name)
+    args := jsg_call_args(g, s, a, n, 0)
+    sep := str.Len(args) > 0 ? ", " : ""
+    ret `__sal_dyn(` + recv + `, "` + m + `"` + sep + args + ")"
+end
+
 func jsg_call_method(
     g &: Jg, s &: sm.Sema, a &: at.Ast, n: int, obj: int, callee: int, objts: str
 ): str:
     mut sname := ""
     ssym := cg_struct_of(s, objts, sname)
+    // The struct's OWN name, which is what the definition side used: a
+    // struct from another package is spelled "ifacedriver_Memory" at the
+    // use site while its methods were emitted under "Memory".
+    if ssym != 0 && str.Len(sm.SymAt(s, ssym).name) > 0:
+        sname = sm.SymAt(s, ssym).name
+    end
     calleev := at.Get(a, callee)
     mut msym := 0
     if ssym != 0:
@@ -1038,7 +1177,7 @@ func jsg_call_member(
         end
     end
     if str.StartsWith(objts, "dyn "):
-        ret jsg_unsupported(g, "dyn interface call")
+        ret jsg_call_dyn(g, s, a, n, obj, callee)
     end
     if str.Equals(objts, "File*"):
         ret jsg_unsupported(g, "File")

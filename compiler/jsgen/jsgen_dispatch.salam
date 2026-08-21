@@ -390,24 +390,29 @@ func jsg_expr_p(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, minprec: int): str:
         ret jsg_wrap(sv3, JSP_UNARY, minprec)
     end
     if n.kind == at.AST_CAST:
-        if n.a != 0:
-            ak := at.KindOf(a, n.a)
-            if ak == at.AST_ARRAY_LIT || ak == at.AST_STRUCT_LIT:
-                ret jsg_expr_p(g, s, a, n.a, minprec)
-            end
-        end
         mut dts := ""
         if n.ty != 0 && str.Len(at.Get(a, n.ty).type_str) > 0:
             dts = at.Get(a, n.ty).type_str
         else str.Len(n.type_str) > 0:
             dts = n.type_str
         end
+        // A literal keeps its own shape through a cast - unless the cast is
+        // to a `dyn`, which wraps it (jsg_dyn_box) rather than retyping it.
+        if n.a != 0 && !str.StartsWith(dts, "dyn "):
+            ak := at.KindOf(a, n.a)
+            if ak == at.AST_ARRAY_LIT || ak == at.AST_STRUCT_LIT:
+                ret jsg_expr_p(g, s, a, n.a, minprec)
+            end
+        end
         sts := n.a != 0 ? at.Get(a, n.a).type_str : ""
         if str.Equals(dts, sts):
             ret jsg_expr_p(g, s, a, n.a, minprec)
         end
         if str.StartsWith(dts, "dyn "):
-            ret jsg_unsupported(g, "dyn cast")
+            if str.StartsWith(sts, "dyn "):
+                ret jsg_expr_p(g, s, a, n.a, minprec)
+            end
+            ret jsg_dyn_box(g, s, a, id, dts)
         end
         dn := str.Len(dts)
         if cg_is_int_typestr(dts) && dn > 0 && byte_at(dts, dn - 1) != 42 && !has_bracket(dts):

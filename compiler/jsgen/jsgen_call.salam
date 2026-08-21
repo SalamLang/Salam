@@ -243,6 +243,13 @@ func jsg_emit_extern_call(
     end
     tmpl := host_lookup(extname)
     if str.Len(tmpl) == 0 && no_browser_equivalent(extname):
+        // std/mem is the one place these are expected: its wrappers are
+        // emitted because the package is reachable, not because anything
+        // still calls them (the containers that used to are JS types now).
+        // Warning there would fire on every build that touches mem.
+        if str.Equals(g.pkg, "mem"):
+            ret `__salam_unsupported("` + extname + `")`
+        end
         ret jsg_unsupported(g, extname)
     end
     if str.Len(tmpl) == 0:
@@ -471,7 +478,19 @@ func jsg_print(g &: Jg, s &: sm.Sema, a &: at.Ast, n: int, err: bool): str:
         if i > 0:
             str.BufAppend(b, ", ")
         end
-        str.BufAppend(b, jsg_expr_p(g, s, a, nv.list.get(i), 0))
+        aid := nv.list.get(i)
+        ats := at.Get(a, aid).type_str
+        // JS already prints a double as the shortest text that reads back
+        // as the same value, which is what the compiled backends do now
+        // too - but it spells the three special values NaN/Infinity, and
+        // this language spells them nan/inf.
+        if str.Equals(ats, "f64") || str.Equals(ats, "f32"):
+            str.BufAppend(
+                b, "__sal_fmtf(" + jsg_expr_p(g, s, a, aid, 0) + ")"
+            )
+        else:
+            str.BufAppend(b, jsg_expr_p(g, s, a, aid, 0))
+        end
         i += 1
     end
     str.BufAppendChar(b, 41) // ')'
@@ -625,6 +644,73 @@ func jsg_call_ident(
     ret jsg_call_finish(g, s, a, n, sig, fnname, "")
 end
 
+// std/str's StringBuilder keeps a grown char buffer, which is raw memory
+// again; here a builder is `{ s: "" }` and its operations are string
+// concatenation. The functions take the builder as their first argument
+// rather than as a receiver, so they are caught on the package call.
+func jsg_call_strbuf(
+    g &: Jg, s &: sm.Sema, a &: at.Ast, n: int, name: str
+): str:
+    nv := at.Get(a, n)
+    if str.Equals(name, "NewBuilder"):
+        ret `({ s: "" })`
+    end
+    if nv.list.len() == 0:
+        ret ""
+    end
+    b := jsg_expr_p(g, s, a, nv.list.get(0), JSP_MEMBER)
+    a1 := nv.list.len() > 1 ? jsg_expr_p(g, s, a, nv.list.get(1), 0) : `""`
+    if str.Equals(name, "BufAppend"):
+        ret "(" + b + ".s += " + a1 + ")"
+    end
+    if str.Equals(name, "BufAppendInt"):
+        ret "(" + b + ".s += String(" + a1 + "))"
+    end
+    if str.Equals(name, "BufAppendChar"):
+        ret "(" + b + ".s += String.fromCharCode(" + a1 + "))"
+    end
+    if str.Equals(name, "BufAppendCp"):
+        ret "(" + b + ".s += String.fromCodePoint(" + a1 + "))"
+    end
+    if str.Equals(name, "BufStr"):
+        ret b + ".s"
+    end
+    if str.Equals(name, "BufLen"):
+        ret b + ".s.length"
+    end
+    if str.Equals(name, "BufIsEmpty"):
+        ret "(" + b + ".s.length === 0)"
+    end
+    if str.Equals(name, "BufReset"):
+        ret "(" + b + `.s = "")`
+    end
+    if str.Equals(name, "BufFree"):
+        ret "undefined"
+    end
+    ret ""
+end
+
+// std/conv's number formatters build their result byte by byte out of
+// malloc'd memory, which is raw memory again. JS says the same things
+// about a number natively - String() over a double is the shortest text
+// that reads back as it, exactly what FormatFloat now returns.
+func jsg_call_conv(
+    g &: Jg, s &: sm.Sema, a &: at.Ast, n: int, name: str
+): str:
+    nv := at.Get(a, n)
+    if nv.list.len() != 1:
+        ret ""
+    end
+    a0 := jsg_expr_p(g, s, a, nv.list.get(0), 0)
+    if str.Equals(name, "FormatFloat"):
+        ret "__sal_fmtf(" + a0 + ")"
+    end
+    if str.Equals(name, "FormatInt") || str.Equals(name, "FormatUint"):
+        ret "String(Math.trunc(" + a0 + "))"
+    end
+    ret ""
+end
+
 func jsg_call_pkg(
     g &: Jg, s &: sm.Sema, a &: at.Ast, n: int, pk: int, callee: int
 ): str:
@@ -644,6 +730,20 @@ func jsg_call_pkg(
     end
     if is_ext:
         ret jsg_call_extern_direct(g, s, a, n, calleev.name)
+    end
+    if str.Equals(pkv.pkgname, "conv"):
+        cv := jsg_call_conv(g, s, a, n, calleev.name)
+        if str.Len(cv) > 0:
+            ret cv
+        end
+    end
+    if str.Equals(pkv.pkgname, "str") && (
+        str.StartsWith(calleev.name, "Buf") || str.Equals(calleev.name, "NewBuilder")
+    ):
+        sb := jsg_call_strbuf(g, s, a, n, calleev.name)
+        if str.Len(sb) > 0:
+            ret sb
+        end
     end
     inl := jsg_try_inline(g, s, a, n, sig, pkv.members)
     if str.Len(inl) > 0:
@@ -786,6 +886,71 @@ func jsg_call_vec(
     ret jsg_unsupported(g, "Vector." + m)
 end
 
+// HashMap<K, V> is a JS Map here, for the same reason Vector<T> is a JS
+// array: its Salam source keeps open-addressed tables in raw memory that a
+// browser cannot hand out. get() answers a missing key with the zero of
+// the value type, the way the struct's own get does, so the zero is read
+// off the type sema gave this very call.
+func jsg_call_map(
+    g &: Jg, s &: sm.Sema, a &: at.Ast, n: int, obj: int, callee: int
+): str:
+    m := at.Get(a, callee).name
+    nv := at.Get(a, n)
+    recv := jsg_expr_p(g, s, a, obj, JSP_MEMBER)
+    a0 := nv.list.len() > 0 ? jsg_expr_p(g, s, a, nv.list.get(0), 0) : "0"
+    a1 := nv.list.len() > 1 ? jsg_expr_p(g, s, a, nv.list.get(1), 0) : "0"
+    if str.Equals(m, "put") || str.Equals(m, "insert"):
+        ret recv + ".set(" + a0 + ", " + a1 + ")"
+    end
+    if str.Equals(m, "has"):
+        ret recv + ".has(" + a0 + ")"
+    end
+    if str.Equals(m, "get"):
+        ret "__sal_mget(" + recv + ", " + a0 + ", " + jsg_zero(s, nv.type_str) + ")"
+    end
+    if str.Equals(m, "get_or"):
+        ret "__sal_mget(" + recv + ", " + a0 + ", " + a1 + ")"
+    end
+    if str.Equals(m, "remove"):
+        ret recv + ".delete(" + a0 + ")"
+    end
+    if str.Equals(m, "size"):
+        ret recv + ".size"
+    end
+    if str.Equals(m, "is_empty"):
+        ret "(" + recv + ".size === 0)"
+    end
+    if str.Equals(m, "iter"):
+        ret "__sal_miter(" + recv + ")"
+    end
+    if str.Equals(m, "free"):
+        ret "undefined"
+    end
+    ret jsg_unsupported(g, "HashMap." + m)
+end
+
+// What __sal_miter() handed back: the map, its keys at the moment iteration
+// started, and a position.
+func jsg_call_mapiter(
+    g &: Jg, s &: sm.Sema, a &: at.Ast, obj: int, callee: int
+): str:
+    m := at.Get(a, callee).name
+    recv := jsg_expr_p(g, s, a, obj, JSP_MEMBER)
+    if str.Equals(m, "has_next"):
+        ret "(" + recv + ".pos < " + recv + ".ks.length)"
+    end
+    if str.Equals(m, "key"):
+        ret recv + ".ks[" + recv + ".pos]"
+    end
+    if str.Equals(m, "value"):
+        ret recv + ".m.get(" + recv + ".ks[" + recv + ".pos])"
+    end
+    if str.Equals(m, "next"):
+        ret "(" + recv + ".pos += 1)"
+    end
+    ret jsg_unsupported(g, "MapIter." + m)
+end
+
 func jsg_call_method(
     g &: Jg, s &: sm.Sema, a &: at.Ast, n: int, obj: int, callee: int, objts: str
 ): str:
@@ -886,6 +1051,12 @@ func jsg_call_member(
     end
     if cg_is_vector_ts(s, objts):
         ret jsg_call_vec(g, s, a, n, obj, callee)
+    end
+    if cg_is_hashmap_ts(s, objts):
+        ret jsg_call_map(g, s, a, n, obj, callee)
+    end
+    if cg_is_mapiter_ts(s, objts):
+        ret jsg_call_mapiter(g, s, a, obj, callee)
     end
     ret jsg_call_method(g, s, a, n, obj, callee, objts)
 end

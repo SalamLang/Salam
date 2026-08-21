@@ -396,6 +396,19 @@ func _server_header(hide: bool): str:
     ret "Salam/".concat(SERVER_VERSION)
 end
 
+// Whether the handler already set a header of its own by this name. Header
+// names are case-insensitive, so a handler that wrote "content-type" has to
+// count as having written "Content-Type" - anything else sends the header
+// twice, which is what a client of this server used to get on every JSON
+// response that also named a charset.
+func _has_header(ctx: i64, name: str): bool:
+    n := salam_ctx_kv_n(ctx, 2)
+    repeat n with i:
+        if str.EqualFold(salam_ctx_kv_key(ctx, 2, i), name): ret true end
+    end
+    ret false
+end
+
 // "200 OK" without a heap allocation. The old path called conv.FormatInt to
 // turn the number into digits and mime.StatusText to look up the reason
 // phrase, then concatenated both, for every response. These four cover
@@ -433,10 +446,18 @@ func _fill_response(b &: str.StringBuilder, ctx: i64, hide: bool, keep: bool):
     else:
         str.BufAppend(b, "\r\nConnection: close")
     end
+    shdr := _server_header(hide)
     str.BufAppend(b, "\r\nServer: ")
-    str.BufAppend(b, _server_header(hide))
+    str.BufAppend(b, shdr)
+    // X-Powered-By is the header an operator reads to find out what answered.
+    // A proxy in front of the service is free to rewrite Server, and most do;
+    // almost none touch this one, so a Salam service says its own name twice.
+    if _has_header(ctx, "X-Powered-By") == false:
+        str.BufAppend(b, "\r\nX-Powered-By: ")
+        str.BufAppend(b, shdr)
+    end
     str.BufAppend(b, "\r\n")
-    if ct.len() > 0:
+    if ct.len() > 0 && _has_header(ctx, "Content-Type") == false:
         str.BufAppend(b, "Content-Type: ")
         str.BufAppend(b, ct)
         str.BufAppend(b, "\r\n")
@@ -611,6 +632,8 @@ func _send_file(fd: i64, path: str, ct: str, server_hdr: str, keep: bool): int:
     else:
         str.BufAppend(hb, "\r\nConnection: close\r\nServer: ")
     end
+    str.BufAppend(hb, server_hdr)
+    str.BufAppend(hb, "\r\nX-Powered-By: ")
     str.BufAppend(hb, server_hdr)
     str.BufAppend(hb, "\r\n\r\n")
     hdr := str.BufStr(hb)
@@ -965,6 +988,8 @@ func _tls_send_file(c &: tls.Conn, path: str, ct: str, server_hdr: str):
     hdr = hdr.concat("\r\nContent-Type: ")
     hdr = hdr.concat(ct)
     hdr = hdr.concat("\r\nConnection: close\r\nServer: ")
+    hdr = hdr.concat(server_hdr)
+    hdr = hdr.concat("\r\nX-Powered-By: ")
     hdr = hdr.concat(server_hdr)
     hdr = hdr.concat("\r\n\r\n")
     tls.Write(c, hdr)

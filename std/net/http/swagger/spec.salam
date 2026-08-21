@@ -1,0 +1,339 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package swagger
+
+// A Doc, written out as an OpenAPI 3.1.0 document.
+//
+// 3.1 rather than 3.0 because its schema dialect *is* JSON Schema 2020-12,
+// which is what the compiler derives (see std/encoding/json/schema.salam).
+// Under 3.0 the schemas would need translating - `anyOf` with a `null` branch
+// rewritten as `nullable: true`, `$defs` refs rewritten again - and every
+// rewrite is a chance for the document to stop matching the encoder. Here the
+// derived schema is dropped in as it stands.
+//
+// The text is assembled rather than built through a Value tree because the
+// schemas arrive as JSON text already: putting them through a decoder and an
+// encoder to place them in an object would reformat numbers that came out of
+// the compiler exactly right.
+
+import encoding.json
+import conv
+import str
+
+func _q(s: str): str:
+    ret json.Str(s)
+end
+
+func _kv(key: str, value: str): str:
+    ret _q(key).concat(":").concat(_q(value))
+end
+
+func _kraw(key: str, raw: str): str:
+    ret _q(key).concat(":").concat(raw)
+end
+
+func _join(parts: Vector<str>): str:
+    mut out := ""
+    repeat parts.len() with i:
+        if i > 0:
+            out = out.concat(",")
+        end
+        out = out.concat(parts.get(i))
+    end
+    ret out
+end
+
+func _obj(parts: Vector<str>): str:
+    ret "{".concat(_join(parts)).concat("}")
+end
+
+func _arr(parts: Vector<str>): str:
+    ret "[".concat(_join(parts)).concat("]")
+end
+
+// A string member, left out entirely when empty. OpenAPI treats a missing
+// description and an empty one the same way, and leaving it out keeps the
+// document to what somebody actually wrote.
+func _opt(parts &: Vector<str>, key: str, value: str):
+    if value.len() > 0:
+        parts.push(_kv(key, value))
+    end
+end
+
+func _info(d: Doc): str:
+    mut parts := Vector {} as Vector<str>
+    defer parts.free()
+    parts.push(_kv("title", d.title))
+    parts.push(_kv("version", d.version))
+    _opt(parts, "description", d.description)
+    if d.contact_name.len() > 0 || d.contact_url.len() > 0 || d.contact_email.len() > 0:
+        mut c := Vector {} as Vector<str>
+        defer c.free()
+        _opt(c, "name", d.contact_name)
+        _opt(c, "url", d.contact_url)
+        _opt(c, "email", d.contact_email)
+        parts.push(_kraw("contact", _obj(c)))
+    end
+    if d.license_name.len() > 0:
+        mut l := Vector {} as Vector<str>
+        defer l.free()
+        l.push(_kv("name", d.license_name))
+        _opt(l, "url", d.license_url)
+        parts.push(_kraw("license", _obj(l)))
+    end
+    ret _obj(parts)
+end
+
+func _servers(d: Doc): str:
+    mut parts := Vector {} as Vector<str>
+    defer parts.free()
+    repeat d.servers.len() with i:
+        mut s := Vector {} as Vector<str>
+        defer s.free()
+        s.push(_kv("url", d.servers.get(i)))
+        _opt(s, "description", d.server_notes.get(i))
+        parts.push(_obj(s))
+    end
+    ret _arr(parts)
+end
+
+func _param(p: Param): str:
+    mut parts := Vector {} as Vector<str>
+    defer parts.free()
+    parts.push(_kv("name", p.name))
+    parts.push(_kv("in", p.loc))
+    parts.push(_kraw("required", p.required ? "true" : "false"))
+    _opt(parts, "description", p.description)
+    parts.push(_kraw("schema", p.schema))
+    ret _obj(parts)
+end
+
+func _json_content(schema: str): str:
+    ret "{\"application/json\":{\"schema\":".concat(schema).concat("}}")
+end
+
+func _replies(o: Op): str:
+    mut parts := Vector {} as Vector<str>
+    defer parts.free()
+    repeat o.replies.len() with i:
+        rp := o.replies.get(i)
+        mut body := Vector {} as Vector<str>
+        defer body.free()
+        // `description` is the one member OpenAPI requires of a response, so
+        // it gets a default rather than being left out and making the
+        // document invalid.
+        body.push(_kv("description", rp.description.len() > 0 ? rp.description : "response"))
+        if rp.schema.len() > 0:
+            body.push(_kraw("content", _json_content(rp.schema)))
+        end
+        parts.push(_kraw(conv.FormatInt(rp.code as i64), _obj(body)))
+    end
+    if parts.len() == 0:
+        // Every operation answers something. A document that says nothing
+        // about what comes back is not more accurate than one that says a 200
+        // is possible, and OpenAPI requires the responses object to be
+        // non-empty.
+        ret "{\"200\":{\"description\":\"OK\"}}"
+    end
+    ret _obj(parts)
+end
+
+func _security(o: Op): str:
+    mut parts := Vector {} as Vector<str>
+    defer parts.free()
+    repeat o.security.len() with i:
+        parts.push("{".concat(_kraw(o.security.get(i), "[]")).concat("}"))
+    end
+    ret _arr(parts)
+end
+
+func _tags_of(o: Op): str:
+    mut parts := Vector {} as Vector<str>
+    defer parts.free()
+    repeat o.tags.len() with i:
+        parts.push(_q(o.tags.get(i)))
+    end
+    ret _arr(parts)
+end
+
+func _params_of(o: Op): str:
+    mut parts := Vector {} as Vector<str>
+    defer parts.free()
+    repeat o.params.len() with i:
+        parts.push(_param(o.params.get(i)))
+    end
+    ret _arr(parts)
+end
+
+func _operation(o: Op): str:
+    mut parts := Vector {} as Vector<str>
+    defer parts.free()
+    parts.push(_kv("operationId", o.op_id.len() > 0 ? o.op_id : _default_op_id(o.method, o.pattern)))
+    if o.tags.len() > 0:
+        parts.push(_kraw("tags", _tags_of(o)))
+    end
+    _opt(parts, "summary", o.summary)
+    _opt(parts, "description", o.description)
+    if o.is_deprecated:
+        parts.push(_kraw("deprecated", "true"))
+    end
+    if o.params.len() > 0:
+        parts.push(_kraw("parameters", _params_of(o)))
+    end
+    if o.body_schema.len() > 0:
+        mut rb := Vector {} as Vector<str>
+        defer rb.free()
+        _opt(rb, "description", o.body_description)
+        rb.push(_kraw("required", o.body_required ? "true" : "false"))
+        rb.push(_kraw("content", _json_content(o.body_schema)))
+        parts.push(_kraw("requestBody", _obj(rb)))
+    end
+    if o.security.len() > 0:
+        parts.push(_kraw("security", _security(o)))
+    end
+    parts.push(_kraw("responses", _replies(o)))
+    ret _obj(parts)
+end
+
+// OpenAPI groups operations by path first and method second, which is the
+// opposite of how a Doc holds them. One pass per distinct path, skipping the
+// paths already emitted, keeps the document in the order the routes were
+// registered without needing the operations sorted.
+func _paths(d: Doc): str:
+    mut done := Vector {} as Vector<str>
+    defer done.free()
+    mut parts := Vector {} as Vector<str>
+    defer parts.free()
+    repeat d.ops.len() with i:
+        path := _openapi_path(d.ops.get(i).pattern)
+        mut seen := false
+        repeat done.len() with j:
+            if str.Equals(done.get(j), path):
+                seen = true
+            end
+        end
+        if seen:
+            continue
+        end
+        done.push(path)
+        mut methods := Vector {} as Vector<str>
+        defer methods.free()
+        repeat d.ops.len() with k:
+            o := d.ops.get(k)
+            if str.Equals(_openapi_path(o.pattern), path):
+                methods.push(_kraw(o.method.lower(), _operation(o)))
+            end
+        end
+        parts.push(_kraw(path, _obj(methods)))
+    end
+    ret _obj(parts)
+end
+
+func _scheme(s: Scheme): str:
+    mut parts := Vector {} as Vector<str>
+    defer parts.free()
+    parts.push(_kv("type", s.kind))
+    if str.Equals(s.kind, "apiKey"):
+        parts.push(_kv("in", s.loc))
+        parts.push(_kv("name", s.param.len() > 0 ? s.param : s.name))
+    else:
+        parts.push(_kv("scheme", s.scheme))
+        _opt(parts, "bearerFormat", s.format)
+    end
+    _opt(parts, "description", s.description)
+    ret _obj(parts)
+end
+
+func _components(d: Doc): str:
+    mut parts := Vector {} as Vector<str>
+    defer parts.free()
+    if d.defs.len() > 0:
+        mut schemas := Vector {} as Vector<str>
+        defer schemas.free()
+        repeat d.defs.len() with i:
+            schemas.push(_kraw(d.defs.get(i).name, d.defs.get(i).body))
+        end
+        parts.push(_kraw("schemas", _obj(schemas)))
+    end
+    if d.schemes.len() > 0:
+        mut sec := Vector {} as Vector<str>
+        defer sec.free()
+        repeat d.schemes.len() with i:
+            sec.push(_kraw(d.schemes.get(i).name, _scheme(d.schemes.get(i))))
+        end
+        parts.push(_kraw("securitySchemes", _obj(sec)))
+    end
+    ret _obj(parts)
+end
+
+// The tags used by any operation, in the order they were first used, so the
+// UI can show its sections in the order the API was written rather than
+// alphabetically.
+func _tag_list(d: Doc): str:
+    mut seen := Vector {} as Vector<str>
+    defer seen.free()
+    mut parts := Vector {} as Vector<str>
+    defer parts.free()
+    repeat d.ops.len() with i:
+        o := d.ops.get(i)
+        repeat o.tags.len() with j:
+            name := o.tags.get(j)
+            mut have := false
+            repeat seen.len() with k:
+                if str.Equals(seen.get(k), name):
+                    have = true
+                end
+            end
+            if !have:
+                seen.push(name)
+                parts.push("{".concat(_kv("name", name)).concat("}"))
+            end
+        end
+    end
+    ret _arr(parts)
+end
+
+// The document, as OpenAPI 3.1.0 JSON.
+@en "Spec"
+@fa "مشخصات"
+@ar "مواصفات"
+pub func Spec(d: Doc): str:
+    mut parts := Vector {} as Vector<str>
+    defer parts.free()
+    parts.push(_kv("openapi", "3.1.0"))
+    parts.push(_kraw("info", _info(d)))
+    if d.servers.len() > 0:
+        parts.push(_kraw("servers", _servers(d)))
+    end
+    tags := _tag_list(d)
+    if tags.len() > 2:
+        parts.push(_kraw("tags", tags))
+    end
+    parts.push(_kraw("paths", _paths(d)))
+    components := _components(d)
+    if components.len() > 2:
+        parts.push(_kraw("components", components))
+    end
+    ret _obj(parts)
+end
+
+// The same document, indented - for writing to a file a person will read, or
+// for checking into a repository next to the code it describes.
+@en "SpecIndent"
+@fa "مشخصات با تورفتگی"
+@ar "مواصفات بمسافة"
+pub func SpecIndent(d: Doc): str:
+    ret json.Indent(Spec(d))
+end

@@ -1,0 +1,158 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package swagger
+
+// Reading a document out of a router, rather than out of a second list the
+// programmer has to keep in step with it.
+//
+// net/router stores every registered route as a method, a pattern and a
+// handler pointer. The first two are all a document needs to say that the
+// route exists and what its path parameters are called; only the prose and
+// the payload types have to be added by hand. So Scan lists everything and
+// the describing calls fill in what they know, which means a route added
+// without a description still shows up - as an undescribed route, which is
+// what it is - instead of silently going missing.
+
+import net.router
+import str
+
+// OpenAPI writes a path parameter `{id}`; net/router writes it `:id`, and
+// writes a catch-all `*`. The catch-all becomes `{path}` with a schema that
+// says it may contain slashes, which is as close as OpenAPI gets to one.
+const _WILDCARD_NAME := "path"
+
+// The path parameters a router pattern declares, in the order they appear.
+func _path_params(pattern: str): Vector<Param>:
+    mut out := Vector {} as Vector<Param>
+    n := pattern.len()
+    mut i := 0
+    until i < n:
+        c := pattern.substr(i, 1)
+        if str.Equals(c, ":"):
+            mut e := i + 1
+            until e < n && !str.Equals(pattern.substr(e, 1), "/"):
+                e += 1
+            end
+            out.push(Param {
+                name = pattern.substr(i + 1, e - i - 1), loc = "path", required = true
+            })
+            i = e
+        else str.Equals(c, "*"):
+            out.push(Param {
+                name = _WILDCARD_NAME, loc = "path", required = true,
+                description = "the rest of the path, slashes included"
+            })
+            i += 1
+        else:
+            i += 1
+        end
+    end
+    ret out
+end
+
+// A router pattern as OpenAPI spells it: "/users/:id" -> "/users/{id}",
+// "/files/*" -> "/files/{path}".
+func _openapi_path(pattern: str): str:
+    mut out := ""
+    n := pattern.len()
+    mut i := 0
+    until i < n:
+        c := pattern.substr(i, 1)
+        if str.Equals(c, ":"):
+            mut e := i + 1
+            until e < n && !str.Equals(pattern.substr(e, 1), "/"):
+                e += 1
+            end
+            out = out.concat("{").concat(pattern.substr(i + 1, e - i - 1)).concat("}")
+            i = e
+        else str.Equals(c, "*"):
+            out = out.concat("{").concat(_WILDCARD_NAME).concat("}")
+            i += 1
+        else:
+            out = out.concat(c)
+            i += 1
+        end
+    end
+    ret out
+end
+
+// A default operationId, for the routes nobody named: "GET /api/todos/:id"
+// becomes "get_api_todos_id". Only has to be stable and unique enough that a
+// generated client compiles.
+func _default_op_id(method: str, pattern: str): str:
+    mut out := method.lower()
+    n := pattern.len()
+    // false, not true: the leading "/" of the pattern is what separates the
+    // method from the path, so "GET /api" is "get_api" and not "getapi".
+    mut last_us := false
+    repeat n with i:
+        c := pattern.substr(i, 1)
+        if str.Equals(c, "/") || str.Equals(c, ":") || str.Equals(c, "*") || str.Equals(c, "-"):
+            if !last_us:
+                out = out.concat("_")
+                last_us = true
+            end
+        else:
+            out = out.concat(c)
+            last_us = false
+        end
+    end
+    ret out
+end
+
+// Every route the router will actually dispatch, added to the document.
+//
+// Routes already in the document keep everything said about them, so Scan can
+// come before or after the describing calls - and can be called again after
+// more routes are registered without undoing any of it.
+//
+// A router's static-file mount is not a route and is not listed: it has no
+// method table, no payload and no parameters, and an OpenAPI operation for
+// "any file under /static" would describe nothing a reader could call.
+@en "Scan"
+@fa "پویش"
+@ar "مسح"
+pub func Scan(d &: Doc, r: router.Router):
+    n := r.routes.len()
+    mut i := 0
+    until i < n:
+        rt := r.routes.get(i)
+        _add := Route(d, rt.method, rt.pattern)
+        i += 1
+    end
+    // Scanning is not describing: leave nothing selected, so a Summary that
+    // follows a bare Scan is a no-op rather than a note on whichever route
+    // the router happened to list last.
+    d.cur = 0 - 1
+end
+
+// Scan, restricted to the routes whose path starts with `prefix`. For a
+// program that serves an API and a website from one router and wants only the
+// API in its documentation.
+@en "ScanPrefix"
+@fa "پویش با پیشوند"
+@ar "مسح ببادئة"
+pub func ScanPrefix(d &: Doc, r: router.Router, prefix: str):
+    n := r.routes.len()
+    mut i := 0
+    until i < n:
+        rt := r.routes.get(i)
+        if rt.pattern.len() >= prefix.len() && str.Equals(rt.pattern.substr(0, prefix.len()), prefix):
+            _add := Route(d, rt.method, rt.pattern)
+        end
+        i += 1
+    end
+    d.cur = 0 - 1
+end

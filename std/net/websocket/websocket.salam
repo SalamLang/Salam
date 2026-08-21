@@ -107,6 +107,11 @@ end
 pub struct Conn:
     pub fd: i64 = 0 - 1
     pub open: bool = false
+    // The target of the handshake request, "/realtime?token=...", as the
+    // client asked for it. A browser cannot set a header on a WebSocket
+    // handshake, so the query string is the only place a client-side
+    // credential can travel; a server that needs one reads it from here.
+    pub path: str = ""
     pub client: bool = false
     pub buf: void* = null
     pub blen: int = 0
@@ -361,6 +366,16 @@ func _read_headers(c &: Conn): str:
     ret hdr
 end
 
+// The target of "GET /path HTTP/1.1", or "" when the request line is not one.
+func _request_path(request: str): str:
+    sp := str.Find(request, " ")
+    if sp < 0: ret "" end
+    rest := request.substr(sp + 1, request.len() - sp - 1)
+    e := str.Find(rest, " ")
+    if e < 0: ret "" end
+    ret rest.substr(0, e)
+end
+
 func _frame_size(c &: Conn): int:
     if c.blen < 2:
         ret 0
@@ -569,6 +584,7 @@ pub func Accept(srv: Server): Conn:
         _shutdown(c)
         ret c
     end
+    c.path = _request_path(hdr)
     c.open = true
     ret c
 end
@@ -617,6 +633,7 @@ pub func AcceptWSS(srv: Server): Conn:
         _shutdown(c)
         ret c
     end
+    c.path = _request_path(hdr)
     c.open = true
     ret c
 end
@@ -834,6 +851,36 @@ pub func Close(c &: Conn):
         _send_frame(c, 8, "")
     end
     _shutdown(c)
+end
+
+@en "Stop"
+@fa "توقف"
+@ar "إيقاف"
+// Stop - ends the connection but leaves its buffer alone.
+//
+// For the case where one thread has to end a connection another thread is
+// reading. A Conn is a value: copies of it share one heap buffer, so calling
+// Close on a copy frees memory the reader is still reading into - a
+// use-after-free, and then a double free when the reader tears down in turn.
+//
+// This sends the close frame, shuts the socket down so the reader wakes with
+// an end-of-stream rather than staying blocked, and stops there. The thread
+// that owns the connection calls Close when its loop ends, and that one call
+// releases the buffer.
+pub func Stop(c &: Conn):
+    if c.open:
+        _send_frame(c, 8, "")
+    end
+    if c.secure:
+        mut tc := _tls_get(c.tls_idx)
+        tls.Close(tc)
+        _tls_put(c.tls_idx, tc)
+    else:
+        if c.fd >= 0:
+            rawsock.Shutdown(rawsock.FromFd(c.fd))
+        end
+    end
+    c.open = false
 end
 
 // ------------------------------------------------------------------ Hub

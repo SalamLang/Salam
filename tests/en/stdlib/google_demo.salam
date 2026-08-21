@@ -1,0 +1,81 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// google - service-account authentication for any Google API.
+//
+// The exchange itself needs a network, so what is checked here is everything
+// that happens before it: reading a service-account file, and refusing the
+// shapes that are not one. The assertion is verified against a real endpoint
+// in the project's own tests, where an RSA key can be generated to sign with.
+
+import google
+
+// A service-account file, with a key that is syntactically a PEM. Signing with
+// it needs a real key; parsing does not, which is the part this checks.
+const ACCOUNT := `{"type":"service_account","project_id":"demo-project","private_key_id":"abc","private_key":"-----BEGIN PRIVATE KEY-----\nMIIEvQ==\n-----END PRIVATE KEY-----\n","client_email":"robot@demo-project.iam.gserviceaccount.com","client_id":"1","token_uri":"https://oauth2.googleapis.com/token"}`
+
+func check(label: str, got: bool):
+    print label
+    print ": "
+    if got: println "ok" else: println "FAILED" end
+end
+
+func parsing():
+    sa := google.ParseServiceAccount(ACCOUNT)
+    check("parses a service account", sa.ok)
+    check("reads the client email",
+        sa.client_email == "robot@demo-project.iam.gserviceaccount.com")
+    check("reads the project", sa.project_id == "demo-project")
+    check("reads the token endpoint", sa.token_uri == "https://oauth2.googleapis.com/token")
+    // JSON carries a PEM with its newlines escaped. A key that still has
+    // literal backslash-n in it parses as nothing, so the decoder has to have
+    // unescaped them.
+    check("unescapes the key", sa.private_key.find("\n") > 0)
+    check("the key is a PEM", sa.private_key.find("BEGIN PRIVATE KEY") > 0)
+end
+
+// The token endpoint defaults to Google's when a file omits it, which older
+// key files do.
+func defaults():
+    sa := google.ParseServiceAccount(
+        `{"client_email":"a@b.iam.gserviceaccount.com","private_key":"-----BEGIN PRIVATE KEY-----\nx\n-----END PRIVATE KEY-----\n"}`)
+    check("defaults the token endpoint", sa.token_uri == "https://oauth2.googleapis.com/token")
+end
+
+func refusals():
+    check("empty document refused", !google.ParseServiceAccount("").ok)
+    check("empty object refused", !google.ParseServiceAccount("{}").ok)
+    check("missing key refused",
+        !google.ParseServiceAccount(`{"client_email":"a@b.com"}`).ok)
+    check("missing email refused",
+        !google.ParseServiceAccount(`{"private_key":"-----BEGIN PRIVATE KEY-----"}`).ok)
+    mut ok := true
+    _none := google.AccessToken(google.ServiceAccount {}, google.SCOPE_FCM, ok)
+    check("unconfigured account mints nothing", !ok)
+    _scope := google.AccessToken(google.ParseServiceAccount(ACCOUNT), "", ok)
+    check("empty scope refused", !ok)
+end
+
+func scopes():
+    check("messaging scope", google.SCOPE_FCM ==
+        "https://www.googleapis.com/auth/firebase.messaging")
+    check("bearer header", google.Authorization("abc") == "Bearer abc")
+end
+
+func main:
+    parsing()
+    defaults()
+    refusals()
+    scopes()
+end

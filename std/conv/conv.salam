@@ -19,6 +19,11 @@ package conv
 
 extern:
     func malloc(size: u64): void*
+    // For FormatFloat: printf is the only correctly-rounded decimal
+    // formatter available here, and strtod the only correctly-rounded
+    // reader back.
+    func snprintf(buf: char*, cap: u64, fmt: str, ...): int
+    func strtod(s: str, endptr: void*): f64
 end
 
 inline pure func _bp(s: str): i8*: ret (s as void*) as i8* end
@@ -243,7 +248,45 @@ pub inline pure func IsNaNF(x: f64): bool: ret x != x end
 @en "FormatFloat"
 @fa "قالب اعشار"
 @ar "تنسیق عشری"
+// The shortest text that reads back as exactly this double: 15 significant
+// digits, then 16, then 17 - the first that survives strtod, which 17
+// always does. This was a hand-rolled 6-significant-digit formatter, so
+// json.Encode wrote 1.23457e+06 for 1234567.0 and str.FromFloat lost every
+// digit past the sixth. `println` renders a float the same way now
+// (std/text's salam_fmt_f64), and so does the JS backend.
+//
+// The buffer is handed to the caller as the result string, the same
+// ownership FormatUint below has always had.
 pub func FormatFloat(x: f64): str:
+    if x != x: ret "nan" end
+    if x != 0.0 && x / 2.0 == x:
+        ret x < 0.0 ? "-inf" : "inf"
+    end
+    cap := 64 as u64
+    buf := malloc(cap)
+    mut prec := 15
+    until prec <= 17:
+        mut spec := "%.15g"
+        if prec == 16:
+            spec = "%.16g"
+        else prec == 17:
+            spec = "%.17g"
+        end
+        n := snprintf(buf as char*, cap, spec, x)
+        if n > 0 && (prec == 17 || strtod(buf as str, null) == x):
+            ret buf as str
+        end
+        prec += 1
+    end
+    ret buf as str
+end
+
+// The 6-significant-digit formatter FormatFloat used to be, kept for
+// callers that want a short fixed rendering rather than an exact one.
+@en "FormatFloatShort"
+@fa "قالب اعشار کوتاه"
+@ar "تنسیق عشری قصیر"
+pub func FormatFloatShort(x: f64): str:
     if x != x: ret "nan" end
     mut v := x
     mut sign := ""

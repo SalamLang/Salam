@@ -90,10 +90,28 @@ end
 // as addressable once a further `.field`/`&(...)` is chained onto it
 // ("lvalue required as unary '&' operand") - so this must recurse into the
 // base rather than assume every AST_MEMBER/AST_INDEX is addressable.
-func cg_addressable(a &: at.Ast, n: int): bool:
+func cg_addressable(s &: sm.Sema, a &: at.Ast, n: int): bool:
     k := at.KindOf(a, n)
-    if k == at.AST_MEMBER || k == at.AST_INDEX:
-        ret cg_addressable(a, at.Get(a, n).a)
+    if k == at.AST_MEMBER:
+        ret cg_addressable(s, a, at.Get(a, n).a)
+    end
+    if k == at.AST_INDEX:
+        // `xs[i]` is an lvalue while it lowers to C's own indexing. Where
+        // the container is a struct value with an operator_index, it lowers
+        // to a CALL instead, and a call's result has no address: `&` over it
+        // is what gcc rejects with "lvalue required as unary '&' operand".
+        cont := at.Get(a, n).a
+        cts := at.Get(a, cont).type_str
+        if str.Len(cts) > 0 && !str.EndsWith(cts, "*"):
+            mut sname := ""
+            css := cg_struct_of(s, cts, sname)
+            if css != 0 && sm.LookupLocal(
+                s, sm.SymAt(s, css).members, "operator_index"
+            ) != 0:
+                ret false
+            end
+        end
+        ret cg_addressable(s, a, cont)
     end
     ret k == at.AST_IDENTIFIER || k == at.AST_THIS || k == at.AST_STRUCT_LIT
 end

@@ -390,24 +390,55 @@ func jsg_expr_p(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, minprec: int): str:
         ret jsg_wrap(sv3, JSP_UNARY, minprec)
     end
     if n.kind == at.AST_CAST:
-        if n.a != 0:
-            ak := at.KindOf(a, n.a)
-            if ak == at.AST_ARRAY_LIT || ak == at.AST_STRUCT_LIT:
-                ret jsg_expr_p(g, s, a, n.a, minprec)
-            end
-        end
         mut dts := ""
         if n.ty != 0 && str.Len(at.Get(a, n.ty).type_str) > 0:
             dts = at.Get(a, n.ty).type_str
         else str.Len(n.type_str) > 0:
             dts = n.type_str
         end
+        // A literal keeps its own shape through a cast - unless the cast is
+        // to a `dyn`, which wraps it (jsg_dyn_box) rather than retyping it.
+        if n.a != 0 && !str.StartsWith(dts, "dyn "):
+            ak := at.KindOf(a, n.a)
+            if ak == at.AST_ARRAY_LIT || ak == at.AST_STRUCT_LIT:
+                ret jsg_expr_p(g, s, a, n.a, minprec)
+            end
+        end
         sts := n.a != 0 ? at.Get(a, n.a).type_str : ""
         if str.Equals(dts, sts):
             ret jsg_expr_p(g, s, a, n.a, minprec)
         end
+        // A str seen through a byte pointer, and back (jsg_is_byte_ptr_ts).
+        if jsg_is_byte_ptr_ts(dts) && str.Equals(sts, "str"):
+            ret "__sal_bytes(" + jsg_expr_p(g, s, a, n.a, 0) + ")"
+        end
+        if str.Equals(dts, "str") && jsg_is_byte_ptr_ts(sts):
+            ret "__sal_str(" + jsg_expr_p(g, s, a, n.a, 0) + ")"
+        end
+        // `(p as u64) + k` cast back to a pointer: C's pointer arithmetic,
+        // which std uses to take a slice of a string's bytes. A Uint8Array
+        // says exactly that - a view starting k bytes in.
+        if jsg_is_byte_ptr_ts(dts):
+            pa := jsg_ptr_add(g, s, a, id)
+            if str.Len(pa) > 0:
+                ret pa
+            end
+        end
+        // A pointer to anything wider than a byte cannot ride on the byte
+        // array a pointer is here: indexing it would step one byte at a
+        // time and quietly answer wrong. std's SHA-1 builds its message
+        // schedule that way (`mem.Allocate(80 * 8) as i64*`), and a wrong
+        // hash is worse than a refusal.
+        if str.EndsWith(dts, "*") && !jsg_is_byte_ptr_ts(dts) && jsg_is_byte_ptr_ts(
+            sts
+        ):
+            ret jsg_unsupported(g, "pointer to " + str.Substr(dts, 0, str.Len(dts) - 1))
+        end
         if str.StartsWith(dts, "dyn "):
-            ret jsg_unsupported(g, "dyn cast")
+            if str.StartsWith(sts, "dyn "):
+                ret jsg_expr_p(g, s, a, n.a, minprec)
+            end
+            ret jsg_dyn_box(g, s, a, id, dts)
         end
         dn := str.Len(dts)
         if cg_is_int_typestr(dts) && dn > 0 && byte_at(dts, dn - 1) != 42 && !has_bracket(dts):
@@ -504,9 +535,18 @@ func jsg_expr_p(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, minprec: int): str:
         ret jsg_expr_p(g, s, a, n.a, JSP_MEMBER) + "." + cg_cident(n.name)
     end
     if n.kind == at.AST_INDEX:
+        // A Vector indexes like the array it is here, without going through
+        // the operator_index method the struct declares (jsg_call_vec).
+        if n.a != 0 && cg_is_vector_ts(s, at.Get(a, n.a).type_str):
+            ret jsg_expr_p(g, s, a, n.a, JSP_MEMBER) + "[" + jsg_expr_p(
+                g, s, a, n.b, 0
+            ) + "]"
+        end
         if n.a != 0:
             ats3 := at.Get(a, n.a).type_str
-            if str.Len(ats3) > 0:
+            // Not through a pointer - that indexes as a pointer (sema's
+            // AST_INDEX check draws the same line).
+            if str.Len(ats3) > 0 && !str.EndsWith(ats3, "*"):
                 mut sname3 := ""
                 ssym3 := cg_struct_of(s, ats3, sname3)
                 if ssym3 != 0:

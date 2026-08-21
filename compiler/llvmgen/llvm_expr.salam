@@ -131,10 +131,21 @@ func str_operand(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): str:
             v, r + " = call ptr @salam_ll_charstr(i32 " + conv(v, s, a, val, "i32") + ")"
         )
     else is_float(ts):
-        need(v, LV_H_F64STR)
-        emit(
-            v, r + " = call ptr @salam_ll_f64str(double " + conv(v, s, a, val, "f64") + ")"
-        )
+        // Through the runtime's salam_fmt_f64, the same shortest
+        // round-trip text print uses - the local %g helper rendered
+        // 12.56636 as "12.5664", so a concatenated float disagreed with a
+        // printed one. The local helper stays as the fallback for a
+        // program that somehow has no text package linked.
+        dref := conv(v, s, a, val, "f64")
+        fref := call_runtime_val(v, s, a, "salam_fmt_f64", "double", dref, "ptr")
+        if str.Len(fref) > 0:
+            emit(v, r + " = select i1 true, ptr " + fref + ", ptr " + fref)
+        else:
+            need(v, LV_H_F64STR)
+            emit(
+                v, r + " = call ptr @salam_ll_f64str(double " + dref + ")"
+            )
+        end
     else is_int_ts(ts):
         if is_signed_ts(ts):
             need(v, LV_H_I64STR)
@@ -342,6 +353,11 @@ end
 func lv_index_set(v &: Lv, s &: sm.Sema, a &: at.Ast, idx: int, value: int): bool:
     idxn := at.Get(a, idx)
     if idxn.a == 0 || str.Len(at.Get(a, idxn.a).type_str) == 0:
+        ret false
+    end
+    // Writing through a pointer is address arithmetic, not the pointee's
+    // operator_index_set (see sema's AST_INDEX check).
+    if is_ptr_ts(at.Get(a, idxn.a).type_str):
         ret false
     end
     mut sname2 := ""
@@ -623,7 +639,14 @@ func lv_lower_print(
             else sg.kind == cg.PF_CHAR:
                 av = ", i32 " + conv(v, s, a, val, "i32")
             else sg.kind == cg.PF_F64:
-                av = ", double " + conv(v, s, a, val, "f64")
+                // Printed as the text salam_fmt_f64 makes of it (the "%s"
+                // cg.PfSpec now asks for), so this backend and the C one
+                // and the browser all render a double the same way.
+                dref := conv(v, s, a, val, "f64")
+                fref := call_runtime_val(
+                    v, s, a, "salam_fmt_f64", "double", dref, "ptr"
+                )
+                av = ", ptr " + fref
             else sg.kind == cg.PF_I32:
                 av = ", i32 " + conv(v, s, a, val, "i32")
             else sg.kind == cg.PF_U32:

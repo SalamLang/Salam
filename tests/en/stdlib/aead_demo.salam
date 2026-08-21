@@ -1,0 +1,70 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// tls.Ecdh/Hkdf/AesGcm - sealing an application protocol.
+//
+// The three primitives compose into the exchange a browser can mirror with
+// WebCrypto: agree on a secret over P-256, split it into one key per direction
+// with HKDF, then seal each frame with AES-256-GCM under a nonce derived from
+// a frame counter.
+//
+// Two keys rather than one so each direction runs its own counter from zero
+// without ever reusing a nonce, which is the single failure that would break
+// GCM outright.
+
+import tls
+
+func step(label: str, ok: bool):
+    print label
+    print ": "
+    println ok
+end
+
+func main:
+    mut server_priv := ""
+    mut server_pub := ""
+    mut client_priv := ""
+    mut client_pub := ""
+    step("keys", tls.EcdhP256Generate(server_priv, server_pub))
+    step("peer keys", tls.EcdhP256Generate(client_priv, client_pub))
+
+    mut ok := false
+    server_secret := tls.EcdhP256Shared(server_priv, client_pub, ok)
+    step("server ecdh", ok)
+    client_secret := tls.EcdhP256Shared(client_priv, server_pub, ok)
+    step("client ecdh", ok)
+    step("secrets agree", server_secret == client_secret)
+
+    salt := tls.RandomSalt(16)
+    s2c := tls.HkdfSha256(server_secret, salt, "demo s2c", 32, ok)
+    step("hkdf", ok)
+    c2s := tls.HkdfSha256(client_secret, salt, "demo c2s", 32, ok)
+    step("directions differ", s2c != c2s)
+    step("client derives the same", tls.HkdfSha256(client_secret, salt, "demo s2c", 32, ok) == s2c)
+
+    nonce := tls.GcmNonce(0 as i64)
+    sealed := tls.AesGcmSeal(s2c, nonce, "{\"t\":\"hello\"}", ok)
+    step("seal", ok)
+    println tls.AesGcmOpen(s2c, nonce, sealed, ok)
+    step("open", ok)
+
+    // The wrong key, a replayed counter and a truncated envelope all fail the
+    // same way: no plaintext and no explanation.
+    _bad := tls.AesGcmOpen(c2s, nonce, sealed, ok)
+    step("wrong key refused", !ok)
+    _stale := tls.AesGcmOpen(s2c, tls.GcmNonce(1 as i64), sealed, ok)
+    step("wrong nonce refused", !ok)
+    _short := tls.AesGcmOpen(s2c, nonce, "AAAA", ok)
+    step("truncated refused", !ok)
+end

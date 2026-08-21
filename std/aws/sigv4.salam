@@ -1,0 +1,232 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package aws
+
+// Signature Version 4.
+//
+// Four steps, and the whole reason they are separated in the specification is
+// that each one is exactly reproducible by the service:
+//
+//   1. a canonical request - the method, path, query and headers, written in
+//      one agreed order with one agreed escaping
+//   2. a string to sign - the algorithm, the timestamp, the scope, and the
+//      hash of step 1
+//   3. a signing key - the secret, walked through the date, region and service
+//      so a leaked signing key is useless tomorrow, elsewhere, or for anything
+//      else
+//   4. the signature - an HMAC of step 2 under step 3
+//
+// Every mismatch between a client and AWS is in step 1, and almost always in
+// the escaping. `_uri_encode` below is the rule AWS actually applies, which is
+// RFC 3986 with `/` optionally left alone; the standard library's URLEncode is
+// close but not identical, which is why this does not use it.
+
+import mem
+import str
+import crypto
+import time
+
+const HEX_DIGITS := "0123456789abcdef"
+const HMAC_SIZE := 32
+
+// Signed - a completed signature and the two values that go with it.
+pub struct Signed:
+    pub authorization: str = ""
+    pub amz_date: str = ""
+    pub payload_hash: str = ""
+    pub ok: bool = false
+end
+
+// _unreserved - the characters AWS leaves alone. Everything else is
+// percent-encoded, including characters a general URL encoder would keep.
+func _unreserved(code: int): bool:
+    if code >= 65 && code <= 90: ret true end
+    if code >= 97 && code <= 122: ret true end
+    if code >= 48 && code <= 57: ret true end
+    ret code == 45 || code == 46 || code == 95 || code == 126
+end
+
+func _hex_byte(v: int): str:
+    ret HEX_DIGITS.substr(v / 16, 1) + HEX_DIGITS.substr(v % 16, 1)
+end
+
+// _uri_encode - AWS's escaping. `keep_slash` is true for a path, where a
+// separator must stay a separator, and false for a query value, where a slash
+// is data.
+func _uri_encode(s: str, keep_slash: bool): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    repeat s.len() with i:
+        code := s[i] as int
+        if _unreserved(code) || (keep_slash && code == 47):
+            str.BufAppendChar(sb, code)
+        else:
+            str.BufAppend(sb, "%" + _hex_byte(code).upper())
+        end
+    end
+    ret str.BufStr(sb)
+end
+
+// _hex - a raw digest as lower-case hex, which is the only form step 2 and the
+// Authorization header ever carry.
+func _hex(ptr: void*, n: int): str:
+    bp := ptr as u8*
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    repeat n with i:
+        str.BufAppend(sb, _hex_byte(bp[i] as int))
+    end
+    ret str.BufStr(sb)
+end
+
+// _hmac_into - HMAC-SHA256 with a raw-byte key, which is what the key
+// derivation chain needs: each step's output is the next step's key, and a
+// digest is not text.
+func _hmac_into(key: void*, klen: int, msg: str, out: void*):
+    crypto.HmacSha256Raw(key, klen, msg as void*, msg.len(), out)
+end
+
+// _signing_key - the secret walked through date, region and service.
+//
+// This is the property that makes SigV4 worth its complexity: the key that
+// signs a request is not the account's secret. It is derived for one day, one
+// region and one service, so a signature captured today proves nothing
+// tomorrow and a key scoped to S3 cannot sign a request to anything else.
+func _signing_key(secret: str, date_stamp: str, region: str, service: str): void*:
+    out := mem.Allocate(HMAC_SIZE as u64)
+    if out == null: ret null end
+    seed := "AWS4" + secret
+    _hmac_into(seed as void*, seed.len(), date_stamp, out)
+    _hmac_into(out, HMAC_SIZE, region, out)
+    _hmac_into(out, HMAC_SIZE, service, out)
+    _hmac_into(out, HMAC_SIZE, "aws4_request", out)
+    ret out
+end
+
+// _canonical_request - step 1. The blank line before the signed-header list is
+// required: it terminates the header block, and omitting it is the single most
+// common reason a hand-rolled signer produces a 403.
+func _canonical_request(method: str, path: str, query: str, headers: str,
+    signed_headers: str, payload_hash: str): str:
+    ret method + "\n" + path + "\n" + query + "\n" + headers + "\n" +
+        signed_headers + "\n" + payload_hash
+end
+
+// _string_to_sign - step 2.
+func _string_to_sign(amz_date: str, scope: str, canonical: str): str:
+    ret ALGORITHM + "\n" + amz_date + "\n" + scope + "\n" + crypto.Sha256Hex(canonical)
+end
+
+// _sign_with - step 4, given a prepared key.
+func _sign_with(key: void*, string_to_sign: str): str:
+    out := mem.Allocate(HMAC_SIZE as u64)
+    defer mem.Free(out)
+    if out == null: ret "" end
+    _hmac_into(key, HMAC_SIZE, string_to_sign, out)
+    ret _hex(out, HMAC_SIZE)
+end
+
+// AmzDate - "20260821T022734Z", the timestamp every signature is anchored to.
+// Derived from the ISO form by dropping the separators, which is exactly what
+// the format is.
+pub func AmzDate(epoch_seconds: i64): str:
+    iso := time.FormatISOUTC(epoch_seconds)
+    ret str.Replace(str.Replace(iso, "-", ""), ":", "")
+end
+
+// DateStamp - the "20260821" half, which scopes the signing key to one day.
+pub func DateStamp(amz_date: str): str:
+    if amz_date.len() < 8: ret amz_date end
+    ret amz_date.substr(0, 8)
+end
+
+// Scope - the credential scope: date, region, service, terminator.
+pub func Scope(date_stamp: str, region: str, service: str): str:
+    ret date_stamp + "/" + region + "/" + service + "/aws4_request"
+end
+
+// UriEncode - AWS's escaping, exported because a caller building a query
+// string has to use the same one.
+pub func UriEncode(s: str, keep_slash: bool): str:
+    ret _uri_encode(s, keep_slash)
+end
+
+// EncodeKey - an object key as a request path. Each segment is escaped and the
+// separators are kept, so "a b/c+d.txt" becomes "/a%20b/c%2Bd.txt".
+pub func EncodeKey(key: str): str:
+    mut trimmed := key
+    if trimmed.len() > 0 && trimmed.substr(0, 1) == "/":
+        trimmed = trimmed.substr(1, trimmed.len() - 1)
+    end
+    ret "/" + _uri_encode(trimmed, true)
+end
+
+// Sha256Bytes - the payload hash for a binary body.
+pub func Sha256Bytes(ptr: void*, n: int): str:
+    digest := mem.Allocate(HMAC_SIZE as u64)
+    defer mem.Free(digest)
+    if digest == null: ret EMPTY_SHA256 end
+    crypto.Sha256Bytes(ptr, n, digest)
+    ret _hex(digest, HMAC_SIZE)
+end
+
+// SignRequest - a signed Authorization header for one request.
+//
+// `canonical_headers` must be the newline-terminated, lower-cased, sorted
+// block, and `signed_headers` the matching semicolon-joined list; building
+// them is the caller's job because only the caller knows which headers it will
+// actually send. S3Sign() in s3.salam does it for the S3 case.
+pub func SignRequest(cfg: Config, method: str, path: str, query: str,
+    canonical_headers: str, signed_headers: str, payload_hash: str,
+    epoch_seconds: i64): Signed:
+    if cfg.secret_key.len() == 0: ret Signed {} end
+    amz_date := AmzDate(epoch_seconds)
+    date_stamp := DateStamp(amz_date)
+    scope := Scope(date_stamp, cfg.region, cfg.service)
+    canonical := _canonical_request(method, path, query, canonical_headers,
+        signed_headers, payload_hash)
+    key := _signing_key(cfg.secret_key, date_stamp, cfg.region, cfg.service)
+    if key == null: ret Signed {} end
+    defer mem.Free(key)
+    signature := _sign_with(key, _string_to_sign(amz_date, scope, canonical))
+    if signature.len() == 0: ret Signed {} end
+    ret Signed {
+        authorization = ALGORITHM + " Credential=" + cfg.access_key + "/" + scope +
+            ", SignedHeaders=" + signed_headers + ", Signature=" + signature,
+        amz_date = amz_date,
+        payload_hash = payload_hash,
+        ok = true
+    }
+end
+
+// SignQuery - the signature for a presigned URL.
+//
+// The difference from SignRequest is where the credential goes: in a presigned
+// URL everything travels in the query string, so the query is part of what is
+// signed and the only signed header is Host. That is what lets a browser fetch
+// the URL with no headers of its own.
+pub func SignQuery(cfg: Config, method: str, path: str, query: str, host: str,
+    epoch_seconds: i64): str:
+    if cfg.secret_key.len() == 0: ret "" end
+    amz_date := AmzDate(epoch_seconds)
+    date_stamp := DateStamp(amz_date)
+    canonical := _canonical_request(method, path, query, "host:" + host + "\n",
+        "host", UNSIGNED_PAYLOAD)
+    key := _signing_key(cfg.secret_key, date_stamp, cfg.region, cfg.service)
+    if key == null: ret "" end
+    defer mem.Free(key)
+    ret _sign_with(key, _string_to_sign(amz_date,
+        Scope(date_stamp, cfg.region, cfg.service), canonical))
+end

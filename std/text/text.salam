@@ -26,9 +26,56 @@ package text
 import mem
 import str
 
+// libc, for salam_fmt_f64 below: printf is the only correctly-rounded
+// decimal formatter available here, and strtod the only correctly-rounded
+// reader back.
+extern:
+    func snprintf(buf: char*, cap: u64, fmt: str, ...): int
+    func strtod(s: str, endptr: void*): f64
+end
+
 inline pure func _strptr(s: str): i64:
     v := s as void*
     ret v as i64
+end
+
+// One "%.Ng" rendering of `v`.
+func _fmt_g(v: f64, prec: int): str:
+    cap := 64 as u64
+    buf := mem.Allocate(cap)
+    n := snprintf(buf as char*, cap, "%." + str.FromInt(prec as i64) + "g", v)
+    mut out := ""
+    if n > 0:
+        out = str.Clone(buf as str)
+    end
+    mem.Free(buf)
+    ret out
+end
+
+extern:
+    // The shortest text that reads back as exactly this double: 15
+    // significant digits, then 16, then 17 - the first that survives
+    // strtod wins, and 17 always does. printf's %g drops trailing zeros,
+    // so this is the answer Python's repr and JavaScript's String() give,
+    // and the one the JS backend already printed while the compiled
+    // backends printed 6 digits: 1/3 came out "0.333333" and
+    // 1000000000.5 came out "1e+09", which is not the same number.
+    func salam_fmt_f64(v: f64): str:
+        // printf spells a negative NaN "-nan" on glibc; the sign of a NaN
+        // is not information this language shows.
+        if v != v:
+            ret "nan"
+        end
+        mut prec := 15
+        until prec <= 17:
+            s := _fmt_g(v, prec)
+            if prec == 17 || strtod(s, null) == v:
+                ret s
+            end
+            prec += 1
+        end
+        ret ""
+    end
 end
 
 extern:

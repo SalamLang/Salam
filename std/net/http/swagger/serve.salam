@@ -1,0 +1,308 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package swagger
+
+// Putting the documentation somewhere a browser can reach it: on the API's
+// own router under a prefix, or on a port of its own.
+//
+//     swagger.Mount(doc, r, "/docs")     // http://host/docs
+//     swagger.Serve(doc, 8091)           // http://host:8091/
+//
+// WHY THE MOUNT TABLE
+//
+// Salam has no closures, so a handler cannot carry the document it is meant
+// to render - `router.Get` takes a bare function pointer and there is nowhere
+// to hang state off it. The two handlers below are therefore ordinary
+// functions that look their document up by the request that reached them, in
+// a table the mounting calls fill in.
+//
+// A table, not a single global, because a process can mount more than one:
+// net/http now runs several servers at once (see its server table), and a
+// gateway in front of two services is two documents. The lookup is by path
+// and by port, because two documents served on their own ports both have
+// their page at "/" and the path alone cannot tell them apart - see
+// _mount_for. A client that sends a Host header without a port (which every
+// browser does include, and which this repo's own client now sends too)
+// leaves that ambiguity unresolved, and gets whichever matched first.
+//
+// The table is written by Mount and read by handler threads, so mounting has
+// to happen before the server that serves it starts - which is the natural
+// order anyway, since the router has to be built before it is used. Mounting
+// after a server is already running would push onto a Vector other threads
+// are reading.
+
+import net.http
+import net.router
+import os
+import str
+
+mut _mounts := Vector {} as Vector<_Mount>
+
+struct _Mount:
+    pub prefix: str = ""
+    // `prefix` with a trailing slash, because "/docs" and "/docs/" are the
+    // same page and the comparison happens on every request. Joined once
+    // here rather than per mount per request.
+    pub prefix_slash: str = ""
+    pub spec_path: str = ""
+    pub title: str = ""
+    pub spec: str = ""
+    // The rendered page. Like the spec it depends on nothing a request
+    // carries, so it is built once at mount time: a handler that rebuilt it
+    // would allocate a fresh twenty-kilobyte copy of the template on every
+    // hit and drop the previous one.
+    //
+    // The page is handed an empty spec URL and works out where its own
+    // document is from the address it was loaded from. Nothing here could do
+    // that as well - "/docs" and "/docs/" are the same page and would need
+    // different relative URLs, and a reverse proxy mounting the service
+    // under another prefix makes any absolute path this process could write
+    // wrong.
+    pub page: str = ""
+    // The port Serve bound, or 0 for a mount on a router the caller owns -
+    // that one answers on whatever port its server ends up listening on, so
+    // it matches any.
+    pub port: int = 0
+end
+
+// Two documents can be mounted at the same path - `Serve(a, 8091)` and
+// `Serve(b, 8092)` both put a page at "/" - so the path alone does not say
+// which one a request wants. The port it arrived on does, and the Host header
+// carries it.
+func _host_port(host: str): int:
+    colon := str.LastIndex(host, ":")
+    if colon < 0 || colon == host.len() - 1:
+        ret 0
+    end
+    tail := host.substr(colon + 1, host.len() - colon - 1)
+    // A bare IPv6 literal is all colons and hex - "[::1]" has a last colon
+    // with no port after it - so the tail has to be digits before it can be
+    // read as one.
+    repeat tail.len() with i:
+        c := tail.substr(i, 1)
+        if c < "0" || c > "9":
+            ret 0
+        end
+    end
+    ret tail.to_int()
+end
+
+func _path_matches(m: _Mount, path: str, want_spec: bool): bool:
+    if want_spec:
+        ret str.Equals(m.spec_path, path)
+    end
+    ret str.Equals(m.prefix, path) || str.Equals(m.prefix_slash, path)
+end
+
+// The mount this request wants: the one bound to the port it arrived on if
+// there is one, then a router mount (which answers on any port), then - for a
+// Host header that carried no port, such as a request through a proxy on 80 -
+// whichever matched the path first.
+func _mount_for(path: str, host: str, want_spec: bool): int:
+    port := _host_port(host)
+    if port > 0:
+        repeat _mounts.len() with i:
+            m := _mounts.get(i)
+            if m.port == port && _path_matches(m, path, want_spec):
+                ret i
+            end
+        end
+    end
+    repeat _mounts.len() with j:
+        m2 := _mounts.get(j)
+        if m2.port == 0 && _path_matches(m2, path, want_spec):
+            ret j
+        end
+    end
+    repeat _mounts.len() with k:
+        if _path_matches(_mounts.get(k), path, want_spec):
+            ret k
+        end
+    end
+    ret 0 - 1
+end
+
+// "/docs/" and "/docs" name the same page; the trailing slash is dropped so
+// the spec URL below is built from one spelling. "/" stays "/".
+func _clean_prefix(prefix: str): str:
+    mut p := prefix
+    if p.len() == 0:
+        ret "/"
+    end
+    if !str.Equals(p.substr(0, 1), "/"):
+        p = "/".concat(p)
+    end
+    until p.len() > 1 && str.Equals(p.substr(p.len() - 1, 1), "/"):
+        p = p.substr(0, p.len() - 1)
+    end
+    ret p
+end
+
+// Where the page fetches its spec from, given where the page itself lives.
+func _spec_path_for(prefix: str): str:
+    if str.Equals(prefix, "/"):
+        ret "/openapi.json"
+    end
+    ret prefix.concat("/openapi.json")
+end
+
+func _register(prefix: str, port: int, title: str, spec: str): int:
+    p := _clean_prefix(prefix)
+    entry := _Mount {
+        prefix = p, prefix_slash = p.concat("/"), spec_path = _spec_path_for(p),
+        title = title, spec = spec, page = Page(title, ""), port = port
+    }
+    repeat _mounts.len() with i:
+        m := _mounts.get(i)
+        if str.Equals(m.prefix, p) && m.port == port:
+            // Remounting the same place replaces what is there rather than
+            // adding a second entry the lookups would never reach.
+            _mounts.set(i, entry)
+            ret i
+        end
+    end
+    _mounts.push(entry)
+    ret _mounts.len() - 1
+end
+
+// The two handlers. Both are plain `func(ctx: i64)` so they can be registered
+// on a router, and both find their document by the path of the request that
+// reached them.
+func _handle_ui(ctx: i64):
+    i := _mount_for(http.Ctx_path(ctx), http.Ctx_header(ctx, "Host"), false)
+    if i < 0:
+        http.Ctx_status(ctx, 404)
+        http.Ctx_text(ctx, "404 Not Found")
+        ret
+    end
+    // The document is baked into the binary, so a cached copy of this page
+    // outlives the deploy that changed the API it describes. Revalidating is
+    // one conditional request against a local server, and being wrong about
+    // what an API accepts costs more than that.
+    http.Ctx_set_header(ctx, "Cache-Control", "no-cache")
+    http.Ctx_html(ctx, _mounts.get(i).page)
+end
+
+func _handle_spec(ctx: i64):
+    i := _mount_for(http.Ctx_path(ctx), http.Ctx_header(ctx, "Host"), true)
+    if i < 0:
+        http.Ctx_status(ctx, 404)
+        http.Ctx_json(ctx, "{\"error\":\"not found\"}")
+        ret
+    end
+    // A spec is meant to be read by tools on other origins - a client
+    // generator, a linter, a browser page from the frontend's dev server -
+    // and it is a public description of a public interface, so it is served
+    // cross-origin. The API's own routes are untouched by this.
+    http.Ctx_set_header(ctx, "Access-Control-Allow-Origin", "*")
+    http.Ctx_set_header(ctx, "Cache-Control", "no-cache")
+    http.Ctx_json(ctx, _mounts.get(i).spec)
+end
+
+func _mount_routes(r &: router.Router, prefix: str):
+    p := _clean_prefix(prefix)
+    router.Get(r, p, _handle_ui)
+    if !str.Equals(p, "/"):
+        router.Get(r, p.concat("/"), _handle_ui)
+    end
+    router.Get(r, _spec_path_for(p), _handle_spec)
+end
+
+func _serve_on(prefix: str, port: int): bool:
+    mut r := router.NewRouter()
+    _mount_routes(r, prefix)
+    mut s := http.NewServer(port)
+    http.Use(s, r)
+    ret http.RunBackground(s)
+end
+
+// ------------------------------------------------------------ on a router
+
+// Serve the document from the API's own server, under `prefix`: the page at
+// `prefix`, the OpenAPI JSON at `prefix + "/openapi.json"`.
+//
+// Call it after the routes are registered - the spec is rendered here, once,
+// so routes added afterwards will not be in it. That is deliberate: rendering
+// per request would mean holding the Doc past setup and reading it from
+// handler threads.
+@en "Mount"
+@fa "نصب"
+@ar "تركیب"
+pub func Mount(d: Doc, r &: router.Router, prefix: str):
+    _reg := _register(prefix, 0, d.title, Spec(d))
+    _mount_routes(r, prefix)
+end
+
+// Mount an OpenAPI document this package did not build: one written by hand,
+// generated by another tool, or read off disk with SpecFromFile.
+@en "MountSpec"
+@fa "نصب مشخصات"
+@ar "تركیب المواصفات"
+pub func MountSpec(spec: str, title: str, r &: router.Router, prefix: str):
+    _reg := _register(prefix, 0, title, spec)
+    _mount_routes(r, prefix)
+end
+
+// -------------------------------------------------------- on its own port
+
+// Serve the document on `port`, with the page at "/" and the OpenAPI JSON at
+// "/openapi.json", on a listener of its own.
+//
+// Returns as soon as the port is bound; the server runs on its own thread, so
+// this goes before the API's own blocking Run. False when the port could not
+// be bound - already in use, or privileged.
+//
+// Give the Doc a Server() naming the API's base URL when the documentation is
+// on a port of its own: the page sends its try-it-out requests to the server
+// selected in the header, and the docs port is not the API.
+@en "Serve"
+@fa "سرو"
+@ar "خدمة"
+pub func Serve(d: Doc, port: int): bool:
+    _reg := _register("/", port, d.title, Spec(d))
+    ret _serve_on("/", port)
+end
+
+// Serve, for a document from somewhere else.
+@en "ServeSpec"
+@fa "سرو مشخصات"
+@ar "خدمة المواصفات"
+pub func ServeSpec(spec: str, title: str, port: int): bool:
+    _reg := _register("/", port, title, spec)
+    ret _serve_on("/", port)
+end
+
+// ----------------------------------------------------------------- files
+
+// An OpenAPI document read from disk, "" when the file cannot be read.
+@en "SpecFromFile"
+@fa "مشخصات از پرونده"
+@ar "مواصفات من ملف"
+pub func SpecFromFile(path: str): str:
+    if !os.Exists(path):
+        ret ""
+    end
+    ret os.ReadFile(path)
+end
+
+// Write the document out as indented JSON - for checking a spec into a
+// repository next to the code it describes, or handing it to a client
+// generator. False when the file could not be written.
+@en "WriteSpec"
+@fa "نوشتن مشخصات"
+@ar "كتابة المواصفات"
+pub func WriteSpec(d: Doc, path: str): bool:
+    ret os.WriteFile(path, SpecIndent(d)) > 0
+end

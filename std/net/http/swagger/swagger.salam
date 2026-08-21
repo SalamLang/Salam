@@ -1,0 +1,714 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "net/http/swagger"
+@fa "سواگر"
+@ar "سواغر"
+package swagger
+
+// OpenAPI for a net/router Router: what the routes are, what goes in, what
+// comes out - and a page that renders it.
+//
+//     mut r := router.NewRouter()
+//     router.Get(r, "/api/todos", list_todos)
+//     router.Post(r, "/api/todos", create_todo)
+//
+//     mut doc := swagger.New("Todo API", "1.0.0")
+//     swagger.Scan(doc, r)                        // every route, listed
+//
+//     swagger.At(doc, "GET", "/api/todos")
+//     swagger.Summary(doc, "List todos")
+//     swagger.Query(doc, "status", "all, open or done", false)
+//     swagger.Returns(doc, 200, "the page", TodoPage {})
+//
+//     swagger.At(doc, "POST", "/api/todos")
+//     swagger.Accepts(doc, "the todo to create", NewTodo {})
+//     swagger.Returns(doc, 201, "the todo, with its id", Todo {})
+//
+//     swagger.Mount(doc, r, "/docs")              // same server, /docs
+//     swagger.Serve(doc, 8091)                    // or a port of its own
+//
+// WHAT IS AUTOMATIC AND WHAT IS NOT
+//
+// Scan is the automatic half: it walks the router's own route table, so every
+// method and path a program actually serves is in the document whether or not
+// anyone remembered to describe it, `:id` becomes a required path parameter,
+// and `*` becomes a catch-all. A route added later and not described still
+// appears - as an undocumented one, which is the honest thing for it to look
+// like.
+//
+// Returns and Accepts are the other automatic half, and the reason this
+// package needs no schema DSL: they take a value and read its type, so
+// `Returns(doc, 200, "...", Todo {})` writes out every field of `Todo`, its
+// wire names, which fields are optional and every type it nests - from the
+// same declaration, and by the same compiler pass, that produces the encoder
+// json.Marshal(todo) will use (see std/encoding/json/schema.salam). A field
+// renamed with `@json` is renamed in the documentation, in the same commit,
+// without anyone touching this file.
+//
+// What is not automatic is prose. A handler is a `func(ctx: i64)` that writes
+// its response into the context, so there is no return type to read and no
+// way to guess that 404 means "no todo with that id". Summary, Details,
+// Query, Header and the response descriptions are written by hand, once, next
+// to the route they describe.
+//
+// RENDERING SOMEONE ELSE'S SPEC
+//
+// The UI is not tied to a Doc. MountSpec and ServeSpec take OpenAPI JSON from
+// anywhere - a file written by another team, a generated spec, a spec fetched
+// at build time - and render it the same way:
+//
+//     swagger.ServeSpec(swagger.SpecFromFile("openapi.json"), 8091)
+
+import net.router
+import encoding.json
+import str
+
+// Where a `$ref` points in a JSON Schema document, and where it has to point
+// in an OpenAPI one.
+const _DEFS_PREFIX := "#/$defs/"
+const _COMP_PREFIX := "#/components/schemas/"
+
+@en "JSON_TYPE"
+@fa "نوع جیسون"
+@ar "نوع جیسون"
+pub const JSON_TYPE := "application/json"
+
+@en "TEXT_TYPE"
+@fa "نوع متن"
+@ar "نوع نص"
+pub const TEXT_TYPE := "text/plain; charset=utf-8"
+
+@en "HTML_TYPE"
+@fa "نوع اچ تی ام ال"
+@ar "نوع إتش تی إم إل"
+pub const HTML_TYPE := "text/html; charset=utf-8"
+
+@en "FORM_TYPE"
+@fa "نوع فرم"
+@ar "نوع استمارة"
+pub const FORM_TYPE := "application/x-www-form-urlencoded"
+
+@en "TEXT_SCHEMA"
+@fa "طرحواره متن"
+@ar "مخطط نص"
+pub const TEXT_SCHEMA := "{\"type\":\"string\"}"
+
+// What OpenAPI calls a stream of bytes.
+@en "BINARY_SCHEMA"
+@fa "طرحواره دودویی"
+@ar "مخطط ثنائي"
+pub const BINARY_SCHEMA := "{\"type\":\"string\",\"format\":\"binary\"}"
+
+@en "Param"
+@fa "پارامتر"
+@ar "معامل"
+pub struct Param:
+    pub name: str = ""
+    // "path", "query", "header" or "cookie".
+    pub loc: str = "query"
+    pub required: bool = false
+    pub description: str = ""
+    pub schema: str = "{\"type\":\"string\"}"
+end
+
+@en "Reply"
+@fa "پاسخ"
+@ar "رد"
+pub struct Reply:
+    pub code: int = 200
+    pub description: str = ""
+    // "" for a response with no body, such as a 204.
+    pub schema: str = ""
+    // The media type the schema describes. Not every response is JSON: a
+    // report is a CSV, an avatar is a PNG, an error page is HTML, and a
+    // document that calls all of them application/json is wrong about every
+    // one of them.
+    pub content_type: str = "application/json"
+    // Response headers worth naming: the Location of a 201, the Retry-After
+    // of a 429, a request id to quote in a bug report. Parallel vectors
+    // rather than a struct, because a header is a name and a sentence and
+    // nothing else.
+    pub header_names: Vector<str> = Vector {}
+    pub header_notes: Vector<str> = Vector {}
+end
+
+@en "Scheme"
+@fa "طرح احراز هویت"
+@ar "مخطط المصادقة"
+pub struct Scheme:
+    pub name: str = ""
+    // "http" or "apiKey".
+    pub kind: str = "http"
+    pub scheme: str = "bearer"
+    pub format: str = ""
+    pub loc: str = "header"
+    pub param: str = ""
+    pub description: str = ""
+end
+
+@en "Op"
+@fa "عملیات"
+@ar "عملیة"
+pub struct Op:
+    pub method: str = ""
+    pub pattern: str = ""
+    pub op_id: str = ""
+    pub summary: str = ""
+    pub description: str = ""
+    pub is_deprecated: bool = false
+    pub tags: Vector<str> = Vector {}
+    pub params: Vector<Param> = Vector {}
+    pub replies: Vector<Reply> = Vector {}
+    pub security: Vector<str> = Vector {}
+    pub body_schema: str = ""
+    pub body_description: str = ""
+    pub body_required: bool = true
+    pub body_content_type: str = "application/json"
+end
+
+// One entry of `components/schemas`. `name` is the key a `$ref` points at -
+// the compiler's qualified type key, unique across every schema in a program -
+// and `body` is the schema itself.
+@en "Definition"
+@fa "تعریف"
+@ar "تعریف"
+pub struct Definition:
+    pub name: str = ""
+    pub body: str = ""
+end
+
+@en "Doc"
+@fa "سند"
+@ar "وثیقة"
+pub struct Doc:
+    pub title: str = "API"
+    pub version: str = "1.0.0"
+    pub description: str = ""
+    pub servers: Vector<str> = Vector {}
+    pub server_notes: Vector<str> = Vector {}
+    pub ops: Vector<Op> = Vector {}
+    pub defs: Vector<Definition> = Vector {}
+    pub schemes: Vector<Scheme> = Vector {}
+    pub contact_name: str = ""
+    pub contact_url: str = ""
+    pub contact_email: str = ""
+    pub license_name: str = ""
+    pub license_url: str = ""
+    // The operation the describing calls apply to: the one most recently
+    // added by Route, or selected by At. -1 before anything is selected, and
+    // every describing call is a no-op while it is -1, so a mistyped path in
+    // an At is a document with a gap rather than a note attached to whichever
+    // route happened to be current.
+    pub cur: int = 0 - 1
+end
+
+// ------------------------------------------------------------- internals
+
+func _reref(schema: str): str:
+    ret str.Replace(schema, _DEFS_PREFIX, _COMP_PREFIX)
+end
+
+func _op_index(d &: Doc, method: str, pattern: str): int:
+    repeat d.ops.len() with i:
+        o := d.ops.get(i)
+        if str.Equals(o.method, method) && str.Equals(o.pattern, pattern):
+            ret i
+        end
+    end
+    ret 0 - 1
+end
+
+func _def_has(d &: Doc, name: str): bool:
+    repeat d.defs.len() with i:
+        if str.Equals(d.defs.get(i).name, name):
+            ret true
+        end
+    end
+    ret false
+end
+
+// Hoist one schema envelope's named definitions into the document and hand
+// back its root schema, with `$ref`s repointed at `components/schemas`.
+//
+// A name already in the document is left alone rather than overwritten. That
+// is safe rather than merely convenient: the compiler keys a definition by
+// the type's fully qualified spelling, so two envelopes that use the same
+// name are describing the same type and carry the same body.
+func _absorb(d &: Doc, envelope: str): str:
+    defs := json.Get(envelope, "defs")
+    if defs.len() > 2:
+        names := json.Keys(defs)
+        defer names.free()
+        repeat names.len() with i:
+            name := names.get(i)
+            if !_def_has(d, name):
+                // Read the body out of the raw text rather than re-encoding
+                // the parsed value: a round trip through a number would round
+                // it, and these bodies contain lengths and bounds.
+                d.defs.push(Definition { name = name, body = _reref(json.Get(defs, name)) })
+            end
+        end
+    end
+    ret _reref(json.Get(envelope, "schema"))
+end
+
+// The current operation, by reference, or -1 when there is none.
+func _cur(d &: Doc): int:
+    if d.cur < 0 || d.cur >= d.ops.len():
+        ret 0 - 1
+    end
+    ret d.cur
+end
+
+// Generic bodies cannot name this package's structs - a monomorphised copy is
+// checked outside the scope the declaration lives in - so every `<T>` function
+// below stops at computing a schema string and hands it to one of these.
+func _put_param(d &: Doc, name: str, loc: str, description: str, required: bool, schema: str):
+    _set_param(d, Param {
+        name = name, loc = loc, required = required, description = description,
+        schema = schema
+    })
+end
+
+// `{"type":"string","enum":["a","b"]}` for a fixed set of values, or a plain
+// string schema when the set is empty - a menu with nothing in it would be
+// worse than a text box.
+func _enum_schema(values: Vector<str>): str:
+    if values.len() == 0:
+        ret "{\"type\":\"string\"}"
+    end
+    mut out := "{\"type\":\"string\",\"enum\":["
+    repeat values.len() with i:
+        if i > 0:
+            out = out.concat(",")
+        end
+        out = out.concat(json.Str(values.get(i)))
+    end
+    ret out.concat("]}")
+end
+
+func _put_body(d &: Doc, description: str, schema: str, content_type: str, required: bool):
+    i := _cur(d)
+    if i < 0:
+        ret
+    end
+    mut o := d.ops.get(i)
+    o.body_schema = schema
+    o.body_description = description
+    o.body_content_type = content_type
+    o.body_required = required
+    d.ops.set(i, o)
+end
+
+func _set_param(d &: Doc, p: Param):
+    i := _cur(d)
+    if i < 0:
+        ret
+    end
+    mut o := d.ops.get(i)
+    repeat o.params.len() with j:
+        if str.Equals(o.params.get(j).name, p.name) && str.Equals(o.params.get(j).loc, p.loc):
+            o.params.set(j, p)
+            d.ops.set(i, o)
+            ret
+        end
+    end
+    o.params.push(p)
+    d.ops.set(i, o)
+end
+
+func _add_reply(d &: Doc, code: int, description: str, schema: str, content_type: str):
+    i := _cur(d)
+    if i < 0:
+        ret
+    end
+    mut o := d.ops.get(i)
+    r := Reply {
+        code = code, description = description, schema = schema,
+        content_type = content_type
+    }
+    repeat o.replies.len() with j:
+        if o.replies.get(j).code == code:
+            o.replies.set(j, r)
+            d.ops.set(i, o)
+            ret
+        end
+    end
+    o.replies.push(r)
+    d.ops.set(i, o)
+end
+
+// --------------------------------------------------------------- the doc
+
+@en "New"
+@fa "جدید"
+@ar "جدید"
+pub func New(title: str, version: str): Doc:
+    ret Doc { title = title, version = version }
+end
+
+@en "Describe"
+@fa "توضیح"
+@ar "وصف"
+pub func Describe(d &: Doc, text: str):
+    d.description = text
+end
+
+// A base URL the API answers on. The UI sends its try-it-out requests to the
+// one selected there, so a document with no server at all falls back to the
+// page's own origin - right when the docs are mounted on the API itself, and
+// wrong when they are on a port of their own, which is the case worth naming
+// a server for.
+@en "Server"
+@fa "سرور"
+@ar "خادم"
+pub func Server(d &: Doc, url: str, note: str):
+    d.servers.push(url)
+    d.server_notes.push(note)
+end
+
+@en "Contact"
+@fa "تماس"
+@ar "اتصال"
+pub func Contact(d &: Doc, name: str, url: str, email: str):
+    d.contact_name = name
+    d.contact_url = url
+    d.contact_email = email
+end
+
+@en "License"
+@fa "پروانه"
+@ar "رخصة"
+pub func License(d &: Doc, name: str, url: str):
+    d.license_name = name
+    d.license_url = url
+end
+
+// Declare `Authorization: Bearer <token>`. `format` is a hint for client
+// generators - "JWT" for a JWT, "" when it is an opaque token.
+@en "BearerAuth"
+@fa "احراز هویت حامل"
+@ar "مصادقة الحامل"
+pub func BearerAuth(d &: Doc, name: str, format: str):
+    d.schemes.push(Scheme { name = name, kind = "http", scheme = "bearer", format = format })
+end
+
+// Declare a key carried in a named header, query parameter or cookie. `loc`
+// is "header", "query" or "cookie".
+@en "ApiKeyAuth"
+@fa "احراز هویت کلید"
+@ar "مصادقة المفتاح"
+pub func ApiKeyAuth(d &: Doc, name: str, loc: str, param: str):
+    d.schemes.push(Scheme { name = name, kind = "apiKey", loc = loc, param = param })
+end
+
+// ------------------------------------------------------- the operations
+
+// Add an operation, or select the one already there, and make it current.
+@en "Route"
+@fa "مسیر"
+@ar "مسار"
+pub func Route(d &: Doc, method: str, pattern: str): int:
+    // Uppercased before the lookup, not just before the store: an operation
+    // added as "get" is held as "GET", and looking it up by what the caller
+    // wrote would miss it and add a second copy of the same route.
+    verb := str.Upper(method)
+    hit := _op_index(d, verb, pattern)
+    if hit >= 0:
+        d.cur = hit
+        ret hit
+    end
+    mut o := Op { method = verb, pattern = pattern }
+    found := _path_params(pattern)
+    defer found.free()
+    repeat found.len() with i:
+        o.params.push(found.get(i))
+    end
+    d.ops.push(o)
+    d.cur = d.ops.len() - 1
+    ret d.cur
+end
+
+// Select an operation already in the document, so the calls below apply to
+// it. False when there is no such route, and every describing call is then a
+// no-op until the next successful Route or At - a mistyped path leaves a gap
+// in the document rather than moving someone else's summary.
+@en "At"
+@fa "در"
+@ar "عند"
+pub func At(d &: Doc, method: str, pattern: str): bool:
+    hit := _op_index(d, str.Upper(method), pattern)
+    d.cur = hit
+    ret hit >= 0
+end
+
+@en "Summary"
+@fa "خلاصه"
+@ar "ملخص"
+pub func Summary(d &: Doc, text: str):
+    i := _cur(d)
+    if i < 0:
+        ret
+    end
+    mut o := d.ops.get(i)
+    o.summary = text
+    d.ops.set(i, o)
+end
+
+@en "Details"
+@fa "جزئیات"
+@ar "تفاصیل"
+pub func Details(d &: Doc, text: str):
+    i := _cur(d)
+    if i < 0:
+        ret
+    end
+    mut o := d.ops.get(i)
+    o.description = text
+    d.ops.set(i, o)
+end
+
+// Group this operation under a heading. The UI shows one section per tag, in
+// the order the tags were first used.
+@en "Tag"
+@fa "برچسب"
+@ar "وسم"
+pub func Tag(d &: Doc, name: str):
+    i := _cur(d)
+    if i < 0:
+        ret
+    end
+    mut o := d.ops.get(i)
+    o.tags.push(name)
+    d.ops.set(i, o)
+end
+
+// The stable name a generated client will give this operation. One is derived
+// from the method and path when none is set.
+@en "OperationId"
+@fa "شناسه عملیات"
+@ar "معرف العملیة"
+pub func OperationId(d &: Doc, id: str):
+    i := _cur(d)
+    if i < 0:
+        ret
+    end
+    mut o := d.ops.get(i)
+    o.op_id = id
+    d.ops.set(i, o)
+end
+
+@en "Deprecated"
+@fa "منسوخ"
+@ar "مهمل"
+pub func Deprecated(d &: Doc):
+    i := _cur(d)
+    if i < 0:
+        ret
+    end
+    mut o := d.ops.get(i)
+    o.is_deprecated = true
+    d.ops.set(i, o)
+end
+
+// This operation needs the named security scheme, declared with BearerAuth or
+// ApiKeyAuth.
+@en "Secure"
+@fa "امن"
+@ar "مؤمن"
+pub func Secure(d &: Doc, scheme: str):
+    i := _cur(d)
+    if i < 0:
+        ret
+    end
+    mut o := d.ops.get(i)
+    o.security.push(scheme)
+    d.ops.set(i, o)
+end
+
+@en "Query"
+@fa "پرسمان"
+@ar "استعلام"
+pub func Query(d &: Doc, name: str, description: str, required: bool):
+    _put_param(d, name, "query", description, required, "{\"type\":\"string\"}")
+end
+
+// A query parameter whose type is read from `sample`, for the ones that are
+// not strings: `QueryTyped(doc, "limit", "page size", false, 0)`.
+@en "QueryTyped"
+@fa "پرسمان نوع دار"
+@ar "استعلام مصنف"
+pub func QueryTyped<T>(d &: Doc, name: str, description: str, required: bool, sample: T):
+    _put_param(d, name, "query", description, required, _absorb(d, json.SchemaEnvelope(sample)))
+end
+
+// A query parameter that only accepts a few known values:
+// `QueryEnum(doc, "status", "which todos", false, ["all", "open", "done"])`.
+// The values reach the document as a schema rather than as prose, so a
+// generated client gets an enum and the page offers a menu instead of a text
+// box.
+@en "QueryEnum"
+@fa "پرسمان گزینه ای"
+@ar "استعلام محدد"
+pub func QueryEnum(
+    d &: Doc, name: str, description: str, required: bool, values: Vector<str>
+):
+    _put_param(d, name, "query", description, required, _enum_schema(values))
+end
+
+@en "Header"
+@fa "سرصفحه"
+@ar "ترویسة"
+pub func Header(d &: Doc, name: str, description: str, required: bool):
+    _put_param(d, name, "header", description, required, "{\"type\":\"string\"}")
+end
+
+@en "Cookie"
+@fa "کوکی"
+@ar "كوكي"
+pub func Cookie(d &: Doc, name: str, description: str, required: bool):
+    _put_param(d, name, "cookie", description, required, "{\"type\":\"string\"}")
+end
+
+// Describe a path parameter Scan already found. Path parameters are always
+// required, so this only fills in the prose.
+@en "PathParam"
+@fa "پارامتر مسیر"
+@ar "معامل المسار"
+pub func PathParam(d &: Doc, name: str, description: str):
+    _put_param(d, name, "path", description, true, "{\"type\":\"string\"}")
+end
+
+// The request body, as a value of the type the handler decodes. Nothing reads
+// the value; its type is the whole point.
+@en "Accepts"
+@fa "می پذیرد"
+@ar "یقبل"
+pub func Accepts<T>(d &: Doc, description: str, sample: T):
+    _put_body(d, description, _absorb(d, json.SchemaEnvelope(sample)), JSON_TYPE, true)
+end
+
+// The same, for a body the caller may leave out.
+@en "AcceptsOptional"
+@fa "می پذیرد اختیاری"
+@ar "یقبل اختیاري"
+pub func AcceptsOptional<T>(d &: Doc, description: str, sample: T):
+    _put_body(d, description, _absorb(d, json.SchemaEnvelope(sample)), JSON_TYPE, false)
+end
+
+// A body this package cannot derive a schema for, because it is not a Salam
+// value: a form, an uploaded file, a CSV a caller pastes in. `content_type`
+// is the media type and `schema` is a raw JSON Schema - `TEXT_SCHEMA` and
+// `BINARY_SCHEMA` cover the usual two.
+@en "AcceptsRaw"
+@fa "می پذیرد خام"
+@ar "یقبل خام"
+pub func AcceptsRaw(d &: Doc, description: str, content_type: str, schema: str, required: bool):
+    _put_body(d, description, schema, content_type, required)
+end
+
+// A form post: the same fields the type declares, sent as
+// application/x-www-form-urlencoded instead of JSON.
+@en "AcceptsForm"
+@fa "می پذیرد فرم"
+@ar "یقبل استمارة"
+pub func AcceptsForm<T>(d &: Doc, description: str, sample: T):
+    _put_body(d, description, _absorb(d, json.SchemaEnvelope(sample)), FORM_TYPE, true)
+end
+
+// A response, as a value of the type the handler encodes into it.
+@en "Returns"
+@fa "برمی گرداند"
+@ar "یرجع"
+pub func Returns<T>(d &: Doc, code: int, description: str, sample: T):
+    _add_reply(d, code, description, _absorb(d, json.SchemaEnvelope(sample)), JSON_TYPE)
+end
+
+// A response whose body is not JSON. `TEXT_SCHEMA` and `BINARY_SCHEMA` are
+// the two schemas most of these want.
+@en "ReturnsRaw"
+@fa "برمی گرداند خام"
+@ar "یرجع خام"
+pub func ReturnsRaw(d &: Doc, code: int, description: str, content_type: str, schema: str):
+    _add_reply(d, code, description, schema, content_type)
+end
+
+@en "ReturnsText"
+@fa "برمی گرداند متن"
+@ar "یرجع نصا"
+pub func ReturnsText(d &: Doc, code: int, description: str):
+    _add_reply(d, code, description, TEXT_SCHEMA, TEXT_TYPE)
+end
+
+@en "ReturnsHtml"
+@fa "برمی گرداند اچ تی ام ال"
+@ar "یرجع إتش تی إم إل"
+pub func ReturnsHtml(d &: Doc, code: int, description: str):
+    _add_reply(d, code, description, TEXT_SCHEMA, HTML_TYPE)
+end
+
+// A file: an image, a PDF, a zip. `content_type` is what it is;
+// "application/octet-stream" when the server does not commit to one.
+@en "ReturnsFile"
+@fa "برمی گرداند پرونده"
+@ar "یرجع ملفا"
+pub func ReturnsFile(d &: Doc, code: int, description: str, content_type: str):
+    _add_reply(d, code, description, BINARY_SCHEMA, content_type)
+end
+
+// A response with no body: a 204, or a 302 that is all Location header.
+// Name a header the response carries. The reply for `code` is created if
+// nothing has described it yet, so this can come before or after the Returns
+// that gives the code its body.
+@en "ReturnsHeader"
+@fa "برمی گرداند سرصفحه"
+@ar "یرجع ترویسة"
+pub func ReturnsHeader(d &: Doc, code: int, name: str, description: str):
+    i := _cur(d)
+    if i < 0:
+        ret
+    end
+    mut o := d.ops.get(i)
+    mut at_slot := 0 - 1
+    repeat o.replies.len() with j:
+        if o.replies.get(j).code == code:
+            at_slot = j
+        end
+    end
+    if at_slot < 0:
+        o.replies.push(Reply { code = code, description = "", schema = "", content_type = "" })
+        at_slot = o.replies.len() - 1
+    end
+    mut rp := o.replies.get(at_slot)
+    repeat rp.header_names.len() with k:
+        if str.Equals(rp.header_names.get(k), name):
+            rp.header_notes.set(k, description)
+            o.replies.set(at_slot, rp)
+            d.ops.set(i, o)
+            ret
+        end
+    end
+    rp.header_names.push(name)
+    rp.header_notes.push(description)
+    o.replies.set(at_slot, rp)
+    d.ops.set(i, o)
+end
+
+@en "ReturnsNothing"
+@fa "بدون بدنه برمی گرداند"
+@ar "یرجع بلا متن"
+pub func ReturnsNothing(d &: Doc, code: int, description: str):
+    _add_reply(d, code, description, "", "")
+end

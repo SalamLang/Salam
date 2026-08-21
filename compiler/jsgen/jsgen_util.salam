@@ -70,6 +70,14 @@ func local_add(g &: Jg, name: str):
     g.locals.push(name)
 end
 
+// Is `emitted` the JS name of a local still in scope? Names go out through
+// g.local_emit, which is where a collision would be, not g.locals - two
+// different Salam names can be handed the same JS one (a synthetic counter
+// and a user binding).
+func jsg_emit_taken(g &: Jg, emitted: str): bool:
+    ret name_in_strvec(g.local_emit, emitted)
+end
+
 // ---------------------------------------------------------------------------
 // codegen_type.c slice: cg_put_ident_byte / cg_is_c_keyword / cg_cident /
 // parse_typestr (base part) / cg_is_int_typestr / cg_is_unsigned_typestr /
@@ -176,6 +184,68 @@ end
 
 func cg_is_slice_ts(ts: str): bool:
     ret str.StartsWith(ts, "slice<")
+end
+
+// A pointer to bytes. Those are the only pointers this backend can stand
+// behind: a `str` cast to one becomes a Uint8Array over its UTF-8, which is
+// what lets std code that scans a string byte by byte (conv's parsers) read
+// numbers instead of undefined. A pointer to anything else stays
+// unsupported rather than silently indexing by the wrong unit.
+func jsg_is_byte_ptr_ts(ts: str): bool:
+    ret str.Equals(ts, "void*") || str.Equals(ts, "i8*") || str.Equals(
+        ts, "u8*"
+    ) || str.Equals(ts, "char*")
+end
+
+// The pointer under an integer cast of one ((p as u64) in `(p as u64) + k`),
+// or 0 when this is not that shape.
+func jsg_ptr_operand(a &: at.Ast, id: int): int:
+    if id == 0 || at.KindOf(a, id) != at.AST_CAST:
+        ret 0
+    end
+    inner := at.Get(a, id).a
+    if inner == 0:
+        ret 0
+    end
+    ret jsg_is_byte_ptr_ts(at.Get(a, inner).type_str) ? inner : 0
+end
+
+// A `Vector<T>` of the prelude's own collections package, which this
+// backend represents as a plain JS array rather than as the struct its
+// Salam source describes - see jsg_call_vec.
+func cg_is_vector_ts(s &: sm.Sema, ts: str): bool:
+    ret cg_generic_is(s, ts, "Vector")
+end
+
+// The prelude's HashMap<K, V>, represented here as a JS Map, and the
+// iterator its iter() hands out. Same monomorphized-name reasoning as
+// cg_is_vector_ts.
+func cg_is_hashmap_ts(s &: sm.Sema, ts: str): bool:
+    ret cg_generic_is(s, ts, "HashMap")
+end
+
+func cg_is_mapiter_ts(s &: sm.Sema, ts: str): bool:
+    ret cg_generic_is(s, ts, "MapIter")
+end
+
+// Is `ts` an instantiation of the generic named `base`? By the time codegen
+// sees it the type has been monomorphized, so the name on the node reads
+// "Vector_i32", not "Vector<int>". The name alone is not proof (anyone may
+// declare a struct called Vector_i32), so the instance is asked which
+// generic it came from - which also keeps "VectorIter_i32" out of the
+// Vector answer.
+func cg_generic_is(s &: sm.Sema, ts: str, base: str): bool:
+    if !str.StartsWith(ts, base + "_"):
+        ret false
+    end
+    mut sname := ""
+    ssym := cg_struct_of(s, ts, sname)
+    if ssym == 0:
+        ret false
+    end
+    // pkgname is empty on an instantiation - it is stamped on the generic
+    // itself - so the base name is what identifies it.
+    ret str.Equals(sm.SymAt(s, ssym).generic_base, base)
 end
 
 // strchr(ts, '[') != NULL

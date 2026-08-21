@@ -1,0 +1,126 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// webpush - a notification to a browser that is not open.
+//
+// The encryption is the part worth testing offline, because getting it wrong
+// produces a 201 from the push service and silence at the browser. RFC 8291
+// publishes a worked example with the ephemeral key and salt fixed, which is
+// what makes that checkable without a network or a browser: the output is
+// deterministic given those inputs, and one wrong byte anywhere in the key
+// schedule changes all of it.
+
+import webpush
+
+func check(label: str, got: str, want: str):
+    print label
+    print ": "
+    if got == want:
+        println "ok"
+    else:
+        println "MISMATCH"
+        print "  got  "
+        println got
+        print "  want "
+        println want
+    end
+end
+
+// The subscription from RFC 8291 Appendix A. These keys are published, they
+// protect nothing, and using them is what makes the vector checkable.
+func rfc8291_subscription(): webpush.Subscription:
+    ret webpush.Subscription {
+        endpoint = "https://push.example.net/x",
+        p256dh = "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+        auth = "BTBZMqHH6r4Tts7J_aSIgg"
+    }
+end
+
+// The whole of RFC 8291: ECDH, two HKDF passes, AES-128-GCM, and the
+// aes128gcm content-coding header wrapped around the result.
+func encryption_vector():
+    mut ok := false
+    body := webpush.EncryptWith(rfc8291_subscription(),
+        "When I grow up, I want to be a watermelon",
+        "yfWPiYE-n46HLnH0KqZOF1fJJU3MYrct3AELtAQ-oRw",
+        "DGv6ra1nlYgDCS1FRnbzlw", ok)
+    print "encrypted: "
+    println ok
+    check("rfc 8291 body", body,
+        "DGv6ra1nlYgDCS1FRnbzlwAAEABBBP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27ml" +
+        "mlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A_yl95bQpu6cVPT" +
+        "pK4Mqgkf1CXztLVBSt2Ks3oZwbuwXPXLWyouBWLVWGNWQexSgSxsj_Qulcy4a-fN")
+end
+
+// A fresh exchange produces a different body every time - the ephemeral key
+// and the salt are new - which is the property that makes two identical
+// notifications indistinguishable on the wire.
+func freshness():
+    sub := rfc8291_subscription()
+    mut ok := false
+    first := webpush.Encrypt(sub, "hello", ok)
+    second := webpush.Encrypt(sub, "hello", ok)
+    print "same payload seals differently: "
+    println first != second && first.len() == second.len()
+end
+
+// VAPID: an ES256 token naming who is sending and where it may be used.
+func vapid():
+    keys := webpush.GenerateKeys()
+    print "generated keys: "
+    println keys.ok
+    header := webpush.VapidHeaderAt(keys, "https://push.example.net",
+        "mailto:ops@example.com", 1700000000 as i64)
+    print "header shape: "
+    println header.find("vapid t=") == 0 && header.find(", k=" + keys.public_key) > 0
+    // A token is minted for one push service. One audience does not verify at
+    // another, which is what stops a captured header being replayed elsewhere.
+    other := webpush.VapidHeaderAt(keys, "https://push.example.com",
+        "mailto:ops@example.com", 1700000000 as i64)
+    print "audience changes the token: "
+    println header != other
+end
+
+// Deterministic signing, per RFC 6979: the same key over the same message
+// gives the same signature, so a weak random source cannot leak the key.
+func deterministic():
+    keys := webpush.GenerateKeys()
+    a := webpush.VapidHeaderAt(keys, "https://push.example.net", "mailto:a@b.c", 1700000000 as i64)
+    b := webpush.VapidHeaderAt(keys, "https://push.example.net", "mailto:a@b.c", 1700000000 as i64)
+    print "signatures are deterministic: "
+    println a == b
+end
+
+// Refusals, which should be answers rather than surprises.
+func refusals():
+    keys := webpush.GenerateKeys()
+    mut ok := true
+    _empty := webpush.EncryptWith(webpush.Subscription {}, "hi", "", "", ok)
+    print "no subscription keys refused: "
+    println !ok
+    nowhere := webpush.Send(keys, webpush.Subscription {}, "hi",
+        webpush.NewOptions("mailto:a@b.c"))
+    print "no endpoint refused: "
+    println !nowhere.ok && nowhere.error.len() > 0
+    print "no subject refused: "
+    println webpush.VapidHeaderAt(keys, "https://push.example.net", "", 1700000000 as i64).len() == 0
+end
+
+func main:
+    encryption_vector()
+    freshness()
+    vapid()
+    deterministic()
+    refusals()
+end

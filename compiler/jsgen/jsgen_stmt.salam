@@ -59,7 +59,11 @@ end
 
 func jsg_vardecl_inline(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int): str:
     n := at.Get(a, id)
-    kw := n.is_mut ? "let" : "const"
+    // `let` even for a binding the source did not mark `mut`: a binding
+    // handed to a `&:` parameter is written back after the call (see
+    // jsg_call_finish), and `const` made that assignment throw. Nothing
+    // else here depends on the distinction - this is generated code.
+    kw := "let"
     init := n.a != 0 ? jsg_expr(g, s, a, n.a) : jsg_zero(s, n.type_str)
     nm := jsg_local(g, n.name, n.is_mut)
     ret kw + " " + nm + " = " + init
@@ -338,9 +342,19 @@ func jsg_stmt(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int):
     if n.kind == at.AST_ASSIGN:
         if n.op == tok.TK_ASSIGN && n.a != 0 && at.KindOf(a, n.a) == at.AST_INDEX:
             av := at.Get(a, n.a)
+            // `v[i] = x` on a Vector writes the JS array straight, the same
+            // way jsg_expr's AST_INDEX reads it (jsg_call_vec).
+            if av.a != 0 && cg_is_vector_ts(s, at.Get(a, av.a).type_str):
+                cg_line(
+                    g, jsg_expr_p(g, s, a, av.a, JSP_MEMBER) + "[" + jsg_expr(
+                        g, s, a, av.b
+                    ) + "] = " + jsg_expr(g, s, a, n.b) + ";"
+                )
+                ret
+            end
             if av.a != 0:
                 aats := at.Get(a, av.a).type_str
-                if str.Len(aats) > 0:
+                if str.Len(aats) > 0 && !str.EndsWith(aats, "*"):
                     mut sname := ""
                     ssym := cg_struct_of(s, aats, sname)
                     if ssym != 0:

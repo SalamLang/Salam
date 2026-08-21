@@ -37,6 +37,35 @@ import lo "../sal_layout/sal_layout.salam"
         ret out
     end
 
+    // Of several files that all define the entry function, the one *named*
+    // after it - main.salam for `main`, and the langpack's own spelling for
+    // a Persian or Arabic project - is the one a reader would point at, so
+    // it is picked rather than refusing to build the directory. "" when no
+    // candidate is named that way, or when two are (a file can be named
+    // `main.salam` and another `<entry>.salam` at once), which leaves the
+    // ambiguity for the caller to report.
+    //
+    // This is what lets a project keep a second entry point beside its real
+    // one - a benchmark harness, a tool, a build for another target that
+    // has to define its own `main` to compile - without the directory
+    // becoming unbuildable. This compiler had exactly that pair until the
+    // wasm entry moved into main.salam behind SALAM_OS_WASM, and `salam
+    // build compiler/` could resolve the directory to neither of them.
+    func entry_named_candidate(entries &: Vector<str>, entry: str): str:
+        mut found := ""
+        repeat entries.len() with i:
+            f := entries.get(i)
+            stem := pth.PathStem(f)
+            if str.Equals(stem, entry) || str.Equals(stem, "main"):
+                if str.Len(found) > 0:
+                    ret ""
+                end
+                found = f
+            end
+        end
+        ret found
+    end
+
     // Shared "resolve the entry file of `dir`" used by Run()/Exec()
     // (dir="." when no input was given) and build_impl (when an explicit
     // directory is passed instead of a file). The fixed project entry
@@ -93,6 +122,13 @@ import lo "../sal_layout/sal_layout.salam"
             ret ""
         end
         if entries.len() > 1:
+            named := entry_named_candidate(entries, entry)
+            if str.Len(named) > 0:
+                lg.Log(
+                    lgr, lg.PH_DRIVER, lg.LOG_INFO, co.Format1(i18.Tr("entry point: %s"), co.ArgStr(named))
+                )
+                ret named
+            end
             lg.Log(
                 lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format2(
                     i18.Tr("ambiguous entry point: %d files define '%s':"), co.ArgInt(entries.len() as i64),
@@ -103,7 +139,7 @@ import lo "../sal_layout/sal_layout.salam"
                 io.EPrintln("    " + entries.get(ei))
             end
             io.EPrintln("  run a specific one with: salam run <file.salam>")
-            io.EPrintln("  or name the project's entry file 'salam.salam' to make it the project entry")
+            io.EPrintln("  or name one of them '" + entry + ".salam', or the project's entry file 'salam.salam'")
             ret ""
         end
         first := entries.get(0)

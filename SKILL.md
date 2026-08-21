@@ -709,9 +709,11 @@ HTML_TYPE FORM_TYPE` as the usual arguments; `ReturnsNothing` for a 204, and
   `ReturnsHeader(code, "Location", desc)` for a header worth naming.
   Output: `Spec SpecIndent WriteSpec`. `Problems(doc)` lists what is wrong
   with the document (a security scheme nobody declared, a duplicate
-  operationId, a body on a GET) and `Undocumented(doc)` lists the routes
-  nobody has described - print them at startup, or assert on them in a test;
-  `Free(doc)` releases it. Serving: `Mount(doc, r, "/docs")` on the API's own
+  operationId, a body on a GET), `Undocumented(doc)` lists the routes nobody
+  has described, and `Missing(doc, r)` lists the routes the router will serve
+  that the document does not mention at all (the usual cause: `Mount` ran
+  before the last `router.Get`) - print them at startup, or assert on them in
+  a test; `Free(doc)` releases it. Serving: `Mount(doc, r, "/docs")` on the API's own
   server, or `Serve(doc, port)` on a port of its own (returns once bound,
   runs on its own thread). `MountSpec`/`ServeSpec`/`SpecFromFile` render an
   OpenAPI document from anywhere; `Page(title, spec_url)` is the page itself,

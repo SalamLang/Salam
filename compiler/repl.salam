@@ -1459,6 +1459,7 @@ func help(is_layout: bool):
     println "  :defs       print the session as one program"
     println "  :undo       drop the last statement"
     println "  :save FILE  write the session to FILE"
+    println "  :load FILE  read FILE in as though it had been typed"
     println "  :clear      erase the session"
     println "  :quit       exit  (also: :q  quit  exit  q  Ctrl-D)"
     println "  :abort      at the '...' prompt, abandon the block being typed"
@@ -1489,6 +1490,57 @@ func save_session(s &: Session, pack: int, arg: str):
     println "saved to " + path
 end
 
+// :load - the other half of :save. The file is read as though it had been
+// typed: split into turns by the same "does this parse yet?" test the
+// prompt uses, and each turn taken through the same def/statement path, so
+// a definition replaces one of the same name and a statement joins main
+// and runs. A turn that does not survive its check leaves the session
+// alone, exactly as at the prompt, and the rest of the file still loads.
+func load_session(opt &: dr.Dr, s &: Session, pack: int, is_layout: bool, arg: str):
+    path := str.TrimLeft(arg)
+    if str.Len(path) == 0:
+        println "usage: :load FILE"
+        ret
+    end
+    if !os.Exists(path):
+        println "could not read " + path
+        ret
+    end
+    text := io.ReadFile(path)
+    lines := str.Split(text, "\n")
+    mut block := ""
+    mut turns := 0
+    repeat lines.len() with i:
+        line := lines.get(i)
+        // A blank line outside a block is nothing; inside one it belongs to
+        // the block being built.
+        if str.Len(block) == 0 && str.Len(str.TrimLeft(line)) == 0:
+            continue
+        end
+        block += line + "\n"
+        mut name := ""
+        kind := classify(pack, block, name)
+        if incomplete(pack, block, !is_layout && kind == RS_STMT):
+            continue
+        end
+        if is_layout:
+            layout_turn(opt, pack, line, block)
+        else kind != RS_STMT:
+            turn_def(opt, s, pack, kind, name, block)
+        else s.has_main:
+            println lp.Entry(pack) + " is defined - ':run' to execute, ':clear' to start over."
+        else:
+            turn_stmt(opt, s, pack, block)
+        end
+        turns += 1
+        block = ""
+    end
+    if str.Len(str.TrimLeft(block)) > 0:
+        io.EPrintln("error: " + path + " ends in the middle of a block")
+    end
+    println "loaded " + path + " (" + co.I64Toa(turns as i64) + " turn(s))."
+end
+
 // `main()` typed at the prompt reads as "run it", the same shorthand the
 // REPL has always accepted, in the session's own language.
 func wants_run(pack: int, line: str): bool:
@@ -1499,6 +1551,10 @@ end
 
 func is_save_cmd(line: str): bool:
     ret str.StartsWith(line, ":save") && (str.Len(line) == 5 || byte_at(line, 5) == 32)
+end
+
+func is_load_cmd(line: str): bool:
+    ret str.StartsWith(line, ":load") && (str.Len(line) == 5 || byte_at(line, 5) == 32)
 end
 
 func cmd_run(opt &: dr.Dr, s &: Session, pack: int, is_layout: bool):
@@ -1571,6 +1627,11 @@ pub func Run(opt &: dr.Dr): int:
             hist_push(line)
         else is_save_cmd(line):
             save_session(ses, pack, str.Substr(line, 5, str.Len(line) - 5))
+            hist_push(line)
+        else is_load_cmd(line):
+            load_session(
+                opt, ses, pack, is_layout, str.Substr(line, 5, str.Len(line) - 5)
+            )
             hist_push(line)
         else str.Equals(line, ":run") || wants_run(pack, line):
             cmd_run(opt, ses, pack, is_layout)

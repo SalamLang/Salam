@@ -109,7 +109,10 @@ done
 # armhf jobs failed with "cannot represent relocation type BFD_RELOC_64". The
 # length stays .quad either way: Salam reads it as an i64, and a difference
 # between two symbols in one section is resolved at assembly time rather than
-# through a relocation.
+# through a relocation. That i64 then needs .balign 8 of its own, because a
+# 4-byte .long pointer ahead of it would otherwise leave it 4-byte aligned -
+# harmless on x86, a fault on armhf, where a 64-bit load wants its natural
+# alignment.
 case "$($CC -dumpmachine 2>/dev/null)" in
 i?86-* | arm-* | armv7*-* | armhf-* | powerpc-* | mips-* | mipsel-*) PTR=.long ;;
 *) PTR=.quad ;;
@@ -147,8 +150,10 @@ emit() {
             printf '.incbin "%s"\n' "$(to_native_path "$WORK/$stem.tar")"
             printf '%s_end:\n' "$stem"
             printf '.section .data\n'
+            printf '.balign 8\n'
             printf '.globl salam_embed_%s_ptr\n' "$stem"
             printf 'salam_embed_%s_ptr: %s %s_data\n' "$stem" "$PTR" "$stem"
+            printf '.balign 8\n'
             printf '.globl salam_embed_%s_len\n' "$stem"
             printf 'salam_embed_%s_len: .quad %s_end - %s_data\n' "$stem" "$stem" "$stem"
         } >>"$S"
@@ -159,8 +164,10 @@ emit() {
         # needs no per-target conditional.
         {
             printf '.section .data\n'
+            printf '.balign 8\n'
             printf '.globl salam_embed_%s_ptr\n' "$stem"
             printf 'salam_embed_%s_ptr: %s 0\n' "$stem" "$PTR"
+            printf '.balign 8\n'
             printf '.globl salam_embed_%s_len\n' "$stem"
             printf 'salam_embed_%s_len: .quad 0\n' "$stem"
         } >>"$S"

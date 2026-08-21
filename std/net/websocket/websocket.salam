@@ -107,6 +107,11 @@ end
 pub struct Conn:
     pub fd: i64 = 0 - 1
     pub open: bool = false
+    // The target of the handshake request, "/realtime?token=...", as the
+    // client asked for it. A browser cannot set a header on a WebSocket
+    // handshake, so the query string is the only place a client-side
+    // credential can travel; a server that needs one reads it from here.
+    pub path: str = ""
     pub client: bool = false
     pub buf: void* = null
     pub blen: int = 0
@@ -197,12 +202,44 @@ func _bput(p: void*, i: int, v: int):
     bp[i] = v as i8
 end
 
+// _copy_in - the payload, into the frame buffer at `off`, in one move.
+//
+// This used to be a byte-at-a-time loop calling substr(i, 1) per byte, which
+// allocated a one-byte string for every byte of every frame sent. On a payload
+// of any size that dominated the cost of sending: a couple of kilobytes took
+// tens of milliseconds. str.len() and substr() are both byte-oriented, so a
+// straight memcpy of len() bytes is the same bytes, and is what the loop was
+// spelling out the slow way.
+func _copy_in(buf: void*, off: int, payload: str):
+    n := payload.len()
+    if n == 0:
+        ret
+    end
+    mem.Copy(((buf as i64) + (off as i64)) as void*, payload as void*, n as u64)
+end
+
 func _byte_at(s: str, i: int): int:
     mut v := char_code(s.substr(i, 1))
     if v < 0:
         v += 256
     end
     ret v
+end
+
+// _no_delay - Nagle off for one connection.
+//
+// A WebSocket writes one whole frame per send, and a server that answers a
+// request and also broadcasts an event writes two of them back to back. With
+// Nagle on, the second small write waits for the peer's ACK of the first,
+// which the peer delays by tens of milliseconds - turning a few milliseconds
+// of real work into a ~40ms round trip. Every frame here is already a
+// complete message, so there is nothing for Nagle to coalesce that the
+// protocol has not coalesced itself.
+func _no_delay(fd: i64):
+    if fd < 0:
+        ret
+    end
+    rawsock.SetNoDelay(rawsock.FromFd(fd), true)
 end
 
 func _new_conn(fd: i64, client: bool): Conn:
@@ -329,6 +366,16 @@ func _read_headers(c &: Conn): str:
     ret hdr
 end
 
+// The target of "GET /path HTTP/1.1", or "" when the request line is not one.
+func _request_path(request: str): str:
+    sp := str.Find(request, " ")
+    if sp < 0: ret "" end
+    rest := request.substr(sp + 1, request.len() - sp - 1)
+    e := str.Find(rest, " ")
+    if e < 0: ret "" end
+    ret rest.substr(0, e)
+end
+
 func _frame_size(c &: Conn): int:
     if c.blen < 2:
         ret 0
@@ -418,18 +465,23 @@ func _send_frame(c &: Conn, opcode: int, payload: str): int:
         _bput(buf, hlen + 1, m1)
         _bput(buf, hlen + 2, m2)
         _bput(buf, hlen + 3, m3)
+        _copy_in(buf, hlen + 4, payload)
+        // Masked in place, over the bytes already copied. Reading them back
+        // out of the string instead would put a fresh one-byte allocation in
+        // the middle of the loop, which is what this used to do.
+        body := ((buf as i64) + ((hlen + 4) as i64)) as i8*
         repeat plen with i:
             mi := i % 4
             mut mk := m0
             if mi == 1: mk = m1 end
             if mi == 2: mk = m2 end
             if mi == 3: mk = m3 end
-            _bput(buf, hlen + 4 + i, _xor8(_byte_at(payload, i), mk))
+            mut v := body[i] as int
+            if v < 0: v += 256 end
+            body[i] = _xor8(v, mk) as i8
         end
     else:
-        repeat plen with i:
-            _bput(buf, hlen + i, _byte_at(payload, i))
-        end
+        _copy_in(buf, hlen, payload)
     end
     mut sent := 0
     if c.secure:
@@ -520,6 +572,7 @@ pub func Accept(srv: Server): Conn:
     if t.fd < 0:
         ret c
     end
+    _no_delay(t.fd)
     hdr := _read_headers(c)
     resp := HandshakeResponse(hdr)
     if resp == "":
@@ -531,6 +584,7 @@ pub func Accept(srv: Server): Conn:
         _shutdown(c)
         ret c
     end
+    c.path = _request_path(hdr)
     c.open = true
     ret c
 end
@@ -558,6 +612,7 @@ pub func AcceptWSS(srv: Server): Conn:
     if t.fd < 0:
         ret c
     end
+    _no_delay(t.fd)
     tc := tls.WrapServer(t.fd, _wss_cfg)
     c.secure = true
     c.tls_idx = _tls_store(tc)
@@ -578,6 +633,7 @@ pub func AcceptWSS(srv: Server): Conn:
         _shutdown(c)
         ret c
     end
+    c.path = _request_path(hdr)
     c.open = true
     ret c
 end
@@ -591,6 +647,7 @@ pub func Dial(host: str, port: int, path: str): Conn:
     if s.fd < 0:
         ret c
     end
+    _no_delay(s.fd)
     key := encoding.Base64Encode(rand.Alnum(16))
     req := HandshakeRequest(host, path, key)
     n := rawsock.Send(s, req)
@@ -794,6 +851,36 @@ pub func Close(c &: Conn):
         _send_frame(c, 8, "")
     end
     _shutdown(c)
+end
+
+@en "Stop"
+@fa "توقف"
+@ar "إيقاف"
+// Stop - ends the connection but leaves its buffer alone.
+//
+// For the case where one thread has to end a connection another thread is
+// reading. A Conn is a value: copies of it share one heap buffer, so calling
+// Close on a copy frees memory the reader is still reading into - a
+// use-after-free, and then a double free when the reader tears down in turn.
+//
+// This sends the close frame, shuts the socket down so the reader wakes with
+// an end-of-stream rather than staying blocked, and stops there. The thread
+// that owns the connection calls Close when its loop ends, and that one call
+// releases the buffer.
+pub func Stop(c &: Conn):
+    if c.open:
+        _send_frame(c, 8, "")
+    end
+    if c.secure:
+        mut tc := _tls_get(c.tls_idx)
+        tls.Close(tc)
+        _tls_put(c.tls_idx, tc)
+    else:
+        if c.fd >= 0:
+            rawsock.Shutdown(rawsock.FromFd(c.fd))
+        end
+    end
+    c.open = false
 end
 
 // ------------------------------------------------------------------ Hub

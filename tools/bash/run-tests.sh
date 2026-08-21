@@ -13,7 +13,7 @@
 #
 # Usage:
 #   sh tools/bash/run-tests.sh [-j N] [section ...]
-# Sections: general exec js errors layout fmt ssl db opencv llvm cross timereport
+# Sections: general exec js errors layout fmt repl ssl db opencv llvm cross timereport
 #           examples apps basics data editor-selected features games
 #           interop stdlib types webframework
 # Env: SALAM, SALAM_STD, LANGS, NPROC, SALAM_TEST_TIMEOUT,
@@ -78,6 +78,22 @@ if [ "${1:-}" = "--worker" ]; then
             echo "  got:      $(printf '%s' "$2" | tr '\n' '|')"
         fi
     }
+    wk_repl() {
+        # A REPL session: the .in file is fed on stdin and everything the
+        # prompt writes - banner, prompts, diagnostics, program output - is
+        # compared. Each session gets a private cwd because a turn builds
+        # and runs the session from there, and :save writes there too.
+        jobdir="$WORK/repljob_${jobid}_$$"
+        mkdir -p "$jobdir"
+        # 600s, not the 180 this started with: every turn of a session shells
+        # out to a whole build, and eight workers compiling at once stretch
+        # each of those. At 180 the section passed when run alone and timed
+        # out inside a full run.
+        got=$( (cd "$jobdir" && tmo "${SALAM_TEST_TIMEOUT:-600}" "$SALAM_ABS" cli --lang="$lang" --no-color --log-level=error <"$fabs" 2>&1) | tr -d '\r')
+        rm -rf "$jobdir"
+        wk_check "$expabs" "$got"
+    }
+
     wk_fmt() {
         name=$(basename "$f" .salam)
         jobdir="$WORK/fmtjob_${jobid}_$$"
@@ -305,6 +321,7 @@ if [ "${1:-}" = "--worker" ]; then
             wk_check "$expabs" "$got"
             ;;
         fmt) wk_fmt ;;
+        repl) wk_repl ;;
         expect) wk_expect ;;
         buildonly) wk_buildonly ;;
         cross) wk_cross ;;
@@ -505,6 +522,18 @@ if want fmt; then
             exp="$(pick_expect "tests/$lang/fmt/$name")"
             [ -f "$exp" ] || continue
             add_job fmt "fmt/$lang/$name" "$f" "$lang" "$exp"
+        done
+    done
+fi
+
+if want repl; then
+    for lang in $LANGS; do
+        for f in tests/"$lang"/repl/*.in; do
+            [ -e "$f" ] || continue
+            name=$(basename "$f" .in)
+            exp="tests/$lang/repl/$name.out"
+            [ -f "$exp" ] || continue
+            add_job repl "repl/$lang/$name" "$f" "$lang" "$exp"
         done
     done
 fi

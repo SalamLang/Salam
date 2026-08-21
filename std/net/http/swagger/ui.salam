@@ -1,0 +1,783 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package swagger
+
+// The page that renders an OpenAPI document.
+//
+// Written here rather than pulled from a CDN. A documentation page that
+// fetches swagger-ui from unpkg is a page that goes blank on an air-gapped
+// network, on a laptop on a train, inside a CI container with no egress, and
+// behind any firewall that has not been told about unpkg - which is most of
+// the places an internal API's documentation actually gets read. It is also a
+// third party given script access to a page that holds a bearer token in its
+// try-it-out box. So the whole thing is one file with no external request in
+// it: no script tag, no stylesheet, no font, no image.
+//
+// The trade is that this renders the subset of OpenAPI this package emits,
+// and reads a hand-written spec on a best-effort basis, rather than being a
+// complete OpenAPI 3.1 implementation. What it covers: info, servers, tags,
+// paths and operations, parameters, request bodies, responses, security
+// schemes, and schemas including `$ref` (resolved, and cycle-safe), `items`,
+// `properties`, `required`, `enum`, `anyOf`/`oneOf`/`allOf`, and
+// `additionalProperties`.
+//
+// The page is a template with two holes in it, filled by Page below: the
+// document title, and the URL to fetch the spec from. Everything else is
+// constant, so it is one string literal rather than something assembled -
+// backticks make it a raw string, which is why the JavaScript inside uses no
+// template literals of its own.
+
+import encoding.json
+import str
+
+const _PAGE_HEAD := `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__</title>
+<style>
+:root {
+  --bg: #ffffff; --fg: #11181c; --muted: #5c6b73; --line: #e3e8ec;
+  --card: #f7f9fa; --accent: #2b6cb0; --code: #f1f4f6;
+  --get: #1a7f5a; --post: #2b6cb0; --put: #9a6700; --patch: #7a4bbd;
+  --delete: #b42318; --other: #5c6b73;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1417; --fg: #e6edf3; --muted: #93a1ad; --line: #263039;
+    --card: #161c21; --accent: #6ba6e8; --code: #12181d;
+    --get: #4ec99a; --post: #6ba6e8; --put: #e0b341; --patch: #b18cf0;
+    --delete: #f0776a; --other: #93a1ad;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+code, pre, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.wrap { max-width: 60rem; margin: 0 auto; padding: 2rem 1.25rem 6rem; }
+header h1 { margin: 0 0 .25rem; font-size: 1.65rem; letter-spacing: -.01em; }
+.ver {
+  display: inline-block; padding: .1rem .45rem; border: 1px solid var(--line);
+  border-radius: 99px; font-size: .78rem; color: var(--muted); vertical-align: .18em;
+}
+.desc { color: var(--muted); margin: .4rem 0 0; }
+.bar {
+  display: flex; gap: .6rem; align-items: center; flex-wrap: wrap;
+  margin: 1.25rem 0 .5rem; padding: .7rem .8rem;
+  background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+}
+.bar label { font-size: .8rem; color: var(--muted); }
+select, input[type=text], input[type=search], textarea {
+  font: inherit; color: inherit; background: var(--bg);
+  border: 1px solid var(--line); border-radius: 6px; padding: .3rem .45rem;
+}
+input[type=search] { flex: 1 1 12rem; min-width: 8rem; }
+textarea { width: 100%; min-height: 7rem; resize: vertical; }
+h2.tag {
+  margin: 2rem 0 .6rem; padding-bottom: .35rem; font-size: 1.05rem;
+  border-bottom: 1px solid var(--line); text-transform: uppercase;
+  letter-spacing: .06em; color: var(--muted);
+}
+.op { border: 1px solid var(--line); border-radius: 8px; margin: .5rem 0; overflow: hidden; }
+.op > summary {
+  display: flex; gap: .6rem; align-items: center; cursor: pointer;
+  padding: .6rem .75rem; list-style: none; background: var(--card);
+}
+.op > summary::-webkit-details-marker { display: none; }
+.m {
+  flex: none; min-width: 4.4rem; text-align: center; padding: .12rem .4rem;
+  border-radius: 5px; font-size: .74rem; font-weight: 700; letter-spacing: .05em;
+  color: #fff; background: var(--other);
+}
+.m.get { background: var(--get); } .m.post { background: var(--post); }
+.m.put { background: var(--put); } .m.patch { background: var(--patch); }
+.m.delete { background: var(--delete); }
+.path { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .92rem; }
+.sum { color: var(--muted); font-size: .88rem; margin-left: auto; text-align: right; }
+.dep { text-decoration: line-through; opacity: .65; }
+.body { padding: .85rem .95rem 1rem; border-top: 1px solid var(--line); }
+h3 { font-size: .8rem; text-transform: uppercase; letter-spacing: .06em;
+     color: var(--muted); margin: 1.1rem 0 .4rem; }
+h3:first-child { margin-top: 0; }
+table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+th, td { text-align: left; padding: .35rem .5rem; border-bottom: 1px solid var(--line);
+         vertical-align: top; }
+th { font-size: .76rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.req { color: var(--delete); font-weight: 700; }
+.ty { color: var(--accent); }
+.note { color: var(--muted); }
+pre {
+  margin: 0; padding: .6rem .7rem; background: var(--code);
+  border: 1px solid var(--line); border-radius: 6px;
+  overflow-x: auto; font-size: .85rem;
+}
+.schema { font-size: .87rem; display: inline-block; vertical-align: top; }
+.schema ul { margin: .15rem 0 .15rem .4rem; padding-left: .8rem;
+             border-left: 1px solid var(--line); list-style: none; }
+.schema li { padding: .07rem 0; }
+.schema .note { display: block; }
+.k { color: var(--fg); font-weight: 600; }
+.status { display: inline-block; min-width: 2.6rem; font-weight: 700; }
+.s2 { color: var(--get); } .s3 { color: var(--put); }
+.s4 { color: var(--delete); } .s5 { color: var(--delete); }
+button {
+  font: inherit; cursor: pointer; padding: .35rem .8rem; border-radius: 6px;
+  border: 1px solid var(--accent); background: var(--accent); color: #fff;
+}
+button.ghost { background: transparent; color: var(--accent); }
+.try { margin-top: .6rem; display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+.out { margin-top: .55rem; }
+.empty { color: var(--muted); padding: 2rem 0; }
+footer { margin-top: 3rem; color: var(--muted); font-size: .82rem;
+         border-top: 1px solid var(--line); padding-top: .8rem; }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header id="head"></header>
+<div class="bar">
+  <label for="srv">Server</label><select id="srv"></select>
+  <input id="q" type="search" placeholder="Filter by path, method or summary">
+  <label for="auth">Auth</label>
+  <input id="auth" type="text" placeholder="Bearer token" style="flex:0 1 14rem">
+  <button id="expand" class="ghost" type="button">Expand all</button>
+</div>
+<main id="main"></main>
+<footer>Rendered by Salam <code>net/http/swagger</code> &mdash;
+  <a id="raw">OpenAPI document</a></footer>
+</div>
+<script>
+"use strict";
+// Where the OpenAPI document is. Empty means "next to this page", which is
+// how Mount and Serve leave it: the page is at /docs, /docs/ or /, and only
+// the page itself knows which of those it was actually fetched as.
+var SPEC_URL = "__SPEC_JS__";
+if (!SPEC_URL) {
+  var here = location.pathname.replace(/\/+$/, "");
+  // "/docs" and "/docs/" are directories and the spec sits under them;
+  // "/docs/index.html" is a file and the spec sits beside it. A dot in the
+  // last segment is what tells the two apart, which is the same guess a
+  // browser makes when it resolves a relative link.
+  if (/\/[^\/]*\.[^\/]*$/.test(here)) here = here.replace(/\/[^\/]*$/, "");
+  SPEC_URL = here + "/openapi.json";
+}
+var spec = null;
+
+function el(tag, cls, text) {
+  var n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text !== undefined && text !== null) n.textContent = String(text);
+  return n;
+}
+
+// $ref resolution against the document, with a depth cap. A schema may point
+// at itself (a tree node whose children are tree nodes), so the renderer
+// cannot simply follow every ref it meets - it stops and prints the name.
+function deref(s) {
+  var seen = 0;
+  while (s && s.$ref && seen < 32) {
+    var p = String(s.$ref);
+    if (p.indexOf("#/") !== 0) return s;
+    var cur = spec;
+    var parts = p.slice(2).split("/");
+    for (var i = 0; i < parts.length && cur; i++) {
+      cur = cur[parts[i].replace(/~1/g, "/").replace(/~0/g, "~")];
+    }
+    if (!cur) return s;
+    s = cur;
+    seen++;
+  }
+  return s;
+}
+
+function refName(s) {
+  if (!s || !s.$ref) return null;
+  var p = String(s.$ref).split("/");
+  return p[p.length - 1];
+}
+
+// A one-line type for a schema: "string", "Todo[]", "integer<int64>",
+// "string | null". Enough to read a parameter table without expanding
+// anything.
+function typeName(s, depth) {
+  depth = depth || 0;
+  if (!s) return "any";
+  if (s.$ref) return refName(s);
+  if (depth > 6) return "...";
+  var alt = s.anyOf || s.oneOf;
+  if (alt) return alt.map(function (x) { return typeName(x, depth + 1); }).join(" | ");
+  if (s.allOf) return s.allOf.map(function (x) { return typeName(x, depth + 1); }).join(" & ");
+  var t = s.type;
+  if (Array.isArray(t)) return t.join(" | ");
+  if (t === "array") return typeName(s.items, depth + 1) + "[]";
+  if (t === "object" || (!t && s.properties)) {
+    if (s.title) return s.title;
+    if (s.additionalProperties && s.additionalProperties !== true) {
+      return "map<string, " + typeName(s.additionalProperties, depth + 1) + ">";
+    }
+    return "object";
+  }
+  if (!t) return s.enum ? "enum" : "any";
+  return s.format ? t + "<" + s.format + ">" : t;
+}
+
+// The expandable tree under a request or response. 'seen' carries the refs on
+// the current path so a self-referential schema renders one level and stops
+// instead of looping.
+function schemaTree(s, seen, depth) {
+  seen = seen || [];
+  depth = depth || 0;
+  var box = el("div", "schema");
+  if (!s) { box.appendChild(el("span", "note", "any")); return box; }
+  var name = refName(s);
+  if (name && seen.indexOf(name) >= 0) {
+    box.appendChild(el("span", "ty", name + " (recursive)"));
+    return box;
+  }
+  var next = name ? seen.concat([name]) : seen;
+  var r = deref(s);
+  if (depth > 12) { box.appendChild(el("span", "note", "...")); return box; }
+
+  var head = el("span", "ty", typeName(s));
+  box.appendChild(head);
+  if (r.description) box.appendChild(el("div", "note", r.description));
+  if (r.enum) {
+    box.appendChild(el("div", "note", "one of: " + r.enum.join(", ")));
+    return box;
+  }
+  var alt = r.anyOf || r.oneOf || r.allOf;
+  if (alt) {
+    var ul = el("ul");
+    alt.forEach(function (x) {
+      var li = el("li");
+      li.appendChild(schemaTree(x, next, depth + 1));
+      ul.appendChild(li);
+    });
+    box.appendChild(ul);
+    return box;
+  }
+  if (r.type === "array" || r.items) {
+    var ul2 = el("ul");
+    var li2 = el("li");
+    li2.appendChild(schemaTree(r.items, next, depth + 1));
+    ul2.appendChild(li2);
+    box.appendChild(ul2);
+    return box;
+  }
+  if (r.properties) {
+    var req = r.required || [];
+    var ul3 = el("ul");
+    Object.keys(r.properties).forEach(function (k) {
+      var li = el("li");
+      li.appendChild(el("span", "k", k));
+      if (req.indexOf(k) >= 0) {
+        li.appendChild(document.createTextNode(" "));
+        li.appendChild(el("span", "req", "*"));
+      }
+      li.appendChild(document.createTextNode(" "));
+      li.appendChild(schemaTree(r.properties[k], next, depth + 1));
+      ul3.appendChild(li);
+    });
+    box.appendChild(ul3);
+    if (r.additionalProperties === false) box.appendChild(el("div", "note", "no other keys"));
+    return box;
+  }
+  if (r.additionalProperties && r.additionalProperties !== true) {
+    var ul4 = el("ul");
+    var li4 = el("li");
+    li4.appendChild(el("span", "k", "<any key>"));
+    li4.appendChild(document.createTextNode(" "));
+    li4.appendChild(schemaTree(r.additionalProperties, next, depth + 1));
+    ul4.appendChild(li4);
+    box.appendChild(ul4);
+  }
+  return box;
+}
+
+// A worked example built from the schema, so the try-it-out box starts with a
+// body of the right shape instead of an empty one.
+function sample(s, seen, depth) {
+  seen = seen || [];
+  depth = depth || 0;
+  if (!s || depth > 8) return null;
+  var name = refName(s);
+  if (name && seen.indexOf(name) >= 0) return null;
+  var next = name ? seen.concat([name]) : seen;
+  var r = deref(s);
+  if (r.default !== undefined) return r.default;
+  if (r.enum && r.enum.length) return r.enum[0];
+  if (r.anyOf || r.oneOf) return sample((r.anyOf || r.oneOf)[0], next, depth + 1);
+  if (r.allOf) return sample(r.allOf[0], next, depth + 1);
+  var t = Array.isArray(r.type) ? r.type[0] : r.type;
+  if (t === "array" || r.items) {
+    var one = sample(r.items, next, depth + 1);
+    return one === null ? [] : [one];
+  }
+  if (r.properties) {
+    var o = {};
+    Object.keys(r.properties).forEach(function (k) {
+      o[k] = sample(r.properties[k], next, depth + 1);
+    });
+    return o;
+  }
+  if (t === "object") return {};
+  if (t === "integer") return 0;
+  if (t === "number") return 0;
+  if (t === "boolean") return false;
+  if (t === "null") return null;
+  if (t === "string") return r.format ? r.format : "";
+  return null;
+}
+
+function statusClass(code) {
+  var n = parseInt(code, 10);
+  if (n >= 200 && n < 300) return "s2";
+  if (n >= 300 && n < 400) return "s3";
+  if (n >= 400 && n < 500) return "s4";
+  if (n >= 500) return "s5";
+  return "";
+}
+
+function jsonSchemaOf(holder) {
+  var b = bodyOf(holder);
+  return b ? b.schema : null;
+}
+
+// The one representation of a request or response body this page shows: JSON
+// when the operation offers it, otherwise whatever it does offer. The media
+// type comes back too, because a body that is a PNG or a form is a different
+// thing to send than the same schema in JSON would be.
+function bodyOf(holder) {
+  if (!holder || !holder.content) return null;
+  var c = holder.content;
+  var keys = Object.keys(c);
+  if (!keys.length) return null;
+  var key = keys.filter(function (k) { return k.indexOf("json") >= 0; })[0] || keys[0];
+  return { type: key, schema: c[key] ? c[key].schema : null };
+}
+
+function paramTable(params) {
+  var t = el("table");
+  var hr = el("tr");
+  ["Name", "In", "Type", "Description"].forEach(function (h) { hr.appendChild(el("th", null, h)); });
+  t.appendChild(hr);
+  params.forEach(function (p) {
+    var tr = el("tr");
+    var td = el("td");
+    td.appendChild(el("span", "mono k", p.name));
+    if (p.required) {
+      td.appendChild(document.createTextNode(" "));
+      td.appendChild(el("span", "req", "*"));
+    }
+    tr.appendChild(td);
+    tr.appendChild(el("td", "note", p.in));
+    tr.appendChild(el("td", "ty mono", typeName(p.schema)));
+    var note = el("td", "note", p.description || "");
+    var choices = deref(p.schema || {}).enum;
+    if (choices && choices.length) {
+      note.appendChild(el("div", null, "one of: " + choices.join(", ")));
+    }
+    tr.appendChild(note);
+    t.appendChild(tr);
+  });
+  return t;
+}
+
+// The try-it-out form. Path parameters become inputs, query parameters become
+// inputs, and a body-carrying method gets a textarea seeded from the schema.
+function tryBox(method, path, op) {
+  var wrap = el("div");
+  var params = op.parameters || [];
+  var inputs = {};
+  if (params.length) {
+    var grid = el("div", "try");
+    params.forEach(function (p) {
+      var choices = deref(p.schema || {}).enum;
+      var i;
+      if (choices && choices.length) {
+        // A parameter with a fixed set of values is a menu. The blank first
+        // option is "do not send this at all", which is a different request
+        // from sending the first value.
+        i = el("select");
+        i.appendChild(el("option", null, p.required ? "choose" : "(omit)"));
+        i.firstChild.value = "";
+        choices.forEach(function (c) {
+          var o = el("option", null, String(c));
+          o.value = String(c);
+          i.appendChild(o);
+        });
+      } else {
+        i = el("input");
+        i.type = "text";
+        i.placeholder = p.name + (p.required ? " *" : "");
+        i.size = 12;
+      }
+      inputs[p.in + ":" + p.name] = i;
+      var lab = el("label", null, p.name);
+      lab.style.display = "inline-flex";
+      lab.style.gap = ".3rem";
+      lab.style.alignItems = "center";
+      lab.appendChild(i);
+      grid.appendChild(lab);
+    });
+    wrap.appendChild(grid);
+  }
+  var bodyArea = null;
+  var reqBody = bodyOf(op.requestBody);
+  var bodySchema = reqBody ? reqBody.schema : null;
+  var bodyType = (reqBody && reqBody.type) || "application/json";
+  if (bodySchema) {
+    bodyArea = el("textarea");
+    var s = sample(bodySchema);
+    bodyArea.value = s === null ? "{}" : JSON.stringify(s, null, 2);
+    wrap.appendChild(bodyArea);
+  }
+  var row = el("div", "try");
+  var go = el("button", null, "Send");
+  var copy = el("button", "ghost", "Copy as curl");
+  var out = el("div", "out");
+  row.appendChild(go);
+  row.appendChild(copy);
+  wrap.appendChild(row);
+  wrap.appendChild(out);
+
+  // One place decides what the request is, so the curl the page prints is the
+  // request the page sends and not a second guess at it.
+  function compose() {
+    var url = path;
+    var qs = [];
+    var headers = {};
+    params.forEach(function (p) {
+      var v = inputs[p.in + ":" + p.name].value;
+      if (!v) return;
+      if (p.in === "path") url = url.split("{" + p.name + "}").join(encodeURIComponent(v));
+      else if (p.in === "query") qs.push(encodeURIComponent(p.name) + "=" + encodeURIComponent(v));
+      else if (p.in === "header") headers[p.name] = v;
+      else if (p.in === "cookie") {
+        headers["Cookie"] = (headers["Cookie"] ? headers["Cookie"] + "; " : "")
+          + p.name + "=" + v;
+      }
+    });
+    var base = document.getElementById("srv").value || "";
+    if (base.charAt(base.length - 1) === "/") base = base.slice(0, -1);
+    var full = base + url + (qs.length ? "?" + qs.join("&") : "");
+    var tok = document.getElementById("auth").value.trim();
+    if (tok) headers["Authorization"] = tok.indexOf(" ") > 0 ? tok : "Bearer " + tok;
+    var body = bodyArea && bodyArea.value.trim() ? bodyArea.value : null;
+    if (body !== null) headers["Content-Type"] = bodyType;
+    return { url: full, method: method.toUpperCase(), headers: headers, body: body };
+  }
+
+  // Single quotes, with the shell's own escape for a single quote inside one.
+  // Nothing else needs escaping between them.
+  function shq(v) {
+    return "'" + String(v).split("'").join("'\\''") + "'";
+  }
+
+  function asCurl(req) {
+    var parts = ["curl"];
+    if (req.method !== "GET") parts.push("-X " + req.method);
+    parts.push(shq(req.url));
+    Object.keys(req.headers).forEach(function (k) {
+      parts.push("-H " + shq(k + ": " + req.headers[k]));
+    });
+    if (req.body !== null) parts.push("--data " + shq(req.body));
+    return parts.join(" \\\n  ");
+  }
+
+  copy.onclick = function () {
+    var text = asCurl(compose());
+    out.textContent = "";
+    var pre = el("pre", null, text);
+    out.appendChild(pre);
+    // The clipboard needs a secure context, and a documentation page is as
+    // often on plain http as not - so the command is on the page either way,
+    // and copying it is the bonus rather than the mechanism.
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () {
+        out.appendChild(el("div", "note", "copied to the clipboard"));
+      }, function () {});
+    }
+  };
+
+  go.onclick = function () {
+    var req = compose();
+    out.textContent = "";
+    out.appendChild(el("div", "note", "sending..."));
+    fetch(req.url, { method: req.method, headers: req.headers, body: req.body })
+      .then(function (res) {
+        return res.text().then(function (text) { return { res: res, text: text }; });
+      }).then(function (r) {
+        out.textContent = "";
+        var line = el("div");
+        line.appendChild(el("span", "status " + statusClass(r.res.status), r.res.status));
+        line.appendChild(document.createTextNode(" " + r.res.statusText));
+        var ct = r.res.headers.get("content-type");
+        if (ct) line.appendChild(el("span", "note", "   " + ct));
+        out.appendChild(line);
+        var pre = el("pre");
+        try { pre.textContent = JSON.stringify(JSON.parse(r.text), null, 2); }
+        catch (e) { pre.textContent = r.text; }
+        out.appendChild(pre);
+      }).catch(function (e) {
+        out.textContent = "";
+        out.appendChild(el("div", "req", "request failed: " + e.message));
+        out.appendChild(el("div", "note",
+          "A cross-origin request needs the API to send Access-Control-Allow-Origin."));
+      });
+  };
+  return wrap;
+}
+
+// A stable id for one operation, so a link to it survives a reload and can be
+// pasted into a chat: "#op-get-api-todos-id".
+function opAnchor(path, method) {
+  return "op-" + (method + path).toLowerCase().replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function opCard(path, method, op) {
+  var d = el("details", "op");
+  d.id = opAnchor(path, method);
+  var sm = el("summary");
+  sm.appendChild(el("span", "m " + method, method.toUpperCase()));
+  sm.appendChild(el("span", "path" + (op.deprecated ? " dep" : ""), path));
+  if (op.summary) sm.appendChild(el("span", "sum", op.summary));
+  // Opening an operation puts it in the address bar; closing it takes it out
+  // again, so the URL always names what is actually open.
+  d.addEventListener("toggle", function () {
+    if (d.open) {
+      if (location.hash !== "#" + d.id) history.replaceState(null, "", "#" + d.id);
+    } else if (location.hash === "#" + d.id) {
+      history.replaceState(null, "", location.pathname + location.search);
+    }
+  });
+  d.appendChild(sm);
+
+  var b = el("div", "body");
+  if (op.description) b.appendChild(el("p", "note", op.description));
+  if (op.deprecated) b.appendChild(el("p", "req", "Deprecated."));
+  if (op.security && op.security.length) {
+    var names = op.security.map(function (s) { return Object.keys(s).join(", "); }).join(", ");
+    b.appendChild(el("p", "note", "Requires: " + names));
+  }
+  if (op.parameters && op.parameters.length) {
+    b.appendChild(el("h3", null, "Parameters"));
+    b.appendChild(paramTable(op.parameters));
+  }
+  var req = bodyOf(op.requestBody);
+  if (req && req.schema) {
+    b.appendChild(el("h3", null,
+      "Request body" + (op.requestBody.required === false ? " (optional)" : "")));
+    if (op.requestBody.description) b.appendChild(el("p", "note", op.requestBody.description));
+    b.appendChild(el("div", "note mono", req.type));
+    b.appendChild(schemaTree(req.schema));
+  }
+  var responses = op.responses || {};
+  var codes = Object.keys(responses);
+  if (codes.length) {
+    b.appendChild(el("h3", null, "Responses"));
+    codes.sort().forEach(function (code) {
+      var r = responses[code] || {};
+      var row = el("div");
+      row.style.margin = ".45rem 0";
+      var head = el("div");
+      head.appendChild(el("span", "status " + statusClass(code), code));
+      head.appendChild(document.createTextNode(" " + (r.description || "")));
+      row.appendChild(head);
+      if (r.headers) {
+        Object.keys(r.headers).forEach(function (h) {
+          var hd = el("div", "note");
+          hd.appendChild(el("span", "mono k", h));
+          var note = r.headers[h] && r.headers[h].description;
+          if (note) hd.appendChild(document.createTextNode("  " + note));
+          row.appendChild(hd);
+        });
+      }
+      var rb = bodyOf(r);
+      if (rb && rb.schema) {
+        if (rb.type !== "application/json") row.appendChild(el("div", "note mono", rb.type));
+        row.appendChild(schemaTree(rb.schema));
+      }
+      b.appendChild(row);
+    });
+  }
+  b.appendChild(el("h3", null, "Try it"));
+  b.appendChild(tryBox(method, path, op));
+  d.appendChild(b);
+  return d;
+}
+
+var METHODS = ["get", "post", "put", "patch", "delete", "head", "options", "trace"];
+
+function collect() {
+  var out = [];
+  var paths = spec.paths || {};
+  Object.keys(paths).forEach(function (p) {
+    METHODS.forEach(function (m) {
+      if (paths[p][m]) out.push({ path: p, method: m, op: paths[p][m] });
+    });
+  });
+  return out;
+}
+
+// The operation named in the address bar, opened and scrolled to. Runs after
+// every render, because rendering rebuilds the cards and a filter that hides
+// the named one should simply leave nothing to open.
+function openFromHash() {
+  if (!location.hash) return;
+  var target = document.getElementById(location.hash.slice(1));
+  if (!target) return;
+  target.open = true;
+  target.scrollIntoView({ block: "start" });
+}
+
+function render() {
+  var head = document.getElementById("head");
+  head.textContent = "";
+  var info = spec.info || {};
+  var h1 = el("h1", null, info.title || "API");
+  if (info.version) {
+    h1.appendChild(document.createTextNode(" "));
+    h1.appendChild(el("span", "ver", "v" + info.version));
+  }
+  head.appendChild(h1);
+  if (info.description) head.appendChild(el("p", "desc", info.description));
+  if (info.contact && (info.contact.url || info.contact.email)) {
+    var p = el("p", "desc");
+    var a = el("a", null, info.contact.name || info.contact.url || info.contact.email);
+    a.href = info.contact.url || ("mailto:" + info.contact.email);
+    p.appendChild(a);
+    head.appendChild(p);
+  }
+
+  var srv = document.getElementById("srv");
+  srv.textContent = "";
+  var servers = (spec.servers && spec.servers.length) ? spec.servers : [{ url: location.origin }];
+  servers.forEach(function (s) {
+    var o = el("option", null, s.url + (s.description ? "  (" + s.description + ")" : ""));
+    o.value = s.url;
+    srv.appendChild(o);
+  });
+
+  var all = collect();
+  var filter = document.getElementById("q").value.trim().toLowerCase();
+  var shown = all.filter(function (x) {
+    if (!filter) return true;
+    return (x.path + " " + x.method + " " + (x.op.summary || "")).toLowerCase().indexOf(filter) >= 0;
+  });
+
+  var main = document.getElementById("main");
+  main.textContent = "";
+  if (!shown.length) {
+    main.appendChild(el("p", "empty", all.length ? "Nothing matches that filter."
+                                                 : "This document has no operations."));
+    return;
+  }
+  // Section order follows the document's own 'tags' list, then any tag only an
+  // operation mentions, then the untagged ones.
+  var order = (spec.tags || []).map(function (t) { return t.name; });
+  shown.forEach(function (x) {
+    (x.op.tags || []).forEach(function (t) { if (order.indexOf(t) < 0) order.push(t); });
+  });
+  order.push(null);
+  order.forEach(function (tag) {
+    var group = shown.filter(function (x) {
+      var tags = x.op.tags || [];
+      return tag === null ? tags.length === 0 : tags.indexOf(tag) >= 0;
+    });
+    if (!group.length) return;
+    if (tag !== null || order.length > 1) {
+      main.appendChild(el("h2", "tag", tag === null ? "Other" : tag));
+    }
+    group.forEach(function (x) { main.appendChild(opCard(x.path, x.method, x.op)); });
+  });
+}
+
+document.getElementById("q").addEventListener("input", function () {
+  if (spec) render();
+});
+
+// One button rather than two: what it does next is whatever is not already
+// the case, which is also what its label says.
+document.getElementById("expand").addEventListener("click", function () {
+  var all = document.querySelectorAll("details.op");
+  var anyClosed = false;
+  all.forEach(function (d) { if (!d.open) anyClosed = true; });
+  all.forEach(function (d) { d.open = anyClosed; });
+  this.textContent = anyClosed ? "Collapse all" : "Expand all";
+});
+
+document.getElementById("raw").href = SPEC_URL;
+
+fetch(SPEC_URL).then(function (r) {
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  return r.json();
+}).then(function (doc) {
+  spec = doc;
+  render();
+  openFromHash();
+}).catch(function (e) {
+  var main = document.getElementById("main");
+  main.textContent = "";
+  main.appendChild(el("p", "req", "Could not load " + SPEC_URL + ": " + e.message));
+});
+</script>
+</body>
+</html>
+`
+
+func _escape_html(s: str): str:
+    mut out := str.Replace(s, "&", "&amp;")
+    out = str.Replace(out, "<", "&lt;")
+    out = str.Replace(out, ">", "&gt;")
+    ret str.Replace(out, "\"", "&quot;")
+end
+
+func _escape_js(s: str): str:
+    quoted := json.Str(s)
+    mut out := quoted.substr(1, quoted.len() - 2)
+    // "<" cannot survive as itself inside a <script> block: the HTML parser
+    // ends the script at "</script>" wherever it appears, string literal or
+    // not.
+    out = str.Replace(out, "<", "\\u003c")
+    ret str.Replace(out, ">", "\\u003e")
+end
+
+// The documentation page, as one self-contained HTML document.
+//
+// `spec_url` is where the page fetches the OpenAPI JSON from. Leave it empty
+// for "next to this page" - the page then derives it from the address it was
+// loaded from, which is the only thing that gets `/docs` and `/docs/` right
+// and survives a reverse proxy mounting the service under another prefix.
+// Mount and Serve both leave it empty, and a page written to
+// `somewhere/index.html` and served as a static file finds `openapi.json`
+// beside it. Pass a URL when the document lives somewhere else entirely.
+@en "Page"
+@fa "صفحه"
+@ar "صفحة"
+pub func Page(title: str, spec_url: str): str:
+    // Neither value is trusted to be safe in HTML. The title is escaped as
+    // text; the URL goes into a JavaScript string and an href, so it is
+    // escaped as a JSON string and the surrounding quotes are dropped -
+    // which is what turns a `</script>` in either of them into text rather
+    // than the end of the script.
+    out := str.Replace(_PAGE_HEAD, "__TITLE__", _escape_html(title))
+    ret str.Replace(out, "__SPEC_JS__", _escape_js(spec_url))
+end

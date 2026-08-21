@@ -58,6 +58,44 @@ func norm_ident(s0: str): str:
     ret out
 end
 
+// pkg_decl_offset - where the `package` DECLARATION starts: the first line
+// whose first non-blank word is "package", or the length when there is none.
+// That is the end of the region the `@lang "name"` markers live in, and the
+// header scan below stops there.
+//
+// It used to stop at the first "package " anywhere in the text - which a
+// comment can contain. std/db's header says "A driver still exposes its own
+// package (db.sqlite, ...)" on line 17, twenty-eight lines above the
+// declaration, so the scan gave up before reaching the @en/@fa/@ar block and
+// `db` went into no index at all. `import دیتابیس.ردیس` then could not
+// resolve and both the Persian and Arabic redis demos failed to build, on
+// every platform. Four other packages sit on the same trap: arabic, text,
+// unicode and llvm.
+//
+// Leading whitespace is skipped rather than requiring column zero, so an
+// indented declaration is still found.
+func pkg_decl_offset(txt: str, n: int): int:
+    mut ls := 0
+    until ls < n:
+        mut p := ls
+        until p < n && (byte_at(txt, p) == 32 || byte_at(txt, p) == 9):
+            p += 1
+        end
+        if p + 8 <= n && str.Equals(str.Substr(txt, p, 8), "package "):
+            ret ls
+        end
+        mut e := ls
+        until e < n && byte_at(txt, e) != 10:
+            e += 1
+        end
+        if e >= n:
+            ret n
+        end
+        ls = e + 1
+    end
+    ret n
+end
+
 // index_pkg_file - scans a std package file's pre-`package` header for
 // @en/@fa/@ar "alias" annotations and records (lang, alias, canon) rows.
 func index_pkg_file(path: str, canon: str):
@@ -67,10 +105,7 @@ func index_pkg_file(path: str, canon: str):
     end
     txt := sf.text
     n := sf.len
-    mut limit := str.IndexOf(txt, "package ")
-    if limit < 0:
-        limit = n
-    end
+    limit := pkg_decl_offset(txt, n)
     mut i := 0
     until i + 4 < limit && g_sm_seg_n < K_SM_SEG_MAX:
         if byte_at(txt, i) != 64:

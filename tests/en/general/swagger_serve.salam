@@ -1,0 +1,151 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// The documentation, served two ways at once: mounted under /docs on the
+// API's own server, and again on a port of its own - which is also a test
+// that net/http can run two servers in one process without them treading on
+// each other's router.
+
+import net.http
+import net.router
+import net.http.swagger
+import net.internal.rawsock
+import str
+import time
+
+const API_PORT := 19271
+const DOC_PORT := 19272
+
+struct Todo:
+    pub id: i64 = 0 as i64
+    pub title: str = ""
+end
+
+func list_todos(ctx: i64):
+    http.Ctx_json(ctx, "[{\"id\":1,\"title\":\"write docs\"}]")
+end
+
+func get_resp(port: int, path: str): str:
+    mut sock := rawsock.Connect("127.0.0.1", port)
+    mut tries := 0
+    until !rawsock.Ok(sock) && tries < 200:
+        time.Sleep(10)
+        sock = rawsock.Connect("127.0.0.1", port)
+        tries = tries + 1
+    end
+    if !rawsock.Ok(sock):
+        ret ""
+    end
+    // Host carries the port, the way a browser sends it: two documents can
+    // both have their page at "/" on different ports, and that is the only
+    // thing in the request that says which one is wanted.
+    host := "127.0.0.1:" + port
+    rawsock.Send(sock, "GET " + path + " HTTP/1.0\r\nHost: " + host + "\r\n\r\n")
+    mut resp := ""
+    mut chunk := rawsock.Recv(sock, 16384)
+    until chunk.len() > 0:
+        resp = resp + chunk
+        chunk = rawsock.Recv(sock, 16384)
+    end
+    rawsock.Close(sock)
+    ret resp
+end
+
+func main:
+    mut r := router.NewRouter()
+    router.Get(r, "/api/todos", list_todos)
+
+    mut doc := swagger.New("Todo API", "1.0.0")
+    swagger.Server(doc, "http://127.0.0.1:19271", "local")
+    swagger.Scan(doc, r)
+    _a := swagger.At(doc, "GET", "/api/todos")
+    swagger.Summary(doc, "List todos")
+    swagger.Tag(doc, "todos")
+    swagger.Returns(doc, 200, "every todo", Vector {} as Vector<Todo>)
+
+    swagger.Mount(doc, r, "/docs")
+
+    mut s := http.NewServer(API_PORT)
+    http.SetHost(s, "127.0.0.1")
+    http.Use(s, r)
+    println http.RunBackground(s)
+    println swagger.Serve(doc, DOC_PORT)
+
+    // The page, from the API's own server.
+    ui := get_resp(API_PORT, "/docs")
+    println str.Contains(ui, "text/html")
+    println str.Contains(ui, "<title>Todo API</title>")
+    // No external request in it: the whole page is one file.
+    println str.Contains(ui, "https://unpkg.com") == false
+    // And no baked-in path to its own spec either - the page works that out
+    // from the address it was loaded from, so "/docs" and "/docs/" both find
+    // it and a reverse proxy under another prefix does not break it.
+    println str.Contains(ui, "location.pathname")
+
+    // The same page with a trailing slash. It is the same URL to a person,
+    // and both spellings have to reach a page that can still find its spec -
+    // which is why the page derives that URL rather than being handed one.
+    ui_slash := get_resp(API_PORT, "/docs/")
+    println str.Contains(ui_slash, "<title>Todo API</title>")
+
+    // The document itself.
+    spec := get_resp(API_PORT, "/docs/openapi.json")
+    println str.Contains(spec, "application/json")
+    println str.Contains(spec, "\"openapi\":\"3.1.0\"")
+    println str.Contains(spec, "/api/todos")
+    println str.Contains(spec, "#/components/schemas/Todo")
+    println str.Contains(spec, "Access-Control-Allow-Origin")
+
+    // The same document again, on its own port, with the page at the root.
+    ui2 := get_resp(DOC_PORT, "/")
+    println str.Contains(ui2, "<title>Todo API</title>")
+    spec2 := get_resp(DOC_PORT, "/openapi.json")
+    println str.Contains(spec2, "\"openapi\":\"3.1.0\"")
+
+    // And the API is still the API: two routers, two ports, one process.
+    api := get_resp(API_PORT, "/api/todos")
+    println str.Contains(api, "write docs")
+    println str.Contains(get_resp(DOC_PORT, "/api/todos"), "404")
+
+    // A spec from somewhere else renders through the same page.
+    mut r2 := router.NewRouter()
+    swagger.MountSpec(
+        "{\"openapi\":\"3.1.0\",\"info\":{\"title\":\"Imported\",\"version\":\"9\"},\"paths\":{}}",
+        "Imported", r2, "/imported"
+    )
+    mut s2 := http.NewServer(19273)
+    http.SetHost(s2, "127.0.0.1")
+    http.Use(s2, r2)
+    println http.RunBackground(s2)
+    println str.Contains(get_resp(19273, "/imported"), "<title>Imported</title>")
+    println str.Contains(get_resp(19273, "/imported/openapi.json"), "\"title\":\"Imported\"")
+
+    // Two documents on two ports, both with their page at "/". The path
+    // alone cannot tell them apart, so the mount is found by the port the
+    // request arrived on - read off the Host header.
+    mut ra := router.NewRouter()
+    router.Get(ra, "/alpha", list_todos)
+    mut da := swagger.New("Alpha", "1")
+    swagger.Scan(da, ra)
+    mut rb := router.NewRouter()
+    router.Get(rb, "/beta", list_todos)
+    mut db := swagger.New("Beta", "2")
+    swagger.Scan(db, rb)
+    println swagger.Serve(da, 19274)
+    println swagger.Serve(db, 19275)
+    println str.Contains(get_resp(19274, "/"), "<title>Alpha</title>")
+    println str.Contains(get_resp(19275, "/"), "<title>Beta</title>")
+    println str.Contains(get_resp(19274, "/openapi.json"), "/alpha")
+    println str.Contains(get_resp(19275, "/openapi.json"), "/beta")
+end

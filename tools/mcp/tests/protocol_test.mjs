@@ -276,13 +276,14 @@ async function testTools() {
   const { raw } = await converse([
     call(1, "salam_stdlib_packages", {}),
     call(2, "salam_stdlib_symbols", { package: "str", query: "TrimPrefix" }),
-    call(3, "salam_check", { path: "tools/mcp/tests/fixtures/broken.salam" }),
-    call(4, "salam_check", { path: "tools/mcp/tests/fixtures/ok.salam" }),
-    call(5, "salam_check", { path: "../outside.salam" }),
-    call(6, "no_such_tool", {}),
-    call(7, "salam_keywords", {}),
+    call(3, "salam_stdlib_symbols", { package: "encoding.json", query: "Marshal" }),
+    call(4, "salam_check", { path: "tools/mcp/tests/fixtures/broken.salam" }),
+    call(5, "salam_check", { path: "tools/mcp/tests/fixtures/ok.salam" }),
+    call(6, "salam_check", { path: "../outside.salam" }),
+    call(7, "no_such_tool", {}),
+    call(8, "salam_keywords", {}),
   ]);
-  const [pkgs, symbols, broken, ok, traversal, unknownTool, keywords] =
+  const [pkgs, symbols, nested, broken, ok, traversal, unknownTool, keywords] =
     parseLines(raw);
 
   check(
@@ -294,9 +295,23 @@ async function testTools() {
     "stdlib packages exclude non-importable dirs",
     !pkgs.result.structuredContent.includes("excel_bak"),
   );
+  // std/encoding/json is imported as `encoding.json`, so that is the name a
+  // model needs back. Listing only the top level hides it behind `encoding`,
+  // whose own directory holds nothing but the base64/hex helpers.
+  check(
+    "stdlib packages include nested ones by dotted name",
+    pkgs.result.structuredContent.includes("encoding.json") &&
+      pkgs.result.structuredContent.includes("net.http"),
+  );
   check(
     "symbol lookup finds a known declaration",
     symbols.result.content[0].text.includes("TrimPrefix"),
+  );
+  check(
+    "symbol lookup resolves a dotted package name",
+    nested.result.isError === false &&
+      nested.result.content[0].text.includes("Marshal"),
+    nested.result.content?.[0]?.text,
   );
 
   check("a broken file reports isError", broken.result.isError === true);
@@ -356,6 +371,20 @@ async function testResources() {
     "stdlib index maps packages to declarations",
     Object.keys(parsed.packages).length > 20 &&
       Array.isArray(parsed.packages.str),
+  );
+  // The bug this guards: _decls_of used to walk the whole subtree, so every
+  // declaration in std/encoding/json landed under `encoding` and the name a
+  // caller would actually import was nowhere in the file.
+  check(
+    "nested packages are keyed by their import name",
+    Array.isArray(parsed.packages["encoding.json"]) &&
+      parsed.packages["encoding.json"].some((d) => d.includes("Marshal")),
+  );
+  check(
+    "a parent package carries only its own declarations",
+    !parsed.packages.encoding.some((d) =>
+      parsed.packages["encoding.json"].includes(d),
+    ),
   );
   check("missing resource returns -32602", missing.error?.code === -32602);
 }

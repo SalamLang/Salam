@@ -13,19 +13,36 @@
  */
 
 // Flat single-file module (see salam/PORTING.md "Layout - FLAT").
-// Port of compiler/src/driver/repl.c (+ repl.h, which is just the one
-// `driver_repl` declaration - nothing to port there). Package `repl`,
-// alias `rp`. Replaces cli.salam's CMD_REPL/CMD_REPL_LAYOUT stub
-// ("the interactive REPL is not ported yet (PORT-TODO)").
+// Port of compiler/src/driver/repl.c + repl_session.c (+ repl.h /
+// repl_internal.h, declarations only). Package `repl`, alias `rp`.
+// Replaces cli.salam's CMD_REPL/CMD_REPL_LAYOUT stub ("the interactive
+// REPL is not ported yet (PORT-TODO)").
 //
 // Scope: driver_repl's whole interactive loop - readline with history and
-// in-place line editing, block-depth tracking (waits for a matching 'end'
-// before running a multi-line paste), the "accumulate defs / wrap bare
-// statements in func main / :run on demand" general-REPL flow, and the
-// layout-REPL's "render a `layout: ... end` block to HTML on every Enter"
-// flow.
+// in-place line editing, the parser-driven "is this turn finished?" test
+// (waits for the line that completes a block before running it), the
+// session model repl_session.c holds - definitions bucketed and re-sorted
+// into a legal program, statements accumulated in a synthesized main, a
+// name typed twice REPLACING what it named before - and the layout-REPL's
+// "render a `layout: ... end` block to HTML on every Enter" flow.
+//
+// The prompt is not a file: definitions arrive in whatever order the user
+// thinks of them, statements accumulate one at a time, and a name typed
+// twice means "I changed my mind", not "duplicate symbol". Salam compiles
+// ahead of time, so a turn is not an eval: the session is re-rendered as
+// one whole program and rebuilt on every turn, which is what makes
+// bindings survive from one line to the next. Re-running the program also
+// re-runs the output of the turns before it, so emit_output() prints only
+// what the newest turn added.
 //
 // C -> Salam decisions:
+// - repl_session_t's two parallel malloc'd arrays -> a `Session` struct of
+//   Vector<Entry>/Vector<str>, passed `&:` instead of by pointer.
+// - NOT in the C: a statement that re-binds a name an earlier statement
+//   bound (`x := 5` then `x := "five"`) replaces that earlier statement in
+//   place instead of being appended. Appending is what the C did, and it
+//   reached sema as E001 "redefinition of 'x'", so a prompt could never
+//   change a variable's type. See stmt_binding_name().
 // - repl_hist[REPL_HIST_MAX] (fixed C array) -> a module-global
 //   Vector<str> g_hist, still capped at REPL_HIST_MAX entries (oldest
 //   evicted on overflow, same as the C's memmove-down-by-one), just without
@@ -171,11 +188,48 @@ const LFLAG_CLEAR_BITS := 32779 // ECHO|ICANON|IEXTEN|ISIG
 const LFLAG_KEEP_MASK := 4294934516 // ~LFLAG_CLEAR_BITS as u32
 const CFLAG_CS8 := 48
 
+// repl_kind_t (repl_internal.h) - the buckets, in the order the language
+// demands they appear in a file: `package` first, then imports, then
+// externs (E083), then globals (E085), then types (E087), then functions.
+// A REPL user types definitions in whatever order the thought arrives, so
+// the session sorts them back into a legal program on the way out instead
+// of rejecting the input. RS_STMT is not a bucket: it is a statement,
+// which lands in the synthesized main.
+const RS_PKG := 0
+const RS_IMPORT := 1
+const RS_EXTERN := 2
+const RS_GLOBAL := 3
+const RS_TYPE := 4
+const RS_DEF := 5
+const RS_STMT := 6
+
 // repl_hist[]/repl_nhist (repl.c) - module-global session history, shared
 // across every readline() call in one `salam repl` run (matches the C's
 // static array living for the process, reset only at the top of driver_repl
 // via repl_nhist=0/frees, which Run() below reproduces on entry).
 mut g_hist := Vector {} as Vector<str>
+
+// repl_ctx_t's last_out/last_len - what the session printed on its last
+// good run. Every turn re-runs the whole session, so this is what tells
+// emit_output() which part of the output is replay and which part is news.
+mut g_last_out := ""
+mut g_has_last := false
+
+// repl_entry_t
+struct Entry:
+    pub kind: int = 6
+    pub name: str = "" // what this entry defines; "" when it names nothing
+    pub text: str = "" // raw source, newline-terminated
+end
+
+// repl_session_t - what the prompt remembers between turns.
+struct Session:
+    pub defs: Vector<Entry> = Vector {}
+    pub stmts: Vector<str> = Vector {}
+    // The user wrote their own entry function, so no main is synthesized
+    // and bare statements have nowhere to go.
+    pub has_main: bool = false
+end
 
 // resolve_color / stderr_is_tty - private copies of driver.salam's own
 // identically-named helpers (not reusable from here: driver.salam keeps
@@ -506,79 +560,510 @@ func readline(prompt: str, ok &: bool): str:
     end
 end
 
-// repl_is_def - does `line` (already left-trimmed by the caller) start a
-// top-level definition (or a comment, which the C also lets straight into
-// the accumulated session unexamined)?
-func is_def(line: str): bool:
-    kws := ["func ", "struct ", "enum ", "type ", "import ", "package ", "link ", "//"]
-    repeat 8 with i:
-        if str.StartsWith(line, kws[i]):
+// ===========================================================================
+// ===== repl_session.c =====
+// ===========================================================================
+
+// repl_skip_ws - index of the first byte at or after `i` that is neither a
+// space nor a tab.
+func skip_ws(s: str, i: int): int:
+    n := str.Len(s)
+    mut p := i
+    until p < n:
+        c := byte_at(s, p)
+        if c != 32 && c != 9:
+            ret p
+        end
+        p += 1
+    end
+    ret p
+end
+
+// Identifier bytes, non-ASCII included: fa/ar keywords and identifiers are
+// UTF-8, and every continuation byte has the high bit set.
+func ident_byte(c: int): bool:
+    ret c >= 128 || c == 95 || (c >= 48 && c <= 57) || (c >= 97 && c <= 122) || (
+        c >= 65 && c <= 90
+    )
+end
+
+func word_len(s: str, i: int): int:
+    n := str.Len(s)
+    mut e := i
+    until e < n && ident_byte(byte_at(s, e)):
+        e += 1
+    end
+    ret e - i
+end
+
+// The whole first line, trimmed - the fallback name for a block whose
+// subject cannot be read off its opener (`impl X on Y`, an extern block,
+// an import). Retyping it verbatim then replaces it instead of colliding;
+// a different one lives alongside it.
+func line_as_name(line: str): str:
+    p := skip_ws(line, 0)
+    n := str.Len(line)
+    mut e := p
+    until e < n && byte_at(line, e) != 10 && byte_at(line, e) != 13:
+        e += 1
+    end
+    until e > p && (byte_at(line, e - 1) == 32 || byte_at(line, e - 1) == 9):
+        e -= 1
+    end
+    ret str.Substr(line, p, e - p)
+end
+
+// A definition's subject: the identifier after the keyword, dots kept so
+// two members of one type stay distinct.
+func subject_name(s: str, after_kw: int): str:
+    p := skip_ws(s, after_kw)
+    n := str.Len(s)
+    mut e := p
+    until e < n:
+        c := byte_at(s, e)
+        dotted := c == 46 && e + 1 < n && ident_byte(byte_at(s, e + 1))
+        if !ident_byte(c) && !dotted:
+            break
+        end
+        e += 1
+    end
+    ret str.Substr(s, p, e - p)
+end
+
+func word_kind(pack: int, s: str, i: int, n: int): int:
+    ret lp.LookupKeyword(pack, str.Substr(s, i, n))
+end
+
+func is_modifier(k: int): bool:
+    ret k == tok.TK_KW_PUB || k == tok.TK_KW_INLINE || k == tok.TK_KW_NOINLINE || k == tok.TK_KW_PURE || k == tok.TK_KW_NORET || k == tok.TK_KW_DEPRECATED
+end
+
+func names_its_subject(k: int): bool:
+    ret k == tok.TK_KW_FUNC || k == tok.TK_KW_STRUCT || k == tok.TK_KW_ENUM || k == tok.TK_KW_TYPE || k == tok.TK_KW_INTERFACE || k == tok.TK_KW_COMPONENT || k == tok.TK_KW_CONST
+end
+
+func kind_of_keyword(k: int): int:
+    if k == tok.TK_KW_PACKAGE:
+        ret RS_PKG
+    end
+    if k == tok.TK_KW_IMPORT:
+        ret RS_IMPORT
+    end
+    if k == tok.TK_KW_EXTERN:
+        ret RS_EXTERN
+    end
+    if k == tok.TK_KW_CONST:
+        ret RS_GLOBAL
+    end
+    if k == tok.TK_KW_STRUCT || k == tok.TK_KW_ENUM || k == tok.TK_KW_TYPE || k == tok.TK_KW_INTERFACE || k == tok.TK_KW_COMPONENT || k == tok.TK_KW_IMPL:
+        ret RS_TYPE
+    end
+    if k == tok.TK_KW_FUNC || k == tok.TK_KW_OPERATOR:
+        ret RS_DEF
+    end
+    ret RS_STMT
+end
+
+// repl_classify - which bucket does `line` (the first line of a typed
+// block) belong to, and what does it define? `name` gets the defined
+// symbol, or the trimmed line itself when the entry names nothing a later
+// redefinition could match on. Keywords are read through `pack`, so an
+// fa/ar session classifies exactly like an en one.
+func classify(pack: int, line: str, name &: str): int:
+    mut p := skip_ws(line, 0)
+    name = ""
+    ln := str.Len(line)
+    if p + 1 < ln && byte_at(line, p) == 47 && (
+        byte_at(line, p + 1) == 47 || byte_at(line, p + 1) == 42
+    ):
+        name = line_as_name(line)
+        ret RS_DEF
+    end
+    // At most one pass per leading modifier, then the keyword decides.
+    mut guard := 0
+    until guard < 8:
+        n := word_len(line, p)
+        if n == 0:
+            ret RS_STMT
+        end
+        k := word_kind(pack, line, p, n)
+        if is_modifier(k):
+            p = skip_ws(line, p + n)
+            guard += 1
+        else:
+            // `link "..."` has no token of its own - it is parsed off the
+            // identifier - so it is matched by spelling, English only.
+            if k == tok.TK_IDENT && n == 4 && str.Equals(str.Substr(line, p, n), "link"):
+                name = line_as_name(line)
+                ret RS_IMPORT
+            end
+            kind := kind_of_keyword(k)
+            if kind == RS_STMT:
+                ret RS_STMT
+            end
+            if names_its_subject(k):
+                name = subject_name(line, p + n)
+            else k == tok.TK_KW_PACKAGE:
+                name = "package"
+            else:
+                name = line_as_name(line)
+            end
+            if str.Len(name) == 0:
+                name = line_as_name(line)
+            end
+            ret kind
+        end
+    end
+    ret RS_STMT
+end
+
+// An `=` that assigns, as opposed to one inside ==, !=, <=, >=, +=, and
+// friends. Struct literals (`Vec2 { x = 1 }`) count as assignment here,
+// which only costs them the echo.
+func assign_prev_byte(c: int): bool:
+    ret c == 61 || c == 33 || c == 60 || c == 62 || c == 43 || c == 45 || c == 42 || c == 47 || c == 37 || c == 38 || c == 124 || c == 94 || c == 58 || c == 126
+end
+
+func has_assignment(s: str, from: int): bool:
+    n := str.Len(s)
+    mut q := from
+    until q < n:
+        c := byte_at(s, q)
+        nxt := q + 1 < n ? byte_at(s, q + 1) : 0
+        prev := q == from ? 32 : byte_at(s, q - 1)
+        if c == 61 && nxt != 61 && !assign_prev_byte(prev):
             ret true
         end
+        q += 1
     end
     ret false
 end
 
-// repl_wants_run
-func wants_run(line: str): bool:
-    ret str.StartsWith(line, "main()")
+// repl_is_expr_line - is `line` a bare expression: no keyword opener, no
+// assignment, one line? Those are questions, and the REPL answers them by
+// printing the value instead of evaluating for effect.
+func is_expr_line(pack: int, line: str): bool:
+    p := skip_ws(line, 0)
+    n := str.Len(line)
+    if p >= n:
+        ret false
+    end
+    mut nl := p
+    until nl < n && byte_at(line, nl) != 10:
+        nl += 1
+    end
+    if nl < n && skip_ws(line, nl + 1) < n:
+        ret false
+    end
+    if p + 1 < n && byte_at(line, p) == 47 && (
+        byte_at(line, p + 1) == 47 || byte_at(line, p + 1) == 42
+    ):
+        ret false
+    end
+    // A zero-length word is fine: an expression can open with a literal or
+    // a sign (`"a" + "b"`, `-x`, `(1 + 2) * 3`). Only a keyword opener
+    // rules it out - that is a statement, whatever follows.
+    w := word_len(line, p)
+    if w > 0 && tok.IsKeyword(word_kind(pack, line, p, w)):
+        ret false
+    end
+    ret !has_assignment(line, p)
 end
 
-// repl_block_depth - scans `src_text` for a colon that OPENS a block (not
-// preceded by whitespace, followed by whitespace/EOF - the same heuristic
-// that distinguishes `if x:` from a `key: value`-style colon elsewhere) vs
-// a lowercase `end` keyword that closes one. Positive means "still waiting
-// for more input" (a lone left-trimmed statement never opens unmatched
-// blocks, so 0 is the common case).
-func block_depth(pack: int, src_text: str): int:
+// The name a statement BINDS, "" when it binds nothing. `x := 1`,
+// `mut x := 1` and `mut x: int = 1` all bind x; `x = 2` (plain
+// assignment) and `xs.push(1)` bind nothing. Not in the C: the C
+// accumulated statements append-only, so `x := 1` followed by
+// `x := "one"` reached sema as a redefinition (E001) and the turn was
+// rejected. At a prompt that second line means "x is a str from now on",
+// so session_add_stmt below replaces the earlier binding in place
+// (in place, not at the end, so the statements typed between the two
+// still see an x).
+func stmt_binding_name(pack: int, text: str): str:
+    mut p := skip_ws(text, 0)
+    mut n := word_len(text, p)
+    if n == 0:
+        ret ""
+    end
+    k := word_kind(pack, text, p, n)
+    if k == tok.TK_KW_MUT:
+        p = skip_ws(text, p + n)
+        n = word_len(text, p)
+        if n == 0:
+            ret ""
+        end
+        if tok.IsKeyword(word_kind(pack, text, p, n)):
+            ret ""
+        end
+    else tok.IsKeyword(k):
+        ret ""
+    end
+    name := str.Substr(text, p, n)
+    q := skip_ws(text, p + n)
+    // `name :=` or the typed `name: T = ...`; anything else (`name =`,
+    // `name.field = `, `name(...)`) is not a new binding.
+    if q < str.Len(text) && byte_at(text, q) == 58:
+        ret name
+    end
+    ret ""
+end
+
+// The "there is no candidate" entry - render()'s has_cand=false ignores
+// its fields. A struct literal is not accepted as a call argument, so it
+// gets a name here instead of being spelled out at every call site.
+func no_cand(): Entry:
+    e := Entry {}
+    ret e
+end
+
+func session_defines(s &: Session, name: str): bool:
+    mut i := 0
+    until i < s.defs.len():
+        if str.Equals(s.defs.get(i).name, name):
+            ret true
+        end
+        i += 1
+    end
+    ret false
+end
+
+// Does the session still define an entry function after this change?
+func refresh_has_main(s &: Session, pack: int):
+    entry := lp.Entry(pack)
+    s.has_main = false
+    mut i := 0
+    until i < s.defs.len():
+        e := s.defs.get(i)
+        if e.kind == RS_DEF && str.Equals(e.name, entry):
+            s.has_main = true
+        end
+        i += 1
+    end
+end
+
+// repl_session_add - accepts an entry into the session. A definition with
+// the same name as an existing one REPLACES it in place: redefining a
+// function is the most ordinary thing a REPL user does.
+func session_add(s &: Session, pack: int, kind: int, name: str, text: str):
+    mut i := 0
+    until i < s.defs.len():
+        if str.Equals(s.defs.get(i).name, name):
+            hit := Entry { kind = kind, name = name, text = text }
+            s.defs.set(i, hit)
+            refresh_has_main(s, pack)
+            ret
+        end
+        i += 1
+    end
+    fresh := Entry { kind = kind, name = name, text = text }
+    s.defs.push(fresh)
+    refresh_has_main(s, pack)
+end
+
+// Index of the accumulated statement `text` rebinds, or -1 to append.
+func stmt_replace_index(s &: Session, pack: int, text: str): int:
+    nm := stmt_binding_name(pack, text)
+    if str.Len(nm) == 0:
+        ret 0 - 1
+    end
+    mut i := 0
+    until i < s.stmts.len():
+        if str.Equals(stmt_binding_name(pack, s.stmts.get(i)), nm):
+            ret i
+        end
+        i += 1
+    end
+    ret 0 - 1
+end
+
+func session_add_stmt(s &: Session, pack: int, text: str):
+    at_i := stmt_replace_index(s, pack, text)
+    if at_i >= 0:
+        s.stmts.set(at_i, text)
+        ret
+    end
+    s.stmts.push(text)
+end
+
+// repl_session_undo - drops the newest statement, false when there is none.
+func session_undo(s &: Session): bool:
+    if s.stmts.len() == 0:
+        ret false
+    end
+    _dropped := s.stmts.pop()
+    ret true
+end
+
+func put_block(sb &: str.StringBuilder, text: str):
+    n := str.Len(text)
+    if n == 0:
+        ret
+    end
+    str.BufAppend(sb, text)
+    if byte_at(text, n - 1) != 10:
+        str.BufAppendChar(sb, 10)
+    end
+end
+
+func entry_is_pub(pack: int, text: str): bool:
+    p := skip_ws(text, 0)
+    n := word_len(text, p)
+    ret n > 0 && word_kind(pack, text, p, n) == tok.TK_KW_PUB
+end
+
+// `pubsel` selects a pass over one bucket: -1 for everything, 0 for the
+// private entries, 1 for the pub ones. Functions are emitted in two passes
+// because a private function may not follow a pub one (E088), and the
+// prompt has no business making the user care.
+func put_bucket(
+    sb &: str.StringBuilder, s &: Session, pack: int, kind: int, cand: Entry, has_cand: bool, pubsel: int
+):
+    mut i := 0
+    until i < s.defs.len():
+        e := s.defs.get(i)
+        mut skip := e.kind != kind
+        if !skip && pubsel >= 0 && entry_is_pub(pack, e.text) != (pubsel == 1):
+            skip = true
+        end
+        if !skip && has_cand && str.Len(cand.name) > 0 && str.Equals(e.name, cand.name):
+            skip = true
+        end
+        if !skip:
+            put_block(sb, e.text)
+        end
+        i += 1
+    end
+    if has_cand && cand.kind == kind && (
+        pubsel < 0 || entry_is_pub(pack, cand.text) == (pubsel == 1)
+    ):
+        put_block(sb, cand.text)
+    end
+end
+
+// The statements of the synthesized main, with `cand` (an unaccepted
+// statement) placed exactly where session_add_stmt would put it, so the
+// program that gets checked is the program that gets kept.
+func put_stmts(
+    sb &: str.StringBuilder, s &: Session, pack: int, cand: Entry, has_cand: bool
+):
+    mut place := 0 - 1
+    if has_cand && cand.kind == RS_STMT:
+        place = stmt_replace_index(s, pack, cand.text)
+    end
+    mut i := 0
+    until i < s.stmts.len():
+        if i == place:
+            put_block(sb, cand.text)
+        else:
+            put_block(sb, s.stmts.get(i))
+        end
+        i += 1
+    end
+    if has_cand && cand.kind == RS_STMT && place < 0:
+        put_block(sb, cand.text)
+    end
+end
+
+// repl_render - the session as one compilable program: buckets in file
+// order, then a synthesized `func main:` holding every accepted statement.
+// `cand` is an entry that has not been accepted yet (has_cand=false for
+// the session alone); a candidate that redefines an existing name shadows
+// it here too, so the check that follows sees the program the user is
+// asking for rather than a duplicate-symbol error.
+func render(s &: Session, pack: int, cand: Entry, has_cand: bool): str:
+    mut sb := str.NewBuilder()
+    mut k := 0
+    until k < RS_DEF:
+        put_bucket(sb, s, pack, k, cand, has_cand, 0 - 1)
+        k += 1
+    end
+    put_bucket(sb, s, pack, RS_DEF, cand, has_cand, 0)
+    put_bucket(sb, s, pack, RS_DEF, cand, has_cand, 1)
+    if !s.has_main:
+        kw_func := lp.Spelling(pack, tok.TK_KW_FUNC)
+        kw_ret := lp.Spelling(pack, tok.TK_KW_RET)
+        empty := s.stmts.len() == 0 && !(has_cand && cand.kind == RS_STMT)
+        str.BufAppend(sb, str.Len(kw_func) > 0 ? kw_func : "func")
+        str.BufAppend(sb, " " + lp.Entry(pack) + ":\n")
+        put_stmts(sb, s, pack, cand, has_cand)
+        // A function with an empty body is an error in this language, and a
+        // session that is all definitions so far has nothing to put in main
+        // yet. `ret 0` is what main returns anyway.
+        if empty:
+            str.BufAppend(sb, str.Len(kw_ret) > 0 ? kw_ret : "ret")
+            str.BufAppend(sb, " 0\n")
+        end
+        str.BufAppend(sb, lp.EndSpelling(pack) + "\n")
+    end
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+// ===========================================================================
+// ===== repl.c: checking, running and turns =================================
+// ===========================================================================
+
+// repl_incomplete - is the turn still unfinished? The parser decides: it
+// is the only thing that knows a `match` arm from a struct field, and a
+// block-opening ':' from the ':' in `f(n: int): int`. Counting colons and
+// `end`s by hand - what this used to do - miscounted the moment a function
+// took a typed parameter or named a return type, and the prompt then
+// swallowed everything typed after it.
+func incomplete(pack: int, src_text: str): bool:
     lgr := lg.New(lg.LOG_OFF, false)
     mut sf := src.New()
     sf.path = "<repl>"
     sf.text = src_text
     sf.len = str.Len(src_text)
     mut toks := tok.StreamNew(sf.path)
-    mut depth := 0
+    mut a := at.NewAst()
+    mut more := false
     if lx.Run(lgr, pack, sf, toks):
-        n := tok.StreamCount(toks)
-        mut i := 0
-        until i < n:
-            t := tok.StreamAt(toks, i)
-            if t.kind == tok.TK_KW_END:
-                depth -= 1
-            else t.kind == tok.TK_COLON:
-                idx := t.begin_index as int
-                mut lws := idx == 0
-                if !lws:
-                    pc := byte_at(src_text, idx - 1)
-                    lws = pc == 32 || pc == 9 || pc == 10 || pc == 13
-                end
-                mut nxt := true
-                if idx + 1 < str.Len(src_text):
-                    nc := byte_at(src_text, idx + 1)
-                    nxt = nc == 32 || nc == 9 || nc == 10 || nc == 13
-                end
-                if !lws && nxt:
-                    depth += 1
-                end
-            end
-            i += 1
-        end
+        more = ps.NeedsMore(lgr, toks, a)
     end
+    at.FreeAst(a)
     tok.StreamFree(toks)
-    ret depth
+    ret more
 end
 
-// compile_check - repl_is_def's validation branch: does session+block
-// lex/parse/prune/sema cleanly (codegen is never reached - this is a
-// dry-run gate before accepting the def into the session, matching the
-// C's own throwaway arena_t exactly).
-func compile_check(opt &: dr.Dr, pack: int, test_src: str): bool:
-    lgr := lg.New(lg.LOG_ERROR, resolve_color(opt.color))
+// repl_read_block - reads continuation lines until the turn parses (or
+// input ends). `ok` is false when the user abandoned the block with
+// `:abort` - without that escape a block that can never be completed (a
+// typo in the word that closes it) would hold the prompt forever.
+func read_block(pack: int, first: str, ok &: bool): str:
+    mut block := first + "\n"
+    mut cont_ok := true
+    ok = true
+    until incomplete(pack, block) && cont_ok:
+        cont := readline("  ... ", cont_ok)
+        if cont_ok:
+            if str.Equals(cont, ":abort"):
+                println "abandoned."
+                ok = false
+                ret ""
+            end
+            block += cont + "\n"
+            hist_push(cont)
+        end
+    end
+    ret block
+end
+
+// compile_check - the front end only: lex, parse, prune, analyze (codegen
+// is never reached - this is a dry-run gate before accepting a turn into
+// the session, matching the C's own throwaway arena_t exactly). `quiet`
+// decides whether the user sees the diagnostics - the echo probe below
+// asks a question it does not want answered out loud.
+func compile_check(opt &: dr.Dr, pack: int, test_src: str, quiet: bool): bool:
+    lgr := lg.New(quiet ? lg.LOG_OFF : lg.LOG_ERROR, resolve_color(opt.color))
     mut sf := src.New()
     sf.path = "<repl>"
     sf.text = test_src
     sf.len = str.Len(test_src)
-    lg.SetDiagSource(lgr, sf.text, sf.len, opt.diag_style, opt.diag_format)
+    if !quiet:
+        lg.SetDiagSource(lgr, sf.text, sf.len, opt.diag_style, opt.diag_format)
+    end
     mut toks := tok.StreamNew(sf.path)
     ok := lx.Run(lgr, pack, sf, toks)
     mut a := at.NewAst()
@@ -604,13 +1089,30 @@ func compile_check(opt &: dr.Dr, pack: int, test_src: str): bool:
     ret ok && pok && cok && sok
 end
 
+// repl_emit_output - prints what this run added. Everything the session
+// printed on earlier turns comes out again byte for byte, so the common
+// prefix is replay and only the tail is news; a program whose output
+// changed (it reads a clock, a file, the network - or a statement the user
+// just rebound) fails the prefix test and is shown whole rather than
+// guessed at.
+func emit_output(out: str):
+    mut skip := 0
+    if g_has_last && str.StartsWith(out, g_last_out):
+        skip = str.Len(g_last_out)
+    end
+    if str.Len(out) > skip:
+        print str.Substr(out, skip, str.Len(out) - skip)
+    end
+end
+
 // exec_session - repl_exec, reworked to reuse dr.Build's own full
 // package-resolution pipeline (see the file header's "C -> Salam decisions"
 // note on why this is simpler AND more complete than the C's hand-rolled
 // RT_PKGS mini-linker). `opt` is mutated in place (inputs/output/command),
 // matching dr.Run()'s own established idiom of repurposing its `&: Dr` for
-// a one-shot sub-build.
-func exec_session(opt &: dr.Dr, full_src: str):
+// a one-shot sub-build. `replay` is true for a turn (show only what the
+// newest statement added) and false for an explicit :run (show all of it).
+func exec_session(opt &: dr.Dr, full_src: str, replay: bool): int:
     // Same "INFO is too noisy for a one-shot run" bump dr.Run() itself
     // applies before build_impl, so `:run`/a bare statement doesn't spam
     // the whole stdlib closure's parse/codegen INFO lines on every REPL
@@ -620,6 +1122,7 @@ func exec_session(opt &: dr.Dr, full_src: str):
     end
     ts := time.NowMicros()
     tmp_src := os.TempDir() + "/salam-repl-" + ts + ".salam"
+    tmp_out := os.TempDir() + "/salam-repl-" + ts + ".out"
     mut exe_suffix := ""
     if SALAM_OS_WINDOWS:
         exe_suffix = ".exe"
@@ -629,17 +1132,23 @@ func exec_session(opt &: dr.Dr, full_src: str):
     tmp_exe := os.TempDir() + "/salam-repl-" + ts + exe_suffix
     if io.WriteFile(tmp_src, full_src) < 0:
         io.EPrintln("error: could not write a temp file for the session")
-        ret
+        ret 0 - 1
     end
     opt.inputs = Vector {} as Vector<str>
     opt.inputs.push(tmp_src)
     opt.output = tmp_exe
     opt.exe_path = ""
     opt.keep_c = false
-    rc := dr.Build(opt)
+    mut rc := dr.Build(opt)
     if rc == 0:
         exe := str.Len(opt.exe_path) > 0 ? opt.exe_path : tmp_exe
         mut cmdb := str.NewBuilder()
+        if SALAM_OS_WINDOWS:
+            // cmd.exe strips the outermost quote pair off everything after
+            // /c, so the whole redirected command needs one more pair
+            // around it for a temp path with a space in it to survive.
+            str.BufAppendChar(cmdb, 34)
+        end
         str.BufAppendChar(cmdb, 34)
         if SALAM_OS_WINDOWS:
             str.BufAppend(cmdb, exe)
@@ -651,12 +1160,98 @@ func exec_session(opt &: dr.Dr, full_src: str):
             end
         end
         str.BufAppendChar(cmdb, 34)
+        str.BufAppend(cmdb, " > ")
+        str.BufAppendChar(cmdb, 34)
+        str.BufAppend(cmdb, tmp_out)
+        str.BufAppendChar(cmdb, 34)
+        str.BufAppend(cmdb, " 2>&1")
+        if SALAM_OS_WINDOWS:
+            str.BufAppendChar(cmdb, 34)
+        end
         cmdtext := str.BufStr(cmdb)
         str.BufFree(cmdb)
-        _run := system(cmdtext)
+        rc = system(cmdtext)
+        out := io.ReadFile(tmp_out)
+        if replay:
+            emit_output(out)
+        else:
+            print out
+        end
+        if rc == 0:
+            g_last_out = out
+            g_has_last = true
+        else:
+            println "[program exited with " + co.I64Toa(rc as i64) + "]"
+        end
+        _r0 := os.Remove(tmp_out)
+        _r2 := os.Remove(str.Len(opt.exe_path) > 0 ? opt.exe_path : tmp_exe)
     end
     _r1 := os.Remove(tmp_src)
-    _r2 := os.Remove(opt.exe_path.len() > 0 ? opt.exe_path : tmp_exe)
+    ret rc
+end
+
+// repl_echo_wrap - `expr` alone on a line is a question, so answer it: the
+// REPL tries the turn as `println expr` first and keeps that form only if
+// it compiles. A void call like `xs.push("a")` fails that check and runs
+// as the plain statement it is. The expression is not parenthesized -
+// print statements reject that outright - which is safe because it is the
+// whole line.
+func echo_wrap(pack: int, block: str): str:
+    kw := lp.Spelling(pack, tok.TK_KW_PRINTLN)
+    mut n := str.Len(block)
+    until n > 0 && (byte_at(block, n - 1) == 10 || byte_at(block, n - 1) == 13):
+        n -= 1
+    end
+    ret (str.Len(kw) > 0 ? kw : "println") + " " + str.Substr(block, 0, n) + "\n"
+end
+
+// repl_turn_def - a definition turn: check the session as it would be with
+// this entry in it, then let it replace whatever it redefines.
+func turn_def(
+    opt &: dr.Dr, s &: Session, pack: int, kind: int, name: str, block: str
+):
+    again := session_defines(s, name)
+    cand := Entry { kind = kind, name = name, text = block }
+    if !compile_check(opt, pack, render(s, pack, cand, true), false):
+        ret
+    end
+    session_add(s, pack, kind, name, block)
+    if s.has_main && s.stmts.len() > 0:
+        println "note: your own " + lp.Entry(pack) + " replaces the " + co.I64Toa(
+            s.stmts.len() as i64
+        ) + " statement(s) typed so far."
+    end
+    // An import or an extern block names nothing worth reading back.
+    if kind == RS_PKG || kind == RS_IMPORT || kind == RS_EXTERN:
+        println "ok."
+    else:
+        mut tail := ""
+        if s.has_main:
+            tail = " ':run' to execute."
+        end
+        println (again ? "redefined " : "defined ") + name + "." + tail
+    end
+end
+
+// repl_turn_stmt - a statement turn: echo-probe it, check it, run it, and
+// keep it only if all three worked.
+func turn_stmt(opt &: dr.Dr, s &: Session, pack: int, block: str):
+    mut cand := Entry { kind = RS_STMT, name = "", text = block }
+    if is_expr_line(pack, block):
+        cand.text = echo_wrap(pack, block)
+        if !compile_check(opt, pack, render(s, pack, cand, true), true):
+            cand.text = block
+        end
+    end
+    // Analyze before building, the same gate a def already goes through. A
+    // rejected turn is then reported against "<repl>" instead of against a
+    // temp file whose path is longer than the program and which is deleted
+    // before the user could open it, and no backend or C compiler is
+    // started for a turn that cannot survive the front end.
+    src_text := render(s, pack, cand, true)
+    if compile_check(opt, pack, src_text, false) && exec_session(opt, src_text, true) == 0:
+        session_add_stmt(s, pack, cand.text)
+    end
 end
 
 // repl_layout_exec - lex/parse/prune, then (regardless of sema's own
@@ -705,9 +1300,106 @@ func layout_exec(opt &: dr.Dr, pack: int, src_text: str):
     at.FreeAst(a)
 end
 
+// repl_layout_turn
+func layout_turn(opt &: dr.Dr, pack: int, first_line: str, block: str):
+    p := str.TrimLeft(first_line)
+    if str.StartsWith(p, "layout") && (
+        str.Len(p) == 6 || byte_at(p, 6) == 58 || byte_at(p, 6) == 32 || byte_at(p, 6) == 9
+    ):
+        layout_exec(opt, pack, block)
+        ret
+    end
+    io.EPrintln("error: layout REPL only accepts 'layout: ... end' blocks")
+end
+
+// ===========================================================================
+// ===== repl.c: commands ====================================================
+// ===========================================================================
+
+func help(is_layout: bool):
+    if is_layout:
+        println "Layout REPL commands:"
+        println "  :clear  erase accumulated session"
+        println "  :defs   show current session"
+        println "  :quit   exit  (also: :q  quit  exit  q  Ctrl-D)"
+        println ""
+        println "Type a 'layout: ... end' block to render HTML inline."
+        println "Blocks can span multiple lines - the REPL waits until the block"
+        println "parses (every ':' opener matched by an 'end') before running."
+        println ""
+        println "Root-level attributes: title, lang, dir"
+        println "Common elements:  box  heading  p  link  image  input  button"
+        println "Element attrs:    content  color  background  font-size  ..."
+        println ""
+        println `Example:`
+        println `  layout: title = "Hi" box: heading: size = 1 content = "Hello" end end end`
+        ret
+    end
+    println "Commands:"
+    println "  :run        rebuild and run the whole session, showing all output"
+    println "  :defs       print the session as one program"
+    println "  :undo       drop the last statement"
+    println "  :save FILE  write the session to FILE"
+    println "  :clear      erase the session"
+    println "  :quit       exit  (also: :q  quit  exit  q  Ctrl-D)"
+    println "  :abort      at the '...' prompt, abandon the block being typed"
+    println ""
+    println "Definitions (func/struct/enum/type/const/import/extern) are kept and"
+    println "sorted into a legal program; typing a name again redefines it."
+    println "Statements accumulate in a synthesized main, so a variable bound on one"
+    println "line is still there on the next, and binding it again changes it - to a"
+    println "new value or to a new type. A bare expression is printed."
+    println "Any block waits for the line that completes it (a matching 'end')."
+    println ""
+    println "Every turn re-runs the session from the top, so a statement with an"
+    println "outside effect (writing a file, sending a request) happens again each"
+    println "time. Only the new output is shown."
+end
+
+func save_session(s &: Session, pack: int, arg: str):
+    path := str.TrimLeft(arg)
+    if str.Len(path) == 0:
+        println "usage: :save FILE"
+        ret
+    end
+    text := render(s, pack, no_cand(), false)
+    if io.WriteFile(path, text) < 0:
+        println "could not write " + path
+        ret
+    end
+    println "saved to " + path
+end
+
+// `main()` typed at the prompt reads as "run it", the same shorthand the
+// REPL has always accepted, in the session's own language.
+func wants_run(pack: int, line: str): bool:
+    entry := lp.Entry(pack)
+    p := skip_ws(line, 0)
+    ret str.StartsWith(str.Substr(line, p, str.Len(line) - p), entry + "()")
+end
+
+func is_save_cmd(line: str): bool:
+    ret str.StartsWith(line, ":save") && (str.Len(line) == 5 || byte_at(line, 5) == 32)
+end
+
+func cmd_run(opt &: dr.Dr, s &: Session, pack: int, is_layout: bool):
+    if is_layout:
+        println "layout REPL: type 'layout: ... end' blocks to render HTML."
+        ret
+    end
+    if !s.has_main && s.stmts.len() == 0:
+        println "nothing to run yet - type a statement, or define " + lp.Entry(pack) + "."
+        ret
+    end
+    text := render(s, pack, no_cand(), false)
+    _rc := exec_session(opt, text, false)
+end
+
 // driver_repl - the interactive loop.
 pub func Run(opt &: dr.Dr): int:
     g_hist = Vector {} as Vector<str>
+    g_last_out = ""
+    g_has_last = false
     pack := lp.Load(opt.lang)
     if pack == lp.LP_NONE:
         io.EPrintln(
@@ -724,8 +1416,7 @@ pub func Run(opt &: dr.Dr): int:
     is_layout := opt.command == dr.CMD_REPL_LAYOUT
     which := is_layout ? "layout" : "general"
     println "Salam " + which + " REPL (lang=" + opt.lang + "). ':help' for commands."
-    mut session := ""
-    mut has_main := false
+    mut ses := Session {}
 
     mut running := true
     until running:
@@ -738,94 +1429,46 @@ pub func Run(opt &: dr.Dr): int:
         else str.Equals(line, ":quit") || str.Equals(line, ":q") || str.Equals(line, "quit") || str.Equals(line, "exit") || str.Equals(line, "q"):
             running = false
         else str.Equals(line, ":help"):
-            if is_layout:
-                println "Layout REPL commands:"
-                println "  :clear  erase accumulated session"
-                println "  :defs   show current session"
-                println "  :quit   exit  (also: :q  quit  exit  q  Ctrl-D)"
-                println ""
-                println "Type a 'layout: ... end' block to render HTML inline."
-                println "Blocks can span multiple lines - the REPL waits until every"
-                println "':' opener has a matching 'end' (always lowercase) before running."
-                println ""
-                println "Root-level attributes: title, lang, dir"
-                println "Common elements:  box  heading  p  link  image  input  button"
-                println "Element attrs:    content  color  background  font-size  ..."
-                println ""
-                println "Example:"
-                println `  layout: title = "Hi" box: heading: size = 1 content = "Hello" end end end`
-            else:
-                println "Commands:"
-                println "  :run    compile + run the session (requires func main:)"
-                println "  :clear  erase all accumulated definitions"
-                println "  :defs   print current session"
-                println "  :quit   exit  (also: :q  quit  exit  q  Ctrl-D)"
-                println ""
-                println "Top-level defs (func/struct/enum/type) are accumulated."
-                println "Statements are wrapped in func main: and executed immediately."
-                println "Any block opened with ':' waits for a matching 'end' (lowercase)."
-            end
+            help(is_layout)
+            hist_push(line)
         else str.Equals(line, ":clear"):
-            session = ""
-            has_main = false
+            ses = Session {}
+            g_last_out = ""
+            g_has_last = false
             println "session cleared."
+            hist_push(line)
         else str.Equals(line, ":defs"):
-            println str.Len(session) > 0 ? session : "(empty)"
-        else str.Equals(line, ":run") || wants_run(line):
-            if is_layout:
-                println "layout REPL: type 'layout: ... end' blocks to render HTML."
-            else has_main:
-                exec_session(opt, session)
-            else:
-                println "no func main defined - define one, or type a statement."
-            end
+            text := render(ses, pack, no_cand(), false)
+            print str.Len(text) > 0 ? text : "(empty)\n"
+            hist_push(line)
+        else str.Equals(line, ":undo"):
+            println session_undo(ses) ? "dropped the last statement." : "no statement to drop."
+            hist_push(line)
+        else is_save_cmd(line):
+            save_session(ses, pack, str.Substr(line, 5, str.Len(line) - 5))
+            hist_push(line)
+        else str.Equals(line, ":run") || wants_run(pack, line):
+            cmd_run(opt, ses, pack, is_layout)
             hist_push(line)
         else:
-            mut block := line + "\n"
-            mut cont_ok := true
-            until block_depth(pack, block) > 0 && cont_ok:
-                cont := readline("  ... ", cont_ok)
-                if cont_ok:
-                    block += cont + "\n"
-                    hist_push(cont)
-                end
-            end
-            first := str.TrimLeft(line)
-
-            if is_layout:
-                if str.StartsWith(first, "layout") && (str.Len(first) == 6 || byte_at(first, 6) == 58 || byte_at(first, 6) == 32 || byte_at(first, 6) == 9):
-                    layout_exec(opt, pack, block)
+            mut blk_ok := true
+            block := read_block(pack, line, blk_ok)
+            if blk_ok:
+                if is_layout:
+                    layout_turn(opt, pack, line, block)
                 else:
-                    io.EPrintln("error: layout REPL only accepts 'layout: ... end' blocks")
-                end
-                hist_push(line)
-            else is_def(first):
-                test_src := session + block
-                if compile_check(opt, pack, test_src):
-                    session += block
-                    if str.StartsWith(first, "func main"):
-                        has_main = true
-                        println "defined. ':run' to execute."
+                    mut name := ""
+                    kind := classify(pack, line, name)
+                    if kind != RS_STMT:
+                        turn_def(opt, ses, pack, kind, name, block)
+                    else ses.has_main:
+                        println lp.Entry(pack) + " is defined - ':run' to execute, ':clear' to start over."
                     else:
-                        println "defined."
+                        turn_stmt(opt, ses, pack, block)
                     end
                 end
-                hist_push(line)
-            else has_main:
-                println "func main is defined - ':run' to execute, ':clear' to reset."
-            else:
-                full := session + "\nfunc main:\n" + block + "end\n"
-                // Analyze before building, the same gate a def already goes
-                // through. A rejected statement is then reported against
-                // "<repl>" instead of against a temp file whose path is
-                // longer than the program and which is deleted before the
-                // user could open it, and no backend or C compiler is
-                // started for a turn that cannot survive the front end.
-                if compile_check(opt, pack, full):
-                    exec_session(opt, full)
-                end
-                hist_push(line)
             end
+            hist_push(line)
         end
     end
     println "bye."

@@ -219,6 +219,37 @@ k_lv_ints := [
 
 k_lv_uns := ["u8", "u16", "u32", "u64", "size"]
 
+// Win32 APIs are stdcall on i386, and that is not only a name-decoration
+// question: the callee pops the arguments. A call emitted with the default
+// C convention pops them a second time, so the very first GetConsoleMode
+// left ESP eight bytes high and the 32-bit Windows binary walked off its
+// own stack. Marking the declaration and the call x86_stdcallcc fixes the
+// convention, and LLVM's mangler then appends the @N byte count on its own,
+// which is also what makes the symbol match kernel32's _GetConsoleMode@8.
+//
+// A table because nothing in the source says which convention an extern
+// uses, and a `stdcall` keyword could not be used in std until a seed that
+// parses it ships. Every name here was checked against the i686 mingw-w64
+// import libraries with nm: all of them are defined there as _Name@N and
+// none as a bare _Name, so none of them is cdecl. It covers what std
+// declares under SALAM_OS_WINDOWS; anything absent keeps the C convention
+// exactly as before, and a Win32 name that is missing fails loudly at link
+// time as an undefined symbol rather than silently corrupting a stack.
+// CreateCoreWebView2EnvironmentWithOptions is the one entry nm could not
+// confirm - it lives in the WebView2 SDK rather than the mingw import
+// libraries - and it is stdcall by the same Win32 convention.
+k_lv_win32_stdcall := [
+    "CloseHandle", "CreateCoreWebView2EnvironmentWithOptions", "CreateFileA", "CreateProcessA", "CreateWindowExA",
+    "DebugBreak", "DeleteCriticalSection", "DestroyWindow", "DispatchMessageA", "EnterCriticalSection",
+    "FindClose", "FindFirstFileA", "FindNextFileA", "GetConsoleMode", "GetConsoleScreenBufferInfo",
+    "GetCurrentDirectoryA", "GetExitCodeProcess", "GetFileAttributesA", "GetFileAttributesExA", "GetLastError",
+    "GetModuleHandleA", "GetProcAddress", "GetStdHandle", "GetSystemInfo", "GetSystemTimeAsFileTime",
+    "GetTickCount", "InitializeCriticalSection", "IsWindow", "LeaveCriticalSection", "MoveFileExA",
+    "MultiByteToWideChar", "PeekMessageA", "QueryPerformanceCounter", "QueryPerformanceFrequency",
+    "SetConsoleMode", "SetWindowPos", "SetWindowTextA", "Sleep", "SleepEx", "TerminateProcess", "TranslateMessage",
+    "WSAPoll", "WSAStartup"
+]
+
 // ll_extern_seen's prologue[] (codegen_llvm_decl.c), order kept.
 k_lv_prologue_externs := [
     "printf", "dprintf", "strlen", "strcmp", "malloc", "memcpy", "realloc", "free", "memmove", "abort",
@@ -330,9 +361,6 @@ pub struct Lv:
     pub globals: Vector<LvVar> = Vector {}
     pub gdefer: Vector<int> = Vector {} // indices into `globals`
     pub extern_names: Vector<str> = Vector {}
-    // One "-alternatename:_F=_F@N" per extern function, for 32-bit Windows
-    // targets only; empty everywhere else. See stdcall_alias_for.
-    pub extern_stdcall: Vector<str> = Vector {}
     pub pkg_scope: int = 0 // sm ScopeId (0 = C NULL)
     pub emitted: Vector<str> = Vector {}
     pub pkg_touched: Vector<int> = Vector {} // sm SymIds
@@ -478,7 +506,6 @@ func new_lv0(): Lv:
     v.globals = Vector {} as Vector<LvVar>
     v.gdefer = Vector {} as Vector<int>
     v.extern_names = Vector {} as Vector<str>
-    v.extern_stdcall = Vector {} as Vector<str>
     v.emitted = Vector {} as Vector<str>
     v.pkg_touched = Vector {} as Vector<int>
     v.hneed = Vector {} as Vector<bool>
@@ -504,7 +531,6 @@ func free_lv(v &: Lv):
     v.globals.free()
     v.gdefer.free()
     v.extern_names.free()
-    v.extern_stdcall.free()
     v.emitted.free()
     v.pkg_touched.free()
     v.hneed.free()

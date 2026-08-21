@@ -1,0 +1,120 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// The documentation, served two ways at once: mounted under /docs on the
+// API's own server, and again on a port of its own - which is also a test
+// that net/http can run two servers in one process without them treading on
+// each other's router.
+
+import net.http
+import net.router
+import net.http.swagger
+import net.internal.rawsock
+import str
+import time
+
+const API_PORT := 19271
+const DOC_PORT := 19272
+
+struct Todo:
+    pub id: i64 = 0 as i64
+    pub title: str = ""
+end
+
+func list_todos(ctx: i64):
+    http.Ctx_json(ctx, "[{\"id\":1,\"title\":\"write docs\"}]")
+end
+
+func get_resp(port: int, path: str): str:
+    mut sock := rawsock.Connect("127.0.0.1", port)
+    mut tries := 0
+    until !rawsock.Ok(sock) && tries < 200:
+        time.Sleep(10)
+        sock = rawsock.Connect("127.0.0.1", port)
+        tries = tries + 1
+    end
+    if !rawsock.Ok(sock):
+        ret ""
+    end
+    rawsock.Send(sock, "GET " + path + " HTTP/1.0\r\nHost: localhost\r\n\r\n")
+    mut resp := ""
+    mut chunk := rawsock.Recv(sock, 16384)
+    until chunk.len() > 0:
+        resp = resp + chunk
+        chunk = rawsock.Recv(sock, 16384)
+    end
+    rawsock.Close(sock)
+    ret resp
+end
+
+func main:
+    mut r := router.NewRouter()
+    router.Get(r, "/api/todos", list_todos)
+
+    mut doc := swagger.New("Todo API", "1.0.0")
+    swagger.Server(doc, "http://127.0.0.1:19271", "local")
+    swagger.Scan(doc, r)
+    _a := swagger.At(doc, "GET", "/api/todos")
+    swagger.Summary(doc, "List todos")
+    swagger.Tag(doc, "todos")
+    swagger.Returns(doc, 200, "every todo", Vector {} as Vector<Todo>)
+
+    swagger.Mount(doc, r, "/docs")
+
+    mut s := http.NewServer(API_PORT)
+    http.SetHost(s, "127.0.0.1")
+    http.Use(s, r)
+    println http.RunBackground(s)
+    println swagger.Serve(doc, DOC_PORT)
+
+    // The page, from the API's own server.
+    ui := get_resp(API_PORT, "/docs")
+    println str.Contains(ui, "text/html")
+    println str.Contains(ui, "<title>Todo API</title>")
+    // No external request in it: the whole page is one file.
+    println str.Contains(ui, "https://unpkg.com") == false
+    println str.Contains(ui, "docs/openapi.json")
+
+    // The document itself.
+    spec := get_resp(API_PORT, "/docs/openapi.json")
+    println str.Contains(spec, "application/json")
+    println str.Contains(spec, "\"openapi\":\"3.1.0\"")
+    println str.Contains(spec, "/api/todos")
+    println str.Contains(spec, "#/components/schemas/Todo")
+    println str.Contains(spec, "Access-Control-Allow-Origin")
+
+    // The same document again, on its own port, with the page at the root.
+    ui2 := get_resp(DOC_PORT, "/")
+    println str.Contains(ui2, "<title>Todo API</title>")
+    spec2 := get_resp(DOC_PORT, "/openapi.json")
+    println str.Contains(spec2, "\"openapi\":\"3.1.0\"")
+
+    // And the API is still the API: two routers, two ports, one process.
+    api := get_resp(API_PORT, "/api/todos")
+    println str.Contains(api, "write docs")
+    println str.Contains(get_resp(DOC_PORT, "/api/todos"), "404")
+
+    // A spec from somewhere else renders through the same page.
+    mut r2 := router.NewRouter()
+    swagger.MountSpec(
+        "{\"openapi\":\"3.1.0\",\"info\":{\"title\":\"Imported\",\"version\":\"9\"},\"paths\":{}}",
+        "Imported", r2, "/imported"
+    )
+    mut s2 := http.NewServer(19273)
+    http.SetHost(s2, "127.0.0.1")
+    http.Use(s2, r2)
+    println http.RunBackground(s2)
+    println str.Contains(get_resp(19273, "/imported"), "<title>Imported</title>")
+    println str.Contains(get_resp(19273, "/imported/openapi.json"), "\"title\":\"Imported\"")
+end

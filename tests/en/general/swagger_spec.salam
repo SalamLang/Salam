@@ -1,0 +1,135 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// net/http/swagger: an OpenAPI document read out of a router, with the
+// payload schemas derived from the types the handlers exchange.
+
+import net.router
+import net.http.swagger
+import encoding.json
+
+struct Todo:
+    pub id: i64 = 0 as i64
+    pub title: str = ""
+    @json "" "omitempty"
+    pub notes: str = ""
+end
+
+struct NewTodo:
+    pub title: str = ""
+end
+
+func list_todos(_ctx: i64): ret end
+func create_todo(_ctx: i64): ret end
+func get_todo(_ctx: i64): ret end
+func delete_todo(_ctx: i64): ret end
+func health(_ctx: i64): ret end
+func any_file(_ctx: i64): ret end
+
+func build(): swagger.Doc:
+    mut r := router.NewRouter()
+    router.Get(r, "/api/todos", list_todos)
+    router.Post(r, "/api/todos", create_todo)
+    router.Get(r, "/api/todos/:id", get_todo)
+    router.Delete(r, "/api/todos/:id", delete_todo)
+    router.Get(r, "/health", health)
+    router.Get(r, "/files/*", any_file)
+
+    mut doc := swagger.New("Todo API", "1.4.0")
+    swagger.Describe(doc, "A todo list over HTTP.")
+    swagger.Server(doc, "http://127.0.0.1:8090", "local")
+    swagger.License(doc, "MIT", "https://opensource.org/license/mit")
+    swagger.BearerAuth(doc, "bearer", "JWT")
+    // Every route, whether or not anything below describes it.
+    swagger.Scan(doc, r)
+
+    _a := swagger.At(doc, "GET", "/api/todos")
+    swagger.Summary(doc, "List todos")
+    swagger.Tag(doc, "todos")
+    swagger.Query(doc, "status", "all, open or done", false)
+    swagger.QueryTyped(doc, "limit", "page size", false, 0)
+    swagger.Returns(doc, 200, "every todo", Vector {} as Vector<Todo>)
+
+    _b := swagger.At(doc, "POST", "/api/todos")
+    swagger.Summary(doc, "Create a todo")
+    swagger.Tag(doc, "todos")
+    swagger.Secure(doc, "bearer")
+    swagger.Accepts(doc, "the todo to create", NewTodo {})
+    swagger.Returns(doc, 201, "the todo, with its id", Todo {})
+    swagger.ReturnsNothing(doc, 401, "no token")
+
+    _c := swagger.At(doc, "GET", "/api/todos/:id")
+    swagger.Tag(doc, "todos")
+    swagger.PathParam(doc, "id", "the todo's id")
+    swagger.Returns(doc, 200, "the todo", Todo {})
+
+    _d := swagger.At(doc, "DELETE", "/api/todos/:id")
+    swagger.Tag(doc, "todos")
+    swagger.Deprecated(doc)
+    swagger.ReturnsNothing(doc, 204, "gone")
+
+    ret doc
+end
+
+func main:
+    doc := build()
+    spec := swagger.Spec(doc)
+
+    println json.Valid(spec)
+    println json.Get(spec, "openapi")
+    println json.Get(json.Get(spec, "info"), "title")
+
+    paths := json.Get(spec, "paths")
+    keys := json.Keys(paths)
+    defer keys.free()
+    repeat keys.len() with i:
+        println keys.get(i)
+    end
+
+    // A `:id` route becomes `{id}`, and both its methods land under one path.
+    one := json.Get(paths, "/api/todos/{id}")
+    ms := json.Keys(one)
+    defer ms.free()
+    repeat ms.len() with j:
+        println ms.get(j)
+    end
+
+    // The schemas came out of the types, not out of a second list.
+    schemas := json.Get(json.Get(spec, "components"), "schemas")
+    names := json.Keys(schemas)
+    defer names.free()
+    repeat names.len() with k:
+        println names.get(k)
+    end
+    println json.Get(schemas, "Todo")
+    println json.Get(schemas, "NewTodo")
+
+    // A route nobody described is still in the document.
+    println json.Get(json.Get(paths, "/health"), "get")
+    println json.Get(json.Get(paths, "/files/{path}"), "get")
+
+    // And the described ones carry what was said about them.
+    println json.Get(json.Get(json.Get(paths, "/api/todos"), "get"), "parameters")
+    println json.Get(json.Get(json.Get(paths, "/api/todos"), "post"), "requestBody")
+    println json.Get(json.Get(json.Get(paths, "/api/todos"), "post"), "security")
+    println json.Get(json.Get(json.Get(paths, "/api/todos/{id}"), "delete"), "deprecated")
+
+    // At on a route that is not there selects nothing, and the calls that
+    // follow it change nothing - rather than landing on whichever route was
+    // current before.
+    mut d2 := build()
+    println swagger.At(d2, "GET", "/api/nope")
+    swagger.Summary(d2, "this must not be attached to anything")
+    println swagger.Spec(d2).find("this must not be attached") < 0
+end

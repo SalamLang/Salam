@@ -70,6 +70,14 @@ func local_add(g &: Jg, name: str):
     g.locals.push(name)
 end
 
+// Is `emitted` the JS name of a local still in scope? Names go out through
+// g.local_emit, which is where a collision would be, not g.locals - two
+// different Salam names can be handed the same JS one (a synthetic counter
+// and a user binding).
+func jsg_emit_taken(g &: Jg, emitted: str): bool:
+    ret name_in_strvec(g.local_emit, emitted)
+end
+
 // ---------------------------------------------------------------------------
 // codegen_type.c slice: cg_put_ident_byte / cg_is_c_keyword / cg_cident /
 // parse_typestr (base part) / cg_is_int_typestr / cg_is_unsigned_typestr /
@@ -176,6 +184,30 @@ end
 
 func cg_is_slice_ts(ts: str): bool:
     ret str.StartsWith(ts, "slice<")
+end
+
+// A pointer to bytes. Those are the only pointers this backend can stand
+// behind: a `str` cast to one becomes a Uint8Array over its UTF-8, which is
+// what lets std code that scans a string byte by byte (conv's parsers) read
+// numbers instead of undefined. A pointer to anything else stays
+// unsupported rather than silently indexing by the wrong unit.
+func jsg_is_byte_ptr_ts(ts: str): bool:
+    ret str.Equals(ts, "void*") || str.Equals(ts, "i8*") || str.Equals(
+        ts, "u8*"
+    ) || str.Equals(ts, "char*")
+end
+
+// The pointer under an integer cast of one ((p as u64) in `(p as u64) + k`),
+// or 0 when this is not that shape.
+func jsg_ptr_operand(a &: at.Ast, id: int): int:
+    if id == 0 || at.KindOf(a, id) != at.AST_CAST:
+        ret 0
+    end
+    inner := at.Get(a, id).a
+    if inner == 0:
+        ret 0
+    end
+    ret jsg_is_byte_ptr_ts(at.Get(a, inner).type_str) ? inner : 0
 end
 
 // A `Vector<T>` of the prelude's own collections package, which this

@@ -555,6 +555,16 @@ func jsg_call_ident(
     if str.Equals(nm, "char_code") && nv.list.len() == 1:
         ret jsg_expr_p(g, s, a, nv.list.get(0), JSP_MEMBER) + ".charCodeAt(0)"
     end
+    // The same std functions the package-call path replaces (jsg_call_pkg),
+    // caught here for the calls std/str and std/conv make to their own:
+    // those are written unqualified and would otherwise reach the raw-memory
+    // bodies this backend cannot run.
+    if jsg_std_replaced(g, nm):
+        rep := jsg_call_std_replaced(g, s, a, n, nm)
+        if str.Len(rep) > 0:
+            ret rep
+        end
+    end
     if sm.Lookup(s, s.global, nm) == 0:
         if str.Equals(nm, "hash") && nv.list.len() == 1:
             a0 := nv.list.get(0)
@@ -714,6 +724,35 @@ func jsg_call_strbuf(
         ret "undefined"
     end
     ret ""
+end
+
+// Which of the current package's own functions this backend answers
+// itself. Both lists are the std functions whose Salam bodies work through
+// raw memory - see jsg_call_strbuf and jsg_call_conv for what replaces
+// them. Nothing outside those two packages is affected.
+func jsg_std_replaced_name(pkg: str, name: str): bool:
+    if str.Equals(pkg, "str"):
+        ret str.StartsWith(name, "Buf") || str.Equals(name, "NewBuilder")
+    end
+    if str.Equals(pkg, "conv"):
+        ret str.Equals(name, "FormatFloat") || str.Equals(
+            name, "FormatInt"
+        ) || str.Equals(name, "FormatUint")
+    end
+    ret false
+end
+
+func jsg_std_replaced(g &: Jg, name: str): bool:
+    ret jsg_std_replaced_name(g.pkg, name)
+end
+
+func jsg_call_std_replaced(
+    g &: Jg, s &: sm.Sema, a &: at.Ast, n: int, name: str
+): str:
+    if str.Equals(g.pkg, "str"):
+        ret jsg_call_strbuf(g, s, a, n, name)
+    end
+    ret jsg_call_conv(g, s, a, n, name)
 end
 
 // std/conv's number formatters build their result byte by byte out of

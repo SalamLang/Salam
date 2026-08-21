@@ -86,6 +86,45 @@ else:
     end
 end
 
+// Everything Run does before it starts accepting. Split out so the listening
+// socket is open - or known to have failed - before RunBackground returns,
+// rather than on whatever schedule the new thread happens to get: a test that
+// starts a server and immediately connects to it would otherwise be racing
+// the bind.
+func _bind(s: Server): i64:
+    _reqctx_sizeof()
+    _warm_up_split()
+    _http_ignore_sigpipe()
+    ret _net_listen(s.host, s.port)
+end
+
+// The accept loop, as a thread entry point. `packed` is the server's slot in
+// the high half and its listening descriptor in the low half (see
+// ctx_internal.salam's server table); each accepted connection is handed on
+// with the same slot, so its handler thread knows which router to dispatch
+// through.
+func _accept_loop(packed: i64):
+    slot := _srv_slot_of(packed)
+    lfd := _srv_fd_of(packed)
+    until 1 == 1:
+        cfd := _net_accept(lfd)
+        if cfd >= 0:
+            salam_spawn_fn_i64(_web_conn_handler, _srv_pack(slot, cfd))
+        end
+    end
+end
+
+func _accept_loop_tls(packed: i64):
+    slot := _srv_slot_of(packed)
+    lfd := _srv_fd_of(packed)
+    until 1 == 1:
+        cfd := _net_accept(lfd)
+        if cfd >= 0:
+            salam_spawn_fn_i64(_web_tls_conn_handler, _srv_pack(slot, cfd))
+        end
+    end
+end
+
 @en "NewServer"
 @fa "سرور جدید"
 @ar "خادم جدید"
@@ -125,23 +164,33 @@ end
 @fa "اجرا"
 @ar "تشغیل"
 pub func Run(s: Server):
-    _reqctx_sizeof()
-    _warm_up_split()
-    _http_ignore_sigpipe()
-    _current_router = s.router
-    _hide_tokens = s.hide_tokens
-    _access_log = s.access_log
-    port := s.port
-    lfd := _net_listen(s.host, port)
+    lfd := _bind(s)
     if lfd < 0:
         ret
     end
-    until 1 == 1:
-        cfd := _net_accept(lfd)
-        if cfd >= 0:
-            salam_spawn_fn_i64(_web_conn_handler, cfd)
-        end
+    _accept_loop(_srv_pack(_srv_claim(s.router, s.hide_tokens, s.access_log), lfd))
+end
+
+// Run, without blocking: the listener is open when this returns, and its
+// accept loop runs on a thread of its own.
+//
+// This is what makes a second server practical. `Run` never returns, so a
+// program that wants an API on one port and its OpenAPI docs on another (see
+// net/http/swagger) has to background one of them, and backgrounding the
+// small one keeps `main` reading the way it did before. Returns false when
+// the port could not be bound - the usual reason a second listener fails
+// while the first one is fine.
+@en "RunBackground"
+@fa "اجرا در پس زمینه"
+@ar "تشغیل في الخلفیة"
+pub func RunBackground(s: Server): bool:
+    lfd := _bind(s)
+    if lfd < 0:
+        ret false
     end
+    slot := _srv_claim(s.router, s.hide_tokens, s.access_log)
+    salam_spawn_fn_i64(_accept_loop, _srv_pack(slot, lfd))
+    ret true
 end
 
 // TLS-serving counterpart to Run: loads `cert_file`/`key_file` once
@@ -170,22 +219,11 @@ end
 @fa "اجرای امن"
 @ar "تشغیل آمن"
 pub func RunTLS(s: Server, cert_file: str, key_file: str):
-    _reqctx_sizeof()
-    _warm_up_split()
-    _http_ignore_sigpipe()
-    _current_router = s.router
-    _hide_tokens = s.hide_tokens
-    _access_log = s.access_log
-    _current_tls_cfg = tls.NewServerConfig(cert_file, key_file)
-    port := s.port
-    lfd := _net_listen(s.host, port)
+    lfd := _bind(s)
     if lfd < 0:
         ret
     end
-    until 1 == 1:
-        cfd := _net_accept(lfd)
-        if cfd >= 0:
-            salam_spawn_fn_i64(_web_tls_conn_handler, cfd)
-        end
-    end
+    slot := _srv_claim(s.router, s.hide_tokens, s.access_log)
+    _srv_tls.set(slot, tls.NewServerConfig(cert_file, key_file))
+    _accept_loop_tls(_srv_pack(slot, lfd))
 end

@@ -79,7 +79,13 @@ echo "staged minified stdlib preload image at $STD_MIN"
 # those exact names: a `func` with a body inside an `extern:` block survives
 # DCE and keeps its unmangled symbol, which is Salam's EMSCRIPTEN_KEEPALIVE.
 rm -rf .salam-build
+#
+# -DSALAM_NO_SYSCALL because that C is emitted with the HOST's condcomp
+# flags: on a Linux host std/fs takes its getdents64 path, and emscripten's
+# libc has no syscall() to link it against. The macro sends it back to
+# readdir, which emscripten does provide and which is 64-bit clean there.
 "$SALAM" build --backend=c --keep-c compiler/wasm_main.salam \
+    -DSALAM_NO_SYSCALL \
     --output=.wasm-build/host-salam --log-level=warn >/dev/null 2>&1 || true
 SRCS=$(find .salam-build -name '*.c' | sort | tr '\n' ' ')
 [ -n "$SRCS" ] || {

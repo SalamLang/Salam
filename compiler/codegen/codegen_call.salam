@@ -727,6 +727,45 @@ func call_str(
     ret "0"
 end
 
+// A method whose whole body is `ret this.<field>` is a field read wearing a
+// call - len(), cap(), and every other one-line accessor. Both optimizing
+// backends already see through it (a generic instance is emitted `static
+// inline`), but tcc has no inliner at all, so the call survived into the
+// condition of every `each` loop, which re-reads the length once per
+// iteration by design, and into every `until i < v.len():`. Reading the
+// field here is the same read the callee would have done: the receiver is
+// still evaluated exactly once, and a field read has no side effect that
+// could tell the two apart. "" = not one of these.
+func accessor_field(s &: sm.Sema, a &: at.Ast, sig: int): str:
+    if sig == 0:
+        ret ""
+    end
+    sv := sm.SigAt(s, sig)
+    if sv.params.len() != 0 || sv.decl == 0:
+        ret ""
+    end
+    fn := at.Get(a, sv.decl)
+    if fn.kind != at.AST_FUNC_DEF || fn.is_extern || fn.a == 0:
+        ret ""
+    end
+    body := at.Get(a, fn.a)
+    if body.kind != at.AST_BLOCK || body.list.len() != 1:
+        ret ""
+    end
+    st := at.Get(a, body.list.get(0))
+    if st.kind != at.AST_RETURN || st.a == 0:
+        ret ""
+    end
+    mem := at.Get(a, st.a)
+    if mem.kind != at.AST_MEMBER || mem.a == 0 || str.Len(mem.name) == 0:
+        ret ""
+    end
+    if at.KindOf(a, mem.a) != at.AST_THIS:
+        ret ""
+    end
+    ret mem.name
+end
+
 func call_method(
     g &: Cg, s &: sm.Sema, a &: at.Ast, n: int, obj: int, callee: int, objts: str
 ): str:
@@ -760,16 +799,26 @@ func call_method(
         rc = cg_ctype(sm.ToString(s, sm.SigAt(s, sig).ret_type))
     end
     if obj_is_ptr || addressable:
-        mut recv := ""
-        if obj_is_ptr:
-            recv = cg_expr(g, s, a, obj)
-        else:
-            recv = "&(" + cg_expr(g, s, a, obj) + ")"
-        end
+        // Generated once: cg_expr can allocate temporaries, so asking it
+        // for the receiver twice would emit two of them.
+        oexpr := cg_expr(g, s, a, obj)
+        recv := obj_is_ptr ? oexpr : "&(" + oexpr + ")"
         if ret_struct:
             g.tmpn += 1
             sv := g.tmpn
             ret "({ " + rc + " __s" + sv + "; " + mangled + "(" + recv + asv + ", &__s" + sv + "); __s" + sv + "; })"
+        end
+        if str.Len(asv) == 0:
+            fld := accessor_field(s, a, sig)
+            if str.Len(fld) > 0:
+                // A value receiver reads the field directly: &x-> would
+                // only ask the C compiler to fold the pair back apart,
+                // and tcc has nothing to fold it with.
+                if obj_is_ptr:
+                    ret "((" + oexpr + ")->" + cg_cident(fld) + ")"
+                end
+                ret "((" + oexpr + ")." + cg_cident(fld) + ")"
+            end
         end
         ret mangled + "(" + recv + asv + ")"
     end

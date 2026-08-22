@@ -240,9 +240,15 @@ if [ "${1:-}" = "--worker" ]; then
         runner="${extra#*:}"
         outbin="$WORK/cross_${jobid}_$$"
         case "$target" in *windows*) outbin="$outbin.exe" ;; esac
-        if ! "$SALAM_ABS" build "$f" --output="$outbin" --no-color --log-level=error \
-            --lang="$lang" --target="$target" >/dev/null 2>&1; then
+        # INFO, not ERROR: the driver logs "using embedded static third-party
+        # libs: <dir>" there, and that one line is what tells a binary that
+        # carries the static sqlite3/openssl/... set for this target apart
+        # from one that does not. See the loader check after the run.
+        crosslog="$WORK/cross_${jobid}_$$.log"
+        if ! "$SALAM_ABS" build "$f" --output="$outbin" --no-color --log-level=info \
+            --lang="$lang" --target="$target" >"$crosslog" 2>&1; then
             echo "SKIP $label (cross build unavailable for $target - no embedded static libs, or self-hosted/non-flagship salam)"
+            rm -f "$crosslog"
             return
         fi
         if [ -z "$runner" ]; then
@@ -260,7 +266,7 @@ if [ "${1:-}" = "--worker" ]; then
             esac
             if [ "$native" -eq 0 ]; then
                 echo "SKIP $label (build OK; a $hostos host cannot run a $target binary and no emulator is configured for it)"
-                rm -f "$outbin"
+                rm -f "$outbin" "$crosslog"
                 return
             fi
         fi
@@ -270,13 +276,34 @@ if [ "${1:-}" = "--worker" ]; then
                 runner="$alt"
             else
                 echo "SKIP $label (build OK; no $runner on this host to run the $target binary)"
-                rm -f "$outbin"
+                rm -f "$outbin" "$crosslog"
                 return
             fi
         fi
         got=$($runner "$outbin" 2>&1 | tr -d '\r')
+        # A `link dynamic "sqlite3"` in the program is satisfied at link time
+        # by the static archive salam carries for the target, so the binary
+        # needs no .so at all. A salam built WITHOUT those archives (a plain
+        # self-hosted ./salam, which is what this suite normally runs) links
+        # the same program against the host's shared sqlite3 instead, and the
+        # target loader then dies before main - "Error loading shared library
+        # libsqlite3.so.0". That is the same "no embedded static libs" case
+        # the build-failure branch above skips for; it just surfaces one stage
+        # later. Gate the skip on the build log, so a compiler that DID supply
+        # the archives and still produced an unloadable binary fails loudly.
+        case "$got" in
+        *"Error loading shared library"* | *"error while loading shared libraries"* | \
+            *"cannot open shared object file"*)
+            if ! grep -q "static third-party libs" "$crosslog" 2>/dev/null; then
+                missing_lib=$(printf '%s\n' "$got" | tr ' ' '\n' | grep '\.so' | sed 1q | tr -d ':')
+                echo "SKIP $label (build OK; the $target binary wants ${missing_lib:-a shared library} at runtime - this salam carries no embedded static third-party libs for $target)"
+                rm -f "$outbin" "$crosslog"
+                return
+            fi
+            ;;
+        esac
         wk_check "$expabs" "$got"
-        rm -f "$outbin"
+        rm -f "$outbin" "$crosslog"
     }
     run_worker() {
         case "$kind" in

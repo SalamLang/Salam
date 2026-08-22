@@ -19,13 +19,13 @@ exists (see "Self-contained toolchain" below).
 
 ## What `salam build` does today
 
-| invocation                         | path                                        |
-| ---------------------------------- | ------------------------------------------- |
-| `salam build app.salam`            | Salam -> C -> bundled tcc                   |
-| `salam build app.salam --cc=gcc`   | Salam -> C -> system gcc, auto `-O2`        |
-| `salam build app.salam --backend=llvm` | Salam -> LLVM IR -> object, auto `-O2`  |
-| `salam build app.salam --target=T` | Salam -> LLVM IR -> object -> lld           |
-| `salam llvm app.salam ...`         | Salam -> LLVM IR (explicit, all emit modes) |
+| invocation                             | path                                        |
+| -------------------------------------- | ------------------------------------------- |
+| `salam build app.salam`                | Salam -> C -> bundled tcc                   |
+| `salam build app.salam --cc=gcc`       | Salam -> C -> system gcc, auto `-O2`        |
+| `salam build app.salam --backend=llvm` | Salam -> LLVM IR -> object, auto `-O2`      |
+| `salam build app.salam --target=T`     | Salam -> LLVM IR -> object -> lld           |
+| `salam llvm app.salam ...`             | Salam -> LLVM IR (explicit, all emit modes) |
 
 The default comes from [`cli.c:38`](../c/src/cli/cli.c#L38) (`out->cc = "tcc"`),
 and the cross path is chosen at

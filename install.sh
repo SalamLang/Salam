@@ -160,7 +160,11 @@ die() {
     shift
 
     for _line in "$@"; do
-        printf '       %s\n' "$_line" >&2
+        if [ -z "$_line" ]; then
+            printf '\n' >&2
+        else
+            printf '       %s\n' "$_line" >&2
+        fi
     done
 
     printf '\n' >&2
@@ -1140,24 +1144,46 @@ else
 
     if [ -z "$URL" ] && [ "$PLATFORM_FORCED" = 0 ] && [ "$PROBE_BLOCKED" = 0 ]; then
         if [ "$KERNEL" = "bsd" ] || [ "$KERNEL" = "other" ]; then
-            BSD_HINT="Salam publishes Linux, macOS and Windows builds today."
+            NO_BUILD="no release publishes a build for $OS_NAME"
+            PUBLISHED="Salam publishes Linux, macOS and Windows builds today."
 
-            if [ "${BSD_KIND:-}" = "freebsd" ]; then
-                die "no release publishes a $OS_NAME build" \
-                    "$BSD_HINT" \
+            case "${BSD_KIND:-}" in
+            freebsd)
+                die "$NO_BUILD" \
+                    "$PUBLISHED" \
                     "" \
-                    "FreeBSD can still run the Linux build through its compatibility layer:" \
+                    "FreeBSD can run the Linux build through its compatibility layer:" \
                     "  1. enable it once, as root:  sysrc linux_enable=YES && service linux start" \
-                    "  2. install a Linux userland: pkg install linux_base-rl9   (or linux_base-c7)" \
-                    "  3. re-run this installer:    sh install.sh --platform linux" \
+                    "  2. add a Linux userland:     pkg install linux_base-rl9  (or linux_base-c7)" \
+                    "  3. run this installer again: sh install.sh --platform linux" \
                     "" \
-                    "Tell us you want a native build: $ISSUES_URL"
-            fi
-
-            die "no release publishes a $OS_NAME build" \
-                "$BSD_HINT" \
-                "if your system can run Linux binaries, try: sh install.sh --platform linux" \
-                "otherwise please open an issue so we know it is wanted: $ISSUES_URL"
+                    "Want a native build? Say so at $ISSUES_URL"
+                ;;
+            netbsd | dragonfly)
+                die "$NO_BUILD" \
+                    "$PUBLISHED" \
+                    "" \
+                    "With COMPAT_LINUX in your kernel and a Linux userland installed," \
+                    "the Linux build works here: sh install.sh --platform linux" \
+                    "" \
+                    "Want a native build? Say so at $ISSUES_URL"
+                ;;
+            openbsd)
+                die "$NO_BUILD" \
+                    "$PUBLISHED" \
+                    "" \
+                    "OpenBSD dropped Linux emulation in 5.8, so there is nothing to" \
+                    "fall back to here - a native build is the only way." \
+                    "" \
+                    "Want one? Say so at $ISSUES_URL"
+                ;;
+            *)
+                die "$NO_BUILD" \
+                    "$PUBLISHED" \
+                    "if this system can run Linux binaries: sh install.sh --platform linux" \
+                    "otherwise please open an issue so we know it is wanted: $ISSUES_URL"
+                ;;
+            esac
         fi
     fi
 
@@ -1460,9 +1486,12 @@ fi
 
 info "$INSTALL_DIR/salam"
 
+VERIFY_OK=1
+
 if VERIFY_OUT=$("$INSTALL_DIR/salam" version 2>&1); then
     printf '%s\n' "$VERIFY_OUT" | sed 's/^/      /' >&2
 else
+    VERIFY_OK=0
     warn "the installed binary did not run"
     printf '%s\n' "$VERIFY_OUT" | head -n 5 | sed 's/^/      /' >&2
 
@@ -1520,14 +1549,23 @@ if [ "$PATH_CHANGED" = 0 ] && ! on_path "$INSTALL_DIR"; then
 fi
 
 printf '\n' >&2
-printf '  %sSalam %s is installed.%s\n' "$C_GOOD" "$VERSION" "$C_OFF" >&2
+
+if [ "$VERIFY_OK" = 1 ]; then
+    printf '  %sSalam %s is installed.%s\n' "$C_GOOD" "$VERSION" "$C_OFF" >&2
+else
+    printf '  %sSalam %s is in place, but it did not run here.%s\n' \
+        "$C_WARN" "$VERSION" "$C_OFF" >&2
+fi
+
 printf '\n' >&2
 
-if [ "$PATH_CHANGED" = 1 ] && ! on_path "$INSTALL_DIR"; then
+if [ "$VERIFY_OK" = 1 ] && [ "$PATH_CHANGED" = 1 ] && ! on_path "$INSTALL_DIR"; then
     printf '  Start a new shell (or run %ssource %s%s), then try:\n' \
         "$C_BOLD" "$PATH_RC" "$C_OFF" >&2
-else
+elif [ "$VERIFY_OK" = 1 ]; then
     printf '  Try it:\n' >&2
+else
+    printf '  Once that is sorted:\n' >&2
 fi
 
 printf '\n' >&2

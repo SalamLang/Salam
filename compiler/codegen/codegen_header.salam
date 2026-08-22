@@ -495,6 +495,20 @@ func hdr_prelude(g &: Cg, a &: at.Ast, program: int):
     // again is what the include is there to avoid: salam spells the size as
     // uint64_t where the standard says size_t, and the stream as void* where
     // it says FILE*.
+    // Keep freed blocks inside the process instead of handing them straight
+    // back to the kernel. glibc's defaults return anything past 128 KiB with
+    // munmap or an sbrk shrink, so a loop that allocates a result, frees it
+    // and allocates the next one re-faults every page it touches: measured on
+    // a 2048x2048 f64 matrix add, 8192 minor faults per call and roughly two
+    // thirds of the wall time, none of it arithmetic. Raising both thresholds
+    // lets the same pages come back already resident.
+    //
+    // Only glibc has mallopt; everywhere else this is an empty function that
+    // the compiler deletes. SALAM_NO_ALLOC_TUNE opts out for a program that
+    // would rather return memory promptly than reuse it.
+    outh(
+        g, "#ifndef SALAM_ALLOC_TUNE_DEFINED\n#define SALAM_ALLOC_TUNE_DEFINED\n" + "#if defined(__GLIBC__) && !defined(SALAM_NO_ALLOC_TUNE)\n" + "#include <malloc.h>\n" + "static inline void salam_tune_allocator(void) {\n" + "    static int done = 0;\n" + "    if (done) return;\n" + "    done = 1;\n" + "    mallopt(M_MMAP_THRESHOLD, 64 * 1024 * 1024);\n" + "    mallopt(M_TRIM_THRESHOLD, 128 * 1024 * 1024);\n" + "}\n" + "#else\n" + "static inline void salam_tune_allocator(void) { }\n" + "#endif\n" + "#endif\n"
+    )
     outh(
         g, "#ifndef SALAM_OUT_DEFINED\n#define SALAM_OUT_DEFINED\n" + "#define SALAM_OB_SZ 65536\n" + "#if defined(_WIN32)\n" + "extern int _write(int, void *, unsigned);\n" + "#define SALAM_RAW_WRITE(fd, buf, n) _write((fd), (void " + "*)(buf), (unsigned)(n))\n" + "#else\n" + "extern int64_t write(int32_t, void *, uint64_t);\n" + "#define SALAM_RAW_WRITE(fd, buf, n) write((fd), (void " + "*)(buf), (uint64_t)(n))\n" + "#endif\n" + "#if (defined(__GNUC__) || defined(__clang__)) && " + "!defined(__TINYC__)\n" + "__attribute__((weak)) char salam_ob[SALAM_OB_SZ];\n" + "__attribute__((weak)) uint64_t salam_obn;\n" + "__attribute__((weak)) void salam_out_flush(void) {\n" + "    if (salam_obn) { int64_t r = " + "(int64_t)SALAM_RAW_WRITE(1, salam_ob, salam_obn); (void)r; " + "salam_obn = 0; }\n" + "}\n" + "__attribute__((weak, destructor)) void salam_out_fini(void) " + "{ salam_out_flush(); }\n" + "static inline void salam_out_write_(const void *s, uint64_t " + "n) {\n" + "    if (salam_obn + n > SALAM_OB_SZ) salam_out_flush();\n" + "    if (n >= SALAM_OB_SZ) { int64_t r = " + "(int64_t)SALAM_RAW_WRITE(1, s, n); (void)r; return; }\n" + "    __builtin_memcpy(salam_ob + salam_obn, s, (size_t)n); " + "salam_obn += n;\n" + "    if (__builtin_memchr(s, '\\n', (size_t)n)) salam_out_flush();\n" + "}\n" + "#else\n" + "static void salam_out_flush(void) { fflush(0); }\n" + "static void salam_out_write_(const void *s, uint64_t n) {\n" + "    int64_t r = (int64_t)SALAM_RAW_WRITE(1, s, n); (void)r;\n" + "}\n" + "#endif\n" + "#define SALAM_OUT_LIT(s, n) salam_out_write_((s), " + "(uint64_t)(n))\n" + "#endif\n"
     )
@@ -518,7 +532,17 @@ func hdr_prelude(g &: Cg, a &: at.Ast, program: int):
     // its own functions. Whatever those instantiated bodies call therefore has
     // to be visible from the very top of any module header, not from mem's.
     outh(
-        g, "#ifndef SALAM_RT_TYPES_DEFINED\n#define " + "SALAM_RT_TYPES_DEFINED\n" + "typedef struct salam_file salam_file;\n" + "typedef struct salam_map salam_map;\n" + "typedef struct salam_map_iter salam_map_iter;\n" + "typedef struct { void* data; int64_t len; } salam_slice;\n" + "extern int64_t salam_idx(int64_t, int64_t);\n" + "extern SALAM_NORET void salam_panic(const char* msg);\n" + "extern uint64_t salam_hash_int(uint64_t x);\n" + "extern uint64_t salam_str_hash(const char* s);\n" + "void* " + CG_MEM_ALLOC + "(uint64_t size);\n" + "void* " + CG_MEM_ALLOC_ZEROED + "(uint64_t size);\n" + "void* " + CG_MEM_REALLOC + "(void* ptr, uint64_t size);\n" + "void " + CG_MEM_FREE + "(void* ptr);\n" + "static inline void salam_slice_new(salam_slice* out, void* " + "b, int64_t lo, int64_t hi, int64_t esz)" + "{ out->data=(void*)((char*)b+(lo)*(esz)); " + "out->len=(hi)-(lo); }\n" + "static inline void salam_slice_sub(salam_slice* out, " + "salam_slice b, int64_t lo, int64_t hi, int has_hi, int64_t " + "esz)" + "{ if(!has_hi) hi=b.len; " + "out->data=(void*)((char*)b.data+(lo)*(esz)); " + "out->len=(hi)-(lo); }\n" + "static inline void* salam_slice_at(salam_slice s, int64_t i, " + "int64_t esz, int sf)" + "{ return " + "(void*)((char*)s.data+(sf?salam_idx(i,s.len):i)*(esz)); }\n" + "typedef void (*salam_thread_fn)(void);\n" + "typedef void (*salam_thread_arg_fn)(void*);\n" + "#endif\n"
+        g, "#ifndef SALAM_RT_TYPES_DEFINED\n#define " + "SALAM_RT_TYPES_DEFINED\n" + "typedef struct salam_file salam_file;\n" + "typedef struct salam_map salam_map;\n" + "typedef struct salam_map_iter salam_map_iter;\n" + "typedef struct { void* data; int64_t len; } salam_slice;\n" + "extern int64_t salam_idx(int64_t, int64_t);\n"
+            // The bounds check, inline. salam_idx itself lives in another
+            // translation unit, so a call to it is a call even under -O2 -
+            // one per subscript, and one the vectorizer will not look
+            // past. The fast path is a single unsigned compare (a negative
+            // index reinterprets as huge and fails the same test), and the
+            // failing path still goes to salam_idx, so the diagnostic and
+            // the abort stay exactly where they were.
+            + "#define SALAM_IDX(i, n) ({ int64_t __salam_ix = (int64_t)(i); "
+            + "((uint64_t)__salam_ix < (uint64_t)(int64_t)(n)) ? __salam_ix "
+            + ": salam_idx(__salam_ix, (int64_t)(n)); })\n" + "extern SALAM_NORET void salam_panic(const char* msg);\n" + "extern uint64_t salam_hash_int(uint64_t x);\n" + "extern uint64_t salam_str_hash(const char* s);\n" + "void* " + CG_MEM_ALLOC + "(uint64_t size);\n" + "void* " + CG_MEM_ALLOC_ZEROED + "(uint64_t size);\n" + "void* " + CG_MEM_REALLOC + "(void* ptr, uint64_t size);\n" + "void " + CG_MEM_FREE + "(void* ptr);\n" + "static inline void salam_slice_new(salam_slice* out, void* " + "b, int64_t lo, int64_t hi, int64_t esz)" + "{ out->data=(void*)((char*)b+(lo)*(esz)); " + "out->len=(hi)-(lo); }\n" + "static inline void salam_slice_sub(salam_slice* out, " + "salam_slice b, int64_t lo, int64_t hi, int has_hi, int64_t " + "esz)" + "{ if(!has_hi) hi=b.len; " + "out->data=(void*)((char*)b.data+(lo)*(esz)); " + "out->len=(hi)-(lo); }\n" + "static inline void* salam_slice_at(salam_slice s, int64_t i, " + "int64_t esz, int sf)" + "{ return " + "(void*)((char*)s.data+(sf?SALAM_IDX(i,s.len):i)*(esz)); }\n" + "typedef void (*salam_thread_fn)(void);\n" + "typedef void (*salam_thread_arg_fn)(void*);\n" + "#endif\n"
     )
     // std/ modules (mem, str, thread, sync, webview, ...) declare their own
     // CRT/WinAPI extern funcs (e.g. strlen, WaitForSingleObject) using

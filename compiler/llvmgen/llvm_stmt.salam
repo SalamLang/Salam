@@ -263,6 +263,16 @@ func const_i64(a &: at.Ast, n: int, out &: i64): bool:
     ret true
 end
 
+// Whether `repeat n`'s count is a 64-bit unsigned value, and so has to be
+// compared against the counter as one.
+func repeat_count_unsigned(v &: Lv, a &: at.Ast, count: int): bool:
+    if count == 0:
+        ret false
+    end
+    cts := at.Get(a, count).type_str
+    ret is_int_ts(cts) && !is_signed_ts(cts) && int_bits(v, cts) >= 64
+end
+
 // ll_repeat
 func lv_repeat(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     node := at.Get(a, n)
@@ -319,8 +329,14 @@ func lv_repeat(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     emit(v, "store i64 " + start_val + ", ptr " + counter)
     locals_mark := v.locals.len()
     mut bind_slot := ""
-    bind_is_i64 := str.Len(node.type_str) > 0 && str.Equals(node.type_str, "i64")
-    bind_ty := bind_is_i64 ? "i64" : "i32"
+    // The index carries the type semantic analysis gave it - the width of
+    // the values that drive the loop - so an i8 count binds an i8 index
+    // and a u64 count keeps its top bit. The counter itself stays 64-bit
+    // either way: it has to hold the count, and `repeat n` over an i8 n
+    // still walks 0..n.
+    idx_ts := str.Len(node.type_str) > 0 ? node.type_str : "i32"
+    bind_ty := ty_of(v, s, a, idx_ts)
+    bind_bits := int_bits(v, idx_ts)
     if str.Len(node.name) > 0:
         bind_slot = "%v." + safe_name(node.name) + "." + co.I64Toa(v.tmp as i64)
         v.tmp += 1
@@ -349,18 +365,24 @@ func lv_repeat(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
         cmp = new_tmp(v)
         emit(v, cmp + " = select i1 " + going_up + ", i1 " + at_or_below + ", i1 " + at_or_above)
     else:
+        // `repeat n`: unsigned where the count is, since a u64 count above
+        // INT64_MAX compares as negative and the loop never starts.
         cmp = new_tmp(v)
-        emit(v, cmp + " = icmp slt i64 " + cur + ", " + bound_val)
+        emit(
+            v, cmp + " = icmp " + (repeat_count_unsigned(v, a, node.a) ? "ult" : "slt") + " i64 " + cur + ", " + bound_val
+        )
     end
     emit_term(v, "br i1 " + cmp + ", label %" + bodyL + ", label %" + endL)
     emit_label(v, bodyL)
     if str.Len(bind_slot) > 0:
-        if bind_is_i64:
+        if bind_bits >= 64:
             emit(v, "store i64 " + cur + ", ptr " + bind_slot)
         else:
+            // Narrowing, never truncating anything that matters: every
+            // value the counter takes came from a bound of this width.
             narrowed := new_tmp(v)
-            emit(v, narrowed + " = trunc i64 " + cur + " to i32")
-            emit(v, "store i32 " + narrowed + ", ptr " + bind_slot)
+            emit(v, narrowed + " = trunc i64 " + cur + " to " + bind_ty)
+            emit(v, "store " + bind_ty + " " + narrowed + ", ptr " + bind_slot)
         end
     end
     if v.nloop >= 64:

@@ -40,20 +40,44 @@ import sort
 // straight loop is faster. 64 keeps the recursion depth at log2(n) - 6.
 const _SUM_BLOCK := 64
 
-func _sum_flat(x &: Matrix, lo: int, hi: int): f64:
+// Takes the payload pointer rather than the Matrix: the base case reads one
+// element per iteration and going through a.get re-loaded `data` and `count`
+// every time. The block loop stays strictly left-to-right and the split stays
+// at n/2, because the summation ORDER is the accuracy guarantee here - any
+// reassociation would change the last bits of every reduction in the library.
+func _sum_flat(p: f64*, lo: int, hi: int): f64:
     n := hi - lo
     if n <= 0: ret 0.0 end
     if n <= _SUM_BLOCK:
-        mut s := 0.0
-        mut k := lo
-        until k < hi:
-            s += x.a.get(k)
-            k += 1
+        base := _row(p, lo)
+        // Four running totals rather than one. A single accumulator is a
+        // serial dependence chain that no vectoriser is allowed to break,
+        // because floating-point addition does not associate; four let the
+        // block go four elements per add. The pairwise split above is what
+        // bounds the error, and four lanes inside a 64-element block only
+        // makes it smaller, but it does change which additions happen in
+        // which order, so Sum is not bit-for-bit what it was before.
+        mut s0 := 0.0
+        mut s1 := 0.0
+        mut s2 := 0.0
+        mut s3 := 0.0
+        mut i := 0
+        until i + 3 < n:
+            s0 += base[i]
+            s1 += base[i + 1]
+            s2 += base[i + 2]
+            s3 += base[i + 3]
+            i += 4
+        end
+        mut s := (s0 + s1) + (s2 + s3)
+        until i < n:
+            s += base[i]
+            i += 1
         end
         ret s
     end
     mid := lo + n / 2
-    ret _sum_flat(x, lo, mid) + _sum_flat(x, mid, hi)
+    ret _sum_flat(p, lo, mid) + _sum_flat(p, mid, hi)
 end
 
 func _row_sum(x &: Matrix, i: int): f64:
@@ -117,7 +141,7 @@ end
 @en "Sum"
 @fa "مجموع"
 @ar "مجموع"
-pub func Sum(x &: Matrix): f64: ret _sum_flat(x, 0, x.count()) end
+pub func Sum(x &: Matrix): f64: ret _sum_flat(x.a.data, 0, x.count()) end
 
 @en "Prod"
 @fa "حاصل‌ضرب"

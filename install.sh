@@ -211,21 +211,21 @@ usage() {
 Salam installer for Linux, macOS and the BSDs
 
 Usage:
-  install.sh [--dir DIR] [--version X.Y.Z] [--platform NAME]
-             [--no-modify-path] [--no-color]
+    install.sh [--dir DIR] [--version X.Y.Z] [--platform NAME]
+        [--no-modify-path] [--no-color]
 
 Options:
-  -d, --dir DIR         install into DIR (default $HOME/.salam/bin)
-  -v, --version X.Y.Z   install this exact release instead of the newest
-  -p, --platform NAME   force a release asset (linux, linux-i686,
-                        linux-aarch64, linux-armhf, mac)
-      --no-modify-path  never touch your shell startup files
-      --no-color        plain output, no colors
-  -h, --help            show this help
+    -d, --dir DIR        install into DIR (default $HOME/.salam/bin)
+    -v, --version X.Y.Z  install this exact release instead of the newest
+    -p, --platform NAME  force a release asset (linux, linux-i686,
+        linux-aarch64, linux-armhf, mac)
+    --no-modify-path     never touch your shell startup files
+    --no-color           plain output, no colors
+    -h, --help           show this help
 
 Environment:
-  SALAM_INSTALL_DIR, SALAM_VERSION, SALAM_PLATFORM,
-  SALAM_NO_MODIFY_PATH, NO_COLOR, GITHUB_TOKEN
+    SALAM_INSTALL_DIR, SALAM_VERSION, SALAM_PLATFORM,
+    SALAM_NO_MODIFY_PATH, NO_COLOR, GITHUB_TOKEN
 
 USAGE
 }

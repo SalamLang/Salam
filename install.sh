@@ -468,6 +468,14 @@ elif command -v ftp >/dev/null 2>&1; then
     esac
 fi
 
+WGET_FLAGS="--tries=3 --timeout=20"
+
+if [ "$DL_TOOL" = "wget" ]; then
+    case "$(wget --help 2>&1 | head -n 5 || true)" in
+    *BusyBox* | *busybox*) WGET_FLAGS="-T 20" ;;
+    esac
+fi
+
 fetch_to_stdout() {
     _auth=""
 
@@ -493,10 +501,10 @@ fetch_to_stdout() {
         ;;
     wget)
         if [ -n "$_auth" ]; then
-            wget -qO- --tries=3 --timeout=20 -U "$USER_AGENT" \
+            wget $WGET_FLAGS -qO- -U "$USER_AGENT" \
                 --header="$_auth" "$1"
         else
-            wget -qO- --tries=3 --timeout=20 -U "$USER_AGENT" "$1"
+            wget $WGET_FLAGS -qO- -U "$USER_AGENT" "$1"
         fi
         ;;
     fetch)
@@ -515,7 +523,7 @@ fetch_to_file() {
             -A "$USER_AGENT" -o "$2" "$1"
         ;;
     wget)
-        wget -q --tries=3 --timeout=20 -U "$USER_AGENT" -O "$2" "$1"
+        wget $WGET_FLAGS -q -U "$USER_AGENT" -O "$2" "$1"
         ;;
     fetch)
         fetch -q -o "$2" "$1"
@@ -545,8 +553,7 @@ probe_url() {
             -A "$USER_AGENT" "$1" 2>/dev/null || true)
         ;;
     wget)
-        _headers=$(wget --spider -S --tries=2 --timeout=20 \
-            -U "$USER_AGENT" "$1" 2>&1 || true)
+        _headers=$(wget $WGET_FLAGS --spider -S -U "$USER_AGENT" "$1" 2>&1 || true)
         ;;
     fetch)
         # -s prints the size and downloads nothing, which is exactly the
@@ -730,14 +737,17 @@ latest_tag_via_redirect() {
             "$RELEASES_URL/latest" 2>/dev/null || true)
         ;;
     wget)
-        _location=$(wget --max-redirect=0 -S --spider --tries=2 --timeout=20 \
+        _location=$(wget $WGET_FLAGS --max-redirect=0 -S --spider \
             -U "$USER_AGENT" "$RELEASES_URL/latest" 2>&1 |
             tr -d '\015' | sed -n 's/^ *[Ll]ocation: *//p' | tail -n 1 || true)
         ;;
     esac
 
+    # The class has to exclude whitespace: GNU wget writes the header as
+    # "Location: <url> [following]", and everything after the tag would
+    # otherwise be swallowed into it.
     printf '%s\n' "$_location" |
-        sed -n 's#.*/releases/tag/\([^/?#]*\).*#\1#p'
+        sed -n 's#.*/releases/tag/\([^/?#[:space:]]*\).*#\1#p'
 }
 
 tags_via_atom() {

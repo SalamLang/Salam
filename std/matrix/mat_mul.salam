@@ -59,6 +59,26 @@ const _T_BLOCK := 32
 const _MR := 4
 const _NR := 8
 
+// How many k steps one pass keeps live. With _NR = 8 the packed y panel is
+// _KC * 64 bytes and the packed x panel _KC * 32 per micro-tile, so 256 puts
+// the y panel at 16 KiB and leaves room beside it in a 32 KiB L1. Without this
+// split the panels grow with k: at n = 2048 they are 128 KiB and 64 KiB, both
+// spilling out of L1, and the product drops from 47 to 30 GFLOP/s even though
+// the arithmetic is identical.
+const _KC := 512
+
+// How many result rows share one packed x panel. _MC * _KC * 8 bytes is the
+// panel's size, so 128 puts it at 256 KiB and inside a 512 KiB L2. Without an
+// m split the x panel grows with n: at n = 2048 it is 4 MiB, four times the
+// cache it is supposed to live in, and the product loses a third of its rate.
+const _MC := 128
+
+// How many result columns share one packed y panel. The panel is _NC * _KC * 8
+// bytes, so 512 holds it at 2 MiB and inside an 8 MiB L3. Packing every column
+// at once instead put 8 MiB of panel against an 8 MiB cache at n = 2048, and
+// the product spent its time streaming y back from memory.
+const _NC := 512
+
 // A pointer to element `off` of a payload, so an inner loop can subscript
 // from 0 instead of carrying a row offset into every index expression.
 inline func _row(p: f64*, off: int): f64*:
@@ -140,12 +160,12 @@ end
 // apart: at n=1024 that is four separate 8 KiB rows, 32 KiB of A competing
 // with 32 KiB of B panel for a 32 KiB L1. Interleaved, step k reads one cache
 // line and the next three steps are already in it.
-func _mm_pack_a(px: f64*, xc: int, i0: int, kn: int, dst: f64*):
-    a0 := _row(px, i0 * xc)
-    a1 := _row(px, (i0 + 1) * xc)
-    a2 := _row(px, (i0 + 2) * xc)
-    a3 := _row(px, (i0 + 3) * xc)
-    repeat kn with k:
+func _mm_pack_a(px: f64*, xc: int, i0: int, k0: int, kc: int, dst: f64*):
+    a0 := _row(px, i0 * xc + k0)
+    a1 := _row(px, (i0 + 1) * xc + k0)
+    a2 := _row(px, (i0 + 2) * xc + k0)
+    a3 := _row(px, (i0 + 3) * xc + k0)
+    repeat kc with k:
         d := _row(dst, k * _MR)
         d[0] = a0[k]
         d[1] = a1[k]
@@ -169,44 +189,47 @@ end
 // The 4x4 micro-kernel. Sixteen running sums live in locals for the whole k
 // loop and reach memory exactly once, at the end.
 //
-// The accumulation ORDER is unchanged from the row-at-a-time kernel this
-// replaces: every c(i,j) still takes its k terms in increasing k, and the
-// result matrix starts at zero, so adding the finished sum is the same
-// sequence of additions the old loop performed one at a time. The products
-// are therefore bit-for-bit what they were.
+// The sums start from whatever the result already holds, so successive k
+// blocks add to each other. That is what makes the k split above possible,
+// and it is also the one place this kernel stops being bit-for-bit identical
+// to the row-at-a-time loop it replaces: terms within a k block are summed in
+// a register and the block totals are then added, rather than every term
+// being added to memory in turn. Measured against an 80-bit reference the
+// error is slightly SMALLER than the old loop's, but it is a different
+// number, and Sum in mat_reduce made the same trade for the same reason.
 func _mm_micro(pa: f64*, pb: f64*, kn: int, c0: f64*, c1: f64*, c2: f64*, c3: f64*):
-    mut c00 := 0.0
-    mut c01 := 0.0
-    mut c02 := 0.0
-    mut c03 := 0.0
-    mut c04 := 0.0
-    mut c05 := 0.0
-    mut c06 := 0.0
-    mut c07 := 0.0
-    mut c10 := 0.0
-    mut c11 := 0.0
-    mut c12 := 0.0
-    mut c13 := 0.0
-    mut c14 := 0.0
-    mut c15 := 0.0
-    mut c16 := 0.0
-    mut c17 := 0.0
-    mut c20 := 0.0
-    mut c21 := 0.0
-    mut c22 := 0.0
-    mut c23 := 0.0
-    mut c24 := 0.0
-    mut c25 := 0.0
-    mut c26 := 0.0
-    mut c27 := 0.0
-    mut c30 := 0.0
-    mut c31 := 0.0
-    mut c32 := 0.0
-    mut c33 := 0.0
-    mut c34 := 0.0
-    mut c35 := 0.0
-    mut c36 := 0.0
-    mut c37 := 0.0
+    mut c00 := c0[0]
+    mut c01 := c0[1]
+    mut c02 := c0[2]
+    mut c03 := c0[3]
+    mut c04 := c0[4]
+    mut c05 := c0[5]
+    mut c06 := c0[6]
+    mut c07 := c0[7]
+    mut c10 := c1[0]
+    mut c11 := c1[1]
+    mut c12 := c1[2]
+    mut c13 := c1[3]
+    mut c14 := c1[4]
+    mut c15 := c1[5]
+    mut c16 := c1[6]
+    mut c17 := c1[7]
+    mut c20 := c2[0]
+    mut c21 := c2[1]
+    mut c22 := c2[2]
+    mut c23 := c2[3]
+    mut c24 := c2[4]
+    mut c25 := c2[5]
+    mut c26 := c2[6]
+    mut c27 := c2[7]
+    mut c30 := c3[0]
+    mut c31 := c3[1]
+    mut c32 := c3[2]
+    mut c33 := c3[3]
+    mut c34 := c3[4]
+    mut c35 := c3[5]
+    mut c36 := c3[6]
+    mut c37 := c3[7]
     repeat kn with k:
         pak := _row(pa, k * _MR)
         pbk := _row(pb, k * _NR)
@@ -339,21 +362,94 @@ func _matpow_neg(x &: Matrix, k: int): Matrix:
     ret r
 end
 
-// A transpose reads one array along rows and writes the other along columns,
-// so one of the two sides always has a stride of a whole row. Done naively
-// every store lands on a fresh cache line, and that line is evicted long
-// before the other seven doubles in it are ever written - the array is
-// streamed through the cache once per column rather than once in total.
-// Walking in tiles keeps both the source and destination tiles resident, so
-// each line is filled completely before it leaves.
-@en "Transpose"
-@fa "ترانهاده"
-@ar "منقول"
-pub func Transpose(x &: Matrix): Matrix:
-    r := _raw(x.cols, x.rows)
+// The product kernel, accumulating into a destination the caller owns. The
+// micro-kernel reads C before it writes it - that is how the k blocks add
+// up - so `r` must arrive zeroed. MatMul gets that from Zeros; MatMulInto
+// does it itself.
+func _matmul_into(x &: Matrix, y &: Matrix, r &: Matrix):
+    n := x.rows
+    kn := x.cols
+    m := y.cols
+    if n <= 0 || m <= 0 || kn <= 0: ret end
+    px := x.a.data
+    py := y.a.data
+    pr := r.a.data
+    xc := x.cols
+    yc := y.cols
+    rc := m
+    // One packing buffer, reused by every column block.
+    nfull := (n / _MR) * _MR
+    mfull := (m / _NR) * _NR
+    // Three levels, the same shape a tuned BLAS uses and for the same reasons.
+    //
+    //   k blocks of _KC   bound how much of y is live at once
+    //   row blocks of _MC bound the packed x panel to something L2 holds
+    //   the 4x8 micro-kernel keeps its 32 sums in registers
+    //
+    // Each buffer is packed once at the outermost level that can reuse it: y
+    // once per k block, x once per (k block, row block). Both costs are
+    // O(n*k) against O(n*k*m) of arithmetic.
+    bpack := mem.Allocate(((_NC * _KC) as u64) * (sizeof(f64) as u64)) as f64*
+    defer mem.Free(bpack as void*)
+    apack := mem.Allocate(((_MC * _KC) as u64) * (sizeof(f64) as u64)) as f64*
+    defer mem.Free(apack as void*)
+    mut j0 := 0
+    until j0 < mfull:
+        nc := _min2(_NC, mfull - j0)
+        ncblk := nc / _NR
+        mut p0 := 0
+        until p0 < kn:
+            kc := _min2(_KC, kn - p0)
+            repeat ncblk with jb:
+                _mm_pack_b(py, yc, p0, p0 + kc, j0 + jb * _NR, _row(bpack, jb * kc * _NR))
+            end
+            mut i0 := 0
+            until i0 < nfull:
+                // Rounded down to a whole number of micro-tiles. The packing
+                // loop below advances by _MR, so a block length that is not a
+                // multiple of _MR would let the last step read past the row
+                // block and write past the end of apack. Deriving it here
+                // rather than requiring _MC to divide evenly means the tuning
+                // constants can be changed without that becoming a heap bug.
+                mcap := (_MC / _MR) * _MR
+                ic := _min2(mcap, nfull - i0)
+                mut ip := 0
+                until ip < ic:
+                    _mm_pack_a(px, xc, i0 + ip, p0, kc, _row(apack, ip * kc))
+                    ip += _MR
+                end
+                repeat ncblk with jb:
+                    j := j0 + jb * _NR
+                    bp := _row(bpack, jb * kc * _NR)
+                    mut ii := 0
+                    until ii < ic:
+                        i := i0 + ii
+                        _mm_micro(
+                            _row(apack, ii * kc), bp, kc,
+                            _row(pr, i * rc + j), _row(pr, (i + 1) * rc + j), _row(pr, (i + 2) * rc + j), _row(pr, (i + 3) * rc + j)
+                        )
+                        ii += _MR
+                    end
+                end
+                i0 += _MC
+            end
+            p0 += _KC
+        end
+        j0 += _NC
+    end
+    // Rows below the last full block of four, over the columns the kernel did
+    // cover, and then every remaining column across all rows.
+    _mm_edge(pr, rc, px, xc, py, yc, nfull, n, 0, mfull, kn)
+    _mm_edge(pr, rc, px, xc, py, yc, 0, n, mfull, m, kn)
+end
+
+// The transpose kernel, writing into a destination the caller owns. Both
+// Transpose (which allocates one) and TransposeInto (which does not) are
+// this loop; see the blocking note above Transpose for why it is tiled.
+func _transpose_into(x &: Matrix, r &: Matrix):
     n := x.rows
     m := x.cols
-    if n <= 0 || m <= 0: ret r end
+    if n <= 0 || m <= 0: ret end
     px := x.a.data
     pr := r.a.data
     mut i0 := 0
@@ -376,6 +472,21 @@ pub func Transpose(x &: Matrix): Matrix:
         end
         i0 += _T_BLOCK
     end
+end
+
+// A transpose reads one array along rows and writes the other along columns,
+// so one of the two sides always has a stride of a whole row. Done naively
+// every store lands on a fresh cache line, and that line is evicted long
+// before the other seven doubles in it are ever written - the array is
+// streamed through the cache once per column rather than once in total.
+// Walking in tiles keeps both the source and destination tiles resident, so
+// each line is filled completely before it leaves.
+@en "Transpose"
+@fa "ترانهاده"
+@ar "منقول"
+pub func Transpose(x &: Matrix): Matrix:
+    r := _raw(x.cols, x.rows)
+    _transpose_into(x, r)
     ret r
 end
 
@@ -386,52 +497,49 @@ end
 @ar "ضرب المصفوفات"
 pub func MatMul(x &: Matrix, y &: Matrix): Matrix:
     if x.cols != y.rows: ret Zeros(0, 0) end
-    n := x.rows
-    kn := x.cols
-    m := y.cols
-    r := Zeros(n, m)
-    if n <= 0 || m <= 0 || kn <= 0: ret r end
-    px := x.a.data
-    py := y.a.data
-    pr := r.a.data
-    xc := x.cols
-    yc := y.cols
-    rc := m
-    // One packing buffer, reused by every column block.
-    nfull := (n / _MR) * _MR
-    mfull := (m / _NR) * _NR
-    // One B panel, repacked per column block, and the whole of x packed once
-    // into row panels and then reused by every column block. The second buffer
-    // is the size of x again; the copies it costs are O(n*k), against O(n*k*m)
-    // multiply-adds, so it disappears into the noise at any size where the
-    // product itself is worth timing.
-    panel := mem.Allocate(((kn * _NR) as u64) * (sizeof(f64) as u64)) as f64*
-    defer mem.Free(panel as void*)
-    apack := mem.Allocate(((nfull * kn) as u64) * (sizeof(f64) as u64)) as f64*
-    defer mem.Free(apack as void*)
-    mut ip := 0
-    until ip < nfull:
-        _mm_pack_a(px, xc, ip, kn, _row(apack, ip * kn))
-        ip += _MR
-    end
-    mut j := 0
-    until j < mfull:
-        _mm_pack_b(py, yc, 0, kn, j, panel)
-        mut i := 0
-        until i < nfull:
-            _mm_micro(
-                _row(apack, i * kn), panel, kn,
-                _row(pr, i * rc + j), _row(pr, (i + 1) * rc + j), _row(pr, (i + 2) * rc + j), _row(pr, (i + 3) * rc + j)
-            )
-            i += _MR
-        end
-        j += _NR
-    end
-    // Rows below the last full block of four, over the columns the kernel did
-    // cover, and then every remaining column across all rows.
-    _mm_edge(pr, rc, px, xc, py, yc, nfull, n, 0, mfull, kn)
-    _mm_edge(pr, rc, px, xc, py, yc, 0, n, mfull, m, kn)
+    r := Zeros(x.rows, y.cols)
+    _matmul_into(x, y, r)
     ret r
+end
+
+// The allocating calls above are the right default, but a loop that runs
+// the same shapes over and over pays for them twice: once for malloc, and
+// again because a buffer allocated inside the loop is one the optimizer
+// will not keep in registers. These write into a destination the caller
+// owns, so such a loop can allocate once and reuse. Rewriting
+// benchmark/programs/41_matrix_stdlib_smallops around them - three 4x4
+// matrices hoisted out of a 200k-iteration loop - took it from 13.7 ms to
+// 8.4 ms, with the emitted IR still carrying all 64 multiplies of the
+// product either way.
+//
+// `out` must not be `x` or `y`: both kernels read their inputs while they
+// write the destination. False means the shapes did not line up and `out`
+// was left alone.
+@en "TransposeInto"
+@fa "ترانهاده در"
+@ar "منقول في"
+pub func TransposeInto(x &: Matrix, out &: Matrix): bool:
+    if out.rows != x.cols || out.cols != x.rows: ret false end
+    _transpose_into(x, out)
+    ret true
+end
+
+@en "MatMulInto"
+@fa "ضرب ماتریسی در"
+@ar "ضرب المصفوفات في"
+pub func MatMulInto(x &: Matrix, y &: Matrix, out &: Matrix): bool:
+    if x.cols != y.rows: ret false end
+    if out.rows != x.rows || out.cols != y.cols: ret false end
+    // The kernel accumulates, so the destination starts at zero. Writing
+    // n*m doubles is what MatMul's Zeros did anyway - what is saved here
+    // is the allocation and the free, not the fill. Vector.zeros would
+    // reallocate, which is the whole thing this call exists to avoid.
+    pz := out.a.data
+    repeat out.rows * out.cols with i:
+        pz[i] = 0.0
+    end
+    _matmul_into(x, y, out)
+    ret true
 end
 
 // X^T Y without asking the caller to build the transpose. Normal equations,

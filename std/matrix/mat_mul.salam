@@ -42,33 +42,72 @@ package matrix
 
 const _MAT_BLOCK := 64
 
+// Square tile side for the transpose. 32x32 f64 is 8 KiB per tile, so the
+// source tile and the destination tile together sit inside a 32 KiB L1.
+const _T_BLOCK := 32
+
+// A pointer to element `off` of a payload, so an inner loop can subscript
+// from 0 instead of carrying a row offset into every index expression.
+inline func _row(p: f64*, off: int): f64*:
+    ret (p as i64 + (off as i64) * (sizeof(f64) as i64)) as f64*
+end
+
+func _min2(a: int, b: int): int:
+    if a < b: ret a end
+    ret b
+end
+
 func _mm_end(start: int, limit: int): int:
     e := start + _MAT_BLOCK
     if e > limit: ret limit end
     ret e
 end
 
-// r(i, j0..j1) += v * y(k, j0..j1). Split out of the tile loop so the tile
-// itself stays at three levels of nesting, and so this one line is the only
-// thing in the hot path.
-func _mm_axpy(r &: Matrix, i: int, v: f64, y &: Matrix, k: int, j0: int, j1: int):
-    mut j := j0
-    until j < j1:
-        r.add_at(i, j, v * y.at(k, j))
-        j += 1
-    end
+// r(row ro, j0..j1) += v * y(row yo, j0..j1), addressed through the two
+// payload pointers rather than through Matrix.at/add_at.
+//
+// The accessor form cost this loop far more than the one extra call it looks
+// like. `r.add_at(i, j, ...)` re-reads r.cols and r.a.data on every
+// iteration, and so does y.at(k, j), because a double store through one
+// Matrix cannot be proven not to alias another Matrix's own fields - four
+// loads and two integer multiplies per fused multiply-add, none of them
+// removable. Passing the bases in as pointers makes the addresses
+// loop-invariant, which is also what lets the vectoriser version the loop
+// against a runtime overlap check instead of giving up.
+// The subscript is a bare induction variable, and that detail is the whole
+// point of the shape. Salam's `int` wraps modulo 2^32, so codegen emits every
+// int add as `(int32_t)((uint32_t)a + (uint32_t)b)`; inside a subscript that
+// is opaque to the vectoriser's dependence analysis, which needs the address
+// to be an affine function of the induction variable. A `repeat` loop over a
+// pointer already offset to the row start gives exactly that - the C backend
+// emits it as `for (int64_t __rep = 0; ...)` and the loop vectorises. The
+// same body written as `until j < j1` with `pr[ro + j]` does not.
+func _mm_axpy(pr: f64*, v: f64, py: f64*, cnt: int):
+    repeat cnt with t: pr[t] = pr[t] + v * py[t] end
 end
 
 func _mm_tile(r &: Matrix, x &: Matrix, y &: Matrix, ii: int, kk: int, jj: int):
     i1 := _mm_end(ii, r.rows)
     k1 := _mm_end(kk, x.cols)
     j1 := _mm_end(jj, r.cols)
+    pr := r.a.data
+    px := x.a.data
+    py := y.a.data
+    rc := r.cols
+    xc := x.cols
+    yc := y.cols
+    cnt := j1 - jj
     mut i := ii
     until i < i1:
+        xo := i * xc
+        rrow := _row(pr, i * rc + jj)
         mut k := kk
         until k < k1:
-            v := x.at(i, k)
-            if v != 0.0: _mm_axpy(r, i, v, y, k, jj, j1) end
+            v := px[xo + k]
+            // The zero test is what makes a sparse operand cost what its
+            // sparsity says it should; it sits in the middle loop, not the
+            // inner one, so it never blocks vectorisation.
+            if v != 0.0: _mm_axpy(rrow, v, _row(py, k * yc + jj), cnt) end
             k += 1
         end
         i += 1
@@ -106,13 +145,42 @@ func _matpow_neg(x &: Matrix, k: int): Matrix:
     ret r
 end
 
+// A transpose reads one array along rows and writes the other along columns,
+// so one of the two sides always has a stride of a whole row. Done naively
+// every store lands on a fresh cache line, and that line is evicted long
+// before the other seven doubles in it are ever written - the array is
+// streamed through the cache once per column rather than once in total.
+// Walking in tiles keeps both the source and destination tiles resident, so
+// each line is filled completely before it leaves.
 @en "Transpose"
 @fa "ترانهاده"
 @ar "منقول"
 pub func Transpose(x &: Matrix): Matrix:
-    mut r := Zeros(x.cols, x.rows)
-    repeat x.rows with i:
-        repeat x.cols with j: r.set(j, i, x.at(i, j)) end
+    r := Zeros(x.cols, x.rows)
+    n := x.rows
+    m := x.cols
+    if n <= 0 || m <= 0: ret r end
+    px := x.a.data
+    pr := r.a.data
+    mut i0 := 0
+    until i0 < n:
+        i1 := _min2(i0 + _T_BLOCK, n)
+        mut j0 := 0
+        until j0 < m:
+            j1 := _min2(j0 + _T_BLOCK, m)
+            mut i := i0
+            until i < i1:
+                xo := i * m
+                mut j := j0
+                until j < j1:
+                    pr[j * n + i] = px[xo + j]
+                    j += 1
+                end
+                i += 1
+            end
+            j0 += _T_BLOCK
+        end
+        i0 += _T_BLOCK
     end
     ret r
 end

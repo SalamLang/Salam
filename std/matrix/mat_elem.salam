@@ -41,24 +41,49 @@ func _elem_ok(x &: Matrix, y &: Matrix): bool:
     ret true
 end
 
-// Every same-shape binary op is this loop with a different operator, so the
-// four of them share one dispatch rather than four near-identical bodies.
+// Every same-shape binary op is this function with a different operator, but
+// the operator is chosen ONCE, outside the loop, and each arm is its own flat
+// pointer loop. The two things that costs us in source duplication it buys
+// back in generated code:
+//
+//   - A shared `_apply_op(u, v, op)` helper puts a runtime branch in the loop
+//     body. gcc reports exactly that as "not vectorized: unsupported control
+//     flow in loop" and gives up, so every entrywise op ran one element per
+//     iteration no matter the optimisation level.
+//   - Going through a.get/a.set re-reads `data` and `count` from the Vector
+//     on every element. A double store cannot be proven not to alias the
+//     Vector struct itself, so the reload is not removable - hoisting the
+//     three payload pointers into locals here is what makes the addresses
+//     loop-invariant and lets the vectoriser version the loop.
+//
 // op: 0 add, 1 subtract, 2 multiply, 3 divide.
 func _zip(x &: Matrix, y &: Matrix, op: int): Matrix:
     if _elem_ok(x, y) == false: ret Zeros(0, 0) end
-    mut r := Zeros(x.rows, x.cols)
-    repeat x.count() with k:
-        r.a.set(k, _apply_op(x.a.get(k), y.a.get(k), op))
+    // Not `mut`: every write goes through the payload pointer below, so the
+    // Matrix value itself is never reassigned.
+    r := Zeros(x.rows, x.cols)
+    n := x.count()
+    if n <= 0: ret r end
+    px := x.a.data
+    py := y.a.data
+    pr := r.a.data
+    if op == 0:
+        repeat n with k: pr[k] = px[k] + py[k] end
+    else op == 1:
+        repeat n with k: pr[k] = px[k] - py[k] end
+    else op == 2:
+        repeat n with k: pr[k] = px[k] * py[k] end
+    else:
+        // Division keeps its guard: a zero divisor yields 0 rather than an
+        // infinity, so one dead entry cannot poison a later reduction. The
+        // branch is unavoidable here, and this arm does not vectorise.
+        repeat n with k:
+            v := py[k]
+            if v == 0.0: pr[k] = 0.0
+            else: pr[k] = px[k] / v end
+        end
     end
     ret r
-end
-
-func _apply_op(u: f64, v: f64, op: int): f64:
-    if op == 0: ret u + v end
-    if op == 1: ret u - v end
-    if op == 2: ret u * v end
-    if v == 0.0: ret 0.0 end
-    ret u / v
 end
 
 @en "Add"

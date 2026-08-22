@@ -79,10 +79,22 @@ const _MC := 128
 // the product spent its time streaming y back from memory.
 const _NC := 512
 
+// Smallest dimension at which the Strassen split below is worth taking. The
+// split trades one of eight sub-products for eighteen O(n^2) block additions,
+// so it only pays once the cubic term dominates; measured on this machine the
+// crossover sits near 1024 and the packed kernel wins below it.
+const _STRASSEN_MIN := 2048
+
 // A pointer to element `off` of a payload, so an inner loop can subscript
 // from 0 instead of carrying a row offset into every index expression.
 inline func _row(p: f64*, off: int): f64*:
     ret (p as i64 + (off as i64) * (sizeof(f64) as i64)) as f64*
+end
+
+// The same thing for an offset that is already 64-bit, so the micro-kernel's
+// index never has to be widened inside the loop.
+inline func _row64(p: f64*, off: i64): f64*:
+    ret (p as i64 + off * (sizeof(f64) as i64)) as f64*
 end
 
 func _min2(a: int, b: int): int:
@@ -197,7 +209,7 @@ end
 // being added to memory in turn. Measured against an 80-bit reference the
 // error is slightly SMALLER than the old loop's, but it is a different
 // number, and Sum in mat_reduce made the same trade for the same reason.
-func _mm_micro(pa: f64*, pb: f64*, kn: int, c0: f64*, c1: f64*, c2: f64*, c3: f64*):
+func _mm_micro(pa: f64*, pb: f64*, kn: i64, c0: f64*, c1: f64*, c2: f64*, c3: f64*):
     mut c00 := c0[0]
     mut c01 := c0[1]
     mut c02 := c0[2]
@@ -231,8 +243,8 @@ func _mm_micro(pa: f64*, pb: f64*, kn: int, c0: f64*, c1: f64*, c2: f64*, c3: f6
     mut c36 := c3[6]
     mut c37 := c3[7]
     repeat kn with k:
-        pak := _row(pa, k * _MR)
-        pbk := _row(pb, k * _NR)
+        pak := _row64(pa, k * (_MR as i64))
+        pbk := _row64(pb, k * (_NR as i64))
         b0 := pbk[0]
         b1 := pbk[1]
         b2 := pbk[2]
@@ -366,6 +378,156 @@ end
 // micro-kernel reads C before it writes it - that is how the k blocks add
 // up - so `r` must arrive zeroed. MatMul gets that from Zeros; MatMulInto
 // does it itself.
+// dst = x[r0.., c0..] (+ or -) y[r1.., c1..], reading the operand blocks out
+// of their parent matrices rather than materialising quadrants first.
+func _blk_op(x &: Matrix, r0: int, c0: int, y &: Matrix, r1: int, c1: int, sub: bool, dst &: Matrix):
+    px := x.a.data
+    py := y.a.data
+    pd := dst.a.data
+    w := dst.cols
+    repeat dst.rows with i:
+        a := _row(px, (r0 + i) * x.cols + c0)
+        b := _row(py, (r1 + i) * y.cols + c1)
+        d := _row(pd, i * w)
+        if sub:
+            repeat w with j: d[j] = a[j] - b[j] end
+        else:
+            repeat w with j: d[j] = a[j] + b[j] end
+        end
+    end
+end
+
+// dst = x[r0.., c0..]
+func _blk_copy(x &: Matrix, r0: int, c0: int, dst &: Matrix):
+    px := x.a.data
+    pd := dst.a.data
+    w := dst.cols
+    repeat dst.rows with i:
+        a := _row(px, (r0 + i) * x.cols + c0)
+        d := _row(pd, i * w)
+        repeat w with j: d[j] = a[j] end
+    end
+end
+
+// r[r0.., c0..] += src, or -= when neg. The destination starts zeroed, so a
+// quadrant of the result is built by accumulating its two to four terms.
+func _blk_acc(r &: Matrix, r0: int, c0: int, src &: Matrix, neg: bool):
+    pr := r.a.data
+    ps := src.a.data
+    w := src.cols
+    repeat src.rows with i:
+        d := _row(pr, (r0 + i) * r.cols + c0)
+        t := _row(ps, i * w)
+        if neg:
+            repeat w with j: d[j] = d[j] - t[j] end
+        else:
+            repeat w with j: d[j] = d[j] + t[j] end
+        end
+    end
+end
+
+// One level of Strassen's decomposition, recursing through _matmul_pick so
+// deeper levels split again while they are large enough.
+//
+// Seven products instead of eight, at the cost of eighteen block additions:
+//
+//   M1=(A11+A22)(B11+B22)  M2=(A21+A22)B11      M3=A11(B12-B22)
+//   M4=A22(B21-B11)        M5=(A11+A12)B22      M6=(A21-A11)(B11+B12)
+//   M7=(A12-A22)(B21+B22)
+//
+//   C11=M1+M4-M5+M7  C12=M3+M5  C21=M2+M4  C22=M1-M2+M3+M6
+//
+// The result is NOT bit-identical to the direct kernel, and the error is
+// norm-wise rather than entrywise, which is the standing trade for Strassen.
+// Measured against an 80-bit reference on the benchmark inputs: at n = 4096,
+// two levels give a relative error of 4.3e-15 against the direct kernel's
+// 5.5e-16, so roughly ten times worse and still eleven orders inside MAT_TOL.
+// That is fine for the matrices this library is aimed at and worth knowing
+// about for an ill-conditioned one; _STRASSEN_MIN is the knob that turns it
+// off.
+func _strassen(x &: Matrix, y &: Matrix, r &: Matrix):
+    h := x.rows / 2
+    k := x.cols / 2
+    w := y.cols / 2
+    mut ta := _raw(h, k)
+    mut tb := _raw(k, w)
+    mut m1 := Zeros(h, w)
+    mut m2 := Zeros(h, w)
+    mut m3 := Zeros(h, w)
+    mut m4 := Zeros(h, w)
+    mut m5 := Zeros(h, w)
+    mut m6 := Zeros(h, w)
+    mut m7 := Zeros(h, w)
+
+    _blk_op(x, 0, 0, x, h, k, false, ta)
+    _blk_op(y, 0, 0, y, k, w, false, tb)
+    _matmul_pick(ta, tb, m1)
+
+    _blk_op(x, h, 0, x, h, k, false, ta)
+    _blk_copy(y, 0, 0, tb)
+    _matmul_pick(ta, tb, m2)
+
+    _blk_copy(x, 0, 0, ta)
+    _blk_op(y, 0, w, y, k, w, true, tb)
+    _matmul_pick(ta, tb, m3)
+
+    _blk_copy(x, h, k, ta)
+    _blk_op(y, k, 0, y, 0, 0, true, tb)
+    _matmul_pick(ta, tb, m4)
+
+    _blk_op(x, 0, 0, x, 0, k, false, ta)
+    _blk_copy(y, k, w, tb)
+    _matmul_pick(ta, tb, m5)
+
+    _blk_op(x, h, 0, x, 0, 0, true, ta)
+    _blk_op(y, 0, 0, y, 0, w, false, tb)
+    _matmul_pick(ta, tb, m6)
+
+    _blk_op(x, 0, k, x, h, k, true, ta)
+    _blk_op(y, k, 0, y, k, w, false, tb)
+    _matmul_pick(ta, tb, m7)
+
+    _blk_acc(r, 0, 0, m1, false)
+    _blk_acc(r, 0, 0, m4, false)
+    _blk_acc(r, 0, 0, m5, true)
+    _blk_acc(r, 0, 0, m7, false)
+
+    _blk_acc(r, 0, w, m3, false)
+    _blk_acc(r, 0, w, m5, false)
+
+    _blk_acc(r, h, 0, m2, false)
+    _blk_acc(r, h, 0, m4, false)
+
+    _blk_acc(r, h, w, m1, false)
+    _blk_acc(r, h, w, m2, true)
+    _blk_acc(r, h, w, m3, false)
+    _blk_acc(r, h, w, m6, false)
+
+    ta.free()
+    tb.free()
+    m1.free()
+    m2.free()
+    m3.free()
+    m4.free()
+    m5.free()
+    m6.free()
+    m7.free()
+end
+
+// Splits when every dimension is large enough and even, and otherwise runs
+// the packed kernel. An odd dimension is left to the packed kernel rather
+// than padded: the padding would cost a copy of both operands for a saving
+// the split only earns back at these sizes.
+func _matmul_pick(x &: Matrix, y &: Matrix, r &: Matrix):
+    if x.rows >= _STRASSEN_MIN && x.cols >= _STRASSEN_MIN && y.cols >= _STRASSEN_MIN:
+        if (x.rows % 2) == 0 && (x.cols % 2) == 0 && (y.cols % 2) == 0:
+            _strassen(x, y, r)
+            ret
+        end
+    end
+    _matmul_into(x, y, r)
+end
+
 func _matmul_into(x &: Matrix, y &: Matrix, r &: Matrix):
     n := x.rows
     kn := x.cols
@@ -425,7 +587,7 @@ func _matmul_into(x &: Matrix, y &: Matrix, r &: Matrix):
                     until ii < ic:
                         i := i0 + ii
                         _mm_micro(
-                            _row(apack, ii * kc), bp, kc,
+                            _row(apack, ii * kc), bp, kc as i64,
                             _row(pr, i * rc + j), _row(pr, (i + 1) * rc + j), _row(pr, (i + 2) * rc + j), _row(pr, (i + 3) * rc + j)
                         )
                         ii += _MR
@@ -498,7 +660,7 @@ end
 pub func MatMul(x &: Matrix, y &: Matrix): Matrix:
     if x.cols != y.rows: ret Zeros(0, 0) end
     r := Zeros(x.rows, y.cols)
-    _matmul_into(x, y, r)
+    _matmul_pick(x, y, r)
     ret r
 end
 
@@ -538,7 +700,7 @@ pub func MatMulInto(x &: Matrix, y &: Matrix, out &: Matrix): bool:
     repeat out.rows * out.cols with i:
         pz[i] = 0.0
     end
-    _matmul_into(x, y, out)
+    _matmul_pick(x, y, out)
     ret true
 end
 

@@ -27,7 +27,23 @@ import cg "../codegen/codegen.salam"
 // never on the bitwise or shift operators, whose overflow is a different
 // question.
 func nowrap_flag(v &: Lv, k: int, isflt: bool, issigned: bool): str:
-    if !v.nowrap || isflt || !issigned:
+    // Float arithmetic gets the other half of this decision: `contract` lets
+    // the backend fuse an adjacent multiply and add into a single FMA, which
+    // rounds once rather than twice. That is a strictly smaller error, but a
+    // different answer, so it only appears under --fp-contract. Without the
+    // tag LLVM leaves the pair as vmulpd + vaddpd, which is two instructions
+    // and two dependent latencies per multiply-add: on a 4x4 matrix product
+    // micro-kernel that is most of the distance to a tuned BLAS.
+    if isflt:
+        if !v.fp_contract:
+            ret ""
+        end
+        if k == tok.TK_PLUS || k == tok.TK_MINUS || k == tok.TK_STAR:
+            ret " contract"
+        end
+        ret ""
+    end
+    if !v.nowrap || !issigned:
         ret ""
     end
     if k == tok.TK_PLUS || k == tok.TK_MINUS || k == tok.TK_STAR:

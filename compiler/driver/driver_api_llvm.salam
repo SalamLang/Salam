@@ -50,6 +50,26 @@ end
     // LLVM-C native path, is the only reachable backend here) for every output
     // mode except plain unoptimized --emit-llvm (which just leaves the .ll on
     // disk, matching the C's `ir_mode && !verify && opt_level==O0` skip).
+    // `salam build` means "give me a program to run", and the C backend has
+    // always read it that way: it hands the C compiler -O2 (-O3 for
+    // --release) without being asked. The LLVM backend was left at the
+    // -O0 that `salam llvm` uses for readable IR, so the same build was
+    // several times slower through what is now the DEFAULT backend - a
+    // plain counted loop measured 29x, an array-indexing one 4x. A named
+    // -O still wins, and a debug build still keeps its -O0.
+    func build_opt_level(opt &: Dr): int:
+        if opt.llvm_opt_set:
+            ret opt.llvm_opt_level
+        end
+        if opt.debug_info || opt.asan:
+            ret lv.LV_OPT_O0
+        end
+        if !opt.safe:
+            ret lv.LV_OPT_O3
+        end
+        ret lv.LV_OPT_O2
+    end
+
     pub func Llvm(opt &: Dr): int:
         lgr := lg.New(opt.log_level, resolve_color(opt.color))
         pack := lp.Load(opt.lang)
@@ -142,6 +162,7 @@ end
             lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "using embedded static third-party libs: " + xl)
         end
         o.native_cpu = opt.llvm_native_cpu && str.Len(opt.llvm_target) == 0
+        o.fp_contract = opt.llvm_fp_contract
 
         if o.output_mode == lv.LV_OUT_EXEC:
             mut links := Vector {} as Vector<str>
@@ -285,6 +306,7 @@ end
         else:
             opt.llvm_emit = lv.LV_OUT_EXEC
         end
+        opt.llvm_opt_level = build_opt_level(opt)
         rc := Llvm(opt)
         // Only a genuine cross-compile failure gets the toolchain hint. A
         // native build never asked for a target, and RC_LLVM_UNSUPPORTED is

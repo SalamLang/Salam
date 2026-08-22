@@ -177,6 +177,16 @@ func cg_simple_inline(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
     ret cg_expr(g, s, a, n)
 end
 
+// The C type of a `repeat` counter, given the index type semantic
+// analysis settled on. Signed, unless the count is a 64-bit unsigned one -
+// the single case where a signed counter cannot represent it.
+func repeat_ctl_ctype(idx_ts: str): str:
+    if str.Equals(idx_ts, "u64") || str.Equals(idx_ts, "size"):
+        ret "uint64_t"
+    end
+    ret "int64_t"
+end
+
 func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
     if n == 0:
         ret
@@ -464,14 +474,23 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
                 g, "for (int64_t __rep" + t + " = (int64_t)(" + from_c + "), __repe" + t + " = (int64_t)(" + to_c + "), __repa" + t + " = (int64_t)(" + step + "), __reps" + t + " = (__rep" + t + " <= __repe" + t + ") ? __repa" + t + " : -__repa" + t + "; (__reps" + t + " > 0) ? (__rep" + t + " <= __repe" + t + ") : (__rep" + t + " >= __repe" + t + "); __rep" + t + " += __reps" + t + ") {"
             )
         else:
+            // The counter is wider than the index on purpose: it has to
+            // hold the count itself, and `repeat n` over an i8 n still
+            // walks 0..n. Unsigned where the count is, though - a u64
+            // count above INT64_MAX read as int64_t is negative, and the
+            // loop that should have run billions of times ran none.
+            ctl := repeat_ctl_ctype(nn.type_str)
             cg_line(
-                g, "for (int64_t __rep" + t + " = 0, __repn" + t + " = (int64_t)(" + cg_expr(g, s, a, nn.a) + "); __rep" + t + " < __repn" + t + "; __rep" + t + "++) {"
+                g, "for (" + ctl + " __rep" + t + " = 0, __repn" + t + " = (" + ctl + ")(" + cg_expr(g, s, a, nn.a) + "); __rep" + t + " < __repn" + t + "; __rep" + t + "++) {"
             )
         end
         g.indent += 1
         cg_loop_push(g)
         mark := g.locals.len()
         if str.Len(nn.name) > 0:
+            // The index carries the type semantic analysis gave it - the
+            // width of the values that drive the loop, not a fixed i32 -
+            // so the body compares and indexes with it uncast.
             ivct := cg_ctype(str.Len(nn.type_str) > 0 ? nn.type_str : "i32")
             cg_line(
                 g, "const " + ivct + " " + cg_cident(nn.name) + " = (" + ivct + ")__rep" + t + ";"

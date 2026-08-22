@@ -300,6 +300,20 @@ func take_pending_flow(ip &: Interp, out &: int): bool:
     ret true
 end
 
+// Whether a `repeat` still has an iteration left. `uns` is the count form
+// over a 64-bit unsigned count, where the counter has to be compared as
+// the unsigned value it is; the range form is always signed, since its
+// step carries the direction.
+func rep_more(kk: i64, endv: i64, step: i64, uns: bool): bool:
+    if uns:
+        ret (kk as u64) <= (endv as u64)
+    end
+    if step > (0 as i64):
+        ret kk <= endv
+    end
+    ret kk >= endv
+end
+
 // The C REP_NUM macro - evaluates a repeat header operand; msg is the
 // pre-translated "repeat ... must be a number" text.
 func rep_num(
@@ -467,6 +481,7 @@ func exec_stmt(
         mut start := 0 as i64
         mut endv := 0 as i64
         mut step := 1 as i64
+        mut uns := false
         if node.c != 0:
             if !rep_num(
                 ip, a, env, node.a, i18.Tr("repeat range start must be a number"), start
@@ -502,12 +517,20 @@ func exec_stmt(
             ):
                 ret FLOW_NORMAL
             end
+            // A u64 count arrives here as a bit pattern in an i64, not
+            // as a magnitude: one above INT64_MAX reads as negative, and
+            // a loop both backends run would not start at all. The index
+            // type semantic analysis chose is what says which it is.
+            uns = str.Equals(node.type_str, "u64") || str.Equals(node.type_str, "size")
+            if uns && endv == (0 as i64):
+                ret FLOW_NORMAL
+            end
             start = 0 as i64
             endv -= 1 as i64
             step = 1 as i64
         end
         mut kk := start
-        until (step > (0 as i64)) ? (kk <= endv) : (kk >= endv):
+        until rep_more(kk, endv, step, uns):
             tick(ip)
             if ip.failed:
                 ret FLOW_NORMAL

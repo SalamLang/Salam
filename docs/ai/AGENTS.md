@@ -30,6 +30,25 @@ Getting this backwards produces a loop that never runs, or never stops. When
 relocating existing Salam code, copy it verbatim; do not retype loops from
 memory.
 
+`repeat` is the counted loop, and its index takes the type of the values that
+drive it - the count, or a range's bounds and step. A `u8` count binds a `u8`
+index, an `i64` count an `i64` one; bounds that mix signed and unsigned, or a
+count that is not an integer at all, fall back to `i32`.
+
+```salam
+repeat v.len() with i:      // len() is i32, so i is i32
+    print v.get(i)
+end
+
+n := 200 as u8
+repeat n with i:            // i is u8 here
+    total = total + v.get(i as int)   // ...so a signed parameter needs a cast
+end
+```
+
+Untyped literals adapt to the index (`if i < 10` is fine either way), but a
+call that takes a signed `int` does not: pass `i as int`.
+
 ## 2. Top-level declaration order is enforced
 
 The compiler requires one specific order and rejects anything else. In order:

@@ -362,58 +362,15 @@ func _matpow_neg(x &: Matrix, k: int): Matrix:
     ret r
 end
 
-// A transpose reads one array along rows and writes the other along columns,
-// so one of the two sides always has a stride of a whole row. Done naively
-// every store lands on a fresh cache line, and that line is evicted long
-// before the other seven doubles in it are ever written - the array is
-// streamed through the cache once per column rather than once in total.
-// Walking in tiles keeps both the source and destination tiles resident, so
-// each line is filled completely before it leaves.
-@en "Transpose"
-@fa "ترانهاده"
-@ar "منقول"
-pub func Transpose(x &: Matrix): Matrix:
-    r := _raw(x.cols, x.rows)
-    n := x.rows
-    m := x.cols
-    if n <= 0 || m <= 0: ret r end
-    px := x.a.data
-    pr := r.a.data
-    mut i0 := 0
-    until i0 < n:
-        i1 := _min2(i0 + _T_BLOCK, n)
-        mut j0 := 0
-        until j0 < m:
-            j1 := _min2(j0 + _T_BLOCK, m)
-            mut i := i0
-            until i < i1:
-                xo := i * m
-                mut j := j0
-                until j < j1:
-                    pr[j * n + i] = px[xo + j]
-                    j += 1
-                end
-                i += 1
-            end
-            j0 += _T_BLOCK
-        end
-        i0 += _T_BLOCK
-    end
-    ret r
-end
-
-// The (n,k)x(k,m) product. Inner dimensions must agree; if they do not the
-// result is 0x0, the same shape-error convention the elementwise ops use.
-@en "MatMul"
-@fa "ضرب ماتریسی"
-@ar "ضرب المصفوفات"
-pub func MatMul(x &: Matrix, y &: Matrix): Matrix:
-    if x.cols != y.rows: ret Zeros(0, 0) end
+// The product kernel, accumulating into a destination the caller owns. The
+// micro-kernel reads C before it writes it - that is how the k blocks add
+// up - so `r` must arrive zeroed. MatMul gets that from Zeros; MatMulInto
+// does it itself.
+func _matmul_into(x &: Matrix, y &: Matrix, r &: Matrix):
     n := x.rows
     kn := x.cols
     m := y.cols
-    r := Zeros(n, m)
-    if n <= 0 || m <= 0 || kn <= 0: ret r end
+    if n <= 0 || m <= 0 || kn <= 0: ret end
     px := x.a.data
     py := y.a.data
     pr := r.a.data
@@ -484,7 +441,106 @@ pub func MatMul(x &: Matrix, y &: Matrix): Matrix:
     // cover, and then every remaining column across all rows.
     _mm_edge(pr, rc, px, xc, py, yc, nfull, n, 0, mfull, kn)
     _mm_edge(pr, rc, px, xc, py, yc, 0, n, mfull, m, kn)
+end
+
+// The transpose kernel, writing into a destination the caller owns. Both
+// Transpose (which allocates one) and TransposeInto (which does not) are
+// this loop; see the blocking note above Transpose for why it is tiled.
+func _transpose_into(x &: Matrix, r &: Matrix):
+    n := x.rows
+    m := x.cols
+    if n <= 0 || m <= 0: ret end
+    px := x.a.data
+    pr := r.a.data
+    mut i0 := 0
+    until i0 < n:
+        i1 := _min2(i0 + _T_BLOCK, n)
+        mut j0 := 0
+        until j0 < m:
+            j1 := _min2(j0 + _T_BLOCK, m)
+            mut i := i0
+            until i < i1:
+                xo := i * m
+                mut j := j0
+                until j < j1:
+                    pr[j * n + i] = px[xo + j]
+                    j += 1
+                end
+                i += 1
+            end
+            j0 += _T_BLOCK
+        end
+        i0 += _T_BLOCK
+    end
+end
+
+// A transpose reads one array along rows and writes the other along columns,
+// so one of the two sides always has a stride of a whole row. Done naively
+// every store lands on a fresh cache line, and that line is evicted long
+// before the other seven doubles in it are ever written - the array is
+// streamed through the cache once per column rather than once in total.
+// Walking in tiles keeps both the source and destination tiles resident, so
+// each line is filled completely before it leaves.
+@en "Transpose"
+@fa "ترانهاده"
+@ar "منقول"
+pub func Transpose(x &: Matrix): Matrix:
+    r := _raw(x.cols, x.rows)
+    _transpose_into(x, r)
     ret r
+end
+
+// The (n,k)x(k,m) product. Inner dimensions must agree; if they do not the
+// result is 0x0, the same shape-error convention the elementwise ops use.
+@en "MatMul"
+@fa "ضرب ماتریسی"
+@ar "ضرب المصفوفات"
+pub func MatMul(x &: Matrix, y &: Matrix): Matrix:
+    if x.cols != y.rows: ret Zeros(0, 0) end
+    r := Zeros(x.rows, y.cols)
+    _matmul_into(x, y, r)
+    ret r
+end
+
+// The allocating calls above are the right default, but a loop that runs
+// the same shapes over and over pays for them twice: once for malloc, and
+// again because a buffer allocated inside the loop is one the optimizer
+// will not keep in registers. These write into a destination the caller
+// owns, so such a loop can allocate once and reuse. Rewriting
+// benchmark/programs/41_matrix_stdlib_smallops around them - three 4x4
+// matrices hoisted out of a 200k-iteration loop - took it from 13.7 ms to
+// 8.4 ms; the same shape written as plain loops over one Vector each goes
+// from 23.6 ms to 3.4 ms, which is what the optimizer does once the
+// buffers stop moving.
+//
+// `out` must not be `x` or `y`: both kernels read their inputs while they
+// write the destination. False means the shapes did not line up and `out`
+// was left alone.
+@en "TransposeInto"
+@fa "ترانهاده در"
+@ar "منقول في"
+pub func TransposeInto(x &: Matrix, out &: Matrix): bool:
+    if out.rows != x.cols || out.cols != x.rows: ret false end
+    _transpose_into(x, out)
+    ret true
+end
+
+@en "MatMulInto"
+@fa "ضرب ماتریسی در"
+@ar "ضرب المصفوفات في"
+pub func MatMulInto(x &: Matrix, y &: Matrix, out &: Matrix): bool:
+    if x.cols != y.rows: ret false end
+    if out.rows != x.rows || out.cols != y.cols: ret false end
+    // The kernel accumulates, so the destination starts at zero. Writing
+    // n*m doubles is what MatMul's Zeros did anyway - what is saved here
+    // is the allocation and the free, not the fill. Vector.zeros would
+    // reallocate, which is the whole thing this call exists to avoid.
+    pz := out.a.data
+    repeat out.rows * out.cols with i:
+        pz[i] = 0.0
+    end
+    _matmul_into(x, y, out)
+    ret true
 end
 
 // X^T Y without asking the caller to build the transpose. Normal equations,

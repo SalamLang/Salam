@@ -50,8 +50,30 @@ func _sum_flat(p: f64*, lo: int, hi: int): f64:
     if n <= 0: ret 0.0 end
     if n <= _SUM_BLOCK:
         base := _row(p, lo)
-        mut s := 0.0
-        repeat n with t: s += base[t] end
+        // Four running totals rather than one. A single accumulator is a
+        // serial dependence chain that no vectoriser is allowed to break,
+        // because floating-point addition does not associate; four let the
+        // block go four elements per add. The pairwise split above is what
+        // bounds the error, and four lanes inside a 64-element block only
+        // makes it smaller, but it does change which additions happen in
+        // which order, so Sum is not bit-for-bit what it was before.
+        mut s0 := 0.0
+        mut s1 := 0.0
+        mut s2 := 0.0
+        mut s3 := 0.0
+        mut i := 0
+        until i + 3 < n:
+            s0 += base[i]
+            s1 += base[i + 1]
+            s2 += base[i + 2]
+            s3 += base[i + 3]
+            i += 4
+        end
+        mut s := (s0 + s1) + (s2 + s3)
+        until i < n:
+            s += base[i]
+            i += 1
+        end
         ret s
     end
     mid := lo + n / 2

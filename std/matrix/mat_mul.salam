@@ -14,6 +14,8 @@
 
 package matrix
 
+import mem
+
 // Matrix products: the O(n^3) part of the library, and the only part where
 // the memory layout shows up in the running time.
 //
@@ -45,6 +47,14 @@ const _MAT_BLOCK := 64
 // Square tile side for the transpose. 32x32 f64 is 8 KiB per tile, so the
 // source tile and the destination tile together sit inside a 32 KiB L1.
 const _T_BLOCK := 32
+
+// Micro-kernel shape: 4 result rows by 4 result columns, so the 16 running
+// sums are 4 AVX2 vectors and leave room for the operands. This is the number
+// that decides whether the product runs at cache speed or at register speed:
+// with the sums in memory the inner loop reloads and restores each one on
+// every k, which is two memory operations per multiply-add.
+const _MR := 4
+const _NR := 4
 
 // A pointer to element `off` of a payload, so an inner loop can subscript
 // from 0 instead of carrying a row offset into every index expression.
@@ -114,6 +124,113 @@ func _mm_tile(r &: Matrix, x &: Matrix, y &: Matrix, ii: int, kk: int, jj: int):
     end
 end
 
+// Copies y[k0..k1) x [j0..j0+_NR) into a contiguous k-major panel.
+//
+// Without this the micro-kernel would walk y down a column, one row stride per
+// step, and touch a fresh cache line for every element it reads. Packed once
+// per column block and then reused by every row block, the copy costs one pass
+// over the panel and turns the kernel's y reads into sequential ones.
+func _mm_pack_b(py: f64*, yc: int, k0: int, k1: int, j0: int, dst: f64*):
+    mut k := k0
+    mut o := 0
+    until k < k1:
+        src := _row(py, k * yc + j0)
+        d := _row(dst, o)
+        repeat _NR with t: d[t] = src[t] end
+        o += _NR
+        k += 1
+    end
+end
+
+// The 4x4 micro-kernel. Sixteen running sums live in locals for the whole k
+// loop and reach memory exactly once, at the end.
+//
+// The accumulation ORDER is unchanged from the row-at-a-time kernel this
+// replaces: every c(i,j) still takes its k terms in increasing k, and the
+// result matrix starts at zero, so adding the finished sum is the same
+// sequence of additions the old loop performed one at a time. The products
+// are therefore bit-for-bit what they were.
+func _mm_micro(a0: f64*, a1: f64*, a2: f64*, a3: f64*, pb: f64*, kn: int, c0: f64*, c1: f64*, c2: f64*, c3: f64*):
+    mut c00 := 0.0
+    mut c01 := 0.0
+    mut c02 := 0.0
+    mut c03 := 0.0
+    mut c10 := 0.0
+    mut c11 := 0.0
+    mut c12 := 0.0
+    mut c13 := 0.0
+    mut c20 := 0.0
+    mut c21 := 0.0
+    mut c22 := 0.0
+    mut c23 := 0.0
+    mut c30 := 0.0
+    mut c31 := 0.0
+    mut c32 := 0.0
+    mut c33 := 0.0
+    repeat kn with k:
+        pbk := _row(pb, k * _NR)
+        b0 := pbk[0]
+        b1 := pbk[1]
+        b2 := pbk[2]
+        b3 := pbk[3]
+        v0 := a0[k]
+        c00 += v0 * b0
+        c01 += v0 * b1
+        c02 += v0 * b2
+        c03 += v0 * b3
+        v1 := a1[k]
+        c10 += v1 * b0
+        c11 += v1 * b1
+        c12 += v1 * b2
+        c13 += v1 * b3
+        v2 := a2[k]
+        c20 += v2 * b0
+        c21 += v2 * b1
+        c22 += v2 * b2
+        c23 += v2 * b3
+        v3 := a3[k]
+        c30 += v3 * b0
+        c31 += v3 * b1
+        c32 += v3 * b2
+        c33 += v3 * b3
+    end
+    c0[0] = c00
+    c0[1] = c01
+    c0[2] = c02
+    c0[3] = c03
+    c1[0] = c10
+    c1[1] = c11
+    c1[2] = c12
+    c1[3] = c13
+    c2[0] = c20
+    c2[1] = c21
+    c2[2] = c22
+    c2[3] = c23
+    c3[0] = c30
+    c3[1] = c31
+    c3[2] = c32
+    c3[3] = c33
+end
+
+// The edge strip: any rows or columns the 4x4 kernel could not cover, done one
+// dot product at a time. Correct for every shape, and only ever touches fewer
+// than four rows or four columns, so its cost does not scale with n.
+func _mm_edge(pr: f64*, rc: int, px: f64*, xc: int, py: f64*, yc: int, i0: int, i1: int, j0: int, j1: int, kn: int):
+    mut i := i0
+    until i < i1:
+        xrow := _row(px, i * xc)
+        crow := _row(pr, i * rc)
+        mut j := j0
+        until j < j1:
+            mut acc := 0.0
+            repeat kn with k: acc += xrow[k] * py[k * yc + j] end
+            crow[j] = acc
+            j += 1
+        end
+        i += 1
+    end
+end
+
 func _mm_cols(r &: Matrix, x &: Matrix, y &: Matrix, ii: int, kk: int):
     mut jj := 0
     until jj < r.cols:
@@ -156,7 +273,7 @@ end
 @fa "ترانهاده"
 @ar "منقول"
 pub func Transpose(x &: Matrix): Matrix:
-    r := Zeros(x.cols, x.rows)
+    r := _raw(x.cols, x.rows)
     n := x.rows
     m := x.cols
     if n <= 0 || m <= 0: ret r end
@@ -192,16 +309,40 @@ end
 @ar "ضرب المصفوفات"
 pub func MatMul(x &: Matrix, y &: Matrix): Matrix:
     if x.cols != y.rows: ret Zeros(0, 0) end
-    mut r := Zeros(x.rows, y.cols)
-    mut ii := 0
-    until ii < x.rows:
-        mut kk := 0
-        until kk < x.cols:
-            _mm_cols(r, x, y, ii, kk)
-            kk += _MAT_BLOCK
+    n := x.rows
+    kn := x.cols
+    m := y.cols
+    r := Zeros(n, m)
+    if n <= 0 || m <= 0 || kn <= 0: ret r end
+    px := x.a.data
+    py := y.a.data
+    pr := r.a.data
+    xc := x.cols
+    yc := y.cols
+    rc := m
+    // One packing buffer, reused by every column block.
+    panel := mem.Allocate(((kn * _NR) as u64) * (sizeof(f64) as u64)) as f64*
+    defer mem.Free(panel as void*)
+    nfull := (n / _MR) * _MR
+    mfull := (m / _NR) * _NR
+    mut j := 0
+    until j < mfull:
+        _mm_pack_b(py, yc, 0, kn, j, panel)
+        mut i := 0
+        until i < nfull:
+            _mm_micro(
+                _row(px, i * xc), _row(px, (i + 1) * xc), _row(px, (i + 2) * xc), _row(px, (i + 3) * xc),
+                panel, kn,
+                _row(pr, i * rc + j), _row(pr, (i + 1) * rc + j), _row(pr, (i + 2) * rc + j), _row(pr, (i + 3) * rc + j)
+            )
+            i += _MR
         end
-        ii += _MAT_BLOCK
+        j += _NR
     end
+    // Rows below the last full block of four, over the columns the kernel did
+    // cover, and then every remaining column across all rows.
+    _mm_edge(pr, rc, px, xc, py, yc, nfull, n, 0, mfull, kn)
+    _mm_edge(pr, rc, px, xc, py, yc, 0, n, mfull, m, kn)
     ret r
 end
 

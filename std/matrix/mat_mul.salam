@@ -445,73 +445,94 @@ end
 // That is fine for the matrices this library is aimed at and worth knowing
 // about for an ill-conditioned one; _STRASSEN_MIN is the knob that turns it
 // off.
+// Zeroes a whole matrix in place. _matmul_into accumulates, so the product
+// buffer has to start at zero for every one of the seven products.
+func _zero_into(m &: Matrix):
+    p := m.a.data
+    n := m.rows * m.cols
+    repeat n with i: p[i] = 0.0 end
+end
+
+// Strassen's recursion, with one product buffer rather than seven.
+//
+// The textbook presentation materialises M1..M7 and then combines them, which
+// needs seven h*w temporaries live at once. Each Mi is only ever added into
+// one or two quadrants of the result, so they can be consumed as they are
+// produced: compute one product into a single reused buffer, accumulate it
+// where it belongs, and zero it again for the next. At order 4096 that is
+// three temporaries instead of nine, and the same block stays mapped and warm
+// across all seven products instead of the allocator handing back a different
+// one each time.
+//
+// r is already zero when this is called, because _matmul_into accumulates too.
+//
+// The accuracy cost is Strassen's own and is norm-wise, not element-wise: the
+// subtractions cancel, so an entry of the result carries error scaled by the
+// norms of the operand blocks rather than by its own magnitude.
 func _strassen(x &: Matrix, y &: Matrix, r &: Matrix):
     h := x.rows / 2
     k := x.cols / 2
     w := y.cols / 2
     mut ta := _raw(h, k)
     mut tb := _raw(k, w)
-    mut m1 := Zeros(h, w)
-    mut m2 := Zeros(h, w)
-    mut m3 := Zeros(h, w)
-    mut m4 := Zeros(h, w)
-    mut m5 := Zeros(h, w)
-    mut m6 := Zeros(h, w)
-    mut m7 := Zeros(h, w)
+    mut m := Zeros(h, w)
 
+    // M1 = (A11 + A22)(B11 + B22) -> r00, r11
     _blk_op(x, 0, 0, x, h, k, false, ta)
     _blk_op(y, 0, 0, y, k, w, false, tb)
-    _matmul_pick(ta, tb, m1)
+    _matmul_pick(ta, tb, m)
+    _blk_acc(r, 0, 0, m, false)
+    _blk_acc(r, h, w, m, false)
+    _zero_into(m)
 
+    // M2 = (A21 + A22) B11 -> r10, -r11
     _blk_op(x, h, 0, x, h, k, false, ta)
     _blk_copy(y, 0, 0, tb)
-    _matmul_pick(ta, tb, m2)
+    _matmul_pick(ta, tb, m)
+    _blk_acc(r, h, 0, m, false)
+    _blk_acc(r, h, w, m, true)
+    _zero_into(m)
 
+    // M3 = A11 (B12 - B22) -> r01, r11
     _blk_copy(x, 0, 0, ta)
     _blk_op(y, 0, w, y, k, w, true, tb)
-    _matmul_pick(ta, tb, m3)
+    _matmul_pick(ta, tb, m)
+    _blk_acc(r, 0, w, m, false)
+    _blk_acc(r, h, w, m, false)
+    _zero_into(m)
 
+    // M4 = A22 (B21 - B11) -> r00, r10
     _blk_copy(x, h, k, ta)
     _blk_op(y, k, 0, y, 0, 0, true, tb)
-    _matmul_pick(ta, tb, m4)
+    _matmul_pick(ta, tb, m)
+    _blk_acc(r, 0, 0, m, false)
+    _blk_acc(r, h, 0, m, false)
+    _zero_into(m)
 
+    // M5 = (A11 + A12) B22 -> -r00, r01
     _blk_op(x, 0, 0, x, 0, k, false, ta)
     _blk_copy(y, k, w, tb)
-    _matmul_pick(ta, tb, m5)
+    _matmul_pick(ta, tb, m)
+    _blk_acc(r, 0, 0, m, true)
+    _blk_acc(r, 0, w, m, false)
+    _zero_into(m)
 
+    // M6 = (A21 - A11)(B11 + B12) -> r11
     _blk_op(x, h, 0, x, 0, 0, true, ta)
     _blk_op(y, 0, 0, y, 0, w, false, tb)
-    _matmul_pick(ta, tb, m6)
+    _matmul_pick(ta, tb, m)
+    _blk_acc(r, h, w, m, false)
+    _zero_into(m)
 
+    // M7 = (A12 - A22)(B21 + B22) -> r00
     _blk_op(x, 0, k, x, h, k, true, ta)
     _blk_op(y, k, 0, y, k, w, false, tb)
-    _matmul_pick(ta, tb, m7)
-
-    _blk_acc(r, 0, 0, m1, false)
-    _blk_acc(r, 0, 0, m4, false)
-    _blk_acc(r, 0, 0, m5, true)
-    _blk_acc(r, 0, 0, m7, false)
-
-    _blk_acc(r, 0, w, m3, false)
-    _blk_acc(r, 0, w, m5, false)
-
-    _blk_acc(r, h, 0, m2, false)
-    _blk_acc(r, h, 0, m4, false)
-
-    _blk_acc(r, h, w, m1, false)
-    _blk_acc(r, h, w, m2, true)
-    _blk_acc(r, h, w, m3, false)
-    _blk_acc(r, h, w, m6, false)
+    _matmul_pick(ta, tb, m)
+    _blk_acc(r, 0, 0, m, false)
 
     ta.free()
     tb.free()
-    m1.free()
-    m2.free()
-    m3.free()
-    m4.free()
-    m5.free()
-    m6.free()
-    m7.free()
+    m.free()
 end
 
 // Splits when every dimension is large enough and even, and otherwise runs

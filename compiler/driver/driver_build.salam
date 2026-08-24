@@ -40,7 +40,17 @@ import pf "../prof_self.salam"
 
     // driver/build.c driver_build (the CMD_BUILD/CMD_OBJ shared body; `opt`
     // must have .command already set to CMD_BUILD or CMD_OBJ by the caller).
-    func build_impl(opt &: Dr): int:
+    // target_is_freestanding - mirrors cg_target_is_freestanding in the codegen.
+// Kept as its own copy rather than imported because driver and codegen do not
+// otherwise depend on each other; the two must agree, and a test pins them.
+func target_is_freestanding(triple: str): bool:
+    if str.Len(triple) == 0:
+        ret false
+    end
+    ret str.Contains(triple, "uefi") || (str.Contains(triple, "bsos") && str.Contains(triple, "kernel"))
+end
+
+func build_impl(opt &: Dr): int:
         // A bare `salam build` (no inputs) or a directory passed as the
         // sole input (`salam build .`, `salam build ../project/`) doesn't
         // name a file - resolve it to the project's entry file
@@ -686,7 +696,13 @@ import pf "../prof_self.salam"
             ret 1
         end
 
-        if opt.command != CMD_OBJ && !has_entry:
+        // A freestanding target has no `main`: a kernel is entered at
+        // _start from its boot assembly and a UEFI application at efi_main,
+        // both named by the linker rather than by the language. Requiring an
+        // entry point there would mean every such build passed a flag to say
+        // so, so the profile decides it.
+        needs_entry := opt.command != CMD_OBJ && !target_is_freestanding(opt.llvm_target)
+        if needs_entry && !has_entry:
             lg.Log(
                 lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(
                     i18.Tr("no entry point: define a '%s' function"), co.ArgStr(entry)

@@ -471,9 +471,19 @@ func hdr_prelude(g &: Cg, a &: at.Ast, program: int):
     if g.is_gui_mode:
         outh(g, "#ifdef _WIN32\n#include <windows.h>\n#endif\n")
     end
-    outh(
-        g, "#include <stdint.h>\n#include <stdbool.h>\n#include <math.h>" + "\n#include <stddef.h>\n"
-    )
+    // stdint, stdbool and stddef are freestanding headers - the C standard
+    // requires a freestanding implementation to provide them, and gcc and
+    // clang both do under -ffreestanding. <math.h> is not one of them, and a
+    // kernel must not reach libm anyway.
+    if g.freestanding:
+        outh(
+            g, "#include <stdint.h>\n#include <stdbool.h>\n#include <stddef.h>\n"
+        )
+    else:
+        outh(
+            g, "#include <stdint.h>\n#include <stdbool.h>\n#include <math.h>" + "\n#include <stddef.h>\n"
+        )
+    end
     // <stdio.h> is included rather than fopen/fread/fwrite being
     // hand-declared like the rest of the CRT surface: clang's
     // -Wbuiltin-requires-header fires on any declaration of those three
@@ -488,9 +498,14 @@ func hdr_prelude(g &: Cg, a &: at.Ast, program: int):
     // error; mingw spells it `(&__iob_func()[1])`. Only the macro shorthand
     // goes, the libc functions and objects behind it survive, and nothing
     // generated here ever refers to a stdio macro.
-    outh(
-        g, "#include <stdio.h>\n" + "#undef stdin\n#undef stdout\n#undef stderr\n" + "#undef EOF\n#undef BUFSIZ\n" + "#undef SEEK_SET\n#undef SEEK_CUR\n#undef SEEK_END\n"
-    )
+    // <stdio.h> does not exist freestanding, so the hand-declared
+    // fopen/fread/fwrite that hdr_externs suppresses for a hosted build come
+    // back instead and libbs supplies them.
+    if !g.freestanding:
+        outh(
+            g, "#include <stdio.h>\n" + "#undef stdin\n#undef stdout\n#undef stderr\n" + "#undef EOF\n#undef BUFSIZ\n" + "#undef SEEK_SET\n#undef SEEK_CUR\n#undef SEEK_END\n"
+        )
+    end
     // fflush and snprintf come from the <stdio.h> above. Hand-declaring them
     // again is what the include is there to avoid: salam spells the size as
     // uint64_t where the standard says size_t, and the stream as void* where
@@ -512,12 +527,30 @@ func hdr_prelude(g &: Cg, a &: at.Ast, program: int):
     // and pulling the real header in here makes the two collide in every
     // translation unit that touches os. The compile-time define is the
     // supported way out.
-    outh(
-        g, "#ifndef SALAM_ALLOC_TUNE_DEFINED\n#define SALAM_ALLOC_TUNE_DEFINED\n" + "#if defined(__GLIBC__) && !defined(SALAM_NO_ALLOC_TUNE)\n" + "#include <malloc.h>\n" + "static inline void salam_tune_allocator(void) {\n" + "    static int done = 0;\n" + "    if (done) return;\n" + "    done = 1;\n" + "    mallopt(M_MMAP_THRESHOLD, 256 * 1024 * 1024);\n" + "    mallopt(M_TRIM_THRESHOLD, 512 * 1024 * 1024);\n" + "}\n" + "#else\n" + "static inline void salam_tune_allocator(void) { }\n" + "#endif\n#endif\n"
-    )
-    outh(
-        g, "#ifndef SALAM_OUT_DEFINED\n#define SALAM_OUT_DEFINED\n" + "#define SALAM_OB_SZ 65536\n" + "#if defined(_WIN32)\n" + "extern int _write(int, void *, unsigned);\n" + "#define SALAM_RAW_WRITE(fd, buf, n) _write((fd), (void " + "*)(buf), (unsigned)(n))\n" + "#else\n" + "extern int64_t write(int32_t, void *, uint64_t);\n" + "#define SALAM_RAW_WRITE(fd, buf, n) write((fd), (void " + "*)(buf), (uint64_t)(n))\n" + "#endif\n" + "#if (defined(__GNUC__) || defined(__clang__)) && " + "!defined(__TINYC__)\n" + "__attribute__((weak)) char salam_ob[SALAM_OB_SZ];\n" + "__attribute__((weak)) uint64_t salam_obn;\n" + "__attribute__((weak)) void salam_out_flush(void) {\n" + "    if (salam_obn) { int64_t r = " + "(int64_t)SALAM_RAW_WRITE(1, salam_ob, salam_obn); (void)r; " + "salam_obn = 0; }\n" + "}\n" + "__attribute__((weak, destructor)) void salam_out_fini(void) " + "{ salam_out_flush(); }\n" + "static inline void salam_out_write_(const void *s, uint64_t " + "n) {\n" + "    if (salam_obn + n > SALAM_OB_SZ) salam_out_flush();\n" + "    if (n >= SALAM_OB_SZ) { int64_t r = " + "(int64_t)SALAM_RAW_WRITE(1, s, n); (void)r; return; }\n" + "    __builtin_memcpy(salam_ob + salam_obn, s, (size_t)n); " + "salam_obn += n;\n" + "    if (__builtin_memchr(s, '\\n', (size_t)n)) salam_out_flush();\n" + "}\n" + "#else\n" + "static void salam_out_flush(void) { fflush(0); }\n" + "static void salam_out_write_(const void *s, uint64_t n) {\n" + "    int64_t r = (int64_t)SALAM_RAW_WRITE(1, s, n); (void)r;\n" + "}\n" + "#endif\n" + "#define SALAM_OUT_LIT(s, n) salam_out_write_((s), " + "(uint64_t)(n))\n" + "#endif\n"
-    )
+    // Freestanding there is no glibc and no <malloc.h>. Emit the empty arm
+    // so the call in emit_module_init still compiles away to nothing.
+    if g.freestanding:
+        outh(
+            g, "#ifndef SALAM_ALLOC_TUNE_DEFINED\n#define SALAM_ALLOC_TUNE_DEFINED\n" + "static inline void salam_tune_allocator(void) { }\n" + "#endif\n"
+        )
+    else:
+        outh(
+            g, "#ifndef SALAM_ALLOC_TUNE_DEFINED\n#define SALAM_ALLOC_TUNE_DEFINED\n" + "#if defined(__GLIBC__) && !defined(SALAM_NO_ALLOC_TUNE)\n" + "#include <malloc.h>\n" + "static inline void salam_tune_allocator(void) {\n" + "    static int done = 0;\n" + "    if (done) return;\n" + "    done = 1;\n" + "    mallopt(M_MMAP_THRESHOLD, 256 * 1024 * 1024);\n" + "    mallopt(M_TRIM_THRESHOLD, 512 * 1024 * 1024);\n" + "}\n" + "#else\n" + "static inline void salam_tune_allocator(void) { }\n" + "#endif\n#endif\n"
+        )
+    end
+    // Freestanding: no stdio, no write(2) and no destructor to flush from.
+    // The program supplies salam_rt_write; a kernel points it at the serial
+    // port. Unbuffered on purpose - when a kernel triple-faults you want the
+    // last line to have already left the machine.
+    if g.freestanding:
+        outh(
+            g, "#ifndef SALAM_OUT_DEFINED\n#define SALAM_OUT_DEFINED\n" + "extern void salam_rt_write(int32_t fd, const void *buf, uint64_t n);\n" + "#define SALAM_RAW_WRITE(fd, buf, n) (salam_rt_write((int32_t)(fd), " + "(const void *)(buf), (uint64_t)(n)), 0)\n" + "static void salam_out_flush(void) { }\n" + "static void salam_out_write_(const void *s, uint64_t n) {\n" + "    salam_rt_write(1, s, n);\n" + "}\n" + "#define SALAM_OUT_LIT(s, n) salam_out_write_((s), (uint64_t)(n))\n" + "#endif\n"
+        )
+    else:
+        outh(
+            g, "#ifndef SALAM_OUT_DEFINED\n#define SALAM_OUT_DEFINED\n" + "#define SALAM_OB_SZ 65536\n" + "#if defined(_WIN32)\n" + "extern int _write(int, void *, unsigned);\n" + "#define SALAM_RAW_WRITE(fd, buf, n) _write((fd), (void " + "*)(buf), (unsigned)(n))\n" + "#else\n" + "extern int64_t write(int32_t, void *, uint64_t);\n" + "#define SALAM_RAW_WRITE(fd, buf, n) write((fd), (void " + "*)(buf), (uint64_t)(n))\n" + "#endif\n" + "#if (defined(__GNUC__) || defined(__clang__)) && " + "!defined(__TINYC__)\n" + "__attribute__((weak)) char salam_ob[SALAM_OB_SZ];\n" + "__attribute__((weak)) uint64_t salam_obn;\n" + "__attribute__((weak)) void salam_out_flush(void) {\n" + "    if (salam_obn) { int64_t r = " + "(int64_t)SALAM_RAW_WRITE(1, salam_ob, salam_obn); (void)r; " + "salam_obn = 0; }\n" + "}\n" + "__attribute__((weak, destructor)) void salam_out_fini(void) " + "{ salam_out_flush(); }\n" + "static inline void salam_out_write_(const void *s, uint64_t " + "n) {\n" + "    if (salam_obn + n > SALAM_OB_SZ) salam_out_flush();\n" + "    if (n >= SALAM_OB_SZ) { int64_t r = " + "(int64_t)SALAM_RAW_WRITE(1, s, n); (void)r; return; }\n" + "    __builtin_memcpy(salam_ob + salam_obn, s, (size_t)n); " + "salam_obn += n;\n" + "    if (__builtin_memchr(s, '\\n', (size_t)n)) salam_out_flush();\n" + "}\n" + "#else\n" + "static void salam_out_flush(void) { fflush(0); }\n" + "static void salam_out_write_(const void *s, uint64_t n) {\n" + "    int64_t r = (int64_t)SALAM_RAW_WRITE(1, s, n); (void)r;\n" + "}\n" + "#endif\n" + "#define SALAM_OUT_LIT(s, n) salam_out_write_((s), " + "(uint64_t)(n))\n" + "#endif\n"
+        )
+    end
     // See cg_needs_fparg in codegen_call.salam: tcc 0.9.27 (x86-64)
     // overwrites a computed floating-point argument with the value of the
     // floating-point argument that follows it, so every such argument is
@@ -1104,7 +1137,13 @@ func hdr_externs(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
         if d.kind == at.AST_FUNC_DEF:
             fsym := sm.LookupLocal(s, s.global, d.name)
             sig := sig_of_decl(s, fsym, did)
-            if sig != 0 && !is_libm_name(d.name) && !is_stdio_name(d.name):
+            // The libm/stdio suppressions exist because the real headers
+            // already declare those names and clang warns about a second,
+            // not-quite-matching declaration. Freestanding there is no
+            // <stdio.h> and no <math.h>, so nothing else declares them and
+            // the hand-declaration is the only one - keep it.
+            suppress := !g.freestanding && (is_libm_name(d.name) || is_stdio_name(d.name))
+            if sig != 0 && !suppress:
                 mut guard := ""
                 if is_wellknown_libc_name(d.name):
                     guard = "SALAM_EXTERN_LIBC_ON_WIN32"

@@ -29,10 +29,32 @@ The fastest way to get `salam` on your machine:
 { curl -fsSL https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.sh || wget -qO- https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.sh; } | sh && export PATH="$HOME/.salam/bin:$PATH"
 ```
 
-**Windows:**
+Options go after `sh -s --`, for example `... | sh -s -- --dir ./bin --version 0.3.5`.
+The shell installer takes `--dir DIR`, `--version X.Y.Z`, `--platform NAME`,
+`--no-modify-path` and `--help`; run it with `--help` for the full list.
+
+**Windows** (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.ps1 -OutFile "$env:TEMP\salam-install.ps1"; powershell -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\salam-install.ps1"
+```
+
+Or from `cmd.exe`:
 
 ```bat
-powershell -NoProfile -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; (New-Object Net.WebClient).DownloadFile('https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.bat','%TEMP%\salam-install.bat')" && call "%TEMP%\salam-install.bat" && set "PATH=%USERPROFILE%\.salam\bin;%PATH%"
+curl -fsSLo "%TEMP%\salam-install.bat" https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.bat && "%TEMP%\salam-install.bat"
+```
+
+Both land in `%USERPROFILE%\.salam\bin` and put that directory on your user
+PATH; open a new terminal afterwards so the change is visible. `--dir DIR`
+installs somewhere else, `--version X.Y.Z` picks an exact release, and
+`--no-modify-path` leaves PATH untouched.
+
+On Windows 7 and 8, where `curl.exe` and `irm` do not exist yet, bootstrap
+with `certutil` instead:
+
+```bat
+certutil -urlcache -split -f https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.bat "%TEMP%\salam-install.bat" && "%TEMP%\salam-install.bat"
 ```
 
 Or download a pre-built binary from [GitHub Releases](https://github.com/SalamLang/Salam/releases).
@@ -150,8 +172,13 @@ salam exec                  # interpret the project here
 - If `<dir>/salam.salam` exists, it must define `main` and is used as the
   entry file; no scanning or guessing happens.
 - If it does not exist, the directory's top-level `.salam` files are scanned
-  for exactly one file defining `main` (more than one is an error that
-  suggests naming the entry file `salam.salam`).
+  for one defining `main`.
+- If several of them define `main`, the file **named after the entry** wins:
+  `main.salam`, or the langpack's own spelling (`اصلی.salam`, `الرئیسیة.salam`).
+  That is what lets a project keep a second entry point beside its real one -
+  a benchmark harness, a tool, a build for another target - instead of the
+  directory refusing to resolve. Only when none of them is named that way is
+  it an error, and the message says how to settle it.
 - The default executable name for a project is its **directory name**
   (`myproject.exe`), not `salam.exe`.
 - `salam new <name>` scaffolds the project with a `salam.salam` entry file.

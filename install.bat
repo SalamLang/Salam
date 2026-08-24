@@ -1,130 +1,187 @@
+@echo off
 rem Salam installer for Windows.
 rem
-rem Usage:
-rem   powershell -c "irm https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.bat -OutFile install.bat"; .\install.bat
-rem   install.bat --dir .
+rem This file is only a launcher: install.ps1 does the real work. When
+rem install.ps1 is not sitting next to it - the usual case, someone
+rem downloaded install.bat on its own - it is fetched first.
 rem
+rem Usage:
+rem   install.bat
+rem   install.bat --dir C:\Tools\Salam
+rem   install.bat --version 1.2.3
+rem   install.bat --no-modify-path
+rem   install.bat --help
+rem
+rem Every option is passed straight through to install.ps1, so anything
+rem that script learns works here the same day.
+rem
+rem Environment variables:
+rem   SALAM_INSTALL_DIR    install directory, default %USERPROFILE%\.salam\bin
+rem   SALAM_VERSION        exact version to install
+rem   SALAM_NO_MODIFY_PATH set to 1 to leave PATH alone
+rem   SALAM_NO_PAUSE       set to 1 to never wait for a key at the end
+rem
+rem Written without goto, labels or delayed expansion on purpose, so it
+rem behaves the same from cmd.exe, from a double click, from PowerShell
+rem and from a CI step, on everything from Windows 7 to Windows 11.
+rem Parenthesised if blocks group the longer messages; nothing in here
+rem reads a variable it set inside the same block, which is the one
+rem thing that would need delayed expansion to work.
+rem
+rem cmd.exe eats exactly one space after "echo", so every message below
+rem is written with one more leading space than it prints.
 
-@echo off
-setlocal EnableDelayedExpansion
+setlocal EnableExtensions
 
-set "REPO=SalamLang/Salam"
-set "INSTALL_DIR=%SALAM_INSTALL_DIR%"
-set "VERSION=%SALAM_VERSION%"
+set "SALAM_REPO=SalamLang/Salam"
+set "SALAM_PS1_URL=https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.ps1"
+set "SALAM_RELEASES=https://github.com/SalamLang/Salam/releases"
 
-:parse_args
-if "%~1"=="" goto args_done
-if /I "%~1"=="--dir" (
-  set "INSTALL_DIR=%~2"
-  shift & shift
-  goto parse_args
-)
-if /I "%~1"=="--version" (
-  set "VERSION=%~2"
-  shift & shift
-  goto parse_args
-)
-if /I "%~1"=="-h" goto usage
-if /I "%~1"=="--help" goto usage
-echo error: unknown option: %~1 1>&2
-exit /b 1
-:usage
-echo Usage: install.bat [--dir DIR] [--version X.Y.Z]
-exit /b 0
-:args_done
+rem Help is answered here rather than by install.ps1, so it still works
+rem on a machine with no network at all.
+set "SALAM_HELP="
+if "%~1"=="/?" set "SALAM_HELP=1"
+if "%~1"=="-h" set "SALAM_HELP=1"
+if /i "%~1"=="--help" set "SALAM_HELP=1"
+if /i "%~1"=="help" set "SALAM_HELP=1"
 
-set "ARCH=%PROCESSOR_ARCHITECTURE%"
-if /I "%PROCESSOR_ARCHITEW6432%" NEQ "" set "ARCH=%PROCESSOR_ARCHITEW6432%"
-
-if /I "%ARCH%"=="AMD64" (
-  set "PLATFORM=windows"
-) else if /I "%ARCH%"=="x86" (
-  set "PLATFORM=windows-i686"
-) else if /I "%ARCH%"=="ARM64" (
-  for /f "tokens=4-5 delims=. " %%a in ('ver') do set "WINVER=%%a.%%b"
-  if "!WINVER!"=="10.0" (
-    for /f "tokens=3" %%b in ('reg query "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion" /v CurrentBuildNumber 2^>nul') do set "BUILD=%%b"
-    if !BUILD! GEQ 22000 (set "PLATFORM=windows") else (set "PLATFORM=windows-i686")
-  ) else (
-    set "PLATFORM=windows-i686"
-  )
-) else (
-  echo error: unsupported architecture: %ARCH% 1>&2
-  echo Salam publishes windows ^(x86_64^) and windows-i686 ^(32-bit^) builds only. 1>&2
-  exit /b 1
-)
-
-set "WORKDIR=%TEMP%\salam-install-%RANDOM%"
-mkdir "%WORKDIR%" >nul 2>nul
-
-powershell -NoProfile -NonInteractive -EncodedCommand JABFAHIAcgBvAHIAQQBjAHQAaQBvAG4AUAByAGUAZgBlAHIAZQBuAGMAZQAgAD0AIAAnAFMAdABvAHAAJwAKACQAUAByAG8AZwByAGUAcwBzAFAAcgBlAGYAZQByAGUAbgBjAGUAIAA9ACAAJwBTAGkAbABlAG4AdABsAHkAQwBvAG4AdABpAG4AdQBlACcACgAkAHMAYwByAGkAcAB0ADoAcgBlAHMAdQBsAHQATABpAG4AZQAgAD0AIAAkAG4AdQBsAGwACgBmAHUAbgBjAHQAaQBvAG4AIABUAHIAeQBPAG4AZQAoACQAdgApACAAewAKACAAIAAkAGEAcwBzAGUAdAAgAD0AIAAnAHMAYQBsAGEAbQAtACcAIAArACAAJAB2ACAAKwAgACcALQAnACAAKwAgACQAZQBuAHYAOgBQAEwAQQBUAEYATwBSAE0AIAArACAAJwAuAHoAaQBwACcACgAgACAAJAB1AHIAbAAgAD0AIAAnAGgAdAB0AHAAcwA6AC8ALwBnAGkAdABoAHUAYgAuAGMAbwBtAC8AJwAgACsAIAAkAGUAbgB2ADoAUgBFAFAATwAgACsAIAAnAC8AcgBlAGwAZQBhAHMAZQBzAC8AZABvAHcAbgBsAG8AYQBkAC8AdgAnACAAKwAgACQAdgAgACsAIAAnAC8AJwAgACsAIAAkAGEAcwBzAGUAdAAKACAAIAAkAG8AdQB0ACAAPQAgAEoAbwBpAG4ALQBQAGEAdABoACAAJABlAG4AdgA6AFcATwBSAEsARABJAFIAIAAkAGEAcwBzAGUAdAAKACAAIAB0AHIAeQAgAHsACgAgACAAIAAgAEkAbgB2AG8AawBlAC0AVwBlAGIAUgBlAHEAdQBlAHMAdAAgAC0AVQBzAGUAQgBhAHMAaQBjAFAAYQByAHMAaQBuAGcAIAAtAFUAcgBpACAAJAB1AHIAbAAgAC0ATwB1AHQARgBpAGwAZQAgACQAbwB1AHQAIAAtAEUAcgByAG8AcgBBAGMAdABpAG8AbgAgAFMAdABvAHAACgAgACAAIAAgACQAcwBjAHIAaQBwAHQAOgByAGUAcwB1AGwAdABMAGkAbgBlACAAPQAgACQAdgAgACsAIAAnACwAJwAgACsAIAAkAGEAcwBzAGUAdAAgACsAIAAnACwAJwAgACsAIAAkAG8AdQB0AAoAIAAgACAAIAByAGUAdAB1AHIAbgAgACQAdAByAHUAZQAKACAAIAB9ACAAYwBhAHQAYwBoACAAewAKACAAIAAgACAAcgBlAHQAdQByAG4AIAAkAGYAYQBsAHMAZQAKACAAIAB9AAoAfQAKAGkAZgAgACgAJABlAG4AdgA6AFYARQBSAFMASQBPAE4AIAAtAGEAbgBkACAAJABlAG4AdgA6AFYARQBSAFMASQBPAE4AIAAtAG4AZQAgACcAJwApACAAewAKACAAIABpAGYAIAAoAFQAcgB5AE8AbgBlACAAJABlAG4AdgA6AFYARQBSAFMASQBPAE4AKQAgAHsAIABXAHIAaQB0AGUALQBPAHUAdABwAHUAdAAgACQAcgBlAHMAdQBsAHQATABpAG4AZQA7ACAAZQB4AGkAdAAgADAAIAB9ACAAZQBsAHMAZQAgAHsAIABlAHgAaQB0ACAAMQAgAH0ACgB9AAoAdAByAHkAIAB7AAoAIAAgACQAcgBlAGwAcwAgAD0AIABJAG4AdgBvAGsAZQAtAFIAZQBzAHQATQBlAHQAaABvAGQAIAAtAFUAcwBlAEIAYQBzAGkAYwBQAGEAcgBzAGkAbgBnACAALQBVAHIAaQAgACgAJwBoAHQAdABwAHMAOgAvAC8AYQBwAGkALgBnAGkAdABoAHUAYgAuAGMAbwBtAC8AcgBlAHAAbwBzAC8AJwAgACsAIAAkAGUAbgB2ADoAUgBFAFAATwAgACsAIAAnAC8AcgBlAGwAZQBhAHMAZQBzAD8AcABlAHIAXwBwAGEAZwBlAD0AMQAwACcAKQAKAH0AIABjAGEAdABjAGgAIAB7AAoAIAAgAGUAeABpAHQAIAAxAAoAfQAKAGYAbwByAGUAYQBjAGgAIAAoACQAcgAgAGkAbgAgACQAcgBlAGwAcwApACAAewAKACAAIAAkAHYAZQByACAAPQAgACQAcgAuAHQAYQBnAF8AbgBhAG0AZQAgAC0AcgBlAHAAbABhAGMAZQAgACcAXgB2ACcALAAgACcAJwAKACAAIABpAGYAIAAoAFQAcgB5AE8AbgBlACAAJAB2AGUAcgApACAAewAgAFcAcgBpAHQAZQAtAE8AdQB0AHAAdQB0ACAAJAByAGUAcwB1AGwAdABMAGkAbgBlADsAIABlAHgAaQB0ACAAMAAgAH0ACgB9AAoAZQB4AGkAdAAgADEA > "%WORKDIR%\resolve.txt" 2>nul
-
-set "VERSION="
-set "ASSET="
-set "ARCHIVE="
-for /f "usebackq tokens=1-3 delims=," %%A in ("%WORKDIR%\resolve.txt") do (
-  set "VERSION=%%A"
-  set "ASSET=%%B"
-  set "ARCHIVE=%%C"
-)
-
-if not exist "%ARCHIVE%" (
-  echo error: could not find a Salam release publishing a %PLATFORM% asset. 1>&2
-  echo Check https://github.com/%REPO%/releases manually. 1>&2
-  rd /s /q "%WORKDIR%" >nul 2>nul
-  exit /b 1
+if defined SALAM_HELP (
+    echo.
+    echo   Salam Programming Language installer for Windows
+    echo.
+    echo   Usage:
+    echo     install.bat [--dir DIR] [--version X.Y.Z] [--no-modify-path]
+    echo.
+    echo   Options:
+    echo     --dir DIR          install into DIR
+    echo     --version X.Y.Z    install this exact release instead of the latest
+    echo     --no-modify-path   never touch the user PATH
+    echo     --help             show this help
+    echo.
+    echo   Default directory:
+    echo     %USERPROFILE%\.salam\bin
+    echo.
+    echo   Environment:
+    echo     SALAM_INSTALL_DIR, SALAM_VERSION, SALAM_NO_MODIFY_PATH, SALAM_NO_PAUSE
+    echo.
+    echo   This launcher runs install.ps1, downloading it first when it is
+    echo   not next to this file. Releases: %SALAM_RELEASES%
+    echo.
+    exit /b 0
 )
 
-echo Installing Salam %VERSION% (%PLATFORM%) from:
-echo   https://github.com/%REPO%/releases/download/v%VERSION%/%ASSET%
+echo.
+echo   Salam Programming Language installer
+echo   https://github.com/%SALAM_REPO%
+echo   ------------------------------------
 
-set "EXTRACT_DIR=%WORKDIR%\extracted"
-powershell -NoProfile -Command "$ProgressPreference='SilentlyContinue'; Expand-Archive -LiteralPath '%ARCHIVE%' -DestinationPath '%EXTRACT_DIR%' -Force"
-if %ERRORLEVEL% NEQ 0 (
-  echo error: could not extract %ASSET% 1>&2
-  rd /s /q "%WORKDIR%" >nul 2>nul
-  exit /b 1
+rem A window opened by double clicking closes the instant this script
+rem ends, taking the result with it. timeout.exe rather than pause so an
+rem automated run can never hang on it: with input redirected it returns
+rem immediately, and otherwise it gives up on its own after a minute.
+set "SALAM_WAIT="
+set "SALAM_CMDLINE=%cmdcmdline%"
+set "SALAM_CMDLINE=%SALAM_CMDLINE:"=%"
+if not "%SALAM_CMDLINE%"=="%SALAM_CMDLINE:/c =%" set "SALAM_WAIT=1"
+if defined SALAM_NO_PAUSE set "SALAM_WAIT="
+
+rem Windows keeps PowerShell at a fixed path; going through PATH first
+rem would pick up whatever else happens to be called powershell.exe.
+set "SALAM_PS=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
+set "SALAM_HAVE_PS="
+if exist "%SALAM_PS%" set "SALAM_HAVE_PS=1"
+
+rem Windows 7 and newer all ship PowerShell, but a stripped image or a
+rem Server Core install can be missing the in-box copy.
+if not defined SALAM_HAVE_PS where powershell.exe >nul 2>nul
+if not defined SALAM_HAVE_PS if not errorlevel 1 set "SALAM_PS=powershell.exe"
+if not defined SALAM_HAVE_PS if not errorlevel 1 set "SALAM_HAVE_PS=1"
+
+if not defined SALAM_HAVE_PS (
+    echo.
+    echo   error: Windows PowerShell is not on this machine, and this
+    echo          installer needs it to unpack and place the files.
+    echo.
+    echo   Download a release archive by hand instead:
+    echo     %SALAM_RELEASES%
+    echo.
+    if defined SALAM_WAIT echo   Closing in 60 seconds - press a key to close now.
+    if defined SALAM_WAIT if exist "%SystemRoot%\System32\timeout.exe" "%SystemRoot%\System32\timeout.exe" /t 60 >nul 2>nul
+    exit /b 1
 )
 
-set "BINARY=%EXTRACT_DIR%\salam-%PLATFORM%\salam.exe"
-if not exist "%BINARY%" (
-  for /r "%EXTRACT_DIR%" %%F in (salam.exe) do if exist "%%F" set "BINARY=%%F"
+echo.
+echo   Preparing:
+echo       powershell : %SALAM_PS%
+
+set "SALAM_PS1=%~dp0install.ps1"
+set "SALAM_PS1_TEMP="
+
+if not exist "%SALAM_PS1%" set "SALAM_PS1_TEMP=%TEMP%\salam-install-%RANDOM%%RANDOM%.ps1"
+if defined SALAM_PS1_TEMP set "SALAM_PS1=%SALAM_PS1_TEMP%"
+
+if not defined SALAM_PS1_TEMP echo       installer  : using the install.ps1 next to this file
+if defined SALAM_PS1_TEMP echo       installer  : downloading install.ps1 from raw.githubusercontent.com
+
+rem TLS 1.2 has been mandatory on github.com since 2018, and .NET only
+rem picks it by default from 4.7 on. The literal 3072 is Tls12: naming
+rem the enum member instead would break on the older runtimes this has
+rem to keep working with.
+if defined SALAM_PS1_TEMP "%SALAM_PS%" -NoProfile -ExecutionPolicy Bypass -Command "try { [Net.ServicePointManager]::SecurityProtocol = 3072 -bor 768 -bor 192 } catch { }; (New-Object Net.WebClient).DownloadFile('%SALAM_PS1_URL%', '%SALAM_PS1%')" >nul 2>nul
+
+rem certutil goes through WinHTTP, so it still works where PowerShell is
+rem too old to negotiate TLS 1.2 at all - the stock Windows 7 case.
+if defined SALAM_PS1_TEMP if not exist "%SALAM_PS1%" echo       installer  : PowerShell could not fetch it, trying certutil
+if defined SALAM_PS1_TEMP if not exist "%SALAM_PS1%" certutil -urlcache -split -f "%SALAM_PS1_URL%" "%SALAM_PS1%" >nul 2>nul
+
+rem The URL cache keeps a copy of everything it fetches; drop it so a
+rem later run cannot silently reuse a stale script.
+if defined SALAM_PS1_TEMP if exist "%SALAM_PS1%" certutil -urlcache -f "%SALAM_PS1_URL%" delete >nul 2>nul
+
+rem A captive portal or a proxy error page arrives as a perfectly real
+rem file, so check that what landed is the script we asked for. Only the
+rem downloaded copy is checked: a local install.ps1 is the user's own.
+set "SALAM_PS1_OK="
+if not defined SALAM_PS1_TEMP set "SALAM_PS1_OK=1"
+if defined SALAM_PS1_TEMP if exist "%SALAM_PS1%" findstr /c:"# Salam installer for Windows." "%SALAM_PS1%" >nul 2>nul
+if defined SALAM_PS1_TEMP if exist "%SALAM_PS1%" if not errorlevel 1 set "SALAM_PS1_OK=1"
+
+set "SALAM_PS1_SIZE="
+if defined SALAM_PS1_TEMP if defined SALAM_PS1_OK for %%A in ("%SALAM_PS1%") do set "SALAM_PS1_SIZE=%%~zA"
+if defined SALAM_PS1_SIZE echo       installer  : got %SALAM_PS1_SIZE% bytes, saved to %SALAM_PS1%
+
+if not defined SALAM_PS1_OK (
+    echo.
+    echo   error: could not fetch a usable installer script from
+    echo          %SALAM_PS1_URL%
+    echo.
+    echo   Check your internet connection and any proxy settings. If this
+    echo   machine sits behind a filtering proxy, download a release
+    echo   archive by hand instead:
+    echo     %SALAM_RELEASES%
+    echo.
+    if defined SALAM_PS1_TEMP if exist "%SALAM_PS1_TEMP%" del /f /q "%SALAM_PS1_TEMP%" >nul 2>nul
+    if defined SALAM_WAIT echo   Closing in 60 seconds - press a key to close now.
+    if defined SALAM_WAIT if exist "%SystemRoot%\System32\timeout.exe" "%SystemRoot%\System32\timeout.exe" /t 60 >nul 2>nul
+    exit /b 1
 )
-if not exist "%BINARY%" (
-  echo error: could not find salam.exe inside %ASSET% 1>&2
-  rd /s /q "%WORKDIR%" >nul 2>nul
-  exit /b 1
+
+echo       starting install.ps1, which reports every step from here on
+
+set "SALAM_RC=1"
+"%SALAM_PS%" -NoProfile -ExecutionPolicy Bypass -File "%SALAM_PS1%" %*
+set "SALAM_RC=%ERRORLEVEL%"
+
+if defined SALAM_PS1_TEMP if exist "%SALAM_PS1_TEMP%" del /f /q "%SALAM_PS1_TEMP%" >nul 2>nul
+
+if not "%SALAM_RC%"=="0" (
+    echo   The installer stopped with exit code %SALAM_RC%.
+    echo   If nothing was reported above it, this machine blocks PowerShell
+    echo   scripts; take a release archive from %SALAM_RELEASES% instead.
+    echo.
 )
 
-if "%INSTALL_DIR%"=="" set "INSTALL_DIR=%USERPROFILE%\.salam\bin"
-if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%" >nul 2>nul
-copy /y "%BINARY%" "%INSTALL_DIR%\salam.exe" >nul
+if defined SALAM_WAIT echo   Closing in 60 seconds - press a key to close now.
+if defined SALAM_WAIT if exist "%SystemRoot%\System32\timeout.exe" "%SystemRoot%\System32\timeout.exe" /t 60 >nul 2>nul
 
-if exist "%EXTRACT_DIR%\salam-%PLATFORM%\tcc" (
-  xcopy /e /i /y /q "%EXTRACT_DIR%\salam-%PLATFORM%\tcc" "%INSTALL_DIR%\tcc" >nul
-)
-
-rem The compiler looks for a std\ directory next to its own binary (among
-rem other places); without this, every "import os" fails with "standard
-rem library package not found" once salam.exe is on PATH but std\ was left
-rem behind in the extracted archive.
-if exist "%EXTRACT_DIR%\salam-%PLATFORM%\std" (
-  xcopy /e /i /y /q "%EXTRACT_DIR%\salam-%PLATFORM%\std" "%INSTALL_DIR%\std" >nul
-) else (
-  echo warning: no std\ directory found inside %ASSET% - the compiler will not find the standard library
-)
-
-echo Installed: %INSTALL_DIR%\salam.exe
-"%INSTALL_DIR%\salam.exe" version 2>nul
-
-if /I "%INSTALL_DIR%"=="%USERPROFILE%\.salam\bin" (
-  echo ";%PATH%;" | find /I ";%INSTALL_DIR%;" >nul
-  if errorlevel 1 (
-    for /f "usebackq tokens=2,*" %%A in (`reg query "HKCU\Environment" /v Path 2^>nul`) do set "USERPATH=%%B"
-    setx PATH "%USERPATH%;%INSTALL_DIR%" >nul
-    echo Added %INSTALL_DIR% to your user PATH. Open a new terminal for it to take effect.
-  )
-)
-
-rd /s /q "%WORKDIR%" >nul 2>nul
-echo Done. Run 'salam version' to verify (open a new terminal first if PATH was just updated^).
+exit /b %SALAM_RC%

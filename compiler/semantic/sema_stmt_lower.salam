@@ -308,6 +308,54 @@ func check_each(s &: Sema, a &: at.Ast, nid: int):
     each_finish(s, a, nid, seq_decl, fr2)
 end
 
+// A `repeat` index takes the type of the values that drive the loop: a u8
+// count hands the body a u8 index, an i64 count an i64 one. The body can
+// then compare, store and index with it against the very values it came
+// from, which is what makes the count's width worth carrying at all -
+// widening every index to i32 meant a cast at each of those uses, and a
+// u64 count lost its top bit on the way in.
+//
+// repeat_idx_note folds one bound (the count, or a range's end and step)
+// into that decision; repeat_idx_type answers it once all of them have
+// been seen.
+func repeat_idx_note(s &: Sema, t: int, ty &: int, fits &: bool, wide &: bool):
+    if t < 0:
+        fits = false
+        ret
+    end
+    k := ty_at(s, t).kind
+    if k == TY_I64 || k == TY_U64 || k == TY_SIZE:
+        // Kept separately from `ty`: it is all the fallback below needs,
+        // and it survives the bounds having no common type of their own.
+        wide = true
+    end
+    if !type_is_integer(s, t):
+        // A float bound - or one whose type is already an error - has no
+        // integer width to lend the index.
+        fits = false
+        ret
+    end
+    if ty == TYPE_NONE:
+        ty = t
+        ret
+    end
+    common := type_common_arith(s, ty, t)
+    if common == TYPE_NONE:
+        // Signed and unsigned bounds in one loop: neither type covers the
+        // other's range, so there is nothing here to inherit.
+        fits = false
+        ret
+    end
+    ty = common
+end
+
+func repeat_idx_type(s &: Sema, ty: int, fits: bool, wide: bool): int:
+    if fits && ty != TYPE_NONE:
+        ret ty
+    end
+    ret sema_ty(s, wide ? TY_I64 : TY_I32)
+end
+
 // check_stmt - the C switch becomes an if/else chain; the C mid-case
 // `break`s become `ret`s.
 func check_stmt(s &: Sema, a &: at.Ast, nid: int):
@@ -598,7 +646,10 @@ func check_stmt(s &: Sema, a &: at.Ast, nid: int):
                 )
             end
         end
-        mut iv_need64 := ty_at(s, c5).kind == TY_I64 || ty_at(s, c5).kind == TY_U64
+        mut iv_ty := TYPE_NONE
+        mut iv_fits := true
+        mut iv_wide := false
+        repeat_idx_note(s, c5, iv_ty, iv_fits, iv_wide)
         if n5.c != 0:
             e5 := sema_check_expr(s, a, n5.c)
             if !type_is_numeric(s, e5) && !type_is_error(s, e5):
@@ -608,9 +659,7 @@ func check_stmt(s &: Sema, a &: at.Ast, nid: int):
                     )
                 )
             end
-            if ty_at(s, e5).kind == TY_I64 || ty_at(s, e5).kind == TY_U64:
-                iv_need64 = true
-            end
+            repeat_idx_note(s, e5, iv_ty, iv_fits, iv_wide)
         end
         if n5.d != 0:
             st5 := sema_check_expr(s, a, n5.d)
@@ -632,11 +681,9 @@ func check_stmt(s &: Sema, a &: at.Ast, nid: int):
                     s, 63, span_of(a, n5.d), i18.Tr("repeat step must be a positive number (the direction comes from the bounds)")
                 )
             end
-            if ty_at(s, st5).kind == TY_I64 || ty_at(s, st5).kind == TY_U64:
-                iv_need64 = true
-            end
+            repeat_idx_note(s, st5, iv_ty, iv_fits, iv_wide)
         end
-        ivty := sema_ty(s, iv_need64 ? TY_I64 : TY_I32)
+        ivty := repeat_idx_type(s, iv_ty, iv_fits, iv_wide)
         _dt := sema_decorate(s, a, nid, ivty)
         saved5 := s.cur
         mut iv5 := 0

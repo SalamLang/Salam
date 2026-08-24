@@ -72,26 +72,28 @@ end
 
 // Declarations of one package, ordered by their own text.
 //
-// Sorting the file list is NOT enough to make this reproducible. dir.Walk
-// returns whatever the platform's directory walk produces - absolute or
-// relative, '/' or '\' separated, in filesystem order - and any of that can
-// change how paths compare, which changes the order declarations land in.
-// The committed index is byte-compared in CI against a Linux run, so an
-// order that depends on the host at all makes that check fail on content
-// that is actually identical.
+// Only the .salam files sitting directly in the package's own directory
+// count. A nested directory carrying its own anchor is a separate package -
+// std/encoding/json is `encoding.json`, not part of `encoding` - and walking
+// into it files every one of its declarations under the parent, which is a
+// shape no caller can untangle afterwards.
 //
-// Sorting the declaration strings themselves removes the filesystem from the
-// answer completely: the output becomes a pure function of what std/ says,
-// not of how the OS enumerates it.
+// Sorting the declaration strings is what keeps this reproducible. The
+// directory listing arrives in whatever order the platform produces, and the
+// committed index is compared in CI against a Linux run, so an order that
+// depends on the host at all fails that check on content that is identical.
+// Sorting the strings themselves takes the filesystem out of the answer: the
+// output becomes a pure function of what std/ says, not of how the OS
+// enumerates it.
 func _decls_of(pkg_dir: str): value.Value:
     mut arr := value.NewValueArray()
     if !dir.Exists(pkg_dir): ret arr end
-    files := dir.Walk(pkg_dir)
+    entries := dir.List(pkg_dir)
     mut found := Vector {} as Vector<str>
     mut i := 0
-    until i < files.len():
-        f := files.get(i)
-        if str.EndsWith(f, ".salam"): _collect(found, f) end
+    until i < entries.len():
+        e := entries.get(i)
+        if str.EndsWith(e, ".salam"): _collect(found, path.Join(pkg_dir, e)) end
         i += 1
     end
     sorted := mcptxt.Sorted(found)
@@ -113,24 +115,34 @@ func _collect(out &: Vector<str>, f: str):
     end
 end
 
+// Records every importable package under `dir_path` beneath its dotted import
+// name, then descends to do the same for the packages nested inside it.
+//
+// The anchor rule is the compiler's: std/foo/foo.salam, or `import foo` does
+// not resolve. A directory without one is not a package and is not descended
+// into either, so the native shims and example trees stay out.
+func _walk_pkgs(pkgs &: value.Value, dir_path: str, prefix: str):
+    names := dir.ListDirs(dir_path)
+    mut i := 0
+    until i < names.len():
+        n := names.get(i)
+        sub := path.Join(dir_path, n)
+        if file.Exists(path.Join(sub, n.concat(".salam"))):
+            mut full := n
+            if prefix.len() > 0: full = prefix.concat(".").concat(n) end
+            value.ObjectSet(pkgs, full, _decls_of(sub))
+            _walk_pkgs(pkgs, sub, full)
+        end
+        i += 1
+    end
+end
+
 func _index(): str:
     root := _std_root()
     mut out := value.NewValueObject()
     value.ObjectSet(out, "root", value.ValueString("std"))
     mut pkgs := value.NewValueObject()
-    if dir.Exists(root):
-        names := dir.ListDirs(root)
-        mut i := 0
-        until i < names.len():
-            n := names.get(i)
-            // Same anchor rule the compiler uses: std/foo/foo.salam or it is
-            // not an importable package.
-            if file.Exists(path.Join(path.Join(root, n), n.concat(".salam"))):
-                value.ObjectSet(pkgs, n, _decls_of(path.Join(root, n)))
-            end
-            i += 1
-        end
-    end
+    if dir.Exists(root): _walk_pkgs(pkgs, root, "") end
     value.ObjectSet(out, "packages", pkgs)
     // sort_keys is load-bearing, not cosmetic: package names land in a
     // HashMap, so their iteration order follows hash buckets seeded by

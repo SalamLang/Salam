@@ -19,12 +19,13 @@ exists (see "Self-contained toolchain" below).
 
 ## What `salam build` does today
 
-| invocation                         | path                                        |
-| ---------------------------------- | ------------------------------------------- |
-| `salam build app.salam`            | Salam -> C -> bundled tcc                   |
-| `salam build app.salam --cc=gcc`   | Salam -> C -> system gcc, auto `-O2`        |
-| `salam build app.salam --target=T` | Salam -> LLVM IR -> object -> lld           |
-| `salam llvm app.salam ...`         | Salam -> LLVM IR (explicit, all emit modes) |
+| invocation                             | path                                        |
+| -------------------------------------- | ------------------------------------------- |
+| `salam build app.salam`                | Salam -> C -> bundled tcc                   |
+| `salam build app.salam --cc=gcc`       | Salam -> C -> system gcc, auto `-O2`        |
+| `salam build app.salam --backend=llvm` | Salam -> LLVM IR -> object, auto `-O2`      |
+| `salam build app.salam --target=T`     | Salam -> LLVM IR -> object -> lld           |
+| `salam llvm app.salam ...`             | Salam -> LLVM IR (explicit, all emit modes) |
 
 The default comes from [`cli.c:38`](../c/src/cli/cli.c#L38) (`out->cc = "tcc"`),
 and the cross path is chosen at
@@ -471,7 +472,14 @@ no external toolchain involved.
 2. Decide the layout-DSL question (50).
 3. Get all of `tests/en` to parity, then gate it in `run-tests.sh` so the
    fallback path becomes an error rather than a safety net.
-4. Consider making `--release` imply `-O2` through LLVM.
+4. ~~Consider making `--release` imply `-O2` through LLVM.~~ Done, and for
+   every build rather than just `--release`: a `salam build` through the LLVM
+   backend now optimizes at `-O2` (`-O3` with `--release`, `-O0` with
+   `--debug-info`/`--asan`), matching the `-O2` the C backend has always
+   handed the C compiler. A named `-O<n>` still wins. `salam llvm` keeps its
+   `-O0` default - that command exists to be read, and the tests under
+   `tests/en/llvm` are there to catch bugs in the IR we emit, which running
+   the optimizer over it would mask.
 5. Port everything to `compiler/llvm.salam` (see parity note).
 
 ## Bugs found along the way

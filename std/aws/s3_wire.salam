@@ -286,11 +286,11 @@ end
 
 // _head_block - the request line and headers, ready to write. `authorization`
 // is empty for an anonymous request, which sends no credential at all.
-func _head_block(r: Request, path: str, query: str, authorization: str,
-    signed_set: Headers): str:
+func _head_block(method: str, path: str, query: str, authorization: str,
+    signed_set: Headers, body_len: int): str:
     mut sb := str.NewBuilder()
     defer str.BufFree(sb)
-    str.BufAppend(sb, r.method)
+    str.BufAppend(sb, method)
     str.BufAppend(sb, " ")
     str.BufAppend(sb, path)
     if query.len() > 0:
@@ -315,20 +315,20 @@ func _head_block(r: Request, path: str, query: str, authorization: str,
         str.BufAppend(sb, "\r\n")
     end
     str.BufAppend(sb, "Content-Length: ")
-    str.BufAppendInt(sb, r.body_len as i64)
+    str.BufAppendInt(sb, body_len as i64)
     str.BufAppend(sb, "\r\nConnection: close\r\n\r\n")
     ret str.BufStr(sb)
 end
 
 // _signing_set - the headers that are both sent and signed: what the caller
 // asked for, plus the four the protocol requires.
-func _signing_set(cfg: Config, r: Request, host: str, amz_date: str,
+func _signing_set(cfg: Config, extra: Headers, host: str, amz_date: str,
     payload_hash: str): Headers:
     mut out := Headers {}
     _hdr_set(out, "Host", host)
     mut i := 0
-    until i < r.headers.names.len():
-        _hdr_set(out, r.headers.names.get(i), r.headers.values.get(i))
+    until i < extra.names.len():
+        _hdr_set(out, extra.names.get(i), extra.values.get(i))
         i += 1
     end
     if cfg.request_payer: _hdr_set(out, "x-amz-request-payer", "requester") end
@@ -347,29 +347,42 @@ func _payload_hash(r: Request): str:
     ret EMPTY_SHA256
 end
 
+// _dispatch - sign and send one request whose addressing is already decided.
+//
+// Everything after "which host and which path" is identical for every AWS
+// service, and this is that part. S3 reaches it through _send_once, which
+// works out the bucket addressing first; every other service reaches it
+// through Invoke() in service.salam, where the host is just the service name.
+// One implementation rather than two, because a second signer would drift.
+func _dispatch(cfg: Config, ep: httpx.Endpoint, method: str, host: str,
+    path: str, query: str, extra: Headers, body: void*, body_len: int,
+    payload_hash: str, at: i64): httpx.Raw:
+    amz_date := AmzDate(at)
+    signed_set := _signing_set(cfg, extra, host, amz_date, payload_hash)
+    if cfg.anonymous:
+        ret httpx.SendRawTimeout(ep,
+            _head_block(method, path, query, "", signed_set, body_len),
+            body, body_len, cfg.timeout_ms)
+    end
+    mut signed_names := ""
+    canonical := _canon_headers(signed_set, signed_names)
+    s := SignRequest(cfg, method, path, query, canonical, signed_names,
+        payload_hash, at)
+    if !s.ok: ret httpx.Raw { error = "the request could not be signed" } end
+    head := _head_block(method, path, query, s.authorization, signed_set,
+        body_len)
+    ret httpx.SendRawTimeout(ep, head, body, body_len, cfg.timeout_ms)
+end
+
 func _send_once(cfg: Config, r: Request, at: i64): httpx.Raw:
     ep := httpx.ParseEndpoint(cfg.endpoint)
     if !ep.ok:
         ret httpx.Raw { error = "the endpoint could not be parsed: " + cfg.endpoint }
     end
     bucket := _bucket_of(cfg, r)
-    host := _wire_host(cfg, ep, bucket)
-    path := _wire_path(cfg, bucket, r.key)
-    query := _canon_query(r.query)
-    payload_hash := _payload_hash(r)
-    amz_date := AmzDate(at)
-    signed_set := _signing_set(cfg, r, host, amz_date, payload_hash)
-    if cfg.anonymous:
-        ret httpx.SendRaw(ep, _head_block(r, path, query, "", signed_set),
-            r.body, r.body_len)
-    end
-    mut signed_names := ""
-    canonical := _canon_headers(signed_set, signed_names)
-    s := SignRequest(cfg, r.method, path, query, canonical, signed_names,
-        payload_hash, at)
-    if !s.ok: ret httpx.Raw { error = "the request could not be signed" } end
-    head := _head_block(r, path, query, s.authorization, signed_set)
-    ret httpx.SendRaw(ep, head, r.body, r.body_len)
+    ret _dispatch(cfg, ep, r.method, _wire_host(cfg, ep, bucket),
+        _wire_path(cfg, bucket, r.key), _canon_query(r.query), r.headers,
+        r.body, r.body_len, _payload_hash(r), at)
 end
 
 // _do_raw - one request, with retries. The signature is rebuilt on every
@@ -625,7 +638,7 @@ pub func CanonicalRequest(cfg: Config, r: Request, at: i64): str:
     bucket := _bucket_of(cfg, r)
     host := _wire_host(cfg, ep, bucket)
     payload_hash := _payload_hash(r)
-    signed_set := _signing_set(cfg, r, host, AmzDate(at), payload_hash)
+    signed_set := _signing_set(cfg, r.headers, host, AmzDate(at), payload_hash)
     mut signed_names := ""
     canonical := _canon_headers(signed_set, signed_names)
     ret r.method + "\n" + _wire_path(cfg, bucket, r.key) + "\n" +
@@ -643,11 +656,14 @@ pub func PreparedHead(cfg: Config, r: Request, at: i64): str:
     query := _canon_query(r.query)
     payload_hash := _payload_hash(r)
     amz_date := AmzDate(at)
-    signed_set := _signing_set(cfg, r, host, amz_date, payload_hash)
+    signed_set := _signing_set(cfg, r.headers, host, amz_date, payload_hash)
     mut signed_names := ""
     canonical := _canon_headers(signed_set, signed_names)
     s := SignRequest(cfg, r.method, path, query, canonical, signed_names,
         payload_hash, at)
-    if cfg.anonymous: ret _head_block(r, path, query, "", signed_set) end
-    ret _head_block(r, path, query, s.authorization, signed_set)
+    if cfg.anonymous:
+        ret _head_block(r.method, path, query, "", signed_set, r.body_len)
+    end
+    ret _head_block(r.method, path, query, s.authorization, signed_set,
+        r.body_len)
 end

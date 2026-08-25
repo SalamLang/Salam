@@ -239,12 +239,29 @@ func _raw_status(head: str): int:
     ret head.substr(sp + 1, 3).to_int()
 end
 
-func _raw_send_plain(ep: Endpoint, head: str, body: void*, n: int): Raw:
+// _dial_tls - a TLS connection with a deadline on the socket underneath it.
+//
+// tls.Dial() does its own connect and never exposes the descriptor, so there
+// is nowhere to put a deadline. Connecting first and wrapping the descriptor
+// gives the same connection with a timeout on it. tls.Close() closes the
+// descriptor itself, so the tcp side must not be closed as well.
+func _dial_tls(ep: Endpoint, timeout_ms: int): tls.Conn:
+    cfg := tls.NewConfig(ep.host)
+    if timeout_ms <= 0: ret tls.Dial(ep.host, ep.port, cfg) end
+    t := tcp.Dial(ep.host, ep.port)
+    if !tcp.ConnOk(t): ret tls.Conn { err = "could not connect to " + ep.host } end
+    tcp.SetDeadline(t, timeout_ms)
+    ret tls.WrapClient(t.fd, cfg)
+end
+
+func _raw_send_plain(ep: Endpoint, head: str, body: void*, n: int,
+    timeout_ms: int): Raw:
     c := tcp.Dial(ep.host, ep.port)
     if !tcp.ConnOk(c):
         ret Raw { error = "could not connect to " + ep.host + ":" + ep.port }
     end
     defer tcp.Close(c)
+    if timeout_ms > 0: tcp.SetDeadline(c, timeout_ms) end
     mut a := RawAcc {}
     if tcp.Write(c, head) < 0: ret _raw_finish(a, "could not send the request") end
     if n > 0 && tcp.WriteBytes(c, body, n) < 0:
@@ -253,9 +270,9 @@ func _raw_send_plain(ep: Endpoint, head: str, body: void*, n: int): Raw:
     ret _raw_finish(a, _raw_read_plain(c, a))
 end
 
-func _raw_send_tls(ep: Endpoint, head: str, body: void*, n: int): Raw:
-    cfg := tls.NewConfig(ep.host)
-    mut c := tls.Dial(ep.host, ep.port, cfg)
+func _raw_send_tls(ep: Endpoint, head: str, body: void*, n: int,
+    timeout_ms: int): Raw:
+    mut c := _dial_tls(ep, timeout_ms)
     if !tls.ConnOk(c):
         e := tls.ConnError(c)
         tls.Close(c)
@@ -276,9 +293,21 @@ end
 // line, exactly as Send() takes it. The returned Raw owns its body; release it
 // with FreeRaw().
 pub func SendRaw(ep: Endpoint, head: str, body: void*, n: int): Raw:
+    ret SendRawTimeout(ep, head, body, n, 0)
+end
+
+// SendRawTimeout - the same with a deadline, in milliseconds, on every socket
+// operation. Zero waits forever, which is what SendRaw does.
+//
+// Worth setting for anything reached over a network the caller does not
+// control, and required for anything that might not be there at all: a probe
+// of a link-local metadata address on a machine that has none does not fail,
+// it stops responding, and without a deadline the program stops with it.
+pub func SendRawTimeout(ep: Endpoint, head: str, body: void*, n: int,
+    timeout_ms: int): Raw:
     if !ep.ok: ret Raw { error = "the endpoint could not be parsed" } end
-    if ep.secure: ret _raw_send_tls(ep, head, body, n) end
-    ret _raw_send_plain(ep, head, body, n)
+    if ep.secure: ret _raw_send_tls(ep, head, body, n, timeout_ms) end
+    ret _raw_send_plain(ep, head, body, n, timeout_ms)
 end
 
 // FreeRaw - release the body. Safe to call twice, and safe on a Raw that never

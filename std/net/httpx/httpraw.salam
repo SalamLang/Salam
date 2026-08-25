@@ -1,0 +1,316 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package httpx
+
+// One request whose *response* body may be any bytes.
+//
+// httpx.salam already sends a binary body; what it cannot do is receive one.
+// Its Response carries the body as `str`, and a `str` stops at the first NUL,
+// so a PNG, a zip, or an encrypted object comes back silently truncated. That
+// is fine for the XML and JSON an API answers with, and useless for an object
+// store, where the whole point is to hand back the bytes that went in.
+//
+// Raw is the receiving half: the head stays text, because a header block is
+// ASCII by definition, and the body is a buffer the caller owns and frees.
+//
+// Chunked responses are decoded here rather than left to the caller. S3 itself
+// answers with Content-Length, but a reverse proxy in front of it is free to
+// re-frame the response, and a caller that got a chunked body without knowing
+// it would write the chunk headers into its file.
+
+import mem
+import str
+import tls
+import net.tcp
+
+const RAW_CHUNK := 65536
+
+// The ceiling on one response body. An object store will happily be asked for
+// something larger than memory; refusing at a stated limit is a better failure
+// than an allocator returning null halfway through.
+const RAW_LIMIT_DEFAULT := 268435456
+
+mut _raw_limit := RAW_LIMIT_DEFAULT
+
+// Raw - one answer, with the body as bytes.
+//
+// `data` is owned by the caller and must be released with FreeRaw(). It is
+// null when the body is empty, which is the normal case for HEAD, DELETE and
+// a 304.
+pub struct Raw:
+    pub status: int = 0
+    pub head: str = ""
+    pub data: void* = null
+    pub len: int = 0
+    pub ok: bool = false
+    pub error: str = ""
+end
+
+// RawAcc - the growing read buffer. Private: it exists for the duration of one
+// response and hands its allocation to the Raw that replaces it.
+struct RawAcc:
+    pub data: void* = null
+    pub len: int = 0
+    pub cap: int = 0
+    pub bad: bool = false
+end
+
+inline func _raw_byte(p: void*, i: int): int:
+    bp := p as u8*
+    ret bp[i] as int
+end
+
+func _raw_grow(a &: RawAcc, need: int): bool:
+    if a.bad: ret false end
+    if a.len + need <= a.cap: ret true end
+    mut nc := a.cap
+    if nc < RAW_CHUNK: nc = RAW_CHUNK end
+    until nc < a.len + need: nc = nc * 2 end
+    p := mem.Reallocate(a.data, nc as u64)
+    if p == null:
+        a.bad = true
+        ret false
+    end
+    a.data = p
+    a.cap = nc
+    ret true
+end
+
+// _raw_at - a writable pointer to the free space at the end of the buffer.
+func _raw_at(a &: RawAcc, off: int): void*:
+    ret ((a.data as i64) + (off as i64)) as void*
+end
+
+// _raw_read_plain - read to the close. The request asks for Connection: close,
+// so end of stream is end of response and no framing is needed on the way in.
+func _raw_read_plain(c: tcp.Conn, a &: RawAcc): str:
+    until true:
+        if !_raw_grow(a, RAW_CHUNK): ret "out of memory reading the response" end
+        n := tcp.ReadBytes(c, _raw_at(a, a.len), RAW_CHUNK)
+        if n <= 0: ret "" end
+        a.len += n
+        if a.len > _raw_limit:
+            ret "the response is larger than the " + _raw_limit + "-byte limit"
+        end
+    end
+end
+
+func _raw_read_tls(c &: tls.Conn, a &: RawAcc): str:
+    until true:
+        if !_raw_grow(a, RAW_CHUNK): ret "out of memory reading the response" end
+        n := tls.ReadBytes(c, _raw_at(a, a.len), RAW_CHUNK)
+        if n <= 0: ret "" end
+        a.len += n
+        if a.len > _raw_limit:
+            ret "the response is larger than the " + _raw_limit + "-byte limit"
+        end
+    end
+end
+
+// _raw_head_end - the offset just past the blank line that ends the head.
+func _raw_head_end(a &: RawAcc): int:
+    mut i := 0
+    until i + 3 < a.len:
+        if _raw_byte(a.data, i) == 13 && _raw_byte(a.data, i + 1) == 10 &&
+            _raw_byte(a.data, i + 2) == 13 && _raw_byte(a.data, i + 3) == 10:
+            ret i + 4
+        end
+        i += 1
+    end
+    ret -1
+end
+
+func _raw_head_str(a &: RawAcc, n: int): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    repeat n with i:
+        str.BufAppendChar(sb, _raw_byte(a.data, i))
+    end
+    ret str.BufStr(sb)
+end
+
+func _raw_hexval(c: int): int:
+    if c >= 48 && c <= 57: ret c - 48 end
+    if c >= 97 && c <= 102: ret c - 87 end
+    if c >= 65 && c <= 70: ret c - 55 end
+    ret -1
+end
+
+// _raw_dechunk - collapse a chunked body in place.
+//
+// In place is safe because the destination offset never overtakes the source:
+// every chunk is preceded by at least a length line and a CRLF, so the output
+// is strictly shorter than the input.
+func _raw_dechunk(a &: RawAcc, start: int, out_len &: int): bool:
+    mut src := start
+    mut dst := start
+    until true:
+        mut size := 0
+        mut digits := 0
+        until src < a.len:
+            d := _raw_hexval(_raw_byte(a.data, src))
+            if d < 0: break end
+            size = size * 16 + d
+            digits += 1
+            src += 1
+        end
+        if digits == 0: ret false end
+        // Skip any chunk extension, then the CRLF that ends the size line.
+        until src < a.len && _raw_byte(a.data, src) != 10: src += 1 end
+        if src >= a.len: ret false end
+        src += 1
+        if size == 0:
+            out_len = dst - start
+            ret true
+        end
+        if src + size > a.len: ret false end
+        if dst != src:
+            mem.MemMove(_raw_at(a, dst), _raw_at(a, src), size as u64)
+        end
+        dst += size
+        src += size
+        // The CRLF that terminates the chunk data.
+        if src + 1 < a.len && _raw_byte(a.data, src) == 13: src += 2
+        else src < a.len && _raw_byte(a.data, src) == 10: src += 1
+        end
+    end
+end
+
+// _raw_finish - split the accumulated bytes into a Raw, handing the body
+// allocation over rather than copying it.
+func _raw_finish(a &: RawAcc, err: str): Raw:
+    if err.len() > 0:
+        mem.Free(a.data)
+        ret Raw { error = err }
+    end
+    if a.len == 0:
+        mem.Free(a.data)
+        ret Raw { error = "the server closed without answering" }
+    end
+    head_end := _raw_head_end(a)
+    if head_end < 0:
+        mem.Free(a.data)
+        ret Raw { error = "the response head never ended" }
+    end
+    head := _raw_head_str(a, head_end)
+    mut body_len := a.len - head_end
+    if str.Contains(HeaderValue(head, "Transfer-Encoding").lower(), "chunked"):
+        mut decoded := 0
+        if !_raw_dechunk(a, head_end, decoded):
+            mem.Free(a.data)
+            ret Raw { error = "the chunked response body could not be decoded" }
+        end
+        body_len = decoded
+    end
+    status := _raw_status(head)
+    mut out := Raw {
+        status = status,
+        head = head,
+        len = body_len,
+        ok = status >= 200 && status < 300
+    }
+    if body_len == 0:
+        mem.Free(a.data)
+        ret out
+    end
+    // Slide the body to the front so the caller owns one allocation that is
+    // exactly the object, and can hand `data`/`len` to anything expecting a
+    // buffer without an offset travelling alongside it.
+    mem.MemMove(a.data, _raw_at(a, head_end), body_len as u64)
+    out.data = a.data
+    ret out
+end
+
+func _raw_status(head: str): int:
+    sp := head.find(" ")
+    if sp < 0: ret 0 end
+    ret head.substr(sp + 1, 3).to_int()
+end
+
+func _raw_send_plain(ep: Endpoint, head: str, body: void*, n: int): Raw:
+    c := tcp.Dial(ep.host, ep.port)
+    if !tcp.ConnOk(c):
+        ret Raw { error = "could not connect to " + ep.host + ":" + ep.port }
+    end
+    defer tcp.Close(c)
+    mut a := RawAcc {}
+    if tcp.Write(c, head) < 0: ret _raw_finish(a, "could not send the request") end
+    if n > 0 && tcp.WriteBytes(c, body, n) < 0:
+        ret _raw_finish(a, "could not send the body")
+    end
+    ret _raw_finish(a, _raw_read_plain(c, a))
+end
+
+func _raw_send_tls(ep: Endpoint, head: str, body: void*, n: int): Raw:
+    cfg := tls.NewConfig(ep.host)
+    mut c := tls.Dial(ep.host, ep.port, cfg)
+    if !tls.ConnOk(c):
+        e := tls.ConnError(c)
+        tls.Close(c)
+        ret Raw { error = "TLS: " + e }
+    end
+    defer tls.Close(c)
+    mut a := RawAcc {}
+    if tls.Write(c, head) < 0: ret _raw_finish(a, "could not send the request") end
+    if n > 0 && tls.WriteBytes(c, body, n) < 0:
+        ret _raw_finish(a, "could not send the body")
+    end
+    ret _raw_finish(a, _raw_read_tls(c, a))
+end
+
+// SendRaw - one request, with the response body kept as bytes.
+//
+// `head` is the complete request line and header block terminated by a blank
+// line, exactly as Send() takes it. The returned Raw owns its body; release it
+// with FreeRaw().
+pub func SendRaw(ep: Endpoint, head: str, body: void*, n: int): Raw:
+    if !ep.ok: ret Raw { error = "the endpoint could not be parsed" } end
+    if ep.secure: ret _raw_send_tls(ep, head, body, n) end
+    ret _raw_send_plain(ep, head, body, n)
+end
+
+// FreeRaw - release the body. Safe to call twice, and safe on a Raw that never
+// carried one.
+pub func FreeRaw(r &: Raw):
+    if r.data != null:
+        mem.Free(r.data)
+        r.data = null
+    end
+    r.len = 0
+end
+
+// RawText - the body as text, for a response that is known to be text (an XML
+// error document, a JSON manifest). Stops at a NUL, which is the reason the
+// bytes are the default and this is the opt-in.
+pub func RawText(r: Raw): str:
+    if r.data == null || r.len == 0: ret "" end
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    repeat r.len with i:
+        b := _raw_byte(r.data, i)
+        if b == 0: break end
+        str.BufAppendChar(sb, b)
+    end
+    ret str.BufStr(sb)
+end
+
+// RawLimit - the current ceiling on a response body.
+pub func RawLimit(): int: ret _raw_limit end
+
+// SetRawLimit - raise or lower it. A caller that genuinely wants a
+// half-gigabyte object in memory can say so; the default refuses.
+pub func SetRawLimit(bytes: int):
+    if bytes > 0: _raw_limit = bytes end
+end

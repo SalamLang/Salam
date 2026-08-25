@@ -1,0 +1,660 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// std/aws driven against a mock object store over a real socket.
+//
+// aws_demo.salam checks the signing and parsing in isolation, where the inputs
+// are fixed strings. This checks the part that cannot be tested that way: the
+// request that actually goes out, the answer that actually comes back, and
+// whether the two agree.
+//
+// The mock does not merely accept what it is sent. It re-derives every
+// signature from the bytes on the wire - re-reading the signed header list,
+// rebuilding the canonical request from the received headers, rehashing the
+// received body, and recomputing the HMAC - and answers 403 when its result
+// differs. So a test that passes is a test where an independent reader of the
+// request agreed with the client about what the request was, which is the only
+// property that matters against a real service.
+//
+// It also covers what a `str` body cannot carry: an object with NUL bytes in
+// it, round-tripped and compared byte for byte.
+
+import aws
+import mem
+import str
+import sync
+import crypto
+import net.tcp
+
+const PORT := 19844
+const ALGO := "AWS4-HMAC-SHA256"
+const READ_CAP := 262144
+const ACCESS_KEY := "AKIAIOSFODNN7EXAMPLE"
+const SECRET_KEY := "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+
+mut wg := sync.NewWaitGroup()
+
+// ---- small helpers ----
+
+func at(p: void*, off: int): void*:
+    ret ((p as i64) + (off as i64)) as void*
+end
+
+func byte_at(p: void*, i: int): int:
+    bp := p as u8*
+    ret bp[i] as int
+end
+
+func to_str(p: void*, n: int): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    repeat n with i:
+        str.BufAppendChar(sb, byte_at(p, i))
+    end
+    ret str.BufStr(sb)
+end
+
+func hexval(c: int): int:
+    if c >= 48 && c <= 57: ret c - 48 end
+    if c >= 97 && c <= 102: ret c - 87 end
+    if c >= 65 && c <= 70: ret c - 55 end
+    ret 0 - 1
+end
+
+// pct_decode - the mock's own decoder, deliberately not the package's: a test
+// that decodes with the code under test proves nothing about the encoding.
+func pct_decode(s: str): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    n := s.len()
+    mut i := 0
+    until i < n:
+        c := s[i] as int
+        if c == 37 && i + 2 < n:
+            hi := hexval(s[i + 1] as int)
+            lo := hexval(s[i + 2] as int)
+            if hi >= 0 && lo >= 0:
+                str.BufAppendChar(sb, hi * 16 + lo)
+                i += 3
+                continue
+            end
+        end
+        str.BufAppendChar(sb, c)
+        i += 1
+    end
+    ret str.BufStr(sb)
+end
+
+// hdr_get - one header of a request, case-insensitively.
+func hdr_get(head: str, name: str): str:
+    lower := head.lower()
+    needle := "\r\n" + name.lower() + ":"
+    a := lower.find(needle)
+    if a < 0: ret "" end
+    start := a + needle.len()
+    mut stop := str.IndexFrom(head, "\r\n", start)
+    if stop < 0: stop = head.len() end
+    ret head.substr(start, stop - start).trim()
+end
+
+// field - one space-separated field of the request line.
+func field(head: str, which: int): str:
+    mut start := 0
+    mut n := 0
+    until n < which:
+        sp := str.IndexFrom(head, " ", start)
+        if sp < 0: ret "" end
+        start = sp + 1
+        n += 1
+    end
+    stop := str.IndexFrom(head, " ", start)
+    if stop < 0: ret "" end
+    ret head.substr(start, stop - start)
+end
+
+func between(s: str, open: str, close: str): str:
+    a := s.find(open)
+    if a < 0: ret "" end
+    start := a + open.len()
+    stop := str.IndexFrom(s, close, start)
+    if stop < 0: ret s.substr(start, s.len() - start) end
+    ret s.substr(start, stop - start)
+end
+
+func query_of(target: str): str:
+    a := target.find("?")
+    if a < 0: ret "" end
+    ret target.substr(a + 1, target.len() - a - 1)
+end
+
+func path_of(target: str): str:
+    a := target.find("?")
+    if a < 0: ret target end
+    ret target.substr(0, a)
+end
+
+// param - one value out of a query string, decoded.
+func param(query: str, name: str): str:
+    mut pos := 0
+    until pos < query.len():
+        mut stop := str.IndexFrom(query, "&", pos)
+        if stop < 0: stop = query.len() end
+        pair := query.substr(pos, stop - pos)
+        eq := pair.find("=")
+        if eq >= 0 && pct_decode(pair.substr(0, eq)) == name:
+            ret pct_decode(pair.substr(eq + 1, pair.len() - eq - 1))
+        end
+        pos = stop + 1
+    end
+    ret ""
+end
+
+// ---- signature verification ----
+
+func mock_config(): aws.Config:
+    ret aws.Config {
+        endpoint = "http://127.0.0.1:19844",
+        region = "us-east-1",
+        bucket = "bucket",
+        access_key = ACCESS_KEY,
+        secret_key = SECRET_KEY,
+        path_style = true,
+        retry = 1
+    }
+end
+
+// canon_headers - the block the client claims to have signed, rebuilt from the
+// headers that actually arrived. A header that was signed and not sent, or
+// sent with a different value, produces a different block and therefore a
+// different signature.
+func canon_headers(head: str, signed: str, ok &: bool): str:
+    mut block := ""
+    mut pos := 0
+    ok = true
+    until pos < signed.len():
+        mut stop := str.IndexFrom(signed, ";", pos)
+        if stop < 0: stop = signed.len() end
+        name := signed.substr(pos, stop - pos)
+        value := hdr_get(head, name)
+        if value.len() == 0 && name != "host":
+            ok = false
+        end
+        block = block + name + ":" + value + "\n"
+        pos = stop + 1
+    end
+    ret block
+end
+
+// verify - "" when the request signs to what it claims, a reason otherwise.
+func verify(head: str, body: void*, blen: int): str:
+    auth := hdr_get(head, "Authorization")
+    if auth.len() == 0: ret "no Authorization header" end
+    if !str.StartsWith(auth, ALGO): ret "unexpected algorithm" end
+    cred := between(auth, "Credential=", ",")
+    signed := between(auth, "SignedHeaders=", ",")
+    sig := between(auth, "Signature=", "\r\n")
+    if cred.len() == 0 || signed.len() == 0 || sig.len() == 0:
+        ret "malformed Authorization header"
+    end
+    slash := cred.find("/")
+    if slash < 0: ret "malformed credential" end
+    if cred.substr(0, slash) != ACCESS_KEY: ret "unknown access key" end
+    date_stamp := cred.substr(slash + 1, 8)
+    payload := hdr_get(head, "x-amz-content-sha256")
+    if payload.len() == 0: ret "no payload hash" end
+    if payload != aws.UNSIGNED_PAYLOAD && payload != aws.Sha256Bytes(body, blen):
+        ret "the payload hash does not describe the body"
+    end
+    mut complete := false
+    block := canon_headers(head, signed, complete)
+    if !complete: ret "a signed header was not sent" end
+    target := field(head, 1)
+    creq := field(head, 0) + "\n" + path_of(target) + "\n" + query_of(target) +
+        "\n" + block + "\n" + signed + "\n" + payload
+    amz := hdr_get(head, "x-amz-date")
+    if aws.DateStamp(amz) != date_stamp: ret "the date and its scope disagree" end
+    sts := ALGO + "\n" + amz + "\n" +
+        aws.Scope(date_stamp, "us-east-1", "s3") + "\n" + crypto.Sha256Hex(creq)
+    if aws.SignString(mock_config(), date_stamp, sts) != sig:
+        ret "signature mismatch"
+    end
+    ret ""
+end
+
+// ---- the store ----
+
+func store_find(keys &: Vector<str>, key: str): int:
+    mut i := 0
+    until i < keys.len():
+        if keys.get(i) == key: ret i end
+        i += 1
+    end
+    ret 0 - 1
+end
+
+func store_put(keys &: Vector<str>, blobs &: Vector<i64>, sizes &: Vector<int>,
+    kinds &: Vector<str>, key: str, body: void*, n: int, kind: str):
+    copy := mem.Allocate((n + 1) as u64)
+    if copy == null: ret end
+    if n > 0: mem.Copy(copy, body, n as u64) end
+    old := store_find(keys, key)
+    if old >= 0:
+        mem.Free(blobs.get(old) as void*)
+        blobs.set(old, copy as i64)
+        sizes.set(old, n)
+        kinds.set(old, kind)
+        ret
+    end
+    keys.push(key)
+    blobs.push(copy as i64)
+    sizes.push(n)
+    kinds.push(kind)
+end
+
+// ---- responses ----
+
+func reason(status: int): str:
+    if status == 200: ret "OK" end
+    if status == 204: ret "No Content" end
+    if status == 206: ret "Partial Content" end
+    if status == 403: ret "Forbidden" end
+    if status == 404: ret "Not Found" end
+    ret "Error"
+end
+
+func respond(c: tcp.Conn, status: int, extra: str, body: void*, n: int,
+    with_body: bool):
+    head := "HTTP/1.1 " + status + " " + reason(status) + "\r\n" + extra +
+        "Content-Length: " + n + "\r\nConnection: close\r\n\r\n"
+    tcp.Write(c, head)
+    if with_body && n > 0: tcp.WriteBytes(c, body, n) end
+end
+
+func respond_text(c: tcp.Conn, status: int, body: str):
+    respond(c, status, "Content-Type: application/xml\r\n", body as void*,
+        body.len(), true)
+end
+
+func respond_error(c: tcp.Conn, status: int, code: str, message: str):
+    respond_text(c, status, "<?xml version=\"1.0\"?><Error><Code>" + code +
+        "</Code><Message>" + message + "</Message></Error>")
+end
+
+// listing - a ListBucketResult over the stored keys, url-encoded the way S3
+// encodes one when asked to.
+func listing(keys &: Vector<str>, sizes &: Vector<int>, prefix: str,
+    delim: str): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppend(sb, "<?xml version=\"1.0\"?><ListBucketResult>")
+    str.BufAppend(sb, "<Name>bucket</Name><Prefix>")
+    str.BufAppend(sb, aws.UriEncode(prefix, false))
+    str.BufAppend(sb, "</Prefix><Delimiter>")
+    str.BufAppend(sb, aws.UriEncode(delim, false))
+    str.BufAppend(sb, "</Delimiter><EncodingType>url</EncodingType>")
+    str.BufAppend(sb, "<IsTruncated>false</IsTruncated>")
+    mut folders := Vector {} as Vector<str>
+    defer folders.free()
+    mut i := 0
+    until i < keys.len():
+        key := keys.get(i)
+        if str.StartsWith(key, prefix):
+            rest := key.substr(prefix.len(), key.len() - prefix.len())
+            mut cut := 0 - 1
+            if delim.len() > 0: 
+                found := rest.find(delim)
+                if found >= 0:
+                    folder := prefix + rest.substr(0, found + delim.len())
+                    if store_find(folders, folder) < 0: folders.push(folder) end
+                    cut = found
+                end
+            end
+            if cut < 0:
+                str.BufAppend(sb, "<Contents><Key>")
+                str.BufAppend(sb, aws.UriEncode(key, false))
+                str.BufAppend(sb, "</Key><LastModified>2026-08-21T02:27:34.000Z</LastModified>")
+                str.BufAppend(sb, "<ETag>&quot;etag-")
+                str.BufAppendInt(sb, i as i64)
+                str.BufAppend(sb, "&quot;</ETag><Size>")
+                str.BufAppendInt(sb, sizes.get(i) as i64)
+                str.BufAppend(sb, "</Size><StorageClass>STANDARD</StorageClass></Contents>")
+            end
+        end
+        i += 1
+    end
+    mut f := 0
+    until f < folders.len():
+        str.BufAppend(sb, "<CommonPrefixes><Prefix>")
+        str.BufAppend(sb, aws.UriEncode(folders.get(f), false))
+        str.BufAppend(sb, "</Prefix></CommonPrefixes>")
+        f += 1
+    end
+    str.BufAppend(sb, "</ListBucketResult>")
+    ret str.BufStr(sb)
+end
+
+// range_of - the start and length a Range header asks for, clamped.
+func range_of(spec: str, total: int, start &: int): int:
+    start = 0
+    if !str.StartsWith(spec, "bytes="): ret total end
+    rest := spec.substr(6, spec.len() - 6)
+    dash := rest.find("-")
+    if dash < 0: ret total end
+    head := rest.substr(0, dash)
+    tail := rest.substr(dash + 1, rest.len() - dash - 1)
+    if head.len() == 0:
+        mut take := tail.to_int()
+        if take > total: take = total end
+        start = total - take
+        ret take
+    end
+    start = head.to_int()
+    if start >= total:
+        start = 0
+        ret 0
+    end
+    if tail.len() == 0: ret total - start end
+    mut stop := tail.to_int()
+    if stop >= total: stop = total - 1 end
+    ret stop - start + 1
+end
+
+// ---- the mock server ----
+
+func read_request(c: tcp.Conn, head &: str, body &: void*, blen &: int): bool:
+    buf := mem.Allocate(READ_CAP as u64)
+    if buf == null: ret false end
+    defer mem.Free(buf)
+    mut have := 0
+    mut head_end := 0 - 1
+    mut want := 0
+    until true:
+        if head_end < 0 && have >= 4:
+            mut i := 0
+            until i + 3 < have:
+                if byte_at(buf, i) == 13 && byte_at(buf, i + 1) == 10 &&
+                    byte_at(buf, i + 2) == 13 && byte_at(buf, i + 3) == 10:
+                    head_end = i + 4
+                    i = have
+                else:
+                    i += 1
+                end
+            end
+            if head_end >= 0:
+                head = to_str(buf, head_end)
+                cl := hdr_get(head, "Content-Length")
+                if cl.len() > 0: want = cl.to_int() end
+            end
+        end
+        if head_end >= 0 && have - head_end >= want: break end
+        if have >= READ_CAP: break end
+        got := tcp.ReadBytes(c, at(buf, have), READ_CAP - have)
+        if got <= 0: break end
+        have += got
+    end
+    if head_end < 0: ret false end
+    blen = have - head_end
+    if blen > want: blen = want end
+    if blen < 0: blen = 0 end
+    out := mem.Allocate((blen + 1) as u64)
+    if out == null: ret false end
+    if blen > 0: mem.Copy(out, at(buf, head_end), blen as u64) end
+    body = out
+    ret true
+end
+
+func serve():
+    srv := tcp.Bind(PORT)
+    sync.Done(wg)
+    if !tcp.Ok(srv): ret end
+    mut keys := Vector {} as Vector<str>
+    mut blobs := Vector {} as Vector<i64>
+    mut sizes := Vector {} as Vector<int>
+    mut kinds := Vector {} as Vector<str>
+    mut running := true
+    until running:
+        c := tcp.Accept(srv)
+        if !tcp.ConnOk(c): running = false
+        else:
+            mut head := ""
+            mut body := null as void*
+            mut blen := 0
+            if !read_request(c, head, body, blen):
+                tcp.Close(c)
+            else:
+                why := verify(head, body, blen)
+                method := field(head, 0)
+                target := field(head, 1)
+                query := query_of(target)
+                mut key := pct_decode(path_of(target).substr(7, path_of(target).len() - 7))
+                if key.len() > 0 && str.StartsWith(key, "/"):
+                    key = key.substr(1, key.len() - 1)
+                end
+                if why.len() > 0:
+                    respond_error(c, 403, "SignatureDoesNotMatch", why)
+                else key == "__stop":
+                    respond(c, 204, "", null, 0, true)
+                    running = false
+                else method == "PUT":
+                    store_put(keys, blobs, sizes, kinds, key, body, blen,
+                        hdr_get(head, "Content-Type"))
+                    respond(c, 200, "ETag: \"stored\"\r\n", null, 0, true)
+                else method == "DELETE":
+                    idx := store_find(keys, key)
+                    if idx >= 0:
+                        mem.Free(blobs.get(idx) as void*)
+                        keys.set(idx, "")
+                        sizes.set(idx, 0)
+                        blobs.set(idx, 0 as i64)
+                    end
+                    respond(c, 204, "", null, 0, true)
+                else key.len() == 0 && param(query, "list-type") == "2":
+                    respond_text(c, 200, listing(keys, sizes,
+                        param(query, "prefix"), param(query, "delimiter")))
+                else:
+                    idx := store_find(keys, key)
+                    if idx < 0:
+                        respond_error(c, 404, "NoSuchKey",
+                            "The specified key does not exist.")
+                    else:
+                        data := blobs.get(idx) as void*
+                        total := sizes.get(idx)
+                        mut start := 0
+                        mut take := total
+                        mut status := 200
+                        spec := hdr_get(head, "Range")
+                        if spec.len() > 0:
+                            take = range_of(spec, total, start)
+                            status = 206
+                        end
+                        extra := "Content-Type: " + kinds.get(idx) +
+                            "\r\nETag: \"stored\"\r\n" +
+                            "Last-Modified: Fri, 21 Aug 2026 02:27:34 GMT\r\n"
+                        respond(c, status, extra, at(data, start), take,
+                            method != "HEAD")
+                    end
+                end
+                mem.Free(body)
+                tcp.Close(c)
+            end
+        end
+    end
+    mut i := 0
+    until i < blobs.len():
+        if blobs.get(i) != 0 as i64: mem.Free(blobs.get(i) as void*) end
+        i += 1
+    end
+    keys.free()
+    blobs.free()
+    sizes.free()
+    kinds.free()
+    tcp.CloseServer(srv)
+end
+
+// ---- the client side ----
+
+func say(label: str, ok: bool):
+    print label
+    if ok: println ": ok" else: println ": FAIL" end
+end
+
+func say_why(label: str, ok: bool, detail: str):
+    print label
+    if ok: println ": ok"
+    else:
+        print ": FAIL ("
+        print detail
+        println ")"
+    end
+end
+
+// The server's Bind() is not guaranteed to have been reached by the time this
+// thread sends its first request, the same startup race net_proxy.salam
+// documents. A failed connect never reaches the server, so retrying is safe.
+func put_with_retry(cfg: aws.Config, key: str, body: str, kind: str): aws.Result:
+    mut attempt := 0
+    mut res := aws.Result {}
+    until attempt < 20:
+        res = aws.S3Put(cfg, key, body, kind)
+        if res.status > 0: ret res end
+        attempt += 1
+    end
+    ret res
+end
+
+func text_objects(cfg: aws.Config):
+    first := put_with_retry(cfg, "notes/hello.txt", "salaam, world", "text/plain")
+    say_why("put", first.ok, first.error)
+    got := aws.S3Get(cfg, "notes/hello.txt")
+    say("get returns the body", got.body == "salaam, world")
+    say("get reports the length", got.length == 13 as i64)
+    info := aws.S3Stat(cfg, "notes/hello.txt")
+    say("stat size", info.size == 13 as i64)
+    say("stat content type", info.content_type == "text/plain")
+    say("stat parses the date", info.modified_epoch == 1787279254 as i64)
+    say("exists", aws.S3Exists(cfg, "notes/hello.txt"))
+    say("absent key is not an error", !aws.S3Exists(cfg, "notes/none.txt"))
+    missing := aws.S3Get(cfg, "notes/none.txt")
+    say("missing key reports its code", missing.code == "NoSuchKey")
+    say("missing key reports its message",
+        missing.error == "The specified key does not exist.")
+end
+
+func binary_objects(cfg: aws.Config):
+    n := 4096
+    buf := mem.Allocate(n as u64)
+    bp := buf as u8*
+    repeat n with i:
+        bp[i] = ((i * 7) % 256) as u8
+    end
+    put := aws.S3PutBytes(cfg, "blobs/raw.bin", buf, n, "application/octet-stream")
+    say_why("put bytes", put.ok, put.error)
+    mut got := aws.S3GetBytes(cfg, "blobs/raw.bin")
+    say("get bytes length", got.len == n)
+    mut same := got.ok && got.len == n
+    if same:
+        gp := got.data as u8*
+        repeat n with i:
+            if gp[i] != bp[i]: same = false end
+        end
+    end
+    // A str body would have stopped at the first zero byte, which this object
+    // has at index 0 and every 256 bytes after it.
+    say("bytes survive the round trip", same)
+    aws.FreeBytes(got)
+    mut piece := aws.S3GetRange(cfg, "blobs/raw.bin", 10 as i64, 19 as i64)
+    mut ranged := piece.ok && piece.len == 10
+    if ranged:
+        pp := piece.data as u8*
+        repeat 10 with i:
+            if pp[i] != bp[i + 10]: ranged = false end
+        end
+    end
+    say("range returns the right ten bytes", ranged)
+    aws.FreeBytes(piece)
+    mut tail := aws.S3GetBytesWith(cfg, "blobs/raw.bin",
+        aws.GetOptions { range_start = 4090 as i64 })
+    say("open-ended range runs to the end", tail.ok && tail.len == 6)
+    aws.FreeBytes(tail)
+    mem.Free(buf)
+end
+
+func metadata(cfg: aws.Config):
+    mut meta := aws.NewHeaders()
+    aws.HeaderSet(meta, "Author", "ali")
+    res := aws.S3PutWith(cfg, "docs/meta.txt", "body", aws.PutOptions {
+        content_type = "text/plain",
+        cache_control = "max-age=60",
+        meta = meta
+    })
+    say_why("put with options", res.ok, res.error)
+    aws.HeaderFree(meta)
+end
+
+func listings(cfg: aws.Config):
+    aws.S3Put(cfg, "tree/a.txt", "a", "text/plain")
+    aws.S3Put(cfg, "tree/b.txt", "bb", "text/plain")
+    aws.S3Put(cfg, "tree/deep/c.txt", "ccc", "text/plain")
+    aws.S3Put(cfg, "tree/odd/a b+c&d.txt", "awkward", "text/plain")
+    mut flat := aws.S3ListAll(cfg, "tree/")
+    say("list finds every key", aws.ListCount(flat) == 4)
+    say("list sums the sizes", aws.ListTotalSize(flat) == 13 as i64)
+    aws.ListFree(flat)
+    mut folder := aws.S3ListFolder(cfg, "tree/")
+    say("delimiter separates objects", aws.ListCount(folder) == 2)
+    say("delimiter collects folders", aws.ListPrefixCount(folder) == 2)
+    aws.ListFree(folder)
+    // A key with a space, a plus and an ampersand survives being encoded into
+    // a path, signed, listed, encoded again and decoded back.
+    mut odd := aws.S3ListAll(cfg, "tree/odd/")
+    say("awkward key round trips",
+        aws.ListCount(odd) == 1 && aws.ListAt(odd, 0).key == "tree/odd/a b+c&d.txt")
+    aws.ListFree(odd)
+    say("awkward key reads back",
+        aws.S3Get(cfg, "tree/odd/a b+c&d.txt").body == "awkward")
+end
+
+func removal(cfg: aws.Config):
+    aws.S3Put(cfg, "gone/x.txt", "x", "text/plain")
+    say("delete", aws.S3Delete(cfg, "gone/x.txt").ok)
+    say("delete removes it", !aws.S3Exists(cfg, "gone/x.txt"))
+end
+
+// A request whose signature does not match must be refused, and this proves
+// the mock is actually checking rather than waving requests through.
+func tampering(cfg: aws.Config):
+    mut wrong := cfg
+    wrong.secret_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEZ"
+    res := aws.S3Put(wrong, "notes/hello.txt", "forged", "text/plain")
+    say("a wrong secret is refused", !res.ok && res.status == 403)
+    say("and says why", res.code == "SignatureDoesNotMatch")
+    say("the object is unchanged",
+        aws.S3Get(cfg, "notes/hello.txt").body == "salaam, world")
+end
+
+func main:
+    sync.Add(wg, 1 as i64)
+    t := spawn(serve)
+    sync.Wait(wg)
+    cfg := mock_config()
+    text_objects(cfg)
+    binary_objects(cfg)
+    metadata(cfg)
+    listings(cfg)
+    removal(cfg)
+    tampering(cfg)
+    aws.S3Delete(cfg, "__stop")
+    join(t)
+    ret 0
+end

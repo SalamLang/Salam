@@ -23,7 +23,10 @@ extern:
     // formatter available here, and strtod the only correctly-rounded
     // reader back.
     func snprintf(buf: char*, cap: u64, fmt: str, ...): int
-    func strtod(s: str, endptr: void*): f64
+    // Pure in the sense the analyzer means: the result is a function of the
+    // text alone. It sets errno on overflow, which is the same latitude
+    // strcmp and strstr are already declared with.
+    pure func strtod(s: str, endptr: void*): f64
 end
 
 inline pure func _bp(s: str): i8*: ret (s as void*) as i8* end
@@ -211,69 +214,19 @@ pub inline pure func Atoi(s: str): int: ret ParseInt(s) as int end
 @en "ParseFloat"
 @fa "تجزیه اعشار"
 @ar "تحلیل عشری"
+//
+// strtod rather than accumulating the digits here. The obvious loop -
+// multiply the running value by ten, add the digit, then apply the exponent
+// by repeated multiplication - is inexact in three separate places, and the
+// error shows up exactly where it matters most: near the subnormal boundary
+// and near the largest finite double, where being one ulp out is the
+// difference between a number and an infinity.
+//
+// strtod is correctly rounded, and FormatFloat above already depends on that
+// to decide how many digits a value needs, so this adds no new requirement.
+// It also accepts "inf" and "nan", which the loop silently read as zero.
 pub pure func ParseFloat(s: str): f64:
-    n := s.len()
-    bp := _bp(s)
-    mut i := 0
-    until i < n && _is_space(_ub(bp, i)):
-        i += 1
-    end
-    mut neg := false
-    if i < n:
-        c := _ub(bp, i)
-        if c == 45:
-            neg = true
-            i += 1
-        else c == 43:
-            i += 1
-        end
-    end
-    mut v := 0.0
-    until i < n:
-        c := _ub(bp, i)
-        if c < 48 || c > 57: break end
-        v = v * 10.0 + ((c - 48) as f64)
-        i += 1
-    end
-    if i < n && _ub(bp, i) == 46:
-        i += 1
-        mut scale := 1.0
-        until i < n:
-            c := _ub(bp, i)
-            if c < 48 || c > 57: break end
-            scale /= 10.0
-            v += ((c - 48) as f64) * scale
-            i += 1
-        end
-    end
-    if i < n && (_ub(bp, i) == 101 || _ub(bp, i) == 69):
-        i += 1
-        mut eneg := false
-        if i < n:
-            c := _ub(bp, i)
-            if c == 45:
-                eneg = true
-                i += 1
-            else c == 43:
-                i += 1
-            end
-        end
-        mut ev := 0
-        until i < n:
-            c := _ub(bp, i)
-            if c < 48 || c > 57: break end
-            ev = ev * 10 + (c - 48)
-            i += 1
-        end
-        until ev > 0:
-            if eneg: v = v / 10.0 else:
-                v *= 10.0
-            end
-            ev -= 1
-        end
-    end
-    if neg: ret 0.0 - v end
-    ret v
+    ret strtod(s, null)
 end
 
 @en "IsNaNF"

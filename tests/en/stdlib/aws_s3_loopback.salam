@@ -443,6 +443,12 @@ func serve():
                 end
                 if why.len() > 0:
                     respond_error(c, 403, "SignatureDoesNotMatch", why)
+                else key == "__huge":
+                    // An eight-gigabyte object, answered without one. Its
+                    // Content-Length does not fit in 32 bits, and at exactly
+                    // 8 GB a 32-bit reader reports no size at all.
+                    tcp.Write(c, "HTTP/1.1 200 OK\r\nContent-Length: 8589934592" +
+                        "\r\nETag: \"huge\"\r\nConnection: close\r\n\r\n")
                 else key == "__stop":
                     respond(c, 204, "", null, 0, true)
                     running = false
@@ -625,6 +631,17 @@ func listings(cfg: aws.Config):
         aws.S3Get(cfg, "tree/odd/a b+c&d.txt").body == "awkward")
 end
 
+// An object larger than 2 GB is ordinary in an object store, and its size
+// arrives as a Content-Length that a 32-bit reader mangles. S3DownloadFile
+// drives its range loop off this number, so getting it wrong writes a
+// truncated file rather than reporting an error.
+func large_objects(cfg: aws.Config):
+    info := aws.S3Stat(cfg, "__huge")
+    say("head of a huge object", info.ok)
+    say("size beyond 32 bits", info.size == 8589934592 as i64)
+    say("size is not truncated", info.size > 4294967295 as i64)
+end
+
 func removal(cfg: aws.Config):
     aws.S3Put(cfg, "gone/x.txt", "x", "text/plain")
     say("delete", aws.S3Delete(cfg, "gone/x.txt").ok)
@@ -651,6 +668,7 @@ func main:
     text_objects(cfg)
     binary_objects(cfg)
     metadata(cfg)
+    large_objects(cfg)
     listings(cfg)
     removal(cfg)
     tampering(cfg)

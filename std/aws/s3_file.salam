@@ -1,0 +1,398 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package aws
+
+// Objects and files.
+//
+// Everything else in this package moves an object through a buffer, which
+// means the object has to fit in memory. That is the right trade for a
+// manifest and the wrong one for a video, so this file is the one place that
+// works a chunk at a time: an upload reads part-sized pieces off disk and
+// sends each as a multipart part, and a download asks for byte ranges and
+// writes each to the file as it arrives. Peak memory is one chunk either way,
+// whether the object is a kilobyte or a hundred gigabytes.
+//
+// A download writes to a `.part` file and renames it at the end. A rename
+// within one filesystem is atomic, so an interrupted download leaves a visible
+// `.part` rather than a file that looks complete and is not - which is the
+// failure that gets copied into a backup and discovered a year later.
+
+import str
+import mem
+import os
+import net.mime
+
+extern:
+    // Declared by <stdio.h> in every generated module, so these emit no C of
+    // their own. Used rather than std/io because a `str` cannot carry a NUL
+    // byte, and an object generally can.
+    func fopen(path: str, mode: str): void*
+    func fread(ptr: void*, size: u64, count: u64, stream: void*): u64
+    func fwrite(ptr: void*, size: u64, count: u64, stream: void*): u64
+    func fclose(stream: void*): int
+    func fseek(stream: void*, offset: i64, whence: int): int
+    func ftell(stream: void*): i64
+    func remove(path: str): int
+    func rename(oldpath: str, newpath: str): int
+end
+
+// The bytes one ranged GET asks for while downloading. Eight mebibytes is the
+// same figure multipart uses, for the same reason: large enough that the
+// per-request overhead disappears, small enough to re-fetch cheaply.
+const _S3_DOWNLOAD_CHUNK := 8388608
+
+// TransferResult - what a file transfer did.
+pub struct TransferResult:
+    pub ok: bool = false
+    pub status: int = 0
+    pub bytes: i64 = 0
+    pub parts: int = 0
+    pub etag: str = ""
+    pub path: str = ""
+    pub key: str = ""
+    pub error: str = ""
+    pub code: str = ""
+end
+
+// DirResult - what a whole-directory transfer did.
+pub struct DirResult:
+    pub ok: bool = false
+    pub files: int = 0
+    pub bytes: i64 = 0
+    pub skipped: int = 0
+    // The first file that failed, and why. A directory transfer stops at the
+    // first failure rather than continuing and reporting a count, because a
+    // partial sync that claims success is worse than a stopped one.
+    pub failed_path: str = ""
+    pub error: str = ""
+    pub code: str = ""
+end
+
+func _file_size(path: str): i64:
+    f := fopen(path, "rb")
+    if f == null: ret 0 - (1 as i64) end
+    if fseek(f, 0 as i64, 2) != 0:
+        fclose(f)
+        ret 0 - (1 as i64)
+    end
+    n := ftell(f)
+    fclose(f)
+    ret n
+end
+
+func _transfer_failure(res: Result, path: str, key: str): TransferResult:
+    ret TransferResult {
+        ok = false, status = res.status, error = res.error, code = res.code,
+        path = path, key = key
+    }
+end
+
+func _content_type_for(path: str, given: str): str:
+    if given.len() > 0: ret given end
+    ret mime.MimeType(path)
+end
+
+// _read_all - a whole file into a fresh buffer, for an object small enough to
+// send in one request.
+func _read_all(path: str, size: i64, out_len &: int): void*:
+    out_len = 0
+    if size <= 0 as i64: ret null end
+    p := mem.Allocate(size as u64)
+    if p == null: ret null end
+    f := fopen(path, "rb")
+    if f == null:
+        mem.Free(p)
+        ret null
+    end
+    got := fread(p, 1 as u64, size as u64, f)
+    fclose(f)
+    if (got as i64) != size:
+        mem.Free(p)
+        ret null
+    end
+    out_len = size as int
+    ret p
+end
+
+// _upload_stream - a file larger than one part, read a part at a time.
+func _upload_stream(cfg: Config, key: str, path: str, size: i64, part: int,
+    o: PutOptions): TransferResult:
+    buf := mem.Allocate(part as u64)
+    if buf == null:
+        ret TransferResult { error = "no memory for a " + part + "-byte part",
+            path = path, key = key }
+    end
+    defer mem.Free(buf)
+    f := fopen(path, "rb")
+    if f == null:
+        ret TransferResult { error = "could not open " + path, path = path,
+            key = key }
+    end
+    defer fclose(f)
+    mut u := S3CreateUpload(cfg, key, o)
+    if !u.ok:
+        ret TransferResult { status = u.status, error = u.error, code = u.code,
+            path = path, key = key }
+    end
+    mut sent := 0 as i64
+    mut number := 1
+    until sent < size:
+        got := fread(buf, 1 as u64, part as u64, f) as int
+        if got <= 0:
+            S3AbortUpload(cfg, u)
+            u.parts.free()
+            ret TransferResult { error = path + " ended after " +
+                str.FromInt(sent) + " of " + str.FromInt(size) + " bytes",
+                path = path, key = key }
+        end
+        res := S3UploadPart(cfg, u, number, buf, got)
+        if !res.ok:
+            S3AbortUpload(cfg, u)
+            u.parts.free()
+            ret _transfer_failure(res, path, key)
+        end
+        sent = sent + (got as i64)
+        number += 1
+    end
+    done := S3CompleteUpload(cfg, u)
+    count := u.parts.len()
+    if !done.ok:
+        S3AbortUpload(cfg, u)
+        u.parts.free()
+        ret _transfer_failure(done, path, key)
+    end
+    u.parts.free()
+    ret TransferResult {
+        ok = true, status = done.status, bytes = size, parts = count,
+        etag = done.etag, path = path, key = key
+    }
+end
+
+// _relative - a path under `base`, as an object key. Backslashes become
+// forward slashes, because a key separator is `/` on every platform.
+func _relative(base: str, path: str): str:
+    mut rest := path
+    if base.len() > 0 && str.StartsWith(path, base):
+        rest = path.substr(base.len(), path.len() - base.len())
+    end
+    until rest.len() > 0 && (str.StartsWith(rest, "/") || str.StartsWith(rest, "\\")):
+        rest = rest.substr(1, rest.len() - 1)
+    end
+    ret str.Replace(rest, "\\", "/")
+end
+
+// _parent_of - the directory part of a local path, or "".
+func _parent_of(path: str): str:
+    mut cut := -1
+    repeat path.len() with i:
+        c := path[i] as int
+        if c == 47 || c == 92: cut = i end
+    end
+    if cut <= 0: ret "" end
+    ret path.substr(0, cut)
+end
+
+// ------------------------------------------------------------- public API
+
+// S3UploadFile - store a local file as an object.
+//
+// One request for a small file, a multipart upload for a large one, and the
+// decision is made from the file's size against `o.part_size`. The content
+// type is guessed from the extension unless one is given.
+pub func S3UploadFile(cfg: Config, key: str, path: str,
+    o: PutOptions): TransferResult:
+    size := _file_size(path)
+    if size < 0 as i64:
+        ret TransferResult { error = "could not read " + path, path = path,
+            key = key }
+    end
+    mut opts := o
+    opts.content_type = _content_type_for(path, o.content_type)
+    part := _part_size_of(o.part_size)
+    if size > (part as i64):
+        ret _upload_stream(cfg, key, path, size, part, opts)
+    end
+    mut n := 0
+    body := _read_all(path, size, n)
+    defer mem.Free(body)
+    if size > 0 as i64 && body == null:
+        ret TransferResult { error = "could not read " + path, path = path,
+            key = key }
+    end
+    res := S3PutBytesWith(cfg, key, body, n, opts)
+    if !res.ok: ret _transfer_failure(res, path, key) end
+    ret TransferResult {
+        ok = true, status = res.status, bytes = size, parts = 1,
+        etag = Unquote(res.etag), path = path, key = key
+    }
+end
+
+// S3UploadFileAs - the short form, with a content type and nothing else.
+pub func S3UploadFileAs(cfg: Config, key: str, path: str,
+    content_type: str): TransferResult:
+    ret S3UploadFile(cfg, key, path, PutOptions { content_type = content_type })
+end
+
+// S3DownloadFile - write an object to a local file.
+//
+// Ranged reads, one chunk at a time, into a `.part` file that is renamed once
+// the whole object has arrived. Peak memory is one chunk regardless of the
+// object's size.
+pub func S3DownloadFile(cfg: Config, key: str, path: str): TransferResult:
+    info := S3Stat(cfg, key)
+    if !info.ok:
+        ret TransferResult { status = info.status, error = info.error,
+            code = info.code, path = path, key = key }
+    end
+    tmp := path + ".part"
+    f := fopen(tmp, "wb")
+    if f == null:
+        ret TransferResult { error = "could not create " + tmp, path = path,
+            key = key }
+    end
+    mut at := 0 as i64
+    mut chunks := 0
+    until at < info.size:
+        mut stop := at + (_S3_DOWNLOAD_CHUNK as i64) - (1 as i64)
+        if stop >= info.size: stop = info.size - (1 as i64) end
+        mut piece := S3GetRange(cfg, key, at, stop)
+        if !piece.ok || piece.len <= 0:
+            fclose(f)
+            remove(tmp)
+            mut err := piece.error
+            if err.len() == 0: err = "the object store returned an empty range" end
+            FreeBytes(piece)
+            ret TransferResult { status = piece.status, error = err,
+                code = piece.code, path = path, key = key }
+        end
+        got := piece.len
+        written := fwrite(piece.data, 1 as u64, got as u64, f) as int
+        at = at + (got as i64)
+        chunks += 1
+        FreeBytes(piece)
+        if written != got:
+            fclose(f)
+            remove(tmp)
+            ret TransferResult { error = "could not write to " + tmp,
+                path = path, key = key }
+        end
+    end
+    fclose(f)
+    // POSIX rename replaces the destination atomically; Windows refuses when
+    // it exists, so only there is the file removed first - and only after the
+    // download has fully succeeded.
+    if rename(tmp, path) != 0:
+        remove(path)
+        if rename(tmp, path) != 0:
+            remove(tmp)
+            ret TransferResult { error = "could not move " + tmp + " into place",
+                path = path, key = key }
+        end
+    end
+    ret TransferResult {
+        ok = true, status = 200, bytes = info.size, parts = chunks,
+        etag = info.etag, path = path, key = key
+    }
+end
+
+// S3UploadDir - store every file under a local directory.
+//
+// Keys are the prefix followed by each file's path relative to the directory,
+// with the separators normalised to `/`. Stops at the first failure and names
+// the file it stopped on.
+pub func S3UploadDir(cfg: Config, dir: str, prefix: str,
+    o: PutOptions): DirResult:
+    if !os.IsDir(dir):
+        ret DirResult { error = dir + " is not a directory", code = "NotADirectory" }
+    end
+    files := os.Walk(dir) as Vector<str>
+    defer files.free()
+    mut out := DirResult { ok = true }
+    mut base := prefix
+    if base.len() > 0 && !str.EndsWith(base, "/"): base = base + "/" end
+    mut i := 0
+    until i < files.len():
+        path := files.get(i)
+        rel := _relative(dir, path)
+        if rel.len() == 0:
+            out.skipped += 1
+        else:
+            res := S3UploadFile(cfg, base + rel, path, o)
+            if !res.ok:
+                out.ok = false
+                out.failed_path = path
+                out.error = res.error
+                out.code = res.code
+                ret out
+            end
+            out.files += 1
+            out.bytes = out.bytes + res.bytes
+        end
+        i += 1
+    end
+    ret out
+end
+
+// S3DownloadPrefix - write every object under a prefix into a local
+// directory, recreating the key structure as directories.
+pub func S3DownloadPrefix(cfg: Config, prefix: str, dir: str): DirResult:
+    if os.MkdirAll(dir) != 0:
+        ret DirResult { error = "could not create " + dir, code = "IOError" }
+    end
+    listing := S3ListAll(cfg, prefix)
+    if !listing.ok:
+        ret DirResult { error = listing.error, code = listing.code }
+    end
+    mut out := DirResult { ok = true }
+    mut i := 0
+    until i < listing.items.len():
+        entry := listing.items.get(i)
+        rel := _relative(prefix, entry.key)
+        if rel.len() == 0 || str.EndsWith(entry.key, "/"):
+            // A key ending in "/" is a directory placeholder, not an object.
+            out.skipped += 1
+        else:
+            path := dir + "/" + rel
+            parent := _parent_of(path)
+            if parent.len() > 0: os.MkdirAll(parent) end
+            res := S3DownloadFile(cfg, entry.key, path)
+            if !res.ok:
+                out.ok = false
+                out.failed_path = path
+                out.error = res.error
+                out.code = res.code
+                ListFree(listing)
+                ret out
+            end
+            out.files += 1
+            out.bytes = out.bytes + res.bytes
+        end
+        i += 1
+    end
+    ListFree(listing)
+    ret out
+end
+
+// S3FileEtag - the ETag S3 will report for a local file uploaded with a given
+// part size, so an upload can be verified without downloading it again.
+pub func S3FileEtag(path: str, part_size: int): str:
+    size := _file_size(path)
+    if size < 0 as i64: ret "" end
+    mut n := 0
+    body := _read_all(path, size, n)
+    if size > 0 as i64 && body == null: ret "" end
+    defer mem.Free(body)
+    ret S3MultipartEtag(body, n, _part_size_of(part_size))
+end

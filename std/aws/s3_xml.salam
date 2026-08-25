@@ -1,0 +1,115 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package aws
+
+// Reading and writing S3's XML, in the small number of shapes it uses.
+//
+// The error path in s3_wire pulls one element out by hand, which is the right
+// trade for a document that is always `<Error><Code/><Message/></Error>`. A
+// listing is not that shape: it repeats, it nests, and a key can contain any
+// byte a filesystem allows, including the `<` that would end an element. So
+// everything past the error path goes through the real parser.
+//
+// Two things here that the parser does not do. Keys come back percent-encoded
+// when a listing asks for `encoding-type=url`, which is the only way a key
+// containing a newline or a control character survives the round trip; and
+// they have to be decoded with a decoder that leaves `+` alone, which a
+// general URL decoder does not.
+
+import str
+import time
+import encoding.xml
+
+// _xml_text - the trimmed text of a child element, or "" when it is absent.
+func _xml_text(node: xml.XMLNode, tag: str): str:
+    ret xml.Child(node, tag).text.trim()
+end
+
+// _xml_int - a numeric child. Absent and zero are the same thing here, which
+// they are for every count and size S3 reports.
+func _xml_int(node: xml.XMLNode, tag: str): i64:
+    v := _xml_text(node, tag)
+    if v.len() == 0: ret 0 as i64 end
+    ret v.to_int() as i64
+end
+
+func _xml_bool(node: xml.XMLNode, tag: str): bool:
+    ret _xml_text(node, tag).lower() == "true"
+end
+
+// _hexdigit - one hex character's value, or -1.
+func _hexdigit(c: int): int:
+    if c >= 48 && c <= 57: ret c - 48 end
+    if c >= 97 && c <= 102: ret c - 87 end
+    if c >= 65 && c <= 70: ret c - 55 end
+    ret -1
+end
+
+// _pct_decode - percent-decoding, and nothing else.
+//
+// Deliberately not encoding.URLDecode: that one also turns `+` into a space,
+// which is correct for a form body and wrong for an object key. A key called
+// "c++.tar.gz" comes back from S3 as "c%2B%2B.tar.gz", and a decoder that
+// treats a literal `+` as a space would corrupt every key that has one.
+func _pct_decode(s: str): str:
+    if s.find("%") < 0: ret s end
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    n := s.len()
+    mut i := 0
+    until i < n:
+        c := s[i] as int
+        if c == 37 && i + 2 < n:
+            hi := _hexdigit(s[i + 1] as int)
+            lo := _hexdigit(s[i + 2] as int)
+            if hi >= 0 && lo >= 0:
+                str.BufAppendChar(sb, hi * 16 + lo)
+                i += 3
+                continue
+            end
+        end
+        str.BufAppendChar(sb, c)
+        i += 1
+    end
+    ret str.BufStr(sb)
+end
+
+// _iso_epoch - an S3 timestamp as seconds since the epoch, or zero.
+//
+// S3 writes "2026-08-21T02:27:34.000Z"; the fractional part is always zero in
+// practice and time.ParseISO keeps it separately either way.
+func _iso_epoch(s: str): i64:
+    if s.len() == 0: ret 0 as i64 end
+    when := time.ParseISO(s)
+    if !when.ok: ret 0 as i64 end
+    ret when.epoch
+end
+
+// _xml_escape - text going into a request document. S3 accepts an object key
+// as a delete target and as a copy source, and a key is allowed to contain the
+// characters that would otherwise end an element.
+func _xml_escape(s: str): str:
+    mut out := str.Replace(s, "&", "&amp;")
+    out = str.Replace(out, "<", "&lt;")
+    out = str.Replace(out, ">", "&gt;")
+    out = str.Replace(out, "\"", "&quot;")
+    ret str.Replace(out, "'", "&apos;")
+end
+
+// _decoded - a listing value, decoded when the listing asked for encoding.
+func _decoded(s: str, encoded: bool): str:
+    if !encoded: ret s end
+    ret _pct_decode(s)
+end

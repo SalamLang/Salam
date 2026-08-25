@@ -1,0 +1,406 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package aws
+
+// The bucket itself: making one, asking about one, and the handful of settings
+// an application - rather than an operations team - actually changes.
+//
+// Most of what S3 lets you configure on a bucket belongs in infrastructure
+// code, applied once and reviewed: replication, logging, inventory, request
+// payment, object lock. What is here is the part an application legitimately
+// touches at runtime, and creating a bucket per tenant is the case that makes
+// even that necessary.
+//
+// Versioning and lifecycle are both here for the same reason, from opposite
+// directions: versioning is how a delete stops being permanent, and a
+// lifecycle rule is how the versions - and the abandoned multipart uploads -
+// stop accumulating forever.
+
+import str
+import encoding.xml
+
+// _bucket_request - a request against a named bucket, or the Config's.
+func _bucket_request(method: str, bucket: str): Request:
+    if bucket.len() == 0: ret NewRequest(method, "") end
+    ret NewBucketRequest(method, bucket, "")
+end
+
+// _create_body - the location constraint.
+//
+// us-east-1 is the one region that must NOT be named: S3 answers
+// InvalidLocationConstraint when it is, because that region is the default and
+// the API predates the idea of naming it.
+func _create_body(region: str): str:
+    if region.len() == 0 || region == "us-east-1": ret "" end
+    ret "<CreateBucketConfiguration>" +
+        "<LocationConstraint>" + _xml_escape(region) + "</LocationConstraint>" +
+        "</CreateBucketConfiguration>"
+end
+
+func _tag_body(tags: Headers): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppend(sb, "<Tagging><TagSet>")
+    mut i := 0
+    until i < tags.names.len():
+        str.BufAppend(sb, "<Tag><Key>")
+        str.BufAppend(sb, _xml_escape(tags.names.get(i)))
+        str.BufAppend(sb, "</Key><Value>")
+        str.BufAppend(sb, _xml_escape(tags.values.get(i)))
+        str.BufAppend(sb, "</Value></Tag>")
+        i += 1
+    end
+    str.BufAppend(sb, "</TagSet></Tagging>")
+    ret str.BufStr(sb)
+end
+
+func _parse_tags(res: Result): Headers:
+    mut out := Headers {}
+    if !res.ok: ret out end
+    mut ok := false
+    root := xml.DecodeStrict(res.body, ok)
+    if !ok: ret out end
+    set := xml.Child(root, "TagSet")
+    if !xml.Found(set): ret out end
+    rows := xml.Children(set, "Tag")
+    mut i := 0
+    until i < rows.items.len():
+        node := rows.items.get(i)
+        HeaderSet(out, _xml_text(node, "Key"), _xml_text(node, "Value"))
+        i += 1
+    end
+    ret out
+end
+
+// ------------------------------------------------------------- public API
+
+// S3CreateBucket - make a bucket in the Config's region.
+//
+// Creating one that already exists and belongs to you answers 200 at AWS and
+// BucketAlreadyOwnedByYou elsewhere; both mean the bucket is there, which is
+// what the caller wanted.
+pub func S3CreateBucket(cfg: Config, bucket: str): Result:
+    mut r := _bucket_request("PUT", bucket)
+    body := _create_body(cfg.region)
+    if body.len() > 0:
+        SetText(r, body)
+        SetHeader(r, "Content-Type", "application/xml")
+    end
+    ret Do(cfg, r)
+end
+
+// S3CreateBucketAcl - the same, with an ACL. Ignored by a bucket with ACLs
+// disabled, which is the default for anything created since 2023.
+pub func S3CreateBucketAcl(cfg: Config, bucket: str, acl: str): Result:
+    mut r := _bucket_request("PUT", bucket)
+    SetHeader(r, "x-amz-acl", acl)
+    body := _create_body(cfg.region)
+    if body.len() > 0:
+        SetText(r, body)
+        SetHeader(r, "Content-Type", "application/xml")
+    end
+    ret Do(cfg, r)
+end
+
+// S3DeleteBucket - remove an empty bucket. S3 refuses a bucket with anything
+// in it, including old versions and open multipart uploads, which is why this
+// so often answers BucketNotEmpty for a bucket that looks empty.
+pub func S3DeleteBucket(cfg: Config, bucket: str): Result:
+    ret Do(cfg, _bucket_request("DELETE", bucket))
+end
+
+// S3HeadBucket - whether a bucket exists and is reachable with these
+// credentials. 404 means no such bucket, 403 means it is someone else's.
+pub func S3HeadBucket(cfg: Config, bucket: str): Result:
+    ret Do(cfg, _bucket_request("HEAD", bucket))
+end
+
+// S3BucketExists - the question S3HeadBucket is usually asked.
+pub func S3BucketExists(cfg: Config, bucket: str): bool:
+    ret S3HeadBucket(cfg, bucket).ok
+end
+
+// S3ListBuckets - every bucket the credentials can see.
+pub func S3ListBuckets(cfg: Config): BucketList:
+    res := Do(cfg, NewServiceRequest("GET"))
+    if !res.ok:
+        ret BucketList { status = res.status, error = res.error, code = res.code }
+    end
+    mut ok := false
+    root := xml.DecodeStrict(res.body, ok)
+    if !ok:
+        ret BucketList {
+            status = res.status,
+            error = "the bucket listing could not be parsed",
+            code = "MalformedXML"
+        }
+    end
+    mut out := BucketList { ok = true, status = res.status }
+    owner := xml.Child(root, "Owner")
+    if xml.Found(owner):
+        out.owner = _xml_text(owner, "DisplayName")
+        if out.owner.len() == 0: out.owner = _xml_text(owner, "ID") end
+    end
+    holder := xml.Child(root, "Buckets")
+    if !xml.Found(holder): ret out end
+    rows := xml.Children(holder, "Bucket")
+    mut i := 0
+    until i < rows.items.len():
+        node := rows.items.get(i)
+        mut b := BucketEntry {
+            name = _xml_text(node, "Name"),
+            created = _xml_text(node, "CreationDate"),
+            region = _xml_text(node, "BucketRegion")
+        }
+        b.created_epoch = _iso_epoch(b.created)
+        out.items.push(b)
+        i += 1
+    end
+    ret out
+end
+
+pub func BucketCount(l: BucketList): int: ret l.items.len() end
+
+pub func BucketAt(l: BucketList, i: int): BucketEntry:
+    if i < 0 || i >= l.items.len(): ret BucketEntry {} end
+    ret l.items.get(i)
+end
+
+pub func BucketListFree(l &: BucketList): l.items.free() end
+
+// S3BucketRegion - the region a bucket actually lives in.
+//
+// Worth asking before anything else when a correctly signed request is
+// refused: a signature is scoped to a region, so a bucket in eu-central-1
+// rejects a us-east-1 signature with an error that does not say so. AWS
+// answers an empty constraint for us-east-1, which this reports as the name
+// rather than as nothing.
+pub func S3BucketRegion(cfg: Config, bucket: str): str:
+    mut r := _bucket_request("GET", bucket)
+    SetFlag(r, "location")
+    res := Do(cfg, r)
+    if !res.ok:
+        // A redirect carries the right region in a header, which is the whole
+        // answer when the request went to the wrong endpoint.
+        hinted := ResultHeader(res, "x-amz-bucket-region")
+        if hinted.len() > 0: ret hinted end
+        ret ""
+    end
+    where := ResultTag(res.body, "LocationConstraint").trim()
+    if where.len() == 0: ret "us-east-1" end
+    ret where
+end
+
+// S3SetVersioning - turn versioning on, or suspend it.
+//
+// Versioning cannot be turned off once enabled, only suspended: the versions
+// already stored stay stored. Enabling it is the single most effective guard
+// against an application deleting the wrong key, and the single most common
+// source of a storage bill nobody can explain - pair it with a lifecycle rule.
+pub func S3SetVersioning(cfg: Config, bucket: str, enabled: bool): Result:
+    mut r := _bucket_request("PUT", bucket)
+    SetFlag(r, "versioning")
+    mut state := "Suspended"
+    if enabled: state = "Enabled" end
+    body := "<VersioningConfiguration><Status>" + state +
+        "</Status></VersioningConfiguration>"
+    SetText(r, body)
+    SetHeader(r, "Content-Type", "application/xml")
+    SetHeader(r, "Content-MD5", S3ContentMd5(body as void*, body.len()))
+    ret Do(cfg, r)
+end
+
+// S3Versioning - "Enabled", "Suspended", or "" for a bucket that has never had
+// it turned on.
+pub func S3Versioning(cfg: Config, bucket: str): str:
+    mut r := _bucket_request("GET", bucket)
+    SetFlag(r, "versioning")
+    res := Do(cfg, r)
+    if !res.ok: ret "" end
+    ret ResultTag(res.body, "Status").trim()
+end
+
+// S3SetBucketTags - replace a bucket's tag set.
+pub func S3SetBucketTags(cfg: Config, bucket: str, tags: Headers): Result:
+    mut r := _bucket_request("PUT", bucket)
+    SetFlag(r, "tagging")
+    body := _tag_body(tags)
+    SetText(r, body)
+    SetHeader(r, "Content-Type", "application/xml")
+    SetHeader(r, "Content-MD5", S3ContentMd5(body as void*, body.len()))
+    ret Do(cfg, r)
+end
+
+// S3BucketTags - the tag set, empty when there is none.
+pub func S3BucketTags(cfg: Config, bucket: str): Headers:
+    mut r := _bucket_request("GET", bucket)
+    SetFlag(r, "tagging")
+    ret _parse_tags(Do(cfg, r))
+end
+
+pub func S3DeleteBucketTags(cfg: Config, bucket: str): Result:
+    mut r := _bucket_request("DELETE", bucket)
+    SetFlag(r, "tagging")
+    ret Do(cfg, r)
+end
+
+// S3SetBucketPolicy - replace the bucket policy with a JSON document.
+//
+// A policy is the authority on who may do what, and it is evaluated before any
+// ACL. Passing an empty document is not how to remove one; S3DeleteBucketPolicy
+// is.
+pub func S3SetBucketPolicy(cfg: Config, bucket: str, policy_json: str): Result:
+    if policy_json.len() == 0:
+        ret Failure("a bucket policy cannot be empty; delete it instead")
+    end
+    mut r := _bucket_request("PUT", bucket)
+    SetFlag(r, "policy")
+    SetText(r, policy_json)
+    SetHeader(r, "Content-Type", "application/json")
+    ret Do(cfg, r)
+end
+
+// S3BucketPolicy - the policy document, or "" when there is none.
+pub func S3BucketPolicy(cfg: Config, bucket: str): str:
+    mut r := _bucket_request("GET", bucket)
+    SetFlag(r, "policy")
+    res := Do(cfg, r)
+    if !res.ok: ret "" end
+    ret res.body
+end
+
+pub func S3DeleteBucketPolicy(cfg: Config, bucket: str): Result:
+    mut r := _bucket_request("DELETE", bucket)
+    SetFlag(r, "policy")
+    ret Do(cfg, r)
+end
+
+// S3SetBucketCors - the rules that decide which web origins a browser may use
+// a presigned URL from.
+//
+// The setting that most often blocks a direct browser upload: the presigned
+// PUT is correct, the browser refuses to send it, and nothing in the S3
+// response says why because the request never reached S3.
+pub func S3SetBucketCors(cfg: Config, bucket: str, origin: str,
+    methods: str, max_age: int): Result:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppend(sb, "<CORSConfiguration><CORSRule><AllowedOrigin>")
+    str.BufAppend(sb, _xml_escape(origin))
+    str.BufAppend(sb, "</AllowedOrigin>")
+    mut at := 0
+    mut rest := methods
+    until at < 1:
+        comma := rest.find(",")
+        mut one := rest
+        if comma >= 0: one = rest.substr(0, comma) end
+        one = one.trim()
+        if one.len() > 0:
+            str.BufAppend(sb, "<AllowedMethod>")
+            str.BufAppend(sb, one.upper())
+            str.BufAppend(sb, "</AllowedMethod>")
+        end
+        if comma < 0: at = 1
+        else: rest = rest.substr(comma + 1, rest.len() - comma - 1)
+        end
+    end
+    str.BufAppend(sb, "<AllowedHeader>*</AllowedHeader>")
+    str.BufAppend(sb, "<ExposeHeader>ETag</ExposeHeader>")
+    if max_age > 0:
+        str.BufAppend(sb, "<MaxAgeSeconds>")
+        str.BufAppendInt(sb, max_age as i64)
+        str.BufAppend(sb, "</MaxAgeSeconds>")
+    end
+    str.BufAppend(sb, "</CORSRule></CORSConfiguration>")
+    body := str.BufStr(sb)
+    mut r := _bucket_request("PUT", bucket)
+    SetFlag(r, "cors")
+    SetText(r, body)
+    SetHeader(r, "Content-Type", "application/xml")
+    SetHeader(r, "Content-MD5", S3ContentMd5(body as void*, body.len()))
+    ret Do(cfg, r)
+end
+
+pub func S3BucketCors(cfg: Config, bucket: str): str:
+    mut r := _bucket_request("GET", bucket)
+    SetFlag(r, "cors")
+    res := Do(cfg, r)
+    if !res.ok: ret "" end
+    ret res.body
+end
+
+pub func S3DeleteBucketCors(cfg: Config, bucket: str): Result:
+    mut r := _bucket_request("DELETE", bucket)
+    SetFlag(r, "cors")
+    ret Do(cfg, r)
+end
+
+// S3SetLifecycle - install a lifecycle configuration from an XML document.
+//
+// Left as a document rather than modelled as a struct because a lifecycle rule
+// is genuinely open-ended - transitions between six storage classes, expiry of
+// current and non-current versions, abandoned-upload cleanup, filters on
+// prefix, tag and size - and a partial model would be a trap. S3ExpiryRule()
+// builds the two rules almost every bucket wants.
+pub func S3SetLifecycle(cfg: Config, bucket: str, config_xml: str): Result:
+    mut r := _bucket_request("PUT", bucket)
+    SetFlag(r, "lifecycle")
+    SetText(r, config_xml)
+    SetHeader(r, "Content-Type", "application/xml")
+    SetHeader(r, "Content-MD5", S3ContentMd5(config_xml as void*, config_xml.len()))
+    ret Do(cfg, r)
+end
+
+pub func S3Lifecycle(cfg: Config, bucket: str): str:
+    mut r := _bucket_request("GET", bucket)
+    SetFlag(r, "lifecycle")
+    res := Do(cfg, r)
+    if !res.ok: ret "" end
+    ret res.body
+end
+
+pub func S3DeleteLifecycle(cfg: Config, bucket: str): Result:
+    mut r := _bucket_request("DELETE", bucket)
+    SetFlag(r, "lifecycle")
+    ret Do(cfg, r)
+end
+
+// S3ExpiryRule - a lifecycle document that expires objects under a prefix and
+// cleans up abandoned multipart uploads.
+//
+// The second half is the one that matters and the one everyone forgets: parts
+// of an upload that was never completed are stored and billed indefinitely,
+// and they do not appear in any listing. Seven days is a generous ceiling on
+// how long a legitimate upload can be in flight.
+pub func S3ExpiryRule(prefix: str, days: int, abort_days: int): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppend(sb, "<LifecycleConfiguration><Rule><ID>salam-expiry</ID>")
+    str.BufAppend(sb, "<Filter><Prefix>")
+    str.BufAppend(sb, _xml_escape(prefix))
+    str.BufAppend(sb, "</Prefix></Filter><Status>Enabled</Status>")
+    if days > 0:
+        str.BufAppend(sb, "<Expiration><Days>")
+        str.BufAppendInt(sb, days as i64)
+        str.BufAppend(sb, "</Days></Expiration>")
+    end
+    mut abort := abort_days
+    if abort <= 0: abort = 7 end
+    str.BufAppend(sb, "<AbortIncompleteMultipartUpload><DaysAfterInitiation>")
+    str.BufAppendInt(sb, abort as i64)
+    str.BufAppend(sb, "</DaysAfterInitiation></AbortIncompleteMultipartUpload>")
+    str.BufAppend(sb, "</Rule></LifecycleConfiguration>")
+    ret str.BufStr(sb)
+end

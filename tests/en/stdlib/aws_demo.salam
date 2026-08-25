@@ -12,14 +12,20 @@
  *
  */
 
-// aws - Signature Version 4, and the S3 object API on top of it.
+// aws - Signature Version 4, and the S3 API built on it.
 //
-// Everything below is offline: signing is a pure function of the request and
-// the clock, so the two published AWS test vectors can be checked without a
-// network. That is also why the signer takes an instant rather than reading
-// the clock itself.
+// Everything below is offline. Signing is a pure function of the request and
+// the clock, parsing is a pure function of a document, and both are the parts
+// that break; so the published AWS test vectors, a listing document and a
+// browser upload policy are all checked here without a network. That is also
+// why every signer in this package takes an instant rather than reading the
+// clock itself.
+//
+// aws_s3_loopback.salam is the other half: the same package driven against a
+// mock object store over a real socket.
 
 import aws
+import mem
 import net.httpx
 
 func check(label: str, got: str, want: str):
@@ -36,6 +42,12 @@ func check(label: str, got: str, want: str):
     end
 end
 
+func check_bool(label: str, got: bool, want: bool):
+    if got == want: check(label, "yes", "yes")
+    else: check(label, "no", "yes")
+    end
+end
+
 // The credentials from Amazon's own worked examples. They are published, they
 // authorise nothing, and using them is what makes the vectors checkable.
 func example(): aws.Config:
@@ -49,6 +61,8 @@ func example(): aws.Config:
     }
 end
 
+// ---- signing ----
+
 // "GET Object" from the SigV4 documentation, Range header and all.
 func signed_header_vector():
     headers := "host:examplebucket.s3.amazonaws.com\nrange:bytes=0-9\n" +
@@ -61,6 +75,60 @@ func signed_header_vector():
         ", Signature=f0e8bdb87c964420e857bd35b5d6ed310bd44f0170aba48dd91039c6036bdb41")
 end
 
+// The same vector, reached the way the package actually reaches it: by
+// describing the request and letting the wire layer build the canonical form.
+// The two agreeing is what says the general path did not drift from the
+// hand-written one.
+func built_request_vector():
+    mut r := aws.NewRequest("GET", "test.txt")
+    aws.SetHeader(r, "Range", "bytes=0-9")
+    check("built canonical request", aws.CanonicalRequest(example(), r, 1369353600 as i64),
+        "GET\n/test.txt\n\nhost:examplebucket.s3.amazonaws.com\nrange:bytes=0-9\n" +
+        "x-amz-content-sha256:" + aws.EMPTY_SHA256 + "\nx-amz-date:20130524T000000Z\n" +
+        "\nhost;range;x-amz-content-sha256;x-amz-date\n" + aws.EMPTY_SHA256)
+end
+
+// Header and query order is not stylistic: the service re-derives both, and a
+// client that sorts differently is refused with an error that says nothing
+// about ordering. Here the caller adds them in deliberately wrong order.
+func ordering():
+    mut r := aws.NewRequest("GET", "")
+    aws.SetQuery(r, "prefix", "photos/2026 summer/")
+    aws.SetQuery(r, "list-type", "2")
+    aws.SetQuery(r, "delimiter", "/")
+    aws.SetHeader(r, "x-amz-meta-owner", "ali")
+    aws.SetHeader(r, "Content-Type", "application/xml")
+    check("sorted canonical request", aws.CanonicalRequest(example(), r, 1369353600 as i64),
+        "GET\n/\n" +
+        "delimiter=%2F&list-type=2&prefix=photos%2F2026%20summer%2F\n" +
+        "content-type:application/xml\n" +
+        "host:examplebucket.s3.amazonaws.com\n" +
+        "x-amz-content-sha256:" + aws.EMPTY_SHA256 + "\n" +
+        "x-amz-date:20130524T000000Z\n" +
+        "x-amz-meta-owner:ali\n" +
+        "\ncontent-type;host;x-amz-content-sha256;x-amz-date;x-amz-meta-owner\n" +
+        aws.EMPTY_SHA256)
+end
+
+// A signed request must actually send every header it signed, or the service
+// recomputes a different canonical form and refuses it.
+func prepared_head():
+    mut r := aws.NewRequest("PUT", "notes/a.txt")
+    aws.SetHeader(r, "Content-Type", "text/plain")
+    aws.SetText(r, "hello")
+    head := aws.PreparedHead(example(), r, 1369353600 as i64)
+    check_bool("head sends the signed content type",
+        head.find("\r\nContent-Type: text/plain\r\n") >= 0, true)
+    check_bool("head sends the payload hash",
+        head.find("\r\nx-amz-content-sha256: 2cf24dba5fb0a30e") >= 0, true)
+    check_bool("head declares the body length",
+        head.find("\r\nContent-Length: 5\r\n") >= 0, true)
+    check_bool("head closes the connection",
+        head.find("\r\nConnection: close\r\n") >= 0, true)
+end
+
+// ---- presigning ----
+
 // "Query String Request Authentication", the presigned form.
 func presigned_vector():
     url := aws.S3PresignAt(example(), "GET", "test.txt", 86400, 1369353600 as i64)
@@ -72,8 +140,57 @@ func presigned_vector():
         "&X-Amz-Signature=aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404")
 end
 
-// Addressing: the bucket goes in the path or in the hostname, and which one is
-// the difference between AWS and every self-hosted alternative.
+// A presigned PUT that pins the content type signs it too, so the URL cannot
+// be used to store something else under a type of the client's choosing.
+func presigned_put():
+    url := aws.S3PresignWith(example(), "PUT", "up.png",
+        aws.PresignOptions { expires = 600, content_type = "image/png" },
+        1369353600 as i64)
+    check_bool("presigned put signs the type",
+        url.find("X-Amz-SignedHeaders=content-type%3Bhost") >= 0, true)
+    check_bool("presigned put caps the expiry",
+        url.find("X-Amz-Expires=600") >= 0, true)
+end
+
+// Seven days is AWS's ceiling on a presigned URL; asking for more should
+// produce a URL that works for seven days rather than one that works never.
+func presign_ceiling():
+    url := aws.S3PresignAt(example(), "GET", "test.txt", 999999999, 1369353600 as i64)
+    check_bool("expiry clamped to seven days",
+        url.find("X-Amz-Expires=604800") >= 0, true)
+end
+
+// A browser <form> cannot set an Authorization header, so a form upload signs
+// a base64 policy document instead of a canonical request.
+func post_policy():
+    form := aws.S3PresignPostAt(example(), "incoming/", aws.PostOptions {
+        expires = 3600,
+        key_is_prefix = true,
+        content_type = "image/",
+        content_type_is_prefix = true,
+        max_bytes = 1048576 as i64,
+        acl = "private"
+    }, 1369353600 as i64)
+    check_bool("post form built", form.ok, true)
+    check("post url", form.url, "https://examplebucket.s3.amazonaws.com")
+    check("post policy", form.policy,
+        "{\"expiration\":\"2013-05-24T01:00:00Z\",\"conditions\":[" +
+        "{\"bucket\":\"examplebucket\"}," +
+        "[\"starts-with\",\"$key\",\"incoming/\"]," +
+        "{\"x-amz-algorithm\":\"AWS4-HMAC-SHA256\"}," +
+        "{\"x-amz-credential\":\"AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request\"}," +
+        "{\"x-amz-date\":\"20130524T000000Z\"}," +
+        "{\"acl\":\"private\"}," +
+        "[\"starts-with\",\"$Content-Type\",\"image/\"]," +
+        "[\"content-length-range\",0,1048576]]}")
+    check("post signature", aws.HeaderGet(form.fields, "x-amz-signature"),
+        "a4241c22845d07fcff1b88f34fa1dfaef4ef477c59a1ca388f9c346e609c01c9")
+end
+
+// ---- addressing and escaping ----
+
+// The bucket goes in the path or in the hostname, and which one is the
+// difference between AWS and every self-hosted alternative.
 func addressing():
     mut path := example()
     path.path_style = true
@@ -88,10 +205,12 @@ end
 func escaping():
     check("key encoding", aws.EncodeKey("photos/a b+c.png"), "/photos/a%20b%2Bc.png")
     check("value encoding", aws.UriEncode("a b+c/d", false), "a%20b%2Bc%2Fd")
+    check("etag unquoting", aws.Unquote("\"9b2cf5\""), "9b2cf5")
+    check("etag without quotes", aws.Unquote("9b2cf5"), "9b2cf5")
 end
 
-// Endpoint parsing lives in net.httpx, the transport both this package and
-// webpush send their binary bodies through.
+// Endpoint parsing lives in net.httpx, the transport this package sends its
+// binary bodies through.
 func endpoints():
     secure := httpx.ParseEndpoint("https://s3.eu-central-1.amazonaws.com")
     check("https host", secure.host, "s3.eu-central-1.amazonaws.com")
@@ -101,14 +220,196 @@ func endpoints():
     check("minio port", "" + plain.port, "9000")
 end
 
+// One constructor per service, because the addressing rule differs per service
+// and getting it wrong produces a signature error that never mentions it.
+func constructors():
+    check("aws default region", aws.ForAws("", "b").endpoint, "https://s3.amazonaws.com")
+    check("aws named region", aws.ForAws("eu-central-1", "b").endpoint,
+        "https://s3.eu-central-1.amazonaws.com")
+    check_bool("aws is virtual host", aws.ForAws("eu-central-1", "b").path_style, false)
+    check("r2 endpoint", aws.ForR2("acct", "b").endpoint,
+        "https://acct.r2.cloudflarestorage.com")
+    check("r2 region", aws.ForR2("acct", "b").region, "auto")
+    check_bool("minio is path style", aws.ForMinio("http://127.0.0.1:9000", "b").path_style, true)
+    check("trailing slash trimmed", aws.ForMinio("http://127.0.0.1:9000/", "b").endpoint,
+        "http://127.0.0.1:9000")
+    check("spaces endpoint", aws.ForSpaces("ams3", "b").endpoint,
+        "https://ams3.digitaloceanspaces.com")
+end
+
+// A Config in a log should say enough to debug and not enough to steal.
+func redaction():
+    line := aws.Describe(example())
+    check_bool("describe keeps the key prefix", line.find("access_key=AKIA...") >= 0, true)
+    check_bool("describe hides the secret", line.find("wJalr") < 0, true)
+    check_bool("describe reports the length", line.find("secret=set (40 chars)") >= 0, true)
+end
+
+// ---- documents ----
+
+func listing_document(): str:
+    ret "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" +
+        "<ListBucketResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">" +
+        "<Name>photos</Name><Prefix>2026%2F</Prefix><KeyCount>2</KeyCount>" +
+        "<MaxKeys>1000</MaxKeys><Delimiter>%2F</Delimiter>" +
+        "<EncodingType>url</EncodingType><IsTruncated>true</IsTruncated>" +
+        "<NextContinuationToken>1ueGcxL</NextContinuationToken>" +
+        "<Contents><Key>2026%2Fc%2B%2B.tar.gz</Key>" +
+        "<LastModified>2026-08-21T02:27:34.000Z</LastModified>" +
+        "<ETag>&quot;9b2cf5&quot;</ETag><Size>4096</Size>" +
+        "<StorageClass>STANDARD</StorageClass>" +
+        "<Owner><ID>abc</ID><DisplayName>ali</DisplayName></Owner></Contents>" +
+        "<Contents><Key>2026%2Fnote.txt</Key>" +
+        "<LastModified>2026-08-22T10:00:00.000Z</LastModified>" +
+        "<ETag>&quot;deadbe&quot;</ETag><Size>17</Size>" +
+        "<StorageClass>STANDARD_IA</StorageClass></Contents>" +
+        "<CommonPrefixes><Prefix>2026%2Fraw%2F</Prefix></CommonPrefixes>" +
+        "</ListBucketResult>"
+end
+
+// A key can hold any byte a filesystem allows, which is why a listing asks for
+// url encoding and why decoding it needs a decoder that leaves `+` alone: a
+// key called "c++.tar.gz" arrives as "c%2B%2B.tar.gz", and a form decoder
+// would turn every literal plus into a space.
+func listing():
+    l := aws.ParseListing(listing_document(), 200)
+    check_bool("listing parsed", l.ok, true)
+    check("listing name", l.name, "photos")
+    check("listing prefix decoded", l.prefix, "2026/")
+    check("listing delimiter decoded", l.delimiter, "/")
+    check_bool("listing truncated", l.truncated, true)
+    check("listing token", l.next_token, "1ueGcxL")
+    check("listing count", "" + aws.ListCount(l), "2")
+    first := aws.ListAt(l, 0)
+    check("key with a plus decoded", first.key, "2026/c++.tar.gz")
+    check("entry size", "" + first.size, "4096")
+    check("entity-decoded etag", first.etag, "9b2cf5")
+    check("entry owner", first.owner, "ali")
+    check("entry timestamp", "" + first.modified_epoch, "1787279254")
+    check("entry storage class", aws.ListAt(l, 1).storage_class, "STANDARD_IA")
+    check("common prefix", aws.ListPrefixAt(l, 0), "2026/raw/")
+    check("listing total size", "" + aws.ListTotalSize(l), "4113")
+    check("out of range is empty", aws.ListAt(l, 9).key, "")
+end
+
+// An error document is the one XML shape this package reads by hand, because
+// it is always the same shape and always present when something failed.
+func error_document():
+    doc := "<?xml version=\"1.0\"?><Error><Code>NoSuchKey</Code>" +
+        "<Message>The specified key does not exist.</Message>" +
+        "<Key>missing.txt</Key><RequestId>QW3R</RequestId></Error>"
+    check("error code", aws.ResultErrorCode(doc), "NoSuchKey")
+    check("error message", aws.ResultErrorMessage(doc, 404),
+        "The specified key does not exist.")
+    check("error tag", aws.ResultTag(doc, "RequestId"), "QW3R")
+    check("statusless fallback", aws.ResultErrorMessage("", 503),
+        "the object store answered 503")
+end
+
+// ---- checksums ----
+
+// A multipart ETag is not a hash of the object: it is the MD5 of the
+// concatenated part MD5s, with the part count after a dash. Two identical
+// objects uploaded with different part sizes therefore have different ETags,
+// which is why comparing an ETag to a local MD5 fails for anything large.
+func checksums():
+    n := 6291456
+    buf := mem.Allocate(n as u64)
+    bp := buf as u8*
+    repeat n with i:
+        bp[i] = ((i * 31) % 251) as u8
+    end
+    check("single-part etag", aws.S3ContentHashMd5(buf, n),
+        "2ff1456bbc587accacd1620d6d2417c9")
+    check("payload hash", aws.S3ContentHash(buf, n),
+        "55e3466bedbea23ad195d50bb22207bd22bef3e497659d8674f500df0feb0bfe")
+    check("multipart etag", aws.S3MultipartEtag(buf, n, 5242880),
+        "568c0ea23bb95bc6c6cefcd2bdfcac93-2")
+    check("small object keeps the plain etag", aws.S3MultipartEtag(buf, 1024, 5242880),
+        aws.S3ContentHashMd5(buf, 1024))
+    mem.Free(buf)
+    check("empty body hash", aws.Sha256Bytes(null, 0), aws.EMPTY_SHA256)
+end
+
+// ---- header and tag lists ----
+
+func header_list():
+    mut h := aws.NewHeaders()
+    aws.HeaderSet(h, "Content-Type", "text/plain")
+    aws.HeaderSet(h, "CONTENT-TYPE", "application/json")
+    check("header set is case-insensitive", "" + aws.HeaderCount(h), "1")
+    check("header replaced", aws.HeaderGet(h, "content-type"), "application/json")
+    aws.HeaderAdd(h, "x-amz-meta-a", "1")
+    check("header added", "" + aws.HeaderCount(h), "2")
+    check_bool("header present", aws.HeaderHas(h, "X-Amz-Meta-A"), true)
+    check_bool("header absent", aws.HeaderHas(h, "x-amz-meta-b"), false)
+    check("header name at", aws.HeaderNameAt(h, 1), "x-amz-meta-a")
+    check("header value at", aws.HeaderValueAt(h, 1), "1")
+    check("header out of range", aws.HeaderNameAt(h, 7), "")
+    aws.HeaderFree(h)
+end
+
+// Tags attached at upload time travel in one header, URL-encoded, which is
+// what lets them be set in the same request as the object.
+func tags():
+    mut t := aws.NewTags()
+    aws.TagSet(t, "env", "prod")
+    aws.TagSet(t, "owner name", "ali reza")
+    check("tag header", aws.TagString(t), "env=prod&owner%20name=ali%20reza")
+    aws.HeaderFree(t)
+end
+
+// ---- credentials ----
+
+func ini():
+    text := "# a comment\n[default]\naws_access_key_id = AKIADEFAULT\n" +
+        "aws_secret_access_key=secret-one\n\n" +
+        "[work]\n; another comment\naws_access_key_id = AKIAWORK\n" +
+        "aws_secret_access_key = secret-two\naws_session_token = tok\n"
+    check("ini default key", aws.ParseIni(text, "default", "aws_access_key_id"),
+        "AKIADEFAULT")
+    check("ini section scoped", aws.ParseIni(text, "work", "aws_access_key_id"),
+        "AKIAWORK")
+    check("ini token", aws.ParseIni(text, "work", "aws_session_token"), "tok")
+    check("ini missing key", aws.ParseIni(text, "work", "region"), "")
+    check("ini missing section", aws.ParseIni(text, "other", "aws_access_key_id"), "")
+end
+
+// A request that cannot be signed must be refused before it is sent, not
+// answered with a 403 from the far side.
+func guards():
+    check_bool("configured", aws.Configured(example()), true)
+    check_bool("unconfigured", aws.Configured(aws.Config {}), false)
+    mut keyless := example()
+    keyless.secret_key = ""
+    check_bool("no secret is not configured", aws.Configured(keyless), false)
+    check("unconfigured put refused", aws.S3Put(aws.Config {}, "k", "v", "").error,
+        "the object store is not configured")
+    check("unconfigured presign is empty", aws.S3Presign(aws.Config {}, "GET", "k", 60), "")
+    check("delete-everything refused", aws.S3DeletePrefix(example(), "").error,
+        "refusing to delete every object in the bucket; pass a prefix")
+end
+
 func main:
     signed_header_vector()
+    built_request_vector()
+    ordering()
+    prepared_head()
     presigned_vector()
+    presigned_put()
+    presign_ceiling()
+    post_policy()
     addressing()
     escaping()
     endpoints()
-    print "configured: "
-    println aws.Configured(example())
-    print "unconfigured: "
-    println aws.Configured(aws.Config {})
+    constructors()
+    redaction()
+    listing()
+    error_document()
+    checksums()
+    header_list()
+    tags()
+    ini()
+    guards()
+    ret 0
 end

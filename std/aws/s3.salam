@@ -40,6 +40,9 @@ import encoding
 // An MD5 digest is 16 bytes, which is what Content-MD5 carries in base64.
 const _S3_MD5_LEN := 16
 
+// And a SHA-256 digest is 32, which is what x-amz-checksum-sha256 carries.
+const _S3_SHA_LEN := 32
+
 // PutOptions - everything S3 will accept alongside an object.
 //
 // Only `content_type` is worth setting for most objects. The rest matter when
@@ -76,6 +79,12 @@ pub struct PutOptions:
     // is for the S3-compatible services that require it, and for a caller who
     // wants the second check.
     pub checksum_md5: bool = false
+    // Send x-amz-checksum-sha256, S3's own integrity field. Unlike Content-MD5
+    // and unlike the signature, the service *stores* this one, so it can be
+    // read back later and is carried through a multipart assembly. It is the
+    // right answer where a stored object has to prove years from now that it
+    // is the object that was uploaded.
+    pub checksum_sha256: bool = false
     // Skip hashing the body for the signature. Only over HTTPS. Worth it for
     // a large upload, where hashing is a second full pass over the bytes.
     pub unsigned_payload: bool = false
@@ -177,6 +186,17 @@ func _content_md5(p: void*, n: int): str:
     ret encoding.Base64EncodeBytes(digest, _S3_MD5_LEN)
 end
 
+// _checksum_sha256 - the base64 SHA-256 of a body, the form the header takes.
+// Base64 rather than the hex the signature uses, because the two fields were
+// added to S3 a decade apart.
+func _checksum_sha256(p: void*, n: int): str:
+    digest := mem.Allocate(_S3_SHA_LEN as u64)
+    defer mem.Free(digest)
+    if digest == null: ret "" end
+    crypto.Sha256Bytes(p, n, digest)
+    ret encoding.Base64EncodeBytes(digest, _S3_SHA_LEN)
+end
+
 // _apply_meta - the caller's metadata as x-amz-meta-<name> headers.
 func _apply_meta(r &: Request, meta: Headers):
     mut i := 0
@@ -269,6 +289,9 @@ pub func S3PutBytesWith(cfg: Config, key: str, body: void*, n: int,
     _apply_put(r, o)
     if o.checksum_md5 && n > 0:
         SetHeader(r, "Content-MD5", _content_md5(body, n))
+    end
+    if o.checksum_sha256 && n > 0:
+        SetHeader(r, "x-amz-checksum-sha256", _checksum_sha256(body, n))
     end
     ret Do(cfg, r)
 end
@@ -484,4 +507,23 @@ end
 // single-part ETag both are.
 pub func S3ContentMd5(body: void*, n: int): str:
     ret _content_md5(body, n)
+end
+
+// S3ChecksumSha256 - the base64 SHA-256 of a buffer, the value
+// x-amz-checksum-sha256 carries and the one S3 stores alongside the object.
+pub func S3ChecksumSha256(body: void*, n: int): str:
+    ret _checksum_sha256(body, n)
+end
+
+// S3ObjectChecksum - the stored checksum of an object, if it has one.
+//
+// Only answered when the object was uploaded with one, which is why
+// PutOptions.checksum_sha256 exists: an object stored without it can never be
+// asked this question afterwards.
+pub func S3ObjectChecksum(cfg: Config, key: str): str:
+    mut r := NewRequest("HEAD", key)
+    SetHeader(r, "x-amz-checksum-mode", "ENABLED")
+    res := Do(cfg, r)
+    if !res.ok: ret "" end
+    ret ResultHeader(res, "x-amz-checksum-sha256")
 end

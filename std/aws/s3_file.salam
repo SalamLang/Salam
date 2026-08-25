@@ -53,6 +53,9 @@ end
 // per-request overhead disappears, small enough to re-fetch cheaply.
 const _S3_DOWNLOAD_CHUNK := 8388608
 
+// An MD5 digest, which is what a multipart ETag is built out of.
+const _S3_MD5_WIDTH := 16
+
 // TransferResult - what a file transfer did.
 pub struct TransferResult:
     pub ok: bool = false
@@ -387,12 +390,36 @@ end
 
 // S3FileEtag - the ETag S3 will report for a local file uploaded with a given
 // part size, so an upload can be verified without downloading it again.
+//
+// Reads a part at a time, the same way the upload does, so checking a
+// hundred-gigabyte file costs one part of memory rather than the file. The
+// part size must be the one the upload used: a multipart ETag depends on it,
+// which is exactly why it cannot be compared against a plain MD5.
 pub func S3FileEtag(path: str, part_size: int): str:
     size := _file_size(path)
     if size < 0 as i64: ret "" end
-    mut n := 0
-    body := _read_all(path, size, n)
-    if size > 0 as i64 && body == null: ret "" end
-    defer mem.Free(body)
-    ret S3MultipartEtag(body, n, _part_size_of(part_size))
+    part := _part_size_of(part_size)
+    f := fopen(path, "rb")
+    if f == null: ret "" end
+    defer fclose(f)
+    buf := mem.Allocate(part as u64)
+    if buf == null: ret "" end
+    defer mem.Free(buf)
+    if size <= part as i64:
+        got := fread(buf, 1 as u64, size as u64, f) as int
+        ret S3ContentHashMd5(buf, got)
+    end
+    count := ((size + (part as i64) - (1 as i64)) / (part as i64)) as int
+    digests := mem.Allocate((count * _S3_MD5_WIDTH) as u64)
+    if digests == null: ret "" end
+    defer mem.Free(digests)
+    mut i := 0
+    until i < count:
+        got := fread(buf, 1 as u64, part as u64, f) as int
+        if got <= 0: ret "" end
+        crypto.Md5Bytes(buf, got,
+            ((digests as i64) + ((i * _S3_MD5_WIDTH) as i64)) as void*)
+        i += 1
+    end
+    ret S3ContentHashMd5(digests, count * _S3_MD5_WIDTH) + "-" + count
 end

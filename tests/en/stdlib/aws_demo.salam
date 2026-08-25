@@ -325,10 +325,44 @@ func checksums():
         "55e3466bedbea23ad195d50bb22207bd22bef3e497659d8674f500df0feb0bfe")
     check("multipart etag", aws.S3MultipartEtag(buf, n, 5242880),
         "568c0ea23bb95bc6c6cefcd2bdfcac93-2")
+    // Content-MD5 and x-amz-checksum-sha256 both travel as base64, unlike the
+    // hex the signature uses; the two fields were added to S3 a decade apart.
+    check("content-md5 header value", aws.S3ContentMd5(buf, n),
+        "L/FFa7xYesys0WINbSQXyQ==")
+    check("stored sha-256 checksum", aws.S3ChecksumSha256(buf, n),
+        "VeNGa+2+ojrRldULsiIHvSK+8+SXZZ2GdPUA3w/rC/4=")
     check("small object keeps the plain etag", aws.S3MultipartEtag(buf, 1024, 5242880),
         aws.S3ContentHashMd5(buf, 1024))
     mem.Free(buf)
     check("empty body hash", aws.Sha256Bytes(null, 0), aws.EMPTY_SHA256)
+end
+
+// Two Config flags that change what goes on the wire and are invisible until
+// a service refuses the request.
+func flags():
+    anon_cfg := aws.Config {
+        endpoint = "https://s3.amazonaws.com",
+        bucket = "examplebucket",
+        path_style = false,
+        anonymous = true
+    }
+    check_bool("anonymous needs no keys", aws.Configured(anon_cfg), true)
+    head := aws.PreparedHead(anon_cfg, aws.NewRequest("GET", "public/a.txt"),
+        1369353600 as i64)
+    check_bool("anonymous sends no credential", head.find("Authorization") < 0, true)
+    check_bool("anonymous sends no timestamp", head.find("x-amz-date") < 0, true)
+    check_bool("anonymous still names the host",
+        head.find("\r\nHost: examplebucket.s3.amazonaws.com\r\n") >= 0, true)
+    mut payer := example()
+    payer.request_payer = true
+    paid := aws.PreparedHead(payer, aws.NewRequest("GET", "a.txt"), 1369353600 as i64)
+    check_bool("requester-pays header sent",
+        paid.find("\r\nx-amz-request-payer: requester\r\n") >= 0, true)
+    // Sending it is not enough: an x-amz-* header that is not signed makes the
+    // whole request invalid, so it has to be in the signed list too.
+    check_bool("requester-pays header signed",
+        paid.find("SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-amz-request-payer") >= 0,
+        true)
 end
 
 // ---- header and tag lists ----
@@ -407,6 +441,7 @@ func main:
     listing()
     error_document()
     checksums()
+    flags()
     header_list()
     tags()
     ini()

@@ -284,7 +284,9 @@ end
 
 // ------------------------------------------------------------ the request
 
-func _head_block(r: Request, path: str, query: str, s: Signed,
+// _head_block - the request line and headers, ready to write. `authorization`
+// is empty for an anonymous request, which sends no credential at all.
+func _head_block(r: Request, path: str, query: str, authorization: str,
     signed_set: Headers): str:
     mut sb := str.NewBuilder()
     defer str.BufFree(sb)
@@ -307,9 +309,12 @@ func _head_block(r: Request, path: str, query: str, s: Signed,
         str.BufAppend(sb, "\r\n")
         i += 1
     end
-    str.BufAppend(sb, "Authorization: ")
-    str.BufAppend(sb, s.authorization)
-    str.BufAppend(sb, "\r\nContent-Length: ")
+    if authorization.len() > 0:
+        str.BufAppend(sb, "Authorization: ")
+        str.BufAppend(sb, authorization)
+        str.BufAppend(sb, "\r\n")
+    end
+    str.BufAppend(sb, "Content-Length: ")
     str.BufAppendInt(sb, r.body_len as i64)
     str.BufAppend(sb, "\r\nConnection: close\r\n\r\n")
     ret str.BufStr(sb)
@@ -326,6 +331,8 @@ func _signing_set(cfg: Config, r: Request, host: str, amz_date: str,
         _hdr_set(out, r.headers.names.get(i), r.headers.values.get(i))
         i += 1
     end
+    if cfg.request_payer: _hdr_set(out, "x-amz-request-payer", "requester") end
+    if cfg.anonymous: ret out end
     _hdr_set(out, "x-amz-content-sha256", payload_hash)
     _hdr_set(out, "x-amz-date", amz_date)
     if cfg.session_token.len() > 0:
@@ -352,12 +359,16 @@ func _send_once(cfg: Config, r: Request, at: i64): httpx.Raw:
     payload_hash := _payload_hash(r)
     amz_date := AmzDate(at)
     signed_set := _signing_set(cfg, r, host, amz_date, payload_hash)
+    if cfg.anonymous:
+        ret httpx.SendRaw(ep, _head_block(r, path, query, "", signed_set),
+            r.body, r.body_len)
+    end
     mut signed_names := ""
     canonical := _canon_headers(signed_set, signed_names)
     s := SignRequest(cfg, r.method, path, query, canonical, signed_names,
         payload_hash, at)
     if !s.ok: ret httpx.Raw { error = "the request could not be signed" } end
-    head := _head_block(r, path, query, s, signed_set)
+    head := _head_block(r, path, query, s.authorization, signed_set)
     ret httpx.SendRaw(ep, head, r.body, r.body_len)
 end
 
@@ -637,5 +648,6 @@ pub func PreparedHead(cfg: Config, r: Request, at: i64): str:
     canonical := _canon_headers(signed_set, signed_names)
     s := SignRequest(cfg, r.method, path, query, canonical, signed_names,
         payload_hash, at)
-    ret _head_block(r, path, query, s, signed_set)
+    if cfg.anonymous: ret _head_block(r, path, query, "", signed_set) end
+    ret _head_block(r, path, query, s.authorization, signed_set)
 end

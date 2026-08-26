@@ -15,11 +15,12 @@
 
 #include "include/cef_app.h"
 
-int main(int argc, char *argv[]) {
+int main(int argc, char *argv[])
+{
 #if defined(_WIN32)
-  CefMainArgs main_args(GetModuleHandle(nullptr));
+    CefMainArgs main_args(GetModuleHandle(nullptr));
 #else
-  CefMainArgs main_args(argc, argv);
+    CefMainArgs main_args(argc, argv);
 #endif
-  return CefExecuteProcess(main_args, nullptr, nullptr);
+    return CefExecuteProcess(main_args, nullptr, nullptr);
 }

@@ -17,16 +17,10 @@
 @ar "تحویل"
 package conv
 
+import dtoa
+
 extern:
     func malloc(size: u64): void*
-    // For FormatFloat: printf is the only correctly-rounded decimal
-    // formatter available here, and strtod the only correctly-rounded
-    // reader back.
-    func snprintf(buf: char*, cap: u64, fmt: str, ...): int
-    // Pure in the sense the analyzer means: the result is a function of the
-    // text alone. It sets errno on overflow, which is the same latitude
-    // strcmp and strstr are already declared with.
-    pure func strtod(s: str, endptr: void*): f64
 end
 
 inline pure func _bp(s: str): i8*: ret (s as void*) as i8* end
@@ -225,8 +219,15 @@ pub inline pure func Atoi(s: str): int: ret ParseInt(s) as int end
 // strtod is correctly rounded, and FormatFloat above already depends on that
 // to decide how many digits a value needs, so this adds no new requirement.
 // It also accepts "inf" and "nan", which the loop silently read as zero.
-pub pure func ParseFloat(s: str): f64:
-    ret strtod(s, null)
+// Not `pure`: the conversion is a function of the text alone, but it needs a
+// scratch buffer to work in, and obtaining that is a side effect. The
+// previous version was only nominally pure - it called strtod, which sets
+// errno, and had to declare it pure to compile.
+pub func ParseFloat(s: str): f64:
+    if !dtoa.Ready():
+        dtoa.Init(malloc(dtoa.SCRATCH_BYTES as u64))
+    end
+    ret dtoa.ParseF64(s, null)
 end
 
 @en "IsNaNF"
@@ -247,29 +248,19 @@ pub inline pure func IsNaNF(x: f64): bool: ret x != x end
 // The buffer is handed to the caller as the result string, the same
 // ownership FormatUint below has always had.
 pub func FormatFloat(x: f64): str:
-    if x != x: ret "nan" end
-    if x != 0.0 && x / 2.0 == x:
-        ret x < 0.0 ? "-inf" : "inf"
+    if !dtoa.Ready():
+        dtoa.Init(malloc(dtoa.SCRATCH_BYTES as u64))
     end
     cap := 64 as u64
     buf := malloc(cap)
-    mut prec := 15
-    until prec <= 17:
-        mut spec := "%.15g"
-        if prec == 16:
-            spec = "%.16g"
-        else prec == 17:
-            spec = "%.17g"
-        end
-        n := snprintf(buf as char*, cap, spec, x)
-        if n > 0:
-            _fix_exp(buf as i8*)
-        end
-        if n > 0 && (prec == 17 || strtod(buf as str, null) == x):
-            ret buf as str
-        end
-        prec += 1
+    if buf == null:
+        ret ""
     end
+    n := dtoa.ShortestF64(x, buf, cap as int)
+    if n <= 0 || n >= (cap as int):
+        ret ""
+    end
+    _fix_exp(buf as i8*)
     ret buf as str
 end
 

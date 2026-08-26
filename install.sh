@@ -454,6 +454,31 @@ VERSION="${VERSION#v}"
 DL_TOOL=""
 UNAME_S=$(uname -s 2>/dev/null || printf 'unknown')
 
+# Where the downloader's own complaint is kept. Set once the temporary
+# directory exists; until then every capture goes to /dev/null.
+NET_ERR=""
+DL_STATUS=0
+
+net_err_reset() {
+    if [ -n "$NET_ERR" ]; then
+        : >"$NET_ERR" 2>/dev/null || true
+    fi
+}
+
+# The last few lines curl or wget wrote, which is where "Could not
+# resolve host" and "Connection timed out" live. Fails when there is
+# nothing to show, so callers can skip the whole paragraph.
+net_error() {
+    if [ -z "$NET_ERR" ] || [ ! -s "$NET_ERR" ]; then
+        return 1
+    fi
+
+    tr -d '\015' <"$NET_ERR" |
+        sed -e 's/^[[:space:]]*//' -e '/^$/d' |
+        awk '!seen[$0]++' |
+        tail -n 3
+}
+
 if command -v curl >/dev/null 2>&1; then
     DL_TOOL="curl"
 elif command -v wget >/dev/null 2>&1; then
@@ -523,7 +548,9 @@ fetch_to_stdout() {
 fetch_to_file() {
     case "$DL_TOOL" in
     curl)
-        curl -fL --retry 3 --retry-delay 2 --connect-timeout 20 \
+        # -sS: this script draws its own progress bar, but an error still
+        # has to reach stderr, which the caller keeps.
+        curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 20 \
             -A "$USER_AGENT" -o "$2" "$1"
         ;;
     wget)
@@ -553,8 +580,9 @@ probe_url() {
         # status check below can see it. GitHub answers a missing asset
         # with a 404 that still carries a content-length, so trusting
         # that header alone would call every wrong name a hit.
+        net_err_reset
         _headers=$(curl -sSL -I --connect-timeout 20 --max-time 60 \
-            -A "$USER_AGENT" "$1" 2>/dev/null || true)
+            -A "$USER_AGENT" "$1" 2>"${NET_ERR:-/dev/null}" || true)
         ;;
     wget)
         _headers=$(wget $WGET_FLAGS --spider -S -U "$USER_AGENT" "$1" 2>&1 || true)
@@ -579,7 +607,11 @@ probe_url() {
     esac
 
     if [ -z "$_headers" ]; then
-        return 1
+        # Nothing came back at all. That is a DNS failure, a refused
+        # connection or a proxy eating the request, and it says nothing
+        # about whether this release publishes the asset. 2 keeps the
+        # caller from reading it as a missing file.
+        return 2
     fi
 
     _headers=$(printf '%s\n' "$_headers" | tr -d '\015')
@@ -588,6 +620,12 @@ probe_url() {
     # belong to the redirect hops.
     _code=$(printf '%s\n' "$_headers" |
         sed -n 's#^ *HTTP/[0-9.]* *\([0-9][0-9][0-9]\).*#\1#p' | tail -n 1)
+
+    # Output but no status line: wget writes its own errors to the same
+    # stream, so this is the wget-shaped version of the case above.
+    if [ -z "$_code" ]; then
+        return 2
+    fi
 
     case "$_code" in
     2??) ;;
@@ -647,7 +685,10 @@ download_file() {
     _start=$(now_seconds)
     _tenths=0
 
-    fetch_to_file "$_url" "$_dest" >/dev/null 2>&1 &
+    net_err_reset
+    DL_STATUS=0
+
+    fetch_to_file "$_url" "$_dest" >/dev/null 2>"${NET_ERR:-/dev/null}" &
     DL_PID=$!
 
     if [ "$IS_TTY" = 1 ]; then
@@ -662,9 +703,10 @@ download_file() {
     if wait "$DL_PID"; then
         _rc=0
     else
-        _rc=1
+        _rc=$?
     fi
 
+    DL_STATUS=$_rc
     DL_PID=""
 
     if [ "$_rc" != 0 ] || [ ! -s "$_dest" ]; then
@@ -1051,6 +1093,7 @@ fi
 
 ARCHIVE="$WORKDIR/salam.zip"
 EXTRACT_DIR="$WORKDIR/extracted"
+NET_ERR="$WORKDIR/net.err"
 
 # ---------------------------------------------------------------------
 # 2. Which release
@@ -1199,7 +1242,7 @@ else
         TOTAL=0
 
         if [ "$PROBE_BLOCKED" = 1 ]; then
-            info "$DL_TOOL cannot ask for headers; trying $TAG directly"
+            info "the header check got no answer; trying $TAG directly"
         else
             info "no recent release advertised one; trying $TAG directly anyway"
         fi
@@ -1219,9 +1262,37 @@ if [ "$TOTAL" -gt 0 ]; then
 fi
 
 if ! download_file "$URL" "$ARCHIVE" "$TOTAL"; then
+    NET_WHY=$(net_error || true)
+
+    if [ -n "$NET_WHY" ]; then
+        warn "$DL_TOOL said:"
+
+        printf '%s\n' "$NET_WHY" | while IFS= read -r _line; do
+            info "  $_line"
+        done
+    elif [ "$DL_STATUS" != 0 ]; then
+        warn "$DL_TOOL exited with status $DL_STATUS"
+    fi
+
+    # A status line means the request got through and GitHub answered;
+    # the asset is simply not there.
+    case "$NET_WHY" in
+    *404*)
+        die "could not download $ASSET" \
+            "$URL" \
+            "that release publishes no $PLATFORM asset" \
+            "browse what is available at $RELEASES_URL"
+        ;;
+    esac
+
     die "could not download $ASSET" \
         "$URL" \
-        "either that release publishes no $PLATFORM asset, or the transfer was refused" \
+        "" \
+        "release downloads redirect to release-assets.githubusercontent.com," \
+        "a different host from github.com - networks that block or proxy it" \
+        "fail exactly like this while the rest of the script works" \
+        "" \
+        "otherwise that release may publish no $PLATFORM asset;" \
         "browse what is available at $RELEASES_URL"
 fi
 

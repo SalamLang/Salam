@@ -211,6 +211,36 @@ pub func SignRequest(cfg: Config, method: str, path: str, query: str,
     }
 end
 
+// SignString - step 4 on its own: HMAC a string under the derived key.
+//
+// Exported for the one part of S3 that is not a signed request at all. A
+// browser POST upload signs a base64 policy document rather than a canonical
+// request, and it needs exactly this and nothing else.
+pub func SignString(cfg: Config, date_stamp: str, payload: str): str:
+    if cfg.secret_key.len() == 0: ret "" end
+    key := _signing_key(cfg.secret_key, date_stamp, cfg.region, cfg.service)
+    if key == null: ret "" end
+    defer mem.Free(key)
+    ret _sign_with(key, payload)
+end
+
+// SignQueryHeaders - the signature for a presigned URL that also commits the
+// client to sending particular headers.
+//
+// The general form of SignQuery. A presigned PUT that pins the content type
+// has to sign `content-type` as well as `host`, because the signature is only
+// worth anything if it covers what the client is allowed to send.
+pub func SignQueryHeaders(cfg: Config, method: str, path: str, query: str,
+    canonical_headers: str, signed_headers: str, epoch_seconds: i64): str:
+    if cfg.secret_key.len() == 0: ret "" end
+    amz_date := AmzDate(epoch_seconds)
+    date_stamp := DateStamp(amz_date)
+    canonical := _canonical_request(method, path, query, canonical_headers,
+        signed_headers, UNSIGNED_PAYLOAD)
+    ret SignString(cfg, date_stamp, _string_to_sign(amz_date,
+        Scope(date_stamp, cfg.region, cfg.service), canonical))
+end
+
 // SignQuery - the signature for a presigned URL.
 //
 // The difference from SignRequest is where the credential goes: in a presigned
@@ -219,14 +249,6 @@ end
 // the URL with no headers of its own.
 pub func SignQuery(cfg: Config, method: str, path: str, query: str, host: str,
     epoch_seconds: i64): str:
-    if cfg.secret_key.len() == 0: ret "" end
-    amz_date := AmzDate(epoch_seconds)
-    date_stamp := DateStamp(amz_date)
-    canonical := _canonical_request(method, path, query, "host:" + host + "\n",
-        "host", UNSIGNED_PAYLOAD)
-    key := _signing_key(cfg.secret_key, date_stamp, cfg.region, cfg.service)
-    if key == null: ret "" end
-    defer mem.Free(key)
-    ret _sign_with(key, _string_to_sign(amz_date,
-        Scope(date_stamp, cfg.region, cfg.service), canonical))
+    ret SignQueryHeaders(cfg, method, path, query, "host:" + host + "\n", "host",
+        epoch_seconds)
 end

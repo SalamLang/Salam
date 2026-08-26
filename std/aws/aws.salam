@@ -14,28 +14,46 @@
 
 package aws
 
-// AWS Signature Version 4, and the S3 object API built on it.
+// AWS Signature Version 4, and the S3 API built on it.
 //
 // The signing half is generic: SignRequest() will sign a request for any AWS
-// service, and S3 is simply the first caller. The S3 half is deliberately the
-// small part of the API that an application actually uses - put an object, get
-// it back, delete it, ask whether it is there, and hand a browser a URL that
-// works for the next few minutes without giving it a credential.
+// service, and S3 is simply the first caller. The S3 half covers what an
+// application does with an object store - store an object, read it back, ask
+// about it, list, copy, delete, upload something too large for one request,
+// and hand a browser a URL or a form that works without a credential.
 //
 // It works against S3 itself and against the S3-compatible services that
-// matter in practice: MinIO, Cloudflare R2, Backblaze B2, Wasabi, Ceph. What
-// differs between them is addressing, which is the `path_style` flag.
+// matter in practice: MinIO, Cloudflare R2, Backblaze B2, Wasabi, DigitalOcean
+// Spaces, Ceph. What differs between them is addressing, which is the
+// `path_style` flag, and s3_creds has a constructor per service so that the
+// difference does not have to be remembered.
 //
-// Two things this package does NOT do, both on purpose:
+// Where things are:
 //
-//   * It does not stream. An object is a buffer, and a multi-gigabyte upload
-//     wants multipart, which is a different API with a different failure model.
-//   * It does not manage credentials. There is no instance-metadata lookup and
-//     no profile file; a Config is filled in by the caller, which is what makes
-//     it testable and what keeps a surprise network call out of a signing
-//     function.
+//   aws.salam           Config and Result - the two types everything shares
+//   sigv4.salam         the four steps of a signature
+//   s3_wire.salam       Headers, Request, Do() - every S3 request goes here
+//   s3.salam            one object: put, get, stat, copy, delete
+//   s3_list.salam       listing, and deleting in bulk
+//   s3_multipart.salam  uploads assembled from parts
+//   s3_bucket.salam     the bucket itself, and its lifecycle rules
+//   s3_tagging.salam    tags, ACLs and holds
+//   s3_file.salam       local files, a chunk at a time, in bounded memory
+//   s3_presign.salam    URLs and forms that carry no credential
+//   s3_creds.salam      constructing a Config, and reading a stored key
+//   service.salam       Call/Invoke - the same signing, for any AWS service
+//   sts.salam           temporary credentials: roles, web identities, MFA
+//   chain.salam         finding a credential: role profiles, ECS, EC2
+//   sqs.salam           queues, and the receive/handle/delete loop
 //
-// See tests/en/stdlib/aws_demo.salam.
+// The one rule this package holds to about credentials: it never goes looking
+// for one behind the caller's back. Resolve() takes an explicit list of places
+// to try, reports which one answered, and leaves the two that touch the
+// network off unless asked - because a chain that silently tries everything is
+// how a program ends up signing with a credential nobody expected.
+//
+// See tests/en/stdlib/aws_demo.salam, aws_sts_demo.salam, aws_sqs_demo.salam
+// and aws_s3_loopback.salam.
 
 pub const SERVICE_S3 := "s3"
 pub const ALGORITHM := "AWS4-HMAC-SHA256"
@@ -72,6 +90,27 @@ pub struct Config:
     // Seconds a signature is honoured for. Only presigned URLs carry one; a
     // signed header is checked against its own timestamp.
     pub expires: int = 900
+    // How many times a request that failed in a way worth retrying is sent
+    // again. An object store answers 500 and 503 under load, and treating
+    // those as final loses data a second attempt would have stored. One
+    // disables retrying entirely, which is what a test wants.
+    pub retry: int = 3
+    // The first backoff, doubled per attempt and capped at ten seconds.
+    pub retry_base_ms: int = 100
+    // Send no credential at all. A great many buckets are readable by anyone -
+    // public datasets, static sites, release archives - and signing a request
+    // to one is not merely unnecessary, it is impossible without an account.
+    // Only reads make sense anonymously; a write will be refused by the
+    // service, which is the correct place for that decision.
+    pub anonymous: bool = false
+    // Accept the charges for a requester-pays bucket. Without it such a bucket
+    // answers 403 to every request, saying nothing about why.
+    pub request_payer: bool = false
+    // A deadline in milliseconds on every socket operation. Zero waits
+    // forever, which is the old behaviour and the wrong default for anything
+    // reached over a network nobody controls - a stalled connection with no
+    // deadline stops the program rather than the request.
+    pub timeout_ms: int = 0
 end
 
 // Result - one operation's outcome.
@@ -86,6 +125,16 @@ pub struct Result:
     pub etag: str = ""
     pub length: i64 = 0
     pub error: str = ""
+    // The whole response head, so a caller can read a header this struct does
+    // not lift into a field of its own. ResultHeader() is the accessor.
+    pub head: str = ""
+    // The service's own error code - "NoSuchKey", "AccessDenied",
+    // "PreconditionFailed". Worth branching on where `error` is only worth
+    // showing to a person.
+    pub code: str = ""
+    pub request_id: str = ""
+    // Set on a versioned bucket, for the version this call created or read.
+    pub version_id: str = ""
 end
 
 // NewConfig - a Config with the two things that have no sensible default.
@@ -104,8 +153,11 @@ end
 
 // Configured - whether a Config has everything a request needs. Checked before
 // signing, so a missing key is a clear refusal rather than a 403 from AWS.
+//
+// An anonymous Config needs no keys, only somewhere to send the request.
 pub func Configured(cfg: Config): bool:
     if cfg.endpoint.len() == 0 || cfg.bucket.len() == 0: ret false end
+    if cfg.anonymous: ret true end
     ret cfg.access_key.len() > 0 && cfg.secret_key.len() > 0
 end
 

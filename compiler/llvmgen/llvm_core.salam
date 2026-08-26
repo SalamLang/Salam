@@ -58,15 +58,28 @@ func datalayout(triple: str): str:
 end
 
 // ll_target_is_windows
-// True when the target's libc is glibc, the only one with mallopt. An empty
-// triple means "this host", and the compiler only reaches this path on Linux;
-// anything explicitly musl, macOS, Windows or wasm is out.
+// True when the named target's libc is glibc, the only one with mallopt.
+// Anything musl, macOS, Windows or wasm is out. An empty triple names no
+// target at all, so it is answered by resolve_glibc below rather than here.
 func target_is_glibc_of(triple: str): bool:
-    if str.Len(triple) == 0: ret true end
+    if str.Len(triple) == 0: ret false end
     if str.Contains(triple, "musl"): ret false end
     if str.Contains(triple, "darwin") || str.Contains(triple, "apple"): ret false end
     if str.Contains(triple, "windows") || str.Contains(triple, "wasm"): ret false end
     ret str.Contains(triple, "linux")
+end
+
+// The libc gate as the emitter asks it: an explicit triple answers for
+// itself, and an empty one means "whatever the toolchain links by default",
+// which is the host.
+//
+// Linux is not a synonym for glibc here. On Alpine (the benchmark image)
+// clang defaults to a musl triple, and the mallopt calls this used to emit
+// unconditionally for an empty triple failed the link on every program, with
+// nothing but "undefined reference to `mallopt`" to show for it.
+func resolve_glibc(triple: str): bool:
+    if str.Len(triple) > 0: ret target_is_glibc_of(triple) end
+    ret nt_host_is_glibc()
 end
 
 func target_is_windows_of(triple: str): bool:
@@ -105,10 +118,10 @@ func emit_prologue(v &: Lv):
     out_g(v, "declare noalias ptr @malloc(" + u + ") nounwind allocsize(0)\n")
     // glibc only. mallopt does not exist on musl or macOS, so the
     // declaration and the calls that go with it are emitted only when the
-    // target says glibc; on every other target the runtime simply keeps the
-    // allocator's defaults. An empty triple means the host, which this
-    // compiler only builds on when it is Linux.
-    if target_is_glibc_of(v.triple):
+    // libc being linked is glibc; everywhere else the runtime simply keeps
+    // the allocator's defaults. See resolve_glibc for how an empty triple
+    // is answered.
+    if v.libc_glibc:
         out_g(v, "declare i32 @mallopt(i32, i32) nounwind\n")
     end
     out_g(

@@ -58,7 +58,18 @@ func build program(name: str, cfg &: Config, s &: Store): HashMap<str, str>:
     end
 
     salam src := filepath.Join(src, "prog.salam")
-    salam pre := "cd ".concat(cfg.build).concat(" && SALAM_STD=").concat(cfg.std dir).concat(" ").concat(cfg.salam)
+    // Each program builds in its own directory. Every program's module is
+    // named `prog`, so one shared .salam-build lets a half-finished build
+    // hand the next program the previous one's cached object - which surfaces
+    // as an unexplained output mismatch rather than as a build error.
+    prog build := filepath.Join(cfg.build, name)
+    os.MkdirAll(prog build)
+    salam pre := "cd ".concat(prog build).concat(" && SALAM_STD=").concat(cfg.std dir).concat(" ").concat(cfg.salam)
+    // --log-level=error: at the default level the captured output is a few
+    // thousand lines of per-module codegen INFO, and the tail kept for the
+    // report is all log noise with the actual diagnostic scrolled off. The
+    // flag is per-subcommand, so it goes after build/llvm, not before.
+    quiet := " --release --log-level=error "
 
     // --release drops the SALAM_SAFE bounds checks, which is the configuration
     // every other language here is measured in: the C and C++ programs index
@@ -66,7 +77,7 @@ func build program(name: str, cfg &: Config, s &: Store): HashMap<str, str>:
     // on the container-heavy programs for a guarantee none of its rivals were
     // paying for - merge_sort alone runs 1.34x C checked and 0.84x unchecked.
     tcc bin := filepath.Join(cfg.build, name.concat("_salam_tcc"))
-    r = sh cap(salam pre.concat(" build --release ").concat(salam src).concat(" --output=").concat(tcc bin))
+    r = sh cap(salam pre.concat(" build").concat(quiet).concat(salam src).concat(" --output=").concat(tcc bin))
     if r.code == 0 && os.Exists(tcc bin):
         cmds.put("salam_tcc", tcc bin)
     else:
@@ -74,7 +85,7 @@ func build program(name: str, cfg &: Config, s &: Store): HashMap<str, str>:
     end
 
     gcc bin := filepath.Join(cfg.build, name.concat("_salam_gcc"))
-    r = sh cap(salam pre.concat(" build --release ").concat(salam src).concat(` --cc="gcc -O3" --output=`).concat(gcc bin))
+    r = sh cap(salam pre.concat(" build").concat(quiet).concat(salam src).concat(` --cc="gcc -O3" --output=`).concat(gcc bin))
     if r.code == 0 && os.Exists(gcc bin):
         cmds.put("salam_gcc", gcc bin)
     else:
@@ -82,7 +93,7 @@ func build program(name: str, cfg &: Config, s &: Store): HashMap<str, str>:
     end
 
     llvm bin := filepath.Join(cfg.build, name.concat("_salam_llvm"))
-    r = sh cap(salam pre.concat(" llvm --release ").concat(salam src).concat(" -O3 --exec -o ").concat(llvm bin))
+    r = sh cap(salam pre.concat(" llvm").concat(quiet).concat(salam src).concat(" -O3 --exec -o ").concat(llvm bin))
     if r.code == 0 && os.Exists(llvm bin):
         cmds.put("salam_llvm", llvm bin)
     else:

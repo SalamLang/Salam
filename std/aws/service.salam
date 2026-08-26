@@ -1,0 +1,432 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package aws
+
+// One request to any AWS service.
+//
+// The signer has always been generic - a signature is a function of a method,
+// a path, a query, some headers and a body, and nothing in it knows about
+// objects or buckets. Nothing above it was, though: every path into _dispatch
+// went through S3's bucket addressing, so a second service meant a second
+// signer, and a second signer means the two drift.
+//
+// This is the other way in. Addressing for everything that is not S3 is
+// trivial - the host is the service name and the region - so what is left is
+// which of AWS's three request protocols the service speaks:
+//
+//   query  the older services (STS, SQS, SNS, EC2, CloudWatch, IAM). A form
+//          body of Action=X&Version=Y&..., an XML answer.
+//   json   the newer ones (DynamoDB, Lambda, Kinesis, KMS, Secrets Manager).
+//          A JSON body, the operation named in X-Amz-Target, a JSON answer.
+//   rest   the ones shaped like HTTP (API Gateway, Lambda invoke, S3).
+//          The operation is the method and the path.
+//
+// All three are the same signed request underneath, which is why they are one
+// type here with three constructors rather than three clients.
+
+import str
+import time
+import net.httpx
+
+// The services that answer at one global endpoint rather than one per region.
+// A signature still names a region - us-east-1, by convention - so this is
+// about addressing, not about scope.
+const _AWS_GLOBAL := "iam cloudfront route53 organizations waf globalaccelerator"
+
+// The form and JSON content types, spelled once.
+const _CT_FORM := "application/x-www-form-urlencoded; charset=utf-8"
+
+// Call - one request to one service.
+//
+// `region` empty takes the Config's. `endpoint` overrides addressing entirely,
+// which is how a caller reaches a VPC endpoint, a LocalStack, or a test mock.
+pub struct Call:
+    pub service: str = ""
+    pub region: str = ""
+    pub method: str = "POST"
+    pub path: str = "/"
+    // X-Amz-Target, which is how a JSON-protocol service is told which
+    // operation is being called; the path is always "/" for those.
+    pub target: str = ""
+    pub content_type: str = ""
+    pub query: Headers = Headers {}
+    pub headers: Headers = Headers {}
+    // Form parameters, for the query protocol. Rendered into the body in the
+    // order they were added, with Action and Version first.
+    pub params: Headers = Headers {}
+    pub body: str = ""
+    pub endpoint: str = ""
+    // Address the single global endpoint rather than a regional one.
+    pub global_endpoint: bool = false
+end
+
+// _is_global - whether a service name is one of the global ones.
+func _is_global(service: str): bool:
+    if service.len() == 0: ret false end
+    ret str.Contains(_AWS_GLOBAL, service.lower())
+end
+
+// _form_body - the query protocol's body: URL-encoded pairs joined by `&`.
+//
+// AWS's escaping, not a form encoder's: a space is %20 here rather than `+`.
+// The service accepts both, but the body is hashed into the signature, so it
+// has to be encoded once and sent exactly as encoded.
+func _form_body(params: Headers): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    mut i := 0
+    until i < params.names.len():
+        if i > 0: str.BufAppend(sb, "&") end
+        str.BufAppend(sb, UriEncode(params.names.get(i), false))
+        str.BufAppend(sb, "=")
+        str.BufAppend(sb, UriEncode(params.values.get(i), false))
+        i += 1
+    end
+    ret str.BufStr(sb)
+end
+
+// _call_body - the bytes a Call sends, whichever protocol it speaks.
+func _call_body(c: Call): str:
+    if c.params.names.len() > 0: ret _form_body(c.params) end
+    ret c.body
+end
+
+func _call_content_type(c: Call): str:
+    if c.content_type.len() > 0: ret c.content_type end
+    if c.params.names.len() > 0: ret _CT_FORM end
+    if c.target.len() > 0: ret "application/x-amz-json-1.0" end
+    ret ""
+end
+
+func _call_region(cfg: Config, c: Call): str:
+    if c.region.len() > 0: ret c.region end
+    if cfg.region.len() > 0: ret cfg.region end
+    ret "us-east-1"
+end
+
+func _call_endpoint(cfg: Config, c: Call): str:
+    if c.endpoint.len() > 0: ret c.endpoint end
+    if c.global_endpoint || _is_global(c.service):
+        ret "https://" + c.service + ".amazonaws.com"
+    end
+    ret ServiceEndpoint(c.service, _call_region(cfg, c))
+end
+
+func _call_host(ep: httpx.Endpoint): str:
+    mut host := ep.host
+    if (ep.secure && ep.port != 443) || (!ep.secure && ep.port != 80):
+        host = host + ":" + ep.port
+    end
+    ret host
+end
+
+// _call_headers - the caller's headers plus the ones the protocol requires.
+func _call_headers(c: Call, content_type: str): Headers:
+    mut h := _hdr_copy(c.headers)
+    if content_type.len() > 0: _hdr_set(h, "Content-Type", content_type) end
+    if c.target.len() > 0: _hdr_set(h, "X-Amz-Target", c.target) end
+    ret h
+end
+
+// _invoke_once - one attempt, signed for this service and region.
+func _invoke_once(cfg: Config, c: Call, at: i64): httpx.Raw:
+    endpoint := _call_endpoint(cfg, c)
+    ep := httpx.ParseEndpoint(endpoint)
+    if !ep.ok:
+        ret httpx.Raw { error = "the endpoint could not be parsed: " + endpoint }
+    end
+    mut svc := cfg
+    svc.service = c.service
+    svc.region = _call_region(cfg, c)
+    body := _call_body(c)
+    content_type := _call_content_type(c)
+    headers := _call_headers(c, content_type)
+    mut path := c.path
+    if path.len() == 0: path = "/" end
+    mut payload := EMPTY_SHA256
+    if body.len() > 0: payload = Sha256Bytes(body as void*, body.len()) end
+    mut data := null as void*
+    if body.len() > 0: data = body as void* end
+    ret _dispatch(svc, ep, c.method, _call_host(ep), path,
+        _canon_query(c.query), headers, data, body.len(), payload, at)
+end
+
+func _invoke_raw(cfg: Config, c: Call): httpx.Raw:
+    mut attempts := cfg.retry
+    if attempts < 1: attempts = 1 end
+    if attempts > 10: attempts = 10 end
+    mut n := 0
+    until n < attempts:
+        mut raw := _invoke_once(cfg, c, time.Now())
+        if !_retryable(raw.status) || n == attempts - 1: ret raw end
+        httpx.FreeRaw(raw)
+        time.Sleep(_backoff_ms(cfg, n))
+        n += 1
+    end
+    ret httpx.Raw { error = "the request was never attempted" }
+end
+
+// _service_ready - a service call needs credentials and an endpoint, and
+// unlike S3 it needs no bucket. Configured() insists on one, so it cannot be
+// the check here.
+func _service_ready(cfg: Config, c: Call): str:
+    if c.service.len() == 0 && c.endpoint.len() == 0:
+        ret "the call names no service"
+    end
+    if cfg.anonymous: ret "" end
+    if cfg.access_key.len() == 0 || cfg.secret_key.len() == 0:
+        ret "no credentials were supplied for " + c.service
+    end
+    ret ""
+end
+
+// _json_field - one string field out of a JSON document.
+//
+// Deliberately not encoding.json: this reads two fields out of an error
+// document, and pulling a whole parser in for that would make every program
+// that touches any AWS service carry one. A caller who wants the *answer*
+// parsed should hand result.body to encoding.json themselves.
+func _json_field(body: str, name: str): str:
+    needle := "\"" + name + "\""
+    at := body.find(needle)
+    if at < 0: ret "" end
+    mut i := at + needle.len()
+    until i < body.len():
+        c := body[i] as int
+        if c != 32 && c != 58 && c != 9 && c != 10 && c != 13: break end
+        i += 1
+    end
+    if i >= body.len() || body[i] as int != 34: ret "" end
+    i += 1
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    until i < body.len():
+        c := body[i] as int
+        if c == 92 && i + 1 < body.len():
+            esc := body[i + 1] as int
+            if esc == 110: str.BufAppendChar(sb, 10)
+            else esc == 116: str.BufAppendChar(sb, 9)
+            else esc == 114: str.BufAppendChar(sb, 13)
+            else: str.BufAppendChar(sb, esc)
+            end
+            i += 2
+            continue
+        end
+        if c == 34: ret str.BufStr(sb) end
+        str.BufAppendChar(sb, c)
+        i += 1
+    end
+    ret str.BufStr(sb)
+end
+
+// ------------------------------------------------------------- public API
+
+// ServiceEndpoint - where a service answers in a region.
+pub func ServiceEndpoint(service: str, region: str): str:
+    if service.len() == 0: ret "" end
+    if region.len() == 0 || _is_global(service):
+        ret "https://" + service + ".amazonaws.com"
+    end
+    ret "https://" + service + "." + region + ".amazonaws.com"
+end
+
+// NewQueryCall - a call to a query-protocol service.
+//
+// STS, SQS, SNS, EC2, CloudWatch, IAM. `action` and `version` are the two
+// parameters every such request carries, and they go first so that a signed
+// body is reproducible.
+pub func NewQueryCall(service: str, action: str, version: str): Call:
+    mut c := Call { service = service, method = "POST", path = "/" }
+    _hdr_set(c.params, "Action", action)
+    _hdr_set(c.params, "Version", version)
+    ret c
+end
+
+// NewJsonCall - a call to a JSON-protocol service.
+//
+// `target` is the operation, spelled the way the service spells it -
+// "DynamoDB_20120810.GetItem", "TrentService.Encrypt". Getting it wrong
+// produces an UnknownOperationException rather than a signing error, which is
+// at least a diagnosable one.
+pub func NewJsonCall(service: str, target: str, json: str): Call:
+    ret Call {
+        service = service,
+        method = "POST",
+        path = "/",
+        target = target,
+        body = json,
+        content_type = "application/x-amz-json-1.0"
+    }
+end
+
+// NewJson11Call - the same for a service on the 1.1 flavour of the protocol
+// (Lambda's control plane, Kinesis, CloudWatch Logs).
+pub func NewJson11Call(service: str, target: str, json: str): Call:
+    mut c := NewJsonCall(service, target, json)
+    c.content_type = "application/x-amz-json-1.1"
+    ret c
+end
+
+// NewRestCall - a call to a service shaped like HTTP, where the operation is
+// the method and the path.
+pub func NewRestCall(service: str, method: str, path: str): Call:
+    ret Call { service = service, method = method, path = path }
+end
+
+// CallParam - one form parameter, for the query protocol.
+pub func CallParam(c &: Call, name: str, value: str):
+    if value.len() == 0: ret end
+    _hdr_set(c.params, name, value)
+end
+
+// CallParamInt - the same for a number.
+pub func CallParamInt(c &: Call, name: str, value: int):
+    _hdr_set(c.params, name, "" + value)
+end
+
+// CallHeader - one header, which will be signed along with everything else.
+pub func CallHeader(c &: Call, name: str, value: str):
+    if value.len() == 0: ret end
+    _hdr_set(c.headers, name, value)
+end
+
+// CallQuery - one query-string parameter, for a REST-shaped call.
+pub func CallQuery(c &: Call, name: str, value: str):
+    _hdr_set(c.query, name, value)
+end
+
+// CallBody - a body written by the caller, for a REST or JSON call.
+pub func CallBody(c &: Call, body: str, content_type: str):
+    c.body = body
+    if content_type.len() > 0: c.content_type = content_type end
+end
+
+// CallRegion - override the region for this call alone, which matters because
+// a signature is scoped to one and a queue or a table lives in one.
+pub func CallRegion(c &: Call, region: str):
+    c.region = region
+end
+
+// CallEndpoint - send somewhere other than the real AWS. A LocalStack, a VPC
+// endpoint, or a test mock; the signature is unchanged, so the far side can
+// still verify it.
+pub func CallEndpoint(c &: Call, endpoint: str):
+    c.endpoint = endpoint
+end
+
+// Invoke - send a call and read the answer.
+//
+// The answer is a Result, the same one every S3 operation returns, so the
+// error handling a caller already wrote works unchanged. `code` carries the
+// service's own error code, which for the query protocol is the <Code> of its
+// XML fault and for JSON is the tail of its __type.
+pub func Invoke(cfg: Config, c: Call): Result:
+    why := _service_ready(cfg, c)
+    if why.len() > 0: ret Failure(why) end
+    mut raw := _invoke_raw(cfg, c)
+    defer httpx.FreeRaw(raw)
+    body := httpx.RawText(raw)
+    mut out := Result { status = raw.status, body = body, head = raw.head }
+    out.request_id = httpx.HeaderValue(raw.head, "x-amzn-requestid")
+    if out.request_id.len() == 0:
+        out.request_id = httpx.HeaderValue(raw.head, "x-amz-request-id")
+    end
+    if raw.error.len() > 0:
+        out.code = "Transport"
+        out.error = raw.error
+        ret out
+    end
+    out.ok = raw.ok
+    if !raw.ok:
+        out.code = ServiceErrorCode(body)
+        out.error = ServiceErrorMessage(body, raw.status)
+    end
+    ret out
+end
+
+// ServiceErrorCode - the error code out of either protocol's fault document.
+//
+// The query protocol answers <ErrorResponse><Error><Code>…; JSON answers
+// {"__type":"com.amazon.coral.service#SomeException"}, where only the part
+// after the `#` is worth showing.
+pub func ServiceErrorCode(body: str): str:
+    tagged := _tag_text(body, "Code")
+    if tagged.len() > 0: ret tagged end
+    mut typed := _json_field(body, "__type")
+    if typed.len() == 0: typed = _json_field(body, "code") end
+    hash := typed.find("#")
+    if hash >= 0: ret typed.substr(hash + 1, typed.len() - hash - 1) end
+    ret typed
+end
+
+// ServiceErrorMessage - and the human half of it.
+pub func ServiceErrorMessage(body: str, status: int): str:
+    tagged := _tag_text(body, "Message")
+    if tagged.len() > 0: ret tagged end
+    mut msg := _json_field(body, "message")
+    if msg.len() == 0: msg = _json_field(body, "Message") end
+    if msg.len() > 0: ret msg end
+    code := ServiceErrorCode(body)
+    if code.len() > 0: ret code end
+    if status == 0: ret "the service could not be reached" end
+    ret "the service answered " + status
+end
+
+// CallFree - release the pair lists a Call accumulated.
+pub func CallFree(c &: Call):
+    HeaderFree(c.params)
+    HeaderFree(c.headers)
+    HeaderFree(c.query)
+end
+
+// PreparedCall - the request line and headers a call would send, without
+// sending them, and the body it would carry after them.
+//
+// The counterpart of PreparedHead for everything that is not S3, and there for
+// the same reason: a signature disagreement is invisible in a 403, and the
+// only way to find one is to read what was actually signed.
+pub func PreparedCall(cfg: Config, c: Call, at: i64): str:
+    endpoint := _call_endpoint(cfg, c)
+    ep := httpx.ParseEndpoint(endpoint)
+    if !ep.ok: ret "" end
+    mut svc := cfg
+    svc.service = c.service
+    svc.region = _call_region(cfg, c)
+    body := _call_body(c)
+    content_type := _call_content_type(c)
+    headers := _call_headers(c, content_type)
+    mut path := c.path
+    if path.len() == 0: path = "/" end
+    mut payload := EMPTY_SHA256
+    if body.len() > 0: payload = Sha256Bytes(body as void*, body.len()) end
+    host := _call_host(ep)
+    query := _canon_query(c.query)
+    amz_date := AmzDate(at)
+    signed_set := _signing_set(svc, headers, host, amz_date, payload)
+    mut signed_names := ""
+    canonical := _canon_headers(signed_set, signed_names)
+    s := SignRequest(svc, c.method, path, query, canonical, signed_names,
+        payload, at)
+    mut auth := s.authorization
+    if svc.anonymous: auth = "" end
+    ret _head_block(c.method, path, query, auth, signed_set, body.len()) + body
+end
+
+// CallBodyText - the bytes a call would send, on their own. The query
+// protocol builds this from the parameters, so it is the only way to see what
+// was actually posted.
+pub func CallBodyText(c: Call): str:
+    ret _call_body(c)
+end

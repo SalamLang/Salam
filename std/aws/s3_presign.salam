@@ -1,0 +1,404 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package aws
+
+// URLs that work without a credential.
+//
+// This is the most valuable thing S3 offers an application, and the one most
+// often reimplemented badly. A presigned URL lets a browser read from or write
+// to the object store directly: the bytes never pass through the application,
+// so there is no proxy hop, no request-sized allocation, and no reason for a
+// server to be on the path of a two-gigabyte video. The application still
+// decides who gets a URL and for how long, which is the part that matters.
+//
+// Three forms, because browsers need three different things:
+//
+//   * a signed GET, for downloads - the URL is the whole story
+//   * a signed PUT, for uploads from fetch() or XMLHttpRequest
+//   * a POST policy, for an HTML <form> upload, which cannot set headers and
+//     therefore cannot use either of the above
+//
+// A signature covers the method, so a URL minted for GET cannot be used to
+// PUT, and it covers the expiry, so it stops working on its own.
+
+import str
+import time
+import encoding
+import net.httpx
+
+// The seven-day ceiling AWS puts on a SigV4 presigned URL.
+const _S3_MAX_EXPIRES := 604800
+
+// PresignOptions - what a presigned URL is allowed to do.
+//
+// Everything here narrows the URL. `content_type` on a PUT commits the client
+// to sending exactly that type, and the response overrides on a GET let one
+// stored object be handed to a browser under a chosen filename.
+pub struct PresignOptions:
+    // Seconds. Zero takes the Config's `expires`. AWS caps this at seven days
+    // for a SigV4 URL, and this package refuses anything longer rather than
+    // minting a URL the service will reject.
+    pub expires: int = 0
+    pub version_id: str = ""
+    // Signed as a header: the client must send it, and cannot send another.
+    pub content_type: str = ""
+    pub acl: str = ""
+    pub storage_class: str = ""
+    pub response_content_type: str = ""
+    pub response_content_disposition: str = ""
+    pub response_cache_control: str = ""
+end
+
+// PostOptions - the shape of an HTML form upload.
+pub struct PostOptions:
+    pub expires: int = 0
+    // When true, `key` is a prefix and the browser may choose the rest of the
+    // name. This is how "upload into this folder" is expressed; without it the
+    // key is fixed and one URL uploads exactly one object.
+    pub key_is_prefix: bool = false
+    pub content_type: str = ""
+    // When set, the type is a prefix condition rather than an exact one, so
+    // "image/" admits any image and nothing else.
+    pub content_type_is_prefix: bool = false
+    pub acl: str = ""
+    pub cache_control: str = ""
+    pub storage_class: str = ""
+    // The size range the policy will accept, in bytes. A maximum of zero means
+    // no upper bound, which is almost never what a public upload form wants.
+    pub min_bytes: i64 = 0
+    pub max_bytes: i64 = 0
+    // What S3 answers with on success: a status ("201" returns an XML
+    // document) or a URL to redirect the browser to.
+    pub success_status: str = ""
+    pub success_redirect: str = ""
+    pub meta: Headers = Headers {}
+end
+
+// PostForm - a signed browser upload: where to post, and what to post with it.
+//
+// Every field must appear in the form, in this order, before the file input.
+// S3 reads the parts in order and ignores anything after the file.
+pub struct PostForm:
+    pub ok: bool = false
+    pub url: str = ""
+    pub fields: Headers = Headers {}
+    // The policy document, before base64. Kept because it is the only way to
+    // see what a form actually permits.
+    pub policy: str = ""
+    pub error: str = ""
+end
+
+func _origin(ep: httpx.Endpoint, host: str): str:
+    if ep.secure: ret "https://" + host end
+    ret "http://" + host
+end
+
+func _expiry_of(cfg: Config, want: int): int:
+    mut secs := want
+    if secs <= 0: secs = cfg.expires end
+    if secs <= 0: secs = 900 end
+    if secs > _S3_MAX_EXPIRES: secs = _S3_MAX_EXPIRES end
+    ret secs
+end
+
+// _presign_query - the six or seven parameters that carry the credential.
+func _presign_query(cfg: Config, amz_date: str, expires: int, signed: str,
+    o: PresignOptions): Headers:
+    mut q := Headers {}
+    HeaderSet(q, "X-Amz-Algorithm", ALGORITHM)
+    HeaderSet(q, "X-Amz-Credential",
+        cfg.access_key + "/" + Scope(DateStamp(amz_date), cfg.region, cfg.service))
+    HeaderSet(q, "X-Amz-Date", amz_date)
+    HeaderSet(q, "X-Amz-Expires", "" + expires)
+    HeaderSet(q, "X-Amz-SignedHeaders", signed)
+    if cfg.session_token.len() > 0:
+        HeaderSet(q, "X-Amz-Security-Token", cfg.session_token)
+    end
+    if o.version_id.len() > 0: HeaderSet(q, "versionId", o.version_id) end
+    if o.response_content_type.len() > 0:
+        HeaderSet(q, "response-content-type", o.response_content_type)
+    end
+    if o.response_content_disposition.len() > 0:
+        HeaderSet(q, "response-content-disposition", o.response_content_disposition)
+    end
+    if o.response_cache_control.len() > 0:
+        HeaderSet(q, "response-cache-control", o.response_cache_control)
+    end
+    ret q
+end
+
+// _presign_headers - the headers a presigned URL commits the client to. Host
+// always; a content type or an ACL when the caller pins one.
+func _presign_headers(host: str, o: PresignOptions): Headers:
+    mut h := Headers {}
+    HeaderSet(h, "host", host)
+    if o.content_type.len() > 0: HeaderSet(h, "content-type", o.content_type) end
+    if o.acl.len() > 0: HeaderSet(h, "x-amz-acl", o.acl) end
+    if o.storage_class.len() > 0:
+        HeaderSet(h, "x-amz-storage-class", o.storage_class)
+    end
+    ret h
+end
+
+// _json_escape - a JSON string body. Policy conditions carry object keys and
+// content types, which can hold a quote or a backslash.
+func _json_escape(s: str): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    repeat s.len() with i:
+        c := s[i] as int
+        if c == 34: str.BufAppend(sb, "\\\"")
+        else c == 92: str.BufAppend(sb, "\\\\")
+        else c == 10: str.BufAppend(sb, "\\n")
+        else c == 13: str.BufAppend(sb, "\\r")
+        else c == 9: str.BufAppend(sb, "\\t")
+        else c < 32: str.BufAppend(sb, " ")
+        else: str.BufAppendChar(sb, c)
+        end
+    end
+    ret str.BufStr(sb)
+end
+
+// _attr_escape - a value going into an HTML attribute. Small and local rather
+// than a dependency on a template engine, because this package needs exactly
+// four replacements and nothing else.
+func _attr_escape(s: str): str:
+    mut out := str.Replace(s, "&", "&amp;")
+    out = str.Replace(out, "\"", "&quot;")
+    out = str.Replace(out, "<", "&lt;")
+    ret str.Replace(out, ">", "&gt;")
+end
+
+func _cond_exact(name: str, value: str): str:
+    ret "{\"" + _json_escape(name) + "\":\"" + _json_escape(value) + "\"}"
+end
+
+func _cond_starts(name: str, value: str): str:
+    ret "[\"starts-with\",\"$" + _json_escape(name) + "\",\"" +
+        _json_escape(value) + "\"]"
+end
+
+// _post_fields - the form fields, which are also exactly the policy's exact
+// conditions. Building them once and deriving both keeps the two in step; a
+// field that is not in the policy, or a condition with no field, is the usual
+// reason a form upload is refused.
+func _post_fields(cfg: Config, key: str, amz_date: str, o: PostOptions): Headers:
+    mut f := Headers {}
+    HeaderSet(f, "key", key)
+    HeaderSet(f, "x-amz-algorithm", ALGORITHM)
+    HeaderSet(f, "x-amz-credential",
+        cfg.access_key + "/" + Scope(DateStamp(amz_date), cfg.region, cfg.service))
+    HeaderSet(f, "x-amz-date", amz_date)
+    if cfg.session_token.len() > 0:
+        HeaderSet(f, "x-amz-security-token", cfg.session_token)
+    end
+    if o.acl.len() > 0: HeaderSet(f, "acl", o.acl) end
+    if o.cache_control.len() > 0: HeaderSet(f, "Cache-Control", o.cache_control) end
+    if o.storage_class.len() > 0:
+        HeaderSet(f, "x-amz-storage-class", o.storage_class)
+    end
+    if o.content_type.len() > 0 && !o.content_type_is_prefix:
+        HeaderSet(f, "Content-Type", o.content_type)
+    end
+    if o.success_status.len() > 0:
+        HeaderSet(f, "success_action_status", o.success_status)
+    end
+    if o.success_redirect.len() > 0:
+        HeaderSet(f, "success_action_redirect", o.success_redirect)
+    end
+    mut i := 0
+    until i < o.meta.names.len():
+        HeaderSet(f, "x-amz-meta-" + o.meta.names.get(i).lower(),
+            o.meta.values.get(i))
+        i += 1
+    end
+    ret f
+end
+
+func _post_policy(cfg: Config, expiry_iso: str, fields: Headers,
+    o: PostOptions): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppend(sb, "{\"expiration\":\"")
+    str.BufAppend(sb, expiry_iso)
+    str.BufAppend(sb, "\",\"conditions\":[")
+    str.BufAppend(sb, _cond_exact("bucket", cfg.bucket))
+    mut i := 0
+    until i < fields.names.len():
+        name := fields.names.get(i)
+        value := fields.values.get(i)
+        str.BufAppend(sb, ",")
+        if name == "key" && o.key_is_prefix:
+            str.BufAppend(sb, _cond_starts("key", value))
+        else:
+            str.BufAppend(sb, _cond_exact(name, value))
+        end
+        i += 1
+    end
+    if o.content_type.len() > 0 && o.content_type_is_prefix:
+        str.BufAppend(sb, ",")
+        str.BufAppend(sb, _cond_starts("Content-Type", o.content_type))
+    end
+    if o.max_bytes > 0:
+        str.BufAppend(sb, ",[\"content-length-range\",")
+        str.BufAppendInt(sb, o.min_bytes)
+        str.BufAppend(sb, ",")
+        str.BufAppendInt(sb, o.max_bytes)
+        str.BufAppend(sb, "]")
+    end
+    str.BufAppend(sb, "]}")
+    ret str.BufStr(sb)
+end
+
+// ------------------------------------------------------------- public API
+
+// S3Url - the plain, unsigned URL of an object. Useful for a public bucket and
+// for building a link a CDN will front; a private bucket answers 403, which is
+// the point.
+pub func S3Url(cfg: Config, key: str): str:
+    ep := httpx.ParseEndpoint(cfg.endpoint)
+    if !ep.ok: ret "" end
+    ret _origin(ep, _wire_host(cfg, ep, cfg.bucket)) +
+        _wire_path(cfg, cfg.bucket, key)
+end
+
+// S3Presign - a URL that works, without a credential, for `expires` seconds.
+pub func S3Presign(cfg: Config, method: str, key: str, expires: int): str:
+    ret S3PresignAt(cfg, method, key, expires, time.Now())
+end
+
+// S3PresignAt - the same, anchored to a given instant rather than now.
+//
+// Exists so a signature can be reproduced: a test can check one against a
+// published vector, and a caller minting a batch can give them all one expiry
+// rather than a spread of them.
+pub func S3PresignAt(cfg: Config, method: str, key: str, expires: int,
+    epoch_seconds: i64): str:
+    ret S3PresignWith(cfg, method, key, PresignOptions { expires = expires },
+        epoch_seconds)
+end
+
+// S3PresignWith - a presigned URL with every option, anchored to an instant.
+pub func S3PresignWith(cfg: Config, method: str, key: str, o: PresignOptions,
+    epoch_seconds: i64): str:
+    if !Configured(cfg): ret "" end
+    ep := httpx.ParseEndpoint(cfg.endpoint)
+    if !ep.ok: ret "" end
+    host := _wire_host(cfg, ep, cfg.bucket)
+    path := _wire_path(cfg, cfg.bucket, key)
+    amz_date := AmzDate(epoch_seconds)
+    headers := _presign_headers(host, o)
+    mut signed_names := ""
+    canonical := _canon_headers(headers, signed_names)
+    query := _canon_query(_presign_query(cfg, amz_date,
+        _expiry_of(cfg, o.expires), signed_names, o))
+    signature := SignQueryHeaders(cfg, method, path, query, canonical,
+        signed_names, epoch_seconds)
+    if signature.len() == 0: ret "" end
+    ret _origin(ep, host) + path + "?" + query + "&X-Amz-Signature=" + signature
+end
+
+// S3PresignGet - a download URL. The common case, spelled out.
+pub func S3PresignGet(cfg: Config, key: str, expires: int): str:
+    ret S3PresignAt(cfg, "GET", key, expires, time.Now())
+end
+
+// S3PresignPut - an upload URL. Pin the content type when the browser is
+// expected to send one: without it the signature does not cover the type and
+// the client may store anything under any type.
+pub func S3PresignPut(cfg: Config, key: str, content_type: str,
+    expires: int): str:
+    ret S3PresignWith(cfg, "PUT", key,
+        PresignOptions { expires = expires, content_type = content_type },
+        time.Now())
+end
+
+// S3PresignDownload - a URL that makes a browser save the object under a
+// chosen filename rather than displaying it.
+pub func S3PresignDownload(cfg: Config, key: str, filename: str,
+    expires: int): str:
+    ret S3PresignWith(cfg, "GET", key, PresignOptions {
+        expires = expires,
+        response_content_disposition = "attachment; filename=\"" + filename + "\""
+    }, time.Now())
+end
+
+// S3PresignPost - a signed HTML form upload.
+//
+// The only form that works from a plain <form enctype="multipart/form-data">,
+// because a form cannot set an Authorization header or a Content-MD5. The
+// browser posts to `url` with every field of `fields` first and the file last.
+//
+// Worth setting max_bytes on anything a stranger can reach: without it the
+// policy permits an upload of any size, and the bill is the account's.
+pub func S3PresignPost(cfg: Config, key: str, o: PostOptions): PostForm:
+    ret S3PresignPostAt(cfg, key, o, time.Now())
+end
+
+// S3PresignPostAt - the same, anchored to an instant, so it is reproducible.
+pub func S3PresignPostAt(cfg: Config, key: str, o: PostOptions,
+    epoch_seconds: i64): PostForm:
+    if !Configured(cfg):
+        ret PostForm { error = "the object store is not configured" }
+    end
+    ep := httpx.ParseEndpoint(cfg.endpoint)
+    if !ep.ok:
+        ret PostForm { error = "the endpoint could not be parsed: " + cfg.endpoint }
+    end
+    amz_date := AmzDate(epoch_seconds)
+    expiry := epoch_seconds + (_expiry_of(cfg, o.expires) as i64)
+    mut fields := _post_fields(cfg, key, amz_date, o)
+    policy := _post_policy(cfg, time.FormatISOUTC(expiry), fields, o)
+    encoded := encoding.Base64Encode(policy)
+    signature := SignString(cfg, DateStamp(amz_date), encoded)
+    if signature.len() == 0:
+        ret PostForm { error = "the policy could not be signed" }
+    end
+    HeaderSet(fields, "policy", encoded)
+    HeaderSet(fields, "x-amz-signature", signature)
+    host := _wire_host(cfg, ep, cfg.bucket)
+    mut url := _origin(ep, host)
+    if cfg.path_style: url = url + "/" + cfg.bucket end
+    ret PostForm { ok = true, url = url, fields = fields, policy = policy }
+end
+
+// PostFormHtml - the form itself, ready to paste into a page.
+//
+// A convenience with a real purpose: the field order matters, S3 ignores
+// anything after the file input, and getting either wrong produces a rejection
+// that says nothing useful. Generating the form removes both mistakes.
+pub func PostFormHtml(f: PostForm, file_field: str): str:
+    if !f.ok: ret "" end
+    mut name := file_field
+    if name.len() == 0: name = "file" end
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppend(sb, "<form action=\"")
+    str.BufAppend(sb, f.url)
+    str.BufAppend(sb, "\" method=\"post\" enctype=\"multipart/form-data\">\n")
+    mut i := 0
+    until i < f.fields.names.len():
+        str.BufAppend(sb, "  <input type=\"hidden\" name=\"")
+        str.BufAppend(sb, f.fields.names.get(i))
+        str.BufAppend(sb, "\" value=\"")
+        str.BufAppend(sb, _attr_escape(f.fields.values.get(i)))
+        str.BufAppend(sb, "\">\n")
+        i += 1
+    end
+    str.BufAppend(sb, "  <input type=\"file\" name=\"")
+    str.BufAppend(sb, name)
+    str.BufAppend(sb, "\">\n  <button type=\"submit\">Upload</button>\n</form>")
+    ret str.BufStr(sb)
+end

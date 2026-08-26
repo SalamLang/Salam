@@ -3,6 +3,7 @@ package llvmgen
 import str
 import os
 import sm "../semantic/semantic.salam"
+import lb "../llvm_bridge.salam"
 
 // opt_flag
 func nt_opt_flag(l: int): str:
@@ -255,6 +256,41 @@ func nt_emit_tool_cmd(opts: Options): str:
         end
     end
     ret out
+end
+
+// The triple the toolchain would pick for itself, i.e. what an empty
+// --target means at link time. Asked of the same clang that will do the
+// linking, or of the linked-in LLVM when this binary has one, because
+// nothing on disk answers it reliably: a glibc box with musl-dev installed
+// has the musl loader sitting in /lib too.
+func nt_host_triple(): str:
+    embedded := lb.HostTriple()
+    if str.Len(embedded) > 0:
+        ret embedded
+    end
+    tool := nt_resolve_tool("clang", "clang-22")
+    r := os.RunCapture(`"` + tool + `" -dumpmachine 2>/dev/null`)
+    if r.code != 0:
+        ret ""
+    end
+    ret str.Trim(r.out)
+end
+
+// Whether the machine this compiler runs on links glibc - the libc question
+// for an empty target triple. Everything but Linux is a no; on Linux the
+// host triple decides, and when there is no toolchain to ask at all the
+// answer is no, since the calls this gates are an optimization and a
+// wrong yes fails the link outright.
+func nt_host_is_glibc(): bool:
+    if SALAM_OS_LINUX:
+        t := nt_host_triple()
+        if str.Len(t) == 0:
+            ret false
+        end
+        ret target_is_glibc_of(t)
+    else:
+        ret false
+    end
 end
 
 // A quick "<tool> --version" PATH probe (redirected, exit code only).

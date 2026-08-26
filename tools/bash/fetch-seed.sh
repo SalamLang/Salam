@@ -58,14 +58,42 @@ done
     exit 2
 }
 
+# The newest release tag. github.com/OWNER/REPO/releases/latest redirects to
+# .../releases/tag/vX.Y.Z, which is a plain web request; api.github.com answers
+# the same question but allows only 60 unauthenticated calls an hour per IP,
+# shared with everything else on that address. That is what a runner runs out
+# of: the armhf job here got a 403 from the API while the i686 job beside it,
+# on a different address, was fine. So ask github.com first and keep the API as
+# the fallback, authenticated when a token is in the environment (1000 an hour
+# per repository).
+#
+# Two seds rather than a pipeline into head, so a closed pipe cannot take the
+# whole script down with SIGPIPE.
+resolve_latest_tag() {
+    eff=$(curl -fsSL --retry 3 -o /dev/null -w '%{url_effective}' \
+        "https://github.com/$REPO/releases/latest" 2>/dev/null) || eff=
+    case ${eff:-} in
+    */releases/tag/*)
+        printf '%s' "${eff##*/tag/}"
+        return 0
+        ;;
+    esac
+    api=https://api.github.com/repos/$REPO/releases/latest
+    tok=${GH_TOKEN:-${GITHUB_TOKEN:-}}
+    if [ -n "$tok" ]; then
+        body=$(curl -fsSL --retry 3 -H "Authorization: Bearer $tok" "$api") || body=
+    else
+        body=$(curl -fsSL --retry 3 "$api") || body=
+    fi
+    printf '%s' "${body:-}" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | sed -n '1p'
+}
+
 if [ -z "$VERSION" ]; then
-    # Same shape setup-salam uses: read the tag out of the releases API and
-    # strip the leading v. Two seds rather than a pipeline into head, so a
-    # closed pipe cannot take the whole script down with SIGPIPE.
-    body=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest")
-    tag=$(printf '%s' "$body" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | sed -n '1p')
+    tag=$(resolve_latest_tag)
     [ -n "$tag" ] || {
-        echo "error: could not read the latest release tag" >&2
+        echo "error: could not read the latest release tag from github.com or the API" >&2
+        echo "       (the API allows 60 unauthenticated calls an hour per IP - set" >&2
+        echo "        GH_TOKEN, or pass --version to skip the lookup entirely)" >&2
         exit 1
     }
     VERSION=${tag#v}

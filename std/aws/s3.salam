@@ -14,242 +14,516 @@
 
 package aws
 
-// The S3 object API.
+// The S3 object API: one object at a time.
 //
-// Five operations and a presigner. That is the whole of what an application
-// does with an object store day to day, and everything else S3 offers - bucket
-// policy, lifecycle, versioning, replication - is an operations concern rather
-// than an application one.
+// Put it, get it, ask about it, copy it, delete it. Listing is in s3_list,
+// uploads too large for one request are in s3_multipart, the bucket itself is
+// in s3_bucket, and URLs a browser can use are in s3_presign.
 //
-// The presigner is the important one. A presigned URL lets a browser upload to
-// or download from S3 directly, so the bytes never pass through the
-// application at all: no proxy hop, no memory, and no reason for the server to
-// be on the path of a two-gigabyte video. The application still decides who
-// gets a URL, which is the part that matters.
+// Two shapes of every read operation. The plain one hands back text, which is
+// what a manifest, a JSON document or an XML answer is, and the `Bytes` one
+// hands back a buffer, which is what an image or an archive is. Text is the
+// convenient form and it stops at the first NUL byte; that is a property of
+// `str`, not a bug here, and it is why the binary form exists and why nothing
+// in this package makes text the only option.
+//
+// Options are structs with defaults rather than long parameter lists, because
+// S3's per-request knobs are numerous, almost always unused, and impossible to
+// order sensibly. A caller who wants none of them calls the short form.
 
 import mem
 import str
-import conv
 import time
 import crypto
-import net.httpx
+import encoding
 
-// _host_of - the hostname a request is addressed to, which depends on the
-// addressing mode. Virtual-host style puts the bucket in the name; path style
-// leaves it in the path.
-func _host_of(cfg: Config, ep: httpx.Endpoint): str:
-    mut host := ep.host
-    if !cfg.path_style: host = cfg.bucket + "." + ep.host end
-    if (ep.secure && ep.port != 443) || (!ep.secure && ep.port != 80):
-        host = host + ":" + ep.port
-    end
-    ret host
-end
+// An MD5 digest is 16 bytes, which is what Content-MD5 carries in base64.
+const _S3_MD5_LEN := 16
 
-// _path_of - the request path, the other half of the addressing decision.
-func _path_of(cfg: Config, key: str): str:
-    if cfg.path_style: ret "/" + cfg.bucket + EncodeKey(key) end
-    ret EncodeKey(key)
-end
+// And a SHA-256 digest is 32, which is what x-amz-checksum-sha256 carries.
+const _S3_SHA_LEN := 32
 
-// _canonical - the header block a signature covers, and the matching list.
+// PutOptions - everything S3 will accept alongside an object.
 //
-// The order is not stylistic: canonical headers are sorted by name, and these
-// four are already in order, which is why they can be built by concatenation
-// rather than sorted at runtime.
-func _canonical(host: str, amz_date: str, payload_hash: str, content_type: str,
-    session_token: str, signed &: str): str:
-    mut block := "host:" + host + "\n"
-    signed = "host"
-    if content_type.len() > 0:
-        block = block + "content-type:" + content_type + "\n"
-        signed = signed + ";content-type"
-    end
-    block = block + "x-amz-content-sha256:" + payload_hash + "\n"
-    signed = signed + ";x-amz-content-sha256"
-    block = block + "x-amz-date:" + amz_date + "\n"
-    signed = signed + ";x-amz-date"
-    if session_token.len() > 0:
-        block = block + "x-amz-security-token:" + session_token + "\n"
-        signed = signed + ";x-amz-security-token"
-    end
-    ret _reorder(block, signed, content_type.len() > 0)
+// Only `content_type` is worth setting for most objects. The rest matter when
+// the object is served to a browser (cache_control, content_disposition), when
+// it is being written once and must not overwrite (if_none_match = "*"), or
+// when a bucket policy requires encryption (sse).
+pub struct PutOptions:
+    pub content_type: str = ""
+    pub cache_control: str = ""
+    pub content_disposition: str = ""
+    pub content_encoding: str = ""
+    pub content_language: str = ""
+    // An HTTP-date, per RFC 7234. time.FormatHTTPDate() produces one.
+    pub expires: str = ""
+    // STANDARD, STANDARD_IA, ONEZONE_IA, INTELLIGENT_TIERING, GLACIER,
+    // DEEP_ARCHIVE, GLACIER_IR. Unset means the bucket's default.
+    pub storage_class: str = ""
+    // private, public-read, public-read-write, authenticated-read,
+    // bucket-owner-read, bucket-owner-full-control. Ignored by a bucket with
+    // ACLs disabled, which is the modern default.
+    pub acl: str = ""
+    // AES256 for S3-managed keys, aws:kms for KMS.
+    pub sse: str = ""
+    pub sse_kms_key: str = ""
+    // "k1=v1&k2=v2", already URL-encoded per S3's tagging syntax.
+    pub tagging: str = ""
+    // "*" makes the write conditional on the key not existing, which is how a
+    // write-once store is built without a lock.
+    pub if_none_match: str = ""
+    // An ETag, making the write conditional on the object not having changed.
+    pub if_match: str = ""
+    // Send Content-MD5. S3 verifies it and refuses a body that was corrupted
+    // in flight, which the SHA-256 in the signature already covers - so this
+    // is for the S3-compatible services that require it, and for a caller who
+    // wants the second check.
+    pub checksum_md5: bool = false
+    // Send x-amz-checksum-sha256, S3's own integrity field. Unlike Content-MD5
+    // and unlike the signature, the service *stores* this one, so it can be
+    // read back later and is carried through a multipart assembly. It is the
+    // right answer where a stored object has to prove years from now that it
+    // is the object that was uploaded.
+    pub checksum_sha256: bool = false
+    // Skip hashing the body for the signature. Only over HTTPS. Worth it for
+    // a large upload, where hashing is a second full pass over the bytes.
+    pub unsigned_payload: bool = false
+    // User metadata, sent as x-amz-meta-<name> and returned by Stat().
+    pub meta: Headers = Headers {}
+    // The part size a multipart upload uses, and the size above which one is
+    // used at all. Zero takes S3_PART_DEFAULT.
+    pub part_size: int = 0
 end
 
-// _reorder - content-type sorts before host, so the block built above needs
-// its first two lines swapped when a content type is present. Doing it here
-// keeps the builder readable and the canonical form correct.
-func _reorder(block: str, signed &: str, has_content_type: bool): str:
-    if !has_content_type: ret block end
-    lines := block.split("\n")
-    defer lines.free()
-    if lines.len() < 2: ret block end
-    mut out := lines.get(1) + "\n" + lines.get(0) + "\n"
-    mut i := 2
-    while i < lines.len():
-        if lines.get(i).len() > 0: out = out + lines.get(i) + "\n" end
+// GetOptions - the ways to ask for less than the whole object, or to ask only
+// if it changed.
+pub struct GetOptions:
+    // A byte range, inclusive of both ends, as HTTP defines it. Leave `end`
+    // negative for "to the end of the object". A negative `start` with a
+    // positive `end` means the last `end` bytes.
+    pub range_start: i64 = -1
+    pub range_end: i64 = -1
+    pub version_id: str = ""
+    // Conditional reads. if_none_match with a stored ETag is how a cache
+    // revalidates: the answer is 304 and no body when nothing changed.
+    pub if_none_match: str = ""
+    pub if_match: str = ""
+    pub if_modified_since: str = ""
+    pub if_unmodified_since: str = ""
+    // Override what the response says about the object, which is how one
+    // stored object is served under several filenames.
+    pub response_content_type: str = ""
+    pub response_content_disposition: str = ""
+    // Read one part of a multipart object, which also reveals the part
+    // boundaries the object was written with.
+    pub part_number: int = 0
+end
+
+// CopyOptions - the source, and what to do with the source's metadata.
+pub struct CopyOptions:
+    // Empty means the same bucket as the destination.
+    pub source_bucket: str = ""
+    pub source_version_id: str = ""
+    // COPY keeps the source's metadata and content type, REPLACE takes them
+    // from this request. S3 requires REPLACE if any is supplied.
+    pub replace_metadata: bool = false
+    pub content_type: str = ""
+    pub cache_control: str = ""
+    pub content_disposition: str = ""
+    pub storage_class: str = ""
+    pub acl: str = ""
+    pub sse: str = ""
+    pub tagging: str = ""
+    pub if_match: str = ""
+    pub if_none_match: str = ""
+    pub if_modified_since: str = ""
+    pub if_unmodified_since: str = ""
+    pub meta: Headers = Headers {}
+end
+
+// ObjectInfo - what a HEAD reveals, which is everything about an object except
+// its bytes.
+pub struct ObjectInfo:
+    pub ok: bool = false
+    pub status: int = 0
+    pub key: str = ""
+    pub size: i64 = 0
+    pub etag: str = ""
+    pub content_type: str = ""
+    pub content_encoding: str = ""
+    pub cache_control: str = ""
+    pub content_disposition: str = ""
+    // The header as sent, and the same instant as seconds since the epoch.
+    pub last_modified: str = ""
+    pub modified_epoch: i64 = 0
+    pub storage_class: str = ""
+    pub version_id: str = ""
+    pub sse: str = ""
+    // Whether a delete marker is the current version. Only a versioned bucket
+    // ever answers this, and only on a HEAD of a deleted key.
+    pub delete_marker: bool = false
+    // The number of parts a multipart object was written in, or zero.
+    pub parts: int = 0
+    pub meta: Headers = Headers {}
+    pub error: str = ""
+    pub code: str = ""
+end
+
+// _range_header - the Range value for a GetOptions, or "" for a whole object.
+func _range_header(o: GetOptions): str:
+    if o.range_start < 0 && o.range_end < 0: ret "" end
+    if o.range_start < 0: ret "bytes=-" + str.FromInt(o.range_end) end
+    if o.range_end < 0: ret "bytes=" + str.FromInt(o.range_start) + "-" end
+    ret "bytes=" + str.FromInt(o.range_start) + "-" + str.FromInt(o.range_end)
+end
+
+// _content_md5 - the base64 MD5 of a body, which is the form the header takes.
+func _content_md5(p: void*, n: int): str:
+    digest := mem.Allocate(_S3_MD5_LEN as u64)
+    defer mem.Free(digest)
+    if digest == null: ret "" end
+    crypto.Md5Bytes(p, n, digest)
+    ret encoding.Base64EncodeBytes(digest, _S3_MD5_LEN)
+end
+
+// _checksum_sha256 - the base64 SHA-256 of a body, the form the header takes.
+// Base64 rather than the hex the signature uses, because the two fields were
+// added to S3 a decade apart.
+func _checksum_sha256(p: void*, n: int): str:
+    digest := mem.Allocate(_S3_SHA_LEN as u64)
+    defer mem.Free(digest)
+    if digest == null: ret "" end
+    crypto.Sha256Bytes(p, n, digest)
+    ret encoding.Base64EncodeBytes(digest, _S3_SHA_LEN)
+end
+
+// _apply_meta - the caller's metadata as x-amz-meta-<name> headers.
+func _apply_meta(r &: Request, meta: Headers):
+    mut i := 0
+    until i < meta.names.len():
+        name := meta.names.get(i)
+        if name.len() > 0:
+            SetHeader(r, "x-amz-meta-" + name.lower(), meta.values.get(i))
+        end
         i += 1
     end
-    signed = str.Replace(signed, "host;content-type", "content-type;host")
-    ret out
 end
 
-// _head - the request line and headers, ready to write.
-func _head(method: str, path: str, host: str, s: Signed, content_type: str,
-    length: int, session_token: str): str:
-    mut out := method + " " + path + " HTTP/1.1\r\n"
-    out = out + "Host: " + host + "\r\n"
-    if content_type.len() > 0: out = out + "Content-Type: " + content_type + "\r\n" end
-    out = out + "x-amz-content-sha256: " + s.payload_hash + "\r\n"
-    out = out + "x-amz-date: " + s.amz_date + "\r\n"
-    if session_token.len() > 0:
-        out = out + "x-amz-security-token: " + session_token + "\r\n"
+func _apply_put(r &: Request, o: PutOptions):
+    SetHeader(r, "Content-Type", o.content_type)
+    SetHeader(r, "Cache-Control", o.cache_control)
+    SetHeader(r, "Content-Disposition", o.content_disposition)
+    SetHeader(r, "Content-Encoding", o.content_encoding)
+    SetHeader(r, "Content-Language", o.content_language)
+    SetHeader(r, "Expires", o.expires)
+    SetHeader(r, "x-amz-storage-class", o.storage_class)
+    SetHeader(r, "x-amz-acl", o.acl)
+    SetHeader(r, "x-amz-server-side-encryption", o.sse)
+    SetHeader(r, "x-amz-server-side-encryption-aws-kms-key-id", o.sse_kms_key)
+    SetHeader(r, "x-amz-tagging", o.tagging)
+    SetHeader(r, "If-None-Match", o.if_none_match)
+    SetHeader(r, "If-Match", o.if_match)
+    _apply_meta(r, o.meta)
+    if o.unsigned_payload: SetUnsignedPayload(r) end
+end
+
+func _apply_get(r &: Request, o: GetOptions):
+    SetHeader(r, "Range", _range_header(o))
+    SetHeader(r, "If-None-Match", o.if_none_match)
+    SetHeader(r, "If-Match", o.if_match)
+    SetHeader(r, "If-Modified-Since", o.if_modified_since)
+    SetHeader(r, "If-Unmodified-Since", o.if_unmodified_since)
+    if o.version_id.len() > 0: SetQuery(r, "versionId", o.version_id) end
+    if o.part_number > 0: SetQueryInt(r, "partNumber", o.part_number) end
+    if o.response_content_type.len() > 0:
+        SetQuery(r, "response-content-type", o.response_content_type)
     end
-    out = out + "Authorization: " + s.authorization + "\r\n"
-    out = out + "Content-Length: " + length + "\r\n"
-    out = out + "Connection: close\r\n\r\n"
+    if o.response_content_disposition.len() > 0:
+        SetQuery(r, "response-content-disposition", o.response_content_disposition)
+    end
+end
+
+// _meta_from_head - the x-amz-meta-* headers of a response, as a pair list.
+func _meta_from_head(head: str): Headers:
+    mut out := Headers {}
+    lower := head.lower()
+    mut pos := 0
+    until true:
+        at := str.IndexFrom(lower, "\r\nx-amz-meta-", pos)
+        if at < 0: break end
+        start := at + 13
+        colon := str.IndexFrom(head, ":", start)
+        if colon < 0: break end
+        mut eol := str.IndexFrom(head, "\r\n", colon)
+        if eol < 0: eol = head.len() end
+        HeaderSet(out, head.substr(start, colon - start),
+            head.substr(colon + 1, eol - colon - 1).trim())
+        pos = eol
+    end
     ret out
 end
 
-// _result - a wire Response as the caller's Result.
-func _result(r: httpx.Response): Result:
-    if r.error.len() > 0: ret Result { status = r.status, error = r.error } end
-    mut out := Result {
-        ok = r.ok,
-        status = r.status,
-        body = r.body,
-        etag = httpx.HeaderValue(r.head, "ETag")
-    }
-    length := httpx.HeaderValue(r.head, "Content-Length")
-    if length.len() > 0: out.length = length.to_int() as i64 end
-    if !r.ok: out.error = _service_error(r) end
-    ret out
+func _copy_source(cfg: Config, key: str, o: CopyOptions): str:
+    mut bucket := o.source_bucket
+    if bucket.len() == 0: bucket = cfg.bucket end
+    mut src := "/" + bucket + EncodeKey(key)
+    if o.source_version_id.len() > 0:
+        src = src + "?versionId=" + UriEncode(o.source_version_id, false)
+    end
+    ret src
 end
 
-// _service_error - the <Message> S3 returns in its XML error body, or the bare
-// status when there is none. Parsed by hand because pulling in an XML parser
-// for one element that is always present and never nested is not a trade worth
-// making.
-func _service_error(r: httpx.Response): str:
-    at := r.body.find("<Message>")
-    if at < 0: ret "the object store answered " + r.status end
-    stop := str.IndexFrom(r.body, "</Message>", at)
-    if stop < 0: ret "the object store answered " + r.status end
-    ret r.body.substr(at + 9, stop - at - 9)
-end
+// ------------------------------------------------------------- public API
 
-// _request - the shared body of every operation.
-func _request(cfg: Config, method: str, key: str, body: void*, n: int,
+// S3PutBytes - store an object from a buffer.
+pub func S3PutBytes(cfg: Config, key: str, body: void*, n: int,
     content_type: str): Result:
-    if !Configured(cfg): ret Failure("the object store is not configured") end
-    ep := httpx.ParseEndpoint(cfg.endpoint)
-    if !ep.ok: ret Failure("the endpoint could not be parsed: " + cfg.endpoint) end
-    host := _host_of(cfg, ep)
-    path := _path_of(cfg, key)
-    mut payload_hash := EMPTY_SHA256
-    if n > 0: payload_hash = Sha256Bytes(body, n) end
-    mut signed := ""
-    canonical := _canonical(host, AmzDate(time.Now()), payload_hash, content_type,
-        cfg.session_token, signed)
-    s := SignRequest(cfg, method, path, "", canonical, signed, payload_hash, time.Now())
-    if !s.ok: ret Failure("the request could not be signed") end
-    head := _head(method, path, host, s, content_type, n, cfg.session_token)
-    ret _result(httpx.Send(ep, head, body, n))
+    ret S3PutBytesWith(cfg, key, body, n, PutOptions { content_type = content_type })
 end
 
-// _presign_query - the signed query string. Its parameters are in the order
-// AWS sorts them, which is what makes it reproducible on the far side.
-func _presign_query(cfg: Config, amz_date: str, expires: int): str:
-    credential := cfg.access_key + "/" + Scope(DateStamp(amz_date), cfg.region, cfg.service)
-    mut out := "X-Amz-Algorithm=" + ALGORITHM +
-        "&X-Amz-Credential=" + UriEncode(credential, false) +
-        "&X-Amz-Date=" + amz_date +
-        "&X-Amz-Expires=" + expires +
-        "&X-Amz-SignedHeaders=host"
-    if cfg.session_token.len() > 0:
-        out = out + "&X-Amz-Security-Token=" + UriEncode(cfg.session_token, false)
+// S3PutBytesWith - the same with every option S3 offers.
+pub func S3PutBytesWith(cfg: Config, key: str, body: void*, n: int,
+    o: PutOptions): Result:
+    mut r := NewRequest("PUT", key)
+    SetBody(r, body, n)
+    _apply_put(r, o)
+    if o.checksum_md5 && n > 0:
+        SetHeader(r, "Content-MD5", _content_md5(body, n))
     end
+    if o.checksum_sha256 && n > 0:
+        SetHeader(r, "x-amz-checksum-sha256", _checksum_sha256(body, n))
+    end
+    ret Do(cfg, r)
+end
+
+// S3Put - store an object from text.
+pub func S3Put(cfg: Config, key: str, body: str, content_type: str): Result:
+    ret S3PutWith(cfg, key, body, PutOptions { content_type = content_type })
+end
+
+// S3PutWith - store text with options.
+pub func S3PutWith(cfg: Config, key: str, body: str, o: PutOptions): Result:
+    if body.len() == 0: ret S3PutBytesWith(cfg, key, null, 0, o) end
+    ret S3PutBytesWith(cfg, key, body as void*, body.len(), o)
+end
+
+// S3Get - fetch an object as text.
+pub func S3Get(cfg: Config, key: str): Result:
+    ret Do(cfg, NewRequest("GET", key))
+end
+
+// S3GetWith - fetch as text, with a range or a condition.
+pub func S3GetWith(cfg: Config, key: str, o: GetOptions): Result:
+    mut r := NewRequest("GET", key)
+    _apply_get(r, o)
+    ret Do(cfg, r)
+end
+
+// S3GetBytes - fetch an object as bytes. The answer owns its buffer; release
+// it with FreeBytes(). This is the form to use for anything that is not text.
+pub func S3GetBytes(cfg: Config, key: str): Bytes:
+    ret DoBytes(cfg, NewRequest("GET", key))
+end
+
+// S3GetBytesWith - the same, with a range or a condition.
+pub func S3GetBytesWith(cfg: Config, key: str, o: GetOptions): Bytes:
+    mut r := NewRequest("GET", key)
+    _apply_get(r, o)
+    ret DoBytes(cfg, r)
+end
+
+// S3GetRange - a byte range of an object, inclusive of both ends. The way to
+// read the head of a large file, resume an interrupted download, or read one
+// record out of an index.
+pub func S3GetRange(cfg: Config, key: str, start: i64, stop: i64): Bytes:
+    ret S3GetBytesWith(cfg, key, GetOptions { range_start = start, range_end = stop })
+end
+
+// S3Head - the response to a HEAD, as a plain Result.
+pub func S3Head(cfg: Config, key: str): Result:
+    ret Do(cfg, NewRequest("HEAD", key))
+end
+
+// S3Stat - everything a HEAD reveals, parsed.
+pub func S3Stat(cfg: Config, key: str): ObjectInfo:
+    ret S3StatVersion(cfg, key, "")
+end
+
+// S3StatVersion - the same for one version of an object.
+pub func S3StatVersion(cfg: Config, key: str, version_id: str): ObjectInfo:
+    mut r := NewRequest("HEAD", key)
+    if version_id.len() > 0: SetQuery(r, "versionId", version_id) end
+    res := Do(cfg, r)
+    mut out := ObjectInfo {
+        ok = res.ok,
+        status = res.status,
+        key = key,
+        etag = Unquote(res.etag),
+        error = res.error,
+        code = res.code,
+        version_id = res.version_id
+    }
+    if res.head.len() == 0: ret out end
+    out.content_type = ResultHeader(res, "Content-Type")
+    out.content_encoding = ResultHeader(res, "Content-Encoding")
+    out.cache_control = ResultHeader(res, "Cache-Control")
+    out.content_disposition = ResultHeader(res, "Content-Disposition")
+    out.last_modified = ResultHeader(res, "Last-Modified")
+    out.storage_class = ResultHeader(res, "x-amz-storage-class")
+    out.sse = ResultHeader(res, "x-amz-server-side-encryption")
+    out.delete_marker = ResultHeader(res, "x-amz-delete-marker") == "true"
+    out.size = res.length
+    parts := ResultHeader(res, "x-amz-mp-parts-count")
+    if parts.len() > 0: out.parts = parts.to_int() end
+    if out.last_modified.len() > 0:
+        when := time.ParseHTTPDate(out.last_modified)
+        if when.ok: out.modified_epoch = when.epoch end
+    end
+    out.meta = _meta_from_head(res.head)
     ret out
 end
 
-func _origin(ep: httpx.Endpoint, host: str): str:
-    if ep.secure: ret "https://" + host end
-    ret "http://" + host
-end
-
-// S3PutBytes - stores an object from a buffer. The one operation that needs a
-// binary body, and the reason wire.salam exists.
-pub func S3PutBytes(cfg: Config, key: str, body: void*, n: int, content_type: str): Result:
-    ret _request(cfg, "PUT", key, body, n, content_type)
-end
-
-// S3Put - stores an object from text.
-pub func S3Put(cfg: Config, key: str, body: str, content_type: str): Result:
-    if body.len() == 0: ret _request(cfg, "PUT", key, null, 0, content_type) end
-    ret _request(cfg, "PUT", key, body as void*, body.len(), content_type)
-end
-
-// S3Get - fetches an object. The body arrives as text, so this is for objects
-// that are text: manifests, JSON, configuration. Use a presigned URL for
-// anything a browser should download.
-pub func S3Get(cfg: Config, key: str): Result:
-    ret _request(cfg, "GET", key, null, 0, "")
-end
-
-// S3Head - whether an object exists, and how large it is, without moving it.
-pub func S3Head(cfg: Config, key: str): Result:
-    ret _request(cfg, "HEAD", key, null, 0, "")
-end
-
+// S3Delete - remove an object. Removing a key that is not there succeeds, both
+// here and at AWS: delete is idempotent by design.
 pub func S3Delete(cfg: Config, key: str): Result:
-    ret _request(cfg, "DELETE", key, null, 0, "")
+    ret Do(cfg, NewRequest("DELETE", key))
 end
 
-// S3Exists - the question S3Head is usually asked. A missing object is a 404
-// rather than an error, so this answers false instead of failing.
+// S3DeleteVersion - remove one version of an object. On a versioned bucket a
+// plain delete only writes a delete marker; this is what actually reclaims the
+// bytes.
+pub func S3DeleteVersion(cfg: Config, key: str, version_id: str): Result:
+    mut r := NewRequest("DELETE", key)
+    SetQuery(r, "versionId", version_id)
+    ret Do(cfg, r)
+end
+
+// S3Exists - whether an object is there. A missing object is an answer rather
+// than an error, so this is false instead of failing.
 pub func S3Exists(cfg: Config, key: str): bool:
     ret S3Head(cfg, key).ok
 end
 
-// S3Presign - a URL that works, without a credential, for `expires` seconds.
+// S3Size - an object's length, or -1 when it is not there.
+pub func S3Size(cfg: Config, key: str): i64:
+    info := S3Stat(cfg, key)
+    if !info.ok: ret -1 end
+    ret info.size
+end
+
+// S3Copy - copy an object without moving its bytes through this process. The
+// service does the copy internally, so a five-gigabyte object costs one small
+// request rather than five gigabytes of traffic in each direction.
 //
-// This is how an application should move large objects: hand the browser a URL
-// and let it talk to S3 directly. The signature covers the method, so a URL
-// minted for GET cannot be used to PUT, and it covers the expiry, so it stops
-// working on its own.
-pub func S3Presign(cfg: Config, method: str, key: str, expires: int): str:
-    ret S3PresignAt(cfg, method, key, expires, time.Now())
+// The limit is 5 GB per copy; beyond that a multipart copy is required, which
+// is S3CopyLarge() in s3_multipart.
+pub func S3Copy(cfg: Config, src_key: str, dst_key: str): Result:
+    ret S3CopyWith(cfg, src_key, dst_key, CopyOptions {})
 end
 
-// S3PresignAt - the same, anchored to a given instant rather than now. Exists
-// so a signature can be reproduced: a test can check one against a known
-// vector, and a caller minting a batch can give them all one expiry.
-pub func S3PresignAt(cfg: Config, method: str, key: str, expires: int,
-    epoch_seconds: i64): str:
-    if !Configured(cfg): ret "" end
-    ep := httpx.ParseEndpoint(cfg.endpoint)
-    if !ep.ok: ret "" end
-    host := _host_of(cfg, ep)
-    path := _path_of(cfg, key)
-    now := epoch_seconds
-    amz_date := AmzDate(now)
-    query := _presign_query(cfg, amz_date, expires)
-    signature := SignQuery(cfg, method, path, query, host, now)
-    if signature.len() == 0: ret "" end
-    ret _origin(ep, host) + path + "?" + query + "&X-Amz-Signature=" + signature
+// S3CopyWith - copy with a source bucket, a condition, or new metadata.
+pub func S3CopyWith(cfg: Config, src_key: str, dst_key: str,
+    o: CopyOptions): Result:
+    mut r := NewRequest("PUT", dst_key)
+    SetHeader(r, "x-amz-copy-source", _copy_source(cfg, src_key, o))
+    SetHeader(r, "x-amz-copy-source-if-match", o.if_match)
+    SetHeader(r, "x-amz-copy-source-if-none-match", o.if_none_match)
+    SetHeader(r, "x-amz-copy-source-if-modified-since", o.if_modified_since)
+    SetHeader(r, "x-amz-copy-source-if-unmodified-since", o.if_unmodified_since)
+    SetHeader(r, "x-amz-storage-class", o.storage_class)
+    SetHeader(r, "x-amz-acl", o.acl)
+    SetHeader(r, "x-amz-server-side-encryption", o.sse)
+    SetHeader(r, "x-amz-tagging", o.tagging)
+    if o.replace_metadata:
+        SetHeader(r, "x-amz-metadata-directive", "REPLACE")
+        SetHeader(r, "Content-Type", o.content_type)
+        SetHeader(r, "Cache-Control", o.cache_control)
+        SetHeader(r, "Content-Disposition", o.content_disposition)
+        if o.tagging.len() > 0:
+            SetHeader(r, "x-amz-tagging-directive", "REPLACE")
+        end
+        _apply_meta(r, o.meta)
+    end
+    res := Do(cfg, r)
+    if !res.ok: ret res end
+    // A copy can fail *after* a 200: S3 keeps the connection alive during a
+    // long copy and then writes an error into the body. A body with a Code in
+    // it is a failure whatever the status line said.
+    if res.body.find("<Error") >= 0 || res.body.find("<Code>") >= 0:
+        mut bad := res
+        bad.ok = false
+        bad.code = ResultErrorCode(res.body)
+        bad.error = ResultErrorMessage(res.body, res.status)
+        ret bad
+    end
+    ret res
 end
 
-// S3Url - the plain, unsigned URL of an object. Only useful for a bucket that
-// is public; a private one answers 403, which is the point.
-pub func S3Url(cfg: Config, key: str): str:
-    ep := httpx.ParseEndpoint(cfg.endpoint)
-    if !ep.ok: ret "" end
-    ret _origin(ep, _host_of(cfg, ep)) + _path_of(cfg, key)
+// S3Move - copy then delete. Not atomic, and cannot be: S3 has no rename. The
+// delete only runs if the copy succeeded, so a failure leaves the source
+// where it was rather than losing it.
+pub func S3Move(cfg: Config, src_key: str, dst_key: str): Result:
+    copied := S3Copy(cfg, src_key, dst_key)
+    if !copied.ok: ret copied end
+    removed := S3Delete(cfg, src_key)
+    if !removed.ok: ret removed end
+    ret copied
 end
 
-// S3ContentHash - the fingerprint an application keys deduplication on. Not
-// S3's ETag: that is a multipart-dependent value the service chooses, and it
-// is not a hash of the content for anything uploaded in parts.
+// S3Touch - rewrite an object's metadata in place, by copying it onto itself.
+// The only way S3 offers to change a content type or a cache header without
+// re-uploading.
+pub func S3Touch(cfg: Config, key: str, o: CopyOptions): Result:
+    mut opts := o
+    opts.replace_metadata = true
+    ret S3CopyWith(cfg, key, key, opts)
+end
+
+// S3Restore - ask for an archived object to be made readable again. Answers
+// 202 when the restore starts and 409 when one is already running.
+pub func S3Restore(cfg: Config, key: str, days: int, tier: str): Result:
+    mut r := NewRequest("POST", key)
+    SetFlag(r, "restore")
+    mut t := tier
+    if t.len() == 0: t = "Standard" end
+    body := "<RestoreRequest><Days>" + days + "</Days>" +
+        "<GlacierJobParameters><Tier>" + t + "</Tier></GlacierJobParameters>" +
+        "</RestoreRequest>"
+    SetText(r, body)
+    SetHeader(r, "Content-Type", "application/xml")
+    ret Do(cfg, r)
+end
+
+// S3ContentHash - the fingerprint an application keys deduplication on.
+//
+// Deliberately not the ETag: S3 chooses that, and for anything uploaded in
+// parts it is a hash of hashes rather than a hash of the content, so two
+// identical objects uploaded with different part sizes have different ETags.
 pub func S3ContentHash(body: void*, n: int): str:
     ret Sha256Bytes(body, n)
+end
+
+// S3ContentMd5 - the base64 MD5 of a buffer, which is what Content-MD5 and a
+// single-part ETag both are.
+pub func S3ContentMd5(body: void*, n: int): str:
+    ret _content_md5(body, n)
+end
+
+// S3ChecksumSha256 - the base64 SHA-256 of a buffer, the value
+// x-amz-checksum-sha256 carries and the one S3 stores alongside the object.
+pub func S3ChecksumSha256(body: void*, n: int): str:
+    ret _checksum_sha256(body, n)
+end
+
+// S3ObjectChecksum - the stored checksum of an object, if it has one.
+//
+// Only answered when the object was uploaded with one, which is why
+// PutOptions.checksum_sha256 exists: an object stored without it can never be
+// asked this question afterwards.
+pub func S3ObjectChecksum(cfg: Config, key: str): str:
+    mut r := NewRequest("HEAD", key)
+    SetHeader(r, "x-amz-checksum-mode", "ENABLED")
+    res := Do(cfg, r)
+    if !res.ok: ret "" end
+    ret ResultHeader(res, "x-amz-checksum-sha256")
 end

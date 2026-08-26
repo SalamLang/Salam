@@ -1,0 +1,672 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package aws
+
+// The request layer every S3 operation is built on.
+//
+// The original signer could sign four fixed headers in a fixed order. That is
+// enough for put, get and delete, and it runs out immediately after: a ranged
+// read needs `range`, a copy needs `x-amz-copy-source`, metadata needs a
+// header per entry, a listing needs a sorted query string. All of them have to
+// land in the canonical request in the one order AWS re-derives on its side,
+// so the ordering cannot stay hard-coded.
+//
+// Headers is therefore an ordered name/value pair list that sorts on demand,
+// and Request is a whole request described as data. Do() turns one into an
+// answer. Everything else in this package is a function that fills in a
+// Request and reads a Result, which is why the operations below read as
+// declarations rather than as string concatenation.
+//
+// Retries live here too. An object store answers 500 and 503 under load, and a
+// caller that treats those as failures will lose data that a second attempt
+// would have stored. Only the statuses AWS documents as retryable are retried,
+// and only after a backoff, so a struggling service is not made worse.
+
+import mem
+import str
+import time
+import conv
+import net.httpx
+
+// _HDR_MAX guards a caller that builds headers in a loop from a data source it
+// does not control. AWS's own limit on user metadata is 2 KB of names and
+// values together, so anything approaching this is a bug rather than a need.
+const _S3_HDR_MAX := 128
+
+// Headers - an ordered list of name/value pairs.
+//
+// Two parallel vectors rather than a map, for three reasons: a canonical
+// request needs a defined order, a map cannot give one; the same header can
+// legitimately appear twice; and a HashMap iteration order is not something a
+// signature should depend on.
+pub struct Headers:
+    pub names: Vector<str> = Vector {}
+    pub values: Vector<str> = Vector {}
+end
+
+// Request - one S3 request described as data rather than as a string.
+//
+// `key` is the object key, empty for a bucket-level operation. `bucket` is
+// empty to mean "the one in the Config", which is the usual case, and
+// `service_level` addresses the service itself, which only ListBuckets does.
+//
+// `body_hash` is normally left empty and computed from the body. Set it to
+// UNSIGNED_PAYLOAD to sign a request whose body is not hashed, which is worth
+// doing for a large upload over TLS: hashing a hundred megabytes to prove
+// something the transport already guarantees costs real time.
+pub struct Request:
+    pub method: str = "GET"
+    pub key: str = ""
+    pub bucket: str = ""
+    pub service_level: bool = false
+    pub headers: Headers = Headers {}
+    pub query: Headers = Headers {}
+    pub body: void* = null
+    pub body_len: int = 0
+    pub body_hash: str = ""
+end
+
+// Bytes - a response whose body is bytes rather than text.
+//
+// `data` is owned by the caller: release it with FreeBytes(). It is null for
+// an empty body, which is what a 304 or a failed request carries.
+pub struct Bytes:
+    pub ok: bool = false
+    pub status: int = 0
+    pub data: void* = null
+    pub len: int = 0
+    pub etag: str = ""
+    pub head: str = ""
+    pub code: str = ""
+    pub error: str = ""
+end
+
+// ------------------------------------------------------------ header list
+
+func _hdr_find(h: Headers, name: str): int:
+    lower := name.lower()
+    mut i := 0
+    until i < h.names.len():
+        if h.names.get(i).lower() == lower: ret i end
+        i += 1
+    end
+    ret -1
+end
+
+func _hdr_set(h &: Headers, name: str, value: str):
+    at := _hdr_find(h, name)
+    if at >= 0:
+        h.values.set(at, value)
+        ret
+    end
+    if h.names.len() >= _S3_HDR_MAX: ret end
+    h.names.push(name)
+    h.values.push(value)
+end
+
+func _hdr_copy(src: Headers): Headers:
+    mut out := Headers {}
+    mut i := 0
+    until i < src.names.len():
+        out.names.push(src.names.get(i))
+        out.values.push(src.values.get(i))
+        i += 1
+    end
+    ret out
+end
+
+// _hdr_sort - insertion sort by name. The lists are short enough that the
+// simple algorithm is the fast one, and it is stable, which keeps two headers
+// of the same name in the order the caller added them.
+func _hdr_sort(h &: Headers):
+    n := h.names.len()
+    mut i := 1
+    until i < n:
+        nm := h.names.get(i)
+        vl := h.values.get(i)
+        mut j := i - 1
+        until j >= 0 && str.Compare(h.names.get(j), nm) > 0:
+            h.names.set(j + 1, h.names.get(j))
+            h.values.set(j + 1, h.values.get(j))
+            j -= 1
+        end
+        h.names.set(j + 1, nm)
+        h.values.set(j + 1, vl)
+        i += 1
+    end
+end
+
+// _canon_value - a header value as the canonical request spells it: trimmed,
+// with runs of spaces collapsed to one.
+func _canon_value(v: str): str:
+    mut out := v.trim()
+    until str.Contains(out, "  "):
+        out = str.Replace(out, "  ", " ")
+    end
+    ret out
+end
+
+// _canon_headers - the sorted, lower-cased, newline-terminated block, and the
+// matching semicolon-joined name list.
+func _canon_headers(h: Headers, signed &: str): str:
+    mut sorted := _hdr_copy(h)
+    mut i := 0
+    until i < sorted.names.len():
+        sorted.names.set(i, sorted.names.get(i).lower())
+        i += 1
+    end
+    _hdr_sort(sorted)
+    mut block := str.NewBuilder()
+    defer str.BufFree(block)
+    mut list := str.NewBuilder()
+    defer str.BufFree(list)
+    mut k := 0
+    until k < sorted.names.len():
+        nm := sorted.names.get(k)
+        str.BufAppend(block, nm)
+        str.BufAppend(block, ":")
+        str.BufAppend(block, _canon_value(sorted.values.get(k)))
+        str.BufAppend(block, "\n")
+        if k > 0: str.BufAppend(list, ";") end
+        str.BufAppend(list, nm)
+        k += 1
+    end
+    signed = str.BufStr(list)
+    ret str.BufStr(block)
+end
+
+// _canon_query - the sorted query string. Sorting is by the encoded name, and
+// a parameter with no value still carries its `=`, both of which the far side
+// reproduces exactly.
+func _canon_query(q: Headers): str:
+    mut enc := Headers {}
+    mut i := 0
+    until i < q.names.len():
+        enc.names.push(UriEncode(q.names.get(i), false))
+        enc.values.push(UriEncode(q.values.get(i), false))
+        i += 1
+    end
+    _hdr_sort(enc)
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    mut k := 0
+    until k < enc.names.len():
+        if k > 0: str.BufAppend(sb, "&") end
+        str.BufAppend(sb, enc.names.get(k))
+        str.BufAppend(sb, "=")
+        str.BufAppend(sb, enc.values.get(k))
+        k += 1
+    end
+    ret str.BufStr(sb)
+end
+
+// ------------------------------------------------------------- addressing
+
+func _bucket_of(cfg: Config, r: Request): str:
+    if r.service_level: ret "" end
+    if r.bucket.len() > 0: ret r.bucket end
+    ret cfg.bucket
+end
+
+func _wire_host(cfg: Config, ep: httpx.Endpoint, bucket: str): str:
+    mut host := ep.host
+    if bucket.len() > 0 && !cfg.path_style: host = bucket + "." + ep.host end
+    if (ep.secure && ep.port != 443) || (!ep.secure && ep.port != 80):
+        host = host + ":" + ep.port
+    end
+    ret host
+end
+
+func _wire_path(cfg: Config, bucket: str, key: str): str:
+    if bucket.len() == 0: ret "/" end
+    if !cfg.path_style:
+        if key.len() == 0: ret "/" end
+        ret EncodeKey(key)
+    end
+    if key.len() == 0: ret "/" + bucket end
+    ret "/" + bucket + EncodeKey(key)
+end
+
+// ------------------------------------------------------------- the answer
+
+// _tag_text - the text of one non-nested XML element, by hand.
+//
+// Used for the four fields of an error document and nothing else; the listing
+// code parses properly, through encoding.xml.
+func _tag_text(body: str, tag: str): str:
+    open := "<" + tag + ">"
+    at := body.find(open)
+    if at < 0: ret "" end
+    start := at + open.len()
+    stop := str.IndexFrom(body, "</" + tag + ">", start)
+    if stop < 0: ret "" end
+    ret body.substr(start, stop - start)
+end
+
+func _describe(status: int, body: str): str:
+    msg := _tag_text(body, "Message")
+    if msg.len() > 0: ret msg end
+    code := _tag_text(body, "Code")
+    if code.len() > 0: ret code end
+    if status == 0: ret "the object store could not be reached" end
+    ret "the object store answered " + status
+end
+
+// _retryable - the statuses AWS documents as worth another attempt, plus the
+// zero this package uses for "never got an answer".
+func _retryable(status: int): bool:
+    if status == 0: ret true end
+    if status == 429: ret true end
+    ret status == 500 || status == 502 || status == 503 || status == 504
+end
+
+func _backoff_ms(cfg: Config, attempt: int): int:
+    mut base := cfg.retry_base_ms
+    if base <= 0: base = 100 end
+    mut wait := base
+    repeat attempt:
+        wait = wait * 2
+        if wait > 10000: ret 10000 end
+    end
+    ret wait
+end
+
+// ------------------------------------------------------------ the request
+
+// _head_block - the request line and headers, ready to write. `authorization`
+// is empty for an anonymous request, which sends no credential at all.
+func _head_block(method: str, path: str, query: str, authorization: str,
+    signed_set: Headers, body_len: int): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppend(sb, method)
+    str.BufAppend(sb, " ")
+    str.BufAppend(sb, path)
+    if query.len() > 0:
+        str.BufAppend(sb, "?")
+        str.BufAppend(sb, query)
+    end
+    str.BufAppend(sb, " HTTP/1.1\r\n")
+    // Every signed header, in the order it was added, followed by the ones
+    // that are never signed. Host first, because a server reading the request
+    // line wants it early and because it costs nothing.
+    mut i := 0
+    until i < signed_set.names.len():
+        str.BufAppend(sb, signed_set.names.get(i))
+        str.BufAppend(sb, ": ")
+        str.BufAppend(sb, signed_set.values.get(i))
+        str.BufAppend(sb, "\r\n")
+        i += 1
+    end
+    if authorization.len() > 0:
+        str.BufAppend(sb, "Authorization: ")
+        str.BufAppend(sb, authorization)
+        str.BufAppend(sb, "\r\n")
+    end
+    str.BufAppend(sb, "Content-Length: ")
+    str.BufAppendInt(sb, body_len as i64)
+    str.BufAppend(sb, "\r\nConnection: close\r\n\r\n")
+    ret str.BufStr(sb)
+end
+
+// _signing_set - the headers that are both sent and signed: what the caller
+// asked for, plus the four the protocol requires.
+func _signing_set(cfg: Config, extra: Headers, host: str, amz_date: str,
+    payload_hash: str): Headers:
+    mut out := Headers {}
+    _hdr_set(out, "Host", host)
+    mut i := 0
+    until i < extra.names.len():
+        _hdr_set(out, extra.names.get(i), extra.values.get(i))
+        i += 1
+    end
+    if cfg.request_payer: _hdr_set(out, "x-amz-request-payer", "requester") end
+    if cfg.anonymous: ret out end
+    _hdr_set(out, "x-amz-content-sha256", payload_hash)
+    _hdr_set(out, "x-amz-date", amz_date)
+    if cfg.session_token.len() > 0:
+        _hdr_set(out, "x-amz-security-token", cfg.session_token)
+    end
+    ret out
+end
+
+func _payload_hash(r: Request): str:
+    if r.body_hash.len() > 0: ret r.body_hash end
+    if r.body_len > 0 && r.body != null: ret Sha256Bytes(r.body, r.body_len) end
+    ret EMPTY_SHA256
+end
+
+// _dispatch - sign and send one request whose addressing is already decided.
+//
+// Everything after "which host and which path" is identical for every AWS
+// service, and this is that part. S3 reaches it through _send_once, which
+// works out the bucket addressing first; every other service reaches it
+// through Invoke() in service.salam, where the host is just the service name.
+// One implementation rather than two, because a second signer would drift.
+func _dispatch(cfg: Config, ep: httpx.Endpoint, method: str, host: str,
+    path: str, query: str, extra: Headers, body: void*, body_len: int,
+    payload_hash: str, at: i64): httpx.Raw:
+    amz_date := AmzDate(at)
+    signed_set := _signing_set(cfg, extra, host, amz_date, payload_hash)
+    if cfg.anonymous:
+        ret httpx.SendRawTimeout(ep,
+            _head_block(method, path, query, "", signed_set, body_len),
+            body, body_len, cfg.timeout_ms)
+    end
+    mut signed_names := ""
+    canonical := _canon_headers(signed_set, signed_names)
+    s := SignRequest(cfg, method, path, query, canonical, signed_names,
+        payload_hash, at)
+    if !s.ok: ret httpx.Raw { error = "the request could not be signed" } end
+    head := _head_block(method, path, query, s.authorization, signed_set,
+        body_len)
+    ret httpx.SendRawTimeout(ep, head, body, body_len, cfg.timeout_ms)
+end
+
+func _send_once(cfg: Config, r: Request, at: i64): httpx.Raw:
+    ep := httpx.ParseEndpoint(cfg.endpoint)
+    if !ep.ok:
+        ret httpx.Raw { error = "the endpoint could not be parsed: " + cfg.endpoint }
+    end
+    bucket := _bucket_of(cfg, r)
+    ret _dispatch(cfg, ep, r.method, _wire_host(cfg, ep, bucket),
+        _wire_path(cfg, bucket, r.key), _canon_query(r.query), r.headers,
+        r.body, r.body_len, _payload_hash(r), at)
+end
+
+// _do_raw - one request, with retries. The signature is rebuilt on every
+// attempt because it is anchored to a timestamp, and a stale one is refused.
+func _do_raw(cfg: Config, r: Request): httpx.Raw:
+    mut attempts := cfg.retry
+    if attempts < 1: attempts = 1 end
+    if attempts > 10: attempts = 10 end
+    mut n := 0
+    until n < attempts:
+        mut raw := _send_once(cfg, r, time.Now())
+        if !_retryable(raw.status) || n == attempts - 1: ret raw end
+        httpx.FreeRaw(raw)
+        time.Sleep(_backoff_ms(cfg, n))
+        n += 1
+    end
+    ret httpx.Raw { error = "the request was never attempted" }
+end
+
+func _fill_common(raw: httpx.Raw, status: int, ok &: bool, etag &: str,
+    code &: str, error &: str, body: str):
+    ok = raw.ok
+    etag = Unquote(httpx.HeaderValue(raw.head, "ETag"))
+    if raw.error.len() > 0:
+        error = raw.error
+        code = "Transport"
+        ret
+    end
+    if !raw.ok:
+        code = _tag_text(body, "Code")
+        error = _describe(status, body)
+    end
+end
+
+// -------------------------------------------------------------- public API
+
+// NewHeaders - an empty pair list.
+pub func NewHeaders(): Headers:
+    ret Headers {}
+end
+
+// HeaderSet - add a header, or replace one already present. The comparison is
+// case-insensitive, which is what HTTP means by a header name.
+pub func HeaderSet(h &: Headers, name: str, value: str):
+    _hdr_set(h, name, value)
+end
+
+// HeaderAdd - append without replacing, for a header that may legitimately
+// repeat.
+pub func HeaderAdd(h &: Headers, name: str, value: str):
+    if h.names.len() >= _S3_HDR_MAX: ret end
+    h.names.push(name)
+    h.values.push(value)
+end
+
+// HeaderGet - one value, or "" when absent.
+pub func HeaderGet(h: Headers, name: str): str:
+    at := _hdr_find(h, name)
+    if at < 0: ret "" end
+    ret h.values.get(at)
+end
+
+pub func HeaderHas(h: Headers, name: str): bool:
+    ret _hdr_find(h, name) >= 0
+end
+
+pub func HeaderCount(h: Headers): int:
+    ret h.names.len()
+end
+
+pub func HeaderNameAt(h: Headers, i: int): str:
+    if i < 0 || i >= h.names.len(): ret "" end
+    ret h.names.get(i)
+end
+
+pub func HeaderValueAt(h: Headers, i: int): str:
+    if i < 0 || i >= h.values.len(): ret "" end
+    ret h.values.get(i)
+end
+
+pub func HeaderFree(h &: Headers):
+    h.names.free()
+    h.values.free()
+end
+
+// NewRequest - a request against the Config's bucket.
+pub func NewRequest(method: str, key: str): Request:
+    ret Request { method = method, key = key }
+end
+
+// NewBucketRequest - a request against a named bucket rather than the
+// Config's, so one Config can drive several buckets.
+pub func NewBucketRequest(method: str, bucket: str, key: str): Request:
+    ret Request { method = method, bucket = bucket, key = key }
+end
+
+// NewServiceRequest - a request against the service itself, which is what
+// listing buckets is.
+pub func NewServiceRequest(method: str): Request:
+    ret Request { method = method, service_level = true }
+end
+
+// SetQuery - one query parameter. Values are encoded when the request is
+// built, so pass them raw.
+pub func SetQuery(r &: Request, name: str, value: str):
+    _hdr_set(r.query, name, value)
+end
+
+// SetQueryInt - the same for a number, which most S3 parameters are.
+pub func SetQueryInt(r &: Request, name: str, value: int):
+    _hdr_set(r.query, name, "" + value)
+end
+
+// SetFlag - a valueless query parameter: `?acl`, `?uploads`, `?tagging`. These
+// are what select a sub-resource, and they sign as `name=`.
+pub func SetFlag(r &: Request, name: str):
+    _hdr_set(r.query, name, "")
+end
+
+// SetHeader - one header, which will be both sent and signed. Anything set
+// here is covered by the signature, which is required for every x-amz-*.
+pub func SetHeader(r &: Request, name: str, value: str):
+    if value.len() == 0: ret end
+    _hdr_set(r.headers, name, value)
+end
+
+// SetBody - a binary body.
+pub func SetBody(r &: Request, p: void*, n: int):
+    r.body = p
+    r.body_len = n
+end
+
+// SetText - a text body, which is what every XML request document is.
+pub func SetText(r &: Request, s: str):
+    if s.len() == 0:
+        r.body = null
+        r.body_len = 0
+        ret
+    end
+    r.body = s as void*
+    r.body_len = s.len()
+end
+
+// SetUnsignedPayload - sign the request without hashing its body. Valid over
+// HTTPS only, where the transport already protects the bytes, and worth it for
+// a large upload: hashing is a second full pass over the data.
+pub func SetUnsignedPayload(r &: Request):
+    r.body_hash = UNSIGNED_PAYLOAD
+end
+
+// Do - send a request and read a text answer.
+pub func Do(cfg: Config, r: Request): Result:
+    if !Configured(cfg): ret Failure("the object store is not configured") end
+    mut raw := _do_raw(cfg, r)
+    defer httpx.FreeRaw(raw)
+    body := httpx.RawText(raw)
+    mut out := Result { status = raw.status, body = body, head = raw.head }
+    _fill_common(raw, raw.status, out.ok, out.etag, out.code, out.error, body)
+    out.request_id = httpx.HeaderValue(raw.head, "x-amz-request-id")
+    out.version_id = httpx.HeaderValue(raw.head, "x-amz-version-id")
+    length := httpx.HeaderValue(raw.head, "Content-Length")
+    // 64-bit, because Content-Length on an object store routinely exceeds
+    // what 32 bits hold, and S3DownloadFile drives its range loop off this.
+    if length.len() > 0: out.length = conv.ParseInt(length) end
+    ret out
+end
+
+// DoBytes - send a request and keep the answer as bytes. The Bytes owns its
+// buffer; release it with FreeBytes().
+pub func DoBytes(cfg: Config, r: Request): Bytes:
+    if !Configured(cfg):
+        ret Bytes { error = "the object store is not configured", code = "Config" }
+    end
+    mut raw := _do_raw(cfg, r)
+    mut out := Bytes { status = raw.status, head = raw.head }
+    if raw.error.len() > 0:
+        httpx.FreeRaw(raw)
+        out.error = raw.error
+        out.code = "Transport"
+        ret out
+    end
+    if !raw.ok:
+        body := httpx.RawText(raw)
+        httpx.FreeRaw(raw)
+        out.code = _tag_text(body, "Code")
+        out.error = _describe(raw.status, body)
+        ret out
+    end
+    out.ok = true
+    out.etag = Unquote(httpx.HeaderValue(raw.head, "ETag"))
+    out.data = raw.data
+    out.len = raw.len
+    ret out
+end
+
+// FreeBytes - release a binary answer.
+pub func FreeBytes(b &: Bytes):
+    if b.data != null:
+        mem.Free(b.data)
+        b.data = null
+    end
+    b.len = 0
+end
+
+// ResultHeader - one response header, for the cases a Result does not lift
+// into a field of its own.
+pub func ResultHeader(r: Result, name: str): str:
+    ret httpx.HeaderValue(r.head, name)
+end
+
+// BytesHeader - the same for a binary answer.
+pub func BytesHeader(b: Bytes, name: str): str:
+    ret httpx.HeaderValue(b.head, name)
+end
+
+// ResultErrorCode - the <Code> out of an S3 error document.
+//
+// Public because a 200 is not always a success: a long-running copy keeps the
+// connection alive and then writes an error into the body, so a caller with a
+// body in hand sometimes has to ask this question itself.
+pub func ResultErrorCode(body: str): str:
+    ret _tag_text(body, "Code")
+end
+
+// ResultErrorMessage - the <Message>, or a sentence built from the status.
+pub func ResultErrorMessage(body: str, status: int): str:
+    ret _describe(status, body)
+end
+
+// ResultTag - the text of one non-nested element of a response body. The
+// escape hatch for an S3-compatible service that answers with a field this
+// package does not model.
+pub func ResultTag(body: str, tag: str): str:
+    ret _tag_text(body, tag)
+end
+
+// Unquote - strip the quotes S3 wraps an ETag in. The quotes are part of the
+// HTTP header syntax, not part of the value, and comparing them by accident is
+// a classic source of "the object changed" when it did not.
+pub func Unquote(s: str): str:
+    if s.len() >= 2 && s.substr(0, 1) == "\"" && s.substr(s.len() - 1, 1) == "\"":
+        ret s.substr(1, s.len() - 2)
+    end
+    ret s
+end
+
+// CanonicalRequest - the exact string a request signs over.
+//
+// Every disagreement between a client and an object store is a disagreement
+// about this string, and it is invisible in a 403. Printing it next to what
+// the service echoes back in its error document turns a guessing game into a
+// diff, which is the only reason this is public.
+pub func CanonicalRequest(cfg: Config, r: Request, at: i64): str:
+    ep := httpx.ParseEndpoint(cfg.endpoint)
+    bucket := _bucket_of(cfg, r)
+    host := _wire_host(cfg, ep, bucket)
+    payload_hash := _payload_hash(r)
+    signed_set := _signing_set(cfg, r.headers, host, AmzDate(at), payload_hash)
+    mut signed_names := ""
+    canonical := _canon_headers(signed_set, signed_names)
+    ret r.method + "\n" + _wire_path(cfg, bucket, r.key) + "\n" +
+        _canon_query(r.query) + "\n" + canonical + "\n" + signed_names + "\n" +
+        payload_hash
+end
+
+// PreparedHead - the request line and headers a request would send, without
+// sending them. The other half of the same debugging pair.
+pub func PreparedHead(cfg: Config, r: Request, at: i64): str:
+    ep := httpx.ParseEndpoint(cfg.endpoint)
+    bucket := _bucket_of(cfg, r)
+    host := _wire_host(cfg, ep, bucket)
+    path := _wire_path(cfg, bucket, r.key)
+    query := _canon_query(r.query)
+    payload_hash := _payload_hash(r)
+    amz_date := AmzDate(at)
+    signed_set := _signing_set(cfg, r.headers, host, amz_date, payload_hash)
+    mut signed_names := ""
+    canonical := _canon_headers(signed_set, signed_names)
+    s := SignRequest(cfg, r.method, path, query, canonical, signed_names,
+        payload_hash, at)
+    if cfg.anonymous:
+        ret _head_block(r.method, path, query, "", signed_set, r.body_len)
+    end
+    ret _head_block(r.method, path, query, s.authorization, signed_set,
+        r.body_len)
+end

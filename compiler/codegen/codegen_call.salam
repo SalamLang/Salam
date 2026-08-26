@@ -227,10 +227,79 @@ end
 // belongs ahead of this statement's, which only holds if it is evaluated
 // before the buffer is flushed.
 func cg_order_stdout(g &: Cg, pre: str, printf_expr: str): str:
+    // Freestanding there is no stdio and nothing to order against:
+    // salam_out_write_ goes straight to the platform's sink, unbuffered, so
+    // fflush would be an undefined symbol.
+    if g.freestanding:
+        ret "({ " + pre + printf_expr + "; })"
+    end
     if !g.single_threaded:
         ret "({ " + pre + printf_expr + "; fflush(0); })"
     end
     ret "({ " + pre + "salam_out_flush(); " + printf_expr + "; fflush(0); })"
+end
+
+// cg_lower_print_free - the freestanding print path.
+//
+// A hosted build hands everything to printf. Freestanding there is no printf,
+// and providing one would mean shipping a format-string parser and a float
+// formatter into every kernel and every bare-metal program that wanted to
+// print a number. Instead each segment is written directly: literals as
+// themselves, values through the salam_tostr_* family that std/console
+// already defines in pure Salam.
+//
+// The result is a statement expression, so evaluation order is the source
+// order and a segment with a side effect runs exactly once.
+func cg_lower_print_free(
+    g &: Cg, s &: sm.Sema, a &: at.Ast, segs &: Vector<PfSeg>, err: bool
+): str:
+    fd := err ? "2" : "1"
+    mut sb := co.SbNew()
+    co.SbPuts(sb, "({ ")
+    repeat segs.len() with i:
+        sg := segs.get(i)
+        if sg.kind == PF_LIT:
+            n := str.Len(sg.text)
+            if n > 0:
+                co.SbPuts(sb, "salam_rt_write(" + fd + ", (void *)")
+                co.SbPuts(sb, cg_cescape(sg.text))
+                co.SbPuts(sb, ", " + co.I64Toa(n as i64) + "); ")
+            end
+            continue
+        end
+        e := cg_expr(g, s, a, sg.expr)
+        // Every value becomes a string first. One temporary per segment, so
+        // the expression is evaluated once and in order.
+        g.tmpn += 1
+        tv := "__pf" + co.I64Toa(g.tmpn as i64)
+        mut conv := ""
+        if sg.kind == PF_CHAR:
+            conv = "salam_char_from_code(" + e + ")"
+        else sg.kind == PF_BOOL:
+            conv = "salam_tostr_bool(" + e + ")"
+        else sg.kind == PF_U32:
+            conv = "salam_tostr_u32((uint32_t)(" + e + "))"
+        else sg.kind == PF_U64 || sg.kind == PF_SIZE:
+            conv = "salam_tostr_u64((uint64_t)(" + e + "))"
+        else sg.kind == PF_I64:
+            conv = "salam_tostr_i64((int64_t)(" + e + "))"
+        else sg.kind == PF_I32:
+            conv = "salam_tostr_i32((int32_t)(" + e + "))"
+        else sg.kind == PF_F64:
+            // Floating point formatting needs snprintf and a correctly
+            // rounded conversion; neither exists freestanding, and a kernel
+            // must not touch SSE at all.
+            conv = "\"<f64>\""
+        else:
+            conv = "(" + e + ")"
+        end
+        co.SbPuts(sb, "const char* " + tv + " = " + conv + "; ")
+        co.SbPuts(sb, "salam_rt_write(" + fd + ", (void *)" + tv + ", salam_cstrlen(" + tv + ")); ")
+    end
+    co.SbPuts(sb, "})")
+    r := co.SbCstr(sb)
+    co.SbFree(sb)
+    ret r
 end
 
 func cg_lower_print(
@@ -241,6 +310,9 @@ func cg_lower_print(
     pf_build_impl(a, n, nl, segs)
     if segs.len() == 0:
         ret "(void)0"
+    end
+    if g.freestanding:
+        ret cg_lower_print_free(g, s, a, segs, err)
     end
     if !err && g.single_threaded:
         mut all_lit := true

@@ -19,11 +19,6 @@ package conv
 
 extern:
     func malloc(size: u64): void*
-    // For FormatFloat: printf is the only correctly-rounded decimal
-    // formatter available here, and strtod the only correctly-rounded
-    // reader back.
-    func snprintf(buf: char*, cap: u64, fmt: str, ...): int
-    func strtod(s: str, endptr: void*): f64
 end
 
 inline pure func _bp(s: str): i8*: ret (s as void*) as i8* end
@@ -211,69 +206,23 @@ pub inline pure func Atoi(s: str): int: ret ParseInt(s) as int end
 @en "ParseFloat"
 @fa "تجزیه اعشار"
 @ar "تحلیل عشری"
-pub pure func ParseFloat(s: str): f64:
-    n := s.len()
-    bp := _bp(s)
-    mut i := 0
-    until i < n && _is_space(_ub(bp, i)):
-        i += 1
-    end
-    mut neg := false
-    if i < n:
-        c := _ub(bp, i)
-        if c == 45:
-            neg = true
-            i += 1
-        else c == 43:
-            i += 1
-        end
-    end
-    mut v := 0.0
-    until i < n:
-        c := _ub(bp, i)
-        if c < 48 || c > 57: break end
-        v = v * 10.0 + ((c - 48) as f64)
-        i += 1
-    end
-    if i < n && _ub(bp, i) == 46:
-        i += 1
-        mut scale := 1.0
-        until i < n:
-            c := _ub(bp, i)
-            if c < 48 || c > 57: break end
-            scale /= 10.0
-            v += ((c - 48) as f64) * scale
-            i += 1
-        end
-    end
-    if i < n && (_ub(bp, i) == 101 || _ub(bp, i) == 69):
-        i += 1
-        mut eneg := false
-        if i < n:
-            c := _ub(bp, i)
-            if c == 45:
-                eneg = true
-                i += 1
-            else c == 43:
-                i += 1
-            end
-        end
-        mut ev := 0
-        until i < n:
-            c := _ub(bp, i)
-            if c < 48 || c > 57: break end
-            ev = ev * 10 + (c - 48)
-            i += 1
-        end
-        until ev > 0:
-            if eneg: v = v / 10.0 else:
-                v *= 10.0
-            end
-            ev -= 1
-        end
-    end
-    if neg: ret 0.0 - v end
-    ret v
+//
+// strtod rather than accumulating the digits here. The obvious loop -
+// multiply the running value by ten, add the digit, then apply the exponent
+// by repeated multiplication - is inexact in three separate places, and the
+// error shows up exactly where it matters most: near the subnormal boundary
+// and near the largest finite double, where being one ulp out is the
+// difference between a number and an infinity.
+//
+// strtod is correctly rounded, and FormatFloat above already depends on that
+// to decide how many digits a value needs, so this adds no new requirement.
+// It also accepts "inf" and "nan", which the loop silently read as zero.
+// Not `pure`: the conversion is a function of the text alone, but it needs a
+// scratch buffer to work in, and obtaining that is a side effect. The
+// previous version was only nominally pure - it called strtod, which sets
+// errno, and had to declare it pure to compile.
+pub func ParseFloat(s: str): f64:
+    ret _dtoa_parse(s, null)
 end
 
 @en "IsNaNF"
@@ -294,29 +243,16 @@ pub inline pure func IsNaNF(x: f64): bool: ret x != x end
 // The buffer is handed to the caller as the result string, the same
 // ownership FormatUint below has always had.
 pub func FormatFloat(x: f64): str:
-    if x != x: ret "nan" end
-    if x != 0.0 && x / 2.0 == x:
-        ret x < 0.0 ? "-inf" : "inf"
-    end
     cap := 64 as u64
     buf := malloc(cap)
-    mut prec := 15
-    until prec <= 17:
-        mut spec := "%.15g"
-        if prec == 16:
-            spec = "%.16g"
-        else prec == 17:
-            spec = "%.17g"
-        end
-        n := snprintf(buf as char*, cap, spec, x)
-        if n > 0:
-            _fix_exp(buf as i8*)
-        end
-        if n > 0 && (prec == 17 || strtod(buf as str, null) == x):
-            ret buf as str
-        end
-        prec += 1
+    if buf == null:
+        ret ""
     end
+    n := _dtoa_shortest(x, buf, cap as int)
+    if n <= 0 || n >= (cap as int):
+        ret ""
+    end
+    _fix_exp(buf as i8*)
     ret buf as str
 end
 

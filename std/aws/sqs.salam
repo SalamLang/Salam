@@ -1,0 +1,606 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package aws
+
+// Queues.
+//
+// After storage, the thing an application actually needs is somewhere to put
+// work it is not going to do right now. SQS is that, and its model is worth
+// stating plainly because almost every mistake made with it comes from
+// misreading one of these:
+//
+//   * Receiving does not delete. A message that is received becomes invisible
+//     for a while and comes back if it is not deleted. That is what makes the
+//     queue survive a worker dying mid-job, and it is why every consumer loop
+//     has to end in a delete.
+//   * The invisible window is a deadline, not a lease you can forget about. A
+//     job that takes longer than the visibility timeout is handed to a second
+//     worker while the first is still running. ChangeVisibility() extends it;
+//     doing that is the difference between at-least-once and
+//     at-least-once-and-often-twice.
+//   * Delivery is at least once, so handlers have to tolerate repeats. A FIFO
+//     queue narrows that, at a much lower throughput.
+//   * A poll with no wait time returns immediately and usually empty, and
+//     charges for the privilege. Long polling - a wait of up to twenty
+//     seconds - is what the receive loop should almost always use.
+//
+// This speaks the query protocol rather than the newer JSON one: both are
+// supported by the service, the query one answers XML that this package
+// already parses, and it is the one every S3-compatible clone implements.
+
+import str
+import conv
+import encoding.xml
+
+pub const SQS_VERSION := "2012-11-05"
+
+// The most a single ReceiveMessage may return, and the longest it may wait.
+// Both are the service's limits rather than this package's.
+pub const SQS_MAX_MESSAGES := 10
+pub const SQS_MAX_WAIT := 20
+
+// A batch send or delete accepts ten entries.
+pub const SQS_MAX_BATCH := 10
+
+// Message - one message off a queue.
+//
+// `receipt` is the handle that deletes it, and it belongs to this *receipt*
+// rather than to the message: receiving the same message again yields a
+// different handle, and an old one no longer deletes anything.
+pub struct Message:
+    pub id: str = ""
+    pub body: str = ""
+    pub receipt: str = ""
+    pub md5: str = ""
+    // How many times this message has been delivered. A number climbing above
+    // one or two is the signal that a handler is failing silently, and the
+    // reason to attach a dead-letter queue.
+    pub receive_count: int = 0
+    pub sent_epoch: i64 = 0
+    pub group_id: str = ""
+    pub dedup_id: str = ""
+    // System attributes, and the caller's own, as two pair lists.
+    pub attributes: Headers = Headers {}
+    pub message_attributes: Headers = Headers {}
+end
+
+pub struct MessageList:
+    pub ok: bool = false
+    pub status: int = 0
+    pub items: Vector<Message> = Vector {}
+    pub error: str = ""
+    pub code: str = ""
+end
+
+// SendResult - what the service made of one sent message.
+pub struct SendResult:
+    pub ok: bool = false
+    pub id: str = ""
+    pub md5: str = ""
+    // FIFO queues assign one, and it is the only way to order two messages
+    // from outside.
+    pub sequence: str = ""
+    pub error: str = ""
+    pub code: str = ""
+end
+
+// OutMessage - a message to send.
+pub struct OutMessage:
+    pub body: str = ""
+    // Seconds to hold the message invisible before anyone may receive it.
+    pub delay: int = 0
+    // FIFO only. Messages sharing a group are delivered in order and one at a
+    // time; different groups proceed in parallel. Choosing one group for
+    // everything turns a FIFO queue into a single-threaded one.
+    pub group_id: str = ""
+    // FIFO only. Two sends with the same id inside five minutes are one
+    // message. Without it the queue must have content-based deduplication on.
+    pub dedup_id: str = ""
+    pub attributes: Headers = Headers {}
+end
+
+// ReceiveOptions - how to poll.
+pub struct ReceiveOptions:
+    pub max_messages: int = 1
+    // Seconds to wait for a message before answering empty. Zero returns at
+    // once, almost always with nothing, and is billed as a request either way;
+    // this should be 20 in nearly every consumer.
+    pub wait_seconds: int = 20
+    // Seconds the received messages stay invisible. Zero takes the queue's
+    // default.
+    pub visibility_timeout: int = 0
+    // Ask for the system attributes as well, which is the only way to see
+    // ApproximateReceiveCount.
+    pub want_attributes: bool = true
+    pub want_message_attributes: bool = true
+    // FIFO only, and only for a consumer that must not see two batches from
+    // one group at once.
+    pub receive_request_attempt_id: str = ""
+end
+
+// QueueList - the queue URLs an account holds.
+pub struct QueueList:
+    pub ok: bool = false
+    pub items: Vector<str> = Vector {}
+    pub error: str = ""
+    pub code: str = ""
+end
+
+// _queue_path - the path part of a queue URL.
+//
+// A queue URL is the service endpoint plus /account/name, and a request may be
+// posted straight to it. Doing that rather than sending QueueUrl as a
+// parameter is what the SDKs do, and it keeps the request readable in a log.
+func _queue_path(url: str): str:
+    scheme := url.find("://")
+    if scheme < 0: ret "/" end
+    slash := str.IndexFrom(url, "/", scheme + 3)
+    if slash < 0: ret "/" end
+    ret url.substr(slash, url.len() - slash)
+end
+
+// _queue_origin - and the scheme and host of it.
+func _queue_origin(url: str): str:
+    scheme := url.find("://")
+    if scheme < 0: ret "" end
+    slash := str.IndexFrom(url, "/", scheme + 3)
+    if slash < 0: ret url end
+    ret url.substr(0, slash)
+end
+
+// _queue_call - a call addressed at a queue rather than at the service.
+func _queue_call(url: str, action: str): Call:
+    mut c := NewQueryCall("sqs", action, SQS_VERSION)
+    if url.len() == 0: ret c end
+    c.path = _queue_path(url)
+    CallEndpoint(c, _queue_origin(url))
+    ret c
+end
+
+// _service_call - a call addressed at the service, for the actions that are
+// not about one existing queue.
+func _service_call(action: str): Call:
+    mut c := NewQueryCall("sqs", action, SQS_VERSION)
+    override := env.Get("AWS_ENDPOINT_URL_SQS")
+    if override.len() > 0: CallEndpoint(c, override) end
+    ret c
+end
+
+// _put_attributes - the caller's message attributes, in the shape the query
+// protocol wants: one numbered triple per attribute.
+func _put_attributes(c &: Call, attrs: Headers):
+    mut i := 0
+    until i < attrs.names.len():
+        n := "MessageAttribute." + (i + 1)
+        CallParam(c, n + ".Name", attrs.names.get(i))
+        CallParam(c, n + ".Value.DataType", "String")
+        CallParam(c, n + ".Value.StringValue", attrs.values.get(i))
+        i += 1
+    end
+end
+
+// _read_pairs - the <Attribute><Name/><Value/></Attribute> repeats an answer
+// carries, under whichever element name the action uses.
+func _read_pairs(node: xml.XMLNode, tag: str, out &: Headers):
+    rows := xml.Children(node, tag)
+    mut i := 0
+    until i < rows.items.len():
+        row := rows.items.get(i)
+        name := _xml_text(row, "Name")
+        mut value := _xml_text(row, "Value")
+        if value.len() == 0:
+            // A message attribute nests its value one level deeper.
+            inner := xml.Child(row, "Value")
+            if xml.Found(inner): value = _xml_text(inner, "StringValue") end
+        end
+        if name.len() > 0: HeaderSet(out, name, value) end
+        i += 1
+    end
+end
+
+func _message_of(node: xml.XMLNode): Message:
+    mut m := Message {
+        id = _xml_text(node, "MessageId"),
+        body = _xml_text(node, "Body"),
+        receipt = _xml_text(node, "ReceiptHandle"),
+        md5 = _xml_text(node, "MD5OfBody")
+    }
+    _read_pairs(node, "Attribute", m.attributes)
+    _read_pairs(node, "MessageAttribute", m.message_attributes)
+    count := HeaderGet(m.attributes, "ApproximateReceiveCount")
+    if count.len() > 0: m.receive_count = count.to_int() end
+    sent := HeaderGet(m.attributes, "SentTimestamp")
+    // SQS reports this in milliseconds, unlike every other AWS timestamp, so
+    // it is always past what a 32-bit int holds: str.to_int() wraps it to
+    // something plausible-looking and wrong. conv.ParseInt is 64-bit.
+    if sent.len() > 0:
+        m.sent_epoch = conv.ParseInt(sent) / (1000 as i64)
+    end
+    m.group_id = HeaderGet(m.attributes, "MessageGroupId")
+    m.dedup_id = HeaderGet(m.attributes, "MessageDeduplicationId")
+    ret m
+end
+
+// _root_of - the parsed body of a successful answer, or a not-found node.
+func _root_of(res: Result, ok &: bool): xml.XMLNode:
+    ok = false
+    if !res.ok: ret xml.XMLNode {} end
+    ret xml.DecodeStrict(res.body, ok)
+end
+
+func _clamp(v: int, lo: int, hi: int): int:
+    if v < lo: ret lo end
+    if v > hi: ret hi end
+    ret v
+end
+
+// ------------------------------------------------------------- public API
+
+// SqsQueueUrl - the URL of a queue by name.
+//
+// Every other operation takes a URL rather than a name, because the name alone
+// is ambiguous: queues live in an account and a region, and two accounts may
+// hold the same name. Resolving once at startup and keeping the URL is the
+// right shape.
+pub func SqsQueueUrl(cfg: Config, name: str): str:
+    mut c := _service_call("GetQueueUrl")
+    CallParam(c, "QueueName", name)
+    res := Invoke(cfg, c)
+    CallFree(c)
+    if !res.ok: ret "" end
+    ret ResultTag(res.body, "QueueUrl").trim()
+end
+
+// SqsCreateQueue - make a queue, or find the one already there.
+//
+// Creating a queue that exists with the same attributes succeeds and returns
+// it, so this is safe to call at startup. A name ending in .fifo makes a FIFO
+// queue, and the suffix is required for one.
+pub func SqsCreateQueue(cfg: Config, name: str, attributes: Headers): str:
+    mut c := _service_call("CreateQueue")
+    CallParam(c, "QueueName", name)
+    mut i := 0
+    until i < attributes.names.len():
+        n := "Attribute." + (i + 1)
+        CallParam(c, n + ".Name", attributes.names.get(i))
+        CallParam(c, n + ".Value", attributes.values.get(i))
+        i += 1
+    end
+    res := Invoke(cfg, c)
+    CallFree(c)
+    if !res.ok: ret "" end
+    ret ResultTag(res.body, "QueueUrl").trim()
+end
+
+// SqsDeleteQueue - remove a queue and everything in it. The deletion takes up
+// to sixty seconds to propagate, during which sends may still succeed.
+pub func SqsDeleteQueue(cfg: Config, url: str): Result:
+    mut c := _queue_call(url, "DeleteQueue")
+    res := Invoke(cfg, c)
+    CallFree(c)
+    ret res
+end
+
+// SqsListQueues - the queues in the account, optionally by name prefix.
+pub func SqsListQueues(cfg: Config, prefix: str): QueueList:
+    mut c := _service_call("ListQueues")
+    CallParam(c, "QueueNamePrefix", prefix)
+    res := Invoke(cfg, c)
+    CallFree(c)
+    if !res.ok:
+        ret QueueList { error = res.error, code = res.code }
+    end
+    mut ok := false
+    root := _root_of(res, ok)
+    mut out := QueueList { ok = true }
+    if !ok: ret out end
+    holder := xml.Child(root, "ListQueuesResult")
+    mut rows := xml.Children(holder, "QueueUrl")
+    if rows.items.len() == 0: rows = xml.Children(root, "QueueUrl") end
+    mut i := 0
+    until i < rows.items.len():
+        url := rows.items.get(i).text.trim()
+        if url.len() > 0: out.items.push(url) end
+        i += 1
+    end
+    ret out
+end
+
+pub func QueueCount(l: QueueList): int: ret l.items.len() end
+
+pub func QueueAt(l: QueueList, i: int): str:
+    if i < 0 || i >= l.items.len(): ret "" end
+    ret l.items.get(i)
+end
+
+pub func QueueListFree(l &: QueueList): l.items.free() end
+
+// SqsSend - put a message on a queue.
+pub func SqsSend(cfg: Config, url: str, body: str): SendResult:
+    ret SqsSendWith(cfg, url, OutMessage { body = body })
+end
+
+// SqsSendWith - the same with a delay, a FIFO group, or attributes.
+pub func SqsSendWith(cfg: Config, url: str, m: OutMessage): SendResult:
+    if m.body.len() == 0:
+        ret SendResult { error = "an empty message cannot be sent", code = "Config" }
+    end
+    mut c := SqsSendCall(url, m)
+    res := Invoke(cfg, c)
+    CallFree(c)
+    if !res.ok:
+        ret SendResult { error = res.error, code = res.code }
+    end
+    ret SendResult {
+        ok = true,
+        id = ResultTag(res.body, "MessageId").trim(),
+        md5 = ResultTag(res.body, "MD5OfMessageBody").trim(),
+        sequence = ResultTag(res.body, "SequenceNumber").trim()
+    }
+end
+
+// SqsSendCall - the request a send would make, without making it.
+pub func SqsSendCall(url: str, m: OutMessage): Call:
+    mut c := _queue_call(url, "SendMessage")
+    CallParam(c, "MessageBody", m.body)
+    if m.delay > 0: CallParamInt(c, "DelaySeconds", _clamp(m.delay, 0, 900)) end
+    CallParam(c, "MessageGroupId", m.group_id)
+    CallParam(c, "MessageDeduplicationId", m.dedup_id)
+    _put_attributes(c, m.attributes)
+    ret c
+end
+
+// SqsReceive - take up to ten messages off a queue.
+//
+// Long polling by default, because a zero wait returns empty almost every time
+// and is billed the same as one that waits. The messages are NOT removed:
+// deleting each one after it is handled is the second half of the loop.
+pub func SqsReceive(cfg: Config, url: str, o: ReceiveOptions): MessageList:
+    mut c := SqsReceiveCall(url, o)
+    res := Invoke(cfg, c)
+    CallFree(c)
+    ret ParseReceive(res.body, res.status)
+end
+
+// SqsReceiveCall - the request a receive would send, without sending it.
+//
+// The limits are clamped here rather than left to the service, which answers a
+// validation error for a batch of eleven and says nothing useful about it.
+pub func SqsReceiveCall(url: str, o: ReceiveOptions): Call:
+    mut c := _queue_call(url, "ReceiveMessage")
+    CallParamInt(c, "MaxNumberOfMessages", _clamp(o.max_messages, 1, SQS_MAX_MESSAGES))
+    CallParamInt(c, "WaitTimeSeconds", _clamp(o.wait_seconds, 0, SQS_MAX_WAIT))
+    if o.visibility_timeout > 0:
+        CallParamInt(c, "VisibilityTimeout", _clamp(o.visibility_timeout, 0, 43200))
+    end
+    if o.want_attributes: CallParam(c, "AttributeName.1", "All") end
+    if o.want_message_attributes:
+        CallParam(c, "MessageAttributeName.1", "All")
+    end
+    CallParam(c, "ReceiveRequestAttemptId", o.receive_request_attempt_id)
+    ret c
+end
+
+// ParseReceive - a receive answer that arrived from somewhere else.
+//
+// An empty queue answers a well-formed document with no Message in it; that is
+// a success carrying nothing, not a failure.
+pub func ParseReceive(body: str, status: int): MessageList:
+    res := Result {
+        ok = status >= 200 && status < 300, status = status, body = body
+    }
+    if !res.ok:
+        ret MessageList {
+            status = status,
+            error = ServiceErrorMessage(body, status),
+            code = ServiceErrorCode(body)
+        }
+    end
+    mut ok := false
+    root := _root_of(res, ok)
+    mut out := MessageList { ok = true, status = status }
+    if !ok:
+        out.ok = false
+        out.error = "the queue's answer could not be parsed"
+        out.code = "MalformedXML"
+        ret out
+    end
+    holder := xml.Child(root, "ReceiveMessageResult")
+    mut rows := xml.Children(holder, "Message")
+    if rows.items.len() == 0: rows = xml.Children(root, "Message") end
+    mut i := 0
+    until i < rows.items.len():
+        out.items.push(_message_of(rows.items.get(i)))
+        i += 1
+    end
+    ret out
+end
+
+// SqsPoll - the short form: wait up to twenty seconds for one message.
+pub func SqsPoll(cfg: Config, url: str): MessageList:
+    ret SqsReceive(cfg, url, ReceiveOptions {})
+end
+
+// SqsReceiveBatch - up to `count` messages in one call, long-polled.
+pub func SqsReceiveBatch(cfg: Config, url: str, count: int): MessageList:
+    ret SqsReceive(cfg, url, ReceiveOptions { max_messages = count })
+end
+
+pub func MessageCount(l: MessageList): int: ret l.items.len() end
+
+pub func MessageAt(l: MessageList, i: int): Message:
+    if i < 0 || i >= l.items.len(): ret Message {} end
+    ret l.items.get(i)
+end
+
+pub func MessageListFree(l &: MessageList): l.items.free() end
+
+// MessageAttribute - one of the caller's own attributes on a message.
+pub func MessageAttribute(m: Message, name: str): str:
+    ret HeaderGet(m.message_attributes, name)
+end
+
+// SqsDelete - remove a handled message.
+//
+// The half of the loop that is easy to forget: a message that is received and
+// not deleted comes back when its visibility window closes, and will keep
+// coming back until it is deleted or the queue gives up on it.
+pub func SqsDelete(cfg: Config, url: str, receipt: str): Result:
+    if receipt.len() == 0:
+        ret Failure("a message cannot be deleted without its receipt handle")
+    end
+    mut c := _queue_call(url, "DeleteMessage")
+    CallParam(c, "ReceiptHandle", receipt)
+    res := Invoke(cfg, c)
+    CallFree(c)
+    ret res
+end
+
+// SqsDeleteBatch - remove up to ten handled messages in one request.
+//
+// One round trip instead of ten, which against a service across an ocean is
+// the difference between a consumer that keeps up and one that does not.
+pub func SqsDeleteBatch(cfg: Config, url: str, l: MessageList): Result:
+    total := l.items.len()
+    if total == 0: ret Result { ok = true, status = 200 } end
+    mut done := 0
+    mut last := Result { ok = true, status = 200 }
+    until done < total:
+        mut count := total - done
+        if count > SQS_MAX_BATCH: count = SQS_MAX_BATCH end
+        mut c := _queue_call(url, "DeleteMessageBatch")
+        mut i := 0
+        until i < count:
+            n := "DeleteMessageBatchRequestEntry." + (i + 1)
+            CallParam(c, n + ".Id", "m" + i)
+            CallParam(c, n + ".ReceiptHandle", l.items.get(done + i).receipt)
+            i += 1
+        end
+        res := Invoke(cfg, c)
+        CallFree(c)
+        if !res.ok: ret res end
+        // A batch answers 200 with the failures listed in its body; a caller
+        // reading only the status would treat a partial delete as a whole one.
+        if res.body.find("<BatchResultErrorEntry") >= 0:
+            mut bad := res
+            bad.ok = false
+            bad.code = ResultTag(res.body, "Code")
+            bad.error = "some messages were not deleted: " +
+                ResultTag(res.body, "Message")
+            ret bad
+        end
+        last = res
+        done += count
+    end
+    ret last
+end
+
+// SqsChangeVisibility - give a handler more time, or hand a message back early.
+//
+// Extending is what a long-running job must do to stay the only worker on it.
+// Setting zero returns the message to the queue at once, which is the right
+// way for a handler to give up on work it cannot do.
+pub func SqsChangeVisibility(cfg: Config, url: str, receipt: str,
+    seconds: int): Result:
+    mut c := _queue_call(url, "ChangeMessageVisibility")
+    CallParam(c, "ReceiptHandle", receipt)
+    CallParamInt(c, "VisibilityTimeout", _clamp(seconds, 0, 43200))
+    res := Invoke(cfg, c)
+    CallFree(c)
+    ret res
+end
+
+// SqsRelease - hand a message straight back, for a handler that cannot do the
+// work now and wants someone else to try.
+pub func SqsRelease(cfg: Config, url: str, receipt: str): Result:
+    ret SqsChangeVisibility(cfg, url, receipt, 0)
+end
+
+// SqsPurge - discard every message in a queue. Takes up to sixty seconds, and
+// messages sent during it may also be discarded.
+pub func SqsPurge(cfg: Config, url: str): Result:
+    mut c := _queue_call(url, "PurgeQueue")
+    res := Invoke(cfg, c)
+    CallFree(c)
+    ret res
+end
+
+// SqsAttributes - everything the service will say about a queue.
+pub func SqsAttributes(cfg: Config, url: str): Headers:
+    mut c := _queue_call(url, "GetQueueAttributes")
+    CallParam(c, "AttributeName.1", "All")
+    res := Invoke(cfg, c)
+    CallFree(c)
+    mut out := Headers {}
+    if !res.ok: ret out end
+    mut ok := false
+    root := _root_of(res, ok)
+    if !ok: ret out end
+    holder := xml.Child(root, "GetQueueAttributesResult")
+    if xml.Found(holder): _read_pairs(holder, "Attribute", out)
+    else: _read_pairs(root, "Attribute", out)
+    end
+    ret out
+end
+
+// SqsSetAttributes - change a queue's settings.
+pub func SqsSetAttributes(cfg: Config, url: str, attributes: Headers): Result:
+    mut c := _queue_call(url, "SetQueueAttributes")
+    mut i := 0
+    until i < attributes.names.len():
+        n := "Attribute." + (i + 1)
+        CallParam(c, n + ".Name", attributes.names.get(i))
+        CallParam(c, n + ".Value", attributes.values.get(i))
+        i += 1
+    end
+    res := Invoke(cfg, c)
+    CallFree(c)
+    ret res
+end
+
+// SqsDepth - roughly how many messages are waiting.
+//
+// Approximate on purpose: the queue is distributed, and an exact count would
+// mean stopping it. Good enough to scale workers on, and not something to
+// branch on for correctness.
+pub func SqsDepth(cfg: Config, url: str): int:
+    attrs := SqsAttributes(cfg, url)
+    v := HeaderGet(attrs, "ApproximateNumberOfMessages")
+    HeaderFree(attrs)
+    if v.len() == 0: ret 0 - 1 end
+    ret v.to_int()
+end
+
+// SqsRedrivePolicy - the attribute value that sends repeatedly-failing
+// messages to a dead-letter queue.
+//
+// Worth setting on every queue. Without one, a message whose handler always
+// fails is retried until the queue's retention runs out - days of a worker
+// doing nothing else, and no record of which message it was.
+pub func SqsRedrivePolicy(dead_letter_arn: str, max_receives: int): str:
+    mut n := max_receives
+    if n < 1: n = 5 end
+    ret "{\"deadLetterTargetArn\":\"" + dead_letter_arn +
+        "\",\"maxReceiveCount\":\"" + n + "\"}"
+end
+
+// SqsQueueArn - a queue's ARN, which is what a redrive policy and most IAM
+// statements need.
+pub func SqsQueueArn(cfg: Config, url: str): str:
+    attrs := SqsAttributes(cfg, url)
+    arn := HeaderGet(attrs, "QueueArn")
+    HeaderFree(attrs)
+    ret arn
+end

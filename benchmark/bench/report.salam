@@ -26,6 +26,14 @@ func round0(x: f64): f64: ret ((x + 0.5) as i64) as f64 end
 
 func xstr(r: f64): str: ret fmt.FloatPrec(r, 2).concat("x") end
 
+// Ranking order for geomeans, where 0.0 means "no usable timing" rather than
+// "infinitely fast": those rows sort to the bottom.
+func gm less(a: f64, b: f64): bool:
+    if a <= 0.0: ret false end
+    if b <= 0.0: ret true end
+    ret a < b
+end
+
 func names contains(names: Vector<str>, target: str): bool:
     mut i := 0
     until i < names.len():
@@ -35,17 +43,92 @@ func names contains(names: Vector<str>, target: str): bool:
     ret false
 end
 
+// A program counts toward a language's geomean only when it built, ran and
+// matched. The positive check is not paranoia: Geomean is a log average, so
+// one non-positive sample collapses the whole language to 0.0 - and an empty
+// sample set does too, which is how a backend that failed to build all 41
+// programs was reported as "0.00 ms" and ranked first.
+func lang counted(s &: Store, name: str, lang: str): bool:
+    k := kkey(name, lang)
+    if sget(s.status, k) != "ok": ret false end
+    ret fget(s.m min, k) > 0.0
+end
+
 func lang min geomean(s &: Store, names: Vector<str>, lang: str): f64:
     mut vals := Vector {} as Vector<f64> defer vals.free()
     mut i := 0
     until i < names.len():
         name := names.get(i)
-        k := kkey(name, lang)
-        if sget(s.status, k) == "ok": vals.push(fget(s.m min, k)) end
+        if lang counted(s, name, lang): vals.push(fget(s.m min, kkey(name, lang))) end
         i = i + 1
     end
     result := stats.Geomean(vals)
     ret result
+end
+
+func lang counted n(s &: Store, names: Vector<str>, lang: str): int:
+    mut n := 0
+    mut i := 0
+    until i < names.len():
+        if lang counted(s, names.get(i), lang): n = n + 1 end
+        i = i + 1
+    end
+    ret n
+end
+
+func status label(st: str): str:
+    if st == "build_failed": ret "build failed"
+    else st == "run_failed": ret "run failed"
+    else st == "mismatch": ret "output mismatch"
+    else st == "ok": ret "ok"
+    else:
+        ret "not run"
+    end
+end
+
+// Every program/language pair that did not produce a usable timing, so a
+// wholesale failure shows up in the report instead of only in results.json.
+func failure sections(s &: Store, names: Vector<str>, order: Vector<str>): Vector<str>:
+    mut out := Vector {} as Vector<str> mut rows := Vector {} as Vector<str> defer rows.free()
+    mut i := 0
+    until i < names.len():
+        name := names.get(i)
+        mut j := 0
+        until j < order.len():
+            lg := order.get(j)
+            st := sget(s.status, kkey(name, lg))
+            if st != "ok":
+                mut row := "| ".concat(name).concat(" | ").concat(lang label(lg))
+                row = row.concat(" | ").concat(status label(st)).concat(" |")
+                rows.push(row)
+            end
+            j = j + 1
+        end
+        i = i + 1
+    end
+    if rows.len() == 0: ret out end
+    out.push("## Failures")
+    out.push("")
+    out.push(conv.FormatInt(rows.len() as i64).concat(" program/language pairs produced no timing. They are left out of that"))
+    out.push("language's geomean, which is why the `Programs` column in the ranking is")
+    out.push("worth reading before comparing two rows. Full compiler output for each one")
+    out.push("is in `results.json`.")
+    out.push("")
+    out.push("| Program | Language | Status |")
+    out.push("|---|---|---|")
+    mut shown := rows.len()
+    if shown > 30: shown = 30 end
+    mut r := 0
+    until r < shown:
+        out.push(rows.get(r))
+        r = r + 1
+    end
+    if rows.len() > shown:
+        out.push("")
+        out.push("...and ".concat(conv.FormatInt((rows.len() - shown) as i64)).concat(" more, in `results.json`."))
+    end
+    out.push("")
+    ret out
 end
 
 func program best(s &: Store, name: str, order: Vector<str>): f64:
@@ -248,11 +331,13 @@ pub func WriteReport(cfg &: Config, s &: Store, names: Vector<str>, ekeys: Vecto
 
     mut gm langs := Vector {} as Vector<str> defer gm langs.free()
     mut gm vals := Vector {} as Vector<f64> defer gm vals.free()
+    mut gm counts := Vector {} as Vector<int> defer gm counts.free()
     mut oi := 0
     until oi < order.len():
         lg := order.get(oi)
         gm langs.push(lg)
         gm vals.push(lang min geomean(s, names, lg))
+        gm counts.push(lang counted n(s, names, lg))
         oi = oi + 1
     end
     mut gm wins := compute wins(s, names, order)
@@ -263,29 +348,35 @@ pub func WriteReport(cfg &: Config, s &: Store, names: Vector<str>, ekeys: Vecto
         mut min idx := si
         mut sj := si + 1
         until sj < gm vals.len():
-            if gm vals.get(sj) < gm vals.get(min idx): min idx = sj end
+            // A language with no timings has a geomean of 0.0, which would
+            // otherwise sort ahead of C. Those rows go last, not first.
+            if gm less(gm vals.get(sj), gm vals.get(min idx)): min idx = sj end
             sj = sj + 1
         end
         if min idx != si:
             collections.swap(gm langs, si, min idx)
             collections.swap(gm vals, si, min idx)
             collections.swap(gm wins, si, min idx)
+            collections.swap(gm counts, si, min idx)
         end
         si = si + 1
     end
 
     lines.push("## Overall ranking (fastest to slowest)")
     lines.push("")
-    lines.push("One number per language: the **geometric mean of minimum times across all")
-    lines.push(conv.FormatInt(names.len() as i64).concat(" programs** (geometric mean is used because it is not skewed by the few"))
-    lines.push("slow/high-variance programs the way an arithmetic mean would be). Lower is")
+    lines.push("One number per language: the **geometric mean of minimum times across the")
+    lines.push("programs it completed** (geometric mean is used because it is not skewed by the few")
+    lines.push("slow/high-variance programs the way an arithmetic mean would be). `Programs`")
+    lines.push("is how many of the ".concat(conv.FormatInt(names.len() as i64)).concat(" went into that mean: a language that fails to build"))
+    lines.push("one is averaged over the rest, so two rows with different counts are not")
+    lines.push("measuring the same workload, and a row with 0 has no result at all. Lower is")
     lines.push("faster; `vs C` and `vs Salam` express the same geomean as a multiple of C's")
     lines.push("and of the fastest Salam backend's (".concat(lang label(salam best lang)).concat("). Salam's three variants are"))
     lines.push("suffixed **-g** (C backend, `gcc -O3`), **-l** (LLVM backend, `-O3`), and")
     lines.push("**-t** (C backend, `tcc`, no optimizer, the out-of-the-box default).")
     lines.push("")
-    lines.push("| Rank | Language | Geomean | vs C | vs Salam | Fastest / tied-fastest on |")
-    lines.push("|---|---|---|---|---|---|")
+    lines.push("| Rank | Language | Geomean | vs C | vs Salam | Programs | Fastest / tied-fastest on |")
+    lines.push("|---|---|---|---|---|---|---|")
     mut ri := 0
     until ri < gm langs.len():
         lg := gm langs.get(ri)
@@ -297,9 +388,12 @@ pub func WriteReport(cfg &: Config, s &: Store, names: Vector<str>, ekeys: Vecto
         if val > 0.0 && c gm > 0.0: c cell = xstr(val / c gm) end
         mut salam cell := "-"
         if val > 0.0 && salam best gm > 0.0: salam cell = xstr(val / salam best gm) end
+        mut gm cell := fmt.FloatPrec(val, 2).concat(" ms")
+        if val <= 0.0: gm cell = "n/a" end
         mut row := "| ".concat(conv.FormatInt((ri + 1) as i64)).concat(" | ").concat(label)
-        row = row.concat(" | ").concat(fmt.FloatPrec(val, 2)).concat(" ms | ").concat(c cell)
+        row = row.concat(" | ").concat(gm cell).concat(" | ").concat(c cell)
         row = row.concat(" | ").concat(salam cell)
+        row = row.concat(" | ").concat(conv.FormatInt(gm counts.get(ri) as i64)).concat(" / ").concat(conv.FormatInt(names.len() as i64))
         row = row.concat(" | ").concat(conv.FormatInt(w as i64)).concat(" / ").concat(conv.FormatInt(names.len() as i64)).concat(" |")
         lines.push(row)
         ri = ri + 1
@@ -322,15 +416,18 @@ pub func WriteReport(cfg &: Config, s &: Store, names: Vector<str>, ekeys: Vecto
         lg := gm langs.get(bi)
         val := gm vals.get(bi)
         mut bar text := "(off scale)"
-        if scale max > 0.0 && val <= scale max * 3.0:
+        if val <= 0.0: bar text = "(no result)" end
+        if val > 0.0 && scale max > 0.0 && val <= scale max * 3.0:
             mut blen := ((val / scale max) * 45.0 + 0.5) as i64 as int
             if blen < 1: blen = 1 end
             if blen > 45: blen = 45 end
             bar text = str.Repeat("█", blen)
         end
         mut line := fmt.PadRight(lang label(lg), 12).concat(" ").concat(fmt.PadRight(bar text, 45))
-        line = line.concat(" ").concat(fmt.PadLeft(fmt.FloatPrec(val, 2).concat(" ms"), 10))
-        if c gm > 0.0: line = line.concat("  ").concat(xstr(val / c gm)).concat(" C") end
+        mut val text := fmt.FloatPrec(val, 2).concat(" ms")
+        if val <= 0.0: val text = "n/a" end
+        line = line.concat(" ").concat(fmt.PadLeft(val text, 10))
+        if val > 0.0 && c gm > 0.0: line = line.concat("  ").concat(xstr(val / c gm)).concat(" C") end
         if lg == "c": line = line.concat("  <- baseline") end
         lines.push(line)
         bi = bi + 1
@@ -378,7 +475,19 @@ pub func WriteReport(cfg &: Config, s &: Store, names: Vector<str>, ekeys: Vecto
     end
     lines.push(`- "Fastest / tied-fastest on" counts ties on every side (e.g. a 4-way tie`)
     lines.push("  adds 1 to all 4 languages), so the column does not sum to ".concat(conv.FormatInt(names.len() as i64)).concat("."))
+    mut ni2 := 0
+    until ni2 < gm langs.len():
+        if gm counts.get(ni2) == 0:
+            lines.push("- **".concat(lang label(gm langs.get(ni2))).concat(" produced no usable timing on any program** and is ranked"))
+            lines.push("  last with no geomean; see the failures table below.")
+        end
+        ni2 = ni2 + 1
+    end
     lines.push("")
+
+    mut fail lines := failure sections(s, names, order)
+    push all(lines, fail lines)
+    fail lines.free()
 
     lines.push("## Per-program results (minimum ms)")
     lines.push("")

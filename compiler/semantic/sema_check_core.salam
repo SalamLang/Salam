@@ -82,6 +82,47 @@ end
 // sema_check_expr (sema_expr.c, 5c) - full expression type checking.
 // Returns the expression's TypeId (never TYPE_NONE except through the
 // still-stubbed match checker).
+// A cast written where the position already fixes the type - `want`. Two
+// things can be wrong with one. Naming a different type than the only one
+// that fits is a mistake the old rule accepted quietly, converting on the
+// way out: `ret 0 as u32` from a u64 function. Naming the same type the
+// position already named is a no-op that costs the next reader a second
+// look. Both are errors, so that every `as` left in the source is one that
+// is doing something.
+func check_cast_in_context(
+    s &: Sema, a &: at.Ast, inner: int, sp: co.SrcSpan, want: int, target: int, o3: int
+):
+    if want < 0 || target < 0 || s.in_derive:
+        ret
+    end
+    if type_is_error(s, want) || type_is_error(s, target) || type_is_error(s, o3):
+        ret
+    end
+    if !type_equiv(s, want, target):
+        serr(
+            s, 94, sp, co.Format2(
+                i18.Tr(
+                    "an explicit cast here must produce '%s', the type this position requires, not '%s'"
+                ), co.ArgStr(type_to_string(s, want)), co.ArgStr(type_to_string(s, target))
+            )
+        )
+        ret
+    end
+    // Only a cast that changes nothing counts as useless. An int written
+    // where a float is wanted is not that: `as f64` is what makes the value
+    // a float, and E067 asks for exactly that when every `ret` in an f64
+    // function hands back an integer. Same-class widening is the case with
+    // nothing behind it.
+    same_class := type_equiv(s, want, o3) || (type_is_integer(s, want) && type_is_integer(s, o3))
+    if same_class && (type_assignable(s, want, o3) || widens_nonneg(s, a, inner, want, o3)):
+        serr(
+            s, 93, sp, co.Format1(
+                i18.Tr("useless cast: this position already requires '%s'"), co.ArgStr(type_to_string(s, want))
+            )
+        )
+    end
+end
+
 func sema_check_expr(s &: Sema, a &: at.Ast, nid: int): int:
     if nid == 0:
         ret sema_ty(s, TY_VOID)
@@ -90,6 +131,10 @@ func sema_check_expr(s &: Sema, a &: at.Ast, nid: int): int:
     if k != at.AST_LITERAL && k != at.AST_STRUCT_LIT && k != at.AST_ARRAY_LIT && k != at.AST_CALL && k != at.AST_TERNARY && k != at.AST_MATCH:
         s.expected = TYPE_NONE
     end
+    // Consumed here, so a cast one level down - `ret (x as u32) + 1` - is
+    // not judged against a position it is not in.
+    cast_ctx := s.cast_ctx
+    s.cast_ctx = TYPE_NONE
     sp := span_of(a, nid)
     if k == at.AST_LITERAL:
         n := at.Get(a, nid)
@@ -416,6 +461,7 @@ func sema_check_expr(s &: Sema, a &: at.Ast, nid: int): int:
         if target < 0:
             ret sema_decorate(s, a, nid, o3)
         end
+        check_cast_in_context(s, a, n4.a, sp, cast_ctx, target, o3)
         if type_assignable(s, target, o3):
             if !type_is_error(s, o3) && !s.in_derive && type_equiv(s, target, o3) && !sema_cast_target_is_context_dependent(s, a, n4.a, target):
                 serr(

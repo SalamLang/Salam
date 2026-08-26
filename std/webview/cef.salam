@@ -1,0 +1,188 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Chromium Embedded Framework backend, selected with -DSALAM_WEBVIEW_CEF.
+//
+// Without the flag the package uses the OS webview (WebKitGTK on Linux,
+// WKWebView on macOS, WebView2 on Windows) and this file folds away. With it,
+// every platform renders through the same bundled Chromium instead - the
+// point being that a page looks identical everywhere, at the cost of shipping
+// CEF's ~200 MB runtime next to the program.
+//
+// CEF's own API is C++ (and its C API is a hand-rolled vtable protocol with
+// manual refcounting), so this file does not bind CEF directly. It binds the
+// flat C ABI of native/cef_shim.cc, which is built separately - see
+// native/BUILD.md. That indirection is not a style choice: a plain `extern`
+// list cannot express CefRefPtr, CefString's UTF-16 storage, or the handler
+// interfaces CEF requires you to implement.
+//
+// The struct and every method below mirror linux.salam / macos.salam /
+// windows.salam exactly, so switching backends never changes calling code.
+if SALAM_WEBVIEW_CEF:
+    // Skipped when built with -DSALAM_WEBVIEW_CEF_MOCK, which links the
+    // dependency-free native/mock/cef_mock.c stand-in instead so the Salam
+    // side can be tested without the CEF SDK - the same arrangement
+    // std/opencv uses for SALAM_OPENCV_MOCK.
+    if !SALAM_WEBVIEW_CEF_MOCK:
+        link dynamic "salam_webview_cef"
+    end
+
+    extern:
+        func salam_wv_cef_init(debug: int): int
+        func salam_wv_cef_create(width: int, height: int, debug: int): void*
+        func salam_wv_cef_destroy(view: void*)
+        func salam_wv_cef_pump()
+        func salam_wv_cef_is_closed(view: void*): int
+        func salam_wv_cef_set_title(view: void*, title: str)
+        func salam_wv_cef_set_size(view: void*, width: int, height: int, fixed: int)
+        func salam_wv_cef_set_html(view: void*, html: str)
+        func salam_wv_cef_navigate(view: void*, url: str)
+        func salam_wv_cef_eval(view: void*, js: str)
+    end
+
+    @en "HintNone"
+    @fa "بدون اشاره"
+    @ar "لا تلميح"
+    pub const HINT_NONE := 0
+
+    @en "HintFixed"
+    @fa "اشاره ثابت"
+    @ar "تلميح ثابت"
+    pub const HINT_FIXED := 1
+
+    @en "WebView"
+    @fa "نمایش وب"
+    @ar "عرض الويب"
+    pub struct WebView:
+        pub handle: void* = null
+        pub window: void* = null
+        pub closed: bool = false
+
+        @en "destroy"
+        @fa "نابود کردن"
+        @ar "تدمير"
+        pub func Destroy():
+            if this.handle != null && !this.closed:
+                salam_wv_cef_destroy(this.handle)
+                this.handle = null
+                this.window = null
+                this.closed = true
+            end
+        end
+
+        // Pumps CEF's message loop rather than calling CefRunMessageLoop, so
+        // that Terminate() below still ends the loop - the same shape as the
+        // GTK backend's gtk_main_iteration_do loop.
+        @en "run"
+        @fa "اجرا"
+        @ar "تشغيل"
+        pub func Run():
+            if this.handle == null || this.closed:
+                ret
+            end
+            until this.closed:
+                salam_wv_cef_pump()
+                if salam_wv_cef_is_closed(this.handle) != 0:
+                    this.closed = true
+                end
+            end
+        end
+
+        @en "terminate"
+        @fa "پایان دادن"
+        @ar "إنهاء"
+        pub func Terminate():
+            this.closed = true
+        end
+
+        @en "SetTitle"
+        @fa "تنظیم عنوان"
+        @ar "تعيين العنوان"
+        pub func SetTitle(title: str):
+            if this.handle != null && !this.closed:
+                salam_wv_cef_set_title(this.handle, title)
+            end
+        end
+
+        @en "SetSize"
+        @fa "تنظیم اندازه"
+        @ar "تعيين الحجم"
+        pub func SetSize(width: int, height: int, hints: int = HINT_NONE):
+            if this.handle != null && !this.closed:
+                salam_wv_cef_set_size(this.handle, width, height, hints == HINT_FIXED ? 1 : 0)
+            end
+        end
+
+        // CEF dropped LoadString years ago, so the shim encodes `html` as a
+        // data: URL and navigates to it. Documented in native/BUILD.md.
+        @en "SetHTML"
+        @fa "تنظیم HTML"
+        @ar "تعيين HTML"
+        pub func SetHTML(html: str):
+            if this.handle != null && !this.closed:
+                salam_wv_cef_set_html(this.handle, html)
+            end
+        end
+
+        @en "Navigate"
+        @fa "پیمایش"
+        @ar "التنقل"
+        pub func Navigate(url: str):
+            if this.handle != null && !this.closed:
+                salam_wv_cef_navigate(this.handle, url)
+            end
+        end
+
+        @en "Eval"
+        @fa "ارزیابی"
+        @ar "تقييم"
+        pub func Eval(js: str):
+            if this.handle != null && !this.closed:
+                salam_wv_cef_eval(this.handle, js)
+            end
+        end
+
+        // Runs once, now - not on every future navigation. CEF can only do
+        // the latter from the render process, which would mean shipping the
+        // script over IPC to a CefRenderProcessHandler. The OS-webview
+        // backends make the same trade, so the behaviour matches.
+        @en "Init"
+        @fa "اولیه سازی"
+        @ar "تهيئة"
+        pub func Init(js: str):
+            this.Eval(js)
+        end
+
+        @en "IsClosed"
+        @fa "بسته شده است"
+        @ar "مغلق"
+        pub func IsClosed(): bool:
+            ret this.closed
+        end
+    end
+
+    @en "create"
+    @fa "ایجاد"
+    @ar "إنشاء"
+    pub func Create(_debug: bool = false): WebView:
+        if salam_wv_cef_init(_debug ? 1 : 0) == 0:
+            ret WebView { handle = null, window = null, closed = true }
+        end
+        view := salam_wv_cef_create(800, 600, _debug ? 1 : 0)
+        if view == null:
+            ret WebView { handle = null, window = null, closed = true }
+        end
+        ret WebView { handle = view, window = view, closed = false }
+    end
+end

@@ -1,0 +1,350 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package aws
+
+// Where the credentials come from, and where the bucket is.
+//
+// The rest of this package never looks for a credential. A Config is filled in
+// by the caller, which is what keeps a surprise network call out of a signing
+// function and what makes every operation testable. This file is the opposite
+// end of that: named, explicit loaders a caller reaches for on purpose.
+//
+// Environment first, because that is what a container gets. The shared
+// credentials file second, because that is what a developer has. There is
+// deliberately no chain that tries each in turn and no instance-metadata
+// lookup: a program that cannot say where its credentials came from cannot be
+// reasoned about when it stops working.
+//
+// The endpoint constructors are the other half. S3's own addressing has one
+// rule and every compatible service has a different one, and getting it wrong
+// produces a signature error that says nothing about addressing.
+
+import str
+import env
+import os
+
+// A trailing slash in an endpoint is the single most common configuration
+// mistake, because it produces a path with a double slash, which signs
+// differently and fails with no explanation.
+func _clean_endpoint(endpoint: str): str:
+    mut out := endpoint.trim()
+    until str.EndsWith(out, "/"):
+        out = out.substr(0, out.len() - 1)
+    end
+    ret out
+end
+
+func _env_first(a: str, b: str): str:
+    v := env.Get(a)
+    if v.len() > 0: ret v end
+    ret env.Get(b)
+end
+
+func _truthy(v: str): bool:
+    l := v.lower()
+    ret l == "1" || l == "true" || l == "yes" || l == "on"
+end
+
+// _line_at - one line of a text file, without allocating a vector of them.
+// str.Split is avoided deliberately: it is documented as unreliable on its
+// last element, and a credentials file is exactly the kind of input where a
+// silent truncation would be a security problem rather than a bug.
+func _line_at(text: str, from: int, stop &: int): str:
+    n := text.len()
+    if from >= n:
+        stop = n
+        ret ""
+    end
+    mut e := str.IndexFrom(text, "\n", from)
+    if e < 0: e = n end
+    stop = e + 1
+    mut line := text.substr(from, e - from)
+    if line.len() > 0 && str.EndsWith(line, "\r"):
+        line = line.substr(0, line.len() - 1)
+    end
+    ret line
+end
+
+// _ini_value - one key from one section of an INI file.
+func _ini_value(text: str, section: str, key: str): str:
+    want := "[" + section + "]"
+    mut inside := false
+    mut pos := 0
+    until pos < text.len():
+        mut next := 0
+        raw := _line_at(text, pos, next)
+        pos = next
+        line := raw.trim()
+        if line.len() == 0 || str.StartsWith(line, "#") || str.StartsWith(line, ";"):
+            continue
+        end
+        if str.StartsWith(line, "["):
+            inside = line == want
+            continue
+        end
+        if !inside: continue end
+        eq := line.find("=")
+        if eq < 0: continue end
+        if line.substr(0, eq).trim().lower() == key.lower():
+            ret line.substr(eq + 1, line.len() - eq - 1).trim()
+        end
+    end
+    ret ""
+end
+
+func _home(): str:
+    h := env.Get("HOME")
+    if h.len() > 0: ret h end
+    drive := env.Get("HOMEDRIVE")
+    rest := env.Get("HOMEPATH")
+    if drive.len() > 0 && rest.len() > 0: ret drive + rest end
+    ret env.Get("USERPROFILE")
+end
+
+// ------------------------------------------------------------- public API
+
+// AwsEndpoint - the S3 endpoint for a region.
+pub func AwsEndpoint(region: str): str:
+    if region.len() == 0 || region == "us-east-1":
+        ret "https://s3.amazonaws.com"
+    end
+    ret "https://s3." + region + ".amazonaws.com"
+end
+
+// ForAws - a Config against S3 itself.
+//
+// Virtual-host addressing, because AWS has deprecated the path form for
+// buckets created since 2020 and answers a redirect for it.
+pub func ForAws(region: str, bucket: str): Config:
+    mut cfg := Config {
+        endpoint = AwsEndpoint(region),
+        bucket = bucket,
+        path_style = false
+    }
+    if region.len() > 0: cfg.region = region end
+    ret cfg
+end
+
+// ForMinio - a Config against a MinIO server, which is what a local
+// development stack and most self-hosted deployments run.
+pub func ForMinio(endpoint: str, bucket: str): Config:
+    ret Config {
+        endpoint = _clean_endpoint(endpoint),
+        bucket = bucket,
+        path_style = true
+    }
+end
+
+// ForR2 - Cloudflare R2, addressed by account id.
+//
+// R2 has one region, "auto", and signatures are scoped to it. Egress is free,
+// which is the reason to use it and the reason its bucket names are per
+// account rather than global.
+pub func ForR2(account_id: str, bucket: str): Config:
+    ret Config {
+        endpoint = "https://" + account_id + ".r2.cloudflarestorage.com",
+        region = "auto",
+        bucket = bucket,
+        path_style = true
+    }
+end
+
+// ForSpaces - DigitalOcean Spaces.
+pub func ForSpaces(region: str, bucket: str): Config:
+    ret Config {
+        endpoint = "https://" + region + ".digitaloceanspaces.com",
+        region = region,
+        bucket = bucket,
+        path_style = false
+    }
+end
+
+// ForWasabi - Wasabi, which prices storage without egress charges.
+pub func ForWasabi(region: str, bucket: str): Config:
+    ret Config {
+        endpoint = "https://s3." + region + ".wasabisys.com",
+        region = region,
+        bucket = bucket,
+        path_style = false
+    }
+end
+
+// ForBackblaze - Backblaze B2's S3-compatible endpoint.
+pub func ForBackblaze(region: str, bucket: str): Config:
+    ret Config {
+        endpoint = "https://s3." + region + ".backblazeb2.com",
+        region = region,
+        bucket = bucket,
+        path_style = false
+    }
+end
+
+// ForEndpoint - anything else. Path style, because every S3-compatible
+// service that is not AWS either requires it or accepts it.
+pub func ForEndpoint(endpoint: str, region: str, bucket: str): Config:
+    mut cfg := Config {
+        endpoint = _clean_endpoint(endpoint),
+        bucket = bucket,
+        path_style = true
+    }
+    if region.len() > 0: cfg.region = region end
+    ret cfg
+end
+
+// FromEnvironment - a Config from the standard AWS environment variables.
+//
+// AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and AWS_SESSION_TOKEN are the
+// credential; AWS_REGION or AWS_DEFAULT_REGION the region; AWS_ENDPOINT_URL_S3
+// or AWS_ENDPOINT_URL the endpoint, which is how a compatible service is
+// pointed at without changing the program. The bucket is not standard - there
+// is no agreed variable for it - so AWS_S3_BUCKET is read and the caller can
+// override it.
+//
+// Path style is inferred: an explicit endpoint means a compatible service,
+// which almost always wants it, and AWS_S3_FORCE_PATH_STYLE settles it either
+// way.
+pub func FromEnvironment(bucket: str): Config:
+    endpoint := _env_first("AWS_ENDPOINT_URL_S3", "AWS_ENDPOINT_URL")
+    region := _env_first("AWS_REGION", "AWS_DEFAULT_REGION")
+    mut cfg := Config {}
+    if endpoint.len() > 0:
+        cfg.endpoint = _clean_endpoint(endpoint)
+        cfg.path_style = true
+    else:
+        cfg.endpoint = AwsEndpoint(region)
+        cfg.path_style = false
+    end
+    if region.len() > 0: cfg.region = region end
+    cfg.bucket = bucket
+    if cfg.bucket.len() == 0: cfg.bucket = env.Get("AWS_S3_BUCKET") end
+    cfg.access_key = env.Get("AWS_ACCESS_KEY_ID")
+    cfg.secret_key = env.Get("AWS_SECRET_ACCESS_KEY")
+    cfg.session_token = env.Get("AWS_SESSION_TOKEN")
+    forced := env.Get("AWS_S3_FORCE_PATH_STYLE")
+    if forced.len() > 0: cfg.path_style = _truthy(forced) end
+    ret cfg
+end
+
+// CredentialsPath - where the shared credentials file is, honouring
+// AWS_SHARED_CREDENTIALS_FILE.
+pub func CredentialsPath(): str:
+    override := env.Get("AWS_SHARED_CREDENTIALS_FILE")
+    if override.len() > 0: ret override end
+    home := _home()
+    if home.len() == 0: ret "" end
+    ret home + "/.aws/credentials"
+end
+
+// ConfigPath - and where the shared config file is.
+pub func ConfigPath(): str:
+    override := env.Get("AWS_CONFIG_FILE")
+    if override.len() > 0: ret override end
+    home := _home()
+    if home.len() == 0: ret "" end
+    ret home + "/.aws/config"
+end
+
+// FromProfile - credentials from the shared file the AWS tools write.
+//
+// Reads ~/.aws/credentials for the keys and ~/.aws/config for the region,
+// which is where those tools put them; in the config file a non-default
+// profile is spelled "[profile name]" rather than "[name]", and both spellings
+// are tried.
+//
+// An empty profile name means "default", and AWS_PROFILE overrides it.
+//
+// This reads keys and nothing else, and touches no network. A profile that
+// names a `role_arn` instead of keys - the ordinary setup at any organisation
+// that uses roles - has no keys to read, so this answers a Config that is not
+// Configured(). Resolving one means calling STS, so it lives in
+// FromProfileCredentials() in chain.salam, where the network call is expected.
+pub func FromProfile(profile: str, bucket: str): Config:
+    mut name := profile
+    if name.len() == 0: name = env.Get("AWS_PROFILE") end
+    if name.len() == 0: name = "default" end
+    mut cfg := Config { bucket = bucket }
+    creds_path := CredentialsPath()
+    if creds_path.len() > 0 && os.Exists(creds_path):
+        text := os.ReadFile(creds_path)
+        cfg.access_key = _ini_value(text, name, "aws_access_key_id")
+        cfg.secret_key = _ini_value(text, name, "aws_secret_access_key")
+        cfg.session_token = _ini_value(text, name, "aws_session_token")
+    end
+    mut region := ""
+    conf_path := ConfigPath()
+    if conf_path.len() > 0 && os.Exists(conf_path):
+        text := os.ReadFile(conf_path)
+        region = _ini_value(text, name, "region")
+        if region.len() == 0:
+            region = _ini_value(text, "profile " + name, "region")
+        end
+    end
+    if region.len() > 0: cfg.region = region end
+    cfg.endpoint = AwsEndpoint(cfg.region)
+    cfg.path_style = false
+    ret cfg
+end
+
+// ParseIni - one key out of one section of an INI document.
+//
+// Public because the shared config file carries settings this package does not
+// model, and a caller that needs one should not have to write a second parser.
+pub func ParseIni(text: str, section: str, key: str): str:
+    ret _ini_value(text, section, key)
+end
+
+// WithBucket - the same Config against a different bucket. Copying rather than
+// mutating, so one loaded credential can drive several buckets.
+pub func WithBucket(cfg: Config, bucket: str): Config:
+    mut out := cfg
+    out.bucket = bucket
+    ret out
+end
+
+// WithSessionToken - attach temporary credentials from STS or a role.
+pub func WithSessionToken(cfg: Config, token: str): Config:
+    mut out := cfg
+    out.session_token = token
+    ret out
+end
+
+// WithRetry - how hard to try. Zero or one disables retrying, which is what a
+// test against a mock wants.
+pub func WithRetry(cfg: Config, attempts: int, base_ms: int): Config:
+    mut out := cfg
+    out.retry = attempts
+    if base_ms > 0: out.retry_base_ms = base_ms end
+    ret out
+end
+
+// Describe - a Config as a line for a log.
+//
+// The secret is replaced by its length, which is enough to tell "not set" from
+// "set to the wrong thing" without putting the key in a log file that will
+// outlive the credential.
+pub func Describe(cfg: Config): str:
+    mut mode := "path"
+    if !cfg.path_style: mode = "virtual-host" end
+    mut secret := "unset"
+    if cfg.secret_key.len() > 0:
+        secret = "set (" + cfg.secret_key.len() + " chars)"
+    end
+    mut key := cfg.access_key
+    if key.len() > 4: key = key.substr(0, 4) + "..." end
+    if key.len() == 0: key = "unset" end
+    ret "endpoint=" + cfg.endpoint + " bucket=" + cfg.bucket +
+        " region=" + cfg.region + " addressing=" + mode +
+        " access_key=" + key + " secret=" + secret
+end

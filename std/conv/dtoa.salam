@@ -1,0 +1,1263 @@
+// Exact conversion between IEEE-754 doubles and decimal text.
+//
+// The machinery behind FormatFloat and ParseFloat in conv.salam. It lives in
+// its own file because it is long and self-contained, and in this package
+// because this is where converting between a number and its text belongs.
+//
+// Formatting a double used to be the one place the standard library reached
+// outside the language: FormatFloat asked libc for snprintf, ParseFloat for
+// strtod, and salam_fmt_f64 for both. That works on a hosted system and
+// leaves a freestanding one - a kernel, a bootloader, anything without a
+// libc - unable to print a number at all.
+//
+// The method is big-integer arithmetic rather than any of the fast published
+// algorithms (Grisu, Ryu). A double is a 53-bit integer times a power of two,
+// so its decimal expansion is finite and can be written down exactly:
+//
+//   value = m * 2^k          k >= 0:  the integer m << k
+//   value = m / 2^j          k < 0:   the integer m * 5^j, times 10^-j
+//
+// The longest such expansion is 767 digits, for the smallest subnormal. Once
+// the digits are exact, rounding to N of them is arithmetic on a digit string
+// and cannot be wrong. Reading back is the same idea run backwards: parse to
+// an exact fraction, then divide out just enough bits to round once.
+//
+// Doubles are handled as their bit patterns, obtained by writing through a
+// pointer rather than by taking an address - Salam's `&` yields function
+// addresses only. No floating-point arithmetic appears below, so a program
+// compiled without floating-point registers can still link every part of
+// this that does not name a double in its signature.
+package conv
+
+// Limbs are 32 bits so a product fits in 64 without a wider type.
+//
+// The size is set by the worst case in strtod, not in printing: a subnormal
+// needs the numerator shifted left by 1075 bits on top of a mantissa that may
+// already carry several hundred digits. 264 limbs is 8448 bits, comfortably
+// past that; printing never needs more than 80.
+const BN_CAP := 264
+const BN_BYTES := 1064 // (BN_CAP + 1) * 4
+
+// Nine digits is the most that fits in a u32 divisor while leaving the
+// running remainder room in a u64.
+const DEC_CHUNK := 1000000000
+
+// 5^13, the largest power of five that keeps limb * multiplier inside 64 bits.
+const POW5_13 := 1220703125
+const POW5_13_EXP := 13
+
+// 2^29, chosen on the same grounds for the shifting path.
+const POW2_29_EXP := 29
+
+const MAX_DIGITS := 800 // significant digits kept when parsing
+const DIGIT_BUF := 1200 // room for 767 exact digits plus rounding slack
+
+const EXP_BIAS := 1023
+const MANT_BITS := 52
+const SUBNORMAL_EXP := -1074
+
+// Seven big-integer registers, a digit buffer, and eight bytes for punning a
+// double. Six registers are what reading a decimal back needs at once;
+// writing one out needs a single register.
+const BN_REGS := 7
+const OFF_DIGITS := 7448 // BN_REGS * BN_BYTES
+const OFF_PUN := 8648 // OFF_DIGITS + DIGIT_BUF
+pub const SCRATCH_BYTES := 8704
+
+const TWO52 := 0x10000000000000
+const TWO53 := 0x20000000000000
+
+// Scratch, supplied once via Init. Laid out as a fixed set of big-integer
+// registers plus a digit buffer, because the worst case is known in advance
+// and a formatter that allocates is a formatter that can fail.
+mut _scratch := 0 as u64
+mut _ready := false
+
+// ---------------------------------------------------------------- bignum
+
+// Limb 0 holds the count; the digits themselves start at 1. Keeping the
+// length with the data means one pointer describes a whole number, which
+// matters because Salam cannot take the address of a local.
+func _bn_len(b: u32*): int:
+    ret b[0] as int
+end
+
+func _bn_set_len(b: u32*, n: int):
+    b[0] = n as u32
+end
+
+func _bn_at(b: u32*, i: int): u32:
+    ret b[1 + i]
+end
+
+func _bn_put(b: u32*, i: int, v: u32):
+    b[1 + i] = v
+end
+
+func _reg(i: int): u32*:
+    r := (_scratch + ((i * BN_BYTES) as u64)) as u32*
+    r[0] = 0 as u32
+    ret r
+end
+
+func _digit_buf(): u8*:
+    ret (_scratch + (OFF_DIGITS as u64)) as u8*
+end
+
+// The eight bytes a double is read through. Salam's `&` gives function
+// addresses only, so a value is punned by storing it and loading it back at a
+// different type - which is what a union does in C, without needing one.
+func _pun_bits(v: f64): u64:
+    fp := (_scratch + (OFF_PUN as u64)) as f64*
+    fp[0] = v
+    up := (_scratch + (OFF_PUN as u64)) as u64*
+    ret up[0]
+end
+
+func _pun_f64(bits: u64): f64:
+    up := (_scratch + (OFF_PUN as u64)) as u64*
+    up[0] = bits
+    fp := (_scratch + (OFF_PUN as u64)) as f64*
+    ret fp[0]
+end
+
+func _bn_zero(b: u32*):
+    _bn_set_len(b, 0)
+end
+
+func _bn_is_zero(b: u32*): bool:
+    ret _bn_len(b) == 0
+end
+
+func _bn_from_u64(b: u32*, v: u64):
+    if v == (0 as u64):
+        _bn_set_len(b, 0)
+        ret
+    end
+    lo := (v & (0xFFFFFFFF as u64)) as u32
+    hi := (v >> (32 as u64)) as u32
+    _bn_put(b, 0, lo)
+    if hi == (0 as u32):
+        _bn_set_len(b, 1)
+    else:
+        _bn_put(b, 1, hi)
+        _bn_set_len(b, 2)
+    end
+end
+
+func _bn_copy(dst: u32*, src: u32*):
+    n := _bn_len(src)
+    mut i := 0
+    while i < n:
+        _bn_put(dst, i, _bn_at(src, i))
+        i += 1
+    end
+    _bn_set_len(dst, n)
+end
+
+func _bn_trim(b: u32*):
+    mut n := _bn_len(b)
+    while n > 0 && _bn_at(b, n - 1) == (0 as u32):
+        n -= 1
+    end
+    _bn_set_len(b, n)
+end
+
+// _bn_mul_small - multiply in place. The multiplier must be under 2^30 so
+// that limb * multiplier + carry cannot overflow 64 bits.
+func _bn_mul_small(b: u32*, m: u32): bool:
+    n := _bn_len(b)
+    mut carry := 0 as u64
+    mut i := 0
+    while i < n:
+        cur := ((_bn_at(b, i) as u64) * (m as u64)) + carry
+        _bn_put(b, i, (cur & (0xFFFFFFFF as u64)) as u32)
+        carry = cur >> (32 as u64)
+        i += 1
+    end
+    mut len := n
+    while carry != (0 as u64):
+        if len >= BN_CAP:
+            ret false
+        end
+        _bn_put(b, len, (carry & (0xFFFFFFFF as u64)) as u32)
+        carry = carry >> (32 as u64)
+        len += 1
+    end
+    _bn_set_len(b, len)
+    _bn_trim(b)
+    ret true
+end
+
+func _bn_add_small(b: u32*, a: u32): bool:
+    n := _bn_len(b)
+    mut carry := a as u64
+    mut i := 0
+    while i < n && carry != (0 as u64):
+        cur := (_bn_at(b, i) as u64) + carry
+        _bn_put(b, i, (cur & (0xFFFFFFFF as u64)) as u32)
+        carry = cur >> (32 as u64)
+        i += 1
+    end
+    mut len := n
+    while carry != (0 as u64):
+        if len >= BN_CAP:
+            ret false
+        end
+        _bn_put(b, len, (carry & (0xFFFFFFFF as u64)) as u32)
+        carry = carry >> (32 as u64)
+        len += 1
+    end
+    _bn_set_len(b, len)
+    ret true
+end
+
+// _bn_divmod_small - divide in place, returning the remainder. Used only to
+// peel decimal chunks off the front of an exact expansion.
+func _bn_divmod_small(b: u32*, d: u32): u32:
+    n := _bn_len(b)
+    mut rem := 0 as u64
+    mut i := n - 1
+    while i >= 0:
+        cur := (rem << (32 as u64)) | (_bn_at(b, i) as u64)
+        _bn_put(b, i, (cur / (d as u64)) as u32)
+        rem = cur % (d as u64)
+        i -= 1
+    end
+    _bn_trim(b)
+    ret rem as u32
+end
+
+func _bn_bitlen(b: u32*): int:
+    n := _bn_len(b)
+    if n == 0:
+        ret 0
+    end
+    top := _bn_at(b, n - 1)
+    mut bits := 0
+    mut t := top
+    while t != (0 as u32):
+        bits += 1
+        t = t >> (1 as u32)
+    end
+    ret ((n - 1) * 32) + bits
+end
+
+func _bn_shl(b: u32*, k: int): bool:
+    if k <= 0 || _bn_len(b) == 0:
+        ret true
+    end
+    limbs := k / 32
+    bits := k % 32
+    n := _bn_len(b)
+    mut newlen := n + limbs
+    if bits != 0:
+        newlen += 1
+    end
+    if newlen > BN_CAP:
+        ret false
+    end
+    // Walk downward so the source is read before it is overwritten.
+    mut i := newlen - 1
+    while i >= 0:
+        mut v := 0 as u32
+        src := i - limbs
+        if src >= 0 && src < n:
+            if bits == 0:
+                v = _bn_at(b, src)
+            else:
+                v = _bn_at(b, src) << (bits as u32)
+            end
+        end
+        if bits != 0 && (src - 1) >= 0 && (src - 1) < n:
+            v = v | (_bn_at(b, src - 1) >> ((32 - bits) as u32))
+        end
+        _bn_put(b, i, v)
+        i -= 1
+    end
+    _bn_set_len(b, newlen)
+    _bn_trim(b)
+    ret true
+end
+
+func _bn_shr1(b: u32*):
+    n := _bn_len(b)
+    if n == 0:
+        ret
+    end
+    mut i := 0
+    while i < n:
+        mut v := _bn_at(b, i) >> (1 as u32)
+        if (i + 1) < n:
+            v = v | (_bn_at(b, i + 1) << (31 as u32))
+        end
+        _bn_put(b, i, v)
+        i += 1
+    end
+    _bn_trim(b)
+end
+
+// _bn_cmp - -1, 0 or 1 for a < b, a == b, a > b.
+func _bn_cmp(a: u32*, b: u32*): int:
+    na := _bn_len(a)
+    nb := _bn_len(b)
+    if na != nb:
+        if na < nb:
+            ret -1
+        end
+        ret 1
+    end
+    mut i := na - 1
+    while i >= 0:
+        x := _bn_at(a, i)
+        y := _bn_at(b, i)
+        if x != y:
+            if x < y:
+                ret -1
+            end
+            ret 1
+        end
+        i -= 1
+    end
+    ret 0
+end
+
+// _bn_sub - a -= b, which the caller has already established is not negative.
+func _bn_sub(a: u32*, b: u32*):
+    na := _bn_len(a)
+    nb := _bn_len(b)
+    mut borrow := 0 as u64
+    mut i := 0
+    while i < na:
+        mut sub := borrow
+        if i < nb:
+            sub += _bn_at(b, i) as u64
+        end
+        av := _bn_at(a, i) as u64
+        if av >= sub:
+            _bn_put(a, i, ((av - sub) & (0xFFFFFFFF as u64)) as u32)
+            borrow = 0 as u64
+        else:
+            _bn_put(a, i, (((av + (0x100000000 as u64)) - sub) & (0xFFFFFFFF as u64)) as u32)
+            borrow = 1 as u64
+        end
+        i += 1
+    end
+    _bn_trim(a)
+end
+
+// _bn_mul_pow5 - multiply by 5^e, thirteen exponents at a time.
+func _bn_mul_pow5(b: u32*, e: int): bool:
+    mut left := e
+    while left >= POW5_13_EXP:
+        if !_bn_mul_small(b, POW5_13 as u32):
+            ret false
+        end
+        left -= POW5_13_EXP
+    end
+    mut acc := 1 as u32
+    mut i := 0
+    while i < left:
+        acc = acc * (5 as u32)
+        i += 1
+    end
+    if acc != (1 as u32):
+        ret _bn_mul_small(b, acc)
+    end
+    ret true
+end
+
+func _bn_mul_pow10(b: u32*, e: int): bool:
+    if !_bn_mul_pow5(b, e):
+        ret false
+    end
+    ret _bn_shl(b, e)
+end
+
+// _bn_div - floor(p / q), leaving the remainder in p.
+//
+// Shift-and-subtract rather than a general long division, because every
+// caller wants a quotient of at most 64 bits and can afford one pass per
+// quotient bit. `t` is caller-supplied scratch so this allocates nothing.
+func _bn_div(p: u32*, q: u32*, t: u32*): u64:
+    bp := _bn_bitlen(p)
+    bq := _bn_bitlen(q)
+    if bq == 0 || bp < bq:
+        ret 0 as u64
+    end
+    n := bp - bq
+    _bn_copy(t, q)
+    if !_bn_shl(t, n):
+        ret 0 as u64
+    end
+    mut quo := 0 as u64
+    mut i := n
+    while i >= 0:
+        quo = quo << (1 as u64)
+        if _bn_cmp(t, p) <= 0:
+            _bn_sub(p, t)
+            quo = quo | (1 as u64)
+        end
+        _bn_shr1(t)
+        i -= 1
+    end
+    ret quo
+end
+
+// ------------------------------------------------------- double <-> digits
+
+func _u64_bitlen(v: u64): int:
+    mut n := 0
+    mut t := v
+    while t != (0 as u64):
+        n += 1
+        t = t >> (1 as u64)
+    end
+    ret n
+end
+
+// _exact_digits - write the complete decimal expansion of a double's
+// significand into `digits`, most significant first.
+//
+// Returns the digit count and sets out[0] to the decimal exponent, so that
+// value = 0.d1d2... shifted appropriately: the number is `digits` read as an
+// integer, times 10^out[0].
+func _exact_digits(bits: u64, digits: u8*, out: i64*, work: u32*): int:
+    be := ((bits >> (52 as u64)) & (0x7FF as u64)) as int
+    frac := bits & (0xFFFFFFFFFFFFF as u64)
+    mut mant := frac
+    mut exp2 := 0
+    if be == 0:
+        exp2 = SUBNORMAL_EXP
+    else:
+        mant = frac | (0x10000000000000 as u64)
+        exp2 = be - 1075
+    end
+
+    if mant == (0 as u64):
+        digits[0] = 48 as u8
+        out[0] = 0 as i64
+        ret 1
+    end
+
+    _bn_from_u64(work, mant)
+    mut decexp := 0
+    if exp2 >= 0:
+        if !_bn_shl(work, exp2):
+            ret -1
+        end
+    else:
+        j := 0 - exp2
+        if !_bn_mul_pow5(work, j):
+            ret -1
+        end
+        decexp = 0 - j
+    end
+
+    // Peel nine digits at a time off the low end, then reverse.
+    mut pos := 0
+    while !_bn_is_zero(work):
+        mut r := _bn_divmod_small(work, DEC_CHUNK as u32)
+        mut c := 0
+        while c < 9:
+            if pos >= DIGIT_BUF:
+                ret -1
+            end
+            digits[pos] = (48 + ((r % (10 as u32)) as int)) as u8
+            r = r / (10 as u32)
+            pos += 1
+            c += 1
+        end
+    end
+    // The final chunk was emitted with all nine places, so the top of the
+    // buffer may hold zeros that are not part of the number.
+    while pos > 1 && digits[pos - 1] == (48 as u8):
+        pos -= 1
+    end
+
+    mut i := 0
+    mut j2 := pos - 1
+    while i < j2:
+        t := digits[i]
+        digits[i] = digits[j2]
+        digits[j2] = t
+        i += 1
+        j2 -= 1
+    end
+    out[0] = decexp as i64
+    ret pos
+end
+
+// _round_to - round a digit string to `p` significant digits in place.
+//
+// Half-to-even, matching what printf does. Ties are real here rather than
+// theoretical: the expansion is exact and finite, so a trailing 5 with
+// nothing after it happens routinely. Returns 1 if the carry propagated off
+// the front, in which case the caller's exponent goes up by one.
+func _round_to(digits: u8*, ndig: int, p: int): int:
+    if ndig <= p || p < 1:
+        ret 0
+    end
+    rd := (digits[p] as int) - 48
+    mut up := false
+    if rd > 5:
+        up = true
+    else:
+        if rd == 5:
+            mut sticky := false
+            mut i := p + 1
+            while i < ndig:
+                if digits[i] != (48 as u8):
+                    sticky = true
+                    i = ndig
+                else:
+                    i += 1
+                end
+            end
+            if sticky:
+                up = true
+            else:
+                up = (((digits[p - 1] as int) - 48) % 2) == 1
+            end
+        end
+    end
+    if !up:
+        ret 0
+    end
+    mut k := p - 1
+    while k >= 0:
+        if digits[k] == (57 as u8):
+            digits[k] = 48 as u8
+            k -= 1
+        else:
+            digits[k] = digits[k] + (1 as u8)
+            ret 0
+        end
+    end
+    // Every digit was a nine: 999 -> 1000, so the string shifts right.
+    mut m := p - 1
+    while m > 0:
+        digits[m] = digits[m - 1]
+        m -= 1
+    end
+    digits[0] = 49 as u8
+    ret 1
+end
+
+func _put(buf: u8*, cap: int, pos: int, c: u8): int:
+    if pos < cap:
+        buf[pos] = c
+    end
+    ret pos + 1
+end
+
+// _emit_exponent - "e+05" style: a sign always, and at least two digits.
+func _emit_exponent(buf: u8*, cap: int, start: int, x: int): int:
+    mut pos := _put(buf, cap, start, 101 as u8)
+    mut v := x
+    if v < 0:
+        pos = _put(buf, cap, pos, 45 as u8)
+        v = 0 - v
+    else:
+        pos = _put(buf, cap, pos, 43 as u8)
+    end
+    mut d := [0, 0, 0, 0, 0, 0]
+    mut n := 0
+    if v == 0:
+        n = 1
+    else:
+        while v > 0:
+            d[n] = v % 10
+            v = v / 10
+            n += 1
+        end
+    end
+    if n < 2:
+        n = 2
+    end
+    mut i := n - 1
+    while i >= 0:
+        pos = _put(buf, cap, pos, (48 + d[i]) as u8)
+        i -= 1
+    end
+    ret pos
+end
+
+// _digit_at - the i'th significant digit, or '0' past the end of the exact
+// expansion. Padding rather than a special case keeps the two output styles
+// below from each needing their own bounds check.
+func _digit_at(digits: u8*, ndig: int, i: int): u8:
+    if i < 0 || i >= ndig:
+        ret 48 as u8
+    end
+    ret digits[i]
+end
+
+// _format - render `bits` per one printf conversion.
+//
+// `kind` is 'g', 'e' or 'f'. Returns the length the result would have, the
+// way snprintf does, whether or not it fit.
+func _format(bits: u64, prec: int, kind: int, buf: u8*, cap: int, digits: u8*, out: i64*, work: u32*): int:
+    mut pos := 0
+    neg := (bits >> (63 as u64)) != (0 as u64)
+    be := ((bits >> (52 as u64)) & (0x7FF as u64)) as int
+    frac := bits & (0xFFFFFFFFFFFFF as u64)
+
+    if be == 0x7FF:
+        if neg:
+            pos = _put(buf, cap, pos, 45 as u8)
+        end
+        if frac != (0 as u64):
+            pos = _put(buf, cap, pos, 110 as u8)
+            pos = _put(buf, cap, pos, 97 as u8)
+            pos = _put(buf, cap, pos, 110 as u8)
+        else:
+            pos = _put(buf, cap, pos, 105 as u8)
+            pos = _put(buf, cap, pos, 110 as u8)
+            pos = _put(buf, cap, pos, 102 as u8)
+        end
+        ret pos
+    end
+
+    ndig0 := _exact_digits(bits, digits, out, work)
+    if ndig0 < 0:
+        ret -1
+    end
+    mut ndig := ndig0
+    decexp := out[0] as int
+
+    if neg:
+        pos = _put(buf, cap, pos, 45 as u8)
+    end
+
+    // X is the power of ten on the leading digit.
+    mut x := (ndig - 1) + decexp
+    zero := ndig == 1 && digits[0] == (48 as u8)
+    if zero:
+        x = 0
+    end
+
+    mut p := prec
+    if kind == 103: // 'g': precision counts significant digits, and 0 means 1
+        if p < 1:
+            p = 1
+        end
+    end
+
+    mut style := kind
+    if kind == 103:
+        // The %g rule: scientific outside [1e-4, 10^P), fixed inside.
+        if x < -4 || x >= p:
+            style = 101
+        else:
+            style = 102
+        end
+    end
+
+    // How many significant digits to round to. The three conversions count
+    // different things: %g counts significant digits, %e counts digits after
+    // the point plus the one before it, and %f counts decimal places, which
+    // depends on where the point falls.
+    mut sig := p
+    mut ndec := 0
+    if style == 101 && kind != 103:
+        sig = p + 1
+        ndec = p
+    end
+    if style == 102 && kind != 103:
+        sig = (x + 1) + p
+        ndec = p
+    end
+
+    // %f can be asked for fewer decimals than the value has leading zeros,
+    // in which case every digit shown is behind the point and the answer is
+    // either zero or one unit in the last place.
+    if kind == 102 && sig <= 0 && !zero:
+        mut carry := false
+        if sig == 0:
+            rd := (digits[0] as int) - 48
+            if rd > 5:
+                carry = true
+            else:
+                if rd == 5:
+                    mut i := 1
+                    while i < ndig:
+                        if digits[i] != (48 as u8):
+                            carry = true
+                            i = ndig
+                        else:
+                            i += 1
+                        end
+                    end
+                end
+            end
+        end
+        digits[0] = carry ? (49 as u8) : (48 as u8)
+        ndig = 1
+        x = carry ? (0 - p) : 0
+        sig = 1
+    end
+
+    if ndig > sig && sig > 0:
+        x += _round_to(digits, ndig, sig)
+        ndig = sig
+    end
+
+    // %g drops trailing zeros; %e and %f keep them.
+    if kind == 103:
+        mut show := sig
+        while show > 1 && _digit_at(digits, ndig, show - 1) == (48 as u8):
+            show -= 1
+        end
+        ndec = (show - x) - 1
+        if ndec < 0:
+            ndec = 0
+        end
+        if style == 101:
+            // In scientific notation the exponent carries the magnitude, so
+            // the digits after the point are just the rest of the significand.
+            ndec = show - 1
+        end
+    end
+
+    if style == 101:
+        pos = _put(buf, cap, pos, _digit_at(digits, ndig, 0))
+        if ndec > 0:
+            pos = _put(buf, cap, pos, 46 as u8)
+            mut i := 1
+            while i <= ndec:
+                pos = _put(buf, cap, pos, _digit_at(digits, ndig, i))
+                i += 1
+            end
+        end
+        pos = _emit_exponent(buf, cap, pos, x)
+        ret pos
+    end
+
+    // Fixed notation. Digits before position 0 or past the end of the exact
+    // expansion are zeros, which is what makes both the leading "0.000" case
+    // and the trailing "100.0" case fall out of the same loop.
+    if x < 0:
+        pos = _put(buf, cap, pos, 48 as u8)
+    else:
+        mut i := 0
+        while i <= x:
+            pos = _put(buf, cap, pos, _digit_at(digits, ndig, i))
+            i += 1
+        end
+    end
+    if ndec > 0:
+        pos = _put(buf, cap, pos, 46 as u8)
+        mut k := 0
+        while k < ndec:
+            pos = _put(buf, cap, pos, _digit_at(digits, ndig, (x + 1) + k))
+            k += 1
+        end
+    end
+    ret pos
+end
+
+// ------------------------------------------------------------- decimal -> double
+
+
+// _round_quotient - drop `excess` low bits of q, rounding half to even.
+//
+// `sticky` says whether anything nonzero was discarded before this point,
+// which is what distinguishes an exact tie from a value just above one.
+func _round_quotient(q: u64, excess: int, sticky: bool): u64:
+    if excess <= 0:
+        ret q
+    end
+    mask := ((1 as u64) << (excess as u64)) - (1 as u64)
+    dropped := q & mask
+    half := (1 as u64) << ((excess - 1) as u64)
+    mut m := q >> (excess as u64)
+    if dropped > half:
+        m += 1 as u64
+    else:
+        if dropped == half:
+            if sticky || (m & (1 as u64)) != (0 as u64):
+                m += 1 as u64
+            end
+        end
+    end
+    ret m
+end
+
+// _encode - assemble the IEEE bit pattern for m * 2^e2.
+func _encode(neg: bool, m: u64, e2: int): u64:
+    mut bits := 0 as u64
+    if m == (0 as u64):
+        bits = 0 as u64
+    else:
+        if m < (TWO52 as u64):
+            // Subnormal: the exponent field is zero and there is no implicit
+            // leading one, so the significand is stored as-is.
+            bits = m
+        else:
+            be := e2 + 1075
+            if be >= 2047:
+                bits = 0x7FF0000000000000 as u64
+            else:
+                bits = ((be as u64) << (52 as u64)) | (m & (0xFFFFFFFFFFFFF as u64))
+            end
+        end
+    end
+    if neg:
+        bits = bits | (0x8000000000000000 as u64)
+    end
+    ret bits
+end
+
+// _decimal_to_bits - the correctly rounded double nearest to d * 10^dexp.
+//
+// The value is held as an exact fraction p/q, then just enough bits of the
+// quotient are produced to round once. Producing the whole quotient would be
+// both slower and no more accurate.
+func _decimal_to_bits(neg: bool, d: u32*, nd: int, dexp: int, trunc: bool, p: u32*, q: u32*, t: u32*, p0: u32*, q0: u32*): u64:
+    if _bn_is_zero(d):
+        ret _encode(neg, 0 as u64, 0)
+    end
+    mag := (nd + dexp) - 1
+    if mag > 309:
+        ret _encode(neg, 0 as u64, 0) | (0x7FF0000000000000 as u64) | (neg ? (0x8000000000000000 as u64) : (0 as u64))
+    end
+    if mag < -400:
+        ret _encode(neg, 0 as u64, 0)
+    end
+
+    _bn_copy(p0, d)
+    _bn_from_u64(q0, 1 as u64)
+    if dexp >= 0:
+        if !_bn_mul_pow10(p0, dexp):
+            ret _encode(neg, 0 as u64, 0)
+        end
+    else:
+        if !_bn_mul_pow10(q0, 0 - dexp):
+            ret _encode(neg, 0 as u64, 0)
+        end
+    end
+
+    // Scale so the quotient lands just above 53 bits, leaving room to round.
+    bp := _bn_bitlen(p0)
+    bq := _bn_bitlen(q0)
+    shift := 54 - (bp - bq)
+    _bn_copy(p, p0)
+    _bn_copy(q, q0)
+    if shift > 0:
+        if !_bn_shl(p, shift):
+            ret _encode(neg, 0 as u64, 0)
+        end
+    else:
+        if !_bn_shl(q, 0 - shift):
+            ret _encode(neg, 0 as u64, 0)
+        end
+    end
+
+    mut quo := _bn_div(p, q, t)
+    mut sticky := trunc || !_bn_is_zero(p)
+    bl := _u64_bitlen(quo)
+    e2 := 0 - shift
+    excess := bl - 53
+    mut m := _round_quotient(quo, excess, sticky)
+    mut fe := e2 + excess
+    if m >= (TWO53 as u64):
+        m = m >> (1 as u64)
+        fe += 1
+    end
+
+    // Below the smallest normal the significand has to shrink rather than the
+    // exponent keep falling, so the whole division is redone against a fixed
+    // exponent of 2^-1074.
+    if fe < SUBNORMAL_EXP:
+        _bn_copy(p, p0)
+        _bn_copy(q, q0)
+        if !_bn_shl(p, 1075):
+            ret _encode(neg, 0 as u64, 0)
+        end
+        quo = _bn_div(p, q, t)
+        sticky = trunc || !_bn_is_zero(p)
+        m = _round_quotient(quo, 1, sticky)
+        fe = SUBNORMAL_EXP
+        if m >= (TWO52 as u64):
+            // Rounding lifted it back into the normal range, which is the
+            // correct answer and needs the normal encoding.
+            ret _encode(neg, m, fe)
+        end
+        mut bits := m
+        if neg:
+            bits = bits | (0x8000000000000000 as u64)
+        end
+        ret bits
+    end
+
+    if (fe + 1075) >= 2047:
+        mut inf := 0x7FF0000000000000 as u64
+        if neg:
+            inf = inf | (0x8000000000000000 as u64)
+        end
+        ret inf
+    end
+    ret _encode(neg, m, fe)
+end
+
+func _is_digit(c: int): bool:
+    ret c >= 48 && c <= 57
+end
+
+func _lower(c: int): int:
+    if c >= 65 && c <= 90:
+        ret c + 32
+    end
+    ret c
+end
+
+// _byte reads through conv's own _ub, rather than repeating it.
+inline func _byte(s: i8*, i: int): int:
+    ret _ub(s, i)
+end
+
+// _strtod_core - parse a decimal number and return the nearest double's bits.
+//
+// out[0] receives the index one past the last character consumed, so the
+// caller can fill in strtod's endptr.
+func _strtod_core(sp: i8*, out: i64*): u64:
+    mut i := 0
+    // Leading whitespace, as the C library defines it.
+    mut c := _byte(sp, i)
+    while c == 32 || (c >= 9 && c <= 13):
+        i += 1
+        c = _byte(sp, i)
+    end
+
+    mut neg := false
+    if c == 43 || c == 45:
+        neg = c == 45
+        i += 1
+        c = _byte(sp, i)
+    end
+
+    // inf / infinity / nan, case-insensitive.
+    if _lower(c) == 105:
+        if _lower(_byte(sp, i + 1)) == 110 && _lower(_byte(sp, i + 2)) == 102:
+            mut j := i + 3
+            if _lower(_byte(sp, j)) == 105 && _lower(_byte(sp, j + 1)) == 110 && _lower(_byte(sp, j + 2)) == 105 && _lower(_byte(sp, j + 3)) == 116 && _lower(_byte(sp, j + 4)) == 121:
+                j += 5
+            end
+            out[0] = j as i64
+            mut b := 0x7FF0000000000000 as u64
+            if neg:
+                b = b | (0x8000000000000000 as u64)
+            end
+            ret b
+        end
+    end
+    if _lower(c) == 110:
+        if _lower(_byte(sp, i + 1)) == 97 && _lower(_byte(sp, i + 2)) == 110:
+            out[0] = (i + 3) as i64
+            mut b := 0x7FF8000000000000 as u64
+            if neg:
+                b = b | (0x8000000000000000 as u64)
+            end
+            ret b
+        end
+    end
+
+    d := _reg(0)
+    _bn_zero(d)
+
+    mut nd := 0
+    mut dexp := 0
+    mut seen_point := false
+    mut any := false
+    mut trunc := false
+    mut ok := true
+
+    c = _byte(sp, i)
+    while _is_digit(c) || (c == 46 && !seen_point):
+        if c == 46:
+            seen_point = true
+            i += 1
+            c = _byte(sp, i)
+        else:
+            any = true
+            v := c - 48
+            if nd == 0 && v == 0:
+                // A leading zero adds no significant digit, but one after the
+                // point still moves the exponent.
+                if seen_point:
+                    dexp -= 1
+                end
+            else:
+                if nd < MAX_DIGITS:
+                    if !_bn_mul_small(d, 10 as u32):
+                        ok = false
+                    end
+                    if !_bn_add_small(d, v as u32):
+                        ok = false
+                    end
+                    nd += 1
+                    if seen_point:
+                        dexp -= 1
+                    end
+                else:
+                    if v != 0:
+                        trunc = true
+                    end
+                    if !seen_point:
+                        dexp += 1
+                    end
+                end
+            end
+            i += 1
+            c = _byte(sp, i)
+        end
+    end
+
+    if !any:
+        out[0] = 0 as i64 // nothing consumed: strtod leaves endptr at the start
+        ret 0 as u64
+    end
+
+    mut endpos := i
+    if _lower(c) == 101:
+        mut j := i + 1
+        mut esign := 1
+        ec := _byte(sp, j)
+        if ec == 43 || ec == 45:
+            if ec == 45:
+                esign = -1
+            end
+            j += 1
+        end
+        if _is_digit(_byte(sp, j)):
+            mut ev := 0
+            while _is_digit(_byte(sp, j)):
+                if ev < 100000:
+                    ev = (ev * 10) + (_byte(sp, j) - 48)
+                end
+                j += 1
+            end
+            dexp += esign * ev
+            endpos = j
+        end
+    end
+    out[0] = endpos as i64
+
+    if !ok:
+        ret _encode(neg, 0 as u64, 0)
+    end
+
+    bits := _decimal_to_bits(neg, d, nd, dexp, trunc, _reg(1), _reg(2), _reg(3), _reg(4), _reg(5))
+    ret bits
+end
+
+// _snprintf_core - one printf conversion, with literal text around it.
+//
+// Exactly one conversion is supported, because the assembly shim that reaches
+// this forwards exactly one variadic argument. Every call the Salam standard
+// library makes is of that shape ("%.15g" and friends); anything else returns
+// -1 rather than printing something plausible and wrong.
+func _snprintf_core(buf: u8*, cap: int, fp: i8*, iarg: u64, fbits: u64): int:
+    mut out := 0
+    mut i := 0
+    mut used := false
+    mut c := _byte(fp, i)
+    while c != 0:
+        if c != 37:
+            out = _put(buf, cap, out, c as u8)
+            i += 1
+            c = _byte(fp, i)
+        else:
+            i += 1
+            c = _byte(fp, i)
+            if c == 37:
+                out = _put(buf, cap, out, 37 as u8)
+                i += 1
+                c = _byte(fp, i)
+            else:
+                if used:
+                    ret -1
+                end
+                mut prec := -1
+                if c == 46:
+                    i += 1
+                    prec = 0
+                    c = _byte(fp, i)
+                    while _is_digit(c):
+                        prec = (prec * 10) + (c - 48)
+                        i += 1
+                        c = _byte(fp, i)
+                    end
+                end
+                // Length modifiers carry no information here: the shim has
+                // already widened the argument to 64 bits.
+                while c == 108 || c == 104 || c == 122 || c == 106:
+                    i += 1
+                    c = _byte(fp, i)
+                end
+                if c == 103 || c == 101 || c == 102:
+                    mut pr := prec
+                    if pr < 0:
+                        pr = 6
+                    end
+                    // Format into the tail of the caller's buffer, honouring
+                    // whatever room is left.
+                    n := _format_into(fbits, pr, c, (((buf as void*) as u64) + (out as u64)) as u8*, cap - out)
+                    if n < 0:
+                        ret -1
+                    end
+                    out += n
+                    used = true
+                    i += 1
+                    c = _byte(fp, i)
+                else:
+                    if c == 100 || c == 105 || c == 117:
+                        mut v := iarg
+                        mut isneg := false
+                        if c != 117 && (v & (0x8000000000000000 as u64)) != (0 as u64):
+                            isneg = true
+                            v = ((~v) + (1 as u64))
+                        end
+                        mut tmp := [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+                        mut n := 0
+                        if v == (0 as u64):
+                            tmp[0] = 0
+                            n = 1
+                        else:
+                            while v != (0 as u64):
+                                tmp[n] = (v % (10 as u64)) as int
+                                v = v / (10 as u64)
+                                n += 1
+                            end
+                        end
+                        if isneg:
+                            out = _put(buf, cap, out, 45 as u8)
+                        end
+                        mut k := n - 1
+                        while k >= 0:
+                            out = _put(buf, cap, out, (48 + tmp[k]) as u8)
+                            k -= 1
+                        end
+                        used = true
+                        i += 1
+                        c = _byte(fp, i)
+                    else:
+                        if c == 115:
+                            sp := (iarg as void*) as i8*
+                            if iarg == (0 as u64):
+                                ret -1
+                            end
+                            mut j := 0
+                            mut sc := _byte(sp, j)
+                            while sc != 0:
+                                out = _put(buf, cap, out, sc as u8)
+                                j += 1
+                                sc = _byte(sp, j)
+                            end
+                            used = true
+                            i += 1
+                            c = _byte(fp, i)
+                        else:
+                            if c == 99:
+                                out = _put(buf, cap, out, (iarg & (255 as u64)) as u8)
+                                used = true
+                                i += 1
+                                c = _byte(fp, i)
+                            else:
+                                ret -1
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    // snprintf always terminates what it did write, and reports the length it
+    // would have needed.
+    if cap > 0:
+        if out < cap:
+            buf[out] = 0 as u8
+        else:
+            buf[cap - 1] = 0 as u8
+        end
+    end
+    ret out
+end
+
+
+// _dtoa_into - one conversion into a caller's buffer, using the scratch
+// registers. Returns the length it would have needed, as snprintf does.
+func _dtoa_into(bits: u64, prec: int, kind: int, out: u8*, cap: int): int:
+    if !_dtoa_ready():
+        ret -1
+    end
+    outv := (_scratch + (OFF_PUN as u64)) as i64*
+    n := _format(bits, prec, kind, out, cap, _digit_buf(), outv, _reg(6))
+    // Terminate. _format reports a length, the way snprintf does, and every
+    // caller here goes on to treat the buffer as a string. Without this a
+    // second, shorter rendering into the same buffer leaves the tail of the
+    // first behind: 9007199254740992 came back as "9007199254740992e+15",
+    // the "e+15" being the last four bytes of the attempt before it.
+    if cap > 0 && n >= 0:
+        if n < cap:
+            out[n] = 0 as u8
+        else:
+            out[cap - 1] = 0 as u8
+        end
+    end
+    ret n
+end
+
+// _dtoa_ready - claim the scratch on first use.
+//
+// One allocation for the life of the program, because a formatter that can
+// fail to allocate is a formatter that can fail to print a number.
+func _dtoa_ready(): bool:
+    if _scratch == (0 as u64):
+        b := malloc(SCRATCH_BYTES as u64)
+        if b == null:
+            ret false
+        end
+        _scratch = b as u64
+    end
+    ret true
+end
+
+// _dtoa_shortest - the shortest text that reads back as exactly this double.
+//
+// Fifteen significant digits, then sixteen, then seventeen: the first that
+// survives a round trip wins, and seventeen always does. That is the answer
+// Python's repr and JavaScript's String() give.
+func _dtoa_shortest(v: f64, out: void*, cap: int): int:
+    if !_dtoa_ready():
+        ret -1
+    end
+    bits := _pun_bits(v)
+    mut prec := 15
+    while prec < 17:
+        n := _dtoa_into(bits, prec, 103, out as u8*, cap)
+        if n > 0 && n < cap:
+            if _pun_bits(_dtoa_parse(out as str, null)) == bits:
+                ret n
+            end
+        end
+        prec += 1
+    end
+    ret _dtoa_into(bits, 17, 103, out as u8*, cap)
+end
+
+// _dtoa_parse - the correctly rounded double nearest to the text.
+func _dtoa_parse(s: str, endp: void*): f64:
+    if !_dtoa_ready() || (s as void*) as u64 == (0 as u64):
+        ret 0.0
+    end
+    outv := (_scratch + (OFF_PUN as u64)) as i64*
+    outv[0] = 0 as i64
+    bits := _strtod_core(_bp(s), outv)
+    if (endp as u64) != (0 as u64):
+        e := (endp as u64) as u64*
+        e[0] = ((s as void*) as u64) + (outv[0] as u64)
+    end
+    ret _pun_f64(bits)
+end

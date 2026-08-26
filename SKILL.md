@@ -726,7 +726,8 @@ Ctx_status Ctx_set_header Ctx_redirect`. Also a canvas/DOM JS-interop surface.
   self-contained with no CDN - an empty `spec_url` means "next to this page".
 - **`tcp`** (`Bind Accept Read Write Close Ok ConnOk`), **`socket`** (WebSocket),
   **`ssl`**, **`net`**, **`dom`**/**`console`** (browser/JS targets),
-  **`webview`** (desktop windows).
+  **`webview`** (desktop windows; `-DSALAM_WEBVIEW_CEF` renders with a bundled
+  Chromium instead of the OS webview - see `std/webview/native/BUILD.md`).
 
 ### JWT and API route protection
 

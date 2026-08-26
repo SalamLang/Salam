@@ -13,7 +13,7 @@
 #
 # Usage:
 #   sh tools/bash/run-tests.sh [-j N] [section ...]
-# Sections: general exec js errors layout fmt repl ssl db opencv llvm cross timereport
+# Sections: general exec js errors layout fmt repl ssl db opencv webview_cef llvm cross timereport
 #           examples apps basics data editor-selected features games
 #           interop stdlib types webframework
 # Env: SALAM, SALAM_STD, LANGS, NPROC, SALAM_TEST_TIMEOUT,
@@ -738,6 +738,41 @@ if want opencv; then
             done
         else
             note_result "SKIP opencv/$lang/* (no C compiler/ar to build the OpenCV mock shim)" "opencv/$lang/all"
+        fi
+    done
+fi
+
+if want webview_cef; then
+    CEFCC=""
+    for c in tcc gcc cc clang; do
+        command -v "$c" >/dev/null 2>&1 && {
+            CEFCC="$c"
+            break
+        }
+    done
+    cefmockc=""
+    [ -f "std/webview/native/mock/cef_mock.c" ] && cefmockc="std/webview/native/mock/cef_mock.c"
+    cefok=0
+    if [ -n "$CEFCC" ] && [ -n "$cefmockc" ] && command -v ar >/dev/null 2>&1; then
+        mkdir -p "$WORK/cefwork/.work"
+        if "$CEFCC" -c -std=c11 "$cefmockc" -o "$WORK/cefwork/.work/cef_mock.o" >/dev/null 2>&1 &&
+            ar rcs "$WORK/cefwork/.work/libsalam_webview_cef_mock.a" "$WORK/cefwork/.work/cef_mock.o" >/dev/null 2>&1; then
+            cefok=1
+        fi
+    fi
+    for lang in $LANGS; do
+        [ -d "tests/$lang/webview_cef" ] || continue
+        if [ "$cefok" = "1" ]; then
+            for f in tests/"$lang"/webview_cef/*.salam; do
+                [ -e "$f" ] || continue
+                name=$(basename "$f" .salam)
+                case "$name" in _*) continue ;; esac
+                exp="$(pick_expect "tests/$lang/webview_cef/$name")"
+                [ -f "$exp" ] || continue
+                add_job build "webview_cef/$lang/$name" "$f" "$lang" "$exp" "--cc=$CEFCC -DSALAM_WEBVIEW_CEF -DSALAM_WEBVIEW_CEF_MOCK"
+            done
+        else
+            note_result "SKIP webview_cef/$lang/* (no C compiler/ar to build the CEF mock shim)" "webview_cef/$lang/all"
         fi
     done
 fi

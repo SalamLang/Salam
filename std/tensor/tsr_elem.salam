@@ -1,0 +1,544 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package tensor
+
+// Elementwise arithmetic and the broadcast rules that make it useful.
+//
+// Broadcasting here is NumPy's right-aligned semantics restricted to the
+// four shape relations that cover practically all of ML code, each with
+// its own flat loop:
+//
+//   1. equal shapes            - one flat loop over numel
+//   2. one side is one element - flat loop against a hoisted scalar
+//   3. leading broadcast       - the smaller shape equals a suffix of the
+//                                larger one (a [D] bias against [N,D], a
+//                                [D] row against [N,H,D], or the same with
+//                                a leading 1: [1,D] against [N,D])
+//   4. trailing-one broadcast  - same rank, last dim 1 ([N,1] against
+//                                [N,D]: the per-row scalar of a softmax)
+//
+// Anything else returns the empty tensor rather than guessing. General
+// 1-padding broadcast is deliberately absent; where NumPy would stretch
+// [N,1,D] against [1,M,D], this library asks for an explicit copy first,
+// because an implicit stretch is how a shape bug becomes a plausible
+// wrong answer.
+//
+// The kernel discipline is std/matrix's, kept on purpose: the operator is
+// chosen ONCE, outside the loop, and each arm is its own flat pointer
+// loop over hoisted payload pointers. A shared per-element dispatch is
+// what stops the auto-vectorizer cold ("unsupported control flow in
+// loop"), and going through .get/.set re-reads the Vector header every
+// element. Division keeps its zero guard - a zero divisor yields 0 rather
+// than an infinity, so one dead entry cannot poison a later reduction -
+// and that arm does not vectorize; the other three do.
+
+const _BC_BAD := 0 - 1
+const _BC_SAME := 0
+const _BC_SCALAR := 1
+const _BC_SUFFIX := 2
+const _BC_COL := 3
+
+// Unary map codes, dispatched once per call in _map below.
+const _U_EXP := 0
+const _U_LOG := 1
+const _U_TANH := 2
+const _U_SIGMOID := 3
+const _U_RELU := 4
+const _U_GELU := 5
+const _U_SQRT := 6
+const _U_ABS := 7
+const _U_SQUARE := 8
+const _U_NEG := 9
+
+// op: 0 add, 1 subtract, 2 multiply, 3 divide - same coding as std/matrix.
+
+func _k_same(pa: f32*, pb: f32*, pr: f32*, n: int, op: int):
+    if op == 0:
+        repeat n with k: pr[k] = pa[k] + pb[k] end
+    else op == 1:
+        repeat n with k: pr[k] = pa[k] - pb[k] end
+    else op == 2:
+        repeat n with k: pr[k] = pa[k] * pb[k] end
+    else:
+        zero := 0.0 as f32
+        repeat n with k:
+            v := pb[k]
+            if v == zero: pr[k] = zero
+            else: pr[k] = pa[k] / v end
+        end
+    end
+end
+
+// swapped means the caller wrote (small OP big), so the non-commutative
+// arms flip their operands.
+func _k_scalar(pa: f32*, s: f32, pr: f32*, n: int, op: int, swapped: bool):
+    zero := 0.0 as f32
+    if op == 0:
+        repeat n with k: pr[k] = pa[k] + s end
+    else op == 1:
+        if swapped:
+            repeat n with k: pr[k] = s - pa[k] end
+        else:
+            repeat n with k: pr[k] = pa[k] - s end
+        end
+    else op == 2:
+        repeat n with k: pr[k] = pa[k] * s end
+    else:
+        if swapped:
+            repeat n with k:
+                v := pa[k]
+                if v == zero: pr[k] = zero
+                else: pr[k] = s / v end
+            end
+        else:
+            if s == zero:
+                repeat n with k: pr[k] = zero end
+            else:
+                inv := (1.0 as f32) / s
+                repeat n with k: pr[k] = pa[k] * inv end
+            end
+        end
+    end
+end
+
+func _k_suffix(pbig: f32*, psmall: f32*, pr: f32*, outer: int, inner: int, op: int, swapped: bool):
+    zero := 0.0 as f32
+    repeat outer with o:
+        base := o * inner
+        if op == 0:
+            repeat inner with k: pr[base + k] = pbig[base + k] + psmall[k] end
+        else op == 1:
+            if swapped:
+                repeat inner with k: pr[base + k] = psmall[k] - pbig[base + k] end
+            else:
+                repeat inner with k: pr[base + k] = pbig[base + k] - psmall[k] end
+            end
+        else op == 2:
+            repeat inner with k: pr[base + k] = pbig[base + k] * psmall[k] end
+        else:
+            if swapped:
+                repeat inner with k:
+                    v := pbig[base + k]
+                    if v == zero: pr[base + k] = zero
+                    else: pr[base + k] = psmall[k] / v end
+                end
+            else:
+                repeat inner with k:
+                    v := psmall[k]
+                    if v == zero: pr[base + k] = zero
+                    else: pr[base + k] = pbig[base + k] / v end
+                end
+            end
+        end
+    end
+end
+
+func _k_col(pbig: f32*, psmall: f32*, pr: f32*, rows: int, width: int, op: int, swapped: bool):
+    zero := 0.0 as f32
+    repeat rows with r:
+        base := r * width
+        s := psmall[r]
+        if op == 0:
+            repeat width with k: pr[base + k] = pbig[base + k] + s end
+        else op == 1:
+            if swapped:
+                repeat width with k: pr[base + k] = s - pbig[base + k] end
+            else:
+                repeat width with k: pr[base + k] = pbig[base + k] - s end
+            end
+        else op == 2:
+            repeat width with k: pr[base + k] = pbig[base + k] * s end
+        else:
+            if swapped:
+                repeat width with k:
+                    v := pbig[base + k]
+                    if v == zero: pr[base + k] = zero
+                    else: pr[base + k] = s / v end
+                end
+            else:
+                if s == zero:
+                    repeat width with k: pr[base + k] = zero end
+                else:
+                    repeat width with k: pr[base + k] = pbig[base + k] / s end
+                end
+            end
+        end
+    end
+end
+
+// Classifies how `small` broadcasts against `big`. The caller has already
+// arranged big.numel() >= small.numel().
+func _bc_mode(big &: Tensor, small &: Tensor): int:
+    if big.same_shape(small): ret _BC_SAME end
+    if small.numel() == 1: ret _BC_SCALAR end
+    br := big.rank()
+    sr := small.rank()
+    if sr < br:
+        // The small shape must equal the trailing dims of the big one.
+        repeat sr with i:
+            if small.shape.get(i) != big.shape.get(br - sr + i): ret _BC_BAD end
+        end
+        ret _BC_SUFFIX
+    end
+    if sr == br && sr >= 2:
+        if small.shape.get(0) == 1:
+            // [1, rest] against [N, rest] is the suffix case in disguise.
+            mut lead_one := true
+            repeat sr - 1 with i:
+                if small.shape.get(i + 1) != big.shape.get(i + 1): lead_one = false end
+            end
+            if lead_one: ret _BC_SUFFIX end
+        end
+        if small.shape.get(sr - 1) == 1:
+            mut ok := true
+            repeat sr - 1 with i:
+                if small.shape.get(i) != big.shape.get(i): ok = false end
+            end
+            if ok: ret _BC_COL end
+        end
+    end
+    ret _BC_BAD
+end
+
+func _bin_ord(big &: Tensor, small &: Tensor, op: int, swapped: bool): Tensor:
+    mode := _bc_mode(big, small)
+    if mode == _BC_BAD: ret Empty() end
+    r := _raw_like(big)
+    n := big.numel()
+    if n <= 0: ret r end
+    pb := big.data.data
+    ps := small.data.data
+    pr := r.data.data
+    if mode == _BC_SAME:
+        // swapped cannot reach here: equal element counts always keep the
+        // caller's operand order.
+        _k_same(pb, ps, pr, n, op)
+    else mode == _BC_SCALAR:
+        _k_scalar(pb, ps[0], pr, n, op, swapped)
+    else mode == _BC_SUFFIX:
+        inner := small.numel()
+        _k_suffix(pb, ps, pr, n / inner, inner, op, swapped)
+    else:
+        width := big.shape.get(big.rank() - 1)
+        _k_col(pb, ps, pr, n / width, width, op, swapped)
+    end
+    ret r
+end
+
+func _bin(a &: Tensor, b &: Tensor, op: int): Tensor:
+    if a.is_empty() || b.is_empty(): ret Empty() end
+    if a.numel() >= b.numel(): ret _bin_ord(a, b, op, false) end
+    ret _bin_ord(b, a, op, true)
+end
+
+func _same_into(a &: Tensor, b &: Tensor, out &: Tensor, op: int): bool:
+    if a.same_shape(b) == false: ret false end
+    if a.same_shape(out) == false: ret false end
+    n := a.numel()
+    if n <= 0: ret true end
+    _k_same(a.data.data, b.data.data, out.data.data, n, op)
+    ret true
+end
+
+// Unary maps, one dispatched _map with the op chosen outside the loop.
+func _map(x &: Tensor, op: int): Tensor:
+    r := _raw_like(x)
+    n := x.data.len()
+    if n <= 0: ret r end
+    p := x.data.data
+    pr := r.data.data
+    zero := 0.0 as f32
+    one := 1.0 as f32
+    if op == _U_EXP:
+        repeat n with k: pr[k] = expf(p[k]) end
+    else op == _U_LOG:
+        repeat n with k: pr[k] = logf(p[k]) end
+    else op == _U_TANH:
+        repeat n with k: pr[k] = tanhf(p[k]) end
+    else op == _U_SIGMOID:
+        repeat n with k: pr[k] = one / (one + expf(zero - p[k])) end
+    else op == _U_RELU:
+        repeat n with k:
+            v := p[k]
+            mut o := zero
+            if v > zero: o = v end
+            pr[k] = o
+        end
+    else op == _U_GELU:
+        // The tanh approximation: 0.5 x (1 + tanh(sqrt(2/pi) (x + 0.044715 x^3))).
+        c0 := 0.7978845608028654 as f32
+        c1 := 0.044715 as f32
+        half := 0.5 as f32
+        repeat n with k:
+            v := p[k]
+            inner := c0 * (v + c1 * v * v * v)
+            pr[k] = half * v * (one + tanhf(inner))
+        end
+    else op == _U_SQRT:
+        repeat n with k: pr[k] = sqrtf(p[k]) end
+    else op == _U_ABS:
+        repeat n with k: pr[k] = fabsf(p[k]) end
+    else op == _U_SQUARE:
+        repeat n with k:
+            v := p[k]
+            pr[k] = v * v
+        end
+    else:
+        repeat n with k: pr[k] = zero - p[k] end
+    end
+    ret r
+end
+
+// ---- public API ----
+
+@en "Add"
+@fa "جمع"
+@ar "جمع"
+pub func Add(x &: Tensor, y &: Tensor): Tensor: ret _bin(x, y, 0) end
+
+@en "Sub"
+@fa "تفریق"
+@ar "طرح"
+pub func Sub(x &: Tensor, y &: Tensor): Tensor: ret _bin(x, y, 1) end
+
+// The Hadamard (entrywise) product. Matrix multiplication is MatMul.
+@en "Mul"
+@fa "ضرب درایه‌ای"
+@ar "ضرب عنصري"
+pub func Mul(x &: Tensor, y &: Tensor): Tensor: ret _bin(x, y, 2) end
+
+// Entrywise division. Division by zero yields 0 rather than an infinity,
+// so a single dead entry cannot poison a later reduction with a NaN.
+@en "Div"
+@fa "تقسیم درایه‌ای"
+@ar "قسمة عنصرية"
+pub func Div(x &: Tensor, y &: Tensor): Tensor: ret _bin(x, y, 3) end
+
+@en "AddInto"
+@fa "جمع در"
+@ar "جمع إلى"
+pub func AddInto(x &: Tensor, y &: Tensor, out &: Tensor): bool:
+    ret _same_into(x, y, out, 0)
+end
+
+@en "SubInto"
+@fa "تفریق در"
+@ar "طرح إلى"
+pub func SubInto(x &: Tensor, y &: Tensor, out &: Tensor): bool:
+    ret _same_into(x, y, out, 1)
+end
+
+@en "MulInto"
+@fa "ضرب در"
+@ar "ضرب إلى"
+pub func MulInto(x &: Tensor, y &: Tensor, out &: Tensor): bool:
+    ret _same_into(x, y, out, 2)
+end
+
+@en "DivInto"
+@fa "تقسیم در"
+@ar "قسمة إلى"
+pub func DivInto(x &: Tensor, y &: Tensor, out &: Tensor): bool:
+    ret _same_into(x, y, out, 3)
+end
+
+@en "AddScalar"
+@fa "جمع با عدد"
+@ar "جمع عدد"
+pub func AddScalar(x &: Tensor, s: f64): Tensor:
+    r := _raw_like(x)
+    n := x.data.len()
+    if n > 0: _k_scalar(x.data.data, s as f32, r.data.data, n, 0, false) end
+    ret r
+end
+
+@en "SubScalar"
+@fa "تفریق عدد"
+@ar "طرح عدد"
+pub func SubScalar(x &: Tensor, s: f64): Tensor: ret AddScalar(x, 0.0 - s) end
+
+@en "Scale"
+@fa "مقیاس"
+@ar "ضرب بعدد"
+pub func Scale(x &: Tensor, s: f64): Tensor:
+    r := _raw_like(x)
+    n := x.data.len()
+    if n > 0: _k_scalar(x.data.data, s as f32, r.data.data, n, 2, false) end
+    ret r
+end
+
+@en "DivScalar"
+@fa "تقسیم بر عدد"
+@ar "قسمة على عدد"
+pub func DivScalar(x &: Tensor, s: f64): Tensor:
+    if s == 0.0: ret Zeros(x.shape) end
+    ret Scale(x, 1.0 / s)
+end
+
+@en "Neg"
+@fa "قرینه"
+@ar "سالب"
+pub func Neg(x &: Tensor): Tensor: ret _map(x, _U_NEG) end
+
+@en "AddInPlace"
+@fa "جمع درجا"
+@ar "جمع في المكان"
+pub func AddInPlace(dst &: Tensor, src &: Tensor):
+    if dst.same_shape(src) == false: ret end
+    n := dst.data.len()
+    if n <= 0: ret end
+    p := dst.data.data
+    q := src.data.data
+    repeat n with k: p[k] = p[k] + q[k] end
+end
+
+@en "SubInPlace"
+@fa "تفریق درجا"
+@ar "طرح في المكان"
+pub func SubInPlace(dst &: Tensor, src &: Tensor):
+    if dst.same_shape(src) == false: ret end
+    n := dst.data.len()
+    if n <= 0: ret end
+    p := dst.data.data
+    q := src.data.data
+    repeat n with k: p[k] = p[k] - q[k] end
+end
+
+@en "MulInPlace"
+@fa "ضرب درجا"
+@ar "ضرب في المكان"
+pub func MulInPlace(dst &: Tensor, src &: Tensor):
+    if dst.same_shape(src) == false: ret end
+    n := dst.data.len()
+    if n <= 0: ret end
+    p := dst.data.data
+    q := src.data.data
+    repeat n with k: p[k] = p[k] * q[k] end
+end
+
+@en "ScaleInPlace"
+@fa "مقیاس درجا"
+@ar "ضرب بعدد في المكان"
+pub func ScaleInPlace(dst &: Tensor, s: f64):
+    n := dst.data.len()
+    if n <= 0: ret end
+    v := s as f32
+    p := dst.data.data
+    repeat n with k: p[k] = p[k] * v end
+end
+
+@en "AddScalarInPlace"
+@fa "جمع عدد درجا"
+@ar "جمع عدد في المكان"
+pub func AddScalarInPlace(dst &: Tensor, s: f64):
+    n := dst.data.len()
+    if n <= 0: ret end
+    v := s as f32
+    p := dst.data.data
+    repeat n with k: p[k] = p[k] + v end
+end
+
+// dst += alpha * src, the axpy every optimizer update is made of.
+@en "AddScaled"
+@fa "جمع مقیاس‌دار"
+@ar "جمع مضروب"
+pub func AddScaled(dst &: Tensor, src &: Tensor, alpha: f64):
+    if dst.same_shape(src) == false: ret end
+    n := dst.data.len()
+    if n <= 0: ret end
+    a := alpha as f32
+    p := dst.data.data
+    q := src.data.data
+    repeat n with k: p[k] = p[k] + a * q[k] end
+end
+
+@en "Exp"
+@fa "نمایی"
+@ar "أسي"
+pub func Exp(x &: Tensor): Tensor: ret _map(x, _U_EXP) end
+
+@en "Log"
+@fa "لگاریتم"
+@ar "لوغاريتم"
+pub func Log(x &: Tensor): Tensor: ret _map(x, _U_LOG) end
+
+@en "Tanh"
+@fa "تانژانت هذلولی"
+@ar "ظل زائدي"
+pub func Tanh(x &: Tensor): Tensor: ret _map(x, _U_TANH) end
+
+@en "Sigmoid"
+@fa "سیگموئید"
+@ar "سيني"
+pub func Sigmoid(x &: Tensor): Tensor: ret _map(x, _U_SIGMOID) end
+
+@en "Relu"
+@fa "یکسوساز"
+@ar "مقوم"
+pub func Relu(x &: Tensor): Tensor: ret _map(x, _U_RELU) end
+
+@en "Gelu"
+@fa "گلو"
+@ar "جيلو"
+pub func Gelu(x &: Tensor): Tensor: ret _map(x, _U_GELU) end
+
+@en "Sqrt"
+@fa "ریشه دوم"
+@ar "جذر تربيعي"
+pub func Sqrt(x &: Tensor): Tensor: ret _map(x, _U_SQRT) end
+
+@en "Abs"
+@fa "قدر مطلق"
+@ar "قيمة مطلقة"
+pub func Abs(x &: Tensor): Tensor: ret _map(x, _U_ABS) end
+
+@en "Square"
+@fa "مربع"
+@ar "مربع"
+pub func Square(x &: Tensor): Tensor: ret _map(x, _U_SQUARE) end
+
+@en "PowScalar"
+@fa "توان عددی"
+@ar "قوة عددية"
+pub func PowScalar(x &: Tensor, p: f64): Tensor:
+    r := _raw_like(x)
+    n := x.data.len()
+    if n <= 0: ret r end
+    e := p as f32
+    q := x.data.data
+    pr := r.data.data
+    repeat n with k: pr[k] = powf(q[k], e) end
+    ret r
+end
+
+@en "Clip"
+@fa "برش"
+@ar "قص"
+pub func Clip(x &: Tensor, lo: f64, hi: f64): Tensor:
+    r := _raw_like(x)
+    n := x.data.len()
+    if n <= 0: ret r end
+    a := lo as f32
+    b := hi as f32
+    q := x.data.data
+    pr := r.data.data
+    repeat n with k:
+        mut v := q[k]
+        if v < a: v = a end
+        if v > b: v = b end
+        pr[k] = v
+    end
+    ret r
+end

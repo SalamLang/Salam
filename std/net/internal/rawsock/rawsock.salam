@@ -77,6 +77,7 @@ if SALAM_OS_WINDOWS:
         func getaddrinfo(node: str, service: str, hints: void*, res: void*): int
         func freeaddrinfo(res: void*)
         func gethostbyname(name: str): void*
+        func WSAPoll(fds: void*, nfds: u64, timeout: int): int
     end
 else:
     extern:
@@ -97,6 +98,7 @@ else:
         func getaddrinfo(node: str, service: str, hints: void*, res: void*): int
         func freeaddrinfo(res: void*)
         func gethostbyname(name: str): void*
+        func poll(fds: void*, nfds: u64, timeout: int): int
     end
 end
 
@@ -651,6 +653,50 @@ pub func SetTimeout(sock: Socket, millis: int):
         usecp[0] = ((millis % 1000) * 1000) as i64
         setsockopt(sock.fd as int, 1, 20, tv, 16) // SOL_SOCKET, SO_RCVTIMEO
         setsockopt(sock.fd as int, 1, 21, tv, 16) // SOL_SOCKET, SO_SNDTIMEO
+    end
+end
+
+// WaitReadable - true once a read on `sock` would not block.
+//
+// The one primitive a protocol with a heartbeat cannot do without: a
+// WebSocket client has to notice that nothing arrived for N milliseconds
+// and send a pong of its own, which a blocking recv() can never tell it.
+// SetTimeout would do it by consuming, and that is exactly the problem -
+// a receive that times out halfway through a TLS record leaves the record
+// layer holding a fragment it can never finish. poll() touches no bytes,
+// so it composes with a buffering transport (std/tls) the way a timed
+// recv() does not.
+//
+// A negative `timeout_ms` waits forever. "Readable" includes end-of-stream
+// and a pending error: in both cases the following read returns
+// immediately, which is all the caller is promised.
+@en "WaitReadable"
+@fa "انتظار برای خواندن"
+@ar "انتظار القراءة"
+pub func WaitReadable(sock: Socket, timeout_ms: int): bool:
+    if sock.fd < 0:
+        ret false
+    end
+    if SALAM_OS_WINDOWS:
+        // WSAPOLLFD is { SOCKET fd; SHORT events; SHORT revents; } - a
+        // SOCKET is a 64-bit handle on Win64, so the struct is 16 bytes
+        // with the two shorts at offsets 8 and 10.
+        p := mem.AllocateZeroed(16 as u64)
+        defer mem.Free(p)
+        fdp := p as i64*
+        fdp[0] = sock.fd
+        evp := ((p as i64) + 8) as i16*
+        evp[0] = 256 as i16 // POLLRDNORM
+        ret WSAPoll(p, 1 as u64, timeout_ms) > 0
+    else:
+        // struct pollfd is { int fd; short events; short revents; }.
+        p := mem.AllocateZeroed(8 as u64)
+        defer mem.Free(p)
+        fdp := p as i32*
+        fdp[0] = sock.fd as i32
+        evp := ((p as i64) + 4) as i16*
+        evp[0] = 1 as i16 // POLLIN
+        ret poll(p, 1 as u64, timeout_ms) > 0
     end
 end
 

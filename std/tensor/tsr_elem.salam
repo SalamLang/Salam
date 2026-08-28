@@ -224,7 +224,7 @@ func _bin_ord(big &: Tensor, small &: Tensor, op: int, swapped: bool): Tensor:
     if mode == _BC_SAME:
         // swapped cannot reach here: equal element counts always keep the
         // caller's operand order.
-        _k_same(pb, ps, pr, n, op)
+        _par_zip(pb, ps, pr, n, op)
     else mode == _BC_SCALAR:
         _k_scalar(pb, ps[0], pr, n, op, swapped)
     else mode == _BC_SUFFIX:
@@ -248,17 +248,14 @@ func _same_into(a &: Tensor, b &: Tensor, out &: Tensor, op: int): bool:
     if a.same_shape(out) == false: ret false end
     n := a.numel()
     if n <= 0: ret true end
-    _k_same(a.data.data, b.data.data, out.data.data, n, op)
+    _par_zip(a.data.data, b.data.data, out.data.data, n, op)
     ret true
 end
 
-// Unary maps, one dispatched _map with the op chosen outside the loop.
-func _map(x &: Tensor, op: int): Tensor:
-    r := _raw_like(x)
-    n := x.data.len()
-    if n <= 0: ret r end
-    p := x.data.data
-    pr := r.data.data
+// The unary arms over a flat range, the op chosen once outside the loop.
+// _map runs this directly for small tensors; the parallel driver in
+// tsr_par runs it per chunk for large ones.
+func _u_range(p: f32*, pr: f32*, n: int, op: int):
     zero := 0.0 as f32
     one := 1.0 as f32
     if op == _U_EXP:
@@ -298,6 +295,13 @@ func _map(x &: Tensor, op: int): Tensor:
     else:
         repeat n with k: pr[k] = zero - p[k] end
     end
+end
+
+func _map(x &: Tensor, op: int): Tensor:
+    r := _raw_like(x)
+    n := x.data.len()
+    if n <= 0: ret r end
+    _par_map(x.data.data, r.data.data, n, op)
     ret r
 end
 

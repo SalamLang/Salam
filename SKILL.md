@@ -724,7 +724,36 @@ Ctx_status Ctx_set_header Ctx_redirect`. Also a canvas/DOM JS-interop surface.
   `MountSpec`/`ServeSpec`/`SpecFromFile` render an OpenAPI document from
   anywhere; `Page(title, spec_url)` is the page itself,
   self-contained with no CDN - an empty `spec_url` means "next to this page".
-- **`tcp`** (`Bind Accept Read Write Close Ok ConnOk`), **`socket`** (WebSocket),
+- **`net.websocket`** (RFC 6455 client and server, `ws://` and `wss://`):
+  `Listen Accept AcceptWSS Dial DialWith DialWSS DialWSSWith
+DialWSSUnverified`, `SendText SendBinary SendBinaryBytes Ping Close Stop`,
+  `Receive` (blocks) / **`Poll(c, ms)`** (returns a `TIMEOUT` message
+  instead, which is what a protocol with its own heartbeat needs), plus a
+  `Hub` for rooms and broadcast. A binary `Message` carries `.data`/`.len`
+  next to `.text`, because a `str` stops at its first NUL.
+- **`net.socketio`** (`import net.socketio`): a Socket.IO **client**, wire-
+  compatible with socket.io v4 servers - Engine.IO v4 underneath (both
+  transports, HTTP long-polling and WebSocket, and the upgrade between
+  them), Socket.IO v5 on top. `Dial(url)` / `DialWith(url, opts)` /
+  `NewManager` + `Of(m, "/nsp")` for several namespaces on one connection;
+  `Emit EmitStr EmitInt EmitFloat EmitBool EmitJSON EmitBytes EmitArgs
+EmitVolatile`; acknowledgements both ways - **`EmitAck`** (blocks and
+  returns the answer, the shape `await socket.emitWithAck` has in
+  JavaScript), `EmitWithAck` (callback), `Reply`/`ReplyStr`/`ReplyJSON` for
+  an event the server wants acknowledged; `On Once Off OnAny OffAny` for
+  handlers, or **`Next(c, ms)`** to read events in a loop - usually the
+  better fit, because a Salam lambda captures by value and cannot write back
+  to the function that registered it. Arguments are built with
+  `NewArgs`/`AddStr AddInt AddFloat AddBool AddNull AddJSON AddValue
+AddBytes` and read with `ArgStr ArgInt ArgFloat ArgBool ArgJSON ArgValue
+ArgBytes`. `Options` covers `path query auth headers transports
+reconnection* timeout auto_connect event_queue insecure`. Nothing runs in
+  the background: the connection only advances inside `Pump`/`Next`/`Run`/
+  `EmitAck`, and a program that stops calling them stops answering the
+  server's heartbeat. Reconnection (exponential backoff with jitter),
+  offline buffering of emits, binary attachments and connection state
+  recovery are all handled.
+- **`tcp`** (`Bind Accept Read Write Close Ok ConnOk`),
   **`ssl`**, **`net`**, **`dom`**/**`console`** (browser/JS targets),
   **`webview`** (desktop windows; `-DSALAM_WEBVIEW_CEF` renders with a bundled
   Chromium instead of the OS webview - see `std/webview/native/BUILD.md`).

@@ -1,0 +1,391 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package socketio
+
+import net.websocket
+import mem
+
+// What a connection is made of, and why the pieces are shaped this way.
+//
+// A Manager owns one transport to one server. A Client is one NAMESPACE on
+// that transport - "/" for most programs, "/admin" and "/chat" alongside it
+// for the ones that want separate channels without separate sockets. Both
+// are handles: a small copyable value holding a pointer to state on the
+// heap.
+//
+// That indirection is not decoration. A Salam lambda captures the variables
+// around it BY VALUE, so a handler written as
+//
+//     socketio.On(c, "chat", (e: Event): socketio.Emit(...) end)
+//
+// would, with a plain value struct, be emitting into a dead copy of the
+// client as it stood when the handler was registered. Because a handle
+// carries a pointer, every copy of it - the one in the lambda, the one on
+// the caller's stack, the one inside the event being dispatched - refers to
+// the same connection. It is also what lets an Event carry the client that
+// delivered it, so a handler can acknowledge it without reaching for a
+// global.
+
+// --------------------------------------------------------------- constants
+
+@en "TransportAuto"
+@fa "حمل‌ونقل خودکار"
+@ar "نقل تلقائی"
+// Handshake over HTTP long-polling, then upgrade to WebSocket - what the
+// JavaScript client does, and what works through the most middleboxes.
+pub const TRANSPORT_AUTO := 0
+
+@en "TransportWebSocket"
+@fa "حمل‌ونقل وب‌سوکت"
+@ar "نقل وب‌سوکت"
+// Straight to WebSocket. One round trip instead of three, and the right
+// choice for a program talking to a server it knows - but a proxy that
+// blocks upgrades will fail it outright rather than degrading.
+pub const TRANSPORT_WEBSOCKET := 1
+
+@en "TransportPolling"
+@fa "حمل‌ونقل نظرخواهی"
+@ar "نقل استقصاء"
+// HTTP long-polling, never upgrading.
+pub const TRANSPORT_POLLING := 2
+
+@en "EventNone"
+@fa "بدون رویداد"
+@ar "بلا حدث"
+pub const EV_NONE := 0
+
+@en "EventMessage"
+@fa "رویداد پیام"
+@ar "حدث رسالة"
+pub const EV_EVENT := 1
+
+@en "EventConnect"
+@fa "رویداد اتصال"
+@ar "حدث اتصال"
+pub const EV_CONNECT := 2
+
+@en "EventDisconnect"
+@fa "رویداد قطع"
+@ar "حدث قطع"
+pub const EV_DISCONNECT := 3
+
+@en "EventConnectError"
+@fa "رویداد خطای اتصال"
+@ar "حدث خطأ الاتصال"
+pub const EV_CONNECT_ERROR := 4
+
+@en "EventError"
+@fa "رویداد خطا"
+@ar "حدث خطأ"
+pub const EV_ERROR := 5
+
+@en "EventReconnect"
+@fa "رویداد اتصال دوباره"
+@ar "حدث إعادة الاتصال"
+pub const EV_RECONNECT := 6
+
+@en "EventReconnectAttempt"
+@fa "رویداد تلاش دوباره"
+@ar "حدث محاولة إعادة"
+pub const EV_RECONNECT_ATTEMPT := 7
+
+@en "EventReconnectError"
+@fa "رویداد خطای دوباره"
+@ar "حدث خطأ إعادة"
+pub const EV_RECONNECT_ERROR := 8
+
+@en "EventReconnectFailed"
+@fa "رویداد شکست دوباره"
+@ar "حدث فشل إعادة"
+pub const EV_RECONNECT_FAILED := 9
+
+@en "EventPing"
+@fa "رویداد پینگ"
+@ar "حدث بینغ"
+pub const EV_PING := 10
+
+@en "EventTimeout"
+@fa "رویداد مهلت"
+@ar "حدث مهلة"
+// Next() ran out of time with nothing to hand back. Not a failure.
+pub const EV_TIMEOUT := 11
+
+// Pump outcomes.
+@en "PumpOk"
+@fa "پمپ موفق"
+@ar "ضخ ناجح"
+pub const PUMP_OK := 0
+
+@en "PumpTimeout"
+@fa "پمپ مهلت"
+@ar "ضخ مهلة"
+pub const PUMP_TIMEOUT := 1
+
+@en "PumpClosed"
+@fa "پمپ بسته"
+@ar "ضخ مغلق"
+pub const PUMP_CLOSED := 2
+
+// Engine states.
+const ST_CLOSED := 0
+const ST_OPEN := 1
+const ST_WAITING := 2
+
+// ------------------------------------------------------------------- types
+
+// Options - everything about a connection that is not in its URL.
+@en "Options"
+@fa "گزینه‌ها"
+@ar "خیارات"
+pub struct Options:
+    // Where the Engine.IO endpoint is mounted on the server. Must match the
+    // server's own `path`; a mismatch is a 404 on the handshake and nothing
+    // more descriptive.
+    pub path: str = "/socket.io"
+    // Extra query parameters, "a=1&b=2", sent on every request of the
+    // session. Read by server middleware, and the only channel a browser
+    // has for a credential - which is why so many servers expect one here.
+    pub query: str = ""
+    // The CONNECT payload, as a raw JSON object: `{"token":"abc"}`. This is
+    // socket.io's `auth`, checked once per namespace at connect time, and
+    // the right place for a credential when the client is not a browser.
+    pub auth: str = ""
+    // Extra HTTP headers, as "Name: value\r\n" lines, on both the polling
+    // requests and the WebSocket upgrade.
+    pub headers: str = ""
+    pub transports: int = TRANSPORT_AUTO
+    pub reconnection: bool = true
+    // 0 means keep trying forever.
+    pub reconnection_attempts: int = 0
+    pub reconnection_delay: int = 1000
+    pub reconnection_delay_max: int = 5000
+    // Jitter, as a percentage of the delay: the delay is spread over
+    // [d, d + d*factor/100] so a server coming back up is not hit by every
+    // client it dropped at the same instant.
+    pub randomization_factor: int = 50
+    // How long a single connection attempt may take, in milliseconds.
+    pub timeout: int = 20000
+    // Accept a TLS certificate without verifying it. For a development
+    // server with a self-signed certificate, and nothing else: the traffic
+    // stays encrypted but nothing checks who is on the other end.
+    //
+    // Only the WebSocket transport can honour it - the HTTP client the
+    // polling transport uses always verifies - so an https endpoint opened
+    // this way connects over WebSocket directly, skipping the polling
+    // handshake, whatever `transports` says.
+    pub insecure: bool = false
+    // Whether Dial connects before it returns. Turn it off to register
+    // handlers first - an event the server sends the instant it accepts the
+    // connection would otherwise arrive before there is anything to catch
+    // it - and call Connect yourself.
+    pub auto_connect: bool = true
+    // How many events to keep for Next() to pick up, per namespace. Once
+    // full the oldest is dropped, so a program driven only by handlers
+    // cannot grow without bound. 0 turns the queue off entirely, which is
+    // right for a handler-only program and wrong for anything using Next.
+    pub event_queue: int = 256
+end
+
+// Client - one namespace on one connection. A handle; copy it freely.
+@en "Client"
+@fa "کارخواه"
+@ar "عمیل"
+pub struct Client:
+    // Opaque. Nothing outside this package should read it.
+    pub p: void* = null
+end
+
+// Manager - the connection itself, shared by every Client on it.
+@en "Manager"
+@fa "مدیر"
+@ar "مدیر"
+pub struct Manager:
+    // Opaque. Nothing outside this package should read it.
+    pub p: void* = null
+end
+
+// Event - something that happened, on its way to a handler.
+@en "Event"
+@fa "رویداد"
+@ar "حدث"
+pub struct Event:
+    pub kind: int = EV_NONE
+    // The event name, for EV_EVENT. Empty for everything else.
+    pub name: str = ""
+    pub nsp: str = "/"
+    // The arguments as a JSON array, the name excluded. Read them with
+    // ArgStr/ArgInt/ArgJSON rather than by hand.
+    pub data: str = "[]"
+    // Set when the server wants an acknowledgement. Answer it with Ack();
+    // -1 when it does not.
+    pub ack_id: int = 0 - 1
+    // Present on EV_CONNECT_ERROR, EV_ERROR and EV_DISCONNECT: why.
+    pub message: str = ""
+    // Binary arguments, in placeholder order. Valid while the handler runs;
+    // an event taken from Next() owns them until EventFree.
+    pub bins: Vector<Bytes> = Vector {}
+    // The client this arrived on, so a handler can answer without a global.
+    pub client: Client = Client {}
+end
+
+// Ack - the server's answer to an emit that asked for one.
+@en "Ack"
+@fa "تایید"
+@ar "إقرار"
+pub struct Ack:
+    // false when the wait ran out or the connection ended first. `data` is
+    // empty in that case, and the acknowledgement will never arrive: the
+    // server may still have acted on the event.
+    pub ok: bool = false
+    pub id: int = 0 - 1
+    pub data: str = "[]"
+    pub bins: Vector<Bytes> = Vector {}
+end
+
+// Handler - one registration.
+struct Handler:
+    pub name: str = ""
+    pub once: bool = false
+    pub alive: bool = true
+    pub cb: func (Event) = (e: Event): end
+end
+
+// AckWaiter - an outstanding acknowledgement.
+struct AckWaiter:
+    pub id: int = 0 - 1
+    pub deadline: i64 = 0
+    pub has_deadline: bool = false
+    pub alive: bool = true
+    // A waiter registered by EmitWithAck runs a callback; one registered by
+    // the blocking EmitAck has nowhere to call to (a Salam lambda captures
+    // by value, so it could not write the answer back to the caller anyway)
+    // and leaves the Ack in `results` for the caller to pick up instead.
+    pub has_cb: bool = false
+    pub cb: func (Ack) = (a: Ack): end
+end
+
+// Outgoing - a packet waiting for a connection to exist.
+//
+// An emit on a socket that is not connected is not an error: socket.io keeps
+// it and sends it on connect, which is what makes a reconnect invisible to
+// the code doing the emitting. `volatile` is the opt-out.
+struct Outgoing:
+    pub text: str = ""
+    pub bins: Vector<Bytes> = Vector {}
+end
+
+// A namespace's state. `_Sock` and `_Mgr` are allocated once and referred to
+// by pointer for the lifetime of the connection.
+struct SockState:
+    pub mgr: void* = null
+    pub nsp: str = "/"
+    // The server-assigned id of this namespace's socket, empty until
+    // connected. Not the Engine.IO session id.
+    pub id: str = ""
+    pub connected: bool = false
+    // Whether the user wants this namespace connected. A namespace that was
+    // explicitly disconnected is not reconnected behind their back.
+    pub active: bool = false
+    // Connection state recovery: the server's private session id, and the
+    // offset of the last event seen. Sent back on reconnect so the server
+    // can replay what was missed.
+    pub pid: str = ""
+    pub last_offset: str = ""
+    pub recovered: bool = false
+    pub auth: str = ""
+    pub ack_seq: int = 0
+    pub handlers: Vector<Handler> = Vector {}
+    pub any_handlers: Vector<Handler> = Vector {}
+    pub waiters: Vector<AckWaiter> = Vector {}
+    // Answers to blocking EmitAck calls, waiting to be picked up by id.
+    pub results: Vector<Ack> = Vector {}
+    pub outbuf: Vector<Outgoing> = Vector {}
+    pub inbox: Vector<Event> = Vector {}
+    pub queueing: bool = true
+    pub max_queue: int = 256
+end
+
+struct MgrState:
+    pub ep: Endpoint = Endpoint {}
+    pub opts: Options = Options {}
+    pub socks: Vector<Client> = Vector {}
+    pub state: int = ST_CLOSED
+    // The active transport, one of TRANSPORT_WEBSOCKET / TRANSPORT_POLLING.
+    pub transport: int = TRANSPORT_POLLING
+    pub ws: websocket.Conn = websocket.Conn {}
+    pub sid: str = ""
+    pub ping_interval: int = 25000
+    pub ping_timeout: int = 20000
+    pub max_payload: int = 1000000
+    pub can_upgrade: bool = false
+    // When the last packet of any kind arrived. The heartbeat deadline is
+    // measured from here: Engine.IO v4 has the SERVER send the pings, so
+    // silence past ping_interval + ping_timeout means the connection is
+    // gone whatever the socket still claims.
+    pub last_rx: i64 = 0
+    pub cookies: HashMap<str, str> = HashMap {} as HashMap<str, str>
+    pub attempts: int = 0
+    pub retry_at: i64 = 0
+    pub last_error: str = ""
+    // Packets waiting to go out over the polling transport, which can only
+    // write when it is not in the middle of a long-poll.
+    pub pollout: Vector<str> = Vector {}
+    // Reassembly of a packet whose binary attachments are still arriving.
+    pub recon: bool = false
+    pub recon_pkt: Packet = Packet {}
+    pub recon_bins: Vector<Bytes> = Vector {}
+end
+
+// ------------------------------------------------------------------ access
+
+func _sock(c: Client): SockState*:
+    ret c.p as SockState*
+end
+
+func _mgr(m: Manager): MgrState*:
+    ret m.p as MgrState*
+end
+
+func _mgr_of(c: Client): MgrState*:
+    ret _sock(c)[0].mgr as MgrState*
+end
+
+func _new_sock(mgr: void*, nsp: str): Client:
+    raw := mem.AllocateZeroed(sizeof(SockState) as u64)
+    if raw == null:
+        ret Client {}
+    end
+    mut sp := raw as SockState*
+    sp[0] = SockState { mgr = mgr, nsp = nsp }
+    ret Client { p = raw }
+end
+
+func _new_mgr(ep: Endpoint, opts: Options): Manager:
+    raw := mem.AllocateZeroed(sizeof(MgrState) as u64)
+    if raw == null:
+        ret Manager {}
+    end
+    mut mp := raw as MgrState*
+    mp[0] = MgrState { ep = ep, opts = opts }
+    ret Manager { p = raw }
+end
+
+func _free_bins(v &: Vector<Bytes>):
+    repeat v.len() with i:
+        mut b := v.get(i)
+        BytesFree(b)
+    end
+    v.free()
+end

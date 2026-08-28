@@ -1,0 +1,180 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package socketio
+
+import str
+
+// Endpoint - a Socket.IO server URL, split into the parts a connection needs.
+//
+// Socket.IO reads a URL differently from every other client in this stdlib,
+// and getting that wrong is the usual reason a first connection attempt
+// returns 404 rather than a session. In `http://example.com/chat`:
+//
+//   - `/chat` is NOT a resource. It is the NAMESPACE - an application-level
+//     channel multiplexed over the one connection, and never part of any
+//     HTTP request.
+//   - The HTTP path every request actually goes to is a separate setting,
+//     `Options.path`, which defaults to "/socket.io" and has to match what
+//     the server was mounted at.
+//
+// So one origin can serve many independent namespaces over a single socket,
+// and two servers can share an origin by being mounted at different paths.
+pub struct Endpoint:
+    pub secure: bool = false
+    pub host: str = "localhost"
+    pub port: int = 80
+    // Where the Engine.IO endpoint is mounted, without a trailing slash.
+    // ParseURL always leaves the default here; the manager overwrites it
+    // from Options.path, because it is not part of the URL.
+    pub path: str = "/socket.io"
+    pub namespace: str = "/"
+    // The query string as written in the URL, without the "?". Options.query
+    // is appended to it.
+    pub query: str = ""
+    pub ok: bool = false
+end
+
+func _all_digits(s: str): bool:
+    if s.len() == 0:
+        ret false
+    end
+    mut ok := true
+    repeat s.len() with i:
+        c := char_code(s.substr(i, 1))
+        if c < 48 || c > 57:
+            ok = false
+        end
+    end
+    ret ok
+end
+
+// ParseURL - "https://chat.example.com:8443/rooms?token=x" into its parts.
+//
+// Accepts http/https/ws/wss, and no scheme at all (read as http, so
+// "localhost:3000" works). An IPv6 literal must be bracketed
+// ("http://[::1]:3000") or the colons cannot be told from a port separator.
+// A URL it cannot make sense of comes back with `ok = false` rather than a
+// half-filled Endpoint.
+@en "ParseURL"
+@fa "تجزیه نشانی"
+@ar "تحلیل العنوان"
+pub func ParseURL(raw: str): Endpoint:
+    mut e := Endpoint {}
+    s := str.Trim(raw)
+    if s.len() == 0:
+        ret e
+    end
+    mut rest := s
+    mut scheme := ""
+    si := str.Find(rest, "://")
+    if si >= 0:
+        scheme = str.Lower(rest.substr(0, si))
+        rest = rest.substr(si + 3, rest.len() - si - 3)
+    end
+    if scheme == "https" || scheme == "wss":
+        e.secure = true
+    else scheme == "http" || scheme == "ws" || scheme == "":
+        e.secure = false
+    else:
+        ret e
+    end
+    qi := str.Find(rest, "?")
+    if qi >= 0:
+        e.query = rest.substr(qi + 1, rest.len() - qi - 1)
+        rest = rest.substr(0, qi)
+    end
+    // A '#' fragment is meaningless to a server; drop it rather than letting
+    // it end up inside the namespace.
+    hi := str.Find(rest, "#")
+    if hi >= 0:
+        rest = rest.substr(0, hi)
+    end
+    mut authority := rest
+    mut ns := "/"
+    pi := str.Find(rest, "/")
+    if pi >= 0:
+        authority = rest.substr(0, pi)
+        ns = rest.substr(pi, rest.len() - pi)
+    end
+    ui := str.LastIndex(authority, "@")
+    if ui >= 0:
+        authority = authority.substr(ui + 1, authority.len() - ui - 1)
+    end
+    mut host := authority
+    mut port := 0
+    if str.StartsWith(authority, "["):
+        rb := str.Find(authority, "]")
+        if rb < 0:
+            ret e
+        end
+        host = authority.substr(1, rb - 1)
+        after := authority.substr(rb + 1, authority.len() - rb - 1)
+        if str.StartsWith(after, ":"):
+            tail := after.substr(1, after.len() - 1)
+            if !_all_digits(tail):
+                ret e
+            end
+            port = tail.to_int()
+        end
+    else:
+        ci := str.LastIndex(authority, ":")
+        if ci >= 0:
+            tail := authority.substr(ci + 1, authority.len() - ci - 1)
+            if !_all_digits(tail):
+                ret e
+            end
+            host = authority.substr(0, ci)
+            port = tail.to_int()
+        end
+    end
+    if host.len() == 0:
+        ret e
+    end
+    if port <= 0:
+        port = 80
+        if e.secure:
+            port = 443
+        end
+    end
+    // "/chat/" and "/chat" are the same namespace; "/" stays "/".
+    until ns.len() > 1 && str.EndsWith(ns, "/"):
+        ns = ns.substr(0, ns.len() - 1)
+    end
+    if ns.len() == 0:
+        ns = "/"
+    end
+    e.host = host
+    e.port = port
+    e.namespace = ns
+    e.ok = true
+    ret e
+end
+
+// Origin - the scheme://host:port an HTTP request to this endpoint goes to,
+// with an IPv6 host re-bracketed.
+@en "Origin"
+@fa "مبدا"
+@ar "الأصل"
+pub func Origin(e: Endpoint): str:
+    mut sch := "http"
+    if e.secure:
+        sch = "https"
+    end
+    mut h := e.host
+    if str.Contains(h, ":"):
+        h = "[" + h + "]"
+    end
+    ret sch + "://" + h + ":" + e.port
+end

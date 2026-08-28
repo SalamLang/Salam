@@ -1,0 +1,173 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package data
+
+import math
+import matrix
+
+// Seeded synthetic datasets, the testing backbone of the whole ML family.
+//
+// Every generator here takes an explicit seed, builds a matrix.Rng from
+// it, and produces bit-identical output on every machine. That is what
+// lets a KMeans demo assert "agreement with the true labels >= 0.95" in a
+// checked-in .out file instead of shipping a dataset fixture: the dataset
+// is a function of its seed.
+//
+// Shapes follow the family convention: features come back as an n x p
+// Matrix (ownership transferred to the caller), labels and regression
+// targets land in the `y` out-parameter as an n x 1 Matrix, class labels
+// stored as whole-number f64 (0.0, 1.0, ...). The out-parameter is
+// overwritten, not freed - hand in a fresh `matrix.Matrix {}`.
+//
+// Class layout is round-robin (sample i belongs to class i % k), so every
+// prefix of a dataset is roughly balanced and a caller can subsample rows
+// without skewing the classes.
+
+// Cluster centers drawn uniformly from [-10, 10]^p. Kept private and
+// deterministic: the same seed always places the same centers, and the
+// per-sample noise comes from the same stream after them.
+func _centers(g &: matrix.Rng, k: int, p: int): matrix.Matrix:
+    mut c := matrix.Zeros(k, p)
+    repeat k * p with i:
+        c.a.set(i, 0.0 - 10.0 + 20.0 * g.next_float())
+    end
+    ret c
+end
+
+// ---- public API ----
+
+// `n` samples around `centers` Gaussian blobs in `p` dimensions, standard
+// deviation `spread` per axis. Labels 0..centers-1, round-robin.
+@en "MakeBlobs"
+@fa "ساخت خوشه‌ها"
+@ar "صنع كتل"
+pub func MakeBlobs(n: int, centers: int, p: int, spread: f64, seed: i64, y &: matrix.Matrix): matrix.Matrix:
+    if n <= 0 || centers <= 0 || p <= 0: ret matrix.Matrix {} end
+    mut g := matrix.NewRng(seed)
+    mut c := _centers(g, centers, p)
+    defer matrix.Free(c)
+    mut x := matrix.Zeros(n, p)
+    y = matrix.Zeros(n, 1)
+    repeat n with i:
+        cls := i % centers
+        y.set(i, 0, cls as f64)
+        repeat p with j:
+            x.set(i, j, c.at(cls, j) + spread * g.next_normal())
+        end
+    end
+    ret x
+end
+
+// The two interleaved half-moons, the classic not-linearly-separable
+// 2-class picture. Always 2 features.
+@en "MakeMoons"
+@fa "ساخت هلال‌ها"
+@ar "صنع أهلة"
+pub func MakeMoons(n: int, noise: f64, seed: i64, y &: matrix.Matrix): matrix.Matrix:
+    if n <= 0: ret matrix.Matrix {} end
+    mut g := matrix.NewRng(seed)
+    mut x := matrix.Zeros(n, 2)
+    y = matrix.Zeros(n, 1)
+    repeat n with i:
+        cls := i % 2
+        t := math.PI * g.next_float()
+        mut px := math.Cos(t)
+        mut py := math.Sin(t)
+        if cls == 1:
+            px = 1.0 - px
+            py = 0.5 - py
+        end
+        x.set(i, 0, px + noise * g.next_normal())
+        x.set(i, 1, py + noise * g.next_normal())
+        y.set(i, 0, cls as f64)
+    end
+    ret x
+end
+
+// Two concentric circles, the inner one scaled by `factor`. Always 2
+// features; class 0 is the outer ring.
+@en "MakeCircles"
+@fa "ساخت دایره‌ها"
+@ar "صنع دوائر"
+pub func MakeCircles(n: int, noise: f64, factor: f64, seed: i64, y &: matrix.Matrix): matrix.Matrix:
+    if n <= 0: ret matrix.Matrix {} end
+    mut g := matrix.NewRng(seed)
+    mut x := matrix.Zeros(n, 2)
+    y = matrix.Zeros(n, 1)
+    repeat n with i:
+        cls := i % 2
+        t := 2.0 * math.PI * g.next_float()
+        mut r := 1.0
+        if cls == 1: r = factor end
+        x.set(i, 0, r * math.Cos(t) + noise * g.next_normal())
+        x.set(i, 1, r * math.Sin(t) + noise * g.next_normal())
+        y.set(i, 0, cls as f64)
+    end
+    ret x
+end
+
+// A linear regression problem with known ground truth: features are
+// standard normal, y = X w + noise * N(0,1), and the drawn coefficients
+// come back through `true_coef` (p x 1) so a fitter can be checked against
+// them, not just against its own predictions.
+@en "MakeRegression"
+@fa "ساخت رگرسیون"
+@ar "صنع انحدار"
+pub func MakeRegression(n: int, p: int, noise: f64, seed: i64, y &: matrix.Matrix, true_coef &: matrix.Matrix): matrix.Matrix:
+    if n <= 0 || p <= 0: ret matrix.Matrix {} end
+    mut g := matrix.NewRng(seed)
+    true_coef = matrix.Zeros(p, 1)
+    repeat p with j:
+        true_coef.set(j, 0, 0.0 - 2.0 + 4.0 * g.next_float())
+    end
+    mut x := matrix.Zeros(n, p)
+    y = matrix.Zeros(n, 1)
+    repeat n with i:
+        mut acc := 0.0
+        repeat p with j:
+            v := g.next_normal()
+            x.set(i, j, v)
+            acc += v * true_coef.at(j, 0)
+        end
+        y.set(i, 0, acc + noise * g.next_normal())
+    end
+    ret x
+end
+
+// Gaussian class clouds in `p` dimensions with unit spread and centers
+// pushed `sep` apart: MakeBlobs with the knob every classification demo
+// actually wants, how hard the problem is.
+@en "MakeClassification"
+@fa "ساخت دسته‌بندی"
+@ar "صنع تصنيف"
+pub func MakeClassification(n: int, p: int, classes: int, sep: f64, seed: i64, y &: matrix.Matrix): matrix.Matrix:
+    if n <= 0 || p <= 0 || classes <= 0: ret matrix.Matrix {} end
+    mut g := matrix.NewRng(seed)
+    mut c := matrix.Zeros(classes, p)
+    repeat classes * p with i:
+        c.a.set(i, sep * (0.0 - 1.0 + 2.0 * g.next_float()))
+    end
+    mut x := matrix.Zeros(n, p)
+    y = matrix.Zeros(n, 1)
+    repeat n with i:
+        cls := i % classes
+        y.set(i, 0, cls as f64)
+        repeat p with j:
+            x.set(i, j, c.at(cls, j) + g.next_normal())
+        end
+    end
+    matrix.Free(c)
+    ret x
+end

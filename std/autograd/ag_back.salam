@@ -258,6 +258,66 @@ func _bk_softmax(tp &: Tape, n &: Node, dc &: tensor.Tensor, logform: bool):
     end
 end
 
+// d logits = (softmax(logits) - onehot(targets)) * dLoss / N, computed
+// row by row without materializing either the softmax or the one-hot.
+func _bk_celoss(tp &: Tape, n &: Node, dc &: tensor.Tensor):
+    if tp.needs.get(n.a) == false: ret end
+    vl := Value(tp, n.a)
+    idx := Value(tp, n.aux)
+    g := _grad_of(tp, n.a)
+    width := vl.shape.get(vl.rank() - 1)
+    rows := vl.numel() / width
+    p := vl.data.data
+    pi := idx.data.data
+    pg := g.data.data
+    scale := (dc.at(0) / (rows as f64)) as f32
+    one := 1.0 as f32
+    repeat rows with r:
+        base := r * width
+        mut m := p[base]
+        repeat width with k:
+            v := p[base + k]
+            if v > m: m = v end
+        end
+        mut s := 0.0 as f32
+        repeat width with k: s += expf(p[base + k] - m) end
+        inv := one / s
+        t := pi[r] as int
+        repeat width with k:
+            mut sm := expf(p[base + k] - m) * inv
+            if k == t: sm = sm - one end
+            pg[base + k] = pg[base + k] + scale * sm
+        end
+    end
+end
+
+// d logits = (sigmoid(x) - y) * dLoss / N; d target = -x * dLoss / N.
+func _bk_bcewl(tp &: Tape, n &: Node, dc &: tensor.Tensor):
+    vl := Value(tp, n.a)
+    vt := Value(tp, n.b)
+    cnt := vl.numel()
+    scale := (dc.at(0) / (cnt as f64)) as f32
+    one := 1.0 as f32
+    zero := 0.0 as f32
+    p := vl.data.data
+    q := vt.data.data
+    if tp.needs.get(n.a):
+        g := _grad_of(tp, n.a)
+        pg := g.data.data
+        repeat cnt with k:
+            sg := one / (one + expf(zero - p[k]))
+            pg[k] = pg[k] + scale * (sg - q[k])
+        end
+    end
+    if tp.needs.get(n.b):
+        g := _grad_of(tp, n.b)
+        pg := g.data.data
+        repeat cnt with k:
+            pg[k] = pg[k] - scale * p[k]
+        end
+    end
+end
+
 func _bk_transpose2d(tp &: Tape, n &: Node, dc &: tensor.Tensor):
     if tp.needs.get(n.a) == false: ret end
     mut t := tensor.Transpose2D(dc)
@@ -311,6 +371,10 @@ func _backprop_node(tp &: Tape, n: Node):
         end
     else n.op == _OP_TRANSPOSE2D:
         _bk_transpose2d(tp, n, dc)
+    else n.op == _OP_CELOSS:
+        _bk_celoss(tp, n, dc)
+    else n.op == _OP_BCEWL:
+        _bk_bcewl(tp, n, dc)
     else:
         // Unary ops share one kernel; pin/pout both come off the tape.
         if tp.needs.get(n.a):

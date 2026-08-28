@@ -24,6 +24,7 @@ import rand
 import encoding
 import crypto
 import tls
+import time
 
 // Migrated from std/socket (renamed - it implemented WebSocket, not a raw
 // socket, which the old name made every caller's `import socket` read
@@ -74,6 +75,16 @@ pub const PING := 9
 @ar "بونغ"
 pub const PONG := 10
 
+// Not an RFC 6455 opcode - opcodes are four bits, so no frame can ever
+// carry this. Poll() returns it when the wait ran out with no message,
+// which is a different outcome from NONE (the connection ended) and has
+// to be distinguishable: a client with a heartbeat treats one as "nothing
+// yet, carry on" and the other as "reconnect".
+@en "TIMEOUT"
+@fa "مهلت"
+@ar "مهلة"
+pub const TIMEOUT := 100
+
 // Slot table for wss:// connections' underlying std/tls state. Conn cannot
 // embed a tls.Conn field directly - a struct field whose default value
 // references another package's type hits a codegen bug (confirmed via an
@@ -120,6 +131,23 @@ pub struct Conn:
     // indexes _tls_slots when secure is true.
     pub secure: bool = false
     pub tls_idx: int = 0 - 1
+    // The handshake headers as the peer sent them - the response for a
+    // client, the request for a server. A caller that needs a Set-Cookie
+    // off the upgrade, or the subprotocol the server settled on, reads it
+    // from here; nothing else in this file uses it.
+    pub hdr: str = ""
+    // Partial-message state. A message may arrive as several frames, and
+    // Poll() can return between any two of them, so what has been read so
+    // far cannot live in a local the way Receive()'s accumulator used to.
+    pub acc: str = ""
+    pub acc_kind: int = 0
+    pub fragmented: bool = false
+    // The bytes of the binary message being assembled. Owned by the Conn
+    // and reused frame to frame, so a caller never frees it: it stays valid
+    // until the next Poll/Receive on the same connection.
+    pub bin: void* = null
+    pub binlen: int = 0
+    pub bincap: int = 0
 end
 
 @en "Message"
@@ -128,6 +156,13 @@ end
 pub struct Message:
     pub kind: int = 0
     pub text: str = ""
+    // A binary message, unabridged. `text` still holds the same bytes for
+    // the callers that have always read it there, but a `str` stops at the
+    // first NUL, so anything that is really binary must be read from here.
+    // The buffer belongs to the Conn - do not free it, and copy it out
+    // before the next Poll/Receive if it has to outlive the call.
+    pub data: void* = null
+    pub len: int = 0
 end
 
 // Broadcast/rooms registry. `HashMap<str, RoomMembers>` rather than
@@ -202,20 +237,20 @@ func _bput(p: void*, i: int, v: int):
     bp[i] = v as i8
 end
 
-// _copy_in - the payload, into the frame buffer at `off`, in one move.
+// _copy_raw - the payload, into the frame buffer at `off`, in one move.
 //
 // This used to be a byte-at-a-time loop calling substr(i, 1) per byte, which
 // allocated a one-byte string for every byte of every frame sent. On a payload
 // of any size that dominated the cost of sending: a couple of kilobytes took
 // tens of milliseconds. str.len() and substr() are both byte-oriented, so a
-// straight memcpy of len() bytes is the same bytes, and is what the loop was
-// spelling out the slow way.
-func _copy_in(buf: void*, off: int, payload: str):
-    n := payload.len()
-    if n == 0:
+// straight memcpy of the same bytes is what the loop was spelling out the slow
+// way. It takes a pointer rather than a `str` so that a binary payload
+// containing a NUL byte is copied whole instead of stopping there.
+func _copy_raw(buf: void*, off: int, payload: void*, n: int):
+    if n <= 0:
         ret
     end
-    mem.Copy(((buf as i64) + (off as i64)) as void*, payload as void*, n as u64)
+    mem.Copy(((buf as i64) + (off as i64)) as void*, payload, n as u64)
 end
 
 func _byte_at(s: str, i: int): int:
@@ -284,6 +319,129 @@ func _fill(c &: Conn): int:
     ret n
 end
 
+// _readable - true once the next _fill would not block.
+//
+// For a secure connection the socket is the wrong thing to ask on its own:
+// one TLS record can carry several WebSocket frames, so the bytes for the
+// next message are often already decrypted and waiting while the descriptor
+// itself has nothing new. Check the record layer first, the socket second.
+func _readable(c &: Conn, timeout_ms: int): bool:
+    if c.secure:
+        tc := _tls_get(c.tls_idx)
+        if tls.Pending(tc) > 0:
+            ret true
+        end
+        ret rawsock.WaitReadable(rawsock.FromFd(tls.Fd(tc)), timeout_ms)
+    end
+    if c.fd < 0:
+        ret false
+    end
+    ret rawsock.WaitReadable(rawsock.FromFd(c.fd), timeout_ms)
+end
+
+// Room for `need` more bytes in the binary-message accumulator.
+func _bin_ensure(c &: Conn, need: int):
+    if need <= c.bincap:
+        ret
+    end
+    mut ncap := c.bincap * 2
+    if ncap < need:
+        ncap = need
+    end
+    if ncap < 1024:
+        ncap = 1024
+    end
+    mut nb := null as void*
+    if c.bin == null:
+        nb = mem.Allocate(ncap as u64)
+    else:
+        nb = mem.Reallocate(c.bin, ncap as u64)
+    end
+    if nb != null:
+        c.bin = nb
+        c.bincap = ncap
+    end
+end
+
+func _bin_reset(c &: Conn):
+    c.binlen = 0
+end
+
+// The payload of the frame at `off`, unmasked, appended to the binary
+// accumulator. The `str` twin below cannot serve here: it stops at a NUL.
+func _bin_append(c &: Conn, off: int, plen: int, masked: bool, moff: int):
+    if plen <= 0:
+        ret
+    end
+    _bin_ensure(c, c.binlen + plen)
+    if c.bincap < c.binlen + plen:
+        ret
+    end
+    dst := ((c.bin as i64) + (c.binlen as i64)) as i8*
+    repeat plen with i:
+        mut b := _bget(c.buf, off + i)
+        if masked:
+            b = _xor8(b, _bget(c.buf, moff + (i % 4)))
+        end
+        dst[i] = b as i8
+    end
+    c.binlen += plen
+end
+
+func _dial_wss(host: str, port: int, path: str, extra: str, insecure: bool): Conn:
+    mut cfg := tls.NewConfig(host)
+    cfg.insecure_skip_verify = insecure
+    mut tc := tls.Dial(host, port, cfg)
+    mut c := _new_conn(0 - 1, true)
+    c.secure = true
+    c.tls_idx = _tls_store(tc)
+    if !tls.ConnOk(tc):
+        c.open = false
+        ret c
+    end
+    key := encoding.Base64Encode(rand.Alnum(16))
+    req := HandshakeRequestWith(host, path, key, extra)
+    n := tls.Write(tc, req)
+    _tls_put(c.tls_idx, tc)
+    if n <= 0:
+        _shutdown(c)
+        ret c
+    end
+    hdr := _read_headers(c)
+    c.hdr = hdr
+    if !str.Contains(hdr, " 101 "):
+        _shutdown(c)
+        ret c
+    end
+    if !str.Contains(hdr, AcceptKey(key)):
+        _shutdown(c)
+        ret c
+    end
+    c.path = path
+    c.open = true
+    ret c
+end
+
+// The binary accumulator as a `str`, for the callers that have always read a
+// binary message out of Message.text. It stops at the first NUL, which is
+// exactly why Message.data exists next to it.
+func _bin_str(c &: Conn): str:
+    if c.binlen <= 0:
+        ret ""
+    end
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    bp := c.bin as i8*
+    repeat c.binlen with i:
+        mut v := bp[i] as int
+        if v < 0:
+            v += 256
+        end
+        str.BufAppendChar(sb, v)
+    end
+    ret str.BufStr(sb)
+end
+
 func _consume(c &: Conn, n: int):
     if n <= 0:
         ret
@@ -314,6 +472,12 @@ func _shutdown(c &: Conn):
         c.buf = null
         c.blen = 0
         c.bcap = 0
+    end
+    if c.bin != null:
+        mem.Free(c.bin)
+        c.bin = null
+        c.binlen = 0
+        c.bincap = 0
     end
 end
 
@@ -415,6 +579,13 @@ func _frame_size(c &: Conn): int:
 end
 
 func _send_frame(c &: Conn, opcode: int, payload: str): int:
+    ret _send_frame_raw(c, opcode, payload as void*, payload.len())
+end
+
+// The frame writer proper. Takes a pointer and a length rather than a `str`
+// so a binary payload with a NUL byte in it survives: a `str` ends at that
+// byte, which silently truncates every image, protobuf or msgpack frame.
+func _send_frame_raw(c &: Conn, opcode: int, payload: void*, plen: int): int:
     if !c.open && opcode != 8:
         ret 0 - 1
     end
@@ -423,7 +594,6 @@ func _send_frame(c &: Conn, opcode: int, payload: str): int:
     if !c.secure && c.fd < 0:
         ret 0 - 1
     end
-    plen := payload.len()
     mut hlen := 2
     if plen >= 126 && plen < 65536:
         hlen = 4
@@ -465,7 +635,7 @@ func _send_frame(c &: Conn, opcode: int, payload: str): int:
         _bput(buf, hlen + 1, m1)
         _bput(buf, hlen + 2, m2)
         _bput(buf, hlen + 3, m3)
-        _copy_in(buf, hlen + 4, payload)
+        _copy_raw(buf, hlen + 4, payload, plen)
         // Masked in place, over the bytes already copied. Reading them back
         // out of the string instead would put a fresh one-byte allocation in
         // the middle of the loop, which is what this used to do.
@@ -481,7 +651,7 @@ func _send_frame(c &: Conn, opcode: int, payload: str): int:
             body[i] = _xor8(v, mk) as i8
         end
     else:
-        _copy_in(buf, hlen, payload)
+        _copy_raw(buf, hlen, payload, plen)
     end
     mut sent := 0
     if c.secure:
@@ -537,7 +707,31 @@ end
 @fa "درخواست دست دادن"
 @ar "طلب مصافحة"
 pub func HandshakeRequest(host: str, path: str, key: str): str:
-    ret "GET " + path + " HTTP/1.1\r\nHost: " + host + "\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: " + key + "\r\nSec-WebSocket-Version: 13\r\n\r\n"
+    ret HandshakeRequestWith(host, path, key, "")
+end
+
+@en "HandshakeRequestWith"
+@fa "درخواست دست دادن با سربرگ"
+@ar "طلب مصافحة مع ترویسات"
+// The same request with caller-supplied headers spliced in before the blank
+// line. `extra` is a ready-made block of "Name: value\r\n" lines, empty or
+// ending in \r\n.
+//
+// A browser cannot set a header on an upgrade and so has nowhere to put a
+// credential but the query string; a program is not so limited, and the
+// protocols built on WebSocket assume it. Socket.IO's polling-then-upgrade
+// handshake is the case in point: the session it opens over HTTP is carried
+// by a cookie the upgrade has to send back, and a sticky-session load
+// balancer routes on exactly that cookie.
+pub func HandshakeRequestWith(host: str, path: str, key: str, extra: str): str:
+    mut req := "GET " + path + " HTTP/1.1\r\nHost: " + host + "\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: " + key + "\r\nSec-WebSocket-Version: 13\r\n"
+    if extra != "":
+        req += extra
+        if !str.EndsWith(extra, "\r\n"):
+            req += "\r\n"
+        end
+    end
+    ret req + "\r\n"
 end
 
 @en "Listen"
@@ -599,6 +793,7 @@ pub func Accept(srv: Server): Conn:
         _shutdown(c)
         ret c
     end
+    c.hdr = hdr
     c.path = _request_path(hdr)
     c.open = true
     ret c
@@ -648,6 +843,7 @@ pub func AcceptWSS(srv: Server): Conn:
         _shutdown(c)
         ret c
     end
+    c.hdr = hdr
     c.path = _request_path(hdr)
     c.open = true
     ret c
@@ -657,6 +853,14 @@ end
 @fa "شماره گیری"
 @ar "اتصال هاتفی"
 pub func Dial(host: str, port: int, path: str): Conn:
+    ret DialWith(host, port, path, "")
+end
+
+@en "DialWith"
+@fa "شماره گیری با سربرگ"
+@ar "اتصال مع ترویسات"
+// Dial, sending `extra` (a block of "Name: value\r\n" lines) on the upgrade.
+pub func DialWith(host: str, port: int, path: str, extra: str): Conn:
     s := rawsock.Connect(host, port)
     mut c := _new_conn(s.fd, true)
     if s.fd < 0:
@@ -664,13 +868,14 @@ pub func Dial(host: str, port: int, path: str): Conn:
     end
     _no_delay(s.fd)
     key := encoding.Base64Encode(rand.Alnum(16))
-    req := HandshakeRequest(host, path, key)
+    req := HandshakeRequestWith(host, path, key, extra)
     n := rawsock.Send(s, req)
     if n <= 0:
         _shutdown(c)
         ret c
     end
     hdr := _read_headers(c)
+    c.hdr = hdr
     if !str.Contains(hdr, " 101 "):
         _shutdown(c)
         ret c
@@ -679,6 +884,7 @@ pub func Dial(host: str, port: int, path: str): Conn:
         _shutdown(c)
         ret c
     end
+    c.path = path
     c.open = true
     ret c
 end
@@ -688,34 +894,28 @@ end
 @fa "شماره گیری امن"
 @ar "اتصال هاتفی آمن"
 pub func DialWSS(host: str, port: int, path: str): Conn:
-    cfg := tls.NewConfig(host)
-    mut tc := tls.Dial(host, port, cfg)
-    mut c := _new_conn(0 - 1, true)
-    c.secure = true
-    c.tls_idx = _tls_store(tc)
-    if !tls.ConnOk(tc):
-        c.open = false
-        ret c
-    end
-    key := encoding.Base64Encode(rand.Alnum(16))
-    req := HandshakeRequest(host, path, key)
-    n := tls.Write(tc, req)
-    _tls_put(c.tls_idx, tc)
-    if n <= 0:
-        _shutdown(c)
-        ret c
-    end
-    hdr := _read_headers(c)
-    if !str.Contains(hdr, " 101 "):
-        _shutdown(c)
-        ret c
-    end
-    if !str.Contains(hdr, AcceptKey(key)):
-        _shutdown(c)
-        ret c
-    end
-    c.open = true
-    ret c
+    ret DialWSSWith(host, port, path, "")
+end
+
+@en "DialWSSWith"
+@fa "شماره گیری امن با سربرگ"
+@ar "اتصال آمن مع ترویسات"
+// DialWSS, sending `extra` (a block of "Name: value\r\n" lines) on the upgrade.
+pub func DialWSSWith(host: str, port: int, path: str, extra: str): Conn:
+    ret _dial_wss(host, port, path, extra, false)
+end
+
+@en "DialWSSUnverified"
+@fa "شماره گیری امن بدون بررسی"
+@ar "اتصال آمن بلا تحقق"
+// DialWSSWith with certificate verification turned OFF.
+//
+// The connection is still encrypted, but nothing checks that the peer is who
+// it says it is, so anything able to sit between the two ends can read and
+// rewrite the traffic. It exists for one situation - a development server
+// with a self-signed certificate - and is the wrong call for every other.
+pub func DialWSSUnverified(host: str, port: int, path: str, extra: str): Conn:
+    ret _dial_wss(host, port, path, extra, true)
 end
 
 @en "IsOpen"
@@ -728,13 +928,35 @@ end
 @en "Receive"
 @fa "دریافت پیام"
 @ar "استقبال رسالة"
+// Receive - the next message, waiting as long as it takes.
 pub func Receive(c &: Conn): Message:
-    mut msg := Message { kind = 0, text = "" }
+    ret Poll(c, 0 - 1)
+end
+
+@en "Poll"
+@fa "دریافت با مهلت"
+@ar "استقبال بمهلة"
+// Poll - the next message, or TIMEOUT once `timeout_ms` has passed.
+//
+// This is Receive with a clock: a negative timeout is Receive exactly, and
+// zero returns whatever is already buffered without ever waiting. It is what
+// makes a protocol with its own heartbeat writable on top of this package -
+// Socket.IO has to answer a server ping within a deadline, and a blocking
+// Receive gives it no way to notice the deadline arriving.
+//
+// A TIMEOUT return leaves the connection untouched and still open, including
+// halfway through a fragmented message: the frames read so far are kept on
+// the Conn, so calling again resumes rather than restarts. A NONE return
+// means the connection ended.
+//
+// A control frame (ping, close) is answered here and does not consume the
+// timeout budget on its own, matching what Receive has always done.
+pub func Poll(c &: Conn, timeout_ms: int): Message:
+    mut msg := Message { kind = NONE, text = "" }
     if !c.open:
         ret msg
     end
-    mut acc := ""
-    mut acc_kind := 1
+    start := time.MonoMillis()
     mut going := true
     until going:
         fsize := _frame_size(c)
@@ -742,10 +964,23 @@ pub func Receive(c &: Conn): Message:
             Close(c)
             going = false
         else fsize == 0:
-            n := _fill(c)
-            if n <= 0:
-                _shutdown(c)
+            mut remaining := timeout_ms
+            if timeout_ms >= 0:
+                spent := (time.MonoMillis() - start) as int
+                remaining = timeout_ms - spent
+                if remaining < 0:
+                    remaining = 0
+                end
+            end
+            if !_readable(c, remaining):
+                msg = Message { kind = TIMEOUT, text = "" }
                 going = false
+            else:
+                n := _fill(c)
+                if n <= 0:
+                    _shutdown(c)
+                    going = false
+                end
             end
         else:
             b0 := _bget(c.buf, 0)
@@ -771,25 +1006,42 @@ pub func Receive(c &: Conn): Message:
                 moff = hlen
                 hlen += 4
             end
-            payload := _payload_str(c, hlen, plen, masked, moff)
-            _consume(c, fsize)
             if opcode == 9:
+                payload := _payload_str(c, hlen, plen, masked, moff)
+                _consume(c, fsize)
                 _send_frame(c, 10, payload)
             else opcode == 10:
+                payload := _payload_str(c, hlen, plen, masked, moff)
+                _consume(c, fsize)
                 msg = Message { kind = 10, text = payload }
                 going = false
             else opcode == 8:
+                _consume(c, fsize)
                 _send_frame(c, 8, "")
                 _shutdown(c)
                 msg = Message { kind = 8, text = "" }
                 going = false
             else:
+                // A data frame. opcode 0 continues whatever the first frame
+                // of this message declared; 1 and 2 start a new one.
                 if opcode == 1 || opcode == 2:
-                    acc_kind = opcode
+                    c.acc_kind = opcode
+                    c.acc = ""
+                    _bin_reset(c)
                 end
-                acc += payload
+                if c.acc_kind == 2:
+                    _bin_append(c, hlen, plen, masked, moff)
+                else:
+                    c.acc += _payload_str(c, hlen, plen, masked, moff)
+                end
+                _consume(c, fsize)
                 if fin == 1:
-                    msg = Message { kind = acc_kind, text = acc }
+                    if c.acc_kind == 2:
+                        msg = Message { kind = 2, text = _bin_str(c), data = c.bin, len = c.binlen }
+                    else:
+                        msg = Message { kind = c.acc_kind, text = c.acc }
+                    end
+                    c.acc = ""
                     going = false
                 end
             end
@@ -849,6 +1101,15 @@ end
 @ar "إرسال ثنائی"
 pub func SendBinary(c &: Conn, data: str): int:
     ret _send_frame(c, 2, data)
+end
+
+@en "SendBinaryBytes"
+@fa "ارسال بایت دودویی"
+@ar "إرسال بایتات ثنائیة"
+// SendBinary for a payload that is not a `str`: the bytes at `ptr`, all `n`
+// of them, NULs included.
+pub func SendBinaryBytes(c &: Conn, ptr: void*, n: int): int:
+    ret _send_frame_raw(c, 2, ptr, n)
 end
 
 @en "Ping"

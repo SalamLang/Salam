@@ -1,0 +1,282 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package autograd
+
+import tensor
+
+// The recording operations. Each one is the same short story: read the
+// operand headers, run the std/tensor kernel eagerly, push the result
+// as a tape-owned slot, and - only when some input can route a gradient
+// to a leaf - record one node for backward. A failed kernel (shape
+// mismatch) returns the empty tensor, which lands on the tape like any
+// other value and propagates; check Value(tp, v).is_empty() at the loss
+// if the graph's shapes are in doubt.
+//
+// Saved-for-backward is free here: the tape already keeps every
+// operand and every result alive until reset(), so a backward formula
+// that wants exp(x) reads it from the output slot rather than storing a
+// copy. Only quantities that are not tape values (a dropout mask, a
+// convolution's column buffer) will need the aux slot, in the files
+// that introduce them.
+
+func _bin_op(tp &: Tape, op: int, a: int, b: int): int:
+    va := Value(tp, a)
+    vb := Value(tp, b)
+    mut out := tensor.Empty()
+    if op == _OP_ADD:
+        out = tensor.Add(va, vb)
+    else op == _OP_SUB:
+        out = tensor.Sub(va, vb)
+    else op == _OP_MUL:
+        out = tensor.Mul(va, vb)
+    else:
+        out = tensor.Div(va, vb)
+    end
+    needs_grad := tp.needs.get(a) || tp.needs.get(b)
+    id := _push_val(tp, out, true, needs_grad)
+    if needs_grad: _record(tp, op, a, b, id, 0 - 1, 0, 0, 0.0) end
+    ret id
+end
+
+func _un_op(tp &: Tape, op: int, a: int, f0: f64): int:
+    va := Value(tp, a)
+    mut out := tensor.Empty()
+    if op == _OP_NEG:
+        out = tensor.Neg(va)
+    else op == _OP_SCALE:
+        out = tensor.Scale(va, f0)
+    else op == _OP_ADDS:
+        out = tensor.AddScalar(va, f0)
+    else op == _OP_EXP:
+        out = tensor.Exp(va)
+    else op == _OP_LOG:
+        out = tensor.Log(va)
+    else op == _OP_TANH:
+        out = tensor.Tanh(va)
+    else op == _OP_SIGMOID:
+        out = tensor.Sigmoid(va)
+    else op == _OP_RELU:
+        out = tensor.Relu(va)
+    else op == _OP_GELU:
+        out = tensor.Gelu(va)
+    else op == _OP_SQRT:
+        out = tensor.Sqrt(va)
+    else op == _OP_SQUARE:
+        out = tensor.Square(va)
+    else:
+        out = tensor.PowScalar(va, f0)
+    end
+    needs_grad := tp.needs.get(a)
+    id := _push_val(tp, out, true, needs_grad)
+    if needs_grad: _record(tp, op, a, 0 - 1, id, 0 - 1, 0, 0, f0) end
+    ret id
+end
+
+// ---- public API ----
+
+@en "Add"
+@fa "جمع"
+@ar "جمع"
+pub func Add(tp &: Tape, a: int, b: int): int: ret _bin_op(tp, _OP_ADD, a, b) end
+
+@en "Sub"
+@fa "تفریق"
+@ar "طرح"
+pub func Sub(tp &: Tape, a: int, b: int): int: ret _bin_op(tp, _OP_SUB, a, b) end
+
+@en "Mul"
+@fa "ضرب درایه‌ای"
+@ar "ضرب عنصري"
+pub func Mul(tp &: Tape, a: int, b: int): int: ret _bin_op(tp, _OP_MUL, a, b) end
+
+@en "Div"
+@fa "تقسیم درایه‌ای"
+@ar "قسمة عنصرية"
+pub func Div(tp &: Tape, a: int, b: int): int: ret _bin_op(tp, _OP_DIV, a, b) end
+
+@en "Neg"
+@fa "قرینه"
+@ar "سالب"
+pub func Neg(tp &: Tape, a: int): int: ret _un_op(tp, _OP_NEG, a, 0.0) end
+
+@en "Scale"
+@fa "مقیاس"
+@ar "ضرب بعدد"
+pub func Scale(tp &: Tape, a: int, s: f64): int: ret _un_op(tp, _OP_SCALE, a, s) end
+
+@en "AddScalar"
+@fa "جمع با عدد"
+@ar "جمع عدد"
+pub func AddScalar(tp &: Tape, a: int, s: f64): int: ret _un_op(tp, _OP_ADDS, a, s) end
+
+@en "Exp"
+@fa "نمایی"
+@ar "أسي"
+pub func Exp(tp &: Tape, a: int): int: ret _un_op(tp, _OP_EXP, a, 0.0) end
+
+@en "Log"
+@fa "لگاریتم"
+@ar "لوغاريتم"
+pub func Log(tp &: Tape, a: int): int: ret _un_op(tp, _OP_LOG, a, 0.0) end
+
+@en "Tanh"
+@fa "تانژانت هذلولی"
+@ar "ظل زائدي"
+pub func Tanh(tp &: Tape, a: int): int: ret _un_op(tp, _OP_TANH, a, 0.0) end
+
+@en "Sigmoid"
+@fa "سیگموئید"
+@ar "سيني"
+pub func Sigmoid(tp &: Tape, a: int): int: ret _un_op(tp, _OP_SIGMOID, a, 0.0) end
+
+@en "Relu"
+@fa "یکسوساز"
+@ar "مقوم"
+pub func Relu(tp &: Tape, a: int): int: ret _un_op(tp, _OP_RELU, a, 0.0) end
+
+@en "Gelu"
+@fa "گلو"
+@ar "جيلو"
+pub func Gelu(tp &: Tape, a: int): int: ret _un_op(tp, _OP_GELU, a, 0.0) end
+
+@en "Sqrt"
+@fa "ریشه دوم"
+@ar "جذر تربيعي"
+pub func Sqrt(tp &: Tape, a: int): int: ret _un_op(tp, _OP_SQRT, a, 0.0) end
+
+@en "Square"
+@fa "مربع"
+@ar "مربع"
+pub func Square(tp &: Tape, a: int): int: ret _un_op(tp, _OP_SQUARE, a, 0.0) end
+
+@en "PowScalar"
+@fa "توان عددی"
+@ar "قوة عددية"
+pub func PowScalar(tp &: Tape, a: int, p: f64): int: ret _un_op(tp, _OP_POWS, a, p) end
+
+@en "MatMul"
+@fa "ضرب ماتریسی"
+@ar "ضرب المصفوفات"
+pub func MatMul(tp &: Tape, a: int, b: int): int:
+    va := Value(tp, a)
+    vb := Value(tp, b)
+    out := tensor.MatMul(va, vb)
+    needs_grad := tp.needs.get(a) || tp.needs.get(b)
+    id := _push_val(tp, out, true, needs_grad)
+    if needs_grad: _record(tp, _OP_MATMUL, a, b, id, 0 - 1, 0, 0, 0.0) end
+    ret id
+end
+
+// The sum of every element, as a one-element tensor - the shape a loss
+// takes before Backward seeds it.
+@en "Sum"
+@fa "مجموع"
+@ar "مجموع"
+pub func Sum(tp &: Tape, a: int): int:
+    va := Value(tp, a)
+    out := tensor.Scalar(tensor.SumAll(va))
+    needs_grad := tp.needs.get(a)
+    id := _push_val(tp, out, true, needs_grad)
+    if needs_grad: _record(tp, _OP_SUM, a, 0 - 1, id, 0 - 1, 0, 0, 0.0) end
+    ret id
+end
+
+@en "Mean"
+@fa "میانگین"
+@ar "متوسط"
+pub func Mean(tp &: Tape, a: int): int:
+    va := Value(tp, a)
+    out := tensor.Scalar(tensor.MeanAll(va))
+    needs_grad := tp.needs.get(a)
+    id := _push_val(tp, out, true, needs_grad)
+    if needs_grad: _record(tp, _OP_MEAN, a, 0 - 1, id, 0 - 1, 0, 0, 0.0) end
+    ret id
+end
+
+@en "SumAxis"
+@fa "مجموع محور"
+@ar "مجموع محور"
+pub func SumAxis(tp &: Tape, a: int, axis: int, keepdim: bool): int:
+    va := Value(tp, a)
+    out := tensor.SumAxis(va, axis, keepdim)
+    needs_grad := tp.needs.get(a)
+    id := _push_val(tp, out, true, needs_grad)
+    mut kd := 0
+    if keepdim: kd = 1 end
+    if needs_grad: _record(tp, _OP_SUMAXIS, a, 0 - 1, id, 0 - 1, axis, kd, 0.0) end
+    ret id
+end
+
+@en "MeanAxis"
+@fa "میانگین محور"
+@ar "متوسط محور"
+pub func MeanAxis(tp &: Tape, a: int, axis: int, keepdim: bool): int:
+    va := Value(tp, a)
+    out := tensor.MeanAxis(va, axis, keepdim)
+    needs_grad := tp.needs.get(a)
+    id := _push_val(tp, out, true, needs_grad)
+    mut kd := 0
+    if keepdim: kd = 1 end
+    if needs_grad: _record(tp, _OP_MEANAXIS, a, 0 - 1, id, 0 - 1, axis, kd, 0.0) end
+    ret id
+end
+
+@en "Softmax"
+@fa "بیشینه نرم"
+@ar "أقصى ناعم"
+pub func Softmax(tp &: Tape, a: int): int:
+    va := Value(tp, a)
+    out := tensor.Softmax(va)
+    needs_grad := tp.needs.get(a)
+    id := _push_val(tp, out, true, needs_grad)
+    if needs_grad: _record(tp, _OP_SOFTMAX, a, 0 - 1, id, 0 - 1, 0, 0, 0.0) end
+    ret id
+end
+
+@en "LogSoftmax"
+@fa "لگاریتم بیشینه نرم"
+@ar "لوغاريتم الأقصى الناعم"
+pub func LogSoftmax(tp &: Tape, a: int): int:
+    va := Value(tp, a)
+    out := tensor.LogSoftmax(va)
+    needs_grad := tp.needs.get(a)
+    id := _push_val(tp, out, true, needs_grad)
+    if needs_grad: _record(tp, _OP_LOGSOFTMAX, a, 0 - 1, id, 0 - 1, 0, 0, 0.0) end
+    ret id
+end
+
+@en "Reshape"
+@fa "تغییر شکل"
+@ar "إعادة تشكيل"
+pub func Reshape(tp &: Tape, a: int, shape &: Vector<int>): int:
+    va := Value(tp, a)
+    out := tensor.Reshape(va, shape)
+    needs_grad := tp.needs.get(a)
+    id := _push_val(tp, out, true, needs_grad)
+    if needs_grad: _record(tp, _OP_RESHAPE, a, 0 - 1, id, 0 - 1, 0, 0, 0.0) end
+    ret id
+end
+
+@en "Transpose2D"
+@fa "ترانهاده دوبعدی"
+@ar "منقول ثنائي"
+pub func Transpose2D(tp &: Tape, a: int): int:
+    va := Value(tp, a)
+    out := tensor.Transpose2D(va)
+    needs_grad := tp.needs.get(a)
+    id := _push_val(tp, out, true, needs_grad)
+    if needs_grad: _record(tp, _OP_TRANSPOSE2D, a, 0 - 1, id, 0 - 1, 0, 0, 0.0) end
+    ret id
+end

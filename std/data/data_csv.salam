@@ -17,6 +17,7 @@ package data
 import conv
 import encoding.csv
 import io
+import mem
 import math
 import matrix
 import os
@@ -123,17 +124,20 @@ pub struct Table:
     @en "free"
     @fa "آزادسازی"
     @ar "تحرير"
+    // The table owns every string in it: the column names, the levels of
+    // each categorical column, and the raw cells of each text column.
     pub func free():
+        repeat this.names.len() with j: mem.Free(this.names.get(j) as void*) end
         this.names.free()
         this.kinds.free()
         repeat this.cats.len() with j:
             mut lv := this.cats.get(j)
-            lv.free()
+            _free_strs(lv)
         end
         this.cats.free()
         repeat this.raw.len() with j:
             mut rv := this.raw.get(j)
-            rv.free()
+            _free_strs(rv)
         end
         this.raw.free()
         matrix.Free(this.cells)
@@ -148,7 +152,19 @@ inline pure func _ub(bp: i8*, i: int): int:
     ret v
 end
 
-func _trim(s: str): str: ret str.TrimLeft(str.TrimRight(s)) end
+// Both halves allocate, so the one in the middle has to go back.
+// Frees the strings a vector owns, then the vector.
+func _free_strs(v &: Vector<str>):
+    repeat v.len() with i: mem.Free(v.get(i) as void*) end
+    v.free()
+end
+
+func _trim(s: str): str:
+    mid := str.TrimRight(s)
+    out := str.TrimLeft(mid)
+    mem.Free(mid as void*)
+    ret out
+end
 
 // Sign, digits, optional fraction, optional exponent - at least one
 // digit somewhere. `whole` reports whether it was an integer literal.
@@ -243,7 +259,7 @@ pub func LoadCsv(text: str, header: bool): Table:
                     all_num = false
                 end
             end
-            if _level_index(levels, cell) < 0: levels.push(cell) end
+            if _level_index(levels, cell) < 0: levels.push(str.Clone(cell)) end
         end
         mut kind := COL_STR
         if all_num:
@@ -270,16 +286,17 @@ pub func LoadCsv(text: str, header: bool): Table:
         if kind == COL_CAT:
             t.cats.push(levels)
         else:
-            levels.free()
+            _free_strs(levels)
             t.cats.push(Vector {} as Vector<str>)
         end
         if kind == COL_STR:
             t.raw.push(texts)
         else:
-            texts.free()
+            _free_strs(texts)
             t.raw.push(Vector {} as Vector<str>)
         end
     end
+    csv.FreeTable(parsed)
     ret t
 end
 
@@ -291,6 +308,7 @@ pub func LoadCsvFile(path: str, header: bool, ok &: bool): Table:
     if os.Exists(path) == false: ret Table {} end
     text := io.ReadFile(path)
     t := LoadCsv(text, header)
+    mem.Free(text as void*)
     ok = t.cols() > 0
     ret t
 end

@@ -46,6 +46,22 @@ pub struct Endpoint:
     pub ok: bool = false
 end
 
+// A port, or 0 for anything that is not one.
+//
+// The length check is not fussiness: a port is read out of text the other end
+// may control, and "http://host:99999999999" would otherwise overflow into
+// whatever number that wraps to and dial it.
+func _port_of(s: str): int:
+    if !_all_digits(s) || s.len() > 5:
+        ret 0
+    end
+    v := s.to_int()
+    if v < 1 || v > 65535:
+        ret 0
+    end
+    ret v
+end
+
 func _all_digits(s: str): bool:
     if s.len() == 0:
         ret false
@@ -122,21 +138,19 @@ pub func ParseURL(raw: str): Endpoint:
         host = authority.substr(1, rb - 1)
         after := authority.substr(rb + 1, authority.len() - rb - 1)
         if str.StartsWith(after, ":"):
-            tail := after.substr(1, after.len() - 1)
-            if !_all_digits(tail):
+            port = _port_of(after.substr(1, after.len() - 1))
+            if port == 0:
                 ret e
             end
-            port = tail.to_int()
         end
     else:
         ci := str.LastIndex(authority, ":")
         if ci >= 0:
-            tail := authority.substr(ci + 1, authority.len() - ci - 1)
-            if !_all_digits(tail):
+            port = _port_of(authority.substr(ci + 1, authority.len() - ci - 1))
+            if port == 0:
                 ret e
             end
             host = authority.substr(0, ci)
-            port = tail.to_int()
         end
     end
     if host.len() == 0:
@@ -162,19 +176,28 @@ pub func ParseURL(raw: str): Endpoint:
     ret e
 end
 
-// Origin - the scheme://host:port an HTTP request to this endpoint goes to,
-// with an IPv6 host re-bracketed.
+// Origin - the scheme://host[:port] an HTTP request to this endpoint goes
+// to, with an IPv6 host re-bracketed.
+//
+// The port is left off when it is the scheme's own (80 for http, 443 for
+// https), which is what every other client writes and what a virtual host
+// expects to see in the Host header.
 @en "Origin"
 @fa "مبدا"
 @ar "الأصل"
 pub func Origin(e: Endpoint): str:
     mut sch := "http"
+    mut standard := 80
     if e.secure:
         sch = "https"
+        standard = 443
     end
     mut h := e.host
     if str.Contains(h, ":"):
         h = "[" + h + "]"
+    end
+    if e.port == standard:
+        ret sch + "://" + h
     end
     ret sch + "://" + h + ":" + e.port
 end

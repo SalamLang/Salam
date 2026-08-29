@@ -118,6 +118,16 @@ pub const PKT_BINARY_ACK := 6
 // a payload is otherwise made of.
 const RS := 30
 
+// Ceilings on the two numbers a peer writes into a packet header.
+//
+// Both are read digit by digit out of text the other end controls, so both
+// need somewhere to stop. Without a cap, "5999999999999-" overflows the
+// accumulator into a negative attachment count, and an acknowledgement id
+// long enough does the same - neither is a packet any real server sends, so
+// the honest answer is that the packet is malformed.
+const MAX_ATTACHMENTS := 1024
+const MAX_ACK_ID := 1000000000
+
 // Bytes - a binary attachment: a length and the bytes themselves.
 //
 // Not a `str`, deliberately. A Salam `str` ends at its first NUL byte, so
@@ -209,12 +219,12 @@ pub func DecodePacket(text: str): Packet:
     if k == PKT_BINARY_EVENT || k == PKT_BINARY_ACK:
         mut num := 0
         mut seen := false
-        until _digit_at(text, i) >= 0:
+        until _digit_at(text, i) >= 0 && num <= MAX_ATTACHMENTS:
             num = num * 10 + _digit_at(text, i)
             seen = true
             i += 1
         end
-        if !seen || i >= n || text.substr(i, 1) != "-":
+        if !seen || num > MAX_ATTACHMENTS || i >= n || text.substr(i, 1) != "-":
             ret p
         end
         p.attachments = num
@@ -232,9 +242,12 @@ pub func DecodePacket(text: str): Packet:
     end
     if _digit_at(text, i) >= 0:
         mut id := 0
-        until _digit_at(text, i) >= 0:
+        until _digit_at(text, i) >= 0 && id <= MAX_ACK_ID:
             id = id * 10 + _digit_at(text, i)
             i += 1
+        end
+        if id > MAX_ACK_ID:
+            ret p
         end
         p.id = id
     end
@@ -420,9 +433,12 @@ pub func PlaceholderNum(frag: str): int:
         ret 0 - 1
     end
     mut num := 0
-    until _digit_at(frag, i) >= 0:
+    until _digit_at(frag, i) >= 0 && num <= MAX_ATTACHMENTS:
         num = num * 10 + _digit_at(frag, i)
         i += 1
+    end
+    if num > MAX_ATTACHMENTS:
+        ret 0 - 1
     end
     ret num
 end

@@ -50,8 +50,23 @@ func _cookie_header(m: MgrState*): str:
     ret "Cookie: " + ck + "\r\n"
 end
 
+// The header block for an HTTP request: the caller's own headers, then the
+// session cookie.
+//
+// The caller's block is closed off if they did not: an "Authorization: x"
+// with no CRLF after it would run into the next header and produce a request
+// no server can read, which is a miserable thing to debug from the outside.
 func _headers_of(m: MgrState*): str:
-    ret m[0].opts.headers + _cookie_header(m)
+    mut own := m[0].opts.headers
+    // A block that is only whitespace is nothing: left in, its blank line
+    // would end the headers early and turn the rest of the request into a
+    // body.
+    if str.Trim(own).len() == 0:
+        own = ""
+    else !str.EndsWith(own, "\r\n"):
+        own += "\r\n"
+    end
+    ret own + _cookie_header(m)
 end
 
 func _absorb_cookies(m: MgrState*, r: http.Response):
@@ -71,7 +86,18 @@ func _query_of(m: MgrState*, transport: str, sid: str): str:
         q += "&sid=" + sid
     end
     q += "&t=" + time.NowMillis() + "-" + rand.Int32Range(0, 999999)
-    extra := m[0].opts.query
+    // Both halves: what was written in the URL ("http://host/chat?token=x")
+    // and what Options.query adds. The URL's own query is not decoration -
+    // it is where a credential travels when the client cannot set a header,
+    // and server middleware reads it out of the handshake.
+    mut extra := _clean_query(m[0].ep.query)
+    own := _clean_query(m[0].opts.query)
+    if own.len() > 0:
+        if extra.len() > 0:
+            extra += "&"
+        end
+        extra += own
+    end
     if extra.len() > 0:
         q += "&" + extra
     end
@@ -82,10 +108,23 @@ end
 // and what a server mounted the usual way expects; Options.trailing_slash
 // drops it for the ones behind a proxy that rewrites paths.
 func _mount(m: MgrState*): str:
-    if m[0].opts.trailing_slash:
+    // A path of "/" already ends in one; adding another would ask for "//?"
+    // and get a 404 from a server mounted at the root.
+    if m[0].opts.trailing_slash && m[0].ep.path != "/":
         ret m[0].ep.path + "/?"
     end
     ret m[0].ep.path + "?"
+end
+
+// A query fragment with any leading "?" or "&" taken off, so that writing
+// Options.query as "?a=1" - which is what a caller who has just copied it out
+// of a URL will do - does not produce "&?a=1".
+func _clean_query(q: str): str:
+    mut out := str.Trim(q)
+    until str.StartsWith(out, "?") || str.StartsWith(out, "&"):
+        out = out.substr(1, out.len() - 1)
+    end
+    ret out
 end
 
 func _poll_url(m: MgrState*, sid: str): str:
@@ -140,7 +179,7 @@ func _ws_direct(m: MgrState*): bool:
     if !_ws_open(m, ""):
         ret false
     end
-    msg := websocket.Poll(m[0].ws, m[0].opts.timeout)
+    msg := websocket.Poll(m[0].ws, _connect_timeout(m))
     if msg.kind != websocket.TEXT:
         m[0].last_error = "no open packet from the server"
         websocket.Close(m[0].ws)
@@ -212,7 +251,7 @@ func _try_upgrade(m: MgrState*): bool:
         websocket.Close(m[0].ws)
         ret false
     end
-    deadline := _now() + (m[0].opts.timeout as i64)
+    deadline := _now() + (_connect_timeout(m) as i64)
     mut probed := false
     mut going := true
     until going:
@@ -289,7 +328,8 @@ func _engine_close(m: MgrState*):
         // A polling session has no socket to close, so the only way to say
         // goodbye is to post it. Without this the server holds the session
         // open until pingTimeout and keeps replaying its state to nobody.
-        m[0].pollout.clear()
+        // Appended, not substituted: anything already queued is still owed
+        // to the server, and goes out in the same request as the goodbye.
         m[0].pollout.push(EncodeEngine(EIO_CLOSE, ""))
         _poll_flush(m)
     end
@@ -447,10 +487,7 @@ func _poll_turn(m: MgrState*): int:
         if p.len() > 0:
             got = true
             if str.StartsWith(p, "b"):
-                raw := encoding.Base64Decode(p.substr(1, p.len() - 1))
-                mut b := BytesFromStr(raw)
-                _engine_binary(m, b)
-                BytesFree(b)
+                _poll_binary(m, p.substr(1, p.len() - 1))
             else:
                 _engine_payload(m, p)
             end
@@ -460,6 +497,33 @@ func _poll_turn(m: MgrState*): int:
         ret PUMP_TIMEOUT
     end
     ret PUMP_OK
+end
+
+// One base64 attachment out of a polling body.
+//
+// Not Base64Decode into a `str`: that is where the bytes would be lost. A
+// decoded attachment is arbitrary binary, a `str` ends at its first NUL, and
+// a buffer whose first byte is zero - which is most compressed and most
+// binary formats - would arrive empty. The pointer form reports the real
+// length instead.
+func _poll_binary(m: MgrState*, encoded: str):
+    if encoded.len() == 0:
+        ret
+    end
+    cap := (encoded.len() / 4) * 3 + 4
+    buf := mem.Allocate(cap as u64)
+    if buf == null:
+        ret
+    end
+    defer mem.Free(buf)
+    mut ok := true
+    n := encoding.Base64DecodeBytes(encoded, buf, cap, ok)
+    if !ok || n <= 0:
+        ret
+    end
+    mut b := NewBytes(buf, n)
+    _engine_binary(m, b)
+    BytesFree(b)
 end
 
 func _ws_turn(m: MgrState*, timeout_ms: int): int:

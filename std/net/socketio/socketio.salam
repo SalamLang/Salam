@@ -142,9 +142,13 @@ end
 // reading with Next(), to the queue.
 func _deliver(c: Client, ev0: Event):
     sp := _sock(c)
+    m := sp[0].mgr as MgrState*
     mut ev := ev0
     ev.client = c
     mut dead := false
+    // Everything below can run caller code. While it does, Close is not
+    // allowed to release this socket - see the note on Close.
+    m[0].dispatching += 1
     if ev.kind == EV_EVENT:
         n := sp[0].any_handlers.len()
         mut i := 0
@@ -176,6 +180,7 @@ func _deliver(c: Client, ev0: Event):
     if dead:
         _compact_handlers(sp[0].handlers)
     end
+    m[0].dispatching -= 1
     if sp[0].queueing && sp[0].max_queue > 0:
         // The queue takes over the attachments; Next hands them on, and the
         // caller releases them with EventFree. It is bounded so that a
@@ -323,6 +328,37 @@ func _free_waiter_packets(sp: SockState*):
     end
 end
 
+// Fails every acknowledgement the caller is still waiting on.
+//
+// Called when the connection or the namespace goes away. The answer is never
+// coming - the server that would have sent it no longer has the packet's id,
+// and a reconnection starts the numbering again - so a caller blocked in
+// EmitAck with no deadline would otherwise wait for ever. socket.io rejects
+// them at the same moment and for the same reason.
+//
+// Retry waiters (Options.retries) are left alone on purpose: their packet is
+// re-sent when the connection returns, which is the whole point of them.
+func _fail_pending_acks(sp: SockState*):
+    mut dead := false
+    repeat sp[0].waiters.len() with i:
+        mut w := sp[0].waiters.get(i)
+        if w.alive && !w.internal:
+            w.alive = false
+            sp[0].waiters.set(i, w)
+            dead = true
+            a := Ack { ok = false, id = w.id, data = "[]" }
+            if w.has_cb:
+                w.cb(a)
+            else:
+                sp[0].results.push(a)
+            end
+        end
+    end
+    if dead:
+        _drop_dead_waiters(sp)
+    end
+end
+
 func _drop_dead_waiters(sp: SockState*):
     mut kept := Vector {} as Vector<AckWaiter>
     repeat sp[0].waiters.len() with i:
@@ -420,6 +456,12 @@ func _handle_packet(m: MgrState*, p: Packet, bins &: Vector<Bytes>):
         _free_bins(bins)
         sp[0].connected = false
         sp[0].id = ""
+        // The server threw this namespace out, so a reconnection must not
+        // walk straight back in. socket.io detaches the socket from its
+        // manager at this point for the same reason; Connect re-joins it if
+        // that is really what the caller wants.
+        sp[0].active = false
+        _fail_pending_acks(sp)
         _deliver(c, Event { kind = EV_DISCONNECT, nsp = sp[0].nsp, message = REASON_SERVER_DISCONNECT, data = "[]" })
     else p.kind == PKT_EVENT || p.kind == PKT_BINARY_EVENT:
         _on_event_packet(c, p, bins)
@@ -546,6 +588,7 @@ func _engine_shutdown(m: MgrState*, reason: str):
             wants_more = true
         end
         if was:
+            _fail_pending_acks(sp)
             _deliver(c, Event { kind = EV_DISCONNECT, nsp = sp[0].nsp, message = reason, data = "[]" })
         end
     end
@@ -696,7 +739,10 @@ func _wait_connected(c: Client, deadline: i64): bool:
             ret sp[0].connected
         end
         rc := _pump_mgr(m, left)
-        if rc == PUMP_CLOSED && !m[0].opts.reconnection:
+        // ST_CLOSED means the transport is down and nothing is retrying it -
+        // reconnection is off, or it ran out of attempts. Waiting longer
+        // cannot change the answer.
+        if rc == PUMP_CLOSED && m[0].state == ST_CLOSED:
             ret sp[0].connected
         end
     end
@@ -742,6 +788,16 @@ end
 
 // How long to wait for an acknowledgement: what the caller asked for, or
 // Options.ack_timeout when they asked for nothing in particular, or forever.
+// How long one connection attempt may take. A non-positive Options.timeout
+// is read as the default rather than as zero: zero would mean every attempt
+// fails before the first packet can arrive, which nobody sets on purpose.
+func _connect_timeout(m: MgrState*): int:
+    if m[0].opts.timeout > 0:
+        ret m[0].opts.timeout
+    end
+    ret 20000
+end
+
 func _ack_wait(m: MgrState*, timeout_ms: int): int:
     if timeout_ms > 0:
         ret timeout_ms
@@ -941,7 +997,7 @@ pub func Connect(c: Client): bool:
         m[0].attempts = 0
     end
     _send_connect(m, c)
-    ret _wait_connected(c, time.MonoMillis() + (m[0].opts.timeout as i64))
+    ret _wait_connected(c, time.MonoMillis() + (_connect_timeout(m) as i64))
 end
 
 // Disconnect - leave this namespace, and close the transport once no
@@ -962,6 +1018,7 @@ pub func Disconnect(c: Client):
         _engine_write(m, EncodeEngine(EIO_MESSAGE, EncodePacket(p)))
         sp[0].connected = false
         sp[0].id = ""
+        _fail_pending_acks(sp)
         _deliver(c, Event { kind = EV_DISCONNECT, nsp = sp[0].nsp, message = REASON_CLIENT_DISCONNECT, data = "[]" })
     end
     if !_any_active(m):
@@ -971,6 +1028,11 @@ pub func Disconnect(c: Client):
 end
 
 // CloseManager - disconnect every namespace and release the connection.
+//
+// Called from inside a handler it disconnects but does not release: the
+// dispatch loop is standing on the memory it would free. Release it from the
+// loop that drives the connection instead, which is where a program that
+// owns a connection closes it anyway.
 @en "CloseManager"
 @fa "بستن مدیر"
 @ar "إغلاق المدیر"
@@ -979,6 +1041,12 @@ pub func CloseManager(m: Manager):
         ret
     end
     mp := _mgr(m)
+    if mp[0].dispatching > 0:
+        repeat mp[0].socks.len() with i:
+            Disconnect(mp[0].socks.get(i))
+        end
+        ret
+    end
     repeat mp[0].socks.len() with i:
         Disconnect(mp[0].socks.get(i))
     end
@@ -995,6 +1063,9 @@ end
 
 // Close - leave this namespace and release it, taking the whole connection
 // down with it if no other namespace is left on it.
+//
+// From inside a handler this disconnects but does not release, for the
+// reason CloseManager gives; use Disconnect there, which is what it becomes.
 @en "Close"
 @fa "بستن"
 @ar "إغلاق"
@@ -1005,6 +1076,9 @@ pub func Close(c: Client):
     m := ManagerOf(c)
     mp := _mgr(m)
     Disconnect(c)
+    if mp[0].dispatching > 0:
+        ret
+    end
     if mp[0].socks.len() <= 1:
         CloseManager(m)
         ret
@@ -1087,10 +1161,17 @@ pub func Next(c: Client, timeout_ms: int): Event:
     deadline := time.MonoMillis() + (timeout_ms as i64)
     mut out := Event { kind = EV_TIMEOUT, nsp = sp[0].nsp, client = c }
     mut going := true
+    mut finished := false
     until going:
         if sp[0].inbox.len() > 0:
             out = sp[0].inbox.get(0)
             sp[0].inbox.remove_at(0)
+            going = false
+        else finished:
+            // Drained, and there will be no more. The queue is checked
+            // FIRST: the pump that ended the connection put a disconnect in
+            // it on the way out, and leaving here without it would report a
+            // timeout for something that was not one.
             going = false
         else:
             mut left := (deadline - time.MonoMillis()) as int
@@ -1101,8 +1182,11 @@ pub func Next(c: Client, timeout_ms: int): Event:
             end
             if going:
                 rc := _pump_mgr(m, left)
-                if rc == PUMP_CLOSED && !m[0].opts.reconnection:
-                    going = false
+                // ST_CLOSED means the transport is down and nothing is
+                // retrying it - reconnection is off, or it ran out of
+                // attempts. Waiting longer cannot change the answer.
+                if rc == PUMP_CLOSED && m[0].state == ST_CLOSED:
+                    finished = true
                 end
             end
         end
@@ -1126,6 +1210,7 @@ pub func NextEvent(c: Client, timeout_ms: int): Event:
         ret Event { kind = EV_TIMEOUT }
     end
     sp := _sock(c)
+    m := sp[0].mgr as MgrState*
     deadline := time.MonoMillis() + (timeout_ms as i64)
     mut out := Event { kind = EV_TIMEOUT, nsp = sp[0].nsp, client = c }
     mut going := true
@@ -1142,7 +1227,10 @@ pub func NextEvent(c: Client, timeout_ms: int): Event:
             if ev.kind == EV_EVENT || ev.kind == EV_TIMEOUT:
                 out = ev
                 going = false
-            else ev.kind == EV_DISCONNECT && !sp[0].active:
+            else ev.kind == EV_DISCONNECT && (!sp[0].active || m[0].state == ST_CLOSED):
+                // A disconnect the connection will not recover from is worth
+                // interrupting the loop for; one that is about to be
+                // reconnected is not.
                 out = ev
                 going = false
             else:
@@ -1441,7 +1529,10 @@ pub func EmitAck(c: Client, name: str, a: Args, timeout_ms: int): Ack:
             end
             if going:
                 rc := _pump_mgr(m, left)
-                if rc == PUMP_CLOSED && !m[0].opts.reconnection:
+                // ST_CLOSED means the transport is down and nothing is
+                // retrying it - reconnection is off, or it ran out of
+                // attempts. Waiting longer cannot change the answer.
+                if rc == PUMP_CLOSED && m[0].state == ST_CLOSED:
                     going = false
                 end
             end
@@ -1611,6 +1702,51 @@ end
 @ar "عدد الإقرار"
 pub func AckInt(a: Ack, i: int): i64:
     ret ItemInt(a.data, i)
+end
+
+@en "AckFloat"
+@fa "اعشار تایید"
+@ar "عشری الإقرار"
+pub func AckFloat(a: Ack, i: int): f64:
+    ret ItemFloat(a.data, i)
+end
+
+@en "AckBool"
+@fa "بولی تایید"
+@ar "منطقی الإقرار"
+pub func AckBool(a: Ack, i: int): bool:
+    ret ItemBool(a.data, i)
+end
+
+// AckIsBinary - whether answer `i` is a binary attachment rather than JSON.
+// A server can acknowledge with bytes as readily as it can emit them.
+@en "AckIsBinary"
+@fa "تایید دودویی است"
+@ar "إقرار ثنائی"
+pub func AckIsBinary(a: Ack, i: int): bool:
+    ret PlaceholderNum(Item(a.data, i)) >= 0
+end
+
+// AckBytes - answer `i` as its attached buffer. Owned by the Ack, and
+// released by AckFree.
+@en "AckBytes"
+@fa "بایت تایید"
+@ar "بایتات الإقرار"
+pub func AckBytes(a: Ack, i: int): Bytes:
+    n := PlaceholderNum(Item(a.data, i))
+    if n < 0 || n >= a.bins.len():
+        ret Bytes {}
+    end
+    ret a.bins.get(n)
+end
+
+// AckValue - answer `i` parsed into a value tree. Free it with
+// value.ValueFree.
+@en "AckValue"
+@fa "مقدار تایید"
+@ar "قیمة الإقرار"
+pub func AckValue(a: Ack, i: int): value.Value:
+    ret ItemValue(a.data, i)
 end
 
 // EventFree - release an event taken from Next.
@@ -1880,11 +2016,13 @@ pub func Disconnected(c: Client): bool:
     ret !IsConnected(c)
 end
 
-// Active - whether this namespace will come back by itself.
+// Active - whether the caller still wants this namespace connected.
 //
 // True between Connect and Disconnect, including while a reconnection is in
-// flight - which is exactly the difference from IsConnected, and the flag to
-// check before deciding a drop was permanent.
+// flight, which is the difference from IsConnected. It says what the caller
+// asked for, not what the connection is managing: after reconnection has run
+// out of attempts this is still true while nothing is retrying any more, and
+// Pump returning PUMP_CLOSED is what says so.
 @en "Active"
 @fa "فعال"
 @ar "نشط"

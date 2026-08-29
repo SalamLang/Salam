@@ -756,9 +756,12 @@ OnAnyOutgoing PrependAnyOutgoing OffAnyOutgoing` + `Run`/`RunFor`, or
 upgrade reconnect reconnect_attempt reconnect_error reconnect_failed`.
   - **Arguments**: build with `NewArgs`/`AddStr AddInt AddFloat AddBool
 AddNull AddJSON AddValue AddBytes AddBinaryStr`, read with `ArgCount Arg
-ArgStr ArgInt ArgFloat ArgBool ArgValue ArgIsBinary ArgBytes` (and
-    `AckCount AckArg AckStr AckInt`). Binary attachments are `Bytes`, not
-    `str`, because a `str` stops at its first NUL. `EventFree`/`AckFree`.
+ArgStr ArgInt ArgFloat ArgBool ArgValue ArgIsBinary ArgBytes` (and the
+    same over an acknowledgement: `AckCount AckArg AckStr AckInt AckFloat
+AckBool AckValue AckIsBinary AckBytes`). Binary attachments are `Bytes`,
+    not `str`, because a `str` stops at its first NUL. `EventFree`/
+    `AckFree`. `ArgInt`/`ArgFloat` read a number sent as a string too, which
+    is how a server keeps 64 bits intact through JavaScript.
   - **State**: `IsConnected Disconnected Active Recovered Id Sid Namespace
 Transport TransportName LastError Refused RefusalReason Buffered Queued
 Pending Attempts PingInterval PingTimeout MaxPayload EndpointOf Sockets

@@ -734,25 +734,55 @@ DialWSSUnverified`, `SendText SendBinary SendBinaryBytes Ping Close Stop`,
 - **`net.socketio`** (`import net.socketio`): a Socket.IO **client**, wire-
   compatible with socket.io v4 servers - Engine.IO v4 underneath (both
   transports, HTTP long-polling and WebSocket, and the upgrade between
-  them), Socket.IO v5 on top. `Dial(url)` / `DialWith(url, opts)` /
-  `NewManager` + `Of(m, "/nsp")` for several namespaces on one connection;
-  `Emit EmitStr EmitInt EmitFloat EmitBool EmitJSON EmitBytes EmitArgs
-EmitVolatile`; acknowledgements both ways - **`EmitAck`** (blocks and
-  returns the answer, the shape `await socket.emitWithAck` has in
-  JavaScript), `EmitWithAck` (callback), `Reply`/`ReplyStr`/`ReplyJSON` for
-  an event the server wants acknowledged; `On Once Off OnAny OffAny` for
-  handlers, or **`Next(c, ms)`** to read events in a loop - usually the
-  better fit, because a Salam lambda captures by value and cannot write back
-  to the function that registered it. Arguments are built with
-  `NewArgs`/`AddStr AddInt AddFloat AddBool AddNull AddJSON AddValue
-AddBytes` and read with `ArgStr ArgInt ArgFloat ArgBool ArgJSON ArgValue
-ArgBytes`. `Options` covers `path query auth headers transports
-reconnection* timeout auto_connect event_queue insecure`. Nothing runs in
-  the background: the connection only advances inside `Pump`/`Next`/`Run`/
-  `EmitAck`, and a program that stops calling them stops answering the
-  server's heartbeat. Reconnection (exponential backoff with jitter),
-  offline buffering of emits, binary attachments and connection state
-  recovery are all handled.
+  them), Socket.IO v5 on top.
+  - **Connecting**: `Dial(url)` / `DialWith(url, opts)`, or `NewManager` +
+    `Open` + `Of(m, "/nsp")` for several namespaces multiplexed on one
+    connection. `Connect Disconnect Close CloseManager`. The URL's path is
+    the NAMESPACE, not a resource; the HTTP path is `Options.path`
+    (default `/socket.io`) and must match the server's.
+  - **Sending**: `Emit EmitStr EmitInt EmitFloat EmitBool EmitJSON
+EmitBytes EmitArgs EmitVolatile Send`. An emit made while disconnected is
+    held and flushed on connect (`Buffered`); a volatile one is dropped.
+  - **Acknowledgements**, both directions: **`EmitAck`** blocks and returns
+    the answer (the shape `await socket.emitWithAck` has in JavaScript),
+    `EmitWithAck` takes a callback, and `Reply`/`ReplyStr`/`ReplyJSON`
+    answer an event the server wants acknowledged (`ev.ack_id`).
+  - **Receiving**, two shapes: `On Once Off OffAll OnAny PrependAny OffAny
+OnAnyOutgoing PrependAnyOutgoing OffAnyOutgoing` + `Run`/`RunFor`, or
+    **`Next(c, ms)`** / **`NextEvent(c, ms)`** to read in a loop - usually
+    the better fit, because a Salam lambda captures by value and cannot
+    write back to the function that registered it. Handler names include
+    the lifecycle ones: `connect disconnect connect_error error ping
+upgrade reconnect reconnect_attempt reconnect_error reconnect_failed`.
+  - **Arguments**: build with `NewArgs`/`AddStr AddInt AddFloat AddBool
+AddNull AddJSON AddValue AddBytes AddBinaryStr`, read with `ArgCount Arg
+ArgStr ArgInt ArgFloat ArgBool ArgValue ArgIsBinary ArgBytes` (and
+    `AckCount AckArg AckStr AckInt`). Binary attachments are `Bytes`, not
+    `str`, because a `str` stops at its first NUL. `EventFree`/`AckFree`.
+  - **State**: `IsConnected Disconnected Active Recovered Id Sid Namespace
+Transport TransportName LastError Refused RefusalReason Buffered Queued
+Pending Attempts PingInterval PingTimeout MaxPayload EndpointOf Sockets
+ListenerCount HasListeners`. A disconnect reason is one of socket.io's
+    own strings - `REASON_SERVER_DISCONNECT REASON_CLIENT_DISCONNECT
+REASON_PING_TIMEOUT REASON_TRANSPORT_CLOSE REASON_TRANSPORT_ERROR
+REASON_PARSE_ERROR` - so handlers port across unchanged.
+  - **`Options`**: `path query auth headers transports reconnection
+reconnection_attempts reconnection_delay reconnection_delay_max
+randomization_factor timeout auto_connect event_queue ack_timeout retries
+trailing_slash remember_upgrade insecure`, with `SetAuth` and the
+    `SetReconnection*`/`SetTimeout`/`SetRandomizationFactor` setters for a
+    live connection.
+  - **Nothing runs in the background**: the connection only advances inside
+    `Pump`/`PumpManager`/`Next`/`Run`/`EmitAck`, and a program that stops
+    calling them stops answering the server's heartbeat and gets dropped.
+    Reconnection (exponential backoff with jitter), offline buffering,
+    binary attachments, `retries`, and connection state recovery are all
+    handled. Not implemented, deliberately: permessage-deflate compression,
+    custom parsers, and client certificates.
+  - The wire format is public too, for writing a server or a test against
+    it: `EncodePacket DecodePacket EncodeEngine EngineKind EngineBody
+SplitPayloads JoinPayloads SplitJSONArray Placeholder PlaceholderNum
+ParseURL Origin`.
 - **`tcp`** (`Bind Accept Read Write Close Ok ConnOk`),
   **`ssl`**, **`net`**, **`dom`**/**`console`** (browser/JS targets),
   **`webview`** (desktop windows; `-DSALAM_WEBVIEW_CEF` renders with a bundled

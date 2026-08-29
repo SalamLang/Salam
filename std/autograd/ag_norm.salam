@@ -1,0 +1,135 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package autograd
+
+import tensor
+
+// Layer normalization over the last axis, fused.
+//
+// Forward normalizes each row to zero mean and unit variance (plus eps
+// under the root), then scales by gamma and shifts by beta. The row
+// statistics are saved as a [rows, 2] aux tensor (mean, rstd), and the
+// backward is the standard closed form:
+//
+//   dxhat = dy * gamma
+//   dx    = rstd * (dxhat - mean(dxhat) - xhat * mean(dxhat * xhat))
+//   dgamma += sum_rows dy * xhat        dbeta += sum_rows dy
+//
+// which needs nothing but the saved statistics and the two tape
+// values. The node uses s0 for the beta slot id - the third
+// differentiable input, like Conv2D's bias in aux.
+
+extern:
+    pure func sqrtf(x: f32): f32
+end
+
+func _bk_layernorm(tp &: Tape, n &: Node, dc &: tensor.Tensor):
+    vx := Value(tp, n.a)
+    vg := Value(tp, n.b)
+    st := Value(tp, n.aux)
+    beta := n.s0
+    d := vx.shape.get(vx.rank() - 1)
+    rows := vx.numel() / d
+    px := vx.data.data
+    pgam := vg.data.data
+    ps := st.data.data
+    pd := dc.data.data
+    need_x := tp.needs.get(n.a)
+    need_g := tp.needs.get(n.b)
+    need_b := tp.needs.get(beta)
+    mut gx := tensor.Empty()
+    mut gg := tensor.Empty()
+    mut gb := tensor.Empty()
+    if need_x: gx = _grad_of(tp, n.a) end
+    if need_g: gg = _grad_of(tp, n.b) end
+    if need_b: gb = _grad_of(tp, beta) end
+    pgx := gx.data.data
+    pgg := gg.data.data
+    pgb := gb.data.data
+    inv_d := (1.0 / (d as f64)) as f32
+    repeat rows with r:
+        base := r * d
+        mean := ps[r * 2]
+        rstd := ps[r * 2 + 1]
+        mut s1 := 0.0 as f32
+        mut s2 := 0.0 as f32
+        repeat d with k:
+            xhat := (px[base + k] - mean) * rstd
+            dxhat := pd[base + k] * pgam[k]
+            s1 += dxhat
+            s2 += dxhat * xhat
+            if need_g: pgg[k] = pgg[k] + pd[base + k] * xhat end
+            if need_b: pgb[k] = pgb[k] + pd[base + k] end
+        end
+        if need_x:
+            m1 := s1 * inv_d
+            m2 := s2 * inv_d
+            repeat d with k:
+                xhat := (px[base + k] - mean) * rstd
+                dxhat := pd[base + k] * pgam[k]
+                pgx[base + k] = pgx[base + k] + rstd * (dxhat - m1 - xhat * m2)
+            end
+        end
+    end
+end
+
+// ---- public API ----
+
+// Normalizes the last axis of x, then y = gamma * xhat + beta. gamma
+// and beta are recorded values of shape [D].
+@en "LayerNorm"
+@fa "نرمال‌سازی لایه"
+@ar "تسوية الطبقة"
+pub func LayerNorm(tp &: Tape, x: int, gamma: int, beta: int, eps: f64): int:
+    vx := Value(tp, x)
+    vg := Value(tp, gamma)
+    vb := Value(tp, beta)
+    if vx.is_empty(): ret _push_val(tp, tensor.Empty(), true, false) end
+    d := vx.shape.get(vx.rank() - 1)
+    if vg.numel() != d || vb.numel() != d: ret _push_val(tp, tensor.Empty(), true, false) end
+    rows := vx.numel() / d
+    out := tensor.Zeros(vx.shape)
+    st := tensor.Zeros2(rows, 2)
+    px := vx.data.data
+    pg := vg.data.data
+    pb := vb.data.data
+    po := out.data.data
+    ps := st.data.data
+    ef := eps as f32
+    inv_d := (1.0 / (d as f64)) as f32
+    one := 1.0 as f32
+    repeat rows with r:
+        base := r * d
+        mut s := 0.0 as f32
+        repeat d with k: s += px[base + k] end
+        mean := s * inv_d
+        mut v := 0.0 as f32
+        repeat d with k:
+            dlt := px[base + k] - mean
+            v += dlt * dlt
+        end
+        rstd := one / sqrtf(v * inv_d + ef)
+        ps[r * 2] = mean
+        ps[r * 2 + 1] = rstd
+        repeat d with k:
+            po[base + k] = pg[k] * ((px[base + k] - mean) * rstd) + pb[k]
+        end
+    end
+    needs_grad := tp.needs.get(x) || tp.needs.get(gamma) || tp.needs.get(beta)
+    aux := _push_val(tp, st, true, false)
+    id := _push_val(tp, out, true, needs_grad)
+    if needs_grad: _record(tp, _OP_LAYERNORM, x, gamma, id, aux, beta, 0, eps) end
+    ret id
+end

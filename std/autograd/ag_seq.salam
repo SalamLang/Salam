@@ -1,0 +1,195 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package autograd
+
+import tensor
+
+// The operations a sequence model is assembled from: batched matrix
+// products, axis permutation, embedding lookup, and dropout.
+//
+// BatchMatMul's backward is the 2D rule applied per batch entry, over
+// offset pointers through tensor.GemmAcc - one transposed copy of the
+// operand slice per entry, no copy of the gradient. Permute stores its
+// permutation as an aux tensor (there is no room for a vector in a
+// Node) and backpropagates through the inverse permutation. Embedding
+// keeps its index list as an aux tensor and scatter-adds rows on the
+// way back. Dropout draws its mask from the tape's own generator, so a
+// seeded tape is a reproducible training run, and records nothing at
+// all in inference mode.
+
+func _bk_bmm(tp &: Tape, n &: Node, dc &: tensor.Tensor):
+    va := Value(tp, n.a)
+    vb := Value(tp, n.b)
+    b := va.shape.get(0)
+    rows := va.shape.get(1)
+    kn := va.shape.get(2)
+    m := vb.shape.get(2)
+    pd := dc.data.data
+    if tp.needs.get(n.a):
+        ga := _grad_of(tp, n.a)
+        repeat b with i:
+            // dA_i += dC_i * B_i^T
+            mut bt := tensor.TransposeRaw(_off(vb.data.data, i * kn * m), kn, m)
+            tensor.GemmAcc(_off(pd, i * rows * m), bt.data.data, _off(ga.data.data, i * rows * kn), rows, m, kn)
+            bt.free()
+        end
+    end
+    if tp.needs.get(n.b):
+        gb := _grad_of(tp, n.b)
+        repeat b with i:
+            // dB_i += A_i^T * dC_i
+            mut at := tensor.TransposeRaw(_off(va.data.data, i * rows * kn), rows, kn)
+            tensor.GemmAcc(at.data.data, _off(pd, i * rows * m), _off(gb.data.data, i * kn * m), kn, rows, m)
+            at.free()
+        end
+    end
+end
+
+func _bk_permute(tp &: Tape, n &: Node, dc &: tensor.Tensor):
+    if tp.needs.get(n.a) == false: ret end
+    perm := Value(tp, n.aux)
+    r := perm.numel()
+    mut inv := Vector {} as Vector<int>
+    inv.zeros(r)
+    repeat r with i: inv.set(perm.at(i) as int, i) end
+    mut t := tensor.Permute(dc, inv)
+    inv.free()
+    g := _grad_of(tp, n.a)
+    _bk_flat_add(g.data.data, t.data.data, t.numel())
+    t.free()
+end
+
+func _bk_embed(tp &: Tape, n &: Node, dc &: tensor.Tensor):
+    if tp.needs.get(n.a) == false: ret end
+    vw := Value(tp, n.a)
+    idx := Value(tp, n.aux)
+    g := _grad_of(tp, n.a)
+    d := vw.shape.get(1)
+    cnt := idx.numel()
+    pg := g.data.data
+    pd := dc.data.data
+    pi := idx.data.data
+    repeat cnt with i:
+        row := (pi[i] as int) * d
+        src := i * d
+        repeat d with k: pg[row + k] = pg[row + k] + pd[src + k] end
+    end
+end
+
+func _bk_dropout(tp &: Tape, n &: Node, dc &: tensor.Tensor):
+    if tp.needs.get(n.a) == false: ret end
+    mask := Value(tp, n.aux)
+    g := _grad_of(tp, n.a)
+    scale := (1.0 / (1.0 - n.f0)) as f32
+    cnt := mask.numel()
+    pg := g.data.data
+    pd := dc.data.data
+    pm := mask.data.data
+    repeat cnt with k: pg[k] = pg[k] + pd[k] * pm[k] * scale end
+end
+
+// ---- public API ----
+
+@en "BatchMatMul"
+@fa "ضرب ماتریسی دسته‌ای"
+@ar "ضرب المصفوفات دفعي"
+pub func BatchMatMul(tp &: Tape, a: int, b: int): int:
+    va := Value(tp, a)
+    vb := Value(tp, b)
+    out := tensor.BatchMatMul(va, vb)
+    needs_grad := tp.needs.get(a) || tp.needs.get(b)
+    id := _push_val(tp, out, true, needs_grad)
+    if needs_grad: _record(tp, _OP_BMM, a, b, id, 0 - 1, 0, 0, 0.0) end
+    ret id
+end
+
+@en "Permute"
+@fa "جایگشت"
+@ar "تبديل"
+pub func Permute(tp &: Tape, a: int, perm &: Vector<int>): int:
+    va := Value(tp, a)
+    out := tensor.Permute(va, perm)
+    needs_grad := tp.needs.get(a)
+    mut aux := 0 - 1
+    if needs_grad:
+        r := perm.len()
+        pt := tensor.Zeros1(r)
+        pp := pt.data.data
+        repeat r with i: pp[i] = perm.get(i) as f32 end
+        aux = _push_val(tp, pt, true, false)
+    end
+    id := _push_val(tp, out, true, needs_grad)
+    if needs_grad: _record(tp, _OP_PERMUTE, a, 0 - 1, id, aux, 0, 0, 0.0) end
+    ret id
+end
+
+// Rows of the [V, D] weight at `indices`, as an [N, D] tensor.
+@en "Embedding"
+@fa "جاسازی"
+@ar "تضمين"
+pub func Embedding(tp &: Tape, weight: int, indices &: Vector<int>): int:
+    vw := Value(tp, weight)
+    if vw.rank() != 2: ret _push_val(tp, tensor.Empty(), true, false) end
+    v := vw.shape.get(0)
+    d := vw.shape.get(1)
+    cnt := indices.len()
+    out := tensor.Zeros2(cnt, d)
+    it := tensor.Zeros1(cnt)
+    pw := vw.data.data
+    po := out.data.data
+    pi := it.data.data
+    mut ok := true
+    repeat cnt with i:
+        row := indices.get(i)
+        if row < 0 || row >= v: ok = false end
+        pi[i] = row as f32
+    end
+    if ok == false:
+        it.free()
+        out.free()
+        ret _push_val(tp, tensor.Empty(), true, false)
+    end
+    repeat cnt with i:
+        src := (pi[i] as int) * d
+        dst := i * d
+        repeat d with k: po[dst + k] = pw[src + k] end
+    end
+    needs_grad := tp.needs.get(weight)
+    aux := _push_val(tp, it, true, false)
+    id := _push_val(tp, out, true, needs_grad)
+    if needs_grad: _record(tp, _OP_EMBED, weight, 0 - 1, id, aux, 0, 0, 0.0) end
+    ret id
+end
+
+// Inverted dropout: in training mode zeroes each element with
+// probability p and scales the survivors by 1/(1-p); in inference mode
+// (tp.training == false) it is the identity and records nothing.
+@en "Dropout"
+@fa "حذف تصادفی"
+@ar "إسقاط"
+pub func Dropout(tp &: Tape, a: int, p: f64): int:
+    if tp.training == false || p <= 0.0: ret a end
+    if p >= 1.0: ret a end
+    va := Value(tp, a)
+    mut mask := tensor.Zeros(va.shape)
+    tensor.FillBernoulli(mask, 1.0 - p, tp.rng)
+    out := tensor.Mul(va, mask)
+    tensor.ScaleInPlace(out, 1.0 / (1.0 - p))
+    needs_grad := tp.needs.get(a)
+    aux := _push_val(tp, mask, true, false)
+    id := _push_val(tp, out, true, needs_grad)
+    if needs_grad: _record(tp, _OP_DROPOUT, a, 0 - 1, id, aux, 0, 0, p) end
+    ret id
+end

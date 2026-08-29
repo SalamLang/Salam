@@ -1,0 +1,111 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// Milestone: a two-layer transformer encoder learns to reverse fixed
+// token sequences. Embedding, sinusoidal positions, multi-head
+// attention, layer norm, GELU feed-forward, Adam - the whole sequence
+// stack, seeded end to end.
+
+import autograd
+import nn
+import optim
+import tensor
+import testing
+
+struct Reverser:
+    pub embed: nn.Embedding = nn.Embedding {}
+    pub enc1: nn.TransformerEncoderLayer = nn.TransformerEncoderLayer {}
+    pub enc2: nn.TransformerEncoderLayer = nn.TransformerEncoderLayer {}
+    pub norm: nn.LayerNorm = nn.LayerNorm {}
+    pub head: nn.Linear = nn.Linear {}
+
+    pub func forward(tp &: autograd.Tape, ps &: nn.ParamStore, tokens &: Vector<int>, pos &: tensor.Tensor, batch: int, seq: int): int:
+        mut h := this.embed.forward(tp, ps, tokens)
+        h = autograd.Add(tp, h, autograd.Input(tp, pos))
+        h = this.enc1.forward(tp, ps, h, batch, seq)
+        h = this.enc2.forward(tp, ps, h, batch, seq)
+        h = this.norm.forward(tp, ps, h)
+        ret this.head.forward(tp, ps, h)
+    end
+end
+
+func main:
+    vocab := 16
+    seq := 8
+    batch := 32
+    dim := 32
+
+    // Fixed random sequences and their reversals, flattened.
+    mut g := tensor.NewRng(5)
+    mut tokens := Vector {} as Vector<int>
+    mut targets := Vector {} as Vector<int>
+    repeat batch * seq: tokens.push((g.next_float() * (vocab as f64)) as int) end
+    repeat batch with b:
+        repeat seq with t: targets.push(tokens.get(b * seq + (seq - 1 - t))) end
+    end
+    mut pos := nn.SinusoidalPositions(batch, seq, dim)
+
+    mut ps := nn.ParamStore {}
+    mut gi := tensor.NewRng(13)
+    mut model := Reverser {}
+    model.embed = nn.NewEmbedding(ps, "embed", vocab, dim, gi)
+    model.enc1 = nn.NewTransformerEncoderLayer(ps, "enc1", dim, 4, 64, 0.0, gi)
+    model.enc2 = nn.NewTransformerEncoderLayer(ps, "enc2", dim, 4, 64, 0.0, gi)
+    model.norm = nn.NewLayerNorm(ps, "norm", dim)
+    model.head = nn.NewLinear(ps, "head", dim, vocab, gi)
+    mut opt := optim.Adam { lr = 0.003 }
+
+    mut tp := autograd.NewTape(1)
+    mut first_loss := 0.0
+    mut last_loss := 0.0
+    repeat 200 with step:
+        tp.reset()
+        ps.zero_grad()
+        logits := model.forward(tp, ps, tokens, pos, batch, seq)
+        loss := autograd.CrossEntropyLogits(tp, logits, targets)
+        lv := autograd.Value(tp, loss)
+        if step == 0: first_loss = lv.at(0) end
+        last_loss = lv.at(0)
+        autograd.Backward(tp, loss)
+        optim.ClipGradNorm(ps, 1.0)
+        opt.step(ps)
+    end
+    testing.AssertTrue(first_loss > 2.0)
+    testing.AssertTrue(last_loss < 0.1)
+
+    tp.reset()
+    tp.training = false
+    logits := model.forward(tp, ps, tokens, pos, batch, seq)
+    lv := autograd.Value(tp, logits)
+    mut preds := tensor.ArgMaxAxis(lv, 1, false)
+    mut hits := 0
+    total := batch * seq
+    repeat total with i:
+        if (preds.at(i) as int) == targets.get(i): hits += 1 end
+    end
+    acc := (hits as f64) / (total as f64)
+    testing.AssertTrue(acc >= 0.99)
+
+    tp.free()
+    opt.free()
+    ps.free()
+    tensor.Free(pos)
+    tensor.Free(preds)
+    tokens.free()
+    targets.free()
+
+    ret testing.Summary()
+end

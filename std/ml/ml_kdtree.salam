@@ -1,0 +1,312 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ml
+
+import matrix
+import pool
+import sort
+
+// A k-d tree over the rows of a matrix, and the parallel query driver
+// the KNN models use. Nodes split the widest dimension at its median;
+// leaves hold up to leaf_size rows. A query walks the near child first
+// and skips a far child whenever the distance to the splitting plane
+// already exceeds the k-th best distance found.
+//
+// Results match the brute-force search exactly (same rows, same
+// squared distances) as long as distances are distinct; ties may come
+// back in a different order.
+
+@en "KNN_BRUTE"
+@fa "همسایه جستجوی کامل"
+@ar "جيران بحث شامل"
+pub const KNN_BRUTE := 0
+
+@en "KNN_KDTREE"
+@fa "همسایه درخت کی‌دی"
+@ar "جيران شجرة كي دي"
+pub const KNN_KDTREE := 1
+
+// The query being answered in parallel: every worker reads these and
+// writes its own rows of _knn_out.
+mut _knn_q := matrix.Matrix {}
+mut _knn_xtrain := matrix.Matrix {}
+mut _knn_ytrain := matrix.Matrix {}
+mut _knn_tree := KDTree {}
+mut _knn_out := matrix.Matrix {}
+mut _knn_k := 5
+mut _knn_weighted := false
+mut _knn_classes := 0
+mut _knn_alg := 0
+
+@en "KDTree"
+@fa "درخت کی‌دی"
+@ar "شجرة كي دي"
+pub struct KDTree:
+    pub leaf_size: int = 16
+    pub x: matrix.Matrix = matrix.Matrix {}
+    pub idx: Vector<int> = Vector {}
+    pub node_lo: Vector<int> = Vector {}
+    pub node_hi: Vector<int> = Vector {}
+    pub node_dim: Vector<int> = Vector {}
+    pub node_split: Vector<f64> = Vector {}
+    pub node_left: Vector<int> = Vector {}
+    pub node_right: Vector<int> = Vector {}
+    pub ok: bool = false
+
+    @en "build"
+    @fa "ساخت"
+    @ar "بناء"
+    pub func build(x &: matrix.Matrix): bool:
+        this.free()
+        this.ok = false
+        if x.is_empty(): ret false end
+        this.x = matrix.Clone(x)
+        repeat x.rows with i: this.idx.push(i) end
+        mut me := KDTree {}
+        me.leaf_size = this.leaf_size
+        me.x = this.x
+        me.idx = this.idx
+        _kd_build(me)
+        this.node_lo = me.node_lo
+        this.node_hi = me.node_hi
+        this.node_dim = me.node_dim
+        this.node_split = me.node_split
+        this.node_left = me.node_left
+        this.node_right = me.node_right
+        this.ok = true
+        ret true
+    end
+
+    @en "node_count"
+    @fa "تعداد گره"
+    @ar "عدد العقد"
+    pub func node_count(): int: ret this.node_lo.len() end
+
+    // Indices of the k rows nearest to row qi of q, nearest first, with
+    // their squared distances in dist_out.
+    @en "query"
+    @fa "پرس‌وجو"
+    @ar "استعلام"
+    pub func query(q &: matrix.Matrix, qi: int, k: int, dist_out &: Vector<f64>): Vector<int>:
+        mut out := Vector {} as Vector<int>
+        dist_out.clear()
+        if !this.ok || k <= 0 || q.cols != this.x.cols: ret out end
+        mut me := KDTree {}
+        me.x = this.x
+        me.idx = this.idx
+        me.node_lo = this.node_lo
+        me.node_hi = this.node_hi
+        me.node_dim = this.node_dim
+        me.node_split = this.node_split
+        me.node_left = this.node_left
+        me.node_right = this.node_right
+        _kd_query(me, q, qi, k, out, dist_out)
+        ret out
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free():
+        this.x.free()
+        this.idx.free()
+        this.node_lo.free()
+        this.node_hi.free()
+        this.node_dim.free()
+        this.node_split.free()
+        this.node_left.free()
+        this.node_right.free()
+        this.ok = false
+    end
+end
+
+func _kd_build(t &: KDTree):
+    p := t.x.cols
+    mut stack := Vector {} as Vector<int>
+    // root
+    t.node_lo.push(0)
+    t.node_hi.push(t.idx.len())
+    t.node_dim.push(0 - 1)
+    t.node_split.push(0.0)
+    t.node_left.push(0 - 1)
+    t.node_right.push(0 - 1)
+    stack.push(0)
+    until stack.len() > 0:
+        nd := stack.pop()
+        lo := t.node_lo.get(nd)
+        hi := t.node_hi.get(nd)
+        if hi - lo <= t.leaf_size: continue end
+        // widest dimension
+        mut best_d := 0
+        mut best_w := 0.0 - 1.0
+        repeat p with dd:
+            mut mn := t.x.at(t.idx.get(lo), dd)
+            mut mx := mn
+            repeat hi - lo with r:
+                v := t.x.at(t.idx.get(lo + r), dd)
+                if v < mn: mn = v end
+                if v > mx: mx = v end
+            end
+            if mx - mn > best_w:
+                best_w = mx - mn
+                best_d = dd
+            end
+        end
+        if best_w <= 0.0: continue end
+        // sort the range by that dimension and split at the median
+        mut part := Vector {} as Vector<int>
+        repeat hi - lo with r: part.push(t.idx.get(lo + r)) end
+        xs := t.x
+        sort.SortBy(part, (a: int, b: int): ret xs.at(a, best_d) < xs.at(b, best_d) end)
+        repeat hi - lo with r: t.idx.set(lo + r, part.get(r)) end
+        part.free()
+        mid := (lo + hi) / 2
+        t.node_dim.set(nd, best_d)
+        t.node_split.set(nd, t.x.at(t.idx.get(mid), best_d))
+        left := t.node_lo.len()
+        t.node_lo.push(lo)
+        t.node_hi.push(mid)
+        t.node_dim.push(0 - 1)
+        t.node_split.push(0.0)
+        t.node_left.push(0 - 1)
+        t.node_right.push(0 - 1)
+        right := t.node_lo.len()
+        t.node_lo.push(mid)
+        t.node_hi.push(hi)
+        t.node_dim.push(0 - 1)
+        t.node_split.push(0.0)
+        t.node_left.push(0 - 1)
+        t.node_right.push(0 - 1)
+        t.node_left.set(nd, left)
+        t.node_right.set(nd, right)
+        stack.push(left)
+        stack.push(right)
+    end
+    stack.free()
+end
+
+// Keeps the k best (index, squared distance) pairs in ascending order.
+func _kd_offer(best_i &: Vector<int>, best_d &: Vector<f64>, k: int, i: int, d: f64):
+    if best_i.len() == k && d >= best_d.get(k - 1): ret end
+    mut pos := best_i.len()
+    until pos > 0 && best_d.get(pos - 1) > d: pos -= 1 end
+    best_i.insert(pos, i)
+    best_d.insert(pos, d)
+    if best_i.len() > k:
+        _i := best_i.remove_at(k)
+        _d := best_d.remove_at(k)
+    end
+end
+
+func _kd_query(t &: KDTree, q &: matrix.Matrix, qi: int, k: int, out &: Vector<int>, dist_out &: Vector<f64>):
+    p := t.x.cols
+    mut nodes := Vector {} as Vector<int>
+    mut bounds := Vector {} as Vector<f64>
+    nodes.push(0)
+    bounds.push(0.0)
+    until nodes.len() > 0:
+        nd := nodes.pop()
+        bound := bounds.pop()
+        if out.len() == k && bound >= dist_out.get(k - 1): continue end
+        dd := t.node_dim.get(nd)
+        if dd < 0:
+            lo := t.node_lo.get(nd)
+            hi := t.node_hi.get(nd)
+            repeat hi - lo with r:
+                row := t.idx.get(lo + r)
+                mut s := 0.0
+                repeat p with j:
+                    v := q.at(qi, j) - t.x.at(row, j)
+                    s += v * v
+                end
+                _kd_offer(out, dist_out, k, row, s)
+            end
+            continue
+        end
+        diff := q.at(qi, dd) - t.node_split.get(nd)
+        mut near := t.node_left.get(nd)
+        mut far := t.node_right.get(nd)
+        if diff >= 0.0:
+            near = t.node_right.get(nd)
+            far = t.node_left.get(nd)
+        end
+        far_bound := diff * diff > bound ? diff * diff : bound
+        nodes.push(far)
+        bounds.push(far_bound)
+        nodes.push(near)
+        bounds.push(bound)
+    end
+    nodes.free()
+    bounds.free()
+end
+
+// One query row of the parallel KNN prediction: class shares into
+// _knn_out's row (classification) or the neighbor mean (regression,
+// _knn_classes == 0).
+func _knn_row(qi64: i64):
+    qi := qi64 as int
+    mut dist := Vector {} as Vector<f64>
+    mut nb := Vector {} as Vector<int>
+    if _knn_alg == KNN_KDTREE:
+        nb = _knn_tree.query(_knn_q, qi, _knn_k, dist)
+    else:
+        nb = _nearest(_knn_xtrain, _knn_q, qi, _knn_k, dist)
+    end
+    mut total := 0.0
+    mut acc := 0.0
+    repeat nb.len() with t:
+        mut wgt := 1.0
+        if _knn_weighted: wgt = 1.0 / (dist.get(t) + 0.000000001) end
+        yv := _knn_ytrain.at(nb.get(t), 0)
+        if _knn_classes > 0:
+            _knn_out.add_at(qi, yv as int, wgt)
+        else:
+            acc += wgt * yv
+        end
+        total += wgt
+    end
+    if total > 0.0:
+        if _knn_classes > 0:
+            repeat _knn_classes with c: _knn_out.set(qi, c, _knn_out.at(qi, c) / total) end
+        else:
+            _knn_out.set(qi, 0, acc / total)
+        end
+    end
+    nb.free()
+    dist.free()
+end
+
+// Runs _knn_row over every query row, serially or on `workers`.
+func _knn_run(rows: int, workers: int):
+    mut w := workers
+    if w < 0: w = pool.CPUCount() as int end
+    if w <= 1:
+        repeat rows with i: _knn_row(i as i64) end
+    else:
+        pool.ParallelFor(rows as i64, w as i64, (i: i64): _knn_row(i) end)
+    end
+end
+
+// ---- public API ----
+
+@en "NewKDTree"
+@fa "درخت کی‌دی نو"
+@ar "شجرة كي دي جديدة"
+pub func NewKDTree(x &: matrix.Matrix, leaf_size: int): KDTree:
+    mut t := KDTree {}
+    if leaf_size > 0: t.leaf_size = leaf_size end
+    _ok := t.build(x)
+    ret t
+end

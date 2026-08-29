@@ -4,7 +4,7 @@
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.sh | sh
 #   curl -fsSL https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.sh | sh -s -- --dir ./bin
-#   ./install.sh --version 0.3.5
+#   ./install.sh --version 0.3.6
 #
 # Options:
 #   -d, --dir DIR         install into DIR (default: $HOME/.salam/bin)

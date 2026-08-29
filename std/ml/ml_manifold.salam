@@ -1,0 +1,253 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ml
+
+import math
+import matrix
+
+// t-SNE, the exact O(n^2) form: Gaussian affinities with a per-point
+// bandwidth found by bisection to hit the perplexity, symmetrized and
+// normalized into P; a Student-t kernel in the embedding; gradient
+// descent with momentum, per-coordinate gains, and early exaggeration
+// for the first 250 iterations. Fine to a few thousand points; the
+// Barnes-Hut approximation is a later addition behind the same API.
+
+@en "TSNE"
+@fa "تی‌اس‌ان‌ای"
+@ar "تي إس إن إي"
+pub struct TSNE:
+    pub n_components: int = 2
+    pub perplexity: f64 = 30.0
+    pub learning_rate: f64 = 200.0
+    pub n_iter: int = 500
+    pub early_exaggeration: f64 = 12.0
+    pub seed: i64 = 42
+    pub embedding: matrix.Matrix = matrix.Matrix {}
+    pub kl: f64 = 0.0
+    pub ok: bool = false
+
+    @en "fit_transform"
+    @fa "برازش و تبدیل"
+    @ar "ملاءمة وتحويل"
+    pub func fit_transform(x &: matrix.Matrix): matrix.Matrix:
+        n := x.rows
+        m := this.n_components
+        this.ok = false
+        if n < 4 || m < 1: ret matrix.Matrix {} end
+        mut perp := this.perplexity
+        if perp >= ((n - 1) as f64): perp = ((n - 1) as f64) / 3.0 end
+        mut d := _pairwise_sq(x)
+        mut p := _joint_p(d, n, perp)
+        d.free()
+        mut y := matrix.Zeros(n, m)
+        mut g := matrix.NewRng(this.seed)
+        repeat n * m with k: y.a.set(k, 0.0001 * g.next_normal()) end
+        mut grad := Vector {} as Vector<f64>
+        mut vel := Vector {} as Vector<f64>
+        mut gains := Vector {} as Vector<f64>
+        repeat n * m:
+            grad.push(0.0)
+            vel.push(0.0)
+            gains.push(1.0)
+        end
+        mut num := Vector {} as Vector<f64>
+        repeat n * n: num.push(0.0) end
+        repeat this.n_iter with it:
+            exag := it < 250 ? this.early_exaggeration : 1.0
+            momentum := it < 250 ? 0.5 : 0.8
+            sumq := _student_num(y, num)
+            _tsne_grad(y, p, num, sumq, exag, grad)
+            repeat n * m with k:
+                gk := grad.get(k)
+                vk := vel.get(k)
+                mut gn := gains.get(k)
+                if (gk > 0.0) != (vk > 0.0): gn += 0.2 else: gn = gn * 0.8 end
+                if gn < 0.01: gn = 0.01 end
+                gains.set(k, gn)
+                nv := momentum * vk - this.learning_rate * gn * gk
+                vel.set(k, nv)
+                y.a.set(k, y.a.get(k) + nv)
+            end
+            _center_rows(y)
+        end
+        sumq := _student_num(y, num)
+        this.kl = _kl(p, num, sumq, n)
+        p.free()
+        num.free()
+        grad.free()
+        vel.free()
+        gains.free()
+        this.embedding.free()
+        this.embedding = matrix.Clone(y)
+        this.ok = true
+        ret y
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free(): this.embedding.free() end
+end
+
+// Squared Euclidean distances, n*n flat.
+func _pairwise_sq(x &: matrix.Matrix): Vector<f64>:
+    n := x.rows
+    p := x.cols
+    mut d := Vector {} as Vector<f64>
+    repeat n * n: d.push(0.0) end
+    repeat n with i:
+        repeat i with j:
+            mut s := 0.0
+            repeat p with k:
+                t := x.at(i, k) - x.at(j, k)
+                s += t * t
+            end
+            d.set(i * n + j, s)
+            d.set(j * n + i, s)
+        end
+    end
+    ret d
+end
+
+// The conditional distribution of row i at precision beta, written into
+// row i of p; returns its entropy.
+func _row_p(d &: Vector<f64>, n: int, i: int, beta: f64, p &: Vector<f64>): f64:
+    mut sum := 0.0
+    mut dsum := 0.0
+    repeat n with j:
+        if j == i:
+            p.set(i * n + j, 0.0)
+            continue
+        end
+        v := math.Exp(0.0 - d.get(i * n + j) * beta)
+        p.set(i * n + j, v)
+        sum += v
+        dsum += d.get(i * n + j) * v
+    end
+    if sum <= 0.0: ret 0.0 end
+    repeat n with j: p.set(i * n + j, p.get(i * n + j) / sum) end
+    ret math.Log(sum) + beta * dsum / sum
+end
+
+// Symmetric joint affinities with each row's bandwidth bisected to the
+// target perplexity.
+func _joint_p(d &: Vector<f64>, n: int, perp: f64): Vector<f64>:
+    target := math.Log(perp)
+    mut p := Vector {} as Vector<f64>
+    repeat n * n: p.push(0.0) end
+    repeat n with i:
+        mut beta := 1.0
+        mut lo := 0.0
+        mut hi := 0.0
+        mut has_hi := false
+        repeat 50:
+            h := _row_p(d, n, i, beta, p)
+            diff := h - target
+            if diff < 0.00001 && diff > 0.0 - 0.00001: continue end
+            if diff > 0.0:
+                lo = beta
+                if has_hi: beta = (lo + hi) / 2.0 else: beta = beta * 2.0 end
+            else:
+                hi = beta
+                has_hi = true
+                beta = (lo + hi) / 2.0
+            end
+        end
+    end
+    // symmetrize and normalize to a distribution over pairs
+    mut total := 0.0
+    repeat n with i:
+        repeat i with j:
+            v := (p.get(i * n + j) + p.get(j * n + i)) / 2.0
+            p.set(i * n + j, v)
+            p.set(j * n + i, v)
+            total += 2.0 * v
+        end
+    end
+    if total > 0.0:
+        repeat n * n with k:
+            mut v := p.get(k) / total
+            if v < 0.000000000001: v = 0.000000000001 end
+            p.set(k, v)
+        end
+    end
+    repeat n with i: p.set(i * n + i, 0.0) end
+    ret p
+end
+
+// num[i][j] = 1 / (1 + |y_i - y_j|^2), zero on the diagonal; returns
+// the total.
+func _student_num(y &: matrix.Matrix, num &: Vector<f64>): f64:
+    n := y.rows
+    m := y.cols
+    mut total := 0.0
+    repeat n with i:
+        num.set(i * n + i, 0.0)
+        repeat i with j:
+            mut s := 0.0
+            repeat m with k:
+                t := y.at(i, k) - y.at(j, k)
+                s += t * t
+            end
+            v := 1.0 / (1.0 + s)
+            num.set(i * n + j, v)
+            num.set(j * n + i, v)
+            total += 2.0 * v
+        end
+    end
+    ret total
+end
+
+func _tsne_grad(y &: matrix.Matrix, p &: Vector<f64>, num &: Vector<f64>, sumq: f64, exag: f64, grad &: Vector<f64>):
+    n := y.rows
+    m := y.cols
+    repeat n * m with k: grad.set(k, 0.0) end
+    repeat n with i:
+        repeat n with j:
+            if j == i: continue end
+            nij := num.get(i * n + j)
+            q := nij / sumq
+            mult := 4.0 * (exag * p.get(i * n + j) - q) * nij
+            repeat m with k:
+                grad.set(i * m + k, grad.get(i * m + k) + mult * (y.at(i, k) - y.at(j, k)))
+            end
+        end
+    end
+end
+
+func _center_rows(y &: matrix.Matrix):
+    n := y.rows
+    m := y.cols
+    repeat m with k:
+        mut s := 0.0
+        repeat n with i: s += y.at(i, k) end
+        mean := s / (n as f64)
+        repeat n with i: y.set(i, k, y.at(i, k) - mean) end
+    end
+end
+
+func _kl(p &: Vector<f64>, num &: Vector<f64>, sumq: f64, n: int): f64:
+    mut kl := 0.0
+    repeat n with i:
+        repeat n with j:
+            if j == i: continue end
+            pij := p.get(i * n + j)
+            mut q := num.get(i * n + j) / sumq
+            if q < 0.000000000001: q = 0.000000000001 end
+            if pij > 0.0: kl += pij * math.Log(pij / q) end
+        end
+    end
+    ret kl
+end

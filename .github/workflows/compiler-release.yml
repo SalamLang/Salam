@@ -2832,6 +2832,91 @@ jobs:
             echo "::warning::and their declarations are missing from the page"
           fi
           ls -l "$out"
+      # A standalone copy of std/ for this exact tag. The platform archives
+      # each bundle their own std/, but reaching it means downloading a
+      # ~100 MB toolchain for a directory of source files - and there is no
+      # way at all to fetch the std/ of an older release without checking
+      # out the tag. This publishes the tree on its own, in both formats, so
+      # every version keeps a small, directly linkable stdlib download.
+      #
+      # The file list comes from git rather than the filesystem: std/ picks
+      # up untracked native build output (std/opencv/native/build) in a
+      # working checkout, and none of that belongs in a source archive.
+      - name: Package the standard library (tar.gz + zip)
+        run: |
+          set -eu
+          STAGE_ROOT=stdlib-stage
+          STAGE_DIR="salam-${VERSION}-stdlib"
+          STAGE="${STAGE_ROOT}/${STAGE_DIR}"
+          rm -rf "$STAGE_ROOT"
+          mkdir -p "$STAGE"
+
+          # tar as the copy mechanism keeps the std/... paths intact and
+          # handles the NUL-delimited list without tripping over spaces.
+          if git ls-files -z -- std | grep -qz .; then
+            git ls-files -z -- std | tar --null --files-from=- -cf - | tar -xf - -C "$STAGE"
+          else
+            echo "::warning::git ls-files returned nothing for std/; falling back to a filesystem copy"
+            tar -cf - --exclude='std/opencv/native/build' std | tar -xf - -C "$STAGE"
+          fi
+
+          cp VERSION LICENSE "$STAGE/"
+          cp "./release/salam-${VERSION}-stdlib-index.json" "$STAGE/stdlib-index.json"
+          cp "./release/salam-${VERSION}-stdlib-doc.html" "$STAGE/stdlib-doc.html"
+
+          {
+            echo "Salam standard library ${VERSION}"
+            echo ""
+            echo "  std/               the standard library sources, exactly as"
+            echo "                     they are in the v${VERSION} tag"
+            echo "  stdlib-index.json  every package mapped to its public"
+            echo "                     declarations (machine-readable)"
+            echo "  stdlib-doc.html    the same thing as one browsable page"
+            echo ""
+            echo "Point a Salam compiler at this std/ in any of these ways:"
+            echo ""
+            echo "  salam build app.salam --stdlib-path=/path/to/std"
+            echo "  SALAM_STD=/path/to/std salam build app.salam"
+            echo ""
+            echo "or drop a salam.cfg next to the salam binary containing:"
+            echo ""
+            echo "  stdlib = /path/to/std"
+            echo ""
+            echo "The compiler otherwise looks for std/ beside its own binary,"
+            echo "then under the install prefix, then ./std."
+          } > "$STAGE/README.txt"
+
+          # Reproducible archives: same tag, same bytes. Both formats are
+          # published because the platform archives already set that
+          # precedent - .tar.gz for unix consumers, .zip for Windows and for
+          # anything that will not read a tarball.
+          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
+          mkdir -p ./release
+          tar --sort=name --owner=0 --group=0 --numeric-owner \
+              --mtime="@${SOURCE_DATE_EPOCH}" \
+              -czf "./release/salam-${VERSION}-stdlib.tar.gz" \
+              -C "$STAGE_ROOT" "$STAGE_DIR"
+          (cd "$STAGE_ROOT" && zip -r -q -X "../release/salam-${VERSION}-stdlib.zip" "$STAGE_DIR")
+
+          # An archive that silently lost the tree is worse than no archive:
+          # it looks fine on the release page and fails at import time.
+          count=$(find "$STAGE/std" -name '*.salam' -type f | wc -l)
+          echo "packaged ${count} .salam files"
+          [ "$count" -gt 0 ] || { echo "::error::stdlib archive contains no .salam files"; exit 1; }
+          for pkg in std/str std/fmt std/os std/net; do
+            [ -d "$STAGE/$pkg" ] || { echo "::error::stdlib archive is missing $pkg"; exit 1; }
+          done
+
+          ls -l "./release/salam-${VERSION}-stdlib.tar.gz" "./release/salam-${VERSION}-stdlib.zip"
+          {
+            echo "### Standard library archive"
+            echo ""
+            echo "\`${count}\` \`.salam\` files from \`std/\`, plus the index and the doc page."
+            echo ""
+            echo '```'
+            (cd ./release && sha256sum "salam-${VERSION}-stdlib.tar.gz" "salam-${VERSION}-stdlib.zip")
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
       # - name: Post Linux release file to SERVER_VERSIONS_API
       #   env:
       #     SERVER_VERSIONS_API: ${{ secrets.SERVER_VERSIONS_API }}
@@ -2894,14 +2979,25 @@ jobs:
             # release/salam-linux-aarch64
             # release/salam-linux-armhf
             release/salam-*.zip
+            release/salam-*-stdlib.tar.gz
             release/salam-*-stdlib-index.json
             release/salam-*-stdlib-doc.html
             release/salam-application-*.aab
             release/salam-application-*.apk
           )
+          # The patterns overlap on purpose - salam-*-stdlib.zip is matched
+          # both by the broad zip glob and by anyone who later adds an
+          # explicit stdlib entry - and gh rejects the whole upload when the
+          # same path is passed twice, so collapse duplicates here.
           assets=()
           for c in "${candidates[@]}"; do
-            for f in $c; do [ -e "$f" ] && assets+=("$f"); done
+            for f in $c; do
+              [ -e "$f" ] || continue
+              for a in ${assets[@]+"${assets[@]}"}; do
+                [ "$a" = "$f" ] && continue 2
+              done
+              assets+=("$f")
+            done
           done
           echo "Publishing ${#assets[@]} assets:"; printf '  %s\n' "${assets[@]}"
           gh release create "$TAG" \

@@ -488,6 +488,71 @@ Rotation2D/3D Householder Givens Random RandomSPD RandomOrthogonal`, and
   printing `ToString ToStringPrec Print PrintLabeled ToCSV`. Shape errors
   return a `0x0` matrix rather than panicking.
 
+### AI and machine learning
+
+One family of packages, all pure Salam, seeded and deterministic (a fixed
+seed gives the same result on every machine at any thread count). The deep
+learning half is `f32` on `std/tensor`; the classical half is `f64` on
+`std/matrix`. Shape errors return the empty tensor / `0x0` matrix.
+
+- **`tensor`**: n-d `f32` arrays, contiguous row-major, no views. `Tensor
+{data: Vector<f32>, shape: Vector<int>}` with `rank numel dim at set_at at2
+set_at2 reshape_ free`; build with `Zeros(shape) Zeros1..4 Ones Full Scalar
+FromArray Arange Clone CopyInto` and `Shape1..4` helpers. Elementwise `Add Sub
+Mul Div` broadcast in four modes (equal, one element, trailing suffix `[N,D]+[D]`,
+trailing one `[N,1]`), plus `AddScalar Scale Neg Exp Log Tanh Sigmoid Relu Gelu
+Sqrt Abs Square PowScalar Clip` and `*InPlace / *Into / AddScaled` forms. Shape:
+`Reshape SqueezeInPlace UnsqueezeInPlace Permute SliceAxis0 Narrow Concat2
+Stack2 Pad2D`. Reduce: `SumAll MeanAll MaxAll MinAll ArgMaxAll SumAxis MeanAxis
+MaxAxis ArgMaxAxis Softmax LogSoftmax`. Products: `MatMul MatMulInto MatMulAcc
+TransposeMul MulTranspose BatchMatMul MatVec Dot Transpose2D` (packed 4x16
+kernel, ~90 GFLOP/s a core on the LLVM backend, 5x on six cores). Conv:
+`Conv2DForward MaxPool2DForward AvgPool2DForward Im2Col Col2ImAcc`. Random:
+`Rng NewRng DeriveSeed FillUniform FillNormal FillBernoulli RandUniform
+RandNormal`. Parallel: `SetThreads Threads`. Bridge `ToMatrix FromMatrix`;
+records `WriteTensor ReadTensor`; `AllClose Equal MaxAbsDiff ShapeString`.
+- **`autograd`**: tape-based reverse mode. `NewTape(seed)`, leaves `Input`
+  (constant) `Watch` (tape-owned grad) `Param(val, grad)` (accumulates into the
+  caller's buffer), recorded ops `Add Sub Mul Div Neg Scale AddScalar Exp Log
+Tanh Sigmoid Relu Gelu Sqrt Square PowScalar MatMul BatchMatMul Sum Mean
+SumAxis MeanAxis Softmax LogSoftmax Reshape Transpose2D Permute Embedding
+Dropout LayerNorm Conv2D MaxPool2D AvgPool2D`, losses `MSELoss
+CrossEntropyLogits BCEWithLogits`, then `Backward(tp, loss)`, `Value Grad`,
+`tp.reset()` per step, `tp.free()`. `GradCheck` does central differences.
+- **`nn`**: `ParamStore` (owns values and grads; layers hold int handles)
+  with `add at zero_grad free`, `Bind`; layers `Linear Conv2D MaxPool2D
+AvgPool2D LayerNorm Embedding Dropout MultiHeadAttention
+TransformerEncoderLayer` (`New*` constructors, `forward(tp, ps, x)`),
+  `Flatten SinusoidalPositions`, init `XavierUniform XavierNormal
+KaimingUniform KaimingNormal`, checkpoints `SaveCheckpoint LoadCheckpoint`
+  (SLMT, `.gz` aware) and the `*Buf` forms.
+- **`optim`**: `SGD` (momentum, nesterov, weight decay) `Adam` `NewAdamW`
+  `RMSProp` with `step(ps)`, `ClipGradNorm ClipGradValue`, schedules `StepLR
+CosineLR WarmupCosine`.
+- **`ml`**: struct-per-estimator over `matrix`; `fit(x, y): bool`, `predict`,
+  `predict_proba`, `transform`, `score`, `free`, hyperparameters as fields
+  (`ml.KMeans { k = 3, seed = 7 }`). Preprocessing `StandardScaler MinMaxScaler
+LabelEncoder OneHotEncoder SimpleImputer PolynomialFeatures`; models
+  `LinearReg Ridge Lasso LogisticRegression KNNClassifier KNNRegressor
+GaussianNB DecisionTree RandomForest AdaBoost GradientBoosting LinearSVM SVC
+LDA QDA KMeans MiniBatchKMeans DBSCAN Agglomerative GaussianMixture PCA`;
+  metrics `Accuracy ConfusionMatrix Precision Recall F1 MacroF1 RocAuc LogLoss
+MSE MAE RMSE R2Score SilhouetteScore AdjustedRandIndex`; selection
+  `TrainTestSplit KFold StratifiedKFold CrossValScore MeanScore` (callbacks);
+  `LabelsToInts CountClasses`.
+- **`data`**: `MakeBlobs MakeMoons MakeCircles MakeRegression
+MakeClassification` (seeded), `LoadCsv LoadCsvFile` → `Table` (`kinds
+to_matrix split_xy cat_levels`), `MatrixDataset.batches` → `BatchIter`
+  (`next next_tensor reset`), `LoadIdx LoadMnist ParseIdx`, `LoadImageFolder`,
+  `XTensor YLabels`.
+- **`npy`**: `ReadNpy ReadNpyFile WriteNpy WriteNpyFile ToMatrix FromMatrix
+NpzList NpzRead NpzWrite`.
+- **`onnx`**: `LoadOnnx ParseOnnx Run` for inference of MLP/CNN-style graphs
+  (`Conv Gemm MatMul Relu Sigmoid Tanh Softmax MaxPool AveragePool
+GlobalAveragePool BatchNormalization Reshape Flatten Transpose Concat ...`).
+- **`gguf`**: `LoadGguf ParseGguf` (metadata, tensor directory),
+  `LoadTensorF32` dequantizing `F32 F16 Q8_0 Q4_0 Q4_1`.
+
 ### I/O, OS, filesystem
 
 - **`io`**: `ReadFile WriteFile AppendFile Lines WriteLines Input Read Write

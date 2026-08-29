@@ -1,0 +1,221 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/gguf: a hand-built GGUF v3 image with mixed metadata and F32,
+// F16, Q8_0, Q4_0 and Q4_1 tensors, parsed and dequantized.
+
+import archive
+import compress
+import encoding.binary
+import filepath
+import gguf
+import os
+import tensor
+import testing
+
+func put_str(b &: compress.ByteBuf, s: str):
+    binary.WriteU64LE(b, compress.BufLen(compress.BufFromStr(s)) as i64)
+    compress.BufPushBytes(b, s as void*, compress.BufLen(compress.BufFromStr(s)))
+end
+
+func kv_u32(b &: compress.ByteBuf, key: str, v: int):
+    put_str(b, key)
+    binary.WriteU32LE(b, 4)
+    binary.WriteU32LE(b, v)
+end
+
+func kv_str(b &: compress.ByteBuf, key: str, v: str):
+    put_str(b, key)
+    binary.WriteU32LE(b, 8)
+    put_str(b, v)
+end
+
+func tensor_info(b &: compress.ByteBuf, name: str, ne0: int, ne1: int, ggml_type: int, offset: int):
+    put_str(b, name)
+    mut nd := 1
+    if ne1 > 0: nd = 2 end
+    binary.WriteU32LE(b, nd)
+    binary.WriteU64LE(b, ne0 as i64)
+    if ne1 > 0: binary.WriteU64LE(b, ne1 as i64) end
+    binary.WriteU32LE(b, ggml_type)
+    binary.WriteU64LE(b, offset as i64)
+end
+
+func main:
+    eps := 0.000001
+    // half-precision bit patterns: 0.5, 1.0, -2.0, 0.25
+    h_half := 0x3800
+    h_one := 0x3C00
+    h_neg2 := 0xC000
+    h_quarter := 0x3400
+
+    mut b := compress.NewByteBuf()
+    compress.BufPushBytes(b, "GGUF" as void*, 4)
+    binary.WriteU32LE(b, 3)
+    binary.WriteU64LE(b, 5)   // tensors
+    binary.WriteU64LE(b, 6)   // metadata pairs
+    kv_str(b, "general.architecture", "test")
+    kv_u32(b, "general.alignment", 32)
+    // an i64
+    put_str(b, "test.count")
+    binary.WriteU32LE(b, 11)
+    binary.WriteU64LE(b, 0 - 7)
+    // an f32
+    put_str(b, "test.scale")
+    binary.WriteU32LE(b, 6)
+    binary.WriteF32(b, 1.5, false)
+    // an array of i32
+    put_str(b, "test.ids")
+    binary.WriteU32LE(b, 9)
+    binary.WriteU32LE(b, 5)
+    binary.WriteU64LE(b, 3)
+    binary.WriteU32LE(b, 10)
+    binary.WriteU32LE(b, 20)
+    binary.WriteU32LE(b, 30)
+    // an array of strings
+    put_str(b, "tokenizer.tokens")
+    binary.WriteU32LE(b, 9)
+    binary.WriteU32LE(b, 8)
+    binary.WriteU64LE(b, 2)
+    put_str(b, "<s>")
+    put_str(b, "hello")
+
+    // Tensor directory: offsets into the data section.
+    // f32 [ne0=3, ne1=2] = 24 bytes, f16 [4] = 8 bytes -> pad to 32,
+    // q8_0 [32] = 34 -> next at 96, q4_0 [32] = 18 -> next at 128,
+    // q4_1 [32] = 20.
+    tensor_info(b, "w.f32", 3, 2, gguf.GGML_F32, 0)
+    tensor_info(b, "w.f16", 4, 0, gguf.GGML_F16, 32)
+    tensor_info(b, "w.q8", 32, 0, gguf.GGML_Q8_0, 64)
+    tensor_info(b, "w.q40", 32, 0, gguf.GGML_Q4_0, 128)
+    tensor_info(b, "w.q41", 32, 0, gguf.GGML_Q4_1, 160)
+    // Align the data section.
+    until compress.BufLen(b) % 32 != 0: binary.WriteU8(b, 0) end
+    data_start := compress.BufLen(b)
+    // w.f32: 2 rows of 3
+    repeat 6 with k: binary.WriteF32(b, (k as f64) * 0.5, false) end
+    until compress.BufLen(b) - data_start < 32: binary.WriteU8(b, 0) end
+    // w.f16
+    binary.WriteU16LE(b, h_half)
+    binary.WriteU16LE(b, h_one)
+    binary.WriteU16LE(b, h_neg2)
+    binary.WriteU16LE(b, h_quarter)
+    until compress.BufLen(b) - data_start < 64: binary.WriteU8(b, 0) end
+    // w.q8: d = 0.5, q = j - 16
+    binary.WriteU16LE(b, h_half)
+    repeat 32 with j: binary.WriteU8(b, (j - 16) & 255) end
+    until compress.BufLen(b) - data_start < 128: binary.WriteU8(b, 0) end
+    // w.q40: d = 1.0, byte j holds nibbles (j, 15 - j)
+    binary.WriteU16LE(b, h_one)
+    repeat 16 with j: binary.WriteU8(b, (j & 15) | ((15 - j) << 4)) end
+    until compress.BufLen(b) - data_start < 160: binary.WriteU8(b, 0) end
+    // w.q41: d = 0.25, m = -2.0, byte j holds nibbles (j, j)
+    binary.WriteU16LE(b, h_quarter)
+    binary.WriteU16LE(b, h_neg2)
+    repeat 16 with j: binary.WriteU8(b, (j & 15) | ((j & 15) << 4)) end
+
+    mut ok := false
+    mut g := gguf.ParseGguf(compress.BufClone(b), ok)
+    testing.AssertTrue(ok)
+    testing.AssertEqInt(g.version, 3)
+    testing.AssertEqInt(g.alignment, 32)
+    testing.AssertEqInt(g.data_offset, data_start)
+    testing.AssertEqInt(g.keys.len(), 6)
+    testing.AssertEqStr(g.meta_str("general.architecture"), "test")
+    testing.AssertEqInt(g.meta_int("test.count", 0) as int, 0 - 7)
+    testing.AssertEqInt(g.meta_int("missing", 42) as int, 42)
+    sk := g.meta_index("test.scale")
+    testing.AssertEqFloat(g.values.get(sk).f, 1.5, eps)
+    ik := g.meta_index("test.ids")
+    testing.AssertEqInt(g.values.get(ik).kind, gguf.META_ARRAY)
+    testing.AssertEqInt(g.values.get(ik).ints.len(), 3)
+    testing.AssertEqInt(g.values.get(ik).ints.get(2) as int, 30)
+    tk := g.meta_index("tokenizer.tokens")
+    testing.AssertEqInt(g.values.get(tk).strs.len(), 2)
+    testing.AssertEqStr(g.values.get(tk).strs.get(1), "hello")
+
+    // The tensor directory
+    testing.AssertEqInt(g.tensors.len(), 5)
+    testing.AssertEqInt(g.tensor_index("w.q8"), 2)
+    testing.AssertEqInt(g.tensor_index("nope"), 0 - 1)
+    testing.AssertEqInt(g.tensors.get(0).count(), 6)
+    testing.AssertEqInt(gguf.TensorBytes(g, 2), 34)
+    testing.AssertEqInt(gguf.TensorBytes(g, 3), 18)
+
+    // F32 comes back row-major [2, 3]
+    mut tok := false
+    mut f32 := gguf.LoadTensorF32(g, 0, tok)
+    testing.AssertTrue(tok)
+    testing.AssertEqInt(f32.dim(0), 2)
+    testing.AssertEqInt(f32.dim(1), 3)
+    testing.AssertEqFloat(f32.at2(1, 2), 2.5, eps)
+    // F16 decodes the four patterns
+    mut f16 := gguf.LoadTensorF32(g, 1, tok)
+    testing.AssertTrue(tok)
+    testing.AssertEqFloat(f16.at(0), 0.5, eps)
+    testing.AssertEqFloat(f16.at(1), 1.0, eps)
+    testing.AssertEqFloat(f16.at(2), 0.0 - 2.0, eps)
+    testing.AssertEqFloat(f16.at(3), 0.25, eps)
+    // Q8_0: 0.5 * (j - 16)
+    mut q8 := gguf.LoadTensorF32(g, 2, tok)
+    testing.AssertTrue(tok)
+    testing.AssertEqFloat(q8.at(0), 0.0 - 8.0, eps)
+    testing.AssertEqFloat(q8.at(31), 7.5, eps)
+    // Q4_0: element j = j - 8, element j+16 = (15 - j) - 8
+    mut q40 := gguf.LoadTensorF32(g, 3, tok)
+    testing.AssertTrue(tok)
+    testing.AssertEqFloat(q40.at(0), 0.0 - 8.0, eps)
+    testing.AssertEqFloat(q40.at(15), 7.0, eps)
+    testing.AssertEqFloat(q40.at(16), 7.0, eps)
+    testing.AssertEqFloat(q40.at(31), 0.0 - 8.0, eps)
+    // Q4_1: 0.25 * j - 2
+    mut q41 := gguf.LoadTensorF32(g, 4, tok)
+    testing.AssertTrue(tok)
+    testing.AssertEqFloat(q41.at(0), 0.0 - 2.0, eps)
+    testing.AssertEqFloat(q41.at(4), 0.0 - 1.0, eps)
+    testing.AssertEqFloat(q41.at(20), 0.0 - 1.0, eps)
+
+    // Through a file
+    dir := filepath.Join(os.TempDir(), "salam_gguf_test")
+    archive.EnsureDir(dir)
+    path := filepath.Join(dir, "tiny.gguf")
+    testing.AssertTrue(archive.WriteBinaryFileBuf(path, b))
+    mut fok := false
+    mut gf := gguf.LoadGguf(path, fok)
+    testing.AssertTrue(fok)
+    testing.AssertEqInt(gf.tensors.len(), 5)
+    mut mok := true
+    mut gm := gguf.LoadGguf(filepath.Join(dir, "missing.gguf"), mok)
+    testing.AssertFalse(mok)
+
+    // Not a GGUF
+    mut jok := true
+    mut gj := gguf.ParseGguf(compress.BufFromStr("GGML but not GGUF, and far too short"), jok)
+    testing.AssertFalse(jok)
+
+    g.free()
+    gf.free()
+    gm.free()
+    gj.free()
+    tensor.Free(f32)
+    tensor.Free(f16)
+    tensor.Free(q8)
+    tensor.Free(q40)
+    tensor.Free(q41)
+    compress.BufFree(b)
+
+    ret testing.Summary()
+end

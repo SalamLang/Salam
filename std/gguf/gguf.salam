@@ -1,0 +1,363 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "gguf"
+@fa "جی‌جی‌یو‌اف"
+@ar "جي جي يو إف"
+package gguf
+
+import archive
+import compress
+import encoding.binary
+import str
+
+// GGUF, the weight container of the llama.cpp ecosystem: a header, a
+// key-value metadata block, a tensor directory, and an aligned data
+// section. This package reads versions 2 and 3, exposes the metadata
+// (every scalar type, strings, and arrays of them), lists the tensors
+// with their ggml types and dimensions, and dequantizes the common
+// formats to f32 tensors (gguf_quant): F32, F16, Q8_0, Q4_0, Q4_1.
+//
+// GGUF stores dimensions innermost first (ne[0] is the fastest-varying
+// axis), which is the reverse of row-major shape order; LoadTensorF32
+// reverses them, so a [4096 x 32000] embedding table comes back as a
+// tensor of shape [32000, 4096] with rows as tokens.
+//
+// Everything past the metadata - the tokenizer, RoPE, attention, the
+// KV cache, sampling - belongs to a future std/llm that consumes this
+// package together with std/tensor and std/nn.
+
+@en "GGML_F32"
+@fa "نوع اعشاری سی‌ودو"
+@ar "نوع عشري اثنان وثلاثون"
+pub const GGML_F32 := 0
+
+@en "GGML_F16"
+@fa "نوع اعشاری شانزده"
+@ar "نوع عشري ستة عشر"
+pub const GGML_F16 := 1
+
+@en "GGML_Q4_0"
+@fa "نوع کوانتیزه چهار صفر"
+@ar "نوع مكمم أربعة صفر"
+pub const GGML_Q4_0 := 2
+
+@en "GGML_Q4_1"
+@fa "نوع کوانتیزه چهار یک"
+@ar "نوع مكمم أربعة واحد"
+pub const GGML_Q4_1 := 3
+
+@en "GGML_Q8_0"
+@fa "نوع کوانتیزه هشت صفر"
+@ar "نوع مكمم ثمانية صفر"
+pub const GGML_Q8_0 := 8
+
+// Metadata value kinds (the GGUF type codes).
+@en "META_STRING"
+@fa "فراداده رشته"
+@ar "بيانات وصفية نصية"
+pub const META_STRING := 8
+
+@en "META_ARRAY"
+@fa "فراداده آرایه"
+@ar "بيانات وصفية مصفوفة"
+pub const META_ARRAY := 9
+
+@en "MetaValue"
+@fa "مقدار فراداده"
+@ar "قيمة بيانات وصفية"
+pub struct MetaValue:
+    pub kind: int = 0
+    pub elem_kind: int = 0
+    pub i: i64 = 0
+    pub f: f64 = 0.0
+    pub s: str = ""
+    pub ints: Vector<i64> = Vector {}
+    pub floats: Vector<f64> = Vector {}
+    pub strs: Vector<str> = Vector {}
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free():
+        this.ints.free()
+        this.floats.free()
+        this.strs.free()
+    end
+end
+
+@en "TensorInfo"
+@fa "اطلاعات تانسور"
+@ar "معلومات الموتر"
+pub struct TensorInfo:
+    pub name: str = ""
+    pub dims: Vector<int> = Vector {}
+    pub ggml_type: int = 0
+    pub offset: i64 = 0
+
+    @en "count"
+    @fa "شمار"
+    @ar "عدد"
+    pub func count(): int:
+        mut n := 1
+        repeat this.dims.len() with i: n = n * this.dims.get(i) end
+        ret n
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free(): this.dims.free() end
+end
+
+@en "Gguf"
+@fa "جی‌جی‌یو‌اف"
+@ar "جي جي يو إف"
+pub struct Gguf:
+    pub version: int = 0
+    pub keys: Vector<str> = Vector {}
+    pub values: Vector<MetaValue> = Vector {}
+    pub tensors: Vector<TensorInfo> = Vector {}
+    pub alignment: int = 32
+    pub data_offset: int = 0
+    pub raw: compress.ByteBuf = compress.ByteBuf {}
+    pub error: str = ""
+    pub ok: bool = false
+
+    @en "meta_index"
+    @fa "نمایه فراداده"
+    @ar "دليل البيانات الوصفية"
+    pub func meta_index(key: str): int:
+        repeat this.keys.len() with i:
+            if str.Equals(this.keys.get(i), key): ret i end
+        end
+        ret 0 - 1
+    end
+
+    @en "meta_int"
+    @fa "فراداده صحیح"
+    @ar "بيانات وصفية صحيحة"
+    pub func meta_int(key: str, dflt: i64): i64:
+        k := this.meta_index(key)
+        if k < 0: ret dflt end
+        ret this.values.get(k).i
+    end
+
+    @en "meta_str"
+    @fa "فراداده رشته"
+    @ar "بيانات وصفية نصية"
+    pub func meta_str(key: str): str:
+        k := this.meta_index(key)
+        if k < 0: ret "" end
+        ret this.values.get(k).s
+    end
+
+    @en "tensor_index"
+    @fa "نمایه تانسور"
+    @ar "دليل الموتر"
+    pub func tensor_index(name: str): int:
+        repeat this.tensors.len() with i:
+            t := this.tensors.get(i)
+            if str.Equals(t.name, name): ret i end
+        end
+        ret 0 - 1
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free():
+        this.keys.free()
+        repeat this.values.len() with i:
+            mut v := this.values.get(i)
+            v.free()
+        end
+        this.values.free()
+        repeat this.tensors.len() with i:
+            mut t := this.tensors.get(i)
+            t.free()
+        end
+        this.tensors.free()
+        compress.BufFree(this.raw)
+    end
+end
+
+// A GGUF string: u64 length, then the bytes.
+func _read_str(rd &: compress.ByteReader, out &: str): bool:
+    n := binary.ReadU64LE(rd) as int
+    if rd.bad || n < 0 || compress.RdLeft(rd) < n: ret false end
+    mut b := compress.RdBytes(rd, n)
+    out = compress.BufToStrUnsafe(b)
+    compress.BufFree(b)
+    ret true
+end
+
+// One scalar of GGUF type `kind` into v.i / v.f.
+func _read_scalar(rd &: compress.ByteReader, kind: int, iv &: i64, fv &: f64): bool:
+    if kind == 0:
+        iv = binary.ReadU8(rd) as i64
+    else kind == 1:
+        mut x := binary.ReadU8(rd)
+        if x >= 128: x = x - 256 end
+        iv = x as i64
+    else kind == 2:
+        iv = binary.ReadU16LE(rd) as i64
+    else kind == 3:
+        mut x := binary.ReadU16LE(rd)
+        if x >= 32768: x = x - 65536 end
+        iv = x as i64
+    else kind == 4:
+        mut x := binary.ReadU32LE(rd) as i64
+        if x < 0: x = x + 4294967296 end
+        iv = x
+    else kind == 5:
+        iv = binary.ReadU32LE(rd) as i64
+    else kind == 6:
+        fv = binary.ReadF32(rd, false)
+    else kind == 7:
+        iv = binary.ReadU8(rd) as i64
+    else kind == 10 || kind == 11:
+        iv = binary.ReadU64LE(rd)
+    else kind == 12:
+        fv = binary.ReadF64(rd, false)
+    else:
+        ret false
+    end
+    ret rd.bad == false
+end
+
+func _read_value(rd &: compress.ByteReader, kind: int, v &: MetaValue): bool:
+    v.kind = kind
+    if kind == META_STRING: ret _read_str(rd, v.s) end
+    if kind == META_ARRAY:
+        ek := binary.ReadU32LE(rd)
+        cnt := binary.ReadU64LE(rd) as int
+        if rd.bad || cnt < 0: ret false end
+        v.elem_kind = ek
+        repeat cnt:
+            if ek == META_STRING:
+                mut s := ""
+                if _read_str(rd, s) == false: ret false end
+                v.strs.push(s)
+            else ek == 6 || ek == 12:
+                mut f := 0.0
+                mut iv := 0 as i64
+                if _read_scalar(rd, ek, iv, f) == false: ret false end
+                v.floats.push(f)
+            else:
+                mut f := 0.0
+                mut iv := 0 as i64
+                if _read_scalar(rd, ek, iv, f) == false: ret false end
+                v.ints.push(iv)
+            end
+        end
+        ret true
+    end
+    ret _read_scalar(rd, kind, v.i, v.f)
+end
+
+func _parse(g &: Gguf): bool:
+    mut rd := compress.ReaderFromBuf(g.raw)
+    if compress.RdLeft(rd) < 24:
+        g.error = "too short"
+        ret false
+    end
+    if binary.ReadU8(rd) != 71 || binary.ReadU8(rd) != 71 || binary.ReadU8(rd) != 85 || binary.ReadU8(rd) != 70:
+        g.error = "not a GGUF file"
+        ret false
+    end
+    g.version = binary.ReadU32LE(rd)
+    if g.version != 2 && g.version != 3:
+        g.error = "unsupported version " + g.version
+        ret false
+    end
+    ntensors := binary.ReadU64LE(rd) as int
+    nkv := binary.ReadU64LE(rd) as int
+    if rd.bad || ntensors < 0 || nkv < 0:
+        g.error = "bad counts"
+        ret false
+    end
+    repeat nkv:
+        mut key := ""
+        if _read_str(rd, key) == false:
+            g.error = "bad metadata key"
+            ret false
+        end
+        kind := binary.ReadU32LE(rd)
+        mut v := MetaValue {}
+        if _read_value(rd, kind, v) == false:
+            g.error = "bad metadata value for " + key
+            ret false
+        end
+        g.keys.push(key)
+        g.values.push(v)
+    end
+    repeat ntensors:
+        mut t := TensorInfo {}
+        if _read_str(rd, t.name) == false:
+            g.error = "bad tensor name"
+            ret false
+        end
+        nd := binary.ReadU32LE(rd)
+        if rd.bad || nd < 0 || nd > 8:
+            g.error = "bad tensor rank"
+            ret false
+        end
+        repeat nd: t.dims.push(binary.ReadU64LE(rd) as int) end
+        t.ggml_type = binary.ReadU32LE(rd)
+        t.offset = binary.ReadU64LE(rd)
+        if rd.bad:
+            g.error = "truncated tensor directory"
+            ret false
+        end
+        g.tensors.push(t)
+    end
+    al := g.meta_int("general.alignment", 32)
+    if al > 0: g.alignment = al as int end
+    mut off := rd.pos
+    if off % g.alignment != 0: off = off + (g.alignment - off % g.alignment) end
+    g.data_offset = off
+    ret true
+end
+
+// ---- public API ----
+
+// Parses a GGUF image the caller hands over; the buffer is kept (and
+// freed by Gguf.free) so tensors can be loaded from it later.
+@en "ParseGguf"
+@fa "تجزیه جی‌جی‌یو‌اف"
+@ar "تحليل جي جي يو إف"
+pub func ParseGguf(buf: compress.ByteBuf, ok &: bool): Gguf:
+    mut g := Gguf {}
+    g.raw = buf
+    ok = _parse(g)
+    g.ok = ok
+    ret g
+end
+
+@en "LoadGguf"
+@fa "بارگذاری جی‌جی‌یو‌اف"
+@ar "تحميل جي جي يو إف"
+pub func LoadGguf(path: str, ok &: bool): Gguf:
+    ok = false
+    mut fok := false
+    mut raw := archive.ReadBinaryFile(path, fok)
+    if fok == false:
+        compress.BufFree(raw)
+        mut g := Gguf {}
+        g.error = "cannot read " + path
+        ret g
+    end
+    ret ParseGguf(raw, ok)
+end

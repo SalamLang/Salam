@@ -1,0 +1,325 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ml
+
+import matrix
+
+// Clustering. KMeans with k-means++ seeding and Lloyd iterations, the
+// best of n_init restarts by inertia; DBSCAN by density with a brute
+// force neighborhood query. Both are seeded and deterministic.
+//
+// KMeans labels are 0..k-1 in the order the centers were seeded.
+// DBSCAN labels clusters 0, 1, ... in discovery order and marks noise
+// as -1, the scikit-learn convention.
+
+@en "KMeans"
+@fa "کی-میانگین"
+@ar "المتوسطات-ك"
+pub struct KMeans:
+    pub k: int = 8
+    pub max_iter: int = 300
+    pub tol: f64 = 0.0001
+    pub n_init: int = 3
+    pub seed: i64 = 42
+    pub centers: matrix.Matrix = matrix.Matrix {}
+    pub inertia: f64 = 0.0
+    pub n_iter: int = 0
+    pub ok: bool = false
+
+    @en "fit"
+    @fa "برازش"
+    @ar "ملاءمة"
+    pub func fit(x &: matrix.Matrix): bool:
+        this.ok = false
+        if x.is_empty() || this.k < 1 || x.rows < this.k: ret false end
+        mut labels := Vector {} as Vector<int>
+        labels.zeros(x.rows)
+        mut best_inertia := 1.0e300
+        mut best_centers := matrix.Matrix {}
+        mut best_iters := 0
+        mut runs := this.n_init
+        if runs < 1: runs = 1 end
+        repeat runs with r:
+            mut g := matrix.NewRng(this.seed + 7919 * (r as i64))
+            mut c := _kmeanspp(x, this.k, g)
+            mut iters := 0
+            inertia := _lloyd(x, c, labels, this.max_iter, this.tol, iters)
+            if inertia < best_inertia:
+                best_inertia = inertia
+                matrix.Free(best_centers)
+                best_centers = c
+                best_iters = iters
+            else:
+                matrix.Free(c)
+            end
+        end
+        labels.free()
+        matrix.Free(this.centers)
+        this.centers = best_centers
+        this.inertia = best_inertia
+        this.n_iter = best_iters
+        this.ok = true
+        ret true
+    end
+
+    // Nearest center per row, as an n x 1 label column.
+    @en "predict"
+    @fa "پیش‌بینی"
+    @ar "تنبؤ"
+    pub func predict(x &: matrix.Matrix): matrix.Matrix:
+        if this.ok == false || x.cols != this.centers.cols: ret matrix.Matrix {} end
+        mut out := matrix.Zeros(x.rows, 1)
+        repeat x.rows with i:
+            mut bi := 0
+            mut bd := _sqdist(x, i, this.centers, 0)
+            repeat this.k - 1 with t:
+                d := _sqdist(x, i, this.centers, t + 1)
+                if d < bd:
+                    bd = d
+                    bi = t + 1
+                end
+            end
+            out.set(i, 0, bi as f64)
+        end
+        ret out
+    end
+
+    @en "fit_predict"
+    @fa "برازش و پیش‌بینی"
+    @ar "ملاءمة وتنبؤ"
+    pub func fit_predict(x &: matrix.Matrix): matrix.Matrix:
+        if this.fit(x) == false: ret matrix.Matrix {} end
+        ret this.predict(x)
+    end
+
+    // Distances to every center, n x k.
+    @en "transform"
+    @fa "تبدیل"
+    @ar "تحويل"
+    pub func transform(x &: matrix.Matrix): matrix.Matrix:
+        if this.ok == false || x.cols != this.centers.cols: ret matrix.Matrix {} end
+        mut out := matrix.Zeros(x.rows, this.k)
+        repeat x.rows with i:
+            repeat this.k with c: out.set(i, c, _sqdist(x, i, this.centers, c)) end
+        end
+        repeat out.count() with t: out.a.set(t, _sqrt_pos(out.a.get(t))) end
+        ret out
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free(): matrix.Free(this.centers) end
+end
+
+@en "DBSCAN"
+@fa "دی‌بی‌اسکن"
+@ar "دي بي سكان"
+pub struct DBSCAN:
+    pub eps: f64 = 0.5
+    pub min_samples: int = 5
+    pub labels: matrix.Matrix = matrix.Matrix {}
+    pub n_clusters: int = 0
+    pub ok: bool = false
+
+    @en "fit"
+    @fa "برازش"
+    @ar "ملاءمة"
+    pub func fit(x &: matrix.Matrix): bool:
+        this.ok = false
+        if x.is_empty(): ret false end
+        n := x.rows
+        eps2 := this.eps * this.eps
+        matrix.Free(this.labels)
+        this.labels = matrix.Full(n, 1, 0.0 - 1.0)
+        mut visited := Vector {} as Vector<bool>
+        visited.zeros(n)
+        mut cluster := 0
+        mut queue := Vector {} as Vector<int>
+        repeat n with i:
+            if visited.get(i): continue end
+            visited.set(i, true)
+            mut nb := _region(x, i, eps2)
+            if nb.len() < this.min_samples:
+                nb.free()
+                continue
+            end
+            // Expand a new cluster from this core point.
+            this.labels.set(i, 0, cluster as f64)
+            queue.clear()
+            repeat nb.len() with t: queue.push(nb.get(t)) end
+            nb.free()
+            mut head := 0
+            until head < queue.len():
+                q := queue.get(head)
+                head += 1
+                if this.labels.at(q, 0) < 0.0: this.labels.set(q, 0, cluster as f64) end
+                if visited.get(q): continue end
+                visited.set(q, true)
+                mut nq := _region(x, q, eps2)
+                if nq.len() >= this.min_samples:
+                    repeat nq.len() with t: queue.push(nq.get(t)) end
+                end
+                nq.free()
+            end
+            cluster += 1
+        end
+        visited.free()
+        queue.free()
+        this.n_clusters = cluster
+        this.ok = true
+        ret true
+    end
+
+    @en "fit_predict"
+    @fa "برازش و پیش‌بینی"
+    @ar "ملاءمة وتنبؤ"
+    pub func fit_predict(x &: matrix.Matrix): matrix.Matrix:
+        if this.fit(x) == false: ret matrix.Matrix {} end
+        ret matrix.Clone(this.labels)
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free(): matrix.Free(this.labels) end
+end
+
+func _sqdist(a &: matrix.Matrix, i: int, b &: matrix.Matrix, j: int): f64:
+    mut s := 0.0
+    repeat a.cols with c:
+        d := a.at(i, c) - b.at(j, c)
+        s += d * d
+    end
+    ret s
+end
+
+// k-means++: the first center uniformly, each next one with
+// probability proportional to its squared distance from the nearest
+// center chosen so far.
+func _kmeanspp(x &: matrix.Matrix, k: int, g &: matrix.Rng): matrix.Matrix:
+    n := x.rows
+    mut c := matrix.Zeros(k, x.cols)
+    first := (g.next_float() * (n as f64)) as int
+    repeat x.cols with j: c.set(0, j, x.at(first, j)) end
+    mut best := Vector {} as Vector<f64>
+    repeat n with i: best.push(_sqdist(x, i, c, 0)) end
+    mut chosen := 1
+    until chosen < k:
+        mut total := 0.0
+        repeat n with i: total += best.get(i) end
+        mut pick := n - 1
+        if total > 0.0:
+            r := g.next_float() * total
+            mut acc := 0.0
+            mut found := false
+            repeat n with i:
+                if found == false:
+                    acc += best.get(i)
+                    if acc >= r:
+                        pick = i
+                        found = true
+                    end
+                end
+            end
+        else:
+            pick = (g.next_float() * (n as f64)) as int
+        end
+        repeat x.cols with j: c.set(chosen, j, x.at(pick, j)) end
+        repeat n with i:
+            d := _sqdist(x, i, c, chosen)
+            if d < best.get(i): best.set(i, d) end
+        end
+        chosen += 1
+    end
+    best.free()
+    ret c
+end
+
+// Lloyd's iterations from the given centers; returns the inertia and
+// leaves labels/centers updated.
+func _lloyd(x &: matrix.Matrix, centers &: matrix.Matrix, labels &: Vector<int>, max_iter: int, tol: f64, iters_out &: int): f64:
+    n := x.rows
+    k := centers.rows
+    p := x.cols
+    mut sums := matrix.Zeros(k, p)
+    mut counts := Vector {} as Vector<int>
+    counts.zeros(k)
+    mut inertia := 0.0
+    mut it := 0
+    mut done := false
+    until it < max_iter && done == false:
+        // Assignment.
+        inertia = 0.0
+        repeat n with i:
+            mut bi := 0
+            mut bd := _sqdist(x, i, centers, 0)
+            repeat k - 1 with t:
+                d := _sqdist(x, i, centers, t + 1)
+                if d < bd:
+                    bd = d
+                    bi = t + 1
+                end
+            end
+            labels.set(i, bi)
+            inertia += bd
+        end
+        // Update.
+        matrix.SetAll(sums, 0.0)
+        repeat k with c: counts.set(c, 0) end
+        repeat n with i:
+            c := labels.get(i)
+            counts.set(c, counts.get(c) + 1)
+            repeat p with j: sums.add_at(c, j, x.at(i, j)) end
+        end
+        mut shift := 0.0
+        repeat k with c:
+            if counts.get(c) > 0:
+                repeat p with j:
+                    nv := sums.at(c, j) / (counts.get(c) as f64)
+                    d := nv - centers.at(c, j)
+                    shift += d * d
+                    centers.set(c, j, nv)
+                end
+            end
+        end
+        it += 1
+        if shift <= tol * tol: done = true end
+    end
+    iters_out = it
+    sums.free()
+    counts.free()
+    ret inertia
+end
+
+func _sqrt_pos(v: f64): f64:
+    if v <= 0.0: ret 0.0 end
+    // Newton iterations are overkill; std/math is not imported here to
+    // keep this file's dependencies to std/matrix alone, and a handful
+    // of steps from a good start reach f64 precision.
+    mut r := v
+    if r > 1.0: r = v / 2.0 end
+    repeat 40: r = 0.5 * (r + v / r) end
+    ret r
+end
+
+// Indices within eps (squared) of row i, including i itself.
+func _region(x &: matrix.Matrix, i: int, eps2: f64): Vector<int>:
+    mut out := Vector {} as Vector<int>
+    repeat x.rows with j:
+        if _sqdist(x, i, x, j) <= eps2: out.push(j) end
+    end
+    ret out
+end

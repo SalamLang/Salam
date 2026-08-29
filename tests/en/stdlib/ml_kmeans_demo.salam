@@ -1,0 +1,136 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/ml: k-means and DBSCAN on seeded blobs and moons.
+
+import data
+import matrix
+import ml
+import testing
+
+// Agreement between two labelings up to a permutation of cluster ids:
+// each true class is matched to the predicted label it most often gets.
+func agreement(truth &: matrix.Matrix, pred &: matrix.Matrix, k: int): f64:
+    mut hits := 0
+    repeat k with c:
+        mut counts := Vector {} as Vector<int>
+        counts.zeros(k)
+        repeat truth.rows with i:
+            if (truth.at(i, 0) as int) == c:
+                p := pred.at(i, 0) as int
+                if p >= 0 && p < k: counts.set(p, counts.get(p) + 1) end
+            end
+        end
+        mut best := 0
+        repeat k with p:
+            if counts.get(p) > best: best = counts.get(p) end
+        end
+        hits += best
+        counts.free()
+    end
+    ret (hits as f64) / (truth.rows as f64)
+end
+
+func main:
+    mut y := matrix.Matrix {}
+    mut x := data.MakeBlobs(300, 3, 2, 0.4, 11, y)
+
+    mut km := ml.KMeans { k = 3, seed = 1 }
+    mut labels := km.fit_predict(x)
+    testing.AssertTrue(km.ok)
+    testing.AssertEqInt(km.centers.rows, 3)
+    testing.AssertEqInt(labels.rows, 300)
+    testing.AssertTrue(agreement(y, labels, 3) >= 0.95)
+    testing.AssertTrue(km.inertia > 0.0)
+    testing.AssertTrue(km.n_iter >= 1)
+
+    // The same seed reproduces the same centers; predict matches fit
+    mut km2 := ml.KMeans { k = 3, seed = 1 }
+    testing.AssertTrue(km2.fit(x))
+    testing.AssertTrue(matrix.AllClose(km.centers, km2.centers, 0.000000001))
+    mut again := km.predict(x)
+    testing.AssertTrue(matrix.AllClose(again, labels, 0.0))
+
+    // Every center is close to a true blob mean
+    mut near := true
+    repeat 3 with c:
+        mut best := 1.0e300
+        repeat 3 with t:
+            mut sx := 0.0
+            mut sy := 0.0
+            mut cnt := 0
+            repeat x.rows with i:
+                if (y.at(i, 0) as int) == t:
+                    sx += x.at(i, 0)
+                    sy += x.at(i, 1)
+                    cnt += 1
+                end
+            end
+            dx := km.centers.at(c, 0) - sx / (cnt as f64)
+            dy := km.centers.at(c, 1) - sy / (cnt as f64)
+            d := dx * dx + dy * dy
+            if d < best: best = d end
+        end
+        if best > 0.25: near = false end
+    end
+    testing.AssertTrue(near)
+
+    // transform gives one distance per center
+    mut dist := km.transform(x)
+    testing.AssertEqInt(dist.cols, 3)
+    testing.AssertTrue(dist.at(0, labels.at(0, 0) as int) <= dist.at(0, 0))
+    testing.AssertTrue(dist.at(0, labels.at(0, 0) as int) <= dist.at(0, 1))
+
+    // DBSCAN separates the two moons and flags no more than a few noise
+    mut my2 := matrix.Matrix {}
+    mut mx2 := data.MakeMoons(300, 0.05, 12, my2)
+    mut db := ml.DBSCAN { eps = 0.25, min_samples = 4 }
+    mut dl := db.fit_predict(mx2)
+    testing.AssertEqInt(db.n_clusters, 2)
+    mut noise := 0
+    repeat dl.rows with i:
+        if dl.at(i, 0) < 0.0: noise += 1 end
+    end
+    testing.AssertTrue(noise <= 5)
+    testing.AssertTrue(agreement(my2, dl, 2) >= 0.95)
+    // A tiny eps makes everything noise
+    mut db2 := ml.DBSCAN { eps = 0.001, min_samples = 4 }
+    testing.AssertTrue(db2.fit(mx2))
+    testing.AssertEqInt(db2.n_clusters, 0)
+
+    // Errors
+    mut kbig := ml.KMeans { k = 500 }
+    testing.AssertFalse(kbig.fit(x))
+    mut fresh := ml.KMeans {}
+    testing.AssertTrue(fresh.predict(x).is_empty())
+
+    km.free()
+    km2.free()
+    db.free()
+    db2.free()
+    kbig.free()
+    fresh.free()
+    matrix.Free(x)
+    matrix.Free(y)
+    matrix.Free(labels)
+    matrix.Free(again)
+    matrix.Free(dist)
+    matrix.Free(mx2)
+    matrix.Free(my2)
+    matrix.Free(dl)
+
+    ret testing.Summary()
+end

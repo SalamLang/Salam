@@ -1,0 +1,113 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ml
+
+import matrix
+
+// Dimensionality reduction. PCA wraps std/matrix's PCAFit/PCATransform
+// in the estimator convention, keeping the first n_components
+// directions (all of them when n_components is 0); the explained
+// variance ratio is exposed for the usual scree decision.
+
+@en "PCA"
+@fa "تحلیل مؤلفه اصلی"
+@ar "تحليل المكونات الرئيسية"
+pub struct PCA:
+    pub n_components: int = 0
+    pub components: matrix.Matrix = matrix.Matrix {}
+    pub mean: matrix.Matrix = matrix.Matrix {}
+    pub explained_variance: matrix.Matrix = matrix.Matrix {}
+    pub explained_ratio: matrix.Matrix = matrix.Matrix {}
+    pub ok: bool = false
+
+    @en "fit"
+    @fa "برازش"
+    @ar "ملاءمة"
+    pub func fit(x &: matrix.Matrix): bool:
+        this.ok = false
+        if x.is_empty() || x.rows < 2: ret false end
+        mut full := matrix.PCAFit(x)
+        if full.components.is_empty():
+            full.free()
+            ret false
+        end
+        mut keep := this.n_components
+        if keep <= 0 || keep > full.components.cols: keep = full.components.cols end
+        matrix.Free(this.components)
+        matrix.Free(this.mean)
+        matrix.Free(this.explained_variance)
+        matrix.Free(this.explained_ratio)
+        // Components come back one per column; keep the leading ones.
+        this.components = matrix.SubMatrix(full.components, 0, 0, full.components.rows, keep)
+        this.mean = matrix.Clone(full.center)
+        this.explained_variance = matrix.SubMatrix(full.variances, 0, 0, 1, keep)
+        mut total := 0.0
+        repeat full.variances.count() with t: total += full.variances.a.get(t) end
+        this.explained_ratio = matrix.Zeros(1, keep)
+        if total > 0.0:
+            repeat keep with j: this.explained_ratio.set(0, j, this.explained_variance.at(0, j) / total) end
+        end
+        full.free()
+        this.n_components = keep
+        this.ok = true
+        ret true
+    end
+
+    // Projects rows onto the kept components: (x - mean) W.
+    @en "transform"
+    @fa "تبدیل"
+    @ar "تحويل"
+    pub func transform(x &: matrix.Matrix): matrix.Matrix:
+        if this.ok == false || x.cols != this.components.rows: ret matrix.Matrix {} end
+        mut xc := matrix.Clone(x)
+        repeat x.rows with i:
+            repeat x.cols with j: xc.add_at(i, j, 0.0 - this.mean.at(0, j)) end
+        end
+        r := matrix.MatMul(xc, this.components)
+        matrix.Free(xc)
+        ret r
+    end
+
+    @en "fit_transform"
+    @fa "برازش و تبدیل"
+    @ar "ملاءمة وتحويل"
+    pub func fit_transform(x &: matrix.Matrix): matrix.Matrix:
+        if this.fit(x) == false: ret matrix.Matrix {} end
+        ret this.transform(x)
+    end
+
+    // Back to the original space: z W' + mean.
+    @en "inverse_transform"
+    @fa "تبدیل معکوس"
+    @ar "تحويل عكسي"
+    pub func inverse_transform(z &: matrix.Matrix): matrix.Matrix:
+        if this.ok == false || z.cols != this.components.cols: ret matrix.Matrix {} end
+        mut r := matrix.MulTranspose(z, this.components)
+        repeat r.rows with i:
+            repeat r.cols with j: r.add_at(i, j, this.mean.at(0, j)) end
+        end
+        ret r
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free():
+        matrix.Free(this.components)
+        matrix.Free(this.mean)
+        matrix.Free(this.explained_variance)
+        matrix.Free(this.explained_ratio)
+    end
+end

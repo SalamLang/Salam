@@ -122,6 +122,53 @@ pub const EV_PING := 10
 // Next() ran out of time with nothing to hand back. Not a failure.
 pub const EV_TIMEOUT := 11
 
+@en "EventUpgrade"
+@fa "رویداد ارتقا"
+@ar "حدث الترقیة"
+// The session moved from long-polling onto a WebSocket, mid-connection and
+// without interrupting anything.
+pub const EV_UPGRADE := 12
+
+// Why a disconnect happened, spelled exactly as socket.io spells it.
+//
+// These are not descriptions, they are identifiers: the JavaScript client
+// hands the same six strings to a `disconnect` handler, and real programs
+// branch on them - "io server disconnect" means the server made the
+// decision and reconnecting would fight it, while "transport close" means
+// the network went and coming back is the right response. A client that
+// invented friendlier wording here would silently break every one of those
+// handlers on the way across.
+
+@en "ReasonServerDisconnect"
+@fa "قطع توسط سرور"
+@ar "قطع من الخادم"
+pub const REASON_SERVER_DISCONNECT := "io server disconnect"
+
+@en "ReasonClientDisconnect"
+@fa "قطع توسط کارخواه"
+@ar "قطع من العمیل"
+pub const REASON_CLIENT_DISCONNECT := "io client disconnect"
+
+@en "ReasonPingTimeout"
+@fa "مهلت پینگ"
+@ar "مهلة البینغ"
+pub const REASON_PING_TIMEOUT := "ping timeout"
+
+@en "ReasonTransportClose"
+@fa "بسته شدن حمل‌ونقل"
+@ar "إغلاق النقل"
+pub const REASON_TRANSPORT_CLOSE := "transport close"
+
+@en "ReasonTransportError"
+@fa "خطای حمل‌ونقل"
+@ar "خطأ النقل"
+pub const REASON_TRANSPORT_ERROR := "transport error"
+
+@en "ReasonParseError"
+@fa "خطای تجزیه"
+@ar "خطأ التحلیل"
+pub const REASON_PARSE_ERROR := "parse error"
+
 // Pump outcomes.
 @en "PumpOk"
 @fa "پمپ موفق"
@@ -196,6 +243,26 @@ pub struct Options:
     // cannot grow without bound. 0 turns the queue off entirely, which is
     // right for a handler-only program and wrong for anything using Next.
     pub event_queue: int = 256
+    // The default deadline for an acknowledgement, in milliseconds, and the
+    // one `retries` counts against. 0 means an EmitAck given no deadline of
+    // its own waits forever.
+    pub ack_timeout: int = 0
+    // How many times to re-send an event that goes unacknowledged before
+    // giving up. Turning this on makes every emit ask for an acknowledgement
+    // whether or not the caller wanted one, which is how socket.io does it
+    // too - there is no other way to know a packet arrived. Needs
+    // `ack_timeout` to be set, and needs the server to actually acknowledge:
+    // an event no handler acknowledges will be sent `retries` times over.
+    pub retries: int = 0
+    // Engine.IO puts a "/" between the path and the query string
+    // ("/socket.io/?EIO=4"). Servers behind a proxy that normalises paths
+    // sometimes need it left off.
+    pub trailing_slash: bool = true
+    // After one connection has upgraded to WebSocket, go straight to
+    // WebSocket on the next one instead of handshaking over polling first.
+    // Saves two round trips per reconnection, and is wrong if the reason the
+    // connection dropped was that WebSocket stopped working.
+    pub remember_upgrade: bool = false
 end
 
 // Client - one namespace on one connection. A handle; copy it freely.
@@ -263,6 +330,16 @@ struct Handler:
 end
 
 // AckWaiter - an outstanding acknowledgement.
+// Outgoing - a packet waiting for a connection to exist.
+//
+// An emit on a socket that is not connected is not an error: socket.io keeps
+// it and sends it on connect, which is what makes a reconnect invisible to
+// the code doing the emitting. `volatile` is the opt-out.
+struct Outgoing:
+    pub text: str = ""
+    pub bins: Vector<Bytes> = Vector {}
+end
+
 struct AckWaiter:
     pub id: int = 0 - 1
     pub deadline: i64 = 0
@@ -274,16 +351,13 @@ struct AckWaiter:
     // and leaves the Ack in `results` for the caller to pick up instead.
     pub has_cb: bool = false
     pub cb: func (Ack) = (a: Ack): end
-end
-
-// Outgoing - a packet waiting for a connection to exist.
-//
-// An emit on a socket that is not connected is not an error: socket.io keeps
-// it and sends it on connect, which is what makes a reconnect invisible to
-// the code doing the emitting. `volatile` is the opt-out.
-struct Outgoing:
-    pub text: str = ""
-    pub bins: Vector<Bytes> = Vector {}
+    // Re-send state, for Options.retries. The packet is kept encoded so a
+    // retry costs nothing but a write.
+    pub retries_left: int = 0
+    pub interval: int = 0
+    pub internal: bool = false
+    pub has_packet: bool = false
+    pub packet: Outgoing = Outgoing {}
 end
 
 // A namespace's state. `_Sock` and `_Mgr` are allocated once and referred to
@@ -305,9 +379,18 @@ struct SockState:
     pub last_offset: str = ""
     pub recovered: bool = false
     pub auth: str = ""
+    // Set when the server refuses this namespace, so a Connect that is
+    // waiting for an answer stops waiting: a refusal IS the answer, and
+    // sitting out the full timeout after one would turn a one-round-trip
+    // "no" into a twenty-second hang.
+    pub refused: bool = false
+    pub refusal: str = ""
     pub ack_seq: int = 0
     pub handlers: Vector<Handler> = Vector {}
     pub any_handlers: Vector<Handler> = Vector {}
+    // Catch-alls for events going the other way, which is how a program
+    // logs or traces what it sends without wrapping every Emit call.
+    pub out_handlers: Vector<Handler> = Vector {}
     pub waiters: Vector<AckWaiter> = Vector {}
     // Answers to blocking EmitAck calls, waiting to be picked up by id.
     pub results: Vector<Ack> = Vector {}
@@ -330,6 +413,9 @@ struct MgrState:
     pub ping_timeout: int = 20000
     pub max_payload: int = 1000000
     pub can_upgrade: bool = false
+    // Set once a connection on this manager has actually upgraded, so
+    // Options.remember_upgrade has something to remember.
+    pub upgraded_before: bool = false
     // When the last packet of any kind arrived. The heartbeat deadline is
     // measured from here: Engine.IO v4 has the SERVER send the pings, so
     // silence past ping_interval + ping_timeout means the connection is
@@ -342,6 +428,10 @@ struct MgrState:
     // Packets waiting to go out over the polling transport, which can only
     // write when it is not in the middle of a long-poll.
     pub pollout: Vector<str> = Vector {}
+    // While set, a write only queues. Used to send a whole group of packets
+    // - everything buffered while offline - in one request instead of one
+    // request each.
+    pub batching: bool = false
     // Reassembly of a packet whose binary attachments are still arriving.
     pub recon: bool = false
     pub recon_pkt: Packet = Packet {}

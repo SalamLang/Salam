@@ -78,12 +78,22 @@ func _query_of(m: MgrState*, transport: str, sid: str): str:
     ret q
 end
 
+// "/socket.io" + "/" + "?EIO=4...". The slash is what Engine.IO puts there
+// and what a server mounted the usual way expects; Options.trailing_slash
+// drops it for the ones behind a proxy that rewrites paths.
+func _mount(m: MgrState*): str:
+    if m[0].opts.trailing_slash:
+        ret m[0].ep.path + "/?"
+    end
+    ret m[0].ep.path + "?"
+end
+
 func _poll_url(m: MgrState*, sid: str): str:
-    ret Origin(m[0].ep) + m[0].ep.path + "/?" + _query_of(m, "polling", sid)
+    ret Origin(m[0].ep) + _mount(m) + _query_of(m, "polling", sid)
 end
 
 func _ws_path(m: MgrState*, sid: str): str:
-    ret m[0].ep.path + "/?" + _query_of(m, "websocket", sid)
+    ret _mount(m) + _query_of(m, "websocket", sid)
 end
 
 // The open packet: the session id, and the two numbers the heartbeat runs on.
@@ -147,6 +157,7 @@ func _ws_direct(m: MgrState*): bool:
         ret false
     end
     m[0].transport = TRANSPORT_WEBSOCKET
+    m[0].upgraded_before = true
     ret true
 end
 
@@ -229,7 +240,9 @@ func _try_upgrade(m: MgrState*): bool:
         ret false
     end
     m[0].transport = TRANSPORT_WEBSOCKET
+    m[0].upgraded_before = true
     m[0].last_rx = _now()
+    _broadcast_lifecycle(m, EV_UPGRADE, "websocket")
     ret true
 end
 
@@ -243,12 +256,23 @@ func _engine_open(m: MgrState*): bool:
     // transport; the polling transport's HTTP client has no way to be told
     // to skip the check, so its handshake would fail before the upgrade got
     // a chance.
-    if m[0].opts.transports == TRANSPORT_WEBSOCKET || (m[0].ep.secure && m[0].opts.insecure):
-        if !_ws_direct(m):
+    // remember_upgrade: the last connection on this manager reached
+    // WebSocket, so start there instead of paying for the polling handshake
+    // and the upgrade probe all over again.
+    remembered := m[0].opts.remember_upgrade && m[0].upgraded_before && m[0].opts.transports == TRANSPORT_AUTO
+    if m[0].opts.transports == TRANSPORT_WEBSOCKET || remembered || (m[0].ep.secure && m[0].opts.insecure):
+        if _ws_direct(m):
+            m[0].state = ST_OPEN
+            ret true
+        end
+        if !remembered:
             ret false
         end
-        m[0].state = ST_OPEN
-        ret true
+        // The shortcut was a guess about a network that has since changed -
+        // which is the usual reason the connection dropped in the first
+        // place. Forget it and take the long way round.
+        m[0].upgraded_before = false
+        m[0].last_error = ""
     end
     if !_poll_handshake(m):
         ret false
@@ -261,8 +285,21 @@ func _engine_open(m: MgrState*): bool:
 end
 
 func _engine_close(m: MgrState*):
-    if m[0].transport == TRANSPORT_WEBSOCKET && websocket.IsOpen(m[0].ws):
-        websocket.SendText(m[0].ws, EncodeEngine(EIO_CLOSE, ""))
+    if m[0].transport == TRANSPORT_POLLING && m[0].state == ST_OPEN && m[0].sid.len() > 0:
+        // A polling session has no socket to close, so the only way to say
+        // goodbye is to post it. Without this the server holds the session
+        // open until pingTimeout and keeps replaying its state to nobody.
+        m[0].pollout.clear()
+        m[0].pollout.push(EncodeEngine(EIO_CLOSE, ""))
+        _poll_flush(m)
+    end
+    // Closed unconditionally, not only on the websocket transport: an
+    // upgrade probe that failed leaves a socket open on a session that is
+    // still polling, and that one has an owner too.
+    if websocket.IsOpen(m[0].ws):
+        if m[0].transport == TRANSPORT_WEBSOCKET:
+            websocket.SendText(m[0].ws, EncodeEngine(EIO_CLOSE, ""))
+        end
         websocket.Close(m[0].ws)
     end
     m[0].state = ST_CLOSED
@@ -270,12 +307,48 @@ func _engine_close(m: MgrState*):
 end
 
 // Everything queued for the polling transport, in one POST.
+// Everything queued for the polling transport, in as few POSTs as the
+// server's maxPayload allows.
+//
+// The batching is not an optimisation, it is a requirement: a server that
+// announced maxPayload rejects a larger body outright, so one oversized
+// batch would lose every packet in it rather than the one that overflowed.
 func _poll_flush(m: MgrState*): bool:
     if m[0].pollout.len() == 0:
         ret true
     end
-    body := JoinPayloads(m[0].pollout)
+    mut cap := m[0].max_payload
+    if cap < 1024:
+        cap = 1024
+    end
+    mut batch := Vector {} as Vector<str>
+    defer batch.free()
+    mut used := 0
+    mut ok := true
+    repeat m[0].pollout.len() with i:
+        one := m[0].pollout.get(i)
+        // +1 for the record separator this payload will need.
+        if batch.len() > 0 && used + one.len() + 1 > cap:
+            if !_poll_post(m, batch):
+                ok = false
+            end
+            batch.clear()
+            used = 0
+        end
+        batch.push(one)
+        used += one.len() + 1
+    end
+    if batch.len() > 0 && ok:
+        if !_poll_post(m, batch):
+            ok = false
+        end
+    end
     m[0].pollout.clear()
+    ret ok
+end
+
+func _poll_post(m: MgrState*, items: Vector<str>): bool:
+    body := JoinPayloads(items)
     hdrs := _headers_of(m) + "Content-Type: text/plain;charset=UTF-8\r\n"
     r := http.RequestRaw("POST", _poll_url(m, m[0].sid), hdrs, body)
     if r.status != 200:
@@ -294,6 +367,9 @@ func _engine_write(m: MgrState*, payload: str): bool:
         ret websocket.SendText(m[0].ws, payload) == 0
     end
     m[0].pollout.push(payload)
+    if m[0].batching:
+        ret true
+    end
     ret _poll_flush(m)
 end
 
@@ -307,6 +383,9 @@ func _engine_write_bytes(m: MgrState*, b: Bytes): bool:
         ret websocket.SendBinaryBytes(m[0].ws, b.ptr, b.len) == 0
     end
     m[0].pollout.push("b" + BytesToBase64(b))
+    if m[0].batching:
+        ret true
+    end
     ret _poll_flush(m)
 end
 
@@ -332,7 +411,7 @@ func _engine_payload(m: MgrState*, payload: str):
         _engine_write(m, EncodeEngine(EIO_PONG, ""))
         _broadcast_lifecycle(m, EV_PING, "")
     else k == EIO_CLOSE:
-        _engine_shutdown(m, "the server closed the connection")
+        _engine_shutdown(m, REASON_TRANSPORT_CLOSE)
     else k == EIO_MESSAGE:
         _on_socketio_text(m, EngineBody(payload))
     end

@@ -32,8 +32,12 @@ import encoding.value
 // binary attachments, acknowledgements in both directions and with
 // deadlines, several namespaces multiplexed over one connection, the
 // heartbeat, automatic reconnection with exponential backoff and jitter,
-// buffering of everything emitted while offline, and connection state
-// recovery.
+// buffering of everything emitted while offline, re-sending an event that
+// goes unacknowledged, and connection state recovery.
+//
+// What it deliberately does not do: permessage-deflate compression, custom
+// parsers, and client certificates. A self-signed server certificate is
+// reachable through Options.insecure.
 //
 // There is no async/await in Salam, so where the JavaScript client hands
 // you a promise this one gives you a choice of two shapes:
@@ -41,10 +45,11 @@ import encoding.value
 //   handlers      On(c, "chat", (e: Event): ... end) and then Run(c),
 //                 which is the JavaScript program written the same way.
 //
-//   a loop        ev := Next(c, 1000), which is often the better fit here,
-//                 because a Salam lambda captures by value: a handler
+//   a loop        ev := NextEvent(c, 1000), which is often the better fit
+//                 here, because a Salam lambda captures by value: a handler
 //                 cannot write to a variable in the function that
-//                 registered it, while the body of a loop can.
+//                 registered it, while the body of a loop can. Next is the
+//                 same thing including the lifecycle events.
 //
 // Both are driven by the same pump and can be mixed. Nothing runs in the
 // background: a connection only makes progress inside Pump, Next, Run or a
@@ -62,11 +67,12 @@ import encoding.value
 //         socketio.EmitStr(c, "hello", "from salam")
 //         mut going := true
 //         until going:
-//             ev := socketio.Next(c, 1000)
-//             if ev.kind == socketio.EV_EVENT && ev.name == "reply":
+//             mut ev := socketio.NextEvent(c, 1000)
+//             if ev.name == "reply":
 //                 println socketio.ArgStr(ev, 0)
 //                 going = false
 //             end
+//             socketio.EventFree(ev)
 //         end
 //         socketio.Close(c)
 //     end
@@ -104,6 +110,9 @@ func _lifecycle_name(kind: int): str:
     end
     if kind == EV_PING:
         ret "ping"
+    end
+    if kind == EV_UPGRADE:
+        ret "upgrade"
     end
     ret ""
 end
@@ -183,6 +192,24 @@ func _deliver(c: Client, ev0: Event):
     end
 end
 
+// The outgoing counterpart of OnAny: every emit, as it goes out.
+func _notify_outgoing(c: Client, name: str, data: str, ack_id: int):
+    sp := _sock(c)
+    if sp[0].out_handlers.len() == 0:
+        ret
+    end
+    ev := Event { kind = EV_EVENT, name = name, nsp = sp[0].nsp, data = data, ack_id = ack_id, client = c }
+    n := sp[0].out_handlers.len()
+    mut i := 0
+    until i < n && i < sp[0].out_handlers.len():
+        h := sp[0].out_handlers.get(i)
+        if h.alive:
+            h.cb(ev)
+        end
+        i += 1
+    end
+end
+
 func _broadcast_lifecycle(m: MgrState*, kind: int, message: str):
     repeat m[0].socks.len() with i:
         c := m[0].socks.get(i)
@@ -210,9 +237,17 @@ func _resolve_ack(c: Client, id: int, data: str, bins &: Vector<Bytes>): bool:
         if w.alive && w.id == id:
             w.alive = false
             sp[0].waiters.set(i, w)
+            if w.has_packet:
+                mut kept := w.packet
+                _free_bins(kept.bins)
+            end
             mut a := Ack { ok = true, id = id, data = data, bins = bins }
             if w.has_cb:
                 w.cb(a)
+                _free_bins(a.bins)
+            else if w.internal:
+                // Nobody asked for this one; the id existed only so that
+                // Options.retries had something to wait for.
                 _free_bins(a.bins)
             else:
                 sp[0].results.push(a)
@@ -243,19 +278,47 @@ func _expire_acks(m: MgrState*):
             if !w.alive:
                 dead = true
             else w.has_deadline && now >= w.deadline:
-                w.alive = false
-                sp[0].waiters.set(i, w)
-                dead = true
-                a := Ack { ok = false, id = w.id, data = "[]" }
-                if w.has_cb:
-                    w.cb(a)
+                if w.internal && m[0].state != ST_OPEN:
+                    // A retry has nothing to send over. Hold the deadline
+                    // rather than spending an attempt on a closed transport.
+                    w.deadline = now + (w.interval as i64)
+                    sp[0].waiters.set(i, w)
+                else w.retries_left > 0 && w.has_packet:
+                    // Options.retries: the acknowledgement is the only proof
+                    // a packet arrived, so a missing one means send it again.
+                    w.retries_left -= 1
+                    w.deadline = now + (w.interval as i64)
+                    sp[0].waiters.set(i, w)
+                    _write_packet(m, w.packet.text, w.packet.bins)
                 else:
-                    sp[0].results.push(a)
+                    w.alive = false
+                    sp[0].waiters.set(i, w)
+                    dead = true
+                    if w.has_packet:
+                        mut p := w.packet
+                        _free_bins(p.bins)
+                    end
+                    a := Ack { ok = false, id = w.id, data = "[]" }
+                    if w.has_cb:
+                        w.cb(a)
+                    else if !w.internal:
+                        sp[0].results.push(a)
+                    end
                 end
             end
         end
         if dead:
             _drop_dead_waiters(sp)
+        end
+    end
+end
+
+func _free_waiter_packets(sp: SockState*):
+    repeat sp[0].waiters.len() with i:
+        w := sp[0].waiters.get(i)
+        if w.has_packet:
+            mut p := w.packet
+            _free_bins(p.bins)
         end
     end
 end
@@ -350,12 +413,14 @@ func _handle_packet(m: MgrState*, p: Packet, bins &: Vector<Bytes>):
         if why.len() == 0:
             why = p.data
         end
+        sp[0].refused = true
+        sp[0].refusal = why
         _deliver(c, Event { kind = EV_CONNECT_ERROR, nsp = sp[0].nsp, message = why, data = "[]" })
     else p.kind == PKT_DISCONNECT:
         _free_bins(bins)
         sp[0].connected = false
         sp[0].id = ""
-        _deliver(c, Event { kind = EV_DISCONNECT, nsp = sp[0].nsp, message = "the server closed this namespace", data = "[]" })
+        _deliver(c, Event { kind = EV_DISCONNECT, nsp = sp[0].nsp, message = REASON_SERVER_DISCONNECT, data = "[]" })
     else p.kind == PKT_EVENT || p.kind == PKT_BINARY_EVENT:
         _on_event_packet(c, p, bins)
     else p.kind == PKT_ACK || p.kind == PKT_BINARY_ACK:
@@ -368,7 +433,7 @@ end
 func _on_socketio_text(m: MgrState*, text: str):
     p := DecodePacket(text)
     if !p.ok:
-        _broadcast_lifecycle(m, EV_ERROR, "unreadable packet: " + text)
+        _broadcast_lifecycle(m, EV_ERROR, REASON_PARSE_ERROR + ": " + text)
         ret
     end
     if p.attachments > 0 && (p.kind == PKT_BINARY_EVENT || p.kind == PKT_BINARY_ACK):
@@ -415,6 +480,8 @@ end
 
 func _send_connect(m: MgrState*, c: Client):
     sp := _sock(c)
+    sp[0].refused = false
+    sp[0].refusal = ""
     mut payload := ""
     if sp[0].pid.len() > 0:
         payload = `{"pid":` + json.Str(sp[0].pid) + `,"offset":` + json.Str(sp[0].last_offset) + "}"
@@ -425,6 +492,13 @@ func _send_connect(m: MgrState*, c: Client):
     _engine_write(m, EncodeEngine(EIO_MESSAGE, EncodePacket(p)))
 end
 
+// Everything held while there was no connection, now that there is one.
+//
+// The whole group goes in one request rather than one request each. Over a
+// WebSocket that changes nothing - a write is a frame either way - but over
+// polling each write is an HTTP round trip, so a client coming back with
+// twenty held events would otherwise open twenty connections to say what
+// fits in one body.
 func _flush_outbuf(c: Client):
     sp := _sock(c)
     m := sp[0].mgr as MgrState*
@@ -433,12 +507,15 @@ func _flush_outbuf(c: Client):
     end
     mut pending := sp[0].outbuf
     sp[0].outbuf = Vector {} as Vector<Outgoing>
+    m[0].batching = true
     repeat pending.len() with i:
         mut o := pending.get(i)
         _write_packet(m, o.text, o.bins)
         _free_bins(o.bins)
     end
+    m[0].batching = false
     pending.free()
+    _poll_flush(m)
 end
 
 func _reconnect_namespaces(m: MgrState*):
@@ -539,23 +616,45 @@ end
 func _pump_mgr(m: MgrState*, timeout_ms: int): int:
     _expire_acks(m)
     if m[0].state == ST_OPEN && _heartbeat_expired(m):
-        _engine_shutdown(m, "the server stopped sending heartbeats")
+        _engine_shutdown(m, REASON_PING_TIMEOUT)
     end
     if m[0].state != ST_OPEN:
         ret _reconnect_step(m, timeout_ms)
     end
     rc := _transport_read(m, timeout_ms)
     if rc == PUMP_CLOSED:
-        _engine_shutdown(m, "the connection was lost")
+        _engine_shutdown(m, REASON_TRANSPORT_CLOSE)
         ret PUMP_CLOSED
     end
     ret rc
 end
 
-func _emit_raw(c: Client, kind: int, name: str, a: Args, ack_id: int, volatile: bool): bool:
+// One copy of an outgoing packet, owning its own attachments, for a buffer
+// or a retry to hold on to after the caller has freed its Args.
+func _copy_outgoing(text: str, a: Args): Outgoing:
+    mut o := Outgoing { text = text }
+    repeat a.bins.len() with i:
+        b := a.bins.get(i)
+        o.bins.push(NewBytes(b.ptr, b.len))
+    end
+    ret o
+end
+
+func _emit_raw(c: Client, kind: int, name: str, a: Args, ack_id0: int, volatile: bool): bool:
     sp := _sock(c)
     m := sp[0].mgr as MgrState*
-    mut p := Packet { kind = kind, nsp = sp[0].nsp, id = ack_id, data = ArgsJSON(a, name) }
+    mut ack_id := ack_id0
+    mut retrying := false
+    // Options.retries turns every emit into one that asks to be
+    // acknowledged, because an acknowledgement is the only evidence a
+    // packet arrived. The caller never sees this id; the waiter it creates
+    // is marked internal and its answer is thrown away.
+    if kind == PKT_EVENT && ack_id < 0 && m[0].opts.retries > 0 && m[0].opts.ack_timeout > 0:
+        ack_id = _next_ack_id(sp)
+        retrying = true
+    end
+    data := ArgsJSON(a, name)
+    mut p := Packet { kind = kind, nsp = sp[0].nsp, id = ack_id, data = data }
     if a.bins.len() > 0:
         if kind == PKT_EVENT:
             p.kind = PKT_BINARY_EVENT
@@ -565,18 +664,24 @@ func _emit_raw(c: Client, kind: int, name: str, a: Args, ack_id: int, volatile: 
         p.attachments = a.bins.len()
     end
     text := EncodeEngine(EIO_MESSAGE, EncodePacket(p))
+    if kind == PKT_EVENT:
+        _notify_outgoing(c, name, data, ack_id0)
+    end
+    if retrying:
+        mut w := AckWaiter { id = ack_id, alive = true, internal = true, has_deadline = true, has_packet = true }
+        w.deadline = time.MonoMillis() + (m[0].opts.ack_timeout as i64)
+        w.interval = m[0].opts.ack_timeout
+        w.retries_left = m[0].opts.retries
+        w.packet = _copy_outgoing(text, a)
+        sp[0].waiters.push(w)
+    end
     if !sp[0].connected:
         if volatile:
             ret false
         end
         // Held, not dropped: this is what makes a reconnection invisible to
         // the code doing the emitting.
-        mut o := Outgoing { text = text }
-        repeat a.bins.len() with i:
-            b := a.bins.get(i)
-            o.bins.push(NewBytes(b.ptr, b.len))
-        end
-        sp[0].outbuf.push(o)
+        sp[0].outbuf.push(_copy_outgoing(text, a))
         ret true
     end
     ret _write_packet(m, text, a.bins)
@@ -585,7 +690,7 @@ end
 func _wait_connected(c: Client, deadline: i64): bool:
     sp := _sock(c)
     m := sp[0].mgr as MgrState*
-    until !sp[0].connected && time.MonoMillis() < deadline:
+    until !sp[0].connected && !sp[0].refused && time.MonoMillis() < deadline:
         left := (deadline - time.MonoMillis()) as int
         if left <= 0:
             ret sp[0].connected
@@ -602,6 +707,14 @@ func _reserved(name: str): bool:
     ret str.Contains(RESERVED, "|" + name + "|")
 end
 
+// A namespace name, as the server will see it.
+//
+// Only a missing leading slash is corrected, and only because "chat" is a
+// slip nobody means. A trailing slash is left alone: "/chat/" and "/chat"
+// are two different namespaces to a Socket.IO server, and quietly sending
+// one when the caller wrote the other would be a bug that only shows up as
+// "Invalid namespace" from the far end. (ParseURL does strip it, because
+// there a trailing slash is a URL convention rather than a name.)
 func _norm_nsp(nsp: str): str:
     mut s := str.Trim(nsp)
     if s.len() == 0:
@@ -609,9 +722,6 @@ func _norm_nsp(nsp: str): str:
     end
     if !str.StartsWith(s, "/"):
         s = "/" + s
-    end
-    until s.len() > 1 && str.EndsWith(s, "/"):
-        s = s.substr(0, s.len() - 1)
     end
     ret s
 end
@@ -628,6 +738,18 @@ func _norm_path(path: str): str:
         s = s.substr(0, s.len() - 1)
     end
     ret s
+end
+
+// How long to wait for an acknowledgement: what the caller asked for, or
+// Options.ack_timeout when they asked for nothing in particular, or forever.
+func _ack_wait(m: MgrState*, timeout_ms: int): int:
+    if timeout_ms > 0:
+        ret timeout_ms
+    end
+    if timeout_ms < 0:
+        ret 0
+    end
+    ret m[0].opts.ack_timeout
 end
 
 func _next_ack_id(sp: SockState*): int:
@@ -652,6 +774,8 @@ func _free_sock(c: Client):
     sp := _sock(c)
     sp[0].handlers.free()
     sp[0].any_handlers.free()
+    sp[0].out_handlers.free()
+    _free_waiter_packets(sp)
     sp[0].waiters.free()
     repeat sp[0].outbuf.len() with i:
         mut o := sp[0].outbuf.get(i)
@@ -838,7 +962,7 @@ pub func Disconnect(c: Client):
         _engine_write(m, EncodeEngine(EIO_MESSAGE, EncodePacket(p)))
         sp[0].connected = false
         sp[0].id = ""
-        _deliver(c, Event { kind = EV_DISCONNECT, nsp = sp[0].nsp, message = "closed by this client", data = "[]" })
+        _deliver(c, Event { kind = EV_DISCONNECT, nsp = sp[0].nsp, message = REASON_CLIENT_DISCONNECT, data = "[]" })
     end
     if !_any_active(m):
         _engine_close(m)
@@ -940,6 +1064,10 @@ end
 // write a result back to the function that registered it, while the body of
 // a `until` loop around Next is ordinary code in the caller's own scope.
 //
+// Everything comes through here, lifecycle events included - a connect, a
+// disconnect, a heartbeat, an upgrade - so a loop that only wants what the
+// server sent either checks `ev.kind == EV_EVENT` or calls NextEvent.
+//
 // The returned event owns its binary attachments; release it with EventFree
 // when it may have any. Handlers registered with On still run, from inside
 // this call.
@@ -976,6 +1104,49 @@ pub func Next(c: Client, timeout_ms: int): Event:
                 if rc == PUMP_CLOSED && !m[0].opts.reconnection:
                     going = false
                 end
+            end
+        end
+    end
+    ret out
+end
+
+// NextEvent - the next application event, skipping the lifecycle ones.
+//
+// Next hands back everything, connects and pings included, because a program
+// driven by a loop still has to see them. Most loops only care about what
+// the server sent, and this is that loop without the `if ev.kind ==
+// EV_EVENT` around its body. An EV_TIMEOUT still comes back when the wait
+// runs out, and so does an EV_DISCONNECT that ends the connection for good,
+// so the loop can stop.
+@en "NextEvent"
+@fa "رویداد بعدی"
+@ar "الحدث التالی"
+pub func NextEvent(c: Client, timeout_ms: int): Event:
+    if c.p == null:
+        ret Event { kind = EV_TIMEOUT }
+    end
+    sp := _sock(c)
+    deadline := time.MonoMillis() + (timeout_ms as i64)
+    mut out := Event { kind = EV_TIMEOUT, nsp = sp[0].nsp, client = c }
+    mut going := true
+    until going:
+        mut left := 0 - 1
+        if timeout_ms >= 0:
+            left = (deadline - time.MonoMillis()) as int
+            if left <= 0:
+                going = false
+            end
+        end
+        if going:
+            mut ev := Next(c, left)
+            if ev.kind == EV_EVENT || ev.kind == EV_TIMEOUT:
+                out = ev
+                going = false
+            else ev.kind == EV_DISCONNECT && !sp[0].active:
+                out = ev
+                going = false
+            else:
+                EventFree(ev)
             end
         end
     end
@@ -1232,9 +1403,10 @@ end
 // handlers still run, and it hands the answer back as a return value rather
 // than into a callback that could not reach the caller's variables.
 //
-// A `timeout_ms` of 0 or less waits indefinitely. On a timeout the result
-// has `ok = false` and no data - the server may still have acted on the
-// event. Release it with AckFree.
+// `timeout_ms` above zero is a deadline in milliseconds; zero takes
+// Options.ack_timeout, and below zero waits forever whatever the options
+// say. On a timeout the result has `ok = false` and no data - the server may
+// still have acted on the event. Release it with AckFree.
 @en "EmitAck"
 @fa "ارسال و تایید"
 @ar "إرسال وانتظار الإقرار"
@@ -1245,12 +1417,13 @@ pub func EmitAck(c: Client, name: str, a: Args, timeout_ms: int): Ack:
     sp := _sock(c)
     m := sp[0].mgr as MgrState*
     id := _next_ack_id(sp)
-    _register_waiter(sp, id, timeout_ms, false, (x: Ack): end)
+    wait := _ack_wait(m, timeout_ms)
+    _register_waiter(sp, id, wait, false, (x: Ack): end)
     if !_emit_raw(c, PKT_EVENT, name, a, id, false):
         ret Ack { id = id }
     end
-    mut deadline := time.MonoMillis() + (timeout_ms as i64)
-    if timeout_ms <= 0:
+    mut deadline := time.MonoMillis() + (wait as i64)
+    if wait <= 0:
         deadline = 0
     end
     mut out := Ack { id = id }
@@ -1293,8 +1466,9 @@ pub func EmitWithAck(c: Client, name: str, a: Args, timeout_ms: int, cb: func (A
         ret false
     end
     sp := _sock(c)
+    m := sp[0].mgr as MgrState*
     id := _next_ack_id(sp)
-    _register_waiter(sp, id, timeout_ms, true, cb)
+    _register_waiter(sp, id, _ack_wait(m, timeout_ms), true, cb)
     ret _emit_raw(c, PKT_EVENT, name, a, id, false)
 end
 
@@ -1577,4 +1751,430 @@ pub func EndpointOf(c: Client): Endpoint:
         ret Endpoint {}
     end
     ret _mgr_of(c)[0].ep
+end
+
+// Send - the "message" event, socket.io's `socket.send(...)`.
+@en "Send"
+@fa "فرستادن"
+@ar "بعث"
+pub func Send(c: Client, msg: str): bool:
+    ret EmitStr(c, "message", msg)
+end
+
+// PrependAny - OnAny, but ahead of the catch-alls already registered.
+@en "PrependAny"
+@fa "پیش‌افزودن هر"
+@ar "إضافة أمامیة لأی"
+pub func PrependAny(c: Client, cb: func (Event)):
+    if c.p == null:
+        ret
+    end
+    sp := _sock(c)
+    mut fresh := Vector {} as Vector<Handler>
+    fresh.push(Handler { name = "*", cb = cb })
+    repeat sp[0].any_handlers.len() with i:
+        fresh.push(sp[0].any_handlers.get(i))
+    end
+    sp[0].any_handlers.free()
+    sp[0].any_handlers = fresh
+end
+
+// OnAnyOutgoing - call `cb` for every event this client sends.
+//
+// The mirror of OnAny, and the place to put logging or tracing so that it
+// does not have to wrap every Emit call. The event handed over is the one
+// going out: `name`, `data` and the acknowledgement id the caller asked
+// for, if any.
+//
+// It fires when the packet is made, which is what socket.io's
+// onAnyOutgoing does - so it also sees an emit that is then held for a
+// connection, or dropped because it was volatile and there was none.
+@en "OnAnyOutgoing"
+@fa "روی هر خروجی"
+@ar "علی أی صادر"
+pub func OnAnyOutgoing(c: Client, cb: func (Event)):
+    if c.p == null:
+        ret
+    end
+    sp := _sock(c)
+    sp[0].out_handlers.push(Handler { name = "*", cb = cb })
+end
+
+// PrependAnyOutgoing - OnAnyOutgoing, ahead of the ones already registered.
+@en "PrependAnyOutgoing"
+@fa "پیش‌افزودن هر خروجی"
+@ar "إضافة أمامیة لأی صادر"
+pub func PrependAnyOutgoing(c: Client, cb: func (Event)):
+    if c.p == null:
+        ret
+    end
+    sp := _sock(c)
+    mut fresh := Vector {} as Vector<Handler>
+    fresh.push(Handler { name = "*", cb = cb })
+    repeat sp[0].out_handlers.len() with i:
+        fresh.push(sp[0].out_handlers.get(i))
+    end
+    sp[0].out_handlers.free()
+    sp[0].out_handlers = fresh
+end
+
+// OffAnyOutgoing - remove the outgoing catch-alls.
+@en "OffAnyOutgoing"
+@fa "خاموش هر خروجی"
+@ar "إیقاف أی صادر"
+pub func OffAnyOutgoing(c: Client):
+    if c.p == null:
+        ret
+    end
+    sp := _sock(c)
+    sp[0].out_handlers.free()
+    sp[0].out_handlers = Vector {} as Vector<Handler>
+end
+
+// ListenerCount - how many handlers are registered for `name`.
+@en "ListenerCount"
+@fa "شمار شنونده"
+@ar "عدد المستمعین"
+pub func ListenerCount(c: Client, name: str): int:
+    if c.p == null:
+        ret 0
+    end
+    sp := _sock(c)
+    mut n := 0
+    repeat sp[0].handlers.len() with i:
+        h := sp[0].handlers.get(i)
+        if h.alive && h.name == name:
+            n += 1
+        end
+    end
+    ret n
+end
+
+// HasListeners - whether anything is listening for `name`.
+@en "HasListeners"
+@fa "شنونده دارد"
+@ar "لدیه مستمعون"
+pub func HasListeners(c: Client, name: str): bool:
+    ret ListenerCount(c, name) > 0
+end
+
+// AnyListenerCount - how many catch-alls are registered, incoming and
+// outgoing.
+@en "AnyListenerCount"
+@fa "شمار شنونده هر"
+@ar "عدد مستمعی أی"
+pub func AnyListenerCount(c: Client): int:
+    if c.p == null:
+        ret 0
+    end
+    sp := _sock(c)
+    ret sp[0].any_handlers.len() + sp[0].out_handlers.len()
+end
+
+// Disconnected - the opposite of IsConnected, spelled the way socket.io
+// spells it.
+@en "Disconnected"
+@fa "قطع شده"
+@ar "منفصل"
+pub func Disconnected(c: Client): bool:
+    ret !IsConnected(c)
+end
+
+// Active - whether this namespace will come back by itself.
+//
+// True between Connect and Disconnect, including while a reconnection is in
+// flight - which is exactly the difference from IsConnected, and the flag to
+// check before deciding a drop was permanent.
+@en "Active"
+@fa "فعال"
+@ar "نشط"
+pub func Active(c: Client): bool:
+    if c.p == null:
+        ret false
+    end
+    ret _sock(c)[0].active
+end
+
+// Pending - how many acknowledgements are still outstanding.
+@en "Pending"
+@fa "در انتظار"
+@ar "معلق"
+pub func Pending(c: Client): int:
+    if c.p == null:
+        ret 0
+    end
+    sp := _sock(c)
+    mut n := 0
+    repeat sp[0].waiters.len() with i:
+        if sp[0].waiters.get(i).alive:
+            n += 1
+        end
+    end
+    ret n
+end
+
+// Queued - how many events are waiting for Next to take them.
+@en "Queued"
+@fa "در صف"
+@ar "فی الطابور"
+pub func Queued(c: Client): int:
+    if c.p == null:
+        ret 0
+    end
+    ret _sock(c)[0].inbox.len()
+end
+
+// TransportName - "websocket" or "polling", for logging and for a test that
+// wants to prove the upgrade happened.
+@en "TransportName"
+@fa "نام حمل‌ونقل"
+@ar "اسم النقل"
+pub func TransportName(c: Client): str:
+    if c.p == null:
+        ret ""
+    end
+    if _mgr_of(c)[0].transport == TRANSPORT_WEBSOCKET:
+        ret "websocket"
+    end
+    ret "polling"
+end
+
+// PingInterval / PingTimeout - the heartbeat the server asked for, in
+// milliseconds. Known only once the session is open.
+@en "PingInterval"
+@fa "بازه پینگ"
+@ar "فترة البینغ"
+pub func PingInterval(c: Client): int:
+    if c.p == null:
+        ret 0
+    end
+    ret _mgr_of(c)[0].ping_interval
+end
+
+@en "PingTimeout"
+@fa "مهلت پینگ"
+@ar "مهلة البینغ"
+pub func PingTimeout(c: Client): int:
+    if c.p == null:
+        ret 0
+    end
+    ret _mgr_of(c)[0].ping_timeout
+end
+
+// MaxPayload - the largest body the server accepts on the polling
+// transport, which is what packets are batched against.
+@en "MaxPayload"
+@fa "بیشینه بار"
+@ar "أقصی حمولة"
+pub func MaxPayload(c: Client): int:
+    if c.p == null:
+        ret 0
+    end
+    ret _mgr_of(c)[0].max_payload
+end
+
+// SetAuth - replace the CONNECT payload for this namespace.
+//
+// It takes effect on the NEXT connect, which is the point: a token that
+// expired is why the connection dropped, and this is where the new one goes
+// before the reconnection carries it.
+@en "SetAuth"
+@fa "تنظیم احراز"
+@ar "ضبط المصادقة"
+pub func SetAuth(c: Client, auth json: str):
+    if c.p == null:
+        ret
+    end
+    sp := _sock(c)
+    sp[0].auth = auth json
+end
+
+// AuthOf - the CONNECT payload this namespace will send.
+@en "AuthOf"
+@fa "احراز"
+@ar "المصادقة"
+pub func AuthOf(c: Client): str:
+    if c.p == null:
+        ret ""
+    end
+    ret _sock(c)[0].auth
+end
+
+// SetReconnection - turn automatic reconnection on or off on a live
+// connection.
+@en "SetReconnection"
+@fa "تنظیم اتصال دوباره"
+@ar "ضبط إعادة الاتصال"
+pub func SetReconnection(m: Manager, enabled: bool):
+    if m.p == null:
+        ret
+    end
+    mp := _mgr(m)
+    mp[0].opts.reconnection = enabled
+end
+
+// SetReconnectionAttempts - how many tries before giving up; 0 is forever.
+@en "SetReconnectionAttempts"
+@fa "تنظیم تلاش‌های دوباره"
+@ar "ضبط محاولات الإعادة"
+pub func SetReconnectionAttempts(m: Manager, n: int):
+    if m.p == null:
+        ret
+    end
+    mp := _mgr(m)
+    mp[0].opts.reconnection_attempts = n
+end
+
+// SetReconnectionDelay - the first backoff step, in milliseconds.
+@en "SetReconnectionDelay"
+@fa "تنظیم تاخیر دوباره"
+@ar "ضبط تأخیر الإعادة"
+pub func SetReconnectionDelay(m: Manager, ms: int):
+    if m.p == null:
+        ret
+    end
+    mp := _mgr(m)
+    mp[0].opts.reconnection_delay = ms
+end
+
+// SetReconnectionDelayMax - the ceiling the backoff doubles towards.
+@en "SetReconnectionDelayMax"
+@fa "تنظیم بیشینه تاخیر"
+@ar "ضبط أقصی تأخیر"
+pub func SetReconnectionDelayMax(m: Manager, ms: int):
+    if m.p == null:
+        ret
+    end
+    mp := _mgr(m)
+    mp[0].opts.reconnection_delay_max = ms
+end
+
+// SetRandomizationFactor - the jitter, as a percentage of the delay.
+@en "SetRandomizationFactor"
+@fa "تنظیم ضریب تصادفی"
+@ar "ضبط معامل العشوائیة"
+pub func SetRandomizationFactor(m: Manager, percent: int):
+    if m.p == null:
+        ret
+    end
+    mp := _mgr(m)
+    mp[0].opts.randomization_factor = percent
+end
+
+// SetTimeout - how long one connection attempt may take, in milliseconds.
+@en "SetTimeout"
+@fa "تنظیم مهلت"
+@ar "ضبط المهلة"
+pub func SetTimeout(m: Manager, ms: int):
+    if m.p == null:
+        ret
+    end
+    mp := _mgr(m)
+    mp[0].opts.timeout = ms
+end
+
+// OptionsOf - the options a connection is running with, as they stand.
+@en "OptionsOf"
+@fa "گزینه‌ها"
+@ar "الخیارات"
+pub func OptionsOf(m: Manager): Options:
+    if m.p == null:
+        ret Options {}
+    end
+    ret _mgr(m)[0].opts
+end
+
+// Sockets - every namespace open on this connection. The vector is the
+// caller's to free; the Clients in it are not.
+@en "Sockets"
+@fa "سوکت‌ها"
+@ar "المقابس"
+pub func Sockets(m: Manager): Vector<Client>:
+    mut out := Vector {} as Vector<Client>
+    if m.p == null:
+        ret out
+    end
+    mp := _mgr(m)
+    repeat mp[0].socks.len() with i:
+        out.push(mp[0].socks.get(i))
+    end
+    ret out
+end
+
+// Open - bring the transport up without joining a namespace, socket.io's
+// `manager.open()`. Connect does this on its own; this is for a program that
+// wants the connection established before it decides which namespaces to
+// join.
+@en "Open"
+@fa "باز کردن"
+@ar "فتح"
+pub func Open(m: Manager): bool:
+    if m.p == null:
+        ret false
+    end
+    mp := _mgr(m)
+    if mp[0].state == ST_OPEN:
+        ret true
+    end
+    if !mp[0].ep.ok:
+        ret false
+    end
+    if !_engine_open(mp):
+        if mp[0].opts.reconnection:
+            mp[0].state = ST_WAITING
+            mp[0].retry_at = time.MonoMillis() + _backoff(mp)
+        end
+        ret false
+    end
+    mp[0].attempts = 0
+    ret true
+end
+
+// IsOpen - whether the transport underneath is up, whatever the namespaces
+// on it are doing.
+@en "IsOpen"
+@fa "باز است"
+@ar "مفتوح"
+pub func IsOpen(m: Manager): bool:
+    if m.p == null:
+        ret false
+    end
+    ret _mgr(m)[0].state == ST_OPEN
+end
+
+// ManagerError - why the last connection attempt on this manager failed.
+@en "ManagerError"
+@fa "خطای مدیر"
+@ar "خطأ المدیر"
+pub func ManagerError(m: Manager): str:
+    if m.p == null:
+        ret "no manager"
+    end
+    ret _mgr(m)[0].last_error
+end
+
+// Refused - whether the server turned this namespace away, and why.
+//
+// Distinct from a connection that simply is not up: a refusal came from the
+// server's own middleware ("Not authorized"), and reconnecting without
+// changing anything - a new token through SetAuth, usually - will be
+// refused again.
+@en "Refused"
+@fa "رد شده"
+@ar "مرفوض"
+pub func Refused(c: Client): bool:
+    if c.p == null:
+        ret false
+    end
+    ret _sock(c)[0].refused
+end
+
+@en "RefusalReason"
+@fa "دلیل رد"
+@ar "سبب الرفض"
+pub func RefusalReason(c: Client): str:
+    if c.p == null:
+        ret ""
+    end
+    ret _sock(c)[0].refusal
 end

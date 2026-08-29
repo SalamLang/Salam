@@ -836,7 +836,7 @@ DialWSSUnverified`, `SendText SendBinary SendBinaryBytes Ping Close Stop`,
   them), Socket.IO v5 on top.
   - **Connecting**: `Dial(url)` / `DialWith(url, opts)`, or `NewManager` +
     `Open` + `Of(m, "/nsp")` for several namespaces multiplexed on one
-    connection. `Connect Disconnect Close CloseManager`. The URL's path is
+    connection. `Connect Disconnect Close CloseManager`. The path in the URL is
     the NAMESPACE, not a resource; the HTTP path is `Options.path`
     (default `/socket.io`) and must match the server's.
   - **Sending**: `Emit EmitStr EmitInt EmitFloat EmitBool EmitJSON

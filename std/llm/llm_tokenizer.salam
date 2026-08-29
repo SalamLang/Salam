@@ -14,6 +14,7 @@
 
 package llm
 
+import mem
 import str
 
 // Two tokenizer families cover the models this package runs:
@@ -100,6 +101,7 @@ pub struct Tokenizer:
                 str.BufFree(sb)
             end
             this.byte_ids.push(this.index.get_or(key, 0 - 1))
+            mem.Free(key as void*)
         end
     end
 
@@ -139,12 +141,17 @@ pub struct Tokenizer:
         repeat ids.len() with i:
             id := ids.get(i)
             if id == this.bos || id == this.eos || id < 0 || id >= this.tokens.len(): continue end
-            mut t := this.tokens.get(id)
+            t := this.tokens.get(id)
             if this.kind == TOK_SPM:
                 // SentencePiece drops the boundary marker that opens the
                 // text: "▁hello" at the start decodes to "hello".
-                if first && str.StartsWith(t, _SPM_SPACE): t = str.Substr(t, 3, t.len() - 3) end
-                this._decode_spm_piece(sb, t)
+                if first && str.StartsWith(t, _SPM_SPACE):
+                    trimmed := str.Substr(t, 3, t.len() - 3)
+                    this._decode_spm_piece(sb, trimmed)
+                    mem.Free(trimmed as void*)
+                else:
+                    this._decode_spm_piece(sb, t)
+                end
             else:
                 this._decode_bpe_piece(sb, t)
             end
@@ -168,9 +175,15 @@ pub struct Tokenizer:
     end
 
     // Greedy best-score merging over the symbols of one text.
+    // Every symbol in `syms` is an owned string (a substring of the
+    // normalized text, or the concatenation two merges produced), so
+    // they are freed one by one before the vector itself goes.
     func _encode_spm(text: str, out &: Vector<int>):
-        norm := _SPM_SPACE + str.Replace(text, " ", _SPM_SPACE)
+        body := str.Replace(text, " ", _SPM_SPACE)
+        norm := _SPM_SPACE + body
+        mem.Free(body as void*)
         mut syms := _chars_of(norm)
+        mem.Free(norm as void*)
         this._merge_by_score(syms)
         repeat syms.len() with i:
             piece := syms.get(i)
@@ -184,7 +197,7 @@ pub struct Tokenizer:
                 out.push(bid >= 0 ? bid : this.unk)
             end
         end
-        syms.free()
+        _free_syms(syms)
     end
 
     func _merge_by_score(syms &: Vector<str>):
@@ -195,6 +208,7 @@ pub struct Tokenizer:
             repeat syms.len() - 1 with i:
                 cand := syms.get(i) + syms.get(i + 1)
                 id := this.index.get_or(cand, 0 - 1)
+                mem.Free(cand as void*)
                 if id < 0: continue end
                 sc := this.scores.get(id)
                 if best < 0 || sc > best_score:
@@ -205,7 +219,10 @@ pub struct Tokenizer:
             if best < 0:
                 again = false
             else:
-                syms.set(best, syms.get(best) + syms.get(best + 1))
+                merged := syms.get(best) + syms.get(best + 1)
+                mem.Free(syms.get(best) as void*)
+                mem.Free(syms.get(best + 1) as void*)
+                syms.set(best, merged)
                 _r := syms.remove_at(best + 1)
             end
         end
@@ -237,7 +254,9 @@ pub struct Tokenizer:
             mut best := 0 - 1
             mut best_rank := 0
             repeat syms.len() - 1 with i:
-                rank := this.merges.get_or(syms.get(i) + " " + syms.get(i + 1), 0 - 1)
+                probe := syms.get(i) + " " + syms.get(i + 1)
+                rank := this.merges.get_or(probe, 0 - 1)
+                mem.Free(probe as void*)
                 if rank < 0: continue end
                 if best < 0 || rank < best_rank:
                     best = i
@@ -247,7 +266,10 @@ pub struct Tokenizer:
             if best < 0:
                 again = false
             else:
-                syms.set(best, syms.get(best) + syms.get(best + 1))
+                merged := syms.get(best) + syms.get(best + 1)
+                mem.Free(syms.get(best) as void*)
+                mem.Free(syms.get(best + 1) as void*)
+                syms.set(best, merged)
                 _r := syms.remove_at(best + 1)
             end
         end
@@ -255,7 +277,7 @@ pub struct Tokenizer:
             id := this.index.get_or(syms.get(i), 0 - 1)
             out.push(id >= 0 ? id : this.unk)
         end
-        syms.free()
+        _free_syms(syms)
     end
 
     func _decode_spm_piece(sb &: str.StringBuilder, t: str):
@@ -333,6 +355,12 @@ func _chars_of(s: str): Vector<str>:
         i += w
     end
     ret out
+end
+
+// Frees the owned strings a symbol list holds, then the list.
+func _free_syms(syms &: Vector<str>):
+    repeat syms.len() with i: mem.Free(syms.get(i) as void*) end
+    syms.free()
 end
 
 func _hex_digit(v: int): int:

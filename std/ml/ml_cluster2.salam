@@ -1,0 +1,384 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ml
+
+import math
+import matrix
+
+// More clustering: Gaussian mixtures by EM (diagonal covariances),
+// agglomerative clustering with single, complete or average linkage,
+// and mini-batch k-means for data too large to sweep every step.
+//
+// The mixture is seeded by k-means++ centers and unit variances; each
+// EM round recomputes responsibilities with the log-sum-exp guard and
+// then the weighted means, variances (floored by var_floor) and
+// weights. Agglomerative clustering keeps a full cluster-to-cluster
+// distance matrix and merges the closest pair until n_clusters remain,
+// O(n^3) in the worst case and fine into the low thousands.
+
+@en "LINK_SINGLE"
+@fa "پیوند تکی"
+@ar "ربط مفرد"
+pub const LINK_SINGLE := 0
+
+@en "LINK_COMPLETE"
+@fa "پیوند کامل"
+@ar "ربط كامل"
+pub const LINK_COMPLETE := 1
+
+@en "LINK_AVERAGE"
+@fa "پیوند میانگین"
+@ar "ربط متوسط"
+pub const LINK_AVERAGE := 2
+
+@en "GaussianMixture"
+@fa "آمیزه گاوسی"
+@ar "مزيج غاوسي"
+pub struct GaussianMixture:
+    pub k: int = 2
+    pub max_iter: int = 100
+    pub tol: f64 = 0.0001
+    pub var_floor: f64 = 0.000001
+    pub seed: i64 = 42
+    pub means: matrix.Matrix = matrix.Matrix {}
+    pub vars: matrix.Matrix = matrix.Matrix {}
+    pub weights: matrix.Matrix = matrix.Matrix {}
+    pub log_likelihood: f64 = 0.0
+    pub n_iter: int = 0
+    pub ok: bool = false
+
+    @en "fit"
+    @fa "برازش"
+    @ar "ملاءمة"
+    pub func fit(x &: matrix.Matrix): bool:
+        this.ok = false
+        if x.is_empty() || this.k < 1 || x.rows < this.k: ret false end
+        n := x.rows
+        p := x.cols
+        k := this.k
+        mut g := matrix.NewRng(this.seed)
+        matrix.Free(this.means)
+        matrix.Free(this.vars)
+        matrix.Free(this.weights)
+        this.means = _kmeanspp(x, k, g)
+        this.vars = matrix.Ones(k, p)
+        this.weights = matrix.Full(k, 1, 1.0 / (k as f64))
+        mut resp := matrix.Zeros(n, k)
+        mut prev := 0.0 - 1.0e300
+        mut it := 0
+        mut done := false
+        until it < this.max_iter && done == false:
+            ll := _gmm_estep(x, this.means, this.vars, this.weights, resp)
+            // M step.
+            repeat k with c:
+                mut nk := 0.0
+                repeat n with i: nk += resp.at(i, c) end
+                if nk < 1.0e-12: nk = 1.0e-12 end
+                repeat p with j:
+                    mut m := 0.0
+                    repeat n with i: m += resp.at(i, c) * x.at(i, j) end
+                    m = m / nk
+                    this.means.set(c, j, m)
+                    mut v := 0.0
+                    repeat n with i:
+                        d := x.at(i, j) - m
+                        v += resp.at(i, c) * d * d
+                    end
+                    v = v / nk
+                    if v < this.var_floor: v = this.var_floor end
+                    this.vars.set(c, j, v)
+                end
+                this.weights.set(c, 0, nk / (n as f64))
+            end
+            it += 1
+            if ll - prev < this.tol && it > 1: done = true end
+            prev = ll
+        end
+        this.log_likelihood = prev
+        this.n_iter = it
+        matrix.Free(resp)
+        this.ok = true
+        ret true
+    end
+
+    // Responsibilities, n x k.
+    @en "predict_proba"
+    @fa "پیش‌بینی احتمال"
+    @ar "تنبؤ بالاحتمال"
+    pub func predict_proba(x &: matrix.Matrix): matrix.Matrix:
+        if this.ok == false || x.cols != this.means.cols: ret matrix.Matrix {} end
+        mut resp := matrix.Zeros(x.rows, this.k)
+        _gmm_estep(x, this.means, this.vars, this.weights, resp)
+        ret resp
+    end
+
+    @en "predict"
+    @fa "پیش‌بینی"
+    @ar "تنبؤ"
+    pub func predict(x &: matrix.Matrix): matrix.Matrix:
+        mut resp := this.predict_proba(x)
+        if resp.is_empty(): ret resp end
+        out := _argmax_rows(resp)
+        matrix.Free(resp)
+        ret out
+    end
+
+    @en "fit_predict"
+    @fa "برازش و پیش‌بینی"
+    @ar "ملاءمة وتنبؤ"
+    pub func fit_predict(x &: matrix.Matrix): matrix.Matrix:
+        if this.fit(x) == false: ret matrix.Matrix {} end
+        ret this.predict(x)
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free():
+        matrix.Free(this.means)
+        matrix.Free(this.vars)
+        matrix.Free(this.weights)
+    end
+end
+
+@en "Agglomerative"
+@fa "خوشه‌بندی تجمیعی"
+@ar "تجميع هرمي"
+pub struct Agglomerative:
+    pub n_clusters: int = 2
+    pub linkage: int = LINK_AVERAGE
+    pub labels: matrix.Matrix = matrix.Matrix {}
+    pub ok: bool = false
+
+    @en "fit"
+    @fa "برازش"
+    @ar "ملاءمة"
+    pub func fit(x &: matrix.Matrix): bool:
+        this.ok = false
+        n := x.rows
+        if x.is_empty() || this.n_clusters < 1 || n < this.n_clusters: ret false end
+        // Cluster ids per row, cluster sizes, and the live distance matrix
+        // between clusters (rows/cols indexed by the cluster's founding
+        // row; a dead cluster's size is 0).
+        mut cid := Vector {} as Vector<int>
+        mut size := Vector {} as Vector<int>
+        repeat n with i:
+            cid.push(i)
+            size.push(1)
+        end
+        mut d := matrix.Zeros(n, n)
+        repeat n with i:
+            repeat n with j:
+                if j > i:
+                    v := math.Sqrt(_sqdist(x, i, x, j))
+                    d.set(i, j, v)
+                    d.set(j, i, v)
+                end
+            end
+        end
+        mut alive := n
+        until alive > this.n_clusters:
+            // Closest live pair.
+            mut bi := 0 - 1
+            mut bj := 0 - 1
+            mut best := 1.0e300
+            repeat n with i:
+                if size.get(i) > 0:
+                    repeat n with j:
+                        if j > i && size.get(j) > 0 && d.at(i, j) < best:
+                            best = d.at(i, j)
+                            bi = i
+                            bj = j
+                        end
+                    end
+                end
+            end
+            if bi < 0: break end
+            // Merge bj into bi, updating distances by the linkage rule.
+            si := size.get(bi) as f64
+            sj := size.get(bj) as f64
+            repeat n with t:
+                if t != bi && t != bj && size.get(t) > 0:
+                    mut nv := d.at(bi, t)
+                    if this.linkage == LINK_SINGLE:
+                        if d.at(bj, t) < nv: nv = d.at(bj, t) end
+                    else this.linkage == LINK_COMPLETE:
+                        if d.at(bj, t) > nv: nv = d.at(bj, t) end
+                    else:
+                        nv = (si * d.at(bi, t) + sj * d.at(bj, t)) / (si + sj)
+                    end
+                    d.set(bi, t, nv)
+                    d.set(t, bi, nv)
+                end
+            end
+            repeat n with r:
+                if cid.get(r) == bj: cid.set(r, bi) end
+            end
+            size.set(bi, size.get(bi) + size.get(bj))
+            size.set(bj, 0)
+            alive -= 1
+        end
+        // Renumber the surviving clusters 0..n_clusters-1 by first row.
+        matrix.Free(this.labels)
+        this.labels = matrix.Zeros(n, 1)
+        mut remap := Vector {} as Vector<int>
+        remap.zeros(n)
+        repeat n with i: remap.set(i, 0 - 1) end
+        mut next := 0
+        repeat n with r:
+            c := cid.get(r)
+            if remap.get(c) < 0:
+                remap.set(c, next)
+                next += 1
+            end
+            this.labels.set(r, 0, remap.get(c) as f64)
+        end
+        cid.free()
+        size.free()
+        remap.free()
+        matrix.Free(d)
+        this.ok = true
+        ret true
+    end
+
+    @en "fit_predict"
+    @fa "برازش و پیش‌بینی"
+    @ar "ملاءمة وتنبؤ"
+    pub func fit_predict(x &: matrix.Matrix): matrix.Matrix:
+        if this.fit(x) == false: ret matrix.Matrix {} end
+        ret matrix.Clone(this.labels)
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free(): matrix.Free(this.labels) end
+end
+
+@en "MiniBatchKMeans"
+@fa "کی-میانگین دسته کوچک"
+@ar "المتوسطات-ك بدفعات صغيرة"
+pub struct MiniBatchKMeans:
+    pub k: int = 8
+    pub batch_size: int = 64
+    pub max_iter: int = 200
+    pub seed: i64 = 42
+    pub centers: matrix.Matrix = matrix.Matrix {}
+    pub ok: bool = false
+
+    @en "fit"
+    @fa "برازش"
+    @ar "ملاءمة"
+    pub func fit(x &: matrix.Matrix): bool:
+        this.ok = false
+        if x.is_empty() || this.k < 1 || x.rows < this.k: ret false end
+        n := x.rows
+        p := x.cols
+        mut g := matrix.NewRng(this.seed)
+        matrix.Free(this.centers)
+        this.centers = _kmeanspp(x, this.k, g)
+        mut counts := Vector {} as Vector<int>
+        counts.zeros(this.k)
+        mut bs := this.batch_size
+        if bs > n: bs = n end
+        repeat this.max_iter:
+            repeat bs:
+                i := (g.next_float() * (n as f64)) as int
+                mut bi := 0
+                mut bd := _sqdist(x, i, this.centers, 0)
+                repeat this.k - 1 with t:
+                    dd := _sqdist(x, i, this.centers, t + 1)
+                    if dd < bd:
+                        bd = dd
+                        bi = t + 1
+                    end
+                end
+                counts.set(bi, counts.get(bi) + 1)
+                eta := 1.0 / (counts.get(bi) as f64)
+                repeat p with j:
+                    this.centers.set(bi, j, (1.0 - eta) * this.centers.at(bi, j) + eta * x.at(i, j))
+                end
+            end
+        end
+        counts.free()
+        this.ok = true
+        ret true
+    end
+
+    @en "predict"
+    @fa "پیش‌بینی"
+    @ar "تنبؤ"
+    pub func predict(x &: matrix.Matrix): matrix.Matrix:
+        if this.ok == false || x.cols != this.centers.cols: ret matrix.Matrix {} end
+        mut out := matrix.Zeros(x.rows, 1)
+        repeat x.rows with i:
+            mut bi := 0
+            mut bd := _sqdist(x, i, this.centers, 0)
+            repeat this.k - 1 with t:
+                dd := _sqdist(x, i, this.centers, t + 1)
+                if dd < bd:
+                    bd = dd
+                    bi = t + 1
+                end
+            end
+            out.set(i, 0, bi as f64)
+        end
+        ret out
+    end
+
+    @en "fit_predict"
+    @fa "برازش و پیش‌بینی"
+    @ar "ملاءمة وتنبؤ"
+    pub func fit_predict(x &: matrix.Matrix): matrix.Matrix:
+        if this.fit(x) == false: ret matrix.Matrix {} end
+        ret this.predict(x)
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free(): matrix.Free(this.centers) end
+end
+
+// E step: responsibilities into resp, returning the mean log-likelihood.
+func _gmm_estep(x &: matrix.Matrix, means &: matrix.Matrix, vars &: matrix.Matrix, weights &: matrix.Matrix, resp &: matrix.Matrix): f64:
+    n := x.rows
+    p := x.cols
+    k := means.rows
+    half_log_2pi := 0.5 * math.Log(2.0 * math.PI)
+    mut total := 0.0
+    repeat n with i:
+        mut m := 0.0 - 1.0e300
+        repeat k with c:
+            mut ll := math.Log(weights.at(c, 0) + 1.0e-300)
+            repeat p with j:
+                v := vars.at(c, j)
+                d := x.at(i, j) - means.at(c, j)
+                ll -= half_log_2pi + 0.5 * math.Log(v) + d * d / (2.0 * v)
+            end
+            resp.set(i, c, ll)
+            if ll > m: m = ll end
+        end
+        mut s := 0.0
+        repeat k with c:
+            e := math.Exp(resp.at(i, c) - m)
+            resp.set(i, c, e)
+            s += e
+        end
+        repeat k with c: resp.set(i, c, resp.at(i, c) / s) end
+        total += m + math.Log(s)
+    end
+    ret total / (n as f64)
+end

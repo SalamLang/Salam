@@ -1,0 +1,249 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/autograd: narrow, concat, SiLU, rotary embedding, RMS norm and
+// batch norm against central differences.
+
+import autograd
+import tensor
+import testing
+
+mut g_x := tensor.Tensor {}
+mut g_c := tensor.Tensor {}
+mut g_gamma := tensor.Tensor {}
+mut g_beta := tensor.Tensor {}
+mut g_rm := tensor.Tensor {}
+mut g_rv := tensor.Tensor {}
+
+func f_narrow_concat(t: tensor.Tensor): f64:
+    mut tp := autograd.NewTape(1)
+    x := autograd.Input(tp, t)
+    c := autograd.Input(tp, g_c)
+    // swap the two halves along axis 1, weight, sum
+    left := autograd.Narrow(tp, x, 1, 0, 2)
+    right := autograd.Narrow(tp, x, 1, 2, 2)
+    sw := autograd.Concat2(tp, right, left, 1)
+    v := autograd.Value(tp, autograd.Sum(tp, autograd.Mul(tp, autograd.Silu(tp, sw), c)))
+    out := v.at(0)
+    tp.free()
+    ret out
+end
+
+func f_rope(t: tensor.Tensor): f64:
+    mut tp := autograd.NewTape(1)
+    x := autograd.Input(tp, t)
+    c := autograd.Input(tp, g_c)
+    r := autograd.RoPE(tp, x, 3, 2, 1, 10000.0)
+    v := autograd.Value(tp, autograd.Sum(tp, autograd.Mul(tp, autograd.Square(tp, r), c)))
+    out := v.at(0)
+    tp.free()
+    ret out
+end
+
+func f_rms_x(t: tensor.Tensor): f64:
+    mut tp := autograd.NewTape(1)
+    x := autograd.Input(tp, t)
+    g := autograd.Input(tp, g_gamma)
+    c := autograd.Input(tp, g_c)
+    v := autograd.Value(tp, autograd.Sum(tp, autograd.Mul(tp, autograd.Square(tp, autograd.RMSNorm(tp, x, g, 0.00001)), c)))
+    out := v.at(0)
+    tp.free()
+    ret out
+end
+
+func f_rms_g(t: tensor.Tensor): f64:
+    mut tp := autograd.NewTape(1)
+    x := autograd.Input(tp, g_x)
+    g := autograd.Input(tp, t)
+    c := autograd.Input(tp, g_c)
+    v := autograd.Value(tp, autograd.Sum(tp, autograd.Mul(tp, autograd.Square(tp, autograd.RMSNorm(tp, x, g, 0.00001)), c)))
+    out := v.at(0)
+    tp.free()
+    ret out
+end
+
+func bn_loss(tp &: autograd.Tape, x: int, g: int, b: int): int:
+    c := autograd.Input(tp, g_c)
+    mut rm := tensor.Clone(g_rm)
+    mut rv := tensor.Clone(g_rv)
+    y := autograd.BatchNorm(tp, x, g, b, rm, rv, 0.1, 0.00001)
+    l := autograd.Sum(tp, autograd.Mul(tp, autograd.Square(tp, y), c))
+    rm.free()
+    rv.free()
+    ret l
+end
+
+func f_bn_x(t: tensor.Tensor): f64:
+    mut tp := autograd.NewTape(1)
+    x := autograd.Input(tp, t)
+    g := autograd.Input(tp, g_gamma)
+    b := autograd.Input(tp, g_beta)
+    v := autograd.Value(tp, bn_loss(tp, x, g, b))
+    out := v.at(0)
+    tp.free()
+    ret out
+end
+
+func f_bn_g(t: tensor.Tensor): f64:
+    mut tp := autograd.NewTape(1)
+    x := autograd.Input(tp, g_x)
+    g := autograd.Input(tp, t)
+    b := autograd.Input(tp, g_beta)
+    v := autograd.Value(tp, bn_loss(tp, x, g, b))
+    out := v.at(0)
+    tp.free()
+    ret out
+end
+
+func f_bn_b(t: tensor.Tensor): f64:
+    mut tp := autograd.NewTape(1)
+    x := autograd.Input(tp, g_x)
+    g := autograd.Input(tp, g_gamma)
+    b := autograd.Input(tp, t)
+    v := autograd.Value(tp, bn_loss(tp, x, g, b))
+    out := v.at(0)
+    tp.free()
+    ret out
+end
+
+func main:
+    h := 0.01
+    tol := 0.02
+
+    // x is [6, 4]: two sequences of three positions, or a batch of six
+    mut s64 := tensor.Shape2(6, 4)
+    g_x = tensor.RandUniform(s64, 0.0 - 1.5, 1.5, 31)
+    g_c = tensor.RandUniform(s64, 0.0 - 1.0, 1.0, 32)
+    s64.free()
+    mut s4 := tensor.Shape1(4)
+    g_gamma = tensor.RandUniform(s4, 0.5, 1.5, 33)
+    g_beta = tensor.RandUniform(s4, 0.0 - 0.5, 0.5, 34)
+    g_rm = tensor.Zeros1(4)
+    g_rv = tensor.Ones(s4)
+    s4.free()
+
+    // Narrow + Concat2 + SiLU
+    mut tp := autograd.NewTape(1)
+    xid := autograd.Watch(tp, g_x)
+    cid := autograd.Input(tp, g_c)
+    left := autograd.Narrow(tp, xid, 1, 0, 2)
+    right := autograd.Narrow(tp, xid, 1, 2, 2)
+    sw := autograd.Concat2(tp, right, left, 1)
+    swv := autograd.Value(tp, sw)
+    testing.AssertEqFloat(swv.at2(0, 0), g_x.at2(0, 2), 0.000001)
+    testing.AssertEqFloat(swv.at2(5, 3), g_x.at2(5, 1), 0.000001)
+    loss := autograd.Sum(tp, autograd.Mul(tp, autograd.Silu(tp, sw), cid))
+    autograd.Backward(tp, loss)
+    mut ga := tensor.Clone(autograd.Grad(tp, xid))
+    tp.free()
+    testing.AssertTrue(autograd.GradCheck((t: tensor.Tensor): ret f_narrow_concat(t) end, g_x, ga, h, tol))
+    tensor.Free(ga)
+
+    // RoPE: two heads of two, seq 3, offset 1. A rotation preserves norms.
+    mut tp2 := autograd.NewTape(1)
+    rx := autograd.Watch(tp2, g_x)
+    rc := autograd.Input(tp2, g_c)
+    rr := autograd.RoPE(tp2, rx, 3, 2, 1, 10000.0)
+    rv := autograd.Value(tp2, rr)
+    mut n_in := 0.0
+    mut n_out := 0.0
+    repeat 4 with k:
+        n_in += g_x.at2(2, k) * g_x.at2(2, k)
+        n_out += rv.at2(2, k) * rv.at2(2, k)
+    end
+    testing.AssertEqFloat(n_in, n_out, 0.0001)
+    rloss := autograd.Sum(tp2, autograd.Mul(tp2, autograd.Square(tp2, rr), rc))
+    autograd.Backward(tp2, rloss)
+    mut gr := tensor.Clone(autograd.Grad(tp2, rx))
+    tp2.free()
+    testing.AssertTrue(autograd.GradCheck((t: tensor.Tensor): ret f_rope(t) end, g_x, gr, h, tol))
+    tensor.Free(gr)
+
+    // RMSNorm, x and gamma
+    mut tp3 := autograd.NewTape(1)
+    mx := autograd.Watch(tp3, g_x)
+    mg := autograd.Watch(tp3, g_gamma)
+    mc := autograd.Input(tp3, g_c)
+    my := autograd.RMSNorm(tp3, mx, mg, 0.00001)
+    myv := autograd.Value(tp3, my)
+    // each row of x/gamma has unit RMS
+    mut ms := 0.0
+    repeat 4 with k:
+        v := myv.at2(1, k) / g_gamma.at(k)
+        ms += v * v
+    end
+    testing.AssertEqFloat(ms / 4.0, 1.0, 0.001)
+    mloss := autograd.Sum(tp3, autograd.Mul(tp3, autograd.Square(tp3, my), mc))
+    autograd.Backward(tp3, mloss)
+    mut gmx := tensor.Clone(autograd.Grad(tp3, mx))
+    mut gmg := tensor.Clone(autograd.Grad(tp3, mg))
+    tp3.free()
+    testing.AssertTrue(autograd.GradCheck((t: tensor.Tensor): ret f_rms_x(t) end, g_x, gmx, h, tol))
+    testing.AssertTrue(autograd.GradCheck((t: tensor.Tensor): ret f_rms_g(t) end, g_gamma, gmg, h, tol))
+    tensor.Free(gmx)
+    tensor.Free(gmg)
+
+    // BatchNorm in training mode: normalized columns, running stats move
+    mut tp4 := autograd.NewTape(1)
+    bx := autograd.Watch(tp4, g_x)
+    bg := autograd.Watch(tp4, g_gamma)
+    bb := autograd.Watch(tp4, g_beta)
+    mut rm := tensor.Zeros1(4)
+    mut rvar := tensor.Ones(g_gamma.shape)
+    bny := autograd.BatchNorm(tp4, bx, bg, bb, rm, rvar, 0.1, 0.00001)
+    byv := autograd.Value(tp4, bny)
+    mut col := 0.0
+    repeat 6 with i: col += (byv.at2(i, 2) - g_beta.at(2)) / g_gamma.at(2) end
+    testing.AssertEqFloat(col / 6.0, 0.0, 0.0001)
+    testing.AssertTrue(rm.at(2) != 0.0)
+    testing.AssertTrue(rvar.at(2) != 1.0)
+    bc := autograd.Input(tp4, g_c)
+    bloss := autograd.Sum(tp4, autograd.Mul(tp4, autograd.Square(tp4, bny), bc))
+    autograd.Backward(tp4, bloss)
+    mut gbx := tensor.Clone(autograd.Grad(tp4, bx))
+    mut gbg := tensor.Clone(autograd.Grad(tp4, bg))
+    mut gbb := tensor.Clone(autograd.Grad(tp4, bb))
+    tp4.free()
+    testing.AssertTrue(autograd.GradCheck((t: tensor.Tensor): ret f_bn_x(t) end, g_x, gbx, h, tol))
+    testing.AssertTrue(autograd.GradCheck((t: tensor.Tensor): ret f_bn_g(t) end, g_gamma, gbg, h, tol))
+    testing.AssertTrue(autograd.GradCheck((t: tensor.Tensor): ret f_bn_b(t) end, g_beta, gbb, h, tol))
+    tensor.Free(gbx)
+    tensor.Free(gbg)
+    tensor.Free(gbb)
+
+    // Inference mode uses the running statistics and records no coupling
+    mut tp5 := autograd.NewTape(1)
+    tp5.training = false
+    ix := autograd.Input(tp5, g_x)
+    ig := autograd.Input(tp5, g_gamma)
+    ib := autograd.Input(tp5, g_beta)
+    iy := autograd.BatchNorm(tp5, ix, ig, ib, rm, rvar, 0.1, 0.00001)
+    iyv := autograd.Value(tp5, iy)
+    testing.AssertEqInt(tp5.nodes.len(), 0)
+    testing.AssertTrue(iyv.numel() == 24)
+    tp5.free()
+
+    tensor.Free(g_x)
+    tensor.Free(g_c)
+    tensor.Free(g_gamma)
+    tensor.Free(g_beta)
+    tensor.Free(g_rm)
+    tensor.Free(g_rv)
+    tensor.Free(rm)
+    tensor.Free(rvar)
+
+    ret testing.Summary()
+end

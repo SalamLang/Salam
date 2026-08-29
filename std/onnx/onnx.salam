@@ -1,0 +1,209 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "onnx"
+@fa "اونیکس"
+@ar "أونكس"
+package onnx
+
+import archive
+import compress
+import str
+import tensor
+
+// ONNX model files, read and executed for inference on std/tensor.
+//
+// An .onnx file is a protobuf ModelProto; the decoder in onnx_proto
+// walks the handful of messages inference needs (model, graph, node,
+// tensor, attribute, value info) with std/encoding/protobuf's wire
+// primitives, skipping every field it does not know - so opset
+// metadata, doc strings and training-only sections pass through
+// harmlessly. Initializers become f32 tensors (int64 shape tensors are
+// kept as whole-number f32, exact far past any dimension), and the
+// graph's nodes stay in file order, which ONNX guarantees is
+// topological.
+//
+// Run binds the caller's inputs by name, evaluates every node through
+// the op table in onnx_ops (convolution, pooling, dense, activations,
+// normalization, reshaping and elementwise arithmetic - the set the
+// classic image and MLP exports use), and returns the graph outputs in
+// declared order. An unsupported op stops the run and names itself in
+// `error`.
+
+@en "Attr"
+@fa "ویژگی"
+@ar "سمة"
+pub struct Attr:
+    pub name: str = ""
+    pub kind: int = 0
+    pub f: f64 = 0.0
+    pub i: i64 = 0
+    pub s: str = ""
+    pub t: tensor.Tensor = tensor.Tensor {}
+    pub floats: Vector<f64> = Vector {}
+    pub ints: Vector<i64> = Vector {}
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free():
+        this.t.free()
+        this.floats.free()
+        this.ints.free()
+    end
+end
+
+@en "Node"
+@fa "گره"
+@ar "عقدة"
+pub struct Node:
+    pub op: str = ""
+    pub name: str = ""
+    pub inputs: Vector<str> = Vector {}
+    pub outputs: Vector<str> = Vector {}
+    pub attrs: Vector<Attr> = Vector {}
+
+    // The attribute called `name`, or -1.
+    @en "attr_index"
+    @fa "نمایه ویژگی"
+    @ar "دليل السمة"
+    pub func attr_index(name: str): int:
+        repeat this.attrs.len() with i:
+            a := this.attrs.get(i)
+            if str.Equals(a.name, name): ret i end
+        end
+        ret 0 - 1
+    end
+
+    @en "attr_int"
+    @fa "ویژگی صحیح"
+    @ar "سمة صحيحة"
+    pub func attr_int(name: str, dflt: i64): i64:
+        k := this.attr_index(name)
+        if k < 0: ret dflt end
+        ret this.attrs.get(k).i
+    end
+
+    @en "attr_float"
+    @fa "ویژگی اعشاری"
+    @ar "سمة عشرية"
+    pub func attr_float(name: str, dflt: f64): f64:
+        k := this.attr_index(name)
+        if k < 0: ret dflt end
+        ret this.attrs.get(k).f
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free():
+        this.inputs.free()
+        this.outputs.free()
+        repeat this.attrs.len() with i:
+            mut a := this.attrs.get(i)
+            a.free()
+        end
+        this.attrs.free()
+    end
+end
+
+@en "Model"
+@fa "مدل"
+@ar "نموذج"
+pub struct Model:
+    pub inputs: Vector<str> = Vector {}
+    pub outputs: Vector<str> = Vector {}
+    pub nodes: Vector<Node> = Vector {}
+    pub init_names: Vector<str> = Vector {}
+    pub inits: Vector<tensor.Tensor> = Vector {}
+    pub ir_version: i64 = 0
+    pub error: str = ""
+    pub ok: bool = false
+
+    // Graph inputs that are not initializers: what Run expects fed.
+    @en "feed_names"
+    @fa "نام ورودی‌ها"
+    @ar "أسماء المدخلات"
+    pub func feed_names(): Vector<str>:
+        mut out := Vector {} as Vector<str>
+        repeat this.inputs.len() with i:
+            nm := this.inputs.get(i)
+            mut is_init := false
+            repeat this.init_names.len() with j:
+                if str.Equals(this.init_names.get(j), nm): is_init = true end
+            end
+            if is_init == false: out.push(nm) end
+        end
+        ret out
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free():
+        this.inputs.free()
+        this.outputs.free()
+        repeat this.nodes.len() with i:
+            mut n := this.nodes.get(i)
+            n.free()
+        end
+        this.nodes.free()
+        this.init_names.free()
+        repeat this.inits.len() with i:
+            mut t := this.inits.get(i)
+            t.free()
+        end
+        this.inits.free()
+    end
+end
+
+// ---- public API ----
+
+@en "ParseOnnx"
+@fa "تجزیه اونیکس"
+@ar "تحليل أونكس"
+pub func ParseOnnx(p: void*, n: int, ok &: bool): Model:
+    mut m := Model {}
+    ok = _decode_model(p, n, m)
+    m.ok = ok
+    ret m
+end
+
+@en "LoadOnnx"
+@fa "بارگذاری اونیکس"
+@ar "تحميل أونكس"
+pub func LoadOnnx(path: str, ok &: bool): Model:
+    ok = false
+    mut fok := false
+    mut raw := archive.ReadBinaryFile(path, fok)
+    if fok == false:
+        compress.BufFree(raw)
+        mut m := Model {}
+        m.error = "cannot read " + path
+        ret m
+    end
+    m := ParseOnnx(raw.data, compress.BufLen(raw), ok)
+    compress.BufFree(raw)
+    ret m
+end
+
+// Evaluates the graph. `inputs` line up with feed_names(); the result
+// holds one owned tensor per graph output. On failure ok is false and
+// model.error says why.
+@en "Run"
+@fa "اجرا"
+@ar "تشغيل"
+pub func Run(model &: Model, inputs &: Vector<tensor.Tensor>, ok &: bool): Vector<tensor.Tensor>:
+    ret _run_graph(model, inputs, ok)
+end

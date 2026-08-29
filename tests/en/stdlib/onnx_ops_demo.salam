@@ -69,6 +69,7 @@ func attr_float(name: str, v: f64): compress.ByteBuf:
     ret b
 end
 
+// Takes ownership of `vals`, which every caller builds inline.
 func attr_ints(name: str, vals: Vector<i64>): compress.ByteBuf:
     mut b := compress.NewByteBuf()
     put_str(b, 1, name)
@@ -77,6 +78,8 @@ func attr_ints(name: str, vals: Vector<i64>): compress.ByteBuf:
     repeat vals.len() with i: protobuf.WriteVarint(packed, vals.get(i) as u64) end
     sub(b, 8, packed)
     compress.BufFree(packed)
+    mut owned := vals
+    owned.free()
     ret b
 end
 
@@ -131,6 +134,14 @@ func run1(op: str, ins: Vector<str>, outs: Vector<str>, attrs: Vector<compress.B
     repeat attrs.len() with i: sub(n, 5, attrs.get(i)) end
     sub(g, 1, n)
     compress.BufFree(n)
+    // Everything the caller composed for this one call is owned here:
+    // the attribute buffers, and the name vectors built inline.
+    repeat attrs.len() with i:
+        mut ab := attrs.get(i)
+        compress.BufFree(ab)
+    end
+    mut attrs_v := attrs
+    attrs_v.free()
     repeat inits.len() with i:
         mut t := inits.get(i)
         tp := tensor_proto(init_names.get(i), t)
@@ -171,6 +182,14 @@ func run1(op: str, ins: Vector<str>, outs: Vector<str>, attrs: Vector<compress.B
     end
     got.free()
     model.free()
+    mut ins_v := ins
+    ins_v.free()
+    mut outs_v := outs
+    outs_v.free()
+    // The feed NAMES are composed per call too; the feed tensors are the
+    // caller's and are left alone.
+    mut fn_v := feed_names
+    fn_v.free()
     ret out
 end
 
@@ -283,7 +302,10 @@ func main:
     mut rx := run_x("ReduceMax", x, ra3, ok)
     mut want_rx := tensor.MaxAxis(x, 0, false)
     testing.AssertTrue(tensor.AllClose(rx, want_rx, eps))
-    mut rn := run_x("ReduceMin", x, ra3, ok)
+    mut ra4 := no_attrs()
+    ra4.push(attr_ints("axes", ilist(0 as i64)))
+    ra4.push(attr_int("keepdims", 0))
+    mut rn := run_x("ReduceMin", x, ra4, ok)
     testing.AssertEqFloat(rn.at(0), 0.0 - 2.5, eps)
     // no axes at all reduces everything
     mut rall := run_x("ReduceSum", x, no_attrs(), ok)
@@ -426,6 +448,15 @@ func main:
     testing.AssertFalse(ok)
     testing.AssertTrue(bad.is_empty())
 
+    feeds2.free()
+    feeds3.free()
+    gfeeds.free()
+    gfeeds2.free()
+    spfeeds.free()
+    efeeds.free()
+    wfeeds.free()
+    pfeeds.free()
+    lfeeds.free()
     x.free()
     ab.free()
     want_abs.free()

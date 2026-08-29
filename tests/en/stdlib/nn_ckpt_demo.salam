@@ -1,0 +1,136 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/nn: SLMT checkpoints round-trip a model bit for bit, plain and
+// gzipped, and refuse foreign, corrupt or mismatched files.
+
+import archive
+import autograd
+import compress
+import filepath
+import nn
+import os
+import tensor
+import testing
+
+struct Net:
+    pub fc1: nn.Linear = nn.Linear {}
+    pub norm: nn.LayerNorm = nn.LayerNorm {}
+    pub fc2: nn.Linear = nn.Linear {}
+
+    pub func forward(tp &: autograd.Tape, ps &: nn.ParamStore, x: int): int:
+        h := autograd.Relu(tp, this.fc1.forward(tp, ps, x))
+        ret this.fc2.forward(tp, ps, this.norm.forward(tp, ps, h))
+    end
+end
+
+func build(ps &: nn.ParamStore, seed: i64): Net:
+    mut g := tensor.NewRng(seed)
+    mut m := Net {}
+    m.fc1 = nn.NewLinear(ps, "fc1", 6, 8, g)
+    m.norm = nn.NewLayerNorm(ps, "norm", 8)
+    m.fc2 = nn.NewLinear(ps, "fc2", 8, 3, g)
+    ret m
+end
+
+func run(model &: Net, ps &: nn.ParamStore, x &: tensor.Tensor): tensor.Tensor:
+    mut tp := autograd.NewTape(1)
+    tp.training = false
+    xid := autograd.Input(tp, x)
+    out := autograd.Value(tp, model.forward(tp, ps, xid))
+    c := tensor.Clone(out)
+    tp.free()
+    ret c
+end
+
+func perturb(ps &: nn.ParamStore):
+    repeat ps.count() with i:
+        mut p := ps.at(i)
+        tensor.SetAll(p.value, 0.123)
+    end
+end
+
+func main:
+    mut s := tensor.Shape2(4, 6)
+    mut x := tensor.RandUniform(s, 0.0 - 1.0, 1.0, 3)
+    s.free()
+
+    mut ps := nn.ParamStore {}
+    mut model := build(ps, 7)
+    mut before := run(model, ps, x)
+
+    // In-memory round trip: perturb, load, identical output
+    mut buf := nn.SaveCheckpointBuf(ps)
+    testing.AssertTrue(compress.BufLen(buf) > 100)
+    perturb(ps)
+    mut after_perturb := run(model, ps, x)
+    testing.AssertFalse(tensor.Equal(before, after_perturb))
+    testing.AssertTrue(nn.LoadCheckpointBuf(buf, ps))
+    mut restored := run(model, ps, x)
+    testing.AssertTrue(tensor.Equal(before, restored))
+
+    // A flipped byte fails the checksum
+    mut bad := compress.BufClone(buf)
+    compress.BufSet(bad, 30, (compress.BufGet(bad, 30) + 1) & 255)
+    testing.AssertFalse(nn.LoadCheckpointBuf(bad, ps))
+    // A foreign buffer is refused outright
+    mut junk := compress.BufFromStr("definitely not a checkpoint, but long enough")
+    testing.AssertFalse(nn.LoadCheckpointBuf(junk, ps))
+
+    // A store with different names or shapes does not match
+    mut ps2 := nn.ParamStore {}
+    mut g2 := tensor.NewRng(1)
+    _other := nn.NewLinear(ps2, "other", 6, 8, g2)
+    testing.AssertFalse(nn.LoadCheckpointBuf(buf, ps2))
+    mut ps3 := nn.ParamStore {}
+    mut m3 := build(ps3, 1)
+    testing.AssertTrue(nn.LoadCheckpointBuf(buf, ps3))
+    mut same := run(m3, ps3, x)
+    testing.AssertTrue(tensor.Equal(before, same))
+
+    // Files, plain and gzipped
+    dir := filepath.Join(os.TempDir(), "salam_nn_ckpt_test")
+    archive.EnsureDir(dir)
+    path := filepath.Join(dir, "model.slmt")
+    gzpath := filepath.Join(dir, "model.slmt.gz")
+    testing.AssertTrue(nn.SaveCheckpoint(path, ps))
+    testing.AssertTrue(nn.SaveCheckpoint(gzpath, ps))
+    perturb(ps)
+    testing.AssertTrue(nn.LoadCheckpoint(path, ps))
+    mut from_file := run(model, ps, x)
+    testing.AssertTrue(tensor.Equal(before, from_file))
+    perturb(ps)
+    testing.AssertTrue(nn.LoadCheckpoint(gzpath, ps))
+    mut from_gz := run(model, ps, x)
+    testing.AssertTrue(tensor.Equal(before, from_gz))
+    testing.AssertFalse(nn.LoadCheckpoint(filepath.Join(dir, "missing.slmt"), ps))
+
+    compress.BufFree(buf)
+    compress.BufFree(bad)
+    compress.BufFree(junk)
+    ps.free()
+    ps2.free()
+    ps3.free()
+    tensor.Free(x)
+    tensor.Free(before)
+    tensor.Free(after_perturb)
+    tensor.Free(restored)
+    tensor.Free(same)
+    tensor.Free(from_file)
+    tensor.Free(from_gz)
+
+    ret testing.Summary()
+end

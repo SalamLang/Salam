@@ -1,0 +1,162 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package nn
+
+import archive
+import compress
+import encoding.binary
+import str
+import tensor
+
+// Checkpoints: the SLMT container, version 1, little-endian throughout.
+//
+//   "SLMT"        4 bytes magic
+//   u32           version = 1
+//   u32           flags (reserved, 0)
+//   u32           tensor count
+//   records       one tensor.WriteTensor record per parameter, in
+//                 registry order: name, dtype, rank, dims, payload
+//   u32           CRC32 over everything above
+//
+// Loading matches records to parameters BY NAME and copies payloads
+// into the existing value tensors, so every handle a layer holds stays
+// valid and no allocation moves. It succeeds only when every record
+// found its parameter with the same shape and every parameter was
+// covered; anything else - a foreign file, a bad checksum, a renamed
+// layer, a resized one - returns false and leaves whatever did match
+// loaded (a partial load is easy to detect, since the caller can
+// re-initialize, and far more useful than a torn-down store).
+//
+// A path ending in .gz is gzip-wrapped through std/compress on both
+// sides.
+
+const _CKPT_VERSION := 1
+
+func _find_param(ps &: ParamStore, name: str): int:
+    repeat ps.count() with i:
+        p := ps.items.get(i)
+        if str.Equals(p.name, name): ret i end
+    end
+    ret 0 - 1
+end
+
+// ---- public API ----
+
+// Serializes the store into a fresh buffer (caller frees).
+@en "SaveCheckpointBuf"
+@fa "ذخیره نقطه بازرسی در بافر"
+@ar "حفظ نقطة تفتيش في مخزن"
+pub func SaveCheckpointBuf(ps &: ParamStore): compress.ByteBuf:
+    mut buf := compress.NewByteBuf()
+    compress.BufPushBytes(buf, "SLMT" as void*, 4)
+    binary.WriteU32LE(buf, _CKPT_VERSION)
+    binary.WriteU32LE(buf, 0)
+    binary.WriteU32LE(buf, ps.count())
+    repeat ps.count() with i:
+        mut p := ps.items.get(i)
+        tensor.WriteTensor(buf, p.name, p.value)
+    end
+    crc := compress.CRC32Buf(buf)
+    binary.WriteU32LE(buf, crc as int)
+    ret buf
+end
+
+// Restores the store from a buffer written by SaveCheckpointBuf.
+@en "LoadCheckpointBuf"
+@fa "بارگذاری نقطه بازرسی از بافر"
+@ar "تحميل نقطة تفتيش من مخزن"
+pub func LoadCheckpointBuf(buf: compress.ByteBuf, ps &: ParamStore): bool:
+    n := compress.BufLen(buf)
+    if n < 20: ret false end
+    // Checksum first: everything before the trailing u32.
+    stored := compress.BufGet(buf, n - 4) | (compress.BufGet(buf, n - 3) << 8) | (compress.BufGet(buf, n - 2) << 16) | (compress.BufGet(buf, n - 1) << 24)
+    computed := compress.CRC32(buf.data, n - 4)
+    if (stored as u32) != computed: ret false end
+    mut rd := compress.NewByteReader(buf.data, n - 4)
+    if binary.ReadU8(rd) != 83 || binary.ReadU8(rd) != 76 || binary.ReadU8(rd) != 77 || binary.ReadU8(rd) != 84: ret false end
+    if binary.ReadU32LE(rd) != _CKPT_VERSION: ret false end
+    binary.ReadU32LE(rd)
+    count := binary.ReadU32LE(rd)
+    if rd.bad || count < 0: ret false end
+    mut all_ok := count == ps.count()
+    mut seen := Vector {} as Vector<bool>
+    seen.zeros(ps.count())
+    repeat count:
+        mut name := ""
+        mut t := tensor.Empty()
+        if tensor.ReadTensor(rd, name, t) == false:
+            all_ok = false
+        else:
+            idx := _find_param(ps, name)
+            if idx < 0:
+                all_ok = false
+            else:
+                mut p := ps.items.get(idx)
+                if p.value.same_shape(t):
+                    tensor.CopyInto(p.value, t)
+                    seen.set(idx, true)
+                else:
+                    all_ok = false
+                end
+            end
+            t.free()
+        end
+    end
+    repeat ps.count() with i:
+        if seen.get(i) == false: all_ok = false end
+    end
+    seen.free()
+    ret all_ok
+end
+
+@en "SaveCheckpoint"
+@fa "ذخیره نقطه بازرسی"
+@ar "حفظ نقطة تفتيش"
+pub func SaveCheckpoint(path: str, ps &: ParamStore): bool:
+    mut buf := SaveCheckpointBuf(ps)
+    mut ok := false
+    if str.EndsWith(path, ".gz"):
+        mut z := compress.GzipCompressBuf(buf)
+        ok = archive.WriteBinaryFileBuf(path, z)
+        compress.BufFree(z)
+    else:
+        ok = archive.WriteBinaryFileBuf(path, buf)
+    end
+    compress.BufFree(buf)
+    ret ok
+end
+
+@en "LoadCheckpoint"
+@fa "بارگذاری نقطه بازرسی"
+@ar "تحميل نقطة تفتيش"
+pub func LoadCheckpoint(path: str, ps &: ParamStore): bool:
+    mut fok := false
+    mut raw := archive.ReadBinaryFile(path, fok)
+    if fok == false:
+        compress.BufFree(raw)
+        ret false
+    end
+    mut ok := false
+    if str.EndsWith(path, ".gz"):
+        mut zok := false
+        mut plain := compress.GzipDecompressBuf(raw, zok)
+        if zok: ok = LoadCheckpointBuf(plain, ps) end
+        compress.BufFree(plain)
+    else:
+        ok = LoadCheckpointBuf(raw, ps)
+    end
+    compress.BufFree(raw)
+    ret ok
+end

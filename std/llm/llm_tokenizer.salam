@@ -44,65 +44,6 @@ pub const TOK_BPE := 1
 // The SentencePiece word-boundary marker "▁" (U+2581), as UTF-8.
 const _SPM_SPACE := "\xE2\x96\x81"
 
-// GPT-2's byte-to-character table: bytes that are printable map to
-// themselves, the rest to U+0100 onward in byte order.
-func _bpe_b2u(): Vector<int>:
-    mut t := Vector {} as Vector<int>
-    mut next := 256
-    repeat 256 with b:
-        printable := (b >= 33 && b <= 126) || (b >= 161 && b <= 172) || (b >= 174 && b <= 255)
-        if printable:
-            t.push(b)
-        else:
-            t.push(next)
-            next += 1
-        end
-    end
-    ret t
-end
-
-func _byte_at(s: str, i: int): int:
-    p := (s as void*) as i8*
-    ret (p[i] as int) & 255
-end
-
-// Bytes of s as a Vector of UTF-8 character strings.
-func _chars_of(s: str): Vector<str>:
-    mut out := Vector {} as Vector<str>
-    n := s.len()
-    mut i := 0
-    until i < n:
-        mut w := str.CharLen(_byte_at(s, i))
-        if i + w > n: w = n - i end
-        out.push(s.substr(i, w))
-        i += w
-    end
-    ret out
-end
-
-func _hex_digit(v: int): int:
-    if v < 10: ret 48 + v end
-    ret 65 + v - 10
-end
-
-func _hex_val(c: int): int:
-    if c >= 48 && c <= 57: ret c - 48 end
-    if c >= 65 && c <= 70: ret c - 55 end
-    if c >= 97 && c <= 102: ret c - 87 end
-    ret 0 - 1
-end
-
-func _byte_token_text(b: int): str:
-    mut sb := str.NewBuilder()
-    str.BufAppend(sb, "<0x")
-    str.BufAppendChar(sb, _hex_digit(b >> 4))
-    str.BufAppendChar(sb, _hex_digit(b & 15))
-    str.BufAppend(sb, ">")
-    out := str.BufStr(sb)
-    str.BufFree(sb)
-    ret out
-end
-
 @en "Tokenizer"
 @fa "توکن‌ساز"
 @ar "مقطع"
@@ -194,15 +135,20 @@ pub struct Tokenizer:
     @ar "فك الترميز"
     pub func decode(ids &: Vector<int>): str:
         mut sb := str.NewBuilder()
+        mut first := true
         repeat ids.len() with i:
             id := ids.get(i)
             if id == this.bos || id == this.eos || id < 0 || id >= this.tokens.len(): continue end
-            t := this.tokens.get(id)
+            mut t := this.tokens.get(id)
             if this.kind == TOK_SPM:
+                // SentencePiece drops the boundary marker that opens the
+                // text: "▁hello" at the start decodes to "hello".
+                if first && str.StartsWith(t, _SPM_SPACE): t = str.Substr(t, 3, t.len() - 3) end
                 this._decode_spm_piece(sb, t)
             else:
                 this._decode_bpe_piece(sb, t)
             end
+            first = false
         end
         s := str.BufStr(sb)
         str.BufFree(sb)
@@ -351,6 +297,65 @@ pub struct Tokenizer:
             if b >= 0: str.BufAppendChar(sb, b) end
         end
     end
+end
+
+// GPT-2's byte-to-character table: bytes that are printable map to
+// themselves, the rest to U+0100 onward in byte order.
+func _bpe_b2u(): Vector<int>:
+    mut t := Vector {} as Vector<int>
+    mut next := 256
+    repeat 256 with b:
+        printable := (b >= 33 && b <= 126) || (b >= 161 && b <= 172) || (b >= 174 && b <= 255)
+        if printable:
+            t.push(b)
+        else:
+            t.push(next)
+            next += 1
+        end
+    end
+    ret t
+end
+
+func _byte_at(s: str, i: int): int:
+    p := (s as void*) as i8*
+    ret (p[i] as int) & 255
+end
+
+// Bytes of s as a Vector of UTF-8 character strings.
+func _chars_of(s: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    n := s.len()
+    mut i := 0
+    until i < n:
+        mut w := str.CharLen(_byte_at(s, i))
+        if i + w > n: w = n - i end
+        out.push(s.substr(i, w))
+        i += w
+    end
+    ret out
+end
+
+func _hex_digit(v: int): int:
+    if v < 10: ret 48 + v end
+    ret 65 + v - 10
+end
+
+func _hex_val(c: int): int:
+    if c >= 48 && c <= 57: ret c - 48 end
+    if c >= 65 && c <= 70: ret c - 55 end
+    if c >= 97 && c <= 102: ret c - 87 end
+    ret 0 - 1
+end
+
+func _byte_token_text(b: int): str:
+    mut sb := str.NewBuilder()
+    str.BufAppend(sb, "<0x")
+    str.BufAppendChar(sb, _hex_digit(b >> 4))
+    str.BufAppendChar(sb, _hex_digit(b & 15))
+    str.BufAppend(sb, ">")
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
 end
 
 // ---- public API ----

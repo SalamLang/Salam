@@ -547,8 +547,9 @@ LabelEncoder OneHotEncoder SimpleImputer PolynomialFeatures`; models
 GaussianNB DecisionTree RandomForest AdaBoost GradientBoosting LinearSVM SVC
 LDA QDA KMeans MiniBatchKMeans DBSCAN Agglomerative GaussianMixture PCA
 TSNE HistGradientBoosting`, plus the `KDTree` index (`algorithm =
-ml.KNN_KDTREE`, `workers` for parallel queries; the serial path is safe
-  inside another parallel loop);
+ml.KNN_KDTREE`) and `workers` on KNN and KMeans for parallel queries and
+  assignment (identical results at any worker count; the serial path is the
+  safe one inside another parallel loop);
   metrics `Accuracy ConfusionMatrix Precision Recall F1 MacroF1 RocAuc LogLoss
 MSE MAE RMSE R2Score SilhouetteScore AdjustedRandIndex`; selection
   `TrainTestSplit KFold StratifiedKFold CrossValScore CrossValScoreParallel

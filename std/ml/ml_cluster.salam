@@ -15,6 +15,7 @@
 package ml
 
 import matrix
+import pool
 
 // Clustering. KMeans with k-means++ seeding and Lloyd iterations, the
 // best of n_init restarts by inertia; DBSCAN by density with a brute
@@ -23,6 +24,19 @@ import matrix
 // KMeans labels are 0..k-1 in the order the centers were seeded.
 // DBSCAN labels clusters 0, 1, ... in discovery order and marks noise
 // as -1, the scikit-learn convention.
+//
+// The assignment step is the expensive half (O(n k p)), so `workers`
+// spreads its rows over a pool; the distances it writes are summed
+// serially afterwards, which keeps the inertia bit-for-bit equal to the
+// serial run at any worker count.
+
+// The assignment being computed in parallel: workers read these and
+// write their own entries of _km_labels / _km_dist.
+mut _km_x := matrix.Matrix {}
+mut _km_centers := matrix.Matrix {}
+mut _km_labels := Vector {} as Vector<int>
+mut _km_dist := Vector {} as Vector<f64>
+mut _km_k := 0
 
 @en "KMeans"
 @fa "کی-میانگین"
@@ -33,6 +47,8 @@ pub struct KMeans:
     pub tol: f64 = 0.0001
     pub n_init: int = 3
     pub seed: i64 = 42
+    // 0 or 1: serial; -1: every core; n: that many workers.
+    pub workers: int = 0
     pub centers: matrix.Matrix = matrix.Matrix {}
     pub inertia: f64 = 0.0
     pub n_iter: int = 0
@@ -55,7 +71,7 @@ pub struct KMeans:
             mut g := matrix.NewRng(this.seed + 7919 * (r as i64))
             mut c := _kmeanspp(x, this.k, g)
             mut iters := 0
-            inertia := _lloyd(x, c, labels, this.max_iter, this.tol, iters)
+            inertia := _lloyd(x, c, labels, this.max_iter, this.tol, this.workers, iters)
             if inertia < best_inertia:
                 best_inertia = inertia
                 matrix.Free(best_centers)
@@ -250,32 +266,66 @@ end
 
 // Lloyd's iterations from the given centers; returns the inertia and
 // leaves labels/centers updated.
-func _lloyd(x &: matrix.Matrix, centers &: matrix.Matrix, labels &: Vector<int>, max_iter: int, tol: f64, iters_out &: int): f64:
+// The nearest center of row i, and its squared distance.
+func _km_one(x &: matrix.Matrix, centers &: matrix.Matrix, labels &: Vector<int>, dist &: Vector<f64>, i: int, k: int):
+    mut bi := 0
+    mut bd := _sqdist(x, i, centers, 0)
+    repeat k - 1 with t:
+        d := _sqdist(x, i, centers, t + 1)
+        if d < bd:
+            bd = d
+            bi = t + 1
+        end
+    end
+    labels.set(i, bi)
+    dist.set(i, bd)
+end
+
+// The worker body of the parallel assignment, reading the globals.
+func _km_row(i: i64):
+    _km_one(_km_x, _km_centers, _km_labels, _km_dist, i as int, _km_k)
+end
+
+// Assigns every row to its nearest center. The serial path touches no
+// globals; workers > 1 uses them and is NOT re-entrant.
+func _km_assign(x &: matrix.Matrix, centers &: matrix.Matrix, labels &: Vector<int>, dist &: Vector<f64>, workers: int):
+    k := centers.rows
+    mut w := workers
+    if w < 0: w = pool.CPUCount() as int end
+    if w <= 1:
+        repeat x.rows with i: _km_one(x, centers, labels, dist, i, k) end
+        ret
+    end
+    _km_x = x
+    _km_centers = centers
+    _km_labels = labels
+    _km_dist = dist
+    _km_k = k
+    pool.ParallelFor(x.rows as i64, w as i64, (i: i64): _km_row(i) end)
+    _km_x = matrix.Matrix {}
+    _km_centers = matrix.Matrix {}
+    _km_labels = Vector {} as Vector<int>
+    _km_dist = Vector {} as Vector<f64>
+end
+
+func _lloyd(x &: matrix.Matrix, centers &: matrix.Matrix, labels &: Vector<int>, max_iter: int, tol: f64, workers: int, iters_out &: int): f64:
     n := x.rows
     k := centers.rows
     p := x.cols
     mut sums := matrix.Zeros(k, p)
     mut counts := Vector {} as Vector<int>
     counts.zeros(k)
+    mut dist := Vector {} as Vector<f64>
+    dist.zeros(n)
     mut inertia := 0.0
     mut it := 0
     mut done := false
     until it < max_iter && done == false:
-        // Assignment.
+        // Assignment, then the inertia in row order so the sum is the
+        // same however the rows were spread.
+        _km_assign(x, centers, labels, dist, workers)
         inertia = 0.0
-        repeat n with i:
-            mut bi := 0
-            mut bd := _sqdist(x, i, centers, 0)
-            repeat k - 1 with t:
-                d := _sqdist(x, i, centers, t + 1)
-                if d < bd:
-                    bd = d
-                    bi = t + 1
-                end
-            end
-            labels.set(i, bi)
-            inertia += bd
-        end
+        repeat n with i: inertia += dist.get(i) end
         // Update.
         matrix.SetAll(sums, 0.0)
         repeat k with c: counts.set(c, 0) end
@@ -301,6 +351,7 @@ func _lloyd(x &: matrix.Matrix, centers &: matrix.Matrix, labels &: Vector<int>,
     iters_out = it
     sums.free()
     counts.free()
+    dist.free()
     ret inertia
 end
 

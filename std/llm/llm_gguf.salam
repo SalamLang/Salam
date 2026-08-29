@@ -1,0 +1,163 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package llm
+
+import gguf
+import str
+import tensor
+
+// From a parsed GGUF file to a Model and a Tokenizer. The metadata keys
+// follow the llama.cpp naming: general.architecture picks the prefix,
+// "<arch>.embedding_length" and friends give the shape, and the tensors
+// are "token_embd.weight", "blk.N.attn_q.weight", ... Every quantized
+// weight is dequantized to f32 on load (gguf.LoadTensorF32), so memory
+// is four bytes per parameter regardless of the file's format.
+
+func _meta_f64(g &: gguf.Gguf, key: str, dflt: f64): f64:
+    k := g.meta_index(key)
+    if k < 0: ret dflt end
+    v := g.values.get(k)
+    if v.kind == 6 || v.kind == 12: ret v.f end
+    ret v.i as f64
+end
+
+func _tensor(g &: gguf.Gguf, name: str, ok &: bool): tensor.Tensor:
+    idx := g.tensor_index(name)
+    if idx < 0:
+        ok = false
+        ret tensor.Empty()
+    end
+    mut got := false
+    t := gguf.LoadTensorF32(g, idx, got)
+    if !got: ok = false end
+    ret t
+end
+
+func _neox_arch(arch: str): bool:
+    names := ["qwen2", "qwen", "qwen3", "phi2", "phi3", "gptneox", "stablelm", "gemma", "gemma2", "olmo"]
+    repeat 10 with i:
+        if str.Equals(arch, names[i]): ret true end
+    end
+    ret false
+end
+
+// ---- public API ----
+
+@en "ConfigFromGguf"
+@fa "پیکربندی از جی‌جی‌یو‌اف"
+@ar "تكوين من جي جي يو إف"
+pub func ConfigFromGguf(g &: gguf.Gguf): Config:
+    mut c := Config {}
+    arch := g.meta_str("general.architecture")
+    c.dim = g.meta_int(arch + ".embedding_length", 0) as int
+    c.layers = g.meta_int(arch + ".block_count", 0) as int
+    c.heads = g.meta_int(arch + ".attention.head_count", 1) as int
+    c.kv_heads = g.meta_int(arch + ".attention.head_count_kv", c.heads as i64) as int
+    c.ff = g.meta_int(arch + ".feed_forward_length", 0) as int
+    c.ctx = g.meta_int(arch + ".context_length", 512) as int
+    c.eps = _meta_f64(g, arch + ".attention.layer_norm_rms_epsilon", 0.00001)
+    c.rope_theta = _meta_f64(g, arch + ".rope.freq_base", 10000.0)
+    c.rope_kind = _neox_arch(arch) ? ROPE_NEOX : ROPE_NORMAL
+    k := g.meta_index("tokenizer.ggml.tokens")
+    if k >= 0: c.vocab = g.values.get(k).strs.len() end
+    ret c
+end
+
+// The weights of a llama-family GGUF as a Model; ok is false (and the
+// model empty) when a required tensor is missing.
+@en "ModelFromGguf"
+@fa "مدل از جی‌جی‌یو‌اف"
+@ar "نموذج من جي جي يو إف"
+pub func ModelFromGguf(g &: gguf.Gguf): Model:
+    mut m := Model {}
+    m.cfg = ConfigFromGguf(g)
+    mut ok := g.ok && m.cfg.dim > 0 && m.cfg.layers > 0
+    if !ok: ret m end
+    m.tok_embed = _tensor(g, "token_embd.weight", ok)
+    if m.cfg.vocab == 0 && !m.tok_embed.is_empty(): m.cfg.vocab = m.tok_embed.dim(0) end
+    m.out_norm = _tensor(g, "output_norm.weight", ok)
+    if g.tensor_index("output.weight") >= 0:
+        m.out_head = _tensor(g, "output.weight", ok)
+    end
+    repeat m.cfg.layers with i:
+        p := "blk." + i + "."
+        mut l := Layer {}
+        l.attn_norm = _tensor(g, p + "attn_norm.weight", ok)
+        l.wq = _tensor(g, p + "attn_q.weight", ok)
+        l.wk = _tensor(g, p + "attn_k.weight", ok)
+        l.wv = _tensor(g, p + "attn_v.weight", ok)
+        l.wo = _tensor(g, p + "attn_output.weight", ok)
+        l.ffn_norm = _tensor(g, p + "ffn_norm.weight", ok)
+        l.w_gate = _tensor(g, p + "ffn_gate.weight", ok)
+        l.w_up = _tensor(g, p + "ffn_up.weight", ok)
+        l.w_down = _tensor(g, p + "ffn_down.weight", ok)
+        m.layers.push(l)
+    end
+    m.ok = ok
+    if !ok: m.free() end
+    ret m
+end
+
+// The vocabulary, scores, merges and special ids of a GGUF file.
+@en "TokenizerFromGguf"
+@fa "توکن‌ساز از جی‌جی‌یو‌اف"
+@ar "مقطع من جي جي يو إف"
+pub func TokenizerFromGguf(g &: gguf.Gguf): Tokenizer:
+    model := g.meta_str("tokenizer.ggml.model")
+    mut t := NewTokenizer(str.Equals(model, "gpt2") ? TOK_BPE : TOK_SPM)
+    kt := g.meta_index("tokenizer.ggml.tokens")
+    ks := g.meta_index("tokenizer.ggml.scores")
+    if kt >= 0:
+        toks := g.values.get(kt).strs
+        repeat toks.len() with i:
+            mut sc := 0.0
+            if ks >= 0 && i < g.values.get(ks).floats.len(): sc = g.values.get(ks).floats.get(i) end
+            _id := t.add_token(toks.get(i), sc)
+        end
+    end
+    km := g.meta_index("tokenizer.ggml.merges")
+    if km >= 0:
+        ms := g.values.get(km).strs
+        repeat ms.len() with i:
+            rule := ms.get(i)
+            sp := str.IndexOf(rule, " ")
+            if sp > 0: t.add_merge(str.Substr(rule, 0, sp), str.Substr(rule, sp + 1, rule.len() - sp - 1)) end
+        end
+    end
+    t.bos = g.meta_int("tokenizer.ggml.bos_token_id", 0 - 1) as int
+    t.eos = g.meta_int("tokenizer.ggml.eos_token_id", 0 - 1) as int
+    t.unk = g.meta_int("tokenizer.ggml.unknown_token_id", 0) as int
+    t.add_bos = g.meta_int("tokenizer.ggml.add_bos_token", 1) != 0
+    t.finish()
+    ret t
+end
+
+// Everything from one file: false when the file does not parse or a
+// weight is missing (both outputs are then empty).
+@en "LoadGgufModel"
+@fa "بارگذاری مدل جی‌جی‌یو‌اف"
+@ar "تحميل نموذج جي جي يو إف"
+pub func LoadGgufModel(path: str, m &: Model, t &: Tokenizer): bool:
+    mut ok := false
+    mut g := gguf.LoadGguf(path, ok)
+    if !ok:
+        g.free()
+        ret false
+    end
+    m = ModelFromGguf(g)
+    t = TokenizerFromGguf(g)
+    g.free()
+    ret m.ok
+end

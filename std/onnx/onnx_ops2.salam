@@ -1,0 +1,550 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package onnx
+
+import math
+import str
+import tensor
+
+// The second half of the op table, the ops a transformer or a modern
+// vision export leans on that the first wave (onnx_ops) left out:
+//
+//   math       Abs Erf Softplus Elu Selu HardSigmoid PRelu Floor Ceil
+//              Round Reciprocal Sign Pow Min Max Sum Mean
+//   reduce     ReduceMean ReduceSum ReduceMax ReduceMin (axes, keepdims)
+//   indexing   Gather (1-D or scalar indices) Slice Split Expand Where
+//              Equal Greater Less Cast Shape
+//   norm       LayerNormalization InstanceNormalization
+//
+// _exec_node falls through to _exec_node2 before it gives up, so the
+// two tables read as one.
+
+func _erf(x: f64): f64:
+    // Abramowitz and Stegun 7.1.26, |error| < 1.5e-7 - well inside f32.
+    mut sign := 1.0
+    mut v := x
+    if v < 0.0:
+        sign = 0.0 - 1.0
+        v = 0.0 - v
+    end
+    t := 1.0 / (1.0 + 0.3275911 * v)
+    y := 1.0 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * math.Exp(0.0 - v * v)
+    ret sign * y
+end
+
+// x through a scalar function, elementwise, as a fresh tensor.
+func _map_op(x &: tensor.Tensor, op: str, a1: f64, a2: f64): tensor.Tensor:
+    out := tensor.Clone(x)
+    p := out.data.data
+    repeat out.numel() with k:
+        v := p[k] as f64
+        mut r := v
+        if str.Equals(op, "Erf"): r = _erf(v)
+        else str.Equals(op, "Softplus"): r = math.Log(1.0 + math.Exp(v))
+        else str.Equals(op, "Elu"): r = v > 0.0 ? v : a1 * (math.Exp(v) - 1.0)
+        else str.Equals(op, "Selu"): r = a2 * (v > 0.0 ? v : a1 * (math.Exp(v) - 1.0))
+        else str.Equals(op, "HardSigmoid"): r = math.ClampF(a1 * v + a2, 0.0, 1.0)
+        else str.Equals(op, "Floor"): r = math.Floor(v)
+        else str.Equals(op, "Ceil"): r = math.Ceil(v)
+        else str.Equals(op, "Round"): r = math.Round(v)
+        else str.Equals(op, "Reciprocal"): r = v == 0.0 ? 0.0 : 1.0 / v
+        else str.Equals(op, "Sign"): r = math.Sign(v)
+        else: r = v end
+        p[k] = r as f32
+    end
+    ret out
+end
+
+func _unary2(model &: Model, node &: Node, env &: _Env): bool:
+    mut x := tensor.Empty()
+    if _in(model, node, env, 0, x) == false: ret false end
+    op := node.op
+    mut y := tensor.Empty()
+    if str.Equals(op, "Abs"):
+        y = tensor.Abs(x)
+    else str.Equals(op, "Gelu"):
+        y = tensor.Gelu(x)
+    else str.Equals(op, "Cast"):
+        // Only the float types survive a round trip through std/tensor,
+        // and an integer target is a truncation of the same values.
+        to := node.attr_int("to", 1)
+        if to == 6 || to == 7 || to == 5 || to == 12 || to == 13:
+            y = _map_op(x, "Floor", 0.0, 0.0)
+        else:
+            y = tensor.Clone(x)
+        end
+    else str.Equals(op, "Elu"):
+        y = _map_op(x, op, node.attr_float("alpha", 1.0), 0.0)
+    else str.Equals(op, "Selu"):
+        y = _map_op(x, op, node.attr_float("alpha", 1.6732632), node.attr_float("gamma", 1.0507009))
+    else str.Equals(op, "HardSigmoid"):
+        y = _map_op(x, op, node.attr_float("alpha", 0.2), node.attr_float("beta", 0.5))
+    else:
+        y = _map_op(x, op, 0.0, 0.0)
+    end
+    _emit(node, env, 0, y)
+    ret true
+end
+
+// Elementwise a^b with broadcasting.
+func _pow(model &: Model, node &: Node, env &: _Env): bool:
+    mut a := tensor.Empty()
+    mut b := tensor.Empty()
+    if _in(model, node, env, 0, a) == false || _in(model, node, env, 1, b) == false: ret false end
+    mut shape := Vector {} as Vector<int>
+    if tensor.BroadcastShape(a, b, shape) == false:
+        shape.free()
+        model.error = "Pow: shapes do not broadcast"
+        ret false
+    end
+    mut ea := tensor.Expand(a, shape)
+    mut eb := tensor.Expand(b, shape)
+    shape.free()
+    out := tensor.Clone(ea)
+    p := out.data.data
+    pb := eb.data.data
+    repeat out.numel() with k: p[k] = math.Pow(p[k] as f64, pb[k] as f64) as f32 end
+    ea.free()
+    eb.free()
+    _emit(node, env, 0, out)
+    ret true
+end
+
+// Min, Max, Sum and Mean over a variadic input list.
+func _variadic(model &: Model, node &: Node, env &: _Env): bool:
+    n := node.inputs.len()
+    if n == 0:
+        model.error = node.op + ": no inputs"
+        ret false
+    end
+    mut acc := tensor.Empty()
+    if _in(model, node, env, 0, acc) == false: ret false end
+    mut out := tensor.Clone(acc)
+    mut i := 1
+    until i < n:
+        mut b := tensor.Empty()
+        if _in(model, node, env, i, b) == false:
+            out.free()
+            ret false
+        end
+        mut shape := Vector {} as Vector<int>
+        if tensor.BroadcastShape(out, b, shape) == false:
+            shape.free()
+            out.free()
+            model.error = node.op + ": shapes do not broadcast"
+            ret false
+        end
+        mut ea := tensor.Expand(out, shape)
+        mut eb := tensor.Expand(b, shape)
+        shape.free()
+        out.free()
+        p := ea.data.data
+        pb := eb.data.data
+        repeat ea.numel() with k:
+            if str.Equals(node.op, "Min"):
+                if pb[k] < p[k]: p[k] = pb[k] end
+            else str.Equals(node.op, "Max"):
+                if pb[k] > p[k]: p[k] = pb[k] end
+            else:
+                p[k] = p[k] + pb[k]
+            end
+        end
+        eb.free()
+        out = ea
+        i += 1
+    end
+    if str.Equals(node.op, "Mean"): tensor.ScaleInPlace(out, 1.0 / (n as f64)) end
+    _emit(node, env, 0, out)
+    ret true
+end
+
+// ReduceMean / ReduceSum / ReduceMax / ReduceMin, one axis at a time so
+// the axis numbering stays right as the rank shrinks.
+func _reduce(model &: Model, node &: Node, env &: _Env): bool:
+    mut x := tensor.Empty()
+    if _in(model, node, env, 0, x) == false: ret false end
+    keep := node.attr_int("keepdims", 1) != 0
+    mut axes := Vector {} as Vector<int>
+    k := node.attr_index("axes")
+    if k >= 0:
+        a := node.attrs.get(k)
+        repeat a.ints.len() with i: axes.push(_norm_axis(a.ints.get(i), x.rank())) end
+    else if node.inputs.len() > 1 && str.Len(node.inputs.get(1)) > 0:
+        mut t := tensor.Empty()
+        if _in(model, node, env, 1, t) == false:
+            axes.free()
+            ret false
+        end
+        repeat t.numel() with i: axes.push(_norm_axis(t.at(i) as i64, x.rank())) end
+    else:
+        repeat x.rank() with i: axes.push(i) end
+    end
+    // Descending, so removing one does not renumber the others.
+    repeat axes.len() with i:
+        repeat axes.len() - 1 - i with j:
+            if axes.get(j) < axes.get(j + 1):
+                t := axes.get(j)
+                axes.set(j, axes.get(j + 1))
+                axes.set(j + 1, t)
+            end
+        end
+    end
+    mut cur := tensor.Clone(x)
+    repeat axes.len() with i:
+        ax := axes.get(i)
+        if ax < 0 || ax >= cur.rank():
+            axes.free()
+            cur.free()
+            model.error = node.op + ": axis out of range"
+            ret false
+        end
+        mut nxt := tensor.Empty()
+        if str.Equals(node.op, "ReduceMean"): nxt = tensor.MeanAxis(cur, ax, keep)
+        else str.Equals(node.op, "ReduceSum"): nxt = tensor.SumAxis(cur, ax, keep)
+        else str.Equals(node.op, "ReduceMax"): nxt = tensor.MaxAxis(cur, ax, keep)
+        else:
+            // ReduceMin, as -max(-x)
+            mut neg := tensor.Neg(cur)
+            mut mx := tensor.MaxAxis(neg, ax, keep)
+            neg.free()
+            nxt = tensor.Neg(mx)
+            mx.free()
+        end
+        cur.free()
+        cur = nxt
+    end
+    axes.free()
+    _emit(node, env, 0, cur)
+    ret true
+end
+
+// Gather along one axis with 1-D or scalar indices - the embedding
+// lookup and the row/column pick. n-D index tensors are refused rather
+// than silently flattened.
+func _gather(model &: Model, node &: Node, env &: _Env): bool:
+    mut x := tensor.Empty()
+    mut idx := tensor.Empty()
+    if _in(model, node, env, 0, x) == false || _in(model, node, env, 1, idx) == false: ret false end
+    if idx.rank() > 1:
+        model.error = "Gather: only scalar or 1-D indices are supported"
+        ret false
+    end
+    ax := _norm_axis(node.attr_int("axis", 0), x.rank())
+    dim := ax >= 0 && ax < x.rank() ? x.dim(ax) : 0
+    mut ids := Vector {} as Vector<int>
+    repeat idx.numel() with i:
+        mut v := idx.at(i) as int
+        if v < 0: v = v + dim end
+        ids.push(v)
+    end
+    mut y := tensor.IndexSelect(x, ax, ids)
+    ids.free()
+    if y.is_empty():
+        model.error = "Gather: index out of range"
+        ret false
+    end
+    // A scalar index drops the axis, the way ONNX defines it.
+    if idx.rank() == 0 && y.rank() > 1:
+        mut shape := Vector {} as Vector<int>
+        repeat y.rank() with i:
+            if i != ax: shape.push(y.dim(i)) end
+        end
+        if shape.len() == 0: shape.push(1) end
+        _ok := y.reshape_(shape)
+        shape.free()
+    end
+    _emit(node, env, 0, y)
+    ret true
+end
+
+// starts/ends/axes/steps as attributes (opset 1) or inputs (opset 10+),
+// step 1 only.
+func _slice(model &: Model, node &: Node, env &: _Env): bool:
+    mut x := tensor.Empty()
+    if _in(model, node, env, 0, x) == false: ret false end
+    mut starts := Vector {} as Vector<int>
+    mut ends := Vector {} as Vector<int>
+    mut axes := Vector {} as Vector<int>
+    if _int_list(model, node, env, "starts", 1, starts) == false: ret false end
+    if _int_list(model, node, env, "ends", 2, ends) == false: ret false end
+    if starts.len() != ends.len():
+        model.error = "Slice: starts and ends differ in length"
+        ret false
+    end
+    if _int_list(model, node, env, "axes", 3, axes) == false:
+        repeat starts.len() with i: axes.push(i) end
+    end
+    if axes.len() == 0:
+        repeat starts.len() with i: axes.push(i) end
+    end
+    mut steps := Vector {} as Vector<int>
+    if _int_list(model, node, env, "steps", 4, steps):
+        repeat steps.len() with i:
+            if steps.get(i) != 1:
+                model.error = "Slice: only step 1 is supported"
+                ret false
+            end
+        end
+    end
+    mut cur := tensor.Clone(x)
+    repeat starts.len() with i:
+        ax := _norm_axis(axes.get(i) as i64, cur.rank())
+        if ax < 0 || ax >= cur.rank():
+            cur.free()
+            model.error = "Slice: axis out of range"
+            ret false
+        end
+        n := cur.dim(ax)
+        mut lo := starts.get(i)
+        mut hi := ends.get(i)
+        if lo < 0: lo = lo + n end
+        if hi < 0: hi = hi + n end
+        if lo < 0: lo = 0 end
+        if hi > n: hi = n end
+        if hi < lo: hi = lo end
+        mut nxt := tensor.Narrow(cur, ax, lo, hi - lo)
+        cur.free()
+        cur = nxt
+    end
+    starts.free()
+    ends.free()
+    axes.free()
+    steps.free()
+    _emit(node, env, 0, cur)
+    ret true
+end
+
+// Split along an axis into the sizes given, or into equal parts.
+func _split(model &: Model, node &: Node, env &: _Env): bool:
+    mut x := tensor.Empty()
+    if _in(model, node, env, 0, x) == false: ret false end
+    ax := _norm_axis(node.attr_int("axis", 0), x.rank())
+    if ax < 0 || ax >= x.rank():
+        model.error = "Split: axis out of range"
+        ret false
+    end
+    mut sizes := Vector {} as Vector<int>
+    if _int_list(model, node, env, "split", 1, sizes) == false || sizes.len() == 0:
+        parts := node.outputs.len()
+        if parts == 0 || x.dim(ax) % parts != 0:
+            sizes.free()
+            model.error = "Split: cannot divide axis evenly"
+            ret false
+        end
+        repeat parts: sizes.push(x.dim(ax) / parts) end
+    end
+    mut off := 0
+    repeat sizes.len() with i:
+        len := sizes.get(i)
+        if off + len > x.dim(ax):
+            sizes.free()
+            model.error = "Split: sizes exceed the axis"
+            ret false
+        end
+        _emit(node, env, i, tensor.Narrow(x, ax, off, len))
+        off += len
+    end
+    sizes.free()
+    ret true
+end
+
+func _shape_op(model &: Model, node &: Node, env &: _Env): bool:
+    mut x := tensor.Empty()
+    if _in(model, node, env, 0, x) == false: ret false end
+    mut out := tensor.Zeros1(x.rank())
+    repeat x.rank() with i: out.set_at(i, x.dim(i) as f64) end
+    _emit(node, env, 0, out)
+    ret true
+end
+
+func _expand(model &: Model, node &: Node, env &: _Env): bool:
+    mut x := tensor.Empty()
+    mut sh := tensor.Empty()
+    if _in(model, node, env, 0, x) == false || _in(model, node, env, 1, sh) == false: ret false end
+    mut shape := Vector {} as Vector<int>
+    repeat sh.numel() with i:
+        mut d := sh.at(i) as int
+        if d < 0: d = 1 end
+        shape.push(d)
+    end
+    mut y := tensor.Expand(x, shape)
+    shape.free()
+    if y.is_empty():
+        model.error = "Expand: shapes do not broadcast"
+        ret false
+    end
+    _emit(node, env, 0, y)
+    ret true
+end
+
+func _compare(model &: Model, node &: Node, env &: _Env): bool:
+    mut a := tensor.Empty()
+    mut b := tensor.Empty()
+    if _in(model, node, env, 0, a) == false || _in(model, node, env, 1, b) == false: ret false end
+    mut y := tensor.Empty()
+    if str.Equals(node.op, "Equal"): y = tensor.EqualMask(a, b)
+    else str.Equals(node.op, "Greater"): y = tensor.Greater(a, b)
+    else: y = tensor.Less(a, b) end
+    if y.is_empty():
+        model.error = node.op + ": shapes do not broadcast"
+        ret false
+    end
+    _emit(node, env, 0, y)
+    ret true
+end
+
+func _where(model &: Model, node &: Node, env &: _Env): bool:
+    mut c := tensor.Empty()
+    mut a := tensor.Empty()
+    mut b := tensor.Empty()
+    if _in(model, node, env, 0, c) == false || _in(model, node, env, 1, a) == false || _in(model, node, env, 2, b) == false: ret false end
+    mut y := tensor.Where(c, a, b)
+    if y.is_empty():
+        model.error = "Where: shapes do not broadcast"
+        ret false
+    end
+    _emit(node, env, 0, y)
+    ret true
+end
+
+func _prelu(model &: Model, node &: Node, env &: _Env): bool:
+    mut x := tensor.Empty()
+    mut sl := tensor.Empty()
+    if _in(model, node, env, 0, x) == false || _in(model, node, env, 1, sl) == false: ret false end
+    out := tensor.Clone(x)
+    p := out.data.data
+    ps := sl.data.data
+    ns := sl.numel()
+    // The slope is per channel (axis 1) when it has one entry per
+    // channel, and shared when it is a scalar.
+    inner := x.rank() > 2 ? x.numel() / (x.dim(0) * x.dim(1)) : 1
+    chan := x.rank() > 1 ? x.dim(1) : 1
+    zero := 0.0 as f32
+    repeat out.numel() with k:
+        if p[k] < zero:
+            mut s := ps[0]
+            if ns > 1:
+                c := (k / inner) % chan
+                if c < ns: s = ps[c] end
+            end
+            p[k] = p[k] * s
+        end
+    end
+    _emit(node, env, 0, out)
+    ret true
+end
+
+// LayerNormalization over the axes from `axis` on, and its per-sample
+// cousin InstanceNormalization over the spatial axes of [N, C, ...].
+func _layernorm(model &: Model, node &: Node, env &: _Env): bool:
+    mut x := tensor.Empty()
+    mut scale := tensor.Empty()
+    if _in(model, node, env, 0, x) == false || _in(model, node, env, 1, scale) == false: ret false end
+    mut bias := tensor.Empty()
+    has_bias := node.inputs.len() > 2 && str.Len(node.inputs.get(2)) > 0
+    if has_bias:
+        if _in(model, node, env, 2, bias) == false: ret false end
+    end
+    eps := node.attr_float("epsilon", 0.00001)
+    instance := str.Equals(node.op, "InstanceNormalization")
+    mut ax := _norm_axis(node.attr_int("axis", 0 - 1), x.rank())
+    if instance: ax = 2 end
+    if ax < 1 || ax > x.rank():
+        model.error = node.op + ": axis out of range"
+        ret false
+    end
+    mut inner := 1
+    repeat x.rank() with i:
+        if i >= ax: inner = inner * x.dim(i) end
+    end
+    if inner == 0:
+        model.error = node.op + ": empty normalization axis"
+        ret false
+    end
+    outer := x.numel() / inner
+    out := tensor.Clone(x)
+    p := out.data.data
+    psc := scale.data.data
+    nsc := scale.numel()
+    nb := bias.numel()
+    chan := x.rank() > 1 ? x.dim(1) : 1
+    repeat outer with r:
+        base := r * inner
+        mut mean := 0.0
+        repeat inner with k: mean += p[base + k] as f64 end
+        mean = mean / (inner as f64)
+        mut var := 0.0
+        repeat inner with k:
+            d := (p[base + k] as f64) - mean
+            var += d * d
+        end
+        var = var / (inner as f64)
+        inv := 1.0 / math.Sqrt(var + eps)
+        repeat inner with k:
+            v := ((p[base + k] as f64) - mean) * inv
+            // LayerNorm scales per normalized element, Instance per channel.
+            mut idx := k
+            if instance: idx = r % chan end
+            mut s := 1.0
+            if nsc > 0: s = scale.at(idx % nsc) end
+            mut b := 0.0
+            if nb > 0: b = bias.at(idx % nb) end
+            p[base + k] = (v * s + b) as f32
+        end
+    end
+    _emit(node, env, 0, out)
+    ret true
+end
+
+// A list of ints from an attribute, or from input `k` when the opset
+// moved it there. False when neither is present.
+func _int_list(model &: Model, node &: Node, env &: _Env, name: str, k: int, out &: Vector<int>): bool:
+    a := node.attr_index(name)
+    if a >= 0:
+        at := node.attrs.get(a)
+        repeat at.ints.len() with i: out.push(at.ints.get(i) as int) end
+        ret true
+    end
+    if k >= node.inputs.len() || str.Len(node.inputs.get(k)) == 0: ret false end
+    mut t := tensor.Empty()
+    if _env_get(env, node.inputs.get(k), t) == false:
+        model.error = node.op + ": unbound input " + node.inputs.get(k)
+        ret false
+    end
+    repeat t.numel() with i: out.push(t.at(i) as int) end
+    ret true
+end
+
+// The fallthrough half of the dispatch; _exec_node calls this before it
+// reports an unsupported op.
+func _exec_node2(model &: Model, node: Node, env &: _Env): bool:
+    op := node.op
+    if str.Equals(op, "Abs") || str.Equals(op, "Erf") || str.Equals(op, "Softplus") || str.Equals(op, "Elu") || str.Equals(op, "Selu") || str.Equals(op, "HardSigmoid") || str.Equals(op, "Floor") || str.Equals(op, "Ceil") || str.Equals(op, "Round") || str.Equals(op, "Reciprocal") || str.Equals(op, "Sign") || str.Equals(op, "Cast") || str.Equals(op, "Gelu"):
+        ret _unary2(model, node, env)
+    end
+    if str.Equals(op, "Pow"): ret _pow(model, node, env) end
+    if str.Equals(op, "Min") || str.Equals(op, "Max") || str.Equals(op, "Sum") || str.Equals(op, "Mean"): ret _variadic(model, node, env) end
+    if str.Equals(op, "ReduceMean") || str.Equals(op, "ReduceSum") || str.Equals(op, "ReduceMax") || str.Equals(op, "ReduceMin"): ret _reduce(model, node, env) end
+    if str.Equals(op, "Gather"): ret _gather(model, node, env) end
+    if str.Equals(op, "Slice"): ret _slice(model, node, env) end
+    if str.Equals(op, "Split"): ret _split(model, node, env) end
+    if str.Equals(op, "Shape"): ret _shape_op(model, node, env) end
+    if str.Equals(op, "Expand"): ret _expand(model, node, env) end
+    if str.Equals(op, "Equal") || str.Equals(op, "Greater") || str.Equals(op, "Less"): ret _compare(model, node, env) end
+    if str.Equals(op, "Where"): ret _where(model, node, env) end
+    if str.Equals(op, "PRelu"): ret _prelu(model, node, env) end
+    if str.Equals(op, "LayerNormalization") || str.Equals(op, "InstanceNormalization"): ret _layernorm(model, node, env) end
+    ret false
+end

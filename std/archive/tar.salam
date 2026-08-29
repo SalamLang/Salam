@@ -15,6 +15,7 @@
 package archive
 
 import compress
+import mem
 import filepath
 
 // POSIX ustar archives: a fixed 512-byte header (name, size, timestamp,
@@ -95,6 +96,12 @@ func _tar_get_str(p: void*, off: int, width: int): str:
     s := compress.BufToStrUnsafe(buf)
     compress.BufFree(buf)
     ret s
+end
+
+// _tar_get_str returns the shared empty literal for a zero-length name,
+// which must not be freed.
+func _tar_free_str(name: str):
+    if name.len() > 0: mem.Free(name as void*) end
 end
 
 func _tar_checksum(header: void*): int:
@@ -263,17 +270,22 @@ pub func TarExtractByName(p: void*, n: int, name: str, ok &: bool): compress.Byt
         if _tar_is_zero_block(p, pos):
             break
         end
+        // Only compared, never kept: _tar_get_str allocates, so the scan
+        // would leak one name per member it walks past.
         nm := _tar_get_str(p, pos, 100)
-        if nm.len() == 0:
-            break
-        end
+        empty := nm.len() == 0
         size := _tar_get_octal(p, pos + 124, 12)
         bp := p as u8*
         typeflag := bp[pos + 156] as int
         is_dir := typeflag == 53
         datasize := size as int
+        hit := !empty && nm == name && !is_dir
+        _tar_free_str(nm)
+        if empty:
+            break
+        end
 
-        if nm == name && !is_dir:
+        if hit:
             data_ptr := ((p as i64) + ((pos + 512) as i64)) as void*
             compress.BufPushBytes(out, data_ptr, datasize)
             ok = true
@@ -305,7 +317,9 @@ pub func TarExtractAll(p: void*, n: int, destdir: str): bool:
         if e.is_dir:
             EnsureDir(outpath)
         else:
-            EnsureDir(filepath.Dir(outpath))
+            parent := filepath.Dir(outpath)
+            EnsureDir(parent)
+            mem.Free(parent as void*)
             mut ok := false
             data := TarExtractByName(p, n, e.name, ok)
             if ok:
@@ -317,8 +331,10 @@ pub func TarExtractAll(p: void*, n: int, destdir: str): bool:
             end
             compress.BufFree(data)
         end
+        // filepath.Join hands back a fresh string on every entry.
+        mem.Free(outpath as void*)
         i += 1
     end
-    defer entries.free()
+    defer FreeEntries(entries)
     ret all_ok
 end

@@ -511,19 +511,29 @@ TransposeMul MulTranspose BatchMatMul MatVec Dot Transpose2D` (packed 4x16
   `Rng NewRng DeriveSeed FillUniform FillNormal FillBernoulli RandUniform
 RandNormal`. Parallel: `SetThreads Threads`. Bridge `ToMatrix FromMatrix`;
   records `WriteTensor ReadTensor`; `AllClose Equal MaxAbsDiff ShapeString`.
+  General broadcasting and indexing: `BroadcastShape Expand`, masks `Greater
+GreaterEqual Less LessEqual EqualMask NotEqualMask GreaterScalar LessScalar
+EqualScalar`, `Where MaskedFill`, gathers `IndexSelect TakeRows Gather
+ScatterAddRows OneHot`.
 - **`autograd`**: tape-based reverse mode. `NewTape(seed)`, leaves `Input`
   (constant) `Watch` (tape-owned grad) `Param(val, grad)` (accumulates into the
   caller's buffer), recorded ops `Add Sub Mul Div Neg Scale AddScalar Exp Log
 Tanh Sigmoid Relu Gelu Sqrt Square PowScalar MatMul BatchMatMul Sum Mean
 SumAxis MeanAxis Softmax LogSoftmax Reshape Transpose2D Permute Embedding
-Dropout LayerNorm Conv2D MaxPool2D AvgPool2D`, losses `MSELoss
+Dropout LayerNorm RMSNorm BatchNorm Narrow SliceAxis0 Concat2 RoPE Silu
+Conv2D MaxPool2D AvgPool2D`, `Constant` (an untracked tensor on the tape),
+  losses `MSELoss
 CrossEntropyLogits BCEWithLogits`, then `Backward(tp, loss)`, `Value Grad`,
   `tp.reset()` per step, `tp.free()`. `GradCheck` does central differences.
 - **`nn`**: `ParamStore` (owns values and grads; layers hold int handles)
   with `add at zero_grad free`, `Bind`; layers `Linear Conv2D MaxPool2D
-AvgPool2D LayerNorm Embedding Dropout MultiHeadAttention
-TransformerEncoderLayer` (`New*` constructors, `forward(tp, ps, x)`),
-  `Flatten SinusoidalPositions`, init `XavierUniform XavierNormal
+AvgPool2D LayerNorm BatchNorm RMSNorm Embedding Dropout LSTM GRU
+MultiHeadAttention TransformerEncoderLayer` (`New*` constructors,
+  `forward(tp, ps, x)`; `NewTransformerDecoderLayer` sets `attn.causal`, and
+  `CausalMask(seq)` is the additive mask it adds), recurrent helper
+  `LastStep`, the `Layer` interface with `Sequential` and the
+  `ReluLayer GeluLayer TanhLayer` wrappers, `Flatten SinusoidalPositions`,
+  init `XavierUniform XavierNormal
 KaimingUniform KaimingNormal`, checkpoints `SaveCheckpoint LoadCheckpoint`
   (SLMT, `.gz` aware) and the `*Buf` forms.
 - **`optim`**: `SGD` (momentum, nesterov, weight decay) `Adam` `NewAdamW`
@@ -535,10 +545,14 @@ CosineLR WarmupCosine`.
 LabelEncoder OneHotEncoder SimpleImputer PolynomialFeatures`; models
   `LinearReg Ridge Lasso LogisticRegression KNNClassifier KNNRegressor
 GaussianNB DecisionTree RandomForest AdaBoost GradientBoosting LinearSVM SVC
-LDA QDA KMeans MiniBatchKMeans DBSCAN Agglomerative GaussianMixture PCA`;
+LDA QDA KMeans MiniBatchKMeans DBSCAN Agglomerative GaussianMixture PCA
+TSNE HistGradientBoosting`, plus the `KDTree` index (`algorithm =
+ml.KNN_KDTREE`, `workers` for parallel queries; the serial path is safe
+  inside another parallel loop);
   metrics `Accuracy ConfusionMatrix Precision Recall F1 MacroF1 RocAuc LogLoss
 MSE MAE RMSE R2Score SilhouetteScore AdjustedRandIndex`; selection
-  `TrainTestSplit KFold StratifiedKFold CrossValScore MeanScore` (callbacks);
+  `TrainTestSplit KFold StratifiedKFold CrossValScore CrossValScoreParallel
+MeanScore GridSearch` (callbacks; a grid is a `Vector<Candidate>`);
   `LabelsToInts CountClasses`.
 - **`data`**: `MakeBlobs MakeMoons MakeCircles MakeRegression
 MakeClassification` (seeded), `LoadCsv LoadCsvFile` → `Table` (`kinds
@@ -552,6 +566,15 @@ NpzList NpzRead NpzWrite`.
 GlobalAveragePool BatchNormalization Reshape Flatten Transpose Concat ...`).
 - **`gguf`**: `LoadGguf ParseGguf` (metadata, tensor directory),
   `LoadTensorF32` dequantizing `F32 F16 Q8_0 Q4_0 Q4_1`.
+- **`llm`**: decoder-only language models (llama family: RMSNorm, RoPE,
+  grouped-query attention, SiLU-gated FFN). `Config Model Layer`,
+  `RandomModel(cfg, seed)`, `NewKVCache(cfg)` + `Forward(m, cache, tokens)`
+  (positions continue from `cache.len`, so prompt-then-token decoding matches
+  one-shot), `LogitsRow Greedy`, `Sampler` (`temperature top_k top_p
+repeat_penalty`) with `GenerateIds Generate`, tokenizers `NewTokenizer`
+  (`TOK_SPM` SentencePiece with `<0xNN>` byte fallback, `TOK_BPE` byte-level)
+  with `add_token add_merge finish encode decode`, and the GGUF glue
+  `ConfigFromGguf ModelFromGguf TokenizerFromGguf LoadGgufModel`.
 
 ### I/O, OS, filesystem
 

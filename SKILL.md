@@ -546,7 +546,8 @@ LabelEncoder OneHotEncoder SimpleImputer PolynomialFeatures`; models
   `LinearReg Ridge Lasso LogisticRegression KNNClassifier KNNRegressor
 GaussianNB DecisionTree RandomForest AdaBoost GradientBoosting LinearSVM SVC
 LDA QDA KMeans MiniBatchKMeans DBSCAN Agglomerative GaussianMixture PCA
-TSNE HistGradientBoosting`, plus the `KDTree` index (`algorithm =
+TruncatedSVD TSNE MultinomialNB HistGradientBoosting` (`NewElasticNet(alpha,
+  l1_ratio)` builds the mixed-penalty `Lasso`), plus the `KDTree` index (`algorithm =
 ml.KNN_KDTREE`) and `workers` on KNN and KMeans for parallel queries and
   assignment (identical results at any worker count; the serial path is the
   safe one inside another parallel loop);

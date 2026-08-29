@@ -1,0 +1,158 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// A message split across several WebSocket frames.
+//
+// RFC 6455 lets a sender break one message into a first frame with FIN
+// clear, any number of continuation frames, and a last one with FIN set -
+// and lets it slip a control frame in between them, which a client has to
+// answer without losing its place. Nothing in the rest of this stdlib sends
+// fragments, so the only way to test reading them is to write the frames by
+// hand, which is what the server here does over a plain TCP socket.
+//
+// The case that matters most is a Poll that runs out of time HALFWAY
+// through a message. What has been read so far lives on the Conn rather
+// than in a local, so the next call resumes rather than starting over; if
+// it did not, a fragmented message arriving slowly would come back with its
+// beginning missing, or not at all.
+
+import net.websocket
+import net.tcp
+import sync
+import str
+import mem
+import time
+
+const PORT := 19420
+mut ready := sync.NewWaitGroup()
+mut answered ping := false
+
+// One frame, written by hand: the header byte, the length, then the bytes.
+// Server-to-client frames are never masked.
+func frame(c: tcp.Conn, b0: int, data: void*, n: int):
+    buf := mem.Allocate((n + 2) as u64)
+    bp := buf as i8*
+    bp[0] = b0 as i8
+    bp[1] = n as i8
+    if n > 0:
+        mem.Copy(((buf as i64) + 2) as void*, data, n as u64)
+    end
+    tcp.WriteBytes(c, buf, n + 2)
+    mem.Free(buf)
+end
+
+func text frame(c: tcp.Conn, b0: int, s: str):
+    frame(c, b0, s as void*, s.len())
+end
+
+func ws server():
+    srv := tcp.Bind(PORT)
+    sync.Done(ready)
+    if !tcp.Ok(srv):
+        ret
+    end
+    c := tcp.Accept(srv)
+    // Every read below is bounded: this thread is joined by main, so a read
+    // that never returns would hang the whole test rather than fail it.
+    tcp.SetReadDeadline(c, 3000)
+    // The handshake, using the same helper a real server would.
+    mut req := ""
+    until !str.Contains(req, "\r\n\r\n"):
+        chunk := tcp.Read(c, 4096)
+        if chunk.len() == 0:
+            tcp.Close(c)
+            tcp.CloseServer(srv)
+            ret
+        end
+        req += chunk
+    end
+    tcp.Write(c, websocket.HandshakeResponse(req))
+
+    // A text message in three frames: FIN clear, continuation, FIN set.
+    text frame(c, 1, "hello ")
+    text frame(c, 0, "frag")
+    text frame(c, 128, "mented")
+
+    // The same, but with a gap long enough that the client's Poll gives up
+    // in the middle of it, and a PING slipped between the fragments.
+    text frame(c, 1, "slow ")
+    time.Sleep(400)
+    text frame(c, 9 + 128, "beat")
+    text frame(c, 0, "and ")
+    text frame(c, 128, "split")
+
+    // A binary message in two frames, with NUL bytes in both halves.
+    raw := mem.Allocate(4 as u64)
+    bp := raw as i8*
+    bp[0] = 0 as i8
+    bp[1] = 1 as i8
+    bp[2] = 0 as i8
+    bp[3] = 255 as i8
+    frame(c, 2, raw, 4)
+    bp[0] = 7 as i8
+    bp[1] = 0 as i8
+    frame(c, 128, raw, 2)
+    mem.Free(raw)
+
+    // Wait for the pong the client owes us, then go.
+    mut waiting := 0
+    until waiting < 12 && !answered ping:
+        got := tcp.Read(c, 64)
+        if got.len() > 0:
+            answered ping = true
+        end
+        waiting += 1
+    end
+    tcp.Close(c)
+    tcp.CloseServer(srv)
+end
+
+func main:
+    sync.Add(ready, 1 as i64)
+    t := spawn(ws server)
+    sync.Wait(ready)
+
+    mut c := websocket.Dial("127.0.0.1", PORT, "/")
+    println "connected:", websocket.IsOpen(c)
+
+    m1 := websocket.Poll(c, 3000)
+    println "three frames became one message:", m1.kind == websocket.TEXT, m1.text
+
+    // Deliberately too short: the message is only half here.
+    m2 := websocket.Poll(c, 120)
+    println "gave up mid-message:", m2.kind == websocket.TIMEOUT
+    println "and did not report half a message:", m2.text == ""
+
+    // The rest of it, including the ping that arrived in between.
+    m3 := websocket.Poll(c, 3000)
+    println "resumed rather than restarted:", m3.kind == websocket.TEXT, m3.text
+
+    m4 := websocket.Poll(c, 3000)
+    println "binary in two frames:", m4.kind == websocket.BINARY, "bytes:", m4.len
+    bp := m4.data as i8*
+    mut shown := ""
+    repeat m4.len with i:
+        mut v := bp[i] as int
+        if v < 0:
+            v += 256
+        end
+        shown += "" + v + " "
+    end
+    println "  " + shown
+    println "  as text it stops at the first NUL:", m4.text.len()
+
+    websocket.Close(c)
+    join(t)
+    println "the ping was answered mid-message:", answered ping
+end

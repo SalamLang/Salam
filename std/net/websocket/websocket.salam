@@ -96,6 +96,14 @@ pub const TIMEOUT := 100
 // (sequence numbers, buffered plaintext) across calls.
 mut _tls_slots := Vector {} as Vector<tls.Conn>
 
+// Slots whose connection has been torn down, ready to be handed out again.
+//
+// Without this the table only ever grows, one entry per wss:// connection
+// ever made - which is a fixed cost for a program that dials once and an
+// unbounded one for a client that reconnects on a schedule, which is
+// exactly what a protocol with a heartbeat does.
+mut _tls_free := Vector {} as Vector<int>
+
 // tls.ServerConfig is not `pub` in std/tls (see net/http/server.salam's
 // RunTLS for the same constraint), so it cannot be named as a parameter
 // type here either - AcceptWSS reads this global instead of taking a
@@ -187,8 +195,25 @@ end
 // See the comment above _tls_slots (near the consts) for why wss:// state
 // lives in this table instead of a Conn field.
 func _tls_store(tc: tls.Conn): int:
+    if _tls_free.len() > 0:
+        idx := _tls_free.get(_tls_free.len() - 1)
+        _tls_free.remove_at(_tls_free.len() - 1)
+        _tls_slots.set(idx, tc)
+        ret idx
+    end
     _tls_slots.push(tc)
     ret _tls_slots.len() - 1
+end
+
+// Hands a slot back once its connection is finished with. Only _shutdown
+// calls it - the same place that frees the receive buffer, and by the same
+// rule: whoever tears the connection down owns it. Stop() deliberately does
+// not, because a copy of the Conn may still be reading.
+func _tls_release(idx: int):
+    if idx < 0 || idx >= _tls_slots.len():
+        ret
+    end
+    _tls_free.push(idx)
 end
 
 func _tls_get(idx: int): tls.Conn:
@@ -456,10 +481,17 @@ func _consume(c &: Conn, n: int):
 end
 
 func _shutdown(c &: Conn):
-    if c.secure:
+    if c.secure && c.tls_idx >= 0:
         mut tc := _tls_get(c.tls_idx)
         tls.Close(tc)
         _tls_put(c.tls_idx, tc)
+        _tls_release(c.tls_idx)
+        // Cleared so a second Close on the same Conn cannot hand the slot
+        // back twice and have two live connections share it.
+        c.tls_idx = 0 - 1
+    else c.secure:
+        // Already torn down.
+        c.open = false
     else:
         if c.fd >= 0:
             rawsock.Close(rawsock.FromFd(c.fd))
@@ -654,7 +686,11 @@ func _send_frame_raw(c &: Conn, opcode: int, payload: void*, plen: int): int:
         _copy_raw(buf, hlen, payload, plen)
     end
     mut sent := 0
-    if c.secure:
+    if c.secure && c.tls_idx < 0:
+        // Already torn down; the slot is gone and indexing it would be a
+        // read out of the table.
+        ret 0 - 1
+    else c.secure:
         mut tc := _tls_get(c.tls_idx)
         sent = tls.WriteBytes(tc, buf, total)
         _tls_put(c.tls_idx, tc)
@@ -725,7 +761,10 @@ end
 // balancer routes on exactly that cookie.
 pub func HandshakeRequestWith(host: str, path: str, key: str, extra: str): str:
     mut req := "GET " + path + " HTTP/1.1\r\nHost: " + host + "\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: " + key + "\r\nSec-WebSocket-Version: 13\r\n"
-    if extra != "":
+    // A block that is only whitespace is nothing: left in, its blank line
+    // would end the headers early and the server would read the rest of the
+    // request as a body.
+    if str.Trim(extra).len() > 0:
         req += extra
         if !str.EndsWith(extra, "\r\n"):
             req += "\r\n"
@@ -1147,10 +1186,12 @@ pub func Stop(c &: Conn):
     if c.open:
         _send_frame(c, 8, "")
     end
-    if c.secure:
+    if c.secure && c.tls_idx >= 0:
         mut tc := _tls_get(c.tls_idx)
         tls.Close(tc)
         _tls_put(c.tls_idx, tc)
+    else c.secure:
+        c.open = false
     else:
         if c.fd >= 0:
             rawsock.Shutdown(rawsock.FromFd(c.fd))

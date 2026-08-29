@@ -514,7 +514,7 @@ RandNormal`. Parallel: `SetThreads Threads`. Bridge `ToMatrix FromMatrix`;
   General broadcasting and indexing: `BroadcastShape Expand`, masks `Greater
 GreaterEqual Less LessEqual EqualMask NotEqualMask GreaterScalar LessScalar
 EqualScalar`, `Where MaskedFill`, gathers `IndexSelect TakeRows Gather
-ScatterAddRows OneHot`.
+ScatterAddRows OneHot`, and `TopK Tril Triu Cumsum`.
 - **`autograd`**: tape-based reverse mode. `NewTape(seed)`, leaves `Input`
   (constant) `Watch` (tape-owned grad) `Param(val, grad)` (accumulates into the
   caller's buffer), recorded ops `Add Sub Mul Div Neg Scale AddScalar Exp Log

@@ -108,6 +108,27 @@ func _split_axis(x &: Tensor, axis: int, outer &: int, inner &: int):
     end
 end
 
+// The shared body of Tril and Triu over the trailing two axes.
+func _tri(x &: Tensor, diagonal: int, lower: bool): Tensor:
+    if x.rank() < 2: ret Empty() end
+    cols := x.shape.get(x.rank() - 1)
+    rows := x.shape.get(x.rank() - 2)
+    planes := x.numel() / (rows * cols)
+    out := Clone(x)
+    po := out.data.data
+    zero := 0.0 as f32
+    repeat planes with p:
+        base := p * rows * cols
+        repeat rows with i:
+            repeat cols with j:
+                keep := lower ? j <= i + diagonal : j >= i + diagonal
+                if !keep: po[base + i * cols + j] = zero end
+            end
+        end
+    end
+    ret out
+end
+
 // ---- public API ----
 
 // The shape a and b broadcast to; false (and an empty shape) when they
@@ -375,6 +396,88 @@ pub func OneHot(ids &: Vector<int>, classes: int): Tensor:
     repeat n with i:
         c := ids.get(i)
         if c >= 0 && c < classes: po[i * classes + c] = one end
+    end
+    ret out
+end
+
+// The k largest (or smallest) entries of every row, values in order and
+// their column indices in `idx_out`. Rows are the last axis, as
+// everywhere else here; the result has that axis cut to k. A partial
+// selection, so it costs O(n k) per row rather than a full sort.
+@en "TopK"
+@fa "کِی برتر"
+@ar "أعلى ك"
+pub func TopK(x &: Tensor, k: int, largest: bool, idx_out &: Tensor): Tensor:
+    if x.is_empty() || k < 1: ret Empty() end
+    width := x.shape.get(x.rank() - 1)
+    if k > width: ret Empty() end
+    rows := x.numel() / width
+    mut shape := Vector {} as Vector<int>
+    repeat x.rank() with i: shape.push(i == x.rank() - 1 ? k : x.shape.get(i)) end
+    out := Zeros(shape)
+    idx_out.free()
+    idx_out = Zeros(shape)
+    shape.free()
+    px := x.data.data
+    po := out.data.data
+    pi := idx_out.data.data
+    repeat rows with r:
+        base := r * width
+        obase := r * k
+        // Selection: k passes, each taking the best entry not yet taken.
+        mut taken := Vector {} as Vector<bool>
+        repeat width: taken.push(false) end
+        repeat k with t:
+            mut best := 0 - 1
+            repeat width with c:
+                if taken.get(c): continue end
+                if best < 0: best = c
+                else largest && px[base + c] > px[base + best]: best = c
+                else !largest && px[base + c] < px[base + best]: best = c end
+            end
+            taken.set(best, true)
+            po[obase + t] = px[base + best]
+            pi[obase + t] = best as f32
+        end
+        taken.free()
+    end
+    ret out
+end
+
+// The lower (Tril) or upper (Triu) triangle of every 2-D slice, the
+// rest zeroed. `diagonal` shifts the boundary: 0 keeps the main
+// diagonal, a positive value moves it up and to the right.
+@en "Tril"
+@fa "مثلث پایین"
+@ar "المثلث السفلي"
+pub func Tril(x &: Tensor, diagonal: int): Tensor: ret _tri(x, diagonal, true) end
+
+@en "Triu"
+@fa "مثلث بالا"
+@ar "المثلث العلوي"
+pub func Triu(x &: Tensor, diagonal: int): Tensor: ret _tri(x, diagonal, false) end
+
+// The running sum along `axis`.
+@en "Cumsum"
+@fa "جمع تجمعی"
+@ar "المجموع التراكمي"
+pub func Cumsum(x &: Tensor, axis: int): Tensor:
+    if x.is_empty() || axis < 0 || axis >= x.rank(): ret Empty() end
+    mut outer := 1
+    mut inner := 1
+    _split_axis(x, axis, outer, inner)
+    len := x.shape.get(axis)
+    out := Clone(x)
+    po := out.data.data
+    repeat outer with o:
+        repeat inner with i:
+            mut acc := 0.0 as f32
+            repeat len with t:
+                at := (o * len + t) * inner + i
+                acc += po[at]
+                po[at] = acc
+            end
+        end
     end
     ret out
 end

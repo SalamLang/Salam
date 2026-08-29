@@ -1,0 +1,122 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// Milestone: a small CNN learns to classify synthetic 12x12 shapes
+// (horizontal bar, vertical bar, square, diagonal) drawn at seeded
+// positions under noise. Convolution, pooling, flatten, dense, Adam.
+
+import autograd
+import nn
+import optim
+import tensor
+import testing
+
+struct Cnn:
+    pub conv1: nn.Conv2D = nn.Conv2D {}
+    pub conv2: nn.Conv2D = nn.Conv2D {}
+    pub pool: nn.MaxPool2D = nn.MaxPool2D {}
+    pub fc: nn.Linear = nn.Linear {}
+
+    pub func forward(tp &: autograd.Tape, ps &: nn.ParamStore, x: int): int:
+        mut h := autograd.Relu(tp, this.conv1.forward(tp, ps, x))
+        h = this.pool.forward(tp, h)
+        h = autograd.Relu(tp, this.conv2.forward(tp, ps, h))
+        h = this.pool.forward(tp, h)
+        ret this.fc.forward(tp, ps, nn.Flatten(tp, h))
+    end
+end
+
+// Draws sample i of class (i % 4) into a 12x12 plane at a seeded
+// offset, plus Gaussian noise.
+func make_shapes(n: int, seed: i64, labels &: Vector<int>): tensor.Tensor:
+    side := 12
+    mut x := tensor.Zeros4(n, 1, side, side)
+    mut g := tensor.NewRng(seed)
+    tensor.FillNormal(x, 0.0, 0.2, g)
+    p := x.data.data
+    repeat n with i:
+        cls := i % 4
+        labels.push(cls)
+        base := i * side * side
+        off := (g.next_float() * 6.0) as int + 1
+        if cls == 0:
+            repeat side with j: p[base + off * side + j] = 1.0 as f32 end
+        else cls == 1:
+            repeat side with j: p[base + j * side + off] = 1.0 as f32 end
+        else cls == 2:
+            repeat 4 with a:
+                repeat 4 with b: p[base + (off + a) * side + off + b] = 1.0 as f32 end
+            end
+        else:
+            repeat side with j: p[base + j * side + j] = 1.0 as f32 end
+        end
+    end
+    ret x
+end
+
+func main:
+    n := 200
+    mut labels := Vector {} as Vector<int>
+    mut x := make_shapes(n, 3, labels)
+
+    mut ps := nn.ParamStore {}
+    mut g := tensor.NewRng(11)
+    mut model := Cnn {}
+    model.conv1 = nn.NewConv2D(ps, "conv1", 1, 8, 3, 1, 1, g)
+    model.conv2 = nn.NewConv2D(ps, "conv2", 8, 16, 3, 1, 1, g)
+    model.fc = nn.NewLinear(ps, "fc", 16 * 3 * 3, 4, g)
+    mut opt := optim.Adam { lr = 0.005 }
+
+    mut tp := autograd.NewTape(1)
+    mut first_loss := 0.0
+    mut last_loss := 0.0
+    repeat 40 with step:
+        tp.reset()
+        ps.zero_grad()
+        xid := autograd.Input(tp, x)
+        logits := model.forward(tp, ps, xid)
+        loss := autograd.CrossEntropyLogits(tp, logits, labels)
+        lv := autograd.Value(tp, loss)
+        if step == 0: first_loss = lv.at(0) end
+        last_loss = lv.at(0)
+        autograd.Backward(tp, loss)
+        opt.step(ps)
+    end
+    testing.AssertTrue(first_loss > 1.0)
+    testing.AssertTrue(last_loss < 0.3)
+
+    tp.reset()
+    tp.training = false
+    xid := autograd.Input(tp, x)
+    logits := model.forward(tp, ps, xid)
+    lv := autograd.Value(tp, logits)
+    mut preds := tensor.ArgMaxAxis(lv, 1, false)
+    mut hits := 0
+    repeat n with i:
+        if (preds.at(i) as int) == labels.get(i): hits += 1 end
+    end
+    acc := (hits as f64) / (n as f64)
+    testing.AssertTrue(acc >= 0.95)
+
+    tp.free()
+    opt.free()
+    ps.free()
+    tensor.Free(x)
+    tensor.Free(preds)
+    labels.free()
+
+    ret testing.Summary()
+end

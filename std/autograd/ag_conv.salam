@@ -1,0 +1,231 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package autograd
+
+import tensor
+
+// Convolution and pooling on the tape.
+//
+// The convolution node reuses the aux slot for its OPTIONAL BIAS input
+// id (-1 when absent) rather than for an owned tensor - the one node
+// with three differentiable inputs. Geometry packs into s0/s1 as
+// stride*256+stride and pad*256+pad; kernel size is read off the weight
+// shape.
+//
+// Backward RECOMPUTES each sample's im2col columns instead of saving
+// them: saving costs kh*kw times the whole activation per layer for the
+// life of the step, recomputing costs one extra unrolling pass per
+// sample. Small memory, slightly more time - the right trade at the
+// batch sizes a CPU trains. The per-sample products run through
+// tensor.GemmAcc on offset pointers, so nothing is copied per sample
+// but the column buffer itself.
+//
+// MaxPool saves its winners' positions as an owned aux tensor and
+// backward scatters straight to them; AvgPool spreads uniformly over
+// each window (recounting window clipping at the edges).
+
+// Element-offset pointer step, the GEP idiom.
+inline func _off(p: f32*, off: int): f32*:
+    ret (p as i64 + (off as i64) * (sizeof(f32) as i64)) as f32*
+end
+
+func _bk_conv2d(tp &: Tape, n &: Node, dc &: tensor.Tensor):
+    vx := Value(tp, n.a)
+    vw := Value(tp, n.b)
+    sh := n.s0 / 256
+    sw := n.s0 % 256
+    ph := n.s1 / 256
+    pw := n.s1 % 256
+    batch := vx.shape.get(0)
+    c := vx.shape.get(1)
+    h := vx.shape.get(2)
+    wd := vx.shape.get(3)
+    oc := vw.shape.get(0)
+    kh := vw.shape.get(2)
+    kw := vw.shape.get(3)
+    oh := tensor.ConvOutSize(h, kh, sh, ph)
+    ow := tensor.ConvOutSize(wd, kw, sw, pw)
+    kdim := c * kh * kw
+    p := oh * ow
+    pd := dc.data.data
+
+    need_x := tp.needs.get(n.a)
+    need_w := tp.needs.get(n.b)
+
+    mut wt := tensor.Empty()
+    if need_x: wt = tensor.TransposeRaw(vw.data.data, oc, kdim) end
+    mut dcols := tensor.Empty()
+    if need_x: dcols = tensor.Zeros2(kdim, p) end
+
+    repeat batch with i:
+        dout := i * oc * p
+        if need_w:
+            mut cols := tensor.Im2Col(vx, i, kh, kw, sh, sw, ph, pw)
+            mut colst := tensor.Transpose2D(cols)
+            gw := _grad_of(tp, n.b)
+            tensor.GemmAcc(_off(pd, dout), colst.data.data, gw.data.data, oc, p, kdim)
+            cols.free()
+            colst.free()
+        end
+        if need_x:
+            zp := dcols.data.data
+            zero := 0.0 as f32
+            repeat kdim * p with z: zp[z] = zero end
+            tensor.GemmAcc(wt.data.data, _off(pd, dout), zp, kdim, oc, p)
+            mut gx := _grad_of(tp, n.a)
+            tensor.Col2ImAcc(dcols, gx, i, kh, kw, sh, sw, ph, pw)
+        end
+    end
+    if need_x:
+        wt.free()
+        dcols.free()
+    end
+
+    // Bias: one gradient per output channel, summed over batch and
+    // positions.
+    if n.aux >= 0 && tp.needs.get(n.aux):
+        gb := _grad_of(tp, n.aux)
+        pg := gb.data.data
+        repeat batch with i:
+            sbase := i * oc * p
+            repeat oc with o:
+                obase := sbase + o * p
+                mut s := 0.0 as f32
+                repeat p with k: s += pd[obase + k] end
+                pg[o] = pg[o] + s
+            end
+        end
+    end
+end
+
+func _bk_maxpool(tp &: Tape, n &: Node, dc &: tensor.Tensor):
+    if tp.needs.get(n.a) == false: ret end
+    vx := Value(tp, n.a)
+    am := Value(tp, n.aux)
+    g := _grad_of(tp, n.a)
+    h := vx.shape.get(2)
+    w := vx.shape.get(3)
+    planes := vx.shape.get(0) * vx.shape.get(1)
+    op := am.numel() / planes
+    pg := g.data.data
+    pd := dc.data.data
+    pa := am.data.data
+    repeat planes with pl:
+        ibase := pl * h * w
+        obase := pl * op
+        repeat op with k:
+            idx := pa[obase + k] as int
+            pg[ibase + idx] = pg[ibase + idx] + pd[obase + k]
+        end
+    end
+end
+
+func _bk_avgpool(tp &: Tape, n &: Node, dc &: tensor.Tensor):
+    if tp.needs.get(n.a) == false: ret end
+    vx := Value(tp, n.a)
+    vo := Value(tp, n.out)
+    g := _grad_of(tp, n.a)
+    kh := n.s0 / 256
+    kw := n.s0 % 256
+    sh := n.s1 / 256
+    sw := n.s1 % 256
+    h := vx.shape.get(2)
+    w := vx.shape.get(3)
+    oh := vo.shape.get(2)
+    ow := vo.shape.get(3)
+    planes := vx.shape.get(0) * vx.shape.get(1)
+    pg := g.data.data
+    pd := dc.data.data
+    repeat planes with pl:
+        ibase := pl * h * w
+        obase := pl * oh * ow
+        repeat oh with oi:
+            repeat ow with oj:
+                mut cnt := 0
+                repeat kh with ki:
+                    if oi * sh + ki < h:
+                        repeat kw with kj:
+                            if oj * sw + kj < w: cnt += 1 end
+                        end
+                    end
+                end
+                share := pd[obase + oi * ow + oj] / (cnt as f32)
+                repeat kh with ki:
+                    ii := oi * sh + ki
+                    if ii < h:
+                        repeat kw with kj:
+                            jj := oj * sw + kj
+                            if jj < w:
+                                pg[ibase + ii * w + jj] = pg[ibase + ii * w + jj] + share
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+// ---- public API ----
+
+// x [N,C,H,W] convolved with w [OC,C,KH,KW], plus bias b (pass -1 for
+// none), stride sh/sw, zero padding ph/pw.
+@en "Conv2D"
+@fa "پیچش دوبعدی"
+@ar "التفاف ثنائي"
+pub func Conv2D(tp &: Tape, x: int, w: int, b: int, sh: int, sw: int, ph: int, pw: int): int:
+    vx := Value(tp, x)
+    vw := Value(tp, w)
+    mut vb := tensor.Empty()
+    if b >= 0: vb = Value(tp, b) end
+    out := tensor.Conv2DForward(vx, vw, vb, sh, sw, ph, pw)
+    mut needs_grad := tp.needs.get(x) || tp.needs.get(w)
+    if b >= 0 && tp.needs.get(b): needs_grad = true end
+    id := _push_val(tp, out, true, needs_grad)
+    if needs_grad:
+        _record(tp, _OP_CONV2D, x, w, id, b, sh * 256 + sw, ph * 256 + pw, 0.0)
+    end
+    ret id
+end
+
+@en "MaxPool2D"
+@fa "بیشینه‌گیری دوبعدی"
+@ar "تجميع أقصى ثنائي"
+pub func MaxPool2D(tp &: Tape, x: int, kh: int, kw: int, sh: int, sw: int): int:
+    vx := Value(tp, x)
+    mut am := tensor.Empty()
+    out := tensor.MaxPool2DForward(vx, kh, kw, sh, sw, am)
+    needs_grad := tp.needs.get(x)
+    aux := _push_val(tp, am, true, false)
+    id := _push_val(tp, out, true, needs_grad)
+    if needs_grad:
+        _record(tp, _OP_MAXPOOL, x, 0 - 1, id, aux, kh * 256 + kw, sh * 256 + sw, 0.0)
+    end
+    ret id
+end
+
+@en "AvgPool2D"
+@fa "میانگین‌گیری دوبعدی"
+@ar "تجميع متوسط ثنائي"
+pub func AvgPool2D(tp &: Tape, x: int, kh: int, kw: int, sh: int, sw: int): int:
+    vx := Value(tp, x)
+    out := tensor.AvgPool2DForward(vx, kh, kw, sh, sw)
+    needs_grad := tp.needs.get(x)
+    id := _push_val(tp, out, true, needs_grad)
+    if needs_grad:
+        _record(tp, _OP_AVGPOOL, x, 0 - 1, id, 0 - 1, kh * 256 + kw, sh * 256 + sw, 0.0)
+    end
+    ret id
+end

@@ -90,15 +90,27 @@ func call_emit_arg(
     if cg_addressable(s, a, argid):
         ref_c = "&(" + cg_expr(g, s, a, argid) + ")"
     else:
-        // argid isn't a real C lvalue (e.g. a member of a
-        // byval-struct-returning call's result) - bind it to a
-        // genuine local temp first, same fallback cg_method already
-        // uses below, so `&` has an actual lvalue to operate on.
+        // argid isn't a real C lvalue (e.g. a call result, or a member of
+        // a byval-struct-returning call's result) - bind it to a genuine
+        // local temp first, so `&` has an actual lvalue to operate on.
+        //
+        // The temp is declared at FUNCTION scope (g.hoist, spliced in by
+        // cg_hoist_end) and only assigned here. Declaring it inside a
+        // statement expression, `({ T __r = (e); &__r; })`, hands out the
+        // address of an object whose lifetime ends at that expression's
+        // closing brace: the callee then reads a dead stack slot, which
+        // -O0 leaves intact and -O2 reuses - `Clone(Grad(tp, v))` came
+        // back empty in a long function and correct in a short one.
         g.tmpn += 1
         rt := g.tmpn
         argc := cg_expr(g, s, a, argid)
         argts := at.Get(a, argid).type_str
-        ref_c = "({ " + cg_ctype(argts) + " __r" + rt + " = (" + argc + "); &__r" + rt + "; })"
+        if g.hoist_active:
+            g.hoist = g.hoist + "    " + cg_ctype(argts) + " __r" + rt + ";\n"
+            ref_c = "(__r" + rt + " = (" + argc + "), &__r" + rt + ")"
+        else:
+            ref_c = "({ " + cg_ctype(argts) + " __r" + rt + " = (" + argc + "); &__r" + rt + "; })"
+        end
     end
     if i < sv.params.len():
         co.SbPuts(

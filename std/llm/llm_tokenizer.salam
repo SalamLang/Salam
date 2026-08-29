@@ -53,8 +53,9 @@ pub struct Tokenizer:
     pub tokens: Vector<str> = Vector {}
     pub scores: Vector<f64> = Vector {}
     pub index: HashMap<str, int> = HashMap {}
-    // "a b" -> rank, for TOK_BPE.
+    // "a b" -> rank, for TOK_BPE; merge_keys owns those key strings.
     pub merges: HashMap<str, int> = HashMap {}
+    pub merge_keys: Vector<str> = Vector {}
     pub bos: int = 0 - 1
     pub eos: int = 0 - 1
     pub unk: int = 0
@@ -69,9 +70,14 @@ pub struct Tokenizer:
     @ar "إضافة رمز"
     pub func add_token(text: str, score: f64): int:
         id := this.tokens.len()
-        this.tokens.push(text)
+        // The vocabulary owns its strings: a caller's literal, a
+        // freshly built "<0xNN>", and a borrowed GGUF metadata string
+        // all have different lifetimes, and the last one dies with the
+        // file. One copy here makes free() unambiguous.
+        own := str.Clone(text)
+        this.tokens.push(own)
         this.scores.push(score)
-        this.index.put(text, id)
+        this.index.put(own, id)
         ret id
     end
 
@@ -79,7 +85,10 @@ pub struct Tokenizer:
     @fa "افزودن ادغام"
     @ar "إضافة دمج"
     pub func add_merge(a: str, b: str):
-        this.merges.put(a + " " + b, this.merges.size())
+        // HashMap borrows its keys, so the rule string is kept here too.
+        rule := a + " " + b
+        this.merge_keys.push(rule)
+        this.merges.put(rule, this.merges.size())
     end
 
     // Builds the byte tables; call after the vocabulary is complete.
@@ -166,9 +175,12 @@ pub struct Tokenizer:
     @fa "آزادسازی"
     @ar "تحرير"
     pub func free():
+        repeat this.tokens.len() with i: mem.Free(this.tokens.get(i) as void*) end
         this.tokens.free()
         this.scores.free()
         this.index.free()
+        repeat this.merge_keys.len() with i: mem.Free(this.merge_keys.get(i) as void*) end
+        this.merge_keys.free()
         this.merges.free()
         this.byte_ids.free()
         this.b2u.free()
@@ -289,10 +301,13 @@ pub struct Tokenizer:
                 ret
             end
         end
+        // The marker is compared byte by byte: t.substr(i, 3) would
+        // allocate a three-byte string for every character decoded.
         n := t.len()
         mut i := 0
         until i < n:
-            if i + 3 <= n && str.Equals(t.substr(i, 3), _SPM_SPACE):
+            marker := i + 3 <= n && _byte_at(t, i) == 0xE2 && _byte_at(t, i + 1) == 0x96 && _byte_at(t, i + 2) == 0x81
+            if marker:
                 str.BufAppendChar(sb, 32)
                 i += 3
             else:

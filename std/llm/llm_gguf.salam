@@ -15,6 +15,7 @@
 package llm
 
 import gguf
+import mem
 import str
 import tensor
 
@@ -31,6 +32,30 @@ func _meta_f64(g &: gguf.Gguf, key: str, dflt: f64): f64:
     v := g.values.get(k)
     if v.kind == 6 || v.kind == 12: ret v.f end
     ret v.i as f64
+end
+
+// The metadata keys are "<arch>.<name>", so every lookup composes a
+// string; these three own that composition and free it.
+func _arch_int(g &: gguf.Gguf, arch: str, name: str, dflt: i64): i64:
+    key := arch + name
+    v := g.meta_int(key, dflt)
+    mem.Free(key as void*)
+    ret v
+end
+
+func _arch_f64(g &: gguf.Gguf, arch: str, name: str, dflt: f64): f64:
+    key := arch + name
+    v := _meta_f64(g, key, dflt)
+    mem.Free(key as void*)
+    ret v
+end
+
+// One tensor of block `p` ("blk.N."), by its suffix.
+func _blk_tensor(g &: gguf.Gguf, p: str, name: str, ok &: bool): tensor.Tensor:
+    key := p + name
+    t := _tensor(g, key, ok)
+    mem.Free(key as void*)
+    ret t
 end
 
 func _tensor(g &: gguf.Gguf, name: str, ok &: bool): tensor.Tensor:
@@ -61,14 +86,14 @@ end
 pub func ConfigFromGguf(g &: gguf.Gguf): Config:
     mut c := Config {}
     arch := g.meta_str("general.architecture")
-    c.dim = g.meta_int(arch + ".embedding_length", 0) as int
-    c.layers = g.meta_int(arch + ".block_count", 0) as int
-    c.heads = g.meta_int(arch + ".attention.head_count", 1) as int
-    c.kv_heads = g.meta_int(arch + ".attention.head_count_kv", c.heads as i64) as int
-    c.ff = g.meta_int(arch + ".feed_forward_length", 0) as int
-    c.ctx = g.meta_int(arch + ".context_length", 512) as int
-    c.eps = _meta_f64(g, arch + ".attention.layer_norm_rms_epsilon", 0.00001)
-    c.rope_theta = _meta_f64(g, arch + ".rope.freq_base", 10000.0)
+    c.dim = _arch_int(g, arch, ".embedding_length", 0) as int
+    c.layers = _arch_int(g, arch, ".block_count", 0) as int
+    c.heads = _arch_int(g, arch, ".attention.head_count", 1) as int
+    c.kv_heads = _arch_int(g, arch, ".attention.head_count_kv", c.heads as i64) as int
+    c.ff = _arch_int(g, arch, ".feed_forward_length", 0) as int
+    c.ctx = _arch_int(g, arch, ".context_length", 512) as int
+    c.eps = _arch_f64(g, arch, ".attention.layer_norm_rms_epsilon", 0.00001)
+    c.rope_theta = _arch_f64(g, arch, ".rope.freq_base", 10000.0)
     c.rope_kind = _neox_arch(arch) ? ROPE_NEOX : ROPE_NORMAL
     k := g.meta_index("tokenizer.ggml.tokens")
     if k >= 0: c.vocab = g.values.get(k).strs.len() end
@@ -94,16 +119,17 @@ pub func ModelFromGguf(g &: gguf.Gguf): Model:
     repeat m.cfg.layers with i:
         p := "blk." + i + "."
         mut l := Layer {}
-        l.attn_norm = _tensor(g, p + "attn_norm.weight", ok)
-        l.wq = _tensor(g, p + "attn_q.weight", ok)
-        l.wk = _tensor(g, p + "attn_k.weight", ok)
-        l.wv = _tensor(g, p + "attn_v.weight", ok)
-        l.wo = _tensor(g, p + "attn_output.weight", ok)
-        l.ffn_norm = _tensor(g, p + "ffn_norm.weight", ok)
-        l.w_gate = _tensor(g, p + "ffn_gate.weight", ok)
-        l.w_up = _tensor(g, p + "ffn_up.weight", ok)
-        l.w_down = _tensor(g, p + "ffn_down.weight", ok)
+        l.attn_norm = _blk_tensor(g, p, "attn_norm.weight", ok)
+        l.wq = _blk_tensor(g, p, "attn_q.weight", ok)
+        l.wk = _blk_tensor(g, p, "attn_k.weight", ok)
+        l.wv = _blk_tensor(g, p, "attn_v.weight", ok)
+        l.wo = _blk_tensor(g, p, "attn_output.weight", ok)
+        l.ffn_norm = _blk_tensor(g, p, "ffn_norm.weight", ok)
+        l.w_gate = _blk_tensor(g, p, "ffn_gate.weight", ok)
+        l.w_up = _blk_tensor(g, p, "ffn_up.weight", ok)
+        l.w_down = _blk_tensor(g, p, "ffn_down.weight", ok)
         m.layers.push(l)
+        mem.Free(p as void*)
     end
     m.ok = ok
     if !ok: m.free() end

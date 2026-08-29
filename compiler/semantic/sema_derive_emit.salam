@@ -144,6 +144,47 @@ func derive_pkg_qualified(s &: Sema, sym: int): str:
     ret ""
 end
 
+// True when the deriving scope can name the generic template `base` with no
+// qualification. Vector and HashMap reach it through the prelude, which is
+// where every generic the standard library exports for general use lives.
+func derive_template_visible(s &: Sema, base: str): bool:
+    if scope_lookup(s, s.cur, base) != 0:
+        ret true
+    end
+    ret s.prelude != 0 && scope_lookup_local(s, s.prelude, base) != 0
+end
+
+// A generic instance carries the internal name `Vector_i64`, and that name is
+// defined only in the scope the instantiation happened in. A derived function
+// is installed in another package's scope - std/encoding/json's, for
+// `json.Marshal` - so an instance made anywhere else has no name there.
+// `Vector<i64>`, what the programmer wrote, resolves wherever the template
+// does, and is the spelling that survives the move.
+func derive_generic_spelling(s &: Sema, sym: int): str:
+    v := sym_at(s, sym)
+    if str.Len(v.generic_base) == 0 || v.generic_args.len() == 0:
+        ret ""
+    end
+    // Only a template the deriving scope can name unqualified. Salam has no
+    // spelling for another package's generic - `pkg.Box<i32>` is not syntax -
+    // so an instance of one stays unspellable, as it was before.
+    if !derive_template_visible(s, v.generic_base):
+        ret ""
+    end
+    mut out := v.generic_base + "<"
+    repeat v.generic_args.len() with i:
+        arg := derive_type_spelling(s, v.generic_args.get(i))
+        if str.Len(arg) == 0:
+            ret ""
+        end
+        if i > 0:
+            out = out + ", "
+        end
+        out = out + arg
+    end
+    ret out + ">"
+end
+
 func derive_struct_spelling(s &: Sema, sym: int): str:
     if sym == 0:
         ret ""
@@ -155,7 +196,11 @@ func derive_struct_spelling(s &: Sema, sym: int): str:
     if scope_lookup(s, s.global, name) == sym:
         ret name
     end
-    ret derive_pkg_qualified(s, sym)
+    q := derive_pkg_qualified(s, sym)
+    if str.Len(q) > 0:
+        ret q
+    end
+    ret derive_generic_spelling(s, sym)
 end
 
 func derive_array_spelling(s &: Sema, t: int): str:

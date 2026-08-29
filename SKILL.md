@@ -500,17 +500,17 @@ learning half is `f32` on `std/tensor`; the classical half is `f64` on
 set_at2 reshape_ free`; build with `Zeros(shape) Zeros1..4 Ones Full Scalar
 FromArray Arange Clone CopyInto` and `Shape1..4` helpers. Elementwise `Add Sub
 Mul Div` broadcast in four modes (equal, one element, trailing suffix `[N,D]+[D]`,
-trailing one `[N,1]`), plus `AddScalar Scale Neg Exp Log Tanh Sigmoid Relu Gelu
+  trailing one `[N,1]`), plus `AddScalar Scale Neg Exp Log Tanh Sigmoid Relu Gelu
 Sqrt Abs Square PowScalar Clip` and `*InPlace / *Into / AddScaled` forms. Shape:
-`Reshape SqueezeInPlace UnsqueezeInPlace Permute SliceAxis0 Narrow Concat2
+  `Reshape SqueezeInPlace UnsqueezeInPlace Permute SliceAxis0 Narrow Concat2
 Stack2 Pad2D`. Reduce: `SumAll MeanAll MaxAll MinAll ArgMaxAll SumAxis MeanAxis
 MaxAxis ArgMaxAxis Softmax LogSoftmax`. Products: `MatMul MatMulInto MatMulAcc
 TransposeMul MulTranspose BatchMatMul MatVec Dot Transpose2D` (packed 4x16
-kernel, ~90 GFLOP/s a core on the LLVM backend, 5x on six cores). Conv:
-`Conv2DForward MaxPool2DForward AvgPool2DForward Im2Col Col2ImAcc`. Random:
-`Rng NewRng DeriveSeed FillUniform FillNormal FillBernoulli RandUniform
+  kernel, ~90 GFLOP/s a core on the LLVM backend, 5x on six cores). Conv:
+  `Conv2DForward MaxPool2DForward AvgPool2DForward Im2Col Col2ImAcc`. Random:
+  `Rng NewRng DeriveSeed FillUniform FillNormal FillBernoulli RandUniform
 RandNormal`. Parallel: `SetThreads Threads`. Bridge `ToMatrix FromMatrix`;
-records `WriteTensor ReadTensor`; `AllClose Equal MaxAbsDiff ShapeString`.
+  records `WriteTensor ReadTensor`; `AllClose Equal MaxAbsDiff ShapeString`.
 - **`autograd`**: tape-based reverse mode. `NewTape(seed)`, leaves `Input`
   (constant) `Watch` (tape-owned grad) `Param(val, grad)` (accumulates into the
   caller's buffer), recorded ops `Add Sub Mul Div Neg Scale AddScalar Exp Log
@@ -518,7 +518,7 @@ Tanh Sigmoid Relu Gelu Sqrt Square PowScalar MatMul BatchMatMul Sum Mean
 SumAxis MeanAxis Softmax LogSoftmax Reshape Transpose2D Permute Embedding
 Dropout LayerNorm Conv2D MaxPool2D AvgPool2D`, losses `MSELoss
 CrossEntropyLogits BCEWithLogits`, then `Backward(tp, loss)`, `Value Grad`,
-`tp.reset()` per step, `tp.free()`. `GradCheck` does central differences.
+  `tp.reset()` per step, `tp.free()`. `GradCheck` does central differences.
 - **`nn`**: `ParamStore` (owns values and grads; layers hold int handles)
   with `add at zero_grad free`, `Bind`; layers `Linear Conv2D MaxPool2D
 AvgPool2D LayerNorm Embedding Dropout MultiHeadAttention

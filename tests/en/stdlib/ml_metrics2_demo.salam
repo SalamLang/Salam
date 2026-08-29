@@ -1,0 +1,171 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/ml: the curve metrics (ROC, precision-recall, average precision)
+// and the agreement and regression summaries, against hand-computed
+// fixtures.
+
+import matrix
+import ml
+import testing
+
+func col(vals &: Vector<f64>): matrix.Matrix:
+    mut m := matrix.Zeros(vals.len(), 1)
+    repeat vals.len() with i: m.set(i, 0, vals.get(i)) end
+    ret m
+end
+
+func of(a: f64, b: f64, c: f64, d: f64): matrix.Matrix:
+    mut v := Vector {} as Vector<f64>
+    v.push(a)
+    v.push(b)
+    v.push(c)
+    v.push(d)
+    m := col(v)
+    v.free()
+    ret m
+end
+
+func main:
+    eps := 0.000001
+
+    // Four points, a perfect ranking: scores 0.9 0.8 for the positives,
+    // 0.4 0.1 for the negatives.
+    mut y := of(1.0, 1.0, 0.0, 0.0)
+    mut sc := of(0.9, 0.8, 0.4, 0.1)
+    mut roc := ml.RocCurve(y, sc)
+    // one origin row plus one per distinct score
+    testing.AssertEqInt(roc.rows, 5)
+    testing.AssertEqInt(roc.cols, 3)
+    testing.AssertEqFloat(roc.at(0, 1), 0.0, eps)
+    testing.AssertEqFloat(roc.at(0, 2), 0.0, eps)
+    testing.AssertEqFloat(roc.at(1, 2), 0.5, eps)   // first positive
+    testing.AssertEqFloat(roc.at(1, 1), 0.0, eps)
+    testing.AssertEqFloat(roc.at(2, 2), 1.0, eps)   // both positives, no false ones
+    testing.AssertEqFloat(roc.at(2, 1), 0.0, eps)
+    testing.AssertEqFloat(roc.at(4, 1), 1.0, eps)   // the corner
+    testing.AssertEqFloat(roc.at(4, 2), 1.0, eps)
+    testing.AssertEqFloat(ml.RocAuc(y, sc), 1.0, eps)
+    testing.AssertEqFloat(ml.AveragePrecision(y, sc), 1.0, eps)
+    mut pr := ml.PrecisionRecallCurve(y, sc)
+    testing.AssertEqInt(pr.rows, 4)
+    testing.AssertEqFloat(pr.at(0, 1), 0.5, eps)
+    testing.AssertEqFloat(pr.at(0, 2), 1.0, eps)
+    testing.AssertEqFloat(pr.at(3, 1), 1.0, eps)
+    testing.AssertEqFloat(pr.at(3, 2), 0.5, eps)
+
+    // The reversed ranking: AUC 0, and average precision at chance or below
+    mut bad := of(0.1, 0.2, 0.8, 0.9)
+    testing.AssertEqFloat(ml.RocAuc(y, bad), 0.0, eps)
+    testing.AssertTrue(ml.AveragePrecision(y, bad) < 0.6)
+
+    // One swap in the middle: three of four pairs ordered right
+    mut mid := of(0.9, 0.3, 0.5, 0.1)
+    testing.AssertEqFloat(ml.RocAuc(y, mid), 0.75, eps)
+    // AP = 1.0 * 0.5 + (2/3) * 0.5
+    testing.AssertEqFloat(ml.AveragePrecision(y, mid), 0.5 + 1.0 / 3.0, eps)
+
+    // Ties collapse into one row and one step
+    mut tie := of(0.5, 0.5, 0.5, 0.5)
+    mut rtie := ml.RocCurve(y, tie)
+    testing.AssertEqInt(rtie.rows, 2)
+    testing.AssertEqFloat(rtie.at(1, 1), 1.0, eps)
+    testing.AssertEqFloat(rtie.at(1, 2), 1.0, eps)
+    // A single class has no curve at all
+    mut allpos := of(1.0, 1.0, 1.0, 1.0)
+    mut none := ml.RocCurve(allpos, sc)
+    testing.AssertTrue(none.is_empty())
+    testing.AssertEqFloat(ml.AveragePrecision(allpos, sc), 1.0, eps)
+    mut allneg := of(0.0, 0.0, 0.0, 0.0)
+    mut none2 := ml.PrecisionRecallCurve(allneg, sc)
+    testing.AssertTrue(none2.is_empty())
+
+    // Agreement: a classifier that always answers 0 on a 3:1 split
+    mut yb := of(0.0, 0.0, 0.0, 1.0)
+    mut pb := of(0.0, 0.0, 0.0, 0.0)
+    testing.AssertEqFloat(ml.Accuracy(yb, pb), 0.75, eps)
+    testing.AssertEqFloat(ml.BalancedAccuracy(yb, pb), 0.5, eps)
+    testing.AssertEqFloat(ml.MatthewsCorrCoef(yb, pb), 0.0, eps)
+    testing.AssertEqFloat(ml.CohenKappa(yb, pb), 0.0, eps)
+    // A perfect classifier scores one everywhere
+    testing.AssertEqFloat(ml.BalancedAccuracy(yb, yb), 1.0, eps)
+    testing.AssertEqFloat(ml.MatthewsCorrCoef(yb, yb), 1.0, eps)
+    testing.AssertEqFloat(ml.CohenKappa(yb, yb), 1.0, eps)
+    // Exactly wrong on a balanced pair: MCC = -1
+    mut yc := of(0.0, 0.0, 1.0, 1.0)
+    mut pc := of(1.0, 1.0, 0.0, 0.0)
+    testing.AssertEqFloat(ml.MatthewsCorrCoef(yc, pc), 0.0 - 1.0, eps)
+    testing.AssertEqFloat(ml.CohenKappa(yc, pc), 0.0 - 1.0, eps)
+    testing.AssertEqFloat(ml.BalancedAccuracy(yc, pc), 0.0, eps)
+    // Three classes, one mistake
+    mut y3 := of(0.0, 1.0, 2.0, 2.0)
+    mut p3 := of(0.0, 1.0, 2.0, 0.0)
+    testing.AssertEqFloat(ml.BalancedAccuracy(y3, p3), (1.0 + 1.0 + 0.5) / 3.0, eps)
+    testing.AssertTrue(ml.CohenKappa(y3, p3) > 0.5)
+    testing.AssertTrue(ml.MatthewsCorrCoef(y3, p3) > 0.5)
+
+    // Regression summaries: predictions off by a constant 1
+    mut yr := of(1.0, 2.0, 3.0, 10.0)
+    mut prd := of(2.0, 3.0, 4.0, 11.0)
+    testing.AssertEqFloat(ml.MAE(yr, prd), 1.0, eps)
+    testing.AssertEqFloat(ml.MedianAbsoluteError(yr, prd), 1.0, eps)
+    // a constant offset leaves the explained variance perfect but R2 low
+    testing.AssertEqFloat(ml.ExplainedVariance(yr, prd), 1.0, eps)
+    testing.AssertTrue(ml.R2Score(yr, prd) < 1.0)
+    // MAPE weights the small targets most: (1 + 1/2 + 1/3 + 1/10) / 4
+    testing.AssertEqFloat(ml.MAPE(yr, prd), (1.0 + 0.5 + 1.0 / 3.0 + 0.1) / 4.0, eps)
+    // a zero target is skipped rather than dividing by nothing
+    mut yz := of(0.0, 2.0, 0.0, 4.0)
+    mut pz := of(1.0, 3.0, 1.0, 5.0)
+    testing.AssertEqFloat(ml.MAPE(yz, pz), (0.5 + 0.25) / 2.0, eps)
+    // the median ignores one wild miss that MAE cannot
+    mut yw := of(1.0, 2.0, 3.0, 4.0)
+    mut pw := of(1.0, 2.0, 3.0, 104.0)
+    testing.AssertEqFloat(ml.MedianAbsoluteError(yw, pw), 0.0, eps)
+    testing.AssertEqFloat(ml.MAE(yw, pw), 25.0, eps)
+    // mismatched shapes are refused
+    mut small := matrix.Zeros(2, 1)
+    testing.AssertEqFloat(ml.MAPE(yw, small), 0.0, eps)
+    testing.AssertEqFloat(ml.BalancedAccuracy(yb, small), 0.0, eps)
+    testing.AssertTrue(ml.RocCurve(y, small).is_empty())
+
+    matrix.Free(y)
+    matrix.Free(sc)
+    matrix.Free(roc)
+    matrix.Free(pr)
+    matrix.Free(bad)
+    matrix.Free(mid)
+    matrix.Free(tie)
+    matrix.Free(rtie)
+    matrix.Free(allpos)
+    matrix.Free(allneg)
+    matrix.Free(none)
+    matrix.Free(none2)
+    matrix.Free(yb)
+    matrix.Free(pb)
+    matrix.Free(yc)
+    matrix.Free(pc)
+    matrix.Free(y3)
+    matrix.Free(p3)
+    matrix.Free(yr)
+    matrix.Free(prd)
+    matrix.Free(yz)
+    matrix.Free(pz)
+    matrix.Free(yw)
+    matrix.Free(pw)
+    matrix.Free(small)
+    ret testing.Summary()
+end

@@ -551,8 +551,11 @@ TruncatedSVD TSNE MultinomialNB HistGradientBoosting` (`NewElasticNet(alpha,
 ml.KNN_KDTREE`) and `workers` on KNN and KMeans for parallel queries and
   assignment (identical results at any worker count; the serial path is the
   safe one inside another parallel loop);
-  metrics `Accuracy ConfusionMatrix Precision Recall F1 MacroF1 RocAuc LogLoss
-MSE MAE RMSE R2Score SilhouetteScore AdjustedRandIndex`; selection
+  metrics `Accuracy BalancedAccuracy ConfusionMatrix Precision Recall F1
+MacroF1 RocAuc RocCurve PrecisionRecallCurve AveragePrecision LogLoss
+MatthewsCorrCoef CohenKappa MSE MAE RMSE R2Score ExplainedVariance
+MedianAbsoluteError MAPE SilhouetteScore AdjustedRandIndex` (the two curves
+  come back as m x 3 matrices: threshold, then the two rates); selection
   `TrainTestSplit KFold StratifiedKFold CrossValScore CrossValScoreParallel
 MeanScore GridSearch` (callbacks; a grid is a `Vector<Candidate>`);
   `LabelsToInts CountClasses`.

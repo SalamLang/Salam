@@ -138,6 +138,8 @@ pub struct Gguf:
     pub alignment: int = 32
     pub data_offset: int = 0
     pub raw: compress.ByteBuf = compress.ByteBuf {}
+    // Owned on every path that sets it, so free() can release it; the
+    // default is the shared empty literal, which _free_read_str skips.
     pub error: str = ""
     pub ok: bool = false
 
@@ -196,6 +198,7 @@ pub struct Gguf:
             t.free()
         end
         this.tensors.free()
+        _free_read_str(this.error)
         compress.BufFree(this.raw)
     end
 end
@@ -285,11 +288,11 @@ end
 func _parse(g &: Gguf): bool:
     mut rd := compress.ReaderFromBuf(g.raw)
     if compress.RdLeft(rd) < 24:
-        g.error = "too short"
+        g.error = str.Clone("too short")
         ret false
     end
     if binary.ReadU8(rd) != 71 || binary.ReadU8(rd) != 71 || binary.ReadU8(rd) != 85 || binary.ReadU8(rd) != 70:
-        g.error = "not a GGUF file"
+        g.error = str.Clone("not a GGUF file")
         ret false
     end
     g.version = binary.ReadU32LE(rd)
@@ -300,13 +303,13 @@ func _parse(g &: Gguf): bool:
     ntensors := binary.ReadU64LE(rd) as int
     nkv := binary.ReadU64LE(rd) as int
     if rd.bad || ntensors < 0 || nkv < 0:
-        g.error = "bad counts"
+        g.error = str.Clone("bad counts")
         ret false
     end
     repeat nkv:
         mut key := ""
         if _read_str(rd, key) == false:
-            g.error = "bad metadata key"
+            g.error = str.Clone("bad metadata key")
             ret false
         end
         kind := binary.ReadU32LE(rd)
@@ -321,19 +324,19 @@ func _parse(g &: Gguf): bool:
     repeat ntensors:
         mut t := TensorInfo {}
         if _read_str(rd, t.name) == false:
-            g.error = "bad tensor name"
+            g.error = str.Clone("bad tensor name")
             ret false
         end
         nd := binary.ReadU32LE(rd)
         if rd.bad || nd < 0 || nd > 8:
-            g.error = "bad tensor rank"
+            g.error = str.Clone("bad tensor rank")
             ret false
         end
         repeat nd: t.dims.push(binary.ReadU64LE(rd) as int) end
         t.ggml_type = binary.ReadU32LE(rd)
         t.offset = binary.ReadU64LE(rd)
         if rd.bad:
-            g.error = "truncated tensor directory"
+            g.error = str.Clone("truncated tensor directory")
             ret false
         end
         g.tensors.push(t)

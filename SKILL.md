@@ -488,6 +488,105 @@ Rotation2D/3D Householder Givens Random RandomSPD RandomOrthogonal`, and
   printing `ToString ToStringPrec Print PrintLabeled ToCSV`. Shape errors
   return a `0x0` matrix rather than panicking.
 
+### AI and machine learning
+
+One family of packages, all pure Salam, seeded and deterministic (a fixed
+seed gives the same result on every machine at any thread count). The deep
+learning half is `f32` on `std/tensor`; the classical half is `f64` on
+`std/matrix`. Shape errors return the empty tensor / `0x0` matrix.
+
+- **`tensor`**: n-d `f32` arrays, contiguous row-major, no views. `Tensor
+{data: Vector<f32>, shape: Vector<int>}` with `rank numel dim at set_at at2
+set_at2 reshape_ free`; build with `Zeros(shape) Zeros1..4 Ones Full Scalar
+FromArray Arange Clone CopyInto` and `Shape1..4` helpers. Elementwise `Add Sub
+Mul Div` broadcast in four modes (equal, one element, trailing suffix `[N,D]+[D]`,
+  trailing one `[N,1]`), plus `AddScalar Scale Neg Exp Log Tanh Sigmoid Relu Gelu
+Sqrt Abs Square PowScalar Clip` and `*InPlace / *Into / AddScaled` forms. Shape:
+  `Reshape SqueezeInPlace UnsqueezeInPlace Permute SliceAxis0 Narrow Concat2
+Stack2 Pad2D`. Reduce: `SumAll MeanAll MaxAll MinAll ArgMaxAll SumAxis MeanAxis
+MaxAxis ArgMaxAxis Softmax LogSoftmax`. Products: `MatMul MatMulInto MatMulAcc
+TransposeMul MulTranspose BatchMatMul MatVec Dot Transpose2D` (packed 4x16
+  kernel, ~90 GFLOP/s a core on the LLVM backend, 5x on six cores). Conv:
+  `Conv2DForward MaxPool2DForward AvgPool2DForward Im2Col Col2ImAcc`. Random:
+  `Rng NewRng DeriveSeed FillUniform FillNormal FillBernoulli RandUniform
+RandNormal`. Parallel: `SetThreads Threads`. Bridge `ToMatrix FromMatrix`;
+  records `WriteTensor ReadTensor`; `AllClose Equal MaxAbsDiff ShapeString`.
+  General broadcasting and indexing: `BroadcastShape Expand`, masks `Greater
+GreaterEqual Less LessEqual EqualMask NotEqualMask GreaterScalar LessScalar
+EqualScalar`, `Where MaskedFill`, gathers `IndexSelect TakeRows Gather
+ScatterAddRows OneHot`, and `TopK Tril Triu Cumsum`.
+- **`autograd`**: tape-based reverse mode. `NewTape(seed)`, leaves `Input`
+  (constant) `Watch` (tape-owned grad) `Param(val, grad)` (accumulates into the
+  caller's buffer), recorded ops `Add Sub Mul Div Neg Scale AddScalar Exp Log
+Tanh Sigmoid Relu Gelu Sqrt Square PowScalar MatMul BatchMatMul Sum Mean
+SumAxis MeanAxis Softmax LogSoftmax Reshape Transpose2D Permute Embedding
+Dropout LayerNorm RMSNorm BatchNorm GroupNorm Narrow SliceAxis0 Concat2 RoPE Silu
+Conv2D MaxPool2D AvgPool2D`, `Constant` (an untracked tensor on the tape),
+  losses `MSELoss
+CrossEntropyLogits BCEWithLogits`, then `Backward(tp, loss)`, `Value Grad`,
+  `tp.reset()` per step, `tp.free()`. `GradCheck` does central differences.
+- **`nn`**: `ParamStore` (owns values and grads; layers hold int handles)
+  with `add at zero_grad free`, `Bind`; layers `Linear Conv2D MaxPool2D
+AvgPool2D LayerNorm BatchNorm GroupNorm RMSNorm Embedding Dropout LSTM GRU
+MultiHeadAttention TransformerEncoderLayer` (`New*` constructors,
+  `forward(tp, ps, x)`; `NewTransformerDecoderLayer` sets `attn.causal`, and
+  `CausalMask(seq)` is the additive mask it adds), recurrent helper
+  `LastStep`, the `Layer` interface with `Sequential` and the
+  `ReluLayer GeluLayer TanhLayer` wrappers, `Flatten SinusoidalPositions`,
+  init `XavierUniform XavierNormal
+KaimingUniform KaimingNormal`, checkpoints `SaveCheckpoint LoadCheckpoint`
+  (SLMT, `.gz` aware) and the `*Buf` forms.
+- **`optim`**: `SGD` (momentum, nesterov, weight decay) `Adam` `NewAdamW`
+  `RMSProp` with `step(ps)`, `ClipGradNorm ClipGradValue`, schedules `StepLR
+CosineLR WarmupCosine`.
+- **`ml`**: struct-per-estimator over `matrix`; `fit(x, y): bool`, `predict`,
+  `predict_proba`, `transform`, `score`, `free`, hyperparameters as fields
+  (`ml.KMeans { k = 3, seed = 7 }`). Preprocessing `StandardScaler MinMaxScaler
+LabelEncoder OneHotEncoder SimpleImputer PolynomialFeatures`; models
+  `LinearReg Ridge Lasso LogisticRegression KNNClassifier KNNRegressor
+GaussianNB DecisionTree RandomForest AdaBoost GradientBoosting LinearSVM SVC
+LDA QDA KMeans MiniBatchKMeans DBSCAN Agglomerative GaussianMixture PCA
+TruncatedSVD TSNE MultinomialNB HistGradientBoosting` (`NewElasticNet(alpha,
+  l1_ratio)` builds the mixed-penalty `Lasso`), plus the `KDTree` index (`algorithm =
+ml.KNN_KDTREE`) and `workers` on KNN and KMeans for parallel queries and
+  assignment (identical results at any worker count; the serial path is the
+  safe one inside another parallel loop);
+  metrics `Accuracy BalancedAccuracy ConfusionMatrix Precision Recall F1
+MacroF1 RocAuc RocCurve PrecisionRecallCurve AveragePrecision LogLoss
+MatthewsCorrCoef CohenKappa MSE MAE RMSE R2Score ExplainedVariance
+MedianAbsoluteError MAPE SilhouetteScore AdjustedRandIndex` (the two curves
+  come back as m x 3 matrices: threshold, then the two rates); selection
+  `TrainTestSplit KFold StratifiedKFold CrossValScore CrossValScoreParallel
+MeanScore GridSearch` (callbacks; a grid is a `Vector<Candidate>`);
+  `LabelsToInts CountClasses`.
+- **`data`**: `MakeBlobs MakeMoons MakeCircles MakeRegression
+MakeClassification` (seeded), `LoadCsv LoadCsvFile` → `Table` (`kinds
+to_matrix split_xy cat_levels`), `MatrixDataset.batches` → `BatchIter`
+  (`next next_tensor reset`), `LoadIdx LoadMnist ParseIdx`, `LoadImageFolder`,
+  `XTensor YLabels`.
+- **`npy`**: `ReadNpy ReadNpyFile WriteNpy WriteNpyFile ToMatrix FromMatrix
+NpzList NpzRead NpzWrite`.
+- **`onnx`**: `LoadOnnx ParseOnnx Run` for inference of MLP/CNN and
+  transformer-style graphs: `Conv Gemm MatMul Relu Sigmoid Tanh Softmax
+LogSoftmax MaxPool AveragePool GlobalAveragePool BatchNormalization
+LayerNormalization InstanceNormalization Reshape Flatten Transpose Concat
+Squeeze Unsqueeze Identity Dropout Constant Clip LeakyRelu PRelu Elu Selu
+HardSigmoid Softplus Erf Gelu Abs Floor Ceil Round Sign Reciprocal Pow
+Min Max Sum Mean ReduceMean ReduceSum ReduceMax ReduceMin Gather Slice
+Split Shape Expand Where Equal Greater Less Cast`; anything else fails the
+  run with the op named in `model.error`.
+- **`gguf`**: `LoadGguf ParseGguf` (metadata, tensor directory),
+  `LoadTensorF32` dequantizing `F32 F16 Q8_0 Q4_0 Q4_1`.
+- **`llm`**: decoder-only language models (llama family: RMSNorm, RoPE,
+  grouped-query attention, SiLU-gated FFN). `Config Model Layer`,
+  `RandomModel(cfg, seed)`, `NewKVCache(cfg)` + `Forward(m, cache, tokens)`
+  (positions continue from `cache.len`, so prompt-then-token decoding matches
+  one-shot), `LogitsRow Greedy`, `Sampler` (`temperature top_k top_p
+repeat_penalty`) with `GenerateIds Generate`, tokenizers `NewTokenizer`
+  (`TOK_SPM` SentencePiece with `<0xNN>` byte fallback, `TOK_BPE` byte-level)
+  with `add_token add_merge finish encode decode`, and the GGUF glue
+  `ConfigFromGguf ModelFromGguf TokenizerFromGguf LoadGgufModel`.
+
 ### I/O, OS, filesystem
 
 - **`io`**: `ReadFile WriteFile AppendFile Lines WriteLines Input Read Write
@@ -724,7 +823,69 @@ Ctx_status Ctx_set_header Ctx_redirect`. Also a canvas/DOM JS-interop surface.
   `MountSpec`/`ServeSpec`/`SpecFromFile` render an OpenAPI document from
   anywhere; `Page(title, spec_url)` is the page itself,
   self-contained with no CDN - an empty `spec_url` means "next to this page".
-- **`tcp`** (`Bind Accept Read Write Close Ok ConnOk`), **`socket`** (WebSocket),
+- **`net.websocket`** (RFC 6455 client and server, `ws://` and `wss://`):
+  `Listen Accept AcceptWSS Dial DialWith DialWSS DialWSSWith
+DialWSSUnverified`, `SendText SendBinary SendBinaryBytes Ping Close Stop`,
+  `Receive` (blocks) / **`Poll(c, ms)`** (returns a `TIMEOUT` message
+  instead, which is what a protocol with its own heartbeat needs), plus a
+  `Hub` for rooms and broadcast. A binary `Message` carries `.data`/`.len`
+  next to `.text`, because a `str` stops at its first NUL.
+- **`net.socketio`** (`import net.socketio`): a Socket.IO **client**, wire-
+  compatible with socket.io v4 servers - Engine.IO v4 underneath (both
+  transports, HTTP long-polling and WebSocket, and the upgrade between
+  them), Socket.IO v5 on top.
+  - **Connecting**: `Dial(url)` / `DialWith(url, opts)`, or `NewManager` +
+    `Open` + `Of(m, "/nsp")` for several namespaces multiplexed on one
+    connection. `Connect Disconnect Close CloseManager`. The URL's path is
+    the NAMESPACE, not a resource; the HTTP path is `Options.path`
+    (default `/socket.io`) and must match the server's.
+  - **Sending**: `Emit EmitStr EmitInt EmitFloat EmitBool EmitJSON
+EmitBytes EmitArgs EmitVolatile Send`. An emit made while disconnected is
+    held and flushed on connect (`Buffered`); a volatile one is dropped.
+  - **Acknowledgements**, both directions: **`EmitAck`** blocks and returns
+    the answer (the shape `await socket.emitWithAck` has in JavaScript),
+    `EmitWithAck` takes a callback, and `Reply`/`ReplyStr`/`ReplyJSON`
+    answer an event the server wants acknowledged (`ev.ack_id`).
+  - **Receiving**, two shapes: `On Once Off OffAll OnAny PrependAny OffAny
+OnAnyOutgoing PrependAnyOutgoing OffAnyOutgoing` + `Run`/`RunFor`, or
+    **`Next(c, ms)`** / **`NextEvent(c, ms)`** to read in a loop - usually
+    the better fit, because a Salam lambda captures by value and cannot
+    write back to the function that registered it. Handler names include
+    the lifecycle ones: `connect disconnect connect_error error ping
+upgrade reconnect reconnect_attempt reconnect_error reconnect_failed`.
+  - **Arguments**: build with `NewArgs`/`AddStr AddInt AddFloat AddBool
+AddNull AddJSON AddValue AddBytes AddBinaryStr`, read with `ArgCount Arg
+ArgStr ArgInt ArgFloat ArgBool ArgValue ArgIsBinary ArgBytes` (and the
+    same over an acknowledgement: `AckCount AckArg AckStr AckInt AckFloat
+AckBool AckValue AckIsBinary AckBytes`). Binary attachments are `Bytes`,
+    not `str`, because a `str` stops at its first NUL. `EventFree`/
+    `AckFree`. `ArgInt`/`ArgFloat` read a number sent as a string too, which
+    is how a server keeps 64 bits intact through JavaScript.
+  - **State**: `IsConnected Disconnected Active Recovered Id Sid Namespace
+Transport TransportName LastError Refused RefusalReason Buffered Queued
+Pending Attempts PingInterval PingTimeout MaxPayload EndpointOf Sockets
+ListenerCount HasListeners`. A disconnect reason is one of socket.io's
+    own strings - `REASON_SERVER_DISCONNECT REASON_CLIENT_DISCONNECT
+REASON_PING_TIMEOUT REASON_TRANSPORT_CLOSE REASON_TRANSPORT_ERROR
+REASON_PARSE_ERROR` - so handlers port across unchanged.
+  - **`Options`**: `path query auth headers transports reconnection
+reconnection_attempts reconnection_delay reconnection_delay_max
+randomization_factor timeout auto_connect event_queue ack_timeout retries
+trailing_slash remember_upgrade insecure`, with `SetAuth` and the
+    `SetReconnection*`/`SetTimeout`/`SetRandomizationFactor` setters for a
+    live connection.
+  - **Nothing runs in the background**: the connection only advances inside
+    `Pump`/`PumpManager`/`Next`/`Run`/`EmitAck`, and a program that stops
+    calling them stops answering the server's heartbeat and gets dropped.
+    Reconnection (exponential backoff with jitter), offline buffering,
+    binary attachments, `retries`, and connection state recovery are all
+    handled. Not implemented, deliberately: permessage-deflate compression,
+    custom parsers, and client certificates.
+  - The wire format is public too, for writing a server or a test against
+    it: `EncodePacket DecodePacket EncodeEngine EngineKind EngineBody
+SplitPayloads JoinPayloads SplitJSONArray Placeholder PlaceholderNum
+ParseURL Origin`.
+- **`tcp`** (`Bind Accept Read Write Close Ok ConnOk`),
   **`ssl`**, **`net`**, **`dom`**/**`console`** (browser/JS targets),
   **`webview`** (desktop windows; `-DSALAM_WEBVIEW_CEF` renders with a bundled
   Chromium instead of the OS webview - see `std/webview/native/BUILD.md`).

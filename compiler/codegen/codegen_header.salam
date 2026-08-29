@@ -260,7 +260,23 @@ func cg_struct_sym(s &: sm.Sema, name: str): int:
     ret cg_canon_sym(s, name, sm.SYM_STRUCT)
 end
 
-func cg_emit_dyn_types(g &: Cg, s &: sm.Sema):
+// sig_param_is_ref - whether param `p` of the signature is declared `&:`.
+// The ref bit lives on the AST param node, not on the type, so a vtable
+// slot and its thunk have to consult the interface's declaration to type
+// the parameter `T*` the way func_signature does for the method itself.
+func sig_param_is_ref(s &: sm.Sema, a &: at.Ast, sigid: int, p: int): bool:
+    decl := sm.SigAt(s, sigid).decl
+    if decl == 0:
+        ret false
+    end
+    dn := at.Get(a, decl)
+    if p >= dn.list.len():
+        ret false
+    end
+    ret at.Get(a, dn.list.get(p)).is_ref
+end
+
+func cg_emit_dyn_types(g &: Cg, s &: sm.Sema, a &: at.Ast):
     repeat g.dyn_ifaces.len() with i:
         iname := g.dyn_ifaces.get(i)
         ci := cg_cident(iname)
@@ -279,7 +295,8 @@ func cg_emit_dyn_types(g &: Cg, s &: sm.Sema):
             if ms.kind != sm.SYM_METHOD || ms.overloads.len() == 0:
                 continue
             end
-            sig := sm.SigAt(s, ms.overloads.get(0))
+            sigid := ms.overloads.get(0)
+            sig := sm.SigAt(s, sigid)
             // An aggregate return lowers to an out-parameter here just as it
             // does for a plain function (func_signature), so the slot has
             // to be typed `void (*)(void*, ..., R*)`.
@@ -294,7 +311,7 @@ func cg_emit_dyn_types(g &: Cg, s &: sm.Sema):
                         sm.ToString(
                             s, sig.params.get(p)
                         )
-                    )
+                    ) + (sig_param_is_ref(s, a, sigid, p) ? "*" : "")
                 )
             end
             if sret:
@@ -311,7 +328,7 @@ func cg_emit_dyn_types(g &: Cg, s &: sm.Sema):
 end
 
 // cg_emit_dyn_vtables - writes to the C sink (callers keep cur == CG_OUT_C).
-func cg_emit_dyn_vtables_impl(g &: Cg, s &: sm.Sema):
+func cg_emit_dyn_vtables_impl(g &: Cg, s &: sm.Sema, a &: at.Ast):
     repeat g.dyn_impls.len() with i:
         pair := g.dyn_impls.get(i)
         bar := str.IndexOf(pair, "|")
@@ -352,7 +369,7 @@ func cg_emit_dyn_vtables_impl(g &: Cg, s &: sm.Sema):
             mut ps := co.SbNew()
             mut asb := co.SbNew()
             repeat isigv.params.len() with p:
-                pt := cg_ctype(sm.ToString(s, isigv.params.get(p)))
+                pt := cg_ctype(sm.ToString(s, isigv.params.get(p))) + (sig_param_is_ref(s, a, isig, p) ? "*" : "")
                 co.SbPuts(ps, ", " + pt + " __a" + p)
                 co.SbPuts(asb, ", __a" + p)
             end
@@ -1294,7 +1311,7 @@ func cg_header_impl(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
     hdr_struct_fwd(g, s, a, program)
     hdr_struct_fwd_imports(g, s, a)
     dyn_collect(g, s, a, program)
-    cg_emit_dyn_types(g, s)
+    cg_emit_dyn_types(g, s, a)
     outh(g, "\n")
     vec_collect(g, a, program)
     vec_collect_types(g, s, a, program)

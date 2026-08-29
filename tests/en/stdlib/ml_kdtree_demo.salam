@@ -1,0 +1,126 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/ml: the k-d tree returns exactly the brute-force neighbors, and
+// the KNN models give identical answers through the tree, in parallel,
+// and serially.
+
+import data
+import matrix
+import ml
+import testing
+
+func main:
+    mut y := matrix.Matrix {}
+    mut x := data.MakeBlobs(500, 4, 3, 1.2, 21, y)
+    mut qy := matrix.Matrix {}
+    mut qx := data.MakeBlobs(40, 4, 3, 1.5, 22, qy)
+
+    // KDTree query against a brute-force scan
+    mut tree := ml.NewKDTree(x, 8)
+    testing.AssertTrue(tree.ok)
+    testing.AssertTrue(tree.node_count() > 20)
+    mut agree := true
+    mut dist := Vector {} as Vector<f64>
+    repeat 40 with qi:
+        mut nb := tree.query(qx, qi, 7, dist)
+        if nb.len() != 7: agree = false end
+        // brute force: every stored row's distance, smallest seven
+        mut all := Vector {} as Vector<f64>
+        repeat 500 with i:
+            mut s := 0.0
+            repeat 3 with j:
+                t := qx.at(qi, j) - x.at(i, j)
+                s += t * t
+            end
+            all.push(s)
+        end
+        repeat 7 with t:
+            row := nb.get(t)
+            if all.get(row) != dist.get(t): agree = false end
+            // nothing outside the answer is closer than the farthest answer
+            if t > 0 && dist.get(t) < dist.get(t - 1): agree = false end
+        end
+        mut closer := 0
+        repeat 500 with i:
+            if all.get(i) < dist.get(6): closer += 1 end
+        end
+        if closer > 6: agree = false end
+        all.free()
+        nb.free()
+    end
+    testing.AssertTrue(agree)
+    dist.free()
+
+    // KNNClassifier: brute, tree, and parallel tree agree exactly
+    mut brute := ml.KNNClassifier { k = 5 }
+    testing.AssertTrue(brute.fit(x, y))
+    mut kd := ml.KNNClassifier { k = 5, algorithm = ml.KNN_KDTREE, leaf_size = 10 }
+    testing.AssertTrue(kd.fit(x, y))
+    testing.AssertTrue(kd.tree.ok)
+    mut par := ml.KNNClassifier { k = 5, algorithm = ml.KNN_KDTREE, workers = 4 }
+    testing.AssertTrue(par.fit(x, y))
+    mut pb := brute.predict_proba(qx)
+    mut pk := kd.predict_proba(qx)
+    mut pp := par.predict_proba(qx)
+    testing.AssertTrue(matrix.AllClose(pb, pk, 0.0))
+    testing.AssertTrue(matrix.AllClose(pb, pp, 0.0))
+    // qx comes from its own seed, so score it against the model's own
+    // training set rather than qx's unrelated cluster numbering
+    testing.AssertTrue(brute.score(x, y) >= 0.9)
+    testing.AssertEqFloat(kd.score(x, y), brute.score(x, y), 0.0)
+    mut parb := ml.KNNClassifier { k = 5, weighted = true, workers = 3 }
+    testing.AssertTrue(parb.fit(x, y))
+    mut serb := ml.KNNClassifier { k = 5, weighted = true }
+    testing.AssertTrue(serb.fit(x, y))
+    mut w1 := parb.predict(qx)
+    mut w2 := serb.predict(qx)
+    testing.AssertTrue(matrix.AllClose(w1, w2, 0.0))
+
+    // KNNRegressor through the tree, serial and parallel
+    mut ry := matrix.Zeros(500, 1)
+    repeat 500 with i: ry.set(i, 0, x.at(i, 0) * 2.0 + x.at(i, 1)) end
+    mut rb := ml.KNNRegressor { k = 4 }
+    testing.AssertTrue(rb.fit(x, ry))
+    mut rk := ml.KNNRegressor { k = 4, algorithm = ml.KNN_KDTREE, workers = -1 }
+    testing.AssertTrue(rk.fit(x, ry))
+    mut r1 := rb.predict(qx)
+    mut r2 := rk.predict(qx)
+    testing.AssertTrue(matrix.AllClose(r1, r2, 0.0))
+    testing.AssertTrue(rk.score(x, ry) > 0.95)
+
+    pb.free()
+    pk.free()
+    pp.free()
+    w1.free()
+    w2.free()
+    r1.free()
+    r2.free()
+    brute.free()
+    kd.free()
+    par.free()
+    parb.free()
+    serb.free()
+    rb.free()
+    rk.free()
+    tree.free()
+    x.free()
+    y.free()
+    qx.free()
+    qy.free()
+    ry.free()
+    ret testing.Summary()
+end

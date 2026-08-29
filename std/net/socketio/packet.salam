@@ -1,0 +1,536 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package socketio
+
+import str
+import mem
+import encoding
+
+// The wire format, both halves of it, and nothing else: this file knows how
+// to read and write bytes and has no idea a connection exists.
+//
+// Socket.IO is two protocols stacked. Engine.IO underneath owns the
+// connection - the session handshake, the heartbeat, and the choice of
+// transport - and moves opaque payloads. Socket.IO on top owns what an
+// application cares about - namespaces, named events, acknowledgements - and
+// rides inside Engine.IO's "message" payload. A frame off the wire is read
+// by peeling one then the other:
+//
+//   4 2 /chat , 17 ["msg","hi"]
+//   ^ ^ ^~~~~   ^~ ^~~~~~~~~~~~
+//   | |  nsp    |   arguments, JSON
+//   | |         ack id
+//   | Socket.IO type (EVENT)
+//   Engine.IO type (MESSAGE)
+//
+// Every field between the two type digits is optional and is written only
+// when it differs from the default, which is why the format cannot be split
+// on a separator and has to be walked.
+
+// ---------------------------------------------------------- Engine.IO types
+
+@en "EngineOpen"
+@fa "باز کردن موتور"
+@ar "فتح المحرك"
+pub const EIO_OPEN := 0
+
+@en "EngineClose"
+@fa "بستن موتور"
+@ar "إغلاق المحرك"
+pub const EIO_CLOSE := 1
+
+@en "EnginePing"
+@fa "پینگ موتور"
+@ar "بینغ المحرك"
+pub const EIO_PING := 2
+
+@en "EnginePong"
+@fa "پونگ موتور"
+@ar "بونغ المحرك"
+pub const EIO_PONG := 3
+
+@en "EngineMessage"
+@fa "پیام موتور"
+@ar "رسالة المحرك"
+pub const EIO_MESSAGE := 4
+
+@en "EngineUpgrade"
+@fa "ارتقای موتور"
+@ar "ترقیة المحرك"
+pub const EIO_UPGRADE := 5
+
+@en "EngineNoop"
+@fa "بی‌کار موتور"
+@ar "بدون عمل"
+pub const EIO_NOOP := 6
+
+// --------------------------------------------------------- Socket.IO types
+
+@en "Connect"
+@fa "اتصال"
+@ar "اتصال"
+pub const PKT_CONNECT := 0
+
+@en "Disconnect"
+@fa "قطع اتصال"
+@ar "قطع الاتصال"
+pub const PKT_DISCONNECT := 1
+
+@en "EventPacket"
+@fa "بسته رویداد"
+@ar "حزمة الحدث"
+pub const PKT_EVENT := 2
+
+@en "AckPacket"
+@fa "بسته تایید"
+@ar "حزمة الإقرار"
+pub const PKT_ACK := 3
+
+@en "ConnectError"
+@fa "خطای اتصال"
+@ar "خطأ الاتصال"
+pub const PKT_CONNECT_ERROR := 4
+
+@en "BinaryEvent"
+@fa "رویداد دودویی"
+@ar "حدث ثنائی"
+pub const PKT_BINARY_EVENT := 5
+
+@en "BinaryAck"
+@fa "تایید دودویی"
+@ar "إقرار ثنائی"
+pub const PKT_BINARY_ACK := 6
+
+// The record separator Engine.IO v4 joins several payloads with inside one
+// HTTP polling body. 0x1e, chosen because it cannot occur in the UTF-8 text
+// a payload is otherwise made of.
+const RS := 30
+
+// Ceilings on the two numbers a peer writes into a packet header.
+//
+// Both are read digit by digit out of text the other end controls, so both
+// need somewhere to stop. Without a cap, "5999999999999-" overflows the
+// accumulator into a negative attachment count, and an acknowledgement id
+// long enough does the same - neither is a packet any real server sends, so
+// the honest answer is that the packet is malformed.
+const MAX_ATTACHMENTS := 1024
+const MAX_ACK_ID := 1000000000
+
+// Bytes - a binary attachment: a length and the bytes themselves.
+//
+// Not a `str`, deliberately. A Salam `str` ends at its first NUL byte, so
+// half of every PNG, protobuf message or encrypted blob would vanish on the
+// way through one. Anything that owns a Bytes has to free it (BytesFree);
+// the ones handed to a handler on an incoming event belong to the event and
+// are released when the next one is read.
+@en "Bytes"
+@fa "بایت‌ها"
+@ar "بایتات"
+pub struct Bytes:
+    pub ptr: void* = null
+    pub len: int = 0
+end
+
+// Packet - one decoded Socket.IO packet.
+//
+// `data` stays as raw JSON text rather than a parsed tree: most packets are
+// handed straight back out to a handler that wants one field, and parsing
+// every argument of every event to serve that is work almost no caller
+// asks for. args.salam picks fields out of it on demand.
+@en "Packet"
+@fa "بسته"
+@ar "حزمة"
+pub struct Packet:
+    pub kind: int = 0 - 1
+    pub nsp: str = "/"
+    // -1 when the packet carries no acknowledgement id.
+    pub id: int = 0 - 1
+    pub data: str = ""
+    pub attachments: int = 0
+    pub ok: bool = false
+end
+
+func _digit_at(s: str, i: int): int:
+    if i < 0 || i >= s.len():
+        ret 0 - 1
+    end
+    c := char_code(s.substr(i, 1))
+    if c < 48 || c > 57:
+        ret 0 - 1
+    end
+    ret c - 48
+end
+
+func _is_ws(ch: str): bool:
+    ret ch == " " || ch == "\t" || ch == "\n" || ch == "\r"
+end
+
+// ---------------------------------------------------------------- public
+
+// EncodePacket - a Packet as the text that goes inside an Engine.IO message.
+@en "EncodePacket"
+@fa "رمزگذاری بسته"
+@ar "ترمیز الحزمة"
+pub func EncodePacket(p: Packet): str:
+    mut out := "" + p.kind
+    if p.attachments > 0 && (p.kind == PKT_BINARY_EVENT || p.kind == PKT_BINARY_ACK):
+        out += "" + p.attachments + "-"
+    end
+    // The namespace is written only when it is not the default, which is why
+    // a server that expects "/" must never be sent "/,".
+    if p.nsp.len() > 0 && p.nsp != "/":
+        out += p.nsp + ","
+    end
+    if p.id >= 0:
+        out += "" + p.id
+    end
+    out += p.data
+    ret out
+end
+
+// DecodePacket - the inverse. `ok` is false for anything malformed.
+@en "DecodePacket"
+@fa "رمزگشایی بسته"
+@ar "فك الحزمة"
+pub func DecodePacket(text: str): Packet:
+    mut p := Packet {}
+    n := text.len()
+    if n == 0:
+        ret p
+    end
+    k := _digit_at(text, 0)
+    if k < 0 || k > PKT_BINARY_ACK:
+        ret p
+    end
+    p.kind = k
+    mut i := 1
+    if k == PKT_BINARY_EVENT || k == PKT_BINARY_ACK:
+        mut num := 0
+        mut seen := false
+        until _digit_at(text, i) >= 0 && num <= MAX_ATTACHMENTS:
+            num = num * 10 + _digit_at(text, i)
+            seen = true
+            i += 1
+        end
+        if !seen || num > MAX_ATTACHMENTS || i >= n || text.substr(i, 1) != "-":
+            ret p
+        end
+        p.attachments = num
+        i += 1
+    end
+    if i < n && text.substr(i, 1) == "/":
+        c := str.IndexFrom(text, ",", i)
+        if c < 0:
+            p.nsp = text.substr(i, n - i)
+            i = n
+        else:
+            p.nsp = text.substr(i, c - i)
+            i = c + 1
+        end
+    end
+    if _digit_at(text, i) >= 0:
+        mut id := 0
+        until _digit_at(text, i) >= 0 && id <= MAX_ACK_ID:
+            id = id * 10 + _digit_at(text, i)
+            i += 1
+        end
+        if id > MAX_ACK_ID:
+            ret p
+        end
+        p.id = id
+    end
+    if i < n:
+        p.data = text.substr(i, n - i)
+    end
+    p.ok = true
+    ret p
+end
+
+// EncodeEngine - one Engine.IO payload: a type digit and its body.
+@en "EncodeEngine"
+@fa "رمزگذاری موتور"
+@ar "ترمیز المحرك"
+pub func EncodeEngine(kind: int, body: str): str:
+    ret "" + kind + body
+end
+
+// EngineKind - the type of an Engine.IO payload, or -1 if it has none.
+@en "EngineKind"
+@fa "نوع موتور"
+@ar "نوع المحرك"
+pub func EngineKind(payload: str): int:
+    ret _digit_at(payload, 0)
+end
+
+// EngineBody - everything after an Engine.IO payload's type digit.
+@en "EngineBody"
+@fa "بدنه موتور"
+@ar "جسم المحرك"
+pub func EngineBody(payload: str): str:
+    if payload.len() < 2:
+        ret ""
+    end
+    ret payload.substr(1, payload.len() - 1)
+end
+
+// SplitPayloads - an HTTP polling body into the payloads it concatenates.
+//
+// The websocket transport sends one payload per frame and never needs this;
+// polling can only answer a request once, so it packs everything it has
+// into one body separated by 0x1e.
+@en "SplitPayloads"
+@fa "جداسازی بارها"
+@ar "تقسیم الحمولات"
+pub func SplitPayloads(body: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    n := body.len()
+    if n == 0:
+        ret out
+    end
+    mut start := 0
+    mut i := 0
+    until i < n:
+        if char_code(body.substr(i, 1)) == RS:
+            out.push(body.substr(start, i - start))
+            start = i + 1
+        end
+        i += 1
+    end
+    out.push(body.substr(start, n - start))
+    ret out
+end
+
+// JoinPayloads - the inverse, for a polling POST body.
+@en "JoinPayloads"
+@fa "پیوستن بارها"
+@ar "دمج الحمولات"
+pub func JoinPayloads(items: Vector<str>): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    repeat items.len() with i:
+        if i > 0:
+            str.BufAppendChar(sb, RS)
+        end
+        str.BufAppend(sb, items.get(i))
+    end
+    ret str.BufStr(sb)
+end
+
+// SplitJSONArray - the top-level elements of a JSON array, each still raw
+// JSON text.
+//
+// Event arguments arrive as `["name", {...}, [...]]` and are handed back one
+// at a time; a full parse of every argument to serve a handler that reads
+// one of them is work worth not doing. Nesting, strings and escapes are
+// tracked so a comma or bracket inside a string or a sub-object does not
+// split anything. A `text` that is not an array yields nothing.
+@en "SplitJSONArray"
+@fa "جداسازی آرایه جیسون"
+@ar "تقسیم مصفوفة جیسون"
+pub func SplitJSONArray(text: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    s := str.Trim(text)
+    if !str.StartsWith(s, "["):
+        ret out
+    end
+    n := s.len()
+    mut i := 1
+    mut depth := 0
+    mut instr := false
+    mut esc := false
+    mut start := 0 - 1
+    mut done := false
+    until i < n && !done:
+        ch := s.substr(i, 1)
+        if instr:
+            if esc:
+                esc = false
+            else ch == "\\":
+                esc = true
+            else ch == "\"":
+                instr = false
+            end
+        else ch == "\"":
+            instr = true
+            if start < 0:
+                start = i
+            end
+        else ch == "[" || ch == "{":
+            if start < 0:
+                start = i
+            end
+            depth += 1
+        else ch == "]" && depth == 0:
+            if start >= 0:
+                out.push(str.Trim(s.substr(start, i - start)))
+            end
+            done = true
+        else ch == "]" || ch == "}":
+            depth -= 1
+        else ch == "," && depth == 0:
+            if start >= 0:
+                out.push(str.Trim(s.substr(start, i - start)))
+            else:
+                out.push("")
+            end
+            start = 0 - 1
+        else:
+            if !_is_ws(ch) && start < 0:
+                start = i
+            end
+        end
+        i += 1
+    end
+    ret out
+end
+
+// Placeholder - the marker a binary argument leaves behind in the JSON.
+//
+// JSON cannot hold bytes, so a binary event goes out as ordinary JSON with
+// `{"_placeholder":true,"num":N}` where each buffer belonged, followed by
+// the buffers themselves as separate frames. N indexes them in order.
+@en "Placeholder"
+@fa "جانگهدار"
+@ar "عنصر نائب"
+pub func Placeholder(num: int): str:
+    ret `{"_placeholder":true,"num":` + num + "}"
+end
+
+// PlaceholderNum - which attachment a JSON fragment stands for, or -1 when
+// the fragment is not a placeholder.
+@en "PlaceholderNum"
+@fa "شماره جانگهدار"
+@ar "رقم العنصر النائب"
+pub func PlaceholderNum(frag: str): int:
+    if !str.Contains(frag, "_placeholder"):
+        ret 0 - 1
+    end
+    k := str.Find(frag, "\"num\"")
+    if k < 0:
+        ret 0 - 1
+    end
+    c := str.IndexFrom(frag, ":", k)
+    if c < 0:
+        ret 0 - 1
+    end
+    mut i := c + 1
+    until _is_ws(frag.substr(i, 1)):
+        i += 1
+    end
+    if _digit_at(frag, i) < 0:
+        ret 0 - 1
+    end
+    mut num := 0
+    until _digit_at(frag, i) >= 0 && num <= MAX_ATTACHMENTS:
+        num = num * 10 + _digit_at(frag, i)
+        i += 1
+    end
+    if num > MAX_ATTACHMENTS:
+        ret 0 - 1
+    end
+    ret num
+end
+
+// NewBytes - a Bytes owning its own copy of `n` bytes at `ptr`.
+@en "NewBytes"
+@fa "بایت جدید"
+@ar "بایتات جدیدة"
+pub func NewBytes(ptr: void*, n: int): Bytes:
+    if ptr == null || n <= 0:
+        ret Bytes {}
+    end
+    buf := mem.Allocate(n as u64)
+    if buf == null:
+        ret Bytes {}
+    end
+    mem.Copy(buf, ptr, n as u64)
+    ret Bytes { ptr = buf, len = n }
+end
+
+// BytesFromStr - the bytes of a `str`, copied. Stops at a NUL, as any `str`
+// does; it is the caller's own text, so that is what they wrote.
+@en "BytesFromStr"
+@fa "بایت از رشته"
+@ar "بایتات من نص"
+pub func BytesFromStr(s: str): Bytes:
+    ret NewBytes(s as void*, s.len())
+end
+
+// BytesToStr - the bytes as text, truncated at the first NUL. For anything
+// that is really binary use BytesToBase64 or read the pointer directly.
+@en "BytesToStr"
+@fa "بایت به رشته"
+@ar "بایتات إلی نص"
+pub func BytesToStr(b: Bytes): str:
+    if b.ptr == null || b.len <= 0:
+        ret ""
+    end
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    bp := b.ptr as i8*
+    repeat b.len with i:
+        mut v := bp[i] as int
+        if v < 0:
+            v += 256
+        end
+        if v == 0:
+            ret str.BufStr(sb)
+        end
+        str.BufAppendChar(sb, v)
+    end
+    ret str.BufStr(sb)
+end
+
+// BytesToBase64 - the whole buffer, NULs included, as text that survives
+// anywhere.
+@en "BytesToBase64"
+@fa "بایت به بیس۶۴"
+@ar "بایتات إلی بیس64"
+pub func BytesToBase64(b: Bytes): str:
+    if b.ptr == null || b.len <= 0:
+        ret ""
+    end
+    // The pointer form, not Base64Encode(BytesToStr(b)): the round trip
+    // through a `str` would stop at the first NUL and encode a prefix.
+    ret encoding.Base64EncodeBytes(b.ptr, b.len)
+end
+
+// BytesAt - one byte, 0..255, or -1 out of range.
+@en "BytesAt"
+@fa "بایت در"
+@ar "بایت عند"
+pub func BytesAt(b: Bytes, i: int): int:
+    if b.ptr == null || i < 0 || i >= b.len:
+        ret 0 - 1
+    end
+    bp := b.ptr as i8*
+    mut v := bp[i] as int
+    if v < 0:
+        v += 256
+    end
+    ret v
+end
+
+// BytesFree - releases the buffer.
+@en "BytesFree"
+@fa "آزادسازی بایت"
+@ar "تحریر البایتات"
+pub func BytesFree(b &: Bytes):
+    if b.ptr != null:
+        mem.Free(b.ptr)
+        b.ptr = null
+    end
+    b.len = 0
+end

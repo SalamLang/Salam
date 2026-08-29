@@ -12,10 +12,11 @@ import json
 import sys
 from collections import OrderedDict
 
-SERVER_ORDER = ["salam", "nginx", "node", "php"]
+SERVER_ORDER = ["salam", "nginx", "apache", "node", "php"]
 SERVER_LABEL = {
     "salam": "Salam",
     "nginx": "nginx",
+    "apache": "Apache",
     "node": "node/express",
     "php": "php -S",
 }

@@ -1,0 +1,428 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package llm
+
+import mem
+import str
+
+// Two tokenizer families cover the models this package runs:
+//
+//   TOK_SPM  SentencePiece as Llama uses it: a leading "▁" marks a word
+//            boundary, adjacent pieces merge greedily by vocabulary
+//            score, and a piece no token covers falls back to the
+//            <0xNN> byte tokens.
+//   TOK_BPE  byte-level BPE as GPT-2 and Qwen use it: bytes map to the
+//            printable stand-in characters, pieces merge by the rank of
+//            the merge rule, words keep their leading space.
+//
+// The BPE pre-tokenizer here is the plain split at spaces (each word
+// carries its leading space); the regex pre-tokenizers of specific
+// models are not reproduced, which can shift where digits and
+// punctuation are cut. Decoding is exact for both families.
+
+@en "TOK_SPM"
+@fa "توکن‌ساز قطعه جمله"
+@ar "مقطع الجمل"
+pub const TOK_SPM := 0
+
+@en "TOK_BPE"
+@fa "توکن‌ساز بایتی"
+@ar "مقطع البايتات"
+pub const TOK_BPE := 1
+
+// The SentencePiece word-boundary marker "▁" (U+2581), as UTF-8.
+const _SPM_SPACE := "\xE2\x96\x81"
+
+@en "Tokenizer"
+@fa "توکن‌ساز"
+@ar "مقطع"
+pub struct Tokenizer:
+    pub kind: int = TOK_SPM
+    pub tokens: Vector<str> = Vector {}
+    pub scores: Vector<f64> = Vector {}
+    pub index: HashMap<str, int> = HashMap {}
+    // "a b" -> rank, for TOK_BPE; merge_keys owns those key strings.
+    pub merges: HashMap<str, int> = HashMap {}
+    pub merge_keys: Vector<str> = Vector {}
+    pub bos: int = 0 - 1
+    pub eos: int = 0 - 1
+    pub unk: int = 0
+    pub add_bos: bool = true
+    // byte value -> token id of "<0xNN>" (SPM) or of the stand-in
+    // character (BPE); -1 when the vocabulary has none.
+    pub byte_ids: Vector<int> = Vector {}
+    pub b2u: Vector<int> = Vector {}
+
+    @en "add_token"
+    @fa "افزودن توکن"
+    @ar "إضافة رمز"
+    pub func add_token(text: str, score: f64): int:
+        id := this.tokens.len()
+        // The vocabulary owns its strings: a caller's literal, a
+        // freshly built "<0xNN>", and a borrowed GGUF metadata string
+        // all have different lifetimes, and the last one dies with the
+        // file. One copy here makes free() unambiguous.
+        own := str.Clone(text)
+        this.tokens.push(own)
+        this.scores.push(score)
+        this.index.put(own, id)
+        ret id
+    end
+
+    @en "add_merge"
+    @fa "افزودن ادغام"
+    @ar "إضافة دمج"
+    pub func add_merge(a: str, b: str):
+        // HashMap borrows its keys, so the rule string is kept here too.
+        rule := _join_pair(a, b)
+        this.merge_keys.push(rule)
+        this.merges.put(rule, this.merges.size())
+    end
+
+    // Builds the byte tables; call after the vocabulary is complete.
+    @en "finish"
+    @fa "پایان"
+    @ar "إنهاء"
+    pub func finish():
+        this.byte_ids.clear()
+        this.b2u.free()
+        this.b2u = _bpe_b2u()
+        repeat 256 with b:
+            mut key := ""
+            if this.kind == TOK_SPM:
+                key = _byte_token_text(b)
+            else:
+                mut sb := str.NewBuilder()
+                str.BufAppendCp(sb, this.b2u.get(b))
+                key = str.BufStr(sb)
+                str.BufFree(sb)
+            end
+            this.byte_ids.push(this.index.get_or(key, 0 - 1))
+            mem.Free(key as void*)
+        end
+    end
+
+    @en "size"
+    @fa "اندازه"
+    @ar "حجم"
+    pub func size(): int: ret this.tokens.len() end
+
+    @en "token_text"
+    @fa "متن توکن"
+    @ar "نص الرمز"
+    pub func token_text(id: int): str:
+        if id < 0 || id >= this.tokens.len(): ret "" end
+        ret this.tokens.get(id)
+    end
+
+    @en "encode"
+    @fa "رمزگذاری"
+    @ar "ترميز"
+    pub func encode(text: str): Vector<int>:
+        mut out := Vector {} as Vector<int>
+        if this.add_bos && this.bos >= 0: out.push(this.bos) end
+        if this.kind == TOK_SPM:
+            this._encode_spm(text, out)
+        else:
+            this._encode_bpe(text, out)
+        end
+        ret out
+    end
+
+    @en "decode"
+    @fa "رمزگشایی"
+    @ar "فك الترميز"
+    pub func decode(ids &: Vector<int>): str:
+        mut sb := str.NewBuilder()
+        mut first := true
+        repeat ids.len() with i:
+            id := ids.get(i)
+            if id == this.bos || id == this.eos || id < 0 || id >= this.tokens.len(): continue end
+            t := this.tokens.get(id)
+            if this.kind == TOK_SPM:
+                // SentencePiece drops the boundary marker that opens the
+                // text: "▁hello" at the start decodes to "hello".
+                if first && str.StartsWith(t, _SPM_SPACE):
+                    trimmed := str.Substr(t, 3, t.len() - 3)
+                    this._decode_spm_piece(sb, trimmed)
+                    mem.Free(trimmed as void*)
+                else:
+                    this._decode_spm_piece(sb, t)
+                end
+            else:
+                this._decode_bpe_piece(sb, t)
+            end
+            first = false
+        end
+        s := str.BufStr(sb)
+        str.BufFree(sb)
+        ret s
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free():
+        repeat this.tokens.len() with i: mem.Free(this.tokens.get(i) as void*) end
+        this.tokens.free()
+        this.scores.free()
+        this.index.free()
+        repeat this.merge_keys.len() with i: mem.Free(this.merge_keys.get(i) as void*) end
+        this.merge_keys.free()
+        this.merges.free()
+        this.byte_ids.free()
+        this.b2u.free()
+    end
+
+    // Greedy best-score merging over the symbols of one text.
+    // Every symbol in `syms` is an owned string (a substring of the
+    // normalized text, or the concatenation two merges produced), so
+    // they are freed one by one before the vector itself goes.
+    func _encode_spm(text: str, out &: Vector<int>):
+        body := str.Replace(text, " ", _SPM_SPACE)
+        norm := _SPM_SPACE + body
+        mem.Free(body as void*)
+        mut syms := _chars_of(norm)
+        mem.Free(norm as void*)
+        this._merge_by_score(syms)
+        repeat syms.len() with i:
+            piece := syms.get(i)
+            id := this.index.get_or(piece, 0 - 1)
+            if id >= 0:
+                out.push(id)
+                continue
+            end
+            repeat piece.len() with k:
+                bid := this.byte_ids.get(_byte_at(piece, k))
+                out.push(bid >= 0 ? bid : this.unk)
+            end
+        end
+        _free_syms(syms)
+    end
+
+    func _merge_by_score(syms &: Vector<str>):
+        mut again := true
+        until again && syms.len() > 1:
+            mut best := 0 - 1
+            mut best_score := 0.0
+            repeat syms.len() - 1 with i:
+                cand := syms.get(i) + syms.get(i + 1)
+                id := this.index.get_or(cand, 0 - 1)
+                mem.Free(cand as void*)
+                if id < 0: continue end
+                sc := this.scores.get(id)
+                if best < 0 || sc > best_score:
+                    best = i
+                    best_score = sc
+                end
+            end
+            if best < 0:
+                again = false
+            else:
+                merged := syms.get(best) + syms.get(best + 1)
+                mem.Free(syms.get(best) as void*)
+                mem.Free(syms.get(best + 1) as void*)
+                syms.set(best, merged)
+                _r := syms.remove_at(best + 1)
+            end
+        end
+    end
+
+    // Byte-level BPE: words split at spaces, each word keeps its leading
+    // space, bytes become stand-in characters, then rank-ordered merges.
+    func _encode_bpe(text: str, out &: Vector<int>):
+        n := text.len()
+        mut start := 0
+        until start < n:
+            mut stop := start + 1
+            until stop < n && _byte_at(text, stop) != 32: stop += 1 end
+            word := text.substr(start, stop - start)
+            this._encode_bpe_word(word, out)
+            mem.Free(word as void*)
+            start = stop
+        end
+    end
+
+    func _encode_bpe_word(word: str, out &: Vector<int>):
+        mut syms := Vector {} as Vector<str>
+        repeat word.len() with k:
+            mut sb := str.NewBuilder()
+            str.BufAppendCp(sb, this.b2u.get(_byte_at(word, k)))
+            syms.push(str.BufStr(sb))
+            str.BufFree(sb)
+        end
+        mut again := true
+        until again && syms.len() > 1:
+            mut best := 0 - 1
+            mut best_rank := 0
+            repeat syms.len() - 1 with i:
+                probe := _join_pair(syms.get(i), syms.get(i + 1))
+                rank := this.merges.get_or(probe, 0 - 1)
+                mem.Free(probe as void*)
+                if rank < 0: continue end
+                if best < 0 || rank < best_rank:
+                    best = i
+                    best_rank = rank
+                end
+            end
+            if best < 0:
+                again = false
+            else:
+                merged := syms.get(best) + syms.get(best + 1)
+                mem.Free(syms.get(best) as void*)
+                mem.Free(syms.get(best + 1) as void*)
+                syms.set(best, merged)
+                _r := syms.remove_at(best + 1)
+            end
+        end
+        repeat syms.len() with i:
+            id := this.index.get_or(syms.get(i), 0 - 1)
+            out.push(id >= 0 ? id : this.unk)
+        end
+        _free_syms(syms)
+    end
+
+    func _decode_spm_piece(sb &: str.StringBuilder, t: str):
+        if t.len() == 6 && str.StartsWith(t, "<0x") && str.EndsWith(t, ">"):
+            hi := _hex_val(_byte_at(t, 3))
+            lo := _hex_val(_byte_at(t, 4))
+            if hi >= 0 && lo >= 0:
+                str.BufAppendChar(sb, hi * 16 + lo)
+                ret
+            end
+        end
+        // The marker is compared byte by byte: t.substr(i, 3) would
+        // allocate a three-byte string for every character decoded.
+        n := t.len()
+        mut i := 0
+        until i < n:
+            marker := i + 3 <= n && _byte_at(t, i) == 0xE2 && _byte_at(t, i + 1) == 0x96 && _byte_at(t, i + 2) == 0x81
+            if marker:
+                str.BufAppendChar(sb, 32)
+                i += 3
+            else:
+                str.BufAppendChar(sb, _byte_at(t, i))
+                i += 1
+            end
+        end
+    end
+
+    func _decode_bpe_piece(sb &: str.StringBuilder, t: str):
+        n := t.len()
+        mut i := 0
+        mut cp := 0
+        until i < n:
+            i = str.CodePointAt(t, i, cp)
+            mut b := 0 - 1
+            if cp >= 0 && cp < 256 && this.b2u.get(cp) == cp:
+                b = cp
+            else cp >= 256:
+                repeat 256 with k:
+                    if this.b2u.get(k) == cp: b = k end
+                end
+            end
+            if b >= 0: str.BufAppendChar(sb, b) end
+        end
+    end
+end
+
+// GPT-2's byte-to-character table: bytes that are printable map to
+// themselves, the rest to U+0100 onward in byte order.
+func _bpe_b2u(): Vector<int>:
+    mut t := Vector {} as Vector<int>
+    mut next := 256
+    repeat 256 with b:
+        printable := (b >= 33 && b <= 126) || (b >= 161 && b <= 172) || (b >= 174 && b <= 255)
+        if printable:
+            t.push(b)
+        else:
+            t.push(next)
+            next += 1
+        end
+    end
+    ret t
+end
+
+func _byte_at(s: str, i: int): int:
+    p := (s as void*) as i8*
+    ret (p[i] as int) & 255
+end
+
+// Bytes of s as a Vector of UTF-8 character strings.
+func _chars_of(s: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    n := s.len()
+    mut i := 0
+    until i < n:
+        mut w := str.CharLen(_byte_at(s, i))
+        if i + w > n: w = n - i end
+        out.push(s.substr(i, w))
+        i += w
+    end
+    ret out
+end
+
+// "a b" in one allocation: `a + " " + b` would drop the intermediate
+// `a + " "` on the floor, and this runs once per adjacent pair per
+// merge round.
+func _join_pair(a: str, b: str): str:
+    mut sb := str.NewBuilder()
+    str.BufAppend(sb, a)
+    str.BufAppendChar(sb, 32)
+    str.BufAppend(sb, b)
+    r := str.BufStr(sb)
+    str.BufFree(sb)
+    ret r
+end
+
+// Frees the owned strings a symbol list holds, then the list.
+func _free_syms(syms &: Vector<str>):
+    repeat syms.len() with i: mem.Free(syms.get(i) as void*) end
+    syms.free()
+end
+
+func _hex_digit(v: int): int:
+    if v < 10: ret 48 + v end
+    ret 65 + v - 10
+end
+
+func _hex_val(c: int): int:
+    if c >= 48 && c <= 57: ret c - 48 end
+    if c >= 65 && c <= 70: ret c - 55 end
+    if c >= 97 && c <= 102: ret c - 87 end
+    ret 0 - 1
+end
+
+func _byte_token_text(b: int): str:
+    mut sb := str.NewBuilder()
+    str.BufAppend(sb, "<0x")
+    str.BufAppendChar(sb, _hex_digit(b >> 4))
+    str.BufAppendChar(sb, _hex_digit(b & 15))
+    str.BufAppend(sb, ">")
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+// ---- public API ----
+
+@en "NewTokenizer"
+@fa "توکن‌ساز نو"
+@ar "مقطع جديد"
+pub func NewTokenizer(kind: int): Tokenizer:
+    mut t := Tokenizer {}
+    t.kind = kind
+    ret t
+end

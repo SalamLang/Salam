@@ -1,0 +1,299 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package socketio
+
+import encoding.json
+import encoding.value
+import encoding.encerr
+import conv
+
+// Event arguments, going out and coming back.
+//
+// A Socket.IO event is a JSON array whose first element is the event name
+// and whose rest are the arguments, so `emit("chat", "hi", 42)` is on the
+// wire as `["chat","hi",42]`. Building that by hand is where a client
+// leaks: an unescaped quote in a user's message is a malformed packet the
+// server drops without saying why.
+//
+// Args builds the array instead. Each argument is kept as the raw JSON text
+// it will occupy, which means an argument that is already JSON (a payload
+// from somewhere else, a marshalled struct) costs nothing to add, and one
+// that is a plain value is escaped once, correctly, on the way in.
+
+// Args - an argument list under construction.
+@en "Args"
+@fa "آرگومان‌ها"
+@ar "الوسائط"
+pub struct Args:
+    // One raw JSON fragment per argument.
+    pub items: Vector<str> = Vector {}
+    // Binary arguments, in the order their placeholders appear in `items`.
+    pub bins: Vector<Bytes> = Vector {}
+end
+
+func _decode_one(frag: str): value.Value:
+    mut err := encerr.EncodingError {}
+    ret json.Decode(frag, err)
+end
+
+// ---------------------------------------------------------------- building
+
+// NewArgs - an empty argument list. Free it with ArgsFree.
+@en "NewArgs"
+@fa "آرگومان جدید"
+@ar "وسائط جدیدة"
+pub func NewArgs(): Args:
+    ret Args {}
+end
+
+// AddStr - a string argument, escaped.
+@en "AddStr"
+@fa "افزودن رشته"
+@ar "إضافة نص"
+pub func AddStr(a &: Args, s: str):
+    a.items.push(json.Str(s))
+end
+
+@en "AddInt"
+@fa "افزودن عدد"
+@ar "إضافة عدد"
+pub func AddInt(a &: Args, n: i64):
+    a.items.push("" + n)
+end
+
+@en "AddFloat"
+@fa "افزودن اعشاری"
+@ar "إضافة عشری"
+pub func AddFloat(a &: Args, n: f64):
+    a.items.push("" + n)
+end
+
+@en "AddBool"
+@fa "افزودن بولی"
+@ar "إضافة منطقی"
+pub func AddBool(a &: Args, b: bool):
+    if b:
+        a.items.push("true")
+    else:
+        a.items.push("false")
+    end
+end
+
+@en "AddNull"
+@fa "افزودن تهی"
+@ar "إضافة فارغ"
+pub func AddNull(a &: Args):
+    a.items.push("null")
+end
+
+// AddJSON - an argument that is already JSON: an object, an array, anything.
+// Nothing checks it, so what goes in is what goes on the wire.
+@en "AddJSON"
+@fa "افزودن جیسون"
+@ar "إضافة جیسون"
+pub func AddJSON(a &: Args, raw: str):
+    if raw.len() == 0:
+        a.items.push("null")
+    else:
+        a.items.push(raw)
+    end
+end
+
+// AddValue - an argument built as an encoding.value tree.
+@en "AddValue"
+@fa "افزودن مقدار"
+@ar "إضافة قیمة"
+pub func AddValue(a &: Args, v: value.Value):
+    a.items.push(json.EncodeDefault(v))
+end
+
+// AddBytes - a binary argument.
+//
+// It leaves a placeholder in the JSON and travels as its own frame, which is
+// what makes the packet a BINARY_EVENT rather than an EVENT. Args takes a
+// copy, so the caller's buffer is theirs to free straight away.
+@en "AddBytes"
+@fa "افزودن بایت"
+@ar "إضافة بایتات"
+pub func AddBytes(a &: Args, ptr: void*, n: int):
+    a.items.push(Placeholder(a.bins.len()))
+    a.bins.push(NewBytes(ptr, n))
+end
+
+// AddBinaryStr - AddBytes for a payload that happens to be text.
+@en "AddBinaryStr"
+@fa "افزودن رشته دودویی"
+@ar "إضافة نص ثنائی"
+pub func AddBinaryStr(a &: Args, s: str):
+    AddBytes(a, s as void*, s.len())
+end
+
+// ArgsCount - how many arguments have been added.
+@en "ArgsCount"
+@fa "شمار آرگومان"
+@ar "عدد الوسائط"
+pub func ArgsCount(a: Args): int:
+    ret a.items.len()
+end
+
+// ArgsFree - releases the list and every binary buffer it copied.
+@en "ArgsFree"
+@fa "آزادسازی آرگومان"
+@ar "تحریر الوسائط"
+pub func ArgsFree(a &: Args):
+    repeat a.bins.len() with i:
+        mut b := a.bins.get(i)
+        BytesFree(b)
+    end
+    a.bins.free()
+    a.items.free()
+end
+
+// ArgsJSON - the arguments as a JSON array, with `name` first when it is not
+// empty. This is exactly a packet's `data` field.
+@en "ArgsJSON"
+@fa "جیسون آرگومان"
+@ar "جیسون الوسائط"
+pub func ArgsJSON(a: Args, name: str): str:
+    mut out := "["
+    mut first := true
+    if name.len() > 0:
+        out += json.Str(name)
+        first = false
+    end
+    repeat a.items.len() with i:
+        if !first:
+            out += ","
+        end
+        out += a.items.get(i)
+        first = false
+    end
+    ret out + "]"
+end
+
+// ----------------------------------------------------------------- reading
+
+// ItemCount - how many top-level elements a JSON array text has.
+@en "ItemCount"
+@fa "شمار عنصر"
+@ar "عدد العناصر"
+pub func ItemCount(raw: str): int:
+    mut parts := SplitJSONArray(raw)
+    defer parts.free()
+    ret parts.len()
+end
+
+// Item - element `i` of a JSON array text, still raw JSON. "" when there is
+// no such element.
+@en "Item"
+@fa "عنصر"
+@ar "عنصر"
+pub func Item(raw: str, i: int): str:
+    mut parts := SplitJSONArray(raw)
+    defer parts.free()
+    if i < 0 || i >= parts.len():
+        ret ""
+    end
+    ret parts.get(i)
+end
+
+// ItemStr - element `i` as text, with JSON escapes resolved. A non-string
+// element comes back as its raw JSON, so a number reads as "42" rather than
+// as nothing.
+@en "ItemStr"
+@fa "عنصر رشته‌ای"
+@ar "عنصر نصی"
+pub func ItemStr(raw: str, i: int): str:
+    frag := Item(raw, i)
+    if frag.len() == 0:
+        ret ""
+    end
+    mut v := _decode_one(frag)
+    defer value.ValueFree(v)
+    if value.IsString(v):
+        ret value.AsString(v)
+    end
+    ret frag
+end
+
+// ItemInt - element `i` as a whole number.
+//
+// A number written as a string ("42") reads as 42 rather than as 0: JSON has
+// one number type and JavaScript has none for large integers, so a server
+// that has to keep 64 bits intact sends them as text, and a client that
+// answered 0 to that would be wrong in the one case the sender was being
+// careful about. A float truncates toward zero; anything else is 0.
+@en "ItemInt"
+@fa "عنصر عددی"
+@ar "عنصر عددی"
+pub func ItemInt(raw: str, i: int): i64:
+    mut v := _decode_one(Item(raw, i))
+    defer value.ValueFree(v)
+    if value.IsString(v):
+        // conv.ParseInt, not the `str` method: that one lands in an i32 and
+        // would fold exactly the large values a server sends as text to
+        // avoid folding.
+        ret conv.ParseInt(value.AsString(v))
+    end
+    ret value.AsInt(v)
+end
+
+// ItemFloat - element `i` as a number, reading a numeric string too, for
+// the same reason ItemInt does.
+@en "ItemFloat"
+@fa "عنصر اعشاری"
+@ar "عنصر عشری"
+pub func ItemFloat(raw: str, i: int): f64:
+    mut v := _decode_one(Item(raw, i))
+    defer value.ValueFree(v)
+    if value.IsString(v):
+        ret conv.ParseFloat(value.AsString(v))
+    end
+    ret value.AsFloat(v)
+end
+
+// ItemBool - element `i` as a flag. `true`, a non-zero number, and the
+// strings "true"/"1" all read as true; everything else, an absent element
+// included, reads as false. Note this is not JavaScript truthiness - a
+// non-empty string is not true here, because "false" arriving as text and
+// meaning true is a trap rather than a convenience.
+@en "ItemBool"
+@fa "عنصر بولی"
+@ar "عنصر منطقی"
+pub func ItemBool(raw: str, i: int): bool:
+    mut v := _decode_one(Item(raw, i))
+    defer value.ValueFree(v)
+    if value.IsBool(v):
+        ret value.AsBool(v)
+    end
+    if value.IsNumber(v):
+        ret value.AsInt(v) != 0
+    end
+    if value.IsString(v):
+        t := value.AsString(v)
+        ret t == "true" || t == "1"
+    end
+    ret false
+end
+
+// ItemValue - element `i` parsed into an encoding.value tree, for an
+// argument that is an object or an array. The caller frees it with
+// value.ValueFree.
+@en "ItemValue"
+@fa "مقدار عنصر"
+@ar "قیمة العنصر"
+pub func ItemValue(raw: str, i: int): value.Value:
+    ret _decode_one(Item(raw, i))
+end

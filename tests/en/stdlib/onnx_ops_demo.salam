@@ -1,0 +1,514 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/onnx: the second op table - reductions, indexing, comparisons,
+// the extra activations and the normalizations - each checked against
+// the same math done directly on std/tensor.
+
+import compress
+import encoding.protobuf
+import math
+import onnx
+import tensor
+import testing
+
+func sub(buf &: compress.ByteBuf, field: int, m: compress.ByteBuf):
+    protobuf.WriteTag(buf, field, protobuf.WT_LEN)
+    protobuf.WriteLenPrefixedBytes(buf, m.data, compress.BufLen(m))
+end
+
+func put_str(buf &: compress.ByteBuf, field: int, s: str):
+    protobuf.WriteTag(buf, field, protobuf.WT_LEN)
+    protobuf.WriteLenPrefixedStr(buf, s)
+end
+
+func put_int(buf &: compress.ByteBuf, field: int, v: i64):
+    protobuf.WriteTag(buf, field, protobuf.WT_VARINT)
+    protobuf.WriteVarint(buf, v as u64)
+end
+
+func tensor_proto(name: str, t &: tensor.Tensor): compress.ByteBuf:
+    mut b := compress.NewByteBuf()
+    repeat t.rank() with i: put_int(b, 1, t.dim(i) as i64) end
+    put_int(b, 2, 1)
+    mut fd := compress.NewByteBuf()
+    repeat t.numel() with k: protobuf.WriteFloat(fd, t.at(k)) end
+    sub(b, 4, fd)
+    compress.BufFree(fd)
+    put_str(b, 8, name)
+    ret b
+end
+
+func attr_int(name: str, v: i64): compress.ByteBuf:
+    mut b := compress.NewByteBuf()
+    put_str(b, 1, name)
+    put_int(b, 20, 2)
+    put_int(b, 3, v)
+    ret b
+end
+
+func attr_float(name: str, v: f64): compress.ByteBuf:
+    mut b := compress.NewByteBuf()
+    put_str(b, 1, name)
+    put_int(b, 20, 1)
+    protobuf.WriteTag(b, 2, protobuf.WT_FIXED32)
+    protobuf.WriteFloat(b, v)
+    ret b
+end
+
+// Takes ownership of `vals`, which every caller builds inline.
+func attr_ints(name: str, vals: Vector<i64>): compress.ByteBuf:
+    mut b := compress.NewByteBuf()
+    put_str(b, 1, name)
+    put_int(b, 20, 7)
+    mut packed := compress.NewByteBuf()
+    repeat vals.len() with i: protobuf.WriteVarint(packed, vals.get(i) as u64) end
+    sub(b, 8, packed)
+    compress.BufFree(packed)
+    mut owned := vals
+    owned.free()
+    ret b
+end
+
+func node(op: str, ins: Vector<str>, outs: Vector<str>): compress.ByteBuf:
+    mut b := compress.NewByteBuf()
+    repeat ins.len() with i: put_str(b, 1, ins.get(i)) end
+    repeat outs.len() with i: put_str(b, 2, outs.get(i)) end
+    put_str(b, 4, op)
+    ret b
+end
+
+func value_info(name: str): compress.ByteBuf:
+    mut b := compress.NewByteBuf()
+    put_str(b, 1, name)
+    ret b
+end
+
+func names1(a: str): Vector<str>:
+    mut v := Vector {} as Vector<str>
+    v.push(a)
+    ret v
+end
+
+func names2(a: str, b: str): Vector<str>:
+    mut v := Vector {} as Vector<str>
+    v.push(a)
+    v.push(b)
+    ret v
+end
+
+func names3(a: str, b: str, c: str): Vector<str>:
+    mut v := Vector {} as Vector<str>
+    v.push(a)
+    v.push(b)
+    v.push(c)
+    ret v
+end
+
+func ilist(a: i64): Vector<i64>:
+    mut v := Vector {} as Vector<i64>
+    v.push(a)
+    ret v
+end
+
+// Builds a one-node model over the given initializers and feeds, runs
+// it, and returns output `which`. `okout` reports whether the run
+// succeeded.
+func run1(op: str, ins: Vector<str>, outs: Vector<str>, attrs: Vector<compress.ByteBuf>, inits: Vector<tensor.Tensor>, init_names: Vector<str>, feeds: Vector<tensor.Tensor>, feed_names: Vector<str>, which: int, okout &: bool): tensor.Tensor:
+    okout = false
+    mut g := compress.NewByteBuf()
+    mut n := node(op, ins, outs)
+    repeat attrs.len() with i: sub(n, 5, attrs.get(i)) end
+    sub(g, 1, n)
+    compress.BufFree(n)
+    // Everything the caller composed for this one call is owned here:
+    // the attribute buffers, and the name vectors built inline.
+    repeat attrs.len() with i:
+        mut ab := attrs.get(i)
+        compress.BufFree(ab)
+    end
+    mut attrs_v := attrs
+    attrs_v.free()
+    repeat inits.len() with i:
+        mut t := inits.get(i)
+        tp := tensor_proto(init_names.get(i), t)
+        sub(g, 5, tp)
+        compress.BufFree(tp)
+    end
+    repeat feed_names.len() with i:
+        vi := value_info(feed_names.get(i))
+        sub(g, 11, vi)
+        compress.BufFree(vi)
+    end
+    repeat outs.len() with i:
+        if outs.get(i) != "":
+            vo := value_info(outs.get(i))
+            sub(g, 12, vo)
+            compress.BufFree(vo)
+        end
+    end
+    mut m := compress.NewByteBuf()
+    put_int(m, 1, 7)
+    sub(m, 7, g)
+    compress.BufFree(g)
+    mut pok := false
+    mut model := onnx.ParseOnnx(m.data, compress.BufLen(m), pok)
+    compress.BufFree(m)
+    if !pok:
+        model.free()
+        ret tensor.Empty()
+    end
+    mut rok := false
+    mut got := onnx.Run(model, feeds, rok)
+    mut out := tensor.Empty()
+    if rok && which < got.len(): out = tensor.Clone(got.get(which)) end
+    okout = rok
+    repeat got.len() with i:
+        mut gt := got.get(i)
+        gt.free()
+    end
+    got.free()
+    model.free()
+    mut ins_v := ins
+    ins_v.free()
+    mut outs_v := outs
+    outs_v.free()
+    // The feed NAMES are composed per call too; the feed tensors are the
+    // caller's and are left alone.
+    mut fn_v := feed_names
+    fn_v.free()
+    ret out
+end
+
+// The single-feed, no-initializer, no-attribute shape.
+func run_x(op: str, x &: tensor.Tensor, attrs: Vector<compress.ByteBuf>, okout &: bool): tensor.Tensor:
+    mut feeds := Vector {} as Vector<tensor.Tensor>
+    feeds.push(x)
+    mut inits := Vector {} as Vector<tensor.Tensor>
+    mut inames := Vector {} as Vector<str>
+    out := run1(op, names1("x"), names1("y"), attrs, inits, inames, feeds, names1("x"), 0, okout)
+    feeds.free()
+    inits.free()
+    inames.free()
+    ret out
+end
+
+func no_attrs(): Vector<compress.ByteBuf>:
+    v := Vector {} as Vector<compress.ByteBuf>
+    ret v
+end
+
+func main:
+    eps := 0.0001
+    mut ok := false
+
+    // ---- elementwise math ----
+    mut x := tensor.Zeros2(2, 3)
+    repeat 6 with k: x.set_at(k, (k as f64) - 2.5) end
+    mut ab := run_x("Abs", x, no_attrs(), ok)
+    testing.AssertTrue(ok)
+    testing.AssertEqInt(ab.dim(0), 2)
+    mut want_abs := tensor.Abs(x)
+    testing.AssertTrue(tensor.AllClose(ab, want_abs, eps))
+    mut fl := run_x("Floor", x, no_attrs(), ok)
+    testing.AssertEqFloat(fl.at(0), 0.0 - 3.0, eps)
+    testing.AssertEqFloat(fl.at(5), 2.0, eps)
+    mut ce := run_x("Ceil", x, no_attrs(), ok)
+    testing.AssertEqFloat(ce.at(0), 0.0 - 2.0, eps)
+    mut sg := run_x("Sign", x, no_attrs(), ok)
+    testing.AssertEqFloat(sg.at(0), 0.0 - 1.0, eps)
+    testing.AssertEqFloat(sg.at(5), 1.0, eps)
+    mut rc := run_x("Reciprocal", x, no_attrs(), ok)
+    testing.AssertEqFloat(rc.at(0), 1.0 / (0.0 - 2.5), eps)
+    // Erf is the real one, so the GELU identity holds
+    mut er := run_x("Erf", x, no_attrs(), ok)
+    testing.AssertEqFloat(er.at(0), 0.0 - 0.999593, 0.0001)
+    testing.AssertEqFloat(er.at(2), 0.0 - 0.5205, 0.0005)
+    mut gel := run_x("Gelu", x, no_attrs(), ok)
+    mut want_gel := tensor.Gelu(x)
+    testing.AssertTrue(tensor.AllClose(gel, want_gel, 0.001))
+    mut sp := run_x("Softplus", x, no_attrs(), ok)
+    testing.AssertEqFloat(sp.at(0), math.Log(1.0 + math.Exp(0.0 - 2.5)), 0.0001)
+    // Elu and HardSigmoid take their attributes
+    mut ea := no_attrs()
+    ea.push(attr_float("alpha", 2.0))
+    mut el := run_x("Elu", x, ea, ok)
+    testing.AssertEqFloat(el.at(0), 2.0 * (math.Exp(0.0 - 2.5) - 1.0), 0.0001)
+    testing.AssertEqFloat(el.at(5), 2.5, eps)
+    mut hs := run_x("HardSigmoid", x, no_attrs(), ok)
+    testing.AssertEqFloat(hs.at(0), 0.0, eps)
+    testing.AssertEqFloat(hs.at(5), 1.0, eps)
+
+    // ---- Pow, and the variadic family ----
+    mut two := tensor.Zeros1(1)
+    two.set_at(0, 2.0)
+    mut feeds2 := Vector {} as Vector<tensor.Tensor>
+    feeds2.push(x)
+    feeds2.push(two)
+    noinit := Vector {} as Vector<tensor.Tensor>
+    nonames := Vector {} as Vector<str>
+    mut pw := run1("Pow", names2("x", "e"), names1("y"), no_attrs(), noinit, nonames, feeds2, names2("x", "e"), 0, ok)
+    testing.AssertTrue(ok)
+    mut want_pw := tensor.Square(x)
+    testing.AssertTrue(tensor.AllClose(pw, want_pw, eps))
+    mut other := tensor.Zeros2(2, 3)
+    repeat 6 with k: other.set_at(k, 1.0) end
+    mut feeds3 := Vector {} as Vector<tensor.Tensor>
+    feeds3.push(x)
+    feeds3.push(other)
+    mut mx := run1("Max", names2("x", "o"), names1("y"), no_attrs(), noinit, nonames, feeds3, names2("x", "o"), 0, ok)
+    testing.AssertEqFloat(mx.at(0), 1.0, eps)
+    testing.AssertEqFloat(mx.at(5), 2.5, eps)
+    mut mn := run1("Min", names2("x", "o"), names1("y"), no_attrs(), noinit, nonames, feeds3, names2("x", "o"), 0, ok)
+    testing.AssertEqFloat(mn.at(5), 1.0, eps)
+    mut sm := run1("Sum", names2("x", "o"), names1("y"), no_attrs(), noinit, nonames, feeds3, names2("x", "o"), 0, ok)
+    testing.AssertEqFloat(sm.at(0), 0.0 - 1.5, eps)
+    mut me := run1("Mean", names2("x", "o"), names1("y"), no_attrs(), noinit, nonames, feeds3, names2("x", "o"), 0, ok)
+    testing.AssertEqFloat(me.at(0), 0.0 - 0.75, eps)
+
+    // ---- reductions ----
+    mut ra := no_attrs()
+    ra.push(attr_ints("axes", ilist(1 as i64)))
+    ra.push(attr_int("keepdims", 0))
+    mut rs := run_x("ReduceSum", x, ra, ok)
+    testing.AssertTrue(ok)
+    testing.AssertEqInt(rs.rank(), 1)
+    testing.AssertEqInt(rs.dim(0), 2)
+    mut want_rs := tensor.SumAxis(x, 1, false)
+    testing.AssertTrue(tensor.AllClose(rs, want_rs, eps))
+    mut ra2 := no_attrs()
+    ra2.push(attr_ints("axes", ilist(1 as i64)))
+    mut rm := run_x("ReduceMean", x, ra2, ok)
+    testing.AssertEqInt(rm.rank(), 2)      // keepdims defaults to 1
+    testing.AssertEqInt(rm.dim(1), 1)
+    mut want_rm := tensor.MeanAxis(x, 1, true)
+    testing.AssertTrue(tensor.AllClose(rm, want_rm, eps))
+    mut ra3 := no_attrs()
+    ra3.push(attr_ints("axes", ilist(0 as i64)))
+    ra3.push(attr_int("keepdims", 0))
+    mut rx := run_x("ReduceMax", x, ra3, ok)
+    mut want_rx := tensor.MaxAxis(x, 0, false)
+    testing.AssertTrue(tensor.AllClose(rx, want_rx, eps))
+    mut ra4 := no_attrs()
+    ra4.push(attr_ints("axes", ilist(0 as i64)))
+    ra4.push(attr_int("keepdims", 0))
+    mut rn := run_x("ReduceMin", x, ra4, ok)
+    testing.AssertEqFloat(rn.at(0), 0.0 - 2.5, eps)
+    // no axes at all reduces everything
+    mut rall := run_x("ReduceSum", x, no_attrs(), ok)
+    testing.AssertEqFloat(rall.at(0), tensor.SumAll(x), eps)
+
+    // ---- Gather, Slice, Split, Shape, Expand ----
+    mut table := tensor.Zeros2(4, 2)
+    repeat 8 with k: table.set_at(k, k as f64) end
+    mut ids := tensor.Zeros1(3)
+    ids.set_at(0, 2.0)
+    ids.set_at(1, 0.0)
+    ids.set_at(2, 3.0)
+    mut gfeeds := Vector {} as Vector<tensor.Tensor>
+    gfeeds.push(table)
+    gfeeds.push(ids)
+    mut gt := run1("Gather", names2("t", "i"), names1("y"), no_attrs(), noinit, nonames, gfeeds, names2("t", "i"), 0, ok)
+    testing.AssertTrue(ok)
+    testing.AssertEqInt(gt.dim(0), 3)
+    testing.AssertEqInt(gt.dim(1), 2)
+    testing.AssertEqFloat(gt.at2(0, 0), 4.0, eps)
+    testing.AssertEqFloat(gt.at2(1, 1), 1.0, eps)
+    testing.AssertEqFloat(gt.at2(2, 0), 6.0, eps)
+    // a negative index counts from the end
+    mut ids2 := tensor.Zeros1(1)
+    ids2.set_at(0, 0.0 - 1.0)
+    mut gfeeds2 := Vector {} as Vector<tensor.Tensor>
+    gfeeds2.push(table)
+    gfeeds2.push(ids2)
+    mut gt2 := run1("Gather", names2("t", "i"), names1("y"), no_attrs(), noinit, nonames, gfeeds2, names2("t", "i"), 0, ok)
+    testing.AssertEqFloat(gt2.at2(0, 0), 6.0, eps)
+    // along axis 1
+    mut ga := no_attrs()
+    ga.push(attr_int("axis", 1))
+    mut gt3 := run1("Gather", names2("t", "i"), names1("y"), ga, noinit, nonames, gfeeds2, names2("t", "i"), 0, ok)
+    testing.AssertEqInt(gt3.dim(1), 1)
+    testing.AssertEqFloat(gt3.at2(1, 0), 3.0, eps)
+
+    mut sa := no_attrs()
+    sa.push(attr_ints("starts", ilist(1 as i64)))
+    sa.push(attr_ints("ends", ilist(3 as i64)))
+    sa.push(attr_ints("axes", ilist(0 as i64)))
+    mut sl := run_x("Slice", table, sa, ok)
+    testing.AssertTrue(ok)
+    testing.AssertEqInt(sl.dim(0), 2)
+    testing.AssertEqFloat(sl.at2(0, 0), 2.0, eps)
+    // an end past the axis clamps
+    mut sa2 := no_attrs()
+    sa2.push(attr_ints("starts", ilist(2 as i64)))
+    sa2.push(attr_ints("ends", ilist(99 as i64)))
+    sa2.push(attr_ints("axes", ilist(0 as i64)))
+    mut sl2 := run_x("Slice", table, sa2, ok)
+    testing.AssertEqInt(sl2.dim(0), 2)
+
+    mut spa := no_attrs()
+    spa.push(attr_int("axis", 0))
+    mut spfeeds := Vector {} as Vector<tensor.Tensor>
+    spfeeds.push(table)
+    mut part0 := run1("Split", names1("t"), names2("a", "b"), spa, noinit, nonames, spfeeds, names1("t"), 0, ok)
+    testing.AssertTrue(ok)
+    testing.AssertEqInt(part0.dim(0), 2)
+    testing.AssertEqFloat(part0.at2(0, 0), 0.0, eps)
+    mut spa2 := no_attrs()
+    spa2.push(attr_int("axis", 0))
+    mut part1 := run1("Split", names1("t"), names2("a", "b"), spa2, noinit, nonames, spfeeds, names1("t"), 1, ok)
+    testing.AssertEqFloat(part1.at2(0, 0), 4.0, eps)
+
+    mut sh := run_x("Shape", table, no_attrs(), ok)
+    testing.AssertEqInt(sh.rank(), 1)
+    testing.AssertEqInt(sh.dim(0), 2)
+    testing.AssertEqFloat(sh.at(0), 4.0, eps)
+    testing.AssertEqFloat(sh.at(1), 2.0, eps)
+
+    mut small := tensor.Zeros2(1, 2)
+    small.set_at(0, 5.0)
+    small.set_at(1, 7.0)
+    mut shape_t := tensor.Zeros1(2)
+    shape_t.set_at(0, 3.0)
+    shape_t.set_at(1, 2.0)
+    mut efeeds := Vector {} as Vector<tensor.Tensor>
+    efeeds.push(small)
+    efeeds.push(shape_t)
+    mut ex := run1("Expand", names2("s", "d"), names1("y"), no_attrs(), noinit, nonames, efeeds, names2("s", "d"), 0, ok)
+    testing.AssertTrue(ok)
+    testing.AssertEqInt(ex.dim(0), 3)
+    testing.AssertEqFloat(ex.at2(2, 1), 7.0, eps)
+
+    // ---- comparisons and Where ----
+    mut gr := run1("Greater", names2("x", "o"), names1("y"), no_attrs(), noinit, nonames, feeds3, names2("x", "o"), 0, ok)
+    testing.AssertTrue(ok)
+    testing.AssertEqFloat(gr.at(0), 0.0, eps)
+    testing.AssertEqFloat(gr.at(5), 1.0, eps)
+    mut ls := run1("Less", names2("x", "o"), names1("y"), no_attrs(), noinit, nonames, feeds3, names2("x", "o"), 0, ok)
+    testing.AssertEqFloat(ls.at(0), 1.0, eps)
+    mut eqm := run1("Equal", names2("o", "o"), names1("y"), no_attrs(), noinit, nonames, feeds3, names2("o", "o"), 0, ok)
+    testing.AssertEqFloat(tensor.SumAll(eqm), 6.0, eps)
+    mut wfeeds := Vector {} as Vector<tensor.Tensor>
+    wfeeds.push(gr)
+    wfeeds.push(x)
+    wfeeds.push(other)
+    mut wh := run1("Where", names3("c", "a", "b"), names1("y"), no_attrs(), noinit, nonames, wfeeds, names3("c", "a", "b"), 0, ok)
+    testing.AssertTrue(ok)
+    testing.AssertEqFloat(wh.at(0), 1.0, eps)      // condition false: takes `other`
+    testing.AssertEqFloat(wh.at(5), 2.5, eps)      // condition true: takes x
+
+    // ---- PRelu and the normalizations ----
+    mut slope := tensor.Zeros1(1)
+    slope.set_at(0, 0.5)
+    mut pfeeds := Vector {} as Vector<tensor.Tensor>
+    pfeeds.push(x)
+    pfeeds.push(slope)
+    mut pr := run1("PRelu", names2("x", "s"), names1("y"), no_attrs(), noinit, nonames, pfeeds, names2("x", "s"), 0, ok)
+    testing.AssertTrue(ok)
+    testing.AssertEqFloat(pr.at(0), 0.0 - 1.25, eps)
+    testing.AssertEqFloat(pr.at(5), 2.5, eps)
+
+    mut sc := tensor.Zeros1(3)
+    repeat 3 with i: sc.set_at(i, 1.0) end
+    mut bi := tensor.Zeros1(3)
+    mut lfeeds := Vector {} as Vector<tensor.Tensor>
+    lfeeds.push(x)
+    lfeeds.push(sc)
+    lfeeds.push(bi)
+    mut ln := run1("LayerNormalization", names3("x", "s", "b"), names1("y"), no_attrs(), noinit, nonames, lfeeds, names3("x", "s", "b"), 0, ok)
+    testing.AssertTrue(ok)
+    testing.AssertEqInt(ln.dim(1), 3)
+    // each row now has zero mean and unit variance
+    mut row_ok := true
+    repeat 2 with r:
+        mut mean := 0.0
+        repeat 3 with c: mean += ln.at2(r, c) end
+        if math.Abs(mean) > 0.0001: row_ok = false end
+        mut var := 0.0
+        repeat 3 with c: var += ln.at2(r, c) * ln.at2(r, c) end
+        if math.Abs(var / 3.0 - 1.0) > 0.001: row_ok = false end
+    end
+    testing.AssertTrue(row_ok)
+
+    // ---- what is still unsupported says so ----
+    mut bad := run_x("Einsum", x, no_attrs(), ok)
+    testing.AssertFalse(ok)
+    testing.AssertTrue(bad.is_empty())
+
+    feeds2.free()
+    feeds3.free()
+    gfeeds.free()
+    gfeeds2.free()
+    spfeeds.free()
+    efeeds.free()
+    wfeeds.free()
+    pfeeds.free()
+    lfeeds.free()
+    x.free()
+    ab.free()
+    want_abs.free()
+    fl.free()
+    ce.free()
+    sg.free()
+    rc.free()
+    er.free()
+    gel.free()
+    want_gel.free()
+    sp.free()
+    el.free()
+    hs.free()
+    two.free()
+    pw.free()
+    want_pw.free()
+    other.free()
+    mx.free()
+    mn.free()
+    sm.free()
+    me.free()
+    rs.free()
+    want_rs.free()
+    rm.free()
+    want_rm.free()
+    rx.free()
+    want_rx.free()
+    rn.free()
+    rall.free()
+    table.free()
+    ids.free()
+    ids2.free()
+    gt.free()
+    gt2.free()
+    gt3.free()
+    sl.free()
+    sl2.free()
+    part0.free()
+    part1.free()
+    sh.free()
+    small.free()
+    shape_t.free()
+    ex.free()
+    gr.free()
+    ls.free()
+    eqm.free()
+    wh.free()
+    slope.free()
+    pr.free()
+    sc.free()
+    bi.free()
+    ln.free()
+    bad.free()
+    ret testing.Summary()
+end

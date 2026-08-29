@@ -1,19 +1,5 @@
 ---
 name: 🧬 Self-Host - Bootstrap & Parity
-# Builds the self-hosted compiler (compiler/*.salam) the way a user would -
-# install a released `salam`, then `salam build compiler/main.salam` - and
-# gates it against the reference compiler on the shared test corpus.
-#
-# Wants to touch nothing in c/: no `make`, no C sources. The only compiler
-# this workflow should need is the released binary install.sh fetches, which
-# is also the reference the parity gate diffs against. That is the whole
-# point - it is the proving ground for making the self-hosted compiler
-# primary, and it must not depend on the C build to work.
-#
-# One exception, and it is meant to be temporary: when the latest release
-# predates SEED_MIN it cannot resolve the compiler's `../` imports at all
-# (see "Pick the stage-0 compiler"), so stage 0 falls back to building c/.
-# The parity gate still diffs against the released binary either way.
 # checkov:skip=CKV_GHA_7:inputs are only ever read via env: indirection, never interpolated into a run: script
 on:
   push:
@@ -40,11 +26,6 @@ on:
         description: 'Released salam version to bootstrap FROM (e.g. 0.2.7). Blank = latest release with an asset for the runner platform.'
         type: string
         default: ''
-# ccache stores its objects zstd-compressed, but at its default level. The
-# 10 GB Actions cache budget is repository-wide and shared with every other
-# workflow, so raise the level: smaller uploads, and because --max-size caps
-# the COMPRESSED size, more objects fit in the same budget. Matches the value
-# compiler-release.yml sets for the same reason.
 env:
   CCACHE_COMPRESS: '1'
   CCACHE_COMPRESSLEVEL: '9'
@@ -55,11 +36,6 @@ concurrency:
   group: compiler-selfhost-${{ github.ref }}
   cancel-in-progress: true
 jobs:
-  # Resolved once, in its own job, because a matrix job's outputs are
-  # written by every leg and the surviving value is whichever finished
-  # last. Every downstream job pins this exact version so the whole run
-  # bootstraps from, and diffs against, one reference compiler - even if a
-  # release is published while the run is in flight.
   seed:
     name: Resolve seed release
     runs-on: ubuntu-latest
@@ -75,10 +51,6 @@ jobs:
         id: resolve
         env:
           SALAM_VERSION: ${{ inputs.seed_version }}
-          # checkout runs with persist-credentials: false, so install.sh only
-          # sees a token if this step hands it one. Without it the releases
-          # API call is anonymous and shares a per-IP budget with every other
-          # runner on the same address, which is a 403 waiting to happen.
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -eu
@@ -92,12 +64,7 @@ jobs:
     name: Bootstrap on ${{ matrix.os }}
     needs: seed
     runs-on: ${{ matrix.os }}
-    # macOS is not yet known-good for the self-hosted driver; keep it
-    # visible without letting it block the branch. Drop `experimental`
-    # from the matrix entry once it goes green consistently.
     continue-on-error: ${{ matrix.experimental }}
-    # 60, not 45: a cold macOS cache builds lld from source (~10-20 min on
-    # top of the archive merge). Warm runs are unaffected.
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -111,9 +78,6 @@ jobs:
         with:
           persist-credentials: false
 
-      # Uses the checked-out install.sh rather than curl-ing it from main,
-      # so a PR that breaks the installer fails here instead of shipping.
-      # It still downloads the same published release archive.
       - name: Install seed salam from a published release
         env:
           SALAM_VERSION: ${{ needs.seed.outputs.version }}
@@ -123,14 +87,6 @@ jobs:
           sh ./install.sh
           echo "$HOME/.salam/bin" >> "$GITHUB_PATH"
 
-      # Released macOS binaries up to 0.2.7 were linked against Homebrew's
-      # llvm@22 and inherited its optional Z3 solver as a *versioned* Cellar
-      # dylib (/opt/homebrew/opt/z3/lib/libz3.4.16.dylib). Nothing installs
-      # that on a stock runner, so the seed aborts under dyld before it can
-      # compile anything and stage 1 dies with "Abort trap: 6". c/Makefile no
-      # longer links -lz3 and compiler-release.yml now gates on otool, so this
-      # whole step can be deleted once the resolved seed is a release built
-      # after those changes - it is a no-op for a clean binary.
       - name: Repair the seed binary's Homebrew dylib deps (macOS)
         if: runner.os == 'macOS'
         env:
@@ -150,10 +106,6 @@ jobs:
             echo "seed needs missing $lib - installing formula '$formula'"
             brew install "$formula" || true
             if [ -f "$lib" ]; then continue; fi
-            # Homebrew has moved on to a different soname than the one the
-            # seed was built against. Point the old name at whatever is
-            # there: the seed links these libraries but never calls into
-            # them, so it only has to satisfy dyld at load time.
             dir=$(dirname "$lib")
             stem=$(basename "$lib" | cut -d. -f1)
             alt=$(find "$dir" -maxdepth 1 -name "$stem.*.dylib" 2>/dev/null | head -1 || true)
@@ -165,9 +117,6 @@ jobs:
             echo "linked $lib -> $alt"
           done
 
-      # Deliberately not `salam version | head -1`: in a pipeline the exit
-      # status is head's, so a seed that cannot even start reports success and
-      # the real failure only surfaces several steps later, inside bootstrap.sh.
       - name: Verify the seed compiler runs
         run: |
           set -eu
@@ -175,50 +124,9 @@ jobs:
           head -1 seed-version.txt
           rm -f seed-version.txt
 
-      # Which compiler builds stage 1. Normally the release - proving it can
-      # is most of why this workflow exists. But 0.2.7 and older join an
-      # import spec onto the importing file's directory and never collapse
-      # the "..", so compiler/cli/../token.salam and compiler/token.salam are
-      # two separate modules to them, and every extra hop through a
-      # subdirectory multiplies the spellings again
-      # (compiler/cli/../driver/../ast.salam, and so on). Since compiler/ was
-      # split into per-stage directories, its 45 modules expand to 501
-      # work-list entries on such a seed - against its SALAM_MAX_INPUTS of
-      # 64. Entries past the cap are dropped with no diagnostic, so stage 1
-      # died in the C compiler on a missing salam_mod_encoding.h that
-      # crypto.h still #include'd. No amount of trimming closes a 501-vs-64
-      # gap; the seed simply has to be one that canonicalizes "..".
-      #
-      # 0.2.8 fixed that but stops short of a second requirement: a generic
-      # method is instantiated into the header of whichever module uses it, so
-      # `Vector<str>.zeros` lands in str's header while the mem function it
-      # calls is only declared in mem's, which that header reaches long after
-      # the call. 0.2.8 emits no prototype for such a callee, leaving a C89
-      # implicit declaration that gcc 16 rejects outright - stage 1 dies in
-      # the C compiler on `_Salam_mem_AllocateZeroed_u64`. Nothing in std/ can
-      # work around it: the seed only ever declares the three allocator
-      # entry points its own prelude hard-codes.
-      #
-      # 0.2.9 clears both of those and still cannot be a seed, for a reason
-      # that is about the language rather than the C it emits: Vector.get
-      # returns the element now, not its address, and `each x in vec` lowers
-      # to a bare get instead of get(i)[0]. A 0.2.9 seed lowers the old way,
-      # so the first `each` over a Vector in compiler/ (sal_core.salam's
-      # `each p in a.blocks`) indexes an element that is no longer a pointer
-      # and stage 1 dies in semantic analysis.
-      #
-      # All of it - the "seg/../" collapse, the raised cap, the generic
-      # instantiation's cross-package prototypes, and the get/ref split - is
-      # already in c/, so until a release carries them the in-repo reference
-      # compiler stands in as stage 0. Once SEED_MIN is published this step
-      # no-ops itself; delete it then, along with the note at the top of the
-      # file.
       - name: Pick the stage-0 compiler
         env:
           SEED_VERSION: ${{ needs.seed.outputs.version }}
-          # First release that collapses "seg/../", forward-declares the
-          # cross-package callees of a generic instantiation, and lowers
-          # `each` over a Vector to a value-returning get.
           SEED_MIN: '0.3.1'
         run: |
           set -eu
@@ -229,41 +137,11 @@ jobs:
             echo "SALAM_SEED=$HOME/.salam/bin/salam" >> "$GITHUB_ENV"
             exit 0
           fi
-          # This used to fall back to `make -C c`, which no longer exists.
-          # There is no other way to get a stage 0: the compiler is written in
-          # its own language, and a seed older than SEED_MIN cannot resolve
-          # compiler/'s ../ imports. Failing loudly beats bootstrapping from
-          # something that cannot parse the sources.
           echo "::error::seed $SEED_VERSION predates $SEED_MIN and cannot resolve" \
             "compiler/'s ../ imports. Publish a $SEED_MIN or newer release, or" \
             "point SALAM_SEED at a newer binary."
           exit 1
 
-      # Static in-process LLVM/LLD for the self-hosted compiler, so stage2
-      # lowers IR itself instead of shelling out to a clang/lld the user
-      # would have to install. Without libsalam_llvm.a, bootstrap.sh's
-      # SALAM_HAVE_LLVM gate stays off and the compiler falls back to the C
-      # backend - which is what the parity gate used to measure.
-      #
-      # Best-effort on purpose: the archive needs LLVM development libraries,
-      # and this job's value (does the compiler bootstrap at all) must not
-      # depend on apt. A failure here downgrades stage2 to the C backend and
-      # says so; it never fails the job. Once this is green on a few runs,
-      # tighten it by setting SALAM_WITH_LLVM=1 on the bootstrap step below,
-      # which turns a missing archive into a hard error.
-      # `make libsalam-llvm` merges every LLVM/LLD static archive into
-      # libsalam_llvm.a with `ar -M` (see c/Makefile's LLVM_MERGE_LIBS), so
-      # the result is SELF-CONTAINED: a cache hit needs neither llvm-*-dev
-      # nor lld installed, only the handful of small system libs std/llvm
-      # links alongside it. That is what makes caching worth it here - a hit
-      # skips a ~1 GB apt install and the whole archive merge.
-      #
-      # No restore-keys, deliberately. Every other cache in this repository
-      # uses them, but a prefix match here would restore an archive built
-      # from *different* sources: it would link happily and miscompile. The
-      # key is an exact content hash of everything that ends up in the
-      # archive - the two translation units plus the headers they include -
-      # so a miss is correct and a hit is safe.
       - name: Cache static LLVM/LLD archive
         id: llvm-archive
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -273,11 +151,6 @@ jobs:
             salam-llvm-a-${{ matrix.os }}-llvm22-${{ hashFiles(
             'std/llvm/native/**') }}
 
-      # Only useful on a miss, and only for the handful of objects that are
-      # actually compiled (orc_call.c, lld_stub.c, lld_link.cc); the bulk of
-      # the archive is prebuilt LLVM. Cheap to keep, and it makes a
-      # source-only change to those files rebuild in seconds instead of
-      # minutes.
       - name: Cache ccache for the LLVM archive build
         if: steps.llvm-archive.outputs.cache-hit != 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -287,19 +160,6 @@ jobs:
           restore-keys: |
             ccache-selfhost-llvm-${{ matrix.os }}-
 
-      # macOS only, and the reason is upstream packaging: Homebrew's lld
-      # formula is BUILD_SHARED_LIBS=ON, so the machine has liblld*.dylib and
-      # no archives, and an archive is the only thing libsalam_llvm.a can
-      # absorb. Building the same release from source with the shared-libs
-      # switch off is what lets a Mac carry in-process LLD internally, the
-      # way apt.llvm.org's liblld-22-dev already lets Linux.
-      #
-      # Its own cache, keyed on the script and the LLVM major: it is a
-      # ~10 minute build, and it must not be redone every time the archive
-      # key moves for an unrelated reason. Restore-keys are safe here, unlike
-      # for the archive itself - the payload is a plain upstream release
-      # build with no salam sources in it, and the script re-verifies the
-      # version before reusing what it finds.
       - name: Cache static lld (macOS)
         id: lld-static
         if: runner.os == 'macOS' && steps.llvm-archive.outputs.cache-hit != 'true'
@@ -316,19 +176,11 @@ jobs:
         if: steps.llvm-archive.outputs.cache-hit != 'true'
         run: |
           set -u
-          # Not `env: CCACHE_DIR: ~/.ccache`: Actions does not expand `~` in
-          # env values, so ccache would create a literal "~" directory in the
-          # workspace and the cache step above would never see a thing.
           CCACHE_DIR="$HOME/.ccache"
           export CCACHE_DIR
           mkdir -p "$CCACHE_DIR"
           case "${{ matrix.os }}" in
           ubuntu*)
-            # apt.llvm.org publishes AAAA records and the hosted runners have no
-            # IPv6 route, so apt picks the v6 address and stops there: "Cannot
-            # initiate the connection to apt.llvm.org:443 (2a04:4e42:94::561) -
-            # connect (101: Network is unreachable)", then "no longer has a Release
-            # file". Pin apt to IPv4 before llvm.sh runs its own apt-get update.
             echo 'Acquire::ForceIPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4 >/dev/null
             wget -4 -qO llvm.sh https://apt.llvm.org/llvm.sh
             chmod +x llvm.sh
@@ -342,17 +194,6 @@ jobs:
           macos*)
             brew install ccache llvm lld || true
             LLVM_CONFIG="$(brew --prefix llvm)/bin/llvm-config"
-            # Homebrew's lld formula is BUILD_SHARED_LIBS=ON, so it leaves
-            # liblld*.dylib and no archives - and only an archive can go into
-            # libsalam_llvm.a. Build the matching release from source with
-            # the switch off, so a Mac carries in-process LLD internally
-            # instead of depending on what the package manager felt like
-            # shipping. Restored from its own cache when warm; the script
-            # exits early if the prefix is already populated.
-            #
-            # Best-effort by design: what a failure here costs is in-process
-            # LLD, not the job. The Makefile then probes for liblld*.a, finds
-            # none, and builds LLVM-without-LLD - see the LLD_ARGS block.
             if [ ! -f lldstatic/lib/liblldCommon.a ]; then
               sh tools/bash/build-static-lld.sh \
                 --prefix "$PWD/lldstatic" \
@@ -367,12 +208,6 @@ jobs:
             LLVM_CONFIG=llvm-config
             ;;
           esac
-          # Fatal, not a warning. Every failure path in this step used to be
-          # `|| true`, `exit 0` or `::warning::`, so a flaky apt.llvm.org - or
-          # anything else that left llvm-config missing - produced a green job
-          # whose stage2 had silently dropped to the C backend. That is how a
-          # release ships without the backend it is supposed to default to,
-          # and it is invisible in the summary because nothing is red.
           if ! command -v "$LLVM_CONFIG" >/dev/null 2>&1; then
             echo "::error::no $LLVM_CONFIG - refusing to build a stage2 that falls back to the C backend"
             exit 1
@@ -385,18 +220,6 @@ jobs:
             C_COMPILER="ccache gcc"
             CXX_COMPILER="ccache g++"
           fi
-          # Linux gets its static lld from liblld-22-dev, so WITH_LLD is
-          # forced there and a silent 0 is a failure, not a downgrade.
-          #
-          # macOS has to build its own (Homebrew's is shared-only), which is
-          # what LLD_PREFIX below points at. Best-effort on purpose: if that
-          # build did not happen, the Makefile's probe finds no liblld*.a,
-          # settles on WITH_LLD=0, and the job still produces a working
-          # stage2 - LLVM codegen in-process, the final link through cc,
-          # which is what a macOS host does even with LLD linked in, since
-          # in-process LLD only ever serves the mingw-gnu and linux-musl
-          # triples. So a Mac never *needs* it; having it means a Mac can
-          # cross-link to Linux and Windows with nothing else installed.
           LLD_ARGS=WITH_LLD=1
           case "${{ matrix.os }}" in
           macos*)
@@ -409,28 +232,16 @@ jobs:
             ;;
           esac
           echo "lld: ${LLD_ARGS:-(autodetect)}"
-          # LLD_ARGS carried the Makefile's WITH_LLD/LLD_EXTRA_LIBDIR pair;
-          # the script takes them as environment instead.
           # shellcheck disable=SC2086 # deliberately unquoted: empty = omit
           if env $LLD_ARGS CC="$C_COMPILER" CXX="$CXX_COMPILER" \
             sh std/llvm/native/build.sh --llvm-config "$LLVM_CONFIG" \
             --out "$GITHUB_WORKSPACE"; then
-            # The merged archive carries LLVM's own DWARF, which nothing here
-            # ever reads: it describes LLVM's internals, not the user program
-            # being compiled. Dropping it is the single biggest lever on this
-            # cache entry, and the repository's 10 GB cache budget is shared
-            # with every other workflow.
-            #
-            # --strip-debug only, never --strip-all or --strip-unneeded: those
-            # drop the symbol table a static archive is linked BY. ranlib
-            # afterwards rebuilds the archive index that strip invalidates.
             before=$(wc -c <libsalam_llvm.a | tr -d ' ')
             strip --strip-debug libsalam_llvm.a 2>/dev/null ||
               strip -S libsalam_llvm.a 2>/dev/null || true
             ranlib libsalam_llvm.a 2>/dev/null || true
             after=$(wc -c <libsalam_llvm.a | tr -d ' ')
             echo "libsalam_llvm.a: $before -> $after bytes after --strip-debug"
-            # A stripped archive that no longer links is worse than a big one.
             if ! ar t libsalam_llvm.a >/dev/null 2>&1; then
               echo "::error::libsalam_llvm.a is unreadable after strip"
               rm -f libsalam_llvm.a
@@ -443,21 +254,6 @@ jobs:
           fi
           command -v ccache >/dev/null 2>&1 && ccache --show-stats | head -5
 
-      # Needed whether the archive was built or restored: std/llvm links
-      # `link static "z"` / `"zstd"` next to libsalam_llvm.a, and the static
-      # libz.a/libzstd.a come from these packages. A few hundred KB, versus
-      # the ~1 GB of llvm-*-dev the cache hit avoided.
-      # Unconditional rather than gated on the archive existing: these are a
-      # few hundred KB and usually already present, so the check would cost
-      # more than the install. Notably NOT gated with
-      # `hashFiles('libsalam_llvm.a')`, which would read and hash a
-      # multi-hundred-MB archive just to decide whether to run apt.
-      #
-      # macOS needs the same treatment: zstd is the one LLVM system library
-      # its SDK does not carry, so a cache hit that skipped `brew install
-      # llvm` (which pulls zstd in as a dependency) would leave the stage 2
-      # link with nothing to resolve -lzstd against. bootstrap.sh finds the
-      # keg and passes it as --libpath.
       - name: Install LLVM link-time system libs
         run: |
           set -u
@@ -471,17 +267,6 @@ jobs:
           set -eu
           sh compiler/tools/bash/bootstrap.sh "$SALAM_SEED" build/selfhost
 
-      # Records which backend stage2 actually got, so a silent downgrade to
-      # the C backend is visible in the log rather than only showing up as a
-      # parity number weeks later.
-      # Every stage, not just stage2: LLVM is meant to be in all three now
-      # (bootstrap.sh links it into stage1 as well and compiles each stage
-      # with its builder's in-process LLVM), so a downgrade anywhere in the
-      # chain is worth seeing. bootstrap.sh already fails a stage that was
-      # asked to link LLVM and came out without it - this re-checks the
-      # shipped artifacts independently and prints the sizes, which is the
-      # cheapest possible tell: a stage with static LLVM inside is ~160MB and
-      # one without is ~1.5MB.
       - name: Report per-stage backend
         env:
           SALAM_STD: ${{ github.workspace }}/std
@@ -530,9 +315,6 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # One leg per suite so the two runs each suite needs (reference +
-        # self-host) overlap with the other suites instead of queueing
-        # behind them. Suites must match compiler/tools/selfhost-parity-budget.txt.
         suite: [exec, layout, llvm, errors, general]
     steps:
       - name: Checkout code
@@ -540,9 +322,6 @@ jobs:
         with:
           persist-credentials: false
 
-      # Pinned to the exact version the bootstrap job resolved, so every
-      # matrix leg diffs against the same reference even if a release is
-      # published mid-run.
       - name: Install the same seed salam (reference compiler)
         env:
           SALAM_VERSION: ${{ needs.seed.outputs.version }}
@@ -562,11 +341,6 @@ jobs:
         run: |
           set -eu
           sudo apt-get update
-          # libsqlite3/libmariadb/libhiredis: `link dynamic` targets several
-          # tests need present to link at all. Missing ones fail BOTH
-          # compilers, so they would not break the delta - installing them
-          # just keeps the comparison wide. tcc, the corpus' default --cc for
-          # `general`, comes from the pinned build in the next step.
           sudo apt-get install -y libsqlite3-dev libhiredis-dev libmariadb-dev
 
       - name: Set up pinned tcc

@@ -1,0 +1,143 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/ml: multinomial naive Bayes on word counts, truncated SVD on the
+// same document-term matrix, and the elastic net constructor.
+
+import math
+import matrix
+import ml
+import testing
+
+// Six documents over a five-word vocabulary: the first three are about
+// one topic (words 0 and 1), the last three about another (words 3, 4).
+func corpus(): matrix.Matrix:
+    mut x := matrix.Zeros(6, 5)
+    counts := [
+        [4.0, 3.0, 1.0, 0.0, 0.0]
+        [5.0, 2.0, 0.0, 0.0, 1.0]
+        [3.0, 4.0, 1.0, 1.0, 0.0]
+        [0.0, 0.0, 1.0, 4.0, 3.0]
+        [1.0, 0.0, 0.0, 5.0, 2.0]
+        [0.0, 1.0, 1.0, 3.0, 4.0]
+    ]
+    repeat 6 with i:
+        repeat 5 with j: x.set(i, j, counts[i][j]) end
+    end
+    ret x
+end
+
+func main:
+    mut x := corpus()
+    mut y := matrix.Zeros(6, 1)
+    repeat 3 with i: y.set(i + 3, 0, 1.0) end
+
+    // MultinomialNB separates the two topics
+    mut nb := ml.MultinomialNB {}
+    testing.AssertTrue(nb.fit(x, y))
+    testing.AssertTrue(nb.ok)
+    testing.AssertEqInt(nb.n_classes, 2)
+    testing.AssertEqFloat(nb.score(x, y), 1.0, 0.0)
+    // per-class word distributions are normalized in log space
+    repeat 2 with c:
+        mut s := 0.0
+        repeat 5 with j: s += math.Exp(nb.log_prob.at(c, j)) end
+        testing.AssertEqFloat(s, 1.0, 0.000001)
+    end
+    // equal class sizes give equal priors
+    testing.AssertEqFloat(nb.log_priors.at(0, 0), nb.log_priors.at(1, 0), 0.000000001)
+    // an unseen document of topic-one words lands in class 0
+    mut q := matrix.Zeros(1, 5)
+    q.set(0, 0, 2.0)
+    q.set(0, 1, 3.0)
+    mut pq := nb.predict(q)
+    testing.AssertEqFloat(pq.at(0, 0), 0.0, 0.0)
+    mut pr := nb.predict_proba(q)
+    testing.AssertEqFloat(pr.at(0, 0) + pr.at(0, 1), 1.0, 0.000001)
+    testing.AssertTrue(pr.at(0, 0) > 0.9)
+    // smoothing keeps a zero count finite
+    testing.AssertTrue(nb.log_prob.at(0, 3) > 0.0 - 100.0)
+    // negative "counts" are refused
+    mut neg := matrix.Clone(x)
+    neg.set(0, 0, 0.0 - 1.0)
+    mut nb2 := ml.MultinomialNB {}
+    testing.AssertFalse(nb2.fit(neg, y))
+    testing.AssertFalse(nb2.ok)
+    mut none := nb2.predict(q)
+    testing.AssertTrue(none.is_empty())
+    // a flat prior ignores class sizes
+    mut y2 := matrix.Zeros(6, 1)
+    y2.set(5, 0, 1.0)
+    mut nb3 := ml.MultinomialNB { fit_prior = false }
+    testing.AssertTrue(nb3.fit(x, y2))
+    testing.AssertEqFloat(nb3.log_priors.at(0, 0), nb3.log_priors.at(1, 0), 0.000000001)
+
+    // TruncatedSVD: two components carry nearly all of the energy, and
+    // the two topics land on opposite sides of the first one
+    mut sv := ml.TruncatedSVD { n_components = 2 }
+    mut z := sv.fit_transform(x)
+    testing.AssertTrue(sv.ok)
+    testing.AssertEqInt(z.rows, 6)
+    testing.AssertEqInt(z.cols, 2)
+    testing.AssertEqInt(sv.components.rows, 5)
+    testing.AssertEqInt(sv.components.cols, 2)
+    testing.AssertTrue(sv.singular_values.at(0, 0) >= sv.singular_values.at(0, 1))
+    testing.AssertTrue(sv.explained_ratio.at(0, 0) + sv.explained_ratio.at(0, 1) > 0.9)
+    mut sep := true
+    repeat 3 with i:
+        if z.at(i, 1) * z.at(i + 3, 1) >= 0.0: sep = false end
+    end
+    testing.AssertTrue(sep)
+    // the reconstruction is close, and does not re-center anything
+    mut back := sv.inverse_transform(z)
+    testing.AssertEqInt(back.rows, 6)
+    testing.AssertTrue(matrix.AllClose(back, x, 0.6))
+    // asking for more components than the data has clamps
+    mut sv2 := ml.TruncatedSVD { n_components = 99 }
+    testing.AssertTrue(sv2.fit(x))
+    testing.AssertEqInt(sv2.n_components, 5)
+    mut fresh := ml.TruncatedSVD {}
+    testing.AssertTrue(fresh.transform(x).is_empty())
+
+    // The elastic net constructor mixes both penalties
+    mut en := ml.NewElasticNet(0.1, 0.5)
+    testing.AssertEqFloat(en.alpha, 0.1, 0.0)
+    testing.AssertEqFloat(en.l1_ratio, 0.5, 0.0)
+    mut ey := matrix.Zeros(6, 1)
+    repeat 6 with i: ey.set(i, 0, x.at(i, 0) * 2.0 - x.at(i, 3)) end
+    testing.AssertTrue(en.fit(x, ey))
+    testing.AssertTrue(en.score(x, ey) > 0.9)
+
+    nb.free()
+    nb2.free()
+    nb3.free()
+    sv.free()
+    sv2.free()
+    fresh.free()
+    en.free()
+    matrix.Free(x)
+    matrix.Free(y)
+    matrix.Free(y2)
+    matrix.Free(q)
+    matrix.Free(pq)
+    matrix.Free(pr)
+    matrix.Free(neg)
+    matrix.Free(none)
+    matrix.Free(z)
+    matrix.Free(back)
+    matrix.Free(ey)
+    ret testing.Summary()
+end

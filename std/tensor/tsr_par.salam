@@ -1,0 +1,210 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package tensor
+
+import pool
+
+// The parallel drivers, and the one file in this package that owns
+// mutable globals.
+//
+// Salam lambdas capture by value, so a pool.ParallelFor body can carry
+// nothing but its index; every input a worker needs travels through the
+// module-level slots below. That is the sanctioned std/pool pattern
+// (tests/en/general/pool_parallel.salam), and confining the slots to
+// this file keeps the arrangement an implementation detail: nothing
+// else in the package touches them, and nothing outside the package can.
+//
+// Two consequences the rest of the library is built around:
+//
+//   - Tensor kernels are NOT re-entrant. A ParallelFor body must never
+//     call back into a parallel tensor op - the second call would
+//     overwrite the first one's slots. Training loops stay serial at
+//     the top and parallel inside kernels, and BatchMatMul picks ONE
+//     level to parallelize for the same reason.
+//   - Results are bit-identical to the serial kernels at every thread
+//     count. Elementwise chunks touch disjoint ranges of a pure map;
+//     the gemm splits into row bands, and a result row is computed by
+//     exactly the same packing, blocking and accumulation order
+//     whichever band it lands in. Determinism here is what lets every
+//     training demo assert its numbers in a checked-in .out file.
+//
+// Thread policy: SetThreads(n) pins the count, 0 restores the default
+// of CPUCount() capped at 8 - past that, these kernels are memory-bound
+// and extra workers just queue on the same DRAM channels. Every entry
+// point falls back to the serial kernel below its size threshold, since
+// ParallelFor spawns and joins real OS threads per call and that costs
+// tens of microseconds.
+
+// Work below these sizes runs serial: the spawn/join overhead would
+// outweigh the split. _EW_* are element counts, _GM_MIN_FLOPS compares
+// against 2*n*k*m.
+const _EW_CHUNK := 65536
+const _EW_MIN := 262144
+const _GM_MIN_FLOPS := 32000000.0
+
+mut _tsr_threads := 0
+
+// Elementwise slots: same-shape zip and unary map.
+mut _ew_pa := null as f32*
+mut _ew_pb := null as f32*
+mut _ew_pr := null as f32*
+mut _ew_n := 0
+mut _ew_op := 0
+
+// Gemm row-band slots.
+mut _gm_px := null as f32*
+mut _gm_py := null as f32*
+mut _gm_pr := null as f32*
+mut _gm_n := 0
+mut _gm_k := 0
+mut _gm_m := 0
+mut _gm_band := 0
+
+// Batch matmul slots.
+mut _bm_px := null as f32*
+mut _bm_py := null as f32*
+mut _bm_pr := null as f32*
+mut _bm_n := 0
+mut _bm_k := 0
+mut _bm_m := 0
+
+func _ew_zip_worker(t: i64):
+    off := (t as int) * _EW_CHUNK
+    mut cnt := _ew_n - off
+    if cnt > _EW_CHUNK: cnt = _EW_CHUNK end
+    _k_same(_p32(_ew_pa, off), _p32(_ew_pb, off), _p32(_ew_pr, off), cnt, _ew_op)
+end
+
+func _ew_map_worker(t: i64):
+    off := (t as int) * _EW_CHUNK
+    mut cnt := _ew_n - off
+    if cnt > _EW_CHUNK: cnt = _EW_CHUNK end
+    _u_range(_p32(_ew_pa, off), _p32(_ew_pr, off), cnt, _ew_op)
+end
+
+func _gm_worker(t: i64):
+    start := (t as int) * _gm_band
+    mut rows := _gm_n - start
+    if rows > _gm_band: rows = _gm_band end
+    if rows <= 0: ret end
+    _gemm_acc(_p32(_gm_px, start * _gm_k), _gm_py, _p32(_gm_pr, start * _gm_m), rows, _gm_k, _gm_m)
+end
+
+func _bm_worker(t: i64):
+    i := t as int
+    _gemm_acc(
+        _p32(_bm_px, i * _bm_n * _bm_k), _p32(_bm_py, i * _bm_k * _bm_m), _p32(_bm_pr, i * _bm_n * _bm_m), _bm_n, _bm_k, _bm_m
+    )
+end
+
+// Same-shape binary op over flat buffers, parallel when it pays.
+func _par_zip(pa: f32*, pb: f32*, pr: f32*, n: int, op: int):
+    if n < _EW_MIN || Threads() <= 1:
+        _k_same(pa, pb, pr, n, op)
+        ret
+    end
+    _ew_pa = pa
+    _ew_pb = pb
+    _ew_pr = pr
+    _ew_n = n
+    _ew_op = op
+    chunks := (n + _EW_CHUNK - 1) / _EW_CHUNK
+    pool.ParallelFor(chunks as i64, Threads() as i64, (i: i64): _ew_zip_worker(i) end)
+end
+
+// Unary map over flat buffers, parallel when it pays.
+func _par_map(pa: f32*, pr: f32*, n: int, op: int):
+    if n < _EW_MIN || Threads() <= 1:
+        _u_range(pa, pr, n, op)
+        ret
+    end
+    _ew_pa = pa
+    _ew_pr = pr
+    _ew_n = n
+    _ew_op = op
+    chunks := (n + _EW_CHUNK - 1) / _EW_CHUNK
+    pool.ParallelFor(chunks as i64, Threads() as i64, (i: i64): _ew_map_worker(i) end)
+end
+
+// r += x y with the row range split into per-thread bands. Bands are a
+// multiple of the micro-kernel's row count, so every row sees exactly
+// the serial kernel's treatment; each worker runs the full packed
+// pipeline over its band, which re-packs y once per band - an O(k*m)
+// cost per extra thread against the O(n*k*m) it divides.
+func _par_gemm(px: f32*, py: f32*, pr: f32*, n: int, kn: int, m: int):
+    t := Threads()
+    flops := 2.0 * (n as f64) * (kn as f64) * (m as f64)
+    if t <= 1 || flops < _GM_MIN_FLOPS || n < 2 * _MR:
+        _gemm_acc(px, py, pr, n, kn, m)
+        ret
+    end
+    mut band := (n + t - 1) / t
+    band = ((band + _MR - 1) / _MR) * _MR
+    bands := (n + band - 1) / band
+    _gm_px = px
+    _gm_py = py
+    _gm_pr = pr
+    _gm_n = n
+    _gm_k = kn
+    _gm_m = m
+    _gm_band = band
+    pool.ParallelFor(bands as i64, t as i64, (i: i64): _gm_worker(i) end)
+end
+
+// The batch product sweep: one worker per sample, each running the
+// serial kernel - never both levels at once (see the re-entrancy note).
+func _par_batch_gemm(px: f32*, py: f32*, pr: f32*, b: int, n: int, kn: int, m: int):
+    t := Threads()
+    if t <= 1 || b < 2:
+        repeat b with i:
+            _par_gemm(_p32(px, i * n * kn), _p32(py, i * kn * m), _p32(pr, i * n * m), n, kn, m)
+        end
+        ret
+    end
+    if b < t:
+        // Few large samples: keep the batch loop serial and let each
+        // product split into row bands instead.
+        repeat b with i:
+            _par_gemm(_p32(px, i * n * kn), _p32(py, i * kn * m), _p32(pr, i * n * m), n, kn, m)
+        end
+        ret
+    end
+    _bm_px = px
+    _bm_py = py
+    _bm_pr = pr
+    _bm_n = n
+    _bm_k = kn
+    _bm_m = m
+    pool.ParallelFor(b as i64, t as i64, (i: i64): _bm_worker(i) end)
+end
+
+// ---- public API ----
+
+// Pins the worker count for every parallel kernel in this package.
+// 0 restores the default (CPUCount capped at 8); 1 forces serial.
+@en "SetThreads"
+@fa "تنظیم نخ‌ها"
+@ar "تعيين الخيوط"
+pub func SetThreads(n: int): _tsr_threads = n end
+
+@en "Threads"
+@fa "نخ‌ها"
+@ar "الخيوط"
+pub func Threads(): int:
+    if _tsr_threads > 0: ret _tsr_threads end
+    c := pool.CPUCount() as int
+    if c > 8: ret 8 end
+    ret c
+end

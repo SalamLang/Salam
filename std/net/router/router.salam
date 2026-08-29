@@ -17,6 +17,8 @@
 @ar "موجه الشبکة"
 package router
 
+import mem
+
 // Path/method routing, extracted out of std/web's router.salam so it can
 // be reasoned about (and reused) independently of any particular HTTP
 // server implementation. The original `_try_match` wrote extracted
@@ -44,6 +46,10 @@ package router
 // wildcard, exactly like Go/Express routers, regardless of the order
 // routes were registered in.
 
+const _CH_SLASH := 47
+const _CH_COLON := 58
+const _CH_STAR := 42
+
 @en "Param"
 @fa "پارامتر"
 @ar "معامل"
@@ -66,6 +72,11 @@ pub struct Route:
     pub method: str = ""
     pub pattern: str = ""
     pub fn: i64 = 0
+    // The method as a small integer, assigned once at registration. Dispatch
+    // used to strcmp the verb against every route on every request; comparing
+    // an int rejects the wrong ones in a cycle. 0 means "some other verb",
+    // which falls back to comparing the strings.
+    pub mid: int = 0
     // 0 literal, 1 has a ":param", 2 has a "*" - computed once when the
     // route is registered rather than re-derived from the pattern on every
     // request. Dispatch used to call _specificity (two substring searches)
@@ -83,6 +94,21 @@ pub struct Router:
     pub static_dir: str = ""
     pub has_static: bool = false
     pub static_listing: bool = false
+    // Open-addressed index over the literal routes, keyed on (method, path).
+    // Each slot holds a route index plus one, so 0 reads as empty.
+    //
+    // Dispatch was a linear walk of every registered route, comparing two
+    // strings per step. That is fine for the four routes a demo has and
+    // quadratic-feeling for the hundred a real service has, and it put a
+    // strcmp against every unrelated path on the critical path of every
+    // request. Literal routes - which is nearly all of them, and all of the
+    // hot ones - are now one hash and one comparison, whatever the table
+    // size. Parameterised routes still need a walk, so they keep one, but it
+    // only runs when the hash misses.
+    pub idx: Vector<int> = Vector {}
+    pub idx_mask: int = 0
+    pub n_literal: int = 0
+    pub n_dynamic: int = 0
 end
 
 @en "Match"
@@ -92,6 +118,48 @@ pub struct Match:
     pub matched: bool = false
     pub fn: i64 = 0
     pub params: ParamList = ParamList {}
+end
+
+// Releases a ParamList's captures and its backing array. _try_match may have
+// pushed several before hitting the byte that made it fail, and dropping the
+// vector alone abandons every one of them.
+func _free_params(p &: ParamList):
+    n := p.items.len()
+    mut i := 0
+    until i < n:
+        kv := p.items.get(i)
+        mem.Free(kv.key as void *)
+        mem.Free(kv.value as void *)
+        i += 1
+    end
+    p.items.free()
+    p.items = Vector {} as Vector<Param>
+end
+
+func _method_id(m: str): int:
+    if m == "GET": ret 1 end
+    if m == "POST": ret 2 end
+    if m == "PUT": ret 3 end
+    if m == "DELETE": ret 4 end
+    if m == "PATCH": ret 5 end
+    if m == "HEAD": ret 6 end
+    if m == "OPTIONS": ret 7 end
+    ret 0
+end
+
+// FNV-1a over the verb id and the path, folded to 32 bits at every step so
+// the multiply cannot overflow into the sign bit.
+func _hash_key(mid: int, s: str): int:
+    mut h := 2166136261 as i64
+    h = ((h ^ (mid as i64)) * 16777619) & 4294967295
+    p := s as i8 *
+    n := s.len()
+    mut i := 0
+    until i < n:
+        h = ((h ^ ((p[i] as i64) & 255)) * 16777619) & 4294967295
+        i += 1
+    end
+    ret (h & 2147483647) as int
 end
 
 func _param_get(p: ParamList, key: str): str:
@@ -111,27 +179,50 @@ func _specificity(pattern: str): int:
     ret 0
 end
 
+// The byte at `i` of `s`. A `str` is a NUL-terminated byte pointer
+// underneath, so this is a load and nothing else - which is the entire point
+// of it existing.
+//
+// _try_match used to compare one character at a time as `pattern.substr(pi,
+// 1) == "/"`. Every one of those substr calls heap-allocates a two-byte
+// string, compares it, and drops it: matching "/users/:id" against
+// "/users/42" cost roughly twenty allocations, none of them freed, to answer
+// one request. At thirty thousand requests a second that is the largest
+// single source of the server's memory growth, and it is also most of the
+// time the matcher spends. This version does the identical walk with zero
+// allocations - captures excepted, which are the values the caller asked for.
+func _byte_at(s: str, i: int): int:
+    p := s as i8 *
+    // No `as int` here: an i8 widens to the i32 this returns on its own, and
+    // spelling it out is the useless cast E093 rejects.
+    ret p[i]
+end
+
 // Matches `path` against `pattern` (":name" captures one path segment,
 // "*" matches the remainder unconditionally), appending any captures to
-// `out_params`. Direct port of std/web's original algorithm, minus the
-// context-handle side effect.
+// `out_params`.
+//
+// The two capture strings are heap-allocated and become the CALLER's to
+// free - net/http's _dispatch hands them straight to the request context,
+// which owns them for the life of the request. Nothing else in here
+// allocates.
 func _try_match(pattern: str, path: str, out_params &: ParamList): bool:
     mut pi := 0
     mut pp := 0
     plen := pattern.len()
     pathlen := path.len()
     until pi < plen || pp < pathlen:
-        if pi < plen && pattern.substr(pi, 1) == "*":
+        if pi < plen && _byte_at(pattern, pi) == _CH_STAR:
             ret true
         end
-        if pi < plen && pattern.substr(pi, 1) == ":":
+        if pi < plen && _byte_at(pattern, pi) == _CH_COLON:
             mut ne := pi + 1
-            until ne < plen && pattern.substr(ne, 1) != "/":
+            until ne < plen && _byte_at(pattern, ne) != _CH_SLASH:
                 ne += 1
             end
             pname := pattern.substr(pi + 1, ne - pi - 1)
             mut ve := pp
-            until ve < pathlen && path.substr(ve, 1) != "/":
+            until ve < pathlen && _byte_at(path, ve) != _CH_SLASH:
                 ve += 1
             end
             pval := path.substr(pp, ve - pp)
@@ -142,27 +233,78 @@ func _try_match(pattern: str, path: str, out_params &: ParamList): bool:
             if pi >= plen || pp >= pathlen:
                 break
             end
-            if pattern.substr(pi, 1) != path.substr(pp, 1):
+            if _byte_at(pattern, pi) != _byte_at(path, pp):
                 ret false
             end
             pi += 1
             pp += 1
         end
     end
-    until pi < plen && pattern.substr(pi, 1) == "/": pi = pi + 1 end
-    until pp < pathlen && path.substr(pp, 1) == "/": pp = pp + 1 end
+    until pi < plen && _byte_at(pattern, pi) == _CH_SLASH: pi = pi + 1 end
+    until pp < pathlen && _byte_at(path, pp) == _CH_SLASH: pp = pp + 1 end
     ret pi == plen && pp == pathlen
 end
 
-// The one place a Route is built, so `spec` cannot be forgotten. Every
-// registration helper goes through here.
+// Inserts route `ri` into the literal index. A key already present is left
+// alone: Dispatch used to return the first matching route in registration
+// order, and registering the same method and path twice must keep doing so.
+func _idx_insert(r &: Router, ri: int):
+    route := r.routes.get(ri)
+    if route.spec != 0: ret end
+    mut slot := _hash_key(route.mid, route.pattern) & r.idx_mask
+    until r.idx.get(slot) != 0:
+        prev := r.routes.get(r.idx.get(slot) - 1)
+        if prev.mid == route.mid && prev.method == route.method && prev.pattern == route.pattern:
+            ret
+        end
+        slot = (slot + 1) & r.idx_mask
+    end
+    r.idx.set(slot, ri + 1)
+end
+
+// Rebuilds the table at `cap` slots (a power of two) and reinserts every
+// literal route. Called when the load factor would pass a half, which is
+// where open addressing's probe lengths start to grow.
+func _idx_grow(r &: Router, cap: int):
+    r.idx.free()
+    r.idx = Vector {} as Vector<int>
+    repeat cap with _:
+        r.idx.push(0)
+    end
+    r.idx_mask = cap - 1
+    n := r.routes.len()
+    mut i := 0
+    until i < n:
+        _idx_insert(r, i)
+        i += 1
+    end
+end
+
+// The one place a Route is built, so `spec`, `mid` and the index cannot be
+// forgotten. Every registration helper goes through here.
 func _add(r &: Router, method: str, pattern: str, fn: i64):
     mut rt := Route {}
     rt.method = method
     rt.pattern = pattern
     rt.fn = fn
     rt.spec = _specificity(pattern)
+    rt.mid = _method_id(method)
     r.routes.push(rt)
+    if rt.spec != 0:
+        r.n_dynamic += 1
+        ret
+    end
+    r.n_literal += 1
+    cap := r.idx_mask + 1
+    if (r.n_literal * 2) > cap:
+        mut want := 16
+        until want < (r.n_literal * 4):
+            want = want * 2
+        end
+        _idx_grow(r, want)
+    else:
+        _idx_insert(r, r.routes.len() - 1)
+    end
 end
 
 @en "NewRouter"
@@ -274,36 +416,63 @@ end
 // hundred, allocating nothing. Since nothing outranks a literal, the first
 // literal hit ends the search.
 pub func Dispatch(r: Router, method: str, path: str): Match:
-    n := r.routes.len()
     mut m := Match {}
-    mut best := 3
-    mut i := 0
-    until i < n:
-        route := r.routes.get(i)
-        if route.method == method && route.spec < best:
-            if route.spec == 0:
-                if route.pattern == path:
-                    // A param route may already have matched and be holding
-                    // captures this literal is about to make irrelevant.
-                    m.params.items.free()
-                    m.params = ParamList {}
+    mid := _method_id(method)
+    // Literal routes first, and they win outright: static beats param beats
+    // wildcard, so a hit here is the answer and nothing else needs looking
+    // at. One hash, then one comparison per probe, whatever the route count.
+    if r.idx_mask > 0:
+        mut slot := _hash_key(mid, path) & r.idx_mask
+        until r.idx.get(slot) != 0:
+            route := r.routes.get(r.idx.get(slot) - 1)
+            if route.mid == mid && route.pattern == path:
+                // Two different custom verbs hash together when both are
+                // unrecognised (mid 0); only then is the string compared.
+                if mid != 0 || route.method == method:
                     m.matched = true
                     m.fn = route.fn
                     ret m
                 end
-            else:
+            end
+            slot = (slot + 1) & r.idx_mask
+        end
+    end
+    if r.n_dynamic == 0: ret m end
+    // Everything with a ":param" or a "*", in registration order, lowest
+    // specificity winning - param beats wildcard regardless of the order the
+    // two were registered in.
+    n := r.routes.len()
+    mut best := 3
+    mut i := 0
+    until i < n:
+        route := r.routes.get(i)
+        if route.spec != 0 && route.mid == mid && route.spec < best:
+            if mid != 0 || route.method == method:
                 mut params := ParamList {}
                 if _try_match(route.pattern, path, params):
+                    // A less specific route may already have matched and be
+                    // holding captures this one is about to replace.
+                    _free_params(m.params)
                     m.matched = true
                     m.fn = route.fn
                     m.params = params
                     best = route.spec
                 else:
-                    params.items.free()
+                    _free_params(params)
                 end
             end
         end
         i += 1
     end
     ret m
+end
+
+// Frees the captures in a Match the caller is done with. Dispatch hands back
+// heap-allocated key/value pairs; a caller that does not adopt them (as
+// net/http's _dispatch does) has to release them or they leak per request.
+@en "FreeMatch"
+@fa "آزادسازی تطابق"
+@ar "تحریر المطابقة"
+pub func FreeMatch(m &: Match):
+    _free_params(m.params)
 end

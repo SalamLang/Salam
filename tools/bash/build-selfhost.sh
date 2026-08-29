@@ -135,7 +135,7 @@ echo "output : $OUT"
 
 # Two stages when the result has to carry embedded blobs, one otherwise.
 # driver_embed.salam declares the blobs as extern *variables*, and a seed older
-# than 0.3.5 mangles those names (interior underscores get doubled), so it can
+# than 0.3.6 mangles those names (interior underscores get doubled), so it can
 # compile the compiler but not one that links them. Building a plain stage 1
 # first and letting IT build the real thing sidesteps the seed's age entirely -
 # the same reason bootstrap.sh lets the seed decide only what stage 1 gets.

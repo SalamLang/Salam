@@ -1,0 +1,483 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package tensor
+
+// General broadcasting, comparison masks, Where, and index gathers -
+// the glue the four fast broadcast modes of tsr_elem leave out. These
+// materialize their operands (Expand copies), which is the right trade
+// for masks and index work; the hot elementwise paths stay in tsr_elem.
+//
+// Broadcasting is NumPy's: shapes align at the right, and a dimension
+// of size 1 (or a missing one) stretches to match.
+
+// Strides of x seen through an output of `rank` dims: 0 where x has no
+// dim there or a dim of size 1.
+func _bstrides(x &: Tensor, rank: int, out &: Vector<int>):
+    out.clear()
+    xr := x.rank()
+    mut own := Vector {} as Vector<int>
+    repeat xr: own.push(0) end
+    mut s := 1
+    mut i := xr - 1
+    until i >= 0:
+        own.set(i, s)
+        s = s * x.shape.get(i)
+        i -= 1
+    end
+    repeat rank with d:
+        xi := d - (rank - xr)
+        if xi < 0 || x.shape.get(xi) == 1:
+            out.push(0)
+        else:
+            out.push(own.get(xi))
+        end
+    end
+    own.free()
+end
+
+func _can_expand(x &: Tensor, shape &: Vector<int>): bool:
+    r := shape.len()
+    xr := x.rank()
+    if xr > r: ret false end
+    repeat xr with i:
+        d := x.shape.get(i)
+        if d != 1 && d != shape.get(i + r - xr): ret false end
+    end
+    ret true
+end
+
+func _cmp(a &: Tensor, b &: Tensor, op: int): Tensor:
+    mut shape := Vector {} as Vector<int>
+    if !BroadcastShape(a, b, shape):
+        shape.free()
+        ret Empty()
+    end
+    mut ea := Expand(a, shape)
+    mut eb := Expand(b, shape)
+    out := Zeros(shape)
+    shape.free()
+    n := out.numel()
+    pa := ea.data.data
+    pb := eb.data.data
+    po := out.data.data
+    one := 1.0 as f32
+    if op == 0:
+        repeat n with k: if pa[k] > pb[k]: po[k] = one end end
+    else op == 1:
+        repeat n with k: if pa[k] >= pb[k]: po[k] = one end end
+    else op == 2:
+        repeat n with k: if pa[k] < pb[k]: po[k] = one end end
+    else op == 3:
+        repeat n with k: if pa[k] <= pb[k]: po[k] = one end end
+    else op == 4:
+        repeat n with k: if pa[k] == pb[k]: po[k] = one end end
+    else:
+        repeat n with k: if pa[k] != pb[k]: po[k] = one end end
+    end
+    ea.free()
+    eb.free()
+    ret out
+end
+
+func _cmp_scalar(x &: Tensor, s: f64, op: int): Tensor:
+    mut t := Scalar(s)
+    out := _cmp(x, t, op)
+    t.free()
+    ret out
+end
+
+// outer / inner sizes around `axis`.
+func _split_axis(x &: Tensor, axis: int, outer &: int, inner &: int):
+    outer = 1
+    inner = 1
+    repeat x.rank() with i:
+        if i < axis: outer = outer * x.shape.get(i)
+        else i > axis: inner = inner * x.shape.get(i) end
+    end
+end
+
+// The shared body of Tril and Triu over the trailing two axes.
+func _tri(x &: Tensor, diagonal: int, lower: bool): Tensor:
+    if x.rank() < 2: ret Empty() end
+    cols := x.shape.get(x.rank() - 1)
+    rows := x.shape.get(x.rank() - 2)
+    planes := x.numel() / (rows * cols)
+    out := Clone(x)
+    po := out.data.data
+    zero := 0.0 as f32
+    repeat planes with p:
+        base := p * rows * cols
+        repeat rows with i:
+            repeat cols with j:
+                keep := lower ? j <= i + diagonal : j >= i + diagonal
+                if !keep: po[base + i * cols + j] = zero end
+            end
+        end
+    end
+    ret out
+end
+
+// ---- public API ----
+
+// The shape a and b broadcast to; false (and an empty shape) when they
+// cannot.
+@en "BroadcastShape"
+@fa "شکل پخش"
+@ar "شكل البث"
+pub func BroadcastShape(a &: Tensor, b &: Tensor, out &: Vector<int>): bool:
+    out.clear()
+    ra := a.rank()
+    rb := b.rank()
+    r := ra > rb ? ra : rb
+    repeat r with i:
+        ia := i - (r - ra)
+        ib := i - (r - rb)
+        da := ia < 0 ? 1 : a.shape.get(ia)
+        db := ib < 0 ? 1 : b.shape.get(ib)
+        if da != db && da != 1 && db != 1:
+            out.clear()
+            ret false
+        end
+        out.push(da == 1 ? db : da)
+    end
+    ret true
+end
+
+// x stretched to `shape` (a copy); empty when the shapes do not
+// broadcast.
+@en "Expand"
+@fa "گسترش"
+@ar "توسيع"
+pub func Expand(x &: Tensor, shape &: Vector<int>): Tensor:
+    if x.is_empty() || !_can_expand(x, shape): ret Empty() end
+    r := shape.len()
+    mut st := Vector {} as Vector<int>
+    _bstrides(x, r, st)
+    out := Zeros(shape)
+    n := out.numel()
+    px := x.data.data
+    po := out.data.data
+    mut idx := Vector {} as Vector<int>
+    repeat r: idx.push(0) end
+    mut off := 0
+    repeat n with k:
+        po[k] = px[off]
+        mut d := r - 1
+        mut carry := true
+        until carry && d >= 0:
+            idx.set(d, idx.get(d) + 1)
+            off += st.get(d)
+            if idx.get(d) < shape.get(d):
+                carry = false
+            else:
+                off -= st.get(d) * shape.get(d)
+                idx.set(d, 0)
+                d -= 1
+            end
+        end
+    end
+    idx.free()
+    st.free()
+    ret out
+end
+
+// Masks: 1.0 where the comparison holds, 0.0 elsewhere, over the
+// broadcast shape.
+@en "Greater"
+@fa "بزرگ‌تر"
+@ar "أكبر"
+pub func Greater(a &: Tensor, b &: Tensor): Tensor: ret _cmp(a, b, 0) end
+
+@en "GreaterEqual"
+@fa "بزرگ‌تر یا مساوی"
+@ar "أكبر أو يساوي"
+pub func GreaterEqual(a &: Tensor, b &: Tensor): Tensor: ret _cmp(a, b, 1) end
+
+@en "Less"
+@fa "کوچک‌تر"
+@ar "أصغر"
+pub func Less(a &: Tensor, b &: Tensor): Tensor: ret _cmp(a, b, 2) end
+
+@en "LessEqual"
+@fa "کوچک‌تر یا مساوی"
+@ar "أصغر أو يساوي"
+pub func LessEqual(a &: Tensor, b &: Tensor): Tensor: ret _cmp(a, b, 3) end
+
+@en "EqualMask"
+@fa "ماسک برابری"
+@ar "قناع المساواة"
+pub func EqualMask(a &: Tensor, b &: Tensor): Tensor: ret _cmp(a, b, 4) end
+
+@en "NotEqualMask"
+@fa "ماسک نابرابری"
+@ar "قناع عدم المساواة"
+pub func NotEqualMask(a &: Tensor, b &: Tensor): Tensor: ret _cmp(a, b, 5) end
+
+@en "GreaterScalar"
+@fa "بزرگ‌تر از عدد"
+@ar "أكبر من عدد"
+pub func GreaterScalar(x &: Tensor, s: f64): Tensor: ret _cmp_scalar(x, s, 0) end
+
+@en "LessScalar"
+@fa "کوچک‌تر از عدد"
+@ar "أصغر من عدد"
+pub func LessScalar(x &: Tensor, s: f64): Tensor: ret _cmp_scalar(x, s, 2) end
+
+@en "EqualScalar"
+@fa "برابر با عدد"
+@ar "يساوي عددا"
+pub func EqualScalar(x &: Tensor, s: f64): Tensor: ret _cmp_scalar(x, s, 4) end
+
+// Elements of a where cond is nonzero, of b elsewhere, all three
+// broadcast together.
+@en "Where"
+@fa "کجا"
+@ar "حيث"
+pub func Where(cond &: Tensor, a &: Tensor, b &: Tensor): Tensor:
+    mut s1 := Vector {} as Vector<int>
+    if !BroadcastShape(cond, a, s1):
+        s1.free()
+        ret Empty()
+    end
+    mut tmp := Zeros(s1)
+    mut shape := Vector {} as Vector<int>
+    ok := BroadcastShape(tmp, b, shape)
+    tmp.free()
+    s1.free()
+    if !ok:
+        shape.free()
+        ret Empty()
+    end
+    mut ec := Expand(cond, shape)
+    mut ea := Expand(a, shape)
+    mut eb := Expand(b, shape)
+    out := Zeros(shape)
+    shape.free()
+    n := out.numel()
+    pc := ec.data.data
+    pa := ea.data.data
+    pb := eb.data.data
+    po := out.data.data
+    zero := 0.0 as f32
+    repeat n with k: po[k] = pc[k] != zero ? pa[k] : pb[k] end
+    ec.free()
+    ea.free()
+    eb.free()
+    ret out
+end
+
+// x with `value` wherever mask (broadcast to x) is nonzero.
+@en "MaskedFill"
+@fa "پرکردن ماسک‌شده"
+@ar "ملء مقنع"
+pub func MaskedFill(x &: Tensor, mask &: Tensor, value: f64): Tensor:
+    mut em := Expand(mask, x.shape)
+    if em.is_empty(): ret Empty() end
+    out := Clone(x)
+    n := out.numel()
+    pm := em.data.data
+    po := out.data.data
+    v := value as f32
+    zero := 0.0 as f32
+    repeat n with k: if pm[k] != zero: po[k] = v end end
+    em.free()
+    ret out
+end
+
+// The slices of x along `axis` at the given indices, in that order.
+@en "IndexSelect"
+@fa "انتخاب نمایه"
+@ar "اختيار بالفهرس"
+pub func IndexSelect(x &: Tensor, axis: int, ids &: Vector<int>): Tensor:
+    if x.is_empty() || axis < 0 || axis >= x.rank(): ret Empty() end
+    len := x.shape.get(axis)
+    repeat ids.len() with i:
+        if ids.get(i) < 0 || ids.get(i) >= len: ret Empty() end
+    end
+    mut outer := 1
+    mut inner := 1
+    _split_axis(x, axis, outer, inner)
+    mut shape := Vector {} as Vector<int>
+    repeat x.rank() with i: shape.push(i == axis ? ids.len() : x.shape.get(i)) end
+    out := Zeros(shape)
+    shape.free()
+    m := ids.len()
+    px := x.data.data
+    po := out.data.data
+    repeat outer with o:
+        repeat m with t:
+            src := (o * len + ids.get(t)) * inner
+            dst := (o * m + t) * inner
+            repeat inner with k: po[dst + k] = px[src + k] end
+        end
+    end
+    ret out
+end
+
+// Rows of a 2-D (or higher) tensor by index - an embedding lookup.
+@en "TakeRows"
+@fa "گرفتن ردیف‌ها"
+@ar "أخذ الصفوف"
+pub func TakeRows(x &: Tensor, ids &: Vector<int>): Tensor: ret IndexSelect(x, 0, ids) end
+
+// out[..., j, ...] = x[..., idx[..., j, ...], ...] along `axis`: idx has
+// x's rank and x's dims except along axis, and the result has idx's
+// shape.
+@en "Gather"
+@fa "گردآوری"
+@ar "تجميع"
+pub func Gather(x &: Tensor, axis: int, idx &: Tensor): Tensor:
+    if x.is_empty() || idx.is_empty() || axis < 0 || axis >= x.rank() || idx.rank() != x.rank(): ret Empty() end
+    repeat x.rank() with i:
+        if i != axis && idx.shape.get(i) != x.shape.get(i): ret Empty() end
+    end
+    mut outer := 1
+    mut inner := 1
+    _split_axis(x, axis, outer, inner)
+    lx := x.shape.get(axis)
+    li := idx.shape.get(axis)
+    out := Zeros(idx.shape)
+    px := x.data.data
+    pi := idx.data.data
+    po := out.data.data
+    repeat outer with o:
+        repeat li with j:
+            repeat inner with k:
+                at := (o * li + j) * inner + k
+                mut id := pi[at] as int
+                if id < 0: id = 0 end
+                if id >= lx: id = lx - 1 end
+                po[at] = px[(o * lx + id) * inner + k]
+            end
+        end
+    end
+    ret out
+end
+
+// dst[ids[i], :] += src[i, :] for 2-D tensors - the backward of TakeRows.
+@en "ScatterAddRows"
+@fa "پراکندن و افزودن ردیف‌ها"
+@ar "بعثرة وإضافة الصفوف"
+pub func ScatterAddRows(dst &: Tensor, ids &: Vector<int>, src &: Tensor): bool:
+    if dst.rank() != 2 || src.rank() != 2 || src.dim(1) != dst.dim(1) || src.dim(0) != ids.len(): ret false end
+    w := dst.dim(1)
+    rows := dst.dim(0)
+    pd := dst.data.data
+    ps := src.data.data
+    repeat ids.len() with i:
+        r := ids.get(i)
+        if r < 0 || r >= rows: continue end
+        repeat w with k: pd[r * w + k] += ps[i * w + k] end
+    end
+    ret true
+end
+
+// [n, classes] with a 1.0 at each id.
+@en "OneHot"
+@fa "یک‌داغ"
+@ar "ترميز أحادي"
+pub func OneHot(ids &: Vector<int>, classes: int): Tensor:
+    n := ids.len()
+    out := Zeros2(n, classes)
+    po := out.data.data
+    one := 1.0 as f32
+    repeat n with i:
+        c := ids.get(i)
+        if c >= 0 && c < classes: po[i * classes + c] = one end
+    end
+    ret out
+end
+
+// The k largest (or smallest) entries of every row, values in order and
+// their column indices in `idx_out`. Rows are the last axis, as
+// everywhere else here; the result has that axis cut to k. A partial
+// selection, so it costs O(n k) per row rather than a full sort.
+@en "TopK"
+@fa "کِی برتر"
+@ar "أعلى ك"
+pub func TopK(x &: Tensor, k: int, largest: bool, idx_out &: Tensor): Tensor:
+    if x.is_empty() || k < 1: ret Empty() end
+    width := x.shape.get(x.rank() - 1)
+    if k > width: ret Empty() end
+    rows := x.numel() / width
+    mut shape := Vector {} as Vector<int>
+    repeat x.rank() with i: shape.push(i == x.rank() - 1 ? k : x.shape.get(i)) end
+    out := Zeros(shape)
+    idx_out.free()
+    idx_out = Zeros(shape)
+    shape.free()
+    px := x.data.data
+    po := out.data.data
+    pi := idx_out.data.data
+    repeat rows with r:
+        base := r * width
+        obase := r * k
+        // Selection: k passes, each taking the best entry not yet taken.
+        mut taken := Vector {} as Vector<bool>
+        repeat width: taken.push(false) end
+        repeat k with t:
+            mut best := 0 - 1
+            repeat width with c:
+                if taken.get(c): continue end
+                if best < 0: best = c
+                else largest && px[base + c] > px[base + best]: best = c
+                else !largest && px[base + c] < px[base + best]: best = c end
+            end
+            taken.set(best, true)
+            po[obase + t] = px[base + best]
+            pi[obase + t] = best as f32
+        end
+        taken.free()
+    end
+    ret out
+end
+
+// The lower (Tril) or upper (Triu) triangle of every 2-D slice, the
+// rest zeroed. `diagonal` shifts the boundary: 0 keeps the main
+// diagonal, a positive value moves it up and to the right.
+@en "Tril"
+@fa "مثلث پایین"
+@ar "المثلث السفلي"
+pub func Tril(x &: Tensor, diagonal: int): Tensor: ret _tri(x, diagonal, true) end
+
+@en "Triu"
+@fa "مثلث بالا"
+@ar "المثلث العلوي"
+pub func Triu(x &: Tensor, diagonal: int): Tensor: ret _tri(x, diagonal, false) end
+
+// The running sum along `axis`.
+@en "Cumsum"
+@fa "جمع تجمعی"
+@ar "المجموع التراكمي"
+pub func Cumsum(x &: Tensor, axis: int): Tensor:
+    if x.is_empty() || axis < 0 || axis >= x.rank(): ret Empty() end
+    mut outer := 1
+    mut inner := 1
+    _split_axis(x, axis, outer, inner)
+    len := x.shape.get(axis)
+    out := Clone(x)
+    po := out.data.data
+    repeat outer with o:
+        repeat inner with i:
+            mut acc := 0.0 as f32
+            repeat len with t:
+                at := (o * len + t) * inner + i
+                acc += po[at]
+                po[at] = acc
+            end
+        end
+    end
+    ret out
+end

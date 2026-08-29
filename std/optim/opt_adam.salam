@@ -1,0 +1,162 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package optim
+
+import nn
+import tensor
+
+// The adaptive optimizers. Adam keeps first and second moment estimates
+// per element; AdamW is Adam with the weight decay DECOUPLED from the
+// moments (applied straight to the weights), which is the form whose
+// decay actually regularizes under adaptive scaling; RMSProp is the
+// second moment alone.
+//
+// Bias correction is hoisted: 1/(1-b^t) is one scalar per step, not a
+// per-element computation. The eps sits outside the square root, the
+// convention of the original paper and every framework default.
+
+extern:
+    pure func sqrtf(x: f32): f32
+end
+
+@en "Adam"
+@fa "آدام"
+@ar "آدم"
+pub struct Adam:
+    pub lr: f64 = 0.001
+    pub beta1: f64 = 0.9
+    pub beta2: f64 = 0.999
+    pub eps: f64 = 0.00000001
+    pub weight_decay: f64 = 0.0
+    pub decoupled: bool = false
+    t: i64 = 0
+    m: Vector<tensor.Tensor> = Vector {}
+    v: Vector<tensor.Tensor> = Vector {}
+
+    @en "step"
+    @fa "گام"
+    @ar "خطوة"
+    pub func step(ps &: nn.ParamStore):
+        _ensure_state(this.m, ps)
+        _ensure_state(this.v, ps)
+        this.t += 1
+        // Bias corrections as one scalar each.
+        mut p1 := 1.0
+        mut p2 := 1.0
+        mut i := 0 as i64
+        until i < this.t:
+            p1 = p1 * this.beta1
+            p2 = p2 * this.beta2
+            i += 1
+        end
+        c1 := (1.0 / (1.0 - p1)) as f32
+        c2 := (1.0 / (1.0 - p2)) as f32
+        lr := this.lr as f32
+        b1 := this.beta1 as f32
+        b2 := this.beta2 as f32
+        one := 1.0 as f32
+        ef := this.eps as f32
+        wd := this.weight_decay as f32
+        zero := 0.0 as f32
+        repeat ps.count() with pi:
+            mut p := ps.items.get(pi)
+            n := p.value.numel()
+            pw := p.value.data.data
+            pg := p.grad.data.data
+            mt := this.m.get(pi)
+            vt := this.v.get(pi)
+            pm := mt.data.data
+            pv := vt.data.data
+            if this.decoupled && wd != zero:
+                repeat n with k: pw[k] = pw[k] - lr * wd * pw[k] end
+            end
+            repeat n with k:
+                mut g := pg[k]
+                if this.decoupled == false && wd != zero: g = g + wd * pw[k] end
+                nm := b1 * pm[k] + (one - b1) * g
+                nv := b2 * pv[k] + (one - b2) * g * g
+                pm[k] = nm
+                pv[k] = nv
+                pw[k] = pw[k] - lr * (nm * c1) / (sqrtf(nv * c2) + ef)
+            end
+        end
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free():
+        _free_state(this.m)
+        _free_state(this.v)
+    end
+end
+
+@en "RMSProp"
+@fa "آر ام اس پراپ"
+@ar "آر إم إس بروب"
+pub struct RMSProp:
+    pub lr: f64 = 0.01
+    pub alpha: f64 = 0.99
+    pub eps: f64 = 0.00000001
+    pub weight_decay: f64 = 0.0
+    sq: Vector<tensor.Tensor> = Vector {}
+
+    @en "step"
+    @fa "گام"
+    @ar "خطوة"
+    pub func step(ps &: nn.ParamStore):
+        _ensure_state(this.sq, ps)
+        lr := this.lr as f32
+        al := this.alpha as f32
+        one := 1.0 as f32
+        ef := this.eps as f32
+        wd := this.weight_decay as f32
+        zero := 0.0 as f32
+        repeat ps.count() with pi:
+            mut p := ps.items.get(pi)
+            n := p.value.numel()
+            pw := p.value.data.data
+            pg := p.grad.data.data
+            st := this.sq.get(pi)
+            pv := st.data.data
+            repeat n with k:
+                mut g := pg[k]
+                if wd != zero: g = g + wd * pw[k] end
+                nv := al * pv[k] + (one - al) * g * g
+                pv[k] = nv
+                pw[k] = pw[k] - lr * g / (sqrtf(nv) + ef)
+            end
+        end
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free(): _free_state(this.sq) end
+end
+
+// ---- public API ----
+
+// Adam with decoupled weight decay, the transformer-era default.
+@en "NewAdamW"
+@fa "آدام دابلیو نو"
+@ar "آدم دبليو جديد"
+pub func NewAdamW(lr: f64, weight_decay: f64): Adam:
+    mut a := Adam {}
+    a.lr = lr
+    a.weight_decay = weight_decay
+    a.decoupled = true
+    ret a
+end

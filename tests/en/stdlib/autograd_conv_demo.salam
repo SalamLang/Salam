@@ -1,0 +1,148 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/autograd: convolution and pooling gradients against central
+// differences, for the input, the weights, and the bias.
+
+import autograd
+import tensor
+import testing
+
+mut g_x := tensor.Tensor {}
+mut g_w := tensor.Tensor {}
+mut g_b := tensor.Tensor {}
+
+// Loss = sum(square(conv(x, w, b))), stride 2, pad 1: enough
+// nonlinearity that every gradient path matters.
+func conv_loss(tp &: autograd.Tape, x: int, w: int, b: int): int:
+    ret autograd.Sum(tp, autograd.Square(tp, autograd.Conv2D(tp, x, w, b, 2, 2, 1, 1)))
+end
+
+func f_x(t: tensor.Tensor): f64:
+    mut tp := autograd.NewTape(1)
+    x := autograd.Input(tp, t)
+    w := autograd.Input(tp, g_w)
+    b := autograd.Input(tp, g_b)
+    v := autograd.Value(tp, conv_loss(tp, x, w, b))
+    out := v.at(0)
+    tp.free()
+    ret out
+end
+
+func f_w(t: tensor.Tensor): f64:
+    mut tp := autograd.NewTape(1)
+    x := autograd.Input(tp, g_x)
+    w := autograd.Input(tp, t)
+    b := autograd.Input(tp, g_b)
+    v := autograd.Value(tp, conv_loss(tp, x, w, b))
+    out := v.at(0)
+    tp.free()
+    ret out
+end
+
+func f_b(t: tensor.Tensor): f64:
+    mut tp := autograd.NewTape(1)
+    x := autograd.Input(tp, g_x)
+    w := autograd.Input(tp, g_w)
+    b := autograd.Input(tp, t)
+    v := autograd.Value(tp, conv_loss(tp, x, w, b))
+    out := v.at(0)
+    tp.free()
+    ret out
+end
+
+func f_maxpool(t: tensor.Tensor): f64:
+    mut tp := autograd.NewTape(1)
+    x := autograd.Input(tp, t)
+    v := autograd.Value(tp, autograd.Sum(tp, autograd.Square(tp, autograd.MaxPool2D(tp, x, 2, 2, 2, 2))))
+    out := v.at(0)
+    tp.free()
+    ret out
+end
+
+func f_avgpool(t: tensor.Tensor): f64:
+    mut tp := autograd.NewTape(1)
+    x := autograd.Input(tp, t)
+    v := autograd.Value(tp, autograd.Sum(tp, autograd.Square(tp, autograd.AvgPool2D(tp, x, 3, 3, 2, 2))))
+    out := v.at(0)
+    tp.free()
+    ret out
+end
+
+func main:
+    h := 0.01
+    tol := 0.02
+
+    mut sx := tensor.Shape4(2, 2, 5, 5)
+    g_x = tensor.RandUniform(sx, 0.0 - 1.0, 1.0, 5)
+    sx.free()
+    mut sw := tensor.Shape4(3, 2, 3, 3)
+    g_w = tensor.RandUniform(sw, 0.0 - 1.0, 1.0, 6)
+    sw.free()
+    mut sb := tensor.Shape1(3)
+    g_b = tensor.RandUniform(sb, 0.0 - 1.0, 1.0, 7)
+    sb.free()
+
+    // Analytic gradients for all three conv inputs from one backward
+    mut tp := autograd.NewTape(1)
+    xid := autograd.Watch(tp, g_x)
+    wid := autograd.Watch(tp, g_w)
+    bid := autograd.Watch(tp, g_b)
+    loss := conv_loss(tp, xid, wid, bid)
+    autograd.Backward(tp, loss)
+    mut gx := tensor.Clone(autograd.Grad(tp, xid))
+    mut gw := tensor.Clone(autograd.Grad(tp, wid))
+    mut gb := tensor.Clone(autograd.Grad(tp, bid))
+    tp.free()
+
+    testing.AssertTrue(autograd.GradCheck((t: tensor.Tensor): ret f_x(t) end, g_x, gx, h, tol))
+    testing.AssertTrue(autograd.GradCheck((t: tensor.Tensor): ret f_w(t) end, g_w, gw, h, tol))
+    testing.AssertTrue(autograd.GradCheck((t: tensor.Tensor): ret f_b(t) end, g_b, gb, h, tol))
+
+    // Pooling gradients on a 1x1x6x6 image. The values are distinct
+    // with gaps of 0.05 (> 2h), scattered by a stride-7 walk: a max is
+    // not differentiable at a tie, so a numeric check needs every
+    // window's winner to stay the winner under the perturbation.
+    mut px := tensor.Zeros4(1, 1, 6, 6)
+    repeat 36 with k: px.set_at(k, (((k * 7) % 36) as f64) * 0.05) end
+    mut tp2 := autograd.NewTape(1)
+    pid := autograd.Watch(tp2, px)
+    pl := autograd.Sum(tp2, autograd.Square(tp2, autograd.MaxPool2D(tp2, pid, 2, 2, 2, 2)))
+    autograd.Backward(tp2, pl)
+    mut gp := tensor.Clone(autograd.Grad(tp2, pid))
+    tp2.free()
+    testing.AssertTrue(autograd.GradCheck((t: tensor.Tensor): ret f_maxpool(t) end, px, gp, h, tol))
+
+    mut tp3 := autograd.NewTape(1)
+    aid := autograd.Watch(tp3, px)
+    al := autograd.Sum(tp3, autograd.Square(tp3, autograd.AvgPool2D(tp3, aid, 3, 3, 2, 2)))
+    autograd.Backward(tp3, al)
+    mut ga := tensor.Clone(autograd.Grad(tp3, aid))
+    tp3.free()
+    testing.AssertTrue(autograd.GradCheck((t: tensor.Tensor): ret f_avgpool(t) end, px, ga, h, tol))
+
+    tensor.Free(g_x)
+    tensor.Free(g_w)
+    tensor.Free(g_b)
+    tensor.Free(gx)
+    tensor.Free(gw)
+    tensor.Free(gb)
+    tensor.Free(px)
+    tensor.Free(gp)
+    tensor.Free(ga)
+
+    ret testing.Summary()
+end

@@ -1,0 +1,172 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/tensor: elementwise arithmetic, broadcasting, and the unary maps.
+
+import tensor
+import testing
+
+func fill(t &: tensor.Tensor, base: f64):
+    repeat t.numel() with k: t.set_at(k, base + (k as f64)) end
+end
+
+func main:
+    eps := 0.00001
+
+    // Same-shape binary ops
+    mut a := tensor.Zeros2(2, 3)
+    fill(a, 1.0)                       // 1 2 3 / 4 5 6
+    mut b := tensor.Zeros2(2, 3)
+    tensor.SetAll(b, 2.0)
+
+    mut sum := tensor.Add(a, b)
+    testing.AssertEqFloat(sum.at2(0, 0), 3.0, eps)
+    testing.AssertEqFloat(sum.at2(1, 2), 8.0, eps)
+    mut dif := tensor.Sub(a, b)
+    testing.AssertEqFloat(dif.at2(0, 0), 0.0 - 1.0, eps)
+    mut had := tensor.Mul(a, b)
+    testing.AssertEqFloat(had.at2(1, 2), 12.0, eps)
+    mut quo := tensor.Div(a, b)
+    testing.AssertEqFloat(quo.at2(1, 2), 3.0, eps)
+
+    // Division by zero yields 0, never an infinity
+    mut zden := tensor.Zeros2(2, 3)
+    mut dz := tensor.Div(a, zden)
+    testing.AssertEqFloat(dz.at(0), 0.0, eps)
+
+    // Operator sugar allocates a fresh result
+    mut osum := a + b
+    testing.AssertEqFloat(osum.at2(1, 1), 7.0, eps)
+    mut oprod := a * b
+    testing.AssertEqFloat(oprod.at2(0, 1), 4.0, eps)
+
+    // Shape mismatch is the empty sentinel
+    mut tall := tensor.Zeros2(3, 2)
+    testing.AssertTrue(tensor.Add(a, tall).is_empty())
+
+    // Suffix broadcast: [2,3] + [3] adds the row everywhere
+    mut row := tensor.Arange(3)        // 0 1 2
+    mut br := tensor.Add(a, row)
+    testing.AssertEqFloat(br.at2(0, 0), 1.0, eps)
+    testing.AssertEqFloat(br.at2(0, 2), 5.0, eps)
+    testing.AssertEqFloat(br.at2(1, 2), 8.0, eps)
+
+    // The swapped order works too, and subtraction keeps its direction
+    mut swp := tensor.Sub(row, a)      // row - a
+    testing.AssertEqFloat(swp.at2(0, 0), 0.0 - 1.0, eps)
+    testing.AssertEqFloat(swp.at2(1, 2), 2.0 - 6.0, eps)
+
+    // [1,3] against [2,3] is the same suffix case
+    mut row2 := tensor.Zeros2(1, 3)
+    fill(row2, 10.0)                   // 10 11 12
+    mut br2 := tensor.Add(a, row2)
+    testing.AssertEqFloat(br2.at2(1, 0), 14.0, eps)
+
+    // Trailing-one broadcast: [2,3] - [2,1] takes a scalar per row
+    mut colv := tensor.Zeros2(2, 1)
+    colv.set_at(0, 1.0)
+    colv.set_at(1, 4.0)
+    mut bc := tensor.Sub(a, colv)
+    testing.AssertEqFloat(bc.at2(0, 0), 0.0, eps)
+    testing.AssertEqFloat(bc.at2(1, 2), 2.0, eps)
+
+    // One-element broadcast
+    mut two := tensor.Scalar(2.0)
+    mut dbl := tensor.Mul(a, two)
+    testing.AssertEqFloat(dbl.at2(1, 2), 12.0, eps)
+
+    // Scalar forms
+    mut plus := tensor.AddScalar(a, 10.0)
+    testing.AssertEqFloat(plus.at(0), 11.0, eps)
+    mut minus := tensor.SubScalar(a, 1.0)
+    testing.AssertEqFloat(minus.at(0), 0.0, eps)
+    mut scl := tensor.Scale(a, 3.0)
+    testing.AssertEqFloat(scl.at2(1, 2), 18.0, eps)
+    mut dsc := tensor.DivScalar(a, 2.0)
+    testing.AssertEqFloat(dsc.at2(0, 1), 1.0, eps)
+    testing.AssertTrue(tensor.DivScalar(a, 0.0).at(0) == 0.0)
+    mut neg := tensor.Neg(a)
+    testing.AssertEqFloat(neg.at(0), 0.0 - 1.0, eps)
+
+    // In-place forms
+    mut acc := tensor.Clone(a)
+    tensor.AddInPlace(acc, b)
+    testing.AssertEqFloat(acc.at2(0, 0), 3.0, eps)
+    tensor.SubInPlace(acc, b)
+    testing.AssertEqFloat(acc.at2(0, 0), 1.0, eps)
+    tensor.MulInPlace(acc, b)
+    testing.AssertEqFloat(acc.at2(0, 0), 2.0, eps)
+    tensor.ScaleInPlace(acc, 0.5)
+    testing.AssertEqFloat(acc.at2(0, 0), 1.0, eps)
+    tensor.AddScalarInPlace(acc, 1.0)
+    testing.AssertEqFloat(acc.at2(0, 0), 2.0, eps)
+    tensor.AddScaled(acc, b, 0.5)      // += 0.5 * 2
+    testing.AssertEqFloat(acc.at2(0, 0), 3.0, eps)
+
+    // Into forms reuse caller storage and refuse a bad shape
+    mut out := tensor.Zeros2(2, 3)
+    testing.AssertTrue(tensor.AddInto(a, b, out))
+    testing.AssertEqFloat(out.at2(1, 2), 8.0, eps)
+    testing.AssertTrue(tensor.MulInto(a, b, out))
+    testing.AssertEqFloat(out.at2(1, 2), 12.0, eps)
+    testing.AssertFalse(tensor.AddInto(a, tall, out))
+
+    // Unary maps, spot values
+    mut ex := tensor.Exp(tensor.Zeros1(2))
+    testing.AssertEqFloat(ex.at(0), 1.0, eps)
+    mut lg := tensor.Log(tensor.Ones(ex.shape))
+    testing.AssertEqFloat(lg.at(0), 0.0, eps)
+    mut th := tensor.Tanh(tensor.Zeros1(2))
+    testing.AssertEqFloat(th.at(0), 0.0, eps)
+    mut sg := tensor.Sigmoid(tensor.Zeros1(2))
+    testing.AssertEqFloat(sg.at(0), 0.5, eps)
+
+    mut mix := tensor.Zeros1(3)
+    mix.set_at(0, 0.0 - 3.0)
+    mix.set_at(1, 0.0)
+    mix.set_at(2, 2.0)
+    mut rl := tensor.Relu(mix)
+    testing.AssertEqFloat(rl.at(0), 0.0, eps)
+    testing.AssertEqFloat(rl.at(2), 2.0, eps)
+    mut gl := tensor.Gelu(mix)
+    testing.AssertEqFloat(gl.at(1), 0.0, eps)
+    testing.AssertTrue(gl.at(2) > 1.9)
+    testing.AssertTrue(gl.at(0) > 0.0 - 0.01)
+    mut ab := tensor.Abs(mix)
+    testing.AssertEqFloat(ab.at(0), 3.0, eps)
+    mut sq := tensor.Square(mix)
+    testing.AssertEqFloat(sq.at(2), 4.0, eps)
+
+    mut four := tensor.Scalar(4.0)
+    mut rt := tensor.Sqrt(four)
+    testing.AssertEqFloat(rt.at(0), 2.0, eps)
+    mut pw := tensor.PowScalar(four, 0.5)
+    testing.AssertEqFloat(pw.at(0), 2.0, eps)
+
+    mut cl := tensor.Clip(mix, 0.0 - 1.0, 1.0)
+    testing.AssertEqFloat(cl.at(0), 0.0 - 1.0, eps)
+    testing.AssertEqFloat(cl.at(2), 1.0, eps)
+
+    // Comparison helpers
+    testing.AssertTrue(tensor.AllClose(a, a, tensor.TSR_TOL))
+    testing.AssertFalse(tensor.AllClose(a, b, tensor.TSR_TOL))
+    testing.AssertTrue(tensor.Equal(a, a))
+    testing.AssertFalse(tensor.Equal(a, tall))
+    testing.AssertTrue(tensor.MaxAbsDiff(a, tall) > 1.0e200)
+    testing.AssertContains(tensor.ToString(two), "tensor(1)")
+
+    ret testing.Summary()
+end

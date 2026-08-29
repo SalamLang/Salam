@@ -1,0 +1,563 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package onnx
+
+import str
+import tensor
+
+// The op table, opset 13 semantics for the ops it covers:
+//
+//   elementwise  Relu Sigmoid Tanh Exp Log Sqrt Neg LeakyRelu Clip
+//                Add Sub Mul Div (NumPy-style broadcast as std/tensor
+//                supports it) Softmax LogSoftmax (last axis)
+//   dense        MatMul (rank 2) Gemm (alpha, beta, transA, transB)
+//   convolution  Conv (2D, group 1, unit dilation, symmetric pads)
+//                MaxPool AveragePool (2D, no pads) GlobalAveragePool
+//                BatchNormalization (inference form)
+//   shape        Reshape Flatten Transpose Squeeze Unsqueeze Concat
+//                Identity Dropout (inference passthrough) Constant
+//
+// Anything else fails the run with the op named in model.error, which
+// is what an exporter's user needs to hear.
+
+func _norm_axis(axis: i64, rank: int): int:
+    mut a := axis as int
+    if a < 0: a = a + rank end
+    ret a
+end
+
+// Reads input `k` of a node; false (and an error) when unbound.
+func _in(model &: Model, node &: Node, env &: _Env, k: int, out &: tensor.Tensor): bool:
+    if k >= node.inputs.len() || str.Len(node.inputs.get(k)) == 0:
+        model.error = node.op + ": missing input " + k
+        ret false
+    end
+    if _env_get(env, node.inputs.get(k), out) == false:
+        model.error = node.op + ": unbound input " + node.inputs.get(k)
+        ret false
+    end
+    ret true
+end
+
+func _emit(node &: Node, env &: _Env, k: int, t: tensor.Tensor):
+    if k < node.outputs.len(): _env_put(env, node.outputs.get(k), t, true) end
+end
+
+// Axes from an "axes" attribute or from input 1, as ints.
+func _axes_of(model &: Model, node &: Node, env &: _Env, out &: Vector<int>): bool:
+    k := node.attr_index("axes")
+    if k >= 0:
+        a := node.attrs.get(k)
+        repeat a.ints.len() with i: out.push(a.ints.get(i) as int) end
+        ret true
+    end
+    mut t := tensor.Empty()
+    if _in(model, node, env, 1, t) == false: ret false end
+    repeat t.numel() with i: out.push(t.at(i) as int) end
+    ret true
+end
+
+func _unary(model &: Model, node &: Node, env &: _Env): bool:
+    mut x := tensor.Empty()
+    if _in(model, node, env, 0, x) == false: ret false end
+    mut y := tensor.Empty()
+    if str.Equals(node.op, "Relu"): y = tensor.Relu(x)
+    else str.Equals(node.op, "Sigmoid"): y = tensor.Sigmoid(x)
+    else str.Equals(node.op, "Tanh"): y = tensor.Tanh(x)
+    else str.Equals(node.op, "Exp"): y = tensor.Exp(x)
+    else str.Equals(node.op, "Log"): y = tensor.Log(x)
+    else str.Equals(node.op, "Sqrt"): y = tensor.Sqrt(x)
+    else str.Equals(node.op, "Neg"): y = tensor.Neg(x)
+    else str.Equals(node.op, "Softmax"): y = tensor.Softmax(x)
+    else str.Equals(node.op, "LogSoftmax"): y = tensor.LogSoftmax(x)
+    else str.Equals(node.op, "LeakyRelu"):
+        alpha := node.attr_float("alpha", 0.01)
+        y = tensor.Clone(x)
+        p := y.data.data
+        a := alpha as f32
+        zero := 0.0 as f32
+        repeat y.numel() with k:
+            if p[k] < zero: p[k] = p[k] * a end
+        end
+    else:
+        y = tensor.Clone(x)
+    end
+    if str.Equals(node.op, "Softmax") || str.Equals(node.op, "LogSoftmax"):
+        ax := _norm_axis(node.attr_int("axis", 0 - 1), x.rank())
+        if ax != x.rank() - 1:
+            model.error = node.op + ": only the last axis is supported"
+            y.free()
+            ret false
+        end
+    end
+    _emit(node, env, 0, y)
+    ret true
+end
+
+func _binary(model &: Model, node &: Node, env &: _Env): bool:
+    mut a := tensor.Empty()
+    mut b := tensor.Empty()
+    if _in(model, node, env, 0, a) == false || _in(model, node, env, 1, b) == false: ret false end
+    mut y := tensor.Empty()
+    if str.Equals(node.op, "Add"): y = tensor.Add(a, b)
+    else str.Equals(node.op, "Sub"): y = tensor.Sub(a, b)
+    else str.Equals(node.op, "Mul"): y = tensor.Mul(a, b)
+    else: y = tensor.Div(a, b) end
+    if y.is_empty():
+        model.error = node.op + ": shapes " + tensor.ShapeString(a) + " and " + tensor.ShapeString(b) + " do not broadcast"
+        ret false
+    end
+    _emit(node, env, 0, y)
+    ret true
+end
+
+func _clip(model &: Model, node &: Node, env &: _Env): bool:
+    mut x := tensor.Empty()
+    if _in(model, node, env, 0, x) == false: ret false end
+    mut lo := node.attr_float("min", 0.0 - 3.0e38)
+    mut hi := node.attr_float("max", 3.0e38)
+    if node.inputs.len() > 1 && str.Len(node.inputs.get(1)) > 0:
+        mut t := tensor.Empty()
+        if _in(model, node, env, 1, t) == false: ret false end
+        lo = t.at(0)
+    end
+    if node.inputs.len() > 2 && str.Len(node.inputs.get(2)) > 0:
+        mut t := tensor.Empty()
+        if _in(model, node, env, 2, t) == false: ret false end
+        hi = t.at(0)
+    end
+    _emit(node, env, 0, tensor.Clip(x, lo, hi))
+    ret true
+end
+
+func _matmul(model &: Model, node &: Node, env &: _Env): bool:
+    mut a := tensor.Empty()
+    mut b := tensor.Empty()
+    if _in(model, node, env, 0, a) == false || _in(model, node, env, 1, b) == false: ret false end
+    mut y := tensor.Empty()
+    if a.rank() == 3 && b.rank() == 3:
+        y = tensor.BatchMatMul(a, b)
+    else:
+        y = tensor.MatMul(a, b)
+    end
+    if y.is_empty():
+        model.error = "MatMul: shapes " + tensor.ShapeString(a) + " x " + tensor.ShapeString(b)
+        ret false
+    end
+    _emit(node, env, 0, y)
+    ret true
+end
+
+func _gemm(model &: Model, node &: Node, env &: _Env): bool:
+    mut a := tensor.Empty()
+    mut b := tensor.Empty()
+    if _in(model, node, env, 0, a) == false || _in(model, node, env, 1, b) == false: ret false end
+    alpha := node.attr_float("alpha", 1.0)
+    beta := node.attr_float("beta", 1.0)
+    ta := node.attr_int("transA", 0) != 0
+    tb := node.attr_int("transB", 0) != 0
+    mut aa := tensor.Empty()
+    mut bb := tensor.Empty()
+    if ta: aa = tensor.Transpose2D(a) else: aa = tensor.Clone(a) end
+    if tb: bb = tensor.Transpose2D(b) else: bb = tensor.Clone(b) end
+    mut y := tensor.MatMul(aa, bb)
+    aa.free()
+    bb.free()
+    if y.is_empty():
+        model.error = "Gemm: shapes " + tensor.ShapeString(a) + " x " + tensor.ShapeString(b)
+        ret false
+    end
+    if alpha != 1.0: tensor.ScaleInPlace(y, alpha) end
+    if node.inputs.len() > 2 && str.Len(node.inputs.get(2)) > 0:
+        mut c := tensor.Empty()
+        if _in(model, node, env, 2, c) == false:
+            y.free()
+            ret false
+        end
+        mut cs := tensor.Scale(c, beta)
+        mut z := tensor.Add(y, cs)
+        cs.free()
+        y.free()
+        if z.is_empty():
+            model.error = str.Clone("Gemm: C does not broadcast")
+            ret false
+        end
+        y = z
+    end
+    _emit(node, env, 0, y)
+    ret true
+end
+
+// strides/pads/kernel attrs for the 2D window ops.
+func _window(node &: Node, kh &: int, kw &: int, sh &: int, sw &: int, ph &: int, pw &: int, msg &: str): bool:
+    sh = 1
+    sw = 1
+    ks := node.attr_index("strides")
+    if ks >= 0:
+        s := node.attrs.get(ks)
+        if s.ints.len() >= 2:
+            sh = s.ints.get(0) as int
+            sw = s.ints.get(1) as int
+        end
+    end
+    ph = 0
+    pw = 0
+    kp := node.attr_index("pads")
+    if kp >= 0:
+        p := node.attrs.get(kp)
+        if p.ints.len() >= 4:
+            if p.ints.get(0) != p.ints.get(2) || p.ints.get(1) != p.ints.get(3):
+                msg = node.op + ": asymmetric pads are not supported"
+                ret false
+            end
+            ph = p.ints.get(0) as int
+            pw = p.ints.get(1) as int
+        end
+    end
+    kk := node.attr_index("kernel_shape")
+    if kk >= 0:
+        k := node.attrs.get(kk)
+        if k.ints.len() >= 2:
+            kh = k.ints.get(0) as int
+            kw = k.ints.get(1) as int
+        end
+    end
+    kd := node.attr_index("dilations")
+    if kd >= 0:
+        d := node.attrs.get(kd)
+        repeat d.ints.len() with i:
+            if d.ints.get(i) != 1:
+                msg = node.op + ": dilations are not supported"
+                ret false
+            end
+        end
+    end
+    if node.attr_int("group", 1) != 1:
+        msg = node.op + ": grouped convolution is not supported"
+        ret false
+    end
+    ret true
+end
+
+func _conv(model &: Model, node &: Node, env &: _Env): bool:
+    mut x := tensor.Empty()
+    mut w := tensor.Empty()
+    if _in(model, node, env, 0, x) == false || _in(model, node, env, 1, w) == false: ret false end
+    if x.rank() != 4 || w.rank() != 4:
+        model.error = str.Clone("Conv: only 2D convolution is supported")
+        ret false
+    end
+    mut kh := w.shape.get(2)
+    mut kw := w.shape.get(3)
+    mut sh := 1
+    mut sw := 1
+    mut ph := 0
+    mut pw := 0
+    mut msg := ""
+    if _window(node, kh, kw, sh, sw, ph, pw, msg) == false:
+        model.error = msg
+        ret false
+    end
+    mut bias := tensor.Empty()
+    if node.inputs.len() > 2 && str.Len(node.inputs.get(2)) > 0:
+        if _in(model, node, env, 2, bias) == false: ret false end
+    end
+    mut y := tensor.Conv2DForward(x, w, bias, sh, sw, ph, pw)
+    if y.is_empty():
+        model.error = "Conv: shapes " + tensor.ShapeString(x) + " and " + tensor.ShapeString(w)
+        ret false
+    end
+    _emit(node, env, 0, y)
+    ret true
+end
+
+func _pool(model &: Model, node &: Node, env &: _Env): bool:
+    mut x := tensor.Empty()
+    if _in(model, node, env, 0, x) == false: ret false end
+    if x.rank() != 4:
+        model.error = node.op + ": only 2D pooling is supported"
+        ret false
+    end
+    mut kh := 1
+    mut kw := 1
+    mut sh := 1
+    mut sw := 1
+    mut ph := 0
+    mut pw := 0
+    mut msg := ""
+    if _window(node, kh, kw, sh, sw, ph, pw, msg) == false:
+        model.error = msg
+        ret false
+    end
+    if ph != 0 || pw != 0:
+        model.error = node.op + ": padded pooling is not supported"
+        ret false
+    end
+    mut y := tensor.Empty()
+    if str.Equals(node.op, "MaxPool"):
+        mut am := tensor.Empty()
+        y = tensor.MaxPool2DForward(x, kh, kw, sh, sw, am)
+        am.free()
+    else:
+        y = tensor.AvgPool2DForward(x, kh, kw, sh, sw)
+    end
+    if y.is_empty():
+        model.error = node.op + ": bad window for " + tensor.ShapeString(x)
+        ret false
+    end
+    _emit(node, env, 0, y)
+    ret true
+end
+
+func _global_avg(model &: Model, node &: Node, env &: _Env): bool:
+    mut x := tensor.Empty()
+    if _in(model, node, env, 0, x) == false: ret false end
+    if x.rank() != 4:
+        model.error = str.Clone("GlobalAveragePool: rank 4 input required")
+        ret false
+    end
+    mut m1 := tensor.MeanAxis(x, 3, true)
+    y := tensor.MeanAxis(m1, 2, true)
+    m1.free()
+    _emit(node, env, 0, y)
+    ret true
+end
+
+func _batchnorm(model &: Model, node &: Node, env &: _Env): bool:
+    mut x := tensor.Empty()
+    mut scale := tensor.Empty()
+    mut bias := tensor.Empty()
+    mut mean := tensor.Empty()
+    mut vr := tensor.Empty()
+    if _in(model, node, env, 0, x) == false || _in(model, node, env, 1, scale) == false: ret false end
+    if _in(model, node, env, 2, bias) == false || _in(model, node, env, 3, mean) == false: ret false end
+    if _in(model, node, env, 4, vr) == false: ret false end
+    if x.rank() < 2:
+        model.error = str.Clone("BatchNormalization: rank 2 or more required")
+        ret false
+    end
+    eps := node.attr_float("epsilon", 0.00001)
+    c := x.shape.get(1)
+    if scale.numel() != c || bias.numel() != c || mean.numel() != c || vr.numel() != c:
+        model.error = "BatchNormalization: per-channel parameters must have " + c + " entries"
+        ret false
+    end
+    y := tensor.Clone(x)
+    n := x.shape.get(0)
+    inner := x.numel() / (n * c)
+    p := y.data.data
+    repeat c with ch:
+        // y = g * x + b with g = scale / sqrt(var + eps) and
+        // b = bias - mean * g: the inference-time fold.
+        g := (scale.at(ch) / _sqrt64(vr.at(ch) + eps)) as f32
+        b := (bias.at(ch) - mean.at(ch) * (g as f64)) as f32
+        repeat n with i:
+            base := (i * c + ch) * inner
+            repeat inner with k: p[base + k] = p[base + k] * g + b end
+        end
+    end
+    _emit(node, env, 0, y)
+    ret true
+end
+
+func _reshape(model &: Model, node &: Node, env &: _Env): bool:
+    mut x := tensor.Empty()
+    mut sh := tensor.Empty()
+    if _in(model, node, env, 0, x) == false || _in(model, node, env, 1, sh) == false: ret false end
+    mut dims := Vector {} as Vector<int>
+    mut infer := 0 - 1
+    mut known := 1
+    repeat sh.numel() with i:
+        mut d := sh.at(i) as int
+        if d == 0 && i < x.rank(): d = x.shape.get(i) end
+        if d == 0 - 1:
+            infer = i
+            dims.push(1)
+        else:
+            dims.push(d)
+            known = known * d
+        end
+    end
+    if infer >= 0 && known > 0: dims.set(infer, x.numel() / known) end
+    mut y := tensor.Reshape(x, dims)
+    dims.free()
+    if y.is_empty():
+        model.error = str.Clone("Reshape: element count mismatch")
+        ret false
+    end
+    _emit(node, env, 0, y)
+    ret true
+end
+
+func _flatten(model &: Model, node &: Node, env &: _Env): bool:
+    mut x := tensor.Empty()
+    if _in(model, node, env, 0, x) == false: ret false end
+    ax := _norm_axis(node.attr_int("axis", 1), x.rank())
+    mut outer := 1
+    repeat ax with i: outer = outer * x.shape.get(i) end
+    mut dims := tensor.Shape2(outer, x.numel() / outer)
+    y := tensor.Reshape(x, dims)
+    dims.free()
+    _emit(node, env, 0, y)
+    ret true
+end
+
+func _transpose(model &: Model, node &: Node, env &: _Env): bool:
+    mut x := tensor.Empty()
+    if _in(model, node, env, 0, x) == false: ret false end
+    mut perm := Vector {} as Vector<int>
+    k := node.attr_index("perm")
+    if k >= 0:
+        a := node.attrs.get(k)
+        repeat a.ints.len() with i: perm.push(a.ints.get(i) as int) end
+    else:
+        repeat x.rank() with i: perm.push(x.rank() - 1 - i) end
+    end
+    mut y := tensor.Permute(x, perm)
+    perm.free()
+    if y.is_empty():
+        model.error = str.Clone("Transpose: bad perm")
+        ret false
+    end
+    _emit(node, env, 0, y)
+    ret true
+end
+
+func _squeeze(model &: Model, node &: Node, env &: _Env, insert: bool): bool:
+    mut x := tensor.Empty()
+    if _in(model, node, env, 0, x) == false: ret false end
+    mut axes := Vector {} as Vector<int>
+    if _axes_of(model, node, env, axes) == false:
+        // Squeeze with no axes drops every size-1 dimension.
+        if insert:
+            axes.free()
+            ret false
+        end
+        model.error = str.Clone("")
+    end
+    mut y := tensor.Clone(x)
+    if insert:
+        // Insert in ascending order of the final positions.
+        mut i := 0
+        until i < axes.len():
+            mut best := i
+            mut j := i + 1
+            until j < axes.len():
+                if axes.get(j) < axes.get(best): best = j end
+                j += 1
+            end
+            t := axes.get(i)
+            axes.set(i, axes.get(best))
+            axes.set(best, t)
+            i += 1
+        end
+        repeat axes.len() with t:
+            tensor.UnsqueezeInPlace(y, _norm_axis(axes.get(t) as i64, y.rank() + 1))
+        end
+    else axes.len() == 0:
+        tensor.SqueezeInPlace(y)
+    else:
+        mut keep := Vector {} as Vector<int>
+        repeat x.rank() with d:
+            mut drop := false
+            repeat axes.len() with t:
+                if _norm_axis(axes.get(t) as i64, x.rank()) == d && x.shape.get(d) == 1: drop = true end
+            end
+            if drop == false: keep.push(x.shape.get(d)) end
+        end
+        if keep.len() == 0: keep.push(1) end
+        y.reshape_(keep)
+        keep.free()
+    end
+    axes.free()
+    _emit(node, env, 0, y)
+    ret true
+end
+
+func _concat(model &: Model, node &: Node, env &: _Env): bool:
+    if node.inputs.len() == 0:
+        model.error = str.Clone("Concat: no inputs")
+        ret false
+    end
+    mut first := tensor.Empty()
+    if _in(model, node, env, 0, first) == false: ret false end
+    ax := _norm_axis(node.attr_int("axis", 0), first.rank())
+    mut acc := tensor.Clone(first)
+    mut i := 1
+    until i < node.inputs.len():
+        mut nxt := tensor.Empty()
+        if _in(model, node, env, i, nxt) == false:
+            acc.free()
+            ret false
+        end
+        mut joined := tensor.Concat2(acc, nxt, ax)
+        acc.free()
+        if joined.is_empty():
+            model.error = "Concat: shapes disagree off axis " + ax
+            ret false
+        end
+        acc = joined
+        i += 1
+    end
+    _emit(node, env, 0, acc)
+    ret true
+end
+
+func _constant(model &: Model, node &: Node, env &: _Env): bool:
+    k := node.attr_index("value")
+    if k < 0:
+        model.error = str.Clone("Constant: only the tensor form is supported")
+        ret false
+    end
+    a := node.attrs.get(k)
+    _emit(node, env, 0, tensor.Clone(a.t))
+    ret true
+end
+
+func _sqrt64(v: f64): f64:
+    if v <= 0.0: ret 0.0 end
+    mut r := v
+    if r > 1.0: r = v / 2.0 end
+    repeat 40: r = 0.5 * (r + v / r) end
+    ret r
+end
+
+// Dispatch by op name.
+func _exec_node(model &: Model, node: Node, env &: _Env): bool:
+    op := node.op
+    if str.Equals(op, "Relu") || str.Equals(op, "Sigmoid") || str.Equals(op, "Tanh") || str.Equals(op, "Exp") || str.Equals(op, "Log") || str.Equals(op, "Sqrt") || str.Equals(op, "Neg") || str.Equals(op, "Softmax") || str.Equals(op, "LogSoftmax") || str.Equals(op, "LeakyRelu") || str.Equals(op, "Identity") || str.Equals(op, "Dropout"):
+        ret _unary(model, node, env)
+    end
+    if str.Equals(op, "Add") || str.Equals(op, "Sub") || str.Equals(op, "Mul") || str.Equals(op, "Div"): ret _binary(model, node, env) end
+    if str.Equals(op, "Clip"): ret _clip(model, node, env) end
+    if str.Equals(op, "MatMul"): ret _matmul(model, node, env) end
+    if str.Equals(op, "Gemm"): ret _gemm(model, node, env) end
+    if str.Equals(op, "Conv"): ret _conv(model, node, env) end
+    if str.Equals(op, "MaxPool") || str.Equals(op, "AveragePool"): ret _pool(model, node, env) end
+    if str.Equals(op, "GlobalAveragePool"): ret _global_avg(model, node, env) end
+    if str.Equals(op, "BatchNormalization"): ret _batchnorm(model, node, env) end
+    if str.Equals(op, "Reshape"): ret _reshape(model, node, env) end
+    if str.Equals(op, "Flatten"): ret _flatten(model, node, env) end
+    if str.Equals(op, "Transpose"): ret _transpose(model, node, env) end
+    if str.Equals(op, "Squeeze"): ret _squeeze(model, node, env, false) end
+    if str.Equals(op, "Unsqueeze"): ret _squeeze(model, node, env, true) end
+    if str.Equals(op, "Concat"): ret _concat(model, node, env) end
+    if str.Equals(op, "Constant"): ret _constant(model, node, env) end
+    // The second table (onnx_ops2) answers for everything else it knows.
+    if _exec_node2(model, node, env): ret true end
+    if str.Len(model.error) > 0: ret false end
+    model.error = "unsupported op: " + op
+    ret false
+end

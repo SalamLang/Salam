@@ -1,0 +1,86 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/ml: PCA in the estimator convention.
+
+import matrix
+import ml
+import testing
+
+func main:
+    eps := 0.000001
+
+    // Data that lives on a line in 3D plus a little noise: one component
+    // carries almost all the variance
+    mut x := matrix.Zeros(200, 3)
+    mut g := matrix.NewRng(61)
+    repeat 200 with i:
+        t := g.next_normal() * 5.0
+        x.set(i, 0, t + 0.1 * g.next_normal() + 1.0)
+        x.set(i, 1, 2.0 * t + 0.1 * g.next_normal() - 2.0)
+        x.set(i, 2, 0.0 - t + 0.1 * g.next_normal())
+    end
+
+    mut pca := ml.PCA { n_components = 2 }
+    mut z := pca.fit_transform(x)
+    testing.AssertTrue(pca.ok)
+    testing.AssertEqInt(pca.n_components, 2)
+    testing.AssertEqInt(pca.components.rows, 3)
+    testing.AssertEqInt(pca.components.cols, 2)
+    testing.AssertEqInt(z.rows, 200)
+    testing.AssertEqInt(z.cols, 2)
+    // The first component explains nearly everything, ratios sum to <= 1
+    testing.AssertTrue(pca.explained_ratio.at(0, 0) > 0.99)
+    testing.AssertTrue(pca.explained_ratio.at(0, 0) + pca.explained_ratio.at(0, 1) <= 1.0 + eps)
+    testing.AssertTrue(pca.explained_variance.at(0, 0) > pca.explained_variance.at(0, 1))
+    // The mean was removed: projected scores average to zero
+    mut m0 := 0.0
+    repeat 200 with i: m0 += z.at(i, 0) end
+    testing.AssertEqFloat(m0 / 200.0, 0.0, 0.000001)
+    // Components are orthonormal
+    mut gram := matrix.TransposeMul(pca.components, pca.components)
+    testing.AssertEqFloat(gram.at(0, 0), 1.0, 0.000001)
+    testing.AssertEqFloat(gram.at(0, 1), 0.0, 0.000001)
+    // Reconstruction from two components recovers the data closely
+    mut back := pca.inverse_transform(z)
+    testing.AssertTrue(matrix.AllClose(back, x, 0.05))
+
+    // Keeping all components is lossless
+    mut full := ml.PCA {}
+    mut zf := full.fit_transform(x)
+    testing.AssertEqInt(full.n_components, 3)
+    mut backf := full.inverse_transform(zf)
+    testing.AssertTrue(matrix.AllClose(backf, x, 0.000001))
+
+    // Errors
+    mut fresh := ml.PCA {}
+    testing.AssertTrue(fresh.transform(x).is_empty())
+    mut one := matrix.Zeros(1, 3)
+    testing.AssertFalse(fresh.fit(one))
+
+    pca.free()
+    full.free()
+    fresh.free()
+    matrix.Free(x)
+    matrix.Free(z)
+    matrix.Free(gram)
+    matrix.Free(back)
+    matrix.Free(zf)
+    matrix.Free(backf)
+    matrix.Free(one)
+
+    ret testing.Summary()
+end

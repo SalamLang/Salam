@@ -79,6 +79,38 @@ func struct_by_name(s &: sm.Sema, name: str): int:
             end
         end
     end
+    // Not in scope: the type may come from a package this module never
+    // imports itself - a data.Table's `cells` is a matrix.Matrix, and a
+    // gguf.LoadTensorF32 result is a tensor.Tensor, whether or not the
+    // caller imported matrix or tensor. Every package ever loaded is in
+    // the sema's package cache, so search those members too. Without this
+    // the method call fell through to cg_mangle_method with owner 0 and
+    // was mangled as a generic instantiation (`_Salam_g_S_...`), a symbol
+    // no header declares.
+    repeat s.pkg_cache_syms.len() with ci:
+        pkid2 := s.pkg_cache_syms.get(ci)
+        if pkid2 == 0:
+            continue
+        end
+        pk2 := sm.SymAt(s, pkid2)
+        if pk2.kind != sm.SYM_PACKAGE || pk2.members == 0:
+            continue
+        end
+        psc2 := sm.ScopeAt(s, pk2.members)
+        repeat psc2.symbols.len() with j2:
+            symid3 := psc2.symbols.get(j2)
+            sv3 := sm.SymAt(s, symid3)
+            if sv3.kind != sm.SYM_STRUCT:
+                continue
+            end
+            if str.Equals(sv3.name, name):
+                ret symid3
+            end
+            if sv3.ty != sm.TYPE_NONE && str.Len(sm.TypeAt(s, sv3.ty).name) > 0 && str.Equals(sm.TypeAt(s, sv3.ty).name, name):
+                ret symid3
+            end
+        end
+    end
     ret 0
 end
 

@@ -1,0 +1,91 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package nn
+
+import autograd
+import mem
+import math
+import tensor
+
+// Token embeddings and the sinusoidal position table.
+//
+// Sequence data travels FLATTENED through this package: a batch of B
+// sequences of length T is a [B*T, D] tensor with sample b's tokens at
+// rows b*T .. b*T+T-1. Every dense op then works unchanged, and the
+// attention layer is the one place that reshapes to [B, H, T, dh] and
+// back. SinusoidalPositions produces its table already tiled to that
+// layout, so adding it is a same-shape Add.
+
+@en "Embedding"
+@fa "جاسازی"
+@ar "تضمين"
+pub struct Embedding:
+    pub w: int = 0 - 1
+    pub vocab: int = 0
+    pub dim: int = 0
+
+    // Rows for `indices`, as [len(indices), dim].
+    @en "forward"
+    @fa "پیشرو"
+    @ar "أمامي"
+    pub func forward(tp &: autograd.Tape, ps &: ParamStore, indices &: Vector<int>): int:
+        wid := Bind(tp, ps, this.w)
+        ret autograd.Embedding(tp, wid, indices)
+    end
+end
+
+// ---- public API ----
+
+// Embedding table initialized N(0, 1/sqrt(dim)), which keeps a summed
+// token-plus-position input at unit scale.
+@en "NewEmbedding"
+@fa "جاسازی نو"
+@ar "تضمين جديد"
+pub func NewEmbedding(ps &: ParamStore, name: str, vocab: int, dim: int, g &: tensor.Rng): Embedding:
+    mut e := Embedding {}
+    e.vocab = vocab
+    e.dim = dim
+    mut w := tensor.Zeros2(vocab, dim)
+    tensor.FillNormal(w, 0.0, 1.0 / math.Sqrt(dim as f64), g)
+    _pn1 := name + ".w"
+    e.w = ps.add(_pn1, w)
+    mem.Free(_pn1 as void*)
+    ret e
+end
+
+// The "Attention Is All You Need" position table for `seq` positions,
+// tiled `batch` times into the flattened [batch*seq, dim] layout. A
+// constant: feed it through autograd.Input and Add it to the embedded
+// tokens.
+@en "SinusoidalPositions"
+@fa "موقعیت سینوسی"
+@ar "مواضع جيبية"
+pub func SinusoidalPositions(batch: int, seq: int, dim: int): tensor.Tensor:
+    t := tensor.Zeros2(batch * seq, dim)
+    p := t.data.data
+    repeat seq with pos:
+        repeat dim with i:
+            pair := (i / 2) * 2
+            freq := 1.0 / math.Pow(10000.0, (pair as f64) / (dim as f64))
+            angle := (pos as f64) * freq
+            mut v := math.Sin(angle)
+            if i % 2 == 1: v = math.Cos(angle) end
+            repeat batch with b:
+                p[(b * seq + pos) * dim + i] = v as f32
+            end
+        end
+    end
+    ret t
+end

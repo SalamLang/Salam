@@ -1,0 +1,181 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package llm
+
+import math
+import sort
+import tensor
+
+// Turning a logits row into the next token, and the generation loop.
+// A temperature of 0 (or top_k = 1) is greedy; otherwise the row is
+// divided by the temperature, cut to the top_k highest and the smallest
+// nucleus reaching top_p, then sampled from the seeded generator. The
+// repeat penalty divides positive logits (and multiplies negative
+// ones) of tokens already in `recent`.
+
+@en "Sampler"
+@fa "نمونه‌بردار"
+@ar "عينة"
+pub struct Sampler:
+    pub temperature: f64 = 1.0
+    pub top_k: int = 0
+    pub top_p: f64 = 1.0
+    pub repeat_penalty: f64 = 1.0
+    pub rng: tensor.Rng = tensor.Rng {}
+
+    // The next token from row `row` of logits ([n, vocab]).
+    @en "sample"
+    @fa "نمونه"
+    @ar "عينة"
+    pub func sample(logits &: tensor.Tensor, row: int, recent &: Vector<int>): int:
+        vocab := logits.dim(logits.rank() - 1)
+        mut val := Vector {} as Vector<f64>
+        base := row * vocab
+        repeat vocab with k: val.push(logits.at(base + k)) end
+        if this.repeat_penalty != 1.0:
+            repeat recent.len() with r:
+                id := recent.get(r)
+                if id < 0 || id >= vocab: continue end
+                v := val.get(id)
+                val.set(id, v > 0.0 ? v / this.repeat_penalty : v * this.repeat_penalty)
+            end
+        end
+        mut best := 0
+        repeat vocab with k:
+            if val.get(k) > val.get(best): best = k end
+        end
+        if this.temperature <= 0.0 || this.top_k == 1:
+            val.free()
+            ret best
+        end
+        mut idx := Vector {} as Vector<int>
+        repeat vocab with k: idx.push(k) end
+        sort.SortIndexDesc(idx, val)
+        mut keep := vocab
+        if this.top_k > 0 && this.top_k < keep: keep = this.top_k end
+        // softmax over the kept prefix, with the nucleus cut applied on
+        // the running mass
+        mx := val.get(idx.get(0))
+        mut probs := Vector {} as Vector<f64>
+        mut total := 0.0
+        repeat keep with k:
+            p := math.Exp((val.get(idx.get(k)) - mx) / this.temperature)
+            probs.push(p)
+            total += p
+        end
+        if this.top_p < 1.0:
+            mut mass := 0.0
+            mut cut := keep
+            repeat keep with k:
+                mass += probs.get(k) / total
+                if mass >= this.top_p && cut == keep: cut = k + 1 end
+            end
+            keep = cut
+            total = 0.0
+            repeat keep with k: total += probs.get(k) end
+        end
+        u := this.rng.next_float() * total
+        mut acc := 0.0
+        mut pick := idx.get(keep - 1)
+        mut done := false
+        repeat keep with k:
+            if done: continue end
+            acc += probs.get(k)
+            if u < acc:
+                pick = idx.get(k)
+                done = true
+            end
+        end
+        val.free()
+        idx.free()
+        probs.free()
+        ret pick
+    end
+end
+
+// ---- public API ----
+
+@en "NewSampler"
+@fa "نمونه‌بردار نو"
+@ar "عينة جديدة"
+pub func NewSampler(seed: i64): Sampler:
+    mut s := Sampler {}
+    s.rng = tensor.NewRng(seed)
+    ret s
+end
+
+// The argmax of row `row`.
+@en "Greedy"
+@fa "حریصانه"
+@ar "جشع"
+pub func Greedy(logits &: tensor.Tensor, row: int): int:
+    vocab := logits.dim(logits.rank() - 1)
+    base := row * vocab
+    mut best := 0
+    repeat vocab with k:
+        if logits.at(base + k) > logits.at(base + best): best = k end
+    end
+    ret best
+end
+
+// Continues `prompt_ids` (already in the cache's history, or fed here
+// from an empty cache) by up to max_new tokens, stopping at eos or when
+// the context is full. Returns the new ids only.
+@en "GenerateIds"
+@fa "تولید شناسه‌ها"
+@ar "توليد المعرفات"
+pub func GenerateIds(m &: Model, cache &: KVCache, prompt_ids &: Vector<int>, max_new: int, sp &: Sampler, eos: int): Vector<int>:
+    mut out := Vector {} as Vector<int>
+    if prompt_ids.len() == 0: ret out end
+    mut logits := Forward(m, cache, prompt_ids)
+    if logits.is_empty(): ret out end
+    mut step := Vector {} as Vector<int>
+    step.push(0)
+    mut n := 0
+    mut stop := false
+    until n < max_new && !stop:
+        next := sp.sample(logits, logits.dim(0) - 1, out)
+        logits.free()
+        if next == eos:
+            stop = true
+        else:
+            out.push(next)
+            n += 1
+            if cache.len >= cache.ctx:
+                stop = true
+            else:
+                step.set(0, next)
+                logits = Forward(m, cache, step)
+                if logits.is_empty(): stop = true end
+            end
+        end
+    end
+    if !stop: logits.free() end
+    step.free()
+    ret out
+end
+
+// Text in, text out: encode, generate, decode.
+@en "Generate"
+@fa "تولید"
+@ar "توليد"
+pub func Generate(m &: Model, cache &: KVCache, tok &: Tokenizer, prompt: str, max_new: int, sp &: Sampler): str:
+    mut ids := tok.encode(prompt)
+    mut gen := GenerateIds(m, cache, ids, max_new, sp, tok.eos)
+    text := tok.decode(gen)
+    ids.free()
+    gen.free()
+    ret text
+end

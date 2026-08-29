@@ -1,0 +1,279 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// The parts of the protocol a happy path never reaches.
+//
+// A client is judged on what it does with traffic it did not ask for: a
+// packet it cannot parse, an acknowledgement for an id nobody is waiting on,
+// an event for a namespace it never joined, a server that hangs up, and a
+// server that simply stops talking. None of these may take the process down,
+// and each has a defined answer.
+//
+// The heartbeat is checked here too, in both directions: the client has to
+// answer the server's ping, and has to notice when the pings stop. The
+// server advertises a deliberately tiny interval so that "notice" takes
+// under a second rather than the usual forty-five.
+
+import net.socketio
+import net.websocket
+import sync
+import str
+
+const PORT := 19418
+
+mut ready := sync.NewWaitGroup()
+mut server log := ""
+mut ticks := 0
+mut once ticks := 0
+mut any names := ""
+mut ack via callback := ""
+
+func ack id of(text: str): int:
+    mut i := 1
+    mut id := 0
+    mut seen := false
+    until i < text.len():
+        c := char_code(text.substr(i, 1))
+        if c < 48 || c > 57:
+            i = text.len()
+        else:
+            id = id * 10 + (c - 48)
+            seen = true
+            i += 1
+        end
+    end
+    if !seen:
+        ret 0 - 1
+    end
+    ret id
+end
+
+// Round one: answer everything, oddly, then hang up on the namespace.
+func serve odd(c &: websocket.Conn):
+    websocket.SendText(c, `0{"sid":"proto","upgrades":[],"pingInterval":30000,"pingTimeout":30000}`)
+    mut going := true
+    mut idle := 0
+    // A poll that times out is not the end of anything - under a loaded
+    // test runner the client can be several seconds between packets - so it
+    // only counts towards a hard stop that stops this thread wedging.
+    until going:
+        m := websocket.Poll(c, 2000)
+        if m.kind == websocket.TIMEOUT:
+            idle += 1
+            if idle > 30:
+                going = false
+            end
+        else m.kind != websocket.TEXT:
+            going = false
+        else:
+            idle = 0
+            body := m.text.substr(1, m.text.len() - 1)
+            if body == "0":
+                websocket.SendText(c, `40{"sid":"proto-nsp"}`)
+            else str.StartsWith(body, `2["poke"`):
+                // An Engine.IO no-op, which exists to end a long poll and
+                // means nothing here.
+                websocket.SendText(c, socketio.EncodeEngine(socketio.EIO_NOOP, ""))
+                // A Socket.IO packet that is not one.
+                websocket.SendText(c, "4not-a-packet")
+                // An acknowledgement for an id nobody is waiting on.
+                websocket.SendText(c, `43999["stray"]`)
+                // An event for a namespace this client never joined.
+                websocket.SendText(c, `42/ghost,["boo"]`)
+                // ...and then two real ones.
+                websocket.SendText(c, `42["tick",1]`)
+                websocket.SendText(c, `42["tick",2]`)
+            else str.StartsWith(body, "2") && str.Contains(body, `"ask"`):
+                websocket.SendText(c, "43" + ack id of(body) + `["answered"]`)
+            else str.StartsWith(body, "2") && str.Contains(body, `"silent"`):
+                // Deliberately unanswered, so the wait has to time out.
+                server log += "ignored a question;"
+            else str.StartsWith(body, `2["bye"`):
+                // The server closes this namespace, which is not the same as
+                // the connection going away.
+                websocket.SendText(c, socketio.EncodeEngine(socketio.EIO_MESSAGE, "1"))
+                server log += "hung up;"
+            else body == "1":
+                going = false
+            end
+        end
+    end
+end
+
+// Round two: one ping, then silence, so the client has to time it out.
+func serve silent(c &: websocket.Conn):
+    websocket.SendText(c, `0{"sid":"quiet","upgrades":[],"pingInterval":800,"pingTimeout":800}`)
+    mut going := true
+    mut idle := 0
+    until going:
+        m := websocket.Poll(c, 2000)
+        if m.kind == websocket.TIMEOUT:
+            idle += 1
+            if idle > 15:
+                going = false
+            end
+        else m.kind != websocket.TEXT:
+            going = false
+        else:
+            // A pong is the payload "3" on its own - an Engine.IO type digit
+            // with no body - so it is matched before the digit is stripped.
+            if m.text == socketio.EncodeEngine(socketio.EIO_PONG, ""):
+                server log += "answered the ping;"
+                going = false
+            else:
+                body := m.text.substr(1, m.text.len() - 1)
+                if body == "0":
+                    websocket.SendText(c, `40{"sid":"quiet-nsp"}`)
+                    // One heartbeat, straight away, so the client has
+                    // something to answer before the silence starts.
+                    websocket.SendText(c, socketio.EncodeEngine(socketio.EIO_PING, ""))
+                end
+            end
+        end
+    end
+    // Hold the socket open but mute, which is what a wedged server looks
+    // like: the connection is fine, the peer is gone.
+    mut waiting := true
+    mut quiet := 0
+    until waiting:
+        m := websocket.Poll(c, 500)
+        if m.kind != websocket.TIMEOUT:
+            waiting = false
+        else:
+            quiet += 1
+            if quiet > 40:
+                waiting = false
+            end
+        end
+    end
+end
+
+func sio server():
+    srv := websocket.Listen(PORT)
+    sync.Done(ready)
+    if !websocket.Ok(srv):
+        ret
+    end
+    mut first := websocket.Accept(srv)
+    if websocket.IsOpen(first):
+        serve odd(first)
+    end
+    websocket.Close(first)
+    mut second := websocket.Accept(srv)
+    if websocket.IsOpen(second):
+        serve silent(second)
+    end
+    websocket.Close(second)
+    websocket.CloseServer(srv)
+end
+
+func main:
+    sync.Add(ready, 1 as i64)
+    t := spawn(sio server)
+    sync.Wait(ready)
+
+    mut o := socketio.NewOptions()
+    o.transports = socketio.TRANSPORT_WEBSOCKET
+    o.timeout = 3000
+    o.reconnection = false
+    c := socketio.DialWith("http://127.0.0.1:" + PORT, o)
+    println "connected:", socketio.IsConnected(c)
+    println "heartbeat the server asked for:", socketio.PingInterval(c), socketio.PingTimeout(c)
+
+    socketio.On(c, "tick", (e: socketio.Event): ticks += 1 end)
+    socketio.Once(c, "tick", (e: socketio.Event): once ticks += 1 end)
+    socketio.OnAny(c, (e: socketio.Event): any names += e.name + "," end)
+
+    println "-- traffic nobody asked for"
+    mut errors := 0
+    socketio.Emit(c, "poke")
+    mut i := 0
+    until i < 15 && ticks < 2:
+        mut ev := socketio.Next(c, 200)
+        if ev.kind == socketio.EV_ERROR:
+            errors += 1
+        end
+        socketio.EventFree(ev)
+        i += 1
+    end
+    println "unreadable packet reported:", errors > 0
+    println "real events still delivered:", ticks
+    println "Once fired once:", once ticks
+    println "catch-all saw:", any names
+    println "still connected through all of it:", socketio.IsConnected(c)
+
+    println "-- acknowledgements"
+    mut a := socketio.NewArgs()
+    socketio.EmitWithAck(c, "ask", a, 2000, (r: socketio.Ack): ack via callback = "" + r.ok + ":" + socketio.AckStr(r, 0) end)
+    socketio.ArgsFree(a)
+    mut j := 0
+    until j < 15 && ack via callback == "":
+        mut ev := socketio.Next(c, 200)
+        socketio.EventFree(ev)
+        j += 1
+    end
+    println "callback form:", ack via callback
+
+    mut q := socketio.NewArgs()
+    mut timed out := socketio.EmitAck(c, "silent", q, 250)
+    socketio.ArgsFree(q)
+    println "unanswered question times out:", timed out.ok, "no data:", socketio.AckCount(timed out)
+    socketio.AckFree(timed out)
+    println "nothing left outstanding:", socketio.Pending(c)
+
+    println "-- the server closes the namespace"
+    // Drain first, so the next line is testing one thing.
+    mut k := 0
+    until k < 10:
+        mut spare := socketio.Next(c, 100)
+        socketio.EventFree(spare)
+        k += 1
+    end
+    socketio.Emit(c, "bye")
+    // ONE call, not a loop: the pump that ends a connection queues the
+    // disconnect on its way out, and a Next that gave up without looking
+    // again would report a timeout for something that was not one.
+    mut bye := socketio.Next(c, 2000)
+    reason := bye.message
+    println "one Next reported a disconnect:", bye.kind == socketio.EV_DISCONNECT
+    socketio.EventFree(bye)
+    println "reason:", reason
+    println "connected:", socketio.IsConnected(c)
+    socketio.Close(c)
+
+    println "-- a server that stops talking"
+    mut o2 := socketio.NewOptions()
+    o2.transports = socketio.TRANSPORT_WEBSOCKET
+    o2.timeout = 3000
+    o2.reconnection = false
+    c2 := socketio.DialWith("http://127.0.0.1:" + PORT, o2)
+    println "connected:", socketio.IsConnected(c2)
+    mut why := ""
+    mut n := 0
+    until n < 25 && why == "":
+        mut ev := socketio.Next(c2, 200)
+        if ev.kind == socketio.EV_DISCONNECT:
+            why = ev.message
+        end
+        socketio.EventFree(ev)
+        n += 1
+    end
+    println "noticed the silence:", why
+    println "connected:", socketio.IsConnected(c2)
+    println "and does not keep trying:", socketio.Pump(c2, 0) == socketio.PUMP_CLOSED
+    socketio.Close(c2)
+
+    join(t)
+    println "server saw:", server log
+end

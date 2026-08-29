@@ -1,0 +1,137 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package nn
+
+import autograd
+import mem
+import tensor
+
+// Recurrent layers, composed entirely from recorded ops: each time
+// step is a dense projection of the input and of the previous state,
+// gates split off with Narrow, and the outputs are concatenated back
+// into one tensor. Nothing here has a custom backward - the tape
+// unrolls through time on its own.
+//
+// Sequences are TIME-MAJOR for these layers: x is [seq*batch, in] with
+// step t's batch at rows t*batch .. t*batch+batch-1, and the output is
+// [seq*batch, hidden] in the same layout. Flattened batch-major data
+// (as nn_embed produces) converts with a Permute of [batch, seq, D] to
+// [seq, batch, D] and back.
+
+@en "LSTM"
+@fa "حافظه کوتاه‌مدت بلند"
+@ar "ذاكرة طويلة قصيرة المدى"
+pub struct LSTM:
+    pub wx: Linear = Linear {}
+    pub wh: Linear = Linear {}
+    pub hidden: int = 0
+
+    // All hidden states, [seq*batch, hidden], time-major.
+    @en "forward"
+    @fa "پیشرو"
+    @ar "أمامي"
+    pub func forward(tp &: autograd.Tape, ps &: ParamStore, x: int, seq: int, batch: int): int:
+        hd := this.hidden
+        mut zeros := tensor.Zeros2(batch, hd)
+        mut h := autograd.Constant(tp, zeros)
+        mut c := autograd.Constant(tp, zeros)
+        zeros.free()
+        mut out := 0 - 1
+        repeat seq with t:
+            xt := autograd.SliceAxis0(tp, x, t * batch, batch)
+            gates := autograd.Add(tp, this.wx.forward(tp, ps, xt), this.wh.forward(tp, ps, h))
+            ig := autograd.Sigmoid(tp, autograd.Narrow(tp, gates, 1, 0, hd))
+            fg := autograd.Sigmoid(tp, autograd.Narrow(tp, gates, 1, hd, hd))
+            gg := autograd.Tanh(tp, autograd.Narrow(tp, gates, 1, 2 * hd, hd))
+            og := autograd.Sigmoid(tp, autograd.Narrow(tp, gates, 1, 3 * hd, hd))
+            c = autograd.Add(tp, autograd.Mul(tp, fg, c), autograd.Mul(tp, ig, gg))
+            h = autograd.Mul(tp, og, autograd.Tanh(tp, c))
+            if out < 0: out = h else: out = autograd.Concat2(tp, out, h, 0) end
+        end
+        ret out
+    end
+end
+
+@en "GRU"
+@fa "واحد بازگشتی دروازه‌دار"
+@ar "وحدة متكررة ذات بوابات"
+pub struct GRU:
+    pub wx: Linear = Linear {}
+    pub wh: Linear = Linear {}
+    pub hidden: int = 0
+
+    @en "forward"
+    @fa "پیشرو"
+    @ar "أمامي"
+    pub func forward(tp &: autograd.Tape, ps &: ParamStore, x: int, seq: int, batch: int): int:
+        hd := this.hidden
+        mut zeros := tensor.Zeros2(batch, hd)
+        mut h := autograd.Constant(tp, zeros)
+        zeros.free()
+        mut out := 0 - 1
+        repeat seq with t:
+            xt := autograd.SliceAxis0(tp, x, t * batch, batch)
+            gx := this.wx.forward(tp, ps, xt)
+            gh := this.wh.forward(tp, ps, h)
+            r := autograd.Sigmoid(tp, autograd.Add(tp, autograd.Narrow(tp, gx, 1, 0, hd), autograd.Narrow(tp, gh, 1, 0, hd)))
+            z := autograd.Sigmoid(tp, autograd.Add(tp, autograd.Narrow(tp, gx, 1, hd, hd), autograd.Narrow(tp, gh, 1, hd, hd)))
+            n := autograd.Tanh(tp, autograd.Add(tp, autograd.Narrow(tp, gx, 1, 2 * hd, hd), autograd.Mul(tp, r, autograd.Narrow(tp, gh, 1, 2 * hd, hd))))
+            // h = (1 - z) * n + z * h = n + z * (h - n)
+            h = autograd.Add(tp, n, autograd.Mul(tp, z, autograd.Sub(tp, h, n)))
+            if out < 0: out = h else: out = autograd.Concat2(tp, out, h, 0) end
+        end
+        ret out
+    end
+end
+
+// ---- public API ----
+
+@en "NewLSTM"
+@fa "حافظه کوتاه‌مدت بلند نو"
+@ar "ذاكرة طويلة قصيرة جديدة"
+pub func NewLSTM(ps &: ParamStore, name: str, in_f: int, hidden: int, g &: tensor.Rng): LSTM:
+    mut l := LSTM {}
+    l.hidden = hidden
+    _pn1 := name + ".x"
+    l.wx = NewLinear(ps, _pn1, in_f, 4 * hidden, g)
+    mem.Free(_pn1 as void*)
+    _pn2 := name + ".h"
+    l.wh = NewLinearNoBias(ps, _pn2, hidden, 4 * hidden, g)
+    mem.Free(_pn2 as void*)
+    ret l
+end
+
+@en "NewGRU"
+@fa "واحد بازگشتی دروازه‌دار نو"
+@ar "وحدة متكررة ذات بوابات جديدة"
+pub func NewGRU(ps &: ParamStore, name: str, in_f: int, hidden: int, g &: tensor.Rng): GRU:
+    mut l := GRU {}
+    l.hidden = hidden
+    _pn3 := name + ".x"
+    l.wx = NewLinear(ps, _pn3, in_f, 3 * hidden, g)
+    mem.Free(_pn3 as void*)
+    _pn4 := name + ".h"
+    l.wh = NewLinear(ps, _pn4, hidden, 3 * hidden, g)
+    mem.Free(_pn4 as void*)
+    ret l
+end
+
+// The last time step's rows of a time-major [seq*batch, hidden] output.
+@en "LastStep"
+@fa "گام آخر"
+@ar "الخطوة الأخيرة"
+pub func LastStep(tp &: autograd.Tape, out: int, seq: int, batch: int): int:
+    ret autograd.SliceAxis0(tp, out, (seq - 1) * batch, batch)
+end

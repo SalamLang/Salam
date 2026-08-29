@@ -1,0 +1,415 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ml
+
+import math
+import matrix
+import sort
+
+// CART decision trees, classification (gini or entropy) and regression
+// (mean squared error) in one struct: the criterion field picks the
+// mode, and `value` holds class counts per node or the node mean.
+//
+// Nodes live in flat index-linked arrays rather than a pointer graph:
+// node i is a leaf iff feature.get(i) < 0, otherwise rows with
+// x[feature] <= threshold go to left.get(i) and the rest to right.get(i).
+// One allocation per array, trivial to free, trivial to walk, and a
+// forest of them shares no heap pointers between workers.
+//
+// Growth is an explicit work stack over a shared row-index array: each
+// frame owns a contiguous range of it, a split partitions the range in
+// place, and the two halves become frames. No recursion, so a deep tree
+// is a long loop and never a stack overflow. Split search sorts the
+// range's rows by one feature at a time and sweeps once with running
+// class counts (or running sums), scoring every gap between distinct
+// values; max_features > 0 restricts the sweep to a seeded random
+// subset of columns, which is what a random forest asks for.
+
+// One frame of the growth stack: node id, and its rows as a range of
+// the shared index array.
+struct _TreeFrame:
+    pub node: int = 0
+    pub lo: int = 0
+    pub hi: int = 0
+    pub depth: int = 0
+end
+
+@en "DecisionTree"
+@fa "درخت تصمیم"
+@ar "شجرة القرار"
+pub struct DecisionTree:
+    pub criterion: int = TREE_GINI
+    pub max_depth: int = 16
+    pub min_samples_split: int = 2
+    pub min_samples_leaf: int = 1
+    pub max_features: int = 0
+    pub seed: i64 = 42
+    // A class count to size the value table to when the training labels
+    // may not include every class (a forest's bootstrap sample).
+    pub n_classes_hint: int = 0
+    pub feature: Vector<int> = Vector {}
+    pub threshold: Vector<f64> = Vector {}
+    pub left: Vector<int> = Vector {}
+    pub right: Vector<int> = Vector {}
+    pub value: matrix.Matrix = matrix.Matrix {}
+    pub n_classes: int = 0
+    pub ok: bool = false
+
+    @en "is_regression"
+    @fa "رگرسیون است"
+    @ar "انحدار"
+    pub func is_regression(): bool: ret this.criterion == TREE_MSE end
+
+    @en "node_count"
+    @fa "شمار گره"
+    @ar "عدد العقد"
+    pub func node_count(): int: ret this.feature.len() end
+
+    @en "fit"
+    @fa "برازش"
+    @ar "ملاءمة"
+    pub func fit(x &: matrix.Matrix, y &: matrix.Matrix): bool:
+        this.ok = false
+        if x.is_empty() || y.rows != x.rows || y.cols != 1: ret false end
+        this.feature.clear()
+        this.threshold.clear()
+        this.left.clear()
+        this.right.clear()
+        matrix.Free(this.value)
+        mut k := 1
+        if this.is_regression() == false:
+            k = CountClasses(y)
+            if this.n_classes_hint > k: k = this.n_classes_hint end
+            if k < 1: ret false end
+        end
+        this.n_classes = k
+        mut values := Vector {} as Vector<f64>
+        // Grow into a local copy of the settings (a method cannot lend
+        // `this` by reference), then adopt its node arrays.
+        mut me := DecisionTree {}
+        me.criterion = this.criterion
+        me.max_depth = this.max_depth
+        me.min_samples_split = this.min_samples_split
+        me.min_samples_leaf = this.min_samples_leaf
+        me.max_features = this.max_features
+        me.seed = this.seed
+        _grow_tree(me, x, y, k, values)
+        this.feature = me.feature
+        this.threshold = me.threshold
+        this.left = me.left
+        this.right = me.right
+        // Node values: k class counts per node, or one mean.
+        this.value = matrix.Zeros(this.feature.len(), k)
+        repeat this.feature.len() * k with t: this.value.a.set(t, values.get(t)) end
+        values.free()
+        this.ok = true
+        ret true
+    end
+
+    // The leaf node a row lands in.
+    @en "apply_row"
+    @fa "اعمال سطر"
+    @ar "تطبيق صف"
+    pub func apply_row(x &: matrix.Matrix, i: int): int:
+        mut node := 0
+        until this.feature.get(node) >= 0:
+            if x.at(i, this.feature.get(node)) <= this.threshold.get(node):
+                node = this.left.get(node)
+            else:
+                node = this.right.get(node)
+            end
+        end
+        ret node
+    end
+
+    @en "predict_proba"
+    @fa "پیش‌بینی احتمال"
+    @ar "تنبؤ بالاحتمال"
+    pub func predict_proba(x &: matrix.Matrix): matrix.Matrix:
+        if this.ok == false || this.is_regression(): ret matrix.Matrix {} end
+        mut out := matrix.Zeros(x.rows, this.n_classes)
+        repeat x.rows with i:
+            node := this.apply_row(x, i)
+            mut total := 0.0
+            repeat this.n_classes with c: total += this.value.at(node, c) end
+            if total > 0.0:
+                repeat this.n_classes with c: out.set(i, c, this.value.at(node, c) / total) end
+            end
+        end
+        ret out
+    end
+
+    @en "predict"
+    @fa "پیش‌بینی"
+    @ar "تنبؤ"
+    pub func predict(x &: matrix.Matrix): matrix.Matrix:
+        if this.ok == false: ret matrix.Matrix {} end
+        mut out := matrix.Zeros(x.rows, 1)
+        repeat x.rows with i:
+            node := this.apply_row(x, i)
+            if this.is_regression():
+                out.set(i, 0, this.value.at(node, 0))
+            else:
+                mut best := 0
+                repeat this.n_classes with c:
+                    if this.value.at(node, c) > this.value.at(node, best): best = c end
+                end
+                out.set(i, 0, best as f64)
+            end
+        end
+        ret out
+    end
+
+    @en "score"
+    @fa "امتیاز"
+    @ar "درجة"
+    pub func score(x &: matrix.Matrix, y &: matrix.Matrix): f64:
+        mut p := this.predict(x)
+        if p.is_empty(): ret 0.0 end
+        mut r := 0.0
+        if this.is_regression(): r = R2Score(y, p)
+        else: r = Accuracy(y, p) end
+        matrix.Free(p)
+        ret r
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free():
+        this.feature.free()
+        this.threshold.free()
+        this.left.free()
+        this.right.free()
+        matrix.Free(this.value)
+    end
+end
+
+// Impurity of a count vector (classification) from its class counts.
+func _impurity(counts &: Vector<f64>, total: f64, criterion: int): f64:
+    if total <= 0.0: ret 0.0 end
+    mut s := 0.0
+    repeat counts.len() with c:
+        p := counts.get(c) / total
+        if p > 0.0:
+            if criterion == TREE_ENTROPY:
+                s -= p * math.Log(p)
+            else:
+                s += p * (1.0 - p)
+            end
+        end
+    end
+    ret s
+end
+
+// Appends a node's value slots (k of them) computed from rows lo..hi.
+func _node_value(x_rows &: Vector<int>, y &: matrix.Matrix, lo: int, hi: int, k: int, regression: bool, values &: Vector<f64>):
+    if regression:
+        mut s := 0.0
+        repeat hi - lo with t: s += y.at(x_rows.get(lo + t), 0) end
+        values.push(s / ((hi - lo) as f64))
+        ret
+    end
+    mut counts := Vector {} as Vector<f64>
+    counts.zeros(k)
+    repeat hi - lo with t:
+        c := y.at(x_rows.get(lo + t), 0) as int
+        counts.set(c, counts.get(c) + 1.0)
+    end
+    repeat k with c: values.push(counts.get(c)) end
+    counts.free()
+end
+
+// Best split of rows lo..hi over the allowed features. Returns the
+// impurity decrease (0 when nothing helps); the feature and threshold
+// come back through the out-parameters.
+func _best_split(tree &: DecisionTree, x &: matrix.Matrix, y &: matrix.Matrix, rows &: Vector<int>, lo: int, hi: int, k: int, feats &: Vector<int>, best_f &: int, best_t &: f64): f64:
+    n := hi - lo
+    regression := tree.is_regression()
+    nf := n as f64
+    // Parent impurity.
+    mut parent := 0.0
+    mut total_counts := Vector {} as Vector<f64>
+    mut ysum := 0.0
+    mut ysq := 0.0
+    if regression:
+        repeat n with t:
+            v := y.at(rows.get(lo + t), 0)
+            ysum += v
+            ysq += v * v
+        end
+        parent = ysq / nf - (ysum / nf) * (ysum / nf)
+    else:
+        total_counts.zeros(k)
+        repeat n with t:
+            c := y.at(rows.get(lo + t), 0) as int
+            total_counts.set(c, total_counts.get(c) + 1.0)
+        end
+        parent = _impurity(total_counts, nf, tree.criterion)
+    end
+    mut best_gain := 0.0
+    best_f = 0 - 1
+    best_t = 0.0
+    mut order := Vector {} as Vector<int>
+    repeat n with t: order.push(rows.get(lo + t)) end
+    mut keys := Vector {} as Vector<f64>
+    keys.zeros(n)
+    mut lcounts := Vector {} as Vector<f64>
+    if regression == false: lcounts.zeros(k) end
+    min_leaf := tree.min_samples_leaf
+    repeat feats.len() with fi:
+        f := feats.get(fi)
+        repeat n with t: keys.set(t, x.at(order.get(t), f)) end
+        // Sort the row order by this feature's values.
+        mut idx := Vector {} as Vector<int>
+        repeat n with t: idx.push(t) end
+        sort.SortIndex(idx, keys)
+        // Sweep: left side grows one row at a time.
+        if regression == false:
+            repeat k with c: lcounts.set(c, 0.0) end
+        end
+        mut lsum := 0.0
+        mut lsq := 0.0
+        repeat n - 1 with t:
+            r := order.get(idx.get(t))
+            if regression:
+                v := y.at(r, 0)
+                lsum += v
+                lsq += v * v
+            else:
+                c := y.at(r, 0) as int
+                lcounts.set(c, lcounts.get(c) + 1.0)
+            end
+            nl := t + 1
+            nr := n - nl
+            if nl < min_leaf || nr < min_leaf: continue end
+            kv := keys.get(idx.get(t))
+            kn := keys.get(idx.get(t + 1))
+            if kv == kn: continue end
+            nlf := nl as f64
+            nrf := nr as f64
+            mut child := 0.0
+            if regression:
+                rsum := ysum - lsum
+                rsq := ysq - lsq
+                lvar := lsq / nlf - (lsum / nlf) * (lsum / nlf)
+                rvar := rsq / nrf - (rsum / nrf) * (rsum / nrf)
+                child = (nlf * lvar + nrf * rvar) / nf
+            else:
+                mut rcounts := Vector {} as Vector<f64>
+                repeat k with c: rcounts.push(total_counts.get(c) - lcounts.get(c)) end
+                child = (nlf * _impurity(lcounts, nlf, tree.criterion) + nrf * _impurity(rcounts, nrf, tree.criterion)) / nf
+                rcounts.free()
+            end
+            gain := parent - child
+            if gain > best_gain + 1.0e-12:
+                best_gain = gain
+                best_f = f
+                best_t = (kv + kn) / 2.0
+            end
+        end
+        idx.free()
+    end
+    order.free()
+    keys.free()
+    lcounts.free()
+    total_counts.free()
+    ret best_gain
+end
+
+// Partitions rows lo..hi in place so those with x[f] <= t come first;
+// returns the boundary.
+func _partition(x &: matrix.Matrix, rows &: Vector<int>, lo: int, hi: int, f: int, t: f64): int:
+    mut i := lo
+    mut j := hi - 1
+    until i <= j:
+        if x.at(rows.get(i), f) <= t:
+            i += 1
+        else:
+            tmp := rows.get(i)
+            rows.set(i, rows.get(j))
+            rows.set(j, tmp)
+            j -= 1
+        end
+    end
+    ret i
+end
+
+func _grow_tree(tree &: DecisionTree, x &: matrix.Matrix, y &: matrix.Matrix, k: int, values &: Vector<f64>):
+    n := x.rows
+    p := x.cols
+    regression := tree.is_regression()
+    mut rows := Vector {} as Vector<int>
+    repeat n with i: rows.push(i) end
+    mut g := matrix.NewRng(tree.seed)
+    // Root.
+    tree.feature.push(0 - 1)
+    tree.threshold.push(0.0)
+    tree.left.push(0 - 1)
+    tree.right.push(0 - 1)
+    _node_value(rows, y, 0, n, k, regression, values)
+    mut stack := Vector {} as Vector<_TreeFrame>
+    stack.push(_TreeFrame { node = 0, lo = 0, hi = n, depth = 0 })
+    mut feats := Vector {} as Vector<int>
+    until stack.len() > 0:
+        fr := stack.pop()
+        cnt := fr.hi - fr.lo
+        if fr.depth >= tree.max_depth || cnt < tree.min_samples_split || cnt < 2 * tree.min_samples_leaf: continue end
+        // Candidate features: all, or a seeded subset.
+        feats.clear()
+        if tree.max_features > 0 && tree.max_features < p:
+            mut pool := Vector {} as Vector<int>
+            repeat p with j: pool.push(j) end
+            repeat tree.max_features with t:
+                pick := t + ((g.next_float() * ((p - t) as f64)) as int)
+                tmp := pool.get(t)
+                pool.set(t, pool.get(pick))
+                pool.set(pick, tmp)
+                feats.push(pool.get(t))
+            end
+            pool.free()
+        else:
+            repeat p with j: feats.push(j) end
+        end
+        mut bf := 0 - 1
+        mut bt := 0.0
+        gain := _best_split(tree, x, y, rows, fr.lo, fr.hi, k, feats, bf, bt)
+        if bf < 0 || gain <= 0.0: continue end
+        mid := _partition(x, rows, fr.lo, fr.hi, bf, bt)
+        if mid == fr.lo || mid == fr.hi: continue end
+        // Two children.
+        lid := tree.feature.len()
+        tree.feature.push(0 - 1)
+        tree.threshold.push(0.0)
+        tree.left.push(0 - 1)
+        tree.right.push(0 - 1)
+        _node_value(rows, y, fr.lo, mid, k, regression, values)
+        rid := tree.feature.len()
+        tree.feature.push(0 - 1)
+        tree.threshold.push(0.0)
+        tree.left.push(0 - 1)
+        tree.right.push(0 - 1)
+        _node_value(rows, y, mid, fr.hi, k, regression, values)
+        tree.feature.set(fr.node, bf)
+        tree.threshold.set(fr.node, bt)
+        tree.left.set(fr.node, lid)
+        tree.right.set(fr.node, rid)
+        stack.push(_TreeFrame { node = lid, lo = fr.lo, hi = mid, depth = fr.depth + 1 })
+        stack.push(_TreeFrame { node = rid, lo = mid, hi = fr.hi, depth = fr.depth + 1 })
+    end
+    feats.free()
+    stack.free()
+    rows.free()
+end

@@ -1,0 +1,113 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/ml: Gaussian mixtures, agglomerative and mini-batch clustering,
+// scored by the adjusted Rand index and the silhouette.
+
+import data
+import matrix
+import ml
+import testing
+
+func main:
+    mut y := matrix.Matrix {}
+    mut x := data.MakeBlobs(300, 3, 2, 0.5, 111, y)
+
+    // The metrics on the truth itself
+    testing.AssertEqFloat(ml.AdjustedRandIndex(y, y), 1.0, 0.000001)
+    testing.AssertTrue(ml.SilhouetteScore(x, y) > 0.6)
+    // A relabeled copy is the same partition
+    mut yswap := matrix.Clone(y)
+    repeat 300 with i:
+        v := y.at(i, 0)
+        if v == 0.0: yswap.set(i, 0, 2.0) end
+        if v == 2.0: yswap.set(i, 0, 0.0) end
+    end
+    testing.AssertEqFloat(ml.AdjustedRandIndex(y, yswap), 1.0, 0.000001)
+    // A random labeling scores near zero
+    mut yrand := matrix.Zeros(300, 1)
+    mut g := matrix.NewRng(112)
+    repeat 300 with i: yrand.set(i, 0, (g.next_float() * 3.0) as int as f64) end
+    ari_rand := ml.AdjustedRandIndex(y, yrand)
+    testing.AssertTrue(ari_rand < 0.1)
+    testing.AssertTrue(ari_rand > 0.0 - 0.1)
+
+    // Gaussian mixture recovers the blobs
+    mut gmm := ml.GaussianMixture { k = 3, seed = 1 }
+    mut gl := gmm.fit_predict(x)
+    testing.AssertTrue(gmm.ok)
+    testing.AssertTrue(gmm.n_iter >= 2)
+    testing.AssertTrue(ml.AdjustedRandIndex(y, gl) >= 0.95)
+    mut resp := gmm.predict_proba(x)
+    testing.AssertEqInt(resp.cols, 3)
+    mut s := 0.0
+    repeat 3 with c: s += resp.at(0, c) end
+    testing.AssertEqFloat(s, 1.0, 0.000001)
+    mut wsum := 0.0
+    repeat 3 with c: wsum += gmm.weights.at(c, 0) end
+    testing.AssertEqFloat(wsum, 1.0, 0.000001)
+    testing.AssertTrue(gmm.vars.at(0, 0) > 0.1)
+    testing.AssertTrue(gmm.vars.at(0, 0) < 0.6)
+
+    // Agglomerative, all three linkages
+    mut ag := ml.Agglomerative { n_clusters = 3 }
+    mut al := ag.fit_predict(x)
+    testing.AssertTrue(ag.ok)
+    testing.AssertEqInt(ml.CountClasses(al), 3)
+    testing.AssertTrue(ml.AdjustedRandIndex(y, al) >= 0.95)
+    mut ag_s := ml.Agglomerative { n_clusters = 3, linkage = ml.LINK_SINGLE }
+    mut al_s := ag_s.fit_predict(x)
+    testing.AssertTrue(ml.AdjustedRandIndex(y, al_s) >= 0.95)
+    mut ag_c := ml.Agglomerative { n_clusters = 3, linkage = ml.LINK_COMPLETE }
+    mut al_c := ag_c.fit_predict(x)
+    testing.AssertTrue(ml.AdjustedRandIndex(y, al_c) >= 0.95)
+
+    // Mini-batch k-means
+    mut mb := ml.MiniBatchKMeans { k = 3, batch_size = 32, max_iter = 100, seed = 2 }
+    mut ml2 := mb.fit_predict(x)
+    testing.AssertTrue(mb.ok)
+    testing.AssertTrue(ml.AdjustedRandIndex(y, ml2) >= 0.9)
+    mut mb2 := ml.MiniBatchKMeans { k = 3, batch_size = 32, max_iter = 100, seed = 2 }
+    testing.AssertTrue(mb2.fit(x))
+    testing.AssertTrue(matrix.AllClose(mb.centers, mb2.centers, 0.000000001))
+
+    // Errors
+    mut gbad := ml.GaussianMixture { k = 400 }
+    testing.AssertFalse(gbad.fit(x))
+    mut afresh := ml.Agglomerative {}
+    testing.AssertTrue(afresh.labels.is_empty())
+
+    gmm.free()
+    ag.free()
+    ag_s.free()
+    ag_c.free()
+    mb.free()
+    mb2.free()
+    gbad.free()
+    afresh.free()
+    matrix.Free(x)
+    matrix.Free(y)
+    matrix.Free(yswap)
+    matrix.Free(yrand)
+    matrix.Free(gl)
+    matrix.Free(resp)
+    matrix.Free(al)
+    matrix.Free(al_s)
+    matrix.Free(al_c)
+    matrix.Free(ml2)
+
+    ret testing.Summary()
+end

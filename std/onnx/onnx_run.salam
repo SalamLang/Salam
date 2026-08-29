@@ -1,0 +1,117 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package onnx
+
+import str
+import tensor
+
+// Graph execution: a name-to-tensor environment seeded with the
+// initializers (borrowed from the model) and the caller's feeds
+// (borrowed too), then one pass over the nodes in file order, each
+// writing its outputs as environment-owned tensors. Graph outputs are
+// cloned out before the environment is torn down.
+
+// The evaluation environment. Borrowed entries (initializers, feeds)
+// are never freed; produced ones are.
+struct _Env:
+    pub names: Vector<str> = Vector {}
+    pub vals: Vector<tensor.Tensor> = Vector {}
+    pub owned: Vector<bool> = Vector {}
+end
+
+func _env_find(env &: _Env, name: str): int:
+    mut i := env.names.len() - 1
+    // Latest binding wins, so a re-bound name shadows cleanly.
+    until i >= 0:
+        if str.Equals(env.names.get(i), name): ret i end
+        i -= 1
+    end
+    ret 0 - 1
+end
+
+// An aliasing header of the tensor bound to `name`; false when unbound.
+func _env_get(env &: _Env, name: str, out &: tensor.Tensor): bool:
+    k := _env_find(env, name)
+    if k < 0: ret false end
+    t := env.vals.get(k)
+    out.data = t.data
+    out.shape = t.shape
+    ret true
+end
+
+func _env_put(env &: _Env, name: str, t: tensor.Tensor, owned: bool):
+    env.names.push(name)
+    env.vals.push(t)
+    env.owned.push(owned)
+end
+
+func _env_free(env &: _Env):
+    repeat env.vals.len() with i:
+        if env.owned.get(i):
+            mut t := env.vals.get(i)
+            t.free()
+        end
+    end
+    env.names.free()
+    env.vals.free()
+    env.owned.free()
+end
+
+func _run_graph(model &: Model, inputs &: Vector<tensor.Tensor>, ok &: bool): Vector<tensor.Tensor>:
+    mut outs := Vector {} as Vector<tensor.Tensor>
+    ok = false
+    if model.ok == false: ret outs end
+    mut env := _Env {}
+    repeat model.inits.len() with i:
+        _env_put(env, model.init_names.get(i), model.inits.get(i), false)
+    end
+    mut feeds := model.feed_names()
+    if feeds.len() != inputs.len():
+        model.error = "expected " + feeds.len() + " inputs, got " + inputs.len()
+        feeds.free()
+        _env_free(env)
+        ret outs
+    end
+    repeat feeds.len() with i: _env_put(env, feeds.get(i), inputs.get(i), false) end
+    feeds.free()
+    mut good := true
+    mut ni := 0
+    until ni < model.nodes.len() && good:
+        node := model.nodes.get(ni)
+        good = _exec_node(model, node, env)
+        ni += 1
+    end
+    if good:
+        repeat model.outputs.len() with i:
+            mut t := tensor.Empty()
+            if _env_get(env, model.outputs.get(i), t):
+                outs.push(tensor.Clone(t))
+            else:
+                model.error = "output " + model.outputs.get(i) + " was never produced"
+                good = false
+            end
+        end
+    end
+    _env_free(env)
+    if good == false:
+        repeat outs.len() with i:
+            mut t := outs.get(i)
+            t.free()
+        end
+        outs.clear()
+    end
+    ok = good
+    ret outs
+end

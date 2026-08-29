@@ -1,14 +1,6 @@
 ---
 name: 🧩 Extension - VS Code (build & publish)
 
-# Nothing built this extension until now, which is how `src/extension.salam`
-# came to stop compiling without anyone noticing. So the build half runs on
-# every change to it, and the publish half is strictly additive on top.
-#
-# Publishing needs a Marketplace personal access token in the VSCE_PAT secret.
-# Until that exists the job still runs and still produces the .vsix; it just
-# says so and stops instead of failing, so a missing token never turns into a
-# red build.
 # checkov:skip=CKV_GHA_7:inputs are only ever read via env: indirection, never interpolated into a run: script
 on:
   push:
@@ -48,27 +40,14 @@ jobs:
         with:
           persist-credentials: false
 
-      # The compiler is written in Salam, so building it needs one. Used to
-      # come from `make -C c`; that is gone, so a released binary seeds it.
-      # add-to-path: false on purpose. The extension is written against the
-      # compiler in this tree, and a released seed lags it - with both on PATH
-      # the seed won and `salam js src/extension.salam` came back with 135
-      # semantic errors. The seed is passed to the build by path instead, so
-      # the only salam on PATH is the one built below.
       - name: Install a seed compiler
         id: seed
         uses: ./.github/actions/setup-salam
         with:
           add-to-path: 'false'
 
-      # Built from this checkout rather than installed from the last release:
-      # the extension is written against the compiler in this tree, and a
-      # published build lags it. This is the cheap C build (a few seconds),
-      # not the full LLVM one the release workflow does.
       - name: Build the salam compiler from source
         env:
-          # Same reason as the release workflow: the seed path reaches the
-          # script as an environment value, never as expanded script text.
           SEED_PATH: ${{ steps.seed.outputs.salam }}
         run: |
           set -eu
@@ -79,24 +58,15 @@ jobs:
       - name: Set up bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
 
-      # From the repo root: extensions/vscode is a workspace member and its
-      # devDependencies resolve through the root catalog, which only bun reads.
       - name: Install workspace dependencies
         run: bun install --frozen-lockfile
 
-      # SALAM_STD because these run from extensions/vscode: a self-hosted salam
-      # has no stdlib compiled into it and no salam.cfg beside it there, so it
-      # reported every std package missing ("standard library package 'node'
-      # not found") and that read as 135 errors in the extension source.
       - name: Compile the extension
         working-directory: extensions/vscode
         env:
           SALAM_STD: ${{ github.workspace }}/std
         run: |
           set -eu
-          # salam js will not create a missing parent directory, and out/ is
-          # gitignored, so a fresh checkout has none. package.json's scripts do
-          # this themselves; this step calls the compiler directly and has to.
           mkdir -p out
           salam js src/extension.salam --output=out/extension.js
           [ -s out/extension.js ] || { echo "::error::out/extension.js is empty or missing"; exit 1; }
@@ -119,8 +89,6 @@ jobs:
             fi
           done
           [ -n "$vsix" ] || { echo "::error::vsce produced no .vsix"; exit 1; }
-          # Cheap proof the archive is a real, readable zip holding the code,
-          # rather than a zero-byte file that only looks like success.
           unzip -l "$vsix" | grep -q 'extension/out/extension.js' \
             || { echo "::error::$vsix has no extension/out/extension.js"; exit 1; }
           echo "vsix=$(basename "$vsix")" >> "$GITHUB_OUTPUT"
@@ -137,8 +105,6 @@ jobs:
   publish:
     name: Publish to the VS Code Marketplace
     needs: build
-    # Never from a pull request: a fork's PR must not be able to reach the
-    # token, and a branch build has no business shipping to the Marketplace.
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish)
     runs-on: ubuntu-latest
     steps:
@@ -156,10 +122,6 @@ jobs:
       - name: Set up bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
 
-      # Two independent reasons to stop, and neither one is a failure: no token
-      # configured yet, or this version is already on the Marketplace. The
-      # second matters because `vsce publish` errors on a duplicate version,
-      # and every push to main would otherwise go red between releases.
       - name: Decide whether to publish
         id: gate
         env:
@@ -174,9 +136,6 @@ jobs:
           fi
           id=$(node -p "const p=require('./extensions/vscode/package.json');p.publisher+'.'+p.name")
           echo "extension: $id, local version: $VERSION"
-          # A lookup failure must not be read as "not published yet": that
-          # would send a duplicate publish and fail the job on a network
-          # blip. Only a version we positively read and that differs proceeds.
           live=$(bunx vsce show "$id" --json 2>/dev/null \
                  | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
                      try{const j=JSON.parse(s);process.stdout.write(String(j.versions?.[0]?.version||""))}catch{process.stdout.write("")}})' \

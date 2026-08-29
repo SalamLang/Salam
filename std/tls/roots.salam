@@ -86,6 +86,10 @@ const CA_PATH_9 := "C:/msys64/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem"
 const CA_PATH_10 := "/usr/pkg/etc/openssl/certs/ca-certificates.crt"
 const CA_PATH_COUNT := 11
 
+mut _shared_roots := Roots {}
+mut _shared_key := ""
+mut _shared_ready := false
+
 func _ca_path(i: int): str:
     if i == 0: ret CA_PATH_0 end
     if i == 1: ret CA_PATH_1 end
@@ -123,7 +127,11 @@ func _roots_add_pem(r &: Roots, pem: str): int:
         room := (e - body) / 4 * 3 + 8
         mut der := _newbuf(room)
         mut good := false
-        got := encoding.Base64DecodeBytes(pem.substr(body, e - body), der.p, room, good)
+        // substr allocates; the decoder is done with it when it returns, and
+        // a system bundle has enough certificates for the slices to add up.
+        b64 := pem.substr(body, e - body)
+        got := encoding.Base64DecodeBytes(b64, der.p, room, good)
+        mem.Free(b64 as void*)
         if good && got > 0:
             c := _cert_parse(der.p, got)
             if c.ok:
@@ -237,12 +245,39 @@ func _roots_load_file(r &: Roots, path: str): int:
     end
     pem := io.ReadFile(path)
     if pem.len() == 0:
+        mem.Free(pem as void*)
         ret 0
     end
-    ret _roots_add_pem(r, pem)
+    // The store copies what it keeps, so the file's own text goes back.
+    added := _roots_add_pem(r, pem)
+    mem.Free(pem as void*)
+    ret added
 end
 
 // Build the trust store. `ca_file` may be empty to use the default search.
+/*
+ * The trust store, loaded once per process.
+ *
+ * A system bundle is a hundred-odd certificates to read, base64-decode and
+ * parse; doing that inside every handshake made a client that talks to one
+ * host repeatedly spend most of its time - and most of its memory - on work
+ * whose answer never changes. The store is keyed by the file it came from,
+ * so a Config naming its own CA still gets its own, and nothing frees what
+ * is handed back: the cache owns it for the life of the process.
+ */
+func _roots_shared(ca_file: str): Roots:
+    if _shared_ready && _shared_key == ca_file:
+        ret _shared_roots
+    end
+    if _shared_ready:
+        _roots_free(_shared_roots)
+    end
+    _shared_roots = _roots_load(ca_file)
+    _shared_key = ca_file
+    _shared_ready = true
+    ret _shared_roots
+end
+
 func _roots_load(ca_file: str): Roots:
     mut r := _roots_new()
     if ca_file.len() > 0:

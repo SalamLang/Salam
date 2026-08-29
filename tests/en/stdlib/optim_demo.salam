@@ -1,0 +1,122 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/optim: SGD drives a quadratic to its minimum; clipping bounds
+// gradients.
+
+import autograd
+import nn
+import optim
+import tensor
+import testing
+
+func main:
+    eps := 0.001
+
+    // minimize ||w - c||^2: w must converge to c
+    mut ps := nn.ParamStore {}
+    w := tensor.Zeros1(4)
+    wid_store := ps.add("w", w)
+    mut c := tensor.Arange(4)               // the target 0 1 2 3
+
+    mut opt := optim.SGD { lr = 0.1 }
+    mut tp := autograd.NewTape(1)
+    repeat 100:
+        tp.reset()
+        ps.zero_grad()
+        pw := nn.Bind(tp, ps, wid_store)
+        cid := autograd.Input(tp, c)
+        loss := autograd.Sum(tp, autograd.Square(tp, autograd.Sub(tp, pw, cid)))
+        autograd.Backward(tp, loss)
+        opt.step(ps)
+    end
+    mut got := ps.at(wid_store)
+    testing.AssertEqFloat(got.value.at(0), 0.0, eps)
+    testing.AssertEqFloat(got.value.at(3), 3.0, eps)
+
+    // Momentum converges too (and the velocity state allocates lazily)
+    mut ps2 := nn.ParamStore {}
+    w2 := tensor.Zeros1(4)
+    h2 := ps2.add("w", w2)
+    mut opt2 := optim.SGD { lr = 0.05, momentum = 0.9 }
+    repeat 120:
+        tp.reset()
+        ps2.zero_grad()
+        pw := nn.Bind(tp, ps2, h2)
+        cid := autograd.Input(tp, c)
+        loss := autograd.Sum(tp, autograd.Square(tp, autograd.Sub(tp, pw, cid)))
+        autograd.Backward(tp, loss)
+        opt2.step(ps2)
+    end
+    mut got2 := ps2.at(h2)
+    testing.AssertEqFloat(got2.value.at(3), 3.0, 0.01)
+
+    // Weight decay pulls the optimum below the target
+    mut ps3 := nn.ParamStore {}
+    w3 := tensor.Zeros1(1)
+    h3 := ps3.add("w", w3)
+    mut one := tensor.Zeros1(1)
+    tensor.SetAll(one, 1.0)
+    mut opt3 := optim.SGD { lr = 0.1, weight_decay = 2.0 }
+    repeat 200:
+        tp.reset()
+        ps3.zero_grad()
+        pw := nn.Bind(tp, ps3, h3)
+        cid := autograd.Input(tp, one)
+        loss := autograd.Sum(tp, autograd.Square(tp, autograd.Sub(tp, pw, cid)))
+        autograd.Backward(tp, loss)
+        opt3.step(ps3)
+    end
+    mut got3 := ps3.at(h3)
+    // min of (w-1)^2 + wd*w^2/... : stationary at 2(w-1) + 2w = 0 -> 0.5
+    testing.AssertEqFloat(got3.value.at(0), 0.5, 0.01)
+
+    // ClipGradNorm reports the norm and rescales to the cap
+    mut ps4 := nn.ParamStore {}
+    w4 := tensor.Zeros1(2)
+    h4 := ps4.add("w", w4)
+    mut p4 := ps4.at(h4)
+    p4.grad.set_at(0, 3.0)
+    p4.grad.set_at(1, 4.0)
+    norm := optim.ClipGradNorm(ps4, 1.0)
+    testing.AssertEqFloat(norm, 5.0, eps)
+    testing.AssertEqFloat(p4.grad.at(0), 0.6, eps)
+    testing.AssertEqFloat(p4.grad.at(1), 0.8, eps)
+    // Below the cap nothing changes
+    norm2 := optim.ClipGradNorm(ps4, 10.0)
+    testing.AssertEqFloat(norm2, 1.0, eps)
+    testing.AssertEqFloat(p4.grad.at(1), 0.8, eps)
+
+    // ClipGradValue clamps elementwise
+    p4.grad.set_at(0, 7.0)
+    p4.grad.set_at(1, 0.0 - 7.0)
+    optim.ClipGradValue(ps4, 2.0)
+    testing.AssertEqFloat(p4.grad.at(0), 2.0, eps)
+    testing.AssertEqFloat(p4.grad.at(1), 0.0 - 2.0, eps)
+
+    tp.free()
+    opt.free()
+    opt2.free()
+    opt3.free()
+    ps.free()
+    ps2.free()
+    ps3.free()
+    ps4.free()
+    tensor.Free(c)
+    tensor.Free(one)
+
+    ret testing.Summary()
+end

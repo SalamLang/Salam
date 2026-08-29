@@ -1,0 +1,143 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package data
+
+import archive
+import compress
+import encoding.binary
+import matrix
+
+// The IDX container MNIST ships in: a big-endian magic (two zero bytes,
+// an element type code, a dimension count), the dimensions as u32
+// big-endian, then the elements in row-major order. Files may be
+// gzipped; the .gz is sniffed by its two magic bytes rather than by
+// name, so either form of the download works.
+//
+// ParseIdx returns the elements as a matrix with one row per leading
+// index and the remaining dimensions flattened: idx3 images become
+// n x (rows*cols), idx1 labels n x 1. LoadMnist adds the one MNIST
+// convention worth building in, scaling pixel bytes to [0, 1].
+
+const _IDX_U8 := 8
+const _IDX_I8 := 9
+const _IDX_I16 := 11
+const _IDX_I32 := 12
+const _IDX_F32 := 13
+const _IDX_F64 := 14
+
+func _idx_elem(rd &: compress.ByteReader, kind: int): f64:
+    if kind == _IDX_U8: ret binary.ReadU8(rd) as f64 end
+    if kind == _IDX_I8:
+        mut v := binary.ReadU8(rd)
+        if v >= 128: v = v - 256 end
+        ret v as f64
+    end
+    if kind == _IDX_I16:
+        mut v := binary.ReadU16BE(rd)
+        if v >= 32768: v = v - 65536 end
+        ret v as f64
+    end
+    if kind == _IDX_I32: ret binary.ReadU32BE(rd) as f64 end
+    if kind == _IDX_F32: ret binary.ReadF32(rd, true) end
+    ret binary.ReadF64(rd, true)
+end
+
+func _idx_size(kind: int): int:
+    if kind == _IDX_U8 || kind == _IDX_I8: ret 1 end
+    if kind == _IDX_I16: ret 2 end
+    if kind == _IDX_I32 || kind == _IDX_F32: ret 4 end
+    ret 8
+end
+
+// ---- public API ----
+
+@en "ParseIdx"
+@fa "تجزیه آی‌دی‌ایکس"
+@ar "تحليل آي دي إكس"
+pub func ParseIdx(p: void*, n: int, ok &: bool): matrix.Matrix:
+    ok = false
+    if n < 8: ret matrix.Matrix {} end
+    mut rd := compress.NewByteReader(p, n)
+    if binary.ReadU8(rd) != 0 || binary.ReadU8(rd) != 0: ret matrix.Matrix {} end
+    kind := binary.ReadU8(rd)
+    ndim := binary.ReadU8(rd)
+    if ndim < 1 || ndim > 4: ret matrix.Matrix {} end
+    if kind != _IDX_U8 && kind != _IDX_I8 && kind != _IDX_I16 && kind != _IDX_I32 && kind != _IDX_F32 && kind != _IDX_F64:
+        ret matrix.Matrix {}
+    end
+    if compress.RdLeft(rd) < 4 * ndim: ret matrix.Matrix {} end
+    rows := binary.ReadU32BE(rd)
+    mut inner := 1
+    repeat ndim - 1: inner = inner * binary.ReadU32BE(rd) end
+    if rows < 0 || inner < 0: ret matrix.Matrix {} end
+    if compress.RdLeft(rd) < rows * inner * _idx_size(kind): ret matrix.Matrix {} end
+    mut m := matrix.Zeros(rows, inner)
+    repeat rows * inner with k: m.a.set(k, _idx_elem(rd, kind)) end
+    ok = true
+    ret m
+end
+
+// Reads an IDX file, gzipped or not.
+@en "LoadIdx"
+@fa "بارگذاری آی‌دی‌ایکس"
+@ar "تحميل آي دي إكس"
+pub func LoadIdx(path: str, ok &: bool): matrix.Matrix:
+    ok = false
+    mut fok := false
+    mut raw := archive.ReadBinaryFile(path, fok)
+    if fok == false:
+        compress.BufFree(raw)
+        ret matrix.Matrix {}
+    end
+    n := compress.BufLen(raw)
+    mut m := matrix.Matrix {}
+    if n >= 2 && compress.BufGet(raw, 0) == 31 && compress.BufGet(raw, 1) == 139:
+        mut zok := false
+        mut plain := compress.GzipDecompressBuf(raw, zok)
+        if zok: m = ParseIdx(plain.data, compress.BufLen(plain), ok) end
+        compress.BufFree(plain)
+    else:
+        m = ParseIdx(raw.data, n, ok)
+    end
+    compress.BufFree(raw)
+    ret m
+end
+
+// The image file into x (n x 784 for MNIST, pixels scaled to [0, 1])
+// and the label file into y (n x 1). The two must agree on n.
+@en "LoadMnist"
+@fa "بارگذاری ام‌نیست"
+@ar "تحميل إم إن آي إس تي"
+pub func LoadMnist(images_path: str, labels_path: str, x &: matrix.Matrix, y &: matrix.Matrix): bool:
+    mut iok := false
+    mut xi := LoadIdx(images_path, iok)
+    if iok == false:
+        matrix.Free(xi)
+        ret false
+    end
+    mut lok := false
+    mut yl := LoadIdx(labels_path, lok)
+    if lok == false || yl.rows != xi.rows:
+        matrix.Free(xi)
+        matrix.Free(yl)
+        ret false
+    end
+    matrix.ScaleInPlace(xi, 1.0 / 255.0)
+    matrix.Free(x)
+    matrix.Free(y)
+    x = xi
+    y = yl
+    ret true
+end

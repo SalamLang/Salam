@@ -1,0 +1,114 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/data: CSV text becomes a typed Table with inferred column kinds,
+// categorical levels, missing cells, and a feature/label split.
+
+import archive
+import data
+import filepath
+import io
+import math
+import matrix
+import os
+import testing
+
+func main:
+    text := "age,height,city,note,label\n30,1.75,Paris,likes tea,1\n25,,Rome,plays chess,0\n41,1.62,Paris,reads a lot,1\n35,1.80,Berlin,,0\n"
+    mut t := data.LoadCsv(text, true)
+    testing.AssertEqInt(t.rows(), 4)
+    testing.AssertEqInt(t.cols(), 5)
+    testing.AssertEqStr(t.names.get(2), "city")
+    testing.AssertEqInt(t.col_index("label"), 4)
+    testing.AssertEqInt(t.col_index("nothing"), 0 - 1)
+
+    // Kinds: int, float (with a missing cell), categorical, string, int
+    testing.AssertEqInt(t.kinds.get(0), data.COL_INT)
+    testing.AssertEqInt(t.kinds.get(1), data.COL_FLOAT)
+    testing.AssertEqInt(t.kinds.get(2), data.COL_CAT)
+    testing.AssertEqInt(t.kinds.get(3), data.COL_STR)
+    testing.AssertEqInt(t.kinds.get(4), data.COL_INT)
+
+    // Values, NaN for the empty height, levels in first-appearance order
+    testing.AssertEqFloat(t.cells.at(0, 0), 30.0, 0.000001)
+    testing.AssertEqFloat(t.cells.at(2, 1), 1.62, 0.000001)
+    testing.AssertTrue(math.IsNaN(t.cells.at(1, 1)))
+    testing.AssertEqFloat(t.cells.at(0, 2), 0.0, 0.0)   // Paris
+    testing.AssertEqFloat(t.cells.at(1, 2), 1.0, 0.0)   // Rome
+    testing.AssertEqFloat(t.cells.at(2, 2), 0.0, 0.0)   // Paris again
+    testing.AssertEqFloat(t.cells.at(3, 2), 2.0, 0.0)   // Berlin
+    mut levels := t.cat_levels("city")
+    testing.AssertEqInt(levels.len(), 3)
+    testing.AssertEqStr(levels.get(2), "Berlin")
+    // String columns keep their text and hold NaN in the numeric view
+    testing.AssertTrue(math.IsNaN(t.cells.at(0, 3)))
+    testing.AssertEqStr(t.raw.get(3).get(1), "plays chess")
+
+    // The numeric view drops the string column
+    mut m := t.to_matrix()
+    testing.AssertEqInt(m.cols, 4)
+    testing.AssertEqFloat(m.at(3, 3), 0.0, 0.0)
+
+    // Feature/label split
+    mut x := matrix.Matrix {}
+    mut y := matrix.Matrix {}
+    testing.AssertTrue(t.split_xy("label", x, y))
+    testing.AssertEqInt(x.cols, 3)
+    testing.AssertEqInt(y.cols, 1)
+    testing.AssertEqFloat(y.at(2, 0), 1.0, 0.0)
+    testing.AssertEqFloat(x.at(3, 2), 2.0, 0.0)
+    testing.AssertFalse(t.split_xy("note", x, y))
+    testing.AssertFalse(t.split_xy("absent", x, y))
+
+    // No header: generated names, every row is data
+    mut t2 := data.LoadCsv("1,2.5\n3,4.5\n", false)
+    testing.AssertEqInt(t2.rows(), 2)
+    testing.AssertEqStr(t2.names.get(1), "col1")
+    testing.AssertEqInt(t2.kinds.get(1), data.COL_FLOAT)
+
+    // Scientific notation and signs are numeric; a stray letter is not
+    mut t3 := data.LoadCsv("v\n-1e3\n+2.5E-2\n7\n", true)
+    testing.AssertEqInt(t3.kinds.get(0), data.COL_FLOAT)
+    testing.AssertEqFloat(t3.cells.at(0, 0), 0.0 - 1000.0, 0.000001)
+    mut t4 := data.LoadCsv("v\n12a\n7\n", true)
+    testing.AssertEqInt(t4.kinds.get(0), data.COL_STR)
+
+    // A file round trip, and a missing file
+    dir := filepath.Join(os.TempDir(), "salam_data_csv_test")
+    archive.EnsureDir(dir)
+    path := filepath.Join(dir, "rows.csv")
+    io.WriteFile(path, text)
+    mut ok := false
+    mut tf := data.LoadCsvFile(path, true, ok)
+    testing.AssertTrue(ok)
+    testing.AssertEqInt(tf.rows(), 4)
+    mut nok := true
+    mut tm := data.LoadCsvFile(filepath.Join(dir, "missing.csv"), true, nok)
+    testing.AssertFalse(nok)
+    testing.AssertEqInt(tm.cols(), 0)
+
+    t.free()
+    t2.free()
+    t3.free()
+    t4.free()
+    tf.free()
+    levels.free()
+    matrix.Free(m)
+    matrix.Free(x)
+    matrix.Free(y)
+
+    ret testing.Summary()
+end

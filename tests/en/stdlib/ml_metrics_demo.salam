@@ -1,0 +1,141 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/ml: metrics against hand-computed fixtures.
+
+import math
+import matrix
+import ml
+import testing
+
+func col(vals: Vector<f64>): matrix.Matrix:
+    ret matrix.ColVector(vals)
+end
+
+func main:
+    eps := 0.000001
+
+    // 8 binary labels and predictions: tp=3 fp=1 fn=1 tn=3
+    mut yv := Vector {} as Vector<f64>
+    mut pv := Vector {} as Vector<f64>
+    yv.push(1.0)
+    pv.push(1.0)
+    yv.push(1.0)
+    pv.push(1.0)
+    yv.push(1.0)
+    pv.push(1.0)
+    yv.push(1.0)
+    pv.push(0.0)
+    yv.push(0.0)
+    pv.push(1.0)
+    yv.push(0.0)
+    pv.push(0.0)
+    yv.push(0.0)
+    pv.push(0.0)
+    yv.push(0.0)
+    pv.push(0.0)
+    mut y := col(yv)
+    mut p := col(pv)
+
+    testing.AssertEqFloat(ml.Accuracy(y, p), 6.0 / 8.0, eps)
+    testing.AssertEqFloat(ml.Precision(y, p, 1.0), 3.0 / 4.0, eps)
+    testing.AssertEqFloat(ml.Recall(y, p, 1.0), 3.0 / 4.0, eps)
+    testing.AssertEqFloat(ml.F1(y, p, 1.0), 0.75, eps)
+    // class 0 as positive: tp=3 fp=1 fn=1 too, so macro F1 is 0.75
+    testing.AssertEqFloat(ml.MacroF1(y, p, 2), 0.75, eps)
+
+    mut cm := ml.ConfusionMatrix(y, p, 2)
+    testing.AssertEqFloat(cm.at(1, 1), 3.0, eps)
+    testing.AssertEqFloat(cm.at(0, 1), 1.0, eps)
+    testing.AssertEqFloat(cm.at(1, 0), 1.0, eps)
+    testing.AssertEqFloat(cm.at(0, 0), 3.0, eps)
+
+    // ROC AUC: a perfect ranking, a reversed one, and a tie
+    mut sv := Vector {} as Vector<f64>
+    sv.push(0.9)
+    sv.push(0.8)
+    sv.push(0.7)
+    sv.push(0.6)
+    sv.push(0.4)
+    sv.push(0.3)
+    sv.push(0.2)
+    sv.push(0.1)
+    mut s := col(sv)
+    testing.AssertEqFloat(ml.RocAuc(y, s), 1.0, eps)
+    mut neg := matrix.Neg(s)
+    testing.AssertEqFloat(ml.RocAuc(y, neg), 0.0, eps)
+    // one positive scored below one negative: 15 of 16 pairs ordered
+    s.set(3, 0, 0.35)
+    testing.AssertEqFloat(ml.RocAuc(y, s), 15.0 / 16.0, eps)
+    // all tied: 0.5
+    mut tied := matrix.Full(8, 1, 0.5)
+    testing.AssertEqFloat(ml.RocAuc(y, tied), 0.5, eps)
+
+    // Log loss on a 2-class probability table
+    mut proba := matrix.Zeros(2, 2)
+    proba.set(0, 0, 0.2)
+    proba.set(0, 1, 0.8)
+    proba.set(1, 0, 0.6)
+    proba.set(1, 1, 0.4)
+    mut yl := matrix.Zeros(2, 1)
+    yl.set(0, 0, 1.0)
+    yl.set(1, 0, 0.0)
+    want := 0.0 - (math.Log(0.8) + math.Log(0.6)) / 2.0
+    testing.AssertEqFloat(ml.LogLoss(yl, proba), want, eps)
+    // a confident mistake is finite
+    proba.set(1, 0, 0.0)
+    testing.AssertTrue(ml.LogLoss(yl, proba) < 20.0)
+
+    // Regression metrics
+    mut tv := Vector {} as Vector<f64>
+    mut qv := Vector {} as Vector<f64>
+    tv.push(1.0)
+    qv.push(2.0)
+    tv.push(2.0)
+    qv.push(2.0)
+    tv.push(3.0)
+    qv.push(5.0)
+    mut t := col(tv)
+    mut q := col(qv)
+    testing.AssertEqFloat(ml.MSE(t, q), (1.0 + 0.0 + 4.0) / 3.0, eps)
+    testing.AssertEqFloat(ml.MAE(t, q), (1.0 + 0.0 + 2.0) / 3.0, eps)
+    testing.AssertEqFloat(ml.RMSE(t, q), math.Sqrt(5.0 / 3.0), eps)
+    // SS_tot = 2, SS_res = 5 -> R2 = -1.5; perfect prediction -> 1
+    testing.AssertEqFloat(ml.R2Score(t, q), 1.0 - 5.0 / 2.0, eps)
+    testing.AssertEqFloat(ml.R2Score(t, t), 1.0, eps)
+
+    // Length mismatches are zero, never a crash
+    testing.AssertEqFloat(ml.Accuracy(y, t), 0.0, eps)
+    testing.AssertTrue(ml.ConfusionMatrix(y, t, 2).is_empty())
+
+    matrix.Free(y)
+    matrix.Free(p)
+    matrix.Free(cm)
+    matrix.Free(s)
+    matrix.Free(neg)
+    matrix.Free(tied)
+    matrix.Free(proba)
+    matrix.Free(yl)
+    matrix.Free(t)
+    matrix.Free(q)
+    yv.free()
+    pv.free()
+    sv.free()
+    tv.free()
+    qv.free()
+
+    ret testing.Summary()
+end

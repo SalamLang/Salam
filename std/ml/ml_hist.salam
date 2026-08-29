@@ -1,0 +1,417 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ml
+
+import math
+import matrix
+import sort
+
+// Histogram gradient boosting, the LightGBM / sklearn
+// HistGradientBoosting design: every feature is bucketed into at most
+// max_bins quantile bins once, and each tree node scores a split by
+// scanning per-bin sums of gradients and hessians instead of sorting
+// rows - O(n) per feature per node. Second-order leaf values with an
+// L2 penalty; squared loss for regression, softmax cross-entropy with
+// one tree per class per round for classification.
+
+// One tree over binned features, flat index-linked arrays. A node with
+// feature < 0 is a leaf holding `value`.
+@en "HistTree"
+@fa "درخت هیستوگرام"
+@ar "شجرة مدرج تكراري"
+pub struct HistTree:
+    pub feature: Vector<int> = Vector {}
+    pub threshold: Vector<f64> = Vector {}
+    pub left: Vector<int> = Vector {}
+    pub right: Vector<int> = Vector {}
+    pub value: Vector<f64> = Vector {}
+
+    @en "apply_row"
+    @fa "اعمال ردیف"
+    @ar "تطبيق صف"
+    pub func apply_row(x &: matrix.Matrix, i: int): f64:
+        mut nd := 0
+        until this.feature.get(nd) >= 0:
+            if x.at(i, this.feature.get(nd)) <= this.threshold.get(nd):
+                nd = this.left.get(nd)
+            else:
+                nd = this.right.get(nd)
+            end
+        end
+        ret this.value.get(nd)
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free():
+        this.feature.free()
+        this.threshold.free()
+        this.left.free()
+        this.right.free()
+        this.value.free()
+    end
+end
+
+@en "HistGradientBoosting"
+@fa "تقویت گرادیان هیستوگرامی"
+@ar "تعزيز التدرج بالمدرج التكراري"
+pub struct HistGradientBoosting:
+    pub n_estimators: int = 100
+    pub learning_rate: f64 = 0.1
+    pub max_depth: int = 6
+    pub max_bins: int = 255
+    pub min_samples_leaf: int = 20
+    pub l2: f64 = 1.0
+    pub regression: bool = false
+    // learned: bin edges per feature (edges_start[j] .. edges_start[j+1])
+    pub edges: Vector<f64> = Vector {}
+    pub edges_start: Vector<int> = Vector {}
+    pub base: Vector<f64> = Vector {}
+    pub trees: Vector<HistTree> = Vector {}
+    pub n_classes: int = 0
+    pub ok: bool = false
+
+    @en "fit"
+    @fa "برازش"
+    @ar "ملاءمة"
+    pub func fit(x &: matrix.Matrix, y &: matrix.Matrix): bool:
+        this.free_all()
+        this.ok = false
+        n := x.rows
+        p := x.cols
+        if n < 2 || p < 1 || y.rows != n: ret false end
+        kk := this.regression ? 1 : CountClasses(y)
+        if !this.regression && kk < 2: ret false end
+        this.n_classes = kk
+        // binning
+        mut bins := Vector {} as Vector<int>
+        repeat n * p: bins.push(0) end
+        _hist_bin_features(x, this.max_bins, this.edges, this.edges_start, bins)
+        // base scores
+        repeat kk: this.base.push(0.0) end
+        if this.regression:
+            mut s := 0.0
+            repeat n with i: s += y.at(i, 0) end
+            this.base.set(0, s / (n as f64))
+        else:
+            mut counts := Vector {} as Vector<f64>
+            repeat kk: counts.push(1.0) end
+            repeat n with i:
+                c := y.at(i, 0) as int
+                counts.set(c, counts.get(c) + 1.0)
+            end
+            repeat kk with c: this.base.set(c, math.Log(counts.get(c) / ((n + kk) as f64))) end
+            counts.free()
+        end
+        mut f := Vector {} as Vector<f64>
+        repeat n:
+            repeat kk with c: f.push(this.base.get(c)) end
+        end
+        mut g := Vector {} as Vector<f64>
+        mut h := Vector {} as Vector<f64>
+        repeat n:
+            g.push(0.0)
+            h.push(0.0)
+        end
+        mut probs := Vector {} as Vector<f64>
+        repeat kk: probs.push(0.0) end
+        edges := this.edges
+        starts := this.edges_start
+        repeat this.n_estimators:
+            repeat kk with c:
+                // gradients and hessians of class c (or the regression target)
+                repeat n with i:
+                    if this.regression:
+                        g.set(i, f.get(i) - y.at(i, 0))
+                        h.set(i, 1.0)
+                    else:
+                        _softmax_row(f, i, kk, probs)
+                        pc := probs.get(c)
+                        target := (y.at(i, 0) as int) == c ? 1.0 : 0.0
+                        g.set(i, pc - target)
+                        h.set(i, pc * (1.0 - pc) + 0.000001)
+                    end
+                end
+                mut t := HistTree {}
+                _hist_grow(t, bins, n, p, edges, starts, g, h, this.max_depth, this.min_samples_leaf, this.l2, this.learning_rate)
+                repeat n with i: f.set(i * kk + c, f.get(i * kk + c) + t.apply_row(x, i)) end
+                this.trees.push(t)
+            end
+        end
+        bins.free()
+        f.free()
+        g.free()
+        h.free()
+        probs.free()
+        this.ok = true
+        ret true
+    end
+
+    // Raw scores [n, n_classes] (regression: [n, 1]).
+    @en "decision"
+    @fa "تصمیم"
+    @ar "قرار"
+    pub func decision(x &: matrix.Matrix): matrix.Matrix:
+        if !this.ok: ret matrix.Matrix {} end
+        kk := this.n_classes
+        mut out := matrix.Zeros(x.rows, kk)
+        repeat x.rows with i:
+            repeat kk with c: out.set(i, c, this.base.get(c)) end
+        end
+        repeat this.trees.len() with ti:
+            c := ti % kk
+            t := this.trees.get(ti)
+            repeat x.rows with i: out.add_at(i, c, t.apply_row(x, i)) end
+        end
+        ret out
+    end
+
+    @en "predict_proba"
+    @fa "پیش‌بینی احتمال"
+    @ar "تنبؤ الاحتمال"
+    pub func predict_proba(x &: matrix.Matrix): matrix.Matrix:
+        mut out := this.decision(x)
+        if out.is_empty() || this.regression: ret out end
+        kk := this.n_classes
+        mut probs := Vector {} as Vector<f64>
+        repeat kk: probs.push(0.0) end
+        repeat x.rows with i:
+            _softmax_row(out.a, i, kk, probs)
+            repeat kk with c: out.set(i, c, probs.get(c)) end
+        end
+        probs.free()
+        ret out
+    end
+
+    @en "predict"
+    @fa "پیش‌بینی"
+    @ar "تنبؤ"
+    pub func predict(x &: matrix.Matrix): matrix.Matrix:
+        mut d := this.decision(x)
+        if d.is_empty() || this.regression: ret d end
+        out := _argmax_rows(d)
+        matrix.Free(d)
+        ret out
+    end
+
+    @en "score"
+    @fa "امتیاز"
+    @ar "درجة"
+    pub func score(x &: matrix.Matrix, y &: matrix.Matrix): f64:
+        mut pred := this.predict(x)
+        if pred.is_empty(): ret 0.0 end
+        s := this.regression ? R2Score(y, pred) : Accuracy(y, pred)
+        matrix.Free(pred)
+        ret s
+    end
+
+    @en "free_all"
+    @fa "آزادسازی همه"
+    @ar "تحرير الكل"
+    pub func free_all():
+        this.edges.free()
+        this.edges_start.free()
+        this.base.free()
+        repeat this.trees.len() with i:
+            mut t := this.trees.get(i)
+            t.free()
+        end
+        this.trees.free()
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free(): this.free_all() end
+end
+
+// Quantile edges per feature and every row's bin index. A value v
+// falls in bin b = the number of edges below v... precisely: the first
+// edge e with v <= e, so "bin <= b" means "v <= edges[b]".
+func _hist_bin_features(x &: matrix.Matrix, max_bins: int, edges &: Vector<f64>, starts &: Vector<int>, bins &: Vector<int>):
+    n := x.rows
+    p := x.cols
+    mut col := Vector {} as Vector<f64>
+    repeat p with j:
+        starts.push(edges.len())
+        col.clear()
+        repeat n with i: col.push(x.at(i, j)) end
+        sort.Sort(col)
+        mut last := 0.0
+        mut have := false
+        repeat max_bins - 1 with b:
+            e := col.get(((b + 1) * n) / max_bins)
+            if e >= col.get(n - 1): continue end
+            if have && e <= last: continue end
+            edges.push(e)
+            last = e
+            have = true
+        end
+    end
+    starts.push(edges.len())
+    repeat p with j:
+        lo := starts.get(j)
+        hi := starts.get(j + 1)
+        repeat n with i:
+            v := x.at(i, j)
+            // first edge >= v
+            mut a := lo
+            mut b := hi
+            until a < b:
+                mid := (a + b) / 2
+                if edges.get(mid) < v: a = mid + 1 else: b = mid end
+            end
+            bins.set(i * p + j, a - lo)
+        end
+    end
+    col.free()
+end
+
+func _softmax_row(f &: Vector<f64>, i: int, kk: int, probs &: Vector<f64>):
+    mut mx := f.get(i * kk)
+    repeat kk with c:
+        if f.get(i * kk + c) > mx: mx = f.get(i * kk + c) end
+    end
+    mut s := 0.0
+    repeat kk with c:
+        e := math.Exp(f.get(i * kk + c) - mx)
+        probs.set(c, e)
+        s += e
+    end
+    repeat kk with c: probs.set(c, probs.get(c) / s) end
+end
+
+func _hist_leaf(t &: HistTree, value: f64): int:
+    id := t.feature.len()
+    t.feature.push(0 - 1)
+    t.threshold.push(0.0)
+    t.left.push(0 - 1)
+    t.right.push(0 - 1)
+    t.value.push(value)
+    ret id
+end
+
+// Grows one tree depth-first on rows 0..n-1 of the binned matrix.
+func _hist_grow(t &: HistTree, bins &: Vector<int>, n: int, p: int, edges &: Vector<f64>, starts &: Vector<int>, g &: Vector<f64>, h &: Vector<f64>, max_depth: int, min_leaf: int, l2: f64, lr: f64):
+    mut rows := Vector {} as Vector<int>
+    repeat n with i: rows.push(i) end
+    // node work items: node id, lo, hi, depth
+    mut st_node := Vector {} as Vector<int>
+    mut st_lo := Vector {} as Vector<int>
+    mut st_hi := Vector {} as Vector<int>
+    mut st_depth := Vector {} as Vector<int>
+    root := _hist_leaf(t, 0.0)
+    st_node.push(root)
+    st_lo.push(0)
+    st_hi.push(n)
+    st_depth.push(0)
+    mut hg := Vector {} as Vector<f64>
+    mut hh := Vector {} as Vector<f64>
+    mut hc := Vector {} as Vector<int>
+    until st_node.len() > 0:
+        nd := st_node.pop()
+        lo := st_lo.pop()
+        hi := st_hi.pop()
+        depth := st_depth.pop()
+        mut gs := 0.0
+        mut hs := 0.0
+        repeat hi - lo with r:
+            i := rows.get(lo + r)
+            gs += g.get(i)
+            hs += h.get(i)
+        end
+        t.value.set(nd, 0.0 - lr * gs / (hs + l2))
+        if depth >= max_depth || hi - lo < 2 * min_leaf: continue end
+        parent_gain := gs * gs / (hs + l2)
+        mut best_gain := 0.0
+        mut best_f := 0 - 1
+        mut best_b := 0
+        repeat p with j:
+            nb := starts.get(j + 1) - starts.get(j) + 1
+            if nb < 2: continue end
+            hg.clear()
+            hh.clear()
+            hc.clear()
+            repeat nb:
+                hg.push(0.0)
+                hh.push(0.0)
+                hc.push(0)
+            end
+            repeat hi - lo with r:
+                i := rows.get(lo + r)
+                b := bins.get(i * p + j)
+                hg.set(b, hg.get(b) + g.get(i))
+                hh.set(b, hh.get(b) + h.get(i))
+                hc.set(b, hc.get(b) + 1)
+            end
+            mut gl := 0.0
+            mut hl := 0.0
+            mut cl := 0
+            repeat nb - 1 with b:
+                gl += hg.get(b)
+                hl += hh.get(b)
+                cl += hc.get(b)
+                cr := hi - lo - cl
+                if cl < min_leaf || cr < min_leaf: continue end
+                gr := gs - gl
+                hr := hs - hl
+                gain := gl * gl / (hl + l2) + gr * gr / (hr + l2) - parent_gain
+                if gain > best_gain:
+                    best_gain = gain
+                    best_f = j
+                    best_b = b
+                end
+            end
+        end
+        if best_f < 0: continue end
+        // partition rows[lo, hi) by bin <= best_b
+        mut a := lo
+        mut b2 := hi - 1
+        until a <= b2:
+            if bins.get(rows.get(a) * p + best_f) <= best_b:
+                a += 1
+            else:
+                tmp := rows.get(a)
+                rows.set(a, rows.get(b2))
+                rows.set(b2, tmp)
+                b2 -= 1
+            end
+        end
+        mid := a
+        left := _hist_leaf(t, 0.0)
+        right := _hist_leaf(t, 0.0)
+        t.feature.set(nd, best_f)
+        t.threshold.set(nd, edges.get(starts.get(best_f) + best_b))
+        t.left.set(nd, left)
+        t.right.set(nd, right)
+        st_node.push(left)
+        st_lo.push(lo)
+        st_hi.push(mid)
+        st_depth.push(depth + 1)
+        st_node.push(right)
+        st_lo.push(mid)
+        st_hi.push(hi)
+        st_depth.push(depth + 1)
+    end
+    rows.free()
+    st_node.free()
+    st_lo.free()
+    st_hi.free()
+    st_depth.free()
+    hg.free()
+    hh.free()
+    hc.free()
+end

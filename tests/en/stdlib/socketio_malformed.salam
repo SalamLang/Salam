@@ -1,0 +1,125 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// What the parsers do with input nobody would send on purpose.
+//
+// Every byte a Socket.IO client parses came from the other end of a socket,
+// so "what a server sends" is the wrong model - the right one is "what
+// anything on the network can send". Truncated packets, headers that stop
+// halfway, numbers longer than a machine word, brackets that never close,
+// a namespace with no terminator: none of these may take the process with
+// them, and each has to come back as "malformed" rather than as a wrong
+// answer confidently given.
+//
+// The two numbers worth singling out are the attachment count and the
+// acknowledgement id, because both are read digit by digit out of the
+// peer's text. Without a ceiling, "5999999999999-" overflows the
+// accumulator into a NEGATIVE attachment count, and the reassembly loop
+// that waits for that many buffers is then waiting for a number it can
+// never reach.
+
+import net.socketio
+
+func packet(text: str):
+    p := socketio.DecodePacket(text)
+    println "[" + text + "] ok=" + p.ok, "kind=" + p.kind, "nsp=" + p.nsp, "id=" + p.id, "att=" + p.attachments
+end
+
+func url(text: str):
+    e := socketio.ParseURL(text)
+    println "[" + text + "] ok=" + e.ok, socketio.Origin(e), "ns=" + e.namespace
+end
+
+func array(text: str):
+    mut parts := socketio.SplitJSONArray(text)
+    defer parts.free()
+    println "[" + text + "] elements=" + parts.len()
+end
+
+func main:
+    println "-- packets that stop halfway"
+    packet("")
+    packet("2")
+    packet("5")
+    packet("5-")
+    packet("51")
+    packet("51-")
+    packet("2/")
+    packet("2/admin")
+    packet("2/admin,")
+    packet("4")
+
+    println "-- packets that are not packets"
+    packet("hello")
+    packet("9")
+    packet("-1")
+    packet("2x[]")
+    packet("5x-[]")
+
+    println "-- numbers with no business being that long"
+    packet("5999999999999-[]")
+    packet("21111111111111111111[]")
+    packet("2" + "9999999999" + "[]")
+
+    println "-- a namespace that never ends"
+    packet("2/" + "a")
+    packet("0/nocomma")
+
+    println "-- urls"
+    url("")
+    url("://")
+    url("http://")
+    url("http://host:")
+    url("http://host:abc")
+    url("http://host:99999999999")
+    url("http://host:0")
+    url("http://host:65536")
+    url("http://host:65535")
+    url("http://[::1")
+    url("gopher://host")
+    url("http://user:pass@host:8080/ns")
+
+    println "-- json arrays that are not"
+    array("")
+    array("null")
+    array("[")
+    array("[[[[")
+    array(`["unterminated`)
+    array(`["a",]`)
+    array("[,]")
+    array(`[{"a":[1,2]},"b"]`)
+
+    println "-- placeholders that are not"
+    println socketio.PlaceholderNum("")
+    println socketio.PlaceholderNum("{}")
+    println socketio.PlaceholderNum(`{"_placeholder":true}`)
+    println socketio.PlaceholderNum(`{"_placeholder":true,"num":}`)
+    println socketio.PlaceholderNum(`{"_placeholder":true,"num":99999999999}`)
+    println socketio.PlaceholderNum(`{"_placeholder":true,"num":  3}`)
+
+    println "-- reading past the end of things"
+    println "[" + socketio.ItemStr("[]", 0) + "]", socketio.ItemInt("[]", 5), socketio.ItemBool("", 0)
+    println socketio.ItemCount(""), socketio.ItemCount("[")
+    println "[" + socketio.EngineBody("") + "]", socketio.EngineKind(""), socketio.EngineKind("x")
+
+    println "-- payload splitting"
+    mut one := socketio.SplitPayloads("")
+    println one.len()
+    one.free()
+    mut two := socketio.SplitPayloads("\x1e")
+    println two.len(), "[" + two.get(0) + "]", "[" + two.get(1) + "]"
+    two.free()
+
+    println "everything came back rather than falling over"
+end

@@ -393,6 +393,57 @@ pub func ReadBytes(c &: Conn, buf: void*, max: int): int:
     ret take
 end
 
+// Pending - decrypted bytes already held, which a Read would hand back
+// without touching the socket.
+//
+// A caller that waits on the socket for readability (rawsock.WaitReadable)
+// has to ask this first: a single TLS record can carry several protocol
+// messages, so the plaintext for the next one is often already here while
+// the socket itself has nothing more to say. Polling the descriptor without
+// checking this stalls until the peer happens to send something else.
+@en "Pending"
+@fa "در انتظار"
+@ar "معلق"
+pub func Pending(c: Conn): int:
+    ret c.pending.len
+end
+
+// Readable - whether a Read would hand back data without waiting on the
+// socket.
+//
+// Not the same question as Pending, and asking the wrong one deadlocks. One
+// TCP segment routinely carries several TLS records: the first read takes
+// them all off the descriptor and decrypts only the first, so the plaintext
+// for the next message is not in `pending` yet - it is sitting in the record
+// layer, already arrived, with nothing left on the socket to wake a poll.
+// A caller that checked Pending, found it empty and then waited on the
+// descriptor would wait for traffic it already has.
+//
+// True here promises that a record is ready to decode, not that it carries
+// application data: a buffered key update or alert also counts, and reading
+// past one can still block on the socket for the message behind it. That is
+// rare enough to be worth the trade - the alternative is the deadlock above,
+// which is not rare at all.
+@en "Readable"
+@fa "خواندنی"
+@ar "قابل للقراءة"
+pub func Readable(c: Conn): bool:
+    if c.pending.len > 0:
+        ret true
+    end
+    ret _rec_buffered(c.h.rec) > 0
+end
+
+// Fd - the descriptor underneath, for a caller that needs to wait on it
+// (poll/select) rather than read from it. Reading it directly instead of
+// through Read/ReadBytes would desynchronise the record layer.
+@en "Fd"
+@fa "توصیفگر"
+@ar "واصف"
+pub func Fd(c: Conn): i64:
+    ret c.h.rec.fd
+end
+
 @en "Close"
 @fa "بستن اتصال"
 @ar "إغلاق الاتصال"

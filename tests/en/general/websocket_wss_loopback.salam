@@ -1,0 +1,112 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// A WebSocket over TLS, both ends in one process.
+//
+// The case this exists for is several messages sent at once. One TCP segment
+// routinely carries several TLS records, so the first read takes them all off
+// the descriptor and decrypts only the first: the plaintext for the messages
+// behind it has arrived, but there is nothing left on the socket to wake a
+// poll with. A reader that asks the descriptor "is there more?" is told no,
+// and waits for traffic it is already holding.
+//
+// So the three frames below are sent back to back on purpose, and read back
+// one at a time with a short deadline. Ask the wrong question and the second
+// and third come back as timeouts.
+//
+// It also exercises the server half of wss (AcceptWSS over std/tls's
+// WrapServer), which had no test of its own.
+
+import net.websocket
+import sync
+import mem
+
+mut ready := sync.NewWaitGroup()
+mut port := 0
+mut server log := ""
+
+func wss server():
+    websocket.LoadWSSConfig("tests/fixtures/ssl/server.crt", "tests/fixtures/ssl/server.key")
+    srv := websocket.Listen(0)
+    port = websocket.Port(srv)
+    sync.Done(ready)
+    if !websocket.Ok(srv):
+        ret
+    end
+    mut c := websocket.AcceptWSS(srv)
+    if !websocket.IsOpen(c):
+        server log = "the TLS handshake failed"
+        websocket.CloseServer(srv)
+        ret
+    end
+    server log = "accepted;"
+    // Three in a row, with nothing in between: whatever the network does
+    // with them, the reader has to end up with three messages.
+    websocket.SendText(c, "first")
+    websocket.SendText(c, "second")
+    websocket.SendText(c, "third")
+    // And one carrying bytes a str could not.
+    raw := mem.Allocate(4 as u64)
+    bp := raw as i8*
+    bp[0] = 0 as i8
+    bp[1] = 200 as i8
+    bp[2] = 0 as i8
+    bp[3] = 255 as i8
+    websocket.SendBinaryBytes(c, raw, 4)
+    mem.Free(raw)
+
+    m := websocket.Poll(c, 5000)
+    server log += "heard=" + m.text + ";"
+    websocket.Close(c)
+    websocket.CloseServer(srv)
+end
+
+func main:
+    sync.Add(ready, 1 as i64)
+    t := spawn(wss server)
+    sync.Wait(ready)
+
+    mut c := websocket.DialWSSUnverified("127.0.0.1", port, "/", "")
+    println "encrypted connection:", websocket.IsOpen(c)
+    println "server sent a 101:", c.hdr.substr(0, 12)
+
+    // The deadline is not what makes this a test - all four messages are
+    // already here by now, so a reader that goes to the socket for them
+    // finds nothing however long it waits. It is generous on purpose, so a
+    // loaded machine cannot fail it for the wrong reason.
+    mut got := ""
+    repeat 3:
+        m := websocket.Poll(c, 1200)
+        got += m.text + " "
+    end
+    println "three messages, read one at a time:", got
+
+    b := websocket.Poll(c, 1200)
+    println "binary over TLS:", b.kind == websocket.BINARY, "bytes:", b.len
+    bp := b.data as i8*
+    mut shown := ""
+    repeat b.len with i:
+        mut v := bp[i] as int
+        if v < 0:
+            v += 256
+        end
+        shown += "" + v + " "
+    end
+    println "  " + shown
+
+    websocket.SendText(c, "and back")
+    websocket.Close(c)
+    join(t)
+    println "server:", server log
+end

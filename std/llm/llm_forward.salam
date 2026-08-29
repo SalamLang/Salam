@@ -1,0 +1,230 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package llm
+
+import math
+import tensor
+
+// The transformer stack. Forward takes the next chunk of tokens (the
+// whole prompt, or the one token just sampled), appends their keys and
+// values to the cache, and returns the logits of every token in the
+// chunk as [n, vocab]. Positions are the cache's length on entry, so
+// feeding a prompt in one call and then one token per call gives the
+// same numbers as feeding everything at once.
+
+extern:
+    func expf(x: f32): f32
+    func sqrtf(x: f32): f32
+end
+
+// y = x * rsqrt(mean(x^2) + eps) * w, per row of [n, dim].
+func _rmsnorm(x &: tensor.Tensor, w &: tensor.Tensor, eps: f64): tensor.Tensor:
+    n := x.dim(0)
+    d := x.dim(1)
+    out := tensor.Zeros2(n, d)
+    px := x.data.data
+    pw := w.data.data
+    po := out.data.data
+    repeat n with r:
+        base := r * d
+        mut ss := 0.0 as f32
+        repeat d with k:
+            v := px[base + k]
+            ss += v * v
+        end
+        inv := (1.0 as f32) / sqrtf(ss / (d as f32) + (eps as f32))
+        repeat d with k: po[base + k] = px[base + k] * inv * pw[k] end
+    end
+    ret out
+end
+
+// Rotary position embedding in place over [n, heads * hd], row i at
+// position pos0 + i.
+func _rope(x &: tensor.Tensor, heads: int, hd: int, pos0: int, theta: f64, kind: int):
+    n := x.dim(0)
+    width := heads * hd
+    half := hd / 2
+    p := x.data.data
+    repeat n with i:
+        pos := (pos0 + i) as f64
+        repeat half with j:
+            freq := math.Pow(theta, 0.0 - (2.0 * (j as f64)) / (hd as f64))
+            ang := pos * freq
+            c := math.Cos(ang) as f32
+            s := math.Sin(ang) as f32
+            mut ia := 2 * j
+            mut ib := 2 * j + 1
+            if kind == ROPE_NEOX:
+                ia = j
+                ib = j + half
+            end
+            repeat heads with h:
+                base := i * width + h * hd
+                a := p[base + ia]
+                b := p[base + ib]
+                p[base + ia] = a * c - b * s
+                p[base + ib] = a * s + b * c
+            end
+        end
+    end
+end
+
+// Causal attention of q [n, heads*hd] against the cache of one layer,
+// whose positions 0 .. pos0+n-1 are filled. Grouped-query: head h reads
+// kv head h / (heads / kv_heads).
+func _attention(q &: tensor.Tensor, kc &: tensor.Tensor, vc &: tensor.Tensor, pos0: int, heads: int, kv_heads: int, hd: int): tensor.Tensor:
+    n := q.dim(0)
+    width := heads * hd
+    kw := kv_heads * hd
+    out := tensor.Zeros2(n, width)
+    mut sc := tensor.Zeros1(pos0 + n)
+    pq := q.data.data
+    pk := kc.data.data
+    pv := vc.data.data
+    po := out.data.data
+    ps := sc.data.data
+    scale := (1.0 / math.Sqrt(hd as f64)) as f32
+    group := heads / kv_heads
+    repeat heads with h:
+        kh := h / group
+        repeat n with i:
+            last := pos0 + i
+            qb := i * width + h * hd
+            mut mx := 0.0 as f32
+            repeat last + 1 with j:
+                kb := j * kw + kh * hd
+                mut s := 0.0 as f32
+                repeat hd with d: s += pq[qb + d] * pk[kb + d] end
+                s = s * scale
+                ps[j] = s
+                if j == 0 || s > mx: mx = s end
+            end
+            mut sum := 0.0 as f32
+            repeat last + 1 with j:
+                e := expf(ps[j] - mx)
+                ps[j] = e
+                sum += e
+            end
+            inv := (1.0 as f32) / sum
+            ob := i * width + h * hd
+            repeat last + 1 with j:
+                pj := ps[j] * inv
+                vb := j * kw + kh * hd
+                repeat hd with d: po[ob + d] += pj * pv[vb + d] end
+            end
+        end
+    end
+    sc.free()
+    ret out
+end
+
+// Rows of x copied into the cache tensor at positions pos0 ...
+func _cache_put(dst &: tensor.Tensor, x &: tensor.Tensor, pos0: int):
+    n := x.dim(0)
+    w := x.dim(1)
+    pd := dst.data.data
+    px := x.data.data
+    repeat n * w with k: pd[pos0 * w + k] = px[k] end
+end
+
+func _gather_rows(table &: tensor.Tensor, ids &: Vector<int>): tensor.Tensor:
+    n := ids.len()
+    d := table.dim(1)
+    vocab := table.dim(0)
+    out := tensor.Zeros2(n, d)
+    pt := table.data.data
+    po := out.data.data
+    repeat n with i:
+        mut id := ids.get(i)
+        if id < 0 || id >= vocab: id = 0 end
+        repeat d with k: po[i * d + k] = pt[id * d + k] end
+    end
+    ret out
+end
+
+func _layer_forward(m &: Model, li: int, cache &: KVCache, x &: tensor.Tensor, pos0: int):
+    cfg := m.cfg
+    l := m.layers.get(li)
+    hd := cfg.head_dim()
+    // attention sublayer
+    mut h := _rmsnorm(x, l.attn_norm, cfg.eps)
+    mut q := tensor.MulTranspose(h, l.wq)
+    mut k := tensor.MulTranspose(h, l.wk)
+    mut v := tensor.MulTranspose(h, l.wv)
+    h.free()
+    _rope(q, cfg.heads, hd, pos0, cfg.rope_theta, cfg.rope_kind)
+    _rope(k, cfg.kv_heads, hd, pos0, cfg.rope_theta, cfg.rope_kind)
+    mut kc := cache.k.get(li)
+    mut vc := cache.v.get(li)
+    _cache_put(kc, k, pos0)
+    _cache_put(vc, v, pos0)
+    k.free()
+    v.free()
+    mut ctx := _attention(q, kc, vc, pos0, cfg.heads, cfg.kv_heads, hd)
+    q.free()
+    mut o := tensor.MulTranspose(ctx, l.wo)
+    ctx.free()
+    tensor.AddInPlace(x, o)
+    o.free()
+    // feed-forward sublayer: down(silu(gate(h)) * up(h))
+    mut h2 := _rmsnorm(x, l.ffn_norm, cfg.eps)
+    mut gate := tensor.MulTranspose(h2, l.w_gate)
+    mut up := tensor.MulTranspose(h2, l.w_up)
+    h2.free()
+    mut act := tensor.Silu(gate)
+    gate.free()
+    tensor.MulInPlace(act, up)
+    up.free()
+    mut down := tensor.MulTranspose(act, l.w_down)
+    act.free()
+    tensor.AddInPlace(x, down)
+    down.free()
+end
+
+// ---- public API ----
+
+// Logits [n, vocab] for `tokens`, placed at positions cache.len ...;
+// the cache advances by n. Empty when the tokens would overflow ctx.
+@en "Forward"
+@fa "پیشرو"
+@ar "أمامي"
+pub func Forward(m &: Model, cache &: KVCache, tokens &: Vector<int>): tensor.Tensor:
+    n := tokens.len()
+    pos0 := cache.len
+    if !m.ok || n == 0 || pos0 + n > cache.ctx: ret tensor.Empty() end
+    mut x := _gather_rows(m.tok_embed, tokens)
+    repeat m.cfg.layers with li:
+        _layer_forward(m, li, cache, x, pos0)
+    end
+    cache.len = pos0 + n
+    mut xn := _rmsnorm(x, m.out_norm, m.cfg.eps)
+    x.free()
+    mut logits := tensor.Empty()
+    if m.out_head.is_empty():
+        logits = tensor.MulTranspose(xn, m.tok_embed)
+    else:
+        logits = tensor.MulTranspose(xn, m.out_head)
+    end
+    xn.free()
+    ret logits
+end
+
+// One row of a logits tensor as its own [vocab] tensor.
+@en "LogitsRow"
+@fa "ردیف لاجیت"
+@ar "صف اللوغاريتمات"
+pub func LogitsRow(logits &: tensor.Tensor, row: int): tensor.Tensor:
+    ret tensor.SliceAxis0(logits, row, 1)
+end

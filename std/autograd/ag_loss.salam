@@ -1,0 +1,122 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package autograd
+
+import math
+import tensor
+
+// Loss heads. Mean squared error is a plain composition of recorded
+// ops; the two classification losses are fused nodes, because their
+// composed forms are both slower and numerically worse:
+//
+//   - CrossEntropyLogits folds log-softmax and the negative
+//     log-likelihood pick into one pass, and its backward is the
+//     textbook (softmax - onehot)/N without ever materializing a
+//     one-hot tensor.
+//   - BCEWithLogits uses the max(x,0) - x y + log1p(exp(-|x|)) form,
+//     which never exponentiates a positive number, and backpropagates
+//     (sigmoid(x) - y)/N.
+//
+// Class targets travel as a Vector<int> of indices and are copied onto
+// the tape as an aux tensor (f32 whole numbers - exact far beyond any
+// class count), so the caller's vector is free to die after the call.
+
+func _ce_forward(logits &: tensor.Tensor, idx &: tensor.Tensor): f64:
+    width := logits.shape.get(logits.rank() - 1)
+    rows := logits.numel() / width
+    p := logits.data.data
+    pi := idx.data.data
+    mut total := 0.0
+    repeat rows with r:
+        base := r * width
+        mut m := p[base]
+        repeat width with k:
+            v := p[base + k]
+            if v > m: m = v end
+        end
+        mut s := 0.0
+        repeat width with k: s += math.Exp((p[base + k] - m) as f64) end
+        t := pi[r] as int
+        total += (math.Log(s) + (m as f64)) - (p[base + t] as f64)
+    end
+    ret total / (rows as f64)
+end
+
+// ---- public API ----
+
+// Mean squared error between two recorded values, as composed ops.
+@en "MSELoss"
+@fa "خطای میانگین مربعات"
+@ar "خطأ متوسط المربعات"
+pub func MSELoss(tp &: Tape, pred: int, target: int): int:
+    ret Mean(tp, Square(tp, Sub(tp, pred, target)))
+end
+
+// -mean(log softmax(logits)[i, targets[i]]) over the last axis, fused.
+// `logits` is [N, C] (or higher rank folded to rows); `targets` holds N
+// class indices.
+@en "CrossEntropyLogits"
+@fa "آنتروپی متقاطع لوجیت"
+@ar "الانتروبيا المتقاطعة"
+pub func CrossEntropyLogits(tp &: Tape, logits: int, targets &: Vector<int>): int:
+    vl := Value(tp, logits)
+    if vl.is_empty() || vl.rank() < 2: ret _push_val(tp, tensor.Empty(), true, false) end
+    width := vl.shape.get(vl.rank() - 1)
+    rows := vl.numel() / width
+    if targets.len() != rows: ret _push_val(tp, tensor.Empty(), true, false) end
+    // Targets onto the tape as an aux value slot (owned, no grad).
+    ti := tensor.Zeros1(rows)
+    pt := ti.data.data
+    repeat rows with r: pt[r] = targets.get(r) as f32 end
+    aux := _push_val(tp, ti, true, false)
+    tv := Value(tp, aux)
+    out := tensor.Scalar(_ce_forward(vl, tv))
+    needs_grad := tp.needs.get(logits)
+    id := _push_val(tp, out, true, needs_grad)
+    if needs_grad: _record(tp, _OP_CELOSS, logits, 0 - 1, id, aux, 0, 0, 0.0) end
+    ret id
+end
+
+// mean(max(x,0) - x y + log(1 + exp(-|x|))) for targets y in {0,1},
+// fused and overflow-safe. `target` is a recorded value of the same
+// shape as `logits`.
+@en "BCEWithLogits"
+@fa "آنتروپی دودویی لوجیت"
+@ar "الانتروبيا الثنائية"
+pub func BCEWithLogits(tp &: Tape, logits: int, target: int): int:
+    vl := Value(tp, logits)
+    vt := Value(tp, target)
+    if vl.is_empty() || vl.same_shape(vt) == false:
+        ret _push_val(tp, tensor.Empty(), true, false)
+    end
+    n := vl.numel()
+    p := vl.data.data
+    q := vt.data.data
+    mut total := 0.0
+    repeat n with k:
+        x := p[k] as f64
+        y := q[k] as f64
+        mut mx := x
+        if mx < 0.0: mx = 0.0 end
+        mut ax := x
+        if ax < 0.0: ax = 0.0 - ax end
+        total += mx - x * y + math.Log(1.0 + math.Exp(0.0 - ax))
+    end
+    out := tensor.Scalar(total / (n as f64))
+    needs_grad := tp.needs.get(logits) || tp.needs.get(target)
+    id := _push_val(tp, out, true, needs_grad)
+    if needs_grad: _record(tp, _OP_BCEWL, logits, target, id, 0 - 1, 0, 0, 0.0) end
+    ret id
+end

@@ -1,0 +1,583 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package tensor
+
+import mem
+
+// The f32 matrix product - std/matrix's packed f64 kernel, ported and
+// re-tuned for elements half the size. The structure is identical (read
+// mat_mul.salam's essays for the why of every level; they are not
+// repeated here), the differences are the ones f32 forces:
+//
+//   - The micro-kernel is 4x16 instead of 4x8. A 256-bit vector holds
+//     eight f32, so 64 running sums are the same eight vector registers
+//     the f64 kernel's 32 sums were, and each broadcast of an x scalar
+//     now feeds sixteen multiply-adds.
+//   - _KC stays 512: the packed y panel per micro-column is
+//     _KC * 16 * 4 = 32 KiB, the same L1 story as f64's 16 KiB panel at
+//     twice the columns. _NC grows to 1024, which keeps the y panel at
+//     2 MiB in byte terms.
+//   - No Strassen. Each recursion level roughly doubles the norm-wise
+//     error, and f32 starts with seven decimal digits, not sixteen; the
+//     two levels that were harmless in f64 would eat a third of f32's
+//     headroom for a constant-factor win the sizes ML actually
+//     multiplies (batch x features) rarely reach.
+//
+// Everything here works on raw payload pointers over contiguous
+// row-major buffers, which every Tensor is by construction. The batch
+// form is the same kernel swept along the leading dimension.
+
+const _T_BLOCK := 32
+
+const _MR := 4
+const _NR := 16
+
+const _KC := 512
+const _MC := 128
+const _NC := 1024
+
+// GEP helpers, the pointer-offset idiom every kernel below indexes with.
+inline func _p32(p: f32*, off: int): f32*:
+    ret (p as i64 + (off as i64) * (sizeof(f32) as i64)) as f32*
+end
+
+inline func _p3264(p: f32*, off: i64): f32*:
+    ret (p as i64 + off * (sizeof(f32) as i64)) as f32*
+end
+
+func _gmin(a: int, b: int): int:
+    if a < b: ret a end
+    ret b
+end
+
+// x rows i0..i0+_MR interleaved k-major, so the four scalars step k
+// broadcasts sit in one cache line.
+func _gg_pack_a(px: f32*, xc: int, i0: int, k0: int, kc: int, dst: f32*):
+    a0 := _p32(px, i0 * xc + k0)
+    a1 := _p32(px, (i0 + 1) * xc + k0)
+    a2 := _p32(px, (i0 + 2) * xc + k0)
+    a3 := _p32(px, (i0 + 3) * xc + k0)
+    repeat kc with k:
+        d := _p32(dst, k * _MR)
+        d[0] = a0[k]
+        d[1] = a1[k]
+        d[2] = a2[k]
+        d[3] = a3[k]
+    end
+end
+
+// y[k0..k1) x [j0..j0+_NR) as a contiguous k-major panel.
+func _gg_pack_b(py: f32*, yc: int, k0: int, k1: int, j0: int, dst: f32*):
+    mut k := k0
+    mut o := 0
+    until k < k1:
+        src := _p32(py, k * yc + j0)
+        d := _p32(dst, o)
+        repeat _NR with t: d[t] = src[t] end
+        o += _NR
+        k += 1
+    end
+end
+
+// The 4x16 micro-kernel. Sixty-four running sums live in locals for the
+// whole k loop and reach memory exactly once, at the end. They start
+// from what the result already holds, so successive k blocks accumulate
+// - and so callers building a fresh product must hand this a zeroed
+// destination.
+func _gg_micro(pa: f32*, pb: f32*, kn: i64, c0: f32*, c1: f32*, c2: f32*, c3: f32*):
+    mut c0_0 := c0[0]
+    mut c0_1 := c0[1]
+    mut c0_2 := c0[2]
+    mut c0_3 := c0[3]
+    mut c0_4 := c0[4]
+    mut c0_5 := c0[5]
+    mut c0_6 := c0[6]
+    mut c0_7 := c0[7]
+    mut c0_8 := c0[8]
+    mut c0_9 := c0[9]
+    mut c0_10 := c0[10]
+    mut c0_11 := c0[11]
+    mut c0_12 := c0[12]
+    mut c0_13 := c0[13]
+    mut c0_14 := c0[14]
+    mut c0_15 := c0[15]
+    mut c1_0 := c1[0]
+    mut c1_1 := c1[1]
+    mut c1_2 := c1[2]
+    mut c1_3 := c1[3]
+    mut c1_4 := c1[4]
+    mut c1_5 := c1[5]
+    mut c1_6 := c1[6]
+    mut c1_7 := c1[7]
+    mut c1_8 := c1[8]
+    mut c1_9 := c1[9]
+    mut c1_10 := c1[10]
+    mut c1_11 := c1[11]
+    mut c1_12 := c1[12]
+    mut c1_13 := c1[13]
+    mut c1_14 := c1[14]
+    mut c1_15 := c1[15]
+    mut c2_0 := c2[0]
+    mut c2_1 := c2[1]
+    mut c2_2 := c2[2]
+    mut c2_3 := c2[3]
+    mut c2_4 := c2[4]
+    mut c2_5 := c2[5]
+    mut c2_6 := c2[6]
+    mut c2_7 := c2[7]
+    mut c2_8 := c2[8]
+    mut c2_9 := c2[9]
+    mut c2_10 := c2[10]
+    mut c2_11 := c2[11]
+    mut c2_12 := c2[12]
+    mut c2_13 := c2[13]
+    mut c2_14 := c2[14]
+    mut c2_15 := c2[15]
+    mut c3_0 := c3[0]
+    mut c3_1 := c3[1]
+    mut c3_2 := c3[2]
+    mut c3_3 := c3[3]
+    mut c3_4 := c3[4]
+    mut c3_5 := c3[5]
+    mut c3_6 := c3[6]
+    mut c3_7 := c3[7]
+    mut c3_8 := c3[8]
+    mut c3_9 := c3[9]
+    mut c3_10 := c3[10]
+    mut c3_11 := c3[11]
+    mut c3_12 := c3[12]
+    mut c3_13 := c3[13]
+    mut c3_14 := c3[14]
+    mut c3_15 := c3[15]
+    repeat kn with k:
+        pak := _p3264(pa, k * (_MR as i64))
+        pbk := _p3264(pb, k * (_NR as i64))
+        b0 := pbk[0]
+        b1 := pbk[1]
+        b2 := pbk[2]
+        b3 := pbk[3]
+        b4 := pbk[4]
+        b5 := pbk[5]
+        b6 := pbk[6]
+        b7 := pbk[7]
+        b8 := pbk[8]
+        b9 := pbk[9]
+        b10 := pbk[10]
+        b11 := pbk[11]
+        b12 := pbk[12]
+        b13 := pbk[13]
+        b14 := pbk[14]
+        b15 := pbk[15]
+        v0 := pak[0]
+        c0_0 += v0 * b0
+        c0_1 += v0 * b1
+        c0_2 += v0 * b2
+        c0_3 += v0 * b3
+        c0_4 += v0 * b4
+        c0_5 += v0 * b5
+        c0_6 += v0 * b6
+        c0_7 += v0 * b7
+        c0_8 += v0 * b8
+        c0_9 += v0 * b9
+        c0_10 += v0 * b10
+        c0_11 += v0 * b11
+        c0_12 += v0 * b12
+        c0_13 += v0 * b13
+        c0_14 += v0 * b14
+        c0_15 += v0 * b15
+        v1 := pak[1]
+        c1_0 += v1 * b0
+        c1_1 += v1 * b1
+        c1_2 += v1 * b2
+        c1_3 += v1 * b3
+        c1_4 += v1 * b4
+        c1_5 += v1 * b5
+        c1_6 += v1 * b6
+        c1_7 += v1 * b7
+        c1_8 += v1 * b8
+        c1_9 += v1 * b9
+        c1_10 += v1 * b10
+        c1_11 += v1 * b11
+        c1_12 += v1 * b12
+        c1_13 += v1 * b13
+        c1_14 += v1 * b14
+        c1_15 += v1 * b15
+        v2 := pak[2]
+        c2_0 += v2 * b0
+        c2_1 += v2 * b1
+        c2_2 += v2 * b2
+        c2_3 += v2 * b3
+        c2_4 += v2 * b4
+        c2_5 += v2 * b5
+        c2_6 += v2 * b6
+        c2_7 += v2 * b7
+        c2_8 += v2 * b8
+        c2_9 += v2 * b9
+        c2_10 += v2 * b10
+        c2_11 += v2 * b11
+        c2_12 += v2 * b12
+        c2_13 += v2 * b13
+        c2_14 += v2 * b14
+        c2_15 += v2 * b15
+        v3 := pak[3]
+        c3_0 += v3 * b0
+        c3_1 += v3 * b1
+        c3_2 += v3 * b2
+        c3_3 += v3 * b3
+        c3_4 += v3 * b4
+        c3_5 += v3 * b5
+        c3_6 += v3 * b6
+        c3_7 += v3 * b7
+        c3_8 += v3 * b8
+        c3_9 += v3 * b9
+        c3_10 += v3 * b10
+        c3_11 += v3 * b11
+        c3_12 += v3 * b12
+        c3_13 += v3 * b13
+        c3_14 += v3 * b14
+        c3_15 += v3 * b15
+    end
+    c0[0] = c0_0
+    c0[1] = c0_1
+    c0[2] = c0_2
+    c0[3] = c0_3
+    c0[4] = c0_4
+    c0[5] = c0_5
+    c0[6] = c0_6
+    c0[7] = c0_7
+    c0[8] = c0_8
+    c0[9] = c0_9
+    c0[10] = c0_10
+    c0[11] = c0_11
+    c0[12] = c0_12
+    c0[13] = c0_13
+    c0[14] = c0_14
+    c0[15] = c0_15
+    c1[0] = c1_0
+    c1[1] = c1_1
+    c1[2] = c1_2
+    c1[3] = c1_3
+    c1[4] = c1_4
+    c1[5] = c1_5
+    c1[6] = c1_6
+    c1[7] = c1_7
+    c1[8] = c1_8
+    c1[9] = c1_9
+    c1[10] = c1_10
+    c1[11] = c1_11
+    c1[12] = c1_12
+    c1[13] = c1_13
+    c1[14] = c1_14
+    c1[15] = c1_15
+    c2[0] = c2_0
+    c2[1] = c2_1
+    c2[2] = c2_2
+    c2[3] = c2_3
+    c2[4] = c2_4
+    c2[5] = c2_5
+    c2[6] = c2_6
+    c2[7] = c2_7
+    c2[8] = c2_8
+    c2[9] = c2_9
+    c2[10] = c2_10
+    c2[11] = c2_11
+    c2[12] = c2_12
+    c2[13] = c2_13
+    c2[14] = c2_14
+    c2[15] = c2_15
+    c3[0] = c3_0
+    c3[1] = c3_1
+    c3[2] = c3_2
+    c3[3] = c3_3
+    c3[4] = c3_4
+    c3[5] = c3_5
+    c3[6] = c3_6
+    c3[7] = c3_7
+    c3[8] = c3_8
+    c3[9] = c3_9
+    c3[10] = c3_10
+    c3[11] = c3_11
+    c3[12] = c3_12
+    c3[13] = c3_13
+    c3[14] = c3_14
+    c3[15] = c3_15
+end
+
+// The edge strip: rows or columns the 4x16 kernel could not cover, one
+// f32 dot product at a time, accumulated in f64 like every other scalar
+// fallback in the package.
+func _gg_edge(pr: f32*, rc: int, px: f32*, xc: int, py: f32*, yc: int, i0: int, i1: int, j0: int, j1: int, kn: int):
+    mut i := i0
+    until i < i1:
+        xrow := _p32(px, i * xc)
+        crow := _p32(pr, i * rc)
+        mut j := j0
+        until j < j1:
+            mut acc := 0.0 as f32
+            repeat kn with k: acc += xrow[k] * py[k * yc + j] end
+            crow[j] = crow[j] + acc
+            j += 1
+        end
+        i += 1
+    end
+end
+
+// The accumulating product core: r += x y over raw contiguous buffers.
+// r is n x m, x is n x kn, y is kn x m, all row-major with their natural
+// strides. Callers wanting a fresh product zero r first.
+func _gemm_acc(px: f32*, py: f32*, pr: f32*, n: int, kn: int, m: int):
+    if n <= 0 || m <= 0 || kn <= 0: ret end
+    nfull := (n / _MR) * _MR
+    mfull := (m / _NR) * _NR
+    bpack := mem.Allocate(((_NC * _KC) as u64) * (sizeof(f32) as u64)) as f32*
+    defer mem.Free(bpack as void*)
+    apack := mem.Allocate(((_MC * _KC) as u64) * (sizeof(f32) as u64)) as f32*
+    defer mem.Free(apack as void*)
+    mut j0 := 0
+    until j0 < mfull:
+        nc := _gmin(_NC, mfull - j0)
+        ncblk := nc / _NR
+        mut p0 := 0
+        until p0 < kn:
+            kc := _gmin(_KC, kn - p0)
+            repeat ncblk with jb:
+                _gg_pack_b(py, m, p0, p0 + kc, j0 + jb * _NR, _p32(bpack, jb * kc * _NR))
+            end
+            mut i0 := 0
+            until i0 < nfull:
+                mcap := (_MC / _MR) * _MR
+                ic := _gmin(mcap, nfull - i0)
+                mut ip := 0
+                until ip < ic:
+                    _gg_pack_a(px, kn, i0 + ip, p0, kc, _p32(apack, ip * kc))
+                    ip += _MR
+                end
+                repeat ncblk with jb:
+                    j := j0 + jb * _NR
+                    bp := _p32(bpack, jb * kc * _NR)
+                    mut ii := 0
+                    until ii < ic:
+                        i := i0 + ii
+                        _gg_micro(
+                            _p32(apack, ii * kc), bp, kc as i64,
+                            _p32(pr, i * m + j), _p32(pr, (i + 1) * m + j), _p32(pr, (i + 2) * m + j), _p32(pr, (i + 3) * m + j)
+                        )
+                        ii += _MR
+                    end
+                end
+                i0 += _MC
+            end
+            p0 += _KC
+        end
+        j0 += _NC
+    end
+    _gg_edge(pr, m, px, kn, py, m, nfull, n, 0, mfull, kn)
+    _gg_edge(pr, m, px, kn, py, m, 0, n, mfull, m, kn)
+end
+
+func _transpose2d_into(px: f32*, n: int, m: int, pr: f32*):
+    mut i0 := 0
+    until i0 < n:
+        i1 := _gmin(i0 + _T_BLOCK, n)
+        mut j0 := 0
+        until j0 < m:
+            j1 := _gmin(j0 + _T_BLOCK, m)
+            mut i := i0
+            until i < i1:
+                xo := i * m
+                mut j := j0
+                until j < j1:
+                    pr[j * n + i] = px[xo + j]
+                    j += 1
+                end
+                i += 1
+            end
+            j0 += _T_BLOCK
+        end
+        i0 += _T_BLOCK
+    end
+end
+
+func _is_mat(x &: Tensor): bool: ret x.rank() == 2 && x.is_empty() == false end
+
+// ---- public API ----
+
+@en "Transpose2D"
+@fa "ترانهاده دوبعدی"
+@ar "منقول ثنائي"
+pub func Transpose2D(x &: Tensor): Tensor:
+    if _is_mat(x) == false: ret Empty() end
+    n := x.shape.get(0)
+    m := x.shape.get(1)
+    t := Zeros2(m, n)
+    _transpose2d_into(x.data.data, n, m, t.data.data)
+    ret t
+end
+
+// The (n,k)x(k,m) product of two rank-2 tensors. Inner dimensions must
+// agree; a mismatch is the empty tensor, as everywhere.
+@en "MatMul"
+@fa "ضرب ماتریسی"
+@ar "ضرب المصفوفات"
+pub func MatMul(x &: Tensor, y &: Tensor): Tensor:
+    if _is_mat(x) == false || _is_mat(y) == false: ret Empty() end
+    if x.shape.get(1) != y.shape.get(0): ret Empty() end
+    n := x.shape.get(0)
+    kn := x.shape.get(1)
+    m := y.shape.get(1)
+    t := Zeros2(n, m)
+    _par_gemm(x.data.data, y.data.data, t.data.data, n, kn, m)
+    ret t
+end
+
+// Product into a destination the caller owns, zeroed here first. `out`
+// must not alias either operand.
+@en "MatMulInto"
+@fa "ضرب ماتریسی در"
+@ar "ضرب المصفوفات في"
+pub func MatMulInto(x &: Tensor, y &: Tensor, out &: Tensor): bool:
+    if _is_mat(x) == false || _is_mat(y) == false || out.rank() != 2: ret false end
+    if x.shape.get(1) != y.shape.get(0): ret false end
+    n := x.shape.get(0)
+    m := y.shape.get(1)
+    if out.shape.get(0) != n || out.shape.get(1) != m: ret false end
+    pz := out.data.data
+    zero := 0.0 as f32
+    repeat n * m with i: pz[i] = zero end
+    _par_gemm(x.data.data, y.data.data, pz, n, x.shape.get(1), m)
+    ret true
+end
+
+// out += x y, the form backpropagation wants: gradients accumulate into
+// a buffer that already holds the contributions of other consumers.
+@en "MatMulAcc"
+@fa "ضرب ماتریسی انباشته"
+@ar "ضرب المصفوفات تراكمي"
+pub func MatMulAcc(x &: Tensor, y &: Tensor, out &: Tensor): bool:
+    if _is_mat(x) == false || _is_mat(y) == false || out.rank() != 2: ret false end
+    if x.shape.get(1) != y.shape.get(0): ret false end
+    n := x.shape.get(0)
+    m := y.shape.get(1)
+    if out.shape.get(0) != n || out.shape.get(1) != m: ret false end
+    _par_gemm(x.data.data, y.data.data, out.data.data, n, x.shape.get(1), m)
+    ret true
+end
+
+// X^T Y without asking the caller to build the transpose: one tiled
+// transpose copy, then the packed kernel. The copy is O(n*k) against the
+// product's O(n*k*m).
+@en "TransposeMul"
+@fa "ضرب ترانهاده"
+@ar "ضرب المنقول"
+pub func TransposeMul(x &: Tensor, y &: Tensor): Tensor:
+    if _is_mat(x) == false || _is_mat(y) == false: ret Empty() end
+    if x.shape.get(0) != y.shape.get(0): ret Empty() end
+    mut t := Transpose2D(x)
+    r := MatMul(t, y)
+    defer t.free()
+    ret r
+end
+
+// X Y^T, the same one-copy strategy.
+@en "MulTranspose"
+@fa "ضرب در ترانهاده"
+@ar "ضرب في المنقول"
+pub func MulTranspose(x &: Tensor, y &: Tensor): Tensor:
+    if _is_mat(x) == false || _is_mat(y) == false: ret Empty() end
+    if x.shape.get(1) != y.shape.get(1): ret Empty() end
+    mut t := Transpose2D(y)
+    r := MatMul(x, t)
+    defer t.free()
+    ret r
+end
+
+// [B,n,k] x [B,k,m] -> [B,n,m]: the packed kernel swept along the batch.
+@en "BatchMatMul"
+@fa "ضرب ماتریسی دسته‌ای"
+@ar "ضرب المصفوفات دفعي"
+pub func BatchMatMul(x &: Tensor, y &: Tensor): Tensor:
+    if x.rank() != 3 || y.rank() != 3: ret Empty() end
+    if x.shape.get(0) != y.shape.get(0): ret Empty() end
+    if x.shape.get(2) != y.shape.get(1): ret Empty() end
+    b := x.shape.get(0)
+    n := x.shape.get(1)
+    kn := x.shape.get(2)
+    m := y.shape.get(2)
+    t := Zeros3(b, n, m)
+    _par_batch_gemm(x.data.data, y.data.data, t.data.data, b, n, kn, m)
+    ret t
+end
+
+// A x for a rank-2 A and rank-1 x, returned rank-1.
+@en "MatVec"
+@fa "ضرب در بردار"
+@ar "ضرب بمتجه"
+pub func MatVec(a &: Tensor, x &: Tensor): Tensor:
+    if _is_mat(a) == false || x.rank() != 1: ret Empty() end
+    if a.shape.get(1) != x.shape.get(0): ret Empty() end
+    n := a.shape.get(0)
+    kn := a.shape.get(1)
+    t := Zeros1(n)
+    pa := a.data.data
+    pv := x.data.data
+    pr := t.data.data
+    repeat n with i:
+        row := _p32(pa, i * kn)
+        mut s := 0.0 as f32
+        repeat kn with k: s += row[k] * pv[k] end
+        pr[i] = s
+    end
+    ret t
+end
+
+// The transpose of a raw n x m row-major buffer, as a fresh [m, n]
+// tensor. The companion expert entry to GemmAcc below, for callers
+// flattening higher-rank tensors by pointer.
+@en "TransposeRaw"
+@fa "ترانهاده خام"
+@ar "منقول خام"
+pub func TransposeRaw(px: f32*, n: int, m: int): Tensor:
+    t := Zeros2(m, n)
+    _transpose2d_into(px, n, m, t.data.data)
+    ret t
+end
+
+// The expert entry: r += x y over raw contiguous row-major buffers
+// (r is n x m, x is n x k, y is k x m), no shape checks, serial. This
+// exists for callers - convolution backward above all - that address
+// samples inside a batched buffer by offset, where wrapping each slice
+// in a Tensor would mean a copy per sample. Everything about safety is
+// the caller's problem; everyone else wants MatMul or MatMulAcc.
+@en "GemmAcc"
+@fa "ضرب انباشته خام"
+@ar "ضرب تراكمي خام"
+pub func GemmAcc(px: f32*, py: f32*, pr: f32*, n: int, k: int, m: int):
+    _gemm_acc(px, py, pr, n, k, m)
+end
+
+// The dot product of two rank-1 tensors, accumulated in f64.
+@en "Dot"
+@fa "ضرب داخلی"
+@ar "ضرب داخلي"
+pub func Dot(x &: Tensor, y &: Tensor): f64:
+    if x.rank() != 1 || y.rank() != 1: ret 0.0 end
+    n := x.shape.get(0)
+    if n != y.shape.get(0): ret 0.0 end
+    p := x.data.data
+    q := y.data.data
+    mut s := 0.0
+    repeat n with k: s += (p[k] as f64) * (q[k] as f64) end
+    ret s
+end

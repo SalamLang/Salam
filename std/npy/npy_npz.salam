@@ -1,0 +1,116 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package npy
+
+import archive
+import compress
+import mem
+import str
+
+// .npz bundles: a zip whose members are .npy files, one per array,
+// named after the key (NumPy appends ".npy" to the key on write and
+// strips it on read; so does this). Reading goes through
+// archive.ZipList / ZipExtractByName, writing through ZipCreate with
+// stored (uncompressed) members, which is what np.savez produces.
+
+func _strip_npy(name: str): str:
+    if str.EndsWith(name, ".npy"):
+        ret str.Substr(name, 0, str.Len(name) - 4)
+    end
+    ret name
+end
+
+// ---- public API ----
+
+// The array keys in an .npz file (member names without ".npy").
+@en "NpzList"
+@fa "فهرست ان‌پی‌زد"
+@ar "قائمة إن بي زد"
+pub func NpzList(path: str, ok &: bool): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    ok = false
+    mut fok := false
+    mut raw := archive.ReadBinaryFile(path, fok)
+    if fok == false:
+        compress.BufFree(raw)
+        ret out
+    end
+    mut entries := archive.ZipList(raw.data, compress.BufLen(raw))
+    repeat entries.len() with i:
+        e := entries.get(i)
+        if e.is_dir == false: out.push(_strip_npy(e.name)) end
+    end
+    ok = entries.len() > 0
+    entries.free()
+    compress.BufFree(raw)
+    ret out
+end
+
+// One array out of an .npz by key.
+@en "NpzRead"
+@fa "خواندن ان‌پی‌زد"
+@ar "قراءة إن بي زد"
+pub func NpzRead(path: str, key: str, ok &: bool): NpyArray:
+    ok = false
+    mut fok := false
+    mut raw := archive.ReadBinaryFile(path, fok)
+    if fok == false:
+        compress.BufFree(raw)
+        ret NpyArray {}
+    end
+    mut zok := false
+    // The ".npy" member name is composed here, so it is freed here.
+    named := key + ".npy"
+    mut member := archive.ZipExtractByName(raw.data, compress.BufLen(raw), named, zok)
+    mem.Free(named as void*)
+    if zok == false:
+        compress.BufFree(member)
+        member = archive.ZipExtractByName(raw.data, compress.BufLen(raw), key, zok)
+    end
+    mut a := NpyArray {}
+    if zok: a = ReadNpy(member.data, compress.BufLen(member), ok) end
+    compress.BufFree(member)
+    compress.BufFree(raw)
+    ret a
+end
+
+// Writes arrays under their keys as stored members.
+@en "NpzWrite"
+@fa "نوشتن ان‌پی‌زد"
+@ar "كتابة إن بي زد"
+pub func NpzWrite(path: str, keys &: Vector<str>, arrays &: Vector<NpyArray>): bool:
+    if keys.len() != arrays.len() || keys.len() == 0: ret false end
+    mut bufs := Vector {} as Vector<compress.ByteBuf>
+    mut inputs := Vector {} as Vector<archive.ZipFileInput>
+    repeat keys.len() with i:
+        mut a := arrays.get(i)
+        b := WriteNpy(a)
+        mut fi := archive.ZipFileInput {}
+        fi.name = keys.get(i) + ".npy"
+        fi.data_ptr = b.data
+        fi.data_len = compress.BufLen(b)
+        fi.method = 0
+        inputs.push(fi)
+        bufs.push(b)
+    end
+    ok := archive.ZipCreateFile(inputs, path)
+    repeat bufs.len() with i:
+        mut b := bufs.get(i)
+        compress.BufFree(b)
+    end
+    bufs.free()
+    inputs.free()
+    ret ok
+end

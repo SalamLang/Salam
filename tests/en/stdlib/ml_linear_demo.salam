@@ -1,0 +1,121 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/ml: least squares, ridge and lasso recover known coefficients.
+
+import data
+import matrix
+import ml
+import testing
+
+// max |a - b| over two p x 1 columns
+func coef_gap(a &: matrix.Matrix, b &: matrix.Matrix): f64:
+    mut worst := 0.0
+    repeat a.rows with j:
+        mut d := a.at(j, 0) - b.at(j, 0)
+        if d < 0.0: d = 0.0 - d end
+        if d > worst: worst = d end
+    end
+    ret worst
+end
+
+func main:
+    // Noise-free data with a known intercept-free truth
+    mut y := matrix.Matrix {}
+    mut w := matrix.Matrix {}
+    mut x := data.MakeRegression(200, 3, 0.0, 11, y, w)
+
+    mut lr := ml.LinearReg {}
+    testing.AssertTrue(lr.fit(x, y))
+    testing.AssertTrue(lr.ok)
+    testing.AssertTrue(coef_gap(lr.coef, w) < 0.000001)
+    testing.AssertTrue(lr.intercept < 0.000001 && lr.intercept > 0.0 - 0.000001)
+    testing.AssertTrue(lr.score(x, y) > 0.999999)
+
+    // A shifted target picks up the intercept
+    mut ys := matrix.AddScalar(y, 5.0)
+    mut lr2 := ml.LinearReg {}
+    testing.AssertTrue(lr2.fit(x, ys))
+    testing.AssertTrue(lr2.intercept > 4.999 && lr2.intercept < 5.001)
+    mut p := lr2.predict(x)
+    testing.AssertTrue(ml.R2Score(ys, p) > 0.999)
+
+    // Ridge with light regularization on noisy data stays within 0.05
+    mut yn := matrix.Matrix {}
+    mut wn := matrix.Matrix {}
+    mut xn := data.MakeRegression(300, 4, 0.1, 13, yn, wn)
+    mut rg := ml.Ridge { alpha = 0.01 }
+    testing.AssertTrue(rg.fit(xn, yn))
+    testing.AssertTrue(coef_gap(rg.coef, wn) < 0.05)
+    testing.AssertTrue(rg.score(xn, yn) > 0.95)
+    // Heavy regularization shrinks toward zero
+    mut rg2 := ml.Ridge { alpha = 10000.0 }
+    testing.AssertTrue(rg2.fit(xn, yn))
+    mut shrunk := 0.0
+    repeat 4 with j:
+        mut v := rg2.coef.at(j, 0)
+        if v < 0.0: v = 0.0 - v end
+        if v > shrunk: shrunk = v end
+    end
+    testing.AssertTrue(shrunk < 0.1)
+
+    // Lasso zeroes the coefficients of features that carry no signal
+    mut xl := matrix.Random(300, 4, 0.0 - 1.0, 1.0, 17)
+    mut yl := matrix.Zeros(300, 1)
+    mut g := matrix.NewRng(19)
+    repeat 300 with i:
+        yl.set(i, 0, 3.0 * xl.at(i, 0) + 2.0 * xl.at(i, 3) + 0.05 * g.next_normal())
+    end
+    mut ls := ml.Lasso { alpha = 0.05 }
+    testing.AssertTrue(ls.fit(xl, yl))
+    testing.AssertTrue(ls.n_iter < 1000)
+    testing.AssertTrue(ls.coef.at(1, 0) == 0.0)
+    testing.AssertTrue(ls.coef.at(2, 0) == 0.0)
+    testing.AssertTrue(ls.coef.at(0, 0) > 2.5)
+    testing.AssertTrue(ls.coef.at(3, 0) > 1.5)
+    testing.AssertTrue(ls.score(xl, yl) > 0.95)
+    // Elastic net keeps the same support here
+    mut en := ml.Lasso { alpha = 0.05, l1_ratio = 0.5 }
+    testing.AssertTrue(en.fit(xl, yl))
+    testing.AssertTrue(en.coef.at(1, 0) == 0.0)
+
+    // Bad shapes are refused; unfitted models return the sentinel
+    mut bad := matrix.Zeros(5, 1)
+    testing.AssertFalse(lr.fit(x, bad))
+    mut fresh := ml.Ridge {}
+    testing.AssertTrue(fresh.predict(x).is_empty())
+
+    lr.free()
+    lr2.free()
+    rg.free()
+    rg2.free()
+    ls.free()
+    en.free()
+    fresh.free()
+    matrix.Free(x)
+    matrix.Free(y)
+    matrix.Free(w)
+    matrix.Free(ys)
+    matrix.Free(p)
+    matrix.Free(xn)
+    matrix.Free(yn)
+    matrix.Free(wn)
+    matrix.Free(xl)
+    matrix.Free(yl)
+    matrix.Free(bad)
+
+    ret testing.Summary()
+end

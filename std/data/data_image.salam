@@ -1,0 +1,186 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package data
+
+import filepath
+import image
+import os
+import str
+import tensor
+
+// Image folders into tensors: the layout where every class is a
+// subdirectory of the root and every file inside it is one sample
+// (root/cat/001.png, root/dog/002.jpg, ...). Files are decoded by
+// std/image, resized to one fixed size with nearest-neighbor sampling,
+// and packed as an NCHW f32 tensor scaled to [0, 1] - one channel of
+// luminance, or three of RGB.
+//
+// Class directories and files are visited in byte order of their
+// names, never in the order the filesystem reports, so class indices
+// and sample order are the same on every machine.
+
+inline pure func _sbp(s: str): i8*: ret (s as void*) as i8* end
+
+inline pure func _sub(bp: i8*, i: int): int:
+    mut v := bp[i] as int
+    if v < 0: v = v + 256 end
+    ret v
+end
+
+func _str_less(a: str, b: str): bool:
+    na := str.Len(a)
+    nb := str.Len(b)
+    pa := _sbp(a)
+    pb := _sbp(b)
+    mut i := 0
+    until i < na && i < nb:
+        ca := _sub(pa, i)
+        cb := _sub(pb, i)
+        if ca != cb: ret ca < cb end
+        i += 1
+    end
+    ret na < nb
+end
+
+// Insertion sort by byte order; listings are short.
+func _sort_names(v &: Vector<str>):
+    n := v.len()
+    mut i := 1
+    until i < n:
+        key := v.get(i)
+        mut j := i - 1
+        until j >= 0 && _str_less(key, v.get(j)):
+            v.set(j + 1, v.get(j))
+            j -= 1
+        end
+        v.set(j + 1, key)
+        i += 1
+    end
+end
+
+// A directory listing as full paths, sorted. Entries may come back as
+// bare names or as paths depending on the platform; both are handled.
+func _listing(dir: str): Vector<str>:
+    mut raw := os.ListDir(dir)
+    mut out := Vector {} as Vector<str>
+    repeat raw.len() with i:
+        e := raw.get(i)
+        if str.Equals(e, ".") || str.Equals(e, ".."): continue end
+        if os.Exists(e) && str.StartsWith(e, dir):
+            out.push(e)
+        else:
+            out.push(filepath.Join(dir, e))
+        end
+    end
+    raw.free()
+    _sort_names(out)
+    ret out
+end
+
+func _base_name(path: str): str:
+    n := str.Len(path)
+    bp := _sbp(path)
+    mut i := n - 1
+    until i >= 0 && _sub(bp, i) != 47 && _sub(bp, i) != 92: i -= 1 end
+    ret str.Substr(path, i + 1, n - i - 1)
+end
+
+// Writes one resized image into sample `s` of the NCHW buffer.
+func _pack(img: image.Image, p: f32*, s: int, c: int, h: int, w: int):
+    inv := (1.0 / 255.0) as f32
+    repeat h with y:
+        repeat w with x:
+            px := image.GetPixel(img, x, y)
+            r := (px.r as int) as f32
+            g := (px.g as int) as f32
+            b := (px.b as int) as f32
+            base := s * c * h * w
+            if c == 1:
+                lum := (0.299 as f32) * r + (0.587 as f32) * g + (0.114 as f32) * b
+                p[base + y * w + x] = lum * inv
+            else:
+                p[base + y * w + x] = r * inv
+                p[base + h * w + y * w + x] = g * inv
+                p[base + 2 * h * w + y * w + x] = b * inv
+            end
+        end
+    end
+end
+
+// ---- public API ----
+
+// Loads root/<class>/<file> into x ([N, C, height, width], C = 1 for
+// grayscale or 3 for RGB), labels (class index per sample, classes in
+// sorted directory order) and classes (the directory names). Files
+// that fail to decode are skipped. False when no image loads.
+@en "LoadImageFolder"
+@fa "بارگذاری پوشه تصویر"
+@ar "تحميل مجلد الصور"
+pub func LoadImageFolder(root: str, width: int, height: int, gray: bool, x &: tensor.Tensor, labels &: Vector<int>, classes &: Vector<str>): bool:
+    labels.clear()
+    classes.clear()
+    if width <= 0 || height <= 0 || os.IsDir(root) == false: ret false end
+    mut dirs := _listing(root)
+    mut files := Vector {} as Vector<str>
+    mut file_class := Vector {} as Vector<int>
+    repeat dirs.len() with d:
+        dpath := dirs.get(d)
+        if os.IsDir(dpath) == false: continue end
+        cls := classes.len()
+        classes.push(_base_name(dpath))
+        mut inner := _listing(dpath)
+        repeat inner.len() with f:
+            if os.IsDir(inner.get(f)) == false:
+                files.push(inner.get(f))
+                file_class.push(cls)
+            end
+        end
+        inner.free()
+    end
+    dirs.free()
+    mut c := 3
+    if gray: c = 1 end
+    // Decode everything that decodes, then pack the survivors.
+    mut imgs := Vector {} as Vector<image.Image>
+    repeat files.len() with f:
+        mut ok := false
+        mut img := image.Open(files.get(f), ok)
+        if ok && img.width > 0 && img.height > 0:
+            sized := image.ResizeNearestNeighbor(img, width, height)
+            image.Free(img)
+            imgs.push(sized)
+            labels.push(file_class.get(f))
+        else:
+            image.Free(img)
+        end
+    end
+    files.free()
+    file_class.free()
+    n := imgs.len()
+    x.free()
+    if n == 0:
+        imgs.free()
+        ret false
+    end
+    x = tensor.Zeros4(n, c, height, width)
+    p := x.data.data
+    repeat n with s:
+        mut img := imgs.get(s)
+        _pack(img, p, s, c, height, width)
+        image.Free(img)
+    end
+    imgs.free()
+    ret true
+end

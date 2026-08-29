@@ -1,0 +1,314 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package data
+
+import conv
+import encoding.csv
+import io
+import mem
+import math
+import matrix
+import os
+import str
+
+// CSV text into a typed Table, the staging area between a file and a
+// feature matrix.
+//
+// Every column gets a kind by inference over its cells: all whole
+// numbers -> COL_INT, all numeric -> COL_FLOAT, otherwise categorical
+// (COL_CAT) when the distinct values are few relative to the rows
+// (at most max(20, n/10)) and at least one value repeats, else free
+// text (COL_STR). Numeric cells land
+// in `cells` as f64 with NaN for an empty or unparsable entry;
+// categorical cells hold their level index, levels numbered in order
+// of first appearance so the mapping depends on the data alone; string
+// columns hold NaN in `cells` and keep their text in `raw`.
+//
+// to_matrix() and split_xy() hand the numeric view (every column but
+// the string ones) to std/ml; cat_levels() exposes a categorical
+// column's mapping so a held-out file can be encoded the same way.
+
+@en "Table"
+@fa "جدول"
+@ar "جدول"
+pub struct Table:
+    pub names: Vector<str> = Vector {}
+    pub kinds: Vector<int> = Vector {}
+    pub cats: Vector<Vector<str>> = Vector {}
+    pub raw: Vector<Vector<str>> = Vector {}
+    pub cells: matrix.Matrix = matrix.Matrix {}
+
+    @en "rows"
+    @fa "سطرها"
+    @ar "صفوف"
+    pub func rows(): int: ret this.cells.rows end
+
+    @en "cols"
+    @fa "ستون‌ها"
+    @ar "أعمدة"
+    pub func cols(): int: ret this.names.len() end
+
+    @en "col_index"
+    @fa "نمایه ستون"
+    @ar "دليل العمود"
+    pub func col_index(name: str): int:
+        repeat this.names.len() with j:
+            if str.Equals(this.names.get(j), name): ret j end
+        end
+        ret 0 - 1
+    end
+
+    // The levels of a categorical column, in index order (empty for any
+    // other kind).
+    @en "cat_levels"
+    @fa "سطوح رده‌ای"
+    @ar "مستويات الفئة"
+    pub func cat_levels(name: str): Vector<str>:
+        mut out := Vector {} as Vector<str>
+        j := this.col_index(name)
+        if j < 0 || this.kinds.get(j) != COL_CAT: ret out end
+        lv := this.cats.get(j)
+        repeat lv.len() with i: out.push(lv.get(i)) end
+        ret out
+    end
+
+    // Every non-string column, as a fresh n x p matrix.
+    @en "to_matrix"
+    @fa "به ماتریس"
+    @ar "إلى مصفوفة"
+    pub func to_matrix(): matrix.Matrix:
+        mut keep := Vector {} as Vector<int>
+        repeat this.kinds.len() with j:
+            if this.kinds.get(j) != COL_STR: keep.push(j) end
+        end
+        r := _select_cols(this.cells, keep)
+        keep.free()
+        ret r
+    end
+
+    // Features (every non-string column but `label`) into x, the label
+    // column into y. False when the label is missing or a string column.
+    @en "split_xy"
+    @fa "جداسازی ویژگی و برچسب"
+    @ar "فصل السمات والتسمية"
+    pub func split_xy(label: str, x &: matrix.Matrix, y &: matrix.Matrix): bool:
+        lj := this.col_index(label)
+        if lj < 0 || this.kinds.get(lj) == COL_STR: ret false end
+        mut keep := Vector {} as Vector<int>
+        repeat this.kinds.len() with j:
+            if j != lj && this.kinds.get(j) != COL_STR: keep.push(j) end
+        end
+        matrix.Free(x)
+        matrix.Free(y)
+        x = _select_cols(this.cells, keep)
+        mut one := Vector {} as Vector<int>
+        one.push(lj)
+        y = _select_cols(this.cells, one)
+        keep.free()
+        one.free()
+        ret true
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    // The table owns every string in it: the column names, the levels of
+    // each categorical column, and the raw cells of each text column.
+    pub func free():
+        repeat this.names.len() with j: mem.Free(this.names.get(j) as void*) end
+        this.names.free()
+        this.kinds.free()
+        repeat this.cats.len() with j:
+            mut lv := this.cats.get(j)
+            _free_strs(lv)
+        end
+        this.cats.free()
+        repeat this.raw.len() with j:
+            mut rv := this.raw.get(j)
+            _free_strs(rv)
+        end
+        this.raw.free()
+        matrix.Free(this.cells)
+    end
+end
+
+inline pure func _bp(s: str): i8*: ret (s as void*) as i8* end
+
+inline pure func _ub(bp: i8*, i: int): int:
+    mut v := bp[i] as int
+    if v < 0: v = v + 256 end
+    ret v
+end
+
+// Both halves allocate, so the one in the middle has to go back.
+// Frees the strings a vector owns, then the vector.
+func _free_strs(v &: Vector<str>):
+    repeat v.len() with i: mem.Free(v.get(i) as void*) end
+    v.free()
+end
+
+func _trim(s: str): str:
+    mid := str.TrimRight(s)
+    out := str.TrimLeft(mid)
+    mem.Free(mid as void*)
+    ret out
+end
+
+// Sign, digits, optional fraction, optional exponent - at least one
+// digit somewhere. `whole` reports whether it was an integer literal.
+func _is_number(s: str, whole &: bool): bool:
+    n := str.Len(s)
+    bp := _bp(s)
+    mut i := 0
+    if i < n && (_ub(bp, i) == 43 || _ub(bp, i) == 45): i += 1 end
+    mut digits := 0
+    until i < n && _ub(bp, i) >= 48 && _ub(bp, i) <= 57:
+        i += 1
+        digits += 1
+    end
+    whole = true
+    if i < n && _ub(bp, i) == 46:
+        whole = false
+        i += 1
+        until i < n && _ub(bp, i) >= 48 && _ub(bp, i) <= 57:
+            i += 1
+            digits += 1
+        end
+    end
+    if digits == 0: ret false end
+    if i < n && (_ub(bp, i) == 101 || _ub(bp, i) == 69):
+        whole = false
+        i += 1
+        if i < n && (_ub(bp, i) == 43 || _ub(bp, i) == 45): i += 1 end
+        mut ed := 0
+        until i < n && _ub(bp, i) >= 48 && _ub(bp, i) <= 57:
+            i += 1
+            ed += 1
+        end
+        if ed == 0: ret false end
+    end
+    ret i == n
+end
+
+func _select_cols(cells &: matrix.Matrix, keep &: Vector<int>): matrix.Matrix:
+    mut r := matrix.Zeros(cells.rows, keep.len())
+    repeat cells.rows with i:
+        repeat keep.len() with t: r.set(i, t, cells.at(i, keep.get(t))) end
+    end
+    ret r
+end
+
+func _level_index(levels &: Vector<str>, v: str): int:
+    repeat levels.len() with i:
+        if str.Equals(levels.get(i), v): ret i end
+    end
+    ret 0 - 1
+end
+
+// ---- public API ----
+
+@en "LoadCsv"
+@fa "بارگذاری سی‌اس‌وی"
+@ar "تحميل سي إس في"
+pub func LoadCsv(text: str, header: bool): Table:
+    mut t := Table {}
+    mut parsed := csv.ReadAll(text)
+    total := parsed.rows.len()
+    if total == 0: ret t end
+    mut first := 0
+    ncols := parsed.rows.get(0).fields.len()
+    if header:
+        hdr := parsed.rows.get(0)
+        repeat ncols with j: t.names.push(_trim(hdr.fields.get(j))) end
+        first = 1
+    else:
+        repeat ncols with j: t.names.push("col" + j) end
+    end
+    n := total - first
+    t.cells = matrix.Zeros(n, ncols)
+    nan := math.NaN()
+    // Infer each column, then fill it.
+    repeat ncols with j:
+        mut all_int := true
+        mut all_num := true
+        mut levels := Vector {} as Vector<str>
+        mut texts := Vector {} as Vector<str>
+        repeat n with i:
+            row := parsed.rows.get(first + i)
+            mut cell := ""
+            if j < row.fields.len(): cell = _trim(row.fields.get(j)) end
+            texts.push(cell)
+            if str.Len(cell) > 0:
+                mut whole := false
+                if _is_number(cell, whole):
+                    if whole == false: all_int = false end
+                else:
+                    all_int = false
+                    all_num = false
+                end
+            end
+            if _level_index(levels, cell) < 0: levels.push(str.Clone(cell)) end
+        end
+        mut kind := COL_STR
+        if all_num:
+            kind = COL_FLOAT
+            if all_int: kind = COL_INT end
+        else:
+            // Few distinct values, and at least one repeat: a column where
+            // every row is different is free text, however short the file.
+            mut cap := n / 10
+            if cap < 20: cap = 20 end
+            if levels.len() <= cap && levels.len() < n: kind = COL_CAT end
+        end
+        t.kinds.push(kind)
+        repeat n with i:
+            cell := texts.get(i)
+            mut v := nan
+            if kind == COL_CAT:
+                v = _level_index(levels, cell) as f64
+            else kind != COL_STR:
+                if str.Len(cell) > 0: v = conv.ParseFloat(cell) end
+            end
+            t.cells.set(i, j, v)
+        end
+        if kind == COL_CAT:
+            t.cats.push(levels)
+        else:
+            _free_strs(levels)
+            t.cats.push(Vector {} as Vector<str>)
+        end
+        if kind == COL_STR:
+            t.raw.push(texts)
+        else:
+            _free_strs(texts)
+            t.raw.push(Vector {} as Vector<str>)
+        end
+    end
+    csv.FreeTable(parsed)
+    ret t
+end
+
+@en "LoadCsvFile"
+@fa "بارگذاری پرونده سی‌اس‌وی"
+@ar "تحميل ملف سي إس في"
+pub func LoadCsvFile(path: str, header: bool, ok &: bool): Table:
+    ok = false
+    if os.Exists(path) == false: ret Table {} end
+    text := io.ReadFile(path)
+    t := LoadCsv(text, header)
+    mem.Free(text as void*)
+    ok = t.cols() > 0
+    ret t
+end

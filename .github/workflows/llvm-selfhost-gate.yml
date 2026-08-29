@@ -1,22 +1,4 @@
 ---
-#
-# The readiness gate for the LLVM backend.
-#
-# Compiling the compiler with itself is a far stronger test than the test
-# corpus: `tests/en` has 802 files and reported zero codegen errors while
-# `salam build compiler/main.salam --backend=llvm` was still finding real
-# bugs - ten of them, including a runtime entry point that was declared but
-# never defined (salam_panic), a missing `open` builtin, and argv globals
-# that were never emitted. None of those were reachable from the corpus.
-#
-# So "the LLVM backend is ready" means this job is green, not that the
-# sweep is clean.
-#
-# NOTE: `verify` is continue-on-error while the produced compiler still
-# hangs at startup (it builds and links; running it never returns). Flip
-# continue-on-error to false the moment that is fixed - that is the whole
-# point of this workflow, and leaving it soft indefinitely defeats it.
-#
 name: LLVM self-host gate
 
 on:
@@ -49,37 +31,20 @@ jobs:
         with:
           persist-credentials: false
 
-      # LLVM 22 from apt.llvm.org, the same version the release builds
-      # against - not the distro default, which this used to track. std/llvm
-      # calls ORC C entry points that only exist from LLVM 20 on
-      # (LLVMOrcCreateNewThreadSafeContextFromLLVMContext among them), so on
-      # Ubuntu's 18.1 the link fails on symbols the API simply did not have
-      # yet. Gating against a version we do not ship tests nothing useful.
       - name: Install LLVM and lld
         run: |
           set -eu
-          # apt.llvm.org publishes AAAA records and the hosted runners have no
-          # IPv6 route, so apt picks the v6 address and stops there: "Cannot
-          # initiate the connection to apt.llvm.org:443 (2a04:4e42:94::561) -
-          # connect (101: Network is unreachable)", then "no longer has a Release
-          # file". Pin apt to IPv4 before llvm.sh runs its own apt-get update.
           echo 'Acquire::ForceIPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4 >/dev/null
           wget -4 -qO llvm.sh https://apt.llvm.org/llvm.sh
           chmod +x llvm.sh
           sudo ./llvm.sh 22
           sudo apt-get update
-          # libpolly is not optional: llvm-N-dev advertises Polly through
-          # `llvm-config --libs all` and builds libLLVMLTO.a against it, while
-          # shipping libPolly.a separately - without it the link fails either
-          # way, on -lPolly or on getPollyPluginInfo().
           sudo apt-get install -y llvm-22-dev liblld-22-dev libpolly-22-dev \
             libzstd-dev zlib1g-dev libtinfo-dev libxml2-dev
 
       - name: Install a seed compiler
         uses: ./.github/actions/setup-salam
 
-      # The archive std/llvm links against, built from the native shim plus
-      # every static LLVM/LLD archive on the runner.
       - name: Build libsalam_llvm.a
         run: |
           sh std/llvm/native/build.sh --llvm-config llvm-config-22 \
@@ -105,9 +70,6 @@ jobs:
           ./salam build compiler/main.salam --backend=llvm --output=/tmp/selfhost-llvm
           test -s /tmp/selfhost-llvm
 
-      # The actual gate: a compiler that builds but cannot run is not a
-      # compiler. `version` is the cheapest command that still exercises
-      # startup, argv, the layout-schema load and the output path.
       - name: Produced compiler must actually run
         continue-on-error: true
         run: |

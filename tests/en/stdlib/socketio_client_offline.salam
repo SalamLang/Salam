@@ -1,0 +1,133 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Everything a Socket.IO client can be asked before it has a server.
+//
+// A client is useful offline: handlers can be registered, emits are held
+// until there is somewhere to send them, and none of that should need a
+// connection. Nothing here opens a socket - the address is deliberately
+// port 1 and is never dialled, because auto_connect is off.
+
+import net.socketio
+
+mut trace := ""
+
+func note(tag: str):
+    trace += tag + ";"
+end
+
+func main:
+    println "-- defaults"
+    d := socketio.NewOptions()
+    println "path:", d.path
+    println "transports is auto:", d.transports == socketio.TRANSPORT_AUTO
+    println "reconnection:", d.reconnection, "attempts:", d.reconnection_attempts
+    println "delay:", d.reconnection_delay, "max:", d.reconnection_delay_max, "jitter %:", d.randomization_factor
+    println "timeout:", d.timeout, "auto_connect:", d.auto_connect
+    println "queue:", d.event_queue, "ack_timeout:", d.ack_timeout, "retries:", d.retries
+    println "trailing slash:", d.trailing_slash, "remember upgrade:", d.remember_upgrade, "insecure:", d.insecure
+
+    println "-- disconnect reasons are socket.io's own strings"
+    println socketio.REASON_SERVER_DISCONNECT
+    println socketio.REASON_CLIENT_DISCONNECT
+    println socketio.REASON_PING_TIMEOUT
+    println socketio.REASON_TRANSPORT_CLOSE
+    println socketio.REASON_TRANSPORT_ERROR
+    println socketio.REASON_PARSE_ERROR
+
+    println "-- a manager that is never dialled"
+    mut o := socketio.NewOptions()
+    o.auto_connect = false
+    o.path = "custom/mount/"
+    m := socketio.NewManager("http://127.0.0.1:1/chat?room=7", o)
+    println "open:", socketio.IsOpen(m)
+    println "options carried:", socketio.OptionsOf(m).auto_connect, socketio.OptionsOf(m).path
+
+    c := socketio.Of(m, "/chat")
+    ep := socketio.EndpointOf(c)
+    println "origin:", socketio.Origin(ep), "path normalised:", ep.path, "query:", ep.query
+    println "namespace:", socketio.Namespace(c)
+    println "connected:", socketio.IsConnected(c), "disconnected:", socketio.Disconnected(c), "active:", socketio.Active(c)
+    println "id and sid are empty:", socketio.Id(c) == "", socketio.Sid(c) == ""
+    println "transport name before connecting:", socketio.TransportName(c)
+
+    println "-- Of is idempotent, and a name without a slash is corrected"
+    again := socketio.Of(m, "/chat")
+    println "same socket:", again.p == c.p
+    slashless := socketio.Of(m, "admin")
+    println "namespace:", socketio.Namespace(slashless)
+    // A trailing slash is a different namespace to a server, so it is left
+    // exactly as written.
+    trailing := socketio.Of(m, "/admin/")
+    println "kept verbatim:", socketio.Namespace(trailing), "distinct:", trailing.p != slashless.p
+    mut socks := socketio.Sockets(m)
+    println "namespaces open:", socks.len()
+    socks.free()
+
+    println "-- handlers, with nothing connected"
+    socketio.On(c, "tick", (e: socketio.Event): note("tick") end)
+    socketio.On(c, "tick", (e: socketio.Event): note("tick2") end)
+    socketio.Once(c, "boom", (e: socketio.Event): note("boom") end)
+    socketio.OnAny(c, (e: socketio.Event): note("any") end)
+    socketio.OnAnyOutgoing(c, (e: socketio.Event): note("out:" + e.name) end)
+    println "listeners for tick:", socketio.ListenerCount(c, "tick"), socketio.HasListeners(c, "tick")
+    println "listeners for boom:", socketio.ListenerCount(c, "boom")
+    println "listeners for nothing:", socketio.ListenerCount(c, "nope"), socketio.HasListeners(c, "nope")
+    println "catch-alls:", socketio.AnyListenerCount(c)
+    socketio.Off(c, "tick")
+    println "after Off:", socketio.ListenerCount(c, "tick"), socketio.ListenerCount(c, "boom")
+
+    println "-- emits are held until there is a connection"
+    println "reserved names refused:", socketio.Emit(c, "connect"), socketio.Emit(c, "disconnect"), socketio.Emit(c, "connect_error")
+    println "ordinary emit accepted:", socketio.EmitStr(c, "hello", "world")
+    println "send() is the message event:", socketio.Send(c, "plain text")
+    println "buffered:", socketio.Buffered(c)
+    // Volatile means "worthless late", so with nowhere to send it, it goes.
+    mut v := socketio.NewArgs()
+    socketio.AddInt(v, 1)
+    println "volatile dropped:", socketio.EmitVolatile(c, "cursor", v)
+    socketio.ArgsFree(v)
+    println "still buffered:", socketio.Buffered(c)
+    println "outgoing catch-all saw:", trace
+
+    println "-- auth is set before the connect that carries it"
+    println "auth starts empty:", socketio.AuthOf(c) == ""
+    socketio.SetAuth(c, `{"token":"t-1"}`)
+    println "auth now:", socketio.AuthOf(c)
+
+    println "-- manager settings can change on a live connection"
+    socketio.SetReconnection(m, false)
+    socketio.SetReconnectionAttempts(m, 3)
+    socketio.SetReconnectionDelay(m, 250)
+    socketio.SetReconnectionDelayMax(m, 900)
+    socketio.SetRandomizationFactor(m, 10)
+    socketio.SetTimeout(m, 1500)
+    now := socketio.OptionsOf(m)
+    println now.reconnection, now.reconnection_attempts, now.reconnection_delay, now.reconnection_delay_max, now.randomization_factor, now.timeout
+
+    println "-- a handle that points at nothing answers rather than crashing"
+    dead := socketio.Client {}
+    println socketio.IsConnected(dead), socketio.Active(dead), socketio.Id(dead) == "", socketio.Namespace(dead)
+    println socketio.Emit(dead, "x"), socketio.Buffered(dead), socketio.Queued(dead), socketio.Pending(dead)
+    println socketio.Pump(dead, 0) == socketio.PUMP_CLOSED, socketio.Next(dead, 0).kind == socketio.EV_TIMEOUT
+    println socketio.LastError(dead)
+    nomgr := socketio.Manager {}
+    println socketio.IsOpen(nomgr), socketio.Open(nomgr), socketio.ManagerError(nomgr)
+    socketio.Run(dead)
+    socketio.Close(dead)
+    socketio.CloseManager(nomgr)
+    println "survived"
+
+    socketio.CloseManager(m)
+end

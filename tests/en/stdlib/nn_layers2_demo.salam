@@ -1,0 +1,162 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/nn: recurrent layers learn a sequence task, causal attention
+// ignores the future, BatchNorm and RMSNorm layers run, and Sequential
+// chains layers through the Layer interface.
+
+import autograd
+import nn
+import optim
+import tensor
+import testing
+
+// Time-major sequences: each step is a 2-vector, the target is whether
+// the running sum of the first coordinate is positive at the end.
+func make_seq(seq: int, batch: int, seed: i64, labels &: Vector<int>): tensor.Tensor:
+    x := tensor.Zeros2(seq * batch, 2)
+    mut g := tensor.NewRng(seed)
+    p := x.data.data
+    repeat batch with b:
+        mut total := 0.0
+        repeat seq with t:
+            v := g.next_float() * 2.0 - 1.0
+            w := g.next_float() * 2.0 - 1.0
+            p[(t * batch + b) * 2] = v as f32
+            p[(t * batch + b) * 2 + 1] = w as f32
+            total += v
+        end
+        mut lbl := 0
+        if total > 0.0: lbl = 1 end
+        labels.push(lbl)
+    end
+    ret x
+end
+
+func train_rnn(use_gru: bool): f64:
+    seq := 6
+    batch := 64
+    mut labels := Vector {} as Vector<int>
+    mut x := make_seq(seq, batch, 41, labels)
+    mut ps := nn.ParamStore {}
+    mut g := tensor.NewRng(3)
+    mut lstm := nn.NewLSTM(ps, "lstm", 2, 16, g)
+    mut gru := nn.NewGRU(ps, "gru", 2, 16, g)
+    mut head := nn.NewLinear(ps, "head", 16, 2, g)
+    mut opt := optim.Adam { lr = 0.02 }
+    mut tp := autograd.NewTape(1)
+    repeat 80:
+        tp.reset()
+        ps.zero_grad()
+        xid := autograd.Input(tp, x)
+        mut hs := 0
+        if use_gru: hs = gru.forward(tp, ps, xid, seq, batch)
+        else: hs = lstm.forward(tp, ps, xid, seq, batch) end
+        last := nn.LastStep(tp, hs, seq, batch)
+        logits := head.forward(tp, ps, last)
+        loss := autograd.CrossEntropyLogits(tp, logits, labels)
+        autograd.Backward(tp, loss)
+        opt.step(ps)
+    end
+    tp.reset()
+    tp.training = false
+    xid := autograd.Input(tp, x)
+    mut hs := 0
+    if use_gru: hs = gru.forward(tp, ps, xid, seq, batch)
+    else: hs = lstm.forward(tp, ps, xid, seq, batch) end
+    logits := head.forward(tp, ps, nn.LastStep(tp, hs, seq, batch))
+    lv := autograd.Value(tp, logits)
+    mut preds := tensor.ArgMaxAxis(lv, 1, false)
+    mut hits := 0
+    repeat batch with i:
+        if (preds.at(i) as int) == labels.get(i): hits += 1 end
+    end
+    acc := (hits as f64) / (batch as f64)
+    tp.free()
+    opt.free()
+    ps.free()
+    tensor.Free(x)
+    tensor.Free(preds)
+    labels.free()
+    ret acc
+end
+
+func main:
+    // Recurrent layers fit the running-sum sign task
+    testing.AssertTrue(train_rnn(false) >= 0.9)
+    testing.AssertTrue(train_rnn(true) >= 0.9)
+
+    // Causal attention: changing a later token leaves earlier outputs alone
+    mut ps := nn.ParamStore {}
+    mut g := tensor.NewRng(5)
+    mut dec := nn.NewTransformerDecoderLayer(ps, "dec", 8, 2, 16, 0.0, g)
+    testing.AssertTrue(dec.attn.causal)
+    mut s := tensor.Shape2(4, 8)
+    mut xa := tensor.RandUniform(s, 0.0 - 1.0, 1.0, 6)
+    s.free()
+    mut xb := tensor.Clone(xa)
+    xb.set_at2(3, 0, 5.0)     // perturb the last position only
+    mut tp := autograd.NewTape(1)
+    ya := autograd.Value(tp, dec.forward(tp, ps, autograd.Input(tp, xa), 1, 4))
+    yb := autograd.Value(tp, dec.forward(tp, ps, autograd.Input(tp, xb), 1, 4))
+    mut same_prefix := true
+    repeat 3 with t:
+        repeat 8 with k:
+            if ya.at2(t, k) != yb.at2(t, k): same_prefix = false end
+        end
+    end
+    testing.AssertTrue(same_prefix)
+    mut last_differs := false
+    repeat 8 with k:
+        if ya.at2(3, k) != yb.at2(3, k): last_differs = true end
+    end
+    testing.AssertTrue(last_differs)
+    // The mask itself
+    mut m := nn.CausalMask(3)
+    testing.AssertEqFloat(m.at2(1, 0), 0.0, 0.0)
+    testing.AssertTrue(m.at2(0, 2) < 0.0 - 1.0e8)
+    tp.reset()
+
+    // BatchNorm and RMSNorm layers in a Sequential through the Layer interface
+    mut bn := nn.NewBatchNorm(ps, "bn", 8)
+    rms := nn.NewRMSNorm(ps, "rms", 8)
+    lin := nn.NewLinear(ps, "lin", 8, 3, g)
+    mut seqm := nn.Sequential {}
+    seqm.add(bn)
+    seqm.add(rms)
+    seqm.add(nn.ReluLayer {})
+    seqm.add(lin)
+    yid := seqm.forward(tp, ps, autograd.Input(tp, xa))
+    yv := autograd.Value(tp, yid)
+    testing.AssertEqInt(yv.dim(0), 4)
+    testing.AssertEqInt(yv.dim(1), 3)
+    // training mode updated the running mean away from zero
+    testing.AssertTrue(bn.running_mean.at(0) != 0.0)
+    loss := autograd.Sum(tp, autograd.Square(tp, yid))
+    autograd.Backward(tp, loss)
+    mut plin := ps.at(lin.w)
+    testing.AssertTrue(tensor.SumAll(tensor.Abs(plin.grad)) > 0.0)
+    tp.free()
+
+    seqm.free()
+    bn.free()
+    ps.free()
+    tensor.Free(xa)
+    tensor.Free(xb)
+    tensor.Free(m)
+
+    ret testing.Summary()
+end

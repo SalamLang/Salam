@@ -1,0 +1,271 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "npy"
+@fa "ان‌پی‌وای"
+@ar "إن بي واي"
+package npy
+
+import archive
+import compress
+import encoding.binary
+import matrix
+import mem
+
+// NumPy's .npy array files (and .npz bundles, in npy_npz), for moving
+// data between Salam and the Python ecosystem without either side
+// learning the other's formats.
+//
+// An .npy file is a magic, a version, a Python-dict header naming the
+// dtype, memory order and shape, then the raw elements. This reader
+// handles versions 1.0 and 2.0, the plain numeric dtypes (f4 f8, i1 i2
+// i4 i8, u1 u2 u4, b1) in either byte order, and Fortran order for rank
+// 1 and 2; structured and object dtypes are rejected. Every element is
+// widened to f64 on the way in - the family's exchange type - and the
+// original dtype is remembered as a tag. Writing always emits version
+// 1.0, '<f8', C order, the form every NumPy since 1.x reads.
+//
+// The header dict is scanned for its three keys rather than parsed as
+// Python: it is written by one program in one shape, and a 60-line
+// scanner is the right size for that.
+
+@en "NPY_F64"
+@fa "نوع اعشاری هشت"
+@ar "نوع عشري ثمانية"
+pub const NPY_F64 := 0
+
+@en "NPY_F32"
+@fa "نوع اعشاری چهار"
+@ar "نوع عشري أربعة"
+pub const NPY_F32 := 1
+
+@en "NPY_I8"
+@fa "نوع صحیح یک"
+@ar "نوع صحيح واحد"
+pub const NPY_I8 := 2
+
+@en "NPY_I16"
+@fa "نوع صحیح دو"
+@ar "نوع صحيح اثنين"
+pub const NPY_I16 := 3
+
+@en "NPY_I32"
+@fa "نوع صحیح چهار"
+@ar "نوع صحيح أربعة"
+pub const NPY_I32 := 4
+
+@en "NPY_I64"
+@fa "نوع صحیح هشت"
+@ar "نوع صحيح ثمانية"
+pub const NPY_I64 := 5
+
+@en "NPY_U8"
+@fa "نوع بی‌علامت یک"
+@ar "نوع بلا إشارة واحد"
+pub const NPY_U8 := 6
+
+@en "NPY_U16"
+@fa "نوع بی‌علامت دو"
+@ar "نوع بلا إشارة اثنين"
+pub const NPY_U16 := 7
+
+@en "NPY_U32"
+@fa "نوع بی‌علامت چهار"
+@ar "نوع بلا إشارة أربعة"
+pub const NPY_U32 := 8
+
+@en "NPY_BOOL"
+@fa "نوع دودویی"
+@ar "نوع منطقي"
+pub const NPY_BOOL := 9
+
+@en "NpyArray"
+@fa "آرایه ان‌پی‌وای"
+@ar "مصفوفة إن بي واي"
+pub struct NpyArray:
+    pub shape: Vector<int> = Vector {}
+    pub dtype: int = NPY_F64
+    pub data: Vector<f64> = Vector {}
+
+    @en "ndim"
+    @fa "شمار بعد"
+    @ar "عدد الأبعاد"
+    pub func ndim(): int: ret this.shape.len() end
+
+    @en "count"
+    @fa "شمار"
+    @ar "عدد"
+    pub func count(): int: ret this.data.len() end
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free():
+        this.shape.free()
+        this.data.free()
+    end
+end
+
+// Bytes per element of a dtype tag.
+func _elem_size(dtype: int): int:
+    if dtype == NPY_F64 || dtype == NPY_I64: ret 8 end
+    if dtype == NPY_F32 || dtype == NPY_I32 || dtype == NPY_U32: ret 4 end
+    if dtype == NPY_I16 || dtype == NPY_U16: ret 2 end
+    ret 1
+end
+
+// One element off the reader, widened.
+func _read_elem(rd &: compress.ByteReader, dtype: int, big: bool): f64:
+    if dtype == NPY_F64: ret binary.ReadF64(rd, big) end
+    if dtype == NPY_F32: ret binary.ReadF32(rd, big) end
+    if dtype == NPY_I8 || dtype == NPY_U8 || dtype == NPY_BOOL:
+        mut v := binary.ReadU8(rd)
+        if dtype == NPY_I8 && v >= 128: v = v - 256 end
+        ret v as f64
+    end
+    if dtype == NPY_I16 || dtype == NPY_U16:
+        mut v := 0
+        if big: v = binary.ReadU16BE(rd) else: v = binary.ReadU16LE(rd) end
+        if dtype == NPY_I16 && v >= 32768: v = v - 65536 end
+        ret v as f64
+    end
+    if dtype == NPY_I32 || dtype == NPY_U32:
+        mut v := 0 as i64
+        if big: v = binary.ReadU32BE(rd) as i64 else: v = binary.ReadU32LE(rd) as i64 end
+        if v < 0: v = v + 4294967296 end
+        if dtype == NPY_I32 && v >= 2147483648: v = v - 4294967296 end
+        ret v as f64
+    end
+    // NPY_I64
+    if big: ret binary.ReadU64BE(rd) as f64 end
+    ret binary.ReadU64LE(rd) as f64
+end
+
+// ---- public API ----
+
+@en "ReadNpy"
+@fa "خواندن ان‌پی‌وای"
+@ar "قراءة إن بي واي"
+pub func ReadNpy(p: void*, n: int, ok &: bool): NpyArray:
+    ok = false
+    mut a := NpyArray {}
+    mut rd := compress.NewByteReader(p, n)
+    mut dtype := 0
+    mut big := false
+    mut fortran := false
+    hdr_ok := _read_header(rd, dtype, big, fortran, a.shape)
+    if hdr_ok == false: ret a end
+    mut total := 1
+    repeat a.shape.len() with i: total = total * a.shape.get(i) end
+    if a.shape.len() == 0: total = 1 end
+    esz := _elem_size(dtype)
+    if compress.RdLeft(rd) < total * esz:
+        a.shape.free()
+        ret a
+    end
+    if fortran && a.shape.len() > 2:
+        a.shape.free()
+        ret a
+    end
+    a.dtype = dtype
+    a.data.alloc(total)
+    pd := a.data.data
+    if dtype == NPY_F64 && big == false && fortran == false:
+        // The common case is a straight copy: '<f8' is the host layout.
+        src := ((rd.data as i64) + (rd.pos as i64)) as void*
+        mem.Copy(pd as void*, src, (total * 8) as u64)
+    else fortran && a.shape.len() == 2:
+        rows := a.shape.get(0)
+        cols := a.shape.get(1)
+        repeat cols with j:
+            repeat rows with i: pd[i * cols + j] = _read_elem(rd, dtype, big) end
+        end
+    else:
+        repeat total with k: pd[k] = _read_elem(rd, dtype, big) end
+    end
+    if a.shape.len() == 0: a.shape.push(1) end
+    ok = true
+    ret a
+end
+
+@en "ReadNpyFile"
+@fa "خواندن پرونده ان‌پی‌وای"
+@ar "قراءة ملف إن بي واي"
+pub func ReadNpyFile(path: str, ok &: bool): NpyArray:
+    ok = false
+    mut fok := false
+    mut raw := archive.ReadBinaryFile(path, fok)
+    if fok == false:
+        compress.BufFree(raw)
+        ret NpyArray {}
+    end
+    a := ReadNpy(raw.data, compress.BufLen(raw), ok)
+    compress.BufFree(raw)
+    ret a
+end
+
+// Version 1.0, '<f8', C order. The caller frees the buffer.
+@en "WriteNpy"
+@fa "نوشتن ان‌پی‌وای"
+@ar "كتابة إن بي واي"
+pub func WriteNpy(a &: NpyArray): compress.ByteBuf:
+    mut buf := compress.NewByteBuf()
+    _write_header(buf, a.shape)
+    n := a.data.len()
+    compress.BufPushBytes(buf, a.data.data as void*, n * 8)
+    ret buf
+end
+
+@en "WriteNpyFile"
+@fa "نوشتن پرونده ان‌پی‌وای"
+@ar "كتابة ملف إن بي واي"
+pub func WriteNpyFile(a &: NpyArray, path: str): bool:
+    mut buf := WriteNpy(a)
+    ok := archive.WriteBinaryFileBuf(path, buf)
+    compress.BufFree(buf)
+    ret ok
+end
+
+// Rank 1 becomes a 1 x n row, rank 2 maps directly; anything else
+// fails.
+@en "ToMatrix"
+@fa "به ماتریس"
+@ar "إلى مصفوفة"
+pub func ToMatrix(a &: NpyArray, ok &: bool): matrix.Matrix:
+    ok = false
+    d := a.shape.len()
+    if d != 1 && d != 2: ret matrix.Matrix {} end
+    mut rows := 1
+    mut cols := a.shape.get(0)
+    if d == 2:
+        rows = a.shape.get(0)
+        cols = a.shape.get(1)
+    end
+    m := matrix.FromArray(rows, cols, a.data)
+    ok = true
+    ret m
+end
+
+@en "FromMatrix"
+@fa "از ماتریس"
+@ar "من مصفوفة"
+pub func FromMatrix(m &: matrix.Matrix): NpyArray:
+    mut a := NpyArray {}
+    a.shape.push(m.rows)
+    a.shape.push(m.cols)
+    a.data.alloc(m.count())
+    pd := a.data.data
+    repeat m.count() with k: pd[k] = m.a.get(k) end
+    ret a
+end

@@ -1,0 +1,491 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package autograd
+
+import tensor
+
+// Layer normalization over the last axis, fused.
+//
+// Forward normalizes each row to zero mean and unit variance (plus eps
+// under the root), then scales by gamma and shifts by beta. The row
+// statistics are saved as a [rows, 2] aux tensor (mean, rstd), and the
+// backward is the standard closed form:
+//
+//   dxhat = dy * gamma
+//   dx    = rstd * (dxhat - mean(dxhat) - xhat * mean(dxhat * xhat))
+//   dgamma += sum_rows dy * xhat        dbeta += sum_rows dy
+//
+// which needs nothing but the saved statistics and the two tape
+// values. The node uses s0 for the beta slot id - the third
+// differentiable input, like Conv2D's bias in aux.
+
+extern:
+    pure func sqrtf(x: f32): f32
+end
+
+func _bk_layernorm(tp &: Tape, n &: Node, dc &: tensor.Tensor):
+    vx := Value(tp, n.a)
+    vg := Value(tp, n.b)
+    st := Value(tp, n.aux)
+    beta := n.s0
+    d := vx.shape.get(vx.rank() - 1)
+    rows := vx.numel() / d
+    px := vx.data.data
+    pgam := vg.data.data
+    ps := st.data.data
+    pd := dc.data.data
+    need_x := tp.needs.get(n.a)
+    need_g := tp.needs.get(n.b)
+    need_b := tp.needs.get(beta)
+    mut gx := tensor.Empty()
+    mut gg := tensor.Empty()
+    mut gb := tensor.Empty()
+    if need_x: gx = _grad_of(tp, n.a) end
+    if need_g: gg = _grad_of(tp, n.b) end
+    if need_b: gb = _grad_of(tp, beta) end
+    pgx := gx.data.data
+    pgg := gg.data.data
+    pgb := gb.data.data
+    inv_d := (1.0 / (d as f64)) as f32
+    repeat rows with r:
+        base := r * d
+        mean := ps[r * 2]
+        rstd := ps[r * 2 + 1]
+        mut s1 := 0.0 as f32
+        mut s2 := 0.0 as f32
+        repeat d with k:
+            xhat := (px[base + k] - mean) * rstd
+            dxhat := pd[base + k] * pgam[k]
+            s1 += dxhat
+            s2 += dxhat * xhat
+            if need_g: pgg[k] = pgg[k] + pd[base + k] * xhat end
+            if need_b: pgb[k] = pgb[k] + pd[base + k] end
+        end
+        if need_x:
+            m1 := s1 * inv_d
+            m2 := s2 * inv_d
+            repeat d with k:
+                xhat := (px[base + k] - mean) * rstd
+                dxhat := pd[base + k] * pgam[k]
+                pgx[base + k] = pgx[base + k] + rstd * (dxhat - m1 - xhat * m2)
+            end
+        end
+    end
+end
+
+// RMS normalization: y = gamma * x * r with r = 1/sqrt(mean(x^2)+eps)
+// per row; the saved aux holds r per row.
+func _bk_rmsnorm(tp &: Tape, n &: Node, dc &: tensor.Tensor):
+    vx := Value(tp, n.a)
+    vg := Value(tp, n.b)
+    st := Value(tp, n.aux)
+    d := vx.shape.get(vx.rank() - 1)
+    rows := vx.numel() / d
+    px := vx.data.data
+    pgam := vg.data.data
+    ps := st.data.data
+    pd := dc.data.data
+    need_x := tp.needs.get(n.a)
+    need_g := tp.needs.get(n.b)
+    mut gx := tensor.Empty()
+    mut gg := tensor.Empty()
+    if need_x: gx = _grad_of(tp, n.a) end
+    if need_g: gg = _grad_of(tp, n.b) end
+    pgx := gx.data.data
+    pgg := gg.data.data
+    inv_d := (1.0 / (d as f64)) as f32
+    repeat rows with r:
+        base := r * d
+        rs := ps[r]
+        mut s2 := 0.0 as f32
+        repeat d with k:
+            xhat := px[base + k] * rs
+            dxhat := pd[base + k] * pgam[k]
+            s2 += dxhat * xhat
+            if need_g: pgg[k] = pgg[k] + pd[base + k] * xhat end
+        end
+        if need_x:
+            m2 := s2 * inv_d
+            repeat d with k:
+                xhat := px[base + k] * rs
+                dxhat := pd[base + k] * pgam[k]
+                pgx[base + k] = pgx[base + k] + rs * (dxhat - xhat * m2)
+            end
+        end
+    end
+end
+
+// Batch normalization over axis 1 (channels), statistics over every
+// other axis. aux holds [C, 2] = (mean, rstd) used in the forward; s1 is
+// 1 when those were running statistics (inference), in which case the
+// normalization is an affine map per channel and the batch-coupling
+// terms vanish.
+func _bk_batchnorm(tp &: Tape, n &: Node, dc &: tensor.Tensor):
+    vx := Value(tp, n.a)
+    vg := Value(tp, n.b)
+    st := Value(tp, n.aux)
+    beta := n.s0
+    inference := n.s1 == 1
+    nb := vx.shape.get(0)
+    c := vx.shape.get(1)
+    inner := vx.numel() / (nb * c)
+    cnt := nb * inner
+    px := vx.data.data
+    pgam := vg.data.data
+    ps := st.data.data
+    pd := dc.data.data
+    need_x := tp.needs.get(n.a)
+    need_g := tp.needs.get(n.b)
+    need_b := tp.needs.get(beta)
+    mut gx := tensor.Empty()
+    mut gg := tensor.Empty()
+    mut gb := tensor.Empty()
+    if need_x: gx = _grad_of(tp, n.a) end
+    if need_g: gg = _grad_of(tp, n.b) end
+    if need_b: gb = _grad_of(tp, beta) end
+    pgx := gx.data.data
+    pgg := gg.data.data
+    pgb := gb.data.data
+    inv_cnt := (1.0 / (cnt as f64)) as f32
+    repeat c with ch:
+        mean := ps[ch * 2]
+        rstd := ps[ch * 2 + 1]
+        gamma := pgam[ch]
+        mut s1 := 0.0 as f32
+        mut s2 := 0.0 as f32
+        repeat nb with i:
+            base := (i * c + ch) * inner
+            repeat inner with k:
+                xhat := (px[base + k] - mean) * rstd
+                dy := pd[base + k]
+                s1 += dy
+                s2 += dy * xhat
+            end
+        end
+        if need_g: pgg[ch] = pgg[ch] + s2 end
+        if need_b: pgb[ch] = pgb[ch] + s1 end
+        if need_x:
+            m1 := s1 * gamma * inv_cnt
+            m2 := s2 * gamma * inv_cnt
+            repeat nb with i:
+                base := (i * c + ch) * inner
+                repeat inner with k:
+                    dxhat := pd[base + k] * gamma
+                    if inference:
+                        pgx[base + k] = pgx[base + k] + rstd * dxhat
+                    else:
+                        xhat := (px[base + k] - mean) * rstd
+                        pgx[base + k] = pgx[base + k] + rstd * (dxhat - m1 - xhat * m2)
+                    end
+                end
+            end
+        end
+    end
+end
+
+
+// GroupNorm: the same normalization math as LayerNorm, but the mean and
+// rstd of aux are per (sample, group) and the affine is per channel.
+func _bk_groupnorm(tp &: Tape, n &: Node, dc &: tensor.Tensor):
+    vx := Value(tp, n.a)
+    vg := Value(tp, n.b)
+    st := Value(tp, n.aux)
+    beta := n.s0
+    groups := n.s1
+    nb := vx.shape.get(0)
+    c := vx.shape.get(1)
+    inner := vx.numel() / (nb * c)
+    cpg := c / groups
+    m := cpg * inner
+    px := vx.data.data
+    pgam := vg.data.data
+    ps := st.data.data
+    pd := dc.data.data
+    need_x := tp.needs.get(n.a)
+    need_g := tp.needs.get(n.b)
+    need_b := tp.needs.get(beta)
+    mut gx := tensor.Empty()
+    mut gg := tensor.Empty()
+    mut gb := tensor.Empty()
+    if need_x: gx = _grad_of(tp, n.a) end
+    if need_g: gg = _grad_of(tp, n.b) end
+    if need_b: gb = _grad_of(tp, beta) end
+    pgx := gx.data.data
+    pgg := gg.data.data
+    pgb := gb.data.data
+    inv_m := (1.0 / (m as f64)) as f32
+    repeat nb with bi:
+        repeat groups with g:
+            mean := ps[(bi * groups + g) * 2]
+            rstd := ps[(bi * groups + g) * 2 + 1]
+            mut s1 := 0.0 as f32
+            mut s2 := 0.0 as f32
+            repeat cpg with cc:
+                ch := g * cpg + cc
+                base := (bi * c + ch) * inner
+                repeat inner with s:
+                    xhat := (px[base + s] - mean) * rstd
+                    dxhat := pd[base + s] * pgam[ch]
+                    s1 += dxhat
+                    s2 += dxhat * xhat
+                    if need_g: pgg[ch] = pgg[ch] + pd[base + s] * xhat end
+                    if need_b: pgb[ch] = pgb[ch] + pd[base + s] end
+                end
+            end
+            if need_x:
+                m1 := s1 * inv_m
+                m2 := s2 * inv_m
+                repeat cpg with cc:
+                    ch := g * cpg + cc
+                    base := (bi * c + ch) * inner
+                    repeat inner with s:
+                        xhat := (px[base + s] - mean) * rstd
+                        dxhat := pd[base + s] * pgam[ch]
+                        pgx[base + s] = pgx[base + s] + rstd * (dxhat - m1 - xhat * m2)
+                    end
+                end
+            end
+        end
+    end
+end
+
+// ---- public API ----
+
+// Normalizes the last axis of x, then y = gamma * xhat + beta. gamma
+// and beta are recorded values of shape [D].
+@en "LayerNorm"
+@fa "نرمال‌سازی لایه"
+@ar "تسوية الطبقة"
+pub func LayerNorm(tp &: Tape, x: int, gamma: int, beta: int, eps: f64): int:
+    vx := Value(tp, x)
+    vg := Value(tp, gamma)
+    vb := Value(tp, beta)
+    if vx.is_empty(): ret _push_val(tp, tensor.Empty(), true, false) end
+    d := vx.shape.get(vx.rank() - 1)
+    if vg.numel() != d || vb.numel() != d: ret _push_val(tp, tensor.Empty(), true, false) end
+    rows := vx.numel() / d
+    out := tensor.Zeros(vx.shape)
+    st := tensor.Zeros2(rows, 2)
+    px := vx.data.data
+    pg := vg.data.data
+    pb := vb.data.data
+    po := out.data.data
+    ps := st.data.data
+    ef := eps as f32
+    inv_d := (1.0 / (d as f64)) as f32
+    one := 1.0 as f32
+    repeat rows with r:
+        base := r * d
+        mut s := 0.0 as f32
+        repeat d with k: s += px[base + k] end
+        mean := s * inv_d
+        mut v := 0.0 as f32
+        repeat d with k:
+            dlt := px[base + k] - mean
+            v += dlt * dlt
+        end
+        rstd := one / sqrtf(v * inv_d + ef)
+        ps[r * 2] = mean
+        ps[r * 2 + 1] = rstd
+        repeat d with k:
+            po[base + k] = pg[k] * ((px[base + k] - mean) * rstd) + pb[k]
+        end
+    end
+    needs_grad := tp.needs.get(x) || tp.needs.get(gamma) || tp.needs.get(beta)
+    aux := _push_val(tp, st, true, false)
+    id := _push_val(tp, out, true, needs_grad)
+    if needs_grad: _record(tp, _OP_LAYERNORM, x, gamma, id, aux, beta, 0, eps) end
+    ret id
+end
+
+// y = gamma * x / sqrt(mean(x^2) + eps) over the last axis; the
+// transformer normalization without a mean subtraction or a shift.
+@en "RMSNorm"
+@fa "نرمال‌سازی جذر میانگین مربعات"
+@ar "تسوية جذر متوسط المربعات"
+pub func RMSNorm(tp &: Tape, x: int, gamma: int, eps: f64): int:
+    vx := Value(tp, x)
+    vg := Value(tp, gamma)
+    if vx.is_empty(): ret _push_val(tp, tensor.Empty(), true, false) end
+    d := vx.shape.get(vx.rank() - 1)
+    if vg.numel() != d: ret _push_val(tp, tensor.Empty(), true, false) end
+    rows := vx.numel() / d
+    out := tensor.Zeros(vx.shape)
+    st := tensor.Zeros1(rows)
+    px := vx.data.data
+    pg := vg.data.data
+    po := out.data.data
+    ps := st.data.data
+    ef := eps as f32
+    inv_d := (1.0 / (d as f64)) as f32
+    one := 1.0 as f32
+    repeat rows with r:
+        base := r * d
+        mut s := 0.0 as f32
+        repeat d with k: s += px[base + k] * px[base + k] end
+        rs := one / sqrtf(s * inv_d + ef)
+        ps[r] = rs
+        repeat d with k: po[base + k] = pg[k] * px[base + k] * rs end
+    end
+    needs_grad := tp.needs.get(x) || tp.needs.get(gamma)
+    aux := _push_val(tp, st, true, false)
+    id := _push_val(tp, out, true, needs_grad)
+    if needs_grad: _record(tp, _OP_RMSNORM, x, gamma, id, aux, 0, 0, eps) end
+    ret id
+end
+
+// Batch normalization over channel axis 1 of a [N, C] or [N, C, H, W]
+// value. In training mode the batch statistics normalize and update
+// the caller-owned running_mean / running_var (momentum blend, unbiased
+// variance); in inference mode (tp.training false) the running
+// statistics are used instead.
+@en "BatchNorm"
+@fa "نرمال‌سازی دسته"
+@ar "تسوية الدفعة"
+pub func BatchNorm(tp &: Tape, x: int, gamma: int, beta: int, running_mean &: tensor.Tensor, running_var &: tensor.Tensor, momentum: f64, eps: f64): int:
+    vx := Value(tp, x)
+    vg := Value(tp, gamma)
+    vb := Value(tp, beta)
+    if vx.rank() != 2 && vx.rank() != 4: ret _push_val(tp, tensor.Empty(), true, false) end
+    nb := vx.shape.get(0)
+    c := vx.shape.get(1)
+    if vg.numel() != c || vb.numel() != c || running_mean.numel() != c || running_var.numel() != c:
+        ret _push_val(tp, tensor.Empty(), true, false)
+    end
+    inner := vx.numel() / (nb * c)
+    cnt := nb * inner
+    out := tensor.Zeros(vx.shape)
+    st := tensor.Zeros2(c, 2)
+    px := vx.data.data
+    pg := vg.data.data
+    pb := vb.data.data
+    po := out.data.data
+    ps := st.data.data
+    prm := running_mean.data.data
+    prv := running_var.data.data
+    ef := eps as f32
+    one := 1.0 as f32
+    mom := momentum as f32
+    inv_cnt := (1.0 / (cnt as f64)) as f32
+    repeat c with ch:
+        mut mean := 0.0 as f32
+        mut var := 0.0 as f32
+        if tp.training:
+            mut s := 0.0 as f32
+            repeat nb with i:
+                base := (i * c + ch) * inner
+                repeat inner with k: s += px[base + k] end
+            end
+            mean = s * inv_cnt
+            mut v := 0.0 as f32
+            repeat nb with i:
+                base := (i * c + ch) * inner
+                repeat inner with k:
+                    dlt := px[base + k] - mean
+                    v += dlt * dlt
+                end
+            end
+            var = v * inv_cnt
+            mut unbiased := var
+            if cnt > 1: unbiased = v / ((cnt - 1) as f32) end
+            prm[ch] = (one - mom) * prm[ch] + mom * mean
+            prv[ch] = (one - mom) * prv[ch] + mom * unbiased
+        else:
+            mean = prm[ch]
+            var = prv[ch]
+        end
+        rstd := one / sqrtf(var + ef)
+        ps[ch * 2] = mean
+        ps[ch * 2 + 1] = rstd
+        repeat nb with i:
+            base := (i * c + ch) * inner
+            repeat inner with k: po[base + k] = pg[ch] * ((px[base + k] - mean) * rstd) + pb[ch] end
+        end
+    end
+    needs_grad := tp.needs.get(x) || tp.needs.get(gamma) || tp.needs.get(beta)
+    aux := _push_val(tp, st, true, false)
+    id := _push_val(tp, out, true, needs_grad)
+    mut mode := 0
+    if tp.training == false: mode = 1 end
+    if needs_grad: _record(tp, _OP_BATCHNORM, x, gamma, id, aux, beta, mode, eps) end
+    ret id
+end
+
+// Group normalization over [N, C, ...]: the channels are cut into
+// `groups` equal blocks and each block of one sample is normalized
+// together, with a per-channel scale and shift. groups = 1 is
+// LayerNorm over the channels, groups = C is InstanceNorm - and
+// neither depends on the batch size, which is why this is the norm of
+// choice when batches are small.
+@en "GroupNorm"
+@fa "نرمال‌سازی گروهی"
+@ar "تسوية المجموعة"
+pub func GroupNorm(tp &: Tape, x: int, gamma: int, beta: int, groups: int, eps: f64): int:
+    vx := Value(tp, x)
+    vg := Value(tp, gamma)
+    vb := Value(tp, beta)
+    if vx.rank() < 2 || groups < 1: ret _push_val(tp, tensor.Empty(), true, false) end
+    nb := vx.shape.get(0)
+    c := vx.shape.get(1)
+    if c % groups != 0 || vg.numel() != c || vb.numel() != c:
+        ret _push_val(tp, tensor.Empty(), true, false)
+    end
+    inner := vx.numel() / (nb * c)
+    cpg := c / groups
+    m := cpg * inner
+    out := tensor.Zeros(vx.shape)
+    st := tensor.Zeros2(nb * groups, 2)
+    px := vx.data.data
+    pg := vg.data.data
+    pb := vb.data.data
+    po := out.data.data
+    ps := st.data.data
+    ef := eps as f32
+    inv_m := (1.0 / (m as f64)) as f32
+    one := 1.0 as f32
+    repeat nb with bi:
+        repeat groups with g:
+            mut sum := 0.0 as f32
+            repeat cpg with cc:
+                base := (bi * c + g * cpg + cc) * inner
+                repeat inner with s: sum += px[base + s] end
+            end
+            mean := sum * inv_m
+            mut var := 0.0 as f32
+            repeat cpg with cc:
+                base := (bi * c + g * cpg + cc) * inner
+                repeat inner with s:
+                    dlt := px[base + s] - mean
+                    var += dlt * dlt
+                end
+            end
+            rstd := one / sqrtf(var * inv_m + ef)
+            ps[(bi * groups + g) * 2] = mean
+            ps[(bi * groups + g) * 2 + 1] = rstd
+            repeat cpg with cc:
+                ch := g * cpg + cc
+                base := (bi * c + ch) * inner
+                repeat inner with s:
+                    po[base + s] = pg[ch] * ((px[base + s] - mean) * rstd) + pb[ch]
+                end
+            end
+        end
+    end
+    needs_grad := tp.needs.get(x) || tp.needs.get(gamma) || tp.needs.get(beta)
+    aux := _push_val(tp, st, true, false)
+    id := _push_val(tp, out, true, needs_grad)
+    if needs_grad: _record(tp, _OP_GROUPNORM, x, gamma, id, aux, beta, groups, eps) end
+    ret id
+end

@@ -1,0 +1,135 @@
+# Apache counterpart to main.salam, for the routes Apache can answer on its own.
+#
+# Apache, like nginx, is not an application server, so the same rule applies:
+# it gets the routes it can serve without something behind it, and the rest
+# are left blank rather than faked. What is different from nginx is *which*
+# routes those are, and the difference is worth stating because it is the
+# whole reason this column exists next to that one.
+#
+# nginx can synthesize a small response body straight out of its config
+# (`return 200 '{"id":"$1"}'`). Apache cannot: nothing in the core, in
+# mod_alias or in mod_rewrite sets a response body. Apache's answer to "return
+# these bytes quickly" is a file, plus mod_file_cache to mmap it once at
+# startup so the per-request open/read goes away. So:
+#
+#   /plaintext /json /health   a file, MMapFile'd at startup
+#   /cached                    a file, MMapFile'd at startup
+#   /file                      the same bytes, NOT cached: open/read per request
+#   /static/... /              bytes off disk through Apache's normal file path
+#
+# and skipped, because they need per-request work over caller input:
+#
+#   /users/:id                 nginx does this with a regex capture in a
+#                              `return`; Apache has no equivalent
+#   /search /compute /headers /echo
+#
+# The /file vs /cached pair is therefore more meaningful here than in the
+# nginx column, where both hit the same page-cached file and the pair says
+# nothing. Here it is genuinely "mmap'd at boot" minus "opened per request".
+#
+# Every placeholder is filled in by bench/run.sh.
+
+ServerRoot          "@RUNDIR@"
+DefaultRuntimeDir   "@RUNDIR@"
+PidFile             "@RUNDIR@/httpd.pid"
+ServerName          127.0.0.1
+Listen              127.0.0.1:@PORT@
+
+LoadModule mpm_event_module  @MODDIR@/mod_mpm_event.so
+LoadModule authz_core_module @MODDIR@/mod_authz_core.so
+LoadModule mime_module       @MODDIR@/mod_mime.so
+LoadModule dir_module        @MODDIR@/mod_dir.so
+LoadModule alias_module      @MODDIR@/mod_alias.so
+LoadModule file_cache_module @MODDIR@/mod_file_cache.so
+
+# One child per core, each with enough threads to hold every connection the
+# generator opens. MaxRequestWorkers is the real concurrency ceiling: below
+# the connection count it serializes requests and the number measures the
+# queue instead of the server.
+<IfModule mpm_event_module>
+    ServerLimit             @WORKERS@
+    StartServers            @WORKERS@
+    ThreadsPerChild         64
+    ThreadLimit             64
+    MaxRequestWorkers       @MAXWORKERS@
+    MinSpareThreads         @MAXWORKERS@
+    MaxSpareThreads         @MAXWORKERS@
+    MaxConnectionsPerChild  0
+    AsyncRequestWorkerFactor 4
+</IfModule>
+
+# No access log at all. A CustomLog line here would put one write per request
+# in the hot path and measure the disk rather than the server, which is the
+# same reason nginx's template sets `access_log off`.
+ErrorLog  "@RUNDIR@/error.log"
+LogLevel  crit
+
+Timeout              60
+KeepAlive            On
+MaxKeepAliveRequests 0
+KeepAliveTimeout     65
+HostnameLookups      Off
+EnableMMAP           On
+EnableSendfile       On
+ExtendedStatus       Off
+
+TypesConfig /etc/mime.types
+AddDefaultCharset Off
+
+# .htaccess lookups are a stat() per directory per request. Off everywhere.
+<Directory "/">
+    AllowOverride None
+    Require all denied
+    Options None
+</Directory>
+
+DocumentRoot "@ASSETS@"
+<Directory "@ASSETS@">
+    AllowOverride None
+    Require all granted
+    Options -Indexes +FollowSymLinks
+    DirectoryIndex index.html
+</Directory>
+
+<Directory "@RUNDIR@/canned">
+    AllowOverride None
+    Require all granted
+    Options None
+</Directory>
+
+# Read once, at startup, and never stat'd again. This is Apache's answer to
+# nginx's `return 200 "..."`, and it is the closest the two get to measuring
+# the same thing.
+MMapFile "@RUNDIR@/canned/plaintext.txt"
+MMapFile "@RUNDIR@/canned/json.json"
+MMapFile "@RUNDIR@/canned/health.json"
+MMapFile "@RUNDIR@/canned/cached.json"
+
+Alias "/plaintext" "@RUNDIR@/canned/plaintext.txt"
+<Location "/plaintext">
+    ForceType "text/plain; charset=utf-8"
+</Location>
+
+Alias "/json" "@RUNDIR@/canned/json.json"
+<Location "/json">
+    ForceType application/json
+</Location>
+
+Alias "/health" "@RUNDIR@/canned/health.json"
+<Location "/health">
+    ForceType application/json
+</Location>
+
+Alias "/cached" "@RUNDIR@/canned/cached.json"
+<Location "/cached">
+    ForceType application/json
+</Location>
+
+# Deliberately points at the asset directory rather than at the mmap'd copy,
+# so this route pays the open/read that /cached does not.
+Alias "/file" "@ASSETS@/data.json"
+<Location "/file">
+    ForceType application/json
+</Location>
+
+Alias "/static/" "@ASSETS@/"

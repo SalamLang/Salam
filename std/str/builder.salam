@@ -79,8 +79,41 @@ end
 @en "BufAppendInt"
 @fa "افزودن عدد به بافر"
 @ar "إلحاق عدد بالمخزن"
+// Appends the decimal digits of `n` straight into the buffer.
+//
+// This used to be `BufAppend(b, conv.FormatInt(n))`. FormatInt heap-allocates
+// the digits, and nothing freed them, so every Content-Length on every
+// response leaked a small string. Writing the digits in place removes both
+// the leak and the allocation from a path that runs once per response.
 pub func BufAppendInt(b &: StringBuilder, n: i64):
-    BufAppend(b, conv.FormatInt(n))
+    if n == 0:
+        BufAppendChar(b, 48)
+        ret
+    end
+    mut v := n
+    if v < 0:
+        BufAppendChar(b, 45)
+        v = 0 - v
+    end
+    start := b.len
+    until v > 0:
+        BufAppendChar(b, 48 + ((v % 10) as int))
+        v = v / 10
+    end
+    // The digits came out least-significant first; reverse just the span this
+    // call wrote. b.data is read after the appends, never before: every
+    // BufAppendChar above may have reallocated it.
+    mut i := start
+    mut j := b.len - 1
+    p := b.data as i8*
+    until i < j:
+        lo := p[i as int]
+        hi := p[j as int]
+        p[i as int] = hi
+        p[j as int] = lo
+        i += 1
+        j -= 1
+    end
 end
 
 @en "BufLen"
@@ -93,11 +126,17 @@ pub func BufLen(b &: StringBuilder): i64: ret b.len end
 @ar "المخزن فارغ"
 pub func BufIsEmpty(b &: StringBuilder): bool: ret b.len == 0 end
 
+// The buffer's contents as a fresh string the CALLER owns and must free.
+//
+// The empty case allocates rather than returning the "" literal, so that
+// every BufStr result without exception is safe to hand to mem.Free. A
+// caller that has to ask "is this one heap or not?" cannot free anything
+// safely, and that ambiguity is a large part of how the HTTP server leaked.
 @en "BufStr"
 @fa "رشته بافر"
 @ar "نص المخزن"
 pub func BufStr(b &: StringBuilder): str:
-    if b.data == null: ret "" end
+    if b.data == null: ret Clone("") end
     p := b.data as i8*
     p[b.len as int] = 0 as i8
     ret Clone(b.data as str)

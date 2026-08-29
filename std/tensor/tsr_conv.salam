@@ -1,0 +1,280 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package tensor
+
+// Convolution and pooling forward kernels, NCHW layout.
+//
+// The convolution is im2col + gemm, one sample at a time: unrolling the
+// kh x kw receptive fields into a [C*kh*kw, OH*OW] column matrix turns
+// the convolution into exactly the packed matrix product this package
+// already made fast, at the price of materializing the columns (a
+// kh*kw-fold blowup of the input). The column buffer is allocated once
+// and reused across the batch, so the memory tax is one sample's, not
+// the dataset's.
+//
+// Pooling kernels walk their windows directly. MaxPool2D also reports
+// each maximum's flat position inside its (n,c) plane - the backward
+// pass scatters gradients straight to those positions, and std/autograd
+// stores the index tensor as the node's aux.
+//
+// No dilation and no groups in this round; strides and zero padding
+// are enough for the classic image stacks.
+
+func _conv_out(size: int, k: int, s: int, p: int): int:
+    ret (size + 2 * p - k) / s + 1
+end
+
+// Fills `cols` (a [C*kh*kw, OH*OW] matrix) from one sample's plane.
+// Out-of-bounds taps are zero, which is what zero padding means.
+func _im2col_sample(px: f32*, c: int, h: int, w: int, kh: int, kw: int, sh: int, sw: int, ph: int, pw: int, cols: f32*):
+    oh := _conv_out(h, kh, sh, ph)
+    ow := _conv_out(w, kw, sw, pw)
+    p := oh * ow
+    zero := 0.0 as f32
+    repeat c with ci:
+        plane := ci * h * w
+        repeat kh with ki:
+            repeat kw with kj:
+                row := ((ci * kh + ki) * kw + kj) * p
+                repeat oh with oi:
+                    ii := oi * sh - ph + ki
+                    base := row + oi * ow
+                    if ii < 0 || ii >= h:
+                        repeat ow with oj: cols[base + oj] = zero end
+                    else:
+                        src := plane + ii * w
+                        repeat ow with oj:
+                            jj := oj * sw - pw + kj
+                            mut v := zero
+                            if jj >= 0 && jj < w: v = px[src + jj] end
+                            cols[base + oj] = v
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+// The scatter-add inverse of _im2col_sample: folds a [C*kh*kw, OH*OW]
+// column gradient back onto one sample's input plane.
+func _col2im_sample(cols: f32*, c: int, h: int, w: int, kh: int, kw: int, sh: int, sw: int, ph: int, pw: int, px: f32*):
+    oh := _conv_out(h, kh, sh, ph)
+    ow := _conv_out(w, kw, sw, pw)
+    p := oh * ow
+    repeat c with ci:
+        plane := ci * h * w
+        repeat kh with ki:
+            repeat kw with kj:
+                row := ((ci * kh + ki) * kw + kj) * p
+                repeat oh with oi:
+                    ii := oi * sh - ph + ki
+                    if ii >= 0 && ii < h:
+                        dst := plane + ii * w
+                        base := row + oi * ow
+                        repeat ow with oj:
+                            jj := oj * sw - pw + kj
+                            if jj >= 0 && jj < w:
+                                px[dst + jj] = px[dst + jj] + cols[base + oj]
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+// ---- public API ----
+
+// The output spatial size of a convolution or pool along one axis.
+@en "ConvOutSize"
+@fa "اندازه خروجی پیچش"
+@ar "حجم خرج الالتفاف"
+pub func ConvOutSize(size: int, k: int, s: int, p: int): int:
+    ret _conv_out(size, k, s, p)
+end
+
+// One sample's im2col as a standalone [C*kh*kw, OH*OW] tensor - the
+// building block std/autograd's convolution backward recomputes.
+@en "Im2Col"
+@fa "تصویر به ستون"
+@ar "صورة إلى أعمدة"
+pub func Im2Col(x &: Tensor, sample: int, kh: int, kw: int, sh: int, sw: int, ph: int, pw: int): Tensor:
+    if x.rank() != 4: ret Empty() end
+    c := x.shape.get(1)
+    h := x.shape.get(2)
+    w := x.shape.get(3)
+    oh := _conv_out(h, kh, sh, ph)
+    ow := _conv_out(w, kw, sw, pw)
+    if oh <= 0 || ow <= 0 || sample < 0 || sample >= x.shape.get(0): ret Empty() end
+    t := Zeros2(c * kh * kw, oh * ow)
+    _im2col_sample(_p32(x.data.data, sample * c * h * w), c, h, w, kh, kw, sh, sw, ph, pw, t.data.data)
+    ret t
+end
+
+// Scatter-adds a column gradient back onto sample `sample` of dx.
+@en "Col2ImAcc"
+@fa "ستون به تصویر انباشته"
+@ar "أعمدة إلى صورة تراكمي"
+pub func Col2ImAcc(cols &: Tensor, dx &: Tensor, sample: int, kh: int, kw: int, sh: int, sw: int, ph: int, pw: int): bool:
+    if dx.rank() != 4 || cols.rank() != 2: ret false end
+    c := dx.shape.get(1)
+    h := dx.shape.get(2)
+    w := dx.shape.get(3)
+    if sample < 0 || sample >= dx.shape.get(0): ret false end
+    _col2im_sample(cols.data.data, c, h, w, kh, kw, sh, sw, ph, pw, _p32(dx.data.data, sample * c * h * w))
+    ret true
+end
+
+// x [N,C,H,W] * w [OC,C,KH,KW] (+ bias [OC]) -> [N,OC,OH,OW]. Pass the
+// empty tensor as `bias` to skip the bias add.
+@en "Conv2DForward"
+@fa "پیچش دوبعدی پیشرو"
+@ar "التفاف ثنائي أمامي"
+pub func Conv2DForward(x &: Tensor, w &: Tensor, bias &: Tensor, sh: int, sw: int, ph: int, pw: int): Tensor:
+    if x.rank() != 4 || w.rank() != 4: ret Empty() end
+    if x.shape.get(1) != w.shape.get(1): ret Empty() end
+    n := x.shape.get(0)
+    c := x.shape.get(1)
+    h := x.shape.get(2)
+    wd := x.shape.get(3)
+    oc := w.shape.get(0)
+    kh := w.shape.get(2)
+    kw := w.shape.get(3)
+    oh := _conv_out(h, kh, sh, ph)
+    ow := _conv_out(wd, kw, sw, pw)
+    if oh <= 0 || ow <= 0: ret Empty() end
+    if bias.is_empty() == false && bias.numel() != oc: ret Empty() end
+    kdim := c * kh * kw
+    p := oh * ow
+    t := Zeros4(n, oc, oh, ow)
+    mut cols := Vector {} as Vector<f32>
+    cols.alloc(kdim * p)
+    px := x.data.data
+    pw2 := w.data.data
+    pr := t.data.data
+    repeat n with i:
+        _im2col_sample(_p32(px, i * c * h * wd), c, h, wd, kh, kw, sh, sw, ph, pw, cols.data)
+        _gemm_acc(pw2, cols.data, _p32(pr, i * oc * p), oc, kdim, p)
+    end
+    cols.free()
+    if bias.is_empty() == false:
+        pb := bias.data.data
+        repeat n with i:
+            sbase := i * oc * p
+            repeat oc with o:
+                b := pb[o]
+                obase := sbase + o * p
+                repeat p with k: pr[obase + k] = pr[obase + k] + b end
+            end
+        end
+    end
+    ret t
+end
+
+// Max pooling, recording each winner's flat index inside its (n,c)
+// plane into `argmax_out` (overwritten; same shape as the result).
+@en "MaxPool2DForward"
+@fa "بیشینه‌گیری دوبعدی پیشرو"
+@ar "تجميع أقصى ثنائي أمامي"
+pub func MaxPool2DForward(x &: Tensor, kh: int, kw: int, sh: int, sw: int, argmax_out &: Tensor): Tensor:
+    if x.rank() != 4: ret Empty() end
+    n := x.shape.get(0)
+    c := x.shape.get(1)
+    h := x.shape.get(2)
+    w := x.shape.get(3)
+    oh := _conv_out(h, kh, sh, 0)
+    ow := _conv_out(w, kw, sw, 0)
+    if oh <= 0 || ow <= 0: ret Empty() end
+    t := Zeros4(n, c, oh, ow)
+    argmax_out.free()
+    am := Zeros4(n, c, oh, ow)
+    px := x.data.data
+    pr := t.data.data
+    pa := am.data.data
+    planes := n * c
+    repeat planes with pl:
+        ibase := pl * h * w
+        obase := pl * oh * ow
+        repeat oh with oi:
+            repeat ow with oj:
+                mut best := px[ibase + (oi * sh) * w + (oj * sw)]
+                mut bidx := (oi * sh) * w + (oj * sw)
+                repeat kh with ki:
+                    ii := oi * sh + ki
+                    if ii < h:
+                        repeat kw with kj:
+                            jj := oj * sw + kj
+                            if jj < w:
+                                v := px[ibase + ii * w + jj]
+                                if v > best:
+                                    best = v
+                                    bidx = ii * w + jj
+                                end
+                            end
+                        end
+                    end
+                end
+                pr[obase + oi * ow + oj] = best
+                pa[obase + oi * ow + oj] = bidx as f32
+            end
+        end
+    end
+    argmax_out = am
+    ret t
+end
+
+@en "AvgPool2DForward"
+@fa "میانگین‌گیری دوبعدی پیشرو"
+@ar "تجميع متوسط ثنائي أمامي"
+pub func AvgPool2DForward(x &: Tensor, kh: int, kw: int, sh: int, sw: int): Tensor:
+    if x.rank() != 4: ret Empty() end
+    n := x.shape.get(0)
+    c := x.shape.get(1)
+    h := x.shape.get(2)
+    w := x.shape.get(3)
+    oh := _conv_out(h, kh, sh, 0)
+    ow := _conv_out(w, kw, sw, 0)
+    if oh <= 0 || ow <= 0: ret Empty() end
+    t := Zeros4(n, c, oh, ow)
+    px := x.data.data
+    pr := t.data.data
+    planes := n * c
+    repeat planes with pl:
+        ibase := pl * h * w
+        obase := pl * oh * ow
+        repeat oh with oi:
+            repeat ow with oj:
+                mut s := 0.0 as f32
+                mut cnt := 0
+                repeat kh with ki:
+                    ii := oi * sh + ki
+                    if ii < h:
+                        repeat kw with kj:
+                            jj := oj * sw + kj
+                            if jj < w:
+                                s += px[ibase + ii * w + jj]
+                                cnt += 1
+                            end
+                        end
+                    end
+                end
+                pr[obase + oi * ow + oj] = s / (cnt as f32)
+            end
+        end
+    end
+    ret t
+end

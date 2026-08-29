@@ -98,6 +98,10 @@ mut _srv_routers := Vector {} as Vector<router.Router>
 mut _srv_hide := Vector {} as Vector<bool>
 mut _srv_log := Vector {} as Vector<bool>
 mut _srv_tls := Vector {} as Vector<tls.ServerConfig>
+// The "Salam/x.y.z" the Server and X-Powered-By headers carry. It is the
+// same bytes for the life of the process, so it is built once per listener
+// here rather than concatenated fresh for every response.
+mut _srv_shdr := Vector {} as Vector<str>
 mut _srv_count := 0
 
 @en "Context"
@@ -130,6 +134,34 @@ struct _ReqCtx:
     // default is the HTTP/1.1 rule (reuse unless told otherwise); a request
     // line ending in HTTP/1.0, or an explicit "Connection: close", flips it.
     pub keep_alive: bool = true
+    // Every heap string this server allocates while serving the request -
+    // the method, the path, each header name and value, each captured path
+    // parameter - is registered here and freed when the request ends.
+    //
+    // A `str` is a bare byte pointer with no ownership attached, so there is
+    // no way to look at c.method and know whether it is a slice this server
+    // malloc'd or a literal baked into the binary. Freeing the struct alone
+    // (which is all salam_ctx_free used to do) therefore released about
+    // thirty bytes and abandoned everything they pointed at: roughly 1.2 KB
+    // per request, on every route, until the kernel killed the process.
+    // Keeping the pointers is what makes releasing them safe.
+    pub owned: Vector<i64> = Vector {}
+    // The request bytes as they arrived, plus the half-open span of the
+    // header block inside them.
+    //
+    // Headers used to be copied out eagerly: a name and a value allocated,
+    // trimmed and stored for every header line of every request, whether or
+    // not the handler ever asked for one. A plain GET carries three or four
+    // of them and most handlers read none, so that was eight allocations and
+    // eight frees per request spent on nothing. Ctx_header now slices the
+    // value it was asked for straight out of these bytes.
+    //
+    // `raw` is borrowed, not owned - it points at the connection's receive
+    // buffer or at the request string the handler loop is holding, both of
+    // which outlive the request and neither of which this context frees.
+    pub raw: str = ""
+    pub hdr_pos: int = 0
+    pub hdr_end: int = 0
 end
 
 @en "Server"
@@ -163,6 +195,7 @@ func _srv_init():
         _srv_hide.push(false)
         _srv_log.push(false)
         _srv_tls.push(tls.NewServerConfig("", ""))
+        _srv_shdr.push("Salam")
     end
 end
 
@@ -181,6 +214,7 @@ func _srv_claim(r: router.Router, hide: bool, log: bool): int:
     _srv_routers.set(slot, r)
     _srv_hide.set(slot, hide)
     _srv_log.set(slot, log)
+    _srv_shdr.set(slot, _server_header(hide))
     ret slot
 end
 
@@ -198,16 +232,22 @@ end
 
 func _warm_up_split():
     junk := "a/b".split("/")
-    defer junk.free()
+    // free() releases the vector's backing array; the pieces split allocated
+    // are separate blocks and have to go individually.
+    repeat junk.len() with i:
+        mem.Free(junk.get(i) as void *)
+    end
+    junk.free()
 end
 
 func _reqctx_sizeof(): i64:
     if _reqctx_size == 0:
-        v := Vector {} as Vector<_ReqCtx> v.push(_ReqCtx {})
+        mut v := Vector {} as Vector<_ReqCtx> v.push(_ReqCtx {})
         v.push(_ReqCtx {})
         // the stride between two slots, so these have to be the addresses
         // ref hands back, not the elements get returns
         _reqctx_size = (v.ref(1) as i64) - (v.ref(0) as i64)
+        v.free()
     end
     ret _reqctx_size
 end
@@ -216,13 +256,147 @@ func _rc(h: i64): _ReqCtx *:
     ret h as _ReqCtx *
 end
 
+// Whether `s` carries `lit`, in full, starting at `pos`.
+//
+// The obvious spelling is `s.substr(pos, lit.len()) == lit`, and it is what
+// this file used everywhere. Every one of those comparisons heap-allocates a
+// copy of the span, compares it, and abandons it - the header-block walk did
+// it once per header line of every request, which was the single largest
+// remaining source of the server's memory growth after the request context
+// started freeing itself. Reading the bytes costs nothing and allocates
+// nothing.
+func _eq_at(s: str, pos: int, lit: str): bool:
+    m := lit.len()
+    if pos < 0 || pos + m > s.len(): ret false end
+    sp := s as i8 *
+    lp := lit as i8 *
+    mut i := 0
+    until i < m:
+        if sp[pos + i] != lp[i]: ret false end
+        i += 1
+    end
+    ret true
+end
+
+// True when byte `i` of `s` is a space or a tab - the optional whitespace
+// HTTP allows between a header's colon and its value.
+func _ows_at(s: str, i: int): bool:
+    p := s as i8 *
+    b := p[i] as int
+    ret b == 32 || b == 9
+end
+
+// _eq_at, folding BOTH sides, for comparing a field name on the wire against
+// one a caller spelled however they liked ("Content-Type", "content-type").
+func _eq_at_ifold(s: str, pos: int, name: str): bool:
+    m := name.len()
+    if pos < 0 || pos + m > s.len(): ret false end
+    sp := s as i8 *
+    np := name as i8 *
+    mut i := 0
+    until i < m:
+        mut a := sp[pos + i] as int
+        mut b := np[i] as int
+        if a >= 65 && a <= 90: a += 32 end
+        if b >= 65 && b <= 90: b += 32 end
+        if a != b: ret false end
+        i += 1
+    end
+    ret true
+end
+
+// _eq_at with ASCII case folding, for the field names HTTP says are
+// case-insensitive. `lit` must already be lowercase.
+func _eq_at_fold(s: str, pos: int, lit: str): bool:
+    m := lit.len()
+    if pos < 0 || pos + m > s.len(): ret false end
+    sp := s as i8 *
+    lp := lit as i8 *
+    mut i := 0
+    until i < m:
+        mut a := sp[pos + i] as int
+        if a >= 65 && a <= 90: a += 32 end
+        if a != (lp[i] as int): ret false end
+        i += 1
+    end
+    ret true
+end
+
 func salam_ctx_new(fd: i64): i64:
     p := mem.Allocate(_reqctx_sizeof() as u64)
     c := p as _ReqCtx * c[0] = _ReqCtx { fd = fd }
     ret p as i64
 end
 
+// Hands a heap string to the request scope. Returns it unchanged so it can
+// be used inline at the point it is produced, which is the only place the
+// answer to "who frees this?" is still obvious.
+//
+// The pointer must be heap-allocated. Registering a literal here would hand
+// free() a pointer into the binary's read-only data, so every producer whose
+// result reaches this function returns heap unconditionally - see BufStr and
+// _query_parse, both of which allocate even for the empty result rather than
+// return "" and leave the caller unable to tell the two apart.
+func _ctx_own(h: i64, s: str): str:
+    c := _rc(h)
+    c.owned.push((s as void *) as i64)
+    ret s
+end
+
+// Releases everything this request allocated and returns the context to the
+// state salam_ctx_new left it in, WITHOUT giving the vectors' buffers back.
+//
+// A keep-alive connection serves many requests, and allocating a context, an
+// ownership list and three key/value vectors for each of them - then freeing
+// all five again - is five malloc/free pairs per request that buy nothing:
+// the next request on the same connection needs the same five things, at
+// close to the same sizes. Popping to empty keeps the capacity, so the second
+// and later requests on a connection allocate nothing for their own
+// bookkeeping at all. This matters more now than it did before: releasing the
+// request's strings is real work that leaking them did not cost, and reusing
+// the buffers is what pays for it.
+func salam_ctx_reset(h: i64):
+    c := _rc(h)
+    n := c.owned.len()
+    mut i := 0
+    until i < n:
+        mem.Free(c.owned.get(i) as void *)
+        i += 1
+    end
+    until c.owned.len() > 0:
+        c.owned.pop()
+    end
+    _kvl_clear(c.req_hdrs)
+    _kvl_clear(c.path_params)
+    _kvl_clear(c.resp_hdrs)
+    c.status = 200
+    c.is_sent = false
+    c.keep_alive = true
+    c.raw = ""
+    c.hdr_pos = 0
+    c.hdr_end = 0
+    c.method = ""
+    c.path = ""
+    c.query = ""
+    c.body = ""
+    c.resp_ct = ""
+    c.resp_body = ""
+end
+
 func salam_ctx_free(h: i64):
+    c := _rc(h)
+    n := c.owned.len()
+    mut i := 0
+    until i < n:
+        mem.Free(c.owned.get(i) as void *)
+        i += 1
+    end
+    c.owned.free()
+    // The key/value strings these hold were registered above as they were
+    // produced, so only the vectors' own backing buffers are left.
+    c.req_hdrs.free()
+    c.path_params.free()
+    c.resp_hdrs.free()
     mem.Free(h as void *)
 end
 
@@ -338,9 +512,43 @@ func _kvl_clear(l &: Vector<_KV>):
     end
 end
 
+// Finds one header in the request bytes, without having copied any of them
+// out first. Returns "" - a literal, borrowed - when the request did not
+// carry the field, and otherwise a request-scoped copy of the value.
+func _hdr_lookup(h: i64, name: str): str:
+    c := _rc(h)
+    raw := c.raw
+    if raw.len() == 0: ret "" end
+    e := c.hdr_end
+    nlen := name.len()
+    mut pos := c.hdr_pos
+    until pos < e:
+        line_end := str.IndexFrom(raw, "\r\n", pos)
+        if line_end < 0 || line_end > e: break end
+        colon := str.IndexFrom(raw, ":", pos)
+        if colon >= 0 && colon < line_end && colon - pos == nlen && _eq_at_ifold(raw, pos, name):
+            mut vs := colon + 1
+            until vs < line_end && _ows_at(raw, vs):
+                vs += 1
+            end
+            ret _ctx_own(h, raw.substr(vs, line_end - vs))
+        end
+        pos = line_end + 2
+    end
+    ret ""
+end
+
 func salam_ctx_kv_get(h: i64, list: int, key: str): str:
     c := _rc(h)
-    if list == 0: ret _kvl_get_field(c.req_hdrs, key)
+    if list == 0:
+        // Anything a middleware injected wins over what arrived on the wire;
+        // the list is empty on the ordinary path, so this costs a length
+        // check.
+        if c.req_hdrs.len() > 0:
+            over := _kvl_get_field(c.req_hdrs, key)
+            if over.len() > 0: ret over end
+        end
+        ret _hdr_lookup(h, key)
     else list == 1: ret _kvl_get(c.path_params, key)
     else:
         ret _kvl_get_field(c.resp_hdrs, key)
@@ -397,28 +605,41 @@ func salam_ctx_kv_val(h: i64, list: int, idx: int): str:
     end
 end
 
+// The value of `key` in an "a=1&b=2" string, percent-decoded. Always returns
+// a heap string the caller owns, "" included, so the result is unconditionally
+// safe to free (see _ctx_own on why that matters).
+//
+// The old version decoded the WHOLE string first and then split it on "&" and
+// "=". That is wrong as well as leaky: a value containing %26 decodes to a
+// literal "&" before the split ever runs, so ?q=a%26b parsed as two fields and
+// the caller got "a". Percent-decoding has to happen after the field
+// boundaries are found, never before. Splitting is done by index here, so the
+// scan itself allocates nothing.
 func _query_parse(req: str, key: str): str:
-    if req.len() == 0: ret "" end
-    decoded := UrlDecode(req)
-    mut rest := decoded
-    until rest.len() > 0:
-        amp := rest.find("&")
-        mut pair := ""
-        if amp >= 0:
-            pair = rest.substr(0, amp)
-            rest = rest.substr(amp + 1, rest.len() - amp - 1)
-        else:
-            pair = rest
-            rest = ""
-        end
-        eq := pair.find("=")
-        if eq >= 0:
-            if pair.substr(0, eq) == key:
-                ret pair.substr(eq + 1, pair.len() - eq - 1)
+    n := req.len()
+    mut pos := 0
+    until pos < n:
+        amp := str.IndexFrom(req, "&", pos)
+        mut fend := amp
+        if fend < 0: fend = n end
+        eq := str.IndexFrom(req, "=", pos)
+        if eq >= 0 && eq < fend:
+            kraw := req.substr(pos, eq - pos)
+            kdec := UrlDecode(kraw)
+            mem.Free(kraw as void *)
+            hit := kdec == key
+            mem.Free(kdec as void *)
+            if hit:
+                vraw := req.substr(eq + 1, fend - eq - 1)
+                vdec := UrlDecode(vraw)
+                mem.Free(vraw as void *)
+                ret vdec
             end
         end
+        if amp < 0: break end
+        pos = amp + 1
     end
-    ret ""
+    ret str.Clone("")
 end
 
 // Three copies of the whole request used to be made before a single header
@@ -431,29 +652,37 @@ func _parse_http(ctx: i64, req: str):
     n := req.len()
     sp1 := req.find(" ")
     if sp1 < 0: ret end
-    c.method = req.substr(0, sp1)
+    c.method = _ctx_own(ctx, req.substr(0, sp1))
     sp2 := str.IndexFrom(req, " ", sp1 + 1)
     if sp2 < 0: ret end
     pathquery := req.substr(sp1 + 1, sp2 - sp1 - 1)
     qmark := pathquery.find("?")
     if qmark >= 0:
-        c.path = pathquery.substr(0, qmark)
-        c.query = pathquery.substr(qmark + 1, pathquery.len() - qmark - 1)
+        c.path = _ctx_own(ctx, pathquery.substr(0, qmark))
+        c.query = _ctx_own(ctx, pathquery.substr(qmark + 1, pathquery.len() - qmark - 1))
+        // Both halves were copied out; the request target itself is dead.
+        mem.Free(pathquery as void *)
     else:
-        c.path = pathquery
+        c.path = _ctx_own(ctx, pathquery)
         c.query = ""
     end
     first_crlf := str.IndexFrom(req, "\r\n", sp2 + 1)
     if first_crlf < 0: ret end
     // "HTTP/1.0" defaults to closing the connection; 1.1 and later default to
     // keeping it. Either default can still be overridden by Connection below.
-    if first_crlf - sp2 - 1 >= 8 && req.substr(sp2 + 1, 8) == "HTTP/1.0":
+    if first_crlf - sp2 - 1 >= 8 && _eq_at(req, sp2 + 1, "HTTP/1.0"):
         c.keep_alive = false
     end
+    // The header block stays where it landed. This walk only has to find
+    // where the body starts and settle keep-alive; every field name and value
+    // it used to copy out is read on demand by _hdr_lookup instead, and most
+    // are never asked for at all.
+    c.raw = req
+    c.hdr_pos = first_crlf + 2
     mut pos := first_crlf + 2
     mut body_start := 0 - 1
     until pos < n:
-        if pos + 1 < n && req.substr(pos, 2) == "\r\n":
+        if pos + 1 < n && _eq_at(req, pos, "\r\n"):
             body_start = pos + 2
             break
         end
@@ -462,23 +691,22 @@ func _parse_http(ctx: i64, req: str):
             break
         end
         colon := str.IndexFrom(req, ":", pos)
-        if colon >= 0 && colon < line_end:
-            hk := req.substr(pos, colon - pos)
-            hv := str.TrimLeft(req.substr(colon + 1, line_end - colon - 1))
-            salam_ctx_kv_add(ctx, 0, hk, hv)
-            // "Connection" is ten characters; nothing else that matters here
-            // is, so the length check keeps the lowercase copy off the hot
-            // path for every other header on every request.
-            if hk.len() == 10 && hk.lower() == "connection":
-                lv := hv.lower()
-                if lv == "close": c.keep_alive = false
-                else lv == "keep-alive": c.keep_alive = true end
+        // "Connection" is ten characters; nothing else decided here is, so
+        // the length check keeps the comparison off the hot path for every
+        // other header on every request.
+        if colon >= 0 && colon < line_end && colon - pos == 10 && _eq_at_fold(req, pos, "connection"):
+            mut vs := colon + 1
+            until vs < line_end && _ows_at(req, vs):
+                vs += 1
             end
+            if _eq_at_fold(req, vs, "close"): c.keep_alive = false
+            else _eq_at_fold(req, vs, "keep-alive"): c.keep_alive = true end
         end
         pos = line_end + 2
     end
+    c.hdr_end = pos
     if body_start >= 0 && body_start < n:
-        c.body = req.substr(body_start, n - body_start)
+        c.body = _ctx_own(ctx, req.substr(body_start, n - body_start))
     end
 end
 
@@ -505,12 +733,17 @@ end
 // phrase, then concatenated both, for every response. These four cover
 // essentially all of the traffic a server actually emits; everything else
 // falls through to the general path, which still works.
-func _status_line(status: int): str:
-    if status == 200: ret "200 OK" end
-    if status == 404: ret "404 Not Found" end
-    if status == 204: ret "204 No Content" end
-    if status == 500: ret "500 Internal Server Error" end
-    ret conv.FormatInt(status as i64).concat(" ").concat(mime.StatusText(status))
+func _append_status(b &: str.StringBuilder, status: int):
+    if status == 200: str.BufAppend(b, "200 OK") ret end
+    if status == 404: str.BufAppend(b, "404 Not Found") ret end
+    if status == 204: str.BufAppend(b, "204 No Content") ret end
+    if status == 500: str.BufAppend(b, "500 Internal Server Error") ret end
+    // The general path used to be FormatInt(...).concat(" ").concat(...),
+    // which allocated twice and freed neither. StatusText returns a literal,
+    // so writing both pieces into the builder allocates nothing at all.
+    str.BufAppendInt(b, status as i64)
+    str.BufAppend(b, " ")
+    str.BufAppend(b, mime.StatusText(status))
 end
 
 // Serializes the response into `b`, headers and body together.
@@ -524,12 +757,12 @@ end
 // Body and headers land in the same buffer on purpose, so the whole response
 // leaves in a single write. Two writes would mean two syscalls, and with
 // TCP_NODELAY on, two packets for what fits in one.
-func _fill_response(b &: str.StringBuilder, ctx: i64, hide: bool, keep: bool):
+func _fill_response(b &: str.StringBuilder, ctx: i64, shdr: str, keep: bool):
     status := salam_ctx_get_status(ctx)
     ct := salam_ctx_get(ctx, 4)
     body := salam_ctx_get(ctx, 5)
     str.BufAppend(b, "HTTP/1.1 ")
-    str.BufAppend(b, _status_line(status))
+    _append_status(b, status)
     str.BufAppend(b, "\r\nContent-Length: ")
     str.BufAppendInt(b, body.len() as i64)
     if keep:
@@ -537,7 +770,6 @@ func _fill_response(b &: str.StringBuilder, ctx: i64, hide: bool, keep: bool):
     else:
         str.BufAppend(b, "\r\nConnection: close")
     end
-    shdr := _server_header(hide)
     str.BufAppend(b, "\r\nServer: ")
     str.BufAppend(b, shdr)
     // X-Powered-By is the header an operator reads to find out what answered.
@@ -567,9 +799,9 @@ end
 // Kept because std/tls's handler and any caller outside this file still want
 // a response as a string. The plain-HTTP path does not use it: it writes the
 // builder's bytes straight to the socket, which skips the copy BufStr makes.
-func _build_response(ctx: i64, hide: bool): str:
+func _build_response(ctx: i64, shdr: str): str:
     mut b := str.NewBuilder()
-    _fill_response(b, ctx, hide, false)
+    _fill_response(b, ctx, shdr, false)
     out := str.BufStr(b)
     str.BufFree(b)
     ret out
@@ -581,16 +813,24 @@ end
 func _dispatch(r: router.Router, ctx: i64): bool:
     method := salam_ctx_get(ctx, 0)
     path := salam_ctx_get(ctx, 1)
-    m := router.Dispatch(r, method, path)
-    if !m.matched: ret false end
+    mut m := router.Dispatch(r, method, path)
+    if !m.matched:
+        router.FreeMatch(m)
+        ret false
+    end
     salam_ctx_kv_clear(ctx, 1)
     n := m.params.items.len()
     mut i := 0
     until i < n:
         kv := m.params.items.get(i)
-        salam_ctx_kv_add(ctx, 1, kv.key, kv.value)
+        // The capture strings move into the request scope rather than being
+        // copied: Dispatch allocated them, nothing else refers to them, and
+        // the context outlives the Match.
+        salam_ctx_kv_add(ctx, 1, _ctx_own(ctx, kv.key), _ctx_own(ctx, kv.value))
         i += 1
     end
+    m.params.items.free()
+    m.params = router.ParamList {}
     callhandler(m.fn, ctx)
     ret true
 end
@@ -635,9 +875,12 @@ func _content_length(head: str, head_len: int): int:
         if line_end < 0 || line_end >= head_len: break end
         colon := str.IndexFrom(head, ":", pos)
         if colon >= 0 && colon < line_end:
-            hk := head.substr(pos, colon - pos)
-            if hk.len() == 14 && hk.lower() == "content-length":
-                v := str.TrimLeft(head.substr(colon + 1, line_end - colon - 1)).to_int()
+            if colon - pos == 14 && _eq_at_fold(head, pos, "content-length"):
+                raw := head.substr(colon + 1, line_end - colon - 1)
+                trimmed := str.TrimLeft(raw)
+                v := trimmed.to_int()
+                mem.Free(trimmed as void *)
+                mem.Free(raw as void *)
                 if v > 0: ret v end
                 ret 0
             end
@@ -645,11 +888,6 @@ func _content_length(head: str, head_len: int): int:
         pos = line_end + 2
     end
     ret 0
-end
-
-func _has_body(method: str): bool:
-    if method == "GET" || method == "HEAD" || method == "OPTIONS": ret false end
-    ret true
 end
 
 // Reads exactly one complete request off `fd`, leaving anything that arrived
@@ -662,32 +900,101 @@ end
 // thrown away. Framing it properly - headers to the blank line, then exactly
 // Content-Length body bytes - is what makes connection reuse safe rather than
 // merely fast.
-func _read_request(fd: i64, scratch: void *, pending &: str): str:
+// Whether the verb occupying s[0..vend) can carry a body.
+func _has_body_at(s: str, vend: int): bool:
+    if vend == 3 && _eq_at(s, 0, "GET"): ret false end
+    if vend == 4 && _eq_at(s, 0, "HEAD"): ret false end
+    if vend == 7 && _eq_at(s, 0, "OPTIONS"): ret false end
+    ret true
+end
+
+// Reads exactly one request off `fd`, leaving anything that arrived behind it
+// in `pending` for the next call. `owned` says whether the returned string is
+// the caller's to free.
+//
+// The fast path - nothing pipelined from the previous request, and the whole
+// request in one recv - hands back the receive buffer itself, NUL-terminated
+// in place. That is the shape of essentially every request a keep-alive
+// connection carries, and it used to cost two allocations and two full copies
+// of the request bytes before a single byte was parsed: one in _str_of to
+// turn the buffer into a string, and another in `buf.concat(chunk)` to append
+// that string to an empty one. Now it costs neither.
+//
+// The buffer is reused by the next read on this connection, which is why the
+// borrow is safe: the request is fully parsed, and every field the context
+// keeps is copied out of it, before this function is called again.
+func _read_request(fd: i64, scratch: void *, pending &: str, owned &: bool): str:
     sock := rawsock.FromFd(fd)
-    mut buf := pending
-    pending = ""
-    mut head_end := str.IndexFrom(buf, "\r\n\r\n", 0)
-    until head_end < 0:
+    owned = false
+    if pending.len() == 0:
         got := rawsock.RecvBytes(sock, scratch, _RD_CHUNK)
         if got <= 0: ret "" end
-        buf = buf.concat(_str_of(scratch, got))
-        head_end = str.IndexFrom(buf, "\r\n\r\n", 0)
+        sp0 := scratch as i8 *
+        sp0[got] = 0 as i8
+        one := scratch as str
+        head_end := str.IndexFrom(one, "\r\n\r\n", 0)
+        if head_end >= 0:
+            head_len := head_end + 4
+            mut need := head_len
+            vend := one.find(" ")
+            if vend > 0 && _has_body_at(one, vend):
+                need = head_len + _content_length(one, head_len)
+            end
+            if need == got: ret one end
+            if need < got:
+                pending = one.substr(need, got - need)
+                owned = true
+                ret one.substr(0, need)
+            end
+        end
+        // Split across packets, or a body still arriving: copy what came in
+        // and let the accumulating path below finish the job.
+        pending = _str_of(scratch, got)
+    end
+    mut buf := pending
+    pending = ""
+    // Where to resume the terminator search. Scanning from 0 after every read
+    // makes assembling a large request quadratic in its size; only the three
+    // bytes straddling the join need re-examining.
+    mut scan := 0
+    mut head_end := str.IndexFrom(buf, "\r\n\r\n", scan)
+    until head_end < 0:
+        got := rawsock.RecvBytes(sock, scratch, _RD_CHUNK)
+        if got <= 0:
+            mem.Free(buf as void *)
+            ret ""
+        end
+        chunk := _str_of(scratch, got)
+        grown := buf.concat(chunk)
+        mem.Free(chunk as void *)
+        scan = buf.len() - 3
+        if scan < 0: scan = 0 end
+        mem.Free(buf as void *)
+        buf = grown
+        head_end = str.IndexFrom(buf, "\r\n\r\n", scan)
     end
     head_len := head_end + 4
     mut need := head_len
-    sp := buf.find(" ")
-    if sp > 0 && _has_body(buf.substr(0, sp)):
+    vend := buf.find(" ")
+    if vend > 0 && _has_body_at(buf, vend):
         need = head_len + _content_length(buf, head_len)
         until buf.len() < need:
             got := rawsock.RecvBytes(sock, scratch, _RD_CHUNK)
             if got <= 0: break end
-            buf = buf.concat(_str_of(scratch, got))
+            chunk := _str_of(scratch, got)
+            grown := buf.concat(chunk)
+            mem.Free(chunk as void *)
+            mem.Free(buf as void *)
+            buf = grown
         end
         if buf.len() < need: need = buf.len() end
     end
+    owned = true
     if need == buf.len(): ret buf end
     pending = buf.substr(need, buf.len() - need)
-    ret buf.substr(0, need)
+    out := buf.substr(0, need)
+    mem.Free(buf as void *)
+    ret out
 end
 
 func _net_send_all(fd: i64, data: str):
@@ -730,6 +1037,7 @@ func _send_file(fd: i64, path: str, ct: str, server_hdr: str, keep: bool): int:
     hdr := str.BufStr(hb)
     str.BufFree(hb)
     _net_send_all(fd, hdr)
+    mem.Free(hdr as void *)
     chunk_cap := 65536 as u64
     buf := mem.Allocate(chunk_cap)
     defer mem.Free(buf)
@@ -789,20 +1097,31 @@ end
 // never to "./src" - the croot-prefix check below would never match it
 // and every subpath would 404. Under root ".", any cleaned path that
 // isn't an escape ("..", "../...") or OS-absolute is contained.
+// The path under `root` that `rel` names, or "" if `rel` escapes it. Always
+// returns a heap string the caller frees, "" included.
 func _safe_static_path(root: str, rel: str): str:
     croot := filepath.Clean(root)
     joined := filepath.Join(croot, rel)
     cleaned := filepath.Clean(joined)
+    mem.Free(joined as void *)
+    mut ok := false
     if croot == ".":
-        if cleaned == ".": ret cleaned end
-        if cleaned == "..": ret "" end
-        if str.StartsWith(cleaned, "../"): ret "" end
-        if filepath.IsAbs(cleaned): ret "" end
-        ret cleaned
+        ok = true
+        if cleaned == "..": ok = false end
+        if str.StartsWith(cleaned, "../"): ok = false end
+        if cleaned != "." && filepath.IsAbs(cleaned): ok = false end
+    else cleaned == croot:
+        ok = true
+    else:
+        // The trailing slash is what stops "/srv/wwwroot" passing as a path
+        // under "/srv/www". It used to be checked with croot.concat("/"),
+        // which allocated a string per request and dropped it.
+        ok = _eq_at(cleaned, 0, croot) && _eq_at(cleaned, croot.len(), "/")
     end
-    if cleaned == croot: ret cleaned end
-    if str.StartsWith(cleaned, croot.concat("/")): ret cleaned end
-    ret ""
+    mem.Free(croot as void *)
+    if ok: ret cleaned end
+    mem.Free(cleaned as void *)
+    ret str.Clone("")
 end
 
 // Renders a simple "Index of <path>" directory listing, like a plain dev
@@ -891,24 +1210,26 @@ end
 // straight to the transport and there is nothing left to send).
 // Serves one request and writes its response. Sets `keep` to whether the
 // connection may be reused afterwards; the caller owns the socket either way.
-func _serve_request(slot: int, fd: i64, req: str, keep &: bool): bool:
+func _serve_request(slot: int, fd: i64, ctx: i64, req: str, keep &: bool): bool:
     if req.len() == 0:
         keep = false
         ret false
     end
-    ctx := salam_ctx_new(fd)
+    salam_ctx_reset(ctx)
     _parse_http(ctx, req)
     keep = _rc(ctx).keep_alive
     r := _srv_routers.get(slot)
-    hide := _srv_hide.get(slot)
-    shdr := _server_header(hide)
+    shdr := _srv_shdr.get(slot)
     mut static_handled := false
     if r.has_static:
         prefix := r.static_prefix
         path := salam_ctx_get(ctx, 1)
-        if path.len() >= prefix.len() && path.substr(0, prefix.len()) == prefix:
-            rel := UrlDecode(path.substr(prefix.len(), path.len() - prefix.len()))
+        if _eq_at(path, 0, prefix):
+            relraw := path.substr(prefix.len(), path.len() - prefix.len())
+            rel := UrlDecode(relraw)
+            mem.Free(relraw as void *)
             target := _safe_static_path(r.static_dir, rel)
+            mem.Free(rel as void *)
             if target.len() > 0:
                 if os.IsDir(target):
                     idx := filepath.Join(target, "index.html")
@@ -920,9 +1241,10 @@ func _serve_request(slot: int, fd: i64, req: str, keep &: bool): bool:
                     else r.static_listing:
                         salam_ctx_set_status(ctx, 200)
                         salam_ctx_set(ctx, 4, "text/html; charset=utf-8")
-                        salam_ctx_set(ctx, 5, _dir_listing_html(path, target))
+                        salam_ctx_set(ctx, 5, _ctx_own(ctx, _dir_listing_html(path, target)))
                         static_handled = true
                     end
+                    mem.Free(idx as void *)
                 else os.Exists(target):
                     if _send_file(fd, target, mime.MimeType(target), shdr, keep) == 1:
                         _ctx_mark_sent(ctx)
@@ -930,6 +1252,7 @@ func _serve_request(slot: int, fd: i64, req: str, keep &: bool): bool:
                     end
                 end
             end
+            mem.Free(target as void *)
         end
     end
     if static_handled == false:
@@ -943,13 +1266,12 @@ func _serve_request(slot: int, fd: i64, req: str, keep &: bool): bool:
     _log_access(slot, salam_ctx_get(ctx, 0), salam_ctx_get(ctx, 1), salam_ctx_get_status(ctx))
     if salam_ctx_is_sent(ctx) == 0:
         mut b := str.NewBuilder()
-        _fill_response(b, ctx, hide, keep)
+        _fill_response(b, ctx, shdr, keep)
         // Straight out of the builder: no BufStr copy, one write for headers
         // and body together.
         tcp.WriteBytes(tcp.ConnFromFd(fd), b.data, b.len as int)
         str.BufFree(b)
     end
-    salam_ctx_free(ctx)
     ret true
 end
 
@@ -973,16 +1295,26 @@ func _web_conn_handler(packed: i64):
     rawsock.SetNoDelay(sock, true)
     rawsock.SetTimeout(sock, _keepalive_idle_ms)
     scratch := mem.Allocate((_RD_CHUNK + 1) as u64)
+    // One context for the whole connection; _serve_request resets it per
+    // request rather than building a new one.
+    ctx := salam_ctx_new(fd)
     mut pending := ""
     mut served := 0
     until 1 == 1:
-        req := _read_request(fd, scratch, pending)
+        mut owned := false
+        req := _read_request(fd, scratch, pending, owned)
         if req.len() == 0: break end
         mut keep := true
-        if _serve_request(slot, fd, req, keep) == false: break end
+        ok := _serve_request(slot, fd, ctx, req, keep)
+        if owned: mem.Free(req as void *) end
+        if ok == false: break end
         served += 1
         if keep == false || served >= _keepalive_max_reqs: break end
     end
+    // Whatever the peer pipelined behind the last request it will never get an
+    // answer to, but the bytes are still this thread's to release.
+    if pending.len() > 0: mem.Free(pending as void *) end
+    salam_ctx_free(ctx)
     mem.Free(scratch)
     _net_close(fd)
 end
@@ -1015,22 +1347,26 @@ func _web_tls_conn_handler(packed: i64):
     end
     req := tls.Read(c, 32768)
     if req.len() == 0:
+        mem.Free(req as void *)
         tls.Close(c)
         ret
     end
     ctx := salam_ctx_new(fd)
     defer salam_ctx_free(ctx)
+    defer mem.Free(req as void *)
     _parse_http(ctx, req)
     r := _srv_routers.get(slot)
-    hide := _srv_hide.get(slot)
-    shdr := _server_header(hide)
+    shdr := _srv_shdr.get(slot)
     mut static_handled := false
     if r.has_static:
         prefix := r.static_prefix
         path := salam_ctx_get(ctx, 1)
-        if path.len() >= prefix.len() && path.substr(0, prefix.len()) == prefix:
-            rel := UrlDecode(path.substr(prefix.len(), path.len() - prefix.len()))
+        if _eq_at(path, 0, prefix):
+            relraw := path.substr(prefix.len(), path.len() - prefix.len())
+            rel := UrlDecode(relraw)
+            mem.Free(relraw as void *)
             target := _safe_static_path(r.static_dir, rel)
+            mem.Free(rel as void *)
             if target.len() > 0:
                 if os.IsDir(target):
                     idx := filepath.Join(target, "index.html")
@@ -1041,15 +1377,17 @@ func _web_tls_conn_handler(packed: i64):
                     else r.static_listing:
                         salam_ctx_set_status(ctx, 200)
                         salam_ctx_set(ctx, 4, "text/html; charset=utf-8")
-                        salam_ctx_set(ctx, 5, _dir_listing_html(path, target))
+                        salam_ctx_set(ctx, 5, _ctx_own(ctx, _dir_listing_html(path, target)))
                         static_handled = true
                     end
+                    mem.Free(idx as void *)
                 else os.Exists(target):
                     _tls_send_file(c, target, mime.MimeType(target), shdr)
                     _ctx_mark_sent(ctx)
                     static_handled = true
                 end
             end
+            mem.Free(target as void *)
         end
     end
     if static_handled == false:
@@ -1062,8 +1400,9 @@ func _web_tls_conn_handler(packed: i64):
     end
     _log_access(slot, salam_ctx_get(ctx, 0), salam_ctx_get(ctx, 1), salam_ctx_get_status(ctx))
     if salam_ctx_is_sent(ctx) == 0:
-        resp := _build_response(ctx, hide)
+        resp := _build_response(ctx, shdr)
         tls.Write(c, resp)
+        mem.Free(resp as void *)
     end
     tls.Close(c)
 end

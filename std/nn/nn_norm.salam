@@ -1,0 +1,184 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package nn
+
+import autograd
+import mem
+import tensor
+
+// Layer normalization over the last axis, with learned scale and
+// shift. gamma starts at one and beta at zero, so a fresh layer is a
+// plain normalization.
+
+@en "LayerNorm"
+@fa "نرمال‌سازی لایه"
+@ar "تسوية الطبقة"
+pub struct LayerNorm:
+    pub gamma: int = 0 - 1
+    pub beta: int = 0 - 1
+    pub eps: f64 = 0.00001
+
+    @en "forward"
+    @fa "پیشرو"
+    @ar "أمامي"
+    pub func forward(tp &: autograd.Tape, ps &: ParamStore, x: int): int:
+        g := Bind(tp, ps, this.gamma)
+        b := Bind(tp, ps, this.beta)
+        ret autograd.LayerNorm(tp, x, g, b, this.eps)
+    end
+end
+
+// Batch normalization over channels (axis 1) of [N, C] or [N, C, H, W]
+// values, with running statistics for inference.
+@en "BatchNorm"
+@fa "نرمال‌سازی دسته"
+@ar "تسوية الدفعة"
+pub struct BatchNorm:
+    pub gamma: int = 0 - 1
+    pub beta: int = 0 - 1
+    pub running_mean: tensor.Tensor = tensor.Tensor {}
+    pub running_var: tensor.Tensor = tensor.Tensor {}
+    pub momentum: f64 = 0.1
+    pub eps: f64 = 0.00001
+
+    @en "forward"
+    @fa "پیشرو"
+    @ar "أمامي"
+    pub func forward(tp &: autograd.Tape, ps &: ParamStore, x: int): int:
+        g := Bind(tp, ps, this.gamma)
+        b := Bind(tp, ps, this.beta)
+        ret autograd.BatchNorm(tp, x, g, b, this.running_mean, this.running_var, this.momentum, this.eps)
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free():
+        this.running_mean.free()
+        this.running_var.free()
+    end
+end
+
+// Group normalization: channels cut into `groups` blocks, each block of
+// each sample normalized on its own. Independent of the batch size,
+// which is what makes it the norm for small-batch vision work.
+@en "GroupNorm"
+@fa "نرمال‌سازی گروهی"
+@ar "تسوية المجموعة"
+pub struct GroupNorm:
+    pub gamma: int = 0 - 1
+    pub beta: int = 0 - 1
+    pub groups: int = 1
+    pub eps: f64 = 0.00001
+
+    @en "forward"
+    @fa "پیشرو"
+    @ar "أمامي"
+    pub func forward(tp &: autograd.Tape, ps &: ParamStore, x: int): int:
+        g := Bind(tp, ps, this.gamma)
+        b := Bind(tp, ps, this.beta)
+        ret autograd.GroupNorm(tp, x, g, b, this.groups, this.eps)
+    end
+end
+
+// RMS normalization with a learned scale, the transformer variant
+// without a shift.
+@en "RMSNorm"
+@fa "نرمال‌سازی جذر میانگین مربعات"
+@ar "تسوية جذر متوسط المربعات"
+pub struct RMSNorm:
+    pub gamma: int = 0 - 1
+    pub eps: f64 = 0.00001
+
+    @en "forward"
+    @fa "پیشرو"
+    @ar "أمامي"
+    pub func forward(tp &: autograd.Tape, ps &: ParamStore, x: int): int:
+        g := Bind(tp, ps, this.gamma)
+        ret autograd.RMSNorm(tp, x, g, this.eps)
+    end
+end
+
+// ---- public API ----
+
+@en "NewLayerNorm"
+@fa "نرمال‌سازی لایه نو"
+@ar "تسوية طبقة جديدة"
+pub func NewLayerNorm(ps &: ParamStore, name: str, dim: int): LayerNorm:
+    mut l := LayerNorm {}
+    mut g := tensor.Zeros1(dim)
+    tensor.SetAll(g, 1.0)
+    _pn1 := name + ".gamma"
+    l.gamma = ps.add(_pn1, g)
+    mem.Free(_pn1 as void*)
+    b := tensor.Zeros1(dim)
+    _pn2 := name + ".beta"
+    l.beta = ps.add(_pn2, b)
+    mem.Free(_pn2 as void*)
+    ret l
+end
+
+// The running statistics are owned by the layer: free() releases them.
+@en "NewBatchNorm"
+@fa "نرمال‌سازی دسته نو"
+@ar "تسوية دفعة جديدة"
+pub func NewBatchNorm(ps &: ParamStore, name: str, channels: int): BatchNorm:
+    mut l := BatchNorm {}
+    mut g := tensor.Zeros1(channels)
+    tensor.SetAll(g, 1.0)
+    _pn3 := name + ".gamma"
+    l.gamma = ps.add(_pn3, g)
+    mem.Free(_pn3 as void*)
+    b := tensor.Zeros1(channels)
+    _pn4 := name + ".beta"
+    l.beta = ps.add(_pn4, b)
+    mem.Free(_pn4 as void*)
+    l.running_mean = tensor.Zeros1(channels)
+    mut v := tensor.Zeros1(channels)
+    tensor.SetAll(v, 1.0)
+    l.running_var = v
+    ret l
+end
+
+@en "NewGroupNorm"
+@fa "نرمال‌سازی گروهی نو"
+@ar "تسوية مجموعة جديدة"
+pub func NewGroupNorm(ps &: ParamStore, name: str, channels: int, groups: int): GroupNorm:
+    mut l := GroupNorm {}
+    l.groups = groups
+    mut g := tensor.Zeros1(channels)
+    tensor.SetAll(g, 1.0)
+    _pn5 := name + ".gamma"
+    l.gamma = ps.add(_pn5, g)
+    mem.Free(_pn5 as void*)
+    b := tensor.Zeros1(channels)
+    _pn6 := name + ".beta"
+    l.beta = ps.add(_pn6, b)
+    mem.Free(_pn6 as void*)
+    ret l
+end
+
+@en "NewRMSNorm"
+@fa "نرمال‌سازی جذر میانگین مربعات نو"
+@ar "تسوية جذر متوسط المربعات جديدة"
+pub func NewRMSNorm(ps &: ParamStore, name: str, dim: int): RMSNorm:
+    mut l := RMSNorm {}
+    mut g := tensor.Zeros1(dim)
+    tensor.SetAll(g, 1.0)
+    _pn7 := name + ".gamma"
+    l.gamma = ps.add(_pn7, g)
+    mem.Free(_pn7 as void*)
+    ret l
+end

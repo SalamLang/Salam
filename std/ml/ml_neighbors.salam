@@ -1,0 +1,207 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ml
+
+import matrix
+import sort
+
+// k-nearest neighbors. fit() copies the training set; a query finds
+// the k closest rows by squared Euclidean distance either by brute
+// force (every row, O(n log n) per query) or through a k-d tree built
+// at fit time (algorithm = KNN_KDTREE, ml_kdtree), which wins once n is
+// large and the dimension is modest. Queries are independent, so
+// `workers` splits the query rows across a pool; results are identical
+// at any worker count.
+//
+// Classification votes (optionally by inverse distance) with ties going
+// to the lower class index; regression averages the neighbors' targets.
+
+@en "KNNClassifier"
+@fa "دسته‌بند نزدیک‌ترین همسایه"
+@ar "مصنف أقرب الجيران"
+pub struct KNNClassifier:
+    pub k: int = 5
+    pub weighted: bool = false
+    pub algorithm: int = KNN_BRUTE
+    pub leaf_size: int = 16
+    // 0 or 1: serial; -1: every core; n: that many workers.
+    pub workers: int = 0
+    pub xtrain: matrix.Matrix = matrix.Matrix {}
+    pub ytrain: matrix.Matrix = matrix.Matrix {}
+    pub tree: KDTree = KDTree {}
+    pub n_classes: int = 0
+    pub ok: bool = false
+
+    @en "fit"
+    @fa "برازش"
+    @ar "ملاءمة"
+    pub func fit(x &: matrix.Matrix, y &: matrix.Matrix): bool:
+        this.ok = false
+        if x.is_empty() || y.rows != x.rows || y.cols != 1 || this.k < 1: ret false end
+        matrix.Free(this.xtrain)
+        matrix.Free(this.ytrain)
+        this.xtrain = matrix.Clone(x)
+        this.ytrain = matrix.Clone(y)
+        this.n_classes = CountClasses(y)
+        this.tree.free()
+        if this.algorithm == KNN_KDTREE:
+            this.tree.leaf_size = this.leaf_size
+            if !this.tree.build(x): ret false end
+        end
+        this.ok = this.n_classes > 0
+        ret this.ok
+    end
+
+    @en "predict_proba"
+    @fa "پیش‌بینی احتمال"
+    @ar "تنبؤ بالاحتمال"
+    pub func predict_proba(x &: matrix.Matrix): matrix.Matrix:
+        if this.ok == false || x.cols != this.xtrain.cols: ret matrix.Matrix {} end
+        mut out := matrix.Zeros(x.rows, this.n_classes)
+        _knn_run(x, this.xtrain, this.ytrain, this.tree, out, this.k, this.weighted, this.n_classes, this.algorithm, this.workers)
+        ret out
+    end
+
+    @en "predict"
+    @fa "پیش‌بینی"
+    @ar "تنبؤ"
+    pub func predict(x &: matrix.Matrix): matrix.Matrix:
+        mut probs := this.predict_proba(x)
+        if probs.is_empty(): ret probs end
+        mut out := matrix.Zeros(x.rows, 1)
+        repeat x.rows with i:
+            mut best := 0
+            repeat this.n_classes with c:
+                if probs.at(i, c) > probs.at(i, best): best = c end
+            end
+            out.set(i, 0, best as f64)
+        end
+        matrix.Free(probs)
+        ret out
+    end
+
+    @en "score"
+    @fa "امتیاز"
+    @ar "درجة"
+    pub func score(x &: matrix.Matrix, y &: matrix.Matrix): f64:
+        mut p := this.predict(x)
+        if p.is_empty(): ret 0.0 end
+        r := Accuracy(y, p)
+        matrix.Free(p)
+        ret r
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free():
+        matrix.Free(this.xtrain)
+        matrix.Free(this.ytrain)
+        this.tree.free()
+    end
+end
+
+@en "KNNRegressor"
+@fa "رگرسور نزدیک‌ترین همسایه"
+@ar "منحدر أقرب الجيران"
+pub struct KNNRegressor:
+    pub k: int = 5
+    pub weighted: bool = false
+    pub algorithm: int = KNN_BRUTE
+    pub leaf_size: int = 16
+    pub workers: int = 0
+    pub xtrain: matrix.Matrix = matrix.Matrix {}
+    pub ytrain: matrix.Matrix = matrix.Matrix {}
+    pub tree: KDTree = KDTree {}
+    pub ok: bool = false
+
+    @en "fit"
+    @fa "برازش"
+    @ar "ملاءمة"
+    pub func fit(x &: matrix.Matrix, y &: matrix.Matrix): bool:
+        this.ok = false
+        if x.is_empty() || y.rows != x.rows || y.cols != 1 || this.k < 1: ret false end
+        matrix.Free(this.xtrain)
+        matrix.Free(this.ytrain)
+        this.xtrain = matrix.Clone(x)
+        this.ytrain = matrix.Clone(y)
+        this.tree.free()
+        if this.algorithm == KNN_KDTREE:
+            this.tree.leaf_size = this.leaf_size
+            if !this.tree.build(x): ret false end
+        end
+        this.ok = true
+        ret true
+    end
+
+    @en "predict"
+    @fa "پیش‌بینی"
+    @ar "تنبؤ"
+    pub func predict(x &: matrix.Matrix): matrix.Matrix:
+        if this.ok == false || x.cols != this.xtrain.cols: ret matrix.Matrix {} end
+        mut out := matrix.Zeros(x.rows, 1)
+        _knn_run(x, this.xtrain, this.ytrain, this.tree, out, this.k, this.weighted, 0, this.algorithm, this.workers)
+        ret out
+    end
+
+    @en "score"
+    @fa "امتیاز"
+    @ar "درجة"
+    pub func score(x &: matrix.Matrix, y &: matrix.Matrix): f64:
+        mut p := this.predict(x)
+        if p.is_empty(): ret 0.0 end
+        r := R2Score(y, p)
+        matrix.Free(p)
+        ret r
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free():
+        matrix.Free(this.xtrain)
+        matrix.Free(this.ytrain)
+        this.tree.free()
+    end
+end
+
+// Indices of the k nearest training rows to query row `qi`.
+func _nearest(xtrain &: matrix.Matrix, x &: matrix.Matrix, qi: int, k: int, dist_out &: Vector<f64>): Vector<int>:
+    n := xtrain.rows
+    p := xtrain.cols
+    mut d := Vector {} as Vector<f64>
+    repeat n with i:
+        mut s := 0.0
+        repeat p with j:
+            t := x.at(qi, j) - xtrain.at(i, j)
+            s += t * t
+        end
+        d.push(s)
+    end
+    mut idx := Vector {} as Vector<int>
+    repeat n with i: idx.push(i) end
+    sort.SortIndex(idx, d)
+    mut out := Vector {} as Vector<int>
+    dist_out.clear()
+    mut kk := k
+    if kk > n: kk = n end
+    repeat kk with i:
+        out.push(idx.get(i))
+        dist_out.push(d.get(idx.get(i)))
+    end
+    d.free()
+    idx.free()
+    ret out
+end

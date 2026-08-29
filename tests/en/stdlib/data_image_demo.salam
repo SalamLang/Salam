@@ -1,0 +1,107 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/data: an image folder written by std/image comes back as an NCHW
+// tensor with sorted class indices.
+
+import archive
+import data
+import filepath
+import image
+import os
+import tensor
+import testing
+
+// A w x h image filled with one color, saved as PNG.
+func write_png(path: str, w: int, h: int, r: int, g: int, b: int):
+    mut c := image.Color {}
+    c.r = r as u8
+    c.g = g as u8
+    c.b = b as u8
+    mut img := image.NewFilled(w, h, c)
+    image.Save(img, path)
+    image.Free(img)
+end
+
+func main:
+    eps := 0.000001
+    root := filepath.Join(os.TempDir(), "salam_data_image_test")
+    dogs := filepath.Join(root, "dog")
+    cats := filepath.Join(root, "cat")
+    archive.EnsureDir(root)
+    archive.EnsureDir(dogs)
+    archive.EnsureDir(cats)
+    // Two red dogs of different sizes, one blue cat, one junk file
+    write_png(filepath.Join(dogs, "b.png"), 8, 6, 255, 0, 0)
+    write_png(filepath.Join(dogs, "a.png"), 3, 5, 255, 0, 0)
+    write_png(filepath.Join(cats, "only.png"), 4, 4, 0, 0, 255)
+    archive.WriteBinaryFile(filepath.Join(cats, "notes.txt"), "hello" as void*, 5)
+
+    mut x := tensor.Empty()
+    mut labels := Vector {} as Vector<int>
+    mut classes := Vector {} as Vector<str>
+    testing.AssertTrue(data.LoadImageFolder(root, 4, 4, false, x, labels, classes))
+    // Classes sorted by name: cat = 0, dog = 1
+    testing.AssertEqInt(classes.len(), 2)
+    testing.AssertEqStr(classes.get(0), "cat")
+    testing.AssertEqStr(classes.get(1), "dog")
+    // Three decodable images, resized to 4x4 RGB
+    testing.AssertEqInt(x.rank(), 4)
+    testing.AssertEqInt(x.dim(0), 3)
+    testing.AssertEqInt(x.dim(1), 3)
+    testing.AssertEqInt(x.dim(2), 4)
+    testing.AssertEqInt(x.dim(3), 4)
+    testing.AssertEqInt(labels.len(), 3)
+    testing.AssertEqInt(labels.get(0), 0)
+    testing.AssertEqInt(labels.get(1), 1)
+    testing.AssertEqInt(labels.get(2), 1)
+    // The cat is blue: channel 2 is one, channel 0 is zero
+    testing.AssertEqFloat(x.at(0 * 48 + 2 * 16 + 5), 1.0, eps)
+    testing.AssertEqFloat(x.at(0 * 48 + 0 * 16 + 5), 0.0, eps)
+    // The dogs are red
+    testing.AssertEqFloat(x.at(1 * 48 + 0 * 16 + 0), 1.0, eps)
+    testing.AssertEqFloat(x.at(2 * 48 + 1 * 16 + 3), 0.0, eps)
+
+    // Grayscale packs one channel of luminance
+    mut g := tensor.Empty()
+    mut glabels := Vector {} as Vector<int>
+    mut gclasses := Vector {} as Vector<str>
+    testing.AssertTrue(data.LoadImageFolder(root, 2, 2, true, g, glabels, gclasses))
+    testing.AssertEqInt(g.dim(1), 1)
+    testing.AssertEqInt(g.numel(), 3 * 4)
+    testing.AssertEqFloat(g.at(0), 0.114, 0.001)   // blue luminance
+    testing.AssertEqFloat(g.at(4), 0.299, 0.001)   // red luminance
+
+    // A missing root, or one without images, fails
+    mut e := tensor.Empty()
+    mut el := Vector {} as Vector<int>
+    mut ec := Vector {} as Vector<str>
+    testing.AssertFalse(data.LoadImageFolder(filepath.Join(root, "nope"), 4, 4, false, e, el, ec))
+    empty := filepath.Join(os.TempDir(), "salam_data_image_empty")
+    archive.EnsureDir(empty)
+    testing.AssertFalse(data.LoadImageFolder(empty, 4, 4, false, e, el, ec))
+
+    tensor.Free(x)
+    tensor.Free(g)
+    labels.free()
+    classes.free()
+    glabels.free()
+    gclasses.free()
+    el.free()
+    ec.free()
+
+    ret testing.Summary()
+end

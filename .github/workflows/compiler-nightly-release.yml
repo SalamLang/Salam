@@ -3,7 +3,6 @@ name: 🌙 Compiler - Nightly Release Check
 # checkov:skip=CKV_GHA_7:inputs are only ever read via env: indirection, never interpolated into a run: script
 on:
   schedule:
-    # 08:00 Asia/Tehran (UTC+3:30, no DST) == 04:30 UTC
     - cron: '30 4 * * *'
   workflow_dispatch:
     inputs:
@@ -28,15 +27,6 @@ jobs:
           ref: main
           fetch-depth: 0
           persist-credentials: false
-      # Decided against main's HEAD, not against a fixed time window. A
-      # 24-hour window was wrong in both directions: GitHub's scheduler
-      # routinely drifts the run by an hour or two, so commits landing in the
-      # gap between a late run and the next early one were never seen; and a
-      # day with no commits skipped the nightly even when the previous
-      # night's release had *failed* to publish, so one red build meant no
-      # nightly until someone pushed again. Comparing against the commit the
-      # last nightly was actually built from retries by itself until a
-      # nightly for the current main exists.
       - name: Decide whether a nightly is needed
         id: check
         env:
@@ -47,9 +37,6 @@ jobs:
           head="$(git rev-parse HEAD)"
           echo "main HEAD: $head"
 
-          # Every nightly is published with `--target "$GITHUB_SHA"`, so a
-          # nightly release's target_commitish is the exact commit it was
-          # built from. Releases come back newest-first.
           last="$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=30" \
             --jq 'map(select(.prerelease and (.tag_name | test("nightly")))) | .[0].target_commitish // ""' 2>/dev/null || true)"
           echo "last nightly built from: ${last:-<none>}"
@@ -65,9 +52,6 @@ jobs:
             echo "needed=0" >> "$GITHUB_OUTPUT"
           else
             echo "main has moved since the last nightly:"
-            # The sha is unknown locally if the last nightly was built from a
-            # commit that has since been force-pushed away; that is still a
-            # reason to build, so never let the log lookup fail the step.
             git log --oneline "$last..HEAD" 2>/dev/null | head -20 || true
             echo "needed=1" >> "$GITHUB_OUTPUT"
           fi
@@ -83,10 +67,6 @@ jobs:
             --ref main \
             -f nightly=true \
             -f nightly_date="${NIGHTLY_DATE}"
-          # `gh workflow run` prints nothing useful, so leave a link behind:
-          # without it the dispatched run - the one that can actually fail -
-          # is unreachable from this run's log. The dispatch is async, so
-          # give the run a moment to appear before asking for it.
           sleep 10
           url="$(gh run list --workflow=compiler-release.yml --event=workflow_dispatch \
             --branch=main --limit 1 --json url --jq '.[0].url' 2>/dev/null || true)"

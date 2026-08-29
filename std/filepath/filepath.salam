@@ -85,37 +85,57 @@ end
 @en "Join"
 @fa "پیوند"
 @ar "دمج"
+// Returns a heap string the CALLER owns and must free.
 pub func Join(a: str, b: str): str:
     if a.len() == 0: ret Normalize(b) end
     if b.len() == 0: ret Normalize(a) end
     x := Normalize(a)
     y := Normalize(b)
-    if str.EndsWith(x, "/"):
-        if str.StartsWith(y, "/"):
-            ret x.concat(y.substr(1, y.len() - 1))
-        end
-        ret x.concat(y)
+    mut out := ""
+    if str.EndsWith(x, "/") && str.StartsWith(y, "/"):
+        tail := y.substr(1, y.len() - 1)
+        out = x.concat(tail)
+        mem.Free(tail as void*)
+    else str.EndsWith(x, "/") || str.StartsWith(y, "/"):
+        out = x.concat(y)
+    else:
+        // One concat, not two: `x.concat("/").concat(y)` throws away the
+        // intermediate that holds x + "/".
+        mut sb := str.NewBuilder()
+        str.BufAppend(sb, x)
+        str.BufAppend(sb, "/")
+        str.BufAppend(sb, y)
+        out = str.BufStr(sb)
+        str.BufFree(sb)
     end
-    if str.StartsWith(y, "/"):
-        ret x.concat(y)
-    end
-    ret x.concat("/").concat(y)
+    mem.Free(x as void*)
+    mem.Free(y as void*)
+    ret out
 end
 
 @en "Base"
 @fa "نام پایه"
 @ar "الاسم الأساسی"
+// Returns a heap string the CALLER owns and must free, in every branch.
 pub func Base(p: str): str:
     mut q := Normalize(p)
     until q.len() > 1 && str.EndsWith(q, "/"):
-        q = q.substr(0, q.len() - 1)
+        shorter := q.substr(0, q.len() - 1)
+        mem.Free(q as void*)
+        q = shorter
     end
-    if q == "/": ret "/"
-    else q.len() == 0: ret "."
+    if q == "/":
+        mem.Free(q as void*)
+        ret str.Clone("/")
+    else q.len() == 0:
+        mem.Free(q as void*)
+        ret str.Clone(".")
     end
     idx := str.LastIndex(q, "/")
     if idx < 0: ret q end
-    ret q.substr(idx + 1, q.len() - idx - 1)
+    out := q.substr(idx + 1, q.len() - idx - 1)
+    mem.Free(q as void*)
+    ret out
 end
 
 @en "Dir"
@@ -135,11 +155,17 @@ end
 @en "Ext"
 @fa "پسوند"
 @ar "امتداد"
+// Returns a heap string the CALLER owns and must free, "" included.
 pub func Ext(p: str): str:
     b := Base(p)
     idx := str.LastIndex(b, ".")
-    if idx <= 0: ret "" end
-    ret b.substr(idx, b.len() - idx)
+    if idx <= 0:
+        mem.Free(b as void*)
+        ret str.Clone("")
+    end
+    out := b.substr(idx, b.len() - idx)
+    mem.Free(b as void*)
+    ret out
 end
 
 @en "Stem"
@@ -155,12 +181,21 @@ end
 @en "Clean"
 @fa "پاک سازی"
 @ar "تنظیف"
+// Returns a heap string the CALLER owns and must free, in every branch.
+//
+// `parts.free()` releases the vector's backing array and nothing else: split
+// heap-allocates each piece, and dropping the vector abandoned every one of
+// them. On net/http's static-file route that was a dozen small strings per
+// request, which is what made serving a stylesheet leak more than serving a
+// JSON body.
 pub func Clean(p: str): str:
     q := Normalize(p)
-    if q.len() == 0: ret "." end
+    if q.len() == 0:
+        mem.Free(q as void*)
+        ret str.Clone(".")
+    end
     abs := str.StartsWith(q, "/")
     parts := q.split("/")
-    defer parts.free()
     kept := Vector {} as Vector<str> defer kept.free()
     repeat parts.len() with i:
         seg := parts.get(i)
@@ -178,9 +213,23 @@ pub func Clean(p: str): str:
             end
         end
     end
+    // Join copies what it needs, so the pieces can go once it has run. `kept`
+    // only ever holds pointers that came out of `parts`.
     out := str.Join(kept, "/")
-    if abs: ret "/".concat(out) end
-    if out.len() == 0: ret "." end
+    repeat parts.len() with i:
+        mem.Free(parts.get(i) as void*)
+    end
+    parts.free()
+    mem.Free(q as void*)
+    if abs:
+        rooted := "/".concat(out)
+        mem.Free(out as void*)
+        ret rooted
+    end
+    if out.len() == 0:
+        mem.Free(out as void*)
+        ret str.Clone(".")
+    end
     ret out
 end
 

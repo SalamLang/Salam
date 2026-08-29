@@ -1,0 +1,164 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "optim"
+@fa "بهینه‌سازی"
+@ar "تحسين"
+package optim
+
+import math
+import nn
+import tensor
+
+// Optimizers over an nn.ParamStore. Each is a struct whose
+// hyperparameters are public f64 fields with the customary defaults, so
+// construction is a struct literal and a schedule is one assignment to
+// .lr per step. Per-parameter state (momentum and moment buffers) is
+// allocated lazily on the first step and indexed in registry order;
+// free() releases it. The parameter registry itself is never owned
+// here.
+//
+// The update loops run on raw payload pointers with every
+// hyperparameter hoisted to an f32 local - a parameter tensor can be
+// megabytes, and this is the third pass over it per step after forward
+// and backward.
+//
+// The workflow every optimizer assumes: gradients ACCUMULATE across
+// backward calls (that is autograd's contract), so a step is
+// ps.zero_grad() ... Backward ... opt.step(ps).
+
+@en "SGD"
+@fa "گرادیان کاهشی تصادفی"
+@ar "انحدار تدرجي عشوائي"
+pub struct SGD:
+    pub lr: f64 = 0.01
+    pub momentum: f64 = 0.0
+    pub weight_decay: f64 = 0.0
+    pub nesterov: bool = false
+    vel: Vector<tensor.Tensor> = Vector {}
+
+    @en "step"
+    @fa "گام"
+    @ar "خطوة"
+    pub func step(ps &: nn.ParamStore):
+        if this.momentum != 0.0: _ensure_state(this.vel, ps) end
+        lr := this.lr as f32
+        wd := this.weight_decay as f32
+        mom := this.momentum as f32
+        zero := 0.0 as f32
+        repeat ps.count() with i:
+            mut p := ps.items.get(i)
+            n := p.value.numel()
+            pw := p.value.data.data
+            pg := p.grad.data.data
+            if mom == zero:
+                if wd == zero:
+                    repeat n with k: pw[k] = pw[k] - lr * pg[k] end
+                else:
+                    repeat n with k: pw[k] = pw[k] - lr * (pg[k] + wd * pw[k]) end
+                end
+            else:
+                v := this.vel.get(i)
+                pv := v.data.data
+                if this.nesterov:
+                    repeat n with k:
+                        g := pg[k] + wd * pw[k]
+                        nv := mom * pv[k] + g
+                        pv[k] = nv
+                        pw[k] = pw[k] - lr * (g + mom * nv)
+                    end
+                else:
+                    repeat n with k:
+                        g := pg[k] + wd * pw[k]
+                        nv := mom * pv[k] + g
+                        pv[k] = nv
+                        pw[k] = pw[k] - lr * nv
+                    end
+                end
+            end
+        end
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free(): _free_state(this.vel) end
+end
+
+// Grows `state` with zero tensors until every parameter has one.
+func _ensure_state(state &: Vector<tensor.Tensor>, ps &: nn.ParamStore):
+    until state.len() < ps.count():
+        mut p := ps.items.get(state.len())
+        state.push(tensor.Zeros(p.value.shape))
+    end
+end
+
+func _free_state(state &: Vector<tensor.Tensor>):
+    repeat state.len() with i:
+        mut t := state.get(i)
+        t.free()
+    end
+    state.free()
+end
+
+// ---- public API ----
+
+// Scales every gradient so their global L2 norm is at most max_norm,
+// returning the norm found. The norm accumulates in f64: a million f32
+// squares summed in f32 is where clipping starts lying.
+@en "ClipGradNorm"
+@fa "برش نُرم گرادیان"
+@ar "قص معيار التدرج"
+pub func ClipGradNorm(ps &: nn.ParamStore, max_norm: f64): f64:
+    mut total := 0.0
+    repeat ps.count() with i:
+        mut p := ps.items.get(i)
+        n := p.grad.numel()
+        pg := p.grad.data.data
+        repeat n with k:
+            v := pg[k] as f64
+            total += v * v
+        end
+    end
+    norm := math.Sqrt(total)
+    if norm > max_norm && norm > 0.0:
+        scale := (max_norm / norm) as f32
+        repeat ps.count() with i:
+            mut p := ps.items.get(i)
+            n := p.grad.numel()
+            pg := p.grad.data.data
+            repeat n with k: pg[k] = pg[k] * scale end
+        end
+    end
+    ret norm
+end
+
+@en "ClipGradValue"
+@fa "برش مقدار گرادیان"
+@ar "قص قيمة التدرج"
+pub func ClipGradValue(ps &: nn.ParamStore, limit: f64):
+    hi := limit as f32
+    lo := (0.0 - limit) as f32
+    repeat ps.count() with i:
+        mut p := ps.items.get(i)
+        n := p.grad.numel()
+        pg := p.grad.data.data
+        repeat n with k:
+            mut v := pg[k]
+            if v > hi: v = hi end
+            if v < lo: v = lo end
+            pg[k] = v
+        end
+    end
+end

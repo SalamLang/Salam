@@ -1,0 +1,100 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/ml: histogram gradient boosting on binned features - binary and
+// multi-class classification, regression, and a constant feature that
+// gets no bins.
+
+import data
+import math
+import matrix
+import ml
+import testing
+
+func main:
+    // Binary classification on moons
+    mut my := matrix.Matrix {}
+    mut mx := data.MakeMoons(400, 0.2, 81, my)
+    mut sp := ml.TrainTestSplit(mx, my, 0.25, 82)
+    mut hb := ml.HistGradientBoosting { n_estimators = 60, learning_rate = 0.2, max_depth = 4, min_samples_leaf = 5 }
+    testing.AssertTrue(hb.fit(sp.x_train, sp.y_train))
+    testing.AssertTrue(hb.ok)
+    testing.AssertEqInt(hb.n_classes, 2)
+    testing.AssertEqInt(hb.trees.len(), 120)
+    testing.AssertTrue(hb.score(sp.x_train, sp.y_train) >= 0.95)
+    testing.AssertTrue(hb.score(sp.x_test, sp.y_test) >= 0.85)
+    mut pr := hb.predict_proba(sp.x_test)
+    testing.AssertEqInt(pr.cols, 2)
+    testing.AssertEqFloat(pr.at(3, 0) + pr.at(3, 1), 1.0, 0.000001)
+    // edges per feature stay under max_bins
+    testing.AssertEqInt(hb.edges_start.len(), 3)
+    testing.AssertTrue(hb.edges_start.get(1) - hb.edges_start.get(0) < 255)
+    testing.AssertTrue(hb.edges_start.get(1) - hb.edges_start.get(0) > 10)
+
+    // Multi-class on three blobs, coarse bins
+    mut bly := matrix.Matrix {}
+    mut blx := data.MakeBlobs(240, 3, 2, 1.5, 83, bly)
+    mut hb3 := ml.HistGradientBoosting { n_estimators = 30, learning_rate = 0.3, max_depth = 3, max_bins = 16, min_samples_leaf = 5 }
+    testing.AssertTrue(hb3.fit(blx, bly))
+    testing.AssertEqInt(hb3.n_classes, 3)
+    testing.AssertEqInt(hb3.trees.len(), 90)
+    testing.AssertTrue(hb3.score(blx, bly) >= 0.9)
+    mut d := hb3.decision(blx)
+    testing.AssertEqInt(d.cols, 3)
+
+    // Regression on a smooth curve, with a constant second feature
+    mut xr := matrix.Zeros(200, 2)
+    mut yr := matrix.Zeros(200, 1)
+    repeat 200 with i:
+        v := (i as f64) * 0.03
+        xr.set(i, 0, v)
+        xr.set(i, 1, 7.0)
+        yr.set(i, 0, math.Sin(v) + 0.2 * v)
+    end
+    mut hr := ml.HistGradientBoosting { n_estimators = 80, learning_rate = 0.2, max_depth = 3, min_samples_leaf = 3, regression = true }
+    testing.AssertTrue(hr.fit(xr, yr))
+    testing.AssertEqInt(hr.n_classes, 1)
+    testing.AssertEqInt(hr.edges_start.get(2) - hr.edges_start.get(1), 0)   // no edges for a constant
+    testing.AssertTrue(hr.score(xr, yr) > 0.98)
+    mut q := matrix.Zeros(1, 2)
+    q.set(0, 0, 2.0)
+    q.set(0, 1, 7.0)
+    mut pq := hr.predict(q)
+    testing.AssertTrue(math.Abs(pq.at(0, 0) - (math.Sin(2.0) + 0.4)) < 0.15)
+
+    // Unfitted and mismatched inputs
+    mut empty := ml.HistGradientBoosting {}
+    mut none := empty.predict(q)
+    testing.AssertTrue(none.is_empty())
+    testing.AssertTrue(!empty.fit(q, yr))
+
+    pr.free()
+    d.free()
+    q.free()
+    pq.free()
+    hb.free()
+    hb3.free()
+    hr.free()
+    empty.free()
+    sp.free()
+    mx.free()
+    my.free()
+    blx.free()
+    bly.free()
+    xr.free()
+    yr.free()
+    ret testing.Summary()
+end

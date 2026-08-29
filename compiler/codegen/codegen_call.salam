@@ -90,15 +90,27 @@ func call_emit_arg(
     if cg_addressable(s, a, argid):
         ref_c = "&(" + cg_expr(g, s, a, argid) + ")"
     else:
-        // argid isn't a real C lvalue (e.g. a member of a
-        // byval-struct-returning call's result) - bind it to a
-        // genuine local temp first, same fallback cg_method already
-        // uses below, so `&` has an actual lvalue to operate on.
+        // argid isn't a real C lvalue (e.g. a call result, or a member of
+        // a byval-struct-returning call's result) - bind it to a genuine
+        // local temp first, so `&` has an actual lvalue to operate on.
+        //
+        // The temp is declared at FUNCTION scope (g.hoist, spliced in by
+        // cg_hoist_end) and only assigned here. Declaring it inside a
+        // statement expression, `({ T __r = (e); &__r; })`, hands out the
+        // address of an object whose lifetime ends at that expression's
+        // closing brace: the callee then reads a dead stack slot, which
+        // -O0 leaves intact and -O2 reuses - `Clone(Grad(tp, v))` came
+        // back empty in a long function and correct in a short one.
         g.tmpn += 1
         rt := g.tmpn
         argc := cg_expr(g, s, a, argid)
         argts := at.Get(a, argid).type_str
-        ref_c = "({ " + cg_ctype(argts) + " __r" + rt + " = (" + argc + "); &__r" + rt + "; })"
+        if g.hoist_active:
+            g.hoist = g.hoist + "    " + cg_ctype(argts) + " __r" + rt + ";\n"
+            ref_c = "(__r" + rt + " = (" + argc + "), &__r" + rt + ")"
+        else:
+            ref_c = "({ " + cg_ctype(argts) + " __r" + rt + " = (" + argc + "); &__r" + rt + "; })"
+        end
     end
     if i < sv.params.len():
         co.SbPuts(
@@ -650,14 +662,14 @@ func call_pkg(
     ret mangled + "(" + args + ")"
 end
 
-// The declared return type of `method` on the interface behind a "dyn
-// Iface" (or "dyn Iface*", or the qualified "dyn pkg.Iface") receiver type
-// string. sm.TYPE_NONE when anything along the way does not resolve, which
-// the caller reads as "not an aggregate" and falls back to the plain call
+// The signature of `method` on the interface behind a "dyn Iface" (or
+// "dyn Iface*", or the qualified "dyn pkg.Iface") receiver type string.
+// 0 when anything along the way does not resolve, which the caller reads
+// as "not an aggregate, no `&:` params" and falls back to the plain call
 // shape.
-func dyn_method_ret(s &: sm.Sema, objts: str, method: str): int:
+func dyn_method_sig(s &: sm.Sema, objts: str, method: str): int:
     if !str.StartsWith(objts, "dyn "):
-        ret sm.TYPE_NONE
+        ret 0
     end
     mut name := str.Substr(objts, 4, str.Len(objts) - 4)
     until str.Len(name) > 0 && str.EndsWith(name, "*"):
@@ -665,13 +677,13 @@ func dyn_method_ret(s &: sm.Sema, objts: str, method: str): int:
     end
     isym := cg_iface_sym(s, name)
     if isym == 0 || sm.SymAt(s, isym).members == 0:
-        ret sm.TYPE_NONE
+        ret 0
     end
     ms := sm.LookupLocal(s, sm.SymAt(s, isym).members, method)
     if ms == 0 || sm.SymAt(s, ms).kind != sm.SYM_METHOD || sm.SymAt(s, ms).overloads.len() == 0:
-        ret sm.TYPE_NONE
+        ret 0
     end
-    ret sm.SigAt(s, sm.SymAt(s, ms).overloads.get(0)).ret_type
+    ret sm.SymAt(s, ms).overloads.get(0)
 end
 
 func call_dyn(
@@ -687,12 +699,15 @@ func call_dyn(
     if str.Equals(mname, "free"):
         ret "({ " + dynct + " __dv" + t + " = (" + recv + "); " + CG_MEM_FREE + "(__dv" + t + acc + "data); })"
     end
-    asv := call_args_lead(g, s, a, n, 0)
+    // Arguments are shaped by the interface's signature: a `&:` param
+    // takes the argument's address exactly as a direct call would.
+    isig := dyn_method_sig(s, objts, mname)
+    asv := call_args_lead(g, s, a, n, isig)
     // A vtable slot whose method returns an aggregate is `void (*)(..., R*)`,
     // matching the sret lowering every other call path uses, so the result
     // has to be caught in a temporary and yielded from the statement
     // expression rather than taken as the call's value.
-    ret2 := dyn_method_ret(s, objts, mname)
+    ret2 := isig != 0 ? sm.SigAt(s, isig).ret_type : sm.TYPE_NONE
     if type_is_byval_agg(s, ret2):
         rc := cg_ctype(sm.ToString(s, ret2))
         g.tmpn += 1

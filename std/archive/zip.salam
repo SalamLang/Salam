@@ -16,6 +16,7 @@ package archive
 
 import compress
 import filepath
+import mem
 import str
 
 // The ZIP archive format (PKWARE's APPNOTE.TXT): a local file header
@@ -70,6 +71,12 @@ func _zip_read_name(p: void*, off: int, name_len: int): str:
     nm := compress.BufToStrUnsafe(nmbuf)
     compress.BufFree(nmbuf)
     ret nm
+end
+
+// _zip_read_name returns the shared empty literal for a zero-length
+// name, which must not be freed.
+func _zip_free_name(name: str):
+    if str.Len(name) > 0: mem.Free(name as void*) end
 end
 
 func _zip_is_dir_name(name: str): bool:
@@ -256,9 +263,12 @@ pub func ZipExtractByName(p: void*, n: int, name: str, ok &: bool): compress.Byt
         extra_len := LEGet16(p, pos + 30)
         comment_len := LEGet16(p, pos + 32)
         local_offset := LEGet32(p, pos + 42)
+        // Only compared, never kept: _zip_read_name allocates, so the
+        // scan would leak one name per entry it walks past.
         nm := _zip_read_name(p, pos + 46, name_len)
-
-        if nm == name:
+        hit := nm == name
+        _zip_free_name(nm)
+        if hit:
             if (flags & 1) != 0:
                 ret out
             end

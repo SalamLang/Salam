@@ -1,0 +1,363 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/onnx: models written by hand with the protobuf wire writer are
+// parsed and executed; an MLP and a small CNN match the same math done
+// directly on std/tensor.
+
+import archive
+import compress
+import encoding.protobuf
+import filepath
+import onnx
+import os
+import tensor
+import testing
+
+// ---- protobuf builders for the ONNX messages ----
+
+func sub(buf &: compress.ByteBuf, field: int, m: compress.ByteBuf):
+    protobuf.WriteTag(buf, field, protobuf.WT_LEN)
+    protobuf.WriteLenPrefixedBytes(buf, m.data, compress.BufLen(m))
+end
+
+func put_str(buf &: compress.ByteBuf, field: int, s: str):
+    protobuf.WriteTag(buf, field, protobuf.WT_LEN)
+    protobuf.WriteLenPrefixedStr(buf, s)
+end
+
+func put_int(buf &: compress.ByteBuf, field: int, v: i64):
+    protobuf.WriteTag(buf, field, protobuf.WT_VARINT)
+    protobuf.WriteVarint(buf, v as u64)
+end
+
+// A float TensorProto with packed float_data.
+func tensor_proto(name: str, t &: tensor.Tensor): compress.ByteBuf:
+    mut b := compress.NewByteBuf()
+    repeat t.rank() with i: put_int(b, 1, t.dim(i) as i64) end
+    put_int(b, 2, 1)
+    mut fd := compress.NewByteBuf()
+    repeat t.numel() with k: protobuf.WriteFloat(fd, t.at(k)) end
+    sub(b, 4, fd)
+    compress.BufFree(fd)
+    put_str(b, 8, name)
+    ret b
+end
+
+func attr_int(name: str, v: i64): compress.ByteBuf:
+    mut b := compress.NewByteBuf()
+    put_str(b, 1, name)
+    put_int(b, 20, 2)
+    put_int(b, 3, v)
+    ret b
+end
+
+func attr_float(name: str, v: f64): compress.ByteBuf:
+    mut b := compress.NewByteBuf()
+    put_str(b, 1, name)
+    put_int(b, 20, 1)
+    protobuf.WriteTag(b, 2, protobuf.WT_FIXED32)
+    protobuf.WriteFloat(b, v)
+    ret b
+end
+
+func attr_ints(name: str, vals: Vector<i64>): compress.ByteBuf:
+    mut b := compress.NewByteBuf()
+    put_str(b, 1, name)
+    put_int(b, 20, 7)
+    mut packed := compress.NewByteBuf()
+    repeat vals.len() with i: protobuf.WriteVarint(packed, vals.get(i) as u64) end
+    sub(b, 8, packed)
+    compress.BufFree(packed)
+    ret b
+end
+
+func node(op: str, ins: Vector<str>, outs: Vector<str>): compress.ByteBuf:
+    mut b := compress.NewByteBuf()
+    repeat ins.len() with i: put_str(b, 1, ins.get(i)) end
+    repeat outs.len() with i: put_str(b, 2, outs.get(i)) end
+    put_str(b, 4, op)
+    ret b
+end
+
+func value_info(name: str): compress.ByteBuf:
+    mut b := compress.NewByteBuf()
+    put_str(b, 1, name)
+    ret b
+end
+
+func model_of(graph: compress.ByteBuf): compress.ByteBuf:
+    mut m := compress.NewByteBuf()
+    put_int(m, 1, 7)
+    sub(m, 7, graph)
+    ret m
+end
+
+func names(a: str, b: str, c: str): Vector<str>:
+    mut v := Vector {} as Vector<str>
+    v.push(a)
+    if b != "": v.push(b) end
+    if c != "": v.push(c) end
+    ret v
+end
+
+func ints2(a: i64, b: i64): Vector<i64>:
+    mut v := Vector {} as Vector<i64>
+    v.push(a)
+    v.push(b)
+    ret v
+end
+
+func ints4(a: i64, b: i64, c: i64, d: i64): Vector<i64>:
+    mut v := Vector {} as Vector<i64>
+    v.push(a)
+    v.push(b)
+    v.push(c)
+    v.push(d)
+    ret v
+end
+
+func main:
+    eps := 0.0001
+
+    // ---- an MLP: Gemm -> Relu -> Gemm ----
+    mut s34 := tensor.Shape2(3, 4)
+    mut w1 := tensor.RandUniform(s34, 0.0 - 1.0, 1.0, 1)
+    s34.free()
+    mut b1 := tensor.Arange(4)
+    mut s42 := tensor.Shape2(4, 2)
+    mut w2 := tensor.RandUniform(s42, 0.0 - 1.0, 1.0, 2)
+    s42.free()
+    mut b2 := tensor.Arange(2)
+    mut sx := tensor.Shape2(2, 3)
+    mut x := tensor.RandUniform(sx, 0.0 - 1.0, 1.0, 3)
+    sx.free()
+
+    mut g := compress.NewByteBuf()
+    mut n1 := node("Gemm", names("x", "w1", "b1"), names("h", "", ""))
+    a_alpha := attr_float("alpha", 1.0)
+    sub(n1, 5, a_alpha)
+    sub(g, 1, n1)
+    n2 := node("Relu", names("h", "", ""), names("r", "", ""))
+    sub(g, 1, n2)
+    n3 := node("Gemm", names("r", "w2", "b2"), names("y", "", ""))
+    sub(g, 1, n3)
+    tw1 := tensor_proto("w1", w1)
+    tb1 := tensor_proto("b1", b1)
+    tw2 := tensor_proto("w2", w2)
+    tb2 := tensor_proto("b2", b2)
+    sub(g, 5, tw1)
+    sub(g, 5, tb1)
+    sub(g, 5, tw2)
+    sub(g, 5, tb2)
+    vx := value_info("x")
+    vw := value_info("w1")
+    vy := value_info("y")
+    sub(g, 11, vx)
+    sub(g, 11, vw)
+    sub(g, 12, vy)
+    mbuf := model_of(g)
+
+    mut ok := false
+    mut m := onnx.ParseOnnx(mbuf.data, compress.BufLen(mbuf), ok)
+    testing.AssertTrue(ok)
+    testing.AssertTrue(m.ok)
+    testing.AssertEqInt(m.nodes.len(), 3)
+    testing.AssertEqInt(m.inits.len(), 4)
+    testing.AssertEqStr(m.nodes.get(1).op, "Relu")
+    testing.AssertEqInt(m.ir_version as int, 7)
+    mut feeds := m.feed_names()
+    testing.AssertEqInt(feeds.len(), 1)
+    testing.AssertEqStr(feeds.get(0), "x")
+
+    mut ins := Vector {} as Vector<tensor.Tensor>
+    ins.push(x)
+    mut rok := false
+    mut outs := onnx.Run(m, ins, rok)
+    testing.AssertTrue(rok)
+    testing.AssertEqInt(outs.len(), 1)
+    mut y := outs.get(0)
+    testing.AssertEqInt(y.dim(0), 2)
+    testing.AssertEqInt(y.dim(1), 2)
+    // The same math on std/tensor
+    mut h := tensor.MatMul(x, w1)
+    mut hb := tensor.Add(h, b1)
+    mut r := tensor.Relu(hb)
+    mut o := tensor.MatMul(r, w2)
+    mut ob := tensor.Add(o, b2)
+    testing.AssertTrue(tensor.AllClose(y, ob, eps))
+
+    // Wrong feed count is an error with a message
+    mut none := Vector {} as Vector<tensor.Tensor>
+    mut bad := false
+    mut outs2 := onnx.Run(m, none, bad)
+    testing.AssertFalse(bad)
+    testing.AssertEqInt(outs2.len(), 0)
+    testing.AssertTrue(m.error != "")
+
+    // ---- a CNN: Conv(pad 1) -> Relu -> MaxPool 2 -> Flatten -> Gemm -> Softmax ----
+    mut sc := tensor.Shape4(1, 1, 4, 4)
+    mut img := tensor.RandUniform(sc, 0.0, 1.0, 4)
+    sc.free()
+    mut sw := tensor.Shape4(2, 1, 3, 3)
+    mut cw := tensor.RandUniform(sw, 0.0 - 0.5, 0.5, 5)
+    sw.free()
+    mut cb := tensor.Arange(2)
+    mut sfc := tensor.Shape2(8, 3)
+    mut fw := tensor.RandUniform(sfc, 0.0 - 0.5, 0.5, 6)
+    sfc.free()
+    mut fb := tensor.Zeros1(3)
+
+    mut g2 := compress.NewByteBuf()
+    mut c1 := node("Conv", names("img", "cw", "cb"), names("c", "", ""))
+    a_pads := attr_ints("pads", ints4(1, 1, 1, 1))
+    a_str := attr_ints("strides", ints2(1, 1))
+    a_ks := attr_ints("kernel_shape", ints2(3, 3))
+    sub(c1, 5, a_pads)
+    sub(c1, 5, a_str)
+    sub(c1, 5, a_ks)
+    sub(g2, 1, c1)
+    c2 := node("Relu", names("c", "", ""), names("cr", "", ""))
+    sub(g2, 1, c2)
+    mut c3 := node("MaxPool", names("cr", "", ""), names("p", "", ""))
+    a_pk := attr_ints("kernel_shape", ints2(2, 2))
+    a_ps := attr_ints("strides", ints2(2, 2))
+    sub(c3, 5, a_pk)
+    sub(c3, 5, a_ps)
+    sub(g2, 1, c3)
+    c4 := node("Flatten", names("p", "", ""), names("f", "", ""))
+    sub(g2, 1, c4)
+    c5 := node("Gemm", names("f", "fw", "fb"), names("l", "", ""))
+    sub(g2, 1, c5)
+    mut c6 := node("Softmax", names("l", "", ""), names("prob", "", ""))
+    a_ax := attr_int("axis", 0 - 1)
+    sub(c6, 5, a_ax)
+    sub(g2, 1, c6)
+    tcw := tensor_proto("cw", cw)
+    tcb := tensor_proto("cb", cb)
+    tfw := tensor_proto("fw", fw)
+    tfb := tensor_proto("fb", fb)
+    sub(g2, 5, tcw)
+    sub(g2, 5, tcb)
+    sub(g2, 5, tfw)
+    sub(g2, 5, tfb)
+    vimg := value_info("img")
+    vprob := value_info("prob")
+    sub(g2, 11, vimg)
+    sub(g2, 12, vprob)
+    mbuf2 := model_of(g2)
+
+    // Through a file this time
+    dir := filepath.Join(os.TempDir(), "salam_onnx_test")
+    archive.EnsureDir(dir)
+    path := filepath.Join(dir, "cnn.onnx")
+    testing.AssertTrue(archive.WriteBinaryFileBuf(path, mbuf2))
+    mut fok := false
+    mut m2 := onnx.LoadOnnx(path, fok)
+    testing.AssertTrue(fok)
+    testing.AssertEqInt(m2.nodes.len(), 6)
+    mut ins2 := Vector {} as Vector<tensor.Tensor>
+    ins2.push(img)
+    mut rok2 := false
+    mut outs3 := onnx.Run(m2, ins2, rok2)
+    testing.AssertTrue(rok2)
+    mut prob := outs3.get(0)
+    testing.AssertEqInt(prob.dim(0), 1)
+    testing.AssertEqInt(prob.dim(1), 3)
+    testing.AssertEqFloat(tensor.SumAll(prob), 1.0, eps)
+    // Reference on std/tensor
+    mut conv := tensor.Conv2DForward(img, cw, cb, 1, 1, 1, 1)
+    mut cr := tensor.Relu(conv)
+    mut am := tensor.Empty()
+    mut pooled := tensor.MaxPool2DForward(cr, 2, 2, 2, 2, am)
+    mut s18 := tensor.Shape2(1, 8)
+    mut flat := tensor.Reshape(pooled, s18)
+    s18.free()
+    mut logits := tensor.MatMul(flat, fw)
+    mut ref := tensor.Softmax(logits)
+    testing.AssertTrue(tensor.AllClose(prob, ref, eps))
+
+    // An unsupported op names itself
+    mut g3 := compress.NewByteBuf()
+    u := node("Einsum", names("x", "", ""), names("y", "", ""))
+    sub(g3, 1, u)
+    vx3 := value_info("x")
+    vy3 := value_info("y")
+    sub(g3, 11, vx3)
+    sub(g3, 12, vy3)
+    mbuf3 := model_of(g3)
+    mut ok3 := false
+    mut m3 := onnx.ParseOnnx(mbuf3.data, compress.BufLen(mbuf3), ok3)
+    testing.AssertTrue(ok3)
+    mut rok3 := false
+    mut outs4 := onnx.Run(m3, ins, rok3)
+    testing.AssertFalse(rok3)
+    testing.AssertContains(m3.error, "Einsum")
+    // Garbage is not a model
+    mut junk := compress.BufFromStr("not a protobuf at all, sorry")
+    mut jok := true
+    mut mj := onnx.ParseOnnx(junk.data, compress.BufLen(junk), jok)
+    testing.AssertFalse(jok)
+
+    m.free()
+    m2.free()
+    m3.free()
+    mj.free()
+    repeat outs.len() with i:
+        mut t := outs.get(i)
+        t.free()
+    end
+    repeat outs3.len() with i:
+        mut t := outs3.get(i)
+        t.free()
+    end
+    outs.free()
+    outs2.free()
+    outs3.free()
+    outs4.free()
+    ins.free()
+    ins2.free()
+    none.free()
+    feeds.free()
+    tensor.Free(w1)
+    tensor.Free(b1)
+    tensor.Free(w2)
+    tensor.Free(b2)
+    tensor.Free(x)
+    tensor.Free(h)
+    tensor.Free(hb)
+    tensor.Free(r)
+    tensor.Free(o)
+    tensor.Free(ob)
+    tensor.Free(img)
+    tensor.Free(cw)
+    tensor.Free(cb)
+    tensor.Free(fw)
+    tensor.Free(fb)
+    tensor.Free(conv)
+    tensor.Free(cr)
+    tensor.Free(am)
+    tensor.Free(pooled)
+    tensor.Free(flat)
+    tensor.Free(logits)
+    tensor.Free(ref)
+    compress.BufFree(mbuf)
+    compress.BufFree(mbuf2)
+    compress.BufFree(mbuf3)
+    compress.BufFree(junk)
+
+    ret testing.Summary()
+end

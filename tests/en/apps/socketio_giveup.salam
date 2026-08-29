@@ -1,0 +1,101 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Reconnection that runs out, and a client that admits it.
+//
+// A client which retries for ever is easy to write and impossible to use: a
+// program built on one can never report that the server is gone, because the
+// client never says so. Options.reconnection_attempts puts a bound on it, and
+// what this checks is that the bound is honoured exactly - the attempts are
+// counted, the last one reports failure, and the pump then says CLOSED
+// instead of quietly trying again.
+//
+// There is no server at all here. The port is bound and released first so
+// that connecting to it is refused rather than left hanging.
+
+import net.socketio
+import net.tcp
+import time
+
+mut attempts seen := 0
+mut errors seen := 0
+mut gave up := false
+
+func main:
+    // A port nothing is listening on, found by briefly listening on it.
+    probe := tcp.Bind(0)
+    port := tcp.Port(probe)
+    tcp.CloseServer(probe)
+    println "picked a free port:", port > 0
+
+    mut o := socketio.NewOptions()
+    o.transports = socketio.TRANSPORT_WEBSOCKET
+    o.timeout = 1000
+    o.reconnection = true
+    o.reconnection_attempts = 2
+    o.reconnection_delay = 60
+    o.reconnection_delay_max = 120
+    o.randomization_factor = 0
+    o.auto_connect = false
+    c := socketio.DialWith("http://127.0.0.1:" + port, o)
+
+    socketio.On(c, "reconnect_attempt", (e: socketio.Event): attempts seen += 1 end)
+    socketio.On(c, "reconnect_error", (e: socketio.Event): errors seen += 1 end)
+    socketio.On(c, "reconnect_failed", (e: socketio.Event): gave up = true end)
+
+    println "first attempt fails:", socketio.Connect(c)
+    println "and says why:", socketio.LastError(c).len() > 0
+    println "but is still trying:", socketio.Active(c)
+
+    mut rc := socketio.PUMP_TIMEOUT
+    mut i := 0
+    until i < 40 && !gave up:
+        rc = socketio.Pump(c, 100)
+        i += 1
+    end
+
+    println "gave up:", gave up
+    println "attempts made:", attempts seen, "of", socketio.OptionsOf(socketio.ManagerOf(c)).reconnection_attempts
+    println "each one reported an error:", errors seen == attempts seen
+    println "the pump now says closed:", socketio.Pump(c, 0) == socketio.PUMP_CLOSED
+    println "and keeps saying it:", socketio.Pump(c, 0) == socketio.PUMP_CLOSED
+    println "no further attempts:", attempts seen
+
+    // The lifecycle events are all still queued for a caller reading with
+    // Next, so drain them before timing the empty case.
+    mut queued kinds := 0
+    mut d := 0
+    until d < 40:
+        mut ev := socketio.Next(c, 0)
+        if ev.kind == socketio.EV_TIMEOUT:
+            d = 40
+        else:
+            queued kinds += 1
+        end
+        socketio.EventFree(ev)
+        d += 1
+    end
+    println "lifecycle events were queued for Next:", queued kinds > 0
+    // ...and now Next must not sit out its whole timeout: there is nothing
+    // left to wait for, and a client that blocks here has hung.
+    start := time.MonoMillis()
+    ev := socketio.Next(c, 3000)
+    waited := time.MonoMillis() - start
+    println "returns at once:", ev.kind == socketio.EV_TIMEOUT, waited < 1000
+
+    // An emit is still accepted and held - the caller may yet reconnect.
+    println "emit still buffered:", socketio.EmitStr(c, "later", "x"), socketio.Buffered(c)
+    println "not connected:", !socketio.IsConnected(c)
+    socketio.Close(c)
+end

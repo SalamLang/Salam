@@ -1,0 +1,105 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/tensor: the parallel drivers agree with the serial kernels
+// bit-for-bit, at any thread count. That is the package's contract, not
+// a tolerance check.
+
+import matrix
+import tensor
+import testing
+
+func main:
+    // A tensor big enough to clear the parallel threshold (262144).
+    mut xm := matrix.Random(600, 500, 0.0 - 1.0, 1.0, 21)
+    mut ym := matrix.Random(600, 500, 0.5, 1.5, 22)
+    mut x := tensor.FromMatrix(xm)
+    mut y := tensor.FromMatrix(ym)
+    matrix.Free(xm)
+    matrix.Free(ym)
+
+    tensor.SetThreads(1)
+    mut sum1 := tensor.Add(x, y)
+    mut mul1 := tensor.Mul(x, y)
+    mut exp1 := tensor.Exp(x)
+    mut gel1 := tensor.Gelu(x)
+    tensor.SetThreads(4)
+    mut sum4 := tensor.Add(x, y)
+    mut mul4 := tensor.Mul(x, y)
+    mut exp4 := tensor.Exp(x)
+    mut gel4 := tensor.Gelu(x)
+    testing.AssertTrue(tensor.Equal(sum1, sum4))
+    testing.AssertTrue(tensor.Equal(mul1, mul4))
+    testing.AssertTrue(tensor.Equal(exp1, exp4))
+    testing.AssertTrue(tensor.Equal(gel1, gel4))
+
+    // The gemm splits into row bands past 2*n*k*m >= 32e6: 300^3 is 54e6.
+    mut am := matrix.Random(300, 300, 0.0 - 1.0, 1.0, 23)
+    mut bm := matrix.Random(300, 300, 0.0 - 1.0, 1.0, 24)
+    mut a := tensor.FromMatrix(am)
+    mut b := tensor.FromMatrix(bm)
+    matrix.Free(am)
+    matrix.Free(bm)
+    tensor.SetThreads(1)
+    mut p1 := tensor.MatMul(a, b)
+    tensor.SetThreads(4)
+    mut p4 := tensor.MatMul(a, b)
+    tensor.SetThreads(3)
+    mut p3 := tensor.MatMul(a, b)
+    testing.AssertTrue(tensor.Equal(p1, p4))
+    testing.AssertTrue(tensor.Equal(p1, p3))
+
+    // Batched products, batch >= workers, same contract.
+    mut xb := tensor.Zeros3(4, 40, 30)
+    repeat xb.numel() with k: xb.set_at(k, ((k * 7) % 13) as f64) end
+    mut yb := tensor.Zeros3(4, 30, 20)
+    repeat yb.numel() with k: yb.set_at(k, ((k * 5) % 11) as f64) end
+    tensor.SetThreads(1)
+    mut q1 := tensor.BatchMatMul(xb, yb)
+    tensor.SetThreads(4)
+    mut q4 := tensor.BatchMatMul(xb, yb)
+    testing.AssertTrue(tensor.Equal(q1, q4))
+
+    // Thread policy plumbing
+    tensor.SetThreads(0)
+    testing.AssertTrue(tensor.Threads() >= 1)
+    testing.AssertTrue(tensor.Threads() <= 8)
+    tensor.SetThreads(2)
+    testing.AssertEqInt(tensor.Threads(), 2)
+    tensor.SetThreads(0)
+
+    tensor.Free(x)
+    tensor.Free(y)
+    tensor.Free(sum1)
+    tensor.Free(mul1)
+    tensor.Free(exp1)
+    tensor.Free(gel1)
+    tensor.Free(sum4)
+    tensor.Free(mul4)
+    tensor.Free(exp4)
+    tensor.Free(gel4)
+    tensor.Free(a)
+    tensor.Free(b)
+    tensor.Free(p1)
+    tensor.Free(p4)
+    tensor.Free(p3)
+    tensor.Free(xb)
+    tensor.Free(yb)
+    tensor.Free(q1)
+    tensor.Free(q4)
+
+    ret testing.Summary()
+end

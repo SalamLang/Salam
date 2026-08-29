@@ -1,16 +1,5 @@
 ---
 name: 🤖 MCP Server - Build & Protocol Conformance
-# Builds tools/mcp (the MCP server, itself written in Salam) with the compiler
-# from this checkout, then drives it over stdio exactly as an MCP client does
-# and asserts on the wire format.
-#
-# The conformance suite is the point: a regression in JSON-RPC framing, in the
-# dual-era protocol negotiation, or in how diagnostics are surfaced shows up in
-# an AI client as inexplicably broken tooling rather than as a build failure.
-# This catches it here instead.
-#
-# The compiler is built from c/ rather than installed from a release on
-# purpose - the server must be tested against the compiler it ships alongside.
 on:
   push:
     branches:
@@ -73,10 +62,6 @@ jobs:
           find . -maxdepth 3 -name 'salam' -type f -perm -u+x >&2 || true
           exit 1
 
-      # SALAM_STD explicitly: a self-hosted salam carries no stdlib prefix baked
-      # in the way the C build did, so without it the compiler can reach std/
-      # both through salam.cfg and through its own default and report the same
-      # file twice ("package name 'mem' is claimed by two different files").
       - name: Build the MCP server
         env:
           SALAM: ${{ steps.compiler.outputs.path }}
@@ -96,25 +81,10 @@ jobs:
           SALAM_MCP_BIN: ${{ steps.compiler.outputs.path }}
         run: |
           set -eu
-          # The index is generated from std/, so a stdlib change that does not
-          # regenerate it leaves the committed copy lying to every AI client
-          # that reads it.
           printf '%s\n' \
             '{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"salam://stdlib/index.json"}}' \
             | SALAM_MCP_ROOT="$PWD" \
               ./salam-mcp 2>/dev/null > /tmp/index-response.jsonl
-          # Compare canonical compact JSON, never pretty-printed bytes. The
-          # committed file is reformatted by the biome pre-commit hook, which
-          # collapses short arrays onto one line where JSON.stringify(…, 2)
-          # always expands them - a byte comparison fails on that alone while
-          # the content is identical. Comparing compact form still catches
-          # what matters: added, removed or reordered packages and symbols.
-          #
-          # The single quotes are the point: everything between them is
-          # JavaScript, and the ${...} inside are template literals that node
-          # evaluates. Letting the shell expand them first would substitute
-          # empty strings for k, a.length and b.length and silently gut the
-          # diagnostic, so SC2016 is describing exactly the behaviour wanted.
           # shellcheck disable=SC2016
           node -e '
             const fs = require("fs");

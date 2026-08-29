@@ -77,6 +77,7 @@ if SALAM_OS_WINDOWS:
         func getaddrinfo(node: str, service: str, hints: void*, res: void*): int
         func freeaddrinfo(res: void*)
         func gethostbyname(name: str): void*
+        func WSAPoll(fds: void*, nfds: u64, timeout: int): int
     end
 else:
     extern:
@@ -97,10 +98,36 @@ else:
         func getaddrinfo(node: str, service: str, hints: void*, res: void*): int
         func freeaddrinfo(res: void*)
         func gethostbyname(name: str): void*
+        func poll(fds: void*, nfds: u64, timeout: int): int
     end
 end
 
 // ------------------------------------------------------------- constants
+
+// Sent with every stream write: MSG_NOSIGNAL, so a write to a peer that has
+// already closed returns EPIPE instead of raising SIGPIPE.
+//
+// The default action for SIGPIPE is to kill the process, and nothing about
+// that is hypothetical - a server writing a reply to a client that has just
+// navigated away, or either end of a connection both sides are closing at
+// once, dies outright with no diagnostic and no chance to handle it. It
+// surfaces as an intermittent exit 141 and reads like a hang, because the
+// output simply stops mid-sentence.
+//
+// Ignoring the signal process-wide would do it too, but that is a rude thing
+// for a library to decide on a program's behalf - it would also change what
+// happens when the program's own stdout is a closed pipe. The flag is per
+// call and affects nothing else. macOS has no MSG_NOSIGNAL and uses a
+// per-socket option instead; see _no_sigpipe.
+if SALAM_OS_WINDOWS:
+    const _SEND_FLAGS := 0
+else SALAM_OS_MAC:
+    const _SEND_FLAGS := 0
+else SALAM_OS_FREEBSD:
+    const _SEND_FLAGS := 131072
+else:
+    const _SEND_FLAGS := 16384
+end
 
 pub const AF_INET := 2
 pub const SOCK_STREAM := 1
@@ -296,6 +323,23 @@ end
 
 // -------------------------------------------------------------- Socket API
 
+// macOS has no MSG_NOSIGNAL, so the same protection is a socket option
+// there, set once when the socket is made. Everywhere else this is nothing:
+// the flag on each send has already done the job.
+func _no_sigpipe(fd: i64):
+    if fd < 0:
+        ret
+    end
+    if SALAM_OS_MAC:
+        opt := mem.Allocate(4 as u64)
+        defer mem.Free(opt)
+        o32 := opt as int*
+        o32[0] = 1
+        // SOL_SOCKET is 0xffff and SO_NOSIGPIPE 0x1022 on Darwin.
+        setsockopt(fd as int, 65535, 4130, opt, 4)
+    end
+end
+
 @en "FromFd"
 @fa "سوکت از توصیف‌گر"
 @ar "مقبس من واصف"
@@ -313,6 +357,7 @@ pub func Open(family: int, socktype: int): Socket:
         ret Socket { fd = s, family = family }
     else:
         s := socket(family, socktype, 0)
+        _no_sigpipe(s as i64)
         ret Socket { fd = s as i64, family = family }
     end
 end
@@ -357,6 +402,7 @@ pub func ConnectProto(host: str, port: int, socktype: int): Socket:
             close(s)
             ret Socket { fd = 0 - 1, family = fam }
         end
+        _no_sigpipe(s as i64)
         ret Socket { fd = s as i64, family = fam }
     end
 end
@@ -481,6 +527,7 @@ pub func Accept(server: Socket): Socket:
     else:
         c := accept(server.fd as int, null, null)
         if c == 0 - 1: ret Socket { fd = 0 - 1, family = server.family } end
+        _no_sigpipe(c as i64)
         ret Socket { fd = c as i64, family = server.family }
     end
 end
@@ -490,9 +537,9 @@ end
 @ar "إرسال"
 pub func Send(sock: Socket, data: str): int:
     if SALAM_OS_WINDOWS:
-        ret send(sock.fd, data as void*, data.len(), 0)
+        ret send(sock.fd, data as void*, data.len(), _SEND_FLAGS)
     else:
-        ret send(sock.fd as int, data as void*, data.len(), 0)
+        ret send(sock.fd as int, data as void*, data.len(), _SEND_FLAGS)
     end
 end
 
@@ -503,7 +550,7 @@ pub func SendBytes(sock: Socket, ptr: void*, n: int): int:
     if SALAM_OS_WINDOWS:
         mut sent := 0
         until sent < n:
-            r := send(sock.fd, (ptr as i64 + sent) as void*, n - sent, 0)
+            r := send(sock.fd, (ptr as i64 + sent) as void*, n - sent, _SEND_FLAGS)
             if r <= 0: ret sent end
             sent += r
         end
@@ -511,7 +558,7 @@ pub func SendBytes(sock: Socket, ptr: void*, n: int): int:
     else:
         mut sent := 0
         until sent < n:
-            r := send(sock.fd as int, (ptr as i64 + sent) as void*, n - sent, 0)
+            r := send(sock.fd as int, (ptr as i64 + sent) as void*, n - sent, _SEND_FLAGS)
             if r <= 0: ret sent end
             sent += r
         end
@@ -651,6 +698,50 @@ pub func SetTimeout(sock: Socket, millis: int):
         usecp[0] = ((millis % 1000) * 1000) as i64
         setsockopt(sock.fd as int, 1, 20, tv, 16) // SOL_SOCKET, SO_RCVTIMEO
         setsockopt(sock.fd as int, 1, 21, tv, 16) // SOL_SOCKET, SO_SNDTIMEO
+    end
+end
+
+// WaitReadable - true once a read on `sock` would not block.
+//
+// The one primitive a protocol with a heartbeat cannot do without: a
+// WebSocket client has to notice that nothing arrived for N milliseconds
+// and send a pong of its own, which a blocking recv() can never tell it.
+// SetTimeout would do it by consuming, and that is exactly the problem -
+// a receive that times out halfway through a TLS record leaves the record
+// layer holding a fragment it can never finish. poll() touches no bytes,
+// so it composes with a buffering transport (std/tls) the way a timed
+// recv() does not.
+//
+// A negative `timeout_ms` waits forever. "Readable" includes end-of-stream
+// and a pending error: in both cases the following read returns
+// immediately, which is all the caller is promised.
+@en "WaitReadable"
+@fa "انتظار برای خواندن"
+@ar "انتظار القراءة"
+pub func WaitReadable(sock: Socket, timeout_ms: int): bool:
+    if sock.fd < 0:
+        ret false
+    end
+    if SALAM_OS_WINDOWS:
+        // WSAPOLLFD is { SOCKET fd; SHORT events; SHORT revents; } - a
+        // SOCKET is a 64-bit handle on Win64, so the struct is 16 bytes
+        // with the two shorts at offsets 8 and 10.
+        p := mem.AllocateZeroed(16 as u64)
+        defer mem.Free(p)
+        fdp := p as i64*
+        fdp[0] = sock.fd
+        evp := ((p as i64) + 8) as i16*
+        evp[0] = 256 as i16 // POLLRDNORM
+        ret WSAPoll(p, 1 as u64, timeout_ms) > 0
+    else:
+        // struct pollfd is { int fd; short events; short revents; }.
+        p := mem.AllocateZeroed(8 as u64)
+        defer mem.Free(p)
+        fdp := p as i32*
+        fdp[0] = sock.fd as i32
+        evp := ((p as i64) + 4) as i16*
+        evp[0] = 1 as i16 // POLLIN
+        ret poll(p, 1 as u64, timeout_ms) > 0
     end
 end
 

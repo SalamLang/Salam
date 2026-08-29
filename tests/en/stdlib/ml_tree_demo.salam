@@ -1,0 +1,122 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/ml: CART decision trees for classification and regression.
+
+import data
+import math
+import matrix
+import ml
+import testing
+
+func main:
+    // Separable blobs: a full tree fits them exactly with few nodes
+    mut y := matrix.Matrix {}
+    mut x := data.MakeBlobs(150, 3, 2, 0.5, 51, y)
+    mut t := ml.DecisionTree {}
+    testing.AssertTrue(t.fit(x, y))
+    testing.AssertTrue(t.ok)
+    testing.AssertEqInt(t.n_classes, 3)
+    testing.AssertEqFloat(t.score(x, y), 1.0, 0.000001)
+    testing.AssertTrue(t.node_count() >= 5)
+    testing.AssertTrue(t.node_count() <= 15)
+    // Leaves are pure: probabilities are one-hot
+    mut pr := t.predict_proba(x)
+    mut all_pure := true
+    repeat pr.rows with i:
+        mut mx := 0.0
+        repeat 3 with c:
+            if pr.at(i, c) > mx: mx = pr.at(i, c) end
+        end
+        if mx < 0.999999: all_pure = false end
+    end
+    testing.AssertTrue(all_pure)
+
+    // Moons: a depth-limited tree generalizes; the same seed rebuilds
+    // the same tree
+    mut moon_y := matrix.Matrix {}
+    mut moon_x := data.MakeMoons(400, 0.2, 52, moon_y)
+    mut sp := ml.TrainTestSplit(moon_x, moon_y, 0.25, 53)
+    mut t4 := ml.DecisionTree { max_depth = 4 }
+    testing.AssertTrue(t4.fit(sp.x_train, sp.y_train))
+    testing.AssertTrue(t4.score(sp.x_train, sp.y_train) >= 0.85)
+    testing.AssertTrue(t4.score(sp.x_test, sp.y_test) >= 0.80)
+    mut t4b := ml.DecisionTree { max_depth = 4 }
+    testing.AssertTrue(t4b.fit(sp.x_train, sp.y_train))
+    testing.AssertEqInt(t4.node_count(), t4b.node_count())
+    testing.AssertEqFloat(t4.threshold.get(0), t4b.threshold.get(0), 0.0)
+    // Entropy chooses splits too
+    mut te := ml.DecisionTree { criterion = ml.TREE_ENTROPY, max_depth = 6 }
+    testing.AssertTrue(te.fit(sp.x_train, sp.y_train))
+    testing.AssertTrue(te.score(sp.x_test, sp.y_test) >= 0.80)
+    // min_samples_leaf caps how far a tree can go
+    mut tl := ml.DecisionTree { min_samples_leaf = 40 }
+    testing.AssertTrue(tl.fit(moon_x, moon_y))
+    testing.AssertTrue(tl.node_count() < t4.node_count() * 3)
+
+    // A random feature subset per split still fits
+    mut ts := ml.DecisionTree { max_features = 1, seed = 3 }
+    testing.AssertTrue(ts.fit(x, y))
+    testing.AssertTrue(ts.score(x, y) >= 0.95)
+
+    // Regression tree on a smooth curve
+    mut xr := matrix.Zeros(200, 1)
+    mut yr := matrix.Zeros(200, 1)
+    repeat 200 with i:
+        v := (i as f64) * 0.03
+        xr.set(i, 0, v)
+        yr.set(i, 0, math.Sin(v))
+    end
+    mut tr := ml.DecisionTree { criterion = ml.TREE_MSE, max_depth = 6 }
+    testing.AssertTrue(tr.fit(xr, yr))
+    testing.AssertTrue(tr.is_regression())
+    testing.AssertEqInt(tr.value.cols, 1)
+    testing.AssertTrue(tr.score(xr, yr) > 0.98)
+    mut q := matrix.Full(1, 1, 1.5)
+    mut pq := tr.predict(q)
+    testing.AssertTrue(pq.at(0, 0) > math.Sin(1.5) - 0.1)
+    testing.AssertTrue(pq.at(0, 0) < math.Sin(1.5) + 0.1)
+    // Classification helpers are refused in regression mode
+    testing.AssertTrue(tr.predict_proba(xr).is_empty())
+
+    // Unfitted and mismatched inputs
+    mut fresh := ml.DecisionTree {}
+    testing.AssertTrue(fresh.predict(x).is_empty())
+    mut bad := matrix.Zeros(5, 1)
+    testing.AssertFalse(fresh.fit(x, bad))
+
+    t.free()
+    t4.free()
+    t4b.free()
+    te.free()
+    tl.free()
+    ts.free()
+    tr.free()
+    fresh.free()
+    sp.free()
+    matrix.Free(x)
+    matrix.Free(y)
+    matrix.Free(pr)
+    matrix.Free(moon_x)
+    matrix.Free(moon_y)
+    matrix.Free(xr)
+    matrix.Free(yr)
+    matrix.Free(q)
+    matrix.Free(pq)
+    matrix.Free(bad)
+
+    ret testing.Summary()
+end

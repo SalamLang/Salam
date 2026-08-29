@@ -29,7 +29,7 @@ The fastest way to get `salam` on your machine:
 { curl -fsSL https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.sh || wget -qO- https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.sh; } | sh && export PATH="$HOME/.salam/bin:$PATH"
 ```
 
-Options go after `sh -s --`, for example `... | sh -s -- --dir ./bin --version 0.3.5`.
+Options go after `sh -s --`, for example `... | sh -s -- --dir ./bin --version 0.3.6`.
 The shell installer takes `--dir DIR`, `--version X.Y.Z`, `--platform NAME`,
 `--no-modify-path` and `--help`; run it with `--help` for the full list.
 

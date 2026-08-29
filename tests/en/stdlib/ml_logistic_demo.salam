@@ -1,0 +1,100 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/ml: logistic regression, binary and multinomial.
+
+import data
+import matrix
+import ml
+import testing
+
+func main:
+    // Two well-separated classes
+    mut y2 := matrix.Matrix {}
+    mut x2 := data.MakeClassification(200, 3, 2, 3.0, 21, y2)
+    mut lg := ml.LogisticRegression {}
+    testing.AssertTrue(lg.fit(x2, y2))
+    testing.AssertEqInt(lg.n_classes, 2)
+    testing.AssertEqInt(lg.coef.cols, 2)
+    testing.AssertTrue(lg.score(x2, y2) >= 0.95)
+    // Probabilities are a proper distribution per row
+    mut pr := lg.predict_proba(x2)
+    testing.AssertEqInt(pr.cols, 2)
+    mut rows_ok := true
+    repeat pr.rows with i:
+        s := pr.at(i, 0) + pr.at(i, 1)
+        if s < 0.999999 || s > 1.000001: rows_ok = false end
+    end
+    testing.AssertTrue(rows_ok)
+
+    // Three classes, harder separation
+    mut y3 := matrix.Matrix {}
+    mut x3 := data.MakeClassification(300, 4, 3, 3.5, 7, y3)
+    mut lg3 := ml.LogisticRegression { max_iter = 800 }
+    testing.AssertTrue(lg3.fit(x3, y3))
+    testing.AssertEqInt(lg3.n_classes, 3)
+    testing.AssertTrue(lg3.score(x3, y3) >= 0.90)
+    mut pred := lg3.predict(x3)
+    testing.AssertEqInt(pred.rows, 300)
+    testing.AssertTrue(ml.MacroF1(y3, pred, 3) >= 0.85)
+
+    // A held-out split generalizes too
+    mut sp := ml.TrainTestSplit(x3, y3, 0.3, 4)
+    mut lgs := ml.LogisticRegression { max_iter = 800 }
+    testing.AssertTrue(lgs.fit(sp.x_train, sp.y_train))
+    testing.AssertTrue(lgs.score(sp.x_test, sp.y_test) >= 0.85)
+
+    // Cross-validation through the callback interface
+    mut folds := ml.StratifiedKFold(y3, 5, 8)
+    mut scores := ml.CrossValScore(
+        (xtr: matrix.Matrix, ytr: matrix.Matrix, xte: matrix.Matrix): ret fit_logistic(xtr, ytr, xte) end,
+        (a: matrix.Matrix, b: matrix.Matrix): ret ml.Accuracy(a, b) end,
+        x3, y3, folds
+    )
+    testing.AssertTrue(ml.MeanScore(scores) >= 0.85)
+
+    // One class only cannot be fitted
+    mut one := matrix.Zeros(10, 1)
+    mut xo := matrix.Zeros(10, 2)
+    mut lg1 := ml.LogisticRegression {}
+    testing.AssertFalse(lg1.fit(xo, one))
+
+    lg.free()
+    lg3.free()
+    lgs.free()
+    lg1.free()
+    sp.free()
+    folds.free()
+    scores.free()
+    matrix.Free(x2)
+    matrix.Free(y2)
+    matrix.Free(pr)
+    matrix.Free(x3)
+    matrix.Free(y3)
+    matrix.Free(pred)
+    matrix.Free(one)
+    matrix.Free(xo)
+
+    ret testing.Summary()
+end
+
+func fit_logistic(xtr: matrix.Matrix, ytr: matrix.Matrix, xte: matrix.Matrix): matrix.Matrix:
+    mut m := ml.LogisticRegression { max_iter = 800 }
+    if m.fit(xtr, ytr) == false: ret matrix.Matrix {} end
+    p := m.predict(xte)
+    m.free()
+    ret p
+end

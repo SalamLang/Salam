@@ -1,0 +1,81 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/tensor: named tensor records round-trip through a byte buffer.
+
+import compress
+import mem
+import str
+import tensor
+import testing
+
+func main:
+    // Two tensors of different ranks into one buffer
+    mut s := tensor.Shape3(2, 3, 4)
+    mut a := tensor.RandUniform(s, 0.0 - 5.0, 5.0, 31)
+    s.free()
+    mut b := tensor.Arange(7)
+
+    mut buf := compress.NewByteBuf()
+    testing.AssertTrue(tensor.WriteTensor(buf, "layer.weight", a))
+    testing.AssertTrue(tensor.WriteTensor(buf, "layer.bias", b))
+    testing.AssertTrue(compress.BufLen(buf) > 0)
+
+    // The empty sentinel and an empty name are refused
+    mut e := tensor.Empty()
+    testing.AssertFalse(tensor.WriteTensor(buf, "x", e))
+    testing.AssertFalse(tensor.WriteTensor(buf, "", a))
+
+    // Read both back, names and payloads intact
+    mut rd := compress.ReaderFromBuf(buf)
+    mut name := ""
+    mut got := tensor.Empty()
+    testing.AssertTrue(tensor.ReadTensor(rd, name, got))
+    testing.AssertEqStr(name, "layer.weight")
+    testing.AssertTrue(got.same_shape(a))
+    testing.AssertTrue(tensor.Equal(got, a))
+    mut name2 := ""
+    mut got2 := tensor.Empty()
+    testing.AssertTrue(tensor.ReadTensor(rd, name2, got2))
+    testing.AssertEqStr(name2, "layer.bias")
+    testing.AssertTrue(tensor.Equal(got2, b))
+
+    // The buffer is exhausted; another read fails cleanly
+    mut name3 := ""
+    mut got3 := tensor.Empty()
+    testing.AssertFalse(tensor.ReadTensor(rd, name3, got3))
+
+    // A truncated record fails without tearing the destination
+    mut short := compress.NewByteBuf()
+    testing.AssertTrue(tensor.WriteTensor(short, "w", b))
+    mut rd2 := compress.NewByteReader(short.data, compress.BufLen(short) - 5)
+    mut name4 := ""
+    mut got4 := tensor.Empty()
+    testing.AssertFalse(tensor.ReadTensor(rd2, name4, got4))
+
+    compress.BufFree(buf)
+    compress.BufFree(short)
+    tensor.Free(a)
+    tensor.Free(b)
+    tensor.Free(got)
+    tensor.Free(got2)
+
+    mem.Free(name as void*)
+    mem.Free(name2 as void*)
+    // The truncated read named its record before it ran out of payload.
+    if str.Len(name4) > 0: mem.Free(name4 as void*) end
+    ret testing.Summary()
+end

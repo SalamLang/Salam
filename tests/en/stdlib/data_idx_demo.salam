@@ -1,0 +1,167 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/data: IDX/MNIST files, built by hand, gzipped and plain.
+
+import archive
+import compress
+import data
+import encoding.binary
+import filepath
+import matrix
+import mem
+import os
+import testing
+
+// idx3: 4 images of 3 rows x 2 cols, pixel = image*10 + index
+func make_images(): compress.ByteBuf:
+    mut b := compress.NewByteBuf()
+    binary.WriteU8(b, 0)
+    binary.WriteU8(b, 0)
+    binary.WriteU8(b, 8)
+    binary.WriteU8(b, 3)
+    binary.WriteU32BE(b, 4)
+    binary.WriteU32BE(b, 3)
+    binary.WriteU32BE(b, 2)
+    repeat 4 with i:
+        repeat 6 with k: binary.WriteU8(b, i * 10 + k) end
+    end
+    ret b
+end
+
+// idx1: 4 labels
+func make_labels(): compress.ByteBuf:
+    mut b := compress.NewByteBuf()
+    binary.WriteU8(b, 0)
+    binary.WriteU8(b, 0)
+    binary.WriteU8(b, 8)
+    binary.WriteU8(b, 1)
+    binary.WriteU32BE(b, 4)
+    binary.WriteU8(b, 7)
+    binary.WriteU8(b, 2)
+    binary.WriteU8(b, 1)
+    binary.WriteU8(b, 0)
+    ret b
+end
+
+func main:
+    eps := 0.000000001
+
+    // In-memory parse
+    mut img := make_images()
+    mut ok := false
+    mut m := data.ParseIdx(img.data, compress.BufLen(img), ok)
+    testing.AssertTrue(ok)
+    testing.AssertEqInt(m.rows, 4)
+    testing.AssertEqInt(m.cols, 6)
+    testing.AssertEqFloat(m.at(2, 5), 25.0, eps)
+    mut lab := make_labels()
+    mut lok := false
+    mut l := data.ParseIdx(lab.data, compress.BufLen(lab), lok)
+    testing.AssertTrue(lok)
+    testing.AssertEqInt(l.rows, 4)
+    testing.AssertEqInt(l.cols, 1)
+    testing.AssertEqFloat(l.at(0, 0), 7.0, eps)
+
+    // A signed 16-bit and a float32 file
+    mut s16 := compress.NewByteBuf()
+    binary.WriteU8(s16, 0)
+    binary.WriteU8(s16, 0)
+    binary.WriteU8(s16, 11)
+    binary.WriteU8(s16, 1)
+    binary.WriteU32BE(s16, 2)
+    binary.WriteU16BE(s16, 65535)
+    binary.WriteU16BE(s16, 300)
+    mut s16ok := false
+    mut ms := data.ParseIdx(s16.data, compress.BufLen(s16), s16ok)
+    testing.AssertTrue(s16ok)
+    testing.AssertEqFloat(ms.at(0, 0), 0.0 - 1.0, eps)
+    testing.AssertEqFloat(ms.at(1, 0), 300.0, eps)
+    mut f32 := compress.NewByteBuf()
+    binary.WriteU8(f32, 0)
+    binary.WriteU8(f32, 0)
+    binary.WriteU8(f32, 13)
+    binary.WriteU8(f32, 2)
+    binary.WriteU32BE(f32, 1)
+    binary.WriteU32BE(f32, 2)
+    binary.WriteF32(f32, 1.5, true)
+    binary.WriteF32(f32, 0.0 - 2.5, true)
+    mut fok := false
+    mut mf := data.ParseIdx(f32.data, compress.BufLen(f32), fok)
+    testing.AssertTrue(fok)
+    testing.AssertEqFloat(mf.at(0, 1), 0.0 - 2.5, eps)
+
+    // Bad magic, unknown type, truncated payload
+    mut bad := compress.BufFromStr("nope")
+    mut bok := true
+    mut mb := data.ParseIdx(bad.data, compress.BufLen(bad), bok)
+    testing.AssertFalse(bok)
+    mut tok := true
+    mut mt := data.ParseIdx(img.data, compress.BufLen(img) - 3, tok)
+    testing.AssertFalse(tok)
+
+    // Files: gzipped images, plain labels
+    dir := filepath.Join(os.TempDir(), "salam_data_idx_test")
+    archive.EnsureDir(dir)
+    ipath := filepath.Join(dir, "images-idx3-ubyte.gz")
+    lpath := filepath.Join(dir, "labels-idx1-ubyte")
+    mut z := compress.GzipCompressBuf(img)
+    testing.AssertTrue(archive.WriteBinaryFileBuf(ipath, z))
+    testing.AssertTrue(archive.WriteBinaryFileBuf(lpath, lab))
+    mut x := matrix.Matrix {}
+    mut y := matrix.Matrix {}
+    testing.AssertTrue(data.LoadMnist(ipath, lpath, x, y))
+    testing.AssertEqInt(x.rows, 4)
+    testing.AssertEqInt(x.cols, 6)
+    testing.AssertEqFloat(x.at(2, 5), 25.0 / 255.0, eps)
+    testing.AssertEqFloat(y.at(1, 0), 2.0, eps)
+    // Mismatched counts are refused; so is a missing file
+    mut one := compress.NewByteBuf()
+    binary.WriteU8(one, 0)
+    binary.WriteU8(one, 0)
+    binary.WriteU8(one, 8)
+    binary.WriteU8(one, 1)
+    binary.WriteU32BE(one, 1)
+    binary.WriteU8(one, 3)
+    opath := filepath.Join(dir, "one-label")
+    testing.AssertTrue(archive.WriteBinaryFileBuf(opath, one))
+    testing.AssertFalse(data.LoadMnist(ipath, opath, x, y))
+    missing := filepath.Join(dir, "missing")
+    testing.AssertFalse(data.LoadMnist(missing, lpath, x, y))
+    mem.Free(missing as void*)
+
+    compress.BufFree(img)
+    compress.BufFree(lab)
+    compress.BufFree(s16)
+    compress.BufFree(f32)
+    compress.BufFree(bad)
+    compress.BufFree(z)
+    compress.BufFree(one)
+    matrix.Free(m)
+    matrix.Free(l)
+    matrix.Free(ms)
+    matrix.Free(mf)
+    matrix.Free(mb)
+    matrix.Free(mt)
+    matrix.Free(x)
+    matrix.Free(y)
+
+    mem.Free(dir as void*)
+    mem.Free(ipath as void*)
+    mem.Free(lpath as void*)
+    mem.Free(opath as void*)
+    ret testing.Summary()
+end

@@ -1,0 +1,222 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package nn
+
+import autograd
+import mem
+import math
+import tensor
+
+// Multi-head self-attention and the pre-norm transformer encoder block.
+//
+// Inputs are flattened sequences, [B*T, D] (see nn_embed). Attention
+// projects Q, K, V with dense layers, splits heads by
+//
+//   [B*T, D] -> [B, T, H, dh] -> permute -> [B, H, T, dh] -> [B*H, T, dh]
+//
+// runs the batched products scores = Q K^T / sqrt(dh), softmax over the
+// last axis, context = A V, and merges the heads by the inverse walk
+// before the output projection. Every step is a recorded op, so the
+// whole block differentiates without any attention-specific backward.
+//
+// The encoder block is pre-norm (LayerNorm feeds each sublayer, the
+// residual bypasses it), which trains stably without warmup at the
+// depths this package targets. No masking in this round: encoders only.
+
+@en "MultiHeadAttention"
+@fa "توجه چندسر"
+@ar "انتباه متعدد الرؤوس"
+pub struct MultiHeadAttention:
+    pub wq: Linear = Linear {}
+    pub wk: Linear = Linear {}
+    pub wv: Linear = Linear {}
+    pub wo: Linear = Linear {}
+    pub dim: int = 0
+    pub heads: int = 1
+    pub dropout: f64 = 0.0
+    // Causal: position t attends to positions <= t only (a decoder).
+    pub causal: bool = false
+
+    // Self-attention over x, a flattened [batch*seq, dim] tensor.
+    @en "forward"
+    @fa "پیشرو"
+    @ar "أمامي"
+    pub func forward(tp &: autograd.Tape, ps &: ParamStore, x: int, batch: int, seq: int): int:
+        dh := this.dim / this.heads
+        q := _split_heads(tp, this.wq.forward(tp, ps, x), batch, seq, this.heads, dh)
+        k := _split_heads(tp, this.wk.forward(tp, ps, x), batch, seq, this.heads, dh)
+        v := _split_heads(tp, this.wv.forward(tp, ps, x), batch, seq, this.heads, dh)
+        kt := _transpose_last(tp, k)
+        mut scores := autograd.BatchMatMul(tp, q, kt)
+        scores = autograd.Scale(tp, scores, 1.0 / math.Sqrt(dh as f64))
+        if this.causal:
+            // A [seq, seq] additive mask rides the suffix broadcast onto
+            // every [batch*heads, seq, seq] score plane.
+            mut mask := CausalMask(seq)
+            scores = autograd.Add(tp, scores, autograd.Constant(tp, mask))
+            mask.free()
+        end
+        mut attn := autograd.Softmax(tp, scores)
+        attn = autograd.Dropout(tp, attn, this.dropout)
+        ctx := autograd.BatchMatMul(tp, attn, v)
+        merged := _merge_heads(tp, ctx, batch, seq, this.heads, dh)
+        ret this.wo.forward(tp, ps, merged)
+    end
+end
+
+@en "TransformerEncoderLayer"
+@fa "لایه رمزگذار ترنسفورمر"
+@ar "طبقة مشفر المحول"
+pub struct TransformerEncoderLayer:
+    pub attn: MultiHeadAttention = MultiHeadAttention {}
+    pub ln1: LayerNorm = LayerNorm {}
+    pub ln2: LayerNorm = LayerNorm {}
+    pub ff1: Linear = Linear {}
+    pub ff2: Linear = Linear {}
+    pub dropout: f64 = 0.0
+
+    @en "forward"
+    @fa "پیشرو"
+    @ar "أمامي"
+    pub func forward(tp &: autograd.Tape, ps &: ParamStore, x: int, batch: int, seq: int): int:
+        a := this.attn.forward(tp, ps, this.ln1.forward(tp, ps, x), batch, seq)
+        h := autograd.Add(tp, x, autograd.Dropout(tp, a, this.dropout))
+        mut f := autograd.Gelu(tp, this.ff1.forward(tp, ps, this.ln2.forward(tp, ps, h)))
+        f = this.ff2.forward(tp, ps, f)
+        ret autograd.Add(tp, h, autograd.Dropout(tp, f, this.dropout))
+    end
+end
+
+func _split_heads(tp &: autograd.Tape, x: int, b: int, t: int, h: int, dh: int): int:
+    mut s4 := tensor.Shape4(b, t, h, dh)
+    r := autograd.Reshape(tp, x, s4)
+    s4.free()
+    mut perm := Vector {} as Vector<int>
+    perm.push(0)
+    perm.push(2)
+    perm.push(1)
+    perm.push(3)
+    p := autograd.Permute(tp, r, perm)
+    perm.free()
+    mut s3 := tensor.Shape3(b * h, t, dh)
+    out := autograd.Reshape(tp, p, s3)
+    s3.free()
+    ret out
+end
+
+func _merge_heads(tp &: autograd.Tape, x: int, b: int, t: int, h: int, dh: int): int:
+    mut s4 := tensor.Shape4(b, h, t, dh)
+    r := autograd.Reshape(tp, x, s4)
+    s4.free()
+    mut perm := Vector {} as Vector<int>
+    perm.push(0)
+    perm.push(2)
+    perm.push(1)
+    perm.push(3)
+    p := autograd.Permute(tp, r, perm)
+    perm.free()
+    mut s2 := tensor.Shape2(b * t, h * dh)
+    out := autograd.Reshape(tp, p, s2)
+    s2.free()
+    ret out
+end
+
+// [B*H, T, dh] -> [B*H, dh, T]
+func _transpose_last(tp &: autograd.Tape, x: int): int:
+    mut perm := Vector {} as Vector<int>
+    perm.push(0)
+    perm.push(2)
+    perm.push(1)
+    out := autograd.Permute(tp, x, perm)
+    perm.free()
+    ret out
+end
+
+// ---- public API ----
+
+@en "NewMultiHeadAttention"
+@fa "توجه چندسر نو"
+@ar "انتباه متعدد الرؤوس جديد"
+pub func NewMultiHeadAttention(ps &: ParamStore, name: str, dim: int, heads: int, dropout: f64, g &: tensor.Rng): MultiHeadAttention:
+    mut m := MultiHeadAttention {}
+    m.dim = dim
+    m.heads = heads
+    m.dropout = dropout
+    _pn1 := name + ".q"
+    m.wq = NewLinear(ps, _pn1, dim, dim, g)
+    mem.Free(_pn1 as void*)
+    _pn2 := name + ".k"
+    m.wk = NewLinear(ps, _pn2, dim, dim, g)
+    mem.Free(_pn2 as void*)
+    _pn3 := name + ".v"
+    m.wv = NewLinear(ps, _pn3, dim, dim, g)
+    mem.Free(_pn3 as void*)
+    _pn4 := name + ".o"
+    m.wo = NewLinear(ps, _pn4, dim, dim, g)
+    mem.Free(_pn4 as void*)
+    ret m
+end
+
+@en "NewTransformerEncoderLayer"
+@fa "لایه رمزگذار ترنسفورمر نو"
+@ar "طبقة مشفر محول جديدة"
+pub func NewTransformerEncoderLayer(ps &: ParamStore, name: str, dim: int, heads: int, ff_dim: int, dropout: f64, g &: tensor.Rng): TransformerEncoderLayer:
+    mut l := TransformerEncoderLayer {}
+    l.dropout = dropout
+    _pn5 := name + ".attn"
+    l.attn = NewMultiHeadAttention(ps, _pn5, dim, heads, dropout, g)
+    mem.Free(_pn5 as void*)
+    _pn6 := name + ".ln1"
+    l.ln1 = NewLayerNorm(ps, _pn6, dim)
+    mem.Free(_pn6 as void*)
+    _pn7 := name + ".ln2"
+    l.ln2 = NewLayerNorm(ps, _pn7, dim)
+    mem.Free(_pn7 as void*)
+    _pn8 := name + ".ff1"
+    l.ff1 = NewLinear(ps, _pn8, dim, ff_dim, g)
+    mem.Free(_pn8 as void*)
+    _pn9 := name + ".ff2"
+    l.ff2 = NewLinear(ps, _pn9, ff_dim, dim, g)
+    mem.Free(_pn9 as void*)
+    ret l
+end
+
+// The additive causal mask: 0 on and below the diagonal, a large
+// negative above it, so a softmax over a row ignores later positions.
+@en "CausalMask"
+@fa "ماسک علّی"
+@ar "قناع سببي"
+pub func CausalMask(seq: int): tensor.Tensor:
+    m := tensor.Zeros2(seq, seq)
+    p := m.data.data
+    neg := (0.0 - 1.0e9) as f32
+    repeat seq with i:
+        repeat seq with j:
+            if j > i: p[i * seq + j] = neg end
+        end
+    end
+    ret m
+end
+
+// A pre-norm decoder block: causal self-attention plus the feed-forward,
+// the layer a language model stacks.
+@en "NewTransformerDecoderLayer"
+@fa "لایه رمزگشای ترنسفورمر نو"
+@ar "طبقة فك تشفير محول جديدة"
+pub func NewTransformerDecoderLayer(ps &: ParamStore, name: str, dim: int, heads: int, ff_dim: int, dropout: f64, g &: tensor.Rng): TransformerEncoderLayer:
+    mut l := NewTransformerEncoderLayer(ps, name, dim, heads, ff_dim, dropout, g)
+    l.attn.causal = true
+    ret l
+end

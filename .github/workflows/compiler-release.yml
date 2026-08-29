@@ -18,13 +18,6 @@ on:
         description: 'Date (YYYY-MM-DD) to stamp the nightly tag/title with; defaults to today (UTC) if left blank'
         type: string
         default: ''
-# ccache stores its objects zstd-compressed; level 0 (its default) is fast but
-# leaves a lot on the table. This repository keeps seven ccache directories
-# across the release matrix, budgeted at 300-800 MB each, against a 10 GB
-# repository-wide Actions cache limit shared with every other workflow. Level 9
-# shrinks each directory materially for a small write-time cost, which both
-# reduces what is uploaded and - because --max-size caps the COMPRESSED size -
-# lets more objects live inside the same budget, improving the hit rate.
 env:
   CCACHE_COMPRESS: '1'
   CCACHE_COMPRESSLEVEL: '9'
@@ -52,11 +45,6 @@ jobs:
           persist-credentials: false
       - name: Install dependencies (static LLVM + LLD + cross sysroot inputs)
         run: |
-          # apt.llvm.org publishes AAAA records and the hosted runners have no
-          # IPv6 route, so apt picks the v6 address and stops there: "Cannot
-          # initiate the connection to apt.llvm.org:443 (2a04:4e42:94::561) -
-          # connect (101: Network is unreachable)", then "no longer has a Release
-          # file". Pin apt to IPv4 before llvm.sh runs its own apt-get update.
           echo 'Acquire::ForceIPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4 >/dev/null
           wget -4 -qO llvm.sh https://apt.llvm.org/llvm.sh
           chmod +x llvm.sh
@@ -66,14 +54,6 @@ jobs:
             llvm-22-dev liblld-22-dev libpolly-22-dev libclang-rt-22-dev \
             libzstd-dev zlib1g-dev libtinfo-dev libxml2-dev \
             musl-dev musl-tools mingw-w64 qemu-user-static wine64
-          # wine64 alone (no i386 multiarch) can run the 64-bit-only PE
-          # binaries this job cross-compiles (--target=x86_64-w64-windows-gnu);
-          # run-tests.sh's cross section looks for a "wine" command, so
-          # symlink it rather than pulling in wine32/i386 dependencies.
-          # Newer Ubuntu (26.04+) turned wine64 into an empty transitional
-          # package that just depends on the full "wine" package instead of
-          # shipping its own /usr/bin/wine64, so fall back to "wine" if
-          # "wine64" isn't found on PATH.
           WINE_BIN="$(command -v wine64 || command -v wine || true)"
           if [ -z "$WINE_BIN" ]; then
             echo "::error::no wine or wine64 binary found after installing wine64"
@@ -106,8 +86,6 @@ jobs:
           key: musl-embed-sysroots-v2-${{ github.run_id }}
           restore-keys: |
             musl-embed-sysroots-v2-
-      # x86_64 is absent on purpose: this job takes it from the distro's
-      # musl-dev via `make stage-sysroots`, not from a downloaded toolchain.
       - name: Fetch cross musl sysroots (aarch64 + i686 + armhf) for embedding
         run: sh tools/bash/fetch-musl-sysroots.sh --out /tmp/muslcc --arches "aarch64 i686 arm"
       - name: Cache ccache (Linux)
@@ -117,17 +95,6 @@ jobs:
           key: ccache-linux-${{ github.run_id }}
           restore-keys: |
             ccache-linux-
-      # Restore/save split rather than a plain actions/cache: a cache entry is
-      # only ever written when its key MISSES, so one immutable key freezes
-      # whatever the very first run happened to produce. Any run that staged
-      # only part of the target set (a musl sysroot fetch that failed, a
-      # cross-toolchain download that 404'd) pins that partial set forever -
-      # every later run then hits the stale entry, rebuilds the missing libs
-      # from scratch, and cannot store them because the key already exists.
-      # Keying on run_id and restoring by prefix lets each run start from the
-      # newest entry and save a more complete one, so the cache converges
-      # instead of freezing. The save is skipped when nothing was built, so a
-      # fully-cached run does not re-upload an identical entry.
       - name: Restore static third-party libs (sqlite3 + hiredis + openssl + mariadb, per --target=)
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -135,34 +102,11 @@ jobs:
           key: extralibs-sqlite3-3530400-hiredis-v1.4.0-openssl-3.6.3-mariadb-v3.4.9-v2-${{ github.run_id }}
           restore-keys: |
             extralibs-sqlite3-3530400-hiredis-v1.4.0-openssl-3.6.3-mariadb-v3.4.9-v2-
-      # Static libsqlite3.a/libhiredis.a/libssl.a/libcrypto.a/libmariadb.a per
-      # supported --target= triple, embedded into salam itself (see
-      # SALAM_EMBED_EXTRALIBS_*_DIR below and compiler/driver/driver_embed.salam's
-      # salam_try_embed_extralibs_{musl,mingw}) so `link dynamic "sqlite3"`/
-      # `link dynamic "hiredis"`/`link dynamic "ssl"`+`link dynamic "crypto"`/
-      # `link dynamic "mariadb"` resolve to a bundled static archive on any
-      # target - no separate
-      # install needed by whoever eventually runs a salam-built program.
-      # Kept as its own toolchain fetch, independent of the crt/libc
-      # musl-cross fetch above (which discards the full toolchain after
-      # copying out crt1.o/libc.a/etc.) so this never risks touching that
-      # already-working logic. All libraries are built together per target
-      # (not as separate steps) so
-      # the aarch64/i686/arm cross-toolchain - a real, ~100MB fetch - only
-      # gets downloaded once per target rather than once per library.
       - name: Build static third-party libs for all --target= triples
         id: extralibs
         run: |
           set -eu
           mkdir -p /tmp/extralibs
-          # Cheap content fingerprint, compared again at the end of this
-          # step, so the save below only runs when something was actually
-          # built. The set of paths is signal enough: every need_build*
-          # gate below builds only when its .a is missing, so anything
-          # built necessarily adds a file. Deliberately no `find -printf`
-          # (a GNU extension): if it were unsupported the error would be
-          # swallowed, both fingerprints would come back empty and equal,
-          # and the cache would silently never be saved again.
           fingerprint() {
             find "$1" -type f 2>/dev/null \
               | LC_ALL=C sort | sha256sum | cut -d' ' -f1
@@ -171,11 +115,6 @@ jobs:
           TARGETS="x86_64-linux-musl aarch64-linux-musl i686-linux-musl arm-linux-musleabihf x86_64-w64-windows-gnu hostlibs"
           need_build() { [ ! -f "/tmp/extralibs/$2/lib$1.a" ]; }
           any_needed() { for t in $TARGETS; do need_build "$1" "$t" && return 0; done; return 1; }
-          # openssl's build_openssl() below writes libssl.a + libcrypto.a, not
-          # a "libopenssl.a" - need_build()'s generic lib$1.a pattern doesn't
-          # match either file, so a plain `need_build openssl` is always true
-          # and would force a from-source openssl rebuild for every target on
-          # every run regardless of cache. Check the real output files instead.
           need_build_openssl() { [ ! -f "/tmp/extralibs/$1/libssl.a" ] || [ ! -f "/tmp/extralibs/$1/libcrypto.a" ]; }
           any_needed_openssl() { for t in $TARGETS; do need_build_openssl "$t" && return 0; done; return 1; }
 
@@ -191,23 +130,6 @@ jobs:
             git clone --quiet --depth 1 --branch v1.4.0 \
               https://github.com/redis/hiredis.git /tmp/hiredis-src
           fi
-          # openssl needs its own build (Configure + make), not a simple
-          # CC/AR pair like sqlite3/hiredis, so it isn't run through
-          # build_all() below - build_openssl() is called directly instead,
-          # both from the "straightforward toolchain" section and inside
-          # the aarch64/i686/arm loop. no-secure-memory is required under
-          # musl: crypto/mem_sec.c's secure-heap code includes the Linux
-          # kernel's <linux/mman.h> (for mlock2's MLOCK_ONFAULT), which
-          # musl's minimal sysroot does not ship - the whole file's
-          # OPENSSL_SYS_LINUX block is guarded by #ifndef
-          # OPENSSL_NO_SECURE_MEMORY, so disabling the feature skips that
-          # include entirely rather than needing the header.
-          # Also pre-fetched whenever mariadb needs (re)building, even if
-          # openssl itself is fully cached: build_mariadb() below points
-          # CMake's FindOpenSSL at a scratch "openssl-root" (headers only,
-          # via ensure_openssl_root()) that isn't part of the cached
-          # /tmp/extralibs path, so a fresh runner needs the tarball on hand
-          # to regenerate just those headers even on an openssl cache hit.
           if any_needed_openssl || any_needed mariadb; then
             curl -fL --connect-timeout 15 --max-time 180 -o /tmp/openssl.tar.gz \
               "https://github.com/openssl/openssl/releases/download/openssl-3.6.3/openssl-3.6.3.tar.gz"
@@ -215,20 +137,9 @@ jobs:
               | sha256sum -c -
           fi
           JOBS=$(nproc 2>/dev/null || echo 4)
-          # no-engine: the legacy engines/ (e_afalg, e_capi, e_padlock, ...) are
-          # optional OS/hardware-integration modules superseded by OpenSSL 3.x
-          # "providers" - e_afalg.c specifically needs the Linux kernel's
-          # <linux/version.h>, absent from musl's minimal sysroot. Disabling
-          # the whole category avoids that (and whatever the next engine's
-          # missing-header turns out to be on some other cross-toolchain)
-          # rather than chasing them one at a time; nothing in std/ssl/ssl.salam
-          # needs engine-specific APIs.
           build_openssl() {
             target="$1"; ossl_target="$2"; shift 2
             need_build_openssl "$target" || { echo "reusing cached openssl for $target"; return 0; }
-            # Per-target scratch dir (not a single shared /tmp/openssl-build)
-            # so independent targets can be built concurrently below without
-            # clobbering each other's in-progress Configure/make tree.
             ob_dir="/tmp/openssl-build-$target"
             rm -rf "$ob_dir" "$ob_dir.log"; mkdir -p "$ob_dir"
             tar xf /tmp/openssl.tar.gz -C "$ob_dir" --strip-components=1
@@ -239,11 +150,6 @@ jobs:
               if [ -f "$ob_dir/libssl.a" ] && [ -f "$ob_dir/libcrypto.a" ]; then
                 mkdir -p "/tmp/extralibs/$target"
                 cp "$ob_dir/libssl.a" "$ob_dir/libcrypto.a" "/tmp/extralibs/$target/"
-                # Scratch OpenSSL "root" (headers + libs) for build_mariadb()
-                # below to point CMake's FindOpenSSL at - deliberately NOT
-                # under /tmp/extralibs (which gets embedded into salam
-                # itself): the headers are only needed to configure
-                # mariadbclient's build here in CI, never at runtime.
                 rm -rf "/tmp/openssl-root-$target"
                 mkdir -p "/tmp/openssl-root-$target/include" "/tmp/openssl-root-$target/lib"
                 cp -r "$ob_dir/include/." "/tmp/openssl-root-$target/include/"
@@ -259,41 +165,10 @@ jobs:
             fi
             rm -rf "$ob_dir" "$ob_dir.log"
           }
-          # MariaDB Connector/C is CMake-based (needs a compiler + system-name
-          # override per target, not a simple CC/AR pair) - same reasoning as
-          # openssl above. Its CMakeLists has no "disable TLS" option at all -
-          # WITH_SSL must be OPENSSL, GNUTLS, or (Windows-only) SCHANNEL, else
-          # it hard-errors ("Invalid TLS/SSL option") - so windows targets use
-          # SCHANNEL (native Windows API, zero extra dependency) and
-          # everything else points CMake's FindOpenSSL at the scratch
-          # "openssl-root" build_openssl() staged above via OPENSSL_ROOT_DIR.
-          # The project's own CMake install step renames the static lib to
-          # libmariadb.a via a symlink, but salam's embed extraction (a
-          # deliberately tiny custom untar, see compiler/driver/driver_sysroot.salam)
-          # does not support symlinks, so the rename is done here with a
-          # plain copy instead.
           if any_needed mariadb; then
             git clone --quiet --depth 1 --branch v3.4.9 \
               https://github.com/mariadb-corporation/mariadb-connector-c.git /tmp/mariadb-src
           fi
-          # Regenerates just the openssl-root scratch headers (cheap:
-          # extract + `Configure` + `make build_generated`, no compiling)
-          # when build_openssl() didn't run this CI invocation because its
-          # .a files were already cache hit - the headers live outside the
-          # cached /tmp/extralibs path (see build_openssl()'s comment), so a
-          # cache hit alone leaves them missing even though the actual libs
-          # are available.
-          #
-          # The sentinel is opensslv.h, and it is generated, not shipped:
-          # OpenSSL 3.x keeps ~two dozen headers as .h.in templates and
-          # `Configure` alone expands none of them. Staging a Configure-only
-          # tree therefore looked complete (evp.h, macros.h and the rest of
-          # the static headers are all there, and CMake's FindOpenSSL was
-          # happy) right up to the first compile, which died on
-          # `openssl/macros.h:15: openssl/opensslv.h: No such file or
-          # directory` - the whole mariadb build for the one target whose
-          # openssl came from cache. build_openssl() never hit this because
-          # `make build_libs` generates them on the way to the .a files.
           ensure_openssl_root() {
             target="$1"; ossl_target="$2"; shift 2
             [ -f "/tmp/openssl-root-$target/include/openssl/opensslv.h" ] && return 0
@@ -304,13 +179,9 @@ jobs:
               echo "243a86649cf6f23eeb6a2ff2456e09e5d77dd9018a54d3d96b0c6bdd6ba6c7f1  /tmp/openssl.tar.gz" \
                 | sha256sum -c - || return 1
             }
-            # Per-target scratch dir - see build_openssl()'s comment above.
             ob_dir="/tmp/openssl-build-$target"
             rm -rf "$ob_dir" "$ob_dir.log"; mkdir -p "$ob_dir"
             tar xf /tmp/openssl.tar.gz -C "$ob_dir" --strip-components=1
-            # build_generated expands the .h.in templates and nothing else -
-            # it runs perl only, so it needs no cross compiler and costs
-            # seconds, unlike the build_libs that build_openssl() does.
             ( cd "$ob_dir" \
               && ./Configure "$ossl_target" no-shared no-tests no-docs no-apps \
                    no-secure-memory no-engine "$@" \
@@ -324,9 +195,6 @@ jobs:
             cp "/tmp/extralibs/$target/libssl.a" "/tmp/extralibs/$target/libcrypto.a" \
               "/tmp/openssl-root-$target/lib/"
             rm -rf "$ob_dir" "$ob_dir.log"
-            # Fail here rather than 400 lines into mariadb's compile: a root
-            # missing a generated header configures cleanly and only dies at
-            # the first #include.
             [ -f "/tmp/openssl-root-$target/include/openssl/opensslv.h" ] || {
               echo "::warning::openssl-root for $target is missing generated headers"
               return 1; }
@@ -338,14 +206,6 @@ jobs:
               *windows*) ssl_args=(-DWITH_SSL=SCHANNEL) ;;
               *)
                 if ensure_openssl_root "$target" "$ossl_target"; then
-                  # FindOpenSSL.cmake consults pkg-config before honoring
-                  # OPENSSL_ROOT_DIR, so on a runner with system libssl-dev
-                  # preinstalled it silently resolves OPENSSL_INCLUDE_DIR to
-                  # /usr/include (wrong version, and for cross targets the
-                  # bundled musl-cross gcc can't even see /usr/include at
-                  # all - "fatal error: openssl/evp.h: No such file or
-                  # directory"). Pin the include dir and both static libs
-                  # directly so FindOpenSSL's own probing never runs.
                   ssl_args=(-DWITH_SSL=OPENSSL "-DOPENSSL_ROOT_DIR=/tmp/openssl-root-$target" \
                     -DOPENSSL_USE_STATIC_LIBS=TRUE \
                     "-DOPENSSL_INCLUDE_DIR=/tmp/openssl-root-$target/include" \
@@ -358,20 +218,8 @@ jobs:
                 fi
                 ;;
             esac
-            # Per-target scratch build dir (mariadb-connector-c is built
-            # out-of-source, so /tmp/mariadb-src itself is only ever read,
-            # not written - safe to share read-only across concurrent
-            # targets below) so independent targets can build concurrently.
             mb_dir="/tmp/mariadb-build-$target"
             rm -rf "$mb_dir" "$mb_dir.log"; mkdir -p "$mb_dir"
-            # CMAKE_COMPILE_WARNING_AS_ERROR=OFF is load-bearing, not
-            # tidiness: mariadb-connector-c adds -Werror to CMAKE_C_FLAGS
-            # unless that variable is *defined* (CMakeLists.txt:145), and
-            # its ma_context.c falls back to empty stubs with unused
-            # parameters on any target with neither inline asm nor working
-            # ucontext - which is every musl arch outside x86. That turned
-            # -Wunused-parameter into a hard build failure for
-            # arm-linux-musleabihf and cost that target its static mariadb.
             if ( cd "$mb_dir" \
                  && cmake /tmp/mariadb-src -DCMAKE_BUILD_TYPE=Release \
                       -DCMAKE_COMPILE_WARNING_AS_ERROR=OFF \
@@ -420,28 +268,10 @@ jobs:
               build_hiredis "$target" "$cc" "$ar"; echo "built libhiredis.a for $target"
             fi
           }
-          # x86_64-linux-musl and the windows target already have a real,
-          # complete cross-gcc on PATH (musl-tools / mingw-w64, apt-installed
-          # above) - straightforward.
           build_all x86_64-linux-musl musl-gcc ar
           build_all x86_64-w64-windows-gnu x86_64-w64-mingw32-gcc x86_64-w64-mingw32-ar
-          # "hostlibs" isn't a --target= triple - it's this runner's own
-          # native glibc host (ubuntu-latest), for SALAM_EMBED_HOSTLIBS_DIR
-          # (same-host, no --target= builds - see compiler/driver/driver_build.salam
-          # and compiler/driver/driver_embed.salam). Genuinely separate from the
-          # x86_64-linux-musl build above: this runner links glibc
-          # natively, not musl, so it needs its own glibc-linked .a files.
           build_all hostlibs gcc ar
 
-          # openssl (a from-source ./Configure + make, minutes per target on
-          # a genuine cache miss) and mariadb (a CMake build depending on it)
-          # are the only slow part of this step on a cache miss - sqlite3/
-          # hiredis above stay sequential because build_hiredis() does an
-          # in-tree `make clean && make` in the single shared
-          # /tmp/hiredis-src checkout, which would race under real
-          # concurrency. build_openssl()/build_mariadb() build into
-          # per-target scratch dirs instead (see their definitions above), so
-          # these 3 independent targets are safe to build concurrently here.
           (
             build_openssl x86_64-linux-musl linux-x86_64 CC=musl-gcc
             build_mariadb x86_64-linux-musl linux-x86_64 -DCMAKE_C_COMPILER=musl-gcc
@@ -456,18 +286,6 @@ jobs:
           ) &
           wait
 
-          # aarch64/i686/arm need the full cross-tools/musl-cross toolchain
-          # (not just the trimmed crt1.o/libc.a the sysroot-embed step
-          # keeps) - fetch it fresh here, use its bundled gcc + headers,
-          # then discard everything except the resulting .a files.
-          #
-          # Split into two passes: fetching the toolchain and building
-          # sqlite3/hiredis (build_all) touch shared host state (the single
-          # /tmp/hiredis-src checkout - see build_all's own parallelism note
-          # above) and stay sequential per arch below; the actual
-          # openssl+mariadb builds are queued into the ARCH_* arrays and run
-          # concurrently across all 3 archs afterward, same as the x86_64/
-          # hostlibs targets above.
           ARCH_TARGETS=(); ARCH_GCC=(); ARCH_OSSL=(); ARCH_ARCH=(); ARCH_CTRIPLE=()
           for pair in aarch64:aarch64-linux-musl:aarch64-unknown-linux-musl:linux-aarch64 \
                       i686:i686-linux-musl:i686-unknown-linux-musl:linux-x86 \
@@ -491,13 +309,6 @@ jobs:
                      -o -name "*musleabihf-ar" | head -1)
               if [ -n "$GCC" ] && [ -n "$AR" ]; then
                 build_all "$target" "$GCC" "$AR"
-                # $GCC/$AR point inside /tmp/xtc-${arch}: queue this arch for
-                # the parallel openssl/mariadb pass below instead of
-                # cleaning up the fetched toolchain right away (the
-                # unconditional cleanup a few lines down is skipped via
-                # `continue` for exactly this case), since that pass still
-                # needs a real cross-gcc/ar to invoke. All queued archs'
-                # toolchains are removed together after that pass completes.
                 ARCH_TARGETS+=("$target"); ARCH_GCC+=("$GCC"); ARCH_OSSL+=("$ossl_target")
                 ARCH_ARCH+=("$arch"); ARCH_CTRIPLE+=("$ctriple")
                 continue
@@ -537,9 +348,6 @@ jobs:
             echo "${var}=/tmp/extralibs/$target" >> "$GITHUB_ENV"
           done
 
-          # Fail safe towards saving: an empty fingerprint means the
-          # helper itself broke, and skipping the save on that would
-          # quietly reintroduce the very staleness this replaced.
           EXTRALIBS_AFTER=$(fingerprint /tmp/extralibs)
           if [ -n "$EXTRALIBS_AFTER" ] && [ "$EXTRALIBS_BEFORE" = "$EXTRALIBS_AFTER" ]; then
             echo 'changed=false' >> "$GITHUB_OUTPUT"
@@ -554,18 +362,9 @@ jobs:
         with:
           path: /tmp/extralibs
           key: extralibs-sqlite3-3530400-hiredis-v1.4.0-openssl-3.6.3-mariadb-v3.4.9-v2-${{ github.run_id }}
-      # The compiler is written in its own language, so building it needs one:
-      # the last published release. Everything it produces from here is this
-      # checkout's sources, and build-selfhost.sh stamps this checkout's
-      # VERSION onto the result rather than letting the seed's leak through.
       - name: Install a seed compiler
         uses: ./.github/actions/setup-salam
 
-      # Built by the compiler itself now, not by make -C c. Three pieces:
-      # stage-sysroots collects this host's musl/mingw CRTs, build-embed turns
-      # those plus the per-target static third-party libs into libsalam_embed.a,
-      # and std/llvm/native/build.sh produces the libsalam_llvm.a that carries
-      # in-process LLVM and LLD. The compiler then links all three in.
       - name: Stage the musl and mingw sysroots
         run: sh tools/bash/stage-sysroots.sh --out="$GITHUB_WORKSPACE/sysroots"
 
@@ -648,22 +447,10 @@ jobs:
           grep -qE 'RESULT: [0-9]+ passed, 0 failed' /tmp/tests.log \
             || { echo "::error::Linux test suite failed - blocking release"; exit 1; }
 
-      # Generated C has to compile without a single diagnostic, under every C
-      # compiler that can build it - not just the one the auto-ladder happens
-      # to pick above. SALAM_C_STRICT=1 makes any diagnostic fatal, so a
-      # codegen regression stops the job rather than scrolling past in a log
-      # nobody reads; running all three matters because they disagree about
-      # what is worth warning about, and a construct only gcc objects to is
-      # still a construct we emitted wrongly.
-      #
-      # Deliberately not a matrix job: it reuses the salam built above, and
-      # the sections listed are the codegen-heavy ones. db/opencv are skipped
-      # because they pass their own --cc for the mock link.
       - name: Generated C compiles clean under tcc, gcc and clang
         if: startsWith(github.event.head_commit.message, 'release:') || (github.event_name == 'workflow_dispatch' && inputs.nightly)
         run: |
           set -eu
-          # One clang, whichever name this image has it under.
           CLANG=""
           for c in clang-22 clang; do
             if command -v "$c" >/dev/null 2>&1; then
@@ -760,13 +547,6 @@ jobs:
           HOMEBREW_NO_AUTO_UPDATE: '1'
           HOMEBREW_NO_INSTALL_CLEANUP: '1'
         run: |
-          # Same restore/save reasoning as the static-libs cache: keep the
-          # rolling run_id key, but only upload when the download set
-          # actually moved. A plain actions/cache stores a new copy of the
-          # whole thing on every single run, and these entries are big
-          # enough that the duplicates alone were evicting other caches.
-          # shasum, not sha256sum: macOS ships the former in the base
-          # system and has no coreutils, so sha256sum is simply absent.
           fingerprint() {
             find "$1" -type f 2>/dev/null \
               | LC_ALL=C sort | shasum -a 256 | cut -d' ' -f1
@@ -806,19 +586,8 @@ jobs:
         run: |
           set -eu
           LLVM_PREFIX="$(brew --prefix llvm@22)"
-          # No sysroot staging here: a macOS runner has neither musl nor
-          # mingw, so there is nothing to embed and stage-sysroots would
-          # skip every target anyway. LLVM only.
           sh std/llvm/native/build.sh \
             --llvm-config "$LLVM_PREFIX/bin/llvm-config" --out "$GITHUB_WORKSPACE"
-          # zstd is the one library neither the SDK nor the default search
-          # path provides; it comes from Homebrew. Pointing -L at brew's lib
-          # finds the *dylib*, and a release that links /opt/homebrew/... dies
-          # on any Mac without that exact formula - which the self-containment
-          # check below is there to catch. Apple's linker has no -Bstatic, and
-          # picks the .dylib whenever both sit in one directory, so the archive
-          # gets a directory of its own instead. Same thing c/Makefile did with
-          # its MACOS_ZSTD_A.
           mkdir -p "$GITHUB_WORKSPACE/maclibs"
           zstd_a="$(brew --prefix zstd)/lib/libzstd.a"
           [ -f "$zstd_a" ] || {
@@ -830,15 +599,6 @@ jobs:
           sh tools/bash/build-selfhost.sh --llvm="$GITHUB_WORKSPACE" \
             -- --libpath="$GITHUB_WORKSPACE/maclibs"
           ./salam version
-      # The Linux and Windows jobs already refuse to ship a binary that
-      # imports a third-party library; macOS had no such gate, and 0.2.7
-      # shipped with a dynamic reference to Homebrew's versioned
-      # /opt/homebrew/opt/z3/lib/libz3.4.16.dylib. That path exists only on a
-      # machine with that exact formula version installed, so the released
-      # binary aborted under dyld before main() on every other Mac - including
-      # the runner that the self-host workflow bootstraps from. The build now
-      # drops -lz3 and prefers a static libzstd (see c/Makefile); this check is
-      # what keeps the next such leak from reaching a release.
       - name: Verify salam is self-contained (no Homebrew dylibs)
         run: |
           set -eu
@@ -913,17 +673,9 @@ jobs:
         with:
           persist-credentials: false
 
-      # The test suite builds+runs one native .exe per test case (hundreds of
-      # them), each a fresh file Windows Defender's real-time scanner inspects
-      # before it's allowed to execute. That per-process scan is the single
-      # biggest contributor to this job being far slower than the Linux/macOS
-      # builds for the same test suite - excluding the paths/binaries that
-      # matter here is the standard fix for GitHub-hosted Windows runners.
       - name: Exclude build/test paths from Windows Defender
         shell: pwsh
         run: |
-          # Best-effort: some runner images/policies may reject these: don't
-          # let a blocked exclusion fail the whole build over a speed-up.
           try {
             Add-MpPreference -ExclusionPath "${{ github.workspace }}"
             Add-MpPreference -ExclusionPath "C:\msys64"
@@ -952,11 +704,6 @@ jobs:
           MSYSTEM: MINGW64
           CHERE_INVOKING: '1'
         run: |
-          # Same restore/save reasoning as the static-libs cache: keep the
-          # rolling run_id key, but only upload when the package set
-          # actually moved. A plain actions/cache stored a fresh ~300MB
-          # copy on every run, and those duplicates alone were evicting
-          # other caches out of the repo's 10GB budget.
           fingerprint() {
             find "$1" -type f 2>/dev/null \
               | LC_ALL=C sort | sha256sum | cut -d' ' -f1
@@ -964,17 +711,6 @@ jobs:
           mkdir -p /c/msys64/var/cache/pacman/pkg
           PKGS_BEFORE=$(fingerprint /c/msys64/var/cache/pacman/pkg)
 
-          # clang here is a genuine multi-target cross-compiler frontend
-          # (unlike gcc, it needs no target-native binary to compile - only
-          # target headers via -isystem) - used below to build sqlite3/
-          # hiredis/openssl/mariadb for the 4 linux-musl --target= triples,
-          # which musl-cross's Linux-hosted cross-gcc binaries cannot do on
-          # this Windows host (wrong executable format). llvm-ar/llvm-ranlib
-          # (bundled with mingw-w64-x86_64-llvm, already installed below)
-          # are the target-agnostic archiver counterpart.
-          # git: the bundled tcc is cloned from a pinned TinyCC commit in a
-          # later step, and this MSYS2 shell does not otherwise have one -
-          # Git for Windows is not on its PATH.
           pacman -Sy --noconfirm --needed \
             mingw-w64-x86_64-gcc \
             mingw-w64-x86_64-llvm \
@@ -1017,10 +753,6 @@ jobs:
             C:\muslcc\sr-aarch64
             C:\muslcc\sr-i686
             C:\muslcc\sr-arm
-          # v3: the staged sysroots gained crtbeginT.o/crtend.o/libgcc_eh.a,
-          # which clang needs to link statically here. A restored v2 cache
-          # has only the old five files and fetch-musl-sysroots.sh would
-          # reuse it as-is, so the key has to move for them to appear.
           key: musl-embed-sysroots-win-v3-${{ github.run_id }}
           restore-keys: |
             musl-embed-sysroots-win-v3-
@@ -1030,16 +762,8 @@ jobs:
         env:
           MSYSTEM: MINGW64
           CHERE_INVOKING: '1'
-        # --headers, unlike the Linux jobs: this one has no cross toolchain
-        # of its own to build the static third-party libs with, so it
-        # cross-compiles them with clang against exactly these sysroots.
         run: sh tools/bash/fetch-musl-sysroots.sh --out /c/muslcc --headers
 
-      # Same restore/save split as the Linux job above, and for the same
-      # reason - see that step's comment. This job is where it bit hardest:
-      # the 4 linux-musl targets it cross-builds depend on sysroots staged a
-      # step earlier, so the entry written by the first run predated them and
-      # every run since rebuilt sqlite3/hiredis for all 4 from scratch.
       - name: Restore static third-party libs (sqlite3 + hiredis + openssl + mariadb, per --target=)
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -1047,30 +771,6 @@ jobs:
           key: extralibs-sqlite3-3530400-hiredis-v1.4.0-openssl-3.6.3-mariadb-v3.4.9-win-v3-${{ github.run_id }}
           restore-keys: |
             extralibs-sqlite3-3530400-hiredis-v1.4.0-openssl-3.6.3-mariadb-v3.4.9-win-v3-
-      # Windows counterpart of the Linux job's identically-named step - see
-      # its comment for the overall rationale. x86_64-w64-windows-gnu (this
-      # job's own native target) is built via the native MSYS2 gcc, same as
-      # before. The 4 linux-musl targets are now also built here, via
-      # clang -target <triple> -isystem <musl-sysroot>/include (the sysroot
-      # staged with headers by the "Fetch cross musl sysroots" step above) +
-      # llvm-ar/llvm-ranlib as the archiver: musl-cross's own cross-gcc
-      # binaries are Linux-hosted ELF executables that cannot run under
-      # MSYS2/Windows at all (wrong binary format), but clang needs no
-      # target-native binary to *compile* - only target headers - so this
-      # sidesteps that entirely. Nothing here ever executes target code:
-      # sqlite3/hiredis/openssl(build_libs)/mariadb(mariadbclient) all only
-      # compile + archive .a files, no link/run step, so a working target
-      # linker is never needed either - salam's own embedded LLD does the
-      # real link later, against these plus SALAM_EMBED_MUSL_*_DIR.
-      # Each musl target gets a small on-disk "<triple>-gcc"/-ar/-ranlib
-      # wrapper (a plain shebang script - exec'd fine by the MSYS-native
-      # perl/make used for openssl/hiredis below) plus a "<triple>-gcc.bat"
-      # twin (for CMake's native mingw-w64 cmake.exe, which cannot run a
-      # shebang script directly) so both the Configure-based (openssl) and
-      # CMake-based (mariadb) builds can drive clang as if it were a real
-      # "<triple>-gcc". Best-effort throughout, same as the rest of this
-      # file: any single library/target failing just warns and is skipped,
-      # never fails the job.
       - name: Build static third-party libs for x86_64-w64-windows-gnu + linux-musl targets
         id: extralibs
         shell: 'C:\msys64\usr\bin\bash.exe --login -eo pipefail "{0}"'
@@ -1081,8 +781,6 @@ jobs:
           set -eu
           pacman -Sy --noconfirm --needed git unzip >/dev/null
 
-          # See the Linux job's identical fingerprint helper: it decides
-          # whether the save step below has anything new worth uploading.
           mkdir -p /c/extralibs
           fingerprint() {
             find "$1" -type f 2>/dev/null \
@@ -1090,16 +788,9 @@ jobs:
           }
           EXTRALIBS_BEFORE=$(fingerprint /c/extralibs)
 
-          # need_build/need_build_openssl take the target triple as their
-          # last argument (unlike this step's previous windows-gnu-only
-          # form) so the same helpers cover every target below.
           need_build() { [ ! -f "/c/extralibs/$2/lib$1.a" ]; }
           need_build_openssl() { [ ! -f "/c/extralibs/$1/libssl.a" ] || [ ! -f "/c/extralibs/$1/libcrypto.a" ]; }
 
-          # Only targets whose musl sysroot actually has headers staged (see
-          # the fetch step above; a target whose fetch failed there is
-          # silently absent here, already warned about at fetch time).
-          # entry = <triple>:<sysroot-dir>:<openssl-Configure-target>:<CMAKE_SYSTEM_PROCESSOR>
           MUSL_TARGETS=""
           if [ -n "${SALAM_EMBED_MUSL_DIR:-}" ] && [ -f "${SALAM_EMBED_MUSL_DIR}/include/features.h" ]; then
             MUSL_TARGETS="$MUSL_TARGETS x86_64-linux-musl:${SALAM_EMBED_MUSL_DIR}:linux-x86_64:x86_64"
@@ -1119,11 +810,6 @@ jobs:
           any_needed() { for t in x86_64-w64-windows-gnu $(musl_triples); do need_build "$1" "$t" && return 0; done; return 1; }
           any_needed_openssl() { for t in x86_64-w64-windows-gnu $(musl_triples); do need_build_openssl "$t" && return 0; done; return 1; }
 
-          # C:\msys64 is this whole workflow's hardcoded MSYS2 install root
-          # (every step's `shell:` points at it directly) - used below to
-          # give CMake (a native mingw-w64 binary, not MSYS-native) real
-          # Windows paths for its compiler/AR/RANLIB instead of relying on
-          # MSYS's argv auto-path-conversion heuristics.
           LLVM_AR_WIN=C:/msys64/mingw64/bin/llvm-ar.exe
           LLVM_RANLIB_WIN=C:/msys64/mingw64/bin/llvm-ranlib.exe
           if [ ! -f "$LLVM_AR_WIN" ] || [ ! -f "$LLVM_RANLIB_WIN" ]; then
@@ -1133,38 +819,6 @@ jobs:
 
           XWRAP=/c/xwrap
           mkdir -p "$XWRAP"
-          # Emits <XWRAP>/<triple>/<triple>-{gcc,ar,ranlib} (plain shebang
-          # scripts, exec'd fine by MSYS-native perl/make via their normal
-          # #! handling) plus a <triple>-gcc.bat twin (for native mingw-w64
-          # cmake.exe, which cannot run a shebang script). Prints the wrapper
-          # dir's POSIX path on stdout.
-          #
-          # Only the .bat carries link flags, and deliberately so. The shebang
-          # pair is used by sqlite3/hiredis (compile + ar, never a link) and by
-          # openssl's `make build_libs` (static libs only), all of which work
-          # as they are; the .bat is used by exactly one caller, mariadb's
-          # CMake, which is the only thing here that links an executable.
-          #
-          #   -fuse-ld=lld  clang otherwise resolves plain `ld` off PATH, which
-          #                 on this runner is MSYS2's mingw ld - a PE-only
-          #                 linker. Its very first act is CMakeTestCCompiler's
-          #                 try-compile, and it died there with "unrecognised
-          #                 emulation mode: elf_i386 / Supported emulations:
-          #                 i386pep i386pe", so CMake declared the compiler
-          #                 broken and every musl target lost its static
-          #                 mariadb. lld links ELF for all four.
-          #   -B/-L         these sysroots are flat - crt1.o, crti.o, crtn.o,
-          #                 libc.a and libgcc.a sit directly in <sysroot> (see
-          #                 tools/bash/fetch-musl-sysroots.sh), nowhere clang
-          #                 looks by default. Without -B it emits a bare
-          #                 "crt1.o" the linker cannot resolve.
-          #   -static       nothing but .a files was staged, so a dynamic link
-          #                 has nothing to find.
-          #
-          # The .bat also needs a Windows-shaped sysroot path: it is read by
-          # native cmake.exe/clang.exe, which take a leading /c/... as
-          # drive-relative rather than as the MSYS mount. Same reasoning as
-          # LLVM_AR_WIN/LLVM_RANLIB_WIN above.
           make_musl_wrapper() {
             triple="$1"; sr="$2"
             d="$XWRAP/$triple"; mkdir -p "$d"
@@ -1217,11 +871,6 @@ jobs:
             git clone --quiet --depth 1 --branch v1.4.0 \
               https://github.com/redis/hiredis.git /tmp/hiredis-src
           fi
-          # openssl and mariadb (SCHANNEL for windows-gnu; OPENSSL, via the
-          # scratch openssl-root below, for the 4 musl targets) build
-          # concurrently into their own per-target scratch dirs. Package
-          # installs are hoisted into one combined pacman call first since
-          # pacman cannot run two concurrent instances (db lock).
           if any_needed_openssl || any_needed mariadb; then
             pkgs=""
             if any_needed_openssl; then pkgs="$pkgs perl"; fi
@@ -1253,10 +902,6 @@ jobs:
               if [ -f "$ob_dir/libssl.a" ] && [ -f "$ob_dir/libcrypto.a" ]; then
                 mkdir -p "/c/extralibs/$target"
                 cp "$ob_dir/libssl.a" "$ob_dir/libcrypto.a" "/c/extralibs/$target/"
-                # Scratch openssl "root" (headers + libs) for build_mariadb()
-                # below to point CMake's FindOpenSSL at - not under
-                # /c/extralibs (which gets embedded into salam itself): the
-                # headers are only needed to configure mariadbclient here.
                 rm -rf "/tmp/openssl-root-$target"
                 mkdir -p "/tmp/openssl-root-$target/include" "/tmp/openssl-root-$target/lib"
                 cp -r "$ob_dir/include/." "/tmp/openssl-root-$target/include/"
@@ -1277,23 +922,6 @@ jobs:
             mb_dir="/tmp/mariadb-build-$target"
             rm -rf "$mb_dir" "$mb_dir.log"; mkdir -p "$mb_dir"
             # shellcheck disable=SC2086
-            # -DCMAKE_COMPILE_WARNING_AS_ERROR=OFF: see the Linux job's copy
-            # of build_mariadb for why this is load-bearing on musl targets.
-            #
-            # WITH_CURL=OFF is not enough to keep curl out: CMakeLists.txt:74
-            # runs FIND_PACKAGE(CURL) unconditionally, before it ever looks at
-            # the option. On this runner that finds MSYS2's CURLConfig.cmake,
-            # which find_dependency(Brotli)'s its way into a FindBrotli.cmake
-            # that calls pkg_check_modules - a command that only exists once
-            # FindPkgConfig has been loaded, and ssl_args deliberately sets
-            # CMAKE_DISABLE_FIND_PACKAGE_PkgConfig=ON to stop FindOpenSSL
-            # resolving the wrong OpenSSL. So the two settings collided:
-            # "Unknown CMake command pkg_check_modules", and every musl target
-            # lost its mariadb again. Disabling the CURL lookup outright is
-            # what WITH_CURL=OFF was asking for anyway.
-            #
-            # This only surfaced once the cross compiler could link at all -
-            # before that CMake stopped at its own compiler check.
             if ( cd "$mb_dir" \
                  && cmake /tmp/mariadb-src -G "MSYS Makefiles" -DCMAKE_BUILD_TYPE=Release \
                       -DCMAKE_COMPILE_WARNING_AS_ERROR=OFF \
@@ -1326,14 +954,12 @@ jobs:
               "$target" "$target" "$target" "$target"
           }
 
-          # --- x86_64-w64-windows-gnu: native MSYS2 gcc, same as before ---
           build_all x86_64-w64-windows-gnu gcc ar
           (
             build_openssl x86_64-w64-windows-gnu mingw64
             build_mariadb x86_64-w64-windows-gnu -DWITH_SSL=SCHANNEL -DCMAKE_C_COMPILER=gcc
           ) &
 
-          # --- the 4 linux-musl targets: clang -target cross-compile ---
           for entry in $MUSL_TARGETS; do
             triple="${entry%%:*}"; rest="${entry#*:}"
             sr="${rest%%:*}"; rest2="${rest#*:}"
@@ -1357,9 +983,6 @@ jobs:
 
           echo "SALAM_EMBED_EXTRALIBS_X86_64_W64_WINDOWS_GNU_DIR=C:/extralibs/x86_64-w64-windows-gnu" \
             >> "$GITHUB_ENV"
-          # This job's own native (no --target=) build IS x86_64-w64-windows-gnu
-          # - reuse the same staged libs for SALAM_EMBED_HOSTLIBS_DIR rather
-          # than building a redundant second copy.
           echo "SALAM_EMBED_HOSTLIBS_DIR=C:/extralibs/x86_64-w64-windows-gnu" \
             >> "$GITHUB_ENV"
           for entry in $MUSL_TARGETS; do
@@ -1369,9 +992,6 @@ jobs:
             echo "${var}=C:/extralibs/$triple" >> "$GITHUB_ENV"
           done
 
-          # Fail safe towards saving: an empty fingerprint means the
-          # helper itself broke, and skipping the save on that would
-          # quietly reintroduce the very staleness this replaced.
           EXTRALIBS_AFTER=$(fingerprint /c/extralibs)
           if [ -n "$EXTRALIBS_AFTER" ] && [ "$EXTRALIBS_BEFORE" = "$EXTRALIBS_AFTER" ]; then
             echo 'changed=false' >> "$GITHUB_OUTPUT"
@@ -1398,22 +1018,11 @@ jobs:
           MSYSTEM: MINGW64
           CHERE_INVOKING: '1'
           CCACHE_DIR: 'C:/ccache-win64'
-          # Through the environment rather than expanded into the script:
-          # zizmor flags a ${{ }} inside a run block as a template-injection
-          # site, and it is right that the shell should never see the value
-          # as source text.
           SEED_PATH: ${{ steps.seed.outputs.salam }}
         run: |
           set -eu
           SR=/tmp/mingw-sr/lib
           mkdir -p "$SR"
-          # Search the whole /mingw64 tree by basename instead of assuming a
-          # fixed subdirectory layout - MSYS2 has shuffled crt/gcc-runtime
-          # paths across gcc bumps before, and a hardcoded path silently
-          # degrades this to a build with no embedded sysroot.
-          # stage-sysroots.sh is not used here for the same reason: its search
-          # list is fixed directories, which is right on Linux and wrong on a
-          # runner whose layout moves.
           missing=""
           for x in crt2.o dllcrt2.o libmingw32.a libmingwex.a libmoldname.a \
             libmsvcrt.a libadvapi32.a libshell32.a libuser32.a libkernel32.a \
@@ -1445,24 +1054,9 @@ jobs:
             --extralibs-aarch64-musl "${SALAM_EMBED_EXTRALIBS_AARCH64_LINUX_MUSL_DIR:-}" \
             --extralibs-i686-musl "${SALAM_EMBED_EXTRALIBS_I686_LINUX_MUSL_DIR:-}" \
             --extralibs-arm-musl "${SALAM_EMBED_EXTRALIBS_ARM_LINUX_MUSLEABIHF_DIR:-}"
-          # The old make line passed EXTRA_LDFLAGS="-static -static-libgcc
-          # -static-libstdc++", and dropping them is what produced
-          # "duplicate section .rdata$_ZTSSt9exception has different size":
-          # the merged LLVM archive and MSYS2's libstdc++ disagree about the
-          # same comdat unless gcc supplies its own copy. There is no
-          # --ldflags on the driver, so they ride in on a cc wrapper.
-          # A .bat, not a shell script: the driver spawns the C compiler as a
-          # native Windows command, and cmd cannot run a shebang. A shell
-          # wrapper came back as "'C:/msys64/tmp/cc-static' is not recognized
-          # as an internal or external command". c/Makefile's own musl wrapper
-          # emitted a .bat twin for exactly this reason.
           printf '@echo off\r\ngcc %%* -static -static-libgcc -static-libstdc++\r\n' \
             > /tmp/cc-static.bat
 
-          # --seed by path, not through PATH: this step runs under MSYS2 bash,
-          # and the Windows-style directory setup-salam appends to GITHUB_PATH
-          # is not something an MSYS shell resolves, so `command -v salam`
-          # found nothing and the build stopped with "no seed compiler".
           sh tools/bash/build-selfhost.sh \
             --seed="$(cygpath -u "$SEED_PATH")" \
             --llvm="$GITHUB_WORKSPACE" --embed="$GITHUB_WORKSPACE" \
@@ -1493,28 +1087,12 @@ jobs:
           fi
           echo "OK: salam.exe imports only Windows system DLLs."
 
-      # Built from the pin in tools/ci/tinycc-ref.txt rather than fetched
-      # from Savannah, whose newest win64 binary is 0.9.27 from December 2017
-      # - eight years and a win64 float-argument miscompile behind mob. It
-      # installs straight into the bundle at salam-windows/tcc, the same path
-      # the zip used to unpack to, so everything downstream is unchanged.
-      # The build is entirely determined by the pinned commit and the script
-      # driving it, so it is worth caching rather than repeating every run:
-      # a clone of tinycc's history plus a full compile, for a bundle that
-      # comes out byte-for-byte the same. Keyed on both files so moving the
-      # pin or changing the build invalidates it; the install prefix is a
-      # fixed path under the workspace, which matters because configure
-      # bakes it into the binary, so restoring it elsewhere would not work.
-      # The staging step below runs `tcc.exe -v` on whatever lands here, so
-      # a restored bundle still has to prove it runs.
       - name: Restore bundled tcc
         id: tccbundle
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: salam-windows/tcc
           key: tcc-bundle-windows-x86_64-${{ hashFiles('tools/ci/tinycc-ref.txt', 'tools/ci/build-tcc.sh') }}-v1
-      # MSYS2 rather than the `shell: bash` the staging step below uses:
-      # building tcc needs gcc and make, which Git Bash does not have.
       - name: Build bundled tcc from the pinned TinyCC commit
         if: steps.tccbundle.outputs.cache-hit != 'true'
         shell: 'C:\msys64\usr\bin\bash.exe --login -eo pipefail "{0}"'
@@ -1623,29 +1201,6 @@ jobs:
           pacman -Sy --noconfirm --needed \
             mingw-w64-x86_64-hiredis mingw-w64-x86_64-libmariadbclient mingw-w64-x86_64-sqlite3
 
-      # tcc (the C backend bundled with the Windows release) resolves genuine
-      # Windows system DLLs (ws2_32, winhttp, kernel32, user32, ...) on its
-      # own with zero staging. It does NOT know about MSYS2-only libraries,
-      # so hiredis/mariadb/sqlite3/openssl need a copy placed in tcc's own
-      # lib/ dir (searched relative to tcc.exe regardless of -L) under the
-      # exact name `-l<name>` expects: bare `lib<name>.dll` for the
-      # MinGW-built hiredis/mariadb, a renamed copy for sqlite3 (MSYS2 ships
-      # it soname-versioned as `libsqlite3-0.dll`) and for openssl (ships as
-      # `lib{ssl,crypto}-3-x64.dll`).
-      #
-      # sqlite3 is bundled rather than linked against the OS-provided
-      # winsqlite3.dll (the std lib's previous approach) because that DLL's
-      # presence isn't guaranteed on every Windows SKU - notably it is not
-      # reliably present on the Windows Server base this windows-latest
-      # runner uses, which is exactly what broke `import sqlite`/FFI-sqlite
-      # tests here. Bundling our own copy (like hiredis/mariadb already do)
-      # makes this self-contained instead of relying on the host OS.
-      #
-      # WebView2Loader.dll is MSVC-built, not MinGW-built: tcc's direct-DLL
-      # loader (which reads the export table straight from the PE image)
-      # rejects it outright ("unrecognized file type"), so it needs an
-      # actual `.def` - generated via tcc's own bundled `-impdef`, exactly
-      # as tcc-win32.txt documents for linking against arbitrary DLLs.
       - name: Stage native libs for full test suite (hiredis, mariadb, sqlite3, openssl, WebView2Loader)
         if: startsWith(github.event.head_commit.message, 'release:') || (github.event_name == 'workflow_dispatch' && inputs.nightly)
         shell: bash
@@ -1667,10 +1222,6 @@ jobs:
             -o "$TCCLIB/WebView2Loader.def"
           rm -rf wv2pkg webview2.nupkg
 
-      # The db-category tests build a mysql_mock.a via a POSIX `ln -s`
-      # (see tools/bash/run-one-build.sh); unprivileged symlink creation
-      # on Windows silently no-ops without Developer Mode, which failed
-      # tests would otherwise mask as ordinary link errors.
       - name: Enable Developer Mode (symlink support for db mock tests)
         if: startsWith(github.event.head_commit.message, 'release:') || (github.event_name == 'workflow_dispatch' && inputs.nightly)
         shell: pwsh
@@ -1678,9 +1229,6 @@ jobs:
           New-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock" `
             -Name "AllowDevelopmentWithoutDevMode" -Value 1 -PropertyType DWord -Force | Out-Null
 
-      # Chocolatey's own resolve/download/checksum overhead makes a cold
-      # `choco install` take minutes for a single small package; caching the
-      # installed package skips all of that on every run after the first.
       - name: Cache Chocolatey redis package
         if: startsWith(github.event.head_commit.message, 'release:') || (github.event_name == 'workflow_dispatch' && inputs.nightly)
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -1693,13 +1241,6 @@ jobs:
         shell: bash
         run: |
           set -eu
-          # GitHub Actions services: only run on Linux-hosted runners, so a
-          # live Redis for the db/redis + interop/redis_demo tests has to be
-          # started by hand here. Launched (and left running) within this
-          # same step/process tree, not a separate step, so there's no risk
-          # of it being torn down by the runner's per-step Job Object.
-          # Skip the (slow) install entirely when the cache step above
-          # already restored a working copy.
           REDIS_EXE=$(find /c/ProgramData/chocolatey -iname "redis-server.exe" 2>/dev/null | head -1)
           [ -n "$REDIS_EXE" ] || choco install redis -y --no-progress --limit-output
           REDIS_EXE=$(find /c/ProgramData/chocolatey -iname "redis-server.exe" 2>/dev/null | head -1)
@@ -1716,18 +1257,6 @@ jobs:
           done
           [ "$ready" = 1 ] || echo "::warning::redis-server did not answer PING in time; redis tests will fail"
 
-          # `tcc` here must resolve to the exact bundled binary salam.exe's
-          # own build uses (for consistent lib-search behavior with the
-          # staged native libs above); mingw64/bin supplies `ar` for the
-          # mysql mock build and the runtime DLL closure for
-          # hiredis/mariadb (WS2_32, libcurl, zlib, zstd, ...) since those
-          # were staged under their original mingw64/bin names. openssl and
-          # sqlite3 were staged as *renamed* copies (libssl.dll,
-          # libcrypto.dll, libsqlite3.dll - see "Stage native libs" above)
-          # that only exist under tcc/lib, not under any name mingw64/bin
-          # provides, so tcc/lib must be on PATH too or every test that
-          # links ssl/crypto/sqlite3 fails at process start with no output
-          # (DLL not found, before stdio is even initialized).
           export PATH="$GITHUB_WORKSPACE/salam-windows/tcc:$GITHUB_WORKSPACE/salam-windows/tcc/lib:/c/msys64/mingw64/bin:$PATH"
           SALAM="$GITHUB_WORKSPACE/salam-windows/salam.exe" \
             sh tools/bash/run-tests.sh 2>&1 | tee /tmp/tests.log || true
@@ -1757,8 +1286,6 @@ jobs:
     name: Build Salam for Windows (32-bit / i686, cross-compiled static LLVM+LLD)
     runs-on: ubuntu-latest
     continue-on-error: true
-    # The cross build is driven by the Linux binary this run just produced,
-    # not by the released seed - see "Use this run's Linux salam" below.
     needs: build-linux
     steps:
       - name: Checkout code
@@ -1782,11 +1309,6 @@ jobs:
         if: steps.cache-llvm-mingw.outputs.cache-hit != 'true'
         run: |
           set -eu
-          # MSYS2 dropped LLVM/clang/lld for i686 entirely (confirmed via
-          # "target not found" at install time). llvm-mingw is a separately
-          # maintained project that still builds a real LLVM 22 targeting
-          # i686-w64-mingw32; its Linux-hosted release lets us cross-compile
-          # from here without needing a native 32-bit Windows machine.
           curl -fL --connect-timeout 15 --max-time 600 --retry 3 --retry-delay 10 \
             -o /tmp/llvm-mingw.tar.xz \
             "https://github.com/mstorsjo/llvm-mingw/releases/download/20260616/llvm-mingw-20260616-ucrt-ubuntu-22.04-x86_64.tar.xz"
@@ -1801,14 +1323,6 @@ jobs:
           path: /tmp/llvm-i686-install
           key: llvm-i686-mingw32-static-llvmorg-22.1.8-v1
 
-      # This is the expensive, one-time part: llvm-mingw itself only ships a
-      # *dynamic* libLLVM-22.dll for i686 (confirmed - no static .a anywhere
-      # in its release), so a genuinely static, single-file salam.exe means
-      # building LLVM+LLD from source ourselves, cross-targeting
-      # i686-w64-mingw32 with llvm-mingw's own clang (staying on one
-      # compiler/runtime end to end avoids GCC/Clang ABI-mixing risk).
-      # Cached by LLVM tag, so this only reruns when llvm-mingw bumps its
-      # LLVM version - every other push reuses the cache in seconds.
       - name: Build static LLVM+LLD for i686-w64-mingw32 (cache miss only - slow)
         if: steps.cache-llvm-i686.outputs.cache-hit != 'true'
         run: |
@@ -1827,13 +1341,6 @@ jobs:
           ninja -C /tmp/llvm-native-build llvm-tblgen
 
           echo "--- stage 2: cross-compiled static LLVM+LLD for i686-w64-mingw32 ---"
-          # Targets scoped to what salam's own --target flag actually
-          # supports (x86_64/i686 -> X86, aarch64 -> AArch64, arm -> ARM,
-          # wasm32 -> WebAssembly) rather than every obscure LLVM backend,
-          # to keep this one-time build bounded. zlib/zstd/libxml2/terminfo
-          # are disabled - llvm-mingw's i686 sysroot has no static libz/
-          # libzstd to link against, and none of those are load-bearing for
-          # codegen/JIT/linking.
           cmake -G Ninja -S /tmp/llvm-src/llvm -B /tmp/llvm-cross-build \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX=/tmp/llvm-i686-install \
@@ -1861,14 +1368,6 @@ jobs:
           restore-keys: |
             ccache-win-i686-v3-
 
-      # The compiler that emits the i686 Windows code has to be one built
-      # from THIS commit, not the last release: a published seed carries the
-      # codegen it was released with, so any fix on the way to a working
-      # 32-bit Windows binary (the -alternatename aliases that resolve the
-      # stdcall-decorated Win32 imports, for one) would sit unused until the
-      # next release, and the job would keep failing for a bug already fixed
-      # in the tree. build-linux has already produced exactly such a
-      # compiler, with LLVM and LLD embedded, so use it directly.
       - name: Use this run's Linux salam as the cross-compiler
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -1885,13 +1384,6 @@ jobs:
           which ccache >/dev/null 2>&1 || sudo apt-get install -y ccache
           ccache --max-size=500M >/dev/null 2>&1 || true
 
-          # salam's Makefile drives everything off `$(LLVM_CONFIG) --foo`;
-          # llvm-config itself only exists as a native-host tool (we built
-          # LLVM as a *library only*, and a real llvm-config binary would
-          # be a foreign i686-w64-mingw32 PE anyway - can't run it here to
-          # ask it questions). This shim answers the same handful of flags
-          # the Makefile actually calls with the paths/libs from the cross
-          # build above, standing in for the genuine tool.
           cat > /tmp/fake-llvm-config << 'FAKE_LLVM_CONFIG_EOF'
           #!/usr/bin/env bash
           set -eu
@@ -1920,34 +1412,15 @@ jobs:
           FAKE_LLVM_CONFIG_EOF
           chmod +x /tmp/fake-llvm-config
 
-          # Cross-compiling the compiler itself: the seed runs here, on x86_64
-          # Linux, and emits an i686 Windows PE. The archive it links has to be
-          # built for the target too, which is what the cross LLVM above is.
           WITH_LLD=1 AR="$TC/llvm-ar" CC="$TC/i686-w64-mingw32-clang" \
             CXX="$TC/i686-w64-mingw32-clang++" \
             sh std/llvm/native/build.sh --llvm-config /tmp/fake-llvm-config \
             --out "$GITHUB_WORKSPACE"
 
-          # llvm-mingw lays its target libraries out as <root>/<triple>/lib,
-          # which is exactly the shape $SALAM_SYSROOTS is searched with, so
-          # pointing at the root is enough to resolve kernel32 and friends.
-          # Without it the link came back with every Win32 import undefined
-          # (_GetStdHandle, _EnterCriticalSection, ...).
           export SALAM_SYSROOTS=/tmp/llvm-mingw
-          # llvm-mingw carries compiler-rt where a gcc-built mingw carries
-          # libgcc, so -lgcc/-lgcc_eh find nothing and the link stops there.
-          # Point the two names at what this toolchain actually has: the
-          # builtins archive for libgcc, and an empty one for libgcc_eh, since
-          # unwinding here comes from libunwind rather than libgcc_eh.
-          # The sysroot is found by name, but its import libraries (kernel32,
-          # user32, ...) still have to be on the link's -L list, which is why
-          # _GetFileType and friends came back undefined even with the sysroot
-          # detected.
           mgw_lib=/tmp/llvm-mingw/i686-w64-mingw32/lib
           if [ -d "$mgw_lib" ]; then
             rt=$(find /tmp/llvm-mingw -name 'libclang_rt.builtins-i386.a' 2>/dev/null | head -1)
-            # Written as ifs, not && chains: under `set -e` a chain whose first
-            # test is false takes the whole step down with it.
             if [ -n "$rt" ] && [ ! -f "$mgw_lib/libgcc.a" ]; then
               cp "$rt" "$mgw_lib/libgcc.a"
             fi
@@ -1987,9 +1460,6 @@ jobs:
           fi
           echo "OK: salam.exe imports only Windows system DLLs."
 
-      # Same reasoning as the x86_64 bundle above, with its own key: this
-      # cross-build runs on a Linux runner and produces an i686 PE, so it
-      # must never share an entry with a native build on the same runner.
       - name: Restore bundled tcc (i686 cross)
         id: tccbundle
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -2003,19 +1473,6 @@ jobs:
           mkdir -p "$DIST"
           cp salam.exe "$DIST/"
           cp -r std    "$DIST/std"
-          # Cross-built from the pin in tools/ci/tinycc-ref.txt with the
-          # same llvm-mingw toolchain this job already uses for LLVM, rather
-          # than fetched from Savannah, whose newest win32 binary is 0.9.27
-          # from December 2017. --cpu=i386 with --targetos=WIN32 is what
-          # produces a 32-bit Windows tcc from a Linux host; there is no
-          # native i686 runner to build it on. build-tcc.sh reads the target
-          # name (i386-win32) back out of those two flags and builds the
-          # runtime with a host-native tcc of its own - see the script.
-          # A tcc.exe with no libtcc1.a beside it links nothing, so both have
-          # to be there before the cached bundle counts as usable. The build
-          # is all-or-nothing and the save only runs after it succeeds, so a
-          # half-written entry should not exist; this just makes one
-          # self-heal instead of shipping a bundle that cannot compile.
           if [ -f "$DIST/tcc/tcc.exe" ] \
              && [ -n "$(find "$DIST/tcc" -name libtcc1.a 2>/dev/null | head -1)" ]; then
             echo "reusing cached tcc bundle at $DIST/tcc"
@@ -2112,10 +1569,6 @@ jobs:
           key: ccache-linux-i686-v2-${{ github.run_id }}
           restore-keys: |
             ccache-linux-i686-v2-
-      # setup-salam installs the runner's own architecture, which is the
-      # wrong one for a compile that happens inside a foreign-arch
-      # container. This puts the matching release beside the checkout so
-      # the container can use it as its seed.
       - name: Fetch a seed compiler for the container
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -2125,13 +1578,6 @@ jobs:
         run: |
           set -eu
           mkdir -p /tmp/ccache-i686
-          # Debian dropped i386 dev packages for LLVM past v15 in its stable
-          # "bookworm" archive, but sid (unstable) still builds a full
-          # llvm-21-dev/lld-21/liblld-21-dev for i386 - confirmed on
-          # packages.debian.org. LLVM itself stopped shipping 32-bit Windows
-          # installers at v22 (github.com/ScoopInstaller/Main/issues/7685),
-          # so 21 is the newest release that still targets 32-bit hosts at
-          # all; 22+ tracks amd64/arm64 only (see the 64-bit jobs above).
           docker run --rm --platform=linux/386 \
             -v "$PWD:/work" -w /work \
             -v /tmp/ccache-i686:/root/.ccache \
@@ -2140,32 +1586,11 @@ jobs:
               apt-get update
               PKGS="build-essential ccache file git llvm-21-dev liblld-21-dev libpolly-21-dev libzstd-dev zlib1g-dev libtinfo-dev libxml2-dev"
               if ! apt-get install -y --no-install-recommends $PKGS; then
-                # Debian is winding the i386 port down. linux-libc-dev is now
-                # Architecture: all, and dak only copies an arch:all binary
-                # into binary-<arch> for architectures whose source package
-                # still builds there - so every time a new linux upload lands
-                # in sid, linux-libc-dev can disappear from binary-i386 for a
-                # few hours. libc6-dev depends on it, which drags down
-                # build-essential, zlib1g-dev, llvm-21-dev, everything, with
-                # "linux-libc-dev: none of the choices are installable".
-                # binary-all itself is unreachable here (Debian sets
-                # No-Support-for-Architecture-all, so apt refuses to fetch
-                # that index), but the amd64 index carries the same arch:all
-                # packages. Adding it as a source is enough; amd64 is never
-                # added as a dpkg architecture, so only Architecture: all
-                # packages out of it are installable and every real binary
-                # still resolves to i386.
                 echo "::warning::i386 dependency resolution failed - retrying with the amd64 index as an Architecture: all fallback."
                 printf "deb [arch=amd64] http://deb.debian.org/debian sid main\n" > /etc/apt/sources.list.d/arch-all-fallback.list
                 apt-get update
                 apt-get install -y --no-install-recommends $PKGS
               fi
-              # This container runs as root over a bind mount owned by the
-              # host runner user, not root - git refuses to touch a repo it
-              # does not itself own ("dubious ownership") unless told
-              # otherwise, which silently blanked out SALAM_GIT_COMMIT/DATE
-              # (the Makefile discards git stderr, so the failure was
-              # invisible - salam version just printed "unknown").
               git config --global --add safe.directory /work
               ccache --max-size=300M >/dev/null 2>&1 || true
               MUSL_SR=/work/sysroots/x86_64-linux-musl
@@ -2173,8 +1598,6 @@ jobs:
               sh std/llvm/native/build.sh --llvm-config llvm-config-21 --out /work
               sh tools/bash/build-embed.sh --out /work \
                 --musl-x86_64 "$MUSL_SR" --mingw-x86_64 "$MINGW_SR"
-              # The seed runs in here, not on the host, so it has to be built for
-              # the same architecture as this container - fetched by the step above.
               sh tools/bash/build-selfhost.sh --seed=/work/seed/salam \
                 --llvm=/work --embed=/work --output=/work/salam
               echo 1 > /work/.self_contained
@@ -2193,15 +1616,6 @@ jobs:
       - name: Verify cross-compiled x86_64-linux-musl output runs natively on this host
         if: env.SELF_CONTAINED == '1'
         run: |
-          # The previous step's `docker run` has no --user flag, so the
-          # container runs as root and everything it writes into the bind
-          # mount (including these two cross-compiled outputs) lands on the
-          # host owned by root:root. This step itself runs directly on the
-          # runner as the unprivileged `runner` user, so `chmod` on a
-          # root-owned file fails with EPERM ("Operation not permitted") -
-          # reclaim ownership first (GitHub-hosted runners have passwordless
-          # sudo) rather than adding --user to the container (which would
-          # break its own `apt-get install`, which needs root).
           sudo chown "$(id -u):$(id -g)" .smoke_x86_64 .smoke_x86_64.exe
           file .smoke_x86_64
           chmod +x .smoke_x86_64
@@ -2275,10 +1689,6 @@ jobs:
           key: ccache-linux-armhf-v2-${{ github.run_id }}
           restore-keys: |
             ccache-linux-armhf-v2-
-      # setup-salam installs the runner's own architecture, which is the
-      # wrong one for a compile that happens inside a foreign-arch
-      # container. This puts the matching release beside the checkout so
-      # the container can use it as its seed.
       - name: Fetch a seed compiler for the container
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -2288,13 +1698,6 @@ jobs:
         run: |
           set -eu
           mkdir -p /tmp/ccache-armhf
-          # apt.llvm.org does not publish armhf at all (only amd64/i386/
-          # arm64/s390x); Debian's own stable "bookworm" archive tops out at
-          # llvm-15 for armhf, but sid (unstable) still builds a full
-          # llvm-21-dev/lld-21/liblld-21-dev for armhf - confirmed on
-          # packages.debian.org. 21 is the newest release that still targets
-          # 32-bit hosts at all (LLVM stopped shipping 32-bit Windows
-          # installers at v22: github.com/ScoopInstaller/Main/issues/7685).
           docker run --rm --platform=linux/arm/v7 \
             -v "$PWD:/work" -w /work \
             -v /tmp/ccache-armhf:/root/.ccache \
@@ -2303,12 +1706,6 @@ jobs:
               apt-get update
               apt-get install -y --no-install-recommends build-essential ccache file git \
                 llvm-21-dev liblld-21-dev libpolly-21-dev libzstd-dev zlib1g-dev libtinfo-dev libxml2-dev
-              # Same fix as the i686 job above: this container runs as root
-              # over a bind mount owned by the host runner user, so git
-              # refuses to read it as "dubious ownership" unless told
-              # otherwise - the Makefile discards git stderr, so that
-              # failure silently produced "unknown" commit/date instead of
-              # erroring.
               git config --global --add safe.directory /work
               ccache --max-size=300M >/dev/null 2>&1 || true
               MUSL_SR=/work/sysroots/x86_64-linux-musl
@@ -2316,8 +1713,6 @@ jobs:
               sh std/llvm/native/build.sh --llvm-config llvm-config-21 --out /work
               sh tools/bash/build-embed.sh --out /work \
                 --musl-x86_64 "$MUSL_SR" --mingw-x86_64 "$MINGW_SR"
-              # The seed runs in here, not on the host, so it has to be built for
-              # the same architecture as this container - fetched by the step above.
               sh tools/bash/build-selfhost.sh --seed=/work/seed/salam \
                 --llvm=/work --embed=/work --output=/work/salam
               echo 1 > /work/.self_contained
@@ -2325,28 +1720,6 @@ jobs:
               /work/salam version
               export SALAM_STD=/work/std
               printf "func main:\n    println \"ok-armhf\"\nend\n" > /tmp/smoke.salam
-              # ORC in-process JIT goes through LLVM JITLink, whose AArch32
-              # (32-bit ARM) backend is explicitly documented upstream as
-              # not production-ready (llvm.org/docs/JITLink.html: "the arm32
-              # ... backend[s] ... are not yet ready for general use"), and
-              # fails with "Invalid opcode ... for relocation: Arm_Jump24" -
-              # a known gap, not a salam bug or an LLVM-21-vs-22 regression.
-              # Skip --jit here rather than run-and-warn; --exec below still
-              # exercises the same LLVM codegen via AOT object emission + a
-              # real linker (build-and-run), a separate and mature path.
-              # --exec emits an AOT object and links it with the system
-              # linker - unlike --jit above, this has no known upstream gap
-              # and is expected to just work. Keep this and the smoke-exec
-              # run as two separate top-level statements (not `a && b`):
-              # with `set -e`, a failing first command in an `&&` list is
-              # exempt from triggering exit (bash only checks the last
-              # command in the list), so `a && b` would silently skip `b`
-              # and let the step report success even if `a` itself failed
-              # to produce a working binary - which is exactly how a real
-              # armhf hard/soft-float ABI link failure here went unnoticed
-              # previously. Two statements means either one failing now
-              # correctly fails this step (still non-fatal to the overall
-              # release build, since the job has continue-on-error: true).
               /work/salam llvm /tmp/smoke.salam --exec -o /tmp/smoke_exec --log-level=warn
               /tmp/smoke_exec
               if [ "$(cat /work/.self_contained)" = 1 ]; then
@@ -2359,15 +1732,6 @@ jobs:
       - name: Verify cross-compiled x86_64-linux-musl output runs natively on this host
         if: env.SELF_CONTAINED == '1'
         run: |
-          # The previous step's `docker run` has no --user flag, so the
-          # container runs as root and everything it writes into the bind
-          # mount (including these two cross-compiled outputs) lands on the
-          # host owned by root:root. This step itself runs directly on the
-          # runner as the unprivileged `runner` user, so `chmod` on a
-          # root-owned file fails with EPERM ("Operation not permitted") -
-          # reclaim ownership first (GitHub-hosted runners have passwordless
-          # sudo) rather than adding --user to the container (which would
-          # break its own `apt-get install`, which needs root).
           sudo chown "$(id -u):$(id -g)" .smoke_x86_64 .smoke_x86_64.exe
           file .smoke_x86_64
           chmod +x .smoke_x86_64
@@ -2427,11 +1791,6 @@ jobs:
           persist-credentials: false
       - name: Install dependencies (static LLVM + LLD + cross sysroot inputs)
         run: |
-          # apt.llvm.org publishes AAAA records and the hosted runners have no
-          # IPv6 route, so apt picks the v6 address and stops there: "Cannot
-          # initiate the connection to apt.llvm.org:443 (2a04:4e42:94::561) -
-          # connect (101: Network is unreachable)", then "no longer has a Release
-          # file". Pin apt to IPv4 before llvm.sh runs its own apt-get update.
           echo 'Acquire::ForceIPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4 >/dev/null
           wget -4 -qO llvm.sh https://apt.llvm.org/llvm.sh
           chmod +x llvm.sh
@@ -2442,11 +1801,6 @@ jobs:
             libzstd-dev zlib1g-dev libtinfo-dev libxml2-dev \
             libsqlite3-dev \
             mingw-w64 qemu-user-static
-          # libsqlite3-dev: this job builds no static third-party libs (the
-          # x86_64 job does that for the release archives), so the general
-          # suite's `link dynamic "sqlite3"` tests have nothing for the
-          # in-process lld to find in the musl sysroot. They fall back to the
-          # C backend, which links them against the host's libsqlite3.
           gcc --version | head -1
           llvm-config-22 --version
       - name: Cache cross musl sysroots (x86_64 + aarch64 + i686 + armhf) for embedding
@@ -2623,14 +1977,6 @@ jobs:
       ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
       ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
 
-  # Best-effort gate: a signing-secret hiccup on the Android side (or an
-  # android/ build regression) should not block the far more heavily-used
-  # native-binary release. Jobs that call a reusable workflow via `uses:`
-  # can't set `continue-on-error`, so this no-op job absorbs build-android's
-  # failure and always reports success; create-release depends on this job
-  # instead and downloads build-android's artifact with continue-on-error,
-  # so a failure there just means the AAB/APKs are missing from that run's
-  # release rather than the whole release failing.
   android-gate:
     name: Android build gate (best-effort)
     needs: build-android
@@ -2795,11 +2141,6 @@ jobs:
           [ -f ./release-linux-armhf/salam ]      && mv ./release-linux-armhf/salam      ./release/salam-linux-armhf      || true
           echo "release/ now contains:"; ls -la ./release
 
-      # The machine-readable std/ index the MCP server and the editor tooling
-      # read. It is committed, and mcp-server.yml fails the build when it
-      # drifts from std/, so the copy checked out here is the one that matches
-      # this tag. Publishing it per-release means consumers can pin a version
-      # instead of pointing a raw URL at a branch that keeps moving.
       - name: Stage the stdlib index
         run: |
           set -eu
@@ -2809,13 +2150,6 @@ jobs:
           cp "$src" "./release/salam-${VERSION}-stdlib-index.json"
           ls -l "./release/salam-${VERSION}-stdlib-index.json"
 
-      # The browsable counterpart of the index above: one self-contained page
-      # for the whole standard library, generated by this release's own
-      # compiler rather than a stale one. `salam doc` exits 1 when a source
-      # file will not parse - deliberately, so silently missing entries are
-      # not the only clue - but it still writes the page, so that is surfaced
-      # as a warning rather than taken as a reason to hold the whole release.
-      # A missing page is a real failure and does stop it.
       - name: Generate the stdlib documentation page
         run: |
           set -eu
@@ -2832,6 +2166,72 @@ jobs:
             echo "::warning::and their declarations are missing from the page"
           fi
           ls -l "$out"
+      - name: Package the standard library (tar.gz)
+        run: |
+          set -eu
+          STAGE_ROOT=stdlib-stage
+          STAGE_DIR="salam-${VERSION}-stdlib"
+          STAGE="${STAGE_ROOT}/${STAGE_DIR}"
+          rm -rf "$STAGE_ROOT"
+          mkdir -p "$STAGE"
+
+          if git ls-files -z -- std | grep -qz .; then
+            git ls-files -z -- std | tar --null --files-from=- -cf - | tar -xf - -C "$STAGE"
+          else
+            echo "::warning::git ls-files returned nothing for std/; falling back to a filesystem copy"
+            tar -cf - --exclude='std/opencv/native/build' std | tar -xf - -C "$STAGE"
+          fi
+
+          cp VERSION LICENSE "$STAGE/"
+          cp "./release/salam-${VERSION}-stdlib-index.json" "$STAGE/stdlib-index.json"
+          cp "./release/salam-${VERSION}-stdlib-doc.html" "$STAGE/stdlib-doc.html"
+
+          {
+            echo "Salam standard library ${VERSION}"
+            echo ""
+            echo "  std/               the standard library sources, exactly as"
+            echo "                     they are in the v${VERSION} tag"
+            echo "  stdlib-index.json  every package mapped to its public"
+            echo "                     declarations (machine-readable)"
+            echo "  stdlib-doc.html    the same thing as one browsable page"
+            echo ""
+            echo "Point a Salam compiler at this std/ in any of these ways:"
+            echo ""
+            echo "  salam build app.salam --stdlib-path=/path/to/std"
+            echo "  SALAM_STD=/path/to/std salam build app.salam"
+            echo ""
+            echo "or drop a salam.cfg next to the salam binary containing:"
+            echo ""
+            echo "  stdlib = /path/to/std"
+            echo ""
+            echo "The compiler otherwise looks for std/ beside its own binary,"
+            echo "then under the install prefix, then ./std."
+          } > "$STAGE/README.txt"
+
+          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
+          mkdir -p ./release
+          tar --sort=name --owner=0 --group=0 --numeric-owner \
+              --mtime="@${SOURCE_DATE_EPOCH}" \
+              -czf "./release/salam-${VERSION}-stdlib.tar.gz" \
+              -C "$STAGE_ROOT" "$STAGE_DIR"
+
+          count=$(find "$STAGE/std" -name '*.salam' -type f | wc -l)
+          echo "packaged ${count} .salam files"
+          [ "$count" -gt 0 ] || { echo "::error::stdlib archive contains no .salam files"; exit 1; }
+          for pkg in std/str std/fmt std/os std/net; do
+            [ -d "$STAGE/$pkg" ] || { echo "::error::stdlib archive is missing $pkg"; exit 1; }
+          done
+
+          ls -l "./release/salam-${VERSION}-stdlib.tar.gz"
+          {
+            echo "### Standard library archive"
+            echo ""
+            echo "\`${count}\` \`.salam\` files from \`std/\`, plus the index and the doc page."
+            echo ""
+            echo '```'
+            (cd ./release && sha256sum "salam-${VERSION}-stdlib.tar.gz")
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
       # - name: Post Linux release file to SERVER_VERSIONS_API
       #   env:
       #     SERVER_VERSIONS_API: ${{ secrets.SERVER_VERSIONS_API }}
@@ -2894,6 +2294,7 @@ jobs:
             # release/salam-linux-aarch64
             # release/salam-linux-armhf
             release/salam-*.zip
+            release/salam-*-stdlib.tar.gz
             release/salam-*-stdlib-index.json
             release/salam-*-stdlib-doc.html
             release/salam-application-*.aab
@@ -2901,7 +2302,13 @@ jobs:
           )
           assets=()
           for c in "${candidates[@]}"; do
-            for f in $c; do [ -e "$f" ] && assets+=("$f"); done
+            for f in $c; do
+              [ -e "$f" ] || continue
+              for a in ${assets[@]+"${assets[@]}"}; do
+                [ "$a" = "$f" ] && continue 2
+              done
+              assets+=("$f")
+            done
           done
           echo "Publishing ${#assets[@]} assets:"; printf '  %s\n' "${assets[@]}"
           gh release create "$TAG" \
@@ -2911,13 +2318,6 @@ jobs:
             ${PRERELEASE_FLAG:+"$PRERELEASE_FLAG"} \
             "${assets[@]}"
 
-  # A failed nightly used to be invisible. The nightly-check workflow goes
-  # green the moment it dispatches, and the failure then lands in *this*
-  # workflow's run, which nobody is watching at 04:30 UTC - so every nightly
-  # attempt after 2026-08-04 failed its release gate unnoticed and the newest
-  # published nightly went stale for a week. This job keeps a single tracking
-  # issue in sync with the outcome: opened/updated when a nightly cannot
-  # publish, closed when one does.
   nightly-report:
     name: Report nightly outcome
     if: |
@@ -2943,9 +2343,6 @@ jobs:
       - name: Open, update or close the nightly tracking issue
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # This job deliberately has no checkout - it only talks to the
-          # issues API - so gh cannot infer the repository from a git
-          # remote and has to be told which one it is.
           GH_REPO: ${{ github.repository }}
           RESULTS: ${{ toJSON(needs) }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -2954,17 +2351,11 @@ jobs:
           set -eu
           TITLE="🌙 Nightly release is failing"
 
-          # "skipped" is not a failure: create-release skips itself when a
-          # build job fails, and reporting it alongside the build that
-          # actually broke just buries the real cause.
           failed=$(printf '%s' "$RESULTS" \
             | jq -r 'to_entries
                      | map(select(.value.result == "failure" or .value.result == "cancelled"))
                      | .[].key')
 
-          # Matched on the exact title rather than `gh issue list --search`:
-          # the search index lags behind by minutes, which would open a
-          # second copy of this issue every night.
           num=$(gh issue list --state open --limit 100 --json number,title \
             | jq -r --arg t "$TITLE" 'map(select(.title == $t)) | .[0].number // empty')
 

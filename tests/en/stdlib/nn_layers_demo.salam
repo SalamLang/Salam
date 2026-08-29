@@ -1,0 +1,140 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/nn: the parameter registry, Linear, initializers, and the fused
+// losses.
+
+import autograd
+import math
+import nn
+import tensor
+import testing
+
+func main:
+    eps := 0.0001
+
+    // ParamStore owns values and zeroed grads; handles are stable
+    mut ps := nn.ParamStore {}
+    mut g := tensor.NewRng(3)
+    lin := nn.NewLinear(ps, "fc", 4, 3, g)
+    testing.AssertEqInt(ps.count(), 2)
+    mut pw := ps.at(lin.w)
+    testing.AssertEqStr(pw.name, "fc.w")
+    testing.AssertEqInt(pw.value.dim(0), 4)
+    testing.AssertEqInt(pw.value.dim(1), 3)
+    testing.AssertEqFloat(pw.grad.at(0), 0.0, eps)
+    mut pb := ps.at(lin.b)
+    testing.AssertEqFloat(pb.value.at(0), 0.0, eps)
+
+    // Same seed, same init; different seed, different init
+    mut ps2 := nn.ParamStore {}
+    mut g2 := tensor.NewRng(3)
+    lin2 := nn.NewLinear(ps2, "fc", 4, 3, g2)
+    mut pw2 := ps2.at(lin2.w)
+    testing.AssertTrue(tensor.Equal(pw.value, pw2.value))
+    mut ps3 := nn.ParamStore {}
+    mut g3 := tensor.NewRng(4)
+    lin3 := nn.NewLinear(ps3, "fc", 4, 3, g3)
+    mut pw3 := ps3.at(lin3.w)
+    testing.AssertFalse(tensor.Equal(pw.value, pw3.value))
+
+    // Kaiming-uniform bound
+    limit := math.Sqrt(6.0 / 4.0)
+    testing.AssertTrue(tensor.MaxAll(pw.value) <= limit)
+    testing.AssertTrue(tensor.MinAll(pw.value) >= 0.0 - limit)
+
+    // Forward pass: shape, bias broadcast, gradients into the store
+    mut tp := autograd.NewTape(1)
+    mut x := tensor.Zeros2(2, 4)
+    tensor.SetAll(x, 1.0)
+    xid := autograd.Input(tp, x)
+    out := lin.forward(tp, ps, xid)
+    ov := autograd.Value(tp, out)
+    testing.AssertEqInt(ov.dim(0), 2)
+    testing.AssertEqInt(ov.dim(1), 3)
+    loss := autograd.Sum(tp, out)
+    autograd.Backward(tp, loss)
+    // d(sum)/d(bias) = batch size for every bias element
+    testing.AssertEqFloat(pb.grad.at(0), 2.0, eps)
+    testing.AssertEqFloat(pb.grad.at(2), 2.0, eps)
+    // d(sum)/dW = column sums of x = 2 everywhere here
+    testing.AssertEqFloat(pw.grad.at(0), 2.0, eps)
+    tp.reset()
+
+    // zero_grad clears accumulation
+    ps.zero_grad()
+    testing.AssertEqFloat(pb.grad.at(0), 0.0, eps)
+
+    // CrossEntropyLogits: known value and gradient at uniform logits
+    mut logits := tensor.Zeros2(2, 4)
+    lw := autograd.Watch(tp, logits)
+    mut targets := Vector {} as Vector<int>
+    targets.push(1)
+    targets.push(3)
+    ce := autograd.CrossEntropyLogits(tp, lw, targets)
+    cv := autograd.Value(tp, ce)
+    testing.AssertEqFloat(cv.at(0), math.Log(4.0), eps)
+    autograd.Backward(tp, ce)
+    cg := autograd.Grad(tp, lw)
+    // (softmax - onehot)/N: softmax is 1/4, N = 2 rows
+    testing.AssertEqFloat(cg.at2(0, 0), 0.125, eps)
+    testing.AssertEqFloat(cg.at2(0, 1), 0.125 - 0.5, eps)
+    testing.AssertEqFloat(cg.at2(1, 3), 0.125 - 0.5, eps)
+    targets.free()
+    tp.reset()
+
+    // MSELoss composes to mean((p-t)^2)
+    mut pr := tensor.Arange(3)             // 0 1 2
+    mut tg := tensor.Zeros1(3)
+    pid := autograd.Watch(tp, pr)
+    tid := autograd.Input(tp, tg)
+    mse := autograd.MSELoss(tp, pid, tid)
+    mv := autograd.Value(tp, mse)
+    testing.AssertEqFloat(mv.at(0), 5.0 / 3.0, eps)
+    autograd.Backward(tp, mse)
+    mg := autograd.Grad(tp, pid)
+    testing.AssertEqFloat(mg.at(2), 2.0 * 2.0 / 3.0, eps)
+    tp.reset()
+
+    // BCEWithLogits at zero logits is log 2, gradient (0.5 - y)/N
+    mut bl := tensor.Zeros1(4)
+    mut bt := tensor.Zeros1(4)
+    bt.set_at(1, 1.0)
+    bt.set_at(3, 1.0)
+    bid := autograd.Watch(tp, bl)
+    btid := autograd.Input(tp, bt)
+    bce := autograd.BCEWithLogits(tp, bid, btid)
+    bv := autograd.Value(tp, bce)
+    testing.AssertEqFloat(bv.at(0), math.Log(2.0), eps)
+    autograd.Backward(tp, bce)
+    bg := autograd.Grad(tp, bid)
+    testing.AssertEqFloat(bg.at(0), 0.125, eps)
+    testing.AssertEqFloat(bg.at(1), 0.0 - 0.125, eps)
+    tp.reset()
+
+    tp.free()
+    ps.free()
+    ps2.free()
+    ps3.free()
+    tensor.Free(x)
+    tensor.Free(logits)
+    tensor.Free(pr)
+    tensor.Free(tg)
+    tensor.Free(bl)
+    tensor.Free(bt)
+
+    ret testing.Summary()
+end

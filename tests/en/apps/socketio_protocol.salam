@@ -185,7 +185,7 @@ func main:
 
     mut o := socketio.NewOptions()
     o.transports = socketio.TRANSPORT_WEBSOCKET
-    o.timeout = 5000
+    o.timeout = 3000
     o.reconnection = false
     c := socketio.DialWith("http://127.0.0.1:" + PORT, o)
     println "connected:", socketio.IsConnected(c)
@@ -199,7 +199,7 @@ func main:
     mut errors := 0
     socketio.Emit(c, "poke")
     mut i := 0
-    until i < 30 && ticks < 2:
+    until i < 15 && ticks < 2:
         mut ev := socketio.Next(c, 200)
         if ev.kind == socketio.EV_ERROR:
             errors += 1
@@ -218,7 +218,7 @@ func main:
     socketio.EmitWithAck(c, "ask", a, 2000, (r: socketio.Ack): ack via callback = "" + r.ok + ":" + socketio.AckStr(r, 0) end)
     socketio.ArgsFree(a)
     mut j := 0
-    until j < 30 && ack via callback == "":
+    until j < 15 && ack via callback == "":
         mut ev := socketio.Next(c, 200)
         socketio.EventFree(ev)
         j += 1
@@ -226,24 +226,28 @@ func main:
     println "callback form:", ack via callback
 
     mut q := socketio.NewArgs()
-    mut timed out := socketio.EmitAck(c, "silent", q, 300)
+    mut timed out := socketio.EmitAck(c, "silent", q, 250)
     socketio.ArgsFree(q)
     println "unanswered question times out:", timed out.ok, "no data:", socketio.AckCount(timed out)
     socketio.AckFree(timed out)
     println "nothing left outstanding:", socketio.Pending(c)
 
     println "-- the server closes the namespace"
-    socketio.Emit(c, "bye")
-    mut reason := ""
+    // Drain first, so the next line is testing one thing.
     mut k := 0
-    until k < 30 && reason == "":
-        mut ev := socketio.Next(c, 200)
-        if ev.kind == socketio.EV_DISCONNECT:
-            reason = ev.message
-        end
-        socketio.EventFree(ev)
+    until k < 10:
+        mut spare := socketio.Next(c, 100)
+        socketio.EventFree(spare)
         k += 1
     end
+    socketio.Emit(c, "bye")
+    // ONE call, not a loop: the pump that ends a connection queues the
+    // disconnect on its way out, and a Next that gave up without looking
+    // again would report a timeout for something that was not one.
+    mut bye := socketio.Next(c, 2000)
+    reason := bye.message
+    println "one Next reported a disconnect:", bye.kind == socketio.EV_DISCONNECT
+    socketio.EventFree(bye)
     println "reason:", reason
     println "connected:", socketio.IsConnected(c)
     socketio.Close(c)
@@ -251,13 +255,13 @@ func main:
     println "-- a server that stops talking"
     mut o2 := socketio.NewOptions()
     o2.transports = socketio.TRANSPORT_WEBSOCKET
-    o2.timeout = 5000
+    o2.timeout = 3000
     o2.reconnection = false
     c2 := socketio.DialWith("http://127.0.0.1:" + PORT, o2)
     println "connected:", socketio.IsConnected(c2)
     mut why := ""
     mut n := 0
-    until n < 60 && why == "":
+    until n < 25 && why == "":
         mut ev := socketio.Next(c2, 200)
         if ev.kind == socketio.EV_DISCONNECT:
             why = ev.message

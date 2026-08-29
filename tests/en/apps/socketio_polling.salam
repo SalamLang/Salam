@@ -31,6 +31,7 @@ import net.tcp
 import sync
 import str
 import time
+import mem
 
 const PORT := 19417
 
@@ -39,6 +40,7 @@ mut outbox := Vector {} as Vector<str>
 mut server log := ""
 mut saw pong := false
 mut biggest post := 0
+mut pending blob ack := 0 - 1
 mut running := true
 
 func header value(head: str, name: str): int:
@@ -118,6 +120,16 @@ func handle payload(payload: str):
     if payload.len() == 0:
         ret
     end
+    if str.StartsWith(payload, "b"):
+        // A binary attachment: base64 behind a "b", because a polling body
+        // is text and cannot carry the bytes themselves.
+        server log += "binary=" + payload.substr(1, payload.len() - 1) + ";"
+        if pending blob ack >= 0:
+            outbox.push("43" + pending blob ack + "[true]")
+            pending blob ack = 0 - 1
+        end
+        ret
+    end
     kind := socketio.EngineKind(payload)
     rest := socketio.EngineBody(payload)
     if kind == socketio.EIO_PONG:
@@ -134,6 +146,15 @@ func handle payload(payload: str):
             outbox.push(`42["echoed","over polling"]`)
         else str.StartsWith(rest, "2") && str.Contains(rest, `"held"`):
             server log += "held " + rest.substr(1, rest.len() - 1) + ";"
+        else str.StartsWith(rest, "5") && str.Contains(rest, `"upload"`):
+            // A BINARY_EVENT; its buffer follows in a later request.
+            dash := str.Find(rest, "-")
+            server log += "attachments=" + rest.substr(1, dash - 1) + ";"
+            pending blob ack = ack id of("x" + rest.substr(dash + 1, rest.len() - dash - 1))
+        else str.StartsWith(rest, "2") && str.Contains(rest, `"fetch"`):
+            // ...and one going the other way, buffer and all.
+            outbox.push(`451-["blob",{"_placeholder":true,"num":0}]`)
+            outbox.push("bCQAH/w==")
         else str.StartsWith(rest, "2") && str.Contains(rest, `"sum"`):
             id := ack id of(rest)
             server log += "sum#" + id + ";"
@@ -210,7 +231,7 @@ func main:
     // Left on AUTO deliberately: the handshake goes over polling and the
     // client only upgrades if the server offers it, which this one does not.
     o.transports = socketio.TRANSPORT_AUTO
-    o.timeout = 5000
+    o.timeout = 3000
     o.reconnection = false
     // Held before there is a connection, so that connecting has a group to
     // send rather than one packet.
@@ -228,21 +249,51 @@ func main:
     println "max payload:", socketio.MaxPayload(c)
 
     socketio.EmitStr(c, "echo", "hello")
-    mut ev := socketio.NextEvent(c, 4000)
+    mut ev := socketio.NextEvent(c, 1500)
     println "event:", ev.name, socketio.ArgStr(ev, 0)
     socketio.EventFree(ev)
 
     mut a := socketio.NewArgs()
     socketio.AddInt(a, 3)
     socketio.AddInt(a, 4)
-    mut ack := socketio.EmitAck(c, "sum", a, 4000)
+    mut ack := socketio.EmitAck(c, "sum", a, 2000)
     socketio.ArgsFree(a)
     println "acknowledged:", ack.ok, socketio.AckInt(ack, 0)
     socketio.AckFree(ack)
 
+    println "-- binary, which polling carries as base64"
+    buf := mem.Allocate(5 as u64)
+    bp := buf as i8*
+    bp[0] = 0 as i8
+    bp[1] = 30 as i8
+    bp[2] = 255 as i8
+    bp[3] = 0 as i8
+    bp[4] = 65 as i8
+    mut up := socketio.NewArgs()
+    socketio.AddBytes(up, buf, 5)
+    mem.Free(buf)
+    mut sent := socketio.EmitAck(c, "upload", up, 2000)
+    socketio.ArgsFree(up)
+    println "server took the attachment:", sent.ok
+    socketio.AckFree(sent)
+
+    socketio.Emit(c, "fetch")
+    mut blob := socketio.NextEvent(c, 1500)
+    mut spins := 0
+    until blob.name != "blob" && blob.kind != socketio.EV_TIMEOUT && spins < 6:
+        socketio.EventFree(blob)
+        blob = socketio.NextEvent(c, 1500)
+        spins += 1
+    end
+    down := socketio.ArgBytes(blob, 0)
+    // A buffer starting with a NUL, which is what a `str` would have lost.
+    println "attachment back:", down.len, socketio.BytesAt(down, 0), socketio.BytesAt(down, 1), socketio.BytesAt(down, 2), socketio.BytesAt(down, 3)
+    println "base64:", socketio.BytesToBase64(down)
+    socketio.EventFree(blob)
+
     // Long enough for at least one empty poll, which is how the server's
     // heartbeat reaches a polling client.
-    socketio.RunFor(c, 1200)
+    socketio.RunFor(c, 800)
     println "answered the heartbeat:", saw pong
     println "nothing held any more:", socketio.Buffered(c)
     // Three held events, plus the namespace CONNECT that goes with them,

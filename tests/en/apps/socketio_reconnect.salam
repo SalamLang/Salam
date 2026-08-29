@@ -56,7 +56,7 @@ func serve one(c &: websocket.Conn, sid: str): bool:
             if body == "0":
                 websocket.SendText(c, `40{"sid":"` + sid + `-nsp"}`)
                 server log += sid + ":joined;"
-            else str.StartsWith(body, `2["drop"`):
+            else str.StartsWith(body, "2") && str.Contains(body, `"drop"`):
                 server log += sid + ":drop;"
                 dropped = true
                 going = false
@@ -106,7 +106,7 @@ func main:
 
     mut o := socketio.NewOptions()
     o.transports = socketio.TRANSPORT_WEBSOCKET
-    o.timeout = 5000
+    o.timeout = 3000
     o.reconnection = true
     o.reconnection_delay = 120
     o.reconnection_delay_max = 300
@@ -114,11 +114,22 @@ func main:
     c := socketio.DialWith("http://127.0.0.1:" + PORT, o)
     println "connected:", socketio.IsConnected(c), "id:", socketio.Id(c)
 
-    // Ask the server to cut the connection, then pump until it is noticed.
-    socketio.Emit(c, "drop")
+    // Ask the server to cut the connection - and ask it for an
+    // acknowledgement it will never send, with no deadline of its own.
+    //
+    // The answer can never arrive: the server that would have sent it is
+    // gone, and a reconnection starts the numbering again. A client that
+    // kept waiting here would simply stop, so losing the connection has to
+    // fail what is outstanding.
+    mut d := socketio.NewArgs()
+    mut never := socketio.EmitAck(c, "drop", d, 0 - 1)
+    socketio.ArgsFree(d)
+    println "the outstanding acknowledgement failed rather than hanging:", !never.ok
+    socketio.AckFree(never)
+
     mut reason := ""
     mut i := 0
-    until i < 40 && reason == "":
+    until i < 20 && reason == "":
         mut ev := socketio.Next(c, 200)
         if ev.kind == socketio.EV_DISCONNECT:
             reason = ev.message
@@ -142,7 +153,7 @@ func main:
     mut attempted := false
     mut rejoined := false
     mut j := 0
-    until j < 60 && !rejoined:
+    until j < 30 && !rejoined:
         mut ev := socketio.Next(c, 200)
         if ev.kind == socketio.EV_RECONNECT_ATTEMPT:
             attempted = true

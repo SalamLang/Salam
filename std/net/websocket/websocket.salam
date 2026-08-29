@@ -32,16 +32,13 @@ import time
 // this migration) server-side wss:// via std/tls.WrapServer and a Hub
 // for broadcast/rooms.
 //
-// wss:// SERVER support (AcceptWSS) has the same caveat net/http's
-// RunTLS documents: it is wired exactly per std/tls/conn.salam's
-// documented WrapServer signature, but an end-to-end local check during
-// this migration found WrapServer hanging mid-handshake against this
-// codebase's own tls.Dial client, with zero existing test coverage for
-// WrapServer anywhere in the repo to compare against. Treat AcceptWSS
-// as unverified until std/tls's server-side handshake has its own
-// passing test. ws:// (plain) Accept/Dial and wss:// client (DialWSS)
-// are unaffected - both existed in std/socket before this migration and
-// are unchanged here.
+// wss:// SERVER support (AcceptWSS) was carried over from the migration
+// marked unverified, on the strength of a local check that found
+// std/tls's WrapServer hanging mid-handshake with no test anywhere to
+// compare against. It is verified now:
+// tests/en/general/websocket_wss_loopback.salam runs both halves in one
+// process against the repo's own certificate, and the handshake, several
+// messages in a row, a binary frame and the reply all come through.
 
 const WS_GUID := "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
@@ -353,7 +350,10 @@ end
 func _readable(c &: Conn, timeout_ms: int): bool:
     if c.secure:
         tc := _tls_get(c.tls_idx)
-        if tls.Pending(tc) > 0:
+        // tls.Readable, not tls.Pending: a record can be off the socket and
+        // not yet decrypted, in which case the message is here but the
+        // descriptor has nothing left to wake a poll with.
+        if tls.Readable(tc):
             ret true
         end
         ret rawsock.WaitReadable(rawsock.FromFd(tls.Fd(tc)), timeout_ms)

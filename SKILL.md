@@ -566,9 +566,15 @@ to_matrix split_xy cat_levels`), `MatrixDataset.batches` → `BatchIter`
   `XTensor YLabels`.
 - **`npy`**: `ReadNpy ReadNpyFile WriteNpy WriteNpyFile ToMatrix FromMatrix
 NpzList NpzRead NpzWrite`.
-- **`onnx`**: `LoadOnnx ParseOnnx Run` for inference of MLP/CNN-style graphs
-  (`Conv Gemm MatMul Relu Sigmoid Tanh Softmax MaxPool AveragePool
-GlobalAveragePool BatchNormalization Reshape Flatten Transpose Concat ...`).
+- **`onnx`**: `LoadOnnx ParseOnnx Run` for inference of MLP/CNN and
+  transformer-style graphs: `Conv Gemm MatMul Relu Sigmoid Tanh Softmax
+LogSoftmax MaxPool AveragePool GlobalAveragePool BatchNormalization
+LayerNormalization InstanceNormalization Reshape Flatten Transpose Concat
+Squeeze Unsqueeze Identity Dropout Constant Clip LeakyRelu PRelu Elu Selu
+HardSigmoid Softplus Erf Gelu Abs Floor Ceil Round Sign Reciprocal Pow
+Min Max Sum Mean ReduceMean ReduceSum ReduceMax ReduceMin Gather Slice
+Split Shape Expand Where Equal Greater Less Cast`; anything else fails the
+  run with the op named in `model.error`.
 - **`gguf`**: `LoadGguf ParseGguf` (metadata, tensor directory),
   `LoadTensorF32` dequantizing `F32 F16 Q8_0 Q4_0 Q4_1`.
 - **`llm`**: decoder-only language models (llama family: RMSNorm, RoPE,

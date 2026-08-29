@@ -73,21 +73,6 @@ function row(p, note) {
   return `<tr><td><a href="${p}">${p}</a></td><td>${note}</td></tr>\n`;
 }
 
-// Deliberately minimal, matching escape_json in main.salam: enough that an
-// arbitrary request body cannot break out of the JSON string it goes into.
-function escapeJson(s) {
-  let out = "";
-  for (const c of s) {
-    if (c === '"') out += '\\"';
-    else if (c === "\\") out += "\\\\";
-    else if (c === "\n") out += "\\n";
-    else if (c === "\r") out += "\\r";
-    else if (c === "\t") out += "\\t";
-    else out += c;
-  }
-  return out;
-}
-
 app.get("/plaintext", (_req, res) => text(res, "Hello, World!"));
 
 app.get("/health", (_req, res) =>
@@ -119,25 +104,30 @@ app.get("/file", (_req, res) => {
 // of the filesystem on this machine, per request.
 app.get("/cached", (_req, res) => jsonOk(res, CACHED));
 
+// JSON.stringify, not a template literal. The id comes out of the URL, and
+// interpolating it raw let a single double quote end the JSON string and the
+// rest of the segment be read as structure - `/users/a"b` answered
+// `{"id":"a"b",...}`, which no parser accepts and which CodeQL reports as
+// reflected XSS. Serializing an object cannot produce that, and for the ids
+// this benchmark actually sends it emits the identical bytes.
 app.get("/users/:id", (req, res) => {
   const id = req.params.id;
   if (!id) {
     res.status(400).type("application/json").send('{"error":"missing id"}');
     return;
   }
-  jsonOk(res, `{"id":"${id}","name":"user-${id}","active":true}`);
+  jsonOk(res, JSON.stringify({ id: id, name: `user-${id}`, active: true }));
 });
 
 app.get("/search", (req, res) => {
   const raw = req.query.q;
   const q = typeof raw === "string" ? raw : "";
   const n = intQuery(req, "n", 5, 0, 100);
-  let out = `{"query":"${q}","count":${n},"results":[`;
+  const results = [];
   for (let i = 0; i < n; i++) {
-    if (i > 0) out += ",";
-    out += `{"rank":${i + 1},"title":"${q} result ${i + 1}"}`;
+    results.push({ rank: i + 1, title: `${q} result ${i + 1}` });
   }
-  jsonOk(res, `${out}]}`);
+  jsonOk(res, JSON.stringify({ query: q, count: n, results: results }));
 });
 
 // Tunable CPU work, identical in shape to main.salam's loop.
@@ -151,10 +141,13 @@ app.get("/compute", (req, res) => {
 app.get("/headers", (req, res) => {
   jsonOk(
     res,
-    `{"host":"${req.headers.host || ""}",` +
-      `"user_agent":"${req.headers["user-agent"] || ""}",` +
-      `"accept":"${req.headers.accept || ""}",` +
-      `"method":"${req.method}","path":"${req.path}"}`,
+    JSON.stringify({
+      host: req.headers.host || "",
+      user_agent: req.headers["user-agent"] || "",
+      accept: req.headers.accept || "",
+      method: req.method,
+      path: req.path,
+    }),
   );
 });
 
@@ -163,10 +156,7 @@ app.get("/headers", (req, res) => {
 // turn the route into a 400 factory.
 app.post("/echo", express.text({ type: "*/*", limit: "10mb" }), (req, res) => {
   const body = typeof req.body === "string" ? req.body : "";
-  jsonOk(
-    res,
-    `{"bytes":${Buffer.byteLength(body)},"echo":"${escapeJson(body)}"}`,
-  );
+  jsonOk(res, JSON.stringify({ bytes: Buffer.byteLength(body), echo: body }));
 });
 
 // An HTML page assembled per request out of pieces, which is what a

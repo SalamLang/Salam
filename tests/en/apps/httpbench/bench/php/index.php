@@ -13,6 +13,12 @@
 
 declare(strict_types=1);
 
+// Slashes and non-ASCII are left as they are, because that is what
+// JSON.stringify and main.salam's append_json_escaped do; escaping either
+// would make this column's bodies differ from the other three on exactly the
+// inputs the escaping exists to handle.
+const JSON_FLAGS = JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR;
+
 $env    = getenv('HTTPBENCH_ASSETS');
 $ASSETS = ($env === false || $env === '') ? __DIR__ . '/../../public' : $env;
 
@@ -57,9 +63,17 @@ function row(string $p, string $note): string
 }
 
 // One path parameter, matched the way a micro-framework would.
+//
+// json_encode, not interpolation: $id arrives in the URL, and a double quote
+// in it would otherwise close the JSON string and let the rest of the segment
+// be read as structure. The Salam and node servers escape the same three
+// routes for the same reason; see append_json_escaped in main.salam.
 if (preg_match('#^/users/([^/]+)$#', $path, $m)) {
     $id = $m[1];
-    json_ok("{\"id\":\"$id\",\"name\":\"user-$id\",\"active\":true}");
+    json_ok(json_encode(
+        ['id' => $id, 'name' => "user-$id", 'active' => true],
+        JSON_FLAGS
+    ));
     return;
 }
 
@@ -94,15 +108,15 @@ switch ($path) {
         $raw = $_GET['q'] ?? '';
         $q = is_string($raw) ? $raw : '';
         $n = int_query('n', 5, 0, 100);
-        $out = '{"query":"' . $q . '","count":' . $n . ',"results":[';
+        $results = [];
         for ($i = 0; $i < $n; $i++) {
-            if ($i > 0) {
-                $out .= ',';
-            }
             $r = $i + 1;
-            $out .= '{"rank":' . $r . ',"title":"' . $q . ' result ' . $r . '"}';
+            $results[] = ['rank' => $r, 'title' => "$q result $r"];
         }
-        json_ok($out . ']}');
+        json_ok(json_encode(
+            ['query' => $q, 'count' => $n, 'results' => $results],
+            JSON_FLAGS
+        ));
         return;
 
     case '/compute':
@@ -121,7 +135,7 @@ switch ($path) {
             'accept'     => $_SERVER['HTTP_ACCEPT'] ?? '',
             'method'     => $method,
             'path'       => $path,
-        ], JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR));
+        ], JSON_FLAGS));
         return;
 
     case '/echo':
@@ -129,7 +143,7 @@ switch ($path) {
         $body = $raw === false ? '' : $raw;
         json_ok(json_encode(
             ['bytes' => strlen($body), 'echo' => $body],
-            JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR
+            JSON_FLAGS
         ));
         return;
 

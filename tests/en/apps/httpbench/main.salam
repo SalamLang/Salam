@@ -87,7 +87,7 @@ func fail(ctx: i64, code: int, message: str):
     mut b := str.NewBuilder()
     defer str.BufFree(b)
     str.BufAppend(b, `{"error":"`)
-    str.BufAppend(b, message)
+    append_json_escaped(b, message)
     str.BufAppend(b, `"}`)
     http.Ctx_status(ctx, code)
     http.Ctx_json(ctx, http.Ctx_own(ctx, str.BufStr(b)))
@@ -194,9 +194,9 @@ func user_route(ctx: i64):
     mut b := str.NewBuilder()
     defer str.BufFree(b)
     str.BufAppend(b, `{"id":"`)
-    str.BufAppend(b, id)
+    append_json_escaped(b, id)
     str.BufAppend(b, `","name":"user-`)
-    str.BufAppend(b, id)
+    append_json_escaped(b, id)
     str.BufAppend(b, `","active":true}`)
     json_owned(ctx, str.BufStr(b))
 end
@@ -209,7 +209,7 @@ func search_route(ctx: i64):
     mut b := str.NewBuilder()
     defer str.BufFree(b)
     str.BufAppend(b, `{"query":"`)
-    str.BufAppend(b, q)
+    append_json_escaped(b, q)
     str.BufAppend(b, `","count":`)
     str.BufAppendInt(b, n as i64)
     str.BufAppend(b, `,"results":[`)
@@ -218,7 +218,7 @@ func search_route(ctx: i64):
         str.BufAppend(b, `{"rank":`)
         str.BufAppendInt(b, (i + 1) as i64)
         str.BufAppend(b, `,"title":"`)
-        str.BufAppend(b, q)
+        append_json_escaped(b, q)
         str.BufAppend(b, " result ")
         str.BufAppendInt(b, (i + 1) as i64)
         str.BufAppend(b, `"}`)
@@ -236,36 +236,54 @@ func echo_route(ctx: i64):
     str.BufAppend(b, `{"bytes":`)
     str.BufAppendInt(b, body.len() as i64)
     str.BufAppend(b, `,"echo":"`)
-    esc := escape_json(body)
-    str.BufAppend(b, esc)
-    mem.Free(esc as void *)
+    append_json_escaped(b, body)
     str.BufAppend(b, `"}`)
     json_owned(ctx, str.BufStr(b))
 end
 
 // Deliberately minimal: enough that an arbitrary request body cannot break
 // out of the JSON string it is placed in.
-// One pass over the bytes, no allocation per character. The obvious version
-// of this loop is `c := s.substr(i, 1)`, which heap-allocates a two-byte
-// string for every byte of the body and never frees it - on a 10 KB POST that
-// is ten thousand allocations to escape one string.
-func escape_json(s: str): str:
+// Appends `s` to `b` as the body of a JSON string, escaping everything that
+// would otherwise end the string early or is not legal raw inside one.
+//
+// Every route that interpolates something the caller sent - the :id segment,
+// the q parameter, the request headers - has to go through here. Without it a
+// single double quote in any of them ends the JSON string and the rest of the
+// value is parsed as structure: `?q=a"b` used to answer
+// `{"query":"a"b",...}`, which no JSON parser will accept. CodeQL reports the
+// same thing as reflected XSS, on the grounds that a client sniffing the
+// response as HTML would then see markup it never should have.
+//
+// Bytes above 127 are passed through unchanged, so UTF-8 survives byte for
+// byte rather than being escaped to \uXXXX.
+func append_json_escaped(b &: str.StringBuilder, s: str):
     p := s as i8 *
     n := s.len()
-    mut b := str.NewBuilder()
-    defer str.BufFree(b)
     repeat n with i:
-        c := p[i] as int
+        mut c := p[i] as int
+        if c < 0: c += 256 end
         if c == 34: str.BufAppend(b, `\"`)
         else c == 92: str.BufAppend(b, "\\\\")
         else c == 10: str.BufAppend(b, "\\n")
         else c == 13: str.BufAppend(b, "\\r")
         else c == 9: str.BufAppend(b, "\\t")
+        else c == 8: str.BufAppend(b, "\\b")
+        else c == 12: str.BufAppend(b, "\\f")
+        else c < 32:
+            // The rest of the C0 controls have no short form, and JSON does
+            // not allow any of them raw inside a string.
+            str.BufAppend(b, "\\u00")
+            str.BufAppendChar(b, hex_digit(c / 16))
+            str.BufAppendChar(b, hex_digit(c % 16))
         else:
             str.BufAppendChar(b, c)
         end
     end
-    ret str.BufStr(b)
+end
+
+func hex_digit(v: int): int:
+    if v < 10: ret 48 + v end
+    ret 87 + v
 end
 
 // Tunable CPU work. Turn n up until requests per second stops tracking the
@@ -295,15 +313,15 @@ func headers_route(ctx: i64):
     mut b := str.NewBuilder()
     defer str.BufFree(b)
     str.BufAppend(b, `{"host":"`)
-    str.BufAppend(b, http.Ctx_header(ctx, "Host"))
+    append_json_escaped(b, http.Ctx_header(ctx, "Host"))
     str.BufAppend(b, `","user_agent":"`)
-    str.BufAppend(b, http.Ctx_header(ctx, "User-Agent"))
+    append_json_escaped(b, http.Ctx_header(ctx, "User-Agent"))
     str.BufAppend(b, `","accept":"`)
-    str.BufAppend(b, http.Ctx_header(ctx, "Accept"))
+    append_json_escaped(b, http.Ctx_header(ctx, "Accept"))
     str.BufAppend(b, `","method":"`)
-    str.BufAppend(b, http.Ctx_method(ctx))
+    append_json_escaped(b, http.Ctx_method(ctx))
     str.BufAppend(b, `","path":"`)
-    str.BufAppend(b, http.Ctx_path(ctx))
+    append_json_escaped(b, http.Ctx_path(ctx))
     str.BufAppend(b, `"}`)
     json_owned(ctx, str.BufStr(b))
 end

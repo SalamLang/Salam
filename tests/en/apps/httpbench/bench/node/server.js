@@ -23,14 +23,18 @@ const CLUSTER = Math.max(1, Number(process.env.CLUSTER) || 1);
 const ASSETS =
   process.env.HTTPBENCH_ASSETS || path.join(__dirname, "..", "..", "public");
 
-if (cluster.isPrimary && CLUSTER > 1) {
+// The forking primary supervises and never serves: it forks, replaces dead
+// workers, and skips the listen at the bottom of this file. Everything in
+// between is cheap enough to set up in a process that will not use it.
+const SUPERVISOR = cluster.isPrimary && CLUSTER > 1;
+
+if (SUPERVISOR) {
   for (let i = 0; i < CLUSTER; i++) cluster.fork();
   // A worker that dies mid-run would leave the rest of the routes measured
   // against a smaller server than the one the header claims. Replacing it
   // keeps the core budget honest; run.sh separately notices a server that
   // dies outright.
   cluster.on("exit", () => cluster.fork());
-  return;
 }
 
 // Read once at boot, which is the whole point of /cached sitting next to
@@ -84,13 +88,13 @@ function escapeJson(s) {
   return out;
 }
 
-app.get("/plaintext", (req, res) => text(res, "Hello, World!"));
+app.get("/plaintext", (_req, res) => text(res, "Hello, World!"));
 
-app.get("/health", (req, res) =>
+app.get("/health", (_req, res) =>
   jsonOk(res, '{"status":"ok","service":"httpbench"}'),
 );
 
-app.get("/json", (req, res) =>
+app.get("/json", (_req, res) =>
   jsonOk(
     res,
     '{"message":"Hello, World!","server":"node","routes":13,"ok":true}',
@@ -98,7 +102,7 @@ app.get("/json", (req, res) =>
 );
 
 // Pays a full open/read/close per request, on purpose.
-app.get("/file", (req, res) => {
+app.get("/file", (_req, res) => {
   fs.readFile(path.join(ASSETS, "data.json"), "utf8", (err, body) => {
     if (err || !body) {
       res
@@ -113,7 +117,7 @@ app.get("/file", (req, res) => {
 
 // The same bytes with the read hoisted out. /file minus /cached is the cost
 // of the filesystem on this machine, per request.
-app.get("/cached", (req, res) => jsonOk(res, CACHED));
+app.get("/cached", (_req, res) => jsonOk(res, CACHED));
 
 app.get("/users/:id", (req, res) => {
   const id = req.params.id;
@@ -133,7 +137,7 @@ app.get("/search", (req, res) => {
     if (i > 0) out += ",";
     out += `{"rank":${i + 1},"title":"${q} result ${i + 1}"}`;
   }
-  jsonOk(res, out + "]}");
+  jsonOk(res, `${out}]}`);
 });
 
 // Tunable CPU work, identical in shape to main.salam's loop.
@@ -167,7 +171,7 @@ app.post("/echo", express.text({ type: "*/*", limit: "10mb" }), (req, res) => {
 
 // An HTML page assembled per request out of pieces, which is what a
 // templating layer ultimately does. Byte-identical to main.salam's / route.
-app.get("/", (req, res) => {
+app.get("/", (_req, res) => {
   let b = '<!doctype html>\n<html lang="en">\n<head>\n';
   b += '<meta charset="utf-8">\n';
   b += '<meta name="viewport" content="width=device-width, initial-scale=1">\n';
@@ -198,11 +202,13 @@ app.use(
   express.static(ASSETS, { etag: false, lastModified: false }),
 );
 
-app.use((req, res) =>
+app.use((_req, res) =>
   res.status(404).type("text/plain; charset=utf-8").send("404 Not Found"),
 );
 
-app.listen(PORT, "127.0.0.1", () => {
-  if (!cluster.isPrimary) return;
-  console.log(`httpbench-node on http://127.0.0.1:${PORT}`);
-});
+if (!SUPERVISOR) {
+  app.listen(PORT, "127.0.0.1", () => {
+    if (!cluster.isPrimary) return;
+    console.log(`httpbench-node on http://127.0.0.1:${PORT}`);
+  });
+}

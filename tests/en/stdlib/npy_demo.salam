@@ -1,0 +1,210 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/npy: .npy round trips, foreign dtypes and byte orders, Fortran
+// order, and .npz bundles.
+
+import archive
+import compress
+import encoding.binary
+import filepath
+import matrix
+import npy
+import os
+import testing
+
+// Builds an .npy image by hand with an arbitrary descr and payload
+// writer, the way NumPy itself would lay it out.
+func hand_npy(descr: str, fortran: str, shape: str, payload &: compress.ByteBuf): compress.ByteBuf:
+    mut buf := compress.NewByteBuf()
+    binary.WriteU8(buf, 147)
+    compress.BufPushBytes(buf, "NUMPY" as void*, 5)
+    binary.WriteU8(buf, 1)
+    binary.WriteU8(buf, 0)
+    mut dict := "{'descr': '" + descr + "', 'fortran_order': " + fortran + ", 'shape': " + shape + ", }"
+    total := 10 + compress.BufLen(compress.BufFromStr(dict)) + 1
+    mut pad := 0
+    if total % 64 != 0: pad = 64 - total % 64 end
+    repeat pad: dict = dict + " " end
+    dict = dict + "\n"
+    mut db := compress.BufFromStr(dict)
+    binary.WriteU16LE(buf, compress.BufLen(db))
+    compress.BufPushBuf(buf, db)
+    compress.BufPushBuf(buf, payload)
+    compress.BufFree(db)
+    ret buf
+end
+
+func main:
+    eps := 0.000000001
+
+    // Write '<f8' from a matrix, read it back byte for byte
+    mut m := matrix.Zeros(2, 3)
+    repeat 6 with k: m.a.set(k, (k as f64) * 1.5 - 2.0) end
+    mut a := npy.FromMatrix(m)
+    testing.AssertEqInt(a.ndim(), 2)
+    testing.AssertEqInt(a.count(), 6)
+    mut buf := npy.WriteNpy(a)
+    testing.AssertEqInt(compress.BufLen(buf) % 64, 48)   // 128 header + 48 payload
+    mut ok := false
+    mut b := npy.ReadNpy(buf.data, compress.BufLen(buf), ok)
+    testing.AssertTrue(ok)
+    testing.AssertEqInt(b.dtype, npy.NPY_F64)
+    testing.AssertEqInt(b.shape.get(0), 2)
+    testing.AssertEqInt(b.shape.get(1), 3)
+    testing.AssertEqFloat(b.data.get(5), 5.5, eps)
+    mut buf2 := npy.WriteNpy(b)
+    testing.AssertTrue(compress.BufEquals(buf, buf2))
+    mut mok := false
+    mut m2 := npy.ToMatrix(b, mok)
+    testing.AssertTrue(mok)
+    testing.AssertTrue(matrix.AllClose(m, m2, eps))
+
+    // A hand-built '<i2' array with a negative value
+    mut p16 := compress.NewByteBuf()
+    binary.WriteU16LE(p16, 7)
+    binary.WriteU16LE(p16, 65535)   // -1 as i16
+    binary.WriteU16LE(p16, 300)
+    mut h16 := hand_npy("<i2", "False", "(3,)", p16)
+    mut ok16 := false
+    mut a16 := npy.ReadNpy(h16.data, compress.BufLen(h16), ok16)
+    testing.AssertTrue(ok16)
+    testing.AssertEqInt(a16.dtype, npy.NPY_I16)
+    testing.AssertEqInt(a16.ndim(), 1)
+    testing.AssertEqFloat(a16.data.get(1), 0.0 - 1.0, eps)
+    testing.AssertEqFloat(a16.data.get(2), 300.0, eps)
+
+    // Big-endian f4, and a bool column
+    mut pbe := compress.NewByteBuf()
+    binary.WriteF32(pbe, 2.5, true)
+    binary.WriteF32(pbe, 0.0 - 4.0, true)
+    mut hbe := hand_npy(">f4", "False", "(2,)", pbe)
+    mut okbe := false
+    mut abe := npy.ReadNpy(hbe.data, compress.BufLen(hbe), okbe)
+    testing.AssertTrue(okbe)
+    testing.AssertEqInt(abe.dtype, npy.NPY_F32)
+    testing.AssertEqFloat(abe.data.get(0), 2.5, eps)
+    testing.AssertEqFloat(abe.data.get(1), 0.0 - 4.0, eps)
+    mut pb := compress.NewByteBuf()
+    binary.WriteU8(pb, 1)
+    binary.WriteU8(pb, 0)
+    binary.WriteU8(pb, 1)
+    mut hb := hand_npy("|b1", "False", "(3,)", pb)
+    mut okb := false
+    mut ab := npy.ReadNpy(hb.data, compress.BufLen(hb), okb)
+    testing.AssertTrue(okb)
+    testing.AssertEqInt(ab.dtype, npy.NPY_BOOL)
+    testing.AssertEqFloat(ab.data.get(2), 1.0, eps)
+
+    // Fortran order: the file holds columns first, the array comes back
+    // in row-major
+    mut pf := compress.NewByteBuf()
+    repeat 6 with k: binary.WriteF64(pf, k as f64, false) end
+    mut hf := hand_npy("<f8", "True", "(2, 3)", pf)
+    mut okf := false
+    mut af := npy.ReadNpy(hf.data, compress.BufLen(hf), okf)
+    testing.AssertTrue(okf)
+    // column-major payload 0..5 means a[0,1] = 2, a[1,0] = 1
+    testing.AssertEqFloat(af.data.get(1), 2.0, eps)
+    testing.AssertEqFloat(af.data.get(3), 1.0, eps)
+
+    // A scalar () becomes shape [1]; a structured dtype is refused
+    mut ps := compress.NewByteBuf()
+    binary.WriteF64(ps, 9.0, false)
+    mut hs := hand_npy("<f8", "False", "()", ps)
+    mut oks := false
+    mut asc := npy.ReadNpy(hs.data, compress.BufLen(hs), oks)
+    testing.AssertTrue(oks)
+    testing.AssertEqInt(asc.ndim(), 1)
+    testing.AssertEqFloat(asc.data.get(0), 9.0, eps)
+    mut hx := hand_npy("|O", "False", "(1,)", ps)
+    mut okx := true
+    mut ax := npy.ReadNpy(hx.data, compress.BufLen(hx), okx)
+    testing.AssertFalse(okx)
+    // Truncated payload is refused too
+    mut okt := true
+    mut at := npy.ReadNpy(buf.data, compress.BufLen(buf) - 8, okt)
+    testing.AssertFalse(okt)
+
+    // Files: .npy and .npz
+    dir := filepath.Join(os.TempDir(), "salam_npy_test")
+    archive.EnsureDir(dir)
+    path := filepath.Join(dir, "arr.npy")
+    testing.AssertTrue(npy.WriteNpyFile(a, path))
+    mut okfile := false
+    mut afile := npy.ReadNpyFile(path, okfile)
+    testing.AssertTrue(okfile)
+    testing.AssertEqFloat(afile.data.get(0), 0.0 - 2.0, eps)
+    mut okmiss := true
+    mut amiss := npy.ReadNpyFile(filepath.Join(dir, "missing.npy"), okmiss)
+    testing.AssertFalse(okmiss)
+
+    mut keys := Vector {} as Vector<str>
+    keys.push("x")
+    keys.push("y")
+    mut arrays := Vector {} as Vector<npy.NpyArray>
+    arrays.push(a)
+    arrays.push(a16)
+    zpath := filepath.Join(dir, "bundle.npz")
+    testing.AssertTrue(npy.NpzWrite(zpath, keys, arrays))
+    mut lok := false
+    mut names := npy.NpzList(zpath, lok)
+    testing.AssertTrue(lok)
+    testing.AssertEqInt(names.len(), 2)
+    testing.AssertEqStr(names.get(1), "y")
+    mut rok := false
+    mut y := npy.NpzRead(zpath, "y", rok)
+    testing.AssertTrue(rok)
+    testing.AssertEqInt(y.count(), 3)
+    testing.AssertEqFloat(y.data.get(2), 300.0, eps)
+    mut nok := true
+    mut none := npy.NpzRead(zpath, "z", nok)
+    testing.AssertFalse(nok)
+
+    a.free()
+    b.free()
+    a16.free()
+    abe.free()
+    ab.free()
+    af.free()
+    asc.free()
+    ax.free()
+    at.free()
+    afile.free()
+    amiss.free()
+    y.free()
+    none.free()
+    matrix.Free(m)
+    matrix.Free(m2)
+    compress.BufFree(buf)
+    compress.BufFree(buf2)
+    compress.BufFree(p16)
+    compress.BufFree(h16)
+    compress.BufFree(pbe)
+    compress.BufFree(hbe)
+    compress.BufFree(pb)
+    compress.BufFree(hb)
+    compress.BufFree(pf)
+    compress.BufFree(hf)
+    compress.BufFree(ps)
+    compress.BufFree(hs)
+    compress.BufFree(hx)
+    keys.free()
+    arrays.free()
+    names.free()
+
+    ret testing.Summary()
+end

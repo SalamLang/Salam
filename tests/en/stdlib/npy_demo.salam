@@ -22,8 +22,10 @@ import compress
 import encoding.binary
 import filepath
 import matrix
+import mem
 import npy
 import os
+import str
 import testing
 
 // Builds an .npy image by hand with an arbitrary descr and payload
@@ -34,13 +36,23 @@ func hand_npy(descr: str, fortran: str, shape: str, payload &: compress.ByteBuf)
     compress.BufPushBytes(buf, "NUMPY" as void*, 5)
     binary.WriteU8(buf, 1)
     binary.WriteU8(buf, 0)
-    mut dict := "{'descr': '" + descr + "', 'fortran_order': " + fortran + ", 'shape': " + shape + ", }"
-    total := 10 + compress.BufLen(compress.BufFromStr(dict)) + 1
+    mut sb := str.NewBuilder()
+    str.BufAppend(sb, "{'descr': '")
+    str.BufAppend(sb, descr)
+    str.BufAppend(sb, "', 'fortran_order': ")
+    str.BufAppend(sb, fortran)
+    str.BufAppend(sb, ", 'shape': ")
+    str.BufAppend(sb, shape)
+    str.BufAppend(sb, ", }")
+    total := 10 + (str.BufLen(sb) as int) + 1
     mut pad := 0
     if total % 64 != 0: pad = 64 - total % 64 end
-    repeat pad: dict = dict + " " end
-    dict = dict + "\n"
+    repeat pad: str.BufAppendChar(sb, 32) end
+    str.BufAppendChar(sb, 10)
+    dict := str.BufStr(sb)
+    str.BufFree(sb)
     mut db := compress.BufFromStr(dict)
+    mem.Free(dict as void*)
     binary.WriteU16LE(buf, compress.BufLen(db))
     compress.BufPushBuf(buf, db)
     compress.BufPushBuf(buf, payload)
@@ -149,7 +161,9 @@ func main:
     testing.AssertTrue(okfile)
     testing.AssertEqFloat(a_file.data.get(0), 0.0 - 2.0, eps)
     mut okmiss := true
-    mut amiss := npy.ReadNpyFile(filepath.Join(dir, "missing.npy"), okmiss)
+    missing := filepath.Join(dir, "missing.npy")
+    mut amiss := npy.ReadNpyFile(missing, okmiss)
+    mem.Free(missing as void*)
     testing.AssertFalse(okmiss)
 
     mut keys := Vector {} as Vector<str>
@@ -206,5 +220,8 @@ func main:
     arrays.free()
     names.free()
 
+    mem.Free(dir as void*)
+    mem.Free(path as void*)
+    mem.Free(zpath as void*)
     ret testing.Summary()
 end

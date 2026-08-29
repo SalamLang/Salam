@@ -241,11 +241,16 @@ func _resolve_ack(c: Client, id: int, data: str, bins &: Vector<Bytes>): bool:
         mut w := sp[0].waiters.get(i)
         if w.alive && w.id == id:
             w.alive = false
-            sp[0].waiters.set(i, w)
             if w.has_packet:
                 mut kept := w.packet
                 _free_bins(kept.bins)
+                // Cleared, not just freed: a settled waiter stays in the
+                // list until the next sweep compacts it, and _free_sock
+                // releases the packets of everything still in there. Leaving
+                // the flag set would free these buffers a second time.
+                w.has_packet = false
             end
+            sp[0].waiters.set(i, w)
             mut a := Ack { ok = true, id = id, data = data, bins = bins }
             if w.has_cb:
                 w.cb(a)
@@ -297,12 +302,13 @@ func _expire_acks(m: MgrState*):
                     _write_packet(m, w.packet.text, w.packet.bins)
                 else:
                     w.alive = false
-                    sp[0].waiters.set(i, w)
                     dead = true
                     if w.has_packet:
                         mut p := w.packet
                         _free_bins(p.bins)
+                        w.has_packet = false
                     end
+                    sp[0].waiters.set(i, w)
                     a := Ack { ok = false, id = w.id, data = "[]" }
                     if w.has_cb:
                         w.cb(a)

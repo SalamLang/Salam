@@ -37,13 +37,19 @@ DURATION="${DURATION:-10}"
 WARMUP="${WARMUP:-3}"
 CONNS="${CONNS:-64}"
 THREADS="${THREADS:-2}"
-SERVERS="${SERVERS:-salam nginx node php}"
+SERVERS="${SERVERS:-salam nginx apache node php}"
 ROUTES="${ROUTES:-plaintext json cached file users search compute headers static home echo}"
 
+# One port per server, even though only one server is ever up at a time.
+# Sharing a port would work in principle and fail in practice: a server that
+# is slow to release its listener collides with the next one, `wait_up`
+# succeeds against the corpse of the previous run, and the column that comes
+# out belongs to neither. Distinct ports make that failure impossible.
 SALAM_PORT=8099
 NGINX_PORT=8100
 PHP_PORT=8101
 NODE_PORT=8102
+APACHE_PORT=8103
 
 NPROC="$(nproc)"
 # The generator needs cores of its own, or it becomes the bottleneck and every
@@ -54,6 +60,14 @@ SERVER_CORES="$((NPROC > 2 ? NPROC - THREADS : 1))"
 SERVER_CPUS="0-$((SERVER_CORES - 1))"
 GEN_CPUS="$SERVER_CORES-$((NPROC - 1))"
 [ "$SERVER_CORES" -ge "$NPROC" ] && GEN_CPUS="$SERVER_CPUS"
+
+# Apache's MaxRequestWorkers is a hard concurrency ceiling, not a hint: set it
+# below the connection count and requests queue, and the column measures the
+# queue rather than the server. One child per core, 64 threads each, and a
+# floor that keeps it above CONNS on a single-core box.
+APACHE_THREADS=64
+APACHE_MAX_WORKERS=$((SERVER_CORES * APACHE_THREADS))
+[ "$APACHE_MAX_WORKERS" -lt "$CONNS" ] && APACHE_MAX_WORKERS="$CONNS"
 
 mkdir -p "$RUNDIR"
 RESULTS="$RUNDIR/results.json"
@@ -175,6 +189,7 @@ stop_server() {
     [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null
     pkill -f "$RUNDIR/httpbench" 2>/dev/null
     pkill -f "nginx: master.*$RUNDIR" 2>/dev/null
+    pkill -f "apache2 -f $RUNDIR/apache/httpd.conf" 2>/dev/null
     pkill -f "bench/node/server.js" 2>/dev/null
     pkill -f "php -S 127.0.0.1:$PHP_PORT" 2>/dev/null
     SERVER_PID=""
@@ -212,6 +227,40 @@ start_nginx() {
     wait_up "$NGINX_PORT"
 }
 
+# Apache cannot build a response body from its config the way nginx can, so
+# the fixed-body routes are files that mod_file_cache mmaps at startup. They
+# are written here, byte-identical to what main.salam returns, so the only
+# thing that differs between the two columns is the server.
+apache_canned() {
+    mkdir -p "$RUNDIR/apache/canned"
+    printf 'Hello, World!' >"$RUNDIR/apache/canned/plaintext.txt"
+    printf '{"message":"Hello, World!","server":"apache","routes":13,"ok":true}' \
+        >"$RUNDIR/apache/canned/json.json"
+    printf '{"status":"ok","service":"httpbench"}' >"$RUNDIR/apache/canned/health.json"
+    cp "$ASSETS/data.json" "$RUNDIR/apache/canned/cached.json"
+}
+
+start_apache() {
+    # Ubuntu ships every module as a separate .so under a path the config has
+    # to name outright; apxs knows where, and the hardcoded path is only the
+    # fallback for a distribution that has no apxs.
+    local moddir
+    moddir="$(apxs -q LIBEXECDIR 2>/dev/null)"
+    [ -d "${moddir:-}" ] || moddir=/usr/lib/apache2/modules
+    apache_canned
+    sed -e "s|@RUNDIR@|$RUNDIR/apache|g" \
+        -e "s|@ASSETS@|$ASSETS|g" \
+        -e "s|@PORT@|$APACHE_PORT|g" \
+        -e "s|@WORKERS@|$SERVER_CORES|g" \
+        -e "s|@MAXWORKERS@|$APACHE_MAX_WORKERS|g" \
+        -e "s|@MODDIR@|$moddir|g" \
+        "$HERE/apache/httpd.conf.template" >"$RUNDIR/apache/httpd.conf"
+    taskset -c "$SERVER_CPUS" \
+        apache2 -f "$RUNDIR/apache/httpd.conf" -DFOREGROUND >"$RUNDIR/apache.log" 2>&1 &
+    SERVER_PID=$!
+    wait_up "$APACHE_PORT"
+}
+
 start_node() {
     [ -d "$HERE/node/node_modules" ] || npm --prefix "$HERE/node" install --silent >/dev/null 2>&1
     HTTPBENCH_ASSETS="$ASSETS" PORT="$NODE_PORT" CLUSTER="$SERVER_CORES" \
@@ -237,6 +286,7 @@ start_server() {
     case "$1" in
     salam) start_salam ;;
     nginx) start_nginx ;;
+    apache) start_apache ;;
     node) start_node ;;
     php) start_php ;;
     *) return 1 ;;
@@ -262,6 +312,7 @@ port_of() {
     case "$1" in
     salam) echo "$SALAM_PORT" ;;
     nginx) echo "$NGINX_PORT" ;;
+    apache) echo "$APACHE_PORT" ;;
     php) echo "$PHP_PORT" ;;
     node) echo "$NODE_PORT" ;;
     esac
@@ -294,6 +345,25 @@ nginx_skips() {
     home) [ ! -s "$ASSETS/index.html" ] && return 0 ;;
     esac
     return 1
+}
+
+# Apache skips everything nginx does, plus /users/:id. nginx can capture the
+# path segment and interpolate it into a `return 200` body; Apache has no
+# directive that sets a body at all, so the route would have to be faked or
+# put behind mod_php, and either one would stop measuring Apache.
+apache_skips() {
+    case "$1" in
+    users) return 0 ;;
+    esac
+    nginx_skips "$1"
+}
+
+server_skips() {
+    case "$1" in
+    nginx) nginx_skips "$2" ;;
+    apache) apache_skips "$2" ;;
+    *) return 1 ;;
+    esac
 }
 
 # Waits for the kernel's TIME_WAIT table to drain before the next route.
@@ -375,8 +445,8 @@ for server in $SERVERS; do
     prewarm "$(port_of "$server")"
     ensure_up "$server" "prewarm"
     for route in $ROUTES; do
-        if [ "$server" = "nginx" ] && nginx_skips "$route"; then
-            note "nginx skips /$route (needs an application server)"
+        if server_skips "$server" "$route"; then
+            note "$server skips /$route (needs an application server)"
             continue
         fi
         drain_time_wait

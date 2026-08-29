@@ -146,6 +146,22 @@ struct _ReqCtx:
     // per request, on every route, until the kernel killed the process.
     // Keeping the pointers is what makes releasing them safe.
     pub owned: Vector<i64> = Vector {}
+    // The request bytes as they arrived, plus the half-open span of the
+    // header block inside them.
+    //
+    // Headers used to be copied out eagerly: a name and a value allocated,
+    // trimmed and stored for every header line of every request, whether or
+    // not the handler ever asked for one. A plain GET carries three or four
+    // of them and most handlers read none, so that was eight allocations and
+    // eight frees per request spent on nothing. Ctx_header now slices the
+    // value it was asked for straight out of these bytes.
+    //
+    // `raw` is borrowed, not owned - it points at the connection's receive
+    // buffer or at the request string the handler loop is holding, both of
+    // which outlive the request and neither of which this context frees.
+    pub raw: str = ""
+    pub hdr_pos: int = 0
+    pub hdr_end: int = 0
 end
 
 @en "Server"
@@ -262,6 +278,33 @@ func _eq_at(s: str, pos: int, lit: str): bool:
     ret true
 end
 
+// True when byte `i` of `s` is a space or a tab - the optional whitespace
+// HTTP allows between a header's colon and its value.
+func _ows_at(s: str, i: int): bool:
+    p := s as i8 *
+    b := p[i] as int
+    ret b == 32 || b == 9
+end
+
+// _eq_at, folding BOTH sides, for comparing a field name on the wire against
+// one a caller spelled however they liked ("Content-Type", "content-type").
+func _eq_at_ifold(s: str, pos: int, name: str): bool:
+    m := name.len()
+    if pos < 0 || pos + m > s.len(): ret false end
+    sp := s as i8 *
+    np := name as i8 *
+    mut i := 0
+    until i < m:
+        mut a := sp[pos + i] as int
+        mut b := np[i] as int
+        if a >= 65 && a <= 90: a += 32 end
+        if b >= 65 && b <= 90: b += 32 end
+        if a != b: ret false end
+        i += 1
+    end
+    ret true
+end
+
 // _eq_at with ASCII case folding, for the field names HTTP says are
 // case-insensitive. `lit` must already be lowercase.
 func _eq_at_fold(s: str, pos: int, lit: str): bool:
@@ -298,6 +341,46 @@ func _ctx_own(h: i64, s: str): str:
     c := _rc(h)
     c.owned.push((s as void *) as i64)
     ret s
+end
+
+// Releases everything this request allocated and returns the context to the
+// state salam_ctx_new left it in, WITHOUT giving the vectors' buffers back.
+//
+// A keep-alive connection serves many requests, and allocating a context, an
+// ownership list and three key/value vectors for each of them - then freeing
+// all five again - is five malloc/free pairs per request that buy nothing:
+// the next request on the same connection needs the same five things, at
+// close to the same sizes. Popping to empty keeps the capacity, so the second
+// and later requests on a connection allocate nothing for their own
+// bookkeeping at all. This matters more now than it did before: releasing the
+// request's strings is real work that leaking them did not cost, and reusing
+// the buffers is what pays for it.
+func salam_ctx_reset(h: i64):
+    c := _rc(h)
+    n := c.owned.len()
+    mut i := 0
+    until i < n:
+        mem.Free(c.owned.get(i) as void *)
+        i += 1
+    end
+    until c.owned.len() > 0:
+        c.owned.pop()
+    end
+    _kvl_clear(c.req_hdrs)
+    _kvl_clear(c.path_params)
+    _kvl_clear(c.resp_hdrs)
+    c.status = 200
+    c.is_sent = false
+    c.keep_alive = true
+    c.raw = ""
+    c.hdr_pos = 0
+    c.hdr_end = 0
+    c.method = ""
+    c.path = ""
+    c.query = ""
+    c.body = ""
+    c.resp_ct = ""
+    c.resp_body = ""
 end
 
 func salam_ctx_free(h: i64):
@@ -429,9 +512,43 @@ func _kvl_clear(l &: Vector<_KV>):
     end
 end
 
+// Finds one header in the request bytes, without having copied any of them
+// out first. Returns "" - a literal, borrowed - when the request did not
+// carry the field, and otherwise a request-scoped copy of the value.
+func _hdr_lookup(h: i64, name: str): str:
+    c := _rc(h)
+    raw := c.raw
+    if raw.len() == 0: ret "" end
+    e := c.hdr_end
+    nlen := name.len()
+    mut pos := c.hdr_pos
+    until pos < e:
+        line_end := str.IndexFrom(raw, "\r\n", pos)
+        if line_end < 0 || line_end > e: break end
+        colon := str.IndexFrom(raw, ":", pos)
+        if colon >= 0 && colon < line_end && colon - pos == nlen && _eq_at_ifold(raw, pos, name):
+            mut vs := colon + 1
+            until vs < line_end && _ows_at(raw, vs):
+                vs += 1
+            end
+            ret _ctx_own(h, raw.substr(vs, line_end - vs))
+        end
+        pos = line_end + 2
+    end
+    ret ""
+end
+
 func salam_ctx_kv_get(h: i64, list: int, key: str): str:
     c := _rc(h)
-    if list == 0: ret _kvl_get_field(c.req_hdrs, key)
+    if list == 0:
+        // Anything a middleware injected wins over what arrived on the wire;
+        // the list is empty on the ordinary path, so this costs a length
+        // check.
+        if c.req_hdrs.len() > 0:
+            over := _kvl_get_field(c.req_hdrs, key)
+            if over.len() > 0: ret over end
+        end
+        ret _hdr_lookup(h, key)
     else list == 1: ret _kvl_get(c.path_params, key)
     else:
         ret _kvl_get_field(c.resp_hdrs, key)
@@ -556,6 +673,12 @@ func _parse_http(ctx: i64, req: str):
     if first_crlf - sp2 - 1 >= 8 && _eq_at(req, sp2 + 1, "HTTP/1.0"):
         c.keep_alive = false
     end
+    // The header block stays where it landed. This walk only has to find
+    // where the body starts and settle keep-alive; every field name and value
+    // it used to copy out is read on demand by _hdr_lookup instead, and most
+    // are never asked for at all.
+    c.raw = req
+    c.hdr_pos = first_crlf + 2
     mut pos := first_crlf + 2
     mut body_start := 0 - 1
     until pos < n:
@@ -568,25 +691,20 @@ func _parse_http(ctx: i64, req: str):
             break
         end
         colon := str.IndexFrom(req, ":", pos)
-        if colon >= 0 && colon < line_end:
-            hk := _ctx_own(ctx, req.substr(pos, colon - pos))
-            hraw := req.substr(colon + 1, line_end - colon - 1)
-            hv := _ctx_own(ctx, str.TrimLeft(hraw))
-            mem.Free(hraw as void *)
-            salam_ctx_kv_add(ctx, 0, hk, hv)
-            // "Connection" is ten characters; nothing else that matters here
-            // is, so the length check keeps the lowercase copy off the hot
-            // path for every other header on every request.
-            // "Connection" is ten characters; nothing else that matters
-            // here is, so the length check keeps the comparison off the hot
-            // path for every other header on every request.
-            if hk.len() == 10 && _eq_at_fold(hk, 0, "connection"):
-                if _eq_at_fold(hv, 0, "close"): c.keep_alive = false
-                else _eq_at_fold(hv, 0, "keep-alive"): c.keep_alive = true end
+        // "Connection" is ten characters; nothing else decided here is, so
+        // the length check keeps the comparison off the hot path for every
+        // other header on every request.
+        if colon >= 0 && colon < line_end && colon - pos == 10 && _eq_at_fold(req, pos, "connection"):
+            mut vs := colon + 1
+            until vs < line_end && _ows_at(req, vs):
+                vs += 1
             end
+            if _eq_at_fold(req, vs, "close"): c.keep_alive = false
+            else _eq_at_fold(req, vs, "keep-alive"): c.keep_alive = true end
         end
         pos = line_end + 2
     end
+    c.hdr_end = pos
     if body_start >= 0 && body_start < n:
         c.body = _ctx_own(ctx, req.substr(body_start, n - body_start))
     end
@@ -1092,12 +1210,12 @@ end
 // straight to the transport and there is nothing left to send).
 // Serves one request and writes its response. Sets `keep` to whether the
 // connection may be reused afterwards; the caller owns the socket either way.
-func _serve_request(slot: int, fd: i64, req: str, keep &: bool): bool:
+func _serve_request(slot: int, fd: i64, ctx: i64, req: str, keep &: bool): bool:
     if req.len() == 0:
         keep = false
         ret false
     end
-    ctx := salam_ctx_new(fd)
+    salam_ctx_reset(ctx)
     _parse_http(ctx, req)
     keep = _rc(ctx).keep_alive
     r := _srv_routers.get(slot)
@@ -1154,7 +1272,6 @@ func _serve_request(slot: int, fd: i64, req: str, keep &: bool): bool:
         tcp.WriteBytes(tcp.ConnFromFd(fd), b.data, b.len as int)
         str.BufFree(b)
     end
-    salam_ctx_free(ctx)
     ret true
 end
 
@@ -1178,6 +1295,9 @@ func _web_conn_handler(packed: i64):
     rawsock.SetNoDelay(sock, true)
     rawsock.SetTimeout(sock, _keepalive_idle_ms)
     scratch := mem.Allocate((_RD_CHUNK + 1) as u64)
+    // One context for the whole connection; _serve_request resets it per
+    // request rather than building a new one.
+    ctx := salam_ctx_new(fd)
     mut pending := ""
     mut served := 0
     until 1 == 1:
@@ -1185,7 +1305,7 @@ func _web_conn_handler(packed: i64):
         req := _read_request(fd, scratch, pending, owned)
         if req.len() == 0: break end
         mut keep := true
-        ok := _serve_request(slot, fd, req, keep)
+        ok := _serve_request(slot, fd, ctx, req, keep)
         if owned: mem.Free(req as void *) end
         if ok == false: break end
         served += 1
@@ -1194,6 +1314,7 @@ func _web_conn_handler(packed: i64):
     // Whatever the peer pipelined behind the last request it will never get an
     // answer to, but the bytes are still this thread's to release.
     if pending.len() > 0: mem.Free(pending as void *) end
+    salam_ctx_free(ctx)
     mem.Free(scratch)
     _net_close(fd)
 end

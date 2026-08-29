@@ -56,6 +56,28 @@ end
 
 // ---- public API ----
 
+// The threshold sweep behind the curves below: indices ordered by
+// descending score, so walking them accumulates true and false
+// positives one distinct threshold at a time.
+func _by_score_desc(score &: matrix.Matrix): Vector<int>:
+    n := score.rows
+    mut order := Vector {} as Vector<int>
+    repeat n with i: order.push(i) end
+    mut keys := Vector {} as Vector<f64>
+    repeat n with i: keys.push(score.at(i, 0)) end
+    sort.SortIndexDesc(order, keys)
+    keys.free()
+    ret order
+end
+
+func _pos_neg(y &: matrix.Matrix, npos &: int, nneg &: int):
+    npos = 0
+    nneg = 0
+    repeat y.rows with i:
+        if y.at(i, 0) == 1.0: npos += 1 else: nneg += 1 end
+    end
+end
+
 @en "Accuracy"
 @fa "دقت"
 @ar "دقة"
@@ -138,7 +160,7 @@ pub func RocAuc(y &: matrix.Matrix, score &: matrix.Matrix): f64:
     repeat n with i: order.push(i) end
     mut keys := Vector {} as Vector<f64>
     repeat n with i: keys.push(score.at(i, 0)) end
-    sort.SortBy(order, (a: int, b: int): ret keys.get(a) < keys.get(b) end)
+    sort.SortIndex(order, keys)
     // Average ranks over tie groups (ranks are 1-based).
     mut ranks := Vector {} as Vector<f64>
     ranks.zeros(n)
@@ -241,4 +263,288 @@ pub func R2Score(y &: matrix.Matrix, pred &: matrix.Matrix): f64:
     end
     if ss_tot == 0.0: ret 0.0 end
     ret 1.0 - ss_res / ss_tot
+end
+
+// The ROC curve of binary labels {0,1} against a score, as an m x 3
+// matrix of (threshold, false positive rate, true positive rate). The
+// first row is the (0, 0) corner at +infinity and the last is (1, 1);
+// one row per distinct score in between, descending. Empty when either
+// class is missing.
+@en "RocCurve"
+@fa "منحنی راک"
+@ar "منحنى روك"
+pub func RocCurve(y &: matrix.Matrix, score &: matrix.Matrix): matrix.Matrix:
+    n := y.rows
+    if n == 0 || score.rows != n: ret matrix.Matrix {} end
+    mut npos := 0
+    mut nneg := 0
+    _pos_neg(y, npos, nneg)
+    if npos == 0 || nneg == 0: ret matrix.Matrix {} end
+    mut order := _by_score_desc(score)
+    mut rows := Vector {} as Vector<f64>
+    rows.push(1.0e300)
+    rows.push(0.0)
+    rows.push(0.0)
+    mut tp := 0.0
+    mut fp := 0.0
+    mut i := 0
+    until i < n:
+        t := score.at(order.get(i), 0)
+        mut j := i
+        until j < n && score.at(order.get(j), 0) == t:
+            if y.at(order.get(j), 0) == 1.0: tp += 1.0 else: fp += 1.0 end
+            j += 1
+        end
+        rows.push(t)
+        rows.push(fp / (nneg as f64))
+        rows.push(tp / (npos as f64))
+        i = j
+    end
+    order.free()
+    m := rows.len() / 3
+    mut out := matrix.Zeros(m, 3)
+    repeat rows.len() with k: out.a.set(k, rows.get(k)) end
+    rows.free()
+    ret out
+end
+
+// The precision-recall curve, an m x 3 matrix of (threshold, recall,
+// precision), one row per distinct score, descending. Empty when no
+// positive label is present.
+@en "PrecisionRecallCurve"
+@fa "منحنی دقت و بازخوانی"
+@ar "منحنى الدقة والاستدعاء"
+pub func PrecisionRecallCurve(y &: matrix.Matrix, score &: matrix.Matrix): matrix.Matrix:
+    n := y.rows
+    if n == 0 || score.rows != n: ret matrix.Matrix {} end
+    mut npos := 0
+    mut nneg := 0
+    _pos_neg(y, npos, nneg)
+    if npos == 0: ret matrix.Matrix {} end
+    mut order := _by_score_desc(score)
+    mut rows := Vector {} as Vector<f64>
+    mut tp := 0.0
+    mut fp := 0.0
+    mut i := 0
+    until i < n:
+        t := score.at(order.get(i), 0)
+        mut j := i
+        until j < n && score.at(order.get(j), 0) == t:
+            if y.at(order.get(j), 0) == 1.0: tp += 1.0 else: fp += 1.0 end
+            j += 1
+        end
+        rows.push(t)
+        rows.push(tp / (npos as f64))
+        rows.push(tp / (tp + fp))
+        i = j
+    end
+    order.free()
+    m := rows.len() / 3
+    mut out := matrix.Zeros(m, 3)
+    repeat rows.len() with k: out.a.set(k, rows.get(k)) end
+    rows.free()
+    ret out
+end
+
+// Average precision: the precision-recall curve summed as a step
+// function, sum (R_i - R_{i-1}) P_i, the interpolation-free form
+// scikit-learn reports.
+@en "AveragePrecision"
+@fa "میانگین دقت"
+@ar "متوسط الدقة"
+pub func AveragePrecision(y &: matrix.Matrix, score &: matrix.Matrix): f64:
+    mut c := PrecisionRecallCurve(y, score)
+    if c.is_empty(): ret 0.0 end
+    mut ap := 0.0
+    mut prev := 0.0
+    repeat c.rows with i:
+        r := c.at(i, 1)
+        ap += (r - prev) * c.at(i, 2)
+        prev = r
+    end
+    matrix.Free(c)
+    ret ap
+end
+
+// The mean of the per-class recalls - the accuracy an imbalanced test
+// set cannot inflate.
+@en "BalancedAccuracy"
+@fa "دقت متوازن"
+@ar "الدقة المتوازنة"
+pub func BalancedAccuracy(y &: matrix.Matrix, pred &: matrix.Matrix): f64:
+    n := y.rows
+    if n == 0 || pred.rows != n: ret 0.0 end
+    k := CountClasses(y)
+    if k < 1: ret 0.0 end
+    mut hits := Vector {} as Vector<f64>
+    mut total := Vector {} as Vector<f64>
+    repeat k:
+        hits.push(0.0)
+        total.push(0.0)
+    end
+    repeat n with i:
+        c := y.at(i, 0) as int
+        if c < 0 || c >= k: continue end
+        total.set(c, total.get(c) + 1.0)
+        if pred.at(i, 0) == y.at(i, 0): hits.set(c, hits.get(c) + 1.0) end
+    end
+    mut s := 0.0
+    mut seen := 0
+    repeat k with c:
+        if total.get(c) > 0.0:
+            s += hits.get(c) / total.get(c)
+            seen += 1
+        end
+    end
+    hits.free()
+    total.free()
+    if seen == 0: ret 0.0 end
+    ret s / (seen as f64)
+end
+
+// Matthews correlation coefficient over k classes, the balanced
+// -1..1 summary of a confusion matrix.
+@en "MatthewsCorrCoef"
+@fa "ضریب همبستگی متیوز"
+@ar "معامل ارتباط ماثيوز"
+pub func MatthewsCorrCoef(y &: matrix.Matrix, pred &: matrix.Matrix): f64:
+    k := CountClasses(y)
+    if k < 1: ret 0.0 end
+    mut cm := ConfusionMatrix(y, pred, k)
+    if cm.is_empty(): ret 0.0 end
+    mut total := 0.0
+    mut correct := 0.0
+    mut rowsum := Vector {} as Vector<f64>
+    mut colsum := Vector {} as Vector<f64>
+    repeat k:
+        rowsum.push(0.0)
+        colsum.push(0.0)
+    end
+    repeat k with i:
+        repeat k with j:
+            v := cm.at(i, j)
+            total += v
+            rowsum.set(i, rowsum.get(i) + v)
+            colsum.set(j, colsum.get(j) + v)
+            if i == j: correct += v end
+        end
+    end
+    mut dot := 0.0
+    mut rr := 0.0
+    mut cc := 0.0
+    repeat k with i:
+        dot += rowsum.get(i) * colsum.get(i)
+        rr += rowsum.get(i) * rowsum.get(i)
+        cc += colsum.get(i) * colsum.get(i)
+    end
+    rowsum.free()
+    colsum.free()
+    matrix.Free(cm)
+    den := math.Sqrt(total * total - rr) * math.Sqrt(total * total - cc)
+    if den == 0.0: ret 0.0 end
+    ret (correct * total - dot) / den
+end
+
+// Cohen's kappa: agreement past what chance alone would give.
+@en "CohenKappa"
+@fa "کاپای کوهن"
+@ar "كابا كوهين"
+pub func CohenKappa(y &: matrix.Matrix, pred &: matrix.Matrix): f64:
+    k := CountClasses(y)
+    if k < 1: ret 0.0 end
+    mut cm := ConfusionMatrix(y, pred, k)
+    if cm.is_empty(): ret 0.0 end
+    mut total := 0.0
+    mut correct := 0.0
+    mut rowsum := Vector {} as Vector<f64>
+    mut colsum := Vector {} as Vector<f64>
+    repeat k:
+        rowsum.push(0.0)
+        colsum.push(0.0)
+    end
+    repeat k with i:
+        repeat k with j:
+            v := cm.at(i, j)
+            total += v
+            rowsum.set(i, rowsum.get(i) + v)
+            colsum.set(j, colsum.get(j) + v)
+            if i == j: correct += v end
+        end
+    end
+    mut chance := 0.0
+    repeat k with i: chance += rowsum.get(i) * colsum.get(i) end
+    rowsum.free()
+    colsum.free()
+    matrix.Free(cm)
+    if total == 0.0: ret 0.0 end
+    po := correct / total
+    pe := chance / (total * total)
+    if pe == 1.0: ret 0.0 end
+    ret (po - pe) / (1.0 - pe)
+end
+
+// 1 - Var(y - pred) / Var(y): R2 without the penalty for a constant
+// offset in the predictions.
+@en "ExplainedVariance"
+@fa "واریانس تبیین‌شده"
+@ar "التباين المفسر"
+pub func ExplainedVariance(y &: matrix.Matrix, pred &: matrix.Matrix): f64:
+    n := y.rows
+    if n == 0 || pred.rows != n: ret 0.0 end
+    nf := n as f64
+    mut mr := 0.0
+    mut my := 0.0
+    repeat n with i:
+        mr += y.at(i, 0) - pred.at(i, 0)
+        my += y.at(i, 0)
+    end
+    mr = mr / nf
+    my = my / nf
+    mut vr := 0.0
+    mut vy := 0.0
+    repeat n with i:
+        a := (y.at(i, 0) - pred.at(i, 0)) - mr
+        b := y.at(i, 0) - my
+        vr += a * a
+        vy += b * b
+    end
+    if vy == 0.0: ret 0.0 end
+    ret 1.0 - vr / vy
+end
+
+// The median absolute error, the robust companion of MAE.
+@en "MedianAbsoluteError"
+@fa "میانه خطای مطلق"
+@ar "وسيط الخطأ المطلق"
+pub func MedianAbsoluteError(y &: matrix.Matrix, pred &: matrix.Matrix): f64:
+    n := y.rows
+    if n == 0 || pred.rows != n: ret 0.0 end
+    mut d := Vector {} as Vector<f64>
+    repeat n with i: d.push(math.Abs(y.at(i, 0) - pred.at(i, 0))) end
+    sort.Sort(d)
+    mut m := d.get(n / 2)
+    if n % 2 == 0: m = (d.get(n / 2 - 1) + d.get(n / 2)) / 2.0 end
+    d.free()
+    ret m
+end
+
+// Mean absolute percentage error, as a fraction (0.1 is ten percent).
+// Targets of zero are skipped, the only sane reading of a relative
+// error against nothing.
+@en "MAPE"
+@fa "میانگین درصد خطای مطلق"
+@ar "متوسط النسبة المئوية للخطأ المطلق"
+pub func MAPE(y &: matrix.Matrix, pred &: matrix.Matrix): f64:
+    n := y.rows
+    if n == 0 || pred.rows != n: ret 0.0 end
+    mut s := 0.0
+    mut seen := 0
+    repeat n with i:
+        t := y.at(i, 0)
+        if t == 0.0: continue end
+        s += math.Abs((t - pred.at(i, 0)) / t)
+        seen += 1
+    end
+    if seen == 0: ret 0.0 end
+    ret s / (seen as f64)
 end

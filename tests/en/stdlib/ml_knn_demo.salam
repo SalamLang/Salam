@@ -1,0 +1,107 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/ml: k-nearest neighbors, classification and regression.
+
+import data
+import math
+import matrix
+import ml
+import testing
+
+func main:
+    // Blobs far apart: every neighbor agrees
+    mut y := matrix.Matrix {}
+    mut x := data.MakeBlobs(150, 3, 2, 0.5, 31, y)
+    mut knn := ml.KNNClassifier { k = 3 }
+    testing.AssertTrue(knn.fit(x, y))
+    testing.AssertEqInt(knn.n_classes, 3)
+    testing.AssertEqFloat(knn.score(x, y), 1.0, 0.000001)
+
+    // Held-out points are classified by their neighbors
+    mut sp := ml.TrainTestSplit(x, y, 0.2, 2)
+    mut knn2 := ml.KNNClassifier { k = 5 }
+    testing.AssertTrue(knn2.fit(sp.x_train, sp.y_train))
+    testing.AssertEqFloat(knn2.score(sp.x_test, sp.y_test), 1.0, 0.000001)
+
+    // Probabilities: unanimous neighborhoods give 1.0 on one class
+    mut pr := knn2.predict_proba(sp.x_test)
+    testing.AssertEqInt(pr.cols, 3)
+    mut unanimous := true
+    repeat pr.rows with i:
+        mut mx := 0.0
+        repeat 3 with c:
+            if pr.at(i, c) > mx: mx = pr.at(i, c) end
+        end
+        if mx < 0.999999: unanimous = false end
+    end
+    testing.AssertTrue(unanimous)
+
+    // Distance weighting still agrees on clean data
+    mut knnw := ml.KNNClassifier { k = 7, weighted = true }
+    testing.AssertTrue(knnw.fit(x, y))
+    testing.AssertEqFloat(knnw.score(x, y), 1.0, 0.000001)
+
+    // Regression: y = sin(x0) + x1 on a grid, neighbors interpolate
+    mut xr := matrix.Zeros(400, 2)
+    mut yr := matrix.Zeros(400, 1)
+    repeat 400 with i:
+        a := ((i % 20) as f64) * 0.15
+        b := ((i / 20) as f64) * 0.1
+        xr.set(i, 0, a)
+        xr.set(i, 1, b)
+        yr.set(i, 0, math.Sin(a) + b)
+    end
+    mut reg := ml.KNNRegressor { k = 4 }
+    testing.AssertTrue(reg.fit(xr, yr))
+    mut q := matrix.Zeros(1, 2)
+    q.set(0, 0, 1.0)
+    q.set(0, 1, 1.0)
+    mut pq := reg.predict(q)
+    testing.AssertTrue(pq.at(0, 0) > math.Sin(1.0) + 1.0 - 0.15)
+    testing.AssertTrue(pq.at(0, 0) < math.Sin(1.0) + 1.0 + 0.15)
+    testing.AssertTrue(reg.score(xr, yr) > 0.98)
+    mut regw := ml.KNNRegressor { k = 4, weighted = true }
+    testing.AssertTrue(regw.fit(xr, yr))
+    testing.AssertTrue(regw.score(xr, yr) > 0.99)
+
+    // Shape and state errors
+    mut fresh := ml.KNNClassifier {}
+    testing.AssertTrue(fresh.predict(x).is_empty())
+    mut bad := ml.KNNClassifier { k = 0 }
+    testing.AssertFalse(bad.fit(x, y))
+    mut wide := matrix.Zeros(3, 5)
+    testing.AssertTrue(knn.predict(wide).is_empty())
+
+    knn.free()
+    knn2.free()
+    knnw.free()
+    reg.free()
+    regw.free()
+    fresh.free()
+    bad.free()
+    sp.free()
+    matrix.Free(x)
+    matrix.Free(y)
+    matrix.Free(pr)
+    matrix.Free(xr)
+    matrix.Free(yr)
+    matrix.Free(q)
+    matrix.Free(pq)
+    matrix.Free(wide)
+
+    ret testing.Summary()
+end

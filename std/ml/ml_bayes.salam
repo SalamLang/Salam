@@ -1,0 +1,167 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ml
+
+import math
+import matrix
+
+// Gaussian naive Bayes: each feature is modeled as an independent
+// normal per class. fit() collects per-class means and variances plus
+// log priors; prediction sums log-likelihoods and normalizes through a
+// softmax. var_smoothing adds a fraction of the largest feature variance
+// to every variance, the standard guard against a feature that is
+// constant within a class.
+
+@en "GaussianNB"
+@fa "بیز ساده گاوسی"
+@ar "بايز الساذج الغاوسي"
+pub struct GaussianNB:
+    pub var_smoothing: f64 = 0.000000001
+    pub means: matrix.Matrix = matrix.Matrix {}
+    pub vars: matrix.Matrix = matrix.Matrix {}
+    pub log_priors: matrix.Matrix = matrix.Matrix {}
+    pub n_classes: int = 0
+    pub ok: bool = false
+
+    @en "fit"
+    @fa "برازش"
+    @ar "ملاءمة"
+    pub func fit(x &: matrix.Matrix, y &: matrix.Matrix): bool:
+        this.ok = false
+        if x.is_empty() || y.rows != x.rows || y.cols != 1: ret false end
+        k := CountClasses(y)
+        if k < 1: ret false end
+        p := x.cols
+        n := x.rows
+        matrix.Free(this.means)
+        matrix.Free(this.vars)
+        matrix.Free(this.log_priors)
+        this.means = matrix.Zeros(k, p)
+        this.vars = matrix.Zeros(k, p)
+        this.log_priors = matrix.Zeros(k, 1)
+        mut counts := Vector {} as Vector<int>
+        counts.zeros(k)
+        repeat n with i:
+            c := y.at(i, 0) as int
+            counts.set(c, counts.get(c) + 1)
+            repeat p with j: this.means.add_at(c, j, x.at(i, j)) end
+        end
+        repeat k with c:
+            if counts.get(c) > 0:
+                repeat p with j: this.means.mul_at(c, j, 1.0 / (counts.get(c) as f64)) end
+            end
+        end
+        repeat n with i:
+            c := y.at(i, 0) as int
+            repeat p with j:
+                d := x.at(i, j) - this.means.at(c, j)
+                this.vars.add_at(c, j, d * d)
+            end
+        end
+        // The largest overall feature variance sets the smoothing floor.
+        mut vmax := 0.0
+        repeat p with j:
+            m := _col_mean(x, j)
+            v := _col_std(x, j, m)
+            if v * v > vmax: vmax = v * v end
+        end
+        eps := this.var_smoothing * vmax
+        repeat k with c:
+            cnt := counts.get(c)
+            if cnt > 0:
+                repeat p with j: this.vars.set(c, j, this.vars.at(c, j) / (cnt as f64) + eps) end
+                this.log_priors.set(c, 0, math.Log((cnt as f64) / (n as f64)))
+            else:
+                repeat p with j: this.vars.set(c, j, 1.0) end
+                this.log_priors.set(c, 0, 0.0 - 700.0)
+            end
+        end
+        counts.free()
+        this.n_classes = k
+        this.ok = true
+        ret true
+    end
+
+    // Per-class posteriors, row-normalized.
+    @en "predict_proba"
+    @fa "پیش‌بینی احتمال"
+    @ar "تنبؤ بالاحتمال"
+    pub func predict_proba(x &: matrix.Matrix): matrix.Matrix:
+        if this.ok == false || x.cols != this.means.cols: ret matrix.Matrix {} end
+        k := this.n_classes
+        p := x.cols
+        mut out := matrix.Zeros(x.rows, k)
+        half_log_2pi := 0.5 * math.Log(2.0 * math.PI)
+        repeat x.rows with i:
+            mut m := 0.0 - 1.0e300
+            repeat k with c:
+                mut ll := this.log_priors.at(c, 0)
+                repeat p with j:
+                    v := this.vars.at(c, j)
+                    d := x.at(i, j) - this.means.at(c, j)
+                    ll -= half_log_2pi + 0.5 * math.Log(v) + d * d / (2.0 * v)
+                end
+                out.set(i, c, ll)
+                if ll > m: m = ll end
+            end
+            mut s := 0.0
+            repeat k with c:
+                e := math.Exp(out.at(i, c) - m)
+                out.set(i, c, e)
+                s += e
+            end
+            repeat k with c: out.set(i, c, out.at(i, c) / s) end
+        end
+        ret out
+    end
+
+    @en "predict"
+    @fa "پیش‌بینی"
+    @ar "تنبؤ"
+    pub func predict(x &: matrix.Matrix): matrix.Matrix:
+        mut probs := this.predict_proba(x)
+        if probs.is_empty(): ret probs end
+        mut out := matrix.Zeros(x.rows, 1)
+        repeat x.rows with i:
+            mut best := 0
+            repeat this.n_classes with c:
+                if probs.at(i, c) > probs.at(i, best): best = c end
+            end
+            out.set(i, 0, best as f64)
+        end
+        matrix.Free(probs)
+        ret out
+    end
+
+    @en "score"
+    @fa "امتیاز"
+    @ar "درجة"
+    pub func score(x &: matrix.Matrix, y &: matrix.Matrix): f64:
+        mut p := this.predict(x)
+        if p.is_empty(): ret 0.0 end
+        r := Accuracy(y, p)
+        matrix.Free(p)
+        ret r
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free():
+        matrix.Free(this.means)
+        matrix.Free(this.vars)
+        matrix.Free(this.log_priors)
+    end
+end

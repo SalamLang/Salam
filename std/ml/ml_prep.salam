@@ -1,0 +1,502 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ml
+
+import math
+import matrix
+import sort
+import str
+
+// Fitted preprocessing: the transforms with a train/test asymmetry.
+// Each learns its statistics from the training matrix in fit() and
+// applies exactly those to anything handed to transform(), which is
+// what keeps a held-out set honest. Stateless feature construction
+// (PolynomialFeatures) lives here too because it belongs to the same
+// pipeline stage.
+
+@en "StandardScaler"
+@fa "مقیاس‌گر استاندارد"
+@ar "مقياس معياري"
+pub struct StandardScaler:
+    pub with_mean: bool = true
+    pub with_std: bool = true
+    pub mean: matrix.Matrix = matrix.Matrix {}
+    pub std: matrix.Matrix = matrix.Matrix {}
+    pub ok: bool = false
+
+    @en "fit"
+    @fa "برازش"
+    @ar "ملاءمة"
+    pub func fit(x &: matrix.Matrix): bool:
+        this.ok = false
+        if x.is_empty(): ret false end
+        matrix.Free(this.mean)
+        matrix.Free(this.std)
+        this.mean = matrix.Zeros(1, x.cols)
+        this.std = matrix.Ones(1, x.cols)
+        repeat x.cols with j:
+            m := _col_mean(x, j)
+            this.mean.set(0, j, m)
+            s := _col_std(x, j, m)
+            if s > 0.0: this.std.set(0, j, s) end
+        end
+        this.ok = true
+        ret true
+    end
+
+    @en "transform"
+    @fa "تبدیل"
+    @ar "تحويل"
+    pub func transform(x &: matrix.Matrix): matrix.Matrix:
+        if this.ok == false || x.cols != this.mean.cols: ret matrix.Matrix {} end
+        mut r := matrix.Clone(x)
+        repeat x.cols with j:
+            mut m := 0.0
+            if this.with_mean: m = this.mean.at(0, j) end
+            mut s := 1.0
+            if this.with_std: s = this.std.at(0, j) end
+            repeat x.rows with i: r.set(i, j, (x.at(i, j) - m) / s) end
+        end
+        ret r
+    end
+
+    @en "fit_transform"
+    @fa "برازش و تبدیل"
+    @ar "ملاءمة وتحويل"
+    pub func fit_transform(x &: matrix.Matrix): matrix.Matrix:
+        if this.fit(x) == false: ret matrix.Matrix {} end
+        ret this.transform(x)
+    end
+
+    @en "inverse_transform"
+    @fa "تبدیل معکوس"
+    @ar "تحويل عكسي"
+    pub func inverse_transform(x &: matrix.Matrix): matrix.Matrix:
+        if this.ok == false || x.cols != this.mean.cols: ret matrix.Matrix {} end
+        mut r := matrix.Clone(x)
+        repeat x.cols with j:
+            mut m := 0.0
+            if this.with_mean: m = this.mean.at(0, j) end
+            mut s := 1.0
+            if this.with_std: s = this.std.at(0, j) end
+            repeat x.rows with i: r.set(i, j, x.at(i, j) * s + m) end
+        end
+        ret r
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free():
+        matrix.Free(this.mean)
+        matrix.Free(this.std)
+    end
+end
+
+@en "MinMaxScaler"
+@fa "مقیاس‌گر کمینه‌بیشینه"
+@ar "مقياس أدنى-أقصى"
+pub struct MinMaxScaler:
+    pub lo: f64 = 0.0
+    pub hi: f64 = 1.0
+    pub data_min: matrix.Matrix = matrix.Matrix {}
+    pub data_range: matrix.Matrix = matrix.Matrix {}
+    pub ok: bool = false
+
+    @en "fit"
+    @fa "برازش"
+    @ar "ملاءمة"
+    pub func fit(x &: matrix.Matrix): bool:
+        this.ok = false
+        if x.is_empty(): ret false end
+        matrix.Free(this.data_min)
+        matrix.Free(this.data_range)
+        this.data_min = matrix.Zeros(1, x.cols)
+        this.data_range = matrix.Ones(1, x.cols)
+        repeat x.cols with j:
+            mut mn := x.at(0, j)
+            mut mx := mn
+            repeat x.rows with i:
+                v := x.at(i, j)
+                if v < mn: mn = v end
+                if v > mx: mx = v end
+            end
+            this.data_min.set(0, j, mn)
+            if mx > mn: this.data_range.set(0, j, mx - mn) end
+        end
+        this.ok = true
+        ret true
+    end
+
+    @en "transform"
+    @fa "تبدیل"
+    @ar "تحويل"
+    pub func transform(x &: matrix.Matrix): matrix.Matrix:
+        if this.ok == false || x.cols != this.data_min.cols: ret matrix.Matrix {} end
+        mut r := matrix.Clone(x)
+        span := this.hi - this.lo
+        repeat x.cols with j:
+            mn := this.data_min.at(0, j)
+            rg := this.data_range.at(0, j)
+            repeat x.rows with i: r.set(i, j, this.lo + (x.at(i, j) - mn) / rg * span) end
+        end
+        ret r
+    end
+
+    @en "fit_transform"
+    @fa "برازش و تبدیل"
+    @ar "ملاءمة وتحويل"
+    pub func fit_transform(x &: matrix.Matrix): matrix.Matrix:
+        if this.fit(x) == false: ret matrix.Matrix {} end
+        ret this.transform(x)
+    end
+
+    @en "inverse_transform"
+    @fa "تبدیل معکوس"
+    @ar "تحويل عكسي"
+    pub func inverse_transform(x &: matrix.Matrix): matrix.Matrix:
+        if this.ok == false || x.cols != this.data_min.cols: ret matrix.Matrix {} end
+        mut r := matrix.Clone(x)
+        span := this.hi - this.lo
+        repeat x.cols with j:
+            mn := this.data_min.at(0, j)
+            rg := this.data_range.at(0, j)
+            repeat x.rows with i: r.set(i, j, (x.at(i, j) - this.lo) / span * rg + mn) end
+        end
+        ret r
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free():
+        matrix.Free(this.data_min)
+        matrix.Free(this.data_range)
+    end
+end
+
+// String labels to 0..k-1 and back. Classes are numbered in order of
+// first appearance, so the mapping is a function of the training data
+// alone and never of a hash seed.
+@en "LabelEncoder"
+@fa "رمزگذار برچسب"
+@ar "مشفر التسميات"
+pub struct LabelEncoder:
+    pub classes: Vector<str> = Vector {}
+    pub ok: bool = false
+
+    @en "fit"
+    @fa "برازش"
+    @ar "ملاءمة"
+    pub func fit(labels &: Vector<str>): bool:
+        this.classes.clear()
+        repeat labels.len() with i:
+            if this.index_of(labels.get(i)) < 0: this.classes.push(labels.get(i)) end
+        end
+        this.ok = this.classes.len() > 0
+        ret this.ok
+    end
+
+    @en "index_of"
+    @fa "نمایه"
+    @ar "دليل"
+    pub func index_of(label: str): int:
+        repeat this.classes.len() with i:
+            if str.Equals(this.classes.get(i), label): ret i end
+        end
+        ret 0 - 1
+    end
+
+    // Unknown labels map to -1.
+    @en "transform"
+    @fa "تبدیل"
+    @ar "تحويل"
+    pub func transform(labels &: Vector<str>): matrix.Matrix:
+        if this.ok == false: ret matrix.Matrix {} end
+        mut y := matrix.Zeros(labels.len(), 1)
+        repeat labels.len() with i: y.set(i, 0, this.index_of(labels.get(i)) as f64) end
+        ret y
+    end
+
+    @en "fit_transform"
+    @fa "برازش و تبدیل"
+    @ar "ملاءمة وتحويل"
+    pub func fit_transform(labels &: Vector<str>): matrix.Matrix:
+        if this.fit(labels) == false: ret matrix.Matrix {} end
+        ret this.transform(labels)
+    end
+
+    @en "inverse_transform"
+    @fa "تبدیل معکوس"
+    @ar "تحويل عكسي"
+    pub func inverse_transform(y &: matrix.Matrix): Vector<str>:
+        mut out := Vector {} as Vector<str>
+        repeat y.rows with i:
+            k := y.at(i, 0) as int
+            if k >= 0 && k < this.classes.len():
+                out.push(this.classes.get(k))
+            else:
+                out.push("")
+            end
+        end
+        ret out
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free(): this.classes.free() end
+end
+
+// Whole-number labels to indicator columns.
+@en "OneHotEncoder"
+@fa "رمزگذار تک‌داغ"
+@ar "مشفر أحادي"
+pub struct OneHotEncoder:
+    pub n_classes: int = 0
+    pub ok: bool = false
+
+    @en "fit"
+    @fa "برازش"
+    @ar "ملاءمة"
+    pub func fit(y &: matrix.Matrix): bool:
+        this.n_classes = CountClasses(y)
+        this.ok = this.n_classes > 0
+        ret this.ok
+    end
+
+    @en "transform"
+    @fa "تبدیل"
+    @ar "تحويل"
+    pub func transform(y &: matrix.Matrix): matrix.Matrix:
+        if this.ok == false: ret matrix.Matrix {} end
+        mut r := matrix.Zeros(y.rows, this.n_classes)
+        repeat y.rows with i:
+            k := y.at(i, 0) as int
+            if k >= 0 && k < this.n_classes: r.set(i, k, 1.0) end
+        end
+        ret r
+    end
+
+    @en "fit_transform"
+    @fa "برازش و تبدیل"
+    @ar "ملاءمة وتحويل"
+    pub func fit_transform(y &: matrix.Matrix): matrix.Matrix:
+        if this.fit(y) == false: ret matrix.Matrix {} end
+        ret this.transform(y)
+    end
+
+    // The argmax of each row, back to a label column.
+    @en "inverse_transform"
+    @fa "تبدیل معکوس"
+    @ar "تحويل عكسي"
+    pub func inverse_transform(onehot &: matrix.Matrix): matrix.Matrix:
+        mut y := matrix.Zeros(onehot.rows, 1)
+        repeat onehot.rows with i:
+            mut best := 0
+            repeat onehot.cols with j:
+                if onehot.at(i, j) > onehot.at(i, best): best = j end
+            end
+            y.set(i, 0, best as f64)
+        end
+        ret y
+    end
+end
+
+// Fills NaN cells column by column with the mean, the median, or a
+// constant learned at fit time.
+@en "SimpleImputer"
+@fa "جایگذار ساده"
+@ar "معوض بسيط"
+pub struct SimpleImputer:
+    pub strategy: int = IMPUTE_MEAN
+    pub fill: f64 = 0.0
+    pub stats: matrix.Matrix = matrix.Matrix {}
+    pub ok: bool = false
+
+    @en "fit"
+    @fa "برازش"
+    @ar "ملاءمة"
+    pub func fit(x &: matrix.Matrix): bool:
+        this.ok = false
+        if x.is_empty(): ret false end
+        matrix.Free(this.stats)
+        this.stats = matrix.Zeros(1, x.cols)
+        repeat x.cols with j:
+            mut v := this.fill
+            if this.strategy == IMPUTE_MEAN:
+                v = _col_mean_nan(x, j)
+            else this.strategy == IMPUTE_MEDIAN:
+                v = _col_median_nan(x, j)
+            end
+            this.stats.set(0, j, v)
+        end
+        this.ok = true
+        ret true
+    end
+
+    @en "transform"
+    @fa "تبدیل"
+    @ar "تحويل"
+    pub func transform(x &: matrix.Matrix): matrix.Matrix:
+        if this.ok == false || x.cols != this.stats.cols: ret matrix.Matrix {} end
+        mut r := matrix.Clone(x)
+        repeat x.cols with j:
+            v := this.stats.at(0, j)
+            repeat x.rows with i:
+                if math.IsNaN(x.at(i, j)): r.set(i, j, v) end
+            end
+        end
+        ret r
+    end
+
+    @en "fit_transform"
+    @fa "برازش و تبدیل"
+    @ar "ملاءمة وتحويل"
+    pub func fit_transform(x &: matrix.Matrix): matrix.Matrix:
+        if this.fit(x) == false: ret matrix.Matrix {} end
+        ret this.transform(x)
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free(): matrix.Free(this.stats) end
+end
+
+// Every monomial of the input features up to `degree`, in the order of
+// non-decreasing index tuples (x0, x1, x0*x0, x0*x1, x1*x1, ...), with an
+// optional leading column of ones.
+@en "PolynomialFeatures"
+@fa "ویژگی چندجمله‌ای"
+@ar "سمات كثيرة الحدود"
+pub struct PolynomialFeatures:
+    pub degree: int = 2
+    pub include_bias: bool = false
+
+    @en "transform"
+    @fa "تبدیل"
+    @ar "تحويل"
+    pub func transform(x &: matrix.Matrix): matrix.Matrix:
+        if x.is_empty() || this.degree < 1: ret matrix.Matrix {} end
+        p := x.cols
+        mut cols := _poly_count(p, this.degree)
+        mut offset := 0
+        if this.include_bias:
+            cols += 1
+            offset = 1
+        end
+        mut r := matrix.Zeros(x.rows, cols)
+        if this.include_bias:
+            repeat x.rows with i: r.set(i, 0, 1.0) end
+        end
+        mut col := offset
+        // Odometer over non-decreasing tuples of length k, k = 1..degree.
+        repeat this.degree with kk:
+            k := kk + 1
+            mut idx := Vector {} as Vector<int>
+            idx.zeros(k)
+            mut more := true
+            until more:
+                repeat x.rows with i:
+                    mut v := 1.0
+                    repeat k with t: v = v * x.at(i, idx.get(t)) end
+                    r.set(i, col, v)
+                end
+                col += 1
+                // advance: find the rightmost position that can grow
+                mut pos := k - 1
+                until pos >= 0 && idx.get(pos) == p - 1: pos -= 1 end
+                if pos < 0:
+                    more = false
+                else:
+                    nv := idx.get(pos) + 1
+                    mut t := pos
+                    until t < k:
+                        idx.set(t, nv)
+                        t += 1
+                    end
+                end
+            end
+            idx.free()
+        end
+        ret r
+    end
+end
+
+// Column statistics: mean, and population standard deviation (ddof 0).
+func _col_mean(x &: matrix.Matrix, j: int): f64:
+    mut s := 0.0
+    repeat x.rows with i: s += x.at(i, j) end
+    ret s / (x.rows as f64)
+end
+
+func _col_std(x &: matrix.Matrix, j: int, mean: f64): f64:
+    mut s := 0.0
+    repeat x.rows with i:
+        d := x.at(i, j) - mean
+        s += d * d
+    end
+    ret math.Sqrt(s / (x.rows as f64))
+end
+
+// Column statistics that skip NaN cells, for the imputer.
+func _col_mean_nan(x &: matrix.Matrix, j: int): f64:
+    mut s := 0.0
+    mut c := 0
+    repeat x.rows with i:
+        v := x.at(i, j)
+        if math.IsNaN(v) == false:
+            s += v
+            c += 1
+        end
+    end
+    if c == 0: ret 0.0 end
+    ret s / (c as f64)
+end
+
+func _col_median_nan(x &: matrix.Matrix, j: int): f64:
+    mut vals := Vector {} as Vector<f64>
+    repeat x.rows with i:
+        v := x.at(i, j)
+        if math.IsNaN(v) == false: vals.push(v) end
+    end
+    n := vals.len()
+    if n == 0:
+        vals.free()
+        ret 0.0
+    end
+    sort.Sort(vals)
+    mut m := vals.get(n / 2)
+    if n % 2 == 0: m = (vals.get(n / 2 - 1) + vals.get(n / 2)) / 2.0 end
+    vals.free()
+    ret m
+end
+
+// Counts the monomials of degrees 1..d in p variables (with repetition),
+// and generates them by walking non-decreasing index tuples.
+func _poly_count(p: int, d: int): int:
+    // sum over k=1..d of C(p+k-1, k)
+    mut total := 0
+    repeat d with kk:
+        k := kk + 1
+        mut c := 1
+        repeat k with i:
+            c = c * (p + i) / (i + 1)
+        end
+        total += c
+    end
+    ret total
+end

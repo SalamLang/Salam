@@ -1,0 +1,185 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/tensor: general broadcasting (Expand), comparison masks, Where,
+// MaskedFill, IndexSelect/TakeRows, Gather, ScatterAddRows, OneHot.
+
+import tensor
+import testing
+
+func main:
+    // Expand: [3,1] and [1,4] both stretch to [3,4]
+    mut col := tensor.Arange(3)
+    mut s31 := tensor.Shape2(3, 1)
+    testing.AssertTrue(col.reshape_(s31))
+    s31.free()
+    mut row := tensor.Arange(4)
+    mut s14 := tensor.Shape2(1, 4)
+    testing.AssertTrue(row.reshape_(s14))
+    s14.free()
+    mut bs := Vector {} as Vector<int>
+    testing.AssertTrue(tensor.BroadcastShape(col, row, bs))
+    testing.AssertEqInt(bs.len(), 2)
+    testing.AssertEqInt(bs.get(0), 3)
+    testing.AssertEqInt(bs.get(1), 4)
+    mut ec := tensor.Expand(col, bs)
+    mut er := tensor.Expand(row, bs)
+    testing.AssertEqFloat(ec.at2(2, 3), 2.0, 0.0)
+    testing.AssertEqFloat(ec.at2(1, 0), 1.0, 0.0)
+    testing.AssertEqFloat(er.at2(2, 3), 3.0, 0.0)
+    testing.AssertEqFloat(er.at2(0, 1), 1.0, 0.0)
+    // a 1-D [4] against [3,4] aligns at the right
+    mut flat := tensor.Arange(4)
+    mut ef := tensor.Expand(flat, bs)
+    testing.AssertTrue(tensor.Equal(ef, er))
+    ef.free()
+    // incompatible shapes are refused
+    mut bad := tensor.Arange(5)
+    mut bs2 := Vector {} as Vector<int>
+    testing.AssertTrue(!tensor.BroadcastShape(bad, row, bs2))
+    mut ebad := tensor.Expand(bad, bs)
+    testing.AssertTrue(ebad.is_empty())
+    bs2.free()
+    bad.free()
+
+    // masks over the broadcast shape: col > row is 1 where i > j
+    mut gt := tensor.Greater(col, row)
+    testing.AssertEqInt(gt.dim(0), 3)
+    testing.AssertEqInt(gt.dim(1), 4)
+    testing.AssertEqFloat(tensor.SumAll(gt), 3.0, 0.0)   // (1,0) (2,0) (2,1)
+    testing.AssertEqFloat(gt.at2(2, 1), 1.0, 0.0)
+    testing.AssertEqFloat(gt.at2(1, 1), 0.0, 0.0)
+    mut ge := tensor.GreaterEqual(col, row)
+    testing.AssertEqFloat(tensor.SumAll(ge), 6.0, 0.0)
+    mut eq := tensor.EqualMask(col, row)
+    testing.AssertEqFloat(tensor.SumAll(eq), 3.0, 0.0)
+    mut ne := tensor.NotEqualMask(col, row)
+    testing.AssertEqFloat(tensor.SumAll(ne), 9.0, 0.0)
+    mut lt := tensor.Less(col, row)
+    mut le := tensor.LessEqual(col, row)
+    testing.AssertEqFloat(tensor.SumAll(lt), 6.0, 0.0)
+    testing.AssertEqFloat(tensor.SumAll(le), 9.0, 0.0)
+    mut gs := tensor.GreaterScalar(flat, 1.5)
+    testing.AssertEqFloat(tensor.SumAll(gs), 2.0, 0.0)
+    mut ls := tensor.LessScalar(flat, 1.5)
+    testing.AssertEqFloat(tensor.SumAll(ls), 2.0, 0.0)
+    mut es := tensor.EqualScalar(flat, 3.0)
+    testing.AssertEqFloat(es.at(3), 1.0, 0.0)
+    testing.AssertEqFloat(tensor.SumAll(es), 1.0, 0.0)
+
+    // Where picks per element, broadcasting a scalar fallback
+    mut zero := tensor.Scalar(0.0)
+    mut w := tensor.Where(gt, ec, zero)
+    testing.AssertEqInt(w.dim(0), 3)
+    testing.AssertEqFloat(w.at2(2, 0), 2.0, 0.0)
+    testing.AssertEqFloat(w.at2(0, 3), 0.0, 0.0)
+    testing.AssertEqFloat(tensor.SumAll(w), 5.0, 0.0)
+    // MaskedFill with a [4] mask broadcast over the rows
+    mut mf := tensor.MaskedFill(er, gs, 0.0 - 1.0)
+    testing.AssertEqFloat(mf.at2(1, 3), 0.0 - 1.0, 0.0)
+    testing.AssertEqFloat(mf.at2(1, 1), 1.0, 0.0)
+
+    // IndexSelect / TakeRows
+    mut m := tensor.Arange(12)
+    mut s34 := tensor.Shape2(3, 4)
+    testing.AssertTrue(m.reshape_(s34))
+    s34.free()
+    mut ids := Vector {} as Vector<int>
+    ids.push(2)
+    ids.push(0)
+    ids.push(2)
+    mut rows := tensor.TakeRows(m, ids)
+    testing.AssertEqInt(rows.dim(0), 3)
+    testing.AssertEqFloat(rows.at2(0, 1), 9.0, 0.0)
+    testing.AssertEqFloat(rows.at2(1, 3), 3.0, 0.0)
+    mut cols := tensor.IndexSelect(m, 1, ids)
+    testing.AssertEqInt(cols.dim(1), 3)
+    testing.AssertEqFloat(cols.at2(1, 0), 6.0, 0.0)
+    testing.AssertEqFloat(cols.at2(2, 1), 8.0, 0.0)
+    ids.push(9)
+    mut oob := tensor.TakeRows(m, ids)
+    testing.AssertTrue(oob.is_empty())
+    ids.free()
+
+    // Gather along axis 1: out[i][j] = m[i][idx[i][j]]
+    mut idx := tensor.Zeros2(3, 2)
+    idx.set_at2(0, 0, 3.0)
+    idx.set_at2(0, 1, 0.0)
+    idx.set_at2(1, 0, 1.0)
+    idx.set_at2(1, 1, 1.0)
+    idx.set_at2(2, 0, 2.0)
+    idx.set_at2(2, 1, 3.0)
+    mut g := tensor.Gather(m, 1, idx)
+    testing.AssertEqInt(g.dim(1), 2)
+    testing.AssertEqFloat(g.at2(0, 0), 3.0, 0.0)
+    testing.AssertEqFloat(g.at2(1, 1), 5.0, 0.0)
+    testing.AssertEqFloat(g.at2(2, 1), 11.0, 0.0)
+    // Gather along axis 0 with a [1,4] index picks one row per column
+    mut idx0 := tensor.Zeros2(1, 4)
+    idx0.set_at2(0, 0, 2.0)
+    idx0.set_at2(0, 3, 1.0)
+    mut g0 := tensor.Gather(m, 0, idx0)
+    testing.AssertEqFloat(g0.at2(0, 0), 8.0, 0.0)
+    testing.AssertEqFloat(g0.at2(0, 1), 1.0, 0.0)
+    testing.AssertEqFloat(g0.at2(0, 3), 7.0, 0.0)
+
+    // ScatterAddRows accumulates duplicates
+    mut dst := tensor.Zeros2(3, 4)
+    mut sids := Vector {} as Vector<int>
+    sids.push(1)
+    sids.push(1)
+    sids.push(0)
+    testing.AssertTrue(tensor.ScatterAddRows(dst, sids, rows))
+    testing.AssertEqFloat(dst.at2(1, 1), 10.0, 0.0)   // 9 + 1
+    testing.AssertEqFloat(dst.at2(0, 0), 8.0, 0.0)
+    testing.AssertEqFloat(dst.at2(2, 0), 0.0, 0.0)
+    // OneHot
+    mut oh := tensor.OneHot(sids, 3)
+    testing.AssertEqInt(oh.dim(0), 3)
+    testing.AssertEqFloat(oh.at2(0, 1), 1.0, 0.0)
+    testing.AssertEqFloat(oh.at2(2, 0), 1.0, 0.0)
+    testing.AssertEqFloat(tensor.SumAll(oh), 3.0, 0.0)
+    sids.free()
+
+    col.free()
+    row.free()
+    flat.free()
+    bs.free()
+    ec.free()
+    er.free()
+    gt.free()
+    ge.free()
+    eq.free()
+    ne.free()
+    lt.free()
+    le.free()
+    gs.free()
+    ls.free()
+    es.free()
+    zero.free()
+    w.free()
+    mf.free()
+    m.free()
+    rows.free()
+    cols.free()
+    idx.free()
+    g.free()
+    idx0.free()
+    g0.free()
+    dst.free()
+    oh.free()
+    ret testing.Summary()
+end

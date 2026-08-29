@@ -252,51 +252,71 @@ func _kd_query(t &: KDTree, q &: matrix.Matrix, qi: int, k: int, out &: Vector<i
     bounds.free()
 end
 
-// One query row of the parallel KNN prediction: class shares into
-// _knn_out's row (classification) or the neighbor mean (regression,
-// _knn_classes == 0).
-func _knn_row(qi64: i64):
-    qi := qi64 as int
+// One query row: class shares into `out`'s row (classification) or the
+// neighbor mean (regression, classes == 0).
+func _knn_one(q &: matrix.Matrix, xtrain &: matrix.Matrix, ytrain &: matrix.Matrix, tree &: KDTree, out &: matrix.Matrix, qi: int, k: int, weighted: bool, classes: int, alg: int):
     mut dist := Vector {} as Vector<f64>
     mut nb := Vector {} as Vector<int>
-    if _knn_alg == KNN_KDTREE:
-        nb = _knn_tree.query(_knn_q, qi, _knn_k, dist)
+    if alg == KNN_KDTREE:
+        nb = tree.query(q, qi, k, dist)
     else:
-        nb = _nearest(_knn_xtrain, _knn_q, qi, _knn_k, dist)
+        nb = _nearest(xtrain, q, qi, k, dist)
     end
     mut total := 0.0
     mut acc := 0.0
     repeat nb.len() with t:
         mut wgt := 1.0
-        if _knn_weighted: wgt = 1.0 / (dist.get(t) + 0.000000001) end
-        yv := _knn_ytrain.at(nb.get(t), 0)
-        if _knn_classes > 0:
-            _knn_out.add_at(qi, yv as int, wgt)
+        if weighted: wgt = 1.0 / (dist.get(t) + 0.000000001) end
+        yv := ytrain.at(nb.get(t), 0)
+        if classes > 0:
+            out.add_at(qi, yv as int, wgt)
         else:
             acc += wgt * yv
         end
         total += wgt
     end
     if total > 0.0:
-        if _knn_classes > 0:
-            repeat _knn_classes with c: _knn_out.set(qi, c, _knn_out.at(qi, c) / total) end
+        if classes > 0:
+            repeat classes with c: out.set(qi, c, out.at(qi, c) / total) end
         else:
-            _knn_out.set(qi, 0, acc / total)
+            out.set(qi, 0, acc / total)
         end
     end
     nb.free()
     dist.free()
 end
 
-// Runs _knn_row over every query row, serially or on `workers`.
-func _knn_run(rows: int, workers: int):
+// The worker body of the parallel path, reading the query globals.
+func _knn_row(qi64: i64):
+    _knn_one(_knn_q, _knn_xtrain, _knn_ytrain, _knn_tree, _knn_out, qi64 as int, _knn_k, _knn_weighted, _knn_classes, _knn_alg)
+end
+
+// Answers every query row of `q` into `out`. The serial path touches no
+// globals, so a model with workers = 0 is safe inside another parallel
+// loop (cross-validation, a grid search); workers > 1 uses the module
+// query globals and is NOT re-entrant.
+func _knn_run(q &: matrix.Matrix, xtrain &: matrix.Matrix, ytrain &: matrix.Matrix, tree &: KDTree, out &: matrix.Matrix, k: int, weighted: bool, classes: int, alg: int, workers: int):
     mut w := workers
     if w < 0: w = pool.CPUCount() as int end
     if w <= 1:
-        repeat rows with i: _knn_row(i as i64) end
-    else:
-        pool.ParallelFor(rows as i64, w as i64, (i: i64): _knn_row(i) end)
+        repeat q.rows with i: _knn_one(q, xtrain, ytrain, tree, out, i, k, weighted, classes, alg) end
+        ret
     end
+    _knn_q = q
+    _knn_xtrain = xtrain
+    _knn_ytrain = ytrain
+    _knn_tree = tree
+    _knn_out = out
+    _knn_k = k
+    _knn_weighted = weighted
+    _knn_classes = classes
+    _knn_alg = alg
+    pool.ParallelFor(q.rows as i64, w as i64, (i: i64): _knn_row(i) end)
+    _knn_q = matrix.Matrix {}
+    _knn_xtrain = matrix.Matrix {}
+    _knn_ytrain = matrix.Matrix {}
+    _knn_tree = KDTree {}
+    _knn_out = matrix.Matrix {}
 end
 
 // ---- public API ----

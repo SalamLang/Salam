@@ -15,6 +15,7 @@
 package ml
 
 import matrix
+import pool
 
 // Splitting and cross-validation.
 //
@@ -77,6 +78,32 @@ pub struct Folds:
         this.train.free()
         this.test.free()
     end
+end
+
+// The outcome of a GridSearch: the mean cross-validation score of every
+// candidate and the index of the best one.
+@en "GridResult"
+@fa "نتیجه جستجوی شبکه‌ای"
+@ar "نتيجة البحث الشبكي"
+pub struct GridResult:
+    pub scores: Vector<f64> = Vector {}
+    pub best: int = 0 - 1
+    pub best_score: f64 = 0.0
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free(): this.scores.free() end
+end
+
+// One hyper-parameter setting for GridSearch: a fitpred closure
+// (x_train, y_train, x_test) -> predictions, and a label for reporting.
+@en "Candidate"
+@fa "نامزد"
+@ar "مرشح"
+pub struct Candidate:
+    pub name: str = ""
+    pub fit: func (matrix.Matrix, matrix.Matrix, matrix.Matrix) matrix.Matrix = (a: matrix.Matrix, b: matrix.Matrix, c: matrix.Matrix): ret matrix.Matrix {} end
 end
 
 // A seeded permutation of 0..n-1 (Fisher-Yates).
@@ -245,4 +272,81 @@ pub func MeanScore(scores &: Vector<f64>): f64:
     mut s := 0.0
     repeat scores.len() with i: s += scores.get(i) end
     ret s / (scores.len() as f64)
+end
+
+// CrossValScore with the folds spread over `workers` (0 or 1: serial,
+// -1: every core). Each fold fits its own model, so the scores are the
+// serial ones in the same order.
+@en "CrossValScoreParallel"
+@fa "امتیاز اعتبارسنجی متقاطع موازی"
+@ar "درجة التحقق المتقاطع المتوازي"
+pub func CrossValScoreParallel(fitpred: func (matrix.Matrix, matrix.Matrix, matrix.Matrix) matrix.Matrix, metric: func (matrix.Matrix, matrix.Matrix) f64, x &: matrix.Matrix, y &: matrix.Matrix, folds &: Folds, workers: int): Vector<f64>:
+    mut w := workers
+    if w < 0: w = pool.CPUCount() as int end
+    if w <= 1: ret CrossValScore(fitpred, metric, x, y, folds) end
+    k := folds.count()
+    mut scores := Vector {} as Vector<f64>
+    repeat k: scores.push(0.0) end
+    xs := x
+    ys := y
+    fs := folds
+    pool.ParallelFor(k as i64, w as i64, (i: i64):
+        f := i as int
+        tr := fs.train.get(f)
+        te := fs.test.get(f)
+        mut xtr := _take_rows(xs, tr)
+        mut ytr := _take_rows(ys, tr)
+        mut xte := _take_rows(xs, te)
+        mut yte := _take_rows(ys, te)
+        mut pred := fitpred(xtr, ytr, xte)
+        mut sc := 0.0
+        if pred.is_empty() == false: sc = metric(yte, pred) end
+        scores.set(f, sc)
+        matrix.Free(xtr)
+        matrix.Free(ytr)
+        matrix.Free(xte)
+        matrix.Free(yte)
+        matrix.Free(pred)
+    end)
+    ret scores
+end
+
+// Cross-validates every candidate estimator (one Candidate per
+// hyper-parameter setting) and picks the highest mean score. With
+// workers > 1 the candidates run in parallel, each on serial folds.
+@en "GridSearch"
+@fa "جستجوی شبکه‌ای"
+@ar "بحث شبكي"
+pub func GridSearch(candidates &: Vector<Candidate>, metric: func (matrix.Matrix, matrix.Matrix) f64, x &: matrix.Matrix, y &: matrix.Matrix, folds &: Folds, workers: int): GridResult:
+    mut r := GridResult {}
+    n := candidates.len()
+    repeat n: r.scores.push(0.0) end
+    mut w := workers
+    if w < 0: w = pool.CPUCount() as int end
+    if w <= 1 || n <= 1:
+        repeat n with c:
+            mut sc := CrossValScore(candidates.get(c).fit, metric, x, y, folds)
+            r.scores.set(c, MeanScore(sc))
+            sc.free()
+        end
+    else:
+        xs := x
+        ys := y
+        fs := folds
+        cs := candidates
+        out := r.scores
+        pool.ParallelFor(n as i64, w as i64, (i: i64):
+            c := i as int
+            mut sc := CrossValScore(cs.get(c).fit, metric, xs, ys, fs)
+            out.set(c, MeanScore(sc))
+            sc.free()
+        end)
+    end
+    repeat n with c:
+        if r.best < 0 || r.scores.get(c) > r.best_score:
+            r.best = c
+            r.best_score = r.scores.get(c)
+        end
+    end
+    ret r
 end

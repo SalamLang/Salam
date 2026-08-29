@@ -17,11 +17,13 @@ package ml
 import matrix
 import sort
 
-// k-nearest neighbors, brute force. fit() copies the training set;
-// each query computes its squared Euclidean distance to every stored
-// row and takes the k smallest. O(n) memory per model and O(n log n)
-// per query, which is the right trade until n reaches the hundreds of
-// thousands - a tree index is a later addition, not a different API.
+// k-nearest neighbors. fit() copies the training set; a query finds
+// the k closest rows by squared Euclidean distance either by brute
+// force (every row, O(n log n) per query) or through a k-d tree built
+// at fit time (algorithm = KNN_KDTREE, ml_kdtree), which wins once n is
+// large and the dimension is modest. Queries are independent, so
+// `workers` splits the query rows across a pool; results are identical
+// at any worker count.
 //
 // Classification votes (optionally by inverse distance) with ties going
 // to the lower class index; regression averages the neighbors' targets.
@@ -32,8 +34,13 @@ import sort
 pub struct KNNClassifier:
     pub k: int = 5
     pub weighted: bool = false
+    pub algorithm: int = KNN_BRUTE
+    pub leaf_size: int = 16
+    // 0 or 1: serial; -1: every core; n: that many workers.
+    pub workers: int = 0
     pub xtrain: matrix.Matrix = matrix.Matrix {}
     pub ytrain: matrix.Matrix = matrix.Matrix {}
+    pub tree: KDTree = KDTree {}
     pub n_classes: int = 0
     pub ok: bool = false
 
@@ -48,6 +55,11 @@ pub struct KNNClassifier:
         this.xtrain = matrix.Clone(x)
         this.ytrain = matrix.Clone(y)
         this.n_classes = CountClasses(y)
+        this.tree.free()
+        if this.algorithm == KNN_KDTREE:
+            this.tree.leaf_size = this.leaf_size
+            if !this.tree.build(x): ret false end
+        end
         this.ok = this.n_classes > 0
         ret this.ok
     end
@@ -58,23 +70,7 @@ pub struct KNNClassifier:
     pub func predict_proba(x &: matrix.Matrix): matrix.Matrix:
         if this.ok == false || x.cols != this.xtrain.cols: ret matrix.Matrix {} end
         mut out := matrix.Zeros(x.rows, this.n_classes)
-        mut dist := Vector {} as Vector<f64>
-        repeat x.rows with qi:
-            mut nb := _nearest(this.xtrain, x, qi, this.k, dist)
-            mut total := 0.0
-            repeat nb.len() with t:
-                c := this.ytrain.at(nb.get(t), 0) as int
-                mut wgt := 1.0
-                if this.weighted: wgt = 1.0 / (dist.get(t) + 0.000000001) end
-                out.add_at(qi, c, wgt)
-                total += wgt
-            end
-            if total > 0.0:
-                repeat this.n_classes with c: out.set(qi, c, out.at(qi, c) / total) end
-            end
-            nb.free()
-        end
-        dist.free()
+        _knn_run(x, this.xtrain, this.ytrain, this.tree, out, this.k, this.weighted, this.n_classes, this.algorithm, this.workers)
         ret out
     end
 
@@ -113,6 +109,7 @@ pub struct KNNClassifier:
     pub func free():
         matrix.Free(this.xtrain)
         matrix.Free(this.ytrain)
+        this.tree.free()
     end
 end
 
@@ -122,8 +119,12 @@ end
 pub struct KNNRegressor:
     pub k: int = 5
     pub weighted: bool = false
+    pub algorithm: int = KNN_BRUTE
+    pub leaf_size: int = 16
+    pub workers: int = 0
     pub xtrain: matrix.Matrix = matrix.Matrix {}
     pub ytrain: matrix.Matrix = matrix.Matrix {}
+    pub tree: KDTree = KDTree {}
     pub ok: bool = false
 
     @en "fit"
@@ -136,6 +137,11 @@ pub struct KNNRegressor:
         matrix.Free(this.ytrain)
         this.xtrain = matrix.Clone(x)
         this.ytrain = matrix.Clone(y)
+        this.tree.free()
+        if this.algorithm == KNN_KDTREE:
+            this.tree.leaf_size = this.leaf_size
+            if !this.tree.build(x): ret false end
+        end
         this.ok = true
         ret true
     end
@@ -146,21 +152,7 @@ pub struct KNNRegressor:
     pub func predict(x &: matrix.Matrix): matrix.Matrix:
         if this.ok == false || x.cols != this.xtrain.cols: ret matrix.Matrix {} end
         mut out := matrix.Zeros(x.rows, 1)
-        mut dist := Vector {} as Vector<f64>
-        repeat x.rows with qi:
-            mut nb := _nearest(this.xtrain, x, qi, this.k, dist)
-            mut s := 0.0
-            mut total := 0.0
-            repeat nb.len() with t:
-                mut wgt := 1.0
-                if this.weighted: wgt = 1.0 / (dist.get(t) + 0.000000001) end
-                s += wgt * this.ytrain.at(nb.get(t), 0)
-                total += wgt
-            end
-            if total > 0.0: out.set(qi, 0, s / total) end
-            nb.free()
-        end
-        dist.free()
+        _knn_run(x, this.xtrain, this.ytrain, this.tree, out, this.k, this.weighted, 0, this.algorithm, this.workers)
         ret out
     end
 
@@ -181,6 +173,7 @@ pub struct KNNRegressor:
     pub func free():
         matrix.Free(this.xtrain)
         matrix.Free(this.ytrain)
+        this.tree.free()
     end
 end
 

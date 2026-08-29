@@ -520,14 +520,14 @@ ScatterAddRows OneHot`.
   caller's buffer), recorded ops `Add Sub Mul Div Neg Scale AddScalar Exp Log
 Tanh Sigmoid Relu Gelu Sqrt Square PowScalar MatMul BatchMatMul Sum Mean
 SumAxis MeanAxis Softmax LogSoftmax Reshape Transpose2D Permute Embedding
-Dropout LayerNorm RMSNorm BatchNorm Narrow SliceAxis0 Concat2 RoPE Silu
+Dropout LayerNorm RMSNorm BatchNorm GroupNorm Narrow SliceAxis0 Concat2 RoPE Silu
 Conv2D MaxPool2D AvgPool2D`, `Constant` (an untracked tensor on the tape),
   losses `MSELoss
 CrossEntropyLogits BCEWithLogits`, then `Backward(tp, loss)`, `Value Grad`,
   `tp.reset()` per step, `tp.free()`. `GradCheck` does central differences.
 - **`nn`**: `ParamStore` (owns values and grads; layers hold int handles)
   with `add at zero_grad free`, `Bind`; layers `Linear Conv2D MaxPool2D
-AvgPool2D LayerNorm BatchNorm RMSNorm Embedding Dropout LSTM GRU
+AvgPool2D LayerNorm BatchNorm GroupNorm RMSNorm Embedding Dropout LSTM GRU
 MultiHeadAttention TransformerEncoderLayer` (`New*` constructors,
   `forward(tp, ps, x)`; `NewTransformerDecoderLayer` sets `attn.causal`, and
   `CausalMask(seq)` is the additive mask it adds), recurrent helper

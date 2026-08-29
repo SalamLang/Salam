@@ -195,6 +195,72 @@ func _bk_batchnorm(tp &: Tape, n &: Node, dc &: tensor.Tensor):
     end
 end
 
+
+// GroupNorm: the same normalization math as LayerNorm, but the mean and
+// rstd of aux are per (sample, group) and the affine is per channel.
+func _bk_groupnorm(tp &: Tape, n &: Node, dc &: tensor.Tensor):
+    vx := Value(tp, n.a)
+    vg := Value(tp, n.b)
+    st := Value(tp, n.aux)
+    beta := n.s0
+    groups := n.s1
+    nb := vx.shape.get(0)
+    c := vx.shape.get(1)
+    inner := vx.numel() / (nb * c)
+    cpg := c / groups
+    m := cpg * inner
+    px := vx.data.data
+    pgam := vg.data.data
+    ps := st.data.data
+    pd := dc.data.data
+    need_x := tp.needs.get(n.a)
+    need_g := tp.needs.get(n.b)
+    need_b := tp.needs.get(beta)
+    mut gx := tensor.Empty()
+    mut gg := tensor.Empty()
+    mut gb := tensor.Empty()
+    if need_x: gx = _grad_of(tp, n.a) end
+    if need_g: gg = _grad_of(tp, n.b) end
+    if need_b: gb = _grad_of(tp, beta) end
+    pgx := gx.data.data
+    pgg := gg.data.data
+    pgb := gb.data.data
+    inv_m := (1.0 / (m as f64)) as f32
+    repeat nb with bi:
+        repeat groups with g:
+            mean := ps[(bi * groups + g) * 2]
+            rstd := ps[(bi * groups + g) * 2 + 1]
+            mut s1 := 0.0 as f32
+            mut s2 := 0.0 as f32
+            repeat cpg with cc:
+                ch := g * cpg + cc
+                base := (bi * c + ch) * inner
+                repeat inner with s:
+                    xhat := (px[base + s] - mean) * rstd
+                    dxhat := pd[base + s] * pgam[ch]
+                    s1 += dxhat
+                    s2 += dxhat * xhat
+                    if need_g: pgg[ch] = pgg[ch] + pd[base + s] * xhat end
+                    if need_b: pgb[ch] = pgb[ch] + pd[base + s] end
+                end
+            end
+            if need_x:
+                m1 := s1 * inv_m
+                m2 := s2 * inv_m
+                repeat cpg with cc:
+                    ch := g * cpg + cc
+                    base := (bi * c + ch) * inner
+                    repeat inner with s:
+                        xhat := (px[base + s] - mean) * rstd
+                        dxhat := pd[base + s] * pgam[ch]
+                        pgx[base + s] = pgx[base + s] + rstd * (dxhat - m1 - xhat * m2)
+                    end
+                end
+            end
+        end
+    end
+end
+
 // ---- public API ----
 
 // Normalizes the last axis of x, then y = gamma * xhat + beta. gamma
@@ -354,5 +420,72 @@ pub func BatchNorm(tp &: Tape, x: int, gamma: int, beta: int, running_mean &: te
     mut mode := 0
     if tp.training == false: mode = 1 end
     if needs_grad: _record(tp, _OP_BATCHNORM, x, gamma, id, aux, beta, mode, eps) end
+    ret id
+end
+
+// Group normalization over [N, C, ...]: the channels are cut into
+// `groups` equal blocks and each block of one sample is normalized
+// together, with a per-channel scale and shift. groups = 1 is
+// LayerNorm over the channels, groups = C is InstanceNorm - and
+// neither depends on the batch size, which is why this is the norm of
+// choice when batches are small.
+@en "GroupNorm"
+@fa "نرمال‌سازی گروهی"
+@ar "تسوية المجموعة"
+pub func GroupNorm(tp &: Tape, x: int, gamma: int, beta: int, groups: int, eps: f64): int:
+    vx := Value(tp, x)
+    vg := Value(tp, gamma)
+    vb := Value(tp, beta)
+    if vx.rank() < 2 || groups < 1: ret _push_val(tp, tensor.Empty(), true, false) end
+    nb := vx.shape.get(0)
+    c := vx.shape.get(1)
+    if c % groups != 0 || vg.numel() != c || vb.numel() != c:
+        ret _push_val(tp, tensor.Empty(), true, false)
+    end
+    inner := vx.numel() / (nb * c)
+    cpg := c / groups
+    m := cpg * inner
+    out := tensor.Zeros(vx.shape)
+    st := tensor.Zeros2(nb * groups, 2)
+    px := vx.data.data
+    pg := vg.data.data
+    pb := vb.data.data
+    po := out.data.data
+    ps := st.data.data
+    ef := eps as f32
+    inv_m := (1.0 / (m as f64)) as f32
+    one := 1.0 as f32
+    repeat nb with bi:
+        repeat groups with g:
+            mut sum := 0.0 as f32
+            repeat cpg with cc:
+                base := (bi * c + g * cpg + cc) * inner
+                repeat inner with s: sum += px[base + s] end
+            end
+            mean := sum * inv_m
+            mut var := 0.0 as f32
+            repeat cpg with cc:
+                base := (bi * c + g * cpg + cc) * inner
+                repeat inner with s:
+                    dlt := px[base + s] - mean
+                    var += dlt * dlt
+                end
+            end
+            rstd := one / sqrtf(var * inv_m + ef)
+            ps[(bi * groups + g) * 2] = mean
+            ps[(bi * groups + g) * 2 + 1] = rstd
+            repeat cpg with cc:
+                ch := g * cpg + cc
+                base := (bi * c + ch) * inner
+                repeat inner with s:
+                    po[base + s] = pg[ch] * ((px[base + s] - mean) * rstd) + pb[ch]
+                end
+            end
+        end
+    end
+    needs_grad := tp.needs.get(x) || tp.needs.get(gamma) || tp.needs.get(beta)
+    aux := _push_val(tp, st, true, false)
+    id := _push_val(tp, out, true, needs_grad)
+    if needs_grad: _record(tp, _OP_GROUPNORM, x, gamma, id, aux, beta, groups, eps) end
     ret id
 end

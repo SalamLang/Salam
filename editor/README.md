@@ -1,16 +1,3 @@
-<!-- START doctoc generated TOC please keep comment here to allow auto update -->
-<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
-
-- [🌐 Salam Web Playground](#-salam-web-playground)
-  - [⚙️ How it works](#️-how-it-works)
-  - [🎬 Animated output](#-animated-output)
-  - [↩️ Undo and redo](#️-undo-and-redo)
-  - [🔨 Building](#-building)
-  - [▶️ Running it](#️-running-it)
-  - [🧪 Trying the interpreter without the browser](#-trying-the-interpreter-without-the-browser)
-
-<!-- END doctoc generated TOC please keep comment here to allow auto update -->
-
 # 🌐 Salam Web Playground
 
 Run Salam entirely in the browser. Edit code, run it, and preview layout pages —

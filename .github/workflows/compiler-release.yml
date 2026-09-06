@@ -2147,8 +2147,20 @@ jobs:
           src=docs/ai/stdlib-index.json
           [ -f "$src" ] || { echo "::error::$src is missing"; exit 1; }
           mkdir -p ./release
-          cp "$src" "./release/salam-${VERSION}-stdlib-index.json"
-          ls -l "./release/salam-${VERSION}-stdlib-index.json"
+          out="./release/salam-${VERSION}-stdlib-index.json"
+
+          # Stamp the release copy with the version and commit it was cut
+          # from, so a downloaded index says which std/ it describes. The
+          # committed docs/ai/stdlib-index.json deliberately stays without
+          # them: the MCP server computes that file live and CI fails when
+          # the two disagree, so a stamp there would break on every commit.
+          jq --arg version "$VERSION" --arg commit "$GITHUB_SHA" \
+             '{version: $version, commit: $commit} + .' "$src" > "$out"
+
+          jq -e '.version and .commit and .root and (.packages | length > 0)' "$out" >/dev/null \
+            || { echo "::error::stamped stdlib index is malformed"; exit 1; }
+          echo "stamped version=${VERSION} commit=${GITHUB_SHA}"
+          ls -l "$out"
 
       - name: Generate the stdlib documentation page
         run: |
@@ -2192,7 +2204,8 @@ jobs:
             echo "  std/               the standard library sources, exactly as"
             echo "                     they are in the v${VERSION} tag"
             echo "  stdlib-index.json  every package mapped to its public"
-            echo "                     declarations (machine-readable)"
+            echo "                     declarations (machine-readable), stamped"
+            echo "                     with the version and commit it came from"
             echo "  stdlib-doc.html    the same thing as one browsable page"
             echo ""
             echo "Point a Salam compiler at this std/ in any of these ways:"
@@ -2210,10 +2223,20 @@ jobs:
 
           SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
           mkdir -p ./release
+          OUT_DIR="$(pwd)/release"
           tar --sort=name --owner=0 --group=0 --numeric-owner \
               --mtime="@${SOURCE_DATE_EPOCH}" \
-              -czf "./release/salam-${VERSION}-stdlib.tar.gz" \
+              -czf "${OUT_DIR}/salam-${VERSION}-stdlib.tar.gz" \
               -C "$STAGE_ROOT" "$STAGE_DIR"
+
+          # The same tree as a .zip, because that is what Windows opens
+          # without installing anything. Timestamps are pinned and entries
+          # fed in sorted order so the archive is reproducible the way the
+          # tarball's --sort=name/--mtime make it.
+          find "$STAGE_ROOT" -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
+          ( cd "$STAGE_ROOT" \
+            && find "$STAGE_DIR" -print | LC_ALL=C sort \
+               | zip -qX9 "${OUT_DIR}/salam-${VERSION}-stdlib.zip" -@ )
 
           count=$(find "$STAGE/std" -name '*.salam' -type f | wc -l)
           echo "packaged ${count} .salam files"
@@ -2222,14 +2245,23 @@ jobs:
             [ -d "$STAGE/$pkg" ] || { echo "::error::stdlib archive is missing $pkg"; exit 1; }
           done
 
-          ls -l "./release/salam-${VERSION}-stdlib.tar.gz"
+          # Both archives must carry the same file list; a zip that quietly
+          # lost half the tree would still look fine on the release page.
+          tar_n=$(tar -tzf "${OUT_DIR}/salam-${VERSION}-stdlib.tar.gz" | grep -c '\.salam$' || true)
+          zip_n=$(unzip -Z1 "${OUT_DIR}/salam-${VERSION}-stdlib.zip" | grep -c '\.salam$' || true)
+          echo "tar.gz holds ${tar_n} .salam files, zip holds ${zip_n}"
+          [ "$tar_n" = "$zip_n" ] && [ "$tar_n" = "$count" ] \
+            || { echo "::error::stdlib archives disagree (tar=${tar_n} zip=${zip_n} staged=${count})"; exit 1; }
+
+          ls -l "${OUT_DIR}/salam-${VERSION}-stdlib.tar.gz" "${OUT_DIR}/salam-${VERSION}-stdlib.zip"
           {
             echo "### Standard library archive"
             echo ""
-            echo "\`${count}\` \`.salam\` files from \`std/\`, plus the index and the doc page."
+            echo "\`${count}\` \`.salam\` files from \`std/\`, plus the index and the doc page,"
+            echo "shipped as both \`.tar.gz\` and \`.zip\`."
             echo ""
             echo '```'
-            (cd ./release && sha256sum "salam-${VERSION}-stdlib.tar.gz")
+            (cd ./release && sha256sum "salam-${VERSION}-stdlib.tar.gz" "salam-${VERSION}-stdlib.zip")
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
       # - name: Post Linux release file to SERVER_VERSIONS_API
@@ -2310,13 +2342,70 @@ jobs:
               assets+=("$f")
             done
           done
-          echo "Publishing ${#assets[@]} assets:"; printf '  %s\n' "${assets[@]}"
+          [ "${#assets[@]}" -gt 0 ] || { echo "::error::no release assets matched"; exit 1; }
+
+          # A .sha256 beside every asset, the way a distro ships one next to
+          # each .iso, plus a SHA256SUMS manifest that checks the whole
+          # release in one pass. Both hold bare basenames, never the
+          # release/ prefix this job stages under: the downloader verifies
+          # the file where it landed, so `sha256sum -c` has to find it in
+          # the working directory.
+          : > release/SHA256SUMS
+          sums=()
+          for f in "${assets[@]}"; do
+            b="${f#release/}"
+            ( cd release && sha256sum "$b" > "${b}.sha256" && cat "${b}.sha256" >> SHA256SUMS )
+            sums+=("release/${b}.sha256")
+          done
+          sums+=("release/SHA256SUMS")
+
+          # Prove the manifest before it ships. A SHA256SUMS that does not
+          # verify is worse than none: it teaches people the check is noise.
+          ( cd release && sha256sum -c SHA256SUMS ) \
+            || { echo "::error::SHA256SUMS does not verify against the staged assets"; exit 1; }
+
+          {
+            echo "### Verifying your download"
+            echo ""
+            echo "Every file has a \`.sha256\` beside it, and \`SHA256SUMS\` covers them all."
+            echo ""
+            echo "Check a single file:"
+            echo ""
+            echo '```'
+            echo "sha256sum -c salam-${VERSION}-linux.zip.sha256"
+            echo '```'
+            echo ""
+            echo "Check everything you downloaded:"
+            echo ""
+            echo '```'
+            echo "sha256sum --ignore-missing -c SHA256SUMS"
+            echo '```'
+            echo ""
+            echo "On macOS use \`shasum -a 256 -c\` in place of \`sha256sum -c\`."
+            echo "On Windows, \`certutil -hashfile <file> SHA256\` prints the hash to compare by eye."
+            echo ""
+          } > release-notes-preamble.md
+
+          echo "Publishing ${#assets[@]} assets and ${#sums[@]} checksum files:"
+          printf '  %s\n' "${assets[@]}" "${sums[@]}"
+          {
+            echo "### Release checksums (SHA-256)"
+            echo ""
+            echo '```'
+            cat release/SHA256SUMS
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # --notes-file prepends to the generated notes rather than
+          # replacing them, so the verification instructions land above the
+          # usual changelog instead of dropping it.
           gh release create "$TAG" \
             --target "$GITHUB_SHA" \
             --title "$RELEASE_TITLE" \
+            --notes-file release-notes-preamble.md \
             --generate-notes \
             ${PRERELEASE_FLAG:+"$PRERELEASE_FLAG"} \
-            "${assets[@]}"
+            "${assets[@]}" "${sums[@]}"
 
   nightly-report:
     name: Report nightly outcome

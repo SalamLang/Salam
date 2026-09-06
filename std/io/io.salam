@@ -25,7 +25,12 @@ extern:
     // C89's "flush every open output stream". <stdio.h> already declares it
     // in every generated module, so this declaration emits no C of its own.
     func fflush(stream: void*): int
+    func fread(ptr: void*, size: u64, nmemb: u64, stream: void*): u64
+    func fwrite(ptr: void*, size: u64, nmemb: u64, stream: void*): u64
 end
+
+// How much Copy moves per fread/fwrite pair.
+const COPY_CHUNK := 65536
 
 @en "Input"
 @fa "بخوان"
@@ -176,25 +181,40 @@ end
 @en "Copy"
 @fa "کپی"
 @ar "نسخ"
+// Copies the rest of `src` into `dst`, returning the number of bytes moved.
+//
+// fread/fwrite, not File.read/File.write. Those two carry a str, and
+// salam_file_read NUL-terminates what it read, so the first zero byte in a
+// chunk ended it and the rest of that chunk was dropped - silently, and with a
+// byte count that agreed with the truncation. On text there is nothing to see;
+// on a binary stream it is data loss reported as success, and it is how copying
+// a WebP produced a five-byte file. Reading straight through the FILE* keeps
+// the bytes bytes.
 pub func Copy(dst: File*, src: File*): i64:
-    // Only `src` is guarded, for the same reason as ReadAll: a null handle is
-    // the one case where read answers with the empty string literal instead of
-    // a heap block. A null `dst` is left to behave exactly as before - write
-    // reports -1 per chunk and the byte total still comes out of src.
-    if src == null:
+    if src == null || dst == null:
         ret 0
     end
-    mut total := 0 as i64
-    mut chunk := src.read(4096)
-    // Same ownership as ReadAll above: every read is a fresh buffer, and
-    // this one is done with it as soon as it has been written out.
-    until chunk.len() > 0:
-        dst.write(chunk)
-        total += chunk.len() as i64
-        mem.Free(chunk as void*)
-        chunk = src.read(4096)
+    buf := mem.Allocate(COPY_CHUNK as u64)
+    if buf == null:
+        ret 0
     end
-    mem.Free(chunk as void*)
+    sp := src as void*
+    dp := dst as void*
+    mut total := 0 as i64
+    mut going := true
+    while going:
+        got := fread(buf, 1 as u64, COPY_CHUNK as u64, sp)
+        if got == 0 as u64:
+            going = false
+        else:
+            put := fwrite(buf, 1 as u64, got, dp)
+            total += put as i64
+            // A short write is the disk saying no; carrying on would only lose
+            // more of the file and still call the result a copy.
+            if put != got: going = false end
+        end
+    end
+    mem.Free(buf)
     ret total
 end
 

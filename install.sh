@@ -941,8 +941,8 @@ Linux)
     # local glibc is what lets the asset choice below prefer the static
     # musl build instead of installing something that cannot start.
     if [ "$LIBC" = "glibc" ] && command -v ldd >/dev/null 2>&1; then
-        GLIBC_VER=$(ldd --version 2>&1 | head -n 1 \
-            | grep -oE '[0-9]+\.[0-9]+' | tail -n 1 || true)
+        GLIBC_VER=$(ldd --version 2>&1 | head -n 1 |
+            grep -oE '[0-9]+\.[0-9]+' | tail -n 1 || true)
     fi
     ;;
 Darwin)
@@ -1017,8 +1017,8 @@ else
             # loaded, so it runs anywhere. Order decides which is installed,
             # and every name is probed against the real release, so listing
             # both means a release that publishes only one still resolves.
-            if [ "$LIBC" = "musl" ] || [ "$LIBC" = "unknown" ] \
-                || glibc_below_floor; then
+            if [ "$LIBC" = "musl" ] || [ "$LIBC" = "unknown" ] ||
+                glibc_below_floor; then
                 PLATFORMS="linux-musl linux linux-x86_64"
             else
                 PLATFORMS="linux linux-musl linux-x86_64"

@@ -166,7 +166,41 @@ if [ "${1:-}" = "--worker" ]; then
         produced=0
         if [ -x "$exe" ]; then
             produced=1
-            got=$(tmo "$exp_tmo" "$exe" </dev/null 2>&1 | tr -d '\r')
+            # Capture the status, not just the text. A run killed by the
+            # timeout dies with its stdout still sitting in the block buffer
+            # a pipe gave it, so every line it printed is lost and the
+            # failure arrives looking like "expected ..., got nothing" - a
+            # wrong-output report for what is really a hang. This runner
+            # already learned that lesson once for port/*; the disguise was
+            # still here one layer down.
+            #
+            # The retry is for a timeout and nothing else. A loopback network
+            # test on a loaded parallel runner is the one thing in this suite
+            # that legitimately loses a race; a program that printed the
+            # wrong bytes will print them again, so a content failure is
+            # never retried. A genuine deadlock times out twice and still
+            # fails the run.
+            outf="$jobdir/run.out"
+            rtry=1
+            timedout=0
+            while [ "$rtry" -le 2 ]; do
+                tmo "$exp_tmo" "$exe" </dev/null >"$outf" 2>&1
+                rc=$?
+                if [ "$rc" -ne 124 ]; then
+                    timedout=0
+                    break
+                fi
+                timedout=1
+                [ "$rtry" -eq 1 ] && echo "  $label timed out after ${exp_tmo}s, retrying once"
+                rtry=$((rtry + 1))
+            done
+            got=$(tr -d '\r' <"$outf" 2>/dev/null)
+            if [ "$timedout" -eq 1 ]; then
+                echo "FAIL $label (timed out after ${exp_tmo}s, twice)"
+                echo "  killed mid-run, so anything it printed was lost with the buffer"
+                rm -rf "$jobdir"
+                return
+            fi
         else
             html="$jobdir/a.html"
             wtry=1

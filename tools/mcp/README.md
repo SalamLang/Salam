@@ -159,7 +159,11 @@ standard library:
 tools/mcp/gen-index.sh
 ```
 
-CI fails if the committed copy has drifted.
+CI fails if the committed copy has drifted. The `stdlib-index` prek hook
+runs this for you whenever a commit touches `std/` or `tools/mcp/`, and
+fails when it had to rewrite the index, so the drift shows up locally
+rather than on the pull request. A checkout without a built `salam-mcp`
+cannot regenerate anything; there the hook reports that and passes.
 
 ## 📁 Layout
 

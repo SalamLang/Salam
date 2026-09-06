@@ -47,6 +47,12 @@ INSTALL_DIR="${SALAM_INSTALL_DIR:-}"
 VERSION="${SALAM_VERSION:-}"
 PLATFORM="${SALAM_PLATFORM:-}"
 PLATFORM_FORCED=0
+# Detected glibc ("2.34"), empty when it could not be read or is not glibc.
+GLIBC_VER=""
+# The oldest glibc the published glibc bundles will start on. Raise it when
+# a release links a newer symbol; salam-*-linux-musl.zip is what everything
+# below this floor gets instead.
+GLIBC_FLOOR="2.38"
 
 if [ -n "$PLATFORM" ]; then
     PLATFORM_FORCED=1
@@ -928,6 +934,16 @@ Linux)
     if [ -z "$LIBC" ]; then
         LIBC="unknown"
     fi
+
+    # The glibc bundles are linked on the newest Ubuntu the CI runners
+    # offer, so they carry symbol versions an older distribution simply
+    # does not have and the binary dies on the first call. Knowing the
+    # local glibc is what lets the asset choice below prefer the static
+    # musl build instead of installing something that cannot start.
+    if [ "$LIBC" = "glibc" ] && command -v ldd >/dev/null 2>&1; then
+        GLIBC_VER=$(ldd --version 2>&1 | head -n 1 \
+            | grep -oE '[0-9]+\.[0-9]+' | tail -n 1 || true)
+    fi
     ;;
 Darwin)
     KERNEL="mac"
@@ -967,6 +983,26 @@ SunOS | AIX | Haiku | GNU | *)
     ;;
 esac
 
+# True when the detected glibc is older than the floor the published glibc
+# bundles need. Unknown version answers false: a machine we cannot measure
+# gets the normal build and the existing "did not run" diagnosis, rather
+# than being pushed onto a fallback it may not need.
+glibc_below_floor() {
+    [ "$LIBC" = "glibc" ] || return 1
+    [ -n "$GLIBC_VER" ] || return 1
+    case "$GLIBC_VER" in
+    *.*) ;;
+    *) return 1 ;;
+    esac
+    _need_maj=${GLIBC_FLOOR%%.*}
+    _need_min=${GLIBC_FLOOR#*.}
+    _have_maj=${GLIBC_VER%%.*}
+    _have_min=${GLIBC_VER#*.}
+    [ "$_have_maj" -lt "$_need_maj" ] && return 0
+    [ "$_have_maj" -gt "$_need_maj" ] && return 1
+    [ "$_have_min" -lt "$_need_min" ]
+}
+
 # Asset names to try, best first. They are probed against the real
 # release, so a build published later - freebsd, mac-aarch64 - starts
 # working here with no change to this script.
@@ -976,7 +1012,18 @@ else
     case "$KERNEL" in
     linux)
         case "$ARCH" in
-        x86_64 | amd64) PLATFORMS="linux linux-x86_64" ;;
+        x86_64 | amd64)
+            # linux-musl is the fully static build: no libc of any kind is
+            # loaded, so it runs anywhere. Order decides which is installed,
+            # and every name is probed against the real release, so listing
+            # both means a release that publishes only one still resolves.
+            if [ "$LIBC" = "musl" ] || [ "$LIBC" = "unknown" ] \
+                || glibc_below_floor; then
+                PLATFORMS="linux-musl linux linux-x86_64"
+            else
+                PLATFORMS="linux linux-musl linux-x86_64"
+            fi
+            ;;
         i386 | i486 | i586 | i686 | x86) PLATFORMS="linux-i686" ;;
         aarch64 | arm64 | armv8*) PLATFORMS="linux-aarch64 linux-arm64" ;;
         armv7* | armv6* | arm) PLATFORMS="linux-armhf linux-arm" ;;
@@ -1010,7 +1057,11 @@ field "system" "$OS_LABEL"
 field "machine" "$ARCH"
 
 if [ -n "$LIBC" ]; then
-    field "libc" "$LIBC"
+    if [ -n "$GLIBC_VER" ]; then
+        field "libc" "$LIBC $GLIBC_VER"
+    else
+        field "libc" "$LIBC"
+    fi
 fi
 
 field "downloader" "$DL_TOOL"
@@ -1030,9 +1081,14 @@ if [ "$KERNEL" = "bsd" ] && [ "$PLATFORM_FORCED" = 0 ]; then
 fi
 
 if [ "$KERNEL" = "linux" ] && [ "$LIBC" = "musl" ]; then
-    warn "the published Linux builds link against glibc, and this system uses musl"
-    info "if salam will not start, install a glibc shim (apk add gcompat) or"
+    info "this system uses musl, so the fully static build is preferred"
+    info "if this release predates it, install a glibc shim (apk add gcompat) or"
     info "use the Docker image: docker run --rm -it salamlang/salam"
+fi
+
+if [ "$KERNEL" = "linux" ] && glibc_below_floor; then
+    info "glibc $GLIBC_VER is older than the $GLIBC_FLOOR the glibc bundles need"
+    info "preferring the fully static build, which loads no libc at all"
 fi
 
 if [ "$KERNEL" = "linux" ] && [ "$LIBC" = "bionic" ]; then

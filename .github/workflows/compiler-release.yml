@@ -532,6 +532,96 @@ jobs:
         with:
           name: salam-linux
           path: salam
+  build-linux-musl:
+    name: Build Salam for Linux (x86_64 musl, fully static)
+    runs-on: ubuntu-latest
+    # Never blocks a release. This is the portability fallback asset, not a
+    # platform in its own right: if it fails to build, the release still goes
+    # out with the glibc bundles and install.sh keeps its old behaviour.
+    continue-on-error: true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install musl toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-dev musl-tools
+          musl-gcc --version | head -1
+      - name: Install a seed compiler
+        uses: ./.github/actions/setup-salam
+      - name: Build a fully static salam against musl
+        run: |
+          set -eu
+          # --cc takes a path, so a two-line wrapper is how -static reaches
+          # the link without teaching the driver a new flag. musl rather than
+          # glibc-static because this binary has to resolve DNS: a static
+          # glibc still dlopen()s NSS at runtime and warns about it at link
+          # time, while musl's resolver is genuinely self-contained.
+          printf '#!/bin/sh\nexec musl-gcc -static "$@"\n' > /tmp/musl-static-cc
+          chmod +x /tmp/musl-static-cc
+
+          # --backend=c on purpose: the LLVM backend links libsalam_llvm.a,
+          # a C++ archive built against the host glibc, which cannot go into
+          # a static musl binary. A seed compiler does not need the embedded
+          # LLVM - it only has to be able to build the real one.
+          # After `--`: build-selfhost.sh parses its own flags first and
+          # rejects anything it does not know, so salam build options have to
+          # be handed over explicitly.
+          sh tools/bash/build-selfhost.sh -- --backend=c --cc=/tmp/musl-static-cc
+      - name: It must be static, and it must run
+        run: |
+          set -eu
+          file ./salam
+          file ./salam | grep -q 'statically linked' \
+            || { echo "::error::the musl build is not statically linked"; exit 1; }
+          if objdump -T ./salam 2>/dev/null | grep -q 'GLIBC_'; then
+            echo "::error::the musl build still references versioned glibc symbols"
+            objdump -T ./salam | grep 'GLIBC_' | head
+            exit 1
+          fi
+          SALAM_STD="$PWD/std" ./salam version
+          printf 'func main:\n    println "ok-musl"\nend\n' > smoke.salam
+          SALAM_STD="$PWD/std" ./salam exec smoke.salam
+          rm -f smoke.salam
+      - name: Stage versioned archive
+        run: |
+          set -eu
+          VERSION=$(tr -d ' \t\r\n' < VERSION)
+          DIST="salam-linux-musl"
+          mkdir -p "$DIST"
+          cp salam "$DIST/salam"
+          cp -r std "$DIST/std"
+          cp README.md LICENSE "$DIST/" 2>/dev/null || true
+          {
+            echo "Salam for Linux (x86_64, static musl)."
+            echo ""
+            echo "This build depends on no system libraries at all, so it runs on any"
+            echo "x86_64 Linux regardless of which glibc the distribution ships - the"
+            echo "one to reach for on Amazon Linux, RHEL, Debian stable, Alpine, or"
+            echo "inside a slim container. install.sh picks it automatically when the"
+            echo "glibc bundle would not start."
+            echo ""
+            echo "  ./salam version"
+            echo "  ./salam exec  app.salam            (interpreter)"
+            echo "  ./salam build app.salam -o app     (native binary; needs a C compiler)"
+            echo ""
+            echo "It carries no embedded LLVM or sysroots, so it cannot cross-compile"
+            echo "and has no --jit. For that, use the glibc bundle on a host new enough"
+            echo "to run it."
+          } > "$DIST/RUN-ME.txt"
+          zip -r "salam-${VERSION}-linux-musl.zip" "$DIST" >/dev/null
+          tar -czf "salam-${VERSION}-linux-musl.tar.gz" "$DIST"
+          ls -la "salam-${VERSION}-linux-musl.zip" "salam-${VERSION}-linux-musl.tar.gz"
+      - name: Upload versioned archive
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: salam-linux-musl-zip
+          path: |
+            salam-*-linux-musl.zip
+            salam-*-linux-musl.tar.gz
+
   build-macos:
     name: Build Salam for macOS
     runs-on: macos-latest
@@ -2045,6 +2135,7 @@ jobs:
         build-linux-i686,
         build-linux-armhf,
         build-linux-aarch64,
+        build-linux-musl,
         android-gate,
       ]
     permissions:
@@ -2167,6 +2258,12 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: salam-linux-armhf-zip
+          path: ./release
+      - name: Download the static musl archive
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: salam-linux-musl-zip
           path: ./release
       - name: Download Android AAB + APKs
         continue-on-error: true
@@ -2418,6 +2515,10 @@ jobs:
             done
           done
           [ "${#assets[@]}" -gt 0 ] || { echo "::error::no release assets matched"; exit 1; }
+          # Kept next to install.sh's GLIBC_FLOOR: both describe the same
+          # floor, and a release note that disagrees with the installer is
+          # worse than no note.
+          GLIBC_FLOOR_NOTE="glibc 2.38"
 
           # A .sha256 beside every asset, the way a distro ships one next to
           # each .iso, plus a SHA256SUMS manifest that checks the whole
@@ -2458,6 +2559,18 @@ jobs:
             echo ""
             echo "On macOS use \`shasum -a 256 -c\` in place of \`sha256sum -c\`."
             echo "On Windows, \`certutil -hashfile <file> SHA256\` prints the hash to compare by eye."
+            echo ""
+            echo "### Which Linux x86_64 build"
+            echo ""
+            echo "\`linux\` is the flagship: embedded LLVM, LLD and sysroots, so it"
+            echo "cross-compiles and JITs with nothing else installed. It links glibc"
+            echo "and needs ${GLIBC_FLOOR_NOTE} or newer."
+            echo ""
+            echo "\`linux-musl\` is fully static and loads no libc at all, so it runs on"
+            echo "any x86_64 Linux - Amazon Linux, RHEL, Debian stable, Alpine, slim"
+            echo "containers. It has no embedded LLVM, so no cross-compiling and no JIT."
+            echo ""
+            echo "\`install.sh\` reads the local glibc and picks between them."
             echo ""
           } > release-notes-preamble.md
 

@@ -401,7 +401,7 @@ Current priorities in this repository are:
 - `20`: early cleanup (`fix-byte-order-marker`)
 - `30`: whitespace cleanup (`trailing-whitespace`)
 - `35`: manual permission normalization (`chmod`, manual stage)
-- `40`: formatters (`prettier`, `file-contents-sorter`, `shfmt` in manual stage)
+- `40`: formatters and generated files (`prettier`, `file-contents-sorter`, `stdlib-index`, `shfmt` in manual stage)
 - `45`: `biome-check`
 - `50`: validation and security checks (`codespell`, `markdownlint`, `yamllint`, `detect-private-key`, `gitleaks`, and other safety checks)
 

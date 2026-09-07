@@ -25,29 +25,6 @@ extern:
     func printf(fmt: str, ...): int
 end
 
-if SALAM_OS_WINDOWS:
-    extern:
-        func _write(fd: int, buf: void*, n: u32): int
-    end
-else:
-    // ssize_t and size_t are the pointer width, so the declaration has to
-    // follow it - same reason std/fs splits its syscall() decl. A u64 count
-    // on a 32-bit target makes this (i32, i32, i64) -> i64 where the real
-    // write is (i32, i32, i32) -> i32. An ELF link never notices; wasm-ld
-    // does, and answers with a stub that traps on the first call, which is
-    // how every diagnostic the online playground tried to print killed the
-    // module instead.
-    if SALAM_ARCH_X64 || SALAM_ARCH_ARM64:
-        extern:
-            func write(fd: int, buf: void*, n: u64): i64
-        end
-    else:
-        extern:
-            func write(fd: int, buf: void*, n: u32): i32
-        end
-    end
-end
-
 extern:
     func salam_tostr_i32(x: int): str: ret str.Clone(conv.FormatInt(x as i64)) end
     func salam_tostr_i64(x: i64): str: ret str.Clone(conv.FormatInt(x)) end
@@ -62,18 +39,18 @@ extern:
     end
 end
 
-if SALAM_OS_WINDOWS:
-    func _err_raw(s: str): _write(2, s as void*, s.len() as u32) end
-else:
-    // The cast has to track the declaration above: on a 32-bit target the
-    // count parameter is u32, and a u64 argument is a type error rather
-    // than a silent narrowing.
-    if SALAM_ARCH_X64 || SALAM_ARCH_ARM64:
-        func _err_raw(s: str): write(2, s as void*, s.len() as u64) end
-    else:
-        func _err_raw(s: str): write(2, s as void*, s.len() as u32) end
-    end
-end
+// `printerr`, rather than this module declaring write() itself. ssize_t and
+// size_t are the pointer width, so a hand-written declaration is only right
+// for one target - but the deeper problem is that it cannot be kept in step
+// with the one codegen emits into every module header. A bootstrap build
+// compiles this file's declaration from the tree while the header comes from
+// the seed compiler, so the two disagree whenever the seed predates a change
+// here, and C rejects the translation unit. The builtin has no such split:
+// codegen lowers it against whichever prelude it just emitted, so there is
+// exactly one declaration of write() per compilation and it is always the
+// right one. It does not recurse into salam_emit - print/printerr are
+// inlined C, not calls back into this module.
+func _err_raw(s: str): printerr s end
 
 extern:
     func salam_emit(s: str, err: int):

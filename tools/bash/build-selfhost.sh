@@ -118,7 +118,11 @@ set --
 # number instead of this checkout's. Same stamping bootstrap.sh does. %cI, not
 # %ci, so the date carries no spaces.
 STAMP_VERSION="$(cat "$ROOT/VERSION" 2>/dev/null || echo 0.0.0-dev)"
-STAMP_COMMIT="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+# The full 40-character hash, not --short: an abbreviation is only
+# unique until the repository grows into a collision, and anything
+# reading SALAM_GIT_COMMIT to identify a build - a bug report, a
+# reproducibility check - wants the name that always resolves.
+STAMP_COMMIT="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
 STAMP_DATE="$(git -C "$ROOT" show -s --format=%cI HEAD 2>/dev/null || echo unknown)"
 STAMP_DIRTY=
 if [ -n "$(git -C "$ROOT" status --porcelain 2>/dev/null)" ]; then

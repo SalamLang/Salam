@@ -267,7 +267,11 @@ has_inprocess_llvm() {
 # place the release number lives; the git metadata describes the tree being
 # compiled, not the compiler doing the compiling.
 STAMP_VERSION="$(cat "$ROOT/VERSION" 2>/dev/null || echo 0.0.0-dev)"
-STAMP_COMMIT="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+# The full 40-character hash, not --short: an abbreviation is only
+# unique until the repository grows into a collision, and anything
+# reading SALAM_GIT_COMMIT to identify a build - a bug report, a
+# reproducibility check - wants the name that always resolves.
+STAMP_COMMIT="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
 # Strict ISO 8601 (%cI, not %ci): the flag list below is word-split on the
 # way to the build command, so a commit date with spaces in it would arrive
 # as four separate arguments. The C Makefile stamps the same format.

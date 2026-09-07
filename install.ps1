@@ -1,10 +1,20 @@
 # Salam installer for Windows.
 #
 # Usage:
+#   irm https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.ps1 | iex
+#   iex "& { $(irm https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.ps1) } --dir C:\Tools\Salam"
 #   powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
 #   .\install.ps1 --dir C:\Tools\Salam
 #   .\install.ps1 --version 1.2.3
 #   .\install.ps1 --no-modify-path
+#
+# The piped form (irm | iex) runs fine under the default Restricted
+# execution policy: iex evaluates the script text in the current
+# session instead of launching it as a .ps1 file, which is the thing
+# that policy gates. Options can't follow a plain pipe the way `sh -s
+# --` works, so pass them through the "& { ... } args" wrapper above,
+# or set the matching environment variable before the pipe instead:
+#   $env:SALAM_VERSION = "1.2.3"; irm https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.ps1 | iex
 #
 # Environment variables:
 #   SALAM_INSTALL_DIR      same as --dir

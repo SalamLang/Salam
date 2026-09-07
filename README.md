@@ -83,7 +83,13 @@ The shell installer takes `--dir DIR`, `--version X.Y.Z`, `--platform NAME`,
 **Windows** (PowerShell):
 
 ```powershell
-irm https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.ps1 -OutFile "$env:TEMP\salam-install.ps1"; powershell -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\salam-install.ps1"
+irm https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.ps1 | iex
+```
+
+To pass options, wrap the fetched script instead of piping it:
+
+```powershell
+iex "& { $(irm https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.ps1) } --dir C:\Tools\Salam"
 ```
 
 Or from `cmd.exe`:

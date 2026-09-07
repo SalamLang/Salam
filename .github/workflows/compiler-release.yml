@@ -2556,12 +2556,22 @@ jobs:
           git config user.name "${GIT_TAGGER_NAME:-$GITHUB_ACTOR}"
           git config user.email "${GIT_TAGGER_EMAIL:-$GITHUB_ACTOR@users.noreply.github.com}"
           git config user.signingkey "$KEY_ID"
-          git config gpg.program gpg
+          # Always through the wrapper, passphrase or not. A runner has no
+          # tty, so gpg must never be in a position to want a prompt: even a
+          # key with no passphrase can send the agent looking for pinentry
+          # depending on how it was generated. Loopback settles it either
+          # way, and the passphrase flag is only added when there is one.
+          cat > .gpg-batch <<'GPGWRAP'
+          #!/bin/sh
           if [ -n "${GPG_PASSPHRASE:-}" ]; then
-            git config gpg.program "$PWD/.gpg-batch"
-            printf '#!/bin/sh\nexec gpg --batch --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" "$@"\n' > .gpg-batch
-            chmod +x .gpg-batch
+              exec gpg --batch --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" "$@"
           fi
+          exec gpg --batch --pinentry-mode loopback "$@"
+          GPGWRAP
+          sed -i 's/^          //' .gpg-batch
+          chmod +x .gpg-batch
+          git config gpg.program "$PWD/.gpg-batch"
+          export GPG_PASSPHRASE
 
           git tag -s "$TAG" -m "$RELEASE_TITLE" "$GITHUB_SHA"
           git tag -v "$TAG" || { echo "::error::the tag did not verify locally"; exit 1; }

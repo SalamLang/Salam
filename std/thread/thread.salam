@@ -34,7 +34,14 @@ if SALAM_OS_WINDOWS:
 else:
     extern:
         func pthread_create(thread: void*, attr: void*, start: void*, arg: void*): int
-        func pthread_join(thread: u64, retval: void*): int
+        // pthread_t is pointer-sized on every target glibc and musl
+        // support, so void* is the one spelling that is right on both
+        // widths. Declaring it u64 made the call (i32, i32) -> i32 on a
+        // 32-bit target look like (i64, i32) -> i32: harmless in an ELF
+        // link, which never checks, and fatal under wasm-ld, which does.
+        // It answered with "function signature mismatch: pthread_join" and
+        // a stub that traps the moment anything joins a thread.
+        func pthread_join(thread: void*, retval: void*): int
     end
 end
 
@@ -67,7 +74,11 @@ else:
         end
         func salam_thread_spawn_arg(fn: void*, arg: void*): i64:
             if fn == null: ret 0 end
-            t := mem.Allocate(8 as u64)
+            // Zeroed, not just allocated: pthread_create fills only the
+            // first pointer-sized word, so on a 32-bit target the upper
+            // half of this slot is whatever the allocator left behind and
+            // the read below would carry it into the join.
+            t := mem.AllocateZeroed(8 as u64)
             if pthread_create(t, null, fn, arg) != 0:
                 mem.Free(t)
                 ret 0
@@ -77,7 +88,7 @@ else:
         func salam_thread_join(h: i64):
             if h == 0: ret end
             tp := (h as void*) as i64*
-            pthread_join(tp[0] as u64, null)
+            pthread_join(tp[0] as void*, null)
             mem.Free(h as void*)
         end
     end

@@ -56,6 +56,22 @@
 //       change makes older seeds unusable, and its own comment says the c/
 //       fallback no-ops "once SEED_MIN is published". Bumping it every
 //       release would keep that temporary fallback alive forever.
+//   tools/bash/build-selfhost.sh
+//       "a seed older than 0.3.6 mangles those names" is the same kind of
+//       floor: it records which release fixed the doubled underscores, and
+//       moving it with each bump would claim every future seed is broken.
+//   install.sh, docs/GETTING_STARTED.md
+//       "--version 0.3.6" demonstrates the flag's syntax. The number is an
+//       example of the shape an argument takes, not a statement about which
+//       release is current, and a reader copying it gets a version that
+//       exists either way.
+//
+// myst.yml's TOP-LEVEL `version: 1` is NOT a release version - it is the
+// config schema version MyST itself defines, and mystmd has no project-level
+// version field at all (checked against mystmd 1.10.1). The two entries in
+// the table below anchor on the Versions menu instead. Anchoring anything on
+// that `version:` would pin the schema number to the release number and
+// break the site config on the next bump.
 package main
 
 import os
@@ -81,6 +97,25 @@ func sites(): Vector<Site>:
     // examples in the same chapter.
     v.push(Site { path = "books/en/intro-programming/chapters/01-getting-started.tex", prefix = "$ salam version\nsalam ", suffix = "\n" })
     v.push(Site { path = "docs/PROFILING.md", prefix = "\"salam_version\": \"", suffix = "\"" })
+    // The readthedocs menu in myst.yml names the current release twice: once
+    // as the entry labelled "(Stable)" and once in that entry's URL. Both are
+    // anchored on the lowercase "v", which the menu's own "- title: Versions"
+    // heading cannot collide with, and on "readthedocs.io/v", which the
+    // "latest" URL above it does not contain.
+    v.push(Site { path = "myst.yml", prefix = "- title: v", suffix = " (Stable)" })
+    v.push(Site { path = "myst.yml", prefix = "readthedocs.io/v", suffix = "/" })
+    // bun records each workspace member's own version, so the lockfile goes
+    // stale the moment extensions/vscode/package.json moves without it. The
+    // anchor carries the package name above it because a bare "version": "
+    // matches every other member in the file, and this is the one bun.lock
+    // entry that tracks the release rather than a third-party dependency.
+    v.push(
+        Site {
+            path = "bun.lock",
+            prefix = "\"name\": \"salam-programming-language\",\n      \"version\": \"",
+            suffix = "\""
+        }
+    )
     ret v
 end
 
@@ -165,7 +200,53 @@ func check_all(want: str): int:
     ret bad
 end
 
+// myst.yml's Versions menu is a list, not a single field. Bumping it means
+// the new release takes the "(Stable)" label and the release it replaces
+// stays in the menu without one - which is what a reader following an old
+// link needs. The generic substitution below would overwrite the old entry
+// instead, silently dropping that release from the documentation menu, so
+// the promotion happens here first and the table then finds it already
+// correct.
+func myst_promote(want: str): bool:
+    path := "myst.yml"
+    if os.Exists(path) == false:
+        ret false
+    end
+    body := os.ReadFile(path)
+    old := read_at(body, "- title: v", " (Stable)")
+    if old.len() == 0 || old == want:
+        ret false
+    end
+    mut out := write_at(body, "- title: v", " (Stable)", want)
+    out = write_at(out, "readthedocs.io/v", "/", want)
+
+    marker := "- title: v" + want + " (Stable)"
+    at := out.find(marker)
+    if at < 0:
+        ret false
+    end
+    from := at + marker.len()
+    rest := out.substr(from, out.len() - from)
+    nl1 := rest.find("\n")
+    if nl1 < 0:
+        ret false
+    end
+    tail_from := nl1 + 1
+    after := rest.substr(tail_from, rest.len() - tail_from)
+    nl2 := after.find("\n")
+    if nl2 < 0:
+        ret false
+    end
+    cut := from + tail_from + nl2 + 1
+    ins := "        - title: v" + old + "\n" + "          url: https://salamlang.readthedocs.io/v" + old + "/\n"
+    out = out.substr(0, cut) + ins + out.substr(cut, out.len() - cut)
+    _n := os.WriteFile(path, out)
+    println "  promoted      ", path, old, "->", want, "- and kept", old, "in the menu"
+    ret true
+end
+
 func sync_all(want: str): int:
+    _promoted := myst_promote(want)
     mut changed := 0
     all := sites()
     defer all.free()

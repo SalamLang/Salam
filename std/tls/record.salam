@@ -57,6 +57,14 @@ const ALERT_DECRYPT_ERROR := 51
 const ALERT_PROTOCOL_VERSION := 70
 const ALERT_INTERNAL_ERROR := 80
 
+// How long one handshake read may wait on the peer. Generous on purpose:
+// it is a backstop against a connection that stalls forever, not a
+// performance bound, and a loaded CI runner doing a full handshake in
+// software has been seen to need seconds. Only the handshake uses it; an
+// established connection keeps waiting indefinitely, which is what an idle
+// WebSocket needs.
+const HANDSHAKE_READ_TIMEOUT_MS := 15000
+
 // ---------------------------------------------------------------- transport
 
 struct RecordLayer:
@@ -68,6 +76,13 @@ struct RecordLayer:
     pub eof: bool = false
     pub failed: bool = false
     pub err: str = ""
+    // Milliseconds a single fill may wait for the peer, or 0 for "block as
+    // long as it takes". Only the handshake sets it: an established
+    // connection is allowed to sit idle indefinitely, because that is what
+    // a WebSocket between messages looks like, but a peer that opens a
+    // connection and then says nothing must not pin the accepting thread
+    // for the life of the process.
+    pub read_deadline_ms: int = 0
 end
 
 func _rec_new(fd: i64): RecordLayer:
@@ -92,6 +107,18 @@ end
 
 // Pull more bytes from the socket into the receive buffer.
 func _rec_fill(r &: RecordLayer): bool:
+    // WaitReadable, never SetTimeout: a timed recv() that expires halfway
+    // through a record consumes the bytes it did get and leaves this layer
+    // holding a fragment it can never finish. poll() touches no bytes, so
+    // it composes with a buffering transport the way a timed recv does not
+    // - the reasoning is spelled out on rawsock.WaitReadable itself.
+    if r.read_deadline_ms > 0:
+        if !rawsock.WaitReadable(rawsock.FromFd(r.fd), r.read_deadline_ms):
+            _rec_fail(r, "timed out waiting for the peer")
+            r.eof = true
+            ret false
+        end
+    end
     mut tmp := _newbuf(4096)
     defer _buf_free(tmp)
     _putzeros(tmp, 4096)

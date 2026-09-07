@@ -652,7 +652,41 @@ jobs:
 
           brew untap aws/tap || true
           brew install llvm@22 ccache
-          "$(brew --prefix llvm@22)/bin/llvm-config" --version
+
+          # The runner image preinstalls llvm@20, and it owns the unversioned
+          # symlinks, so brew leaves llvm@22 keg-only and every bare clang,
+          # llvm-ar or llvm-config on PATH is still 20. The steps below pass
+          # llvm-config by absolute path, but std/llvm/native/build.sh ends
+          # its AR search with a bare `command -v llvm-ar`, and that fallback
+          # taking 20 while the headers and archives are 22 surfaces as a
+          # link error nowhere near the cause. Make 22 the LLVM on PATH so
+          # there is only one version to find.
+          brew link --overwrite --force llvm@22 \
+            || echo "::warning::brew could not link llvm@22; the absolute prefix below still governs the build"
+
+          LLVM_PREFIX="$(brew --prefix llvm@22)"
+          echo "$LLVM_PREFIX/bin" >> "$GITHUB_PATH"
+
+          LLVM_VER="$("$LLVM_PREFIX/bin/llvm-config" --version)"
+          echo "llvm-config: $LLVM_VER  ($LLVM_PREFIX)"
+          case "$LLVM_VER" in
+          22.*) ;;
+          *)
+              echo "::error::expected LLVM 22 from the llvm@22 keg, got $LLVM_VER"
+              exit 1
+              ;;
+          esac
+
+          # Whatever a bare name now resolves to is what an unqualified tool
+          # lookup gets, so say it out loud rather than leaving it implied.
+          if command -v llvm-config >/dev/null 2>&1; then
+              BARE_VER="$(llvm-config --version 2>/dev/null || echo unknown)"
+              echo "bare llvm-config on PATH: $BARE_VER"
+              case "$BARE_VER" in
+              22.*) ;;
+              *) echo "::warning::a bare llvm-config on PATH is $BARE_VER, not 22" ;;
+              esac
+          fi
 
           PKGS_AFTER=$(fingerprint "$HOME/Library/Caches/Homebrew/downloads")
           if [ -n "$PKGS_AFTER" ] && [ "$PKGS_BEFORE" = "$PKGS_AFTER" ]; then

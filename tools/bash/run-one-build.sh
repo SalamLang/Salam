@@ -53,9 +53,21 @@ fi
 
 want=$(tr -d '\r' <"$exp")
 got=""
+_timedout=0
 _try=1
+# Through a pipe the exit status belongs to tr, so a run killed by the
+# timeout was indistinguishable from one that simply printed nothing, and
+# the report blamed the program's output for what was really a hang. A
+# SIGKILLed process loses whatever it had not flushed, which is how the
+# websocket wss loopback failure on Windows came back as an empty `got`.
+# Redirect to a file instead, so the status is the timeout's own.
+_runout="$jobdir/run.out"
 while [ "$_try" -le 4 ]; do
-    got=$(timeout "${SALAM_TEST_TIMEOUT:-30}" "$exe" 2>&1 | tr -d '\r')
+    timeout "${SALAM_TEST_TIMEOUT:-30}" "$exe" >"$_runout" 2>&1
+    _rc=$?
+    got=$(tr -d '\r' <"$_runout" 2>/dev/null)
+    _timedout=0
+    [ "$_rc" -eq 124 ] && _timedout=1
     if [ "$got" = "$want" ]; then break; fi
     case "$got" in *"Permission denied"* | "") sleep 1 ;; *) break ;; esac
     _try=$((_try + 1))
@@ -64,6 +76,10 @@ if [ "$got" = "$want" ]; then
     echo "PASS $label"
 else
     echo "FAIL $label"
+    if [ "$_timedout" -eq 1 ]; then
+        echo "  timed out after ${SALAM_TEST_TIMEOUT:-30}s on attempt $_try of 4 - it hung, it did not finish and print this"
+        echo "  anything it had not flushed died with it, so the text below may be short"
+    fi
     echo "  expected: $(echo "$want" | tr '\n' '|')"
     echo "  got:      $(echo "$got" | tr '\n' '|')"
 fi

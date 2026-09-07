@@ -2523,7 +2523,12 @@ jobs:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
           GPG_SIGNING_KEY_ID: ${{ secrets.GPG_SIGNING_KEY_ID }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GIT_TAGGER_NAME: ${{ secrets.GIT_TAGGER_NAME }}
+          GIT_TAGGER_EMAIL: ${{ secrets.GIT_TAGGER_EMAIL }}
+          # RELEASE_TOKEN is a PAT belonging to the account that should own
+          # the tag and the release. Without it everything is attributed to
+          # github-actions[bot], which is what GITHUB_TOKEN authenticates as.
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           set -eu
           # Without the key this step does nothing and the release below
@@ -2553,8 +2558,18 @@ jobs:
           echo "allow-loopback-pinentry" >> "$HOME/.gnupg/gpg-agent.conf"
           gpgconf --reload gpg-agent || true
 
-          git config user.name "${GIT_TAGGER_NAME:-$GITHUB_ACTOR}"
-          git config user.email "${GIT_TAGGER_EMAIL:-$GITHUB_ACTOR@users.noreply.github.com}"
+          # The tagger email has to be the one on the signing key, and that
+          # same address has to be verified on the account, or GitHub shows
+          # a valid signature as "Unverified" and credits nobody. Reading it
+          # off the key removes the chance of the two drifting apart; the
+          # GITHUB_ACTOR noreply address this used before could never match
+          # a key UID and so could never verify.
+          KEY_UID=$(gpg --list-keys --with-colons "$KEY_ID" | awk -F: '/^uid:/ {print $10; exit}')
+          KEY_EMAIL=$(printf '%s' "$KEY_UID" | sed -n 's/.*<\(.*\)>.*/\1/p')
+          KEY_NAME=$(printf '%s' "$KEY_UID" | sed 's/ *<.*//')
+          git config user.name "${GIT_TAGGER_NAME:-${KEY_NAME:-$GITHUB_ACTOR}}"
+          git config user.email "${GIT_TAGGER_EMAIL:-${KEY_EMAIL:-$GITHUB_ACTOR@users.noreply.github.com}}"
+          echo "tagging as $(git config user.name) <$(git config user.email)>"
           git config user.signingkey "$KEY_ID"
           # Always through the wrapper, passphrase or not. A runner has no
           # tty, so gpg must never be in a position to want a prompt: even a
@@ -2585,7 +2600,9 @@ jobs:
 
       - name: Create GitHub Release with auto-generated notes
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Same token as the tag: with RELEASE_TOKEN set the release is
+          # published by that account instead of github-actions[bot].
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           set -eu
           shopt -s nullglob

@@ -124,6 +124,11 @@ to_ar_path() {
 trap 'rm -rf "$WORK"' EXIT INT TERM
 
 echo "llvm-config : $LLVM_CONFIG ($($LLVM_CONFIG --version))"
+# AR is picked by a fallback chain that ends at whatever `llvm-ar` PATH
+# happens to offer, which on a machine carrying two LLVM kegs need not be
+# the one llvm-config points at. Printing it costs nothing and turns a
+# version mismatch into a visible line instead of a later link error.
+echo "ar          : ${AR:-none}"
 echo "in-process LLD : $([ "$WITH_LLD" = 1 ] && echo yes || echo 'no (stubbed)')"
 
 # -DSALAM_HAVE_LLVM is what makes orc_call.c define the five

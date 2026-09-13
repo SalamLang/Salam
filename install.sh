@@ -1013,16 +1013,15 @@ else
     linux)
         case "$ARCH" in
         x86_64 | amd64)
-            # linux-x86_64-musl is the fully static build: no libc of any
-            # kind is loaded, so it runs anywhere. Order decides which is
-            # installed, and every name is probed against the real release,
-            # so the pre-0.3.7 spellings stay in the list and an older
-            # release still resolves.
+            # linux-musl is the fully static build: no libc of any kind is
+            # loaded, so it runs anywhere. Order decides which is installed,
+            # and every name is probed against the real release, so listing
+            # both means a release that publishes only one still resolves.
             if [ "$LIBC" = "musl" ] || [ "$LIBC" = "unknown" ] ||
                 glibc_below_floor; then
-                PLATFORMS="linux-x86_64-musl linux-musl linux-x86_64 linux"
+                PLATFORMS="linux-musl linux linux-x86_64"
             else
-                PLATFORMS="linux-x86_64 linux linux-x86_64-musl linux-musl"
+                PLATFORMS="linux linux-musl linux-x86_64"
             fi
             ;;
         i386 | i486 | i586 | i686 | x86) PLATFORMS="linux-i686" ;;
@@ -1036,13 +1035,8 @@ else
         ;;
     mac)
         case "$ARCH" in
-        # Only Apple Silicon is published. The old "mac" asset was an
-        # arm64 build under a name that did not say so, which an Intel Mac
-        # downloaded and then could not exec; leaving it out of the Intel
-        # list turns that into an honest "nothing published for this
-        # platform" before anything is fetched.
-        arm64 | aarch64) PLATFORMS="macos-arm64 mac-arm64 mac-aarch64 mac" ;;
-        *) PLATFORMS="macos-x86_64 mac-x86_64" ;;
+        arm64 | aarch64) PLATFORMS="mac mac-aarch64 mac-arm64" ;;
+        *) PLATFORMS="mac mac-x86_64" ;;
         esac
         ;;
     bsd)

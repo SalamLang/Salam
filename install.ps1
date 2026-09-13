@@ -25,8 +25,8 @@
 #   %USERPROFILE%\.salam\bin
 #
 # Release assets this understands:
-#   windows        Windows x86_64
-#   windows-i686   Windows 32-bit, and ARM through x86 emulation
+#   windows-x86_64  Windows x86_64
+#   windows-i686    Windows 32-bit, and ARM through x86 emulation
 #
 # Written against PowerShell 2.0 so a stock Windows 7 SP1 box can run it
 # unchanged: no Invoke-WebRequest, no Expand-Archive, no ConvertFrom-Json,
@@ -333,7 +333,7 @@ function Get-Platform {
     }
 
     if ($arch -ieq "AMD64" -or $arch -ieq "x64" -or $arch -ieq "EM64T") {
-        return "windows"
+        return "windows-x86_64"
     }
 
     if ($arch -ieq "x86") {
@@ -344,7 +344,7 @@ function Get-Platform {
         # Windows 11 on ARM emulates x64; Windows 10 on ARM only ever
         # emulated x86, so it gets the 32-bit build.
         if ($OsInfo.Build -ge 22000) {
-            return "windows"
+            return "windows-x86_64"
         }
 
         return "windows-i686"
@@ -356,7 +356,7 @@ function Get-Platform {
     }
 
     Fail ("unsupported processor architecture: $arch. Salam publishes " +
-        "windows (x86_64) and windows-i686 (32-bit) builds only.")
+        "windows-x86_64 and windows-i686 builds only.")
 }
 
 # ---------------------------------------------------------------------
@@ -1257,6 +1257,15 @@ Write-Step "Checking this machine"
 $os = Get-OsInfo
 $platform = Get-Platform -OsInfo $os
 
+# Assets carry an explicit architecture from 0.3.7 on: what used to be
+# "windows" is "windows-x86_64". The old spelling stays in the list so an
+# earlier release, or --version 0.3.6, still resolves.
+$platformNames = @($platform)
+
+if ($platform -eq "windows-x86_64") {
+    $platformNames = @("windows-x86_64", "windows")
+}
+
 $osLabel = $os.Name
 
 if ($os.Build -gt 0) {
@@ -1348,13 +1357,19 @@ try {
 
         Write-Info "requested version: $Version"
 
-        $asset = "salam-$Version-$platform.zip"
-        $url = "https://github.com/$Repo/releases/download/v$Version/$asset"
+        Write-Step "Downloading the release archive"
 
-        Write-Step "Downloading $asset"
-        Write-Info $url
+        foreach ($name in $platformNames) {
+            $asset = "salam-$Version-$name.zip"
+            $url = "https://github.com/$Repo/releases/download/v$Version/$asset"
 
-        $downloaded = Save-Url -Url $url -Destination $archive -ShowProgress $true -Quiet $false
+            Write-Info $url
+
+            if (Save-Url -Url $url -Destination $archive -ShowProgress $true -Quiet $false) {
+                $downloaded = $true
+                break
+            }
+        }
 
         if (!$downloaded) {
             Fail ("release v$Version publishes no $platform asset. " +
@@ -1388,9 +1403,6 @@ try {
                 $candidate = $candidate.Substring(1)
             }
 
-            $asset = "salam-$candidate-$platform.zip"
-            $url = "https://github.com/$Repo/releases/download/$tag/$asset"
-
             if (!$stepAnnounced) {
                 # Named generically: which asset this ends up being is
                 # only settled once one of the candidates answers.
@@ -1398,11 +1410,20 @@ try {
                 $stepAnnounced = $true
             }
 
-            Write-Info $url
+            foreach ($name in $platformNames) {
+                $asset = "salam-$candidate-$name.zip"
+                $url = "https://github.com/$Repo/releases/download/$tag/$asset"
 
-            if (Save-Url -Url $url -Destination $archive -ShowProgress $true -Quiet $false) {
-                $Version = $candidate
-                $downloaded = $true
+                Write-Info $url
+
+                if (Save-Url -Url $url -Destination $archive -ShowProgress $true -Quiet $false) {
+                    $Version = $candidate
+                    $downloaded = $true
+                    break
+                }
+            }
+
+            if ($downloaded) {
                 break
             }
 
@@ -1425,7 +1446,7 @@ try {
         Fail "the downloaded file is not a zip archive - try again"
     }
 
-    Write-Step "Extracting salam-$Version-$platform.zip"
+    Write-Step "Extracting $asset"
     Write-Info ("archive size: " + (Format-Size $size))
 
     Expand-ZipArchive -Archive $archive -Destination $extractDir

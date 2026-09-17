@@ -580,6 +580,80 @@ func lv_incdec(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     ret make_llv(node.is_prefix ? newv : oldv, ts)
 end
 
+// One segment of a print, already a string, sent straight to a file
+// descriptor. There is no stdio to go through: fd 1 keeps the same buffer
+// the all-literal path uses, fd 2 is written immediately so a panic message
+// survives whatever happens next.
+func write_free(v &: Lv, ref: str, err: bool):
+    ln := new_tmp(v)
+    emit(v, ln + " = call " + v.usize + " @strlen(ptr " + ref + ")")
+    mut n64 := ln
+    if !str.Equals(v.usize, "i64"):
+        z := new_tmp(v)
+        emit(v, z + " = zext " + v.usize + " " + ln + " to i64")
+        n64 = z
+    end
+    if err:
+        emit(v, new_tmp(v) + " = call i64 @write(i32 2, ptr " + ref + ", i64 " + n64 + ")")
+    else:
+        need(v, LV_H_OUTBUF)
+        emit(v, "call void @salam_out_write(ptr " + ref + ", i64 " + n64 + ")")
+    end
+end
+
+// The freestanding counterpart of cg_lower_print_free: no printf to hand a
+// format string to, so every segment is turned into a string and written on
+// its own, in source order. The salam_tostr_* family std/console defines is
+// the same one the C backend calls.
+func lower_print_free(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, segs &: Vector<cg.PfSeg>, err: bool
+):
+    mut i := 0
+    until i < segs.len():
+        sg := segs.get(i)
+        if sg.kind == cg.PF_LIT:
+            n := str.Len(sg.text)
+            if n > 0:
+                lit := strconst(v, sg.text)
+                if err:
+                    emit(v, new_tmp(v) + " = call i64 @write(i32 2, ptr " + lit + ", i64 " + co.I64Toa(n as i64) + ")")
+                else:
+                    need(v, LV_H_OUTBUF)
+                    emit(v, "call void @salam_out_write(ptr " + lit + ", i64 " + co.I64Toa(n as i64) + ")")
+                end
+            end
+            i += 1
+            continue
+        end
+        val := lv_expr(v, s, a, sg.expr)
+        mut ref := ""
+        if sg.kind == cg.PF_STR:
+            ref = val.ref
+        else sg.kind == cg.PF_BOOL:
+            ref = call_runtime_val(v, s, a, "salam_tostr_bool", "i1", val.ref, "ptr")
+        else sg.kind == cg.PF_CHAR:
+            ref = call_runtime_val(v, s, a, "salam_char_from_code", "i32", conv(v, s, a, val, "i32"), "ptr")
+        else sg.kind == cg.PF_I32:
+            ref = call_runtime_val(v, s, a, "salam_tostr_i32", "i32", conv(v, s, a, val, "i32"), "ptr")
+        else sg.kind == cg.PF_U32:
+            ref = call_runtime_val(v, s, a, "salam_tostr_u32", "i32", conv(v, s, a, val, "u32"), "ptr")
+        else sg.kind == cg.PF_I64:
+            ref = call_runtime_val(v, s, a, "salam_tostr_i64", "i64", val.ref, "ptr")
+        else sg.kind == cg.PF_U64 || sg.kind == cg.PF_SIZE:
+            ref = call_runtime_val(v, s, a, "salam_tostr_u64", "i64", conv(v, s, a, val, "u64"), "ptr")
+        else:
+            // A double needs a correctly rounded conversion, and a kernel
+            // must not touch SSE at all. The C backend prints the same.
+            ref = strconst(v, "<f64>")
+        end
+        if str.Len(ref) == 0:
+            ref = strconst(v, "?")
+        end
+        write_free(v, ref, err)
+        i += 1
+    end
+end
+
 // ll_lower_print
 func lv_lower_print(
     v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, nl: bool, err: bool
@@ -588,6 +662,11 @@ func lv_lower_print(
     defer segs.free()
     cg.PfBuild(a, n, nl, segs)
     if segs.len() == 0:
+        ret
+    end
+
+    if v.freestanding:
+        lower_print_free(v, s, a, segs, err)
         ret
     end
 

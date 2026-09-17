@@ -193,6 +193,36 @@ func pick_overload(
     ret 0
 end
 
+// Every signature indexed by the declaration it belongs to, built on first
+// use. A name is not enough to find a function's own signature: two packages
+// can each declare a private `draw_empty`, the global scope holds one of
+// them, and the other one then took its parameter list - a wrong LLVM
+// signature when the arities happened to agree, and a compiler crash when
+// they did not.
+func sig_for_decl(v &: Lv, s &: sm.Sema, fn: int): int:
+    if v.sig_ix.len() == 0:
+        total := sm.SigCount(s)
+        mut i := 1
+        until i < total:
+            d := sm.SigAt(s, i).decl
+            if d > 0:
+                until v.sig_ix.len() <= d:
+                    v.sig_ix.push(0)
+                end
+                if v.sig_ix.get(d) == 0:
+                    v.sig_ix.set(d, i)
+                end
+            end
+            i += 1
+        end
+        v.sig_ix.push(0)
+    end
+    if fn <= 0 || fn >= v.sig_ix.len():
+        ret 0
+    end
+    ret v.sig_ix.get(fn)
+end
+
 // ll_sig_of
 func sig_of(v &: Lv, s &: sm.Sema, a &: at.Ast, fn: int, owner: int): int:
     fname := at.Get(a, fn).name
@@ -200,22 +230,55 @@ func sig_of(v &: Lv, s &: sm.Sema, a &: at.Ast, fn: int, owner: int): int:
     if owner != 0:
         symid = sm.LookupLocal(s, sm.SymAt(s, owner).members, fname)
     else:
-        symid = sym_of(v, s, a, fname)
-    end
-    if symid == 0:
-        ret 0
-    end
-    sy := sm.SymAt(s, symid)
-    repeat sy.overloads.len() with i:
-        sigid := sy.overloads.get(i)
-        if sm.SigAt(s, sigid).decl == fn:
-            ret sigid
+        // The package being emitted owns its own names, the way call_user
+        // already resolves a call; only then does the global scope answer.
+        if v.pkg_scope != 0:
+            own := sm.LookupLocal(s, v.pkg_scope, fname)
+            if own != 0 && sm.SymAt(s, own).kind == sm.SYM_FUNC:
+                symid = own
+            end
+        end
+        if symid == 0:
+            symid = sym_of(v, s, a, fname)
         end
     end
-    if sy.overloads.len() > 0:
-        ret sy.overloads.get(0)
+    if symid != 0:
+        sy := sm.SymAt(s, symid)
+        repeat sy.overloads.len() with i:
+            sigid := sy.overloads.get(i)
+            if sm.SigAt(s, sigid).decl == fn:
+                ret sigid
+            end
+        end
+    end
+    exact := sig_for_decl(v, s, fn)
+    if exact != 0:
+        ret exact
+    end
+    if symid != 0:
+        sy2 := sm.SymAt(s, symid)
+        if sy2.overloads.len() > 0:
+            first := sy2.overloads.get(0)
+            if sm.SigAt(s, first).params.len() == at.ChildCount(a, fn):
+                ret first
+            end
+        end
     end
     ret 0
+end
+
+// How many parameters a declaration and its signature agree on. They always
+// should; when they do not the module is wrong rather than merely incomplete,
+// so say so and emit the part that is sound instead of reading past the end
+// of either list.
+func param_count(v &: Lv, a &: at.Ast, s &: sm.Sema, fn: int, sig: int, fname: str): int:
+    n := at.ChildCount(a, fn)
+    m := sm.SigAt(s, sig).params.len()
+    if n == m:
+        ret n
+    end
+    lv_error(v, a, fn, "no signature for '" + fname + "'")
+    ret n < m ? n : m
 end
 
 // ll_fn_header - recv_param "" = the C NULL.
@@ -244,7 +307,8 @@ func fn_header(
     end
     fnode := at.Get(a, fn)
     sg := sm.SigAt(s, sig)
-    repeat at.ChildCount(a, fn) with i:
+    nparams := param_count(v, a, s, fn, sig, fname)
+    repeat nparams with i:
         p := at.Get(a, fnode.list.get(i))
         pts := sm.ToString(s, sg.params.get(i))
         if !first:
@@ -279,6 +343,13 @@ func fn_header(
         co.SbPuts(hdr, " minsize")
     end
     co.SbPuts(hdr, " nounwind")
+    // Without this the optimizer rewrites calls into whatever libc it
+    // assumes is there - printf("%s\n", x) becomes puts, strstr(s, "/")
+    // becomes strchr - and a freestanding program fails to link against
+    // names its own runtime never defined.
+    if v.freestanding:
+        co.SbPuts(hdr, " \"no-builtins\"")
+    end
     if v.debug && str.Len(v.cur_sp) > 0:
         co.SbPuts(hdr, " !dbg " + v.cur_sp)
     end
@@ -292,7 +363,7 @@ end
 func spill_params(v &: Lv, s &: sm.Sema, a &: at.Ast, fn: int, sig: int):
     fnode := at.Get(a, fn)
     sg := sm.SigAt(s, sig)
-    repeat at.ChildCount(a, fn) with i:
+    repeat param_count(v, a, s, fn, sig, at.Get(a, fn).name) with i:
         p := at.Get(a, fnode.list.get(i))
         pts := sm.ToString(s, sg.params.get(i))
         if p.is_ref:
@@ -432,7 +503,7 @@ func emit_function(v &: Lv, s &: sm.Sema, a &: at.Ast, fn: int, owner: int):
         // take the printf path. Only where the buffer is reachable at all:
         // single_threaded is already false for Windows targets, whose CRT
         // has no `write` for the helper to call.
-        if v.single_threaded:
+        if v.single_threaded && !v.freestanding:
             need(v, LV_H_OUTBUF)
             // Returning from main is not the only way out: os.Exit() calls
             // exit(), and an atexit handler can print after main is gone.

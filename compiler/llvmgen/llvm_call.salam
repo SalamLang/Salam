@@ -19,9 +19,35 @@ func param_is_ref(s &: sm.Sema, a &: at.Ast, sig: int, i: int): bool:
     ret at.Get(a, dn.list.get(i)).is_ref
 end
 
+// Which parameters of the C library functions declare_libc declares are
+// size_t. Salam has no pointer-width integer type - std/mem spells the
+// allocator `extern func malloc(size: u64)` - so on a 32-bit target the
+// argument arrives as an i64 while the callee was declared taking an i32.
+// LLVM accepts that mismatch SILENTLY and emits the call in the wrong ABI:
+// on big-endian ARM an i64 travels in r0:r1 with the high half in r0, so
+// malloc would be handed 0. Narrow the argument to the declared width here.
+func libc_size_param(fname: str, i: int): bool:
+    if str.Equals(fname, "malloc"):
+        ret i == 0
+    end
+    if str.Equals(fname, "realloc"):
+        ret i == 1
+    end
+    if str.Equals(fname, "memcpy") || str.Equals(fname, "memmove"):
+        ret i == 2
+    end
+    if str.Equals(fname, "write"):
+        ret i == 2
+    end
+    if str.Equals(fname, "snprintf"):
+        ret i == 1
+    end
+    ret false
+end
+
 // ll_emit_arg
 func emit_arg(
-    v &: Lv, s &: sm.Sema, a &: at.Ast, ab &: str.StringBuilder, arg: int, sig: int, i: int
+    v &: Lv, s &: sm.Sema, a &: at.Ast, ab &: str.StringBuilder, arg: int, sig: int, i: int, cname: str
 ):
     if param_is_ref(s, a, sig, i):
         addr := lv_addr_of(v, s, a, arg)
@@ -31,7 +57,15 @@ func emit_arg(
     val := lv_expr(v, s, a, arg)
     sg := sm.SigAt(s, sig)
     pts := i < sg.params.len() ? sm.ToString(s, sg.params.get(i)) : val.ts
-    co.SbPuts(ab, ty_of(v, s, a, pts) + " " + conv(v, s, a, val, pts))
+    mut ty := ty_of(v, s, a, pts)
+    mut ref2 := conv(v, s, a, val, pts)
+    if str.Equals(ty, "i64") && !str.Equals(v.usize, "i64") && libc_size_param(cname, i):
+        t := new_tmp(v)
+        emit(v, t + " = trunc i64 " + ref2 + " to " + v.usize)
+        ty = v.usize
+        ref2 = t
+    end
+    co.SbPuts(ab, ty + " " + ref2)
 end
 
 // ll_fill_defaults
@@ -56,7 +90,7 @@ func fill_defaults(
             if !first:
                 co.SbPuts(ab, ", ")
             end
-            emit_arg(v, s, a, ab, param.a, sig, i)
+            emit_arg(v, s, a, ab, param.a, sig, i, "")
             first = false
         end
         i += 1
@@ -91,13 +125,16 @@ func call_user(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, nm: str): Llv:
     sig := pick_overload(v, s, a, fsym, n)
     ensure_fn(v, s, a, sm.SigAt(s, sig).decl, 0, v.pkg_scope)
     nn := at.Get(a, n)
+    // The C name, for an extern only: a Salam function called `malloc` is
+    // not the libc one and must not have its arguments narrowed.
+    cname := sm.SigAt(s, sig).decl != 0 && at.Get(a, sm.SigAt(s, sig).decl).is_extern ? nm : ""
     mut ab := co.SbNew()
     mut i := 0
     until i < nn.list.len():
         if i > 0:
             co.SbPuts(ab, ", ")
         end
-        emit_arg(v, s, a, ab, nn.list.get(i), sig, i)
+        emit_arg(v, s, a, ab, nn.list.get(i), sig, i, cname)
         i += 1
     end
     fill_defaults(v, s, a, ab, n, sig, nn.list.len() == 0)
@@ -201,7 +238,7 @@ func emit_call(
         if !first:
             co.SbPuts(ab, ", ")
         end
-        emit_arg(v, s, a, ab, nn.list.get(i), sig, i)
+        emit_arg(v, s, a, ab, nn.list.get(i), sig, i, fname)
         first = false
         i += 1
     end

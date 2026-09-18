@@ -93,7 +93,34 @@ func ll_enqueue_imports(a &: at.Ast, prog: int, dir: str, lang: str, work &: Vec
         end
         if !known:
             work.push(ipath)
+            ll_enqueue_pkg_siblings(ipath, work)
         end
+    end
+end
+
+// A package is a DIRECTORY of .salam files and an import resolves to only
+// one of them, so following imports alone misses every `link` declared in a
+// sibling. std/tls spells its Windows trust-store dependency
+// `link dynamic "crypt32"` in roots.salam, not tls.salam, so the LLVM link
+// never saw it and any program reaching that code failed with undefined
+// CertOpenSystemStoreA / CertEnumCertificatesInStore / CertCloseStore. The C
+// backend does not have the bug because it compiles every file of every
+// package and scans them all. Entry 0 is the file itself, already queued.
+func ll_enqueue_pkg_siblings(path: str, work &: Vector<str>):
+    pfiles := sm.PackageFiles(path)
+    mut pi := 1
+    until pi < pfiles.len():
+        ppath := pfiles.get(pi)
+        mut dup := false
+        repeat work.len() with pj:
+            if str.Equals(work.get(pj), ppath):
+                dup = true
+            end
+        end
+        if !dup:
+            work.push(ppath)
+        end
+        pi += 1
     end
 end
 
@@ -111,6 +138,7 @@ func ll_gather_links(
     mut work := Vector {} as Vector<str>
     defer work.free()
     ll_enqueue_imports(a, main_prog, dir_of(main_path), main_lang, work)
+    ll_enqueue_pkg_siblings(main_path, work)
     mut wi := 0
     until wi < work.len():
         path := work.get(wi)

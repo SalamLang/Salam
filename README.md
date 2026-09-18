@@ -644,6 +644,23 @@ Terms used across this readme, the [Contributing Guide](CONTRIBUTING.md), and th
 | **[Wrangler](https://developers.cloudflare.com/workers/wrangler/)** | Cloudflare's CLI for building and deploying Workers. The `runner/` workspace uses Wrangler for local development (`wrangler dev`) and CI type generation. |
 | **[yamllint](https://github.com/adrienverge/yamllint)** | YAML linter. Run as a prek hook to validate `.yml` workflow and configuration files. |
 
+## Licence
+
+Salam is licensed under the **GNU General Public License v3.0**. See [LICENSE](LICENSE).
+
+One directory is deliberately excepted:
+
+| Path | Licence |
+| --- | --- |
+| Everything not listed below | GPL-3.0 |
+| [`extensions/vscode/`](extensions/vscode/) | MIT, see [extensions/vscode/LICENSE](extensions/vscode/LICENSE) |
+
+The VS Code extension, and in particular the TextMate grammar it ships at `extensions/vscode/syntaxes/salam.tmLanguage.json`, is MIT so that other projects can vendor it. Syntax highlighting is only useful if editors, code-hosting sites and documentation tools can embed it, and several will not accept a copyleft grammar. [GitHub Linguist](https://github.com/github-linguist/linguist), for example, accepts grammar dependencies only under permissive licences.
+
+The files the extension actually publishes are all editor data with no GPL dependency. Its `src/` and `scripts/` are written in Salam and import the standard library, so they are GPL-derived when built, and [`.vscodeignore`](extensions/vscode/.vscodeignore) keeps both out of the published `.vsix`. See [extensions/vscode/README.md](extensions/vscode/README.md#licence) for the detail.
+
+Keeping the exception inside the monorepo means the grammar stays generated from the compiler's own keyword tables and cannot drift out of step with the language.
+
 ---
 
 © 2024-2026 Salam Language Team

@@ -125,32 +125,44 @@ os="$(uname -s)"
 arch="$(uname -m)"
 case "$arch" in
 x86_64 | amd64)
-    platform="linux"
+    platforms="linux-x86_64 linux"
     ;;
 i386 | i486 | i586 | i686 | x86)
-    platform="linux-i686"
+    platforms="linux-i686"
     ;;
 aarch64 | arm64)
-    platform="linux-aarch64"
+    platforms="linux-aarch64"
     ;;
 armv6l | armv7l | armv7 | arm)
-    platform="linux-armhf"
+    platforms="linux-armhf"
     ;;
 *)
     die "unsupported architecture: $arch"
     ;;
 esac
+platform="${platforms%% *}"
 
 workdir="$(mktemp -d 2>/dev/null || mktemp -d -t salam)"
 trap 'rm -rf "$workdir"' EXIT INT TERM
 archive="$workdir/download.zip"
 
 if [ -n "$VERSION" ]; then
-    ASSET="salam-${VERSION}-${platform}.zip"
-    URL="https://github.com/${REPO}/releases/download/v${VERSION}/${ASSET}"
+    found=0
+    for p in $platforms; do
+        asset="salam-${VERSION}-${p}.zip"
+        url="https://github.com/${REPO}/releases/download/v${VERSION}/${asset}"
+        if fetch_to_file "$url" "$archive" 2>/dev/null && [ -s "$archive" ]; then
+            platform="$p"
+            ASSET="$asset"
+            URL="$url"
+            found=1
+            break
+        fi
+        rm -f "$archive"
+    done
+    [ "$found" = 1 ] || die "no asset for $arch in release v${VERSION}"
     log "Installing Salam ${VERSION} (${platform}) from:"
     log "  $URL"
-    fetch_to_file "$URL" "$archive" || die "download failed: $URL"
 else
     log "Resolving latest Salam release with a ${platform} asset..."
     tags="$(list_release_tags)"
@@ -163,17 +175,23 @@ else
     found=0
     for tag in $tags; do
         v="${tag#v}"
-        asset="salam-${v}-${platform}.zip"
-        url="https://github.com/${REPO}/releases/download/${tag}/${asset}"
         log "  trying ${tag}..."
-        if fetch_to_file "$url" "$archive" 2>/dev/null && [ -s "$archive" ]; then
-            VERSION="$v"
-            ASSET="$asset"
-            URL="$url"
-            found=1
+        for p in $platforms; do
+            asset="salam-${v}-${p}.zip"
+            url="https://github.com/${REPO}/releases/download/${tag}/${asset}"
+            if fetch_to_file "$url" "$archive" 2>/dev/null && [ -s "$archive" ]; then
+                platform="$p"
+                VERSION="$v"
+                ASSET="$asset"
+                URL="$url"
+                found=1
+                break
+            fi
+            rm -f "$archive"
+        done
+        if [ "$found" = 1 ]; then
             break
         fi
-        rm -f "$archive"
     done
     [ "$found" = 1 ] || die "no release under https://github.com/${REPO}/releases publishes a ${platform} asset"
     log "Installing Salam ${VERSION} (${platform}) from:"

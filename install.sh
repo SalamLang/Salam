@@ -1019,9 +1019,9 @@ else
             # both means a release that publishes only one still resolves.
             if [ "$LIBC" = "musl" ] || [ "$LIBC" = "unknown" ] ||
                 glibc_below_floor; then
-                PLATFORMS="linux-musl linux linux-x86_64"
+                PLATFORMS="linux-x86_64-musl linux-musl linux-x86_64 linux"
             else
-                PLATFORMS="linux linux-musl linux-x86_64"
+                PLATFORMS="linux-x86_64 linux linux-x86_64-musl linux-musl"
             fi
             ;;
         i386 | i486 | i586 | i686 | x86) PLATFORMS="linux-i686" ;;
@@ -1035,8 +1035,8 @@ else
         ;;
     mac)
         case "$ARCH" in
-        arm64 | aarch64) PLATFORMS="mac mac-aarch64 mac-arm64" ;;
-        *) PLATFORMS="mac mac-x86_64" ;;
+        arm64 | aarch64) PLATFORMS="macos-arm64 mac mac-aarch64 mac-arm64" ;;
+        *) PLATFORMS="macos-x86_64 mac mac-x86_64" ;;
         esac
         ;;
     bsd)

@@ -479,7 +479,22 @@ func vec_emit(g &: Cg, ts: str):
     outh(g, "#endif\n")
 end
 
-func hdr_prelude(g &: Cg, a &: at.Ast, program: int):
+// One of the five names spelled the way <string.h> spells them. A program
+// that defines the name itself gets no declaration here: its own definition
+// is the declaration, and libc's spelling would only conflict with it.
+func rt_decl(g &: Cg, s &: sm.Sema, a &: at.Ast, name: str, proto: str):
+    did := libc_definition(a, name)
+    if did == 0:
+        outh(g, proto)
+        ret
+    end
+    sig := sig_for_decl(s, did)
+    if sig != 0:
+        outh(g, cg_extern_proto(s, a, did, sig) + ";\n")
+    end
+end
+
+func hdr_prelude(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
     outh(g, "#pragma once\n")
     guard := cg_cident(g.module)
     outh(
@@ -630,9 +645,13 @@ func hdr_prelude(g &: Cg, a &: at.Ast, program: int):
     // a `char**` parameter, so the C text is written out here instead of being
     // derived from a salam signature - same reason libc_canonical_proto exists
     // for the extern blocks in std/.
-    outh(
-        g, "#ifndef SALAM_RT_STR_DEFINED\n#define SALAM_RT_STR_DEFINED\n" + "extern size_t strlen(const char* s);\n" + "extern int strcmp(const char* a, const char* b);\n" + "extern char* strstr(const char* haystack, const char* " + "needle);\n" + "extern long strtol(const char* s, char** endptr, int " + "base);\n" + "extern double strtod(const char* s, char** endptr);\n" + "#endif\n"
-    )
+    outh(g, "#ifndef SALAM_RT_STR_DEFINED\n#define SALAM_RT_STR_DEFINED\n")
+    rt_decl(g, s, a, "strlen", "extern size_t strlen(const char* s);\n")
+    rt_decl(g, s, a, "strcmp", "extern int strcmp(const char* a, const char* b);\n")
+    rt_decl(g, s, a, "strstr", "extern char* strstr(const char* haystack, const char* needle);\n")
+    rt_decl(g, s, a, "strtol", "extern long strtol(const char* s, char** endptr, int base);\n")
+    rt_decl(g, s, a, "strtod", "extern double strtod(const char* s, char** endptr);\n")
+    outh(g, "#endif\n")
     outh(
         g, "#ifndef SALAM_RT_STR2_DEFINED\n#define SALAM_RT_STR2_DEFINED\n" + "extern const char* salam_strcat(const char* a, const char* " + "b);\n" + "extern const char* salam_char_from_code(int32_t c);\n" + "extern const char* salam_fmt_f64(double v);\n" + "extern const char* salam_str_substr(const char* s, int32_t " + "start, int32_t n);\n" + "extern const char* salam_str_trim(const char* s);\n" + "extern void* salam_str_split(const char* s, const char* " + "delim, void* out_count);\n" + "extern const char* salam_str_repeat(const char* s, int32_t " + "n);\n" + "extern const char* salam_str_upper(const char* s);\n" + "extern const char* salam_str_lower(const char* s);\n" + "#endif\n"
     )
@@ -1054,6 +1073,40 @@ func is_stdio_name(name: str): bool:
     ret false
 end
 
+// Whether the program supplies this name itself: an `extern:` entry with a
+// body, anywhere in the program. libc's prototype is what a CALLER needs;
+// where the program is the one defining the function, the definition is its
+// own declaration, and libc's spelling only collides with it - `memcpy`
+// declared `const void*` against a definition that cannot say `const` is a
+// hard error, which is what kept a freestanding runtime out of Salam.
+func libc_definition(a &: at.Ast, name: str): int:
+    total := at.Count(a)
+    mut i := 1
+    until i < total:
+        n := at.Get(a, i)
+        if n.kind == at.AST_FUNC_DEF && n.is_extern && n.a != 0 && str.Equals(n.name, name):
+            ret i
+        end
+        i += 1
+    end
+    ret 0
+end
+
+// The signature belonging to one declaration, found by the declaration
+// rather than by name: two of these names can be declared in several
+// packages at once, and only one of them is the definition.
+func sig_for_decl(s &: sm.Sema, decl: int): int:
+    total := sm.SigCount(s)
+    mut i := 1
+    until i < total:
+        if sm.SigAt(s, i).decl == decl:
+            ret i
+        end
+        i += 1
+    end
+    ret 0
+end
+
 // <string.h>/<stdlib.h> names whose real prototype salam's type vocabulary
 // cannot express, so an `extern func memcpy(dst: void*, src: void*, n: u64)`
 // in std/mem came out as a declaration both gcc and clang consider
@@ -1170,7 +1223,10 @@ func hdr_externs(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
                 if str.Len(guard) > 0:
                     outh(g, "#ifndef " + guard + "\n")
                 end
-                mut proto := libc_canonical_proto(d.name)
+                mut proto := ""
+                if libc_definition(a, d.name) == 0:
+                    proto = libc_canonical_proto(d.name)
+                end
                 if str.Len(proto) == 0:
                     proto = cg_extern_proto(s, a, did, sig)
                 end
@@ -1306,7 +1362,7 @@ func hdr_impl_prototypes(g &: Cg, s &: sm.Sema, a &: at.Ast):
 end
 
 func cg_header_impl(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
-    hdr_prelude(g, a, program)
+    hdr_prelude(g, s, a, program)
     hdr_enums(g, s, a, program)
     hdr_struct_fwd(g, s, a, program)
     hdr_struct_fwd_imports(g, s, a)

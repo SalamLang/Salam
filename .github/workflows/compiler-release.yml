@@ -478,7 +478,7 @@ jobs:
         run: |
           set -eu
           VERSION=$(tr -d ' \t\r\n' < VERSION)
-          DIST="salam-linux"
+          DIST="salam-linux-x86_64"
           mkdir -p "$DIST"
           cp salam "$DIST/salam"
           cp -r std "$DIST/std"
@@ -514,19 +514,16 @@ jobs:
               echo "sysroot. macOS targets are not supported (Apple SDK restrictions)."
             fi
           } > "$DIST/RUN-ME.txt"
-          zip -r "salam-${VERSION}-linux.zip" "$DIST" >/dev/null
-          # Same tree as the .zip, as a .tar.gz too: it is what Unix
-          # reaches for, and it carries the executable bit on salam
-          # without anyone having to chmod after unzipping.
-          tar -czf "salam-${VERSION}-linux.tar.gz" "$DIST"
-          ls -la "salam-${VERSION}-linux.zip" "salam-${VERSION}-linux.tar.gz"
+          zip -r "salam-${VERSION}-linux-x86_64.zip" "$DIST" >/dev/null
+          tar -czf "salam-${VERSION}-linux-x86_64.tar.gz" "$DIST"
+          ls -la "salam-${VERSION}-linux-x86_64.zip" "salam-${VERSION}-linux-x86_64.tar.gz"
       - name: Upload versioned archive
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: salam-linux-zip
           path: |
-            salam-*-linux.zip
-            salam-*-linux.tar.gz
+            salam-*-linux-x86_64.zip
+            salam-*-linux-x86_64.tar.gz
       - name: Upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -535,9 +532,6 @@ jobs:
   build-linux-musl:
     name: Build Salam for Linux (x86_64 musl, fully static)
     runs-on: ubuntu-latest
-    # Never blocks a release. This is the portability fallback asset, not a
-    # platform in its own right: if it fails to build, the release still goes
-    # out with the glibc bundles and install.sh keeps its old behaviour.
     continue-on-error: true
     steps:
       - name: Checkout code
@@ -554,21 +548,9 @@ jobs:
       - name: Build a fully static salam against musl
         run: |
           set -eu
-          # --cc takes a path, so a two-line wrapper is how -static reaches
-          # the link without teaching the driver a new flag. musl rather than
-          # glibc-static because this binary has to resolve DNS: a static
-          # glibc still dlopen()s NSS at runtime and warns about it at link
-          # time, while musl's resolver is genuinely self-contained.
           printf '#!/bin/sh\nexec musl-gcc -static "$@"\n' > /tmp/musl-static-cc
           chmod +x /tmp/musl-static-cc
 
-          # --backend=c on purpose: the LLVM backend links libsalam_llvm.a,
-          # a C++ archive built against the host glibc, which cannot go into
-          # a static musl binary. A seed compiler does not need the embedded
-          # LLVM - it only has to be able to build the real one.
-          # After `--`: build-selfhost.sh parses its own flags first and
-          # rejects anything it does not know, so salam build options have to
-          # be handed over explicitly.
           sh tools/bash/build-selfhost.sh -- --backend=c --cc=/tmp/musl-static-cc
       - name: It must be static, and it must run
         run: |
@@ -589,7 +571,7 @@ jobs:
         run: |
           set -eu
           VERSION=$(tr -d ' \t\r\n' < VERSION)
-          DIST="salam-linux-musl"
+          DIST="salam-linux-x86_64-musl"
           mkdir -p "$DIST"
           cp salam "$DIST/salam"
           cp -r std "$DIST/std"
@@ -611,16 +593,16 @@ jobs:
             echo "and has no --jit. For that, use the glibc bundle on a host new enough"
             echo "to run it."
           } > "$DIST/RUN-ME.txt"
-          zip -r "salam-${VERSION}-linux-musl.zip" "$DIST" >/dev/null
-          tar -czf "salam-${VERSION}-linux-musl.tar.gz" "$DIST"
-          ls -la "salam-${VERSION}-linux-musl.zip" "salam-${VERSION}-linux-musl.tar.gz"
+          zip -r "salam-${VERSION}-linux-x86_64-musl.zip" "$DIST" >/dev/null
+          tar -czf "salam-${VERSION}-linux-x86_64-musl.tar.gz" "$DIST"
+          ls -la "salam-${VERSION}-linux-x86_64-musl.zip" "salam-${VERSION}-linux-x86_64-musl.tar.gz"
       - name: Upload versioned archive
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: salam-linux-musl-zip
           path: |
-            salam-*-linux-musl.zip
-            salam-*-linux-musl.tar.gz
+            salam-*-linux-x86_64-musl.zip
+            salam-*-linux-x86_64-musl.tar.gz
 
   build-macos:
     name: Build Salam for macOS
@@ -652,7 +634,31 @@ jobs:
 
           brew untap aws/tap || true
           brew install llvm@22 ccache
-          "$(brew --prefix llvm@22)/bin/llvm-config" --version
+
+          brew link --overwrite --force llvm@22 \
+            || echo "::warning::brew could not link llvm@22; the absolute prefix below still governs the build"
+
+          LLVM_PREFIX="$(brew --prefix llvm@22)"
+          echo "$LLVM_PREFIX/bin" >> "$GITHUB_PATH"
+
+          LLVM_VER="$("$LLVM_PREFIX/bin/llvm-config" --version)"
+          echo "llvm-config: $LLVM_VER  ($LLVM_PREFIX)"
+          case "$LLVM_VER" in
+          22.*) ;;
+          *)
+              echo "::error::expected LLVM 22 from the llvm@22 keg, got $LLVM_VER"
+              exit 1
+              ;;
+          esac
+
+          if command -v llvm-config >/dev/null 2>&1; then
+              BARE_VER="$(llvm-config --version 2>/dev/null || echo unknown)"
+              echo "bare llvm-config on PATH: $BARE_VER"
+              case "$BARE_VER" in
+              22.*) ;;
+              *) echo "::warning::a bare llvm-config on PATH is $BARE_VER, not 22" ;;
+              esac
+          fi
 
           PKGS_AFTER=$(fingerprint "$HOME/Library/Caches/Homebrew/downloads")
           if [ -n "$PKGS_AFTER" ] && [ "$PKGS_BEFORE" = "$PKGS_AFTER" ]; then
@@ -730,7 +736,7 @@ jobs:
         run: |
           set -eu
           VERSION=$(tr -d ' \t\r\n' < VERSION)
-          DIST="salam-mac"
+          DIST="salam-macos-arm64"
           mkdir -p "$DIST"
           cp salam "$DIST/salam"
           cp -r std "$DIST/std"
@@ -748,19 +754,16 @@ jobs:
             echo "is not redistributable, so linking uses Apple's toolchain. Cross-"
             echo "compiling FROM Linux/Windows TO macOS is likewise not supported."
           } > "$DIST/RUN-ME.txt"
-          zip -r "salam-${VERSION}-mac.zip" "$DIST" >/dev/null
-          # Same tree as the .zip, as a .tar.gz too: it is what Unix
-          # reaches for, and it carries the executable bit on salam
-          # without anyone having to chmod after unzipping.
-          tar -czf "salam-${VERSION}-mac.tar.gz" "$DIST"
-          ls -la "salam-${VERSION}-mac.zip" "salam-${VERSION}-mac.tar.gz"
+          zip -r "salam-${VERSION}-macos-arm64.zip" "$DIST" >/dev/null
+          tar -czf "salam-${VERSION}-macos-arm64.tar.gz" "$DIST"
+          ls -la "salam-${VERSION}-macos-arm64.zip" "salam-${VERSION}-macos-arm64.tar.gz"
       - name: Upload versioned archive
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: salam-macos-zip
           path: |
-            salam-*-mac.zip
-            salam-*-mac.tar.gz
+            salam-*-macos-arm64.zip
+            salam-*-macos-arm64.tar.gz
       - name: Upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -1369,20 +1372,17 @@ jobs:
         shell: bash
         run: |
           VERSION=$(tr -d ' \t\r\n' < VERSION)
-          7z a -tzip "salam-${VERSION}-windows.zip" salam-windows >/dev/null
-          # Same tree as the .zip, as a .tar.gz too: it is what Unix
-          # reaches for, and it carries the executable bit on salam
-          # without anyone having to chmod after unzipping.
-          tar -czf "salam-${VERSION}-windows.tar.gz" salam-windows
-          ls -la "salam-${VERSION}-windows.zip" "salam-${VERSION}-windows.tar.gz"
+          7z a -tzip "salam-${VERSION}-windows-x86_64.zip" salam-windows >/dev/null
+          tar -czf "salam-${VERSION}-windows-x86_64.tar.gz" salam-windows
+          ls -la "salam-${VERSION}-windows-x86_64.zip" "salam-${VERSION}-windows-x86_64.tar.gz"
 
       - name: Upload self-contained bundle
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: salam-windows-bundle
           path: |
-            salam-*-windows.zip
-            salam-*-windows.tar.gz
+            salam-*-windows-x86_64.zip
+            salam-*-windows-x86_64.tar.gz
 
       - name: Upload salam.exe
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -1641,9 +1641,6 @@ jobs:
         run: |
           VERSION=$(tr -d ' \t\r\n' < VERSION)
           zip -r "salam-${VERSION}-windows-i686.zip" salam-windows-i686 >/dev/null
-          # Same tree as the .zip, as a .tar.gz too: it is what Unix
-          # reaches for, and it carries the executable bit on salam
-          # without anyone having to chmod after unzipping.
           tar -czf "salam-${VERSION}-windows-i686.tar.gz" salam-windows-i686
           ls -la "salam-${VERSION}-windows-i686.zip" "salam-${VERSION}-windows-i686.tar.gz"
 
@@ -1766,9 +1763,6 @@ jobs:
             fi
           } > "$DIST/RUN-ME.txt"
           zip -r "salam-${VERSION}-linux-i686.zip" "$DIST" >/dev/null
-          # Same tree as the .zip, as a .tar.gz too: it is what Unix
-          # reaches for, and it carries the executable bit on salam
-          # without anyone having to chmod after unzipping.
           tar -czf "salam-${VERSION}-linux-i686.tar.gz" "$DIST"
           ls -la "salam-${VERSION}-linux-i686.zip" "salam-${VERSION}-linux-i686.tar.gz"
       - name: Upload versioned archive
@@ -1799,7 +1793,7 @@ jobs:
           sudo apt-get install -y musl-tools musl-dev mingw-w64
           sh tools/bash/stage-sysroots.sh --out="$GITHUB_WORKSPACE/sysroots"
       - name: Set up QEMU (armhf containers need user-mode emulation; i386 doesn't)
-        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+        uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4.3.0
         with:
           platforms: arm
       - name: Cache ccache (Linux armhf)
@@ -1888,9 +1882,6 @@ jobs:
             fi
           } > "$DIST/RUN-ME.txt"
           zip -r "salam-${VERSION}-linux-armhf.zip" "$DIST" >/dev/null
-          # Same tree as the .zip, as a .tar.gz too: it is what Unix
-          # reaches for, and it carries the executable bit on salam
-          # without anyone having to chmod after unzipping.
           tar -czf "salam-${VERSION}-linux-armhf.tar.gz" "$DIST"
           ls -la "salam-${VERSION}-linux-armhf.zip" "salam-${VERSION}-linux-armhf.tar.gz"
       - name: Upload versioned archive
@@ -2077,9 +2068,6 @@ jobs:
             fi
           } > "$DIST/RUN-ME.txt"
           zip -r "salam-${VERSION}-linux-aarch64.zip" "$DIST" >/dev/null
-          # Same tree as the .zip, as a .tar.gz too: it is what Unix
-          # reaches for, and it carries the executable bit on salam
-          # without anyone having to chmod after unzipping.
           tar -czf "salam-${VERSION}-linux-aarch64.tar.gz" "$DIST"
           ls -la "salam-${VERSION}-linux-aarch64.zip" "salam-${VERSION}-linux-aarch64.tar.gz"
       - name: Upload versioned archive
@@ -2288,11 +2276,6 @@ jobs:
           mkdir -p ./release
           out="./release/salam-${VERSION}-stdlib-index.json"
 
-          # Stamp the release copy with the version and commit it was cut
-          # from, so a downloaded index says which std/ it describes. The
-          # committed docs/ai/stdlib-index.json deliberately stays without
-          # them: the MCP server computes that file live and CI fails when
-          # the two disagree, so a stamp there would break on every commit.
           jq --arg version "$VERSION" --arg commit "$GITHUB_SHA" \
              '{version: $version, commit: $commit} + .' "$src" > "$out"
 
@@ -2368,10 +2351,6 @@ jobs:
               -czf "${OUT_DIR}/salam-${VERSION}-stdlib.tar.gz" \
               -C "$STAGE_ROOT" "$STAGE_DIR"
 
-          # The same tree as a .zip, because that is what Windows opens
-          # without installing anything. Timestamps are pinned and entries
-          # fed in sorted order so the archive is reproducible the way the
-          # tarball's --sort=name/--mtime make it.
           find "$STAGE_ROOT" -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
           ( cd "$STAGE_ROOT" \
             && find "$STAGE_DIR" -print | LC_ALL=C sort \
@@ -2384,8 +2363,6 @@ jobs:
             [ -d "$STAGE/$pkg" ] || { echo "::error::stdlib archive is missing $pkg"; exit 1; }
           done
 
-          # Both archives must carry the same file list; a zip that quietly
-          # lost half the tree would still look fine on the release page.
           tar_n=$(tar -tzf "${OUT_DIR}/salam-${VERSION}-stdlib.tar.gz" | grep -c '\.salam$' || true)
           zip_n=$(unzip -Z1 "${OUT_DIR}/salam-${VERSION}-stdlib.zip" | grep -c '\.salam$' || true)
           echo "tar.gz holds ${tar_n} .salam files, zip holds ${zip_n}"
@@ -2403,50 +2380,10 @@ jobs:
             (cd ./release && sha256sum "salam-${VERSION}-stdlib.tar.gz" "salam-${VERSION}-stdlib.zip")
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-      # - name: Post Linux release file to SERVER_VERSIONS_API
-      #   env:
-      #     SERVER_VERSIONS_API: ${{ secrets.SERVER_VERSIONS_API }}
-      #     SERVER_VERSIONS_KEY: ${{ secrets.SERVER_VERSIONS_KEY }}
-      #   run: |
-      #     curl -X POST "$SERVER_VERSIONS_API" \
-      #       -F "file=@./release/salam-linux" \
-      #       -F "version=${{ env.VERSION }}" \
-      #       -F "date=$(date +'%Y-%m-%d')" \
-      #       -F "time=$(date +'%H:%M:%S')" \
-      #       -F "key='$SERVER_VERSIONS_KEY'" \
-      #       -F "platform=linux"
-      # - name: Post macOS release file to SERVER_VERSIONS_API
-      #   env:
-      #     SERVER_VERSIONS_API: ${{ secrets.SERVER_VERSIONS_API }}
-      #     SERVER_VERSIONS_KEY: ${{ secrets.SERVER_VERSIONS_KEY }}
-      #   run: |
-      #     curl -X POST "$SERVER_VERSIONS_API" \
-      #       -F "file=@./release/salam-mac" \
-      #       -F "version=${{ env.VERSION }}" \
-      #       -F "date=$(date +'%Y-%m-%d')" \
-      #       -F "time=$(date +'%H:%M:%S')" \
-      #       -F "key='$SERVER_VERSIONS_KEY'" \
-      #       -F "platform=macos"
-      # - name: Post Windows release file to SERVER_VERSIONS_API
-      #   env:
-      #     SERVER_VERSIONS_API: ${{ secrets.SERVER_VERSIONS_API }}
-      #     SERVER_VERSIONS_KEY: ${{ secrets.SERVER_VERSIONS_KEY }}
-      #   run: |
-      #     curl -X POST "$SERVER_VERSIONS_API" \
-      #       -F "file=@./release/salam-windows.exe" \
-      #       -F "version=${{ env.VERSION }}" \
-      #       -F "date=$(date +'%Y-%m-%d')" \
-      #       -F "time=$(date +'%H:%M:%S')" \
-      #       -F "key='$SERVER_VERSIONS_KEY'" \
-      #       -F "platform=windows"
       - name: Check every zip has a matching tar.gz
         run: |
           set -eu
           shopt -s nullglob
-          # Runs before the release is deleted below: a half-built set of
-          # assets must not be able to take the previous release down with
-          # it. Compares file entries only, since a zip and a tar disagree
-          # about whether directories are entries in their own right.
           fail=0
           for z in release/salam-*.zip; do
             t="${z%.zip}.tar.gz"
@@ -2483,26 +2420,77 @@ jobs:
           fi
           gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/tags/$TAG" >/dev/null 2>&1 || true
           git tag -d "$TAG" 2>/dev/null || true
+      - name: Create a signed, annotated tag
+        id: signtag
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          GPG_SIGNING_KEY_ID: ${{ secrets.GPG_SIGNING_KEY_ID }}
+          GIT_TAGGER_NAME: ${{ secrets.GIT_TAGGER_NAME }}
+          GIT_TAGGER_EMAIL: ${{ secrets.GIT_TAGGER_EMAIL }}
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          if [ -z "${GPG_PRIVATE_KEY:-}" ]; then
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "no GPG_PRIVATE_KEY secret; the release will carry an unsigned lightweight tag"
+            exit 0
+          fi
+
+          printf '%s\n' "$GPG_PRIVATE_KEY" | gpg --batch --quiet --import
+          KEY_ID="${GPG_SIGNING_KEY_ID:-}"
+          if [ -z "$KEY_ID" ]; then
+            KEY_ID=$(gpg --list-secret-keys --with-colons | awk -F: '/^sec:/ {print $5; exit}')
+          fi
+          [ -n "$KEY_ID" ] || { echo "::error::imported a GPG key but could not read its id"; exit 1; }
+          echo "signing with $KEY_ID"
+
+          mkdir -p "$HOME/.gnupg"
+          chmod 700 "$HOME/.gnupg"
+          echo "allow-loopback-pinentry" >> "$HOME/.gnupg/gpg-agent.conf"
+          gpgconf --reload gpg-agent || true
+
+          KEY_UID=$(gpg --list-keys --with-colons "$KEY_ID" | awk -F: '/^uid:/ {print $10; exit}')
+          KEY_EMAIL=$(printf '%s' "$KEY_UID" | sed -n 's/.*<\(.*\)>.*/\1/p')
+          KEY_NAME=$(printf '%s' "$KEY_UID" | sed 's/ *<.*//')
+          git config user.name "${GIT_TAGGER_NAME:-${KEY_NAME:-$GITHUB_ACTOR}}"
+          git config user.email "${GIT_TAGGER_EMAIL:-${KEY_EMAIL:-$GITHUB_ACTOR@users.noreply.github.com}}"
+          echo "tagging as $(git config user.name) <$(git config user.email)>"
+          git config user.signingkey "$KEY_ID"
+          cat > .gpg-batch <<'GPGWRAP'
+          #!/bin/sh
+          if [ -n "${GPG_PASSPHRASE:-}" ]; then
+              exec gpg --batch --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" "$@"
+          fi
+          exec gpg --batch --pinentry-mode loopback "$@"
+          GPGWRAP
+          sed -i 's/^          //' .gpg-batch
+          chmod +x .gpg-batch
+          git config gpg.program "$PWD/.gpg-batch"
+          export GPG_PASSPHRASE
+
+          git tag -s "$TAG" -m "$RELEASE_TITLE" "$GITHUB_SHA"
+          git tag -v "$TAG" || { echo "::error::the tag did not verify locally"; exit 1; }
+
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "refs/tags/$TAG"
+          rm -f .gpg-batch
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+          echo "pushed a signed annotated tag $TAG"
+
       - name: Create GitHub Release with auto-generated notes
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          TAG_WAS_SIGNED: ${{ steps.signtag.outputs.signed }}
         run: |
           set -eu
           shopt -s nullglob
           candidates=(
-            # release/salam-linux
-            # release/salam-mac
-            # release/salam-windows.exe
-            # release/salam-linux-i686
-            # release/salam-windows-i686.exe
-            # release/salam-linux-aarch64
-            # release/salam-linux-armhf
             release/salam-*.zip
             release/salam-*.tar.gz
             release/salam-*-stdlib-index.json
             release/salam-*-stdlib-doc.html
-            release/salam-application-*.aab
-            release/salam-application-*.apk
+            release/salam-*-android.aab
+            release/salam-*-android-*.apk
           )
           assets=()
           for c in "${candidates[@]}"; do
@@ -2515,17 +2503,8 @@ jobs:
             done
           done
           [ "${#assets[@]}" -gt 0 ] || { echo "::error::no release assets matched"; exit 1; }
-          # Kept next to install.sh's GLIBC_FLOOR: both describe the same
-          # floor, and a release note that disagrees with the installer is
-          # worse than no note.
           GLIBC_FLOOR_NOTE="glibc 2.38"
 
-          # A .sha256 beside every asset, the way a distro ships one next to
-          # each .iso, plus a SHA256SUMS manifest that checks the whole
-          # release in one pass. Both hold bare basenames, never the
-          # release/ prefix this job stages under: the downloader verifies
-          # the file where it landed, so `sha256sum -c` has to find it in
-          # the working directory.
           : > release/SHA256SUMS
           sums=()
           for f in "${assets[@]}"; do
@@ -2535,8 +2514,6 @@ jobs:
           done
           sums+=("release/SHA256SUMS")
 
-          # Prove the manifest before it ships. A SHA256SUMS that does not
-          # verify is worse than none: it teaches people the check is noise.
           ( cd release && sha256sum -c SHA256SUMS ) \
             || { echo "::error::SHA256SUMS does not verify against the staged assets"; exit 1; }
 
@@ -2548,7 +2525,7 @@ jobs:
             echo "Check a single file:"
             echo ""
             echo '```'
-            echo "sha256sum -c salam-${VERSION}-linux.zip.sha256"
+            echo "sha256sum -c salam-${VERSION}-linux-x86_64.zip.sha256"
             echo '```'
             echo ""
             echo "Check everything you downloaded:"
@@ -2562,11 +2539,11 @@ jobs:
             echo ""
             echo "### Which Linux x86_64 build"
             echo ""
-            echo "\`linux\` is the flagship: embedded LLVM, LLD and sysroots, so it"
+            echo "\`linux-x86_64\` is the flagship: embedded LLVM, LLD and sysroots, so"
             echo "cross-compiles and JITs with nothing else installed. It links glibc"
             echo "and needs ${GLIBC_FLOOR_NOTE} or newer."
             echo ""
-            echo "\`linux-musl\` is fully static and loads no libc at all, so it runs on"
+            echo "\`linux-x86_64-musl\` is fully static and loads no libc at all, so it"
             echo "any x86_64 Linux - Amazon Linux, RHEL, Debian stable, Alpine, slim"
             echo "containers. It has no embedded LLVM, so no cross-compiling and no JIT."
             echo ""
@@ -2584,11 +2561,11 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-          # --notes-file prepends to the generated notes rather than
-          # replacing them, so the verification instructions land above the
-          # usual changelog instead of dropping it.
+          TARGET_ARG="--target $GITHUB_SHA"
+          [ "$TAG_WAS_SIGNED" = "true" ] && TARGET_ARG=""
+          # shellcheck disable=SC2086 # deliberately empty or two words
           gh release create "$TAG" \
-            --target "$GITHUB_SHA" \
+            $TARGET_ARG \
             --title "$RELEASE_TITLE" \
             --notes-file release-notes-preamble.md \
             --generate-notes \

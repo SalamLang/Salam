@@ -83,31 +83,38 @@ runs:
         arch="$RUNNER_ARCH"
 
         case "${os}-${arch}" in
-          Linux-X64)     slug="linux";         dist="salam-linux";         bin="salam" ;;
-          Linux-ARM64)   slug="linux-aarch64"; dist="salam-linux-aarch64"; bin="salam" ;;
-          Linux-ARM)     slug="linux-armhf";   dist="salam-linux-armhf";   bin="salam" ;;
-          Linux-X86)     slug="linux-i686";    dist="salam-linux-i686";    bin="salam" ;;
-          macOS-*)       slug="mac";           dist="salam-mac";           bin="salam" ;;
-          Windows-X64)   slug="windows";       dist="salam-windows";       bin="salam.exe" ;;
-          Windows-X86)   slug="windows-i686";  dist="salam-windows-i686";  bin="salam.exe" ;;
+          Linux-X64)     slugs="linux-x86_64 linux linux-x86_64-musl linux-musl"; bin="salam" ;;
+          Linux-ARM64)   slugs="linux-aarch64 linux-arm64";                       bin="salam" ;;
+          Linux-ARM)     slugs="linux-armhf linux-arm";                           bin="salam" ;;
+          Linux-X86)     slugs="linux-i686";                                      bin="salam" ;;
+          macOS-ARM64)   slugs="macos-arm64 mac mac-aarch64 mac-arm64";           bin="salam" ;;
+          macOS-X64)     slugs="macos-x86_64 mac mac-x86_64";                     bin="salam" ;;
+          Windows-X64)   slugs="windows-x86_64 windows";                          bin="salam.exe" ;;
+          Windows-X86)   slugs="windows-i686";                                    bin="salam.exe" ;;
           *)
             echo "::error::Unsupported runner platform ${os}-${arch}. Salam releases cover Linux (x64/arm64/armhf/i686), macOS, and Windows (x64/i686)." >&2
             exit 1
             ;;
         esac
 
-        asset="salam-${version}-${slug}.zip"
-        url="https://github.com/${repo}/releases/download/${tag}/${asset}"
-        if ! curl -fsIL --retry 2 -o /dev/null "$url"; then
-          alt="salam-${version}-${slug}-minimal.zip"
-          alt_url="https://github.com/${repo}/releases/download/${tag}/${alt}"
-          if curl -fsIL --retry 2 -o /dev/null "$alt_url"; then
-            asset=$alt
-            url=$alt_url
-          else
-            echo "::error::Neither ${asset} nor ${alt} exists on ${tag}." >&2
-            exit 1
-          fi
+        asset=
+        url=
+        tried=
+        for slug in $slugs; do
+          for candidate in "salam-${version}-${slug}.zip" "salam-${version}-${slug}-minimal.zip"; do
+            candidate_url="https://github.com/${repo}/releases/download/${tag}/${candidate}"
+            tried="${tried} ${candidate}"
+            if curl -fsIL --retry 2 -o /dev/null "$candidate_url"; then
+              asset=$candidate
+              url=$candidate_url
+              break 2
+            fi
+          done
+        done
+
+        if [ -z "$asset" ]; then
+          echo "::error::${tag} publishes no asset for ${os}-${arch}; tried:${tried}" >&2
+          exit 1
         fi
 
         raw="${RUNNER_TOOL_CACHE:-$HOME}/salam/${version}/${arch}"
@@ -123,7 +130,6 @@ runs:
           echo "tag=${tag}"
           echo "version=${version}"
           echo "asset=${asset}"
-          echo "dist=${dist}"
           echo "bin=${bin}"
           echo "url=${url}"
           echo "dir-bash=${dir_bash}"
@@ -182,21 +188,21 @@ runs:
       shell: bash
       env:
         SALAM_DIR: ${{ steps.resolve.outputs.dir-bash }}
-        SALAM_DIST: ${{ steps.resolve.outputs.dist }}
         SALAM_BIN: ${{ steps.resolve.outputs.bin }}
         ADD_TO_PATH: ${{ inputs.add-to-path }}
       run:
         | # zizmor: ignore[github-env] path is derived from resolved os/arch/version outputs, not attacker-controlled input
         set -euo pipefail
 
-        bindir="${SALAM_DIR}/${SALAM_DIST}"
-        salam="${bindir}/${SALAM_BIN}"
+        salam=$(find "$SALAM_DIR" -type f -name "$SALAM_BIN" 2>/dev/null | sed -n '1p') || true
 
-        if [ ! -f "$salam" ]; then
-          echo "::error::Expected Salam binary not found at ${salam} after extraction." >&2
+        if [ -z "$salam" ] || [ ! -f "$salam" ]; then
+          echo "::error::No ${SALAM_BIN} found under ${SALAM_DIR} after extraction." >&2
           ls -la "$SALAM_DIR" || true
           exit 1
         fi
+
+        bindir=$(dirname "$salam")
 
         [ "$RUNNER_OS" != "Windows" ] && chmod +x "$salam"
 

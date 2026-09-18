@@ -45,9 +45,9 @@ Change `scripts/gen_grammar.salam` and regenerate; a direct edit to the JSON wil
 
 **This directory is MIT licensed.** See [LICENSE](LICENSE).
 
-The wider Salam repository is GPL-3.0. This directory is deliberately the exception: editor tooling, and the TextMate grammar above all, is only useful if other people can vendor it. [GitHub Linguist](https://github.com/github-linguist/linguist) and similar projects accept grammar dependencies only under permissive licences, and nothing that merely embeds a grammar should take on a copyleft obligation to do so.
+The rest of the repository is copyleft; see the licence file at the repository root. This directory is deliberately the exception: editor tooling, and the TextMate grammar above all, is only useful if other people can vendor it. [GitHub Linguist](https://github.com/github-linguist/linguist) and similar projects accept grammar dependencies only under permissive licences, and nothing that merely embeds a grammar should take on a copyleft obligation to do so.
 
-Everything the extension ships is MIT and carries no GPL dependency:
+Everything the extension ships is MIT and carries no copyleft dependency:
 
 | Shipped file                                           | Notes                            |
 | ------------------------------------------------------ | -------------------------------- |
@@ -55,7 +55,7 @@ Everything the extension ships is MIT and carries no GPL dependency:
 | `language-configuration.json`, `snippets/`, `icons/`   | editor data                      |
 | `README.md`, `CHANGELOG.md`, `LICENSE`, `package.json` | metadata                         |
 
-One thing worth stating plainly rather than leaving implied: `src/` and `scripts/` are written in Salam and import the standard library, which is GPL-3.0. Both are excluded from the published extension by [`.vscodeignore`](.vscodeignore), so no GPL-derived code is distributed in the `.vsix`. If you build them yourself, the result combines this MIT code with the GPL standard library and the combination is governed accordingly.
+One thing worth stating plainly rather than leaving implied: `src/` and `scripts/` are written in Salam and import the standard library, which is copyleft. Both are excluded from the published extension by [`.vscodeignore`](.vscodeignore), so nothing derived from it is distributed in the `.vsix`. If you build them yourself, the result combines this MIT code with that library and the combination is governed accordingly.
 
 So a project that wants the grammar, the snippets or the language configuration can take them under MIT with nothing further to consider. That is the case Linguist and other consumers care about.
 

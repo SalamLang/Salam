@@ -1,0 +1,193 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package aws
+
+// Tags, ACLs and holds: the things attached to an object that are not the
+// object.
+//
+// Tags are the useful half. Unlike user metadata, a tag can be changed without
+// rewriting the object, and unlike a prefix, it can be used by a lifecycle
+// rule or an IAM policy to say "expire anything tagged temporary" or "only
+// this role may read anything tagged confidential". Ten per object, and they
+// are the right place for anything an operator will later want to select on.
+//
+// An ACL is the older mechanism and is disabled by default on any bucket
+// created since 2023; a bucket policy is what replaced it. The functions are
+// here because S3-compatible services still use ACLs and because an older
+// bucket may depend on one.
+
+import str
+
+// S3 allows ten tags per object and fifty per bucket. Refusing locally is
+// better than a rejection that names no key.
+const _S3_TAG_MAX := 50
+
+func _object_tag_request(method: str, key: str, version_id: str): Request:
+    mut r := NewRequest(method, key)
+    SetFlag(r, "tagging")
+    if version_id.len() > 0: SetQuery(r, "versionId", version_id) end
+    ret r
+end
+
+// ------------------------------------------------------------- public API
+
+// NewTags - an empty tag set. A Headers, because a tag set is exactly an
+// ordered list of name/value pairs.
+pub func NewTags(): Headers: ret Headers {} end
+
+// TagSet - a tag set from the pairs a caller has.
+pub func TagSet(h &: Headers, name: str, value: str): HeaderSet(h, name, value) end
+
+// TagString - a tag set as the `x-amz-tagging` header spells it: URL-encoded
+// pairs joined by `&`.
+//
+// This is the form that attaches tags at upload time, in the same request as
+// the object, rather than in a second call that can fail on its own.
+pub func TagString(tags: Headers): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    mut i := 0
+    until i < tags.names.len():
+        if i > 0: str.BufAppend(sb, "&") end
+        str.BufAppend(sb, UriEncode(tags.names.get(i), false))
+        str.BufAppend(sb, "=")
+        str.BufAppend(sb, UriEncode(tags.values.get(i), false))
+        i += 1
+    end
+    ret str.BufStr(sb)
+end
+
+// S3SetObjectTags - replace an object's tag set.
+//
+// Replace, not merge: S3 has no partial update here, so a caller adding one
+// tag must read the set, add to it, and write it back. Doing that from two
+// places at once loses one of the writes, which is a property of the service.
+pub func S3SetObjectTags(cfg: Config, key: str, tags: Headers): Result:
+    if tags.names.len() > _S3_TAG_MAX:
+        ret Failure("an object may carry at most " + _S3_TAG_MAX + " tags")
+    end
+    mut r := _object_tag_request("PUT", key, "")
+    body := _tag_body(tags)
+    SetText(r, body)
+    SetHeader(r, "Content-Type", "application/xml")
+    SetHeader(r, "Content-MD5", S3ContentMd5(body as void*, body.len()))
+    ret Do(cfg, r)
+end
+
+// S3ObjectTags - an object's tags, empty when it has none.
+pub func S3ObjectTags(cfg: Config, key: str): Headers:
+    ret _parse_tags(Do(cfg, _object_tag_request("GET", key, "")))
+end
+
+// S3ObjectTagsVersion - the tags of one version of an object.
+pub func S3ObjectTagsVersion(cfg: Config, key: str, version_id: str): Headers:
+    ret _parse_tags(Do(cfg, _object_tag_request("GET", key, version_id)))
+end
+
+// S3DeleteObjectTags - remove every tag from an object.
+pub func S3DeleteObjectTags(cfg: Config, key: str): Result:
+    ret Do(cfg, _object_tag_request("DELETE", key, ""))
+end
+
+// S3AddObjectTag - read, add one, write back.
+//
+// The convenience S3 does not offer, with the race it implies: two callers
+// adding a tag at the same moment will leave one of the two tags behind.
+pub func S3AddObjectTag(cfg: Config, key: str, name: str, value: str): Result:
+    mut tags := S3ObjectTags(cfg, key)
+    HeaderSet(tags, name, value)
+    res := S3SetObjectTags(cfg, key, tags)
+    HeaderFree(tags)
+    ret res
+end
+
+// S3SetObjectAcl - apply a canned ACL to an object.
+//
+// private, public-read, public-read-write, authenticated-read,
+// bucket-owner-read, bucket-owner-full-control. A bucket with ACLs disabled -
+// every bucket created since 2023, by default - refuses this with
+// AccessControlListNotSupported, and a bucket policy is the answer instead.
+pub func S3SetObjectAcl(cfg: Config, key: str, acl: str): Result:
+    mut r := NewRequest("PUT", key)
+    SetFlag(r, "acl")
+    SetHeader(r, "x-amz-acl", acl)
+    ret Do(cfg, r)
+end
+
+// S3ObjectAcl - the grant document, as XML. Left as a document because a
+// grant list is open-ended and modelling half of it would mislead.
+pub func S3ObjectAcl(cfg: Config, key: str): str:
+    mut r := NewRequest("GET", key)
+    SetFlag(r, "acl")
+    res := Do(cfg, r)
+    if !res.ok: ret "" end
+    ret res.body
+end
+
+// S3MakePublic - the one ACL an application actually applies at runtime.
+pub func S3MakePublic(cfg: Config, key: str): Result:
+    ret S3SetObjectAcl(cfg, key, "public-read")
+end
+
+// S3MakePrivate - and the one it applies to undo it.
+pub func S3MakePrivate(cfg: Config, key: str): Result:
+    ret S3SetObjectAcl(cfg, key, "private")
+end
+
+// S3SetLegalHold - hold an object against deletion, indefinitely, until the
+// hold is released.
+//
+// Only works on a bucket with object lock enabled, which can only be set when
+// the bucket is created. Independent of any retention period: a legal hold
+// outlasts one.
+pub func S3SetLegalHold(cfg: Config, key: str, held: bool): Result:
+    mut r := NewRequest("PUT", key)
+    SetFlag(r, "legal-hold")
+    mut state := "OFF"
+    if held: state = "ON" end
+    body := "<LegalHold><Status>" + state + "</Status></LegalHold>"
+    SetText(r, body)
+    SetHeader(r, "Content-Type", "application/xml")
+    SetHeader(r, "Content-MD5", S3ContentMd5(body as void*, body.len()))
+    ret Do(cfg, r)
+end
+
+// S3LegalHold - whether an object is held.
+pub func S3LegalHold(cfg: Config, key: str): bool:
+    mut r := NewRequest("GET", key)
+    SetFlag(r, "legal-hold")
+    res := Do(cfg, r)
+    if !res.ok: ret false end
+    ret ResultTag(res.body, "Status").trim().upper() == "ON"
+end
+
+// S3SetRetention - hold an object until a given instant.
+//
+// GOVERNANCE can be overridden by a caller holding the bypass permission;
+// COMPLIANCE cannot be overridden by anyone, including the account root, until
+// the date passes. Setting COMPLIANCE on the wrong object is not reversible.
+pub func S3SetRetention(cfg: Config, key: str, mode: str,
+    until_epoch: i64): Result:
+    mut r := NewRequest("PUT", key)
+    SetFlag(r, "retention")
+    mut m := mode.upper()
+    if m != "COMPLIANCE": m = "GOVERNANCE" end
+    body := "<Retention><Mode>" + m + "</Mode><RetainUntilDate>" +
+        time.FormatISOUTC(until_epoch) + "</RetainUntilDate></Retention>"
+    SetText(r, body)
+    SetHeader(r, "Content-Type", "application/xml")
+    SetHeader(r, "Content-MD5", S3ContentMd5(body as void*, body.len()))
+    ret Do(cfg, r)
+end

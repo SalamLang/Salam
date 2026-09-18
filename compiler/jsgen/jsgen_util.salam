@@ -35,7 +35,7 @@ func name_in_strvec(v: Vector<str>, name: str): bool:
     n := v.len()
     mut i := 0
     until i < n:
-        if str.Equals(v.get(i)[0], name):
+        if str.Equals(v.get(i), name):
             ret true
         end
         i += 1
@@ -68,6 +68,14 @@ end
 
 func local_add(g &: Jg, name: str):
     g.locals.push(name)
+end
+
+// Is `emitted` the JS name of a local still in scope? Names go out through
+// g.local_emit, which is where a collision would be, not g.locals - two
+// different Salam names can be handed the same JS one (a synthetic counter
+// and a user binding).
+func jsg_emit_taken(g &: Jg, emitted: str): bool:
+    ret name_in_strvec(g.local_emit, emitted)
 end
 
 // ---------------------------------------------------------------------------
@@ -178,6 +186,68 @@ func cg_is_slice_ts(ts: str): bool:
     ret str.StartsWith(ts, "slice<")
 end
 
+// A pointer to bytes. Those are the only pointers this backend can stand
+// behind: a `str` cast to one becomes a Uint8Array over its UTF-8, which is
+// what lets std code that scans a string byte by byte (conv's parsers) read
+// numbers instead of undefined. A pointer to anything else stays
+// unsupported rather than silently indexing by the wrong unit.
+func jsg_is_byte_ptr_ts(ts: str): bool:
+    ret str.Equals(ts, "void*") || str.Equals(ts, "i8*") || str.Equals(
+        ts, "u8*"
+    ) || str.Equals(ts, "char*")
+end
+
+// The pointer under an integer cast of one ((p as u64) in `(p as u64) + k`),
+// or 0 when this is not that shape.
+func jsg_ptr_operand(a &: at.Ast, id: int): int:
+    if id == 0 || at.KindOf(a, id) != at.AST_CAST:
+        ret 0
+    end
+    inner := at.Get(a, id).a
+    if inner == 0:
+        ret 0
+    end
+    ret jsg_is_byte_ptr_ts(at.Get(a, inner).type_str) ? inner : 0
+end
+
+// A `Vector<T>` of the prelude's own collections package, which this
+// backend represents as a plain JS array rather than as the struct its
+// Salam source describes - see jsg_call_vec.
+func cg_is_vector_ts(s &: sm.Sema, ts: str): bool:
+    ret cg_generic_is(s, ts, "Vector")
+end
+
+// The prelude's HashMap<K, V>, represented here as a JS Map, and the
+// iterator its iter() hands out. Same monomorphized-name reasoning as
+// cg_is_vector_ts.
+func cg_is_hashmap_ts(s &: sm.Sema, ts: str): bool:
+    ret cg_generic_is(s, ts, "HashMap")
+end
+
+func cg_is_mapiter_ts(s &: sm.Sema, ts: str): bool:
+    ret cg_generic_is(s, ts, "MapIter")
+end
+
+// Is `ts` an instantiation of the generic named `base`? By the time codegen
+// sees it the type has been monomorphized, so the name on the node reads
+// "Vector_i32", not "Vector<int>". The name alone is not proof (anyone may
+// declare a struct called Vector_i32), so the instance is asked which
+// generic it came from - which also keeps "VectorIter_i32" out of the
+// Vector answer.
+func cg_generic_is(s &: sm.Sema, ts: str, base: str): bool:
+    if !str.StartsWith(ts, base + "_"):
+        ret false
+    end
+    mut sname := ""
+    ssym := cg_struct_of(s, ts, sname)
+    if ssym == 0:
+        ret false
+    end
+    // pkgname is empty on an instantiation - it is stamped on the generic
+    // itself - so the base name is what identifies it.
+    ret str.Equals(sm.SymAt(s, ssym).generic_base, base)
+end
+
 // strchr(ts, '[') != NULL
 func has_bracket(ts: str): bool:
     n := str.Len(ts)
@@ -228,7 +298,7 @@ func cg_mangle_in(
     n := params.len()
     mut i := 0
     until i < n:
-        out = out + "_" + type_code(s, params.get(i)[0])
+        out = out + "_" + type_code(s, params.get(i))
         i += 1
     end
     ret out
@@ -252,7 +322,7 @@ func array_size_of(ts: str): i64:
         i += 1
     end
     if lb < 0:
-        ret 0 as i64
+        ret 0
     end
     mut v := 0 as i64
     mut p := lb + 1
@@ -278,7 +348,7 @@ func sig_of_decl(s &: sm.Sema, fsym: int, decl: int): int:
     n := fv.overloads.len()
     mut i := 0
     until i < n:
-        sg := fv.overloads.get(i)[0]
+        sg := fv.overloads.get(i)
         if sm.SigAt(s, sg).decl == decl:
             ret sg
         end
@@ -295,7 +365,7 @@ func pick_overload(s &: sm.Sema, a &: at.Ast, fsym: int, call: int): int:
     n := fv.overloads.len()
     mut i := 0
     until i < n:
-        sg := fv.overloads.get(i)[0]
+        sg := fv.overloads.get(i)
         sv := sm.SigAt(s, sg)
         if fallback == 0:
             fallback = sg
@@ -312,8 +382,8 @@ func pick_overload(s &: sm.Sema, a &: at.Ast, fsym: int, call: int): int:
         mut ok := true
         mut j := 0
         until j < nfix:
-            arg := at.Get(a, cv.list.get(j)[0])
-            pt := sm.ToString(s, sv.params.get(j)[0])
+            arg := at.Get(a, cv.list.get(j))
+            pt := sm.ToString(s, sv.params.get(j))
             if str.Len(arg.type_str) == 0 || !str.Equals(arg.type_str, pt):
                 ok = false
                 break
@@ -337,7 +407,7 @@ func struct_by_name(s &: sm.Sema, name: str): int:
     n := gsc.symbols.len()
     mut i := 0
     until i < n:
-        sy := gsc.symbols.get(i)[0]
+        sy := gsc.symbols.get(i)
         sv := sm.SymAt(s, sy)
         if sv.kind == sm.SYM_STRUCT && sv.ty != sm.TYPE_NONE:
             tn := sm.TypeAt(s, sv.ty).name
@@ -349,7 +419,7 @@ func struct_by_name(s &: sm.Sema, name: str): int:
     end
     mut i2 := 0
     until i2 < n:
-        pk := gsc.symbols.get(i2)[0]
+        pk := gsc.symbols.get(i2)
         pv := sm.SymAt(s, pk)
         if pv.kind != sm.SYM_PACKAGE || pv.members == 0:
             i2 += 1
@@ -359,7 +429,7 @@ func struct_by_name(s &: sm.Sema, name: str): int:
         m := msc.symbols.len()
         mut j := 0
         until j < m:
-            sy2 := msc.symbols.get(j)[0]
+            sy2 := msc.symbols.get(j)
             sv2 := sm.SymAt(s, sy2)
             if sv2.kind == sm.SYM_STRUCT:
                 if str.Equals(sv2.name, name):
@@ -437,7 +507,7 @@ func pick_op_overload(s &: sm.Sema, msym: int, want_nparams: int): int:
     mut fallback := 0
     mut i := 0
     until i < n:
-        sg := mv.overloads.get(i)[0]
+        sg := mv.overloads.get(i)
         if sm.SigAt(s, sg).params.len() == want_nparams:
             if fallback == 0:
                 fallback = sg

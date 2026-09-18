@@ -1,0 +1,129 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package sort
+
+// Sorting an index array by a separate key vector, without a
+// comparator closure: SortIndex(idx, keys) orders the *elements* of
+// idx so that keys[idx[0]] <= keys[idx[1]] <= ...
+//
+// This is the shape behind every "argsort" - ranking rows by a score,
+// splitting a feature at its median, taking the k nearest distances -
+// and SortBy could express it as `(a, b): ret keys.get(a) < keys.get(b)
+// end`. It is here because that closure is allocated afresh every time
+// the expression is evaluated and nothing frees it, so an argsort
+// inside a loop leaks one environment per iteration; a decision tree
+// sorting every feature at every node leaked thousands. No closure, no
+// allocation, and one fewer indirect call per comparison.
+
+func _key_swap(idx &: Vector<int>, i: int, j: int):
+    t := idx.get(i)
+    idx.set(i, idx.get(j))
+    idx.set(j, t)
+end
+
+// Insertion sort over [lo, hi], the base case small ranges deserve.
+func _key_insertion(idx &: Vector<int>, keys &: Vector<f64>, lo: int, hi: int):
+    mut i := lo + 1
+    until i <= hi:
+        v := idx.get(i)
+        kv := keys.get(v)
+        mut j := i - 1
+        until j >= lo && keys.get(idx.get(j)) > kv:
+            idx.set(j + 1, idx.get(j))
+            j -= 1
+        end
+        idx.set(j + 1, v)
+        i += 1
+    end
+end
+
+// Median of three, moved to lo so the partition can use it as pivot.
+func _key_pivot(idx &: Vector<int>, keys &: Vector<f64>, lo: int, hi: int):
+    mid := lo + (hi - lo) / 2
+    if keys.get(idx.get(mid)) < keys.get(idx.get(lo)): _key_swap(idx, mid, lo) end
+    if keys.get(idx.get(hi)) < keys.get(idx.get(lo)): _key_swap(idx, hi, lo) end
+    if keys.get(idx.get(hi)) < keys.get(idx.get(mid)): _key_swap(idx, hi, mid) end
+    _key_swap(idx, mid, lo)
+end
+
+// Three-way partition around a median-of-three pivot: equal keys land
+// in the middle and are never recursed into, which matters because a
+// feature column full of the same value is the normal case here, not a
+// pathological one.
+func _key_quick(idx &: Vector<int>, keys &: Vector<f64>, lo0: int, hi0: int):
+    mut lo := lo0
+    mut hi := hi0
+    until hi - lo > 12:
+        _key_pivot(idx, keys, lo, hi)
+        pivot := keys.get(idx.get(lo))
+        mut lt := lo
+        mut gt := hi
+        mut i := lo
+        until i <= gt:
+            k := keys.get(idx.get(i))
+            if k < pivot:
+                _key_swap(idx, lt, i)
+                lt += 1
+                i += 1
+            else k > pivot:
+                _key_swap(idx, i, gt)
+                gt -= 1
+            else:
+                i += 1
+            end
+        end
+        // Recurse into the smaller side and loop on the larger, so the
+        // stack stays logarithmic.
+        if lt - lo < hi - gt:
+            _key_quick(idx, keys, lo, lt - 1)
+            lo = gt + 1
+        else:
+            _key_quick(idx, keys, gt + 1, hi)
+            hi = lt - 1
+        end
+    end
+    _key_insertion(idx, keys, lo, hi)
+end
+
+// ---- public API ----
+
+// Orders the elements of `idx` by their key, ascending. Elements of
+// idx are positions into `keys`; anything out of range is left where
+// it is only by accident, so keep idx a permutation of 0..keys.len()-1.
+@en "SortIndex"
+@fa "مرتب‌سازی نمایه"
+@ar "ترتيب الفهرس"
+pub func SortIndex(idx &: Vector<int>, keys &: Vector<f64>):
+    n := idx.len()
+    if n < 2: ret end
+    _key_quick(idx, keys, 0, n - 1)
+end
+
+// The same order reversed: largest key first.
+@en "SortIndexDesc"
+@fa "مرتب‌سازی نمایه نزولی"
+@ar "ترتيب الفهرس تنازليا"
+pub func SortIndexDesc(idx &: Vector<int>, keys &: Vector<f64>):
+    n := idx.len()
+    if n < 2: ret end
+    _key_quick(idx, keys, 0, n - 1)
+    mut i := 0
+    mut j := n - 1
+    until i < j:
+        _key_swap(idx, i, j)
+        i += 1
+        j -= 1
+    end
+end

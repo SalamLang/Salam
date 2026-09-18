@@ -1,0 +1,276 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package tensor
+
+// Reductions, whole-tensor and per-axis, plus the two softmaxes.
+//
+// Whole-tensor sums accumulate in f64. An f32 running sum loses a bit of
+// the answer per ~2^24 of magnitude ratio, and a loss reduced over a
+// large batch is exactly the place that bites; one widening per element
+// costs a fraction of the load it accompanies.
+//
+// Per-axis reductions accumulate in f32, into the output buffer itself.
+// Their per-slot totals are short (one axis, not the whole tensor), the
+// results feed straight back into f32 arithmetic, and keeping the inner
+// loop a flat f32 add over `inner` contiguous elements is what lets it
+// vectorize.
+//
+// The axis decomposition is the same everywhere: outer x n x inner, with
+// `n` the axis being folded. keepdim keeps the folded axis as size 1 -
+// handing the result straight back to the trailing-one broadcast mode -
+// and dropping the last dimension of a rank-1 tensor yields [1], because
+// rank 0 does not exist here.
+//
+// Softmax and LogSoftmax run along the last axis and subtract the row
+// maximum first, the standard guard that keeps expf from overflowing on
+// logits that mean nothing more than "very confident".
+
+func _reduced_shape(x &: Tensor, axis: int, keepdim: bool): Vector<int>:
+    mut s := Vector {} as Vector<int>
+    repeat x.rank() with i:
+        if i == axis:
+            if keepdim: s.push(1) end
+        else:
+            s.push(x.shape.get(i))
+        end
+    end
+    if s.len() == 0: s.push(1) end
+    ret s
+end
+
+func _axis_ok(x &: Tensor, axis: int): bool:
+    if x.is_empty(): ret false end
+    ret axis >= 0 && axis < x.rank()
+end
+
+// ---- public API ----
+
+@en "SumAll"
+@fa "مجموع همه"
+@ar "مجموع الكل"
+pub func SumAll(x &: Tensor): f64:
+    n := x.data.len()
+    p := x.data.data
+    mut s := 0.0
+    repeat n with k: s += p[k] as f64 end
+    ret s
+end
+
+@en "MeanAll"
+@fa "میانگین همه"
+@ar "متوسط الكل"
+pub func MeanAll(x &: Tensor): f64:
+    n := x.data.len()
+    if n <= 0: ret 0.0 end
+    ret SumAll(x) / (n as f64)
+end
+
+@en "MaxAll"
+@fa "بیشینه همه"
+@ar "أقصى الكل"
+pub func MaxAll(x &: Tensor): f64:
+    n := x.data.len()
+    if n <= 0: ret 0.0 end
+    p := x.data.data
+    mut best := p[0]
+    repeat n with k:
+        v := p[k]
+        if v > best: best = v end
+    end
+    ret best as f64
+end
+
+@en "MinAll"
+@fa "کمینه همه"
+@ar "أدنى الكل"
+pub func MinAll(x &: Tensor): f64:
+    n := x.data.len()
+    if n <= 0: ret 0.0 end
+    p := x.data.data
+    mut best := p[0]
+    repeat n with k:
+        v := p[k]
+        if v < best: best = v end
+    end
+    ret best as f64
+end
+
+@en "ArgMaxAll"
+@fa "نمایه بیشینه همه"
+@ar "دليل أقصى الكل"
+pub func ArgMaxAll(x &: Tensor): int:
+    n := x.data.len()
+    if n <= 0: ret 0 - 1 end
+    p := x.data.data
+    mut best := p[0]
+    mut at_idx := 0
+    repeat n with k:
+        v := p[k]
+        if v > best:
+            best = v
+            at_idx = k
+        end
+    end
+    ret at_idx
+end
+
+@en "SumAxis"
+@fa "مجموع محور"
+@ar "مجموع محور"
+pub func SumAxis(x &: Tensor, axis: int, keepdim: bool): Tensor:
+    if _axis_ok(x, axis) == false: ret Empty() end
+    n := x.shape.get(axis)
+    outer := _outer_of(x, axis)
+    inner := _inner_of(x, axis)
+    mut oshape := _reduced_shape(x, axis, keepdim)
+    t := Zeros(oshape)
+    oshape.free()
+    p := t.data.data
+    q := x.data.data
+    repeat outer with o:
+        dbase := o * inner
+        repeat n with i:
+            sbase := (o * n + i) * inner
+            repeat inner with k: p[dbase + k] = p[dbase + k] + q[sbase + k] end
+        end
+    end
+    ret t
+end
+
+@en "MeanAxis"
+@fa "میانگین محور"
+@ar "متوسط محور"
+pub func MeanAxis(x &: Tensor, axis: int, keepdim: bool): Tensor:
+    mut t := SumAxis(x, axis, keepdim)
+    if t.is_empty(): ret t end
+    ScaleInPlace(t, 1.0 / (x.shape.get(axis) as f64))
+    ret t
+end
+
+@en "MaxAxis"
+@fa "بیشینه محور"
+@ar "أقصى محور"
+pub func MaxAxis(x &: Tensor, axis: int, keepdim: bool): Tensor:
+    if _axis_ok(x, axis) == false: ret Empty() end
+    n := x.shape.get(axis)
+    outer := _outer_of(x, axis)
+    inner := _inner_of(x, axis)
+    mut oshape := _reduced_shape(x, axis, keepdim)
+    t := _raw(oshape)
+    oshape.free()
+    p := t.data.data
+    q := x.data.data
+    repeat outer with o:
+        dbase := o * inner
+        sbase0 := o * n * inner
+        repeat inner with k: p[dbase + k] = q[sbase0 + k] end
+        repeat n - 1 with i:
+            sbase := (o * n + i + 1) * inner
+            repeat inner with k:
+                v := q[sbase + k]
+                if v > p[dbase + k]: p[dbase + k] = v end
+            end
+        end
+    end
+    ret t
+end
+
+// The index of the maximum along `axis`, stored as f32 whole numbers -
+// exact up to 2^24, far beyond any dimension a tensor here will carry.
+@en "ArgMaxAxis"
+@fa "نمایه بیشینه محور"
+@ar "دليل أقصى محور"
+pub func ArgMaxAxis(x &: Tensor, axis: int, keepdim: bool): Tensor:
+    if _axis_ok(x, axis) == false: ret Empty() end
+    n := x.shape.get(axis)
+    outer := _outer_of(x, axis)
+    inner := _inner_of(x, axis)
+    mut oshape := _reduced_shape(x, axis, keepdim)
+    t := Zeros(oshape)
+    oshape.free()
+    p := t.data.data
+    q := x.data.data
+    repeat outer with o:
+        dbase := o * inner
+        repeat inner with k:
+            mut best := q[o * n * inner + k]
+            mut bi := 0
+            repeat n - 1 with i:
+                v := q[(o * n + i + 1) * inner + k]
+                if v > best:
+                    best = v
+                    bi = i + 1
+                end
+            end
+            p[dbase + k] = bi as f32
+        end
+    end
+    ret t
+end
+
+@en "Softmax"
+@fa "بیشینه نرم"
+@ar "أقصى ناعم"
+pub func Softmax(x &: Tensor): Tensor:
+    if x.is_empty(): ret Empty() end
+    width := x.shape.get(x.rank() - 1)
+    rows := x.numel() / width
+    t := _raw_like(x)
+    p := t.data.data
+    q := x.data.data
+    one := 1.0 as f32
+    repeat rows with r:
+        base := r * width
+        mut m := q[base]
+        repeat width with k:
+            v := q[base + k]
+            if v > m: m = v end
+        end
+        mut s := 0.0 as f32
+        repeat width with k:
+            e := expf(q[base + k] - m)
+            p[base + k] = e
+            s += e
+        end
+        inv := one / s
+        repeat width with k: p[base + k] = p[base + k] * inv end
+    end
+    ret t
+end
+
+@en "LogSoftmax"
+@fa "لگاریتم بیشینه نرم"
+@ar "لوغاريتم الأقصى الناعم"
+pub func LogSoftmax(x &: Tensor): Tensor:
+    if x.is_empty(): ret Empty() end
+    width := x.shape.get(x.rank() - 1)
+    rows := x.numel() / width
+    t := _raw_like(x)
+    p := t.data.data
+    q := x.data.data
+    repeat rows with r:
+        base := r * width
+        mut m := q[base]
+        repeat width with k:
+            v := q[base + k]
+            if v > m: m = v end
+        end
+        mut s := 0.0 as f32
+        repeat width with k: s += expf(q[base + k] - m) end
+        lse := m + logf(s)
+        repeat width with k: p[base + k] = q[base + k] - lse end
+    end
+    ret t
+end

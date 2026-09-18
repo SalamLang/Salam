@@ -33,7 +33,7 @@ import str
 import encoding
 import compress
 import net.internal.rawsock
-import net.url
+import encoding.url
 import tls
 
 // WinHTTP is the Windows default: it is OS-provided (no curl/openssl either
@@ -63,6 +63,10 @@ end
 
 mut _g_http_status := 0
 mut _g_http_headers := ""
+// Why the last request produced no response, when it produced none. A failed
+// TLS handshake and a server that answered with nothing both left status 0 and
+// an empty body, with no way for a caller to tell them apart.
+mut _g_http_error := ""
 
 @en "Response"
 @fa "پاسخ"
@@ -71,6 +75,10 @@ pub struct Response:
     pub status: int = 0
     pub body: str = ""
     pub head: str = ""
+    // Empty on any response that came back from the server, including a 500.
+    // Non-empty only when the request never got one: DNS, connect, or - most
+    // often - the TLS handshake. See Error().
+    pub err: str = ""
 end
 
 @en "Client"
@@ -530,10 +538,29 @@ else:
         ret path
     end
 
+    // The Host header, port included unless it is the scheme's default.
+    // RFC 7230 requires the port, and a server that has more than one thing
+    // on more than one port has nothing else to tell them apart by: a request
+    // to :8092 that says `Host: example.com` is indistinguishable from one to
+    // :8091. Browsers have always sent it; this client used to leave it off.
+    func _host_header(u: url.URL): str:
+        if u.port == 0:
+            ret u.host
+        end
+        if u.port == 80 && str.Equals(u.scheme, "http"):
+            ret u.host
+        end
+        if u.port == 443 && str.Equals(u.scheme, "https"):
+            ret u.host
+        end
+        ret u.host.concat(":").concat(str.FromInt(u.port as i64))
+    end
+
     func _build_request(method: str, u: url.URL, raw_headers: str, body: str): str:
         target := _request_target(u)
         headers := _drop_transport_headers(raw_headers)
-        mut req := method.concat(" ").concat(target).concat(" HTTP/1.1\r\nHost: ").concat(u.host).concat("\r\n")
+        mut req := method.concat(" ").concat(target).concat(" HTTP/1.1\r\nHost: ")
+        req = req.concat(_host_header(u)).concat("\r\n")
         if _header_at(headers, "User-Agent") < 0:
             req = req.concat("User-Agent: Salam/1.0\r\n")
         end
@@ -566,6 +593,7 @@ else:
             end
         end
         if u.host.len() == 0:
+            _g_http_error = "no host in URL '" + url_str + "'"
             ret ""
         end
         req := _build_request(method, u, headers, body)
@@ -575,6 +603,7 @@ else:
             cfg := tls.NewConfig(u.host)
             mut c := tls.Dial(u.host, port, cfg)
             if !tls.ConnOk(c):
+                _g_http_error = "TLS: " + tls.ConnError(c)
                 tls.Close(c)
                 ret ""
             end
@@ -584,6 +613,7 @@ else:
         else:
             s := rawsock.Connect(u.host, port)
             if !rawsock.Ok(s):
+                _g_http_error = "could not connect to " + u.host + ":" + port
                 ret ""
             end
             rawsock.Send(s, req)
@@ -627,10 +657,10 @@ func _parse_response(req: str): Response:
     sep_pos := req.find("\r\n\r\n")
     if sep_pos >= 0:
         _g_http_headers = req.substr(0, sep_pos + 4)
-        ret Response { status = _g_http_status, body = req.substr(sep_pos + 4, req.len() - sep_pos - 4), head = _g_http_headers }
+        ret Response { status = _g_http_status, body = req.substr(sep_pos + 4, req.len() - sep_pos - 4), head = _g_http_headers, err = _g_http_error }
     end
     _g_http_headers = ""
-    ret Response { status = _g_http_status, body = req, head = "" }
+    ret Response { status = _g_http_status, body = req, head = "", err = _g_http_error }
 end
 
 func serialize(headers: HashMap<str, str>): str:
@@ -646,6 +676,7 @@ end
 func send(method: str, url_str: str, header_block: str, body: str): Response:
     _g_http_status = 0
     _g_http_headers = ""
+    _g_http_error = ""
     mut effective_headers := header_block
     if body.len() > 0:
         if header_block.find("Content-Type") < 0:
@@ -726,6 +757,16 @@ pub func Body(r: Response): str:
     ret r.body
 end
 
+@en "Error"
+@fa "خطا"
+@ar "خطأ"
+// Why no response arrived, or "" when one did. `Status(r) == 0` on its own
+// cannot tell a refused connection or a failed TLS handshake from a server
+// that closed without writing a status line; this can.
+pub func Error(r: Response): str:
+    ret r.err
+end
+
 @en "Headers"
 @fa "سرصفحه ها"
 @ar "ترویسات"
@@ -733,7 +774,7 @@ pub func Headers(r: Response): HashMap<str, str>:
     m := HashMap {} as HashMap<str, str> lines := r.head.split("\r\n")
     defer lines.free()
     repeat lines.len() with i:
-        line := lines.get(i)[0]
+        line := lines.get(i)
         c := line.find(":")
         if c > 0:
             key := line.substr(0, c)
@@ -755,7 +796,7 @@ pub func GetHeader(r: Response, name: str): str:
     mut found := false
     repeat lines.len() with i:
         if found == false:
-            line := lines.get(i)[0]
+            line := lines.get(i)
             c := line.find(":")
             if c > 0:
                 if _hdr_lower(line.substr(0, c)) == target:
@@ -791,7 +832,7 @@ pub func HeaderValues(r: Response, name: str): Vector<str>:
     lines := r.head.split("\r\n")
     defer lines.free()
     repeat lines.len() with i:
-        line := lines.get(i)[0]
+        line := lines.get(i)
         c := line.find(":")
         if c > 0:
             if _hdr_lower(line.substr(0, c)) == target:
@@ -903,7 +944,7 @@ pub func CookieMap(r: Response): HashMap<str, str>:
     m := HashMap {} as HashMap<str, str>
     raw := SetCookieLines(r)
     repeat raw.len() with i:
-        rawline := raw.get(i)[0]
+        rawline := raw.get(i)
         semi := rawline.find(";")
         mut pair := rawline
         if semi >= 0:
@@ -918,7 +959,7 @@ pub func CookieMap(r: Response): HashMap<str, str>:
         end
         m.put(nm.trim(), vl.trim())
     end
-    raw.free()
+    defer raw.free()
     ret m
 end
 

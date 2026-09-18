@@ -1,40 +1,66 @@
 ---
-name: Bug report
-about: Create a report to help us improve
-title: ''
-labels: ''
+name: 🐛 Bug report
+about: Create a report to help us improve Salam
+title: '[BUG] '
+labels: 'bug'
 assignees: ''
 ---
 
-**Describe the bug**
+## 🐛 Describe the Bug
+
 A clear and concise description of what the bug is.
 
-**To Reproduce**
-Steps to reproduce the behavior:
+## 🔁 Steps to Reproduce
 
 1. Go to '...'
-2. Click on '....'
-3. Scroll down to '....'
-4. See error
+2. Run '...'
+3. See error
 
-**Expected behavior**
+## ✅ Expected Behavior
+
 A clear and concise description of what you expected to happen.
 
-**Screenshots**
-If applicable, add screenshots to help explain your problem.
+## ❌ Actual Behavior
 
-**Desktop (please complete the following information):**
+A clear and concise description of what actually happened.
 
-- OS: [e.g. iOS]
-- Browser [e.g. chrome, safari]
-- Version [e.g. 22]
+## 🖼️ Screenshots / Logs
 
-**Mobile phone (please complete the following information):**
+If applicable, add screenshots or paste compiler output to help explain your problem.
 
-- Device: [e.g. iPhone6]
-- OS: [e.g. iOS8.1]
-- Browser [e.g. stock browser, safari]
-- Version [e.g. 22]
+```
+Paste error output here
+```
 
-**Additional context**
-Add any other context about the problem here.
+## 🌍 Environment
+
+**Desktop:**
+
+- OS: [e.g. Ubuntu 24.04, macOS 15, Windows 11]
+- Salam version: [run `salam version` to check]
+- Compiler backend: [e.g. tcc, gcc, clang, LLVM]
+
+**Mobile (if applicable):**
+
+- Device: [e.g. iPhone 15]
+- OS: [e.g. iOS 17]
+- Browser: [e.g. Safari, Chrome]
+
+## 📎 Minimal Reproducer
+
+If possible, paste a minimal `.salam` file that triggers the bug:
+
+```salam
+func main {
+    // minimal repro here
+}
+```
+
+## 🔗 Additional Context
+
+Add any other context, links, or related issues here.
+
+---
+
+> 💡 Before submitting, please search [existing issues](https://github.com/SalamLang/Salam/issues) to avoid duplicates.
+> Join us on [Discord](https://discord.gg/HfY3QHDPdv) or [Telegram](https://t.me/SalamProgrammingLanguage) if you need quick help.

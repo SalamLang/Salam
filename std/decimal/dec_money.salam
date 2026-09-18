@@ -1,0 +1,146 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package decimal
+
+import bigint
+
+// Dividing money among people, which is not the same as dividing a number.
+//
+// 100.00 split three ways is not three lots of 33.33: that is 99.99, and the
+// missing cent has to be somewhere. Rounding each share independently is the
+// classic accounting bug -- the parts stop summing to the whole, and the
+// discrepancy shows up a month later in a reconciliation report.
+//
+// Both functions here guarantee the property that matters: **the parts sum
+// back to the total, exactly**, at the total's own scale. They do it by
+// dividing with a floor, which leaves a non-negative remainder of at most one
+// unit in the last place per share, and then handing out those units one each
+// to the earliest shares. The result is fully determined -- no randomness, no
+// "largest remainder" tie-break -- so the same input always splits the same
+// way and two systems computing it independently agree.
+//
+// The caller owns the returned Vector and every Dec in it:
+//
+//     mut parts := decimal.Split(total, 3)
+//     each p in parts: println decimal.ToStr(p) end
+//     repeat parts.len() with i: parts.get(i).free() end
+//     parts.free()
+
+// The unit in the last place at scale `sc`, i.e. one cent at scale 2, as the
+// single-limb bigint the distribution loops add.
+func _ulp_parts(q: bigint.Int, extra: int, sc: int): Dec:
+    if extra == 0: ret _adopt(q.clone(), sc) end
+    mut one := bigint.FromInt(extra as i64)
+    r := bigint.Add(q, one)
+    one.free()
+    ret _adopt(r, sc)
+end
+
+// total divided into n parts that sum back to total exactly, at total's scale.
+// The first `total mod n` parts are one unit in the last place larger than the
+// rest, so 100.00 into 3 gives 33.34, 33.33, 33.33. An n below 1 gives an
+// empty vector.
+@en "Split"
+@fa "تقسیم برابر"
+@ar "تقسيم متساو"
+pub func Split(total: Dec, n: int): Vector<Dec>:
+    mut out := Vector {} as Vector<Dec>
+    if n < 1: ret out end
+    mut divisor := bigint.FromInt(n as i64)
+    mut q := bigint.Int {}
+    mut r := bigint.Int {}
+    // Floored, not truncated: it keeps the remainder non-negative even for a
+    // negative total, so the same "hand out one each" loop works for a refund.
+    _ok := bigint.FloorDivMod(total.unscaled, divisor, q, r)
+    divisor.free()
+    extra := bigint.ToIntClamped(r) as int
+    r.free()
+    repeat n with i:
+        mut bonus := 0
+        if i < extra: bonus = 1 end
+        out.push(_ulp_parts(q, bonus, total.scale))
+    end
+    q.free()
+    ret out
+end
+
+// total divided in proportion to `ratios`, summing back to total exactly at
+// total's scale. Ratios must be non-negative with a positive sum; anything
+// else gives an empty vector.
+//
+// Each share is floor(total * ratio / sum), and the units left over are handed
+// one each to the earliest shares -- so Allocate(0.05, [3, 7]) at scale 2 is
+// 0.02 and 0.03, and never 0.01 and 0.03.
+@en "Allocate"
+@fa "تخصیص نسبی"
+@ar "توزيع نسبي"
+pub func Allocate(total: Dec, ratios: Vector<i64>): Vector<Dec>:
+    mut out := Vector {} as Vector<Dec>
+    k := ratios.len()
+    if k == 0: ret out end
+
+    mut sum := bigint.Int {}
+    mut negative_ratio := false
+    repeat k with i:
+        if ratios.get(i) < 0 as i64: negative_ratio = true end
+        bigint.AddIntTo(sum, ratios.get(i))
+    end
+    if negative_ratio || sum.sign() <= 0:
+        sum.free()
+        ret out
+    end
+
+    // Floor each share, then measure what the flooring left behind.
+    mut shares := Vector {} as Vector<bigint.Int>
+    mut given := bigint.Int {}
+    repeat k with i:
+        mut num := bigint.MulInt(total.unscaled, ratios.get(i))
+        s := bigint.FloorDiv(num, sum)
+        num.free()
+        bigint.AddTo(given, s)
+        shares.push(s)
+    end
+    sum.free()
+
+    mut left := bigint.Sub(total.unscaled, given)
+    given.free()
+    // The shortfall is strictly less than k units, so it fits an int and the
+    // one-each pass below covers it in a single sweep.
+    extra := bigint.ToIntClamped(left) as int
+    left.free()
+
+    repeat k with i:
+        mut bonus := 0
+        if i < extra: bonus = 1 end
+        out.push(_ulp_parts(shares.get(i), bonus, total.scale))
+        mut s := shares.get(i)
+        s.free()
+    end
+    shares.free()
+    ret out
+end
+
+// Frees every Dec in a vector and then the vector itself, which is the cleanup
+// Split and Allocate results need.
+@en "FreeAll"
+@fa "آزادسازی همه"
+@ar "تحرير الكل"
+pub func FreeAll(v &: Vector<Dec>):
+    repeat v.len() with i:
+        mut d := v.get(i)
+        d.free()
+    end
+    v.free()
+end

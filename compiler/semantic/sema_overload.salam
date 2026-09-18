@@ -63,7 +63,7 @@ func resolve_overload(
     mut nmatch := 0
 
     repeat fv.overloads.len() with i:
-        sgid := fv.overloads.get(i)[0]
+        sgid := fv.overloads.get(i)
         sg := sig_at(s, sgid)
         if argtypes.len() < sg.required:
             continue
@@ -77,7 +77,7 @@ func resolve_overload(
         end
         mut ok := true
         repeat nfix with j:
-            if !type_equiv(s, sg.params.get(j)[0], argtypes.get(j)[0]):
+            if !type_equiv(s, sg.params.get(j), argtypes.get(j)):
                 ok = false
                 break
             end
@@ -100,7 +100,7 @@ func resolve_overload(
     end
 
     repeat fv.overloads.len() with i2:
-        sgid2 := fv.overloads.get(i2)[0]
+        sgid2 := fv.overloads.get(i2)
         sg2 := sig_at(s, sgid2)
         if argtypes.len() < sg2.required:
             continue
@@ -114,7 +114,7 @@ func resolve_overload(
         end
         mut ok2 := true
         repeat nfix2 with j2:
-            if !type_assignable(s, sg2.params.get(j2)[0], argtypes.get(j2)[0]):
+            if !type_assignable(s, sg2.params.get(j2), argtypes.get(j2)):
                 ok2 = false
                 break
             end
@@ -136,7 +136,7 @@ func resolve_overload(
         ret 0
     end
     if fv.overloads.len() == 1:
-        sg3 := sig_at(s, fv.overloads.get(0)[0])
+        sg3 := sig_at(s, fv.overloads.get(0))
         if argtypes.len() < sg3.required || (!sg3.variadic && argtypes.len() > sg3.params.len()):
             if sg3.variadic:
                 serr(
@@ -167,11 +167,11 @@ func resolve_overload(
             nfix3 = sg3.params.len()
         end
         repeat nfix3 with j3:
-            if !type_assignable(s, sg3.params.get(j3)[0], argtypes.get(j3)[0]):
+            if !type_assignable(s, sg3.params.get(j3), argtypes.get(j3)):
                 serr(
                     s, 12, sp, co.Format3(
                         i18.Tr("argument %zu: cannot pass '%s' to '%s'"), co.ArgUint((j3 + 1) as u64),
-                        co.ArgStr(type_to_string(s, argtypes.get(j3)[0])), co.ArgStr(type_to_string(s, sg3.params.get(j3)[0]))
+                        co.ArgStr(type_to_string(s, argtypes.get(j3))), co.ArgStr(type_to_string(s, sg3.params.get(j3)))
                     )
                 )
                 ret 0
@@ -199,19 +199,36 @@ func mark_ref_args(s &: Sema, a &: at.Ast, call: int, sigid: int):
     dl := at.Get(a, sg.decl).list
     mut i := 0
     until i < at.ChildCount(a, call) && i < dl.len():
-        p := at.Get(a, dl.get(i)[0])
+        p := at.Get(a, dl.get(i))
         if p.kind == at.AST_PARAM && p.is_ref:
             argid := at.Child(a, call, i)
             if argid != 0:
                 mut arg := at.Get(a, argid)
-                if arg.kind == at.AST_IDENTIFIER && str.Len(arg.name) > 0:
-                    arg.ref_arg = true
-                    at.Put(a, argid, arg)
-                    symid := scope_lookup(s, s.cur, arg.name)
-                    if symid != 0:
-                        mut sv := sym_at(s, symid)
-                        sv.mutated = true
-                        sym_put(s, symid, sv)
+                arg.ref_arg = true
+                at.Put(a, argid, arg)
+                // `f(h.k)` and `f(rows[0])` are writes through a projection,
+                // exactly as `h.k = ...` is: the variable they hang off is
+                // mutated, and (sema_definit) it counts as given a value.
+                // Stamping only bare identifiers meant `f(arr[1])` was read as
+                // a *read* of an as-yet-unassigned `arr` and rejected (E089).
+                mut root := argid
+                mut rk := at.KindOf(a, root)
+                until rk == at.AST_MEMBER || rk == at.AST_INDEX || rk == at.AST_SLICE:
+                    root = at.Get(a, root).a
+                    if root == 0:
+                        break
+                    end
+                    rk = at.KindOf(a, root)
+                end
+                if root != 0 && at.KindOf(a, root) == at.AST_IDENTIFIER:
+                    rname := at.Get(a, root).name
+                    if str.Len(rname) > 0:
+                        symid := scope_lookup(s, s.cur, rname)
+                        if symid != 0:
+                            mut sv := sym_at(s, symid)
+                            sv.mutated = true
+                            sym_put(s, symid, sv)
+                        end
                     end
                 end
             end
@@ -263,7 +280,7 @@ func check_pure_builtin(s &: Sema, a &: at.Ast, n: int, nm: str):
     impure := [
         "print", "println", "printerr", "printerrln", "input", "open", "args", "listdir", "spawn", "callhandler",
         "join"
-    ] as str[11]
+    ]
     repeat 11 with i:
         if str.Equals(nm, impure[i]):
             serr(

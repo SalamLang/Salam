@@ -1,22 +1,4 @@
 ---
-#
-# The readiness gate for the LLVM backend.
-#
-# Compiling the compiler with itself is a far stronger test than the test
-# corpus: `tests/en` has 802 files and reported zero codegen errors while
-# `salam build compiler/main.salam --backend=llvm` was still finding real
-# bugs - ten of them, including a runtime entry point that was declared but
-# never defined (salam_panic), a missing `open` builtin, and argv globals
-# that were never emitted. None of those were reachable from the corpus.
-#
-# So "the LLVM backend is ready" means this job is green, not that the
-# sweep is clean.
-#
-# NOTE: `verify` is continue-on-error while the produced compiler still
-# hangs at startup (it builds and links; running it never returns). Flip
-# continue-on-error to false the moment that is fixed - that is the whole
-# point of this workflow, and leaving it soft indefinitely defeats it.
-#
 name: LLVM self-host gate
 
 on:
@@ -24,8 +6,8 @@ on:
     branches: [main]
   pull_request:
     paths:
-      - 'c/src/llvm/**'
-      - 'c/src/semantic/**'
+      - 'std/llvm/native/**'
+      - 'compiler/semantic/**'
       - 'compiler/llvmgen/**'
       - 'compiler/semantic/**'
       - 'std/**'
@@ -51,24 +33,25 @@ jobs:
 
       - name: Install LLVM and lld
         run: |
+          set -eu
+          echo 'Acquire::ForceIPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4 >/dev/null
+          wget -4 -qO llvm.sh https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 22
           sudo apt-get update
-          sudo apt-get install -y llvm-dev liblld-dev libzstd-dev zlib1g-dev
-          # libpolly-N-dev is not optional, and this workflow was the only one
-          # omitting it (compiler-release, compiler-selfhost and
-          # lint-memory-leaks all install it explicitly). Ubuntu's llvm-N-dev
-          # advertises Polly through `llvm-config --libs all` AND builds
-          # libLLVMLTO.a against it, while shipping libPolly.a in a separate
-          # package - so without it the link fails whichever way the Makefile
-          # jumps: keeping -lPolly gives "cannot find -lPolly", dropping it
-          # gives "undefined reference to getPollyPluginInfo()".
-          #
-          # The version is derived rather than pinned because this job
-          # deliberately tracks the distro's default llvm-dev.
-          v="$(llvm-config --version | cut -d. -f1)"
-          sudo apt-get install -y "libpolly-$v-dev"
+          sudo apt-get install -y llvm-22-dev liblld-22-dev libpolly-22-dev \
+            libzstd-dev zlib1g-dev libtinfo-dev libxml2-dev
 
-      - name: Build the C compiler with LLVM in-process
-        run: make -C c -j"$(nproc)" WITH_LLVM=1 WITH_LLD=1
+      - name: Install a seed compiler
+        uses: ./.github/actions/setup-salam
+
+      - name: Build libsalam_llvm.a
+        run: |
+          sh std/llvm/native/build.sh --llvm-config llvm-config-22 \
+            --out "$GITHUB_WORKSPACE"
+
+      - name: Build the compiler with LLVM in-process
+        run: sh tools/bash/build-selfhost.sh --llvm="$GITHUB_WORKSPACE"
 
       - name: Backend must compile the whole corpus
         run: |
@@ -87,9 +70,6 @@ jobs:
           ./salam build compiler/main.salam --backend=llvm --output=/tmp/selfhost-llvm
           test -s /tmp/selfhost-llvm
 
-      # The actual gate: a compiler that builds but cannot run is not a
-      # compiler. `version` is the cheapest command that still exercises
-      # startup, argv, the layout-schema load and the output path.
       - name: Produced compiler must actually run
         continue-on-error: true
         run: |

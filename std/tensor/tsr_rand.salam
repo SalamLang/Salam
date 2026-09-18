@@ -1,0 +1,149 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package tensor
+
+import math
+
+// Seeded randomness for tensors: weight initialization, dropout masks,
+// synthetic inputs. The generator is std/matrix's xorshift64* ported
+// verbatim (same constants, same seeding), so the two packages draw
+// identical streams from identical seeds.
+//
+// Every function takes either an explicit `g &: Rng` (for callers
+// threading one stream through many fills, the way an initializer walks
+// a model's layers) or a bare seed (for one-shot constructors). Nothing
+// here touches std/rand's global state: a fixed seed must mean the same
+// tensor on every machine, every run, at any thread count - the fills
+// are single-threaded on purpose, since a chunked fill would hand each
+// chunk a different slice of the stream depending on the split.
+
+const _RNG_MULT := 2685821657736338717 as u64
+const _RNG_ODD := 1442695040888963407 as u64
+
+@en "Rng"
+@fa "مولد تصادفی"
+@ar "مولد عشوائي"
+pub struct Rng:
+    pub s: u64 = 0
+
+    @en "next_bits"
+    @fa "بیت بعدی"
+    @ar "بتات تالية"
+    pub func next_bits(): u64:
+        mut x := this.s
+        x = x ^ (x >> 12)
+        x = x ^ (x << 25)
+        x = x ^ (x >> 27)
+        this.s = x
+        ret x * _RNG_MULT
+    end
+
+    // A uniform double in [0, 1), from the top 53 bits.
+    @en "next_float"
+    @fa "اعشاری بعدی"
+    @ar "عدد عشري تال"
+    pub func next_float(): f64:
+        v := this.next_bits() >> 11
+        ret (v as f64) / 9007199254740992.0
+    end
+
+    // A standard normal deviate by the Box-Muller transform.
+    @en "next_normal"
+    @fa "نرمال بعدی"
+    @ar "طبيعي تال"
+    pub func next_normal(): f64:
+        mut u := this.next_float()
+        if u <= 0.0: u = 1.0e-15 end
+        v := this.next_float()
+        ret math.Sqrt(0.0 - 2.0 * math.Log(u)) * math.Cos(6.283185307179586 * v)
+    end
+end
+
+// ---- public API ----
+
+@en "NewRng"
+@fa "مولد تصادفی نو"
+@ar "مولد عشوائي جديد"
+pub func NewRng(seed: i64): Rng:
+    mut g := Rng {}
+    g.s = (seed as u64) + _RNG_ODD
+    if g.s == 0: g.s = _RNG_ODD end
+    ret g
+end
+
+// Derives an independent stream for parallel task `index` from a base
+// seed - the whole family's convention for seeding forest trees, CV
+// folds and workers, so results match at any worker count.
+@en "DeriveSeed"
+@fa "بذر مشتق"
+@ar "بذرة مشتقة"
+pub func DeriveSeed(seed: i64, index: i64): i64:
+    ret seed + (0 - 7046029254386353131) * (index + 1)
+end
+
+@en "FillUniform"
+@fa "پر کردن یکنواخت"
+@ar "ملء منتظم"
+pub func FillUniform(t &: Tensor, lo: f64, hi: f64, g &: Rng):
+    n := t.data.len()
+    p := t.data.data
+    repeat n with k: p[k] = (lo + (hi - lo) * g.next_float()) as f32 end
+end
+
+@en "FillNormal"
+@fa "پر کردن نرمال"
+@ar "ملء طبيعي"
+pub func FillNormal(t &: Tensor, mean: f64, std: f64, g &: Rng):
+    n := t.data.len()
+    p := t.data.data
+    repeat n with k: p[k] = (mean + std * g.next_normal()) as f32 end
+end
+
+// Ones with probability p, zeros otherwise: a dropout mask before its
+// rescale.
+@en "FillBernoulli"
+@fa "پر کردن برنولی"
+@ar "ملء برنولي"
+pub func FillBernoulli(t &: Tensor, p: f64, g &: Rng):
+    n := t.data.len()
+    d := t.data.data
+    one := 1.0 as f32
+    zero := 0.0 as f32
+    repeat n with k:
+        mut v := zero
+        if g.next_float() < p: v = one end
+        d[k] = v
+    end
+end
+
+@en "RandUniform"
+@fa "تصادفی یکنواخت"
+@ar "عشوائي منتظم"
+pub func RandUniform(shape &: Vector<int>, lo: f64, hi: f64, seed: i64): Tensor:
+    t := _raw(shape)
+    mut g := NewRng(seed)
+    FillUniform(t, lo, hi, g)
+    ret t
+end
+
+@en "RandNormal"
+@fa "تصادفی نرمال"
+@ar "عشوائي طبيعي"
+pub func RandNormal(shape &: Vector<int>, seed: i64): Tensor:
+    t := _raw(shape)
+    mut g := NewRng(seed)
+    FillNormal(t, 0.0, 1.0, g)
+    ret t
+end

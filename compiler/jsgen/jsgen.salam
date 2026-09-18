@@ -26,7 +26,7 @@
 // - jg_t + the used slice of cg_t (codegen_internal.h) are merged into the
 //   package struct Jg. cg->c (sb_t*) is Jg.out, a str.StringBuilder that is
 //   swapped exactly where the C swaps sb pointers (function bodies, lambda
-//   bodies, match-expression IIFEs). cg fields jsgen never touches
+//   bodies and immediately invoked match expressions). cg fields jsgen never touches
 //   (h/safe/debug_info/lam_*/vec_types/dyn_*/deferred/...) are dropped.
 // - The cg_* helpers jsgen calls (codegen_emit.c / codegen_type.c /
 //   codegen_overload.c / codegen_expr.c's cg_op) are ported here as private
@@ -59,20 +59,40 @@ k_js_kw := [
     "if", "implements", "import", "in", "instanceof", "interface", "let", "new", "null", "of", "package",
     "private", "protected", "public", "return", "static", "super", "switch", "this", "throw", "true",
     "try", "typeof", "undefined", "var", "void", "while", "with", "yield"
-] as str[50]
+]
 
 k_js_hostg := [
     "document", "window", "console", "Math", "JSON", "String", "Number", "Boolean", "Array", "Object",
     "Error", "Date", "Promise", "Symbol", "Map", "Set", "globalThis", "performance", "navigator", "location",
     "fetch", "alert", "confirm", "prompt", "parseInt", "parseFloat", "isNaN", "isFinite", "getComputedStyle",
     "requestAnimationFrame", "setTimeout", "setInterval", "clearTimeout", "clearInterval"
-] as str[34]
+]
 
 k_js_runtime := [
     "salam_panic", "__salam_unsupported", "salam_input", "salam_strcat", "salam_str_hash", "salam_hash_int",
     "fmod", "sqrt", "cbrt", "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "exp", "log", "log2",
     "log10", "floor", "ceil", "round", "trunc", "hypot", "fabs", "pow"
-] as str[27]
+]
+
+// The C library's memory primitives, which a browser has no answer for:
+// there is no heap to hand out, and a JS array is not a block of bytes.
+// Emitting a plain call to one of these produced JS that died with
+// "ReferenceError: realloc is not defined" the first time a Vector grew,
+// naming a symbol the reader never wrote. They are reported at build time
+// and lowered to __salam_unsupported() instead - the same treatment
+// 'sizeof' and 'spawn' already get.
+// C library functions a browser has no answer for. They are reported at
+// build time and lowered to __salam_unsupported() instead - the same
+// treatment 'sizeof' and 'spawn' get - so a page fails with the name of
+// what it wanted rather than "ReferenceError: printf is not defined".
+// The memory primitives are NOT here: those are host-mapped onto typed
+// arrays (see k_js_host_names).
+k_js_no_browser := [
+    "printf", "fprintf", "sprintf", "snprintf", "puts", "fputs", "fopen", "fclose",
+    "fread", "fwrite", "fseek", "ftell", "fflush", "opendir", "readdir", "closedir",
+    "remove", "unlink", "rename", "mkdir", "rmdir", "getenv", "setenv", "system",
+    "atexit", "exit", "abort", "signal", "time", "clock", "usleep", "sleep"
+]
 
 // ===== codegen_type.c: cg_is_c_keyword() table =====
 k_js_ckw := [
@@ -81,9 +101,23 @@ k_js_ckw := [
     "short", "signed", "sizeof", "static", "struct", "switch", "typedef", "union", "unsigned", "void",
     "volatile", "while", "asm", "bool", "true", "false", "_Bool", "_Complex", "_Imaginary", "_Alignas",
     "_Alignof", "_Atomic", "_Generic", "_Noreturn", "_Static_assert", "_Thread_local"
-] as str[48]
+]
 
 // ===== jsgen_host.c: k_js_host[] (name/template pairs, split) =====
+// The C memory primitives, over typed arrays. A pointer is a Uint8Array of
+// BYTES here, which is what a `str` cast to one becomes (jsg_is_byte_ptr_ts)
+// and what these hand back. An allocation scaled by sizeof(T) cannot arrive:
+// `sizeof` is unsupported and fails first, so a buffer of anything wider than
+// a byte never gets built on a wrong element size.
+k_js_mem_names := [
+    "malloc", "calloc", "realloc", "free", "memset", "memcpy", "memmove"
+]
+
+k_js_mem_tmpls := [
+    "new Uint8Array(%0)", "new Uint8Array((%0) * (%1))", "__sal_grow(%0, %1)", "undefined",
+    "__sal_memset(%0, %1, %2)", "__sal_memcpy(%0, %1, %2)", "__sal_memcpy(%0, %1, %2)"
+]
+
 k_js_host_names := [
     "salam_js_query", "salam_js_query_all", "salam_js_by_id", "salam_js_id_exists", "salam_js_create",
     "salam_js_body", "salam_js_document", "salam_js_window", "salam_js_global", "salam_js_append", "salam_js_remove",
@@ -108,7 +142,7 @@ k_js_host_names := [
     "salam_js_new_promise", "salam_js_new", "salam_js_invoke", "salam_js_is_nullish", "salam_js_null", "salam_js_undefined",
     "salam_js_to_str", "salam_js_to_num", "salam_js_to_bool", "salam_js_typeof", "salam_js_array0", "salam_js_obj0",
     "strcmp"
-] as str[114]
+]
 
 k_js_host_tmpls := [
     "document.querySelector(%0)", "Array.from(document.querySelectorAll(%0))", "document.getElementById(%0)",
@@ -138,7 +172,7 @@ k_js_host_tmpls := [
     "new Promise(%0)", "new %0(%+1)", "%0(%+1)", "(%0 === null || %0 === undefined)", "null", "undefined",
     "String(%0)", "Number(%0)", "!!(%0)", "typeof %0", "[]", "{}",
     "(%0 < %1 ? -1 : (%0 > %1 ? 1 : 0))"
-] as str[114]
+]
 
 // ===== jsgen.h: jsgen_output_t =====
 pub struct Output:
@@ -164,6 +198,8 @@ pub struct Jg:
     pub cur_fn_home: int = 0 // ScopeId
     pub tmpn: int = 0
     pub fn_defers: Vector<int> = Vector {} // NodeIds
+    // fn_defers depth at the start of each enclosing loop body
+    pub loop_dmark: Vector<int> = Vector {}
     pub match_result_tmp: str = "" // "" = C NULL
     pub match_end_label: str = "" // "" = C NULL
     // jg_t

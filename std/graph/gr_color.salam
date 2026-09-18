@@ -1,0 +1,290 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package graph
+
+
+// Colouring, cliques, independent sets and vertex covers: the NP-hard corner
+// of the library, where the honest thing is to say which routines are exact
+// and which are heuristics.
+//
+//   GreedyColoring    heuristic, <= maxdegree + 1 colours, O(n + m)
+//   WelshPowell       greedy in descending degree order, usually better
+//   DSatur            greedy by saturation, exact on bipartite and chordal
+//   ChromaticNumber   exact, branch and bound, exponential
+//   CountColorings    exact chromatic polynomial value, deletion-contraction
+//   MaxClique         exact, Bron-Kerbosch with pivoting, exponential
+//
+// The exact routines are for graphs of tens of nodes, not thousands. That is
+// not an implementation limit; it is what the problems cost.
+//
+// Colours are 0-based integers. A colouring is proper when no edge joins two
+// nodes of the same colour, which IsProperColoring checks and every routine
+// here guarantees, self loops excepted: a self loop makes a proper colouring
+// impossible and is ignored rather than making everything fail.
+
+func _color_key(n: int, u: int, v: int): i64: ret (u as i64) * (n as i64) + (v as i64) end
+
+func _color_adj(g &: Graph): HashMap<i64, bool>:
+    mut s := HashMap {} as HashMap<i64, bool>
+    repeat g.size() with e:
+        u := g.edge_from(e)
+        v := g.edge_to(e)
+        if u != v:
+            s.put(_color_key(g.n, u, v), true)
+            s.put(_color_key(g.n, v, u), true)
+        end
+    end
+    ret s
+end
+
+// The lowest colour not used by any neighbour, which is the greedy choice.
+func _lowest_free(g &: Graph, u: int, color: Vector<int>, used &: Vector<bool>): int:
+    FillBool(used, g.n + 1, false)
+    mut k := g.adj_start(u)
+    stop := g.adj_stop(u)
+    until k < stop:
+        v := g.adj_node(k)
+        c := color.get(v)
+        if c != GRAPH_NONE: used.set(c, true) end
+        k += 1
+    end
+    mut c := 0
+    until used.get(c): c += 1 end
+    ret c
+end
+
+// Saturation: how many distinct colours already surround a node. DSatur
+// always takes the most constrained node next, breaking ties by degree.
+func _saturation(g &: Graph, u: int, color: Vector<int>, seen &: Vector<bool>): int:
+    FillBool(seen, g.n + 1, false)
+    mut count := 0
+    mut k := g.adj_start(u)
+    stop := g.adj_stop(u)
+    until k < stop:
+        c := color.get(g.adj_node(k))
+        if c != GRAPH_NONE:
+            if seen.get(c) == false:
+                seen.set(c, true)
+                count += 1
+            end
+        end
+        k += 1
+    end
+    ret count
+end
+
+func _dsatur_pick(g &: Graph, color: Vector<int>, seen &: Vector<bool>): int:
+    mut best := GRAPH_NONE
+    mut bestsat := GRAPH_NONE
+    repeat g.n with u:
+        if color.get(u) == GRAPH_NONE:
+            sat := _saturation(g, u, color, seen)
+            if _dsatur_better(g, u, best, sat, bestsat):
+                best = u
+                bestsat = sat
+            end
+        end
+    end
+    ret best
+end
+
+func _dsatur_better(g &: Graph, u: int, best: int, sat: int, bestsat: int): bool:
+    if best == GRAPH_NONE: ret true end
+    if sat > bestsat: ret true end
+    if sat < bestsat: ret false end
+    ret g.degree(u) > g.degree(best)
+end
+
+func _can_use(g &: Graph, u: int, c: int, color: Vector<int>): bool:
+    mut k := g.adj_start(u)
+    stop := g.adj_stop(u)
+    until k < stop:
+        v := g.adj_node(k)
+        if v != u:
+            if color.get(v) == c: ret false end
+        end
+        k += 1
+    end
+    ret true
+end
+
+// Backtracking k-colouring. Colours are tried in order and a node may only
+// open a colour one higher than the highest used so far, which kills the k!
+// symmetry between equivalent colourings and is what makes this finish.
+func _color_search(g &: Graph, k: int, u: int, color &: Vector<int>, high: int): bool:
+    if u >= g.n: ret true end
+    mut top := high + 1
+    if top > k - 1: top = k - 1 end
+    mut c := 0
+    until c <= top:
+        if _can_use(g, u, c, color):
+            color.set(u, c)
+            mut nh := high
+            if c > nh: nh = c end
+            if _color_search(g, k, u + 1, color, nh): ret true end
+            color.set(u, GRAPH_NONE)
+        end
+        c += 1
+    end
+    ret false
+end
+
+
+
+func _mark_incident(g &: Graph, u: int, ecolor: Vector<int>, used &: Vector<bool>):
+    mut k := g.adj_start(u)
+    stop := g.adj_stop(u)
+    until k < stop:
+        c := ecolor.get(g.adj_edge(k))
+        if c != GRAPH_NONE: used.set(c, true) end
+        k += 1
+    end
+end
+
+// Greedy colouring in the given node order: each node takes the lowest colour
+// none of its neighbours has. Never needs more than maxdegree + 1 colours,
+// and the order is what decides how close to optimal it gets.
+@en "GreedyColoring"
+@fa "رنگ‌آمیزی حریصانه"
+@ar "تلوين جشع"
+pub func GreedyColoring(g &: Graph, order: Vector<int>): Vector<int>:
+    mut color := Vector {} as Vector<int>
+    mut used := Vector {} as Vector<bool>
+    defer used.free()
+    FillInt(color, g.n, GRAPH_NONE)
+    repeat order.len() with i:
+        u := order.get(i)
+        color.set(u, _lowest_free(g, u, color, used))
+    end
+    ret color
+end
+
+@en "GreedyColoringNatural"
+@fa "رنگ‌آمیزی حریصانه طبیعی"
+@ar "تلوين جشع طبيعي"
+pub func GreedyColoringNatural(g &: Graph): Vector<int>:
+    mut order := Vector {} as Vector<int>
+    defer order.free()
+    Iota(order, g.n)
+    ret GreedyColoring(g, order)
+end
+
+// Welsh-Powell: greedy in order of descending degree. The high degree nodes
+// are the constrained ones, so colouring them first leaves fewer conflicts.
+@en "WelshPowell"
+@fa "ولش-پاول"
+@ar "ويلش-باول"
+pub func WelshPowell(g &: Graph): Vector<int>:
+    mut h := MinHeap { }
+    defer h.free()
+    repeat g.n with u: h.push(0.0 - (g.degree(u) as f64), u) end
+    mut order := Vector {} as Vector<int>
+    defer order.free()
+    until h.is_empty() == false: order.push(h.pop()) end
+    ret GreedyColoring(g, order)
+end
+
+// DSatur: at every step colour the node with the most differently-coloured
+// neighbours. It is exact on bipartite, cycle and chordal graphs, and is the
+// best of the greedy heuristics in general.
+@en "DSatur"
+@fa "دی‌سچور"
+@ar "دي ساتور"
+pub func DSatur(g &: Graph): Vector<int>:
+    mut color := Vector {} as Vector<int>
+    mut used := Vector {} as Vector<bool>
+    defer used.free()
+    mut seen := Vector {} as Vector<bool>
+    defer seen.free()
+    FillInt(color, g.n, GRAPH_NONE)
+    repeat g.n:
+        u := _dsatur_pick(g, color, seen)
+        if u == GRAPH_NONE: break end
+        color.set(u, _lowest_free(g, u, color, used))
+    end
+    ret color
+end
+
+@en "ColorCount"
+@fa "شمار رنگ"
+@ar "عدد الألوان"
+pub func ColorCount(color: Vector<int>): int:
+    mut best := GRAPH_NONE
+    repeat color.len() with u:
+        if color.get(u) > best: best = color.get(u) end
+    end
+    ret best + 1
+end
+
+@en "IsProperColoring"
+@fa "رنگ‌آمیزی درست است"
+@ar "تلوين صحيح"
+pub func IsProperColoring(g &: Graph, color: Vector<int>): bool:
+    repeat g.size() with e:
+        u := g.edge_from(e)
+        v := g.edge_to(e)
+        if u != v:
+            if color.get(u) == color.get(v): ret false end
+        end
+    end
+    ret true
+end
+
+// The exact chromatic number, by asking "is there a proper k-colouring" for
+// k = 1, 2, ... until one succeeds. The greedy result bounds the search from
+// above and the answer is never below the size of any clique.
+@en "ChromaticNumber"
+@fa "عدد رنگی"
+@ar "العدد اللوني"
+pub func ChromaticNumber(g &: Graph): int:
+    if g.n == 0: ret 0 end
+    repeat g.size() with e:
+        if g.edge_from(e) == g.edge_to(e): ret GRAPH_NONE end
+    end
+    mut color := Vector {} as Vector<int>
+    defer color.free()
+    mut upper := DSatur(g)
+    limit := ColorCount(upper)
+    defer upper.free()
+    mut k := 1
+    until k <= limit:
+        FillInt(color, g.n, GRAPH_NONE)
+        if _color_search(g, k, 0, color, GRAPH_NONE): ret k end
+        k += 1
+    end
+    ret limit
+end
+
+// Greedy edge colouring: adjacent edges get different colours. Vizing's
+// theorem says maxdegree or maxdegree + 1 colours always suffice; greedy can
+// use up to 2 maxdegree - 1, so this is an upper bound, not the index.
+@en "EdgeColoringGreedy"
+@fa "رنگ‌آمیزی یالی حریصانه"
+@ar "تلوين الأضلاع الجشع"
+pub func EdgeColoringGreedy(g &: Graph): Vector<int>:
+    mut ecolor := Vector {} as Vector<int>
+    mut used := Vector {} as Vector<bool>
+    defer used.free()
+    FillInt(ecolor, g.size(), GRAPH_NONE)
+    repeat g.size() with e:
+        FillBool(used, 2 * g.n + 2, false)
+        _mark_incident(g, g.edge_from(e), ecolor, used)
+        _mark_incident(g, g.edge_to(e), ecolor, used)
+        mut c := 0
+        until used.get(c): c += 1 end
+        ecolor.set(e, c)
+    end
+    ret ecolor
+end

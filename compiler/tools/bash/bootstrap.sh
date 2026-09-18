@@ -163,10 +163,10 @@ case "${SALAM_WITH_LLVM:-auto}" in
         LLVM_FLAGS="-DSALAM_HAVE_LLVM --libpath=$LLVM_LIBDIR"
         LLVM_STATE="static in-process ($LLVM_LIBDIR/libsalam_llvm.a)"
     elif [ "${SALAM_WITH_LLVM:-auto}" = auto ]; then
-        LLVM_STATE="off (no $LLVM_LIBDIR/libsalam_llvm.a; build it with 'make -C c libsalam-llvm WITH_LLVM=1 WITH_LLD=1')"
+        LLVM_STATE="off (no $LLVM_LIBDIR/libsalam_llvm.a; build it with 'sh std/llvm/native/build.sh')"
     else
         echo "error: SALAM_WITH_LLVM=${SALAM_WITH_LLVM} but $LLVM_LIBDIR/libsalam_llvm.a is missing." >&2
-        echo "       Build it with: make -C c libsalam-llvm WITH_LLVM=1 WITH_LLD=1" >&2
+        echo "       Build it with: sh std/llvm/native/build.sh" >&2
         exit 2
     fi
     ;;
@@ -205,6 +205,13 @@ fi
 # compiling something to find out.
 accepts_llvm_flags() {
     "$1" help 2>&1 | grep -q -- '--libpath'
+}
+
+# Does this compiler understand -dNAME=VALUE compile-time constants? A seed
+# released before they existed rejects the flag outright rather than ignoring
+# it, so stage 1 has to ask before stamping the build info onto it.
+accepts_const_defines() {
+    "$1" help 2>&1 | grep -q -- '-dNAME=VALUE'
 }
 
 # Escape hatch for the LLVM-builds-LLVM chain below. `c` puts every stage
@@ -252,6 +259,32 @@ has_inprocess_llvm() {
     rm -rf "$_probe_dir"
     return $_rc
 }
+
+# What `salam version` will report for every stage. compiler/sal_core.salam
+# reads these as compile-time constants, so without them a stage inherits the
+# *builder's* build info - which for stage 1 means a released seed's version
+# number rather than this checkout's. VERSION is the repo file, the single
+# place the release number lives; the git metadata describes the tree being
+# compiled, not the compiler doing the compiling.
+STAMP_VERSION="$(cat "$ROOT/VERSION" 2>/dev/null || echo 0.0.0-dev)"
+# The full 40-character hash, not --short: an abbreviation is only
+# unique until the repository grows into a collision, and anything
+# reading SALAM_GIT_COMMIT to identify a build - a bug report, a
+# reproducibility check - wants the name that always resolves.
+STAMP_COMMIT="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
+# Strict ISO 8601 (%cI, not %ci): the flag list below is word-split on the
+# way to the build command, so a commit date with spaces in it would arrive
+# as four separate arguments. The C Makefile stamps the same format.
+STAMP_DATE="$(git -C "$ROOT" show -s --format=%cI HEAD 2>/dev/null || echo unknown)"
+STAMP_DIRTY=
+if [ -n "$(git -C "$ROOT" status --porcelain 2>/dev/null)" ]; then
+    STAMP_DIRTY=-dirty
+fi
+# Quoted so a value that would otherwise read as a number (a two-component
+# version like "0.3") stays a string constant.
+BUILD_INFO_FLAGS="-dSALAM_VERSION=\"$STAMP_VERSION\" -dSALAM_GIT_COMMIT=\"$STAMP_COMMIT\""
+BUILD_INFO_FLAGS="$BUILD_INFO_FLAGS -dSALAM_GIT_DATE=\"$STAMP_DATE\""
+BUILD_INFO_FLAGS="$BUILD_INFO_FLAGS -dSALAM_GIT_DIRTY=\"$STAMP_DIRTY\""
 
 # The seed decides whether stage 1 can have LLVM. Everything after it is
 # built by a compiler from this checkout, so from stage 2 on the only
@@ -309,11 +342,20 @@ while [ "$stage" -le "$STAGES" ]; do
         stage_backend=LLVM
     fi
     echo "   backend: $stage_backend (via $(basename "$prev"))"
+    # A seed too old to know -d gets no stamp and reports its own build info;
+    # every later stage is built by a compiler from this checkout, so only
+    # stage 1 can ever fall back.
+    stage_info=$BUILD_INFO_FLAGS
+    if ! accepts_const_defines "$prev"; then
+        stage_info=
+        echo "::warning::$(basename "$prev") predates -dNAME=VALUE;" \
+            "stage $stage reports its builder's version, not $STAMP_VERSION" >&2
+    fi
     # shellcheck disable=SC2086 # flag lists; splitting is wanted
     (
         cd "$ROOT" &&
             "$prev" build compiler/main.salam \
-                --output="$out" $stage_cc --log-level=error $stage_llvm
+                --output="$out" $stage_cc --log-level=error $stage_llvm $stage_info
     ) || {
         echo "::error::stage $stage build failed" >&2
         if [ "$stage_backend" = LLVM ]; then
@@ -334,7 +376,7 @@ while [ "$stage" -le "$STAGES" ]; do
             echo "      mem function nothing declared yet - an implicit declaration of" >&2
             echo "      _Salam_mem_AllocateZeroed_u64 that gcc 16 and clang reject." >&2
             echo "hint: use a 0.2.9 or newer seed, or build one from this checkout" >&2
-            echo "      with 'make -C c' and pass ./salam." >&2
+            echo "      with 'sh tools/bash/build-selfhost.sh' and pass ./salam." >&2
         fi
         exit 1
     }

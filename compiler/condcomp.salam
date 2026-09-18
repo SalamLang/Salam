@@ -48,7 +48,7 @@ import str
 pub const CC_BOOL := 0
 pub const CC_STR := 1
 
-const K_CC_NUM_BOOL_FLAGS := 20
+const K_CC_NUM_BOOL_FLAGS := 25
 
 // ===== condcomp_table.c =====
 // s_all_bool_flags[] (NULL terminator dropped; fixed length instead).
@@ -56,8 +56,9 @@ k_cc_all_bool_flags := [
     "SALAM_OS_WINDOWS", "SALAM_OS_WIN64", "SALAM_OS_WIN32", "SALAM_OS_WASM", "SALAM_OS_ANDROID", "SALAM_OS_LINUX",
     "SALAM_OS_MAC", "SALAM_OS_BSD", "SALAM_OS_FREEBSD", "SALAM_OS_OPENBSD", "SALAM_OS_NETBSD", "SALAM_OS_UNIX",
     "SALAM_ARCH_X64", "SALAM_ARCH_X86", "SALAM_ARCH_ARM64", "SALAM_ARCH_ARM", "SALAM_ARCH_WASM", "SALAM_MEM_DEBUG",
-    "SALAM_ASAN", "SALAM_SAFE"
-] as str[20]
+    "SALAM_ASAN", "SALAM_SAFE", "SALAM_OS_BSOS", "SALAM_OS_UEFI", "SALAM_FREESTANDING", "SALAM_KERNEL",
+    "SALAM_OS_SALAMOS"
+]
 
 // cc_const_t
 pub struct Entry:
@@ -198,7 +199,52 @@ func cc_push_target_defs(t &: Table, trip: str):
         cc_push_str(t, "SALAM_ARCH", "arm")
     end
 
-    if trip_has(trip, "windows") || trip_has(trip, "mingw") || trip_has(trip, "win32"):
+    if trip_has(trip, "bsos"):
+        cc_push_bool(t, "SALAM_OS_BSOS", true)
+        // Deliberately NOT SALAM_OS_UNIX. BS OS runs Salam programs and has no
+        // libc, so a package that takes its POSIX arm on this target compiles
+        // to open/read/pthread_create calls that nothing can link. Claiming
+        // Unix here was a shortcut that made those packages appear to port for
+        // free; it made them fail at link time with an undefined symbol
+        // instead of at the `if` with a branch that is honestly missing.
+        // std/net, std/sync and std/thread are the three packages this
+        // affects, and each needs a real SALAM_OS_BSOS arm.
+        cc_push_str(t, "SALAM_OS", "bsos")
+        // Every BSOS target is freestanding, not only the kernel one, which is
+        // what cg_target_is_freestanding in codegen_core.salam has always
+        // decided. The flag used to be set here for the kernel triple alone,
+        // so a BSOS userspace program was compiled freestanding but could not
+        // say so in an `if`. The two now agree.
+        cc_push_bool(t, "SALAM_FREESTANDING", true)
+        // "-kernel" adds the ring-0 profile on top: the float ban that keeps
+        // SSE state off the interrupt path.
+        if trip_has(trip, "kernel"):
+            cc_push_bool(t, "SALAM_KERNEL", true)
+        end
+    else trip_has(trip, "salamos"):
+        cc_push_bool(t, "SALAM_OS_SALAMOS", true)
+        // Deliberately NOT SALAM_OS_UNIX, for the same reason as
+        // SALAM_OS_BSOS above: SalamOS has no libc, so std/net, std/sync and
+        // std/thread need a real SALAM_OS_SALAMOS arm rather than falling
+        // through to a POSIX path that fails at link time with an undefined
+        // symbol instead of at the `if` with a branch that is honestly
+        // missing.
+        cc_push_str(t, "SALAM_OS", "salamos")
+        // Every SalamOS target is freestanding, kernel or not: there is no
+        // libc, a userspace program links against libsos/sysabi's raw
+        // syscall stub instead.
+        cc_push_bool(t, "SALAM_FREESTANDING", true)
+        // "-kernel" adds the ring-0 profile on top: the float ban that keeps
+        // SSE state off the interrupt path.
+        if trip_has(trip, "kernel"):
+            cc_push_bool(t, "SALAM_KERNEL", true)
+        end
+    else trip_has(trip, "uefi"):
+        // BS-Boot: PE32+, Microsoft x64 ABI, no libc.
+        cc_push_bool(t, "SALAM_OS_UEFI", true)
+        cc_push_bool(t, "SALAM_FREESTANDING", true)
+        cc_push_str(t, "SALAM_OS", "uefi")
+    else trip_has(trip, "windows") || trip_has(trip, "mingw") || trip_has(trip, "win32"):
         cc_push_bool(t, "SALAM_OS_WINDOWS", true)
         cc_push_str(t, "SALAM_OS", "windows")
         cc_push_bool(t, bits64 ? "SALAM_OS_WIN64" : "SALAM_OS_WIN32", true)
@@ -276,7 +322,7 @@ func cc_fold_defined_call(a: at.Ast, t: Table, id: int): Bres:
     if n.list.len() != 1:
         ret Bres {}
     end
-    argid := n.list.get(0)[0]
+    argid := n.list.get(0)
     if argid == 0:
         ret Bres {}
     end
@@ -311,7 +357,7 @@ func cc_fold_scalar(a: at.Ast, t: Table, id: int, lenient: bool): Scalar:
             end
             ret Scalar {}
         end
-        e := t.entries.get(ci)[0]
+        e := t.entries.get(ci)
         if e.kind == CC_BOOL:
             ret Scalar { ok = true, is_str = false, bval = e.bval, sval = "" }
         end
@@ -405,6 +451,78 @@ func cc_cond_has_ref(a: at.Ast, id: int): bool:
     ret false
 end
 
+// cc_lvalue_root - the identifier an assignment target hangs off, walking
+// through the member/index chain the way sema's analyze_lvalue does. 0 when
+// the target bottoms out in something that is not a plain name.
+func cc_lvalue_root(a &: at.Ast, id: int): int:
+    mut cur := id
+    until cur != 0:
+        k := at.KindOf(a, cur)
+        if k == at.AST_IDENTIFIER:
+            ret cur
+        end
+        if k != at.AST_MEMBER && k != at.AST_INDEX && k != at.AST_SLICE:
+            ret 0
+        end
+        cur = at.Get(a, cur).a
+    end
+    ret 0
+end
+
+// cc_note_write - records the root of a write target as assigned-in-pruned-code.
+func cc_note_write(a &: at.Ast, file: str, target: int):
+    r := cc_lvalue_root(a, target)
+    if r != 0:
+        at.NotePruned(a, file, at.Get(a, r).name, true)
+    end
+end
+
+// cc_note_pruned - walks a subtree that is about to be dropped and records
+// every name it mentions (Ast.pruned_names), marking the ones it writes to.
+// Without this, the lints that fire at the end of sema see a variable whose
+// only assignment, or a function whose only call, lived in the branch this
+// host folds away, and report it as unused or never-mutated - a hard error on
+// source that is correct for the other host. The write set mirrors the four
+// things sema itself counts as a mutation: assignment targets, ++/--, the
+// receiver of a method call, and any bare identifier handed to a call (the
+// callee's `&:` parameters are not known this early, so every argument name
+// is treated as one).
+func cc_note_pruned(a &: at.Ast, file: str, id: int):
+    if id == 0:
+        ret
+    end
+    n := at.Get(a, id)
+    at.NotePruned(a, file, n.name, false)
+    if n.kind == at.AST_ASSIGN || n.kind == at.AST_INCDEC:
+        cc_note_write(a, file, n.a)
+    end
+    if n.kind == at.AST_CALL:
+        if at.KindOf(a, n.a) == at.AST_MEMBER:
+            cc_note_write(a, file, at.Get(a, n.a).a)
+        end
+        repeat at.ChildCount(a, id) with ai:
+            arg := at.Child(a, id, ai)
+            if arg != 0 && at.KindOf(a, arg) == at.AST_IDENTIFIER:
+                at.NotePruned(a, file, at.Get(a, arg).name, true)
+            end
+        end
+    end
+    cc_note_pruned(a, file, n.ty)
+    cc_note_pruned(a, file, n.a)
+    cc_note_pruned(a, file, n.b)
+    cc_note_pruned(a, file, n.c)
+    cc_note_pruned(a, file, n.d)
+    repeat at.ChildCount(a, id) with i0:
+        cc_note_pruned(a, file, at.Child(a, id, i0))
+    end
+    repeat at.DimCount(a, id) with i1:
+        cc_note_pruned(a, file, at.Dim(a, id, i1))
+    end
+    repeat at.CaptureCount(a, id) with i2:
+        cc_note_pruned(a, file, at.Capture(a, id, i2))
+    end
+end
+
 // cc_resolve_if - returns the surviving node id (0 = whole if pruned away).
 func cc_resolve_if(
     a &: at.Ast, log: lg.Logger, file: str, t: Table, id: int, top_level: bool, ok &: bool
@@ -416,6 +534,7 @@ func cc_resolve_if(
     end
     if r.ok:
         taken := r.bval ? n.b : n.c
+        cc_note_pruned(a, file, r.bval ? n.c : n.b)
         if taken == 0:
             ret 0
         end
@@ -515,18 +634,18 @@ func cc_process_list(
     defer orig.free()
     n0 := at.Get(a, owner)
     repeat n0.list.len() with i0:
-        orig.push(n0.list.get(i0)[0])
+        orig.push(n0.list.get(i0))
     end
     mut out := Vector {} as Vector<int>
     repeat orig.len() with i1:
-        it := orig.get(i1)[0]
+        it := orig.get(i1)
         if it != 0 && at.KindOf(a, it) == at.AST_IF:
             resolved := cc_resolve_if(a, log, file, t, it, top_level, ok)
             if resolved != 0:
                 if at.KindOf(a, resolved) == at.AST_BLOCK:
                     rn := at.Get(a, resolved)
                     repeat rn.list.len() with j:
-                        out.push(rn.list.get(j)[0])
+                        out.push(rn.list.get(j))
                     end
                 else:
                     out.push(resolved)
@@ -555,7 +674,7 @@ pub func TableBuild(target_triple: str, defines: Vector<str>): Table:
         cc_push_host_defs(t)
     end
     repeat defines.len() with i:
-        cc_push_define(t, defines.get(i)[0])
+        cc_push_define(t, defines.get(i))
     end
     cc_push_missing_bool_defaults(t)
     ret t
@@ -569,7 +688,7 @@ end
 // cc_table_lookup - first entry named `name`, or -1 (the C NULL).
 pub func Lookup(t: Table, name: str): int:
     repeat t.entries.len() with i:
-        e := t.entries.get(i)[0]
+        e := t.entries.get(i)
         if str.Equals(e.name, name):
             ret i
         end
@@ -582,23 +701,23 @@ pub func EntryCount(t: Table): int:
 end
 
 pub func EntryName(t: Table, i: int): str:
-    e := t.entries.get(i)[0]
+    e := t.entries.get(i)
     ret e.name
 end
 
 // CC_BOOL or CC_STR
 pub func EntryKind(t: Table, i: int): int:
-    e := t.entries.get(i)[0]
+    e := t.entries.get(i)
     ret e.kind
 end
 
 pub func EntryBool(t: Table, i: int): bool:
-    e := t.entries.get(i)[0]
+    e := t.entries.get(i)
     ret e.bval
 end
 
 pub func EntryStr(t: Table, i: int): str:
-    e := t.entries.get(i)[0]
+    e := t.entries.get(i)
     ret e.sval
 end
 

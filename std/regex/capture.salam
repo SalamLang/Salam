@@ -1,0 +1,445 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Reading a match apart: where it matched, and what each capturing group
+// captured. A MatchResult is a plain value - it carries the subject text and
+// the group offsets, so it can be copied, stored in a Vector and read long
+// after the next match has run, without anything to free.
+//
+//     m := regex.FindMatchStr(`(\d{4})-(\d{2})-(\d{2})`, "due 2026-08-17.")
+//     if m.ok:
+//         println regex.Group(m, 1), regex.Group(m, 2), regex.Group(m, 3)
+//     end
+//
+// Vector results (FindAll, FindSubmatch, Split) are heap allocated: the caller
+// frees them, `defer v.free()` as usual.
+
+package regex
+
+@en "MatchResult"
+@fa "نتیجه تطبیق"
+@ar "نتیجة التطابق"
+pub struct MatchResult:
+    // False when nothing matched; every other field is then meaningless.
+    pub ok: bool = false
+    // Byte offsets of the whole match: [start, stop).
+    pub start: int = -1
+    pub stop: int = -1
+    // Number of capturing groups in the pattern, which is the highest index
+    // Group accepts. A group that took no part in the match is still counted,
+    // and reads back as "".
+    pub count: int = 0
+    pub text: str = ""
+    pub pattern: str = ""
+    pub gs: int[17] = [-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1]
+    pub ge: int[17] = [-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1]
+end
+
+// Snapshot the engine's capture slots into a value the caller can keep.
+func _re_result(pat: str, text: str, ok: bool): MatchResult:
+    mut m := MatchResult { text = text, pattern = pat }
+    if !ok: ret m end
+    m.ok = true
+    m.start = _re_save[0]
+    m.stop = _re_save[1]
+    m.count = _re_ngroup
+    mut i := 0
+    until i <= _RE_MAX_GROUP:
+        m.gs[i] = _re_save[2 * i]
+        m.ge[i] = _re_save[2 * i + 1]
+        i += 1
+    end
+    ret m
+end
+
+// Group number a (?<name>…) / (?P<name>…) in `pat` was given, or -1. Group
+// numbers come from the order of the opening parens, so this counts them the
+// way the parser did: skipping escapes, class bodies and (?:…).
+func _re_name_index(pat: str, name: str): int:
+    pl := pat.len()
+    pp := _bp(pat)
+    mut i := 0
+    mut g := 0
+    until i < pl:
+        c := _ub(pp, i)
+        if c == 92:
+            i += 2
+        else c == 91:
+            stop := _re_scan_class(pat, i)
+            if stop < 0: i += 1 else: i = stop end
+        else c == 40:
+            mut j := i + 1
+            if j < pl && _ub(pp, j) == 63:
+                j += 1
+                if j < pl && _ub(pp, j) == 80: j += 1 end
+                if j < pl && _ub(pp, j) == 60:
+                    j += 1
+                    ns := j
+                    until j < pl && _ub(pp, j) != 62:
+                        j += 1
+                    end
+                    g += 1
+                    if j < pl && _re_same(pat.substr(ns, j - ns), name): ret g end
+                end
+            else:
+                g += 1
+            end
+            i += 1
+        else:
+            i += 1
+        end
+    end
+    ret -1
+end
+
+// Where the search resumes after a match: one past a zero-width match, so a
+// pattern that can match nothing still walks the whole subject. This is the Go
+// rule rather than the Perl one - a pattern that just matched nothing at some
+// offset is not retried there demanding something, so `a??` over "a1" finds
+// three empty matches instead of an empty one and "a" at the same offset.
+func _re_advance(m: MatchResult): int:
+    if m.stop > m.start: ret m.stop end
+    ret m.start + 1
+end
+
+// $1 / ${1} / ${name}, resolved against a match.
+func _re_expand_ref(m: MatchResult, name: str): str:
+    nl := name.len()
+    if nl == 0: ret "" end
+    np := _bp(name)
+    mut alldigits := true
+    mut i := 0
+    mut num := 0
+    until i < nl:
+        c := _ub(np, i)
+        if !_re_is_digit(c): alldigits = false
+        else:
+            num = num * 10 + (c - 48)
+        end
+        i += 1
+    end
+    if alldigits: ret Group(m, num) end
+    ret GroupByName(m, name)
+end
+
+@en "FindMatch"
+@fa "یافتن تطبیق"
+@ar "بحث تطابق"
+pub func FindMatch(re: Regex, text: str): MatchResult:
+    ret _re_result(re.pattern, text, _re_exec(re.pattern, text, 0))
+end
+
+@en "FindMatchStr"
+@fa "یافتن تطبیق رشته"
+@ar "بحث تطابق نص"
+pub func FindMatchStr(pattern: str, text: str): MatchResult:
+    ret _re_result(pattern, text, _re_exec(pattern, text, 0))
+end
+
+@en "FindMatchFrom"
+@fa "یافتن تطبیق از"
+@ar "بحث تطابق من"
+pub func FindMatchFrom(re: Regex, text: str, from: int): MatchResult:
+    ret _re_result(re.pattern, text, _re_exec(re.pattern, text, from))
+end
+
+@en "GroupCount"
+@fa "تعداد گروه"
+@ar "عدد المجموعات"
+pub func GroupCount(m: MatchResult): int:
+    ret m.count
+end
+
+@en "GroupOk"
+@fa "گروه هست"
+@ar "المجموعة موجودة"
+pub func GroupOk(m: MatchResult, i: int): bool:
+    if !m.ok || i < 0 || i > m.count || i > _RE_MAX_GROUP: ret false end
+    ret m.gs[i] >= 0 && m.ge[i] >= m.gs[i]
+end
+
+@en "Group"
+@fa "گروه"
+@ar "مجموعة"
+pub func Group(m: MatchResult, i: int): str:
+    if !GroupOk(m, i): ret "" end
+    ret m.text.substr(m.gs[i], m.ge[i] - m.gs[i])
+end
+
+@en "GroupStart"
+@fa "شروع گروه"
+@ar "بدایة المجموعة"
+pub func GroupStart(m: MatchResult, i: int): int:
+    if !GroupOk(m, i): ret -1 end
+    ret m.gs[i]
+end
+
+@en "GroupEnd"
+@fa "پایان گروه"
+@ar "نهایة المجموعة"
+pub func GroupEnd(m: MatchResult, i: int): int:
+    if !GroupOk(m, i): ret -1 end
+    ret m.ge[i]
+end
+
+@en "GroupIndex"
+@fa "شماره گروه"
+@ar "رقم المجموعة"
+pub func GroupIndex(m: MatchResult, name: str): int:
+    ret _re_name_index(m.pattern, name)
+end
+
+@en "GroupByName"
+@fa "گروه با نام"
+@ar "مجموعة بالاسم"
+pub func GroupByName(m: MatchResult, name: str): str:
+    ret Group(m, _re_name_index(m.pattern, name))
+end
+
+@en "FindSubmatch"
+@fa "یافتن زیرتطبیق"
+@ar "بحث تطابق فرعی"
+pub func FindSubmatch(re: Regex, text: str): Vector<str>:
+    out := Vector {} as Vector<str>
+    m := FindMatch(re, text)
+    if !m.ok: ret out end
+    mut i := 0
+    until i <= m.count:
+        out.push(Group(m, i))
+        i += 1
+    end
+    ret out
+end
+
+@en "FindSubmatchStr"
+@fa "یافتن زیرتطبیق رشته"
+@ar "بحث تطابق فرعی نص"
+pub func FindSubmatchStr(pattern: str, text: str): Vector<str>:
+    ret FindSubmatch(Compile(pattern), text)
+end
+
+@en "FindAllMatches"
+@fa "یافتن همه تطبیق ها"
+@ar "بحث کل التطابقات"
+pub func FindAllMatches(re: Regex, text: str, limit: int): Vector<MatchResult>:
+    out := Vector {} as Vector<MatchResult>
+    mut from := 0
+    mut going := true
+    until going:
+        if limit >= 0 && out.len() >= limit: going = false
+        else from > text.len(): going = false
+        else:
+            m := FindMatchFrom(re, text, from)
+            if !m.ok:
+                going = false
+            else:
+                out.push(m)
+                from = _re_advance(m)
+            end
+        end
+    end
+    ret out
+end
+
+@en "FindAllN"
+@fa "یافتن چند"
+@ar "بحث عدد"
+pub func FindAllN(re: Regex, text: str, limit: int): Vector<str>:
+    // Deliberately not FindAllMatches plus a map: keeping the whole walk in
+    // strings is what lets this one run under the interpreter too.
+    out := Vector {} as Vector<str>
+    mut from := 0
+    mut going := true
+    until going:
+        if limit >= 0 && out.len() >= limit: going = false
+        else from > text.len(): going = false
+        else:
+            m := FindMatchFrom(re, text, from)
+            if !m.ok:
+                going = false
+            else:
+                out.push(Group(m, 0))
+                from = _re_advance(m)
+            end
+        end
+    end
+    ret out
+end
+
+@en "FindAll"
+@fa "یافتن همه"
+@ar "بحث الکل"
+pub func FindAll(re: Regex, text: str): Vector<str>:
+    ret FindAllN(re, text, -1)
+end
+
+@en "FindAllStr"
+@fa "یافتن همه رشته"
+@ar "بحث الکل نص"
+pub func FindAllStr(pattern: str, text: str): Vector<str>:
+    ret FindAllN(Compile(pattern), text, -1)
+end
+
+@en "SplitN"
+@fa "جدا کردن چند"
+@ar "تقسیم عدد"
+pub func SplitN(re: Regex, text: str, limit: int): Vector<str>:
+    // limit is a ceiling on the pieces: negative for no ceiling, and zero for
+    // none wanted at all, the same way it reads in FindAllN.
+    out := Vector {} as Vector<str>
+    if limit == 0: ret out end
+    mut from := 0
+    mut cut := 0
+    mut going := true
+    until going:
+        if limit >= 0 && out.len() + 1 >= limit: going = false
+        else from > text.len(): going = false
+        else:
+            m := FindMatchFrom(re, text, from)
+            // A zero-width match at the cut point, or at the very end, would
+            // only produce an empty piece and no progress, so it is skipped
+            // rather than split on.
+            if !m.ok:
+                going = false
+            else m.stop == m.start && m.start >= text.len():
+                going = false
+            else m.stop == m.start && m.start <= cut:
+                from = _re_advance(m)
+            else:
+                out.push(text.substr(cut, m.start - cut))
+                cut = m.stop
+                from = _re_advance(m)
+            end
+        end
+    end
+    out.push(text.substr(cut, text.len() - cut))
+    ret out
+end
+
+@en "Split"
+@fa "جدا کردن"
+@ar "تقسیم"
+pub func Split(re: Regex, text: str): Vector<str>:
+    ret SplitN(re, text, -1)
+end
+
+@en "SplitStr"
+@fa "جدا کردن رشته"
+@ar "تقسیم نص"
+pub func SplitStr(pattern: str, text: str): Vector<str>:
+    ret SplitN(Compile(pattern), text, -1)
+end
+
+@en "Expand"
+@fa "بسط"
+@ar "توسیع"
+pub func Expand(m: MatchResult, template: str): str:
+    if !m.ok: ret "" end
+    mut out := ""
+    tl := template.len()
+    tp := _bp(template)
+    mut i := 0
+    until i < tl:
+        c := _ub(tp, i)
+        mut plain := true
+        if c == 36 && i + 1 < tl:
+            n := _ub(tp, i + 1)
+            if n == 36:
+                out = out.concat("$")
+                i += 2
+                plain = false
+            else n == 123:
+                mut j := i + 2
+                until j < tl && _ub(tp, j) != 125:
+                    j += 1
+                end
+                if j < tl:
+                    out = out.concat(_re_expand_ref(m, template.substr(i + 2, j - i - 2)))
+                    i = j + 1
+                    plain = false
+                end
+            else _re_is_digit(n):
+                mut j := i + 1
+                mut num := 0
+                until j < tl && _re_is_digit(_ub(tp, j)):
+                    num = num * 10 + (_ub(tp, j) - 48)
+                    j += 1
+                end
+                out = out.concat(Group(m, num))
+                i = j
+                plain = false
+            end
+        end
+        if plain:
+            out = out.concat(template.substr(i, 1))
+            i += 1
+        end
+    end
+    ret out
+end
+
+@en "ReplaceExpand"
+@fa "جایگزینی با بسط"
+@ar "استبدال مع توسیع"
+pub func ReplaceExpand(re: Regex, text: str, template: str): str:
+    m := FindMatch(re, text)
+    if !m.ok: ret text end
+    tl := text.len()
+    ret text.substr(0, m.start).concat(Expand(m, template)).concat(text.substr(m.stop, tl - m.stop))
+end
+
+@en "ReplaceAllExpand"
+@fa "جایگزینی همه با بسط"
+@ar "استبدال الکل مع توسیع"
+pub func ReplaceAllExpand(re: Regex, text: str, template: str): str:
+    mut out := ""
+    mut cut := 0
+    mut from := 0
+    mut going := true
+    until going:
+        if from > text.len(): going = false
+        else:
+            m := FindMatchFrom(re, text, from)
+            if !m.ok:
+                going = false
+            else:
+                out = out.concat(text.substr(cut, m.start - cut)).concat(Expand(m, template))
+                cut = m.stop
+                from = _re_advance(m)
+                // A zero-width match leaves the byte it sat on unconsumed.
+                if m.stop == m.start && from <= text.len():
+                    if from > cut:
+                        out = out.concat(text.substr(cut, from - cut))
+                        cut = from
+                    end
+                end
+            end
+        end
+    end
+    ret out.concat(text.substr(cut, text.len() - cut))
+end
+
+@en "ReplaceExpandStr"
+@fa "جایگزینی با بسط رشته"
+@ar "استبدال مع توسیع نص"
+pub func ReplaceExpandStr(pattern: str, text: str, template: str): str:
+    ret ReplaceExpand(Compile(pattern), text, template)
+end
+
+@en "ReplaceAllExpandStr"
+@fa "جایگزینی همه با بسط رشته"
+@ar "استبدال الکل مع توسیع نص"
+pub func ReplaceAllExpandStr(pattern: str, text: str, template: str): str:
+    ret ReplaceAllExpand(Compile(pattern), text, template)
+end

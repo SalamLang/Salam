@@ -16,6 +16,7 @@ package archive
 
 import compress
 import filepath
+import mem
 import str
 
 // The ZIP archive format (PKWARE's APPNOTE.TXT): a local file header
@@ -72,6 +73,12 @@ func _zip_read_name(p: void*, off: int, name_len: int): str:
     ret nm
 end
 
+// _zip_read_name returns the shared empty literal for a zero-length
+// name, which must not be freed.
+func _zip_free_name(name: str):
+    if str.Len(name) > 0: mem.Free(name as void*) end
+end
+
 func _zip_is_dir_name(name: str): bool:
     n := name.len()
     if n == 0: ret false end
@@ -98,7 +105,7 @@ pub func ZipCreate(files: Vector<ZipFileInput>): compress.ByteBuf:
     mut count := 0
     mut i := 0
     until i < files.len():
-        f := files.get(i)[0]
+        f := files.get(i)
         crc := compress.CRC32(f.data_ptr, f.data_len)
         mut comp_ptr := f.data_ptr
         mut comp_len := f.data_len
@@ -256,9 +263,12 @@ pub func ZipExtractByName(p: void*, n: int, name: str, ok &: bool): compress.Byt
         extra_len := LEGet16(p, pos + 30)
         comment_len := LEGet16(p, pos + 32)
         local_offset := LEGet32(p, pos + 42)
+        // Only compared, never kept: _zip_read_name allocates, so the
+        // scan would leak one name per entry it walks past.
         nm := _zip_read_name(p, pos + 46, name_len)
-
-        if nm == name:
+        hit := nm == name
+        _zip_free_name(nm)
+        if hit:
             if (flags & 1) != 0:
                 ret out
             end
@@ -302,12 +312,14 @@ pub func ZipExtractAll(p: void*, n: int, destdir: str): bool:
     mut all_ok := true
     mut i := 0
     until i < entries.len():
-        e := entries.get(i)[0]
+        e := entries.get(i)
         outpath := filepath.Join(destdir, e.name)
         if e.is_dir:
             EnsureDir(outpath)
         else:
-            EnsureDir(filepath.Dir(outpath))
+            parent := filepath.Dir(outpath)
+            EnsureDir(parent)
+            mem.Free(parent as void*)
             mut ok := false
             data := ZipExtractByName(p, n, e.name, ok)
             if ok:
@@ -319,8 +331,10 @@ pub func ZipExtractAll(p: void*, n: int, destdir: str): bool:
             end
             compress.BufFree(data)
         end
+        // filepath.Join hands back a fresh string on every entry.
+        mem.Free(outpath as void*)
         i += 1
     end
-    entries.free()
+    defer FreeEntries(entries)
     ret all_ok
 end

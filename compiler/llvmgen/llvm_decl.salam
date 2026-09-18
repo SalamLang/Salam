@@ -21,7 +21,7 @@ func emit_struct_types(v &: Lv, s &: sm.Sema, a &: at.Ast, program: int):
                 ltname := struct_ltype(sname)
                 mut seen := false
                 repeat v.emitted.len() with ke:
-                    if str.Equals(ltname, v.emitted.get(ke)[0]):
+                    if str.Equals(ltname, v.emitted.get(ke)):
                         seen = true
                     end
                 end
@@ -32,7 +32,7 @@ func emit_struct_types(v &: Lv, s &: sm.Sema, a &: at.Ast, program: int):
                     mut nf := 0
                     syms := sm.ScopeAt(s, sy.members).symbols
                     repeat syms.len() with j:
-                        f := sm.SymAt(s, syms.get(j)[0])
+                        f := sm.SymAt(s, syms.get(j))
                         if f.kind == sm.SYM_FIELD:
                             if nf != 0:
                                 co.SbPuts(b, ", ")
@@ -103,7 +103,7 @@ func mangle_in(
         sg := sm.SigAt(s, sig)
         repeat sg.params.len() with i:
             co.SbPutc(b, 95)
-            put_type_code(b, sm.ToString(s, sg.params.get(i)[0]))
+            put_type_code(b, sm.ToString(s, sg.params.get(i)))
         end
     end
     r := co.SbCstr(b)
@@ -112,13 +112,43 @@ func mangle_in(
 end
 
 // ll_mangle - the package in scope right now. Every call site that reaches a
-// free function through the current scope (a same-package call, funcptr/&f)
+// free function through the current scope (a same-package call, a bare name
+// read as a value, &f)
 // is emitting into the same package the callee was declared in, so the
 // definition and those calls agree on the name. call_pkg is the exception -
 // it resolves through another package's member scope and passes that package
 // to mangle_in itself.
 func mangle(v &: Lv, s &: sm.Sema, owner: str, fn_name: str, sig: int): str:
     ret mangle_in(v, s, pkg_of_scope(s, v.pkg_scope), owner, fn_name, sig)
+end
+
+// A method's owner, spelled the one way every side of the call agrees on.
+//
+// It used to be the struct's DECLARED name, so `pa.Input.free` and
+// `pb.Input.free` both mangled to @salam_Input_free: one body was emitted and
+// every call to either bound to it. The bodies read `this` at their own
+// struct's field offsets, so a call that got the wrong one loaded whatever
+// happened to sit at that offset in the other layout - which is how a
+// `Vector<i64>` receiver came out eight bytes past its real address and free()
+// was handed the {count, cap} pair as if it were the data pointer. The C
+// backend never had this: cg_mangle_method has always folded the owner's
+// package into the name.
+//
+// The canonical type name is unique by construction and is exactly what a
+// receiver's type_str already carries, so call sites can derive it without
+// knowing anything the declared name did not already tell them.
+func owner_key(s &: sm.Sema, osym: int): str:
+    if osym == 0:
+        ret ""
+    end
+    ov := sm.SymAt(s, osym)
+    if ov.ty != sm.TYPE_NONE:
+        ts := sm.ToString(s, ov.ty)
+        if str.Len(ts) > 0:
+            ret ts
+        end
+    end
+    ret ov.name
 end
 
 // ll_pick_overload - first exact arg-typestring match; else first
@@ -131,7 +161,7 @@ func pick_overload(
     sy := sm.SymAt(s, symid)
     nargs := at.ChildCount(a, call)
     repeat sy.overloads.len() with i:
-        sigid := sy.overloads.get(i)[0]
+        sigid := sy.overloads.get(i)
         sg := sm.SigAt(s, sigid)
         skip := nargs < sg.required || (!sg.variadic && nargs > sg.params.len())
         if !skip:
@@ -143,7 +173,7 @@ func pick_overload(
             mut j := 0
             until j < nfix && okm:
                 arg := at.Get(a, at.Child(a, call, j))
-                pt := sm.ToString(s, sg.params.get(j)[0])
+                pt := sm.ToString(s, sg.params.get(j))
                 if str.Len(arg.type_str) == 0 || !str.Equals(arg.type_str, pt):
                     okm = false
                 end
@@ -158,9 +188,39 @@ func pick_overload(
         ret arity
     end
     if sy.overloads.len() > 0:
-        ret sy.overloads.get(0)[0]
+        ret sy.overloads.get(0)
     end
     ret 0
+end
+
+// Every signature indexed by the declaration it belongs to, built on first
+// use. A name is not enough to find a function's own signature: two packages
+// can each declare a private `draw_empty`, the global scope holds one of
+// them, and the other one then took its parameter list - a wrong LLVM
+// signature when the arities happened to agree, and a compiler crash when
+// they did not.
+func sig_for_decl(v &: Lv, s &: sm.Sema, fn: int): int:
+    if v.sig_ix.len() == 0:
+        total := sm.SigCount(s)
+        mut i := 1
+        until i < total:
+            d := sm.SigAt(s, i).decl
+            if d > 0:
+                until v.sig_ix.len() <= d:
+                    v.sig_ix.push(0)
+                end
+                if v.sig_ix.get(d) == 0:
+                    v.sig_ix.set(d, i)
+                end
+            end
+            i += 1
+        end
+        v.sig_ix.push(0)
+    end
+    if fn <= 0 || fn >= v.sig_ix.len():
+        ret 0
+    end
+    ret v.sig_ix.get(fn)
 end
 
 // ll_sig_of
@@ -170,22 +230,55 @@ func sig_of(v &: Lv, s &: sm.Sema, a &: at.Ast, fn: int, owner: int): int:
     if owner != 0:
         symid = sm.LookupLocal(s, sm.SymAt(s, owner).members, fname)
     else:
-        symid = sym_of(v, s, a, fname)
-    end
-    if symid == 0:
-        ret 0
-    end
-    sy := sm.SymAt(s, symid)
-    repeat sy.overloads.len() with i:
-        sigid := sy.overloads.get(i)[0]
-        if sm.SigAt(s, sigid).decl == fn:
-            ret sigid
+        // The package being emitted owns its own names, the way call_user
+        // already resolves a call; only then does the global scope answer.
+        if v.pkg_scope != 0:
+            own := sm.LookupLocal(s, v.pkg_scope, fname)
+            if own != 0 && sm.SymAt(s, own).kind == sm.SYM_FUNC:
+                symid = own
+            end
+        end
+        if symid == 0:
+            symid = sym_of(v, s, a, fname)
         end
     end
-    if sy.overloads.len() > 0:
-        ret sy.overloads.get(0)[0]
+    if symid != 0:
+        sy := sm.SymAt(s, symid)
+        repeat sy.overloads.len() with i:
+            sigid := sy.overloads.get(i)
+            if sm.SigAt(s, sigid).decl == fn:
+                ret sigid
+            end
+        end
+    end
+    exact := sig_for_decl(v, s, fn)
+    if exact != 0:
+        ret exact
+    end
+    if symid != 0:
+        sy2 := sm.SymAt(s, symid)
+        if sy2.overloads.len() > 0:
+            first := sy2.overloads.get(0)
+            if sm.SigAt(s, first).params.len() == at.ChildCount(a, fn):
+                ret first
+            end
+        end
     end
     ret 0
+end
+
+// How many parameters a declaration and its signature agree on. They always
+// should; when they do not the module is wrong rather than merely incomplete,
+// so say so and emit the part that is sound instead of reading past the end
+// of either list.
+func param_count(v &: Lv, a &: at.Ast, s &: sm.Sema, fn: int, sig: int, fname: str): int:
+    n := at.ChildCount(a, fn)
+    m := sm.SigAt(s, sig).params.len()
+    if n == m:
+        ret n
+    end
+    lv_error(v, a, fn, "no signature for '" + fname + "'")
+    ret n < m ? n : m
 end
 
 // ll_fn_header - recv_param "" = the C NULL.
@@ -214,9 +307,10 @@ func fn_header(
     end
     fnode := at.Get(a, fn)
     sg := sm.SigAt(s, sig)
-    repeat at.ChildCount(a, fn) with i:
-        p := at.Get(a, fnode.list.get(i)[0])
-        pts := sm.ToString(s, sg.params.get(i)[0])
+    nparams := param_count(v, a, s, fn, sig, fname)
+    repeat nparams with i:
+        p := at.Get(a, fnode.list.get(i))
+        pts := sm.ToString(s, sg.params.get(i))
         if !first:
             co.SbPuts(hdr, ", ")
         end
@@ -249,6 +343,13 @@ func fn_header(
         co.SbPuts(hdr, " minsize")
     end
     co.SbPuts(hdr, " nounwind")
+    // Without this the optimizer rewrites calls into whatever libc it
+    // assumes is there - printf("%s\n", x) becomes puts, strstr(s, "/")
+    // becomes strchr - and a freestanding program fails to link against
+    // names its own runtime never defined.
+    if v.freestanding:
+        co.SbPuts(hdr, " \"no-builtins\"")
+    end
     if v.debug && str.Len(v.cur_sp) > 0:
         co.SbPuts(hdr, " !dbg " + v.cur_sp)
     end
@@ -262,9 +363,9 @@ end
 func spill_params(v &: Lv, s &: sm.Sema, a &: at.Ast, fn: int, sig: int):
     fnode := at.Get(a, fn)
     sg := sm.SigAt(s, sig)
-    repeat at.ChildCount(a, fn) with i:
-        p := at.Get(a, fnode.list.get(i)[0])
-        pts := sm.ToString(s, sg.params.get(i)[0])
+    repeat param_count(v, a, s, fn, sig, at.Get(a, fn).name) with i:
+        p := at.Get(a, fnode.list.get(i))
+        pts := sm.ToString(s, sg.params.get(i))
         if p.is_ref:
             local_add(v, p.name, "%arg" + co.I64Toa(i as i64), pts)
         else:
@@ -316,7 +417,7 @@ func emit_function(v &: Lv, s &: sm.Sema, a &: at.Ast, fn: int, owner: int):
         fname = fnode.name
     else:
         fname = mangle(
-            v, s, owner != 0 ? sm.SymAt(s, owner).name : "", fnode.name, sig
+            v, s, owner != 0 ? owner_key(s, owner) : "", fnode.name, sig
         )
     end
     mut recv_param := ""
@@ -329,7 +430,7 @@ func emit_function(v &: Lv, s &: sm.Sema, a &: at.Ast, fn: int, owner: int):
     end
     exported := is_main0 || (owner == 0 && fnode.is_extern)
     repeat v.emitted.len() with i:
-        if str.Equals(fname, v.emitted.get(i)[0]):
+        if str.Equals(fname, v.emitted.get(i)):
             ret
         end
     end
@@ -350,10 +451,12 @@ func emit_function(v &: Lv, s &: sm.Sema, a &: at.Ast, fn: int, owner: int):
     // belonging to the inner function and never defined in its own,
     // producing IR that fails to parse.
     mut saved_brk := Vector {} as Vector<str>
+    mut saved_dmk := Vector {} as Vector<int>
     mut saved_cont := Vector {} as Vector<str>
     repeat saved_nloop with sbi:
-        saved_brk.push(v.brk.get(sbi)[0])
-        saved_cont.push(v.cont.get(sbi)[0])
+        saved_brk.push(v.brk.get(sbi))
+        saved_cont.push(v.cont.get(sbi))
+        saved_dmk.push(v.loop_dmark.get(sbi))
     end
     saved_main := v.is_main
     saved_byval := v.self_byval
@@ -400,7 +503,7 @@ func emit_function(v &: Lv, s &: sm.Sema, a &: at.Ast, fn: int, owner: int):
         // take the printf path. Only where the buffer is reachable at all:
         // single_threaded is already false for Windows targets, whose CRT
         // has no `write` for the helper to call.
-        if v.single_threaded:
+        if v.single_threaded && !v.freestanding:
             need(v, LV_H_OUTBUF)
             // Returning from main is not the only way out: os.Exit() calls
             // exit(), and an atexit handler can print after main is gone.
@@ -429,6 +532,18 @@ func emit_function(v &: Lv, s &: sm.Sema, a &: at.Ast, fn: int, owner: int):
             ensure_fn(v, s, a, sm.SigAt(s, sa).decl, 0, sm.SymAt(s, sa_owner).members)
             emit(v, "call void @salam_set_args(i32 %argc, ptr %argv)")
         end
+        // Keep freed blocks in the process instead of returning them to the
+        // kernel. glibc hands anything past 128 KiB back with munmap or an
+        // sbrk shrink, so a loop that allocates a result, frees it and
+        // allocates the next one re-faults every page it touches: on a
+        // 4096x4096 f64 matrix add that was two thirds of the wall time and
+        // none of it arithmetic. M_MMAP_THRESHOLD is -3 and M_TRIM_THRESHOLD
+        // is -1; the values clear a 128 MiB matrix, which the first version
+        // of this did not.
+        if v.libc_glibc:
+            emit(v, new_tmp(v) + " = call i32 @mallopt(i32 -3, i32 268435456)")
+            emit(v, new_tmp(v) + " = call i32 @mallopt(i32 -1, i32 536870912)")
+        end
         emit_global_inits(v, s, a)
     end
     if fnode.a != 0:
@@ -451,11 +566,13 @@ func emit_function(v &: Lv, s &: sm.Sema, a &: at.Ast, fn: int, owner: int):
     v.lbl = saved_lbl
     v.nloop = saved_nloop
     repeat saved_nloop with rbi:
-        v.brk.set(rbi, saved_brk.get(rbi)[0])
-        v.cont.set(rbi, saved_cont.get(rbi)[0])
+        v.brk.set(rbi, saved_brk.get(rbi))
+        v.cont.set(rbi, saved_cont.get(rbi))
+        v.loop_dmark.set(rbi, saved_dmk.get(rbi))
     end
-    saved_brk.free()
-    saved_cont.free()
+    defer saved_brk.free()
+    defer saved_dmk.free()
+    defer saved_cont.free()
     v.is_main = saved_main
     v.ret_ts = saved_ret
     v.self_byval = saved_byval
@@ -498,9 +615,9 @@ end
 // ll_match_sig
 func match_sig(s &: sm.Sema, m: int, want: int): int:
     sy := sm.SymAt(s, m)
-    first := sy.overloads.len() > 0 ? sy.overloads.get(0)[0] : 0
+    first := sy.overloads.len() > 0 ? sy.overloads.get(0) : 0
     repeat sy.overloads.len() with i:
-        sigid := sy.overloads.get(i)[0]
+        sigid := sy.overloads.get(i)
         if sm.SigAt(s, sigid).params.len() == want:
             ret sigid
         end
@@ -514,7 +631,7 @@ func ensure_vtbl(
 ):
     name := vtbl_name(iface, concrete)
     repeat v.emitted.len() with i:
-        if str.Equals(name, v.emitted.get(i)[0]):
+        if str.Equals(name, v.emitted.get(i)):
             ret
         end
     end
@@ -528,10 +645,10 @@ func ensure_vtbl(
     mut n := 0
     isyms := sm.ScopeAt(s, sm.SymAt(s, isym).members).symbols
     repeat isyms.len() with mi:
-        imid := isyms.get(mi)[0]
+        imid := isyms.get(mi)
         im := sm.SymAt(s, imid)
         if im.kind == sm.SYM_METHOD && im.overloads.len() > 0:
-            isig := im.overloads.get(0)[0]
+            isig := im.overloads.get(0)
             cm := sm.LookupLocal(s, sm.SymAt(s, csym).members, im.name)
             mut csig := 0
             if cm != 0 && sm.SymAt(s, cm).kind == sm.SYM_METHOD:
@@ -544,7 +661,7 @@ func ensure_vtbl(
                 ensure_fn(v, s, a, sm.SigAt(s, csig).decl, csym, v.pkg_scope)
                 co.SbPuts(
                     slots, "ptr @" + mangle(
-                        v, s, concrete, im.name, csig
+                        v, s, owner_key(s, csym), im.name, csig
                     )
                 )
             else:
@@ -647,7 +764,7 @@ func mangle_ti(
         sg := sm.SigAt(s, sig)
         repeat sg.params.len() with i:
             co.SbPutc(b, 95)
-            put_type_code(b, sm.ToString(s, sg.params.get(i)[0]))
+            put_type_code(b, sm.ToString(s, sg.params.get(i)))
         end
     end
     r := co.SbCstr(b)
@@ -659,15 +776,15 @@ end
 func emit_impls_in(v &: Lv, s &: sm.Sema, a &: at.Ast, gsc: int):
     syms := sm.ScopeAt(s, gsc).symbols
     repeat syms.len() with i:
-        ownerid := syms.get(i)[0]
+        ownerid := syms.get(i)
         owner := sm.SymAt(s, ownerid)
         if owner.kind == sm.SYM_TYPEIMPL && owner.members != 0:
             msyms := sm.ScopeAt(s, owner.members).symbols
             repeat msyms.len() with j:
-                m := sm.SymAt(s, msyms.get(j)[0])
+                m := sm.SymAt(s, msyms.get(j))
                 if m.kind == sm.SYM_METHOD:
                     repeat m.overloads.len() with k:
-                        sigid := m.overloads.get(k)[0]
+                        sigid := m.overloads.get(k)
                         d := sm.SigAt(s, sigid).decl
                         if d != 0:
                             emit_function(v, s, a, d, ownerid)

@@ -1,0 +1,189 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/autograd: analytic gradients agree with central differences for
+// composite functions. h and tol are sized for f32 forward math.
+
+import autograd
+import tensor
+import testing
+
+// The fixed weight the matmul case multiplies by, shared with its loss
+// function through a global because lambdas capture by value.
+mut g_w := tensor.Tensor {}
+
+func f_tanh(t: tensor.Tensor): f64:
+    mut tp := autograd.NewTape(1)
+    x := autograd.Input(tp, t)
+    v := autograd.Value(tp, autograd.Sum(tp, autograd.Tanh(tp, x)))
+    out := v.at(0)
+    tp.free()
+    ret out
+end
+
+func f_sigx(t: tensor.Tensor): f64:
+    mut tp := autograd.NewTape(1)
+    x := autograd.Input(tp, t)
+    v := autograd.Value(tp, autograd.Sum(tp, autograd.Mul(tp, autograd.Sigmoid(tp, x), x)))
+    out := v.at(0)
+    tp.free()
+    ret out
+end
+
+func f_matmul(t: tensor.Tensor): f64:
+    mut tp := autograd.NewTape(1)
+    x := autograd.Input(tp, t)
+    w := autograd.Input(tp, g_w)
+    v := autograd.Value(tp, autograd.Sum(tp, autograd.Square(tp, autograd.MatMul(tp, x, w))))
+    out := v.at(0)
+    tp.free()
+    ret out
+end
+
+func f_logsoftmax(t: tensor.Tensor): f64:
+    mut tp := autograd.NewTape(1)
+    x := autograd.Input(tp, t)
+    v := autograd.Value(tp, autograd.Sum(tp, autograd.Square(tp, autograd.LogSoftmax(tp, x))))
+    out := v.at(0)
+    tp.free()
+    ret out
+end
+
+func f_gelu(t: tensor.Tensor): f64:
+    mut tp := autograd.NewTape(1)
+    x := autograd.Input(tp, t)
+    v := autograd.Value(tp, autograd.Mean(tp, autograd.Gelu(tp, x)))
+    out := v.at(0)
+    tp.free()
+    ret out
+end
+
+func f_rational(t: tensor.Tensor): f64:
+    // sum(x / (x^2 + 1))
+    mut tp := autograd.NewTape(1)
+    x := autograd.Input(tp, t)
+    den := autograd.AddScalar(tp, autograd.Square(tp, x), 1.0)
+    v := autograd.Value(tp, autograd.Sum(tp, autograd.Div(tp, x, den)))
+    out := v.at(0)
+    tp.free()
+    ret out
+end
+
+func f_expscale(t: tensor.Tensor): f64:
+    mut tp := autograd.NewTape(1)
+    x := autograd.Input(tp, t)
+    v := autograd.Value(tp, autograd.Sum(tp, autograd.Exp(tp, autograd.Scale(tp, x, 0.5))))
+    out := v.at(0)
+    tp.free()
+    ret out
+end
+
+func f_sumaxis(t: tensor.Tensor): f64:
+    mut tp := autograd.NewTape(1)
+    x := autograd.Input(tp, t)
+    v := autograd.Value(tp, autograd.Sum(tp, autograd.Square(tp, autograd.SumAxis(tp, x, 0, false))))
+    out := v.at(0)
+    tp.free()
+    ret out
+end
+
+// Builds the analytic gradient of `which` at x, as a fresh tensor the
+// caller frees. The forward graph here must match the f_* function the
+// checker perturbs.
+func analytic_of(which: int, x &: tensor.Tensor): tensor.Tensor:
+    mut tp := autograd.NewTape(1)
+    xid := autograd.Watch(tp, x)
+    mut loss := 0 - 1
+    if which == 0:
+        loss = autograd.Sum(tp, autograd.Tanh(tp, xid))
+    else which == 1:
+        loss = autograd.Sum(tp, autograd.Mul(tp, autograd.Sigmoid(tp, xid), xid))
+    else which == 2:
+        w := autograd.Input(tp, g_w)
+        loss = autograd.Sum(tp, autograd.Square(tp, autograd.MatMul(tp, xid, w)))
+    else which == 3:
+        loss = autograd.Sum(tp, autograd.Square(tp, autograd.LogSoftmax(tp, xid)))
+    else which == 4:
+        loss = autograd.Mean(tp, autograd.Gelu(tp, xid))
+    else which == 5:
+        den := autograd.AddScalar(tp, autograd.Square(tp, xid), 1.0)
+        loss = autograd.Sum(tp, autograd.Div(tp, xid, den))
+    else which == 6:
+        loss = autograd.Sum(tp, autograd.Exp(tp, autograd.Scale(tp, xid, 0.5)))
+    else:
+        loss = autograd.Sum(tp, autograd.Square(tp, autograd.SumAxis(tp, xid, 0, false)))
+    end
+    autograd.Backward(tp, loss)
+    g := autograd.Grad(tp, xid)
+    out := tensor.Clone(g)
+    tp.free()
+    ret out
+end
+
+func main:
+    h := 0.01
+    tol := 0.02
+
+    mut s43 := tensor.Shape2(4, 3)
+    mut x := tensor.RandUniform(s43, 0.0 - 2.0, 2.0, 17)
+    mut s32 := tensor.Shape2(3, 2)
+    g_w = tensor.RandUniform(s32, 0.0 - 1.0, 1.0, 19)
+    s32.free()
+
+    mut ga := analytic_of(0, x)
+    testing.AssertTrue(autograd.GradCheck((t: tensor.Tensor): ret f_tanh(t) end, x, ga, h, tol))
+    tensor.Free(ga)
+
+    ga = analytic_of(1, x)
+    testing.AssertTrue(autograd.GradCheck((t: tensor.Tensor): ret f_sigx(t) end, x, ga, h, tol))
+    tensor.Free(ga)
+
+    ga = analytic_of(2, x)
+    testing.AssertTrue(autograd.GradCheck((t: tensor.Tensor): ret f_matmul(t) end, x, ga, h, tol))
+    tensor.Free(ga)
+
+    ga = analytic_of(3, x)
+    testing.AssertTrue(autograd.GradCheck((t: tensor.Tensor): ret f_logsoftmax(t) end, x, ga, h, tol))
+    tensor.Free(ga)
+
+    ga = analytic_of(4, x)
+    testing.AssertTrue(autograd.GradCheck((t: tensor.Tensor): ret f_gelu(t) end, x, ga, h, tol))
+    tensor.Free(ga)
+
+    ga = analytic_of(5, x)
+    testing.AssertTrue(autograd.GradCheck((t: tensor.Tensor): ret f_rational(t) end, x, ga, h, tol))
+    tensor.Free(ga)
+
+    ga = analytic_of(6, x)
+    testing.AssertTrue(autograd.GradCheck((t: tensor.Tensor): ret f_expscale(t) end, x, ga, h, tol))
+    tensor.Free(ga)
+
+    ga = analytic_of(7, x)
+    testing.AssertTrue(autograd.GradCheck((t: tensor.Tensor): ret f_sumaxis(t) end, x, ga, h, tol))
+    tensor.Free(ga)
+
+    // A wrong gradient is rejected
+    ga = analytic_of(0, x)
+    tensor.ScaleInPlace(ga, 1.5)
+    testing.AssertFalse(autograd.GradCheck((t: tensor.Tensor): ret f_tanh(t) end, x, ga, h, tol))
+    tensor.Free(ga)
+
+    s43.free()
+    tensor.Free(x)
+    tensor.Free(g_w)
+
+    ret testing.Summary()
+end

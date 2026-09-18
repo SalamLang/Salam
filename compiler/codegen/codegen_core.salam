@@ -12,7 +12,7 @@ import sm "../semantic/semantic.salam"
 func detect_gui_imports(a &: at.Ast, program: int): bool:
     prog := at.Get(a, program)
     repeat prog.list.len() with i:
-        d := at.Get(a, prog.list.get(i)[0])
+        d := at.Get(a, prog.list.get(i))
         if d.kind != at.AST_IMPORT:
             continue
         end
@@ -29,7 +29,7 @@ end
 func emit_private_protos(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
     prog := at.Get(a, program)
     repeat prog.list.len() with i:
-        did := prog.list.get(i)[0]
+        did := prog.list.get(i)
         d := at.Get(a, did)
         if d.typarams.len() > 0:
             continue
@@ -48,10 +48,56 @@ func emit_private_protos(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
     out(g, "\n")
 end
 
+// A global whose initialiser is not a constant is emitted as a plain
+// definition plus a separate assignment, because C only accepts a constant
+// expression there. Those assignments used to be replayed at the top of `main`
+// and nowhere else, which meant they ran for the main module only: a
+// `mut g_cat := catalog.New()` in an imported package stayed zeroed, and the
+// first read of it failed a long way from the cause ("Vector.get: index out of
+// bounds") with nothing to say the initialiser had never run.
+//
+// Every module gets one of these instead, and runs its imports' first, so the
+// graph comes up bottom-up before main's body starts. The flag is set before
+// the recursion, not after, so an import cycle terminates rather than
+// recursing forever - the same trade C++ makes for static initialisation.
+func emit_module_init(g &: Cg, _s &: sm.Sema, a &: at.Ast, program: int):
+    out(g, "void " + cg_module_init_name(g.module) + "(void) {\n")
+    out(g, "    static int __salam_init_done = 0;\n")
+    out(g, "    if (__salam_init_done) return;\n")
+    out(g, "    __salam_init_done = 1;\n")
+    // core's init is the one every other module's init calls first, and it
+    // runs before main's body, so it is the single place the process-wide
+    // allocator tuning can be installed exactly once.
+    if str.Equals(g.module, "core"):
+        out(g, "    salam_tune_allocator();\n")
+    end
+    // std/core is every module's dependency without appearing in anyone's
+    // import list - the header includes its header on the same terms.
+    if !str.Equals(g.module, "core"):
+        out(g, "    " + cg_module_init_name("core") + "();\n")
+    end
+    prog := at.Get(a, program)
+    repeat prog.list.len() with i:
+        did := prog.list.get(i)
+        if at.KindOf(a, did) != at.AST_IMPORT:
+            continue
+        end
+        basev := cg_import_module(a, did)
+        if str.Len(basev) == 0:
+            continue
+        end
+        out(g, "    " + cg_module_init_name(basev) + "();\n")
+    end
+    repeat g.deferred.len() with j:
+        out(g, "    " + g.deferred.get(j) + "\n")
+    end
+    out(g, "}\n\n")
+end
+
 func emit_globals(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
     prog := at.Get(a, program)
     repeat prog.list.len() with i:
-        d := at.Get(a, prog.list.get(i)[0])
+        d := at.Get(a, prog.list.get(i))
         if d.kind != at.AST_CONST_DECL && d.kind != at.AST_VAR_DECL:
             continue
         end
@@ -59,13 +105,15 @@ func emit_globals(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
             continue
         end
         ts := str.Len(d.type_str) > 0 ? d.type_str : "int32_t"
-        decl := cg_decl(ts, d.name)
+        // Package-qualified, so two modules can each declare `COLS`.
+        gname := cg_global_cname(g.pkg, d.name)
+        decl := cg_decl_cn(ts, gname)
         is_array := str.IndexOf(ts, "[") >= 0
         can_defer := d.kind == at.AST_VAR_DECL && d.a != 0 && at.KindOf(a, d.a) != at.AST_LITERAL && !is_array
         if can_defer:
             out(g, decl + ";\n")
             g.deferred.push(
-                cg_cident(d.name) + " = " + cg_expr(g, s, a, d.a) + ";"
+                gname + " = " + cg_expr(g, s, a, d.a) + ";"
             )
         else:
             // Arrays are excluded on purpose. A Salam array parameter is a
@@ -77,7 +125,10 @@ func emit_globals(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
             // never alias, so they keep the qualifier (and .rodata).
             // codegen_header's extern declaration must agree, or the
             // definition and the declaration conflict.
-            want_const := d.kind == at.AST_CONST_DECL && !is_array
+            // A function value is excluded for the same reason an array is:
+            // it lowers to the closure environment pointer, which a callee
+            // takes as a plain `void*`.
+            want_const := d.kind == at.AST_CONST_DECL && !is_array && !type_is_callable(ts)
             gct_const := want_const && str.StartsWith(cg_ctype(ts), "const ")
             pfx := (want_const && !gct_const) ? "const " : ""
             if d.a != 0:
@@ -93,19 +144,19 @@ end
 func emit_impl_protos(g &: Cg, s &: sm.Sema, a &: at.Ast):
     gsc := sm.ScopeAt(s, s.global)
     repeat gsc.symbols.len() with i:
-        oid := gsc.symbols.get(i)[0]
+        oid := gsc.symbols.get(i)
         owner := sm.SymAt(s, oid)
         if owner.kind != sm.SYM_TYPEIMPL || owner.members == 0:
             continue
         end
         msc := sm.ScopeAt(s, owner.members)
         repeat msc.symbols.len() with j:
-            m := sm.SymAt(s, msc.symbols.get(j)[0])
+            m := sm.SymAt(s, msc.symbols.get(j))
             if m.kind != sm.SYM_METHOD:
                 continue
             end
             repeat m.overloads.len() with k:
-                sig := m.overloads.get(k)[0]
+                sig := m.overloads.get(k)
                 if sig != 0 && sm.SigAt(s, sig).decl != 0:
                     out(
                         g, func_signature(
@@ -121,19 +172,19 @@ end
 func emit_impl_bodies(g &: Cg, s &: sm.Sema, a &: at.Ast):
     gsc := sm.ScopeAt(s, s.global)
     repeat gsc.symbols.len() with i:
-        oid := gsc.symbols.get(i)[0]
+        oid := gsc.symbols.get(i)
         owner := sm.SymAt(s, oid)
         if owner.kind != sm.SYM_TYPEIMPL || owner.members == 0:
             continue
         end
         msc := sm.ScopeAt(s, owner.members)
         repeat msc.symbols.len() with j:
-            m := sm.SymAt(s, msc.symbols.get(j)[0])
+            m := sm.SymAt(s, msc.symbols.get(j))
             if m.kind != sm.SYM_METHOD:
                 continue
             end
             repeat m.overloads.len() with k:
-                sig := m.overloads.get(k)[0]
+                sig := m.overloads.get(k)
                 if sig != 0 && sm.SigAt(s, sig).decl != 0:
                     cg_function(g, s, a, sm.SigAt(s, sig).decl, oid)
                 end
@@ -144,7 +195,7 @@ end
 
 func inl_name_in(names: Vector<str>, name: str): bool:
     repeat names.len() with i:
-        if str.Equals(names.get(i)[0], name):
+        if str.Equals(names.get(i), name):
             ret true
         end
     end
@@ -166,7 +217,7 @@ func inl_collect_locals(a &: at.Ast, names &: Vector<str>, id: int):
     inl_collect_locals(a, names, n.c)
     inl_collect_locals(a, names, n.d)
     repeat n.list.len() with i:
-        inl_collect_locals(a, names, n.list.get(i)[0])
+        inl_collect_locals(a, names, n.list.get(i))
     end
 end
 
@@ -177,7 +228,7 @@ func inl_sym_decl(s &: sm.Sema, symid: int): int:
         ret sv.decl
     end
     if sv.overloads.len() > 0:
-        sig := sv.overloads.get(0)[0]
+        sig := sv.overloads.get(0)
         if sig != 0:
             ret sm.SigAt(s, sig).decl
         end
@@ -223,11 +274,45 @@ func inl_body_exportable(
         ret false
     end
     repeat n.list.len() with i:
-        if !inl_body_exportable(s, a, names, n.list.get(i)[0]):
+        if !inl_body_exportable(s, a, names, n.list.get(i)):
             ret false
         end
     end
     ret true
+end
+
+// A `pub inline` body is copied into the header, so it may only name things
+// every includer can also see. One that reaches for a module-private symbol
+// loses the inline rather than the compile.
+func demote_if_nonexportable(g &: Cg, s &: sm.Sema, a &: at.Ast, fid: int):
+    f := at.Get(a, fid)
+    mut names := Vector {} as Vector<str>
+    inl_collect_locals(a, names, fid)
+    if !inl_body_exportable(s, a, names, f.a):
+        mut fn2 := at.Get(a, fid)
+        fn2.is_inline = false
+        at.Put(a, fid, fn2)
+        lg.Log(
+            g.log, lg.PH_CODEGEN, lg.LOG_INFO, "inline '" + f.name + "' uses module-private symbols; " + "emitting it as a regular function"
+        )
+    end
+    names.free()
+end
+
+// Methods of a generic struct are already emitted `static inline` once per
+// instantiation, so `inline` on them is a no-op rather than a header export.
+func demote_struct_inlines(g &: Cg, s &: sm.Sema, a &: at.Ast, did: int):
+    d := at.Get(a, did)
+    if d.typarams.len() > 0 || d.synthetic:
+        ret
+    end
+    repeat d.list.len() with j:
+        mid := d.list.get(j)
+        m := at.Get(a, mid)
+        if m.kind == at.AST_FUNC_DEF && m.is_inline && m.is_pub && !m.is_extern:
+            demote_if_nonexportable(g, s, a, mid)
+        end
+    end
 end
 
 func demote_nonexportable_inlines(
@@ -235,8 +320,12 @@ func demote_nonexportable_inlines(
 ):
     prog := at.Get(a, program)
     repeat prog.list.len() with i:
-        did := prog.list.get(i)[0]
+        did := prog.list.get(i)
         d := at.Get(a, did)
+        if d.kind == at.AST_STRUCT_DEF:
+            demote_struct_inlines(g, s, a, did)
+            continue
+        end
         if d.kind != at.AST_FUNC_DEF || !d.is_inline:
             continue
         end
@@ -252,17 +341,29 @@ func demote_nonexportable_inlines(
         if !d.is_pub:
             continue
         end
-        mut names := Vector {} as Vector<str>
-        inl_collect_locals(a, names, did)
-        if !inl_body_exportable(s, a, names, d.a):
-            mut dn2 := at.Get(a, did)
-            dn2.is_inline = false
-            at.Put(a, did, dn2)
-            lg.Log(
-                g.log, lg.PH_CODEGEN, lg.LOG_INFO, "inline '" + d.name + "' uses module-private symbols; " + "emitting it as a regular function"
-            )
+        demote_if_nonexportable(g, s, a, did)
+    end
+end
+
+func is_header_inline(a &: at.Ast, fid: int): bool:
+    f := at.Get(a, fid)
+    ret f.kind == at.AST_FUNC_DEF && f.is_inline && f.is_pub && !f.is_extern && f.typarams.len() == 0 && !f.synthetic && f.a != 0
+end
+
+func emit_struct_inline_bodies(g &: Cg, s &: sm.Sema, a &: at.Ast, did: int):
+    d := at.Get(a, did)
+    if d.typarams.len() > 0 || d.synthetic:
+        ret
+    end
+    ssym := sm.LookupLocal(s, s.global, d.name)
+    if ssym == 0:
+        ret
+    end
+    repeat d.list.len() with j:
+        mid := d.list.get(j)
+        if is_header_inline(a, mid):
+            cg_function(g, s, a, mid, ssym)
         end
-        names.free()
     end
 end
 
@@ -271,15 +372,15 @@ func emit_inline_header(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
     g.cur = CG_OUT_H
     prog := at.Get(a, program)
     repeat prog.list.len() with i:
-        did := prog.list.get(i)[0]
+        did := prog.list.get(i)
         d := at.Get(a, did)
-        if d.kind != at.AST_FUNC_DEF || !d.is_inline || !d.is_pub:
+        if d.kind == at.AST_STRUCT_DEF:
+            emit_struct_inline_bodies(g, s, a, did)
             continue
         end
-        if d.typarams.len() > 0 || d.synthetic || d.is_extern || d.a == 0:
-            continue
+        if is_header_inline(a, did):
+            cg_function(g, s, a, did, 0)
         end
-        cg_function(g, s, a, did, 0)
     end
     g.cur = save
 end
@@ -287,7 +388,7 @@ end
 func emit_function_bodies(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
     prog := at.Get(a, program)
     repeat prog.list.len() with i:
-        did := prog.list.get(i)[0]
+        did := prog.list.get(i)
         d := at.Get(a, did)
         if d.typarams.len() > 0:
             continue
@@ -306,8 +407,11 @@ func emit_function_bodies(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
         else d.kind == at.AST_STRUCT_DEF:
             ssym := sm.LookupLocal(s, s.global, d.name)
             repeat d.list.len() with j:
-                mid := d.list.get(j)[0]
-                if at.KindOf(a, mid) == at.AST_FUNC_DEF:
+                mid := d.list.get(j)
+                m := at.Get(a, mid)
+                // pub inline methods already have their body in the header,
+                // same as pub inline free functions above.
+                if m.kind == at.AST_FUNC_DEF && !(m.is_inline && m.is_pub):
                     cg_function(g, s, a, mid, ssym)
                 end
             end
@@ -354,7 +458,7 @@ func inst_pkg_protos(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
                         // func_signature mangles with g.pkg; borrow the callee's.
                         g.pkg = pkname
                         repeat sm.SymAt(s, fn).overloads.len() with k:
-                            sig := sm.SymAt(s, fn).overloads.get(k)[0]
+                            sig := sm.SymAt(s, fn).overloads.get(k)
                             if sig != 0 && sm.SigAt(s, sig).decl != 0:
                                 dd := at.Get(a, sm.SigAt(s, sig).decl)
                                 if !dd.is_extern && !dd.synthetic && dd.typarams.len() == 0:
@@ -380,10 +484,10 @@ func inst_pkg_protos(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
     inst_pkg_protos(g, s, a, nn.c)
     inst_pkg_protos(g, s, a, nn.d)
     repeat nn.list.len() with li:
-        inst_pkg_protos(g, s, a, nn.list.get(li)[0])
+        inst_pkg_protos(g, s, a, nn.list.get(li))
     end
     repeat nn.dims.len() with di:
-        inst_pkg_protos(g, s, a, nn.dims.get(di)[0])
+        inst_pkg_protos(g, s, a, nn.dims.get(di))
     end
 end
 
@@ -392,13 +496,13 @@ func emit_instances_header(
 ):
     prog := at.Get(a, program)
     repeat prog.list.len() with pi:
-        pd := prog.list.get(pi)[0]
+        pd := prog.list.get(pi)
         if at.Get(a, pd).synthetic:
             inst_pkg_protos(g, s, a, pd)
         end
     end
     repeat prog.list.len() with i:
-        did := prog.list.get(i)[0]
+        did := prog.list.get(i)
         d := at.Get(a, did)
         if !d.synthetic:
             continue
@@ -419,7 +523,7 @@ func emit_instances_header(
                 continue
             end
             repeat d.list.len() with j:
-                mid := d.list.get(j)[0]
+                mid := d.list.get(j)
                 m := at.Get(a, mid)
                 if m.kind != at.AST_FUNC_DEF:
                     continue
@@ -439,7 +543,7 @@ func emit_instances_header(
     save := g.cur
     g.cur = CG_OUT_H
     repeat prog.list.len() with i2:
-        did := prog.list.get(i2)[0]
+        did := prog.list.get(i2)
         d := at.Get(a, did)
         if !d.synthetic:
             continue
@@ -462,7 +566,7 @@ func emit_instances_header(
                 continue
             end
             repeat d.list.len() with j:
-                mid := d.list.get(j)[0]
+                mid := d.list.get(j)
                 m := at.Get(a, mid)
                 if m.kind != at.AST_FUNC_DEF:
                     continue
@@ -554,17 +658,58 @@ func node_uses_spawn(a &: at.Ast, id: int): bool:
         ret true
     end
     repeat n.list.len() with i:
-        if node_uses_spawn(a, n.list.get(i)[0]):
+        if node_uses_spawn(a, n.list.get(i)):
             ret true
         end
     end
     ret false
 end
 
+// Does this build target Windows? Same question llvmgen's
+// target_is_windows_of answers, asked here for the same reason: the
+// buffered literal-print path below is off on Windows.
+func cg_target_is_windows(triple: str): bool:
+    if str.Len(triple) > 0:
+        ret str.Contains(triple, "windows") || str.Contains(triple, "mingw") || str.Contains(triple, "win32")
+    end
+    if SALAM_OS_WINDOWS:
+        ret true
+    else:
+        ret false
+    end
+end
+
+// cg_target_is_freestanding - a BSOS kernel or a UEFI application. There is
+// no libc to include, no stdio to buffer through and no allocator to tune;
+// the program supplies salam_rt_write and the four mem entry points itself.
+// Unlike cg_target_is_windows this never falls back to the host: an empty
+// triple is a hosted build.
+func cg_target_is_freestanding(triple: str): bool:
+    if str.Len(triple) == 0:
+        ret false
+    end
+    // Every BSOS or SalamOS target is freestanding, not just the kernel one.
+    // Neither has a libc: a userspace program links against the runtime
+    // hooks in its own user stdlib and crt, so there is no <stdio.h> to
+    // include and no libc allocator to tune. That changes when either crt
+    // grows far enough to be a hosted C library.
+    ret str.Contains(triple, "uefi") || str.Contains(triple, "bsos") || str.Contains(triple, "salamos")
+end
+
+// cg_target_is_kernel - ring 0. Freestanding, and additionally float-free:
+// SSE state is not saved on the interrupt path, so a stray f64 is silent
+// corruption rather than a slow path.
+func cg_target_is_kernel(triple: str): bool:
+    if str.Len(triple) == 0:
+        ret false
+    end
+    ret str.Contains(triple, "kernel") && (str.Contains(triple, "bsos") || str.Contains(triple, "salamos"))
+end
+
 func module_single_threaded_impl(a &: at.Ast, program: int): bool:
     prog := at.Get(a, program)
     repeat prog.list.len() with i:
-        did := prog.list.get(i)[0]
+        did := prog.list.get(i)
         d := at.Get(a, did)
         if d.kind == at.AST_IMPORT:
             mut p := d.name
@@ -596,6 +741,7 @@ func cg_free(g &: Cg):
     g.dyn_impls.free()
     g.deferred.free()
     g.fn_defers.free()
+    g.loop_dmark.free()
 end
 
 // ===========================================================================
@@ -624,6 +770,42 @@ func cur_sink_len(g &: Cg): i64:
     ret str.BufLen(g.bc)
 end
 
+// The current sink's length: the mark a function body starts at, for the
+// hoisted-declaration splice in cg_hoist_end.
+func cur_sink_mark(g &: Cg): i64:
+    if g.cur == CG_OUT_H:
+        ret str.BufLen(g.bh)
+    else g.cur == CG_OUT_LAMD:
+        ret str.BufLen(g.blamd)
+    else g.cur == CG_OUT_LAMF:
+        ret str.BufLen(g.blamf)
+    end
+    ret str.BufLen(g.bc)
+end
+
+// Opens a hoisting scope for the function whose opening brace was just
+// emitted. Pairs with cg_hoist_end; the caller saves and restores the
+// three hoist fields around the pair, since a lambda body is emitted in
+// the middle of its enclosing function.
+func cg_hoist_begin(g &: Cg):
+    g.hoist = ""
+    g.hoist_pos = cur_sink_mark(g)
+    g.hoist_active = true
+end
+
+// Splices the hoisted declarations in at the recorded mark: the body
+// emitted since then is lifted off the sink and re-appended after them.
+// The copy is only paid by functions that actually hoisted something.
+func cg_hoist_end(g &: Cg):
+    if str.Len(g.hoist) > 0:
+        body := cur_sink_take(g, g.hoist_pos)
+        out(g, g.hoist)
+        out(g, body)
+    end
+    g.hoist = ""
+    g.hoist_active = false
+end
+
 func sb_take(b &: str.StringBuilder, mark: i64): str:
     total := str.BufLen(b)
     if total <= mark:
@@ -631,7 +813,7 @@ func sb_take(b &: str.StringBuilder, mark: i64): str:
     end
     full := str.BufStr(b)
     r := str.Substr(full, mark as int, (total - mark) as int)
-    b._len = mark
+    b.len = mark
     ret r
 end
 
@@ -653,4 +835,17 @@ func locals_trunc(g &: Cg, mark: int):
     until g.locals.len() > mark:
         _dropped := g.locals.pop()
     end
+end
+
+// IsFreestandingTarget / IsKernelTarget - public queries over the same
+// triple-sniffing rules cg_target_is_freestanding/cg_target_is_kernel use
+// internally, so tooling and tests outside this package (driver_build.salam
+// keeps its own copy for the same reason) can ask the question without
+// duplicating the triple substrings by hand.
+pub func IsFreestandingTarget(triple: str): bool:
+    ret cg_target_is_freestanding(triple)
+end
+
+pub func IsKernelTarget(triple: str): bool:
+    ret cg_target_is_kernel(triple)
 end

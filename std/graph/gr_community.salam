@@ -1,0 +1,435 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package graph
+
+// Cohesive subgroups: k-cores and degeneracy, modularity, and three ways to
+// partition a graph into communities.
+//
+//   CoreNumbers       exact, linear, the peeling order of the graph
+//   LabelPropagation  near-linear, unstable, no parameters
+//   Louvain           greedy modularity, the standard workhorse
+//   GirvanNewman      divisive by edge betweenness, slow but interpretable
+//
+// Modularity measures how many more edges fall inside communities than a
+// random graph with the same degrees would have. It has a resolution limit,
+// so it cannot see communities smaller than about sqrt(m) edges no matter
+// which algorithm optimises it. That is a property of the measure, not of
+// these implementations, and it is why k-cores (which optimise nothing) are
+// worth having alongside.
+//
+// Community ids come back dense, 0..k-1, whatever the algorithm's internal
+// labelling was.
+
+func _degrees_now(g &: Graph, alive: Vector<bool>, deg &: Vector<int>):
+    FillInt(deg, g.n, 0)
+    repeat g.size() with e:
+        u := g.edge_from(e)
+        v := g.edge_to(e)
+        if u != v:
+            if alive.get(u):
+                if alive.get(v):
+                    deg.set(u, deg.get(u) + 1)
+                    deg.set(v, deg.get(v) + 1)
+                end
+            end
+        end
+    end
+end
+
+func _densify(labels &: Vector<int>): int:
+    mut map := HashMap {} as HashMap<i64, int>
+    defer map.free()
+    mut next := 0
+    repeat labels.len() with u:
+        k := labels.get(u) as i64
+        if map.has(k) == false:
+            map.put(k, next)
+            next += 1
+        end
+        labels.set(u, map.get(k))
+    end
+    ret next
+end
+
+func _weighted_degrees(g &: Graph, deg &: Vector<f64>): f64:
+    FillFloat(deg, g.n, 0.0)
+    mut total := 0.0
+    repeat g.size() with e:
+        u := g.edge_from(e)
+        v := g.edge_to(e)
+        w := g.edge_weight(e)
+        deg.set(u, deg.get(u) + w)
+        deg.set(v, deg.get(v) + w)
+        total += w
+    end
+    ret total
+end
+
+// The gain in modularity from moving u into each neighbouring community,
+// evaluated as the local delta: edges gained inside, minus the expected
+// number given the degrees.
+func _best_move(g &: Graph, u: int, comm &: Vector<int>, ktot &: Vector<f64>, deg: Vector<f64>, m2: f64): int:
+    mut links := HashMap {} as HashMap<i64, f64>
+    defer links.free()
+    _neighbor_weights(g, u, comm, links)
+    mut best := comm.get(u)
+    mut bestgain := 0.0
+    repeat g.n with c:
+        if links.has(c as i64):
+            gain := links.get(c as i64) - ktot.get(c) * deg.get(u) / m2
+            if gain > bestgain:
+                bestgain = gain
+                best = c
+            end
+        end
+    end
+    ret best
+end
+
+func _neighbor_weights(g &: Graph, u: int, comm &: Vector<int>, links &: HashMap<i64, f64>):
+    mut k := g.adj_start(u)
+    stop := g.adj_stop(u)
+    until k < stop:
+        v := g.adj_node(k)
+        if v != u:
+            c := comm.get(v) as i64
+            mut cur := 0.0
+            if links.has(c): cur = links.get(c) end
+            links.put(c, cur + g.adj_weight(k))
+        end
+        k += 1
+    end
+end
+
+func _louvain_phase(g &: Graph, comm &: Vector<int>): bool:
+    mut deg := Vector {} as Vector<f64>
+    defer deg.free()
+    mut ktot := Vector {} as Vector<f64>
+    defer ktot.free()
+    total := _weighted_degrees(g, deg)
+    m2 := 2.0 * total
+    if m2 <= 0.0: ret false end
+    FillFloat(ktot, g.n, 0.0)
+    repeat g.n with u: ktot.set(comm.get(u), ktot.get(comm.get(u)) + deg.get(u)) end
+    mut moved := false
+    mut round := 0
+    until round < 20:
+        if _louvain_sweep(g, comm, ktot, deg, m2) == false: break end
+        moved = true
+        round += 1
+    end
+    ret moved
+end
+
+func _louvain_sweep(g &: Graph, comm &: Vector<int>, ktot &: Vector<f64>, deg: Vector<f64>, m2: f64): bool:
+    mut changed := false
+    repeat g.n with u:
+        old := comm.get(u)
+        ktot.set(old, ktot.get(old) - deg.get(u))
+        best := _best_move(g, u, comm, ktot, deg, m2)
+        comm.set(u, best)
+        ktot.set(best, ktot.get(best) + deg.get(u))
+        if best != old: changed = true end
+    end
+    ret changed
+end
+
+// Collapse each community to a single node, summing the weights between and
+// inside them. Louvain then repeats on this smaller graph, which is what
+// lets it find hierarchy rather than one flat partition.
+func _aggregate(g &: Graph, comm: Vector<int>, k: int): Graph:
+    mut h := New(k, false)
+    mut acc := HashMap {} as HashMap<i64, f64>
+    defer acc.free()
+    mut order := Vector {} as Vector<i64>
+    defer order.free()
+    repeat g.size() with e:
+        a := comm.get(g.edge_from(e))
+        b := comm.get(g.edge_to(e))
+        mut lo := a
+        mut hi := b
+        if lo > hi:
+            lo = b
+            hi = a
+        end
+        key := (lo as i64) * (k as i64) + (hi as i64)
+        if acc.has(key) == false: order.push(key) end
+        mut cur := 0.0
+        if acc.has(key): cur = acc.get(key) end
+        acc.put(key, cur + g.edge_weight(e))
+    end
+    _emit_aggregate(h, acc, order, k)
+    ret h
+end
+
+func _emit_aggregate(h &: Graph, acc &: HashMap<i64, f64>, order: Vector<i64>, k: int):
+    repeat order.len() with i:
+        key := order.get(i)
+        a := (key / (k as i64)) as int
+        b := (key % (k as i64)) as int
+        h.add_weighted(a, b, acc.get(key))
+    end
+end
+
+func _label_round(g &: Graph, comm &: Vector<int>): bool:
+    mut changed := false
+    repeat g.n with u:
+        best := _majority_label(g, u, comm)
+        if best != GRAPH_NONE:
+            if best != comm.get(u):
+                comm.set(u, best)
+                changed = true
+            end
+        end
+    end
+    ret changed
+end
+
+// The label carried by the greatest total edge weight among u's neighbours,
+// ties broken by the smaller label so the result does not depend on
+// adjacency order.
+func _majority_label(g &: Graph, u: int, comm &: Vector<int>): int:
+    mut tally := HashMap {} as HashMap<i64, f64>
+    defer tally.free()
+    _neighbor_weights(g, u, comm, tally)
+    mut best := GRAPH_NONE
+    mut bestw := 0.0
+    repeat g.n with c:
+        if tally.has(c as i64):
+            w := tally.get(c as i64)
+            if w > bestw:
+                bestw = w
+                best = c
+            end
+        end
+    end
+    ret best
+end
+
+func _peel_below(g &: Graph, alive &: Vector<bool>, deg: Vector<int>, core &: Vector<int>, k: int): int:
+    mut removed := 0
+    repeat g.n with u:
+        if alive.get(u):
+            if deg.get(u) <= k:
+                core.set(u, k)
+                alive.set(u, false)
+                removed += 1
+            end
+        end
+    end
+    ret removed
+end
+
+func _remap(comm &: Vector<int>, mapping &: Vector<int>, local: Vector<int>):
+    repeat comm.len() with u:
+        cur := mapping.get(u)
+        comm.set(u, local.get(cur))
+    end
+    repeat mapping.len() with u: mapping.set(u, comm.get(u)) end
+end
+
+func _weakest_link(g &: Graph): int:
+    if g.size() == 0: ret GRAPH_NONE end
+    mut eb := EdgeBetweenness(g)
+    defer eb.free()
+    mut best := 0
+    repeat eb.len() with e:
+        if eb.get(e) > eb.get(best): best = e end
+    end
+    ret best
+end
+
+func _drop_kth_kept(keep &: Vector<bool>, w: int):
+    mut c := 0
+    repeat keep.len() with e:
+        if keep.get(e):
+            if c == w:
+                keep.set(e, false)
+                ret
+            end
+            c += 1
+        end
+    end
+end
+
+// The k-core: what is left after repeatedly deleting every node of degree
+// below k. A node's core number is the largest k whose core contains it.
+@en "KCore"
+@fa "هسته کا"
+@ar "النواة كي"
+pub func KCore(g &: Graph, k: int, alive &: Vector<bool>): int:
+    FillBool(alive, g.n, true)
+    mut deg := Vector {} as Vector<int>
+    defer deg.free()
+    mut left := g.n
+    mut peeled := true
+    until peeled:
+        peeled = false
+        _degrees_now(g, alive, deg)
+        repeat g.n with u:
+            if alive.get(u):
+                if deg.get(u) < k:
+                    alive.set(u, false)
+                    left = left - 1
+                    peeled = true
+                end
+            end
+        end
+    end
+    ret left
+end
+
+// Core numbers for every node, by peeling in increasing degree order. The
+// largest core number is the degeneracy, which bounds the chromatic number
+// and is the standard measure of how sparse a graph is everywhere.
+@en "CoreNumbers"
+@fa "شماره‌های هسته"
+@ar "أرقام النواة"
+pub func CoreNumbers(g &: Graph): Vector<int>:
+    mut core := Vector {} as Vector<int>
+    mut alive := Vector {} as Vector<bool>
+    defer alive.free()
+    mut deg := Vector {} as Vector<int>
+    defer deg.free()
+    FillInt(core, g.n, 0)
+    FillBool(alive, g.n, true)
+    mut k := 0
+    mut left := g.n
+    until left > 0:
+        _degrees_now(g, alive, deg)
+        removed := _peel_below(g, alive, deg, core, k)
+        if removed == 0:
+            k += 1
+        else:
+            left = left - removed
+        end
+    end
+    ret core
+end
+
+@en "Degeneracy"
+@fa "تباهیدگی"
+@ar "الانحلال"
+pub func Degeneracy(g &: Graph): int:
+    mut core := CoreNumbers(g)
+    defer core.free()
+    ret MaxInt(core)
+end
+
+// Newman's modularity of a partition: the fraction of edge weight inside
+// communities minus what that fraction would be if the same degrees were
+// wired at random. Runs from -0.5 to 1; above about 0.3 is usually taken as
+// real community structure.
+@en "Modularity"
+@fa "پیمانگی"
+@ar "النمطية"
+pub func Modularity(g &: Graph, comm: Vector<int>): f64:
+    mut deg := Vector {} as Vector<f64>
+    defer deg.free()
+    total := _weighted_degrees(g, deg)
+    if total <= 0.0: ret 0.0 end
+    mut inside := 0.0
+    repeat g.size() with e:
+        if comm.get(g.edge_from(e)) == comm.get(g.edge_to(e)): inside += g.edge_weight(e) end
+    end
+    mut expected := 0.0
+    k := MaxInt(comm) + 1
+    mut ktot := Vector {} as Vector<f64>
+    defer ktot.free()
+    FillFloat(ktot, k, 0.0)
+    repeat g.n with u: ktot.set(comm.get(u), ktot.get(comm.get(u)) + deg.get(u)) end
+    repeat k with c: expected += (ktot.get(c) / (2.0 * total)) * (ktot.get(c) / (2.0 * total)) end
+    ret inside / total - expected
+end
+
+// Label propagation: everyone adopts the commonest label among their
+// neighbours until nothing changes. No objective function and no parameter,
+// which makes it fast and its answer order-dependent; it is the cheap first
+// look, not the final word.
+@en "LabelPropagation"
+@fa "انتشار برچسب"
+@ar "انتشار التسميات"
+pub func LabelPropagation(g &: Graph, comm &: Vector<int>): int:
+    Iota(comm, g.n)
+    mut round := 0
+    until round < 100:
+        if _label_round(g, comm) == false: break end
+        round += 1
+    end
+    ret _densify(comm)
+end
+
+// Louvain: move nodes between communities while modularity improves, then
+// collapse each community into one node and repeat. Each level is fast and
+// the levels together find structure at several scales.
+@en "Louvain"
+@fa "لوون"
+@ar "لوفان"
+pub func Louvain(g &: Graph, comm &: Vector<int>): int:
+    Iota(comm, g.n)
+    if g.size() == 0: ret g.n end
+    mut level := Clone(g)
+    mut mapping := Vector {} as Vector<int>
+    defer mapping.free()
+    Iota(mapping, g.n)
+    mut depth := 0
+    until depth < 10:
+        mut local := Vector {} as Vector<int>
+        Iota(local, level.n)
+        improved := _louvain_phase(level, local)
+        k := _densify(local)
+        if improved == false:
+            local.free()
+            break
+        end
+        _remap(comm, mapping, local)
+        next := _aggregate(level, local, k)
+        level.free()
+        level = next
+        local.free()
+        depth += 1
+    end
+    defer level.free()
+    ret _densify(comm)
+end
+
+// Girvan-Newman: repeatedly delete the edge with the highest betweenness,
+// which is the edge most likely to bridge two communities, until the graph
+// falls into `want` pieces. Slow (a betweenness pass per removal) but every
+// step is explainable, which is why it is still taught and still used.
+@en "GirvanNewman"
+@fa "گیروان-نیومن"
+@ar "غيرفان-نيومان"
+pub func GirvanNewman(g &: Graph, want: int, comm &: Vector<int>): int:
+    mut work := Clone(g)
+    mut keep := Vector {} as Vector<bool>
+    defer keep.free()
+    FillBool(keep, g.size(), true)
+    mut count := Components(work, comm)
+    mut guard := 0
+    until count < want:
+        if guard >= g.size(): break end
+        e := _weakest_link(work)
+        if e == GRAPH_NONE: break end
+        _drop_kth_kept(keep, e)
+        next := EdgeSubgraph(g, keep)
+        work.free()
+        work = next
+        count = Components(work, comm)
+        guard += 1
+    end
+    defer work.free()
+    ret count
+end

@@ -1,0 +1,422 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package graph
+
+import str
+
+// Derived graphs: every operation here returns a brand new Graph and leaves
+// its input untouched, so they compose. The caller owns the result and frees
+// it. Node ids are preserved wherever the node set is preserved; the two
+// operations that change the node set (Subgraph, DisjointUnion) say exactly
+// how they renumber.
+
+func _key(n: int, u: int, v: int): i64: ret (u as i64) * (n as i64) + (v as i64) end
+
+func _kept(keep: Vector<bool>, i: int): bool:
+    if i >= keep.len(): ret false end
+    ret keep.get(i)
+end
+
+func _copy_names(src &: Graph, dst &: Graph, shift: int):
+    repeat src.names.len() with u:
+        s := src.name(u)
+        if str.Len(s) > 0: dst.set_name(u + shift, s) end
+    end
+end
+
+func _append_edges(src &: Graph, dst &: Graph, shift: int):
+    repeat src.size() with e:
+        dst.add_weighted(src.edge_from(e) + shift, src.edge_to(e) + shift, src.edge_weight(e))
+    end
+end
+
+func _fill_sub(g &: Graph, h &: Graph, map: Vector<int>):
+    repeat g.size() with e:
+        a := map.get(g.edge_from(e))
+        b := map.get(g.edge_to(e))
+        if a != GRAPH_NONE:
+            if b != GRAPH_NONE: h.add_weighted(a, b, g.edge_weight(e)) end
+        end
+    end
+end
+
+func _fill_complement(g &: Graph, h &: Graph, seen &: HashMap<i64, bool>):
+    repeat g.n with u:
+        repeat g.n with v:
+            if u != v:
+                if seen.has(_key(g.n, u, v)) == false:
+                    if g.directed: h.add_edge(u, v)
+                    else v > u: h.add_edge(u, v)
+                    end
+                end
+            end
+        end
+    end
+end
+
+func _link_incident(g &: Graph, h &: Graph, seen &: HashMap<i64, bool>, u: int, m: int):
+    start := g.adj_start(u)
+    stop := g.adj_stop(u)
+    mut i := start
+    until i < stop:
+        mut j := i + 1
+        until j < stop:
+            a := g.adj_edge(i)
+            b := g.adj_edge(j)
+            if a != b:
+                mut lo := a
+                mut hi := b
+                if lo > hi:
+                    lo = b
+                    hi = a
+                end
+                k := _key(m, lo, hi)
+                if seen.has(k) == false:
+                    seen.put(k, true)
+                    h.add_edge(lo, hi)
+                end
+            end
+            j += 1
+        end
+        i += 1
+    end
+end
+
+func _collect_best(g &: Graph, best &: HashMap<i64, f64>, order &: Vector<i64>):
+    repeat g.size() with e:
+        u := g.edge_from(e)
+        v := g.edge_to(e)
+        if u != v:
+            mut a := u
+            mut b := v
+            if g.directed == false:
+                if a > b:
+                    a = v
+                    b = u
+                end
+            end
+            k := _key(g.n, a, b)
+            w := g.edge_weight(e)
+            if best.has(k):
+                if w < best.get(k): best.put(k, w) end
+            else:
+                best.put(k, w)
+                order.push(k)
+            end
+        end
+    end
+end
+
+// A structural copy. Weights, names and direction come along; the CSR index
+// does not, since it is rebuilt on first use and copying it would only make
+// the copy dependent on when the original was last indexed.
+@en "Clone"
+@fa "همانندسازی"
+@ar "استنساخ"
+pub func Clone(g &: Graph): Graph:
+    mut h := New(g.n, g.directed)
+    m := g.size()
+    repeat m with e:
+        h.add_weighted(g.edge_from(e), g.edge_to(e), g.edge_weight(e))
+    end
+    _copy_names(g, h, 0)
+    ret h
+end
+
+// Every arc flipped. On an undirected graph this is just a copy, which is the
+// mathematically correct answer rather than an error.
+@en "Transpose"
+@fa "ترانهاده"
+@ar "منقول"
+pub func Transpose(g &: Graph): Graph:
+    mut h := New(g.n, g.directed)
+    m := g.size()
+    repeat m with e:
+        h.add_weighted(g.edge_to(e), g.edge_from(e), g.edge_weight(e))
+    end
+    _copy_names(g, h, 0)
+    ret h
+end
+
+@en "Reverse"
+@fa "وارونه"
+@ar "معكوس"
+pub func Reverse(g &: Graph): Graph: ret Transpose(g) end
+
+// Forget the orientation of every arc. Parallel arcs u->v and v->u survive as
+// two parallel undirected edges; run Simplify if you want one.
+@en "ToUndirected"
+@fa "به بی‌جهت"
+@ar "إلى غير موجه"
+pub func ToUndirected(g &: Graph): Graph:
+    mut h := New(g.n, false)
+    m := g.size()
+    repeat m with e:
+        h.add_weighted(g.edge_from(e), g.edge_to(e), g.edge_weight(e))
+    end
+    _copy_names(g, h, 0)
+    ret h
+end
+
+// The standard orientation of an undirected graph: each edge becomes an
+// opposing pair of arcs, so reachability and degrees agree with the original.
+@en "ToDirected"
+@fa "به جهت‌دار"
+@ar "إلى موجه"
+pub func ToDirected(g &: Graph): Graph:
+    mut h := New(g.n, true)
+    m := g.size()
+    repeat m with e:
+        u := g.edge_from(e)
+        v := g.edge_to(e)
+        w := g.edge_weight(e)
+        h.add_weighted(u, v, w)
+        if u != v: h.add_weighted(v, u, w) end
+    end
+    _copy_names(g, h, 0)
+    ret h
+end
+
+// Node-induced subgraph over the nodes marked true in `keep`. Kept nodes are
+// renumbered to 0..k-1 in increasing order of their original id, and `map`
+// receives the old->new table (GRAPH_NONE for dropped nodes) so results can
+// be carried back.
+@en "SubgraphMap"
+@fa "زیرگراف با نگاشت"
+@ar "بيان جزئي مع خريطة"
+pub func SubgraphMap(g &: Graph, keep: Vector<bool>, map &: Vector<int>): Graph:
+    map.clear()
+    mut k := 0
+    repeat g.n with u:
+        if _kept(keep, u):
+            map.push(k)
+            k += 1
+        else:
+            map.push(GRAPH_NONE)
+        end
+    end
+    mut h := New(k, g.directed)
+    _fill_sub(g, h, map)
+    repeat g.n with u:
+        if map.get(u) != GRAPH_NONE: h.set_name(map.get(u), g.name(u)) end
+    end
+    ret h
+end
+
+@en "Subgraph"
+@fa "زیرگراف"
+@ar "بيان جزئي"
+pub func Subgraph(g &: Graph, keep: Vector<bool>): Graph:
+    mut map := Vector {} as Vector<int>
+    defer map.free()
+    ret SubgraphMap(g, keep, map)
+end
+
+// The edge-induced subgraph: the same node set, only the edges marked true.
+@en "EdgeSubgraph"
+@fa "زیرگراف یالی"
+@ar "بيان جزئي بالأضلاع"
+pub func EdgeSubgraph(g &: Graph, keep: Vector<bool>): Graph:
+    mut h := New(g.n, g.directed)
+    m := g.size()
+    repeat m with e:
+        if _kept(keep, e): h.add_weighted(g.edge_from(e), g.edge_to(e), g.edge_weight(e)) end
+    end
+    _copy_names(g, h, 0)
+    ret h
+end
+
+// The complement of the underlying simple graph: an edge exactly where there
+// was none. Self loops are never produced, so the complement of K(n) is the
+// empty graph rather than n loops.
+@en "Complement"
+@fa "مکمل"
+@ar "متمم"
+pub func Complement(g &: Graph): Graph:
+    mut h := New(g.n, g.directed)
+    mut seen := HashMap {} as HashMap<i64, bool>
+    defer seen.free()
+    m := g.size()
+    repeat m with e:
+        seen.put(_key(g.n, g.edge_from(e), g.edge_to(e)), true)
+        if g.directed == false: seen.put(_key(g.n, g.edge_to(e), g.edge_from(e)), true) end
+    end
+    _fill_complement(g, h, seen)
+    _copy_names(g, h, 0)
+    ret h
+end
+
+// Same node set, both edge lists. Parallel edges are kept, so Union of a
+// graph with itself doubles every edge; compose with Simplify for the
+// set-theoretic union of simple graphs.
+@en "Union"
+@fa "اجتماع"
+@ar "اتحاد"
+pub func Union(a &: Graph, b &: Graph): Graph:
+    mut n := a.n
+    if b.n > n: n = b.n end
+    mut h := New(n, a.directed)
+    _append_edges(a, h, 0)
+    _append_edges(b, h, 0)
+    _copy_names(a, h, 0)
+    ret h
+end
+
+// Two graphs side by side: b's node i becomes a.n + i.
+@en "DisjointUnion"
+@fa "اجتماع جدا"
+@ar "اتحاد منفصل"
+pub func DisjointUnion(a &: Graph, b &: Graph): Graph:
+    mut h := New(a.n + b.n, a.directed)
+    _append_edges(a, h, 0)
+    _append_edges(b, h, a.n)
+    _copy_names(a, h, 0)
+    _copy_names(b, h, a.n)
+    ret h
+end
+
+// Only the edges present in both, compared as endpoint pairs (weights come
+// from `a`). Multiplicity is not tracked: one copy per matching pair.
+@en "Intersection"
+@fa "اشتراک"
+@ar "تقاطع"
+pub func Intersection(a &: Graph, b &: Graph): Graph:
+    mut n := a.n
+    if b.n > n: n = b.n end
+    mut h := New(n, a.directed)
+    mut seen := HashMap {} as HashMap<i64, bool>
+    defer seen.free()
+    m := a.size()
+    repeat m with e:
+        u := a.edge_from(e)
+        v := a.edge_to(e)
+        k := _key(n, u, v)
+        if seen.has(k) == false:
+            if b.has_edge(u, v):
+                seen.put(k, true)
+                h.add_weighted(u, v, a.edge_weight(e))
+            end
+        end
+    end
+    ret h
+end
+
+// One node per edge of g, adjacent when the two edges share an endpoint.
+// L(G) turns edge questions into node questions: an Eulerian circuit of G is
+// a Hamiltonian cycle of L(G), edge colourings of G are node colourings of
+// L(G), and the edge connectivity of G shows up as node connectivity here.
+@en "LineGraph"
+@fa "گراف یالی"
+@ar "بيان الأضلاع"
+pub func LineGraph(g &: Graph): Graph:
+    m := g.size()
+    mut h := New(m, false)
+    mut seen := HashMap {} as HashMap<i64, bool>
+    defer seen.free()
+    repeat g.n with u:
+        _link_incident(g, h, seen, u, m)
+    end
+    ret h
+end
+
+// Drop self loops and collapse parallel edges, keeping the lightest copy of
+// each pair. The result is a simple graph, which is what most textbook
+// statements assume.
+@en "Simplify"
+@fa "ساده‌سازی"
+@ar "تبسيط"
+pub func Simplify(g &: Graph): Graph:
+    mut h := New(g.n, g.directed)
+    mut best := HashMap {} as HashMap<i64, f64>
+    defer best.free()
+    mut order := Vector {} as Vector<i64>
+    defer order.free()
+    _collect_best(g, best, order)
+    repeat order.len() with i:
+        k := order.get(i)
+        h.add_weighted((k / (g.n as i64)) as int, (k % (g.n as i64)) as int, best.get(k))
+    end
+    _copy_names(g, h, 0)
+    ret h
+end
+
+@en "RemoveSelfLoops"
+@fa "حذف طوقه‌ها"
+@ar "إزالة الحلقات"
+pub func RemoveSelfLoops(g &: Graph): Graph:
+    mut h := New(g.n, g.directed)
+    m := g.size()
+    repeat m with e:
+        if g.edge_from(e) != g.edge_to(e):
+            h.add_weighted(g.edge_from(e), g.edge_to(e), g.edge_weight(e))
+        end
+    end
+    _copy_names(g, h, 0)
+    ret h
+end
+
+@en "SelfLoopCount"
+@fa "شمار طوقه"
+@ar "عدد الحلقات"
+pub func SelfLoopCount(g &: Graph): int:
+    mut c := 0
+    repeat g.size() with e:
+        if g.edge_from(e) == g.edge_to(e): c += 1 end
+    end
+    ret c
+end
+
+@en "HasSelfLoop"
+@fa "دارای طوقه"
+@ar "به حلقة"
+pub func HasSelfLoop(g &: Graph): bool: ret SelfLoopCount(g) > 0 end
+
+@en "ParallelEdgeCount"
+@fa "شمار یال موازی"
+@ar "عدد الأضلاع المتوازية"
+pub func ParallelEdgeCount(g &: Graph): int:
+    mut seen := HashMap {} as HashMap<i64, bool>
+    defer seen.free()
+    mut c := 0
+    repeat g.size() with e:
+        u := g.edge_from(e)
+        v := g.edge_to(e)
+        k := _key(g.n, u, v)
+        if seen.has(k): c += 1
+        else: seen.put(k, true)
+        end
+        if g.directed == false: seen.put(_key(g.n, v, u), true) end
+    end
+    ret c
+end
+
+// Simple = no self loop and no parallel edge, the default assumption of most
+// of graph theory.
+@en "IsSimple"
+@fa "ساده است"
+@ar "بسيط"
+pub func IsSimple(g &: Graph): bool:
+    if HasSelfLoop(g): ret false end
+    ret ParallelEdgeCount(g) == 0
+end
+
+@en "TotalWeight"
+@fa "وزن کل"
+@ar "الوزن الكلي"
+pub func TotalWeight(g &: Graph): f64:
+    mut s := 0.0
+    repeat g.size() with e: s += g.edge_weight(e) end
+    ret s
+end

@@ -1,0 +1,114 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/tensor: convolution and pooling forward kernels, hand-checked.
+
+import tensor
+import testing
+
+func main:
+    eps := 0.0001
+
+    testing.AssertEqInt(tensor.ConvOutSize(12, 3, 1, 1), 12)
+    testing.AssertEqInt(tensor.ConvOutSize(12, 2, 2, 0), 6)
+    testing.AssertEqInt(tensor.ConvOutSize(5, 3, 2, 1), 3)
+
+    // A 1x1x4x4 iota image and an all-ones 2x2 kernel: every output is
+    // the sum of its window.
+    mut x := tensor.Zeros4(1, 1, 4, 4)
+    repeat 16 with k: x.set_at(k, k as f64) end
+    mut w := tensor.Zeros4(1, 1, 2, 2)
+    tensor.SetAll(w, 1.0)
+    mut none := tensor.Empty()
+    mut y := tensor.Conv2DForward(x, w, none, 1, 1, 0, 0)
+    testing.AssertEqInt(y.dim(2), 3)
+    testing.AssertEqFloat(y.at(0), 0.0 + 1.0 + 4.0 + 5.0, eps)      // top-left
+    testing.AssertEqFloat(y.at(8), 10.0 + 11.0 + 14.0 + 15.0, eps)  // bottom-right
+
+    // Bias shifts every element of its channel
+    mut bias := tensor.Zeros1(1)
+    tensor.SetAll(bias, 100.0)
+    mut yb := tensor.Conv2DForward(x, w, bias, 1, 1, 0, 0)
+    testing.AssertEqFloat(yb.at(0), 110.0, eps)
+
+    // Padding of one with stride two: the corner window sees only x[0]
+    mut yp := tensor.Conv2DForward(x, w, none, 2, 2, 1, 1)
+    testing.AssertEqInt(yp.dim(2), 3)
+    testing.AssertEqFloat(yp.at(0), 0.0, eps)
+    // center window: rows 1..2 x cols 1..2 of the iota image
+    testing.AssertEqFloat(yp.at(4), 5.0 + 6.0 + 9.0 + 10.0, eps)
+
+    // Two input channels sum into one output channel
+    mut x2 := tensor.Zeros4(1, 2, 2, 2)
+    repeat 8 with k: x2.set_at(k, 1.0) end
+    mut w2 := tensor.Zeros4(1, 2, 2, 2)
+    tensor.SetAll(w2, 1.0)
+    mut y2 := tensor.Conv2DForward(x2, w2, none, 1, 1, 0, 0)
+    testing.AssertEqInt(y2.numel(), 1)
+    testing.AssertEqFloat(y2.at(0), 8.0, eps)
+
+    // Im2Col of the iota image with a 2x2 kernel: row 0 is the window's
+    // top-left taps in scan order
+    mut cols := tensor.Im2Col(x, 0, 2, 2, 1, 1, 0, 0)
+    testing.AssertEqInt(cols.dim(0), 4)
+    testing.AssertEqInt(cols.dim(1), 9)
+    testing.AssertEqFloat(cols.at2(0, 0), 0.0, eps)
+    testing.AssertEqFloat(cols.at2(3, 8), 15.0, eps)
+
+    // Col2ImAcc with a 1x1 kernel is the identity scatter
+    mut ones := tensor.Zeros2(1, 16)
+    tensor.SetAll(ones, 1.0)
+    mut dx := tensor.Zeros4(1, 1, 4, 4)
+    testing.AssertTrue(tensor.Col2ImAcc(ones, dx, 0, 1, 1, 1, 1, 0, 0))
+    testing.AssertEqFloat(tensor.SumAll(dx), 16.0, eps)
+
+    // MaxPool with argmax positions
+    mut mp := tensor.Zeros4(1, 1, 4, 4)
+    repeat 16 with k: mp.set_at(k, k as f64) end
+    mut am := tensor.Empty()
+    mut pooled := tensor.MaxPool2DForward(mp, 2, 2, 2, 2, am)
+    testing.AssertEqInt(pooled.dim(2), 2)
+    testing.AssertEqFloat(pooled.at(0), 5.0, eps)
+    testing.AssertEqFloat(pooled.at(3), 15.0, eps)
+    testing.AssertEqFloat(am.at(0), 5.0, eps)
+    testing.AssertEqFloat(am.at(3), 15.0, eps)
+
+    // AvgPool
+    mut ap := tensor.AvgPool2DForward(mp, 2, 2, 2, 2)
+    testing.AssertEqFloat(ap.at(0), (0.0 + 1.0 + 4.0 + 5.0) / 4.0, eps)
+
+    // Shape errors return the sentinel
+    testing.AssertTrue(tensor.Conv2DForward(x2, w, none, 1, 1, 0, 0).is_empty())
+
+    tensor.Free(x)
+    tensor.Free(w)
+    tensor.Free(y)
+    tensor.Free(bias)
+    tensor.Free(yb)
+    tensor.Free(yp)
+    tensor.Free(x2)
+    tensor.Free(w2)
+    tensor.Free(y2)
+    tensor.Free(cols)
+    tensor.Free(ones)
+    tensor.Free(dx)
+    tensor.Free(mp)
+    tensor.Free(am)
+    tensor.Free(pooled)
+    tensor.Free(ap)
+
+    ret testing.Summary()
+end

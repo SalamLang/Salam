@@ -1,0 +1,247 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package image
+
+// Measuring text without drawing it, and choosing a size that fits.
+//
+// There are two different widths and confusing them is the usual cause
+// of text that looks off-center. The ADVANCE width (TextWidthStyled, in
+// text_font.salam) is how far the pen travels, side bearings included -
+// use it to place one run after another. The INK width here is the
+// bounding box of the marks actually drawn - use it to center something,
+// or to make it fill a banner.
+//
+// Nothing here rasterizes anything: the box comes from each glyph's own
+// bounding box in the `glyf` table, run through the same style matrix
+// and the same layout loop the drawing path uses, so a measurement and
+// the drawing it predicts can never disagree. Measuring a 60-character
+// line is a few hundred additions, which is what makes the fitting
+// functions below - which measure repeatedly - cheap enough to call per
+// frame.
+//
+// Boxes are returned relative to the pen origin: (0, 0) is where the
+// baseline starts, x grows right and y grows DOWN, so y0 is negative for
+// anything above the baseline (nearly everything) and y1 is positive for
+// descenders. Add the pen position to get canvas coordinates.
+//
+// The box is exact for upright text. For rotated or slanted text it is
+// the box of each glyph's transformed bounding box, which is a hair
+// larger than the box of the outline itself - by design, since a caller
+// fitting text into a frame wants the safe number.
+
+func _bounds_point(px: f64, a: f64, b: f64, c: f64, d: f64, gx: int, gy: int, x0 &: f64, y0 &: f64, x1 &: f64, y1 &: f64):
+    fx := gx as f64
+    fy := gy as f64
+    // `by` would be a keyword here, hence vx/vy for the device point.
+    vx := a * fx + c * fy + px
+    vy := b * fx + d * fy
+    if vx < x0: x0 = vx end
+    if vx > x1: x1 = vx end
+    if vy < y0: y0 = vy end
+    if vy > y1: y1 = vy end
+end
+
+func _bounds_visual(f: Font, cps &: Vector<int>, st: TextStyle, x0 &: f64, y0 &: f64, x1 &: f64, y1 &: f64): bool:
+    scale := ScaleFactor(f, st.size)
+    mut a := 0.0
+    mut b := 0.0
+    mut c := 0.0
+    mut d := 0.0
+    _style_matrix(f, st, a, b, c, d)
+    mut pen := 0.0
+    mut prev := 0
+    mut any := false
+    mut i := 0
+    until i < cps.len():
+        glyph := GlyphIndex(f, cps.get(i))
+        if st.kern && prev != 0:
+            pen += (KernAdvance(f, prev, glyph) as f64) * scale
+        end
+        mut gx0 := 0
+        mut gy0 := 0
+        mut gx1 := 0
+        mut gy1 := 0
+        if GlyphBox(f, glyph, gx0, gy0, gx1, gy1):
+            // All four corners, not two: a rotation or a slant maps the
+            // box's corners to four different places.
+            _bounds_point(pen, a, b, c, d, gx0, gy0, x0, y0, x1, y1)
+            _bounds_point(pen, a, b, c, d, gx1, gy0, x0, y0, x1, y1)
+            _bounds_point(pen, a, b, c, d, gx0, gy1, x0, y0, x1, y1)
+            _bounds_point(pen, a, b, c, d, gx1, gy1, x0, y0, x1, y1)
+            any = true
+        end
+        pen += (GlyphAdvance(f, glyph) as f64) * scale + st.tracking
+        prev = glyph
+        i += 1
+    end
+    ret any
+end
+
+// The ink box of `text`, relative to the pen origin on the baseline.
+// Returns false - and a zeroed box - for text with nothing to draw (an
+// empty string, only spaces, or a font that has none of its glyphs), so
+// a caller centering something can tell "no ink" from "ink at the
+// origin".
+@en "TextBounds"
+@fa "کادر متن"
+@ar "حدود النص"
+pub func TextBounds(f: Font, text: str, st: TextStyle, x0 &: f64, y0 &: f64, x1 &: f64, y1 &: f64): bool:
+    x0 = 0.0
+    y0 = 0.0
+    x1 = 0.0
+    y1 = 0.0
+    if !FontValid(f):
+        ret false
+    end
+    mut cps := Vector {} as Vector<int>
+    _text_to_visual(text, st, cps)
+    mut bx0 := 1.0e30
+    mut by0 := 1.0e30
+    mut bx1 := 0.0 - 1.0e30
+    mut by1 := 0.0 - 1.0e30
+    any := _bounds_visual(f, cps, st, bx0, by0, bx1, by1)
+    cps.free()
+    if !any:
+        ret false
+    end
+    x0 = bx0
+    y0 = by0
+    x1 = bx1
+    y1 = by1
+    ret true
+end
+
+// Width of the marks themselves, which is what "center this" and "fill
+// the banner" mean. Compare TextWidthStyled, the pen advance.
+@en "TextInkWidth"
+@fa "عرض جوهر متن"
+@ar "عرض حبر النص"
+pub func TextInkWidth(f: Font, text: str, st: TextStyle): f64:
+    mut x0 := 0.0
+    mut y0 := 0.0
+    mut x1 := 0.0
+    mut y1 := 0.0
+    if !TextBounds(f, text, st, x0, y0, x1, y1):
+        ret 0.0
+    end
+    ret x1 - x0
+end
+
+// Height of the marks themselves - the cap height of "SALAM", taller for
+// "Salamج" which has both an ascender and a descender. For a height that
+// does NOT change with the letters (so successive lines line up), use
+// LineHeightPixels instead.
+@en "TextInkHeight"
+@fa "ارتفاع جوهر متن"
+@ar "ارتفاع حبر النص"
+pub func TextInkHeight(f: Font, text: str, st: TextStyle): f64:
+    mut x0 := 0.0
+    mut y0 := 0.0
+    mut x1 := 0.0
+    mut y1 := 0.0
+    if !TextBounds(f, text, st, x0, y0, x1, y1):
+        ret 0.0
+    end
+    ret y1 - y0
+end
+
+// Both at once, for callers that need the pair and would otherwise
+// measure twice.
+@en "TextInkSize"
+@fa "اندازه جوهر متن"
+@ar "حجم حبر النص"
+pub func TextInkSize(f: Font, text: str, st: TextStyle, w &: f64, h &: f64): bool:
+    mut x0 := 0.0
+    mut y0 := 0.0
+    mut x1 := 0.0
+    mut y1 := 0.0
+    ok := TextBounds(f, text, st, x0, y0, x1, y1)
+    w = x1 - x0
+    h = y1 - y0
+    ret ok
+end
+
+// The em size at which `text` is exactly `target_w` pixels of ink wide,
+// capped at `max_size`. The pixel size is what a caller sets on the
+// style (st.size is ignored on the way in).
+//
+// Ink width is very nearly proportional to size - exactly so when
+// tracking is 0 - so this converges in one step and the remaining passes
+// only correct for tracking, which is a fixed number of pixels per glyph
+// and does not scale. Five passes is far more than that needs and still
+// costs less than drawing the text once.
+@en "FitSizeToWidth"
+@fa "اندازه متناسب با عرض"
+@ar "حجم مناسب للعرض"
+pub func FitSizeToWidth(f: Font, text: str, st: TextStyle, target_w: f64, max_size: f64): f64:
+    ret FitSizeToBox(f, text, st, target_w, 0.0, max_size)
+end
+
+// The em size at which `text` fits inside target_w x target_h, capped at
+// `max_size`. A target of 0 for either axis means "do not constrain this
+// one", so this covers width-only and height-only fitting too.
+//
+// Typical use - a caption filling 90% of a canvas:
+//
+//   size := image.FitSizeToBox(font, msg, st, (img.width as f64) * 0.9,
+//                              (img.height as f64) * 0.9, 400.0)
+//   st.size = size
+//   image.DrawTextCentered(img, cx, cy, msg, color, font, st)
+//
+// or in one call, image.DrawTextFitBox.
+@en "FitSizeToBox"
+@fa "اندازه متناسب با کادر"
+@ar "حجم مناسب للصندوق"
+pub func FitSizeToBox(f: Font, text: str, st: TextStyle, target_w: f64, target_h: f64, max_size: f64): f64:
+    if !FontValid(f) || max_size <= 0.0:
+        ret 0.0
+    end
+    if target_w <= 0.0 && target_h <= 0.0:
+        ret 0.0
+    end
+    mut probe := st
+    mut size := max_size
+    mut pass := 0
+    until pass < 5:
+        probe.size = size
+        mut w := 0.0
+        mut h := 0.0
+        if !TextInkSize(f, text, probe, w, h):
+            ret size
+        end
+        mut ratio := 1.0e30
+        if target_w > 0.0 && w > 0.0:
+            ratio = target_w / w
+        end
+        if target_h > 0.0 && h > 0.0:
+            hr := target_h / h
+            if hr < ratio:
+                ratio = hr
+            end
+        end
+        if ratio > 1.0e29:
+            ret size
+        end
+        size = size * ratio
+        if size > max_size:
+            size = max_size
+        end
+        if size < 0.5:
+            size = 0.5
+        end
+        pass += 1
+    end
+    ret size
+end

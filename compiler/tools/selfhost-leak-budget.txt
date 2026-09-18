@@ -42,10 +42,97 @@
 #     source.Free lets the schema/std-index scans release file text they are
 #     done with
 # `salam version` went from 4,349,628 bytes leaked to 148,810.
+#
+# Re-measured 2026-08-15 on Linux/x86-64, gcc 13 (observed: version 6179,
+# help 6167, format 6372, inspect 118043, exec 122511, build 217275). Three
+# fixes, the first two of which are what had pushed `inspect` and `exec` over
+# the old numbers:
+#   - sal_path PathJoin/PathDir build their answer into one StringBuilder
+#     instead of composing PathToSlash(PathTrimSep(dir)) with `+`. The old
+#     shape dropped three intermediate strings per join, and the std-package
+#     scan joins paths thousands of times for a one-file compile.
+#   - sema_definit releases the Di vectors and every di_snap flow snapshot;
+#     one Di plus a snapshot per if/match/loop was leaked per checked function
+#   - the lexer frees the '_'-stripped copy of each numeric literal, which
+#     exists only to be handed to decode_number - the token keeps the literal
+#     as written
+#
+# One caveat learned here, since the header above promises run-to-run
+# reproducibility: that holds for one BINARY, not across a rebuild. These
+# counts are LSan's unreachable-block count, and whether a block is reachable
+# depends on stale pointers left in the stack and registers, so a change that
+# only frees memory can still move an unrelated case by ~2%. Freeing the Di
+# vectors alone moved `build` +5,116 with the lexing work provably identical
+# (same 76 parses, same 73,728 tokens). Do not read a small move in one case
+# as a leak in the code you just touched; diff the per-callsite profiles.
 
-version 6400
-help 6400
-format 6620
-inspect 128700
-exec 133200
-build 235400
+# Re-baselined 2026-08-18 on Linux/x86-64, gcc 13 (observed: version 6179,
+# help 6167, format 6431, inspect 215492-215575, exec 219951, build 927314;
+# the CI runner saw 215571 / 219943 / 927349). Only inspect/exec/build moved,
+# and NOT because the compiler started leaking more per unit of work - the
+# unit of work grew. These cases compile tests/en/basics/hello.salam, whose
+# cost is dominated by the std/ packages the loader pulls in transitively, and
+# 0.3.1 added a lot of stdlib (calendar, graph, matrix, json, image, dotenv,
+# ...). Lexing the same hello.salam against the v0.3.0 std/ versus this one,
+# with one and the same compiler binary:
+#
+#   case      v0.3.0 std/      this std/     growth
+#   build     71,555 tokens    317,199       4.43x
+#   inspect   40,168 tokens    162,293       4.04x
+#
+# against which the leak counts moved 217,275 -> 927,314 (4.27x) and
+# 118,043 -> 215,535 (1.83x). Per token that is 3.04 -> 2.92 leaked
+# allocations for build and 2.94 -> 1.33 for inspect: flat to better, in both
+# cases, which is why this is a re-baseline and not a leak hunt. 88% of what
+# remains is still the one known shape - the lex_slice() substring each token
+# keeps as its lexeme, from scan_op/scan_number/scan_ident - unchanged since
+# the numbers above it were measured.
+#
+# The ratchet only moves down for a FIXED workload; it cannot tell a real
+# regression from std/ getting bigger. If these numbers need raising again,
+# check the token counts first, the same way this entry did.
+
+# Re-baselined 2026-08-21 on Linux/x86-64, gcc 13 (observed: version 6179,
+# help 6167, format 6431, inspect 221689, exec 226231, build 937000; the CI
+# runner saw 221855 / 226227). Only inspect and exec moved, and by 0.8% each -
+# the same shape as the entry above, checked the same way rather than assumed.
+#
+# One ASan binary, two stdlib trees, nothing else different:
+#
+#   case      pre-merge std/   this std/    delta
+#   inspect   219,939          221,772      +1,833
+#   exec      224,481          226,231      +1,750
+#
+# The deltas are the whole overage (the budgets were 220,000 and 224,500, and
+# the pre-merge numbers sit right on them), so the compiler is not leaking
+# more per unit of work - there is more work. std/ gained five packages in
+# 0.3.2 (aws, google, webpush, net/httpx, net/http/swagger), 599 -> 614
+# package files, and the std index scan reads every one of their headers to
+# build the import alias table. More files scanned, more allocations, flat
+# per file.
+#
+# Raised by ~2%, the headroom this file has always carried.
+
+# Re-baselined 2026-08-26 on Linux/x86-64, gcc 13: only inspect and exec
+# moved, by 1.5% each, and for the reason the two entries above describe
+# rather than a new leak. Measured the way they prescribe - one ASan binary,
+# two stdlib trees, nothing else different:
+#
+#   case      main std/    this std/    delta
+#   inspect   221,337      224,764      +3,427
+#   exec      228,010      231,464      +3,454
+#
+# The binary in all four runs is built from this branch, so every compiler
+# change it carries is held constant; swapping only std/ accounts for the
+# whole move. std/ went from 614 package files to 630 - the S3, SQS and STS
+# work - and the std index scan reads every one of their headers to build the
+# import alias table. More files scanned, flat per file.
+#
+# Raised by ~2%, the headroom this file has always carried.
+
+version 6300
+help 6300
+format 6500
+inspect 229500
+exec 234500
+build 946000

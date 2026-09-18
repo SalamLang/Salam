@@ -1,0 +1,113 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/ml: random forests, serial and parallel, classification and
+// regression. The parallel forest must equal the serial one tree for
+// tree.
+
+import data
+import math
+import matrix
+import ml
+import testing
+
+func main:
+    // Moons: a forest beats a single depth-limited tree on held-out data
+    mut my := matrix.Matrix {}
+    mut mx := data.MakeMoons(400, 0.25, 71, my)
+    mut sp := ml.TrainTestSplit(mx, my, 0.25, 72)
+    mut rf := ml.RandomForest { n_trees = 40, max_depth = 8, seed = 3 }
+    testing.AssertTrue(rf.fit(sp.x_train, sp.y_train))
+    testing.AssertTrue(rf.ok)
+    testing.AssertEqInt(rf.trees.len(), 40)
+    testing.AssertEqInt(rf.n_classes, 2)
+    testing.AssertTrue(rf.score(sp.x_train, sp.y_train) >= 0.95)
+    testing.AssertTrue(rf.score(sp.x_test, sp.y_test) >= 0.88)
+    // Probabilities are distributions
+    mut pr := rf.predict_proba(sp.x_test)
+    mut sums_ok := true
+    repeat pr.rows with i:
+        s := pr.at(i, 0) + pr.at(i, 1)
+        if s < 0.999999 || s > 1.000001: sums_ok = false end
+    end
+    testing.AssertTrue(sums_ok)
+
+    // Parallel growth reproduces the serial forest exactly
+    mut rfp := ml.RandomForest { n_trees = 40, max_depth = 8, seed = 3, workers = 4 }
+    testing.AssertTrue(rfp.fit(sp.x_train, sp.y_train))
+    mut same := true
+    repeat 40 with t:
+        mut a := rf.trees.get(t)
+        mut b := rfp.trees.get(t)
+        if a.node_count() != b.node_count(): same = false end
+        if a.node_count() > 0 && a.threshold.get(0) != b.threshold.get(0): same = false end
+    end
+    testing.AssertTrue(same)
+    mut p1 := rf.predict(sp.x_test)
+    mut p2 := rfp.predict(sp.x_test)
+    testing.AssertTrue(matrix.AllClose(p1, p2, 0.0))
+
+    // The acceptance target: 100 trees on a 3-class problem, held out
+    mut cy := matrix.Matrix {}
+    mut cx := data.MakeClassification(600, 6, 3, 2.5, 73, cy)
+    mut csp := ml.TrainTestSplit(cx, cy, 0.3, 5)
+    mut big := ml.RandomForest { n_trees = 100, max_depth = 12, seed = 9, workers = 0 - 1 }
+    testing.AssertTrue(big.fit(csp.x_train, csp.y_train))
+    testing.AssertTrue(big.score(csp.x_test, csp.y_test) >= 0.95)
+
+    // Regression forest on a smooth surface
+    mut xr := matrix.Zeros(300, 2)
+    mut yr := matrix.Zeros(300, 1)
+    mut g := matrix.NewRng(74)
+    repeat 300 with i:
+        a := g.next_float() * 3.0
+        b := g.next_float() * 3.0
+        xr.set(i, 0, a)
+        xr.set(i, 1, b)
+        yr.set(i, 0, math.Sin(a) + 0.5 * b)
+    end
+    mut rr := ml.RandomForest { n_trees = 30, criterion = ml.TREE_MSE, max_depth = 10, seed = 4 }
+    testing.AssertTrue(rr.fit(xr, yr))
+    testing.AssertTrue(rr.is_regression())
+    testing.AssertTrue(rr.score(xr, yr) > 0.95)
+    testing.AssertTrue(rr.predict_proba(xr).is_empty())
+
+    // Errors
+    mut fresh := ml.RandomForest {}
+    testing.AssertTrue(fresh.predict(mx).is_empty())
+    mut none := ml.RandomForest { n_trees = 0 }
+    testing.AssertFalse(none.fit(mx, my))
+
+    rf.free()
+    rfp.free()
+    big.free()
+    rr.free()
+    fresh.free()
+    none.free()
+    sp.free()
+    csp.free()
+    matrix.Free(mx)
+    matrix.Free(my)
+    matrix.Free(pr)
+    matrix.Free(p1)
+    matrix.Free(p2)
+    matrix.Free(cx)
+    matrix.Free(cy)
+    matrix.Free(xr)
+    matrix.Free(yr)
+
+    ret testing.Summary()
+end

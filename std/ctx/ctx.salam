@@ -1,0 +1,259 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "ctx"
+@fa "زمینه"
+@ar "سياق"
+package ctx
+
+import mem
+import sync
+
+/*
+ * A cancellation context: a tree of nodes where cancelling or expiring any
+ * node implicitly finishes everything below it.
+ *
+ * Two decisions shape the whole design.
+ *
+ * Done-ness is computed lazily by walking up the parent chain rather than
+ * pushed down at cancel time. That means Cancel touches one node, no list of
+ * children has to be maintained, and no watcher thread exists - a context here
+ * costs a little memory and nothing else while it is alive.
+ *
+ * Every node in a tree shares the root's mutex and condition variable. That is
+ * what makes lazy evaluation work with *blocking* waits: cancelling a parent
+ * broadcasts on the one condition variable the whole tree waits on, so a child's
+ * Wait wakes and re-evaluates its own chain. One lock per tree also means the
+ * chain walk is atomic with respect to concurrent cancellation.
+ */
+@en "Context"
+@fa "زمینه"
+@ar "سياق"
+pub struct Context:
+    // [0] cancelled, [1] absolute deadline in sync.NowMs() terms,
+    // [2] whether [1] is set at all.
+    pub state: i64* = null
+    // A heap copy of the parent handle - null at the root. It is a copy, not
+    // the caller's own variable, so a parent going out of scope cannot leave a
+    // child pointing at a dead frame; every field it carries is a pointer to
+    // shared state anyway.
+    pub parent: Context* = null
+    pub mu: sync.Mutex = sync.Mutex {}
+    pub cv: sync.CondVar = sync.CondVar {}
+    // Only the root owns the mutex and condition variable it shares out.
+    pub is_root: bool = false
+end
+
+// Caller must hold c.mu. Walks self-to-root and stops at the first node that
+// is finished, so the nearest reason wins.
+func done_chain(c: Context, reason &: int): bool:
+    mut cur := c
+    until true:
+        s := cur.state
+        if s[0] != 0:
+            reason = 1
+            ret true
+        end
+        if s[2] != 0 && sync.NowMs() >= s[1]:
+            reason = 2
+            ret true
+        end
+        if cur.parent == null:
+            break
+        end
+        cur = cur.parent[0]
+    end
+    reason = 0
+    ret false
+end
+
+// The soonest deadline anywhere on the chain, or 0 when nothing on it expires
+// on its own. A wait has to wake at that moment even though no thread will
+// signal it.
+func nearest_deadline(c: Context): i64:
+    mut cur := c
+    mut best := 0 as i64
+    until true:
+        s := cur.state
+        if s[2] != 0:
+            if best == 0 || s[1] < best:
+                best = s[1]
+            end
+        end
+        if cur.parent == null:
+            break
+        end
+        cur = cur.parent[0]
+    end
+    ret best
+end
+
+func child_of(parent: Context, deadline: i64, has_deadline: bool): Context:
+    p := mem.AllocateZeroed(sizeof(Context) as u64) as Context*
+    p[0] = parent
+    st := mem.AllocateZeroed(24 as u64) as i64*
+    if has_deadline:
+        st[1] = deadline
+        st[2] = 1
+    end
+    ret Context { state = st, parent = p, mu = parent.mu, cv = parent.cv, is_root = false }
+end
+
+/*
+ * The root of a tree: never cancelled and never expires on its own, but owns
+ * the mutex and condition variable every descendant shares. Free it last.
+ */
+@en "Background"
+@fa "پس زمینه"
+@ar "خلفية"
+pub func Background(): Context:
+    st := mem.AllocateZeroed(24 as u64) as i64*
+    ret Context {
+        state = st, parent = null, mu = sync.NewMutex(), cv = sync.NewCondVar(), is_root = true
+    }
+end
+
+@en "WithCancel"
+@fa "با لغو"
+@ar "مع إلغاء"
+pub func WithCancel(parent: Context): Context:
+    ret child_of(parent, 0 as i64, false)
+end
+
+/*
+ * Finishes on its own `ms` milliseconds from now. A child may shorten the
+ * effective deadline but never extend it - the chain walk takes the soonest,
+ * so a long-lived child of a short-lived parent still ends with the parent.
+ */
+@en "WithTimeout"
+@fa "با مهلت"
+@ar "مع مهلة"
+pub func WithTimeout(parent: Context, ms: i64): Context:
+    ret child_of(parent, sync.NowMs() + ms, true)
+end
+
+@en "WithDeadline"
+@fa "با موعد"
+@ar "مع موعد نهائي"
+pub func WithDeadline(parent: Context, at_ms: i64): Context:
+    ret child_of(parent, at_ms, true)
+end
+
+/*
+ * Cancels this node and, by implication, everything under it. Idempotent, and
+ * safe to call from any thread.
+ */
+@en "Cancel"
+@fa "لغو"
+@ar "إلغاء"
+pub func Cancel(c: Context):
+    s := c.state
+    sync.Lock(c.mu)
+    s[0] = 1
+    sync.Broadcast(c.cv)
+    sync.Unlock(c.mu)
+end
+
+@en "IsDone"
+@fa "تمام شده"
+@ar "منتهي"
+pub func IsDone(c: Context): bool:
+    mut why := 0
+    sync.Lock(c.mu)
+    r := done_chain(c, why)
+    sync.Unlock(c.mu)
+    ret r
+end
+
+/*
+ * "" while live, "cancelled" if some node was cancelled, "deadline exceeded"
+ * if one ran out of time. Mirrors the reason a worker would report back.
+ */
+@en "Err"
+@fa "خطا"
+@ar "خطأ"
+pub func Err(c: Context): str:
+    mut why := 0
+    sync.Lock(c.mu)
+    _ := done_chain(c, why)
+    sync.Unlock(c.mu)
+    if why == 1:
+        ret "cancelled"
+    end
+    if why == 2:
+        ret "deadline exceeded"
+    end
+    ret ""
+end
+
+@en "Deadline"
+@fa "موعد"
+@ar "موعد نهائي"
+pub func Deadline(c: Context): i64:
+    sync.Lock(c.mu)
+    d := nearest_deadline(c)
+    sync.Unlock(c.mu)
+    ret d
+end
+
+/*
+ * Blocks until the context finishes or `ms` elapses, and reports whether it
+ * finished. Waking at the context's own deadline is handled by capping each
+ * sleep at whichever comes first - nothing signals a deadline, so a wait that
+ * only listened for a broadcast would sleep straight past it.
+ */
+@en "Wait"
+@fa "انتظار"
+@ar "انتظار"
+pub func Wait(c: Context, ms: i64): bool:
+    mut why := 0
+    sync.Lock(c.mu)
+    until_ms := sync.NowMs() + ms
+    mut fin := done_chain(c, why)
+    until !fin:
+        mut left := until_ms - sync.NowMs()
+        dl := nearest_deadline(c)
+        if dl > 0:
+            dleft := dl - sync.NowMs()
+            if dleft < left:
+                left = dleft
+            end
+        end
+        if left <= 0:
+            break
+        end
+        _ := sync.WaitCondTimeout(c.cv, c.mu, left)
+        fin = done_chain(c, why)
+    end
+    sync.Unlock(c.mu)
+    ret fin
+end
+
+/*
+ * Releases one node. Children must be freed before the root, which is the one
+ * that owns the shared mutex and condition variable.
+ */
+@en "Free"
+@fa "آزادسازی"
+@ar "تحرير"
+pub func Free(c: Context):
+    mem.Free(c.state as void*)
+    if c.parent != null:
+        mem.Free(c.parent as void*)
+    end
+    if c.is_root:
+        sync.DestroyCondVar(c.cv)
+        sync.Destroy(c.mu)
+    end
+end

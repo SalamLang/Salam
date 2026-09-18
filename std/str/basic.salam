@@ -27,7 +27,17 @@ pub inline func Concat(a: str, b: str): str: ret a.concat(b) end
 @en "Compare"
 @fa "مقایسه"
 @ar "مقارنة"
-pub inline pure func Compare(a: str, b: str): int: ret strcmp(a, b) end
+// Orders a before, with or after b as -1, 0 or 1.
+//
+// C's strcmp only promises a sign, and libc implementations differ in the
+// magnitude they give it: on x86-64 glibc "a" vs "b" is -1, on aarch64 it is
+// -64. Folding it to a sign is what makes a program print the same number on
+// every machine and every backend.
+pub inline pure func Compare(a: str, b: str): int:
+    c := strcmp(a, b)
+    if c < 0: ret 0 - 1 end
+    ret c > 0 ? 1 : 0
+end
 
 @en "Equals"
 @fa "برابر است"
@@ -38,6 +48,24 @@ pub inline pure func Equals(a: str, b: str): bool: ret strcmp(a, b) == 0 end
 @fa "زیررشته"
 @ar "مقطع"
 pub inline func Substr(s: str, start: int, n: int): str: ret s.substr(start, n) end
+
+@en "SubstrIn"
+@fa "زیررشته درون"
+@ar "مقطع داخل"
+// Substr for a caller that already knows the slice is inside the string:
+// 0 <= start and start + n <= Len(s). Substr cannot know that, so it walks
+// the whole string with strlen just to clamp its two arguments - which a
+// scanner slicing every token out of one buffer pays once per token over
+// the entire buffer, making a single pass over a file quadratic in the
+// file's size. With the bounds supplied, copying n bytes is the only work
+// left. Same ownership as Substr: heap the caller frees.
+pub func SubstrIn(s: str, start: int, n: int): str:
+    mut ln := n
+    if ln < 0: ln = 0 end
+    r := mem.AllocateZeroed((ln + 1) as u64)
+    mem.Copy(r, ((_bp(s) as void*) as i64 + (start as i64)) as void*, ln as u64)
+    ret r as str
+end
 
 @en "Find"
 @fa "یافتن"
@@ -57,7 +85,7 @@ pub func Join(parts: Vector<str>, sep: str): str:
     defer BufFree(sb)
     repeat parts.len() with i:
         if i > 0: BufAppend(sb, sep) end
-        BufAppend(sb, parts.get(i)[0])
+        BufAppend(sb, parts.get(i))
     end
     out := BufStr(sb)
     ret out
@@ -96,24 +124,41 @@ end
 @en "Replace"
 @fa "جایگزینی"
 @ar "استبدال"
+// Returns a heap string the CALLER owns and must free. The two "nothing to
+// do" branches allocate a copy rather than returning the argument, for the
+// same reason TrimLeft does: a sometimes-aliased return cannot be freed
+// safely by anyone. filepath.Normalize is a bare call to this function, so
+// filepath.Clean freeing its own working copy was freeing its caller's
+// string on every path that contained no backslash - which is every path on
+// a POSIX system.
+//
+// The spans copied out between matches are appended and then released; they
+// used to be abandoned, one per match, on every call.
 pub func Replace(s: str, find: str, replacement: str): str:
     fl := find.len()
-    if fl == 0: ret s end
+    if fl == 0: ret Clone(s) end
     n := s.len()
+    mut idx := IndexFrom(s, find, 0)
+    if idx < 0: ret Clone(s) end
     mut sb := NewBuilder()
     defer BufFree(sb)
     mut i := 0
-    mut idx := IndexFrom(s, find, 0)
-    if idx < 0: ret s end
     until idx >= 0:
-        if idx > i: BufAppend(sb, s.substr(i, idx - i)) end
+        if idx > i:
+            head := s.substr(i, idx - i)
+            BufAppend(sb, head)
+            mem.Free(head as void*)
+        end
         BufAppend(sb, replacement)
         i = idx + fl
         idx = IndexFrom(s, find, i)
     end
-    if i < n: BufAppend(sb, s.substr(i, n - i)) end
-    out := BufStr(sb)
-    ret out
+    if i < n:
+        tail := s.substr(i, n - i)
+        BufAppend(sb, tail)
+        mem.Free(tail as void*)
+    end
+    ret BufStr(sb)
 end
 
 @en "FromInt"
@@ -121,7 +166,12 @@ end
 @ar "من عدد صحیح"
 pub func FromInt(i: i64): str: ret conv.FormatInt(i) end
 
+// f64 in a signature needs an SSE register even when the body never touches
+// the FPU, which SALAM_KERNEL's -mgeneral-regs-only refuses to generate.
+if SALAM_KERNEL:
+else:
 @en "FromFloat"
 @fa "از اعشار"
 @ar "من عدد عشری"
 pub func FromFloat(f: f64): str: ret conv.FormatFloat(f) end
+end

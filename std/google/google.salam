@@ -1,0 +1,241 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package google
+
+// Google service-account authentication.
+//
+// Every Google API - Cloud Messaging, Cloud Storage, Sheets, Vision - is
+// reached the same way from a server: a service-account JSON file, an RS256
+// assertion signed with the key inside it, and an access token exchanged for
+// that assertion. This package is that exchange and nothing else, because it
+// is the only part every one of those APIs shares.
+//
+// The token is cached until shortly before it expires. That matters more than
+// it looks: the exchange is a network round trip and an RSA signature, and
+// doing it per request would put both on the path of every push notification.
+//
+// It replaces no SDK and wraps no API. What it hands back is a bearer token;
+// what a caller does with it is an ordinary HTTP request.
+
+import sync
+import str
+import net.http
+import encoding
+import encoding.json
+import crypto
+import tls
+import time
+
+// Google issues tokens good for an hour. Renewing a minute early costs one
+// extra exchange an hour and removes the race where a token expires between
+// being read and being used.
+const RENEW_MARGIN_SECONDS := 60
+const ASSERTION_TTL_SECONDS := 3600
+
+const GRANT_TYPE := "urn:ietf:params:oauth:grant-type:jwt-bearer"
+
+// Scopes worth naming, since a caller should not have to look them up.
+pub const SCOPE_FCM := "https://www.googleapis.com/auth/firebase.messaging"
+pub const SCOPE_STORAGE := "https://www.googleapis.com/auth/devstorage.read_write"
+pub const SCOPE_CLOUD := "https://www.googleapis.com/auth/cloud-platform"
+
+mut _cache_lock := sync.NewMutex()
+mut _cache_keys := Vector {} as Vector<str>
+mut _cache_tokens := Vector {} as Vector<str>
+mut _cache_expiry := Vector {} as Vector<i64>
+
+// ServiceAccount - the fields of a service-account JSON file that matter.
+//
+// The others - private_key_id, auth_uri, the certificate URLs - are for
+// verifying Google's side of things, which TLS already does.
+pub struct ServiceAccount:
+    pub client_email: str = ""
+    pub private_key: str = ""
+    pub token_uri: str = "https://oauth2.googleapis.com/token"
+    pub project_id: str = ""
+    pub ok: bool = false
+end
+
+// _b64url - standard base64 to the URL-safe alphabet, unpadded, which is what
+// JOSE uses everywhere.
+func _b64url(standard: str): str:
+    mut out := str.Replace(str.Replace(standard, "+", "-"), "/", "_")
+    while out.len() > 0 && out.substr(out.len() - 1, 1) == "=":
+        out = out.substr(0, out.len() - 1)
+    end
+    ret out
+end
+
+// _part - one JOSE segment.
+func _part(payload: str): str:
+    ret _b64url(encoding.Base64Encode(payload))
+end
+
+// _digest - SHA-256 of the signing input, which is what RS256 signs.
+func _digest(signing_input: str): str:
+    ret encoding.Base64Encode(encoding.HexDecode(crypto.Sha256Hex(signing_input)))
+end
+
+// _assertion - the signed JWT exchanged for a token.
+//
+// `aud` is the token endpoint rather than the API being called: the assertion
+// authenticates to Google's authorisation server, and the scope is what says
+// which API the resulting token is for.
+func _assertion(sa: ServiceAccount, scope: str, now: i64): str:
+    header := _part(`{"alg":"RS256","typ":"JWT"}`)
+    claims := _part(`{"iss":"` + sa.client_email + `","scope":"` + scope +
+        `","aud":"` + sa.token_uri + `","iat":` + _num(now) +
+        `,"exp":` + _num(now + (ASSERTION_TTL_SECONDS as i64)) + `}`)
+    signing_input := header + "." + claims
+    mut ok := false
+    signature := tls.RsaSignPkcs1Sha256(sa.private_key, _digest(signing_input), ok)
+    if !ok: ret "" end
+    ret signing_input + "." + _b64url(signature)
+end
+
+func _num(value: i64): str:
+    mut v := value
+    if v <= 0 as i64: ret "0" end
+    mut out := ""
+    while v > 0 as i64:
+        out = "0123456789".substr((v % (10 as i64)) as int, 1) + out
+        v = v / (10 as i64)
+    end
+    ret out
+end
+
+// _cached - a token that is still good, or "". Called under the lock.
+func _cached(key: str, now: i64): str:
+    repeat _cache_keys.len() with i:
+        if _cache_keys.get(i) == key && _cache_expiry.get(i) > now:
+            ret _cache_tokens.get(i)
+        end
+    end
+    ret ""
+end
+
+// _remember - stores a token against its key, replacing any earlier one.
+func _remember(key: str, token: str, expires_at: i64):
+    repeat _cache_keys.len() with i:
+        if _cache_keys.get(i) == key:
+            _cache_tokens.set(i, token)
+            _cache_expiry.set(i, expires_at)
+            ret
+        end
+    end
+    _cache_keys.push(key)
+    _cache_tokens.push(token)
+    _cache_expiry.push(expires_at)
+end
+
+// _exchange - the assertion for a token.
+func _exchange(sa: ServiceAccount, scope: str, now: i64, ok &: bool): str:
+    ok = false
+    assertion := _assertion(sa, scope, now)
+    if assertion.len() == 0: ret "" end
+    mut headers := http.NewHeaders()
+    defer headers.free()
+    headers.put("Content-Type", "application/x-www-form-urlencoded")
+    body := "grant_type=" + encoding.URLEncode(GRANT_TYPE) + "&assertion=" + assertion
+    response := http.PostWith(sa.token_uri, body, headers)
+    if !http.Ok(response): ret "" end
+    token := json.Get(http.Body(response), "access_token")
+    if token.len() == 0: ret "" end
+    ok = true
+    ret token
+end
+
+// _mint - the exchange, and the cache write that follows it.
+//
+// The lock is not held across the request: two threads racing here both do the
+// exchange and the second overwrites the first, which costs one extra token
+// and is far better than every push waiting behind one HTTP call.
+func _mint(sa: ServiceAccount, scope: str, key: str, now: i64, ok &: bool): str:
+    token := _exchange(sa, scope, now, ok)
+    if !ok: ret "" end
+    sync.Lock(_cache_lock)
+    _remember(key, token, now + (ASSERTION_TTL_SECONDS as i64) - (RENEW_MARGIN_SECONDS as i64))
+    sync.Unlock(_cache_lock)
+    ret token
+end
+
+// ParseServiceAccount - the JSON a service-account key file contains.
+//
+// The private key arrives with its newlines escaped, which is how JSON carries
+// a PEM; the decoder unescapes them, and a PEM with literal backslash-n in it
+// parses as nothing at all.
+pub func ParseServiceAccount(document: str): ServiceAccount:
+    if document.len() == 0: ret ServiceAccount {} end
+    email := json.Get(document, "client_email")
+    key := json.Get(document, "private_key")
+    if email.len() == 0 || key.len() == 0: ret ServiceAccount {} end
+    mut sa := ServiceAccount {
+        client_email = email,
+        private_key = key,
+        project_id = json.Get(document, "project_id"),
+        ok = true
+    }
+    uri := json.Get(document, "token_uri")
+    if uri.len() > 0: sa.token_uri = uri end
+    ret sa
+end
+
+// AccessToken - a bearer token for one scope, minted or reused.
+//
+// Cached per (account, scope) until shortly before it expires, so a caller may
+// ask for one on every request without paying for a signature and a round trip
+// each time.
+pub func AccessToken(sa: ServiceAccount, scope: str, ok &: bool): str:
+    ok = false
+    if !sa.ok || scope.len() == 0: ret "" end
+    now := time.Now()
+    key := sa.client_email + "|" + scope
+    sync.Lock(_cache_lock)
+    hit := _cached(key, now)
+    sync.Unlock(_cache_lock)
+    if hit.len() > 0:
+        ok = true
+        ret hit
+    end
+    ret _mint(sa, scope, key, now, ok)
+end
+
+// Forget - drops any cached token for an account. For a caller that has just
+// been told its credentials changed.
+pub func Forget(sa: ServiceAccount):
+    sync.Lock(_cache_lock)
+    mut keys := Vector {} as Vector<str>
+    mut tokens := Vector {} as Vector<str>
+    mut expiry := Vector {} as Vector<i64>
+    repeat _cache_keys.len() with i:
+        if !str.StartsWith(_cache_keys.get(i), sa.client_email + "|"):
+            keys.push(_cache_keys.get(i))
+            tokens.push(_cache_tokens.get(i))
+            expiry.push(_cache_expiry.get(i))
+        end
+    end
+    _cache_keys.free()
+    _cache_tokens.free()
+    _cache_expiry.free()
+    _cache_keys = keys
+    _cache_tokens = tokens
+    _cache_expiry = expiry
+    sync.Unlock(_cache_lock)
+end
+
+// Authorization - the header value a Google API request carries.
+pub func Authorization(token: str): str:
+    ret "Bearer " + token
+end

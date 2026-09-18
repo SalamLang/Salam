@@ -93,7 +93,7 @@
 //   std/fs uses). The values ALIAS the target bytes exactly like the C.
 //   One deviation: loading a NULL char* cell yields "" (the C's
 //   val_str(NULL) crashed on first use). ptr addresses live in i64 (like
-//   the web package's funcptr slots).
+//   the web package's handler slots).
 // - INTRINSICS[] function-pointer table -> k_ip_intrinsics name table (same
 //   order) + an index dispatch in call_intrinsic; the platform row is
 //   "SleepEx" (ms) on Windows and "usleep" (µs) elsewhere via compile-time
@@ -121,6 +121,7 @@ extern:
     func rename(old: str, new_path: str): int
     func fopen(path: str, mode: str): void*
     func fclose(fp: void*): int
+    func fflush(fp: void*): int
     func fseek(fp: void*, off: int, whence: int): int
     func ftell(fp: void*): int
     func fread(ptr: void*, size: u64, nmemb: u64, stream: void*): u64
@@ -214,8 +215,17 @@ pub const PTR_I64 := 6
 pub const PTR_U64 := 7
 pub const PTR_F32 := 8
 pub const PTR_F64 := 9
-pub const PTR_STR := 10
-pub const PTR_OPAQUE := 11
+// One byte each, matching what the C backend lays down. Without their own
+// kinds they fell to PTR_OPAQUE, whose load and store are pointer-sized: a
+// Vector<bool> allocates one byte per element and every write ran eight bytes
+// past it, corrupting the heap.
+pub const PTR_BOOL := 10
+pub const PTR_CHAR := 11
+pub const PTR_STR := 12
+pub const PTR_OPAQUE := 13
+// Points at a struct laid out in real memory: the pointee type name rides in
+// Value.s and interp_memlayout.salam turns the bytes into a value and back.
+pub const PTR_STRUCT := 14
 
 // ===== interp_internal.h =====
 // flow_t
@@ -230,7 +240,8 @@ pub const ILOC_VAR := 0
 pub const ILOC_FIELD := 1
 pub const ILOC_ARR := 2
 pub const ILOC_PTR := 3
-pub const ILOC_OPIDX := 4
+pub const ILOC_MEM := 4
+pub const ILOC_OPIDX := 5
 
 // #define INTERP_MAX_DEPTH 1000
 pub const INTERP_MAX_DEPTH := 1000
@@ -244,7 +255,7 @@ const K_IP_INTR_COUNT := 22
 mut k_ip_intrinsics := [
     "sqrt", "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "log", "log10", "exp", "floor", "ceil",
     "fabs", "fmod", "pow", "strlen", "strcmp", "strtol", "strtod", "salam_input", "time"
-] as str[22]
+]
 
 // ===== handle type aliases (all 0 = the C NULL pointer) =====
 pub type EnvId = int
@@ -377,6 +388,9 @@ pub struct Loc:
     pub idx: i64 = 0 as i64 // ILOC_ARR / ILOC_PTR
     pub pa: i64 = 0 as i64 // ILOC_PTR address bits
     pub pe: int = 0 // ILOC_PTR element kind
+    pub pts: str = "" // ILOC_PTR element type name (PTR_STRUCT)
+    pub mem: i64 = 0 as i64 // ILOC_MEM: the address of the field in memory
+    pub mem_ts: str = "" // ILOC_MEM: its declared type
     pub key: Value = Value {} // ILOC_OPIDX
     pub get_m: int = 0 // ILOC_OPIDX (at.NodeId)
     pub set_m: int = 0 // ILOC_OPIDX (at.NodeId)
@@ -424,6 +438,7 @@ pub struct Interp:
     pub impls: Vector<int> = Vector {}
     pub extern_fns: Vector<Value> = Vector {} // boxed closures (slot 0 sentinel)
     pub extern_decls: Vector<int> = Vector {}
+    pub mem_boxes: Vector<Value> = Vector {} // slots with no byte image
     pub def_env_defs: Vector<int> = Vector {} // vec def_envs (parallel)
     pub def_env_envs: Vector<int> = Vector {}
     // lookup tables:

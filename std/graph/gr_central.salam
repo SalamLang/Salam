@@ -1,0 +1,435 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package graph
+
+import math
+
+// Centrality: seven answers to "which node matters most", because the
+// question has no single answer.
+//
+//   Degree        how many neighbours a node has, immediate influence
+//   Closeness     how near it is to everything else, speed of reach
+//   Harmonic      closeness that survives disconnection
+//   Betweenness   how much traffic must pass through it, brokerage
+//   Eigenvector   importance as a fixed point: important neighbours
+//   Katz          eigenvector plus a base score, safe on digraphs
+//   PageRank      Katz with the score divided among out-links
+//   HITS          two scores: hubs that point well, authorities pointed at
+//
+// Betweenness uses Brandes' algorithm, which is what makes the whole family
+// affordable: one breadth-first search per node accumulates dependencies
+// backwards over the shortest path DAG, giving O(nm) instead of the O(n^3)
+// of computing and re-walking all shortest paths.
+//
+// Eigenvector, Katz, PageRank and HITS are power iterations. They stop when
+// successive vectors differ by less than the tolerance or when the iteration
+// budget runs out, so they always terminate.
+
+func _brandes_bfs(g &: Graph, s: int, dist &: Vector<int>, sigma &: Vector<f64>, order &: Vector<int>):
+    FillInt(dist, g.n, GRAPH_NONE)
+    FillFloat(sigma, g.n, 0.0)
+    order.clear()
+    dist.set(s, 0)
+    sigma.set(s, 1.0)
+    order.push(s)
+    mut head := 0
+    until head < order.len():
+        u := order.get(head)
+        head += 1
+        _brandes_scan(g, u, dist, sigma, order)
+    end
+end
+
+func _brandes_scan(g &: Graph, u: int, dist &: Vector<int>, sigma &: Vector<f64>, order &: Vector<int>):
+    mut k := g.adj_start(u)
+    stop := g.adj_stop(u)
+    until k < stop:
+        v := g.adj_node(k)
+        if dist.get(v) == GRAPH_NONE:
+            dist.set(v, dist.get(u) + 1)
+            order.push(v)
+        end
+        if dist.get(v) == dist.get(u) + 1: sigma.set(v, sigma.get(v) + sigma.get(u)) end
+        k += 1
+    end
+end
+
+// The accumulation half of Brandes: walk the breadth-first order backwards,
+// so every node is processed after all the nodes that depend on it, and push
+// each node's dependency back along the shortest path DAG.
+func _brandes_back(g &: Graph, s: int, dist: Vector<int>, sigma: Vector<f64>, order: Vector<int>, delta &: Vector<f64>, score &: Vector<f64>, edge_score &: Vector<f64>):
+    FillFloat(delta, g.n, 0.0)
+    mut i := order.len() - 1
+    until i >= 0:
+        w := order.get(i)
+        _brandes_push(g, w, dist, sigma, delta, edge_score)
+        if w != s: score.set(w, score.get(w) + delta.get(w)) end
+        i = i - 1
+    end
+end
+
+func _brandes_push(g &: Graph, w: int, dist: Vector<int>, sigma: Vector<f64>, delta &: Vector<f64>, edge_score &: Vector<f64>):
+    mut k := g.in_start(w)
+    stop := g.in_stop(w)
+    until k < stop:
+        v := g.in_node(k)
+        if dist.get(v) == dist.get(w) - 1:
+            share := sigma.get(v) / sigma.get(w) * (1.0 + delta.get(w))
+            delta.set(v, delta.get(v) + share)
+            if edge_score.len() > 0:
+                e := g.in_edge(k)
+                edge_score.set(e, edge_score.get(e) + share)
+            end
+        end
+        k += 1
+    end
+end
+
+func _normalize(v &: Vector<f64>):
+    mut norm := 0.0
+    repeat v.len() with i: norm += v.get(i) * v.get(i) end
+    norm = math.Sqrt(norm)
+    if norm <= 0.0: ret end
+    repeat v.len() with i: v.set(i, v.get(i) / norm) end
+end
+
+func _scale_to_sum(v &: Vector<f64>):
+    mut s := 0.0
+    repeat v.len() with i: s += v.get(i) end
+    if s <= 0.0: ret end
+    repeat v.len() with i: v.set(i, v.get(i) / s) end
+end
+
+func _delta_of(a: Vector<f64>, b: Vector<f64>): f64:
+    mut d := 0.0
+    repeat a.len() with i: d += math.Abs(a.get(i) - b.get(i)) end
+    ret d
+end
+
+// One multiplication by the adjacency matrix, in the direction the caller
+// asks for: out-neighbours for hubs and for the plain adjacency product,
+// in-neighbours for authorities and for PageRank's inbound mass.
+func _spread_out(g &: Graph, src: Vector<f64>, dst &: Vector<f64>):
+    FillFloat(dst, g.n, 0.0)
+    repeat g.n with u:
+        mut k := g.adj_start(u)
+        stop := g.adj_stop(u)
+        until k < stop:
+            v := g.adj_node(k)
+            dst.set(v, dst.get(v) + src.get(u))
+            k += 1
+        end
+    end
+end
+
+func _spread_in(g &: Graph, src: Vector<f64>, dst &: Vector<f64>):
+    FillFloat(dst, g.n, 0.0)
+    repeat g.n with u:
+        mut k := g.in_start(u)
+        stop := g.in_stop(u)
+        until k < stop:
+            v := g.in_node(k)
+            dst.set(v, dst.get(v) + src.get(u))
+            k += 1
+        end
+    end
+end
+
+func _pagerank_step(g &: Graph, cur: Vector<f64>, nxt &: Vector<f64>, damping: f64):
+    n := g.n
+    mut sink := 0.0
+    FillFloat(nxt, n, 0.0)
+    repeat n with u:
+        d := g.out_degree(u)
+        if d == 0: sink += cur.get(u)
+        else: _pagerank_spread(g, u, cur.get(u) / (d as f64), nxt)
+        end
+    end
+    base := (1.0 - damping) / (n as f64) + damping * sink / (n as f64)
+    repeat n with u: nxt.set(u, base + damping * nxt.get(u)) end
+end
+
+func _pagerank_spread(g &: Graph, u: int, share: f64, nxt &: Vector<f64>):
+    mut k := g.adj_start(u)
+    stop := g.adj_stop(u)
+    until k < stop:
+        v := g.adj_node(k)
+        nxt.set(v, nxt.get(v) + share)
+        k += 1
+    end
+end
+
+func _closeness_of(dist: Vector<int>, n: int): f64:
+    mut total := 0.0
+    mut reached := 0
+    repeat n with v:
+        d := dist.get(v)
+        if d > 0:
+            total += d as f64
+            reached += 1
+        end
+    end
+    if reached == 0: ret 0.0 end
+    if n < 2: ret 0.0 end
+    ret ((reached as f64) / total) * ((reached as f64) / ((n - 1) as f64))
+end
+
+func _brandes_all(g &: Graph, score &: Vector<f64>, edge_score &: Vector<f64>):
+    mut dist := Vector {} as Vector<int>
+    defer dist.free()
+    mut sigma := Vector {} as Vector<f64>
+    defer sigma.free()
+    mut order := Vector {} as Vector<int>
+    defer order.free()
+    mut delta := Vector {} as Vector<f64>
+    defer delta.free()
+    repeat g.n with s:
+        _brandes_bfs(g, s, dist, sigma, order)
+        _brandes_back(g, s, dist, sigma, order, delta, score, edge_score)
+    end
+end
+
+@en "DegreeCentrality"
+@fa "مرکزیت درجه"
+@ar "مركزية الدرجة"
+pub func DegreeCentrality(g &: Graph): Vector<f64>:
+    mut out := Vector {} as Vector<f64>
+    if g.n < 2: ret out end
+    d := (g.n - 1) as f64
+    repeat g.n with u: out.push((g.degree(u) as f64) / d) end
+    ret out
+end
+
+@en "InDegreeCentrality"
+@fa "مرکزیت درجه ورودی"
+@ar "مركزية الدرجة الواردة"
+pub func InDegreeCentrality(g &: Graph): Vector<f64>:
+    mut out := Vector {} as Vector<f64>
+    if g.n < 2: ret out end
+    d := (g.n - 1) as f64
+    repeat g.n with u: out.push((g.in_degree(u) as f64) / d) end
+    ret out
+end
+
+@en "OutDegreeCentrality"
+@fa "مرکزیت درجه خروجی"
+@ar "مركزية الدرجة الصادرة"
+pub func OutDegreeCentrality(g &: Graph): Vector<f64>:
+    mut out := Vector {} as Vector<f64>
+    if g.n < 2: ret out end
+    d := (g.n - 1) as f64
+    repeat g.n with u: out.push((g.out_degree(u) as f64) / d) end
+    ret out
+end
+
+// Closeness: the reciprocal of the mean distance to the nodes u can reach,
+// scaled by the fraction it reaches so that a node trapped in a small
+// component does not outrank a well placed one (Wasserman-Faust).
+@en "ClosenessCentrality"
+@fa "مرکزیت نزدیکی"
+@ar "مركزية القرب"
+pub func ClosenessCentrality(g &: Graph): Vector<f64>:
+    mut out := Vector {} as Vector<f64>
+    mut dist := Vector {} as Vector<int>
+    defer dist.free()
+    mut parent := Vector {} as Vector<int>
+    defer parent.free()
+    repeat g.n with u:
+        BFSFrom(g, u, dist, parent)
+        out.push(_closeness_of(dist, g.n))
+    end
+    ret out
+end
+
+// Harmonic centrality sums the reciprocals of the distances instead, so
+// unreachable nodes contribute zero rather than infinity. It is the version
+// to use when the graph is not connected.
+@en "HarmonicCentrality"
+@fa "مرکزیت هارمونیک"
+@ar "المركزية التوافقية"
+pub func HarmonicCentrality(g &: Graph): Vector<f64>:
+    mut out := Vector {} as Vector<f64>
+    mut dist := Vector {} as Vector<int>
+    defer dist.free()
+    mut parent := Vector {} as Vector<int>
+    defer parent.free()
+    repeat g.n with u:
+        BFSFrom(g, u, dist, parent)
+        mut s := 0.0
+        repeat g.n with v:
+            if v != u:
+                d := dist.get(v)
+                if d > 0: s += 1.0 / (d as f64) end
+            end
+        end
+        if g.n > 1: s = s / ((g.n - 1) as f64) end
+        out.push(s)
+    end
+    ret out
+end
+
+// Betweenness by Brandes: for each node, the fraction of shortest paths
+// between other pairs that run through it. Undirected results are halved
+// because each unordered pair is counted from both ends.
+@en "BetweennessCentrality"
+@fa "مرکزیت بینابینی"
+@ar "مركزية الوساطة"
+pub func BetweennessCentrality(g &: Graph): Vector<f64>:
+    mut score := Vector {} as Vector<f64>
+    mut edge_score := Vector {} as Vector<f64>
+    defer edge_score.free()
+    FillFloat(score, g.n, 0.0)
+    _brandes_all(g, score, edge_score)
+    if g.directed == false:
+        repeat g.n with u: score.set(u, score.get(u) / 2.0) end
+    end
+    ret score
+end
+
+// The same accumulation, credited to edges instead of nodes. This is what
+// Girvan-Newman community detection removes, one edge at a time.
+@en "EdgeBetweenness"
+@fa "بینابینی یال"
+@ar "وساطة الأضلاع"
+pub func EdgeBetweenness(g &: Graph): Vector<f64>:
+    mut score := Vector {} as Vector<f64>
+    defer score.free()
+    mut edge_score := Vector {} as Vector<f64>
+    FillFloat(score, g.n, 0.0)
+    FillFloat(edge_score, g.size(), 0.0)
+    _brandes_all(g, score, edge_score)
+    if g.directed == false:
+        repeat g.size() with e: edge_score.set(e, edge_score.get(e) / 2.0) end
+    end
+    ret edge_score
+end
+
+// Eigenvector centrality by power iteration: the principal eigenvector of
+// the adjacency matrix, where a node is important if its neighbours are.
+// Perron-Frobenius guarantees the iteration converges to a positive vector
+// on a connected undirected graph.
+@en "EigenvectorCentrality"
+@fa "مرکزیت بردار ویژه"
+@ar "مركزية المتجه الذاتي"
+pub func EigenvectorCentrality(g &: Graph, iters: int, tol: f64): Vector<f64>:
+    mut cur := Vector {} as Vector<f64>
+    mut nxt := Vector {} as Vector<f64>
+    defer nxt.free()
+    FillFloat(cur, g.n, 1.0)
+    _normalize(cur)
+    mut step := 0
+    until step < iters:
+        _spread_out(g, cur, nxt)
+        _normalize(nxt)
+        d := _delta_of(cur, nxt)
+        repeat g.n with u: cur.set(u, nxt.get(u)) end
+        if d < tol: break end
+        step += 1
+    end
+    ret cur
+end
+
+// Katz centrality: every node starts with `beta` and every walk of length k
+// arriving at it adds alpha^k. Choose alpha below the reciprocal of the
+// largest eigenvalue or the series diverges, which is exactly why this
+// works on directed graphs where eigenvector centrality collapses.
+@en "KatzCentrality"
+@fa "مرکزیت کاتز"
+@ar "مركزية كاتز"
+pub func KatzCentrality(g &: Graph, alpha: f64, beta: f64, iters: int, tol: f64): Vector<f64>:
+    mut cur := Vector {} as Vector<f64>
+    mut nxt := Vector {} as Vector<f64>
+    defer nxt.free()
+    FillFloat(cur, g.n, beta)
+    mut step := 0
+    until step < iters:
+        _spread_out(g, cur, nxt)
+        repeat g.n with u: nxt.set(u, beta + alpha * nxt.get(u)) end
+        d := _delta_of(cur, nxt)
+        repeat g.n with u: cur.set(u, nxt.get(u)) end
+        if d < tol: break end
+        step += 1
+    end
+    ret cur
+end
+
+// PageRank: the stationary distribution of a random surfer who follows an
+// out-link with probability `damping` and teleports otherwise. Nodes with no
+// out-links would leak probability, so their mass is redistributed
+// uniformly, which keeps the total exactly 1.
+@en "PageRank"
+@fa "رتبه‌بندی صفحه"
+@ar "ترتيب الصفحة"
+pub func PageRank(g &: Graph, damping: f64, iters: int, tol: f64): Vector<f64>:
+    mut cur := Vector {} as Vector<f64>
+    mut nxt := Vector {} as Vector<f64>
+    defer nxt.free()
+    if g.n == 0: ret cur end
+    FillFloat(cur, g.n, 1.0 / (g.n as f64))
+    mut step := 0
+    until step < iters:
+        _pagerank_step(g, cur, nxt, damping)
+        d := _delta_of(cur, nxt)
+        repeat g.n with u: cur.set(u, nxt.get(u)) end
+        if d < tol: break end
+        step += 1
+    end
+    ret cur
+end
+
+// HITS: hubs point at good authorities, authorities are pointed at by good
+// hubs. The two vectors are the principal eigenvectors of A A^T and A^T A,
+// found by alternating the two updates.
+@en "HITS"
+@fa "هیتس"
+@ar "هيتس"
+pub func HITS(g &: Graph, iters: int, tol: f64, hubs &: Vector<f64>, auth &: Vector<f64>):
+    FillFloat(hubs, g.n, 1.0)
+    FillFloat(auth, g.n, 1.0)
+    mut tmp := Vector {} as Vector<f64>
+    defer tmp.free()
+    mut step := 0
+    until step < iters:
+        _spread_out(g, hubs, tmp)
+        _normalize(tmp)
+        d := _delta_of(auth, tmp)
+        repeat g.n with u: auth.set(u, tmp.get(u)) end
+        _spread_in(g, auth, tmp)
+        _normalize(tmp)
+        repeat g.n with u: hubs.set(u, tmp.get(u)) end
+        if d < tol: break end
+        step += 1
+    end
+end
+
+// The node with the highest score in a centrality vector, GRAPH_NONE when
+// the vector is empty. Ties go to the lowest node id.
+@en "TopNode"
+@fa "برترین گره"
+@ar "أعلى عقدة"
+pub func TopNode(score: Vector<f64>): int:
+    mut best := GRAPH_NONE
+    repeat score.len() with u:
+        if best == GRAPH_NONE: best = u
+        else score.get(u) > score.get(best): best = u
+        end
+    end
+    ret best
+end
+
+@en "ScaleToSum"
+@fa "مقیاس به مجموع"
+@ar "قياس إلى المجموع"
+pub func ScaleToSum(v &: Vector<f64>): _scale_to_sum(v) end

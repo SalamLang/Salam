@@ -1,0 +1,227 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ml
+
+import matrix
+import pool
+
+// Random forests: bagged CART trees with a random feature subset per
+// split, votes averaged for classification and predictions averaged
+// for regression.
+//
+// Every tree is a function of one derived seed - its bootstrap sample
+// and its feature subsets both come from matrix.NewRng(derive(seed, i))
+// - so the forest is identical whether the trees are grown serially or
+// across pool.ParallelFor workers, and `workers` is purely a speed knob.
+// Workers reach the shared inputs through the file-private globals
+// below (lambdas capture by value) and each writes only its own slot of
+// the tree vector; the vector is sized before the fan-out, so no worker
+// ever triggers a reallocation.
+
+// Fan-out slots: read-only inputs and settings, one output slot per tree.
+mut _rf_x := matrix.Matrix {}
+mut _rf_y := matrix.Matrix {}
+mut _rf_trees := Vector {} as Vector<DecisionTree>
+mut _rf_criterion := 0
+mut _rf_depth := 16
+mut _rf_leaf := 1
+mut _rf_features := 0
+mut _rf_bootstrap := true
+mut _rf_seed := 0 as i64
+mut _rf_classes := 0
+
+@en "RandomForest"
+@fa "جنگل تصادفی"
+@ar "غابة عشوائية"
+pub struct RandomForest:
+    pub n_trees: int = 100
+    pub criterion: int = TREE_GINI
+    pub max_depth: int = 16
+    pub min_samples_leaf: int = 1
+    pub max_features: int = 0
+    pub bootstrap: bool = true
+    pub seed: i64 = 42
+    pub workers: int = 0
+    pub trees: Vector<DecisionTree> = Vector {}
+    pub n_classes: int = 0
+    pub ok: bool = false
+
+    @en "is_regression"
+    @fa "رگرسیون است"
+    @ar "انحدار"
+    pub func is_regression(): bool: ret this.criterion == TREE_MSE end
+
+    @en "fit"
+    @fa "برازش"
+    @ar "ملاءمة"
+    pub func fit(x &: matrix.Matrix, y &: matrix.Matrix): bool:
+        this.ok = false
+        if x.is_empty() || y.rows != x.rows || y.cols != 1 || this.n_trees < 1: ret false end
+        this.free_trees()
+        mut mf := this.max_features
+        if mf <= 0:
+            if this.is_regression():
+                mf = x.cols / 3
+            else:
+                mf = _isqrt(x.cols)
+            end
+            if mf < 1: mf = 1 end
+        end
+        _rf_x = x
+        _rf_y = y
+        _rf_criterion = this.criterion
+        _rf_depth = this.max_depth
+        _rf_leaf = this.min_samples_leaf
+        _rf_features = mf
+        _rf_bootstrap = this.bootstrap
+        _rf_seed = this.seed
+        _rf_classes = 0
+        if this.is_regression() == false: _rf_classes = CountClasses(y) end
+        _rf_trees = Vector {} as Vector<DecisionTree>
+        repeat this.n_trees: _rf_trees.push(DecisionTree {}) end
+        mut w := this.workers
+        if w < 0: w = pool.CPUCount() as int end
+        if w <= 1:
+            repeat this.n_trees with t: _rf_fit_one(t as i64) end
+        else:
+            pool.ParallelFor(this.n_trees as i64, w as i64, (i: i64): _rf_fit_one(i) end)
+        end
+        this.trees = _rf_trees
+        _rf_trees = Vector {} as Vector<DecisionTree>
+        if this.is_regression(): this.n_classes = 1
+        else: this.n_classes = CountClasses(y) end
+        this.ok = true
+        ret true
+    end
+
+    @en "predict_proba"
+    @fa "پیش‌بینی احتمال"
+    @ar "تنبؤ بالاحتمال"
+    pub func predict_proba(x &: matrix.Matrix): matrix.Matrix:
+        if this.ok == false || this.is_regression(): ret matrix.Matrix {} end
+        mut out := matrix.Zeros(x.rows, this.n_classes)
+        repeat this.trees.len() with t:
+            mut tree := this.trees.get(t)
+            mut p := tree.predict_proba(x)
+            if p.is_empty() == false && p.cols == this.n_classes: matrix.AddInPlace(out, p) end
+            matrix.Free(p)
+        end
+        matrix.ScaleInPlace(out, 1.0 / (this.trees.len() as f64))
+        ret out
+    end
+
+    @en "predict"
+    @fa "پیش‌بینی"
+    @ar "تنبؤ"
+    pub func predict(x &: matrix.Matrix): matrix.Matrix:
+        if this.ok == false: ret matrix.Matrix {} end
+        if this.is_regression():
+            mut out := matrix.Zeros(x.rows, 1)
+            repeat this.trees.len() with t:
+                mut tree := this.trees.get(t)
+                mut p := tree.predict(x)
+                if p.is_empty() == false: matrix.AddInPlace(out, p) end
+                matrix.Free(p)
+            end
+            matrix.ScaleInPlace(out, 1.0 / (this.trees.len() as f64))
+            ret out
+        end
+        mut probs := this.predict_proba(x)
+        mut out := matrix.Zeros(x.rows, 1)
+        repeat x.rows with i:
+            mut best := 0
+            repeat this.n_classes with c:
+                if probs.at(i, c) > probs.at(i, best): best = c end
+            end
+            out.set(i, 0, best as f64)
+        end
+        matrix.Free(probs)
+        ret out
+    end
+
+    @en "score"
+    @fa "امتیاز"
+    @ar "درجة"
+    pub func score(x &: matrix.Matrix, y &: matrix.Matrix): f64:
+        mut p := this.predict(x)
+        if p.is_empty(): ret 0.0 end
+        mut r := 0.0
+        if this.is_regression(): r = R2Score(y, p)
+        else: r = Accuracy(y, p) end
+        matrix.Free(p)
+        ret r
+    end
+
+    @en "free_trees"
+    @fa "آزادسازی درخت‌ها"
+    @ar "تحرير الأشجار"
+    pub func free_trees():
+        repeat this.trees.len() with t:
+            mut tree := this.trees.get(t)
+            tree.free()
+        end
+        this.trees.free()
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free(): this.free_trees() end
+end
+
+func _isqrt(n: int): int:
+    mut r := 0
+    until (r + 1) * (r + 1) <= n: r += 1 end
+    ret r
+end
+
+// The family's per-task seed derivation (tensor.DeriveSeed's constant).
+func _derive_seed(seed: i64, index: i64): i64:
+    ret seed + (0 - 7046029254386353131) * (index + 1)
+end
+
+// Grows tree `t` from its own bootstrap sample and stores it.
+func _rf_fit_one(t: i64):
+    n := _rf_x.rows
+    seed := _derive_seed(_rf_seed, t)
+    mut g := matrix.NewRng(seed)
+    mut xb := matrix.Matrix {}
+    mut yb := matrix.Matrix {}
+    if _rf_bootstrap:
+        xb = matrix.Zeros(n, _rf_x.cols)
+        yb = matrix.Zeros(n, 1)
+        repeat n with i:
+            src := (g.next_float() * (n as f64)) as int
+            repeat _rf_x.cols with j: xb.set(i, j, _rf_x.at(src, j)) end
+            yb.set(i, 0, _rf_y.at(src, 0))
+        end
+    else:
+        xb = matrix.Clone(_rf_x)
+        yb = matrix.Clone(_rf_y)
+    end
+    mut tree := DecisionTree {}
+    tree.criterion = _rf_criterion
+    tree.max_depth = _rf_depth
+    tree.min_samples_leaf = _rf_leaf
+    tree.max_features = _rf_features
+    tree.seed = seed + 1
+    // A bootstrap can miss a class entirely; the hint sizes the tree's
+    // value table to the forest's class count so every vote lines up.
+    tree.n_classes_hint = _rf_classes
+    tree.fit(xb, yb)
+    _rf_trees.set(t as int, tree)
+    matrix.Free(xb)
+    matrix.Free(yb)
+end

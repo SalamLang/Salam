@@ -1,0 +1,213 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Grapheme cluster segmentation, following UAX #29.
+//
+// A grapheme cluster is what a reader calls a character. It is not a byte and
+// it is not a code point:
+//
+//   "سَلام"  is 5 code points and 4 grapheme clusters - the fatha rides on the
+//            seen rather than standing beside it.
+//   "é"      may be 1 code point or 2, and is 1 cluster either way.
+//   a flag   is 2 code points and 1 cluster.
+//
+// This is the unit to count when you mean "how long is this text", to cut on
+// when you truncate, and to reverse by. CharCount and Reverse in unicode.salam
+// work in code points, which is faster and correct for scripts with no marks -
+// but on Persian with harakat, or on emoji, they count and cut in the middle
+// of what the reader sees as one character. GraphemeCount and ReverseGraphemes
+// here are the versions that do not.
+
+package str
+
+// Whether a grapheme cluster boundary falls between `prev` and `curr`.
+//
+// The rules are UAX #29's GB3 through GB999, applied in order; the first one
+// that matches decides. Two of them need more than the neighbouring pair:
+//
+//   `ri_run`   how many Regional_Indicator code points immediately precede
+//              `curr`. Flags are pairs, so a boundary falls between every
+//              second one - GB12/GB13.
+//   `pict_zwj` whether what precedes `curr` is an Extended_Pictographic
+//              followed by zero or more Extend and then a ZWJ. That is the
+//              shape of an emoji ZWJ sequence, which stays one cluster - GB11.
+//   `conjunct` whether what precedes `curr` is an Indic consonant that has
+//              since been followed by a virama, with nothing but Extend and
+//              Linker in between. That makes `curr`, if it is a consonant, the
+//              tail of a conjunct - GB9c.
+func _gcb_is_break(prev: int, curr: int, ri_run: int, pict_zwj: bool, conjunct: bool): bool:
+    pc := unicode.GraphemeBreak(prev)
+    cc := unicode.GraphemeBreak(curr)
+
+    // GB3: CR LF is never split.
+    if pc == unicode.GcbCR && cc == unicode.GcbLF: ret false end
+    // GB4/GB5: controls stand alone on both sides.
+    if pc == unicode.GcbControl || pc == unicode.GcbCR || pc == unicode.GcbLF: ret true end
+    if cc == unicode.GcbControl || cc == unicode.GcbCR || cc == unicode.GcbLF: ret true end
+    // GB6/GB7/GB8: Hangul syllables built from jamo stay together.
+    if pc == unicode.GcbL:
+        if cc == unicode.GcbL || cc == unicode.GcbV || cc == unicode.GcbLV || cc == unicode.GcbLVT: ret false end
+    end
+    if pc == unicode.GcbLV || pc == unicode.GcbV:
+        if cc == unicode.GcbV || cc == unicode.GcbT: ret false end
+    end
+    if pc == unicode.GcbLVT || pc == unicode.GcbT:
+        if cc == unicode.GcbT: ret false end
+    end
+    // GB9/GB9a: marks attach to what precedes them. This is the rule that
+    // keeps Arabic and Persian harakat on their letter.
+    if cc == unicode.GcbExtend || cc == unicode.GcbZWJ: ret false end
+    if cc == unicode.GcbSpacingMark: ret false end
+    // GB9b: a prepending mark attaches to what follows it.
+    if pc == unicode.GcbPrepend: ret false end
+    // GB9c: an Indic conjunct spans the virama that joins its consonants.
+    if conjunct && unicode.ConjunctBreak(curr) == unicode.IncbConsonant: ret false end
+    // GB11: emoji joined by ZWJ are one cluster.
+    if pc == unicode.GcbZWJ && cc == unicode.GcbExtendedPictographic && pict_zwj: ret false end
+    // GB12/GB13: regional indicators pair up into flags.
+    if pc == unicode.GcbRegionalIndicator && cc == unicode.GcbRegionalIndicator:
+        if ri_run % 2 == 1: ret false end
+    end
+    // GB999: otherwise, break.
+    ret true
+end
+
+// Advances the GB11 state machine over one code point.
+//
+// 0 = nothing pending, 1 = an Extended_Pictographic, possibly followed by
+// Extend, 2 = that followed by a ZWJ. GB11 fires from state 2.
+func _gcb_pict_next(state: int, cp: int): int:
+    k := unicode.GraphemeBreak(cp)
+    if k == unicode.GcbExtendedPictographic: ret 1 end
+    if state == 1 && k == unicode.GcbExtend: ret 1 end
+    if state == 1 && k == unicode.GcbZWJ: ret 2 end
+    ret 0
+end
+
+// Advances the GB9c state machine over one code point.
+//
+// 0 = nothing pending, 1 = a consonant seen with no virama yet, 2 = a
+// consonant and then a virama, with only Extend and Linker since. GB9c fires
+// from state 2. A consonant always restarts the machine at 1, because it is
+// simultaneously the end of one conjunct and a candidate start for the next.
+func _gcb_conj_next(state: int, cp: int): int:
+    k := unicode.ConjunctBreak(cp)
+    if k == unicode.IncbConsonant: ret 1 end
+    if state > 0 && k == unicode.IncbLinker: ret 2 end
+    if state > 0 && k == unicode.IncbExtend: ret state end
+    ret 0
+end
+
+@en "GraphemeCount"
+@fa "شمار خوشه"
+@ar "عدد العناقید"
+// How many grapheme clusters `s` contains - the number a reader would give if
+// asked how many characters it has.
+//
+// Compare CharCount, which counts code points: for "سَلام" this returns 4 and
+// CharCount returns 5, because the fatha is not a character on its own.
+pub func GraphemeCount(s: str): int:
+    n := s.len()
+    if n == 0: ret 0 end
+    bp := _bp(s)
+    mut count := 1
+    mut prev := 0
+    mut i := _decode_at(bp, n, 0, prev)
+    mut ri_run := 0
+    if unicode.GraphemeBreak(prev) == unicode.GcbRegionalIndicator: ri_run = 1 end
+    mut pict := _gcb_pict_next(0, prev)
+    mut conj := _gcb_conj_next(0, prev)
+    mut curr := 0
+    until i < n:
+        i = _decode_at(bp, n, i, curr)
+        if _gcb_is_break(prev, curr, ri_run, pict == 2, conj == 2):
+            count += 1
+            ri_run = 0
+        end
+        if unicode.GraphemeBreak(curr) == unicode.GcbRegionalIndicator:
+            ri_run += 1
+        else:
+            ri_run = 0
+        end
+        pict = _gcb_pict_next(pict, curr)
+        conj = _gcb_conj_next(conj, curr)
+        prev = curr
+    end
+    ret count
+end
+
+@en "Graphemes"
+@fa "خوشه ها"
+@ar "العناقید"
+// Splits `s` into its grapheme clusters.
+//
+// This is the safe way to take the first N characters of text, or to lay text
+// out one character at a time: cutting a string at a code point boundary can
+// leave a combining mark stranded at the start of the tail, where it will
+// attach itself to whatever ends up in front of it.
+pub func Graphemes(s: str): Vector<str>:
+    out := Vector {} as Vector<str>
+    n := s.len()
+    if n == 0: ret out end
+    bp := _bp(s)
+    mut prev := 0
+    mut start := 0
+    mut i := _decode_at(bp, n, 0, prev)
+    mut ri_run := 0
+    if unicode.GraphemeBreak(prev) == unicode.GcbRegionalIndicator: ri_run = 1 end
+    mut pict := _gcb_pict_next(0, prev)
+    mut conj := _gcb_conj_next(0, prev)
+    mut curr := 0
+    until i < n:
+        at := i
+        i = _decode_at(bp, n, i, curr)
+        if _gcb_is_break(prev, curr, ri_run, pict == 2, conj == 2):
+            out.push(s.substr(start, at - start))
+            start = at
+            ri_run = 0
+        end
+        if unicode.GraphemeBreak(curr) == unicode.GcbRegionalIndicator:
+            ri_run += 1
+        else:
+            ri_run = 0
+        end
+        pict = _gcb_pict_next(pict, curr)
+        conj = _gcb_conj_next(conj, curr)
+        prev = curr
+    end
+    out.push(s.substr(start, n - start))
+    ret out
+end
+
+@en "ReverseGraphemes"
+@fa "وارونه خوشه ای"
+@ar "عکس بالعناقید"
+// Reverses `s` by grapheme cluster, keeping each cluster intact.
+//
+// This is the counterpart to Reverse, which reverses code points and so
+// detaches combining marks from their base and moves them onto whichever
+// letter lands in front of them. On text with no marks the two agree; on
+// Persian written with harakat, or on emoji, only this one is right.
+pub func ReverseGraphemes(s: str): str:
+    parts := Graphemes(s)
+    defer parts.free()
+    mut sb := NewBuilder()
+    defer BufFree(sb)
+    mut i := parts.len() - 1
+    until i >= 0:
+        BufAppend(sb, parts.get(i))
+        i -= 1
+    end
+    ret BufStr(sb)
+end

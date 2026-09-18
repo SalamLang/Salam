@@ -1,0 +1,182 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/tensor: the f32 matrix product, validated against std/matrix's f64
+// kernel. Entries live in [-1,1], so with k <= 257 the f32 result should
+// sit well inside 1e-3 of the f64 one.
+
+import matrix
+import tensor
+import testing
+
+// |t - m| elementwise max, comparing the f32 tensor against the f64 truth.
+func against(t &: tensor.Tensor, m &: matrix.Matrix): f64:
+    mut tm := tensor.ToMatrix(t)
+    defer matrix.Free(tm)
+    if tm.rows != m.rows || tm.cols != m.cols: ret 1.0e300 end
+    mut worst := 0.0
+    repeat m.count() with k:
+        d := tm.flat(k) - m.flat(k)
+        mut a := d
+        if a < 0.0: a = 0.0 - a end
+        if a > worst: worst = a end
+    end
+    ret worst
+end
+
+// One shape check: x(n,k) y(k,m) random, f32 product against f64 product.
+func check_shape(n: int, k: int, m: int, seed: i64): bool:
+    mut xm := matrix.Random(n, k, 0.0 - 1.0, 1.0, seed)
+    mut ym := matrix.Random(k, m, 0.0 - 1.0, 1.0, seed + 1)
+    mut rm := matrix.MatMul(xm, ym)
+    mut xt := tensor.FromMatrix(xm)
+    mut yt := tensor.FromMatrix(ym)
+    mut rt := tensor.MatMul(xt, yt)
+    ok := against(rt, rm) < 0.001
+    matrix.Free(xm)
+    matrix.Free(ym)
+    matrix.Free(rm)
+    tensor.Free(xt)
+    tensor.Free(yt)
+    tensor.Free(rt)
+    ret ok
+end
+
+func main:
+    eps := 0.00001
+
+    // Shapes chosen to hit every path: pure edge kernel, exact micro
+    // tiles, edges on both sides, and one size past every blocking level.
+    testing.AssertTrue(check_shape(1, 1, 1, 3))
+    testing.AssertTrue(check_shape(3, 5, 2, 5))
+    testing.AssertTrue(check_shape(4, 8, 16, 7))
+    testing.AssertTrue(check_shape(5, 3, 17, 9))
+    testing.AssertTrue(check_shape(64, 64, 64, 11))
+    testing.AssertTrue(check_shape(129, 257, 65, 13))
+
+    // A hand-checked tiny product
+    mut a := tensor.Zeros2(2, 2)
+    a.set_at2(0, 0, 1.0)
+    a.set_at2(0, 1, 2.0)
+    a.set_at2(1, 0, 3.0)
+    a.set_at2(1, 1, 4.0)
+    mut b := tensor.Zeros2(2, 2)
+    b.set_at2(0, 0, 5.0)
+    b.set_at2(0, 1, 6.0)
+    b.set_at2(1, 0, 7.0)
+    b.set_at2(1, 1, 8.0)
+    mut c := tensor.MatMul(a, b)
+    testing.AssertEqFloat(c.at2(0, 0), 19.0, eps)
+    testing.AssertEqFloat(c.at2(0, 1), 22.0, eps)
+    testing.AssertEqFloat(c.at2(1, 0), 43.0, eps)
+    testing.AssertEqFloat(c.at2(1, 1), 50.0, eps)
+
+    // Shape mismatch is the empty sentinel
+    mut tall := tensor.Zeros2(3, 2)
+    testing.AssertTrue(tensor.MatMul(a, tall).is_empty())
+
+    // Into zeroes its destination; Acc accumulates on top
+    mut out := tensor.Ones(c.shape)
+    testing.AssertTrue(tensor.MatMulInto(a, b, out))
+    testing.AssertTrue(tensor.AllClose(out, c, eps))
+    testing.AssertTrue(tensor.MatMulAcc(a, b, out))
+    testing.AssertEqFloat(out.at2(0, 0), 38.0, eps)
+    testing.AssertFalse(tensor.MatMulInto(a, tall, out))
+
+    // Transpose2D, and the two one-sided transpose products
+    mut at := tensor.Transpose2D(a)
+    testing.AssertEqFloat(at.at2(0, 1), 3.0, eps)
+    testing.AssertEqFloat(at.at2(1, 0), 2.0, eps)
+    mut tm := tensor.TransposeMul(a, b)     // A^T B
+    mut tm2 := tensor.MatMul(at, b)
+    testing.AssertTrue(tensor.AllClose(tm, tm2, eps))
+    mut mt := tensor.MulTranspose(a, b)     // A B^T
+    mut bt := tensor.Transpose2D(b)
+    mut mt2 := tensor.MatMul(a, bt)
+    testing.AssertTrue(tensor.AllClose(mt, mt2, eps))
+
+    // A non-square transpose round trip
+    mut wide := tensor.Zeros2(2, 5)
+    repeat 10 with k: wide.set_at(k, k as f64) end
+    mut wt := tensor.Transpose2D(wide)
+    testing.AssertEqInt(wt.dim(0), 5)
+    testing.AssertEqFloat(wt.at2(3, 1), 8.0, eps)
+    mut back := tensor.Transpose2D(wt)
+    testing.AssertTrue(tensor.Equal(back, wide))
+
+    // BatchMatMul agrees with slicing and multiplying by hand
+    mut xb := tensor.Zeros3(2, 3, 4)
+    repeat xb.numel() with k: xb.set_at(k, (k as f64) * 0.25) end
+    mut yb := tensor.Zeros3(2, 4, 2)
+    repeat yb.numel() with k: yb.set_at(k, 1.0 - (k as f64) * 0.125) end
+    mut bmm := tensor.BatchMatMul(xb, yb)
+    testing.AssertEqInt(bmm.rank(), 3)
+    testing.AssertEqInt(bmm.dim(2), 2)
+    repeat 2 with i:
+        mut xs := tensor.SliceAxis0(xb, i, 1)
+        mut s34 := tensor.Shape2(3, 4)
+        xs.reshape_(s34)
+        s34.free()
+        mut ys := tensor.SliceAxis0(yb, i, 1)
+        mut s42 := tensor.Shape2(4, 2)
+        ys.reshape_(s42)
+        s42.free()
+        mut ps := tensor.MatMul(xs, ys)
+        mut bs := tensor.SliceAxis0(bmm, i, 1)
+        mut s32 := tensor.Shape2(3, 2)
+        bs.reshape_(s32)
+        s32.free()
+        testing.AssertTrue(tensor.AllClose(ps, bs, eps))
+        tensor.Free(xs)
+        tensor.Free(ys)
+        tensor.Free(ps)
+        tensor.Free(bs)
+    end
+
+    // MatVec and Dot
+    mut v := tensor.Arange(2)               // 0 1
+    mut av := tensor.MatVec(a, v)           // [2, 4]
+    testing.AssertEqFloat(av.at(0), 2.0, eps)
+    testing.AssertEqFloat(av.at(1), 4.0, eps)
+    mut u := tensor.Arange(3)
+    mut w := tensor.AddScalar(u, 1.0)       // 1 2 3
+    testing.AssertEqFloat(tensor.Dot(u, w), 0.0 * 1.0 + 1.0 * 2.0 + 2.0 * 3.0, eps)
+    testing.AssertEqFloat(tensor.Dot(u, v), 0.0, eps)
+
+    tensor.Free(a)
+    tensor.Free(b)
+    tensor.Free(c)
+    tensor.Free(tall)
+    tensor.Free(out)
+    tensor.Free(at)
+    tensor.Free(tm)
+    tensor.Free(tm2)
+    tensor.Free(mt)
+    tensor.Free(bt)
+    tensor.Free(mt2)
+    tensor.Free(wide)
+    tensor.Free(wt)
+    tensor.Free(back)
+    tensor.Free(xb)
+    tensor.Free(yb)
+    tensor.Free(bmm)
+    tensor.Free(v)
+    tensor.Free(av)
+    tensor.Free(u)
+    tensor.Free(w)
+
+    ret testing.Summary()
+end

@@ -1,0 +1,228 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package bigint
+
+// Sign handling for the additive operations, plus multiplication and shifts.
+//
+// Every routine here reduces to the unsigned kernels in bigint.salam and then
+// decides one bool. The rule for a signed add is the only part with any real
+// content: like signs add magnitudes and keep the sign, unlike signs subtract
+// the smaller magnitude from the larger and take the sign of the larger. _norm
+// clears the sign when the result came out zero, so 5 + (-5) is +0 and never
+// the -0 that would break Cmp.
+
+@en "Neg"
+@fa "قرینه"
+@ar "سالب"
+pub func Neg(x: Int): Int:
+    mut r := x.clone()
+    if !r.is_zero(): r.neg = !r.neg end
+    ret r
+end
+
+@en "Abs"
+@fa "قدرمطلق"
+@ar "قيمة مطلقة"
+pub func Abs(x: Int): Int:
+    mut r := x.clone()
+    r.neg = false
+    ret r
+end
+
+@en "Add"
+@fa "جمع"
+@ar "جمع"
+pub func Add(a: Int, b: Int): Int:
+    if a.neg == b.neg:
+        mut r := _uadd(a, b)
+        r.neg = a.neg
+        _norm(r)
+        ret r
+    end
+    c := _ucmp(a, b)
+    if c == 0: ret Int {} end
+    if c > 0:
+        mut r := _usub(a, b)
+        r.neg = a.neg
+        _norm(r)
+        ret r
+    end
+    mut r := _usub(b, a)
+    r.neg = b.neg
+    _norm(r)
+    ret r
+end
+
+@en "Sub"
+@fa "تفریق"
+@ar "طرح"
+pub func Sub(a: Int, b: Int): Int:
+    mut nb := b.clone()
+    defer nb.free()
+    if !nb.is_zero(): nb.neg = !nb.neg end
+    ret Add(a, nb)
+end
+
+@en "Mul"
+@fa "ضرب"
+@ar "ضرب"
+pub func Mul(a: Int, b: Int): Int:
+    mut r := _umul(a, b)
+    r.neg = a.neg != b.neg
+    _norm(r)
+    ret r
+end
+
+// x squared, which is just Mul(x, x) -- passing an Int twice is safe because
+// nothing here writes through its operands.
+@en "Sqr"
+@fa "مربع"
+@ar "مربع"
+pub func Sqr(x: Int): Int: ret Mul(x, x) end
+
+// ---------------------------------------------------------------------------
+// Mixed operations with machine integers
+// ---------------------------------------------------------------------------
+
+@en "AddInt"
+@fa "جمع صحیح"
+@ar "جمع صحيح"
+pub func AddInt(a: Int, v: i64): Int:
+    mut b := FromInt(v)
+    defer b.free()
+    ret Add(a, b)
+end
+
+@en "SubInt"
+@fa "تفریق صحیح"
+@ar "طرح صحيح"
+pub func SubInt(a: Int, v: i64): Int:
+    mut b := FromInt(v)
+    defer b.free()
+    ret Sub(a, b)
+end
+
+@en "MulInt"
+@fa "ضرب صحیح"
+@ar "ضرب صحيح"
+pub func MulInt(a: Int, v: i64): Int:
+    mut b := FromInt(v)
+    defer b.free()
+    ret Mul(a, b)
+end
+
+// ---------------------------------------------------------------------------
+// Shifts
+//
+// These are the arithmetic shifts, defined on the value rather than on the
+// magnitude: Shl is exactly x * 2^k, and Shr is exactly floor(x / 2^k). The
+// floor matters for negatives -- Shr(-1, 4) is -1, not 0 -- so that Shr agrees
+// with FloorDiv by a power of two and a loop that halves a running total does
+// not drift toward zero.
+// ---------------------------------------------------------------------------
+
+@en "Shl"
+@fa "شیفت چپ"
+@ar "إزاحة يسار"
+pub func Shl(x: Int, k: int): Int:
+    if k < 0: ret Shr(x, 0 - k) end
+    mut r := _ushl(x, k)
+    r.neg = x.neg
+    _norm(r)
+    ret r
+end
+
+@en "Shr"
+@fa "شیفت راست"
+@ar "إزاحة يمين"
+pub func Shr(x: Int, k: int): Int:
+    if k < 0: ret Shl(x, 0 - k) end
+    mut r := _ushr(x, k)
+    if x.neg:
+        // Truncating the magnitude rounds toward zero, which for a negative
+        // value is the wrong way; drop one more when anything was shifted off.
+        if _has_low_bits(x, k):
+            mut one := One()
+            defer one.free()
+            bumped := _uadd(r, one)
+            r.free()
+            r = bumped
+        end
+        r.neg = true
+    end
+    _norm(r)
+    ret r
+end
+
+// ---------------------------------------------------------------------------
+// In-place forms
+//
+// A loop that accumulates with Add allocates a result and frees the old total
+// on every iteration. These do the same arithmetic and hand the bookkeeping to
+// the library, so `each v in items: bigint.AddTo(total, v) end` stays correct
+// without a temporary in the loop body.
+// ---------------------------------------------------------------------------
+
+@en "Set"
+@fa "تنظیم"
+@ar "تعيين"
+pub func Set(x &: Int, src: Int): _replace(x, src.clone()) end
+
+@en "SetInt"
+@fa "تنظیم صحیح"
+@ar "تعيين صحيح"
+pub func SetInt(x &: Int, v: i64): _replace(x, FromInt(v)) end
+
+@en "AddTo"
+@fa "افزودن به"
+@ar "أضف إلى"
+pub func AddTo(x &: Int, y: Int): _replace(x, Add(x, y)) end
+
+@en "SubFrom"
+@fa "کاستن از"
+@ar "اطرح من"
+pub func SubFrom(x &: Int, y: Int): _replace(x, Sub(x, y)) end
+
+@en "MulBy"
+@fa "ضرب در"
+@ar "اضرب في"
+pub func MulBy(x &: Int, y: Int): _replace(x, Mul(x, y)) end
+
+@en "AddIntTo"
+@fa "افزودن صحیح به"
+@ar "أضف صحيحا إلى"
+pub func AddIntTo(x &: Int, v: i64): _replace(x, AddInt(x, v)) end
+
+@en "MulIntBy"
+@fa "ضرب در صحیح"
+@ar "اضرب في صحيح"
+pub func MulIntBy(x &: Int, v: i64): _replace(x, MulInt(x, v)) end
+
+@en "NegateIn"
+@fa "قرینه‌سازی"
+@ar "اعكس الإشارة"
+pub func NegateIn(x &: Int):
+    if !x.is_zero(): x.neg = !x.neg end
+end
+
+@en "ShlBy"
+@fa "شیفت چپ در جا"
+@ar "أزح يسارا"
+pub func ShlBy(x &: Int, k: int): _replace(x, Shl(x, k)) end
+
+@en "ShrBy"
+@fa "شیفت راست در جا"
+@ar "أزح يمينا"
+pub func ShrBy(x &: Int, k: int): _replace(x, Shr(x, k)) end

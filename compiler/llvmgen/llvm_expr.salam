@@ -27,7 +27,23 @@ import cg "../codegen/codegen.salam"
 // never on the bitwise or shift operators, whose overflow is a different
 // question.
 func nowrap_flag(v &: Lv, k: int, isflt: bool, issigned: bool): str:
-    if !v.nowrap || isflt || !issigned:
+    // Float arithmetic gets the other half of this decision: `contract` lets
+    // the backend fuse an adjacent multiply and add into a single FMA, which
+    // rounds once rather than twice. That is a strictly smaller error, but a
+    // different answer, so it only appears under --fp-contract. Without the
+    // tag LLVM leaves the pair as vmulpd + vaddpd, which is two instructions
+    // and two dependent latencies per multiply-add: on a 4x4 matrix product
+    // micro-kernel that is most of the distance to a tuned BLAS.
+    if isflt:
+        if !v.fp_contract:
+            ret ""
+        end
+        if k == tok.TK_PLUS || k == tok.TK_MINUS || k == tok.TK_STAR:
+            ret " contract"
+        end
+        ret ""
+    end
+    if !v.nowrap || !issigned:
         ret ""
     end
     if k == tok.TK_PLUS || k == tok.TK_MINUS || k == tok.TK_STAR:
@@ -104,7 +120,7 @@ end
 
 // ll_to_ptr
 func to_ptr(v &: Lv, s &: sm.Sema, a &: at.Ast, val: Llv): str:
-    if is_ptr_ts(val.ts) || is_str(val.ts) || str.Equals(val.ts, "null"):
+    if is_ptr_ts(val.ts) || is_str(s, val.ts) || str.Equals(val.ts, "null"):
         ret val.ref
     end
     r := new_tmp(v)
@@ -116,7 +132,7 @@ end
 func str_operand(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): str:
     node := at.Get(a, n)
     ts := node.type_str
-    if str.Len(ts) > 0 && is_str(ts):
+    if str.Len(ts) > 0 && is_str(s, ts):
         ret lv_expr(v, s, a, n).ref
     end
     val := lv_expr(v, s, a, n)
@@ -131,10 +147,21 @@ func str_operand(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): str:
             v, r + " = call ptr @salam_ll_charstr(i32 " + conv(v, s, a, val, "i32") + ")"
         )
     else is_float(ts):
-        need(v, LV_H_F64STR)
-        emit(
-            v, r + " = call ptr @salam_ll_f64str(double " + conv(v, s, a, val, "f64") + ")"
-        )
+        // Through the runtime's salam_fmt_f64, the same shortest
+        // round-trip text print uses - the local %g helper rendered
+        // 12.56636 as "12.5664", so a concatenated float disagreed with a
+        // printed one. The local helper stays as the fallback for a
+        // program that somehow has no text package linked.
+        dref := conv(v, s, a, val, "f64")
+        fref := call_runtime_val(v, s, a, "salam_fmt_f64", "double", dref, "ptr")
+        if str.Len(fref) > 0:
+            emit(v, r + " = select i1 true, ptr " + fref + ", ptr " + fref)
+        else:
+            need(v, LV_H_F64STR)
+            emit(
+                v, r + " = call ptr @salam_ll_f64str(double " + dref + ")"
+            )
+        end
     else is_int_ts(ts):
         if is_signed_ts(ts):
             need(v, LV_H_I64STR)
@@ -163,8 +190,8 @@ func binary_string(
     node := at.Get(a, n)
     an := at.Get(a, node.a)
     bn := at.Get(a, node.b)
-    as2 := str.Len(an.type_str) > 0 && is_str(an.type_str)
-    bs2 := str.Len(bn.type_str) > 0 && is_str(bn.type_str)
+    as2 := str.Len(an.type_str) > 0 && is_str(s, an.type_str)
+    bs2 := str.Len(bn.type_str) > 0 && is_str(s, bn.type_str)
     if op == tok.TK_PLUS && (as2 || bs2):
         l := str_operand(v, s, a, node.a)
         r2 := str_operand(v, s, a, node.b)
@@ -260,13 +287,13 @@ func op_struct(v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str, sname2 &: str): int:
     end
     sname2 = is_ptr_ts(ts) ? str.Substr(ts, 0, str.Len(ts) - 1) : ts
     ss := struct_sym(v, s, a, sname2)
-    // Mangle by the struct symbol's own name, never by the spelling at the
-    // use site. ensure_fn emits the body through lv_function(.., ss), which
-    // mangles with the symbol's name, so a receiver whose type_str carries
-    // the package ("excel.FileMeta") would call @salam_excel__FileMeta_free
-    // while the definition landed as @salam_FileMeta_free.
+    // Mangle by the struct symbol's canonical type name, never by the spelling
+    // at the use site: ensure_fn emits the body through lv_function(.., ss),
+    // which uses owner_key, and the two have to agree. Resolving the symbol
+    // first also normalises a receiver whose type_str was written some other
+    // way.
     if ss != 0:
-        nm := sm.SymAt(s, ss).name
+        nm := owner_key(s, ss)
         if str.Len(nm) > 0:
             sname2 = nm
         end
@@ -280,7 +307,7 @@ func pick_arity(s &: sm.Sema, symid: int, want: int): int:
     sy := sm.SymAt(s, symid)
     mut i := 0
     until i < sy.overloads.len():
-        sigid := sy.overloads.get(i)[0]
+        sigid := sy.overloads.get(i)
         if sm.SigAt(s, sigid).params.len() == want:
             ret sigid
         end
@@ -318,7 +345,7 @@ func op_call(
     mut argsb := "ptr " + recvref
     if rhs != 0:
         sg := sm.SigAt(s, sig)
-        mut pts := sg.params.len() > 0 ? sm.ToString(s, sg.params.get(0)[0]) : ""
+        mut pts := sg.params.len() > 0 ? sm.ToString(s, sg.params.get(0)) : ""
         rv := lv_expr(v, s, a, rhs)
         if str.Len(pts) == 0:
             pts = rv.ts
@@ -344,6 +371,11 @@ func lv_index_set(v &: Lv, s &: sm.Sema, a &: at.Ast, idx: int, value: int): boo
     if idxn.a == 0 || str.Len(at.Get(a, idxn.a).type_str) == 0:
         ret false
     end
+    // Writing through a pointer is address arithmetic, not the pointee's
+    // operator_index_set (see sema's AST_INDEX check).
+    if is_ptr_ts(at.Get(a, idxn.a).type_str):
+        ret false
+    end
     mut sname2 := ""
     ss := op_struct(v, s, a, at.Get(a, idxn.a).type_str, sname2)
     if ss == 0:
@@ -367,8 +399,8 @@ func lv_index_set(v &: Lv, s &: sm.Sema, a &: at.Ast, idx: int, value: int): boo
     an := at.Get(a, idxn.a)
     recv := is_ptr_ts(an.type_str) ? lv_expr(v, s, a, idxn.a).ref : lv_addr_of(v, s, a, idxn.a).ptr
     sg := sm.SigAt(s, sig)
-    p0 := sm.ToString(s, sg.params.get(0)[0])
-    p1 := sm.ToString(s, sg.params.get(1)[0])
+    p0 := sm.ToString(s, sg.params.get(0))
+    p1 := sm.ToString(s, sg.params.get(1))
     iv := conv(v, s, a, lv_expr(v, s, a, idxn.b), p0)
     vv := conv(v, s, a, lv_expr(v, s, a, value), p1)
     fname := mangle(v, s, sname2, "operator_index_set", sig)
@@ -536,7 +568,7 @@ func lv_incdec(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     addr := lv_addr_of(v, s, a, tgt)
     ts := addr.ts
     oldv := new_tmp(v)
-    emit(v, oldv + " = load " + ty_of(v, s, a, ts) + ", ptr " + addr.ptr)
+    emit(v, oldv + " = load " + ty_of(v, s, a, ts) + ", ptr " + addr.ptr + addr.tbaa)
     flt := is_float(ts)
     step := flt ? "1.0" : "1"
     ik := node.op == tok.TK_PLUS_PLUS ? tok.TK_PLUS : tok.TK_MINUS
@@ -544,8 +576,82 @@ func lv_incdec(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     newv := new_tmp(v)
     nw2 := nowrap_flag(v, ik, flt, is_signed_ts(ts))
     emit(v, newv + " = " + op2 + nw2 + " " + ty_of(v, s, a, ts) + " " + oldv + ", " + step)
-    emit(v, "store " + ty_of(v, s, a, ts) + " " + newv + ", ptr " + addr.ptr)
+    emit(v, "store " + ty_of(v, s, a, ts) + " " + newv + ", ptr " + addr.ptr + addr.tbaa)
     ret make_llv(node.is_prefix ? newv : oldv, ts)
+end
+
+// One segment of a print, already a string, sent straight to a file
+// descriptor. There is no stdio to go through: fd 1 keeps the same buffer
+// the all-literal path uses, fd 2 is written immediately so a panic message
+// survives whatever happens next.
+func write_free(v &: Lv, ref: str, err: bool):
+    ln := new_tmp(v)
+    emit(v, ln + " = call " + v.usize + " @strlen(ptr " + ref + ")")
+    mut n64 := ln
+    if !str.Equals(v.usize, "i64"):
+        z := new_tmp(v)
+        emit(v, z + " = zext " + v.usize + " " + ln + " to i64")
+        n64 = z
+    end
+    if err:
+        emit(v, new_tmp(v) + " = call i64 @write(i32 2, ptr " + ref + ", i64 " + n64 + ")")
+    else:
+        need(v, LV_H_OUTBUF)
+        emit(v, "call void @salam_out_write(ptr " + ref + ", i64 " + n64 + ")")
+    end
+end
+
+// The freestanding counterpart of cg_lower_print_free: no printf to hand a
+// format string to, so every segment is turned into a string and written on
+// its own, in source order. The salam_tostr_* family std/console defines is
+// the same one the C backend calls.
+func lower_print_free(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, segs &: Vector<cg.PfSeg>, err: bool
+):
+    mut i := 0
+    until i < segs.len():
+        sg := segs.get(i)
+        if sg.kind == cg.PF_LIT:
+            n := str.Len(sg.text)
+            if n > 0:
+                lit := strconst(v, sg.text)
+                if err:
+                    emit(v, new_tmp(v) + " = call i64 @write(i32 2, ptr " + lit + ", i64 " + co.I64Toa(n as i64) + ")")
+                else:
+                    need(v, LV_H_OUTBUF)
+                    emit(v, "call void @salam_out_write(ptr " + lit + ", i64 " + co.I64Toa(n as i64) + ")")
+                end
+            end
+            i += 1
+            continue
+        end
+        val := lv_expr(v, s, a, sg.expr)
+        mut ref := ""
+        if sg.kind == cg.PF_STR:
+            ref = val.ref
+        else sg.kind == cg.PF_BOOL:
+            ref = call_runtime_val(v, s, a, "salam_tostr_bool", "i1", val.ref, "ptr")
+        else sg.kind == cg.PF_CHAR:
+            ref = call_runtime_val(v, s, a, "salam_char_from_code", "i32", conv(v, s, a, val, "i32"), "ptr")
+        else sg.kind == cg.PF_I32:
+            ref = call_runtime_val(v, s, a, "salam_tostr_i32", "i32", conv(v, s, a, val, "i32"), "ptr")
+        else sg.kind == cg.PF_U32:
+            ref = call_runtime_val(v, s, a, "salam_tostr_u32", "i32", conv(v, s, a, val, "u32"), "ptr")
+        else sg.kind == cg.PF_I64:
+            ref = call_runtime_val(v, s, a, "salam_tostr_i64", "i64", val.ref, "ptr")
+        else sg.kind == cg.PF_U64 || sg.kind == cg.PF_SIZE:
+            ref = call_runtime_val(v, s, a, "salam_tostr_u64", "i64", conv(v, s, a, val, "u64"), "ptr")
+        else:
+            // A double needs a correctly rounded conversion, and a kernel
+            // must not touch SSE at all. The C backend prints the same.
+            ref = strconst(v, "<f64>")
+        end
+        if str.Len(ref) == 0:
+            ref = strconst(v, "?")
+        end
+        write_free(v, ref, err)
+        i += 1
+    end
 end
 
 // ll_lower_print
@@ -559,13 +665,18 @@ func lv_lower_print(
         ret
     end
 
+    if v.freestanding:
+        lower_print_free(v, s, a, segs, err)
+        ret
+    end
+
     buffered := v.single_threaded && !err
 
     if buffered:
         mut all_lit := true
         mut i := 0
         until i < segs.len() && all_lit:
-            if segs.get(i)[0].kind != cg.PF_LIT:
+            if segs.get(i).kind != cg.PF_LIT:
                 all_lit = false
             end
             i += 1
@@ -574,7 +685,7 @@ func lv_lower_print(
             mut raw := co.SbNew()
             mut j := 0
             until j < segs.len():
-                co.SbPuts(raw, segs.get(j)[0].text)
+                co.SbPuts(raw, segs.get(j).text)
                 j += 1
             end
             rawlen := co.SbLen(raw)
@@ -594,7 +705,7 @@ func lv_lower_print(
     mut argsb := co.SbNew()
     mut k := 0
     until k < segs.len():
-        sg := segs.get(k)[0]
+        sg := segs.get(k)
         if sg.kind == cg.PF_LIT:
             tn := str.Len(sg.text)
             mut ti := 0
@@ -623,7 +734,14 @@ func lv_lower_print(
             else sg.kind == cg.PF_CHAR:
                 av = ", i32 " + conv(v, s, a, val, "i32")
             else sg.kind == cg.PF_F64:
-                av = ", double " + conv(v, s, a, val, "f64")
+                // Printed as the text salam_fmt_f64 makes of it (the "%s"
+                // cg.PfSpec now asks for), so this backend and the C one
+                // and the browser all render a double the same way.
+                dref := conv(v, s, a, val, "f64")
+                fref := call_runtime_val(
+                    v, s, a, "salam_fmt_f64", "double", dref, "ptr"
+                )
+                av = ", ptr " + fref
             else sg.kind == cg.PF_I32:
                 av = ", i32 " + conv(v, s, a, val, "i32")
             else sg.kind == cg.PF_U32:

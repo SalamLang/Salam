@@ -1,0 +1,353 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "autograd"
+@fa "مشتق‌گیری خودکار"
+@ar "اشتقاق تلقائي"
+package autograd
+
+import tensor
+
+// Reverse-mode automatic differentiation over std/tensor, built as a
+// tape.
+//
+// A variable is a plain int - an index into the tape - and every
+// operation in this package is eager: autograd.Add(tp, a, b) computes
+// the f32 result immediately with the std/tensor kernel and records one
+// node saying how gradients flow back through it. Backward(tp, loss)
+// then walks the node list once, in reverse, dispatching on an op code.
+// There are no graph objects, no per-node function pointers, and no
+// deferred execution to debug.
+//
+// Memory is the design's center, because nothing here is garbage
+// collected:
+//
+//   - Every tensor an operation produces is OWNED BY THE TAPE, along
+//     with every gradient buffer and every auxiliary tensor (a dropout
+//     mask, a saved column buffer). tp.reset() frees all of it in one
+//     sweep and keeps the vectors' capacity, which is what a training
+//     step calls before building the next graph; tp.free() releases
+//     everything at the end of the run.
+//   - Input(tp, x) borrows: the tape stores an aliasing header of x and
+//     never frees it. The caller keeps ownership, and x must stay alive
+//     and unresized until reset.
+//   - Param(tp, val, grad) borrows BOTH ways: the value is read in
+//     place, and backward accumulates += into the persistent grad
+//     buffer the caller (typically std/nn's ParamStore) owns. Gradients
+//     therefore survive reset() - that is the point - and zeroing them
+//     between steps is the optimizer's job.
+//
+// Values are read with Value(tp, v) and gradients with Grad(tp, v);
+// both return aliasing headers into tape-owned storage. Read them,
+// clone them if they must outlive the tape - never free them and never
+// resize them.
+//
+// Operations record a node only when a gradient can actually reach a
+// leaf (some input has needs set). A forward pass over constants and
+// plain inputs records nothing and backpropagates in zero time, so the
+// same model code serves training and inference; Watch(tp, x) marks a
+// borrowed tensor as wanting a gradient when there is no ParamStore in
+// the picture.
+
+// Node op codes. Private: the dispatch table is an implementation
+// detail shared by ag_ops and ag_back.
+const _OP_ADD := 1
+const _OP_SUB := 2
+const _OP_MUL := 3
+const _OP_DIV := 4
+const _OP_NEG := 5
+const _OP_SCALE := 6
+const _OP_ADDS := 7
+const _OP_EXP := 8
+const _OP_LOG := 9
+const _OP_TANH := 10
+const _OP_SIGMOID := 11
+const _OP_RELU := 12
+const _OP_GELU := 13
+const _OP_SQRT := 14
+const _OP_SQUARE := 15
+const _OP_POWS := 16
+const _OP_MATMUL := 17
+const _OP_SUM := 18
+const _OP_MEAN := 19
+const _OP_SUMAXIS := 20
+const _OP_MEANAXIS := 21
+const _OP_SOFTMAX := 22
+const _OP_LOGSOFTMAX := 23
+const _OP_RESHAPE := 24
+const _OP_TRANSPOSE2D := 25
+const _OP_CELOSS := 26
+const _OP_BCEWL := 27
+const _OP_CONV2D := 28
+const _OP_MAXPOOL := 29
+const _OP_AVGPOOL := 30
+const _OP_BMM := 31
+const _OP_PERMUTE := 32
+const _OP_EMBED := 33
+const _OP_DROPOUT := 34
+const _OP_LAYERNORM := 35
+const _OP_NARROW := 36
+const _OP_CONCAT2 := 37
+const _OP_SILU := 38
+const _OP_ROPE := 39
+const _OP_RMSNORM := 40
+const _OP_BATCHNORM := 41
+const _OP_GROUPNORM := 42
+
+@en "Node"
+@fa "گره"
+@ar "عقدة"
+pub struct Node:
+    pub op: int = 0
+    pub a: int = 0 - 1
+    pub b: int = 0 - 1
+    pub out: int = 0 - 1
+    pub aux: int = 0 - 1
+    pub s0: int = 0
+    pub s1: int = 0
+    pub f0: f64 = 0.0
+end
+
+@en "Tape"
+@fa "نوار"
+@ar "شريط"
+pub struct Tape:
+    pub vals: Vector<tensor.Tensor> = Vector {}
+    pub grads: Vector<tensor.Tensor> = Vector {}
+    pub owns_val: Vector<bool> = Vector {}
+    pub owns_grad: Vector<bool> = Vector {}
+    pub needs: Vector<bool> = Vector {}
+    pub nodes: Vector<Node> = Vector {}
+    pub training: bool = true
+    pub rng: tensor.Rng = tensor.Rng {}
+
+    @en "len"
+    @fa "طول"
+    @ar "طول"
+    pub func len(): int: ret this.vals.len() end
+
+    // Frees every tape-owned payload and empties the tape, keeping the
+    // vectors' capacity. The step-boundary call of a training loop.
+    @en "reset"
+    @fa "بازنشانی"
+    @ar "إعادة تعيين"
+    pub func reset():
+        n := this.vals.len()
+        repeat n with i:
+            if this.owns_val.get(i):
+                mut v := this.vals.get(i)
+                v.free()
+            end
+            if this.owns_grad.get(i):
+                mut g := this.grads.get(i)
+                g.free()
+            end
+        end
+        this.vals.clear()
+        this.grads.clear()
+        this.owns_val.clear()
+        this.owns_grad.clear()
+        this.needs.clear()
+        this.nodes.clear()
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free():
+        this.reset()
+        this.vals.free()
+        this.grads.free()
+        this.owns_val.free()
+        this.owns_grad.free()
+        this.needs.free()
+        this.nodes.free()
+    end
+end
+
+// An aliasing header of `t`: same payload, fresh struct. The bridge
+// between `&:` parameters and by-value tensor arguments.
+func _alias(t &: tensor.Tensor): tensor.Tensor:
+    mut h := tensor.Tensor {}
+    h.data = t.data
+    h.shape = t.shape
+    ret h
+end
+
+// Appends one value slot; the grad slot starts empty and is allocated
+// lazily by backward.
+func _push_val(tp &: Tape, t: tensor.Tensor, owned: bool, needs_grad: bool): int:
+    id := tp.vals.len()
+    tp.vals.push(t)
+    tp.grads.push(tensor.Tensor {})
+    tp.owns_val.push(owned)
+    tp.owns_grad.push(false)
+    tp.needs.push(needs_grad)
+    ret id
+end
+
+func _record(tp &: Tape, op: int, a: int, b: int, out: int, aux: int, s0: int, s1: int, f0: f64):
+    mut n := Node {}
+    n.op = op
+    n.a = a
+    n.b = b
+    n.out = out
+    n.aux = aux
+    n.s0 = s0
+    n.s1 = s1
+    n.f0 = f0
+    tp.nodes.push(n)
+end
+
+// The gradient buffer for slot v, allocating zeros on first touch.
+// Returns an aliasing header.
+func _grad_of(tp &: Tape, v: int): tensor.Tensor:
+    mut g := tp.grads.get(v)
+    if g.data.len() == 0:
+        val := tp.vals.get(v)
+        g = tensor.Zeros(val.shape)
+        tp.grads.set(v, g)
+        tp.owns_grad.set(v, true)
+    end
+    ret g
+end
+
+// ---- public API ----
+
+@en "NewTape"
+@fa "نوار نو"
+@ar "شريط جديد"
+pub func NewTape(seed: i64): Tape:
+    mut tp := Tape {}
+    tp.rng = tensor.NewRng(seed)
+    ret tp
+end
+
+// Borrows `t` as a constant leaf: no gradient will be tracked for it.
+@en "Input"
+@fa "ورودی"
+@ar "مدخل"
+pub func Input(tp &: Tape, t &: tensor.Tensor): int:
+    ret _push_val(tp, _alias(t), false, false)
+end
+
+// Copies `t` onto the tape as a constant the tape owns - for values a
+// forward pass makes up on the spot (an initial recurrent state, a
+// mask) and would otherwise have to keep alive itself.
+@en "Constant"
+@fa "ثابت"
+@ar "ثابت"
+pub func Constant(tp &: Tape, t &: tensor.Tensor): int:
+    ret _push_val(tp, tensor.Clone(t), true, false)
+end
+
+// Borrows `t` as a differentiable leaf with a tape-owned gradient. For
+// checking gradients and for ad-hoc optimization without a ParamStore.
+@en "Watch"
+@fa "پایش"
+@ar "مراقبة"
+pub func Watch(tp &: Tape, t &: tensor.Tensor): int:
+    ret _push_val(tp, _alias(t), false, true)
+end
+
+// Borrows a parameter and its persistent gradient buffer. Backward
+// accumulates += into `grad` in place, so it survives reset(); the
+// caller zeroes it between steps. `grad` must already match `val`'s
+// shape.
+@en "Param"
+@fa "پارامتر"
+@ar "معامل"
+pub func Param(tp &: Tape, val &: tensor.Tensor, grad &: tensor.Tensor): int:
+    id := _push_val(tp, _alias(val), false, true)
+    tp.grads.set(id, _alias(grad))
+    ret id
+end
+
+// The value held at slot v, as an aliasing header: read it, clone it if
+// it must outlive the tape, never free it.
+@en "Value"
+@fa "مقدار"
+@ar "قيمة"
+pub func Value(tp &: Tape, v: int): tensor.Tensor:
+    mut t := tp.vals.get(v)
+    ret _alias(t)
+end
+
+// The gradient at slot v, allocated as zeros if backward has not put
+// anything there. Same aliasing rules as Value.
+@en "Grad"
+@fa "گرادیان"
+@ar "تدرج"
+pub func Grad(tp &: Tape, v: int): tensor.Tensor:
+    g := _grad_of(tp, v)
+    ret g
+end
+
+// Seeds d(loss)/d(loss) = 1 and walks the tape backwards once. `loss`
+// is usually a one-element tensor; seeding a bigger output means
+// backpropagating the sum of its elements.
+@en "Backward"
+@fa "پس‌انتشار"
+@ar "انتشار خلفي"
+pub func Backward(tp &: Tape, loss: int):
+    if loss < 0 || loss >= tp.vals.len(): ret end
+    mut seed := _grad_of(tp, loss)
+    tensor.SetAll(seed, 1.0)
+    mut i := tp.nodes.len() - 1
+    until i >= 0:
+        n := tp.nodes.get(i)
+        // A node whose output never received a gradient contributes
+        // nothing; skipping it is both faster and what keeps detached
+        // subgraphs silent.
+        g := tp.grads.get(n.out)
+        if g.data.len() > 0:
+            _backprop_node(tp, n)
+        end
+        i -= 1
+    end
+end
+
+// Central-difference check of an analytic gradient. `f` evaluates the
+// scalar function at the tensor it is handed (typically by building and
+// discarding its own tape); `x` is perturbed in place and restored.
+// Differences are formed in f64 with step h, compared against
+// `analytic` to tolerance tol - for f32 forward math, h around 1e-2 and
+// tol around 2e-2 relative is what the arithmetic supports.
+@en "GradCheck"
+@fa "بررسی گرادیان"
+@ar "فحص التدرج"
+pub func GradCheck(f: func (tensor.Tensor) f64, x &: tensor.Tensor, analytic &: tensor.Tensor, h: f64, tol: f64): bool:
+    if x.same_shape(analytic) == false: ret false end
+    hx := _alias(x)
+    n := x.numel()
+    mut ok := true
+    repeat n with k:
+        orig := x.at(k)
+        x.set_at(k, orig + h)
+        fp := f(hx)
+        x.set_at(k, orig - h)
+        fm := f(hx)
+        x.set_at(k, orig)
+        numeric := (fp - fm) / (2.0 * h)
+        want := analytic.at(k)
+        mut diff := numeric - want
+        if diff < 0.0: diff = 0.0 - diff end
+        mut scale := 1.0
+        mut aw := want
+        if aw < 0.0: aw = 0.0 - aw end
+        if aw > scale: scale = aw end
+        if diff > tol * scale: ok = false end
+    end
+    ret ok
+end

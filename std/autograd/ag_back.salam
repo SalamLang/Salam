@@ -1,0 +1,422 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package autograd
+
+import tensor
+
+// The f32 libm corner again: extern declarations do not travel through
+// imports, so the three the backward formulas need are bound here too.
+extern:
+    pure func expf(x: f32): f32
+    pure func tanhf(x: f32): f32
+    pure func powf(x: f32, y: f32): f32
+end
+
+// The backward kernels and the one dispatch switch that runs them.
+//
+// Everything accumulates with += into the input's gradient buffer,
+// which is how fan-out falls out for free: a value consumed by three
+// operations receives three accumulations, in reverse tape order, and
+// nothing has to count consumers. Gradients of broadcast operands are
+// summed back over the broadcast axes by _acc_reduced, which re-derives
+// the broadcast mode from the two shapes rather than trusting a stored
+// flag.
+//
+// The unary formulas read their saved quantities straight off the tape
+// - the input from vals[n.a], the output from vals[n.out] - since the
+// tape keeps both alive until reset(). Where the derivative is cheap
+// from the output (exp, tanh, sigmoid, sqrt, softmax) that is the one
+// used; where it needs the input (relu, log, gelu, powers) the input is
+// there too. Each kernel is a flat pointer loop in the package's usual
+// shape: hoisted payloads, bare induction, no per-element dispatch.
+
+// dst-grad[k] += dc[k] over a flat range.
+func _bk_flat_add(pg: f32*, pd: f32*, n: int):
+    repeat n with k: pg[k] = pg[k] + pd[k] end
+end
+
+// Accumulates dc into the gradient of slot v, folding broadcast axes
+// back down when v's value was the smaller operand.
+func _acc_reduced(tp &: Tape, v: int, dc &: tensor.Tensor):
+    if tp.needs.get(v) == false: ret end
+    target := Value(tp, v)
+    g := _grad_of(tp, v)
+    pg := g.data.data
+    pd := dc.data.data
+    tn := target.numel()
+    dn := dc.numel()
+    if target.same_shape(dc):
+        _bk_flat_add(pg, pd, dn)
+        ret
+    end
+    if tn == 1:
+        pg[0] = pg[0] + (tensor.SumAll(dc) as f32)
+        ret
+    end
+    tr := target.rank()
+    dr := dc.rank()
+    // Trailing-one column: [N,1] against [N,W] - one row sum per slot.
+    if tr == dr && target.shape.get(tr - 1) == 1:
+        width := dc.shape.get(dr - 1)
+        rows := dn / width
+        repeat rows with r:
+            base := r * width
+            mut s := 0.0 as f32
+            repeat width with k: s += pd[base + k] end
+            pg[r] = pg[r] + s
+        end
+        ret
+    end
+    // Suffix broadcast (a plain suffix, or the same rank led by 1):
+    // fold the leading repeats.
+    inner := tn
+    outer := dn / inner
+    repeat outer with o:
+        base := o * inner
+        repeat inner with k: pg[k] = pg[k] + pd[base + k] end
+    end
+end
+
+func _bk_mul(tp &: Tape, n &: Node, dc &: tensor.Tensor):
+    va := Value(tp, n.a)
+    vb := Value(tp, n.b)
+    if tp.needs.get(n.a):
+        mut t := tensor.Mul(dc, vb)
+        _acc_reduced(tp, n.a, t)
+        t.free()
+    end
+    if tp.needs.get(n.b):
+        mut t := tensor.Mul(dc, va)
+        _acc_reduced(tp, n.b, t)
+        t.free()
+    end
+end
+
+func _bk_div(tp &: Tape, n &: Node, dc &: tensor.Tensor):
+    vb := Value(tp, n.b)
+    vo := Value(tp, n.out)
+    if tp.needs.get(n.a):
+        mut t := tensor.Div(dc, vb)
+        _acc_reduced(tp, n.a, t)
+        t.free()
+    end
+    if tp.needs.get(n.b):
+        // d/dB (A/B) = -A/B^2 = -(out)/B, and out is already on the tape.
+        mut t := tensor.Mul(dc, vo)
+        mut t2 := tensor.Div(t, vb)
+        tensor.ScaleInPlace(t2, 0.0 - 1.0)
+        _acc_reduced(tp, n.b, t2)
+        t.free()
+        t2.free()
+    end
+end
+
+// The unary backward arms. pg += factor(x, out) * pd, one flat loop per
+// op, factor chosen outside the loop.
+func _bk_unary(op: int, pin: f32*, pout: f32*, pd: f32*, pg: f32*, cnt: int, f0: f64):
+    zero := 0.0 as f32
+    one := 1.0 as f32
+    if op == _OP_NEG:
+        repeat cnt with k: pg[k] = pg[k] - pd[k] end
+    else op == _OP_SCALE:
+        s := f0 as f32
+        repeat cnt with k: pg[k] = pg[k] + s * pd[k] end
+    else op == _OP_ADDS:
+        repeat cnt with k: pg[k] = pg[k] + pd[k] end
+    else op == _OP_EXP:
+        repeat cnt with k: pg[k] = pg[k] + pd[k] * pout[k] end
+    else op == _OP_LOG:
+        repeat cnt with k:
+            v := pin[k]
+            if v != zero: pg[k] = pg[k] + pd[k] / v end
+        end
+    else op == _OP_TANH:
+        repeat cnt with k:
+            o := pout[k]
+            pg[k] = pg[k] + pd[k] * (one - o * o)
+        end
+    else op == _OP_SIGMOID:
+        repeat cnt with k:
+            o := pout[k]
+            pg[k] = pg[k] + pd[k] * o * (one - o)
+        end
+    else op == _OP_RELU:
+        repeat cnt with k:
+            mut m := zero
+            if pin[k] > zero: m = one end
+            pg[k] = pg[k] + pd[k] * m
+        end
+    else op == _OP_GELU:
+        // d/dx of the tanh approximation: with u = c0 (x + c1 x^3),
+        // 0.5 (1 + tanh u) + 0.5 x (1 - tanh^2 u) c0 (1 + 3 c1 x^2).
+        c0 := 0.7978845608028654 as f32
+        c1 := 0.044715 as f32
+        half := 0.5 as f32
+        three := 3.0 as f32
+        repeat cnt with k:
+            x := pin[k]
+            u := c0 * (x + c1 * x * x * x)
+            t := tanhf(u)
+            du := c0 * (one + three * c1 * x * x)
+            d := half * (one + t) + half * x * (one - t * t) * du
+            pg[k] = pg[k] + pd[k] * d
+        end
+    else op == _OP_SQRT:
+        half := 0.5 as f32
+        repeat cnt with k:
+            o := pout[k]
+            if o != zero: pg[k] = pg[k] + pd[k] * half / o end
+        end
+    else op == _OP_SQUARE:
+        two := 2.0 as f32
+        repeat cnt with k: pg[k] = pg[k] + pd[k] * two * pin[k] end
+    else op == _OP_SILU:
+        // d/dx x*s(x) = s(x) (1 + x (1 - s(x)))
+        repeat cnt with k:
+            x := pin[k]
+            s := one / (one + expf(zero - x))
+            pg[k] = pg[k] + pd[k] * s * (one + x * (one - s))
+        end
+    else:
+        // _OP_POWS: p * x^(p-1)
+        p := f0 as f32
+        pm1 := (f0 - 1.0) as f32
+        repeat cnt with k: pg[k] = pg[k] + pd[k] * p * powf(pin[k], pm1) end
+    end
+end
+
+func _bk_matmul(tp &: Tape, n &: Node, dc &: tensor.Tensor):
+    if tp.needs.get(n.a):
+        vb := Value(tp, n.b)
+        mut tb := tensor.Transpose2D(vb)
+        mut ga := _grad_of(tp, n.a)
+        tensor.MatMulAcc(dc, tb, ga)
+        tb.free()
+    end
+    if tp.needs.get(n.b):
+        va := Value(tp, n.a)
+        mut ta := tensor.Transpose2D(va)
+        mut gb := _grad_of(tp, n.b)
+        tensor.MatMulAcc(ta, dc, gb)
+        ta.free()
+    end
+end
+
+func _bk_sum_axis(tp &: Tape, n &: Node, dc &: tensor.Tensor, mean: bool):
+    if tp.needs.get(n.a) == false: ret end
+    va := Value(tp, n.a)
+    g := _grad_of(tp, n.a)
+    axis := n.s0
+    cnt := va.shape.get(axis)
+    mut outer := 1
+    repeat axis with i: outer = outer * va.shape.get(i) end
+    inner := va.numel() / (outer * cnt)
+    pg := g.data.data
+    pd := dc.data.data
+    mut scale := 1.0 as f32
+    if mean: scale = (1.0 / (cnt as f64)) as f32 end
+    repeat outer with o:
+        dbase := o * inner
+        repeat cnt with i:
+            gbase := (o * cnt + i) * inner
+            repeat inner with k: pg[gbase + k] = pg[gbase + k] + scale * pd[dbase + k] end
+        end
+    end
+end
+
+func _bk_softmax(tp &: Tape, n &: Node, dc &: tensor.Tensor, logform: bool):
+    if tp.needs.get(n.a) == false: ret end
+    vo := Value(tp, n.out)
+    g := _grad_of(tp, n.a)
+    width := vo.shape.get(vo.rank() - 1)
+    rows := vo.numel() / width
+    pg := g.data.data
+    pd := dc.data.data
+    po := vo.data.data
+    repeat rows with r:
+        base := r * width
+        if logform:
+            // d = dC - softmax(x) * sum(dC); softmax = exp(out).
+            mut s := 0.0 as f32
+            repeat width with k: s += pd[base + k] end
+            repeat width with k:
+                pg[base + k] = pg[base + k] + pd[base + k] - expf(po[base + k]) * s
+            end
+        else:
+            // d = out * (dC - sum(dC * out)).
+            mut s := 0.0 as f32
+            repeat width with k: s += pd[base + k] * po[base + k] end
+            repeat width with k:
+                pg[base + k] = pg[base + k] + po[base + k] * (pd[base + k] - s)
+            end
+        end
+    end
+end
+
+// d logits = (softmax(logits) - onehot(targets)) * dLoss / N, computed
+// row by row without materializing either the softmax or the one-hot.
+func _bk_celoss(tp &: Tape, n &: Node, dc &: tensor.Tensor):
+    if tp.needs.get(n.a) == false: ret end
+    vl := Value(tp, n.a)
+    idx := Value(tp, n.aux)
+    g := _grad_of(tp, n.a)
+    width := vl.shape.get(vl.rank() - 1)
+    rows := vl.numel() / width
+    p := vl.data.data
+    pi := idx.data.data
+    pg := g.data.data
+    scale := (dc.at(0) / (rows as f64)) as f32
+    one := 1.0 as f32
+    repeat rows with r:
+        base := r * width
+        mut m := p[base]
+        repeat width with k:
+            v := p[base + k]
+            if v > m: m = v end
+        end
+        mut s := 0.0 as f32
+        repeat width with k: s += expf(p[base + k] - m) end
+        inv := one / s
+        t := pi[r] as int
+        repeat width with k:
+            mut sm := expf(p[base + k] - m) * inv
+            if k == t: sm = sm - one end
+            pg[base + k] = pg[base + k] + scale * sm
+        end
+    end
+end
+
+// d logits = (sigmoid(x) - y) * dLoss / N; d target = -x * dLoss / N.
+func _bk_bcewl(tp &: Tape, n &: Node, dc &: tensor.Tensor):
+    vl := Value(tp, n.a)
+    vt := Value(tp, n.b)
+    cnt := vl.numel()
+    scale := (dc.at(0) / (cnt as f64)) as f32
+    one := 1.0 as f32
+    zero := 0.0 as f32
+    p := vl.data.data
+    q := vt.data.data
+    if tp.needs.get(n.a):
+        g := _grad_of(tp, n.a)
+        pg := g.data.data
+        repeat cnt with k:
+            sg := one / (one + expf(zero - p[k]))
+            pg[k] = pg[k] + scale * (sg - q[k])
+        end
+    end
+    if tp.needs.get(n.b):
+        g := _grad_of(tp, n.b)
+        pg := g.data.data
+        repeat cnt with k:
+            pg[k] = pg[k] - scale * p[k]
+        end
+    end
+end
+
+func _bk_transpose2d(tp &: Tape, n &: Node, dc &: tensor.Tensor):
+    if tp.needs.get(n.a) == false: ret end
+    mut t := tensor.Transpose2D(dc)
+    g := _grad_of(tp, n.a)
+    _bk_flat_add(g.data.data, t.data.data, t.numel())
+    t.free()
+end
+
+// The dispatch. Called only for nodes whose output holds a gradient.
+func _backprop_node(tp &: Tape, n: Node):
+    mut dc := tp.grads.get(n.out)
+    if n.op == _OP_ADD:
+        _acc_reduced(tp, n.a, dc)
+        _acc_reduced(tp, n.b, dc)
+    else n.op == _OP_SUB:
+        _acc_reduced(tp, n.a, dc)
+        if tp.needs.get(n.b):
+            mut t := tensor.Neg(dc)
+            _acc_reduced(tp, n.b, t)
+            t.free()
+        end
+    else n.op == _OP_MUL:
+        _bk_mul(tp, n, dc)
+    else n.op == _OP_DIV:
+        _bk_div(tp, n, dc)
+    else n.op == _OP_MATMUL:
+        _bk_matmul(tp, n, dc)
+    else n.op == _OP_SUM:
+        if tp.needs.get(n.a):
+            mut g := _grad_of(tp, n.a)
+            tensor.AddScalarInPlace(g, dc.at(0))
+        end
+    else n.op == _OP_MEAN:
+        if tp.needs.get(n.a):
+            mut g := _grad_of(tp, n.a)
+            va := Value(tp, n.a)
+            tensor.AddScalarInPlace(g, dc.at(0) / (va.numel() as f64))
+        end
+    else n.op == _OP_SUMAXIS:
+        _bk_sum_axis(tp, n, dc, false)
+    else n.op == _OP_MEANAXIS:
+        _bk_sum_axis(tp, n, dc, true)
+    else n.op == _OP_SOFTMAX:
+        _bk_softmax(tp, n, dc, false)
+    else n.op == _OP_LOGSOFTMAX:
+        _bk_softmax(tp, n, dc, true)
+    else n.op == _OP_RESHAPE:
+        if tp.needs.get(n.a):
+            g := _grad_of(tp, n.a)
+            _bk_flat_add(g.data.data, dc.data.data, dc.numel())
+        end
+    else n.op == _OP_TRANSPOSE2D:
+        _bk_transpose2d(tp, n, dc)
+    else n.op == _OP_CELOSS:
+        _bk_celoss(tp, n, dc)
+    else n.op == _OP_BCEWL:
+        _bk_bcewl(tp, n, dc)
+    else n.op == _OP_CONV2D:
+        _bk_conv2d(tp, n, dc)
+    else n.op == _OP_MAXPOOL:
+        _bk_maxpool(tp, n, dc)
+    else n.op == _OP_AVGPOOL:
+        _bk_avgpool(tp, n, dc)
+    else n.op == _OP_BMM:
+        _bk_bmm(tp, n, dc)
+    else n.op == _OP_PERMUTE:
+        _bk_permute(tp, n, dc)
+    else n.op == _OP_EMBED:
+        _bk_embed(tp, n, dc)
+    else n.op == _OP_DROPOUT:
+        _bk_dropout(tp, n, dc)
+    else n.op == _OP_LAYERNORM:
+        _bk_layernorm(tp, n, dc)
+    else n.op == _OP_NARROW:
+        _bk_narrow(tp, n, dc)
+    else n.op == _OP_CONCAT2:
+        _bk_concat2(tp, n, dc)
+    else n.op == _OP_ROPE:
+        _bk_rope(tp, n, dc)
+    else n.op == _OP_RMSNORM:
+        _bk_rmsnorm(tp, n, dc)
+    else n.op == _OP_BATCHNORM:
+        _bk_batchnorm(tp, n, dc)
+    else n.op == _OP_GROUPNORM:
+        _bk_groupnorm(tp, n, dc)
+    else:
+        // Unary ops share one kernel; pin/pout both come off the tape.
+        if tp.needs.get(n.a):
+            va := Value(tp, n.a)
+            vo := Value(tp, n.out)
+            g := _grad_of(tp, n.a)
+            _bk_unary(n.op, va.data.data, vo.data.data, dc.data.data, g.data.data, va.numel(), n.f0)
+        end
+    end
+end

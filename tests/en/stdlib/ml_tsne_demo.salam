@@ -1,0 +1,95 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/ml: t-SNE embeds three 8-D blobs into the plane with the
+// clusters intact (nearest other point shares the label), centered,
+// deterministic under a seed.
+
+import data
+import math
+import matrix
+import ml
+import testing
+
+// Fraction of points whose nearest other point has the same label.
+func neighbor_purity(z &: matrix.Matrix, y &: matrix.Matrix): f64:
+    n := z.rows
+    mut hits := 0
+    repeat n with i:
+        mut best := 0 - 1
+        mut best_d := 0.0
+        repeat n with j:
+            if j == i: continue end
+            mut d := 0.0
+            repeat z.cols with k:
+                t := z.at(i, k) - z.at(j, k)
+                d += t * t
+            end
+            if best < 0 || d < best_d:
+                best = j
+                best_d = d
+            end
+        end
+        if y.at(best, 0) == y.at(i, 0): hits += 1 end
+    end
+    ret (hits as f64) / (n as f64)
+end
+
+func main:
+    mut y := matrix.Matrix {}
+    mut x := data.MakeBlobs(90, 3, 8, 0.6, 11, y)
+    mut t := ml.TSNE { perplexity = 15.0, seed = 1 }
+    mut z := t.fit_transform(x)
+    testing.AssertTrue(t.ok)
+    testing.AssertEqInt(z.rows, 90)
+    testing.AssertEqInt(z.cols, 2)
+    testing.AssertTrue(neighbor_purity(z, y) >= 0.95)
+    // centered
+    mut mx := 0.0
+    mut my := 0.0
+    repeat 90 with i:
+        mx += z.at(i, 0)
+        my += z.at(i, 1)
+    end
+    testing.AssertTrue(math.Abs(mx) < 0.000001)
+    testing.AssertTrue(math.Abs(my) < 0.000001)
+    // the divergence is finite and small after convergence
+    testing.AssertTrue(t.kl >= 0.0 && t.kl < 1.0)
+    // the same seed reproduces the embedding
+    mut t2 := ml.TSNE { perplexity = 15.0, seed = 1 }
+    mut z2 := t2.fit_transform(x)
+    mut same := true
+    repeat 180 with k:
+        if z.a.get(k) != z2.a.get(k): same = false end
+    end
+    testing.AssertTrue(same)
+    // the stored embedding matches the returned one
+    testing.AssertEqFloat(t.embedding.at(5, 1), z.at(5, 1), 0.0)
+    // too few points is refused
+    mut tiny := matrix.Zeros(3, 2)
+    mut t3 := ml.TSNE {}
+    mut z3 := t3.fit_transform(tiny)
+    testing.AssertTrue(z3.is_empty())
+    testing.AssertTrue(!t3.ok)
+    tiny.free()
+    t.free()
+    t2.free()
+    z.free()
+    z2.free()
+    x.free()
+    y.free()
+    ret testing.Summary()
+end

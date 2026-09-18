@@ -1,0 +1,152 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/data: the seeded synthetic dataset generators.
+
+import data
+import matrix
+import testing
+
+// How many rows of y carry the label `cls`.
+func label_count(y &: matrix.Matrix, cls: f64): int:
+    mut c := 0
+    repeat y.rows with i:
+        if y.at(i, 0) == cls: c += 1 end
+    end
+    ret c
+end
+
+// Mean of one feature over the rows of one class.
+func class_mean(x &: matrix.Matrix, y &: matrix.Matrix, cls: f64, j: int): f64:
+    mut s := 0.0
+    mut c := 0
+    repeat x.rows with i:
+        if y.at(i, 0) == cls:
+            s += x.at(i, j)
+            c += 1
+        end
+    end
+    if c == 0: ret 0.0 end
+    ret s / (c as f64)
+end
+
+func main:
+    tight := 0.000000001
+
+    // Blobs: balanced labels, and each cloud hugs its own center
+    mut yb := matrix.Matrix {}
+    mut bx := data.MakeBlobs(90, 3, 2, 0.5, 42, yb)
+    testing.AssertEqInt(bx.rows, 90)
+    testing.AssertEqInt(bx.cols, 2)
+    testing.AssertEqInt(yb.rows, 90)
+    testing.AssertEqInt(label_count(yb, 0.0), 30)
+    testing.AssertEqInt(label_count(yb, 1.0), 30)
+    testing.AssertEqInt(label_count(yb, 2.0), 30)
+    // With spread 0.5 and centers drawn from [-10,10]^2, every point sits
+    // far closer to its own class mean than the average of the others.
+    mut worst_within := 0.0
+    repeat 90 with i:
+        cls := yb.at(i, 0)
+        d0 := bx.at(i, 0) - class_mean(bx, yb, cls, 0)
+        d1 := bx.at(i, 1) - class_mean(bx, yb, cls, 1)
+        d := d0 * d0 + d1 * d1
+        if d > worst_within: worst_within = d end
+    end
+    testing.AssertTrue(worst_within < 16.0)
+
+    // Determinism: the same seed reproduces the same dataset exactly
+    mut yb2 := matrix.Matrix {}
+    mut bx2 := data.MakeBlobs(90, 3, 2, 0.5, 42, yb2)
+    testing.AssertTrue(matrix.AllClose(bx, bx2, tight))
+    mut yb3 := matrix.Matrix {}
+    mut bx3 := data.MakeBlobs(90, 3, 2, 0.5, 43, yb3)
+    testing.AssertFalse(matrix.AllClose(bx, bx3, 0.001))
+
+    // Moons: with zero noise every point sits on its unit half-circle
+    mut my := matrix.Matrix {}
+    mut mx := data.MakeMoons(100, 0.0, 7, my)
+    testing.AssertEqInt(mx.rows, 100)
+    testing.AssertEqInt(label_count(my, 0.0), 50)
+    mut moon_worst := 0.0
+    repeat 100 with i:
+        mut px := mx.at(i, 0)
+        mut py := mx.at(i, 1)
+        if my.at(i, 0) == 1.0:
+            px = 1.0 - px
+            py = 0.5 - py
+        end
+        r := px * px + py * py
+        d := r - 1.0
+        mut a := d
+        if a < 0.0: a = 0.0 - a end
+        if a > moon_worst: moon_worst = a end
+    end
+    testing.AssertTrue(moon_worst < tight)
+
+    // Circles: outer ring at radius 1, inner at the given factor
+    mut cy := matrix.Matrix {}
+    mut cx := data.MakeCircles(80, 0.0, 0.5, 9, cy)
+    mut circ_ok := true
+    repeat 80 with i:
+        r := cx.at(i, 0) * cx.at(i, 0) + cx.at(i, 1) * cx.at(i, 1)
+        mut want := 1.0
+        if cy.at(i, 0) == 1.0: want = 0.25 end
+        d := r - want
+        mut a := d
+        if a < 0.0: a = 0.0 - a end
+        if a > tight: circ_ok = false end
+    end
+    testing.AssertTrue(circ_ok)
+
+    // Regression: zero noise means y is exactly X w
+    mut ry := matrix.Matrix {}
+    mut rw := matrix.Matrix {}
+    mut rx := data.MakeRegression(200, 3, 0.0, 11, ry, rw)
+    testing.AssertEqInt(rx.rows, 200)
+    testing.AssertEqInt(rw.rows, 3)
+    mut pred := matrix.MatMul(rx, rw)
+    testing.AssertTrue(matrix.AllClose(pred, ry, tight))
+
+    // Classification: shapes, round-robin labels, and a real seed effect
+    mut ky := matrix.Matrix {}
+    mut kx := data.MakeClassification(60, 2, 3, 3.0, 5, ky)
+    testing.AssertEqInt(kx.rows, 60)
+    testing.AssertEqInt(label_count(ky, 2.0), 20)
+    testing.AssertEqFloat(ky.at(4, 0), 1.0, tight)
+
+    // Degenerate sizes come back as the empty sentinel
+    mut ey := matrix.Matrix {}
+    testing.AssertTrue(data.MakeBlobs(0, 3, 2, 1.0, 1, ey).is_empty())
+
+    matrix.Free(bx)
+    matrix.Free(yb)
+    matrix.Free(bx2)
+    matrix.Free(yb2)
+    matrix.Free(bx3)
+    matrix.Free(yb3)
+    matrix.Free(mx)
+    matrix.Free(my)
+    matrix.Free(cx)
+    matrix.Free(cy)
+    matrix.Free(rx)
+    matrix.Free(ry)
+    matrix.Free(rw)
+    matrix.Free(pred)
+    matrix.Free(kx)
+    matrix.Free(ky)
+
+    ret testing.Summary()
+end

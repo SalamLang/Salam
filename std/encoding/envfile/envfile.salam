@@ -1,0 +1,161 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "envfile"
+@fa "پرونده محیط"
+@ar "ملف بیئة"
+package envfile
+
+import collections
+
+// envfile owns the .env FILE FORMAT and nothing else: no process
+// environment, no configuration model, no file layering. Keeping it to
+// the format alone is what lets both of its callers reuse it without a
+// dependency cycle:
+//
+//   std/encoding/envfile  parse, expand and serialize the format  (here)
+//   std/config            flat key/value model; .env support delegates here
+//   std/env               process environment; applies a Doc to it
+//
+// That is the same split std/config already uses for YAML, where it
+// calls std/encoding/yaml rather than carrying a second parser.
+
+// Per-entry parse hint. Single-quoted values are taken verbatim, so they
+// must never be run through variable expansion; everything else may be.
+const _LITERAL := 0
+const _EXPANDABLE := 1
+
+// Entries live in a collections.OrderedMap, which keeps them in the
+// order the file wrote them while still answering a lookup in constant
+// time. Order is not cosmetic here: expansion resolves a reference
+// against the entries defined BEFORE it, and Format has to reproduce the
+// file as written.
+//
+// `flags` runs alongside the map, one entry per position. It is parse
+// state, not data: it records whether a value is still eligible for
+// expansion, and ExpandDoc clears it by producing an all-literal Doc.
+// _push is the only thing that writes to both, which is what keeps the
+// two in step.
+@en "Doc"
+@fa "سند"
+@ar "وثیقة"
+pub struct Doc:
+    pub m: collections.OrderedMap = collections.OrderedMap {}
+    pub flags: Vector<int> = Vector {}
+end
+
+inline pure func _bp(s: str): i8*: ret (s as void*) as i8* end
+
+inline pure func _ub(bp: i8*, i: int): int:
+    mut v := bp[i] as int
+    if v < 0: v = v + 256 end
+    ret v
+end
+
+// Last assignment wins, which is what every .env reader does and what
+// makes layering one file over another work. OrderedMap.set reports the
+// position it used, so appending to `flags` is exactly the case where
+// that position is one past the end.
+func _push(d &: Doc, key: str, val: str, flag: int):
+    i := d.m.set(key, val)
+    if i == d.flags.len():
+        d.flags.push(flag)
+    else:
+        d.flags.set(i, flag)
+    end
+end
+
+@en "New"
+@fa "جدید"
+@ar "جدید"
+pub func New(): Doc:
+    ret Doc {}
+end
+
+@en "Len"
+@fa "طول"
+@ar "طول"
+pub func Len(d &: Doc): int: ret d.m.len() end
+
+@en "Has"
+@fa "دارد"
+@ar "یملک"
+pub func Has(d &: Doc, key: str): bool: ret d.m.has(key) end
+
+@en "Get"
+@fa "دریافت"
+@ar "جلب"
+pub func Get(d &: Doc, key: str): str: ret d.m.get(key) end
+
+@en "GetOr"
+@fa "دریافت یا"
+@ar "جلب أو"
+pub func GetOr(d &: Doc, key: str, def: str): str: ret d.m.get_or(key, def) end
+
+// A value set through the API is already final, so it is marked literal
+// and a later ExpandDoc will not reinterpret a '$' inside it.
+@en "Set"
+@fa "تنظیم"
+@ar "تعیین"
+pub func Set(d &: Doc, key: str, val: str):
+    _push(d, key, val, _LITERAL)
+end
+
+@en "Remove"
+@fa "حذف"
+@ar "إزالة"
+pub func Remove(d &: Doc, key: str): bool:
+    i := d.m.remove(key)
+    if i < 0: ret false end
+    d.flags.remove_at(i)
+    ret true
+end
+
+@en "KeyAt"
+@fa "کلید در"
+@ar "مفتاح عند"
+pub func KeyAt(d &: Doc, i: int): str: ret d.m.key_at(i) end
+
+@en "ValueAt"
+@fa "مقدار در"
+@ar "قیمة عند"
+pub func ValueAt(d &: Doc, i: int): str: ret d.m.val_at(i) end
+
+@en "Keys"
+@fa "کلیدها"
+@ar "المفاتیح"
+pub func Keys(d &: Doc): Vector<str>:
+    ret d.m.clone_keys()
+end
+
+// Copies every entry of src over dst, src winning on conflicts. This is
+// how a .env.local is layered on top of a .env. Expansion eligibility
+// travels with the value, so a merged document can still be expanded
+// once at the end rather than per file.
+@en "MergeInto"
+@fa "ادغام در"
+@ar "دمج فی"
+pub func MergeInto(dst &: Doc, src &: Doc):
+    repeat src.m.len() with i:
+        _push(dst, src.m.key_at(i), src.m.val_at(i), src.flags.get(i))
+    end
+end
+
+@en "Free"
+@fa "آزادسازی"
+@ar "تحریر"
+pub func Free(d &: Doc):
+    d.m.free()
+    d.flags.free()
+end

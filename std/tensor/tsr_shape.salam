@@ -1,0 +1,307 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package tensor
+
+// Shape surgery. Everything here either rewrites metadata over the same
+// element order (Reshape, Squeeze, Unsqueeze) or materializes a copy in
+// the new order (Permute, Narrow, Concat2, Stack2, Pad2D). There are no
+// views to hand out, so "cheap" means the metadata forms and their
+// in-place variants; the copying forms say so by returning a fresh
+// tensor.
+//
+// The copying kernels all reduce to the same decomposition: pick the
+// axis being rearranged, call everything before it `outer` and
+// everything after it `inner`, and move contiguous `inner`-sized blocks.
+// Row-major order makes those blocks genuinely contiguous, so the inner
+// loops are flat pointer copies the vectorizer treats as memmove.
+
+// outer x inner products around one axis.
+func _outer_of(x &: Tensor, axis: int): int:
+    mut o := 1
+    repeat axis with i: o = o * x.shape.get(i) end
+    ret o
+end
+
+func _inner_of(x &: Tensor, axis: int): int:
+    mut v := 1
+    r := x.rank()
+    repeat r - axis - 1 with i: v = v * x.shape.get(axis + 1 + i) end
+    ret v
+end
+
+// ---- public API ----
+
+// A reshaped copy. For the O(1) in-place form use the reshape_ method;
+// this one exists for call sites that need the original intact.
+@en "Reshape"
+@fa "تغییر شکل"
+@ar "إعادة تشكيل"
+pub func Reshape(x &: Tensor, shape &: Vector<int>): Tensor:
+    mut n := 1
+    if shape.len() == 0: n = 0 end
+    repeat shape.len() with i: n = n * shape.get(i) end
+    if n != x.numel(): ret Empty() end
+    mut t := Clone(x)
+    t.reshape_(shape)
+    ret t
+end
+
+// Drops every dimension of size 1, in place. A tensor that is nothing
+// but ones keeps a single [1], because rank 0 does not exist here.
+@en "SqueezeInPlace"
+@fa "فشردن درجا"
+@ar "ضغط في المكان"
+pub func SqueezeInPlace(x &: Tensor):
+    mut s := Vector {} as Vector<int>
+    repeat x.rank() with i:
+        d := x.shape.get(i)
+        if d != 1: s.push(d) end
+    end
+    if s.len() == 0: s.push(1) end
+    x.shape.free()
+    x.shape = s
+end
+
+// Inserts a size-1 dimension at `axis`, in place. axis may be rank(),
+// which appends.
+@en "UnsqueezeInPlace"
+@fa "گشودن درجا"
+@ar "توسيع في المكان"
+pub func UnsqueezeInPlace(x &: Tensor, axis: int):
+    r := x.rank()
+    if axis < 0 || axis > r: ret end
+    x.shape.insert(axis, 1)
+end
+
+// Reorders dimensions by `perm` (a permutation of 0..rank-1) into a fresh
+// tensor. The odometer walk keeps the output sequential - the write side
+// is the streaming side, the read side jumps - because a sequential store
+// stream is the half the hardware prefetcher rewards most.
+@en "Permute"
+@fa "جایگشت"
+@ar "تبديل"
+pub func Permute(x &: Tensor, perm &: Vector<int>): Tensor:
+    r := x.rank()
+    if perm.len() != r || r == 0: ret Empty() end
+    // Validate: every value in range, each axis exactly once.
+    mut in_range := true
+    repeat r with i:
+        p := perm.get(i)
+        if p < 0 || p >= r: in_range = false end
+    end
+    if in_range == false: ret Empty() end
+    mut seen := Vector {} as Vector<int>
+    seen.zeros(r)
+    repeat r with i: seen.set(perm.get(i), seen.get(perm.get(i)) + 1) end
+    mut valid := true
+    repeat r with i:
+        if seen.get(i) != 1: valid = false end
+    end
+    seen.free()
+    if valid == false: ret Empty() end
+
+    // Input strides, then the stride each OUTPUT dimension advances by.
+    mut istr := Vector {} as Vector<int>
+    istr.zeros(r)
+    mut acc := 1
+    repeat r with i:
+        d := r - 1 - i
+        istr.set(d, acc)
+        acc = acc * x.shape.get(d)
+    end
+    mut ostr := Vector {} as Vector<int>
+    ostr.zeros(r)
+    mut oshape := Vector {} as Vector<int>
+    repeat r with i:
+        oshape.push(x.shape.get(perm.get(i)))
+        ostr.set(i, istr.get(perm.get(i)))
+    end
+
+    t := _raw(oshape)
+    n := t.data.len()
+    if n > 0:
+        p := t.data.data
+        q := x.data.data
+        // Odometer over the output multi-index; src tracks the input flat
+        // index incrementally, so there is no div/mod per element.
+        mut idx := Vector {} as Vector<int>
+        idx.zeros(r)
+        mut src := 0
+        repeat n with k:
+            p[k] = q[src]
+            mut d := r - 1
+            mut carrying := true
+            until carrying:
+                v := idx.get(d) + 1
+                if v < oshape.get(d):
+                    idx.set(d, v)
+                    src += ostr.get(d)
+                    carrying = false
+                else:
+                    src -= idx.get(d) * ostr.get(d)
+                    idx.set(d, 0)
+                    if d == 0:
+                        carrying = false
+                    else:
+                        d -= 1
+                    end
+                end
+            end
+        end
+        idx.free()
+    end
+    istr.free()
+    ostr.free()
+    oshape.free()
+    ret t
+end
+
+// Rows start..start+len of the leading dimension, copied out. The fast
+// common case of Narrow: one contiguous block.
+@en "SliceAxis0"
+@fa "برش محور صفر"
+@ar "شريحة المحور صفر"
+pub func SliceAxis0(x &: Tensor, start: int, len: int): Tensor:
+    r := x.rank()
+    if r == 0: ret Empty() end
+    d0 := x.shape.get(0)
+    if start < 0 || len <= 0 || start + len > d0: ret Empty() end
+    mut oshape := _copy_shape(x.shape)
+    oshape.set(0, len)
+    t := _raw(oshape)
+    oshape.free()
+    inner := x.numel() / d0
+    n := len * inner
+    p := t.data.data
+    q := x.data.data
+    base := start * inner
+    repeat n with k: p[k] = q[base + k] end
+    ret t
+end
+
+// Elements start..start+len of one axis, any rank.
+@en "Narrow"
+@fa "باریک‌سازی"
+@ar "تضييق"
+pub func Narrow(x &: Tensor, axis: int, start: int, len: int): Tensor:
+    r := x.rank()
+    if axis < 0 || axis >= r: ret Empty() end
+    if axis == 0: ret SliceAxis0(x, start, len) end
+    mid := x.shape.get(axis)
+    if start < 0 || len <= 0 || start + len > mid: ret Empty() end
+    outer := _outer_of(x, axis)
+    inner := _inner_of(x, axis)
+    mut oshape := _copy_shape(x.shape)
+    oshape.set(axis, len)
+    t := _raw(oshape)
+    oshape.free()
+    p := t.data.data
+    q := x.data.data
+    block := len * inner
+    repeat outer with o:
+        sbase := (o * mid + start) * inner
+        dbase := o * block
+        repeat block with k: p[dbase + k] = q[sbase + k] end
+    end
+    ret t
+end
+
+// Concatenation of two tensors along one axis. Every other dimension
+// must agree.
+@en "Concat2"
+@fa "پیوند دو"
+@ar "ضم اثنين"
+pub func Concat2(a &: Tensor, b &: Tensor, axis: int): Tensor:
+    r := a.rank()
+    if r == 0 || b.rank() != r || axis < 0 || axis >= r: ret Empty() end
+    repeat r with i:
+        if i != axis && a.shape.get(i) != b.shape.get(i): ret Empty() end
+    end
+    ma := a.shape.get(axis)
+    mb := b.shape.get(axis)
+    outer := _outer_of(a, axis)
+    inner := _inner_of(a, axis)
+    mut oshape := _copy_shape(a.shape)
+    oshape.set(axis, ma + mb)
+    t := _raw(oshape)
+    oshape.free()
+    p := t.data.data
+    qa := a.data.data
+    qb := b.data.data
+    blocka := ma * inner
+    blockb := mb * inner
+    ostride := blocka + blockb
+    repeat outer with o:
+        dbase := o * ostride
+        abase := o * blocka
+        repeat blocka with k: p[dbase + k] = qa[abase + k] end
+        bbase := o * blockb
+        repeat blockb with k: p[dbase + blocka + k] = qb[bbase + k] end
+    end
+    ret t
+end
+
+// Two same-shape tensors stacked along a new leading axis: [s...] twice
+// becomes [2, s...].
+@en "Stack2"
+@fa "انباشت دو"
+@ar "تكديس اثنين"
+pub func Stack2(a &: Tensor, b &: Tensor): Tensor:
+    if a.same_shape(b) == false || a.rank() == 0: ret Empty() end
+    mut oshape := Vector {} as Vector<int>
+    oshape.push(2)
+    repeat a.rank() with i: oshape.push(a.shape.get(i)) end
+    t := _raw(oshape)
+    oshape.free()
+    n := a.numel()
+    p := t.data.data
+    qa := a.data.data
+    qb := b.data.data
+    repeat n with k: p[k] = qa[k] end
+    repeat n with k: p[n + k] = qb[k] end
+    ret t
+end
+
+// Zero padding of the last two dimensions - the NCHW convolution's halo.
+// pt/pb rows above and below, pl/pr columns left and right.
+@en "Pad2D"
+@fa "لایه‌گذاری دوبعدی"
+@ar "حشو ثنائي"
+pub func Pad2D(x &: Tensor, pt: int, pb: int, pl: int, pr: int): Tensor:
+    r := x.rank()
+    if r < 2 || pt < 0 || pb < 0 || pl < 0 || pr < 0: ret Empty() end
+    h := x.shape.get(r - 2)
+    w := x.shape.get(r - 1)
+    oh := h + pt + pb
+    ow := w + pl + pr
+    mut oshape := _copy_shape(x.shape)
+    oshape.set(r - 2, oh)
+    oshape.set(r - 1, ow)
+    t := Zeros(oshape)
+    oshape.free()
+    planes := x.numel() / (h * w)
+    p := t.data.data
+    q := x.data.data
+    repeat planes with c:
+        splane := c * h * w
+        dplane := c * oh * ow
+        repeat h with i:
+            sbase := splane + i * w
+            dbase := dplane + (i + pt) * ow + pl
+            repeat w with k: p[dbase + k] = q[sbase + k] end
+        end
+    end
+    ret t
+end

@@ -1,0 +1,236 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package graph
+
+import str
+import conv
+
+// Reading and writing graphs: edge lists, adjacency lists, DOT, Mermaid and
+// JSON.
+//
+// Everything writes to a str and parses from a str, with no file handling,
+// so the same routines work for a file, an HTTP body, a test fixture or a
+// log line. Node names are used when a node has one and the id otherwise.
+//
+// The edge list format is the interchange format for this library: one edge
+// per line, "u v" or "u v weight", "#" comments and blank lines ignored. It
+// is what most public graph datasets ship as.
+
+func _label(g &: Graph, u: int): str:
+    s := g.name(u)
+    if str.Len(s) > 0: ret s end
+    ret conv.FormatInt(u as i64)
+end
+
+func _quote(s: str): str: ret "\"" + s + "\"" end
+
+func _weight_text(w: f64): str: ret conv.FormatFloat(w) end
+
+func _arrow(g &: Graph): str:
+    if g.directed: ret " -> " end
+    ret " -- "
+end
+
+func _is_blank(line: str): bool:
+    t := str.Trim(line)
+    if str.Len(t) == 0: ret true end
+    ret str.StartsWith(t, "#")
+end
+
+func _parse_line(g &: Graph, line: str):
+    if _is_blank(line): ret end
+    mut parts := str.Fields(str.Trim(line))
+    defer parts.free()
+    if parts.len() < 2: ret end
+    u := str.ToInt(parts.get(0)) as int
+    v := str.ToInt(parts.get(1)) as int
+    if parts.len() >= 3: g.add_weighted(u, v, str.ToFloat(parts.get(2)))
+    else: g.add_edge(u, v)
+    end
+end
+
+func _max_node(text: str): int:
+    mut best := 0
+    mut lines := str.Split(text, "\n")
+    defer lines.free()
+    repeat lines.len() with i:
+        if _is_blank(lines.get(i)) == false:
+            mut parts := str.Fields(str.Trim(lines.get(i)))
+            repeat parts.len() with k:
+                if k < 2:
+                    v := str.ToInt(parts.get(k)) as int
+                    if v > best: best = v end
+                end
+            end
+            parts.free()
+        end
+    end
+    ret best
+end
+
+func _json_links(g &: Graph): str:
+    mut out := ""
+    repeat g.size() with e:
+        if e > 0: out = out + "," end
+        out = out + "{\"source\":" + conv.FormatInt(g.edge_from(e) as i64)
+        out = out + ",\"target\":" + conv.FormatInt(g.edge_to(e) as i64)
+        out = out + ",\"weight\":" + _weight_text(g.edge_weight(e)) + "}"
+    end
+    ret out
+end
+
+// One line per edge: the format most graph datasets are published in, and
+// the one FromEdgeList reads back.
+@en "ToEdgeList"
+@fa "به فهرست یال"
+@ar "إلى قائمة الأضلاع"
+pub func ToEdgeList(g &: Graph): str:
+    mut out := ""
+    repeat g.size() with e:
+        out = out + conv.FormatInt(g.edge_from(e) as i64) + " " + conv.FormatInt(g.edge_to(e) as i64)
+        out = out + " " + _weight_text(g.edge_weight(e)) + "\n"
+    end
+    ret out
+end
+
+// Parse an edge list. Blank lines and lines starting with # are skipped, a
+// third column is the weight, and the node count comes from the largest id
+// seen unless `n` is bigger.
+@en "FromEdgeList"
+@fa "از فهرست یال"
+@ar "من قائمة الأضلاع"
+pub func FromEdgeList(text: str, n: int, directed: bool): Graph:
+    mut want := _max_node(text) + 1
+    if n > want: want = n end
+    mut g := New(want, directed)
+    mut lines := str.Split(text, "\n")
+    defer lines.free()
+    repeat lines.len() with i: _parse_line(g, lines.get(i)) end
+    ret g
+end
+
+// One line per node: "u: v w x", the human-readable form.
+@en "ToAdjacencyList"
+@fa "به فهرست مجاورت"
+@ar "إلى قائمة الجوار"
+pub func ToAdjacencyList(g &: Graph): str:
+    mut out := ""
+    repeat g.n with u:
+        out = out + _label(g, u) + ":"
+        mut k := g.adj_start(u)
+        stop := g.adj_stop(u)
+        until k < stop:
+            out = out + " " + _label(g, g.adj_node(k))
+            k += 1
+        end
+        out = out + "\n"
+    end
+    ret out
+end
+
+// The adjacency matrix as text, one row per line. Only sensible for small
+// graphs, and exactly what you want when checking one by eye.
+@en "ToMatrixText"
+@fa "به متن ماتریس"
+@ar "إلى نص المصفوفة"
+pub func ToMatrixText(g &: Graph): str:
+    mut a := AdjacencyMatrix(g)
+    mut out := ""
+    repeat g.n with i:
+        repeat g.n with j:
+            if j > 0: out = out + " " end
+            out = out + conv.FormatInt(a.at(i, j) as i64)
+        end
+        out = out + "\n"
+    end
+    defer a.free()
+    ret out
+end
+
+// Graphviz DOT. Feed it to `dot -Tpng` for a drawing; weights become edge
+// labels when they are not all 1.
+@en "ToDot"
+@fa "به دات"
+@ar "إلى دوت"
+pub func ToDot(g &: Graph): str:
+    mut out := "graph G {\n"
+    if g.directed: out = "digraph G {\n" end
+    repeat g.n with u:
+        out = out + "  " + _quote(_label(g, u)) + ";\n"
+    end
+    repeat g.size() with e:
+        out = out + "  " + _quote(_label(g, g.edge_from(e))) + _arrow(g) + _quote(_label(g, g.edge_to(e)))
+        if IsClose(g.edge_weight(e), 1.0) == false:
+            out = out + " [label=" + _quote(_weight_text(g.edge_weight(e))) + "]"
+        end
+        out = out + ";\n"
+    end
+    ret out + "}\n"
+end
+
+// Mermaid flowchart syntax, which renders inline in Markdown on most sites
+// and in the Salam docs.
+@en "ToMermaid"
+@fa "به مرمید"
+@ar "إلى ميرمايد"
+pub func ToMermaid(g &: Graph): str:
+    mut out := "graph LR\n"
+    mut link := " --- "
+    if g.directed: link = " --> " end
+    repeat g.size() with e:
+        out = out + "  " + _label(g, g.edge_from(e)) + link + _label(g, g.edge_to(e)) + "\n"
+    end
+    ret out
+end
+
+// A JSON document with a nodes array and a links array, the shape D3 and
+// most JavaScript graph libraries expect.
+@en "ToJSON"
+@fa "به جیسون"
+@ar "إلى جيسون"
+pub func ToJSON(g &: Graph): str:
+    mut out := "{\"directed\":"
+    if g.directed: out = out + "true"
+    else: out = out + "false"
+    end
+    out = out + ",\"nodes\":["
+    repeat g.n with u:
+        if u > 0: out = out + "," end
+        out = out + "{\"id\":" + conv.FormatInt(u as i64) + ",\"name\":" + _quote(_label(g, u)) + "}"
+    end
+    out = out + "],\"links\":["
+    out = out + _json_links(g)
+    ret out + "]}"
+end
+
+// A one-line summary: order, size, and the properties that are cheap to
+// check. What you print when a graph surprises you.
+@en "Describe"
+@fa "توصیف"
+@ar "وصف"
+pub func Describe(g &: Graph): str:
+    mut out := "n=" + conv.FormatInt(g.n as i64) + " m=" + conv.FormatInt(g.size() as i64)
+    if g.directed: out = out + " directed"
+    else: out = out + " undirected"
+    end
+    out = out + " components=" + conv.FormatInt(ComponentCount(g) as i64)
+    if IsSimple(g): out = out + " simple" end
+    if Bipartite(g): out = out + " bipartite" end
+    if IsTree(g): out = out + " tree" end
+    if g.directed:
+        if IsDAG(g): out = out + " dag" end
+    end
+    ret out
+end

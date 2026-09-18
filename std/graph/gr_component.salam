@@ -1,0 +1,188 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package graph
+
+// What traversal answers once it has run everywhere: connected components,
+// bipartiteness, topological order and cycles.
+//
+// These share the walks in gr_traverse.salam and differ only in what they
+// accumulate, which is why they sit next to it rather than inside it.
+//
+// Connectivity here is the undirected notion, so a digraph is read through
+// its underlying undirected graph (weak connectivity); StronglyConnected in
+// gr_connect.salam is the directed one. Topological order and IsDAG are the
+// opposite: they are meaningless on an undirected graph and say so by
+// returning false rather than by guessing.
+
+// Connected components of the underlying undirected graph. `comp` gets a
+// component id per node, and the count comes back.
+@en "Components"
+@fa "مؤلفه‌ها"
+@ar "مكونات"
+pub func Components(g &: Graph, comp &: Vector<int>): int:
+    FillInt(comp, g.n, GRAPH_NONE)
+    mut id := 0
+    repeat g.n with u:
+        if comp.get(u) == GRAPH_NONE:
+            _comp_bfs(g, u, id, comp)
+            id += 1
+        end
+    end
+    ret id
+end
+
+@en "ComponentCount"
+@fa "شمار مؤلفه"
+@ar "عدد المكونات"
+pub func ComponentCount(g &: Graph): int:
+    mut comp := Vector {} as Vector<int>
+    defer comp.free()
+    ret Components(g, comp)
+end
+
+@en "ComponentSizes"
+@fa "اندازه مؤلفه‌ها"
+@ar "أحجام المكونات"
+pub func ComponentSizes(g &: Graph): Vector<int>:
+    mut comp := Vector {} as Vector<int>
+    defer comp.free()
+    c := Components(g, comp)
+    mut out := Vector {} as Vector<int>
+    FillInt(out, c, 0)
+    repeat g.n with u:
+        i := comp.get(u)
+        out.set(i, out.get(i) + 1)
+    end
+    ret out
+end
+
+@en "IsConnected"
+@fa "همبند است"
+@ar "متصل"
+pub func IsConnected(g &: Graph): bool:
+    if g.n == 0: ret true end
+    ret ComponentCount(g) == 1
+end
+
+// Two-colour the graph, GRAPH_NONE meaning an isolated node was never
+// reached. False as soon as an edge joins two nodes of the same colour, which
+// is exactly an odd cycle.
+@en "IsBipartite"
+@fa "دوبخشی است"
+@ar "ثنائي التجزئة"
+pub func IsBipartite(g &: Graph, color &: Vector<int>): bool:
+    FillInt(color, g.n, GRAPH_NONE)
+    if g.directed == false: ret _bipartite_all(g, color, g.n) end
+    mut u := ToUndirected(g)
+    ok := _bipartite_all(u, color, g.n)
+    defer u.free()
+    ret ok
+end
+
+@en "Bipartite"
+@fa "دوبخشی"
+@ar "ثنائي"
+pub func Bipartite(g &: Graph): bool:
+    mut color := Vector {} as Vector<int>
+    defer color.free()
+    ret IsBipartite(g, color)
+end
+
+// Kahn's algorithm. True with a valid order in `order`, false when a directed
+// cycle makes one impossible (the partial order is still there).
+@en "TopologicalSort"
+@fa "مرتب‌سازی توپولوژیک"
+@ar "ترتيب طوبولوجي"
+pub func TopologicalSort(g &: Graph, order &: Vector<int>): bool:
+    order.clear()
+    mut deg := Vector {} as Vector<int>
+    defer deg.free()
+    _indegrees(g, deg)
+    mut q := Vector {} as Vector<int>
+    defer q.free()
+    repeat g.n with u:
+        if deg.get(u) == 0: q.push(u) end
+    end
+    mut head := 0
+    until head < q.len():
+        u := q.get(head)
+        head += 1
+        order.push(u)
+        _relax_indegree(g, u, deg, q)
+    end
+    ret order.len() == g.n
+end
+
+// The topological order that is smallest in lexicographic order, produced by
+// always taking the lowest available id instead of any available id. Useful
+// when a build or schedule has to be reproducible.
+@en "TopologicalSortLex"
+@fa "مرتب‌سازی توپولوژیک الفبایی"
+@ar "ترتيب طوبولوجي معجمي"
+pub func TopologicalSortLex(g &: Graph, order &: Vector<int>): bool:
+    order.clear()
+    mut deg := Vector {} as Vector<int>
+    defer deg.free()
+    _indegrees(g, deg)
+    mut h := MinHeap { }
+    defer h.free()
+    repeat g.n with u:
+        if deg.get(u) == 0: h.push(u as f64, u) end
+    end
+    until h.is_empty() == false:
+        u := h.pop()
+        order.push(u)
+        _relax_indegree_heap(g, u, deg, h)
+    end
+    ret order.len() == g.n
+end
+
+@en "IsDAG"
+@fa "گراف جهت‌دار بی‌دور است"
+@ar "بيان موجه بلا دورات"
+pub func IsDAG(g &: Graph): bool:
+    if g.directed == false: ret false end
+    mut order := Vector {} as Vector<int>
+    defer order.free()
+    ret TopologicalSort(g, order)
+end
+
+// A cycle as a node sequence, empty when the graph is acyclic. Directed
+// graphs look for a directed cycle; undirected graphs count a self loop or a
+// pair of parallel edges as a cycle, as they should.
+@en "FindCycle"
+@fa "یافتن دور"
+@ar "إيجاد دورة"
+pub func FindCycle(g &: Graph): Vector<int>:
+    mut out := Vector {} as Vector<int>
+    mut state := Vector {} as Vector<int>
+    defer state.free()
+    FillInt(state, g.n, 0)
+    repeat g.n with u:
+        if state.get(u) == 0:
+            if _find_cycle_from(g, u, state, out): ret out end
+        end
+    end
+    ret out
+end
+
+@en "HasCycle"
+@fa "دارای دور"
+@ar "به دورة"
+pub func HasCycle(g &: Graph): bool:
+    mut c := FindCycle(g)
+    defer c.free()
+    ret c.len() > 0
+end

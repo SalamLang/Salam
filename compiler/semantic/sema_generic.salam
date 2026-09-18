@@ -57,34 +57,55 @@ func g_subst(a &: at.Ast, nid: int, params: Vector<str>, args: Vector<int>):
     g_subst(a, n.c, params, args)
     g_subst(a, n.d, params, args)
     repeat n.list.len() with i:
-        g_subst(a, n.list.get(i)[0], params, args)
+        g_subst(a, n.list.get(i), params, args)
     end
     repeat n.dims.len() with i2:
-        g_subst(a, n.dims.get(i2)[0], params, args)
+        g_subst(a, n.dims.get(i2), params, args)
     end
     if n.kind == at.AST_TYPE && str.Len(n.name) > 0:
         repeat params.len() with pi:
-            if !str.Equals(n.name, params.get(pi)[0]):
+            if !str.Equals(n.name, params.get(pi)):
                 continue
             end
-            ccid := at.Clone(a, args.get(pi)[0])
+            ccid := at.Clone(a, args.get(pi))
             cc := at.Get(a, ccid)
             mut nv := at.Get(a, nid)
-            ptr := nv.is_pointer || cc.is_pointer
+            // Stars ACCUMULATE. `T*` instantiated with T = `Edge*` is
+            // Edge**, not Edge*: OR-ing the two booleans used to collapse
+            // every pointer-of-pointer to one level.
+            cc_depth := cc.ptr_depth != 0 ? cc.ptr_depth : (cc.is_pointer ? 1 : 0)
+            n_depth := nv.ptr_depth != 0 ? nv.ptr_depth : (nv.is_pointer ? 1 : 0)
+            depth := n_depth + cc_depth
             nv.name = cc.name
             nv.list.free()
             nv.list = Vector {} as Vector<int>
             repeat cc.list.len() with k:
-                nv.list.push(cc.list.get(k)[0])
+                nv.list.push(cc.list.get(k))
             end
-            nv.is_pointer = ptr
+            nv.ptr_depth = depth
+            nv.is_pointer = depth > 0
+            nv.elem_ptr_depth += cc.elem_ptr_depth
             nv.is_dyn = cc.is_dyn
+            // The resolved type comes along whole only where the occurrence
+            // is the bare parameter. `T*` or `T[4]` stands for a different
+            // type than what the caller resolved, so only the base travels and
+            // sema_resolve_type re-applies the `*`/`[N]` - going back through
+            // the name would fail for any argument the template's own package
+            // cannot see (`Vector<Row>` over a struct from another package:
+            // "unknown type 'cmod_Row'"). The base is only usable when the
+            // argument node is itself undecorated; `T[4]` with T = `Foo[3]`
+            // has to merge dims, and cc.sema_type is the whole array there.
+            if n_depth == 0 && nv.dims.len() == 0 && nv.elem_ptr_depth == 0:
+                nv.sema_type = cc.sema_type
+            else cc_depth == 0 && cc.dims.len() == 0 && cc.elem_ptr_depth == 0:
+                nv.sema_base_type = cc.sema_type
+            end
             mut merged := Vector {} as Vector<int>
             repeat cc.dims.len() with k2:
-                merged.push(cc.dims.get(k2)[0])
+                merged.push(cc.dims.get(k2))
             end
             repeat nv.dims.len() with k3:
-                merged.push(nv.dims.get(k3)[0])
+                merged.push(nv.dims.get(k3))
             end
             nv.dims.free()
             nv.dims = merged
@@ -99,13 +120,28 @@ end
 func g_instance_name(s &: Sema, base: str, argtypes: Vector<int>): str:
     mut out := base
     repeat argtypes.len() with i:
-        out = out + "_" + g_sanitize(type_to_string(s, argtypes.get(i)[0]))
+        out = out + "_" + g_sanitize(type_to_string(s, argtypes.get(i)))
     end
     ret out
 end
 
 // g_type_to_ast - synthesizes an AST_TYPE node describing `t`.
+// The name is kept for diagnostics and for the instance's mangled name, but
+// the resolved type travels with the node: the template is checked inside the
+// package that declared it, and that scope cannot see a struct the caller
+// declared. Without this a stdlib generic could only ever be instantiated with
+// a built-in type.
 func g_type_to_ast(s &: Sema, a &: at.Ast, t: int, sp: co.SrcSpan): int:
+    nid := g_type_to_ast_bare(s, a, t, sp)
+    if t >= 0:
+        mut nv := at.Get(a, nid)
+        nv.sema_type = t
+        at.Put(a, nid, nv)
+    end
+    ret nid
+end
+
+func g_type_to_ast_bare(s &: Sema, a &: at.Ast, t: int, sp: co.SrcSpan): int:
     nid := new_node_at(a, at.AST_TYPE, sp)
     mut nv := at.Get(a, nid)
     nv.synthetic = true
@@ -118,6 +154,7 @@ func g_type_to_ast(s &: Sema, a &: at.Ast, t: int, sp: co.SrcSpan): int:
     if v.kind == TY_PTR && v.pointee >= 0:
         p := g_type_to_ast(s, a, v.pointee, sp)
         mut pv := at.Get(a, p)
+        pv.ptr_depth += 1
         pv.is_pointer = true
         at.Put(a, p, pv)
         ret p
@@ -142,18 +179,24 @@ end
 func iface_satisfied(
     s &: Sema, _a &: at.Ast, concrete: int, iface_name: str, tparam: str, sp: co.SrcSpan
 ): bool:
-    iface := scope_lookup(s, s.global, iface_name)
-    mut iface_ok := iface != 0
-    if iface_ok && sym_at(s, iface).kind != SYM_INTERFACE:
-        iface_ok = false
-    end
-    if !iface_ok:
-        serr(
-            s, 1, sp, co.Format2(
-                i18.Tr("bound '%s' on type parameter '%s' is not an interface"), co.ArgStr(iface_name),
-                co.ArgStr(tparam)
+    mut why := ""
+    iface := sema_lookup_iface(s, _a, iface_name, sp, why)
+    if iface == 0:
+        if str.Len(why) > 0:
+            serr(
+                s, 1, sp, co.Format3(
+                    i18.Tr("bound '%s' on type parameter '%s': %s"), co.ArgStr(iface_name),
+                    co.ArgStr(tparam), co.ArgStr(why)
+                )
             )
-        )
+        else:
+            serr(
+                s, 1, sp, co.Format2(
+                    i18.Tr("bound '%s' on type parameter '%s' is not an interface"), co.ArgStr(iface_name),
+                    co.ArgStr(tparam)
+                )
+            )
+        end
         ret false
     end
     mut members := 0
@@ -179,11 +222,11 @@ func iface_satisfied(
     mut all_ok := true
     ifm := scope_at(s, sym_at(s, iface).members)
     repeat ifm.symbols.len() with i:
-        im := sym_at(s, ifm.symbols.get(i)[0])
+        im := sym_at(s, ifm.symbols.get(i))
         if im.kind != SYM_METHOD || im.overloads.len() == 0:
             continue
         end
-        want := sig_at(s, im.overloads.get(0)[0])
+        want := sig_at(s, im.overloads.get(0))
         smx := scope_lookup_local(s, members, im.name)
         mut have_m := smx != 0
         if have_m && sym_at(s, smx).kind != SYM_METHOD:
@@ -202,13 +245,13 @@ func iface_satisfied(
         smv := sym_at(s, smx)
         mut sig_ok := false
         repeat smv.overloads.len() with k:
-            have := sig_at(s, smv.overloads.get(k)[0])
+            have := sig_at(s, smv.overloads.get(k))
             if have.params.len() != want.params.len():
                 continue
             end
             mut pm := true
             repeat want.params.len() with p:
-                if !type_equiv(s, have.params.get(p)[0], want.params.get(p)[0]):
+                if !type_equiv(s, have.params.get(p), want.params.get(p)):
                     pm = false
                     break
                 end
@@ -242,7 +285,7 @@ func g_check_bounds(
         bound := at.TyparamBound(a, tmpl, i)
         if str.Len(bound) > 0:
             _ok := iface_satisfied(
-                s, a, argtypes.get(i)[0], bound, at.Typaram(a, tmpl, i), sp
+                s, a, argtypes.get(i), bound, at.Typaram(a, tmpl, i), sp
             )
         end
     end
@@ -294,10 +337,10 @@ func coerce_args_to_dyn(
     sg := sig_at(s, sigid)
     mut i := 0
     until i < at.ChildCount(a, call) && i < sg.params.len() && i < argtypes.len():
-        pt := sg.params.get(i)[0]
+        pt := sg.params.get(i)
         if pt >= 0 && ty_at(s, pt).kind == TY_DYN:
             arg := at.Child(a, call, i)
-            nb := coerce_to_dyn(s, a, pt, arg, argtypes.get(i)[0])
+            nb := coerce_to_dyn(s, a, pt, arg, argtypes.get(i))
             mut cn := at.Get(a, call)
             cn.list.set(i, nb)
             at.Put(a, call, cn)
@@ -315,8 +358,8 @@ func coerce_args_to_variant(
     sg := sig_at(s, sigid)
     mut i := 0
     until i < at.ChildCount(a, call) && i < sg.params.len() && i < argtypes.len():
-        pt := sg.params.get(i)[0]
-        att := argtypes.get(i)[0]
+        pt := sg.params.get(i)
+        att := argtypes.get(i)
         if pt >= 0 && ty_at(s, pt).kind == TY_VARIANT && att >= 0 && ty_at(s, att).kind != TY_VARIANT:
             tag := type_variant_tag(s, pt, att)
             if tag >= 0:
@@ -348,7 +391,7 @@ func g_instantiate_func(
     mut argtypes := Vector {} as Vector<int>
     defer argtypes.free()
     repeat targ_nodes.len() with i:
-        argtypes.push(sema_resolve_type(s, a, targ_nodes.get(i)[0]))
+        argtypes.push(sema_resolve_type(s, a, targ_nodes.get(i)))
     end
     iname := g_instance_name(s, tn.name, argtypes)
     existing := scope_lookup_local(s, s.global, iname)
@@ -364,6 +407,9 @@ func g_instantiate_func(
     mut iv := at.Get(a, inst)
     iv.name = iname
     iv.synthetic = true
+    // The clone is checked against the declaring package's scope, so its body
+    // may name that package's private functions. See at.Node.home_pkg.
+    iv.home_pkg = derive_pkg_name_of(s, s.gen_pkg != 0 ? s.gen_pkg : s.global)
     at.Put(a, inst, iv)
     g_subst(a, inst, tn.typarams, targ_nodes)
     mut iv2 := at.Get(a, inst)
@@ -407,15 +453,15 @@ func g_unify(s &: Sema, a &: at.Ast, pty: int, att: int, tname: str): int:
         ret att
     end
     if str.Equals(pn, "Vector") && v.kind == TY_VEC && p.list.len() >= 1:
-        ret g_unify(s, a, p.list.get(0)[0], v.elem, tname)
+        ret g_unify(s, a, p.list.get(0), v.elem, tname)
     end
     if str.Equals(pn, "HashMap") && v.kind == TY_MAP:
         mut u := TYPE_NONE
         if p.list.len() >= 1:
-            u = g_unify(s, a, p.list.get(0)[0], v.key, tname)
+            u = g_unify(s, a, p.list.get(0), v.key, tname)
         end
         if u < 0 && p.list.len() >= 2:
-            u = g_unify(s, a, p.list.get(1)[0], v.elem, tname)
+            u = g_unify(s, a, p.list.get(1), v.elem, tname)
         end
         ret u
     end
@@ -428,7 +474,7 @@ func g_unify(s &: Sema, a &: at.Ast, pty: int, att: int, tname: str): int:
             end
             repeat k with i:
                 u2 := g_unify(
-                    s, a, p.list.get(i)[0], isym.generic_args.get(i)[0], tname
+                    s, a, p.list.get(i), isym.generic_args.get(i), tname
                 )
                 if u2 >= 0:
                     ret u2
@@ -458,7 +504,7 @@ func g_localize_instance(s &: Sema, a &: at.Ast, t: int, sp: co.SrcSpan): int:
     tv.synthetic = true
     at.Put(a, tnid, tv)
     repeat isym.generic_args.len() with i:
-        at.AddChild(a, tnid, g_type_to_ast(s, a, isym.generic_args.get(i)[0], sp))
+        at.AddChild(a, tnid, g_type_to_ast(s, a, isym.generic_args.get(i), sp))
     end
     lt := sema_resolve_type(s, a, tnid)
     if lt >= 0 && ty_at(s, lt).kind == TY_STRUCT:
@@ -478,7 +524,7 @@ func g_infer_call(
     mut total := 0
     mut seen_default := false
     repeat tv.list.len() with i:
-        param := at.Get(a, tv.list.get(i)[0])
+        param := at.Get(a, tv.list.get(i))
         if param.kind != at.AST_PARAM:
             continue
         end
@@ -517,13 +563,13 @@ func g_infer_call(
     end
     mut targ_nodes := Vector {} as Vector<int>
     repeat tv.typarams.len() with t:
-        tpn := tv.typarams.get(t)[0]
+        tpn := tv.typarams.get(t)
         mut bound := TYPE_NONE
         mut pi := 0
         until pi < tv.list.len() && pi < argtypes.len():
-            p := at.Get(a, tv.list.get(pi)[0])
+            p := at.Get(a, tv.list.get(pi))
             if p.kind == at.AST_PARAM:
-                u := g_unify(s, a, p.ty, argtypes.get(pi)[0], tpn)
+                u := g_unify(s, a, p.ty, argtypes.get(pi), tpn)
                 if u >= 0:
                     bound = u
                     break
@@ -537,7 +583,7 @@ func g_infer_call(
         if bound < 0:
             mut pi2 := argtypes.len()
             until pi2 < tv.list.len():
-                p2 := at.Get(a, tv.list.get(pi2)[0])
+                p2 := at.Get(a, tv.list.get(pi2))
                 if p2.kind == at.AST_PARAM && p2.a != 0 && p2.ty != 0 && str.Equals(at.Get(a, p2.ty).name, tpn):
                     bound = sema_check_expr(s, a, p2.a)
                     if bound >= 0:

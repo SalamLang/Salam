@@ -64,6 +64,35 @@ func run_fixture(quiet: lg.Logger, stem: str, src_text: str): lv.Output:
     ret o
 end
 
+// run_fixture for a named target. A freestanding triple changes what the
+// emitter may call, so the fixture has to be compiled as that target rather
+// than as the host.
+func run_fixture_for(
+    quiet: lg.Logger, stem: str, src_text: str, triple: str
+): lv.Output:
+    fixture := "compiler/tests_port/tmp_lv/" + stem + ".salam"
+    _w := os.WriteFile(fixture, src_text)
+    mut sf := src.New()
+    testing.AssertMsg(src.Load(fixture, sf), "src.Load failed for " + stem)
+    pack := lx.Detect(sf, lp.Load("en"))
+    mut toks := tok.StreamNew(fixture)
+    _lok := lx.Run(quiet, pack, sf, toks)
+    mut a2 := at.NewAst()
+    mut prog := 0
+    _pok := ps.Run(quiet, toks, a2, prog)
+    tok.StreamFree(toks)
+    mut s2 := sm.New(quiet, fixture, lp.Code(pack))
+    sm.SetCc(s2, cc.TableBuild(triple, Vector {} as Vector<str>))
+    _ck := cc.PruneProgram(a2, quiet, fixture, s2.cctab, prog)
+    sok := sm.Run(s2, a2, prog)
+    testing.AssertMsg(sok, "sema failed for " + stem)
+    mut opts := lv.OptionsDefault()
+    opts.target_triple = triple
+    o := lv.RunOpts(quiet, s2, a2, prog, stem, lp.Entry(pack), opts, fixture)
+    _rm := os.Remove(fixture)
+    ret o
+end
+
 // Shell-quote exactly the way the link-script generator does. SbPutShellArg
 // spells a quoted argument "x" on Windows and 'x' on POSIX, so pinning the
 // link-script expectations to either form makes them fail on the other host,
@@ -80,6 +109,10 @@ end
 
 func main:
     quiet := lg.New(lg.LOG_OFF, false)
+    mut a := at.NewAst()
+    defer at.FreeAst(a)
+    mut s := sm.New(quiet, "t.salam", "en")
+    defer sm.Free(s)
 
     // --- ll_target_ptr_bits / ll_target_is_windows / ll_datalayout ---
     testing.AssertEqInt(lv.TargetPtrBits("x86_64-pc-linux-gnu"), 64)
@@ -87,6 +120,12 @@ func main:
     testing.AssertEqInt(lv.TargetPtrBits("aarch64-apple-darwin"), 64)
     testing.AssertEqInt(lv.TargetPtrBits("wasm32-wasi"), 32)
     testing.AssertEqInt(lv.TargetPtrBits("riscv64-unknown-linux"), 64)
+
+    testing.AssertFalse(lv.TargetIsFreestanding(""))
+    testing.AssertFalse(lv.TargetIsFreestanding("x86_64-pc-linux-gnu"))
+    testing.AssertTrue(lv.TargetIsFreestanding("x86_64-unknown-salamos"))
+    testing.AssertTrue(lv.TargetIsFreestanding("x86_64-unknown-bsos"))
+    testing.AssertTrue(lv.TargetIsFreestanding("x86_64-unknown-uefi"))
 
     testing.AssertTrue(lv.TargetIsWindows("x86_64-pc-windows-msvc"))
     testing.AssertTrue(lv.TargetIsWindows("x86_64-w64-mingw32"))
@@ -139,19 +178,19 @@ func main:
     mut fp := lv.FuncParamsOf("func(i32, f64) bool")
     defer fp.free()
     testing.AssertEqInt(fp.len(), 2)
-    testing.AssertEqStr(fp.get(0)[0], "i32")
-    testing.AssertEqStr(fp.get(1)[0], "f64")
+    testing.AssertEqStr(fp.get(0), "i32")
+    testing.AssertEqStr(fp.get(1), "f64")
     mut fp0 := lv.FuncParamsOf("func() void")
     defer fp0.free()
     testing.AssertEqInt(fp0.len(), 0)
 
     // --- ll_zero ---
-    testing.AssertEqStr(lv.ZeroOf("str"), "null")
-    testing.AssertEqStr(lv.ZeroOf("i32*"), "null")
-    testing.AssertEqStr(lv.ZeroOf("bool"), "false")
-    testing.AssertEqStr(lv.ZeroOf("f64"), "0.0")
-    testing.AssertEqStr(lv.ZeroOf("i32"), "0")
-    testing.AssertEqStr(lv.ZeroOf("SomeStruct"), "zeroinitializer")
+    testing.AssertEqStr(lv.ZeroOf(s, "str"), "null")
+    testing.AssertEqStr(lv.ZeroOf(s, "i32*"), "null")
+    testing.AssertEqStr(lv.ZeroOf(s, "bool"), "false")
+    testing.AssertEqStr(lv.ZeroOf(s, "f64"), "0.0")
+    testing.AssertEqStr(lv.ZeroOf(s, "i32"), "0")
+    testing.AssertEqStr(lv.ZeroOf(s, "SomeStruct"), "zeroinitializer")
 
     // --- ll_is_int / ll_is_signed ---
     testing.AssertTrue(lv.IsIntTs("u64"))
@@ -165,9 +204,9 @@ func main:
     mut vm := lv.VariantMembersOf("Variant<i32, f64, str>")
     defer vm.free()
     testing.AssertEqInt(vm.len(), 3)
-    testing.AssertEqStr(vm.get(0)[0], "i32")
-    testing.AssertEqStr(vm.get(1)[0], "f64")
-    testing.AssertEqStr(vm.get(2)[0], "str")
+    testing.AssertEqStr(vm.get(0), "i32")
+    testing.AssertEqStr(vm.get(1), "f64")
+    testing.AssertEqStr(vm.get(2), "str")
     testing.AssertEqStr(
         lv.VariantCnameOf("Variant<i32, f64, str>"), "%_Salam_variant_i32_f64_str"
     )
@@ -177,11 +216,6 @@ func main:
     )
 
     // --- module + fn state, ll_new_tmp / ll_new_lbl / ll_strconst ---
-    mut a := at.NewAst()
-    defer at.FreeAst(a)
-    mut s := sm.New(quiet, "t.salam", "en")
-    defer sm.Free(s)
-
     mut v := lv.NewLv(quiet, "t", "main", "")
     testing.AssertEqInt(v.ptr_bits, 64)
     testing.AssertEqStr(v.usize, "i64")
@@ -245,7 +279,7 @@ func main:
     testing.AssertEqStr(lv.MangleOf(v, s, "", "helper", 0), "salam_helper")
 
     // --- ll_zero / ll_array_elem round trip for globals-style init text ---
-    testing.AssertEqStr(lv.ZeroOf(lv.ArrayElemOf("i32[3]")), "0")
+    testing.AssertEqStr(lv.ZeroOf(s, lv.ArrayElemOf("i32[3]")), "0")
 
     lv.FreeLv(v)
 
@@ -319,8 +353,12 @@ func main:
     testing.AssertContains(o1.ll_src, "= add i32 ")
     testing.AssertContains(o1.ll_src, "= sub i32 ")
     testing.AssertContains(o1.ll_src, "= mul i32 ")
-    testing.AssertMsg(str.IndexOf(o1.ll_src, "nsw") < 0, "b_bit1 emitted nsw")
-    testing.AssertMsg(str.IndexOf(o1.ll_src, "nuw") < 0, "b_bit1 emitted nuw")
+    // Matched with the surrounding spaces the flags always carry ("add nuw
+    // i32 ..."). A bare substring search also hits any identifier that
+    // happens to contain the letters - the stdlib's @g.ScriptSunuwar global
+    // made this assertion fail on IR that emits no flag at all.
+    testing.AssertMsg(str.IndexOf(o1.ll_src, " nsw ") < 0, "b_bit1 emitted nsw")
+    testing.AssertMsg(str.IndexOf(o1.ll_src, " nuw ") < 0, "b_bit1 emitted nuw")
     testing.AssertContains(o1.ll_src, "= sdiv i32 ")
     testing.AssertContains(o1.ll_src, "= srem i32 ")
     testing.AssertContains(o1.ll_src, "= and i32 ")
@@ -375,7 +413,7 @@ func main:
     testing.AssertContains(o5.ll_src, "alloca i64")
 
     // --- struct field GEP + array index GEP ---
-    src6 := "struct Point:\n" + "    pub x: int = 0\n" + "    pub y: int = 0\n" + "end\n" + "func main:\n" + "    mut p := Point { x = 3, y = 4 }\n" + "    p.x = p.x + 1\n" + "    println p.x + p.y\n" + "    arr := [1, 2, 3] as int[3]\n" + "    println arr[1]\n" + "end\n"
+    src6 := "struct Point:\n" + "    pub x: int = 0\n" + "    pub y: int = 0\n" + "end\n" + "func main:\n" + "    mut p := Point { x = 3, y = 4 }\n" + "    p.x = p.x + 1\n" + "    println p.x + p.y\n" + "    arr := [1, 2, 3]\n" + "    println arr[1]\n" + "end\n"
     o6 := run_fixture(quiet, "b_struct1", src6)
     testing.AssertMsg(o6.ok, "b_struct1.ok false: " + o6.error)
     testing.AssertContains(o6.ll_src, "%struct.Point = type { i32, i32 }")
@@ -436,6 +474,22 @@ func main:
     o12 := run_fixture(quiet, "b_defer1", src12)
     testing.AssertMsg(o12.ok, "b_defer1.ok false: " + o12.error)
     testing.AssertContains(o12.ll_src, "= add i32 ")
+
+    // --- a local whose name shadows a package's is a method receiver, not
+    // a package-qualified call. std/core imports std/map, so `package map`
+    // sits in every program's symbol table whether or not the file names it;
+    // `mut map := Vector {} as Vector<int>` then made map.push() resolve to
+    // that package and the build died with "package function 'push' not
+    // found" (#1545). Asserting on the emitted receiver call is what keeps
+    // this from silently coming back: the fix is a type gate in
+    // llvm_call_kinds.salam, and nothing else here would notice it going.
+    src13 := "func main:\n" + "    mut map := Vector {} as Vector<int>\n" + "    map.push(7)\n" + "    println map.len()\n" + "    map.free()\n" + "end\n"
+    o13 := run_fixture(quiet, "b_shadow1", src13)
+    testing.AssertMsg(o13.ok, "b_shadow1.ok false: " + o13.error)
+    testing.AssertContains(
+        o13.ll_src, "call void @salam_Vector__i32_push_i32(ptr "
+    )
+    testing.AssertContains(o13.ll_src, "= call i32 @salam_Vector__i32_len(ptr ")
 
     // ===== stage C: native toolchain glue (llvm_native.c / =====
     // ===== driver/llvm_toolchain.c) =====
@@ -617,6 +671,30 @@ func main:
     testing.AssertTrue(rc_bad != 0)
     testing.AssertFalse(os.Exists(exe_bad_path))
     _rmbad := os.Remove(ll_bad_path)
+
+    // --- a freestanding target has no libc to print through ---
+    // printf/dprintf/fflush are not there, and neither is whatever the
+    // optimizer would rewrite a call into, so every emitted function says so.
+    srcf := "func main:\n" + "    n := 7\n" + "    println \"n is \", n\n" + "end\n"
+    of := run_fixture_for(quiet, "b_free1", srcf, "x86_64-unknown-salamos")
+    testing.AssertMsg(of.ok, "b_free1.ok false: " + of.error)
+    testing.AssertContains(of.ll_src, "\"no-builtins\"")
+    testing.AssertContains(of.ll_src, "@salam_out_write(ptr ")
+    testing.AssertMsg(
+        str.IndexOf(of.ll_src, "call i32 (ptr, ...) @printf") < 0, "b_free1 printed through printf"
+    )
+    testing.AssertMsg(
+        str.IndexOf(of.ll_src, "@fflush(ptr null)") < 0, "b_free1 flushed a stdio stream"
+    )
+
+    // The same program for the host still goes through printf, so the change
+    // above is the freestanding path and nothing else.
+    oh := run_fixture_for(quiet, "b_host1", srcf, "x86_64-pc-linux-gnu")
+    testing.AssertMsg(oh.ok, "b_host1.ok false: " + oh.error)
+    testing.AssertContains(oh.ll_src, "@printf(ptr ")
+    testing.AssertMsg(
+        str.IndexOf(oh.ll_src, "\"no-builtins\"") < 0, "b_host1 refused the host libc"
+    )
 
     os.Exit(testing.Summary())
 end

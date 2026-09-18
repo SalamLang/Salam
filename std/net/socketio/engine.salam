@@ -1,0 +1,559 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package socketio
+
+import net.http
+import str
+import time
+import rand
+import encoding
+import encoding.json
+
+// The Engine.IO half: the session, the transport, and the heartbeat.
+//
+// Engine.IO exists because a WebSocket is not always reachable. It opens a
+// session over plain HTTP long-polling - which goes through anything - and
+// then, if it can, moves that same session onto a WebSocket without the
+// application above noticing. This file implements both transports and the
+// switch between them; nothing above it knows which one is carrying a
+// packet.
+//
+// The heartbeat runs the other way round from what most people expect. In
+// protocol version 4 the SERVER sends the pings and the client answers; a
+// client that waits to be asked and never is has to notice the silence
+// itself, which is what `last_rx` and _heartbeat_expired are for.
+
+func _now(): i64:
+    ret time.MonoMillis()
+end
+
+func _cookie_header(m: MgrState*): str:
+    if m[0].cookies.size() == 0:
+        ret ""
+    end
+    ck := http.CookieHeader(m[0].cookies)
+    if ck.len() == 0:
+        ret ""
+    end
+    ret "Cookie: " + ck + "\r\n"
+end
+
+// The header block for an HTTP request: the caller's own headers, then the
+// session cookie.
+//
+// The caller's block is closed off if they did not: an "Authorization: x"
+// with no CRLF after it would run into the next header and produce a request
+// no server can read, which is a miserable thing to debug from the outside.
+func _headers_of(m: MgrState*): str:
+    mut own := m[0].opts.headers
+    // A block that is only whitespace is nothing: left in, its blank line
+    // would end the headers early and turn the rest of the request into a
+    // body.
+    if str.Trim(own).len() == 0:
+        own = ""
+    else !str.EndsWith(own, "\r\n"):
+        own += "\r\n"
+    end
+    ret own + _cookie_header(m)
+end
+
+func _absorb_cookies(m: MgrState*, r: http.Response):
+    mut got := http.CookieMap(r)
+    defer got.free()
+    each (k, v) in got:
+        m[0].cookies.put(k, v)
+    end
+end
+
+// The query string every request of a session carries. `t` is Engine.IO's
+// cache-buster: without it a proxy is free to answer a long-poll from its
+// cache, and the session simply stops.
+func _query_of(m: MgrState*, transport: str, sid: str): str:
+    mut q := "EIO=4&transport=" + transport
+    if sid.len() > 0:
+        q += "&sid=" + sid
+    end
+    q += "&t=" + time.NowMillis() + "-" + rand.Int32Range(0, 999999)
+    // Both halves: what was written in the URL ("http://host/chat?token=x")
+    // and what Options.query adds. The URL's own query is not decoration -
+    // it is where a credential travels when the client cannot set a header,
+    // and server middleware reads it out of the handshake.
+    mut extra := _clean_query(m[0].ep.query)
+    own := _clean_query(m[0].opts.query)
+    if own.len() > 0:
+        if extra.len() > 0:
+            extra += "&"
+        end
+        extra += own
+    end
+    if extra.len() > 0:
+        q += "&" + extra
+    end
+    ret q
+end
+
+// "/socket.io" + "/" + "?EIO=4...". The slash is what Engine.IO puts there
+// and what a server mounted the usual way expects; Options.trailing_slash
+// drops it for the ones behind a proxy that rewrites paths.
+func _mount(m: MgrState*): str:
+    // A path of "/" already ends in one; adding another would ask for "//?"
+    // and get a 404 from a server mounted at the root.
+    if m[0].opts.trailing_slash && m[0].ep.path != "/":
+        ret m[0].ep.path + "/?"
+    end
+    ret m[0].ep.path + "?"
+end
+
+// A query fragment with any leading "?" or "&" taken off, so that writing
+// Options.query as "?a=1" - which is what a caller who has just copied it out
+// of a URL will do - does not produce "&?a=1".
+func _clean_query(q: str): str:
+    mut out := str.Trim(q)
+    until str.StartsWith(out, "?") || str.StartsWith(out, "&"):
+        out = out.substr(1, out.len() - 1)
+    end
+    ret out
+end
+
+func _poll_url(m: MgrState*, sid: str): str:
+    ret Origin(m[0].ep) + _mount(m) + _query_of(m, "polling", sid)
+end
+
+func _ws_path(m: MgrState*, sid: str): str:
+    ret _mount(m) + _query_of(m, "websocket", sid)
+end
+
+// The open packet: the session id, and the two numbers the heartbeat runs on.
+func _read_open(m: MgrState*, body: str): bool:
+    if json.Get(body, "sid").len() == 0:
+        ret false
+    end
+    m[0].sid = json.Get(body, "sid")
+    if json.Has(body, "pingInterval"):
+        m[0].ping_interval = json.GetInt(body, "pingInterval")
+    end
+    if json.Has(body, "pingTimeout"):
+        m[0].ping_timeout = json.GetInt(body, "pingTimeout")
+    end
+    if json.Has(body, "maxPayload"):
+        m[0].max_payload = json.GetInt(body, "maxPayload")
+    end
+    m[0].can_upgrade = str.Contains(json.Get(body, "upgrades"), "websocket")
+    m[0].last_rx = _now()
+    ret true
+end
+
+func _ws_open(m: MgrState*, sid: str): bool:
+    path := _ws_path(m, sid)
+    hdrs := _headers_of(m)
+    if m[0].ep.secure && m[0].opts.insecure:
+        m[0].ws = websocket.DialWSSUnverified(m[0].ep.host, m[0].ep.port, path, hdrs)
+    else m[0].ep.secure:
+        m[0].ws = websocket.DialWSSWith(m[0].ep.host, m[0].ep.port, path, hdrs)
+    else:
+        m[0].ws = websocket.DialWith(m[0].ep.host, m[0].ep.port, path, hdrs)
+    end
+    if !websocket.IsOpen(m[0].ws):
+        m[0].last_error = "websocket handshake to " + Origin(m[0].ep) + " was refused"
+        ret false
+    end
+    ret true
+end
+
+// A WebSocket session opened without a prior handshake: the server sends the
+// open packet as the first frame, so there is one round trip instead of the
+// polling handshake's three.
+func _ws_direct(m: MgrState*): bool:
+    if !_ws_open(m, ""):
+        ret false
+    end
+    msg := websocket.Poll(m[0].ws, _connect_timeout(m))
+    if msg.kind != websocket.TEXT:
+        m[0].last_error = "no open packet from the server"
+        websocket.Close(m[0].ws)
+        ret false
+    end
+    if EngineKind(msg.text) != EIO_OPEN:
+        m[0].last_error = "expected an open packet, got " + msg.text
+        websocket.Close(m[0].ws)
+        ret false
+    end
+    if !_read_open(m, EngineBody(msg.text)):
+        m[0].last_error = "malformed open packet"
+        websocket.Close(m[0].ws)
+        ret false
+    end
+    m[0].transport = TRANSPORT_WEBSOCKET
+    m[0].upgraded_before = true
+    ret true
+end
+
+func _poll_handshake(m: MgrState*): bool:
+    r := http.RequestRaw("GET", _poll_url(m, ""), _headers_of(m), "")
+    if r.status != 200:
+        if r.err.len() > 0:
+            m[0].last_error = r.err
+        else:
+            m[0].last_error = "handshake to " + m[0].ep.path + " answered " + r.status
+        end
+        ret false
+    end
+    _absorb_cookies(m, r)
+    mut payloads := SplitPayloads(r.body)
+    defer payloads.free()
+    if payloads.len() == 0:
+        m[0].last_error = "empty handshake response"
+        ret false
+    end
+    first := payloads.get(0)
+    if EngineKind(first) != EIO_OPEN:
+        m[0].last_error = "expected an open packet, got " + first
+        ret false
+    end
+    if !_read_open(m, EngineBody(first)):
+        m[0].last_error = "malformed open packet"
+        ret false
+    end
+    m[0].transport = TRANSPORT_POLLING
+    // Anything the server bundled after the open packet is already session
+    // traffic and has to be dispatched, not dropped.
+    mut i := 1
+    until i < payloads.len():
+        _engine_payload(m, payloads.get(i))
+        i += 1
+    end
+    ret true
+end
+
+// The upgrade handshake: a probe over the new transport, and only once the
+// server has echoed it does the old one stand down. A probe that goes
+// unanswered costs nothing - the session carries on over polling.
+func _try_upgrade(m: MgrState*): bool:
+    if !m[0].can_upgrade:
+        ret false
+    end
+    if !_ws_open(m, m[0].sid):
+        ret false
+    end
+    if websocket.SendText(m[0].ws, EncodeEngine(EIO_PING, "probe")) != 0:
+        websocket.Close(m[0].ws)
+        ret false
+    end
+    deadline := _now() + (_connect_timeout(m) as i64)
+    mut probed := false
+    mut going := true
+    until going:
+        left := (deadline - _now()) as int
+        if left <= 0:
+            going = false
+        else:
+            msg := websocket.Poll(m[0].ws, left)
+            if msg.kind == websocket.TIMEOUT:
+                going = false
+            else msg.kind != websocket.TEXT:
+                going = false
+            else EngineKind(msg.text) == EIO_PONG && EngineBody(msg.text) == "probe":
+                probed = true
+                going = false
+            end
+        end
+    end
+    if !probed:
+        websocket.Close(m[0].ws)
+        ret false
+    end
+    if websocket.SendText(m[0].ws, EncodeEngine(EIO_UPGRADE, "")) != 0:
+        websocket.Close(m[0].ws)
+        ret false
+    end
+    m[0].transport = TRANSPORT_WEBSOCKET
+    m[0].upgraded_before = true
+    m[0].last_rx = _now()
+    _broadcast_lifecycle(m, EV_UPGRADE, "websocket")
+    ret true
+end
+
+// Opens the session, by whichever route the options allow.
+func _engine_open(m: MgrState*): bool:
+    m[0].last_error = ""
+    m[0].sid = ""
+    m[0].recon = false
+    m[0].pollout.clear()
+    // An unverified TLS connection can only be made by the WebSocket
+    // transport; the polling transport's HTTP client has no way to be told
+    // to skip the check, so its handshake would fail before the upgrade got
+    // a chance.
+    // remember_upgrade: the last connection on this manager reached
+    // WebSocket, so start there instead of paying for the polling handshake
+    // and the upgrade probe all over again.
+    remembered := m[0].opts.remember_upgrade && m[0].upgraded_before && m[0].opts.transports == TRANSPORT_AUTO
+    if m[0].opts.transports == TRANSPORT_WEBSOCKET || remembered || (m[0].ep.secure && m[0].opts.insecure):
+        if _ws_direct(m):
+            m[0].state = ST_OPEN
+            ret true
+        end
+        if !remembered:
+            ret false
+        end
+        // The shortcut was a guess about a network that has since changed -
+        // which is the usual reason the connection dropped in the first
+        // place. Forget it and take the long way round.
+        m[0].upgraded_before = false
+        m[0].last_error = ""
+    end
+    if !_poll_handshake(m):
+        ret false
+    end
+    if m[0].opts.transports == TRANSPORT_AUTO:
+        _try_upgrade(m)
+    end
+    m[0].state = ST_OPEN
+    ret true
+end
+
+func _engine_close(m: MgrState*):
+    if m[0].transport == TRANSPORT_POLLING && m[0].state == ST_OPEN && m[0].sid.len() > 0:
+        // A polling session has no socket to close, so the only way to say
+        // goodbye is to post it. Without this the server holds the session
+        // open until pingTimeout and keeps replaying its state to nobody.
+        // Appended, not substituted: anything already queued is still owed
+        // to the server, and goes out in the same request as the goodbye.
+        m[0].pollout.push(EncodeEngine(EIO_CLOSE, ""))
+        _poll_flush(m)
+    end
+    // Closed unconditionally, not only on the websocket transport: an
+    // upgrade probe that failed leaves a socket open on a session that is
+    // still polling, and that one has an owner too.
+    if websocket.IsOpen(m[0].ws):
+        if m[0].transport == TRANSPORT_WEBSOCKET:
+            websocket.SendText(m[0].ws, EncodeEngine(EIO_CLOSE, ""))
+        end
+        websocket.Close(m[0].ws)
+    end
+    m[0].state = ST_CLOSED
+    m[0].sid = ""
+end
+
+// Everything queued for the polling transport, in one POST.
+// Everything queued for the polling transport, in as few POSTs as the
+// server's maxPayload allows.
+//
+// The batching is not an optimisation, it is a requirement: a server that
+// announced maxPayload rejects a larger body outright, so one oversized
+// batch would lose every packet in it rather than the one that overflowed.
+func _poll_flush(m: MgrState*): bool:
+    if m[0].pollout.len() == 0:
+        ret true
+    end
+    mut cap := m[0].max_payload
+    if cap < 1024:
+        cap = 1024
+    end
+    mut batch := Vector {} as Vector<str>
+    defer batch.free()
+    mut used := 0
+    mut ok := true
+    repeat m[0].pollout.len() with i:
+        one := m[0].pollout.get(i)
+        // +1 for the record separator this payload will need.
+        if batch.len() > 0 && used + one.len() + 1 > cap:
+            if !_poll_post(m, batch):
+                ok = false
+            end
+            batch.clear()
+            used = 0
+        end
+        batch.push(one)
+        used += one.len() + 1
+    end
+    if batch.len() > 0 && ok:
+        if !_poll_post(m, batch):
+            ok = false
+        end
+    end
+    m[0].pollout.clear()
+    ret ok
+end
+
+func _poll_post(m: MgrState*, items: Vector<str>): bool:
+    body := JoinPayloads(items)
+    hdrs := _headers_of(m) + "Content-Type: text/plain;charset=UTF-8\r\n"
+    r := http.RequestRaw("POST", _poll_url(m, m[0].sid), hdrs, body)
+    if r.status != 200:
+        m[0].last_error = "polling write answered " + r.status
+        ret false
+    end
+    _absorb_cookies(m, r)
+    ret true
+end
+
+func _engine_write(m: MgrState*, payload: str): bool:
+    if m[0].state != ST_OPEN:
+        ret false
+    end
+    if m[0].transport == TRANSPORT_WEBSOCKET:
+        ret websocket.SendText(m[0].ws, payload) == 0
+    end
+    m[0].pollout.push(payload)
+    if m[0].batching:
+        ret true
+    end
+    ret _poll_flush(m)
+end
+
+// A binary attachment. Over a WebSocket it is a binary frame; over polling
+// there is only a text body, so Engine.IO base64s it behind a "b" marker.
+func _engine_write_bytes(m: MgrState*, b: Bytes): bool:
+    if m[0].state != ST_OPEN:
+        ret false
+    end
+    if m[0].transport == TRANSPORT_WEBSOCKET:
+        ret websocket.SendBinaryBytes(m[0].ws, b.ptr, b.len) == 0
+    end
+    m[0].pollout.push("b" + BytesToBase64(b))
+    if m[0].batching:
+        ret true
+    end
+    ret _poll_flush(m)
+end
+
+func _heartbeat_expired(m: MgrState*): bool:
+    if m[0].state != ST_OPEN:
+        ret false
+    end
+    limit := (m[0].ping_interval + m[0].ping_timeout) as i64
+    ret _now() - m[0].last_rx > limit
+end
+
+// One Engine.IO payload, dispatched. The Socket.IO layer above only ever
+// sees the body of a MESSAGE.
+func _engine_payload(m: MgrState*, payload: str):
+    if payload.len() == 0:
+        ret
+    end
+    m[0].last_rx = _now()
+    k := EngineKind(payload)
+    if k == EIO_PING:
+        // Answering is not optional: a server that does not hear back inside
+        // pingTimeout drops the session.
+        _engine_write(m, EncodeEngine(EIO_PONG, ""))
+        _broadcast_lifecycle(m, EV_PING, "")
+    else k == EIO_CLOSE:
+        _engine_shutdown(m, REASON_TRANSPORT_CLOSE)
+    else k == EIO_MESSAGE:
+        _on_socketio_text(m, EngineBody(payload))
+    end
+end
+
+func _engine_binary(m: MgrState*, b: Bytes):
+    m[0].last_rx = _now()
+    _on_socketio_binary(m, b)
+end
+
+// One turn of the polling transport: write what is waiting, then hold a
+// request open until the server has something to say.
+//
+// The timeout argument cannot be honoured here the way the WebSocket
+// transport honours it - an HTTP request in flight cannot be abandoned
+// halfway - so a long-poll returns when the server answers, which it does at
+// the latest on its next heartbeat.
+func _poll_turn(m: MgrState*): int:
+    if !_poll_flush(m):
+        ret PUMP_CLOSED
+    end
+    r := http.RequestRaw("GET", _poll_url(m, m[0].sid), _headers_of(m), "")
+    if r.status != 200:
+        m[0].last_error = "long-poll answered " + r.status
+        ret PUMP_CLOSED
+    end
+    _absorb_cookies(m, r)
+    mut payloads := SplitPayloads(r.body)
+    defer payloads.free()
+    mut got := false
+    repeat payloads.len() with i:
+        p := payloads.get(i)
+        if p.len() > 0:
+            got = true
+            if str.StartsWith(p, "b"):
+                _poll_binary(m, p.substr(1, p.len() - 1))
+            else:
+                _engine_payload(m, p)
+            end
+        end
+    end
+    if !got:
+        ret PUMP_TIMEOUT
+    end
+    ret PUMP_OK
+end
+
+// One base64 attachment out of a polling body.
+//
+// Not Base64Decode into a `str`: that is where the bytes would be lost. A
+// decoded attachment is arbitrary binary, a `str` ends at its first NUL, and
+// a buffer whose first byte is zero - which is most compressed and most
+// binary formats - would arrive empty. The pointer form reports the real
+// length instead.
+func _poll_binary(m: MgrState*, encoded: str):
+    if encoded.len() == 0:
+        ret
+    end
+    cap := (encoded.len() / 4) * 3 + 4
+    buf := mem.Allocate(cap as u64)
+    if buf == null:
+        ret
+    end
+    defer mem.Free(buf)
+    mut ok := true
+    n := encoding.Base64DecodeBytes(encoded, buf, cap, ok)
+    if !ok || n <= 0:
+        ret
+    end
+    mut b := NewBytes(buf, n)
+    _engine_binary(m, b)
+    BytesFree(b)
+end
+
+func _ws_turn(m: MgrState*, timeout_ms: int): int:
+    msg := websocket.Poll(m[0].ws, timeout_ms)
+    if msg.kind == websocket.TIMEOUT:
+        ret PUMP_TIMEOUT
+    end
+    if msg.kind == websocket.TEXT:
+        _engine_payload(m, msg.text)
+        ret PUMP_OK
+    end
+    if msg.kind == websocket.BINARY:
+        mut b := NewBytes(msg.data, msg.len)
+        _engine_binary(m, b)
+        BytesFree(b)
+        ret PUMP_OK
+    end
+    if msg.kind == websocket.PONG:
+        ret PUMP_TIMEOUT
+    end
+    ret PUMP_CLOSED
+end
+
+// Reads whatever the active transport has, for at most `timeout_ms`.
+func _transport_read(m: MgrState*, timeout_ms: int): int:
+    if m[0].state != ST_OPEN:
+        ret PUMP_CLOSED
+    end
+    if m[0].transport == TRANSPORT_WEBSOCKET:
+        ret _ws_turn(m, timeout_ms)
+    end
+    ret _poll_turn(m)
+end

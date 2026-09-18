@@ -1,0 +1,296 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package decimal
+
+import bigint
+import str
+
+// Text in and text out.
+//
+// Output is always plain positional notation -- "0.00001250", never "1.25e-5".
+// A price, an invoice line, and a ledger entry are all read by people and
+// stored in databases that expect a fixed form, and switching to exponential
+// notation past some threshold is how a total ends up rendered as "1e+06" on
+// a receipt. There is no formatter here that will do that to you.
+//
+// Input accepts what a person or a data feed actually writes: a sign, digits
+// with `_` grouping, an optional fraction, an optional exponent, and Persian
+// or Arabic-Indic digits alongside ASCII. The scale of the result is the
+// number of fraction digits as written, so "1.50" parses at scale 2 and keeps
+// its trailing zero -- which for money is information, not noise.
+
+// Appends `digits` with a decimal point inserted `scale` places from the
+// right, no sign. Digits are copied byte by byte rather than through Substr
+// because a str result is never reclaimed in Salam, and a formatter that runs
+// once per ledger row should not leave two dead strings behind each time.
+func _emit_digits(b &: str.StringBuilder, digits: str, scale: int):
+    n := str.Len(digits)
+    if scale <= 0:
+        str.BufAppend(b, digits)
+        ret
+    end
+    if n <= scale:
+        // Smaller than one: a leading zero, then enough padding zeros that the
+        // digits land in the right place.
+        str.BufAppendChar(b, 48)
+        str.BufAppendChar(b, 46)
+        repeat scale - n: str.BufAppendChar(b, 48) end
+        str.BufAppend(b, digits)
+        ret
+    end
+    cut := n - scale
+    repeat cut with i: str.BufAppendChar(b, digits[i] as int) end
+    str.BufAppendChar(b, 46)
+    mut i := cut
+    while i < n:
+        str.BufAppendChar(b, digits[i] as int)
+        i += 1
+    end
+end
+
+// ---------------------------------------------------------------------------
+// Formatting
+// ---------------------------------------------------------------------------
+
+// Plain decimal notation, with exactly `Scale(d)` digits after the point and
+// never an exponent. A zero at scale 2 prints "0.00".
+@en "ToStr"
+@fa "به رشته"
+@ar "إلى نص"
+pub func ToStr(d: Dec): str:
+    if d.scale <= 0: ret bigint.ToStr(d.unscaled) end
+    mut a := bigint.Abs(d.unscaled)
+    digits := bigint.ToStr(a)
+    a.free()
+    mut b := str.NewBuilder()
+    if d.unscaled.sign() < 0: str.BufAppendChar(b, 45) end
+    _emit_digits(b, digits, d.scale)
+    out := str.BufStr(b)
+    str.BufFree(b)
+    ret out
+end
+
+// d rounded to `scale` places (banker's rounding) and printed with exactly
+// that many, trailing zeros included. This is the money formatter:
+// ToStrFixed(total, 2) is "7.50", not "7.5".
+@en "ToStrFixed"
+@fa "به رشته ثابت"
+@ar "إلى نص ثابت"
+pub func ToStrFixed(d: Dec, scale: int): str:
+    mut r := Round(d, scale)
+    s := ToStr(r)
+    r.free()
+    ret s
+end
+
+// d rounded to `scale` places and printed with `group` between every three
+// digits of the integer part and `point` before the fraction -- so
+// FormatGrouped(x, 2, ",", ".") gives "1,234,567.89" and
+// FormatGrouped(x, 2, ".", ",") gives the European "1.234.567,89".
+//
+// The digits themselves stay ASCII; pass the result through
+// str.ToPersianDigits or str.ToArabicDigits to localize them.
+@en "FormatGrouped"
+@fa "قالب گروهی"
+@ar "تنسيق مجمع"
+pub func FormatGrouped(d: Dec, scale: int, group: str, point: str): str:
+    mut r := Round(d, scale)
+    mut a := bigint.Abs(r.unscaled)
+    digits := bigint.ToStr(a)
+    a.free()
+    neg := r.unscaled.sign() < 0
+    sc := r.scale
+    r.free()
+
+    n := str.Len(digits)
+    // Digits 0..wn-1 are the integer part and wn..n-1 the fraction. A wn of
+    // zero or less means the value is below one, so the integer part is a
+    // written-in "0" and the fraction needs -wn leading zeros of padding.
+    wn := n - sc
+
+    mut b := str.NewBuilder()
+    if neg: str.BufAppendChar(b, 45) end
+    if wn <= 0:
+        str.BufAppendChar(b, 48)
+    else:
+        repeat wn with i:
+            // A separator goes before every digit whose distance from the end
+            // of the integer part is a nonzero multiple of three.
+            rem := wn - i
+            if i > 0 && rem % 3 == 0: str.BufAppend(b, group) end
+            str.BufAppendChar(b, digits[i] as int)
+        end
+    end
+    if sc > 0:
+        str.BufAppend(b, point)
+        if wn < 0: repeat 0 - wn: str.BufAppendChar(b, 48) end end
+        mut i := wn
+        if i < 0: i = 0 end
+        while i < n:
+            str.BufAppendChar(b, digits[i] as int)
+            i += 1
+        end
+    end
+    out := str.BufStr(b)
+    str.BufFree(b)
+    ret out
+end
+
+// ---------------------------------------------------------------------------
+// Parsing
+// ---------------------------------------------------------------------------
+
+// Reads "123.45", "-0.001", "+1_000.00", "1.5e3", "۱۲٫۳۴"-style Persian and
+// Arabic-Indic digits. The scale of the result is the number of fraction
+// digits written, less any exponent, so "1.50" is scale 2 and "1.5e3" is 1500
+// at scale 0. Sets ok = false and returns zero on anything malformed.
+@en "Parse"
+@fa "تجزیه"
+@ar "تحليل"
+pub func Parse(s: str, ok &: bool): Dec:
+    ok = false
+    // As in bigint.ParseBase: only pay for the digit fold when the input
+    // actually carries non-ASCII digits.
+    mut norm := s
+    if str.HasPersianDigits(s) || str.HasArabicDigits(s):
+        norm = str.ToEnglishDigits(s)
+    end
+    n := str.Len(norm)
+    mut i := 0
+    while i < n && (norm[i] as int) == 32: i += 1 end
+
+    mut neg := false
+    if i < n:
+        c := norm[i] as int
+        if c == 45: neg = true i += 1
+        else c == 43: i += 1
+        end
+    end
+
+    // Mantissa digits are collected with the point removed; `frac` counts how
+    // many of them fell after it, which is the scale before any exponent.
+    mut digits := str.NewBuilder()
+    mut seen := 0
+    mut frac := 0
+    mut dot := false
+    mut bad := false
+    while i < n:
+        c := norm[i] as int
+        if c == 95:
+            // A group separator, legal only between digits.
+            if seen == 0: bad = true break end
+            i += 1
+            continue
+        end
+        if c == 46:
+            if dot: bad = true break end
+            dot = true
+            i += 1
+            continue
+        end
+        if c < 48 || c > 57: break end
+        str.BufAppendChar(digits, c)
+        seen += 1
+        if dot: frac += 1 end
+        i += 1
+    end
+
+    mut ex := 0
+    if !bad && i < n:
+        c := norm[i] as int
+        if c == 101 || c == 69:
+            i += 1
+            mut eneg := false
+            if i < n:
+                sc := norm[i] as int
+                if sc == 45: eneg = true i += 1
+                else sc == 43: i += 1
+                end
+            end
+            mut edig := 0
+            while i < n:
+                c2 := norm[i] as int
+                if c2 < 48 || c2 > 57: break end
+                // Clamped: an exponent past this is not a number anyone meant,
+                // and letting it through would ask Pow10 for a terabyte.
+                if ex < 1000000: ex = ex * 10 + (c2 - 48) end
+                edig += 1
+                i += 1
+            end
+            if edig == 0: bad = true end
+            if eneg: ex = 0 - ex end
+        end
+    end
+
+    while i < n && (norm[i] as int) == 32: i += 1 end
+    if i < n: bad = true end
+
+    body := str.BufStr(digits)
+    str.BufFree(digits)
+    if bad || seen == 0: ret Dec {} end
+
+    mut pok := false
+    mut u := bigint.Parse(body, pok)
+    if !pok:
+        u.free()
+        ret Dec {}
+    end
+    if neg: bigint.NegateIn(u) end
+    ok = true
+    // _adopt folds a negative scale (which an exponent can produce) back into
+    // the digits, so the Dec that comes out always has scale >= 0.
+    ret _adopt(u, frac - ex)
+end
+
+// Parses s, or returns zero when it is not a valid decimal.
+@en "ParseOr"
+@fa "تجزیه یا صفر"
+@ar "تحليل أو صفر"
+pub func ParseOr(s: str): Dec:
+    mut ok := false
+    mut v := Parse(s, ok)
+    if !ok:
+        v.free()
+        ret Dec {}
+    end
+    ret v
+end
+
+// ---------------------------------------------------------------------------
+// Machine number conversions
+// ---------------------------------------------------------------------------
+
+// The integer part of d, truncated toward zero. Sets ok = false if it does not
+// fit an i64.
+@en "ToInt"
+@fa "به صحیح"
+@ar "إلى صحيح"
+pub func ToInt(d: Dec, ok &: bool): i64:
+    mut t := Truncate(d, 0)
+    v := bigint.ToInt(t.unscaled, ok)
+    t.free()
+    ret v
+end
+
+// d as the nearest f64. Lossy past 15 significant digits, which is the reason
+// this type exists -- use it for a chart axis, not for a balance.
+@en "ToFloat"
+@fa "به اعشاری ماشین"
+@ar "إلى عشري آلي"
+pub func ToFloat(d: Dec): f64:
+    mut f := bigint.ToFloat(d.unscaled)
+    repeat d.scale: f = f / 10.0 end
+    ret f
+end

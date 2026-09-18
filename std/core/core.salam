@@ -23,8 +23,16 @@ import map
 import str
 import text
 import console
-import fs
-import thread
+
+// fs and thread have no freestanding-safe implementation: fs opens files
+// through libc, and thread starts pthreads. Neither is reachable from a
+// freestanding profile that has no libc, so this is not lost capability,
+// only a re-export core never actually used itself.
+if SALAM_FREESTANDING:
+else:
+    import fs
+    import thread
+end
 
 extern:
     func getchar(): int
@@ -52,6 +60,33 @@ func _strptr(s: str): i64:
 end
 
 extern:
+    /*
+     * The hash entry points behind the generic HashMap. They live in core
+     * because a HashMap<K,V> instantiation is emitted into the header of
+     * whichever module first uses the map, and that module has no reason to
+     * import crypto - core is one of the two packages the driver always
+     * links, so the symbol is always there to resolve against.
+     */
+    func salam_str_hash(s: str): u64:
+        bp := (s as void*) as i8*
+        mut h := 14695981039346656037 as u64
+        mut j := 0
+        until bp[j] != 0:
+            mut c := bp[j] as int
+            if c < 0: c = c + 256 end
+            h *= 1099511628211
+            h += (c as u64)
+            j += 1
+        end
+        ret h
+    end
+    func salam_hash_int(x: u64): u64:
+        mut h := x + 14695981039346656037
+        h *= 1099511628211
+        h += 1099511628211
+        h *= 1099511628211
+        ret h
+    end
     func salam_idx(idx: i64, len: i64): i64:
         if idx < 0 || idx >= len:
             printerrln "salam: array index ".concat(conv.FormatInt(idx)).concat(" out of bounds [0,").concat(conv.FormatInt(len)).concat(")")
@@ -78,21 +113,25 @@ extern:
         _salam_argc = argc
         _salam_argv = argv
     end
+    // Indexed as `str*`, not `i64*`: argv is an array of pointers, and on a
+    // 32-bit host those are 4 bytes each. Reading it through an i64* view
+    // fetched two argv entries glued together as one address, and the
+    // strlen() on that garbage pointer segfaulted before main ever ran -
+    // which is what a 32-bit self-hosted build died of on startup. sizeof
+    // keeps the allocation in step with the element type.
     func salam_args(out_count: void*): void*:
         oc := out_count as int*
         n := _salam_argc
         mut slots := n
         if slots < 1: slots = 1 end
-        arr := mem.Allocate((slots * 8) as u64)
-        a64 := arr as i64*
-        av := _salam_argv as i64*
+        arr := mem.Allocate((slots as u64) * (sizeof(str) as u64)) as str*
+        av := _salam_argv as str*
         repeat n with i:
-            cp := av[i] as void*
-            s := cp as str
-            a64[i] = _strptr(s.substr(0, s.len()))
+            s := av[i]
+            arr[i] = s.substr(0, s.len())
         end
         oc[0] = n
-        ret arr
+        ret arr as void*
     end
 end
 

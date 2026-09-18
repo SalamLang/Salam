@@ -1,0 +1,351 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// aws - the service layer, temporary credentials, and where a credential
+// comes from.
+//
+// Offline, like aws_demo.salam and for the same reason: building a request and
+// reading an answer are pure functions, and they are the parts that break. A
+// signed AssumeRole request is checked byte for byte against what the wire
+// would carry, an STS answer is parsed from a stored document, and the expiry
+// arithmetic is checked against fixed instants rather than the clock.
+//
+// What is deliberately NOT here: anything that would open a socket. The
+// metadata providers and the profile-to-role chain are exercised against mock
+// services outside the suite, because a test that probes a link-local address
+// on a machine that has none is a test that measures a timeout.
+
+import aws
+
+func check(label: str, got: str, want: str):
+    print label
+    print ": "
+    if got == want:
+        println "ok"
+    else:
+        println "MISMATCH"
+        print "  got  "
+        println got
+        print "  want "
+        println want
+    end
+end
+
+func check_bool(label: str, got: bool, want: bool):
+    if got == want: check(label, "yes", "yes")
+    else: check(label, "no", "yes")
+    end
+end
+
+func example(): aws.Config:
+    ret aws.Config {
+        endpoint = "https://s3.amazonaws.com",
+        region = "us-east-1",
+        bucket = "examplebucket",
+        access_key = "AKIAIOSFODNN7EXAMPLE",
+        secret_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+        path_style = false
+    }
+end
+
+// ---- addressing ----
+
+// Most services answer per region; a handful answer at one global address. A
+// signature still names a region either way, so this is only about where the
+// request goes.
+func endpoints():
+    check("regional service", aws.ServiceEndpoint("sqs", "eu-central-1"),
+        "https://sqs.eu-central-1.amazonaws.com")
+    check("dynamodb", aws.ServiceEndpoint("dynamodb", "us-west-2"),
+        "https://dynamodb.us-west-2.amazonaws.com")
+    check("sts is regional", aws.ServiceEndpoint("sts", "ap-south-1"),
+        "https://sts.ap-south-1.amazonaws.com")
+    // iam has no regional endpoints at all, so naming one must not produce
+    // an address that does not exist.
+    check("iam is global", aws.ServiceEndpoint("iam", "eu-west-1"),
+        "https://iam.amazonaws.com")
+    check("cloudfront is global", aws.ServiceEndpoint("cloudfront", "eu-west-1"),
+        "https://cloudfront.amazonaws.com")
+    check("no region means global", aws.ServiceEndpoint("sts", ""),
+        "https://sts.amazonaws.com")
+    check("sts helper", aws.StsEndpoint("eu-west-1"),
+        "https://sts.eu-west-1.amazonaws.com")
+end
+
+// ---- the query protocol ----
+
+// The body of a query-protocol request is form-encoded with AWS's escaping,
+// not a form encoder's: a space is %20 rather than `+`, and a colon and a
+// slash are both escaped. The body is hashed into the signature, so it has to
+// be encoded once and sent exactly as encoded.
+func query_body():
+    mut c := aws.NewQueryCall("sts", "AssumeRole", aws.STS_VERSION)
+    aws.CallParam(c, "RoleArn", "arn:aws:iam::123456789012:role/Deploy")
+    aws.CallParam(c, "RoleSessionName", "deploy ci")
+    aws.CallParamInt(c, "DurationSeconds", 3600)
+    check("query body", aws.CallBodyText(c),
+        "Action=AssumeRole&Version=2011-06-15" +
+        "&RoleArn=arn%3Aaws%3Aiam%3A%3A123456789012%3Arole%2FDeploy" +
+        "&RoleSessionName=deploy%20ci&DurationSeconds=3600")
+    aws.CallFree(c)
+end
+
+// An empty parameter is dropped rather than sent blank: STS rejects several of
+// its optional parameters when they arrive empty.
+func query_omits_empty():
+    mut c := aws.NewQueryCall("sts", "GetSessionToken", aws.STS_VERSION)
+    aws.CallParam(c, "SerialNumber", "")
+    aws.CallParam(c, "TokenCode", "")
+    check("empty parameters dropped", aws.CallBodyText(c),
+        "Action=GetSessionToken&Version=2011-06-15")
+    aws.CallFree(c)
+end
+
+// The whole signed request for an AssumeRole, byte for byte. This is the test
+// that says the generic service path signs the same way the S3 path does.
+func signed_call():
+    mut c := aws.NewQueryCall("sts", "GetCallerIdentity", aws.STS_VERSION)
+    aws.CallEndpoint(c, "https://sts.amazonaws.com")
+    head := aws.PreparedCall(example(), c, 1369353600 as i64)
+    check("service request line",
+        head.substr(0, head.find("\r\n")), "POST / HTTP/1.1")
+    check_bool("service host", head.find("\r\nHost: sts.amazonaws.com\r\n") >= 0, true)
+    check_bool("service content type",
+        head.find("\r\nContent-Type: application/x-www-form-urlencoded; charset=utf-8\r\n") >= 0,
+        true)
+    // The credential scope names the service, which is what stops an S3
+    // signature from being replayed against STS.
+    check_bool("scoped to sts",
+        head.find("Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/sts/aws4_request") >= 0,
+        true)
+    check_bool("content type is signed",
+        head.find("SignedHeaders=content-type;host;x-amz-content-sha256;x-amz-date") >= 0,
+        true)
+    check_bool("body follows the head",
+        head.find("\r\n\r\nAction=GetCallerIdentity&Version=2011-06-15") >= 0, true)
+end
+
+// A JSON-protocol call names its operation in a header instead of a body
+// parameter, and the header has to be signed like every other x-amz one.
+func json_call():
+    mut c := aws.NewJsonCall("dynamodb", "DynamoDB_20120810.GetItem",
+        "{\"TableName\":\"orders\"}")
+    aws.CallRegion(c, "eu-central-1")
+    head := aws.PreparedCall(example(), c, 1369353600 as i64)
+    check_bool("json host",
+        head.find("\r\nHost: dynamodb.eu-central-1.amazonaws.com\r\n") >= 0, true)
+    check_bool("json target sent",
+        head.find("\r\nX-Amz-Target: DynamoDB_20120810.GetItem\r\n") >= 0, true)
+    check_bool("json target signed",
+        head.find("SignedHeaders=content-type;host;x-amz-content-sha256;x-amz-date;x-amz-target") >= 0,
+        true)
+    check_bool("json content type",
+        head.find("\r\nContent-Type: application/x-amz-json-1.0\r\n") >= 0, true)
+    check_bool("json scoped to its own region",
+        head.find("/20130524/eu-central-1/dynamodb/aws4_request") >= 0, true)
+    check_bool("json body sent",
+        head.find("\r\n\r\n{\"TableName\":\"orders\"}") >= 0, true)
+    aws.CallFree(c)
+end
+
+func json11_call():
+    c := aws.NewJson11Call("kinesis", "Kinesis_20131202.PutRecord", "{}")
+    head := aws.PreparedCall(example(), c, 1369353600 as i64)
+    check_bool("json 1.1 content type",
+        head.find("\r\nContent-Type: application/x-amz-json-1.1\r\n") >= 0, true)
+end
+
+// ---- reading answers ----
+
+func assume_role_answer(): str:
+    ret "<AssumeRoleResponse xmlns=\"https://sts.amazonaws.com/doc/2011-06-15/\">" +
+        "<AssumeRoleResult>" +
+        "<AssumedRoleUser><Arn>arn:aws:sts::123456789012:assumed-role/Deploy/ci</Arn>" +
+        "<AssumedRoleId>AROA:ci</AssumedRoleId></AssumedRoleUser>" +
+        "<Credentials><AccessKeyId>ASIAEXAMPLE</AccessKeyId>" +
+        "<SecretAccessKey>wJalrSecretExample</SecretAccessKey>" +
+        "<SessionToken>FQoGZXIvExampleToken</SessionToken>" +
+        "<Expiration>2026-08-21T03:27:34Z</Expiration></Credentials>" +
+        "</AssumeRoleResult><ResponseMetadata><RequestId>R1</RequestId>" +
+        "</ResponseMetadata></AssumeRoleResponse>"
+end
+
+// The <Credentials> element sits under a result element whose name changes per
+// action, so it is searched for rather than named.
+func parse_answer():
+    creds := aws.ParseCredentials(assume_role_answer(), 200, "AssumeRole")
+    check_bool("credentials parsed", creds.ok, true)
+    check("access key", creds.access_key, "ASIAEXAMPLE")
+    check("secret key", creds.secret_key, "wJalrSecretExample")
+    check("session token", creds.session_token, "FQoGZXIvExampleToken")
+    check("expiry", creds.expires, "2026-08-21T03:27:34Z")
+    check("expiry as an instant", "" + creds.expires_epoch, "1787282854")
+    check("source recorded", creds.source, "AssumeRole")
+end
+
+// An answer that parses but carries half a credential must not be reported as
+// usable: a Config with an access key and no secret signs nothing.
+func parse_incomplete():
+    partial := "<AssumeRoleResponse><AssumeRoleResult><Credentials>" +
+        "<AccessKeyId>ASIAEXAMPLE</AccessKeyId>" +
+        "<Expiration>2026-08-21T03:27:34Z</Expiration>" +
+        "</Credentials></AssumeRoleResult></AssumeRoleResponse>"
+    creds := aws.ParseCredentials(partial, 200, "AssumeRole")
+    check_bool("incomplete credential refused", creds.ok, false)
+    check("incomplete credential says why", creds.code, "MalformedXML")
+    empty := aws.ParseCredentials("<AssumeRoleResponse/>", 200, "AssumeRole")
+    check_bool("credential-less answer refused", empty.ok, false)
+end
+
+// The two protocols report failure in two different documents, and a caller
+// should not have to know which service it is talking to in order to read one.
+func faults():
+    xml_fault := "<ErrorResponse xmlns=\"https://sts.amazonaws.com/doc/2011-06-15/\">" +
+        "<Error><Type>Sender</Type><Code>AccessDenied</Code>" +
+        "<Message>User is not authorized to perform sts:AssumeRole</Message>" +
+        "</Error><RequestId>R1</RequestId></ErrorResponse>"
+    check("query fault code", aws.ServiceErrorCode(xml_fault), "AccessDenied")
+    check("query fault message", aws.ServiceErrorMessage(xml_fault, 403),
+        "User is not authorized to perform sts:AssumeRole")
+    json_fault := "{\"__type\":\"com.amazon.coral.service#ResourceNotFoundException\"," +
+        "\"message\":\"Requested resource not found\"}"
+    // Only the part after the `#` is worth showing a person.
+    check("json fault code", aws.ServiceErrorCode(json_fault),
+        "ResourceNotFoundException")
+    check("json fault message", aws.ServiceErrorMessage(json_fault, 400),
+        "Requested resource not found")
+    escaped := "{\"__type\":\"Bad\",\"message\":\"a \\\"quoted\\\" word\"}"
+    check("json escapes decoded", aws.ServiceErrorMessage(escaped, 400),
+        "a \"quoted\" word")
+    check("statusless fallback", aws.ServiceErrorMessage("", 500),
+        "the service answered 500")
+end
+
+// ---- expiry ----
+
+// The check that matters happens on the service's clock, not this one, so
+// credentials are treated as expired slightly before they actually are.
+func expiry():
+    creds := aws.ParseCredentials(assume_role_answer(), 200, "AssumeRole")
+    check_bool("valid well before expiry",
+        aws.Expired(creds, 1787200000 as i64, 300), false)
+    check_bool("expired inside the skew",
+        aws.Expired(creds, 1787282700 as i64, 300), true)
+    check_bool("expired after the fact",
+        aws.Expired(creds, 1787290000 as i64, 300), true)
+    check_bool("exactly at the skew boundary",
+        aws.Expired(creds, 1787282554 as i64, 300), true)
+    check("seconds remaining",
+        "" + aws.SecondsRemaining(creds, 1787282854 as i64 - (90 as i64)), "90")
+    // A long-lived key has no expiry and must never be treated as stale.
+    static_key := aws.StaticCredentials("AKIA", "secret")
+    check_bool("static credentials are usable", static_key.ok, true)
+    check_bool("static credentials never expire",
+        aws.Expired(static_key, 9999999999 as i64, 300), false)
+    check("static credentials have no deadline",
+        "" + aws.SecondsRemaining(static_key, 1787282854 as i64), "-1")
+    check_bool("half a static credential is refused",
+        aws.StaticCredentials("AKIA", "").ok, false)
+    // A failed lookup is expired by definition: there is nothing to use.
+    check_bool("a failed credential is expired",
+        aws.Expired(aws.Credentials {}, 0 as i64, 300), true)
+end
+
+// Applying a credential replaces the credential and nothing else - the
+// endpoint, region and bucket were already decided.
+func applying():
+    creds := aws.ParseCredentials(assume_role_answer(), 200, "AssumeRole")
+    out := aws.Apply(example(), creds)
+    check("applied key", out.access_key, "ASIAEXAMPLE")
+    check("applied token", out.session_token, "FQoGZXIvExampleToken")
+    check("bucket kept", out.bucket, "examplebucket")
+    check("region kept", out.region, "us-east-1")
+    check_bool("applied config is usable", aws.Configured(out), true)
+    // A failed credential must not quietly wipe a Config that already worked.
+    kept := aws.Apply(example(), aws.Credentials {})
+    check("failed credential changes nothing", kept.access_key,
+        "AKIAIOSFODNN7EXAMPLE")
+end
+
+// A temporary credential ends up in log lines; the secret must not.
+func describing():
+    creds := aws.ParseCredentials(assume_role_answer(), 200, "AssumeRole")
+    line := aws.DescribeCredentials(creds)
+    check_bool("describe says it is temporary", line.find("temporary") >= 0, true)
+    check_bool("describe hides the secret", line.find("wJalrSecret") < 0, true)
+    check_bool("describe hides the token", line.find("FQoGZXIv") < 0, true)
+    check_bool("describe names the expiry",
+        line.find("2026-08-21T03:27:34Z") >= 0, true)
+    check_bool("describe names the source", line.find("AssumeRole") >= 0, true)
+    check("describe explains a failure",
+        aws.DescribeCredentials(aws.Credentials { error = "nothing found" }),
+        "credentials unavailable: nothing found")
+    check_bool("a static key reads as long-lived",
+        aws.DescribeCredentials(aws.StaticCredentials("AKIAEXAMPLE", "s")).find("long-lived") >= 0,
+        true)
+end
+
+// ---- guards ----
+
+// Anything that would need a network call must refuse before making one when
+// its inputs are missing.
+func guards():
+    check("web identity needs both halves",
+        aws.AssumeRoleWithWebIdentity(example(), "arn:x", "s", "", 900).code,
+        "Config")
+    check("federation needs a policy",
+        aws.GetFederationToken(example(), "bob", "", 900).code, "Config")
+    check("assume needs a role", aws.AssumeRole(example(), "", "s", 900).code,
+        "Config")
+    // A service call with no credentials must say that, rather than sending an
+    // unsigned request and reporting whatever the service says about it.
+    bare := aws.NewQueryCall("sts", "GetCallerIdentity", aws.STS_VERSION)
+    check("service call needs credentials",
+        aws.Invoke(aws.Config {}, bare).error,
+        "no credentials were supplied for sts")
+end
+
+// The two sources that cost a network round trip are off unless asked for, so
+// that a program which does not run on AWS never pays a timeout to find out.
+func chain_defaults():
+    d := aws.DefaultChain()
+    check_bool("environment is on by default", d.use_env, true)
+    check_bool("profile is on by default", d.use_profile, true)
+    check_bool("instance metadata is off by default", d.use_instance, false)
+    check_bool("container metadata is off by default", d.use_container, false)
+    check_bool("roles are followed by default", d.follow_roles, true)
+    c := aws.ContainerChain()
+    check_bool("container chain enables the metadata services",
+        c.use_container && c.use_instance, true)
+    check_bool("container chain skips the shared file", c.use_profile, false)
+    check("source names are stable", aws.SOURCE_INSTANCE, "instance")
+end
+
+func main:
+    endpoints()
+    query_body()
+    query_omits_empty()
+    signed_call()
+    json_call()
+    json11_call()
+    parse_answer()
+    parse_incomplete()
+    faults()
+    expiry()
+    applying()
+    describing()
+    guards()
+    chain_defaults()
+    ret 0
+end

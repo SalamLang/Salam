@@ -18,7 +18,16 @@
 // Section comments mark which original .c/.h each part came from; within the
 // file the tiers follow the hard ordering rules (E083/E085/E088):
 // package -> imports -> consts/globals -> types -> private funcs -> pub funcs.
-package core
+//
+// Named `sal_core`, not `core`: this package is internal to the compiler's
+// own self-hosted build and every importer already aliases it to `co`
+// (`import co "sal_core.salam"`), so nothing outside this file depends on
+// the exact package name - but `std/core` is a real, public stdlib package
+// declared `package core`, and the compiler's own build imports std (via
+// `io`/`mem`/`os`/`str` below, which reach `std/core` transitively). Two
+// same-named packages in one program collide ("claimed by two different
+// files"), so this one takes the name that doesn't collide.
+package sal_core
 
 import io
 import mem
@@ -30,6 +39,9 @@ extern:
     // Must match the declaration in Salam's generated C prelude exactly:
     // extern int snprintf(char *buf, uint64_t size, const char *fmt, ...);
     func snprintf(buf: char*, cap: u64, fmt: str, ...): int
+    // For FmtF64's round-trip test - the only correctly-rounded reader
+    // available here.
+    func strtod(s: str, endptr: void*): f64
 end
 
 // ===== port of c/src/core/timer.c (externs; bodies at the end of this file)
@@ -51,15 +63,22 @@ end
 pub const SAL_NUMSTR_MAX := 21
 
 // ===== build_info.h =====
-// The C header took SALAM_VERSION / SALAM_GIT_* from -D defines at build time
-// and SALAM_BUILD_DATE from __DATE__/__TIME__. Salam has no __DATE__; the
-// build system should stamp these constants (or pass -D defines once the
-// driver port wires them through). Defaults mirror the C fallbacks.
-pub const VERSION := "0.2.9"
-pub const GIT_COMMIT := "unknown"
-pub const GIT_DATE := "unknown"
-pub const GIT_DIRTY := ""
-pub const BUILD_DATE := "unknown"
+// Nothing here is a literal any more, and in particular the version number
+// is not: it used to be a hand-kept copy of the repo's VERSION file and went
+// stale between releases, so `salam version` under-reported the build.
+//
+// Each of these reads a compile-time constant the compiler building this
+// file supplies - the same names a `salam build -dNAME=VALUE` defines, which
+// is how the bootstrap stamps the repo's VERSION and git metadata onto a
+// stage. With nothing stamped they fall back to the *building* compiler's
+// own build info, which for a stage built from this checkout is already the
+// right answer. SALAM_BUILD_DATE is the moment of this compile, so it dates
+// the binary being produced rather than the one producing it.
+pub const VERSION := SALAM_VERSION
+pub const GIT_COMMIT := SALAM_GIT_COMMIT
+pub const GIT_DATE := SALAM_GIT_DATE
+pub const GIT_DIRTY := SALAM_GIT_DIRTY
+pub const BUILD_DATE := SALAM_BUILD_DATE
 
 // ===== status.h =====
 // C: typedef enum { ST_OK = 0, ST_ERROR, ST_FATAL } status_t;
@@ -309,6 +328,80 @@ func c_format_f64(
     ret out
 end
 
+// printf's exponent, trimmed in place to the shortest form C99 asks for -
+// a sign and at least two digits. The Windows CRT writes three of them, so
+// 0.00001 came back "1e-005" there and "1e-05" everywhere else, and the
+// same program printed a different number depending on the machine.
+// Everything read here is ASCII, so a plain signed byte compare will do.
+func _fix_exp(p: i8*):
+    mut n := 0
+    until (p[n] as int) != 0:
+        n += 1
+    end
+    mut e := 0
+    until e < n && (p[e] as int) != 101:
+        e += 1
+    end
+    if e >= n:
+        ret
+    end
+    mut d := e + 1
+    if d < n && ((p[d] as int) == 43 || (p[d] as int) == 45):
+        d += 1
+    end
+    mut z := d
+    until n - z > 2 && (p[z] as int) == 48:
+        z += 1
+    end
+    if z == d:
+        ret
+    end
+    mut i := d
+    mut j := z
+    until j <= n:
+        p[i] = p[j]
+        i += 1
+        j += 1
+    end
+end
+
+// One "%.Ng" rendering of `v`.
+func fmt_g(v: f64, prec: int): str:
+    cap := 64 as u64
+    buf := mem.Allocate(cap)
+    n := snprintf(buf as char*, cap, "%." + str.FromInt(prec as i64) + "g", v)
+    mut out := ""
+    if n > 0:
+        _fix_exp(buf as i8*)
+        out = str.Clone(buf as str)
+    end
+    mem.Free(buf)
+    ret out
+end
+
+// FmtF64 - the shortest text that reads back as exactly this double: 15
+// significant digits, then 16, then 17, the first that survives strtod.
+// The compile-time twin of std/text's salam_fmt_f64, for the constant
+// folding that writes a float literal straight into a print's format
+// string; the two have to agree, or the same value would print differently
+// depending on whether the compiler could see it.
+pub func FmtF64(v: f64): str:
+    // printf spells a negative NaN "-nan" on glibc; the sign of a NaN is
+    // not information this language shows.
+    if v != v:
+        ret "nan"
+    end
+    mut prec := 15
+    until prec <= 17:
+        sv := fmt_g(v, prec)
+        if prec == 17 || strtod(sv, null) == v:
+            ret sv
+        end
+        prec += 1
+    end
+    ret ""
+end
+
 // ===== prelude.h =====
 // sal_strdup: strings are values in Salam; return an owned copy.
 // ByteAt - unsigned byte read from a str. THE shared copy of the byte_at
@@ -540,7 +633,7 @@ pub func VecPush<T>(v &: Vector<T>, item: T):
     v.push(item)
 end
 
-pub func VecAt<T>(v: Vector<T>, i: int): T: ret v.get(i)[0]
+pub func VecAt<T>(v: Vector<T>, i: int): T: ret v.get(i)
 end
 
 pub func VecLen<T>(v: Vector<T>): int: ret v.len()
@@ -590,7 +683,7 @@ pub func Format(fmt: str, args: Vector<FmtArg>): str:
         if i < n && fmt_ub(bp, i) == 42:
             width = 0
             if argi < args.len():
-                width = arg_i64(args.get(argi)[0]) as int
+                width = arg_i64(args.get(argi)) as int
                 argi += 1
             end
             i += 1
@@ -611,7 +704,7 @@ pub func Format(fmt: str, args: Vector<FmtArg>): str:
             if i < n && fmt_ub(bp, i) == 42:
                 prec = 0
                 if argi < args.len():
-                    prec = arg_i64(args.get(argi)[0]) as int
+                    prec = arg_i64(args.get(argi)) as int
                     argi += 1
                 end
                 i += 1
@@ -660,7 +753,7 @@ pub func Format(fmt: str, args: Vector<FmtArg>): str:
         end
         mut a := FmtArg {}
         if argi < args.len():
-            a = args.get(argi)[0]
+            a = args.get(argi)
             argi += 1
         end
         if cv == 100 || cv == 105:
@@ -850,5 +943,5 @@ end
 // --time-report parity check compares the JSON's shape, not this value, so
 // the difference shows up as a reported 0 rather than a missing key.
 pub func PeakRss(): i64:
-    ret 0 as i64
+    ret 0
 end

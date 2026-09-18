@@ -1,0 +1,83 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/optim: Adam, AdamW, RMSProp, and the schedules.
+
+import autograd
+import nn
+import optim
+import tensor
+import testing
+
+// Runs `steps` iterations of minimizing ||w - c||^2 with the chosen
+// optimizer (0 Adam, 1 AdamW, 2 RMSProp) and returns the final w[3].
+func drive(kind: int, steps: int, c &: tensor.Tensor): f64:
+    mut ps := nn.ParamStore {}
+    w := tensor.Zeros1(4)
+    h := ps.add("w", w)
+    mut adam := optim.Adam { lr = 0.1 }
+    mut adamw := optim.NewAdamW(0.1, 0.01)
+    mut rms := optim.RMSProp { lr = 0.05 }
+    mut tp := autograd.NewTape(1)
+    repeat steps:
+        tp.reset()
+        ps.zero_grad()
+        pw := nn.Bind(tp, ps, h)
+        cid := autograd.Input(tp, c)
+        loss := autograd.Sum(tp, autograd.Square(tp, autograd.Sub(tp, pw, cid)))
+        autograd.Backward(tp, loss)
+        if kind == 0:
+            adam.step(ps)
+        else kind == 1:
+            adamw.step(ps)
+        else:
+            rms.step(ps)
+        end
+    end
+    mut p := ps.at(h)
+    out := p.value.at(3)
+    tp.free()
+    adam.free()
+    adamw.free()
+    rms.free()
+    ps.free()
+    ret out
+end
+
+func main:
+    eps := 0.05
+
+    mut c := tensor.Arange(4)               // target 0 1 2 3
+
+    // All three adaptive optimizers reach the quadratic's minimum
+    testing.AssertEqFloat(drive(0, 400, c), 3.0, eps)
+    testing.AssertEqFloat(drive(1, 400, c), 3.0, eps)
+    testing.AssertEqFloat(drive(2, 500, c), 3.0, eps)
+
+    // Schedules
+    testing.AssertEqFloat(optim.StepLR(1.0, 0, 10, 0.5), 1.0, 0.000001)
+    testing.AssertEqFloat(optim.StepLR(1.0, 25, 10, 0.5), 0.25, 0.000001)
+    testing.AssertEqFloat(optim.CosineLR(1.0, 0, 100, 0.0), 1.0, 0.000001)
+    testing.AssertEqFloat(optim.CosineLR(1.0, 50, 100, 0.0), 0.5, 0.000001)
+    testing.AssertEqFloat(optim.CosineLR(1.0, 100, 100, 0.1), 0.1, 0.000001)
+    testing.AssertEqFloat(optim.WarmupCosine(1.0, 0, 10, 110, 0.0), 0.1, 0.000001)
+    testing.AssertEqFloat(optim.WarmupCosine(1.0, 9, 10, 110, 0.0), 1.0, 0.000001)
+    testing.AssertEqFloat(optim.WarmupCosine(1.0, 60, 10, 110, 0.0), 0.5, 0.000001)
+
+    tensor.Free(c)
+
+    ret testing.Summary()
+end

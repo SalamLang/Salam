@@ -1,0 +1,833 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// The matching engine: a pattern is parsed into a small syntax tree, the tree
+// is compiled to a flat instruction program, and the program is run by a
+// backtracking VM. Groups fall out of that shape for free - a capturing paren
+// becomes a pair of SAVE instructions that write the current text offset into
+// a slot, and the VM restores the slot when a branch fails, so what survives to
+// the MATCH instruction is exactly the spans of the branch that won.
+//
+// Everything lives in package globals: a compiled program is a set of parallel
+// int arrays, never a heap allocation, so Regex stays a plain value that nobody
+// has to free. Only the most recent pattern stays compiled (patterns repeat in
+// a loop far more often than they alternate), keyed on the pattern text.
+
+package regex
+
+const _RE_MAX_NODE := 512
+const _RE_MAX_PROG := 1024
+// Capture groups, not counting the whole match; slots are two per group plus
+// two for the whole match at index 0.
+const _RE_MAX_GROUP := 16
+const _RE_MAX_SLOT := 34
+// A run that needs more than this many VM steps, or nests deeper than this many
+// frames, is treated as "no match" instead of running away. Both are far above
+// what a sane pattern needs, and they are what keeps a pathological pattern
+// like (a*)* from spinning forever or overflowing the C stack.
+const _RE_MAX_STEP := 400000
+const _RE_MAX_DEPTH := 20000
+// Upper bound on a {n,m} count: the repetition is compiled by repeating the
+// body, so this bounds the program size too.
+const _RE_MAX_REP := 64
+// Loops that need a progress guard; deeper nesting than this falls back to the
+// step budget, which still terminates.
+const _RE_MAX_MARK := 16
+
+// Syntax tree node kinds.
+const _NK_EMPTY := 0
+const _NK_CHAR := 1
+const _NK_ANY := 2
+const _NK_CLASS := 3
+const _NK_ESC := 4
+const _NK_BOL := 5
+const _NK_EOL := 6
+const _NK_CAT := 7
+const _NK_ALT := 8
+const _NK_STAR := 9
+const _NK_PLUS := 10
+const _NK_QUEST := 11
+const _NK_GROUP := 12
+const _NK_REP := 13
+
+// VM opcodes.
+const _OP_CHAR := 1
+const _OP_ANY := 2
+const _OP_CLASS := 3
+const _OP_ESC := 4
+const _OP_SPLIT := 5
+const _OP_JMP := 6
+const _OP_SAVE := 7
+const _OP_MATCH := 8
+const _OP_BOL := 9
+const _OP_EOL := 10
+// A run of one single-byte atom: x is the pc of that atom, y the smallest
+// accepted count, z the greedy flag. The whole run is consumed by a loop and
+// backtracked by a counter, which is what keeps .* over a megabyte of text from
+// nesting a VM frame per byte.
+const _OP_MANY := 11
+// Progress guard for a loop whose body can match nothing. MARK records where
+// the iteration started; PROG jumps back only if the body actually consumed
+// something, and LSPLIT is the same test on the split that closes a `+`. A
+// backward target is the repeat branch, and only it is guarded.
+const _OP_MARK := 12
+const _OP_PROG := 13
+const _OP_LSPLIT := 14
+
+mut _re_last_end := -1
+mut _re_err := false
+mut _re_pi := 0
+mut _re_nnode := 0
+mut _re_nprog := 0
+mut _re_ngroup := 0
+mut _re_steps := 0
+mut _re_depth := 0
+mut _re_rep_min := 0
+mut _re_rep_max := 0
+mut _re_rep_end := 0
+mut _re_cached := false
+mut _re_cached_ok := false
+mut _re_cached_pat := ""
+mut _re_nmark := 0
+
+// Syntax tree: kind, left/right child, two payload ints (character code, group
+// number, class span, repetition bounds) and the greedy flag of a quantifier.
+mut _re_nk: int[_RE_MAX_NODE]
+mut _re_nl: int[_RE_MAX_NODE]
+mut _re_nr: int[_RE_MAX_NODE]
+mut _re_na: int[_RE_MAX_NODE]
+mut _re_nb: int[_RE_MAX_NODE]
+mut _re_ng: int[_RE_MAX_NODE]
+
+// Program: opcode plus two operands.
+mut _re_op: int[_RE_MAX_PROG]
+mut _re_ox: int[_RE_MAX_PROG]
+mut _re_oy: int[_RE_MAX_PROG]
+mut _re_oz: int[_RE_MAX_PROG]
+
+// Loop-entry offsets of the run in progress, one per progress-guarded loop.
+mut _re_mark: int[_RE_MAX_MARK]
+
+// Capture slots of the run in progress: 2*g is the start of group g, 2*g+1 its
+// end, -1 when the group did not take part in the match.
+mut _re_save: int[_RE_MAX_SLOT]
+
+inline pure func _bp(s: str): i8*: ret (s as void*) as i8* end
+
+inline pure func _ub(bp: i8*, i: int): int:
+    mut v := bp[i] as int
+    if v < 0: v = v + 256 end
+    ret v
+end
+
+// Byte equality, spelled out rather than via strcmp: the JS backend has no
+// strcmp, and this package has to behave the same on every backend.
+pure func _re_same(a: str, b: str): bool:
+    n := a.len()
+    if n != b.len(): ret false end
+    ap := _bp(a)
+    bpp := _bp(b)
+    mut i := 0
+    until i < n:
+        if _ub(ap, i) != _ub(bpp, i): ret false end
+        i += 1
+    end
+    ret true
+end
+
+inline pure func _re_is_digit(c: int): bool: ret c >= 48 && c <= 57 end
+
+inline pure func _re_is_word(c: int): bool:
+    ret (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || (c >= 48 && c <= 57) || c == 95
+end
+
+inline pure func _re_is_space(c: int): bool:
+    ret c == 32 || c == 9 || c == 10 || c == 13 || c == 11 || c == 12
+end
+
+// One \x escape against one input byte. Uppercase is the complement of
+// lowercase; anything else is a literal that never reaches here.
+pure func _re_esc_match(ec: int, cc: int): bool:
+    if ec == 100: ret _re_is_digit(cc)
+    else ec == 68: ret !_re_is_digit(cc)
+    else ec == 119: ret _re_is_word(cc)
+    else ec == 87: ret !_re_is_word(cc)
+    else ec == 115: ret _re_is_space(cc)
+    else ec == 83: ret !_re_is_space(cc)
+    end
+    ret cc == ec
+end
+
+// The byte an escape stands for when it is not a character class.
+pure func _re_esc_char(ec: int): int:
+    if ec == 110: ret 10
+    else ec == 116: ret 9
+    else ec == 114: ret 13
+    else ec == 102: ret 12
+    else ec == 118: ret 11
+    else ec == 48: ret 0
+    end
+    ret ec
+end
+
+// Index just past the ']' that closes the class starting at `start`, or -1 if
+// it is never closed. A ']' first in the class is a literal, and a backslash
+// escapes whatever follows it.
+pure func _re_scan_class(pat: str, start: int): int:
+    pl := pat.len()
+    pp := _bp(pat)
+    mut q := start + 1
+    if q < pl && _ub(pp, q) == 94: q += 1 end
+    if q < pl && _ub(pp, q) == 93: q += 1 end
+    until q < pl && _ub(pp, q) != 93:
+        if _ub(pp, q) == 92: q += 1 end
+        q += 1
+    end
+    if q < pl && _ub(pp, q) == 93: ret q + 1 end
+    ret -1
+end
+
+// Match one byte against the class spanning pat[start .. stop), where start is
+// the '[' and stop is just past the ']'.
+pure func _re_class_match(pat: str, start: int, stop: int, cc: int): bool:
+    pp := _bp(pat)
+    mut q := start + 1
+    mut neg := false
+    mut found := false
+    if q < stop && _ub(pp, q) == 94:
+        neg = true
+        q += 1
+    end
+    // stop - 1 is the closing ']', so the items end there.
+    last := stop - 1
+    if q < last && _ub(pp, q) == 93:
+        if cc == 93: found = true end
+        q += 1
+    end
+    until q < last:
+        c := _ub(pp, q)
+        if c == 92 && q + 1 < last:
+            ec := _ub(pp, q + 1)
+            if ec == 100 || ec == 68 || ec == 119 || ec == 87 || ec == 115 || ec == 83:
+                if _re_esc_match(ec, cc): found = true end
+            else:
+                if cc == _re_esc_char(ec): found = true end
+            end
+            q += 2
+        else q + 2 < last && _ub(pp, q + 1) == 45:
+            lo := c
+            hi := _ub(pp, q + 2)
+            if cc >= lo && cc <= hi: found = true end
+            q += 3
+        else:
+            if cc == c: found = true end
+            q += 1
+        end
+    end
+    if neg: ret !found end
+    ret found
+end
+
+func _re_new_node(k: int, l: int, r: int, a: int, b: int): int:
+    if _re_nnode >= _RE_MAX_NODE:
+        _re_err = true
+        ret 0
+    end
+    id := _re_nnode
+    _re_nk[id] = k
+    _re_nl[id] = l
+    _re_nr[id] = r
+    _re_na[id] = a
+    _re_nb[id] = b
+    _re_ng[id] = 1
+    _re_nnode += 1
+    ret id
+end
+
+func _re_next_group(): int:
+    if _re_ngroup >= _RE_MAX_GROUP:
+        _re_err = true
+        ret 0
+    end
+    _re_ngroup += 1
+    ret _re_ngroup
+end
+
+// Read a {n}, {n,} or {n,m} at `start` into _re_rep_*. False means "this brace
+// is not a repetition", and the caller treats it as an ordinary character.
+func _re_scan_rep(pat: str, start: int): bool:
+    pl := pat.len()
+    pp := _bp(pat)
+    mut q := start + 1
+    mut lo := 0
+    mut nlo := 0
+    until q < pl && _re_is_digit(_ub(pp, q)):
+        lo = lo * 10 + (_ub(pp, q) - 48)
+        nlo += 1
+        q += 1
+    end
+    if nlo == 0: ret false end
+    mut hi := lo
+    if q < pl && _ub(pp, q) == 44:
+        q += 1
+        mut h := 0
+        mut nhi := 0
+        until q < pl && _re_is_digit(_ub(pp, q)):
+            h = h * 10 + (_ub(pp, q) - 48)
+            nhi += 1
+            q += 1
+        end
+        if nhi == 0: hi = -1 else: hi = h end
+    end
+    if q >= pl || _ub(pp, q) != 125: ret false end
+    if hi >= 0 && hi < lo: ret false end
+    // A count this large is a repetition the compiler cannot lay out, not a
+    // literal brace: say so rather than quietly matching something else.
+    if lo > _RE_MAX_REP || hi > _RE_MAX_REP:
+        _re_err = true
+        ret false
+    end
+    _re_rep_min = lo
+    _re_rep_max = hi
+    _re_rep_end = q + 1
+    ret true
+end
+
+func _re_p_atom(pat: str): int:
+    pl := pat.len()
+    pp := _bp(pat)
+    if _re_pi >= pl: ret _re_new_node(_NK_EMPTY, -1, -1, 0, 0) end
+    c := _ub(pp, _re_pi)
+    if c == 40:
+        _re_pi += 1
+        mut gnum := 0
+        if _re_pi < pl && _ub(pp, _re_pi) == 63:
+            _re_pi += 1
+            mut nc := -1
+            if _re_pi < pl: nc = _ub(pp, _re_pi) end
+            if nc == 58:
+                _re_pi += 1
+            else nc == 60 || nc == 80:
+                if nc == 80:
+                    _re_pi += 1
+                    if _re_pi >= pl || _ub(pp, _re_pi) != 60:
+                        _re_err = true
+                        ret 0
+                    end
+                end
+                _re_pi += 1
+                until _re_pi < pl && _ub(pp, _re_pi) != 62:
+                    _re_pi += 1
+                end
+                if _re_pi >= pl:
+                    _re_err = true
+                    ret 0
+                end
+                _re_pi += 1
+                gnum = _re_next_group()
+            else:
+                // Lookaround and inline flags are not supported.
+                _re_err = true
+                ret 0
+            end
+        else:
+            gnum = _re_next_group()
+        end
+        inner := _re_p_alt(pat)
+        if _re_err: ret inner end
+        if _re_pi >= pl || _ub(pp, _re_pi) != 41:
+            _re_err = true
+            ret inner
+        end
+        _re_pi += 1
+        if gnum > 0: ret _re_new_node(_NK_GROUP, inner, -1, gnum, 0) end
+        ret inner
+    else c == 91:
+        stop := _re_scan_class(pat, _re_pi)
+        if stop < 0:
+            _re_err = true
+            ret 0
+        end
+        st := _re_pi
+        _re_pi = stop
+        ret _re_new_node(_NK_CLASS, -1, -1, st, stop)
+    else c == 92:
+        if _re_pi + 1 >= pl:
+            _re_err = true
+            ret 0
+        end
+        e := _ub(pp, _re_pi + 1)
+        _re_pi += 2
+        if e == 100 || e == 68 || e == 119 || e == 87 || e == 115 || e == 83:
+            ret _re_new_node(_NK_ESC, -1, -1, e, 0)
+        end
+        ret _re_new_node(_NK_CHAR, -1, -1, _re_esc_char(e), 0)
+    else c == 46:
+        _re_pi += 1
+        ret _re_new_node(_NK_ANY, -1, -1, 0, 0)
+    else c == 94:
+        _re_pi += 1
+        ret _re_new_node(_NK_BOL, -1, -1, 0, 0)
+    else c == 36:
+        _re_pi += 1
+        ret _re_new_node(_NK_EOL, -1, -1, 0, 0)
+    else c == 41 || c == 42 || c == 43 || c == 63:
+        // A stray ')' or a quantifier with nothing in front of it.
+        _re_err = true
+        ret 0
+    end
+    _re_pi += 1
+    ret _re_new_node(_NK_CHAR, -1, -1, c, 0)
+end
+
+func _re_p_repeat(pat: str): int:
+    mut node := _re_p_atom(pat)
+    pl := pat.len()
+    pp := _bp(pat)
+    mut going := true
+    until going && !_re_err:
+        if _re_pi >= pl:
+            going = false
+        else:
+            c := _ub(pp, _re_pi)
+            if c == 42 || c == 43 || c == 63:
+                _re_pi += 1
+                mut greedy := 1
+                if _re_pi < pl && _ub(pp, _re_pi) == 63:
+                    greedy = 0
+                    _re_pi += 1
+                end
+                mut k := _NK_STAR
+                if c == 43: k = _NK_PLUS
+                else c == 63: k = _NK_QUEST
+                end
+                node = _re_new_node(k, node, -1, 0, 0)
+                _re_ng[node] = greedy
+            else c == 123 && _re_scan_rep(pat, _re_pi):
+                _re_pi = _re_rep_end
+                mut greedy := 1
+                if _re_pi < pl && _ub(pp, _re_pi) == 63:
+                    greedy = 0
+                    _re_pi += 1
+                end
+                node = _re_new_node(_NK_REP, node, -1, _re_rep_min, _re_rep_max)
+                _re_ng[node] = greedy
+            else:
+                going = false
+            end
+        end
+    end
+    ret node
+end
+
+func _re_p_concat(pat: str): int:
+    pl := pat.len()
+    pp := _bp(pat)
+    mut left := -1
+    mut going := true
+    until going && !_re_err:
+        if _re_pi >= pl:
+            going = false
+        else:
+            c := _ub(pp, _re_pi)
+            if c == 124 || c == 41:
+                going = false
+            else:
+                n := _re_p_repeat(pat)
+                if left < 0:
+                    left = n
+                else:
+                    left = _re_new_node(_NK_CAT, left, n, 0, 0)
+                end
+            end
+        end
+    end
+    if left < 0: ret _re_new_node(_NK_EMPTY, -1, -1, 0, 0) end
+    ret left
+end
+
+func _re_p_alt(pat: str): int:
+    mut left := _re_p_concat(pat)
+    pl := pat.len()
+    pp := _bp(pat)
+    until !_re_err && _re_pi < pl && _ub(pp, _re_pi) == 124:
+        _re_pi += 1
+        right := _re_p_concat(pat)
+        left = _re_new_node(_NK_ALT, left, right, 0, 0)
+    end
+    ret left
+end
+
+func _re_emit(op: int, x: int, y: int): int:
+    if _re_nprog >= _RE_MAX_PROG:
+        _re_err = true
+        ret 0
+    end
+    id := _re_nprog
+    _re_op[id] = op
+    _re_ox[id] = x
+    _re_oy[id] = y
+    _re_oz[id] = 0
+    _re_nprog += 1
+    ret id
+end
+
+// Whether a node can match the empty string. A loop over such a body would
+// otherwise repeat forever without moving, so this is what decides that the
+// loop needs a progress guard.
+func _re_nullable(node: int): bool:
+    k := _re_nk[node]
+    if k == _NK_EMPTY || k == _NK_BOL || k == _NK_EOL: ret true
+    else k == _NK_CHAR || k == _NK_ANY || k == _NK_CLASS || k == _NK_ESC: ret false
+    else k == _NK_CAT: ret _re_nullable(_re_nl[node]) && _re_nullable(_re_nr[node])
+    else k == _NK_ALT: ret _re_nullable(_re_nl[node]) || _re_nullable(_re_nr[node])
+    else k == _NK_STAR || k == _NK_QUEST: ret true
+    else k == _NK_PLUS || k == _NK_GROUP: ret _re_nullable(_re_nl[node])
+    else k == _NK_REP: ret _re_na[node] == 0 || _re_nullable(_re_nl[node])
+    end
+    ret true
+end
+
+// A mark slot for one guarded loop, or -1 when they are all in use.
+func _re_new_mark(): int:
+    if _re_nmark >= _RE_MAX_MARK: ret 0 - 1 end
+    id := _re_nmark
+    _re_nmark += 1
+    ret id
+end
+
+// Whether a node compiles to exactly one instruction that eats exactly one
+// byte - the shape a MANY run can hold.
+func _re_simple_atom(node: int): bool:
+    k := _re_nk[node]
+    ret k == _NK_CHAR || k == _NK_ANY || k == _NK_CLASS || k == _NK_ESC
+end
+
+// Emit `body` repeated `min` or more times as one MANY run. The atom sits right
+// after the MANY, so what follows the run is always pc + 2.
+func _re_gen_many(body: int, min: int, greedy: int):
+    mp := _re_emit(_OP_MANY, 0, min)
+    _re_oz[mp] = greedy
+    _re_ox[mp] = _re_nprog
+    _re_gen(body)
+end
+
+// x?  - a split that either enters the body or steps over it. Greedy prefers
+// entering, lazy prefers skipping; that preference order is the whole
+// difference between .* and .*? once the VM tries branches left to right.
+func _re_gen_quest(body: int, greedy: int):
+    sp := _re_emit(_OP_SPLIT, 0, 0)
+    bs := _re_nprog
+    _re_gen(body)
+    after := _re_nprog
+    if greedy == 1:
+        _re_ox[sp] = bs
+        _re_oy[sp] = after
+    else:
+        _re_ox[sp] = after
+        _re_oy[sp] = bs
+    end
+end
+
+// x* - the same split, with a jump back to it after the body.
+func _re_gen_star(body: int, greedy: int):
+    if _re_simple_atom(body):
+        _re_gen_many(body, 0, greedy)
+        ret
+    end
+    top := _re_nprog
+    sp := _re_emit(_OP_SPLIT, 0, 0)
+    bs := _re_nprog
+    mut mslot := 0 - 1
+    if _re_nullable(body): mslot = _re_new_mark() end
+    if mslot >= 0: _re_emit(_OP_MARK, mslot, 0) end
+    _re_gen(body)
+    if mslot >= 0:
+        _re_emit(_OP_PROG, top, mslot)
+    else:
+        _re_emit(_OP_JMP, top, 0)
+    end
+    after := _re_nprog
+    if greedy == 1:
+        _re_ox[sp] = bs
+        _re_oy[sp] = after
+    else:
+        _re_ox[sp] = after
+        _re_oy[sp] = bs
+    end
+end
+
+func _re_gen(node: int):
+    if _re_err: ret end
+    k := _re_nk[node]
+    if k == _NK_EMPTY:
+        ret
+    else k == _NK_CHAR:
+        _re_emit(_OP_CHAR, _re_na[node], 0)
+    else k == _NK_ANY:
+        _re_emit(_OP_ANY, 0, 0)
+    else k == _NK_CLASS:
+        _re_emit(_OP_CLASS, _re_na[node], _re_nb[node])
+    else k == _NK_ESC:
+        _re_emit(_OP_ESC, _re_na[node], 0)
+    else k == _NK_BOL:
+        _re_emit(_OP_BOL, 0, 0)
+    else k == _NK_EOL:
+        _re_emit(_OP_EOL, 0, 0)
+    else k == _NK_CAT:
+        _re_gen(_re_nl[node])
+        _re_gen(_re_nr[node])
+    else k == _NK_ALT:
+        sp := _re_emit(_OP_SPLIT, 0, 0)
+        _re_ox[sp] = _re_nprog
+        _re_gen(_re_nl[node])
+        jp := _re_emit(_OP_JMP, 0, 0)
+        _re_oy[sp] = _re_nprog
+        _re_gen(_re_nr[node])
+        _re_ox[jp] = _re_nprog
+    else k == _NK_STAR:
+        _re_gen_star(_re_nl[node], _re_ng[node])
+    else k == _NK_PLUS:
+        if _re_simple_atom(_re_nl[node]):
+            _re_gen_many(_re_nl[node], 1, _re_ng[node])
+        else:
+            top := _re_nprog
+            mut mslot := 0 - 1
+            if _re_nullable(_re_nl[node]): mslot = _re_new_mark() end
+            if mslot >= 0: _re_emit(_OP_MARK, mslot, 0) end
+            _re_gen(_re_nl[node])
+            mut sp := 0
+            if mslot >= 0:
+                sp = _re_emit(_OP_LSPLIT, 0, 0)
+                _re_oz[sp] = mslot
+            else:
+                sp = _re_emit(_OP_SPLIT, 0, 0)
+            end
+            after := _re_nprog
+            if _re_ng[node] == 1:
+                _re_ox[sp] = top
+                _re_oy[sp] = after
+            else:
+                _re_ox[sp] = after
+                _re_oy[sp] = top
+            end
+        end
+    else k == _NK_QUEST:
+        _re_gen_quest(_re_nl[node], _re_ng[node])
+    else k == _NK_GROUP:
+        g := _re_na[node]
+        _re_emit(_OP_SAVE, 2 * g, 0)
+        _re_gen(_re_nl[node])
+        _re_emit(_OP_SAVE, 2 * g + 1, 0)
+    else k == _NK_REP:
+        // {n,m} is compiled by repetition: n copies of the body, then either a
+        // star (open ended) or m-n optional copies.
+        body := _re_nl[node]
+        lo := _re_na[node]
+        hi := _re_nb[node]
+        greedy := _re_ng[node]
+        repeat lo:
+            _re_gen(body)
+        end
+        if hi < 0:
+            _re_gen_star(body, greedy)
+        else:
+            repeat hi - lo:
+                _re_gen_quest(body, greedy)
+            end
+        end
+    end
+end
+
+// Compile `pat` into the program globals, reusing the last compile when the
+// pattern text is unchanged. Returns false for a pattern the parser rejects.
+func _re_compile(pat: str): bool:
+    if _re_cached && _re_same(_re_cached_pat, pat): ret _re_cached_ok end
+    _re_err = false
+    _re_pi = 0
+    _re_nnode = 0
+    _re_nprog = 0
+    _re_ngroup = 0
+    _re_nmark = 0
+    _re_emit(_OP_SAVE, 0, 0)
+    root := _re_p_alt(pat)
+    // Anything left over is an unbalanced ')'.
+    if _re_pi < pat.len(): _re_err = true end
+    _re_gen(root)
+    _re_emit(_OP_SAVE, 1, 0)
+    _re_emit(_OP_MATCH, 0, 0)
+    _re_cached = true
+    _re_cached_pat = pat
+    _re_cached_ok = !_re_err
+    ret _re_cached_ok
+end
+
+// One single-byte instruction against text[si]; the MANY loop is the only
+// caller, since every other opcode is dispatched by _re_step itself.
+func _re_atom_ok(pat: str, text: str, apc: int, si: int): bool:
+    tp := _bp(text)
+    op := _re_op[apc]
+    if op == _OP_CHAR: ret _ub(tp, si) == _re_ox[apc]
+    else op == _OP_ANY: ret true
+    else op == _OP_CLASS: ret _re_class_match(pat, _re_ox[apc], _re_oy[apc], _ub(tp, si))
+    else op == _OP_ESC: ret _re_esc_match(_re_ox[apc], _ub(tp, si))
+    end
+    ret false
+end
+
+func _re_step(pat: str, text: str, pc: int, si: int): int:
+    tl := text.len()
+    tp := _bp(text)
+    op := _re_op[pc]
+    if op == _OP_CHAR:
+        if si < tl && _ub(tp, si) == _re_ox[pc]: ret _re_run(pat, text, pc + 1, si + 1) end
+        ret -1
+    else op == _OP_ANY:
+        if si < tl: ret _re_run(pat, text, pc + 1, si + 1) end
+        ret -1
+    else op == _OP_CLASS:
+        if si < tl && _re_class_match(pat, _re_ox[pc], _re_oy[pc], _ub(tp, si)):
+            ret _re_run(pat, text, pc + 1, si + 1)
+        end
+        ret -1
+    else op == _OP_ESC:
+        if si < tl && _re_esc_match(_re_ox[pc], _ub(tp, si)):
+            ret _re_run(pat, text, pc + 1, si + 1)
+        end
+        ret -1
+    else op == _OP_BOL:
+        if si == 0: ret _re_run(pat, text, pc + 1, si) end
+        ret -1
+    else op == _OP_EOL:
+        if si == tl: ret _re_run(pat, text, pc + 1, si) end
+        ret -1
+    else op == _OP_MANY:
+        // Take the whole run first, then give bytes back one at a time (or
+        // hand them out one at a time, when lazy), trying the rest of the
+        // pattern after each. Only that trial recurses, so the run itself
+        // costs no stack.
+        atom := _re_ox[pc]
+        min := _re_oy[pc]
+        mut count := 0
+        until si + count < tl && _re_atom_ok(pat, text, atom, si + count):
+            count += 1
+        end
+        if count < min: ret -1 end
+        if _re_oz[pc] == 1:
+            mut n := count
+            until n >= min:
+                r := _re_run(pat, text, pc + 2, si + n)
+                if r >= 0: ret r end
+                n -= 1
+            end
+            ret -1
+        end
+        mut n := min
+        until n <= count:
+            r := _re_run(pat, text, pc + 2, si + n)
+            if r >= 0: ret r end
+            n += 1
+        end
+        ret -1
+    else op == _OP_SPLIT:
+        r := _re_run(pat, text, _re_ox[pc], si)
+        if r >= 0: ret r end
+        ret _re_run(pat, text, _re_oy[pc], si)
+    else op == _OP_MARK:
+        slot := _re_ox[pc]
+        old := _re_mark[slot]
+        _re_mark[slot] = si
+        r := _re_run(pat, text, pc + 1, si)
+        if r >= 0: ret r end
+        _re_mark[slot] = old
+        ret -1
+    else op == _OP_PROG:
+        // The body matched nothing, so another turn round the loop would match
+        // nothing again: leave instead.
+        if si > _re_mark[_re_oy[pc]]: ret _re_run(pat, text, _re_ox[pc], si) end
+        ret _re_run(pat, text, pc + 1, si)
+    else op == _OP_LSPLIT:
+        // Same guard, on a split: a target behind us is the repeat branch.
+        mut r := -1
+        if _re_ox[pc] > pc || si > _re_mark[_re_oz[pc]]:
+            r = _re_run(pat, text, _re_ox[pc], si)
+            if r >= 0: ret r end
+        end
+        if _re_oy[pc] > pc || si > _re_mark[_re_oz[pc]]:
+            ret _re_run(pat, text, _re_oy[pc], si)
+        end
+        ret -1
+    else op == _OP_JMP:
+        ret _re_run(pat, text, _re_ox[pc], si)
+    else op == _OP_SAVE:
+        slot := _re_ox[pc]
+        old := _re_save[slot]
+        _re_save[slot] = si
+        r := _re_run(pat, text, pc + 1, si)
+        if r >= 0: ret r end
+        // This branch lost, so the span it recorded never happened.
+        _re_save[slot] = old
+        ret -1
+    else op == _OP_MATCH:
+        ret si
+    end
+    ret -1
+end
+
+func _re_run(pat: str, text: str, pc: int, si: int): int:
+    _re_steps += 1
+    _re_depth += 1
+    if _re_steps > _RE_MAX_STEP || _re_depth > _RE_MAX_DEPTH:
+        _re_depth -= 1
+        ret -1
+    end
+    r := _re_step(pat, text, pc, si)
+    _re_depth -= 1
+    ret r
+end
+
+// Leftmost match of `pat` in `text` at or after `from`. On success the span and
+// every group span are left in _re_save for the caller to read out.
+func _re_exec(pat: str, text: str, from: int): bool:
+    if !_re_compile(pat): ret false end
+    tl := text.len()
+    mut si := from
+    if si < 0: si = 0 end
+    until si <= tl:
+        // The budget is per starting offset, not per search: runaway
+        // backtracking is something one offset does, and a shared budget would
+        // otherwise turn a long subject into a false "no match" once the plain
+        // left-to-right scan had spent it.
+        _re_steps = 0
+        _re_depth = 0
+        mut k := 0
+        until k < _RE_MAX_SLOT:
+            _re_save[k] = -1
+            k += 1
+        end
+        e := _re_run(pat, text, 0, si)
+        if e >= 0:
+            _re_last_end = e
+            ret true
+        end
+        si += 1
+    end
+    ret false
+end
+
+// Start offset of the leftmost match, or -1. _re_last_end holds its end.
+func _re_search(pat: str, text: str): int:
+    if !_re_exec(pat, text, 0): ret -1 end
+    ret _re_save[0]
+end

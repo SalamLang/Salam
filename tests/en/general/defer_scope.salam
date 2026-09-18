@@ -1,0 +1,113 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// `defer` is scoped to the block it is written in, not to the function.
+//
+// A defer inside an `if` used to be replayed at function exit, where the
+// variable it names is out of scope: the C backend emitted "'v' undeclared"
+// from the generated C and the LLVM backend refused with "address of an
+// unknown identifier". Both compile now, and all four backends agree on
+// when the cleanup runs.
+
+func report(tag: str):
+    print tag
+    println ""
+end
+
+// The case that did not compile at all: the deferred name lives inside the
+// branch, so its cleanup has to be emitted before the branch closes.
+func block_local():
+    n := 3
+    if n > 1:
+        mut v := Vector {} as Vector<int>
+        defer v.free()
+        v.push(7)
+        println v.len()
+    end
+    report("after branch")
+end
+
+// A branch that is not taken registers nothing, so the cleanup must not run.
+// Function-exit replay used to free this twice.
+func untaken_branch():
+    mut v := Vector {} as Vector<int>
+    n := 0
+    if n > 1:
+        defer v.free()
+        report("taken")
+    end
+    v.push(7)
+    println v.len()
+    v.free()
+    report("after untaken")
+end
+
+// A loop body registers its defer on every pass, so it runs once per
+// iteration rather than once for the whole loop.
+func per_iteration():
+    mut i := 0
+    until i < 3:
+        defer report("iter")
+        i = i + 1
+    end
+    report("after loop")
+end
+
+// break leaves the body without reaching its end, and still runs it.
+func through_break():
+    mut i := 0
+    until i < 5:
+        defer report("b-iter")
+        if i == 1:
+            break
+        end
+        i = i + 1
+    end
+    report("after break")
+end
+
+// continue is the same jump, one iteration earlier.
+func through_continue():
+    mut i := 0
+    until i < 3:
+        defer report("c-iter")
+        i = i + 1
+        if i == 2:
+            continue
+        end
+        report("body-end")
+    end
+    report("after continue")
+end
+
+// A return unwinds every open block, innermost defer first.
+func through_return(n: int): int:
+    defer report("fn-level")
+    if n > 0:
+        defer report("branch-level")
+        ret 1
+    end
+    ret 0
+end
+
+func main:
+    block_local()
+    untaken_branch()
+    per_iteration()
+    through_break()
+    through_continue()
+    println through_return(1)
+    println through_return(0)
+    ret 0
+end

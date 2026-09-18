@@ -1,0 +1,216 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package image
+
+// Paired brackets (UAX #9 rules BD16 and N0), the part of the bidi
+// algorithm that keeps "hello (سلام) 42 world" from coming apart.
+//
+// Without it, a bracket is just another neutral character and takes its
+// direction from whatever is on each side of it. That is fine for one
+// bracket and wrong for a pair: in the line above, the closing bracket
+// sits between Persian text and a number - both of which count as
+// right-to-left for that decision - so it joins the Persian run, and the
+// number is dragged across the sentence with it. The two brackets end up
+// in different runs and the phrase they were supposed to enclose is no
+// longer enclosed by anything.
+//
+// N0 fixes that by resolving a bracket PAIR together, before the
+// ordinary neutral rules run:
+//
+//   - a pair containing strong text in the paragraph's own direction
+//     takes that direction,
+//   - a pair containing only opposite-direction text takes the opposite
+//     direction if the text before the pair also runs that way, and the
+//     paragraph direction otherwise,
+//   - a pair containing no strong text at all is left to the ordinary
+//     neutral rules.
+//
+// BD16 is how the pairs are found: a stack of at most 63 open brackets,
+// with a closing bracket matching the nearest open one still on it.
+// Anything unmatched is left alone.
+//
+// The bracket table covers the ASCII pairs and the CJK/fullwidth ones a
+// mixed-language line realistically contains. Unicode's own
+// Bidi_Paired_Bracket property lists a few dozen more (mathematical
+// ornaments and the like); they behave as plain neutrals here, which is
+// what they did everywhere in this file before N0 existed.
+
+const _BIDI_MAX_PAIRS := 63
+
+// The closing bracket that goes with `cp`, or 0 when `cp` does not open
+// a pair.
+func _bidi_bracket_close(cp: int): int:
+    if cp == 0x28: ret 0x29 end
+    if cp == 0x5B: ret 0x5D end
+    if cp == 0x7B: ret 0x7D end
+    if cp == 0x2045: ret 0x2046 end
+    if cp == 0x2308: ret 0x2309 end
+    if cp == 0x230A: ret 0x230B end
+    if cp == 0x3008: ret 0x3009 end
+    if cp == 0x300A: ret 0x300B end
+    if cp == 0x300C: ret 0x300D end
+    if cp == 0x300E: ret 0x300F end
+    if cp == 0x3010: ret 0x3011 end
+    if cp == 0x3014: ret 0x3015 end
+    if cp == 0x3016: ret 0x3017 end
+    if cp == 0x3018: ret 0x3019 end
+    if cp == 0x301A: ret 0x301B end
+    if cp == 0xFF08: ret 0xFF09 end
+    if cp == 0xFF3B: ret 0xFF3D end
+    if cp == 0xFF5B: ret 0xFF5D end
+    ret 0
+end
+
+// L, or R for everything that pulls a neutral rightwards - which
+// includes both kinds of number, exactly as N0 and N1 specify.
+func _bidi_strong_of(c: int): int:
+    if c == _BC_L: ret _BC_L end
+    if c == _BC_R || c == _BC_EN || c == _BC_AN: ret _BC_R end
+    ret 0 - 1
+end
+
+// BD16: match every closing bracket with the nearest unmatched opening
+// one, recording the pairs in `opens`/`closes`. A closing bracket with
+// no match on the stack is skipped, and the whole scan stops once 63
+// brackets are open, both as the spec requires.
+func _bidi_find_pairs(cps &: Vector<int>, classes &: Vector<int>, opens &: Vector<int>, closes &: Vector<int>):
+    mut stack_close := Vector {} as Vector<int>
+    mut stack_pos := Vector {} as Vector<int>
+    mut i := 0
+    until i < cps.len():
+        if classes.get(i) == _BC_ON:
+            cp := cps.get(i)
+            closer := _bidi_bracket_close(cp)
+            if closer != 0:
+                if stack_close.len() >= _BIDI_MAX_PAIRS:
+                    break
+                end
+                stack_close.push(closer)
+                stack_pos.push(i)
+            else:
+                mut k := stack_close.len() - 1
+                until k >= 0:
+                    if stack_close.get(k) == cp:
+                        opens.push(stack_pos.get(k))
+                        closes.push(i)
+                        until stack_close.len() <= k:
+                            stack_close.pop()
+                            stack_pos.pop()
+                        end
+                        break
+                    end
+                    k -= 1
+                end
+            end
+        end
+        i += 1
+    end
+    stack_close.free()
+    stack_pos.free()
+    // N0 processes pairs in order of their opening position. Popping the
+    // stack can record an inner pair before an outer one, so sort - the
+    // lists are tiny, which is what makes insertion sort the right one.
+    mut a := 1
+    until a < opens.len():
+        o := opens.get(a)
+        c := closes.get(a)
+        mut b := a - 1
+        until b >= 0 && opens.get(b) > o:
+            opens.set(b + 1, opens.get(b))
+            closes.set(b + 1, closes.get(b))
+            b -= 1
+        end
+        opens.set(b + 1, o)
+        closes.set(b + 1, c)
+        a += 1
+    end
+end
+
+// The strong direction found strictly between the brackets: the
+// embedding direction wins if present, otherwise the opposite one if
+// present, otherwise none.
+func _bidi_inside_strong(classes &: Vector<int>, open: int, close: int, e: int): int:
+    mut found_opposite := false
+    mut i := open + 1
+    until i < close:
+        s := _bidi_strong_of(classes.get(i))
+        if s == e:
+            ret e
+        end
+        if s >= 0:
+            found_opposite = true
+        end
+        i += 1
+    end
+    if found_opposite:
+        if e == _BC_L: ret _BC_R end
+        ret _BC_L
+    end
+    ret 0 - 1
+end
+
+// The first strong direction before the opening bracket, or the
+// paragraph direction when there is none (the "sos" of the run).
+func _bidi_before_strong(classes &: Vector<int>, open: int, base: int): int:
+    mut i := open - 1
+    until i >= 0:
+        s := _bidi_strong_of(classes.get(i))
+        if s >= 0:
+            ret s
+        end
+        i -= 1
+    end
+    if base == 1:
+        ret _BC_R
+    end
+    ret _BC_L
+end
+
+// N0. Runs after the weak rules and before the neutral ones: it turns
+// the two brackets of a pair into strong characters of the same
+// direction, which is what the neutral rules then resolve around.
+func _bidi_resolve_pairs(cps &: Vector<int>, classes &: Vector<int>, base: int):
+    mut e := _BC_L
+    if base == 1:
+        e = _BC_R
+    end
+    mut opens := Vector {} as Vector<int>
+    mut closes := Vector {} as Vector<int>
+    _bidi_find_pairs(cps, classes, opens, closes)
+    mut i := 0
+    until i < opens.len():
+        open := opens.get(i)
+        close := closes.get(i)
+        inside := _bidi_inside_strong(classes, open, close, e)
+        if inside == e:
+            classes.set(open, e)
+            classes.set(close, e)
+        else if inside >= 0:
+            // Opposite-direction text inside: the pair follows it only
+            // when the text leading up to the pair runs that way too,
+            // and follows the paragraph otherwise.
+            if _bidi_before_strong(classes, open, base) == inside:
+                classes.set(open, inside)
+                classes.set(close, inside)
+            else:
+                classes.set(open, e)
+                classes.set(close, e)
+            end
+        end
+        i += 1
+    end
+    opens.free()
+    closes.free()
+end

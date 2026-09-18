@@ -57,6 +57,55 @@ func _is_package(root: str, name: str): bool:
     ret file.Exists(path.Join(path.Join(root, name), name.concat(".salam")))
 end
 
+// Appends every importable package under `dir_path` by its dotted import
+// name, then descends into each one. `encoding.json` is a package in its own
+// right, not a corner of `encoding`, and that is the name an `import` line
+// spells - so that is the name the listing gives back.
+func _collect_pkgs(out &: Vector<str>, dir_path: str, prefix: str):
+    names := mcptxt.Sorted(dir.ListDirs(dir_path))
+    mut i := 0
+    until i < names.len():
+        n := names.get(i)
+        if !str.StartsWith(n, ".") && _is_package(dir_path, n):
+            mut full := n
+            if prefix.len() > 0: full = prefix.concat(".").concat(n) end
+            out.push(full)
+            _collect_pkgs(out, path.Join(dir_path, n), full)
+        end
+        i += 1
+    end
+end
+
+// Turns an import name into the directory holding it: `encoding.json` lives
+// at std/encoding/json. Joining a segment at a time leaves the separator to
+// the platform instead of baking '/' into the path.
+func _pkg_dir(root: str, pkg: str): str:
+    parts := str.Split(pkg, ".")
+    mut p := root
+    mut i := 0
+    until i < parts.len():
+        p = path.Join(p, parts.get(i))
+        i += 1
+    end
+    ret p
+end
+
+// The sources of one package: the .salam files directly in its directory.
+// Descending further would answer for the nested packages too, which have
+// their own names and answer for themselves.
+func _pkg_sources(pkg_dir: str): Vector<str>:
+    out := Vector {} as Vector<str>
+    if !dir.Exists(pkg_dir): ret out end
+    names := mcptxt.Sorted(dir.List(pkg_dir))
+    mut i := 0
+    until i < names.len():
+        n := names.get(i)
+        if _is_salam(n): out.push(path.Join(pkg_dir, n)) end
+        i += 1
+    end
+    ret out
+end
+
 // Every .salam file under a directory, recursively, in a stable order.
 // dir.Walk follows the filesystem, so sorting is what keeps symbol and
 // example listings identical across machines.
@@ -66,7 +115,7 @@ func _sources(root: str): Vector<str>:
     all := mcptxt.Sorted(dir.Walk(root))
     mut i := 0
     until i < all.len():
-        p := all.get(i)[0]
+        p := all.get(i)
         if _is_salam(p): out.push(p) end
         i += 1
     end
@@ -92,7 +141,7 @@ func _decls_in(file_path: str, query: str): Vector<str>:
     lines := mcptxt.Lines(file.ReadText(file_path))
     mut i := 0
     until i < lines.len():
-        ln := lines.get(i)[0]
+        ln := lines.get(i)
         kind := _decl_kind(ln)
         if kind.len() > 0 && mcptxt.ContainsFold(ln, query):
             out.push(ln.trim())
@@ -107,7 +156,7 @@ func _hits_in(file_path: str, query: str, cap: int): Vector<str>:
     lines := mcptxt.Lines(file.ReadText(file_path))
     mut i := 0
     until i < lines.len() && out.len() < cap:
-        ln := lines.get(i)[0]
+        ln := lines.get(i)
         if mcptxt.ContainsFold(ln, query):
             out.push(str.FromInt(i + 1).concat(": ").concat(ln.trim()))
         end
@@ -117,20 +166,35 @@ func _hits_in(file_path: str, query: str, cap: int): Vector<str>:
 end
 
 // Pulls one {TK_..., "word"} table out of the compiler's langpack source.
+// The keyword spellings for one language, read out of the self-hosted
+// langpack's parallel arrays (k_kw_spell_en / _fa / _ar). Used to parse the C
+// compiler's kw_entry_t rows, which no longer exist; the data is the same, the
+// shape is a plain Salam array literal now.
 func _kw_table(src: str, array_name: str): Vector<str>:
     out := Vector {} as Vector<str>
     start := src.find(array_name)
     if start < 0: ret out end
     rest := src.substr(start, src.len() - start)
-    stop := rest.find("};")
-    mut body := rest
-    if stop > 0: body = rest.substr(0, stop) end
-    lines := mcptxt.Lines(body)
+    open_b := rest.find("[")
+    if open_b < 0: ret out end
+    stop := rest.find("]")
+    if stop < 0: ret out end
+    body := rest.substr(open_b + 1, stop - open_b - 1)
     mut i := 0
-    until i < lines.len():
-        ln := lines.get(i)[0].trim()
-        if str.StartsWith(ln, "{TK_"):
-            out.push(_kw_pair(ln))
+    mut cur := ""
+    mut inside := false
+    until i < body.len():
+        c := body.substr(i, 1)
+        if str.Equals(c, "\""):
+            if inside:
+                if cur.len() > 0: out.push(cur) end
+                cur = ""
+                inside = false
+            else:
+                inside = true
+            end
+        else inside:
+            cur = cur.concat(c)
         end
         i += 1
     end
@@ -148,7 +212,7 @@ func _kw_pair(ln: str): str:
 end
 
 func _langpack_src(): str:
-    p := path.Join(mcpexec.Root(), "c/src/langpack/langpack_data.c")
+    p := path.Join(mcpexec.Root(), "compiler/langpack.salam")
     ret file.ReadText(p)
 end
 
@@ -159,9 +223,11 @@ func _word(pair: str): str:
 end
 
 func _row(en: Vector<str>, fa: Vector<str>, ar: Vector<str>, i: int): str:
-    mut line := en.get(i)[0]
-    if i < fa.len(): line = line.concat("\t").concat(_word(fa.get(i)[0])) end
-    if i < ar.len(): line = line.concat("\t").concat(_word(ar.get(i)[0])) end
+    // The spellings arrive bare now, not as "TK_x<tab>spelling" rows, so
+    // there is nothing to split and no token column to fill.
+    mut line := en.get(i)
+    if i < fa.len(): line = line.concat("\t").concat(fa.get(i)) end
+    if i < ar.len(): line = line.concat("\t").concat(ar.get(i)) end
     ret line
 end
 
@@ -170,20 +236,15 @@ end
 @en "Packages"
 @fa "بسته‌ها"
 @ar "الحزم"
-// Every importable std package, read from the tree rather than hardcoded.
+// Every importable std package, read from the tree rather than hardcoded,
+// nested ones included under the dotted name an `import` line would use.
 pub func Packages(): mcpout.ToolResult:
     root := _std_root()
     if !dir.Exists(root):
         ret mcpout.Failure("stdlib not found at ".concat(root).concat(" - set SALAM_STD or SALAM_MCP_ROOT."))
     end
-    names := mcptxt.Sorted(dir.ListDirs(root))
     mut items := Vector {} as Vector<str>
-    mut i := 0
-    until i < names.len():
-        n := names.get(i)[0]
-        if !str.StartsWith(n, ".") && _is_package(root, n): items.push(n) end
-        i += 1
-    end
+    _collect_pkgs(items, root, "")
     body := "Importable std packages (".concat(str.FromInt(items.len())).concat("):\n\n").concat(mcpout.Bullets(items))
     ret mcpout.Rich(body, mcpout.StrArray(items), false)
 end
@@ -195,24 +256,24 @@ end
 // tool that stops a model inventing function names.
 pub func Symbols(pkg: str, query: str): mcpout.ToolResult:
     if !mcpexec.SafePath(pkg): ret mcpout.Failure("unsupported package name: ".concat(pkg)) end
-    root := path.Join(_std_root(), pkg)
+    root := _pkg_dir(_std_root(), pkg)
     if !dir.Exists(root): ret mcpout.Failure("no such std package: ".concat(pkg)) end
-    files := _sources(root)
+    files := _pkg_sources(root)
     mut all := Vector {} as Vector<str>
     mut i := 0
     until i < files.len():
-        decls := _decls_in(files.get(i)[0], query)
+        decls := _decls_in(files.get(i), query)
         mut j := 0
         until j < decls.len():
-            all.push(decls.get(j)[0])
+            all.push(decls.get(j))
             j += 1
         end
         i += 1
     end
     if all.len() == 0:
-        ret mcpout.Text("No public declarations matched in std/".concat(pkg).concat("."))
+        ret mcpout.Text("No public declarations matched in std/".concat(str.Replace(pkg, ".", "/")).concat("."))
     end
-    body := "Public declarations in std/".concat(pkg).concat(" (").concat(str.FromInt(all.len())).concat("):\n\n").concat(mcpout.Bullets(all))
+    body := "Public declarations in std/".concat(str.Replace(pkg, ".", "/")).concat(" (").concat(str.FromInt(all.len())).concat("):\n\n").concat(mcpout.Bullets(all))
     ret mcpout.Rich(body, mcpout.StrArray(all), false)
 end
 
@@ -230,7 +291,7 @@ pub func FindExamples(query: str, limit: int): mcpout.ToolResult:
     mut items := Vector {} as Vector<str>
     mut i := 0
     until i < files.len() && items.len() < cap:
-        f := files.get(i)[0]
+        f := files.get(i)
         hits := _hits_in(f, query, 2)
         if hits.len() > 0:
             items.push(f.concat("\n    ").concat(mcptxt.Join(hits, "\n    ")))
@@ -258,7 +319,7 @@ pub func ReadSource(rel: str, start: int, count: int): mcpout.ToolResult:
     mut picked := Vector {} as Vector<str>
     mut i := from - 1
     until i < lines.len() && picked.len() < n:
-        picked.push(str.FromInt(i + 1).concat("\t").concat(lines.get(i)[0]))
+        picked.push(str.FromInt(i + 1).concat("\t").concat(lines.get(i)))
         i += 1
     end
     ret mcpout.Text(rel.concat("\n\n").concat(mcptxt.Join(picked, "\n")))
@@ -274,11 +335,16 @@ pub func Keywords(): mcpout.ToolResult:
     if src.len() == 0:
         ret mcpout.Failure("langpack source not readable; set SALAM_MCP_ROOT to the Salam checkout.")
     end
-    en := _kw_table(src, "k_lang_en[]")
-    fa := _kw_table(src, "k_lang_fa[]")
-    ar := _kw_table(src, "k_lang_ar[]")
+    en := _kw_table(src, "k_kw_spell_en :=")
+    fa := _kw_table(src, "k_kw_spell_fa :=")
+    ar := _kw_table(src, "k_kw_spell_ar :=")
     mut rows := Vector {} as Vector<str>
-    rows.push("token\tenglish\tpersian\tarabic")
+    // Three columns, not four. The old first column carried the TK_ name,
+    // which came free when this parsed "TK_x<tab>spelling" rows; reading
+    // k_kw_spell_en gives bare spellings and no token name, and leaving the
+    // header at four would have shifted every value one column left - a
+    // reader would have taken persian for english.
+    rows.push("english\tpersian\tarabic")
     mut i := 0
     until i < en.len():
         rows.push(_row(en, fa, ar, i))

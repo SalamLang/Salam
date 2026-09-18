@@ -1,0 +1,302 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "decimal"
+@fa "اعشاری"
+@ar "عشري"
+package decimal
+
+import bigint
+
+// Exact fixed-point decimal arithmetic -- the type money belongs in.
+//
+// A Dec is an arbitrary-precision integer paired with a decimal scale, and its
+// value is exactly `unscaled * 10^-scale`. 19.99 is unscaled 1999 at scale 2.
+// Nothing here is ever an approximation of a base-2 fraction, so the sums that
+// f64 gets wrong come out right:
+//
+//     0.1 + 0.2 == 0.30000000000000004    // f64
+//     0.1 + 0.2 == 0.3                    // Dec, exactly
+//
+// WHY NOT JUST USE INTEGER CENTS. Because the scale travels with the value.
+// Integer cents work until the first tax rate, the first currency with three
+// decimal places (Bahraini dinar), or the first per-unit price quoted to five
+// (fuel, electricity). Then every function needs to know, out of band, what
+// its integers mean -- and the first one that guesses wrong is a bug you find
+// in production. A Dec carries its own scale and Add refuses to lose it.
+//
+// SCALE RULES. Add and Sub take the larger scale of their operands; Mul takes
+// the sum. All three are exact and never round. Div cannot be exact -- 1/3
+// has no finite decimal form -- so it demands a scale and a rounding mode as
+// arguments rather than picking either one for you.
+//
+// ROUNDING. Seven modes, on the Rounding enum below, which carries a table
+// showing what each one does to the cases that tell them apart.
+//
+// OWNERSHIP. Same contract as bigint: every function that returns a Dec hands
+// over a fresh allocation and the caller frees it.
+//
+//     mut price := decimal.FromScaled(1999 as i64, 2)   // 19.99
+//     defer price.free()
+//     mut total := decimal.MulInt(price, 3 as i64)      // 59.97, exactly
+//     defer total.free()
+//     println decimal.ToStr(total)
+//
+// Operands are taken by value and are never mutated or freed by the callee.
+
+// How a value that falls between two representable results is resolved.
+//
+// Every mode is defined on the *magnitude*, so Up and Down mean away from and
+// toward zero -- which is not the same as Ceil and Floor once the value is
+// negative. Rounding 2.5 and -2.5 to a whole number tells the seven apart:
+//
+//     mode        2.5    -2.5    2.7    -2.1    what it is
+//     ---------------------------------------------------------------------
+//     Down          2      -2      2      -2    truncate toward zero
+//     Up            3      -3      3      -3    away from zero
+//     Floor         2      -3      2      -3    toward minus infinity
+//     Ceil          3      -2      3      -2    toward plus infinity
+//     HalfUp        3      -3      3      -2    nearest, ties away from zero
+//     HalfDown      2      -2      3      -2    nearest, ties toward zero
+//     HalfEven      2      -2      3      -2    nearest, ties to even
+//
+// HalfUp is what a person means by "round" and what a receipt prints.
+// HalfEven is banker's rounding, the default of the convenience wrappers in
+// this package: it is the only half-mode with no upward bias across many
+// roundings, which is why accounting standards and IEEE 754 both pick it.
+@en "Rounding"
+@fa "گردکردن"
+@ar "تقريب"
+pub enum Rounding:
+    Down, Up, Floor, Ceil, HalfUp, HalfDown, HalfEven
+end
+
+@en "Dec"
+@fa "اعشاری"
+@ar "عشري"
+pub struct Dec:
+    // The digits, with no decimal point: the value is unscaled * 10^-scale.
+    pub unscaled: bigint.Int = bigint.Int {}
+
+    // Digits after the decimal point. Never negative -- a value that would
+    // want a negative scale is normalized up into the unscaled part instead,
+    // so 1.5e3 is 1500 at scale 0 rather than 15 at scale -2.
+    pub scale: int = 0
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free(): this.unscaled.free() end
+
+    @en "is_zero"
+    @fa "صفر است"
+    @ar "صفر"
+    pub func is_zero(): bool: ret this.unscaled.is_zero() end
+
+    @en "sign"
+    @fa "علامت"
+    @ar "إشارة"
+    pub func sign(): int: ret this.unscaled.sign() end
+
+    @en "clone"
+    @fa "همانند"
+    @ar "استنساخ"
+    pub func clone(): Dec:
+        mut r := Dec {}
+        r.unscaled = this.unscaled.clone()
+        r.scale = this.scale
+        ret r
+    end
+
+    // Plain decimal notation, never exponential -- see ToStr.
+    @en "to_str"
+    @fa "به رشته"
+    @ar "إلى نص"
+    pub func to_str(): str: ret ToStr(this[0]) end
+end
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+// Builds a Dec that takes ownership of u. A negative scale is folded into the
+// digits so that every Dec in circulation satisfies scale >= 0.
+func _adopt(u: bigint.Int, scale: int): Dec:
+    mut d := Dec {}
+    if scale < 0:
+        mut p := bigint.Pow10(0 - scale)
+        d.unscaled = bigint.Mul(u, p)
+        p.free()
+        mut tmp := u
+        tmp.free()
+        d.scale = 0
+        ret d
+    end
+    d.unscaled = u
+    d.scale = scale
+    ret d
+end
+
+// x * 10^k for k >= 0, the exact widening that Add and Cmp use to bring two
+// operands onto a common scale.
+func _shift10(x: bigint.Int, k: int): bigint.Int:
+    if k <= 0: ret x.clone() end
+    mut p := bigint.Pow10(k)
+    r := bigint.Mul(x, p)
+    p.free()
+    ret r
+end
+
+// ---------------------------------------------------------------------------
+// Construction
+// ---------------------------------------------------------------------------
+
+@en "Zero"
+@fa "صفر"
+@ar "صفر"
+pub func Zero(): Dec: ret Dec {} end
+
+// A whole number, at scale 0.
+@en "FromInt"
+@fa "از صحیح"
+@ar "من صحيح"
+pub func FromInt(v: i64): Dec: ret _adopt(bigint.FromInt(v), 0) end
+
+// The direct money constructor: FromScaled(1999, 2) is 19.99, and
+// FromScaled(-50, 2) is -0.50. No text parsing and no float in the path.
+@en "FromScaled"
+@fa "از مقیاس"
+@ar "من مقياس"
+pub func FromScaled(unscaled: i64, scale: int): Dec:
+    ret _adopt(bigint.FromInt(unscaled), scale)
+end
+
+// A Dec from a big unscaled value; the argument is cloned, not adopted.
+@en "New"
+@fa "نو"
+@ar "جديد"
+pub func New(unscaled: bigint.Int, scale: int): Dec:
+    ret _adopt(unscaled.clone(), scale)
+end
+
+@en "Clone"
+@fa "همانند"
+@ar "استنساخ"
+pub func Clone(d: Dec): Dec: ret d.clone() end
+
+@en "Free"
+@fa "آزادسازی"
+@ar "تحرير"
+pub func Free(d &: Dec): d.unscaled.free() end
+
+// The nearest Dec to an f64, at the given scale. THIS IS LOSSY, and the loss
+// happens before this function is called: the literal 0.1 is already not one
+// tenth by the time it arrives. Use it for input that genuinely is a float
+// (a sensor reading, a legacy API); for money, parse the text or build it
+// with FromScaled.
+@en "FromFloat"
+@fa "از اعشاری ماشین"
+@ar "من عشري آلي"
+pub func FromFloat(f: f64, scale: int): Dec:
+    mut sc := scale
+    if sc < 0: sc = 0 end
+    mut scaled := f
+    repeat sc: scaled = scaled * 10.0 end
+    // Round half away from zero at the last kept digit.
+    if scaled < 0.0:
+        scaled = scaled - 0.5
+    else:
+        scaled = scaled + 0.5
+    end
+    ret _adopt(bigint.FromInt(scaled as i64), sc)
+end
+
+// ---------------------------------------------------------------------------
+// Inspection
+// ---------------------------------------------------------------------------
+
+@en "IsZero"
+@fa "صفر است"
+@ar "صفر"
+pub func IsZero(d: Dec): bool: ret d.unscaled.is_zero() end
+
+@en "Sign"
+@fa "علامت"
+@ar "إشارة"
+pub func Sign(d: Dec): int: ret d.unscaled.sign() end
+
+@en "IsNegative"
+@fa "منفی است"
+@ar "سالب"
+pub func IsNegative(d: Dec): bool: ret d.unscaled.sign() < 0 end
+
+@en "Scale"
+@fa "مقیاس"
+@ar "مقياس"
+pub func Scale(d: Dec): int: ret d.scale end
+
+// The digits without the point, as a fresh bigint the caller frees.
+@en "Unscaled"
+@fa "بی‌مقیاس"
+@ar "بلا مقياس"
+pub func Unscaled(d: Dec): bigint.Int: ret d.unscaled.clone() end
+
+// -1, 0 or +1. Comparison is exact: the operands are widened to a common
+// scale first, so 1.0 and 1.00 compare equal despite different scales.
+@en "Cmp"
+@fa "مقایسه"
+@ar "مقارنة"
+pub func Cmp(a: Dec, b: Dec): int:
+    mut s := a.scale
+    if b.scale > s: s = b.scale end
+    mut ax := _shift10(a.unscaled, s - a.scale)
+    mut bx := _shift10(b.unscaled, s - b.scale)
+    c := bigint.Cmp(ax, bx)
+    ax.free()
+    bx.free()
+    ret c
+end
+
+// Equal in value, so 1.0 equals 1.00. Compare scales yourself if the
+// difference matters.
+@en "Equals"
+@fa "برابر است"
+@ar "يساوي"
+pub func Equals(a: Dec, b: Dec): bool: ret Cmp(a, b) == 0 end
+
+@en "Less"
+@fa "کمتر است"
+@ar "أصغر"
+pub func Less(a: Dec, b: Dec): bool: ret Cmp(a, b) < 0 end
+
+@en "Greater"
+@fa "بیشتر است"
+@ar "أكبر"
+pub func Greater(a: Dec, b: Dec): bool: ret Cmp(a, b) > 0 end
+
+@en "Min"
+@fa "کمینه"
+@ar "أصغر"
+pub func Min(a: Dec, b: Dec): Dec:
+    if Cmp(a, b) <= 0: ret a.clone() end
+    ret b.clone()
+end
+
+@en "Max"
+@fa "بیشینه"
+@ar "أكبر"
+pub func Max(a: Dec, b: Dec): Dec:
+    if Cmp(a, b) >= 0: ret a.clone() end
+    ret b.clone()
+end

@@ -1,0 +1,118 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import chan
+import sync
+
+mut hand := chan.Chan {} as chan.Chan<i64>
+mut done := chan.Chan {} as chan.Chan<i64>
+mut wg := sync.NewWaitGroup()
+
+// Records, for each value it receives, how many sends had completed at that
+// moment. On a rendezvous channel a send cannot complete before its receiver
+// takes it, so the sender can never run ahead of the receiver.
+mut sends_done := 0 as i64
+mut max_lead := 0 as i64
+mut lead_mu := sync.NewMutex()
+
+func producer():
+    mut i := 1 as i64
+    until i <= 50:
+        hand.send(i)
+        sync.Lock(lead_mu)
+        sends_done = sends_done + 1
+        sync.Unlock(lead_mu)
+        i = i + 1
+    end
+    hand.close()
+    sync.Done(wg)
+end
+
+func consumer():
+    mut ok := true
+    mut total := 0 as i64
+    until true:
+        v := hand.recv(ok)
+        if !ok: break end
+        sync.Lock(lead_mu)
+        /*
+         * Completed sends may never exceed values already taken. Holding
+         * value v, send(v) has been unblocked but may not have recorded its
+         * increment yet, so sends_done is v-1 or v - never v+1, because
+         * send(v+1) cannot even start until send(v) returns. On a buffered
+         * channel the producer would race ahead and this would go positive.
+         */
+        lead := sends_done - v
+        if lead > max_lead: max_lead = lead end
+        sync.Unlock(lead_mu)
+        total = total + v
+    end
+    done.send(total)
+    sync.Done(wg)
+end
+
+func main:
+    hand.init(0 as i64)
+    done.init(1 as i64)
+
+    println "cap:", hand.capacity()
+
+    sync.Add(wg, 2 as i64)
+    t1 := spawn(producer)
+    t2 := spawn(consumer)
+    sync.Wait(wg)
+    join(t1)
+    join(t2)
+
+    mut ok := true
+    total := done.recv(ok)
+    println "total:", total
+    println "no lead:", max_lead <= 0
+
+    // Nothing is sending, so a timed receive must give up and say so rather
+    // than block forever.
+    mut idle := chan.Chan {} as chan.Chan<i64>
+    idle.init(2 as i64)
+    t0 := sync.NowMs()
+    mut ok2 := true
+    _ := idle.recv_timeout(ok2, 120 as i64)
+    waited := sync.NowMs() - t0
+    println "recv timed out:", !ok2
+    println "waited enough:", waited >= 110
+
+    // A rendezvous send with nobody listening must time out and retract, so
+    // the value is not left behind for a later receiver.
+    mut lonely := chan.Chan {} as chan.Chan<i64>
+    lonely.init(0 as i64)
+    sent := lonely.send_timeout(99 as i64, 120 as i64)
+    mut ok3 := true
+    _2 := lonely.try_recv(ok3)
+    println "send timed out:", !sent
+    println "nothing left:", !ok3
+
+    // A buffered send into a full channel must also give up.
+    mut small := chan.Chan {} as chan.Chan<i64>
+    small.init(1 as i64)
+    first := small.send_timeout(1 as i64, 100 as i64)
+    second := small.send_timeout(2 as i64, 100 as i64)
+    println "buffered timeout:", first, second
+
+    sync.DestroyWaitGroup(wg)
+    sync.Destroy(lead_mu)
+    hand.free()
+    done.free()
+    idle.free()
+    lonely.free()
+    small.free()
+end

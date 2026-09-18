@@ -1,0 +1,242 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import testing
+import config
+import os
+import io
+import fs.path
+
+// std/config is one flat, ordered key to value model with three readers
+// in front of it: INI, .env and YAML. It owns none of those formats.
+// .env goes through std/encoding/envfile and YAML through
+// std/encoding/yaml, so what is tested here is the model and the
+// flattening, not a second copy of either parser.
+
+func ini_text(): str:
+    mut t := "# global settings\n"
+    t = t.concat("port = 8080\n")
+    t = t.concat("name = \"my app\" # display name\n")
+    t = t.concat("path = 'C:\\tmp'\n")
+    t = t.concat("\n")
+    t = t.concat("[db]\n")
+    t = t.concat("host=localhost\n")
+    t = t.concat("; a comment line\n")
+    t = t.concat("timeout = 30 ; seconds\n")
+    t = t.concat("debug = true\n")
+    ret t
+end
+
+func test_ini():
+    mut c := config.ParseINI(ini_text())
+    defer config.Free(c)
+    testing.AssertEqInt(config.Len(c), 6)
+    testing.AssertEqStr(config.Get(c, "port"), "8080")
+    // an inline comment is stripped, a quoted value keeps its spaces
+    testing.AssertEqStr(config.Get(c, "name"), "my app")
+    // single quotes are verbatim, so a Windows path survives
+    testing.AssertEqStr(config.Get(c, "path"), "C:\\tmp")
+    // a section prefixes its keys
+    testing.AssertEqStr(config.Get(c, "db.host"), "localhost")
+    testing.AssertEqStr(config.Get(c, "db.timeout"), "30")
+    // ';' opens an inline comment in INI, unlike .env
+    testing.AssertTrue(config.Has(c, "db.debug"))
+    testing.AssertFalse(config.Has(c, "missing"))
+end
+
+func test_typed_reads():
+    mut c := config.ParseINI(ini_text())
+    defer config.Free(c)
+    testing.AssertEqInt64(config.GetInt(c, "port", 0 as i64), 8080 as i64)
+    testing.AssertEqInt64(config.GetInt(c, "db.timeout", 0 as i64), 30 as i64)
+    testing.AssertTrue(config.GetBool(c, "db.debug", false))
+    // a missing key falls back to the supplied default, every time
+    testing.AssertEqInt64(config.GetInt(c, "nope", 42 as i64), 42 as i64)
+    testing.AssertEqFloat(config.GetFloat(c, "nope", 1.5), 1.5, 0.0001)
+    testing.AssertFalse(config.GetBool(c, "nope", false))
+    testing.AssertEqStr(config.GetOr(c, "nope", "fallback"), "fallback")
+    // and a missing key reads as empty rather than crashing
+    testing.AssertEqStr(config.Get(c, "nope"), "")
+end
+
+func test_mutate():
+    mut c := config.New()
+    defer config.Free(c)
+    testing.AssertEqInt(config.Len(c), 0)
+    config.Set(c, "a", "1")
+    config.Set(c, "b", "2")
+    config.Set(c, "a", "3")
+    // setting an existing key replaces it in place
+    testing.AssertEqInt(config.Len(c), 2)
+    testing.AssertEqStr(config.Get(c, "a"), "3")
+    keys := config.Keys(c)
+    defer keys.free()
+    testing.AssertEqInt(keys.len(), 2)
+    testing.AssertEqStr(keys.get(0), "a")
+    testing.AssertTrue(config.Remove(c, "a"))
+    testing.AssertFalse(config.Remove(c, "a"))
+    testing.AssertEqInt(config.Len(c), 1)
+    testing.AssertEqStr(config.Get(c, "b"), "2")
+end
+
+func test_section():
+    mut c := config.ParseINI(ini_text())
+    defer config.Free(c)
+    mut db := config.Section(c, "db")
+    defer config.Free(db)
+    // a section is a config in its own right, with the prefix removed
+    testing.AssertEqInt(config.Len(db), 3)
+    testing.AssertEqStr(config.Get(db, "host"), "localhost")
+    testing.AssertFalse(config.Has(db, "db.host"))
+    testing.AssertFalse(config.Has(db, "port"))
+    mut none := config.Section(c, "absent")
+    defer config.Free(none)
+    testing.AssertEqInt(config.Len(none), 0)
+end
+
+// The layering that makes configuration usable: defaults, then the file,
+// then whatever the environment overrides. Later wins, and neither input
+// is modified.
+func test_merge():
+    mut defaults := config.New()
+    defer config.Free(defaults)
+    config.Set(defaults, "host", "localhost")
+    config.Set(defaults, "port", "3000")
+    mut file := config.New()
+    defer config.Free(file)
+    config.Set(file, "port", "8080")
+    config.Set(file, "debug", "true")
+    mut merged := config.Merge(defaults, file)
+    defer config.Free(merged)
+    testing.AssertEqStr(config.Get(merged, "host"), "localhost")
+    testing.AssertEqStr(config.Get(merged, "port"), "8080")
+    testing.AssertEqStr(config.Get(merged, "debug"), "true")
+    testing.AssertEqInt(config.Len(merged), 3)
+    // the sources are untouched
+    testing.AssertEqStr(config.Get(defaults, "port"), "3000")
+    testing.AssertEqInt(config.Len(file), 2)
+end
+
+// .env support is delegated, so what matters here is that the whole
+// format arrives intact rather than a reduced version of it.
+func test_env_format():
+    mut t := "# comment\n"
+    t = t.concat("export API_KEY=abc123 # inline\n")
+    t = t.concat("QUOTED=\"a b\"\n")
+    t = t.concat("HOST=localhost\n")
+    t = t.concat("URL=http://${HOST}/api\n")
+    t = t.concat("EMPTY=\n")
+    mut c := config.ParseEnv(t)
+    defer config.Free(c)
+    testing.AssertEqInt(config.Len(c), 5)
+    testing.AssertEqStr(config.Get(c, "API_KEY"), "abc123")
+    testing.AssertEqStr(config.Get(c, "QUOTED"), "a b")
+    // expansion against an earlier entry, which the old loop could not do
+    testing.AssertEqStr(config.Get(c, "URL"), "http://localhost/api")
+    testing.AssertEqStr(config.Get(c, "EMPTY"), "")
+end
+
+// Nested YAML maps flatten to dotted keys, the same shape ParseINI
+// produces for sections, so Section works on either source.
+func test_yaml_flatten():
+    mut t := "app:\n"
+    t = t.concat("  name: myservice\n")
+    t = t.concat("  port: 8080\n")
+    t = t.concat("  db:\n")
+    t = t.concat("    host: dbhost\n")
+    t = t.concat("top: 1\n")
+    mut c := config.ParseYAML(t)
+    defer config.Free(c)
+    testing.AssertEqStr(config.Get(c, "app.name"), "myservice")
+    testing.AssertEqInt64(config.GetInt(c, "app.port", 0 as i64), 8080 as i64)
+    testing.AssertEqStr(config.Get(c, "app.db.host"), "dbhost")
+    testing.AssertEqStr(config.Get(c, "top"), "1")
+    mut app := config.Section(c, "app")
+    defer config.Free(app)
+    testing.AssertEqStr(config.Get(app, "name"), "myservice")
+    testing.AssertEqStr(config.Get(app, "db.host"), "dbhost")
+end
+
+func test_format_roundtrip():
+    mut c := config.New()
+    defer config.Free(c)
+    config.Set(c, "port", "9090")
+    config.Set(c, "name", "my app")
+    config.Set(c, "db.host", "localhost")
+    ini := config.FormatINI(c)
+    testing.AssertContains(ini, "port = 9090")
+    // a value with a space has to come back quoted or it would not reparse
+    testing.AssertContains(ini, `name = "my app"`)
+    testing.AssertContains(ini, "[db]")
+    mut back := config.ParseINI(ini)
+    defer config.Free(back)
+    testing.AssertEqStr(config.Get(back, "name"), "my app")
+    testing.AssertEqStr(config.Get(back, "db.host"), "localhost")
+    testing.AssertEqInt(config.Len(back), config.Len(c))
+
+    env := config.FormatEnv(c)
+    testing.AssertContains(env, "port=9090")
+    testing.AssertContains(env, `name="my app"`)
+    mut envback := config.ParseEnv(env)
+    defer config.Free(envback)
+    testing.AssertEqStr(config.Get(envback, "name"), "my app")
+    // the shell sourceable form is the same with a prefix per line
+    exported := config.FormatEnvExport(c)
+    testing.AssertContains(exported, "export port=9090")
+end
+
+func test_load_from_files():
+    dir := os.TempDir()
+    ini_path := path.Join(dir, "salam_cfg_demo.ini")
+    env_path := path.Join(dir, "salam_cfg_demo.env")
+    yml_path := path.Join(dir, "salam_cfg_demo.yaml")
+    io.WriteFile(ini_path, ini_text())
+    io.WriteFile(env_path, "TOKEN=xyz\nMODE=fast\n")
+    io.WriteFile(yml_path, "server:\n  port: 9999\n")
+
+    mut a := config.LoadINI(ini_path)
+    defer config.Free(a)
+    testing.AssertEqStr(config.Get(a, "db.host"), "localhost")
+    mut b := config.LoadEnv(env_path)
+    defer config.Free(b)
+    testing.AssertEqStr(config.Get(b, "TOKEN"), "xyz")
+    mut d := config.LoadYAML(yml_path)
+    defer config.Free(d)
+    testing.AssertEqInt64(config.GetInt(d, "server.port", 0 as i64), 9999 as i64)
+
+    // a file that is not there reads as an empty config, not a crash
+    mut missing := config.LoadINI(path.Join(dir, "salam_cfg_nothing.ini"))
+    defer config.Free(missing)
+    testing.AssertEqInt(config.Len(missing), 0)
+
+    os.Remove(ini_path)
+    os.Remove(env_path)
+    os.Remove(yml_path)
+end
+
+func main:
+    test_ini()
+    test_typed_reads()
+    test_mutate()
+    test_section()
+    test_merge()
+    test_env_format()
+    test_yaml_flatten()
+    test_format_roundtrip()
+    test_load_from_files()
+    testing.Summary()
+    ret 0
+end

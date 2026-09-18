@@ -1,0 +1,643 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Character classification and case mapping for the whole of Unicode.
+//
+// Everything here takes a code point, not a byte and not a string index.
+// Decoding UTF-8 into code points is str's job; this package only answers
+// questions about a code point once you have one.
+//
+// The data lives in tables.salam, which is generated from the Unicode
+// Character Database - see tools/python/gen_unicode_tables.py. Lookups are a
+// binary search over a few thousand ranges, so they are not free the way an
+// ASCII comparison is. Where a predicate has an ASCII answer that cannot be
+// wrong, it is checked first and returns without touching a table; str's
+// classify.salam leans on that so ASCII-only text pays close to nothing.
+//
+// Case mapping is the default, non-tailored kind: no Turkish dotless i, no
+// Lithuanian or Azeri rules. Case *folding* is the right tool for
+// case-insensitive comparison, and ToFold is what str.EqualFold uses.
+
+@en "unicode"
+@fa "یونیکد"
+@ar "یونیکود"
+package unicode
+
+// U+200C ZERO WIDTH NON-JOINER. In Persian it is a real orthographic mark,
+// not decoration: it is what keeps "می‌رود" from joining into "میرود" and
+// what separates the plural "ها" from its noun. Unicode classes it as a
+// format character (Cf), so IsSpace is correct to answer false for it - but
+// text that splits on spaces alone will still mangle Persian, which is why it
+// gets a name here instead of being left as a bare number at each call site.
+pub const ZWNJ := 0x200C
+
+// U+200D ZERO WIDTH JOINER, the mirror of ZWNJ: it forces a joining form
+// where the script would not otherwise produce one.
+pub const ZWJ := 0x200D
+
+// The largest code point Unicode defines. Anything above this is not a code
+// point at all and every predicate below answers false for it.
+pub const MaxCodePoint := 0x10FFFF
+
+// Highest code point that is certainly ASCII, kept as a named bound because
+// every fast path below tests against it.
+const _ASCII_MAX := 0x7F
+
+// Hangul syllables are composed and decomposed by arithmetic, not by table.
+// The 11172 syllables in U+AC00..U+D7A3 are a regular product of 19 leading
+// jamo, 21 vowels and 28 trailing jamo, so tabling them would add ~11000
+// decomposition entries and ~800 grapheme-break ranges to no purpose. The
+// decomposition, composition and grapheme-break functions below all
+// special-case this range. Constants are from UAX #15 section 3.12.
+pub const HangulSBase := 0xAC00
+pub const HangulLBase := 0x1100
+pub const HangulVBase := 0x1161
+pub const HangulTBase := 0x11A7
+pub const HangulLCount := 19
+pub const HangulVCount := 21
+pub const HangulTCount := 28
+pub const HangulNCount := 588
+pub const HangulSCount := 11172
+
+// ---------------------------------------------------------------------------
+// table search
+// ---------------------------------------------------------------------------
+
+// Index of the last entry of `keys` that is <= cp, or -1 if cp precedes the
+// whole table. Every table in tables.salam is sorted by its first column, so
+// this one search drives all of them.
+pure func _floor_index(keys: int[:], cp: int): int:
+    mut lo := 0
+    mut hi := keys.len() - 1
+    mut found := -1
+    until lo <= hi:
+        mid := lo + (hi - lo) / 2
+        if keys[mid] <= cp:
+            found = mid
+            lo = mid + 1
+        else:
+            hi = mid - 1
+        end
+    end
+    ret found
+end
+
+// True when cp falls inside one of the [los[i], his[i]] ranges. The ranges are
+// sorted and disjoint, so only the one starting at or before cp can contain it.
+pure func _in_ranges(los: int[:], his: int[:], cp: int): bool:
+    i := _floor_index(los, cp)
+    if i < 0: ret false end
+    ret cp <= his[i]
+end
+
+// Applies a (lo, hi, stride, delta) case table to cp, returning cp unchanged
+// when no run covers it. The stride check is what keeps the interleaved
+// upper/lower pairs of Latin Extended from mapping the wrong half: in a run
+// with stride 2 only every other code point is really in the table.
+pure func _case_map(los: int[:], his: int[:], strides: int[:], deltas: int[:], cp: int): int:
+    i := _floor_index(los, cp)
+    if i < 0: ret cp end
+    if cp > his[i]: ret cp end
+    if (cp - los[i]) % strides[i] != 0: ret cp end
+    ret cp + deltas[i]
+end
+
+// Row of a table keyed by an exact sorted code point column, or -1 when cp is
+// absent. The decomposition and full-fold tables are all shaped this way: a
+// sorted key column plus parallel offset/length columns into a flat sequence.
+pure func _keyed_index(keys: int[:], cp: int): int:
+    i := _floor_index(keys, cp)
+    if i < 0: ret -1 end
+    if keys[i] != cp: ret -1 end
+    ret i
+end
+
+// Row of the full-fold table describing cp, or -1 when cp folds to a single
+// code point (which is all but 104 of them).
+pure func _fold_full_index(cp: int): int:
+    if cp <= _ASCII_MAX: ret -1 end
+    ret _keyed_index(_FOLDF_CP[:], cp)
+end
+
+// ---------------------------------------------------------------------------
+// general category
+// ---------------------------------------------------------------------------
+
+@en "Category"
+@fa "دسته"
+@ar "الفئة"
+// The general category of cp as one of the Cat* constants. Unassigned code
+// points - and anything outside the code space - come back as CatCn.
+pub pure func Category(cp: int): int:
+    if cp < 0 || cp > MaxCodePoint: ret CatCn end
+    i := _floor_index(_CAT_LO[:], cp)
+    if i < 0: ret CatCn end
+    if cp > _CAT_HI[i]: ret CatCn end
+    ret _CAT_ID[i]
+end
+
+@en "CategoryName"
+@fa "نام دسته"
+@ar "اسم الفئة"
+// The two-letter category abbreviation for cp, such as "Lo" for Persian and
+// Arabic letters or "Mn" for a combining mark.
+pub pure func CategoryName(cp: int): str:
+    ret _CAT_NAMES[Category(cp)]
+end
+
+@en "IsAssigned"
+@fa "تخصیص یافته است"
+@ar "مخصص"
+// Whether Unicode assigns cp any character at all.
+pub pure func IsAssigned(cp: int): bool:
+    ret Category(cp) != CatCn
+end
+
+// ---------------------------------------------------------------------------
+// classification
+// ---------------------------------------------------------------------------
+
+@en "IsLetter"
+@fa "حرف است"
+@ar "حرف"
+// Whether cp is in general category L - a letter in the strict sense.
+// IsAlphabetic is usually the better question; see the note there.
+pub pure func IsLetter(cp: int): bool:
+    c := Category(cp)
+    ret c >= CatLu && c <= CatLo
+end
+
+@en "IsAlphabetic"
+@fa "الفبایی است"
+@ar "أبجدي"
+// Whether cp has the Alphabetic property. This is wider than IsLetter: it
+// takes in letter numbers and the combining marks that carry vowels in Arabic
+// and the Indic scripts, so the Persian short vowels and the Arabic
+// diacritics count as alphabetic here while their category is Mn.
+//
+// For "is this part of a word", this is the predicate to reach for.
+pub pure func IsAlphabetic(cp: int): bool:
+    if cp < 0 || cp > MaxCodePoint: ret false end
+    ret _in_ranges(_ALPHA_LO[:], _ALPHA_HI[:], cp)
+end
+
+@en "IsUpper"
+@fa "بزرگ است"
+@ar "حرف کبیر"
+// Whether cp is an uppercase letter (category Lu). Scripts without case -
+// Arabic and Persian among them - have no uppercase letters, so this is false
+// for every Persian character rather than meaningless.
+pub pure func IsUpper(cp: int): bool:
+    ret Category(cp) == CatLu
+end
+
+@en "IsLower"
+@fa "کوچک است"
+@ar "حرف صغیر"
+// Whether cp is a lowercase letter (category Ll).
+pub pure func IsLower(cp: int): bool:
+    ret Category(cp) == CatLl
+end
+
+@en "IsTitle"
+@fa "عنوانی است"
+@ar "حرف عنوان"
+// Whether cp is a titlecase letter (category Lt) - the digraphs such as
+// U+01C5 that have a distinct form for the start of a word.
+pub pure func IsTitle(cp: int): bool:
+    ret Category(cp) == CatLt
+end
+
+@en "IsMark"
+@fa "نشانه است"
+@ar "علامة"
+// Whether cp is a combining mark (category M). These are the code points that
+// attach to a preceding base character - Arabic harakat, Hebrew niqqud, the
+// accents behind precomposed Latin letters - and they are exactly what makes
+// a code point count different from a visible character count.
+pub pure func IsMark(cp: int): bool:
+    c := Category(cp)
+    ret c >= CatMn && c <= CatMe
+end
+
+@en "IsDigit"
+@fa "رقم است"
+@ar "رقم"
+// Whether cp is a decimal digit (category Nd). True for the ASCII digits, for
+// the Arabic-Indic digits ٠-٩ and for the Persian digits ۰-۹ alike. See
+// str.DigitValue for turning one into its numeric value.
+pub pure func IsDigit(cp: int): bool:
+    ret Category(cp) == CatNd
+end
+
+@en "IsNumber"
+@fa "عدد است"
+@ar "رقم عام"
+// Whether cp is any kind of number (category N), including the letter numbers
+// such as Roman numerals and the fractions.
+pub pure func IsNumber(cp: int): bool:
+    c := Category(cp)
+    ret c >= CatNd && c <= CatNo
+end
+
+@en "IsAlnum"
+@fa "حرف یا رقم است"
+@ar "حرف او رقم"
+// Whether cp is alphabetic or a decimal digit.
+pub pure func IsAlnum(cp: int): bool:
+    ret IsAlphabetic(cp) || IsDigit(cp)
+end
+
+@en "IsPunct"
+@fa "نشانه نگارشی است"
+@ar "علامة ترقیم"
+// Whether cp is punctuation (category P). Covers the Arabic comma ، the
+// Arabic question mark ؟ and the Arabic full stop, not just the ASCII marks.
+pub pure func IsPunct(cp: int): bool:
+    c := Category(cp)
+    ret c >= CatPc && c <= CatPo
+end
+
+@en "IsSymbol"
+@fa "نماد است"
+@ar "رمز"
+// Whether cp is a symbol (category S) - maths operators, currency signs such
+// as the rial sign ﷼, modifier symbols and the rest.
+pub pure func IsSymbol(cp: int): bool:
+    c := Category(cp)
+    ret c >= CatSm && c <= CatSo
+end
+
+@en "IsSpace"
+@fa "فاصله است"
+@ar "فراغ"
+// Whether cp has the White_Space property.
+//
+// This is the Unicode answer, not the ASCII one: the no-break space U+00A0,
+// the Arabic-script-friendly narrow no-break space U+202F, the ideographic
+// space U+3000 and the whole U+2000 block all count. ZWNJ and ZWJ do not -
+// they are format characters, and treating them as spaces would split Persian
+// words in exactly the places the writer joined them. Use IsJoinControl for
+// those.
+pub pure func IsSpace(cp: int): bool:
+    if cp < 0 || cp > MaxCodePoint: ret false end
+    ret _in_ranges(_WS_LO[:], _WS_HI[:], cp)
+end
+
+@en "IsControl"
+@fa "کنترلی است"
+@ar "تحکم"
+// Whether cp is a control character (category Cc).
+pub pure func IsControl(cp: int): bool:
+    ret Category(cp) == CatCc
+end
+
+@en "IsFormat"
+@fa "قالبی است"
+@ar "تنسیق"
+// Whether cp is a format character (category Cf). ZWNJ, ZWJ, the bidi
+// overrides and the Arabic letter mark all live here: invisible code points
+// that steer rendering without being characters in their own right.
+pub pure func IsFormat(cp: int): bool:
+    ret Category(cp) == CatCf
+end
+
+@en "IsJoinControl"
+@fa "کنترل اتصال است"
+@ar "تحکم الوصل"
+// Whether cp is ZWNJ or ZWJ, the two code points that control cursive
+// joining. A tokenizer for Persian must keep these inside the word: "می‌رود"
+// is one word, and splitting it at the ZWNJ produces two fragments that mean
+// nothing on their own.
+pub inline pure func IsJoinControl(cp: int): bool:
+    ret cp == ZWNJ || cp == ZWJ
+end
+
+// ---------------------------------------------------------------------------
+// case mapping
+// ---------------------------------------------------------------------------
+
+@en "ToUpper"
+@fa "به بزرگ"
+@ar "إلی الکبیر"
+// The simple uppercase form of cp, or cp itself when it has none. "Simple"
+// means one code point in and one out: the cases that grow, such as the
+// German sharp s becoming "SS", are left alone here.
+pub pure func ToUpper(cp: int): int:
+    if cp >= 0x61 && cp <= 0x7A: ret cp - 32 end
+    if cp <= _ASCII_MAX: ret cp end
+    ret _case_map(_UP_LO[:], _UP_HI[:], _UP_STRIDE[:], _UP_DELTA[:], cp)
+end
+
+@en "ToLower"
+@fa "به کوچک"
+@ar "إلی الصغیر"
+// The simple lowercase form of cp, or cp itself when it has none.
+pub pure func ToLower(cp: int): int:
+    if cp >= 0x41 && cp <= 0x5A: ret cp + 32 end
+    if cp <= _ASCII_MAX: ret cp end
+    ret _case_map(_LOW_LO[:], _LOW_HI[:], _LOW_STRIDE[:], _LOW_DELTA[:], cp)
+end
+
+@en "ToTitle"
+@fa "به عنوانی"
+@ar "إلی العنوان"
+// The simple titlecase form of cp. Differs from ToUpper only for the handful
+// of digraphs that have a third, title, form.
+pub pure func ToTitle(cp: int): int:
+    if cp >= 0x61 && cp <= 0x7A: ret cp - 32 end
+    if cp <= _ASCII_MAX: ret cp end
+    ret _case_map(_TITLE_LO[:], _TITLE_HI[:], _TITLE_STRIDE[:], _TITLE_DELTA[:], cp)
+end
+
+@en "ToFold"
+@fa "به تاشده"
+@ar "إلی المطوی"
+// The simple case fold of cp - the form to compare against when case should
+// not matter. Folding is not the same as lowercasing: it maps the Greek final
+// sigma ς and the medial sigma σ together, which ToLower does not.
+//
+// A few code points fold to more than one code point and cannot be expressed
+// here; FoldFull covers those.
+pub pure func ToFold(cp: int): int:
+    if cp >= 0x41 && cp <= 0x5A: ret cp + 32 end
+    if cp <= _ASCII_MAX: ret cp end
+    ret _case_map(_FOLD_LO[:], _FOLD_HI[:], _FOLD_STRIDE[:], _FOLD_DELTA[:], cp)
+end
+
+@en "HasFullFold"
+@fa "تاشدن بلند دارد"
+@ar "له طی کامل"
+// Whether cp folds to more than one code point. These are the code points
+// that make case-insensitive comparison a decoding problem rather than a
+// character-by-character walk, since one code point on one side has to line
+// up with several on the other.
+pub pure func HasFullFold(cp: int): bool:
+    ret _fold_full_index(cp) >= 0
+end
+
+@en "FullFoldLen"
+@fa "طول تاشدن بلند"
+@ar "طول الطی الکامل"
+// How many code points the full fold of cp expands to: 1 for almost
+// everything, up to MaxFoldLen for the rest.
+pub pure func FullFoldLen(cp: int): int:
+    i := _fold_full_index(cp)
+    if i < 0: ret 1 end
+    ret _FOLDF_LEN[i]
+end
+
+@en "FullFoldAt"
+@fa "تاشدن بلند در"
+@ar "الطی الکامل عند"
+// The code point at position k of the full fold of cp, with k running from 0
+// to FullFoldLen(cp) - 1. Out-of-range k gives back cp's simple fold, so a
+// caller that miscounts gets a sane character rather than a garbage one.
+//
+// Written this way, rather than returning a string, so that this package
+// needs no string handling at all - std/str imports std/unicode, and the
+// dependency has to run in one direction only. str.EqualFold is the intended
+// consumer: it walks both sides a code point at a time and expands through
+// these two functions.
+pub pure func FullFoldAt(cp: int, k: int): int:
+    i := _fold_full_index(cp)
+    if i < 0: ret ToFold(cp) end
+    if k < 0 || k >= _FOLDF_LEN[i]: ret ToFold(cp) end
+    ret _FOLDF_SEQ[_FOLDF_OFF[i] + k]
+end
+
+// ---------------------------------------------------------------------------
+// normalization primitives
+// ---------------------------------------------------------------------------
+
+@en "CombiningClass"
+@fa "رده ترکیبی"
+@ar "رتبة الترکیب"
+// The canonical combining class of cp, 0 for a base character.
+//
+// This is what canonical ordering sorts by. When a base letter carries several
+// marks, their order in memory is not fixed by the writer - a Persian word
+// typed with a fatha before a shadda and the same word typed the other way
+// round are different byte sequences - and normalization puts them in a
+// defined order so the two compare equal. Marks of class 0 and marks of equal
+// class are never reordered relative to each other.
+pub pure func CombiningClass(cp: int): int:
+    i := _floor_index(_CCC_LO[:], cp)
+    if i < 0: ret 0 end
+    if cp > _CCC_HI[i]: ret 0 end
+    ret _CCC_VAL[i]
+end
+
+@en "DecompLen"
+@fa "طول تجزیه"
+@ar "طول التفکیک"
+// How many code points cp decomposes to canonically: 1 when it does not
+// decompose at all.
+pub pure func DecompLen(cp: int): int:
+    if cp >= HangulSBase && cp < HangulSBase + HangulSCount:
+        if (cp - HangulSBase) % HangulTCount == 0: ret 2 end
+        ret 3
+    end
+    i := _keyed_index(_NFD_CP[:], cp)
+    if i < 0: ret 1 end
+    ret _NFD_LEN[i]
+end
+
+@en "DecompAt"
+@fa "تجزیه در"
+@ar "التفکیک عند"
+// Code point k of the canonical decomposition of cp, for k below
+// DecompLen(cp). The stored decompositions are already fully expanded, so the
+// result never decomposes again and a caller needs no recursion.
+pub pure func DecompAt(cp: int, k: int): int:
+    if cp >= HangulSBase && cp < HangulSBase + HangulSCount:
+        sidx := cp - HangulSBase
+        if k == 0: ret HangulLBase + sidx / HangulNCount end
+        if k == 1: ret HangulVBase + (sidx % HangulNCount) / HangulTCount end
+        if k == 2 && sidx % HangulTCount != 0: ret HangulTBase + sidx % HangulTCount end
+        ret cp
+    end
+    i := _keyed_index(_NFD_CP[:], cp)
+    if i < 0: ret cp end
+    if k < 0 || k >= _NFD_LEN[i]: ret cp end
+    ret _NFD_SEQ[_NFD_OFF[i] + k]
+end
+
+@en "CompatDecompLen"
+@fa "طول تجزیه سازگاری"
+@ar "طول تفکیک التوافق"
+// How many code points cp decomposes to under compatibility decomposition.
+//
+// This is the wider decomposition, and for Arabic and Persian it is the
+// useful one: the presentation forms in U+FB50..U+FDFF and U+FE70..U+FEFF -
+// the isolated, initial, medial and final letter shapes that some documents
+// and PDF extractions store literally - only reduce to plain letters here.
+// The Arabic ligature lam-alef ﻻ decomposes to two code points this way and
+// not at all canonically.
+pub pure func CompatDecompLen(cp: int): int:
+    if cp >= HangulSBase && cp < HangulSBase + HangulSCount:
+        ret DecompLen(cp)
+    end
+    i := _keyed_index(_NFKD_CP[:], cp)
+    if i < 0: ret 1 end
+    ret _NFKD_LEN[i]
+end
+
+@en "CompatDecompAt"
+@fa "تجزیه سازگاری در"
+@ar "تفکیک التوافق عند"
+// Code point k of the compatibility decomposition of cp.
+pub pure func CompatDecompAt(cp: int, k: int): int:
+    if cp >= HangulSBase && cp < HangulSBase + HangulSCount:
+        ret DecompAt(cp, k)
+    end
+    i := _keyed_index(_NFKD_CP[:], cp)
+    if i < 0: ret cp end
+    if k < 0 || k >= _NFKD_LEN[i]: ret cp end
+    ret _NFKD_SEQ[_NFKD_OFF[i] + k]
+end
+
+@en "Compose"
+@fa "ترکیب"
+@ar "ترکیب"
+// The single code point that the pair (a, b) composes to, or -1 if they do
+// not compose.
+//
+// Not every pair that decomposes will compose back: Unicode lists composition
+// exclusions for pairs where round-tripping would erase a distinction the
+// source made on purpose, and those are absent from the table. Hangul
+// composes arithmetically rather than by lookup.
+pub pure func Compose(a: int, b: int): int:
+    lidx := a - HangulLBase
+    if lidx >= 0 && lidx < HangulLCount:
+        vidx := b - HangulVBase
+        if vidx >= 0 && vidx < HangulVCount:
+            ret HangulSBase + (lidx * HangulVCount + vidx) * HangulTCount
+        end
+    end
+    sidx := a - HangulSBase
+    if sidx >= 0 && sidx < HangulSCount && sidx % HangulTCount == 0:
+        tidx := b - HangulTBase
+        if tidx > 0 && tidx < HangulTCount: ret a + tidx end
+    end
+    mut i := _floor_index(_COMP_A[:], a)
+    if i < 0: ret 0 - 1 end
+    if _COMP_A[i] != a: ret 0 - 1 end
+    // _floor_index lands on the LAST row for this starter; the rows for one
+    // starter are contiguous and there are at most nineteen of them, so
+    // walking back over them costs less than a second binary search.
+    until i >= 0 && _COMP_A[i] == a:
+        if _COMP_B[i] == b: ret _COMP_CP[i] end
+        i -= 1
+    end
+    ret 0 - 1
+end
+
+@en "GraphemeBreak"
+@fa "شکست خوشه"
+@ar "فاصل العنقود"
+// The Grapheme_Cluster_Break class of cp, as one of the Gcb* constants.
+// Callers normally want str.Graphemes rather than this.
+pub pure func GraphemeBreak(cp: int): int:
+    if cp >= HangulSBase && cp < HangulSBase + HangulSCount:
+        if (cp - HangulSBase) % HangulTCount == 0: ret GcbLV end
+        ret GcbLVT
+    end
+    i := _floor_index(_GCB_LO[:], cp)
+    if i < 0: ret GcbOther end
+    if cp > _GCB_HI[i]: ret GcbOther end
+    ret _GCB_ID[i]
+end
+
+@en "ConjunctBreak"
+@fa "شکست پیوند"
+@ar "فاصل الوصل"
+// The Indic_Conjunct_Break class of cp, as one of the Incb* constants.
+//
+// Needed by one segmentation rule, GB9c: a consonant joined to a following
+// consonant through a virama forms a conjunct, and the whole of it is one
+// grapheme cluster. Without this, Devanagari क्त would count and cut as three
+// characters instead of the one a reader sees.
+pub pure func ConjunctBreak(cp: int): int:
+    i := _floor_index(_INCB_LO[:], cp)
+    if i < 0: ret IncbNone end
+    if cp > _INCB_HI[i]: ret IncbNone end
+    ret _INCB_ID[i]
+end
+
+// ---------------------------------------------------------------------------
+// bidirectional algorithm data
+// ---------------------------------------------------------------------------
+
+@en "BidiClass"
+@fa "رده دوسویه"
+@ar "صنف ثنائي الاتجاه"
+// The Bidi_Class of cp, as one of the Bc* constants.
+//
+// This is the input to the bidirectional algorithm in std/bidi. Arabic and
+// Persian letters are BcAL, Hebrew is BcR, and Arabic-Indic digits are BcAN -
+// a distinction that matters, because Arabic numbers run left to right inside
+// text that runs right to left.
+pub pure func BidiClass(cp: int): int:
+    i := _floor_index(_BIDI_LO[:], cp)
+    if i < 0: ret BcL end
+    if cp > _BIDI_HI[i]: ret BcL end
+    ret _BIDI_ID[i]
+end
+
+@en "PairedBracketType"
+@fa "گونه کروشه جفت"
+@ar "نوع القوس المزدوج"
+// Whether cp opens a bracket pair, closes one, or is not a bracket
+// (PbtOpen, PbtClose, PbtNone).
+pub pure func PairedBracketType(cp: int): int:
+    i := _keyed_index(_BRACKET_CP[:], cp)
+    if i < 0: ret PbtNone end
+    ret _BRACKET_TYPE[i]
+end
+
+@en "PairedBracket"
+@fa "کروشه جفت"
+@ar "القوس المزدوج"
+// The bracket that pairs with cp, or cp itself when it is not a bracket.
+pub pure func PairedBracket(cp: int): int:
+    i := _keyed_index(_BRACKET_CP[:], cp)
+    if i < 0: ret cp end
+    ret _BRACKET_PAIR[i]
+end
+
+@en "Script"
+@fa "خط"
+@ar "الخط"
+// The Script property of cp, as one of the Script* constants.
+//
+// This is the right way to ask "is this Arabic script". Arabic script is
+// spread across the main block, the supplement, the extended blocks and both
+// presentation-form blocks, and several of those also contain code points
+// that belong to other scripts or to none - so testing a block range is wrong
+// in both directions.
+pub pure func Script(cp: int): int:
+    i := _floor_index(_SCRIPT_LO[:], cp)
+    if i < 0: ret ScriptUnknown end
+    if cp > _SCRIPT_HI[i]: ret ScriptUnknown end
+    ret _SCRIPT_ID[i]
+end
+
+@en "ScriptName"
+@fa "نام خط"
+@ar "اسم الخط"
+// The name of cp's script, such as "Arabic" or "Latin".
+pub pure func ScriptName(cp: int): str:
+    ret _SCRIPT_NAMES[Script(cp)]
+end

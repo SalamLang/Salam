@@ -67,7 +67,7 @@ end
 - `&:` marks a by-reference parameter.
 - Built-in `str` methods are only: `len concat substr find/search/indexOf trim
 lower upper repeat split to_int to_float`. Everything else is in `str`.
-- `Vector {} as Vector<str>`, `v.get(i)[0]` to read an element.
+- `Vector {} as Vector<str>`, `v.get(i)` to read an element, `v.ref(i)` for its address.
 - Nested generics (`Vector<Vector<T>>`) do not work, so flatten instead. They
   fail with type errors pointing _inside_ std, not at your code.
 

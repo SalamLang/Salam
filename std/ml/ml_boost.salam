@@ -1,0 +1,379 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ml
+
+import math
+import matrix
+
+// Boosting over CART trees.
+//
+// AdaBoost (SAMME) reweights the rows after each stump: a misclassified
+// row's weight grows by exp(alpha), and alpha itself comes from the
+// weighted error and the class count, so it stays meaningful past two
+// classes. Weighted fitting is done by weighted resampling with a
+// seeded generator, which keeps DecisionTree free of a sample-weight
+// path and still converges to the same ensemble in expectation.
+//
+// GradientBoosting fits a regression tree to the negative gradient of
+// the loss at each round: squared error for regression, and for
+// classification the multinomial deviance with one tree per class per
+// round on the softmax residual. Every tree's contribution is scaled by
+// the learning rate, and the first prediction is the mean target (or
+// the log class priors).
+
+@en "AdaBoost"
+@fa "آدابوست"
+@ar "أدابوست"
+pub struct AdaBoost:
+    pub n_estimators: int = 50
+    pub max_depth: int = 1
+    pub learning_rate: f64 = 1.0
+    pub seed: i64 = 42
+    pub trees: Vector<DecisionTree> = Vector {}
+    pub alphas: Vector<f64> = Vector {}
+    pub n_classes: int = 0
+    pub ok: bool = false
+
+    @en "fit"
+    @fa "برازش"
+    @ar "ملاءمة"
+    pub func fit(x &: matrix.Matrix, y &: matrix.Matrix): bool:
+        this.ok = false
+        if x.is_empty() || y.rows != x.rows || y.cols != 1 || this.n_estimators < 1: ret false end
+        n := x.rows
+        k := CountClasses(y)
+        if k < 2: ret false end
+        this.free_all()
+        mut wts := Vector {} as Vector<f64>
+        repeat n: wts.push(1.0 / (n as f64)) end
+        mut g := matrix.NewRng(this.seed)
+        mut round := 0
+        mut stop := false
+        until round < this.n_estimators && stop == false:
+            // Weighted resample.
+            mut xs := matrix.Zeros(n, x.cols)
+            mut ys := matrix.Zeros(n, 1)
+            repeat n with i:
+                src := _weighted_pick(wts, g.next_float())
+                repeat x.cols with j: xs.set(i, j, x.at(src, j)) end
+                ys.set(i, 0, y.at(src, 0))
+            end
+            mut tree := DecisionTree {}
+            tree.max_depth = this.max_depth
+            tree.n_classes_hint = k
+            tree.seed = this.seed + (round as i64)
+            tree.fit(xs, ys)
+            matrix.Free(xs)
+            matrix.Free(ys)
+            mut pred := tree.predict(x)
+            mut err := 0.0
+            repeat n with i:
+                if pred.at(i, 0) != y.at(i, 0): err += wts.get(i) end
+            end
+            if err >= 1.0 - 1.0 / (k as f64):
+                // No better than chance: drop it and stop.
+                tree.free()
+                matrix.Free(pred)
+                stop = true
+            else:
+                mut e := err
+                if e < 1.0e-10: e = 1.0e-10 end
+                alpha := this.learning_rate * (math.Log((1.0 - e) / e) + math.Log((k - 1) as f64))
+                mut total := 0.0
+                repeat n with i:
+                    if pred.at(i, 0) != y.at(i, 0):
+                        wts.set(i, wts.get(i) * math.Exp(alpha))
+                    end
+                    total += wts.get(i)
+                end
+                repeat n with i: wts.set(i, wts.get(i) / total) end
+                this.trees.push(tree)
+                this.alphas.push(alpha)
+                matrix.Free(pred)
+                if err < 1.0e-10: stop = true end
+            end
+            round += 1
+        end
+        wts.free()
+        this.n_classes = k
+        this.ok = this.trees.len() > 0
+        ret this.ok
+    end
+
+    // Weighted votes, normalized per row.
+    @en "predict_proba"
+    @fa "پیش‌بینی احتمال"
+    @ar "تنبؤ بالاحتمال"
+    pub func predict_proba(x &: matrix.Matrix): matrix.Matrix:
+        if this.ok == false: ret matrix.Matrix {} end
+        mut out := matrix.Zeros(x.rows, this.n_classes)
+        repeat this.trees.len() with t:
+            mut tree := this.trees.get(t)
+            mut p := tree.predict(x)
+            a := this.alphas.get(t)
+            repeat x.rows with i: out.add_at(i, p.at(i, 0) as int, a) end
+            matrix.Free(p)
+        end
+        repeat x.rows with i:
+            mut s := 0.0
+            repeat this.n_classes with c: s += out.at(i, c) end
+            if s > 0.0:
+                repeat this.n_classes with c: out.set(i, c, out.at(i, c) / s) end
+            end
+        end
+        ret out
+    end
+
+    @en "predict"
+    @fa "پیش‌بینی"
+    @ar "تنبؤ"
+    pub func predict(x &: matrix.Matrix): matrix.Matrix:
+        mut probs := this.predict_proba(x)
+        if probs.is_empty(): ret probs end
+        out := _argmax_rows(probs)
+        matrix.Free(probs)
+        ret out
+    end
+
+    @en "score"
+    @fa "امتیاز"
+    @ar "درجة"
+    pub func score(x &: matrix.Matrix, y &: matrix.Matrix): f64:
+        mut p := this.predict(x)
+        if p.is_empty(): ret 0.0 end
+        r := Accuracy(y, p)
+        matrix.Free(p)
+        ret r
+    end
+
+    @en "free_all"
+    @fa "آزادسازی همه"
+    @ar "تحرير الكل"
+    pub func free_all():
+        repeat this.trees.len() with t:
+            mut tree := this.trees.get(t)
+            tree.free()
+        end
+        this.trees.free()
+        this.alphas.free()
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free(): this.free_all() end
+end
+
+@en "GradientBoosting"
+@fa "تقویت گرادیانی"
+@ar "تعزيز تدرجي"
+pub struct GradientBoosting:
+    pub n_estimators: int = 100
+    pub learning_rate: f64 = 0.1
+    pub max_depth: int = 3
+    pub min_samples_leaf: int = 1
+    pub regression: bool = false
+    pub trees: Vector<DecisionTree> = Vector {}
+    pub base: matrix.Matrix = matrix.Matrix {}
+    pub n_classes: int = 0
+    pub ok: bool = false
+
+    @en "fit"
+    @fa "برازش"
+    @ar "ملاءمة"
+    pub func fit(x &: matrix.Matrix, y &: matrix.Matrix): bool:
+        this.ok = false
+        if x.is_empty() || y.rows != x.rows || y.cols != 1 || this.n_estimators < 1: ret false end
+        n := x.rows
+        this.free_all()
+        mut k := 1
+        if this.regression == false:
+            k = CountClasses(y)
+            if k < 2: ret false end
+        end
+        matrix.Free(this.base)
+        this.base = matrix.Zeros(1, k)
+        // Running raw scores f[i, c].
+        mut f := matrix.Zeros(n, k)
+        if this.regression:
+            mut mean := 0.0
+            repeat n with i: mean += y.at(i, 0) end
+            mean = mean / (n as f64)
+            this.base.set(0, 0, mean)
+            repeat n with i: f.set(i, 0, mean) end
+        else:
+            repeat n with i: this.base.add_at(0, y.at(i, 0) as int, 1.0) end
+            repeat k with c:
+                mut pr := this.base.at(0, c) / (n as f64)
+                if pr < 1.0e-6: pr = 1.0e-6 end
+                this.base.set(0, c, math.Log(pr))
+            end
+            repeat n with i:
+                repeat k with c: f.set(i, c, this.base.at(0, c)) end
+            end
+        end
+        mut resid := matrix.Zeros(n, 1)
+        repeat this.n_estimators with round:
+            repeat k with c:
+                // Negative gradient for this class (or the residual).
+                if this.regression:
+                    repeat n with i: resid.set(i, 0, y.at(i, 0) - f.at(i, 0)) end
+                else:
+                    repeat n with i:
+                        mut m := f.at(i, 0)
+                        repeat k with cc:
+                            if f.at(i, cc) > m: m = f.at(i, cc) end
+                        end
+                        mut s := 0.0
+                        repeat k with cc: s += math.Exp(f.at(i, cc) - m) end
+                        p := math.Exp(f.at(i, c) - m) / s
+                        mut target := 0.0
+                        if (y.at(i, 0) as int) == c: target = 1.0 end
+                        resid.set(i, 0, target - p)
+                    end
+                end
+                mut tree := DecisionTree {}
+                tree.criterion = TREE_MSE
+                tree.max_depth = this.max_depth
+                tree.min_samples_leaf = this.min_samples_leaf
+                tree.seed = (round * k + c) as i64
+                tree.fit(x, resid)
+                mut step := tree.predict(x)
+                repeat n with i: f.add_at(i, c, this.learning_rate * step.at(i, 0)) end
+                matrix.Free(step)
+                this.trees.push(tree)
+            end
+        end
+        matrix.Free(resid)
+        matrix.Free(f)
+        this.n_classes = k
+        this.ok = true
+        ret true
+    end
+
+    // Raw scores: the base plus every tree's scaled contribution.
+    @en "decision"
+    @fa "تصمیم"
+    @ar "قرار"
+    pub func decision(x &: matrix.Matrix): matrix.Matrix:
+        if this.ok == false: ret matrix.Matrix {} end
+        k := this.n_classes
+        mut f := matrix.Zeros(x.rows, k)
+        repeat x.rows with i:
+            repeat k with c: f.set(i, c, this.base.at(0, c)) end
+        end
+        rounds := this.trees.len() / k
+        repeat rounds with r:
+            repeat k with c:
+                mut tree := this.trees.get(r * k + c)
+                mut step := tree.predict(x)
+                repeat x.rows with i: f.add_at(i, c, this.learning_rate * step.at(i, 0)) end
+                matrix.Free(step)
+            end
+        end
+        ret f
+    end
+
+    @en "predict_proba"
+    @fa "پیش‌بینی احتمال"
+    @ar "تنبؤ بالاحتمال"
+    pub func predict_proba(x &: matrix.Matrix): matrix.Matrix:
+        if this.ok == false || this.regression: ret matrix.Matrix {} end
+        mut f := this.decision(x)
+        k := this.n_classes
+        repeat x.rows with i:
+            mut m := f.at(i, 0)
+            repeat k with c:
+                if f.at(i, c) > m: m = f.at(i, c) end
+            end
+            mut s := 0.0
+            repeat k with c:
+                e := math.Exp(f.at(i, c) - m)
+                f.set(i, c, e)
+                s += e
+            end
+            repeat k with c: f.set(i, c, f.at(i, c) / s) end
+        end
+        ret f
+    end
+
+    @en "predict"
+    @fa "پیش‌بینی"
+    @ar "تنبؤ"
+    pub func predict(x &: matrix.Matrix): matrix.Matrix:
+        if this.ok == false: ret matrix.Matrix {} end
+        if this.regression: ret this.decision(x) end
+        mut probs := this.predict_proba(x)
+        out := _argmax_rows(probs)
+        matrix.Free(probs)
+        ret out
+    end
+
+    @en "score"
+    @fa "امتیاز"
+    @ar "درجة"
+    pub func score(x &: matrix.Matrix, y &: matrix.Matrix): f64:
+        mut p := this.predict(x)
+        if p.is_empty(): ret 0.0 end
+        mut r := 0.0
+        if this.regression: r = R2Score(y, p)
+        else: r = Accuracy(y, p) end
+        matrix.Free(p)
+        ret r
+    end
+
+    @en "free_all"
+    @fa "آزادسازی همه"
+    @ar "تحرير الكل"
+    pub func free_all():
+        repeat this.trees.len() with t:
+            mut tree := this.trees.get(t)
+            tree.free()
+        end
+        this.trees.free()
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free():
+        this.free_all()
+        matrix.Free(this.base)
+    end
+end
+
+// The index whose cumulative weight first reaches u * total, for a
+// weight vector that sums to one.
+func _weighted_pick(wts &: Vector<f64>, u: f64): int:
+    mut acc := 0.0
+    n := wts.len()
+    repeat n with i:
+        acc += wts.get(i)
+        if acc >= u: ret i end
+    end
+    ret n - 1
+end
+
+func _argmax_rows(p &: matrix.Matrix): matrix.Matrix:
+    mut out := matrix.Zeros(p.rows, 1)
+    repeat p.rows with i:
+        mut best := 0
+        repeat p.cols with c:
+            if p.at(i, c) > p.at(i, best): best = c end
+        end
+        out.set(i, 0, best as f64)
+    end
+    ret out
+end

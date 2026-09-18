@@ -1,0 +1,237 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/matrix: the statistics of a data matrix, PCA and regression.
+//
+// Rows are observations, columns are variables, throughout.
+
+import matrix
+import math
+import testing
+
+// Four observations of two variables:
+//   x: 1 2 3 4   (mean 2.5, sample variance 5/3)
+//   y: 2 4 6 8   (mean 5.0, sample variance 20/3, exactly 2x)
+func data(): matrix.Matrix:
+    mut m := matrix.Zeros(4, 2)
+    repeat 4 with i:
+        m.set(i, 0, (i + 1) as f64)
+        m.set(i, 1, ((i + 1) * 2) as f64)
+    end
+    ret m
+end
+
+func check_moments():
+    mut x := data()
+
+    mut mu := matrix.ColumnMeans(x)
+    testing.AssertEqInt(mu.rows, 1)
+    testing.AssertEqInt(mu.cols, 2)
+    testing.AssertEqFloat(mu.at(0, 0), 2.5, 0.000000001)
+    testing.AssertEqFloat(mu.at(0, 1), 5.0, 0.000000001)
+
+    mut sd := matrix.ColumnStds(x, true)
+    testing.AssertEqFloat(sd.at(0, 0), math.Sqrt(5.0 / 3.0), 0.000001)
+    testing.AssertEqFloat(sd.at(0, 1), math.Sqrt(20.0 / 3.0), 0.000001)
+
+    // Centred columns sum to zero
+    mut c := matrix.CenterColumns(x)
+    mut sums := matrix.ColSums(c)
+    testing.AssertEqFloat(sums.at(0, 0), 0.0, 0.000000001)
+    testing.AssertEqFloat(sums.at(0, 1), 0.0, 0.000000001)
+    testing.AssertEqFloat(c.at(0, 0), 0.0 - 1.5, 0.000000001)
+
+    // Standardized columns have zero mean and unit variance
+    mut s := matrix.Standardize(x, true)
+    mut smu := matrix.ColumnMeans(s)
+    mut ssd := matrix.ColumnStds(s, true)
+    testing.AssertEqFloat(smu.at(0, 0), 0.0, 0.000000001)
+    testing.AssertEqFloat(ssd.at(0, 0), 1.0, 0.000001)
+    testing.AssertEqFloat(ssd.at(0, 1), 1.0, 0.000001)
+
+    defer x.free()
+    defer mu.free()
+    defer sd.free()
+    defer c.free()
+    defer sums.free()
+    defer s.free()
+    defer smu.free()
+    defer ssd.free()
+end
+
+func check_covariance():
+    mut x := data()
+    mut cov := matrix.Covariance(x, true)
+    testing.AssertEqInt(cov.rows, 2)
+    testing.AssertEqInt(cov.cols, 2)
+    testing.AssertTrue(matrix.IsSymmetric(cov, 0.000000001))
+    testing.AssertTrue(matrix.IsPositiveSemiDefinite(cov, 0.000001))
+
+    // var(x) = 5/3, var(y) = 20/3, cov(x,y) = 10/3
+    testing.AssertEqFloat(cov.at(0, 0), 5.0 / 3.0, 0.000001)
+    testing.AssertEqFloat(cov.at(1, 1), 20.0 / 3.0, 0.000001)
+    testing.AssertEqFloat(cov.at(0, 1), 10.0 / 3.0, 0.000001)
+
+    // The diagonal of the covariance is the per-column variance
+    mut col0 := matrix.Col(x, 0)
+    testing.AssertEqFloat(matrix.Var(col0, true), cov.at(0, 0), 0.000001)
+
+    // y = 2x, so the correlation is exactly 1
+    mut corr := matrix.Correlation(x)
+    testing.AssertEqFloat(corr.at(0, 0), 1.0, 0.000001)
+    testing.AssertEqFloat(corr.at(1, 1), 1.0, 0.000001)
+    testing.AssertEqFloat(corr.at(0, 1), 1.0, 0.000001)
+
+    // An anticorrelated pair gives -1
+    mut anti := matrix.Zeros(4, 2)
+    repeat 4 with i:
+        anti.set(i, 0, (i as f64))
+        anti.set(i, 1, 0.0 - (i as f64))
+    end
+    mut ac := matrix.Correlation(anti)
+    testing.AssertEqFloat(ac.at(0, 1), 0.0 - 1.0, 0.000001)
+
+    // A constant column has no variance, and correlation says zero rather
+    // than dividing by it
+    mut flat := matrix.Zeros(4, 2)
+    repeat 4 with i:
+        flat.set(i, 0, (i as f64))
+        flat.set(i, 1, 7.0)
+    end
+    mut fc := matrix.Correlation(flat)
+    testing.AssertEqFloat(fc.at(0, 1), 0.0, 0.000001)
+
+    defer x.free()
+    defer cov.free()
+    defer col0.free()
+    defer corr.free()
+    defer anti.free()
+    defer ac.free()
+    defer flat.free()
+    defer fc.free()
+end
+
+func check_pca():
+    // Data that varies along one direction only: PCA must find it, and put
+    // all of the variance in the first component.
+    mut x := data()
+    mut p := matrix.PCAFit(x)
+    testing.AssertEqInt(p.components.rows, 2)
+    testing.AssertEqInt(p.components.cols, 2)
+    testing.AssertEqFloat(p.center.at(0, 0), 2.5, 0.000001)
+
+    // Variances descend, and the second is zero here
+    testing.AssertTrue(p.variances.at(0, 0) > p.variances.at(0, 1))
+    testing.AssertEqFloat(p.variances.at(0, 1), 0.0, 0.000001)
+
+    // The components are orthonormal
+    testing.AssertTrue(matrix.IsOrthogonal(p.components, 0.000001))
+
+    // The leading direction is (1,2) normalized, since y = 2x
+    mut lead := matrix.Col(p.components, 0)
+    ratio := lead.at(1, 0) / lead.at(0, 0)
+    testing.AssertEqFloat(ratio, 2.0, 0.000001)
+
+    // All the variance is explained by the first component
+    mut ev := matrix.ExplainedVariance(p)
+    testing.AssertEqFloat(ev.at(0, 0), 1.0, 0.000001)
+    testing.AssertEqFloat(ev.at(0, 1), 0.0, 0.000001)
+
+    // Projecting onto one component loses nothing here
+    mut t := matrix.PCATransform(p, x, 1)
+    testing.AssertEqInt(t.rows, 4)
+    testing.AssertEqInt(t.cols, 1)
+    testing.AssertEqFloat(matrix.Var(t, true), p.variances.at(0, 0), 0.000001)
+
+    // The SVD route agrees with the covariance route
+    mut q := matrix.PCAFromSVD(x)
+    testing.AssertEqFloat(q.variances.at(0, 0), p.variances.at(0, 0), 0.000001)
+    testing.AssertEqFloat(q.variances.at(0, 1), p.variances.at(0, 1), 0.000001)
+
+    defer x.free()
+    defer p.free()
+    defer lead.free()
+    defer ev.free()
+    defer t.free()
+    defer q.free()
+end
+
+func check_regression():
+    // y = 1 + 2t exactly, so the fit is exact and R^2 is 1
+    mut t := matrix.Zeros(4, 1)
+    mut y := matrix.Zeros(4, 1)
+    repeat 4 with i:
+        t.set(i, 0, (i as f64))
+        y.set(i, 0, 1.0 + 2.0 * (i as f64))
+    end
+    mut beta := matrix.LinearRegression(t, y)
+    testing.AssertEqInt(beta.rows, 2)
+    testing.AssertEqFloat(beta.at(0, 0), 1.0, 0.000001)
+    testing.AssertEqFloat(beta.at(1, 0), 2.0, 0.000001)
+
+    // The fitted values reproduce y, and R^2 is 1
+    mut ones := matrix.Full(4, 1, 1.0)
+    mut design := matrix.HStack(ones, t)
+    mut fitted := matrix.MatVec(design, beta)
+    testing.AssertTrue(matrix.AllClose(fitted, y, 0.000001))
+    testing.AssertEqFloat(matrix.RSquared(y, fitted), 1.0, 0.000001)
+
+    // Predicting the mean everywhere gives R^2 of exactly zero
+    mut meanfit := matrix.Full(4, 1, matrix.Mean(y))
+    testing.AssertEqFloat(matrix.RSquared(y, meanfit), 0.0, 0.000001)
+
+    // Two predictors: y = 1 + 2 t1 + 3 t2, recovered exactly
+    mut x2 := matrix.Zeros(4, 2)
+    mut y2 := matrix.Zeros(4, 1)
+    repeat 4 with i:
+        t1 := i as f64
+        t2 := (i % 2) as f64
+        x2.set(i, 0, t1)
+        x2.set(i, 1, t2)
+        y2.set(i, 0, 1.0 + 2.0 * t1 + 3.0 * t2)
+    end
+    mut b2 := matrix.LinearRegression(x2, y2)
+    testing.AssertEqInt(b2.rows, 3)
+    testing.AssertEqFloat(b2.at(0, 0), 1.0, 0.000001)
+    testing.AssertEqFloat(b2.at(1, 0), 2.0, 0.000001)
+    testing.AssertEqFloat(b2.at(2, 0), 3.0, 0.000001)
+
+    // Mismatched shapes are refused
+    mut wrong := matrix.Zeros(3, 1)
+    mut none := matrix.LinearRegression(t, wrong)
+    testing.AssertTrue(none.is_empty())
+
+    defer t.free()
+    defer y.free()
+    defer beta.free()
+    defer ones.free()
+    defer design.free()
+    defer fitted.free()
+    defer meanfit.free()
+    defer x2.free()
+    defer y2.free()
+    defer b2.free()
+    defer wrong.free()
+    defer none.free()
+end
+
+func main:
+    check_moments()
+    check_covariance()
+    check_pca()
+    check_regression()
+    ret testing.Summary()
+end

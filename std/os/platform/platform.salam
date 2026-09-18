@@ -25,42 +25,50 @@ if SALAM_OS_LINUX:
     extern:
         func sysconf(name: int): i64
     end
+
+    // glibc's _SC_NPROCESSORS_ONLN - CPUs currently online. Spelled out here
+    // because sysconf takes the raw number and 84 says nothing on its own.
+    const _SC_NPROCESSORS_ONLN := 84
 end
 
-func str_has_prefix(s: str, prefix: str): bool:
-    if prefix.len() > s.len(): ret false end
-    ret s.substr(0, prefix.len()) == prefix
+func str_has_prefix(text: str, prefix: str): bool:
+    if prefix.len() > text.len(): ret false end
+    ret text.substr(0, prefix.len()) == prefix
 end
 
-func extract_digits(s: str): str:
-    mut out := ""
+// First run of ASCII digits in `text`, "" when it holds none. Leading
+// non-digits are skipped; the run ends at the first character after it.
+func extract_digits(text: str): str:
+    mut digits := ""
     mut i := 0
-    n := s.len()
+    n := text.len()
     until i < n:
-        c := s.substr(i, 1)
-        code := char_code(c)
+        ch := text.substr(i, 1)
+        code := char_code(ch)
         if code >= 48 && code <= 57:
-            out = out.concat(c)
+            digits = digits.concat(ch)
         else:
-            if out.len() > 0: ret out end
+            if digits.len() > 0: ret digits end
         end
         i += 1
     end
-    ret out
+    ret digits
 end
 
+// Value of a "<key> <number> kB" line in /proc/meminfo, in BYTES (the file
+// reports kibibytes). -1 when the file or the key is missing.
 func _meminfo_field(key: str): i64:
-    text := io.ReadFile("/proc/meminfo")
-    if text.len() == 0: ret 0 - 1 end
-    lines := text.split("\n")
+    meminfo := io.ReadFile("/proc/meminfo")
+    if meminfo.len() == 0: ret 0 - 1 end
+    lines := meminfo.split("\n")
     defer lines.free()
     mut i := 0
-    n := lines.len()
-    until i < n:
-        line := lines.get(i)[0]
+    line_count := lines.len()
+    until i < line_count:
+        line := lines.get(i)
         if str_has_prefix(line, key):
-            rest := line.substr(key.len(), line.len() - key.len())
-            digits := extract_digits(rest)
+            after_key := line.substr(key.len(), line.len() - key.len())
+            digits := extract_digits(after_key)
             if digits.len() > 0: ret conv.ParseInt(digits) * 1024 end
             ret 0 - 1
         end
@@ -156,9 +164,9 @@ if SALAM_OS_WINDOWS:
     @fa "تعداد پردازنده"
     @ar "عدد المعالجات"
     pub func CpuCount(): int:
-        v := os.Env("NUMBER_OF_PROCESSORS")
-        if v.len() == 0: ret 0 - 1 end
-        ret conv.ParseInt(v) as int
+        count := os.Env("NUMBER_OF_PROCESSORS")
+        if count.len() == 0: ret 0 - 1 end
+        ret conv.ParseInt(count) as int
     end
 
     // Memory queries shell out to PowerShell/CIM rather than calling
@@ -169,35 +177,37 @@ if SALAM_OS_WINDOWS:
     @fa "کل حافظه"
     @ar "إجمالي الذاکرة"
     pub func TotalMemory(): i64:
-        out := os.Output(`powershell -NoProfile -Command "(Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory"`)
-        v := extract_digits(out)
-        if v.len() == 0: ret 0 - 1 end
-        ret conv.ParseInt(v)
+        reply := os.Output(`powershell -NoProfile -Command "(Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory"`)
+        digits := extract_digits(reply)
+        if digits.len() == 0: ret 0 - 1 end
+        ret conv.ParseInt(digits)
     end
 
     @en "AvailableMemory"
     @fa "حافظه موجود"
     @ar "الذاکرة المتاحة"
     pub func AvailableMemory(): i64:
-        out := os.Output(`powershell -NoProfile -Command "(Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory"`)
-        v := extract_digits(out)
-        if v.len() == 0: ret 0 - 1 end
-        ret conv.ParseInt(v) * 1024
+        // FreePhysicalMemory is reported in kibibytes; every other value
+        // this package returns is in bytes.
+        reply := os.Output(`powershell -NoProfile -Command "(Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory"`)
+        digits := extract_digits(reply)
+        if digits.len() == 0: ret 0 - 1 end
+        ret conv.ParseInt(digits) * 1024
     end
 else:
     if SALAM_OS_LINUX:
         @en "CpuCount"
         @fa "تعداد پردازنده"
         @ar "عدد المعالجات"
-        pub func CpuCount(): int: ret sysconf(84) as int end
+        pub func CpuCount(): int: ret sysconf(_SC_NPROCESSORS_ONLN) as int end
     else:
         @en "CpuCount"
         @fa "تعداد پردازنده"
         @ar "عدد المعالجات"
         pub func CpuCount(): int:
-            v := os.Output("sysctl -n hw.ncpu")
-            if v.len() == 0: ret 0 - 1 end
-            ret conv.ParseInt(v) as int
+            reply := os.Output("sysctl -n hw.ncpu")
+            if reply.len() == 0: ret 0 - 1 end
+            ret conv.ParseInt(reply) as int
         end
     end
 
@@ -206,12 +216,11 @@ else:
     @ar "إجمالي الذاکرة"
     pub func TotalMemory(): i64:
         if SALAM_OS_LINUX:
-            v := _meminfo_field("MemTotal:")
-            ret v
+            ret _meminfo_field("MemTotal:")
         else:
-            out := os.Output("sysctl -n hw.memsize")
-            if out.len() == 0: ret 0 - 1 end
-            ret conv.ParseInt(out)
+            reply := os.Output("sysctl -n hw.memsize")
+            if reply.len() == 0: ret 0 - 1 end
+            ret conv.ParseInt(reply)
         end
     end
 

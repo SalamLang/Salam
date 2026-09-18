@@ -1,0 +1,198 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// net/socketio against a Socket.IO server written here, on top of
+// net/websocket, in one process.
+//
+// The server side answers with literal protocol strings rather than by
+// calling anything in net/socketio, so what is being checked is that the
+// client puts the documented bytes on the wire and reads the documented
+// bytes back - not that the package agrees with itself.
+
+import net.socketio
+import net.websocket
+import sync
+import str
+import mem
+
+const PORT := 19412
+
+mut ready := sync.NewWaitGroup()
+mut server log := ""
+
+// The ack id out of a packet like `42<id>["add",2,3]`, or -1.
+func ack id of(text: str): int:
+    mut i := 1
+    mut id := 0
+    mut seen := false
+    until i < text.len():
+        c := char_code(text.substr(i, 1))
+        if c < 48 || c > 57:
+            i = text.len()
+        else:
+            id = id * 10 + (c - 48)
+            seen = true
+            i += 1
+        end
+    end
+    if !seen:
+        ret 0 - 1
+    end
+    ret id
+end
+
+func sio server():
+    srv := websocket.Listen(PORT)
+    sync.Done(ready)
+    if !websocket.Ok(srv):
+        ret
+    end
+    mut c := websocket.Accept(srv)
+    if !websocket.IsOpen(c):
+        websocket.CloseServer(srv)
+        ret
+    end
+    // The path carries the Engine.IO parameters, and both halves of the
+    // query: what was written in the URL and what Options.query added. A
+    // server's middleware reads a credential out of exactly this.
+    if str.Contains(c.path, "EIO=4") && str.Contains(c.path, "transport=websocket"):
+        server log += "handshake ok;"
+    end
+    if str.Contains(c.path, "room=7"):
+        server log += "url query;"
+    end
+    if str.Contains(c.path, "client=salam"):
+        server log += "options query;"
+    end
+    // Written without the closing CRLF, which is how a caller writes one
+    // header and how a client that does not close it off produces a request
+    // no server can read.
+    if str.Contains(c.hdr, "X-Api-Key: k-123"):
+        server log += "extra header;"
+    end
+    websocket.SendText(c, `0{"sid":"loopback-sid","upgrades":[],"pingInterval":20000,"pingTimeout":5000}`)
+    mut going := true
+    mut idle := 0
+    // A poll that times out is not the end of anything - under a loaded
+    // test runner the client can be several seconds between packets - so it
+    // only counts towards a hard stop that stops this thread wedging.
+    until going:
+        m := websocket.Poll(c, 2000)
+        if m.kind == websocket.TIMEOUT:
+            idle += 1
+            if idle > 30:
+                going = false
+            end
+        else m.kind != websocket.TEXT:
+            going = false
+        else:
+            idle = 0
+            t := m.text
+            body := t.substr(1, t.len() - 1)
+            if t == "40":
+                websocket.SendText(c, `40{"sid":"nsp-socket-1"}`)
+            else body == "3":
+                server log += "pong;"
+            else str.StartsWith(body, `2["echo"`):
+                server log += "echo;"
+                websocket.SendText(c, `42["echoed","and back"]`)
+                // An event the client has to acknowledge.
+                websocket.SendText(c, `427["question","2+2"]`)
+                // A binary event: the placeholder, then the buffer.
+                websocket.SendText(c, `451-["blob",{"_placeholder":true,"num":0}]`)
+                raw := mem.Allocate(4 as u64)
+                bp := raw as i8*
+                bp[0] = 9 as i8
+                bp[1] = 0 as i8
+                bp[2] = 200 as i8
+                bp[3] = 255 as i8
+                websocket.SendBinaryBytes(c, raw, 4)
+                mem.Free(raw)
+            else str.StartsWith(body, "2") && str.Contains(body, `"add"`):
+                id := ack id of(body)
+                server log += "add#" + id + ";"
+                websocket.SendText(c, "43" + id + "[5]")
+            else str.StartsWith(body, "37"):
+                server log += "replied=" + body.substr(2, body.len() - 2) + ";"
+            else body == "1":
+                server log += "client left;"
+                going = false
+            end
+        end
+    end
+    websocket.Close(c)
+    websocket.CloseServer(srv)
+end
+
+func main:
+    sync.Add(ready, 1 as i64)
+    t := spawn(sio server)
+    sync.Wait(ready)
+
+    mut o := socketio.NewOptions()
+    o.transports = socketio.TRANSPORT_WEBSOCKET
+    o.timeout = 3000
+    o.reconnection = false
+    o.query = "?client=salam"
+    o.headers = "X-Api-Key: k-123"
+    c := socketio.DialWith("http://127.0.0.1:" + PORT + "/?room=7", o)
+
+    println "connected:", socketio.IsConnected(c)
+    println "engine sid:", socketio.Sid(c)
+    println "namespace socket id:", socketio.Id(c)
+    println "namespace:", socketio.Namespace(c)
+    println "transport is websocket:", socketio.Transport(c) == socketio.TRANSPORT_WEBSOCKET
+
+    // Emit, and read back the three packets the server answers with.
+    socketio.EmitStr(c, "echo", "please")
+    mut got event := ""
+    mut got binary := ""
+    mut question id := 0 - 1
+    mut n := 0
+    until n < 8:
+        mut ev := socketio.Next(c, 400)
+        if ev.kind == socketio.EV_EVENT:
+            if ev.name == "echoed":
+                got event = socketio.ArgStr(ev, 0)
+            else ev.name == "question":
+                question id = ev.ack_id
+                socketio.ReplyStr(ev, "four")
+            else ev.name == "blob":
+                b := socketio.ArgBytes(ev, 0)
+                got binary = "" + b.len + ":" + socketio.BytesAt(b, 0) + "," + socketio.BytesAt(b, 1) + "," + socketio.BytesAt(b, 2) + "," + socketio.BytesAt(b, 3)
+            end
+        end
+        socketio.EventFree(ev)
+        n += 1
+    end
+    println "event argument:", got event
+    println "binary argument:", got binary
+    println "question wanted an ack:", question id >= 0
+
+    // Emit and wait for the server's acknowledgement.
+    mut a := socketio.NewArgs()
+    socketio.AddInt(a, 2)
+    socketio.AddInt(a, 3)
+    mut ack := socketio.EmitAck(c, "add", a, 2000)
+    socketio.ArgsFree(a)
+    println "ack ok:", ack.ok, "value:", socketio.AckInt(ack, 0)
+    socketio.AckFree(ack)
+
+    // A reserved name is refused rather than sent.
+    println "reserved name refused:", !socketio.Emit(c, "connect")
+
+    socketio.Close(c)
+    join(t)
+    println "server saw:", server log
+end

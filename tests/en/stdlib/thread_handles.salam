@@ -1,0 +1,100 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/thread: the typed wrapper around the raw handles `spawn` returns.
+//
+// `spawn(fn)` gives back an i64 - an OS handle on Windows, a pointer to a
+// pthread_t elsewhere - and `join(h)` takes it back. That is all the language
+// itself offers. std/thread wraps the number in a Thread struct so it can be
+// stored in a Vector, checked for validity, and joined as a group.
+//
+// The number 0 means "no thread". thread.New(0) is the failed-spawn value,
+// and Valid() is the check; joining an invalid handle is a no-op rather than
+// a crash, which is what lets JoinAll run over a partially-filled list.
+//
+// WHAT A WORKER CANNOT DO
+//
+// spawn takes a function of no arguments and ignores any return value, so a
+// worker communicates only through shared state. There is no per-thread
+// argument to pass an index in, which is why every "give each worker its own
+// slot" pattern goes through a shared counter under a lock - see
+// worker_pool.salam for that.
+
+import sync
+import thread
+
+const WORKERS := 5
+const PER_WORKER := 1000
+
+mut hits := 0
+mut lock := sync.Mutex {}
+mut wg := sync.WaitGroup {}
+
+func worker():
+    repeat PER_WORKER:
+        sync.Lock(lock)
+        hits = hits + 1
+        sync.Unlock(lock)
+    end
+    sync.Done(wg)
+end
+
+func main:
+    lock = sync.NewMutex()
+    wg = sync.NewWaitGroup()
+
+    // The failed-spawn value, and the check for it.
+    dead := thread.New(0 as i64)
+    println "invalid valid :", thread.Valid(dead)
+    println "invalid handle:", thread.Handle(dead)
+    // Joining it does nothing, on purpose: a caller that spawned a batch and
+    // got one failure can still join the whole batch.
+    thread.Join(dead)
+    println "join(invalid) returned"
+
+    // A real one.
+    one := thread.New(spawn(worker))
+    println "spawned valid :", thread.Valid(one)
+    println "handle is set :", thread.Handle(one) != 0 as i64
+
+    // A group of them, collected into a Vector and joined together.
+    // Collect appends and hands the vector back, so it chains.
+    mut group := Vector {} as Vector<thread.Thread>
+    defer group.free()
+    sync.Add(wg, WORKERS as i64)
+    repeat WORKERS - 1:
+        group = thread.Collect(group, spawn(worker))
+    end
+    println "group size    :", group.len()
+
+    // Wait for the work, then join every handle.
+    sync.Wait(wg)
+    thread.Join(one)
+    thread.JoinAll(group)
+    println "total hits    :", hits, "of", WORKERS * PER_WORKER
+    println "every worker counted:", hits == WORKERS * PER_WORKER
+
+    // Every collected handle is a real one.
+    mut all_valid := true
+    repeat group.len() with i:
+        if !thread.Valid(group.get(i)): all_valid = false end
+    end
+    println "all valid     :", all_valid
+
+    sync.DestroyWaitGroup(wg)
+    sync.Destroy(lock)
+    ret 0
+end

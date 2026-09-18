@@ -1,6 +1,7 @@
 package semantic
 
 import str
+import tok "../token.salam"
 
 // ===== types.c =====
 
@@ -16,7 +17,7 @@ end
 // type_array - interned on (elem, length).
 func type_array(s &: Sema, elem: int, length: i64): int:
     repeat s.arrays_intern.len() with i:
-        tid := s.arrays_intern.get(i)[0]
+        tid := s.arrays_intern.get(i)
         t := ty_at(s, tid)
         if t.elem == elem && t.length == length:
             ret tid
@@ -43,7 +44,7 @@ end
 // type_ptr - interned on pointee.
 func type_ptr(s &: Sema, pointee: int): int:
     repeat s.ptrs_intern.len() with i:
-        tid := s.ptrs_intern.get(i)[0]
+        tid := s.ptrs_intern.get(i)
         t := ty_at(s, tid)
         if t.pointee == pointee:
             ret tid
@@ -70,6 +71,7 @@ func type_enum(s &: Sema, decl_sym: int, name: str): int:
     mut nt := Type { kind = TY_ENUM }
     nt.decl = decl_sym
     nt.name = name
+    nt.enum_val_kind = tok.TV_INT
     id := s.types.len()
     s.types.push(nt)
     ret id
@@ -123,7 +125,7 @@ func type_func_new(s &: Sema, ret_t: int, params: Vector<int>): int:
     mut nt := Type { kind = TY_FUNC }
     nt.elem = ret_t
     repeat params.len() with i:
-        nt.params.push(params.get(i)[0])
+        nt.params.push(params.get(i))
     end
     id := s.types.len()
     s.types.push(nt)
@@ -134,10 +136,10 @@ end
 func type_variant_new(s &: Sema, members: Vector<int>): int:
     mut nt := Type { kind = TY_VARIANT }
     repeat members.len() with i:
-        m := members.get(i)[0]
+        m := members.get(i)
         mut dup := false
         repeat nt.params.len() with j:
-            if type_equiv(s, nt.params.get(j)[0], m):
+            if type_equiv(s, nt.params.get(j), m):
                 dup = true
                 break
             end
@@ -161,7 +163,7 @@ func type_variant_tag(s &: Sema, variant: int, member: int): int:
         ret 0 - 1
     end
     repeat tv.params.len() with i:
-        if type_equiv(s, tv.params.get(i)[0], member):
+        if type_equiv(s, tv.params.get(i), member):
             ret i
         end
     end
@@ -335,7 +337,7 @@ func type_equiv(s &: Sema, ta: int, tb: int): bool:
             ret false
         end
         repeat va.params.len() with i:
-            if !type_equiv(s, va.params.get(i)[0], vb.params.get(i)[0]):
+            if !type_equiv(s, va.params.get(i), vb.params.get(i)):
                 ret false
             end
         end
@@ -346,7 +348,7 @@ func type_equiv(s &: Sema, ta: int, tb: int): bool:
             ret false
         end
         repeat va.params.len() with i2:
-            if !type_equiv(s, va.params.get(i2)[0], vb.params.get(i2)[0]):
+            if !type_equiv(s, va.params.get(i2), vb.params.get(i2)):
                 ret false
             end
         end
@@ -365,8 +367,17 @@ func type_implicit(s &: Sema, src: int, dst: int): bool:
     if sk == TY_NULL && dk == TY_PTR:
         ret true
     end
-    if sk == TY_ENUM && dk == TY_I32:
-        ret true
+    if sk == TY_ENUM:
+        st := ty_at(s, src)
+        if st.enum_val_kind == tok.TV_STRING && dk == TY_STR:
+            ret true
+        end
+        if st.enum_val_kind == tok.TV_FLOAT && (dk == TY_F64 || dk == TY_F32):
+            ret true
+        end
+        if st.enum_val_kind == tok.TV_INT && dk == TY_I32:
+            ret true
+        end
     end
     if sk == TY_UCHAR && dk == TY_STR:
         ret true
@@ -426,7 +437,13 @@ func type_castable(s &: Sema, dst: int, src: int): bool:
     if (dk == TY_FUNC && sk == TY_PTR) || (dk == TY_PTR && sk == TY_FUNC):
         ret true
     end
-    sn := type_is_numeric(s, src) || sk == TY_BOOL || sk == TY_CHAR || sk == TY_ENUM
+    if sk == TY_ENUM && ty_at(s, src).enum_val_kind == tok.TV_STRING && dk == TY_STR:
+        ret true
+    end
+    // A string-backed enum's only valid cast target is str (above); it must
+    // not fall into the numeric-ish cast below just because TY_ENUM is
+    // generally cast-compatible with numbers.
+    sn := type_is_numeric(s, src) || sk == TY_BOOL || sk == TY_CHAR || (sk == TY_ENUM && ty_at(s, src).enum_val_kind != tok.TV_STRING)
     dn := type_is_numeric(s, dst) || dk == TY_BOOL || dk == TY_CHAR || dk == TY_ENUM
     if sn && dn:
         ret true
@@ -505,7 +522,7 @@ func type_params_str(s &: Sema, params: Vector<int>): str:
         if i > 0:
             out = out + ", "
         end
-        out = out + type_to_string(s, params.get(i)[0])
+        out = out + type_to_string(s, params.get(i))
     end
     ret out
 end

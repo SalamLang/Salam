@@ -1,0 +1,152 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "pool"
+@fa "استخر"
+@ar "مجمع"
+package pool
+
+import mem
+import sync
+import thread
+
+if SALAM_OS_WINDOWS:
+    extern:
+        func GetSystemInfo(info: void*)
+    end
+else:
+    extern:
+        func sysconf(name: int): i64
+    end
+end
+
+/*
+ * Shared state for one ParallelFor run. It lives on the heap rather than on
+ * the caller's stack because the address is what reaches each worker through
+ * spawn(f, arg), and the frame that created it must not be able to disappear
+ * underneath a still-running thread. ParallelFor joins every worker before
+ * freeing it, so the lifetime is exact.
+ */
+struct Range:
+    pub body: func (i64) = (i: i64): end
+    pub next: i64* = null
+    pub n: i64 = 0
+    pub mu: sync.Mutex = sync.Mutex {}
+end
+
+/*
+ * Workers pull one index at a time from a shared cursor rather than being
+ * handed a contiguous block each. Static blocks are faster to compute but lose
+ * badly when the per-item cost varies - one worker finishing early then sits
+ * idle while another grinds through the expensive half. Self-scheduling costs
+ * a mutex acquire per item and keeps every core busy to the end.
+ */
+func range_worker(rp: Range*):
+    r := rp[0]
+    c := r.next
+    until true:
+        sync.Lock(r.mu)
+        i := c[0]
+        c[0] = i + 1
+        sync.Unlock(r.mu)
+        if i >= r.n:
+            break
+        end
+        r.body(i)
+    end
+end
+
+if SALAM_OS_WINDOWS:
+    /*
+     * SYSTEM_INFO puts dwNumberOfProcessors at offset 32 on x64. Reading it
+     * out of a raw buffer avoids having to describe the whole struct.
+     */
+    func cpu_count_os(): i64:
+        buf := mem.AllocateZeroed(96 as u64)
+        GetSystemInfo(buf)
+        p := ((buf as i64) + 32) as i32*
+        n := p[0] as i64
+        mem.Free(buf)
+        ret n
+    end
+else:
+    /*
+     * _SC_NPROCESSORS_ONLN is not a standard constant - it is 84 on
+     * glibc/Linux and 58 on macOS and the BSDs. The choice has to be made at
+     * compile time: SALAM_OS_BSD only exists as a symbol on those platforms,
+     * so a runtime `if` on it would not even resolve elsewhere.
+     */
+    if defined(SALAM_OS_BSD):
+        func cpu_count_os(): i64: ret sysconf(58) end
+    else:
+        func cpu_count_os(): i64: ret sysconf(84) end
+    end
+end
+
+@en "CPUCount"
+@fa "تعداد پردازنده"
+@ar "عدد المعالجات"
+pub func CPUCount(): i64:
+    n := cpu_count_os()
+    if n < 1:
+        ret 1
+    end
+    ret n
+end
+
+/*
+ * Runs body(0) .. body(n-1) across `workers` threads and returns once every
+ * index has been processed. `body` must be safe to run concurrently with
+ * itself - ParallelFor guarantees each index is passed to exactly one worker,
+ * and nothing else.
+ */
+@en "ParallelFor"
+@fa "برای موازی"
+@ar "تكرار متوازي"
+pub func ParallelFor(n: i64, workers: i64, body: func (i64)):
+    if n <= 0:
+        ret
+    end
+    mut w := workers
+    if w < 1: w = 1 end
+    if w > n: w = n end
+
+    rp := mem.AllocateZeroed(sizeof(Range) as u64) as Range*
+    c := mem.AllocateZeroed(8 as u64) as i64*
+    rp[0] = Range { body = body, next = c, n = n, mu = sync.NewMutex() }
+
+    mut ts := Vector {} as Vector<thread.Thread>
+    mut k := 0 as i64
+    until k < w:
+        ts = thread.Collect(ts, spawn(range_worker, rp))
+        k = k + 1
+    end
+    thread.JoinAll(ts)
+    ts.free()
+
+    sync.Destroy(rp[0].mu)
+    mem.Free(c as void*)
+    mem.Free(rp as void*)
+end
+
+/*
+ * The common case: one worker per hardware thread. A caller that already
+ * knows the shape of its workload should pick the count itself.
+ */
+@en "ParallelForAuto"
+@fa "برای موازی خودکار"
+@ar "تكرار متوازي تلقائي"
+pub func ParallelForAuto(n: i64, body: func (i64)):
+    ParallelFor(n, CPUCount(), body)
+end

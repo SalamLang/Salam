@@ -1,0 +1,119 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ml
+
+import math
+import matrix
+
+// Clustering metrics. The silhouette scores a labeling by the data
+// alone: for every point, the mean distance to its own cluster (a)
+// against the mean distance to the nearest other cluster (b), as
+// (b - a) / max(a, b), averaged - +1 is tight and well separated, 0 is
+// overlapping, negative is misassigned. Noise points (label -1) are
+// skipped. The adjusted Rand index compares a labeling to a reference
+// up to relabeling, with chance agreement subtracted, so 1 is identical
+// partitions and about 0 is random.
+
+// ---- public API ----
+
+@en "SilhouetteScore"
+@fa "امتیاز سایه‌نما"
+@ar "درجة الصورة الظلية"
+pub func SilhouetteScore(x &: matrix.Matrix, labels &: matrix.Matrix): f64:
+    n := x.rows
+    if n < 2 || labels.rows != n: ret 0.0 end
+    k := CountClasses(labels)
+    if k < 2: ret 0.0 end
+    mut counts := Vector {} as Vector<int>
+    counts.zeros(k)
+    repeat n with i:
+        c := labels.at(i, 0) as int
+        if c >= 0: counts.set(c, counts.get(c) + 1) end
+    end
+    mut sums := Vector {} as Vector<f64>
+    mut total := 0.0
+    mut scored := 0
+    repeat n with i:
+        ci := labels.at(i, 0) as int
+        if ci < 0 || counts.get(ci) < 2: continue end
+        sums.clear()
+        repeat k: sums.push(0.0) end
+        repeat n with j:
+            cj := labels.at(j, 0) as int
+            if j != i && cj >= 0:
+                sums.set(cj, sums.get(cj) + math.Sqrt(_sqdist(x, i, x, j)))
+            end
+        end
+        a := sums.get(ci) / ((counts.get(ci) - 1) as f64)
+        mut b := 1.0e300
+        repeat k with c:
+            if c != ci && counts.get(c) > 0:
+                v := sums.get(c) / (counts.get(c) as f64)
+                if v < b: b = v end
+            end
+        end
+        mut denom := a
+        if b > denom: denom = b end
+        if denom > 0.0: total += (b - a) / denom end
+        scored += 1
+    end
+    counts.free()
+    sums.free()
+    if scored == 0: ret 0.0 end
+    ret total / (scored as f64)
+end
+
+@en "AdjustedRandIndex"
+@fa "شاخص رند تعدیل‌شده"
+@ar "مؤشر راند المعدل"
+pub func AdjustedRandIndex(a &: matrix.Matrix, b &: matrix.Matrix): f64:
+    n := a.rows
+    if n < 2 || b.rows != n: ret 0.0 end
+    ka := CountClasses(a) + 1
+    kb := CountClasses(b) + 1
+    // Contingency table with label -1 mapped to the last slot.
+    mut table := matrix.Zeros(ka, kb)
+    repeat n with i:
+        mut ia := a.at(i, 0) as int
+        mut ib := b.at(i, 0) as int
+        if ia < 0: ia = ka - 1 end
+        if ib < 0: ib = kb - 1 end
+        table.add_at(ia, ib, 1.0)
+    end
+    mut sum_cells := 0.0
+    mut sum_rows := 0.0
+    mut sum_cols := 0.0
+    repeat ka with i:
+        mut r := 0.0
+        repeat kb with j:
+            v := table.at(i, j)
+            sum_cells += v * (v - 1.0) / 2.0
+            r += v
+        end
+        sum_rows += r * (r - 1.0) / 2.0
+    end
+    repeat kb with j:
+        mut c := 0.0
+        repeat ka with i: c += table.at(i, j) end
+        sum_cols += c * (c - 1.0) / 2.0
+    end
+    matrix.Free(table)
+    nf := n as f64
+    total := nf * (nf - 1.0) / 2.0
+    expected := sum_rows * sum_cols / total
+    max_index := (sum_rows + sum_cols) / 2.0
+    if max_index == expected: ret 1.0 end
+    ret (sum_cells - expected) / (max_index - expected)
+end

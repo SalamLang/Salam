@@ -17,12 +17,59 @@ import co "../sal_core.salam"
 import pf "../prof_self.salam"
 import lv "../llvmgen/llvmgen.salam"
 
+// native_link_triple - the triple a build with NO --target actually links
+// for, but only where that link needs a sysroot to succeed.
+//
+// On Windows the native path goes through LinkMingw, which wants the same
+// x86_64-w64-mingw32 tree a cross build does. The sysroot lookup below used
+// to run only when --target was given, so a native Windows build never
+// resolved one - not the bundled tree, not the one compiled into the binary
+// - and LinkMingw fell back to the hardcoded /usr/x86_64-w64-mingw32, which
+// does not exist on Windows. Every file then failed the in-process LLVM
+// step and quietly fell back to the C backend, so a self-contained
+// salam.exe was shipping with LLVM and LLD embedded and never using them.
+// It only became visible when a test needed something tcc cannot compile.
+//
+// Empty everywhere else: those hosts link natively without a sysroot, and
+// an empty triple skips the lookup exactly as before.
+if SALAM_OS_WINDOWS:
+    if SALAM_ARCH_X86:
+        func native_link_triple(): str: ret "i686-w64-windows-gnu" end
+    else SALAM_ARCH_ARM64:
+        func native_link_triple(): str: ret "aarch64-w64-windows-gnu" end
+    else:
+        func native_link_triple(): str: ret "x86_64-w64-windows-gnu" end
+    end
+else:
+    func native_link_triple(): str: ret "" end
+end
+
     // driver_llvm (driver/llvm_build.c) - single-file lex/parse/prune/sema ->
     // lv.RunOpts (IR text) -> write <module>.ll -> lv.NativeRun (the toolchain
     // shell-out; see llvm.salam's stage-C notes on why NativeRun, not a direct
     // LLVM-C native path, is the only reachable backend here) for every output
     // mode except plain unoptimized --emit-llvm (which just leaves the .ll on
     // disk, matching the C's `ir_mode && !verify && opt_level==O0` skip).
+    // `salam build` means "give me a program to run", and the C backend has
+    // always read it that way: it hands the C compiler -O2 (-O3 for
+    // --release) without being asked. The LLVM backend was left at the
+    // -O0 that `salam llvm` uses for readable IR, so the same build was
+    // several times slower through what is now the DEFAULT backend - a
+    // plain counted loop measured 29x, an array-indexing one 4x. A named
+    // -O still wins, and a debug build still keeps its -O0.
+    func build_opt_level(opt &: Dr): int:
+        if opt.llvm_opt_set:
+            ret opt.llvm_opt_level
+        end
+        if opt.debug_info || opt.asan:
+            ret lv.LV_OPT_O0
+        end
+        if !opt.safe:
+            ret lv.LV_OPT_O3
+        end
+        ret lv.LV_OPT_O2
+    end
+
     pub func Llvm(opt &: Dr): int:
         lgr := lg.New(opt.log_level, resolve_color(opt.color))
         pack := lp.Load(opt.lang)
@@ -105,7 +152,17 @@ import lv "../llvmgen/llvmgen.salam"
         o.release = !opt.safe
         o.target_triple = opt.llvm_target
         o.lib_paths = opt.lib_paths
+        // Static third-party libs (sqlite3/openssl/hiredis/mariadb) this
+        // binary carries for the target, so `link dynamic "sqlite3"` resolves
+        // without the user installing dev packages. Appended as a -L, so an
+        // explicit --libpath still takes precedence.
+        mut xl := ""
+        if EmbeddedExtralibs(opt.llvm_target, xl):
+            o.lib_paths.push(xl)
+            lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "using embedded static third-party libs: " + xl)
+        end
         o.native_cpu = opt.llvm_native_cpu && str.Len(opt.llvm_target) == 0
+        o.fp_contract = opt.llvm_fp_contract
 
         if o.output_mode == lv.LV_OUT_EXEC:
             mut links := Vector {} as Vector<str>
@@ -116,11 +173,25 @@ import lv "../llvmgen/llvmgen.salam"
             o.link_libs = links
             o.link_kinds = kinds
             o.nlink = links.len()
-            if str.Len(opt.llvm_target) > 0:
+            mut sr_triple := opt.llvm_target
+            if str.Len(sr_triple) == 0:
+                sr_triple = native_link_triple()
+            end
+            if str.Len(sr_triple) > 0:
                 mut sr := ""
-                if sm.FindSysroot(opt.llvm_target, sr):
+                if sm.FindSysroot(sr_triple, sr):
                     o.sysroot = sr
                     lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "using bundled sysroot: " + sr)
+                else:
+                    // Nothing on disk. A self-contained build carries the
+                    // sysroot inside itself; unpack it into the cache and use
+                    // that. Deliberately last, so $SALAM_SYSROOTS or a system
+                    // package still wins over the embedded copy.
+                    mut esr := ""
+                    if EmbeddedSysrootFor(sr_triple, sm.SysrootSubdir(sr_triple), esr):
+                        o.sysroot = esr
+                        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "using embedded sysroot: " + esr)
+                    end
                 end
             end
         end
@@ -180,7 +251,16 @@ import lv "../llvmgen/llvmgen.salam"
             end
         else:
             if str.Len(opt.output) > 0:
-                o.output_file = opt.output
+                // A caller-named executable still has to be launchable on the
+                // target: `--target=x86_64-w64-windows-gnu -o hello` writes
+                // hello.exe from a Linux host, while a non-Windows target keeps
+                // the name exactly as typed. Executables only - an -o for
+                // .o/.ll/.s names that artifact and nothing is appended to it.
+                if o.output_mode == lv.LV_OUT_EXEC:
+                    o.output_file = exe_name_for(opt.output, opt.llvm_target)
+                else:
+                    o.output_file = opt.output
+                end
             else:
                 o.output_file = default_llvm_output(
                     output_stem_of(opt.input), o.output_mode, opt.llvm_target
@@ -197,6 +277,10 @@ import lv "../llvmgen/llvmgen.salam"
                 if str.Len(opt.exe_path) == 0 && o.output_mode == lv.LV_OUT_EXEC:
                     opt.exe_path = o.output_file
                 end
+            else o.output_mode == lv.LV_OUT_EXEC && str.Len(opt.llvm_target) == 0:
+                // Native link only: a cross-compile has no C backend to retry
+                // with, so it keeps the plain failure code.
+                rc = RC_LLVM_LINK_FAILED
             end
         end
         sm.Free(s)
@@ -222,12 +306,13 @@ import lv "../llvmgen/llvmgen.salam"
         else:
             opt.llvm_emit = lv.LV_OUT_EXEC
         end
+        opt.llvm_opt_level = build_opt_level(opt)
         rc := Llvm(opt)
         // Only a genuine cross-compile failure gets the toolchain hint. A
         // native build never asked for a target, and RC_LLVM_UNSUPPORTED is
         // handled by build_impl (which falls back to the C backend), so
         // neither should be reported as a missing cross toolchain.
-        if rc != 0 && rc != RC_LLVM_UNSUPPORTED && str.Len(opt.llvm_target) > 0:
+        if rc != 0 && rc != RC_LLVM_UNSUPPORTED && rc != RC_LLVM_LINK_FAILED && str.Len(opt.llvm_target) > 0:
             io.EPrintln(
                 co.Format1(
                     i18.Tr(

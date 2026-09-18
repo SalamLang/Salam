@@ -22,7 +22,27 @@ import mem
 
 extern:
     func salam_open(path: str, mode: str): File*
+    // The File* methods below (f.read, f.write, f.close, ...) lower to these
+    // runtime functions, which std/fs defines. Declared here because a call
+    // needs a prototype in its own translation unit: this module does not
+    // import std/fs, so without these the generated C calls them implicitly,
+    // which a pre-C99 compiler accepted silently and a current one rejects.
+    // It only ever showed up on a freestanding target, where no other header
+    // happens to drag the declarations in.
+    func salam_file_read(f: File*, size: u64): str
+    func salam_file_readline(f: File*): str
+    func salam_file_write(f: File*, data: str): int
+    func salam_file_close(f: File*)
+    func salam_file_seek(f: File*, off: i64, whence: int): int
+    // C89's "flush every open output stream". <stdio.h> already declares it
+    // in every generated module, so this declaration emits no C of its own.
+    func fflush(stream: void*): int
+    func fread(ptr: void*, size: u64, nmemb: u64, stream: void*): u64
+    func fwrite(ptr: void*, size: u64, nmemb: u64, stream: void*): u64
 end
+
+// How much Copy moves per fread/fwrite pair.
+const COPY_CHUNK := 65536
 
 @en "Input"
 @fa "بخوان"
@@ -123,6 +143,22 @@ pub func EPrint(s: str): printerr s end
 @ar "طباعة خطأ بسطر جدید"
 pub func EPrintln(s: str): printerrln s end
 
+// Push every buffered output stream out to the operating system.
+//
+// A `println` already gets its own line out, redirected or not, so a program
+// that only prints does not need this. It is here for what the compiler
+// cannot see: output written by C code the program links against, which keeps
+// its own `FILE*` buffer and is fully buffered whenever it is not writing to
+// a terminal. Calling it is never wrong - flushing with nothing pending costs
+// a branch - and it is the right thing to do before a daemon blocks on
+// accept(), or before handing the terminal to a subprocess.
+@en "Flush"
+@fa "تخلیه"
+@ar "تفریغ"
+pub func Flush():
+    _r := fflush(null as void*)
+end
+
 @en "ReadAll"
 @fa "خواندن همه"
 @ar "قراءة الکل"
@@ -157,25 +193,40 @@ end
 @en "Copy"
 @fa "کپی"
 @ar "نسخ"
+// Copies the rest of `src` into `dst`, returning the number of bytes moved.
+//
+// fread/fwrite, not File.read/File.write. Those two carry a str, and
+// salam_file_read NUL-terminates what it read, so the first zero byte in a
+// chunk ended it and the rest of that chunk was dropped - silently, and with a
+// byte count that agreed with the truncation. On text there is nothing to see;
+// on a binary stream it is data loss reported as success, and it is how copying
+// a WebP produced a five-byte file. Reading straight through the FILE* keeps
+// the bytes bytes.
 pub func Copy(dst: File*, src: File*): i64:
-    // Only `src` is guarded, for the same reason as ReadAll: a null handle is
-    // the one case where read answers with the empty string literal instead of
-    // a heap block. A null `dst` is left to behave exactly as before - write
-    // reports -1 per chunk and the byte total still comes out of src.
-    if src == null:
-        ret 0 as i64
+    if src == null || dst == null:
+        ret 0
     end
+    buf := mem.Allocate(COPY_CHUNK as u64)
+    if buf == null:
+        ret 0
+    end
+    sp := src as void*
+    dp := dst as void*
     mut total := 0 as i64
-    mut chunk := src.read(4096)
-    // Same ownership as ReadAll above: every read is a fresh buffer, and
-    // this one is done with it as soon as it has been written out.
-    until chunk.len() > 0:
-        dst.write(chunk)
-        total += chunk.len() as i64
-        mem.Free(chunk as void*)
-        chunk = src.read(4096)
+    mut going := true
+    while going:
+        got := fread(buf, 1 as u64, COPY_CHUNK as u64, sp)
+        if got == 0 as u64:
+            going = false
+        else:
+            put := fwrite(buf, 1 as u64, got, dp)
+            total += put as i64
+            // A short write is the disk saying no; carrying on would only lose
+            // more of the file and still call the result a copy.
+            if put != got: going = false end
+        end
     end
-    mem.Free(chunk as void*)
+    mem.Free(buf)
     ret total
 end
 
@@ -189,7 +240,7 @@ pub func WriteLines(path: str, lines: Vector<str>): int:
     end
     mut total := 0
     repeat lines.len() with i:
-        total += f.write(lines.get(i)[0])
+        total += f.write(lines.get(i))
         total += f.write("\n")
     end
     f.close()

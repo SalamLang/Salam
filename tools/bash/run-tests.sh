@@ -13,7 +13,7 @@
 #
 # Usage:
 #   sh tools/bash/run-tests.sh [-j N] [section ...]
-# Sections: general exec js errors layout fmt ssl db opencv llvm cross timereport
+# Sections: general exec js errors layout fmt repl ssl db opencv webview_cef llvm cross timereport
 #           examples apps basics data editor-selected features games
 #           interop stdlib types webframework
 # Env: SALAM, SALAM_STD, LANGS, NPROC, SALAM_TEST_TIMEOUT,
@@ -78,6 +78,22 @@ if [ "${1:-}" = "--worker" ]; then
             echo "  got:      $(printf '%s' "$2" | tr '\n' '|')"
         fi
     }
+    wk_repl() {
+        # A REPL session: the .in file is fed on stdin and everything the
+        # prompt writes - banner, prompts, diagnostics, program output - is
+        # compared. Each session gets a private cwd because a turn builds
+        # and runs the session from there, and :save writes there too.
+        jobdir="$WORK/repljob_${jobid}_$$"
+        mkdir -p "$jobdir"
+        # 600s, not the 180 this started with: every turn of a session shells
+        # out to a whole build, and eight workers compiling at once stretch
+        # each of those. At 180 the section passed when run alone and timed
+        # out inside a full run.
+        got=$( (cd "$jobdir" && tmo "${SALAM_TEST_TIMEOUT:-600}" "$SALAM_ABS" cli --lang="$lang" --no-color --log-level=error <"$fabs" 2>&1) | tr -d '\r')
+        rm -rf "$jobdir"
+        wk_check "$expabs" "$got"
+    }
+
     wk_fmt() {
         name=$(basename "$f" .salam)
         jobdir="$WORK/fmtjob_${jobid}_$$"
@@ -122,6 +138,16 @@ if [ "${1:-}" = "--worker" ]; then
         rm -rf "$jobdir"
     }
     wk_expect() {
+        # SALAM_TEST_TIMEOUT was documented in the header but never read; the
+        # cap was a hardcoded 20s. That is fine for an example program and far
+        # too short for the port binaries, which each run a whole compiler
+        # pipeline over their fixtures - semantic_test alone takes ~30s. They
+        # were being killed mid-run and reported as "missing expected: 0
+        # failed", i.e. a timeout wearing a wrong-output disguise.
+        case "$label" in
+        port/*) exp_tmo="${SALAM_TEST_TIMEOUT:-300}" ;;
+        *) exp_tmo="${SALAM_TEST_TIMEOUT:-20}" ;;
+        esac
         jobdir="$WORK/exjob_${jobid}_$$"
         mkdir -p "$jobdir"
         exe="$jobdir/a.exe"
@@ -140,7 +166,7 @@ if [ "${1:-}" = "--worker" ]; then
         produced=0
         if [ -x "$exe" ]; then
             produced=1
-            got=$(tmo 20 "$exe" </dev/null 2>&1 | tr -d '\r')
+            got=$(tmo "$exp_tmo" "$exe" </dev/null 2>&1 | tr -d '\r')
         else
             html="$jobdir/a.html"
             wtry=1
@@ -214,9 +240,15 @@ if [ "${1:-}" = "--worker" ]; then
         runner="${extra#*:}"
         outbin="$WORK/cross_${jobid}_$$"
         case "$target" in *windows*) outbin="$outbin.exe" ;; esac
-        if ! "$SALAM_ABS" build "$f" --output="$outbin" --no-color --log-level=error \
-            --lang="$lang" --target="$target" >/dev/null 2>&1; then
+        # INFO, not ERROR: the driver logs "using embedded static third-party
+        # libs: <dir>" there, and that one line is what tells a binary that
+        # carries the static sqlite3/openssl/... set for this target apart
+        # from one that does not. See the loader check after the run.
+        crosslog="$WORK/cross_${jobid}_$$.log"
+        if ! "$SALAM_ABS" build "$f" --output="$outbin" --no-color --log-level=info \
+            --lang="$lang" --target="$target" >"$crosslog" 2>&1; then
             echo "SKIP $label (cross build unavailable for $target - no embedded static libs, or self-hosted/non-flagship salam)"
+            rm -f "$crosslog"
             return
         fi
         if [ -z "$runner" ]; then
@@ -234,7 +266,7 @@ if [ "${1:-}" = "--worker" ]; then
             esac
             if [ "$native" -eq 0 ]; then
                 echo "SKIP $label (build OK; a $hostos host cannot run a $target binary and no emulator is configured for it)"
-                rm -f "$outbin"
+                rm -f "$outbin" "$crosslog"
                 return
             fi
         fi
@@ -244,13 +276,34 @@ if [ "${1:-}" = "--worker" ]; then
                 runner="$alt"
             else
                 echo "SKIP $label (build OK; no $runner on this host to run the $target binary)"
-                rm -f "$outbin"
+                rm -f "$outbin" "$crosslog"
                 return
             fi
         fi
         got=$($runner "$outbin" 2>&1 | tr -d '\r')
+        # A `link dynamic "sqlite3"` in the program is satisfied at link time
+        # by the static archive salam carries for the target, so the binary
+        # needs no .so at all. A salam built WITHOUT those archives (a plain
+        # self-hosted ./salam, which is what this suite normally runs) links
+        # the same program against the host's shared sqlite3 instead, and the
+        # target loader then dies before main - "Error loading shared library
+        # libsqlite3.so.0". That is the same "no embedded static libs" case
+        # the build-failure branch above skips for; it just surfaces one stage
+        # later. Gate the skip on the build log, so a compiler that DID supply
+        # the archives and still produced an unloadable binary fails loudly.
+        case "$got" in
+        *"Error loading shared library"* | *"error while loading shared libraries"* | \
+            *"cannot open shared object file"*)
+            if ! grep -q "static third-party libs" "$crosslog" 2>/dev/null; then
+                missing_lib=$(printf '%s\n' "$got" | tr ' ' '\n' | grep '\.so' | sed 1q | tr -d ':')
+                echo "SKIP $label (build OK; the $target binary wants ${missing_lib:-a shared library} at runtime - this salam carries no embedded static third-party libs for $target)"
+                rm -f "$outbin" "$crosslog"
+                return
+            fi
+            ;;
+        esac
         wk_check "$expabs" "$got"
-        rm -f "$outbin"
+        rm -f "$outbin" "$crosslog"
     }
     run_worker() {
         case "$kind" in
@@ -295,6 +348,7 @@ if [ "${1:-}" = "--worker" ]; then
             wk_check "$expabs" "$got"
             ;;
         fmt) wk_fmt ;;
+        repl) wk_repl ;;
         expect) wk_expect ;;
         buildonly) wk_buildonly ;;
         cross) wk_cross ;;
@@ -499,6 +553,18 @@ if want fmt; then
     done
 fi
 
+if want repl; then
+    for lang in $LANGS; do
+        for f in tests/"$lang"/repl/*.in; do
+            [ -e "$f" ] || continue
+            name=$(basename "$f" .in)
+            exp="tests/$lang/repl/$name.out"
+            [ -f "$exp" ] || continue
+            add_job repl "repl/$lang/$name" "$f" "$lang" "$exp"
+        done
+    done
+fi
+
 collect_example_dir() {
     dir="$1"
     for lang in $LANGS; do
@@ -509,18 +575,30 @@ collect_example_dir() {
             name="${rel%.salam}"
             base="tests/$lang/$dir/$name"
             exp="$(pick_expect "$base")"
+            # Decided once, then applied to BOTH job kinds. It used to be
+            # computed inside the .expect branch, which left a marked test
+            # that ships a .out (interop/*/redis_demo) with an ungated build
+            # job - and a host without Redis cannot even LINK that one, since
+            # -lhiredis is missing too, so it failed the suite instead of
+            # skipping. That is precisely what the marker file exists to
+            # prevent. Tests carrying only a marker and no expectation still
+            # queue nothing and report nothing, exactly as before.
+            skip=""
+            if [ -f "$base.redis" ] && [ "${REDIS_OK:-0}" != "1" ]; then
+                skip="requires a Redis server on 127.0.0.1:6379"
+            elif [ -f "$base.network" ] && [ "${SALAM_TEST_NETWORK:-0}" != "1" ]; then
+                skip="requires live network; set SALAM_TEST_NETWORK=1"
+            elif [ -f "$base.interactive" ] && [ "${SALAM_TEST_INTERACTIVE:-0}" != "1" ]; then
+                skip="opens a modal window; set SALAM_TEST_INTERACTIVE=1 on a desktop session"
+            fi
             if [ -f "$exp" ]; then
-                add_job build "$dir/$lang/$name" "$f" "$lang" "$exp"
+                if [ -n "$skip" ]; then
+                    note_result "SKIP $dir/$lang/$name ($skip)" "$dir/$lang/$name"
+                else
+                    add_job build "$dir/$lang/$name" "$f" "$lang" "$exp"
+                fi
             fi
             if [ -f "$base.expect" ]; then
-                skip=""
-                if [ -f "$base.redis" ] && [ "${REDIS_OK:-0}" != "1" ]; then
-                    skip="requires a Redis server on 127.0.0.1:6379"
-                elif [ -f "$base.network" ] && [ "${SALAM_TEST_NETWORK:-0}" != "1" ]; then
-                    skip="requires live network; set SALAM_TEST_NETWORK=1"
-                elif [ -f "$base.interactive" ] && [ "${SALAM_TEST_INTERACTIVE:-0}" != "1" ]; then
-                    skip="opens a modal window; set SALAM_TEST_INTERACTIVE=1 on a desktop session"
-                fi
                 if [ -n "$skip" ]; then
                     note_result "SKIP $dir/$lang/$name ($skip)" "$dir/$lang/$name"
                 else
@@ -546,6 +624,14 @@ if want general; then
             exp="$(pick_expect "tests/$lang/general/$name")"
             [ -f "$exp" ] || continue
             def=$(grep -o 'DEFINE: [A-Za-z0-9_]*' "$f" | sed 's/DEFINE: /-D/' | tr '\n' ' ')
+            # `// CONST: NAME=VALUE` -> `-dNAME=VALUE`, the value-carrying
+            # sibling of DEFINE (a bare NAME is the flag's valueless form).
+            # [!-~] is "printable, not a space": a value may not contain one,
+            # because the whole flag list travels as a single tab-separated
+            # jobs.tsv field and is word-split back apart in the worker.
+            # Quotes are kept literal on purpose - `-dTAG="0.3"` is how a
+            # numeric-looking constant is pinned to str.
+            def="$def$(grep -o 'CONST: [!-~]*' "$f" | sed 's/CONST: /-d/' | tr '\n' ' ')"
             add_job build "general/$lang/$name" "$f" "$lang" "$exp" "${def:--}"
         done
     done
@@ -559,19 +645,36 @@ if want db; then
             break
         }
     done
+    # One archive holds every engine mock (mysql, postgres); each is a stand-in
+    # for a client library CI has no server for, implemented over sqlite3.
     mockc=""
+    pgmockc=""
     for lang in $LANGS; do
         [ -f "tests/$lang/db/mysql_mock.c" ] && {
             mockc="tests/$lang/db/mysql_mock.c"
             break
         }
     done
+    for lang in $LANGS; do
+        [ -f "tests/$lang/db/postgres_mock.c" ] && {
+            pgmockc="tests/$lang/db/postgres_mock.c"
+            break
+        }
+    done
     dbok=0
     if [ -n "$DBCC" ] && [ -n "$mockc" ] && command -v ar >/dev/null 2>&1; then
         mkdir -p "$WORK/dbwork/.work"
-        if "$DBCC" -c "$mockc" -o "$WORK/dbwork/.work/mysql_mock.o" >/dev/null 2>&1 &&
-            ar rcs "$WORK/dbwork/.work/libsalammock.a" "$WORK/dbwork/.work/mysql_mock.o" >/dev/null 2>&1; then
-            dbok=1
+        mockobjs="$WORK/dbwork/.work/mysql_mock.o"
+        if "$DBCC" -c "$mockc" -o "$WORK/dbwork/.work/mysql_mock.o" >/dev/null 2>&1; then
+            if [ -n "$pgmockc" ] &&
+                "$DBCC" -c "$pgmockc" -o "$WORK/dbwork/.work/postgres_mock.o" \
+                    >/dev/null 2>&1; then
+                mockobjs="$mockobjs $WORK/dbwork/.work/postgres_mock.o"
+            fi
+            # shellcheck disable=SC2086
+            if ar rcs "$WORK/dbwork/.work/libsalammock.a" $mockobjs >/dev/null 2>&1; then
+                dbok=1
+            fi
         fi
     fi
     for lang in $LANGS; do
@@ -639,6 +742,41 @@ if want opencv; then
     done
 fi
 
+if want webview_cef; then
+    CEFCC=""
+    for c in tcc gcc cc clang; do
+        command -v "$c" >/dev/null 2>&1 && {
+            CEFCC="$c"
+            break
+        }
+    done
+    cefmockc=""
+    [ -f "std/webview/native/mock/cef_mock.c" ] && cefmockc="std/webview/native/mock/cef_mock.c"
+    cefok=0
+    if [ -n "$CEFCC" ] && [ -n "$cefmockc" ] && command -v ar >/dev/null 2>&1; then
+        mkdir -p "$WORK/cefwork/.work"
+        if "$CEFCC" -c -std=c11 "$cefmockc" -o "$WORK/cefwork/.work/cef_mock.o" >/dev/null 2>&1 &&
+            ar rcs "$WORK/cefwork/.work/libsalam_webview_cef_mock.a" "$WORK/cefwork/.work/cef_mock.o" >/dev/null 2>&1; then
+            cefok=1
+        fi
+    fi
+    for lang in $LANGS; do
+        [ -d "tests/$lang/webview_cef" ] || continue
+        if [ "$cefok" = "1" ]; then
+            for f in tests/"$lang"/webview_cef/*.salam; do
+                [ -e "$f" ] || continue
+                name=$(basename "$f" .salam)
+                case "$name" in _*) continue ;; esac
+                exp="$(pick_expect "tests/$lang/webview_cef/$name")"
+                [ -f "$exp" ] || continue
+                add_job build "webview_cef/$lang/$name" "$f" "$lang" "$exp" "--cc=$CEFCC -DSALAM_WEBVIEW_CEF -DSALAM_WEBVIEW_CEF_MOCK"
+            done
+        else
+            note_result "SKIP webview_cef/$lang/* (no C compiler/ar to build the CEF mock shim)" "webview_cef/$lang/all"
+        fi
+    done
+fi
+
 if want ssl; then
     for lang in $LANGS; do
         [ -d "tests/$lang/ssl" ] || continue
@@ -702,7 +840,7 @@ if want llvm; then
                 add_job llvm "llvm/$lang/$name" "$f" "$lang" "$exp"
             done
         elif [ "$prc" -ge 128 ]; then
-            note_result "FAIL llvm/$lang/* (salam crashed on probe, signal $((prc - 128)); rebuild salam via tools/build-compiler.sh)" "llvm/$lang/all"
+            note_result "FAIL llvm/$lang/* (salam crashed on probe, signal $((prc - 128)); rebuild salam via tools/bash/build-selfhost.sh)" "llvm/$lang/all"
         else
             note_result "SKIP llvm/$lang/* (LLVM toolchain unavailable: 'salam llvm --jit' probe failed)" "llvm/$lang/all"
         fi
@@ -828,7 +966,9 @@ TIMEREPORT_EOF
     }
 
     tr_json="$tr_dir/report.json"
-    (cd "$tr_dir" && "$SALAM" build --time-report=json tiny.salam >/dev/null 2>"$tr_json")
+    # SALAM_ABS, not SALAM: the default is the relative ./salam and this runs
+    # from $tr_dir, where that name does not exist (the build exited 127).
+    (cd "$tr_dir" && "$SALAM_ABS" build --time-report=json tiny.salam >/dev/null 2>"$tr_json")
     tr_rc=$?
     tr_line=$(grep '"schema":"salam.timereport.v1"' "$tr_json" | head -1)
     if [ "$tr_rc" -ne 0 ]; then
@@ -857,7 +997,7 @@ TIMEREPORT_EOF
     fi
 
     # --time-trace writes a Chrome Trace Event array the same run.
-    (cd "$tr_dir" && "$SALAM" build --time-trace=trace.json tiny.salam >/dev/null 2>&1)
+    (cd "$tr_dir" && "$SALAM_ABS" build --time-trace=trace.json tiny.salam >/dev/null 2>&1)
     if [ -s "$tr_dir/trace.json" ] && grep -q '"ph":"X"' "$tr_dir/trace.json"; then
         note_result "PASS timereport/trace" "timereport/trace"
     else

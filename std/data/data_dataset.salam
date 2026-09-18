@@ -1,0 +1,191 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package data
+
+import matrix
+import tensor
+
+// Batch iteration for training loops.
+//
+// MatrixDataset holds a feature matrix and a target column; batches()
+// hands out a BatchIter that walks a seeded permutation of the rows in
+// fixed-size batches, copying each batch into caller-owned matrices.
+// reset(epoch) reshuffles from seed + epoch, so epoch e of a run is the
+// same sequence of batches on every machine, and a training loop
+// written as
+//
+//     mut it := ds.batches(32, true, 7)
+//     repeat epochs with e:
+//         it.reset(e)
+//         until it.next(xb, yb): ... end
+//     end
+//
+// is fully reproducible. The tensor forms (next_tensor, XTensor,
+// YLabels) bridge to std/tensor for neural network training without
+// std/ml having to know about tensors at all.
+
+@en "BatchIter"
+@fa "پیمایشگر دسته"
+@ar "مكرر الدفعات"
+pub struct BatchIter:
+    pub x: matrix.Matrix = matrix.Matrix {}
+    pub y: matrix.Matrix = matrix.Matrix {}
+    pub batch: int = 32
+    pub shuffle: bool = true
+    pub seed: i64 = 0
+    pub order: Vector<int> = Vector {}
+    pub pos: int = 0
+
+    // Reshuffles for `epoch` (or restores row order when not shuffling)
+    // and rewinds.
+    @en "reset"
+    @fa "بازنشانی"
+    @ar "إعادة تعيين"
+    pub func reset(epoch: i64):
+        n := this.x.rows
+        this.order.clear()
+        repeat n with i: this.order.push(i) end
+        if this.shuffle:
+            mut g := matrix.NewRng(this.seed + epoch)
+            mut i := n - 1
+            until i > 0:
+                j := (g.next_float() * ((i + 1) as f64)) as int
+                t := this.order.get(i)
+                this.order.set(i, this.order.get(j))
+                this.order.set(j, t)
+                i -= 1
+            end
+        end
+        this.pos = 0
+    end
+
+    // Fills x_out/y_out with the next batch (overwriting them; the
+    // caller frees). False once the epoch is exhausted. The last batch
+    // may be short.
+    @en "next"
+    @fa "بعدی"
+    @ar "التالي"
+    pub func next(x_out &: matrix.Matrix, y_out &: matrix.Matrix): bool:
+        n := this.order.len()
+        if this.pos >= n: ret false end
+        mut cnt := this.batch
+        if this.pos + cnt > n: cnt = n - this.pos end
+        matrix.Free(x_out)
+        matrix.Free(y_out)
+        x_out = matrix.Zeros(cnt, this.x.cols)
+        y_out = matrix.Zeros(cnt, this.y.cols)
+        repeat cnt with i:
+            src := this.order.get(this.pos + i)
+            repeat this.x.cols with j: x_out.set(i, j, this.x.at(src, j)) end
+            repeat this.y.cols with j: y_out.set(i, j, this.y.at(src, j)) end
+        end
+        this.pos += cnt
+        ret true
+    end
+
+    // The same batch as an f32 tensor of features plus class labels as
+    // ints, for std/autograd losses.
+    @en "next_tensor"
+    @fa "بعدی تانسور"
+    @ar "التالي كموتر"
+    pub func next_tensor(x_out &: tensor.Tensor, labels_out &: Vector<int>): bool:
+        n := this.order.len()
+        if this.pos >= n: ret false end
+        mut cnt := this.batch
+        if this.pos + cnt > n: cnt = n - this.pos end
+        x_out.free()
+        x_out = tensor.Zeros2(cnt, this.x.cols)
+        labels_out.clear()
+        p := x_out.data.data
+        repeat cnt with i:
+            src := this.order.get(this.pos + i)
+            repeat this.x.cols with j: p[i * this.x.cols + j] = this.x.at(src, j) as f32 end
+            labels_out.push(this.y.at(src, 0) as int)
+        end
+        this.pos += cnt
+        ret true
+    end
+
+    @en "batches_per_epoch"
+    @fa "دسته در هر دور"
+    @ar "دفعات لكل دورة"
+    pub func batches_per_epoch(): int:
+        n := this.x.rows
+        if this.batch <= 0: ret 0 end
+        ret (n + this.batch - 1) / this.batch
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free(): this.order.free() end
+end
+
+@en "MatrixDataset"
+@fa "مجموعه‌داده ماتریسی"
+@ar "مجموعة بيانات مصفوفية"
+pub struct MatrixDataset:
+    pub x: matrix.Matrix = matrix.Matrix {}
+    pub y: matrix.Matrix = matrix.Matrix {}
+
+    @en "len"
+    @fa "طول"
+    @ar "طول"
+    pub func len(): int: ret this.x.rows end
+
+    // An iterator over this dataset's rows. It borrows x and y, so the
+    // dataset must outlive it.
+    @en "batches"
+    @fa "دسته‌ها"
+    @ar "دفعات"
+    pub func batches(batch: int, shuffle: bool, seed: i64): BatchIter:
+        mut it := BatchIter {}
+        it.x = this.x
+        it.y = this.y
+        it.batch = batch
+        it.shuffle = shuffle
+        it.seed = seed
+        it.reset(0)
+        ret it
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free():
+        matrix.Free(this.x)
+        matrix.Free(this.y)
+    end
+end
+
+// ---- public API ----
+
+// The feature matrix as an f32 tensor.
+@en "XTensor"
+@fa "تانسور ویژگی"
+@ar "موتر السمات"
+pub func XTensor(x &: matrix.Matrix): tensor.Tensor:
+    ret tensor.FromMatrix(x)
+end
+
+// The label column as ints.
+@en "YLabels"
+@fa "برچسب‌ها"
+@ar "التسميات"
+pub func YLabels(y &: matrix.Matrix): Vector<int>:
+    mut out := Vector {} as Vector<int>
+    repeat y.rows with i: out.push(y.at(i, 0) as int) end
+    ret out
+end

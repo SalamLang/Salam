@@ -24,6 +24,12 @@ import filepath
 
 extern:
     func salam_open(path: str, mode: str): File*
+    // ListDir below lowers to this builtin, which std/fs defines. Declared
+    // here for the same reason salam_open is: this module does not import
+    // std/fs, so without a prototype in scope the generated C calls it
+    // implicitly, which a pre-C99 compiler accepted silently (assuming int)
+    // and a current one rejects outright. The signature is std/fs's own.
+    func salam_os_listdir(path: str, out_count: void*): void*
     func getenv(name: str): void*
     noret func exit(code: int)
     noret func abort()
@@ -35,6 +41,8 @@ extern:
     func fclose(fp: void*): int
     func system(cmd: str): int
     func fgets(buf: void*, n: int, fp: void*): void*
+    func fread(ptr: void*, size: u64, nmemb: u64, stream: void*): u64
+    func fwrite(ptr: void*, size: u64, nmemb: u64, stream: void*): u64
 end
 
 if SALAM_OS_WINDOWS:
@@ -62,6 +70,11 @@ else:
         func getpid(): int
     end
 end
+
+// How much Copy moves per fread/fwrite pair. Big enough that a large file is
+// not thousands of syscalls, small enough that copying one does not depend on
+// having the whole file's worth of memory free.
+const COPY_CHUNK := 65536
 
 @en "FileInfo"
 @fa "اطلاعات پرونده"
@@ -201,20 +214,54 @@ pub func Mkdir(path: str): int: ret _os_mkdir(path) end
 @ar "حذف مجلد"
 pub func Rmdir(path: str): int: ret _os_rmdir(path) end
 
+// Copies `src` to `dst` byte for byte, creating or truncating `dst`.
+// Returns 0, or -1 if either file could not be opened or the copy was short.
+//
+// fread/fwrite rather than io.Copy, and that is a correctness matter, not a
+// performance one. io.Copy moves the bytes through File.read, which returns a
+// str: salam_file_read NUL-terminates what it read, so the first zero byte in
+// the file ends the chunk and everything after it in that chunk is dropped.
+// For text that never shows; for a binary file it is silent truncation, and it
+// reported success while doing it. A WebP header carries a zero five bytes in,
+// so copying one produced a five-byte file.
+//
+// The stream is not slurped whole either: a copy should not need as much free
+// memory as the file is long.
 @en "Copy"
 @fa "کپی"
 @ar "نسخ"
 pub func Copy(src: str, dst: str): int:
-    fin := salam_open(src, "rb")
+    fin := fopen(src, "rb")
     if fin == null: ret 0 - 1 end
-    fout := salam_open(dst, "wb")
+    fout := fopen(dst, "wb")
     if fout == null:
-        fin.close()
+        _shut := fclose(fin)
         ret 0 - 1
     end
-    io.Copy(fout, fin)
-    fin.close()
-    fout.close()
+    buf := mem.Allocate(COPY_CHUNK as u64)
+    if buf == null:
+        _a := fclose(fin)
+        _b := fclose(fout)
+        ret 0 - 1
+    end
+    mut failed := false
+    mut going := true
+    while going:
+        got := fread(buf, 1 as u64, COPY_CHUNK as u64, fin)
+        if got == 0 as u64:
+            going = false
+        else:
+            if fwrite(buf, 1 as u64, got, fout) != got:
+                failed = true
+                going = false
+            end
+        end
+    end
+    mem.Free(buf)
+    _a := fclose(fin)
+    // The close is what flushes, so a full disk surfaces HERE or nowhere.
+    if fclose(fout) != 0: failed = true end
+    if failed: ret 0 - 1 end
     ret 0
 end
 
@@ -246,7 +293,7 @@ pub func Walk(root: str): Vector<str>:
         dir := stack.pop()
         entries := listdir(dir)
         repeat entries.len() with i:
-            name := entries.get(i)[0]
+            name := entries.get(i)
             full := filepath.Join(dir, name)
             if _os_is_dir(full):
                 stack.push(full)
@@ -311,7 +358,7 @@ pub func FileSize(path: str): i64:
     fseek(fp, 0, 2)
     n := ftell(fp)
     fclose(fp)
-    ret n as i64
+    ret n
 end
 
 @en "Stat"

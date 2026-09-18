@@ -1,0 +1,221 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// aws - queues.
+//
+// Offline, like the other two aws demos: what goes on the wire is a pure
+// function of the call, and what comes back is a pure function of the
+// document, so both are checked without a service. The consumer loop itself -
+// receive, handle, delete, and the redelivery that happens when the delete is
+// missed - is exercised against a mock outside the suite.
+
+import aws
+
+func check(label: str, got: str, want: str):
+    print label
+    print ": "
+    if got == want:
+        println "ok"
+    else:
+        println "MISMATCH"
+        print "  got  "
+        println got
+        print "  want "
+        println want
+    end
+end
+
+func check_bool(label: str, got: bool, want: bool):
+    if got == want: check(label, "yes", "yes")
+    else: check(label, "no", "yes")
+    end
+end
+
+func example(): aws.Config:
+    ret aws.Config {
+        endpoint = "https://s3.amazonaws.com",
+        region = "us-east-1",
+        bucket = "unused",
+        access_key = "AKIAIOSFODNN7EXAMPLE",
+        secret_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+    }
+end
+
+func queue_url(): str:
+    ret "https://sqs.eu-west-1.amazonaws.com/123456789012/jobs"
+end
+
+// ---- addressing ----
+
+// A request goes to the queue's own URL rather than to the service root with
+// the queue named in a parameter. Both work; posting to the queue is what the
+// SDKs do and what makes a request readable in a log.
+func addressing():
+    c := aws.NewQueryCall("sqs", "SendMessage", aws.SQS_VERSION)
+    head := aws.PreparedCall(example(), c, 1369353600 as i64)
+    check_bool("service root by default",
+        head.find("\r\nHost: sqs.us-east-1.amazonaws.com\r\n") >= 0, true)
+    check_bool("scoped to sqs",
+        head.find("/20130524/us-east-1/sqs/aws4_request") >= 0, true)
+end
+
+// ---- messages ----
+
+func receive_answer(): str:
+    ret "<ReceiveMessageResponse xmlns=\"http://queue.amazonaws.com/doc/2012-11-05/\">" +
+        "<ReceiveMessageResult><Message>" +
+        "<MessageId>e5cba1-1</MessageId>" +
+        "<ReceiptHandle>AQEB7Handle==</ReceiptHandle>" +
+        "<MD5OfBody>fafb00f5732ab283681e124bf8747ed1</MD5OfBody>" +
+        "<Body>render invoice 42 &amp; 43</Body>" +
+        "<Attribute><Name>ApproximateReceiveCount</Name><Value>3</Value></Attribute>" +
+        "<Attribute><Name>SentTimestamp</Name><Value>1787282854000</Value></Attribute>" +
+        "<Attribute><Name>MessageGroupId</Name><Value>tenant-7</Value></Attribute>" +
+        "<MessageAttribute><Name>tenant</Name>" +
+        "<Value><DataType>String</DataType><StringValue>acme &amp; co</StringValue></Value>" +
+        "</MessageAttribute>" +
+        "<MessageAttribute><Name>priority</Name>" +
+        "<Value><DataType>String</DataType><StringValue>high</StringValue></Value>" +
+        "</MessageAttribute>" +
+        "</Message></ReceiveMessageResult></ReceiveMessageResponse>"
+end
+
+func messages():
+    l := aws.ParseReceive(receive_answer(), 200)
+    check_bool("receive parsed", l.ok, true)
+    check("message count", "" + aws.MessageCount(l), "1")
+    m := aws.MessageAt(l, 0)
+    check("message id", m.id, "e5cba1-1")
+    check("entity-decoded body", m.body, "render invoice 42 & 43")
+    check("receipt handle", m.receipt, "AQEB7Handle==")
+    check("body digest", m.md5, "fafb00f5732ab283681e124bf8747ed1")
+    // A receive count climbing above one or two is the signal that a handler
+    // is failing silently, so it has to survive parsing.
+    check("receive count", "" + m.receive_count, "3")
+    // SQS reports this in milliseconds, unlike every other AWS timestamp, and
+    // the value is always past what 32 bits hold.
+    check("sent timestamp in seconds", "" + m.sent_epoch, "1787282854")
+    check("fifo group", m.group_id, "tenant-7")
+    // A message attribute nests its value one level deeper than a system
+    // attribute does.
+    check("message attribute", aws.MessageAttribute(m, "tenant"), "acme & co")
+    check("second message attribute", aws.MessageAttribute(m, "priority"), "high")
+    check("absent attribute", aws.MessageAttribute(m, "nothing"), "")
+    check("out of range is empty", aws.MessageAt(l, 4).id, "")
+end
+
+// An empty queue answers a well-formed document with no Message in it, which
+// is a success with nothing in it rather than a failure.
+func empty_receive():
+    l := aws.ParseReceive("<ReceiveMessageResponse><ReceiveMessageResult/>" +
+        "</ReceiveMessageResponse>", 200)
+    check_bool("an empty queue is not an error", l.ok, true)
+    check("nothing received", "" + aws.MessageCount(l), "0")
+end
+
+// ---- sending ----
+
+func sending():
+    mut m := aws.OutMessage { body = "work", delay = 30, group_id = "g1",
+        dedup_id = "d1" }
+    aws.HeaderSet(m.attributes, "tenant", "acme")
+    c := aws.SqsSendCall(queue_url(), m)
+    body := aws.CallBodyText(c)
+    check_bool("action first",
+        body.find("Action=SendMessage&Version=2012-11-05") == 0, true)
+    check_bool("body sent", body.find("&MessageBody=work") >= 0, true)
+    check_bool("delay sent", body.find("&DelaySeconds=30") >= 0, true)
+    check_bool("fifo group sent", body.find("&MessageGroupId=g1") >= 0, true)
+    check_bool("dedup id sent", body.find("&MessageDeduplicationId=d1") >= 0, true)
+    // A message attribute is three numbered parameters, not one.
+    check_bool("attribute name",
+        body.find("&MessageAttribute.1.Name=tenant") >= 0, true)
+    check_bool("attribute type",
+        body.find("&MessageAttribute.1.Value.DataType=String") >= 0, true)
+    check_bool("attribute value",
+        body.find("&MessageAttribute.1.Value.StringValue=acme") >= 0, true)
+    // The request goes to the queue's path, not the service root.
+    head := aws.PreparedCall(example(), c, 1369353600 as i64)
+    check_bool("posted to the queue",
+        head.find("POST /123456789012/jobs HTTP/1.1") == 0, true)
+    check_bool("addressed at the queue's region",
+        head.find("\r\nHost: sqs.eu-west-1.amazonaws.com\r\n") >= 0, true)
+end
+
+// The limits are the service's, and exceeding them is an error from the far
+// side rather than a clamp - so they are clamped here.
+func clamping():
+    c := aws.SqsReceiveCall(queue_url(), aws.ReceiveOptions {
+        max_messages = 99, wait_seconds = 600, visibility_timeout = 99999
+    })
+    body := aws.CallBodyText(c)
+    check_bool("batch size clamped to ten",
+        body.find("&MaxNumberOfMessages=10") >= 0, true)
+    check_bool("wait clamped to twenty",
+        body.find("&WaitTimeSeconds=20") >= 0, true)
+    check_bool("visibility clamped to twelve hours",
+        body.find("&VisibilityTimeout=43200") >= 0, true)
+    small := aws.SqsReceiveCall(queue_url(), aws.ReceiveOptions {
+        max_messages = 0, wait_seconds = 0
+    })
+    check_bool("batch size has a floor of one",
+        aws.CallBodyText(small).find("&MaxNumberOfMessages=1") >= 0, true)
+end
+
+// Long polling is the default, because a zero wait answers empty almost every
+// time and is billed the same as one that waits.
+func polling_default():
+    o := aws.ReceiveOptions {}
+    check("default wait", "" + o.wait_seconds, "20")
+    check("default batch", "" + o.max_messages, "1")
+    check_bool("attributes asked for by default", o.want_attributes, true)
+end
+
+// ---- configuration ----
+
+// Without a dead-letter queue, a message whose handler always fails is retried
+// until the queue's retention runs out.
+func redrive():
+    check("redrive policy",
+        aws.SqsRedrivePolicy("arn:aws:sqs:us-east-1:1:dlq", 5),
+        "{\"deadLetterTargetArn\":\"arn:aws:sqs:us-east-1:1:dlq\"," +
+        "\"maxReceiveCount\":\"5\"}")
+    check("redrive count has a floor",
+        aws.SqsRedrivePolicy("arn:aws:sqs:us-east-1:1:dlq", 0),
+        "{\"deadLetterTargetArn\":\"arn:aws:sqs:us-east-1:1:dlq\"," +
+        "\"maxReceiveCount\":\"5\"}")
+end
+
+func guards():
+    check("an empty message is refused",
+        aws.SqsSendWith(example(), queue_url(), aws.OutMessage {}).code, "Config")
+    check("a delete needs its receipt",
+        aws.SqsDelete(example(), queue_url(), "").error,
+        "a message cannot be deleted without its receipt handle")
+    check("limits are the service's",
+        "" + aws.SQS_MAX_MESSAGES + "/" + aws.SQS_MAX_WAIT + "/" + aws.SQS_MAX_BATCH,
+        "10/20/10")
+end
+
+func main:
+    addressing()
+    messages()
+    empty_receive()
+    sending()
+    clamping()
+    polling_default()
+    redrive()
+    guards()
+    ret 0
+end

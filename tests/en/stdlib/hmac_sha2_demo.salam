@@ -1,0 +1,143 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/crypto HMAC over the SHA-2 family, against the RFC 4231 vectors.
+//
+// Cases 1, 4, 6 and 7 use binary keys or binary data, so they go through the
+// pointer form (HmacSha*Raw) - a `str` cannot carry a 0x00 byte, and case 4's
+// key runs 0x01..0x19 precisely to catch an implementation that mishandles
+// low bytes. Cases 6 and 7 use a 131-byte key, longer than both block sizes,
+// which is the only path that hashes the key before using it.
+
+import str
+import mem
+import crypto
+import testing
+
+pure func hexdigit(v: int): int:
+    if v < 10: ret 48 + v end
+    ret 87 + v
+end
+
+func hex_of(p: void*, n: int): str:
+    bp := p as u8*
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    repeat n with i:
+        b := bp[i] as int
+        str.BufAppendChar(sb, hexdigit(b / 16))
+        str.BufAppendChar(sb, hexdigit(b % 16))
+    end
+    out := str.BufStr(sb)
+    ret out
+end
+
+func fill(p: void*, n: int, value: int):
+    bp := p as u8*
+    repeat n with i:
+        bp[i] = value as u8
+    end
+end
+
+func mac_hex(variant: int, key: void*, klen: int, msg: void*, mlen: int): str:
+    mut n := 32
+    if variant == 384: n = 48 end
+    if variant == 512: n = 64 end
+    out := mem.Allocate(n as u64)
+    defer mem.Free(out)
+    if variant == 256:
+        crypto.HmacSha256Raw(key, klen, msg, mlen, out)
+    else variant == 384:
+        crypto.HmacSha384Raw(key, klen, msg, mlen, out)
+    else:
+        crypto.HmacSha512Raw(key, klen, msg, mlen, out)
+    end
+    ret hex_of(out, n)
+end
+
+// RFC 4231 case 1: 20 bytes of 0x0b, "Hi There"
+func case1():
+    key := mem.Allocate(20 as u64)
+    defer mem.Free(key)
+    fill(key, 20, 0x0b)
+    msg := "Hi There"
+    testing.AssertEqStr(mac_hex(256, key, 20, msg as void*, msg.len()), "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7")
+    testing.AssertEqStr(mac_hex(384, key, 20, msg as void*, msg.len()), "afd03944d84895626b0825f4ab46907f15f9dadbe4101ec682aa034c7cebc59cfaea9ea9076ede7f4af152e8b2fa9cb6")
+    testing.AssertEqStr(mac_hex(512, key, 20, msg as void*, msg.len()), "87aa7cdea5ef619d4ff0b4241a1d6cb02379f4e2ce4ec2787ad0b30545e17cdedaa833b7d6b8a702038b274eaea3f4e4be9d914eeb61f1702e696c203a126854")
+end
+
+// RFC 4231 case 2: "Jefe". The one case where key and data are both text, so
+// it also covers the str-taking wrappers.
+func case2():
+    k := "Jefe"
+    d := "what do ya want for nothing?"
+    testing.AssertEqStr(crypto.HmacSha256Hex(k, d), "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843")
+    testing.AssertEqStr(crypto.HmacSha384Hex(k, d), "af45d2e376484031617f78d2b58a6b1b9c7ef464f5a01b47e42ec3736322445e8e2240ca5e69e2c78b3239ecfab21649")
+    testing.AssertEqStr(crypto.HmacSha512Hex(k, d), "164b7a7bfcf819e2e395fbe73b56e0a387bd64222e831fd610270cd7ea2505549758bf75c05a994a6d034f65f8f0e6fdcaeab1a34d4a6b4b636e070a38bce737")
+    // the Bytes wrapper must agree with the Hex one
+    out := mem.Allocate(32 as u64)
+    defer mem.Free(out)
+    crypto.HmacSha256Bytes(k, d, out)
+    testing.AssertEqStr(hex_of(out, 32), crypto.HmacSha256Hex(k, d))
+end
+
+// RFC 4231 case 4: key 0x01..0x19, data 50 bytes of 0xcd
+func case4():
+    key := mem.Allocate(25 as u64)
+    defer mem.Free(key)
+    kp := key as u8*
+    repeat 25 with i:
+        kp[i] = (i + 1) as u8
+    end
+    msg := mem.Allocate(50 as u64)
+    defer mem.Free(msg)
+    fill(msg, 50, 0xcd)
+    testing.AssertEqStr(mac_hex(256, key, 25, msg, 50), "82558a389a443c0ea4cc819899f2083a85f0faa3e578f8077a2e3ff46729665b")
+    testing.AssertEqStr(mac_hex(384, key, 25, msg, 50), "3e8a69b7783c25851933ab6290af6ca77a9981480850009cc5577c6e1f573b4e6801dd23c4a7d679ccf8a386c674cffb")
+    testing.AssertEqStr(mac_hex(512, key, 25, msg, 50), "b0ba465637458c6990e5a8c5f61d4af7e576d97ff94b872de76f8050361ee3dba91ca5c11aa25eb4d679275cc5788063a5f19741120c4f2de2adebeb10a298dd")
+end
+
+// RFC 4231 cases 6 and 7: a 131-byte key.
+func case6():
+    key := mem.Allocate(131 as u64)
+    defer mem.Free(key)
+    fill(key, 131, 0xaa)
+    m := "Test Using Larger Than Block-Size Key - Hash Key First"
+    testing.AssertEqStr(mac_hex(256, key, 131, m as void*, m.len()), "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54")
+    testing.AssertEqStr(mac_hex(384, key, 131, m as void*, m.len()), "4ece084485813e9088d2c63a041bc5b44f9ef1012a2b588f3cd11f05033ac4c60c2ef6ab4030fe8296248df163f44952")
+    testing.AssertEqStr(mac_hex(512, key, 131, m as void*, m.len()), "80b24263c7c1a3ebb71493c1dd7be8b49b46d1f41b4aeec1121b013783f8f3526b56d037e05f2598bd0fd2215d6a1e5295e64f73f63f0aec8b915a985d786598")
+end
+
+func case7():
+    key := mem.Allocate(131 as u64)
+    defer mem.Free(key)
+    fill(key, 131, 0xaa)
+    mut m := "This is a test using a larger than block-size key and a larger than block-size data. "
+    m = m.concat("The key needs to be hashed before being used by the HMAC algorithm.")
+    testing.AssertEqInt(m.len(), 152)
+    testing.AssertEqStr(mac_hex(256, key, 131, m as void*, m.len()), "9b09ffa71b942fcb27635fbcd5b0e944bfdc63644f0713938a7f51535c3a35e2")
+    testing.AssertEqStr(mac_hex(384, key, 131, m as void*, m.len()), "6617178e941f020d351e2f254e8fd32c602420feb0b8fb9adccebb82461e99c5a678cc31e799176d3860e6110c46523e")
+    testing.AssertEqStr(mac_hex(512, key, 131, m as void*, m.len()), "e37b6a775dc87dbaa4dfa9f96e5e3ffddebd71f8867289865df5a32d20cdc944b6022cac3c4982b10d5eeb55c3e4de15134676fb6de0446065c97440fa8c6a58")
+end
+
+func main:
+    case1()
+    case2()
+    case4()
+    case6()
+    case7()
+    ret testing.Summary()
+end

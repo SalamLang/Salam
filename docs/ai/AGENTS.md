@@ -30,6 +30,25 @@ Getting this backwards produces a loop that never runs, or never stops. When
 relocating existing Salam code, copy it verbatim; do not retype loops from
 memory.
 
+`repeat` is the counted loop, and its index takes the type of the values that
+drive it - the count, or a range's bounds and step. A `u8` count binds a `u8`
+index, an `i64` count an `i64` one; bounds that mix signed and unsigned, or a
+count that is not an integer at all, fall back to `i32`.
+
+```salam
+repeat v.len() with i:      // len() is i32, so i is i32
+    print v.get(i)
+end
+
+n := 200 as u8
+repeat n with i:            // i is u8 here
+    total = total + v.get(i as int)   // ...so a signed parameter needs a cast
+end
+```
+
+Untyped literals adapt to the index (`if i < 10` is fine either way), but a
+call that takes a signed `int` does not: pass `i as int`.
+
 ## 2. Top-level declaration order is enforced
 
 The compiler requires one specific order and rejects anything else. In order:
@@ -61,6 +80,17 @@ Salam fails the build on unused imports, variables and functions.
 | `E066` | unused function | call it, mark it `pub`, or prefix with `_` |
 
 Add imports only as you use them.
+
+Loop bindings are stricter: a `_` prefix does not excuse them, because the
+fix is to drop the binding rather than rename it. Write `repeat 20000:`, not
+`repeat 20000 with _i:`. The one escape is the bare name `_`, for the
+`each (key, value)` form that has no way to omit a binding:
+
+```salam
+each (_, value) in scores:   // iterate for the values alone
+    total = total + value
+end
+```
 
 ## 4. Bindings
 
@@ -126,7 +156,7 @@ out := str.BufStr(sb)
 ```salam
 v := Vector {} as Vector<str>
 v.push("a")
-first := v.get(0)[0]                       // get() returns a slot; [0] reads it
+first := v.get(0)                          // get() returns the element; v.ref(0) is its address
 m := HashMap {} as HashMap<str, int>
 ```
 
@@ -212,7 +242,7 @@ advice. Each one silently produces wrong behaviour rather than a diagnostic.
   code with `salam build`/`salam run`, never `salam exec`.
 
 - **`os.Args()` has a broken generic type.** Binding any element to a local
-  (`a := argv.get(1)[0]`) corrupts semantic analysis or crashes the compiler.
+  (`a := argv.get(1)`) corrupts semantic analysis or crashes the compiler.
   Pass argv-derived values _inline_ as call arguments only.
 
 - **Enum values cannot cross a package boundary.** A `pub enum`'s members are

@@ -1,0 +1,253 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package envfile
+
+import str
+import collections
+
+// Variable expansion, kept separate from reading so that a caller can
+// resolve against values this package has no way to reach.
+//
+// Forms understood, inside unquoted and double-quoted values only:
+//
+//   $NAME             bare reference, [A-Za-z0-9_]
+//   ${NAME}           braced, also allows '.' and '-' in the name
+//   ${NAME-default}   default when NAME is not defined at all
+//   ${NAME:-default}  default when NAME is undefined OR empty
+//   \$                a literal dollar sign
+//
+// An unresolvable reference with no default becomes the empty string,
+// matching every other .env reader. A reference that does not parse is
+// left alone, so a value like "cost: $5" survives unharmed.
+//
+// Expansion looks only at entries ALREADY expanded, never at later ones.
+// That makes reference cycles unrepresentable rather than something to
+// detect, and matches reading a file top to bottom.
+
+// One parsed reference. `colon` distinguishes ':-' from '-', which
+// differ only when the name is defined but empty.
+struct _DR:
+    pub name: str = ""
+    pub def: str = ""
+    pub has_def: bool = false
+    pub colon: bool = false
+    pub next: int = 0
+    pub ok: bool = false
+end
+
+func _is_var_char(c: int): bool:
+    if c >= 48 && c <= 57: ret true end
+    if c >= 65 && c <= 90: ret true end
+    if c >= 97 && c <= 122: ret true end
+    ret c == 95
+end
+
+// A name may not start with a digit. Without that rule "$5" reads as a
+// reference to a variable named 5, and a value like "costs $5" silently
+// loses the amount.
+//
+// A bare $NAME also stops at '.', so "$DIR.bak" is a reference plus
+// literal text. The braced form has an explicit terminator, so there a
+// dot is safe to take as part of the name and dotted keys can be
+// referenced. '-' is never part of a name in either form: inside braces
+// it opens the default in "${NAME-default}".
+func _read_var(s: str, i: int, dotted: bool, endpos &: int): str:
+    n := s.len()
+    bp := _bp(s)
+    endpos = i
+    if i >= n: ret "" end
+    first := _ub(bp, i)
+    if _is_var_char(first) == false || (first >= 48 && first <= 57): ret "" end
+    mut p := i
+    until p < n:
+        c := _ub(bp, p)
+        mut good := _is_var_char(c)
+        if dotted && c == 46: good = true end
+        if good == false: break end
+        p += 1
+    end
+    endpos = p
+    ret s.substr(i, p - i)
+end
+
+func _ref_braced(s: str, i: int): _DR:
+    n := s.len()
+    bp := _bp(s)
+    mut p := 0
+    name := _read_var(s, i + 2, true, p)
+    if name.len() == 0: ret _DR { next = i + 1 } end
+    mut colon := false
+    mut has_def := false
+    mut defval := ""
+    if p < n && _ub(bp, p) == 58:
+        colon = true
+        p += 1
+    end
+    if p < n && _ub(bp, p) == 45:
+        p += 1
+        start := p
+        until p < n && _ub(bp, p) != 125:
+            p += 1
+        end
+        defval = s.substr(start, p - start)
+        has_def = true
+    end
+    if p >= n || _ub(bp, p) != 125: ret _DR { next = i + 1 } end
+    ret _DR { name = name, def = defval, has_def = has_def, colon = colon, next = p + 1, ok = true }
+end
+
+// `i` points at the '$'.
+func _ref_at(s: str, i: int): _DR:
+    n := s.len()
+    if i + 1 >= n: ret _DR { next = i + 1 } end
+    if _ub(_bp(s), i + 1) == 123: ret _ref_braced(s, i) end
+    mut p := 0
+    name := _read_var(s, i + 1, false, p)
+    if name.len() == 0: ret _DR { next = i + 1 } end
+    ret _DR { name = name, next = p, ok = true }
+end
+
+func _lookup(name: str, d &: Doc, base &: Doc, found &: bool): str:
+    found = true
+    i := d.m.index_of(name)
+    if i >= 0: ret d.m.val_at(i) end
+    j := base.m.index_of(name)
+    if j >= 0: ret base.m.val_at(j) end
+    found = false
+    ret ""
+end
+
+func _resolve(r: _DR, d &: Doc, base &: Doc): str:
+    mut found := false
+    v := _lookup(r.name, d, base, found)
+    if found:
+        if v.len() > 0: ret v end
+        if r.colon && r.has_def: ret r.def end
+        ret v
+    end
+    if r.has_def: ret r.def end
+    ret ""
+end
+
+func _expand_one(raw: str, d &: Doc, base &: Doc): str:
+    n := raw.len()
+    bp := _bp(raw)
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    mut p := 0
+    until p < n:
+        c := _ub(bp, p)
+        if c == 92 && p + 1 < n && _ub(bp, p + 1) == 36:
+            str.BufAppendChar(sb, 36)
+            p += 2
+            continue
+        end
+        if c != 36:
+            str.BufAppendChar(sb, c)
+            p += 1
+            continue
+        end
+        r := _ref_at(raw, p)
+        if r.ok == false:
+            str.BufAppendChar(sb, c)
+            p += 1
+            continue
+        end
+        str.BufAppend(sb, _resolve(r, d, base))
+        p = r.next
+    end
+    out := str.BufStr(sb)
+    ret out
+end
+
+func _collect_refs(raw: str, out &: Vector<str>):
+    n := raw.len()
+    bp := _bp(raw)
+    mut p := 0
+    until p < n:
+        c := _ub(bp, p)
+        if c == 92 && p + 1 < n && _ub(bp, p + 1) == 36:
+            p += 2
+            continue
+        end
+        if c != 36:
+            p += 1
+            continue
+        end
+        r := _ref_at(raw, p)
+        if r.ok && collections.contains(out, r.name) == false:
+            out.push(r.name)
+        end
+        if r.next > p: p = r.next else: p = p + 1 end
+    end
+end
+
+// Resolves every entry of `d` in order. Each value sees the entries
+// already resolved before it, then falls back to `base`. The result is
+// fully literal: expanding it again is a no-op.
+@en "ExpandDoc"
+@fa "گسترش سند"
+@ar "توسیع وثیقة"
+pub func ExpandDoc(d &: Doc, base &: Doc): Doc:
+    mut out := Doc {}
+    repeat d.m.len() with i:
+        k := d.m.key_at(i)
+        v := d.m.val_at(i)
+        if d.flags.get(i) == _LITERAL:
+            _push(out, k, v, _LITERAL)
+        else:
+            ev := _expand_one(v, out, base)
+            _push(out, k, ev, _LITERAL)
+        end
+    end
+    ret out
+end
+
+// Expands one string against `d` first and `base` second.
+@en "Expand"
+@fa "گسترش"
+@ar "توسیع"
+pub func Expand(raw: str, d &: Doc, base &: Doc): str:
+    ret _expand_one(raw, d, base)
+end
+
+// Every distinct variable name referenced by an unresolved Doc, in the
+// order first seen. This is how a caller discovers what it needs to put
+// into `base` before calling ExpandDoc: std/env uses it to pull exactly
+// the referenced variables out of the real environment instead of trying
+// to enumerate the whole of it. It also stands on its own as the check
+// behind "which variables does this .env depend on".
+@en "RefNames"
+@fa "نام‌های ارجاع"
+@ar "أسماء المراجع"
+pub func RefNames(d &: Doc): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    repeat d.m.len() with i:
+        if d.flags.get(i) == _EXPANDABLE:
+            _collect_refs(d.m.val_at(i), out)
+        end
+    end
+    ret out
+end
+
+// The same question asked of a plain string rather than a document.
+@en "RefNamesIn"
+@fa "نام‌های ارجاع در"
+@ar "أسماء المراجع فی"
+pub func RefNamesIn(raw: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    _collect_refs(raw, out)
+    ret out
+end

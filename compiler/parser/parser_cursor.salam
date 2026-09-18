@@ -15,7 +15,7 @@ end
 
 func skip_comments_from(p &: Ps, from: int): int:
     mut i := from
-    until i < p.count - 1 && is_comment_kind(p.toks.toks.get(i)[0].kind):
+    until i < p.count - 1 && is_comment_kind(p.toks.toks.get(i).kind):
         i += 1
     end
     ret i
@@ -26,7 +26,7 @@ func p_peek(p &: Ps): tok.Token:
     if i >= p.count:
         i = p.count - 1
     end
-    ret p.toks.toks.get(i)[0]
+    ret p.toks.toks.get(i)
 end
 
 func p_peek2(p &: Ps): tok.Token:
@@ -37,7 +37,7 @@ func p_peek2(p &: Ps): tok.Token:
     if i >= p.count:
         i = p.count - 1
     end
-    ret p.toks.toks.get(i)[0]
+    ret p.toks.toks.get(i)
 end
 
 func p_prev(p &: Ps): tok.Token:
@@ -45,7 +45,7 @@ func p_prev(p &: Ps): tok.Token:
     if p.pos > 0:
         i = p.pos - 1
     end
-    ret p.toks.toks.get(i)[0]
+    ret p.toks.toks.get(i)
 end
 
 func p_at(p &: Ps, k: int): bool:
@@ -91,6 +91,24 @@ func p_error(p &: Ps, msg: str):
     )
     lg.LogAt(
         p.lgr, lg.PH_PARSER, lg.LOG_ERROR, p.file, t.begin_line as int, t.begin_col as int, m
+    )
+    if !p.had_error && t.kind == tok.TK_EOF:
+        p.err_at_eof = true
+    end
+    p.had_error = true
+    p.panic = true
+end
+
+// p_error's sibling for messages that already name the offending token, so
+// appending "(near '...')" would only repeat it. `msg` and `help` are emitted
+// verbatim - the caller has already translated and formatted both.
+func p_error_verbatim(p &: Ps, help: str, msg: str):
+    if p.panic:
+        ret
+    end
+    t := p_peek(p)
+    lg.LogAtHelp(
+        p.lgr, lg.PH_PARSER, lg.LOG_ERROR, p.file, t.begin_line as int, t.begin_col as int, help, msg
     )
     if !p.had_error && t.kind == tok.TK_EOF:
         p.err_at_eof = true
@@ -191,6 +209,16 @@ func p_at_reserved_word(p &: Ps): bool:
     ret false
 end
 
+func p_reserved_word_error(p &: Ps):
+    t := p_peek(p)
+    word := t.lexeme.len() > 0 ? t.lexeme : "<eof>"
+    msg := co.Format1(
+        i18.Tr("'%s' is a reserved word, so it cannot be used as a name"), co.ArgStr(word)
+    )
+    help := co.Format1(i18.Tr("pick a different name, for example '%s_'"), co.ArgStr(word))
+    p_error_verbatim(p, help, msg)
+end
+
 func p_name(p &: Ps, what: str): str:
     if p_at(p, tok.TK_IDENT):
         s := p_peek(p).lexeme
@@ -198,11 +226,7 @@ func p_name(p &: Ps, what: str): str:
         ret s
     end
     if p_at_reserved_word(p):
-        p_error(
-            p, co.Format1(
-                i18.Tr("%s (reserved word cannot be used as a name)"), co.ArgStr(i18.Tr(what))
-            )
-        )
+        p_reserved_word_error(p)
         p_advance(p)
         ret "<error>"
     end
@@ -239,7 +263,7 @@ func p_peekn(p &: Ps, k: int): tok.Token:
     if i >= p.count:
         i = p.count - 1
     end
-    ret p.toks.toks.get(i)[0]
+    ret p.toks.toks.get(i)
 end
 
 func p_ident_run_len(p &: Ps): int:

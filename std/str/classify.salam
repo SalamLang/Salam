@@ -12,46 +12,186 @@
  *
  */
 
+// Character classification.
+//
+// Two families live here and the difference between them matters.
+//
+// The IsAscii* predicates answer about the 128 ASCII code points and nothing
+// else. They are the right tool for wire formats, numbers, identifiers and
+// paths - anywhere accepting ۷ alongside 7 would be a bug rather than a
+// courtesy. An IPv4 parser that treats "۱۲۷.۰.۰.۱" as an address, or a
+// command line that reads "--jobs=۴", is not being generous; it is being
+// wrong in a way that is hard to see.
+//
+// The unqualified predicates - IsSpace, IsAlpha, IsDigit and the rest - answer
+// for the whole of Unicode, by way of std/unicode and its UCD-derived tables.
+// These are the ones to use on human text. IsAlpha('س') is true here; it was
+// not before, and that single answer is the reason this file stopped being a
+// handful of range comparisons.
+//
+// Both families take a CODE POINT, not a byte. This is the easy mistake to
+// make, because for ASCII text the two are the same and byte-at-a-time code
+// appears to work: no byte of a multi-byte UTF-8 sequence can collide with an
+// ASCII value, so a byte loop calling IsAsciiSpace is accidentally safe. It is
+// not safe with the Unicode predicates, where a continuation byte such as 0xB2
+// is a perfectly good code point (SUPERSCRIPT TWO) that never appeared in the
+// text. Walk strings with CodePointAt instead - see unicode.salam.
+
 package str
+
+import unicode
+
+@en "IsAscii"
+@fa "اسکی است"
+@ar "أسکي"
+// Whether cp is one of the 128 ASCII code points.
+pub inline pure func IsAscii(code: int): bool:
+    ret code >= 0 && code <= 127
+end
+
+@en "IsAsciiSpace"
+@fa "فاصله اسکی است"
+@ar "فراغ أسکي"
+// ASCII whitespace: space, tab, line feed, vertical tab, form feed and
+// carriage return. This is exactly the ASCII part of Unicode's White_Space,
+// so it agrees with IsSpace on every code point below 128.
+pub inline pure func IsAsciiSpace(code: int): bool:
+    ret code == 32 || (code >= 9 && code <= 13)
+end
+
+@en "IsAsciiDigit"
+@fa "رقم اسکی است"
+@ar "رقم أسکي"
+// ASCII 0 through 9 and nothing else. This is the predicate for parsing
+// numbers out of a format that specifies ASCII digits.
+pub inline pure func IsAsciiDigit(code: int): bool:
+    ret code >= 48 && code <= 57
+end
+
+@en "IsAsciiUpper"
+@fa "بزرگ اسکی است"
+@ar "کبیر أسکي"
+// ASCII A through Z.
+pub inline pure func IsAsciiUpper(code: int): bool:
+    ret code >= 65 && code <= 90
+end
+
+@en "IsAsciiLower"
+@fa "کوچک اسکی است"
+@ar "صغیر أسکي"
+// ASCII a through z.
+pub inline pure func IsAsciiLower(code: int): bool:
+    ret code >= 97 && code <= 122
+end
+
+@en "IsAsciiAlpha"
+@fa "حرف اسکی است"
+@ar "حرف أسکي"
+// An ASCII letter, either case.
+pub inline pure func IsAsciiAlpha(code: int): bool:
+    ret IsAsciiUpper(code) || IsAsciiLower(code)
+end
+
+@en "IsAsciiAlnum"
+@fa "حرف یا رقم اسکی است"
+@ar "حرف او رقم أسکي"
+// An ASCII letter or an ASCII digit.
+pub inline pure func IsAsciiAlnum(code: int): bool:
+    ret IsAsciiAlpha(code) || IsAsciiDigit(code)
+end
 
 @en "IsSpace"
 @fa "فاصله است"
 @ar "فراغ"
-pub inline pure func IsSpace(code: int): bool:
-    ret code == 32 || code == 9 || code == 10 || code == 13
+// Whether cp has the Unicode White_Space property: the ASCII whitespace, the
+// no-break space U+00A0, the narrow no-break space U+202F that Persian text
+// uses before enclitics, the ideographic space U+3000 and the rest.
+//
+// ZERO WIDTH NON-JOINER is deliberately NOT whitespace. It is a format
+// character, and "می‌رود" is one word, not two - see unicode.IsJoinControl.
+pub pure func IsSpace(code: int): bool:
+    if IsAscii(code): ret IsAsciiSpace(code) end
+    ret unicode.IsSpace(code)
 end
 
 @en "IsDigit"
 @fa "رقم است"
 @ar "رقم"
-pub inline pure func IsDigit(code: int): bool:
-    ret code >= 48 && code <= 57
+// Whether cp is a decimal digit in any script (Unicode category Nd): 7, the
+// Arabic-Indic ٧ and the Persian ۷ all qualify.
+//
+// If you are parsing a number whose format specifies ASCII, use IsAsciiDigit.
+// If you want the numeric value of a digit, or only the three scripts Salam
+// converts between, see DigitValue and IsAnyDigit in digits.salam.
+pub pure func IsDigit(code: int): bool:
+    if IsAscii(code): ret IsAsciiDigit(code) end
+    ret unicode.IsDigit(code)
 end
 
 @en "IsUpper"
 @fa "بزرگ است"
 @ar "حرف کبیر"
-pub inline pure func IsUpper(code: int): bool:
-    ret code >= 65 && code <= 90
+// Whether cp is an uppercase letter (Unicode category Lu). False for every
+// Persian and Arabic letter, because those scripts have no case at all.
+pub pure func IsUpper(code: int): bool:
+    if IsAscii(code): ret IsAsciiUpper(code) end
+    ret unicode.IsUpper(code)
 end
 
 @en "IsLower"
 @fa "کوچک است"
 @ar "حرف صغیر"
-pub inline pure func IsLower(code: int): bool:
-    ret code >= 97 && code <= 122
+// Whether cp is a lowercase letter (Unicode category Ll).
+pub pure func IsLower(code: int): bool:
+    if IsAscii(code): ret IsAsciiLower(code) end
+    ret unicode.IsLower(code)
 end
 
 @en "IsAlpha"
 @fa "حرف است"
 @ar "حرف"
-pub inline pure func IsAlpha(code: int): bool:
-    ret IsUpper(code) || IsLower(code)
+// Whether cp is alphabetic.
+//
+// This uses Unicode's Alphabetic property rather than category L alone, so it
+// covers the Arabic and Persian letters, the harakat that carry vowels, the
+// Indic matras, and the letter numbers - everything that is part of a word
+// rather than punctuation around it.
+pub pure func IsAlpha(code: int): bool:
+    if IsAscii(code): ret IsAsciiAlpha(code) end
+    ret unicode.IsAlphabetic(code)
 end
 
 @en "IsAlnum"
 @fa "حرف یا رقم است"
 @ar "حرف او رقم"
-pub inline pure func IsAlnum(code: int): bool:
-    ret IsAlpha(code) || IsDigit(code)
+// Whether cp is alphabetic or a decimal digit, in any script.
+pub pure func IsAlnum(code: int): bool:
+    if IsAscii(code): ret IsAsciiAlnum(code) end
+    ret unicode.IsAlnum(code)
+end
+
+@en "IsPunct"
+@fa "نشانه نگارشی است"
+@ar "علامة ترقیم"
+// Whether cp is punctuation (Unicode category P), including the Arabic comma
+// ،  the Arabic semicolon ؛ and the Arabic question mark ؟.
+pub pure func IsPunct(code: int): bool:
+    ret unicode.IsPunct(code)
+end
+
+@en "IsMark"
+@fa "نشانه است"
+@ar "علامة"
+// Whether cp is a combining mark (Unicode category M) - a code point that
+// attaches to the one before it rather than standing on its own.
+pub pure func IsMark(code: int): bool:
+    ret unicode.IsMark(code)
+end
+
+@en "IsControl"
+@fa "کنترلی است"
+@ar "تحکم"
+// Whether cp is a control character (Unicode category Cc).
+pub pure func IsControl(code: int): bool:
+    ret unicode.IsControl(code)
 end

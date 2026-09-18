@@ -1,0 +1,503 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "tensor"
+@fa "تانسور"
+@ar "موتر"
+package tensor
+
+import matrix
+
+// N-dimensional arrays over f32, the storage type of machine learning.
+//
+// One type, Tensor, carries every value in this library: a shape plus a
+// single flat Vector<f32> in row-major (C) order, so a tensor is one
+// allocation and any element is an index computation away from a load.
+// f64 dense linear algebra stays in std/matrix; this package exists for
+// the workloads where f32 is the right trade: twice the elements per
+// cache line and per SIMD lane, at a precision every ML training loop
+// tolerates by design. ToMatrix and FromMatrix bridge the two worlds for
+// rank-1 and rank-2 data.
+//
+// The public scalar surface is f64 on purpose: literals in Salam are f64,
+// so `AddScalar(x, 1.5)` reads naturally and the cast to f32 happens once,
+// outside every loop. Storage and kernels are pure f32.
+//
+// There are no views. Every Tensor owns its buffer, reshape_ is the only
+// O(1) shape change (same buffer, new metadata), and everything else that
+// changes layout materializes a copy. Under manual memory a view that
+// aliases another tensor's buffer is a use-after-free waiting to happen;
+// copies are the deal this library offers, and the *Into and *InPlace
+// forms exist so hot loops can stop paying for them.
+//
+// Ownership follows std/matrix exactly: a function that returns a Tensor
+// hands over ownership and the caller frees it (Free or .free()); a
+// `x &: Tensor` parameter borrows and never frees. Shape errors return
+// the empty tensor (check is_empty()), and empty propagates through
+// chained operations the way 0x0 does in std/matrix.
+//
+// A word on the arithmetic operators (+ - * /): they allocate a fresh
+// result, so a chained expression like `a + b + c` creates an
+// intermediate nobody frees. They are sugar for short-lived expressions
+// whose result you free; training code should run through std/autograd,
+// where the tape owns every temporary, or through the *Into/*InPlace
+// forms.
+
+// The f32 corner of libm. std/math wraps the f64 entry points; the f32
+// variants avoid a widen-compute-narrow round trip in every unary kernel.
+extern:
+    pure func expf(x: f32): f32
+    pure func logf(x: f32): f32
+    pure func tanhf(x: f32): f32
+    pure func powf(x: f32, y: f32): f32
+    pure func sqrtf(x: f32): f32
+    pure func fabsf(x: f32): f32
+end
+
+// The default slack for "are these equal" questions about f32 data. f32
+// carries ~7 decimal digits; after a handful of roundings 1e-5 is the
+// tightest tolerance that reports honest arithmetic as equal.
+@en "TSR_TOL"
+@fa "رواداری تانسور"
+@ar "تسامح الموتر"
+pub const TSR_TOL := 1.0e-5
+
+@en "Tensor"
+@fa "تانسور"
+@ar "موتر"
+pub struct Tensor:
+    pub data: Vector<f32> = Vector {}
+    pub shape: Vector<int> = Vector {}
+
+    @en "rank"
+    @fa "رتبه"
+    @ar "رتبة"
+    pub func rank(): int: ret this.shape.len() end
+
+    @en "numel"
+    @fa "شمار درایه‌ها"
+    @ar "عدد العناصر"
+    pub func numel(): int:
+        r := this.shape.len()
+        if r == 0: ret 0 end
+        mut n := 1
+        repeat r with i: n = n * this.shape.get(i) end
+        ret n
+    end
+
+    @en "dim"
+    @fa "بعد"
+    @ar "بعد"
+    pub func dim(i: int): int: ret this.shape.get(i) end
+
+    @en "is_empty"
+    @fa "تهی است"
+    @ar "فارغ"
+    pub func is_empty(): bool: ret this.data.len() == 0 end
+
+    @en "same_shape"
+    @fa "هم‌شکل"
+    @ar "نفس الشكل"
+    pub func same_shape(o &: Tensor): bool:
+        r := this.shape.len()
+        if r != o.shape.len(): ret false end
+        repeat r with i:
+            if this.shape.get(i) != o.shape.get(i): ret false end
+        end
+        ret true
+    end
+
+    // Flat row-major access. The bounds check lives in Vector.get/set, so
+    // these accessors are safe by default and free under --release; kernels
+    // that have already proven their indices go through .data.data instead.
+    @en "at"
+    @fa "در"
+    @ar "عند"
+    pub func at(i: int): f64: ret this.data.get(i) as f64 end
+
+    @en "set_at"
+    @fa "تنظیم در"
+    @ar "تعيين عند"
+    pub func set_at(i: int, v: f64): this.data.set(i, v as f32) end
+
+    @en "add_at"
+    @fa "افزودن در"
+    @ar "إضافة عند"
+    pub func add_at(i: int, v: f64):
+        this.data.set(i, this.data.get(i) + (v as f32))
+    end
+
+    // Rank-2 convenience: row i, column j of a matrix-shaped tensor.
+    @en "at2"
+    @fa "در دو"
+    @ar "عند اثنين"
+    pub func at2(i: int, j: int): f64:
+        ret this.data.get(i * this.shape.get(1) + j) as f64
+    end
+
+    @en "set_at2"
+    @fa "تنظیم در دو"
+    @ar "تعيين عند اثنين"
+    pub func set_at2(i: int, j: int, v: f64):
+        this.data.set(i * this.shape.get(1) + j, v as f32)
+    end
+
+    // O(1) reshape of this tensor in place. The element count must match;
+    // on a mismatch the tensor is left untouched and false comes back.
+    @en "reshape_"
+    @fa "تغییر شکل درجا"
+    @ar "إعادة تشكيل في المكان"
+    pub func reshape_(shape &: Vector<int>): bool:
+        mut n := 1
+        if shape.len() == 0: n = 0 end
+        repeat shape.len() with i: n = n * shape.get(i) end
+        if n != this.numel(): ret false end
+        this.shape.clear()
+        repeat shape.len() with i: this.shape.push(shape.get(i)) end
+        ret true
+    end
+
+    @en "operator +"
+    @fa "عملگر جمع"
+    @ar "عامل الجمع"
+    pub func operator + (other: Tensor): Tensor:
+        mut me := Tensor {}
+        me.data = this.data
+        me.shape = this.shape
+        ret Add(me, other)
+    end
+
+    @en "operator -"
+    @fa "عملگر تفریق"
+    @ar "عامل الطرح"
+    pub func operator - (other: Tensor): Tensor:
+        mut me := Tensor {}
+        me.data = this.data
+        me.shape = this.shape
+        ret Sub(me, other)
+    end
+
+    @en "operator *"
+    @fa "عملگر ضرب"
+    @ar "عامل الضرب"
+    pub func operator * (other: Tensor): Tensor:
+        mut me := Tensor {}
+        me.data = this.data
+        me.shape = this.shape
+        ret Mul(me, other)
+    end
+
+    @en "operator /"
+    @fa "عملگر تقسیم"
+    @ar "عامل القسمة"
+    pub func operator / (other: Tensor): Tensor:
+        mut me := Tensor {}
+        me.data = this.data
+        me.shape = this.shape
+        ret Div(me, other)
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free():
+        this.data.free()
+        this.shape.free()
+    end
+end
+
+func _copy_shape(shape &: Vector<int>): Vector<int>:
+    mut s := Vector {} as Vector<int>
+    n := shape.len()
+    if n > 0:
+        s.alloc(n)
+        repeat n with i: s.set(i, shape.get(i)) end
+    end
+    ret s
+end
+
+func _numel_of(shape &: Vector<int>): int:
+    r := shape.len()
+    if r == 0: ret 0 end
+    mut n := 1
+    repeat r with i: n = n * shape.get(i) end
+    ret n
+end
+
+// A tensor with its shape set and its buffer NOT initialised, for kernels
+// that write every element before anyone can read one. Private on purpose,
+// same bargain as std/matrix's _raw: handing this out would break "a fresh
+// tensor is zero".
+func _raw(shape &: Vector<int>): Tensor:
+    mut t := Tensor {}
+    t.shape = _copy_shape(shape)
+    n := _numel_of(shape)
+    if n > 0: t.data.alloc(n) end
+    ret t
+end
+
+func _raw_like(x &: Tensor): Tensor:
+    ret _raw(x.shape)
+end
+
+// ---- public API ----
+
+@en "Empty"
+@fa "تهی"
+@ar "فارغ"
+pub func Empty(): Tensor: ret Tensor {} end
+
+// Shape builders, so a call site can write Zeros(Shape2(3, 4)) without
+// assembling a Vector<int> by hand. The returned vector is owned by the
+// caller; the constructors below copy it, so the idiomatic pattern is
+//   s := tensor.Shape2(3, 4)
+//   t := tensor.Zeros(s)
+//   s.free()
+// or the ZerosN conveniences that skip the vector entirely.
+@en "Shape1"
+@fa "شکل یک"
+@ar "شكل واحد"
+pub func Shape1(n: int): Vector<int>:
+    mut s := Vector {} as Vector<int>
+    s.push(n)
+    ret s
+end
+
+@en "Shape2"
+@fa "شکل دو"
+@ar "شكل اثنين"
+pub func Shape2(a: int, b: int): Vector<int>:
+    mut s := Vector {} as Vector<int>
+    s.push(a)
+    s.push(b)
+    ret s
+end
+
+@en "Shape3"
+@fa "شکل سه"
+@ar "شكل ثلاثة"
+pub func Shape3(a: int, b: int, c: int): Vector<int>:
+    mut s := Vector {} as Vector<int>
+    s.push(a)
+    s.push(b)
+    s.push(c)
+    ret s
+end
+
+@en "Shape4"
+@fa "شکل چهار"
+@ar "شكل أربعة"
+pub func Shape4(a: int, b: int, c: int, d: int): Vector<int>:
+    mut s := Vector {} as Vector<int>
+    s.push(a)
+    s.push(b)
+    s.push(c)
+    s.push(d)
+    ret s
+end
+
+@en "Zeros"
+@fa "صفرها"
+@ar "أصفار"
+pub func Zeros(shape &: Vector<int>): Tensor:
+    mut t := Tensor {}
+    t.shape = _copy_shape(shape)
+    n := _numel_of(shape)
+    if n > 0: t.data.zeros(n) end
+    ret t
+end
+
+@en "Zeros1"
+@fa "صفرها یک"
+@ar "أصفار واحد"
+pub func Zeros1(n: int): Tensor:
+    mut s := Shape1(n)
+    t := Zeros(s)
+    s.free()
+    ret t
+end
+
+@en "Zeros2"
+@fa "صفرها دو"
+@ar "أصفار اثنين"
+pub func Zeros2(r: int, c: int): Tensor:
+    mut s := Shape2(r, c)
+    t := Zeros(s)
+    s.free()
+    ret t
+end
+
+@en "Zeros3"
+@fa "صفرها سه"
+@ar "أصفار ثلاثة"
+pub func Zeros3(a: int, b: int, c: int): Tensor:
+    mut s := Shape3(a, b, c)
+    t := Zeros(s)
+    s.free()
+    ret t
+end
+
+@en "Zeros4"
+@fa "صفرها چهار"
+@ar "أصفار أربعة"
+pub func Zeros4(a: int, b: int, c: int, d: int): Tensor:
+    mut s := Shape4(a, b, c, d)
+    t := Zeros(s)
+    s.free()
+    ret t
+end
+
+@en "Full"
+@fa "پرشده"
+@ar "مملوء"
+pub func Full(shape &: Vector<int>, x: f64): Tensor:
+    t := _raw(shape)
+    n := t.data.len()
+    if n <= 0: ret t end
+    v := x as f32
+    p := t.data.data
+    repeat n with k: p[k] = v end
+    ret t
+end
+
+@en "Ones"
+@fa "یک‌ها"
+@ar "آحاد"
+pub func Ones(shape &: Vector<int>): Tensor: ret Full(shape, 1.0) end
+
+// A single value as a shape-[1] tensor. This library has no rank-0
+// tensors; one element in one dimension keeps every kernel's loop bounds
+// honest.
+@en "Scalar"
+@fa "اسکالر"
+@ar "عدد مفرد"
+pub func Scalar(x: f64): Tensor:
+    mut s := Shape1(1)
+    t := Full(s, x)
+    s.free()
+    ret t
+end
+
+// Wraps an existing flat row-major buffer. The data is copied, so the
+// caller keeps ownership of what it passed in. The lengths must agree;
+// a mismatch returns the empty tensor.
+@en "FromArray"
+@fa "از آرایه"
+@ar "من مصفوفة خطية"
+pub func FromArray(shape &: Vector<int>, data &: Vector<f32>): Tensor:
+    n := _numel_of(shape)
+    if n != data.len(): ret Empty() end
+    t := _raw(shape)
+    if n <= 0: ret t end
+    p := t.data.data
+    q := data.data
+    repeat n with k: p[k] = q[k] end
+    ret t
+end
+
+// 0, 1, ..., n-1 as a shape-[n] tensor.
+@en "Arange"
+@fa "بازه گام"
+@ar "مدى"
+pub func Arange(n: int): Tensor:
+    t := Zeros1(n)
+    p := t.data.data
+    repeat n with k: p[k] = k as f32 end
+    ret t
+end
+
+@en "Clone"
+@fa "همانند"
+@ar "نسخة"
+pub func Clone(x &: Tensor): Tensor:
+    t := _raw_like(x)
+    n := t.data.len()
+    if n <= 0: ret t end
+    p := t.data.data
+    q := x.data.data
+    repeat n with k: p[k] = q[k] end
+    ret t
+end
+
+// Overwrites dst with src, keeping dst's allocation. Shapes must already
+// agree; this is the in-place counterpart of Clone for loops that would
+// otherwise allocate a fresh tensor per iteration.
+@en "CopyInto"
+@fa "رونوشت در"
+@ar "نسخ إلى"
+pub func CopyInto(dst &: Tensor, src &: Tensor):
+    if dst.same_shape(src) == false: ret end
+    n := src.data.len()
+    if n <= 0: ret end
+    p := dst.data.data
+    q := src.data.data
+    repeat n with k: p[k] = q[k] end
+end
+
+@en "Free"
+@fa "آزادسازی"
+@ar "تحرير"
+pub func Free(x &: Tensor):
+    x.data.free()
+    x.shape.free()
+end
+
+@en "SetAll"
+@fa "تنظیم همه"
+@ar "تعيين الكل"
+pub func SetAll(x &: Tensor, v: f64):
+    n := x.data.len()
+    if n <= 0: ret end
+    s := v as f32
+    p := x.data.data
+    repeat n with k: p[k] = s end
+end
+
+@en "SameShape"
+@fa "هم‌شکل"
+@ar "نفس الشكل"
+pub func SameShape(x &: Tensor, y &: Tensor): bool: ret x.same_shape(y) end
+
+// The f64 bridge: rank-1 becomes a 1xn row, rank-2 maps directly. Anything
+// else returns the 0x0 matrix, std/matrix's own error shape.
+@en "ToMatrix"
+@fa "به ماتریس"
+@ar "إلى مصفوفة"
+pub func ToMatrix(x &: Tensor): matrix.Matrix:
+    r := x.rank()
+    if r != 1 && r != 2: ret matrix.Matrix {} end
+    mut rows := 1
+    mut cols := x.shape.get(0)
+    if r == 2:
+        rows = x.shape.get(0)
+        cols = x.shape.get(1)
+    end
+    mut m := matrix.Zeros(rows, cols)
+    n := x.data.len()
+    q := x.data.data
+    repeat n with k: m.a.set(k, q[k] as f64) end
+    ret m
+end
+
+@en "FromMatrix"
+@fa "از ماتریس"
+@ar "من مصفوفة"
+pub func FromMatrix(m &: matrix.Matrix): Tensor:
+    if m.is_empty(): ret Empty() end
+    t := Zeros2(m.rows, m.cols)
+    n := m.count()
+    p := t.data.data
+    repeat n with k: p[k] = m.a.get(k) as f32 end
+    ret t
+end

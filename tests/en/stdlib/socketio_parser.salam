@@ -1,0 +1,129 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// The wire format and the URL rules of net/socketio, with no server in
+// sight. Every expectation here is a line out of the Socket.IO protocol
+// specification rather than out of this implementation.
+
+import net.socketio
+import mem
+
+func show url(raw: str):
+    e := socketio.ParseURL(raw)
+    println raw, "=>", socketio.Origin(e), "ns=" + e.namespace, "q=" + e.query, "ok=" + e.ok
+end
+
+func round trip(text: str):
+    p := socketio.DecodePacket(text)
+    println text, "=> kind=" + p.kind, "nsp=" + p.nsp, "id=" + p.id, "att=" + p.attachments, "data=" + p.data
+    println "   re-encodes:", socketio.EncodePacket(p) == text
+end
+
+func main:
+    println "-- urls"
+    show url("http://localhost:3000")
+    show url("https://chat.example.com/rooms")
+    show url("ws://127.0.0.1:8080/admin/?token=abc")
+    show url("localhost:3000/ns")
+    show url("http://[::1]:9000/v6")
+    // The scheme's own port is left off, the way every other client writes
+    // it and the way a virtual host expects to see it.
+    show url("http://example.com:80/x")
+    show url("https://example.com:443/x")
+    show url("gopher://nope")
+
+    println "-- packets"
+    round trip("0")
+    round trip("0/admin,")
+    round trip(`0{"sid":"abc123"}`)
+    round trip("1")
+    round trip(`2["chat","hello"]`)
+    round trip(`2/news,["item",7]`)
+    round trip(`21["ack-me"]`)
+    round trip(`2/room,17["msg","hi"]`)
+    round trip(`31[{"ok":true}]`)
+    round trip(`4{"message":"Not authorized"}`)
+    round trip(`51-["blob",{"_placeholder":true,"num":0}]`)
+    round trip(`62-/admin,9[{"_placeholder":true,"num":0},{"_placeholder":true,"num":1}]`)
+
+    println "-- malformed"
+    println socketio.DecodePacket("").ok
+    println socketio.DecodePacket("9").ok
+    println socketio.DecodePacket("5x-[]").ok
+
+    println "-- engine payloads"
+    println socketio.EngineKind("2probe"), socketio.EngineBody("2probe")
+    println socketio.EngineKind(`4{"a":1}`), socketio.EngineBody(`4{"a":1}`)
+    println socketio.EncodeEngine(socketio.EIO_MESSAGE, "40")
+    mut joined := Vector {} as Vector<str>
+    defer joined.free()
+    joined.push("40")
+    joined.push(`42["a"]`)
+    packed := socketio.JoinPayloads(joined)
+    mut back := socketio.SplitPayloads(packed)
+    defer back.free()
+    println back.len(), back.get(0), back.get(1)
+
+    println "-- json arrays"
+    mut parts := socketio.SplitJSONArray(`["a", 1, [2,3], {"k":"],"}, null, "x\"y"]`)
+    defer parts.free()
+    println parts.len()
+    each x in parts:
+        println "  " + x
+    end
+    println socketio.ItemCount("[]"), socketio.ItemCount("not an array")
+
+    println "-- reading arguments"
+    row := `["hi there", 42, 3.5, true, {"k":[1,2]}, null]`
+    println socketio.ItemStr(row, 0)
+    println socketio.ItemInt(row, 1)
+    println socketio.ItemFloat(row, 2)
+    println socketio.ItemBool(row, 3)
+    println socketio.Item(row, 4)
+    println socketio.ItemStr(row, 9) == ""
+
+    println "-- building arguments"
+    mut a := socketio.NewArgs()
+    socketio.AddStr(a, `quote " and \ backslash`)
+    socketio.AddInt(a, 0 - 7)
+    socketio.AddBool(a, false)
+    socketio.AddNull(a)
+    socketio.AddJSON(a, `{"nested":[1,2]}`)
+    println socketio.ArgsCount(a)
+    println socketio.ArgsJSON(a, "evt")
+    socketio.ArgsFree(a)
+
+    println "-- placeholders"
+    println socketio.Placeholder(3)
+    println socketio.PlaceholderNum(socketio.Placeholder(3))
+    println socketio.PlaceholderNum(`{"num":12,"_placeholder":true}`)
+    println socketio.PlaceholderNum(`{"num":1}`)
+    println socketio.PlaceholderNum(`"plain"`)
+
+    println "-- bytes"
+    buf := mem.Allocate(5 as u64)
+    bp := buf as i8*
+    bp[0] = 72 as i8
+    bp[1] = 0 as i8
+    bp[2] = 105 as i8
+    bp[3] = 255 as i8
+    bp[4] = 1 as i8
+    mut b := socketio.NewBytes(buf, 5)
+    mem.Free(buf)
+    println b.len, socketio.BytesAt(b, 0), socketio.BytesAt(b, 1), socketio.BytesAt(b, 3), socketio.BytesAt(b, 9)
+    println socketio.BytesToBase64(b)
+    println "truncated at NUL:", socketio.BytesToStr(b)
+    socketio.BytesFree(b)
+    println b.len
+end

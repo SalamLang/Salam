@@ -1,0 +1,208 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/matrix: Cholesky, LDL^T, and the inertia of a symmetric matrix.
+
+import matrix
+import testing
+
+// The textbook example: [[4,12,-16],[12,37,-43],[-16,-43,98]], whose
+// Cholesky factor has the integer entries [[2,0,0],[6,1,0],[-8,5,3]].
+func spd3(): matrix.Matrix:
+    mut m := matrix.Zeros(3, 3)
+    m.set(0, 0, 4.0)
+    m.set(0, 1, 12.0)
+    m.set(0, 2, 0.0 - 16.0)
+    m.set(1, 0, 12.0)
+    m.set(1, 1, 37.0)
+    m.set(1, 2, 0.0 - 43.0)
+    m.set(2, 0, 0.0 - 16.0)
+    m.set(2, 1, 0.0 - 43.0)
+    m.set(2, 2, 98.0)
+    ret m
+end
+
+func check_cholesky(eps: f64):
+    mut a := spd3()
+    mut l := matrix.Cholesky(a)
+    testing.AssertFalse(l.is_empty())
+    testing.AssertEqFloat(l.at(0, 0), 2.0, eps)
+    testing.AssertEqFloat(l.at(1, 0), 6.0, eps)
+    testing.AssertEqFloat(l.at(1, 1), 1.0, eps)
+    testing.AssertEqFloat(l.at(2, 0), 0.0 - 8.0, eps)
+    testing.AssertEqFloat(l.at(2, 1), 5.0, eps)
+    testing.AssertEqFloat(l.at(2, 2), 3.0, eps)
+    // The upper triangle is left as zero
+    testing.AssertEqFloat(l.at(0, 2), 0.0, eps)
+    testing.AssertTrue(matrix.IsLowerTriangular(l, eps))
+
+    // L L^T reproduces A
+    mut back := matrix.MulTranspose(l, l)
+    testing.AssertTrue(matrix.AllClose(back, a, 0.000000001))
+
+    // A matrix that is not positive definite has no factor, and that failure
+    // is itself the positive-definiteness test.
+    mut indef := matrix.Zeros(2, 2)
+    indef.set(0, 0, 1.0)
+    indef.set(0, 1, 2.0)
+    indef.set(1, 0, 2.0)
+    indef.set(1, 1, 1.0)
+    mut none := matrix.Cholesky(indef)
+    testing.AssertTrue(none.is_empty())
+    testing.AssertFalse(matrix.IsPositiveDefinite(indef, 0.000000001))
+    testing.AssertTrue(matrix.IsPositiveDefinite(a, 0.000000001))
+
+    defer a.free()
+    defer l.free()
+    defer back.free()
+    defer indef.free()
+    defer none.free()
+end
+
+func check_spd_solve(eps: f64):
+    mut a := spd3()
+    mut b := matrix.Zeros(3, 1)
+    b.set(0, 0, 1.0)
+    b.set(1, 0, 2.0)
+    b.set(2, 0, 3.0)
+
+    mut x := matrix.SolveSPD(a, b)
+    testing.AssertFalse(x.is_empty())
+
+    // It must agree with the general solver
+    mut xg := matrix.Solve(a, b)
+    testing.AssertTrue(matrix.AllClose(x, xg, 0.000001))
+
+    // And satisfy the system
+    mut r := matrix.Residual(a, x, b)
+    testing.AssertEqFloat(matrix.NormFrobenius(r), 0.0, 0.000001)
+
+    // The Cholesky inverse matches the general one
+    mut inv := matrix.InverseSPD(a)
+    mut invg := matrix.Inverse(a)
+    testing.AssertTrue(matrix.AllClose(inv, invg, 0.000001))
+
+    // det via Cholesky: 4*37*98 style expansion gives 36
+    testing.AssertEqFloat(matrix.DetSPD(a), 36.0, 0.000001)
+    testing.AssertEqFloat(matrix.Det(a), 36.0, 0.000001)
+
+    // log det is the summed form of the same number
+    logd := matrix.LogDetSPD(a)
+    testing.AssertEqFloat(logd, 3.5835189384561099, 0.000001)
+
+    // A matrix that is not positive definite is refused
+    mut indef := matrix.Zeros(2, 2)
+    indef.set(0, 0, 0.0 - 1.0)
+    indef.set(1, 1, 1.0)
+    mut bad := matrix.SolveSPD(indef, b)
+    testing.AssertTrue(bad.is_empty())
+    testing.AssertEqFloat(matrix.DetSPD(indef), 0.0, eps)
+
+    defer a.free()
+    defer b.free()
+    defer x.free()
+    defer xg.free()
+    defer r.free()
+    defer inv.free()
+    defer invg.free()
+    defer indef.free()
+    defer bad.free()
+end
+
+func check_ldl(eps: f64):
+    mut a := spd3()
+    mut f := matrix.LDLDecompose(a)
+    testing.AssertTrue(f.ok)
+    testing.AssertEqInt(f.n, 3)
+
+    // L is unit lower triangular
+    testing.AssertEqFloat(f.l.at(0, 0), 1.0, eps)
+    testing.AssertEqFloat(f.l.at(1, 1), 1.0, eps)
+    testing.AssertEqFloat(f.l.at(2, 2), 1.0, eps)
+
+    // For a positive definite matrix every D entry is positive
+    testing.AssertTrue(f.d.at(0, 0) > 0.0)
+    testing.AssertTrue(f.d.at(0, 1) > 0.0)
+    testing.AssertTrue(f.d.at(0, 2) > 0.0)
+
+    // L D L^T reproduces A
+    mut d := matrix.Diag(f.d.a)
+    mut ld := matrix.MatMul(f.l, d)
+    mut back := matrix.MulTranspose(ld, f.l)
+    testing.AssertTrue(matrix.AllClose(back, a, 0.000001))
+
+    // And solving through it agrees with the general solver
+    mut b := matrix.Zeros(3, 1)
+    b.set(0, 0, 1.0)
+    b.set(1, 0, 2.0)
+    b.set(2, 0, 3.0)
+    mut x := matrix.LDLSolve(f, b)
+    mut xg := matrix.Solve(a, b)
+    testing.AssertTrue(matrix.AllClose(x, xg, 0.000001))
+
+    defer a.free()
+    defer f.free()
+    defer d.free()
+    defer ld.free()
+    defer back.free()
+    defer b.free()
+    defer x.free()
+    defer xg.free()
+end
+
+func check_inertia(eps: f64):
+    // Positive definite: three positive eigenvalues, none negative
+    mut a := spd3()
+    mut ia := matrix.Inertia(a)
+    testing.AssertEqFloat(ia.at(0, 0), 3.0, eps)
+    testing.AssertEqFloat(ia.at(0, 1), 0.0, eps)
+    testing.AssertEqFloat(ia.at(0, 2), 0.0, eps)
+
+    // diag(1, -1, 1): two positive, one negative, without any eigenvalue
+    // ever being computed.
+    mut mixed := matrix.Eye(3)
+    mixed.set(1, 1, 0.0 - 1.0)
+    mut im := matrix.Inertia(mixed)
+    testing.AssertEqFloat(im.at(0, 0), 2.0, eps)
+    testing.AssertEqFloat(im.at(0, 1), 1.0, eps)
+    testing.AssertEqFloat(im.at(0, 2), 0.0, eps)
+
+    // The signs agree with what the symmetric eigensolver reports
+    mut ev := matrix.EigValsSym(mixed)
+    mut pos := 0
+    mut neg := 0
+    repeat ev.count() with k:
+        if ev.a.get(k) > 0.0: pos += 1 end
+        if ev.a.get(k) < 0.0: neg += 1 end
+    end
+    testing.AssertEqInt(pos, 2)
+    testing.AssertEqInt(neg, 1)
+
+    defer a.free()
+    defer ia.free()
+    defer mixed.free()
+    defer im.free()
+    defer ev.free()
+end
+
+func main:
+    eps := 0.000000001
+    check_cholesky(eps)
+    check_spd_solve(eps)
+    check_ldl(eps)
+    check_inertia(eps)
+    ret testing.Summary()
+end

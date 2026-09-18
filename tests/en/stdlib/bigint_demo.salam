@@ -1,0 +1,331 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import bigint
+import testing
+import mem
+import os
+
+// Asserts that x prints as `want`, then frees x -- which keeps each case below
+// to one line instead of three.
+func eq(x: bigint.Int, want: str):
+    mut v := x
+    testing.AssertEqStr(bigint.ToStr(v), want)
+    v.free()
+end
+
+func test_parse_and_print():
+    mut ok := false
+    mut a := bigint.Parse("123456789012345678901234567890", ok)
+    testing.AssertTrue(ok)
+    testing.AssertEqStr(bigint.ToStr(a), "123456789012345678901234567890")
+    // A value far past what any machine integer holds still round trips.
+    testing.AssertEqInt(a.bit_len(), 97)
+    a.free()
+
+    // Group separators, an explicit sign, and Persian digits are all accepted.
+    eq(bigint.ParseOr("1_000_000", 10), "1000000")
+    eq(bigint.ParseOr("+42", 10), "42")
+    eq(bigint.ParseOr("۱۳۹۹", 10), "1399")
+    eq(bigint.ParseOr("٧٨٦", 10), "786")
+
+    // Base 0 reads the prefix; an explicit base ignores prefixes.
+    eq(bigint.ParseOr("0xdead_beef", 0), "3735928559")
+    eq(bigint.ParseOr("0b1011", 0), "11")
+    eq(bigint.ParseOr("0o755", 0), "493")
+    eq(bigint.ParseOr("zz", 36), "1295")
+
+    // Malformed input reports failure rather than a partial number.
+    mut bad := false
+    mut junk := bigint.Parse("12x34", bad)
+    testing.AssertFalse(bad)
+    testing.AssertTrue(junk.is_zero())
+    junk.free()
+
+    mut empty := false
+    mut e := bigint.Parse("-", empty)
+    testing.AssertFalse(empty)
+    e.free()
+end
+
+func test_arithmetic():
+    mut a := bigint.ParseOr("99999999999999999999", 10)
+    mut b := bigint.ParseOr("1", 10)
+    eq(bigint.Add(a, b), "100000000000000000000")
+    eq(bigint.Sub(a, b), "99999999999999999998")
+    eq(bigint.Mul(a, a), "9999999999999999999800000000000000000001")
+    eq(bigint.Neg(a), "-99999999999999999999")
+    eq(bigint.Abs(bigint.Neg(a)), "99999999999999999999")
+    a.free()
+    b.free()
+
+    // 2^256, and one less than it.
+    mut one := bigint.One()
+    mut p := bigint.Shl(one, 256)
+    testing.AssertEqInt(p.bit_len(), 257)
+    eq(bigint.Sub(p, one), "115792089237316195423570985008687907853269984665640564039457584007913129639935")
+    p.free()
+    one.free()
+
+    eq(bigint.Factorial(25), "15511210043330985984000000")
+    eq(bigint.Pow(bigint.FromInt(3 as i64), 40), "12157665459056928801")
+    eq(bigint.Pow10(30), "1000000000000000000000000000000")
+end
+
+// The two division conventions differ exactly when the remainder is nonzero
+// and the operand signs disagree, and this is the case that shows it.
+func test_division_conventions():
+    mut a := bigint.FromInt(0 - 7 as i64)
+    mut b := bigint.FromInt(2 as i64)
+
+    // Truncated: toward zero, remainder signed like the dividend.
+    eq(bigint.Div(a, b), "-3")
+    eq(bigint.Rem(a, b), "-1")
+
+    // Floored: toward minus infinity, remainder signed like the divisor.
+    eq(bigint.FloorDiv(a, b), "-4")
+    eq(bigint.FloorMod(a, b), "1")
+
+    // Mod is always in [0, |m|), whatever the sign of the modulus.
+    eq(bigint.Mod(a, b), "1")
+    eq(bigint.Mod(a, bigint.FromInt(0 - 2 as i64)), "1")
+
+    // Both identities hold: a == q*b + r for each convention.
+    mut q := bigint.Int {}
+    mut r := bigint.Int {}
+    testing.AssertTrue(bigint.DivMod(a, b, q, r))
+    mut back := bigint.Add(bigint.Mul(q, b), r)
+    testing.AssertTrue(bigint.Equals(back, a))
+    back.free()
+    q.free()
+    r.free()
+
+    // Dividing by zero reports false instead of trapping.
+    mut z := bigint.Zero()
+    mut q2 := bigint.Int {}
+    mut r2 := bigint.Int {}
+    testing.AssertFalse(bigint.DivMod(a, z, q2, r2))
+    q2.free()
+    r2.free()
+    z.free()
+
+    a.free()
+    b.free()
+
+    // A quotient that needs the full long-division path, not a shortcut.
+    mut big := bigint.ParseOr("100000000000000000000000000000000000000001", 10)
+    mut div := bigint.ParseOr("123456789012345678901", 10)
+    eq(bigint.Div(big, div), "810000007290000066340")
+    eq(bigint.Rem(big, div), "66617732697661707661")
+    big.free()
+    div.free()
+end
+
+// Shr is floor division by a power of two, so it agrees with FloorDiv rather
+// than drifting toward zero on negatives.
+func test_shifts():
+    mut n := bigint.FromInt(0 - 1 as i64)
+    eq(bigint.Shr(n, 4), "-1")
+    n.free()
+
+    mut m := bigint.FromInt(0 - 17 as i64)
+    eq(bigint.Shr(m, 1), "-9")
+    eq(bigint.Shl(m, 3), "-136")
+    m.free()
+
+    mut p := bigint.FromInt(17 as i64)
+    eq(bigint.Shr(p, 1), "8")
+    p.free()
+end
+
+// The bitwise operators take the two's-complement view, where a negative
+// number reads as though it had infinitely many leading 1 bits.
+func test_bitwise():
+    mut minus1 := bigint.FromInt(0 - 1 as i64)
+    mut x := bigint.ParseOr("123456789123456789", 10)
+
+    // And with all-ones is the identity; Or with all-ones is all-ones.
+    eq(bigint.And(minus1, x), "123456789123456789")
+    eq(bigint.Or(minus1, x), "-1")
+    eq(bigint.Xor(x, x), "0")
+
+    // Not is exactly -x-1.
+    eq(bigint.Not(x), "-123456789123456790")
+    eq(bigint.Not(bigint.Not(x)), "123456789123456789")
+
+    // AndNot clears bits without materializing an infinitely wide ~b.
+    mut mask := bigint.FromInt(0xFF as i64)
+    eq(bigint.AndNot(bigint.FromInt(0x1234 as i64), mask), "4608")
+    eq(bigint.And(bigint.FromInt(0x1234 as i64), mask), "52")
+    mask.free()
+
+    testing.AssertEqInt(bigint.PopCount(bigint.FromInt(255 as i64)), 8)
+    testing.AssertEqInt(bigint.TrailingZeros(bigint.FromInt(48 as i64)), 4)
+    testing.AssertEqInt(bigint.TrailingZeros(bigint.Zero()), 0 - 1)
+
+    minus1.free()
+    x.free()
+end
+
+func test_number_theory():
+    mut a := bigint.ParseOr("461952", 10)
+    mut b := bigint.ParseOr("116298", 10)
+    eq(bigint.Gcd(a, b), "18")
+    eq(bigint.Lcm(a, b), "2984671872")
+
+    // Bezout: a*x + b*y == gcd(a, b), exactly.
+    mut x := bigint.Int {}
+    mut y := bigint.Int {}
+    mut g := bigint.ExtGcd(a, b, x, y)
+    mut lhs := bigint.Add(bigint.Mul(a, x), bigint.Mul(b, y))
+    testing.AssertTrue(bigint.Equals(lhs, g))
+    lhs.free()
+    g.free()
+    x.free()
+    y.free()
+    a.free()
+    b.free()
+
+    // A modular inverse, and the pair that has none.
+    mut m := bigint.FromInt(3120 as i64)
+    mut e := bigint.FromInt(17 as i64)
+    mut ok := false
+    mut d := bigint.ModInverse(e, m, ok)
+    testing.AssertTrue(ok)
+    testing.AssertEqStr(bigint.ToStr(d), "2753")
+    d.free()
+
+    mut noinv := false
+    mut none := bigint.ModInverse(bigint.FromInt(12 as i64), m, noinv)
+    testing.AssertFalse(noinv)
+    none.free()
+    e.free()
+    m.free()
+
+    // Textbook RSA on small keys: sign then verify, which is the operation
+    // std/tls and std/ssh each reimplemented privately.
+    mut n := bigint.FromInt(3233 as i64)
+    mut pubexp := bigint.FromInt(17 as i64)
+    mut privexp := bigint.FromInt(413 as i64)
+    mut msg := bigint.FromInt(65 as i64)
+    mut cipher := bigint.ModExp(msg, pubexp, n)
+    testing.AssertEqStr(bigint.ToStr(cipher), "2790")
+    mut back := bigint.ModExp(cipher, privexp, n)
+    testing.AssertTrue(bigint.Equals(back, msg))
+    back.free()
+    cipher.free()
+    msg.free()
+    privexp.free()
+    pubexp.free()
+    n.free()
+
+    // Integer square root floors, and is exact on perfect squares.
+    eq(
+        bigint.Sqrt(bigint.ParseOr("152415787532388367501905199875019052100", 10)), "12345678901234567890"
+    )
+    eq(bigint.Sqrt(bigint.FromInt(15 as i64)), "3")
+    eq(bigint.Sqrt(bigint.FromInt(16 as i64)), "4")
+end
+
+func test_conversions():
+    // i64 conversion reports overflow rather than wrapping.
+    mut ok := true
+    mut fits := bigint.ParseOr("9223372036854775807", 10)
+    testing.AssertTrue(bigint.ToInt(fits, ok) == 9223372036854775807 as i64)
+    testing.AssertTrue(ok)
+    fits.free()
+
+    mut over := bigint.ParseOr("9223372036854775808", 10)
+    mut oflow := true
+    _ignored := bigint.ToInt(over, oflow)
+    testing.AssertFalse(oflow)
+    over.free()
+
+    // The most negative i64 has no positive counterpart and still converts.
+    mut lo := bigint.ParseOr("-9223372036854775808", 10)
+    mut lok := false
+    testing.AssertTrue(bigint.ToInt(lo, lok) == 0 - 9223372036854775807 as i64 - (1 as i64))
+    testing.AssertTrue(lok)
+    lo.free()
+
+    // Other bases, lowercase and unprefixed.
+    mut v := bigint.ParseOr("255", 10)
+    testing.AssertEqStr(bigint.ToHex(v), "ff")
+    testing.AssertEqStr(bigint.ToStrBase(v, 2), "11111111")
+    testing.AssertEqStr(bigint.ToStrBase(v, 36), "73")
+    v.free()
+
+    // Big-endian bytes, the form integers take in DER and on the TLS wire.
+    mut num := bigint.ParseOr("0x0102030405060708090a", 0)
+    n := bigint.ByteLen(num)
+    testing.AssertEqInt(n, 10)
+    buf := mem.Allocate(n as u64)
+    testing.AssertTrue(bigint.ToBytes(num, buf, n))
+    mut rt := bigint.FromBytes(buf, n)
+    testing.AssertTrue(bigint.Equals(rt, num))
+    // A buffer that is too small is refused, not silently truncated.
+    testing.AssertFalse(bigint.ToBytes(num, buf, n - 1))
+    mem.Free(buf)
+    rt.free()
+    num.free()
+end
+
+func test_comparison_and_inplace():
+    mut a := bigint.ParseOr("-500", 10)
+    mut b := bigint.ParseOr("7", 10)
+    testing.AssertTrue(bigint.Less(a, b))
+    testing.AssertFalse(bigint.Greater(a, b))
+    testing.AssertEqInt(bigint.Cmp(a, b), 0 - 1)
+    // CmpAbs ignores both signs, so it orders these the other way.
+    testing.AssertEqInt(bigint.CmpAbs(a, b), 1)
+    testing.AssertEqInt(bigint.Sign(a), 0 - 1)
+    testing.AssertEqInt(bigint.Sign(bigint.Zero()), 0)
+    testing.AssertTrue(bigint.IsEven(a))
+    testing.AssertTrue(bigint.IsOdd(b))
+    eq(bigint.Min(a, b), "-500")
+    eq(bigint.Max(a, b), "7")
+
+    // The in-place forms free the old value for you, so a loop needs no
+    // temporary of its own.
+    mut acc := bigint.One()
+    repeat 1 to 20 with i:
+        bigint.MulIntBy(acc, i as i64)
+    end
+    testing.AssertEqStr(bigint.ToStr(acc), "2432902008176640000")
+    bigint.AddTo(acc, b)
+    testing.AssertEqStr(bigint.ToStr(acc), "2432902008176640007")
+    bigint.SubFrom(acc, b)
+    bigint.SetInt(acc, 6 as i64)
+    bigint.MulBy(acc, b)
+    testing.AssertEqStr(bigint.ToStr(acc), "42")
+    bigint.NegateIn(acc)
+    testing.AssertEqStr(bigint.ToStr(acc), "-42")
+    acc.free()
+    a.free()
+    b.free()
+end
+
+func main:
+    test_parse_and_print()
+    test_arithmetic()
+    test_division_conventions()
+    test_shifts()
+    test_bitwise()
+    test_number_theory()
+    test_conversions()
+    test_comparison_and_inplace()
+    os.Exit(testing.Summary())
+end

@@ -29,8 +29,8 @@ Salam is a general-purpose and systems programming language designed for efficie
 [![PR - Pull Request Labeler](https://github.com/SalamLang/Salam/actions/workflows/pr-labeler.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/pr-labeler.yml)
 [![Dependabot Updates](https://github.com/SalamLang/Salam/actions/workflows/dependabot/dependabot-updates/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/dependabot/dependabot-updates)
 [![GitHub Pages Build Deployment](https://github.com/SalamLang/Salam/actions/workflows/pages/pages-build-deployment/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/pages/pages-build-deployment)
-[![VS Code Marketplace Version](https://vsmarketplacebadges.dev/version/salamlanguage.salam-programming-language.svg)](https://marketplace.visualstudio.com/items?itemName=salamlanguage.salam-programming-language)
-[![VS Code Marketplace Installs](https://vsmarketplacebadges.dev/installs/salamlanguage.salam-programming-language.svg)](https://marketplace.visualstudio.com/items?itemName=salamlanguage.salam-programming-language)
+[![VS Code Marketplace Version](https://vsmarketplacebadges.dev/version/salamlanguage.salam-programming-language.svg?label=VS%20Code%20Marketplace%20Version)](https://marketplace.visualstudio.com/items?itemName=salamlanguage.salam-programming-language)
+[![VS Code Marketplace Installs](https://vsmarketplacebadges.dev/installs/salamlanguage.salam-programming-language.svg?label=VS%20Code%20Marketplace%20Installs)](https://marketplace.visualstudio.com/items?itemName=salamlanguage.salam-programming-language)
 
 ---
 
@@ -76,10 +76,26 @@ inclusive environment for building high-performance software.
 { curl -fsSL https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.sh || wget -qO- https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.sh; } | sh && export PATH="$HOME/.salam/bin:$PATH"
 ```
 
-**Windows:**
+Options go after `sh -s --`, for example `... | sh -s -- --dir ./bin --version 0.3.5`.
+The shell installer takes `--dir DIR`, `--version X.Y.Z`, `--platform NAME`,
+`--no-modify-path` and `--help`; run it with `--help` for the full list.
 
-```bash
-powershell -NoProfile -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; (New-Object Net.WebClient).DownloadFile('https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.bat','%TEMP%\salam-install.bat')" && call "%TEMP%\salam-install.bat" && set "PATH=%USERPROFILE%\.salam\bin;%PATH%"
+**Windows** (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.ps1 | iex
+```
+
+To pass options, wrap the fetched script instead of piping it:
+
+```powershell
+iex "& { $(irm https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.ps1) } --dir C:\Tools\Salam"
+```
+
+Or from `cmd.exe`:
+
+```bat
+curl -fsSLo "%TEMP%\salam-install.bat" https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.bat && "%TEMP%\salam-install.bat"
 ```
 
 ## 🧩 Editor Support
@@ -88,7 +104,7 @@ powershell -NoProfile -Command "[Net.ServicePointManager]::SecurityProtocol = [N
 
 Install the official Salam Language extension from the [Visual Studio Code Marketplace](https://marketplace.visualstudio.com/) for syntax highlighting and language support.
 
-[![Install on VS Code](https://vsmarketplacebadges.dev/version/salamlanguage.salam-programming-language.svg)](https://marketplace.visualstudio.com/items?itemName=salamlanguage.salam-programming-language)
+[![Install on VS Code](https://vsmarketplacebadges.dev/version/salamlanguage.salam-programming-language.svg?label=Install%20on%20VS%20Code)](https://marketplace.visualstudio.com/items?itemName=salamlanguage.salam-programming-language)
 
 ## 🛠️ The Compiler (`salam`)
 
@@ -119,7 +135,8 @@ compiled programs are self-contained and link only `-lm` (`-lmsvcrt` with tcc).
 
 ```sh
 # general language -> native executable
-salam build app.salam --output=app.exe         # then ./app.exe
+salam build app.salam                          # -> app (app.exe on Windows)
+salam build app.salam --output=myapp           # then ./myapp
 salam cli build app.salam --keep-c             # optional 'cli' prefix; keep generated C
 salam obj app.salam                            # compile to .o only
 
@@ -163,7 +180,8 @@ architectures using the **LLVM backend**. Pass a full LLVM target triple with
 through LLVM (`clang`/`llc`) instead of the default C backend, so `--cc` and
 `--keep-c` no longer apply. The output name follows the target's conventions
 (`.exe` for Windows, `.obj` for MSVC objects, none for ELF), and `--output`
-overrides it as usual.
+overrides it as usual - except that a Windows target still gets `.exe`
+appended to a name that lacks it, so the binary stays launchable there.
 
 ```sh
 # Windows executable from Linux (MinGW target)

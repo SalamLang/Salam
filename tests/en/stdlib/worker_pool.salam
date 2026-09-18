@@ -1,0 +1,125 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// A worker pool: four threads share one list of jobs and each takes the next
+// one that is free.
+//
+// This is the pattern to reach for when work has to be split and `spawn`
+// cannot pass an argument. The shared cursor is the only contended thing:
+//
+//     lock, take an index, advance the cursor, unlock, then work
+//
+// The work itself happens OUTSIDE the lock, writing to `results[i]` - a slot
+// no other thread can be holding, because the cursor handed it out exactly
+// once. Holding the lock across the work instead would be correct and
+// pointless: four threads taking turns is one thread with extra steps.
+//
+// WHY THE OUTPUT IS DETERMINISTIC
+//
+// Which worker gets which job is up to the scheduler and changes every run.
+// The set of jobs does not: every index is handed out exactly once, so the
+// sum over the results is fixed. Anything a concurrency test prints has to
+// be a property of the whole, never of the interleaving.
+
+import mem
+import sync
+
+const JOBS := 100
+const WORKERS := 4
+// A slot that has not been written yet. Squares are never negative, so this
+// cannot collide with a real result.
+const UNSET := 0 - 1
+
+mut cursor := 0
+mut lock := sync.Mutex {}
+mut wg := sync.WaitGroup {}
+mut results := null as i64*
+// How many jobs each worker actually took. The split varies per run; the
+// total does not.
+mut taken := 0
+
+// Take the next index, or -1 when there is no work left.
+func next_job(): int:
+    sync.Lock(lock)
+    mut mine := 0 - 1
+    if cursor < JOBS:
+        mine = cursor
+        cursor = cursor + 1
+        taken = taken + 1
+    end
+    sync.Unlock(lock)
+    ret mine
+end
+
+func worker():
+    until true:
+        job := next_job()
+        if job < 0: break end
+        // Outside the lock: this slot belongs to this thread now.
+        results[job] = (job * job) as i64
+    end
+    sync.Done(wg)
+end
+
+func main:
+    lock = sync.NewMutex()
+    wg = sync.NewWaitGroup()
+    results = mem.Allocate((JOBS * 8) as u64) as i64*
+    repeat JOBS with i:
+        results[i] = UNSET as i64
+    end
+
+    sync.Add(wg, WORKERS as i64)
+    t1 := spawn(worker)
+    t2 := spawn(worker)
+    t3 := spawn(worker)
+    t4 := spawn(worker)
+    sync.Wait(wg)
+    join(t1)
+    join(t2)
+    join(t3)
+    join(t4)
+
+    // Every job handed out exactly once.
+    println "jobs taken    :", taken, "of", JOBS
+    println "cursor        :", cursor
+
+    // Every slot written, and written with the right answer.
+    mut unwritten := 0
+    mut wrong := 0
+    mut sum := 0 as i64
+    repeat JOBS with i:
+        v := results[i]
+        if v == UNSET as i64:
+            unwritten = unwritten + 1
+        else v != (i * i) as i64:
+            wrong = wrong + 1
+        end
+        sum = sum + v
+    end
+    println "unwritten     :", unwritten
+    println "wrong values  :", wrong
+    // 0^2 + 1^2 + ... + 99^2
+    println "sum of squares:", sum
+
+    // An exhausted pool hands out nothing.
+    println "after drain   :", next_job()
+
+    mem.Free(results as void*)
+    sync.DestroyWaitGroup(wg)
+    sync.Destroy(lock)
+    ret 0
+end

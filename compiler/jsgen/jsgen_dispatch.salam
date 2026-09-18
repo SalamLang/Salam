@@ -22,7 +22,7 @@ func jsg_match_arm_cond(
         cnt := armv.list.len()
         mut i := 0
         until i < cnt:
-            pat := at.Get(a, armv.list.get(i)[0])
+            pat := at.Get(a, armv.list.get(i))
             if i > 0:
                 str.BufAppend(b, " || ")
             end
@@ -70,7 +70,7 @@ func jsg_stmt_has_break_continue(a &: at.Ast, id: int): bool:
         cnt := n.list.len()
         mut i := 0
         until i < cnt:
-            arm := at.Get(a, n.list.get(i)[0])
+            arm := at.Get(a, n.list.get(i))
             if jsg_list_has_break_continue(a, arm.b):
                 ret true
             end
@@ -91,7 +91,7 @@ func jsg_list_has_break_continue(a &: at.Ast, block: int): bool:
     cnt := bv.list.len()
     mut i := 0
     until i < cnt:
-        if jsg_stmt_has_break_continue(a, bv.list.get(i)[0]):
+        if jsg_stmt_has_break_continue(a, bv.list.get(i)):
             ret true
         end
         i += 1
@@ -123,7 +123,7 @@ func jsg_match_expr(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int): str:
         cnt := n.list.len()
         mut i := 0
         until i < cnt:
-            arm := n.list.get(i)[0]
+            arm := n.list.get(i)
             cond := jsg_match_arm_cond(g, s, a, arm, subj_var, subj_ts)
             cg_line(g, (i > 0 ? "} else " : "") + "if (" + cond + ") {")
             g.indent += 1
@@ -150,7 +150,7 @@ func jsg_match_expr(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int): str:
     cnt2 := n.list.len()
     mut i2 := 0
     until i2 < cnt2:
-        arm2 := n.list.get(i2)[0]
+        arm2 := n.list.get(i2)
         cond2 := jsg_match_arm_cond(g, s, a, arm2, subj_var, subj_ts2)
         cg_line(g, (i2 > 0 ? "} else " : "") + "if (" + cond2 + ") {")
         g.indent += 1
@@ -172,6 +172,20 @@ func jsg_match_expr(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int): str:
         ret "(() => {" + body + "})()"
     end
     ret "(() => {\n" + body + "})()"
+end
+
+// An enum member's JS value, in its backing type. JS strings/numbers are
+// value types compared by content with ===, so unlike C/LLVM no separate
+// comparison codegen is needed once the member itself is right.
+func jsg_enum_member_value(s &: sm.Sema, m: int): str:
+    mv := sm.SymAt(s, m)
+    if mv.enum_val_kind == tok.TV_FLOAT:
+        ret co.Format1("%.17g", co.ArgFloat(mv.enum_value_f))
+    end
+    if mv.enum_val_kind == tok.TV_STRING:
+        ret jsg_escape(mv.enum_value_str)
+    end
+    ret co.I64Toa(mv.enum_value)
 end
 
 func jsg_expr_p(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, minprec: int): str:
@@ -209,6 +223,12 @@ func jsg_expr_p(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, minprec: int): str:
         ret "0"
     end
     if n.kind == at.AST_IDENTIFIER:
+        // A `&:` parameter is passed as a one-element box (see jsg_function
+        // and jsg_call_finish) - JS has no address-of for a primitive, so
+        // every read of it inside the function unwraps the box instead.
+        if n.is_ref && local_known(g, n.name):
+            ret jsg_local_ref(g, n.name) + "[0]"
+        end
         if local_known(g, n.name):
             ret jsg_local_ref(g, n.name)
         end
@@ -235,7 +255,7 @@ func jsg_expr_p(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, minprec: int): str:
                 ret jsg_global_ref(g, gp1, n.name)
             end
             if syv.kind == sm.SYM_FUNC && syv.overloads.len() > 0:
-                sig := syv.overloads.get(0)[0]
+                sig := syv.overloads.get(0)
                 if sig != 0:
                     mut d_ext := false
                     mut d_syn := false
@@ -370,24 +390,55 @@ func jsg_expr_p(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, minprec: int): str:
         ret jsg_wrap(sv3, JSP_UNARY, minprec)
     end
     if n.kind == at.AST_CAST:
-        if n.a != 0:
-            ak := at.KindOf(a, n.a)
-            if ak == at.AST_ARRAY_LIT || ak == at.AST_STRUCT_LIT:
-                ret jsg_expr_p(g, s, a, n.a, minprec)
-            end
-        end
         mut dts := ""
         if n.ty != 0 && str.Len(at.Get(a, n.ty).type_str) > 0:
             dts = at.Get(a, n.ty).type_str
         else str.Len(n.type_str) > 0:
             dts = n.type_str
         end
+        // A literal keeps its own shape through a cast - unless the cast is
+        // to a `dyn`, which wraps it (jsg_dyn_box) rather than retyping it.
+        if n.a != 0 && !str.StartsWith(dts, "dyn "):
+            ak := at.KindOf(a, n.a)
+            if ak == at.AST_ARRAY_LIT || ak == at.AST_STRUCT_LIT:
+                ret jsg_expr_p(g, s, a, n.a, minprec)
+            end
+        end
         sts := n.a != 0 ? at.Get(a, n.a).type_str : ""
         if str.Equals(dts, sts):
             ret jsg_expr_p(g, s, a, n.a, minprec)
         end
+        // A str seen through a byte pointer, and back (jsg_is_byte_ptr_ts).
+        if jsg_is_byte_ptr_ts(dts) && str.Equals(sts, "str"):
+            ret "__sal_bytes(" + jsg_expr_p(g, s, a, n.a, 0) + ")"
+        end
+        if str.Equals(dts, "str") && jsg_is_byte_ptr_ts(sts):
+            ret "__sal_str(" + jsg_expr_p(g, s, a, n.a, 0) + ")"
+        end
+        // `(p as u64) + k` cast back to a pointer: C's pointer arithmetic,
+        // which std uses to take a slice of a string's bytes. A Uint8Array
+        // says exactly that - a view starting k bytes in.
+        if jsg_is_byte_ptr_ts(dts):
+            pa := jsg_ptr_add(g, s, a, id)
+            if str.Len(pa) > 0:
+                ret pa
+            end
+        end
+        // A pointer to anything wider than a byte cannot ride on the byte
+        // array a pointer is here: indexing it would step one byte at a
+        // time and quietly answer wrong. std's SHA-1 builds its message
+        // schedule that way (`mem.Allocate(80 * 8) as i64*`), and a wrong
+        // hash is worse than a refusal.
+        if str.EndsWith(dts, "*") && !jsg_is_byte_ptr_ts(dts) && jsg_is_byte_ptr_ts(
+            sts
+        ):
+            ret jsg_unsupported(g, "pointer to " + str.Substr(dts, 0, str.Len(dts) - 1))
+        end
         if str.StartsWith(dts, "dyn "):
-            ret jsg_unsupported(g, "dyn cast")
+            if str.StartsWith(sts, "dyn "):
+                ret jsg_expr_p(g, s, a, n.a, minprec)
+            end
+            ret jsg_dyn_box(g, s, a, id, dts)
         end
         dn := str.Len(dts)
         if cg_is_int_typestr(dts) && dn > 0 && byte_at(dts, dn - 1) != 42 && !has_bracket(dts):
@@ -418,13 +469,23 @@ func jsg_expr_p(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, minprec: int): str:
         if n.a != 0:
             av := at.Get(a, n.a)
             if av.kind == at.AST_IDENTIFIER && !local_known(g, av.name):
-                e := sm.Lookup(s, s.global, av.name)
+                mut e := sm.Lookup(s, s.global, av.name)
+                // Same reasoning as codegen_expr.salam's matching fallback:
+                // a synthesized enum-derive body is checked against its
+                // enum's home scope (sema), so an unqualified enum name
+                // inside it can be package-scoped - this lookup only
+                // searches the global scope by default and needs the same
+                // cur_fn_home fallback used for free-function calls in such
+                // bodies.
+                if (e == 0 || sm.SymAt(s, e).kind != sm.SYM_ENUM) && g.cur_fn_home != 0:
+                    e = sm.Lookup(s, g.cur_fn_home, av.name)
+                end
                 if e != 0:
                     ev := sm.SymAt(s, e)
                     if ev.kind == sm.SYM_ENUM && ev.members != 0:
                         m := sm.LookupLocal(s, ev.members, n.name)
                         if m != 0:
-                            ret co.I64Toa(sm.SymAt(s, m).enum_value)
+                            ret jsg_enum_member_value(s, m)
                         end
                     end
                     if ev.kind == sm.SYM_PACKAGE && ev.members != 0:
@@ -447,13 +508,45 @@ func jsg_expr_p(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, minprec: int): str:
                     end
                 end
             end
+            // pkg.EnumName.Member: n.a is itself pkg.EnumName, an
+            // AST_MEMBER - see the matching fix in check_member/
+            // sema_expr.salam for why the parser always builds this as a
+            // plain left-associative chain. Without this, n.a falls to the
+            // generic fallback below, which has no idea "pkg.EnumName"
+            // denotes a type and emits it as a literal (and nonexistent) JS
+            // property access.
+            if av.kind == at.AST_MEMBER && av.a != 0 && at.KindOf(a, av.a) == at.AST_IDENTIFIER && !local_known(g, at.Get(a, av.a).name):
+                pkname2 := at.Get(a, av.a).name
+                mut pk4 := sm.Lookup(s, s.global, pkname2)
+                if pk4 == 0 && g.cur_fn_home != 0:
+                    pk4 = sm.Lookup(s, g.cur_fn_home, pkname2)
+                end
+                if pk4 != 0 && sm.SymAt(s, pk4).kind == sm.SYM_PACKAGE:
+                    e3 := sm.LookupLocal(s, sm.SymAt(s, pk4).members, av.name)
+                    if e3 != 0 && sm.SymAt(s, e3).kind == sm.SYM_ENUM && sm.SymAt(s, e3).members != 0:
+                        m4 := sm.LookupLocal(s, sm.SymAt(s, e3).members, n.name)
+                        if m4 != 0:
+                            ret jsg_enum_member_value(s, m4)
+                        end
+                    end
+                end
+            end
         end
         ret jsg_expr_p(g, s, a, n.a, JSP_MEMBER) + "." + cg_cident(n.name)
     end
     if n.kind == at.AST_INDEX:
+        // A Vector indexes like the array it is here, without going through
+        // the operator_index method the struct declares (jsg_call_vec).
+        if n.a != 0 && cg_is_vector_ts(s, at.Get(a, n.a).type_str):
+            ret jsg_expr_p(g, s, a, n.a, JSP_MEMBER) + "[" + jsg_expr_p(
+                g, s, a, n.b, 0
+            ) + "]"
+        end
         if n.a != 0:
             ats3 := at.Get(a, n.a).type_str
-            if str.Len(ats3) > 0:
+            // Not through a pointer - that indexes as a pointer (sema's
+            // AST_INDEX check draws the same line).
+            if str.Len(ats3) > 0 && !str.EndsWith(ats3, "*"):
                 mut sname3 := ""
                 ssym3 := cg_struct_of(s, ats3, sname3)
                 if ssym3 != 0:
@@ -510,7 +603,7 @@ func jsg_expr_p(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, minprec: int): str:
             if i > 0:
                 str.BufAppend(b, ", ")
             end
-            str.BufAppend(b, jsg_expr_p(g, s, a, n.list.get(i)[0], 0))
+            str.BufAppend(b, jsg_expr_p(g, s, a, n.list.get(i), 0))
             i += 1
         end
         str.BufAppendChar(b, 93) // ']'

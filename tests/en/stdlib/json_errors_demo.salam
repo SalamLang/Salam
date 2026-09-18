@@ -1,0 +1,186 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// What each JSON reader does with a document it will not accept.
+//
+// Both readers report through the same encerr.EncodingError - a kind, a
+// message and a byte position - but they disagree about what counts as an
+// error, and the difference is the whole reason both exist:
+//
+//   json.Unmarshal   knows the target type, so an unknown key, a missing
+//                    key, a repeated key and a value of the wrong type are
+//                    all failures it can name
+//   json.Decode      knows only JSON, so it rejects malformed syntax and
+//                    accepts every well-formed document, whatever is in it
+//
+// The encoder side is here too: a value with no JSON spelling (an infinity,
+// a NaN) has to become something valid rather than emit a token no parser
+// would read back.
+
+package main
+
+import encoding.json
+import encoding.value
+import encoding.encerr
+import testing
+import os
+import mem
+
+struct Point:
+    pub x: int = 0
+    pub y: int = 0
+end
+
+struct Floats:
+    pub a: f64 = 0.0
+    pub b: f64 = 0.0
+    pub c: f64 = 0.0
+end
+
+struct Chain:
+    pub id: int = 0
+    pub next: Chain* = null
+end
+
+// --- the typed reader rejects what does not fit the type ---
+
+func typed_rejections():
+    mut p := Point {}
+
+    // A key the struct does not declare.
+    mut e1 := encerr.NoError()
+    testing.AssertFalse(json.Unmarshal(`{"x":1,"y":2,"z":3}`, p, e1))
+    testing.AssertTrue(encerr.IsError(e1))
+    testing.AssertContains(e1.message, "unknown key")
+
+    // A key the struct declares and the document omits.
+    mut e2 := encerr.NoError()
+    testing.AssertFalse(json.Unmarshal(`{"x":1}`, p, e2))
+    testing.AssertTrue(encerr.IsError(e2))
+
+    // The same key twice.
+    mut e3 := encerr.NoError()
+    testing.AssertFalse(json.Unmarshal(`{"x":1,"x":2,"y":3}`, p, e3))
+    testing.AssertTrue(encerr.IsError(e3))
+
+    // A string where an int belongs.
+    mut e4 := encerr.NoError()
+    testing.AssertFalse(json.Unmarshal(`{"x":"1","y":2}`, p, e4))
+    testing.AssertTrue(encerr.IsError(e4))
+
+    // A complete document with something after it.
+    mut e5 := encerr.NoError()
+    testing.AssertFalse(json.Unmarshal(`{"x":1,"y":2} tail`, p, e5))
+    testing.AssertEqInt(e5.kind, encerr.KindTrailingData)
+
+    // Truncated input reports where it ran out.
+    mut e6 := encerr.NoError()
+    testing.AssertFalse(json.Unmarshal(`{"x":1,`, p, e6))
+    testing.AssertTrue(e6.position > 0)
+
+    // The lenient reader forgives the first three and keeps the defaults of
+    // whatever the document did not mention.
+    mut q := Point {}
+    mut e7 := encerr.NoError()
+    testing.AssertTrue(json.UnmarshalLenient(`{"x":1,"x":2,"z":9}`, q, e7))
+    testing.AssertEqInt(q.y, 0)
+
+    // It is lenient about keys, not about syntax.
+    mut e8 := encerr.NoError()
+    testing.AssertFalse(json.UnmarshalLenient(`{"x":`, q, e8))
+    testing.AssertTrue(encerr.IsError(e8))
+end
+
+// --- the dynamic reader rejects only malformed JSON ---
+
+func dynamic_rejections():
+    // Every one of these is a document the typed reader above turned down,
+    // and the tree reader takes all of them.
+    mut ok1 := encerr.NoError()
+    v1 := json.Decode(`{"x":1,"y":2,"z":3}`, ok1)
+    testing.AssertFalse(encerr.IsError(ok1))
+    testing.AssertEqInt(value.ObjectLen(v1), 3)
+    value.ValueFree(v1)
+
+    mut ok2 := encerr.NoError()
+    v2 := json.Decode(`{"x":"1"}`, ok2)
+    testing.AssertFalse(encerr.IsError(ok2))
+    testing.AssertTrue(value.IsString(value.ObjectGet(v2, "x")))
+    value.ValueFree(v2)
+
+    // Syntax it does turn down, with a position to point at.
+    mut b1 := encerr.NoError()
+    json.Decode(`{"a": }`, b1)
+    testing.AssertTrue(encerr.IsError(b1))
+    testing.AssertTrue(b1.position > 0)
+
+    mut b2 := encerr.NoError()
+    json.Decode(`[1,2`, b2)
+    testing.AssertTrue(encerr.IsError(b2))
+
+    mut b3 := encerr.NoError()
+    json.Decode(``, b3)
+    testing.AssertTrue(encerr.IsError(b3))
+
+    // Trailing data is the tree reader's business too.
+    mut b4 := encerr.NoError()
+    json.Decode(`{} {}`, b4)
+    testing.AssertEqInt(b4.kind, encerr.KindTrailingData)
+
+    // json.Valid is the same question without the tree.
+    testing.AssertTrue(json.Valid(`{"a":[1,2,{"b":null}]}`))
+    testing.AssertFalse(json.Valid(`{"a":}`))
+end
+
+// --- the encoder side ---
+
+func encoder_edges():
+    // JSON cannot spell an infinity or a NaN, so the derived encoder writes
+    // null rather than a token nothing can read back.
+    inf := 1.0 / 0.0
+    f := Floats { a = 0.0 - inf, b = inf, c = 0.5 }
+    text := json.Marshal(f)
+    testing.AssertEqStr(text, `{"a":null,"b":null,"c":0.5}`)
+    testing.AssertTrue(json.Valid(text))
+
+    // A null pointer is null; a live one is the pointee, recursively.
+    testing.AssertEqStr(json.Marshal(Chain { id = 3 }), `{"id":3,"next":null}`)
+    cell := mem.Allocate(64 as u64)
+    defer mem.Free(cell)
+    tail := cell as Chain*
+    tail[0] = Chain { id = 2, next = null }
+    head := Chain { id = 1, next = tail }
+    testing.AssertEqStr(json.Marshal(head), `{"id":1,"next":{"id":2,"next":null}}`)
+
+    // Control characters and quotes survive a round trip through both sides.
+    raw := "tab\there \"quoted\" \\ back"
+    enc := json.Marshal(raw)
+    testing.AssertTrue(json.Valid(enc))
+    mut got := ""
+    mut e := encerr.NoError()
+    testing.AssertTrue(json.Unmarshal(enc, got, e))
+    testing.AssertEqStr(got, raw)
+
+    mut de := encerr.NoError()
+    v := json.Decode(enc, de)
+    testing.AssertEqStr(value.AsString(v), raw)
+    value.ValueFree(v)
+end
+
+func main:
+    typed_rejections()
+    dynamic_rejections()
+    encoder_edges()
+    os.Exit(testing.Summary())
+end

@@ -104,18 +104,18 @@ k_cg_ckw := [
     "short", "signed", "sizeof", "static", "struct", "switch", "typedef", "union", "unsigned", "void",
     "volatile", "while", "asm", "bool", "true", "false", "_Bool", "_Complex", "_Imaginary", "_Alignas",
     "_Alignof", "_Atomic", "_Generic", "_Noreturn", "_Static_assert", "_Thread_local"
-] as str[48]
+]
 
 // base_ctype's m[] as two parallel arrays (order kept).
 k_cg_base_s := [
     "void", "bool", "char", "str", "uchar", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "size",
     "f32", "f64", "File"
-] as str[17]
+]
 
 k_cg_base_c := [
     "void", "bool", "char", "const char*", "const char*", "int8_t", "int16_t", "int32_t", "int64_t",
     "uint8_t", "uint16_t", "uint32_t", "uint64_t", "size_t", "float", "double", "salam_file"
-] as str[17]
+]
 
 // g_cg_export_{pkg,from,to} - --export=Fn:CName overrides (driver.salam
 // populates via AddExportOverride while scanning each module's own AST, so
@@ -156,6 +156,13 @@ pub struct Cg:
     pub locals: Vector<str> = Vector {}
     pub cur_struct: int = 0 // SymId (0 = C NULL)
     pub cur_fn_home: int = 0 // ScopeId (0 = C NULL)
+    // While a struct literal is filling in a field's DEFAULT expression, the
+    // scope that expression was written in - the declaring module's global
+    // scope, which is not this module's when the struct came from a package.
+    // `pub category: int = ERR_EXECUTION` in std/graphql is emitted at every
+    // construction site, so the global it names has to be spelled the way its
+    // own package defines it. Only cg_global_ref reads this.
+    pub cur_lit_home: int = 0 // ScopeId (0 = C NULL)
     pub safe: bool = false
     pub debug_info: bool = false
     pub single_threaded: bool = false
@@ -166,6 +173,16 @@ pub struct Cg:
     // Salam side declares it - so a bare `ret` inside it has to become
     // `return 0;`, not `return;`.
     pub cur_is_main: bool = false
+    // Declarations hoisted to the top of the function being emitted, and
+    // the sink offset just inside its opening brace where they go. A call
+    // argument that is an rvalue struct bound to a `&:` parameter needs a
+    // temporary whose lifetime covers the call; a temporary declared inside
+    // a GNU statement expression dies at that expression's closing brace,
+    // so its address dangled and -O2 reused the slot (see call_emit_arg).
+    // The temporaries are declared here instead and assigned in place.
+    pub hoist: str = ""
+    pub hoist_pos: i64 = 0
+    pub hoist_active: bool = false
     pub vec_types: Vector<str> = Vector {}
     pub variant_types: Vector<str> = Vector {}
     pub dyn_ifaces: Vector<str> = Vector {}
@@ -174,10 +191,18 @@ pub struct Cg:
     pub entry: str = ""
     pub deferred: Vector<str> = Vector {}
     pub fn_defers: Vector<int> = Vector {} // at.NodeIds (6b: AST_DEFER stmts)
+    // fn_defers depth at the start of each enclosing loop body, so break and
+    // continue can run that body's defers before jumping over its end.
+    pub loop_dmark: Vector<int> = Vector {}
     pub lam_n: int = 0
     pub clos_n: int = 0
     pub cur_lambda: int = 0 // at.NodeId (0 = C NULL)
     pub is_gui_mode: bool = false
+    // Freestanding: emit no libc includes, no stdio buffering and no
+    // allocator tuning. Set from the target triple in Run.
+    pub freestanding: bool = false
+    // Kernel: freestanding, and floating point is rejected.
+    pub kernel: bool = false
     pub target_triple: str = ""
     pub match_result_tmp: str = ""
     pub match_end_label: str = ""
@@ -192,8 +217,8 @@ end
 // cg_export_override - "" if (pkg, fname) has no registered override.
 func cg_export_override(pkg: str, fname: str): str:
     repeat g_cg_export_from.len() with i:
-        if str.Equals(g_cg_export_pkg.get(i)[0], pkg) && str.Equals(g_cg_export_from.get(i)[0], fname):
-            ret g_cg_export_to.get(i)[0]
+        if str.Equals(g_cg_export_pkg.get(i), pkg) && str.Equals(g_cg_export_from.get(i), fname):
+            ret g_cg_export_to.get(i)
         end
     end
     ret ""

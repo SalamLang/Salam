@@ -1,0 +1,105 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package tensor
+
+import compress
+import encoding.binary
+import mem
+import str
+
+// One named tensor as a binary record - the unit the SLMT checkpoint
+// format in std/nn strings together, kept here so the format is usable
+// without std/nn (an embedding table, a dataset cache, a single weight).
+//
+// Record layout, little-endian throughout:
+//
+//   u16  name length        utf-8 bytes follow
+//   u8   dtype              1 = f32 (2 is reserved for a future f64)
+//   u8   rank
+//   u32  dims[rank]
+//   u64  payload bytes      always 4 * numel for dtype 1
+//   raw  payload            f32 values, little-endian
+//
+// The payload is moved with one bulk copy, not element-at-a-time
+// conversion calls; a checkpoint is megabytes of f32 and the per-call
+// form was measured at 20x the wall time. The bulk copy fixes the wire
+// format to little-endian byte order, which every architecture Salam
+// targets (x64, x86, arm64, arm, wasm) already is - a big-endian port
+// would add the swap in exactly one place here.
+
+const _TSR_DTYPE_F32 := 1
+
+// ---- public API ----
+
+// Appends one named tensor record to `buf`. False when the name is too
+// long for the u16 field or the tensor is the empty sentinel.
+@en "WriteTensor"
+@fa "نوشتن تانسور"
+@ar "كتابة موتر"
+pub func WriteTensor(buf &: compress.ByteBuf, name: str, t &: Tensor): bool:
+    nl := str.Len(name)
+    if nl <= 0 || nl > 65535: ret false end
+    if t.is_empty(): ret false end
+    r := t.rank()
+    if r > 255: ret false end
+    binary.WriteU16LE(buf, nl)
+    compress.BufPushBytes(buf, name as void*, nl)
+    binary.WriteU8(buf, _TSR_DTYPE_F32)
+    binary.WriteU8(buf, r)
+    repeat r with i: binary.WriteU32LE(buf, t.shape.get(i)) end
+    n := t.numel()
+    binary.WriteU64LE(buf, (n as i64) * 4)
+    compress.BufPushBytes(buf, t.data.data as void*, n * 4)
+    ret true
+end
+
+// Reads one record: the name lands in `name_out`, the tensor in `out`
+// (overwriting whatever it held - the caller keeps ownership). False on
+// a truncated or foreign record, with the reader left in its bad state
+// rather than half-advanced.
+@en "ReadTensor"
+@fa "خواندن تانسور"
+@ar "قراءة موتر"
+pub func ReadTensor(rd &: compress.ByteReader, name_out &: str, out &: Tensor): bool:
+    nl := binary.ReadU16LE(rd)
+    if rd.bad || nl <= 0: ret false end
+    if compress.RdLeft(rd) < nl: ret false end
+    mut nb := compress.RdBytes(rd, nl)
+    name_out = compress.BufToStrUnsafe(nb)
+    compress.BufFree(nb)
+    dtype := binary.ReadU8(rd)
+    r := binary.ReadU8(rd)
+    if rd.bad || dtype != _TSR_DTYPE_F32 || r <= 0 || r > 255: ret false end
+    mut shape := Vector {} as Vector<int>
+    mut n := 1
+    repeat r:
+        d := binary.ReadU32LE(rd)
+        shape.push(d)
+        n = n * d
+    end
+    nbytes := binary.ReadU64LE(rd)
+    if rd.bad || nbytes != (n as i64) * 4 || compress.RdLeft(rd) < n * 4:
+        shape.free()
+        ret false
+    end
+    out.free()
+    t := _raw(shape)
+    shape.free()
+    src := ((rd.data as i64) + (rd.pos as i64)) as void*
+    mem.Copy(t.data.data as void*, src, (n * 4) as u64)
+    rd.pos += n * 4
+    out = t
+    ret true
+end

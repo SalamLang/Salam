@@ -1,0 +1,178 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package image
+
+// The `cmap` table: which glyph a Unicode codepoint is drawn with.
+//
+// A font ships several subtables for several platforms, and picking the
+// right one is most of the work - _ttf_pick_cmap ranks them once at load
+// time and the Font remembers the winner, so a lookup is a search in one
+// table rather than a search for a table.
+//
+// Four subtable formats are read, which between them cover every font in
+// circulation: 4 (segmented BMP, what almost everything uses), 12
+// (segmented UCS-4, needed for anything past U+FFFF), 6 (a dense range)
+// and 0 (a 256-byte table, only in very old fonts). Anything else scores
+// below all of them in _ttf_cmap_score and is skipped rather than
+// misread.
+
+// Ranks the cmap subtables so the most capable Unicode one wins: full
+// UCS-4 (3/10 or 0/4+) over the BMP-only (3/1, 0/0-3) over the symbol
+// (3/0) and Mac Roman (1/0) fallbacks that only old fonts ship alone.
+// Subtable formats this file cannot read score below all of them.
+func _ttf_cmap_score(plat: int, enc: int, format: int): int:
+    if format != 0 && format != 4 && format != 6 && format != 12:
+        ret -1
+    end
+    if plat == 3 && enc == 10: ret 5 end
+    if plat == 0 && enc >= 3: ret 4 end
+    if plat == 3 && enc == 1: ret 3 end
+    if plat == 0: ret 2 end
+    if plat == 3 && enc == 0: ret 1 end
+    if plat == 1 && enc == 0: ret 0 end
+    ret -1
+end
+
+func _ttf_pick_cmap(f &: Font, cmap_off: int):
+    if cmap_off <= 0:
+        ret
+    end
+    ntab := _ttf_u16(f.data, f.size, cmap_off + 2)
+    mut best := 0
+    mut best_score := 0 - 1
+    mut best_symbol := false
+    mut i := 0
+    until i < ntab:
+        rec := cmap_off + 4 + i * 8
+        plat := _ttf_u16(f.data, f.size, rec)
+        enc := _ttf_u16(f.data, f.size, rec + 2)
+        sub := cmap_off + _ttf_u32(f.data, f.size, rec + 4)
+        format := _ttf_u16(f.data, f.size, sub)
+        score := _ttf_cmap_score(plat, enc, format)
+        if score > best_score:
+            best_score = score
+            best = sub
+            best_symbol = plat == 3 && enc == 0
+        end
+        i += 1
+    end
+    if best_score >= 0:
+        f.cmap_sub = best
+        f.cmap_symbol = best_symbol
+    end
+end
+
+func _ttf_cmap0(f: Font, sub: int, cp: int): int:
+    if cp < 0 || cp > 255:
+        ret 0
+    end
+    ret _ttf_u8(f.data, f.size, sub + 6 + cp)
+end
+
+func _ttf_cmap4(f: Font, sub: int, cp: int): int:
+    if cp > 0xFFFF:
+        ret 0
+    end
+    seg_x2 := _ttf_u16(f.data, f.size, sub + 6)
+    ends := sub + 14
+    starts := ends + seg_x2 + 2
+    deltas := starts + seg_x2
+    ranges := deltas + seg_x2
+    mut i := 0
+    until i < seg_x2:
+        if _ttf_u16(f.data, f.size, ends + i) >= cp:
+            start := _ttf_u16(f.data, f.size, starts + i)
+            if start > cp:
+                ret 0
+            end
+            delta := _ttf_u16(f.data, f.size, deltas + i)
+            ro := _ttf_u16(f.data, f.size, ranges + i)
+            if ro == 0:
+                ret (cp + delta) & 0xFFFF
+            end
+            // The glyph id lives idRangeOffset bytes past the *address of
+            // the idRangeOffset entry itself* - the one place the format
+            // encodes a pointer as a self-relative byte count.
+            g := _ttf_u16(f.data, f.size, ranges + i + ro + (cp - start) * 2)
+            if g == 0:
+                ret 0
+            end
+            ret (g + delta) & 0xFFFF
+        end
+        i += 2
+    end
+    ret 0
+end
+
+func _ttf_cmap6(f: Font, sub: int, cp: int): int:
+    first := _ttf_u16(f.data, f.size, sub + 6)
+    count := _ttf_u16(f.data, f.size, sub + 8)
+    if cp < first || cp >= first + count:
+        ret 0
+    end
+    ret _ttf_u16(f.data, f.size, sub + 10 + (cp - first) * 2)
+end
+
+func _ttf_cmap12(f: Font, sub: int, cp: int): int:
+    ngroups := _ttf_u32(f.data, f.size, sub + 12)
+    mut lo := 0
+    mut hi := ngroups
+    until lo < hi:
+        mid := (lo + hi) / 2
+        g := sub + 16 + mid * 12
+        start := _ttf_u32(f.data, f.size, g)
+        end_cp := _ttf_u32(f.data, f.size, g + 4)
+        if cp < start:
+            hi = mid
+        else:
+            if cp > end_cp:
+                lo = mid + 1
+            else:
+                ret _ttf_u32(f.data, f.size, g + 8) + (cp - start)
+            end
+        end
+    end
+    ret 0
+end
+
+func _ttf_lookup(f: Font, cp: int): int:
+    if f.cmap_sub == 0:
+        ret 0
+    end
+    format := _ttf_u16(f.data, f.size, f.cmap_sub)
+    if format == 0: ret _ttf_cmap0(f, f.cmap_sub, cp) end
+    if format == 4: ret _ttf_cmap4(f, f.cmap_sub, cp) end
+    if format == 6: ret _ttf_cmap6(f, f.cmap_sub, cp) end
+    if format == 12: ret _ttf_cmap12(f, f.cmap_sub, cp) end
+    ret 0
+end
+
+// The glyph a codepoint maps to, or 0 (.notdef, drawn as an empty or
+// boxed glyph by most fonts) when the font has no glyph for it. Symbol
+// fonts, whose cmap keys everything at 0xF000+ch, are retried at that
+// offset so callers never have to know which kind they loaded.
+@en "GlyphIndex"
+@fa "اندیس نویسه"
+@ar "فهرس الرسم"
+pub func GlyphIndex(f: Font, codepoint: int): int:
+    g := _ttf_lookup(f, codepoint)
+    if g != 0:
+        ret g
+    end
+    if f.cmap_symbol && codepoint >= 0 && codepoint < 0x100:
+        ret _ttf_lookup(f, 0xF000 + codepoint)
+    end
+    ret 0
+end

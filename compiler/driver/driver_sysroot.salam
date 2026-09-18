@@ -4,10 +4,53 @@ import os
 import str
 import pth "../sal_path.salam"
 
-    func tar_oct(buf: str, off: int, n: int): i64:
+    // A tar archive is raw bytes, and Salam's `str` stops at the first NUL, so
+    // every read below goes through a `u8*` and an explicit length instead.
+    // Writing has the same problem - a .o or .a in a sysroot is full of NULs -
+    // so the extracted contents go out through fwrite rather than os.WriteFile.
+    extern:
+        func fopen(path: str, mode: str): void*
+        func fwrite(ptr: void*, size: u64, nmemb: u64, stream: void*): u64
+        func fclose(stream: void*): int
+    end
+
+    // Salam has no pointer arithmetic on u8*, so an offset pointer is made by
+    // going through i64. Only used to hand fwrite the start of a member.
+    inline func at_off(p: u8*, off: int): u8*:
+        ret ((p as i64) + (off as i64)) as u8*
+    end
+
+    // A tar header field that is known NUL-free (names, prefixes) back into a
+    // str. Anything that can carry a NUL must not come through here.
+    func bytes_str(buf: u8*, off: int, n: int): str:
+        mut sb := str.NewBuilder()
+        defer str.BufFree(sb)
         mut i := 0
         until i < n:
-            c := byte_at(buf, off + i)
+            str.BufAppendChar(sb, buf[off + i] as int)
+            i += 1
+        end
+        ret str.BufStr(sb)
+    end
+
+    func write_raw(path: str, buf: u8*, off: int, n: int): bool:
+        fp := fopen(path, "wb")
+        if fp == null:
+            ret false
+        end
+        mut ok := true
+        if n > 0:
+            w := fwrite(at_off(buf, off) as void*, 1 as u64, n as u64, fp)
+            ok = (w as int) == n
+        end
+        _c := fclose(fp)
+        ret ok
+    end
+
+    func tar_oct(buf: u8*, off: int, n: int): i64:
+        mut i := 0
+        until i < n:
+            c := buf[off + i] as int
             if c != 32 && c != 0:
                 break
             end
@@ -15,7 +58,7 @@ import pth "../sal_path.salam"
         end
         mut v := 0 as i64
         until i < n:
-            c := byte_at(buf, off + i)
+            c := buf[off + i] as int
             if c < 48 || c > 55:
                 break
             end
@@ -28,13 +71,12 @@ import pth "../sal_path.salam"
     // untar - minimal USTAR reader (GNU long-name 'L' entries, directories '5',
     // regular files '0'/NUL/'7'; anything else, and any ".." / absolute name,
     // is skipped exactly like the C).
-    func untar(tar: str, dest: str): bool:
-        total := str.Len(tar)
+    func untar(tar: u8*, total: int, dest: str): bool:
         mut off := 0
         mut longname := ""
         mut have_long := false
         until off + 512 <= total:
-            h0 := byte_at(tar, off)
+            h0 := tar[off] as int
             if h0 == 0:
                 break
             end
@@ -45,20 +87,20 @@ import pth "../sal_path.salam"
             else:
                 mut nmlen := 0
                 until nmlen < 100:
-                    if byte_at(tar, off + nmlen) == 0:
+                    if tar[off + nmlen] as int == 0:
                         break
                     end
                     nmlen += 1
                 end
-                nm := str.Substr(tar, off, nmlen)
+                nm := bytes_str(tar, off, nmlen)
                 mut pfxlen := 0
                 until pfxlen < 155:
-                    if byte_at(tar, off + 345 + pfxlen) == 0:
+                    if tar[off + 345 + pfxlen] as int == 0:
                         break
                     end
                     pfxlen += 1
                 end
-                pfx := str.Substr(tar, off + 345, pfxlen)
+                pfx := bytes_str(tar, off + 345, pfxlen)
                 if str.Len(pfx) > 0:
                     name = pfx + "/" + nm
                 else:
@@ -66,7 +108,7 @@ import pth "../sal_path.salam"
                 end
             end
             size := tar_oct(tar, off + 124, 12)
-            typ := byte_at(tar, off + 156)
+            typ := tar[off + 156] as int
             off += 512
             if size > (total - off) as i64:
                 break
@@ -78,7 +120,7 @@ import pth "../sal_path.salam"
 
             if typ == 76: // 'L'
                 cp := size < (511 as i64) ? size as int : 511
-                longname = str.Substr(tar, off, cp)
+                longname = bytes_str(tar, off, cp)
                 have_long = true
                 off += blocks * 512
                 continue
@@ -97,8 +139,7 @@ import pth "../sal_path.salam"
                 if str.Len(parent) > 0:
                     _mk := os.MkdirAll(parent)
                 end
-                content := str.Substr(tar, off, size as int)
-                if os.WriteFile(full, content) < 0:
+                if !write_raw(full, tar, off, size as int):
                     ret false
                 end
             end

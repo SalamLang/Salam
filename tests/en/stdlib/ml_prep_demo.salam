@@ -1,0 +1,151 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/ml: the fitted preprocessing transforms.
+
+import math
+import matrix
+import ml
+import testing
+
+func main:
+    eps := 0.000001
+
+    // A 4x2 matrix: column 0 is 1..4, column 1 is 10, 20, 30, 40
+    mut x := matrix.Zeros(4, 2)
+    repeat 4 with i:
+        x.set(i, 0, (i + 1) as f64)
+        x.set(i, 1, ((i + 1) * 10) as f64)
+    end
+
+    // StandardScaler: zero mean, unit (population) std, exact inverse
+    mut ss := ml.StandardScaler {}
+    mut xs := ss.fit_transform(x)
+    testing.AssertTrue(ss.ok)
+    testing.AssertEqFloat(ss.mean.at(0, 0), 2.5, eps)
+    testing.AssertEqFloat(ss.std.at(0, 1), math.Sqrt(125.0), eps)
+    mut m0 := 0.0
+    repeat 4 with i: m0 += xs.at(i, 0) end
+    testing.AssertEqFloat(m0, 0.0, eps)
+    mut back := ss.inverse_transform(xs)
+    testing.AssertTrue(matrix.AllClose(back, x, eps))
+    // Unfitted or mismatched: the sentinel
+    mut ss2 := ml.StandardScaler {}
+    testing.AssertTrue(ss2.transform(x).is_empty())
+    mut wide := matrix.Zeros(2, 3)
+    testing.AssertTrue(ss.transform(wide).is_empty())
+
+    // MinMaxScaler onto [0,1] and onto [-1,1]
+    mut mm := ml.MinMaxScaler {}
+    mut xm := mm.fit_transform(x)
+    testing.AssertEqFloat(xm.at(0, 0), 0.0, eps)
+    testing.AssertEqFloat(xm.at(3, 1), 1.0, eps)
+    testing.AssertEqFloat(xm.at(1, 0), 1.0 / 3.0, eps)
+    mut mm2 := ml.MinMaxScaler { lo = 0.0 - 1.0, hi = 1.0 }
+    mut xm2 := mm2.fit_transform(x)
+    testing.AssertEqFloat(xm2.at(0, 0), 0.0 - 1.0, eps)
+    testing.AssertEqFloat(xm2.at(3, 0), 1.0, eps)
+    mut back2 := mm2.inverse_transform(xm2)
+    testing.AssertTrue(matrix.AllClose(back2, x, eps))
+
+    // LabelEncoder numbers classes by first appearance
+    mut labels := Vector {} as Vector<str>
+    labels.push("cat")
+    labels.push("dog")
+    labels.push("cat")
+    labels.push("bird")
+    mut le := ml.LabelEncoder {}
+    mut y := le.fit_transform(labels)
+    testing.AssertEqInt(le.classes.len(), 3)
+    testing.AssertEqFloat(y.at(0, 0), 0.0, eps)
+    testing.AssertEqFloat(y.at(1, 0), 1.0, eps)
+    testing.AssertEqFloat(y.at(3, 0), 2.0, eps)
+    testing.AssertEqInt(le.index_of("zebra"), 0 - 1)
+    mut names := le.inverse_transform(y)
+    testing.AssertEqStr(names.get(3), "bird")
+
+    // OneHotEncoder and its argmax inverse
+    mut oh := ml.OneHotEncoder {}
+    mut hot := oh.fit_transform(y)
+    testing.AssertEqInt(hot.cols, 3)
+    testing.AssertEqFloat(hot.at(1, 1), 1.0, eps)
+    testing.AssertEqFloat(hot.at(1, 0), 0.0, eps)
+    mut yb := oh.inverse_transform(hot)
+    testing.AssertTrue(matrix.AllClose(yb, y, eps))
+
+    // SimpleImputer fills NaN with the column mean, median or constant
+    mut xn := matrix.Clone(x)
+    xn.set(1, 0, math.NaN())
+    xn.set(3, 1, math.NaN())
+    mut imp := ml.SimpleImputer {}
+    mut xi := imp.fit_transform(xn)
+    testing.AssertEqFloat(xi.at(1, 0), (1.0 + 3.0 + 4.0) / 3.0, eps)
+    testing.AssertEqFloat(xi.at(3, 1), 20.0, eps)
+    testing.AssertEqFloat(xi.at(0, 0), 1.0, eps)
+    mut imp2 := ml.SimpleImputer { strategy = ml.IMPUTE_MEDIAN }
+    mut xi2 := imp2.fit_transform(xn)
+    testing.AssertEqFloat(xi2.at(1, 0), 3.0, eps)
+    mut imp3 := ml.SimpleImputer { strategy = ml.IMPUTE_CONSTANT, fill = 0.0 - 9.0 }
+    mut xi3 := imp3.fit_transform(xn)
+    testing.AssertEqFloat(xi3.at(3, 1), 0.0 - 9.0, eps)
+
+    // PolynomialFeatures degree 2 on two features: x0 x1 x0^2 x0x1 x1^2
+    mut pf := ml.PolynomialFeatures {}
+    mut xp := pf.transform(x)
+    testing.AssertEqInt(xp.cols, 5)
+    testing.AssertEqFloat(xp.at(1, 2), 4.0, eps)
+    testing.AssertEqFloat(xp.at(1, 3), 40.0, eps)
+    testing.AssertEqFloat(xp.at(1, 4), 400.0, eps)
+    mut pf3 := ml.PolynomialFeatures { degree = 3, include_bias = true }
+    mut xp3 := pf3.transform(x)
+    testing.AssertEqInt(xp3.cols, 1 + 2 + 3 + 4)
+    testing.AssertEqFloat(xp3.at(2, 0), 1.0, eps)
+    testing.AssertEqFloat(xp3.at(2, 9), 27000.0, eps)   // x1^3 at row 2
+
+    // Label helpers
+    mut ints := ml.LabelsToInts(y)
+    testing.AssertEqInt(ints.get(3), 2)
+    testing.AssertEqInt(ml.CountClasses(y), 3)
+
+    ss.free()
+    mm.free()
+    mm2.free()
+    le.free()
+    imp.free()
+    imp2.free()
+    imp3.free()
+    matrix.Free(x)
+    matrix.Free(xs)
+    matrix.Free(back)
+    matrix.Free(wide)
+    matrix.Free(xm)
+    matrix.Free(xm2)
+    matrix.Free(back2)
+    matrix.Free(y)
+    matrix.Free(hot)
+    matrix.Free(yb)
+    matrix.Free(xn)
+    matrix.Free(xi)
+    matrix.Free(xi2)
+    matrix.Free(xi3)
+    matrix.Free(xp)
+    matrix.Free(xp3)
+    labels.free()
+    names.free()
+    ints.free()
+
+    ret testing.Summary()
+end

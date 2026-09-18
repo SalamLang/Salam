@@ -1,0 +1,225 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package npy
+
+import compress
+import conv
+import encoding.binary
+import mem
+import str
+
+// The .npy preamble: "\x93NUMPY", major, minor, a little-endian header
+// length (u16 in 1.0, u32 in 2.0), and the header text - a Python dict
+// literal padded with spaces to a 64-byte boundary and ended by '\n'.
+//
+// The three keys are located by name and their values scanned in
+// place: 'descr' as a quoted dtype string, 'fortran_order' as True or
+// False, 'shape' as a parenthesized int tuple. Anything the scanner
+// cannot make sense of is a rejection, never a guess.
+
+inline pure func _bp(s: str): i8*: ret (s as void*) as i8* end
+
+inline pure func _ub(bp: i8*, i: int): int:
+    mut v := bp[i] as int
+    if v < 0: v = v + 256 end
+    ret v
+end
+
+// The quoted string following `key` in text, or "" when absent.
+func _quoted_after(text: str, key: str): str:
+    k := str.IndexOf(text, key)
+    if k < 0: ret "" end
+    n := str.Len(text)
+    bp := _bp(text)
+    mut i := k + str.Len(key)
+    // skip to the value's opening quote (past the colon)
+    mut colon := false
+    until i < n:
+        c := _ub(bp, i)
+        if c == 58: colon = true end
+        if colon && (c == 39 || c == 34):
+            mut j := i + 1
+            until j < n && _ub(bp, j) != 39 && _ub(bp, j) != 34: j += 1 end
+            ret str.Substr(text, i + 1, j - i - 1)
+        end
+        i += 1
+    end
+    ret ""
+end
+
+// True/False following `key`; the out-param `found` says whether the
+// key was there at all.
+func _bool_after(text: str, key: str, found &: bool): bool:
+    found = false
+    k := str.IndexOf(text, key)
+    if k < 0: ret false end
+    rest := str.Substr(text, k + str.Len(key), str.Len(text) - k - str.Len(key))
+    t := str.IndexOf(rest, "True")
+    f := str.IndexOf(rest, "False")
+    mem.Free(rest as void*)
+    if t < 0 && f < 0: ret false end
+    found = true
+    if f < 0: ret true end
+    if t < 0: ret false end
+    ret t < f
+end
+
+// The int tuple following `key` into shape_out. "()" is a scalar, which
+// leaves the vector empty.
+func _shape_after(text: str, key: str, shape_out &: Vector<int>): bool:
+    k := str.IndexOf(text, key)
+    if k < 0: ret false end
+    n := str.Len(text)
+    bp := _bp(text)
+    mut i := k + str.Len(key)
+    until i < n && _ub(bp, i) != 40: i += 1 end
+    if i >= n: ret false end
+    i += 1
+    mut cur := 0
+    mut have := false
+    until i < n:
+        c := _ub(bp, i)
+        if c >= 48 && c <= 57:
+            cur = cur * 10 + (c - 48)
+            have = true
+        else c == 44:
+            if have: shape_out.push(cur) end
+            cur = 0
+            have = false
+        else c == 41:
+            if have: shape_out.push(cur) end
+            ret true
+        else c != 32:
+            ret false
+        end
+        i += 1
+    end
+    ret false
+end
+
+// Maps a descr like '<f8' onto a dtype tag and byte order.
+func _descr_to_dtype(descr: str, dtype &: int, big &: bool): bool:
+    n := str.Len(descr)
+    if n < 2: ret false end
+    bp := _bp(descr)
+    mut i := 0
+    c0 := _ub(bp, 0)
+    big = false
+    if c0 == 60 || c0 == 124 || c0 == 61:
+        i = 1
+    else c0 == 62:
+        big = true
+        i = 1
+    end
+    if i >= n: ret false end
+    kind := _ub(bp, i)
+    mut size := 0
+    mut j := i + 1
+    until j < n:
+        d := _ub(bp, j)
+        if d < 48 || d > 57: ret false end
+        size = size * 10 + (d - 48)
+        j += 1
+    end
+    if kind == 102:
+        if size == 8: dtype = NPY_F64 ret true end
+        if size == 4: dtype = NPY_F32 ret true end
+        ret false
+    end
+    if kind == 105:
+        if size == 1: dtype = NPY_I8 ret true end
+        if size == 2: dtype = NPY_I16 ret true end
+        if size == 4: dtype = NPY_I32 ret true end
+        if size == 8: dtype = NPY_I64 ret true end
+        ret false
+    end
+    if kind == 117:
+        if size == 1: dtype = NPY_U8 ret true end
+        if size == 2: dtype = NPY_U16 ret true end
+        if size == 4: dtype = NPY_U32 ret true end
+        ret false
+    end
+    if kind == 98 && size == 1:
+        dtype = NPY_BOOL
+        ret true
+    end
+    ret false
+end
+
+// Reads the preamble, leaving the reader at the first element.
+func _read_header(rd &: compress.ByteReader, dtype &: int, big &: bool, fortran &: bool, shape_out &: Vector<int>): bool:
+    if compress.RdLeft(rd) < 10: ret false end
+    if binary.ReadU8(rd) != 147: ret false end
+    if binary.ReadU8(rd) != 78 || binary.ReadU8(rd) != 85 || binary.ReadU8(rd) != 77 || binary.ReadU8(rd) != 80 || binary.ReadU8(rd) != 89: ret false end
+    major := binary.ReadU8(rd)
+    binary.ReadU8(rd)
+    mut hlen := 0
+    if major == 1:
+        hlen = binary.ReadU16LE(rd)
+    else major == 2 || major == 3:
+        hlen = binary.ReadU32LE(rd)
+    else:
+        ret false
+    end
+    if rd.bad || hlen <= 0 || compress.RdLeft(rd) < hlen: ret false end
+    mut hb := compress.RdBytes(rd, hlen)
+    text := compress.BufToStrUnsafe(hb)
+    compress.BufFree(hb)
+    descr := _quoted_after(text, "descr")
+    // One exit, so the header text and the descr slice are released
+    // whichever way the parse ends.
+    mut ok := str.Len(descr) > 0
+    if ok: ok = _descr_to_dtype(descr, dtype, big) end
+    mut found := false
+    if ok:
+        fortran = _bool_after(text, "fortran_order", found)
+        ok = found
+    end
+    if ok: ok = _shape_after(text, "shape", shape_out) end
+    if str.Len(descr) > 0: mem.Free(descr as void*) end
+    if str.Len(text) > 0: mem.Free(text as void*) end
+    ret ok
+end
+
+// Appends a version 1.0 preamble for a '<f8' C-order array of `shape`.
+// One builder, not a chain of `dict = dict + ...`: every link of that
+// chain abandoned the string before it, and the padding loop ran one
+// per space.
+func _write_header(buf &: compress.ByteBuf, shape &: Vector<int>):
+    mut sb := str.NewBuilder()
+    str.BufAppend(sb, "{'descr': '<f8', 'fortran_order': False, 'shape': (")
+    repeat shape.len() with i:
+        str.BufAppendInt(sb, shape.get(i) as i64)
+        if shape.len() == 1 || i + 1 < shape.len(): str.BufAppendChar(sb, 44) end
+        if i + 1 < shape.len(): str.BufAppendChar(sb, 32) end
+    end
+    str.BufAppend(sb, "), }")
+    // Pad so that magic(6) + version(2) + len(2) + header is a multiple
+    // of 64, with the newline last.
+    total := 10 + (str.BufLen(sb) as int) + 1
+    mut pad := 0
+    if total % 64 != 0: pad = 64 - total % 64 end
+    repeat pad: str.BufAppendChar(sb, 32) end
+    str.BufAppendChar(sb, 10)
+    dict := str.BufStr(sb)
+    str.BufFree(sb)
+    binary.WriteU8(buf, 147)
+    compress.BufPushBytes(buf, "NUMPY" as void*, 5)
+    binary.WriteU8(buf, 1)
+    binary.WriteU8(buf, 0)
+    binary.WriteU16LE(buf, str.Len(dict))
+    compress.BufPushBytes(buf, dict as void*, str.Len(dict))
+    mem.Free(dict as void*)
+end

@@ -14,9 +14,115 @@ import i18 "../i18n.salam"
 // check_unused_params (plus the dce hooks further down).
 // ===========================================================================
 
+// sema_cast_target_is_context_dependent - whether `aid`'s type can genuinely
+// change depending on the cast's target type (via the `s.expected` hint the
+// AST_CAST case feeds it). For these kinds, the checked type naturally comes
+// out equal to the cast target even when the cast is meaningful (e.g.
+// `1 as i64` picks i64 precisely because of the hint), so an equal-type
+// result there must not be flagged as a useless cast. Everything else
+// already has a fixed type before the cast is applied, so casting it to
+// that same type is always useless.
+func sema_cast_target_is_context_dependent(s &: Sema, a &: at.Ast, aid: int, target: int): bool:
+    if aid == 0:
+        ret false
+    end
+    an := at.Get(a, aid)
+    if an.kind == at.AST_ARRAY_LIT:
+        // check_array_lit only consults the expected element type for an
+        // empty literal or a 'dyn' element slot; a non-empty literal of any
+        // other element type infers its shape purely from its elements, so
+        // the cast target never changes the outcome there.
+        if at.ChildCount(a, aid) == 0:
+            ret true
+        end
+        ret target >= 0 && ty_at(s, target).kind == TY_ARRAY && ty_at(s, target).elem >= 0 && ty_at(s, ty_at(s, target).elem).kind == TY_DYN
+    end
+    if an.kind == at.AST_STRUCT_LIT || an.kind == at.AST_CALL:
+        ret true
+    end
+    if an.kind == at.AST_LITERAL:
+        ret an.op == tok.TK_INT || an.op == tok.TK_FLOAT
+    end
+    ret false
+end
+
+// func_addr_target_ok (sema_expr.c) - shared by `&f` and by a bare function
+// name read as a value. Both need one unambiguous, non-generic target: a
+// generic function has no code until it is instantiated, and an overload set
+// gives no way to say which body was meant.
+func func_addr_target_ok(s &: Sema, a &: at.Ast, sym: int, fname: str, sp: co.SrcSpan): bool:
+    fsv := sym_at(s, sym)
+    mut only_generic := false
+    if fsv.overloads.len() == 1:
+        sg0 := sig_at(s, fsv.overloads.get(0))
+        if sg0.decl != 0 && at.TyparamCount(a, sg0.decl) > 0:
+            only_generic = true
+        end
+    end
+    if fsv.overloads.len() == 0 || only_generic:
+        serr(
+            s, 73, sp, co.Format1(
+                i18.Tr("cannot take the address of generic function '%s'"), co.ArgStr(fname)
+            )
+        )
+        ret false
+    end
+    if fsv.overloads.len() > 1:
+        serr(
+            s, 74, sp, co.Format2(
+                i18.Tr("function '%s' is ambiguous as a value (%zu overloads exist)"), co.ArgStr(fname),
+                co.ArgUint(fsv.overloads.len() as u64)
+            )
+        )
+        ret false
+    end
+    ret true
+end
+
 // sema_check_expr (sema_expr.c, 5c) - full expression type checking.
 // Returns the expression's TypeId (never TYPE_NONE except through the
 // still-stubbed match checker).
+// A cast written where the position already fixes the type - `want`. Two
+// things can be wrong with one. Naming a different type than the only one
+// that fits is a mistake the old rule accepted quietly, converting on the
+// way out: `ret 0 as u32` from a u64 function. Naming the same type the
+// position already named is a no-op that costs the next reader a second
+// look. Both are errors, so that every `as` left in the source is one that
+// is doing something.
+func check_cast_in_context(
+    s &: Sema, a &: at.Ast, inner: int, sp: co.SrcSpan, want: int, target: int, o3: int
+):
+    if want < 0 || target < 0 || s.in_derive:
+        ret
+    end
+    if type_is_error(s, want) || type_is_error(s, target) || type_is_error(s, o3):
+        ret
+    end
+    if !type_equiv(s, want, target):
+        serr(
+            s, 94, sp, co.Format2(
+                i18.Tr(
+                    "an explicit cast here must produce '%s', the type this position requires, not '%s'"
+                ), co.ArgStr(type_to_string(s, want)), co.ArgStr(type_to_string(s, target))
+            )
+        )
+        ret
+    end
+    // Only a cast that changes nothing counts as useless. An int written
+    // where a float is wanted is not that: `as f64` is what makes the value
+    // a float, and E067 asks for exactly that when every `ret` in an f64
+    // function hands back an integer. Same-class widening is the case with
+    // nothing behind it.
+    same_class := type_equiv(s, want, o3) || (type_is_integer(s, want) && type_is_integer(s, o3))
+    if same_class && (type_assignable(s, want, o3) || widens_nonneg(s, a, inner, want, o3)):
+        serr(
+            s, 93, sp, co.Format1(
+                i18.Tr("useless cast: this position already requires '%s'"), co.ArgStr(type_to_string(s, want))
+            )
+        )
+    end
+end
+
 func sema_check_expr(s &: Sema, a &: at.Ast, nid: int): int:
     if nid == 0:
         ret sema_ty(s, TY_VOID)
@@ -25,6 +131,10 @@ func sema_check_expr(s &: Sema, a &: at.Ast, nid: int): int:
     if k != at.AST_LITERAL && k != at.AST_STRUCT_LIT && k != at.AST_ARRAY_LIT && k != at.AST_CALL && k != at.AST_TERNARY && k != at.AST_MATCH:
         s.expected = TYPE_NONE
     end
+    // Consumed here, so a cast one level down - `ret (x as u32) + 1` - is
+    // not judged against a position it is not in.
+    cast_ctx := s.cast_ctx
+    s.cast_ctx = TYPE_NONE
     sp := span_of(a, nid)
     if k == at.AST_LITERAL:
         n := at.Get(a, nid)
@@ -59,6 +169,11 @@ func sema_check_expr(s &: Sema, a &: at.Ast, nid: int): int:
     end
     if k == at.AST_IDENTIFIER:
         mut name := at.Get(a, nid).name
+        // The parser already reported why this name could not be read; a
+        // follow-up "unknown identifier '<error>'" would only bury it.
+        if at.NameIsErr(name):
+            ret sema_decorate(s, a, nid, sema_err_ty(s))
+        end
         mut sym := scope_lookup(s, s.cur, name)
         if sym == 0:
             c := local_canon(s, a, name, sp)
@@ -70,10 +185,12 @@ func sema_check_expr(s &: Sema, a &: at.Ast, nid: int): int:
         end
         if sym == 0:
             mut is_str_lit := false
+            // The node has been rewritten into a literal in place, so the
+            // literal arm above types it - a -d constant then gets exactly
+            // the type the same text written in the source would have, f64
+            // and bool included.
             if builtin_global_const(a, nid, name, is_str_lit):
-                ret sema_decorate(
-                    s, a, nid, is_str_lit ? sema_ty(s, TY_STR) : sema_ty(s, TY_I32)
-                )
+                ret sema_check_expr(s, a, nid)
             end
         end
         if sym == 0:
@@ -83,13 +200,30 @@ func sema_check_expr(s &: Sema, a &: at.Ast, nid: int): int:
             ret sema_decorate(s, a, nid, sema_err_ty(s))
         end
         sv := sym_at(s, sym)
-        if sv.kind == SYM_FUNC || sv.kind == SYM_METHOD:
+        if sv.kind == SYM_METHOD:
             serr(
                 s, 1, sp, co.Format1(
-                    i18.Tr("function '%s' used as a value"), co.ArgStr(name)
+                    i18.Tr("method '%s' used as a value (call it)"), co.ArgStr(name)
                 )
             )
             ret sema_decorate(s, a, nid, sema_err_ty(s))
+        end
+        // A free function read as a value decays to its address, typed i64 -
+        // the handler-slot ABI std/net/router and friends take. `&f` is the
+        // other spelling and still yields a void*, for the C-callback casts
+        // in std/webview.
+        if sv.kind == SYM_FUNC:
+            if !func_addr_target_ok(s, a, sym, name, sp):
+                ret sema_decorate(s, a, nid, sema_err_ty(s))
+            end
+            mut fvs := sym_at(s, sym)
+            fvs.used = true
+            sym_put(s, sym, fvs)
+            dce_mark_root(s.pkg, fvs.name)
+            mut fvn := at.Get(a, nid)
+            fvn.func_value = true
+            at.Put(a, nid, fvn)
+            ret sema_decorate(s, a, nid, sema_ty(s, TY_I64))
         end
         if sv.kind == SYM_STRUCT || sv.kind == SYM_ENUM:
             serr(
@@ -103,7 +237,7 @@ func sema_check_expr(s &: Sema, a &: at.Ast, nid: int): int:
         svm.used = true
         sym_put(s, sym, svm)
         if s.lam.len() > 0 && (svm.kind == SYM_VAR || svm.kind == SYM_PARAM):
-            top := s.lam.get(s.lam.len() - 1)[0]
+            top := s.lam.get(s.lam.len() - 1)
             if !defined_within(s, s.cur, top.boundary, name) && scope_lookup_local(s, s.global, name) == 0:
                 record_capture(s, a, nid, svm.ty)
             end
@@ -117,6 +251,57 @@ func sema_check_expr(s &: Sema, a &: at.Ast, nid: int): int:
     end
     if k == at.AST_FUNC_ADDR:
         mut fname := at.Get(a, nid).name
+        if at.NameIsErr(fname):
+            ret sema_decorate(s, a, nid, sema_err_ty(s))
+        end
+        // `&pkg.f` - the package identifier the parser parked in n.a.
+        pkgid := at.Get(a, nid).a
+        if pkgid != 0 && at.KindOf(a, pkgid) == at.AST_IDENTIFIER:
+            pname := at.Get(a, pkgid).name
+            pk := scope_lookup(s, s.cur, pname)
+            if pk == 0 || sym_at(s, pk).kind != SYM_PACKAGE:
+                serr(
+                    s, 1, sp, co.Format3(
+                        i18.Tr("unknown package '%s' in '&%s.%s'"), co.ArgStr(pname),
+                        co.ArgStr(pname), co.ArgStr(fname)
+                    )
+                )
+                ret sema_decorate(s, a, nid, sema_err_ty(s))
+            end
+            pkv2 := sym_at(s, pk)
+            fname = pkg_member_canon(s, a, pk, fname, sp)
+            at.SetName(a, nid, fname)
+            m3 := scope_lookup_local(s, pkv2.members, fname)
+            if m3 == 0 || sym_at(s, m3).kind != SYM_FUNC:
+                serr(
+                    s, 72, sp, co.Format2(
+                        i18.Tr("'&%s.%s' requires a function"), co.ArgStr(pkv2.name), co.ArgStr(fname)
+                    )
+                )
+                ret sema_decorate(s, a, nid, sema_err_ty(s))
+            end
+            mv3 := sym_at(s, m3)
+            if !mv3.is_pub:
+                serr(
+                    s, 17, sp, co.Format2(
+                        i18.Tr("'%s' is not exported by package '%s' (mark it 'pub')"), co.ArgStr(fname),
+                        co.ArgStr(pkv2.name)
+                    )
+                )
+                ret sema_decorate(s, a, nid, sema_err_ty(s))
+            end
+            if !func_addr_target_ok(s, a, m3, fname, sp):
+                ret sema_decorate(s, a, nid, sema_err_ty(s))
+            end
+            mut mv3u := sym_at(s, m3)
+            mv3u.used = true
+            sym_put(s, m3, mv3u)
+            dce_mark_root(
+                str.Len(mv3u.pkgname) > 0 ? mv3u.pkgname : pkv2.name, mv3u.name
+            )
+            _dpa := sema_decorate(s, a, pkgid, pkv2.ty)
+            ret sema_decorate(s, a, nid, type_ptr(s, sema_ty(s, TY_VOID)))
+        end
         mut fsym := scope_lookup(s, s.cur, fname)
         if fsym == 0:
             c2 := local_canon(s, a, fname, sp)
@@ -151,28 +336,7 @@ func sema_check_expr(s &: Sema, a &: at.Ast, nid: int): int:
             )
             ret sema_decorate(s, a, nid, sema_err_ty(s))
         end
-        mut only_generic := false
-        if fsv.overloads.len() == 1:
-            sg0 := sig_at(s, fsv.overloads.get(0)[0])
-            if sg0.decl != 0 && at.TyparamCount(a, sg0.decl) > 0:
-                only_generic = true
-            end
-        end
-        if fsv.overloads.len() == 0 || only_generic:
-            serr(
-                s, 73, sp, co.Format1(
-                    i18.Tr("cannot take the address of generic function '%s'"), co.ArgStr(fname)
-                )
-            )
-            ret sema_decorate(s, a, nid, sema_err_ty(s))
-        end
-        if fsv.overloads.len() > 1:
-            serr(
-                s, 74, sp, co.Format2(
-                    i18.Tr("function '%s' is ambiguous for '&' (%zu overloads exist)"), co.ArgStr(fname),
-                    co.ArgUint(fsv.overloads.len() as u64)
-                )
-            )
+        if !func_addr_target_ok(s, a, fsym, fname, sp):
             ret sema_decorate(s, a, nid, sema_err_ty(s))
         end
         mut fsm := sym_at(s, fsym)
@@ -297,7 +461,15 @@ func sema_check_expr(s &: Sema, a &: at.Ast, nid: int): int:
         if target < 0:
             ret sema_decorate(s, a, nid, o3)
         end
+        check_cast_in_context(s, a, n4.a, sp, cast_ctx, target, o3)
         if type_assignable(s, target, o3):
+            if !type_is_error(s, o3) && !s.in_derive && type_equiv(s, target, o3) && !sema_cast_target_is_context_dependent(s, a, n4.a, target):
+                serr(
+                    s, 93, sp, co.Format1(
+                        i18.Tr("useless cast: this expression already has type '%s'"), co.ArgStr(type_to_string(s, target))
+                    )
+                )
+            end
             ret sema_decorate(s, a, nid, target)
         end
         if !type_castable(s, target, o3):
@@ -319,7 +491,13 @@ func sema_check_expr(s &: Sema, a &: at.Ast, nid: int): int:
         n5 := at.Get(a, nid)
         arr := sema_check_expr(s, a, n5.a)
         idx := sema_check_expr(s, a, n5.b)
-        ssym2 := struct_sym_of(s, arr)
+        // Only a struct VALUE answers `x[i]` with its operator_index.
+        // Through a pointer that same syntax is address arithmetic - C's
+        // meaning, and the one `d[i]` over a `T*` field relies on. Reading
+        // it as the pointee's operator made `Vector<Vector<int>>` fail to
+        // compile: inside the outer vector, `d[i]` over `Vector_i32*` came
+        // back as the inner vector's element type instead of a Vector.
+        ssym2 := ty_at(s, arr).kind == TY_STRUCT ? struct_sym_of(s, arr) : 0
         if ssym2 != 0:
             ovl2 := sema_try_op_overload(
                 s, a, nid, ssym2, "operator_index", idx

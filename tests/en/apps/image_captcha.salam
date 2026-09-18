@@ -1,0 +1,265 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// A complete image CAPTCHA generator, written against std/image alone -
+// no external image library, no font library, no shell-out to
+// ImageMagick.
+//
+// It draws the four things that actually make a CAPTCHA hard to read for
+// a program and easy for a person: characters set at different sizes,
+// angles and baselines so no fixed grid segments them; a busy but
+// low-contrast background so thresholding does not separate ink from
+// paper; curves that cross the glyphs so contour tracing joins letters
+// together; and a final sine warp of the whole canvas so no glyph is a
+// rigid transform of a template.
+//
+// Text is drawn with a real TrueType font when the machine has one
+// (image.FindSystemFont looks in the usual Windows/macOS/Linux places,
+// and $SALAM_FONT overrides it), and falls back to std/image's built-in
+// 5x7 bitmap font otherwise, so this runs everywhere - the fallback is
+// why the printed output below says nothing about which one was used.
+//
+// The PRNG is seeded with a fixed value so the run is reproducible; a
+// real deployment would call rand.SeedAuto() and keep the code in the
+// session instead of printing it.
+//
+// Checked against a `.expect` (every listed line must appear) rather than a
+// `.out` (whole output must match), because two of the lines below carry
+// machine-specific paths - which font was found, and where the temp file
+// landed. Recording those would pin the suite to one machine.
+
+package main
+
+import image
+import rand
+import str
+import os
+import filepath
+import math
+
+const CAPTCHA_W := 320
+const CAPTCHA_H := 110
+const CODE_LEN := 6
+
+// No I/l/O/0/1: the pairs a human cannot tell apart in a distorted image
+// are exactly the ones that make a CAPTCHA feel broken.
+const ALPHABET := "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+func byte_at(s: str, i: int): int:
+    bp := s as u8*
+    ret bp[i] as int
+end
+
+func clampi(v: int, lo: int, hi: int): int:
+    if v < lo: ret lo end
+    if v > hi: ret hi end
+    ret v
+end
+
+func make_code(n: int): str:
+    mut out := ""
+    mut i := 0
+    until i < n:
+        k := rand.Int32Range(0, str.Len(ALPHABET) - 1)
+        out = out + str.Substr(ALPHABET, k, 1)
+        i += 1
+    end
+    ret out
+end
+
+// A vertical gradient plus fine speckle. Low contrast on purpose: it has
+// to survive being read by a person while denying a solver a clean
+// threshold between paper and ink.
+func paint_background(img &: image.Image):
+    top := image.RGB(240, 246, 253)
+    bottom := image.RGB(206, 220, 240)
+    mut y := 0
+    until y < img.height:
+        t := (y as f64) / ((img.height - 1) as f64)
+        image.DrawLine(img, 0, y, img.width - 1, y, image.LerpColor(top, bottom, t))
+        y += 1
+    end
+    mut i := 0
+    until i < 900:
+        g := rand.Int32Range(150, 215)
+        image.SetPixel(img, rand.Int32Range(0, img.width - 1), rand.Int32Range(0, img.height - 1), image.RGB(g, g, g + 25))
+        i += 1
+    end
+end
+
+// Sine curves drawn the whole width of the canvas, over the glyphs.
+// Semi-transparent so they read as background to a person but still
+// connect neighbouring characters into one blob for a segmenter.
+func draw_curves(img &: image.Image, count: int):
+    mut c := 0
+    until c < count:
+        mid := (rand.Int32Range(20, img.height - 20)) as f64
+        amp := (rand.Int32Range(6, 20)) as f64
+        period := (rand.Int32Range(35, 85)) as f64
+        phase := (rand.Int32Range(0, 628)) as f64 / 100.0
+        col := image.RGBA(rand.Int32Range(40, 150), rand.Int32Range(40, 150), rand.Int32Range(80, 190), 150)
+        mut prev := 0
+        mut x := 0
+        until x < img.width:
+            yy := (mid + amp * math.Sin((x as f64) / period + phase)) as int
+            if x > 0:
+                image.DrawLine(img, x - 1, prev, x, yy, col)
+            end
+            prev = yy
+            x += 1
+        end
+        c += 1
+    end
+end
+
+func scatter_dots(img &: image.Image, count: int):
+    mut i := 0
+    until i < count:
+        col := image.RGBA(rand.Int32Range(30, 120), rand.Int32Range(30, 120), rand.Int32Range(60, 160), 190)
+        image.DrawCircleFilled(img, rand.Int32Range(0, img.width - 1), rand.Int32Range(0, img.height - 1), rand.Int32Range(0, 1), col)
+        i += 1
+    end
+end
+
+// One glyph at a time, each with its own size, rotation, slant, baseline
+// and color - the layout a solver cannot undo with a single affine
+// guess. DrawCodepointStyled returns the advance, which is ignored here
+// on purpose: the pen is placed on an even grid so the characters stay
+// evenly spread whatever their widths.
+func draw_code_ttf(img &: image.Image, code: str, f: image.Font):
+    n := str.Len(code)
+    step := ((img.width - 44) as f64) / (n as f64)
+    mut i := 0
+    until i < n:
+        mut st := image.TextStyle {}
+        st.size = 42.0 + (rand.Int32Range(0, 12) as f64)
+        st.rotate = (rand.Int32Range(0 - 34, 34) as f64) / 100.0
+        st.skew = (rand.Int32Range(0 - 22, 22) as f64) / 100.0
+        col := image.RGB(rand.Int32Range(10, 80), rand.Int32Range(10, 80), rand.Int32Range(70, 170))
+        baseline := 78.0 + (rand.Int32Range(0 - 7, 7) as f64)
+        x := 24.0 + (i as f64) * step
+        image.DrawCodepointStyled(img, byte_at(code, i), x, baseline, col, f, st)
+        i += 1
+    end
+end
+
+// The no-font-on-this-machine path. The 5x7 bitmap font cannot rotate,
+// so the jitter it does get is position and scale; the warp at the end
+// still bends the result.
+func draw_code_bitmap(img &: image.Image, code: str):
+    n := str.Len(code)
+    step := (img.width - 44) / n
+    mut i := 0
+    until i < n:
+        scale := rand.Int32Range(4, 6)
+        x := 24 + i * step
+        y := 34 + rand.Int32Range(0 - 10, 10)
+        col := image.RGB(rand.Int32Range(10, 80), rand.Int32Range(10, 80), rand.Int32Range(70, 170))
+        image.DrawText(img, x, y, str.Substr(code, i, 1), col, scale)
+        i += 1
+    end
+end
+
+// Sine displacement of the whole canvas: every column slides vertically
+// and every row horizontally, sampled from a copy so the warp reads from
+// the original pixels rather than from its own output. Coordinates are
+// clamped, so the edges smear instead of showing holes.
+func warp(src: image.Image, amp: f64, period: f64): image.Image:
+    mut out := image.New(src.width, src.height)
+    mut y := 0
+    until y < src.height:
+        mut x := 0
+        until x < src.width:
+            sx := (x as f64) + amp * math.Sin((y as f64) / period)
+            sy := (y as f64) + amp * math.Sin((x as f64) / period + 1.7)
+            ix := clampi(sx as int, 0, src.width - 1)
+            iy := clampi(sy as int, 0, src.height - 1)
+            image.SetPixel(out, x, y, image.GetPixel(src, ix, iy))
+            x += 1
+        end
+        y += 1
+    end
+    ret out
+end
+
+func count_ink(img: image.Image): int:
+    mut n := 0
+    mut y := 0
+    until y < img.height:
+        mut x := 0
+        until x < img.width:
+            if image.Luminance(image.GetPixel(img, x, y)) < 140:
+                n += 1
+            end
+            x += 1
+        end
+        y += 1
+    end
+    ret n
+end
+
+func main:
+    // Fixed seed: the same run every time, which is what makes this
+    // testable. Use rand.SeedAuto() for a real one.
+    rand.Seed(20260816 as i64)
+
+    code := make_code(CODE_LEN)
+    println "code: " + code
+    println "size: " + str.FromInt(CAPTCHA_W as i64) + "x" + str.FromInt(CAPTCHA_H as i64)
+
+    mut img := image.New(CAPTCHA_W, CAPTCHA_H)
+    paint_background(img)
+
+    font_path := image.FindSystemFont()
+    mut font_ok := false
+    mut font := image.LoadFont(font_path, font_ok)
+    if font_ok:
+        println "font: " + font_path
+        draw_code_ttf(img, code, font)
+    else:
+        println "font: built-in 5x7 bitmap (no system TrueType font found)"
+        draw_code_bitmap(img, code)
+    end
+    image.FreeFont(font)
+
+    draw_curves(img, 3)
+    scatter_dots(img, 220)
+
+    mut final := warp(img, 3.5, 21.0)
+    image.DrawRect(final, 0, 0, final.width, final.height, image.RGB(110, 130, 165))
+    image.Free(img)
+
+    // Enough dark pixels to be a drawing rather than an empty canvas,
+    // whichever of the two font paths ran.
+    if count_ink(final) > 200:
+        println "ink: ok"
+    else:
+        println "ink: missing"
+    end
+
+    outdir := filepath.Join(os.TempDir(), "salam_captcha")
+    os.MkdirAll(outdir)
+    png_path := filepath.Join(outdir, "captcha_" + code + ".png")
+    jpg_path := filepath.Join(outdir, "captcha_" + code + ".jpg")
+    if image.Save(final, png_path):
+        println "saved png: ok"
+    end
+    if image.SaveQuality(final, jpg_path, 80):
+        println "saved jpg: ok"
+    end
+    println "file: " + png_path
+
+    image.Free(final)
+    ret 0
+end

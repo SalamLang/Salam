@@ -14,6 +14,69 @@
 
 package str
 
+// Decodes the UTF-8 sequence starting at byte `i` of `bp`, writes the code
+// point to `cp` and returns the index of the next sequence.
+//
+// A truncated or malformed sequence sets `cp` to -1 and still advances, so a
+// loop over bad input terminates instead of spinning or reading past `n`. -1
+// is not a code point, so every predicate in classify.salam answers false for
+// it and callers need no separate error check.
+func _decode_at(bp: i8*, n: int, i: int, cp &: int): int:
+    b0 := _ub(bp, i)
+    char_len := CharLen(b0)
+    next_i := i + char_len
+    if next_i > n:
+        cp = 0 - 1
+        ret n
+    end
+    if char_len == 1:
+        cp = b0
+    else char_len == 2:
+        cp = ((b0 & 0x1F) << 6) | (_ub(bp, i + 1) & 0x3F)
+    else char_len == 3:
+        cp = ((b0 & 0x0F) << 12) | ((_ub(bp, i + 1) & 0x3F) << 6) | (_ub(bp, i + 2) & 0x3F)
+    else:
+        cp = ((b0 & 0x07) << 18) | ((_ub(bp, i + 1) & 0x3F) << 12) | ((_ub(bp, i + 2) & 0x3F) << 6) | (_ub(bp, i + 3) & 0x3F)
+    end
+    ret next_i
+end
+
+// Index of the start of the UTF-8 sequence that ends just before byte `e`.
+// Continuation bytes are 0x80..0xBF, which no lead byte can be, so walking
+// back over them finds the boundary without needing to re-scan from the front.
+pure func _prev_boundary(bp: i8*, e: int): int:
+    mut b := e - 1
+    until b > 0 && _ub(bp, b) >= 128 && _ub(bp, b) < 192:
+        b -= 1
+    end
+    ret b
+end
+
+@en "CodePointAt"
+@fa "کدنقطه در"
+@ar "نقطة الرمز عند"
+// Decodes the code point starting at byte offset `i` of `s`, writes it to
+// `cp`, and returns the byte offset of the next one. Malformed input yields
+// -1 in `cp` and still advances.
+//
+// This is how to walk a string when the Unicode predicates in classify.salam
+// are involved, since those take code points and a raw byte is not one:
+//
+//     mut i := 0
+//     mut cp := 0
+//     until i < s.len():
+//         i = str.CodePointAt(s, i, cp)
+//         if str.IsAlpha(cp): ... end
+//     end
+pub func CodePointAt(s: str, i: int, cp &: int): int:
+    n := s.len()
+    if i < 0 || i >= n:
+        cp = 0 - 1
+        ret n
+    end
+    ret _decode_at(_bp(s), n, i, cp)
+end
+
 @en "CharLen"
 @fa "طول نویسه"
 @ar "طول حرف"
@@ -40,6 +103,13 @@ end
 @en "Reverse"
 @fa "وارونه"
 @ar "عکس"
+// Reverses the code points of `s`.
+//
+// Code points, not characters. A combining mark is its own code point and
+// travels separately from the letter it sits on, so reversing text that uses
+// them moves each mark onto whichever letter now precedes it - "é" written as
+// e + U+0301 comes back as U+0301 + e. Reversing by grapheme cluster is the
+// operation that would keep those together, and it is not implemented here.
 pub func Reverse(s: str): str:
     n := s.len()
     bp := _bp(s)
@@ -47,10 +117,7 @@ pub func Reverse(s: str): str:
     defer BufFree(sb)
     mut e := n
     until e > 0:
-        mut b := e - 1
-        until b > 0 && _ub(bp, b) >= 128 && _ub(bp, b) < 192:
-            b -= 1
-        end
+        b := _prev_boundary(bp, e)
         mut k := b
         until k < e:
             BufAppendChar(sb, _ub(bp, k))

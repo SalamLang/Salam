@@ -1,0 +1,353 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Regression test for the text pipeline in std/image that runs before a
+// single pixel is drawn: Arabic contextual shaping (arabic_forms.salam,
+// arabic_shape.salam) and bidirectional reordering (text_bidi.salam).
+//
+// Both are pure text-to-text transforms, so every assertion here is an
+// exact codepoint sequence and none of it needs a font, a canvas or the
+// host to have any particular typeface installed. The expected forms are
+// the Unicode Arabic Presentation Forms the letters must take - e.g.
+// seen (U+0633) followed by a joining letter has to become U+FEB3, its
+// initial form - and the expected orders are what the bidi algorithm
+// must produce for a single line.
+//
+// The strings are written in Persian on purpose: it exercises the letters
+// Arabic does not have (peh, tcheh, gaf, keheh, farsi yeh) and the
+// digits that read left to right inside a right-to-left sentence.
+
+package main
+
+import image
+import str
+import testing
+import os
+
+// A string built from explicit codepoints - what the shaper is expected
+// to produce, spelled out rather than pasted, since presentation forms
+// are unreadable in source and easy to get wrong by copying.
+func cps_to_str(cps &: Vector<int>): str:
+    mut b := str.NewBuilder()
+    mut i := 0
+    until i < cps.len():
+        cp := cps.get(i)
+        if cp < 0x80:
+            str.BufAppendChar(b, cp)
+        else if cp < 0x800:
+            str.BufAppendChar(b, 0xC0 | (cp >> 6))
+            str.BufAppendChar(b, 0x80 | (cp & 0x3F))
+        else:
+            str.BufAppendChar(b, 0xE0 | (cp >> 12))
+            str.BufAppendChar(b, 0x80 | ((cp >> 6) & 0x3F))
+            str.BufAppendChar(b, 0x80 | (cp & 0x3F))
+        end
+        i += 1
+    end
+    out := str.BufStr(b)
+    str.BufFree(b)
+    ret out
+end
+
+func check_shaping:
+    mut e := Vector {} as Vector<int>
+
+    // سلام (seen, lam, alef, meem):
+    //   seen joins the letter after it        -> initial   U+FEB3
+    //   lam + alef is a mandatory ligature,
+    //   joined from the right                 -> final     U+FEFC
+    //   meem cannot join a lam-alef           -> isolated  U+FEE1
+    e.push(0xFEB3)
+    e.push(0xFEFC)
+    e.push(0xFEE1)
+    testing.AssertEqStr(image.ShapeArabic("سلام"), cps_to_str(e))
+    e.clear()
+
+    // ایران (alef, farsi yeh, reh, alef, noon): alef and reh only join
+    // to their right, so the word is three joined pieces, not one.
+    e.push(0xFE8D)
+    e.push(0xFBFE)
+    e.push(0xFEAE)
+    e.push(0xFE8D)
+    e.push(0xFEE5)
+    testing.AssertEqStr(image.ShapeArabic("ایران"), cps_to_str(e))
+    e.clear()
+
+    // پیشرفت (peh, farsi yeh, sheen, reh, feh, teh-taa) - every form in one
+    // word: initial peh, medial yeh and sheen, final reh (which breaks
+    // the join, so feh starts a new run as an initial), final teh-taa. The
+    // Persian-only letters live in the Forms-A block, far from the
+    // Arabic ones: peh initial is U+FB58, farsi yeh medial U+FBFF.
+    e.push(0xFB58)
+    e.push(0xFBFF)
+    e.push(0xFEB8)
+    e.push(0xFEAE)
+    e.push(0xFED3)
+    e.push(0xFE96)
+    testing.AssertEqStr(image.ShapeArabic("پیشرفت"), cps_to_str(e))
+    e.clear()
+
+    // A single letter has nothing to join to and stays isolated.
+    e.push(0xFEE9)
+    testing.AssertEqStr(image.ShapeArabic("ه"), cps_to_str(e))
+    e.clear()
+
+    // Bare lam + alef with nothing before it: the ligature in its
+    // isolated form.
+    e.push(0xFEFB)
+    testing.AssertEqStr(image.ShapeArabic("لا"), cps_to_str(e))
+    e.clear()
+
+    // A harakat between two letters is transparent to joining: beh still
+    // takes its medial form, and the mark is kept.
+    e.push(0xFE91)
+    e.push(0x064E)
+    e.push(0xFE92)
+    e.push(0xFE96)
+    testing.AssertEqStr(image.ShapeArabic("بَبت"), cps_to_str(e))
+    e.clear()
+
+    // Text with no Arabic in it is returned untouched, byte for byte.
+    testing.AssertEqStr(image.ShapeArabic("Salam 123!"), "Salam 123!")
+    testing.AssertEqStr(image.ShapeArabic(""), "")
+    testing.AssertEqStr(image.ShapeArabic("héllo Σαλάμ"), "héllo Σαλάμ")
+
+    e.free()
+end
+
+func check_direction:
+    testing.AssertTrue(image.IsRTLText("سلام"))
+    testing.AssertTrue(image.IsRTLText("hello سلام"))
+    testing.AssertFalse(image.IsRTLText("hello"))
+    testing.AssertFalse(image.IsRTLText("123 456"))
+    testing.AssertFalse(image.IsRTLText(""))
+
+    // The paragraph direction is the direction of the first STRONG
+    // character: digits and punctuation do not decide it.
+    testing.AssertEqInt(image.BaseDirection("سلام hello"), image.TextDirRTL)
+    testing.AssertEqInt(image.BaseDirection("hello سلام"), image.TextDirLTR)
+    testing.AssertEqInt(image.BaseDirection("123 سلام"), image.TextDirRTL)
+    testing.AssertEqInt(image.BaseDirection("123"), image.TextDirLTR)
+    testing.AssertEqInt(image.BaseDirection(""), image.TextDirLTR)
+end
+
+func check_visual_order:
+    mut e := Vector {} as Vector<int>
+
+    // Right-to-left text comes out reversed, ready to be drawn left to
+    // right by a renderer that knows nothing about direction.
+    e.push(0xFEE1)
+    e.push(0xFEFC)
+    e.push(0xFEB3)
+    testing.AssertEqStr(image.ToVisualOrder("سلام", image.TextDirAuto), cps_to_str(e))
+    e.clear()
+
+    // A Latin run inside a Persian sentence keeps its own order while
+    // the sentence around it reverses - the whole point of the
+    // algorithm.
+    e.push(0x61)
+    e.push(0x62)
+    e.push(0x20)
+    e.push(0xFEE1)
+    e.push(0xFEFC)
+    e.push(0xFEB3)
+    testing.AssertEqStr(image.ToVisualOrder("سلام ab", image.TextDirAuto), cps_to_str(e))
+    e.clear()
+
+    // Same string, same result, whether the direction was detected or
+    // stated outright.
+    e.push(0x61)
+    e.push(0x62)
+    e.push(0x20)
+    e.push(0xFEE1)
+    e.push(0xFEFC)
+    e.push(0xFEB3)
+    testing.AssertEqStr(image.ToVisualOrder("سلام ab", image.TextDirRTL), cps_to_str(e))
+    e.clear()
+
+    // Digits after Arabic text are Arabic numbers and still read left to
+    // right, on the left of the word they follow.
+    e.push(0x31)
+    e.push(0x32)
+    e.push(0x33)
+    e.push(0x20)
+    e.push(0xFEE1)
+    e.push(0xFEFC)
+    e.push(0xFEB3)
+    testing.AssertEqStr(image.ToVisualOrder("سلام 123", image.TextDirAuto), cps_to_str(e))
+    e.clear()
+
+    // A Persian phrase inside an English sentence: the paragraph stays
+    // left to right and only the Persian run flips.
+    e.push(0x61)
+    e.push(0x62)
+    e.push(0x20)
+    e.push(0xFEE1)
+    e.push(0xFEFC)
+    e.push(0xFEB3)
+    testing.AssertEqStr(image.ToVisualOrder("ab سلام", image.TextDirAuto), cps_to_str(e))
+    e.clear()
+
+    // Forcing the other direction moves the Latin run to the right of
+    // the line instead, which is what a right-to-left page wants.
+    e.push(0xFEE1)
+    e.push(0xFEFC)
+    e.push(0xFEB3)
+    e.push(0x20)
+    e.push(0x61)
+    e.push(0x62)
+    testing.AssertEqStr(image.ToVisualOrder("ab سلام", image.TextDirRTL), cps_to_str(e))
+    e.clear()
+
+    // Mirrored characters: a parenthesis in right-to-left text points
+    // the other way, because it is stored by meaning and drawn by shape.
+    e.push(0x28)
+    e.push(0xFEE1)
+    e.push(0xFEFC)
+    e.push(0xFEB3)
+    e.push(0x29)
+    testing.AssertEqStr(image.ToVisualOrder("(سلام)", image.TextDirAuto), cps_to_str(e))
+    e.clear()
+
+    // A separator between two numbers joins them (UAX #9 W4), so a time
+    // or a thousands separator stays one left-to-right run instead of
+    // being torn in half and reversed. "ساعت ۱۸:۳۰" has to keep reading
+    // 18:30, not 30:18.
+    e.push(0x06F1)
+    e.push(0x06F8)
+    e.push(0x3A)
+    e.push(0x06F3)
+    e.push(0x06F0)
+    e.push(0x20)
+    e.push(0xFE96)
+    e.push(0xFECB)
+    e.push(0xFE8E)
+    e.push(0xFEB3)
+    testing.AssertEqStr(image.ToVisualOrder("ساعت ۱۸:۳۰", image.TextDirAuto), cps_to_str(e))
+    e.clear()
+
+    // The same rule for a comma inside a number, with the colon that is
+    // NOT between two numbers staying neutral and following the Persian
+    // word it belongs to.
+    e.push(0x31)
+    e.push(0x2C)
+    e.push(0x32)
+    e.push(0x35)
+    e.push(0x30)
+    e.push(0x20)
+    e.push(0x3A)
+    e.push(0xFE96)
+    e.push(0xFEE4)
+    e.push(0xFBFF)
+    e.push(0xFED7)
+    testing.AssertEqStr(image.ToVisualOrder("قیمت: 1,250", image.TextDirAuto), cps_to_str(e))
+    e.clear()
+
+    // Bracket pairs are resolved as a pair (UAX #9 N0): a Persian phrase
+    // in brackets inside an English sentence keeps its brackets around
+    // it, and the number after them stays where it was written.
+    e.push(0xFEE1)
+    e.push(0xFEFC)
+    e.push(0xFEB3)
+    testing.AssertEqStr(image.ToVisualOrder("hello (سلام) 42 world", image.TextDirAuto), "hello (" + cps_to_str(e) + ") 42 world")
+    e.clear()
+
+    // Arabic-Indic digits are weak, not strong: they never make a line
+    // right-to-left, but two such numbers side by side still swap, which
+    // is the one case where text with no Persian letter in it is still
+    // reordered.
+    e.push(0x0662)
+    e.push(0x0666)
+    e.push(0x20)
+    e.push(0x0664)
+    e.push(0x0663)
+    e.push(0x0666)
+    testing.AssertEqStr(image.ToVisualOrder("ab ٤٣٦ ٢٦", image.TextDirAuto), "ab " + cps_to_str(e))
+    testing.AssertFalse(image.IsRTLText("ab ٤٣٦ ٢٦"))
+    e.clear()
+
+    // European digits in the same position do not: the weak rules make
+    // them plain left-to-right text.
+    testing.AssertEqStr(image.ToVisualOrder("ab 436 26", image.TextDirAuto), "ab 436 26")
+
+    // Left-to-right text is passed through unchanged, byte for byte -
+    // the pipeline costs nothing for text that does not need it.
+    testing.AssertEqStr(image.ToVisualOrder("Hello, world!", image.TextDirAuto), "Hello, world!")
+    testing.AssertEqStr(image.ToVisualOrder("", image.TextDirAuto), "")
+    testing.AssertEqStr(image.ToVisualOrder("Straße", image.TextDirLTR), "Straße")
+
+    e.free()
+end
+
+// Shaping and reordering decide which glyphs get drawn, so they show up
+// in the drawn width too: on a font that covers Arabic, the same string
+// measured with shaping on and off is not the same width, and the
+// pipeline never changes how many characters there are.
+func check_with_font:
+    path := image.FindArabicFont()
+    mut ok := false
+    f := image.LoadFont(path, ok)
+    testing.AssertTrue(!ok || str.Len(path) > 0)
+    testing.AssertTrue(!ok || image.FontValid(f))
+
+    mut st := image.TextStyle {}
+    st.size = 32.0
+    shaped_w := image.TextWidthStyled(f, "سلام", st)
+    mut raw := image.TextStyle {}
+    raw.size = 32.0
+    raw.shape = false
+    raw_w := image.TextWidthStyled(f, "سلام", raw)
+    testing.AssertTrue(!ok || shaped_w > 0.0)
+    testing.AssertTrue(!ok || raw_w > 0.0)
+    // The ligature merges two letters into one glyph, so shaped text is
+    // narrower than the same string drawn letter by letter.
+    testing.AssertTrue(!ok || shaped_w < raw_w)
+
+    // Drawing it puts ink on the canvas, and the same text drawn at
+    // twice the size is wider.
+    mut img := image.NewFilled(360, 90, image.RGB(255, 255, 255))
+    image.DrawTextStyled(img, 10.0, 60.0, "سلام ایران ۱۴۰۴", image.RGB(0, 0, 0), f, st)
+    mut ink := 0
+    mut y := 0
+    until y < img.height:
+        mut x := 0
+        until x < img.width:
+            if image.Luminance(image.GetPixel(img, x, y)) < 128:
+                ink += 1
+            end
+            x += 1
+        end
+        y += 1
+    end
+    testing.AssertTrue(!ok || ink > 100)
+    mut big := image.TextStyle {}
+    big.size = 64.0
+    testing.AssertTrue(!ok || image.TextWidthStyled(f, "سلام", big) > shaped_w)
+    image.Free(img)
+    image.FreeFont(f)
+end
+
+func main:
+    println "shaping"
+    check_shaping()
+    println "direction"
+    check_direction()
+    println "visual order"
+    check_visual_order()
+    println "with font"
+    check_with_font()
+    println "done"
+    os.Exit(testing.Summary())
+    ret 0
+end

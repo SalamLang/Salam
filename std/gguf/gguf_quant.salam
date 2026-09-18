@@ -1,0 +1,141 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package gguf
+
+import compress
+import encoding.binary
+import math
+import tensor
+
+// Dequantization of the block formats into f32 tensors.
+//
+//   F32    4 bytes each, copied
+//   F16    IEEE half, decoded (subnormals and infinities included)
+//   Q8_0   blocks of 32: f16 scale d, then 32 signed bytes; x = d * q
+//   Q4_0   blocks of 32: f16 scale d, then 16 bytes of nibbles; the low
+//          nibble of byte j is element j, the high nibble element j+16;
+//          x = d * (nibble - 8)
+//   Q4_1   blocks of 32: f16 scale d, f16 minimum m, 16 nibble bytes;
+//          x = d * nibble + m
+//
+// Element counts of the quantized types must be multiples of 32, as
+// they are in every file ggml writes.
+
+// IEEE 754 binary16 to f64.
+func _half(bits: int): f64:
+    sign := (bits >> 15) & 1
+    exp := (bits >> 10) & 31
+    frac := bits & 1023
+    mut v := 0.0
+    if exp == 0:
+        v = (frac as f64) * math.Pow(2.0, 0.0 - 24.0)
+    else exp == 31:
+        if frac == 0: v = 1.0e300 * 1.0e300 else: v = 0.0 / 0.0 end
+    else:
+        v = (1.0 + (frac as f64) / 1024.0) * math.Pow(2.0, (exp - 15) as f64)
+    end
+    if sign == 1: v = 0.0 - v end
+    ret v
+end
+
+func _bytes_of(t &: TensorInfo): int:
+    n := t.count()
+    if t.ggml_type == GGML_F32: ret n * 4 end
+    if t.ggml_type == GGML_F16: ret n * 2 end
+    if t.ggml_type == GGML_Q8_0: ret (n / 32) * 34 end
+    if t.ggml_type == GGML_Q4_0: ret (n / 32) * 18 end
+    if t.ggml_type == GGML_Q4_1: ret (n / 32) * 20 end
+    ret 0 - 1
+end
+
+// ---- public API ----
+
+// The number of data bytes a tensor occupies, or -1 for a type this
+// package does not dequantize.
+@en "TensorBytes"
+@fa "بایت‌های تانسور"
+@ar "بايتات الموتر"
+pub func TensorBytes(g &: Gguf, index: int): int:
+    if index < 0 || index >= g.tensors.len(): ret 0 - 1 end
+    t := g.tensors.get(index)
+    ret _bytes_of(t)
+end
+
+// Tensor `index` as f32, with GGUF's innermost-first dimensions
+// reversed into row-major shape order.
+@en "LoadTensorF32"
+@fa "بارگذاری تانسور اعشاری"
+@ar "تحميل موتر عشري"
+pub func LoadTensorF32(g &: Gguf, index: int, ok &: bool): tensor.Tensor:
+    ok = false
+    if g.ok == false || index < 0 || index >= g.tensors.len(): ret tensor.Empty() end
+    t := g.tensors.get(index)
+    nbytes := _bytes_of(t)
+    if nbytes < 0: ret tensor.Empty() end
+    n := t.count()
+    start := g.data_offset + (t.offset as int)
+    if start < 0 || start + nbytes > compress.BufLen(g.raw): ret tensor.Empty() end
+    if t.ggml_type != GGML_F32 && t.ggml_type != GGML_F16 && n % 32 != 0: ret tensor.Empty() end
+    mut shape := Vector {} as Vector<int>
+    mut i := t.dims.len() - 1
+    until i >= 0:
+        shape.push(t.dims.get(i))
+        i -= 1
+    end
+    if shape.len() == 0: shape.push(1) end
+    out := tensor.Zeros(shape)
+    shape.free()
+    p := out.data.data
+    mut rd := compress.NewByteReader(((g.raw.data as i64) + (start as i64)) as void*, nbytes)
+    if t.ggml_type == GGML_F32:
+        repeat n with k: p[k] = binary.ReadF32(rd, false) as f32 end
+    else t.ggml_type == GGML_F16:
+        repeat n with k: p[k] = _half(binary.ReadU16LE(rd)) as f32 end
+    else t.ggml_type == GGML_Q8_0:
+        repeat n / 32 with b:
+            d := _half(binary.ReadU16LE(rd))
+            repeat 32 with j:
+                mut q := binary.ReadU8(rd)
+                if q >= 128: q = q - 256 end
+                p[b * 32 + j] = (d * (q as f64)) as f32
+            end
+        end
+    else t.ggml_type == GGML_Q4_0:
+        repeat n / 32 with b:
+            d := _half(binary.ReadU16LE(rd))
+            repeat 16 with j:
+                byte := binary.ReadU8(rd)
+                lo := (byte & 15) - 8
+                hi := (byte >> 4) - 8
+                p[b * 32 + j] = (d * (lo as f64)) as f32
+                p[b * 32 + j + 16] = (d * (hi as f64)) as f32
+            end
+        end
+    else:
+        repeat n / 32 with b:
+            d := _half(binary.ReadU16LE(rd))
+            m := _half(binary.ReadU16LE(rd))
+            repeat 16 with j:
+                byte := binary.ReadU8(rd)
+                lo := byte & 15
+                hi := byte >> 4
+                p[b * 32 + j] = (d * (lo as f64) + m) as f32
+                p[b * 32 + j + 16] = (d * (hi as f64) + m) as f32
+            end
+        end
+    end
+    ok = true
+    ret out
+end

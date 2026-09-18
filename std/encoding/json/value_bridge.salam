@@ -68,15 +68,18 @@ func _pstr(s: str, i: int, endpos &: int, err &: encerr.EncodingError): str:
             else e == 114: str.BufAppendChar(sb, 13)
             else e == 116: str.BufAppendChar(sb, 9)
             else e == 117:
-                if p + 4 < n:
-                    h0 := encoding.HexVal(s.substr(p + 1, 1))
-                    h1 := encoding.HexVal(s.substr(p + 2, 1))
-                    h2 := encoding.HexVal(s.substr(p + 3, 1))
-                    h3 := encoding.HexVal(s.substr(p + 4, 1))
-                    code := h0 * 4096 + h1 * 256 + h2 * 16 + h3
-                    str.BufAppendChar(sb, code)
-                    p += 4
+                // _dcp (json_scan) does the whole escape: four hex digits, the
+                // surrogate pair a non-BMP code point is written as, and the
+                // UTF-8 encoding. The four separate substr+HexVal calls here
+                // built the code point and then appended it as one byte, which
+                // is what turned every escaped Persian letter into mojibake.
+                q := _dcp(s, p, sb)
+                if q < 0:
+                    err = encerr.ErrUnexpectedToken("invalid \\u escape", p)
+                    endpos = p
+                    ret str.BufStr(sb)
                 end
+                p = q
             else:
                 str.BufAppendChar(sb, e)
             end
@@ -212,8 +215,8 @@ func _sort_keys(keys &: Vector<str>):
     until i < n:
         mut j := i
         until j > 0:
-            a := keys.get(j - 1)[0]
-            b := keys.get(j)[0]
+            a := keys.get(j - 1)
+            b := keys.get(j)
             if a <= b: break end
             keys.set(j - 1, b)
             keys.set(j, a)
@@ -230,7 +233,16 @@ func _encode_value(v: value.Value, opts: JSONOptions): str:
         ret "false"
     end
     if value.IsInt(v): ret conv.FormatInt(value.AsInt(v)) end
-    if value.IsFloat(v): ret conv.FormatFloat(value.AsFloat(v)) end
+    // conv.FormatFloat does not exist under SALAM_KERNEL (f64 in a
+    // signature needs an SSE register, which -mgeneral-regs-only refuses
+    // regardless of the body; see its own comment in std/conv/conv.salam).
+    if value.IsFloat(v):
+        if SALAM_KERNEL:
+            ret "null"
+        else:
+            ret conv.FormatFloat(value.AsFloat(v))
+        end
+    end
     if value.IsString(v): ret Str(value.AsString(v)) end
     if value.IsArray(v):
         mut parts := Vector {} as Vector<str>
@@ -248,7 +260,7 @@ func _encode_value(v: value.Value, opts: JSONOptions): str:
         mut parts := Vector {} as Vector<str>
         mut i := 0
         until i < keys.len():
-            k := keys.get(i)[0]
+            k := keys.get(i)
             fv := value.ObjectGet(v, k)
             if opts.ignore_null && value.IsNull(fv):
                 i += 1

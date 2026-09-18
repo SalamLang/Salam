@@ -3,9 +3,19 @@
 # salam can produce fully static linux-musl binaries for a target without
 # that target's toolchain installed.
 #
-# A sysroot here is five files - crt1.o, crti.o, crtn.o, libc.a, libgcc.a -
-# plus, with --headers, musl's libc headers, taken out of a prebuilt
-# cross toolchain and with everything else thrown away.
+# A sysroot here is five required files - crt1.o, crti.o, crtn.o, libc.a,
+# libgcc.a - plus three more that clang wants only when it links a static
+# executable itself (crtbeginT.o, crtend.o, libgcc_eh.a), plus, with
+# --headers, musl's libc headers. All taken out of a prebuilt cross toolchain
+# with everything else thrown away.
+#
+# The extra three are best-effort: an arch whose toolchain does not carry them
+# still stages, because salam's own driver never asks for them - it names
+# crt1.o and lets its C compiler do the rest. They matter to the Windows
+# release job, which cross-compiles the static third-party libs with clang.
+# Without them in the sysroot clang falls back to the host's GCC install,
+# which on that runner is mingw: PE objects, and the link dies with
+# "crtend.o: unknown file type".
 #
 # Usage:
 #   tools/bash/fetch-musl-sysroots.sh --out DIR [--arches "x86_64 aarch64 ..."]
@@ -180,6 +190,14 @@ for arch in $ARCHES; do
         else
             missing="$missing $f"
         fi
+    done
+
+    # Optional, and deliberately not part of `missing`: losing one of these
+    # costs a static clang link on the Windows job, while treating it as
+    # required would cost the whole arch.
+    for f in crtbeginT.o crtend.o libgcc_eh.a; do
+        found=$(find "$arch-x" -name "$f" -type f 2>/dev/null | head -1)
+        [ -n "$found" ] && cp "$found" "$SR/$f"
     done
 
     if [ -n "$missing" ]; then

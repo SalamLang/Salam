@@ -1,0 +1,424 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package matrix
+
+import math
+
+// The named matrices: structured families that show up constantly, and the
+// test cases that every numerical library is measured against.
+//
+// Three groups live here.
+//
+// Structured operators. Toeplitz and Circulant are convolutions, Vandermonde
+// turns polynomial interpolation into a linear system, Companion turns
+// polynomial root-finding into an eigenvalue problem (and is how every
+// serious root finder actually works), Hankel appears in moment problems and
+// system identification.
+//
+// Geometry. The rotation matrices, the Householder reflector and the Givens
+// rotation, which are the three transformations the factorizations in this
+// library are built out of.
+//
+// Torture tests. Hilbert is the canonical ill-conditioned matrix: the 12x12
+// one has a condition number around 10^16, which means a double-precision
+// solve of a system involving it retains no correct digits at all. It is here
+// so that claims about accuracy can be checked rather than asserted.
+//
+// The random constructors take an explicit seed and use their own generator,
+// so a result is reproducible across runs and machines. A test that cannot be
+// reproduced cannot be debugged.
+
+// xorshift64* constants: the multiplier is the one Vigna published with the
+// generator, chosen so the low bits pass the same statistical tests as the
+// high ones.
+const _RNG_MULT := 2685821657736338717 as u64
+const _RNG_ODD := 1442695040888963407 as u64
+
+@en "Rng"
+@fa "مولد تصادفی"
+@ar "مولد عشوائي"
+pub struct Rng:
+    pub s: u64 = 0
+
+    // One xorshift64* step. Small, fast, and with a period of 2^64 - 1,
+    // which is far more than any matrix construction will ask of it.
+    @en "next_bits"
+    @fa "بیت بعدی"
+    @ar "بتات تالية"
+    pub func next_bits(): u64:
+        mut x := this.s
+        x = x ^ (x >> 12)
+        x = x ^ (x << 25)
+        x = x ^ (x >> 27)
+        this.s = x
+        ret x * _RNG_MULT
+    end
+
+    // A uniform double in [0, 1). Built from the top 53 bits, which are the
+    // ones that fit a double's mantissa exactly.
+    @en "next_float"
+    @fa "اعشاری بعدی"
+    @ar "عدد عشري تال"
+    pub func next_float(): f64:
+        v := this.next_bits() >> 11
+        ret (v as f64) / 9007199254740992.0
+    end
+
+    // A standard normal deviate by the Box-Muller transform.
+    @en "next_normal"
+    @fa "نرمال بعدی"
+    @ar "طبيعي تال"
+    pub func next_normal(): f64:
+        mut u := this.next_float()
+        if u <= 0.0: u = 1.0e-15 end
+        v := this.next_float()
+        ret math.Sqrt(0.0 - 2.0 * math.Log(u)) * math.Cos(6.283185307179586 * v)
+    end
+end
+
+func _fill_random(m &: Matrix, g &: Rng, lo: f64, hi: f64):
+    repeat m.count() with k: m.a.set(k, lo + (hi - lo) * g.next_float()) end
+end
+
+func _fill_normal(m &: Matrix, g &: Rng):
+    repeat m.count() with k: m.a.set(k, g.next_normal()) end
+end
+
+func _hilb_inv_entry(i: int, j: int, n: int): f64:
+    mut v := ((i + j + 1) as f64) * _binom(n + i, n - j - 1) * _binom(n + j, n - i - 1)
+    v = v * _binom(i + j, i) * _binom(i + j, i)
+    if (i + j) % 2 == 1: ret 0.0 - v end
+    ret v
+end
+
+// Binomial coefficients by the multiplicative recurrence, which stays in
+// integers the whole way and never forms a factorial that overflows.
+func _binom(n: int, k: int): f64:
+    if k < 0 || k > n: ret 0.0 end
+    mut r := 1.0
+    mut i := 0
+    until i < k:
+        r = r * ((n - i) as f64) / ((i + 1) as f64)
+        i += 1
+    end
+    ret r
+end
+
+func _hankel_at(fc &: Matrix, lr &: Matrix, i: int, j: int, n: int): f64:
+    k := i + j
+    if k < n: ret fc.a.get(k) end
+    ret lr.a.get(k - n + 1)
+end
+
+func _rot_fill(m &: Matrix, p: int, q: int, c: f64, s: f64):
+    m.set(p, p, c)
+    m.set(p, q, 0.0 - s)
+    m.set(q, p, s)
+    m.set(q, q, c)
+end
+
+// A seeded generator. A zero seed is replaced, since xorshift is stuck at
+// zero forever.
+@en "NewRng"
+@fa "مولد نو"
+@ar "مولد جديد"
+pub func NewRng(seed: i64): Rng:
+    mut g := Rng {}
+    g.s = (seed as u64) + _RNG_ODD
+    if g.s == 0: g.s = _RNG_ODD end
+    ret g
+end
+
+// H(i,j) = 1/(i+j+1). Symmetric, positive definite, and catastrophically
+// ill-conditioned: cond grows roughly like e^(3.5n), so by n = 12 a double
+// precision solve has lost every digit. The standard proving ground for a
+// linear solver's accuracy claims.
+@en "Hilbert"
+@fa "هیلبرت"
+@ar "هيلبرت"
+pub func Hilbert(n: int): Matrix:
+    mut m := Zeros(n, n)
+    repeat n with i:
+        repeat n with j: m.set(i, j, 1.0 / ((i + j + 1) as f64)) end
+    end
+    ret m
+end
+
+// The exact inverse of the Hilbert matrix, whose entries are all integers.
+// Having it in closed form is what makes Hilbert a usable test: the error of
+// a computed inverse can be measured against truth rather than estimated.
+@en "HilbertInverse"
+@fa "وارون هیلبرت"
+@ar "معكوس هيلبرت"
+pub func HilbertInverse(n: int): Matrix:
+    mut m := Zeros(n, n)
+    repeat n with i:
+        repeat n with j: m.set(i, j, _hilb_inv_entry(i, j, n)) end
+    end
+    ret m
+end
+// V(i,j) = x_i^j: the matrix of the polynomial interpolation problem. Solving
+// V c = y gives the coefficients of the unique degree n-1 polynomial through
+// the points, and V's determinant is the product of all pairwise differences
+// of the nodes, so it is singular exactly when two nodes coincide.
+@en "Vandermonde"
+@fa "واندرموند"
+@ar "فاندرموند"
+pub func Vandermonde(x &: Matrix, cols: int): Matrix:
+    n := x.count()
+    mut m := Zeros(n, cols)
+    repeat n with i:
+        mut p := 1.0
+        repeat cols with j:
+            m.set(i, j, p)
+            p = p * x.a.get(i)
+        end
+    end
+    ret m
+end
+
+// Constant along diagonals: T(i,j) depends only on j-i. `first_col` supplies
+// the entries at and below the diagonal, `first_row` those above it, with
+// first_row(0) ignored since the corner belongs to the column.
+@en "Toeplitz"
+@fa "توپلیتز"
+@ar "توبليتز"
+pub func Toeplitz(first_col &: Matrix, first_row &: Matrix): Matrix:
+    n := first_col.count()
+    m := first_row.count()
+    mut r := Zeros(n, m)
+    repeat n with i:
+        repeat m with j:
+            if j >= i: r.set(i, j, first_row.a.get(j - i))
+            else:
+                r.set(i, j, first_col.a.get(i - j))
+            end
+        end
+    end
+    ret r
+end
+
+// Constant along antidiagonals: H(i,j) depends only on i+j.
+@en "Hankel"
+@fa "هنکل"
+@ar "هانكل"
+pub func Hankel(first_col &: Matrix, last_row &: Matrix): Matrix:
+    n := first_col.count()
+    m := last_row.count()
+    mut r := Zeros(n, m)
+    repeat n with i:
+        repeat m with j: r.set(i, j, _hankel_at(first_col, last_row, i, j, n)) end
+    end
+    ret r
+end
+
+// Every row is the previous one rotated right by one. A circulant matrix is
+// diagonalized by the discrete Fourier transform, which is the reason cyclic
+// convolution costs n log n.
+@en "Circulant"
+@fa "دورانی"
+@ar "دائرية"
+pub func Circulant(c &: Matrix): Matrix:
+    n := c.count()
+    mut r := Zeros(n, n)
+    repeat n with i:
+        repeat n with j: r.set(i, j, c.a.get(((j - i) % n + n) % n)) end
+    end
+    ret r
+end
+
+// The companion matrix of a monic polynomial given by its coefficients in
+// ascending order. Its characteristic polynomial is exactly that polynomial,
+// so its eigenvalues are the roots, which is how polynomial root finding is
+// done in practice: hand the companion matrix to a QR iteration.
+@en "Companion"
+@fa "همراه"
+@ar "مرافقة"
+pub func Companion(coeffs &: Matrix): Matrix:
+    n := coeffs.count() - 1
+    if n < 1: ret Zeros(0, 0) end
+    lead := coeffs.a.get(n)
+    if lead == 0.0: ret Zeros(0, 0) end
+    mut m := Zeros(n, n)
+    repeat n with i: m.set(i, n - 1, 0.0 - coeffs.a.get(i) / lead) end
+    mut i := 1
+    until i < n:
+        m.set(i, i - 1, 1.0)
+        i += 1
+    end
+    ret m
+end
+
+// P(i,j) = binomial(i+j, i). Symmetric, positive definite, determinant
+// exactly 1, and ill-conditioned enough to be a useful test while staying
+// entirely in integers.
+@en "Pascal"
+@fa "پاسکال"
+@ar "باسكال"
+pub func Pascal(n: int): Matrix:
+    mut m := Zeros(n, n)
+    repeat n with i: m.set(i, 0, 1.0) end
+    repeat n with j: m.set(0, j, 1.0) end
+    mut i := 1
+    until i < n:
+        mut j := 1
+        until j < n:
+            m.set(i, j, m.at(i - 1, j) + m.at(i, j - 1))
+            j += 1
+        end
+        i += 1
+    end
+    ret m
+end
+
+// The counter-clockwise rotation of the plane by `theta` radians.
+@en "Rotation2D"
+@fa "دوران دوبعدی"
+@ar "دوران ثنائي"
+pub func Rotation2D(theta: f64): Matrix:
+    c := math.Cos(theta)
+    s := math.Sin(theta)
+    mut m := Zeros(2, 2)
+    m.set(0, 0, c)
+    m.set(0, 1, 0.0 - s)
+    m.set(1, 0, s)
+    m.set(1, 1, c)
+    ret m
+end
+
+// Rotation about a coordinate axis: axis 0 for x, 1 for y, 2 for z, by the
+// right-hand rule.
+@en "Rotation3D"
+@fa "دوران سه‌بعدی"
+@ar "دوران ثلاثي"
+pub func Rotation3D(axis: int, theta: f64): Matrix:
+    c := math.Cos(theta)
+    s := math.Sin(theta)
+    mut m := Eye(3)
+    if axis == 0: _rot_fill(m, 1, 2, c, s) end
+    if axis == 1: _rot_fill(m, 2, 0, c, s) end
+    if axis == 2: _rot_fill(m, 0, 1, c, s) end
+    ret m
+end
+
+// The reflector I - 2 v v^T / (v^T v): reflection through the hyperplane with
+// normal v. Orthogonal, symmetric and its own inverse. This one matrix is
+// what QR, Hessenberg reduction and tridiagonalization are all made of.
+@en "Householder"
+@fa "هاوس‌هولدر"
+@ar "هاوسهولدر"
+pub func Householder(v &: Matrix): Matrix:
+    n := v.count()
+    mut d := 0.0
+    repeat n with k: d += v.a.get(k) * v.a.get(k) end
+    mut m := Eye(n)
+    if d == 0.0: ret m end
+    f := 2.0 / d
+    repeat n with i:
+        repeat n with j: m.add_at(i, j, 0.0 - f * v.a.get(i) * v.a.get(j)) end
+    end
+    ret m
+end
+
+// The plane rotation acting on coordinates p and q. Orthogonal, and the tool
+// for zeroing one entry at a time, which is what the eigenvalue iteration
+// and the SVD sweeps use.
+@en "Givens"
+@fa "گیونز"
+@ar "غيفنز"
+pub func Givens(n: int, p: int, q: int, theta: f64): Matrix:
+    mut m := Eye(n)
+    if p < 0 || q < 0 || p >= n || q >= n || p == q: ret m end
+    _rot_fill(m, p, q, math.Cos(theta), math.Sin(theta))
+    ret m
+end
+
+// The permutation matrix for a given rearrangement: P(i, perm(i)) = 1, so
+// P A permutes the rows of A into the given order.
+@en "Permutation"
+@fa "جایگشت"
+@ar "تبديل"
+pub func Permutation(perm &: Matrix): Matrix:
+    n := perm.count()
+    mut m := Zeros(n, n)
+    repeat n with i:
+        j := perm.a.get(i) as int
+        if j >= 0 && j < n: m.set(i, j, 1.0) end
+    end
+    ret m
+end
+
+// Uniform entries in [lo, hi).
+@en "Random"
+@fa "تصادفی"
+@ar "عشوائية"
+pub func Random(rows: int, cols: int, lo: f64, hi: f64, seed: i64): Matrix:
+    mut g := NewRng(seed)
+    mut m := Zeros(rows, cols)
+    _fill_random(m, g, lo, hi)
+    ret m
+end
+
+// Standard normal entries, the matrix ensemble most theory is stated for.
+@en "RandomNormal"
+@fa "تصادفی نرمال"
+@ar "عشوائية طبيعية"
+pub func RandomNormal(rows: int, cols: int, seed: i64): Matrix:
+    mut g := NewRng(seed)
+    mut m := Zeros(rows, cols)
+    _fill_normal(m, g)
+    ret m
+end
+
+// A random symmetric matrix, from the symmetric part of a random one.
+@en "RandomSymmetric"
+@fa "تصادفی متقارن"
+@ar "عشوائية متماثلة"
+pub func RandomSymmetric(n: int, seed: i64): Matrix:
+    mut a := RandomNormal(n, n, seed)
+    m := SymPart(a)
+    defer a.free()
+    ret m
+end
+
+// A random symmetric positive definite matrix, built as A^T A + nI. The shift
+// is what guarantees definiteness rather than mere semidefiniteness: A^T A
+// alone is singular whenever A happens to be, and for a test matrix that is
+// exactly the case one does not want to hit by accident.
+@en "RandomSPD"
+@fa "تصادفی معین مثبت"
+@ar "عشوائية معرفة موجبة"
+pub func RandomSPD(n: int, seed: i64): Matrix:
+    mut a := RandomNormal(n, n, seed)
+    mut m := Gram(a)
+    ShiftDiagonal(m, n as f64)
+    defer a.free()
+    ret m
+end
+
+// A random orthogonal matrix, as the Q of a QR factorization of a random
+// Gaussian matrix. That construction samples the orthogonal group evenly,
+// which building one from random rotations does not.
+@en "RandomOrthogonal"
+@fa "تصادفی متعامد"
+@ar "عشوائية متعامدة"
+pub func RandomOrthogonal(n: int, seed: i64): Matrix:
+    mut a := RandomNormal(n, n, seed)
+    mut f := QRDecompose(a)
+    q := QRGetQ(f)
+    defer f.free()
+    defer a.free()
+    ret q
+end

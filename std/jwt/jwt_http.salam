@@ -1,0 +1,266 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package jwt
+
+import net.http
+
+// The HTTP half of this package: turn a request into either a verified
+// identity or a finished 401/403 response, in one line at the top of a
+// handler.
+//
+//     func guard(): jwt.Guard:
+//         mut g := jwt.NewGuard(os.Env("API_SECRET"))
+//         g.opts.issuer = "api.example.com"
+//         ret g
+//     end
+//
+//     func me(ctx: i64):
+//         mut t := jwt.Token { }
+//         if !jwt.Require(ctx, guard(), t): ret end     // 401 already sent
+//         http.Ctx_json(ctx, `{"sub":"` + t.claims.sub + `"}`)
+//     end
+//
+//     func admin(ctx: i64):
+//         mut t := jwt.Token { }
+//         if !jwt.RequireScope(ctx, guard(), "admin", t): ret end
+//         ...
+//     end
+//
+// WHY THIS IS IN std/jwt AND NOT A PACKAGE OF ITS OWN
+//
+// It was one, briefly, on the theory that a CLI which only signs tokens
+// should not link an HTTP server. Measured, that theory is false: dead-code
+// elimination drops every unused function, and a jwt-only binary is byte for
+// byte the same size with these files present. What was left was a second
+// package whose name promised more than it delivered - "auth" implies OAuth,
+// sessions, LDAP - for one specific thing: JWT over HTTP. So it lives here,
+// where its name is accurate.
+//
+// net/router has no middleware chain - a route is a function pointer, and a
+// handler cannot wrap another. So the guard is a call at the top of the
+// handler instead, which is more typing than a middleware but has the
+// property that it is visible in the handler it protects. There is no way to
+// add a route and forget to cover it somewhere else.
+//
+// Require WRITES the failure response and returns false. The handler's whole
+// obligation on a false is to return.
+
+@en "Guard"
+@fa "نگهبان"
+@ar "حارس"
+pub struct Guard:
+    // The HMAC secret. An empty one makes every verification fail, which is
+    // the correct behaviour when the config did not load.
+    pub secret: str = ""
+    // Verification policy: algorithm, issuer, audience, leeway, ...
+    pub opts: Options = Options {}
+    // Also accept the token from this cookie when there is no Authorization
+    // header. Empty (the default) means header-only, which is what an API
+    // wants; set it for a browser session. See auth_session.salam.
+    pub cookie: str = ""
+    // The realm reported in WWW-Authenticate.
+    pub realm: str = "api"
+end
+
+pure func _lower_ascii(c: int): int:
+    if c >= 65 && c <= 90: ret c + 32 end
+    ret c
+end
+
+// Case-insensitive "bearer " prefix, per RFC 6750 §2.1 - the scheme is a
+// token and clients send every casing of it.
+func _strip_bearer(value: str): str:
+    n := value.len()
+    if n < 7: ret "" end
+    want := "bearer"
+    p := (value as void*) as i8*
+    w := (want as void*) as i8*
+    repeat 6 with i:
+        mut a := p[i] as int
+        if a < 0: a = a + 256 end
+        mut b := w[i] as int
+        if b < 0: b = b + 256 end
+        if _lower_ascii(a) != b: ret "" end
+    end
+    if value.substr(6, 1) != " ": ret "" end
+    mut start := 6
+    until start < n && value.substr(start, 1) == " ":
+        start += 1
+    end
+    if start >= n: ret "" end
+    ret value.substr(start, n - start)
+end
+
+func _json_error(code: str, reason: str): str:
+    ret `{"error":"`.concat(code).concat(`","reason":"`).concat(reason).concat(`"}`)
+end
+
+func _challenge(ctx: i64, g: Guard, token_was_offered: bool):
+    http.Ctx_status(ctx, 401)
+    mut value := `Bearer realm="`.concat(g.realm).concat(`"`)
+    if token_was_offered:
+        value = value.concat(`, error="invalid_token"`)
+    end
+    http.Ctx_set_header(ctx, "WWW-Authenticate", value)
+end
+
+@en "NewGuard"
+@fa "نگهبان جدید"
+@ar "حارس جدید"
+pub func NewGuard(secret: str): Guard:
+    ret Guard { secret = secret, opts = DefaultOptions() }
+end
+
+// The token out of an Authorization header VALUE, or "" if it is not a
+// bearer credential. Split out from BearerToken so it can be tested without
+// a live request.
+@en "ParseBearer"
+@fa "تجزیه حامل"
+@ar "تحلیل حامل"
+pub func ParseBearer(header_value: str): str:
+    ret _strip_bearer(header_value)
+end
+
+// The bearer token from the request's Authorization header, or "" when
+// there is none.
+@en "BearerToken"
+@fa "توکن حامل"
+@ar "رمز حامل"
+pub func BearerToken(ctx: i64): str:
+    ret _strip_bearer(http.Ctx_header(ctx, "Authorization"))
+end
+
+// The token the guard should check: Authorization first, then the cookie if
+// the guard names one. Header first on purpose - an explicit credential
+// beats an ambient one, and it is what keeps a stale cookie from shadowing
+// the token a client just sent.
+@en "TokenFrom"
+@fa "توکن از"
+@ar "الرمز من"
+pub func TokenFrom(ctx: i64, g: Guard): str:
+    bearer := BearerToken(ctx)
+    if bearer.len() > 0: ret bearer end
+    if g.cookie.len() > 0: ret http.Ctx_cookie(ctx, g.cookie) end
+    ret ""
+end
+
+// Verify without touching the response. For a handler that wants to serve
+// something either way - a public page that shows more when signed in.
+@en "Check"
+@fa "بررسی"
+@ar "فحص"
+pub func Check(ctx: i64, g: Guard, err &: int): Token:
+    raw := TokenFrom(ctx, g)
+    if raw.len() == 0:
+        err = JWT_ERR_MALFORMED
+        ret Token {}
+    end
+    ret Verify(raw, g.secret, g.opts, err)
+end
+
+// 401 with a WWW-Authenticate challenge. `reason` is the machine-readable
+// half; nothing here echoes back the token or which byte of it was wrong.
+//
+// The challenge carries error="invalid_token" only when a credential was
+// actually presented and rejected. RFC 6750 §3 asks for a bare challenge
+// when the request simply had none, and clients use the difference to decide
+// between "sign in" and "your session went bad".
+@en "Unauthorized"
+@fa "غیرمجاز"
+@ar "غیر مصرح"
+pub func Unauthorized(ctx: i64, g: Guard, reason: str):
+    _challenge(ctx, g, true)
+    http.Ctx_json(ctx, _json_error("unauthorized", reason))
+end
+
+// 401 for a request that presented no credential at all.
+@en "MissingCredential"
+@fa "بدون گواهی"
+@ar "بدون اعتماد"
+pub func MissingCredential(ctx: i64, g: Guard):
+    _challenge(ctx, g, false)
+    http.Ctx_json(ctx, _json_error("unauthorized", "missing bearer token"))
+end
+
+// 403: the caller is who they say they are and still may not do this.
+@en "Forbidden"
+@fa "ممنوع"
+@ar "محظور"
+pub func Forbidden(ctx: i64, reason: str):
+    http.Ctx_status(ctx, 403)
+    http.Ctx_json(ctx, _json_error("forbidden", reason))
+end
+
+// Verify, or finish the response with a 401 and return false.
+@en "Require"
+@fa "نیاز"
+@ar "یتطلب"
+pub func Require(ctx: i64, g: Guard, t &: Token): bool:
+    raw := TokenFrom(ctx, g)
+    if raw.len() == 0:
+        MissingCredential(ctx, g)
+        ret false
+    end
+    mut err := 0
+    verified := Verify(raw, g.secret, g.opts, err)
+    if err != JWT_OK:
+        Unauthorized(ctx, g, ErrorText(err))
+        ret false
+    end
+    t = verified
+    ret true
+end
+
+// Require, plus an OAuth-style space-delimited "scope" claim containing
+// `scope`. 401 when the token is bad, 403 when it is good but too narrow.
+@en "RequireScope"
+@fa "نیاز به دامنه"
+@ar "یتطلب نطاق"
+pub func RequireScope(ctx: i64, g: Guard, scope: str, t &: Token): bool:
+    if !Require(ctx, g, t): ret false end
+    if !HasScope(t, scope):
+        Forbidden(ctx, "missing scope: ".concat(scope))
+        ret false
+    end
+    ret true
+end
+
+// Require, plus a claim that is either the string `value` or an array
+// containing it: RequireClaim(ctx, g, "role", "admin", t).
+@en "RequireClaim"
+@fa "نیاز به ادعا"
+@ar "یتطلب مطالبة"
+pub func RequireClaim(ctx: i64, g: Guard, key: str, value: str, t &: Token): bool:
+    if !Require(ctx, g, t): ret false end
+    if !ListHas(t, key, value):
+        Forbidden(ctx, "missing ".concat(key).concat(": ").concat(value))
+        ret false
+    end
+    ret true
+end
+
+// Require, plus the subject. For a route like /users/:id/settings, where
+// being signed in is not enough - it has to be that user.
+@en "RequireSubject"
+@fa "نیاز به موضوع"
+@ar "یتطلب موضوع"
+pub func RequireSubject(ctx: i64, g: Guard, subject: str, t &: Token): bool:
+    if !Require(ctx, g, t): ret false end
+    if t.claims.sub != subject:
+        Forbidden(ctx, "not your resource")
+        ret false
+    end
+    ret true
+end

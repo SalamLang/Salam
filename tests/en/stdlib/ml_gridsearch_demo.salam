@@ -1,0 +1,101 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/ml: GridSearch ranks candidate estimators by cross-validation,
+// and the parallel fold/candidate paths reproduce the serial scores.
+
+import data
+import matrix
+import ml
+import testing
+
+func knn_fit(k: int): func (matrix.Matrix, matrix.Matrix, matrix.Matrix) matrix.Matrix:
+    ret (xtr: matrix.Matrix, ytr: matrix.Matrix, xte: matrix.Matrix):
+        mut m := ml.KNNClassifier { k = k }
+        mut out := matrix.Matrix {}
+        if m.fit(xtr, ytr): out = m.predict(xte) end
+        m.free()
+        ret out
+    end
+end
+
+func tree_fit(depth: int): func (matrix.Matrix, matrix.Matrix, matrix.Matrix) matrix.Matrix:
+    ret (xtr: matrix.Matrix, ytr: matrix.Matrix, xte: matrix.Matrix):
+        mut m := ml.DecisionTree { max_depth = depth }
+        mut out := matrix.Matrix {}
+        if m.fit(xtr, ytr): out = m.predict(xte) end
+        m.free()
+        ret out
+    end
+end
+
+func main:
+    mut y := matrix.Matrix {}
+    mut x := data.MakeMoons(300, 0.25, 31, y)
+    mut folds := ml.KFold(300, 5, true, 3)
+    acc := (yt: matrix.Matrix, yp: matrix.Matrix): ret ml.Accuracy(yt, yp) end
+
+    // Serial and parallel cross-validation agree fold by fold
+    mut s1 := ml.CrossValScore(knn_fit(7), acc, x, y, folds)
+    mut s2 := ml.CrossValScoreParallel(knn_fit(7), acc, x, y, folds, 3)
+    testing.AssertEqInt(s1.len(), 5)
+    testing.AssertEqInt(s2.len(), 5)
+    mut same := true
+    repeat 5 with k:
+        if s1.get(k) != s2.get(k): same = false end
+    end
+    testing.AssertTrue(same)
+    testing.AssertTrue(ml.MeanScore(s1) >= 0.85)
+
+    // A grid over KNN's k and a tree's depth: a depth-1 stump loses
+    mut cands := Vector {} as Vector<ml.Candidate>
+    cands.push(ml.Candidate { name = "knn3", fit = knn_fit(3) })
+    cands.push(ml.Candidate { name = "knn11", fit = knn_fit(11) })
+    cands.push(ml.Candidate { name = "stump", fit = tree_fit(1) })
+    cands.push(ml.Candidate { name = "tree6", fit = tree_fit(6) })
+    mut g := ml.GridSearch(cands, acc, x, y, folds, 0)
+    testing.AssertEqInt(g.scores.len(), 4)
+    testing.AssertTrue(g.best >= 0)
+    testing.AssertTrue(g.best != 2)
+    testing.AssertTrue(g.best_score >= 0.85)
+    testing.AssertTrue(g.scores.get(2) < g.best_score)
+    testing.AssertEqFloat(g.scores.get(g.best), g.best_score, 0.0)
+    // the parallel search reports the same numbers
+    mut gp := ml.GridSearch(cands, acc, x, y, folds, 4)
+    testing.AssertEqInt(gp.best, g.best)
+    mut same2 := true
+    repeat 4 with c:
+        if gp.scores.get(c) != g.scores.get(c): same2 = false end
+    end
+    testing.AssertTrue(same2)
+    // an empty grid has no best
+    mut none := Vector {} as Vector<ml.Candidate>
+    mut g0 := ml.GridSearch(none, acc, x, y, folds, 0)
+    testing.AssertEqInt(g0.best, 0 - 1)
+    testing.AssertEqInt(g0.scores.len(), 0)
+
+    g.free()
+    gp.free()
+    g0.free()
+    none.free()
+    cands.free()
+    s1.free()
+    s2.free()
+    folds.free()
+    x.free()
+    y.free()
+    ret testing.Summary()
+end

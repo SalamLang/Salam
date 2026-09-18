@@ -486,6 +486,73 @@ func const_eval(
     ret false
 end
 
+// Whether an expression provably cannot be negative.
+//
+// It is what lets a signed value widen into an unsigned type without a
+// cast: `19 as i16` fits in a u64 and says so, while `0 - 5 as i16` does
+// not, and neither does anything whose value is only known at run time.
+// The alternative rules both go wrong somewhere - "narrower type wins"
+// would wave -5 through as 18446744073709551611, and "any signed type may
+// hold a negative" rejects the plain `ret 19` case that started this.
+//
+// An immutable binding is its initializer: `:=` without `mut` can never be
+// reassigned, so proving the initializer non-negative proves the name is.
+// A loop binding is excluded - its value is the loop's, not its
+// declaration's - and so is anything whose initializer will not fold.
+func expr_nonneg(s &: Sema, a &: at.Ast, nid: int, depth: int): bool:
+    if nid == 0 || depth > 8:
+        ret false
+    end
+    mut cv := ConstVal {}
+    if const_eval(s, a, nid, cv, depth):
+        if cv.kind == CV_INT:
+            ret cv.i >= (0 as i64)
+        end
+        if cv.kind == CV_FLOAT:
+            ret cv.f >= 0.0
+        end
+        ret false
+    end
+    if at.KindOf(a, nid) != at.AST_IDENTIFIER:
+        ret false
+    end
+    symid := scope_lookup(s, s.cur, at.Get(a, nid).name)
+    if symid == 0:
+        ret false
+    end
+    sv := sym_at(s, symid)
+    if sv.kind != SYM_VAR || sv.is_mut || sv.loop_bind || sv.decl == 0:
+        ret false
+    end
+    ret expr_nonneg(s, a, at.Get(a, sv.decl).a, depth + 1)
+end
+
+// sema_expr_nonneg - expr_nonneg from outside this file.
+func sema_expr_nonneg(s &: Sema, a &: at.Ast, nid: int): bool:
+    ret expr_nonneg(s, a, nid, 0)
+end
+
+// A signed value used where an unsigned one is wanted. The signedness rule exists
+// because the negative half of a signed type has nowhere to go in an
+// unsigned one - but when the value provably cannot be negative there is
+// no half to lose, and requiring `as u64` there only hides which casts are
+// load-bearing. The width still has to fit: i64 into u32 stays an error
+// however non-negative it is.
+func widens_nonneg(
+    s &: Sema, a &: at.Ast, expr: int, dst: int, src: int
+): bool:
+    if !type_is_integer(s, dst) || !type_is_integer(s, src):
+        ret false
+    end
+    if type_is_signed(s, dst) || !type_is_signed(s, src):
+        ret false
+    end
+    if int_rank(ty_at(s, src).kind) > int_rank(ty_at(s, dst).kind):
+        ret false
+    end
+    ret sema_expr_nonneg(s, a, expr)
+end
+
 // sema_const_eval - the compile-time value of an expression, if it has one.
 func sema_const_eval(s &: Sema, a &: at.Ast, nid: int, out &: ConstVal): bool:
     ret const_eval(s, a, nid, out, 0)

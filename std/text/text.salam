@@ -26,37 +26,39 @@ package text
 import mem
 import str
 
+// salam_fmt_f64 below is conv.FormatFloat. The exact decimal conversion
+// lives there, in the package that owns turning numbers into text.
+import conv
+
 inline pure func _strptr(s: str): i64:
     v := s as void*
     ret v as i64
 end
 
+
+// f64 in a signature needs an SSE register even when the body never touches
+// the FPU, which SALAM_KERNEL's -mgeneral-regs-only refuses to generate.
+// Kernel code has no floats to format in the first place (coding standard
+// rule 2), so this simply does not exist there.
+if SALAM_KERNEL:
+else:
 extern:
-    func salam_strcat(a: str, b: str): str:
-        la := a.len() as i64
-        lb := b.len() as i64
-        r := mem.AllocateZeroed((la + lb + 1) as u64)
-        mem.Copy(r, a as void*, la as u64)
-        mem.Copy(((r as i64) + la) as void*, b as void*, lb as u64)
-        ret r as str
+    // The shortest text that reads back as exactly this double: 15
+    // significant digits, then 16, then 17 - the first that reads back as
+    // the same double wins, and 17 always does. Trailing zeros are dropped,
+    // so this is the answer Python's repr and JavaScript's String() give.
+    //
+    // std/dtoa does the conversion exactly, in integer arithmetic. This used
+    // to call snprintf and strtod, which meant the language could not print a
+    // number without a libc underneath it - fine on a hosted system, and the
+    // reason a freestanding target had no float formatting at all.
+    func salam_fmt_f64(v: f64): str:
+        ret conv.FormatFloat(v)
     end
-    func salam_char_from_code(c: int): str:
-        r := mem.AllocateZeroed(2 as u64)
-        mem.Set(r, c, 1 as u64)
-        ret r as str
-    end
-    func salam_str_substr(s: str, start: int, n: int): str:
-        slen := s.len()
-        mut st := start
-        mut ln := n
-        if st < 0: st = 0 end
-        if st > slen: st = slen end
-        if ln < 0: ln = 0 end
-        if st + ln > slen: ln = slen - st end
-        r := mem.AllocateZeroed((ln + 1) as u64)
-        mem.Copy(r, (_strptr(s) + (st as i64)) as void*, ln as u64)
-        ret r as str
-    end
+end
+end
+
+extern:
     func salam_str_repeat(s: str, n: int): str:
         slen := s.len() as i64
         if n <= 1 || slen == 0:
@@ -142,11 +144,14 @@ extern:
         dl := delim.len()
         n := s.len()
         if dl == 0:
-            arr := mem.Allocate(8 as u64)
-            a64 := arr as i64*
-            a64[0] = _copy_range(s, 0, n)
+            // sizeof(str), not 8: the caller reads this back as a char*[],
+            // whose elements are 4 bytes wide on a 32-bit host. Allocating
+            // and indexing it as i64 under-allocated by half and returned
+            // pairs of pointers glued together as single addresses.
+            arr := mem.Allocate(sizeof(str) as u64) as str*
+            arr[0] = (_copy_range(s, 0, n) as void*) as str
             oc[0] = 1
-            ret arr
+            ret arr as void*
         end
         mut count := 1
         mut idx := _find_from(s, delim, 0)
@@ -154,19 +159,18 @@ extern:
             count += 1
             idx = _find_from(s, delim, idx + dl)
         end
-        arr := mem.Allocate((count * 8) as u64)
-        a64 := arr as i64*
+        arr := mem.Allocate((count as u64) * (sizeof(str) as u64)) as str*
         mut k := 0
         mut off := 0
         idx = _find_from(s, delim, 0)
         until idx >= 0:
-            a64[k] = _copy_range(s, off, idx - off)
+            arr[k] = (_copy_range(s, off, idx - off) as void*) as str
             k += 1
             off = idx + dl
             idx = _find_from(s, delim, off)
         end
-        a64[k] = _copy_range(s, off, n - off)
+        arr[k] = (_copy_range(s, off, n - off) as void*) as str
         oc[0] = count
-        ret arr
+        ret arr as void*
     end
 end

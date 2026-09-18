@@ -1,0 +1,339 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import decimal
+import bigint
+import testing
+import os
+
+// Asserts that d prints as `want`, then frees d.
+func eq(d: decimal.Dec, want: str):
+    mut v := d
+    testing.AssertEqStr(decimal.ToStr(v), want)
+    v.free()
+end
+
+// Rounds `text` to `scale` places under `mode` and checks the printed result:
+// one line per cell of the rounding table in std/decimal/decimal.salam.
+func round eq(text: str, scale: int, mode: decimal.Rounding, want: str):
+    mut d := decimal.ParseOr(text)
+    mut r := decimal.Rescale(d, scale, mode)
+    testing.AssertEqStr(decimal.ToStr(r), want)
+    r.free()
+    d.free()
+end
+
+// The headline property: base-10 fractions add up the way they are written.
+func test_exactness():
+    mut a := decimal.ParseOr("0.1")
+    mut b := decimal.ParseOr("0.2")
+    eq(decimal.Add(a, b), "0.3")
+    testing.AssertTrue(decimal.Equals(decimal.Add(a, b), decimal.ParseOr("0.3")))
+
+    // The same sum in f64 is not 0.3, which is the whole reason for this type.
+    testing.AssertFalse(0.1 + 0.2 == 0.3)
+
+    // A hundred additions of one cent make exactly one unit.
+    mut cent := decimal.FromScaled(1 as i64, 2)
+    mut total := decimal.Zero()
+    repeat 100:
+        next := decimal.Add(total, cent)
+        total.free()
+        total = next
+    end
+    testing.AssertEqStr(decimal.ToStr(total), "1.00")
+    testing.AssertTrue(decimal.Equals(total, decimal.FromInt(1 as i64)))
+    total.free()
+    cent.free()
+    a.free()
+    b.free()
+end
+
+func test_parsing():
+    eq(decimal.ParseOr("123.45"), "123.45")
+    eq(decimal.ParseOr("-0.001"), "-0.001")
+    eq(decimal.ParseOr("+1_000.00"), "1000.00")
+    eq(decimal.ParseOr("42"), "42")
+    // Trailing zeros are kept: for money the scale is information.
+    eq(decimal.ParseOr("1.50"), "1.50")
+    eq(decimal.ParseOr("0.00"), "0.00")
+    // An exponent shifts the scale, and a value that would need a negative
+    // scale is normalized up into the digits instead.
+    eq(decimal.ParseOr("1.5e3"), "1500")
+    eq(decimal.ParseOr("1.5e-3"), "0.0015")
+    eq(decimal.ParseOr("2E2"), "200")
+    // Persian and Arabic-Indic digits read the same as ASCII.
+    eq(decimal.ParseOr("۱۲۳.۴۵"), "123.45")
+    eq(decimal.ParseOr("٩٩.٩٩"), "99.99")
+
+    testing.AssertEqInt(decimal.Scale(decimal.ParseOr("1.50")), 2)
+    testing.AssertEqInt(decimal.Scale(decimal.ParseOr("1.5e3")), 0)
+
+    // Malformed input reports failure instead of a partial value.
+    mut ok := true
+    mut bad := decimal.Parse("1.2.3", ok)
+    testing.AssertFalse(ok)
+    bad.free()
+
+    mut ok2 := true
+    mut bad2 := decimal.Parse("12abc", ok2)
+    testing.AssertFalse(ok2)
+    bad2.free()
+
+    mut ok3 := true
+    mut bad3 := decimal.Parse("", ok3)
+    testing.AssertFalse(ok3)
+    bad3.free()
+
+    mut ok4 := false
+    mut good := decimal.Parse("  7.25  ", ok4)
+    testing.AssertTrue(ok4)
+    testing.AssertEqStr(decimal.ToStr(good), "7.25")
+    good.free()
+end
+
+// Add and Sub take the larger scale, Mul takes the sum, and all three are
+// exact -- no rounding mode is consulted anywhere in this test.
+func test_scale_rules():
+    mut a := decimal.ParseOr("1.5")
+    mut b := decimal.ParseOr("2.250")
+    eq(decimal.Add(a, b), "3.750")
+    eq(decimal.Sub(a, b), "-0.750")
+    eq(decimal.Mul(a, b), "3.3750")
+    testing.AssertEqInt(decimal.Scale(decimal.Mul(a, b)), 4)
+
+    // 0.05 * 0.05 keeps every digit rather than collapsing to 0.00.
+    mut small := decimal.ParseOr("0.05")
+    eq(decimal.Mul(small, small), "0.0025")
+    small.free()
+
+    eq(decimal.Pow(decimal.ParseOr("1.1"), 3), "1.331")
+    eq(decimal.MulInt(decimal.ParseOr("19.99"), 3 as i64), "59.97")
+    eq(decimal.AddInt(a, 10 as i64), "11.5")
+    eq(decimal.Neg(a), "-1.5")
+    eq(decimal.Abs(decimal.ParseOr("-8.25")), "8.25")
+    a.free()
+    b.free()
+end
+
+// Division cannot be exact, so it takes the scale and the mode as arguments.
+func test_division():
+    mut one := decimal.FromInt(1 as i64)
+    mut three := decimal.FromInt(3 as i64)
+    eq(decimal.Div(one, three, 5, decimal.Rounding.HalfEven), "0.33333")
+    eq(decimal.Div(one, three, 10, decimal.Rounding.Up), "0.3333333334")
+    eq(decimal.Div(one, three, 0, decimal.Rounding.Ceil), "1")
+
+    mut two := decimal.FromInt(2 as i64)
+    eq(decimal.DivRound(one, two, 2), "0.50")
+    eq(decimal.DivInt(decimal.ParseOr("10.00"), 4 as i64, 2, decimal.Rounding.HalfEven), "2.50")
+
+    // A zero divisor yields zero rather than trapping.
+    eq(decimal.Div(one, decimal.Zero(), 2, decimal.Rounding.HalfEven), "0.00")
+
+    one.free()
+    two.free()
+    three.free()
+end
+
+// One row of the rounding table per mode, on the values that separate them.
+func test_rounding_modes():
+    round eq("2.5", 0, decimal.Rounding.Down, "2")
+    round eq("2.5", 0, decimal.Rounding.Up, "3")
+    round eq("2.5", 0, decimal.Rounding.Floor, "2")
+    round eq("2.5", 0, decimal.Rounding.Ceil, "3")
+    round eq("2.5", 0, decimal.Rounding.HalfUp, "3")
+    round eq("2.5", 0, decimal.Rounding.HalfDown, "2")
+    round eq("2.5", 0, decimal.Rounding.HalfEven, "2")
+
+    round eq("-2.5", 0, decimal.Rounding.Down, "-2")
+    round eq("-2.5", 0, decimal.Rounding.Up, "-3")
+    round eq("-2.5", 0, decimal.Rounding.Floor, "-3")
+    round eq("-2.5", 0, decimal.Rounding.Ceil, "-2")
+    round eq("-2.5", 0, decimal.Rounding.HalfUp, "-3")
+    round eq("-2.5", 0, decimal.Rounding.HalfDown, "-2")
+    round eq("-2.5", 0, decimal.Rounding.HalfEven, "-2")
+
+    // 3.5 ties to 4, so HalfEven alternates rather than always going up.
+    round eq("3.5", 0, decimal.Rounding.HalfEven, "4")
+    round eq("2.7", 0, decimal.Rounding.Down, "2")
+    round eq("-2.1", 0, decimal.Rounding.Floor, "-3")
+    round eq("-2.1", 0, decimal.Rounding.Ceil, "-2")
+
+    // Rescaling upward is exact and only appends zeros.
+    eq(decimal.Rescale(decimal.ParseOr("1.5"), 4, decimal.Rounding.Down), "1.5000")
+    eq(decimal.Round(decimal.ParseOr("1.005"), 2), "1.00")
+    eq(decimal.RoundHalfUp(decimal.ParseOr("1.005"), 2), "1.01")
+    eq(decimal.Truncate(decimal.ParseOr("-1.999"), 2), "-1.99")
+
+    // Trim drops trailing zeros without changing the value.
+    mut wide := decimal.ParseOr("1.2500")
+    mut thin := decimal.Trim(wide)
+    testing.AssertEqStr(decimal.ToStr(thin), "1.25")
+    testing.AssertTrue(decimal.Equals(thin, wide))
+    thin.free()
+    wide.free()
+end
+
+func test_formatting():
+    mut d := decimal.ParseOr("7.5")
+    testing.AssertEqStr(decimal.ToStrFixed(d, 2), "7.50")
+    testing.AssertEqStr(decimal.ToStrFixed(d, 0), "8")
+    d.free()
+
+    mut big := decimal.ParseOr("1234567.891")
+    testing.AssertEqStr(decimal.FormatGrouped(big, 2, ",", "."), "1,234,567.89")
+    // The European convention is the same call with the separators swapped.
+    testing.AssertEqStr(decimal.FormatGrouped(big, 2, ".", ","), "1.234.567,89")
+    testing.AssertEqStr(decimal.FormatGrouped(big, 0, " ", "."), "1 234 568")
+    big.free()
+
+    // A value below one keeps its leading zero, and a negative keeps its sign.
+    testing.AssertEqStr(decimal.FormatGrouped(decimal.ParseOr("0.5"), 2, ",", "."), "0.50")
+    testing.AssertEqStr(decimal.FormatGrouped(decimal.ParseOr("-9876.5"), 2, ",", "."), "-9,876.50")
+
+    // Output never switches to exponential notation, however small.
+    testing.AssertEqStr(decimal.ToStr(decimal.ParseOr("0.0000001")), "0.0000001")
+
+    mut ok := false
+    testing.AssertTrue(decimal.ToInt(decimal.ParseOr("-12.9"), ok) == 0 - 12 as i64)
+    testing.AssertTrue(ok)
+    testing.AssertTrue(decimal.ToFloat(decimal.ParseOr("0.5")) == 0.5)
+end
+
+func test_comparison():
+    mut a := decimal.ParseOr("1.0")
+    mut b := decimal.ParseOr("1.00")
+    // Equal in value even though the scales differ.
+    testing.AssertTrue(decimal.Equals(a, b))
+    testing.AssertEqInt(decimal.Cmp(a, b), 0)
+    testing.AssertFalse(decimal.Scale(a) == decimal.Scale(b))
+
+    mut c := decimal.ParseOr("-3.5")
+    testing.AssertTrue(decimal.Less(c, a))
+    testing.AssertTrue(decimal.Greater(a, c))
+    testing.AssertEqInt(decimal.Sign(c), 0 - 1)
+    testing.AssertTrue(decimal.IsNegative(c))
+    testing.AssertTrue(decimal.IsZero(decimal.ParseOr("-0.000")))
+    eq(decimal.Min(a, c), "-3.5")
+    eq(decimal.Max(a, c), "1.0")
+    a.free()
+    b.free()
+    c.free()
+end
+
+// Splitting money: the parts must add back to the whole, always.
+func test_money_split():
+    mut total := decimal.ParseOr("100.00")
+    mut parts := decimal.Split(total, 3)
+    testing.AssertEqInt(parts.len(), 3)
+    testing.AssertEqStr(decimal.ToStr(parts.get(0)), "33.34")
+    testing.AssertEqStr(decimal.ToStr(parts.get(1)), "33.33")
+    testing.AssertEqStr(decimal.ToStr(parts.get(2)), "33.33")
+    mut sum := decimal.Sum(parts)
+    testing.AssertTrue(decimal.Equals(sum, total))
+    sum.free()
+    decimal.FreeAll(parts)
+
+    // A refund splits the same way, with the remainder still distributed.
+    mut refund := decimal.ParseOr("-100.00")
+    mut rparts := decimal.Split(refund, 3)
+    mut rsum := decimal.Sum(rparts)
+    testing.AssertTrue(decimal.Equals(rsum, refund))
+    rsum.free()
+    decimal.FreeAll(rparts)
+    refund.free()
+
+    // Proportional allocation, where naive rounding would lose a cent.
+    mut ratios := Vector {} as Vector<i64>
+    ratios.push(3 as i64)
+    ratios.push(7 as i64)
+    mut five := decimal.ParseOr("0.05")
+    mut alloc := decimal.Allocate(five, ratios)
+    testing.AssertEqStr(decimal.ToStr(alloc.get(0)), "0.02")
+    testing.AssertEqStr(decimal.ToStr(alloc.get(1)), "0.03")
+    mut asum := decimal.Sum(alloc)
+    testing.AssertTrue(decimal.Equals(asum, five))
+    asum.free()
+    decimal.FreeAll(alloc)
+
+    mut shares := decimal.Allocate(total, ratios)
+    testing.AssertEqStr(decimal.ToStr(shares.get(0)), "30.00")
+    testing.AssertEqStr(decimal.ToStr(shares.get(1)), "70.00")
+    decimal.FreeAll(shares)
+    ratios.free()
+    five.free()
+    total.free()
+end
+
+// An invoice line, which is what all of this is for.
+func test_invoice():
+    mut unit := decimal.ParseOr("19.99")
+    qty := 7 as i64
+    mut line := decimal.MulInt(unit, qty)
+    testing.AssertEqStr(decimal.ToStr(line), "139.93")
+
+    // 8.25% sales tax, rounded to the cent with banker's rounding.
+    mut rate := decimal.ParseOr("8.25")
+    mut tax := decimal.Percent(line, rate, 2)
+    testing.AssertEqStr(decimal.ToStr(tax), "11.54")
+
+    mut due := decimal.Add(line, tax)
+    testing.AssertEqStr(decimal.ToStrFixed(due, 2), "151.47")
+    testing.AssertEqStr(decimal.FormatGrouped(due, 2, ",", "."), "151.47")
+
+    // The unscaled digits are reachable as a bigint when a wire format or a
+    // database column wants integer minor units.
+    mut minor := decimal.Unscaled(due)
+    testing.AssertEqStr(bigint.ToStr(minor), "15147")
+    minor.free()
+
+    due.free()
+    tax.free()
+    rate.free()
+    line.free()
+    unit.free()
+end
+
+// Nothing overflows: the unscaled part is a bigint, so a national budget in
+// rials at four decimal places is just a larger number.
+func test_no_overflow():
+    mut huge := decimal.ParseOr("123456789012345678901234567890.1234")
+    mut doubled := decimal.Add(huge, huge)
+    testing.AssertEqStr(decimal.ToStr(doubled), "246913578024691357802469135780.2468")
+    mut squared := decimal.Mul(huge, huge)
+    testing.AssertEqInt(decimal.Scale(squared), 8)
+    mut back := decimal.Div(squared, huge, 4, decimal.Rounding.HalfEven)
+    testing.AssertTrue(decimal.Equals(back, huge))
+    back.free()
+    squared.free()
+    doubled.free()
+    huge.free()
+end
+
+func main:
+    test_exactness()
+    test_parsing()
+    test_scale_rules()
+    test_division()
+    test_rounding_modes()
+    test_formatting()
+    test_comparison()
+    test_money_split()
+    test_invoice()
+    test_no_overflow()
+    os.Exit(testing.Summary())
+end

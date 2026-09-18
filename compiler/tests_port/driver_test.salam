@@ -19,10 +19,13 @@
 // HEAD `bin/salam`) lives in tests_port/driver_run.salam.
 
 import dr "../driver/driver.salam"
+import cg "../codegen/codegen.salam"
 import testing
 import os
 import io
 import str
+import mem
+import co "../sal_core.salam"
 
 func test_command_consts():
     testing.AssertEqInt(dr.CMD_INSPECT, 0)
@@ -88,8 +91,39 @@ end
 func test_dir_of():
     testing.AssertEqStr(dr.DirOf("foo.salam"), "")
     testing.AssertEqStr(dr.DirOf("a/b/foo.salam"), "a/b")
-    testing.AssertEqStr(dr.DirOf("a\\b\\foo.salam"), "a\\b")
+    // Separators are normalised on the way out - sal_path_dir() in the C runs
+    // its result through sal_path_to_slash, so a Windows-spelled path yields a
+    // slash-spelled directory on every host.
+    testing.AssertEqStr(dr.DirOf("a\\b\\foo.salam"), "a/b")
     testing.AssertEqStr(dr.DirOf("/x/y/z.salam"), "/x/y")
+end
+
+// ExeSuffix/ExeName: the executable extension follows the TARGET, not the
+// build host. A Windows triple gets ".exe" (appended to an explicit
+// --output too, unless it already carries it), every other triple - and a
+// non-Windows host with no --target at all - gets the bare name.
+func test_exe_name():
+    testing.AssertEqStr(dr.ExeSuffix("x86_64-w64-windows-gnu"), ".exe")
+    testing.AssertEqStr(dr.ExeSuffix("i686-w64-mingw32"), ".exe")
+    testing.AssertEqStr(dr.ExeSuffix("wasm32-wasi"), "")
+    testing.AssertEqStr(dr.ExeSuffix("aarch64-apple-darwin"), "")
+    testing.AssertEqStr(dr.ExeSuffix("x86_64-unknown-linux-gnu"), "")
+    testing.AssertEqStr(dr.ExeName("hello", "x86_64-w64-windows-gnu"), "hello.exe")
+    testing.AssertEqStr(dr.ExeName("hello.exe", "x86_64-w64-windows-gnu"), "hello.exe")
+    testing.AssertEqStr(dr.ExeName("hello.EXE", "x86_64-pc-windows-msvc"), "hello.EXE")
+    testing.AssertEqStr(dr.ExeName("out/prog", "i686-w64-mingw32"), "out/prog.exe")
+    testing.AssertEqStr(dr.ExeName("hello", "wasm32-wasi"), "hello")
+    // A name the caller typed is never rewritten for a non-Windows target,
+    // ".exe" and all.
+    testing.AssertEqStr(dr.ExeName("hello.exe", "aarch64-apple-darwin"), "hello.exe")
+    // Empty triple = this host, so the answer is the host's own convention.
+    if SALAM_OS_WINDOWS:
+        testing.AssertEqStr(dr.ExeSuffix(""), ".exe")
+        testing.AssertEqStr(dr.ExeName("hello", ""), "hello.exe")
+    else:
+        testing.AssertEqStr(dr.ExeSuffix(""), "")
+        testing.AssertEqStr(dr.ExeName("hello", ""), "hello")
+    end
 end
 
 func test_resolve_color():
@@ -119,6 +153,66 @@ func test_build_missing_input():
     opt.output = "/tmp/salam_driver_test_missing_out"
     rc := dr.Build(opt)
     testing.AssertTrue(rc != 0)
+end
+
+// Build() reads the input list, but the LLVM backend it dispatches to reads
+// the single opt.input instead. A caller that fills only the list - which
+// repl.salam does, swapping in a fresh temp file every turn - used to reach
+// that backend with nothing to compile and got "salam: no input file" on
+// any binary with LLVM linked in. Build has to put the two back in step,
+// and it has to do so before it can fail on the file itself.
+func test_build_syncs_input_with_inputs():
+    mut opt := dr.NewOptions()
+    defer opt.inputs.free()
+    defer opt.run_args.free()
+    defer opt.defines.free()
+    missing := "this_file_does_not_exist_24680.salam"
+    opt.inputs.push(missing)
+    opt.output = "/tmp/salam_driver_test_sync_out"
+    rc := dr.Build(opt)
+    testing.AssertTrue(rc != 0)
+    testing.AssertEqStr(opt.input, missing)
+end
+
+// Building a directory when several of its files define `main`: the one
+// named after the entry wins, so a project can keep a second entry beside
+// its real one instead of the directory refusing to resolve at all.
+func test_dir_entry_prefers_named_file():
+    dir := "compiler/tests_port/tmp_dr/entrypick"
+    os.MkdirAll(dir)
+    _w1 := io.WriteFile(dir + "/main.salam", "func main:\n    println 1\nend\n")
+    _w2 := io.WriteFile(dir + "/wasm_main.salam", "func main:\n    println 2\nend\n")
+    mut opt := dr.NewOptions()
+    defer opt.inputs.free()
+    defer opt.run_args.free()
+    defer opt.defines.free()
+    opt.inputs.push(dir)
+    opt.output = "compiler/tests_port/tmp_dr/entrypick_out"
+    opt.backend = "c"
+    rc := dr.Build(opt)
+    testing.AssertEqInt(rc, 0)
+    testing.AssertEqStr(opt.input, dir + "/main.salam")
+    _r1 := os.RemoveAll(dir)
+    _r2 := os.Remove("compiler/tests_port/tmp_dr/entrypick_out")
+end
+
+// ...and when none of them is named after the entry there is still nothing
+// to prefer, so the directory stays ambiguous and the build fails.
+func test_dir_entry_still_ambiguous_without_a_named_file():
+    dir := "compiler/tests_port/tmp_dr/entrytie"
+    os.MkdirAll(dir)
+    _w1 := io.WriteFile(dir + "/one.salam", "func main:\n    println 1\nend\n")
+    _w2 := io.WriteFile(dir + "/two.salam", "func main:\n    println 2\nend\n")
+    mut opt := dr.NewOptions()
+    defer opt.inputs.free()
+    defer opt.run_args.free()
+    defer opt.defines.free()
+    opt.inputs.push(dir)
+    opt.output = "compiler/tests_port/tmp_dr/entrytie_out"
+    opt.backend = "c"
+    rc := dr.Build(opt)
+    testing.AssertTrue(rc != 0)
+    _r1 := os.RemoveAll(dir)
 end
 
 // Exec() with a nonexistent input also fails cleanly (rc == 2, matching
@@ -308,35 +402,93 @@ func test_debug_memcheck_guards():
     defer opt3.defines.free()
     opt3.inputs.push("compiler/tests_port/tmp_dr/dt_llvm_hello.salam")
     testing.AssertEqStr(opt3.cc, "tcc")
-    testing.AssertEqInt(dr.Memcheck(opt3), 2) // tcc can't do ASan
+    // The tcc guard is deliberately conditional: tcc cannot instrument for
+    // ASan, but the binary it emits is fine for Valgrind to watch, so Memcheck
+    // only refuses when there is no Valgrind to fall back on. Asserting it
+    // where Valgrind exists would build and execute a program, which this
+    // test does not want to do -- so the guard is checked in the one
+    // configuration that reaches it.
+    if os.Run("valgrind --version > /dev/null 2>&1") != 0:
+        testing.AssertEqInt(dr.Memcheck(opt3), 2) // no ASan and no Valgrind
+    end
 end
 
-// embed_sysroot.c's MaterializeSysroot - no real embedded sysroot blob
-// exists anywhere in this repo to test against (see the module's own
-// header note: unreachable without SALAM_HAVE_LLVM, ported for source
-// fidelity only). A full build-a-tar/parse-it-back test isn't possible with
-// `str` (see the PORT-NOTE on test_materialize_sysroot below), so only the
-// short-tar fast-path is verified.
+// embed_sysroot.c's MaterializeSysroot. This used to be scoped down to the
+// short-tar fast path, because MaterializeSysroot took the archive as a `str`
+// and Salam's `str` ends at the first NUL - which a USTAR archive is full of.
+// It now takes a pointer and a length, so a real archive can be built in
+// memory here, unpacked, and read back, NUL bytes and all.
+func tar_put(buf: u8*, off: int, text: str):
+    mut i := 0
+    until i < str.Len(text):
+        buf[off + i] = co.ByteAt(text, i) as u8
+        i += 1
+    end
+end
 
-// PORT-NOTE (pre-existing, found post-restructure, unrelated to the path
-// move): Salam's `str` is NUL-terminated C-string-backed - str.Len()/BufStr
-// truncate at the first embedded 0x00 byte (verified directly: appending
-// "AB" + NUL + "CD" and reading back via str.BufStr/str.Len yields length 2,
-// not 5). A real USTAR tar archive is full of NUL padding bytes, so it can
-// never survive a round-trip through `str` intact - this makes a full
-// build-a-tar-in-a-str/parse-it-back test impossible to write faithfully
-// with the current `str` type (would need a byte-safe Vector<u8> buffer
-// type throughout MaterializeSysroot/untar to fix properly, which is a
-// bigger change than this test file should make unilaterally). This is not
-// a driver.salam regression: MaterializeSysroot/untar are themselves only
-// reachable behind SALAM_HAVE_LLVM (unset in this build), so the module's
-// own header already documents this path as "ported for source fidelity
-// only" - dead code today, not exercised by any real build. Scoped down to
-// what CAN be verified without embedded NULs: the short-tar fast-path.
+// One USTAR header plus a data block, for a file whose contents deliberately
+// carry an embedded NUL.
+func build_tar(len_out &: int): void*:
+    total := 512 * 3
+    p := mem.AllocateZeroed(total as u64)
+    b := p as u8*
+    tar_put(b, 0, "probe.bin")
+    tar_put(b, 100, "0000644")      // mode
+    tar_put(b, 124, "00000000005")  // size: 5 bytes
+    b[156] = 48 as u8               // typeflag '0', a regular file
+    tar_put(b, 257, "ustar")
+    mut c := 0
+    until c < 8:
+        b[148 + c] = 32 as u8       // checksum field, spaces so tar_oct skips it
+        c += 1
+    end
+    b[512] = 65 as u8   // 'A'
+    b[513] = 0 as u8    // NUL - the byte a str could never carry
+    b[514] = 66 as u8   // 'B'
+    b[515] = 0 as u8
+    b[516] = 67 as u8   // 'C'
+    len_out = total
+    ret p
+end
+
 func test_materialize_sysroot():
     mut out := ""
-    ok := dr.MaterializeSysroot("dt_test_sysroot", "too short", out)
-    testing.AssertFalse(ok) // str.Len(tar) < 512 -> false, no NUL bytes involved
+    ok := dr.MaterializeSysroot("dt_test_sysroot", null as void*, 0 as i64, out)
+    testing.AssertFalse(ok) // null blob, and a length under one header block
+
+    mut n := 0
+    p := build_tar(n)
+    mut dir := ""
+    ok2 := dr.MaterializeSysroot("dt_probe", p, n as i64, dir)
+    mem.Free(p)
+    testing.AssertTrue(ok2)
+
+    f := dir + "/probe.bin"
+    testing.AssertTrue(os.Exists(f))
+    // Five bytes, not one: a write that went through `str` would stop at the
+    // NUL at offset 1, which is the whole reason this path takes a pointer.
+    testing.AssertEqInt64(os.FileSize(f), 5 as i64)
+    _rm := os.RemoveAll(dir)
+end
+
+// The driver keeps its own copy of the freestanding-target check rather than
+// importing codegen's (they do not otherwise depend on each other); this is
+// the test that pins them to agreement, referenced by comment on both sides.
+func test_freestanding_kernel_triples_agree():
+    triples := [
+        "", "x86_64-pc-linux-gnu", "x86_64-pc-windows-msvc", "aarch64-apple-darwin",
+        "x86_64-unknown-uefi", "x86_64-unknown-bsos", "x86_64-unknown-bsos-kernel",
+        "x86_64-unknown-salamos", "x86_64-unknown-salamos-kernel"
+    ]
+    repeat 9 with i:
+        t := triples[i]
+        testing.AssertEqBool(dr.IsFreestandingTarget(t), cg.IsFreestandingTarget(t))
+    end
+    testing.AssertFalse(cg.IsKernelTarget("x86_64-unknown-bsos"))
+    testing.AssertTrue(cg.IsKernelTarget("x86_64-unknown-bsos-kernel"))
+    testing.AssertFalse(cg.IsKernelTarget("x86_64-unknown-salamos"))
+    testing.AssertTrue(cg.IsKernelTarget("x86_64-unknown-salamos-kernel"))
+    testing.AssertFalse(cg.IsKernelTarget("x86_64-unknown-uefi"))
 end
 
 func main:
@@ -345,8 +497,12 @@ func main:
     test_option_defaults()
     test_module_of()
     test_dir_of()
+    test_exe_name()
     test_resolve_color()
     test_build_missing_input()
+    test_build_syncs_input_with_inputs()
+    test_dir_entry_prefers_named_file()
+    test_dir_entry_still_ambiguous_without_a_named_file()
     test_exec_missing_input()
     test_backends_report_failure_on_no_input()
     test_llvm_real_program()
@@ -356,5 +512,6 @@ func main:
     test_llvm_build_sets_emit_mode()
     test_debug_memcheck_guards()
     test_materialize_sysroot()
+    test_freestanding_kernel_triples_agree()
     os.Exit(testing.Summary())
 end

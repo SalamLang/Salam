@@ -1,0 +1,414 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// A polls API: ask a question, offer some answers, count the votes.
+//
+//   POST   /auth/register        {email, password}
+//   POST   /auth/login
+//   GET    /polls                ?open=1&limit=&offset=        (public)
+//   GET    /polls/:id            question, options, tallies    (public)
+//   POST   /api/polls            {question, options:[...], closes_at?}
+//   POST   /api/polls/:id/vote   {option_id}
+//   GET    /api/polls/:id/myvote
+//   POST   /api/polls/:id/close  owner only
+//   GET    /api/polls/mine
+//   GET    /health
+//
+// WHAT THIS ONE IS ABOUT
+//
+// Two things the other examples do not do.
+//
+// 1. A REAL JSON BODY. The other APIs read flat {"title": "..."} objects,
+//    which json.Get handles. A poll arrives with an ARRAY of options, so
+//    this one parses the body properly: json.Decode gives a value.Value
+//    tree, and value.ArrayGet walks it. Note the value.ValueFree - that
+//    tree is heap-allocated and nothing collects it for you.
+//
+// 2. "ONE VOTE EACH" AS A CONSTRAINT, NOT A CHECK. The rule lives in a
+//    UNIQUE index; the API translates the resulting error into a 409. See
+//    _store.salam's header for why the obvious "check, then insert" version
+//    is wrong on a server with more than one client.
+
+import os
+import crypto
+import jwt
+import conv
+import net.http
+import net.router
+import encoding.json
+import encoding.value
+import encoding.encerr
+import store "_store.salam"
+
+const PORT := 8093
+const ACCESS_TTL := 3600
+const MAX_OPTIONS := 10
+const MAX_PAGE := 50
+
+func secret(): str:
+    s := os.Env("JWT_SECRET")
+    if s.len() > 0: ret s end
+    ret "dev-only-secret-change-me"
+end
+
+func guard(): jwt.Guard:
+    mut g := jwt.NewGuard(secret())
+    g.opts.issuer = "polls.salam"
+    g.opts.require_exp = true
+    // Half a minute of tolerance on exp/nbf/iat. Not politeness: two
+    // machines never agree on the time to the second, and without it a
+    // token minted a moment ago can be refused as "issued in the future".
+    g.opts.leeway = 30 as i64
+    ret g
+end
+
+// ---------------------------------------------------------------- helpers
+
+func send(ctx: i64, code: int, body: str):
+    http.Ctx_status(ctx, code)
+    http.Ctx_set_header(ctx, "Access-Control-Allow-Origin", "*")
+    http.Ctx_json(ctx, body)
+end
+
+func fail(ctx: i64, code: int, message: str):
+    send(ctx, code, `{"error":`.concat(json.Str(message)).concat("}"))
+end
+
+func db_fail(ctx: i64, where: str, err: str):
+    println "[db] ", where, ": ", err
+    fail(ctx, 500, "database error")
+end
+
+// A connection for this request, or a 503 and false. Every handler that
+// touches the database starts with this and pairs it with `defer
+// store.Close(conn)` - the connection belongs to this request and to this
+// thread, and it goes away when the handler returns however it returns.
+func db(ctx: i64, c &: store.Conn): bool:
+    conn := store.Connect()
+    if !store.Ok(conn):
+        println "[db] connect: ", store.Err(conn)
+        fail(ctx, 503, "database unavailable")
+        ret false
+    end
+    c = conn
+    ret true
+end
+
+func caller(ctx: i64): i64:
+    mut t := jwt.Token {}
+    if !jwt.Require(ctx, guard(), t): ret 0 as i64 end
+    ret t.claims.sub.to_int() as i64
+end
+
+func int_param(ctx: i64, name: str, fallback: int, max: int): int:
+    raw := http.Ctx_query(ctx, name)
+    if raw.len() == 0: ret fallback end
+    v := raw.to_int()
+    if v < 0: ret fallback end
+    if v > max: ret max end
+    ret v
+end
+
+func path_id(ctx: i64): i64:
+    ret http.Ctx_param(ctx, "id").to_int() as i64
+end
+
+// ---------------------------------------------------------------- auth
+
+func register(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
+    body := http.Ctx_body(ctx)
+    email := json.Get(body, "email").trim().lower()
+    password := json.Get(body, "password")
+    if email.len() < 3 || email.find("@") < 0:
+        fail(ctx, 400, "a valid email is required")
+        ret
+    end
+    if password.len() < 8:
+        fail(ctx, 400, "password must be at least 8 characters")
+        ret
+    end
+    if store.FindUser(conn, email).id != 0 as i64:
+        fail(ctx, 409, "that email is already registered")
+        ret
+    end
+    mut err := ""
+    id := store.CreateUser(conn, email, crypto.HashPassword(password), err)
+    if id == 0 as i64:
+        db_fail(ctx, "create user", err)
+        ret
+    end
+    send(ctx, 201, `{"id":`.concat(conv.FormatInt(id)).concat(`,"email":`).concat(json.Str(email)).concat("}"))
+end
+
+func login(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
+    body := http.Ctx_body(ctx)
+    u := store.FindUser(conn, json.Get(body, "email").trim().lower())
+    mut stored := u.hash
+    if stored.len() == 0: stored = crypto.HashPassword("_no_such_user_") end
+    ok := crypto.VerifyPassword(json.Get(body, "password"), stored)
+    if u.id == 0 as i64 || !ok:
+        fail(ctx, 401, "invalid email or password")
+        ret
+    end
+    mut c := jwt.NewClaims()
+    c.sub = conv.FormatInt(u.id)
+    mut err := 0
+    token := jwt.Issue(guard(), c, ACCESS_TTL as i64, err)
+    send(ctx, 200, `{"access":`.concat(json.Str(token)).concat("}"))
+end
+
+// ---------------------------------------------------------------- polls
+
+func list_polls(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
+    open_only := http.Ctx_query(ctx, "open") == "1"
+    limit := int_param(ctx, "limit", 20, MAX_PAGE)
+    offset := int_param(ctx, "offset", 0, 100000)
+    send(ctx, 200, store.ListPolls(conn, open_only, limit, offset))
+end
+
+func get_poll(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
+    p := store.GetPoll(conn, path_id(ctx))
+    if p.id == 0 as i64:
+        fail(ctx, 404, "no such poll")
+        ret
+    end
+    send(ctx, 200, p.json)
+end
+
+// The only handler in these examples that parses a nested JSON body.
+func create_poll(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
+    uid := caller(ctx)
+    if uid == 0 as i64: ret end
+    mut perr := encerr.NoError()
+    body := json.Decode(http.Ctx_body(ctx), perr)
+    // ValueFree releases the whole tree. Every early return below has to go
+    // through it, which is what `defer` is for.
+    defer value.ValueFree(body)
+    if encerr.IsError(perr) || !value.IsObject(body):
+        fail(ctx, 400, "body must be a JSON object")
+        ret
+    end
+    question := text_field(body, "question").trim()
+    if question.len() == 0 || question.len() > 255:
+        fail(ctx, 400, "question is required (255 bytes max)")
+        ret
+    end
+    mut labels := Vector {} as Vector<str>
+    defer labels.free()
+    if !read_options(body, labels):
+        fail(ctx, 400, "options must be an array of 2 to 10 non-empty strings")
+        ret
+    end
+    mut err := ""
+    id := store.CreatePoll(conn, uid, question, text_field(body, "closes_at"), labels, err)
+    if id == 0 as i64:
+        db_fail(ctx, "create poll", err)
+        ret
+    end
+    send(ctx, 201, store.GetPoll(conn, id).json)
+end
+
+func text_field(obj: value.Value, key: str): str:
+    if !value.ObjectHas(obj, key): ret "" end
+    v := value.ObjectGet(obj, key)
+    if !value.IsString(v): ret "" end
+    ret value.AsString(v)
+end
+
+// Pull ["a", "b", ...] out of the body and validate it in one pass.
+func read_options(body: value.Value, labels &: Vector<str>): bool:
+    if !value.ObjectHas(body, "options"): ret false end
+    arr := value.ObjectGet(body, "options")
+    if !value.IsArray(arr): ret false end
+    n := value.ArrayLen(arr)
+    if n < 2 || n > MAX_OPTIONS: ret false end
+    repeat n with i:
+        item := value.ArrayGet(arr, i)
+        if !value.IsString(item): ret false end
+        label := value.AsString(item).trim()
+        if label.len() == 0 || label.len() > 190: ret false end
+        labels.push(label)
+    end
+    ret true
+end
+
+func my_polls(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
+    uid := caller(ctx)
+    if uid == 0 as i64: ret end
+    send(ctx, 200, store.MyPolls(conn, uid))
+end
+
+func close_poll(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
+    uid := caller(ctx)
+    if uid == 0 as i64: ret end
+    p := store.GetPoll(conn, path_id(ctx))
+    if p.id == 0 as i64:
+        fail(ctx, 404, "no such poll")
+        ret
+    end
+    if p.owner_id != uid:
+        jwt.Forbidden(ctx, "only the poll's owner can close it")
+        ret
+    end
+    mut err := ""
+    if !store.ClosePoll(conn, p.id, err):
+        db_fail(ctx, "close poll", err)
+        ret
+    end
+    send(ctx, 200, store.GetPoll(conn, p.id).json)
+end
+
+// ---------------------------------------------------------------- voting
+
+func vote(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
+    uid := caller(ctx)
+    if uid == 0 as i64: ret end
+    poll_id := path_id(ctx)
+    p := store.GetPoll(conn, poll_id)
+    if p.id == 0 as i64:
+        fail(ctx, 404, "no such poll")
+        ret
+    end
+    if store.IsExpired(conn, poll_id):
+        fail(ctx, 409, "this poll is closed")
+        ret
+    end
+    option_id := json.GetInt(http.Ctx_body(ctx), "option_id") as i64
+    if !store.OptionInPoll(conn, poll_id, option_id):
+        fail(ctx, 400, "that option is not on this poll")
+        ret
+    end
+    reason := store.Vote(conn, poll_id, option_id, uid)
+    if reason == "already_voted":
+        // A second ballot is a 409, and the message says where to go next.
+        // Silently overwriting the first vote would be the wrong default:
+        // changing a vote should be a decision, not an accident.
+        send(ctx, 409, `{"error":"you have already voted in this poll","hint":"PATCH the same route to change your vote"}`)
+        ret
+    end
+    if reason.len() > 0:
+        db_fail(ctx, "vote", reason)
+        ret
+    end
+    send(ctx, 201, store.GetPoll(conn, poll_id).json)
+end
+
+func change_vote(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
+    uid := caller(ctx)
+    if uid == 0 as i64: ret end
+    poll_id := path_id(ctx)
+    if store.GetPoll(conn, poll_id).id == 0 as i64:
+        fail(ctx, 404, "no such poll")
+        ret
+    end
+    if store.IsExpired(conn, poll_id):
+        fail(ctx, 409, "this poll is closed")
+        ret
+    end
+    if store.MyVote(conn, poll_id, uid) == 0 as i64:
+        fail(ctx, 404, "you have not voted in this poll yet")
+        ret
+    end
+    option_id := json.GetInt(http.Ctx_body(ctx), "option_id") as i64
+    if !store.OptionInPoll(conn, poll_id, option_id):
+        fail(ctx, 400, "that option is not on this poll")
+        ret
+    end
+    mut err := ""
+    if !store.ChangeVote(conn, poll_id, option_id, uid, err):
+        db_fail(ctx, "change vote", err)
+        ret
+    end
+    send(ctx, 200, store.GetPoll(conn, poll_id).json)
+end
+
+func my_vote(ctx: i64):
+    mut conn := store.Conn {}
+    if !db(ctx, conn): ret end
+    defer store.Close(conn)
+    uid := caller(ctx)
+    if uid == 0 as i64: ret end
+    option_id := store.MyVote(conn, path_id(ctx), uid)
+    if option_id == 0 as i64:
+        send(ctx, 200, `{"voted":false}`)
+        ret
+    end
+    send(ctx, 200, `{"voted":true,"option_id":`.concat(conv.FormatInt(option_id)).concat("}"))
+end
+
+func health(ctx: i64):
+    send(ctx, 200, `{"status":"ok","service":"polls"}`)
+end
+
+func main:
+    // Reads the settings, initialises the client library, and proves the
+    // credentials work by opening one connection and closing it again. After
+    // this returns, no connection is held: each request makes its own.
+    //
+    // The library init has to happen here, on the main thread, before any
+    // request thread exists - see _store.salam's header.
+    mut err := ""
+    if !store.Configure(err):
+        println "cannot reach the database: ", err
+        println "set DB_HOST / DB_PORT / DB_USER / DB_PASS / DB_NAME, then load schema.sql"
+        ret 1
+    end
+    defer store.Shutdown()
+    mut r := router.NewRouter()
+    router.Post(r, "/auth/register", register)
+    router.Post(r, "/auth/login", login)
+    router.Get(r, "/polls", list_polls)
+    router.Get(r, "/polls/:id", get_poll)
+    router.Get(r, "/api/polls/mine", my_polls)
+    router.Post(r, "/api/polls", create_poll)
+    router.Post(r, "/api/polls/:id/vote", vote)
+    router.Patch(r, "/api/polls/:id/vote", change_vote)
+    router.Get(r, "/api/polls/:id/myvote", my_vote)
+    router.Post(r, "/api/polls/:id/close", close_poll)
+    router.Get(r, "/health", health)
+    mut s := http.NewServer(PORT)
+    http.Use(s, r)
+    println "polls API on http://localhost:8093"
+    http.Run(s)
+    ret 0
+end

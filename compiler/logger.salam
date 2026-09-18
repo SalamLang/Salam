@@ -22,7 +22,9 @@
 // - FILE *sink -> dropped; the logger always writes to stderr via io.EPrint*
 //   (the C compiler only ever passes stderr).
 // - logger_t* -> value struct Logger; setters take it by reference (&:).
-// - i18n_tr() is skipped here (Log/LogAt take an already-formatted `msg`);
+// - i18n_tr() is skipped for the message itself (Log/LogAt take an
+//   already-formatted `msg`); only the plain path's "help:" label is
+//   translated here, which is why i18n.salam is imported;
 //   the i18n module IS ported (i18n.salam) and callers translate their own
 //   format template via i18.Tr(fmt) before formatting args in - same
 //   convention as diag.salam's Report(). The one place this package itself
@@ -45,6 +47,7 @@ import io
 import time
 import dr "diag_render.salam"
 import co "sal_core.salam"
+import i18 "i18n.salam"
 
 // ===== logger.c =====
 // log_level_t
@@ -173,7 +176,7 @@ func find_src(lgr: Logger, file: str): str:
     n := lgr.src_table.len()
     mut i := 0
     until i < n:
-        e := lgr.src_table.get(i)[0]
+        e := lgr.src_table.get(i)
         if str.Equals(e.file, file):
             ret e.text
         end
@@ -184,14 +187,14 @@ end
 
 // logger_emit_rich (logger_emit.c): rustc/gcc/clang-style rendering with a
 // source excerpt, via diag_render.salam.
-func render_rich(lgr: Logger, level: int, file: str, line: int, col: int, msg: str): str:
+func render_rich(lgr: Logger, level: int, file: str, line: int, col: int, help: str, msg: str): str:
     mut is_error := level == LOG_ERROR
     mut code := 0
     body := split_code_prefix(msg, is_error, code)
     lvl := is_error ? "error" : "warning"
     src := find_src(lgr, file)
     ret dr.RenderAt(
-        lvl, code, is_error, file, line, col, 0, src, str.Len(src), body, "", lgr.diag_style, lgr.diag_format,
+        lvl, code, is_error, file, line, col, 0, src, str.Len(src), body, help, lgr.diag_style, lgr.diag_format,
         lgr.color
     )
 end
@@ -251,7 +254,7 @@ pub func AddDiagSource(lg &: Logger, file: str, src_text: str, src_len: int):
     n := lg.src_table.len()
     mut i := 0
     until i < n:
-        mut e := lg.src_table.get(i)[0]
+        mut e := lg.src_table.get(i)
         if str.Equals(e.file, file):
             e.text = src_text
             e.len = src_len
@@ -374,6 +377,11 @@ pub func FormatPlain(lgr: Logger, phase: int, level: int, file: str, line: int, 
     ret out
 end
 
+// logger_emit_plain's help footnote, on its own line under the message.
+pub func FormatPlainHelp(help: str): str:
+    ret "  " + i18.Tr("help") + ": " + help
+end
+
 // logger_log without a source location (LOG_T/D/I/W/E macros)
 pub func Log(lgr: Logger, phase: int, level: int, msg: str):
     if !Enabled(lgr, level):
@@ -384,12 +392,23 @@ end
 
 // logger_log with file + span (LOG_*_AT macros)
 pub func LogAt(lgr: Logger, phase: int, level: int, file: str, line: int, col: int, msg: str):
+    LogAtHelp(lgr, phase, level, file, line, col, "", msg)
+end
+
+// logger_log_help: LogAt plus a trailing "= help: ..." line on the rendered
+// diagnostic. `help` is emitted verbatim, so callers translate it themselves
+// (it usually carries a user-supplied name and has to be formatted first);
+// pass "" for no help line.
+pub func LogAtHelp(lgr: Logger, phase: int, level: int, file: str, line: int, col: int, help: str, msg: str):
     if !Enabled(lgr, level):
         ret
     end
     if lgr.diag_rich && str.Len(file) > 0 && line > 0 && (level == LOG_ERROR || level == LOG_WARN):
-        io.EPrint(render_rich(lgr, level, file, line, col, msg))
+        io.EPrint(render_rich(lgr, level, file, line, col, help, msg))
         ret
     end
     io.EPrintln(FormatPlain(lgr, phase, level, file, line, col, msg))
+    if str.Len(help) > 0:
+        io.EPrintln(FormatPlainHelp(help))
+    end
 end

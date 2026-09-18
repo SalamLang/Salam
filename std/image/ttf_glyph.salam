@@ -1,0 +1,326 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package image
+
+// Glyph outlines: decoding one `glyf` entry into contour points. The
+// container half (finding `glyf`/`loca` and everything else) is in
+// truetype.salam; turning these points into pixels is glyph_raster.salam.
+//
+// Points come out already transformed into device (pixel) space by the
+// 2x3 matrix the caller passes in - `a b c d` are the linear part and
+// `dx dy` the translation, so a point (gx, gy) in font units lands at
+// (a*gx + c*gy + dx, b*gx + d*gy + dy). Text drawing passes a matrix
+// whose vertical part is negative, since font units grow upward from the
+// baseline and image rows grow downward. Composite glyphs compose their
+// own matrix with that one, which is exactly why the transform is
+// applied here rather than in a second pass: a component's scale has to
+// multiply into the parent's before either is applied.
+//
+// A contour is a run of points, ended by an exclusive index in `ends`
+// (so contour k is points[ends[k-1] .. ends[k]), with ends[-1] = 0).
+// Points carry an on-curve flag: TrueType outlines are quadratic
+// B-splines where consecutive off-curve points imply an on-curve point
+// at their midpoint, which the flattener in glyph_raster.salam
+// reconstructs.
+
+// Simple-glyph point flags (spec: "Simple Glyph Description").
+const _TTF_ON_CURVE := 1
+const _TTF_X_SHORT := 2
+const _TTF_Y_SHORT := 4
+const _TTF_REPEAT := 8
+const _TTF_X_SAME := 16
+const _TTF_Y_SAME := 32
+
+// Composite-glyph component flags.
+const _TTF_ARG_WORDS := 1
+const _TTF_ARGS_XY := 2
+const _TTF_HAVE_SCALE := 8
+const _TTF_MORE_COMP := 32
+const _TTF_XY_SCALE := 64
+const _TTF_TWO_BY_TWO := 128
+
+// A hard cap on points per glyph. Every read is bounds-checked already,
+// so this is not a safety net for reading past the buffer - it stops a
+// corrupt endPtsOfContours from turning into a multi-gigabyte allocation
+// before the (all zero, hence harmless) points are even decoded. The
+// largest glyphs in real CJK fonts run to a few thousand points.
+const _TTF_MAX_POINTS := 20000
+
+const _TTF_MAX_DEPTH := 5
+
+struct _GlyphPoint:
+    pub x: f64 = 0.0
+    pub y: f64 = 0.0
+    pub on: bool = false
+end
+
+func _ttf_i8(f: Font, off: int): int:
+    v := _ttf_u8(f.data, f.size, off)
+    if v >= 128:
+        ret v - 256
+    end
+    ret v
+end
+
+// F2Dot14: a signed 16-bit fixed-point number with 14 fraction bits, the
+// only number format composite-glyph scales are stored in.
+func _ttf_f2dot14(f: Font, off: int): f64:
+    ret (_ttf_i16(f.data, f.size, off) as f64) / 16384.0
+end
+
+// Byte range of one glyph's outline inside `glyf`, via `loca`. Returns
+// false for an absent, out-of-range or empty glyph - "empty" being how
+// every font stores a space, not an error.
+func _ttf_glyph_range(f: Font, gid: int, off &: int, glen &: int): bool:
+    off = 0
+    glen = 0
+    if gid < 0 || gid >= f.num_glyphs:
+        ret false
+    end
+    mut s := 0
+    mut e := 0
+    if f.loca_long:
+        s = _ttf_u32(f.data, f.size, f.loca + gid * 4)
+        e = _ttf_u32(f.data, f.size, f.loca + gid * 4 + 4)
+    else:
+        s = _ttf_u16(f.data, f.size, f.loca + gid * 2) * 2
+        e = _ttf_u16(f.data, f.size, f.loca + gid * 2 + 2) * 2
+    end
+    if e <= s || s < 0:
+        ret false
+    end
+    off = f.glyf + s
+    glen = e - s
+    ret true
+end
+
+// Reads the per-point flag array, expanding the REPEAT runs the format
+// packs identical consecutive flags into. Returns the cursor position
+// just past the array.
+func _ttf_read_flags(f: Font, start: int, npoints: int, flags &: Vector<int>): int:
+    mut cur := start
+    mut n := 0
+    until n < npoints:
+        fl := _ttf_u8(f.data, f.size, cur)
+        cur += 1
+        flags.push(fl)
+        n += 1
+        if (fl & _TTF_REPEAT) != 0:
+            r := _ttf_u8(f.data, f.size, cur)
+            cur += 1
+            mut k := 0
+            until k < r && n < npoints:
+                flags.push(fl)
+                n += 1
+                k += 1
+            end
+        end
+    end
+    ret cur
+end
+
+// Reads one coordinate array. x and y differ only in which pair of flag
+// bits selects the encoding, so both go through here: a short coordinate
+// is one unsigned byte whose sign comes from the "same" bit, a long one
+// is a signed 16-bit delta, and "same, not short" means a delta of zero.
+// Every value is a delta from the previous point, so the running sum is
+// the actual coordinate.
+func _ttf_read_coords(f: Font, start: int, npoints: int, short_bit: int, same_bit: int, flags &: Vector<int>, out &: Vector<int>): int:
+    mut cur := start
+    mut v := 0
+    mut i := 0
+    until i < npoints:
+        fl := flags.get(i)
+        if (fl & short_bit) != 0:
+            d := _ttf_u8(f.data, f.size, cur)
+            cur += 1
+            if (fl & same_bit) != 0:
+                v += d
+            else:
+                v -= d
+            end
+        else if (fl & same_bit) == 0:
+            v += _ttf_i16(f.data, f.size, cur)
+            cur += 2
+        end
+        out.push(v)
+        i += 1
+    end
+    ret cur
+end
+
+func _ttf_simple_glyph(f: Font, goff: int, ncont: int, a: f64, b: f64, c: f64, d: f64, dx: f64, dy: f64, pts &: Vector<_GlyphPoint>, ends &: Vector<int>):
+    base := pts.len()
+    npoints := _ttf_u16(f.data, f.size, goff + 10 + (ncont - 1) * 2) + 1
+    if npoints <= 0 || npoints > _TTF_MAX_POINTS:
+        ret
+    end
+    mut i := 0
+    until i < ncont:
+        e := _ttf_u16(f.data, f.size, goff + 10 + i * 2)
+        if e < npoints:
+            ends.push(base + e + 1)
+        end
+        i += 1
+    end
+    ins_at := goff + 10 + ncont * 2
+    mut flags := Vector {} as Vector<int>
+    mut xs := Vector {} as Vector<int>
+    mut ys := Vector {} as Vector<int>
+    after_flags := _ttf_read_flags(f, ins_at + 2 + _ttf_u16(f.data, f.size, ins_at), npoints, flags)
+    after_x := _ttf_read_coords(f, after_flags, npoints, _TTF_X_SHORT, _TTF_X_SAME, flags, xs)
+    _ttf_read_coords(f, after_x, npoints, _TTF_Y_SHORT, _TTF_Y_SAME, flags, ys)
+    mut k := 0
+    until k < npoints:
+        gx := xs.get(k) as f64
+        gy := ys.get(k) as f64
+        mut p := _GlyphPoint {}
+        p.x = a * gx + c * gy + dx
+        p.y = b * gx + d * gy + dy
+        p.on = (flags.get(k) & _TTF_ON_CURVE) != 0
+        pts.push(p)
+        k += 1
+    end
+    flags.free()
+    xs.free()
+    ys.free()
+end
+
+// Reads one component's placement into the caller's matrix slots, and
+// returns the cursor past it. Only the offset form of the arguments is
+// honored; the point-matching form (align component point i to parent
+// point j, which no text font in circulation uses) is treated as a zero
+// offset rather than guessed at.
+func _ttf_component_xform(f: Font, at: int, flags: int, sa &: f64, sb &: f64, sc &: f64, sd &: f64, ox &: f64, oy &: f64): int:
+    mut cur := at
+    mut arg1 := 0
+    mut arg2 := 0
+    if (flags & _TTF_ARG_WORDS) != 0:
+        arg1 = _ttf_i16(f.data, f.size, cur)
+        arg2 = _ttf_i16(f.data, f.size, cur + 2)
+        cur += 4
+    else:
+        arg1 = _ttf_i8(f, cur)
+        arg2 = _ttf_i8(f, cur + 1)
+        cur += 2
+    end
+    sa = 1.0
+    sb = 0.0
+    sc = 0.0
+    sd = 1.0
+    if (flags & _TTF_HAVE_SCALE) != 0:
+        sa = _ttf_f2dot14(f, cur)
+        sd = sa
+        cur += 2
+    else if (flags & _TTF_XY_SCALE) != 0:
+        sa = _ttf_f2dot14(f, cur)
+        sd = _ttf_f2dot14(f, cur + 2)
+        cur += 4
+    else if (flags & _TTF_TWO_BY_TWO) != 0:
+        sa = _ttf_f2dot14(f, cur)
+        sb = _ttf_f2dot14(f, cur + 2)
+        sc = _ttf_f2dot14(f, cur + 4)
+        sd = _ttf_f2dot14(f, cur + 6)
+        cur += 8
+    end
+    ox = 0.0
+    oy = 0.0
+    if (flags & _TTF_ARGS_XY) != 0:
+        ox = arg1 as f64
+        oy = arg2 as f64
+    end
+    ret cur
+end
+
+func _ttf_composite_glyph(f: Font, goff: int, a: f64, b: f64, c: f64, d: f64, dx: f64, dy: f64, pts &: Vector<_GlyphPoint>, ends &: Vector<int>, depth: int):
+    mut cur := goff + 10
+    mut more := true
+    until more:
+        flags := _ttf_u16(f.data, f.size, cur)
+        sub := _ttf_u16(f.data, f.size, cur + 2)
+        mut sa := 1.0
+        mut sb := 0.0
+        mut sc := 0.0
+        mut sd := 1.0
+        mut ox := 0.0
+        mut oy := 0.0
+        cur = _ttf_component_xform(f, cur + 4, flags, sa, sb, sc, sd, ox, oy)
+        // Compose parent(child(p)): the component's own scale/skew runs
+        // first, then the text matrix already in a..dy.
+        _ttf_append_glyph(f, sub, a * sa + c * sb, b * sa + d * sb, a * sc + c * sd, b * sc + d * sd, a * ox + c * oy + dx, b * ox + d * oy + dy, pts, ends, depth + 1)
+        more = (flags & _TTF_MORE_COMP) != 0
+    end
+end
+
+// Appends one glyph's contours, transformed, to `pts`/`ends`. Recurses
+// through composite glyphs (accented letters are almost always a base
+// letter plus a shifted accent component), bounded by _TTF_MAX_DEPTH
+// against a font whose components reference each other in a cycle.
+func _ttf_append_glyph(f: Font, gid: int, a: f64, b: f64, c: f64, d: f64, dx: f64, dy: f64, pts &: Vector<_GlyphPoint>, ends &: Vector<int>, depth: int):
+    if depth >= _TTF_MAX_DEPTH:
+        ret
+    end
+    mut goff := 0
+    mut glen := 0
+    if !_ttf_glyph_range(f, gid, goff, glen):
+        ret
+    end
+    ncont := _ttf_i16(f.data, f.size, goff)
+    if ncont > 0:
+        _ttf_simple_glyph(f, goff, ncont, a, b, c, d, dx, dy, pts, ends)
+        ret
+    end
+    if ncont < 0:
+        _ttf_composite_glyph(f, goff, a, b, c, d, dx, dy, pts, ends, depth)
+    end
+end
+
+// The glyph's own bounding box in font units, straight from the `glyf`
+// header. Zeroes for an empty glyph (a space), which is what a caller
+// measuring ink wants to see.
+@en "GlyphBox"
+@fa "کادر نویسه"
+@ar "صندوق الرسم"
+pub func GlyphBox(f: Font, glyph: int, x0 &: int, y0 &: int, x1 &: int, y1 &: int): bool:
+    x0 = 0
+    y0 = 0
+    x1 = 0
+    y1 = 0
+    mut goff := 0
+    mut glen := 0
+    if !_ttf_glyph_range(f, glyph, goff, glen):
+        ret false
+    end
+    x0 = _ttf_i16(f.data, f.size, goff + 2)
+    y0 = _ttf_i16(f.data, f.size, goff + 4)
+    x1 = _ttf_i16(f.data, f.size, goff + 6)
+    y1 = _ttf_i16(f.data, f.size, goff + 8)
+    ret true
+end
+
+// Whether the glyph has any outline at all: false for .notdef in a font
+// that leaves it empty, for a space, and for any codepoint the font does
+// not cover.
+@en "GlyphHasOutline"
+@fa "نویسه طرح دارد"
+@ar "للرسم مخطط"
+pub func GlyphHasOutline(f: Font, glyph: int): bool:
+    mut goff := 0
+    mut glen := 0
+    if !_ttf_glyph_range(f, glyph, goff, glen):
+        ret false
+    end
+    ret _ttf_i16(f.data, f.size, goff) != 0
+end

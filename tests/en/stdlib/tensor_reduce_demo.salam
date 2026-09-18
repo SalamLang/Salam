@@ -1,0 +1,127 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// std/tensor: reductions and the two softmaxes.
+
+import math
+import tensor
+import testing
+
+func iota(t &: tensor.Tensor):
+    repeat t.numel() with k: t.set_at(k, k as f64) end
+end
+
+func main:
+    eps := 0.00001
+
+    mut m := tensor.Zeros2(2, 3)
+    iota(m)                                   // 0 1 2 / 3 4 5
+
+    // Whole-tensor reductions
+    testing.AssertEqFloat(tensor.SumAll(m), 15.0, eps)
+    testing.AssertEqFloat(tensor.MeanAll(m), 2.5, eps)
+    testing.AssertEqFloat(tensor.MaxAll(m), 5.0, eps)
+    testing.AssertEqFloat(tensor.MinAll(m), 0.0, eps)
+    m.set_at(1, 50.0)
+    testing.AssertEqInt(tensor.ArgMaxAll(m), 1)
+    m.set_at(1, 1.0)
+    testing.AssertEqInt(tensor.ArgMaxAll(tensor.Empty()), 0 - 1)
+
+    // Axis reductions, both axes, with and without keepdim
+    mut s0 := tensor.SumAxis(m, 0, false)     // [3]: 3 5 7
+    testing.AssertEqInt(s0.rank(), 1)
+    testing.AssertEqInt(s0.dim(0), 3)
+    testing.AssertEqFloat(s0.at(0), 3.0, eps)
+    testing.AssertEqFloat(s0.at(2), 7.0, eps)
+    mut s1 := tensor.SumAxis(m, 1, true)      // [2,1]: 3 12
+    testing.AssertEqInt(s1.rank(), 2)
+    testing.AssertEqInt(s1.dim(1), 1)
+    testing.AssertEqFloat(s1.at(0), 3.0, eps)
+    testing.AssertEqFloat(s1.at(1), 12.0, eps)
+    testing.AssertTrue(tensor.SumAxis(m, 2, false).is_empty())
+
+    // keepdim output drops straight into the trailing-one broadcast
+    mut centered := tensor.Sub(m, s1)
+    testing.AssertEqFloat(centered.at2(0, 0), 0.0 - 3.0, eps)
+    testing.AssertEqFloat(centered.at2(1, 2), 0.0 - 7.0, eps)
+
+    mut mean1 := tensor.MeanAxis(m, 1, false) // [2]: 1 4
+    testing.AssertEqFloat(mean1.at(0), 1.0, eps)
+    testing.AssertEqFloat(mean1.at(1), 4.0, eps)
+
+    mut mx0 := tensor.MaxAxis(m, 0, false)    // [3]: 3 4 5
+    testing.AssertEqFloat(mx0.at(0), 3.0, eps)
+    testing.AssertEqFloat(mx0.at(2), 5.0, eps)
+
+    // A rank-1 reduction keeps shape [1]
+    mut v := tensor.Arange(4)
+    mut vs := tensor.SumAxis(v, 0, false)
+    testing.AssertEqInt(vs.rank(), 1)
+    testing.AssertEqInt(vs.dim(0), 1)
+    testing.AssertEqFloat(vs.at(0), 6.0, eps)
+
+    // ArgMax along an axis
+    mut a := tensor.Zeros2(2, 3)
+    a.set_at2(0, 1, 9.0)
+    a.set_at2(1, 2, 4.0)
+    mut am1 := tensor.ArgMaxAxis(a, 1, false) // [2]: 1 2
+    testing.AssertEqFloat(am1.at(0), 1.0, eps)
+    testing.AssertEqFloat(am1.at(1), 2.0, eps)
+    mut am0 := tensor.ArgMaxAxis(a, 0, false) // [3]: 0 0 1
+    testing.AssertEqFloat(am0.at(0), 0.0, eps)
+    testing.AssertEqFloat(am0.at(2), 1.0, eps)
+
+    // Softmax rows are positive and sum to one; order is preserved
+    mut sm := tensor.Softmax(m)
+    mut row0 := 0.0
+    repeat 3 with k: row0 += sm.at2(0, k) end
+    testing.AssertEqFloat(row0, 1.0, eps)
+    mut row1 := 0.0
+    repeat 3 with k: row1 += sm.at2(1, k) end
+    testing.AssertEqFloat(row1, 1.0, eps)
+    testing.AssertTrue(sm.at2(0, 2) > sm.at2(0, 1))
+
+    // A hand-checked value: softmax([0,1,2]) at index 2
+    e0 := math.Exp(0.0 - 2.0)
+    e1 := math.Exp(0.0 - 1.0)
+    want := 1.0 / (e0 + e1 + 1.0)
+    testing.AssertEqFloat(sm.at2(0, 2), want, eps)
+
+    // LogSoftmax agrees with log(Softmax) and shifts by the constant
+    mut lsm := tensor.LogSoftmax(m)
+    testing.AssertEqFloat(lsm.at2(0, 2), math.Log(want), eps)
+    mut shifted := tensor.AddScalar(m, 100.0)
+    mut lsm2 := tensor.LogSoftmax(shifted)
+    testing.AssertTrue(tensor.AllClose(lsm, lsm2, 0.001))
+
+    tensor.Free(m)
+    tensor.Free(s0)
+    tensor.Free(s1)
+    tensor.Free(centered)
+    tensor.Free(mean1)
+    tensor.Free(mx0)
+    tensor.Free(v)
+    tensor.Free(vs)
+    tensor.Free(a)
+    tensor.Free(am1)
+    tensor.Free(am0)
+    tensor.Free(sm)
+    tensor.Free(lsm)
+    tensor.Free(shifted)
+    tensor.Free(lsm2)
+
+    ret testing.Summary()
+end

@@ -1,0 +1,459 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package webpush
+
+// Web Push: sending a notification to a browser that is not open.
+//
+// Three specifications meet here, and it is worth knowing which does what,
+// because the failures look alike and the causes do not:
+//
+//   RFC 8030  the protocol - a POST to the endpoint the browser gave you
+//   RFC 8292  VAPID - who is sending, proved with an ES256 JWT
+//   RFC 8291  the encryption - so the push service forwards a payload it
+//             cannot read
+//
+// The last one is the reason this cannot be a few lines around an HTTP client.
+// A push service is an intermediary the sender does not control, so the
+// payload is encrypted to a key the browser generated and never shared with
+// it. Getting that wrong produces a 201 from the push service and silence at
+// the browser, which is the least helpful failure mode available - hence
+// Encrypt() being separately callable and separately testable.
+//
+// See tests/en/stdlib/webpush_demo.salam.
+
+import mem
+import str
+import time
+import conv
+import crypto
+import encoding
+import tls
+import net.httpx
+
+// The default lifetime a push service should hold an undelivered message: four
+// weeks, which is what the specification suggests and what browsers assume.
+pub const DEFAULT_TTL := 2419200
+
+// A VAPID token is valid for at most 24 hours; twelve is the usual choice, and
+// leaves room for a badly set clock on either side.
+const VAPID_TTL_SECONDS := 43200
+
+const POINT_LEN := 65
+const AUTH_LEN := 16
+const SALT_LEN := 16
+const RECORD_SIZE := 4096
+
+// Keys - the application server's identity. One pair per deployment, generated
+// once and kept: the public half is what a browser subscribes with, so
+// changing it invalidates every existing subscription.
+pub struct Keys:
+    pub public_key: str = ""
+    pub private_key: str = ""
+    pub ok: bool = false
+end
+
+// Subscription - what the browser handed the application, verbatim. All three
+// fields are base64url, which is what PushSubscription.toJSON() produces.
+pub struct Subscription:
+    pub endpoint: str = ""
+    pub p256dh: str = ""
+    pub auth: str = ""
+end
+
+// Options - the delivery hints a push service honours.
+pub struct Options:
+    // "mailto:someone@example.com" or "https://example.com". Required: it is
+    // how a push service reaches whoever is sending, and some refuse without.
+    pub subject: str = ""
+    pub ttl: int = 2419200
+    // "very-low", "low", "normal" or "high". A low-urgency message may be
+    // held until the device is awake anyway, which saves its battery.
+    pub urgency: str = ""
+    // A topic replaces an undelivered message with the same one, so a device
+    // that was offline gets the latest rather than a backlog.
+    pub topic: str = ""
+end
+
+// Result - what happened.
+//
+// `gone` is the field that matters operationally: a 404 or 410 means the
+// subscription is dead for good and the caller should delete it. Anything else
+// is worth retrying or ignoring, but not worth forgetting a device over.
+pub struct Result:
+    pub ok: bool = false
+    pub status: int = 0
+    pub gone: bool = false
+    pub error: str = ""
+end
+
+// _b64url - standard base64 to the URL-safe alphabet, unpadded, which is what
+// every field in these specifications uses.
+func _b64url(standard: str): str:
+    mut out := str.Replace(str.Replace(standard, "+", "-"), "/", "_")
+    while out.len() > 0 && out.substr(out.len() - 1, 1) == "=":
+        out = out.substr(0, out.len() - 1)
+    end
+    ret out
+end
+
+// _b64std - the reverse, restoring the padding the decoder needs.
+func _b64std(urlsafe: str): str:
+    mut out := str.Replace(str.Replace(urlsafe, "-", "+"), "_", "/")
+    while out.len() % 4 != 0:
+        out = out + "="
+    end
+    ret out
+end
+
+// _alloc_copy - a fresh buffer holding one decoded base64 value, and its
+// length. Base64 in, bytes out, because everything below has to concatenate
+// binary and a str cannot hold it.
+func _alloc_copy(b64: str, out_len &: int): void*:
+    capacity := b64.len() + 16
+    ptr := mem.AllocateZeroed(capacity as u64)
+    out_len = 0
+    if ptr == null: ret null end
+    mut ok := true
+    n := encoding.Base64DecodeBytes(b64, ptr, capacity, ok)
+    if !ok || n <= 0:
+        mem.Free(ptr)
+        ret null
+    end
+    out_len = n
+    ret ptr
+end
+
+func _put(dst: void*, off: int, src: void*, n: int):
+    mem.Copy(((dst as i64) + (off as i64)) as void*, src, n as u64)
+end
+
+func _put_byte(dst: void*, off: int, v: int):
+    bp := dst as u8*
+    bp[off] = v as u8
+end
+
+func _put_str(dst: void*, off: int, s: str):
+    if s.len() > 0: _put(dst, off, s as void*, s.len()) end
+end
+
+// _key_info - "WebPush: info" || 0x00 || the browser's key || ours.
+//
+// Binding both public keys into the key derivation is what stops a push
+// service that has seen one exchange from replaying it against another
+// subscriber: the derived key is specific to this pair and no other.
+func _key_info(ua_point: void*, as_point: void*): str:
+    label := "WebPush: info"
+    total := label.len() + 1 + POINT_LEN + POINT_LEN
+    buf := mem.AllocateZeroed(total as u64)
+    if buf == null: ret "" end
+    defer mem.Free(buf)
+    _put_str(buf, 0, label)
+    _put_byte(buf, label.len(), 0)
+    _put(buf, label.len() + 1, ua_point, POINT_LEN)
+    _put(buf, label.len() + 1 + POINT_LEN, as_point, POINT_LEN)
+    ret encoding.Base64EncodeBytes(buf, total)
+end
+
+// _label_info - "Content-Encoding: <name>" || 0x00, the info string for the
+// content key and the nonce.
+func _label_info(name: str): str:
+    label := "Content-Encoding: " + name
+    total := label.len() + 1
+    buf := mem.AllocateZeroed(total as u64)
+    if buf == null: ret "" end
+    defer mem.Free(buf)
+    _put_str(buf, 0, label)
+    _put_byte(buf, label.len(), 0)
+    ret encoding.Base64EncodeBytes(buf, total)
+end
+
+// _padded - the payload with RFC 8188's record delimiter appended. 0x02 marks
+// the last record; a 0x01 would mean another follows, and this never sends
+// more than one because a push payload is capped at four kilobytes anyway.
+func _padded(payload: str): str:
+    total := payload.len() + 1
+    buf := mem.AllocateZeroed(total as u64)
+    if buf == null: ret "" end
+    defer mem.Free(buf)
+    _put_str(buf, 0, payload)
+    _put_byte(buf, payload.len(), 2)
+    ret encoding.Base64EncodeBytes(buf, total)
+end
+
+// _body - the aes128gcm content-coding header, then the ciphertext.
+//
+//   salt(16) | record size(4, big-endian) | key length(1) | our key(65) | ciphertext
+//
+// The header carries the sender's public key because the receiver has no other
+// way to know which ephemeral key this message was sealed with.
+func _body(salt: void*, as_point: void*, ciphertext_b64: str): str:
+    mut ct_len := 0
+    ct := _alloc_copy(ciphertext_b64, ct_len)
+    if ct == null: ret "" end
+    defer mem.Free(ct)
+    header := SALT_LEN + 4 + 1 + POINT_LEN
+    total := header + ct_len
+    buf := mem.AllocateZeroed(total as u64)
+    if buf == null: ret "" end
+    defer mem.Free(buf)
+    _put(buf, 0, salt, SALT_LEN)
+    _put_byte(buf, SALT_LEN, (RECORD_SIZE >> 24) & 255)
+    _put_byte(buf, SALT_LEN + 1, (RECORD_SIZE >> 16) & 255)
+    _put_byte(buf, SALT_LEN + 2, (RECORD_SIZE >> 8) & 255)
+    _put_byte(buf, SALT_LEN + 3, RECORD_SIZE & 255)
+    _put_byte(buf, SALT_LEN + 4, POINT_LEN)
+    _put(buf, SALT_LEN + 5, as_point, POINT_LEN)
+    _put(buf, header, ct, ct_len)
+    ret encoding.Base64EncodeBytes(buf, total)
+end
+
+// _origin - the scheme and host of an endpoint, which is the audience a VAPID
+// token is minted for. A token for one push service is not valid at another.
+func _origin(endpoint: str): str:
+    ep := httpx.ParseEndpoint(endpoint)
+    if !ep.ok: ret "" end
+    mut out := "https://"
+    if !ep.secure: out = "http://" end
+    out = out + ep.host
+    if (ep.secure && ep.port != 443) || (!ep.secure && ep.port != 80):
+        out = out + ":" + ep.port
+    end
+    ret out
+end
+
+// _jwt_part - one JOSE segment: the JSON, base64url, unpadded.
+func _jwt_part(json: str): str:
+    ret _b64url(encoding.Base64Encode(json))
+end
+
+// _digest_b64 - SHA-256 of the signing input, which is what ES256 signs.
+func _digest_b64(signing_input: str): str:
+    ret encoding.Base64Encode(encoding.HexDecode(crypto.Sha256Hex(signing_input)))
+end
+
+// _path_of - the request path and query of an endpoint, which is everything
+// after the authority. Push endpoints carry a long opaque token there.
+func _path_of(endpoint: str): str:
+    mut rest := endpoint
+    if str.StartsWith(rest, "https://"): rest = rest.substr(8, rest.len() - 8)
+    else str.StartsWith(rest, "http://"): rest = rest.substr(7, rest.len() - 7)
+    end
+    slash := rest.find("/")
+    if slash < 0: ret "/" end
+    ret rest.substr(slash, rest.len() - slash)
+end
+
+func _host_header(endpoint: str): str:
+    ep := httpx.ParseEndpoint(endpoint)
+    if !ep.ok: ret "" end
+    if (ep.secure && ep.port != 443) || (!ep.secure && ep.port != 80):
+        ret ep.host + ":" + ep.port
+    end
+    ret ep.host
+end
+
+// _seal - the key schedule and the AEAD, once the exchange has happened.
+func _seal(sub: Subscription, payload: str, as_point: str, ecdh: str,
+    salt_b64: str, ok &: bool): str:
+    mut ua_len := 0
+    ua := _alloc_copy(_b64std(sub.p256dh), ua_len)
+    if ua == null || ua_len != POINT_LEN: ret "" end
+    defer mem.Free(ua)
+    mut as_len := 0
+    as_ptr := _alloc_copy(as_point, as_len)
+    if as_ptr == null: ret "" end
+    defer mem.Free(as_ptr)
+    mut derive_ok := false
+    ikm := tls.HkdfSha256Raw(ecdh, _b64std(sub.auth), _key_info(ua, as_ptr), 32, derive_ok)
+    if !derive_ok: ret "" end
+    ret _encrypt_records(ikm, payload, as_ptr, salt_b64, ok)
+end
+
+// _encrypt_records - the content key, the nonce, and the one record.
+func _encrypt_records(ikm: str, payload: str, as_ptr: void*, salt_b64: str,
+    ok &: bool): str:
+    mut derive_ok := false
+    cek := tls.HkdfSha256Raw(ikm, salt_b64, _label_info("aes128gcm"), 16, derive_ok)
+    if !derive_ok: ret "" end
+    nonce := tls.HkdfSha256Raw(ikm, salt_b64, _label_info("nonce"), 12, derive_ok)
+    if !derive_ok: ret "" end
+    mut seal_ok := false
+    ciphertext := tls.AesGcmSealBytes(cek, nonce, _padded(payload), seal_ok)
+    if !seal_ok: ret "" end
+    mut salt_len := 0
+    salt := _alloc_copy(salt_b64, salt_len)
+    if salt == null || salt_len != SALT_LEN: ret "" end
+    defer mem.Free(salt)
+    body := _body(salt, as_ptr, ciphertext)
+    ok = body.len() > 0
+    ret _b64url(body)
+end
+
+// _post - the request itself.
+func _post(sub: Subscription, authorization: str, opts: Options, encoding_name: str,
+    n: int, body: void*): Result:
+    ep := httpx.ParseEndpoint(sub.endpoint)
+    if !ep.ok: ret Result { error = "the endpoint could not be parsed" } end
+    head := _request_head(sub, authorization, opts, encoding_name, n)
+    ret _result(httpx.Send(ep, head, body, n))
+end
+
+func _request_head(sub: Subscription, authorization: str, opts: Options,
+    encoding_name: str, n: int): str:
+    mut out := "POST " + _path_of(sub.endpoint) + " HTTP/1.1\r\n"
+    out = out + "Host: " + _host_header(sub.endpoint) + "\r\n"
+    out = out + "Authorization: " + authorization + "\r\n"
+    out = out + "TTL: " + _ttl_of(opts) + "\r\n"
+    if encoding_name.len() > 0:
+        out = out + "Content-Encoding: " + encoding_name + "\r\n"
+        out = out + "Content-Type: application/octet-stream\r\n"
+    end
+    if opts.urgency.len() > 0: out = out + "Urgency: " + opts.urgency + "\r\n" end
+    if opts.topic.len() > 0: out = out + "Topic: " + opts.topic + "\r\n" end
+    out = out + "Content-Length: " + n + "\r\n"
+    ret out + "Connection: close\r\n\r\n"
+end
+
+func _ttl_of(opts: Options): str:
+    if opts.ttl <= 0: ret "" + DEFAULT_TTL end
+    ret "" + opts.ttl
+end
+
+// _result - the answer, with the one distinction that matters: a subscription
+// the push service says is gone should be deleted, not retried.
+func _result(r: httpx.Response): Result:
+    if r.error.len() > 0: ret Result { status = r.status, error = r.error } end
+    if r.status == 404 || r.status == 410:
+        ret Result { status = r.status, gone = true, error = "the subscription is gone" }
+    end
+    if r.ok: ret Result { ok = true, status = r.status } end
+    ret Result { status = r.status, error = _reason(r) }
+end
+
+func _reason(r: httpx.Response): str:
+    if r.body.len() > 0 && r.body.len() < 400: ret str.Trim(r.body) end
+    ret "the push service answered " + r.status
+end
+
+// GenerateKeys - a fresh application server key pair, base64url.
+//
+// Generated once per deployment and stored. The public half is what a browser
+// passes to pushManager.subscribe(), so replacing it silently invalidates
+// every subscription already taken out against the old one.
+pub func GenerateKeys(): Keys:
+    mut priv := ""
+    mut spki := ""
+    if !tls.EcdhP256Generate(priv, spki): ret Keys {} end
+    point := tls.EcdhP256PublicPoint(priv)
+    if point.len() == 0: ret Keys {} end
+    ret Keys {
+        public_key = _b64url(point),
+        private_key = _b64url(priv),
+        ok = true
+    }
+end
+
+// VapidHeaderAt - the Authorization header value, anchored to an instant.
+//
+// `t=` is the signed token and `k=` the public key it was signed with, so a
+// push service can verify without knowing the sender in advance. That is the
+// whole of VAPID: not authentication, but an accountable identity.
+pub func VapidHeaderAt(keys: Keys, audience: str, subject: str,
+    epoch_seconds: i64): str:
+    if !keys.ok || audience.len() == 0 || subject.len() == 0: ret "" end
+    header := _jwt_part(`{"typ":"JWT","alg":"ES256"}`)
+    claims := _jwt_part(`{"aud":"` + audience + `","exp":` +
+        conv.FormatInt(epoch_seconds + (VAPID_TTL_SECONDS as i64)) +
+        `,"sub":"` + subject + `"}`)
+    signing_input := header + "." + claims
+    mut ok := false
+    signature := tls.P256Sign(_b64std(keys.private_key), _digest_b64(signing_input), ok)
+    if !ok: ret "" end
+    ret "vapid t=" + signing_input + "." + _b64url(signature) + ", k=" + keys.public_key
+end
+
+// VapidHeader - the same, for now.
+pub func VapidHeader(keys: Keys, audience: str, subject: str): str:
+    ret VapidHeaderAt(keys, audience, subject, time.Now())
+end
+
+// EncryptWith - the sealed body, given a specific ephemeral key and salt.
+//
+// Separated from Encrypt so it can be checked against a published test vector:
+// the encryption is deterministic once the ephemeral key and salt are fixed,
+// and it is otherwise impossible to tell a correct implementation from one
+// that produces plausible-looking bytes a browser will silently discard.
+// Every key in these specifications is base64url, so both parameters are too;
+// they are normalised here rather than at the call site.
+pub func EncryptWith(sub: Subscription, payload: str, as_private: str,
+    salt: str, ok &: bool): str:
+    ok = false
+    if sub.p256dh.len() == 0 || sub.auth.len() == 0: ret "" end
+    as_priv_b64 := _b64std(as_private)
+    as_point := tls.EcdhP256PublicPoint(as_priv_b64)
+    if as_point.len() == 0: ret "" end
+    mut shared_ok := false
+    ecdh := tls.EcdhP256SharedPoint(as_priv_b64, _b64std(sub.p256dh), shared_ok)
+    if !shared_ok: ret "" end
+    ret _seal(sub, payload, as_point, ecdh, _b64std(salt), ok)
+end
+
+// Encrypt - the sealed body for one subscription, with a fresh ephemeral key
+// and salt. What Send uses, and what a caller wanting to send the request
+// itself would call.
+pub func Encrypt(sub: Subscription, payload: str, ok &: bool): str:
+    ok = false
+    mut priv := ""
+    mut spki := ""
+    if !tls.EcdhP256Generate(priv, spki): ret "" end
+    ret EncryptWith(sub, payload, _b64url(priv), _b64url(tls.RandomSalt(SALT_LEN)), ok)
+end
+
+// Send - one notification.
+//
+// A payload is optional: a bare push with no body is legal and wakes the
+// service worker, which then fetches whatever it needs. That path skips the
+// encryption entirely, which is why it is worth keeping.
+pub func Send(keys: Keys, sub: Subscription, payload: str, opts: Options): Result:
+    if sub.endpoint.len() == 0: ret Result { error = "the subscription has no endpoint" } end
+    audience := _origin(sub.endpoint)
+    authorization := VapidHeader(keys, audience, opts.subject)
+    if authorization.len() == 0:
+        ret Result { error = "the VAPID header could not be built" }
+    end
+    if payload.len() == 0: ret _post(sub, authorization, opts, "", 0, null) end
+    mut ok := false
+    body := Encrypt(sub, payload, ok)
+    if !ok: ret Result { error = "the payload could not be encrypted" } end
+    mut n := 0
+    ptr := _alloc_copy(_b64std(body), n)
+    if ptr == null: ret Result { error = "the sealed payload could not be read" } end
+    out := _post(sub, authorization, opts, "aes128gcm", n, ptr)
+    mem.Free(ptr)
+    ret out
+end
+
+// NewOptions - the defaults, with the one field that has no default.
+pub func NewOptions(subject: str): Options:
+    ret Options { subject = subject, ttl = DEFAULT_TTL }
+end
+
+// KeysFrom - an existing pair, as stored. No validation beyond length: a wrong
+// key produces a signature a push service rejects, and pretending to check it
+// here would only move the failure.
+pub func KeysFrom(public_key: str, private_key: str): Keys:
+    if public_key.len() == 0 || private_key.len() == 0: ret Keys {} end
+    ret Keys { public_key = public_key, private_key = private_key, ok = true }
+end

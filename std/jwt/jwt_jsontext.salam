@@ -1,0 +1,151 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package jwt
+
+// JSON string encoding: the escape/unescape half of what a JWS header and
+// claim set need. jwt_json.salam is the other half, the object scanner.
+//
+// Escaping is strict where std/encoding/json's is not: everything below
+// 0x20 goes out as \u00XX, so no claim value can produce a payload that is
+// not valid JSON. Unescaping is the full set, \uXXXX and surrogate pairs
+// included, since the token may well have been minted by another language.
+
+func _utf8_append(sb &: str.StringBuilder, cp: int):
+    if cp < 0x80:
+        str.BufAppendChar(sb, cp)
+    else cp < 0x800:
+        str.BufAppendChar(sb, 0xC0 | (cp >> 6))
+        str.BufAppendChar(sb, 0x80 | (cp & 0x3F))
+    else cp < 0x10000:
+        str.BufAppendChar(sb, 0xE0 | (cp >> 12))
+        str.BufAppendChar(sb, 0x80 | ((cp >> 6) & 0x3F))
+        str.BufAppendChar(sb, 0x80 | (cp & 0x3F))
+    else:
+        str.BufAppendChar(sb, 0xF0 | (cp >> 18))
+        str.BufAppendChar(sb, 0x80 | ((cp >> 12) & 0x3F))
+        str.BufAppendChar(sb, 0x80 | ((cp >> 6) & 0x3F))
+        str.BufAppendChar(sb, 0x80 | (cp & 0x3F))
+    end
+end
+
+pure func _hex_digit(code: int): int:
+    if code >= 48 && code <= 57: ret code - 48 end
+    if code >= 97 && code <= 102: ret code - 87 end
+    if code >= 65 && code <= 70: ret code - 55 end
+    ret 0 - 1
+end
+
+// The four hex digits of a \uXXXX escape at `i`, or -1.
+func _hex4(s: str, i: int): int:
+    if i + 3 >= s.len(): ret 0 - 1 end
+    bp := _bp(s)
+    mut v := 0
+    repeat 4 with k:
+        d := _hex_digit(_ub(bp, i + k))
+        if d < 0: ret 0 - 1 end
+        v = v * 16 + d
+    end
+    ret v
+end
+
+// Body of a JSON string (no surrounding quotes) -> raw bytes.
+func _unescape(s: str): str:
+    n := s.len()
+    bp := _bp(s)
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    mut i := 0
+    until i < n:
+        code := _ub(bp, i)
+        if code != 92:
+            str.BufAppendChar(sb, code)
+            i += 1
+            continue
+        end
+        if i + 1 >= n: break end
+        esc := _ub(bp, i + 1)
+        i += 2
+        if esc == 110: str.BufAppendChar(sb, 10)
+        else esc == 116: str.BufAppendChar(sb, 9)
+        else esc == 114: str.BufAppendChar(sb, 13)
+        else esc == 98: str.BufAppendChar(sb, 8)
+        else esc == 102: str.BufAppendChar(sb, 12)
+        else esc == 117:
+            cp := _hex4(s, i)
+            if cp < 0: continue end
+            i += 4
+            // A surrogate pair arrives as two escapes; join them.
+            if cp >= 0xD800 && cp <= 0xDBFF && i + 1 < n && _ub(bp, i) == 92 && _ub(bp, i + 1) == 117:
+                lo := _hex4(s, i + 2)
+                if lo >= 0xDC00 && lo <= 0xDFFF:
+                    i += 6
+                    _utf8_append(sb, 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00))
+                    continue
+                end
+            end
+            _utf8_append(sb, cp)
+        else:
+            // \" \\ \/ and anything else: the character itself
+            str.BufAppendChar(sb, esc)
+        end
+    end
+    out := str.BufStr(sb)
+    ret out
+end
+
+func _hexchar(v: int): int:
+    if v < 10: ret 48 + v end
+    ret 87 + v
+end
+
+// Raw JSON text of the FIRST `key` member, quotes included for strings, and
+// Escape strictly: everything below 0x20 goes out as \u00XX, so no claim
+// value can produce a payload that is not valid JSON.
+func _escape(s: str): str:
+    n := s.len()
+    bp := _bp(s)
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    repeat n with i:
+        code := _ub(bp, i)
+        if code == 34:
+            str.BufAppend(sb, `\"`)
+        else code == 92:
+            str.BufAppend(sb, `\\`)
+        else code == 10:
+            str.BufAppend(sb, `\n`)
+        else code == 9:
+            str.BufAppend(sb, `\t`)
+        else code == 13:
+            str.BufAppend(sb, `\r`)
+        else code == 8:
+            str.BufAppend(sb, `\b`)
+        else code == 12:
+            str.BufAppend(sb, `\f`)
+        else code < 32:
+            str.BufAppend(sb, `\u00`)
+            str.BufAppendChar(sb, _hexchar(code / 16))
+            str.BufAppendChar(sb, _hexchar(code % 16))
+        else:
+            str.BufAppendChar(sb, code)
+        end
+    end
+    out := str.BufStr(sb)
+    ret out
+end
+
+func _quoted(s: str): str:
+    ret `"`.concat(_escape(s)).concat(`"`)
+end

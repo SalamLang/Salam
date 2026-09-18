@@ -157,8 +157,10 @@ package llvmgen
 
 import str
 import co "../sal_core.salam"
+import tok "../token.salam"
 import at "../ast.salam"
 import lg "../logger.salam"
+import sm "../semantic/semantic.salam"
 
 // ===== codegen_llvm.h =====
 // llvm_opt_level_t - order and values MUST stay identical to the C enum.
@@ -199,32 +201,81 @@ pub const LV_H_COUNT := 14
 k_lv_w64 := [
     "x86_64", "amd64", "aarch64", "arm64", "riscv64", "wasm64", "powerpc64", "ppc64", "mips64", "sparc64",
     "s390x", "loongarch64"
-] as str[12]
+]
 
 // Real LLVM backends with a 16-bit pointer datalayout (p:16). Checked before
 // w32 so "avr"/"msp430" triples don't fall into a generic bucket.
-k_lv_w16 := ["msp430", "avr"] as str[2]
+k_lv_w16 := ["msp430", "avr"]
 
 k_lv_w32 := [
     "i386", "i486", "i586", "i686", "wasm32", "armv6", "armv7", "armv5", "thumb", "mipsel", "mips", "riscv32",
     "powerpc", "ppc", "arm"
-] as str[15]
+]
 
 // ll_is_int's ints[] / ll_is_signed's uns[] (order kept).
 k_lv_ints := [
     "bool", "char", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "size"
-] as str[11]
+]
 
-k_lv_uns := ["u8", "u16", "u32", "u64", "size"] as str[5]
+k_lv_uns := ["u8", "u16", "u32", "u64", "size"]
+
+// Win32 APIs are stdcall on i386, and that is not only a name-decoration
+// question: the callee pops the arguments. A call emitted with the default
+// C convention pops them a second time, so the very first GetConsoleMode
+// left ESP eight bytes high and the 32-bit Windows binary walked off its
+// own stack. Marking the declaration and the call x86_stdcallcc fixes the
+// convention, and LLVM's mangler then appends the @N byte count on its own,
+// which is also what makes the symbol match kernel32's _GetConsoleMode@8.
+//
+// A table because nothing in the source says which convention an extern
+// uses, and a `stdcall` keyword could not be used in std until a seed that
+// parses it ships.
+//
+// Derived rather than hand-listed, after a hand-listed one shipped without
+// GetFileType and the 32-bit Windows link came back undefined on it: every
+// function name declared anywhere in this tree was tested against the i686
+// mingw-w64 import libraries with nm, and a name is here exactly when they
+// define _Name@N and do NOT define a bare _Name. That is the condition
+// under which the undecorated reference could not link at all, so it is
+// also the condition under which the extern has to be stdcall.
+//
+// It is why the socket calls are on the list. On Windows send, recv,
+// socket and friends come from ws2_32 and are stdcall; on Linux they are
+// cdecl libc. The table is only consulted for a 32-bit Windows target, so
+// both readings stay correct. fopen, malloc and strlen are absent because
+// the import libraries define them undecorated, which is the same test.
+//
+// A missing name fails loudly at link time as an undefined symbol rather
+// than silently corrupting a stack, which is how the first version's gap
+// surfaced. CreateCoreWebView2EnvironmentWithOptions is the one entry nm
+// could not weigh in on - it lives in the WebView2 SDK, not in the mingw
+// import libraries - and it is stdcall by the same Win32 convention.
+k_lv_win32_stdcall := [
+    "CertCloseStore", "CertEnumCertificatesInStore", "CertOpenSystemStoreA", "CloseHandle",
+    "CreateCoreWebView2EnvironmentWithOptions", "CreateFileA", "CreateProcessA", "CreateWindowExA", "DebugBreak",
+    "DeleteCriticalSection", "DestroyWindow", "DispatchMessageA", "EnterCriticalSection", "FindClose",
+    "FindFirstFileA", "FindNextFileA", "GetConsoleMode", "GetConsoleScreenBufferInfo", "GetCurrentDirectoryA",
+    "GetCurrentProcess", "GetExitCodeProcess", "GetFileAttributesA", "GetFileAttributesExA", "GetFileType",
+    "GetLastError", "GetModuleHandleA", "GetProcAddress", "GetProcessTimes", "GetStdHandle", "GetSystemInfo",
+    "GetSystemTimeAsFileTime", "GetTickCount", "InitializeCriticalSection", "IsWindow", "LeaveCriticalSection",
+    "MoveFileExA", "MultiByteToWideChar", "PeekMessageA", "QueryPerformanceCounter", "QueryPerformanceFrequency",
+    "ReadConsoleInputA", "SetConsoleMode", "SetWindowPos", "SetWindowTextA", "Sleep", "SleepEx",
+    "TerminateProcess", "TranslateMessage", "WSAPoll", "WSAStartup", "WaitForSingleObject", "WideCharToMultiByte",
+    "WinHttpAddRequestHeaders", "WinHttpCloseHandle", "WinHttpConnect", "WinHttpOpen", "WinHttpOpenRequest",
+    "WinHttpQueryHeaders", "WinHttpReadData", "WinHttpReceiveResponse", "WinHttpSendRequest", "accept", "bind",
+    "closesocket", "connect", "freeaddrinfo", "getaddrinfo", "gethostbyname", "getsockname", "htons", "inet_ntoa",
+    "ioctlsocket", "listen", "ntohs", "poll", "recv", "recvfrom", "send", "sendto", "setsockopt", "shutdown",
+    "socket"
+]
 
 // ll_extern_seen's prologue[] (codegen_llvm_decl.c), order kept.
 k_lv_prologue_externs := [
     "printf", "dprintf", "strlen", "strcmp", "malloc", "memcpy", "realloc", "free", "memmove", "abort",
     "exit", "atexit", "fflush", "signal", "raise", "snprintf", "strtol", "strtod", "strstr", "write"
-] as str[20]
+]
 
 // codegen_llvm_run_opts' rt_essentials[].
-k_lv_rt_essentials := ["salam_panic", "salam_idx"] as str[2]
+k_lv_rt_essentials := ["salam_panic", "salam_idx"]
 
 // ===== codegen_llvm.h =====
 // codegen_llvm_options_t. The C NULL opts pointer == OptionsDefault().
@@ -236,6 +287,9 @@ pub struct Options:
     // Release build (SALAM_SAFE off). Besides dropping the library's bounds
     // checks it lets signed arithmetic be emitted `nsw` - see nowrap_flag.
     pub release: bool = false
+    // --fp-contract: tag float add/sub/mul `contract` so the backend may
+    // fuse a multiply-add pair into one FMA. See arith_flags.
+    pub fp_contract: bool = false
     pub output_mode: int = 0
     pub output_file: str = ""
     pub target_triple: str = ""
@@ -266,9 +320,12 @@ pub struct Llv:
 end
 
 // ll_addr_t - an address: pointer text + pointee typestring.
+// tbaa is the ", !tbaa !N" suffix for loads/stores through this address, or
+// "". Only member and index addresses carry one; see tbaa_suffix.
 pub struct LvAddr:
     pub ptr: str = ""
     pub ts: str = ""
+    pub tbaa: str = ""
 end
 
 // lvar_t - a named local/global slot.
@@ -276,6 +333,14 @@ pub struct LvVar:
     pub name: str = ""
     pub ptr: str = ""
     pub ts: str = ""
+    // Set on module-level globals: the package that declared this one, so two
+    // packages can each have a `COLS` without the second silently binding to
+    // the first's storage. "" on function locals and on extern globals, which
+    // name one object the whole program shares.
+    pub pkg: str = ""
+    // A module-level global whose initialiser is not an LLVM constant: the
+    // expression node, replayed by emit_global_inits.
+    pub init: int = 0
 end
 
 // lstr_t - an interned string constant.
@@ -307,15 +372,21 @@ pub struct Lv:
     pub is_main: bool = false
     pub brk: Vector<str> = Vector {} // const char *brk[64] (see header)
     pub cont: Vector<str> = Vector {} // const char *cont[64]
+    // defers depth at the start of each enclosing loop body, indexed by nloop
+    pub loop_dmark: Vector<int> = Vector {}
     pub nloop: int = 0
     pub defers: Vector<int> = Vector {} // at.NodeIds of deferred stmts
     pub self_ts: str = ""
     pub this_ref: str = ""
     pub self_byval: bool = false
     pub globals: Vector<LvVar> = Vector {}
-    pub gdefer: Vector<int> = Vector {} // at.NodeIds of runtime-init decls
+    pub gdefer: Vector<int> = Vector {} // indices into `globals`
     pub extern_names: Vector<str> = Vector {}
     pub pkg_scope: int = 0 // sm ScopeId (0 = C NULL)
+    // decl NodeId -> SigId, built once from the whole signature table. Two
+    // packages may each declare a private function of the same name, and a
+    // name lookup cannot tell them apart; the declaration can.
+    pub sig_ix: Vector<int> = Vector {}
     pub emitted: Vector<str> = Vector {}
     pub pkg_touched: Vector<int> = Vector {} // sm SymIds
     pub cur_lambda: int = 0 // at.NodeId (0 = C NULL)
@@ -326,6 +397,9 @@ pub struct Lv:
     pub first_error: str = ""
     pub debug: bool = false
     pub meta_n: int = 0
+    pub tbaa_char: str = ""
+    pub tbaa_data_sfx: str = ""
+    pub tbaa_ptr_sfx: str = ""
     pub di_file: str = ""
     pub di_cu: str = ""
     pub di_subty: str = ""
@@ -336,11 +410,22 @@ pub struct Lv:
     pub src_file: str = ""
     pub src_dir: str = ""
     pub triple: str = ""
+    // Whether the libc this module will be linked against is glibc, resolved
+    // once from the triple (or, for an empty one, from the toolchain that
+    // will do the linking). Gates the mallopt tuning, which no other libc has.
+    pub libc_glibc: bool = false
+    // A kernel or a bare-metal program: no libc, no stdio, no atexit. The
+    // program supplies write() and the mem entry points itself, exactly as
+    // cg_target_is_freestanding describes for the C backend.
+    pub freestanding: bool = false
     pub usize: str = ""
     pub ptr_bits: int = 0
     pub optsize: bool = false
     pub minsize: bool = false
     pub nowrap: bool = false
+    // Mirrors Opts.fp_contract onto the emitter, the same way nowrap
+    // mirrors Opts.release. See arith flags in llvm_expr.
+    pub fp_contract: bool = false
     pub single_threaded: bool = false
     pub jit: bool = false
     pub hneed: Vector<bool> = Vector {}
@@ -452,6 +537,7 @@ func new_lv0(): Lv:
     v.strings = Vector {} as Vector<LvStr>
     v.brk = Vector {} as Vector<str>
     v.cont = Vector {} as Vector<str>
+    v.loop_dmark = Vector {} as Vector<int>
     v.defers = Vector {} as Vector<int>
     v.globals = Vector {} as Vector<LvVar>
     v.gdefer = Vector {} as Vector<int>
@@ -476,20 +562,36 @@ func free_lv(v &: Lv):
     v.strings.free()
     v.brk.free()
     v.cont.free()
+    v.loop_dmark.free()
     v.defers.free()
     v.globals.free()
     v.gdefer.free()
     v.extern_names.free()
     v.emitted.free()
     v.pkg_touched.free()
+    v.sig_ix.free()
     v.hneed.free()
 end
 
 // ===== codegen_llvm_internal.h (SAL_INLINE helpers) =====
 
+// A string-backed enum's LLVM representation is a `ptr` (enum_member_value
+// hands back the same deduplicated global an ordinary string literal would
+// get), so it needs to be treated exactly like str/uchar wherever that
+// representation matters (== via strcmp, string coercion) - only its *name*
+// ("Color") isn't literally "str". Int/float-backed enums need no such
+// translation.
+func ts_is_string_enum(s &: sm.Sema, ts: str): bool:
+    if str.Len(ts) == 0:
+        ret false
+    end
+    esym := sm.LookupLocal(s, s.global, ts)
+    ret esym != 0 && sm.SymAt(s, esym).kind == sm.SYM_ENUM && sm.SymAt(s, esym).enum_val_kind == tok.TV_STRING
+end
+
 // ll_is_str
-func is_str(ts: str): bool:
-    ret str.Equals(ts, "str") || str.Equals(ts, "uchar")
+func is_str(s &: sm.Sema, ts: str): bool:
+    ret str.Equals(ts, "str") || str.Equals(ts, "uchar") || ts_is_string_enum(s, ts)
 end
 
 // ll_is_bool

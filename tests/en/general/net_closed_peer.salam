@@ -1,0 +1,98 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Writing to a peer that has gone.
+//
+// A write to a socket whose far end has closed raises SIGPIPE, and the
+// default action for SIGPIPE is to kill the process - no error, no return
+// value, no chance to handle it. That is not an exotic case: it is a server
+// answering a client that navigated away, or either end of a connection both
+// sides are closing at once. It surfaces as an intermittent exit 141 and
+// reads like a hang, because the program's output simply stops mid-sentence.
+//
+// The net stack asks for EPIPE instead (MSG_NOSIGNAL, or SO_NOSIGPIPE on
+// macOS), so a write to a dead peer is an ordinary failed write. This test
+// is the proof: it writes into a closed connection repeatedly, and the only
+// thing it has to do is reach the end.
+
+import net.websocket
+import net.tcp
+import sync
+import time
+
+mut ws ready := sync.NewWaitGroup()
+mut tcp ready := sync.NewWaitGroup()
+mut ws port := 0
+mut tcp port := 0
+mut ws writes := 0
+mut tcp writes := 0
+
+func ws server():
+    srv := websocket.Listen(0)
+    ws port = websocket.Port(srv)
+    sync.Done(ws ready)
+    if !websocket.Ok(srv):
+        ret
+    end
+    mut c := websocket.Accept(srv)
+    // Let the client go away first.
+    time.Sleep(200)
+    repeat 10 with i:
+        websocket.SendText(c, "into the void " + i)
+        ws writes += 1
+        time.Sleep(20)
+    end
+    websocket.Close(c)
+    websocket.CloseServer(srv)
+end
+
+func tcp server():
+    srv := tcp.Bind(0)
+    tcp port = tcp.Port(srv)
+    sync.Done(tcp ready)
+    if !tcp.Ok(srv):
+        ret
+    end
+    c := tcp.Accept(srv)
+    time.Sleep(200)
+    repeat 10 with i:
+        tcp.Write(c, "into the void " + i + "\n")
+        tcp writes += 1
+        time.Sleep(20)
+    end
+    tcp.Close(c)
+    tcp.CloseServer(srv)
+end
+
+func main:
+    sync.Add(ws ready, 1 as i64)
+    wt := spawn(ws server)
+    sync.Wait(ws ready)
+    mut wc := websocket.Dial("127.0.0.1", ws port, "/")
+    println "websocket connected:", websocket.IsOpen(wc)
+    websocket.Close(wc)
+    join(wt)
+    println "server wrote to a closed peer and lived:", ws writes
+
+    sync.Add(tcp ready, 1 as i64)
+    tt := spawn(tcp server)
+    sync.Wait(tcp ready)
+    tc := tcp.Dial("127.0.0.1", tcp port)
+    println "tcp connected:", tcp.ConnOk(tc)
+    tcp.Close(tc)
+    join(tt)
+    println "server wrote to a closed peer and lived:", tcp writes
+
+    println "reached the end"
+end

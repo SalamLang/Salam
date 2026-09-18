@@ -105,6 +105,11 @@ pub func Run(ip &: Interp, a &: at.Ast, sem &: sm.Sema, program: int): int:
         ret run_fail(ip)
     end
     fixup_generic_envs(ip, a, sem)
+    rehome_synthetic_funcs(ip, a)
+    interp_eval_globals(ip, a, sem, program)
+    if ip.failed:
+        ret run_fail(ip)
+    end
     main_fn := find_func(ip, a, ip.entry, 0 - 1)
     if main_fn == 0:
         lg.Log(
@@ -129,18 +134,18 @@ end
 // Releases every pool vector (the C freed its arena wholesale).
 pub func Free(ip &: Interp):
     repeat ip.envs.len() with i0:
-        e := ip.envs.get(i0)[0]
+        e := ip.envs.get(i0)
         e.names.free()
         e.vals.free()
     end
     ip.envs.free()
     repeat ip.arrs.len() with i1:
-        ar := ip.arrs.get(i1)[0]
+        ar := ip.arrs.get(i1)
         ar.items.free()
     end
     ip.arrs.free()
     repeat ip.maps.len() with i2:
-        m := ip.maps.get(i2)[0]
+        m := ip.maps.get(i2)
         m.keys.free()
         m.vals.free()
         m.used.free()
@@ -149,7 +154,7 @@ pub func Free(ip &: Interp):
     ip.maps.free()
     ip.iters.free()
     repeat ip.sts.len() with i3:
-        s := ip.sts.get(i3)[0]
+        s := ip.sts.get(i3)
         s.fnames.free()
         s.fvals.free()
     end
@@ -158,7 +163,7 @@ pub func Free(ip &: Interp):
     ip.variants.free()
     ip.mods.free()
     repeat ip.fnlists.len() with i4:
-        fl := ip.fnlists.get(i4)[0]
+        fl := ip.fnlists.get(i4)
         fl.nodes.free()
     end
     ip.fnlists.free()
@@ -168,6 +173,7 @@ pub func Free(ip &: Interp):
     ip.impls.free()
     ip.extern_fns.free()
     ip.extern_decls.free()
+    ip.mem_boxes.free()
     ip.def_env_defs.free()
     ip.def_env_envs.free()
     ip.tab_funcs.keys.free()
@@ -315,18 +321,18 @@ pub func MapPut(ip &: Interp, mid: int, k: Value, v: Value):
 end
 
 pub func MapGet(ip &: Interp, mid: int, k: Value, found &: bool): Value:
-    m := ip.maps.get(mid)[0]
+    m := ip.maps.get(mid)
     e := map_find(m, k)
     if e < 0:
         found = false
         ret val_null()
     end
     found = true
-    ret m.vals.get(e)[0]
+    ret m.vals.get(e)
 end
 
 pub func MapHas(ip &: Interp, mid: int, k: Value): bool:
-    m := ip.maps.get(mid)[0]
+    m := ip.maps.get(mid)
     ret map_find(m, k) >= 0
 end
 
@@ -335,7 +341,7 @@ pub func MapRemove(ip &: Interp, mid: int, k: Value): bool:
 end
 
 pub func MapSize(ip &: Interp, mid: int): int:
-    m := ip.maps.get(mid)[0]
+    m := ip.maps.get(mid)
     ret m.count
 end
 
@@ -362,18 +368,18 @@ pub func StructFindField(ip &: Interp, sid: int, name: str): int:
 end
 
 pub func StructFieldCount(ip &: Interp, sid: int): int:
-    s := ip.sts.get(sid)[0]
+    s := ip.sts.get(sid)
     ret s.fnames.len()
 end
 
 pub func StructFieldName(ip &: Interp, sid: int, i: int): str:
-    s := ip.sts.get(sid)[0]
-    ret s.fnames.get(i)[0]
+    s := ip.sts.get(sid)
+    ret s.fnames.get(i)
 end
 
 pub func StructFieldValue(ip &: Interp, sid: int, i: int): Value:
-    s := ip.sts.get(sid)[0]
-    ret s.fvals.get(i)[0]
+    s := ip.sts.get(sid)
+    ret s.fvals.get(i)
 end
 
 pub func MkClosure(ip &: Interp, fnnode: int, env: int): Value:
@@ -475,10 +481,13 @@ pub func CallBuiltinMethod(
     ret call_builtin_method(ip, a, call, recv, method, args)
 end
 
+// `env` is the caller's scope, which is where a `&:` argument is written back
+// to; pass ip.globals when there is no enclosing call.
 pub func CallModuleFunc(
-    ip &: Interp, a &: at.Ast, call: int, mid: int, fnname: str, args: Vector<Value>
+    ip &: Interp, a &: at.Ast, env: int, call: int, mid: int, fnname: str,
+    args: Vector<Value>
 ): Value:
-    ret call_module_func(ip, a, call, mid, fnname, args)
+    ret call_module_func(ip, a, env, call, mid, fnname, args)
 end
 
 pub func CallFunc(

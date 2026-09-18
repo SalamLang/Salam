@@ -33,6 +33,48 @@ inline pure func _is_space(c: int): bool:
     ret c == 32 || c == 9 || c == 10 || c == 13
 end
 
+// printf's exponent, trimmed in place to the shortest form C99 asks for -
+// a sign and at least two digits. The Windows CRT writes three of them, so
+// 0.00001 came back "1e-005" there and "1e-05" everywhere else, and a
+// program's output depended on the machine that ran it.
+//
+// Only called from FormatFloat below, which does not exist under
+// SALAM_KERNEL (see the comment on ParseFloat further down).
+if SALAM_KERNEL:
+else:
+func _fix_exp(p: i8*):
+    mut n := 0
+    until _ub(p, n) != 0:
+        n += 1
+    end
+    mut e := 0
+    until e < n && _ub(p, e) != 101:
+        e += 1
+    end
+    if e >= n:
+        ret
+    end
+    mut d := e + 1
+    if d < n && (_ub(p, d) == 43 || _ub(p, d) == 45):
+        d += 1
+    end
+    mut z := d
+    until n - z > 2 && _ub(p, z) == 48:
+        z += 1
+    end
+    if z == d:
+        ret
+    end
+    mut i := d
+    mut j := z
+    until j <= n:
+        p[i] = p[j]
+        i += 1
+        j += 1
+    end
+end
+end
+
 pure func _kw(bp: i8*, i: int, w: int, kw: str): bool:
     if w != kw.len(): ret false end
     kp := _bp(kw)
@@ -42,6 +84,10 @@ pure func _kw(bp: i8*, i: int, w: int, kw: str): bool:
     ret true
 end
 
+// Only called from FormatFloatShort below, which does not exist under
+// SALAM_KERNEL.
+if SALAM_KERNEL:
+else:
 func _digits6(d: i64): str:
     mut ds := ""
     mut t := d
@@ -65,6 +111,7 @@ func _exp_str(e: int): str:
     en := FormatInt(ea as i64)
     if ea < 10: ret es.concat("0").concat(en) end
     ret es.concat(en)
+end
 end
 
 @en "FormatUint"
@@ -167,72 +214,33 @@ end
 @ar "نص إلى عدد"
 pub inline pure func Atoi(s: str): int: ret ParseInt(s) as int end
 
+// f64 in a function's signature needs an SSE register under the SysV ABI,
+// which SALAM_KERNEL's -mgeneral-regs-only refuses to generate even when the
+// body never touches the FPU. None of ParseFloat through FormatFloatPrec
+// exist under SALAM_KERNEL; FormatUint/FormatInt/FormatHex above and
+// ParseInt/ParseHex below are u64/i64 only and are unaffected.
+if SALAM_KERNEL:
+else:
 @en "ParseFloat"
 @fa "تجزیه اعشار"
 @ar "تحلیل عشری"
-pub pure func ParseFloat(s: str): f64:
-    n := s.len()
-    bp := _bp(s)
-    mut i := 0
-    until i < n && _is_space(_ub(bp, i)):
-        i += 1
-    end
-    mut neg := false
-    if i < n:
-        c := _ub(bp, i)
-        if c == 45:
-            neg = true
-            i += 1
-        else c == 43:
-            i += 1
-        end
-    end
-    mut v := 0.0
-    until i < n:
-        c := _ub(bp, i)
-        if c < 48 || c > 57: break end
-        v = v * 10.0 + ((c - 48) as f64)
-        i += 1
-    end
-    if i < n && _ub(bp, i) == 46:
-        i += 1
-        mut scale := 1.0
-        until i < n:
-            c := _ub(bp, i)
-            if c < 48 || c > 57: break end
-            scale /= 10.0
-            v += ((c - 48) as f64) * scale
-            i += 1
-        end
-    end
-    if i < n && (_ub(bp, i) == 101 || _ub(bp, i) == 69):
-        i += 1
-        mut eneg := false
-        if i < n:
-            c := _ub(bp, i)
-            if c == 45:
-                eneg = true
-                i += 1
-            else c == 43:
-                i += 1
-            end
-        end
-        mut ev := 0
-        until i < n:
-            c := _ub(bp, i)
-            if c < 48 || c > 57: break end
-            ev = ev * 10 + (c - 48)
-            i += 1
-        end
-        until ev > 0:
-            if eneg: v = v / 10.0 else:
-                v *= 10.0
-            end
-            ev -= 1
-        end
-    end
-    if neg: ret 0.0 - v end
-    ret v
+//
+// strtod rather than accumulating the digits here. The obvious loop -
+// multiply the running value by ten, add the digit, then apply the exponent
+// by repeated multiplication - is inexact in three separate places, and the
+// error shows up exactly where it matters most: near the subnormal boundary
+// and near the largest finite double, where being one ulp out is the
+// difference between a number and an infinity.
+//
+// strtod is correctly rounded, and FormatFloat above already depends on that
+// to decide how many digits a value needs, so this adds no new requirement.
+// It also accepts "inf" and "nan", which the loop silently read as zero.
+// Not `pure`: the conversion is a function of the text alone, but it needs a
+// scratch buffer to work in, and obtaining that is a side effect. The
+// previous version was only nominally pure - it called strtod, which sets
+// errno, and had to declare it pure to compile.
+pub func ParseFloat(s: str): f64:
+    ret _dtoa_parse(s, null)
 end
 
 @en "IsNaNF"
@@ -243,7 +251,35 @@ pub inline pure func IsNaNF(x: f64): bool: ret x != x end
 @en "FormatFloat"
 @fa "قالب اعشار"
 @ar "تنسیق عشری"
+// The shortest text that reads back as exactly this double: 15 significant
+// digits, then 16, then 17 - the first that survives strtod, which 17
+// always does. This was a hand-rolled 6-significant-digit formatter, so
+// json.Encode wrote 1.23457e+06 for 1234567.0 and str.FromFloat lost every
+// digit past the sixth. `println` renders a float the same way now
+// (std/text's salam_fmt_f64), and so does the JS backend.
+//
+// The buffer is handed to the caller as the result string, the same
+// ownership FormatUint below has always had.
 pub func FormatFloat(x: f64): str:
+    cap := 64 as u64
+    buf := malloc(cap)
+    if buf == null:
+        ret ""
+    end
+    n := _dtoa_shortest(x, buf, cap as int)
+    if n <= 0 || n >= (cap as int):
+        ret ""
+    end
+    _fix_exp(buf as i8*)
+    ret buf as str
+end
+
+// The 6-significant-digit formatter FormatFloat used to be, kept for
+// callers that want a short fixed rendering rather than an exact one.
+@en "FormatFloatShort"
+@fa "قالب اعشار کوتاه"
+@ar "تنسیق عشری قصیر"
+pub func FormatFloatShort(x: f64): str:
     if x != x: ret "nan" end
     mut v := x
     mut sign := ""
@@ -314,7 +350,7 @@ pub func FormatFloatPrec(x: f64, prec: int): str:
     if p > 15: p = 15 end
     if v > 900000000000000.0: ret sign.concat(FormatFloat(v)) end
     mut scale := 1 as i64
-    repeat p with k:
+    repeat p:
         scale *= 10
     end
     total := (v * (scale as f64) + 0.5) as i64
@@ -326,6 +362,7 @@ pub func FormatFloatPrec(x: f64, prec: int): str:
         fs = "0".concat(fs)
     end
     ret sign.concat(FormatUint(ip as u64)).concat(".").concat(fs)
+end
 end
 
 @en "FormatHex"

@@ -1,0 +1,237 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "llm"
+@fa "مدل زبانی بزرگ"
+@ar "نموذج لغوي كبير"
+package llm
+
+import math
+import tensor
+
+// Decoder-only language models, run from weights in memory or from a
+// GGUF file: the llama family (Llama, Mistral, TinyLlama, Qwen2 and the
+// other RMSNorm + RoPE + gated-SiLU designs). The package holds
+//
+//   Config      the shape of the model (llm.salam)
+//   Model       the dequantized f32 weights (llm.salam)
+//   KVCache     per-layer key/value history, so a token costs one step
+//   Forward     the transformer stack over a chunk of tokens (llm_forward)
+//   Tokenizer   SentencePiece-style and byte-level BPE (llm_tokenizer)
+//   Sampler     greedy, temperature, top-k, top-p (llm_sample)
+//   Generate    the loop tying them together (llm_sample)
+//   LoadGguf*   the GGUF reader glue (llm_gguf)
+//
+// Weights are plain f32 tensors from std/tensor; the projections run
+// through the blocked gemm, attention and normalization are dedicated
+// loops here. Nothing is recorded on a tape: this is inference, and
+// training a model of this shape is std/nn's job (its decoder layer
+// and RMSNorm are the trainable twins of what runs here).
+//
+// Every weight matrix is [out, in], the orientation GGUF hands back,
+// so a projection is y = x W^T (tensor.MulTranspose).
+
+// Rotary embedding pairs (x[2i], x[2i+1]) - the original Llama layout.
+@en "ROPE_NORMAL"
+@fa "روپ عادی"
+@ar "دوران عادي"
+pub const ROPE_NORMAL := 0
+
+// Rotary embedding pairs (x[i], x[i + d/2]) - GPT-NeoX, Qwen2, Phi.
+@en "ROPE_NEOX"
+@fa "روپ نئوایکس"
+@ar "دوران نيوإكس"
+pub const ROPE_NEOX := 1
+
+@en "Config"
+@fa "پیکربندی"
+@ar "تكوين"
+pub struct Config:
+    pub vocab: int = 0
+    pub dim: int = 0
+    pub layers: int = 0
+    pub heads: int = 1
+    pub kv_heads: int = 1
+    pub ff: int = 0
+    pub ctx: int = 512
+    pub eps: f64 = 0.00001
+    pub rope_theta: f64 = 10000.0
+    pub rope_kind: int = ROPE_NORMAL
+
+    @en "head_dim"
+    @fa "بعد سر"
+    @ar "بعد الرأس"
+    pub func head_dim(): int: ret this.dim / this.heads end
+end
+
+// One transformer block. Norm weights are [dim] or [ff]; projections are
+// [out, in].
+@en "Layer"
+@fa "لایه"
+@ar "طبقة"
+pub struct Layer:
+    pub attn_norm: tensor.Tensor = tensor.Tensor {}
+    pub wq: tensor.Tensor = tensor.Tensor {}
+    pub wk: tensor.Tensor = tensor.Tensor {}
+    pub wv: tensor.Tensor = tensor.Tensor {}
+    pub wo: tensor.Tensor = tensor.Tensor {}
+    pub ffn_norm: tensor.Tensor = tensor.Tensor {}
+    pub w_gate: tensor.Tensor = tensor.Tensor {}
+    pub w_up: tensor.Tensor = tensor.Tensor {}
+    pub w_down: tensor.Tensor = tensor.Tensor {}
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free():
+        this.attn_norm.free()
+        this.wq.free()
+        this.wk.free()
+        this.wv.free()
+        this.wo.free()
+        this.ffn_norm.free()
+        this.w_gate.free()
+        this.w_up.free()
+        this.w_down.free()
+    end
+end
+
+// tok_embed is [vocab, dim]; out_head is [vocab, dim] or empty when the
+// output projection is tied to the embedding.
+@en "Model"
+@fa "مدل"
+@ar "نموذج"
+pub struct Model:
+    pub cfg: Config = Config {}
+    pub tok_embed: tensor.Tensor = tensor.Tensor {}
+    pub layers: Vector<Layer> = Vector {}
+    pub out_norm: tensor.Tensor = tensor.Tensor {}
+    pub out_head: tensor.Tensor = tensor.Tensor {}
+    pub ok: bool = false
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free():
+        this.tok_embed.free()
+        repeat this.layers.len() with i:
+            mut l := this.layers.get(i)
+            l.free()
+        end
+        this.layers.free()
+        this.out_norm.free()
+        this.out_head.free()
+    end
+end
+
+// Per-layer [ctx, kv_heads * head_dim] key and value histories. `len` is
+// how many positions are filled; reset() rewinds it without freeing.
+@en "KVCache"
+@fa "حافظه کلید و مقدار"
+@ar "ذاكرة المفتاح والقيمة"
+pub struct KVCache:
+    pub k: Vector<tensor.Tensor> = Vector {}
+    pub v: Vector<tensor.Tensor> = Vector {}
+    pub len: int = 0
+    pub ctx: int = 0
+
+    @en "reset"
+    @fa "بازنشانی"
+    @ar "إعادة تعيين"
+    pub func reset(): this.len = 0 end
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free():
+        repeat this.k.len() with i:
+            mut kt := this.k.get(i)
+            kt.free()
+            mut vt := this.v.get(i)
+            vt.free()
+        end
+        this.k.free()
+        this.v.free()
+    end
+end
+
+func _normal(shape &: Vector<int>, std: f64, g &: tensor.Rng): tensor.Tensor:
+    mut t := tensor.Zeros(shape)
+    tensor.FillNormal(t, 0.0, std, g)
+    ret t
+end
+
+func _ones(n: int): tensor.Tensor:
+    mut t := tensor.Zeros1(n)
+    tensor.SetAll(t, 1.0)
+    ret t
+end
+
+// ---- public API ----
+
+@en "NewKVCache"
+@fa "حافظه کلید و مقدار نو"
+@ar "ذاكرة مفتاح وقيمة جديدة"
+pub func NewKVCache(cfg &: Config): KVCache:
+    mut c := KVCache {}
+    c.ctx = cfg.ctx
+    width := cfg.kv_heads * cfg.head_dim()
+    repeat cfg.layers:
+        c.k.push(tensor.Zeros2(cfg.ctx, width))
+        c.v.push(tensor.Zeros2(cfg.ctx, width))
+    end
+    ret c
+end
+
+// A model of the given shape with seeded Gaussian weights - for tests
+// and for training experiments that start from scratch. Norm weights
+// are ones; projections scale by 1/sqrt(fan_in).
+@en "RandomModel"
+@fa "مدل تصادفی"
+@ar "نموذج عشوائي"
+pub func RandomModel(cfg &: Config, seed: i64): Model:
+    mut m := Model {}
+    m.cfg = cfg
+    mut g := tensor.NewRng(seed)
+    hd := cfg.head_dim()
+    sd := 1.0 / math.Sqrt(cfg.dim as f64)
+    sf := 1.0 / math.Sqrt(cfg.ff as f64)
+    mut s := tensor.Shape2(cfg.vocab, cfg.dim)
+    m.tok_embed = _normal(s, 1.0, g)
+    s.free()
+    repeat cfg.layers:
+        mut l := Layer {}
+        l.attn_norm = _ones(cfg.dim)
+        l.ffn_norm = _ones(cfg.dim)
+        mut sq := tensor.Shape2(cfg.heads * hd, cfg.dim)
+        l.wq = _normal(sq, sd, g)
+        l.wo = _normal(sq, sd, g)
+        sq.free()
+        mut sk := tensor.Shape2(cfg.kv_heads * hd, cfg.dim)
+        l.wk = _normal(sk, sd, g)
+        l.wv = _normal(sk, sd, g)
+        sk.free()
+        mut sg := tensor.Shape2(cfg.ff, cfg.dim)
+        l.w_gate = _normal(sg, sd, g)
+        l.w_up = _normal(sg, sd, g)
+        sg.free()
+        mut sdn := tensor.Shape2(cfg.dim, cfg.ff)
+        l.w_down = _normal(sdn, sf, g)
+        sdn.free()
+        m.layers.push(l)
+    end
+    m.out_norm = _ones(cfg.dim)
+    m.ok = true
+    ret m
+end

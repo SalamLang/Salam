@@ -1,6 +1,7 @@
 package csv
 
 import encoding.value
+import mem
 import str
 import conv
 
@@ -27,8 +28,18 @@ pub struct CSVOptions:
     pub header: bool = true
 end
 
+// The caller owns both the pieces and the vector (split copies), so the
+// normalized text in between has to go back.
 func _split_lines(text: str): Vector<str>:
-    ret str.Split(str.Replace(text, "\r\n", "\n"), "\n")
+    norm := str.Replace(text, "\r\n", "\n")
+    out := str.Split(norm, "\n")
+    mem.Free(norm as void*)
+    ret out
+end
+
+func _free_lines(lines &: Vector<str>):
+    repeat lines.len() with i: mem.Free(lines.get(i) as void*) end
+    lines.free()
 end
 
 func _index_key(i: int): str:
@@ -37,17 +48,30 @@ end
 
 pub func ReadAll(text: str): CSVTable:
     mut out := CSVTable {}
-    lines := _split_lines(text)
+    mut lines := _split_lines(text)
     mut i := 0
     until i < lines.len():
-        line := lines.get(i)[0]
+        line := lines.get(i)
         i += 1
         if line.len() == 0: continue end
         mut row := CSVRow {}
         row.fields = ReadLine(line)
         out.rows.push(row)
     end
+    _free_lines(lines)
     ret out
+end
+
+// Releases a table and every cell string in it. ReadAll's fields are
+// freshly allocated copies, so a table that is done with must come back
+// here or the whole file stays in memory.
+pub func FreeTable(t &: CSVTable):
+    repeat t.rows.len() with i:
+        mut r := t.rows.get(i)
+        repeat r.fields.len() with j: mem.Free(r.fields.get(j) as void*) end
+        r.fields.free()
+    end
+    t.rows.free()
 end
 
 pub func WriteAll(table: CSVTable): str:
@@ -56,7 +80,7 @@ pub func WriteAll(table: CSVTable): str:
     mut i := 0
     until i < table.rows.len():
         if i > 0: str.BufAppend(sb, "\r\n") end
-        str.BufAppend(sb, WriteLine(table.rows.get(i)[0].fields))
+        str.BufAppend(sb, WriteLine(table.rows.get(i).fields))
         i += 1
     end
     ret str.BufStr(sb)
@@ -73,18 +97,18 @@ pub func ToValueWith(text: str, opts: CSVOptions): value.Value:
     mut headerIdx := 0
     mut header := Vector {} as Vector<str>
     if opts.header:
-        header = table.rows.get(0)[0].fields
+        header = table.rows.get(0).fields
         headerIdx = 1
     end
     mut i := headerIdx
     until i < table.rows.len():
-        row := table.rows.get(i)[0].fields
+        row := table.rows.get(i).fields
         mut obj := value.NewValueObject()
         mut j := 0
         until j < row.len():
             mut key := _index_key(j)
-            if opts.header && j < header.len(): key = header.get(j)[0] end
-            value.ObjectSet(obj, key, value.ValueString(row.get(j)[0]))
+            if opts.header && j < header.len(): key = header.get(j) end
+            value.ObjectSet(obj, key, value.ValueString(row.get(j)))
             j += 1
         end
         value.ArrayPush(out, obj)
@@ -114,7 +138,7 @@ pub func FromValueWith(v: value.Value, opts: CSVOptions): str:
         mut fields := Vector {} as Vector<str>
         mut j := 0
         until j < header.len():
-            fields.push(value.AsString(value.ObjectGet(item, header.get(j)[0])))
+            fields.push(value.AsString(value.ObjectGet(item, header.get(j))))
             j += 1
         end
         mut r := CSVRow {}

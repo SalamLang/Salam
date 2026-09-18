@@ -24,7 +24,7 @@ func emit_lambda(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     mut et := co.SbNew()
     co.SbPuts(et, envty + " = type { ptr")
     repeat ncap with ci:
-        cap := at.Get(a, node.captures.get(ci)[0])
+        cap := at.Get(a, node.captures.get(ci))
         co.SbPuts(et, ", " + ty_of(v, s, a, cap.type_str))
     end
     co.SbPuts(et, " }\n")
@@ -45,11 +45,13 @@ func emit_lambda(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     // Same reasoning as the function emitter: a lambda body is
     // emitted nested inside whatever was being lowered, so the outer
     // loops' live break/continue targets must survive it.
+    mut saved_dmk2 := Vector {} as Vector<int>
     mut saved_brk2 := Vector {} as Vector<str>
     mut saved_cont2 := Vector {} as Vector<str>
     repeat saved_nloop with sbi2:
-        saved_brk2.push(v.brk.get(sbi2)[0])
-        saved_cont2.push(v.cont.get(sbi2)[0])
+        saved_brk2.push(v.brk.get(sbi2))
+        saved_cont2.push(v.cont.get(sbi2))
+        saved_dmk2.push(v.loop_dmark.get(sbi2))
     end
     saved_main := v.is_main
     saved_term := v.term
@@ -92,7 +94,7 @@ func emit_lambda(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
         hdr, "define internal " + ty_of(v, s, a, rts) + " @" + name + "(ptr noundef %env"
     )
     repeat at.ChildCount(a, n) with i:
-        p := at.Get(a, node.list.get(i)[0])
+        p := at.Get(a, node.list.get(i))
         if p.is_ref:
             co.SbPuts(hdr, ", ptr %arg" + co.I64Toa(i as i64))
         else:
@@ -106,7 +108,7 @@ func emit_lambda(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     co.SbFree(hdr)
 
     repeat at.ChildCount(a, n) with i2:
-        p2 := at.Get(a, node.list.get(i2)[0])
+        p2 := at.Get(a, node.list.get(i2))
         if p2.is_ref:
             local_add(v, p2.name, "%arg" + co.I64Toa(i2 as i64), p2.type_str)
         else:
@@ -140,11 +142,13 @@ func emit_lambda(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     v.lbl = saved_lbl
     v.nloop = saved_nloop
     repeat saved_nloop with rbi2:
-        v.brk.set(rbi2, saved_brk2.get(rbi2)[0])
-        v.cont.set(rbi2, saved_cont2.get(rbi2)[0])
+        v.brk.set(rbi2, saved_brk2.get(rbi2))
+        v.cont.set(rbi2, saved_cont2.get(rbi2))
+        v.loop_dmark.set(rbi2, saved_dmk2.get(rbi2))
     end
-    saved_brk2.free()
-    saved_cont2.free()
+    defer saved_brk2.free()
+    defer saved_dmk2.free()
+    defer saved_cont2.free()
     v.is_main = saved_main
     v.term = saved_term
     v.ret_ts = saved_ret
@@ -246,7 +250,7 @@ func const_agg(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, out2 &: str): bool:
         mut i := 0
         until i < node.list.len() && okall:
             mut vtext := ""
-            if !const_value(v, s, a, node.list.get(i)[0], vtext):
+            if !const_value(v, s, a, node.list.get(i), vtext):
                 okall = false
             else:
                 if i != 0:
@@ -279,14 +283,14 @@ func const_agg(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, out2 &: str): bool:
         fsyms := sm.ScopeAt(s, sm.SymAt(s, ss).members).symbols
         mut fi := 0
         until fi < fsyms.len() && okall2:
-            f := sm.SymAt(s, fsyms.get(fi)[0])
+            f := sm.SymAt(s, fsyms.get(fi))
             if f.kind == sm.SYM_FIELD:
                 fts := sm.ToString(s, f.ty)
                 mut prov := 0
                 repeat node.list.len() with j:
-                    fld := at.Get(a, node.list.get(j)[0])
+                    fld := at.Get(a, node.list.get(j))
                     if prov == 0 && str.Len(fld.name) > 0 && str.Equals(fld.name, f.name):
-                        prov = node.list.get(j)[0]
+                        prov = node.list.get(j)
                     end
                 end
                 mut vtext2 := ""
@@ -299,7 +303,7 @@ func const_agg(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, out2 &: str): bool:
                         okall2 = false
                     end
                 else:
-                    vtext2 = zero_of(fts)
+                    vtext2 = zero_of(s, fts)
                 end
                 if okall2:
                     flety := ty_of(v, s, a, fts)
@@ -332,6 +336,16 @@ end
 // ll_emit_globals
 func emit_globals(v &: Lv, s &: sm.Sema, a &: at.Ast, program: int):
     mut any := false
+    // Every global carries the package it was declared in. The LLVM backend
+    // puts the whole program in one module, so without that the second package
+    // to declare a `COLS` was skipped as "already emitted" and both packages
+    // then read the first one's storage - the same collision the C backend
+    // reported as a duplicate definition at link time, except here it linked
+    // and quietly returned the wrong value.
+    mut gpkg := pkg_of_scope(s, v.pkg_scope)
+    if str.Len(gpkg) == 0:
+        gpkg = "main"
+    end
     mut i := 0
     until i < at.ChildCount(a, program):
         d := at.Child(a, program, i)
@@ -341,7 +355,7 @@ func emit_globals(v &: Lv, s &: sm.Sema, a &: at.Ast, program: int):
         // duplicate definition in the module. This lets the function be
         // called again for a package whose globals may or may not have been
         // emitted already, which lv_addr_of relies on.
-        if !skip && global_find(v, dn.name) >= 0:
+        if !skip && global_find_in(v, gpkg, dn.name) >= 0:
             skip = true
         end
         // An extern *variable* - POSIX `environ`, which std/os/process
@@ -358,29 +372,38 @@ func emit_globals(v &: Lv, s &: sm.Sema, a &: at.Ast, program: int):
             ev.name = dn.name
             ev.ptr = eref
             ev.ts = ets
+            // No package: it is the one object everyone links against.
+            ev.pkg = ""
+            ev.init = 0
             v.globals.push(ev)
             any = true
             skip = true
         end
         if !skip:
             ts := str.Len(dn.type_str) > 0 ? dn.type_str : "i32"
-            gref := "@g." + str.TrimPrefix(struct_ltype(dn.name), "%struct.")
+            gref := "@g." + gpkg + "." + str.TrimPrefix(struct_ltype(dn.name), "%struct.")
             lty := ty_of(v, s, a, ts)
             mut init := ""
             mut cv := ""
-            if dn.a != 0 && const_value(v, s, a, dn.a, cv):
-                init = cv
-            else:
-                init = zero_of(ts)
-                if dn.a != 0:
-                    v.gdefer.push(d)
-                end
-            end
-            out_g(v, gref + " = internal global " + lty + " " + init + "\n")
             mut gv := LvVar {}
             gv.name = dn.name
             gv.ptr = gref
             gv.ts = ts
+            gv.pkg = gpkg
+            gv.init = 0
+            if dn.a != 0 && const_value(v, s, a, dn.a, cv):
+                init = cv
+            else:
+                init = zero_of(s, ts)
+                if dn.a != 0:
+                    gv.init = dn.a
+                    // The index of the entry pushed just below, not a name to
+                    // look back up: two packages can have a global of the same
+                    // name and the lookup would pick one of them at random.
+                    v.gdefer.push(v.globals.len())
+                end
+            end
+            out_g(v, gref + " = internal global " + lty + " " + init + "\n")
             v.globals.push(gv)
             any = true
         end
@@ -403,7 +426,7 @@ func extern_seen(v &: Lv, name: str): bool:
         end
     end
     repeat v.extern_names.len() with i:
-        if str.Equals(name, v.extern_names.get(i)[0]):
+        if str.Equals(name, v.extern_names.get(i)):
             ret true
         end
     end
@@ -436,7 +459,7 @@ func body_sig_for(s &: sm.Sema, a &: at.Ast, name: str, owner &: int): int:
         ov := sm.SymAt(s, fs).overloads
         mut o := 0
         until o < ov.len():
-            sgid := ov.get(o)[0]
+            sgid := ov.get(o)
             o += 1
             d := sm.SigAt(s, sgid).decl
             // `is_extern` too, not just "has a body": the point of this
@@ -456,6 +479,27 @@ func body_sig_for(s &: sm.Sema, a &: at.Ast, name: str, owner &: int): int:
     ret 0 - 1
 end
 
+// StdcallCc - " x86_stdcallcc" for an extern that is a Win32 API on a
+// 32-bit Windows target, "" otherwise. See k_lv_win32_stdcall in
+// llvmgen.salam for why this is a table and how it was checked.
+//
+// Both the `declare` and every call site have to carry it: the convention
+// decides who pops the arguments, and disagreeing on that is what left the
+// i686 stack eight bytes out after the first Win32 call. Emitting it also
+// makes LLVM's mangler append the @N byte count, which is the decoration
+// kernel32's import library exports the function under.
+func StdcallCc(v &: Lv, name: str): str:
+    if !target_is_windows_of(v.triple) || target_ptr_bits_of(v.triple) != 32:
+        ret ""
+    end
+    repeat k_lv_win32_stdcall.len() with i:
+        if str.Equals(name, k_lv_win32_stdcall[i]):
+            ret " x86_stdcallcc"
+        end
+    end
+    ret ""
+end
+
 // ll_declare_extern - one bodyless `extern func` -> one `declare` line,
 // de-duplicated against everything already declared or defined.
 //
@@ -471,7 +515,7 @@ func declare_extern(v &: Lv, s &: sm.Sema, a &: at.Ast, name: str, sigid: int):
         ret
     end
     repeat v.emitted.len() with ke:
-        if str.Equals(name, v.emitted.get(ke)[0]):
+        if str.Equals(name, v.emitted.get(ke)):
             ret
         end
     end
@@ -490,7 +534,7 @@ func declare_extern(v &: Lv, s &: sm.Sema, a &: at.Ast, name: str, sigid: int):
     dn2 := at.Get(a, sg.decl)
     mut b := co.SbNew()
     co.SbPuts(
-        b, "declare " + ty_of(v, s, a, sm.ToString(s, sg.ret_type)) + " @" + name + "("
+        b, "declare" + StdcallCc(v, name) + " " + ty_of(v, s, a, sm.ToString(s, sg.ret_type)) + " @" + name + "("
     )
     repeat sg.params.len() with j:
         if j != 0:
@@ -498,7 +542,7 @@ func declare_extern(v &: Lv, s &: sm.Sema, a &: at.Ast, name: str, sigid: int):
         end
         co.SbPuts(
             b, ty_of(
-                v, s, a, sm.ToString(s, sg.params.get(j)[0])
+                v, s, a, sm.ToString(s, sg.params.get(j))
             )
         )
     end
@@ -521,12 +565,12 @@ end
 func emit_externs_in(v &: Lv, s &: sm.Sema, a &: at.Ast, gsc: int):
     syms := sm.ScopeAt(s, gsc).symbols
     repeat syms.len() with i:
-        symid := syms.get(i)[0]
+        symid := syms.get(i)
         sy := sm.SymAt(s, symid)
         mut skip := sy.kind != sm.SYM_FUNC || sy.overloads.len() == 0
         mut sigid := 0
         if !skip:
-            sigid = sy.overloads.get(0)[0]
+            sigid = sy.overloads.get(0)
             d := sm.SigAt(s, sigid).decl
             if d == 0:
                 skip = true
@@ -558,7 +602,7 @@ func touch_pkg(v &: Lv, s &: sm.Sema, a &: at.Ast, pk: int):
         ret
     end
     repeat v.pkg_touched.len() with i:
-        if v.pkg_touched.get(i)[0] == pk:
+        if v.pkg_touched.get(i) == pk:
             ret
         end
     end
@@ -594,15 +638,15 @@ end
 // ll_emit_global_inits - runs at the top of main().
 func emit_global_inits(v &: Lv, s &: sm.Sema, a &: at.Ast):
     repeat v.gdefer.len() with i:
-        d := v.gdefer.get(i)[0]
-        dn := at.Get(a, d)
-        gi := global_find(v, dn.name)
-        if gi >= 0:
-            g := v.globals.get(gi)[0]
-            val := conv(v, s, a, lv_expr(v, s, a, dn.a), g.ts)
-            emit(
-                v, "store " + ty_of(v, s, a, g.ts) + " " + val + ", ptr " + g.ptr
-            )
+        gi := v.gdefer.get(i)
+        if gi >= 0 && gi < v.globals.len():
+            g := v.globals.get(gi)
+            if g.init != 0:
+                val := conv(v, s, a, lv_expr(v, s, a, g.init), g.ts)
+                emit(
+                    v, "store " + ty_of(v, s, a, g.ts) + " " + val + ", ptr " + g.ptr
+                )
+            end
         end
     end
 end

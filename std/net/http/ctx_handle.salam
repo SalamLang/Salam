@@ -36,7 +36,15 @@ pub func Ctx_body(h: i64): str: ret salam_ctx_get(h, 3) end
 @en "Ctx_query"
 @fa "پرسمان زمینه"
 @ar "استعلام السیاق"
-pub func Ctx_query(h: i64, key: str): str: ret _query_parse(salam_ctx_get(h, 2), key) end
+pub func Ctx_query(h: i64, key: str): str:
+    // Percent-decoding has to produce a new string, so this one is heap and
+    // somebody has to free it. Handing it to the request scope means the
+    // handler gets a plain `str` it can read and forget, and it is released
+    // with everything else when the response goes out - rather than leaking
+    // once per call, which is what a handler reading two query parameters
+    // used to cost.
+    ret _ctx_own(h, _query_parse(salam_ctx_get(h, 2), key))
+end
 
 @en "Ctx_header"
 @fa "سرصفحه زمینه"
@@ -51,7 +59,9 @@ pub func Ctx_param(h: i64, name: str): str: ret salam_ctx_kv_get(h, 1, name) end
 @en "Ctx_form"
 @fa "فرم زمینه"
 @ar "استمارة السیاق"
-pub func Ctx_form(h: i64, field: str): str: ret _query_parse(salam_ctx_get(h, 3), field) end
+pub func Ctx_form(h: i64, field: str): str:
+    ret _ctx_own(h, _query_parse(salam_ctx_get(h, 3), field))
+end
 
 @en "Ctx_status"
 @fa "وضعیت زمینه"
@@ -86,6 +96,24 @@ pub func Ctx_text(h: i64, text: str):
     salam_ctx_set(h, 4, "text/plain; charset=utf-8")
     salam_ctx_set(h, 5, text)
 end
+
+// Hands a string the handler built to the request scope: it is freed when the
+// response has been sent, and until then it can be used like any other `str`.
+//
+// This is the answer to "my handler assembled a body with a StringBuilder,
+// who frees it?". Ctx_json and friends deliberately do NOT take ownership of
+// what they are given, because most callers pass a literal and freeing one of
+// those would corrupt the heap - so a handler with a heap-allocated body says
+// so here:
+//
+//     http.Ctx_json(ctx, http.Ctx_own(ctx, str.BufStr(b)))
+//
+// Only ever pass a heap pointer. A literal, or a string already given to this
+// function, will be freed twice.
+@en "Ctx_own"
+@fa "مالکیت زمینه"
+@ar "تملک السیاق"
+pub func Ctx_own(h: i64, s: str): str: ret _ctx_own(h, s) end
 
 @en "Ctx_redirect"
 @fa "تغییرمسیر زمینه"

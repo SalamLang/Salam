@@ -1,0 +1,170 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import testing
+import encoding.yaml
+import encoding.value
+import encoding.encerr
+
+// Reading side of std/encoding/yaml: paths, types, keys and the value
+// bridge. The writing side (Str/Member/Object/Array/Dump) is covered by
+// tests/en/general/yaml_pkg.
+//
+// Keys and TypeOf matter beyond this package: std/config walks a YAML
+// document with exactly those two to flatten it into dotted keys.
+
+func doc(): str:
+    mut t := "app:\n"
+    t = t.concat("  name: myservice\n")
+    t = t.concat("  port: 8080\n")
+    t = t.concat("  debug: true\n")
+    t = t.concat("  ratio: 0.75\n")
+    t = t.concat("  tags:\n")
+    t = t.concat("    - alpha\n")
+    t = t.concat("    - beta\n")
+    t = t.concat("    - gamma\n")
+    t = t.concat("  db:\n")
+    t = t.concat("    host: localhost\n")
+    t = t.concat("    user: root\n")
+    t = t.concat("blank:\n")
+    t = t.concat("quoted: \"has: a colon\"\n")
+    ret t
+end
+
+func test_scalars():
+    t := doc()
+    testing.AssertEqStr(yaml.Get(t, "app.name"), "myservice")
+    testing.AssertEqInt(yaml.GetInt(t, "app.port"), 8080)
+    testing.AssertTrue(yaml.GetBool(t, "app.debug"))
+    testing.AssertEqFloat(yaml.GetFloat(t, "app.ratio"), 0.75, 0.0001)
+    // a quoted scalar keeps the character that would otherwise be syntax
+    testing.AssertEqStr(yaml.Get(t, "quoted"), "has: a colon")
+    // a key with no value reads as empty, not as the text "null"
+    testing.AssertEqStr(yaml.Get(t, "blank"), "")
+    // a path that is not there reads as empty rather than failing
+    testing.AssertEqStr(yaml.Get(t, "app.nothing"), "")
+end
+
+func test_nested_and_sequences():
+    t := doc()
+    testing.AssertEqStr(yaml.Get(t, "app.db.host"), "localhost")
+    testing.AssertEqStr(yaml.Get(t, "app.db.user"), "root")
+    testing.AssertEqStr(yaml.Get(t, "app.tags[0]"), "alpha")
+    testing.AssertEqStr(yaml.Get(t, "app.tags[1]"), "beta")
+    testing.AssertEqStr(yaml.Get(t, "app.tags[2]"), "gamma")
+    testing.AssertEqInt(yaml.Len(t, "app.tags"), 3)
+    // Len reports the member count of a map too
+    testing.AssertEqInt(yaml.Len(t, "app.db"), 2)
+    // and -1 for anything that is not a collection
+    testing.AssertEqInt(yaml.Len(t, "app.name"), 0 - 1)
+end
+
+func test_has_and_typeof():
+    t := doc()
+    testing.AssertTrue(yaml.Has(t, "app"))
+    testing.AssertTrue(yaml.Has(t, "app.db.host"))
+    testing.AssertFalse(yaml.Has(t, "app.db.password"))
+    testing.AssertFalse(yaml.Has(t, "nope"))
+    testing.AssertEqStr(yaml.TypeOf(t, "app"), "map")
+    testing.AssertEqStr(yaml.TypeOf(t, "app.tags"), "list")
+    testing.AssertEqStr(yaml.TypeOf(t, "app.name"), "string")
+    testing.AssertEqStr(yaml.TypeOf(t, "app.port"), "int")
+    testing.AssertEqStr(yaml.TypeOf(t, "app.ratio"), "float")
+    testing.AssertEqStr(yaml.TypeOf(t, "app.debug"), "bool")
+    testing.AssertEqStr(yaml.TypeOf(t, "missing"), "none")
+end
+
+// The pair std/config uses to flatten a document into dotted keys.
+func test_keys():
+    t := doc()
+    top := yaml.Keys(t, "")
+    defer top.free()
+    testing.AssertEqInt(top.len(), 3)
+    testing.AssertEqStr(top.get(0), "app")
+    testing.AssertEqStr(top.get(1), "blank")
+    testing.AssertEqStr(top.get(2), "quoted")
+
+    inner := yaml.Keys(t, "app")
+    defer inner.free()
+    testing.AssertEqInt(inner.len(), 6)
+    testing.AssertEqStr(inner.get(0), "name")
+    testing.AssertEqStr(inner.get(5), "db")
+
+    deep := yaml.Keys(t, "app.db")
+    defer deep.free()
+    testing.AssertEqInt(deep.len(), 2)
+
+    // a sequence and a scalar have no keys, and neither does a bad path
+    seq := yaml.Keys(t, "app.tags")
+    defer seq.free()
+    testing.AssertEqInt(seq.len(), 0)
+    scalar := yaml.Keys(t, "app.name")
+    defer scalar.free()
+    testing.AssertEqInt(scalar.len(), 0)
+    gone := yaml.Keys(t, "not.here")
+    defer gone.free()
+    testing.AssertEqInt(gone.len(), 0)
+end
+
+func test_has_keys():
+    t := doc()
+    mut want := Vector {} as Vector<str>
+    defer want.free()
+    want.push("app")
+    want.push("quoted")
+    testing.AssertTrue(yaml.HasKeys(t, want))
+    want.push("absent")
+    testing.AssertFalse(yaml.HasKeys(t, want))
+end
+
+func test_valid_and_json():
+    t := doc()
+    testing.AssertTrue(yaml.Valid(t))
+    testing.AssertTrue(yaml.Valid(""))
+    json := yaml.ToJSON(t)
+    testing.AssertContains(json, `"name"`)
+    testing.AssertContains(json, `"myservice"`)
+    testing.AssertContains(json, "8080")
+end
+
+// Decode lifts a document into the shared encoding.value tree, which is
+// what lets one document cross between yaml, json and toml.
+func test_value_bridge():
+    mut err := encerr.NoError()
+    v := yaml.Decode(doc(), err)
+    testing.AssertFalse(encerr.IsError(err))
+    testing.AssertTrue(value.IsObject(v))
+    app := value.ObjectGet(v, "app")
+    testing.AssertTrue(value.IsObject(app))
+    testing.AssertEqStr(value.AsString(value.ObjectGet(app, "name")), "myservice")
+    // and Encode puts it back into YAML that still reads the same way
+    out := yaml.Encode(v)
+    testing.AssertEqStr(yaml.Get(out, "app.name"), "myservice")
+    testing.AssertEqInt(yaml.GetInt(out, "app.port"), 8080)
+    testing.AssertEqStr(yaml.Get(out, "app.db.host"), "localhost")
+end
+
+func main:
+    test_scalars()
+    test_nested_and_sequences()
+    test_has_and_typeof()
+    test_keys()
+    test_has_keys()
+    test_valid_and_json()
+    test_value_bridge()
+    testing.Summary()
+    ret 0
+end

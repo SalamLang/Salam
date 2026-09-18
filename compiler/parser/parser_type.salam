@@ -29,12 +29,49 @@ func parse_array_dims(p &: Ps, a &: at.Ast, n: int):
     end
 end
 
+// A run of stars after the dims. Only single stars: "T**" reaches the
+// parser as ONE power token, and re-reading that as two levels would have
+// to be undone again by the formatter, which reflows '**' as a binary
+// operator. A pointer-to-pointer is therefore still unspellable in source;
+// the depth machinery below exists for the types generic substitution
+// BUILDS, where Vector<Edge*> genuinely needs an Edge** for its data
+// pointer.
 func parse_ptr_suffix(p &: Ps, a &: at.Ast, n: int):
-    if p_match(p, tok.TK_STAR):
+    until p_match(p, tok.TK_STAR):
         mut nn := at.Get(a, n)
         nn.is_pointer = true
+        nn.ptr_depth += 1
         at.Put(a, n, nn)
     end
+end
+
+func p_at_star_run(p &: Ps, k: int): bool:
+    ret p_peekn(p, k).kind == tok.TK_STAR
+end
+
+// Both sides of the dims are legal and they mean different types:
+// "Edge*[6]" is six pointers, "Edge[6]*" is one pointer to an array of
+// six. Which side each star sat on is counted separately so sema can
+// apply type_ptr before or after wrapping in type_array.
+func parse_ptr_and_dims(p &: Ps, a &: at.Ast, n: int):
+    until p_at_star_run(p, 0):
+        // Only the run of stars that a '[' follows belongs to the
+        // element; once the dims are behind us the rest are ordinary
+        // suffixes.
+        mut k := 1
+        until p_at_star_run(p, k):
+            k += 1
+        end
+        if p_peekn(p, k).kind != tok.TK_LBRACKET:
+            break
+        end
+        mut nn := at.Get(a, n)
+        nn.elem_ptr_depth += 1
+        at.Put(a, n, nn)
+        p_advance(p)
+    end
+    parse_array_dims(p, a, n)
+    parse_ptr_suffix(p, a, n)
 end
 
 func parse_type_dyn(p &: Ps, a &: at.Ast, n: int): int:
@@ -44,8 +81,12 @@ func parse_type_dyn(p &: Ps, a &: at.Ast, n: int): int:
     nn.name = p_peek(p).lexeme
     at.Put(a, n, nn)
     p_advance(p)
-    parse_array_dims(p, a, n)
-    parse_ptr_suffix(p, a, n)
+    if p_at(p, tok.TK_DOT) && p_peek2(p).kind == tok.TK_IDENT:
+        p_advance(p)
+        at.SetName(a, n, nn.name + "." + p_peek(p).lexeme)
+        p_advance(p)
+    end
+    parse_ptr_and_dims(p, a, n)
     p_fin(p, a, n)
     ret n
 end
@@ -92,8 +133,7 @@ func parse_type_named(p &: Ps, a &: at.Ast, n: int): int:
         end
         p_close_angle(p, "'>' to close type arguments")
     end
-    parse_array_dims(p, a, n)
-    parse_ptr_suffix(p, a, n)
+    parse_ptr_and_dims(p, a, n)
     p_fin(p, a, n)
     ret n
 end

@@ -1,0 +1,154 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// The same graph walk with no pointers and no magic -1: an adjacency
+// matrix, and every "might not be there" answer carried as Option<int>.
+// Unreachable is None, the BFS root has a None parent, and a vertex with
+// no neighbour yields None instead of a sentinel the caller can forget to
+// check.
+
+import option
+
+type Maybe = option.Option<int>
+
+struct Graph:
+    pub n: int = 0
+    pub adj: Vector<bool> = Vector {}
+end
+
+func nothing(): Maybe: ret option.None() end
+
+func just(i: int): Maybe: ret option.Some(i) end
+
+func make_graph(n: int): Graph:
+    mut g := Graph { n = n }
+    repeat n * n: g.adj.push(false) end
+    ret g
+end
+
+func link(g &: Graph, from: int, dst: int): g.adj[from * g.n + dst] = true end
+
+func has_edge(g: Graph, from: int, dst: int): bool: ret g.adj[from * g.n + dst] end
+
+// None when the vertex is isolated, so a caller cannot walk into a
+// neighbour that is not there.
+func first_neighbor(g: Graph, v: int): Maybe:
+    repeat g.n with j:
+        if g.adj[v * g.n + j]: ret just(j) end
+    end
+    ret nothing()
+end
+
+func last_neighbor(g: Graph, v: int): Maybe:
+    mut found := nothing()
+    repeat g.n with j:
+        if g.adj[v * g.n + j]: found = just(j) end
+    end
+    ret found
+end
+
+func degree(g: Graph, v: int): int:
+    mut d := 0
+    repeat g.n with j:
+        if g.adj[v * g.n + j]: d = d + 1 end
+    end
+    ret d
+end
+
+// BFS filling parent[] with Some(previous) / None for the root and for
+// anything never reached. dist[] is the same shape.
+func bfs(g: Graph, src: int, parent &: Vector<Maybe>, dist &: Vector<Maybe>):
+    mut queue := Vector {} as Vector<int>
+    defer queue.free()
+    dist[src] = just(0)
+    queue.push(src)
+    mut head := 0
+    until head < queue.len():
+        v := queue[head]
+        head = head + 1
+        d := option.Unwrap(dist[v])
+        repeat g.n with j:
+            if g.adj[v * g.n + j] && option.IsNone(dist[j]):
+                dist[j] = just(d + 1)
+                parent[j] = just(v)
+                queue.push(j)
+            end
+        end
+    end
+end
+
+func path_to(parent: Vector<Maybe>, dist: Vector<Maybe>, v: int): str:
+    if option.IsNone(dist[v]): ret "no path" end
+    mut out := "" + v
+    mut at := parent[v]
+    until option.IsSome(at):
+        p := option.Unwrap(at)
+        out = "" + p + " -> " + out
+        at = parent[p]
+    end
+    ret out
+end
+
+func main:
+    mut g := make_graph(6)
+    defer g.adj.free()
+
+    // 0 -> 1 -> 3, 0 -> 2 -> 3 -> 4, with 5 left isolated.
+    link(g, 0, 1)
+    link(g, 0, 2)
+    link(g, 1, 3)
+    link(g, 2, 3)
+    link(g, 3, 4)
+
+    repeat 6 with v:
+        f := first_neighbor(g, v)
+        l := last_neighbor(g, v)
+        print "vertex", v, "degree", degree(g, v)
+        print " first", option.UnwrapOr(f, -1), "last", option.UnwrapOr(l, -1)
+        println " isolated", option.IsNone(f)
+    end
+
+    println "0->1:", has_edge(g, 0, 1)
+    println "1->0:", has_edge(g, 1, 0)
+
+    mut parent := Vector {} as Vector<Maybe>
+    defer parent.free()
+    mut dist := Vector {} as Vector<Maybe>
+    defer dist.free()
+    repeat 6:
+        parent.push(nothing())
+        dist.push(nothing())
+    end
+    bfs(g, 0, parent, dist)
+
+    repeat 6 with v:
+        if option.IsSome(dist[v]):
+            d := option.Unwrap(dist[v])
+            println "reached", v, "at depth", d, "via", path_to(parent, dist, v)
+        else:
+            println "unreachable", v, "depth", option.UnwrapOr(dist[v], -1)
+        end
+    end
+
+    // The root is reachable but has no parent - two different absences
+    // that a single null could not tell apart.
+    print "root reached:", option.IsSome(dist[0])
+    println " root has parent:", option.IsSome(parent[0])
+    print "5 reached:", option.IsSome(dist[5])
+    println " 5 has parent:", option.IsSome(parent[5])
+    println "path to 5:", path_to(parent, dist, 5)
+
+    // Expect() states the invariant at the point that relies on it.
+    println "depth of 4 =", option.Expect(dist[4], "4 must be reachable from 0")
+end

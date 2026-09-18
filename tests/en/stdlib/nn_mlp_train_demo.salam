@@ -1,0 +1,102 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+// Milestone: a two-layer MLP trains on a 10-class problem, in pure
+// Salam, to high accuracy - the full loop of tensor, autograd, nn and
+// optim working together. Everything is seeded, so the asserted
+// thresholds are deterministic.
+
+import autograd
+import data
+import matrix
+import nn
+import optim
+import tensor
+import testing
+
+struct Mlp:
+    pub fc1: nn.Linear = nn.Linear {}
+    pub fc2: nn.Linear = nn.Linear {}
+
+    pub func forward(tp &: autograd.Tape, ps &: nn.ParamStore, x: int): int:
+        h := autograd.Relu(tp, this.fc1.forward(tp, ps, x))
+        ret this.fc2.forward(tp, ps, h)
+    end
+end
+
+func main:
+    // Dataset: 1000 samples, 16 features, 10 well-separated classes.
+    mut ym := matrix.Matrix {}
+    mut xm := data.MakeClassification(1000, 16, 10, 4.0, 42, ym)
+    mut x := tensor.FromMatrix(xm)
+    n := xm.rows
+    mut targets := Vector {} as Vector<int>
+    repeat n with i: targets.push(ym.at(i, 0) as int) end
+    matrix.Free(xm)
+    matrix.Free(ym)
+
+    // Model and optimizer.
+    mut ps := nn.ParamStore {}
+    mut g := tensor.NewRng(7)
+    mut model := Mlp {}
+    model.fc1 = nn.NewLinear(ps, "fc1", 16, 64, g)
+    model.fc2 = nn.NewLinear(ps, "fc2", 64, 10, g)
+    mut opt := optim.SGD { lr = 0.2, momentum = 0.9 }
+
+    // Full-batch training.
+    mut tp := autograd.NewTape(1)
+    mut first_loss := 0.0
+    mut last_loss := 0.0
+    repeat 120 with step:
+        tp.reset()
+        ps.zero_grad()
+        xid := autograd.Input(tp, x)
+        logits := model.forward(tp, ps, xid)
+        loss := autograd.CrossEntropyLogits(tp, logits, targets)
+        lv := autograd.Value(tp, loss)
+        if step == 0: first_loss = lv.at(0) end
+        last_loss = lv.at(0)
+        autograd.Backward(tp, loss)
+        opt.step(ps)
+    end
+
+    // The loss must have fallen hard from its random-init value (~ln 10).
+    testing.AssertTrue(first_loss > 1.5)
+    testing.AssertTrue(last_loss < 0.15)
+
+    // Train accuracy from an inference pass.
+    tp.reset()
+    tp.training = false
+    xid := autograd.Input(tp, x)
+    logits := model.forward(tp, ps, xid)
+    lv := autograd.Value(tp, logits)
+    mut preds := tensor.ArgMaxAxis(lv, 1, false)
+    mut hits := 0
+    repeat n with i:
+        if (preds.at(i) as int) == targets.get(i): hits += 1 end
+    end
+    acc := (hits as f64) / (n as f64)
+    testing.AssertTrue(acc >= 0.97)
+
+    tp.free()
+    opt.free()
+    ps.free()
+    tensor.Free(x)
+    tensor.Free(preds)
+    targets.free()
+
+    ret testing.Summary()
+end

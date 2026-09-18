@@ -1,0 +1,352 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ml
+
+import matrix
+import pool
+
+// Splitting and cross-validation.
+//
+// With no estimator interface to program against, cross-validation is
+// generic over a CALLBACK: `fitpred` takes (x_train, y_train, x_test)
+// and returns predictions for x_test. A caller wraps any estimator in a
+// lambda - construct, fit, predict, free - and since lambdas capture by
+// value, the hyperparameters of that lambda are the candidate being
+// scored. The metric is a callback too, (y_true, y_pred) -> f64, so any
+// function in ml_metrics drops straight in.
+//
+// Shuffles are seeded permutations from matrix.NewRng; a fold layout is
+// a function of (n, k, seed) and nothing else.
+
+@en "Split"
+@fa "تقسیم"
+@ar "تقسيم"
+pub struct Split:
+    pub x_train: matrix.Matrix = matrix.Matrix {}
+    pub x_test: matrix.Matrix = matrix.Matrix {}
+    pub y_train: matrix.Matrix = matrix.Matrix {}
+    pub y_test: matrix.Matrix = matrix.Matrix {}
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free():
+        matrix.Free(this.x_train)
+        matrix.Free(this.x_test)
+        matrix.Free(this.y_train)
+        matrix.Free(this.y_test)
+    end
+end
+
+// Row indices for each fold: train.get(f) and test.get(f).
+@en "Folds"
+@fa "برش‌ها"
+@ar "طيات"
+pub struct Folds:
+    pub train: Vector<Vector<int>> = Vector {}
+    pub test: Vector<Vector<int>> = Vector {}
+
+    @en "count"
+    @fa "شمار"
+    @ar "عدد"
+    pub func count(): int: ret this.test.len() end
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free():
+        repeat this.train.len() with i:
+            mut t := this.train.get(i)
+            t.free()
+        end
+        repeat this.test.len() with i:
+            mut t := this.test.get(i)
+            t.free()
+        end
+        this.train.free()
+        this.test.free()
+    end
+end
+
+// The outcome of a GridSearch: the mean cross-validation score of every
+// candidate and the index of the best one.
+@en "GridResult"
+@fa "نتیجه جستجوی شبکه‌ای"
+@ar "نتيجة البحث الشبكي"
+pub struct GridResult:
+    pub scores: Vector<f64> = Vector {}
+    pub best: int = 0 - 1
+    pub best_score: f64 = 0.0
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحرير"
+    pub func free(): this.scores.free() end
+end
+
+// One hyper-parameter setting for GridSearch: a fitpred closure
+// (x_train, y_train, x_test) -> predictions, and a label for reporting.
+@en "Candidate"
+@fa "نامزد"
+@ar "مرشح"
+pub struct Candidate:
+    pub name: str = ""
+    pub fit: func (matrix.Matrix, matrix.Matrix, matrix.Matrix) matrix.Matrix = (a: matrix.Matrix, b: matrix.Matrix, c: matrix.Matrix): ret matrix.Matrix {} end
+end
+
+// A seeded permutation of 0..n-1 (Fisher-Yates).
+func _permutation(n: int, seed: i64): Vector<int>:
+    mut p := Vector {} as Vector<int>
+    repeat n with i: p.push(i) end
+    mut g := matrix.NewRng(seed)
+    mut i := n - 1
+    until i > 0:
+        j := (g.next_float() * ((i + 1) as f64)) as int
+        t := p.get(i)
+        p.set(i, p.get(j))
+        p.set(j, t)
+        i -= 1
+    end
+    ret p
+end
+
+// Rows of x at `idx`, as a fresh matrix.
+func _take_rows(x &: matrix.Matrix, idx &: Vector<int>): matrix.Matrix:
+    mut r := matrix.Zeros(idx.len(), x.cols)
+    repeat idx.len() with i:
+        src := idx.get(i)
+        repeat x.cols with j: r.set(i, j, x.at(src, j)) end
+    end
+    ret r
+end
+
+// Builds train index vectors as the complement of each test vector.
+func _complete_folds(n: int, f &: Folds):
+    repeat f.test.len() with k:
+        mut mask := Vector {} as Vector<bool>
+        mask.zeros(n)
+        tv := f.test.get(k)
+        repeat tv.len() with i: mask.set(tv.get(i), true) end
+        mut tr := Vector {} as Vector<int>
+        repeat n with i:
+            if mask.get(i) == false: tr.push(i) end
+        end
+        mask.free()
+        f.train.push(tr)
+    end
+end
+
+// ---- public API ----
+
+// A seeded shuffle split: test_frac of the rows held out.
+@en "TrainTestSplit"
+@fa "تقسیم آموزش‌آزمون"
+@ar "تقسيم تدريب واختبار"
+pub func TrainTestSplit(x &: matrix.Matrix, y &: matrix.Matrix, test_frac: f64, seed: i64): Split:
+    mut s := Split {}
+    n := x.rows
+    if n == 0 || y.rows != n: ret s end
+    mut ntest := (test_frac * (n as f64) + 0.5) as int
+    if ntest < 1: ntest = 1 end
+    if ntest >= n: ntest = n - 1 end
+    mut perm := _permutation(n, seed)
+    mut te := Vector {} as Vector<int>
+    mut tr := Vector {} as Vector<int>
+    repeat n with i:
+        if i < ntest: te.push(perm.get(i))
+        else: tr.push(perm.get(i)) end
+    end
+    s.x_train = _take_rows(x, tr)
+    s.y_train = _take_rows(y, tr)
+    s.x_test = _take_rows(x, te)
+    s.y_test = _take_rows(y, te)
+    perm.free()
+    te.free()
+    tr.free()
+    ret s
+end
+
+// k folds over n rows, contiguous or seeded-shuffled. Sizes differ by
+// at most one.
+@en "KFold"
+@fa "کی برش"
+@ar "طي كاف"
+pub func KFold(n: int, k: int, shuffle: bool, seed: i64): Folds:
+    mut f := Folds {}
+    if k < 2 || n < k: ret f end
+    mut order := Vector {} as Vector<int>
+    if shuffle:
+        order = _permutation(n, seed)
+    else:
+        repeat n with i: order.push(i) end
+    end
+    mut start := 0
+    repeat k with fold:
+        mut size := n / k
+        if fold < n % k: size += 1 end
+        mut te := Vector {} as Vector<int>
+        repeat size with i: te.push(order.get(start + i)) end
+        f.test.push(te)
+        start += size
+    end
+    order.free()
+    _complete_folds(n, f)
+    ret f
+end
+
+// k folds that keep each class's proportion: rows of every class are
+// shuffled and dealt round-robin into the folds.
+@en "StratifiedKFold"
+@fa "کی برش طبقه‌ای"
+@ar "طي كاف طبقي"
+pub func StratifiedKFold(y &: matrix.Matrix, k: int, seed: i64): Folds:
+    mut f := Folds {}
+    n := y.rows
+    if k < 2 || n < k: ret f end
+    repeat k: f.test.push(Vector {} as Vector<int>) end
+    nc := CountClasses(y)
+    mut perm := _permutation(n, seed)
+    repeat nc with c:
+        mut dealt := 0
+        repeat n with i:
+            row := perm.get(i)
+            if (y.at(row, 0) as int) == c:
+                mut te := f.test.get(dealt % k)
+                te.push(row)
+                f.test.set(dealt % k, te)
+                dealt += 1
+            end
+        end
+    end
+    perm.free()
+    _complete_folds(n, f)
+    ret f
+end
+
+// Fits and scores on every fold, returning one score per fold.
+// fitpred: (x_train, y_train, x_test) -> predictions for x_test.
+// metric: (y_true, y_pred) -> score.
+@en "CrossValScore"
+@fa "امتیاز اعتبارسنجی متقاطع"
+@ar "درجة التحقق المتقاطع"
+pub func CrossValScore(fitpred: func (matrix.Matrix, matrix.Matrix, matrix.Matrix) matrix.Matrix, metric: func (matrix.Matrix, matrix.Matrix) f64, x &: matrix.Matrix, y &: matrix.Matrix, folds &: Folds): Vector<f64>:
+    mut scores := Vector {} as Vector<f64>
+    repeat folds.count() with k:
+        tr := folds.train.get(k)
+        te := folds.test.get(k)
+        mut xtr := _take_rows(x, tr)
+        mut ytr := _take_rows(y, tr)
+        mut xte := _take_rows(x, te)
+        mut yte := _take_rows(y, te)
+        mut pred := fitpred(xtr, ytr, xte)
+        mut sc := 0.0
+        if pred.is_empty() == false: sc = metric(yte, pred) end
+        scores.push(sc)
+        matrix.Free(xtr)
+        matrix.Free(ytr)
+        matrix.Free(xte)
+        matrix.Free(yte)
+        matrix.Free(pred)
+    end
+    ret scores
+end
+
+// The mean of a score vector - the number a cross-validation reports.
+@en "MeanScore"
+@fa "میانگین امتیاز"
+@ar "متوسط الدرجة"
+pub func MeanScore(scores &: Vector<f64>): f64:
+    if scores.len() == 0: ret 0.0 end
+    mut s := 0.0
+    repeat scores.len() with i: s += scores.get(i) end
+    ret s / (scores.len() as f64)
+end
+
+// CrossValScore with the folds spread over `workers` (0 or 1: serial,
+// -1: every core). Each fold fits its own model, so the scores are the
+// serial ones in the same order.
+@en "CrossValScoreParallel"
+@fa "امتیاز اعتبارسنجی متقاطع موازی"
+@ar "درجة التحقق المتقاطع المتوازي"
+pub func CrossValScoreParallel(fitpred: func (matrix.Matrix, matrix.Matrix, matrix.Matrix) matrix.Matrix, metric: func (matrix.Matrix, matrix.Matrix) f64, x &: matrix.Matrix, y &: matrix.Matrix, folds &: Folds, workers: int): Vector<f64>:
+    mut w := workers
+    if w < 0: w = pool.CPUCount() as int end
+    if w <= 1: ret CrossValScore(fitpred, metric, x, y, folds) end
+    k := folds.count()
+    mut scores := Vector {} as Vector<f64>
+    repeat k: scores.push(0.0) end
+    xs := x
+    ys := y
+    fs := folds
+    pool.ParallelFor(k as i64, w as i64, (i: i64):
+        f := i as int
+        tr := fs.train.get(f)
+        te := fs.test.get(f)
+        mut xtr := _take_rows(xs, tr)
+        mut ytr := _take_rows(ys, tr)
+        mut xte := _take_rows(xs, te)
+        mut yte := _take_rows(ys, te)
+        mut pred := fitpred(xtr, ytr, xte)
+        mut sc := 0.0
+        if pred.is_empty() == false: sc = metric(yte, pred) end
+        scores.set(f, sc)
+        matrix.Free(xtr)
+        matrix.Free(ytr)
+        matrix.Free(xte)
+        matrix.Free(yte)
+        matrix.Free(pred)
+    end)
+    ret scores
+end
+
+// Cross-validates every candidate estimator (one Candidate per
+// hyper-parameter setting) and picks the highest mean score. With
+// workers > 1 the candidates run in parallel, each on serial folds.
+@en "GridSearch"
+@fa "جستجوی شبکه‌ای"
+@ar "بحث شبكي"
+pub func GridSearch(candidates &: Vector<Candidate>, metric: func (matrix.Matrix, matrix.Matrix) f64, x &: matrix.Matrix, y &: matrix.Matrix, folds &: Folds, workers: int): GridResult:
+    mut r := GridResult {}
+    n := candidates.len()
+    repeat n: r.scores.push(0.0) end
+    mut w := workers
+    if w < 0: w = pool.CPUCount() as int end
+    if w <= 1 || n <= 1:
+        repeat n with c:
+            mut sc := CrossValScore(candidates.get(c).fit, metric, x, y, folds)
+            r.scores.set(c, MeanScore(sc))
+            sc.free()
+        end
+    else:
+        xs := x
+        ys := y
+        fs := folds
+        cs := candidates
+        out := r.scores
+        pool.ParallelFor(n as i64, w as i64, (i: i64):
+            c := i as int
+            mut sc := CrossValScore(cs.get(c).fit, metric, xs, ys, fs)
+            out.set(c, MeanScore(sc))
+            sc.free()
+        end)
+    end
+    repeat n with c:
+        if r.best < 0 || r.scores.get(c) > r.best_score:
+            r.best = c
+            r.best_score = r.scores.get(c)
+        end
+    end
+    ret r
+end

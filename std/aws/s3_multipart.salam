@@ -1,0 +1,552 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package aws
+
+// Multipart upload: an object assembled from pieces.
+//
+// A single PUT is capped at five gigabytes, and long before that it becomes a
+// bad idea for a different reason: one failed byte at the end costs the whole
+// transfer. Multipart splits the object into parts that are uploaded
+// independently, retried independently, and stitched together by the service
+// at the end. Nothing is visible under the key until the completing call, so a
+// reader never sees a half-written object.
+//
+// The lifecycle has three states and exactly one trap.
+//
+//   Create  -> an upload id, and storage that is already being paid for
+//   Upload  -> one part at a time, each answering an ETag that must be kept
+//   Complete or Abort
+//
+// The trap is the missing third state. An upload that is neither completed nor
+// aborted keeps its parts forever, invisible to a listing and billed monthly.
+// Every function here that fails after Create aborts on the way out, and
+// S3ListUploads() exists so an application can find the ones a crash left
+// behind.
+
+import str
+import encoding.xml
+
+// S3's own limits. Five mebibytes is the floor for every part but the last,
+// ten thousand is the ceiling on the count, and the two together set the
+// largest object a given part size can build.
+pub const S3_PART_MIN := 5242880
+pub const S3_PART_MAX_COUNT := 10000
+
+// The default, at eight mebibytes: comfortably over the floor, small enough
+// that a failed part is cheap to resend, and large enough that a
+// hundred-gigabyte object still fits inside the part-count ceiling.
+pub const S3_PART_DEFAULT := 8388608
+
+const _S3_MD5_SIZE := 16
+
+// PartRef - one uploaded part: the number it was given and the ETag S3
+// answered with. Completing the upload means handing both back.
+pub struct PartRef:
+    pub number: int = 0
+    pub etag: str = ""
+    pub size: i64 = 0
+end
+
+// Upload - one multipart upload in progress.
+//
+// `parts` accumulates as parts are uploaded, so completing is a matter of
+// handing this back rather than of the caller keeping a parallel list.
+pub struct Upload:
+    pub ok: bool = false
+    pub status: int = 0
+    pub upload_id: str = ""
+    pub key: str = ""
+    pub bucket: str = ""
+    pub parts: Vector<PartRef> = Vector {}
+    pub error: str = ""
+    pub code: str = ""
+end
+
+// PartList - the parts a service says an upload currently holds. Worth reading
+// before resuming an interrupted upload: it is the only authority on which
+// parts actually arrived.
+pub struct PartList:
+    pub ok: bool = false
+    pub status: int = 0
+    pub items: Vector<PartRef> = Vector {}
+    pub truncated: bool = false
+    pub next_marker: str = ""
+    pub error: str = ""
+    pub code: str = ""
+end
+
+// UploadRef - one in-progress upload, as a listing reports it.
+pub struct UploadRef:
+    pub key: str = ""
+    pub upload_id: str = ""
+    pub initiated: str = ""
+    pub initiated_epoch: i64 = 0
+    pub storage_class: str = ""
+end
+
+pub struct UploadList:
+    pub ok: bool = false
+    pub status: int = 0
+    pub items: Vector<UploadRef> = Vector {}
+    pub truncated: bool = false
+    pub next_key_marker: str = ""
+    pub next_upload_marker: str = ""
+    pub error: str = ""
+    pub code: str = ""
+end
+
+func _upload_failure(res: Result): Upload:
+    ret Upload {
+        ok = false, status = res.status, error = res.error, code = res.code
+    }
+end
+
+// _complete_body - the manifest that stitches the parts together. S3 requires
+// ascending part numbers, and answers InvalidPartOrder rather than sorting.
+func _complete_body(u: Upload): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppend(sb, "<CompleteMultipartUpload>")
+    mut i := 0
+    until i < u.parts.len():
+        p := u.parts.get(i)
+        str.BufAppend(sb, "<Part><PartNumber>")
+        str.BufAppendInt(sb, p.number as i64)
+        str.BufAppend(sb, "</PartNumber><ETag>&quot;")
+        str.BufAppend(sb, _xml_escape(Unquote(p.etag)))
+        str.BufAppend(sb, "&quot;</ETag></Part>")
+        i += 1
+    end
+    str.BufAppend(sb, "</CompleteMultipartUpload>")
+    ret str.BufStr(sb)
+end
+
+// _sorted_parts - a copy in ascending part order. Parts may legitimately be
+// uploaded out of order, in parallel; the manifest may not be out of order.
+func _sorted_parts(u: Upload): Upload:
+    mut out := u
+    mut sorted := Vector {} as Vector<PartRef>
+    mut i := 0
+    until i < u.parts.len():
+        p := u.parts.get(i)
+        mut at := sorted.len()
+        mut j := 0
+        until j < sorted.len():
+            if sorted.get(j).number > p.number:
+                at = j
+                j = sorted.len()
+            else:
+                j += 1
+            end
+        end
+        sorted.push(p)
+        mut k := sorted.len() - 1
+        until k > at:
+            sorted.set(k, sorted.get(k - 1))
+            k -= 1
+        end
+        sorted.set(at, p)
+        i += 1
+    end
+    out.parts = sorted
+    ret out
+end
+
+func _part_size_of(want: int): int:
+    mut size := want
+    if size <= 0: size = S3_PART_DEFAULT end
+    if size < S3_PART_MIN: size = S3_PART_MIN end
+    ret size
+end
+
+// _md5_into - one part's raw MD5, for the multipart ETag calculation.
+func _md5_into(p: void*, n: int, out: void*):
+    crypto.Md5Bytes(p, n, out)
+end
+
+// ------------------------------------------------------------- public API
+
+// S3CreateUpload - begin a multipart upload.
+//
+// From this point the parts are being stored and billed. Every path out of
+// this function's caller must reach S3CompleteUpload or S3AbortUpload.
+pub func S3CreateUpload(cfg: Config, key: str, o: PutOptions): Upload:
+    mut r := NewRequest("POST", key)
+    SetFlag(r, "uploads")
+    _apply_put(r, o)
+    res := Do(cfg, r)
+    if !res.ok: ret _upload_failure(res) end
+    mut ok := false
+    root := xml.DecodeStrict(res.body, ok)
+    id := _xml_text(root, "UploadId")
+    if !ok || id.len() == 0:
+        ret Upload {
+            status = res.status,
+            error = "the upload id could not be read from the answer",
+            code = "MalformedXML"
+        }
+    end
+    ret Upload {
+        ok = true,
+        status = res.status,
+        upload_id = id,
+        key = key,
+        bucket = _xml_text(root, "Bucket")
+    }
+end
+
+// S3UploadPart - send one part.
+//
+// Part numbers run from 1 to 10000 and need not be contiguous, but the
+// completing manifest must list them in ascending order, which S3CompleteUpload
+// takes care of. Every part but the last must be at least five mebibytes; a
+// smaller one is accepted here and refused at completion, which is S3's own
+// behaviour and not worth second-guessing locally.
+pub func S3UploadPart(cfg: Config, u &: Upload, number: int, data: void*,
+    n: int): Result:
+    if !u.ok || u.upload_id.len() == 0:
+        ret Failure("the upload was never created")
+    end
+    if number < 1 || number > S3_PART_MAX_COUNT:
+        ret Failure("a part number must be between 1 and 10000")
+    end
+    mut r := NewRequest("PUT", u.key)
+    SetQueryInt(r, "partNumber", number)
+    SetQuery(r, "uploadId", u.upload_id)
+    SetBody(r, data, n)
+    res := Do(cfg, r)
+    if !res.ok: ret res end
+    etag := Unquote(res.etag)
+    if etag.len() == 0:
+        ret Failure("the service accepted part " + number + " without an ETag")
+    end
+    u.parts.push(PartRef { number = number, etag = etag, size = n as i64 })
+    ret res
+end
+
+// S3UploadPartCopy - build a part out of a range of an object that is already
+// in the store, without the bytes travelling here and back.
+//
+// This is how an object larger than five gigabytes is copied, and how several
+// stored objects are concatenated into one.
+pub func S3UploadPartCopy(cfg: Config, u &: Upload, number: int,
+    src_key: str, o: CopyOptions, start: i64, stop: i64): Result:
+    if !u.ok || u.upload_id.len() == 0:
+        ret Failure("the upload was never created")
+    end
+    mut r := NewRequest("PUT", u.key)
+    SetQueryInt(r, "partNumber", number)
+    SetQuery(r, "uploadId", u.upload_id)
+    SetHeader(r, "x-amz-copy-source", _copy_source(cfg, src_key, o))
+    if start >= 0 && stop >= start:
+        SetHeader(r, "x-amz-copy-source-range",
+            "bytes=" + str.FromInt(start) + "-" + str.FromInt(stop))
+    end
+    res := Do(cfg, r)
+    if !res.ok: ret res end
+    // A part copy reports its ETag in the body, not in a header.
+    etag := Unquote(ResultTag(res.body, "ETag").trim())
+    if etag.len() == 0:
+        ret Failure("the copied part " + number + " came back without an ETag")
+    end
+    mut size := 0 as i64
+    if start >= 0 && stop >= start: size = stop - start + (1 as i64) end
+    u.parts.push(PartRef { number = number, etag = etag, size = size })
+    ret res
+end
+
+// S3CompleteUpload - stitch the parts together and publish the object.
+//
+// The answer can be a failure with a 200 status: S3 holds the connection open
+// while it assembles a large object and writes the outcome into the body once
+// it knows. A caller that only reads the status line will treat a failed
+// assembly as a success.
+pub func S3CompleteUpload(cfg: Config, u: Upload): Result:
+    if !u.ok || u.upload_id.len() == 0:
+        ret Failure("the upload was never created")
+    end
+    if u.parts.len() == 0:
+        ret Failure("an upload cannot be completed with no parts")
+    end
+    mut ordered := _sorted_parts(u)
+    body := _complete_body(ordered)
+    // _sorted_parts built its own vector; the caller still owns u.parts.
+    ordered.parts.free()
+    mut r := NewRequest("POST", u.key)
+    SetQuery(r, "uploadId", u.upload_id)
+    SetText(r, body)
+    SetHeader(r, "Content-Type", "application/xml")
+    res := Do(cfg, r)
+    if !res.ok: ret res end
+    if res.body.find("<Error") >= 0 || ResultErrorCode(res.body).len() > 0:
+        mut bad := res
+        bad.ok = false
+        bad.code = ResultErrorCode(res.body)
+        bad.error = ResultErrorMessage(res.body, res.status)
+        ret bad
+    end
+    mut out := res
+    out.etag = Unquote(ResultTag(res.body, "ETag").trim())
+    ret out
+end
+
+// S3AbortUpload - discard an upload and release the parts it holds.
+//
+// Safe to call on an upload that was already completed or aborted; S3 answers
+// NoSuchUpload, which is the same outcome from where the caller stands.
+pub func S3AbortUpload(cfg: Config, u: Upload): Result:
+    if u.upload_id.len() == 0: ret Failure("the upload was never created") end
+    mut r := NewRequest("DELETE", u.key)
+    SetQuery(r, "uploadId", u.upload_id)
+    ret Do(cfg, r)
+end
+
+// S3ListParts - the parts a service currently holds for an upload. The
+// authority when resuming: a part the client thinks it sent and this does not
+// list did not arrive.
+pub func S3ListParts(cfg: Config, key: str, upload_id: str): PartList:
+    mut r := NewRequest("GET", key)
+    SetQuery(r, "uploadId", upload_id)
+    res := Do(cfg, r)
+    if !res.ok:
+        ret PartList { status = res.status, error = res.error, code = res.code }
+    end
+    mut ok := false
+    root := xml.DecodeStrict(res.body, ok)
+    if !ok:
+        ret PartList {
+            status = res.status,
+            error = "the part listing could not be parsed",
+            code = "MalformedXML"
+        }
+    end
+    mut out := PartList {
+        ok = true,
+        status = res.status,
+        truncated = _xml_bool(root, "IsTruncated"),
+        next_marker = _xml_text(root, "NextPartNumberMarker")
+    }
+    rows := xml.Children(root, "Part")
+    mut i := 0
+    until i < rows.items.len():
+        node := rows.items.get(i)
+        out.items.push(PartRef {
+            number = _xml_text(node, "PartNumber").to_int(),
+            etag = Unquote(_xml_text(node, "ETag")),
+            size = _xml_int(node, "Size")
+        })
+        i += 1
+    end
+    ret out
+end
+
+// S3ListUploads - the multipart uploads a bucket is currently holding open.
+//
+// The only way to find the storage a crashed process left behind. Worth
+// running on a schedule against any bucket that takes large uploads, and worth
+// pairing with a lifecycle rule that aborts them automatically.
+pub func S3ListUploads(cfg: Config, prefix: str): UploadList:
+    mut r := NewRequest("GET", "")
+    SetFlag(r, "uploads")
+    if prefix.len() > 0: SetQuery(r, "prefix", prefix) end
+    res := Do(cfg, r)
+    if !res.ok:
+        ret UploadList { status = res.status, error = res.error, code = res.code }
+    end
+    mut ok := false
+    root := xml.DecodeStrict(res.body, ok)
+    if !ok:
+        ret UploadList {
+            status = res.status,
+            error = "the upload listing could not be parsed",
+            code = "MalformedXML"
+        }
+    end
+    mut out := UploadList {
+        ok = true,
+        status = res.status,
+        truncated = _xml_bool(root, "IsTruncated"),
+        next_key_marker = _xml_text(root, "NextKeyMarker"),
+        next_upload_marker = _xml_text(root, "NextUploadIdMarker")
+    }
+    rows := xml.Children(root, "Upload")
+    mut i := 0
+    until i < rows.items.len():
+        node := rows.items.get(i)
+        mut u := UploadRef {
+            key = _xml_text(node, "Key"),
+            upload_id = _xml_text(node, "UploadId"),
+            initiated = _xml_text(node, "Initiated"),
+            storage_class = _xml_text(node, "StorageClass")
+        }
+        u.initiated_epoch = _iso_epoch(u.initiated)
+        out.items.push(u)
+        i += 1
+    end
+    ret out
+end
+
+// S3PutLarge - store a buffer as a multipart upload.
+//
+// For an object that is already in memory and too large for one request. The
+// upload is aborted on any failure, so a partial transfer does not turn into
+// storage nobody is looking at.
+pub func S3PutLarge(cfg: Config, key: str, data: void*, n: int, part_size: int,
+    o: PutOptions): Result:
+    size := _part_size_of(part_size)
+    if n <= size: ret S3PutBytesWith(cfg, key, data, n, o) end
+    if n / size >= S3_PART_MAX_COUNT:
+        ret Failure("the part size is too small for an object of " + n + " bytes")
+    end
+    mut u := S3CreateUpload(cfg, key, o)
+    if !u.ok:
+        ret Result { status = u.status, error = u.error, code = u.code }
+    end
+    mut sent := 0
+    mut number := 1
+    until sent < n:
+        mut count := n - sent
+        if count > size: count = size end
+        chunk := ((data as i64) + (sent as i64)) as void*
+        res := S3UploadPart(cfg, u, number, chunk, count)
+        if !res.ok:
+            S3AbortUpload(cfg, u)
+            u.parts.free()
+            ret res
+        end
+        sent += count
+        number += 1
+    end
+    done := S3CompleteUpload(cfg, u)
+    if !done.ok: S3AbortUpload(cfg, u) end
+    u.parts.free()
+    ret done
+end
+
+// S3CopyLarge - copy an object of any size, by copying ranges of it into the
+// parts of a new upload. The bytes never leave the service.
+pub func S3CopyLarge(cfg: Config, src_key: str, dst_key: str, part_size: int,
+    o: CopyOptions): Result:
+    mut src_cfg := cfg
+    if o.source_bucket.len() > 0: src_cfg.bucket = o.source_bucket end
+    info := S3Stat(src_cfg, src_key)
+    if !info.ok:
+        ret Result { status = info.status, error = info.error, code = info.code }
+    end
+    size := _part_size_of(part_size) as i64
+    if info.size <= size: ret S3CopyWith(cfg, src_key, dst_key, o) end
+    mut u := S3CreateUpload(cfg, dst_key, PutOptions {
+        content_type = o.content_type,
+        cache_control = o.cache_control,
+        storage_class = o.storage_class,
+        acl = o.acl,
+        sse = o.sse,
+        meta = o.meta
+    })
+    if !u.ok:
+        ret Result { status = u.status, error = u.error, code = u.code }
+    end
+    mut at := 0 as i64
+    mut number := 1
+    until at < info.size:
+        mut stop := at + size - (1 as i64)
+        if stop >= info.size: stop = info.size - (1 as i64) end
+        res := S3UploadPartCopy(cfg, u, number, src_key, o, at, stop)
+        if !res.ok:
+            S3AbortUpload(cfg, u)
+            u.parts.free()
+            ret res
+        end
+        at = stop + (1 as i64)
+        number += 1
+    end
+    done := S3CompleteUpload(cfg, u)
+    if !done.ok: S3AbortUpload(cfg, u) end
+    u.parts.free()
+    ret done
+end
+
+// S3MultipartEtag - the ETag S3 will report for a buffer uploaded in parts of
+// a given size.
+//
+// A multipart ETag is not a hash of the object: it is the MD5 of the
+// concatenated part MD5s, followed by a dash and the part count. That is why
+// two identical objects uploaded with different part sizes have different
+// ETags, and why comparing an ETag to a local MD5 fails for anything large.
+// Computing the value the same way S3 will is the only way to verify a
+// multipart upload from this side.
+pub func S3MultipartEtag(data: void*, n: int, part_size: int): str:
+    size := _part_size_of(part_size)
+    if n <= size: ret S3ContentHashMd5(data, n) end
+    count := (n + size - 1) / size
+    digests := mem.Allocate((count * _S3_MD5_SIZE) as u64)
+    if digests == null: ret "" end
+    defer mem.Free(digests)
+    mut i := 0
+    until i < count:
+        off := i * size
+        mut take := n - off
+        if take > size: take = size end
+        _md5_into(((data as i64) + (off as i64)) as void*, take,
+            ((digests as i64) + ((i * _S3_MD5_SIZE) as i64)) as void*)
+        i += 1
+    end
+    outer := mem.Allocate(_S3_MD5_SIZE as u64)
+    if outer == null: ret "" end
+    defer mem.Free(outer)
+    _md5_into(digests, count * _S3_MD5_SIZE, outer)
+    ret _hex(outer, _S3_MD5_SIZE) + "-" + count
+end
+
+// S3ContentHashMd5 - the hex MD5 of a buffer, which is the ETag of any object
+// stored in a single request.
+pub func S3ContentHashMd5(data: void*, n: int): str:
+    digest := mem.Allocate(_S3_MD5_SIZE as u64)
+    if digest == null: ret "" end
+    defer mem.Free(digest)
+    _md5_into(data, n, digest)
+    ret _hex(digest, _S3_MD5_SIZE)
+end
+
+// PartCount - the parts in a list.
+pub func PartCount(p: PartList): int: ret p.items.len() end
+
+pub func PartAt(p: PartList, i: int): PartRef:
+    if i < 0 || i >= p.items.len(): ret PartRef {} end
+    ret p.items.get(i)
+end
+
+pub func UploadCount(u: UploadList): int: ret u.items.len() end
+
+pub func UploadAt(u: UploadList, i: int): UploadRef:
+    if i < 0 || i >= u.items.len(): ret UploadRef {} end
+    ret u.items.get(i)
+end
+
+// UploadParts - how many parts have been accepted so far.
+pub func UploadParts(u: Upload): int: ret u.parts.len() end
+
+// UploadBytes - how many bytes those parts account for.
+pub func UploadBytes(u: Upload): i64:
+    mut total := 0 as i64
+    mut i := 0
+    until i < u.parts.len():
+        total = total + u.parts.get(i).size
+        i += 1
+    end
+    ret total
+end
+
+pub func UploadFreeParts(u &: Upload): u.parts.free() end

@@ -382,7 +382,29 @@ end
 // ll_function - the function frame. Body statements come from stage B's
 // lv_block_top; everything else (header, spills, this-slot, global inits,
 // implicit return, builder nesting) is stage A.
+// Match-expression state is per function. `ret` inside a match arm does not
+// return: lower_return stores to the match's result slot and branches to its
+// merge block. A function emitted ON DEMAND from inside such an arm - by
+// ensure_fn for a call, or by touching a package for the first time -
+// inherited that state and ended with `br label %L0_mend` in a function that
+// has neither that block nor a `ret`, so LLVM rejected the whole module with
+// "use of undefined value '%L0_mend'". Every caller funnels through here, so
+// clearing it here covers the on-demand paths as well as the top-level walk.
+// emit_globals already guards its own nested emission the same way.
 func emit_function(v &: Lv, s &: sm.Sema, a &: at.Ast, fn: int, owner: int):
+    saved_mres := v.match_result_ptr
+    saved_mts := v.match_result_ts
+    saved_mmerge := v.match_merge_block
+    v.match_result_ptr = ""
+    v.match_result_ts = ""
+    v.match_merge_block = ""
+    emit_function_body(v, s, a, fn, owner)
+    v.match_result_ptr = saved_mres
+    v.match_result_ts = saved_mts
+    v.match_merge_block = saved_mmerge
+end
+
+func emit_function_body(v &: Lv, s &: sm.Sema, a &: at.Ast, fn: int, owner: int):
     fnode := at.Get(a, fn)
     // A bodyless `extern func` has no definition to emit - but it does need a
     // `declare`, and this is the one place every call site funnels through

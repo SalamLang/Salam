@@ -16,10 +16,16 @@ RUN set -eu; \
     fi; \
     VERSION="${TAG#v}"; \
     echo "resolved Salam release: ${TAG}"; \
-    curl -fL --retry 3 --retry-delay 2 -o salam.zip \
-      "https://github.com/SalamLang/Salam/releases/download/${TAG}/salam-${VERSION}-linux.zip" \
-    && unzip -q salam.zip \
-    && mv salam-linux /opt/salam \
+    for SLUG in linux-x86_64 linux; do \
+      if curl -fL --retry 3 --retry-delay 2 -o salam.zip \
+           "https://github.com/SalamLang/Salam/releases/download/${TAG}/salam-${VERSION}-${SLUG}.zip"; then \
+        break; \
+      fi; \
+      rm -f salam.zip; \
+    done; \
+    [ -s salam.zip ] || { echo "no linux asset on ${TAG}" >&2; exit 1; }; \
+    unzip -q salam.zip \
+    && mv "salam-${SLUG}" /opt/salam \
     && rm -f /opt/salam/RUN-ME.txt salam.zip \
     && chmod +x /opt/salam/salam \
     && printf '%s' "${VERSION}" > /opt/salam/VERSION

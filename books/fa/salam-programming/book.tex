@@ -146,9 +146,6 @@ Scale = 0.85
 % کد اصلیِ فایل، فقط با پرچمِ رنگ.
 % ---------------------------------------------------------------------
 \makeatletter
-\newif\ifsalamfa@ascii
-\def\salamfa@asciiloop#1{\ifx#1\relax\else\ifnum`#1>127 \salamfa@asciifalse\fi\expandafter\salamfa@asciiloop\fi}
-
 \newif\ifsalamfa@lineopen       % آیا ناحیه‌ی اسکیِ رها (هنوز چاپ‌نشده) باز است؟
 \newcommand{\salamfa@lineacc}{}% محتوای رنگ‌شده‌ی همان ناحیه، هنوز بدون \lr بیرونی
 
@@ -161,20 +158,66 @@ Scale = 0.85
 % به همین دلیل با یک ثبات توکن (\toks@) محتوا را فقط یک لایه باز می‌کنیم و
 % خودِ محتوا دست‌نخورده می‌ماند؛ \the\toks@ درون edef هرگز دوباره باز
 % نمی‌شود - همان ترفندی که \g@addto@macro در هسته‌ی لاتک به کار می‌برد.
+% نکته‌ی ظریفِ آخر: \lr (بستهٔ bidi) یک embedding چپ‌به‌راست می‌سازد، نه
+% یک override؛ درونِ یک embedding قاعده‌های حلِ نوعِ ضعیفِ یونیکد هنوز
+% اجرا می‌شوند، و برای الگوی «عدد، یک عملگرِ تنها، عددِ دیگر» (مثلاً
+% «۱ + ۲» با فاصله دو طرفِ «+») bidi آن سه‌تکه را نسبت به بافتِ بیرونی
+% وارونه می‌نشاند. راه‌حل، نویسه‌های override یونیکد است: LRO
+% (U+202D) پیش و PDF (U+202C) پس از محتوا. تنها با override به‌تنهایی
+% حروف‌چینیِ پیوستنِ حروفِ فارسیِ مجاور در ادامه‌ی خط خراب می‌شد - چون
+% \lr خودش محدوده‌ی فونتِ \latincodefont را در یک گروه می‌بست و اینجا،
+% وقتی \lr را برداشتیم، آن گروه هم رفت و \latincodefont بدونِ مرز به
+% بقیه‌ی خط نشت می‌کرد. برای همین کل محتوا - override و تعویضِ فونت و
+% همه - داخل یک {...} صریح گذاشته شده تا هم override درست کار کند و هم
+% فونت به بیرون درز نکند.
+% اما خودِ override یک باگِ تازه باز می‌کند: توکنی مثل «0.3» (رقم، نقطه،
+% رقم، بدونِ هیچ پرانتزی) زیرِ override دو تکه‌اش («0» و «3») جا به جا
+% می‌شوند («0.30000000000000004» می‌شود «30000000000000004.0»؛
+% «۷.۰ / ۲.۰» می‌شود «۰.۷ / ۰.۲»). \lr (که خودش یک embedding معمولی است،
+% نه override) این مورد را درست چاپ می‌کند. اما \lr به نوبه‌ی خودش
+% فراخوانیِ تودرتو («بزرگتر(...), ۱۹)») را خراب می‌کند: وقتی نیمه‌ی بازِ
+% یک پرانتز در توکنِ خامِ فارسیِ قبل از ادغام نشسته و نیمه‌ی بسته‌اش
+% («), ۱۹)») تویِ ناحیه‌ی ادغام‌شده است، یعنی «عمقِ پرانتزِ» این ناحیه
+% صفر نیست (بسته‌ها بیشتر از بازها هستند) - دقیقاً همان حالتی که override
+% لازم دارد. برعکس، آرایه‌ای مثلِ «[17, 15, 19, 12, 20]» که کلِ پرانتزش
+% (این‌جا کروشه) خودش تویِ همان یک ناحیه جفت می‌شود، عمقش صفر است و مثل
+% حالتِ بی‌پرانتز با \lr درست چاپ می‌شود؛ زیرِ override برعکس خراب
+% می‌شد. پس معیار «عمقِ خالصِ پرانتز/کروشه» است، نه صرفِ وجودِ آن‌ها:
+% اگر بازها و بسته‌های ناحیه با هم برابر نباشند (عمق ≠ صفر) از override
+% استفاده کن؛ وگرنه (چه بدونِ هیچ پرانتزی، چه با پرانتزِ کاملاً جفت‌شده
+% در همان ناحیه) از \lr ساده.
 \newcommand{\salamfa@lineflush}{%
   \ifsalamfa@lineopen
     \toks@\expandafter{\salamfa@lineacc}%
-    \edef\salamfa@linetmp{\noexpand\lr{\noexpand\latincodefont{}\the\toks@}}%
+    \ifnum\salamfa@brkdepth=\z@
+      \edef\salamfa@linetmp{\noexpand\lr{\noexpand\latincodefont \the\toks@}}%
+    \else
+      \edef\salamfa@linetmp{{‭\noexpand\latincodefont \the\toks@‬}}%
+    \fi
     \expandafter\salamfa@gadd\expandafter{\salamfa@linetmp}%
     \global\let\salamfa@lineacc\@empty
     \global\salamfa@lineopenfalse
+    \global\salamfa@brkdepth\z@
   \fi}
 
 % فاصله‌ی میان‌واژه: اگر وسط یک ناحیه‌ی اسکیِ باز باشیم به همان انباره
 % می‌رود (تا ناحیه پاره نشود)؛ وگرنه مثل قبل مستقیم روی خروجی می‌رود.
+% نکته‌ی مهم: در یک embedding چپ‌به‌راستِ تویِ متنِ راست‌به‌چپ، لبه‌ی
+% «آخرِ» محتوا (همان‌جا که این فاصله بعد از عددی مثل «18» می‌نشیند) بصریاً
+% کنارِ چیزی می‌افتد که در ترتیبِ منطقی قبل از آن embedding آمده، نه بعدِ
+% آن؛ همان‌طور که در یک جمله‌ی فارسیِ عادی، خودِ رقم‌های یک عدد
+% (بدونِ \lr هم) چپ‌به‌راست خوانده می‌شوند اما «عدد» به‌عنوانِ یک واحد در
+% جایگاهِ منطقی‌اش می‌نشیند. پس فاصله‌ای که قرار است بینِ «18» و کلمه‌ی
+% فارسیِ بعدی («سال») دیده شود را نباید تویِ همان \lr، به‌عنوانِ آخرین
+% چیز، جا داد - آن‌جا کنارِ چیزی می‌نشیند که قبل از عدد بوده، و «سال»
+% بی‌فاصله به «18» می‌چسبد. راه‌حل: چنین فاصله‌ای را «معلق» نگه می‌داریم؛
+% اگر توکنِ اسکیِ دیگری در ادامه آمد، همان‌جا (وسطِ ناحیه) اضافه‌اش
+% می‌کنیم؛ اگر توکنِ غیرقابل‌ادغام (فارسی) آمد، ناحیه را می‌بندیم و
+% فاصله را بیرون از \lr، به‌شکلِ معمولی، پیش از آن توکن می‌گذاریم.
+\newif\ifsalamfa@spacepending
 \newcommand{\salamfa@feedspace}{%
   \ifsalamfa@lineopen
-    \g@addto@macro\salamfa@lineacc{\space}%
+    \salamfa@spacependingtrue
   \else
     \salamfa@gadd{\space}%
   \fi}
@@ -183,14 +226,66 @@ Scale = 0.85
 % انباره‌ی سطحِ خط می‌رود (تا با توکن‌های اسکیِ همسایه در یک \lr ادغام
 % شود)؛ وگرنه (فارسیِ خالص یا مخلوط) دست‌نخورده و مستقیم صادر می‌شود،
 % بعد از آن‌که هر ناحیه‌ی اسکیِ رهاشده را ببندد.
+% علامت‌ها و عملگرهای اسکی همیشه باید ادغام شوند، اما رقم‌های فارسی هم
+% (که این کتاب حالا در کد به کار می‌برد) باید همراهشان ادغام شوند - وگرنه
+% توکنی مثل «۲۵),» چون دیگر «تمام‌اسکی» نیست، از مسیر ادغام بیرون می‌افتد و
+% همان مشکلِ ترتیب دوباره برمی‌گردد. پس معیار «قابل‌ادغام» می‌شود: هیچ
+% حرفِ فارسی ندارد (رقمِ فارسی اشکالی ندارد). فقط برای چاپِ درستِ آن رقمِ
+% فارسی، آن تکه باید با قلمِ کدِ فارسی نوشته شود، نه لاتین.
+\newif\ifsalamfa@mergeable
+\newif\ifsalamfa@hasfadigit
+\def\salamfa@mergeloop#1{%
+  \ifx#1\relax\else
+    \ifnum`#1>127
+      \ifnum`#1<1776 \salamfa@mergeablefalse
+      \else\ifnum`#1>1785 \salamfa@mergeablefalse
+      \else \salamfa@hasfadigittrue
+      \fi\fi
+    \fi
+    \expandafter\salamfa@mergeloop
+  \fi}
+% \salamfa@brkdepth: عمقِ خالصِ پرانتز/کروشه‌ی ناحیه‌ی ادغام‌شده‌ی جاری
+% (بازها منهای بسته‌ها)؛ برای انتخاب override در برابر \lr در
+% \salamfa@lineflush - نگاه کنید به توضیح آن‌جا.
+\newcount\salamfa@brkdepth
+\def\salamfa@brkloop#1{%
+  \ifx#1\relax\else
+    \ifnum`#1=40 \advance\salamfa@brkdepth\@ne\fi
+    \ifnum`#1=91 \advance\salamfa@brkdepth\@ne\fi
+    \ifnum`#1=41 \advance\salamfa@brkdepth\m@ne\fi
+    \ifnum`#1=93 \advance\salamfa@brkdepth\m@ne\fi
+    \expandafter\salamfa@brkloop
+  \fi}
+% توکنِ مخلوطِ فارسی+اسکی که پرانتزِ جفت‌نشده دارد (مثل «بزرگتر(۱۲,»)
+% دست‌نخورده و خام صادر می‌شود؛ اما همین پرانتزِ تنها، چون جفتش («)») در
+% یک ناحیه‌ی جداگانه (ادغام‌شده) نشسته، به‌جای «(» آینه‌ای («)») چاپ
+% می‌شود. راه‌حل: پیش از صدور، «(» و «)» را در متنِ خام جابه‌جا می‌کنیم؛
+% وقتی خودِ bidi دوباره آینه‌اش می‌کند، شکلِ درست («(») از آب درمی‌آید.
 \newcommand{\salamfa@tokC}[2]{%
-  \salamfa@asciitrue\salamfa@asciiloop#2\relax
-  \ifsalamfa@ascii
+  \salamfa@mergeabletrue\salamfa@hasfadigitfalse\salamfa@mergeloop#2\relax
+  \ifsalamfa@mergeable
+    \salamfa@brkloop#2\relax
+    \ifsalamfa@spacepending
+      \g@addto@macro\salamfa@lineacc{\space}%
+      \salamfa@spacependingfalse
+    \fi
     \global\salamfa@lineopentrue
-    \g@addto@macro\salamfa@lineacc{#1{#2}}%
+    \ifsalamfa@hasfadigit
+      \g@addto@macro\salamfa@lineacc{#1{{\salamcodefont #2}}}%
+    \else
+      \g@addto@macro\salamfa@lineacc{#1{#2}}%
+    \fi
   \else
     \salamfa@lineflush
-    \salamfa@gadd{#1{#2}}%
+    \ifsalamfa@spacepending
+      \salamfa@gadd{\space}%
+      \salamfa@spacependingfalse
+    \fi
+    \StrSubstitute{#2}{(}{ZzLPARzZ}[\salamfa@pmA]%
+    \StrSubstitute{\salamfa@pmA}{)}{(}[\salamfa@pmB]%
+    \StrSubstitute{\salamfa@pmB}{ZzLPARzZ}{)}[\salamfa@pmC]%
+    \edef\salamfa@tokCtmp{\noexpand#1{\salamfa@pmC}}%
+    \expandafter\salamfa@gadd\expandafter{\salamfa@tokCtmp}%
   \fi}
 \newcommand{\salamfa@id}[1]{#1}
 \newcommand{\salamfaNM}[1]{\textcolor{nm}{#1}}
@@ -239,6 +334,8 @@ Scale = 0.85
   \salamfa@lead=0
   \salamfa@linecmtfalse \salamfa@instrfalse  % these never span lines
   \global\salamfa@lineopenfalse \global\let\salamfa@lineacc\@empty
+  \global\salamfa@spacependingfalse
+  \global\salamfa@brkdepth\z@
   \ifnum\salamfa@nlines>\@ne \salamfa@gadd{\\}\fi
   \salamfa@gadd{\strut}% keep blank lines non-empty (avoids consecutive \\)
   \edef\salamfa@line{\detokenize{#1}\space\salamfa@end\space}%

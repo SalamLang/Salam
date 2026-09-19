@@ -866,7 +866,41 @@ func type_is_byval_agg(s &: sm.Sema, t: int): bool:
         ret false
     end
     k := sm.TypeAt(s, t).kind
-    ret k == sm.TY_STRUCT || k == sm.TY_VEC || k == sm.TY_DYN || k == sm.TY_SLICE || k == sm.TY_VARIANT
+    ret k == sm.TY_STRUCT || k == sm.TY_VEC || k == sm.TY_DYN || k == sm.TY_SLICE || k == sm.TY_VARIANT || k == sm.TY_ARRAY
+end
+
+// A fixed array returned by value needs the caller's storage passed in, the
+// same as a struct sret return, but the C declarator for "pointer to array"
+// puts the star and the name inside parens ahead of the dims - cg_ctype's
+// plain "append a star" only works for scalars and structs, so this is its
+// own helper rather than a case inside cg_decl.
+func cg_array_ret_decl(ts: str, name: str): str:
+    mut base := ""
+    mut ptr := false
+    mut dims := Vector {} as Vector<int>
+    defer dims.free()
+    mut eptr := 0
+    mut pdepth := 0
+    parse_typestr_ex(ts, 96, base, ptr, dims, eptr, pdepth)
+    mut found := false
+    mut bc := base_ctype(base, found)
+    if !found:
+        bc = cg_cident(base)
+    end
+    until eptr > 0:
+        bc = bc + "*"
+        eptr -= 1
+    end
+    // `name` is a compiler-generated C identifier already (`__ret`), not
+    // a Salam name - cg_cident would double its leading underscores.
+    mut b := co.SbNew()
+    co.SbPuts(b, bc + " (*" + name + ")")
+    repeat dims.len() with i:
+        co.SbPuts(b, "[" + dims.get(i) + "]")
+    end
+    r := co.SbCstr(b)
+    co.SbFree(b)
+    ret r
 end
 
 func array_size_of(ts: str): i64:

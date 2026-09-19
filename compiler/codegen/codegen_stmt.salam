@@ -145,7 +145,11 @@ func cg_is_array_place(a &: at.Ast, n: int): bool:
         inner := at.Get(a, n).a
         ret inner != 0 && at.KindOf(a, inner) != at.AST_ARRAY_LIT && cg_is_array_place(a, inner)
     end
-    ret k == at.AST_IDENTIFIER || k == at.AST_MEMBER || k == at.AST_INDEX || k == at.AST_THIS
+    // A call to a function that returns a fixed array is sret now (see
+    // type_is_byval_agg/call_sret): its value is a fresh local temp that
+    // decays to a pointer exactly like any other array expression, so it
+    // is as much a place to memcpy from as a local or a field is.
+    ret k == at.AST_IDENTIFIER || k == at.AST_MEMBER || k == at.AST_INDEX || k == at.AST_THIS || k == at.AST_CALL
 end
 
 func cg_vardecl_inline(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
@@ -395,21 +399,33 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
         if nn.a != 0 && g.fn_defers.len() > 0:
             expr := cg_expr_value(g, s, a, nn.a)
             r_ts := at.Get(a, nn.a).type_str
+            r_act := cg_array_ctype(r_ts)
             g.tmpn += 1
             t := g.tmpn
             tmp := "__retv" + t
+            // An array temp still holds the pointer it decayed to (its own
+            // declarator would need the same pointer-to-array trick as the
+            // sret param); salam_arrcpy at the end reads through that
+            // pointer, so a plain cg_ctype pointer temp is fine here.
             cg_line(
                 g, cg_ctype(str.Len(r_ts) > 0 ? r_ts : "int32_t") + " " + tmp + " = (" + expr + ");"
             )
             cg_emit_defers(g, s, a)
-            if g.cur_sret:
+            if g.cur_sret && str.Len(r_act) > 0:
+                cg_line(g, "salam_arrcpy(*__ret, " + tmp + ", sizeof(" + r_act + ")); return;")
+            else g.cur_sret:
                 cg_line(g, "*__ret = " + tmp + "; return;")
             else:
                 cg_line(g, "return " + tmp + ";")
             end
         else nn.a != 0 && g.cur_sret:
             cg_emit_defers(g, s, a)
-            cg_line(g, "*__ret = (" + cg_expr_value(g, s, a, nn.a) + "); return;")
+            ret_act := cg_array_ctype(at.Get(a, nn.a).type_str)
+            if str.Len(ret_act) > 0:
+                cg_line(g, "salam_arrcpy(*__ret, " + cg_expr_value(g, s, a, nn.a) + ", sizeof(" + ret_act + ")); return;")
+            else:
+                cg_line(g, "*__ret = (" + cg_expr_value(g, s, a, nn.a) + "); return;")
+            end
         else nn.a != 0:
             cg_emit_defers(g, s, a)
             cg_line(g, "return " + cg_expr_value(g, s, a, nn.a) + ";")

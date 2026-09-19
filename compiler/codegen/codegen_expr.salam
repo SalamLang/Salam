@@ -144,6 +144,15 @@ func cg_cescape(sv: str): str:
         if c == 0:
             break
         end
+        // A `?` right after another `?` is written `\?`, so that "??/",
+        // "??=" and the other seven trigraphs never appear in the C text.
+        // Trigraphs are off by default, but gcc and clang still warn about
+        // every one they ignore (-Wtrigraphs is part of -Wall).
+        if c == 63 && i > 0 && byte_at(sv, i - 1) == 63:
+            co.SbPuts(b, "\\?")
+            i += 1
+            continue
+        end
         if c == 10:
             co.SbPuts(b, "\\n")
         else c == 9:
@@ -700,7 +709,18 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
             ret co.U64Toa(u) + suf
         end
         if nn.op == tok.TK_FLOAT:
-            buf := co.Format1("%.17g", co.ArgFloat(nn.value_float))
+            fv := nn.value_float
+            // %.17g spells these "inf" and "nan", which C has no literal for
+            // (`inf` is an undeclared identifier). They reach here from
+            // constant folding - `1e308 * 10.0`, `0.0 / 0.0` - and the
+            // division forms are what every C compiler accepts silently.
+            if fv != fv:
+                ret "(0.0 / 0.0)"
+            end
+            if fv * 0.5 == fv && fv != 0.0:
+                ret fv > 0.0 ? "(1.0 / 0.0)" : "(-1.0 / 0.0)"
+            end
+            buf := co.Format1("%.17g", co.ArgFloat(fv))
             nb := str.Len(buf)
             mut hasmark := false
             mut bi := 0
@@ -865,10 +885,19 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
             end
             eaq := cg_expr(g, s, a, nn.a)
             ebq := cg_expr(g, s, a, nn.b)
-            // Shifts keep the left operand's type; the right operand's value
-            // is used as-is.
+            // Shifts keep the left operand's type. A constant count has
+            // already been checked against the width (check_binary); a
+            // computed one is reduced modulo the width here, because a C
+            // shift by the width or more is undefined - gcc folds
+            // `x << 33` on an int32_t to whatever it likes. On x86 and arm
+            // the hardware masks the count the same way, so the `&` is
+            // free for the 32- and 64-bit types.
             if shift:
-                ret "((" + cty + ")((" + aty + ")(" + eaq + ") " + cg_op(nn.op) + " (" + ebq + ")))"
+                mut ebs := "(" + ebq + ")"
+                if !(at.KindOf(a, nn.b) == at.AST_LITERAL && bn.op == tok.TK_INT):
+                    ebs = "((" + ebq + ") & " + co.I64Toa((cg_int_ts_bits(cts) - 1) as i64) + ")"
+                end
+                ret "((" + cty + ")((" + aty + ")(" + eaq + ") " + cg_op(nn.op) + " " + ebs + "))"
             end
             if cg_op_is_cmp(nn.op):
                 ret "((" + cty + ")(" + eaq + ") " + cg_op(nn.op) + " (" + cty + ")(" + ebq + "))"

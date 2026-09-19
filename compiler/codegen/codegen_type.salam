@@ -144,6 +144,31 @@ func type_is_callable(ts: str): bool:
     ret str.StartsWith(ts, "func(") || str.StartsWith(ts, "externfunc(")
 end
 
+// A pointer to a callable, "(func(i32) i32)*" - the parenthesised spelling
+// type_to_string uses so the trailing stars cannot be read as part of the
+// return type. Every callable is a void* in C, so its pointer is void**,
+// one more star per level. "" when `ts` is not that shape.
+func cg_fnptr_ctype(ts: str): str:
+    if !str.StartsWith(ts, "(func(") && !str.StartsWith(ts, "(externfunc("):
+        ret ""
+    end
+    mut n := str.Len(ts)
+    mut stars := 0
+    until n > 0 && byte_at(ts, n - 1) == 42:
+        stars += 1
+        n -= 1
+    end
+    if stars == 0 || byte_at(ts, n - 1) != 41:
+        ret ""
+    end
+    mut spelled := "void*"
+    until stars > 0:
+        spelled = spelled + "*"
+        stars -= 1
+    end
+    ret spelled
+end
+
 // parse_typestr_ex - cap mirrors the caller's base[] buffer size, plus the
 // star count that belongs to an array's ELEMENT type: "Edge*[6]" yields
 // base "Edge", dims {6}, ptr false, eptr 1.
@@ -470,6 +495,10 @@ func cg_ctype(ts: str): str:
     if type_is_callable(ts):
         ret "void*"
     end
+    fp := cg_fnptr_ctype(ts)
+    if str.Len(fp) > 0:
+        ret fp
+    end
     mut base := ""
     mut ptr := false
     mut dims := Vector {} as Vector<int>
@@ -501,7 +530,7 @@ end
 // braces. "" for anything that is not a plain array of a nameable element
 // type, so callers can fall back to the bare brace form.
 func cg_array_ctype(ts: str): str:
-    if str.Len(ts) == 0 || cg_is_slice_ts(ts) || str.StartsWith(ts, "Variant<") || str.StartsWith(ts, "dyn ") || str.StartsWith(ts, "func("):
+    if str.Len(ts) == 0 || cg_is_slice_ts(ts) || str.StartsWith(ts, "Variant<") || str.StartsWith(ts, "dyn ") || str.StartsWith(ts, "func(") || str.StartsWith(ts, "("):
         ret ""
     end
     mut base := ""
@@ -590,6 +619,10 @@ func cg_decl_cn(ts: str, name: str): str:
     end
     if str.StartsWith(ts, "func(") || str.StartsWith(ts, "externfunc("):
         ret "void* " + name
+    end
+    fp := cg_fnptr_ctype(ts)
+    if str.Len(fp) > 0:
+        ret fp + " " + name
     end
     mut base := ""
     mut ptr := false
@@ -833,7 +866,41 @@ func type_is_byval_agg(s &: sm.Sema, t: int): bool:
         ret false
     end
     k := sm.TypeAt(s, t).kind
-    ret k == sm.TY_STRUCT || k == sm.TY_VEC || k == sm.TY_DYN || k == sm.TY_SLICE || k == sm.TY_VARIANT
+    ret k == sm.TY_STRUCT || k == sm.TY_VEC || k == sm.TY_DYN || k == sm.TY_SLICE || k == sm.TY_VARIANT || k == sm.TY_ARRAY
+end
+
+// A fixed array returned by value needs the caller's storage passed in, the
+// same as a struct sret return, but the C declarator for "pointer to array"
+// puts the star and the name inside parens ahead of the dims - cg_ctype's
+// plain "append a star" only works for scalars and structs, so this is its
+// own helper rather than a case inside cg_decl.
+func cg_array_ret_decl(ts: str, name: str): str:
+    mut base := ""
+    mut ptr := false
+    mut dims := Vector {} as Vector<int>
+    defer dims.free()
+    mut eptr := 0
+    mut pdepth := 0
+    parse_typestr_ex(ts, 96, base, ptr, dims, eptr, pdepth)
+    mut found := false
+    mut bc := base_ctype(base, found)
+    if !found:
+        bc = cg_cident(base)
+    end
+    until eptr > 0:
+        bc = bc + "*"
+        eptr -= 1
+    end
+    // `name` is a compiler-generated C identifier already (`__ret`), not
+    // a Salam name - cg_cident would double its leading underscores.
+    mut b := co.SbNew()
+    co.SbPuts(b, bc + " (*" + name + ")")
+    repeat dims.len() with i:
+        co.SbPuts(b, "[" + dims.get(i) + "]")
+    end
+    r := co.SbCstr(b)
+    co.SbFree(b)
+    ret r
 end
 
 func array_size_of(ts: str): i64:

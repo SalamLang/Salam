@@ -105,6 +105,12 @@ func func_signature(
         end
         if p.is_ref:
             co.SbPuts(b, cg_ctype(pts) + "* " + cg_cident(p.name))
+        else str.Len(cg_array_ctype(pts)) > 0:
+            // An array parameter is a value in Salam and a pointer in C.
+            // The caller's array arrives under a spare name and the body
+            // works on its own copy (see cg_array_param_copies), the way
+            // the LLVM backend passes the aggregate itself.
+            co.SbPuts(b, cg_decl(pts, p.name + "__in"))
         else:
             co.SbPuts(b, cg_decl(pts, p.name))
         end
@@ -114,7 +120,12 @@ func func_signature(
         if !first:
             co.SbPuts(b, ", ")
         end
-        co.SbPuts(b, cg_ctype(sm.ToString(s, sig.ret_type)) + "* __ret")
+        rets_ts := sm.ToString(s, sig.ret_type)
+        if str.Len(cg_array_ctype(rets_ts)) > 0:
+            co.SbPuts(b, cg_array_ret_decl(rets_ts, "__ret"))
+        else:
+            co.SbPuts(b, cg_ctype(rets_ts) + "* __ret")
+        end
         first = false
     end
     if first && owner == 0:
@@ -124,6 +135,34 @@ func func_signature(
     r := co.SbCstr(b)
     co.SbFree(b)
     ret r
+end
+
+// The prologue lines that give each by-value array parameter its own copy:
+// `T name[N]; memcpy(name, name__in, sizeof(T[N]));`. Without them a C
+// array parameter decays to the caller's storage and every write in the
+// callee showed through, which the LLVM backend (and the language) never
+// allowed.
+func cg_array_param_copies(g &: Cg, s &: sm.Sema, a &: at.Ast, fnid: int, sigid: int):
+    fn := at.Get(a, fnid)
+    sig := sm.SigAt(s, sigid)
+    repeat fn.list.len() with i:
+        if i >= sig.params.len():
+            break
+        end
+        p := at.Get(a, fn.list.get(i))
+        if p.is_ref:
+            continue
+        end
+        pts := sm.ToString(s, sig.params.get(i))
+        act := cg_array_ctype(pts)
+        if str.Len(act) == 0:
+            continue
+        end
+        cg_line(g, cg_decl(pts, p.name) + ";")
+        cg_line(
+            g, "salam_arrcpy(" + cg_cident(p.name) + ", " + cg_cident(p.name + "__in") + ", sizeof(" + act + "));"
+        )
+    end
 end
 
 func cg_extern_proto(s &: sm.Sema, a &: at.Ast, fnid: int, sigid: int): str:
@@ -274,6 +313,7 @@ func cg_function(g &: Cg, s &: sm.Sema, a &: at.Ast, fnid: int, owner: int):
         // of them, every imported module's. See emit_module_init.
         cg_line(g, cg_module_init_name(g.module) + "();")
     end
+    cg_array_param_copies(g, s, a, fnid, sig)
     if fn.a != 0:
         cg_block(g, s, a, fn.a)
     end

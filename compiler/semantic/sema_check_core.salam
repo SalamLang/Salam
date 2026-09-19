@@ -515,6 +515,19 @@ func sema_check_expr(s &: Sema, a &: at.Ast, nid: int): int:
         end
         av := ty_at(s, arr)
         if av.kind == TY_ARRAY:
+            // A literal index into a fixed array is checked here rather
+            // than left to read past the end at run time.
+            ib := at.Get(a, n5.b)
+            if ib.kind == at.AST_LITERAL && ib.value_kind == tok.TV_INT && av.length > (0 as i64):
+                iv := ib.value_int as i64
+                if iv < (0 as i64) || iv >= av.length:
+                    serr(
+                        s, 21, sp, co.Format2(
+                            i18.Tr("index %d is out of bounds for an array of length %d"), co.ArgInt(iv), co.ArgInt(av.length)
+                        )
+                    )
+                end
+            end
             ret sema_decorate(s, a, nid, av.elem)
         end
         if av.kind == TY_SLICE:
@@ -560,6 +573,24 @@ func sema_check_expr(s &: Sema, a &: at.Ast, nid: int): int:
         end
         bk := ty_at(s, base).kind
         if bk == TY_ARRAY || bk == TY_SLICE:
+            // A slice is a writable view: whoever receives `a[2:]` may
+            // store through it, so the array it was taken from counts as
+            // mutated here. Without this a `mut` array that is only ever
+            // written through a slice handed to a callee tripped E069.
+            mut root := n6.a
+            until root != 0 && (at.KindOf(a, root) == at.AST_MEMBER || at.KindOf(a, root) == at.AST_INDEX || at.KindOf(a, root) == at.AST_SLICE):
+                root = at.Get(a, root).a
+            end
+            if root != 0 && at.KindOf(a, root) == at.AST_IDENTIFIER:
+                rsym := scope_lookup(s, s.cur, at.Get(a, root).name)
+                if rsym != 0:
+                    mut rv := sym_at(s, rsym)
+                    if rv.is_mut || rv.is_ref:
+                        rv.mutated = true
+                        sym_put(s, rsym, rv)
+                    end
+                end
+            end
             ret sema_decorate(s, a, nid, type_slice(s, ty_at(s, base).elem))
         end
         if !type_is_error(s, base):

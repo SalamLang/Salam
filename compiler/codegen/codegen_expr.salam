@@ -429,6 +429,11 @@ func cg_struct_lit(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
     mut first := true
     mut post_names := Vector {} as Vector<str>
     mut post_vals := Vector {} as Vector<str>
+    // "" for an ordinary post-assignment, the array's C type for a field
+    // that has to be copied in with salam_arrcpy: C cannot initialise or
+    // assign an array from another array, so `arr = o.arr` in a literal is
+    // a copy after the fact.
+    mut post_arr := Vector {} as Vector<str>
     if ssym != 0:
         msc := sm.ScopeAt(s, sm.SymAt(s, ssym).members)
         repeat msc.symbols.len() with i:
@@ -459,9 +464,15 @@ func cg_struct_lit(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
             if !has_val:
                 continue
             end
-            if cg_val_needs_hoist(val):
+            fact := cg_array_ctype(sm.ToString(s, f.ty))
+            if str.Len(fact) > 0 && provided != 0 && cg_is_array_place(a, at.Get(a, provided).a):
                 post_names.push(f.name)
                 post_vals.push(val)
+                post_arr.push(fact)
+            else cg_val_needs_hoist(val):
+                post_names.push(f.name)
+                post_vals.push(val)
+                post_arr.push("")
             else:
                 if !first:
                     co.SbPuts(inl, ", ")
@@ -492,10 +503,19 @@ func cg_struct_lit(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
             g, cg_cident(sl_cn) + " __sl" + t + " = (" + cg_cident(sl_cn) + "){ " + co.SbCstr(inl) + " };"
         )
         repeat post_names.len() with k:
-            cg_line(g, "__sl" + t + "." + cg_cident(post_names.get(k)) + " = " + post_vals.get(k) + ";")
+            if str.Len(post_arr.get(k)) > 0:
+                cg_line(
+                    g, "salam_arrcpy(__sl" + t + "." + cg_cident(post_names.get(k)) + ", " + post_vals.get(k) + ", sizeof(" + post_arr.get(k) + "));"
+                )
+            else:
+                cg_line(g, "__sl" + t + "." + cg_cident(post_names.get(k)) + " = " + post_vals.get(k) + ";")
+            end
         end
         r = "__sl" + t
     end
+    post_names.free()
+    post_vals.free()
+    post_arr.free()
     co.SbFree(inl)
     ret r
 end

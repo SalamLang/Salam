@@ -3,6 +3,7 @@ package semantic
 import str
 import tok "../token.salam"
 import at "../ast.salam"
+import co "../sal_core.salam"
 import i18 "../i18n.salam"
 
 // ===========================================================================
@@ -179,23 +180,63 @@ func fold_result_is_int(a &: at.Ast, nid: int): bool:
     ret str.Equals(ts, "i8") || str.Equals(ts, "i16") || str.Equals(ts, "i32") || str.Equals(ts, "i64") || str.Equals(ts, "u8") || str.Equals(ts, "u16") || str.Equals(ts, "u32") || str.Equals(ts, "u64") || str.Equals(ts, "char")
 end
 
+// Width in bits of an integer type string, 64 for anything else.
+func fold_ts_bits(ts: str): int:
+    if str.Equals(ts, "i8") || str.Equals(ts, "u8") || str.Equals(ts, "char"):
+        ret 8
+    end
+    if str.Equals(ts, "i16") || str.Equals(ts, "u16"):
+        ret 16
+    end
+    if str.Equals(ts, "i32") || str.Equals(ts, "u32"):
+        ret 32
+    end
+    ret 64
+end
+
+// The value an expression of type `ts` holds at run time: the arithmetic
+// here is done in i64, but the program's own is done at the operand
+// width, so a result that does not fit wraps the same way it would have
+// wrapped in the generated code. 2147483647 + 1 is -2147483648 as an
+// i32 whether it is folded or computed.
+func fold_wrap(ts: str, v: i64): i64:
+    bits := fold_ts_bits(ts)
+    if bits >= 64:
+        ret v
+    end
+    mask := ((1 as u64) << bits) - (1 as u64)
+    low := (v as u64) & mask
+    if str.StartsWith(ts, "u") || str.Equals(ts, "char"):
+        ret low as i64
+    end
+    sign := (1 as u64) << (bits - 1)
+    if (low & sign) != (0 as u64):
+        ret (low | ~mask) as i64
+    end
+    ret low as i64
+end
+
+func fold_int_wrapped(a &: at.Ast, nid: int, v: i64):
+    fold_int(a, nid, fold_wrap(at.Get(a, nid).type_str, v))
+end
+
 func fold_binary_int(s &: Sema, a &: at.Ast, nid: int, va: i64, vb: i64):
     op := at.Get(a, nid).op
     if op == tok.TK_PLUS:
         if fold_result_is_int(a, nid) && add_ok(va, vb):
-            fold_int(a, nid, va + vb)
+            fold_int_wrapped(a, nid, va + vb)
         end
         ret
     end
     if op == tok.TK_MINUS:
         if fold_result_is_int(a, nid) && sub_ok(va, vb):
-            fold_int(a, nid, va - vb)
+            fold_int_wrapped(a, nid, va - vb)
         end
         ret
     end
     if op == tok.TK_STAR:
         if fold_result_is_int(a, nid) && mul_ok(va, vb):
-            fold_int(a, nid, va * vb)
+            fold_int_wrapped(a, nid, va * vb)
         end
         ret
     end
@@ -257,14 +298,24 @@ func fold_binary_int(s &: Sema, a &: at.Ast, nid: int, va: i64, vb: i64):
         end
         ret
     end
-    if op == tok.TK_SHL:
-        if fold_result_is_int(a, nid) && vb >= 0 && vb < 64:
-            fold_int(a, nid, ((va as u64) << (vb as int)) as i64)
+    if op == tok.TK_SHL || op == tok.TK_SHR:
+        if !fold_result_is_int(a, nid):
+            ret
         end
-        ret
-    end
-    if op == tok.TK_SHR:
-        if fold_result_is_int(a, nid) && vb >= 0 && vb < 64:
+        // A count at or past the operand's width is undefined in the C
+        // the program becomes, and no width would give it a meaning.
+        width := fold_ts_bits(at.Get(a, nid).type_str)
+        if vb < 0 || vb >= (width as i64):
+            serr(
+                s, 21, span_of(a, nid), co.Format2(
+                    i18.Tr("shift count %d is outside the width of '%s'"), co.ArgInt(vb), co.ArgStr(at.Get(a, nid).type_str)
+                )
+            )
+            ret
+        end
+        if op == tok.TK_SHL:
+            fold_int_wrapped(a, nid, ((va as u64) << (vb as int)) as i64)
+        else:
             fold_int(a, nid, va >> (vb as int))
         end
         ret

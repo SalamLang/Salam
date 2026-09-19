@@ -35,38 +35,40 @@ run_latexmk() {
     fi
 }
 
+# Every directory under books/<lang>/ that holds a book.tex is a book.
 build_one() {
     lang="$1"
-    dir="$BOOKS_ROOT/$lang/intro-programming"
-
-    if [ ! -f "$dir/book.tex" ]; then
-        error "no book.tex found under $dir"
+    found=0
+    for dir in "$BOOKS_ROOT/$lang"/*/; do
+        [ -f "$dir/book.tex" ] || continue
+        found=1
+        log "Building '$lang' book: ${dir}book.tex"
+        (
+            cd "$dir"
+            run_latexmk
+            if [ ! -f "book.pdf" ]; then
+                error "build failed for ${dir}book.tex (no PDF generated)"
+                exit 1
+            fi
+            log "Done: ${dir}book.pdf"
+        ) || return 1
+    done
+    if [ "$found" -eq 0 ]; then
+        error "no book.tex found under $BOOKS_ROOT/$lang"
         return 1
     fi
-
-    log "Building '$lang' book: $dir/book.tex"
-    (
-        cd "$dir"
-        run_latexmk
-        if [ ! -f "book.pdf" ]; then
-            error "build failed for $lang (no PDF generated)"
-            exit 1
-        fi
-        log "Done: $dir/book.pdf"
-    ) || return 1
 }
 
 clean_one() {
     lang="$1"
-    dir="$BOOKS_ROOT/$lang/intro-programming"
-
-    if [ -d "$dir" ]; then
-        log "Cleaning $lang build artifacts"
+    for dir in "$BOOKS_ROOT/$lang"/*/; do
+        [ -f "$dir/book.tex" ] || continue
+        log "Cleaning ${dir}"
         (
             cd "$dir"
             latexmk -C || true
         )
-    fi
+    done
 }
 
 case "${1:-all}" in

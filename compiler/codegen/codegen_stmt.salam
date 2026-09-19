@@ -137,6 +137,21 @@ func cg_cond(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
     ret cg_unparen(cg_expr(g, s, a, n))
 end
 
+// An expression that denotes an existing array object rather than building
+// one: something `memcpy` can read from directly.
+func cg_is_array_place(a &: at.Ast, n: int): bool:
+    k := at.KindOf(a, n)
+    if k == at.AST_CAST:
+        inner := at.Get(a, n).a
+        ret inner != 0 && at.KindOf(a, inner) != at.AST_ARRAY_LIT && cg_is_array_place(a, inner)
+    end
+    // A call to a function that returns a fixed array is sret now (see
+    // type_is_byval_agg/call_sret): its value is a fresh local temp that
+    // decays to a pointer exactly like any other array expression, so it
+    // is as much a place to memcpy from as a local or a field is.
+    ret k == at.AST_IDENTIFIER || k == at.AST_MEMBER || k == at.AST_INDEX || k == at.AST_THIS || k == at.AST_CALL
+end
+
 func cg_vardecl_inline(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
     nn := at.Get(a, n)
     ts := str.Len(nn.type_str) > 0 ? nn.type_str : "int32_t"
@@ -210,6 +225,25 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
             end
             ret
         end
+        // `_ := f()` evaluates f for its effects and keeps nothing. Two of
+        // them in one block would be two C objects named `_`.
+        if str.Equals(nn.name, "_") && nn.a != 0:
+            cg_line(g, "(void)(" + cg_expr_value(g, s, a, nn.a) + ");")
+            ret
+        end
+        // An array is a value: `b := a` copies it. C has no array
+        // assignment, so an initializer that is another array (a local, a
+        // field, a row of a 2-D array) becomes a declaration plus memcpy.
+        // Literals keep the braced initializer.
+        act := cg_array_ctype(nn.type_str)
+        if str.Len(act) > 0 && nn.a != 0 && cg_is_array_place(a, nn.a):
+            local_add(g, nn.name)
+            cg_line(g, cg_decl(nn.type_str, nn.name) + ";")
+            cg_line(
+                g, "salam_arrcpy(" + cg_cident(nn.name) + ", " + cg_expr(g, s, a, nn.a) + ", sizeof(" + act + "));"
+            )
+            ret
+        end
         cg_line(g, cg_vardecl_inline(g, s, a, n) + ";")
         // A leading underscore is how Salam spells "declared on purpose,
         // never read", which is what stops sema's unused-name rule firing.
@@ -231,6 +265,22 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
         ret
     end
     if k == at.AST_ASSIGN:
+        // Whole-array assignment, `b = a` or `b = [4, 5, 6]`: C cannot
+        // assign arrays, so it is a memcpy of the array's own size (never
+        // sizeof the left operand, which may be a parameter).
+        if nn.op == tok.TK_ASSIGN && nn.a != 0 && nn.b != 0:
+            lact := cg_array_ctype(at.Get(a, nn.a).type_str)
+            if str.Len(lact) > 0 && !cg_is_slice_ts(at.Get(a, nn.b).type_str):
+                mut src := cg_expr(g, s, a, nn.b)
+                if str.StartsWith(src, "{"):
+                    src = "(" + lact + ")" + src
+                end
+                cg_line(
+                    g, "salam_arrcpy(" + cg_expr(g, s, a, nn.a) + ", " + src + ", sizeof(" + lact + "));"
+                )
+                ret
+            end
+        end
         if nn.op == tok.TK_ASSIGN && nn.a != 0 && at.KindOf(a, nn.a) == at.AST_INDEX:
             ixn := at.Get(a, nn.a)
             container_ts := at.Get(a, ixn.a).type_str
@@ -349,21 +399,33 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
         if nn.a != 0 && g.fn_defers.len() > 0:
             expr := cg_expr_value(g, s, a, nn.a)
             r_ts := at.Get(a, nn.a).type_str
+            r_act := cg_array_ctype(r_ts)
             g.tmpn += 1
             t := g.tmpn
             tmp := "__retv" + t
+            // An array temp still holds the pointer it decayed to (its own
+            // declarator would need the same pointer-to-array trick as the
+            // sret param); salam_arrcpy at the end reads through that
+            // pointer, so a plain cg_ctype pointer temp is fine here.
             cg_line(
                 g, cg_ctype(str.Len(r_ts) > 0 ? r_ts : "int32_t") + " " + tmp + " = (" + expr + ");"
             )
             cg_emit_defers(g, s, a)
-            if g.cur_sret:
+            if g.cur_sret && str.Len(r_act) > 0:
+                cg_line(g, "salam_arrcpy(*__ret, " + tmp + ", sizeof(" + r_act + ")); return;")
+            else g.cur_sret:
                 cg_line(g, "*__ret = " + tmp + "; return;")
             else:
                 cg_line(g, "return " + tmp + ";")
             end
         else nn.a != 0 && g.cur_sret:
             cg_emit_defers(g, s, a)
-            cg_line(g, "*__ret = (" + cg_expr_value(g, s, a, nn.a) + "); return;")
+            ret_act := cg_array_ctype(at.Get(a, nn.a).type_str)
+            if str.Len(ret_act) > 0:
+                cg_line(g, "salam_arrcpy(*__ret, " + cg_expr_value(g, s, a, nn.a) + ", sizeof(" + ret_act + ")); return;")
+            else:
+                cg_line(g, "*__ret = (" + cg_expr_value(g, s, a, nn.a) + "); return;")
+            end
         else nn.a != 0:
             cg_emit_defers(g, s, a)
             cg_line(g, "return " + cg_expr_value(g, s, a, nn.a) + ";")

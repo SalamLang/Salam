@@ -368,6 +368,28 @@ pub func NativeBuildScript(ll_path: str, opts: Options): str:
     ret script
 end
 
+// NativeBuildScript's cmd.exe counterpart: the same tool invocations with
+// the shell variables folded in, since cmd has no `$IN`. `true` is spelled
+// `rem` there, and `set -e` is unnecessary because the batch stops on the
+// first non-zero exit only if asked - so each command is followed by an
+// errorlevel check.
+pub func NativeBatchScript(ll_path: str, opts: Options): str:
+    needs_out := opts.output_mode != LV_OUT_JIT && opts.output_mode != LV_OUT_IR
+    mut body := nt_emit_tool_cmd(opts)
+    body = str.Replace(body, `"$IN"`, `"` + ll_path + `"`)
+    if needs_out && str.Len(opts.output_file) > 0:
+        body = str.Replace(body, `"$OUT"`, `"` + opts.output_file + `"`)
+    end
+    if str.Len(opts.sysroot) > 0:
+        body = str.Replace(body, `"$SYSROOT"`, `"` + opts.sysroot + `"`)
+    end
+    body = str.Replace(body, "\ntrue\n", "\nrem\n")
+    mut out := "@echo off\n"
+    out += body
+    out += "if errorlevel 1 exit /b 1\n"
+    ret out
+end
+
 // salam_llvm_toolchain - the real link/emit step: writes NativeBuildScript's
 // output to `<ll_path>.run.sh` and runs it (bash directly on POSIX,
 // `wsl.exe -e bash` on Windows, exactly like the C). -1 = no toolchain
@@ -399,15 +421,46 @@ pub func NativeRun(lgr: lg.Logger, ll_path: str, opts: Options): int:
     if !ToolchainAvailable():
         ret 0 - 1
     end
-    script := NativeBuildScript(ll_path, opts)
-    spath := ll_path + ".run.sh"
-    _w := os.WriteFile(spath, script)
-    script_tp := nt_to_tool_path(spath)
+    // A Windows host with a toolchain of its own drives it directly. Going
+    // through `wsl.exe -e bash` means clang searches Linux prefixes, so a
+    // third-party import library the C backend finds in msys2's /mingw64/lib
+    // - sqlite3, for one - is invisible and the link fails with "unable to
+    // find library -lsqlite3". Mixing the two with -L only moves the failure
+    // to the CRT (_gnu_exception_handler), because the mingw runtime then
+    // comes half from each. One toolchain end to end is the only coherent
+    // answer, and it is what the C backend has always done. WSL remains the
+    // path when this host has no toolchain of its own.
+    mut native_cc := ""
+    mut spath := ll_path + ".run.sh"
+    mut script := ""
     mut cmd := ""
-    if SALAM_OS_WINDOWS:
-        cmd = `wsl.exe -e bash "` + script_tp + `"`
+    if nt_win_native_cc(native_cc):
+        spath = ll_path + ".run.bat"
+        script = NativeBatchScript(ll_path, opts)
+        _wb := os.WriteFile(spath, script)
+        // os.Run is system(), which on Windows is already `cmd /c`, so the
+        // command is just the batch file - prefixing another `cmd /c` nests
+        // two of them and the quote-stripping mangles the path. It has to be
+        // absolute, because cmd will not take a batch file from the working
+        // directory by bare name, and every separator has to be a backslash:
+        // after the outer cmd strips the quotes, a `/` in the path reads as
+        // the start of a switch.
+        mut bat := spath
+        n2 := str.Len(bat)
+        if !(n2 >= 2 && byte_at(bat, 1) == 58):
+            bat = os.Cwd() + "\\" + bat
+        end
+        bat = str.Replace(bat, "/", "\\")
+        cmd = `"` + bat + `"`
     else:
-        cmd = `bash "` + script_tp + `"`
+        script = NativeBuildScript(ll_path, opts)
+        _w := os.WriteFile(spath, script)
+        script_tp := nt_to_tool_path(spath)
+        if SALAM_OS_WINDOWS:
+            cmd = `wsl.exe -e bash "` + script_tp + `"`
+        else:
+            cmd = `bash "` + script_tp + `"`
+        end
     end
     lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "llvm toolchain: " + cmd)
     rc := os.Run(cmd)

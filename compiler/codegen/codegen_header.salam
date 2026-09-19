@@ -277,6 +277,22 @@ func sig_param_is_ref(s &: sm.Sema, a &: at.Ast, sigid: int, p: int): bool:
 end
 
 func cg_emit_dyn_types(g &: Cg, s &: sm.Sema, a &: at.Ast):
+    // Every fat pointer and vtable is named before any is defined: an
+    // interface method that takes or returns `dyn` of its own interface -
+    // `func combine(o: dyn Maker): int` - spells `_Salam_dyn_Maker` inside
+    // the vtable that `_Salam_dyn_Maker` itself is defined after. A
+    // prototype only needs the type declared, so the forward typedefs are
+    // enough.
+    repeat g.dyn_ifaces.len() with i0:
+        iname0 := g.dyn_ifaces.get(i0)
+        ci0 := cg_cident(iname0)
+        if cg_iface_sym(s, iname0) == 0:
+            continue
+        end
+        outh(
+            g, "#ifndef SALAM_DYN_" + ci0 + "_DECLARED\n#define SALAM_DYN_" + ci0 + "_DECLARED\n" + "typedef struct _Salam_vtbl_" + ci0 + " _Salam_vtbl_" + ci0 + ";\n" + "typedef struct _Salam_dyn_" + ci0 + " _Salam_dyn_" + ci0 + ";\n#endif\n"
+        )
+    end
     repeat g.dyn_ifaces.len() with i:
         iname := g.dyn_ifaces.get(i)
         ci := cg_cident(iname)
@@ -287,7 +303,7 @@ func cg_emit_dyn_types(g &: Cg, s &: sm.Sema, a &: at.Ast):
         outh(
             g, "#ifndef SALAM_DYN_" + ci + "_DEFINED\n#define SALAM_DYN_" + ci + "_DEFINED\n"
         )
-        outh(g, "typedef struct _Salam_vtbl_" + ci + " {\n")
+        outh(g, "struct _Salam_vtbl_" + ci + " {\n")
         imembers := sm.SymAt(s, isym).members
         isc := sm.ScopeAt(s, imembers)
         repeat isc.symbols.len() with m:
@@ -301,7 +317,20 @@ func cg_emit_dyn_types(g &: Cg, s &: sm.Sema, a &: at.Ast):
             // does for a plain function (func_signature), so the slot has
             // to be typed `void (*)(void*, ..., R*)`.
             sret := type_is_byval_agg(s, sig.ret_type)
-            rc := cg_ctype(sm.ToString(s, sig.ret_type))
+            ret_ts0 := sm.ToString(s, sig.ret_type)
+            rc := cg_ctype(ret_ts0)
+            // An array return's out-parameter is written as the real
+            // (unnamed) array declarator, not cg_ctype's always-single-
+            // decay "T*": C's array-parameter rule keeps every dimension
+            // past the first, so a 2-D return needs "(*)[3]", which only
+            // cg_decl_cn's dimension-aware form produces.
+            ret_act0 := cg_array_ctype(ret_ts0)
+            mut ret_out0 := ""
+            if str.Len(ret_act0) > 0:
+                ret_out0 = cg_array_ret_decl(ret_ts0, "")
+            else:
+                ret_out0 = rc + "*"
+            end
             outh(
                 g, "    " + (sret ? "void" : rc) + " (*" + cg_cident(ms.name) + ")(void*"
             )
@@ -315,13 +344,13 @@ func cg_emit_dyn_types(g &: Cg, s &: sm.Sema, a &: at.Ast):
                 )
             end
             if sret:
-                outh(g, ", " + rc + "*")
+                outh(g, ", " + ret_out0)
             end
             outh(g, ");\n")
         end
-        outh(g, "} _Salam_vtbl_" + ci + ";\n")
+        outh(g, "};\n")
         outh(
-            g, "typedef struct { void* data; const _Salam_vtbl_" + ci + "* vtable; } _Salam_dyn_" + ci + ";\n"
+            g, "struct _Salam_dyn_" + ci + " { void* data; const _Salam_vtbl_" + ci + "* vtable; };\n"
         )
         outh(g, "#endif\n")
     end
@@ -384,7 +413,18 @@ func cg_emit_dyn_vtables_impl(g &: Cg, s &: sm.Sema, a &: at.Ast):
                 recv_star = ""
             end
             isigv := sm.SigAt(s, isig)
-            rets := cg_ctype(sm.ToString(s, isigv.ret_type))
+            iret_ts := sm.ToString(s, isigv.ret_type)
+            rets := cg_ctype(iret_ts)
+            iret_act := cg_array_ctype(iret_ts)
+            // Same array-parameter declarator as func_signature and the
+            // vtable slot above - cg_ctype's flat "T*" loses every
+            // dimension past the first.
+            mut ret_out1 := ""
+            if str.Len(iret_act) > 0:
+                ret_out1 = cg_array_ret_decl(iret_ts, "__ret")
+            else:
+                ret_out1 = rets + "* __ret"
+            end
             mut ps := co.SbNew()
             mut asb := co.SbNew()
             repeat isigv.params.len() with p:
@@ -400,7 +440,7 @@ func cg_emit_dyn_vtables_impl(g &: Cg, s &: sm.Sema, a &: at.Ast):
             recv_expr := recv_star == "*" ? "(" + cc2 + "*)self" : "*(" + cc2 + "*)self"
             if sret2:
                 out(
-                    g, "static void _Salam_thunk_" + ci + "_" + cc2 + "_" + cg_cident(ms.name) + "(void* self" + co.SbCstr(ps) + ", " + rets + "* __ret){ " + mangled + "(" + recv_expr + co.SbCstr(asb) + ", __ret); }\n"
+                    g, "static void _Salam_thunk_" + ci + "_" + cc2 + "_" + cg_cident(ms.name) + "(void* self" + co.SbCstr(ps) + ", " + ret_out1 + "){ " + mangled + "(" + recv_expr + co.SbCstr(asb) + ", __ret); }\n"
                 )
             else:
                 out(

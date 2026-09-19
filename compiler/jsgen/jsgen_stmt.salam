@@ -64,7 +64,10 @@ func jsg_vardecl_inline(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int): str:
     // jsg_call_finish), and `const` made that assignment throw. Nothing
     // else here depends on the distinction - this is generated code.
     kw := "let"
-    init := n.a != 0 ? jsg_expr(g, s, a, n.a) : jsg_zero(s, n.type_str)
+    mut init := n.a != 0 ? jsg_expr(g, s, a, n.a) : jsg_zero(s, n.type_str)
+    if n.a != 0 && !jsg_is_fresh_value(a, n.a) && jsg_needs_copy(s, n.type_str):
+        init = jsg_copy_expr(g, s, n.type_str, init, 0)
+    end
     // `_ := f()` keeps nothing; a second `let _` in one block is a syntax
     // error in strict mode.
     if str.Equals(n.name, "_"):
@@ -130,7 +133,12 @@ func jsg_simple_inline(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int): str:
         if n.op == tok.TK_POWER_EQ:
             ret jsg_expr(g, s, a, n.a) + " = Math.pow(" + jsg_expr(g, s, a, n.a) + ", " + jsg_expr(g, s, a, n.b) + ")"
         end
-        ret jsg_expr(g, s, a, n.a) + " " + cg_op(n.op) + " " + jsg_expr(g, s, a, n.b)
+        mut rhs := jsg_expr(g, s, a, n.b)
+        lts := at.Get(a, n.a).type_str
+        if n.op == tok.TK_ASSIGN && !jsg_is_fresh_value(a, n.b) && jsg_needs_copy(s, lts):
+            rhs = jsg_copy_expr(g, s, lts, rhs, 0)
+        end
+        ret jsg_expr(g, s, a, n.a) + " " + cg_op(n.op) + " " + rhs
     end
     if k == at.AST_EXPR_STMT:
         ret jsg_expr(g, s, a, at.Get(a, id).a)
@@ -442,9 +450,12 @@ func jsg_stmt(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int):
                 ret
             end
         end
-        cg_line(
-            g, jsg_expr(g, s, a, n.a) + " " + cg_op(n.op) + " " + jsg_expr(g, s, a, n.b) + ";"
-        )
+        mut prhs := jsg_expr(g, s, a, n.b)
+        plts := n.a != 0 ? at.Get(a, n.a).type_str : ""
+        if n.op == tok.TK_ASSIGN && n.b != 0 && !jsg_is_fresh_value(a, n.b) && jsg_needs_copy(s, plts):
+            prhs = jsg_copy_expr(g, s, plts, prhs, 0)
+        end
+        cg_line(g, jsg_expr(g, s, a, n.a) + " " + cg_op(n.op) + " " + prhs + ";")
         ret
     end
     if n.kind == at.AST_EXPR_STMT:
@@ -708,6 +719,18 @@ func jsg_function(g &: Jg, s &: sm.Sema, a &: at.Ast, fnid: int, owner: int):
     cg_line(g, "function " + name + "(" + str.BufStr(params) + ") {")
     str.BufFree(params)
     g.indent += 1
+    // A by-value struct or array parameter is the callee's own copy.
+    sgp := sm.SigAt(s, sig)
+    mut pi := 0
+    until pi < np && pi < sgp.params.len():
+        p2 := at.Get(a, fn.list.get(pi))
+        pts := sm.ToString(s, sgp.params.get(pi))
+        if !p2.is_ref && jsg_needs_copy(s, pts):
+            pn := jsg_local_ref(g, p2.name)
+            cg_line(g, pn + " = " + jsg_copy_expr(g, s, pts, pn, 0) + ";")
+        end
+        pi += 1
+    end
     if fn.a != 0:
         jsg_block(g, s, a, fn.a)
     end

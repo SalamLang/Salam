@@ -49,7 +49,7 @@ def _mismatches(pattern, txt, decls):
             continue
         dret, dps = decls[name]
         at = [a.strip().split(" ")[0] for a in args.split(",") if a.strip()]
-        if pattern is CALL_RE and ret != dret:
+        if ret != dret:
             bad.append((name, "return", dret, ret))
             continue
         if len(at) != len(dps):

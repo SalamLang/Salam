@@ -148,8 +148,14 @@ func cg_is_array_place(a &: at.Ast, n: int): bool:
     // A call to a function that returns a fixed array is sret now (see
     // type_is_byval_agg/call_sret): its value is a fresh local temp that
     // decays to a pointer exactly like any other array expression, so it
-    // is as much a place to memcpy from as a local or a field is.
-    ret k == at.AST_IDENTIFIER || k == at.AST_MEMBER || k == at.AST_INDEX || k == at.AST_THIS || k == at.AST_CALL
+    // is as much a place to memcpy from as a local or a field is. An
+    // operator overload (operator_add and friends) returning an array
+    // goes through the same sret lowering (cg_emit_op_call) and reaches
+    // codegen as AST_BINARY/AST_UNARY, not AST_CALL - sema only lets
+    // either be array-typed by resolving to such an overload, since
+    // neither built-in arithmetic nor a built-in unary operator can
+    // produce an array result.
+    ret k == at.AST_IDENTIFIER || k == at.AST_MEMBER || k == at.AST_INDEX || k == at.AST_THIS || k == at.AST_CALL || k == at.AST_BINARY || k == at.AST_UNARY
 end
 
 func cg_vardecl_inline(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
@@ -403,13 +409,20 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
             g.tmpn += 1
             t := g.tmpn
             tmp := "__retv" + t
-            // An array temp still holds the pointer it decayed to (its own
-            // declarator would need the same pointer-to-array trick as the
-            // sret param); salam_arrcpy at the end reads through that
-            // pointer, so a plain cg_ctype pointer temp is fine here.
-            cg_line(
-                g, cg_ctype(str.Len(r_ts) > 0 ? r_ts : "int32_t") + " " + tmp + " = (" + expr + ");"
-            )
+            if str.Len(r_act) > 0:
+                // A deferred statement can still mutate the array `expr`
+                // names (e.g. `ret a` then a defer that writes into `a`),
+                // so the value has to be copied into a real array temp
+                // here, before the defers run - not just pointed at, the
+                // way a bare `cg_ctype` pointer temp would (that pointer
+                // would still read whatever the defers left behind).
+                cg_line(g, cg_decl_cn(r_ts, tmp) + ";")
+                cg_line(g, "salam_arrcpy(" + tmp + ", " + expr + ", sizeof(" + r_act + "));")
+            else:
+                cg_line(
+                    g, cg_ctype(str.Len(r_ts) > 0 ? r_ts : "int32_t") + " " + tmp + " = (" + expr + ");"
+                )
+            end
             cg_emit_defers(g, s, a)
             if g.cur_sret && str.Len(r_act) > 0:
                 cg_line(g, "salam_arrcpy(*__ret, " + tmp + ", sizeof(" + r_act + ")); return;")

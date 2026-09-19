@@ -65,7 +65,34 @@ end
 // graph comes up bottom-up before main's body starts. The flag is set before
 // the recursion, not after, so an import cycle terminates rather than
 // recursing forever - the same trade C++ makes for static initialisation.
-func emit_module_init(g &: Cg, _s &: sm.Sema, a &: at.Ast, program: int):
+// emit_deferred_globals - the deferred globals' own initializer statements
+// (emit_globals already wrote their bare declarations and queued their
+// AST ids in g.deferred_globals). Called from inside emit_module_init's
+// own hoist scope, so an array-returning call in one of them hoists its
+// temp into the init function itself - the same reason cg_function opens
+// one before emitting a body - rather than into a `({ T t; f(&t); t; })`
+// whose temp's address stops being safe to use the moment that nested
+// block's own `}` is reached (see cg_sret_wrap and call_emit_arg's own
+// comment for the miscompile this exact shape already caused once).
+func emit_deferred_globals(g &: Cg, s &: sm.Sema, a &: at.Ast):
+    repeat g.deferred_globals.len() with i:
+        did := g.deferred_globals.get(i)
+        d := at.Get(a, did)
+        ts := str.Len(d.type_str) > 0 ? d.type_str : "int32_t"
+        gname := cg_global_cname(g.pkg, d.name)
+        is_array := str.IndexOf(ts, "[") >= 0
+        array_copy := is_array && d.a != 0 && cg_is_array_place(a, d.a)
+        act := array_copy ? cg_array_ctype(ts) : ""
+        if array_copy && str.Len(act) > 0:
+            out(g, "    salam_arrcpy(" + gname + ", " + cg_expr(g, s, a, d.a) + ", sizeof(" + act + "));\n")
+        else:
+            out(g, "    " + gname + " = " + cg_expr(g, s, a, d.a) + ";\n")
+        end
+    end
+    g.deferred_globals.clear()
+end
+
+func emit_module_init(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
     out(g, "void " + cg_module_init_name(g.module) + "(void) {\n")
     out(g, "    static int __salam_init_done = 0;\n")
     out(g, "    if (__salam_init_done) return;\n")
@@ -93,16 +120,23 @@ func emit_module_init(g &: Cg, _s &: sm.Sema, a &: at.Ast, program: int):
         end
         out(g, "    " + cg_module_init_name(basev) + "();\n")
     end
-    repeat g.deferred.len() with j:
-        out(g, "    " + g.deferred.get(j) + "\n")
-    end
+    saved_hoist := g.hoist
+    saved_hpos := g.hoist_pos
+    saved_hactive := g.hoist_active
+    cg_hoist_begin(g)
+    emit_deferred_globals(g, s, a)
+    cg_hoist_end(g)
+    g.hoist = saved_hoist
+    g.hoist_pos = saved_hpos
+    g.hoist_active = saved_hactive
     out(g, "}\n\n")
 end
 
 func emit_globals(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
     prog := at.Get(a, program)
     repeat prog.list.len() with i:
-        d := at.Get(a, prog.list.get(i))
+        did := prog.list.get(i)
+        d := at.Get(a, did)
         if d.kind != at.AST_CONST_DECL && d.kind != at.AST_VAR_DECL:
             continue
         end
@@ -115,25 +149,22 @@ func emit_globals(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
         decl := cg_decl_cn(ts, gname)
         is_array := str.IndexOf(ts, "[") >= 0
         // A global array copied from another array (`gx := ga`, another
-        // module-level array, a struct field, a row of a 2-D array) is
-        // exactly the case cg_stmt's own AST_VAR_DECL handles with
-        // salam_arrcpy for a local: C cannot initialise one array object
-        // from another, `int32_t gx[2] = ga;` is not valid C, and it must
-        // run as a statement (in the module's init function) rather than
-        // as a static initializer either way.
+        // module-level array, a struct field, a row of a 2-D array, or
+        // now an array-returning call) is exactly the case cg_stmt's own
+        // AST_VAR_DECL handles with salam_arrcpy for a local: C cannot
+        // initialise one array object from another, `int32_t gx[2] = ga;`
+        // is not valid C, and it must run as a statement (in the
+        // module's init function) rather than as a static initializer
+        // either way.
         array_copy := is_array && d.a != 0 && cg_is_array_place(a, d.a)
         act := array_copy ? cg_array_ctype(ts) : ""
         can_defer := (d.kind == at.AST_VAR_DECL && d.a != 0 && at.KindOf(a, d.a) != at.AST_LITERAL && !is_array) || (array_copy && str.Len(act) > 0)
-        if array_copy && str.Len(act) > 0:
+        if can_defer:
+            // The initializer expression itself is built later, by
+            // emit_deferred_globals from inside emit_module_init's own
+            // hoist scope - see deferred_globals's own comment.
             out(g, decl + ";\n")
-            g.deferred.push(
-                "salam_arrcpy(" + gname + ", " + cg_expr(g, s, a, d.a) + ", sizeof(" + act + "));"
-            )
-        else can_defer:
-            out(g, decl + ";\n")
-            g.deferred.push(
-                gname + " = " + cg_expr(g, s, a, d.a) + ";"
-            )
+            g.deferred_globals.push(did)
         else:
             // Arrays are excluded on purpose. A Salam array parameter is a
             // plain pointer the callee may write through - `func f(a: u64[8])`
@@ -763,6 +794,7 @@ func cg_free(g &: Cg):
     g.dyn_ifaces.free()
     g.dyn_impls.free()
     g.deferred.free()
+    g.deferred_globals.free()
     g.fn_defers.free()
     g.loop_dmark.free()
 end

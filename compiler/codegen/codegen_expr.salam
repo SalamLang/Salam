@@ -334,10 +334,7 @@ func cg_emit_op_call(
         g, s, sname, ssym, mname, sm.SigAt(s, sig).params
     )
     ret_struct := type_is_byval_agg(s, sm.SigAt(s, sig).ret_type)
-    mut rc := ""
-    if ret_struct:
-        rc = cg_ctype(sm.ToString(s, sm.SigAt(s, sig).ret_type))
-    end
+    ret_t := sm.SigAt(s, sig).ret_type
     lhs_ts := at.Get(a, lhs).type_str
     lhs_is_ptr := str.Len(lhs_ts) > 0 && str.EndsWith(lhs_ts, "*")
     addressable := cg_addressable(s, a, lhs)
@@ -354,21 +351,18 @@ func cg_emit_op_call(
             recv = "&(" + cg_expr(g, s, a, lhs) + ")"
         end
         if ret_struct:
-            g.tmpn += 1
-            sv := g.tmpn
-            ret "({ " + rc + " __s" + sv + "; " + mangled + "(" + recv + sep + rhs_c + ", &__s" + sv + "); __s" + sv + "; })"
+            ret cg_sret_wrap(g, s, ret_t, "", "", "", mangled + "(" + recv + sep + rhs_c + ", ", ")")
         end
         ret mangled + "(" + recv + sep + rhs_c + ")"
     end
     g.tmpn += 1
     t := g.tmpn
     lhs_c := cg_expr(g, s, a, lhs)
+    tname := "__t" + t
     if ret_struct:
-        g.tmpn += 1
-        sv2 := g.tmpn
-        ret "({ " + cg_ctype(lhs_ts) + " __t" + t + " = (" + lhs_c + "); " + rc + " __s" + sv2 + "; " + mangled + "(&__t" + t + sep + rhs_c + ", &__s" + sv2 + "); __s" + sv2 + "; })"
+        ret cg_sret_wrap(g, s, ret_t, cg_ctype(lhs_ts), tname, lhs_c, mangled + "(&" + tname + sep + rhs_c + ", ", ")")
     end
-    ret "({ " + cg_ctype(lhs_ts) + " __t" + t + " = (" + lhs_c + "); " + mangled + "(&__t" + t + sep + rhs_c + "); })"
+    ret "({ " + cg_ctype(lhs_ts) + " " + tname + " = (" + lhs_c + "); " + mangled + "(&" + tname + sep + rhs_c + "); })"
 end
 
 func cg_ident_char(c: int, first: bool): bool:
@@ -460,13 +454,16 @@ func cg_struct_lit(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
             end
             mut val := ""
             mut has_val := false
+            mut val_node := 0
             if provided != 0:
-                val = cg_expr(g, s, a, at.Get(a, provided).a)
+                val_node = at.Get(a, provided).a
+                val = cg_expr(g, s, a, val_node)
                 has_val = true
             else f.decl != 0 && at.Get(a, f.decl).a != 0:
+                val_node = at.Get(a, f.decl).a
                 save_lit := g.cur_lit_home
                 g.cur_lit_home = sm.SymAt(s, ssym).home
-                val = cg_expr(g, s, a, at.Get(a, f.decl).a)
+                val = cg_expr(g, s, a, val_node)
                 g.cur_lit_home = save_lit
                 has_val = true
             end
@@ -474,7 +471,11 @@ func cg_struct_lit(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
                 continue
             end
             fact := cg_array_ctype(sm.ToString(s, f.ty))
-            if str.Len(fact) > 0 && provided != 0 && cg_is_array_place(a, at.Get(a, provided).a):
+            // An array field's DEFAULT (not just an explicitly given value)
+            // can itself be an array place - gating this only on
+            // `provided != 0` left the default case falling through to
+            // the plain `.field = val` form below, invalid C for an array.
+            if str.Len(fact) > 0 && cg_is_array_place(a, val_node):
                 post_names.push(f.name)
                 post_vals.push(val)
                 post_arr.push(fact)

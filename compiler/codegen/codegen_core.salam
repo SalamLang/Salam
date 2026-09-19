@@ -109,8 +109,22 @@ func emit_globals(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
         gname := cg_global_cname(g.pkg, d.name)
         decl := cg_decl_cn(ts, gname)
         is_array := str.IndexOf(ts, "[") >= 0
-        can_defer := d.kind == at.AST_VAR_DECL && d.a != 0 && at.KindOf(a, d.a) != at.AST_LITERAL && !is_array
-        if can_defer:
+        // A global array copied from another array (`gx := ga`, another
+        // module-level array, a struct field, a row of a 2-D array) is
+        // exactly the case cg_stmt's own AST_VAR_DECL handles with
+        // salam_arrcpy for a local: C cannot initialise one array object
+        // from another, `int32_t gx[2] = ga;` is not valid C, and it must
+        // run as a statement (in the module's init function) rather than
+        // as a static initializer either way.
+        array_copy := is_array && d.a != 0 && cg_is_array_place(a, d.a)
+        act := array_copy ? cg_array_ctype(ts) : ""
+        can_defer := (d.kind == at.AST_VAR_DECL && d.a != 0 && at.KindOf(a, d.a) != at.AST_LITERAL && !is_array) || (array_copy && str.Len(act) > 0)
+        if array_copy && str.Len(act) > 0:
+            out(g, decl + ";\n")
+            g.deferred.push(
+                "salam_arrcpy(" + gname + ", " + cg_expr(g, s, a, d.a) + ", sizeof(" + act + "));"
+            )
+        else can_defer:
             out(g, decl + ";\n")
             g.deferred.push(
                 gname + " = " + cg_expr(g, s, a, d.a) + ";"

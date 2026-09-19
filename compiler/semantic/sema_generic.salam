@@ -86,6 +86,16 @@ func g_subst(a &: at.Ast, nid: int, params: Vector<str>, args: Vector<int>):
             nv.is_pointer = depth > 0
             nv.elem_ptr_depth += cc.elem_ptr_depth
             nv.is_dyn = cc.is_dyn
+            // A function type carries its return type in `ty` and its
+            // extern-ness in a flag; neither lives in the name or the
+            // list, so a `func (int) int` handed to Vector<T> used to come
+            // out as `func (int) void`. The clone owns a fresh copy.
+            nv.ty = cc.ty
+            nv.is_extern = cc.is_extern
+            nv.is_variadic = cc.is_variadic
+            if cc.is_slice:
+                nv.is_slice = true
+            end
             // The resolved type comes along whole only where the occurrence
             // is the bare parameter. `T*` or `T[4]` stands for a different
             // type than what the caller resolved, so only the base travels and
@@ -200,15 +210,22 @@ func iface_satisfied(
         ret false
     end
     mut members := 0
-    if concrete >= 0 && ty_at(s, concrete).kind == TY_STRUCT && ty_at(s, concrete).decl != 0:
-        members = sym_at(s, ty_at(s, concrete).decl).members
-    else concrete >= 0:
+    mut impl_members := 0
+    if concrete >= 0:
         owner := scope_lookup(
             s, s.global, impl_owner_key(type_to_string(s, concrete))
         )
         if owner != 0:
-            members = sym_at(s, owner).members
+            impl_members = sym_at(s, owner).members
         end
+    end
+    if concrete >= 0 && ty_at(s, concrete).kind == TY_STRUCT && ty_at(s, concrete).decl != 0:
+        members = sym_at(s, ty_at(s, concrete).decl).members
+    else:
+        // A non-struct type (or a struct with no methods of its own)
+        // relies entirely on an `impl Iface on T` block for its methods.
+        members = impl_members
+        impl_members = 0
     end
     if members == 0:
         serr(
@@ -227,10 +244,20 @@ func iface_satisfied(
             continue
         end
         want := sig_at(s, im.overloads.get(0))
-        smx := scope_lookup_local(s, members, im.name)
+        mut smx := scope_lookup_local(s, members, im.name)
         mut have_m := smx != 0
         if have_m && sym_at(s, smx).kind != SYM_METHOD:
             have_m = false
+        end
+        // A struct's own methods take priority, but one an `impl` block
+        // supplies still counts: a struct can satisfy an interface partly
+        // through its own methods and partly through one impl block.
+        if !have_m && impl_members != 0:
+            smx = scope_lookup_local(s, impl_members, im.name)
+            have_m = smx != 0
+            if have_m && sym_at(s, smx).kind != SYM_METHOD:
+                have_m = false
+            end
         end
         if !have_m:
             serr(
@@ -391,7 +418,7 @@ func g_instantiate_func(
     mut argtypes := Vector {} as Vector<int>
     defer argtypes.free()
     repeat targ_nodes.len() with i:
-        argtypes.push(sema_resolve_type(s, a, targ_nodes.get(i)))
+        argtypes.push(g_check_targ(s, a, sema_resolve_type(s, a, targ_nodes.get(i)), sp))
     end
     iname := g_instance_name(s, tn.name, argtypes)
     existing := scope_lookup_local(s, s.global, iname)
@@ -608,4 +635,20 @@ func g_infer_call(
     g_result := g_instantiate_func(s, a, tmpl, targ_nodes, sp)
     targ_nodes.free()
     ret g_result
+end
+
+// g_check_targ - a fixed array cannot be a type argument. C has no array
+// values: `Vector<i32[3]>` lowered to a payload the vector could neither
+// assign nor return ("assignment to expression with array type"), and no
+// backend can give `T` a value of that shape. The error names the fix.
+func g_check_targ(s &: Sema, _a &: at.Ast, t: int, sp: co.SrcSpan): int:
+    if t >= 0 && ty_at(s, t).kind == TY_ARRAY:
+        serr(
+            s, 98, sp, co.Format1(
+                i18.Tr("a fixed array ('%s') cannot be a type argument; wrap it in a struct or use a slice"), co.ArgStr(type_to_string(s, t))
+            )
+        )
+        ret sema_err_ty(s)
+    end
+    ret t
 end

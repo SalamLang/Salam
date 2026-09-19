@@ -247,6 +247,18 @@ func sema_check_expr(s &: Sema, a &: at.Ast, nid: int): int:
             nv.is_ref = true
             at.Put(a, nid, nv)
         end
+        // A module-level global gets its type from its initializer, in
+        // source order. Read from an earlier global's initializer it has
+        // none yet, and the error type used to flow on without a word and
+        // reach the C as `_3cerror_3e gx;`.
+        if svm.ty < 0 && (svm.kind == SYM_VAR || svm.kind == SYM_CONST) && svm.home == s.global:
+            serr(
+                s, 97, sp, co.Format1(
+                    i18.Tr("global '%s' is used before its declaration; move it above this line"), co.ArgStr(name)
+                )
+            )
+            ret sema_decorate(s, a, nid, sema_err_ty(s))
+        end
         ret sema_decorate(s, a, nid, svm.ty)
     end
     if k == at.AST_FUNC_ADDR:
@@ -462,6 +474,24 @@ func sema_check_expr(s &: Sema, a &: at.Ast, nid: int): int:
             ret sema_decorate(s, a, nid, o3)
         end
         check_cast_in_context(s, a, n4.a, sp, cast_ctx, target, o3)
+        // `x as Variant<...>` where x has one of the member types is a box,
+        // not a conversion: the node becomes the AST_VARIANT_BOX that every
+        // other coercion site builds, so a cast in a struct field default,
+        // a call argument or a return reaches codegen as the tagged
+        // initializer and never as a C cast to a union type.
+        if target >= 0 && !type_is_error(s, o3) && ty_at(s, target).kind == TY_VARIANT && ty_at(s, o3).kind != TY_VARIANT:
+            vtag := type_variant_tag(s, target, o3)
+            if vtag >= 0:
+                mut bx := at.Get(a, nid)
+                bx.kind = at.AST_VARIANT_BOX
+                bx.ty = 0
+                bx.synthetic = true
+                bx.value_kind = tok.TV_INT
+                bx.value_int = vtag as u64
+                at.Put(a, nid, bx)
+                ret sema_decorate(s, a, nid, target)
+            end
+        end
         if type_assignable(s, target, o3):
             if !type_is_error(s, o3) && !s.in_derive && type_equiv(s, target, o3) && !sema_cast_target_is_context_dependent(s, a, n4.a, target):
                 serr(
@@ -515,6 +545,19 @@ func sema_check_expr(s &: Sema, a &: at.Ast, nid: int): int:
         end
         av := ty_at(s, arr)
         if av.kind == TY_ARRAY:
+            // A literal index into a fixed array is checked here rather
+            // than left to read past the end at run time.
+            ib := at.Get(a, n5.b)
+            if ib.kind == at.AST_LITERAL && ib.value_kind == tok.TV_INT:
+                iv := ib.value_int as i64
+                if iv < (0 as i64) || iv >= av.length:
+                    serr(
+                        s, 21, sp, co.Format2(
+                            i18.Tr("index %d is out of bounds for an array of length %d"), co.ArgInt(iv), co.ArgInt(av.length)
+                        )
+                    )
+                end
+            end
             ret sema_decorate(s, a, nid, av.elem)
         end
         if av.kind == TY_SLICE:
@@ -560,6 +603,24 @@ func sema_check_expr(s &: Sema, a &: at.Ast, nid: int): int:
         end
         bk := ty_at(s, base).kind
         if bk == TY_ARRAY || bk == TY_SLICE:
+            // A slice is a writable view: whoever receives `a[2:]` may
+            // store through it, so the array it was taken from counts as
+            // mutated here. Without this a `mut` array that is only ever
+            // written through a slice handed to a callee tripped E069.
+            mut root := n6.a
+            until root != 0 && (at.KindOf(a, root) == at.AST_MEMBER || at.KindOf(a, root) == at.AST_INDEX || at.KindOf(a, root) == at.AST_SLICE):
+                root = at.Get(a, root).a
+            end
+            if root != 0 && at.KindOf(a, root) == at.AST_IDENTIFIER:
+                rsym := scope_lookup(s, s.cur, at.Get(a, root).name)
+                if rsym != 0:
+                    mut rv := sym_at(s, rsym)
+                    if rv.is_mut || rv.is_ref:
+                        rv.mutated = true
+                        sym_put(s, rsym, rv)
+                    end
+                end
+            end
             ret sema_decorate(s, a, nid, type_slice(s, ty_at(s, base).elem))
         end
         if !type_is_error(s, base):

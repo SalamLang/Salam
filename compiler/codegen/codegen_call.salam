@@ -87,6 +87,11 @@ func call_emit_arg(
     end
     sv := sm.SigAt(s, sig)
     mut ref_c := ""
+    if at.Get(a, argid).ref_arg_ptr:
+        // Already a pointer to the parameter's type (`this`, or a T*).
+        co.SbPuts(b, cg_expr_value(g, s, a, argid))
+        ret
+    end
     if cg_addressable(s, a, argid):
         ref_c = "&(" + cg_expr(g, s, a, argid) + ")"
     else:
@@ -188,15 +193,75 @@ func call_args_lead(
     ret r
 end
 
+// cg_sret_wrap - the value of an sret call, given the call text split
+// around where the out-parameter address goes (call_pre + ADDR + call_post)
+// and an optional receiver-binding prefix (pfx_ty "" = none) for a
+// non-addressable receiver/operand a method or operator call still has to
+// take the address of.
+//
+// A struct/vec/dyn/variant return is a normal C value, so `({ decl; call;
+// value; })` can yield it directly - that is what call_sret used before
+// arrays joined type_is_byval_agg, and it is still correct for those.
+// An array return cannot be that block's value the same way (the whole
+// point of giving it a real array declarator is that arrays are not
+// scalars C can hand back from a `({ })`, only decay out of one), and
+// doing that anyway compiles - clang happens not to miscompile it, but
+// gcc does: `array_return.salam` built with --cc=gcc silently printed
+// garbage ("8388608 0 8388608" for "1 2 3") because __sN's storage is
+// scoped to the statement expression's own nested block, and gcc reuses
+// it before the decayed pointer in the enclosing salam_arrcpy/argument
+// position is read - the exact hazard call_emit_arg's own non-
+// addressable-argument temp already hit once under -O2 and was fixed by
+// hoisting rather than nesting. An array temp gets the same fix here:
+// only its bare declaration goes to g.hoist (real function scope), the
+// call and the value are sequenced with it through the comma operator.
+func cg_sret_wrap(
+    g &: Cg, s &: sm.Sema, ret_t: int, pfx_ty: str, pfx_name: str, pfx_val: str, call_pre: str, call_post: str
+): str:
+    ret_ts := sm.ToString(s, ret_t)
+    act := cg_array_ctype(ret_ts)
+    have_pfx := str.Len(pfx_ty) > 0
+    g.tmpn += 1
+    t := g.tmpn
+    if str.Len(act) > 0 && g.hoist_active:
+        tmp := "__sa" + t
+        g.hoist = g.hoist + "    " + cg_decl_cn(ret_ts, tmp) + ";\n"
+        mut lead := ""
+        if have_pfx:
+            g.hoist = g.hoist + "    " + pfx_ty + " " + pfx_name + ";\n"
+            lead = "(" + pfx_name + " = (" + pfx_val + ")), "
+        end
+        // The callee's own out-parameter is "T (*)[N]" (cg_array_ret_decl,
+        // func_signature) - the pointer C's array-parameter rule would
+        // give this same declarator if it were written as one, not the
+        // plain "T*" a real array object decays to on its own. &tmp is
+        // that pointer; tmp (bare, ordinary decay) is still the right
+        // thing to hand a consumer like salam_arrcpy afterwards.
+        ret "(" + lead + call_pre + "&" + tmp + call_post + ", " + tmp + ")"
+    end
+    if str.Len(act) > 0:
+        tmp2 := "__sa" + t
+        mut lead2 := ""
+        if have_pfx:
+            lead2 = pfx_ty + " " + pfx_name + " = (" + pfx_val + "); "
+        end
+        ret "({ " + lead2 + cg_decl_cn(ret_ts, tmp2) + "; " + call_pre + "&" + tmp2 + call_post + "; " + tmp2 + "; })"
+    end
+    rc := cg_ctype(ret_ts)
+    tmp3 := "__s" + t
+    mut lead3 := ""
+    if have_pfx:
+        lead3 = pfx_ty + " " + pfx_name + " = (" + pfx_val + "); "
+    end
+    ret "({ " + lead3 + rc + " " + tmp3 + "; " + call_pre + "&" + tmp3 + call_post + "; " + tmp3 + "; })"
+end
+
 // call_sret - ret_t is a sm TypeId.
 func call_sret(
     g &: Cg, s &: sm.Sema, ret_t: int, mangled: str, args: str
 ): str:
-    rc := cg_ctype(sm.ToString(s, ret_t))
-    g.tmpn += 1
-    t := g.tmpn
     sep := str.Len(args) > 0 ? ", " : ""
-    ret "({ " + rc + " __s" + t + "; " + mangled + "(" + args + sep + "&__s" + t + "); __s" + t + "; })"
+    ret cg_sret_wrap(g, s, ret_t, "", "", "", mangled + "(" + args + sep, ")")
 end
 
 func call_value(
@@ -709,10 +774,9 @@ func call_dyn(
     // expression rather than taken as the call's value.
     ret2 := isig != 0 ? sm.SigAt(s, isig).ret_type : sm.TYPE_NONE
     if type_is_byval_agg(s, ret2):
-        rc := cg_ctype(sm.ToString(s, ret2))
-        g.tmpn += 1
-        r := g.tmpn
-        ret "({ " + dynct + " __dv" + t + " = (" + recv + "); " + rc + " __s" + r + "; __dv" + t + acc + "vtable->" + cg_cident(mname) + "(__dv" + t + acc + "data" + asv + ", &__s" + r + "); __s" + r + "; })"
+        dvname := "__dv" + t
+        call_pre := dvname + acc + "vtable->" + cg_cident(mname) + "(" + dvname + acc + "data" + asv + ", "
+        ret cg_sret_wrap(g, s, ret2, dynct, dvname, recv, call_pre, ")")
     end
     ret "({ " + dynct + " __dv" + t + " = (" + recv + "); __dv" + t + acc + "vtable->" + cg_cident(mname) + "(__dv" + t + acc + "data" + asv + "); })"
 end
@@ -881,19 +945,14 @@ func call_method(
     asv := call_args_lead(g, s, a, n, sig)
     addressable := cg_addressable(s, a, obj)
     ret_struct := sig != 0 && type_is_byval_agg(s, sm.SigAt(s, sig).ret_type)
-    mut rc := ""
-    if ret_struct:
-        rc = cg_ctype(sm.ToString(s, sm.SigAt(s, sig).ret_type))
-    end
+    ret_t := sig != 0 ? sm.SigAt(s, sig).ret_type : sm.TYPE_NONE
     if obj_is_ptr || addressable:
         // Generated once: cg_expr can allocate temporaries, so asking it
         // for the receiver twice would emit two of them.
         oexpr := cg_expr(g, s, a, obj)
         recv := obj_is_ptr ? oexpr : "&(" + oexpr + ")"
         if ret_struct:
-            g.tmpn += 1
-            sv := g.tmpn
-            ret "({ " + rc + " __s" + sv + "; " + mangled + "(" + recv + asv + ", &__s" + sv + "); __s" + sv + "; })"
+            ret cg_sret_wrap(g, s, ret_t, "", "", "", mangled + "(" + recv + asv + ", ", ")")
         end
         if str.Len(asv) == 0:
             fld := accessor_field(s, a, sig)
@@ -912,12 +971,11 @@ func call_method(
     g.tmpn += 1
     t := g.tmpn
     oexpr := cg_expr(g, s, a, obj)
+    tname := "__t" + t
     if ret_struct:
-        g.tmpn += 1
-        sv2 := g.tmpn
-        ret "({ " + cg_ctype(objts) + " __t" + t + " = (" + oexpr + "); " + rc + " __s" + sv2 + "; " + mangled + "(&__t" + t + asv + ", &__s" + sv2 + "); __s" + sv2 + "; })"
+        ret cg_sret_wrap(g, s, ret_t, cg_ctype(objts), tname, oexpr, mangled + "(&" + tname + asv + ", ", ")")
     end
-    ret "({ " + cg_ctype(objts) + " __t" + t + " = (" + oexpr + "); " + mangled + "(&__t" + t + asv + "); })"
+    ret "({ " + cg_ctype(objts) + " " + tname + " = (" + oexpr + "); " + mangled + "(&" + tname + asv + "); })"
 end
 
 func call_impl(
@@ -940,10 +998,7 @@ func call_impl(
     asv := call_args_lead(g, s, a, n, sig)
     recv := cg_expr(g, s, a, obj)
     if sig != 0 && type_is_byval_agg(s, sm.SigAt(s, sig).ret_type):
-        rc := cg_ctype(sm.ToString(s, sm.SigAt(s, sig).ret_type))
-        g.tmpn += 1
-        sv := g.tmpn
-        ret "({ " + rc + " __s" + sv + "; " + mangled + "((" + recv + ")" + asv + ", &__s" + sv + "); __s" + sv + "; })"
+        ret cg_sret_wrap(g, s, sm.SigAt(s, sig).ret_type, "", "", "", mangled + "((" + recv + ")" + asv + ", ", ")")
     end
     ret mangled + "((" + recv + ")" + asv + ")"
 end

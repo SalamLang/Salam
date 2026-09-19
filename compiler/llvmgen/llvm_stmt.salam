@@ -25,7 +25,24 @@ func lv_vardecl(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     // read that no assignment precedes, but a `&:` parameter the callee only
     // writes on some paths would still leave this indeterminate, so zero it -
     // the C and JS backends do the same.
-    emit(v, "store " + ty_of(v, s, a, ts) + " " + zero_of(s, ts) + ", ptr " + slot)
+    zv := zero_of(s, ts)
+    if str.Equals(zv, "zeroinitializer"):
+        // Storing a whole aggregate as one `zeroinitializer` value is legal
+        // IR but pathological: LLVM scalarises it element by element. A
+        // `mut tape: int[30000]` (tests/en/apps/brainfuck.salam) took clang
+        // from 1s to over 300s, while the same program through the C backend
+        // - where `= {0}` becomes a memset - built in 4s. The size comes from
+        // a gep on a null pointer, so no target size arithmetic is needed.
+        szp := new_tmp(v)
+        sz := new_tmp(v)
+        emit(v, szp + " = getelementptr " + ty_of(v, s, a, ts) + ", ptr null, i32 1")
+        emit(v, sz + " = ptrtoint ptr " + szp + " to " + v.usize)
+        emit(
+            v, "call void @llvm.memset.p0." + v.usize + "(ptr " + slot + ", i8 0, " + v.usize + " " + sz + ", i1 false)"
+        )
+        ret
+    end
+    emit(v, "store " + ty_of(v, s, a, ts) + " " + zv + ", ptr " + slot)
 end
 
 // ll_compound_base

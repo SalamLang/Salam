@@ -32,16 +32,14 @@ func cg_import_module(a &: at.Ast, did: int): str:
     end
     stem := str.Len(resolved) - str.Len(pth.PathBase(resolved))
     rl := str.Len(resolved)
-    mut k := 0
     mut b := co.SbNew()
     mut q := stem
-    until q < rl && k < 127:
+    until q < rl:
         c := byte_at(resolved, q)
         if c == 46:
             break
         end
         co.SbPutc(b, c)
-        k += 1
         q += 1
     end
     basev := co.SbCstr(b)
@@ -158,12 +156,7 @@ func dyn_collect(g &: Cg, s &: sm.Sema, a &: at.Ast, id: int):
         if str.Len(an.type_str) > 0:
             iface := str.Substr(n.type_str, 4, str.Len(n.type_str) - 4)
             dyn_set_add(g.dyn_ifaces, iface)
-            // char pair[256] - sal_snprintf truncation kept.
-            mut pair := iface + "|" + an.type_str
-            if str.Len(pair) > 255:
-                pair = str.Substr(pair, 0, 255)
-            end
-            dyn_set_add(g.dyn_impls, pair)
+            dyn_set_add(g.dyn_impls, iface + "|" + an.type_str)
         end
     end
     dyn_collect(g, s, a, n.ty)
@@ -277,6 +270,22 @@ func sig_param_is_ref(s &: sm.Sema, a &: at.Ast, sigid: int, p: int): bool:
 end
 
 func cg_emit_dyn_types(g &: Cg, s &: sm.Sema, a &: at.Ast):
+    // Every fat pointer and vtable is named before any is defined: an
+    // interface method that takes or returns `dyn` of its own interface -
+    // `func combine(o: dyn Maker): int` - spells `_Salam_dyn_Maker` inside
+    // the vtable that `_Salam_dyn_Maker` itself is defined after. A
+    // prototype only needs the type declared, so the forward typedefs are
+    // enough.
+    repeat g.dyn_ifaces.len() with i0:
+        iname0 := g.dyn_ifaces.get(i0)
+        ci0 := cg_cident(iname0)
+        if cg_iface_sym(s, iname0) == 0:
+            continue
+        end
+        outh(
+            g, "#ifndef SALAM_DYN_" + ci0 + "_DECLARED\n#define SALAM_DYN_" + ci0 + "_DECLARED\n" + "typedef struct _Salam_vtbl_" + ci0 + " _Salam_vtbl_" + ci0 + ";\n" + "typedef struct _Salam_dyn_" + ci0 + " _Salam_dyn_" + ci0 + ";\n#endif\n"
+        )
+    end
     repeat g.dyn_ifaces.len() with i:
         iname := g.dyn_ifaces.get(i)
         ci := cg_cident(iname)
@@ -287,7 +296,7 @@ func cg_emit_dyn_types(g &: Cg, s &: sm.Sema, a &: at.Ast):
         outh(
             g, "#ifndef SALAM_DYN_" + ci + "_DEFINED\n#define SALAM_DYN_" + ci + "_DEFINED\n"
         )
-        outh(g, "typedef struct _Salam_vtbl_" + ci + " {\n")
+        outh(g, "struct _Salam_vtbl_" + ci + " {\n")
         imembers := sm.SymAt(s, isym).members
         isc := sm.ScopeAt(s, imembers)
         repeat isc.symbols.len() with m:
@@ -301,27 +310,46 @@ func cg_emit_dyn_types(g &: Cg, s &: sm.Sema, a &: at.Ast):
             // does for a plain function (func_signature), so the slot has
             // to be typed `void (*)(void*, ..., R*)`.
             sret := type_is_byval_agg(s, sig.ret_type)
-            rc := cg_ctype(sm.ToString(s, sig.ret_type))
+            ret_ts0 := sm.ToString(s, sig.ret_type)
+            rc := cg_ctype(ret_ts0)
+            // An array return's out-parameter is written as the real
+            // (unnamed) array declarator, not cg_ctype's always-single-
+            // decay "T*": C's array-parameter rule keeps every dimension
+            // past the first, so a 2-D return needs "(*)[3]", which only
+            // cg_decl_cn's dimension-aware form produces.
+            ret_act0 := cg_array_ctype(ret_ts0)
+            mut ret_out0 := ""
+            if str.Len(ret_act0) > 0:
+                ret_out0 = cg_array_ret_decl(ret_ts0, "")
+            else:
+                ret_out0 = rc + "*"
+            end
             outh(
                 g, "    " + (sret ? "void" : rc) + " (*" + cg_cident(ms.name) + ")(void*"
             )
             repeat sig.params.len() with p:
-                outh(
-                    g, ", " + cg_ctype(
-                        sm.ToString(
-                            s, sig.params.get(p)
-                        )
-                    ) + (sig_param_is_ref(s, a, sigid, p) ? "*" : "")
-                )
+                pts0 := sm.ToString(s, sig.params.get(p))
+                pact0 := sig_param_is_ref(s, a, sigid, p) ? "" : cg_array_ctype(pts0)
+                if str.Len(pact0) > 0:
+                    // An unnamed array declarator adjusts to a pointer to
+                    // everything past the first dimension the same way a
+                    // named one does (C's own parameter-decay rule, not
+                    // something this has to spell out itself) - cg_decl_cn
+                    // with an empty name, exactly like func_signature's own
+                    // by-value array parameter above, just anonymous here.
+                    outh(g, ", " + cg_decl_cn(pts0, ""))
+                else:
+                    outh(g, ", " + cg_ctype(pts0) + (sig_param_is_ref(s, a, sigid, p) ? "*" : ""))
+                end
             end
             if sret:
-                outh(g, ", " + rc + "*")
+                outh(g, ", " + ret_out0)
             end
             outh(g, ");\n")
         end
-        outh(g, "} _Salam_vtbl_" + ci + ";\n")
+        outh(g, "};\n")
         outh(
-            g, "typedef struct { void* data; const _Salam_vtbl_" + ci + "* vtable; } _Salam_dyn_" + ci + ";\n"
+            g, "struct _Salam_dyn_" + ci + " { void* data; const _Salam_vtbl_" + ci + "* vtable; };\n"
         )
         outh(g, "#endif\n")
     end
@@ -354,23 +382,65 @@ func cg_emit_dyn_vtables_impl(g &: Cg, s &: sm.Sema, a &: at.Ast):
             isig := ms.overloads.get(0)
             cm := sm.LookupLocal(s, sm.SymAt(s, csym).members, ms.name)
             csig := dyn_match_sig(s, cm, isig)
-            if csig == 0:
-                continue
+            mut mangled := ""
+            mut recv_star := "*"
+            if csig != 0:
+                // Through cg_mangle_method, not cg_mangle: the method
+                // belongs to the struct's own package, which is not the
+                // module being emitted when a driver in another package
+                // is boxed into an interface here.
+                mangled = cg_mangle_method(
+                    g, s, sm.SymAt(s, csym).name, csym, ms.name, sm.SigAt(s, csig).params
+                )
+            else:
+                // Nothing on the struct itself; an `impl Iface on Struct`
+                // block may still provide it (see sema_generic.salam's
+                // iface_satisfied, which now accepts this too). Those
+                // methods take `this` by value, mangled with the "ti"
+                // scheme (see codegen_decl.salam / llvm_decl.salam), not
+                // by the struct's own pointer-receiver convention.
+                iowner := sm.Lookup(s, s.global, sm.ImplOwnerKey(cnamev))
+                mut icm := 0
+                if iowner != 0 && sm.SymAt(s, iowner).kind == sm.SYM_TYPEIMPL:
+                    icm = sm.LookupLocal(s, sm.SymAt(s, iowner).members, ms.name)
+                end
+                icsig := dyn_match_sig(s, icm, isig)
+                if icsig == 0:
+                    continue
+                end
+                mangled = cg_mangle_ti(s, cnamev, ms.name, sm.SigAt(s, icsig).params)
+                recv_star = ""
             end
-            // Through cg_mangle_method, not cg_mangle: the method belongs
-            // to the struct's own package, which is not the module being
-            // emitted when a driver in another package is boxed into an
-            // interface here.
-            mangled := cg_mangle_method(
-                g, s, sm.SymAt(s, csym).name, csym, ms.name, sm.SigAt(s, csig).params
-            )
             isigv := sm.SigAt(s, isig)
-            rets := cg_ctype(sm.ToString(s, isigv.ret_type))
+            iret_ts := sm.ToString(s, isigv.ret_type)
+            rets := cg_ctype(iret_ts)
+            iret_act := cg_array_ctype(iret_ts)
+            // Same array-parameter declarator as func_signature and the
+            // vtable slot above - cg_ctype's flat "T*" loses every
+            // dimension past the first.
+            mut ret_out1 := ""
+            if str.Len(iret_act) > 0:
+                ret_out1 = cg_array_ret_decl(iret_ts, "__ret")
+            else:
+                ret_out1 = rets + "* __ret"
+            end
             mut ps := co.SbNew()
             mut asb := co.SbNew()
             repeat isigv.params.len() with p:
-                pt := cg_ctype(sm.ToString(s, isigv.params.get(p))) + (sig_param_is_ref(s, a, isig, p) ? "*" : "")
-                co.SbPuts(ps, ", " + pt + " __a" + p)
+                pts1 := sm.ToString(s, isigv.params.get(p))
+                pact1 := sig_param_is_ref(s, a, isig, p) ? "" : cg_array_ctype(pts1)
+                if str.Len(pact1) > 0:
+                    // Named array declarator - C's parameter-decay rule
+                    // drops the first dimension on its own, same as any
+                    // named array parameter (func_signature's own "__in"
+                    // copies included), so this is cg_decl_cn, not the
+                    // pointer-to-whole-array form cg_array_ret_decl builds
+                    // for an out-parameter.
+                    co.SbPuts(ps, ", " + cg_decl_cn(pts1, "__a" + p))
+                else:
+                    pt := cg_ctype(pts1) + (sig_param_is_ref(s, a, isig, p) ? "*" : "")
+                    co.SbPuts(ps, ", " + pt + " __a" + p)
+                end
                 co.SbPuts(asb, ", __a" + p)
             end
             isvoid := isigv.ret_type != sm.TYPE_NONE && sm.TypeAt(s, isigv.ret_type).kind == sm.TY_VOID
@@ -378,13 +448,14 @@ func cg_emit_dyn_vtables_impl(g &: Cg, s &: sm.Sema, a &: at.Ast):
             // aggregate, so the thunk cannot `return f(...)` - it takes the
             // caller's out-pointer and hands it straight on.
             sret2 := type_is_byval_agg(s, isigv.ret_type)
+            recv_expr := recv_star == "*" ? "(" + cc2 + "*)self" : "*(" + cc2 + "*)self"
             if sret2:
                 out(
-                    g, "static void _Salam_thunk_" + ci + "_" + cc2 + "_" + cg_cident(ms.name) + "(void* self" + co.SbCstr(ps) + ", " + rets + "* __ret){ " + mangled + "((" + cc2 + "*)self" + co.SbCstr(asb) + ", __ret); }\n"
+                    g, "static void _Salam_thunk_" + ci + "_" + cc2 + "_" + cg_cident(ms.name) + "(void* self" + co.SbCstr(ps) + ", " + ret_out1 + "){ " + mangled + "(" + recv_expr + co.SbCstr(asb) + ", __ret); }\n"
                 )
             else:
                 out(
-                    g, "static " + rets + " _Salam_thunk_" + ci + "_" + cc2 + "_" + cg_cident(ms.name) + "(void* self" + co.SbCstr(ps) + "){ " + (isvoid ? "" : "return ") + mangled + "((" + cc2 + "*)self" + co.SbCstr(asb) + "); }\n"
+                    g, "static " + rets + " _Salam_thunk_" + ci + "_" + cc2 + "_" + cg_cident(ms.name) + "(void* self" + co.SbCstr(ps) + "){ " + (isvoid ? "" : "return ") + mangled + "(" + recv_expr + co.SbCstr(asb) + "); }\n"
                 )
             end
             co.SbFree(ps)
@@ -479,7 +550,22 @@ func vec_emit(g &: Cg, ts: str):
     outh(g, "#endif\n")
 end
 
-func hdr_prelude(g &: Cg, a &: at.Ast, program: int):
+// One of the five names spelled the way <string.h> spells them. A program
+// that defines the name itself gets no declaration here: its own definition
+// is the declaration, and libc's spelling would only conflict with it.
+func rt_decl(g &: Cg, s &: sm.Sema, a &: at.Ast, name: str, proto: str):
+    did := libc_definition(a, name)
+    if did == 0:
+        outh(g, proto)
+        ret
+    end
+    sig := sig_for_decl(s, did)
+    if sig != 0:
+        outh(g, cg_extern_proto(s, a, did, sig) + ";\n")
+    end
+end
+
+func hdr_prelude(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
     outh(g, "#pragma once\n")
     guard := cg_cident(g.module)
     outh(
@@ -501,6 +587,13 @@ func hdr_prelude(g &: Cg, a &: at.Ast, program: int):
             g, "#include <stdint.h>\n#include <stdbool.h>\n#include <math.h>" + "\n#include <stddef.h>\n"
         )
     end
+    // Whole-array copies (`b := a`, a by-value array parameter) go through
+    // this rather than memcpy, which <string.h> would have to declare and a
+    // freestanding build cannot include. The compilers that have the
+    // builtin turn it into the same code; anything else gets a byte loop.
+    outh(
+        g, "#ifndef SALAM_ARRCPY_DEFINED\n#define SALAM_ARRCPY_DEFINED\n" + "static inline void salam_arrcpy(void *d, const void *s, size_t n) {\n" + "#if (defined(__GNUC__) || defined(__clang__)) && !defined(__TINYC__)\n" + "    __builtin_memcpy(d, s, n);\n" + "#else\n" + "    unsigned char *dd = (unsigned char *)d; const unsigned char *ss = (const unsigned char *)s;\n" + "    while (n--) *dd++ = *ss++;\n" + "#endif\n" + "}\n#endif\n"
+    )
     // <stdio.h> is included rather than fopen/fread/fwrite being
     // hand-declared like the rest of the CRT surface: clang's
     // -Wbuiltin-requires-header fires on any declaration of those three
@@ -630,9 +723,13 @@ func hdr_prelude(g &: Cg, a &: at.Ast, program: int):
     // a `char**` parameter, so the C text is written out here instead of being
     // derived from a salam signature - same reason libc_canonical_proto exists
     // for the extern blocks in std/.
-    outh(
-        g, "#ifndef SALAM_RT_STR_DEFINED\n#define SALAM_RT_STR_DEFINED\n" + "extern size_t strlen(const char* s);\n" + "extern int strcmp(const char* a, const char* b);\n" + "extern char* strstr(const char* haystack, const char* " + "needle);\n" + "extern long strtol(const char* s, char** endptr, int " + "base);\n" + "extern double strtod(const char* s, char** endptr);\n" + "#endif\n"
-    )
+    outh(g, "#ifndef SALAM_RT_STR_DEFINED\n#define SALAM_RT_STR_DEFINED\n")
+    rt_decl(g, s, a, "strlen", "extern size_t strlen(const char* s);\n")
+    rt_decl(g, s, a, "strcmp", "extern int strcmp(const char* a, const char* b);\n")
+    rt_decl(g, s, a, "strstr", "extern char* strstr(const char* haystack, const char* needle);\n")
+    rt_decl(g, s, a, "strtol", "extern long strtol(const char* s, char** endptr, int base);\n")
+    rt_decl(g, s, a, "strtod", "extern double strtod(const char* s, char** endptr);\n")
+    outh(g, "#endif\n")
     outh(
         g, "#ifndef SALAM_RT_STR2_DEFINED\n#define SALAM_RT_STR2_DEFINED\n" + "extern const char* salam_strcat(const char* a, const char* " + "b);\n" + "extern const char* salam_char_from_code(int32_t c);\n" + "extern const char* salam_fmt_f64(double v);\n" + "extern const char* salam_str_substr(const char* s, int32_t " + "start, int32_t n);\n" + "extern const char* salam_str_trim(const char* s);\n" + "extern void* salam_str_split(const char* s, const char* " + "delim, void* out_count);\n" + "extern const char* salam_str_repeat(const char* s, int32_t " + "n);\n" + "extern const char* salam_str_upper(const char* s);\n" + "extern const char* salam_str_lower(const char* s);\n" + "#endif\n"
     )
@@ -1054,6 +1151,40 @@ func is_stdio_name(name: str): bool:
     ret false
 end
 
+// Whether the program supplies this name itself: an `extern:` entry with a
+// body, anywhere in the program. libc's prototype is what a CALLER needs;
+// where the program is the one defining the function, the definition is its
+// own declaration, and libc's spelling only collides with it - `memcpy`
+// declared `const void*` against a definition that cannot say `const` is a
+// hard error, which is what kept a freestanding runtime out of Salam.
+func libc_definition(a &: at.Ast, name: str): int:
+    total := at.Count(a)
+    mut i := 1
+    until i < total:
+        n := at.Get(a, i)
+        if n.kind == at.AST_FUNC_DEF && n.is_extern && n.a != 0 && str.Equals(n.name, name):
+            ret i
+        end
+        i += 1
+    end
+    ret 0
+end
+
+// The signature belonging to one declaration, found by the declaration
+// rather than by name: two of these names can be declared in several
+// packages at once, and only one of them is the definition.
+func sig_for_decl(s &: sm.Sema, decl: int): int:
+    total := sm.SigCount(s)
+    mut i := 1
+    until i < total:
+        if sm.SigAt(s, i).decl == decl:
+            ret i
+        end
+        i += 1
+    end
+    ret 0
+end
+
 // <string.h>/<stdlib.h> names whose real prototype salam's type vocabulary
 // cannot express, so an `extern func memcpy(dst: void*, src: void*, n: u64)`
 // in std/mem came out as a declaration both gcc and clang consider
@@ -1114,6 +1245,276 @@ func libc_canonical_proto(name: str): str:
     if str.Equals(name, "memcmp"):
         ret "extern int memcmp(const void* a, const void* b, size_t n)"
     end
+    // Everything else gcc and clang know as a built-in. A user extern such
+    // as `func abs(x: i64): i64` or `func strdup(s: str): str` used to be
+    // emitted from its Salam signature and drew -Wbuiltin-declaration-
+    // mismatch / -Wincompatible-library-redeclaration. The prototypes are
+    // the C library's own, harvested from glibc's <stdlib.h>, <string.h>,
+    // <math.h> and <unistd.h> with `gcc -aux-info`, and spelled with the
+    // typedef names (size_t, ssize_t, off_t) so they hold on every libc.
+    // Name/prototype pairs, flattened with stride 2.
+    protos := [
+        "abort", "extern void abort(void)",
+        "abs", "extern int abs(int)",
+        "acos", "extern double acos(double)",
+        "acosf", "extern float acosf(float)",
+        "acosh", "extern double acosh(double)",
+        "acoshf", "extern float acoshf(float)",
+        "acoshl", "extern long double acoshl(long double)",
+        "acosl", "extern long double acosl(long double)",
+        "alloca", "extern void* alloca(size_t)",
+        "asin", "extern double asin(double)",
+        "asinf", "extern float asinf(float)",
+        "asinh", "extern double asinh(double)",
+        "asinhf", "extern float asinhf(float)",
+        "asinhl", "extern long double asinhl(long double)",
+        "asinl", "extern long double asinl(long double)",
+        "atan", "extern double atan(double)",
+        "atan2", "extern double atan2(double, double)",
+        "atan2f", "extern float atan2f(float, float)",
+        "atan2l", "extern long double atan2l(long double, long double)",
+        "atanf", "extern float atanf(float)",
+        "atanh", "extern double atanh(double)",
+        "atanhf", "extern float atanhf(float)",
+        "atanhl", "extern long double atanhl(long double)",
+        "atanl", "extern long double atanl(long double)",
+        "bcmp", "extern int bcmp(const void*, const void*, size_t)",
+        "bcopy", "extern void bcopy(const void*, void*, size_t)",
+        "bzero", "extern void bzero(void*, size_t)",
+        "cbrt", "extern double cbrt(double)",
+        "cbrtf", "extern float cbrtf(float)",
+        "cbrtl", "extern long double cbrtl(long double)",
+        "ceil", "extern double ceil(double)",
+        "ceilf", "extern float ceilf(float)",
+        "ceill", "extern long double ceill(long double)",
+        "copysign", "extern double copysign(double, double)",
+        "copysignf", "extern float copysignf(float, float)",
+        "copysignl", "extern long double copysignl(long double, long double)",
+        "cos", "extern double cos(double)",
+        "cosf", "extern float cosf(float)",
+        "cosh", "extern double cosh(double)",
+        "coshf", "extern float coshf(float)",
+        "coshl", "extern long double coshl(long double)",
+        "cosl", "extern long double cosl(long double)",
+        "drem", "extern double drem(double, double)",
+        "dremf", "extern float dremf(float, float)",
+        "dreml", "extern long double dreml(long double, long double)",
+        "erf", "extern double erf(double)",
+        "erfc", "extern double erfc(double)",
+        "erfcf", "extern float erfcf(float)",
+        "erfcl", "extern long double erfcl(long double)",
+        "erff", "extern float erff(float)",
+        "erfl", "extern long double erfl(long double)",
+        "execl", "extern int execl(const char*, const char*, ...)",
+        "execle", "extern int execle(const char*, const char*, ...)",
+        "execlp", "extern int execlp(const char*, const char*, ...)",
+        "execv", "extern int execv(const char*, char*const*)",
+        "execve", "extern int execve(const char*, char*const*, char*const*)",
+        "execvp", "extern int execvp(const char*, char*const*)",
+        "exit", "extern void exit(int)",
+        "exp", "extern double exp(double)",
+        "exp2", "extern double exp2(double)",
+        "exp2f", "extern float exp2f(float)",
+        "exp2l", "extern long double exp2l(long double)",
+        "expf", "extern float expf(float)",
+        "expl", "extern long double expl(long double)",
+        "expm1", "extern double expm1(double)",
+        "expm1f", "extern float expm1f(float)",
+        "expm1l", "extern long double expm1l(long double)",
+        "fabs", "extern double fabs(double)",
+        "fabsf", "extern float fabsf(float)",
+        "fabsl", "extern long double fabsl(long double)",
+        "fdim", "extern double fdim(double, double)",
+        "fdimf", "extern float fdimf(float, float)",
+        "fdiml", "extern long double fdiml(long double, long double)",
+        "ffs", "extern int ffs(int)",
+        "ffsl", "extern int ffsl(long int)",
+        "ffsll", "extern int ffsll(long long int)",
+        "finite", "extern int finite(double)",
+        "finitef", "extern int finitef(float)",
+        "finitel", "extern int finitel(long double)",
+        "floor", "extern double floor(double)",
+        "floorf", "extern float floorf(float)",
+        "floorl", "extern long double floorl(long double)",
+        "fma", "extern double fma(double, double, double)",
+        "fmaf", "extern float fmaf(float, float, float)",
+        "fmal", "extern long double fmal(long double, long double, long double)",
+        "fmax", "extern double fmax(double, double)",
+        "fmaxf", "extern float fmaxf(float, float)",
+        "fmaxl", "extern long double fmaxl(long double, long double)",
+        "fmin", "extern double fmin(double, double)",
+        "fminf", "extern float fminf(float, float)",
+        "fminl", "extern long double fminl(long double, long double)",
+        "fmod", "extern double fmod(double, double)",
+        "fmodf", "extern float fmodf(float, float)",
+        "fmodl", "extern long double fmodl(long double, long double)",
+        "free", "extern void free(void*)",
+        "frexp", "extern double frexp(double, int*)",
+        "frexpf", "extern float frexpf(float, int*)",
+        "frexpl", "extern long double frexpl(long double, int*)",
+        "gamma", "extern double gamma(double)",
+        "gammaf", "extern float gammaf(float)",
+        "gammal", "extern long double gammal(long double)",
+        "hypot", "extern double hypot(double, double)",
+        "hypotf", "extern float hypotf(float, float)",
+        "hypotl", "extern long double hypotl(long double, long double)",
+        "ilogb", "extern int ilogb(double)",
+        "ilogbf", "extern int ilogbf(float)",
+        "ilogbl", "extern int ilogbl(long double)",
+        "index", "extern char* index(const char*, int)",
+        "isinf", "extern int isinf(double)",
+        "isinff", "extern int isinff(float)",
+        "isinfl", "extern int isinfl(long double)",
+        "isnan", "extern int isnan(double)",
+        "isnanf", "extern int isnanf(float)",
+        "isnanl", "extern int isnanl(long double)",
+        "j0", "extern double j0(double)",
+        "j0f", "extern float j0f(float)",
+        "j0l", "extern long double j0l(long double)",
+        "j1", "extern double j1(double)",
+        "j1f", "extern float j1f(float)",
+        "j1l", "extern long double j1l(long double)",
+        "jn", "extern double jn(int, double)",
+        "jnf", "extern float jnf(int, float)",
+        "jnl", "extern long double jnl(int, long double)",
+        "labs", "extern long int labs(long int)",
+        "ldexp", "extern double ldexp(double, int)",
+        "ldexpf", "extern float ldexpf(float, int)",
+        "ldexpl", "extern long double ldexpl(long double, int)",
+        "lgamma", "extern double lgamma(double)",
+        "lgammaf", "extern float lgammaf(float)",
+        "lgammal", "extern long double lgammal(long double)",
+        "llabs", "extern long long int llabs(long long int)",
+        "llrint", "extern long long int llrint(double)",
+        "llrintf", "extern long long int llrintf(float)",
+        "llrintl", "extern long long int llrintl(long double)",
+        "llround", "extern long long int llround(double)",
+        "llroundf", "extern long long int llroundf(float)",
+        "llroundl", "extern long long int llroundl(long double)",
+        "log", "extern double log(double)",
+        "log10", "extern double log10(double)",
+        "log10f", "extern float log10f(float)",
+        "log10l", "extern long double log10l(long double)",
+        "log1p", "extern double log1p(double)",
+        "log1pf", "extern float log1pf(float)",
+        "log1pl", "extern long double log1pl(long double)",
+        "log2", "extern double log2(double)",
+        "log2f", "extern float log2f(float)",
+        "log2l", "extern long double log2l(long double)",
+        "logb", "extern double logb(double)",
+        "logbf", "extern float logbf(float)",
+        "logbl", "extern long double logbl(long double)",
+        "logf", "extern float logf(float)",
+        "logl", "extern long double logl(long double)",
+        "lrint", "extern long int lrint(double)",
+        "lrintf", "extern long int lrintf(float)",
+        "lrintl", "extern long int lrintl(long double)",
+        "lround", "extern long int lround(double)",
+        "lroundf", "extern long int lroundf(float)",
+        "lroundl", "extern long int lroundl(long double)",
+        "memalign", "extern void* memalign(size_t, size_t)",
+        "memccpy", "extern void* memccpy(void*, const void*, int, size_t)",
+        "memchr", "extern void* memchr(const void*, int, size_t)",
+        "mempcpy", "extern void* mempcpy(void*, const void*, size_t)",
+        "modf", "extern double modf(double, double*)",
+        "modff", "extern float modff(float, float*)",
+        "modfl", "extern long double modfl(long double, long double*)",
+        "nan", "extern double nan(const char*)",
+        "nanf", "extern float nanf(const char*)",
+        "nanl", "extern long double nanl(const char*)",
+        "nearbyint", "extern double nearbyint(double)",
+        "nearbyintf", "extern float nearbyintf(float)",
+        "nearbyintl", "extern long double nearbyintl(long double)",
+        "nextafter", "extern double nextafter(double, double)",
+        "nextafterf", "extern float nextafterf(float, float)",
+        "nextafterl", "extern long double nextafterl(long double, long double)",
+        "nexttoward", "extern double nexttoward(double, long double)",
+        "nexttowardf", "extern float nexttowardf(float, long double)",
+        "nexttowardl", "extern long double nexttowardl(long double, long double)",
+        "pow", "extern double pow(double, double)",
+        "powf", "extern float powf(float, float)",
+        "powl", "extern long double powl(long double, long double)",
+        "printf", "extern int printf(const char*, ...)",
+        "putchar", "extern int putchar(int)",
+        "puts", "extern int puts(const char*)",
+        "remainder", "extern double remainder(double, double)",
+        "remainderf", "extern float remainderf(float, float)",
+        "remainderl", "extern long double remainderl(long double, long double)",
+        "remquo", "extern double remquo(double, double, int*)",
+        "remquof", "extern float remquof(float, float, int*)",
+        "remquol", "extern long double remquol(long double, long double, int*)",
+        "rindex", "extern char* rindex(const char*, int)",
+        "rint", "extern double rint(double)",
+        "rintf", "extern float rintf(float)",
+        "rintl", "extern long double rintl(long double)",
+        "round", "extern double round(double)",
+        "roundf", "extern float roundf(float)",
+        "roundl", "extern long double roundl(long double)",
+        "scalb", "extern double scalb(double, double)",
+        "scalbf", "extern float scalbf(float, float)",
+        "scalbl", "extern long double scalbl(long double, long double)",
+        "scalbln", "extern double scalbln(double, long int)",
+        "scalblnf", "extern float scalblnf(float, long int)",
+        "scalblnl", "extern long double scalblnl(long double, long int)",
+        "scalbn", "extern double scalbn(double, int)",
+        "scalbnf", "extern float scalbnf(float, int)",
+        "scalbnl", "extern long double scalbnl(long double, int)",
+        "scanf", "extern int scanf(const char*, ...)",
+        "significand", "extern double significand(double)",
+        "significandf", "extern float significandf(float)",
+        "significandl", "extern long double significandl(long double)",
+        "sin", "extern double sin(double)",
+        "sinf", "extern float sinf(float)",
+        "sinh", "extern double sinh(double)",
+        "sinhf", "extern float sinhf(float)",
+        "sinhl", "extern long double sinhl(long double)",
+        "sinl", "extern long double sinl(long double)",
+        "sqrt", "extern double sqrt(double)",
+        "sqrtf", "extern float sqrtf(float)",
+        "sqrtl", "extern long double sqrtl(long double)",
+        "sscanf", "extern int sscanf(const char*, const char*, ...)",
+        "strcasecmp", "extern int strcasecmp(const char*, const char*)",
+        "strchr", "extern char* strchr(const char*, int)",
+        "strcmp", "extern int strcmp(const char*, const char*)",
+        "strcspn", "extern size_t strcspn(const char*, const char*)",
+        "strdup", "extern char* strdup(const char*)",
+        "strerror", "extern char* strerror(int)",
+        "strncasecmp", "extern int strncasecmp(const char*, const char*, size_t)",
+        "strncmp", "extern int strncmp(const char*, const char*, size_t)",
+        "strndup", "extern char* strndup(const char*, size_t)",
+        "strnlen", "extern size_t strnlen(const char*, size_t)",
+        "strpbrk", "extern char* strpbrk(const char*, const char*)",
+        "strrchr", "extern char* strrchr(const char*, int)",
+        "strspn", "extern size_t strspn(const char*, const char*)",
+        "tan", "extern double tan(double)",
+        "tanf", "extern float tanf(float)",
+        "tanh", "extern double tanh(double)",
+        "tanhf", "extern float tanhf(float)",
+        "tanhl", "extern long double tanhl(long double)",
+        "tanl", "extern long double tanl(long double)",
+        "tgamma", "extern double tgamma(double)",
+        "tgammaf", "extern float tgammaf(float)",
+        "tgammal", "extern long double tgammal(long double)",
+        "trunc", "extern double trunc(double)",
+        "truncf", "extern float truncf(float)",
+        "truncl", "extern long double truncl(long double)",
+        "y0", "extern double y0(double)",
+        "y0f", "extern float y0f(float)",
+        "y0l", "extern long double y0l(long double)",
+        "y1", "extern double y1(double)",
+        "y1f", "extern float y1f(float)",
+        "y1l", "extern long double y1l(long double)",
+        "yn", "extern double yn(int, double)",
+        "ynf", "extern float ynf(int, float)",
+        "ynl", "extern long double ynl(int, long double)"
+    ]
+    mut i := 0
+    until i < protos.len():
+        if str.Equals(protos[i], name):
+            ret protos[i + 1]
+        end
+        i += 2
+    end
     ret ""
 end
 
@@ -1159,7 +1560,13 @@ func hdr_externs(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
             // not-quite-matching declaration. Freestanding there is no
             // <stdio.h> and no <math.h>, so nothing else declares them and
             // the hand-declaration is the only one - keep it.
-            suppress := !g.freestanding && (is_libm_name(d.name) || is_stdio_name(d.name))
+            // "write" joins libm/stdio for the same reason: hdr_prelude
+            // always declares it first (SALAM_RAW_WRITE, behind
+            // SALAM_OUT_DEFINED), so a user's own `extern func write(...)`
+            // met a real, already-emitted "extern ... write(...)" with a
+            // different parameter width - std/console does exactly this,
+            // and only avoided it by never calling println in that file.
+            suppress := !g.freestanding && (is_libm_name(d.name) || is_stdio_name(d.name) || str.Equals(d.name, "write"))
             if sig != 0 && !suppress:
                 mut guard := ""
                 if is_wellknown_libc_name(d.name):
@@ -1170,7 +1577,10 @@ func hdr_externs(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
                 if str.Len(guard) > 0:
                     outh(g, "#ifndef " + guard + "\n")
                 end
-                mut proto := libc_canonical_proto(d.name)
+                mut proto := ""
+                if libc_definition(a, d.name) == 0:
+                    proto = libc_canonical_proto(d.name)
+                end
                 if str.Len(proto) == 0:
                     proto = cg_extern_proto(s, a, did, sig)
                 end
@@ -1238,7 +1648,8 @@ func hdr_prototypes(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
         if d.synthetic:
             continue
         end
-        if d.kind == at.AST_FUNC_DEF && !str.Equals(d.name, g.entry) && (d.is_pub || pkgmod):
+        is_entry := str.Equals(d.name, g.entry) && !pkgmod
+        if d.kind == at.AST_FUNC_DEF && !is_entry && (d.is_pub || pkgmod):
             fsym := sm.LookupLocal(s, s.global, d.name)
             sig := sig_of_decl(s, fsym, did)
             if sig != 0:
@@ -1306,7 +1717,7 @@ func hdr_impl_prototypes(g &: Cg, s &: sm.Sema, a &: at.Ast):
 end
 
 func cg_header_impl(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
-    hdr_prelude(g, a, program)
+    hdr_prelude(g, s, a, program)
     hdr_enums(g, s, a, program)
     hdr_struct_fwd(g, s, a, program)
     hdr_struct_fwd_imports(g, s, a)

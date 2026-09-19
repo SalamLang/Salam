@@ -35,6 +35,12 @@ func datalayout(triple: str): str:
     dl_a64_elf := "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128"
     dl_a64_mac := "e-m:o-i64:64-i128:128-n32:64-S128"
     dl_rv64 := "e-m:e-p:64:64-i64:64-i128:128-n32:64-S128"
+    // 32-bit ARM/Thumb EABI. "E-" is big-endian: the Verix eVo terminals run
+    // BE-32, so thumbeb/armeb must NOT fall through to "" (no datalayout),
+    // which would leave LLVM to assume the host's endianness and silently
+    // byte-swap every constant in the image.
+    dl_arm_le := "e-m:e-p:32:32-Fi8-i64:64-v128:64:128-a:0:32-n32-S64"
+    dl_arm_be := "E-m:e-p:32:32-Fi8-i64:64-v128:64:128-a:0:32-n32-S64"
     if str.Len(triple) == 0:
         ret dl_host()
     end
@@ -53,6 +59,10 @@ func datalayout(triple: str): str:
     end
     if str.Contains(triple, "riscv64"):
         ret dl_rv64
+    end
+    // After aarch64/arm64 above, so only the 32-bit ARM families reach here.
+    if str.Contains(triple, "thumb") || str.Contains(triple, "arm"):
+        ret (str.Contains(triple, "thumbeb") || str.Contains(triple, "armeb")) ? dl_arm_be : dl_arm_le
     end
     ret ""
 end
@@ -102,20 +112,50 @@ func pl_widen(v &: Lv, src: str, dst: str): str:
     ret dst
 end
 
+// Whether the program defines this libc name itself, anywhere. A `declare`
+// beside a `define` of the same name is not valid IR, so a program carrying
+// its own freestanding runtime - malloc, memcpy, strlen and the rest - was
+// rejected as a redefinition before it reached the assembler.
+func program_defines(a &: at.Ast, name: str): bool:
+    total := at.Count(a)
+    mut i := 1
+    until i < total:
+        n := at.Get(a, i)
+        if n.kind == at.AST_FUNC_DEF && n.is_extern && n.a != 0 && str.Equals(n.name, name):
+            ret true
+        end
+        i += 1
+    end
+    ret false
+end
+
+func declare_libc(v &: Lv, a &: at.Ast, name: str, proto: str):
+    if program_defines(a, name):
+        ret
+    end
+    out_g(v, proto)
+end
+
 // ll_emit_prologue
-func emit_prologue(v &: Lv):
+func emit_prologue(v &: Lv, a &: at.Ast):
     u := v.usize
     out_g(
         v, "; Salam -> LLVM IR (textual). usize = " + u + " (" + (v.ptr_bits == 32 ? "32" : "64") + "-bit target).\n"
     )
-    out_g(v, "declare i32 @printf(ptr, ...) nounwind\n")
-    out_g(v, "declare i32 @dprintf(i32, ptr, ...) nounwind\n")
-    out_g(v, "declare i64 @write(i32, ptr, i64) nounwind\n")
-    out_g(
-        v, "declare " + u + " @strlen(ptr) nounwind willreturn memory(argmem: read)\n"
+    declare_libc(v, a, "printf", "declare i32 @printf(ptr, ...) nounwind\n")
+    declare_libc(v, a, "dprintf", "declare i32 @dprintf(i32, ptr, ...) nounwind\n")
+    // write(2) takes and returns size_t/ssize_t, i.e. POINTER width - not
+    // always i64. On a 32-bit target (i686, wasm32, armv7, the Verix eVo
+    // terminals) an i64 declaration mismatches the real write() and passes
+    // the length in the wrong place. The C backend already gets this right
+    // (codegen_header's __SIZEOF_POINTER__ == 4 branch); this is the LLVM
+    // backend catching up.
+    declare_libc(v, a, "write", "declare " + u + " @write(i32, ptr, " + u + ") nounwind\n")
+    declare_libc(
+        v, a, "strlen", "declare " + u + " @strlen(ptr) nounwind willreturn memory(argmem: read)\n"
     )
-    out_g(v, "declare i32 @strcmp(ptr, ptr) nounwind willreturn memory(argmem: read)\n")
-    out_g(v, "declare noalias ptr @malloc(" + u + ") nounwind allocsize(0)\n")
+    declare_libc(v, a, "strcmp", "declare i32 @strcmp(ptr, ptr) nounwind willreturn memory(argmem: read)\n")
+    declare_libc(v, a, "malloc", "declare noalias ptr @malloc(" + u + ") nounwind allocsize(0)\n")
     // glibc only. mallopt does not exist on musl or macOS, so the
     // declaration and the calls that go with it are emitted only when the
     // libc being linked is glibc; everywhere else the runtime simply keeps
@@ -124,22 +164,26 @@ func emit_prologue(v &: Lv):
     if v.libc_glibc:
         out_g(v, "declare i32 @mallopt(i32, i32) nounwind\n")
     end
-    out_g(
-        v, "declare noalias ptr @realloc(ptr, " + u + ") nounwind allocsize(1)\n"
+    declare_libc(
+        v, a, "realloc", "declare noalias ptr @realloc(ptr, " + u + ") nounwind allocsize(1)\n"
     )
-    out_g(v, "declare void @free(ptr) nounwind\n")
-    out_g(v, "declare ptr @memcpy(ptr, ptr, " + u + ") nounwind\n")
-    out_g(v, "declare ptr @memmove(ptr, ptr, " + u + ") nounwind\n")
-    out_g(v, "declare void @abort() noreturn nounwind cold\n")
-    out_g(v, "declare void @exit(i32) noreturn nounwind\n")
-    out_g(v, "declare i32 @atexit(ptr) nounwind\n")
-    out_g(v, "declare i32 @fflush(ptr) nounwind\n")
-    out_g(v, "declare ptr @signal(i32, ptr) nounwind\n")
-    out_g(v, "declare i32 @raise(i32) nounwind\n")
-    out_g(v, "declare i32 @snprintf(ptr, " + u + ", ptr, ...) nounwind\n")
-    out_g(v, "declare i64 @strtol(ptr, ptr, i32) nounwind\n")
-    out_g(v, "declare double @strtod(ptr, ptr) nounwind\n")
-    out_g(v, "declare ptr @strstr(ptr, ptr) nounwind willreturn memory(argmem: read)\n")
+    declare_libc(v, a, "free", "declare void @free(ptr) nounwind\n")
+    declare_libc(v, a, "memcpy", "declare ptr @memcpy(ptr, ptr, " + u + ") nounwind\n")
+    declare_libc(v, a, "memmove", "declare ptr @memmove(ptr, ptr, " + u + ") nounwind\n")
+    // Zeroing an aggregate local (see lv_vardecl). Emitted unconditionally:
+    // an unused declare costs nothing, and threading a "needed" flag through
+    // lv_vardecl would not pay for itself.
+    out_g(v, "declare void @llvm.memset.p0." + u + "(ptr, i8, " + u + ", i1) nounwind\n")
+    declare_libc(v, a, "abort", "declare void @abort() noreturn nounwind cold\n")
+    declare_libc(v, a, "exit", "declare void @exit(i32) noreturn nounwind\n")
+    declare_libc(v, a, "atexit", "declare i32 @atexit(ptr) nounwind\n")
+    declare_libc(v, a, "fflush", "declare i32 @fflush(ptr) nounwind\n")
+    declare_libc(v, a, "signal", "declare ptr @signal(i32, ptr) nounwind\n")
+    declare_libc(v, a, "raise", "declare i32 @raise(i32) nounwind\n")
+    declare_libc(v, a, "snprintf", "declare i32 @snprintf(ptr, " + u + ", ptr, ...) nounwind\n")
+    declare_libc(v, a, "strtol", "declare " + ltype(v) + " @strtol(ptr, ptr, i32) nounwind\n")
+    declare_libc(v, a, "strtod", "declare double @strtod(ptr, ptr) nounwind\n")
+    declare_libc(v, a, "strstr", "declare ptr @strstr(ptr, ptr) nounwind willreturn memory(argmem: read)\n")
     out_g(v, "declare double @llvm.pow.f64(double, double)\n")
     out_g(v, "%dyn = type { ptr, ptr }\n")
 end
@@ -328,10 +372,39 @@ func onsig_helper(v &: Lv): str:
     ret "define internal void @salam_out_onsig(i32 %s) nounwind {\n" + "entry:\n" + "  call void @salam_out_flush()\n" + "  %d = call ptr @signal(i32 %s, ptr null)\n" + "  %r = call i32 @raise(i32 %s)\n" + "  ret void\n" + "}\n"
 end
 
+// emit_outbuf keeps its byte count in an i64 global, but write(2) takes
+// size_t. On a 64-bit target those are the same type and nothing is emitted,
+// so the IR there is byte-for-byte what it always was; on a 32-bit one the
+// count is narrowed first. wpre() is the (possibly empty) instruction and
+// wref() the operand to pass.
+func wpre(v &: Lv, src2: str, dst: str): str:
+    if str.Equals(v.usize, "i64"):
+        ret ""
+    end
+    ret "  " + dst + " = trunc i64 " + src2 + " to " + v.usize + "\n"
+end
+
+func wref(v &: Lv, src2: str, dst: str): str:
+    if str.Equals(v.usize, "i64"):
+        ret src2
+    end
+    ret dst
+end
+
+// The width of C `long`, which strtol returns. 32-bit on Windows whatever
+// the architecture (LLP64) and on every ILP32 target; 64-bit only on LP64
+// Unix. It is NOT the same question as usize on Windows x86_64.
+func ltype(v &: Lv): str:
+    if target_is_windows_of(v.triple):
+        ret "i32"
+    end
+    ret v.usize
+end
+
 // ll_emit_outbuf
 func emit_outbuf(v &: Lv):
     out_hg(
-        v, "@salam_ob = internal global [65536 x i8] zeroinitializer\n" + "@salam_obn = internal global i64 0\n" + "declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1) nounwind\n" + "define internal void @salam_out_flush() nounwind {\n" + "entry:\n" + "  %n = load i64, ptr @salam_obn\n" + "  %z = icmp eq i64 %n, 0\n" + "  br i1 %z, label %done, label %do\n" + "do:\n" + "  %r = call i64 @write(i32 1, ptr @salam_ob, i64 %n)\n" + "  store i64 0, ptr @salam_obn\n" + "  br label %done\n" + "done:\n" + "  ret void\n" + "}\n" + onsig_helper(v) + "define internal void @salam_out_write(ptr %s, i64 %n) nounwind {\n" + "entry:\n" + "  %obn = load i64, ptr @salam_obn\n" + "  %sum = add i64 %obn, %n\n" + "  %over = icmp ugt i64 %sum, 65536\n" + "  br i1 %over, label %flush, label %chk\n" + "flush:\n" + "  call void @salam_out_flush()\n" + "  br label %chk\n" + "chk:\n" + "  %big = icmp uge i64 %n, 65536\n" + "  br i1 %big, label %direct, label %copy\n" + "direct:\n" + "  %rd = call i64 @write(i32 1, ptr %s, i64 %n)\n" + "  ret void\n" + "copy:\n" + "  %obn2 = load i64, ptr @salam_obn\n" + "  %dst = getelementptr inbounds [65536 x i8], ptr @salam_ob, i64 0, i64 %obn2\n" + "  call void @llvm.memcpy.p0.p0.i64(ptr %dst, ptr %s, i64 %n, i1 false)\n" + "  %newn = add i64 %obn2, %n\n" + "  store i64 %newn, ptr @salam_obn\n" + "  ret void\n" + "}\n" + "@llvm.global_dtors = appending global [1 x { i32, ptr, ptr }] " + "[{ i32, ptr, ptr } { i32 65535, ptr @salam_out_flush, ptr null }]\n\n"
+        v, "@salam_ob = internal global [65536 x i8] zeroinitializer\n" + "@salam_obn = internal global i64 0\n" + "declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1) nounwind\n" + "define internal void @salam_out_flush() nounwind {\n" + "entry:\n" + "  %n = load i64, ptr @salam_obn\n" + "  %z = icmp eq i64 %n, 0\n" + "  br i1 %z, label %done, label %do\n" + "do:\n" + wpre(v, "%n", "%nw") + "  %r = call " + v.usize + " @write(i32 1, ptr @salam_ob, " + v.usize + " " + wref(v, "%n", "%nw") + ")\n" + "  store i64 0, ptr @salam_obn\n" + "  br label %done\n" + "done:\n" + "  ret void\n" + "}\n" + onsig_helper(v) + "define internal void @salam_out_write(ptr %s, i64 %n) nounwind {\n" + "entry:\n" + "  %obn = load i64, ptr @salam_obn\n" + "  %sum = add i64 %obn, %n\n" + "  %over = icmp ugt i64 %sum, 65536\n" + "  br i1 %over, label %flush, label %chk\n" + "flush:\n" + "  call void @salam_out_flush()\n" + "  br label %chk\n" + "chk:\n" + "  %big = icmp uge i64 %n, 65536\n" + "  br i1 %big, label %direct, label %copy\n" + "direct:\n" + wpre(v, "%n", "%ndw") + "  %rd = call " + v.usize + " @write(i32 1, ptr %s, " + v.usize + " " + wref(v, "%n", "%ndw") + ")\n" + "  ret void\n" + "copy:\n" + "  %obn2 = load i64, ptr @salam_obn\n" + "  %dst = getelementptr inbounds [65536 x i8], ptr @salam_ob, i64 0, i64 %obn2\n" + "  call void @llvm.memcpy.p0.p0.i64(ptr %dst, ptr %s, i64 %n, i1 false)\n" + "  %newn = add i64 %obn2, %n\n" + "  store i64 %newn, ptr @salam_obn\n" + "  ret void\n" + "}\n" + "@llvm.global_dtors = appending global [1 x { i32, ptr, ptr }] " + "[{ i32, ptr, ptr } { i32 65535, ptr @salam_out_flush, ptr null }]\n\n"
     )
 end
 

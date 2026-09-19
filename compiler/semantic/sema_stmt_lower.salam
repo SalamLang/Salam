@@ -25,6 +25,12 @@ func define_local(s &: Sema, a &: at.Ast, did: int, kind: int, t: int):
     sym_put(s, symid, sv)
     sema_check_shadows_func(s, d.name, span_of(a, did))
     if scope_define(s, s.cur, symid) != 0:
+        // `_` is a discard: a second `_ := f()` in the same block is not a
+        // redefinition of anything anyone can read.
+        if str.Equals(d.name, "_"):
+            scope_replace_local(s, s.cur, symid)
+            ret
+        end
         serr(
             s, 1, span_of(a, did), co.Format1(i18.Tr("redefinition of '%s'"), co.ArgStr(d.name))
         )
@@ -981,6 +987,24 @@ func sema_check_var_decl(s &: Sema, a &: at.Ast, nid: int): int:
     mut declared := TYPE_NONE
     if n.ty != 0:
         declared = sema_resolve_type(s, a, n.ty)
+    end
+    // The `x := 1 as f32` sugar above discards the AST_CAST node and
+    // points `n.a` straight at the int literal, on the assumption that a
+    // cast right after a var-decl's `:=` is just a type annotation. True
+    // for `x := 1 as i64` (same bit pattern, wider slot) - false here: an
+    // int literal's bits are not a float's, and with the cast gone the
+    // literal reached codegen still holding its own int type, so C read
+    // 16777217 as a `float` initializer itself and warned about the
+    // rounding codegen never got the chance to round. Recompute it as the
+    // real float value now, the same conversion the run-time path performs.
+    if cast_sugar && declared >= 0 && (ty_at(s, declared).kind == TY_F32 || ty_at(s, declared).kind == TY_F64) && n.a != 0 && at.KindOf(a, n.a) == at.AST_LITERAL:
+        mut ln := at.Get(a, n.a)
+        if ln.op == tok.TK_INT:
+            ln.value_kind = tok.TV_FLOAT
+            ln.value_float = ln.value_int as f64
+            ln.op = tok.TK_FLOAT
+            at.Put(a, n.a, ln)
+        end
     end
 
     if n.a != 0 && at.KindOf(a, n.a) == at.AST_STRUCT_LIT && str.Len(at.Get(a, n.a).name) > 0:

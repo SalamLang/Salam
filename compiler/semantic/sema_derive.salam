@@ -35,15 +35,26 @@ import ps "../parser/parser.salam"
 // `Point[3]` -> `Point_a3`, `geo.Point` -> `geo_Point`. Only has to be
 // injective enough that two different types never collide.
 func derive_key(ts: str): str:
+    // Each special character gets its OWN two-letter escape rather than
+    // folding onto a shared "_": "pkg.Point" and a struct actually named
+    // "pkg_Point" used to both key to "pkg_Point", so whichever's
+    // equality function was derived first was silently reused for the
+    // other, comparing it field by field against the wrong struct.
     mut out := ""
     repeat str.Len(ts) with i:
         b := byte_at(ts, i)
-        if b == 60 || b == 44 || b == 46 || b == 95:
-            out = out + "_"
+        if b == 60:
+            out = out + "_o" // '<'
+        else b == 44:
+            out = out + "_c" // ','
+        else b == 46:
+            out = out + "_d" // '.'
+        else b == 95:
+            out = out + "_u" // '_'
         else b == 91:
-            out = out + "_a"
+            out = out + "_a" // '['
         else b == 42:
-            out = out + "_p"
+            out = out + "_p" // '*'
         // '>', ']' and ' ' carry no information once the opener is encoded.
         else b != 62 && b != 93 && b != 32:
             out = out + ts.substr(i, 1)
@@ -292,6 +303,164 @@ func derive_stringify(s &: Sema, a &: at.Ast, t: int, sp: co.SrcSpan): str:
     slot := derive_registry_find(s, fname)
     s.derived_decls.set(slot - 1, fn)
     ret fname
+end
+
+// ---- derived equality ---------------------------------------------------
+//
+// `a == b` on a struct with no operator_eq of its own compares field by
+// field, through `func _eqof_<T>(_a: T, _b: T): bool` derived here the same
+// way _strof_ is. Arrays compare element-wise; a nested struct compares
+// through its own derived (or user) operator; anything that owns heap
+// storage or hides its representation (Vector, HashMap, dyn, Variant,
+// closures, files) has no field-wise meaning and is refused up front, so
+// the user sees one error at the comparison rather than a cascade from
+// generated code.
+
+func derive_eq_name(s &: Sema, t: int): str:
+    ret "_eqof_" + derive_key(type_to_string(s, t))
+end
+
+func derive_eq_possible(s &: Sema, t: int, depth: int): bool:
+    if t < 0 || depth > 8:
+        ret false
+    end
+    v := ty_at(s, t)
+    k := v.kind
+    if k == TY_ARRAY:
+        ret derive_eq_possible(s, v.elem, depth + 1)
+    end
+    if k == TY_STRUCT:
+        sym := v.decl
+        if sym == 0:
+            ret false
+        end
+        if scope_lookup_local(s, sym_at(s, sym).members, "operator_eq") != 0:
+            ret true
+        end
+        // A container or anything that owns storage (it has a `free()`)
+        // is not its fields: comparing a Vector's buffer pointer and
+        // count says nothing about its contents.
+        if derive_method_sig(s, sym, "free", 0) != 0 || derive_map_cursor(s, sym) != 0:
+            ret false
+        end
+        if str.Len(derive_seq_count(s, sym)) > 0 && derive_seq_elem(s, sym) != TYPE_NONE:
+            ret false
+        end
+        fields := scope_at(s, sym_at(s, sym).members).symbols
+        repeat fields.len() with i:
+            fv := sym_at(s, fields.get(i))
+            if fv.kind == SYM_FIELD && !derive_eq_possible(s, fv.ty, depth + 1):
+                ret false
+            end
+        end
+        ret true
+    end
+    if k == TY_VEC || k == TY_MAP || k == TY_MAP_ITER || k == TY_SLICE || k == TY_DYN || k == TY_VARIANT:
+        ret false
+    end
+    if k == TY_FUNC || k == TY_FILE || k == TY_VOID || k == TY_ERROR:
+        ret false
+    end
+    ret true
+end
+
+// One `if l != r: ret false end`, or a loop of them for an array.
+func derive_eq_field(s &: Sema, t: int, l: str, r: str, depth: int): str:
+    v := ty_at(s, t)
+    if v.kind == TY_ARRAY:
+        iv := "_i" + co.I64Toa(depth as i64)
+        inner := derive_eq_field(s, v.elem, l + "[" + iv + "]", r + "[" + iv + "]", depth + 1)
+        ret DV_IND + "repeat len(" + l + ") with " + iv + ":\n" + inner + DV_IND + "end\n"
+    end
+    ret DV_IND + "if " + l + " != " + r + ": ret false end\n"
+end
+
+func derive_eq_source(s &: Sema, t: int, fname: str): str:
+    spelling := derive_type_spelling(s, t)
+    if str.Len(spelling) == 0:
+        ret ""
+    end
+    sym := ty_at(s, t).decl
+    mut body := ""
+    fields := scope_at(s, sym_at(s, sym).members).symbols
+    repeat fields.len() with i:
+        fv := sym_at(s, fields.get(i))
+        if fv.kind == SYM_FIELD:
+            body = body + derive_eq_field(s, fv.ty, "_a." + fv.name, "_b." + fv.name, 0)
+        end
+    end
+    ret "func " + fname + "(_a: " + spelling + ", _b: " + spelling + "): bool:\n" + body + DV_IND +
+        "ret true\nend\n"
+end
+
+// Derive `_eqof_<T>` for struct type `t` and return its name; "" when it
+// cannot be spelled (the caller reports the comparison as unsupported).
+func derive_struct_eq(s &: Sema, a &: at.Ast, t: int, _sp: co.SrcSpan): str:
+    if t < 0 || s.program == 0 || !derive_eq_possible(s, t, 0):
+        ret ""
+    end
+    fname := derive_eq_name(s, t)
+    if derive_registry_find(s, fname) != 0:
+        ret fname
+    end
+    if scope_lookup_local(s, s.global, fname) != 0:
+        ret ""
+    end
+    derive_registry_claim(s, fname)
+    text := derive_eq_source(s, t, fname)
+    if str.Len(text) == 0:
+        derive_registry_drop(s, derive_registry_find(s, fname))
+        ret ""
+    end
+    prog := derive_parse(s, a, text, "<derived>")
+    mut fn := 0
+    if prog != 0:
+        fn = derive_install_all(s, a, prog, fname, 0)
+    end
+    if fn == 0:
+        derive_registry_drop(s, derive_registry_find(s, fname))
+        ret ""
+    end
+    slot := derive_registry_find(s, fname)
+    s.derived_decls.set(slot - 1, fn)
+    ret fname
+end
+
+// Turn the binary node `nid` (`l == r` or `l != r`) into `_eqof_T(l, r)`,
+// wrapped in `!` for the negated form. The operands stay where they are.
+func derive_rewrite_eq(s &: Sema, a &: at.Ast, nid: int, fname: str, negate: bool):
+    n := at.Get(a, nid)
+    sp := span_of(a, nid)
+    callee := new_node_at(a, at.AST_IDENTIFIER, sp)
+    at.SetName(a, callee, fname)
+    mut cv := at.Get(a, callee)
+    cv.synthetic = true
+    at.Put(a, callee, cv)
+    mut callid := nid
+    if negate:
+        callid = new_node_at(a, at.AST_CALL, sp)
+    end
+    mut kv := at.Get(a, callid)
+    kv.kind = at.AST_CALL
+    kv.a = callee
+    kv.b = 0
+    kv.op = 0
+    kv.synthetic = true
+    kv.list.free()
+    kv.list = Vector {} as Vector<int>
+    kv.list.push(n.a)
+    kv.list.push(n.b)
+    at.Put(a, callid, kv)
+    _d := sema_decorate(s, a, callid, sema_ty(s, TY_BOOL))
+    if negate:
+        mut uv := at.Get(a, nid)
+        uv.kind = at.AST_UNARY
+        uv.op = tok.TK_NOT
+        uv.a = callid
+        uv.b = 0
+        uv.synthetic = true
+        at.Put(a, nid, uv)
+    end
 end
 
 // Replace print argument `i` with a call to a stringify function derived for

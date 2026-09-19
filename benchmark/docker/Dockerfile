@@ -86,7 +86,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates curl unzip gcc libc6-dev git libxml2 \
     && rm -rf /var/lib/apt/lists/*
-ARG SALAM_SEED_SLUG=linux
+ARG SALAM_SEED_SLUG=linux-x86_64
 COPY tools /repo/tools
 COPY compiler /repo/compiler
 COPY std /repo/std

@@ -453,8 +453,10 @@ func lv_lambda_value(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     sz := new_tmp(v)
     env := new_tmp(v)
     emit(v, szp + " = getelementptr " + envty + ", ptr null, i32 1")
-    emit(v, sz + " = ptrtoint ptr " + szp + " to i64")
-    emit(v, env + " = call ptr @malloc(i64 " + sz + ")")
+    // malloc is declared taking size_t, which is NOT i64 on a 32-bit target;
+    // a mismatched call here is accepted by LLVM and lowered in the wrong ABI.
+    emit(v, sz + " = ptrtoint ptr " + szp + " to " + v.usize)
+    emit(v, env + " = call ptr @malloc(" + v.usize + " " + sz + ")")
     f0 := new_tmp(v)
     emit(
         v, f0 + " = getelementptr inbounds " + envty + ", ptr " + env + ", i32 0, i32 0"
@@ -956,6 +958,12 @@ func lv_expr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
             mut gep := ""
             if gep_from_int_add(v, s, a, n, to_ts, gep):
                 ret make_llv(gep, to_ts)
+            end
+            // An array decays to a pointer to its first element. Reading the
+            // array as a value would load the whole block; what a cast to a
+            // pointer asks for is where it lives.
+            if (is_ptr_ts(to_ts) || is_str(s, to_ts)) && is_array_ts(at.Get(a, node.a).type_str):
+                ret make_llv(lv_addr_of(v, s, a, node.a).ptr, to_ts)
             end
         end
         vv3 := lv_expr(v, s, a, node.a)

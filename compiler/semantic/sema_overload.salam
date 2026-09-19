@@ -53,6 +53,33 @@ func ro_found(
     ret sigid
 end
 
+// param_accepts - type_assignable, plus one case it cannot see: a `&:`
+// parameter of type T takes a T* as well, since the callee receives a
+// pointer either way. That is what lets a method hand `this` to a helper
+// declared `f(x &: T)` instead of copying itself into a local first.
+func param_accepts(s &: Sema, a &: at.Ast, sgid: int, j: int, argt: int): bool:
+    sg := sig_at(s, sgid)
+    if type_assignable(s, sg.params.get(j), argt):
+        ret true
+    end
+    if sg.decl == 0 || argt < 0:
+        ret false
+    end
+    dl := at.Get(a, sg.decl).list
+    if j >= dl.len():
+        ret false
+    end
+    p := at.Get(a, dl.get(j))
+    if p.kind != at.AST_PARAM || !p.is_ref:
+        ret false
+    end
+    av := ty_at(s, argt)
+    if av.kind != TY_PTR || av.pointee < 0:
+        ret false
+    end
+    ret type_equiv(s, sg.params.get(j), av.pointee)
+end
+
 // resolve_overload - exact pass, then assignable pass, then diagnostics.
 // 0 = the C NULL (no match; errors already reported).
 func resolve_overload(
@@ -114,7 +141,7 @@ func resolve_overload(
         end
         mut ok2 := true
         repeat nfix2 with j2:
-            if !type_assignable(s, sg2.params.get(j2), argtypes.get(j2)):
+            if !param_accepts(s, a, sgid2, j2, argtypes.get(j2)):
                 ok2 = false
                 break
             end
@@ -167,7 +194,7 @@ func resolve_overload(
             nfix3 = sg3.params.len()
         end
         repeat nfix3 with j3:
-            if !type_assignable(s, sg3.params.get(j3), argtypes.get(j3)):
+            if !param_accepts(s, a, fv.overloads.get(0), j3, argtypes.get(j3)):
                 serr(
                     s, 12, sp, co.Format3(
                         i18.Tr("argument %zu: cannot pass '%s' to '%s'"), co.ArgUint((j3 + 1) as u64),
@@ -205,6 +232,11 @@ func mark_ref_args(s &: Sema, a &: at.Ast, call: int, sigid: int):
             if argid != 0:
                 mut arg := at.Get(a, argid)
                 arg.ref_arg = true
+                // A T* bound to `x &: T` (see param_accepts) is passed as
+                // the pointer it already is.
+                if i < sg.params.len() && str.Equals(arg.type_str, type_to_string(s, sg.params.get(i)) + "*"):
+                    arg.ref_arg_ptr = true
+                end
                 at.Put(a, argid, arg)
                 // `f(h.k)` and `f(rows[0])` are writes through a projection,
                 // exactly as `h.k = ...` is: the variable they hang off is
@@ -256,6 +288,8 @@ func try_impl_call(
         s, a, m, argtypes, span_of(a, n), at.Get(a, callee).name
     )
     mark_ref_args(s, a, n, sig)
+    coerce_args_to_dyn(s, a, n, argtypes, sig)
+    coerce_args_to_variant(s, a, n, argtypes, sig)
     _dc := sema_decorate(s, a, callee, sym_at(s, m).ty)
     ret sema_decorate(s, a, n, sig_ret_or_err(s, sig))
 end

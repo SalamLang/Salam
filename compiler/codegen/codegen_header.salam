@@ -354,16 +354,35 @@ func cg_emit_dyn_vtables_impl(g &: Cg, s &: sm.Sema, a &: at.Ast):
             isig := ms.overloads.get(0)
             cm := sm.LookupLocal(s, sm.SymAt(s, csym).members, ms.name)
             csig := dyn_match_sig(s, cm, isig)
-            if csig == 0:
-                continue
+            mut mangled := ""
+            mut recv_star := "*"
+            if csig != 0:
+                // Through cg_mangle_method, not cg_mangle: the method
+                // belongs to the struct's own package, which is not the
+                // module being emitted when a driver in another package
+                // is boxed into an interface here.
+                mangled = cg_mangle_method(
+                    g, s, sm.SymAt(s, csym).name, csym, ms.name, sm.SigAt(s, csig).params
+                )
+            else:
+                // Nothing on the struct itself; an `impl Iface on Struct`
+                // block may still provide it (see sema_generic.salam's
+                // iface_satisfied, which now accepts this too). Those
+                // methods take `this` by value, mangled with the "ti"
+                // scheme (see codegen_decl.salam / llvm_decl.salam), not
+                // by the struct's own pointer-receiver convention.
+                iowner := sm.Lookup(s, s.global, sm.ImplOwnerKey(cnamev))
+                mut icm := 0
+                if iowner != 0 && sm.SymAt(s, iowner).kind == sm.SYM_TYPEIMPL:
+                    icm = sm.LookupLocal(s, sm.SymAt(s, iowner).members, ms.name)
+                end
+                icsig := dyn_match_sig(s, icm, isig)
+                if icsig == 0:
+                    continue
+                end
+                mangled = cg_mangle_ti(s, cnamev, ms.name, sm.SigAt(s, icsig).params)
+                recv_star = ""
             end
-            // Through cg_mangle_method, not cg_mangle: the method belongs
-            // to the struct's own package, which is not the module being
-            // emitted when a driver in another package is boxed into an
-            // interface here.
-            mangled := cg_mangle_method(
-                g, s, sm.SymAt(s, csym).name, csym, ms.name, sm.SigAt(s, csig).params
-            )
             isigv := sm.SigAt(s, isig)
             rets := cg_ctype(sm.ToString(s, isigv.ret_type))
             mut ps := co.SbNew()
@@ -378,13 +397,14 @@ func cg_emit_dyn_vtables_impl(g &: Cg, s &: sm.Sema, a &: at.Ast):
             // aggregate, so the thunk cannot `return f(...)` - it takes the
             // caller's out-pointer and hands it straight on.
             sret2 := type_is_byval_agg(s, isigv.ret_type)
+            recv_expr := recv_star == "*" ? "(" + cc2 + "*)self" : "*(" + cc2 + "*)self"
             if sret2:
                 out(
-                    g, "static void _Salam_thunk_" + ci + "_" + cc2 + "_" + cg_cident(ms.name) + "(void* self" + co.SbCstr(ps) + ", " + rets + "* __ret){ " + mangled + "((" + cc2 + "*)self" + co.SbCstr(asb) + ", __ret); }\n"
+                    g, "static void _Salam_thunk_" + ci + "_" + cc2 + "_" + cg_cident(ms.name) + "(void* self" + co.SbCstr(ps) + ", " + rets + "* __ret){ " + mangled + "(" + recv_expr + co.SbCstr(asb) + ", __ret); }\n"
                 )
             else:
                 out(
-                    g, "static " + rets + " _Salam_thunk_" + ci + "_" + cc2 + "_" + cg_cident(ms.name) + "(void* self" + co.SbCstr(ps) + "){ " + (isvoid ? "" : "return ") + mangled + "((" + cc2 + "*)self" + co.SbCstr(asb) + "); }\n"
+                    g, "static " + rets + " _Salam_thunk_" + ci + "_" + cc2 + "_" + cg_cident(ms.name) + "(void* self" + co.SbCstr(ps) + "){ " + (isvoid ? "" : "return ") + mangled + "(" + recv_expr + co.SbCstr(asb) + "); }\n"
                 )
             end
             co.SbFree(ps)

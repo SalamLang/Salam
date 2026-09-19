@@ -86,6 +86,16 @@ func g_subst(a &: at.Ast, nid: int, params: Vector<str>, args: Vector<int>):
             nv.is_pointer = depth > 0
             nv.elem_ptr_depth += cc.elem_ptr_depth
             nv.is_dyn = cc.is_dyn
+            // A function type carries its return type in `ty` and its
+            // extern-ness in a flag; neither lives in the name or the
+            // list, so a `func (int) int` handed to Vector<T> used to come
+            // out as `func (int) void`. The clone owns a fresh copy.
+            nv.ty = cc.ty
+            nv.is_extern = cc.is_extern
+            nv.is_variadic = cc.is_variadic
+            if cc.is_slice:
+                nv.is_slice = true
+            end
             // The resolved type comes along whole only where the occurrence
             // is the bare parameter. `T*` or `T[4]` stands for a different
             // type than what the caller resolved, so only the base travels and
@@ -200,15 +210,22 @@ func iface_satisfied(
         ret false
     end
     mut members := 0
-    if concrete >= 0 && ty_at(s, concrete).kind == TY_STRUCT && ty_at(s, concrete).decl != 0:
-        members = sym_at(s, ty_at(s, concrete).decl).members
-    else concrete >= 0:
+    mut impl_members := 0
+    if concrete >= 0:
         owner := scope_lookup(
             s, s.global, impl_owner_key(type_to_string(s, concrete))
         )
         if owner != 0:
-            members = sym_at(s, owner).members
+            impl_members = sym_at(s, owner).members
         end
+    end
+    if concrete >= 0 && ty_at(s, concrete).kind == TY_STRUCT && ty_at(s, concrete).decl != 0:
+        members = sym_at(s, ty_at(s, concrete).decl).members
+    else:
+        // A non-struct type (or a struct with no methods of its own)
+        // relies entirely on an `impl Iface on T` block for its methods.
+        members = impl_members
+        impl_members = 0
     end
     if members == 0:
         serr(
@@ -227,10 +244,20 @@ func iface_satisfied(
             continue
         end
         want := sig_at(s, im.overloads.get(0))
-        smx := scope_lookup_local(s, members, im.name)
+        mut smx := scope_lookup_local(s, members, im.name)
         mut have_m := smx != 0
         if have_m && sym_at(s, smx).kind != SYM_METHOD:
             have_m = false
+        end
+        // A struct's own methods take priority, but one an `impl` block
+        // supplies still counts: a struct can satisfy an interface partly
+        // through its own methods and partly through one impl block.
+        if !have_m && impl_members != 0:
+            smx = scope_lookup_local(s, impl_members, im.name)
+            have_m = smx != 0
+            if have_m && sym_at(s, smx).kind != SYM_METHOD:
+                have_m = false
+            end
         end
         if !have_m:
             serr(

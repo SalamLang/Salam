@@ -687,7 +687,31 @@ func ensure_vtbl(
                     )
                 )
             else:
-                co.SbPuts(slots, "ptr null")
+                // Nothing on the struct itself; an `impl Iface on Struct`
+                // block may still provide it (sema_generic.salam's
+                // iface_satisfied accepts this too). Those methods take
+                // `this` by value, mangled with the "ti" scheme, so the
+                // vtable - whose slot always calls `fn(ptr data, ...)` -
+                // needs a small thunk that loads the value and forwards.
+                iowner := sym_of(v, s, a, sm.ImplOwnerKey(concrete))
+                mut icsig := 0
+                if iowner != 0 && sm.SymAt(s, iowner).kind == sm.SYM_TYPEIMPL:
+                    icm := sm.LookupLocal(s, sm.SymAt(s, iowner).members, im.name)
+                    if icm != 0 && sm.SymAt(s, icm).kind == sm.SYM_METHOD:
+                        icsig = match_sig(s, icm, sm.SigAt(s, isig).params.len())
+                    end
+                end
+                if icsig != 0:
+                    mut oscp := scope_of(s, iowner)
+                    if oscp == 0:
+                        oscp = v.pkg_scope
+                    end
+                    ensure_fn(v, s, a, sm.SigAt(s, icsig).decl, iowner, oscp)
+                    tname := dyn_impl_thunk(v, s, a, iface, concrete, im.name, isig, icsig)
+                    co.SbPuts(slots, "ptr @" + tname)
+                else:
+                    co.SbPuts(slots, "ptr null")
+                end
             end
             n += 1
         end
@@ -696,6 +720,59 @@ func ensure_vtbl(
         v, name + " = private unnamed_addr constant [" + co.I64Toa(n as i64) + " x ptr] [" + co.SbCstr(slots) + "]\n"
     )
     co.SbFree(slots)
+end
+
+
+// A one-off wrapper for a vtable slot backed by an `impl Iface on T` method:
+// the slot always calls `fn(ptr data, ...)`, but a by-value "ti"-mangled
+// impl method wants `T` itself. Loads the value from `data` and forwards.
+func dyn_impl_thunk(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, iface: str, concrete: str, mname: str, isig: int, icsig: int
+): str:
+    mut b := co.SbNew()
+    co.SbPuts(b, "dynthunk.")
+    put_ident(b, iface)
+    co.SbPutc(b, 46)
+    put_ident(b, concrete)
+    co.SbPutc(b, 46)
+    put_ident(b, mname)
+    tname := co.SbCstr(b)
+    co.SbFree(b)
+    repeat v.emitted.len() with i:
+        if str.Equals(tname, v.emitted.get(i)):
+            ret tname
+        end
+    end
+    v.emitted.push(tname)
+
+    isigv := sm.SigAt(s, isig)
+    cty := struct_ltype(concrete)
+    rts := sm.ToString(s, isigv.ret_type)
+    rty := ty_of(v, s, a, rts)
+    is_void := str.Equals(rty, "void")
+
+    mut hdr := co.SbNew()
+    co.SbPuts(hdr, "define private " + rty + " @" + tname + "(ptr %self")
+    mut callargs := co.SbNew()
+    co.SbPuts(callargs, cty + " %recv")
+    repeat isigv.params.len() with p:
+        pts := sm.ToString(s, isigv.params.get(p))
+        pty := param_is_ref(s, a, isig, p) ? "ptr" : ty_of(v, s, a, pts)
+        co.SbPuts(hdr, ", " + pty + " %a" + co.I64Toa(p as i64))
+        co.SbPuts(callargs, ", " + pty + " %a" + co.I64Toa(p as i64))
+    end
+    co.SbPuts(hdr, ") {\n")
+    out_g(v, co.SbCstr(hdr))
+    co.SbFree(hdr)
+    out_g(v, "  %recv = load " + cty + ", ptr %self\n")
+    fname := mangle_ti(v, s, concrete, mname, icsig)
+    if is_void:
+        out_g(v, "  call void @" + fname + "(" + co.SbCstr(callargs) + ")\n  ret void\n}\n")
+    else:
+        out_g(v, "  %r = call " + rty + " @" + fname + "(" + co.SbCstr(callargs) + ")\n  ret " + rty + " %r\n}\n")
+    end
+    co.SbFree(callargs)
+    ret tname
 end
 
 // ll_box_dyn - box a struct value into a %dyn { data, vtbl } pair.

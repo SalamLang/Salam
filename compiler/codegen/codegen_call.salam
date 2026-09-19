@@ -87,6 +87,11 @@ func call_emit_arg(
     end
     sv := sm.SigAt(s, sig)
     mut ref_c := ""
+    if at.Get(a, argid).ref_arg_ptr:
+        // Already a pointer to the parameter's type (`this`, or a T*).
+        co.SbPuts(b, cg_expr_value(g, s, a, argid))
+        ret
+    end
     if cg_addressable(s, a, argid):
         ref_c = "&(" + cg_expr(g, s, a, argid) + ")"
     else:
@@ -192,11 +197,18 @@ end
 func call_sret(
     g &: Cg, s &: sm.Sema, ret_t: int, mangled: str, args: str
 ): str:
-    rc := cg_ctype(sm.ToString(s, ret_t))
+    ret_ts := sm.ToString(s, ret_t)
     g.tmpn += 1
     t := g.tmpn
     sep := str.Len(args) > 0 ? ", " : ""
-    ret "({ " + rc + " __s" + t + "; " + mangled + "(" + args + sep + "&__s" + t + "); __s" + t + "; })"
+    // An array return decays to a pointer the same way any other array
+    // expression does (see cg_is_array_place); the local temp still needs
+    // a real array declarator, not cg_ctype's decayed-pointer spelling.
+    // "__s<t>" is already a C identifier (like the struct branch below),
+    // so this goes through cg_decl_cn, not cg_decl (which would run it
+    // through cg_cident and double its leading underscores).
+    decl := str.Len(cg_array_ctype(ret_ts)) > 0 ? cg_decl_cn(ret_ts, "__s" + t) : cg_ctype(ret_ts) + " __s" + t
+    ret "({ " + decl + "; " + mangled + "(" + args + sep + "&__s" + t + "); __s" + t + "; })"
 end
 
 func call_value(

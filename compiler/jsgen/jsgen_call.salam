@@ -79,7 +79,7 @@ func jsg_call_finish(
         until i < cv.list.len() && i < at.Get(a, decl).list.len():
             p := at.Get(a, at.Get(a, decl).list.get(i))
             argv := at.Get(a, cv.list.get(i))
-            if p.kind == at.AST_PARAM && p.is_ref && argv.kind == at.AST_IDENTIFIER:
+            if p.kind == at.AST_PARAM && p.is_ref && (argv.kind == at.AST_IDENTIFIER || argv.ref_arg_ptr):
                 any_ref = true
                 break
             end
@@ -109,7 +109,12 @@ func jsg_call_finish(
         if i2 > 0 || str.Len(recv) > 0:
             str.BufAppend(argb, ", ")
         end
-        if p2 != 0 && at.Get(a, p2).kind == at.AST_PARAM && at.Get(a, p2).is_ref && argv2.kind == at.AST_IDENTIFIER:
+        if p2 != 0 && at.Get(a, p2).kind == at.AST_PARAM && at.Get(a, p2).is_ref && argv2.ref_arg_ptr:
+            // A pointer argument (`this`) already names the shared object;
+            // the callee still unwraps its `&:` parameter with [0], so it
+            // travels in a box with nothing to write back.
+            str.BufAppend(argb, "[" + jsg_expr_p(g, s, a, argid, 0) + "]")
+        else p2 != 0 && at.Get(a, p2).kind == at.AST_PARAM && at.Get(a, p2).is_ref && argv2.kind == at.AST_IDENTIFIER:
             box := jsg_fresh(g, "__ref")
             str.BufAppend(pre, "const " + box + " = [" + jsg_expr_p(g, s, a, argid, 0) + "]; ")
             str.BufAppend(argb, box)
@@ -1118,11 +1123,8 @@ func jsg_dyn_box(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, dts: str): str:
             continue
         end
         mut fn := ""
-        if ssym != 0:
-            csym := sm.LookupLocal(s, sm.SymAt(s, ssym).members, mv.name)
-            if csym == 0:
-                continue
-            end
+        csym := ssym != 0 ? sm.LookupLocal(s, sm.SymAt(s, ssym).members, mv.name) : 0
+        if csym != 0:
             csig := sm.SymAt(s, csym).overloads.len() > 0 ? sm.SymAt(s, csym).overloads.get(
                 0
             ) : 0
@@ -1135,12 +1137,18 @@ func jsg_dyn_box(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, dts: str): str:
             fn = jsg_fn_name(
                 g, s, spkg, sm.SymAt(s, ssym).name, mv.name, csym, csig, false, d_syn
             )
-        else:
+        else impl_sym != 0:
+            // Nothing on the struct itself (or no struct at all, a
+            // primitive/enum concrete type): an `impl Iface on T` block
+            // provides it instead, emitted under a plain `<T>_<method>`
+            // name (jsg_emit_impls).
             isym2 := sm.SymAt(s, impl_sym)
             if isym2.members == 0 || sm.LookupLocal(s, isym2.members, mv.name) == 0:
                 continue
             end
             fn = jsg_ident(cg_cident(concrete) + "_" + mv.name)
+        else:
+            continue
         end
         str.BufAppend(b, ", " + cg_cident(mv.name) + ": " + fn)
     end

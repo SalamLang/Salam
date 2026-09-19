@@ -315,6 +315,28 @@ println a.balance
 Fields and methods are **private by default**; add `pub` to expose. `this` is the
 receiver.
 
+**Operator overloading:** a struct method named `operator_<op>` is called for that
+operator when the left operand is the struct: `operator_add operator_sub
+operator_mul operator_div operator_mod operator_pow` (binary arithmetic, one
+param, same or convertible type), `operator_eq operator_ne operator_lt operator_gt
+operator_le operator_ge` (comparison, one param, returns `bool`; `!=` falls back to
+`!operator_eq` when `operator_ne` is not defined), `operator_index` /
+`operator_index_set` (`s[i]` / `s[i] = v`), and `operator_not` (unary `!`, no
+param). **Unary `-` reuses `operator_sub`, overloaded by arity**: a zero-parameter
+`operator_sub` is negation, a one-parameter `operator_sub` is binary subtraction -
+define both on the same struct if you need both:
+
+```salam
+struct Vec2:
+    pub x: f64
+    pub y: f64
+    pub func operator_add(o: Vec2): Vec2: ret Vec2 { x = this.x + o.x, y = this.y + o.y } end
+    pub func operator_sub(o: Vec2): Vec2: ret Vec2 { x = this.x - o.x, y = this.y - o.y } end
+    pub func operator_sub(): Vec2: ret Vec2 { x = -this.x, y = -this.y } end   // unary -v
+    pub func operator_eq(o: Vec2): bool: ret this.x == o.x && this.y == o.y end
+end
+```
+
 **Enums & `match`:**
 
 ```salam

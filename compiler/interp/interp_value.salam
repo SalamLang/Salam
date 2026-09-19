@@ -300,6 +300,42 @@ func to_str(ip &: Interp, v: Value): str:
     ret ""
 end
 
+// A struct or a fixed array is a value: binding one to a new name, storing
+// it in a field or element, or passing it by value gives the receiver its
+// own copy, as the C and LLVM backends do. Handles into ip.sts/ip.arrs
+// would otherwise make every such binding an alias, and a callee writing
+// its by-value parameter showed through to the caller. A slice stays the
+// view it is; a Vector held in a field keeps its buffer and copies its
+// header, which is the C layout's meaning too.
+func val_copy_deep(ip &: Interp, v: Value): Value:
+    if v.kind == VAL_STRUCT:
+        src := ip.sts.get(v.id)
+        mut s := SStruct { type_name = src.type_name, def = src.def }
+        repeat src.fnames.len() with i:
+            s.fnames.push(src.fnames.get(i))
+            s.fvals.push(val_copy_deep(ip, src.fvals.get(i)))
+        end
+        id := ip.sts.len()
+        ip.sts.push(s)
+        ret Value { kind = VAL_STRUCT, id = id }
+    end
+    if v.kind == VAL_ARRAY:
+        an := ip.arrs.get(v.id)
+        if an.is_view:
+            ret v
+        end
+        n := an.items.len()
+        nid := arr_new(ip, n)
+        mut na := ip.arrs.get(nid)
+        repeat n with i:
+            na.items.push(val_copy_deep(ip, an.items.get(i)))
+        end
+        ip.arrs.set(nid, na)
+        ret val_arr(nid)
+    end
+    ret v
+end
+
 func arr_new(ip &: Interp, cap: int): int:
     id := ip.arrs.len()
     ip.arrs.push(Arr { cap = cap < 4 ? 4 : cap })

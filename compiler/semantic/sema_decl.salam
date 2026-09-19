@@ -11,6 +11,38 @@ import i18 "../i18n.salam"
 // ===== sema_decl.c =====
 // ===========================================================================
 
+// push_overload - adds `sig` to `fsym`'s overload set, unless one with the
+// same parameter types is there already: a second definition of the same
+// function used to be accepted and then reported at every call as
+// ambiguous, far from the line that caused it.
+func push_overload(s &: Sema, a &: at.Ast, fsym: int, sig: int, did: int):
+    mut fv := sym_at(s, fsym)
+    nsg := sig_at(s, sig)
+    repeat fv.overloads.len() with i:
+        osg := sig_at(s, fv.overloads.get(i))
+        if osg.params.len() != nsg.params.len():
+            continue
+        end
+        mut same := true
+        repeat nsg.params.len() with j:
+            if !type_equiv(s, osg.params.get(j), nsg.params.get(j)):
+                same = false
+                break
+            end
+        end
+        if same:
+            serr(
+                s, 1, span_of(a, did), co.Format1(
+                    i18.Tr("'%s' is already defined with these parameter types"), co.ArgStr(fv.name)
+                )
+            )
+            ret
+        end
+    end
+    fv.overloads.push(sig)
+    sym_put(s, fsym, fv)
+end
+
 func tv_kind_name(k: int): str:
     if k == tok.TV_INT:
         ret "int"
@@ -348,8 +380,10 @@ func sema_collect(s &: Sema, a &: at.Ast, program: int):
                     if m.is_pub:
                         mv.is_pub = true
                     end
-                    mv.overloads.push(sig)
                     mv.ty = sym_at(s, ssym).ty
+                    sym_put(s, mm, mv)
+                    push_overload(s, a, mm, sig, mid)
+                    mv = sym_at(s, mm)
                     sym_put(s, mm, mv)
                 end
             end
@@ -379,8 +413,8 @@ func sema_collect(s &: Sema, a &: at.Ast, program: int):
                 if mv2.decl == 0:
                     mv2.decl = mid2
                 end
-                mv2.overloads.push(sig2)
                 sym_put(s, mm2, mv2)
+                push_overload(s, a, mm2, sig2, mid2)
             end
         else d.kind == at.AST_IMPL_DEF:
             tt := sema_resolve_type(s, a, d.ty)
@@ -434,8 +468,10 @@ func sema_collect(s &: Sema, a &: at.Ast, program: int):
                 if mv3.decl == 0:
                     mv3.decl = mid3
                 end
-                mv3.overloads.push(sig3)
                 mv3.ty = sym_at(s, owner).ty
+                sym_put(s, mm3, mv3)
+                push_overload(s, a, mm3, sig3, mid3)
+                mv3 = sym_at(s, mm3)
                 sym_put(s, mm3, mv3)
             end
         else d.kind == at.AST_ENUM_DEF:
@@ -549,9 +585,7 @@ func sema_collect(s &: Sema, a &: at.Ast, program: int):
                 continue
             end
             fsig := build_sig(s, a, did, 0)
-            mut fv3 := sym_at(s, fsym)
-            fv3.overloads.push(fsig)
-            sym_put(s, fsym, fv3)
+            push_overload(s, a, fsym, fsig, did)
         else d.kind == at.AST_VAR_DECL || d.kind == at.AST_CONST_DECL:
             g := symbol_new(
                 s, d.kind == at.AST_CONST_DECL ? SYM_CONST : SYM_VAR, d.name

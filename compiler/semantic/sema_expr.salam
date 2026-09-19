@@ -222,6 +222,24 @@ func check_binary(s &: Sema, a &: at.Ast, nid: int): int:
                 ret sema_decorate(s, a, nid, ov2)
             end
         end
+        // No operator_eq of its own: two values of one struct type still
+        // compare, field by field, through a derived function. Anything
+        // else used to fall through as if the operands were scalars and
+        // reach the C compiler as `a == b` on two structs.
+        if (op == tok.TK_EQ || op == tok.TK_NE) && type_equiv(s, l, r):
+            fname := derive_struct_eq(s, a, l, sp)
+            if str.Len(fname) > 0:
+                derive_rewrite_eq(s, a, nid, fname, op == tok.TK_NE)
+                ret sema_decorate(s, a, nid, sema_ty(s, TY_BOOL))
+            end
+            serr(
+                s, 21, sp, co.Format1(
+                    i18.Tr("values of type '%s' cannot be compared field by field; define operator_eq on the struct"),
+                    co.ArgStr(type_to_string(s, l))
+                )
+            )
+            ret sema_decorate(s, a, nid, sema_err_ty(s))
+        end
     end
     if op == tok.TK_POWER:
         if !type_is_numeric(s, l) || !type_is_numeric(s, r):
@@ -295,7 +313,22 @@ func check_binary(s &: Sema, a &: at.Ast, nid: int): int:
         // operators take the common integer type of both operands.
         if op == tok.TK_SHL || op == tok.TK_SHR:
             lt := type_common_arith(s, l, l)
-            ret sema_decorate(s, a, nid, lt >= 0 ? lt : l)
+            rt := lt >= 0 ? lt : l
+            // A literal count at or past the operand's width is undefined
+            // in the generated C; the folder makes the same check when
+            // both sides are constants.
+            mut cnt := 0 as i64
+            if lit_int(a, n.b, cnt):
+                width := fold_ts_bits(type_to_string(s, rt))
+                if cnt < 0 || cnt >= (width as i64):
+                    serr(
+                        s, 21, sp, co.Format2(
+                            i18.Tr("shift count %d is outside the width of '%s'"), co.ArgInt(cnt), co.ArgStr(type_to_string(s, rt))
+                        )
+                    )
+                end
+            end
+            ret sema_decorate(s, a, nid, rt)
         end
         c2 := type_common_arith(s, l, r)
         if c2 < 0 || !type_is_integer(s, c2):

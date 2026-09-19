@@ -287,11 +287,12 @@ The formatter runs automatically on staged C files via the `clang-format` prek h
 
 ### 🪝 Commit Hooks
 
-We use [`prek`](https://prek.j178.dev) for repository hooks. Salam currently has three hook modes:
+We use [`prek`](https://prek.j178.dev) for repository hooks. Salam currently has four hook modes:
 
 - **Standard hooks**: the default checks in `prek.toml` that run for installed Git hook stages (currently `pre-commit` and `pre-push`).
 - **Manual hooks**: hooks in `prek.toml` that are marked for the `manual` stage and run only when requested.
 - **Audit hooks**: security-focused hooks in `prek-audit.toml` that run separately from the standard set.
+- **Infra hooks**: infrastructure and package audit checks in `prek-infra.toml` that run separately from the standard set.
 
 #### Install `prek`
 
@@ -345,6 +346,12 @@ Choose any of these supported installation methods:
 
    ```bash
    prek run --all-files --config prek-audit.toml
+   ```
+
+5. Run the infra hooks:
+
+   ```bash
+   prek run --all-files --config prek-infra.toml
    ```
 
 Manual hooks include cleanup and platform-specific tasks such as `chmod` and `shfmt`. If you are on Windows, run the manual stage only for hooks that apply to your environment.
@@ -405,25 +412,26 @@ Current priorities in this repository are:
 - `45`: `biome-check`
 - `50`: validation and security checks (`codespell`, `markdownlint`, `yamllint`, `detect-private-key`, `gitleaks`, and other safety checks)
 
-Because the `manual` stage and `prek-audit.toml` run separately, only hooks in the command you execute are considered for ordering.
+Because the `manual` stage, `prek-audit.toml`, and `prek-infra.toml` run separately, only hooks in the command you execute are considered for ordering.
 
 ## ⚙️ Continuous Integration
 
 Every pull request triggers a suite of automated checks. Understanding what runs helps you resolve failures quickly.
 
-| Workflow                          | What it checks                                                                                                                                              |
-| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Compiler - Build & Test**       | Builds the compiler inside an Alpine + LLVM Docker image and runs the test suite.                                                                           |
-| **Compiler - Clone & Build**      | Verifies that a fresh clone can build on Windows, macOS, and Linux.                                                                                         |
-| **Compiler - Build & Release**    | Compiles release binaries for the supported distribution targets.                                                                                           |
-| **Memory Leaks**                  | Runs the whole test corpus through AddressSanitizer/LeakSanitizer builds of both compilers. See [Memory leak checks](#-memory-leak-checks) below.           |
-| **Editor - Build Playground**     | Builds the WebAssembly playground bundle on pull requests to catch editor or compiler integration regressions before merge.                                 |
-| **Books - Build & Validate PDFs** | Builds the language books and verifies the generated PDFs.                                                                                                  |
-| **Prek Standard Hooks**           | Runs `prek run --all-files` on Ubuntu, macOS, and Windows to verify formatting, spelling, linting, and security checks defined in `prek.toml`.              |
-| **Prek Manual Hooks**             | Runs the `manual`-stage hooks (e.g. `shfmt`, `chmod`) across the same platform matrix.                                                                      |
-| **Prek Audit Hooks**              | Runs `prek run --all-files --config prek-audit.toml` across the same platform matrix to perform security-focused audit checks defined in `prek-audit.toml`. |
-| **Super-Linter**                  | Runs a broad set of language-specific linters across the repository.                                                                                        |
-| **PR - Auto-Labeler**             | Applies labels automatically based on the files changed in the pull request.                                                                                |
+| Workflow                          | What it checks                                                                                                                                                           |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Compiler - Build & Test**       | Builds the compiler inside an Alpine + LLVM Docker image and runs the test suite.                                                                                        |
+| **Compiler - Clone & Build**      | Verifies that a fresh clone can build on Windows, macOS, and Linux.                                                                                                      |
+| **Compiler - Build & Release**    | Compiles release binaries for the supported distribution targets.                                                                                                        |
+| **Memory Leaks**                  | Runs the whole test corpus through AddressSanitizer/LeakSanitizer builds of both compilers. See [Memory leak checks](#-memory-leak-checks) below.                        |
+| **Editor - Build Playground**     | Builds the WebAssembly playground bundle on pull requests to catch editor or compiler integration regressions before merge.                                              |
+| **Books - Build & Validate PDFs** | Builds the language books and verifies the generated PDFs.                                                                                                               |
+| **Prek Standard Hooks**           | Runs `prek run --all-files` on Ubuntu, macOS, and Windows to verify formatting, spelling, linting, and security checks defined in `prek.toml`.                           |
+| **Prek Manual Hooks**             | Runs the `manual`-stage hooks (e.g. `shfmt`, `chmod`) across the same platform matrix.                                                                                   |
+| **Prek Audit Hooks**              | Runs `prek run --all-files --config prek-audit.toml` across the same platform matrix to perform security-focused audit checks defined in `prek-audit.toml`.              |
+| **Prek Infra Hooks**              | Runs `prek run --all-files --config prek-infra.toml` across the same platform matrix to perform infrastructure and dependency audit checks defined in `prek-infra.toml`. |
+| **Super-Linter**                  | Runs a broad set of language-specific linters across the repository.                                                                                                     |
+| **PR - Auto-Labeler**             | Applies labels automatically based on the files changed in the pull request.                                                                                             |
 
 All checks must pass before a pull request can be merged. If a check fails:
 

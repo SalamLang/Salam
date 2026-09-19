@@ -144,6 +144,31 @@ func type_is_callable(ts: str): bool:
     ret str.StartsWith(ts, "func(") || str.StartsWith(ts, "externfunc(")
 end
 
+// A pointer to a callable, "(func(i32) i32)*" - the parenthesised spelling
+// type_to_string uses so the trailing stars cannot be read as part of the
+// return type. Every callable is a void* in C, so its pointer is void**,
+// one more star per level. "" when `ts` is not that shape.
+func cg_fnptr_ctype(ts: str): str:
+    if !str.StartsWith(ts, "(func(") && !str.StartsWith(ts, "(externfunc("):
+        ret ""
+    end
+    mut n := str.Len(ts)
+    mut stars := 0
+    until n > 0 && byte_at(ts, n - 1) == 42:
+        stars += 1
+        n -= 1
+    end
+    if stars == 0 || byte_at(ts, n - 1) != 41:
+        ret ""
+    end
+    mut spelled := "void*"
+    until stars > 0:
+        spelled = spelled + "*"
+        stars -= 1
+    end
+    ret spelled
+end
+
 // parse_typestr_ex - cap mirrors the caller's base[] buffer size, plus the
 // star count that belongs to an array's ELEMENT type: "Edge*[6]" yields
 // base "Edge", dims {6}, ptr false, eptr 1.
@@ -470,6 +495,10 @@ func cg_ctype(ts: str): str:
     if type_is_callable(ts):
         ret "void*"
     end
+    fp := cg_fnptr_ctype(ts)
+    if str.Len(fp) > 0:
+        ret fp
+    end
     mut base := ""
     mut ptr := false
     mut dims := Vector {} as Vector<int>
@@ -501,7 +530,7 @@ end
 // braces. "" for anything that is not a plain array of a nameable element
 // type, so callers can fall back to the bare brace form.
 func cg_array_ctype(ts: str): str:
-    if str.Len(ts) == 0 || cg_is_slice_ts(ts) || str.StartsWith(ts, "Variant<") || str.StartsWith(ts, "dyn ") || str.StartsWith(ts, "func("):
+    if str.Len(ts) == 0 || cg_is_slice_ts(ts) || str.StartsWith(ts, "Variant<") || str.StartsWith(ts, "dyn ") || str.StartsWith(ts, "func(") || str.StartsWith(ts, "("):
         ret ""
     end
     mut base := ""
@@ -590,6 +619,10 @@ func cg_decl_cn(ts: str, name: str): str:
     end
     if str.StartsWith(ts, "func(") || str.StartsWith(ts, "externfunc("):
         ret "void* " + name
+    end
+    fp := cg_fnptr_ctype(ts)
+    if str.Len(fp) > 0:
+        ret fp + " " + name
     end
     mut base := ""
     mut ptr := false

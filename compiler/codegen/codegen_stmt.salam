@@ -137,6 +137,17 @@ func cg_cond(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
     ret cg_unparen(cg_expr(g, s, a, n))
 end
 
+// An expression that denotes an existing array object rather than building
+// one: something `memcpy` can read from directly.
+func cg_is_array_place(a &: at.Ast, n: int): bool:
+    k := at.KindOf(a, n)
+    if k == at.AST_CAST:
+        inner := at.Get(a, n).a
+        ret inner != 0 && at.KindOf(a, inner) != at.AST_ARRAY_LIT && cg_is_array_place(a, inner)
+    end
+    ret k == at.AST_IDENTIFIER || k == at.AST_MEMBER || k == at.AST_INDEX || k == at.AST_THIS
+end
+
 func cg_vardecl_inline(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
     nn := at.Get(a, n)
     ts := str.Len(nn.type_str) > 0 ? nn.type_str : "int32_t"
@@ -210,6 +221,25 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
             end
             ret
         end
+        // `_ := f()` evaluates f for its effects and keeps nothing. Two of
+        // them in one block would be two C objects named `_`.
+        if str.Equals(nn.name, "_") && nn.a != 0:
+            cg_line(g, "(void)(" + cg_expr_value(g, s, a, nn.a) + ");")
+            ret
+        end
+        // An array is a value: `b := a` copies it. C has no array
+        // assignment, so an initializer that is another array (a local, a
+        // field, a row of a 2-D array) becomes a declaration plus memcpy.
+        // Literals keep the braced initializer.
+        act := cg_array_ctype(nn.type_str)
+        if str.Len(act) > 0 && nn.a != 0 && cg_is_array_place(a, nn.a):
+            local_add(g, nn.name)
+            cg_line(g, cg_decl(nn.type_str, nn.name) + ";")
+            cg_line(
+                g, "salam_arrcpy(" + cg_cident(nn.name) + ", " + cg_expr(g, s, a, nn.a) + ", sizeof(" + act + "));"
+            )
+            ret
+        end
         cg_line(g, cg_vardecl_inline(g, s, a, n) + ";")
         // A leading underscore is how Salam spells "declared on purpose,
         // never read", which is what stops sema's unused-name rule firing.
@@ -231,6 +261,22 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
         ret
     end
     if k == at.AST_ASSIGN:
+        // Whole-array assignment, `b = a` or `b = [4, 5, 6]`: C cannot
+        // assign arrays, so it is a memcpy of the array's own size (never
+        // sizeof the left operand, which may be a parameter).
+        if nn.op == tok.TK_ASSIGN && nn.a != 0 && nn.b != 0:
+            lact := cg_array_ctype(at.Get(a, nn.a).type_str)
+            if str.Len(lact) > 0 && !cg_is_slice_ts(at.Get(a, nn.b).type_str):
+                mut src := cg_expr(g, s, a, nn.b)
+                if str.StartsWith(src, "{"):
+                    src = "(" + lact + ")" + src
+                end
+                cg_line(
+                    g, "salam_arrcpy(" + cg_expr(g, s, a, nn.a) + ", " + src + ", sizeof(" + lact + "));"
+                )
+                ret
+            end
+        end
         if nn.op == tok.TK_ASSIGN && nn.a != 0 && at.KindOf(a, nn.a) == at.AST_INDEX:
             ixn := at.Get(a, nn.a)
             container_ts := at.Get(a, ixn.a).type_str

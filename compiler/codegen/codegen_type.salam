@@ -85,7 +85,7 @@ func cg_cident(name: str): str:
         i += 1
     end
     if ok:
-        if cg_is_c_keyword(name):
+        if cg_is_c_keyword(name) || cg_is_c_reserved(name):
             ret name + "_"
         end
         ret name
@@ -93,6 +93,21 @@ func cg_cident(name: str): str:
     mut b := co.SbNew()
     if is_digit_b(byte_at(name, 0)):
         co.SbPutc(b, 95)
+    end
+    // `_X...` and `__...` are C's reserved namespace, and gcc really does
+    // define names there (`__k8`). Such a name is re-based under `_u_`: the
+    // marker cannot be produced by any other Salam name, because a Salam
+    // `_u_X` has its interior underscore doubled and comes out as `_u__X`.
+    if n >= 2 && byte_at(name, 0) == 95 && (byte_at(name, 1) == 95 || (byte_at(name, 1) >= 65 && byte_at(name, 1) <= 90)):
+        co.SbPuts(b, "_u_")
+        mut jr := 1
+        until jr < n:
+            cg_put_ident_byte(b, byte_at(name, jr))
+            jr += 1
+        end
+        r0 := co.SbCstr(b)
+        co.SbFree(b)
+        ret r0
     end
     // A LEADING underscore is copied through as one, not doubled. C reserves
     // every identifier starting with "__" for the implementation, and gcc
@@ -239,9 +254,10 @@ func parse_typestr_ex(
             p = rb + 1
         end
     end
-    if blen >= cap:
-        blen = cap - 1
-    end
+    // `cap` is a leftover of the C port's fixed base[] buffer; a Salam
+    // string has no such limit, and truncating a long struct name here
+    // produced a C type that was never declared.
+    _cap := cap
     base = str.Substr(ts, 0, blen)
 end
 
@@ -334,11 +350,12 @@ func cg_vec_elem(ts: str, cap: int): str:
     until ee > es && byte_at(ts, ee - 1) == 32:
         ee -= 1
     end
-    mut el := ee - es
-    if el >= cap:
-        el = cap - 1
-    end
-    ret str.Substr(ts, es, el)
+    // `cap` mirrors the C port's fixed buffer and is ignored: a nested
+    // element type longer than it was silently cut short, and the typedef
+    // for `Vector<HashMap<str, Vector<...>>>` then named a type that did
+    // not exist.
+    _cap := cap
+    ret str.Substr(ts, es, ee - es)
 end
 
 func cg_encode_typestr(b &: str.StringBuilder, s: str, skip_spaces: bool):
@@ -382,14 +399,7 @@ func variant_push_trimmed(ts: str, s0: int, e0: int, out2 &: Vector<str>):
     until e > s && byte_at(ts, e - 1) == 32:
         e -= 1
     end
-    if out2.len() >= 64:
-        ret
-    end
-    mut l := e - s
-    if l >= 160:
-        l = 159
-    end
-    out2.push(str.Substr(ts, s, l))
+    out2.push(str.Substr(ts, s, e - s))
 end
 
 // cg_variant_members - the caller frees the returned vector.
@@ -485,10 +495,7 @@ func cg_ctype(ts: str): str:
     end
     if str.StartsWith(ts, "dyn "):
         suf := pbrk_arr_star(ts, 4)
-        mut il := (suf >= 0 ? suf : str.Len(ts)) - 4
-        if il >= 96:
-            il = 95
-        end
+        il := (suf >= 0 ? suf : str.Len(ts)) - 4
         iface := str.Substr(ts, 4, il)
         ret "_Salam_dyn_" + cg_cident(iface) + (suf >= 0 ? "*" : "")
     end
@@ -602,10 +609,7 @@ func cg_decl_cn(ts: str, name: str): str:
     end
     if str.StartsWith(ts, "dyn "):
         suf := pbrk_arr_star(ts, 4)
-        mut il := (suf >= 0 ? suf : str.Len(ts)) - 4
-        if il >= 96:
-            il = 95
-        end
+        il := (suf >= 0 ? suf : str.Len(ts)) - 4
         iface := str.Substr(ts, 4, il)
         mut star := ""
         mut dstr := ""

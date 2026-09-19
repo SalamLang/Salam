@@ -32,16 +32,14 @@ func cg_import_module(a &: at.Ast, did: int): str:
     end
     stem := str.Len(resolved) - str.Len(pth.PathBase(resolved))
     rl := str.Len(resolved)
-    mut k := 0
     mut b := co.SbNew()
     mut q := stem
-    until q < rl && k < 127:
+    until q < rl:
         c := byte_at(resolved, q)
         if c == 46:
             break
         end
         co.SbPutc(b, c)
-        k += 1
         q += 1
     end
     basev := co.SbCstr(b)
@@ -158,12 +156,7 @@ func dyn_collect(g &: Cg, s &: sm.Sema, a &: at.Ast, id: int):
         if str.Len(an.type_str) > 0:
             iface := str.Substr(n.type_str, 4, str.Len(n.type_str) - 4)
             dyn_set_add(g.dyn_ifaces, iface)
-            // char pair[256] - sal_snprintf truncation kept.
-            mut pair := iface + "|" + an.type_str
-            if str.Len(pair) > 255:
-                pair = str.Substr(pair, 0, 255)
-            end
-            dyn_set_add(g.dyn_impls, pair)
+            dyn_set_add(g.dyn_impls, iface + "|" + an.type_str)
         end
     end
     dyn_collect(g, s, a, n.ty)
@@ -1252,6 +1245,276 @@ func libc_canonical_proto(name: str): str:
     if str.Equals(name, "memcmp"):
         ret "extern int memcmp(const void* a, const void* b, size_t n)"
     end
+    // Everything else gcc and clang know as a built-in. A user extern such
+    // as `func abs(x: i64): i64` or `func strdup(s: str): str` used to be
+    // emitted from its Salam signature and drew -Wbuiltin-declaration-
+    // mismatch / -Wincompatible-library-redeclaration. The prototypes are
+    // the C library's own, harvested from glibc's <stdlib.h>, <string.h>,
+    // <math.h> and <unistd.h> with `gcc -aux-info`, and spelled with the
+    // typedef names (size_t, ssize_t, off_t) so they hold on every libc.
+    // Name/prototype pairs, flattened with stride 2.
+    protos := [
+        "abort", "extern void abort(void)",
+        "abs", "extern int abs(int)",
+        "acos", "extern double acos(double)",
+        "acosf", "extern float acosf(float)",
+        "acosh", "extern double acosh(double)",
+        "acoshf", "extern float acoshf(float)",
+        "acoshl", "extern long double acoshl(long double)",
+        "acosl", "extern long double acosl(long double)",
+        "alloca", "extern void* alloca(size_t)",
+        "asin", "extern double asin(double)",
+        "asinf", "extern float asinf(float)",
+        "asinh", "extern double asinh(double)",
+        "asinhf", "extern float asinhf(float)",
+        "asinhl", "extern long double asinhl(long double)",
+        "asinl", "extern long double asinl(long double)",
+        "atan", "extern double atan(double)",
+        "atan2", "extern double atan2(double, double)",
+        "atan2f", "extern float atan2f(float, float)",
+        "atan2l", "extern long double atan2l(long double, long double)",
+        "atanf", "extern float atanf(float)",
+        "atanh", "extern double atanh(double)",
+        "atanhf", "extern float atanhf(float)",
+        "atanhl", "extern long double atanhl(long double)",
+        "atanl", "extern long double atanl(long double)",
+        "bcmp", "extern int bcmp(const void*, const void*, size_t)",
+        "bcopy", "extern void bcopy(const void*, void*, size_t)",
+        "bzero", "extern void bzero(void*, size_t)",
+        "cbrt", "extern double cbrt(double)",
+        "cbrtf", "extern float cbrtf(float)",
+        "cbrtl", "extern long double cbrtl(long double)",
+        "ceil", "extern double ceil(double)",
+        "ceilf", "extern float ceilf(float)",
+        "ceill", "extern long double ceill(long double)",
+        "copysign", "extern double copysign(double, double)",
+        "copysignf", "extern float copysignf(float, float)",
+        "copysignl", "extern long double copysignl(long double, long double)",
+        "cos", "extern double cos(double)",
+        "cosf", "extern float cosf(float)",
+        "cosh", "extern double cosh(double)",
+        "coshf", "extern float coshf(float)",
+        "coshl", "extern long double coshl(long double)",
+        "cosl", "extern long double cosl(long double)",
+        "drem", "extern double drem(double, double)",
+        "dremf", "extern float dremf(float, float)",
+        "dreml", "extern long double dreml(long double, long double)",
+        "erf", "extern double erf(double)",
+        "erfc", "extern double erfc(double)",
+        "erfcf", "extern float erfcf(float)",
+        "erfcl", "extern long double erfcl(long double)",
+        "erff", "extern float erff(float)",
+        "erfl", "extern long double erfl(long double)",
+        "execl", "extern int execl(const char*, const char*, ...)",
+        "execle", "extern int execle(const char*, const char*, ...)",
+        "execlp", "extern int execlp(const char*, const char*, ...)",
+        "execv", "extern int execv(const char*, char*const*)",
+        "execve", "extern int execve(const char*, char*const*, char*const*)",
+        "execvp", "extern int execvp(const char*, char*const*)",
+        "exit", "extern void exit(int)",
+        "exp", "extern double exp(double)",
+        "exp2", "extern double exp2(double)",
+        "exp2f", "extern float exp2f(float)",
+        "exp2l", "extern long double exp2l(long double)",
+        "expf", "extern float expf(float)",
+        "expl", "extern long double expl(long double)",
+        "expm1", "extern double expm1(double)",
+        "expm1f", "extern float expm1f(float)",
+        "expm1l", "extern long double expm1l(long double)",
+        "fabs", "extern double fabs(double)",
+        "fabsf", "extern float fabsf(float)",
+        "fabsl", "extern long double fabsl(long double)",
+        "fdim", "extern double fdim(double, double)",
+        "fdimf", "extern float fdimf(float, float)",
+        "fdiml", "extern long double fdiml(long double, long double)",
+        "ffs", "extern int ffs(int)",
+        "ffsl", "extern int ffsl(long int)",
+        "ffsll", "extern int ffsll(long long int)",
+        "finite", "extern int finite(double)",
+        "finitef", "extern int finitef(float)",
+        "finitel", "extern int finitel(long double)",
+        "floor", "extern double floor(double)",
+        "floorf", "extern float floorf(float)",
+        "floorl", "extern long double floorl(long double)",
+        "fma", "extern double fma(double, double, double)",
+        "fmaf", "extern float fmaf(float, float, float)",
+        "fmal", "extern long double fmal(long double, long double, long double)",
+        "fmax", "extern double fmax(double, double)",
+        "fmaxf", "extern float fmaxf(float, float)",
+        "fmaxl", "extern long double fmaxl(long double, long double)",
+        "fmin", "extern double fmin(double, double)",
+        "fminf", "extern float fminf(float, float)",
+        "fminl", "extern long double fminl(long double, long double)",
+        "fmod", "extern double fmod(double, double)",
+        "fmodf", "extern float fmodf(float, float)",
+        "fmodl", "extern long double fmodl(long double, long double)",
+        "free", "extern void free(void*)",
+        "frexp", "extern double frexp(double, int*)",
+        "frexpf", "extern float frexpf(float, int*)",
+        "frexpl", "extern long double frexpl(long double, int*)",
+        "gamma", "extern double gamma(double)",
+        "gammaf", "extern float gammaf(float)",
+        "gammal", "extern long double gammal(long double)",
+        "hypot", "extern double hypot(double, double)",
+        "hypotf", "extern float hypotf(float, float)",
+        "hypotl", "extern long double hypotl(long double, long double)",
+        "ilogb", "extern int ilogb(double)",
+        "ilogbf", "extern int ilogbf(float)",
+        "ilogbl", "extern int ilogbl(long double)",
+        "index", "extern char* index(const char*, int)",
+        "isinf", "extern int isinf(double)",
+        "isinff", "extern int isinff(float)",
+        "isinfl", "extern int isinfl(long double)",
+        "isnan", "extern int isnan(double)",
+        "isnanf", "extern int isnanf(float)",
+        "isnanl", "extern int isnanl(long double)",
+        "j0", "extern double j0(double)",
+        "j0f", "extern float j0f(float)",
+        "j0l", "extern long double j0l(long double)",
+        "j1", "extern double j1(double)",
+        "j1f", "extern float j1f(float)",
+        "j1l", "extern long double j1l(long double)",
+        "jn", "extern double jn(int, double)",
+        "jnf", "extern float jnf(int, float)",
+        "jnl", "extern long double jnl(int, long double)",
+        "labs", "extern long int labs(long int)",
+        "ldexp", "extern double ldexp(double, int)",
+        "ldexpf", "extern float ldexpf(float, int)",
+        "ldexpl", "extern long double ldexpl(long double, int)",
+        "lgamma", "extern double lgamma(double)",
+        "lgammaf", "extern float lgammaf(float)",
+        "lgammal", "extern long double lgammal(long double)",
+        "llabs", "extern long long int llabs(long long int)",
+        "llrint", "extern long long int llrint(double)",
+        "llrintf", "extern long long int llrintf(float)",
+        "llrintl", "extern long long int llrintl(long double)",
+        "llround", "extern long long int llround(double)",
+        "llroundf", "extern long long int llroundf(float)",
+        "llroundl", "extern long long int llroundl(long double)",
+        "log", "extern double log(double)",
+        "log10", "extern double log10(double)",
+        "log10f", "extern float log10f(float)",
+        "log10l", "extern long double log10l(long double)",
+        "log1p", "extern double log1p(double)",
+        "log1pf", "extern float log1pf(float)",
+        "log1pl", "extern long double log1pl(long double)",
+        "log2", "extern double log2(double)",
+        "log2f", "extern float log2f(float)",
+        "log2l", "extern long double log2l(long double)",
+        "logb", "extern double logb(double)",
+        "logbf", "extern float logbf(float)",
+        "logbl", "extern long double logbl(long double)",
+        "logf", "extern float logf(float)",
+        "logl", "extern long double logl(long double)",
+        "lrint", "extern long int lrint(double)",
+        "lrintf", "extern long int lrintf(float)",
+        "lrintl", "extern long int lrintl(long double)",
+        "lround", "extern long int lround(double)",
+        "lroundf", "extern long int lroundf(float)",
+        "lroundl", "extern long int lroundl(long double)",
+        "memalign", "extern void* memalign(size_t, size_t)",
+        "memccpy", "extern void* memccpy(void*, const void*, int, size_t)",
+        "memchr", "extern void* memchr(const void*, int, size_t)",
+        "mempcpy", "extern void* mempcpy(void*, const void*, size_t)",
+        "modf", "extern double modf(double, double*)",
+        "modff", "extern float modff(float, float*)",
+        "modfl", "extern long double modfl(long double, long double*)",
+        "nan", "extern double nan(const char*)",
+        "nanf", "extern float nanf(const char*)",
+        "nanl", "extern long double nanl(const char*)",
+        "nearbyint", "extern double nearbyint(double)",
+        "nearbyintf", "extern float nearbyintf(float)",
+        "nearbyintl", "extern long double nearbyintl(long double)",
+        "nextafter", "extern double nextafter(double, double)",
+        "nextafterf", "extern float nextafterf(float, float)",
+        "nextafterl", "extern long double nextafterl(long double, long double)",
+        "nexttoward", "extern double nexttoward(double, long double)",
+        "nexttowardf", "extern float nexttowardf(float, long double)",
+        "nexttowardl", "extern long double nexttowardl(long double, long double)",
+        "pow", "extern double pow(double, double)",
+        "powf", "extern float powf(float, float)",
+        "powl", "extern long double powl(long double, long double)",
+        "printf", "extern int printf(const char*, ...)",
+        "putchar", "extern int putchar(int)",
+        "puts", "extern int puts(const char*)",
+        "remainder", "extern double remainder(double, double)",
+        "remainderf", "extern float remainderf(float, float)",
+        "remainderl", "extern long double remainderl(long double, long double)",
+        "remquo", "extern double remquo(double, double, int*)",
+        "remquof", "extern float remquof(float, float, int*)",
+        "remquol", "extern long double remquol(long double, long double, int*)",
+        "rindex", "extern char* rindex(const char*, int)",
+        "rint", "extern double rint(double)",
+        "rintf", "extern float rintf(float)",
+        "rintl", "extern long double rintl(long double)",
+        "round", "extern double round(double)",
+        "roundf", "extern float roundf(float)",
+        "roundl", "extern long double roundl(long double)",
+        "scalb", "extern double scalb(double, double)",
+        "scalbf", "extern float scalbf(float, float)",
+        "scalbl", "extern long double scalbl(long double, long double)",
+        "scalbln", "extern double scalbln(double, long int)",
+        "scalblnf", "extern float scalblnf(float, long int)",
+        "scalblnl", "extern long double scalblnl(long double, long int)",
+        "scalbn", "extern double scalbn(double, int)",
+        "scalbnf", "extern float scalbnf(float, int)",
+        "scalbnl", "extern long double scalbnl(long double, int)",
+        "scanf", "extern int scanf(const char*, ...)",
+        "significand", "extern double significand(double)",
+        "significandf", "extern float significandf(float)",
+        "significandl", "extern long double significandl(long double)",
+        "sin", "extern double sin(double)",
+        "sinf", "extern float sinf(float)",
+        "sinh", "extern double sinh(double)",
+        "sinhf", "extern float sinhf(float)",
+        "sinhl", "extern long double sinhl(long double)",
+        "sinl", "extern long double sinl(long double)",
+        "sqrt", "extern double sqrt(double)",
+        "sqrtf", "extern float sqrtf(float)",
+        "sqrtl", "extern long double sqrtl(long double)",
+        "sscanf", "extern int sscanf(const char*, const char*, ...)",
+        "strcasecmp", "extern int strcasecmp(const char*, const char*)",
+        "strchr", "extern char* strchr(const char*, int)",
+        "strcmp", "extern int strcmp(const char*, const char*)",
+        "strcspn", "extern size_t strcspn(const char*, const char*)",
+        "strdup", "extern char* strdup(const char*)",
+        "strerror", "extern char* strerror(int)",
+        "strncasecmp", "extern int strncasecmp(const char*, const char*, size_t)",
+        "strncmp", "extern int strncmp(const char*, const char*, size_t)",
+        "strndup", "extern char* strndup(const char*, size_t)",
+        "strnlen", "extern size_t strnlen(const char*, size_t)",
+        "strpbrk", "extern char* strpbrk(const char*, const char*)",
+        "strrchr", "extern char* strrchr(const char*, int)",
+        "strspn", "extern size_t strspn(const char*, const char*)",
+        "tan", "extern double tan(double)",
+        "tanf", "extern float tanf(float)",
+        "tanh", "extern double tanh(double)",
+        "tanhf", "extern float tanhf(float)",
+        "tanhl", "extern long double tanhl(long double)",
+        "tanl", "extern long double tanl(long double)",
+        "tgamma", "extern double tgamma(double)",
+        "tgammaf", "extern float tgammaf(float)",
+        "tgammal", "extern long double tgammal(long double)",
+        "trunc", "extern double trunc(double)",
+        "truncf", "extern float truncf(float)",
+        "truncl", "extern long double truncl(long double)",
+        "y0", "extern double y0(double)",
+        "y0f", "extern float y0f(float)",
+        "y0l", "extern long double y0l(long double)",
+        "y1", "extern double y1(double)",
+        "y1f", "extern float y1f(float)",
+        "y1l", "extern long double y1l(long double)",
+        "yn", "extern double yn(int, double)",
+        "ynf", "extern float ynf(int, float)",
+        "ynl", "extern long double ynl(int, long double)"
+    ]
+    mut i := 0
+    until i < protos.len():
+        if str.Equals(protos[i], name):
+            ret protos[i + 1]
+        end
+        i += 2
+    end
     ret ""
 end
 
@@ -1297,7 +1560,13 @@ func hdr_externs(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
             // not-quite-matching declaration. Freestanding there is no
             // <stdio.h> and no <math.h>, so nothing else declares them and
             // the hand-declaration is the only one - keep it.
-            suppress := !g.freestanding && (is_libm_name(d.name) || is_stdio_name(d.name))
+            // "write" joins libm/stdio for the same reason: hdr_prelude
+            // always declares it first (SALAM_RAW_WRITE, behind
+            // SALAM_OUT_DEFINED), so a user's own `extern func write(...)`
+            // met a real, already-emitted "extern ... write(...)" with a
+            // different parameter width - std/console does exactly this,
+            // and only avoided it by never calling println in that file.
+            suppress := !g.freestanding && (is_libm_name(d.name) || is_stdio_name(d.name) || str.Equals(d.name, "write"))
             if sig != 0 && !suppress:
                 mut guard := ""
                 if is_wellknown_libc_name(d.name):
@@ -1379,7 +1648,8 @@ func hdr_prototypes(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
         if d.synthetic:
             continue
         end
-        if d.kind == at.AST_FUNC_DEF && !str.Equals(d.name, g.entry) && (d.is_pub || pkgmod):
+        is_entry := str.Equals(d.name, g.entry) && !pkgmod
+        if d.kind == at.AST_FUNC_DEF && !is_entry && (d.is_pub || pkgmod):
             fsym := sm.LookupLocal(s, s.global, d.name)
             sig := sig_of_decl(s, fsym, did)
             if sig != 0:

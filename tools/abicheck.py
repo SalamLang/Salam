@@ -16,41 +16,70 @@ IR for a non-x86_64 target before trusting a backend change:
 Exits non-zero when it finds a mismatch. Variadic callees are skipped: C
 argument promotion makes the comparison meaningless there.
 """
-import re, sys
+
+import re
+import sys
+
+DECL_RE = re.compile(
+    r"^declare[^@\n]*?([a-zA-Z0-9_.]+|\{[^}]*\})\s+@([A-Za-z0-9_.$]+)\(([^)]*)\)",
+    re.M,
+)
+CALL_RE = re.compile(r"=\s*call\s+([a-zA-Z0-9_.]+)\s+@([A-Za-z0-9_.$]+)\(([^)]*)\)")
+VOID_CALL_RE = re.compile(
+    r"^\s*call\s+([a-zA-Z0-9_.]+)\s+@([A-Za-z0-9_.$]+)\(([^)]*)\)", re.M
+)
+
+
+def _scan_decls(txt):
+    decls = {}
+    for m in DECL_RE.finditer(txt):
+        ret, name, params = m.group(1), m.group(2), m.group(3)
+        if "..." in params:
+            continue  # variadic: C promotion rules apply
+        ps = [p.strip().split(" ")[0] for p in params.split(",") if p.strip()]
+        decls[name] = (ret, ps)
+    return decls
+
+
+def _mismatches(pattern, txt, decls):
+    bad = []
+    for m in pattern.finditer(txt):
+        ret, name, args = m.group(1), m.group(2), m.group(3)
+        if name not in decls:
+            continue
+        dret, dps = decls[name]
+        at = [a.strip().split(" ")[0] for a in args.split(",") if a.strip()]
+        if ret != dret:
+            bad.append((name, "return", dret, ret))
+            continue
+        if len(at) != len(dps):
+            continue
+        for i, (x, y) in enumerate(zip(dps, at)):
+            if x != y:
+                bad.append((name, f"arg{i}", x, y))
+    return bad
+
 
 def check(path):
-    decls={}
-    txt=open(path, encoding='utf-8', errors='replace').read()
-    for m in re.finditer(r'^declare[^@\n]*?([a-zA-Z0-9_.]+|\{[^}]*\})\s+@([A-Za-z0-9_.$]+)\(([^)]*)\)', txt, re.M):
-        ret, name, params = m.group(1), m.group(2), m.group(3)
-        if '...' in params: continue          # variadic: C promotion rules apply
-        ps=[p.strip().split(' ')[0] for p in params.split(',') if p.strip()]
-        decls[name]=(ret, ps)
-    bad=[]
-    for m in re.finditer(r'=\s*call\s+([a-zA-Z0-9_.]+)\s+@([A-Za-z0-9_.$]+)\(([^)]*)\)', txt):
-        ret, name, args = m.group(1), m.group(2), m.group(3)
-        if name not in decls: continue
-        dret, dps = decls[name]
-        if ret != dret:
-            bad.append((name,'return',dret,ret)); continue
-        at=[a.strip().split(' ')[0] for a in args.split(',') if a.strip()]
-        if len(at)!=len(dps): continue
-        for i,(x,y) in enumerate(zip(dps,at)):
-            if x!=y: bad.append((name,'arg%d'%i,x,y))
-    for m in re.finditer(r'^\s*call\s+([a-zA-Z0-9_.]+)\s+@([A-Za-z0-9_.$]+)\(([^)]*)\)', txt, re.M):
-        ret, name, args = m.group(1), m.group(2), m.group(3)
-        if name not in decls: continue
-        dret, dps = decls[name]
-        at=[a.strip().split(' ')[0] for a in args.split(',') if a.strip()]
-        if len(at)!=len(dps): continue
-        for i,(x,y) in enumerate(zip(dps,at)):
-            if x!=y: bad.append((name,'arg%d'%i,x,y))
+    with open(path, encoding="utf-8", errors="replace") as f:
+        txt = f.read()
+    decls = _scan_decls(txt)
+    bad = _mismatches(CALL_RE, txt, decls)
+    bad += _mismatches(VOID_CALL_RE, txt, decls)
     return bad
-b=check(sys.argv[1])
-seen=set()
-for n,w,d,c in b:
-    k=(n,w,d,c)
-    if k in seen: continue
-    seen.add(k)
-    print("  %-14s %-7s declared %-6s called %s" % (n,w,d,c))
-sys.exit(1 if b else 0)
+
+
+def main():
+    bad = check(sys.argv[1])
+    seen = set()
+    for n, w, d, c in bad:
+        k = (n, w, d, c)
+        if k in seen:
+            continue
+        seen.add(k)
+        print(f"  {n:<14} {w:<7} declared {d:<6} called {c}")
+    sys.exit(1 if bad else 0)
+
+
+if __name__ == "__main__":
+    main()

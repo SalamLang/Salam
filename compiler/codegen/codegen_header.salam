@@ -335,13 +335,19 @@ func cg_emit_dyn_types(g &: Cg, s &: sm.Sema, a &: at.Ast):
                 g, "    " + (sret ? "void" : rc) + " (*" + cg_cident(ms.name) + ")(void*"
             )
             repeat sig.params.len() with p:
-                outh(
-                    g, ", " + cg_ctype(
-                        sm.ToString(
-                            s, sig.params.get(p)
-                        )
-                    ) + (sig_param_is_ref(s, a, sigid, p) ? "*" : "")
-                )
+                pts0 := sm.ToString(s, sig.params.get(p))
+                pact0 := sig_param_is_ref(s, a, sigid, p) ? "" : cg_array_ctype(pts0)
+                if str.Len(pact0) > 0:
+                    // An unnamed array declarator adjusts to a pointer to
+                    // everything past the first dimension the same way a
+                    // named one does (C's own parameter-decay rule, not
+                    // something this has to spell out itself) - cg_decl_cn
+                    // with an empty name, exactly like func_signature's own
+                    // by-value array parameter above, just anonymous here.
+                    outh(g, ", " + cg_decl_cn(pts0, ""))
+                else:
+                    outh(g, ", " + cg_ctype(pts0) + (sig_param_is_ref(s, a, sigid, p) ? "*" : ""))
+                end
             end
             if sret:
                 outh(g, ", " + ret_out0)
@@ -428,8 +434,20 @@ func cg_emit_dyn_vtables_impl(g &: Cg, s &: sm.Sema, a &: at.Ast):
             mut ps := co.SbNew()
             mut asb := co.SbNew()
             repeat isigv.params.len() with p:
-                pt := cg_ctype(sm.ToString(s, isigv.params.get(p))) + (sig_param_is_ref(s, a, isig, p) ? "*" : "")
-                co.SbPuts(ps, ", " + pt + " __a" + p)
+                pts1 := sm.ToString(s, isigv.params.get(p))
+                pact1 := sig_param_is_ref(s, a, isig, p) ? "" : cg_array_ctype(pts1)
+                if str.Len(pact1) > 0:
+                    // Named array declarator - C's parameter-decay rule
+                    // drops the first dimension on its own, same as any
+                    // named array parameter (func_signature's own "__in"
+                    // copies included), so this is cg_decl_cn, not the
+                    // pointer-to-whole-array form cg_array_ret_decl builds
+                    // for an out-parameter.
+                    co.SbPuts(ps, ", " + cg_decl_cn(pts1, "__a" + p))
+                else:
+                    pt := cg_ctype(pts1) + (sig_param_is_ref(s, a, isig, p) ? "*" : "")
+                    co.SbPuts(ps, ", " + pt + " __a" + p)
+                end
                 co.SbPuts(asb, ", __a" + p)
             end
             isvoid := isigv.ret_type != sm.TYPE_NONE && sm.TypeAt(s, isigv.ret_type).kind == sm.TY_VOID

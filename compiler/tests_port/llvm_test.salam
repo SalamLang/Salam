@@ -146,7 +146,15 @@ func main:
     testing.AssertEqStr(
         lv.DatalayoutOf("i686-pc-linux-gnu"), "e-m:e-p:32:32-p270:32:32-p271:32:32-p272:64:64-" + "i128:128-f64:32:64-f80:32-n8:16:32-S128"
     )
-    testing.AssertEqStr(lv.DatalayoutOf("thumbv7-unknown-unknown"), "")
+    // 32-bit ARM/Thumb. These used to be "" - no datalayout at all - which
+    // left LLVM assuming the host's endianness for a cross build. "E-" is
+    // big-endian, which is what the Verix eVo terminals run.
+    testing.AssertEqStr(
+        lv.DatalayoutOf("thumbv7-unknown-unknown"), "e-m:e-p:32:32-Fi8-i64:64-v128:64:128-a:0:32-n32-S64"
+    )
+    testing.AssertEqStr(
+        lv.DatalayoutOf("thumbebv4t-none-eabi"), "E-m:e-p:32:32-Fi8-i64:64-v128:64:128-a:0:32-n32-S64"
+    )
 
     // --- ll_safe_name ---
     testing.AssertEqStr(lv.SafeNameOf("plain_Name.42"), "plain_Name.42")
@@ -636,6 +644,32 @@ func main:
     scriptIr2 := lv.NativeBuildScript("a.ll", optsIr2)
     testing.AssertContains(scriptIr2, "-O3 -S \"$IN\" -o \"$IN\"\n")
 
+    // --- NativeBatchScript: cmd.exe's counterpart of the scripts above.
+    // `true` (the IR/O0/no-verify no-op) sits at the very start of the body
+    // with no newline ahead of it, so the substitution has to match a bare
+    // "true\n" rather than "\ntrue\n" or it never fires. cmd also has no
+    // `set -e`, so every command - not just the last - needs its own
+    // errorlevel check, or a failing `opt -passes=verify` ahead of a
+    // successful clang would go unnoticed. ---
+    batchIr0 := lv.NativeBatchScript("a.ll", optsIr0)
+    testing.AssertContains(batchIr0, "rem\nif errorlevel 1 exit /b 1\n")
+    testing.AssertFalse(str.Contains(batchIr0, "true\n"))
+
+    batchO := lv.NativeBatchScript("a.ll", optsO)
+    testing.AssertContains(
+        batchO, "-passes=verify -disable-output \"a.ll\"\nif errorlevel 1 exit /b 1\n"
+    )
+    testing.AssertEqInt(str.Count(batchO, "if errorlevel 1 exit /b 1\n"), 2)
+
+    // --- a % in a path headed into the batch has to come out doubled, or
+    // cmd.exe reads it as a %VAR% reference while parsing the line - both
+    // in the .bat body (NativeBatchScript) and on the launcher's own
+    // command line (NativeRun, covered by the ToolchainAvailable-gated
+    // block below since building that line needs a native cc). ---
+    batchPct := lv.NativeBatchScript("a%b.ll", optsA)
+    testing.AssertContains(batchPct, "\"a%%b.ll\"")
+    testing.AssertFalse(str.Contains(batchPct, "\"a%b.ll\""))
+
     // --- real link + run, end to end, through NativeRun itself (not just
     // the script builder) - a tiny hand-written .ll compiled and executed
     // via clang, confirming NativeRun's rc + file-cleanup contract ---
@@ -647,7 +681,14 @@ func main:
     // unconditional - invalid IR must not yield an executable either way.
     if lv.ToolchainAvailable():
         ll_ok_path := "compiler/tests_port/tmp_lv/nrun_ok.ll"
-        exe_ok_path := "compiler/tests_port/tmp_lv/nrun_ok_exe"
+        // NativeRun writes exactly the name it is given, and Windows will not
+        // execute one without the extension - os.Output then reads back "".
+        // The driver adds the suffix itself for a named output; this is the
+        // low-level entry point, so the test supplies it.
+        mut exe_ok_path := "compiler/tests_port/tmp_lv/nrun_ok_exe"
+        if SALAM_OS_WINDOWS:
+            exe_ok_path = exe_ok_path + ".exe"
+        end
         _wok := os.WriteFile(ll_ok_path, ll_ok_src)
         mut optsRun := lv.OptionsDefault()
         optsRun.output_mode = lv.LV_OUT_EXEC
@@ -655,7 +696,14 @@ func main:
         rc_ok := lv.NativeRun(quiet, ll_ok_path, optsRun)
         testing.AssertEqInt(rc_ok, 0)
         testing.AssertFalse(os.Exists(ll_ok_path + ".run.sh"))
-        testing.AssertEqStr(os.Output(exe_ok_path), "hi!\n")
+        // cmd.exe reads a leading path component followed by "/" as a
+        // switch, so a forward-slash relative path is not executable there
+        // however it is quoted. Hand it separators it accepts.
+        mut run_path := exe_ok_path
+        if SALAM_OS_WINDOWS:
+            run_path = str.Replace(run_path, "/", "\\")
+        end
+        testing.AssertEqStr(os.Output(run_path), "hi!\n")
         _rmok1 := os.Remove(ll_ok_path)
         _rmok2 := os.Remove(exe_ok_path)
     end

@@ -655,7 +655,7 @@ One directory is deliberately excepted:
 | Everything not listed below | GPL-3.0 |
 | [`extensions/vscode/`](extensions/vscode/) | MIT, see [extensions/vscode/LICENSE](extensions/vscode/LICENSE) |
 
-The VS Code extension, and in particular the TextMate grammar it ships at `extensions/vscode/syntaxes/salam.tmLanguage.json`, is MIT so that other projects can vendor it. Syntax highlighting is only useful if editors, code-hosting sites and documentation tools can embed it, and several will not accept a copyleft grammar. [GitHub Linguist](https://github.com/github-linguist/linguist), for example, accepts grammar dependencies only under permissive licences.
+The Visual Studio Code extension, and in particular the TextMate grammar it ships at `extensions/vscode/syntaxes/salam.tmLanguage.json`, is MIT so that other projects can vendor it. Syntax highlighting is only useful if editors, code-hosting sites and documentation tools can embed it, and several will not accept a copyleft grammar. [GitHub Linguist](https://github.com/github-linguist/linguist), for example, accepts grammar dependencies only under permissive licences.
 
 The files the extension actually publishes are all editor data with no GPL dependency. Its `src/` and `scripts/` are written in Salam and import the standard library, so they are GPL-derived when built, and [`.vscodeignore`](extensions/vscode/.vscodeignore) keeps both out of the published `.vsix`. See [extensions/vscode/README.md](extensions/vscode/README.md#licence) for the detail.
 

@@ -2,8 +2,38 @@ package llvmgen
 
 import str
 import os
+import pth "../sal_path.salam"
 import sm "../semantic/semantic.salam"
 import lb "../llvm_bridge.salam"
+
+// The host toolchain's own library directory, as the tool will see it.
+//
+// On Windows this path drives the build through `wsl.exe -e bash`, so clang
+// there searches Linux prefixes. Everything the mingw sysroot provides still
+// resolves, but a third-party import library does not: msys2 keeps
+// libsqlite3 in /mingw64/lib, the C backend finds it because it runs the host
+// compiler directly, and this path failed every db test with
+// "unable to find library -lsqlite3". Adding the directory the native
+// compiler would have used closes the gap without changing how the build is
+// driven. Empty when no host compiler is on disk, which leaves the command
+// exactly as it was.
+func nt_host_lib_dir(): str:
+    mut p := ""
+    if !sm.FindBundledTool("clang", p):
+        if !sm.FindPathTool("clang", p):
+            ret ""
+        end
+    end
+    bin := pth.PathDir(p)
+    if str.Len(bin) == 0:
+        ret ""
+    end
+    lib := pth.PathJoin(pth.PathDir(bin), "lib")
+    if !os.Exists(lib):
+        ret ""
+    end
+    ret nt_to_tool_path(lib)
+end
 
 // opt_flag
 func nt_opt_flag(l: int): str:
@@ -101,6 +131,14 @@ func nt_shell_arg(v: str): str:
     end
 end
 
+// A literal % in a batch file is expanded as a %VAR% environment reference
+// while the line is read, even inside quotes and even as a bare command-line
+// argument to `cmd /c` - doubling it to %% is the only escape cmd.exe
+// honors, for a path headed into a .bat body or the launcher line itself.
+func nt_bat_percent_escape(s: str): str:
+    ret str.Replace(s, "%", "%%")
+end
+
 // to_tool_path. POSIX: passed through unchanged (the C's realpath() call is
 // skipped - no Salam stdlib equivalent, and every caller in this port
 // already hands a cwd-relative or absolute path that bash resolves fine on
@@ -108,8 +146,36 @@ end
 // (drive-letter case-folded, backslashes flipped); a path with no drive
 // prefix is passed through as-is. This branch is compile-time-pruned out on
 // every build this port is verified against.
+// Whether this Windows host can drive the toolchain itself instead of
+// through `wsl.exe -e bash`.
+//
+// The two do not see the same libraries. WSL's clang searches Linux prefixes,
+// so a third-party import library the C backend picks up from msys2's
+// /mingw64/lib - sqlite3, say - is invisible and the link fails with
+// "unable to find library -lsqlite3". Adding that directory with -L is not a
+// fix either: the mingw runtime then comes half from WSL's
+// /usr/x86_64-w64-mingw32 and half from msys2, and the link fails on
+// _gnu_exception_handler instead. Using one toolchain end to end is the only
+// coherent answer, and it is what the C backend has always done.
+func nt_win_native_cc(out &: str): bool:
+    if SALAM_OS_WINDOWS:
+        if sm.FindBundledTool("clang", out):
+            ret true
+        end
+        ret sm.FindPathTool("clang", out)
+    else:
+        ret false
+    end
+end
+
 func nt_to_tool_path(host: str): str:
     if SALAM_OS_WINDOWS:
+        mut probe := ""
+        if nt_win_native_cc(probe):
+            // Running the toolchain ourselves: it wants host paths, and the
+            // /mnt/<drive> form below would be meaningless to it.
+            ret host
+        end
         n := str.Len(host)
         if n >= 2 && is_alpha_b(byte_at(host, 0)) && byte_at(host, 1) == 58:
             mut out := "/mnt/" + str.Lower(str.Substr(host, 0, 1))
@@ -134,8 +200,18 @@ func nt_resolve_tool(bundled: str, fallback: str): str:
     if sm.FindBundledTool(bundled, out):
         ret nt_to_tool_path(out)
     end
+    mut probe := ""
+    if nt_win_native_cc(probe):
+        // No shell will resolve this for us, so do it here. Falls through to
+        // the bare name when the tool is not on $PATH either, which keeps the
+        // error message the same as before.
+        if sm.FindPathTool(bundled, out):
+            ret out
+        end
+    end
     ret fallback
 end
+
 
 func nt_has_path_char(spec: str): bool:
     ret str.Contains(spec, "/") || str.Contains(spec, "\\") || str.Contains(spec, ".")

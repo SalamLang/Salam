@@ -644,6 +644,32 @@ func main:
     scriptIr2 := lv.NativeBuildScript("a.ll", optsIr2)
     testing.AssertContains(scriptIr2, "-O3 -S \"$IN\" -o \"$IN\"\n")
 
+    // --- NativeBatchScript: cmd.exe's counterpart of the scripts above.
+    // `true` (the IR/O0/no-verify no-op) sits at the very start of the body
+    // with no newline ahead of it, so the substitution has to match a bare
+    // "true\n" rather than "\ntrue\n" or it never fires. cmd also has no
+    // `set -e`, so every command - not just the last - needs its own
+    // errorlevel check, or a failing `opt -passes=verify` ahead of a
+    // successful clang would go unnoticed. ---
+    batchIr0 := lv.NativeBatchScript("a.ll", optsIr0)
+    testing.AssertContains(batchIr0, "rem\nif errorlevel 1 exit /b 1\n")
+    testing.AssertFalse(str.Contains(batchIr0, "true\n"))
+
+    batchO := lv.NativeBatchScript("a.ll", optsO)
+    testing.AssertContains(
+        batchO, "-passes=verify -disable-output \"a.ll\"\nif errorlevel 1 exit /b 1\n"
+    )
+    testing.AssertEqInt(str.Count(batchO, "if errorlevel 1 exit /b 1\n"), 2)
+
+    // --- a % in a path headed into the batch has to come out doubled, or
+    // cmd.exe reads it as a %VAR% reference while parsing the line - both
+    // in the .bat body (NativeBatchScript) and on the launcher's own
+    // command line (NativeRun, covered by the ToolchainAvailable-gated
+    // block below since building that line needs a native cc). ---
+    batchPct := lv.NativeBatchScript("a%b.ll", optsA)
+    testing.AssertContains(batchPct, "\"a%%b.ll\"")
+    testing.AssertFalse(str.Contains(batchPct, "\"a%b.ll\""))
+
     // --- real link + run, end to end, through NativeRun itself (not just
     // the script builder) - a tiny hand-written .ll compiled and executed
     // via clang, confirming NativeRun's rc + file-cleanup contract ---

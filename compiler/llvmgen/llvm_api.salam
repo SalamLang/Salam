@@ -376,17 +376,28 @@ end
 pub func NativeBatchScript(ll_path: str, opts: Options): str:
     needs_out := opts.output_mode != LV_OUT_JIT && opts.output_mode != LV_OUT_IR
     mut body := nt_emit_tool_cmd(opts)
-    body = str.Replace(body, `"$IN"`, `"` + ll_path + `"`)
+    body = str.Replace(body, `"$IN"`, `"` + nt_bat_percent_escape(ll_path) + `"`)
     if needs_out && str.Len(opts.output_file) > 0:
-        body = str.Replace(body, `"$OUT"`, `"` + opts.output_file + `"`)
+        body = str.Replace(
+            body, `"$OUT"`, `"` + nt_bat_percent_escape(opts.output_file) + `"`
+        )
     end
     if str.Len(opts.sysroot) > 0:
-        body = str.Replace(body, `"$SYSROOT"`, `"` + opts.sysroot + `"`)
+        body = str.Replace(
+            body, `"$SYSROOT"`, `"` + nt_bat_percent_escape(opts.sysroot) + `"`
+        )
     end
-    body = str.Replace(body, "\ntrue\n", "\nrem\n")
+    // A no-op line, be it the plain `true` this replaces or `rem` itself,
+    // never needs an errorlevel check - so this substitution has to run
+    // before the check is threaded onto every remaining line below.
+    body = str.Replace(body, "true\n", "rem\n")
+    // cmd has no `set -e`: without a check after EVERY line, a failing
+    // `opt -passes=verify` (LV_OUT_EXEC/OBJ/ASM with verify_module) is
+    // masked by the clang command that runs right after it and resets
+    // errorlevel to 0 on success.
+    body = str.Replace(body, "\n", "\nif errorlevel 1 exit /b 1\n")
     mut out := "@echo off\n"
     out += body
-    out += "if errorlevel 1 exit /b 1\n"
     ret out
 end
 
@@ -451,6 +462,10 @@ pub func NativeRun(lgr: lg.Logger, ll_path: str, opts: Options): int:
             bat = os.Cwd() + "\\" + bat
         end
         bat = str.Replace(bat, "/", "\\")
+        // The launcher line is itself a cmd.exe command: a % in the path
+        // (a temp dir built from a name containing one, say) would expand
+        // as an env reference here too, same as inside the .bat body.
+        bat = nt_bat_percent_escape(bat)
         cmd = `"` + bat + `"`
     else:
         script = NativeBuildScript(ll_path, opts)

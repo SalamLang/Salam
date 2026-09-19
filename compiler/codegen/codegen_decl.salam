@@ -109,8 +109,14 @@ func func_signature(
             // An array parameter is a value in Salam and a pointer in C.
             // The caller's array arrives under a spare name and the body
             // works on its own copy (see cg_array_param_copies), the way
-            // the LLVM backend passes the aggregate itself.
-            co.SbPuts(b, cg_decl(pts, p.name + "__in"))
+            // the LLVM backend passes the aggregate itself. The spare name
+            // is keyed by parameter INDEX, not `p.name + "__in"`: two real
+            // parameters named `a` and `a__in` both encode (via cg_cident's
+            // underscore-doubling) to the same C identifier, which used to
+            // make this a duplicate-parameter build error. An index can't
+            // collide with a Salam-level name, so it goes in unescaped via
+            // cg_decl_cn, the same way __ret/__s<N> already do.
+            co.SbPuts(b, cg_decl_cn(pts, cg_array_in_name(i)))
         else:
             co.SbPuts(b, cg_decl(pts, p.name))
         end
@@ -142,6 +148,13 @@ end
 // array parameter decays to the caller's storage and every write in the
 // callee showed through, which the LLVM backend (and the language) never
 // allowed.
+// The C name of the hidden by-value copy of array parameter `i` - shared
+// between func_signature (the declaration) and cg_array_param_copies (the
+// prologue that copies from it into the real parameter name).
+func cg_array_in_name(i: int): str:
+    ret "__arrin" + co.I64Toa(i as i64)
+end
+
 func cg_array_param_copies(g &: Cg, s &: sm.Sema, a &: at.Ast, fnid: int, sigid: int):
     fn := at.Get(a, fnid)
     sig := sm.SigAt(s, sigid)
@@ -160,7 +173,7 @@ func cg_array_param_copies(g &: Cg, s &: sm.Sema, a &: at.Ast, fnid: int, sigid:
         end
         cg_line(g, cg_decl(pts, p.name) + ";")
         cg_line(
-            g, "salam_arrcpy(" + cg_cident(p.name) + ", " + cg_cident(p.name + "__in") + ", sizeof(" + act + "));"
+            g, "salam_arrcpy(" + cg_cident(p.name) + ", " + cg_array_in_name(i) + ", sizeof(" + act + "));"
         )
     end
 end

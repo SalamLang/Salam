@@ -635,12 +635,30 @@ func vtbl_name(iface: str, concrete: str): str:
 end
 
 // ll_match_sig
-func match_sig(s &: sm.Sema, m: int, want: int): int:
+// The overload of `m` whose parameters match `iface_sig`'s, not just its
+// arity: two overloads of the same name and arity but different parameter
+// types (legal - overloading is by type, not just count) used to let this
+// pick whichever came first regardless of which one actually satisfies the
+// interface, mismatching the parameter types a vtable slot or dyn_impl_thunk
+// then declares against the ones the selected function actually takes.
+func match_sig(s &: sm.Sema, m: int, iface_sig: int): int:
     sy := sm.SymAt(s, m)
+    iparams := sm.SigAt(s, iface_sig).params
     first := sy.overloads.len() > 0 ? sy.overloads.get(0) : 0
     repeat sy.overloads.len() with i:
         sigid := sy.overloads.get(i)
-        if sm.SigAt(s, sigid).params.len() == want:
+        params := sm.SigAt(s, sigid).params
+        if params.len() != iparams.len():
+            continue
+        end
+        mut ok := true
+        repeat params.len() with j:
+            if !sm.Equiv(s, params.get(j), iparams.get(j)):
+                ok = false
+                break
+            end
+        end
+        if ok:
             ret sigid
         end
     end
@@ -674,7 +692,7 @@ func ensure_vtbl(
             cm := sm.LookupLocal(s, sm.SymAt(s, csym).members, im.name)
             mut csig := 0
             if cm != 0 && sm.SymAt(s, cm).kind == sm.SYM_METHOD:
-                csig = match_sig(s, cm, sm.SigAt(s, isig).params.len())
+                csig = match_sig(s, cm, isig)
             end
             if n != 0:
                 co.SbPuts(slots, ", ")
@@ -698,7 +716,7 @@ func ensure_vtbl(
                 if iowner != 0 && sm.SymAt(s, iowner).kind == sm.SYM_TYPEIMPL:
                     icm := sm.LookupLocal(s, sm.SymAt(s, iowner).members, im.name)
                     if icm != 0 && sm.SymAt(s, icm).kind == sm.SYM_METHOD:
-                        icsig = match_sig(s, icm, sm.SigAt(s, isig).params.len())
+                        icsig = match_sig(s, icm, isig)
                     end
                 end
                 if icsig != 0:

@@ -353,3 +353,5 @@ Return nil when there is none."
 
 (provide 'salam-mode)
 
+;;; salam-mode.el ends here
+

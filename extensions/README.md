@@ -89,9 +89,11 @@ cross-references (Kate contexts and item data, GtkSourceView refs and styles,
 TextMate repository includes, Sublime context includes) and rejects lookaround
 in the micro rules, which Go's RE2 cannot run.
 
-`check_engines.py` hands the Kate and GtkSourceView definitions to their own
-engines, `kate-syntax-highlighter` and GtkSourceView through GObject
-introspection, and highlights `tools/fixtures/probe_{en,fa,ar}.salam`. Those
+`check_engines.py` hands three of the definitions to the engines that actually
+read them: the Kate one to `kate-syntax-highlighter`, the Sublime Text one to
+syntect (which ships inside `bat`), and the GtkSourceView one to GtkSourceView
+through GObject introspection. Each highlights
+`tools/fixtures/probe_{en,fa,ar}.salam`. Those
 three files are the same program written with the English, Persian and Arabic
 keywords, and each one compiles. The check asserts that a construct comes out
 styled the same way in all three, so dropping a Persian keyword from one

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Run the Kate and GtkSourceView definitions through their real engines.
+"""Run the Kate, Sublime Text and GtkSourceView definitions through the real
+engines that read them.
 
-Both engines are optional. Where one is missing the check is skipped rather
+Every engine is optional. Where one is missing the check is skipped rather
 than failed, so this runs anywhere `validate.py` does.
 
 What it asserts is the property that matters for a trilingual language: the
@@ -21,6 +22,11 @@ import sys
 FIXTURES = "extensions/tools/fixtures"
 KATE_DEFINITION = "extensions/kate/salam.xml"
 GTK_DEFINITION = "extensions/gtksourceview"
+SUBLIME_DEFINITION = "extensions/sublime/Salam.sublime-syntax"
+
+# A theme that gives keywords, types and function names three different
+# colours, so the assertions below can tell them apart.
+SYNTECT_THEME = "Monokai Extended"
 
 # The same construct in each keyword pack. Every row has to come out styled
 # the same way in all three columns.
@@ -50,6 +56,75 @@ ENGINE_ERRORS = (
 
 def probe(language):
     return os.path.join(FIXTURES, f"probe_{language}.salam")
+
+
+def bat_binary():
+    """syntect ships inside bat, which Debian and Ubuntu install as batcat."""
+    return shutil.which("batcat") or shutil.which("bat")
+
+
+def syntect_cache(definition):
+    """Build a bat syntax cache holding only the Salam definition."""
+    root = os.path.join(
+        os.environ.get("TMPDIR", "/tmp"), "salam-engine-check", "syntect"
+    )
+    syntaxes = os.path.join(root, "syntaxes")
+    os.makedirs(syntaxes, exist_ok=True)
+    shutil.copy(definition, syntaxes)
+    subprocess.run(
+        [bat_binary(), "cache", "--build", "--source", root, "--target", root],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return root
+
+
+def syntect_styles(path, cache_dir):
+    environment = dict(os.environ, BAT_CACHE_PATH=cache_dir)
+    out = subprocess.run(
+        [
+            bat_binary(),
+            "--language=salam",
+            "--color=always",
+            "--style=plain",
+            "--paging=never",
+            f"--theme={SYNTECT_THEME}",
+            path,
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+        env=environment,
+    ).stdout
+
+    # syntect emits one span per scope change, so a string arrives as three
+    # pieces and a comment as two. Merge neighbours that share a colour back
+    # into the token a reader sees.
+    runs = []
+    colour = ""
+    for piece in re.split(r"(\x1b\[[0-9;]*m)", out):
+        if piece.startswith("\x1b["):
+            codes = piece[2:-1]
+            colour = "" if codes in ("", "0") else codes
+            continue
+        for index, line in enumerate(piece.split("\n")):
+            if index:
+                runs.append((None, "\n"))
+            if line:
+                runs.append((colour, line))
+
+    styles = {}
+    merged = []
+    for colour, text in runs:
+        if merged and merged[-1][0] == colour:
+            merged[-1][1] += text
+        else:
+            merged.append([colour, text])
+    for colour, text in merged:
+        if colour is not None and text.strip():
+            styles.setdefault(text.strip(), colour)
+    return styles
 
 
 def kate_styles(path, definition_dir):
@@ -216,6 +291,17 @@ def main():
         failures += check("kate", kate_styles, root)
     else:
         print("kate: skipped (kate-syntax-highlighter is not installed)")
+
+    if bat_binary():
+        try:
+            failures += check(
+                "syntect", syntect_styles, syntect_cache(SUBLIME_DEFINITION)
+            )
+        except ENGINE_ERRORS as error:
+            print(f"syntect: FAIL building the cache: {error}")
+            failures += 1
+    else:
+        print("syntect: skipped (neither batcat nor bat is installed)")
 
     try:
         import gi

@@ -1,0 +1,1469 @@
+package syntaxcheck
+
+import str
+import io
+import os
+import encoding.json
+import encoding.value
+import encoding.yaml
+import encoding.xml
+import encoding.encerr
+import config
+
+pub const FLAVOR_ONIGURUMA := 0
+pub const FLAVOR_RE2 := 1
+
+const RE_ONIG := 0
+const RE_RE2 := 1
+
+mut failures := Vector {} as Vector<str>
+
+pub struct ReDiag:
+    pub ok: bool = true
+    pub message: str = ""
+    pub pos: int = 0
+end
+
+struct Names:
+    pub items: Vector<str> = Vector {}
+end
+
+struct Patterns:
+    pub items: Vector<str> = Vector {}
+    pub where: Vector<str> = Vector {}
+end
+
+func fail(where: str, message: str):
+    failures.push(where + ": " + message)
+end
+
+func has(names: Names, want: str): bool:
+    mut i := 0
+    until i < names.items.len():
+        if names.items.get(i) == want: ret true end
+        i += 1
+    end
+    ret false
+end
+
+func add(names &: Names, value: str):
+    if !has(names, value): names.items.push(value) end
+end
+
+func compile_all(pats &: Patterns, where: str, flavor: int): int:
+    mut count := 0
+    mut i := 0
+    until i < pats.items.len():
+        pat := pats.items.get(i)
+        if str.Len(pat) > 0:
+            count += 1
+            d := regex_diag(pat, flavor)
+            if !d.ok:
+                fail(where, "regex " + clip_to(pats.where.get(i), 40) + " \"" + clip_to(pat, 70) + "\": " + d.message)
+            end
+        end
+        i += 1
+    end
+    ret count
+end
+
+func keep(pats &: Patterns, pat: str, where: str):
+    pats.items.push(pat)
+    pats.where.push(where)
+end
+
+func free_patterns(pats &: Patterns):
+    pats.items.free()
+    pats.where.free()
+end
+
+func read_text_ok(path: str, out &: str): bool:
+    out = io.ReadFile(path)
+    if str.Len(out) > 0: ret true end
+    ret os.FileSize(path) == 0 as i64
+end
+
+func load_json(path: str, strip: bool, ok &: bool): value.Value:
+    ok = false
+    if !os.Exists(path):
+        fail(path, "the file is missing")
+        ret value.ValueNull()
+    end
+    mut text := ""
+    if !read_text_ok(path, text):
+        fail(path, "the file cannot be read")
+        ret value.ValueNull()
+    end
+    if strip: text = strip_line_comments(text) end
+    mut err := encerr.NoError()
+    v := json.Decode(text, err)
+    if encerr.IsError(err):
+        fail(path, "JSON: " + err.message + " at byte " + str.FromInt(err.position as i64))
+        ret value.ValueNull()
+    end
+    ok = true
+    ret v
+end
+
+func load_yaml(path: str, ok &: bool): value.Value:
+    ok = false
+    if !os.Exists(path):
+        fail(path, "the file is missing")
+        ret value.ValueNull()
+    end
+    mut raw := ""
+    if !read_text_ok(path, raw):
+        fail(path, "the file cannot be read")
+        ret value.ValueNull()
+    end
+    text := last_yaml_document(raw)
+    mut err := encerr.NoError()
+    v := yaml.Decode(text, err)
+    if encerr.IsError(err):
+        fail(path, "YAML: " + err.message + " at byte " + str.FromInt(err.position as i64))
+        ret value.ValueNull()
+    end
+    ok = true
+    ret v
+end
+
+func load_xml(path: str, ok &: bool): xml.XMLNode:
+    ok = false
+    if !os.Exists(path):
+        fail(path, "the file is missing")
+        ret xml.XMLNode {}
+    end
+    mut text := ""
+    if !read_text_ok(path, text):
+        fail(path, "the file cannot be read")
+        ret xml.XMLNode {}
+    end
+    mut reason := ""
+    if !xml_wellformed(text, reason):
+        fail(path, "XML: " + reason)
+        ret xml.XMLNode {}
+    end
+    mut parsed := false
+    root := xml.DecodeStrict(text, parsed)
+    if !parsed:
+        fail(path, "XML: the document does not parse")
+        ret root
+    end
+    ok = true
+    ret root
+end
+
+inline pure func bp(s: str): i8*: ret (s as void*) as i8* end
+
+inline pure func ub(p: i8*, i: int): int:
+    mut v := p[i] as int
+    if v < 0: v = v + 256 end
+    ret v
+end
+
+pure func is_hex(c: int): bool:
+    ret (c >= 48 && c <= 57) || (c >= 97 && c <= 102) || (c >= 65 && c <= 70)
+end
+
+pure func is_digit(c: int): bool: ret c >= 48 && c <= 57 end
+
+pure func is_name_byte(c: int): bool:
+    ret (c >= 48 && c <= 57) || (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || c == 95
+end
+
+pure func is_flag_byte(c: int): bool:
+    ret c == 105 || c == 109 || c == 115 || c == 120 || c == 117 || c == 85 || c == 76 || c == 110 || c == 97 || c == 100 || c == 112
+end
+
+pure func is_upper_byte(c: int): bool: ret c >= 65 && c <= 90 end
+
+func one(c: int): str:
+    mut sb := str.NewBuilder()
+    str.BufAppendChar(sb, c)
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func bad(message: str, pos: int): ReDiag:
+    ret ReDiag { ok = false, message = message, pos = pos }
+end
+
+func clip(s: str, limit: int): str:
+    if str.Len(s) <= limit: ret s end
+    ret str.Substr(s, 0, limit) + "..."
+end
+
+func hex_value(p: i8*, start: int, count: int): int:
+    mut v := 0
+    mut i := 0
+    until i < count:
+        c := ub(p, start + i)
+        mut d := 0
+        if c >= 48 && c <= 57: d = c - 48
+        else c >= 97 && c <= 102: d = c - 87
+        else: d = c - 55
+        end
+        v = v * 16 + d
+        i += 1
+    end
+    ret v
+end
+
+func dec_value(p: i8*, start: int, count: int): int:
+    mut v := 0
+    mut i := 0
+    until i < count:
+        v = v * 10 + (ub(p, start + i) - 48)
+        i += 1
+    end
+    ret v
+end
+
+func hex_run(p: i8*, n: int, start: int, limit: int): int:
+    mut k := start
+    until k < n && k - start < limit && is_hex(ub(p, k)):
+        k += 1
+    end
+    ret k - start
+end
+
+func scan_hex_brace(p: i8*, n: int, at: int, what: str, diag &: ReDiag): int:
+    mut j := at + 1
+    mut digits := 0
+    until j < n && ub(p, j) != 125:
+        if !is_hex(ub(p, j)):
+            diag = bad(what + " takes hexadecimal digits only", j)
+            ret n
+        end
+        digits += 1
+        j += 1
+    end
+    if j >= n:
+        diag = bad(what + " is never closed", at)
+        ret n
+    end
+    if digits == 0 || digits > 6:
+        diag = bad(what + " needs between one and six hexadecimal digits", at)
+        ret n
+    end
+    if hex_value(p, at + 1, digits) > 1114111:
+        diag = bad(what + " is above the highest code point", at)
+        ret n
+    end
+    ret j + 1
+end
+
+func scan_brace_name(p: i8*, n: int, at: int, what: str, diag &: ReDiag): int:
+    mut j := at + 1
+    until j < n && ub(p, j) != 125:
+        j += 1
+    end
+    if j >= n:
+        diag = bad(what + " is never closed", at)
+        ret n
+    end
+    if j == at + 1:
+        diag = bad(what + " is empty", at)
+        ret n
+    end
+    ret j + 1
+end
+
+func scan_escape(pat: str, p: i8*, n: int, at: int, flavor: int, in_class: bool,
+                 ref_nums &: Vector<int>, ref_names &: Names, diag &: ReDiag): int:
+    if at + 1 >= n:
+        diag = bad("the pattern ends with a backslash", at)
+        ret n
+    end
+    e := ub(p, at + 1)
+    if e == 120:
+        if at + 2 < n && ub(p, at + 2) == 123:
+            ret scan_hex_brace(p, n, at + 2, "\\x{...}", diag)
+        end
+        got := hex_run(p, n, at + 2, 2)
+        if got == 0:
+            diag = bad("\\x needs at least one hexadecimal digit", at)
+            ret n
+        end
+        ret at + 2 + got
+    end
+    if e == 117:
+        if flavor == RE_RE2:
+            diag = bad("\\u is not supported by Go RE2, write \\x{...}", at)
+            ret n
+        end
+        if at + 2 < n && ub(p, at + 2) == 123:
+            ret scan_hex_brace(p, n, at + 2, "\\u{...}", diag)
+        end
+        if hex_run(p, n, at + 2, 4) != 4:
+            diag = bad("\\u needs four hexadecimal digits", at)
+            ret n
+        end
+        ret at + 6
+    end
+    if e == 112 || e == 80:
+        if at + 2 < n && ub(p, at + 2) == 123:
+            ret scan_brace_name(p, n, at + 2, "\\p{...}", diag)
+        end
+        if at + 2 >= n:
+            diag = bad("\\p needs a property name", at)
+            ret n
+        end
+        ret at + 3
+    end
+    if e == 107 && !in_class:
+        if flavor == RE_RE2:
+            diag = bad("named backreferences are not supported by Go RE2", at)
+            ret n
+        end
+        if at + 2 >= n:
+            diag = bad("\\k needs a group name", at)
+            ret n
+        end
+        open := ub(p, at + 2)
+        mut close := 0
+        if open == 60: close = 62
+        else open == 39: close = 39
+        else:
+            diag = bad("\\k needs <name> or 'name'", at)
+            ret n
+        end
+        mut j := at + 3
+        until j < n && ub(p, j) != close:
+            j += 1
+        end
+        if j >= n:
+            diag = bad("the \\k group name is never closed", at)
+            ret n
+        end
+        add(ref_names, str.Substr(pat, at + 3, j - (at + 3)))
+        ret j + 1
+    end
+    if e >= 49 && e <= 57 && !in_class:
+        if flavor == RE_RE2:
+            diag = bad("backreferences are not supported by Go RE2", at)
+            ret n
+        end
+        mut j := at + 1
+        until j < n && is_digit(ub(p, j)):
+            j += 1
+        end
+        ref_nums.push(dec_value(p, at + 1, j - (at + 1)))
+        ret j
+    end
+    if flavor == RE_RE2 && !in_class && (e == 90 || e == 71 || e == 75):
+        diag = bad("\\" + one(e) + " is not supported by Go RE2", at)
+        ret n
+    end
+    ret at + 2
+end
+
+func scan_class(pat: str, p: i8*, n: int, at: int, flavor: int,
+                ref_nums &: Vector<int>, ref_names &: Names, diag &: ReDiag): int:
+    mut j := at + 1
+    if j < n && ub(p, j) == 94: j += 1 end
+    if j < n && ub(p, j) == 93: j += 1 end
+    mut prev_lit := 0 - 1
+    until diag.ok && j < n && ub(p, j) != 93:
+        c := ub(p, j)
+        if c == 92:
+            j = scan_escape(pat, p, n, j, flavor, true, ref_nums, ref_names, diag)
+            prev_lit = 0 - 1
+        else c == 91 && j + 1 < n && ub(p, j + 1) == 58:
+            mut k := j + 2
+            until k + 1 < n && !(ub(p, k) == 58 && ub(p, k + 1) == 93):
+                k += 1
+            end
+            if k + 1 >= n:
+                diag = bad("a POSIX bracket class is never closed", j)
+                ret n
+            end
+            j = k + 2
+            prev_lit = 0 - 1
+        else c == 45 && prev_lit >= 0 && j + 1 < n && ub(p, j + 1) != 93:
+            hi := ub(p, j + 1)
+            if hi != 92 && hi < 128 && prev_lit < 128 && hi < prev_lit:
+                diag = bad("the character range " + one(prev_lit) + "-" + one(hi) + " runs backwards", j)
+                ret n
+            end
+            j += 2
+            prev_lit = 0 - 1
+        else:
+            prev_lit = c
+            j += 1
+        end
+    end
+    if !diag.ok: ret n end
+    if j >= n:
+        diag = bad("a character class is never closed", at)
+        ret n
+    end
+    ret j + 1
+end
+
+func scan_group_open(pat: str, p: i8*, n: int, at: int, flavor: int,
+                     groups &: int, depth &: int, names &: Names, diag &: ReDiag): int:
+    if at + 1 >= n || ub(p, at + 1) != 63:
+        groups += 1
+        depth += 1
+        ret at + 1
+    end
+    if at + 2 >= n:
+        diag = bad("a group opens at the very end of the pattern", at)
+        ret n
+    end
+    c2 := ub(p, at + 2)
+    if c2 == 58:
+        depth += 1
+        ret at + 3
+    end
+    if c2 == 35:
+        mut j := at + 3
+        until j < n && ub(p, j) != 41:
+            j += 1
+        end
+        if j >= n:
+            diag = bad("an inline comment (?# is never closed", at)
+            ret n
+        end
+        ret j + 1
+    end
+    if c2 == 61 || c2 == 33:
+        if flavor == RE_RE2:
+            diag = bad("lookahead is not supported by Go RE2", at)
+            ret n
+        end
+        depth += 1
+        ret at + 3
+    end
+    if c2 == 62:
+        if flavor == RE_RE2:
+            diag = bad("atomic groups are not supported by Go RE2", at)
+            ret n
+        end
+        depth += 1
+        ret at + 3
+    end
+    if c2 == 40:
+        diag = bad("conditional groups are supported by neither engine", at)
+        ret n
+    end
+    mut name_at := 0
+    mut close := 0
+    if c2 == 60:
+        if at + 3 < n && (ub(p, at + 3) == 61 || ub(p, at + 3) == 33):
+            if flavor == RE_RE2:
+                diag = bad("lookbehind is not supported by Go RE2", at)
+                ret n
+            end
+            depth += 1
+            ret at + 4
+        end
+        name_at = at + 3
+        close = 62
+    else c2 == 39:
+        if flavor == RE_RE2:
+            diag = bad("(?'name' is not supported by Go RE2, write (?P<name>", at)
+            ret n
+        end
+        name_at = at + 3
+        close = 39
+    else c2 == 80:
+        if at + 3 < n && ub(p, at + 3) == 61:
+            diag = bad("(?P=name) backreferences are supported by neither engine", at)
+            ret n
+        end
+        if at + 3 >= n || ub(p, at + 3) != 60:
+            diag = bad("(?P must be followed by <name>", at)
+            ret n
+        end
+        name_at = at + 4
+        close = 62
+    end
+    if close != 0:
+        mut j := name_at
+        until j < n && ub(p, j) != close:
+            if !is_name_byte(ub(p, j)):
+                diag = bad("a group name holds only letters, digits and underscores", j)
+                ret n
+            end
+            j += 1
+        end
+        if j >= n:
+            diag = bad("a group name is never closed", at)
+            ret n
+        end
+        if j == name_at:
+            diag = bad("a group name is empty", at)
+            ret n
+        end
+        groups += 1
+        depth += 1
+        add(names, str.Substr(pat, name_at, j - name_at))
+        ret j + 1
+    end
+    mut j := at + 2
+    until j < n && ub(p, j) != 41 && ub(p, j) != 58:
+        c := ub(p, j)
+        if c != 45 && !is_flag_byte(c):
+            diag = bad("(?" + one(c) + " is not a group either engine knows", at)
+            ret n
+        end
+        j += 1
+    end
+    if j >= n:
+        diag = bad("an inline flag group is never closed", at)
+        ret n
+    end
+    if ub(p, j) == 58: depth += 1 end
+    ret j + 1
+end
+
+func scan_quant_suffix(p: i8*, n: int, at: int, flavor: int, diag &: ReDiag): int:
+    if at >= n: ret at end
+    c := ub(p, at)
+    if c == 63: ret at + 1 end
+    if c == 43:
+        if flavor == RE_RE2:
+            diag = bad("possessive quantifiers are not supported by Go RE2", at)
+            ret n
+        end
+        ret at + 1
+    end
+    ret at
+end
+
+func scan_brace(p: i8*, n: int, at: int, lo &: int, hi &: int): int:
+    mut j := at + 1
+    mut dlo := 0
+    until j < n && is_digit(ub(p, j)):
+        dlo += 1
+        j += 1
+    end
+    if dlo == 0: ret 0 - 1 end
+    lo = dec_value(p, at + 1, dlo)
+    if j < n && ub(p, j) == 125:
+        hi = lo
+        ret j + 1
+    end
+    if j >= n || ub(p, j) != 44: ret 0 - 1 end
+    start := j + 1
+    j = start
+    mut dhi := 0
+    until j < n && is_digit(ub(p, j)):
+        dhi += 1
+        j += 1
+    end
+    if j >= n || ub(p, j) != 125: ret 0 - 1 end
+    if dhi == 0: hi = 0 - 1
+    else: hi = dec_value(p, start, dhi)
+    end
+    ret j + 1
+end
+
+func regex_diag(pat: str, flavor: int): ReDiag:
+    mut diag := ReDiag {}
+    mut names := Names {}
+    mut ref_names := Names {}
+    mut ref_nums := Vector {} as Vector<int>
+    n := str.Len(pat)
+    p := bp(pat)
+    mut i := 0
+    mut depth := 0
+    mut groups := 0
+    mut atom := false
+    until diag.ok && i < n:
+        c := ub(p, i)
+        if c == 92:
+            i = scan_escape(pat, p, n, i, flavor, false, ref_nums, ref_names, diag)
+            atom = true
+        else c == 91:
+            i = scan_class(pat, p, n, i, flavor, ref_nums, ref_names, diag)
+            atom = true
+        else c == 40:
+            i = scan_group_open(pat, p, n, i, flavor, groups, depth, names, diag)
+            atom = false
+        else c == 41:
+            if depth == 0:
+                diag = bad("a closing parenthesis has no opening one", i)
+            else:
+                depth -= 1
+                atom = true
+                i += 1
+            end
+        else c == 42 || c == 43 || c == 63:
+            if !atom:
+                diag = bad("there is nothing for '" + one(c) + "' to repeat", i)
+            else:
+                i = scan_quant_suffix(p, n, i + 1, flavor, diag)
+                atom = false
+            end
+        else c == 123:
+            mut lo := 0
+            mut hi := 0
+            after := scan_brace(p, n, i, lo, hi)
+            if after < 0:
+                atom = true
+                i += 1
+            else if !atom:
+                diag = bad("there is nothing for the {n,m} repetition to repeat", i)
+            else if hi >= 0 && hi < lo:
+                diag = bad("the repetition {" + str.FromInt(lo as i64) + "," + str.FromInt(hi as i64) + "} counts down", i)
+            else if flavor == RE_RE2 && (lo > 1000 || hi > 1000):
+                diag = bad("Go RE2 caps a repetition count at 1000", i)
+            else:
+                i = scan_quant_suffix(p, n, after, flavor, diag)
+                atom = false
+            end
+        else c == 124:
+            atom = false
+            i += 1
+        else c == 94 || c == 36:
+            atom = false
+            i += 1
+        else:
+            atom = true
+            i += 1
+        end
+    end
+    if diag.ok && depth > 0:
+        diag = bad("a group is never closed", n)
+    end
+    mut k := 0
+    until diag.ok && k < ref_nums.len():
+        r := ref_nums.get(k)
+        if r > groups:
+            diag = bad("\\" + str.FromInt(r as i64) + " refers to a group the pattern does not have", 0)
+        end
+        k += 1
+    end
+    mut m := 0
+    until diag.ok && m < ref_names.items.len():
+        want := ref_names.items.get(m)
+        if !has(names, want):
+            diag = bad("\\k<" + want + "> refers to a group the pattern does not have", 0)
+        end
+        m += 1
+    end
+    names.items.free()
+    ref_names.items.free()
+    ref_nums.free()
+    ret diag
+end
+
+func clip_to(s: str, limit: int): str:
+    if str.Len(s) <= limit: ret s end
+    ret str.Substr(s, 0, limit) + "..."
+end
+
+func strip_line_comments(text: str): str:
+    lines := str.Split(text, "\n")
+    mut sb := str.NewBuilder()
+    mut i := 0
+    until i < lines.len():
+        line := lines.get(i)
+        if str.StartsWith(str.Trim(line), "//"):
+            str.BufAppendChar(sb, 10)
+        else:
+            str.BufAppend(sb, line)
+            str.BufAppendChar(sb, 10)
+        end
+        i += 1
+    end
+    lines.free()
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func last_yaml_document(text: str): str:
+    docs := yaml.SplitDocuments(text)
+    mut out := text
+    mut i := 0
+    until i < docs.len():
+        if str.Len(str.Trim(docs.get(i))) > 0: out = docs.get(i) end
+        i += 1
+    end
+    docs.free()
+    ret out
+end
+
+func placeholder_at(text: str, from: int, slot &: str): int:
+    n := str.Len(text)
+    p := bp(text)
+    mut i := from
+    slot = ""
+    until i + 3 < n:
+        if ub(p, i) == 37 && ub(p, i + 1) == 37:
+            mut j := i + 2
+            until j < n && (is_upper_byte(ub(p, j)) || ub(p, j) == 95):
+                j += 1
+            end
+            if j > i + 2 && j + 1 < n && ub(p, j) == 37 && ub(p, j + 1) == 37:
+                slot = str.Substr(text, i, j + 2 - i)
+                ret i
+            end
+        end
+        i += 1
+    end
+    ret 0 - 1
+end
+
+func xml_wellformed(text: str, reason &: str): bool:
+    mut tz := xml.NewXMLTokenizer(text)
+    mut stack := Vector {} as Vector<str>
+    mut good := true
+    reason = ""
+    until good:
+        tok := xml.NextToken(tz)
+        if tok.kind == xml.XMLTokEOF:
+            if stack.len() > 0:
+                good = false
+                reason = "<" + stack.get(stack.len() - 1) + "> is never closed"
+            end
+            break
+        end
+        if tok.kind == xml.XMLTokError:
+            good = false
+            reason = "the document does not tokenise"
+        else tok.kind == xml.XMLTokStartElement:
+            if str.Len(tok.tag) == 0:
+                good = false
+                reason = "an element has no name"
+            else:
+                stack.push(tok.tag)
+            end
+        else tok.kind == xml.XMLTokEndElement:
+            if stack.len() == 0:
+                good = false
+                reason = "</" + tok.tag + "> closes an element that never opened"
+            else:
+                open := stack.get(stack.len() - 1)
+                stack.pop()
+                if open != tok.tag:
+                    good = false
+                    reason = "</" + tok.tag + "> closes <" + open + ">"
+                end
+            end
+        end
+    end
+    stack.free()
+    ret good
+end
+func map_has(keys &: Vector<str>, want: str): bool:
+    mut i := 0
+    until i < keys.len():
+        if keys.get(i) == want: ret true end
+        i += 1
+    end
+    ret false
+end
+
+func map_get(keys &: Vector<str>, vals &: Vector<str>, want: str): str:
+    mut i := 0
+    until i < keys.len():
+        if keys.get(i) == want: ret vals.get(i) end
+        i += 1
+    end
+    ret ""
+end
+
+func tm_walk(node: value.Value, repo: value.Value, path: str, where: str, pats &: Patterns):
+    if value.IsObject(node):
+        keys := value.ObjectKeys(node)
+        mut i := 0
+        until i < keys.len():
+            k := keys.get(i)
+            child := value.ObjectGet(node, k)
+            if (k == "match" || k == "begin" || k == "end") && value.IsString(child):
+                keep(pats, value.AsString(child), where + "." + k)
+            else k == "include" && value.IsString(child) && str.StartsWith(value.AsString(child), "#"):
+                ref := value.AsString(child)
+                name := str.Substr(ref, 1, str.Len(ref) - 1)
+                if !value.ObjectHas(repo, name):
+                    fail(path, where + " includes the unknown repository key \"" + name + "\"")
+                end
+            else:
+                tm_walk(child, repo, path, where + "." + k, pats)
+            end
+            i += 1
+        end
+        keys.free()
+        ret
+    end
+    if value.IsArray(node):
+        mut i := 0
+        until i < value.ArrayLen(node):
+            tm_walk(value.ArrayGet(node, i), repo, path, where + "[" + str.FromInt(i as i64) + "]", pats)
+            i += 1
+        end
+    end
+end
+
+func check_textmate(path: str): str:
+    mut summary := ""
+    mut ok := false
+    mut grammar := load_json(path, false, ok)
+    if !ok: ret "" end
+    mut pats := Patterns {}
+    if !value.ObjectHas(grammar, "repository"):
+        fail(path, "the grammar has no repository")
+    else:
+        repo := value.ObjectGet(grammar, "repository")
+        tm_walk(value.ObjectGet(grammar, "patterns"), repo, path, "patterns", pats)
+        tm_walk(repo, repo, path, "repository", pats)
+    end
+    count := compile_all(pats, path, RE_ONIG)
+    summary = str.FromInt(count as i64) + " regexes"
+    free_patterns(pats)
+    value.ValueFree(grammar)
+    ret summary
+end
+
+func expand_vars(text: str, keys &: Vector<str>, vals &: Vector<str>, path: str, depth: int): str:
+    if depth > 10:
+        fail(path, "a variable expands into itself: " + clip_to(text, 40))
+        ret text
+    end
+    if !str.Contains(text, "{{"): ret text end
+    mut sb := str.NewBuilder()
+    mut i := 0
+    mut going := true
+    until going:
+        open := str.IndexFrom(text, "{{", i)
+        if open < 0:
+            str.BufAppend(sb, str.Substr(text, i, str.Len(text) - i))
+            going = false
+        else:
+            close := str.IndexFrom(text, "}}", open + 2)
+            if close < 0:
+                str.BufAppend(sb, str.Substr(text, i, str.Len(text) - i))
+                going = false
+            else:
+                str.BufAppend(sb, str.Substr(text, i, open - i))
+                name := str.Substr(text, open + 2, close - (open + 2))
+                if !map_has(keys, name):
+                    fail(path, "the pattern uses the undefined variable {{" + name + "}}")
+                    str.BufAppend(sb, "X")
+                else:
+                    str.BufAppend(sb, expand_vars(map_get(keys, vals, name), keys, vals, path, depth + 1))
+                end
+                i = close + 2
+            end
+        end
+    end
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func sublime_walk(node: value.Value, contexts: value.Value, path: str, where: str,
+                  keys &: Vector<str>, vals &: Vector<str>, pats &: Patterns):
+    if value.IsArray(node):
+        mut i := 0
+        until i < value.ArrayLen(node):
+            sublime_walk(value.ArrayGet(node, i), contexts, path, where, keys, vals, pats)
+            i += 1
+        end
+        ret
+    end
+    if !value.IsObject(node): ret end
+    if value.ObjectHas(node, "include"):
+        target := value.ObjectGet(node, "include")
+        if value.IsString(target) && !value.ObjectHas(contexts, value.AsString(target)):
+            fail(path, where + " includes the unknown context \"" + value.AsString(target) + "\"")
+        end
+    end
+    if value.ObjectHas(node, "match"):
+        m := value.ObjectGet(node, "match")
+        if value.IsString(m):
+            keep(pats, expand_vars(value.AsString(m), keys, vals, path, 0), where)
+        end
+    end
+    mut which := 0
+    until which < 2:
+        mut key := "push"
+        if which == 1: key = "set" end
+        if value.ObjectHas(node, key):
+            target := value.ObjectGet(node, key)
+            if value.IsString(target):
+                if !value.ObjectHas(contexts, value.AsString(target)):
+                    fail(path, where + " " + key + "es the unknown context \"" + value.AsString(target) + "\"")
+                end
+            else:
+                sublime_walk(target, contexts, path, where, keys, vals, pats)
+            end
+        end
+        which += 1
+    end
+end
+
+func check_sublime(path: str): str:
+    mut summary := ""
+    mut ok := false
+    mut doc := load_yaml(path, ok)
+    if !ok: ret "" end
+    mut keys := Vector {} as Vector<str>
+    mut vals := Vector {} as Vector<str>
+    if value.ObjectHas(doc, "variables"):
+        vars := value.ObjectGet(doc, "variables")
+        names := value.ObjectKeys(vars)
+        mut i := 0
+        until i < names.len():
+            keys.push(names.get(i))
+            vals.push(value.AsString(value.ObjectGet(vars, names.get(i))))
+            i += 1
+        end
+        names.free()
+    end
+    mut pats := Patterns {}
+    if !value.ObjectHas(doc, "contexts"):
+        fail(path, "the syntax has no contexts")
+    else:
+        contexts := value.ObjectGet(doc, "contexts")
+        names := value.ObjectKeys(contexts)
+        mut i := 0
+        until i < names.len():
+            sublime_walk(value.ObjectGet(contexts, names.get(i)), contexts, path, names.get(i), keys, vals, pats)
+            i += 1
+        end
+        names.free()
+    end
+    count := compile_all(pats, path, RE_ONIG)
+    summary = str.FromInt(count as i64) + " regexes"
+    free_patterns(pats)
+    keys.free()
+    vals.free()
+    value.ValueFree(doc)
+    ret summary
+end
+
+func collect_attr(node: xml.XMLNode, tag: str, attr: str, out &: Names):
+    if node.tag == tag:
+        v := xml.Attr(node, attr)
+        if str.Len(v) > 0: add(out, v) end
+    end
+    mut i := 0
+    until i < node.children.len():
+        collect_attr(node.children.get(i), tag, attr, out)
+        i += 1
+    end
+end
+
+func kate_refs(node: xml.XMLNode, path: str, contexts &: Names, lists &: Names, styles &: Names, pats &: Patterns):
+    target := xml.Attr(node, "context")
+    if str.Len(target) > 0 && !str.StartsWith(target, "#") && !has(contexts, target):
+        fail(path, "a <" + node.tag + "> rule points at the unknown context \"" + target + "\"")
+    end
+    used := xml.Attr(node, "attribute")
+    if str.Len(used) > 0 && !has(styles, used):
+        fail(path, "a <" + node.tag + "> rule uses the unknown itemData \"" + used + "\"")
+    end
+    if node.tag == "keyword":
+        listname := xml.Attr(node, "String")
+        if !has(lists, listname):
+            fail(path, "a keyword rule uses the unknown list \"" + listname + "\"")
+        end
+    end
+    if node.tag == "RegExpr":
+        keep(pats, xml.Attr(node, "String"), "RegExpr")
+    end
+    mut i := 0
+    until i < node.children.len():
+        kate_refs(node.children.get(i), path, contexts, lists, styles, pats)
+        i += 1
+    end
+end
+
+func check_kate(path: str): str:
+    mut summary := ""
+    mut ok := false
+    root := load_xml(path, ok)
+    if !ok: ret "" end
+    mut contexts := Names {}
+    mut lists := Names {}
+    mut styles := Names {}
+    collect_attr(root, "context", "name", contexts)
+    collect_attr(root, "list", "name", lists)
+    collect_attr(root, "itemData", "name", styles)
+    mut pats := Patterns {}
+    kate_refs(root, path, contexts, lists, styles, pats)
+    count := compile_all(pats, path, RE_ONIG)
+    summary = str.FromInt(count as i64) + " regexes, " + str.FromInt(lists.items.len() as i64) + " lists"
+    free_patterns(pats)
+    contexts.items.free()
+    lists.items.free()
+    styles.items.free()
+    ret summary
+end
+
+func gtk_defines(node: xml.XMLNode, keys &: Vector<str>, vals &: Vector<str>):
+    if node.tag == "define-regex":
+        id := xml.Attr(node, "id")
+        if str.Len(id) > 0:
+            keys.push(id)
+            vals.push(node.text)
+        end
+    end
+    mut i := 0
+    until i < node.children.len():
+        gtk_defines(node.children.get(i), keys, vals)
+        i += 1
+    end
+end
+
+func expand_gtk(text: str, keys &: Vector<str>, vals &: Vector<str>, path: str, depth: int): str:
+    if depth > 10:
+        fail(path, "a define-regex expands into itself: " + clip_to(text, 40))
+        ret text
+    end
+    if !str.Contains(text, "\\%{"): ret text end
+    mut sb := str.NewBuilder()
+    mut i := 0
+    mut going := true
+    until going:
+        open := str.IndexFrom(text, "\\%{", i)
+        if open < 0:
+            str.BufAppend(sb, str.Substr(text, i, str.Len(text) - i))
+            going = false
+        else:
+            close := str.IndexFrom(text, "}", open + 3)
+            if close < 0:
+                str.BufAppend(sb, str.Substr(text, i, str.Len(text) - i))
+                going = false
+            else:
+                str.BufAppend(sb, str.Substr(text, i, open - i))
+                name := str.Substr(text, open + 3, close - (open + 3))
+                if !map_has(keys, name):
+                    fail(path, "a rule uses the undefined regex \\%{" + name + "}")
+                    str.BufAppend(sb, "X")
+                else:
+                    str.BufAppend(sb, "(?:" + expand_gtk(map_get(keys, vals, name), keys, vals, path, depth + 1) + ")")
+                end
+                i = close + 1
+            end
+        end
+    end
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func gtk_walk(node: xml.XMLNode, path: str, ids &: Names, styles &: Names,
+              keys &: Vector<str>, vals &: Vector<str>, pats &: Patterns):
+    if node.tag == "context":
+        target := xml.Attr(node, "ref")
+        if str.Len(target) > 0 && !str.Contains(target, ":") && !has(ids, target):
+            fail(path, "the context ref \"" + target + "\" is not defined here")
+        end
+        used := xml.Attr(node, "style-ref")
+        if str.Len(used) > 0 && !str.Contains(used, ":") && !has(styles, used):
+            fail(path, "the style-ref \"" + used + "\" is not defined here")
+        end
+    end
+    if node.tag == "match" || node.tag == "start" || node.tag == "end" || node.tag == "define-regex":
+        if str.Len(node.text) > 0:
+            keep(pats, expand_gtk(node.text, keys, vals, path, 0), "<" + node.tag + ">")
+        end
+    end
+    mut i := 0
+    until i < node.children.len():
+        gtk_walk(node.children.get(i), path, ids, styles, keys, vals, pats)
+        i += 1
+    end
+end
+
+func check_gtksourceview(path: str): str:
+    mut summary := ""
+    mut ok := false
+    root := load_xml(path, ok)
+    if !ok: ret "" end
+    mut ids := Names {}
+    mut styles := Names {}
+    collect_attr(root, "context", "id", ids)
+    collect_attr(root, "style", "id", styles)
+    mut keys := Vector {} as Vector<str>
+    mut vals := Vector {} as Vector<str>
+    gtk_defines(root, keys, vals)
+    mut pats := Patterns {}
+    gtk_walk(root, path, ids, styles, keys, vals, pats)
+    count := compile_all(pats, path, RE_ONIG)
+    summary = str.FromInt(count as i64) + " regexes"
+    free_patterns(pats)
+    keys.free()
+    vals.free()
+    ids.items.free()
+    styles.items.free()
+    ret summary
+end
+
+func micro_walk(node: value.Value, pats &: Patterns, where: str):
+    if value.IsObject(node):
+        keys := value.ObjectKeys(node)
+        mut i := 0
+        until i < keys.len():
+            child := value.ObjectGet(node, keys.get(i))
+            if value.IsString(child):
+                keep(pats, value.AsString(child), keys.get(i))
+            else:
+                micro_walk(child, pats, keys.get(i))
+            end
+            i += 1
+        end
+        keys.free()
+        ret
+    end
+    if value.IsArray(node):
+        mut i := 0
+        until i < value.ArrayLen(node):
+            micro_walk(value.ArrayGet(node, i), pats, where)
+            i += 1
+        end
+    end
+end
+
+func micro_groups(): Names:
+    mut out := Names {}
+    add(out, "comment")
+    add(out, "constant")
+    add(out, "constant.number")
+    add(out, "constant.string")
+    add(out, "identifier")
+    add(out, "identifier.class")
+    add(out, "preproc")
+    add(out, "statement")
+    add(out, "symbol.brackets")
+    add(out, "symbol.operator")
+    ret out
+end
+
+func check_micro(path: str): str:
+    mut summary := ""
+    mut ok := false
+    mut doc := load_yaml(path, ok)
+    if !ok: ret "" end
+    if !value.ObjectHas(doc, "rules") || !value.ObjectHas(doc, "detect"):
+        fail(path, "the file needs both a rules and a detect section")
+        value.ValueFree(doc)
+        ret ""
+    end
+    rules := value.ObjectGet(doc, "rules")
+    mut pats := Patterns {}
+    micro_walk(rules, pats, "rules")
+    micro_walk(value.ObjectGet(doc, "detect"), pats, "detect")
+
+    mut seen := Names {}
+    mut i := 0
+    until i < value.ArrayLen(rules):
+        entry := value.ArrayGet(rules, i)
+        if value.IsObject(entry):
+            names := value.ObjectKeys(entry)
+            mut j := 0
+            until j < names.len():
+                add(seen, names.get(j))
+                j += 1
+            end
+            names.free()
+        end
+        i += 1
+    end
+    mut wanted := micro_groups()
+    mut missing := ""
+    mut k := 0
+    until k < wanted.items.len():
+        g := wanted.items.get(k)
+        if !has(seen, g):
+            if str.Len(missing) > 0: missing = missing + ", " end
+            missing = missing + g
+        end
+        k += 1
+    end
+    if str.Len(missing) > 0:
+        fail(path, "no rule is left for " + missing)
+    end
+    count := compile_all(pats, path, RE_RE2)
+    summary = str.FromInt(count as i64) + " regexes, " + str.FromInt(value.ArrayLen(rules) as i64) + " rules"
+    free_patterns(pats)
+    seen.items.free()
+    wanted.items.free()
+    value.ValueFree(doc)
+    ret summary
+end
+
+func check_nano(path: str): str:
+    mut summary := ""
+    if !os.Exists(path):
+        fail(path, "the file is missing")
+        ret ""
+    end
+    mut text := ""
+    if !read_text_ok(path, text):
+        fail(path, "the file cannot be read")
+        ret ""
+    end
+    lines := str.Split(text, "\n")
+    mut syntax := false
+    mut rules := 0
+    mut i := 0
+    until i < lines.len():
+        line := lines.get(i)
+        if str.StartsWith(line, "syntax "): syntax = true end
+        if str.StartsWith(line, "color ") || str.StartsWith(line, "icolor "):
+            rules += 1
+            if str.Count(line, "\"") < 2:
+                fail(path, "the quoting is unbalanced: " + clip_to(line, 60))
+            end
+        end
+        i += 1
+    end
+    if !syntax: fail(path, "there is no syntax directive") end
+    summary = str.FromInt(rules as i64) + " rules"
+    lines.free()
+    ret summary
+end
+
+func check_ini(path: str, required: Names): str:
+    mut summary := ""
+    if !os.Exists(path):
+        fail(path, "the file is missing")
+        ret ""
+    end
+    mut text := ""
+    if !read_text_ok(path, text):
+        fail(path, "the file cannot be read")
+        ret ""
+    end
+    mut parsed := config.ParseINI(text)
+    config.Free(parsed)
+    lines := str.Split(text, "\n")
+    mut sections := Names {}
+    mut i := 0
+    until i < lines.len():
+        line := str.Trim(lines.get(i))
+        if str.Len(line) > 0 && !str.StartsWith(line, "#") && !str.StartsWith(line, ";"):
+            if str.StartsWith(line, "["):
+                if !str.EndsWith(line, "]"):
+                    fail(path, "line " + str.FromInt((i + 1) as i64) + " opens a section it never closes")
+                else:
+                    add(sections, str.Substr(line, 1, str.Len(line) - 2))
+                end
+            else str.IndexOf(line, "=") < 0:
+                fail(path, "line " + str.FromInt((i + 1) as i64) + " is neither a section nor a key: " + clip_to(line, 40))
+            end
+        end
+        i += 1
+    end
+    mut k := 0
+    until k < required.items.len():
+        want := required.items.get(k)
+        if !has(sections, want):
+            fail(path, "there is no [" + want + "] section")
+        end
+        k += 1
+    end
+    summary = str.FromInt(sections.items.len() as i64) + " sections"
+    sections.items.free()
+    lines.free()
+    ret summary
+end
+
+func plist_scope(root: xml.XMLNode, path: str): str:
+    dict := xml.Child(root, "dict")
+    if !xml.Found(dict):
+        fail(path, "the plist has no dict")
+        ret ""
+    end
+    mut scope := false
+    mut name := ""
+    mut i := 0
+    until i + 1 < dict.children.len():
+        k := dict.children.get(i)
+        v := dict.children.get(i + 1)
+        if k.tag == "key":
+            if k.text == "scope": scope = true end
+            if k.text == "name": name = v.text end
+        end
+        i += 2
+    end
+    if !scope: fail(path, "there is no scope") end
+    ret name
+end
+
+func check_plist(path: str): str:
+    mut summary := ""
+    mut ok := false
+    root := load_xml(path, ok)
+    if !ok: ret "" end
+    if root.tag != "plist":
+        fail(path, "the root element is <" + root.tag + ">, not <plist>")
+        ret ""
+    end
+    summary = plist_scope(root, path)
+    ret summary
+end
+
+func generated_files(): Names:
+    mut out := Names {}
+    add(out, "extensions/vscode/syntaxes/salam.tmLanguage.json")
+    add(out, "extensions/sublime/Salam.sublime-syntax")
+    add(out, "extensions/sublime/Salam.sublime-completions")
+    add(out, "extensions/sublime/Comments.tmPreferences")
+    add(out, "extensions/sublime/Indentation Rules.tmPreferences")
+    add(out, "extensions/sublime/Symbol List.tmPreferences")
+    add(out, "extensions/vim/syntax/salam.vim")
+    add(out, "extensions/vim/indent/salam.vim")
+    add(out, "extensions/vim/ftplugin/salam.vim")
+    add(out, "extensions/vim/UltiSnips/salam.snippets")
+    add(out, "extensions/emacs/salam-mode.el")
+    add(out, "extensions/kate/salam.xml")
+    add(out, "extensions/gtksourceview/salam.lang")
+    add(out, "extensions/jetbrains/Salam.xml")
+    add(out, "extensions/geany/filetypes.Salam.conf")
+    add(out, "extensions/notepadpp/salam.xml")
+    add(out, "extensions/nano/salam.nanorc")
+    add(out, "extensions/micro/salam.yaml")
+    ret out
+end
+
+func check_placeholders(): str:
+    mut summary := ""
+    mut files := generated_files()
+    mut i := 0
+    until i < files.items.len():
+        path := files.items.get(i)
+        if !os.Exists(path):
+            fail(path, "the generated file is missing")
+        else:
+            mut slots := Names {}
+            mut text := ""
+            if !read_text_ok(path, text):
+                fail(path, "the generated file cannot be read")
+            end
+            mut at := 0
+            until at >= 0:
+                mut slot := ""
+                at = placeholder_at(text, at, slot)
+                if at >= 0:
+                    add(slots, slot)
+                    at = at + str.Len(slot)
+                end
+            end
+            mut j := 0
+            until j < slots.items.len():
+                fail(path, slots.items.get(j) + " was never substituted")
+                j += 1
+            end
+            slots.items.free()
+        end
+        i += 1
+    end
+    summary = "no unfilled template slots"
+    files.items.free()
+    ret summary
+end
+
+func check_json_parses(path: str): str:
+    mut summary := ""
+    mut ok := false
+    mut v := load_json(path, true, ok)
+    if !ok: ret "" end
+    summary = "ok"
+    value.ValueFree(v)
+    ret summary
+end
+
+func check_xml_parses(path: str): str:
+    mut summary := ""
+    mut ok := false
+    root := load_xml(path, ok)
+    if !ok: ret "" end
+    summary = "<" + root.tag + "> ok"
+    ret summary
+end
+
+pub func Reset():
+    failures.clear()
+end
+
+pub func FailureCount(): int:
+    ret failures.len()
+end
+
+pub func FailureAt(i: int): str:
+    if i < 0 || i >= failures.len(): ret "" end
+    ret failures.get(i)
+end
+
+pub func CheckRegex(pattern: str, flavor: int): ReDiag:
+    ret regex_diag(pattern, flavor)
+end
+
+pub func Clip(s: str, limit: int): str:
+    ret clip_to(s, limit)
+end
+
+pub func XMLWellFormed(text: str, reason &: str): bool:
+    ret xml_wellformed(text, reason)
+end
+
+pub func LastYAMLDocument(text: str): str:
+    ret last_yaml_document(text)
+end
+
+pub func StripLineComments(text: str): str:
+    ret strip_line_comments(text)
+end
+
+pub func PlaceholderAt(text: str, from: int, slot &: str): int:
+    ret placeholder_at(text, from, slot)
+end
+
+pub func CheckTextMate(path: str): str:
+    ret check_textmate(path)
+end
+
+pub func CheckSublimeSyntax(path: str): str:
+    ret check_sublime(path)
+end
+
+pub func CheckKate(path: str): str:
+    ret check_kate(path)
+end
+
+pub func CheckGtkSourceView(path: str): str:
+    ret check_gtksourceview(path)
+end
+
+pub func CheckMicro(path: str): str:
+    ret check_micro(path)
+end
+
+pub func CheckNano(path: str): str:
+    ret check_nano(path)
+end
+
+pub func CheckIni(path: str, first: str, second: str): str:
+    mut want := Names {}
+    add(want, first)
+    if str.Len(second) > 0: add(want, second) end
+    out := check_ini(path, want)
+    want.items.free()
+    ret out
+end
+
+pub func CheckPlist(path: str): str:
+    ret check_plist(path)
+end
+
+pub func CheckGeneratedFiles(): str:
+    ret check_placeholders()
+end
+
+pub func CheckJsonParses(path: str): str:
+    ret check_json_parses(path)
+end
+
+pub func CheckXmlParses(path: str): str:
+    ret check_xml_parses(path)
+end

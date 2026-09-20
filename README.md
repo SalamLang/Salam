@@ -106,6 +106,22 @@ Install the official Salam Language extension from the [Visual Studio Code Marke
 
 [![Install on VS Code](https://vsmarketplacebadges.dev/version/salamlanguage.salam-programming-language.svg?label=Install%20on%20VS%20Code)](https://marketplace.visualstudio.com/items?itemName=salamlanguage.salam-programming-language)
 
+### Everything else
+
+[`extensions/`](extensions/) has integrations for eleven editors, each with
+its own installation instructions:
+
+| | | |
+| --- | --- | --- |
+| [VS Code](extensions/vscode) | [Vim & Neovim](extensions/vim) | [Sublime Text](extensions/sublime) |
+| [Emacs](extensions/emacs) | [JetBrains IDEs](extensions/jetbrains) | [Kate & KDevelop](extensions/kate) |
+| [Geany](extensions/geany) | [gedit & GNOME](extensions/gtksourceview) | [Notepad++](extensions/notepadpp) |
+| [GNU nano](extensions/nano) | [micro](extensions/micro) | |
+
+All of them highlight the English, Persian and Arabic keyword packs, and the
+word lists are generated from the compiler's own tables so they cannot drift.
+The richer plugins also run, build, check and format through the compiler.
+
 ## 🛠️ The Compiler (`salam`)
 
 Salam is statically typed and compiled. The **general** language transpiles to [C](https://en.wikipedia.org/wiki/C_(programming_language)) and is

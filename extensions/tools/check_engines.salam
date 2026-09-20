@@ -1,0 +1,560 @@
+package main
+
+import str
+import io
+import os
+import fmt
+import encoding.json
+import encoding.encerr
+import encoding.value
+import encoding.xml
+
+const FIXTURES := "extensions/tools/fixtures"
+const KATE_DEFINITION := "extensions/kate/salam.xml"
+const GTK_DEFINITION := "extensions/gtksourceview"
+const SUBLIME_DEFINITION := "extensions/sublime/Salam.sublime-syntax"
+const TEXTMATE_DEFINITION := "extensions/vscode/syntaxes/salam.tmLanguage.json"
+const TEXTMATE_DRIVER := "extensions/tools/check_textmate.mjs"
+const GTK_DRIVER := "extensions/tools/check_gtksource.py"
+
+const MODULES_MISSING := 3
+const SYNTECT_THEME := "Monokai Extended"
+
+const ENGINE_KATE := 0
+const ENGINE_TEXTMATE := 1
+const ENGINE_SYNTECT := 2
+const ENGINE_GTK := 3
+
+mut scratch := ""
+mut bat := ""
+
+struct Styles:
+    pub tokens: Vector<str> = Vector {}
+    pub styles: Vector<str> = Vector {}
+end
+
+struct Row:
+    pub category: str = ""
+    pub en: str = ""
+    pub fa: str = ""
+    pub ar: str = ""
+end
+
+func quoted(s: str): str:
+    ret "\"" + s + "\""
+end
+
+func styles_free(s &: Styles):
+    s.tokens.free()
+    s.styles.free()
+end
+
+func styles_put(s &: Styles, token: str, style: str):
+    mut i := 0
+    until i < s.tokens.len():
+        if s.tokens.get(i) == token: ret end
+        i += 1
+    end
+    s.tokens.push(token)
+    s.styles.push(style)
+end
+
+func styles_get(s: Styles, token: str, found &: bool): str:
+    found = false
+    mut i := 0
+    until i < s.tokens.len():
+        if s.tokens.get(i) == token:
+            found = true
+            ret s.styles.get(i)
+        end
+        i += 1
+    end
+    mut j := 0
+    until j < s.tokens.len():
+        if str.Contains(s.tokens.get(j), token):
+            found = true
+            ret s.styles.get(j)
+        end
+        j += 1
+    end
+    ret ""
+end
+
+func shell(cmd: str, out &: str, errtext &: str): int:
+    errfile := scratch + "/stderr.txt"
+    res := os.RunCapture(cmd + " 2>" + quoted(errfile))
+    out = res.out
+    errtext = ""
+    if os.Exists(errfile): errtext = str.Trim(io.ReadFile(errfile)) end
+    ret res.code
+end
+
+func have_tool(name: str): bool:
+    res := os.RunCapture("command -v " + name + " >/dev/null 2>&1")
+    ret res.code == 0
+end
+
+func probe_path(language: str): str:
+    ret FIXTURES + "/probe_" + language + ".salam"
+end
+
+func parse_driver_json(text: str, path: str, out &: Styles, reason &: str): bool:
+    mut err := encerr.NoError()
+    v := json.Decode(text, err)
+    if encerr.IsError(err):
+        reason = "the driver did not print JSON: " + err.message
+        ret false
+    end
+    if !value.IsObject(v) || !value.ObjectHas(v, path):
+        reason = "the driver reported nothing for " + path
+        ret false
+    end
+    pairs := value.ObjectGet(v, path)
+    mut i := 0
+    until i < value.ArrayLen(pairs):
+        pair := value.ArrayGet(pairs, i)
+        if value.ArrayLen(pair) >= 2:
+            styles_put(out, value.AsString(value.ArrayGet(pair, 0)),
+                            value.AsString(value.ArrayGet(pair, 1)))
+        end
+        i += 1
+    end
+    ret true
+end
+
+func textmate_styles(path: str, out &: Styles, reason &: str): bool:
+    mut printed := ""
+    mut errtext := ""
+    code := shell("node " + quoted(TEXTMATE_DRIVER) + " " + quoted(TEXTMATE_DEFINITION) + " " + quoted(path),
+                  printed, errtext)
+    if code != 0:
+        reason = "the driver exited " + str.FromInt(code as i64) + ": " + errtext
+        ret false
+    end
+    ret parse_driver_json(printed, path, out, reason)
+end
+
+func gtk_styles(path: str, definitions: str, out &: Styles, reason &: str): bool:
+    mut printed := ""
+    mut errtext := ""
+    code := shell("python3 " + quoted(GTK_DRIVER) + " " + quoted(definitions) + " " + quoted(path),
+                  printed, errtext)
+    if code != 0:
+        reason = "the driver exited " + str.FromInt(code as i64) + ": " + errtext
+        ret false
+    end
+    ret parse_driver_json(printed, path, out, reason)
+end
+
+func trim_style(raw: str): str:
+    mut s := str.Trim(raw)
+    until str.EndsWith(s, ";"):
+        s = str.Substr(s, 0, str.Len(s) - 1)
+    end
+    ret s
+end
+
+func kate_styles(path: str, definitions: str, out &: Styles, reason &: str): bool:
+    mut printed := ""
+    mut errtext := ""
+    code := shell("XDG_DATA_HOME=" + quoted(definitions) + " kate-syntax-highlighter -s Salam -f html " + quoted(path),
+                  printed, errtext)
+    if code != 0:
+        reason = "the highlighter exited " + str.FromInt(code as i64) + ": " + errtext
+        ret false
+    end
+    open := str.IndexOf(printed, "<pre>")
+    close := str.IndexOf(printed, "</pre>")
+    if open < 0 || close < open:
+        reason = "the highlighter printed no <pre> block"
+        ret false
+    end
+    body := str.Substr(printed, open + 5, close - (open + 5))
+    n := str.Len(body)
+    mut i := 0
+    until i < n:
+        if str.StartsWith(str.Substr(body, i, 6), "<span "):
+            attr_at := str.IndexFrom(body, "style=\"", i)
+            gt := str.IndexFrom(body, ">", i)
+            shut := str.IndexFrom(body, "</span>", i)
+            if gt < 0 || shut < 0:
+                i = n
+            else:
+                mut style := ""
+                if attr_at >= 0 && attr_at < gt:
+                    attr_end := str.IndexFrom(body, "\"", attr_at + 7)
+                    if attr_end > 0: style = trim_style(str.Substr(body, attr_at + 7, attr_end - (attr_at + 7))) end
+                end
+                text := str.Trim(xml.UnescapeEntities(str.Substr(body, gt + 1, shut - (gt + 1))))
+                if str.Len(text) > 0: styles_put(out, text, style) end
+                i = shut + 7
+            end
+        else:
+            next := str.IndexFrom(body, "<", i)
+            mut stop := n
+            if next >= 0: stop = next end
+            if stop <= i: stop = i + 1 end
+            text := str.Trim(xml.UnescapeEntities(str.Substr(body, i, stop - i)))
+            if str.Len(text) > 0: styles_put(out, text, "") end
+            i = stop
+        end
+    end
+    ret true
+end
+
+func syntect_styles(path: str, cache: str, out &: Styles, reason &: str): bool:
+    mut printed := ""
+    mut errtext := ""
+    code := shell("BAT_CACHE_PATH=" + quoted(cache) + " " + bat +
+                  " --language=salam --color=always --style=plain --paging=never --theme=" +
+                  quoted(SYNTECT_THEME) + " " + quoted(path), printed, errtext)
+    if code != 0:
+        reason = bat + " exited " + str.FromInt(code as i64) + ": " + errtext
+        ret false
+    end
+
+    mut colours := Vector {} as Vector<str>
+    mut breaks := Vector {} as Vector<bool>
+    mut texts := Vector {} as Vector<str>
+    mut colour := ""
+    n := str.Len(printed)
+    mut i := 0
+    until i < n:
+        if str.CharAt(printed, i) == "\x1b" && i + 1 < n && str.CharAt(printed, i + 1) == "[":
+            stop := str.IndexFrom(printed, "m", i + 2)
+            if stop < 0:
+                i = n
+            else:
+                codes := str.Substr(printed, i + 2, stop - (i + 2))
+                if codes == "" || codes == "0": colour = ""
+                else: colour = codes
+                end
+                i = stop + 1
+            end
+        else:
+            esc := str.IndexFrom(printed, "\x1b", i)
+            mut stop := n
+            if esc >= 0: stop = esc end
+            piece := str.Substr(printed, i, stop - i)
+            lines := str.Split(piece, "\n")
+            mut k := 0
+            until k < lines.len():
+                if k > 0:
+                    colours.push("")
+                    breaks.push(true)
+                    texts.push("\n")
+                end
+                if str.Len(lines.get(k)) > 0:
+                    colours.push(colour)
+                    breaks.push(false)
+                    texts.push(lines.get(k))
+                end
+                k += 1
+            end
+            lines.free()
+            i = stop
+        end
+    end
+
+    mut m := 0
+    until m < colours.len():
+        if m > 0 && breaks.get(m) == breaks.get(m - 1) && colours.get(m) == colours.get(m - 1):
+            texts.set(m - 1, texts.get(m - 1) + texts.get(m))
+            texts.set(m, "")
+            colours.set(m, "")
+            breaks.set(m, true)
+        end
+        m += 1
+    end
+    mut q := 0
+    until q < colours.len():
+        if !breaks.get(q):
+            text := str.Trim(texts.get(q))
+            if str.Len(text) > 0 && str.Len(colours.get(q)) > 0:
+                styles_put(out, text, colours.get(q))
+            end
+        end
+        q += 1
+    end
+    colours.free()
+    breaks.free()
+    texts.free()
+    ret true
+end
+
+func read_styles(engine: int, path: str, definitions: str, out &: Styles, reason &: str): bool:
+    if engine == ENGINE_KATE: ret kate_styles(path, definitions, out, reason) end
+    if engine == ENGINE_TEXTMATE: ret textmate_styles(path, out, reason) end
+    if engine == ENGINE_SYNTECT: ret syntect_styles(path, definitions, out, reason) end
+    ret gtk_styles(path, definitions, out, reason)
+end
+
+func rows(): Vector<Row>:
+    mut out := Vector {} as Vector<Row>
+    out.push(Row { category = "keyword", en = "func", fa = "تابع", ar = "دالة" })
+    out.push(Row { category = "keyword", en = "if", fa = "اگر", ar = "إذا" })
+    out.push(Row { category = "keyword", en = "end", fa = "تمام", ar = "نهاية" })
+    out.push(Row { category = "keyword", en = "match", fa = "تطبیق", ar = "طابق" })
+    out.push(Row { category = "type", en = "int", fa = "صحیح۳۲", ar = "صحيح" })
+    out.push(Row { category = "builtin", en = "println", fa = "چاپ", ar = "اطبع" })
+    out.push(Row { category = "string", en = "hello", fa = "سلام", ar = "مرحبا" })
+    out.push(Row { category = "number", en = "42", fa = "۱۲۳", ar = "٤٥٦" })
+    out.push(Row { category = "comment", en = "comment", fa = "comment", ar = "comment" })
+    out.push(Row { category = "contextual", en = "static", fa = "ایستا", ar = "ساكن" })
+    ret out
+end
+
+func sorted_categories(): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    out.push("builtin")
+    out.push("comment")
+    out.push("contextual")
+    out.push("keyword")
+    out.push("number")
+    out.push("string")
+    out.push("type")
+    ret out
+end
+
+func spelling(row: Row, which: int): str:
+    if which == 0: ret row.en end
+    if which == 1: ret row.fa end
+    ret row.ar
+end
+
+func language_name(which: int): str:
+    if which == 0: ret "en" end
+    if which == 1: ret "fa" end
+    ret "ar"
+end
+
+func compare(per_language &: Vector<Styles>, problems &: Vector<str>,
+             cat_names &: Vector<str>, cat_styles &: Vector<str>):
+    mut table := rows()
+    mut r := 0
+    until r < table.len():
+        row := table.get(r)
+        mut seen_styles := Vector {} as Vector<str>
+        mut seen_labels := Vector {} as Vector<str>
+        mut which := 0
+        until which < 3:
+            token := spelling(row, which)
+            mut found := false
+            style := styles_get(per_language.get(which), token, found)
+            label := language_name(which) + ":" + token
+            if !found:
+                problems.push(row.category + ": \"" + token + "\" never appears in the " + language_name(which) + " output")
+            else str.Len(style) == 0:
+                problems.push(row.category + ": \"" + token + "\" (" + language_name(which) + ") is not styled at all")
+            else:
+                mut at := 0 - 1
+                mut s := 0
+                until s < seen_styles.len():
+                    if seen_styles.get(s) == style: at = s end
+                    s += 1
+                end
+                if at < 0:
+                    seen_styles.push(style)
+                    seen_labels.push(label)
+                else:
+                    seen_labels.set(at, seen_labels.get(at) + ", " + label)
+                end
+            end
+            which += 1
+        end
+        if seen_styles.len() > 1:
+            mut detail := ""
+            mut s := 0
+            until s < seen_styles.len():
+                if s > 0: detail = detail + " | " end
+                detail = detail + seen_labels.get(s) + " => " + seen_styles.get(s)
+                s += 1
+            end
+            problems.push(row.category + ": the three spellings differ: " + detail)
+        else seen_styles.len() == 1:
+            mut known := false
+            mut c := 0
+            until c < cat_names.len():
+                if cat_names.get(c) == row.category: known = true end
+                c += 1
+            end
+            if !known:
+                cat_names.push(row.category)
+                cat_styles.push(seen_styles.get(0))
+            end
+        end
+        seen_styles.free()
+        seen_labels.free()
+        r += 1
+    end
+    table.free()
+
+    mut distinct := Vector {} as Vector<str>
+    distinct.push("comment")
+    distinct.push("keyword")
+    distinct.push("type")
+    mut a := 0
+    until a < distinct.len():
+        mut b := a + 1
+        until b < distinct.len():
+            mut sa := ""
+            mut sb := ""
+            mut i := 0
+            until i < cat_names.len():
+                if cat_names.get(i) == distinct.get(a): sa = cat_styles.get(i) end
+                if cat_names.get(i) == distinct.get(b): sb = cat_styles.get(i) end
+                i += 1
+            end
+            if str.Len(sa) > 0 && sa == sb:
+                problems.push(distinct.get(a) + " and " + distinct.get(b) + " are styled identically")
+            end
+            b += 1
+        end
+        a += 1
+    end
+    distinct.free()
+end
+
+func check(engine: int, name: str, definitions: str): int:
+    println name + ":"
+    mut per_language := Vector {} as Vector<Styles>
+    mut broken := false
+    mut which := 0
+    until which < 3:
+        mut found := Styles {}
+        mut reason := ""
+        if !read_styles(engine, probe_path(language_name(which)), definitions, found, reason):
+            if !broken: println "  FAIL: " + reason end
+            broken = true
+        end
+        per_language.push(found)
+        which += 1
+    end
+    if broken:
+        mut f := 0
+        until f < per_language.len():
+            mut s := per_language.get(f)
+            styles_free(s)
+            f += 1
+        end
+        per_language.free()
+        ret 1
+    end
+
+    mut problems := Vector {} as Vector<str>
+    mut cat_names := Vector {} as Vector<str>
+    mut cat_styles := Vector {} as Vector<str>
+    compare(per_language, problems, cat_names, cat_styles)
+
+    mut order := sorted_categories()
+    mut o := 0
+    until o < order.len():
+        mut i := 0
+        until i < cat_names.len():
+            if cat_names.get(i) == order.get(o):
+                println "  " + fmt.PadRight(cat_names.get(i), 9) + " " + cat_styles.get(i)
+            end
+            i += 1
+        end
+        o += 1
+    end
+    order.free()
+
+    mut status := 0
+    if problems.len() > 0:
+        println "  FAIL"
+        mut i := 0
+        until i < problems.len():
+            println "    " + problems.get(i)
+            i += 1
+        end
+        status = 1
+    else:
+        println "  all three keyword packs are styled alike"
+    end
+
+    mut f := 0
+    until f < per_language.len():
+        mut s := per_language.get(f)
+        styles_free(s)
+        f += 1
+    end
+    per_language.free()
+    problems.free()
+    cat_names.free()
+    cat_styles.free()
+    ret status
+end
+
+func staged(source: str, subdirectory: str, filename: str): str:
+    target := scratch + "/" + subdirectory
+    _made := os.MkdirAll(target)
+    _copied := os.Copy(source, target + "/" + filename)
+    ret scratch
+end
+
+func syntect_cache(definition: str, ok &: bool): str:
+    root := scratch + "/syntect"
+    _made := os.MkdirAll(root + "/syntaxes")
+    _copied := os.Copy(definition, root + "/syntaxes/Salam.sublime-syntax")
+    mut printed := ""
+    mut errtext := ""
+    code := shell(bat + " cache --build --source " + quoted(root) + " --target " + quoted(root), printed, errtext)
+    ok = code == 0
+    if !ok: println "syntect: FAIL building the cache: " + errtext end
+    ret root
+end
+
+func driver_present(cmd: str): bool:
+    mut printed := ""
+    mut errtext := ""
+    ret shell(cmd, printed, errtext) != MODULES_MISSING
+end
+
+func main:
+    if !os.IsDir(FIXTURES):
+        printerrln "run me from the repository root"
+        os.Exit(2)
+    end
+    scratch = os.TempDir() + "/salam-engine-check"
+    _made := os.MkdirAll(scratch)
+
+    mut failures := 0
+
+    if have_tool("kate-syntax-highlighter"):
+        root := staged(KATE_DEFINITION, "org.kde.syntax-highlighting/syntax", "salam.xml")
+        failures += check(ENGINE_KATE, "kate", root)
+    else:
+        println "kate: skipped (kate-syntax-highlighter is not installed)"
+    end
+
+    if have_tool("node") && driver_present("node " + quoted(TEXTMATE_DRIVER) + " --probe-modules"):
+        failures += check(ENGINE_TEXTMATE, "vscode-textmate", "")
+    else:
+        println "vscode-textmate: skipped (npm install vscode-textmate vscode-oniguruma)"
+    end
+
+    if have_tool("batcat"): bat = "batcat"
+    else have_tool("bat"): bat = "bat"
+    end
+    if str.Len(bat) > 0:
+        mut built := false
+        cache := syntect_cache(SUBLIME_DEFINITION, built)
+        if built:
+            failures += check(ENGINE_SYNTECT, "syntect", cache)
+        else:
+            failures += 1
+        end
+    else:
+        println "syntect: skipped (neither batcat nor bat is installed)"
+    end
+
+    if have_tool("python3") && driver_present("python3 " + quoted(GTK_DRIVER) + " --probe-modules"):
+        failures += check(ENGINE_GTK, "gtksourceview", os.Cwd() + "/" + GTK_DEFINITION)
+    else:
+        println "gtksourceview: skipped (gir1.2-gtksource-4 is not installed)"
+    end
+
+    if failures > 0: os.Exit(1) end
+    os.Exit(0)
+end

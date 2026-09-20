@@ -36,10 +36,10 @@ If `salam` is not on your `PATH`, set `salam.compilerPath` to its absolute locat
 `syntaxes/salam.tmLanguage.json` is not edited by hand. It is produced from the compiler's own keyword and type tables, so it cannot drift from the language:
 
 ```sh
-salam exec scripts/gen_grammar.salam > syntaxes/salam.tmLanguage.json
+salam exec extensions/tools/gen_syntaxes.salam --timeout=180000
 ```
 
-Change `scripts/gen_grammar.salam` and regenerate; a direct edit to the JSON will be overwritten.
+That one generator also produces the Sublime Text, Vim, Emacs, Kate, GtkSourceView, Notepad++, JetBrains, nano and micro definitions, so every editor stays in step. Change the generator and rerun it; a direct edit to the JSON will be overwritten.
 
 ## Licence
 
@@ -55,7 +55,7 @@ Everything the extension ships is MIT and carries no copyleft dependency:
 | `language-configuration.json`, `snippets/`, `icons/`   | editor data                      |
 | `README.md`, `CHANGELOG.md`, `LICENSE`, `package.json` | metadata                         |
 
-One thing worth stating plainly rather than leaving implied: `src/` and `scripts/` are written in Salam and import the standard library, which is copyleft. Both are excluded from the published extension by [`.vscodeignore`](.vscodeignore), so nothing derived from it is distributed in the `.vsix`. If you build them yourself, the result combines this MIT code with that library and the combination is governed accordingly.
+One thing worth stating plainly rather than leaving implied: `src/` is written in Salam and imports the standard library, which is copyleft. It is excluded from the published extension by [`.vscodeignore`](.vscodeignore), so nothing derived from it is distributed in the `.vsix`. If you build it yourself, the result combines this MIT code with that library and the combination is governed accordingly. The grammar generator has the same property and now lives outside this directory entirely, at `extensions/tools/gen_syntaxes.salam`.
 
 So a project that wants the grammar, the snippets or the language configuration can take them under MIT with nothing further to consider. That is the case Linguist and other consumers care about.
 

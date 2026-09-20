@@ -1,0 +1,332 @@
+package main
+
+import sc "syntaxcheck.salam"
+import str
+import os
+import testing
+
+mut scratch := ""
+
+func onig(pattern: str): bool:
+    ret sc.CheckRegex(pattern, sc.FLAVOR_ONIGURUMA).ok
+end
+
+func re2(pattern: str): bool:
+    ret sc.CheckRegex(pattern, sc.FLAVOR_RE2).ok
+end
+
+func onig_says(pattern: str, fragment: str):
+    d := sc.CheckRegex(pattern, sc.FLAVOR_ONIGURUMA)
+    testing.AssertFalse(d.ok)
+    testing.AssertContains(d.message, fragment)
+end
+
+func re2_says(pattern: str, fragment: str):
+    d := sc.CheckRegex(pattern, sc.FLAVOR_RE2)
+    testing.AssertFalse(d.ok)
+    testing.AssertContains(d.message, fragment)
+end
+
+func write(name: str, body: str): str:
+    path := scratch + "/" + name
+    _written := os.WriteFile(path, body)
+    ret path
+end
+
+func only_failure(where: str): str:
+    testing.AssertEqInt(sc.FailureCount(), 1)
+    if sc.FailureCount() == 0:
+        println "no failure was recorded for", where
+        ret ""
+    end
+    ret sc.FailureAt(0)
+end
+
+func regex_accepts():
+    testing.AssertTrue(onig("\\b(func|end)\\b"))
+    testing.AssertTrue(onig("[A-Za-z_][A-Za-z0-9_\\x{0600}-\\x{06FF}]*"))
+    testing.AssertTrue(onig("(?<name>\\w+)\\s+\\k<name>"))
+    testing.AssertTrue(onig("(?i)abc"))
+    testing.AssertTrue(onig("(?i:abc)def"))
+    testing.AssertTrue(onig("(?#a comment)x"))
+    testing.AssertTrue(onig("[[:alpha:]_]+"))
+    testing.AssertTrue(onig("a{2,5}?"))
+    testing.AssertTrue(onig("a*+"))
+    testing.AssertTrue(onig("(?=ahead)x"))
+    testing.AssertTrue(onig("(?<=behind)x"))
+    testing.AssertTrue(onig("{notaquantifier}"))
+    testing.AssertTrue(onig("[]]"))
+    testing.AssertTrue(onig("[^]]"))
+    testing.AssertTrue(onig("\\p{L}+"))
+    testing.AssertTrue(onig(""))
+    testing.AssertTrue(re2("\\b(func|end)\\b"))
+    testing.AssertTrue(re2("[0-9]{1,3}(\\.[0-9]{1,3}){3}"))
+    testing.AssertTrue(re2("(?P<year>[0-9]{4})"))
+    testing.AssertTrue(re2("\\x{0660}-\\x{0669}"))
+    testing.AssertTrue(re2("a{1000}"))
+end
+
+func regex_rejects():
+    onig_says("a**", "nothing for")
+    onig_says("^*", "nothing for")
+    onig_says("*start", "nothing for")
+    onig_says("[z-a]", "runs backwards")
+    onig_says("(unclosed", "never closed")
+    onig_says("unopened)", "no opening one")
+    onig_says("[abc", "never closed")
+    onig_says("trailing\\", "ends with a backslash")
+    onig_says("a{3,2}", "counts down")
+    onig_says("\\2(a)", "does not have")
+    onig_says("\\k<nope>(?<yes>a)", "does not have")
+    onig_says("\\x{110000}", "highest code point")
+    onig_says("\\x{}", "between one and six")
+    onig_says("\\x{zz}", "hexadecimal digits only")
+    onig_says("(?<>a)", "is empty")
+    onig_says("[[:alpha:]", "never closed")
+    onig_says("(?P=n)", "supported by neither")
+    onig_says("(?(1)a|b)", "supported by neither")
+end
+
+func re2_rejects_what_it_cannot_run():
+    re2_says("(?=ahead)", "lookahead")
+    re2_says("(?!ahead)", "lookahead")
+    re2_says("(?<=behind)x", "lookbehind")
+    re2_says("(?<!behind)x", "lookbehind")
+    re2_says("(a)\\1", "backreferences")
+    re2_says("(?<n>a)\\k<n>", "backreferences")
+    re2_says("a*+", "possessive")
+    re2_says("(?>atomic)", "atomic")
+    re2_says("a{2000}", "caps a repetition")
+    re2_says("\\u0660", "\\u is not supported")
+    re2_says("\\Kx", "not supported by Go RE2")
+end
+
+func xml_wellformedness():
+    mut reason := ""
+    testing.AssertTrue(sc.XMLWellFormed("<a><b/></a>", reason))
+    testing.AssertTrue(sc.XMLWellFormed("<?xml version=\"1.0\"?><!-- c --><a>t</a>", reason))
+    testing.AssertTrue(sc.XMLWellFormed("<!DOCTYPE a SYSTEM \"a.dtd\"><a/>", reason))
+    testing.AssertFalse(sc.XMLWellFormed("<a></b>", reason))
+    testing.AssertContains(reason, "closes <a>")
+    testing.AssertFalse(sc.XMLWellFormed("<a><b></a></b>", reason))
+    testing.AssertFalse(sc.XMLWellFormed("<a>", reason))
+    testing.AssertContains(reason, "never closed")
+    testing.AssertFalse(sc.XMLWellFormed("</a>", reason))
+    testing.AssertContains(reason, "never opened")
+end
+
+func text_helpers():
+    testing.AssertEqStr(sc.Clip("abcdef", 3), "abc...")
+    testing.AssertEqStr(sc.Clip("ab", 3), "ab")
+    testing.AssertEqStr(str.Trim(sc.StripLineComments("// gone\nkept\n  // gone too\n")), "kept")
+    testing.AssertEqStr(str.Trim(sc.LastYAMLDocument("%YAML 1.2\n---\nname: x\n")), "name: x")
+    testing.AssertEqStr(str.Trim(sc.LastYAMLDocument("# lead\n---\nname: y\n")), "name: y")
+    testing.AssertEqStr(str.Trim(sc.LastYAMLDocument("name: z\n")), "name: z")
+    mut slot := ""
+    testing.AssertEqInt(sc.PlaceholderAt("a %%NAME%% b", 0, slot), 2)
+    testing.AssertEqStr(slot, "%%NAME%%")
+    testing.AssertEqInt(sc.PlaceholderAt("a %%NAME%% b", 10, slot), 0 - 1)
+    testing.AssertEqInt(sc.PlaceholderAt("no slots here", 0, slot), 0 - 1)
+    testing.AssertEqInt(sc.PlaceholderAt("100%% done", 0, slot), 0 - 1)
+end
+
+func textmate_faults():
+    sc.Reset()
+    path := write("bad.tmLanguage.json", `{"patterns": [{"include": "#ghost"}], "repository": {}}`)
+    _s1 := sc.CheckTextMate(path)
+    testing.AssertContains(only_failure(path), "unknown repository key \"ghost\"")
+
+    sc.Reset()
+    path2 := write("badre.tmLanguage.json", `{"patterns": [{"match": "[unclosed"}], "repository": {}}`)
+    _s2 := sc.CheckTextMate(path2)
+    testing.AssertContains(only_failure(path2), "never closed")
+
+    sc.Reset()
+    path3 := write("broken.json", `{"patterns": [,]}`)
+    _s3 := sc.CheckTextMate(path3)
+    testing.AssertContains(only_failure(path3), "JSON:")
+
+    sc.Reset()
+    _s4 := sc.CheckTextMate(scratch + "/absent.json")
+    testing.AssertContains(only_failure("absent"), "the file is missing")
+end
+
+func sublime_faults():
+    sc.Reset()
+    path := write("bad.sublime-syntax", "%YAML 1.2\n---\nname: X\ncontexts:\n  main:\n    - include: ghost\n")
+    _s1 := sc.CheckSublimeSyntax(path)
+    testing.AssertContains(only_failure(path), "unknown context \"ghost\"")
+
+    sc.Reset()
+    path2 := write("badvar.sublime-syntax", "%YAML 1.2\n---\nname: X\ncontexts:\n  main:\n    - match: '{{missing}}'\n      scope: x\n")
+    _s2 := sc.CheckSublimeSyntax(path2)
+    testing.AssertContains(only_failure(path2), "undefined variable {{missing}}")
+
+    sc.Reset()
+    path3 := write("badpush.sublime-syntax", "%YAML 1.2\n---\nname: X\ncontexts:\n  main:\n    - match: a\n      push: nowhere\n")
+    _s3 := sc.CheckSublimeSyntax(path3)
+    testing.AssertContains(only_failure(path3), "unknown context \"nowhere\"")
+end
+
+func kate_faults():
+    sc.Reset()
+    path := write("kate_ctx.xml", `<language><highlighting><list name="kw"><item>a</item></list><contexts><context name="Normal" attribute="Normal Text"><RegExpr String="a" context="Ghost"/></context></contexts><itemDatas><itemData name="Normal Text"/></itemDatas></highlighting></language>`)
+    _s1 := sc.CheckKate(path)
+    testing.AssertContains(only_failure(path), "unknown context \"Ghost\"")
+
+    sc.Reset()
+    path2 := write("kate_list.xml", `<language><highlighting><contexts><context name="Normal"><keyword String="nolist"/></context></contexts><itemDatas></itemDatas></highlighting></language>`)
+    _s2 := sc.CheckKate(path2)
+    testing.AssertContains(only_failure(path2), "unknown list \"nolist\"")
+
+    sc.Reset()
+    path3 := write("kate_item.xml", `<language><highlighting><contexts><context name="Normal" attribute="Nope"/></contexts></highlighting></language>`)
+    _s3 := sc.CheckKate(path3)
+    testing.AssertContains(only_failure(path3), "unknown itemData \"Nope\"")
+
+    sc.Reset()
+    path4 := write("kate_bad.xml", `<language><highlighting></language>`)
+    _s4 := sc.CheckKate(path4)
+    testing.AssertContains(only_failure(path4), "XML:")
+end
+
+func gtk_faults():
+    sc.Reset()
+    path := write("gtk_ref.lang", `<language id="x"><definitions><context id="a"><include><context ref="ghost"/></include></context></definitions></language>`)
+    _s1 := sc.CheckGtkSourceView(path)
+    testing.AssertContains(only_failure(path), "context ref \"ghost\"")
+
+    sc.Reset()
+    path2 := write("gtk_style.lang", `<language id="x"><styles><style id="known"/></styles><definitions><context id="a" style-ref="unknown"><match>x</match></context></definitions></language>`)
+    _s2 := sc.CheckGtkSourceView(path2)
+    testing.AssertContains(only_failure(path2), "style-ref \"unknown\"")
+
+    sc.Reset()
+    path3 := write("gtk_regex.lang", `<language id="x"><definitions><context id="a"><match>\%{nosuch}</match></context></definitions></language>`)
+    _s3 := sc.CheckGtkSourceView(path3)
+    testing.AssertContains(only_failure(path3), "undefined regex")
+end
+
+func micro_faults():
+    sc.Reset()
+    path := write("micro_look.yaml", "filetype: x\n\ndetect:\n  filename: \"x$\"\n\nrules:\n  - comment: '(?=ahead)'\n")
+    _s1 := sc.CheckMicro(path)
+    testing.AssertTrue(sc.FailureCount() >= 1)
+    mut saw_look := false
+    mut i := 0
+    until i < sc.FailureCount():
+        if str.Contains(sc.FailureAt(i), "lookahead"): saw_look = true end
+        i += 1
+    end
+    testing.AssertTrue(saw_look)
+
+    sc.Reset()
+    path2 := write("micro_missing.yaml", "filetype: x\n\ndetect:\n  filename: \"x$\"\n\nrules:\n  - comment: 'a'\n")
+    _s2 := sc.CheckMicro(path2)
+    testing.AssertContains(sc.FailureAt(0), "no rule is left for")
+    testing.AssertContains(sc.FailureAt(0), "constant.number")
+end
+
+func nano_faults():
+    sc.Reset()
+    path := write("bad.nanorc", "color green \"unbalanced\ncolor red \"ok\"\n")
+    _s1 := sc.CheckNano(path)
+    testing.AssertEqInt(sc.FailureCount(), 2)
+    testing.AssertContains(sc.FailureAt(0), "quoting is unbalanced")
+    testing.AssertContains(sc.FailureAt(1), "no syntax directive")
+
+    sc.Reset()
+    path2 := write("good.nanorc", "syntax \"salam\" \"\\.salam$\"\ncolor green \"\\<func\\>\"\n")
+    summary := sc.CheckNano(path2)
+    testing.AssertEqInt(sc.FailureCount(), 0)
+    testing.AssertEqStr(summary, "1 rules")
+end
+
+func ini_faults():
+    sc.Reset()
+    path := write("bad.conf", "[settings]\nkey=value\n")
+    _s1 := sc.CheckIni(path, "keywords", "settings")
+    testing.AssertContains(only_failure(path), "no [keywords] section")
+
+    sc.Reset()
+    path2 := write("stray.conf", "[keywords]\nnot a pair\n[settings]\n")
+    _s2 := sc.CheckIni(path2, "keywords", "settings")
+    testing.AssertContains(only_failure(path2), "neither a section nor a key")
+
+    sc.Reset()
+    path3 := write("open.conf", "[keywords\nprimary=func\n[settings]\n")
+    _s3 := sc.CheckIni(path3, "keywords", "settings")
+    testing.AssertTrue(sc.FailureCount() >= 1)
+    testing.AssertContains(sc.FailureAt(0), "never closes")
+end
+
+func plist_and_json_faults():
+    sc.Reset()
+    path := write("noscope.tmPreferences", `<plist version="1.0"><dict><key>name</key><string>N</string></dict></plist>`)
+    _s1 := sc.CheckPlist(path)
+    testing.AssertContains(only_failure(path), "no scope")
+
+    sc.Reset()
+    path2 := write("notplist.tmPreferences", `<other><dict/></other>`)
+    _s2 := sc.CheckPlist(path2)
+    testing.AssertContains(only_failure(path2), "not <plist>")
+
+    sc.Reset()
+    path3 := write("bad2.json", `{"a": }`)
+    _s3 := sc.CheckJsonParses(path3)
+    testing.AssertContains(only_failure(path3), "JSON:")
+
+    sc.Reset()
+    path4 := write("commented.json", "// a leading comment\n{\"a\": 1}\n")
+    _s4 := sc.CheckJsonParses(path4)
+    testing.AssertEqInt(sc.FailureCount(), 0)
+
+    sc.Reset()
+    path5 := write("mismatched.xml", "<a><b></a></b>")
+    _s5 := sc.CheckXmlParses(path5)
+    testing.AssertContains(only_failure(path5), "XML:")
+end
+
+func the_real_files_still_pass():
+    sc.Reset()
+    if !os.IsDir("extensions"):
+        println "skipping the repository files, run me from the repository root"
+        ret
+    end
+    _a := sc.CheckTextMate("extensions/vscode/syntaxes/salam.tmLanguage.json")
+    _b := sc.CheckSublimeSyntax("extensions/sublime/Salam.sublime-syntax")
+    _c := sc.CheckKate("extensions/kate/salam.xml")
+    _d := sc.CheckGtkSourceView("extensions/gtksourceview/salam.lang")
+    _e := sc.CheckMicro("extensions/micro/salam.yaml")
+    _f := sc.CheckNano("extensions/nano/salam.nanorc")
+    _g := sc.CheckIni("extensions/geany/filetypes.Salam.conf", "keywords", "settings")
+    _h := sc.CheckGeneratedFiles()
+    mut i := 0
+    until i < sc.FailureCount():
+        println "unexpected:", sc.FailureAt(i)
+        i += 1
+    end
+    testing.AssertEqInt(sc.FailureCount(), 0)
+end
+
+func main:
+    scratch = os.TempDir() + "/salam-syntaxcheck-test"
+    _mk := os.MkdirAll(scratch)
+
+    regex_accepts()
+    regex_rejects()
+    re2_rejects_what_it_cannot_run()
+    xml_wellformedness()
+    text_helpers()
+    textmate_faults()
+    sublime_faults()
+    kate_faults()
+    gtk_faults()
+    micro_faults()
+    nano_faults()
+    ini_faults()
+    plist_and_json_faults()
+    the_real_files_still_pass()
+
+    os.Exit(testing.Summary())
+end

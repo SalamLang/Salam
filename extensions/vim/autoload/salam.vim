@@ -205,13 +205,14 @@ function! salam#Inspect(flag) abort
     write
   endif
 
-  let l:output = s:Capture(['inspect', l:path, a:flag, '--error-style=gcc'] + s:CommonArgs())
+  let l:output = s:Capture(['inspect', l:path, a:flag, '--error-style=gcc', '--log-level=error'] + s:CommonArgs())
+  let l:lines = split(l:output, "\n")
 
   new
   setlocal buftype=nofile bufhidden=wipe noswapfile nobuflisted
+  call setline(1, l:lines)
   setlocal filetype=xml
-  silent put =split(l:output, "\n")
-  silent 1delete _
+  setlocal nomodified
   normal! gg
 endfunction
 

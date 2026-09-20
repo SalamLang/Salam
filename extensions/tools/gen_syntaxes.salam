@@ -37,7 +37,7 @@ ONIG_DIGIT := "0-9\\x{0660}-\\x{0669}\\x{06F0}-\\x{06F9}"
 VIM_DIGIT := "0-9\\u0660-\\u0669\\u06f0-\\u06f9"
 EL_DIGIT := "0-9٠-٩۰-۹"
 
-VIM_ISKEYWORD := "@,48-57,_,192-255,1536-1791,1872-1919,2208-2303,64336-65023,65136-65279,8204,8205"
+VIM_ISKEYWORD := "@,48-57,_,192-255"
 
 TK_FUNC := 10
 TK_RET := 11
@@ -446,11 +446,7 @@ endif
 let s:cpo_save = &cpo
 set cpo&vim
 
-if has('patch-7.4.1142')
-  syn iskeyword %%ISKEYWORD%%
-else
-  setlocal iskeyword=%%ISKEYWORD%%
-endif
+syn iskeyword %%ISKEYWORD%%
 
 syn case match
 syn sync minlines=60 maxlines=400
@@ -469,6 +465,7 @@ syn keyword salamBuiltinType  %%INTRTYPES%%
 syn keyword salamBuiltin      %%IO%%
 syn keyword salamOperatorWord %%LOGICAL%%
 syn keyword salamContextual   %%CONTEXTUAL%%
+%%JOINED%%
 
 syn keyword salamFuncDecl  %%FUNCDEF%% nextgroup=salamFunctionName skipwhite
 syn keyword salamStructure %%STRUCTURE%% nextgroup=salamTypeName skipwhite
@@ -640,8 +637,6 @@ let b:did_ftplugin = 1
 let s:cpo_save = &cpo
 set cpo&vim
 
-setlocal iskeyword=%%ISKEYWORD%%
-
 setlocal commentstring=//\ %s
 setlocal comments=s1:/*,mb:*,ex:*/,://
 setlocal suffixesadd=.salam
@@ -661,7 +656,7 @@ if exists('loaded_matchit') && !exists('b:match_words')
   let b:match_words = '\<\%(%%MATCHSTART%%\)\>:\<\%(%%MATCHMIDDLE%%\)\>:\<\%(%%MATCHEND%%\)\>'
 endif
 
-let b:undo_ftplugin = 'setlocal iskeyword< commentstring< comments< suffixesadd<'
+let b:undo_ftplugin = 'setlocal commentstring< comments< suffixesadd<'
       \ . ' includeexpr< formatoptions< expandtab< shiftwidth< softtabstop< tabstop<'
       \ . ' | unlet! b:match_words b:match_ignorecase'
 
@@ -2375,6 +2370,49 @@ func vim_alt_arr(words: str[:]): str:
     ret vim_alt(v)
 end
 
+func has_joiner(w: str): bool:
+    n := w.len()
+    mut i := 0
+    until i + 2 < n:
+        if (w[i] as i32) == 226 && (w[i + 1] as i32) == 128:
+            c := w[i + 2] as i32
+            if c == 140 || c == 141:
+                ret true
+            end
+        end
+        i += 1
+    end
+    ret false
+end
+
+func plain_words(words: Vector<str>): Vector<str>:
+    mut v := Vector {} as Vector<str>
+    repeat words.len() with i:
+        if !has_joiner(words.get(i)):
+            v.push(words.get(i))
+        end
+    end
+    ret v
+end
+
+func joined_words(words: Vector<str>): Vector<str>:
+    mut v := Vector {} as Vector<str>
+    repeat words.len() with i:
+        if has_joiner(words.get(i)):
+            v.push(words.get(i))
+        end
+    end
+    ret v
+end
+
+func vim_joined_rule(group: str, words: Vector<str>): str:
+    j := joined_words(words)
+    if j.len() == 0:
+        ret ""
+    end
+    ret "syn match " + group + " \"\\<\\%(" + vim_alt(j) + "\\)\\>\"\n"
+end
+
 func vim_words(words: Vector<str>): str:
     ret str.Join(words, " ")
 end
@@ -2382,25 +2420,45 @@ end
 func emit_vim_syntax(lx: Lex): str:
     mut s := VIM_SYNTAX_TPL
     s = str.Replace(s, "%%BT%%", "\x60")
+    mut joined := str.NewBuilder()
+    defer str.BufFree(joined)
+    str.BufAppend(joined, vim_joined_rule("salamConditional", lx.conditional))
+    str.BufAppend(joined, vim_joined_rule("salamRepeat", lx.loops))
+    str.BufAppend(joined, vim_joined_rule("salamStatement", lx.statement))
+    str.BufAppend(joined, vim_joined_rule("salamStorageClass", lx.storageClass))
+    str.BufAppend(joined, vim_joined_rule("salamKeyword", lx.keywords))
+    str.BufAppend(joined, vim_joined_rule("salamFuncDecl", lx.funcDef))
+    str.BufAppend(joined, vim_joined_rule("salamStructure", lx.structure))
+    str.BufAppend(joined, vim_joined_rule("salamInclude", lx.includes))
+    str.BufAppend(joined, vim_joined_rule("salamBoolean", lx.booleans))
+    str.BufAppend(joined, vim_joined_rule("salamNull", lx.nulls))
+    str.BufAppend(joined, vim_joined_rule("salamThis", lx.receiver))
+    str.BufAppend(joined, vim_joined_rule("salamType", lx.types))
+    str.BufAppend(joined, vim_joined_rule("salamType", lx.autos))
+    str.BufAppend(joined, vim_joined_rule("salamBuiltinType", lx.intrTypes))
+    str.BufAppend(joined, vim_joined_rule("salamBuiltin", lx.io))
+    str.BufAppend(joined, vim_joined_rule("salamOperatorWord", lx.logical))
+    str.BufAppend(joined, vim_joined_rule("salamContextual", lx.contextual))
+    s = str.Replace(s, "%%JOINED%%", str.TrimRight(str.BufStr(joined)))
     s = str.Replace(s, "%%ISKEYWORD%%", VIM_ISKEYWORD)
     s = str.Replace(s, "%%DIGIT%%", VIM_DIGIT)
-    s = str.Replace(s, "%%CONDITIONAL%%", vim_words(lx.conditional))
-    s = str.Replace(s, "%%LOOP%%", vim_words(lx.loops))
-    s = str.Replace(s, "%%STATEMENT%%", vim_words(lx.statement))
-    s = str.Replace(s, "%%STORAGECLASS%%", vim_words(lx.storageClass))
-    s = str.Replace(s, "%%STRUCTURE%%", vim_words(lx.structure))
-    s = str.Replace(s, "%%INCLUDE%%", vim_words(lx.includes))
-    s = str.Replace(s, "%%KEYWORD%%", vim_words(lx.keywords))
-    s = str.Replace(s, "%%FUNCDEF%%", vim_words(lx.funcDef))
-    s = str.Replace(s, "%%BOOLEAN%%", vim_words(lx.booleans))
-    s = str.Replace(s, "%%NULL%%", vim_words(lx.nulls))
-    s = str.Replace(s, "%%THIS%%", vim_words(lx.receiver))
-    s = str.Replace(s, "%%TYPES%%", vim_words(lx.types))
-    s = str.Replace(s, "%%AUTO%%", vim_words(lx.autos))
-    s = str.Replace(s, "%%INTRTYPES%%", vim_words(lx.intrTypes))
-    s = str.Replace(s, "%%IO%%", vim_words(lx.io))
-    s = str.Replace(s, "%%LOGICAL%%", vim_words(lx.logical))
-    s = str.Replace(s, "%%CONTEXTUAL%%", vim_words(lx.contextual))
+    s = str.Replace(s, "%%CONDITIONAL%%", vim_words(plain_words(lx.conditional)))
+    s = str.Replace(s, "%%LOOP%%", vim_words(plain_words(lx.loops)))
+    s = str.Replace(s, "%%STATEMENT%%", vim_words(plain_words(lx.statement)))
+    s = str.Replace(s, "%%STORAGECLASS%%", vim_words(plain_words(lx.storageClass)))
+    s = str.Replace(s, "%%STRUCTURE%%", vim_words(plain_words(lx.structure)))
+    s = str.Replace(s, "%%INCLUDE%%", vim_words(plain_words(lx.includes)))
+    s = str.Replace(s, "%%KEYWORD%%", vim_words(plain_words(lx.keywords)))
+    s = str.Replace(s, "%%FUNCDEF%%", vim_words(plain_words(lx.funcDef)))
+    s = str.Replace(s, "%%BOOLEAN%%", vim_words(plain_words(lx.booleans)))
+    s = str.Replace(s, "%%NULL%%", vim_words(plain_words(lx.nulls)))
+    s = str.Replace(s, "%%THIS%%", vim_words(plain_words(lx.receiver)))
+    s = str.Replace(s, "%%TYPES%%", vim_words(plain_words(lx.types)))
+    s = str.Replace(s, "%%AUTO%%", vim_words(plain_words(lx.autos)))
+    s = str.Replace(s, "%%INTRTYPES%%", vim_words(plain_words(lx.intrTypes)))
+    s = str.Replace(s, "%%IO%%", vim_words(plain_words(lx.io)))
+    s = str.Replace(s, "%%LOGICAL%%", vim_words(plain_words(lx.logical)))
+    s = str.Replace(s, "%%CONTEXTUAL%%", vim_words(plain_words(lx.contextual)))
     s = str.Replace(s, "%%DIRECTIVES%%", vim_alt_arr(DIRECTIVE_WORDS[:]))
     s = str.Replace(s, "%%INTRMETHODS%%", vim_alt(lx.intrMethods))
     s = str.Replace(s, "%%ALLKW%%", vim_alt(all_keywords(lx)))

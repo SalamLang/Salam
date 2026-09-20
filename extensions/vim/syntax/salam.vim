@@ -8,11 +8,7 @@ endif
 let s:cpo_save = &cpo
 set cpo&vim
 
-if has('patch-7.4.1142')
-  syn iskeyword @,48-57,_,192-255,1536-1791,1872-1919,2208-2303,64336-65023,65136-65279,8204,8205
-else
-  setlocal iskeyword=@,48-57,_,192-255,1536-1791,1872-1919,2208-2303,64336-65023,65136-65279,8204,8205
-endif
+syn iskeyword @,48-57,_,192-255
 
 syn case match
 syn sync minlines=60 maxlines=400
@@ -20,8 +16,8 @@ syn sync minlines=60 maxlines=400
 syn keyword salamConditional  if else match اگر وگرنه تطبیق إذا وإلا طابق
 syn keyword salamRepeat       until repeat each while تاوقتی تکرار هر بينما كرر كل
 syn keyword salamStatement    ret end break continue defer to by in with بازگشت تمام بشکن ادامه تعلیق تا گام در با أرجع نهاية اكسر واصل أجل إلى خطوة في مع
-syn keyword salamStorageClass mut const extern pub inline noinline pure noret deprecated متغیر ثابت خارجی عمومی درون‌خطی غیردرون‌خطی خالص بی‌بازگشت منسوخ متغير خارجي عام مضمن غيرمضمن نقي لايرجع مهجور
-syn keyword salamKeyword      on as layout operator impl بر بعنوان صفحه عملگر پیاده‌سازی على بوصفه صفحة عامل تنفيذ
+syn keyword salamStorageClass mut const extern pub inline noinline pure noret deprecated متغیر ثابت خارجی عمومی خالص منسوخ متغير خارجي عام مضمن غيرمضمن نقي لايرجع مهجور
+syn keyword salamKeyword      on as layout operator impl بر بعنوان صفحه عملگر على بوصفه صفحة عامل تنفيذ
 syn keyword salamBoolean      true false درست نادرست صواب خطأ
 syn keyword salamNull         null پوچ عدم
 syn keyword salamThis         this این هذا
@@ -31,6 +27,8 @@ syn keyword salamBuiltinType  وکتور متجه Vector نگاشت خريطة H
 syn keyword salamBuiltin      print println printerr printerrln input بنویس چاپ خطابنویس خطاچاپ بخوان اكتب اطبع اكتبخطأ اطبعخطأ اقرأ
 syn keyword salamOperatorWord و یا أو
 syn keyword salamContextual   link static dynamic framework kind پیوند ایستا پویا چارچوب گونه رابط ساكن ديناميكي إطار صنف dyn
+syn match salamStorageClass "\<\%(غیردرون‌خطی\|بی‌بازگشت\|درون‌خطی\)\>"
+syn match salamKeyword "\<\%(پیاده‌سازی\)\>"
 
 syn keyword salamFuncDecl  func تابع دالة nextgroup=salamFunctionName skipwhite
 syn keyword salamStructure type struct enum interface component نوع ساختار شمارش واسط مولفه بنية تعداد واجهة مكون nextgroup=salamTypeName skipwhite

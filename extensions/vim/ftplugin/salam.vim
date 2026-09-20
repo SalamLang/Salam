@@ -9,8 +9,6 @@ let b:did_ftplugin = 1
 let s:cpo_save = &cpo
 set cpo&vim
 
-setlocal iskeyword=@,48-57,_,192-255,1536-1791,1872-1919,2208-2303,64336-65023,65136-65279,8204,8205
-
 setlocal commentstring=//\ %s
 setlocal comments=s1:/*,mb:*,ex:*/,://
 setlocal suffixesadd=.salam
@@ -30,7 +28,7 @@ if exists('loaded_matchit') && !exists('b:match_words')
   let b:match_words = '\<\%(پیاده‌سازی\|interface\|component\|struct\|layout\|extern\|repeat\|تاوقتی\|ساختار\|until\|match\|while\|شمارش\|خارجی\|مولفه\|تکرار\|تطبیق\|بينما\|تعداد\|خارجي\|واجهة\|تنفيذ\|func\|type\|enum\|impl\|each\|تابع\|صفحه\|واسط\|دالة\|بنية\|صفحة\|مكون\|طابق\|اگر\|نوع\|إذا\|على\|كرر\|if\|on\|بر\|هر\|كل\)\>:\<\%(وگرنه\|else\|وإلا\)\>:\<\%(نهاية\|تمام\|end\)\>'
 endif
 
-let b:undo_ftplugin = 'setlocal iskeyword< commentstring< comments< suffixesadd<'
+let b:undo_ftplugin = 'setlocal commentstring< comments< suffixesadd<'
       \ . ' includeexpr< formatoptions< expandtab< shiftwidth< softtabstop< tabstop<'
       \ . ' | unlet! b:match_words b:match_ignorecase'
 

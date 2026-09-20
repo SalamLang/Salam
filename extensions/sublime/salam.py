@@ -1,3 +1,7 @@
+# Sublime Text runs package code in a Python 3.3 host unless the package opts
+# into 3.8, so this file stays on str.format and cannot use f-strings.
+# ruff: noqa: UP030, UP032
+# pylint: disable=import-error,too-few-public-methods,consider-using-f-string
 """Salam support for Sublime Text.
 
 Syntax highlighting, indentation and completions come from the data files
@@ -30,15 +34,19 @@ ARABIC_RANGES = (
     (0xFE70, 0xFEFF),
 )
 
+
 def settings():
     return sublime.load_settings(SETTINGS_FILE)
+
 
 def setting(key, fallback):
     value = settings().get(key, fallback)
     return fallback if value is None else value
 
+
 def is_salam(view):
     return view is not None and view.match_selector(0, SYNTAX_SCOPE)
+
 
 def startup_info():
     """Keep Windows from flashing a console window for each compiler run."""
@@ -49,6 +57,7 @@ def startup_info():
     info.wShowWindow = subprocess.SW_HIDE
     return info
 
+
 def run_compiler(args, cwd=None):
     """Run the compiler and return (returncode, stdout, stderr).
 
@@ -57,18 +66,19 @@ def run_compiler(args, cwd=None):
     """
     command = [setting("compiler_path", "salam")] + args
     try:
-        proc = subprocess.Popen(
+        with subprocess.Popen(
             command,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             cwd=cwd,
             startupinfo=startup_info(),
             universal_newlines=True,
-        )
-        out, err = proc.communicate()
-        return proc.returncode, out or "", err or ""
+        ) as proc:
+            out, err = proc.communicate()
+            return proc.returncode, out or "", err or ""
     except OSError as exc:
-        return None, "", "cannot run %r: %s" % (command[0], exc)
+        return None, "", "cannot run {0!r}: {1}".format(command[0], exc)
+
 
 def is_arabic_script(codepoint):
     for low, high in ARABIC_RANGES:
@@ -76,10 +86,12 @@ def is_arabic_script(codepoint):
             return True
     return False
 
+
 def directive_lang(head):
     """The two-letter code from a '//! lang: xx' header, or ''."""
     match = re.search(r"(?:lang|LANG|زبان)\s*:\s*([A-Za-z]{2})", head)
     return match.group(1).lower() if match else ""
+
 
 def detect_lang(text):
     """Which keyword pack a buffer is written in: 'en', 'fa' or 'ar'."""
@@ -100,12 +112,14 @@ def detect_lang(text):
             arabic += 1
     return "ar" if arabic >= 3 else "en"
 
+
 def common_args(text):
     args = ["--lang=" + detect_lang(text)]
     stdlib = setting("stdlib_path", "")
     if stdlib:
         args.append("--stdlib-path=" + stdlib)
     return args
+
 
 def format_source(text):
     """Return (formatted_text, error). `salam format` rewrites files in
@@ -118,10 +132,10 @@ def format_source(text):
         args = ["format", path, "--indent=" + str(setting("format_indent", "4"))]
         code, out, err = run_compiler(args + common_args(text), cwd=workdir)
         if code != 0:
-            return None, (err or out).strip() or "salam format exited %s" % code
+            return None, (err or out).strip() or "salam format exited {0}".format(code)
         with open(path, "r", encoding="utf-8") as handle:
             return handle.read(), None
-    except (IOError, OSError) as exc:
+    except OSError as exc:
         return None, str(exc)
     finally:
         try:
@@ -131,6 +145,7 @@ def format_source(text):
         except OSError:
             pass
 
+
 def show_panel(window, text):
     panel = window.create_output_panel(OUTPUT_PANEL)
     panel.settings().set("result_file_regex", GCC_DIAGNOSTIC)
@@ -139,6 +154,7 @@ def show_panel(window, text):
     panel.run_command("append", {"characters": text})
     panel.set_read_only(True)
     window.run_command("show_panel", {"panel": "output." + OUTPUT_PANEL})
+
 
 class SalamFormatCommand(sublime_plugin.TextCommand):
     """Reformat the whole buffer with `salam format`."""
@@ -168,13 +184,14 @@ class SalamFormatCommand(sublime_plugin.TextCommand):
         self.view.set_viewport_position(viewport, False)
         sublime.status_message("Salam: formatted")
 
+
 class SalamCheckCommand(sublime_plugin.TextCommand):
     """Type-check the file without running it, into the output panel."""
 
     def is_enabled(self):
         return is_salam(self.view)
 
-    def run(self, edit):
+    def run(self, _edit):
         path = self.view.file_name()
         if not path:
             sublime.status_message("Salam: save the file first")
@@ -192,23 +209,35 @@ class SalamCheckCommand(sublime_plugin.TextCommand):
             "--error-style=gcc",
             "--log-level=error",
         ]
-        code, out, err = run_compiler(args + common_args(text), cwd=os.path.dirname(path))
+        code, out, err = run_compiler(
+            args + common_args(text), cwd=os.path.dirname(path)
+        )
         report = (out + err).strip()
         if code == 0 and not report:
             sublime.status_message("Salam: no problems found")
-            self.view.window().run_command("hide_panel", {"panel": "output." + OUTPUT_PANEL})
+            self.view.window().run_command(
+                "hide_panel", {"panel": "output." + OUTPUT_PANEL}
+            )
             return
         show_panel(self.view.window(), report + "\n")
 
+
 class SalamToggleFormatOnSaveCommand(sublime_plugin.ApplicationCommand):
+    """Turn the format-on-save setting on or off."""
+
     def run(self):
         config = settings()
         now = not config.get("format_on_save", False)
         config.set("format_on_save", now)
         sublime.save_settings(SETTINGS_FILE)
-        sublime.status_message("Salam: format on save %s" % ("on" if now else "off"))
+        sublime.status_message(
+            "Salam: format on save {0}".format("on" if now else "off")
+        )
+
 
 class SalamFormatOnSave(sublime_plugin.EventListener):
+    """Reformat a Salam buffer before it is written, when enabled."""
+
     def on_pre_save(self, view):
         if is_salam(view) and setting("format_on_save", False):
             view.run_command("salam_format")

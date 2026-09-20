@@ -14,7 +14,6 @@ local namespace = vim.api.nvim_create_namespace('salam')
 local group = vim.api.nvim_create_augroup('salam_nvim', { clear = true })
 
 local PERSIAN_ONLY = '[\u{67e}\u{686}\u{698}\u{6af}\u{6a9}\u{6cc}]'
-local ARABIC_SCRIPT = '[\u{600}-\u{6ff}\u{750}-\u{77f}\u{8a0}-\u{8ff}\u{fb50}-\u{fdff}\u{fe70}-\u{feff}]'
 
 local SEVERITY = {
   error = vim.diagnostic.severity.ERROR,

@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
-"""Check that every generated editor syntax file parses and that its
-regexes compile. Run from the repository root."""
+"""Check that every generated editor syntax file parses and that its regexes
+compile. Run from the repository root."""
 
+import configparser
 import json
 import os
+import plistlib
 import re
 import sys
 import xml.dom.minidom
+from xml.parsers.expat import ExpatError
 
 try:
     import regex
@@ -19,16 +22,27 @@ except ImportError:
     yaml = None
 
 ROOT = "extensions"
+PARSE_ERRORS = (OSError, ValueError, ExpatError, KeyError, RuntimeError)
+
 failures = []
 
 
 def fail(where, message):
-    failures.append("%s: %s" % (where, message))
+    failures.append(f"{where}: {message}")
+
+
+def read_text(path):
+    with open(path, encoding="utf-8") as handle:
+        return handle.read()
 
 
 def to_python_regex(pattern):
-    return re.sub(r"\\x\{([0-9A-Fa-f]+)\}",
-                  lambda m: "\\u%04x" % int(m.group(1), 16), pattern)
+    """Rewrite Oniguruma's \\x{hhhh} as an escape Python's engines accept."""
+    return re.sub(
+        r"\\x\{([0-9A-Fa-f]+)\}",
+        lambda match: f"\\u{int(match.group(1), 16):04x}",
+        pattern,
+    )
 
 
 def compile_all(patterns, where):
@@ -39,32 +53,40 @@ def compile_all(patterns, where):
         count += 1
         try:
             regex.compile(to_python_regex(pattern))
-        except Exception as exc:
-            fail(where, "regex %r: %s" % (pattern[:70], exc))
+        except re.error as error:
+            fail(where, f"regex {pattern[:70]!r}: {error}")
     return count
 
 
-def check_json(path, strip_comments=False):
-    text = open(path, encoding="utf-8").read()
+def load_json(path, strip_comments=False):
+    text = read_text(path)
     if strip_comments:
-        text = re.sub(r"^\s*//.*$", "", text, flags=re.M)
+        text = re.sub(r"^\s*//.*$", "", text, flags=re.MULTILINE)
     try:
         return json.loads(text)
-    except Exception as exc:
-        fail(path, str(exc))
+    except (OSError, json.JSONDecodeError) as error:
+        fail(path, str(error))
         return None
 
 
-def check_xml(path):
+def load_xml(path):
     try:
         return xml.dom.minidom.parse(path)
-    except Exception as exc:
-        fail(path, str(exc))
+    except (OSError, ExpatError) as error:
+        fail(path, str(error))
+        return None
+
+
+def load_yaml(path):
+    try:
+        return yaml.safe_load(read_text(path))
+    except (OSError, yaml.YAMLError) as error:
+        fail(path, str(error))
         return None
 
 
 def check_textmate(path):
-    grammar = check_json(path)
+    grammar = load_json(path)
     if grammar is None:
         return
     patterns = []
@@ -74,9 +96,13 @@ def check_textmate(path):
             for key, value in node.items():
                 if key in ("match", "begin", "end") and isinstance(value, str):
                     patterns.append(value)
-                elif key == "include" and isinstance(value, str) and value.startswith("#"):
+                elif (
+                    key == "include"
+                    and isinstance(value, str)
+                    and value.startswith("#")
+                ):
                     if value[1:] not in grammar["repository"]:
-                        fail(path, "include of unknown repository key %r" % value)
+                        fail(path, f"include of unknown repository key {value!r}")
                 else:
                     walk(value)
         elif isinstance(node, list):
@@ -85,17 +111,15 @@ def check_textmate(path):
 
     walk(grammar["patterns"])
     walk(grammar["repository"])
-    print("  %-52s %d regexes" % (path, compile_all(patterns, path)))
+    print(f"  {path:<52} {compile_all(patterns, path)} regexes")
 
 
 def check_sublime_syntax(path):
     if yaml is None:
-        print("  %-52s skipped (no PyYAML)" % path)
+        print(f"  {path:<52} skipped (no PyYAML)")
         return
-    try:
-        doc = yaml.safe_load(open(path, encoding="utf-8"))
-    except Exception as exc:
-        fail(path, str(exc))
+    doc = load_yaml(path)
+    if doc is None:
         return
 
     variables = doc.get("variables", {})
@@ -103,8 +127,11 @@ def check_sublime_syntax(path):
     def expand(text, depth=0):
         if depth > 10:
             raise RuntimeError("variable recursion")
-        return re.sub(r"\{\{(\w+)\}\}",
-                      lambda m: expand(variables[m.group(1)], depth + 1), text)
+        return re.sub(
+            r"\{\{(\w+)\}\}",
+            lambda match: expand(variables[match.group(1)], depth + 1),
+            text,
+        )
 
     contexts = doc["contexts"]
     patterns = []
@@ -115,75 +142,80 @@ def check_sublime_syntax(path):
                 walk(item, where)
         elif isinstance(node, dict):
             if "include" in node and node["include"] not in contexts:
-                fail(path, "%s includes unknown context %r" % (where, node["include"]))
+                fail(path, f"{where} includes unknown context {node['include']!r}")
             if "match" in node:
                 patterns.append(expand(node["match"]))
             for key in ("push", "set"):
-                if key in node:
-                    if isinstance(node[key], str):
-                        if node[key] not in contexts:
-                            fail(path, "%s %s unknown context %r" % (where, key, node[key]))
-                    else:
-                        walk(node[key], where)
+                if key not in node:
+                    continue
+                if isinstance(node[key], str):
+                    if node[key] not in contexts:
+                        fail(path, f"{where} {key} unknown context {node[key]!r}")
+                else:
+                    walk(node[key], where)
 
     for name, body in contexts.items():
         walk(body, name)
-    print("  %-52s %d regexes" % (path, compile_all(patterns, path)))
+    print(f"  {path:<52} {compile_all(patterns, path)} regexes")
 
 
 def check_kate(path):
-    doc = check_xml(path)
+    doc = load_xml(path)
     if doc is None:
         return
     names = {c.getAttribute("name") for c in doc.getElementsByTagName("context")}
+    lists = {item.getAttribute("name") for item in doc.getElementsByTagName("list")}
+    attributes = {i.getAttribute("name") for i in doc.getElementsByTagName("itemData")}
+
     for element in doc.getElementsByTagName("*"):
         target = element.getAttribute("context")
         if target and not target.startswith("#") and target not in names:
-            fail(path, "rule points at unknown context %r" % target)
-    lists = {l.getAttribute("name") for l in doc.getElementsByTagName("list")}
+            fail(path, f"rule points at unknown context {target!r}")
+        used = element.getAttribute("attribute")
+        if used and used not in attributes:
+            fail(path, f"rule uses unknown itemData {used!r}")
     for keyword in doc.getElementsByTagName("keyword"):
         used = keyword.getAttribute("String")
         if used not in lists:
-            fail(path, "keyword rule uses unknown list %r" % used)
-    attributes = {i.getAttribute("name") for i in doc.getElementsByTagName("itemData")}
-    for element in doc.getElementsByTagName("*"):
-        used = element.getAttribute("attribute")
-        if used and used not in attributes:
-            fail(path, "rule uses unknown itemData %r" % used)
+            fail(path, f"keyword rule uses unknown list {used!r}")
+
     patterns = [e.getAttribute("String") for e in doc.getElementsByTagName("RegExpr")]
-    print("  %-52s %d regexes, %d lists" % (path, compile_all(patterns, path), len(lists)))
+    print(f"  {path:<52} {compile_all(patterns, path)} regexes, {len(lists)} lists")
 
 
 def check_gtksourceview(path):
-    doc = check_xml(path)
+    doc = load_xml(path)
     if doc is None:
         return
-    ids = {c.getAttribute("id") for c in doc.getElementsByTagName("context") if c.getAttribute("id")}
-    for reference in doc.getElementsByTagName("context"):
-        target = reference.getAttribute("ref")
-        if target and ":" not in target and target not in ids:
-            fail(path, "context ref %r is not defined here" % target)
+    ids = {
+        c.getAttribute("id")
+        for c in doc.getElementsByTagName("context")
+        if c.getAttribute("id")
+    }
     styles = {s.getAttribute("id") for s in doc.getElementsByTagName("style")}
+
     for context in doc.getElementsByTagName("context"):
+        target = context.getAttribute("ref")
+        if target and ":" not in target and target not in ids:
+            fail(path, f"context ref {target!r} is not defined here")
         used = context.getAttribute("style-ref")
         if used and ":" not in used and used not in styles:
-            fail(path, "style-ref %r is not defined here" % used)
+            fail(path, f"style-ref {used!r} is not defined here")
+
     patterns = []
     for tag in ("match", "start", "end", "define-regex"):
         for element in doc.getElementsByTagName(tag):
             if element.firstChild:
                 patterns.append(element.firstChild.nodeValue.replace("\\%{ident}", "X"))
-    print("  %-52s %d regexes" % (path, compile_all(patterns, path)))
+    print(f"  {path:<52} {compile_all(patterns, path)} regexes")
 
 
 def check_micro(path):
     if yaml is None:
-        print("  %-52s skipped (no PyYAML)" % path)
+        print(f"  {path:<52} skipped (no PyYAML)")
         return
-    try:
-        doc = yaml.safe_load(open(path, encoding="utf-8"))
-    except Exception as exc:
-        fail(path, str(exc))
+    doc = load_yaml(path)
+    if doc is None:
         return
     patterns = []
 
@@ -202,45 +234,44 @@ def check_micro(path):
     walk(doc["detect"])
     for pattern in patterns:
         if "(?=" in pattern or "(?!" in pattern or "(?<" in pattern:
-            fail(path, "lookaround is not supported by Go RE2: %r" % pattern[:60])
-    print("  %-52s %d regexes, %d rules" % (path, compile_all(patterns, path), len(doc["rules"])))
+            fail(path, f"lookaround is not supported by Go RE2: {pattern[:60]!r}")
+    count = compile_all(patterns, path)
+    print(f"  {path:<52} {count} regexes, {len(doc['rules'])} rules")
 
 
 def check_nano(path):
-    text = open(path, encoding="utf-8").read()
-    if not re.search(r"^syntax ", text, flags=re.M):
+    text = read_text(path)
+    if not re.search(r"^syntax ", text, flags=re.MULTILINE):
         fail(path, "no syntax directive")
     for line in text.splitlines():
         if line.startswith("color ") and line.count('"') < 2:
-            fail(path, "unbalanced quoting: %r" % line[:60])
-    print("  %-52s %d rules" % (path, text.count("\ncolor ")))
+            fail(path, f"unbalanced quoting: {line[:60]!r}")
+    print(f"  {path:<52} {text.count(chr(10) + 'color ')} rules")
 
 
 def check_plist(path):
-    import plistlib
     try:
         with open(path, "rb") as handle:
             data = plistlib.load(handle)
-    except Exception as exc:
-        fail(path, str(exc))
+    except (OSError, plistlib.InvalidFileException, ExpatError) as error:
+        fail(path, str(error))
         return
     if "scope" not in data:
         fail(path, "no scope")
-    print("  %-52s %s" % (path, data.get("name")))
+    print(f"  {path:<52} {data.get('name')}")
 
 
 def check_ini(path, required_sections):
-    import configparser
     parser = configparser.ConfigParser(strict=False, interpolation=None)
     try:
         parser.read(path, encoding="utf-8")
-    except Exception as exc:
-        fail(path, str(exc))
+    except (OSError, configparser.Error) as error:
+        fail(path, str(error))
         return
     for section in required_sections:
         if section not in parser:
-            fail(path, "no [%s] section" % section)
-    print("  %-52s %d sections" % (path, len(parser.sections())))
+            fail(path, f"no [{section}] section")
+    print(f"  {path:<52} {len(parser.sections())} sections")
 
 
 def main():
@@ -258,30 +289,33 @@ def main():
     check_ini("extensions/geany/filetypes.Salam.conf", ("keywords", "settings"))
 
     for path in ("extensions/notepadpp/salam.xml", "extensions/jetbrains/Salam.xml"):
-        if check_xml(path) is not None:
-            print("  %-52s ok" % path)
+        if load_xml(path) is not None:
+            print(f"  {path:<52} ok")
 
-    for path in ("extensions/sublime/Comments.tmPreferences",
-                 "extensions/sublime/Indentation Rules.tmPreferences",
-                 "extensions/sublime/Symbol List.tmPreferences"):
+    for path in (
+        "extensions/sublime/Comments.tmPreferences",
+        "extensions/sublime/Indentation Rules.tmPreferences",
+        "extensions/sublime/Symbol List.tmPreferences",
+    ):
         check_plist(path)
 
-    for path in ("extensions/sublime/Salam.sublime-build",
-                 "extensions/sublime/Salam.sublime-settings",
-                 "extensions/sublime/Default.sublime-commands",
-                 "extensions/sublime/messages.json",
-                 "extensions/vscode/package.json",
-                 "extensions/vscode/language-configuration.json",
-                 "extensions/vscode/snippets/salam.code-snippets"):
-        if check_json(path, strip_comments=True) is not None:
-            print("  %-52s ok" % path)
-    if check_json("extensions/sublime/Salam.sublime-completions", strip_comments=True) is not None:
-        print("  %-52s ok" % "extensions/sublime/Salam.sublime-completions")
+    for path in (
+        "extensions/sublime/Salam.sublime-build",
+        "extensions/sublime/Salam.sublime-settings",
+        "extensions/sublime/Default.sublime-commands",
+        "extensions/sublime/Salam.sublime-completions",
+        "extensions/sublime/messages.json",
+        "extensions/vscode/package.json",
+        "extensions/vscode/language-configuration.json",
+        "extensions/vscode/snippets/salam.code-snippets",
+    ):
+        if load_json(path, strip_comments=True) is not None:
+            print(f"  {path:<52} ok")
 
     if failures:
-        print("\n%d problem(s):" % len(failures))
+        print(f"\n{len(failures)} problem(s):")
         for message in failures:
-            print("  " + message)
+            print(f"  {message}")
         return 1
     print("\nall editor syntax files are valid")
     return 0

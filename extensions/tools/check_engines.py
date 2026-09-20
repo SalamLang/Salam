@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Run the Kate, Sublime Text and GtkSourceView definitions through the real
-engines that read them.
+"""Run the VS Code, Kate, Sublime Text and GtkSourceView definitions through
+the real engines that read them.
 
 Every engine is optional. Where one is missing the check is skipped rather
 than failed, so this runs anywhere `validate.py` does.
@@ -13,6 +13,7 @@ English one, and keywords, types and comments must stay distinguishable.
 # pylint: disable=import-error,import-outside-toplevel
 
 import html
+import json
 import os
 import re
 import shutil
@@ -23,6 +24,8 @@ FIXTURES = "extensions/tools/fixtures"
 KATE_DEFINITION = "extensions/kate/salam.xml"
 GTK_DEFINITION = "extensions/gtksourceview"
 SUBLIME_DEFINITION = "extensions/sublime/Salam.sublime-syntax"
+TEXTMATE_DEFINITION = "extensions/vscode/syntaxes/salam.tmLanguage.json"
+TEXTMATE_DRIVER = "extensions/tools/check_textmate.mjs"
 
 # A theme that gives keywords, types and function names three different
 # colours, so the assertions below can tell them apart.
@@ -34,11 +37,12 @@ PARALLEL = [
     ("keyword", ["func", "تابع", "دالة"]),
     ("keyword", ["if", "اگر", "إذا"]),
     ("keyword", ["end", "تمام", "نهاية"]),
+    ("keyword", ["match", "تطبیق", "طابق"]),
     ("type", ["int", "صحیح۳۲", "صحيح"]),
     ("builtin", ["println", "چاپ", "اطبع"]),
-    ("string", ['"hello"', '"سلام"', '"مرحبا"']),
+    ("string", ["hello", "سلام", "مرحبا"]),
     ("number", ["42", "۱۲۳", "٤٥٦"]),
-    ("comment", ["// comment", "// comment", "// comment"]),
+    ("comment", ["comment", "comment", "comment"]),
 ]
 
 DISTINCT = ("keyword", "type", "comment")
@@ -54,8 +58,38 @@ ENGINE_ERRORS = (
 )
 
 
-def probe(language):
+def probe_path(language):
     return os.path.join(FIXTURES, f"probe_{language}.salam")
+
+
+def textmate_styles(path, _unused):
+    """vscode-textmate reports a scope per token, which names the rule that
+    matched far more precisely than a colour does."""
+    environment = dict(os.environ)
+    out = subprocess.run(
+        ["node", TEXTMATE_DRIVER, TEXTMATE_DEFINITION, path],
+        capture_output=True,
+        text=True,
+        check=True,
+        env=environment,
+    ).stdout
+    tokens = json.loads(out)[path]
+    styles = {}
+    for text, scope in tokens:
+        styles.setdefault(text, scope)
+    return styles
+
+
+def have_textmate():
+    if not shutil.which("node"):
+        return False
+    probe = subprocess.run(
+        ["node", TEXTMATE_DRIVER, TEXTMATE_DEFINITION, probe_path("en")],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return probe.returncode == 0
 
 
 def bat_binary():
@@ -249,7 +283,8 @@ def check(engine, reader, definition_dir):
     print(f"{engine}:")
     try:
         per_language = {
-            language: reader(probe(language), definition_dir) for language in LANGUAGES
+            language: reader(probe_path(language), definition_dir)
+            for language in LANGUAGES
         }
     except ENGINE_ERRORS as error:
         print(f"  FAIL: {error}")
@@ -291,6 +326,11 @@ def main():
         failures += check("kate", kate_styles, root)
     else:
         print("kate: skipped (kate-syntax-highlighter is not installed)")
+
+    if have_textmate():
+        failures += check("vscode-textmate", textmate_styles, None)
+    else:
+        print("vscode-textmate: skipped (npm install vscode-textmate vscode-oniguruma)")
 
     if bat_binary():
         try:

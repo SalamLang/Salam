@@ -24,6 +24,20 @@ except ImportError:
 ROOT = "extensions"
 PARSE_ERRORS = (OSError, ValueError, ExpatError, KeyError, RuntimeError)
 
+# Every group the micro rules are expected to still assign.
+MICRO_GROUPS = {
+    "comment",
+    "constant",
+    "constant.number",
+    "constant.string",
+    "identifier",
+    "identifier.class",
+    "preproc",
+    "statement",
+    "symbol.brackets",
+    "symbol.operator",
+}
+
 failures = []
 
 
@@ -235,6 +249,16 @@ def check_micro(path):
     for pattern in patterns:
         if "(?=" in pattern or "(?!" in pattern or "(?<" in pattern:
             fail(path, f"lookaround is not supported by Go RE2: {pattern[:60]!r}")
+
+    # A template edit once removed the number, annotation and operator rules
+    # without changing anything this file could otherwise notice.
+    groups = set()
+    for rule in doc["rules"]:
+        groups.update(rule.keys())
+    missing = MICRO_GROUPS - groups
+    if missing:
+        fail(path, f"no rule left for {sorted(missing)}")
+
     count = compile_all(patterns, path)
     print(f"  {path:<52} {count} regexes, {len(doc['rules'])} rules")
 

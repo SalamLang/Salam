@@ -298,6 +298,42 @@ def check_ini(path, required_sections):
     print(f"  {path:<52} {len(parser.sections())} sections")
 
 
+GENERATED = (
+    "extensions/vscode/syntaxes/salam.tmLanguage.json",
+    "extensions/sublime/Salam.sublime-syntax",
+    "extensions/sublime/Salam.sublime-completions",
+    "extensions/sublime/Comments.tmPreferences",
+    "extensions/sublime/Indentation Rules.tmPreferences",
+    "extensions/sublime/Symbol List.tmPreferences",
+    "extensions/vim/syntax/salam.vim",
+    "extensions/vim/indent/salam.vim",
+    "extensions/vim/ftplugin/salam.vim",
+    "extensions/vim/UltiSnips/salam.snippets",
+    "extensions/emacs/salam-mode.el",
+    "extensions/kate/salam.xml",
+    "extensions/gtksourceview/salam.lang",
+    "extensions/jetbrains/Salam.xml",
+    "extensions/geany/filetypes.Salam.conf",
+    "extensions/notepadpp/salam.xml",
+    "extensions/nano/salam.nanorc",
+    "extensions/micro/salam.yaml",
+)
+
+PLACEHOLDER = re.compile(r"%%[A-Z_]+%%")
+
+
+def check_placeholders():
+    """A template slot the generator never fills leaves a literal %%NAME%%.
+    It still parses and its regex still compiles, so nothing else sees it."""
+    for path in GENERATED:
+        if not os.path.exists(path):
+            fail(path, "generated file is missing")
+            continue
+        for slot in sorted(set(PLACEHOLDER.findall(read_text(path)))):
+            fail(path, f"{slot} was never substituted")
+    print(f"  {'every generated file':<52} no unfilled template slots")
+
+
 def main():
     if not os.path.isdir(ROOT):
         print("run me from the repository root", file=sys.stderr)
@@ -311,6 +347,7 @@ def main():
     check_micro("extensions/micro/salam.yaml")
     check_nano("extensions/nano/salam.nanorc")
     check_ini("extensions/geany/filetypes.Salam.conf", ("keywords", "settings"))
+    check_placeholders()
 
     for path in ("extensions/notepadpp/salam.xml", "extensions/jetbrains/Salam.xml"):
         if load_xml(path) is not None:

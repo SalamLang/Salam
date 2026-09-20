@@ -43,6 +43,7 @@ PARALLEL = [
     ("string", ["hello", "سلام", "مرحبا"]),
     ("number", ["42", "۱۲۳", "٤٥٦"]),
     ("comment", ["comment", "comment", "comment"]),
+    ("contextual", ["static", "ایستا", "ساكن"]),
 ]
 
 DISTINCT = ("keyword", "type", "comment")

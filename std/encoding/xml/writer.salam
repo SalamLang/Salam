@@ -1,0 +1,238 @@
+package xml
+
+pub struct WriteOptions:
+    pub indent: str = ""
+    pub newline: str = "\n"
+    pub declaration: bool = false
+    pub doctype: bool = false
+    pub empty_as_pair: bool = false
+    pub sort_attributes: bool = false
+    pub escape_newlines_in_attributes: bool = false
+end
+
+func escape_into(sb &: str.StringBuilder, text: str, in_attribute: bool, escape_breaks: bool):
+    n := str.Len(text)
+    p := xbp(text)
+    mut i := 0
+    until i < n:
+        c := xub(p, i)
+        if c == 38: str.BufAppend(sb, "&amp;")
+        else c == 60: str.BufAppend(sb, "&lt;")
+        else c == 62: str.BufAppend(sb, "&gt;")
+        else c == 34 && in_attribute: str.BufAppend(sb, "&quot;")
+        else c == 39 && in_attribute: str.BufAppend(sb, "&apos;")
+        else c == 13: str.BufAppend(sb, "&#xD;")
+        else c == 10 && in_attribute && escape_breaks: str.BufAppend(sb, "&#xA;")
+        else c == 9 && in_attribute && escape_breaks: str.BufAppend(sb, "&#x9;")
+        else: str.BufAppendChar(sb, c)
+        end
+        i += 1
+    end
+end
+
+func sorted_attribute_ids(d: Document, id: int): Vector<int>:
+    n := node_at(d, id)
+    mut out := Vector {} as Vector<int>
+    mut i := 0
+    until i < n.attrs.len():
+        out.push(n.attrs.get(i))
+        i += 1
+    end
+    mut a := 0
+    until a < out.len():
+        mut b := a + 1
+        until b < out.len():
+            x := d.attributes.get(out.get(a))
+            y := d.attributes.get(out.get(b))
+            mut swap := false
+            if x.uri > y.uri: swap = true
+            else x.uri == y.uri && x.local > y.local: swap = true
+            end
+            if swap:
+                keep_id := out.get(a)
+                out.set(a, out.get(b))
+                out.set(b, keep_id)
+            end
+            b += 1
+        end
+        a += 1
+    end
+    ret out
+end
+
+func has_element_child(d: Document, id: int): bool:
+    n := node_at(d, id)
+    mut i := 0
+    until i < n.children.len():
+        if node_at(d, n.children.get(i)).kind == KindElement: ret true end
+        i += 1
+    end
+    ret false
+end
+
+func write_node(d: Document, id: int, sb &: str.StringBuilder, opts: WriteOptions, depth: int, inline_only: bool):
+    n := node_at(d, id)
+    pretty := str.Len(opts.indent) > 0 && !inline_only
+    if n.kind == KindText:
+        escape_into(sb, n.value, false, false)
+        ret
+    end
+    if n.kind == KindCData:
+        str.BufAppend(sb, "<![CDATA[" + n.value + "]]>")
+        ret
+    end
+    if n.kind == KindComment:
+        if pretty: str.BufAppend(sb, str.Repeat(opts.indent, depth)) end
+        str.BufAppend(sb, "<!--" + n.value + "-->")
+        if pretty: str.BufAppend(sb, opts.newline) end
+        ret
+    end
+    if n.kind == KindProcessingInstruction:
+        if pretty: str.BufAppend(sb, str.Repeat(opts.indent, depth)) end
+        str.BufAppend(sb, "<?" + n.name)
+        if str.Len(n.value) > 0: str.BufAppend(sb, " " + n.value) end
+        str.BufAppend(sb, "?>")
+        if pretty: str.BufAppend(sb, opts.newline) end
+        ret
+    end
+    if n.kind != KindElement:
+        mut i := 0
+        until i < n.children.len():
+            write_node(d, n.children.get(i), sb, opts, depth, inline_only)
+            i += 1
+        end
+        ret
+    end
+
+    if pretty: str.BufAppend(sb, str.Repeat(opts.indent, depth)) end
+    str.BufAppend(sb, "<" + n.name)
+    mut ids := Vector {} as Vector<int>
+    if opts.sort_attributes:
+        ids = sorted_attribute_ids(d, id)
+    else:
+        mut k := 0
+        until k < n.attrs.len():
+            ids.push(n.attrs.get(k))
+            k += 1
+        end
+    end
+    mut a := 0
+    until a < ids.len():
+        at := d.attributes.get(ids.get(a))
+        str.BufAppend(sb, " " + at.name + "=\"")
+        escape_into(sb, at.value, true, opts.escape_newlines_in_attributes)
+        str.BufAppendChar(sb, 34)
+        a += 1
+    end
+    ids.free()
+
+    if n.children.len() == 0:
+        if opts.empty_as_pair: str.BufAppend(sb, "></" + n.name + ">")
+        else: str.BufAppend(sb, "/>")
+        end
+        if pretty: str.BufAppend(sb, opts.newline) end
+        ret
+    end
+
+    str.BufAppendChar(sb, 62)
+    block := pretty && has_element_child(d, id)
+    if block: str.BufAppend(sb, opts.newline) end
+    mut i := 0
+    until i < n.children.len():
+        child := n.children.get(i)
+        if block:
+            write_node(d, child, sb, opts, depth + 1, false)
+        else:
+            write_node(d, child, sb, opts, 0, true)
+        end
+        i += 1
+    end
+    if block: str.BufAppend(sb, str.Repeat(opts.indent, depth)) end
+    str.BufAppend(sb, "</" + n.name + ">")
+    if pretty: str.BufAppend(sb, opts.newline) end
+end
+
+func write_prolog(d: Document, sb &: str.StringBuilder, opts: WriteOptions):
+    if opts.declaration:
+        mut version := d.version
+        if str.Len(version) == 0: version = "1.0" end
+        str.BufAppend(sb, "<?xml version=\"" + version + "\"")
+        if str.Len(d.encoding) > 0: str.BufAppend(sb, " encoding=\"" + d.encoding + "\"") end
+        if str.Len(d.standalone) > 0: str.BufAppend(sb, " standalone=\"" + d.standalone + "\"") end
+        str.BufAppend(sb, "?>" + opts.newline)
+    end
+    if opts.doctype && str.Len(d.doctype) > 0:
+        str.BufAppend(sb, "<!DOCTYPE " + d.doctype)
+        if str.Len(d.doctype_public) > 0:
+            str.BufAppend(sb, " PUBLIC \"" + d.doctype_public + "\" \"" + d.doctype_system + "\"")
+        else str.Len(d.doctype_system) > 0:
+            str.BufAppend(sb, " SYSTEM \"" + d.doctype_system + "\"")
+        end
+        if str.Len(d.internal_subset) > 0:
+            str.BufAppend(sb, " [" + d.internal_subset + "]")
+        end
+        str.BufAppend(sb, ">" + opts.newline)
+    end
+end
+
+func render(d: Document, id: int, opts: WriteOptions, prolog: bool): str:
+    mut sb := str.NewBuilder()
+    if prolog: write_prolog(d, sb, opts) end
+    write_node(d, id, sb, opts, 0, false)
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+pub func DefaultWriteOptions(): WriteOptions:
+    ret WriteOptions { indent = "", newline = "\n" }
+end
+
+pub func Write(d: Document): str:
+    ret render(d, DocumentNode(d), DefaultWriteOptions(), false)
+end
+
+pub func WriteIndent(d: Document, unit: str): str:
+    mut opts := DefaultWriteOptions()
+    opts.indent = unit
+    ret render(d, DocumentNode(d), opts, false)
+end
+
+pub func WriteWith(d: Document, opts: WriteOptions): str:
+    ret render(d, DocumentNode(d), opts, true)
+end
+
+pub func WriteNode(d: Document, id: int): str:
+    ret render(d, id, DefaultWriteOptions(), false)
+end
+
+pub func WriteNodeIndent(d: Document, id: int, unit: str): str:
+    mut opts := DefaultWriteOptions()
+    opts.indent = unit
+    ret render(d, id, opts, false)
+end
+
+pub func WriteDocument(d: Document): str:
+    mut opts := DefaultWriteOptions()
+    opts.declaration = true
+    opts.doctype = true
+    body := render(d, DocumentNode(d), opts, true)
+    if str.EndsWith(body, opts.newline): ret body end
+    ret body + opts.newline
+end
+
+pub func Canonical(d: Document): str:
+    mut opts := DefaultWriteOptions()
+    opts.empty_as_pair = true
+    opts.sort_attributes = true
+    opts.escape_newlines_in_attributes = true
+    ret render(d, DocumentNode(d), opts, false)
+end
+
+pub func CanonicalNode(d: Document, id: int): str:
+    mut opts := DefaultWriteOptions()
+    opts.empty_as_pair = true
+    opts.sort_attributes = true
+    opts.escape_newlines_in_attributes = true
+    ret render(d, id, opts, false)
+end

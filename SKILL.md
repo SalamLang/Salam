@@ -712,6 +712,64 @@ LowerBound UpperBound Min Max Reverse Swap` + named algorithms
   space: `@doc "a" "b"`; a second `@doc` on the same definition is an error).
   `SchemaEnvelope`/`SchemaMerge` are the two halves for callers that want the
   definitions separately.
+- **`xml`** (`import encoding.xml`): two models in one package.
+  - The **simple tree** is `XMLNode` (`tag attrs children text`) with `Decode
+DecodeStrict Valid Encode EncodeIndent EncodeDeclaration Child Children Attr
+HasAttr SetAttr AppendChild NewXMLNode Found ToValue FromValue EscapeText
+EscapeAttr UnescapeEntities`, plus the pull tokenizer `NewXMLTokenizer` /
+    `NextToken` (`XMLTok*` kinds). It ignores mixed-content order and
+    namespaces, and is the right size for reading a config file.
+  - The **full document model** is `Document`, an arena of nodes addressed by
+    `int` handles. It keeps mixed content in order, resolves namespaces,
+    expands internal entities and records a line and column for every node.
+    Parse with `Parse(text, err)`, `ParseWith(text, opts, err)` or
+    `WellFormed(text, err)`; `ParseError` carries `ok message line col offset`
+    and `ErrorText` formats it. `ParseOptions` has `preserve_whitespace
+keep_comments keep_instructions namespaces expand_entities max_depth`.
+    Read with `Root DocumentNode Kind Name LocalName Prefix NamespaceURI Value
+Parent ChildCount ChildAt ChildNodes Elements ElementsNamed FirstElementNamed
+Descendants Ancestors NextSibling PreviousSibling Depth Path Line Column
+AttributeCount AttributeAt HasAttribute AttributeValue AttributeValueNS Text
+DirectText EntityCount EntityValue`; build and edit with `NewDocument
+CreateElement CreateText CreateCData CreateComment CreateProcessingInstruction
+Append InsertBefore RemoveChild SetAttribute RemoveAttribute SetText`; write
+    with `Write WriteIndent WriteNode WriteNodeIndent WriteDocument WriteWith
+Canonical CanonicalNode`. `Free(d)` releases it and `FreeList` a `NodeList`.
+    **Parsing is strict**: a mismatched end tag, a second root, a duplicate
+    attribute, `--` inside a comment, `]]>` in character data, an undeclared
+    entity or an undeclared namespace prefix is an error with a position, not
+    a guess. Entity expansion is bounded by `max_entity_depth` and a
+    document-wide `max_entity_expansion`, so a recursive entity and the
+    billion-laughs shape are both rejected rather than run.
+  - **Searching is XPath 1.0**: `Select(d, context, expr, err): NodeList` (a
+    context of `-1` means the document node), plus `SelectFirst SelectString
+SelectNumber SelectBoolean Evaluate`, where an `XPathValue` has kind
+    `ValueNodeSet`, `ValueString`, `ValueNumber` or `ValueBoolean`. Supported:
+    location paths, `//`, `.`, `..`, `@attr`, `*`, `p:*`, the four node tests
+    `node() text() comment() processing-instruction()`, all twelve axes
+    (`child descendant parent ancestor self descendant-or-self
+ancestor-or-self following-sibling preceding-sibling attribute following
+preceding`), predicates, the union operator, the boolean, comparison and
+    arithmetic operators, and the function library `last position count name
+local-name namespace-uri string concat starts-with contains ends-with
+substring-before substring-after substring string-length normalize-space
+translate boolean not true false number sum floor ceiling round`. Variable
+    references and the namespace axis are not implemented. An attribute comes
+    back as a **negative handle**: test one with `IsAttributeRef`, read it
+    with `ReferencedAttribute`, and `StringValue` / `NodeName` take either
+    kind.
+  - **Checking is DTD validation**: `ParseDTD(text): DTD` reads element and
+    attribute-list declarations, and a document's own subset is in
+    `d.internal_subset`. `Validate(d, dtd): Report` and
+    `ValidateInternalSubset(d): Report` check the root name, content models
+    (`EMPTY`, `ANY`, mixed, and nested groups like `(a,(b|c)+,d?)*`),
+    undeclared elements, attribute types (`CDATA ID IDREF IDREFS NMTOKEN
+NMTOKENS ENTITY ENTITIES`, enumerations and `NOTATION`), `#REQUIRED` and
+    `#FIXED`, ID uniqueness and IDREF resolution. `CheckNamespaces(d)` reports
+    unbound prefixes in a tree built by hand, and `ApplyDefaults(d, dtd)`
+    fills in declared attribute defaults. A `Report` is `ok` plus `items` of
+    `Violation { message line col node }`; `ReportText` formats it, and
+    `FreeReport` / `FreeDTD` release them.
 - **`yaml`**: parse/query/encode/dump. **`csv`**: `ReadLine(str): Vector<str>`,
   `WriteLine(Vector<str>): str`.
 - **`encoding`**: `Base64Encode Base64Decode HexEncode HexDecode URLEncode

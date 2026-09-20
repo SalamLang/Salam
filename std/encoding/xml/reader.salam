@@ -1,0 +1,1021 @@
+package xml
+
+pub const EntityDepthLimit := 32
+pub const EntityExpansionLimit := 262144
+
+pub struct ParseError:
+    pub ok: bool = true
+    pub message: str = ""
+    pub line: int = 0
+    pub col: int = 0
+    pub offset: int = 0
+end
+
+pub struct ParseOptions:
+    pub preserve_whitespace: bool = false
+    pub keep_comments: bool = true
+    pub keep_instructions: bool = true
+    pub namespaces: bool = true
+    pub expand_entities: bool = true
+    pub max_depth: int = 1024
+    pub max_entity_depth: int = EntityDepthLimit
+    pub max_entity_expansion: int = EntityExpansionLimit
+end
+
+struct Scope:
+    pub prefixes: Vector<str> = Vector {}
+    pub uris: Vector<str> = Vector {}
+    pub marks: Vector<int> = Vector {}
+end
+
+struct Reader:
+    pub text: str = ""
+    pub n: int = 0
+    pub pos: int = 0
+    pub expanded: int = 0
+    pub line_starts: Vector<int> = Vector {}
+end
+
+inline pure func xbp(s: str): i8*: ret (s as void*) as i8* end
+
+inline pure func xub(p: i8*, i: int): int:
+    mut v := p[i] as int
+    if v < 0: v = v + 256 end
+    ret v
+end
+
+pure func xml_space(c: int): bool:
+    ret c == 32 || c == 9 || c == 10 || c == 13
+end
+
+pure func ascii_digit(c: int): bool: ret c >= 48 && c <= 57 end
+
+pure func ascii_hex(c: int): bool:
+    ret (c >= 48 && c <= 57) || (c >= 97 && c <= 102) || (c >= 65 && c <= 70)
+end
+
+pure func name_start_cp(c: int): bool:
+    if c == 58 || c == 95: ret true end
+    if c >= 65 && c <= 90: ret true end
+    if c >= 97 && c <= 122: ret true end
+    if c >= 0xC0 && c <= 0xD6: ret true end
+    if c >= 0xD8 && c <= 0xF6: ret true end
+    if c >= 0xF8 && c <= 0x2FF: ret true end
+    if c >= 0x370 && c <= 0x37D: ret true end
+    if c >= 0x37F && c <= 0x1FFF: ret true end
+    if c >= 0x200C && c <= 0x200D: ret true end
+    if c >= 0x2070 && c <= 0x218F: ret true end
+    if c >= 0x2C00 && c <= 0x2FEF: ret true end
+    if c >= 0x3001 && c <= 0xD7FF: ret true end
+    if c >= 0xF900 && c <= 0xFDCF: ret true end
+    if c >= 0xFDF0 && c <= 0xFFFD: ret true end
+    if c >= 0x10000 && c <= 0xEFFFF: ret true end
+    ret false
+end
+
+pure func name_char_cp(c: int): bool:
+    if name_start_cp(c): ret true end
+    if c == 45 || c == 46: ret true end
+    if c >= 48 && c <= 57: ret true end
+    if c == 0xB7: ret true end
+    if c >= 0x300 && c <= 0x36F: ret true end
+    if c >= 0x203F && c <= 0x2040: ret true end
+    ret false
+end
+
+pure func valid_char_cp(c: int): bool:
+    if c == 9 || c == 10 || c == 13: ret true end
+    if c >= 32 && c <= 0xD7FF: ret true end
+    if c >= 0xE000 && c <= 0xFFFD: ret true end
+    if c >= 0x10000 && c <= 0x10FFFF: ret true end
+    ret false
+end
+
+func decode_cp(p: i8*, n: int, at: int, width &: int): int:
+    width = 1
+    b0 := xub(p, at)
+    if b0 < 0x80: ret b0 end
+    if b0 >= 0xC0 && b0 < 0xE0 && at + 1 < n:
+        width = 2
+        ret ((b0 & 0x1F) << 6) | (xub(p, at + 1) & 0x3F)
+    end
+    if b0 >= 0xE0 && b0 < 0xF0 && at + 2 < n:
+        width = 3
+        ret ((b0 & 0x0F) << 12) | ((xub(p, at + 1) & 0x3F) << 6) | (xub(p, at + 2) & 0x3F)
+    end
+    if b0 >= 0xF0 && at + 3 < n:
+        width = 4
+        ret ((b0 & 0x07) << 18) | ((xub(p, at + 1) & 0x3F) << 12) | ((xub(p, at + 2) & 0x3F) << 6) | (xub(p, at + 3) & 0x3F)
+    end
+    ret 0 - 1
+end
+
+func index_lines(text: str): Vector<int>:
+    mut out := Vector {} as Vector<int>
+    out.push(0)
+    n := str.Len(text)
+    p := xbp(text)
+    mut i := 0
+    until i < n:
+        if xub(p, i) == 10: out.push(i + 1) end
+        i += 1
+    end
+    ret out
+end
+
+func line_of(starts &: Vector<int>, offset: int): int:
+    mut lo := 0
+    mut hi := starts.len() - 1
+    until lo < hi:
+        mid := (lo + hi + 1) / 2
+        if starts.get(mid) <= offset: lo = mid
+        else: hi = mid - 1
+        end
+    end
+    ret lo
+end
+
+func fail_at(err &: ParseError, rd &: Reader, offset: int, message: str):
+    if !err.ok: ret end
+    idx := line_of(rd.line_starts, offset)
+    err.ok = false
+    err.message = message
+    err.line = idx + 1
+    err.col = offset - rd.line_starts.get(idx) + 1
+    err.offset = offset
+end
+
+func encode_cp(sb &: str.StringBuilder, cp: int):
+    if cp < 0x80:
+        str.BufAppendChar(sb, cp)
+    else cp < 0x800:
+        str.BufAppendChar(sb, 0xC0 | (cp >> 6))
+        str.BufAppendChar(sb, 0x80 | (cp & 0x3F))
+    else cp < 0x10000:
+        str.BufAppendChar(sb, 0xE0 | (cp >> 12))
+        str.BufAppendChar(sb, 0x80 | ((cp >> 6) & 0x3F))
+        str.BufAppendChar(sb, 0x80 | (cp & 0x3F))
+    else:
+        str.BufAppendChar(sb, 0xF0 | (cp >> 18))
+        str.BufAppendChar(sb, 0x80 | ((cp >> 12) & 0x3F))
+        str.BufAppendChar(sb, 0x80 | ((cp >> 6) & 0x3F))
+        str.BufAppendChar(sb, 0x80 | (cp & 0x3F))
+    end
+end
+
+func scan_name(rd &: Reader, p: i8*, at: int, stop &: int): str:
+    mut i := at
+    mut width := 0
+    if i >= rd.n:
+        stop = i
+        ret ""
+    end
+    cp := decode_cp(p, rd.n, i, width)
+    if cp < 0 || !name_start_cp(cp):
+        stop = i
+        ret ""
+    end
+    i += width
+    until i < rd.n:
+        c := decode_cp(p, rd.n, i, width)
+        if c < 0 || !name_char_cp(c): break end
+        i += width
+    end
+    stop = i
+    ret str.Substr(rd.text, at, i - at)
+end
+
+func skip_space(rd &: Reader, p: i8*, at: int): int:
+    mut i := at
+    until i < rd.n && xml_space(xub(p, i)):
+        i += 1
+    end
+    ret i
+end
+
+func expand_entities(d &: Document, rd &: Reader, raw: str, at: int, in_attribute: bool,
+                     opts: ParseOptions, depth: int, err &: ParseError): str:
+    if !str.Contains(raw, "&"): ret str.Clone(raw) end
+    mut ceiling := opts.max_entity_depth
+    if ceiling <= 0: ceiling = EntityDepthLimit end
+    if depth > ceiling:
+        fail_at(err, rd, at, "an entity expands into itself, or nests deeper than the parser allows")
+        ret ""
+    end
+    mut budget := opts.max_entity_expansion
+    if budget <= 0: budget = EntityExpansionLimit end
+    if rd.expanded > budget:
+        fail_at(err, rd, at, "the entities in this document expand to more text than the parser allows")
+        ret ""
+    end
+    mut sb := str.NewBuilder()
+    n := str.Len(raw)
+    p := xbp(raw)
+    mut i := 0
+    until err.ok && i < n:
+        c := xub(p, i)
+        if c != 38:
+            str.BufAppendChar(sb, c)
+            i += 1
+            continue
+        end
+        semi := str.IndexFrom(raw, ";", i)
+        if semi < 0:
+            fail_at(err, rd, at + i, "an entity reference has no closing semicolon")
+            break
+        end
+        body := str.Substr(raw, i + 1, semi - i - 1)
+        if str.Len(body) == 0:
+            fail_at(err, rd, at + i, "an entity reference is empty")
+            break
+        end
+        if str.CharAt(body, 0) == "#":
+            mut cp := 0
+            mut good := true
+            if str.Len(body) > 2 && (str.CharAt(body, 1) == "x" || str.CharAt(body, 1) == "X"):
+                digits := str.Substr(body, 2, str.Len(body) - 2)
+                dn := str.Len(digits)
+                dp := xbp(digits)
+                if dn == 0: good = false end
+                mut k := 0
+                until good && k < dn:
+                    ch := xub(dp, k)
+                    if !ascii_hex(ch):
+                        good = false
+                    else:
+                        mut v := 0
+                        if ch >= 48 && ch <= 57: v = ch - 48
+                        else ch >= 97 && ch <= 102: v = ch - 87
+                        else: v = ch - 55
+                        end
+                        cp = cp * 16 + v
+                    end
+                    k += 1
+                end
+            else:
+                digits := str.Substr(body, 1, str.Len(body) - 1)
+                dn := str.Len(digits)
+                dp := xbp(digits)
+                if dn == 0: good = false end
+                mut k := 0
+                until good && k < dn:
+                    ch := xub(dp, k)
+                    if !ascii_digit(ch): good = false
+                    else: cp = cp * 10 + (ch - 48)
+                    end
+                    k += 1
+                end
+            end
+            if !good:
+                fail_at(err, rd, at + i, "\"&" + body + ";\" is not a character reference")
+                break
+            end
+            if !valid_char_cp(cp):
+                fail_at(err, rd, at + i, "the character reference \"&" + body + ";\" is not a legal XML character")
+                break
+            end
+            encode_cp(sb, cp)
+            i = semi + 1
+            continue
+        end
+        if body == "amp": str.BufAppendChar(sb, 38)
+        else body == "lt": str.BufAppendChar(sb, 60)
+        else body == "gt": str.BufAppendChar(sb, 62)
+        else body == "quot": str.BufAppendChar(sb, 34)
+        else body == "apos": str.BufAppendChar(sb, 39)
+        else:
+            mut known := false
+            mut value := ""
+            mut e := 0
+            until e < d.entity_names.len():
+                if d.entity_names.get(e) == body:
+                    known = true
+                    value = d.entity_values.get(e)
+                end
+                e += 1
+            end
+            if !known:
+                fail_at(err, rd, at + i, "the entity \"&" + body + ";\" is not declared")
+                break
+            end
+            if in_attribute && str.Contains(value, "<"):
+                fail_at(err, rd, at + i, "the entity \"&" + body + ";\" puts a '<' in an attribute value")
+                break
+            end
+            if opts.expand_entities:
+                piece := expand_entities(d, rd, value, at + i, in_attribute, opts, depth + 1, err)
+                if !err.ok: break end
+                rd.expanded = rd.expanded + str.Len(piece)
+                str.BufAppend(sb, piece)
+                release(piece)
+                if rd.expanded > budget:
+                    fail_at(err, rd, at + i, "the entities in this document expand to more text than the parser allows")
+                    break
+                end
+            else:
+                str.BufAppend(sb, "&" + body + ";")
+            end
+        end
+        i = semi + 1
+    end
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func scope_push(sc &: Scope):
+    sc.marks.push(sc.prefixes.len())
+end
+
+func scope_pop(sc &: Scope):
+    if sc.marks.len() == 0: ret end
+    mark := sc.marks.get(sc.marks.len() - 1)
+    sc.marks.pop()
+    until sc.prefixes.len() > mark:
+        sc.prefixes.pop()
+        sc.uris.pop()
+    end
+end
+
+func scope_bind(sc &: Scope, prefix: str, uri: str):
+    sc.prefixes.push(prefix)
+    sc.uris.push(uri)
+end
+
+func scope_lookup(sc &: Scope, prefix: str, found &: bool): str:
+    found = false
+    if prefix == "xml":
+        found = true
+        ret XMLNamespaceURI
+    end
+    if prefix == "xmlns":
+        found = true
+        ret XMLNSNamespaceURI
+    end
+    mut i := sc.prefixes.len() - 1
+    until i >= 0:
+        if sc.prefixes.get(i) == prefix:
+            found = true
+            ret sc.uris.get(i)
+        end
+        i -= 1
+    end
+    if prefix == "":
+        found = true
+        ret ""
+    end
+    ret ""
+end
+
+func scope_free(sc &: Scope):
+    sc.prefixes.free()
+    sc.uris.free()
+    sc.marks.free()
+end
+
+func split_qname(name: str, prefix &: str, local &: str): bool:
+    colon := str.IndexOf(name, ":")
+    if colon < 0:
+        prefix = ""
+        local = str.Clone(name)
+        ret true
+    end
+    if colon == 0 || colon == str.Len(name) - 1: ret false end
+    rest := str.Substr(name, colon + 1, str.Len(name) - colon - 1)
+    if str.Contains(rest, ":"): ret false end
+    prefix = str.Substr(name, 0, colon)
+    local = rest
+    ret true
+end
+
+func read_quoted(rd &: Reader, p: i8*, at: int, stop &: int, err &: ParseError, what: str): str:
+    if at >= rd.n || (xub(p, at) != 34 && xub(p, at) != 39):
+        fail_at(err, rd, at, what + " must be in quotes")
+        stop = at
+        ret ""
+    end
+    quote := xub(p, at)
+    mut i := at + 1
+    until i < rd.n && xub(p, i) != quote:
+        i += 1
+    end
+    if i >= rd.n:
+        fail_at(err, rd, at, what + " is never closed")
+        stop = rd.n
+        ret ""
+    end
+    stop = i + 1
+    ret str.Substr(rd.text, at + 1, i - at - 1)
+end
+
+func read_declaration(d &: Document, rd &: Reader, p: i8*, at: int, err &: ParseError): int:
+    mut i := at + 5
+    i = skip_space(rd, p, i)
+    mut stop := i
+    key := own(d, scan_name(rd, p, i, stop))
+    if key != "version":
+        fail_at(err, rd, i, "the XML declaration must start with version")
+        ret rd.n
+    end
+    i = skip_space(rd, p, stop)
+    if i >= rd.n || xub(p, i) != 61:
+        fail_at(err, rd, i, "the XML declaration is missing '=' after version")
+        ret rd.n
+    end
+    i = skip_space(rd, p, i + 1)
+    d.version = own(d, read_quoted(rd, p, i, stop, err, "the version"))
+    if !err.ok: ret rd.n end
+    i = skip_space(rd, p, stop)
+    until i < rd.n && xub(p, i) != 63:
+        field := own(d, scan_name(rd, p, i, stop))
+        if str.Len(field) == 0:
+            fail_at(err, rd, i, "the XML declaration holds something that is not a name")
+            ret rd.n
+        end
+        i = skip_space(rd, p, stop)
+        if i >= rd.n || xub(p, i) != 61:
+            fail_at(err, rd, i, "the XML declaration is missing '=' after " + field)
+            ret rd.n
+        end
+        i = skip_space(rd, p, i + 1)
+        text := own(d, read_quoted(rd, p, i, stop, err, "the " + field + " value"))
+        if !err.ok: ret rd.n end
+        if field == "encoding": d.encoding = text
+        else field == "standalone":
+            if text != "yes" && text != "no":
+                fail_at(err, rd, i, "standalone must be yes or no")
+                ret rd.n
+            end
+            d.standalone = text
+        else:
+            fail_at(err, rd, i, "the XML declaration has no field called " + field)
+            ret rd.n
+        end
+        i = skip_space(rd, p, stop)
+    end
+    if i + 1 >= rd.n || xub(p, i) != 63 || xub(p, i + 1) != 62:
+        fail_at(err, rd, i, "the XML declaration is never closed")
+        ret rd.n
+    end
+    ret i + 2
+end
+
+func register_entities(d &: Document, subset: str):
+    mut i := 0
+    until true:
+        at := str.IndexFrom(subset, "<!ENTITY", i)
+        if at < 0: break end
+        mut j := at + 8
+        n := str.Len(subset)
+        p := xbp(subset)
+        until j < n && xml_space(xub(p, j)):
+            j += 1
+        end
+        if j < n && xub(p, j) == 37:
+            i = at + 8
+            continue
+        end
+        start := j
+        until j < n && !xml_space(xub(p, j)) && xub(p, j) != 62:
+            j += 1
+        end
+        name := own(d, str.Substr(subset, start, j - start))
+        until j < n && xml_space(xub(p, j)):
+            j += 1
+        end
+        if j < n && (xub(p, j) == 34 || xub(p, j) == 39):
+            quote := xub(p, j)
+            vstart := j + 1
+            mut k := vstart
+            until k < n && xub(p, k) != quote:
+                k += 1
+            end
+            if str.Len(name) > 0:
+                d.entity_names.push(name)
+                d.entity_values.push(own(d, str.Substr(subset, vstart, k - vstart)))
+            end
+            i = k + 1
+        else:
+            i = at + 8
+        end
+    end
+end
+
+func read_doctype(d &: Document, rd &: Reader, p: i8*, at: int, err &: ParseError): int:
+    mut i := skip_space(rd, p, at + 9)
+    mut stop := i
+    name := own(d, scan_name(rd, p, i, stop))
+    if str.Len(name) == 0:
+        fail_at(err, rd, i, "the document type declaration has no name")
+        ret rd.n
+    end
+    d.doctype = name
+    i = skip_space(rd, p, stop)
+    word := own(d, scan_name(rd, p, i, stop))
+    if word == "PUBLIC":
+        i = skip_space(rd, p, stop)
+        d.doctype_public = own(d, read_quoted(rd, p, i, stop, err, "the public identifier"))
+        if !err.ok: ret rd.n end
+        i = skip_space(rd, p, stop)
+        d.doctype_system = own(d, read_quoted(rd, p, i, stop, err, "the system identifier"))
+        if !err.ok: ret rd.n end
+        i = skip_space(rd, p, stop)
+    else word == "SYSTEM":
+        i = skip_space(rd, p, stop)
+        d.doctype_system = own(d, read_quoted(rd, p, i, stop, err, "the system identifier"))
+        if !err.ok: ret rd.n end
+        i = skip_space(rd, p, stop)
+    else str.Len(word) > 0:
+        fail_at(err, rd, i, "a document type declaration takes SYSTEM or PUBLIC, not " + word)
+        ret rd.n
+    end
+    if i < rd.n && xub(p, i) == 91:
+        mut depth := 1
+        mut j := i + 1
+        until j < rd.n && depth > 0:
+            c := xub(p, j)
+            if c == 91: depth += 1
+            else c == 93: depth -= 1
+            end
+            j += 1
+        end
+        if depth > 0:
+            fail_at(err, rd, i, "the internal subset is never closed")
+            ret rd.n
+        end
+        d.internal_subset = own(d, str.Substr(rd.text, i + 1, j - i - 2))
+        register_entities(d, d.internal_subset)
+        i = skip_space(rd, p, j)
+    end
+    if i >= rd.n || xub(p, i) != 62:
+        fail_at(err, rd, i, "the document type declaration is never closed")
+        ret rd.n
+    end
+    ret i + 1
+end
+
+func read_comment(d &: Document, rd &: Reader, p: i8*, at: int, parent: int,
+                  opts: ParseOptions, err &: ParseError): int:
+    start := at + 4
+    mut i := start
+    until i + 2 < rd.n && !(xub(p, i) == 45 && xub(p, i + 1) == 45 && xub(p, i + 2) == 62):
+        if xub(p, i) == 45 && xub(p, i + 1) == 45:
+            fail_at(err, rd, i, "a comment may not hold \"--\"")
+            ret rd.n
+        end
+        i += 1
+    end
+    if i + 2 >= rd.n:
+        fail_at(err, rd, at, "a comment is never closed")
+        ret rd.n
+    end
+    if opts.keep_comments:
+        id := CreateComment(d, own(d, str.Substr(rd.text, start, i - start)))
+        place(d, rd, id, parent, at)
+    end
+    ret i + 3
+end
+
+func read_instruction(d &: Document, rd &: Reader, p: i8*, at: int, parent: int,
+                      opts: ParseOptions, err &: ParseError): int:
+    mut stop := at + 2
+    target := own(d, scan_name(rd, p, at + 2, stop))
+    if str.Len(target) == 0:
+        fail_at(err, rd, at, "a processing instruction has no target")
+        ret rd.n
+    end
+    if str.EqualFold(target, "xml"):
+        fail_at(err, rd, at, "\"xml\" is reserved and cannot be a processing instruction target")
+        ret rd.n
+    end
+    mut i := stop
+    mut close := 0 - 1
+    until i + 1 < rd.n && close < 0:
+        if xub(p, i) == 63 && xub(p, i + 1) == 62: close = i end
+        i += 1
+    end
+    if close < 0:
+        fail_at(err, rd, at, "a processing instruction is never closed")
+        ret rd.n
+    end
+    raw_data := str.Substr(rd.text, stop, close - stop)
+    data := own(d, str.Trim(raw_data))
+    release(raw_data)
+    if opts.keep_instructions:
+        id := CreateProcessingInstruction(d, target, data)
+        place(d, rd, id, parent, at)
+    end
+    ret close + 2
+end
+
+func read_cdata(d &: Document, rd &: Reader, p: i8*, at: int, parent: int, err &: ParseError): int:
+    start := at + 9
+    mut i := start
+    mut close := 0 - 1
+    until i + 2 < rd.n && close < 0:
+        if xub(p, i) == 93 && xub(p, i + 1) == 93 && xub(p, i + 2) == 62: close = i end
+        i += 1
+    end
+    if close < 0:
+        fail_at(err, rd, at, "a CDATA section is never closed")
+        ret rd.n
+    end
+    id := CreateCData(d, own(d, str.Substr(rd.text, start, close - start)))
+    place(d, rd, id, parent, at)
+    ret close + 3
+end
+
+func place(d &: Document, rd &: Reader, id: int, parent: int, offset: int):
+    idx := line_of(rd.line_starts, offset)
+    mut n := d.nodes.get(id)
+    n.line = idx + 1
+    n.col = offset - rd.line_starts.get(idx) + 1
+    d.nodes.set(id, n)
+    attach(d, parent, id)
+end
+
+func all_space(text: str): bool:
+    n := str.Len(text)
+    p := xbp(text)
+    mut i := 0
+    until i < n:
+        if !xml_space(xub(p, i)): ret false end
+        i += 1
+    end
+    ret true
+end
+
+func read_text_run(d &: Document, rd &: Reader, p: i8*, at: int, parent: int,
+                   opts: ParseOptions, err &: ParseError): int:
+    mut i := at
+    until i < rd.n && xub(p, i) != 60:
+        if xub(p, i) == 93 && i + 2 < rd.n && xub(p, i + 1) == 93 && xub(p, i + 2) == 62:
+            fail_at(err, rd, i, "\"]]>\" may not appear in character data")
+            ret rd.n
+        end
+        mut width := 0
+        cp := decode_cp(p, rd.n, i, width)
+        if cp < 0 || !valid_char_cp(cp):
+            fail_at(err, rd, i, "the document holds a character XML does not allow")
+            ret rd.n
+        end
+        i += width
+    end
+    raw := str.Substr(rd.text, at, i - at)
+    if parent == 0:
+        outside := !all_space(raw)
+        release(raw)
+        if outside:
+            fail_at(err, rd, at, "text is not allowed outside the root element")
+            ret rd.n
+        end
+        ret i
+    end
+    text := expand_entities(d, rd, raw, at, false, opts, 0, err)
+    release(raw)
+    if !err.ok:
+        release(text)
+        ret rd.n
+    end
+    if str.Len(text) == 0 || (!opts.preserve_whitespace && all_space(text)):
+        release(text)
+        ret i
+    end
+    id := CreateText(d, own(d, text))
+    place(d, rd, id, parent, at)
+    ret i
+end
+
+func read_attributes(d &: Document, rd &: Reader, p: i8*, at: int, id: int, sc &: Scope,
+                     opts: ParseOptions, self_closing &: bool, err &: ParseError): int:
+    mut i := at
+    self_closing = false
+    until err.ok:
+        before := i
+        i = skip_space(rd, p, i)
+        if i >= rd.n:
+            fail_at(err, rd, at, "a start tag is never closed")
+            ret rd.n
+        end
+        c := xub(p, i)
+        if c == 62: ret i + 1 end
+        if c == 47:
+            if i + 1 >= rd.n || xub(p, i + 1) != 62:
+                fail_at(err, rd, i, "'/' in a start tag must be followed by '>'")
+                ret rd.n
+            end
+            self_closing = true
+            ret i + 2
+        end
+        if i == before:
+            fail_at(err, rd, i, "attributes must be separated by whitespace")
+            ret rd.n
+        end
+        mut stop := i
+        name := own(d, scan_name(rd, p, i, stop))
+        if str.Len(name) == 0:
+            fail_at(err, rd, i, "an attribute name is missing")
+            ret rd.n
+        end
+        if HasAttribute(d, id, name):
+            fail_at(err, rd, i, "the attribute \"" + name + "\" is given twice")
+            ret rd.n
+        end
+        name_at := i
+        i = skip_space(rd, p, stop)
+        if i >= rd.n || xub(p, i) != 61:
+            fail_at(err, rd, i, "the attribute \"" + name + "\" has no value")
+            ret rd.n
+        end
+        i = skip_space(rd, p, i + 1)
+        raw := read_quoted(rd, p, i, stop, err, "the value of \"" + name + "\"")
+        if !err.ok:
+            release(raw)
+            ret rd.n
+        end
+        if str.Contains(raw, "<"):
+            release(raw)
+            fail_at(err, rd, i, "the attribute \"" + name + "\" holds a literal '<'")
+            ret rd.n
+        end
+        value := own(d, expand_entities(d, rd, raw, i + 1, true, opts, 0, err))
+        release(raw)
+        if !err.ok: ret rd.n end
+        mut prefix := ""
+        mut local := ""
+        if opts.namespaces:
+            if !split_qname(name, prefix, local):
+                fail_at(err, rd, name_at, "\"" + name + "\" is not a valid qualified name")
+                ret rd.n
+            end
+            if str.Len(prefix) > 0: _kept := own(d, prefix) end
+            _kept_local := own(d, local)
+        else:
+            prefix = ""
+            local = name
+        end
+        idx := line_of(rd.line_starts, name_at)
+        d.attributes.push(Attribute { owner = id, name = name, prefix = prefix, local = local, value = value,
+                                      line = idx + 1, col = name_at - rd.line_starts.get(idx) + 1 })
+        mut owner := d.nodes.get(id)
+        owner.attrs.push(d.attributes.len() - 1)
+        d.nodes.set(id, owner)
+        if opts.namespaces:
+            if name == "xmlns":
+                scope_bind(sc, "", value)
+            else prefix == "xmlns":
+                if str.Len(value) == 0:
+                    fail_at(err, rd, name_at, "the prefix \"" + local + "\" cannot be bound to an empty namespace")
+                    ret rd.n
+                end
+                if local == "xmlns":
+                    fail_at(err, rd, name_at, "the prefix \"xmlns\" cannot be redeclared")
+                    ret rd.n
+                end
+                if local == "xml" && value != XMLNamespaceURI:
+                    fail_at(err, rd, name_at, "the prefix \"xml\" can only be bound to " + XMLNamespaceURI)
+                    ret rd.n
+                end
+                if value == XMLNSNamespaceURI:
+                    fail_at(err, rd, name_at, "no prefix may be bound to " + XMLNSNamespaceURI)
+                    ret rd.n
+                end
+                scope_bind(sc, local, value)
+            end
+        end
+        i = stop
+    end
+    ret rd.n
+end
+
+func resolve_names(d &: Document, _rd &: Reader, id: int, sc &: Scope, err &: ParseError):
+    mut n := d.nodes.get(id)
+    mut found := false
+    uri := scope_lookup(sc, n.prefix, found)
+    if !found:
+        err.ok = false
+        err.message = "the namespace prefix \"" + n.prefix + "\" is not declared"
+        err.line = n.line
+        err.col = n.col
+        ret
+    end
+    n.uri = uri
+    d.nodes.set(id, n)
+    mut i := 0
+    until err.ok && i < n.attrs.len():
+        aid := n.attrs.get(i)
+        mut a := d.attributes.get(aid)
+        if str.Len(a.prefix) > 0 && a.prefix != "xmlns":
+            mut ok := false
+            au := scope_lookup(sc, a.prefix, ok)
+            if !ok:
+                err.ok = false
+                err.message = "the namespace prefix \"" + a.prefix + "\" is not declared"
+                err.line = a.line
+                err.col = a.col
+                ret
+            end
+            a.uri = au
+            d.attributes.set(aid, a)
+        end
+        mut j := 0
+        until err.ok && j < i:
+            b := d.attributes.get(n.attrs.get(j))
+            if str.Len(a.uri) > 0 && b.uri == a.uri && b.local == a.local:
+                err.ok = false
+                err.message = "the attribute \"" + a.local + "\" is given twice in the same namespace"
+                err.line = a.line
+                err.col = a.col
+                ret
+            end
+            j += 1
+        end
+        i += 1
+    end
+end
+
+func parse_into(d &: Document, rd &: Reader, opts: ParseOptions, err &: ParseError):
+    p := xbp(rd.text)
+    mut sc := Scope {}
+    mut stack := Vector {} as Vector<int>
+    mut parent := 0
+    mut seen_root := false
+    mut seen_doctype := false
+    mut i := 0
+
+    if rd.n >= 3 && xub(p, 0) == 0xEF && xub(p, 1) == 0xBB && xub(p, 2) == 0xBF: i = 3 end
+    if i + 5 <= rd.n && str.Substr(rd.text, i, 5) == "<?xml" &&
+       (i + 5 >= rd.n || xml_space(xub(p, i + 5)) || xub(p, i + 5) == 63):
+        i = read_declaration(d, rd, p, i, err)
+    end
+
+    until err.ok && i < rd.n:
+        c := xub(p, i)
+        if c != 60:
+            i = read_text_run(d, rd, p, i, parent, opts, err)
+            continue
+        end
+        if i + 1 >= rd.n:
+            fail_at(err, rd, i, "the document ends with '<'")
+            break
+        end
+        c1 := xub(p, i + 1)
+        if c1 == 33:
+            if i + 3 < rd.n && xub(p, i + 2) == 45 && xub(p, i + 3) == 45:
+                i = read_comment(d, rd, p, i, parent, opts, err)
+                continue
+            end
+            if i + 8 < rd.n && str.Substr(rd.text, i + 2, 7) == "[CDATA[":
+                if parent == 0:
+                    fail_at(err, rd, i, "a CDATA section is not allowed outside the root element")
+                    break
+                end
+                i = read_cdata(d, rd, p, i, parent, err)
+                continue
+            end
+            if i + 9 <= rd.n && str.Substr(rd.text, i + 2, 7) == "DOCTYPE":
+                if seen_doctype:
+                    fail_at(err, rd, i, "there is more than one document type declaration")
+                    break
+                end
+                if seen_root:
+                    fail_at(err, rd, i, "the document type declaration must come before the root element")
+                    break
+                end
+                seen_doctype = true
+                i = read_doctype(d, rd, p, i, err)
+                continue
+            end
+            fail_at(err, rd, i, "\"<!\" starts nothing the parser knows")
+            break
+        end
+        if c1 == 63:
+            i = read_instruction(d, rd, p, i, parent, opts, err)
+            continue
+        end
+        if c1 == 47:
+            mut stop := i + 2
+            name := scan_name(rd, p, i + 2, stop)
+            if stack.len() == 0:
+                fail_at(err, rd, i, "</" + name + "> closes an element that never opened")
+                release(name)
+                break
+            end
+            top := stack.get(stack.len() - 1)
+            if d.nodes.get(top).name != name:
+                fail_at(err, rd, i, "</" + name + "> closes <" + d.nodes.get(top).name + ">")
+                release(name)
+                break
+            end
+            j := skip_space(rd, p, stop)
+            if j >= rd.n || xub(p, j) != 62:
+                fail_at(err, rd, j, "the end tag </" + name + "> is never closed")
+                release(name)
+                break
+            end
+            release(name)
+            stack.pop()
+            if opts.namespaces: scope_pop(sc) end
+            parent = d.nodes.get(top).parent
+            i = j + 1
+            continue
+        end
+
+        mut stop := i + 1
+        name := own(d, scan_name(rd, p, i + 1, stop))
+        if str.Len(name) == 0:
+            fail_at(err, rd, i + 1, "an element name is missing or starts with a character XML does not allow")
+            break
+        end
+        if parent == 0 && seen_root:
+            fail_at(err, rd, i, "a document may hold only one root element, and <" + name + "> is a second")
+            break
+        end
+        if stack.len() >= opts.max_depth:
+            fail_at(err, rd, i, "the element nesting is deeper than the parser allows")
+            break
+        end
+        id := new_element(d, name)
+        if opts.namespaces:
+            mut prefix := ""
+            mut local := ""
+            if !split_qname(name, prefix, local):
+                fail_at(err, rd, i + 1, "\"" + name + "\" is not a valid qualified name")
+                break
+            end
+            mut e := d.nodes.get(id)
+            if str.Len(prefix) > 0: e.prefix = own(d, prefix) end
+            e.local = own(d, local)
+            d.nodes.set(id, e)
+            scope_push(sc)
+        end
+        place(d, rd, id, parent, i)
+        mut self_closing := false
+        i = read_attributes(d, rd, p, stop, id, sc, opts, self_closing, err)
+        if !err.ok: break end
+        if opts.namespaces:
+            resolve_names(d, rd, id, sc, err)
+            if !err.ok: break end
+        end
+        if parent == 0: seen_root = true end
+        if self_closing:
+            if opts.namespaces: scope_pop(sc) end
+        else:
+            stack.push(id)
+            parent = id
+        end
+    end
+
+    if err.ok && stack.len() > 0:
+        last := stack.get(stack.len() - 1)
+        err.ok = false
+        err.message = "<" + d.nodes.get(last).name + "> is never closed"
+        err.line = d.nodes.get(last).line
+        err.col = d.nodes.get(last).col
+    end
+    if err.ok && !seen_root:
+        err.ok = false
+        err.message = "the document has no root element"
+        err.line = 1
+        err.col = 1
+    end
+    stack.free()
+    scope_free(sc)
+end
+
+pub func DefaultOptions(): ParseOptions:
+    ret ParseOptions { keep_comments = true, keep_instructions = true, namespaces = true,
+                       expand_entities = true, max_depth = 1024,
+                       max_entity_depth = EntityDepthLimit, max_entity_expansion = EntityExpansionLimit }
+end
+
+pub func NoError(): ParseError:
+    ret ParseError {}
+end
+
+pub func ErrorText(e: ParseError): str:
+    if e.ok: ret "" end
+    ret "line " + str.FromInt(e.line as i64) + ", column " + str.FromInt(e.col as i64) + ": " + e.message
+end
+
+pub func ParseWith(text: str, opts: ParseOptions, err &: ParseError): Document:
+    mut d := NewDocument()
+    d.version = ""
+    d.encoding = ""
+    mut rd := Reader { text = text, n = str.Len(text) }
+    rd.line_starts = index_lines(text)
+    err = ParseError {}
+    parse_into(d, rd, opts, err)
+    rd.line_starts.free()
+    ret d
+end
+
+pub func Parse(text: str, err &: ParseError): Document:
+    ret ParseWith(text, DefaultOptions(), err)
+end
+
+pub func WellFormed(text: str, err &: ParseError): bool:
+    mut d := ParseWith(text, DefaultOptions(), err)
+    Free(d)
+    ret err.ok
+end

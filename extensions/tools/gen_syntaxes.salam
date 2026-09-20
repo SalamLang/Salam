@@ -1,0 +1,1067 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Generates the syntax definitions shipped with every Salam editor plugin.
+//
+// The word lists are not written down here: they are read straight out of the
+// compiler at generation time, so an editor can never highlight a keyword set
+// the compiler no longer agrees with.
+//
+//   compiler/langpack.salam          keyword spellings (en/fa/ar) + token kinds
+//   compiler/semantic/semantic.salam primitive type names, intrinsic types
+//                                    and intrinsic method names
+//
+// Run from the repository root:
+//
+//   salam exec extensions/tools/gen_syntaxes.salam
+//
+// Every file it writes is committed; CI regenerates and fails on a diff.
+
+import str
+import os
+import sort
+import encoding.json
+
+// ---------------------------------------------------------------------------
+// Paths (relative to the repository root)
+// ---------------------------------------------------------------------------
+
+LANGPACK_SRC := "compiler/langpack.salam"
+SEMANTIC_SRC := "compiler/semantic/semantic.salam"
+EXT_DIR := "extensions"
+SNIPPETS_SRC := "extensions/vscode/snippets/salam.code-snippets"
+
+// ---------------------------------------------------------------------------
+// Identifier character ranges
+//
+// Salam identifiers accept Arabic script so Persian and Arabic programs can
+// name things in their own alphabet: Arabic (0600-06FF), Arabic Supplement
+// (0750-077F), Arabic Extended-A (08A0-08FF), Presentation Forms A/B
+// (FB50-FDFF, FE70-FEFF) and the two joiners (200C ZWNJ, 200D ZWJ).
+// ---------------------------------------------------------------------------
+
+// Oniguruma / TextMate flavour (VS Code, Sublime Text, TextMate, Kate).
+// IDS is the same set without the digits: an identifier cannot start with one.
+ONIG_IDS := "A-Za-z_\\x{0600}-\\x{06FF}\\x{0750}-\\x{077F}\\x{08A0}-\\x{08FF}\\x{FB50}-\\x{FDFF}\\x{FE70}-\\x{FEFF}\\x{200C}\\x{200D}"
+ONIG_IDC := "A-Za-z0-9_\\x{0600}-\\x{06FF}\\x{0750}-\\x{077F}\\x{08A0}-\\x{08FF}\\x{FB50}-\\x{FDFF}\\x{FE70}-\\x{FEFF}\\x{200C}\\x{200D}"
+
+// Vim flavour: \%u0600 for a single code point inside a collection.
+VIM_IDC := "A-Za-z0-9_\\%u0600-\\%u06ff\\%u0750-\\%u077f\\%u08a0-\\%u08ff\\%ufb50-\\%ufdff\\%ufe70-\\%ufeff\\%u200c\\%u200d"
+
+// Emacs regexp flavour: literal characters inside a [] class.
+EL_IDC := "[:alnum:]_؀-ۿݐ-ݿࢠ-ࣿﭐ-﷿ﹰ-﻿‌‍"
+
+// The 'iskeyword' setting Vim needs before Persian/Arabic words count as
+// one word (decimal code point ranges).
+VIM_ISKEYWORD := "@,48-57,_,192-255,1536-1791,1872-1919,2208-2303,64336-65023,65136-65279,8204,8205"
+
+// ---------------------------------------------------------------------------
+// Token kinds, mirroring compiler/token.salam. Keywords are grouped for
+// highlighting by the kind the lexer gives them, never by spelling, so a new
+// keyword lands in the right bucket in all three languages at once.
+// ---------------------------------------------------------------------------
+
+// Control flow: if, else, until/while, end, ret, break, continue, defer,
+// repeat, to, by, each, in, with, match.
+CONTROL_KINDS := [12, 13, 14, 21, 11, 28, 29, 37, 48, 50, 51, 52, 53, 54, 55]
+
+// Declarations and modifiers: func, on, mut, const, type, struct, enum,
+// import, as, layout, package, operator, extern, interface, pub, inline,
+// noinline, pure, noret, deprecated, component, impl.
+STORAGE_KINDS := [10, 15, 16, 17, 18, 19, 20, 22, 23, 30, 31, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 49]
+
+// Literal values: true, false, null.
+CONST_KINDS := [24, 25, 26]
+
+// The receiver: this.
+THIS_KINDS := [27]
+
+// Built-in output statements: print, println, printerr, printerrln, input.
+IO_KINDS := [32, 33, 34, 35, 36]
+
+// Word-spelled boolean operators, Persian and Arabic only.
+LOGICAL_KINDS := [68, 69]
+
+// Closes a block: end.
+END_KINDS := [21]
+
+// Opens the alternative arm, and so dedents one level: else.
+ELSE_KINDS := [13]
+
+// Introduces a named function: func.
+FUNC_DEF_KINDS := [10]
+
+// Introduces a named type: type, struct, enum, package, interface, component.
+TYPE_DEF_KINDS := [18, 19, 20, 31, 40, 47]
+
+// 'auto' infers a declaration's type; it is contextual, not a lexer keyword,
+// so the parser matches these spellings directly (parser_decl_var.salam).
+AUTO_WORDS := ["auto", "خودکار", "تلقائي"]
+
+// 'dyn T' marks an interface value; also contextual (parser_type.salam).
+DYN_WORDS := ["dyn"]
+
+// Recognised inside a '//!' header line.
+DIRECTIVE_WORDS := ["mode", "title", "lang", "dir", "name", "version"]
+
+// ---------------------------------------------------------------------------
+// Templates
+//
+// Every editor's syntax file is a fixed skeleton with the word lists spliced
+// in. Salam requires globals before the first type or function, so all of the
+// skeletons live together here, and the emit_* functions below fill them.
+// ---------------------------------------------------------------------------
+
+SUBLIME_SYNTAX_TPL := `%YAML 1.2
+---
+# GENERATED FILE - do not edit by hand.
+# Regenerate with: salam exec extensions/tools/gen_syntaxes.salam
+#
+# Salam Programming Language - https://github.com/SalamLang/Salam
+# Keywords are spelled in English, Persian and Arabic; all three are listed
+# here because a single source file may use any one of them.
+name: Salam
+scope: source.salam
+version: 2
+
+file_extensions:
+  - salam
+
+first_line_match: '^//!'
+
+variables:
+  ids: '%%IDS%%'
+  idc: '%%IDC%%'
+  ident: '[{{ids}}][{{idc}}]*'
+  nbb: '(?<![{{idc}}])'
+  nba: '(?![{{idc}}])'
+
+contexts:
+  main:
+    - include: directives
+    - include: comments
+    - include: annotations
+    - include: strings
+    - include: numbers
+    - include: definitions
+    - include: keywords
+    - include: layout-element
+    - include: function-call
+    - include: member
+    - include: operators
+    - include: punctuation
+
+  # //! mode: web | title: ... - the header block of a layout page.
+  directives:
+    - match: '//!'
+      scope: punctuation.definition.comment.salam
+      push:
+        - meta_scope: comment.line.directive.salam
+        - match: '$\n?'
+          pop: true
+        - match: '\b(?:%%DIRECTIVES%%)\b'
+          scope: keyword.other.directive.salam
+        - match: '\|'
+          scope: punctuation.separator.directive.salam
+
+  comments:
+    - match: '/\*'
+      scope: punctuation.definition.comment.begin.salam
+      push:
+        - meta_scope: comment.block.salam
+        - match: '\*/'
+          scope: punctuation.definition.comment.end.salam
+          pop: true
+    - match: '//'
+      scope: punctuation.definition.comment.salam
+      push:
+        - meta_scope: comment.line.double-slash.salam
+        - match: '$\n?'
+          pop: true
+
+  annotations:
+    - match: '(@)([A-Za-z_][{{idc}}]*)'
+      captures:
+        1: punctuation.definition.annotation.salam
+        2: storage.modifier.annotation.salam
+
+  strings:
+    - match: '"""'
+      scope: punctuation.definition.string.begin.salam
+      push:
+        - meta_scope: string.quoted.triple.salam
+        - match: '"""'
+          scope: punctuation.definition.string.end.salam
+          pop: true
+        - include: string-escapes
+    - match: '"'
+      scope: punctuation.definition.string.begin.salam
+      push:
+        - meta_scope: string.quoted.double.salam
+        - match: '"'
+          scope: punctuation.definition.string.end.salam
+          pop: true
+        - match: '\n'
+          scope: invalid.illegal.newline.salam
+          pop: true
+        - include: string-escapes
+    - match: '%%BT%%'
+      scope: punctuation.definition.string.begin.salam
+      push:
+        - meta_scope: string.quoted.raw.salam
+        - match: '%%BT%%'
+          scope: punctuation.definition.string.end.salam
+          pop: true
+    - match: '{{nbb}}u?''(\\(?:x[0-9A-Fa-f]{2}|u\{[0-9A-Fa-f]+\}|u[0-9A-Fa-f]{4}|.)|[^''\\])'''
+      scope: string.quoted.single.salam
+
+  string-escapes:
+    - match: '\\(?:x[0-9A-Fa-f]{2}|u\{[0-9A-Fa-f]+\}|u[0-9A-Fa-f]{4}|[0abfnrtv"''\\])'
+      scope: constant.character.escape.salam
+    - match: '\\.'
+      scope: invalid.illegal.unknown-escape.salam
+
+  numbers:
+    - match: '{{nbb}}(?:[0-9][0-9_]*\.[0-9][0-9_]*(?:[eE][+-]?[0-9][0-9_]*)?|[0-9][0-9_]*[eE][+-]?[0-9][0-9_]*)f?{{nba}}'
+      scope: constant.numeric.float.salam
+    - match: '{{nbb}}0[xX][0-9A-Fa-f][0-9A-Fa-f_]*{{nba}}'
+      scope: constant.numeric.integer.hexadecimal.salam
+    - match: '{{nbb}}0[bB][01][01_]*{{nba}}'
+      scope: constant.numeric.integer.binary.salam
+    - match: '{{nbb}}0[oO][0-7][0-7_]*{{nba}}'
+      scope: constant.numeric.integer.octal.salam
+    - match: '{{nbb}}[0-9][0-9_]*f?{{nba}}'
+      scope: constant.numeric.integer.decimal.salam
+
+  definitions:
+    - match: '({{nbb}}(?:%%FUNCDEF%%){{nba}})\s+({{ident}})'
+      captures:
+        1: storage.type.function.salam keyword.declaration.function.salam
+        2: entity.name.function.salam
+    - match: '({{nbb}}(?:%%TYPEDEF%%){{nba}})\s+({{ident}})'
+      captures:
+        1: storage.type.salam keyword.declaration.type.salam
+        2: entity.name.type.salam
+
+  keywords:
+    - match: '{{nbb}}(?:%%CONTROL%%){{nba}}'
+      scope: keyword.control.salam
+    - match: '{{nbb}}(?:%%LOGICAL%%){{nba}}'
+      scope: keyword.operator.word.salam
+    - match: '{{nbb}}(?:%%STORAGE%%){{nba}}'
+      scope: storage.type.salam
+    - match: '{{nbb}}(?:%%IO%%){{nba}}'
+      scope: support.function.builtin.salam
+    # %%BT%%_%%BT%% and %%BT%%__%%BT%% print the last expression in the REPL.
+    - match: '{{nbb}}_{1,2}{{nba}}'
+      scope: support.function.builtin.salam
+    - match: '{{nbb}}(?:%%CONSTS%%){{nba}}'
+      scope: constant.language.salam
+    - match: '{{nbb}}(?:%%THIS%%){{nba}}'
+      scope: variable.language.this.salam
+    - match: '{{nbb}}(?:%%AUTO%%){{nba}}'
+      scope: storage.type.auto.salam
+    - match: '{{nbb}}(?:%%TYPES%%){{nba}}'
+      scope: storage.type.primitive.salam
+    - match: '{{nbb}}(?:%%INTRTYPES%%){{nba}}'
+      scope: support.class.builtin.salam
+    - match: '{{nbb}}(?:%%CONTEXTUAL%%){{nba}}'
+      scope: keyword.other.salam
+
+  # A layout page element: a bare name on its own line, opening a block.
+  layout-element:
+    - match: '^\s*(?!(?:%%ALLKW%%){{nba}})({{ident}})\s*(:)\s*$'
+      captures:
+        1: entity.name.tag.layout.salam
+        2: punctuation.section.block.begin.salam
+
+  function-call:
+    - match: '({{ident}})\s*(?=\()'
+      scope: variable.function.salam
+
+  member:
+    - match: '(?<=\.)\s*(?:%%INTRMETHODS%%){{nba}}'
+      scope: support.function.builtin.salam
+    - match: '(?<=\.)\s*({{ident}})'
+      scope: variable.other.member.salam
+
+  operators:
+    - match: '=>'
+      scope: keyword.operator.arrow.salam
+    - match: '\.\.\.'
+      scope: keyword.operator.spread.salam
+    - match: '==|!=|<=|>=|<|>'
+      scope: keyword.operator.comparison.salam
+    - match: '\^\^=|\+=|-=|\*=|/=|%='
+      scope: keyword.operator.assignment.augmented.salam
+    - match: '&&|\|\||!'
+      scope: keyword.operator.logical.salam
+    - match: ':='
+      scope: keyword.operator.assignment.salam
+    - match: '\^\^|[+\-*/%]'
+      scope: keyword.operator.arithmetic.salam
+    - match: '&'
+      scope: keyword.operator.reference.salam
+    - match: '='
+      scope: keyword.operator.assignment.salam
+    - match: '\?'
+      scope: keyword.operator.ternary.salam
+
+  punctuation:
+    - match: ','
+      scope: punctuation.separator.salam
+    - match: ':'
+      scope: punctuation.separator.salam
+    - match: '\.'
+      scope: punctuation.accessor.salam
+    - match: '[()]'
+      scope: punctuation.section.parens.salam
+    - match: '[\[\]]'
+      scope: punctuation.section.brackets.salam
+    - match: '[{}]'
+      scope: punctuation.section.braces.salam
+`
+
+// Sublime Text reads indentation and comment settings from TextMate
+// preference plists rather than from the .sublime-syntax file.
+SUBLIME_INDENT_TPL := `<?xml version="1.0" encoding="UTF-8"?>
+<!-- GENERATED FILE - do not edit by hand.
+     Regenerate with: salam exec extensions/tools/gen_syntaxes.salam -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>name</key>
+	<string>Indentation Rules</string>
+	<key>scope</key>
+	<string>source.salam</string>
+	<key>settings</key>
+	<dict>
+		<!-- A block opens with a trailing ':', optionally followed by a comment. -->
+		<key>increaseIndentPattern</key>
+		<string>:\s*(//.*)?$</string>
+		<!-- 'end' closes a block; 'else' reopens one at the outer level. -->
+		<key>decreaseIndentPattern</key>
+		<string>^\s*(?:(?:%%END%%)\s*$|(?:%%ELSE%%)(?:\s|:))</string>
+	</dict>
+</dict>
+</plist>
+`
+
+SUBLIME_COMMENTS_TPL := `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>name</key>
+	<string>Comments</string>
+	<key>scope</key>
+	<string>source.salam</string>
+	<key>settings</key>
+	<dict>
+		<key>shellVariables</key>
+		<array>
+			<dict>
+				<key>name</key>
+				<string>TM_COMMENT_START</string>
+				<key>value</key>
+				<string>// </string>
+			</dict>
+			<dict>
+				<key>name</key>
+				<string>TM_COMMENT_START_2</string>
+				<key>value</key>
+				<string>/*</string>
+			</dict>
+			<dict>
+				<key>name</key>
+				<string>TM_COMMENT_END_2</string>
+				<key>value</key>
+				<string>*/</string>
+			</dict>
+			<dict>
+				<key>name</key>
+				<string>TM_COMMENT_DISABLE_INDENT_2</string>
+				<key>value</key>
+				<string>yes</string>
+			</dict>
+		</array>
+	</dict>
+</dict>
+</plist>
+`
+
+SUBLIME_SYMBOLS_TPL := `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>name</key>
+	<string>Symbol List</string>
+	<key>scope</key>
+	<string>source.salam entity.name.function, source.salam entity.name.type</string>
+	<key>settings</key>
+	<dict>
+		<key>showInSymbolList</key>
+		<integer>1</integer>
+		<key>showInIndexedSymbolList</key>
+		<integer>1</integer>
+	</dict>
+</dict>
+</plist>
+`
+
+// %%TEMPLATES%%
+
+
+// ---------------------------------------------------------------------------
+// The lexicon: every word an editor colours, bucketed by the role the
+// compiler gives it.
+// ---------------------------------------------------------------------------
+
+struct Lex:
+    pub control: Vector<str> = Vector {}
+    pub storage: Vector<str> = Vector {}
+    pub consts: Vector<str> = Vector {}
+    pub receiver: Vector<str> = Vector {}
+    pub io: Vector<str> = Vector {}
+    pub logical: Vector<str> = Vector {}
+    pub contextual: Vector<str> = Vector {}
+    pub autos: Vector<str> = Vector {}
+    pub types: Vector<str> = Vector {}
+    pub intrTypes: Vector<str> = Vector {}
+    pub intrMethods: Vector<str> = Vector {}
+    pub funcDef: Vector<str> = Vector {}
+    pub typeDef: Vector<str> = Vector {}
+    pub endWords: Vector<str> = Vector {}
+    pub elseWords: Vector<str> = Vector {}
+end
+
+// One editor snippet, read from the VS Code snippet file so every editor
+// offers the same set under the same trigger words.
+struct Snippet:
+    pub name: str = ""
+    pub prefix: str = ""
+    pub body: str = ""
+    pub desc: str = ""
+end
+
+// ---------------------------------------------------------------------------
+// Reading the word lists back out of the compiler's own source
+// ---------------------------------------------------------------------------
+
+func is_ident_byte(c: char): bool:
+    if c >= 'a' && c <= 'z': ret true end
+    if c >= 'A' && c <= 'Z': ret true end
+    if c >= '0' && c <= '9': ret true end
+    ret c == '_'
+end
+
+func find_from(s: str, sub: str, start: int): int:
+    if start >= s.len(): ret 0 - 1 end
+    rest := s.substr(start, s.len() - start)
+    k := rest.find(sub)
+    if k < 0: ret 0 - 1 end
+    ret start + k
+end
+
+// Drops '//' line comments so a comment can never be mistaken for data.
+// String literals are copied through untouched.
+func strip_comments(src: str): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    n := src.len()
+    mut i := 0
+    mut inStr := false
+    until i < n:
+        c := src[i]
+        if inStr:
+            str.BufAppendChar(sb, c as i32)
+            if c == '\\' && i + 1 < n:
+                str.BufAppendChar(sb, src[i + 1] as i32)
+                i += 2
+                continue
+            end
+            if c == '"': inStr = false end
+            i += 1
+            continue
+        end
+        if c == '"':
+            inStr = true
+            str.BufAppendChar(sb, c as i32)
+            i += 1
+            continue
+        end
+        if c == '/' && i + 1 < n && src[i + 1] == '/':
+            until i < n && src[i] != '\n':
+                i += 1
+            end
+            continue
+        end
+        str.BufAppendChar(sb, c as i32)
+        i += 1
+    end
+    ret str.BufStr(sb)
+end
+
+// The text between the brackets of a top-level `name := [ ... ]`, or "".
+func array_body(clean: str, name: str): str:
+    n := clean.len()
+    mut from := 0
+    until from < n:
+        p := find_from(clean, name, from)
+        if p < 0: ret "" end
+        from = p + 1
+        after := p + name.len()
+        if p > 0 && is_ident_byte(clean[p - 1]): continue end
+        if after < n && is_ident_byte(clean[after]): continue end
+
+        mut i := after
+        until i < n && (clean[i] == ' ' || clean[i] == '\t'): i += 1 end
+        if i + 1 < n && clean[i] == ':' && clean[i + 1] == '=':
+            i += 2
+        else i < n && clean[i] == '=':
+            i += 1
+        else:
+            continue
+        end
+        until i < n && (clean[i] == ' ' || clean[i] == '\t' || clean[i] == '\n'): i += 1 end
+        if i >= n || clean[i] != '[': continue end
+
+        start := i + 1
+        mut depth := 1
+        mut j := start
+        until j < n && depth > 0:
+            c := clean[j]
+            if c == '"':
+                j += 1
+                until j < n && clean[j] != '"':
+                    if clean[j] == '\\': j += 1 end
+                    j += 1
+                end
+                j += 1
+                continue
+            end
+            if c == '[': depth += 1 end
+            if c == ']': depth -= 1 end
+            j += 1
+        end
+        if depth != 0: ret "" end
+        ret clean.substr(start, j - 1 - start)
+    end
+    ret ""
+end
+
+// Every double-quoted literal in an array body, in order.
+func parse_strings(body: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    n := body.len()
+    mut i := 0
+    until i < n:
+        if body[i] != '"':
+            i += 1
+            continue
+        end
+        mut sb := str.NewBuilder()
+        i += 1
+        until i < n && body[i] != '"':
+            if body[i] == '\\' && i + 1 < n:
+                str.BufAppendChar(sb, body[i + 1] as i32)
+                i += 2
+                continue
+            end
+            str.BufAppendChar(sb, body[i] as i32)
+            i += 1
+        end
+        i += 1
+        out.push(str.BufStr(sb))
+        str.BufFree(sb)
+    end
+    ret out
+end
+
+// Every decimal run in an array body, in order.
+func parse_ints(body: str): Vector<int>:
+    mut out := Vector {} as Vector<int>
+    n := body.len()
+    mut i := 0
+    until i < n:
+        c := body[i]
+        if c < '0' || c > '9':
+            i += 1
+            continue
+        end
+        mut v := 0
+        until i < n && body[i] >= '0' && body[i] <= '9':
+            v = v * 10 + ((body[i] as i32) - 48)
+            i += 1
+        end
+        out.push(v)
+    end
+    ret out
+end
+
+func read_strings(clean: str, name: str): Vector<str>:
+    body := array_body(clean, name)
+    if body == "":
+        printerrln "gen_syntaxes: array '" + name + "' not found"
+        os.Exit(1)
+    end
+    ret parse_strings(body)
+end
+
+func read_ints(clean: str, name: str): Vector<int>:
+    body := array_body(clean, name)
+    if body == "":
+        printerrln "gen_syntaxes: array '" + name + "' not found"
+        os.Exit(1)
+    end
+    ret parse_ints(body)
+end
+
+func contains_str(v: Vector<str>, s: str): bool:
+    repeat v.len() with i:
+        if v.get(i) == s:
+            ret true
+        end
+    end
+    ret false
+end
+
+func push_unique(v &: Vector<str>, s: str):
+    if s == "":
+        ret
+    end
+    if contains_str(v, s):
+        ret
+    end
+    v.push(s)
+end
+
+// Appends every spelling whose token kind is one of `want`.
+func words_for_kinds(spells: Vector<str>, kinds: Vector<int>, want: int[:], out &: Vector<str>):
+    n := spells.len()
+    if kinds.len() < n:
+        printerrln "gen_syntaxes: keyword spelling/kind tables disagree in length"
+        os.Exit(1)
+    end
+    repeat n with i:
+        k := kinds.get(i)
+        mut hit := false
+        repeat len(want) with w:
+            if want[w] == k:
+                hit = true
+            end
+        end
+        if hit:
+            push_unique(out, spells.get(i))
+        end
+    end
+end
+
+func push_all(src: Vector<str>, out &: Vector<str>):
+    repeat src.len() with i:
+        push_unique(out, src.get(i))
+    end
+end
+
+func push_arr(src: str[:], out &: Vector<str>):
+    repeat len(src) with i:
+        push_unique(out, src[i])
+    end
+end
+
+func read_source(path: str): str:
+    text := os.ReadFile(path)
+    if text == "":
+        printerrln "gen_syntaxes: cannot read " + path + " (run me from the repository root)"
+        os.Exit(1)
+    end
+    ret strip_comments(text)
+end
+
+func build_lex(): Lex:
+    lp := read_source(LANGPACK_SRC)
+    sm := read_source(SEMANTIC_SRC)
+
+    spellEn := read_strings(lp, "k_kw_spell_en")
+    kindEn := read_ints(lp, "k_kw_kind_en")
+    spellFa := read_strings(lp, "k_kw_spell_fa")
+    kindFa := read_ints(lp, "k_kw_kind_fa")
+    spellAr := read_strings(lp, "k_kw_spell_ar")
+    kindAr := read_ints(lp, "k_kw_kind_ar")
+
+    mut control := Vector {} as Vector<str>
+    words_for_kinds(spellEn, kindEn, CONTROL_KINDS[:], control)
+    words_for_kinds(spellFa, kindFa, CONTROL_KINDS[:], control)
+    words_for_kinds(spellAr, kindAr, CONTROL_KINDS[:], control)
+
+    mut storage := Vector {} as Vector<str>
+    words_for_kinds(spellEn, kindEn, STORAGE_KINDS[:], storage)
+    words_for_kinds(spellFa, kindFa, STORAGE_KINDS[:], storage)
+    words_for_kinds(spellAr, kindAr, STORAGE_KINDS[:], storage)
+
+    mut consts := Vector {} as Vector<str>
+    words_for_kinds(spellEn, kindEn, CONST_KINDS[:], consts)
+    words_for_kinds(spellFa, kindFa, CONST_KINDS[:], consts)
+    words_for_kinds(spellAr, kindAr, CONST_KINDS[:], consts)
+
+    mut receiver := Vector {} as Vector<str>
+    words_for_kinds(spellEn, kindEn, THIS_KINDS[:], receiver)
+    words_for_kinds(spellFa, kindFa, THIS_KINDS[:], receiver)
+    words_for_kinds(spellAr, kindAr, THIS_KINDS[:], receiver)
+
+    mut io := Vector {} as Vector<str>
+    words_for_kinds(spellEn, kindEn, IO_KINDS[:], io)
+    words_for_kinds(spellFa, kindFa, IO_KINDS[:], io)
+    words_for_kinds(spellAr, kindAr, IO_KINDS[:], io)
+
+    mut logical := Vector {} as Vector<str>
+    words_for_kinds(spellEn, kindEn, LOGICAL_KINDS[:], logical)
+    words_for_kinds(spellFa, kindFa, LOGICAL_KINDS[:], logical)
+    words_for_kinds(spellAr, kindAr, LOGICAL_KINDS[:], logical)
+
+    mut funcDef := Vector {} as Vector<str>
+    words_for_kinds(spellEn, kindEn, FUNC_DEF_KINDS[:], funcDef)
+    words_for_kinds(spellFa, kindFa, FUNC_DEF_KINDS[:], funcDef)
+    words_for_kinds(spellAr, kindAr, FUNC_DEF_KINDS[:], funcDef)
+
+    mut typeDef := Vector {} as Vector<str>
+    words_for_kinds(spellEn, kindEn, TYPE_DEF_KINDS[:], typeDef)
+    words_for_kinds(spellFa, kindFa, TYPE_DEF_KINDS[:], typeDef)
+    words_for_kinds(spellAr, kindAr, TYPE_DEF_KINDS[:], typeDef)
+
+    mut endWords := Vector {} as Vector<str>
+    words_for_kinds(spellEn, kindEn, END_KINDS[:], endWords)
+    words_for_kinds(spellFa, kindFa, END_KINDS[:], endWords)
+    words_for_kinds(spellAr, kindAr, END_KINDS[:], endWords)
+
+    mut elseWords := Vector {} as Vector<str>
+    words_for_kinds(spellEn, kindEn, ELSE_KINDS[:], elseWords)
+    words_for_kinds(spellFa, kindFa, ELSE_KINDS[:], elseWords)
+    words_for_kinds(spellAr, kindAr, ELSE_KINDS[:], elseWords)
+
+    mut contextual := Vector {} as Vector<str>
+    push_all(read_strings(lp, "k_ctx_canon_fa"), contextual)
+    push_all(read_strings(lp, "k_ctx_spell_fa"), contextual)
+    push_all(read_strings(lp, "k_ctx_spell_ar"), contextual)
+    push_arr(DYN_WORDS[:], contextual)
+
+    mut autos := Vector {} as Vector<str>
+    push_arr(AUTO_WORDS[:], autos)
+
+    mut types := Vector {} as Vector<str>
+    push_all(read_strings(sm, "k_sm_prim_names"), types)
+
+    mut intrTypes := Vector {} as Vector<str>
+    push_all(read_strings(sm, "k_sm_intr_types"), intrTypes)
+
+    mut intrMethods := Vector {} as Vector<str>
+    push_all(read_strings(sm, "k_sm_intr_methods"), intrMethods)
+
+    mut out := Lex {}
+    out.control = control
+    out.storage = storage
+    out.consts = consts
+    out.receiver = receiver
+    out.io = io
+    out.logical = logical
+    out.contextual = contextual
+    out.autos = autos
+    out.types = types
+    out.intrTypes = intrTypes
+    out.intrMethods = intrMethods
+    out.funcDef = funcDef
+    out.typeDef = typeDef
+    out.endWords = endWords
+    out.elseWords = elseWords
+    ret out
+end
+
+
+// ---------------------------------------------------------------------------
+// Shared regex construction
+// ---------------------------------------------------------------------------
+
+// Longest word first, so an alternation can never stop at the prefix of a
+// longer keyword ('in' inside 'inline', 'تا' inside 'تاوقتی').
+func alt(words: Vector<str>): str:
+    mut sorted := Vector {} as Vector<str>
+    repeat words.len() with i:
+        sorted.push(words.get(i))
+    end
+    sort.StableSortBy(sorted, (a: str, b: str) => str.CharCount(a) > str.CharCount(b))
+    ret str.Join(sorted, "|")
+end
+
+func alt_arr(words: str[:]): str:
+    mut v := Vector {} as Vector<str>
+    repeat len(words) with i:
+        v.push(words[i])
+    end
+    ret alt(v)
+end
+
+
+
+
+
+// Every reserved word, used to keep the layout DSL's `element:` rule from
+// swallowing an ordinary `extern:` or `else:` line.
+func all_keywords(lx: Lex): Vector<str>:
+    mut v := Vector {} as Vector<str>
+    push_all(lx.control, v)
+    push_all(lx.storage, v)
+    push_all(lx.consts, v)
+    push_all(lx.receiver, v)
+    push_all(lx.io, v)
+    push_all(lx.logical, v)
+    ret v
+end
+
+
+// ---------------------------------------------------------------------------
+// Output
+// ---------------------------------------------------------------------------
+
+func parent_dir(path: str): str:
+    mut cut := 0 - 1
+    repeat path.len() with i:
+        if path[i] == '/':
+            cut = i
+        end
+    end
+    if cut <= 0:
+        ret ""
+    end
+    ret path.substr(0, cut)
+end
+
+func write_out(path: str, body: str):
+    d := parent_dir(path)
+    if d != "":
+        os.MkdirAll(d)
+    end
+    if os.WriteFile(path, body) < 0:
+        printerrln "gen_syntaxes: cannot write " + path
+        os.Exit(1)
+    end
+    println "  " + path
+end
+
+// ---------------------------------------------------------------------------
+// Sublime Text: Salam.sublime-syntax
+//
+// https://www.sublimetext.com/docs/syntax.html - YAML, version 2. The regex
+// flavour is Oniguruma, so the same \x{...} classes the TextMate grammar
+// uses work unchanged.
+// ---------------------------------------------------------------------------
+
+func emit_sublime_syntax(lx: Lex): str:
+    mut s := SUBLIME_SYNTAX_TPL
+    s = str.Replace(s, "%%BT%%", "\x60")
+    s = str.Replace(s, "%%IDS%%", ONIG_IDS)
+    s = str.Replace(s, "%%IDC%%", ONIG_IDC)
+    s = str.Replace(s, "%%DIRECTIVES%%", alt_arr(DIRECTIVE_WORDS[:]))
+    s = str.Replace(s, "%%FUNCDEF%%", alt(lx.funcDef))
+    s = str.Replace(s, "%%TYPEDEF%%", alt(lx.typeDef))
+    s = str.Replace(s, "%%CONTROL%%", alt(lx.control))
+    s = str.Replace(s, "%%LOGICAL%%", alt(lx.logical))
+    s = str.Replace(s, "%%STORAGE%%", alt(lx.storage))
+    s = str.Replace(s, "%%IO%%", alt(lx.io))
+    s = str.Replace(s, "%%CONSTS%%", alt(lx.consts))
+    s = str.Replace(s, "%%THIS%%", alt(lx.receiver))
+    s = str.Replace(s, "%%AUTO%%", alt(lx.autos))
+    s = str.Replace(s, "%%TYPES%%", alt(lx.types))
+    s = str.Replace(s, "%%INTRTYPES%%", alt(lx.intrTypes))
+    s = str.Replace(s, "%%INTRMETHODS%%", alt(lx.intrMethods))
+    s = str.Replace(s, "%%ALLKW%%", alt(all_keywords(lx)))
+    ret s
+end
+
+func emit_sublime_indent(lx: Lex): str:
+    mut s := SUBLIME_INDENT_TPL
+    s = str.Replace(s, "%%END%%", alt(lx.endWords))
+    s = str.Replace(s, "%%ELSE%%", alt(lx.elseWords))
+    ret s
+end
+
+// ---------------------------------------------------------------------------
+// Snippets
+//
+// extensions/vscode/snippets/salam.code-snippets is the one snippet source.
+// Sublime Text, UltiSnips and YASnippet all use TextMate field syntax
+// (${1:name}, $0), so the bodies carry over untouched.
+// ---------------------------------------------------------------------------
+
+func hex_val(c: char): int:
+    if c >= '0' && c <= '9':
+        ret (c as i32) - 48
+    end
+    if c >= 'a' && c <= 'f':
+        ret (c as i32) - 87
+    end
+    if c >= 'A' && c <= 'F':
+        ret (c as i32) - 55
+    end
+    ret 0
+end
+
+// Every string in a JSON array, with the standard escapes decoded.
+func json_strings(arrayJson: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    n := arrayJson.len()
+    mut i := 0
+    until i < n:
+        if arrayJson[i] != '"':
+            i += 1
+            continue
+        end
+        mut sb := str.NewBuilder()
+        i += 1
+        until i < n && arrayJson[i] != '"':
+            if arrayJson[i] != '\\':
+                str.BufAppendChar(sb, arrayJson[i] as i32)
+                i += 1
+                continue
+            end
+            if i + 1 >= n:
+                break
+            end
+            e := arrayJson[i + 1]
+            i += 2
+            if e == 'n':
+                str.BufAppendChar(sb, 10)
+            else e == 't':
+                str.BufAppendChar(sb, 9)
+            else e == 'r':
+                str.BufAppendChar(sb, 13)
+            else e == 'b':
+                str.BufAppendChar(sb, 8)
+            else e == 'f':
+                str.BufAppendChar(sb, 12)
+            else e == 'u':
+                mut cp := 0
+                repeat 4 with k:
+                    if i + k < n:
+                        cp = cp * 16 + hex_val(arrayJson[i + k])
+                    end
+                end
+                i += 4
+                str.BufAppendCp(sb, cp)
+            else:
+                str.BufAppendChar(sb, e as i32)
+            end
+        end
+        i += 1
+        out.push(str.BufStr(sb))
+        str.BufFree(sb)
+    end
+    ret out
+end
+
+func read_snippets(): Vector<Snippet>:
+    text := os.ReadFile(SNIPPETS_SRC)
+    if text == "":
+        printerrln "gen_syntaxes: cannot read " + SNIPPETS_SRC
+        os.Exit(1)
+    end
+    names := json.Keys(text)
+    mut out := Vector {} as Vector<Snippet>
+    repeat names.len() with i:
+        name := names.get(i)
+        obj := json.Get(text, name)
+        lines := json_strings(json.Get(obj, "body"))
+        mut s := Snippet {}
+        s.name = name
+        s.prefix = json.Get(obj, "prefix")
+        s.desc = json.Get(obj, "description")
+        s.body = str.Join(lines, "\n")
+        if s.prefix == "":
+            printerrln "gen_syntaxes: snippet '" + name + "' has no prefix"
+            os.Exit(1)
+        end
+        out.push(s)
+    end
+    ret out
+end
+
+// Sublime Text: a .sublime-completions file. The trigger carries the
+// description after a tab, which is how both ST3 and ST4 render the hint.
+func emit_sublime_completions(snips: Vector<Snippet>): str:
+    mut items := Vector {} as Vector<str>
+    repeat snips.len() with i:
+        s := snips.get(i)
+        trigger := s.prefix + "\t" + s.desc
+        items.push("    {\"trigger\": \"" + json.Escape(trigger) + "\", \"contents\": \"" + json.Escape(s.body) + "\"}")
+    end
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppend(sb, "// GENERATED FILE - do not edit by hand.\n")
+    str.BufAppend(sb, "// Regenerate with: salam exec extensions/tools/gen_syntaxes.salam\n")
+    str.BufAppend(sb, "{\n")
+    str.BufAppend(sb, "  \"scope\": \"source.salam - comment - string\",\n")
+    str.BufAppend(sb, "  \"completions\": [\n")
+    str.BufAppend(sb, str.Join(items, ",\n"))
+    str.BufAppend(sb, "\n  ]\n}\n")
+    ret str.BufStr(sb)
+end
+
+// Vim/Neovim: an UltiSnips snippet file. 'b' triggers only at the start of
+// a line, which is how every one of these snippets is used.
+func emit_ultisnips(snips: Vector<Snippet>): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppend(sb, "# GENERATED FILE - do not edit by hand.\n")
+    str.BufAppend(sb, "# Regenerate with: salam exec extensions/tools/gen_syntaxes.salam\n")
+    str.BufAppend(sb, "#\n")
+    str.BufAppend(sb, "# Salam snippets for UltiSnips. SirVer/ultisnips reads this automatically\n")
+    str.BufAppend(sb, "# once the plugin directory is on your runtimepath.\n")
+    repeat snips.len() with i:
+        s := snips.get(i)
+        str.BufAppend(sb, "\nsnippet " + s.prefix + " \"" + s.desc + "\" b\n")
+        str.BufAppend(sb, s.body)
+        str.BufAppend(sb, "\nendsnippet\n")
+    end
+    ret str.BufStr(sb)
+end
+
+// Emacs: one YASnippet file per snippet, returned as a path/body pair joined
+// by a NUL-free separator the caller splits on.
+func emit_yasnippet(s: Snippet): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppend(sb, "# -*- mode: snippet -*-\n")
+    str.BufAppend(sb, "# GENERATED FILE - regenerate with extensions/tools/gen_syntaxes.salam\n")
+    str.BufAppend(sb, "# name: " + s.name + "\n")
+    str.BufAppend(sb, "# key: " + s.prefix + "\n")
+    str.BufAppend(sb, "# --\n")
+    str.BufAppend(sb, s.body)
+    str.BufAppend(sb, "\n")
+    ret str.BufStr(sb)
+end
+
+func main:
+    lx := build_lex()
+    println "salam editor syntaxes"
+    write_out(EXT_DIR + "/sublime/Salam.sublime-syntax", emit_sublime_syntax(lx))
+    write_out(EXT_DIR + "/sublime/Indentation Rules.tmPreferences", emit_sublime_indent(lx))
+    write_out(EXT_DIR + "/sublime/Comments.tmPreferences", SUBLIME_COMMENTS_TPL)
+    write_out(EXT_DIR + "/sublime/Symbol List.tmPreferences", SUBLIME_SYMBOLS_TPL)
+
+    snips := read_snippets()
+    write_out(EXT_DIR + "/sublime/Salam.sublime-completions", emit_sublime_completions(snips))
+    write_out(EXT_DIR + "/vim/UltiSnips/salam.snippets", emit_ultisnips(snips))
+    repeat snips.len() with i:
+        s := snips.get(i)
+        write_out(EXT_DIR + "/emacs/snippets/salam-mode/" + s.prefix, emit_yasnippet(s))
+    end
+end

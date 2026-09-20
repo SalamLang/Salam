@@ -1,0 +1,1002 @@
+package xml
+
+pub const ContentEmpty := 0
+pub const ContentAny := 1
+pub const ContentMixed := 2
+pub const ContentChildren := 3
+
+pub const AttrCData := 0
+pub const AttrId := 1
+pub const AttrIdRef := 2
+pub const AttrIdRefs := 3
+pub const AttrEntity := 4
+pub const AttrEntities := 5
+pub const AttrNmToken := 6
+pub const AttrNmTokens := 7
+pub const AttrEnumeration := 8
+pub const AttrNotation := 9
+
+pub const DefaultRequired := 0
+pub const DefaultImplied := 1
+pub const DefaultFixed := 2
+pub const DefaultValue := 3
+
+const MK_NAME := 0
+const MK_SEQUENCE := 1
+const MK_CHOICE := 2
+
+const OC_ONCE := 0
+const OC_OPTIONAL := 1
+const OC_STAR := 2
+const OC_PLUS := 3
+
+pub struct ElementDecl:
+    pub name: str = ""
+    pub content: int = 1
+    pub model: str = ""
+    pub root: int = 0 - 1
+    pub mixed: Vector<str> = Vector {}
+end
+
+pub struct AttrDecl:
+    pub element: str = ""
+    pub name: str = ""
+    pub kind: int = 0
+    pub mode: int = 1
+    pub value: str = ""
+    pub values: Vector<str> = Vector {}
+end
+
+struct ModelNode:
+    pub kind: int = 0
+    pub name: str = ""
+    pub occur: int = 0
+    pub args: Vector<int> = Vector {}
+end
+
+pub struct DTD:
+    pub ok: bool = true
+    pub message: str = ""
+    pub elements: Vector<ElementDecl> = Vector {}
+    pub attributes: Vector<AttrDecl> = Vector {}
+    pub notations: Vector<str> = Vector {}
+    pub models: Vector<ModelNode> = Vector {}
+end
+
+pub struct Violation:
+    pub message: str = ""
+    pub line: int = 0
+    pub col: int = 0
+    pub node: int = 0 - 1
+end
+
+pub struct Report:
+    pub ok: bool = true
+    pub items: Vector<Violation> = Vector {}
+end
+
+func report_add(r &: Report, d: Document, node: int, message: str):
+    mut line := 0
+    mut col := 0
+    if node >= 0 && node < d.nodes.len():
+        line = Line(d, node)
+        col = Column(d, node)
+    end
+    r.items.push(Violation { message = message, line = line, col = col, node = node })
+    r.ok = false
+end
+
+func is_name_text(text: str): bool:
+    n := str.Len(text)
+    if n == 0: ret false end
+    p := xbp(text)
+    mut width := 0
+    cp := decode_cp(p, n, 0, width)
+    if cp < 0 || !name_start_cp(cp): ret false end
+    mut i := width
+    until i < n:
+        c := decode_cp(p, n, i, width)
+        if c < 0 || !name_char_cp(c): ret false end
+        i += width
+    end
+    ret true
+end
+
+func is_nmtoken_text(text: str): bool:
+    n := str.Len(text)
+    if n == 0: ret false end
+    p := xbp(text)
+    mut width := 0
+    mut i := 0
+    until i < n:
+        c := decode_cp(p, n, i, width)
+        if c < 0 || !name_char_cp(c): ret false end
+        i += width
+    end
+    ret true
+end
+
+func skip_dtd_space(text: str, p: i8*, n: int, at: int): int:
+    mut i := at
+    until i < n:
+        if xml_space(xub(p, i)):
+            i += 1
+        else i + 3 < n && xub(p, i) == 60 && xub(p, i + 1) == 33 && xub(p, i + 2) == 45 && xub(p, i + 3) == 45:
+            close := str.IndexFrom(text, "-->", i + 4)
+            if close < 0: ret n end
+            i = close + 3
+        else:
+            ret i
+        end
+    end
+    ret i
+end
+
+func read_dtd_name(text: str, p: i8*, n: int, at: int, stop &: int): str:
+    mut i := at
+    until i < n && !xml_space(xub(p, i)) && xub(p, i) != 62 && xub(p, i) != 40 && xub(p, i) != 41 &&
+          xub(p, i) != 124 && xub(p, i) != 44 && xub(p, i) != 42 && xub(p, i) != 63 && xub(p, i) != 43:
+        i += 1
+    end
+    stop = i
+    ret str.Substr(text, at, i - at)
+end
+
+func new_model(dtd &: DTD, kind: int): int:
+    id := dtd.models.len()
+    dtd.models.push(ModelNode { kind = kind })
+    ret id
+end
+
+func read_occurrence(p: i8*, n: int, at: int, stop &: int): int:
+    stop = at
+    if at >= n: ret OC_ONCE end
+    c := xub(p, at)
+    if c == 63:
+        stop = at + 1
+        ret OC_OPTIONAL
+    end
+    if c == 42:
+        stop = at + 1
+        ret OC_STAR
+    end
+    if c == 43:
+        stop = at + 1
+        ret OC_PLUS
+    end
+    ret OC_ONCE
+end
+
+func parse_particle(dtd &: DTD, text: str, p: i8*, n: int, at: int, stop &: int): int:
+    mut i := skip_dtd_space(text, p, n, at)
+    if i < n && xub(p, i) == 40:
+        i += 1
+        mut kind := MK_SEQUENCE
+        mut parts := Vector {} as Vector<int>
+        mut going := true
+        until going:
+            mut inner := i
+            child := parse_particle(dtd, text, p, n, i, inner)
+            if child < 0:
+                parts.free()
+                stop = i
+                ret 0 - 1
+            end
+            parts.push(child)
+            i = skip_dtd_space(text, p, n, inner)
+            if i < n && xub(p, i) == 124:
+                kind = MK_CHOICE
+                i += 1
+            else i < n && xub(p, i) == 44:
+                i += 1
+            else:
+                going = false
+            end
+        end
+        if i >= n || xub(p, i) != 41:
+            parts.free()
+            stop = i
+            ret 0 - 1
+        end
+        i += 1
+        id := new_model(dtd, kind)
+        mut node := dtd.models.get(id)
+        mut k := 0
+        until k < parts.len():
+            node.args.push(parts.get(k))
+            k += 1
+        end
+        node.occur = read_occurrence(p, n, i, i)
+        dtd.models.set(id, node)
+        parts.free()
+        stop = i
+        ret id
+    end
+    mut named := i
+    name := read_dtd_name(text, p, n, i, named)
+    if str.Len(name) == 0:
+        stop = i
+        ret 0 - 1
+    end
+    id := new_model(dtd, MK_NAME)
+    mut node := dtd.models.get(id)
+    node.name = name
+    node.occur = read_occurrence(p, n, named, named)
+    dtd.models.set(id, node)
+    stop = named
+    ret id
+end
+
+func parse_element_decl(dtd &: DTD, text: str, p: i8*, n: int, at: int): int:
+    mut i := skip_dtd_space(text, p, n, at)
+    mut stop := i
+    name := read_dtd_name(text, p, n, i, stop)
+    if str.Len(name) == 0:
+        dtd.ok = false
+        dtd.message = "an element declaration has no name"
+        ret n
+    end
+    i = skip_dtd_space(text, p, n, stop)
+    mut decl := ElementDecl { name = name }
+    if i + 5 <= n && str.Substr(text, i, 5) == "EMPTY":
+        decl.content = ContentEmpty
+        decl.model = "EMPTY"
+        i += 5
+    else i + 3 <= n && str.Substr(text, i, 3) == "ANY":
+        decl.content = ContentAny
+        decl.model = "ANY"
+        i += 3
+    else i < n && xub(p, i) == 40:
+        probe := skip_dtd_space(text, p, n, i + 1)
+        if probe + 7 <= n && str.Substr(text, probe, 7) == "#PCDATA":
+            decl.content = ContentMixed
+            mut j := probe + 7
+            mut going := true
+            until going:
+                j = skip_dtd_space(text, p, n, j)
+                if j < n && xub(p, j) == 124:
+                    j = skip_dtd_space(text, p, n, j + 1)
+                    mut e := j
+                    child := read_dtd_name(text, p, n, j, e)
+                    if str.Len(child) == 0:
+                        dtd.ok = false
+                        dtd.message = "the mixed content model of <" + name + "> is malformed"
+                        ret n
+                    end
+                    decl.mixed.push(child)
+                    j = e
+                else:
+                    going = false
+                end
+            end
+            if j >= n || xub(p, j) != 41:
+                dtd.ok = false
+                dtd.message = "the mixed content model of <" + name + "> is never closed"
+                ret n
+            end
+            j += 1
+            if j < n && xub(p, j) == 42: j += 1 end
+            decl.model = str.Substr(text, i, j - i)
+            i = j
+        else:
+            mut e := i
+            root := parse_particle(dtd, text, p, n, i, e)
+            if root < 0:
+                dtd.ok = false
+                dtd.message = "the content model of <" + name + "> is malformed"
+                ret n
+            end
+            decl.content = ContentChildren
+            decl.root = root
+            decl.model = str.Substr(text, i, e - i)
+            i = e
+        end
+    else:
+        dtd.ok = false
+        dtd.message = "the content model of <" + name + "> is malformed"
+        ret n
+    end
+    dtd.elements.push(decl)
+    i = skip_dtd_space(text, p, n, i)
+    if i < n && xub(p, i) == 62: ret i + 1 end
+    ret i
+end
+
+func attr_kind_of(word: str): int:
+    if word == "CDATA": ret AttrCData end
+    if word == "ID": ret AttrId end
+    if word == "IDREF": ret AttrIdRef end
+    if word == "IDREFS": ret AttrIdRefs end
+    if word == "ENTITY": ret AttrEntity end
+    if word == "ENTITIES": ret AttrEntities end
+    if word == "NMTOKEN": ret AttrNmToken end
+    if word == "NMTOKENS": ret AttrNmTokens end
+    if word == "NOTATION": ret AttrNotation end
+    ret 0 - 1
+end
+
+func parse_attlist_decl(dtd &: DTD, text: str, p: i8*, n: int, at: int): int:
+    mut i := skip_dtd_space(text, p, n, at)
+    mut stop := i
+    element := read_dtd_name(text, p, n, i, stop)
+    if str.Len(element) == 0:
+        dtd.ok = false
+        dtd.message = "an attribute list declaration has no element name"
+        ret n
+    end
+    i = stop
+    mut going := true
+    until going:
+        i = skip_dtd_space(text, p, n, i)
+        if i >= n || xub(p, i) == 62:
+            going = false
+        else:
+            mut e := i
+            name := read_dtd_name(text, p, n, i, e)
+            if str.Len(name) == 0:
+                dtd.ok = false
+                dtd.message = "an attribute in the list for <" + element + "> has no name"
+                ret n
+            end
+            i = skip_dtd_space(text, p, n, e)
+            mut decl := AttrDecl { element = element, name = name }
+            if i < n && xub(p, i) == 40:
+                decl.kind = AttrEnumeration
+                mut j := i + 1
+                mut reading := true
+                until reading:
+                    j = skip_dtd_space(text, p, n, j)
+                    mut q := j
+                    token := read_dtd_name(text, p, n, j, q)
+                    if str.Len(token) > 0: decl.values.push(token) end
+                    j = skip_dtd_space(text, p, n, q)
+                    if j < n && xub(p, j) == 124: j += 1
+                    else: reading = false
+                    end
+                end
+                if j >= n || xub(p, j) != 41:
+                    dtd.ok = false
+                    dtd.message = "the value list for \"" + name + "\" is never closed"
+                    ret n
+                end
+                i = j + 1
+            else:
+                mut e2 := i
+                word := read_dtd_name(text, p, n, i, e2)
+                kind := attr_kind_of(word)
+                if kind < 0:
+                    dtd.ok = false
+                    dtd.message = "\"" + word + "\" is not an attribute type"
+                    ret n
+                end
+                decl.kind = kind
+                i = skip_dtd_space(text, p, n, e2)
+                if kind == AttrNotation:
+                    if i >= n || xub(p, i) != 40:
+                        dtd.ok = false
+                        dtd.message = "NOTATION must be followed by a list of names"
+                        ret n
+                    end
+                    mut j := i + 1
+                    mut reading := true
+                    until reading:
+                        j = skip_dtd_space(text, p, n, j)
+                        mut q := j
+                        token := read_dtd_name(text, p, n, j, q)
+                        if str.Len(token) > 0: decl.values.push(token) end
+                        j = skip_dtd_space(text, p, n, q)
+                        if j < n && xub(p, j) == 124: j += 1
+                        else: reading = false
+                        end
+                    end
+                    if j >= n || xub(p, j) != 41:
+                        dtd.ok = false
+                        dtd.message = "the notation list for \"" + name + "\" is never closed"
+                        ret n
+                    end
+                    i = j + 1
+                end
+            end
+            i = skip_dtd_space(text, p, n, i)
+            if i < n && xub(p, i) == 35:
+                mut e3 := i + 1
+                word := read_dtd_name(text, p, n, i + 1, e3)
+                if word == "REQUIRED": decl.mode = DefaultRequired
+                else word == "IMPLIED": decl.mode = DefaultImplied
+                else word == "FIXED":
+                    decl.mode = DefaultFixed
+                    i = skip_dtd_space(text, p, n, e3)
+                    mut e4 := i
+                    decl.value = read_dtd_literal(text, p, n, i, e4)
+                    e3 = e4
+                else:
+                    dtd.ok = false
+                    dtd.message = "\"#" + word + "\" is not an attribute default"
+                    ret n
+                end
+                i = e3
+            else i < n && (xub(p, i) == 34 || xub(p, i) == 39):
+                decl.mode = DefaultValue
+                mut e4 := i
+                decl.value = read_dtd_literal(text, p, n, i, e4)
+                i = e4
+            end
+            dtd.attributes.push(decl)
+        end
+    end
+    if i < n && xub(p, i) == 62: ret i + 1 end
+    ret i
+end
+
+func read_dtd_literal(text: str, p: i8*, n: int, at: int, stop &: int): str:
+    if at >= n || (xub(p, at) != 34 && xub(p, at) != 39):
+        stop = at
+        ret ""
+    end
+    quote := xub(p, at)
+    mut i := at + 1
+    until i < n && xub(p, i) != quote:
+        i += 1
+    end
+    stop = i + 1
+    ret str.Substr(text, at + 1, i - at - 1)
+end
+
+func parse_notation_decl(dtd &: DTD, text: str, p: i8*, n: int, at: int): int:
+    i := skip_dtd_space(text, p, n, at)
+    mut stop := i
+    name := read_dtd_name(text, p, n, i, stop)
+    if str.Len(name) > 0: dtd.notations.push(name) end
+    close := str.IndexFrom(text, ">", stop)
+    if close < 0: ret n end
+    ret close + 1
+end
+
+func find_element_decl(dtd: DTD, name: str): int:
+    mut i := 0
+    until i < dtd.elements.len():
+        if dtd.elements.get(i).name == name: ret i end
+        i += 1
+    end
+    ret 0 - 1
+end
+
+func copy_positions(source &: Vector<int>): Vector<int>:
+    mut out := Vector {} as Vector<int>
+    mut i := 0
+    until i < source.len():
+        out.push(source.get(i))
+        i += 1
+    end
+    ret out
+end
+
+func match_once(dtd: DTD, id: int, names &: Vector<str>, starts &: Vector<int>): Vector<int>:
+    node := dtd.models.get(id)
+    mut out := Vector {} as Vector<int>
+    if node.kind == MK_NAME:
+        mut i := 0
+        until i < starts.len():
+            at := starts.get(i)
+            if at < names.len() && names.get(at) == node.name: _added := push_unique(out, at + 1) end
+            i += 1
+        end
+        ret out
+    end
+    if node.kind == MK_SEQUENCE:
+        mut current := copy_positions(starts)
+        mut a := 0
+        until a < node.args.len():
+            next := advance_model(dtd, node.args.get(a), names, current)
+            current.free()
+            current = next
+            a += 1
+        end
+        ret current
+    end
+    mut a := 0
+    until a < node.args.len():
+        part := advance_model(dtd, node.args.get(a), names, starts)
+        mut k := 0
+        until k < part.len():
+            _added := push_unique(out, part.get(k))
+            k += 1
+        end
+        part.free()
+        a += 1
+    end
+    ret out
+end
+
+func closure_from(dtd: DTD, id: int, names &: Vector<str>, seed &: Vector<int>, out &: Vector<int>):
+    mut frontier := copy_positions(seed)
+    mut guard := 0
+    until guard < 8192:
+        mut fresh := Vector {} as Vector<int>
+        mut i := 0
+        until i < frontier.len():
+            if push_unique(out, frontier.get(i)): fresh.push(frontier.get(i)) end
+            i += 1
+        end
+        if fresh.len() == 0:
+            fresh.free()
+            break
+        end
+        next := match_once(dtd, id, names, fresh)
+        fresh.free()
+        frontier.free()
+        frontier = next
+        guard += 1
+    end
+    frontier.free()
+end
+
+func advance_model(dtd: DTD, id: int, names &: Vector<str>, starts &: Vector<int>): Vector<int>:
+    node := dtd.models.get(id)
+    if node.occur == OC_ONCE: ret match_once(dtd, id, names, starts) end
+    mut out := Vector {} as Vector<int>
+    if node.occur == OC_OPTIONAL:
+        mut i := 0
+        until i < starts.len():
+            _added := push_unique(out, starts.get(i))
+            i += 1
+        end
+        once := match_once(dtd, id, names, starts)
+        mut k := 0
+        until k < once.len():
+            _added := push_unique(out, once.get(k))
+            k += 1
+        end
+        once.free()
+        ret out
+    end
+    if node.occur == OC_STAR:
+        closure_from(dtd, id, names, starts, out)
+        ret out
+    end
+    first := match_once(dtd, id, names, starts)
+    closure_from(dtd, id, names, first, out)
+    first.free()
+    ret out
+end
+
+func push_unique(list &: Vector<int>, value: int): bool:
+    mut i := 0
+    until i < list.len():
+        if list.get(i) == value: ret false end
+        i += 1
+    end
+    list.push(value)
+    ret true
+end
+
+func parse_dtd_text(text: str): DTD:
+    mut dtd := DTD {}
+    n := str.Len(text)
+    p := xbp(text)
+    mut i := 0
+    until dtd.ok && i < n:
+        i = skip_dtd_space(text, p, n, i)
+        if i >= n: break end
+        if xub(p, i) != 60:
+            i += 1
+            continue
+        end
+        if i + 1 < n && xub(p, i + 1) == 63:
+            close := str.IndexFrom(text, "?>", i)
+            if close < 0: break end
+            i = close + 2
+            continue
+        end
+        if i + 9 <= n && str.Substr(text, i, 9) == "<!ELEMENT":
+            i = parse_element_decl(dtd, text, p, n, i + 9)
+            continue
+        end
+        if i + 9 <= n && str.Substr(text, i, 9) == "<!ATTLIST":
+            i = parse_attlist_decl(dtd, text, p, n, i + 9)
+            continue
+        end
+        if i + 10 <= n && str.Substr(text, i, 10) == "<!NOTATION":
+            i = parse_notation_decl(dtd, text, p, n, i + 10)
+            continue
+        end
+        close := str.IndexFrom(text, ">", i)
+        if close < 0: break end
+        i = close + 1
+    end
+    ret dtd
+end
+
+func find_attr_decl(dtd: DTD, element: str, name: str): int:
+    mut i := 0
+    until i < dtd.attributes.len():
+        a := dtd.attributes.get(i)
+        if a.element == element && a.name == name: ret i end
+        i += 1
+    end
+    ret 0 - 1
+end
+
+func split_tokens(text: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    parts := str.Fields(text)
+    mut i := 0
+    until i < parts.len():
+        if str.Len(parts.get(i)) > 0: out.push(parts.get(i)) end
+        i += 1
+    end
+    parts.free()
+    ret out
+end
+
+func has_text_child(d: Document, id: int): bool:
+    n := node_at(d, id)
+    mut i := 0
+    until i < n.children.len():
+        c := node_at(d, n.children.get(i))
+        if (c.kind == KindText || c.kind == KindCData) && str.Len(str.Trim(c.value)) > 0: ret true end
+        i += 1
+    end
+    ret false
+end
+
+func check_attributes(d: Document, dtd: DTD, r &: Report, id: int,
+                      ids &: Vector<str>, idrefs &: Vector<str>, idref_nodes &: Vector<int>):
+    element := Name(d, id)
+    n := node_at(d, id)
+    mut seen_id := false
+    mut i := 0
+    until i < n.attrs.len():
+        a := d.attributes.get(n.attrs.get(i))
+        if a.name == "xmlns" || a.prefix == "xmlns":
+            i += 1
+            continue
+        end
+        at := find_attr_decl(dtd, element, a.name)
+        if at < 0:
+            report_add(r, d, id, "the attribute \"" + a.name + "\" is not declared for <" + element + ">")
+            i += 1
+            continue
+        end
+        decl := dtd.attributes.get(at)
+        if decl.mode == DefaultFixed && a.value != decl.value:
+            report_add(r, d, id, "the attribute \"" + a.name + "\" is fixed at \"" + decl.value + "\" but is \"" + a.value + "\"")
+        end
+        if decl.kind == AttrEnumeration || decl.kind == AttrNotation:
+            mut allowed := false
+            mut k := 0
+            until k < decl.values.len():
+                if decl.values.get(k) == a.value: allowed = true end
+                k += 1
+            end
+            if !allowed:
+                report_add(r, d, id, "\"" + a.value + "\" is not one of the values declared for \"" + a.name + "\"")
+            end
+        end
+        if decl.kind == AttrId:
+            if seen_id:
+                report_add(r, d, id, "<" + element + "> has more than one ID attribute")
+            end
+            seen_id = true
+            if !is_name_text(a.value):
+                report_add(r, d, id, "the ID \"" + a.value + "\" is not a valid XML name")
+            end
+            mut duplicate := false
+            mut k := 0
+            until k < ids.len():
+                if ids.get(k) == a.value: duplicate = true end
+                k += 1
+            end
+            if duplicate:
+                report_add(r, d, id, "the ID \"" + a.value + "\" is used more than once")
+            else:
+                ids.push(a.value)
+            end
+        end
+        if decl.kind == AttrIdRef:
+            idrefs.push(a.value)
+            idref_nodes.push(id)
+        end
+        if decl.kind == AttrIdRefs:
+            mut parts := split_tokens(a.value)
+            mut k := 0
+            until k < parts.len():
+                idrefs.push(parts.get(k))
+                idref_nodes.push(id)
+                k += 1
+            end
+            parts.free()
+        end
+        if decl.kind == AttrNmToken && !is_nmtoken_text(a.value):
+            report_add(r, d, id, "\"" + a.value + "\" is not a valid NMTOKEN for \"" + a.name + "\"")
+        end
+        if decl.kind == AttrNmTokens:
+            mut parts := split_tokens(a.value)
+            mut k := 0
+            until k < parts.len():
+                if !is_nmtoken_text(parts.get(k)):
+                    report_add(r, d, id, "\"" + parts.get(k) + "\" is not a valid NMTOKEN for \"" + a.name + "\"")
+                end
+                k += 1
+            end
+            parts.free()
+        end
+        i += 1
+    end
+    mut k := 0
+    until k < dtd.attributes.len():
+        decl := dtd.attributes.get(k)
+        if decl.element == element && decl.mode == DefaultRequired && !HasAttribute(d, id, decl.name):
+            report_add(r, d, id, "<" + element + "> is missing the required attribute \"" + decl.name + "\"")
+        end
+        k += 1
+    end
+end
+
+func check_element(d: Document, dtd: DTD, r &: Report, id: int,
+                   ids &: Vector<str>, idrefs &: Vector<str>, idref_nodes &: Vector<int>):
+    element := Name(d, id)
+    at := find_element_decl(dtd, element)
+    if at < 0:
+        report_add(r, d, id, "the element <" + element + "> is not declared")
+    else:
+        decl := dtd.elements.get(at)
+        mut names := Vector {} as Vector<str>
+        n := node_at(d, id)
+        mut i := 0
+        until i < n.children.len():
+            c := node_at(d, n.children.get(i))
+            if c.kind == KindElement: names.push(c.name) end
+            i += 1
+        end
+        if decl.content == ContentEmpty:
+            if names.len() > 0 || has_text_child(d, id):
+                report_add(r, d, id, "<" + element + "> is declared EMPTY but has content")
+            end
+        else decl.content == ContentMixed:
+            mut k := 0
+            until k < names.len():
+                mut allowed := false
+                mut m := 0
+                until m < decl.mixed.len():
+                    if decl.mixed.get(m) == names.get(k): allowed = true end
+                    m += 1
+                end
+                if !allowed:
+                    report_add(r, d, id, "<" + names.get(k) + "> is not allowed inside <" + element + ">")
+                end
+                k += 1
+            end
+        else decl.content == ContentChildren:
+            if has_text_child(d, id):
+                report_add(r, d, id, "<" + element + "> is declared with element content but holds text")
+            end
+            mut starts := Vector {} as Vector<int>
+            starts.push(0)
+            reached := advance_model(dtd, decl.root, names, starts)
+            mut complete := false
+            mut k := 0
+            until k < reached.len():
+                if reached.get(k) == names.len(): complete = true end
+                k += 1
+            end
+            if !complete:
+                report_add(r, d, id, "the children of <" + element + "> do not match " + decl.model)
+            end
+            starts.free()
+            reached.free()
+        end
+        names.free()
+        check_attributes(d, dtd, r, id, ids, idrefs, idref_nodes)
+    end
+    n := node_at(d, id)
+    mut i := 0
+    until i < n.children.len():
+        child := n.children.get(i)
+        if node_at(d, child).kind == KindElement:
+            check_element(d, dtd, r, child, ids, idrefs, idref_nodes)
+        end
+        i += 1
+    end
+end
+
+func collect_prefix_scope(d: Document, id: int, prefixes &: Vector<str>, uris &: Vector<str>): int:
+    n := node_at(d, id)
+    mut added := 0
+    mut i := 0
+    until i < n.attrs.len():
+        a := d.attributes.get(n.attrs.get(i))
+        if a.name == "xmlns":
+            prefixes.push("")
+            uris.push(a.value)
+            added += 1
+        else a.prefix == "xmlns":
+            prefixes.push(a.local)
+            uris.push(a.value)
+            added += 1
+        end
+        i += 1
+    end
+    ret added
+end
+
+func namespace_walk(d: Document, id: int, r &: Report, prefixes &: Vector<str>, uris &: Vector<str>):
+    added := collect_prefix_scope(d, id, prefixes, uris)
+    prefix := Prefix(d, id)
+    if str.Len(prefix) > 0 && prefix != "xml" && !prefix_bound(prefixes, prefix):
+        report_add(r, d, id, "the namespace prefix \"" + prefix + "\" is not declared")
+    end
+    n := node_at(d, id)
+    mut i := 0
+    until i < n.attrs.len():
+        a := d.attributes.get(n.attrs.get(i))
+        if str.Len(a.prefix) > 0 && a.prefix != "xmlns" && a.prefix != "xml" && !prefix_bound(prefixes, a.prefix):
+            report_add(r, d, id, "the namespace prefix \"" + a.prefix + "\" on \"" + a.name + "\" is not declared")
+        end
+        i += 1
+    end
+    mut k := 0
+    until k < n.children.len():
+        child := n.children.get(k)
+        if node_at(d, child).kind == KindElement:
+            namespace_walk(d, child, r, prefixes, uris)
+        end
+        k += 1
+    end
+    mut drop := 0
+    until drop < added:
+        prefixes.pop()
+        uris.pop()
+        drop += 1
+    end
+end
+
+func prefix_bound(prefixes &: Vector<str>, want: str): bool:
+    mut i := prefixes.len() - 1
+    until i >= 0:
+        if prefixes.get(i) == want: ret true end
+        i -= 1
+    end
+    ret false
+end
+
+pub func ParseDTD(text: str): DTD:
+    ret parse_dtd_text(text)
+end
+
+pub func FreeDTD(dtd &: DTD):
+    mut i := 0
+    until i < dtd.elements.len():
+        mut e := dtd.elements.get(i)
+        e.mixed.free()
+        i += 1
+    end
+    mut k := 0
+    until k < dtd.attributes.len():
+        mut a := dtd.attributes.get(k)
+        a.values.free()
+        k += 1
+    end
+    mut m := 0
+    until m < dtd.models.len():
+        mut node := dtd.models.get(m)
+        node.args.free()
+        m += 1
+    end
+    dtd.elements.free()
+    dtd.attributes.free()
+    dtd.notations.free()
+    dtd.models.free()
+end
+
+pub func FreeReport(r &: Report):
+    r.items.free()
+end
+
+pub func ReportText(r: Report): str:
+    if r.ok: ret "" end
+    mut sb := str.NewBuilder()
+    mut i := 0
+    until i < r.items.len():
+        v := r.items.get(i)
+        if i > 0: str.BufAppendChar(sb, 10) end
+        str.BufAppend(sb, "line " + str.FromInt(v.line as i64) + ", column " + str.FromInt(v.col as i64) + ": " + v.message)
+        i += 1
+    end
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+pub func DeclaredElementCount(dtd: DTD): int: ret dtd.elements.len() end
+pub func DeclaredAttributeCount(dtd: DTD): int: ret dtd.attributes.len() end
+
+pub func Validate(d: Document, dtd: DTD): Report:
+    mut r := Report {}
+    if !dtd.ok:
+        r.ok = false
+        r.items.push(Violation { message = dtd.message })
+        ret r
+    end
+    root := Root(d)
+    if root < 0:
+        r.ok = false
+        r.items.push(Violation { message = "the document has no root element" })
+        ret r
+    end
+    if str.Len(d.doctype) > 0 && Name(d, root) != d.doctype:
+        report_add(r, d, root, "the root element is <" + Name(d, root) + "> but the document type declares " + d.doctype)
+    end
+    mut ids := Vector {} as Vector<str>
+    mut idrefs := Vector {} as Vector<str>
+    mut idref_nodes := Vector {} as Vector<int>
+    check_element(d, dtd, r, root, ids, idrefs, idref_nodes)
+    mut i := 0
+    until i < idrefs.len():
+        mut known := false
+        mut k := 0
+        until k < ids.len():
+            if ids.get(k) == idrefs.get(i): known = true end
+            k += 1
+        end
+        if !known:
+            report_add(r, d, idref_nodes.get(i), "the reference \"" + idrefs.get(i) + "\" points at an ID no element carries")
+        end
+        i += 1
+    end
+    ids.free()
+    idrefs.free()
+    idref_nodes.free()
+    ret r
+end
+
+pub func ValidateInternalSubset(d: Document): Report:
+    mut dtd := parse_dtd_text(d.internal_subset)
+    r := Validate(d, dtd)
+    FreeDTD(dtd)
+    ret r
+end
+
+pub func CheckNamespaces(d: Document): Report:
+    mut r := Report {}
+    root := Root(d)
+    if root < 0: ret r end
+    mut prefixes := Vector {} as Vector<str>
+    mut uris := Vector {} as Vector<str>
+    namespace_walk(d, root, r, prefixes, uris)
+    prefixes.free()
+    uris.free()
+    ret r
+end
+
+pub func ApplyDefaults(d &: Document, dtd: DTD): int:
+    root := Root(d)
+    if root < 0: ret 0 end
+    mut filled := 0
+    mut queue := Vector {} as Vector<int>
+    queue.push(root)
+    until queue.len() > 0:
+        id := queue.get(queue.len() - 1)
+        queue.pop()
+        element := Name(d, id)
+        mut k := 0
+        until k < dtd.attributes.len():
+            decl := dtd.attributes.get(k)
+            if decl.element == element && (decl.mode == DefaultValue || decl.mode == DefaultFixed) &&
+               !HasAttribute(d, id, decl.name):
+                SetAttribute(d, id, decl.name, decl.value)
+                filled += 1
+            end
+            k += 1
+        end
+        n := d.nodes.get(id)
+        mut i := n.children.len() - 1
+        until i >= 0:
+            child := n.children.get(i)
+            if d.nodes.get(child).kind == KindElement: queue.push(child) end
+            i -= 1
+        end
+    end
+    queue.free()
+    ret filled
+end

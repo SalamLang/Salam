@@ -75,6 +75,33 @@ micro/salam.yaml
 Everything else in each directory is hand-written: plugin code, settings,
 build commands, documentation.
 
+## Checking
+
+Two scripts run over what the generator produced, and CI runs both:
+
+```sh
+python3 extensions/tools/validate.py       # parses every definition, compiles its patterns
+python3 extensions/tools/check_engines.py  # highlights the probes with real engines
+```
+
+`validate.py` parses each definition, compiles every regular expression in it, checks the
+cross-references (Kate contexts and item data, GtkSourceView refs and styles,
+TextMate repository includes, Sublime context includes) and rejects lookaround
+in the micro rules, which Go's RE2 cannot run.
+
+`check_engines.py` hands the Kate and GtkSourceView definitions to their own
+engines, `kate-syntax-highlighter` and GtkSourceView through GObject
+introspection, and highlights `tools/fixtures/probe_{en,fa,ar}.salam`. Those
+three files are the same program written with the English, Persian and Arabic
+keywords, and each one compiles. The check asserts that a construct comes out
+styled the same way in all three, so dropping a Persian keyword from one
+definition fails the build. Where an engine is not installed the check says so
+and skips rather than failing.
+
+CI additionally loads the syntax in real Vim and checks what it highlights,
+runs the indent file over an unindented file and diffs the result, and
+byte-compiles the Emacs mode with warnings as errors.
+
 ## Snippets
 
 `vscode/snippets/salam.code-snippets` is the single source for all 24

@@ -1,7 +1,7 @@
 # Salam for Geany
 
-A custom filetype definition, with build, run, check and format wired into the
-Build menu.
+A custom file type definition, with build, run, check and format wired into
+the Build menu.
 
 ## Install
 
@@ -18,7 +18,7 @@ forces it.
 Keyword and type highlighting in English, Persian and Arabic on top of Geany's
 C lexer, which also handles `//` and `/* */` comments, strings and numbers.
 Comment toggling, four-space indentation and a symbol list come with the
-filetype.
+file type.
 
 The Build menu gets:
 

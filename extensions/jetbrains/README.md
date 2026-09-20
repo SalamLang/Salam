@@ -23,7 +23,7 @@ number literals, and basic completion from words in the file.
 
 Install the bundled **TextMate Bundles** plugin, then
 `Settings > Editor > TextMate Bundles > +` and select the `extensions/vscode`
-directory of this repository. It uses the same TextMate grammar VS Code does,
+directory of this repository. It uses the same TextMate grammar Visual Studio Code does,
 so declaration names, `//!` directive headers, layout-DSL elements and escape
 sequences are highlighted too.
 

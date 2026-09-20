@@ -5,21 +5,21 @@ single file may use any one of them. Every integration here highlights all
 three, treats Arabic-script letters as identifier characters, and accepts
 numbers written with ASCII, Persian or Arabic-Indic digits.
 
-| Editor          | Directory                         | Highlighting | Indent  | Snippets | Run / build | Format | Diagnostics                     |
-| --------------- | --------------------------------- | ------------ | ------- | -------- | ----------- | ------ | ------------------------------- |
-| VS Code         | [`vscode/`](vscode)               | yes          | yes     | yes      | yes         | yes    | via the compiler                |
-| Vim / Neovim    | [`vim/`](vim)                     | yes          | yes     | yes      | yes         | yes    | quickfix, `vim.diagnostic`, ALE |
-| Sublime Text    | [`sublime/`](sublime)             | yes          | yes     | yes      | yes         | yes    | build panel                     |
-| Emacs           | [`emacs/`](emacs)                 | yes          | yes     | yes      | yes         | yes    | `compile`, flycheck             |
-| Kate / KDevelop | [`kate/`](kate)                   | yes          | generic | no       | no          | no     | no                              |
-| gedit / GNOME   | [`gtksourceview/`](gtksourceview) | yes          | generic | no       | no          | no     | no                              |
-| JetBrains IDEs  | [`jetbrains/`](jetbrains)         | yes          | generic | no       | no          | no     | no                              |
-| Geany           | [`geany/`](geany)                 | yes          | generic | no       | yes         | yes    | build panel                     |
-| Notepad++       | [`notepadpp/`](notepadpp)         | yes          | generic | no       | no          | no     | no                              |
-| GNU nano        | [`nano/`](nano)                   | yes          | no      | no       | no          | `^T`   | linter view                     |
-| micro           | [`micro/`](micro)                 | yes          | no      | no       | no          | no     | no                              |
+| Editor             | Directory                         | Highlighting | Indent  | Snippets | Run / build | Format | Diagnostics                     |
+| ------------------ | --------------------------------- | ------------ | ------- | -------- | ----------- | ------ | ------------------------------- |
+| Visual Studio Code | [`vscode/`](vscode)               | yes          | yes     | yes      | yes         | yes    | via the compiler                |
+| Vim / Neovim       | [`vim/`](vim)                     | yes          | yes     | yes      | yes         | yes    | quickfix, `vim.diagnostic`, ALE |
+| Sublime Text       | [`sublime/`](sublime)             | yes          | yes     | yes      | yes         | yes    | build panel                     |
+| Emacs              | [`emacs/`](emacs)                 | yes          | yes     | yes      | yes         | yes    | `compile`, flycheck             |
+| Kate / KDevelop    | [`kate/`](kate)                   | yes          | generic | no       | no          | no     | no                              |
+| gedit / GNOME      | [`gtksourceview/`](gtksourceview) | yes          | generic | no       | no          | no     | no                              |
+| JetBrains IDEs     | [`jetbrains/`](jetbrains)         | yes          | generic | no       | no          | no     | no                              |
+| Geany              | [`geany/`](geany)                 | yes          | generic | no       | yes         | yes    | build panel                     |
+| Notepad++          | [`notepadpp/`](notepadpp)         | yes          | generic | no       | no          | no     | no                              |
+| GNU nano           | [`nano/`](nano)                   | yes          | no      | no       | no          | `^T`   | linter view                     |
+| micro              | [`micro/`](micro)                 | yes          | no      | no       | no          | no     | no                              |
 
-Each directory has its own README with installation instructions.
+Each directory has its own readme with installation instructions.
 
 ## Where the word lists come from
 
@@ -73,7 +73,7 @@ micro/salam.yaml
 ```
 
 Everything else in each directory is hand-written: plugin code, settings,
-build systems, documentation.
+build commands, documentation.
 
 ## Snippets
 

@@ -14,7 +14,7 @@ Restart micro. `.salam` files are detected by extension.
 Keywords, types, intrinsic types, built-in output statements, constants and
 contextual keywords in English, Persian and Arabic; numbers in ASCII, Persian
 and Arabic-Indic digits; string, raw-string and character literals with escape
-highlighting; `//` and `/* */` comments with TODO markers; `//!` directive
+highlighting; `//` and `/* */` comments with `TODO` markers; `//!` directive
 headers; annotations; and operators.
 
 ## A limitation

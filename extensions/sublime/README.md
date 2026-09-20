@@ -1,6 +1,6 @@
 # Salam for Sublime Text
 
-Syntax highlighting, indentation, snippets, build systems and a formatter for
+Syntax highlighting, indentation, snippets, build commands and a formatter for
 the [Salam programming language](https://github.com/SalamLang/Salam) in
 Sublime Text 3 and 4.
 
@@ -35,11 +35,11 @@ picked for a file whose first line is a `//!` directive header.
 - Indentation: a trailing `:` opens a block, `end` closes it, `else` dedents.
 - Goto Symbol (`Ctrl+R`) lists functions and types, including Persian and
   Arabic names.
-- 24 snippets, the same set the VS Code extension ships.
-- Build systems for running, building, checking, formatting and inspecting.
+- 24 snippets, the same set the Visual Studio Code extension ships.
+- Build commands for running, building, checking, formatting and inspecting.
 - `Salam: Format File` and `Salam: Check File` in the command palette.
 
-## Build systems
+## Build commands
 
 Pick one with `Tools > Build System > Salam`, then `Ctrl+B`. `Ctrl+Shift+B`
 chooses a variant:
@@ -72,7 +72,7 @@ Errors are reported in the gcc one-line style, so `F4` walks them.
 | `format_on_save` | `false`   | Reformat on every save.                                                                                     |
 | `stdlib_path`    | `""`      | `--stdlib-path` for `std/...` imports.                                                                      |
 
-The build systems call `salam` directly and do not read `compiler_path`. If the
+The build commands call `salam` directly and do not read `compiler_path`. If the
 compiler is not on your `PATH`, copy `Salam.sublime-build` into
 `Packages/User/` and put the absolute path in it.
 

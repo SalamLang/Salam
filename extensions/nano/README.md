@@ -21,7 +21,7 @@ nano loads everything in `/usr/share/nano/` by default.
 Keywords, types, built-in output statements, constants and contextual
 keywords in all three languages, numbers in ASCII, Persian and Arabic-Indic
 digits, string, raw-string and character literals, `//` and `/* */` comments,
-TODO markers, and trailing whitespace.
+`TODO` markers, and trailing whitespace.
 
 `^T` (nano 4.0 and later) runs `salam format` on the buffer, and the `linter`
 directive wires `salam inspect` to nano's linter view.

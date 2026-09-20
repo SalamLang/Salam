@@ -1,6 +1,3 @@
--- Neovim layer for the Salam plugin. Everything here is optional: the
--- vimscript half works on its own in both Vim and Neovim.
-
 local M = {}
 
 M.config = {
@@ -30,7 +27,6 @@ local function head_of(bufnr)
   return table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, 200, false), '\n')
 end
 
---- Which keyword pack a buffer is written in: 'en', 'fa' or 'ar'.
 function M.lang(bufnr)
   if M.config.lang ~= 'auto' then
     return M.config.lang
@@ -69,8 +65,6 @@ local function parse_json_lines(lines, bufnr)
     if line:sub(1, 1) == '{' then
       local ok, item = pcall(vim.json.decode, line)
       if ok and type(item) == 'table' and item.line then
-        -- The compiler reports the file it was handed; diagnostics for an
-        -- imported module belong to that module, not to this buffer.
         local same_file = item.file == nil
           or vim.fn.fnamemodify(item.file, ':p') == vim.fn.fnamemodify(name, ':p')
         if same_file then
@@ -89,7 +83,6 @@ local function parse_json_lines(lines, bufnr)
   return out
 end
 
---- Type-check the buffer's file and publish the result to vim.diagnostic.
 function M.check(bufnr)
   bufnr = bufnr or vim.api.nvim_get_current_buf()
   local path = vim.api.nvim_buf_get_name(bufnr)
@@ -138,7 +131,6 @@ function M.check(bufnr)
   })
 end
 
---- Reformat the buffer in place with `salam format`.
 function M.format(bufnr)
   bufnr = bufnr or vim.api.nvim_get_current_buf()
   local tmp = vim.fn.tempname() .. '.salam'
@@ -172,7 +164,6 @@ end
 function M.setup(opts)
   M.config = vim.tbl_extend('force', M.config, opts or {})
 
-  -- Keep the vimscript commands reading the same options.
   vim.g.salam_compiler = M.config.compiler
   vim.g.salam_lang = M.config.lang
   vim.g.salam_run_command = M.config.run_command

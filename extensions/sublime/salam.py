@@ -19,11 +19,8 @@ SETTINGS_FILE = "Salam.sublime-settings"
 SYNTAX_SCOPE = "source.salam"
 OUTPUT_PANEL = "salam"
 
-# "file:line:col: error: message", the shape --error-style=gcc produces.
 GCC_DIAGNOSTIC = r"^(.+?):([0-9]+):([0-9]+): (?:error|warning): (.*)$"
 
-# Persian letters that Arabic does not use. Their presence settles the
-# language pack without reading a directive.
 PERSIAN_ONLY = "پچژگکی"
 ARABIC_RANGES = (
     (0x0600, 0x06FF),
@@ -33,19 +30,15 @@ ARABIC_RANGES = (
     (0xFE70, 0xFEFF),
 )
 
-
 def settings():
     return sublime.load_settings(SETTINGS_FILE)
-
 
 def setting(key, fallback):
     value = settings().get(key, fallback)
     return fallback if value is None else value
 
-
 def is_salam(view):
     return view is not None and view.match_selector(0, SYNTAX_SCOPE)
-
 
 def startup_info():
     """Keep Windows from flashing a console window for each compiler run."""
@@ -55,7 +48,6 @@ def startup_info():
     info.dwFlags |= subprocess.STARTF_USESHOWWINDOW
     info.wShowWindow = subprocess.SW_HIDE
     return info
-
 
 def run_compiler(args, cwd=None):
     """Run the compiler and return (returncode, stdout, stderr).
@@ -78,19 +70,16 @@ def run_compiler(args, cwd=None):
     except OSError as exc:
         return None, "", "cannot run %r: %s" % (command[0], exc)
 
-
 def is_arabic_script(codepoint):
     for low, high in ARABIC_RANGES:
         if low <= codepoint <= high:
             return True
     return False
 
-
 def directive_lang(head):
     """The two-letter code from a '//! lang: xx' header, or ''."""
     match = re.search(r"(?:lang|LANG|زبان)\s*:\s*([A-Za-z]{2})", head)
     return match.group(1).lower() if match else ""
-
 
 def detect_lang(text):
     """Which keyword pack a buffer is written in: 'en', 'fa' or 'ar'."""
@@ -111,14 +100,12 @@ def detect_lang(text):
             arabic += 1
     return "ar" if arabic >= 3 else "en"
 
-
 def common_args(text):
     args = ["--lang=" + detect_lang(text)]
     stdlib = setting("stdlib_path", "")
     if stdlib:
         args.append("--stdlib-path=" + stdlib)
     return args
-
 
 def format_source(text):
     """Return (formatted_text, error). `salam format` rewrites files in
@@ -144,7 +131,6 @@ def format_source(text):
         except OSError:
             pass
 
-
 def show_panel(window, text):
     panel = window.create_output_panel(OUTPUT_PANEL)
     panel.settings().set("result_file_regex", GCC_DIAGNOSTIC)
@@ -153,7 +139,6 @@ def show_panel(window, text):
     panel.run_command("append", {"characters": text})
     panel.set_read_only(True)
     window.run_command("show_panel", {"panel": "output." + OUTPUT_PANEL})
-
 
 class SalamFormatCommand(sublime_plugin.TextCommand):
     """Reformat the whole buffer with `salam format`."""
@@ -173,8 +158,6 @@ class SalamFormatCommand(sublime_plugin.TextCommand):
             sublime.status_message("Salam: already formatted")
             return
 
-        # Replacing the whole buffer would drop the cursor to the top, so
-        # remember where it was as a fraction of the document.
         viewport = self.view.viewport_position()
         selections = [(r.a, r.b) for r in self.view.sel()]
         self.view.replace(edit, whole, formatted)
@@ -184,7 +167,6 @@ class SalamFormatCommand(sublime_plugin.TextCommand):
             self.view.sel().add(sublime.Region(min(start, size), min(end, size)))
         self.view.set_viewport_position(viewport, False)
         sublime.status_message("Salam: formatted")
-
 
 class SalamCheckCommand(sublime_plugin.TextCommand):
     """Type-check the file without running it, into the output panel."""
@@ -218,7 +200,6 @@ class SalamCheckCommand(sublime_plugin.TextCommand):
             return
         show_panel(self.view.window(), report + "\n")
 
-
 class SalamToggleFormatOnSaveCommand(sublime_plugin.ApplicationCommand):
     def run(self):
         config = settings()
@@ -226,7 +207,6 @@ class SalamToggleFormatOnSaveCommand(sublime_plugin.ApplicationCommand):
         config.set("format_on_save", now)
         sublime.save_settings(SETTINGS_FILE)
         sublime.status_message("Salam: format on save %s" % ("on" if now else "off"))
-
 
 class SalamFormatOnSave(sublime_plugin.EventListener):
     def on_pre_save(self, view):

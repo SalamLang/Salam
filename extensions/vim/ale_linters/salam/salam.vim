@@ -1,5 +1,3 @@
-" ALE linter for Salam. Sourced by ALE only; harmless when ALE is absent.
-
 call ale#Set('salam_executable', 'salam')
 call ale#Set('salam_options', '')
 

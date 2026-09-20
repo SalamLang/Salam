@@ -1,16 +1,9 @@
-" Salam support for Vim and Neovim: the work behind the commands.
-" Maintainer: The Salam Team <https://github.com/SalamLang/Salam>
-" License:    MIT
-
 let s:cpo_save = &cpo
 set cpo&vim
 
-" Letters Persian uses and Arabic does not. One of them settles the keyword
-" pack without needing a directive.
 let s:persian_only = '[پچژگکی]'
 let s:arabic_script = '[؀-ۿݐ-ݿࢠ-ࣿﭐ-﷿ﹰ-﻿]'
 
-" Read an option without depending on plugin/salam.vim having run first.
 function! s:Opt(name, default) abort
   return get(g:, a:name, a:default)
 endfunction
@@ -25,7 +18,6 @@ function! s:NullDevice() abort
   return has('win32') || has('win64') ? 'NUL' : '/dev/null'
 endfunction
 
-" Which keyword pack the current buffer is written in.
 function! salam#Lang() abort
   if index(['en', 'fa', 'ar'], s:Opt('salam_lang', 'auto')) >= 0
     return s:Opt('salam_lang', 'auto')
@@ -47,7 +39,6 @@ function! salam#Lang() abort
   return 'en'
 endfunction
 
-" The options every invocation carries.
 function! s:CommonArgs() abort
   let l:args = ['--lang=' . salam#Lang()]
   let l:stdlib = s:Opt('salam_stdlib_path', '')
@@ -61,8 +52,6 @@ function! s:Shell(args) abort
   return join(map([s:Opt('salam_compiler', 'salam')] + a:args, 'shellescape(v:val)'), ' ')
 endfunction
 
-" Runs the compiler and returns its combined output. v:shell_error holds the
-" exit status afterwards.
 function! s:Capture(args) abort
   return system(s:Shell(a:args))
 endfunction
@@ -75,8 +64,6 @@ function! s:CurrentFile() abort
   endif
   return l:path
 endfunction
-
-" --- running -------------------------------------------------------------
 
 function! salam#Run(extra) abort
   let l:path = s:CurrentFile()
@@ -92,8 +79,6 @@ function! salam#Run(extra) abort
     let l:args += split(a:extra)
   endif
 
-  " :! keeps the program's own stdin and stdout, which matters for a
-  " language whose 'input' statement reads from the terminal.
   execute '!' . s:Shell(l:args)
 endfunction
 
@@ -128,10 +113,6 @@ function! salam#Build(extra) abort
   endtry
 endfunction
 
-" --- checking ------------------------------------------------------------
-
-" Lex, parse and analyze without running or emitting anything, then put the
-" diagnostics in the quickfix list.
 function! salam#Check() abort
   let l:path = s:CurrentFile()
   if empty(l:path)
@@ -167,11 +148,6 @@ function! salam#Check() abort
   endif
 endfunction
 
-" --- formatting ----------------------------------------------------------
-
-" `salam format` rewrites files in place, so the buffer goes through a
-" scratch file and comes back as a line replacement, which keeps undo and
-" the cursor position intact.
 function! salam#Format() abort
   let l:tmp = tempname() . '.salam'
   let l:view = winsaveview()
@@ -196,7 +172,6 @@ function! salam#Format() abort
       return
     endif
 
-    " Replace only what changed so a no-op format leaves undo alone.
     call setline(1, l:formatted)
     if line('$') > len(l:formatted)
       silent execute (len(l:formatted) + 1) . ',$delete _'
@@ -221,9 +196,6 @@ function! salam#FormatCheck() abort
   endif
 endfunction
 
-" --- inspecting ----------------------------------------------------------
-
-" Opens the token stream, AST or symbol table in a scratch window.
 function! salam#Inspect(flag) abort
   let l:path = s:CurrentFile()
   if empty(l:path)

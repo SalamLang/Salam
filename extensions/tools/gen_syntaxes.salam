@@ -12,166 +12,146 @@
  *
  */
 
-// Generates the syntax definitions shipped with every Salam editor plugin.
-//
-// The word lists are not written down here: they are read straight out of the
-// compiler at generation time, so an editor can never highlight a keyword set
-// the compiler no longer agrees with.
-//
-//   compiler/langpack.salam          keyword spellings (en/fa/ar) + token kinds
-//   compiler/semantic/semantic.salam primitive type names, intrinsic types
-//                                    and intrinsic method names
-//
+// Generates the editor syntax definitions under extensions/, reading the
+// word lists out of compiler/langpack.salam and compiler/semantic/semantic.salam.
 // Run from the repository root:
-//
-//   salam exec extensions/tools/gen_syntaxes.salam
-//
-// Every file it writes is committed; CI regenerates and fails on a diff.
+//   salam exec extensions/tools/gen_syntaxes.salam --timeout=180000
 
 import str
 import os
 import sort
 import encoding.json
 
-// ---------------------------------------------------------------------------
-// Paths (relative to the repository root)
-// ---------------------------------------------------------------------------
-
 LANGPACK_SRC := "compiler/langpack.salam"
 SEMANTIC_SRC := "compiler/semantic/semantic.salam"
 EXT_DIR := "extensions"
 SNIPPETS_SRC := "extensions/vscode/snippets/salam.code-snippets"
 
-// ---------------------------------------------------------------------------
-// Identifier character ranges
-//
-// Salam identifiers accept Arabic script so Persian and Arabic programs can
-// name things in their own alphabet: Arabic (0600-06FF), Arabic Supplement
-// (0750-077F), Arabic Extended-A (08A0-08FF), Presentation Forms A/B
-// (FB50-FDFF, FE70-FEFF) and the two joiners (200C ZWNJ, 200D ZWJ).
-// ---------------------------------------------------------------------------
-
-// Oniguruma / TextMate flavour (VS Code, Sublime Text, TextMate, Kate).
-// IDS is the same set without the digits: an identifier cannot start with one.
 ONIG_IDS := "A-Za-z_\\x{0600}-\\x{06FF}\\x{0750}-\\x{077F}\\x{08A0}-\\x{08FF}\\x{FB50}-\\x{FDFF}\\x{FE70}-\\x{FEFF}\\x{200C}\\x{200D}"
 ONIG_IDC := "A-Za-z0-9_\\x{0600}-\\x{06FF}\\x{0750}-\\x{077F}\\x{08A0}-\\x{08FF}\\x{FB50}-\\x{FDFF}\\x{FE70}-\\x{FEFF}\\x{200C}\\x{200D}"
 
-// Vim flavour: \%u0600 for a single code point inside a collection.
-VIM_IDC := "A-Za-z0-9_\\%u0600-\\%u06ff\\%u0750-\\%u077f\\%u08a0-\\%u08ff\\%ufb50-\\%ufdff\\%ufe70-\\%ufeff\\%u200c\\%u200d"
-
-// Emacs regexp flavour: literal characters inside a [] class.
 EL_IDS := "[:alpha:]_؀-ۿݐ-ݿࢠ-ࣿﭐ-﷿ﹰ-﻿‌‍"
 EL_IDC := "[:alnum:]_؀-ۿݐ-ݿࢠ-ࣿﭐ-﷿ﹰ-﻿‌‍"
 
-// The 'iskeyword' setting Vim needs before Persian/Arabic words count as
-// one word (decimal code point ranges).
 ONIG_DIGIT := "0-9\\x{0660}-\\x{0669}\\x{06F0}-\\x{06F9}"
 VIM_DIGIT := "0-9\\u0660-\\u0669\\u06f0-\\u06f9"
 EL_DIGIT := "0-9٠-٩۰-۹"
 
 VIM_ISKEYWORD := "@,48-57,_,192-255,1536-1791,1872-1919,2208-2303,64336-65023,65136-65279,8204,8205"
 
-// ---------------------------------------------------------------------------
-// Token kinds, mirroring compiler/token.salam. Keywords are grouped for
-// highlighting by the kind the lexer gives them, never by spelling, so a new
-// keyword lands in the right bucket in all three languages at once.
-// ---------------------------------------------------------------------------
+TK_FUNC := 10
+TK_RET := 11
+TK_IF := 12
+TK_ELSE := 13
+TK_UNTIL := 14
+TK_ON := 15
+TK_MUT := 16
+TK_CONST := 17
+TK_TYPE := 18
+TK_STRUCT := 19
+TK_ENUM := 20
+TK_END := 21
+TK_IMPORT := 22
+TK_AS := 23
+TK_TRUE := 24
+TK_FALSE := 25
+TK_NULL := 26
+TK_THIS := 27
+TK_BREAK := 28
+TK_CONTINUE := 29
+TK_LAYOUT := 30
+TK_PACKAGE := 31
+TK_PRINT := 32
+TK_PRINTLN := 33
+TK_PRINTERR := 34
+TK_PRINTERRLN := 35
+TK_INPUT := 36
+TK_DEFER := 37
+TK_OPERATOR := 38
+TK_EXTERN := 39
+TK_INTERFACE := 40
+TK_PUB := 41
+TK_INLINE := 42
+TK_NOINLINE := 43
+TK_PURE_FN := 44
+TK_NORET := 45
+TK_DEPRECATED := 46
+TK_COMPONENT := 47
+TK_REPEAT := 48
+TK_IMPL := 49
+TK_TO := 50
+TK_STEP := 51
+TK_EACH := 52
+TK_IN := 53
+TK_WITH := 54
+TK_MATCH := 55
+TK_AND := 68
+TK_OR := 69
 
-// Control flow: if, else, until/while, end, ret, break, continue, defer,
-// repeat, to, by, each, in, with, match.
-CONTROL_KINDS := [12, 13, 14, 21, 11, 28, 29, 37, 48, 50, 51, 52, 53, 54, 55]
+CONTROL_KINDS := [
+    TK_IF, TK_ELSE, TK_UNTIL, TK_END, TK_RET, TK_BREAK, TK_CONTINUE, TK_DEFER, TK_REPEAT,
+    TK_TO, TK_STEP, TK_EACH, TK_IN, TK_WITH, TK_MATCH
+]
 
-// Declarations and modifiers: func, on, mut, const, type, struct, enum,
-// import, as, layout, package, operator, extern, interface, pub, inline,
-// noinline, pure, noret, deprecated, component, impl.
-STORAGE_KINDS := [10, 15, 16, 17, 18, 19, 20, 22, 23, 30, 31, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 49]
+STORAGE_KINDS := [
+    TK_FUNC, TK_ON, TK_MUT, TK_CONST, TK_TYPE, TK_STRUCT, TK_ENUM, TK_IMPORT, TK_AS,
+    TK_LAYOUT, TK_PACKAGE, TK_OPERATOR, TK_EXTERN, TK_INTERFACE, TK_PUB, TK_INLINE,
+    TK_NOINLINE, TK_PURE_FN, TK_NORET, TK_DEPRECATED, TK_COMPONENT, TK_IMPL
+]
 
-// Literal values: true, false, null.
-CONST_KINDS := [24, 25, 26]
+CONST_KINDS := [TK_TRUE, TK_FALSE, TK_NULL]
 
-// The receiver: this.
-THIS_KINDS := [27]
+THIS_KINDS := [TK_THIS]
 
-// Built-in output statements: print, println, printerr, printerrln, input.
-IO_KINDS := [32, 33, 34, 35, 36]
+IO_KINDS := [TK_PRINT, TK_PRINTLN, TK_PRINTERR, TK_PRINTERRLN, TK_INPUT]
 
-// Word-spelled boolean operators, Persian and Arabic only.
-LOGICAL_KINDS := [68, 69]
+LOGICAL_KINDS := [TK_AND, TK_OR]
 
-// Vim, Emacs and Kate name their highlight groups more finely than a
-// TextMate scope does, so control and storage split again here.
-//
-// if, else, match.
-CONDITIONAL_KINDS := [12, 13, 55]
+CONDITIONAL_KINDS := [TK_IF, TK_ELSE, TK_MATCH]
 
-// until/while, repeat, each.
-LOOP_KINDS := [14, 48, 52]
+LOOP_KINDS := [TK_UNTIL, TK_REPEAT, TK_EACH]
 
-// ret, end, break, continue, defer, to, by, in, with.
-STATEMENT_KINDS := [11, 21, 28, 29, 37, 50, 51, 53, 54]
+STATEMENT_KINDS := [
+    TK_RET, TK_END, TK_BREAK, TK_CONTINUE, TK_DEFER, TK_TO, TK_STEP, TK_IN, TK_WITH
+]
 
-// type, struct, enum, interface, component - each one names a type.
-STRUCTURE_KINDS := [18, 19, 20, 40, 47]
+STRUCTURE_KINDS := [TK_TYPE, TK_STRUCT, TK_ENUM, TK_INTERFACE, TK_COMPONENT]
 
-// mut, const, extern, pub, inline, noinline, pure, noret, deprecated.
-STORAGECLASS_KINDS := [16, 17, 39, 41, 42, 43, 44, 45, 46]
+STORAGECLASS_KINDS := [
+    TK_MUT, TK_CONST, TK_EXTERN, TK_PUB, TK_INLINE, TK_NOINLINE, TK_PURE_FN, TK_NORET,
+    TK_DEPRECATED
+]
 
-// import, package - each one names a module.
-INCLUDE_KINDS := [22, 31]
+INCLUDE_KINDS := [TK_IMPORT, TK_PACKAGE]
 
-// on, as, layout, operator, impl. 'func' is left out: it gets its own
-// group so the name after it can be highlighted.
-KEYWORD_KINDS := [15, 23, 30, 38, 49]
+KEYWORD_KINDS := [TK_ON, TK_AS, TK_LAYOUT, TK_OPERATOR, TK_IMPL]
 
-// true, false.
-BOOLEAN_KINDS := [24, 25]
+BOOLEAN_KINDS := [TK_TRUE, TK_FALSE]
 
-// null.
-NULL_KINDS := [26]
+NULL_KINDS := [TK_NULL]
 
-// Every keyword that opens an indented block, for matchit's % jump:
-// func, if, until/while, on, type, struct, enum, layout, extern, interface,
-// component, repeat, impl, each, match.
-BLOCK_OPEN_KINDS := [10, 12, 14, 15, 18, 19, 20, 30, 39, 40, 47, 48, 49, 52, 55]
+BLOCK_OPEN_KINDS := [
+    TK_FUNC, TK_IF, TK_UNTIL, TK_ON, TK_TYPE, TK_STRUCT, TK_ENUM, TK_LAYOUT, TK_EXTERN,
+    TK_INTERFACE, TK_COMPONENT, TK_REPEAT, TK_IMPL, TK_EACH, TK_MATCH
+]
 
-// Closes a block: end.
-END_KINDS := [21]
+END_KINDS := [TK_END]
 
-// Opens the alternative arm, and so dedents one level: else.
-ELSE_KINDS := [13]
+ELSE_KINDS := [TK_ELSE]
 
-// Introduces a named function: func.
-FUNC_DEF_KINDS := [10]
+FUNC_DEF_KINDS := [TK_FUNC]
 
-// Introduces a named type: type, struct, enum, package, interface, component.
-TYPE_DEF_KINDS := [18, 19, 20, 31, 40, 47]
+TYPE_DEF_KINDS := [TK_TYPE, TK_STRUCT, TK_ENUM, TK_PACKAGE, TK_INTERFACE, TK_COMPONENT]
 
-// 'auto' infers a declaration's type; it is contextual, not a lexer keyword,
-// so the parser matches these spellings directly (parser_decl_var.salam).
 AUTO_WORDS := ["auto", "خودکار", "تلقائي"]
 
-// 'dyn T' marks an interface value; also contextual (parser_type.salam).
 DYN_WORDS := ["dyn"]
 
-// Recognised inside a '//!' header line.
 DIRECTIVE_WORDS := ["mode", "title", "lang", "dir", "name", "version"]
-
-// ---------------------------------------------------------------------------
-// Templates
-//
-// Every editor's syntax file is a fixed skeleton with the word lists spliced
-// in. Salam requires globals before the first type or function, so all of the
-// skeletons live together here, and the emit_* functions below fill them.
-// ---------------------------------------------------------------------------
 
 SUBLIME_SYNTAX_TPL := `%YAML 1.2
 ---
-# GENERATED FILE - do not edit by hand.
-# Regenerate with: salam exec extensions/tools/gen_syntaxes.salam
-#
-# Salam Programming Language - https://github.com/SalamLang/Salam
-# Keywords are spelled in English, Persian and Arabic; all three are listed
-# here because a single source file may use any one of them.
+# Generated by extensions/tools/gen_syntaxes.salam
 name: Salam
 scope: source.salam
 version: 2
@@ -205,7 +185,6 @@ contexts:
     - include: operators
     - include: punctuation
 
-  # //! mode: web | title: ... - the header block of a layout page.
   directives:
     - match: '//!'
       scope: punctuation.definition.comment.salam
@@ -306,7 +285,6 @@ contexts:
       scope: storage.type.salam
     - match: '{{nbb}}(?:%%IO%%){{nba}}'
       scope: support.function.builtin.salam
-    # %%BT%%_%%BT%% and %%BT%%__%%BT%% print the last expression in the REPL.
     - match: '{{nbb}}_{1,2}{{nba}}'
       scope: support.function.builtin.salam
     - match: '{{nbb}}(?:%%CONSTS%%){{nba}}'
@@ -322,7 +300,6 @@ contexts:
     - match: '{{nbb}}(?:%%CONTEXTUAL%%){{nba}}'
       scope: keyword.other.salam
 
-  # A layout page element: a bare name on its own line, opening a block.
   layout-element:
     - match: '^\s*(?!(?:%%ALLKW%%){{nba}})({{ident}})\s*(:)\s*$'
       captures:
@@ -376,11 +353,8 @@ contexts:
       scope: punctuation.section.braces.salam
 `
 
-// Sublime Text reads indentation and comment settings from TextMate
-// preference plists rather than from the .sublime-syntax file.
 SUBLIME_INDENT_TPL := `<?xml version="1.0" encoding="UTF-8"?>
-<!-- GENERATED FILE - do not edit by hand.
-     Regenerate with: salam exec extensions/tools/gen_syntaxes.salam -->
+<!-- Generated by extensions/tools/gen_syntaxes.salam -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -390,11 +364,9 @@ SUBLIME_INDENT_TPL := `<?xml version="1.0" encoding="UTF-8"?>
 	<string>source.salam</string>
 	<key>settings</key>
 	<dict>
-		<!-- A block opens with a trailing ':', optionally followed by a comment. -->
-		<key>increaseIndentPattern</key>
+				<key>increaseIndentPattern</key>
 		<string>:\s*(//.*)?$</string>
-		<!-- 'end' closes a block; 'else' reopens one at the outer level. -->
-		<key>decreaseIndentPattern</key>
+				<key>decreaseIndentPattern</key>
 		<string>^\s*(?:(?:%%END%%)\s*$|(?:%%ELSE%%)(?:\s|:))</string>
 	</dict>
 </dict>
@@ -402,6 +374,7 @@ SUBLIME_INDENT_TPL := `<?xml version="1.0" encoding="UTF-8"?>
 `
 
 SUBLIME_COMMENTS_TPL := `<?xml version="1.0" encoding="UTF-8"?>
+<!-- Generated by extensions/tools/gen_syntaxes.salam -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -444,6 +417,7 @@ SUBLIME_COMMENTS_TPL := `<?xml version="1.0" encoding="UTF-8"?>
 `
 
 SUBLIME_SYMBOLS_TPL := `<?xml version="1.0" encoding="UTF-8"?>
+<!-- Generated by extensions/tools/gen_syntaxes.salam -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -462,18 +436,8 @@ SUBLIME_SYMBOLS_TPL := `<?xml version="1.0" encoding="UTF-8"?>
 </plist>
 `
 
-// ---------------------------------------------------------------------------
-// Vim and Neovim: syntax/salam.vim
-//
-// 'syn keyword' compares against 'iskeyword', so the Arabic-script ranges go
-// in first; without them a Persian keyword is several words to Vim and \< \>
-// would break inside one. Everything else can then use \k.
-// ---------------------------------------------------------------------------
-
-VIM_SYNTAX_TPL := `" Vim syntax file
-" Language:   Salam
-" Maintainer: The Salam Team <https://github.com/SalamLang/Salam>
-" Generated:  salam exec extensions/tools/gen_syntaxes.salam
+VIM_SYNTAX_TPL := `" Vim syntax file - Language: Salam
+" Generated by extensions/tools/gen_syntaxes.salam
 
 if exists('b:current_syntax')
   finish
@@ -594,10 +558,8 @@ let &cpo = s:cpo_save
 unlet s:cpo_save
 `
 
-VIM_INDENT_TPL := `" Vim indent file
-" Language:   Salam
-" GENERATED FILE - do not edit by hand.
-" Regenerate with: salam exec extensions/tools/gen_syntaxes.salam
+VIM_INDENT_TPL := `" Vim indent file - Language: Salam
+" Generated by extensions/tools/gen_syntaxes.salam
 
 if exists('b:did_indent')
   finish
@@ -620,14 +582,10 @@ if exists('*GetSalamIndent')
   finish
 endif
 
-" A block opens with a trailing ':' and closes with 'end'; 'else' sits one
-" level out and opens the next block itself.
 let s:open_block = ':\s*\%(//.*\)\=$'
 let s:close_block = '^\s*\%(%%END%%\)\s*$'
 let s:else_block = '^\s*\%(%%ELSE%%\)\%(\s\|:\)'
 
-" Strips a trailing line comment and any string literal, so a ':' or a
-" keyword quoted inside one cannot move the indent.
 function! s:Code(lnum) abort
   let l:line = getline(a:lnum)
   let l:line = substitute(l:line, '"""\%(.\{-}\)"""', '""', 'g')
@@ -637,7 +595,6 @@ function! s:Code(lnum) abort
   return substitute(l:line, '\s\+$', '', '')
 endfunction
 
-" The closest line above that carries code, skipping blanks and comments.
 function! s:PrevCode(lnum) abort
   let l:lnum = prevnonblank(a:lnum - 1)
   while l:lnum > 0 && s:Code(l:lnum) =~# '^\s*$'
@@ -656,13 +613,10 @@ function! GetSalamIndent() abort
   let l:indent = indent(l:prev)
   let l:prevcode = s:Code(l:prev)
 
-  " One level in after a line that opened a block.
   if l:prevcode =~# s:open_block
     let l:indent += l:shift
   endif
 
-  " An 'else' or an 'end' on the previous line already dedented itself, so
-  " nothing extra is owed here.
   let l:curcode = s:Code(v:lnum)
   if l:curcode =~# s:close_block || l:curcode =~# s:else_block
     let l:indent -= l:shift
@@ -675,13 +629,8 @@ let &cpo = s:cpo_save
 unlet s:cpo_save
 `
 
-VIM_FTPLUGIN_TPL := `" Vim filetype plugin
-" Language:   Salam
-" Maintainer: The Salam Team <https://github.com/SalamLang/Salam>
-" License:    MIT
-"
-" GENERATED FILE - do not edit by hand.
-" Regenerate with: salam exec extensions/tools/gen_syntaxes.salam
+VIM_FTPLUGIN_TPL := `" Vim filetype plugin - Language: Salam
+" Generated by extensions/tools/gen_syntaxes.salam
 
 if exists('b:did_ftplugin')
   finish
@@ -691,9 +640,6 @@ let b:did_ftplugin = 1
 let s:cpo_save = &cpo
 set cpo&vim
 
-" Identifiers may be written in Arabic script, so w, b, *, # and gd have to
-" treat those letters, the Arabic-Indic digits and ZWNJ/ZWJ as word
-" characters. The syntax file sets the same list for its keyword matching.
 setlocal iskeyword=%%ISKEYWORD%%
 
 setlocal commentstring=//\ %s
@@ -703,7 +649,6 @@ setlocal includeexpr=substitute(v:fname,'\\.','/','g')
 setlocal formatoptions-=t
 setlocal formatoptions+=croqlj
 
-" The compiler's own formatter uses four spaces per level.
 setlocal expandtab
 setlocal shiftwidth=4
 setlocal softtabstop=4
@@ -711,8 +656,6 @@ setlocal tabstop=4
 
 compiler salam
 
-" % jumps between the keyword that opened a block and the 'end' that closes
-" it, in whichever of the three languages the file is written in.
 if exists('loaded_matchit') && !exists('b:match_words')
   let b:match_ignorecase = 0
   let b:match_words = '\<\%(%%MATCHSTART%%\)\>:\<\%(%%MATCHMIDDLE%%\)\>:\<\%(%%MATCHEND%%\)\>'
@@ -735,13 +678,9 @@ EMACS_MODE_TPL := `;;; salam-mode.el --- Major mode for the Salam programming la
 ;; Keywords: languages salam
 ;; SPDX-License-Identifier: MIT
 
-;; Generated by extensions/tools/gen_syntaxes.salam - do not edit by hand.
-
 ;;; Commentary:
 
-;; Major mode for Salam: font locking, indentation, imenu, formatting and
-;; type checking.  Salam keywords are spelled in English, Persian or Arabic;
-;; all three are recognised, and the keyword pack is detected per file.
+;; Generated by extensions/tools/gen_syntaxes.salam
 
 ;;; Code:
 
@@ -793,9 +732,6 @@ An empty string lets the compiler find it."
   :type '(choice (const "exec") (const "run"))
   :group 'salam)
 
-
-;;; Word lists
-
 (defconst salam-conditional-keywords '(%%CONDITIONAL%%))
 (defconst salam-loop-keywords '(%%LOOP%%))
 (defconst salam-statement-keywords '(%%STATEMENT%%))
@@ -832,9 +768,6 @@ An empty string lets the compiler find it."
   "Return a regexp matching any of WORDS as a whole word."
   (concat "\\<" (regexp-opt words) "\\>"))
 
-
-;;; Syntax table
-
 (defvar salam-mode-syntax-table
   (let ((table (make-syntax-table)))
     (modify-syntax-entry ?/ ". 124" table)
@@ -865,9 +798,6 @@ third opens one, which would mis-colour the rest of the buffer."
     (let ((open (- (point) 3)))
       (put-text-property open (1+ open) 'syntax-table (string-to-syntax "|"))
       (put-text-property (1+ open) (point) 'syntax-table (string-to-syntax ".")))))
-
-
-;;; Font lock
 
 (defvar salam-font-lock-keywords
   (list
@@ -907,9 +837,6 @@ third opens one, which would mis-colour the rest of the buffer."
    (cons "\\<0[oO][0-7][0-7_]*\\>" 'font-lock-constant-face)
    (cons "u?'\\(?:\\\\.\\|[^'\\\\]\\)'" 'font-lock-string-face))
   "Font lock rules for ‘salam-mode’.")
-
-
-;;; Indentation
 
 (defun salam--line-code (&optional position)
   "Return the current line with strings and comments blanked out.
@@ -953,9 +880,6 @@ Return nil when there is none."
       (setq target (- target salam-indent-offset)))
     (indent-line-to (max target 0))))
 
-
-;;; Talking to the compiler
-
 (defun salam--detect-lang ()
   "Return the keyword pack this buffer is written in: \"en\", \"fa\" or \"ar\"."
   (if (member salam-lang '("en" "fa" "ar"))
@@ -987,21 +911,18 @@ Return nil when there is none."
          (mapconcat #'shell-quote-argument (cons salam-compiler args) " ")))
     (compile compile-command)))
 
-;;;###autoload
 (defun salam-run ()
   "Run the current buffer's file."
   (interactive)
   (salam--compile (append (list salam-run-command (buffer-file-name) "--error-style=gcc")
                           (salam--common-args))))
 
-;;;###autoload
 (defun salam-build ()
   "Compile the current buffer's file to an executable."
   (interactive)
   (salam--compile (append (list "build" (buffer-file-name) "--error-style=gcc")
                           (salam--common-args))))
 
-;;;###autoload
 (defun salam-check ()
   "Type-check the current buffer's file without running it."
   (interactive)
@@ -1012,7 +933,6 @@ Return nil when there is none."
                                 "--log-level=error")
                           (salam--common-args))))
 
-;;;###autoload
 (defun salam-format-buffer ()
   "Reformat the buffer with ‘salam format’, keeping point where it is."
   (interactive)
@@ -1048,9 +968,6 @@ Return nil when there is none."
   (when salam-format-on-save
     (salam-format-buffer)))
 
-
-;;; The mode
-
 (defvar salam-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "C-c C-r") #'salam-run)
@@ -1071,7 +988,6 @@ Return nil when there is none."
               1))
   "Imenu patterns for ‘salam-mode’.")
 
-;;;###autoload
 (define-derived-mode salam-mode prog-mode "Salam"
   "Major mode for editing Salam source code.
 
@@ -1088,11 +1004,9 @@ Return nil when there is none."
   (setq-local electric-indent-chars (append electric-indent-chars '(?:)))
   (setq-local imenu-generic-expression salam--imenu-expression)
   (setq-local require-final-newline t)
-  ;; Source lines read left to right even when the text in them is Arabic.
   (setq-local bidi-paragraph-direction 'left-to-right)
   (add-hook 'before-save-hook #'salam--format-on-save nil t))
 
-;;;###autoload
 (add-to-list 'auto-mode-alist '("\\.salam\\'" . salam-mode))
 
 (with-eval-after-load 'compile
@@ -1110,12 +1024,11 @@ Return nil when there is none."
 
 (provide 'salam-mode)
 
-;;; salam-mode.el ends here
 `
 
 KATE_TPL := `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE language SYSTEM "language.dtd">
 <!-- Generated by extensions/tools/gen_syntaxes.salam -->
+<!DOCTYPE language SYSTEM "language.dtd">
 <language name="Salam" section="Sources" version="1" kateversion="5.62"
           extensions="*.salam" mimetype="text/x-salam"
           author="The Salam Team" license="MIT" indenter="normal">
@@ -1404,7 +1317,8 @@ GTK_LANG_TPL := `<?xml version="1.0" encoding="UTF-8"?>
 </language>
 `
 
-NPP_TPL := `<NotepadPlus>
+NPP_TPL := `<!-- Generated by extensions/tools/gen_syntaxes.salam -->
+<NotepadPlus>
     <UserLang name="Salam" ext="salam" udlVersion="2.1">
         <Settings>
             <Global caseIgnored="no" allowFoldOfComments="yes" foldCompact="no" forcePureLC="0" decimalSeparator="0" />
@@ -1470,7 +1384,8 @@ NPP_TPL := `<NotepadPlus>
 </NotepadPlus>
 `
 
-JETBRAINS_TPL := `<filetype binary="false" default_extension="" description="Salam" name="Salam">
+JETBRAINS_TPL := `<!-- Generated by extensions/tools/gen_syntaxes.salam -->
+<filetype binary="false" default_extension="" description="Salam" name="Salam">
   <highlighting>
     <options>
       <option name="LINE_COMMENT" value="//" />
@@ -1495,7 +1410,9 @@ JETBRAINS_TPL := `<filetype binary="false" default_extension="" description="Sal
 </filetype>
 `
 
-NANO_TPL := `syntax salam "\.salam$"
+NANO_TPL := `# Generated by extensions/tools/gen_syntaxes.salam
+
+syntax salam "\.salam$"
 comment "//"
 
 formatter salam format
@@ -1529,7 +1446,9 @@ color brightwhite,blue "TODO|FIXME|XXX|HACK|NOTE"
 color ,red "[[:space:]]+$"
 `
 
-MICRO_TPL := `filetype: salam
+MICRO_TPL := `# Generated by extensions/tools/gen_syntaxes.salam
+
+filetype: salam
 
 detect:
     filename: "\\.salam$"
@@ -1592,6 +1511,7 @@ VSCODE_TPL := `{
   "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
   "name": "Salam",
   "scopeName": "source.salam",
+  "_generatedBy": "extensions/tools/gen_syntaxes.salam",
   "patterns": [
     { "include": "#directives" },
     { "include": "#comments" },
@@ -1785,14 +1705,6 @@ VSCODE_TPL := `{
 }
 `
 
-// %%TEMPLATES%%
-
-
-// ---------------------------------------------------------------------------
-// The lexicon: every word an editor colours, bucketed by the role the
-// compiler gives it.
-// ---------------------------------------------------------------------------
-
 struct Lex:
     pub control: Vector<str> = Vector {}
     pub storage: Vector<str> = Vector {}
@@ -1821,18 +1733,12 @@ struct Lex:
     pub blockOpen: Vector<str> = Vector {}
 end
 
-// One editor snippet, read from the VS Code snippet file so every editor
-// offers the same set under the same trigger words.
 struct Snippet:
     pub name: str = ""
     pub prefix: str = ""
     pub body: str = ""
     pub desc: str = ""
 end
-
-// ---------------------------------------------------------------------------
-// Reading the word lists back out of the compiler's own source
-// ---------------------------------------------------------------------------
 
 func is_ident_byte(c: char): bool:
     if c >= 'a' && c <= 'z': ret true end
@@ -1849,8 +1755,6 @@ func find_from(s: str, sub: str, start: int): int:
     ret start + k
 end
 
-// Drops '//' line comments so a comment can never be mistaken for data.
-// String literals are copied through untouched.
 func strip_comments(src: str): str:
     mut sb := str.NewBuilder()
     defer str.BufFree(sb)
@@ -1888,7 +1792,6 @@ func strip_comments(src: str): str:
     ret str.BufStr(sb)
 end
 
-// The text between the brackets of a top-level `name := [ ... ]`, or "".
 func array_body(clean: str, name: str): str:
     n := clean.len()
     mut from := 0
@@ -1936,7 +1839,6 @@ func array_body(clean: str, name: str): str:
     ret ""
 end
 
-// Every double-quoted literal in an array body, in order.
 func parse_strings(body: str): Vector<str>:
     mut out := Vector {} as Vector<str>
     n := body.len()
@@ -1964,7 +1866,6 @@ func parse_strings(body: str): Vector<str>:
     ret out
 end
 
-// Every decimal run in an array body, in order.
 func parse_ints(body: str): Vector<int>:
     mut out := Vector {} as Vector<int>
     n := body.len()
@@ -2022,7 +1923,6 @@ func push_unique(v &: Vector<str>, s: str):
     v.push(s)
 end
 
-// Appends every spelling whose token kind is one of `want`.
 func words_for_kinds(spells: Vector<str>, kinds: Vector<int>, want: int[:], out &: Vector<str>):
     n := spells.len()
     if kinds.len() < n:
@@ -2064,7 +1964,6 @@ func read_source(path: str): str:
     ret strip_comments(text)
 end
 
-// Collects the three keyword packs for one set of token kinds in one step.
 func collect(spellEn: Vector<str>, kindEn: Vector<int>, spellFa: Vector<str>, kindFa: Vector<int>, spellAr: Vector<str>, kindAr: Vector<int>, want: int[:]): Vector<str>:
     mut v := Vector {} as Vector<str>
     words_for_kinds(spellEn, kindEn, want, v)
@@ -2181,13 +2080,6 @@ func build_lex(): Lex:
     ret out
 end
 
-
-// ---------------------------------------------------------------------------
-// Shared regex construction
-// ---------------------------------------------------------------------------
-
-// Longest word first, so an alternation can never stop at the prefix of a
-// longer keyword ('in' inside 'inline', 'تا' inside 'تاوقتی').
 func alt(words: Vector<str>): str:
     mut sorted := Vector {} as Vector<str>
     repeat words.len() with i:
@@ -2213,12 +2105,6 @@ func alt_arr(words: str[:]): str:
     ret alt(v)
 end
 
-
-
-
-
-// Every reserved word, used to keep the layout DSL's `element:` rule from
-// swallowing an ordinary `extern:` or `else:` line.
 func single_words(words: Vector<str>): Vector<str>:
     mut v := Vector {} as Vector<str>
     repeat words.len() with i:
@@ -2240,11 +2126,6 @@ func all_keywords(lx: Lex): Vector<str>:
     push_all(lx.logical, v)
     ret v
 end
-
-
-// ---------------------------------------------------------------------------
-// Output
-// ---------------------------------------------------------------------------
 
 func parent_dir(path: str): str:
     mut cut := 0 - 1
@@ -2270,14 +2151,6 @@ func write_out(path: str, body: str):
     end
     println "  " + path
 end
-
-// ---------------------------------------------------------------------------
-// Sublime Text: Salam.sublime-syntax
-//
-// https://www.sublimetext.com/docs/syntax.html - YAML, version 2. The regex
-// flavour is Oniguruma, so the same \x{...} classes the TextMate grammar
-// uses work unchanged.
-// ---------------------------------------------------------------------------
 
 func emit_sublime_syntax(lx: Lex): str:
     mut s := SUBLIME_SYNTAX_TPL
@@ -2309,14 +2182,6 @@ func emit_sublime_indent(lx: Lex): str:
     ret s
 end
 
-// ---------------------------------------------------------------------------
-// Snippets
-//
-// extensions/vscode/snippets/salam.code-snippets is the one snippet source.
-// Sublime Text, UltiSnips and YASnippet all use TextMate field syntax
-// (${1:name}, $0), so the bodies carry over untouched.
-// ---------------------------------------------------------------------------
-
 func hex_val(c: char): int:
     if c >= '0' && c <= '9':
         ret (c as i32) - 48
@@ -2330,7 +2195,6 @@ func hex_val(c: char): int:
     ret 0
 end
 
-// Every string in a JSON array, with the standard escapes decoded.
 func json_strings(arrayJson: str): Vector<str>:
     mut out := Vector {} as Vector<str>
     n := arrayJson.len()
@@ -2409,8 +2273,6 @@ func read_snippets(): Vector<Snippet>:
     ret out
 end
 
-// Sublime Text: a .sublime-completions file. The trigger carries the
-// description after a tab, which is how both ST3 and ST4 render the hint.
 func emit_sublime_completions(snips: Vector<Snippet>): str:
     mut items := Vector {} as Vector<str>
     repeat snips.len() with i:
@@ -2420,8 +2282,7 @@ func emit_sublime_completions(snips: Vector<Snippet>): str:
     end
     mut sb := str.NewBuilder()
     defer str.BufFree(sb)
-    str.BufAppend(sb, "// GENERATED FILE - do not edit by hand.\n")
-    str.BufAppend(sb, "// Regenerate with: salam exec extensions/tools/gen_syntaxes.salam\n")
+    str.BufAppend(sb, "// Generated by extensions/tools/gen_syntaxes.salam\n")
     str.BufAppend(sb, "{\n")
     str.BufAppend(sb, "  \"scope\": \"source.salam - comment - string\",\n")
     str.BufAppend(sb, "  \"completions\": [\n")
@@ -2430,16 +2291,10 @@ func emit_sublime_completions(snips: Vector<Snippet>): str:
     ret str.BufStr(sb)
 end
 
-// Vim/Neovim: an UltiSnips snippet file. 'b' triggers only at the start of
-// a line, which is how every one of these snippets is used.
 func emit_ultisnips(snips: Vector<Snippet>): str:
     mut sb := str.NewBuilder()
     defer str.BufFree(sb)
-    str.BufAppend(sb, "# GENERATED FILE - do not edit by hand.\n")
-    str.BufAppend(sb, "# Regenerate with: salam exec extensions/tools/gen_syntaxes.salam\n")
-    str.BufAppend(sb, "#\n")
-    str.BufAppend(sb, "# Salam snippets for UltiSnips. SirVer/ultisnips reads this automatically\n")
-    str.BufAppend(sb, "# once the plugin directory is on your runtimepath.\n")
+    str.BufAppend(sb, "# Generated by extensions/tools/gen_syntaxes.salam\n")
     repeat snips.len() with i:
         s := snips.get(i)
         str.BufAppend(sb, "\nsnippet " + s.prefix + " \"" + s.desc + "\" b\n")
@@ -2449,13 +2304,10 @@ func emit_ultisnips(snips: Vector<Snippet>): str:
     ret str.BufStr(sb)
 end
 
-// Emacs: one YASnippet file per snippet, returned as a path/body pair joined
-// by a NUL-free separator the caller splits on.
 func emit_yasnippet(s: Snippet): str:
     mut sb := str.NewBuilder()
     defer str.BufFree(sb)
     str.BufAppend(sb, "# -*- mode: snippet -*-\n")
-    str.BufAppend(sb, "# GENERATED FILE - regenerate with extensions/tools/gen_syntaxes.salam\n")
     str.BufAppend(sb, "# name: " + s.name + "\n")
     str.BufAppend(sb, "# key: " + s.prefix + "\n")
     str.BufAppend(sb, "# --\n")
@@ -2464,7 +2316,6 @@ func emit_yasnippet(s: Snippet): str:
     ret str.BufStr(sb)
 end
 
-// Vim regexes spell alternation '\|', not '|'.
 func vim_alt(words: Vector<str>): str:
     mut sorted := Vector {} as Vector<str>
     repeat words.len() with i:
@@ -2482,7 +2333,6 @@ func vim_alt_arr(words: str[:]): str:
     ret vim_alt(v)
 end
 
-// 'syn keyword' takes a plain space-separated list, in source order.
 func vim_words(words: Vector<str>): str:
     ret str.Join(words, " ")
 end
@@ -2531,7 +2381,6 @@ func emit_vim_ftplugin(lx: Lex): str:
     ret s
 end
 
-// Emacs takes a plain quoted list, so every word is a Lisp string.
 func el_list(words: Vector<str>): str:
     mut v := Vector {} as Vector<str>
     repeat words.len() with i:

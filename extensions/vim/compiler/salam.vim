@@ -1,10 +1,3 @@
-" Vim compiler file
-" Compiler:   salam
-" Maintainer: The Salam Team <https://github.com/SalamLang/Salam>
-"
-" --error-style=gcc turns the compiler's Rust-style diagnostics into the
-" one-line "file:line:col: error: message" form 'errorformat' reads.
-
 if exists('current_compiler')
   finish
 endif

@@ -1,7 +1,3 @@
-" Salam support for Vim and Neovim: commands and options.
-" Maintainer: The Salam Team <https://github.com/SalamLang/Salam>
-" License:    MIT
-
 if exists('g:loaded_salam') || &compatible
   finish
 endif
@@ -10,40 +6,30 @@ let g:loaded_salam = 1
 let s:cpo_save = &cpo
 set cpo&vim
 
-" Compiler executable. A bare name is looked up on $PATH.
 if !exists('g:salam_compiler')
   let g:salam_compiler = 'salam'
 endif
 
-" Keyword pack passed as --lang: 'auto', 'en', 'fa' or 'ar'. 'auto' reads a
-" '//! lang:' directive, then falls back to detecting the script in use.
 if !exists('g:salam_lang')
   let g:salam_lang = 'auto'
 endif
 
-" Which subcommand :SalamRun uses. 'exec' is the tree-walking interpreter and
-" needs no C toolchain; 'run' compiles first.
 if !exists('g:salam_run_command')
   let g:salam_run_command = 'exec'
 endif
 
-" Indentation handed to `salam format --indent`: 'tab', or 1-16 spaces.
 if !exists('g:salam_format_indent')
   let g:salam_format_indent = '4'
 endif
 
-" Reformat the buffer with `salam format` on every write.
 if !exists('g:salam_format_on_save')
   let g:salam_format_on_save = 0
 endif
 
-" Root directory for std/... imports, passed as --stdlib-path. Empty lets
-" the compiler find it.
 if !exists('g:salam_stdlib_path')
   let g:salam_stdlib_path = ''
 endif
 
-" Populate the quickfix list from `:SalamCheck` whenever a buffer is written.
 if !exists('g:salam_check_on_save')
   let g:salam_check_on_save = 0
 endif

@@ -8,9 +8,7 @@
 
 ;;; Commentary:
 
-;; Optional.  Add (require 'flycheck-salam) after flycheck and salam-mode to
-;; check Salam buffers as you type.  The checker runs the compiler's own
-;; analyzer, so it reports exactly what a build would.
+;; Add (require 'flycheck-salam) after flycheck and salam-mode.
 
 ;;; Code:
 

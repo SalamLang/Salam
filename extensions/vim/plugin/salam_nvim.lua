@@ -1,5 +1,3 @@
--- Neovim-only bootstrap. Vim never reads plugin/*.lua, so the vimscript
--- half stays the only thing that loads there.
 if vim.g.loaded_salam_nvim == 1 then
   return
 end

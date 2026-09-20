@@ -1,5 +1,8 @@
 package xml
 
+pub const EntityDepthLimit := 32
+pub const EntityExpansionLimit := 262144
+
 pub struct ParseError:
     pub ok: bool = true
     pub message: str = ""
@@ -15,6 +18,8 @@ pub struct ParseOptions:
     pub namespaces: bool = true
     pub expand_entities: bool = true
     pub max_depth: int = 1024
+    pub max_entity_depth: int = EntityDepthLimit
+    pub max_entity_expansion: int = EntityExpansionLimit
 end
 
 struct Scope:
@@ -27,6 +32,7 @@ struct Reader:
     pub text: str = ""
     pub n: int = 0
     pub pos: int = 0
+    pub expanded: int = 0
     pub line_starts: Vector<int> = Vector {}
 end
 
@@ -188,8 +194,20 @@ func skip_space(rd &: Reader, p: i8*, at: int): int:
 end
 
 func expand_entities(d &: Document, rd &: Reader, raw: str, at: int, in_attribute: bool,
-                     opts: ParseOptions, err &: ParseError): str:
+                     opts: ParseOptions, depth: int, err &: ParseError): str:
     if !str.Contains(raw, "&"): ret raw end
+    mut ceiling := opts.max_entity_depth
+    if ceiling <= 0: ceiling = EntityDepthLimit end
+    if depth > ceiling:
+        fail_at(err, rd, at, "an entity expands into itself, or nests deeper than the parser allows")
+        ret ""
+    end
+    mut budget := opts.max_entity_expansion
+    if budget <= 0: budget = EntityExpansionLimit end
+    if rd.expanded > budget:
+        fail_at(err, rd, at, "the entities in this document expand to more text than the parser allows")
+        ret ""
+    end
     mut sb := str.NewBuilder()
     n := str.Len(raw)
     p := xbp(raw)
@@ -285,7 +303,14 @@ func expand_entities(d &: Document, rd &: Reader, raw: str, at: int, in_attribut
                 break
             end
             if opts.expand_entities:
-                str.BufAppend(sb, expand_entities(d, rd, value, at + i, in_attribute, opts, err))
+                piece := expand_entities(d, rd, value, at + i, in_attribute, opts, depth + 1, err)
+                if !err.ok: break end
+                rd.expanded = rd.expanded + str.Len(piece)
+                if rd.expanded > budget:
+                    fail_at(err, rd, at + i, "the entities in this document expand to more text than the parser allows")
+                    break
+                end
+                str.BufAppend(sb, piece)
             else:
                 str.BufAppend(sb, "&" + body + ";")
             end
@@ -641,7 +666,7 @@ func read_text_run(d &: Document, rd &: Reader, p: i8*, at: int, parent: int,
         end
         ret i
     end
-    text := expand_entities(d, rd, raw, at, false, opts, err)
+    text := expand_entities(d, rd, raw, at, false, opts, 0, err)
     if !err.ok: ret rd.n end
     if !opts.preserve_whitespace && all_space(text) && str.Len(text) > 0:
         ret i
@@ -701,7 +726,7 @@ func read_attributes(d &: Document, rd &: Reader, p: i8*, at: int, id: int, sc &
             fail_at(err, rd, i, "the attribute \"" + name + "\" holds a literal '<'")
             ret rd.n
         end
-        value := expand_entities(d, rd, raw, i + 1, true, opts, err)
+        value := expand_entities(d, rd, raw, i + 1, true, opts, 0, err)
         if !err.ok: ret rd.n end
         mut prefix := ""
         mut local := ""
@@ -939,7 +964,9 @@ func parse_into(d &: Document, rd &: Reader, opts: ParseOptions, err &: ParseErr
 end
 
 pub func DefaultOptions(): ParseOptions:
-    ret ParseOptions { keep_comments = true, keep_instructions = true, namespaces = true, expand_entities = true, max_depth = 1024 }
+    ret ParseOptions { keep_comments = true, keep_instructions = true, namespaces = true,
+                       expand_entities = true, max_depth = 1024,
+                       max_entity_depth = EntityDepthLimit, max_entity_expansion = EntityExpansionLimit }
 end
 
 pub func NoError(): ParseError:

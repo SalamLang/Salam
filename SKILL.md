@@ -738,7 +738,9 @@ Canonical CanonicalNode`. `Free(d)` releases it and `FreeList` a `NodeList`.
     **Parsing is strict**: a mismatched end tag, a second root, a duplicate
     attribute, `--` inside a comment, `]]>` in character data, an undeclared
     entity or an undeclared namespace prefix is an error with a position, not
-    a guess.
+    a guess. Entity expansion is bounded by `max_entity_depth` and a
+    document-wide `max_entity_expansion`, so a recursive entity and the
+    billion-laughs shape are both rejected rather than run.
   - **Searching is XPath 1.0**: `Select(d, context, expr, err): NodeList` (a
     context of `-1` means the document node), plus `SelectFirst SelectString
 SelectNumber SelectBoolean Evaluate`, where an `XPathValue` has kind

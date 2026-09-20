@@ -195,7 +195,7 @@ end
 
 func expand_entities(d &: Document, rd &: Reader, raw: str, at: int, in_attribute: bool,
                      opts: ParseOptions, depth: int, err &: ParseError): str:
-    if !str.Contains(raw, "&"): ret raw end
+    if !str.Contains(raw, "&"): ret str.Clone(raw) end
     mut ceiling := opts.max_entity_depth
     if ceiling <= 0: ceiling = EntityDepthLimit end
     if depth > ceiling:
@@ -306,11 +306,12 @@ func expand_entities(d &: Document, rd &: Reader, raw: str, at: int, in_attribut
                 piece := expand_entities(d, rd, value, at + i, in_attribute, opts, depth + 1, err)
                 if !err.ok: break end
                 rd.expanded = rd.expanded + str.Len(piece)
+                str.BufAppend(sb, piece)
+                release(piece)
                 if rd.expanded > budget:
                     fail_at(err, rd, at + i, "the entities in this document expand to more text than the parser allows")
                     break
                 end
-                str.BufAppend(sb, piece)
             else:
                 str.BufAppend(sb, "&" + body + ";")
             end
@@ -376,7 +377,7 @@ func split_qname(name: str, prefix &: str, local &: str): bool:
     colon := str.IndexOf(name, ":")
     if colon < 0:
         prefix = ""
-        local = name
+        local = str.Clone(name)
         ret true
     end
     if colon == 0 || colon == str.Len(name) - 1: ret false end
@@ -411,7 +412,7 @@ func read_declaration(d &: Document, rd &: Reader, p: i8*, at: int, err &: Parse
     mut i := at + 5
     i = skip_space(rd, p, i)
     mut stop := i
-    key := scan_name(rd, p, i, stop)
+    key := own(d, scan_name(rd, p, i, stop))
     if key != "version":
         fail_at(err, rd, i, "the XML declaration must start with version")
         ret rd.n
@@ -422,11 +423,11 @@ func read_declaration(d &: Document, rd &: Reader, p: i8*, at: int, err &: Parse
         ret rd.n
     end
     i = skip_space(rd, p, i + 1)
-    d.version = read_quoted(rd, p, i, stop, err, "the version")
+    d.version = own(d, read_quoted(rd, p, i, stop, err, "the version"))
     if !err.ok: ret rd.n end
     i = skip_space(rd, p, stop)
     until i < rd.n && xub(p, i) != 63:
-        field := scan_name(rd, p, i, stop)
+        field := own(d, scan_name(rd, p, i, stop))
         if str.Len(field) == 0:
             fail_at(err, rd, i, "the XML declaration holds something that is not a name")
             ret rd.n
@@ -437,7 +438,7 @@ func read_declaration(d &: Document, rd &: Reader, p: i8*, at: int, err &: Parse
             ret rd.n
         end
         i = skip_space(rd, p, i + 1)
-        text := read_quoted(rd, p, i, stop, err, "the " + field + " value")
+        text := own(d, read_quoted(rd, p, i, stop, err, "the " + field + " value"))
         if !err.ok: ret rd.n end
         if field == "encoding": d.encoding = text
         else field == "standalone":
@@ -478,7 +479,7 @@ func register_entities(d &: Document, subset: str):
         until j < n && !xml_space(xub(p, j)) && xub(p, j) != 62:
             j += 1
         end
-        name := str.Substr(subset, start, j - start)
+        name := own(d, str.Substr(subset, start, j - start))
         until j < n && xml_space(xub(p, j)):
             j += 1
         end
@@ -491,7 +492,7 @@ func register_entities(d &: Document, subset: str):
             end
             if str.Len(name) > 0:
                 d.entity_names.push(name)
-                d.entity_values.push(str.Substr(subset, vstart, k - vstart))
+                d.entity_values.push(own(d, str.Substr(subset, vstart, k - vstart)))
             end
             i = k + 1
         else:
@@ -503,25 +504,25 @@ end
 func read_doctype(d &: Document, rd &: Reader, p: i8*, at: int, err &: ParseError): int:
     mut i := skip_space(rd, p, at + 9)
     mut stop := i
-    name := scan_name(rd, p, i, stop)
+    name := own(d, scan_name(rd, p, i, stop))
     if str.Len(name) == 0:
         fail_at(err, rd, i, "the document type declaration has no name")
         ret rd.n
     end
     d.doctype = name
     i = skip_space(rd, p, stop)
-    word := scan_name(rd, p, i, stop)
+    word := own(d, scan_name(rd, p, i, stop))
     if word == "PUBLIC":
         i = skip_space(rd, p, stop)
-        d.doctype_public = read_quoted(rd, p, i, stop, err, "the public identifier")
+        d.doctype_public = own(d, read_quoted(rd, p, i, stop, err, "the public identifier"))
         if !err.ok: ret rd.n end
         i = skip_space(rd, p, stop)
-        d.doctype_system = read_quoted(rd, p, i, stop, err, "the system identifier")
+        d.doctype_system = own(d, read_quoted(rd, p, i, stop, err, "the system identifier"))
         if !err.ok: ret rd.n end
         i = skip_space(rd, p, stop)
     else word == "SYSTEM":
         i = skip_space(rd, p, stop)
-        d.doctype_system = read_quoted(rd, p, i, stop, err, "the system identifier")
+        d.doctype_system = own(d, read_quoted(rd, p, i, stop, err, "the system identifier"))
         if !err.ok: ret rd.n end
         i = skip_space(rd, p, stop)
     else str.Len(word) > 0:
@@ -542,7 +543,7 @@ func read_doctype(d &: Document, rd &: Reader, p: i8*, at: int, err &: ParseErro
             fail_at(err, rd, i, "the internal subset is never closed")
             ret rd.n
         end
-        d.internal_subset = str.Substr(rd.text, i + 1, j - i - 2)
+        d.internal_subset = own(d, str.Substr(rd.text, i + 1, j - i - 2))
         register_entities(d, d.internal_subset)
         i = skip_space(rd, p, j)
     end
@@ -569,7 +570,7 @@ func read_comment(d &: Document, rd &: Reader, p: i8*, at: int, parent: int,
         ret rd.n
     end
     if opts.keep_comments:
-        id := CreateComment(d, str.Substr(rd.text, start, i - start))
+        id := CreateComment(d, own(d, str.Substr(rd.text, start, i - start)))
         place(d, rd, id, parent, at)
     end
     ret i + 3
@@ -578,7 +579,7 @@ end
 func read_instruction(d &: Document, rd &: Reader, p: i8*, at: int, parent: int,
                       opts: ParseOptions, err &: ParseError): int:
     mut stop := at + 2
-    target := scan_name(rd, p, at + 2, stop)
+    target := own(d, scan_name(rd, p, at + 2, stop))
     if str.Len(target) == 0:
         fail_at(err, rd, at, "a processing instruction has no target")
         ret rd.n
@@ -597,7 +598,9 @@ func read_instruction(d &: Document, rd &: Reader, p: i8*, at: int, parent: int,
         fail_at(err, rd, at, "a processing instruction is never closed")
         ret rd.n
     end
-    data := str.Trim(str.Substr(rd.text, stop, close - stop))
+    raw_data := str.Substr(rd.text, stop, close - stop)
+    data := own(d, str.Trim(raw_data))
+    release(raw_data)
     if opts.keep_instructions:
         id := CreateProcessingInstruction(d, target, data)
         place(d, rd, id, parent, at)
@@ -617,7 +620,7 @@ func read_cdata(d &: Document, rd &: Reader, p: i8*, at: int, parent: int, err &
         fail_at(err, rd, at, "a CDATA section is never closed")
         ret rd.n
     end
-    id := CreateCData(d, str.Substr(rd.text, start, close - start))
+    id := CreateCData(d, own(d, str.Substr(rd.text, start, close - start)))
     place(d, rd, id, parent, at)
     ret close + 3
 end
@@ -660,21 +663,26 @@ func read_text_run(d &: Document, rd &: Reader, p: i8*, at: int, parent: int,
     end
     raw := str.Substr(rd.text, at, i - at)
     if parent == 0:
-        if !all_space(raw):
+        outside := !all_space(raw)
+        release(raw)
+        if outside:
             fail_at(err, rd, at, "text is not allowed outside the root element")
             ret rd.n
         end
         ret i
     end
     text := expand_entities(d, rd, raw, at, false, opts, 0, err)
-    if !err.ok: ret rd.n end
-    if !opts.preserve_whitespace && all_space(text) && str.Len(text) > 0:
+    release(raw)
+    if !err.ok:
+        release(text)
+        ret rd.n
+    end
+    if str.Len(text) == 0 || (!opts.preserve_whitespace && all_space(text)):
+        release(text)
         ret i
     end
-    if str.Len(text) > 0:
-        id := CreateText(d, text)
-        place(d, rd, id, parent, at)
-    end
+    id := CreateText(d, own(d, text))
+    place(d, rd, id, parent, at)
     ret i
 end
 
@@ -704,7 +712,7 @@ func read_attributes(d &: Document, rd &: Reader, p: i8*, at: int, id: int, sc &
             ret rd.n
         end
         mut stop := i
-        name := scan_name(rd, p, i, stop)
+        name := own(d, scan_name(rd, p, i, stop))
         if str.Len(name) == 0:
             fail_at(err, rd, i, "an attribute name is missing")
             ret rd.n
@@ -721,20 +729,28 @@ func read_attributes(d &: Document, rd &: Reader, p: i8*, at: int, id: int, sc &
         end
         i = skip_space(rd, p, i + 1)
         raw := read_quoted(rd, p, i, stop, err, "the value of \"" + name + "\"")
-        if !err.ok: ret rd.n end
+        if !err.ok:
+            release(raw)
+            ret rd.n
+        end
         if str.Contains(raw, "<"):
+            release(raw)
             fail_at(err, rd, i, "the attribute \"" + name + "\" holds a literal '<'")
             ret rd.n
         end
-        value := expand_entities(d, rd, raw, i + 1, true, opts, 0, err)
+        value := own(d, expand_entities(d, rd, raw, i + 1, true, opts, 0, err))
+        release(raw)
         if !err.ok: ret rd.n end
         mut prefix := ""
         mut local := ""
-        if opts.namespaces && !split_qname(name, prefix, local):
-            fail_at(err, rd, name_at, "\"" + name + "\" is not a valid qualified name")
-            ret rd.n
-        end
-        if !opts.namespaces:
+        if opts.namespaces:
+            if !split_qname(name, prefix, local):
+                fail_at(err, rd, name_at, "\"" + name + "\" is not a valid qualified name")
+                ret rd.n
+            end
+            if str.Len(prefix) > 0: _kept := own(d, prefix) end
+            _kept_local := own(d, local)
+        else:
             prefix = ""
             local = name
         end
@@ -882,18 +898,22 @@ func parse_into(d &: Document, rd &: Reader, opts: ParseOptions, err &: ParseErr
             name := scan_name(rd, p, i + 2, stop)
             if stack.len() == 0:
                 fail_at(err, rd, i, "</" + name + "> closes an element that never opened")
+                release(name)
                 break
             end
             top := stack.get(stack.len() - 1)
             if d.nodes.get(top).name != name:
                 fail_at(err, rd, i, "</" + name + "> closes <" + d.nodes.get(top).name + ">")
+                release(name)
                 break
             end
             j := skip_space(rd, p, stop)
             if j >= rd.n || xub(p, j) != 62:
                 fail_at(err, rd, j, "the end tag </" + name + "> is never closed")
+                release(name)
                 break
             end
+            release(name)
             stack.pop()
             if opts.namespaces: scope_pop(sc) end
             parent = d.nodes.get(top).parent
@@ -902,7 +922,7 @@ func parse_into(d &: Document, rd &: Reader, opts: ParseOptions, err &: ParseErr
         end
 
         mut stop := i + 1
-        name := scan_name(rd, p, i + 1, stop)
+        name := own(d, scan_name(rd, p, i + 1, stop))
         if str.Len(name) == 0:
             fail_at(err, rd, i + 1, "an element name is missing or starts with a character XML does not allow")
             break
@@ -915,7 +935,7 @@ func parse_into(d &: Document, rd &: Reader, opts: ParseOptions, err &: ParseErr
             fail_at(err, rd, i, "the element nesting is deeper than the parser allows")
             break
         end
-        id := CreateElement(d, name)
+        id := new_element(d, name)
         if opts.namespaces:
             mut prefix := ""
             mut local := ""
@@ -924,8 +944,8 @@ func parse_into(d &: Document, rd &: Reader, opts: ParseOptions, err &: ParseErr
                 break
             end
             mut e := d.nodes.get(id)
-            e.prefix = prefix
-            e.local = local
+            if str.Len(prefix) > 0: e.prefix = own(d, prefix) end
+            e.local = own(d, local)
             d.nodes.set(id, e)
             scope_push(sc)
         end

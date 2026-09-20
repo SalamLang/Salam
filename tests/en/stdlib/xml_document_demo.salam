@@ -1,0 +1,365 @@
+package main
+
+import encoding.xml
+import testing
+import os
+
+const SAMPLE := `<?xml version="1.0" encoding="UTF-8"?>
+<library xmlns="urn:lib" xmlns:dc="http://purl.org/dc/elements/1.1/" city="Tehran">
+  <book id="b1" lang="fa" dc:rights="cc">
+    <dc:title>Salam</dc:title>
+    <price>12.5</price>
+    <tag>a</tag>
+    <tag>b</tag>
+  </book>
+  <book id="b2" lang="en">
+    <dc:title>Hello</dc:title>
+    <price>8</price>
+    <note><![CDATA[raw <text> here]]></note>
+  </book>
+  <!-- end of catalogue -->
+</library>`
+
+func parse_fails(text: str, fragment: str):
+    mut err := xml.NoError()
+    mut d := xml.Parse(text, err)
+    testing.AssertFalse(err.ok)
+    testing.AssertContains(err.message, fragment)
+    xml.Free(d)
+end
+
+func parses(text: str):
+    mut err := xml.NoError()
+    mut d := xml.Parse(text, err)
+    testing.AssertTrue(err.ok)
+    if !err.ok: println "unexpected:", xml.ErrorText(err) end
+    xml.Free(d)
+end
+
+func check_structure():
+    mut err := xml.NoError()
+    mut d := xml.Parse(SAMPLE, err)
+    testing.AssertTrue(err.ok)
+    testing.AssertEqStr(d.version, "1.0")
+    testing.AssertEqStr(d.encoding, "UTF-8")
+
+    root := xml.Root(d)
+    testing.AssertEqStr(xml.Name(d, root), "library")
+    testing.AssertEqStr(xml.NamespaceURI(d, root), "urn:lib")
+    testing.AssertEqStr(xml.AttributeValue(d, root, "city"), "Tehran")
+    testing.AssertEqInt(xml.Depth(d, root), 1)
+    testing.AssertEqInt(xml.Line(d, root), 2)
+
+    mut books := xml.ElementsNamed(d, root, "book")
+    testing.AssertEqInt(books.items.len(), 2)
+    first := books.items.get(0)
+    testing.AssertEqStr(xml.AttributeValue(d, first, "id"), "b1")
+    testing.AssertEqStr(xml.AttributeValueNS(d, first, "http://purl.org/dc/elements/1.1/", "rights"), "cc")
+    testing.AssertEqStr(xml.Path(d, first), "/library[1]/book[1]")
+
+    title := xml.FirstElementNamed(d, first, "dc:title")
+    testing.AssertTrue(xml.Exists(d, title))
+    testing.AssertEqStr(xml.LocalName(d, title), "title")
+    testing.AssertEqStr(xml.Prefix(d, title), "dc")
+    testing.AssertEqStr(xml.NamespaceURI(d, title), "http://purl.org/dc/elements/1.1/")
+    testing.AssertEqStr(xml.Text(d, title), "Salam")
+
+    second := books.items.get(1)
+    note := xml.FirstElementNamed(d, second, "note")
+    testing.AssertEqStr(xml.Text(d, note), "raw <text> here")
+    testing.AssertEqInt(xml.Kind(d, xml.ChildAt(d, note, 0)), xml.KindCData)
+
+    testing.AssertEqInt(xml.Parent(d, title), first)
+    testing.AssertEqInt(xml.NextSibling(d, first), second)
+    testing.AssertEqInt(xml.PreviousSibling(d, second), first)
+
+    mut kids := xml.Descendants(d, second)
+    testing.AssertTrue(kids.items.len() > 3)
+    xml.FreeList(kids)
+    xml.FreeList(books)
+    xml.Free(d)
+end
+
+func check_wellformedness():
+    parses("<a/>")
+    parses("<a></a>")
+    parses(`<?xml version="1.0" standalone="yes"?><a/>`)
+    parses("<a><!-- c --><?pi data?><b/></a>")
+    parses("<a>&amp;&lt;&gt;&quot;&apos;&#65;&#x42;</a>")
+    parses(`<!DOCTYPE a SYSTEM "a.dtd"><a/>`)
+
+    parse_fails("<a></b>", "closes")
+    parse_fails("<a><b></a>", "closes")
+    parse_fails("<a/><b/>", "only one root element")
+    parse_fails("<a>", "never closed")
+    parse_fails("</a>", "never opened")
+    parse_fails("<1a/>", "element name is missing")
+    parse_fails(`<a x="1" x="2"/>`, "given twice")
+    parse_fails(`<a x=1/>`, "must be in quotes")
+    parse_fails(`<a x/>`, "has no value")
+    parse_fails("<a>&nope;</a>", "not declared")
+    parse_fails("<a>&amp</a>", "no closing semicolon")
+    parse_fails("<a><!-- a -- b --></a>", "may not hold")
+    parse_fails("<a><!-- unterminated </a>", "never closed")
+    parse_fails("<a>]]></a>", "may not appear in character data")
+    parse_fails("<a><![CDATA[x</a>", "never closed")
+    parse_fails("<a><p:b/></a>", "not declared")
+    parse_fails(`<a xmlns:p=""><p:b/></a>`, "empty namespace")
+    parse_fails("<!-- nothing else -->", "no root element")
+    parse_fails("text before<a/>", "not allowed outside")
+    parse_fails("<?xml version=\"1.0\"?><?xml-stylesheet?><?xml bad?><a/>", "reserved")
+    parse_fails(`<!DOCTYPE a><!DOCTYPE b><a/>`, "more than one document type")
+    parse_fails("<a>&#xD800;</a>", "not a legal XML character")
+
+    mut err := xml.NoError()
+    testing.AssertTrue(xml.WellFormed("<a><b/></a>", err))
+    testing.AssertFalse(xml.WellFormed("<a><b/>", err))
+    testing.AssertEqInt(err.line, 1)
+end
+
+func check_positions():
+    mut err := xml.NoError()
+    mut d := xml.Parse("<a>\n  <b/>\n  <c>\n    <e/>\n  </c>\n</a>", err)
+    testing.AssertTrue(err.ok)
+    root := xml.Root(d)
+    b := xml.FirstElementNamed(d, root, "b")
+    testing.AssertEqInt(xml.Line(d, b), 2)
+    testing.AssertEqInt(xml.Column(d, b), 3)
+    c := xml.FirstElementNamed(d, root, "c")
+    e := xml.FirstElementNamed(d, c, "e")
+    testing.AssertEqInt(xml.Line(d, e), 4)
+    testing.AssertEqInt(xml.Column(d, e), 5)
+    xml.Free(d)
+
+    mut e2 := xml.NoError()
+    mut d2 := xml.Parse("<a>\n  <b>\n</a>", e2)
+    testing.AssertFalse(e2.ok)
+    testing.AssertEqInt(e2.line, 3)
+    xml.Free(d2)
+end
+
+func check_entities():
+    mut err := xml.NoError()
+    mut d := xml.Parse(`<!DOCTYPE a [<!ENTITY who "sal&#97;m"><!ENTITY greet "hi &who;">]><a t="&greet;">&greet;</a>`, err)
+    testing.AssertTrue(err.ok)
+    testing.AssertEqInt(xml.EntityCount(d), 2)
+    testing.AssertEqStr(xml.EntityValue(d, "who"), "sal&#97;m")
+    root := xml.Root(d)
+    testing.AssertEqStr(xml.Text(d, root), "hi salam")
+    testing.AssertEqStr(xml.AttributeValue(d, root, "t"), "hi salam")
+    xml.Free(d)
+end
+
+func check_building():
+    mut d := xml.NewDocument()
+    root := xml.CreateElement(d, "order")
+    xml.Append(d, xml.DocumentNode(d), root)
+    xml.SetAttribute(d, root, "id", "42")
+    line := xml.CreateElement(d, "line")
+    xml.Append(d, root, line)
+    xml.SetText(d, line, "pen & paper")
+    note := xml.CreateComment(d, " built by hand ")
+    xml.Append(d, root, note)
+
+    testing.AssertEqStr(xml.Write(d), `<order id="42"><line>pen &amp; paper</line><!-- built by hand --></order>`)
+    testing.AssertTrue(xml.HasAttribute(d, root, "id"))
+    testing.AssertTrue(xml.RemoveAttribute(d, root, "id"))
+    testing.AssertFalse(xml.HasAttribute(d, root, "id"))
+
+    head := xml.CreateElement(d, "head")
+    xml.InsertBefore(d, root, head, line)
+    testing.AssertEqInt(xml.ChildAt(d, root, 0), head)
+    testing.AssertTrue(xml.RemoveChild(d, root, head))
+    testing.AssertEqInt(xml.ChildCount(d, root), 2)
+    xml.Free(d)
+end
+
+func check_writing():
+    mut err := xml.NoError()
+    mut d := xml.Parse(`<r a="1" b="2"><x/><y>t</y></r>`, err)
+    testing.AssertTrue(err.ok)
+    testing.AssertEqStr(xml.Write(d), `<r a="1" b="2"><x/><y>t</y></r>`)
+    testing.AssertEqStr(xml.WriteIndent(d, "  "), "<r a=\"1\" b=\"2\">\n  <x/>\n  <y>t</y>\n</r>\n")
+    testing.AssertEqStr(xml.Canonical(d), `<r a="1" b="2"><x></x><y>t</y></r>`)
+    testing.AssertEqStr(xml.WriteNode(d, xml.Root(d)), `<r a="1" b="2"><x/><y>t</y></r>`)
+
+    mut e2 := xml.NoError()
+    mut back := xml.Parse(xml.Write(d), e2)
+    testing.AssertTrue(e2.ok)
+    testing.AssertEqStr(xml.Canonical(d), xml.Canonical(back))
+    xml.Free(back)
+    xml.Free(d)
+
+    mut e3 := xml.NoError()
+    mut d3 := xml.Parse(`<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE r><r/>`, e3)
+    testing.AssertContains(xml.WriteDocument(d3), "<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
+    testing.AssertContains(xml.WriteDocument(d3), "<!DOCTYPE r>")
+    xml.Free(d3)
+end
+
+func nodes_of(d: xml.Document, expr: str): str:
+    mut err := xml.NoError()
+    mut list := xml.Select(d, 0 - 1, expr, err)
+    if !err.ok:
+        list.items.free()
+        ret "error: " + err.message
+    end
+    mut out := ""
+    mut i := 0
+    until i < list.items.len():
+        if i > 0: out = out + "|" end
+        out = out + xml.StringValue(d, list.items.get(i))
+        i += 1
+    end
+    list.items.free()
+    ret out
+end
+
+func check_search():
+    mut err := xml.NoError()
+    mut d := xml.Parse(SAMPLE, err)
+    testing.AssertTrue(err.ok)
+
+    testing.AssertEqStr(nodes_of(d, "//book/@id"), "b1|b2")
+    testing.AssertEqStr(nodes_of(d, "//price"), "12.5|8")
+    testing.AssertEqStr(nodes_of(d, "//book[@lang='en']/@id"), "b2")
+    testing.AssertEqStr(nodes_of(d, "//book[price>10]/@id"), "b1")
+    testing.AssertEqStr(nodes_of(d, "//book[last()]/@id"), "b2")
+    testing.AssertEqStr(nodes_of(d, "//book[1]/tag"), "a|b")
+    testing.AssertEqStr(nodes_of(d, "//tag[position()=2]"), "b")
+    testing.AssertEqStr(nodes_of(d, "//comment()"), " end of catalogue ")
+    testing.AssertEqStr(nodes_of(d, "//book[2]/preceding-sibling::book/@id"), "b1")
+    testing.AssertEqStr(nodes_of(d, "//price/ancestor::book/@id"), "b1|b2")
+    testing.AssertEqStr(nodes_of(d, "//*[local-name()='price']"), "12.5|8")
+    testing.AssertEqStr(nodes_of(d, "//book[not(@lang='en')]/@id"), "b1")
+    testing.AssertEqStr(nodes_of(d, "//book[contains(@id,'2')]/@id"), "b2")
+    testing.AssertEqStr(nodes_of(d, "/library/@city"), "Tehran")
+    testing.AssertEqStr(nodes_of(d, "//note"), "raw <text> here")
+
+    mut e2 := xml.NoError()
+    testing.AssertEqFloat(xml.SelectNumber(d, 0 - 1, "count(//book)", e2), 2.0, 0.0001)
+    testing.AssertEqFloat(xml.SelectNumber(d, 0 - 1, "sum(//price)", e2), 20.5, 0.0001)
+    testing.AssertEqFloat(xml.SelectNumber(d, 0 - 1, "2 + 3 * 4", e2), 14.0, 0.0001)
+    testing.AssertEqFloat(xml.SelectNumber(d, 0 - 1, "7 div 2", e2), 3.5, 0.0001)
+    testing.AssertEqStr(xml.SelectString(d, 0 - 1, "concat('n=', count(//tag))", e2), "n=2")
+    testing.AssertEqStr(xml.SelectString(d, 0 - 1, "normalize-space('  a   b ')", e2), "a b")
+    testing.AssertEqStr(xml.SelectString(d, 0 - 1, "substring('hello', 2, 3)", e2), "ell")
+    testing.AssertEqStr(xml.SelectString(d, 0 - 1, "translate('abc','ab','xy')", e2), "xyc")
+    testing.AssertTrue(xml.SelectBoolean(d, 0 - 1, "//book", e2))
+    testing.AssertFalse(xml.SelectBoolean(d, 0 - 1, "//missing", e2))
+    testing.AssertTrue(e2.ok)
+
+    book := xml.SelectFirst(d, 0 - 1, "//book[2]", e2)
+    testing.AssertEqStr(xml.AttributeValue(d, book, "id"), "b2")
+    inner := xml.SelectFirst(d, book, "price", e2)
+    testing.AssertEqStr(xml.Text(d, inner), "8")
+
+    mut bad := xml.NoError()
+    mut broken := xml.Select(d, 0 - 1, "//a[", bad)
+    testing.AssertFalse(bad.ok)
+    broken.items.free()
+
+    mut bad2 := xml.NoError()
+    mut broken2 := xml.Select(d, 0 - 1, "nosuch()", bad2)
+    testing.AssertFalse(bad2.ok)
+    testing.AssertContains(bad2.message, "no XPath function")
+    broken2.items.free()
+
+    xml.Free(d)
+end
+
+func check_validation():
+    grammar := `<!DOCTYPE note [
+<!ELEMENT note (to,from,heading?,body+)>
+<!ELEMENT to (#PCDATA)>
+<!ELEMENT from (#PCDATA)>
+<!ELEMENT heading (#PCDATA)>
+<!ELEMENT body (#PCDATA)>
+<!ATTLIST note id ID #REQUIRED priority (low|high) "low" ref IDREF #IMPLIED>
+]>`
+    mut err := xml.NoError()
+    mut good := xml.Parse(grammar + `<note id="n1"><to>A</to><from>B</from><body>hi</body></note>`, err)
+    testing.AssertTrue(err.ok)
+    mut r := xml.ValidateInternalSubset(good)
+    testing.AssertTrue(r.ok)
+    xml.FreeReport(r)
+    xml.Free(good)
+
+    mut e2 := xml.NoError()
+    mut bad := xml.Parse(grammar + `<note priority="urgent" ref="x"><from>B</from><to>A</to></note>`, e2)
+    testing.AssertTrue(e2.ok)
+    mut r2 := xml.ValidateInternalSubset(bad)
+    testing.AssertFalse(r2.ok)
+    text := xml.ReportText(r2)
+    testing.AssertContains(text, "do not match")
+    testing.AssertContains(text, "missing the required attribute")
+    testing.AssertContains(text, "not one of the values declared")
+    testing.AssertContains(text, "points at an ID no element carries")
+    xml.FreeReport(r2)
+    xml.Free(bad)
+
+    mut dtd := xml.ParseDTD(`<!ELEMENT r ((a|b)+,c?)><!ELEMENT a EMPTY><!ELEMENT b EMPTY><!ELEMENT c EMPTY>`)
+    testing.AssertTrue(dtd.ok)
+    testing.AssertEqInt(xml.DeclaredElementCount(dtd), 4)
+
+    mut e3 := xml.NoError()
+    mut ok3 := xml.Parse("<r><a/><b/><a/><c/></r>", e3)
+    mut r3 := xml.Validate(ok3, dtd)
+    testing.AssertTrue(r3.ok)
+    xml.FreeReport(r3)
+    xml.Free(ok3)
+
+    mut e4 := xml.NoError()
+    mut bad4 := xml.Parse("<r><c/><a/></r>", e4)
+    mut r4 := xml.Validate(bad4, dtd)
+    testing.AssertFalse(r4.ok)
+    xml.FreeReport(r4)
+    xml.Free(bad4)
+
+    mut e5 := xml.NoError()
+    mut empty5 := xml.Parse("<r/>", e5)
+    mut r5 := xml.Validate(empty5, dtd)
+    testing.AssertFalse(r5.ok)
+    xml.FreeReport(r5)
+    xml.Free(empty5)
+    xml.FreeDTD(dtd)
+
+    mut defaults := xml.ParseDTD(`<!ELEMENT r EMPTY><!ATTLIST r lang CDATA "en">`)
+    mut e6 := xml.NoError()
+    mut d6 := xml.Parse("<r/>", e6)
+    testing.AssertEqInt(xml.ApplyDefaults(d6, defaults), 1)
+    testing.AssertEqStr(xml.AttributeValue(d6, xml.Root(d6), "lang"), "en")
+    xml.Free(d6)
+    xml.FreeDTD(defaults)
+end
+
+func check_namespace_report():
+    mut d := xml.NewDocument()
+    root := xml.CreateElement(d, "p:root")
+    xml.Append(d, xml.DocumentNode(d), root)
+    kid := xml.CreateElement(d, "q:kid")
+    xml.Append(d, root, kid)
+    xml.SetAttribute(d, root, "xmlns:p", "urn:p")
+    mut r := xml.CheckNamespaces(d)
+    testing.AssertFalse(r.ok)
+    testing.AssertContains(xml.ReportText(r), "\"q\" is not declared")
+    xml.FreeReport(r)
+    xml.SetAttribute(d, root, "xmlns:q", "urn:q")
+    mut r2 := xml.CheckNamespaces(d)
+    testing.AssertTrue(r2.ok)
+    xml.FreeReport(r2)
+    xml.Free(d)
+end
+
+func main:
+    check_structure()
+    check_wellformedness()
+    check_positions()
+    check_entities()
+    check_building()
+    check_writing()
+    check_search()
+    check_validation()
+    check_namespace_report()
+    os.Exit(testing.Summary())
+end

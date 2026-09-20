@@ -77,29 +77,56 @@ build commands, documentation.
 
 ## Checking
 
-Two scripts run over what the generator produced, and CI runs both:
+Two Salam programs run over what the generator produced, and CI runs both:
 
 ```sh
-python3 extensions/tools/validate.py       # parses every definition, compiles its patterns
-python3 extensions/tools/check_engines.py  # highlights the probes with real engines
+salam exec extensions/tools/validate.salam --timeout=300000       # parses every definition, checks its patterns
+salam exec extensions/tools/check_engines.salam --timeout=300000  # highlights the probes with real engines
 ```
 
-`validate.py` parses each definition, compiles every regular expression in it, checks the
-cross-references (Kate contexts and item data, GtkSourceView refs and styles,
-TextMate repository includes, Sublime context includes) and rejects lookaround
-in the micro rules, which Go's RE2 cannot run.
+`validate.salam` parses each definition, checks every regular expression in
+it, checks the cross-references (Kate contexts and item data, GtkSourceView
+refs and styles, TextMate repository includes, Sublime context includes and
+`{{variable}}` definitions, GtkSourceView `\%{define-regex}` references) and
+rejects what Go's RE2 cannot run in the micro rules: lookaround,
+backreferences, atomic groups, possessive quantifiers and a repetition count
+above 1000.
 
-`check_engines.py` hands four of the definitions to the engines that actually
-read them: the Visual Studio Code grammar to `vscode-textmate` and
-`vscode-oniguruma`, the Kate one to `kate-syntax-highlighter`, the Sublime Text
-one to syntect (which ships inside `bat`), and the GtkSourceView one to
+The pattern checking is a regular-expression syntax checker written for the
+two flavours these files actually use, Oniguruma and RE2, rather than a
+different engine's parser standing in for them. It reports unbalanced groups
+and classes, a quantifier with nothing to repeat, a reversed `{n,m}` or
+character range, a backreference to a group that does not exist, a malformed
+`\x{...}` or a code point above U+10FFFF, and per flavour the constructs that
+engine cannot run.
+
+`check_engines.salam` hands four of the definitions to the engines that
+actually read them: the Visual Studio Code grammar to `vscode-textmate` and
+`vscode-oniguruma`, the Kate one to `kate-syntax-highlighter`, the Sublime
+Text one to syntect (which ships inside `bat`), and the GtkSourceView one to
 GtkSourceView through GObject introspection. Each highlights
-`tools/fixtures/probe_{en,fa,ar}.salam`. Those
-three files are the same program written with the English, Persian and Arabic
-keywords, and each one compiles. The check asserts that a construct comes out
-styled the same way in all three, so dropping a Persian keyword from one
-definition fails the build. Where an engine is not installed the check says so
-and skips rather than failing.
+`tools/fixtures/probe_{en,fa,ar}.salam`. Those three files are the same
+program written with the English, Persian and Arabic keywords, and each one
+compiles. The check asserts that a construct comes out styled the same way in
+all three, so dropping a Persian keyword from one definition fails the build.
+Where an engine is not installed the check says so and skips rather than
+failing.
+
+Two of those engines can only be reached from their own runtime, so each gets
+a driver that does nothing but dump `[token, style]` pairs as JSON:
+`tools/check_textmate.mjs` for `vscode-textmate`, which is a JavaScript
+library, and `tools/check_gtksource.py` for GtkSourceView, which is reachable
+only through GObject introspection. Every decision the check makes lives in
+`check_engines.salam`.
+
+`tools/syntaxcheck.salam` holds the checking logic that `validate.salam`
+drives, and `tools/syntaxcheck_test.salam` is its test suite: it feeds each
+checker a deliberately broken definition and asserts on the diagnostic, then
+runs every checker over the real files and expects silence.
+
+```sh
+salam exec extensions/tools/syntaxcheck_test.salam --timeout=300000
+```
 
 CI additionally loads the syntax in real Vim and checks what it highlights,
 runs the indent file over an unindented file and diffs the result, and
@@ -134,7 +161,8 @@ The plugin code here talks to the compiler by running it as a separate
 program and never links against or imports the standard library, so nothing
 in this directory carries a copyleft obligation.
 
-`tools/gen_syntaxes.salam` is the exception: it is written in Salam and
-imports the standard library, so it is covered by the repository's GPLv3
-licence. It is a build-time tool and is not part of any plugin. Its output is
-data, and that data is MIT along with the rest of this directory.
+The programs under `tools/` are the exception: `gen_syntaxes.salam`,
+`validate.salam`, `syntaxcheck.salam` and `check_engines.salam` are written in
+Salam and import the standard library, so they are covered by the repository's
+GPLv3 licence. They are build-time tools and are not part of any plugin. Their
+output is data, and that data is MIT along with the rest of this directory.

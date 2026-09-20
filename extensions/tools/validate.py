@@ -73,10 +73,10 @@ def compile_all(patterns, where):
 
 
 def load_json(path, strip_comments=False):
-    text = read_text(path)
-    if strip_comments:
-        text = re.sub(r"^\s*//.*$", "", text, flags=re.MULTILINE)
     try:
+        text = read_text(path)
+        if strip_comments:
+            text = re.sub(r"^\s*//.*$", "", text, flags=re.MULTILINE)
         return json.loads(text)
     except (OSError, json.JSONDecodeError) as error:
         fail(path, str(error))

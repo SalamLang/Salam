@@ -240,22 +240,32 @@ Return nil when there is none."
          (mapconcat #'shell-quote-argument (cons salam-compiler args) " ")))
     (compile compile-command)))
 
+(defun salam--current-file ()
+  "Return the buffer's file, saving it first so the compiler reads this text.
+Signals when the buffer has never been written, which would otherwise build a
+command line containing nil."
+  (unless (buffer-file-name)
+    (user-error "This buffer has no file; save it before running the compiler"))
+  (when (buffer-modified-p)
+    (save-buffer))
+  (buffer-file-name))
+
 (defun salam-run ()
   "Run the current buffer's file."
   (interactive)
-  (salam--compile (append (list salam-run-command (buffer-file-name) "--error-style=gcc")
+  (salam--compile (append (list salam-run-command (salam--current-file) "--error-style=gcc")
                           (salam--common-args))))
 
 (defun salam-build ()
   "Compile the current buffer's file to an executable."
   (interactive)
-  (salam--compile (append (list "build" (buffer-file-name) "--error-style=gcc")
+  (salam--compile (append (list "build" (salam--current-file) "--error-style=gcc")
                           (salam--common-args))))
 
 (defun salam-check ()
   "Type-check the current buffer's file without running it."
   (interactive)
-  (salam--compile (append (list "inspect" (buffer-file-name)
+  (salam--compile (append (list "inspect" (salam--current-file)
                                 "--emit-symbol-xml"
                                 (concat "--xml-out=" (salam--null-device))
                                 "--error-style=gcc"

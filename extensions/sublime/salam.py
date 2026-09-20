@@ -62,9 +62,13 @@ def run_compiler(args, cwd=None):
     """Run the compiler and return (returncode, stdout, stderr).
 
     Returns (None, "", message) when the executable cannot be started, which
-    is almost always a compiler_path that is not on PATH.
+    is almost always a compiler_path that is not on PATH, or when it outlived
+    its timeout. Formatting runs on the UI thread because the edit token only
+    exists there, so an unbounded wait would freeze the editor, and freeze a
+    save along with it.
     """
     command = [setting("compiler_path", "salam")] + args
+    seconds = setting("timeout_seconds", 60)
     try:
         with subprocess.Popen(
             command,
@@ -74,7 +78,16 @@ def run_compiler(args, cwd=None):
             startupinfo=startup_info(),
             universal_newlines=True,
         ) as proc:
-            out, err = proc.communicate()
+            try:
+                out, err = proc.communicate(timeout=seconds)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()
+                return (
+                    None,
+                    "",
+                    "{0} did not finish within {1}s".format(command[0], seconds),
+                )
             return proc.returncode, out or "", err or ""
     except OSError as exc:
         return None, "", "cannot run {0!r}: {1}".format(command[0], exc)
@@ -186,7 +199,11 @@ class SalamFormatCommand(sublime_plugin.TextCommand):
 
 
 class SalamCheckCommand(sublime_plugin.TextCommand):
-    """Type-check the file without running it, into the output panel."""
+    """Type-check the file without running it, into the output panel.
+
+    Nothing here needs the edit token, so the compiler runs off the UI thread
+    and only the panel update comes back to it.
+    """
 
     def is_enabled(self):
         return is_salam(self.view)
@@ -199,6 +216,7 @@ class SalamCheckCommand(sublime_plugin.TextCommand):
         if self.view.is_dirty():
             self.view.run_command("save")
 
+        # Read the buffer and the settings here, where the UI thread owns them.
         text = self.view.substr(sublime.Region(0, self.view.size()))
         null_device = "NUL" if os.name == "nt" else "/dev/null"
         args = [
@@ -208,18 +226,29 @@ class SalamCheckCommand(sublime_plugin.TextCommand):
             "--xml-out=" + null_device,
             "--error-style=gcc",
             "--log-level=error",
-        ]
-        code, out, err = run_compiler(
-            args + common_args(text), cwd=os.path.dirname(path)
+        ] + common_args(text)
+        window = self.view.window()
+        working_dir = os.path.dirname(path)
+
+        sublime.status_message("Salam: checking...")
+        sublime.set_timeout_async(
+            lambda: check_in_background(window, args, working_dir), 0
         )
-        report = (out + err).strip()
-        if code == 0 and not report:
-            sublime.status_message("Salam: no problems found")
-            self.view.window().run_command(
-                "hide_panel", {"panel": "output." + OUTPUT_PANEL}
-            )
-            return
-        show_panel(self.view.window(), report + "\n")
+
+
+def check_in_background(window, args, working_dir):
+    """Runs off the UI thread; touches no buffer."""
+    code, out, err = run_compiler(args, cwd=working_dir)
+    report = (out + err).strip()
+    sublime.set_timeout(lambda: report_check(window, code, report), 0)
+
+
+def report_check(window, code, report):
+    if code == 0 and not report:
+        sublime.status_message("Salam: no problems found")
+        window.run_command("hide_panel", {"panel": "output." + OUTPUT_PANEL})
+        return
+    show_panel(window, report + "\n")
 
 
 class SalamToggleFormatOnSaveCommand(sublime_plugin.ApplicationCommand):

@@ -27,6 +27,9 @@ SUBLIME_DEFINITION = "extensions/sublime/Salam.sublime-syntax"
 TEXTMATE_DEFINITION = "extensions/vscode/syntaxes/salam.tmLanguage.json"
 TEXTMATE_DRIVER = "extensions/tools/check_textmate.mjs"
 
+# The one exit status from that driver that means "skip"; see its header.
+MODULES_MISSING = 3
+
 # A theme that gives keywords, types and function names three different
 # colours, so the assertions below can tell them apart.
 SYNTECT_THEME = "Monokai Extended"
@@ -66,13 +69,11 @@ def probe_path(language):
 def textmate_styles(path, _unused):
     """vscode-textmate reports a scope per token, which names the rule that
     matched far more precisely than a colour does."""
-    environment = dict(os.environ)
     out = subprocess.run(
-        ["node", TEXTMATE_DRIVER, TEXTMATE_DEFINITION, path],
+        [shutil.which("node"), TEXTMATE_DRIVER, TEXTMATE_DEFINITION, path],
         capture_output=True,
         text=True,
         check=True,
-        env=environment,
     ).stdout
     tokens = json.loads(out)[path]
     styles = {}
@@ -82,15 +83,21 @@ def textmate_styles(path, _unused):
 
 
 def have_textmate():
-    if not shutil.which("node"):
+    """Whether the two npm packages are installed, and nothing more.
+
+    The driver reports that with its own exit status, so a grammar that fails
+    to load is never mistaken for an engine that is not there. Anything other
+    than MODULES_MISSING leaves the check to run and fail properly."""
+    node = shutil.which("node")
+    if not node:
         return False
     probe = subprocess.run(
-        ["node", TEXTMATE_DRIVER, TEXTMATE_DEFINITION, probe_path("en")],
+        [node, TEXTMATE_DRIVER, "--probe-modules"],
         capture_output=True,
         text=True,
         check=False,
     )
-    return probe.returncode == 0
+    return probe.returncode != MODULES_MISSING
 
 
 def bat_binary():
@@ -289,6 +296,10 @@ def check(engine, reader, definition_dir):
         }
     except ENGINE_ERRORS as error:
         print(f"  FAIL: {error}")
+        detail = (getattr(error, "stderr", "") or "").strip()
+        if detail:
+            for line in detail.splitlines()[:3]:
+                print(f"    {line}")
         return 1
 
     problems, category_style = compare(per_language)

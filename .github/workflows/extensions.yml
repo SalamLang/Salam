@@ -1,0 +1,112 @@
+---
+name: 🧩 Extensions - editor syntaxes
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'extensions/**'
+      - 'compiler/langpack.salam'
+      - 'compiler/semantic/semantic.salam'
+      - '.github/workflows/extensions.yml'
+  pull_request:
+    paths:
+      - 'extensions/**'
+      - 'compiler/langpack.salam'
+      - 'compiler/semantic/semantic.salam'
+      - '.github/workflows/extensions.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: extensions-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  syntaxes:
+    name: Regenerate and validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install a seed compiler
+        id: seed
+        uses: ./.github/actions/setup-salam
+        with:
+          add-to-path: 'false'
+
+      - name: Build the salam compiler from source
+        env:
+          SEED_PATH: ${{ steps.seed.outputs.salam }}
+        run: |
+          set -eu
+          sh tools/bash/build-selfhost.sh --seed="$SEED_PATH"
+          ./salam version
+          pwd >> "$GITHUB_PATH"
+
+      - name: Regenerate every editor syntax
+        env:
+          SALAM_STD: ${{ github.workspace }}/std
+        run: salam exec extensions/tools/gen_syntaxes.salam --timeout=300000
+
+      - name: Fail if a generated file is out of date
+        run: |
+          set -eu
+          if ! git diff --exit-code -- extensions; then
+            echo "::error::a generated editor file differs from what is committed."
+            echo "::error::run 'salam exec extensions/tools/gen_syntaxes.salam --timeout=180000' and commit the result."
+            exit 1
+          fi
+
+      - name: Validate every syntax definition
+        run: |
+          set -eu
+          python3 -m pip install --quiet --disable-pip-version-check regex PyYAML
+          python3 extensions/tools/validate.py
+
+      - name: Install Vim and Emacs
+        run: |
+          set -eu
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends vim-nox emacs-nox
+
+      - name: Load the Vim syntax and check what it highlights
+        run: |
+          set -eu
+          {
+            echo 'set nocompatible encoding=utf-8'
+            echo "set runtimepath^=$GITHUB_WORKSPACE/extensions/vim"
+            echo 'filetype plugin indent on'
+            echo 'syntax on'
+          } > /tmp/vimrc
+          printf 'func main:\n    if true:\n        println "hi"\n    end\nend\n' > /tmp/probe.salam
+          vim -N -u /tmp/vimrc -es \
+            -c 'edit /tmp/probe.salam' \
+            -c 'call writefile([synIDattr(synID(1, 1, 1), "name"), synIDattr(synID(3, 9, 1), "name")], "/tmp/groups")' \
+            -c 'qa!' < /dev/null
+          grep -qx 'salamFuncDecl' /tmp/groups || { echo "::error::vim did not highlight 'func'"; cat /tmp/groups; exit 1; }
+          grep -qx 'salamBuiltin' /tmp/groups || { echo "::error::vim did not highlight 'println'"; cat /tmp/groups; exit 1; }
+
+      - name: Check the Vim indent file
+        run: |
+          set -eu
+          printf 'func main:\nif true:\nprintln "hi"\nend\nend\n' > /tmp/flat.salam
+          vim -N -u /tmp/vimrc -es -c 'edit /tmp/flat.salam' -c 'normal! gg=G' -c 'write! /tmp/indented' -c 'qa!' < /dev/null
+          printf 'func main:\n    if true:\n        println "hi"\n    end\nend\n' > /tmp/expected
+          diff -u /tmp/expected /tmp/indented
+
+      - name: Byte-compile the Emacs mode
+        run: |
+          set -eu
+          cd extensions/emacs
+          emacs --batch -Q --eval '(setq byte-compile-error-on-warn t)' -f batch-byte-compile salam-mode.el
+          emacs --batch -Q -L . --eval '(progn (require (quote salam-mode)) (with-temp-buffer (insert "func main:\n") (salam-mode) (font-lock-ensure)))'
+          rm -f salam-mode.elc
+
+      - name: Check the Sublime plugin
+        run: python3 -m py_compile extensions/sublime/salam.py

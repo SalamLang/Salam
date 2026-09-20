@@ -1,0 +1,1580 @@
+package xml
+
+pub const ValueNodeSet := 0
+pub const ValueString := 1
+pub const ValueNumber := 2
+pub const ValueBoolean := 3
+
+const TK_END := 0
+const TK_NAME := 1
+const TK_NUMBER := 2
+const TK_LITERAL := 3
+const TK_OP := 4
+
+const XP_PATH := 1
+const XP_STEP := 2
+const XP_BINARY := 3
+const XP_NEGATE := 4
+const XP_LITERAL := 5
+const XP_NUMBER := 6
+const XP_CALL := 7
+const XP_FILTER := 8
+const XP_UNION := 9
+
+const AX_CHILD := 0
+const AX_DESCENDANT := 1
+const AX_PARENT := 2
+const AX_ANCESTOR := 3
+const AX_SELF := 4
+const AX_DESCENDANT_OR_SELF := 5
+const AX_ANCESTOR_OR_SELF := 6
+const AX_FOLLOWING_SIBLING := 7
+const AX_PRECEDING_SIBLING := 8
+const AX_ATTRIBUTE := 9
+const AX_FOLLOWING := 10
+const AX_PRECEDING := 11
+
+const NT_NAME := 0
+const NT_ANY := 1
+const NT_NODE := 2
+const NT_TEXT := 3
+const NT_COMMENT := 4
+const NT_INSTRUCTION := 5
+const NT_PREFIX_ANY := 6
+
+pub struct XPathValue:
+    pub kind: int = 0
+    pub nodes: NodeList = NodeList {}
+    pub text: str = ""
+    pub number: f64 = 0.0
+    pub flag: bool = false
+end
+
+struct XPVal:
+    pub kind: int = 0
+    pub set: int = 0 - 1
+    pub text: str = ""
+    pub number: f64 = 0.0
+    pub flag: bool = false
+end
+
+struct XPExpr:
+    pub kind: int = 0
+    pub op: str = ""
+    pub a: int = 0 - 1
+    pub b: int = 0 - 1
+    pub args: Vector<int> = Vector {}
+    pub text: str = ""
+    pub number: f64 = 0.0
+    pub axis: int = 0
+    pub test: int = 0
+    pub name: str = ""
+    pub prefix: str = ""
+    pub absolute: bool = false
+end
+
+struct XPEngine:
+    pub kinds: Vector<int> = Vector {}
+    pub texts: Vector<str> = Vector {}
+    pub numbers: Vector<f64> = Vector {}
+    pub offsets: Vector<int> = Vector {}
+    pub at: int = 0
+    pub exprs: Vector<XPExpr> = Vector {}
+    pub sets: Vector<NodeList> = Vector {}
+    pub order: Vector<int> = Vector {}
+    pub failed: bool = false
+    pub message: str = ""
+    pub offset: int = 0
+end
+
+func xp_fail(e &: XPEngine, offset: int, message: str):
+    if e.failed: ret end
+    e.failed = true
+    e.message = message
+    e.offset = offset
+end
+
+func xp_op_expected(text: str, prev_kind: int, prev_text: str): bool:
+    if prev_kind == TK_END: ret false end
+    if prev_kind == TK_NAME:
+        if prev_text == "and" || prev_text == "or" || prev_text == "div" || prev_text == "mod": ret false end
+        ret true
+    end
+    if prev_kind == TK_NUMBER || prev_kind == TK_LITERAL: ret true end
+    if prev_text == ")" || prev_text == "]" || prev_text == "*" || prev_text == ".": ret true end
+    _unused := text
+    ret false
+end
+
+func xp_push_token(e &: XPEngine, kind: int, text: str, number: f64, offset: int):
+    e.kinds.push(kind)
+    e.texts.push(text)
+    e.numbers.push(number)
+    e.offsets.push(offset)
+end
+
+func xp_lex(e &: XPEngine, src: str):
+    n := str.Len(src)
+    p := xbp(src)
+    mut i := 0
+    until !e.failed && i < n:
+        c := xub(p, i)
+        if xml_space(c):
+            i += 1
+            continue
+        end
+        start := i
+        if c == 34 || c == 39:
+            mut j := i + 1
+            until j < n && xub(p, j) != c:
+                j += 1
+            end
+            if j >= n:
+                xp_fail(e, i, "a string literal is never closed")
+                ret
+            end
+            xp_push_token(e, TK_LITERAL, str.Substr(src, i + 1, j - i - 1), 0.0, start)
+            i = j + 1
+            continue
+        end
+        if ascii_digit(c) || (c == 46 && i + 1 < n && ascii_digit(xub(p, i + 1))):
+            mut j := i
+            until j < n && (ascii_digit(xub(p, j)) || xub(p, j) == 46):
+                j += 1
+            end
+            xp_push_token(e, TK_NUMBER, "", str.ToFloat(str.Substr(src, i, j - i)), start)
+            i = j
+            continue
+        end
+        mut width := 0
+        cp := decode_cp(p, n, i, width)
+        if cp >= 0 && name_start_cp(cp) && cp != 58:
+            mut j := i
+            until j < n:
+                q := decode_cp(p, n, j, width)
+                if q < 0 || !name_char_cp(q) || q == 58: break end
+                j += width
+            end
+            mut word := str.Substr(src, i, j - i)
+            mut k := j
+            if k + 1 < n && xub(p, k) == 58 && xub(p, k + 1) != 58:
+                m := k + 1
+                if m < n && xub(p, m) == 42:
+                    word = word + ":*"
+                    k = m + 1
+                else:
+                    mut q := m
+                    until q < n:
+                        cq := decode_cp(p, n, q, width)
+                        if cq < 0 || !name_char_cp(cq) || cq == 58: break end
+                        q += width
+                    end
+                    if q > m:
+                        word = str.Substr(src, i, q - i)
+                        k = q
+                    end
+                end
+            end
+            xp_push_token(e, TK_NAME, word, 0.0, start)
+            i = k
+            continue
+        end
+        mut prev_kind := TK_END
+        mut prev_text := ""
+        if e.kinds.len() > 0:
+            prev_kind = e.kinds.get(e.kinds.len() - 1)
+            prev_text = e.texts.get(e.texts.len() - 1)
+        end
+        if c == 47 && i + 1 < n && xub(p, i + 1) == 47:
+            xp_push_token(e, TK_OP, "//", 0.0, start)
+            i += 2
+            continue
+        end
+        if c == 46 && i + 1 < n && xub(p, i + 1) == 46:
+            xp_push_token(e, TK_OP, "..", 0.0, start)
+            i += 2
+            continue
+        end
+        if c == 58 && i + 1 < n && xub(p, i + 1) == 58:
+            xp_push_token(e, TK_OP, "::", 0.0, start)
+            i += 2
+            continue
+        end
+        if (c == 33 || c == 60 || c == 62) && i + 1 < n && xub(p, i + 1) == 61:
+            xp_push_token(e, TK_OP, str.Substr(src, i, 2), 0.0, start)
+            i += 2
+            continue
+        end
+        if c == 42:
+            mut text := "*"
+            if xp_op_expected(text, prev_kind, prev_text): text = "*mul" end
+            xp_push_token(e, TK_OP, text, 0.0, start)
+            i += 1
+            continue
+        end
+        if c == 47 || c == 40 || c == 41 || c == 91 || c == 93 || c == 64 || c == 44 ||
+           c == 124 || c == 43 || c == 45 || c == 61 || c == 60 || c == 62 || c == 46 || c == 36:
+            xp_push_token(e, TK_OP, str.Substr(src, i, 1), 0.0, start)
+            i += 1
+            continue
+        end
+        xp_fail(e, i, "\"" + str.Substr(src, i, 1) + "\" has no meaning in an XPath expression")
+        ret
+    end
+    xp_push_token(e, TK_END, "", 0.0, n)
+end
+
+func tk_kind(e &: XPEngine, ahead: int): int:
+    at := e.at + ahead
+    if at >= e.kinds.len(): ret TK_END end
+    ret e.kinds.get(at)
+end
+
+func tk_text(e &: XPEngine, ahead: int): str:
+    at := e.at + ahead
+    if at >= e.texts.len(): ret "" end
+    ret e.texts.get(at)
+end
+
+func tk_offset(e &: XPEngine): int:
+    if e.at >= e.offsets.len(): ret 0 end
+    ret e.offsets.get(e.at)
+end
+
+func tk_is_op(e &: XPEngine, text: str): bool:
+    ret tk_kind(e, 0) == TK_OP && tk_text(e, 0) == text
+end
+
+func tk_is_word(e &: XPEngine, text: str): bool:
+    ret tk_kind(e, 0) == TK_NAME && tk_text(e, 0) == text
+end
+
+func tk_take(e &: XPEngine):
+    e.at = e.at + 1
+end
+
+func tk_expect(e &: XPEngine, text: str):
+    if !tk_is_op(e, text):
+        xp_fail(e, tk_offset(e), "\"" + text + "\" was expected here")
+        ret
+    end
+    tk_take(e)
+end
+
+func new_expr(e &: XPEngine, kind: int): int:
+    id := e.exprs.len()
+    e.exprs.push(XPExpr { kind = kind })
+    ret id
+end
+
+func axis_code(name: str): int:
+    if name == "child": ret AX_CHILD end
+    if name == "descendant": ret AX_DESCENDANT end
+    if name == "parent": ret AX_PARENT end
+    if name == "ancestor": ret AX_ANCESTOR end
+    if name == "self": ret AX_SELF end
+    if name == "descendant-or-self": ret AX_DESCENDANT_OR_SELF end
+    if name == "ancestor-or-self": ret AX_ANCESTOR_OR_SELF end
+    if name == "following-sibling": ret AX_FOLLOWING_SIBLING end
+    if name == "preceding-sibling": ret AX_PRECEDING_SIBLING end
+    if name == "attribute": ret AX_ATTRIBUTE end
+    if name == "following": ret AX_FOLLOWING end
+    if name == "preceding": ret AX_PRECEDING end
+    ret 0 - 1
+end
+
+func parse_predicates(e &: XPEngine, owner: int):
+    until !e.failed && tk_is_op(e, "["):
+        tk_take(e)
+        inner := parse_expression(e)
+        tk_expect(e, "]")
+        if e.failed: ret end
+        mut node := e.exprs.get(owner)
+        node.args.push(inner)
+        e.exprs.set(owner, node)
+    end
+end
+
+func parse_step(e &: XPEngine): int:
+    id := new_expr(e, XP_STEP)
+    mut node := e.exprs.get(id)
+    node.axis = AX_CHILD
+    node.test = NT_NAME
+    if tk_is_op(e, "."):
+        tk_take(e)
+        node.axis = AX_SELF
+        node.test = NT_NODE
+        e.exprs.set(id, node)
+        ret id
+    end
+    if tk_is_op(e, ".."):
+        tk_take(e)
+        node.axis = AX_PARENT
+        node.test = NT_NODE
+        e.exprs.set(id, node)
+        ret id
+    end
+    if tk_is_op(e, "@"):
+        tk_take(e)
+        node.axis = AX_ATTRIBUTE
+    else tk_kind(e, 0) == TK_NAME && tk_kind(e, 1) == TK_OP && tk_text(e, 1) == "::":
+        code := axis_code(tk_text(e, 0))
+        if code < 0:
+            xp_fail(e, tk_offset(e), "\"" + tk_text(e, 0) + "\" is not an axis this engine knows")
+            ret id
+        end
+        node.axis = code
+        tk_take(e)
+        tk_take(e)
+    end
+    if tk_is_op(e, "*"):
+        tk_take(e)
+        node.test = NT_ANY
+    else tk_kind(e, 0) == TK_NAME:
+        word := tk_text(e, 0)
+        if tk_kind(e, 1) == TK_OP && tk_text(e, 1) == "(":
+            if word == "node": node.test = NT_NODE
+            else word == "text": node.test = NT_TEXT
+            else word == "comment": node.test = NT_COMMENT
+            else word == "processing-instruction": node.test = NT_INSTRUCTION
+            else:
+                xp_fail(e, tk_offset(e), "\"" + word + "()\" is not a node test")
+                ret id
+            end
+            tk_take(e)
+            tk_take(e)
+            if tk_kind(e, 0) == TK_LITERAL:
+                node.name = tk_text(e, 0)
+                tk_take(e)
+            end
+            if !tk_is_op(e, ")"):
+                xp_fail(e, tk_offset(e), "\")\" was expected after the node test")
+                ret id
+            end
+            tk_take(e)
+        else str.EndsWith(word, ":*"):
+            node.test = NT_PREFIX_ANY
+            node.prefix = str.Substr(word, 0, str.Len(word) - 2)
+            tk_take(e)
+        else:
+            node.test = NT_NAME
+            node.name = word
+            colon := str.IndexOf(word, ":")
+            if colon > 0:
+                node.prefix = str.Substr(word, 0, colon)
+                node.name = str.Substr(word, colon + 1, str.Len(word) - colon - 1)
+            end
+            tk_take(e)
+        end
+    else:
+        xp_fail(e, tk_offset(e), "a step was expected here")
+        ret id
+    end
+    e.exprs.set(id, node)
+    parse_predicates(e, id)
+    ret id
+end
+
+func append_step(e &: XPEngine, path: int, step: int):
+    mut node := e.exprs.get(path)
+    node.args.push(step)
+    e.exprs.set(path, node)
+end
+
+func descendant_bridge(e &: XPEngine): int:
+    id := new_expr(e, XP_STEP)
+    mut node := e.exprs.get(id)
+    node.axis = AX_DESCENDANT_OR_SELF
+    node.test = NT_NODE
+    e.exprs.set(id, node)
+    ret id
+end
+
+func starts_a_step(e &: XPEngine): bool:
+    if tk_is_op(e, "@") || tk_is_op(e, "*") || tk_is_op(e, ".") || tk_is_op(e, ".."): ret true end
+    ret tk_kind(e, 0) == TK_NAME
+end
+
+func parse_relative_path(e &: XPEngine, path: int):
+    append_step(e, path, parse_step(e))
+    until !e.failed && (tk_is_op(e, "/") || tk_is_op(e, "//")):
+        doubled := tk_is_op(e, "//")
+        tk_take(e)
+        if doubled: append_step(e, path, descendant_bridge(e)) end
+        append_step(e, path, parse_step(e))
+    end
+end
+
+func parse_location_path(e &: XPEngine): int:
+    id := new_expr(e, XP_PATH)
+    mut node := e.exprs.get(id)
+    if tk_is_op(e, "/"):
+        node.absolute = true
+        e.exprs.set(id, node)
+        tk_take(e)
+        if starts_a_step(e): parse_relative_path(e, id) end
+        ret id
+    end
+    if tk_is_op(e, "//"):
+        node.absolute = true
+        e.exprs.set(id, node)
+        tk_take(e)
+        append_step(e, id, descendant_bridge(e))
+        parse_relative_path(e, id)
+        ret id
+    end
+    e.exprs.set(id, node)
+    parse_relative_path(e, id)
+    ret id
+end
+
+func parse_primary(e &: XPEngine): int:
+    if tk_kind(e, 0) == TK_LITERAL:
+        id := new_expr(e, XP_LITERAL)
+        mut node := e.exprs.get(id)
+        node.text = tk_text(e, 0)
+        e.exprs.set(id, node)
+        tk_take(e)
+        ret id
+    end
+    if tk_kind(e, 0) == TK_NUMBER:
+        id := new_expr(e, XP_NUMBER)
+        mut node := e.exprs.get(id)
+        node.number = e.numbers.get(e.at)
+        e.exprs.set(id, node)
+        tk_take(e)
+        ret id
+    end
+    if tk_is_op(e, "("):
+        tk_take(e)
+        inner := parse_expression(e)
+        tk_expect(e, ")")
+        ret inner
+    end
+    if tk_is_op(e, "$"):
+        xp_fail(e, tk_offset(e), "variable references are not supported")
+        ret new_expr(e, XP_LITERAL)
+    end
+    if tk_kind(e, 0) == TK_NAME && tk_kind(e, 1) == TK_OP && tk_text(e, 1) == "(":
+        id := new_expr(e, XP_CALL)
+        mut node := e.exprs.get(id)
+        node.name = tk_text(e, 0)
+        e.exprs.set(id, node)
+        tk_take(e)
+        tk_take(e)
+        if !tk_is_op(e, ")"):
+            until !e.failed:
+                arg := parse_expression(e)
+                mut owner := e.exprs.get(id)
+                owner.args.push(arg)
+                e.exprs.set(id, owner)
+                if !tk_is_op(e, ","): break end
+                tk_take(e)
+            end
+        end
+        tk_expect(e, ")")
+        ret id
+    end
+    ret parse_location_path(e)
+end
+
+func parse_filter(e &: XPEngine): int:
+    primary := parse_primary(e)
+    if e.failed: ret primary end
+    if e.exprs.get(primary).kind == XP_PATH: ret primary end
+    if !tk_is_op(e, "[") && !tk_is_op(e, "/") && !tk_is_op(e, "//"): ret primary end
+    id := new_expr(e, XP_FILTER)
+    mut node := e.exprs.get(id)
+    node.a = primary
+    e.exprs.set(id, node)
+    parse_predicates(e, id)
+    if tk_is_op(e, "/") || tk_is_op(e, "//"):
+        path := new_expr(e, XP_PATH)
+        doubled := tk_is_op(e, "//")
+        tk_take(e)
+        if doubled: append_step(e, path, descendant_bridge(e)) end
+        parse_relative_path(e, path)
+        mut owner := e.exprs.get(id)
+        owner.b = path
+        e.exprs.set(id, owner)
+    end
+    ret id
+end
+
+func parse_union(e &: XPEngine): int:
+    mut left := parse_filter(e)
+    until !e.failed && tk_is_op(e, "|"):
+        tk_take(e)
+        right := parse_filter(e)
+        id := new_expr(e, XP_UNION)
+        mut node := e.exprs.get(id)
+        node.a = left
+        node.b = right
+        e.exprs.set(id, node)
+        left = id
+    end
+    ret left
+end
+
+func parse_unary(e &: XPEngine): int:
+    if tk_is_op(e, "-"):
+        tk_take(e)
+        inner := parse_unary(e)
+        id := new_expr(e, XP_NEGATE)
+        mut node := e.exprs.get(id)
+        node.a = inner
+        e.exprs.set(id, node)
+        ret id
+    end
+    ret parse_union(e)
+end
+
+func make_binary(e &: XPEngine, op: str, left: int, right: int): int:
+    id := new_expr(e, XP_BINARY)
+    mut node := e.exprs.get(id)
+    node.op = op
+    node.a = left
+    node.b = right
+    e.exprs.set(id, node)
+    ret id
+end
+
+func parse_multiplicative(e &: XPEngine): int:
+    mut left := parse_unary(e)
+    until !e.failed && (tk_is_op(e, "*mul") || tk_is_word(e, "div") || tk_is_word(e, "mod")):
+        mut op := "*"
+        if tk_kind(e, 0) == TK_NAME: op = tk_text(e, 0) end
+        tk_take(e)
+        left = make_binary(e, op, left, parse_unary(e))
+    end
+    ret left
+end
+
+func parse_additive(e &: XPEngine): int:
+    mut left := parse_multiplicative(e)
+    until !e.failed && (tk_is_op(e, "+") || tk_is_op(e, "-")):
+        op := tk_text(e, 0)
+        tk_take(e)
+        left = make_binary(e, op, left, parse_multiplicative(e))
+    end
+    ret left
+end
+
+func parse_relational(e &: XPEngine): int:
+    mut left := parse_additive(e)
+    until !e.failed && (tk_is_op(e, "<") || tk_is_op(e, ">") || tk_is_op(e, "<=") || tk_is_op(e, ">=")):
+        op := tk_text(e, 0)
+        tk_take(e)
+        left = make_binary(e, op, left, parse_additive(e))
+    end
+    ret left
+end
+
+func parse_equality(e &: XPEngine): int:
+    mut left := parse_relational(e)
+    until !e.failed && (tk_is_op(e, "=") || tk_is_op(e, "!=")):
+        op := tk_text(e, 0)
+        tk_take(e)
+        left = make_binary(e, op, left, parse_relational(e))
+    end
+    ret left
+end
+
+func parse_and(e &: XPEngine): int:
+    mut left := parse_equality(e)
+    until !e.failed && tk_is_word(e, "and"):
+        tk_take(e)
+        left = make_binary(e, "and", left, parse_equality(e))
+    end
+    ret left
+end
+
+func parse_expression(e &: XPEngine): int:
+    mut left := parse_and(e)
+    until !e.failed && tk_is_word(e, "or"):
+        tk_take(e)
+        left = make_binary(e, "or", left, parse_and(e))
+    end
+    ret left
+end
+
+
+func attr_ref(aid: int): int: ret 0 - 2 - aid end
+func is_attr_ref(id: int): bool: ret id <= 0 - 2 end
+func aid_of(id: int): int: ret 0 - 2 - id end
+
+func new_set(e &: XPEngine): int:
+    id := e.sets.len()
+    e.sets.push(NodeList {})
+    ret id
+end
+
+func set_push(e &: XPEngine, set: int, id: int):
+    mut s := e.sets.get(set)
+    s.items.push(id)
+    e.sets.set(set, s)
+end
+
+func set_len(e &: XPEngine, set: int): int:
+    if set < 0: ret 0 end
+    ret e.sets.get(set).items.len()
+end
+
+func set_get(e &: XPEngine, set: int, i: int): int:
+    ret e.sets.get(set).items.get(i)
+end
+
+func node_set(set: int): XPVal: ret XPVal { kind = ValueNodeSet, set = set } end
+func string_val(text: str): XPVal: ret XPVal { kind = ValueString, text = text } end
+func number_val(number: f64): XPVal: ret XPVal { kind = ValueNumber, number = number } end
+func boolean_val(flag: bool): XPVal: ret XPVal { kind = ValueBoolean, flag = flag } end
+
+func build_order(e &: XPEngine, d: Document):
+    e.order.clear()
+    mut i := 0
+    until i < d.nodes.len():
+        e.order.push(0)
+        i += 1
+    end
+    mut counter := 0
+    order_walk(e, d, DocumentNode(d), counter)
+end
+
+func order_walk(e &: XPEngine, d: Document, id: int, counter &: int):
+    if id < 0 || id >= e.order.len(): ret end
+    e.order.set(id, counter)
+    counter += 1
+    n := node_at(d, id)
+    mut i := 0
+    until i < n.children.len():
+        order_walk(e, d, n.children.get(i), counter)
+        i += 1
+    end
+end
+
+func order_major(e &: XPEngine, d: Document, id: int): int:
+    if is_attr_ref(id):
+        owner := d.attributes.get(aid_of(id)).owner
+        if owner < 0 || owner >= e.order.len(): ret 0 end
+        ret e.order.get(owner)
+    end
+    if id < 0 || id >= e.order.len(): ret 0 end
+    ret e.order.get(id)
+end
+
+func order_minor(d: Document, id: int): int:
+    if !is_attr_ref(id): ret 0 - 1 end
+    aid := aid_of(id)
+    owner := d.attributes.get(aid).owner
+    if owner < 0: ret 0 end
+    n := node_at(d, owner)
+    mut i := 0
+    until i < n.attrs.len():
+        if n.attrs.get(i) == aid: ret i end
+        i += 1
+    end
+    ret 0
+end
+
+func sort_unique(e &: XPEngine, d: Document, set: int):
+    mut s := e.sets.get(set)
+    mut a := 0
+    until a < s.items.len():
+        mut b := a + 1
+        until b < s.items.len():
+            x := s.items.get(a)
+            y := s.items.get(b)
+            xm := order_major(e, d, x)
+            ym := order_major(e, d, y)
+            mut swap := false
+            if xm > ym: swap = true
+            else xm == ym && order_minor(d, x) > order_minor(d, y): swap = true
+            end
+            if swap:
+                s.items.set(a, y)
+                s.items.set(b, x)
+            end
+            b += 1
+        end
+        a += 1
+    end
+    mut out := NodeList {}
+    mut i := 0
+    until i < s.items.len():
+        if i == 0 || s.items.get(i) != s.items.get(i - 1): out.items.push(s.items.get(i)) end
+        i += 1
+    end
+    s.items.free()
+    e.sets.set(set, out)
+end
+
+func string_of_node(d: Document, id: int): str:
+    if is_attr_ref(id): ret d.attributes.get(aid_of(id)).value end
+    k := Kind(d, id)
+    if k == KindElement || k == KindDocument: ret Text(d, id) end
+    ret Value(d, id)
+end
+
+func name_of_node(d: Document, id: int): str:
+    if is_attr_ref(id): ret d.attributes.get(aid_of(id)).name end
+    ret Name(d, id)
+end
+
+func local_of_node(d: Document, id: int): str:
+    if is_attr_ref(id): ret d.attributes.get(aid_of(id)).local end
+    ret LocalName(d, id)
+end
+
+func uri_of_node(d: Document, id: int): str:
+    if is_attr_ref(id): ret d.attributes.get(aid_of(id)).uri end
+    ret NamespaceURI(d, id)
+end
+
+func matches_test(d: Document, id: int, test: int, name: str, prefix: str): bool:
+    if test == NT_NODE: ret true end
+    if test == NT_TEXT:
+        if is_attr_ref(id): ret false end
+        k := Kind(d, id)
+        ret k == KindText || k == KindCData
+    end
+    if test == NT_COMMENT:
+        if is_attr_ref(id): ret false end
+        ret Kind(d, id) == KindComment
+    end
+    if test == NT_INSTRUCTION:
+        if is_attr_ref(id): ret false end
+        if Kind(d, id) != KindProcessingInstruction: ret false end
+        if str.Len(name) == 0: ret true end
+        ret Name(d, id) == name
+    end
+    if is_attr_ref(id):
+        a := d.attributes.get(aid_of(id))
+        if a.prefix == "xmlns" || a.name == "xmlns": ret false end
+        if test == NT_ANY: ret true end
+        if test == NT_PREFIX_ANY: ret a.prefix == prefix end
+        if str.Len(prefix) > 0: ret a.prefix == prefix && a.local == name end
+        ret a.name == name
+    end
+    if Kind(d, id) != KindElement: ret false end
+    if test == NT_ANY: ret true end
+    if test == NT_PREFIX_ANY: ret Prefix(d, id) == prefix end
+    if str.Len(prefix) > 0: ret Prefix(d, id) == prefix && LocalName(d, id) == name end
+    ret Name(d, id) == name
+end
+
+func gather_descendants(d: Document, id: int, out &: Vector<int>):
+    n := node_at(d, id)
+    mut i := 0
+    until i < n.children.len():
+        child := n.children.get(i)
+        out.push(child)
+        gather_descendants(d, child, out)
+        i += 1
+    end
+end
+
+func axis_nodes(d: Document, origin: int, axis: int, out &: Vector<int>):
+    if axis == AX_SELF:
+        out.push(origin)
+        ret
+    end
+    if is_attr_ref(origin):
+        owner := d.attributes.get(aid_of(origin)).owner
+        if axis == AX_PARENT: out.push(owner) end
+        if axis == AX_ANCESTOR || axis == AX_ANCESTOR_OR_SELF:
+            if axis == AX_ANCESTOR_OR_SELF: out.push(origin) end
+            mut at := owner
+            until at >= 0:
+                out.push(at)
+                at = Parent(d, at)
+            end
+        end
+        ret
+    end
+    if axis == AX_CHILD:
+        n := node_at(d, origin)
+        mut i := 0
+        until i < n.children.len():
+            out.push(n.children.get(i))
+            i += 1
+        end
+        ret
+    end
+    if axis == AX_DESCENDANT:
+        gather_descendants(d, origin, out)
+        ret
+    end
+    if axis == AX_DESCENDANT_OR_SELF:
+        out.push(origin)
+        gather_descendants(d, origin, out)
+        ret
+    end
+    if axis == AX_PARENT:
+        p := Parent(d, origin)
+        if p >= 0: out.push(p) end
+        ret
+    end
+    if axis == AX_ANCESTOR || axis == AX_ANCESTOR_OR_SELF:
+        if axis == AX_ANCESTOR_OR_SELF: out.push(origin) end
+        mut at := Parent(d, origin)
+        until at >= 0:
+            out.push(at)
+            at = Parent(d, at)
+        end
+        ret
+    end
+    if axis == AX_ATTRIBUTE:
+        n := node_at(d, origin)
+        mut i := 0
+        until i < n.attrs.len():
+            out.push(attr_ref(n.attrs.get(i)))
+            i += 1
+        end
+        ret
+    end
+    if axis == AX_FOLLOWING_SIBLING || axis == AX_PRECEDING_SIBLING:
+        parent := Parent(d, origin)
+        if parent < 0: ret end
+        p := node_at(d, parent)
+        mut seen := false
+        mut i := 0
+        until i < p.children.len():
+            child := p.children.get(i)
+            if child == origin: seen = true
+            else seen && axis == AX_FOLLOWING_SIBLING: out.push(child)
+            else !seen && axis == AX_PRECEDING_SIBLING: out.push(child)
+            end
+            i += 1
+        end
+        ret
+    end
+    if axis == AX_FOLLOWING || axis == AX_PRECEDING:
+        mut all := Vector {} as Vector<int>
+        gather_descendants(d, DocumentNode(d), all)
+        mut mine := Vector {} as Vector<int>
+        mine.push(origin)
+        gather_descendants(d, origin, mine)
+        mut ancestors := Vector {} as Vector<int>
+        mut at := origin
+        until at >= 0:
+            ancestors.push(at)
+            at = Parent(d, at)
+        end
+        mut passed := false
+        mut i := 0
+        until i < all.len():
+            candidate := all.get(i)
+            if candidate == origin:
+                passed = true
+            else:
+                mut skip := false
+                mut k := 0
+                until k < mine.len():
+                    if mine.get(k) == candidate: skip = true end
+                    k += 1
+                end
+                mut m := 0
+                until m < ancestors.len():
+                    if ancestors.get(m) == candidate: skip = true end
+                    m += 1
+                end
+                if !skip:
+                    if passed && axis == AX_FOLLOWING: out.push(candidate) end
+                    if !passed && axis == AX_PRECEDING: out.push(candidate) end
+                end
+            end
+            i += 1
+        end
+        all.free()
+        mine.free()
+        ancestors.free()
+    end
+end
+
+func number_to_string(v: f64): str:
+    if math.IsNaN(v): ret "NaN" end
+    if math.IsInf(v):
+        if v > 0.0: ret "Infinity" end
+        ret "-Infinity"
+    end
+    if v == math.Floor(v) && v < 1.0e18 && v > 0.0 - 1.0e18: ret str.FromInt(v as i64) end
+    ret str.FromFloat(v)
+end
+
+func string_to_number(text: str): f64:
+    s := str.Trim(text)
+    n := str.Len(s)
+    if n == 0: ret math.NaN() end
+    p := xbp(s)
+    mut i := 0
+    if xub(p, 0) == 45 || xub(p, 0) == 43: i = 1 end
+    mut digits := 0
+    mut dots := 0
+    until i < n:
+        c := xub(p, i)
+        if ascii_digit(c): digits += 1
+        else c == 46: dots += 1
+        else: ret math.NaN()
+        end
+        i += 1
+    end
+    if digits == 0 || dots > 1: ret math.NaN() end
+    ret str.ToFloat(s)
+end
+
+func as_string(e &: XPEngine, d: Document, v: XPVal): str:
+    if v.kind == ValueString: ret v.text end
+    if v.kind == ValueNumber: ret number_to_string(v.number) end
+    if v.kind == ValueBoolean:
+        if v.flag: ret "true" end
+        ret "false"
+    end
+    if set_len(e, v.set) == 0: ret "" end
+    ret string_of_node(d, set_get(e, v.set, 0))
+end
+
+func as_boolean(e &: XPEngine, d: Document, v: XPVal): bool:
+    if v.kind == ValueBoolean: ret v.flag end
+    if v.kind == ValueString: ret str.Len(v.text) > 0 end
+    if v.kind == ValueNumber: ret !math.IsNaN(v.number) && v.number != 0.0 end
+    _unused := d
+    ret set_len(e, v.set) > 0
+end
+
+func as_number(e &: XPEngine, d: Document, v: XPVal): f64:
+    if v.kind == ValueNumber: ret v.number end
+    if v.kind == ValueBoolean:
+        if v.flag: ret 1.0 end
+        ret 0.0
+    end
+    ret string_to_number(as_string(e, d, v))
+end
+
+func compare_strings(op: str, a: str, b: str): bool:
+    if op == "=": ret a == b end
+    ret a != b
+end
+
+func compare_numbers(op: str, a: f64, b: f64): bool:
+    if math.IsNaN(a) || math.IsNaN(b):
+        if op == "!=": ret true end
+        ret false
+    end
+    if op == "=": ret a == b end
+    if op == "!=": ret a != b end
+    if op == "<": ret a < b end
+    if op == ">": ret a > b end
+    if op == "<=": ret a <= b end
+    ret a >= b
+end
+
+func compare_values(e &: XPEngine, d: Document, op: str, left: XPVal, right: XPVal): bool:
+    equality := op == "=" || op == "!="
+    left_set := left.kind == ValueNodeSet
+    right_set := right.kind == ValueNodeSet
+    if left_set && right_set:
+        mut i := 0
+        until i < set_len(e, left.set):
+            a := string_of_node(d, set_get(e, left.set, i))
+            mut j := 0
+            until j < set_len(e, right.set):
+                b := string_of_node(d, set_get(e, right.set, j))
+                if equality:
+                    if compare_strings(op, a, b): ret true end
+                else:
+                    if compare_numbers(op, string_to_number(a), string_to_number(b)): ret true end
+                end
+                j += 1
+            end
+            i += 1
+        end
+        ret false
+    end
+    if left_set || right_set:
+        mut set := left.set
+        mut other := right
+        mut flipped := false
+        if right_set:
+            set = right.set
+            other = left
+            flipped = true
+        end
+        if other.kind == ValueBoolean && equality:
+            ret compare_strings(op, boolean_text(set_len(e, set) > 0), boolean_text(other.flag))
+        end
+        mut i := 0
+        until i < set_len(e, set):
+            text := string_of_node(d, set_get(e, set, i))
+            mut hit := false
+            if equality && other.kind == ValueString:
+                hit = compare_strings(op, text, other.text)
+            else:
+                a := string_to_number(text)
+                b := as_number(e, d, other)
+                if flipped:
+                    hit = compare_numbers(op, b, a)
+                else:
+                    hit = compare_numbers(op, a, b)
+                end
+            end
+            if hit: ret true end
+            i += 1
+        end
+        ret false
+    end
+    if equality:
+        if left.kind == ValueBoolean || right.kind == ValueBoolean:
+            ret compare_strings(op, boolean_text(as_boolean(e, d, left)), boolean_text(as_boolean(e, d, right)))
+        end
+        if left.kind == ValueNumber || right.kind == ValueNumber:
+            ret compare_numbers(op, as_number(e, d, left), as_number(e, d, right))
+        end
+        ret compare_strings(op, as_string(e, d, left), as_string(e, d, right))
+    end
+    ret compare_numbers(op, as_number(e, d, left), as_number(e, d, right))
+end
+
+func boolean_text(flag: bool): str:
+    if flag: ret "true" end
+    ret "false"
+end
+
+func normalize_space(text: str): str:
+    mut sb := str.NewBuilder()
+    n := str.Len(text)
+    p := xbp(text)
+    mut i := 0
+    mut pending := false
+    mut started := false
+    until i < n:
+        c := xub(p, i)
+        if xml_space(c):
+            if started: pending = true end
+        else:
+            if pending: str.BufAppendChar(sb, 32) end
+            pending = false
+            started = true
+            str.BufAppendChar(sb, c)
+        end
+        i += 1
+    end
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func translate_text(text: str, from: str, onto: str): str:
+    mut sb := str.NewBuilder()
+    n := str.Len(text)
+    p := xbp(text)
+    fn := str.Len(from)
+    fp := xbp(from)
+    tn := str.Len(onto)
+    tp := xbp(onto)
+    mut i := 0
+    until i < n:
+        c := xub(p, i)
+        mut at := 0 - 1
+        mut k := 0
+        until k < fn:
+            if xub(fp, k) == c && at < 0: at = k end
+            k += 1
+        end
+        if at < 0: str.BufAppendChar(sb, c)
+        else at < tn: str.BufAppendChar(sb, xub(tp, at))
+        end
+        i += 1
+    end
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func substring_of(text: str, start: f64, length: f64, has_length: bool): str:
+    n := str.CharCount(text)
+    from := math.Round(start) as int
+    mut count := n
+    if has_length:
+        if math.IsNaN(length) || math.IsNaN(start): ret "" end
+        count = math.Round(length) as int
+    end
+    mut first := from - 1
+    mut last := n
+    if has_length: last = first + count end
+    if first < 0: first = 0 end
+    if last > n: last = n end
+    if last <= first: ret "" end
+    mut sb := str.NewBuilder()
+    mut i := first
+    until i < last:
+        str.BufAppend(sb, str.CharAt(text, i))
+        i += 1
+    end
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func argument_or_context(e &: XPEngine, d: Document, args &: Vector<XPVal>, index: int,
+                         ctx: int, present: bool): str:
+    if present: ret as_string(e, d, args.get(index)) end
+    ret string_of_node(d, ctx)
+end
+
+func call_function(e &: XPEngine, d: Document, name: str, args &: Vector<XPVal>,
+                   ctx: int, position: int, size: int): XPVal:
+    count := args.len()
+    if name == "last": ret number_val(size as f64) end
+    if name == "position": ret number_val(position as f64) end
+    if name == "true": ret boolean_val(true) end
+    if name == "false": ret boolean_val(false) end
+    if name == "count":
+        if count != 1 || args.get(0).kind != ValueNodeSet:
+            xp_fail(e, 0, "count() takes one node-set")
+            ret number_val(0.0)
+        end
+        ret number_val(set_len(e, args.get(0).set) as f64)
+    end
+    if name == "name" || name == "local-name" || name == "namespace-uri":
+        mut target := ctx
+        if count >= 1:
+            if args.get(0).kind != ValueNodeSet || set_len(e, args.get(0).set) == 0: ret string_val("") end
+            target = set_get(e, args.get(0).set, 0)
+        end
+        if name == "name": ret string_val(name_of_node(d, target)) end
+        if name == "local-name": ret string_val(local_of_node(d, target)) end
+        ret string_val(uri_of_node(d, target))
+    end
+    if name == "string":
+        if count == 0: ret string_val(string_of_node(d, ctx)) end
+        ret string_val(as_string(e, d, args.get(0)))
+    end
+    if name == "concat":
+        mut sb := str.NewBuilder()
+        mut i := 0
+        until i < count:
+            str.BufAppend(sb, as_string(e, d, args.get(i)))
+            i += 1
+        end
+        out := str.BufStr(sb)
+        str.BufFree(sb)
+        ret string_val(out)
+    end
+    if name == "starts-with" || name == "contains" || name == "ends-with" ||
+       name == "substring-before" || name == "substring-after":
+        if count != 2:
+            xp_fail(e, 0, name + "() takes two arguments")
+            ret string_val("")
+        end
+        a := as_string(e, d, args.get(0))
+        b := as_string(e, d, args.get(1))
+        if name == "starts-with": ret boolean_val(str.StartsWith(a, b)) end
+        if name == "ends-with": ret boolean_val(str.EndsWith(a, b)) end
+        if name == "contains": ret boolean_val(str.Contains(a, b)) end
+        at := str.IndexOf(a, b)
+        if at < 0: ret string_val("") end
+        if name == "substring-before": ret string_val(str.Substr(a, 0, at)) end
+        ret string_val(str.Substr(a, at + str.Len(b), str.Len(a) - at - str.Len(b)))
+    end
+    if name == "substring":
+        if count < 2:
+            xp_fail(e, 0, "substring() takes two or three arguments")
+            ret string_val("")
+        end
+        text := as_string(e, d, args.get(0))
+        start := as_number(e, d, args.get(1))
+        if count >= 3: ret string_val(substring_of(text, start, as_number(e, d, args.get(2)), true)) end
+        ret string_val(substring_of(text, start, 0.0, false))
+    end
+    if name == "string-length":
+        ret number_val(str.CharCount(argument_or_context(e, d, args, 0, ctx, count >= 1)) as f64)
+    end
+    if name == "normalize-space":
+        ret string_val(normalize_space(argument_or_context(e, d, args, 0, ctx, count >= 1)))
+    end
+    if name == "translate":
+        if count != 3:
+            xp_fail(e, 0, "translate() takes three arguments")
+            ret string_val("")
+        end
+        ret string_val(translate_text(as_string(e, d, args.get(0)), as_string(e, d, args.get(1)), as_string(e, d, args.get(2))))
+    end
+    if name == "boolean":
+        if count != 1:
+            xp_fail(e, 0, "boolean() takes one argument")
+            ret boolean_val(false)
+        end
+        ret boolean_val(as_boolean(e, d, args.get(0)))
+    end
+    if name == "not":
+        if count != 1:
+            xp_fail(e, 0, "not() takes one argument")
+            ret boolean_val(false)
+        end
+        ret boolean_val(!as_boolean(e, d, args.get(0)))
+    end
+    if name == "number":
+        if count == 0: ret number_val(string_to_number(string_of_node(d, ctx))) end
+        ret number_val(as_number(e, d, args.get(0)))
+    end
+    if name == "sum":
+        if count != 1 || args.get(0).kind != ValueNodeSet:
+            xp_fail(e, 0, "sum() takes one node-set")
+            ret number_val(0.0)
+        end
+        mut total := 0.0
+        mut i := 0
+        until i < set_len(e, args.get(0).set):
+            total = total + string_to_number(string_of_node(d, set_get(e, args.get(0).set, i)))
+            i += 1
+        end
+        ret number_val(total)
+    end
+    if name == "floor" || name == "ceiling" || name == "round":
+        if count != 1:
+            xp_fail(e, 0, name + "() takes one argument")
+            ret number_val(0.0)
+        end
+        v := as_number(e, d, args.get(0))
+        if name == "floor": ret number_val(math.Floor(v)) end
+        if name == "ceiling": ret number_val(math.Ceil(v)) end
+        ret number_val(math.Floor(v + 0.5))
+    end
+    xp_fail(e, 0, "there is no XPath function called " + name + "()")
+    ret string_val("")
+end
+
+func keep_by_predicates(e &: XPEngine, d: Document, predicates &: Vector<int>, candidates &: Vector<int>):
+    mut pi := 0
+    until !e.failed && pi < predicates.len():
+        mut kept := Vector {} as Vector<int>
+        size := candidates.len()
+        mut i := 0
+        until !e.failed && i < size:
+            v := evaluate(e, d, predicates.get(pi), candidates.get(i), i + 1, size)
+            mut keep := false
+            if v.kind == ValueNumber: keep = v.number == (i + 1) as f64
+            else: keep = as_boolean(e, d, v)
+            end
+            if keep: kept.push(candidates.get(i)) end
+            i += 1
+        end
+        candidates.clear()
+        mut k := 0
+        until k < kept.len():
+            candidates.push(kept.get(k))
+            k += 1
+        end
+        kept.free()
+        pi += 1
+    end
+end
+
+func run_step(e &: XPEngine, d: Document, step_id: int, source: int): int:
+    step := e.exprs.get(step_id)
+    output := new_set(e)
+    mut i := 0
+    until !e.failed && i < set_len(e, source):
+        origin := set_get(e, source, i)
+        mut candidates := Vector {} as Vector<int>
+        mut raw := Vector {} as Vector<int>
+        axis_nodes(d, origin, step.axis, raw)
+        mut k := 0
+        until k < raw.len():
+            if matches_test(d, raw.get(k), step.test, step.name, step.prefix): candidates.push(raw.get(k)) end
+            k += 1
+        end
+        raw.free()
+        mut predicates := step.args
+        keep_by_predicates(e, d, predicates, candidates)
+        mut m := 0
+        until m < candidates.len():
+            set_push(e, output, candidates.get(m))
+            m += 1
+        end
+        candidates.free()
+        i += 1
+    end
+    sort_unique(e, d, output)
+    ret output
+end
+
+func run_path(e &: XPEngine, d: Document, path_id: int, start: int): XPVal:
+    path := e.exprs.get(path_id)
+    mut current := new_set(e)
+    if path.absolute: set_push(e, current, DocumentNode(d))
+    else: set_push(e, current, start)
+    end
+    mut i := 0
+    until !e.failed && i < path.args.len():
+        current = run_step(e, d, path.args.get(i), current)
+        i += 1
+    end
+    ret node_set(current)
+end
+
+func evaluate(e &: XPEngine, d: Document, id: int, ctx: int, position: int, size: int): XPVal:
+    if e.failed || id < 0: ret string_val("") end
+    node := e.exprs.get(id)
+    if node.kind == XP_LITERAL: ret string_val(node.text) end
+    if node.kind == XP_NUMBER: ret number_val(node.number) end
+    if node.kind == XP_PATH: ret run_path(e, d, id, ctx) end
+    if node.kind == XP_NEGATE: ret number_val(0.0 - as_number(e, d, evaluate(e, d, node.a, ctx, position, size))) end
+    if node.kind == XP_UNION:
+        left := evaluate(e, d, node.a, ctx, position, size)
+        right := evaluate(e, d, node.b, ctx, position, size)
+        if left.kind != ValueNodeSet || right.kind != ValueNodeSet:
+            xp_fail(e, 0, "'|' joins node-sets only")
+            ret string_val("")
+        end
+        merged := new_set(e)
+        mut i := 0
+        until i < set_len(e, left.set):
+            set_push(e, merged, set_get(e, left.set, i))
+            i += 1
+        end
+        mut j := 0
+        until j < set_len(e, right.set):
+            set_push(e, merged, set_get(e, right.set, j))
+            j += 1
+        end
+        sort_unique(e, d, merged)
+        ret node_set(merged)
+    end
+    if node.kind == XP_CALL:
+        mut args := Vector {} as Vector<XPVal>
+        mut i := 0
+        until !e.failed && i < node.args.len():
+            args.push(evaluate(e, d, node.args.get(i), ctx, position, size))
+            i += 1
+        end
+        out := call_function(e, d, node.name, args, ctx, position, size)
+        args.free()
+        ret out
+    end
+    if node.kind == XP_FILTER:
+        base := evaluate(e, d, node.a, ctx, position, size)
+        if base.kind != ValueNodeSet:
+            xp_fail(e, 0, "a predicate can only filter a node-set")
+            ret string_val("")
+        end
+        mut candidates := Vector {} as Vector<int>
+        mut i := 0
+        until i < set_len(e, base.set):
+            candidates.push(set_get(e, base.set, i))
+            i += 1
+        end
+        mut predicates := node.args
+        keep_by_predicates(e, d, predicates, candidates)
+        filtered := new_set(e)
+        mut k := 0
+        until k < candidates.len():
+            set_push(e, filtered, candidates.get(k))
+            k += 1
+        end
+        candidates.free()
+        if node.b < 0: ret node_set(filtered) end
+        tail := e.exprs.get(node.b)
+        mut current := filtered
+        mut s := 0
+        until !e.failed && s < tail.args.len():
+            current = run_step(e, d, tail.args.get(s), current)
+            s += 1
+        end
+        ret node_set(current)
+    end
+    if node.kind == XP_BINARY:
+        op := node.op
+        if op == "and":
+            if !as_boolean(e, d, evaluate(e, d, node.a, ctx, position, size)): ret boolean_val(false) end
+            ret boolean_val(as_boolean(e, d, evaluate(e, d, node.b, ctx, position, size)))
+        end
+        if op == "or":
+            if as_boolean(e, d, evaluate(e, d, node.a, ctx, position, size)): ret boolean_val(true) end
+            ret boolean_val(as_boolean(e, d, evaluate(e, d, node.b, ctx, position, size)))
+        end
+        left := evaluate(e, d, node.a, ctx, position, size)
+        right := evaluate(e, d, node.b, ctx, position, size)
+        if op == "=" || op == "!=" || op == "<" || op == ">" || op == "<=" || op == ">=":
+            ret boolean_val(compare_values(e, d, op, left, right))
+        end
+        a := as_number(e, d, left)
+        b := as_number(e, d, right)
+        if op == "+": ret number_val(a + b) end
+        if op == "-": ret number_val(a - b) end
+        if op == "*": ret number_val(a * b) end
+        if op == "div":
+            if b == 0.0:
+                if a == 0.0 || math.IsNaN(a): ret number_val(math.NaN()) end
+                if a > 0.0: ret number_val(math.Inf()) end
+                ret number_val(0.0 - math.Inf())
+            end
+            ret number_val(a / b)
+        end
+        if op == "mod":
+            if b == 0.0: ret number_val(math.NaN()) end
+            ret number_val(math.Mod(a, b))
+        end
+        xp_fail(e, 0, "\"" + op + "\" is not an operator this engine knows")
+        ret string_val("")
+    end
+    xp_fail(e, 0, "the expression could not be evaluated")
+    ret string_val("")
+end
+
+func engine_free(e &: XPEngine):
+    mut i := 0
+    until i < e.exprs.len():
+        mut x := e.exprs.get(i)
+        x.args.free()
+        i += 1
+    end
+    mut s := 0
+    until s < e.sets.len():
+        mut set := e.sets.get(s)
+        set.items.free()
+        s += 1
+    end
+    e.exprs.free()
+    e.sets.free()
+    e.kinds.free()
+    e.texts.free()
+    e.numbers.free()
+    e.offsets.free()
+    e.order.free()
+end
+
+func run_query(d: Document, context: int, expression: str, err &: ParseError, out &: XPathValue):
+    mut e := XPEngine {}
+    err = ParseError {}
+    out = XPathValue { kind = ValueNodeSet }
+    xp_lex(e, expression)
+    mut root := 0 - 1
+    if !e.failed:
+        root = parse_expression(e)
+        if !e.failed && tk_kind(e, 0) != TK_END:
+            xp_fail(e, tk_offset(e), "the expression has trailing text")
+        end
+    end
+    if !e.failed:
+        build_order(e, d)
+        mut ctx := context
+        if ctx < 0: ctx = DocumentNode(d) end
+        v := evaluate(e, d, root, ctx, 1, 1)
+        if !e.failed:
+            if v.kind == ValueNodeSet:
+                mut copied := NodeList {}
+                mut i := 0
+                until i < set_len(e, v.set):
+                    copied.items.push(set_get(e, v.set, i))
+                    i += 1
+                end
+                out = XPathValue { kind = ValueNodeSet, nodes = copied }
+            else v.kind == ValueString:
+                out = XPathValue { kind = ValueString, text = v.text }
+            else v.kind == ValueNumber:
+                out = XPathValue { kind = ValueNumber, number = v.number }
+            else:
+                out = XPathValue { kind = ValueBoolean, flag = v.flag }
+            end
+        end
+    end
+    if e.failed:
+        err.ok = false
+        err.message = e.message
+        err.line = 1
+        err.col = e.offset + 1
+        err.offset = e.offset
+    end
+    engine_free(e)
+end
+
+pub func Evaluate(d: Document, context: int, expression: str, err &: ParseError): XPathValue:
+    mut out := XPathValue {}
+    run_query(d, context, expression, err, out)
+    ret out
+end
+
+pub func FreeValue(v &: XPathValue):
+    v.nodes.items.free()
+end
+
+pub func Select(d: Document, context: int, expression: str, err &: ParseError): NodeList:
+    mut v := Evaluate(d, context, expression, err)
+    if v.kind != ValueNodeSet:
+        if err.ok:
+            err.ok = false
+            err.message = "the expression does not produce a node-set"
+            err.line = 1
+            err.col = 1
+        end
+        FreeValue(v)
+        ret NodeList {}
+    end
+    ret v.nodes
+end
+
+pub func SelectFirst(d: Document, context: int, expression: str, err &: ParseError): int:
+    mut list := Select(d, context, expression, err)
+    mut out := 0 - 1
+    if list.items.len() > 0: out = list.items.get(0) end
+    list.items.free()
+    ret out
+end
+
+pub func SelectString(d: Document, context: int, expression: str, err &: ParseError): str:
+    mut v := Evaluate(d, context, expression, err)
+    mut out := ""
+    if v.kind == ValueString: out = v.text
+    else v.kind == ValueNumber: out = number_to_string(v.number)
+    else v.kind == ValueBoolean: out = boolean_text(v.flag)
+    else v.nodes.items.len() > 0: out = string_of_node(d, v.nodes.items.get(0))
+    end
+    FreeValue(v)
+    ret out
+end
+
+pub func SelectNumber(d: Document, context: int, expression: str, err &: ParseError): f64:
+    mut v := Evaluate(d, context, expression, err)
+    mut out := 0.0
+    if v.kind == ValueNumber: out = v.number
+    else v.kind == ValueString: out = string_to_number(v.text)
+    else v.kind == ValueBoolean:
+        if v.flag: out = 1.0 end
+    else v.nodes.items.len() > 0: out = string_to_number(string_of_node(d, v.nodes.items.get(0)))
+    else: out = math.NaN()
+    end
+    FreeValue(v)
+    ret out
+end
+
+pub func SelectBoolean(d: Document, context: int, expression: str, err &: ParseError): bool:
+    mut v := Evaluate(d, context, expression, err)
+    mut out := false
+    if v.kind == ValueBoolean: out = v.flag
+    else v.kind == ValueString: out = str.Len(v.text) > 0
+    else v.kind == ValueNumber: out = !math.IsNaN(v.number) && v.number != 0.0
+    else: out = v.nodes.items.len() > 0
+    end
+    FreeValue(v)
+    ret out
+end
+
+pub func IsAttributeRef(id: int): bool: ret is_attr_ref(id) end
+
+pub func AttributeRef(aid: int): int: ret attr_ref(aid) end
+
+pub func ReferencedAttribute(d: Document, id: int): Attribute:
+    if !is_attr_ref(id): ret Attribute {} end
+    aid := aid_of(id)
+    if aid < 0 || aid >= d.attributes.len(): ret Attribute {} end
+    ret d.attributes.get(aid)
+end
+
+pub func StringValue(d: Document, id: int): str:
+    ret string_of_node(d, id)
+end
+
+pub func NodeName(d: Document, id: int): str:
+    ret name_of_node(d, id)
+end

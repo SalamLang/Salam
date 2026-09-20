@@ -229,6 +229,20 @@ def check_plist(path):
     print("  %-52s %s" % (path, data.get("name")))
 
 
+def check_ini(path, required_sections):
+    import configparser
+    parser = configparser.ConfigParser(strict=False, interpolation=None)
+    try:
+        parser.read(path, encoding="utf-8")
+    except Exception as exc:
+        fail(path, str(exc))
+        return
+    for section in required_sections:
+        if section not in parser:
+            fail(path, "no [%s] section" % section)
+    print("  %-52s %d sections" % (path, len(parser.sections())))
+
+
 def main():
     if not os.path.isdir(ROOT):
         print("run me from the repository root", file=sys.stderr)
@@ -241,6 +255,7 @@ def main():
     check_gtksourceview("extensions/gtksourceview/salam.lang")
     check_micro("extensions/micro/salam.yaml")
     check_nano("extensions/nano/salam.nanorc")
+    check_ini("extensions/geany/filetypes.Salam.conf", ("keywords", "settings"))
 
     for path in ("extensions/notepadpp/salam.xml", "extensions/jetbrains/Salam.xml"):
         if check_xml(path) is not None:

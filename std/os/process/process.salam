@@ -55,8 +55,6 @@ pub struct Process:
     pub handle: void* = null
     pub running: bool = false
     pub exit_code: int = 0
-    // Capture is file-backed on every platform - see _open_inheritable and the
-    // POSIX StartCaptured - so there are no stream handles to hold onto here.
     pub stdout_path: str = ""
     pub stderr_path: str = ""
 end
@@ -128,9 +126,6 @@ if SALAM_OS_WINDOWS:
         ret h
     end
 else:
-    // char*[] for execv, so the slots are pointer-sized: sizeof(str), not a
-    // hardcoded 8. With 8 this under-allocated by half on a 32-bit host and
-    // wrote every argument two slots apart, leaving execv a garbage vector.
     func _build_argv(path: str, args: Vector<str>): void*:
         n := args.len()
         arr := mem.Allocate(((n + 2) as u64) * (sizeof(str) as u64)) as str*
@@ -144,11 +139,8 @@ else:
         ret arr as void*
     end
 
-    // O_WRONLY | O_CREAT | O_TRUNC, whose bit values differ between Linux
-    // (0x40 / 0x200) and macOS (0x200 / 0x400).
     func _open_flags(): int:
-        if SALAM_OS_MAC: ret 1 + 512 + 1024 end
-        ret 1 + 64 + 512
+        if SALAM_OS_MAC || SALAM_OS_BSD: ret 1 + 512 + 1024 else: ret 1 + 64 + 512 end
     end
 end
 
@@ -184,11 +176,6 @@ if SALAM_OS_WINDOWS:
     pub func StartCaptured(path: str, args: Vector<str>): Process:
         out_path := temp.File()
         err_path := temp.File()
-        // GENERIC_WRITE + CREATE_ALWAYS for the two capture files. NUL with
-        // GENERIC_READ + OPEN_EXISTING for stdin, so a child that reads stdin
-        // sees EOF instead of competing with the parent for its console - a
-        // captured child inheriting a live stdin blocks forever on the first
-        // read, and the parent blocks with it in Wait.
         out_h := _open_inheritable(out_path, 1073741824 as u32, 2 as u32)
         err_h := _open_inheritable(err_path, 1073741824 as u32, 2 as u32)
         in_h := _open_inheritable("NUL", 2147483648 as u32, 3 as u32)
@@ -290,12 +277,6 @@ else:
         argv := _build_argv(path, args)
         actions := mem.AllocateZeroed(256 as u64)
         posix_spawn_file_actions_init(actions)
-        // fd 0 <- /dev/null (O_RDONLY, which is 0 on every supported target).
-        // A captured child otherwise inherits the parent's stdin: anything
-        // that reads it - a prompt, `git`, a pager - blocks forever with no
-        // reader ever supplying input, and Wait below blocks with it. That is
-        // a hang whose only visible symptom is an empty capture, because the
-        // child never got far enough to write a byte.
         posix_spawn_file_actions_addopen(actions, 0, "/dev/null", 0, 0)
         posix_spawn_file_actions_addopen(actions, 1, out_path, _open_flags(), 420)
         posix_spawn_file_actions_addopen(actions, 2, err_path, _open_flags(), 420)
@@ -367,9 +348,6 @@ else:
     end
 end
 
-// StartCaptured redirects both streams to temp files on every platform, so
-// reading them is one plain file read with no ordering constraint against
-// Wait: read before it, after it, twice, or not at all.
 @en "ReadStdout"
 @fa "خواندن خروجی"
 @ar "قراءة المخرجات"
@@ -386,9 +364,6 @@ pub func ReadStderr(p: Process): str:
     ret io.ReadFile(p.stderr_path)
 end
 
-// Removes the temp files StartCaptured created. Callers that capture in a
-// loop - a request handler shelling out per request, say - have to call this
-// or leak two files per spawn for the lifetime of the process.
 @en "Cleanup"
 @fa "پاکسازی"
 @ar "تنظیف"

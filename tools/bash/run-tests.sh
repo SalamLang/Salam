@@ -1,29 +1,4 @@
 #!/bin/sh
-# Salam end-to-end test suite - fully parallel.
-#
-# Every test category is first collected into one flat job list (so the
-# grand total is known up front), then ALL tests - including the sections
-# that used to run sequentially (exec, errors, layout, fmt, llvm, cross,
-# and the example .expect/.buildonly passes) - execute concurrently on
-# $NPROC workers with a live "STATUS [index/total] label" progress line
-# per test. Each test runs in its own isolated scratch directory, so no
-# two jobs ever collide on generated files (salam_mod_*.c, *.ll, html,
-# js bundles, ...). Heavy build-based sections are queued first so the
-# worker pool stays saturated until the end.
-#
-# Usage:
-#   sh tools/bash/run-tests.sh [-j N] [section ...]
-# Sections: general exec js errors layout fmt repl ssl db opencv webview_cef llvm cross timereport
-#           examples apps basics data editor-selected features games
-#           interop stdlib types webframework
-# Env: SALAM, SALAM_STD, LANGS, NPROC, SALAM_TEST_TIMEOUT,
-#      SALAM_TEST_NETWORK=1, SALAM_TEST_INTERACTIVE=1
-#
-# Portability: plain POSIX sh, matching every host compiler-release.yml
-# runs it on - Linux x64/i686/aarch64/arm/armhf, macOS, and Windows
-# (MSYS2/Git Bash), 64-bit and 32-bit alike. Parallel dispatch prefers
-# `xargs -0 -P` (GNU, BSD/macOS and MSYS2 all support it) and falls back
-# to a plain background-job pool when a host's xargs cannot do -0/-P.
 
 set -u
 
@@ -31,12 +6,6 @@ case "$0" in /* | [A-Za-z]:*) SELF="$0" ;; *) SELF="$(pwd)/$0" ;; esac
 TOOLS_DIR=$(dirname "$SELF")
 TAB=$(printf '\t')
 
-# ---------------------------------------------------------------------------
-# Worker mode: `sh run-tests.sh --worker "<tab-separated job line>"`.
-# Runs exactly one test, writes its full result block to $WORK/results/,
-# and prints the block live with an "[index/total]" progress marker on
-# the first line. Spawned only by the dispatcher below, never by hand.
-# ---------------------------------------------------------------------------
 if [ "${1:-}" = "--worker" ]; then
     cd "$TOOLS_DIR/../.." || exit 1
     line="${2:-}"
@@ -61,7 +30,6 @@ if [ "${1:-}" = "--worker" ]; then
     case "$f" in /* | [A-Za-z]:* | "") fabs="$f" ;; *) fabs="$(pwd)/$f" ;; esac
     case "$exp" in /* | [A-Za-z]:* | "" | -) expabs="$exp" ;; *) expabs="$(pwd)/$exp" ;; esac
 
-    # Portable `timeout` (absent on stock macOS): drop the limit if missing.
     tmo() {
         if command -v timeout >/dev/null 2>&1; then timeout "$@"; else
             shift
@@ -79,16 +47,8 @@ if [ "${1:-}" = "--worker" ]; then
         fi
     }
     wk_repl() {
-        # A REPL session: the .in file is fed on stdin and everything the
-        # prompt writes - banner, prompts, diagnostics, program output - is
-        # compared. Each session gets a private cwd because a turn builds
-        # and runs the session from there, and :save writes there too.
         jobdir="$WORK/repljob_${jobid}_$$"
         mkdir -p "$jobdir"
-        # 600s, not the 180 this started with: every turn of a session shells
-        # out to a whole build, and eight workers compiling at once stretch
-        # each of those. At 180 the section passed when run alone and timed
-        # out inside a full run.
         got=$( (cd "$jobdir" && tmo "${SALAM_TEST_TIMEOUT:-600}" "$SALAM_ABS" cli --lang="$lang" --no-color --log-level=error <"$fabs" 2>&1) | tr -d '\r')
         rm -rf "$jobdir"
         wk_check "$expabs" "$got"
@@ -138,12 +98,6 @@ if [ "${1:-}" = "--worker" ]; then
         rm -rf "$jobdir"
     }
     wk_expect() {
-        # SALAM_TEST_TIMEOUT was documented in the header but never read; the
-        # cap was a hardcoded 20s. That is fine for an example program and far
-        # too short for the port binaries, which each run a whole compiler
-        # pipeline over their fixtures - semantic_test alone takes ~30s. They
-        # were being killed mid-run and reported as "missing expected: 0
-        # failed", i.e. a timeout wearing a wrong-output disguise.
         case "$label" in
         port/*) exp_tmo="${SALAM_TEST_TIMEOUT:-300}" ;;
         *) exp_tmo="${SALAM_TEST_TIMEOUT:-20}" ;;
@@ -158,11 +112,6 @@ if [ "${1:-}" = "--worker" ]; then
             (cd "$jobdir" && "$SALAM_ABS" build "$fabs" --output="$exe" --no-color --log-level=error --lang="$lang") >"$buildlog" 2>&1
             btry=$((btry + 1))
         done
-        # produced: 1 once something exists to inspect. Without it a build
-        # that never emitted a binary was reported as "missing expected:
-        # <last line>", i.e. blamed on the program's output, which sent
-        # anyone reading CI after the wrong bug - a compile or link error
-        # and a genuinely wrong line are not the same failure.
         produced=0
         if [ -x "$exe" ]; then
             produced=1
@@ -197,11 +146,6 @@ if [ "${1:-}" = "--worker" ]; then
             *"$l"*) ;;
             *)
                 ok=0
-                # Every unmatched line, not just the last one to fail. With
-                # only the last kept, a two-line expectation where both
-                # lines were absent looked identical to one where only the
-                # second was, which is exactly the ambiguity that made
-                # interop/en/mysql_demo unreadable from a CI log alone.
                 if [ -z "$missing" ]; then
                     missing="$l"
                 else
@@ -240,10 +184,6 @@ if [ "${1:-}" = "--worker" ]; then
         runner="${extra#*:}"
         outbin="$WORK/cross_${jobid}_$$"
         case "$target" in *windows*) outbin="$outbin.exe" ;; esac
-        # INFO, not ERROR: the driver logs "using embedded static third-party
-        # libs: <dir>" there, and that one line is what tells a binary that
-        # carries the static sqlite3/openssl/... set for this target apart
-        # from one that does not. See the loader check after the run.
         crosslog="$WORK/cross_${jobid}_$$.log"
         if ! "$SALAM_ABS" build "$f" --output="$outbin" --no-color --log-level=info \
             --lang="$lang" --target="$target" >"$crosslog" 2>&1; then
@@ -252,11 +192,6 @@ if [ "${1:-}" = "--worker" ]; then
             return
         fi
         if [ -z "$runner" ]; then
-            # An empty runner means "this host executes the target natively",
-            # which only holds when the target OS matches the host OS. A
-            # Windows host cannot exec an ELF (and a Linux host cannot exec a
-            # PE), so report the same SKIP the qemu/wine paths use instead of
-            # letting the exec fail with a bare "Exec format error".
             hostos=$(uname -s 2>/dev/null || echo unknown)
             native=1
             case "$hostos" in
@@ -281,16 +216,6 @@ if [ "${1:-}" = "--worker" ]; then
             fi
         fi
         got=$($runner "$outbin" 2>&1 | tr -d '\r')
-        # A `link dynamic "sqlite3"` in the program is satisfied at link time
-        # by the static archive salam carries for the target, so the binary
-        # needs no .so at all. A salam built WITHOUT those archives (a plain
-        # self-hosted ./salam, which is what this suite normally runs) links
-        # the same program against the host's shared sqlite3 instead, and the
-        # target loader then dies before main - "Error loading shared library
-        # libsqlite3.so.0". That is the same "no embedded static libs" case
-        # the build-failure branch above skips for; it just surfaces one stage
-        # later. Gate the skip on the build log, so a compiler that DID supply
-        # the archives and still produced an unloadable binary fails loudly.
         case "$got" in
         *"Error loading shared library"* | *"error while loading shared libraries"* | \
             *"cannot open shared object file"*)
@@ -339,8 +264,6 @@ if [ "${1:-}" = "--worker" ]; then
             rm -f "$html"
             ;;
         llvm)
-            # `salam llvm --jit` drops <name>.ll next to the process cwd,
-            # so each job gets a private cwd to run from.
             jobdir="$WORK/llvmjob_${jobid}_$$"
             mkdir -p "$jobdir"
             got=$( (cd "$jobdir" && "$SALAM_ABS" llvm "$fabs" --jit --no-color --log-level=error 2>/dev/null) | tr -d '\r')
@@ -357,13 +280,6 @@ if [ "${1:-}" = "--worker" ]; then
 
     block=$(run_worker)
     [ -n "$block" ] || block="FAIL $label (worker produced no output)"
-    # Exact progress index: a noclobber-created lockfile serializes the
-    # read-increment-write of $WORK/.counter. `set -C; : > file` is an
-    # atomic O_EXCL create in every POSIX sh (pure builtins, no external
-    # process) and behaves correctly on Linux, macOS and MSYS2/NTFS, so
-    # no two workers can ever claim the same index. The spin is bounded:
-    # if a worker is killed while holding the lock, the stale lockfile
-    # is stolen after ~5s instead of hanging the whole suite.
     spins=0
     while ! (set -C && : >"$WORK/.counter.lock") 2>/dev/null; do
         spins=$((spins + 1))
@@ -392,9 +308,6 @@ if [ "${1:-}" = "--worker" ]; then
     exit 0
 fi
 
-# ---------------------------------------------------------------------------
-# Main mode: collect every requested test into $JOBS, then dispatch.
-# ---------------------------------------------------------------------------
 . "$TOOLS_DIR/lib.sh"
 salam_ensure_compiler --quiet
 WORK="${WORK:-${TMPDIR:-/tmp}/salam-run-tests-work.$$}"
@@ -433,32 +346,25 @@ case "$SALAM" in
 *) SALAM_ABS="$(pwd)/$SALAM" ;;
 esac
 
+# Programs that `import llvm` link libsalam_llvm.a. Putting the archive on
+# LIBRARY_PATH here is what lets the llvmapi examples build; without it that
+# section probes false and skips.
+case "${SALAM_LLVM_LIBDIR:-}" in
+"") ;;
+*)
+    LIBRARY_PATH="$SALAM_LLVM_LIBDIR${LIBRARY_PATH:+:$LIBRARY_PATH}"
+    export LIBRARY_PATH
+    ;;
+esac
+
 if [ -z "${SALAM_STD:-}" ] && [ -d "$(pwd)/std" ]; then
     SALAM_STD="$(pwd)/std"
     export SALAM_STD
 fi
 
-# Generated C must compile without a single diagnostic from the C compiler,
-# and a build that produces one fails the test that produced it. On by
-# default here, not left to the caller: a warning that only fails when
-# somebody remembers to ask is a warning that comes back, which is exactly
-# how the "assignment makes pointer from integer without a cast" family kept
-# reappearing in one module after being fixed in another. Set
-# SALAM_C_STRICT=0 to inspect a corpus-wide regression without the suite
-# stopping on the first one.
 : "${SALAM_C_STRICT:=1}"
 export SALAM_C_STRICT
 
-# Some tests (e.g. stdlib/os_detect) legitimately produce different, all
-# "correct", output depending on the host OS and/or CPU architecture -
-# rather than skip them off the primary (linux/x64) CI host, an optional
-# more-specific sibling is preferred over the plain $name.out when one is
-# present for this host, checked most-specific first:
-#   $name.$HOST_OS.$HOST_ARCH.out   (e.g. os_detect.windows.arm64.out)
-#   $name.$HOST_OS.out              (e.g. os_detect.windows.out)
-#   $name.out                       (default/fallback - every existing
-#                                     test is unaffected unless it actually
-#                                     ships one of the more specific files)
 case "$(uname -s 2>/dev/null)" in
 Linux) HOST_OS=linux ;;
 Darwin) HOST_OS=mac ;;
@@ -512,16 +418,6 @@ want_example() {
     return 1
 }
 
-# The redis_* tests talk to a real server on 127.0.0.1:6379 instead of the
-# mysql-style mock, so they are only runnable where one is listening. Probe
-# once and skip (not fail) when it is absent, the same way the llvm/opencv
-# sections degrade - a missing optional service is not a test failure.
-# Start one with e.g. `redis-server --port 6379` (under WSL on Windows: WSL2
-# forwards localhost, so a server bound in the distro is reachable here).
-# `nc` and `redis-cli` are the portable probes and are tried first; bash's
-# /dev/tcp is only a last resort for the common Git-Bash-on-Windows case where
-# neither is installed. It is a bash extension (undefined in POSIX sh, hence
-# the SC3025 suppression), so it is reached only when this really is bash.
 redis_listening() {
     if command -v nc >/dev/null 2>&1 && nc -z 127.0.0.1 6379 >/dev/null 2>&1; then
         return 0
@@ -575,14 +471,6 @@ collect_example_dir() {
             name="${rel%.salam}"
             base="tests/$lang/$dir/$name"
             exp="$(pick_expect "$base")"
-            # Decided once, then applied to BOTH job kinds. It used to be
-            # computed inside the .expect branch, which left a marked test
-            # that ships a .out (interop/*/redis_demo) with an ungated build
-            # job - and a host without Redis cannot even LINK that one, since
-            # -lhiredis is missing too, so it failed the suite instead of
-            # skipping. That is precisely what the marker file exists to
-            # prevent. Tests carrying only a marker and no expectation still
-            # queue nothing and report nothing, exactly as before.
             skip=""
             if [ -f "$base.redis" ] && [ "${REDIS_OK:-0}" != "1" ]; then
                 skip="requires a Redis server on 127.0.0.1:6379"
@@ -624,13 +512,6 @@ if want general; then
             exp="$(pick_expect "tests/$lang/general/$name")"
             [ -f "$exp" ] || continue
             def=$(grep -o 'DEFINE: [A-Za-z0-9_]*' "$f" | sed 's/DEFINE: /-D/' | tr '\n' ' ')
-            # `// CONST: NAME=VALUE` -> `-dNAME=VALUE`, the value-carrying
-            # sibling of DEFINE (a bare NAME is the flag's valueless form).
-            # [!-~] is "printable, not a space": a value may not contain one,
-            # because the whole flag list travels as a single tab-separated
-            # jobs.tsv field and is word-split back apart in the worker.
-            # Quotes are kept literal on purpose - `-dTAG="0.3"` is how a
-            # numeric-looking constant is pinned to str.
             def="$def$(grep -o 'CONST: [!-~]*' "$f" | sed 's/CONST: /-d/' | tr '\n' ' ')"
             add_job build "general/$lang/$name" "$f" "$lang" "$exp" "${def:--}"
         done
@@ -645,8 +526,6 @@ if want db; then
             break
         }
     done
-    # One archive holds every engine mock (mysql, postgres); each is a stand-in
-    # for a client library CI has no server for, implemented over sqlite3.
     mockc=""
     pgmockc=""
     for lang in $LANGS; do
@@ -826,7 +705,8 @@ fi
 if want llvm; then
     for lang in $LANGS; do
         [ -d "tests/$lang/llvm" ] || continue
-        probe_raw=$("$SALAM" llvm "tests/$lang/llvm/_probe.salam" --jit --no-color --log-level=error 2>/dev/null)
+        probe_err="$WORK/llvm_probe_$lang.err"
+        probe_raw=$("$SALAM" llvm "tests/$lang/llvm/_probe.salam" --jit --no-color --log-level=error 2>"$probe_err")
         prc=$?
         probe=$(printf '%s' "$probe_raw" | tr -d '\r')
         rm -f _probe.ll _probe.ll.run.sh 2>/dev/null
@@ -842,8 +722,40 @@ if want llvm; then
         elif [ "$prc" -ge 128 ]; then
             note_result "FAIL llvm/$lang/* (salam crashed on probe, signal $((prc - 128)); rebuild salam via tools/bash/build-selfhost.sh)" "llvm/$lang/all"
         else
-            note_result "SKIP llvm/$lang/* (LLVM toolchain unavailable: 'salam llvm --jit' probe failed)" "llvm/$lang/all"
+            why=$(tr -d '\r' <"$probe_err" 2>/dev/null | grep -i 'error' | head -1)
+            [ -n "$why" ] || why="no error output; got '$probe'"
+            note_result "SKIP llvm/$lang/* ('salam llvm --jit' probe failed: $why)" "llvm/$lang/all"
         fi
+    done
+fi
+
+if want llvmapi; then
+    for lang in $LANGS; do
+        [ -d "tests/$lang/llvmapi" ] || continue
+        probe_dir="$WORK/llvmapi_probe_$lang"
+        mkdir -p "$probe_dir"
+        probe_exe="$probe_dir/probe"
+        probe_err="$probe_dir/probe.err"
+        probe_src="$(pwd)/tests/$lang/llvmapi/_probe.salam"
+        (cd "$probe_dir" && "$SALAM_ABS" build "$probe_src" \
+            --output="$probe_exe" --no-color --log-level=error) >"$probe_err" 2>&1
+        probe=""
+        [ -x "$probe_exe" ] && probe=$("$probe_exe" 2>/dev/null | tr -d '\r')
+        if [ "$probe" = "OK" ]; then
+            for f in tests/"$lang"/llvmapi/*.salam; do
+                [ -e "$f" ] || continue
+                name=$(basename "$f" .salam)
+                case "$name" in _*) continue ;; esac
+                exp="$(pick_expect "tests/$lang/llvmapi/$name")"
+                [ -f "$exp" ] || continue
+                add_job expect "llvmapi/$lang/$name" "$f" "$lang" "$exp"
+            done
+        else
+            why=$(grep -i 'error\|not found' "$probe_err" 2>/dev/null | head -1)
+            [ -n "$why" ] || why="probe produced '$probe'"
+            note_result "SKIP llvmapi/$lang/* (needs libsalam_llvm.a on the link path; set SALAM_LLVM_LIBDIR: $why)" "llvmapi/$lang/all"
+        fi
+        rm -rf "$probe_dir"
     done
 fi
 
@@ -871,19 +783,6 @@ if want errors; then
     done
 fi
 
-# The self-hosted compiler's own unit tests. Every one of them links a large
-# slice of compiler/, so this section costs minutes of build time where the
-# others cost seconds - it is opt-in via SALAM_TEST_PORT=1 or by naming the
-# section, and skipped (never silently dropped) otherwise.
-#
-# It is wired here at all because being wired nowhere is what happened last
-# time: the dir-per-stage restructure moved lexer.salam to lexer/lexer.salam,
-# every file here kept importing the flat paths, and with no runner
-# referencing them the whole suite sat unbuildable without failing anything.
-#
-# *_test.salam only. The *_run.salam files are differential runners that take
-# a source path and print output for byte-comparison against a reference
-# compiler; they are not self-contained suites and have nothing to assert.
 if want port; then
     if [ -z "$SECTIONS" ] && [ "${SALAM_TEST_PORT:-0}" != "1" ]; then
         note_result "SKIP port/* (heavy; set SALAM_TEST_PORT=1 or run the 'port' section)" "port/all"
@@ -938,12 +837,6 @@ if [ "$TOTAL" -gt 0 ]; then
     fi
 fi
 
-# ---------------------------------------------------------------------------
-# timereport: --time-report / --time-trace, and the C-vs-Salam parity of the
-# JSON they emit. Timings are machine-dependent, so nothing here asserts a
-# duration; it checks the report's SHAPE (schema tag, phase keys, self <= wall)
-# and that the two implementations agree on it.
-# ---------------------------------------------------------------------------
 if want timereport; then
     tr_dir="$WORK/timereport"
     mkdir -p "$tr_dir"
@@ -960,14 +853,11 @@ func main:
 end
 TIMEREPORT_EOF
 
-    # Extract a top-level key's value from the one-line report JSON.
     tr_field() {
         tr -d ' ' <"$1" | grep -o "\"$2\":[0-9]*" | head -1 | cut -d: -f2
     }
 
     tr_json="$tr_dir/report.json"
-    # SALAM_ABS, not SALAM: the default is the relative ./salam and this runs
-    # from $tr_dir, where that name does not exist (the build exited 127).
     (cd "$tr_dir" && "$SALAM_ABS" build --time-report=json tiny.salam >/dev/null 2>"$tr_json")
     tr_rc=$?
     tr_line=$(grep '"schema":"salam.timereport.v1"' "$tr_json" | head -1)
@@ -983,8 +873,6 @@ TIMEREPORT_EOF
         for k in source lexer parser semantic codegen write; do
             grep -q "\"$k\":{" "$tr_json" || tr_bad="missing phase '$k'"
         done
-        # Sum of per-phase self time can never exceed wall time (5% slack for
-        # the clock reads the profiler itself performs).
         tr_sum=$(tr -d ' ' <"$tr_json" | grep -o '"self_ns":[0-9]*' | cut -d: -f2 |
             awk '{ t += $1 } END { print t + 0 }')
         [ -n "$tr_wall" ] && [ "$tr_sum" -le $((tr_wall + tr_wall / 20)) ] ||
@@ -996,7 +884,6 @@ TIMEREPORT_EOF
         fi
     fi
 
-    # --time-trace writes a Chrome Trace Event array the same run.
     (cd "$tr_dir" && "$SALAM_ABS" build --time-trace=trace.json tiny.salam >/dev/null 2>&1)
     if [ -s "$tr_dir/trace.json" ] && grep -q '"ph":"X"' "$tr_dir/trace.json"; then
         note_result "PASS timereport/trace" "timereport/trace"
@@ -1004,9 +891,6 @@ TIMEREPORT_EOF
         note_result "FAIL timereport/trace (no trace events written)" "timereport/trace"
     fi
 
-    # Parity: the self-hosted compiler must report the same phase key set. Only
-    # runs when a second binary is pointed at by SALAM_SELFHOST; skips (not
-    # fails) otherwise, the same way the llvm/opencv sections degrade.
     if [ -n "${SALAM_SELFHOST:-}" ] && [ -x "$SALAM_SELFHOST" ]; then
         rm -rf "$tr_dir/.salam-build"
         (cd "$tr_dir" && "$SALAM_SELFHOST" build --time-report=json tiny.salam >/dev/null 2>"$tr_dir/self.json")
@@ -1035,13 +919,6 @@ pass=$(grep -c '^PASS' "$ALL")
 fail=$(grep -c '^FAIL' "$ALL")
 skip=$(grep -c '^SKIP' "$ALL")
 
-# A job that produced no result at all is not a pass. The tally above counts
-# result files, so a worker that died before writing one simply vanished from
-# the arithmetic: a run where 42 of 302 workers failed to start still printed
-# "260 passed, 0 failed" and every CI gate grepping for "0 failed" accepted
-# it. Compare what was queued against what came back and account for the
-# difference as failure, which is the only honest reading of "the test never
-# ran".
 njobs=$(wc -l <"$JOBS" 2>/dev/null | tr -d ' ')
 ngot=$(find "$WORK/results" -name 'r*' -type f 2>/dev/null | wc -l | tr -d ' ')
 : "${njobs:=0}"

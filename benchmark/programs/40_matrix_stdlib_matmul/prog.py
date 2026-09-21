@@ -1,5 +1,3 @@
-"""Matrix-stdlib benchmark: real NumPy (@), not a hand-written triple loop."""
-
 import numpy as np
 
 n = 400

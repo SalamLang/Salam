@@ -1,5 +1,3 @@
-"""Perfect-numbers benchmark."""
-
 count = 0
 total = 0
 for n in range(2, 30001):

@@ -1,5 +1,3 @@
-"""Many small NumPy calls: build a 4x4, transpose, multiply, trace, repeat."""
-
 import numpy as np
 
 reps = 200000

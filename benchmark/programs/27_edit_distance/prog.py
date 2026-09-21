@@ -1,5 +1,3 @@
-"""edit_distance benchmark: pure-integer Levenshtein DP."""
-
 LEN1 = 2000
 LEN2 = 2000
 

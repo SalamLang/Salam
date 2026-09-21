@@ -1,5 +1,3 @@
-"""run_length_stats benchmark: streaming run-length encoding over a formula-generated sequence."""
-
 n = 5000000
 total_runs = 0
 sumsq = 0

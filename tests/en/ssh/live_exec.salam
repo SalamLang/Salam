@@ -12,36 +12,6 @@
  *
  */
 
-// Live interop check against a real, unmodified OpenSSH sshd - connect,
-// authenticate, run commands, and check the client/session API end to end.
-// tests/en/ssh/vectors_bytes.salam proves the primitives are correct in
-// isolation; this proves the whole stack actually talks to someone else's
-// server implementation, on a non-default port (the "old and new server,
-// custom port" part of this package's own brief).
-//
-// Requires network access to a real sshd and a matching key, so - like
-// tests/en/tls/live_handshake.salam - this is not part of the offline
-// vector suite. Fill in _HOST/_PORT/_USER/_KEY_PATH for your own server
-// before running, or point them at a local throwaway sshd:
-//
-//   ssh-keygen -t rsa -b 2048 -f /tmp/sshtest/id_rsa -N ""
-//   echo "Port 2222
-//   ListenAddress 127.0.0.1
-//   HostKey <a real host key file>
-//   AuthorizedKeysFile /tmp/sshtest/id_rsa.pub
-//   PubkeyAuthentication yes
-//   PasswordAuthentication no
-//   StrictModes no" > /tmp/sshtest/sshd_config
-//   /usr/sbin/sshd -f /tmp/sshtest/sshd_config -D &
-//
-//   salam build tests/en/ssh/live_exec.salam --output=/tmp/live_exec && /tmp/live_exec
-//
-// This does NOT test password authentication - see this file's header note
-// at the bottom for why, and WithPassword's own unit-level wiring is
-// covered by nothing more than "the field gets set" since exercising the
-// real password codepath needs a live account with a known password,
-// which a committed test cannot safely provision for itself.
-
 package main
 
 import ssh
@@ -68,7 +38,7 @@ func main:
     mut cfg := ssh.NewConfig(_HOST, _PORT, _USER)
     loaded := ssh.WithKeyFile(cfg, _KEY_PATH)
     check(loaded, "WithKeyFile loads the identity from disk")
-    ssh.WithHostKeyMode(cfg, ssh.HOSTKEY_MODE_INSECURE) // throwaway test host key, not a real trust decision
+    ssh.WithHostKeyMode(cfg, ssh.HOSTKEY_MODE_INSECURE)
 
     mut client := ssh.Dial(cfg)
     check(ssh.Ok(client), "Dial connects and authenticates with a private key, on a non-default port")
@@ -80,7 +50,6 @@ func main:
     fp := ssh.HostKeyFingerprint(client)
     check(str.StartsWith(fp, "SHA256:"), "HostKeyFingerprint returns a ssh-keygen -lf-shaped fingerprint")
 
-    // ---------------------------------------------------------- RunCommand / exit codes
     res_ok := ssh.RunCommand(client, "echo hello-from-real-sshd; exit 0")
     check(res_ok.ok, "RunCommand reports ok for a command that runs to completion")
     check(str.Contains(res_ok.stdout, "hello-from-real-sshd"), "RunCommand captures real stdout")
@@ -97,7 +66,6 @@ func main:
     res_whoami := ssh.RunCommand(client, "whoami")
     check(str.Contains(res_whoami.stdout, _USER), "RunCommand's remote whoami matches the authenticated user")
 
-    // ---------------------------------------------------------- Start / Wait / Output (drive it yourself)
     mut sess := ssh.NewSession(client)
     check(sess.ok, "NewSession opens a channel")
     started := ssh.Start(sess, client, "echo step1; sleep 1; echo step2; exit 42")
@@ -110,19 +78,16 @@ func main:
     check(ssh.SessionClosed(sess), "SessionClosed() is true once the remote command has exited and the channel closed")
     ssh.CloseSession(sess, client)
 
-    // ---------------------------------------------------------- WriteInput (stdin) + DrainOutput
     mut sess2 := ssh.NewSession(client)
     _started2 := ssh.Start(sess2, client, "read line; echo got: $line")
     wrote := ssh.WriteInput(sess2, client, "hello-stdin\n")
     check(wrote, "WriteInput sends bytes to the remote command's stdin")
-    ssh.CloseInput(sess2, client) // EOF so `read` isn't left hanging if it wants more
+    ssh.CloseInput(sess2, client)
     _exit2 := ssh.Wait(sess2, client)
     out2 := ssh.Output(sess2)
     check(str.Contains(out2, "got: hello-stdin"), "a command reading stdin sees exactly what WriteInput sent")
     ssh.CloseSession(sess2, client)
 
-    // DrainOutput: read what's arrived so far, then confirm the buffer was
-    // actually cleared (a second drain right after has nothing new).
     mut sess3 := ssh.NewSession(client)
     _started3 := ssh.Start(sess3, client, "echo first; sleep 1; echo second")
     _exit3 := ssh.Wait(sess3, client)
@@ -132,7 +97,6 @@ func main:
     check(str.Equals(drained2, ""), "DrainOutput clears its buffer - a second call with nothing new returns empty")
     ssh.CloseSession(sess3, client)
 
-    // ---------------------------------------------------------- Reconnect
     ssh.Close(client)
     check(!ssh.Ok(client), "Close() marks the client as no longer connected")
     reconnected := ssh.Reconnect(client)

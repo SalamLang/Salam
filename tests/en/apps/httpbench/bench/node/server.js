@@ -1,18 +1,3 @@
-// The node/express equivalent of main.salam. Same routes, same response
-// bodies, byte for byte, so the only thing that differs between the two
-// columns is the server.
-//
-//   CLUSTER=4 PORT=8102 node server.js
-//
-// express is here because express is what "a node HTTP server" means to most
-// people who would ask this question. A bare `http.createServer` is faster
-// and would flatter node; it would also be measuring something nobody ships.
-//
-// node is single-threaded, so it gets `cluster` with one worker per core the
-// same way nginx gets worker_processes and Salam gets threads. Measuring one
-// node process against four nginx workers would be a comparison of core
-// counts wearing a benchmark's clothes.
-
 const cluster = require("node:cluster");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -23,23 +8,13 @@ const CLUSTER = Math.max(1, Number(process.env.CLUSTER) || 1);
 const ASSETS =
   process.env.HTTPBENCH_ASSETS || path.join(__dirname, "..", "..", "public");
 
-// The forking primary supervises and never serves: it forks, replaces dead
-// workers, and skips the listen at the bottom of this file. Everything in
-// between is cheap enough to set up in a process that will not use it.
 const SUPERVISOR = cluster.isPrimary && CLUSTER > 1;
 
 if (SUPERVISOR) {
   for (let i = 0; i < CLUSTER; i++) cluster.fork();
-  // A worker that dies mid-run would leave the rest of the routes measured
-  // against a smaller server than the one the header claims. Replacing it
-  // keeps the core budget honest; run.sh separately notices a server that
-  // dies outright.
   cluster.on("exit", () => cluster.fork());
 }
 
-// Read once at boot, which is the whole point of /cached sitting next to
-// /file. An unreadable asset leaves it empty rather than throwing, so the
-// route answers instead of killing the worker.
 let CACHED = "";
 try {
   CACHED = fs.readFileSync(path.join(ASSETS, "data.json"), "utf8");
@@ -60,8 +35,6 @@ function jsonOk(res, body) {
 }
 
 function intQuery(req, name, fallback, lo, hi) {
-  // A query parameter can arrive as an array (?n=1&n=2), so anything that
-  // is not a plain string falls back rather than being cast.
   const raw = req.query[name];
   if (typeof raw !== "string" || raw === "") return fallback;
   const v = parseInt(raw, 10);
@@ -86,7 +59,6 @@ app.get("/json", (_req, res) =>
   ),
 );
 
-// Pays a full open/read/close per request, on purpose.
 app.get("/file", (_req, res) => {
   fs.readFile(path.join(ASSETS, "data.json"), "utf8", (err, body) => {
     if (err || !body) {
@@ -100,16 +72,8 @@ app.get("/file", (_req, res) => {
   });
 });
 
-// The same bytes with the read hoisted out. /file minus /cached is the cost
-// of the filesystem on this machine, per request.
 app.get("/cached", (_req, res) => jsonOk(res, CACHED));
 
-// JSON.stringify, not a template literal. The id comes out of the URL, and
-// interpolating it raw let a single double quote end the JSON string and the
-// rest of the segment be read as structure - `/users/a"b` answered
-// `{"id":"a"b",...}`, which no parser accepts and which CodeQL reports as
-// reflected XSS. Serializing an object cannot produce that, and for the ids
-// this benchmark actually sends it emits the identical bytes.
 app.get("/users/:id", (req, res) => {
   const id = req.params.id;
   if (!id) {
@@ -130,7 +94,6 @@ app.get("/search", (req, res) => {
   jsonOk(res, JSON.stringify({ query: q, count: n, results: results }));
 });
 
-// Tunable CPU work, identical in shape to main.salam's loop.
 app.get("/compute", (req, res) => {
   const n = intQuery(req, "n", 1000, 0, 5000000);
   let acc = 0;
@@ -151,16 +114,11 @@ app.get("/headers", (req, res) => {
   );
 });
 
-// Raw body: express.text() with a wildcard type, because the generator sends
-// text/plain and a JSON parser would reject anything that is not JSON and
-// turn the route into a 400 factory.
 app.post("/echo", express.text({ type: "*/*", limit: "10mb" }), (req, res) => {
   const body = typeof req.body === "string" ? req.body : "";
   jsonOk(res, JSON.stringify({ bytes: Buffer.byteLength(body), echo: body }));
 });
 
-// An HTML page assembled per request out of pieces, which is what a
-// templating layer ultimately does. Byte-identical to main.salam's / route.
 app.get("/", (_req, res) => {
   let b = '<!doctype html>\n<html lang="en">\n<head>\n';
   b += '<meta charset="utf-8">\n';

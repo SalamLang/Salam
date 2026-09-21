@@ -21,9 +21,6 @@ import os
 import str
 import filepath
 
-// A builder, not `sb = sb + s` in a loop: that shape abandons the whole
-// string on every iteration, which for the 100 KB fixtures below is a
-// third of a megabyte dropped.
 func repeat_str(s: str, count: int): str:
     mut b := str.NewBuilder()
     mut i := 0
@@ -36,11 +33,6 @@ func repeat_str(s: str, count: int): str:
     ret out
 end
 
-// Hand-builds a minimal RAR4 archive (signature, MAIN_HEAD, two stored
-// FILE_HEAD blocks, ENDARC_HEAD) so RarList/RarExtractByName have
-// something to read without depending on an external .rar - there is no
-// `rar`/`unrar` tool to create one with in this environment, and RAR has
-// no open format to encode against even if there were.
 func _rar_write_file_block(b &: compress.ByteBuf, name: str, data: str):
     name_len := name.len()
     data_len := data.len()
@@ -86,14 +78,6 @@ func build_synthetic_rar(name1: str, data1: str, name2: str, data2: str): compre
     ret b
 end
 
-// Hand-builds a minimal RAR5 archive (signature, MAIN header, one stored
-// FILE header, END header). RAR5 header fields are "vint" (base-128,
-// least-significant-7-bits-first) rather than fixed little-endian, but
-// every value used here is under 128, so each vint is exactly one raw
-// byte - no multi-byte encoding needed. Layout confirmed against real
-// `rar`/`unrar` 7.00 output (see rar.salam's header comment); this fixture
-// keeps that coverage in the repo without depending on an external tool
-// or a generated .rar file.
 func build_synthetic_rar5(name: str, data: str): compress.ByteBuf:
     mut b := compress.NewByteBuf()
     compress.BufPush(b, 0x52)
@@ -105,16 +89,11 @@ func build_synthetic_rar5(name: str, data: str): compress.ByteBuf:
     compress.BufPush(b, 0x01)
     compress.BufPush(b, 0x00)
 
-    // MAIN header: CRC32(4, unchecked by RarList) + HeaderSize(vint=2) +
-    // HeaderType(vint=1) + HeaderFlags(vint=0, no extra/data area).
     archive.LEPut32(b, 0)
     compress.BufPush(b, 2)
     compress.BufPush(b, 1)
     compress.BufPush(b, 0)
 
-    // FILE header: HeaderType(2) HeaderFlags(2=DATA only) DataSize(vint)
-    // FileFlags(0) UnpackedSize(vint) Attributes(0) CompressionInfo(0=
-    // store) HostOS(0) NameSize(vint) Name.
     name_len := name.len()
     data_len := data.len()
     header_data_len := 9 + name_len
@@ -132,7 +111,6 @@ func build_synthetic_rar5(name: str, data: str): compress.ByteBuf:
     compress.BufPushBytes(b, name as void*, name_len)
     compress.BufPushBytes(b, data as void*, data_len)
 
-    // END header: HeaderType(5) HeaderFlags(0).
     archive.LEPut32(b, 0)
     compress.BufPush(b, 2)
     compress.BufPush(b, 5)
@@ -149,7 +127,6 @@ func main:
     d1 := compress.BufFromStr(text1)
     d2 := compress.BufFromStr(text2)
 
-    // ---------------------------------------------------------- GZIP
     p1 := filepath.Join(tmpdir, "sample1.txt")
     testing.AssertTrue(archive.WriteBinaryFile(p1, d1.data, d1.len))
     gzpath := filepath.Join(tmpdir, "sample1.txt.gz")
@@ -162,7 +139,6 @@ func main:
     testing.AssertMsg(compress.BufEquals(d1, r1), "gzip file round-trip mismatch")
     compress.BufFree(r1)
 
-    // ---------------------------------------------------------- ZIP
     p2 := filepath.Join(tmpdir, "sample2.txt")
     testing.AssertTrue(archive.WriteBinaryFile(p2, d2.data, d2.len))
 
@@ -196,7 +172,6 @@ func main:
     testing.AssertTrue(archive.ZipExtractAll(zipbuf.data, zipbuf.len, zextractdir))
     compress.BufFree(zipbuf)
 
-    // ---------------------------------------------------------- TAR
     mut tfiles := Vector {} as Vector<archive.TarFileInput>
     tfiles.push(archive.MakeTarFileInput("sample1.txt", d1.data, d1.len, false))
     tfiles.push(archive.MakeTarFileInput("sub/", 0 as void*, 0, true))
@@ -228,7 +203,6 @@ func main:
     testing.AssertTrue(archive.TarExtractAll(tarbuf.data, tarbuf.len, textractdir))
     compress.BufFree(tarbuf)
 
-    // ---------------------------------------------------------- RAR (read-only)
     rarbuf := build_synthetic_rar("hi.txt", "Hi Salam!", "sub/nested.txt", "Nested RAR content")
     testing.AssertTrue(archive.IsRar(rarbuf.data, rarbuf.len))
     rentries := archive.RarList(rarbuf.data, rarbuf.len) as Vector<archive.Entry>
@@ -248,7 +222,6 @@ func main:
     compress.BufFree(re2)
     compress.BufFree(rarbuf)
 
-    // ---------------------------------------------------------- RAR5 (read-only)
     rar5buf := build_synthetic_rar5("hello5.txt", "Hello RAR5!")
     testing.AssertTrue(archive.IsRar(rar5buf.data, rar5buf.len))
     r5entries := archive.RarList(rar5buf.data, rar5buf.len) as Vector<archive.Entry>
@@ -265,7 +238,6 @@ func main:
     compress.BufFree(r5x)
     compress.BufFree(rar5buf)
 
-    // ------------------------------------------------ binary data (embedded NUL)
     mut bin := compress.NewByteBuf()
     compress.BufPush(bin, 0)
     compress.BufPush(bin, 1)

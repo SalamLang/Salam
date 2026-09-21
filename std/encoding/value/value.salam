@@ -2,39 +2,6 @@ package value
 
 import mem
 
-// value - a hand-rolled dynamic tree (Go's interface{}/Rust's serde_json::Value
-// equivalent) shared by every encoding.* format package (json, yaml, toml,
-// msgpack, csv's bridge, xml's bridge) so they can all round-trip through one
-// common representation instead of each inventing its own.
-//
-// MUTATION SAFETY (read this before touching arr/obj directly): a Value
-// fetched out of a parent's arr/obj (ArrayGet/ObjectGet) is a shallow struct
-// copy - it copies Vector<Value>'s/HashMap<str,Value>'s header (data
-// pointer + len/cap), NOT the backing array, so the copy still ALIASES the
-// same heap storage as the parent's own copy. An in-place ArraySet/
-// ObjectSet on that "copy" therefore often IS visible through the parent
-// immediately - but this is not something to rely on: Vector<T>.push()/
-// HashMap<K,V>.put() can trigger a resize (see vector.salam's reserve() and
-// hashmap.salam's _resize()), which reallocates and reassigns that ONE
-// copy's own data pointer, silently severing the alias from that point on
-// while the parent's copy still points at the old block. Relying on
-// incidental aliasing is therefore unsafe (it can appear to work and then
-// stop the moment a resize happens); relying on NO aliasing is equally
-// wrong (a raw struct copy is not a deep copy - see ValueClone below for
-// that). The one discipline that is always correct regardless of whether
-// aliasing happens to hold at a given moment is: always write every
-// mutated level back into its parent explicitly, all the way to the root:
-//
-//   mut a := value.ObjectGet(root, "a")
-//   mut b := value.ObjectGet(a, "b")
-//   value.ArraySet(b, 2, value.ValueInt(9))
-//   value.ObjectSet(a, "b", b)
-//   value.ObjectSet(root, "a", a)
-//
-// And if you need a Value that is genuinely independent of its source (no
-// aliasing at all, ever), call ValueClone - a real deep copy that builds
-// fresh backing storage for every nested array/object.
-
 pub const KindNull := 0
 pub const KindBool := 1
 pub const KindInt := 2
@@ -52,8 +19,6 @@ pub struct Value:
     pub arr: Vector<Value> = Vector {}
     pub obj: HashMap<str, Value> = HashMap {} as HashMap<str, Value>
 end
-
-// ---- construction ----
 
 pub func ValueNull(): Value: ret Value { kind = KindNull } end
 pub func ValueBool(b: bool): Value: ret Value { kind = KindBool, b = b } end
@@ -87,8 +52,6 @@ pub func NewValueObject(): Value:
     ret Value { kind = KindObject, obj = HashMap {} as HashMap<str, Value> }
 end
 
-// ---- type tests ----
-
 pub func IsNull(v: Value): bool: ret v.kind == KindNull end
 pub func IsBool(v: Value): bool: ret v.kind == KindBool end
 pub func IsInt(v: Value): bool: ret v.kind == KindInt end
@@ -97,9 +60,6 @@ pub func IsNumber(v: Value): bool: ret v.kind == KindInt || v.kind == KindFloat 
 pub func IsString(v: Value): bool: ret v.kind == KindString end
 pub func IsArray(v: Value): bool: ret v.kind == KindArray end
 pub func IsObject(v: Value): bool: ret v.kind == KindObject end
-
-// ---- unwraps (total: wrong-kind returns the zero value, matching
-// the zeroed-miss convention of HashMap.get) ----
 
 pub func AsBool(v: Value): bool: ret v.b end
 
@@ -114,9 +74,6 @@ pub func AsFloat(v: Value): f64:
 end
 
 pub func AsString(v: Value): str: ret v.s end
-
-// ---- array/object access: reads copy out, writes take the parent by
-// reference and mutate in one call - see the mutation-safety note above ----
 
 pub func ArrayLen(v: Value): int: ret v.arr.len() end
 
@@ -151,10 +108,6 @@ pub func ObjectKeys(v: Value): Vector<str>:
     end
     ret out
 end
-
-// ---- deep copy: a plain struct copy (`x := v`) only copies the
-// Vector/HashMap header (data pointer + len/cap), aliasing the same backing
-// storage - ValueClone actually duplicates every nested array/object ----
 
 pub func ValueClone(v: Value): Value:
     if v.kind == KindArray:

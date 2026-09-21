@@ -6,7 +6,6 @@ import at "../ast.salam"
 import i18 "../i18n.salam"
 import sm "../semantic/semantic.salam"
 
-// ll_call_str
 func call_str(
     v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, obj: int, m: str, out2 &: Llv
 ): bool:
@@ -19,8 +18,6 @@ func call_str(
             ret true
         end
     end
-    // Before `recv` is materialized below: call_vec_str lowers the receiver
-    // itself, and evaluating `obj` twice would duplicate any side effects.
     if str.Equals(m, "split") && na == 1:
         ret call_vec_str(v, s, a, n, "salam_str_split", obj, out2)
     end
@@ -127,7 +124,6 @@ func call_str(
     ret false
 end
 
-// ll_call_dyn
 func call_dyn(
     v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, obj: int, iface: str, mname: str
 ): Llv:
@@ -148,15 +144,8 @@ func call_dyn(
         lv_error(v, a, n, "dynamic call on non-interface '" + ib + "'")
         ret poison(at.Get(a, n).type_str)
     end
-    // `d.free()` on an interface value releases the *box*, not a method on
-    // the interface - so no vtable slot could ever match and the lookup
-    // below would report "interface 'Shape' has no method 'free'". Same
-    // lowering the C backend gives it in call_dyn().
     if str.Equals(mname, "free") && at.Get(a, n).list.len() == 0:
         dv0 := lv_expr(v, s, a, obj)
-        // Same `dyn X*` auto-deref the dispatch path below needs:
-        // Vector.get() returns the address of the slot, and extractvalue
-        // wants the %dyn itself.
         mut dv0ref := dv0.ref
         if is_ptr_ts(dv0.ts):
             ld0 := new_tmp(v)
@@ -191,11 +180,6 @@ func call_dyn(
     end
 
     dv := lv_expr(v, s, a, obj)
-    // `dyn X*` - a pointer TO an interface value, which is what Vector.get()
-    // hands back. Auto-deref before dispatching: extractvalue needs the %dyn
-    // itself, not the address of the slot holding it. This used to appear to
-    // work only because ty_of("dyn X*") wrongly answered "%dyn", which broke
-    // the data-pointer side of the same vector instead.
     mut dvref := dv.ref
     if is_ptr_ts(dv.ts):
         ld := new_tmp(v)
@@ -213,9 +197,6 @@ func call_dyn(
     )
     emit(v, fn + " = load ptr, ptr " + sl)
 
-    // Arguments follow the interface's signature exactly as a direct call
-    // would: the vtable slot IS the concrete method, so a `&:` param has to
-    // arrive as the argument's address, not as a copy of its value.
     mut ab := co.SbNew()
     co.SbPuts(ab, "ptr " + data)
     nn := at.Get(a, n)
@@ -238,7 +219,6 @@ func call_dyn(
     ret make_llv(r, rts)
 end
 
-// ll_call_method
 func call_method(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, callee: int): Llv:
     calleen := at.Get(a, callee)
     obj := calleen.a
@@ -246,8 +226,6 @@ func call_method(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, callee: int): Llv:
     objn := at.Get(a, obj)
     ots := objn.type_str
 
-    // Trailing '*'s are not part of the interface name (see call_dyn's
-    // auto-deref): "dyn Shape*" dispatches on Shape, not on "Shape*".
     if str.StartsWith(ots, "dyn "):
         mut ibn := str.Len(ots)
         until ibn > 4 && byte_at(ots, ibn - 1) == 42:
@@ -274,28 +252,11 @@ func call_method(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, callee: int): Llv:
         ret len_of(v, s, a, n, obj)
     end
 
-    // Package-qualified call (`str.Equals(...)`). Gated on the receiver having
-    // no value type of its own, and the gate has to cover BOTH lookups below:
-    // sym_of searches the global scope and then every loaded package, so a
-    // function-local whose name matches a package's - `mut map := Vector {} as
-    // Vector<int>` in jsgen_call.salam, against std/map's `package map` -
-    // resolved to the package, and its `map.push(...)` came back as "package
-    // function 'push' not found". A package identifier carries no value type,
-    // so requiring an empty/<null> type separates the two cleanly. sema types a
-    // real value and leaves only the unresolved package case as "<null>";
-    // keying off the codegen-time locals list instead was wrong, since a local
-    // declared in an enclosing block is not always registered yet at the call
-    // site.
     if objn.kind == at.AST_IDENTIFIER && (str.Len(ots) == 0 || str.Equals(ots, "<null>")):
         pk := sym_of(v, s, a, objn.name)
         if pk != 0 && sm.SymAt(s, pk).kind == sm.SYM_PACKAGE:
             ret call_pkg(v, s, a, n, pk, mname)
         end
-        // sym_of searches the global scope first, so a package whose name
-        // is also an extern function's - std/time is `package time` and
-        // declares `extern func time(...)` - can resolve to the function
-        // instead, leaving `time.FormatDate(...)` reported as a method on
-        // type '<null>'.
         mut pi := 0
         until pi < sm.PackageCount(s):
             cand := sm.PackageAt(s, pi)
@@ -315,10 +276,6 @@ func call_method(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, callee: int): Llv:
     end
     if ms != 0 && sm.SymAt(s, ms).kind == sm.SYM_METHOD && sm.SymAt(s, ms).overloads.len() > 0:
         sig := pick_overload(v, s, a, ms, n)
-        // The callee's body belongs to the scope that declares its type, not
-        // to whichever module is calling; and the symbol it is mangled under
-        // is the struct symbol's own name, never the (possibly
-        // package-qualified) spelling at the use site.
         mut osc := scope_of(s, ss)
         if osc == 0:
             osc = v.pkg_scope
@@ -352,11 +309,6 @@ func call_method(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, callee: int): Llv:
         end
     end
 
-    // `o.fn(args)` where `fn` is a *field* holding a function value, not a
-    // method - so no SYM_METHOD lookup above could ever match it. Same
-    // lowering as any other indirect call; call_indirect re-evaluates the
-    // callee to get the closure pointer, which for a member expression is
-    // the field load.
     if ss != 0 && str.StartsWith(calleen.type_str, "func("):
         ret call_indirect(v, s, a, n, callee)
     end
@@ -367,7 +319,6 @@ func call_method(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, callee: int): Llv:
     ret poison(at.Get(a, n).type_str)
 end
 
-// ll_call_indirect
 func call_indirect(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, callee: int): Llv:
     fts := at.Get(a, callee).type_str
     env := lv_expr(v, s, a, callee)
@@ -397,24 +348,13 @@ func call_indirect(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, callee: int): Llv
     ret make_llv(r, rts)
 end
 
-// ll_is_func_ts
 func is_func_ts(ts: str): bool:
     ret str.StartsWith(ts, "func(")
 end
 
-// ll_call_raw_ptr - call through a raw C function pointer,
-// `externfunc(...)`, produced by `x as extern func (i32, i32) i32` and by
-// COM vtable slot casts in std/webview. Unlike a `func(...)` value, which
-// is a closure (env pointer whose first word is the code pointer, so
-// call_indirect loads through it and passes the env as argument 0), an
-// externfunc IS the code pointer and takes no hidden argument.
 func call_raw_ptr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, callee: int): Llv:
     fts := at.Get(a, callee).type_str
     fv := lv_expr(v, s, a, callee)
-    // The callee only needs an inttoptr when it really is an integer. A raw
-    // function pointer is already a ptr under opaque pointers, and
-    // `inttoptr ptr ... to ptr` is not a legal cast at all - `raw as extern
-    // func (...)` produced exactly that and the module failed to parse.
     mut fn := fv.ref
     if !str.Equals(ty_of(v, s, a, fv.ts), "ptr"):
         fn = new_tmp(v)
@@ -448,7 +388,6 @@ func call_raw_ptr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, callee: int): Llv:
     ret make_llv(r, rts)
 end
 
-// ll_call_intrinsic
 func call_intrinsic(
     v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, nm: str, out2 &: Llv
 ): bool:
@@ -481,9 +420,6 @@ func call_intrinsic(
         out2 = make_llv(r, "str")
         ret true
     end
-    // char_code(s) is the inverse of char_from_code: the unsigned value of
-    // the first byte. Loaded directly rather than through a runtime call,
-    // matching the C backend's `(int32_t)(unsigned char)(s)[0]`.
     if str.Equals(nm, "char_code") && na == 1:
         b := new_tmp(v)
         r = new_tmp(v)
@@ -501,7 +437,6 @@ func call_intrinsic(
     if str.Equals(nm, "input") && na == 0:
         ret call_runtime(v, s, a, n, "salam_input", 0, out2)
     end
-    // open(path, mode) -> std/fs's salam_open, the File* constructor.
     if str.Equals(nm, "open") && na == 2:
         ret call_runtime(v, s, a, n, "salam_open", 0, out2)
     end
@@ -509,14 +444,7 @@ func call_intrinsic(
         out2 = make_llv(strconst(v, i18.Lang()), "str")
         ret true
     end
-    // spawn(f) takes a *function name*, not a value, so the argument is
-    // lowered to the mangled symbol's address rather than through lv_expr,
-    // then handed to the thread runtime. Mirrors call_ident() in the C
-    // backend.
     if str.Equals(nm, "spawn") && (na == 1 || na == 2) && at.KindOf(a, a0) == at.AST_IDENTIFIER:
-        // spawn(f, arg) routes through a second runtime entry point that
-        // forwards the payload to pthread_create; the payload is already
-        // known to be a pointer, so it only needs widening to `ptr`.
         mut rt := "salam_thread_spawn"
         if na == 2:
             rt = "salam_thread_spawn_arg"
@@ -546,8 +474,6 @@ func call_intrinsic(
         out2 = make_llv(r2, "i64")
         ret true
     end
-    // Atomic intrinsics, lowered to real instructions rather than a call.
-    // seq_cst throughout, matching what the C backend asks __atomic_* for.
     if sm.AtomicArity(nm) > 0 && na == sm.AtomicArity(nm) && sm.Lookup(s, s.global, nm) == 0:
         pv := conv(v, s, a, lv_expr(v, s, a, a0), "ptr")
         if str.Equals(nm, "atomic_load"):
@@ -563,8 +489,6 @@ func call_intrinsic(
             ret true
         end
         if str.Equals(nm, "atomic_add"):
-            // atomicrmw yields the value from *before* the operation; salam's
-            // atomic_add is defined to return the new one.
             ov := new_tmp(v)
             emit(v, ov + " = atomicrmw add ptr " + pv + ", i64 " + vv + " seq_cst")
             r = new_tmp(v)
@@ -578,7 +502,6 @@ func call_intrinsic(
             out2 = make_llv(r, "i64")
             ret true
         end
-        // cmpxchg returns { value, success }; only the flag is wanted.
         dv := conv(v, s, a, lv_expr(v, s, a, nn.list.get(2)), "i64")
         pair := new_tmp(v)
         emit(
@@ -589,8 +512,6 @@ func call_intrinsic(
         out2 = make_llv(r, "bool")
         ret true
     end
-    // callhandler(fp, arg) - an indirect call through an integer-encoded
-    // function pointer, the shape the layout/webview callbacks use.
     if str.Equals(nm, "callhandler") && na == 2:
         a1 := nn.list.get(1)
         fp := new_tmp(v)
@@ -599,9 +520,6 @@ func call_intrinsic(
         out2 = make_llv("0", "void")
         ret true
     end
-    // Table-driven builtins (join -> salam_thread_join, strcmp, ...) - the
-    // same table the C backend falls back to in call_ident(), so a new
-    // entry there reaches both backends from one edit.
     bidx := sm.BuiltinLookup(nm)
     if bidx >= 0:
         if call_runtime(v, s, a, n, sm.BuiltinAt(bidx).runtime, 0, out2):
@@ -611,12 +529,9 @@ func call_intrinsic(
     ret false
 end
 
-// ll_call
 func lv_call(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     nn := at.Get(a, n)
     callee := nn.a
-    // Checked before every other form, exactly as cg_call does: a raw C
-    // function pointer is callable whatever expression shape produced it.
     if callee != 0 && is_extern_fn_ts(at.Get(a, callee).type_str):
         ret call_raw_ptr(v, s, a, n, callee)
     end

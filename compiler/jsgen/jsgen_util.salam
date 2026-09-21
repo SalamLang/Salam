@@ -6,9 +6,6 @@ import at "../ast.salam"
 import sm "../semantic/semantic.salam"
 import co "../sal_core.salam"
 
-// ---------------------------------------------------------------------------
-// Byte access + C-locale ctype (same idiom as the lexer/minify ports).
-// ---------------------------------------------------------------------------
 inline func byte_at(s: str, i: int): int: ret co.ByteAt(s, i) end
 
 func is_digit(c: int): bool:
@@ -30,7 +27,6 @@ func to_upper(c: int): int:
     ret c
 end
 
-// strcmp(x, y) == 0 over a Vector<str>
 func name_in_strvec(v: Vector<str>, name: str): bool:
     n := v.len()
     mut i := 0
@@ -43,10 +39,6 @@ func name_in_strvec(v: Vector<str>, name: str): bool:
     ret false
 end
 
-// ---------------------------------------------------------------------------
-// codegen_emit.c slice: cg_indent / cg_line / local_known / local_add.
-// cg_fmt is not needed - call sites build the line with str concatenation.
-// ---------------------------------------------------------------------------
 func cg_indent(g &: Jg):
     if g.compact:
         ret
@@ -70,25 +62,15 @@ func local_add(g &: Jg, name: str):
     g.locals.push(name)
 end
 
-// Is `emitted` the JS name of a local still in scope? Names go out through
-// g.local_emit, which is where a collision would be, not g.locals - two
-// different Salam names can be handed the same JS one (a synthetic counter
-// and a user binding).
 func jsg_emit_taken(g &: Jg, emitted: str): bool:
     ret name_in_strvec(g.local_emit, emitted)
 end
 
-// ---------------------------------------------------------------------------
-// codegen_type.c slice: cg_put_ident_byte / cg_is_c_keyword / cg_cident /
-// parse_typestr (base part) / cg_is_int_typestr / cg_is_unsigned_typestr /
-// cg_is_slice_ts / cg_encode_typestr / cg_mangle_in / cg_mangle_ti /
-// array_size_of.
-// ---------------------------------------------------------------------------
 func put_ident_byte(b &: str.StringBuilder, c: int):
     hex := "0123456789abcdef"
     if is_alnum(c):
         str.BufAppendChar(b, c)
-    else c == 95: // '_'
+    else c == 95:
         str.BufAppend(b, "__")
     else:
         str.BufAppendChar(b, 95)
@@ -139,17 +121,15 @@ func cg_cident(name: str): str:
     ret r
 end
 
-// parse_typestr, reduced to the base-name part cg_struct_of needs:
-// strip ONE trailing '*', then cut at the first '['.
 func ts_base(ts: str): str:
     mut n := str.Len(ts)
-    if n > 0 && byte_at(ts, n - 1) == 42: // '*'
+    if n > 0 && byte_at(ts, n - 1) == 42:
         n -= 1
     end
     mut cut := n
     mut i := 0
     until i < n:
-        if byte_at(ts, i) == 91: // '['
+        if byte_at(ts, i) == 91:
             cut = i
             break
         end
@@ -166,9 +146,6 @@ func cg_is_unsigned_typestr(ts: str): bool:
     ret str.Equals(ts, "u8") || str.Equals(ts, "u16") || str.Equals(ts, "u32") || str.Equals(ts, "u64") || str.Equals(ts, "size")
 end
 
-// Common type of an integer binary operation (SALAM-TYPES.md 15): same
-// signedness picks the higher rank, mixed signedness has no common type
-// (semantic analysis rejects it as E021).
 func cg_common_int_typestr(x: str, y: str): str:
     if !cg_is_int_typestr(x) || !cg_is_int_typestr(y):
         ret ""
@@ -186,19 +163,12 @@ func cg_is_slice_ts(ts: str): bool:
     ret str.StartsWith(ts, "slice<")
 end
 
-// A pointer to bytes. Those are the only pointers this backend can stand
-// behind: a `str` cast to one becomes a Uint8Array over its UTF-8, which is
-// what lets std code that scans a string byte by byte (conv's parsers) read
-// numbers instead of undefined. A pointer to anything else stays
-// unsupported rather than silently indexing by the wrong unit.
 func jsg_is_byte_ptr_ts(ts: str): bool:
     ret str.Equals(ts, "void*") || str.Equals(ts, "i8*") || str.Equals(
         ts, "u8*"
     ) || str.Equals(ts, "char*")
 end
 
-// The pointer under an integer cast of one ((p as u64) in `(p as u64) + k`),
-// or 0 when this is not that shape.
 func jsg_ptr_operand(a &: at.Ast, id: int): int:
     if id == 0 || at.KindOf(a, id) != at.AST_CAST:
         ret 0
@@ -210,20 +180,6 @@ func jsg_ptr_operand(a &: at.Ast, id: int): int:
     ret jsg_is_byte_ptr_ts(at.Get(a, inner).type_str) ? inner : 0
 end
 
-// A `Vector<T>` of the prelude's own collections package, which this
-// backend represents as a plain JS array rather than as the struct its
-// Salam source describes - see jsg_call_vec.
-// ---- value copies -------------------------------------------------------
-//
-// A struct or a fixed array is a value in Salam; in the emitted JS both are
-// objects, so a bind, an assignment, a by-value parameter, a field or an
-// element initialised from an existing one has to copy, or the two names
-// alias and a callee's writes show through to its caller. The copy is
-// type-directed at emit time because a Vector is a JS array as well and
-// keeps its buffer on copy, exactly as the C layout (header copied, data
-// shared) does; only fixed arrays and plain structs go deep.
-
-// "i32[3]" for "i32[2][3]": the outer dimension comes off first.
 func jsg_array_elem_ts(ts: str): str:
     lb := str.IndexOf(ts, "[")
     if lb < 0:
@@ -247,9 +203,6 @@ func jsg_is_value_struct_ts(s &: sm.Sema, ts: str): bool:
     if cg_is_vector_ts(s, ts) || cg_is_hashmap_ts(s, ts) || cg_is_mapiter_ts(s, ts) || str.Equals(ts, "str"):
         ret false
     end
-    // std/str's StringBuilder is `{ s: "" }` here (jsg_call_strbuf), not
-    // the struct its source declares, and a builder is only ever handed
-    // around by reference anyway.
     if str.EndsWith(ts, "StringBuilder"):
         ret false
     end
@@ -261,17 +214,7 @@ func jsg_needs_copy(s &: sm.Sema, ts: str): bool:
     ret jsg_is_fixed_array_ts(ts) || jsg_is_value_struct_ts(s, ts)
 end
 
-// The JS expression that yields a fresh copy of `expr` (a value of type
-// `ts`), or `expr` itself when the type has nothing to copy.
 func jsg_copy_expr(g &: Jg, s &: sm.Sema, ts: str, expr: str, depth: int): str:
-    // Value-type nesting (array-of-array, struct field of struct...) is
-    // acyclic by construction - a struct can't hold itself by value, so
-    // sema already rejects that - and is bounded by how deeply the type
-    // was actually written, so this never fires on real code. It exists
-    // only so a latent bug elsewhere that DID produce a cyclic type
-    // string fails loudly instead of recursing forever; returning `expr`
-    // unchanged here would instead silently alias a value the language
-    // promises is copied.
     if depth > 64:
         ret jsg_unsupported(g, "value type nested too deeply to copy")
     end
@@ -312,8 +255,6 @@ func jsg_copy_expr(g &: Jg, s &: sm.Sema, ts: str, expr: str, depth: int): str:
     ret r
 end
 
-// Whether the expression node builds a fresh value already (a literal), so
-// no copy is owed at the site that binds it.
 func jsg_is_fresh_value(a &: at.Ast, id: int): bool:
     k := at.KindOf(a, id)
     if k == at.AST_CAST:
@@ -327,9 +268,6 @@ func cg_is_vector_ts(s &: sm.Sema, ts: str): bool:
     ret cg_generic_is(s, ts, "Vector")
 end
 
-// The prelude's HashMap<K, V>, represented here as a JS Map, and the
-// iterator its iter() hands out. Same monomorphized-name reasoning as
-// cg_is_vector_ts.
 func cg_is_hashmap_ts(s &: sm.Sema, ts: str): bool:
     ret cg_generic_is(s, ts, "HashMap")
 end
@@ -338,12 +276,6 @@ func cg_is_mapiter_ts(s &: sm.Sema, ts: str): bool:
     ret cg_generic_is(s, ts, "MapIter")
 end
 
-// Is `ts` an instantiation of the generic named `base`? By the time codegen
-// sees it the type has been monomorphized, so the name on the node reads
-// "Vector_i32", not "Vector<int>". The name alone is not proof (anyone may
-// declare a struct called Vector_i32), so the instance is asked which
-// generic it came from - which also keeps "VectorIter_i32" out of the
-// Vector answer.
 func cg_generic_is(s &: sm.Sema, ts: str, base: str): bool:
     if !str.StartsWith(ts, base + "_"):
         ret false
@@ -353,12 +285,9 @@ func cg_generic_is(s &: sm.Sema, ts: str, base: str): bool:
     if ssym == 0:
         ret false
     end
-    // pkgname is empty on an instantiation - it is stamped on the generic
-    // itself - so the base name is what identifies it.
     ret str.Equals(sm.SymAt(s, ssym).generic_base, base)
 end
 
-// strchr(ts, '[') != NULL
 func has_bracket(ts: str): bool:
     n := str.Len(ts)
     mut i := 0
@@ -376,18 +305,17 @@ func cg_encode_typestr(b &: str.StringBuilder, s: str, skip_spaces: bool):
     mut i := 0
     until i < n:
         c := byte_at(s, i)
-        if c == 42: // '*'
+        if c == 42:
             str.BufAppend(b, "_ptr")
-        else c == 91: // '['
+        else c == 91:
             str.BufAppend(b, "_arr")
-        else !(c == 93 || (c == 32 && skip_spaces)): // ']' / skipped ' '
+        else !(c == 93 || (c == 32 && skip_spaces)):
             put_ident_byte(b, c)
         end
         i += 1
     end
 end
 
-// static const char *type_code(cg_t*, type_t*)
 func type_code(s &: sm.Sema, t: int): str:
     mut b := str.NewBuilder()
     cg_encode_typestr(b, sm.ToString(s, t), false)
@@ -396,7 +324,6 @@ func type_code(s &: sm.Sema, t: int): str:
     ret r
 end
 
-// struct_name "" = the C NULL
 func cg_mangle_in(
     s &: sm.Sema, pkg: str, struct_name: str, fn: str, params: Vector<int>
 ): str:
@@ -425,7 +352,7 @@ func array_size_of(ts: str): i64:
     mut i := 0
     mut lb := 0 - 1
     until i < n:
-        if byte_at(ts, i) == 91: // '['
+        if byte_at(ts, i) == 91:
             lb = i
             break
         end
@@ -436,7 +363,7 @@ func array_size_of(ts: str): i64:
     end
     mut v := 0 as i64
     mut p := lb + 1
-    until p < n && byte_at(ts, p) != 93: // ']'
+    until p < n && byte_at(ts, p) != 93:
         c := byte_at(ts, p)
         if c >= 48 && c <= 57:
             v = v * 10 + ((c - 48) as i64)
@@ -446,10 +373,6 @@ func array_size_of(ts: str): i64:
     ret v
 end
 
-// ---------------------------------------------------------------------------
-// codegen_overload.c slice: sig_of_decl / pick_overload / struct_by_name /
-// cg_struct_of / cg_op_method / cg_compound_base / pick_op_overload.
-// ---------------------------------------------------------------------------
 func sig_of_decl(s &: sm.Sema, fsym: int, decl: int): int:
     if fsym == 0:
         ret 0
@@ -559,7 +482,6 @@ func struct_by_name(s &: sm.Sema, name: str): int:
     ret 0
 end
 
-// cg_struct_of: sname receives the parsed base type name.
 func cg_struct_of(s &: sm.Sema, ts: str, sname &: str): int:
     sname = ts_base(ts)
     ret struct_by_name(s, sname)
@@ -591,7 +513,7 @@ func cg_op_method(k: int): str:
     else k == tok.TK_GE:
         ret "operator_ge"
     end
-    ret "" // C NULL
+    ret ""
 end
 
 func cg_compound_base(k: int): int:

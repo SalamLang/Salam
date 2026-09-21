@@ -14,11 +14,6 @@
 
 package jwt
 
-// Verification, in the order that matters: shape, then algorithm, then
-// signature, then claims. Nothing after the signature check runs on a token
-// whose MAC did not match, so a forged payload never reaches the clock or
-// the issuer comparison.
-
 @en "Options"
 @fa "گزینه ها"
 @ar "خیارات"
@@ -58,16 +53,11 @@ func _split3(token: str, a &: str, b &: str, c &: str): bool:
             else d2 < 0:
                 d2 = i
             else:
-                // a fourth segment: JWE, or garbage. Not ours either way.
                 ret false
             end
         end
     end
     if d1 < 0 || d2 < 0: ret false end
-    // An empty header or payload cannot be JSON. An empty SIGNATURE is left
-    // to the algorithm check on purpose: that shape is the "alg": "none"
-    // forgery, and it should be reported as the unsupported algorithm it is
-    // rather than as a parse failure.
     if d1 == 0 || d2 == d1 + 1: ret false end
     a = token.substr(0, d1)
     b = token.substr(d1 + 1, d2 - d1 - 1)
@@ -274,8 +264,6 @@ pub func Verify(token: str, secret: str, opts: Options, err &: int): Token:
         err = JWT_ERR_EMPTY_SECRET
         ret t
     end
-    // "none" lands here as unsupported, which is the whole point: a token
-    // that says it is unsigned is a forgery attempt, not a token.
     if !IsSupportedAlg(t.alg):
         err = JWT_ERR_ALG_UNSUPPORTED
         ret t
@@ -288,17 +276,11 @@ pub func Verify(token: str, secret: str, opts: Options, err &: int): Token:
         err = JWT_ERR_TYPE
         ret t
     end
-    // RFC 7515 §4.1.11: "crit" lists header extensions the verifier is
-    // required to understand. This one understands none of them, and the
-    // spec's answer to that is to reject, not to carry on ignoring them.
     if _member_count(t.header_json, "crit") > 0:
         err = JWT_ERR_ALG_UNSUPPORTED
         ret t
     end
     expected := _signature(t.alg, secret, t.signing_input)
-    // Constant time: an early return on the first differing byte leaks
-    // where it differs, and a signature can be recovered one byte at a
-    // time from that. crypto owns the one implementation.
     if !crypto.SecretEquals(expected, t.signature):
         err = JWT_ERR_SIGNATURE
         ret t

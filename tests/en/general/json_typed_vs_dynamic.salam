@@ -12,21 +12,6 @@
  *
  */
 
-// The two JSON APIs, and where the line between them falls.
-//
-//   json.Marshal / json.Unmarshal   a codec the compiler derives for one
-//                                   concrete type, at compile time
-//   json.Encode / json.Decode       a tree of value.Value, decided at run time
-//
-// Marshal is the one to reach for. It is shorter, it is checked, a field
-// added to the struct appears on the wire without touching any of this, and
-// there is no allocation-tagged tree in the middle. Everything below the
-// first section is the remainder: documents whose shape is not a Salam type,
-// and so cannot be the T of a Marshal<T>.
-//
-// Object key order out of a HashMap is not fixed, so every whole-object
-// encode here goes through sort_keys and every key walk sorts first.
-
 import encoding.json
 import encoding.value
 import encoding.encerr
@@ -37,8 +22,6 @@ struct Point:
     pub y: int = 0
 end
 
-// A shape known at compile time: the typed codec covers it end to end, and
-// the dynamic tree would only be a longer way to write the same thing.
 func known_shape():
     p := Point { x = 3, y = 4 }
     println json.Marshal(p)
@@ -48,10 +31,6 @@ func known_shape():
     println json.Unmarshal("{\"x\":3,\"y\":4}", back, e)
     println back.x + back.y
 
-    // The same document assembled by hand through the dynamic API. It agrees
-    // once the spacing is normalised - the tree encoder writes `"x": 3`, the
-    // derived one writes `"x":3` - and that is the point: this is the code
-    // Marshal saves you from writing.
     mut obj := value.NewValueObject()
     value.ObjectSet(obj, "x", value.ValueInt(3 as i64))
     value.ObjectSet(obj, "y", value.ValueInt(4 as i64))
@@ -61,8 +40,6 @@ func known_shape():
     value.ValueFree(obj)
 end
 
-// Reason 1: the keys are not known until the document arrives. No struct can
-// declare them, so there is no T to derive a codec for.
 func unknown_keys():
     text := `{"retries":3,"region":"eu","debug":true}`
     mut e := encerr.NoError()
@@ -80,8 +57,6 @@ func unknown_keys():
     value.ValueFree(v)
 end
 
-// Reason 2: an array whose elements do not share a type. Vector<T> has one T;
-// this document does not.
 func heterogeneous():
     mut e := encerr.NoError()
     v := json.Decode(`[1,"two",true,null,{"k":1}]`, e)
@@ -103,9 +78,6 @@ func heterogeneous():
     value.ValueFree(v)
 end
 
-// Reason 3: a transform that does not care what the document holds. Redacting
-// every key called "password" at any depth is one function over the tree; as
-// typed code it would be one function per struct that might contain one.
 func redact(v &: value.Value):
     if value.IsObject(v):
         keys := value.ObjectKeys(v)
@@ -136,9 +108,6 @@ func generic_walk():
     value.ValueFree(v)
 end
 
-// Reason 4: fields you must carry through untouched. Unmarshal is strict and
-// rejects a key the struct does not declare; the lenient form accepts the
-// document but drops the key, so it cannot come back out again.
 func passthrough():
     text := `{"x":1,"y":2,"note":"keep me"}`
     mut p := Point {}
@@ -149,7 +118,6 @@ func passthrough():
     println json.UnmarshalLenient(text, p, e2)
     println json.Marshal(p)
 
-    // Through the tree instead, the unknown key survives the round trip.
     mut e3 := encerr.NoError()
     mut v := json.Decode(text, e3)
     value.ObjectSet(v, "x", value.ValueInt(10 as i64))
@@ -157,9 +125,6 @@ func passthrough():
     value.ValueFree(v)
 end
 
-// The two meeting in the middle: decode the envelope dynamically because its
-// shape varies, then hand the one subtree that does have a type to the
-// derived decoder.
 func bridge():
     text := `{"kind":"point","payload":{"x":7,"y":8}}`
     mut e := encerr.NoError()

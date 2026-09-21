@@ -6,9 +6,6 @@ import tok "../token.salam"
 import at "../ast.salam"
 import sm "../semantic/semantic.salam"
 
-// ===== codegen_llvm_stmt.c (remainder) =====
-
-// ll_vardecl
 func lv_vardecl(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     node := at.Get(a, n)
     ts := str.Len(node.type_str) > 0 ? node.type_str : "i32"
@@ -21,18 +18,8 @@ func lv_vardecl(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
         emit(v, "store " + ty_of(v, s, a, ts) + " " + init_val + ", ptr " + slot)
         ret
     end
-    // No initializer: a bare alloca reads back as undef. Sema rejects every
-    // read that no assignment precedes, but a `&:` parameter the callee only
-    // writes on some paths would still leave this indeterminate, so zero it -
-    // the C and JS backends do the same.
     zv := zero_of(s, ts)
     if str.Equals(zv, "zeroinitializer"):
-        // Storing a whole aggregate as one `zeroinitializer` value is legal
-        // IR but pathological: LLVM scalarises it element by element. A
-        // `mut tape: int[30000]` (tests/en/apps/brainfuck.salam) took clang
-        // from 1s to over 300s, while the same program through the C backend
-        // - where `= {0}` becomes a memset - built in 4s. The size comes from
-        // a gep on a null pointer, so no target size arithmetic is needed.
         szp := new_tmp(v)
         sz := new_tmp(v)
         emit(v, szp + " = getelementptr " + ty_of(v, s, a, ts) + ", ptr null, i32 1")
@@ -45,7 +32,6 @@ func lv_vardecl(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     emit(v, "store " + ty_of(v, s, a, ts) + " " + zv + ", ptr " + slot)
 end
 
-// ll_compound_base
 func compound_base(op: int): int:
     if op == tok.TK_PLUS_EQ:
         ret tok.TK_PLUS
@@ -83,7 +69,6 @@ func compound_base(op: int): int:
     ret tok.TK_EOF
 end
 
-// ll_assign
 func lv_assign(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     node := at.Get(a, n)
     target := node.a
@@ -121,14 +106,12 @@ func lv_assign(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     emit(v, "store " + ty_of(v, s, a, ts) + " " + rhs + ", ptr " + addr.ptr + addr.tbaa)
 end
 
-// (C: cg->locals.len = mark) - pop back to a saved local-scope mark.
 func locals_trunc(v &: Lv, mark: int):
     until v.locals.len() > mark:
         _dropped := v.locals.pop()
     end
 end
 
-// ll_stmts_scoped
 func stmts_scoped(v &: Lv, s &: sm.Sema, a &: at.Ast, block: int):
     locals_mark := v.locals.len()
     defers_mark := v.defers.len()
@@ -143,7 +126,6 @@ func stmts_scoped(v &: Lv, s &: sm.Sema, a &: at.Ast, block: int):
     locals_trunc(v, locals_mark)
 end
 
-// ll_if
 func lv_if(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     node := at.Get(a, n)
     cond := as_i1(v, s, a, lv_expr(v, s, a, node.a))
@@ -166,7 +148,6 @@ func lv_if(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     emit_label(v, endL)
 end
 
-// ll_match_stmt
 func lv_match_stmt(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     node := at.Get(a, n)
     if node.list.len() == 0:
@@ -191,7 +172,6 @@ func lv_match_stmt(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     end
 end
 
-// loop-stack push (see the file header for the protocol).
 func loop_push(v &: Lv, break_lbl: str, continue_lbl: str):
     if v.brk.len() == v.nloop:
         v.brk.push(break_lbl)
@@ -205,7 +185,6 @@ func loop_push(v &: Lv, break_lbl: str, continue_lbl: str):
     v.nloop += 1
 end
 
-// ll_while
 func lv_while(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     node := at.Get(a, n)
     condL := new_lbl(v, "wcond")
@@ -228,7 +207,6 @@ func lv_while(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     emit_label(v, endL)
 end
 
-// ll_for
 func lv_for(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     node := at.Get(a, n)
     locals_mark := v.locals.len()
@@ -267,7 +245,6 @@ func lv_for(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     locals_trunc(v, locals_mark)
 end
 
-// ll_const_i64
 func const_i64(a &: at.Ast, n: int, out &: i64): bool:
     if n == 0:
         ret false
@@ -280,8 +257,6 @@ func const_i64(a &: at.Ast, n: int, out &: i64): bool:
     ret true
 end
 
-// Whether `repeat n`'s count is a 64-bit unsigned value, and so has to be
-// compared against the counter as one.
 func repeat_count_unsigned(v &: Lv, a &: at.Ast, count: int): bool:
     if count == 0:
         ret false
@@ -290,13 +265,12 @@ func repeat_count_unsigned(v &: Lv, a &: at.Ast, count: int): bool:
     ret is_int_ts(cts) && !is_signed_ts(cts) && int_bits(v, cts) >= 64
 end
 
-// ll_repeat
 func lv_repeat(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     node := at.Get(a, n)
     mut start_val := ""
     mut bound_val := ""
     mut step_val := ""
-    mut going_up := "" // runtime i1: start <= bound, when the direction is not known here
+    mut going_up := ""
     mut dir_is_static := false
     mut counts_up := false
     if node.c != 0:
@@ -346,11 +320,6 @@ func lv_repeat(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     emit(v, "store i64 " + start_val + ", ptr " + counter)
     locals_mark := v.locals.len()
     mut bind_slot := ""
-    // The index carries the type semantic analysis gave it - the width of
-    // the values that drive the loop - so an i8 count binds an i8 index
-    // and a u64 count keeps its top bit. The counter itself stays 64-bit
-    // either way: it has to hold the count, and `repeat n` over an i8 n
-    // still walks 0..n.
     idx_ts := str.Len(node.type_str) > 0 ? node.type_str : "i32"
     bind_ty := ty_of(v, s, a, idx_ts)
     bind_bits := int_bits(v, idx_ts)
@@ -382,8 +351,6 @@ func lv_repeat(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
         cmp = new_tmp(v)
         emit(v, cmp + " = select i1 " + going_up + ", i1 " + at_or_below + ", i1 " + at_or_above)
     else:
-        // `repeat n`: unsigned where the count is, since a u64 count above
-        // INT64_MAX compares as negative and the loop never starts.
         cmp = new_tmp(v)
         emit(
             v, cmp + " = icmp " + (repeat_count_unsigned(v, a, node.a) ? "ult" : "slt") + " i64 " + cur + ", " + bound_val
@@ -395,8 +362,6 @@ func lv_repeat(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
         if bind_bits >= 64:
             emit(v, "store i64 " + cur + ", ptr " + bind_slot)
         else:
-            // Narrowing, never truncating anything that matters: every
-            // value the counter takes came from a bound of this width.
             narrowed := new_tmp(v)
             emit(v, narrowed + " = trunc i64 " + cur + " to " + bind_ty)
             emit(v, "store " + bind_ty + " " + narrowed + ", ptr " + bind_slot)
@@ -422,7 +387,6 @@ func lv_repeat(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     locals_trunc(v, locals_mark)
 end
 
-// ll_stmt
 func lv_stmt(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     if n == 0 || v.term:
         ret
@@ -501,12 +465,10 @@ func lv_stmt(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     lv_error(v, a, n, at.KindName(k) + " statement")
 end
 
-// ll_block
 func lv_block(v &: Lv, s &: sm.Sema, a &: at.Ast, block: int):
     stmts_scoped(v, s, a, block)
 end
 
-// ll_block_top
 func lv_block_top(v &: Lv, s &: sm.Sema, a &: at.Ast, block: int):
     bn := at.Get(a, block)
     mut i := 0
@@ -515,10 +477,3 @@ func lv_block_top(v &: Lv, s &: sm.Sema, a &: at.Ast, block: int):
         i += 1
     end
 end
-
-// ===========================================================================
-// driver/llvm_toolchain.c (stage C - see the file-header note for why this,
-// and not llvm_native.c's #ifdef SALAM_HAVE_LLVM body, is what's ported).
-// Every private below is prefixed `nt_` (native toolchain) to keep it out of
-// the `ll_*`/C-name-mirroring convention used for the LLVM-IR emitter.
-// ===========================================================================

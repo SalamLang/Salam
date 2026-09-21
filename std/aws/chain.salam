@@ -14,33 +14,6 @@
 
 package aws
 
-// Finding a credential.
-//
-// s3_creds reads the two places a credential is written down: the environment
-// and the shared file. Neither covers how credentials actually reach a program
-// in production, which is one of:
-//
-//   * a profile that names a role rather than a key, so the key in some other
-//     profile has to be found first and then traded for the role. This is the
-//     ordinary developer setup, and s3_creds.FromProfile() answers it with an
-//     empty credential and no explanation - which is the gap this file exists
-//     to close.
-//   * a container, where the credential is fetched from an address the task
-//     runtime puts in the environment.
-//   * an instance, where it comes from the link-local metadata service.
-//   * a web identity token on disk, which is how a Kubernetes pod with an IAM
-//     role is given one.
-//
-// A chain that silently tries all of them is how a program ends up using a
-// credential nobody expected - the classic being a developer's own key on a
-// machine that was supposed to use its instance role. So Resolve() takes an
-// explicit list of sources, reports which one answered in `source`, and the
-// network-touching ones are off unless asked for.
-//
-// Everything here is time-bounded. A metadata probe on a machine that has no
-// metadata service does not fail, it hangs, and a program with no timeout
-// hangs with it.
-
 import str
 import time
 import env
@@ -176,8 +149,6 @@ func _static_from_profile(creds_text: str, config_text: str,
         session_token = ParseIni(creds_text, profile, "aws_session_token"),
         source = SOURCE_PROFILE + " " + profile
     }
-    // Keys are conventionally in the credentials file, but the config file is
-    // accepted too, because plenty of setups put them there.
     if out.access_key.len() == 0:
         out.access_key = _config_value(config_text, profile, "aws_access_key_id")
         out.secret_key = _config_value(config_text, profile, "aws_secret_access_key")
@@ -214,8 +185,6 @@ func _resolve_profile(profile: str, o: ChainOptions, depth: int): Credentials:
     if role_arn.len() == 0 || !o.follow_roles:
         ret _static_from_profile(creds_text, config_text, name)
     end
-    // A role profile may take its starting credential from another profile, a
-    // web identity token on disk, or the machine itself.
     token_file := _config_value(config_text, name, "web_identity_token_file")
     mut base := Config { region = _config_value(config_text, name, "region") }
     if base.region.len() == 0: base.region = "us-east-1" end
@@ -251,8 +220,6 @@ func _resolve_profile(profile: str, o: ChainOptions, depth: int): Credentials:
         start = _static_from_profile(creds_text, config_text, name)
     end
     if !start.ok:
-        // A loop is already fully described by the step that detected it;
-        // wrapping it once per hop turns one sentence into five nested ones.
         if start.code == "ProfileLoop": ret start end
         ret Credentials {
             error = "profile '" + name + "' names a role but its starting " +
@@ -265,8 +232,6 @@ func _resolve_profile(profile: str, o: ChainOptions, depth: int): Credentials:
     assumed.source = SOURCE_PROFILE + " " + name + " -> " + assumed.source
     ret assumed
 end
-
-// ------------------------------------------------------------- public API
 
 // FromEnvironmentCredentials - the credential the environment carries.
 pub func FromEnvironmentCredentials(): Credentials:
@@ -409,7 +374,6 @@ pub func FromInstanceCredentials(timeout_ms: int): Credentials:
             source = SOURCE_INSTANCE
         }
     end
-    // The listing can name more than one role; the first is the one in use.
     mut first := role
     nl := role.find("\n")
     if nl >= 0: first = role.substr(0, nl).trim() end

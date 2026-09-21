@@ -16,24 +16,6 @@ package http2
 
 import compress
 
-// An HTTP/2 connection: the preface and SETTINGS handshake, the stream
-// table, flow control in both directions, and the frame loop that turns
-// arriving frames into per-stream state.
-//
-// The model is deliberately not callback-driven (Salam has no closures,
-// so a callback could carry no context anyway). Instead Poll() reads
-// exactly one frame, applies it, and reports which stream it touched;
-// a caller drives it in a loop and reads the stream's accumulated
-// headers/data/trailers out of the table whenever it likes. That is
-// enough to build both a client that waits for one response and a server
-// that multiplexes many streams, without either having to understand
-// framing.
-//
-// Header blocks split across HEADERS + CONTINUATION are reassembled
-// before HPACK ever sees them: HPACK state is connection-global, so a
-// partially decoded block would corrupt every later block on the
-// connection.
-
 pub const H2_POLL_ERROR := 0 - 1
 pub const H2_POLL_CONNECTION := 0
 
@@ -184,8 +166,6 @@ func _on_headers(c &: Conn, f: Frame): int:
         ret H2_POLL_ERROR
     end
     idx := _ensure_stream(c, f.stream_id)
-    // A HEADERS frame arriving after data has already flowed carries
-    // trailers, not the response head.
     c.pending_trailers = c.streams.items.get(idx).got_headers
     c.pending_stream = f.stream_id
     c.pending_end_stream = FrameHasFlag(f, H2_FLAG_END_STREAM)
@@ -222,7 +202,6 @@ func _on_data(c &: Conn, f: Frame): int:
     idx := _ensure_stream(c, f.stream_id)
     mut s := c.streams.items.get(idx)
     compress.BufPushBuf(s.data, body)
-    // Flow control counts the padded length, not the payload length.
     consumed := compress.BufLen(f.payload)
     s.recv_window -= consumed
     c.recv_window -= consumed
@@ -244,8 +223,6 @@ func _on_settings(c &: Conn, f: Frame): int:
         c.ok = false
         ret H2_POLL_ERROR
     end
-    // A changed SETTINGS_INITIAL_WINDOW_SIZE shifts every open stream's
-    // send window by the delta (section 6.9.2), it does not reset it.
     delta := c.remote.initial_window_size - old_initial
     if delta != 0:
         mut i := 0
@@ -448,8 +425,6 @@ pub func SendData(c &: Conn, stream_id: int, body: compress.ByteBuf, end_stream:
         mut avail := c.streams.items.get(idx).send_window
         if c.send_window < avail: avail = c.send_window end
         if avail <= 0 && (total - off) > 0:
-            // Blocked: the only thing that can unblock us is a frame
-            // from the peer.
             if Poll(c) == H2_POLL_ERROR: ret false end
             continue
         end
@@ -533,8 +508,6 @@ pub func Poll(c &: Conn): int:
         c.ok = false
         ret H2_POLL_ERROR
     end
-    // While a header block is still arriving, only CONTINUATION on the
-    // same stream is legal (section 6.10).
     if c.pending_stream != 0 && f.kind != H2_CONTINUATION:
         FreeFrame(f)
         c.last_error = H2_PROTOCOL_ERROR
@@ -565,11 +538,8 @@ pub func Poll(c &: Conn): int:
         c.last_error = ErrorCodeOf(f)
         result = H2_POLL_CONNECTION
     else f.kind == H2_PUSH_PROMISE:
-        // Push is disabled in our SETTINGS, so a peer sending one is in
-        // violation; refuse the promised stream rather than ignore it.
         SendRstStream(c, f.stream_id, H2_REFUSED_STREAM)
     else:
-        // PRIORITY and any unknown type: must be ignored (section 4.1).
         result = H2_POLL_CONNECTION
     end
     FreeFrame(f)

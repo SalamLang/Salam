@@ -14,36 +14,6 @@
 
 package tensor
 
-// Elementwise arithmetic and the broadcast rules that make it useful.
-//
-// Broadcasting here is NumPy's right-aligned semantics restricted to the
-// four shape relations that cover practically all of ML code, each with
-// its own flat loop:
-//
-//   1. equal shapes            - one flat loop over numel
-//   2. one side is one element - flat loop against a hoisted scalar
-//   3. leading broadcast       - the smaller shape equals a suffix of the
-//                                larger one (a [D] bias against [N,D], a
-//                                [D] row against [N,H,D], or the same with
-//                                a leading 1: [1,D] against [N,D])
-//   4. trailing-one broadcast  - same rank, last dim 1 ([N,1] against
-//                                [N,D]: the per-row scalar of a softmax)
-//
-// Anything else returns the empty tensor rather than guessing. General
-// 1-padding broadcast is deliberately absent; where NumPy would stretch
-// [N,1,D] against [1,M,D], this library asks for an explicit copy first,
-// because an implicit stretch is how a shape bug becomes a plausible
-// wrong answer.
-//
-// The kernel discipline is std/matrix's, kept on purpose: the operator is
-// chosen ONCE, outside the loop, and each arm is its own flat pointer
-// loop over hoisted payload pointers. A shared per-element dispatch is
-// what stops the auto-vectorizer cold ("unsupported control flow in
-// loop"), and going through .get/.set re-reads the Vector header every
-// element. Division keeps its zero guard - a zero divisor yields 0 rather
-// than an infinity, so one dead entry cannot poison a later reduction -
-// and that arm does not vectorize; the other three do.
-
 const _BC_BAD := 0 - 1
 const _BC_SAME := 0
 const _BC_SCALAR := 1
@@ -62,8 +32,6 @@ const _U_ABS := 7
 const _U_SQUARE := 8
 const _U_NEG := 9
 const _U_SILU := 10
-
-// op: 0 add, 1 subtract, 2 multiply, 3 divide - same coding as std/matrix.
 
 func _k_same(pa: f32*, pb: f32*, pr: f32*, n: int, op: int):
     if op == 0:
@@ -187,7 +155,6 @@ func _bc_mode(big &: Tensor, small &: Tensor): int:
     br := big.rank()
     sr := small.rank()
     if sr < br:
-        // The small shape must equal the trailing dims of the big one.
         repeat sr with i:
             if small.shape.get(i) != big.shape.get(br - sr + i): ret _BC_BAD end
         end
@@ -195,7 +162,6 @@ func _bc_mode(big &: Tensor, small &: Tensor): int:
     end
     if sr == br && sr >= 2:
         if small.shape.get(0) == 1:
-            // [1, rest] against [N, rest] is the suffix case in disguise.
             mut lead_one := true
             repeat sr - 1 with i:
                 if small.shape.get(i + 1) != big.shape.get(i + 1): lead_one = false end
@@ -223,8 +189,6 @@ func _bin_ord(big &: Tensor, small &: Tensor, op: int, swapped: bool): Tensor:
     ps := small.data.data
     pr := r.data.data
     if mode == _BC_SAME:
-        // swapped cannot reach here: equal element counts always keep the
-        // caller's operand order.
         _par_zip(pb, ps, pr, n, op)
     else mode == _BC_SCALAR:
         _k_scalar(pb, ps[0], pr, n, op, swapped)
@@ -275,7 +239,6 @@ func _u_range(p: f32*, pr: f32*, n: int, op: int):
             pr[k] = o
         end
     else op == _U_GELU:
-        // The tanh approximation: 0.5 x (1 + tanh(sqrt(2/pi) (x + 0.044715 x^3))).
         c0 := 0.7978845608028654 as f32
         c1 := 0.044715 as f32
         half := 0.5 as f32
@@ -310,8 +273,6 @@ func _map(x &: Tensor, op: int): Tensor:
     _par_map(x.data.data, r.data.data, n, op)
     ret r
 end
-
-// ---- public API ----
 
 @en "Add"
 @fa "جمع"

@@ -6,7 +6,6 @@ import tok "../token.salam"
 import at "../ast.salam"
 import sm "../semantic/semantic.salam"
 
-// ll_addr_of (forward decls of ll_member_addr/ll_index_addr not needed - // Salam allows forward reference within the same file).
 func lv_addr_of(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): LvAddr:
     k := at.KindOf(a, n)
     if k == at.AST_IDENTIFIER:
@@ -54,10 +53,6 @@ func lv_addr_of(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): LvAddr:
                 ret ra2
             end
         end
-        // The enclosing function's own package first. An unqualified name can
-        // only mean this package's global (or an extern, which carries no
-        // package), so a same-named global in some other package must not win
-        // the lookup just by having been emitted earlier.
         mut curpkg := pkg_of_scope(s, v.pkg_scope)
         if str.Len(curpkg) == 0:
             curpkg = "main"
@@ -70,11 +65,6 @@ func lv_addr_of(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): LvAddr:
             ra3.ts = gv.ts
             ret ra3
         end
-        // A package-level global reached from a function of that same
-        // package that nothing has touched yet - std/core's `mut _argc`,
-        // read by its own salam_args(), when the only entry point into
-        // core was an ensure_fn from elsewhere. touch_pkg emits the
-        // package's globals, so the lookup can only succeed after it.
         mut tpi := 0
         until tpi < sm.PackageCount(s):
             tpk := sm.PackageAt(s, tpi)
@@ -104,19 +94,6 @@ func lv_addr_of(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): LvAddr:
                 ret ra5
             end
         end
-        // A package's own top-level global reached before anything emitted
-        // it. emit_globals rather than touch_pkg: a package can be recorded
-        // in pkg_touched while these globals were never emitted, so the
-        // touch would short-circuit and change nothing. Emitting straight
-        // from the package's AST is what resolves the name, and it is safe
-        // to repeat now that emit_globals skips names already emitted.
-        //
-        // Whether this path is needed depends on the platform, which is how
-        // it went unnoticed: std/net/internal/rawsock declares a
-        // `_rawsock_wsa_init` global inside `if SALAM_OS_WINDOWS`, and
-        // emitting it got the package touched early, so `AF_INET` and
-        // `SOCK_STREAM` resolved by luck. On Linux that global is condcomp'd
-        // away and every socket program failed to compile.
         mut pgi := 0
         until pgi < sm.PackageCount(s):
             pgk := sm.PackageAt(s, pgi)
@@ -139,7 +116,6 @@ func lv_addr_of(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): LvAddr:
             end
             pgi += 1
         end
-        // Last chance: an extern global, which belongs to no package.
         xgi := global_find(v, nm)
         if xgi >= 0:
             xgv := v.globals.get(xgi)
@@ -172,7 +148,6 @@ func lv_addr_of(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): LvAddr:
     ret ra5
 end
 
-// ll_member_addr
 func member_addr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): LvAddr:
     nn := at.Get(a, n)
     ots := at.Get(a, nn.a).type_str
@@ -210,7 +185,6 @@ func member_addr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): LvAddr:
     ret ra2
 end
 
-// ll_index_addr
 func index_addr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): LvAddr:
     nn := at.Get(a, n)
     ots := at.Get(a, nn.a).type_str
@@ -230,12 +204,6 @@ func index_addr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): LvAddr:
         ra.tbaa = tbaa_suffix(v, s, ets, false)
         ret ra
     end
-    // `s[i]` on a str. A str IS the pointer, so this indexes the value, not
-    // the slot holding it - the array path below took the variable's address
-    // and emitted `getelementptr ptr, ptr %v.s, i64 0, i64 %i`, which is not
-    // valid IR at all ("invalid getelementptr indices": ptr is not an
-    // aggregate, so the leading 0 has nothing to step through). Element type
-    // comes from sema, which types str[i] as TY_CHAR.
     if str.Equals(ots, "str"):
         sbase := lv_expr(v, s, a, nn.a).ref
         sets := str.Len(nn.type_str) > 0 ? nn.type_str : "char"
@@ -263,16 +231,6 @@ func index_addr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): LvAddr:
         ra2.tbaa = tbaa_suffix(v, s, ets2, false)
         ret ra2
     end
-    // `v[i]` on a Vector. The elements do not live in the Vector struct,
-    // they hang off its `data: T*` field (field 0 of
-    // { data, count, capacity } - see std/collections/vector.salam), so the
-    // address is: step to field 0, load the buffer, then index THAT by the
-    // element type. Falling through to the array path below instead emitted
-    // `getelementptr %struct.Vector__P, ptr %v, i64 0, i64 %i`, which lli
-    // rejects outright ("invalid getelementptr indices"): a struct can only
-    // be indexed by a constant field number, never by a runtime value. This
-    // is the address form, so it also covers `v[i] = x` and `v[i].f`, none
-    // of which the value-side operator_index call can express.
     ss4 := struct_sym(v, s, a, ots)
     if ss4 != 0:
         mut fs4 := 0
@@ -312,7 +270,6 @@ func index_addr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): LvAddr:
     ret ra3
 end
 
-// ll_load_addr
 func load_addr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     addr := lv_addr_of(v, s, a, n)
     r := new_tmp(v)
@@ -320,7 +277,6 @@ func load_addr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     ret make_llv(r, addr.ts)
 end
 
-// ll_struct_lit
 func lv_struct_lit(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     nn := at.Get(a, n)
     sname2 := str.Len(nn.type_str) > 0 ? nn.type_str : nn.name
@@ -369,7 +325,6 @@ func lv_struct_lit(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     ret make_llv(idx != 0 ? cur : "zeroinitializer", sname2)
 end
 
-// ll_array_lit
 func lv_array_lit(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     nn := at.Get(a, n)
     ats := nn.type_str
@@ -394,7 +349,6 @@ func lv_array_lit(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     ret make_llv(nn.list.len() > 0 ? cur : "zeroinitializer", ats)
 end
 
-// ll_slice_expr
 func lv_slice_expr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     nn := at.Get(a, n)
     sts := nn.type_str
@@ -436,12 +390,10 @@ func lv_slice_expr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     ret make_llv(a1, sts)
 end
 
-// ll_lambda_value
 func lv_lambda_value(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     emit_lambda(v, s, a, n)
     node := at.Get(a, n)
     name := node.name
-    // "salam_lambda_" is 13 bytes; the index text follows it.
     idxtxt := str.Substr(name, 13, str.Len(name) - 13)
     envty := "%lam." + idxtxt + ".env"
     ncap := node.captures.len()
@@ -453,8 +405,6 @@ func lv_lambda_value(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     sz := new_tmp(v)
     env := new_tmp(v)
     emit(v, szp + " = getelementptr " + envty + ", ptr null, i32 1")
-    // malloc is declared taking size_t, which is NOT i64 on a 32-bit target;
-    // a mismatched call here is accepted by LLVM and lowered in the wrong ABI.
     emit(v, sz + " = ptrtoint ptr " + szp + " to " + v.usize)
     emit(v, env + " = call ptr @malloc(" + v.usize + " " + sz + ")")
     f0 := new_tmp(v)
@@ -478,18 +428,10 @@ func lv_lambda_value(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     ret make_llv(env, node.type_str)
 end
 
-// ll_literal
 func float_lit_text(f: f64): str:
     ret fp_text(co.Format1("%.17g", co.ArgFloat(f)))
 end
 
-// A decimal constant for the `float` type has one extra rule in LLVM's .ll
-// parser: the value, read back as a double, must be *exactly* representable
-// in f32, or the module is rejected ("floating point constant invalid for
-// type"). A folded `0.7978845608028654 as f32` literal therefore cannot be
-// printed with its f64 digits. Rounding through f32 first makes the printed
-// double exactly the float LLVM will store, which is also bit-for-bit what
-// the fptrunc on the runtime path would have produced.
 func float_lit_text_f32(f: f64): str:
     ret float_lit_text((f as f32) as f64)
 end
@@ -525,7 +467,6 @@ func lv_literal(v &: Lv, a &: at.Ast, n: int): Llv:
     ret make_llv("0", "i32")
 end
 
-// ll_match_pat_eq
 func match_pat_eq(
     v &: Lv, s &: sm.Sema, a &: at.Ast, subj: Llv, pat_head: int
 ): str:
@@ -551,7 +492,6 @@ func match_pat_eq(
     ret r2
 end
 
-// ll_match_variant_tag_cond
 func match_variant_tag_cond(
     v &: Lv, s &: sm.Sema, a &: at.Ast, subj: Llv, tag: int
 ): str:
@@ -564,7 +504,6 @@ func match_variant_tag_cond(
     ret r
 end
 
-// ll_match_arm_cond
 func lv_match_arm_cond(
     v &: Lv, s &: sm.Sema, a &: at.Ast, arm: int, subj: Llv, is_variant: bool
 ): str:
@@ -594,7 +533,6 @@ func lv_match_arm_cond(
     ret str.Len(acc) > 0 ? acc : "false"
 end
 
-// ll_match_expr
 func lv_match_expr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     nn := at.Get(a, n)
     subj := lv_expr(v, s, a, nn.a)
@@ -639,24 +577,6 @@ func lv_match_expr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     ret make_llv(r, rts)
 end
 
-// ll_gep_from_int_add - peephole for `(p as u64 + off) as T*`, the way every
-// stdlib container spells "address of element". Emitted literally that is
-// ptrtoint / add / inttoptr, and the round trip through an integer severs
-// pointer provenance: alias analysis then has to assume the result may point
-// anywhere, so a load through it is never proven independent of a nearby
-// store. LICM leaves loop-invariant element loads inside the loop and the
-// loop vectorizer bails. `getelementptr i8` computes the same address and
-// keeps the base pointer visible.
-//
-// The shape test is pure AST inspection, so a miss costs nothing; once it
-// commits it emits the whole cast, including the non-pointer base case that
-// only the emitted operand's type can rule out. Deliberately not `inbounds`:
-// this fires on arbitrary user arithmetic, and plain byte GEP has exactly the
-// wraparound semantics the integer form had.
-// (The C names this parameter `to`. Here that is the keyword `repeat a to b`
-// is spelled with, so it carries the caller's own name for the same thing.)
-// ll_sizeof_arg_ts - `sizeof(T)`, through any number of casts, yields T's
-// spelling; else "".
 func sizeof_arg_ts(a &: at.Ast, n: int): str:
     mut k := n
     until k != 0 && at.KindOf(a, k) == at.AST_CAST:
@@ -675,12 +595,6 @@ func sizeof_arg_ts(a &: at.Ast, n: int): str:
     ret at.Get(a, nn.list.get(0)).type_str
 end
 
-// ll_elem_index - `idx * sizeof(T)` (either order) where T is `want`, the
-// element-offset half of the idiom below. Returns the index operand so the
-// caller can emit a GEP over T instead of over i8. Worth separating: a byte
-// GEP makes LLVM carry a second induction variable for the byte offset and
-// re-derive the scale, where a typed GEP folds straight into x86's scaled
-// addressing. Returns 0 for no match.
 func elem_index(a &: at.Ast, n: int, want: str): int:
     if n == 0 || at.KindOf(a, n) != at.AST_BINARY || str.Len(want) == 0:
         ret 0
@@ -714,9 +628,6 @@ func gep_from_int_add(
     if bin.op != tok.TK_PLUS && bin.op != tok.TK_MINUS:
         ret false
     end
-    // The base has to be a `<something> as <pointer-width int>` cast. Only the
-    // left operand: `off - p` is not an address, and for `+` the stdlib always
-    // writes the pointer first.
     if bin.a == 0 || at.KindOf(a, bin.a) != at.AST_CAST:
         ret false
     end
@@ -734,18 +645,12 @@ func gep_from_int_add(
         ret false
     end
 
-    // `to_ts` is `T*`; its pointee is what a typed GEP would step over.
     pointee := str.Substr(to_ts, 0, str.Len(to_ts) - 1)
     mut idx := elem_index(a, bin.b, pointee)
 
     p := lv_expr(v, s, a, base.a)
     ptr_base := is_ptr_ts(p.ts) || is_str(s, p.ts)
-    // Evaluate the offset operand exactly once: the index alone when a typed
-    // GEP is on the table, the whole `idx * sizeof(T)` otherwise.
     mut off := lv_expr(v, s, a, (ptr_base && idx != 0) ? idx : bin.b)
-    // A float offset would have been added in float and only then truncated to
-    // a pointer, so it is not this idiom - take the faithful arithmetic path,
-    // scaling the index back up to the byte offset the source asked for.
     mut flt_off := is_float(off.ts)
     if idx != 0 && ptr_base && flt_off:
         szp := new_tmp(v)
@@ -797,21 +702,7 @@ func gep_from_int_add(
     ret true
 end
 
-// ll_expr
-// The LLVM symbol a function name denotes, without the leading '@', or "" on
-// error. Shared by `&f`, by a bare function name read as a value, and by
-// spawn(f).
-//
-// ensure_fn runs unconditionally, the way call_user does it: is_extern decides
-// the *name* (an extern keeps its own), never whether the callee needs
-// emitting. An `extern:` block function with a body is a Salam function that
-// merely keeps an unmangled symbol so it can be handed to C as a callback -
-// std/webview's `&salam_com_addref` COM vtable slots are the whole reason the
-// form exists - and skipping it here left `@salam_com_addref` with neither a
-// declare nor a define anywhere in the module ("use of undefined value").
 func lv_func_symbol(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, name: str): str:
-    // `pkg.f` as a value: the function is in the package's member scope and
-    // mangles with the package that declared it, not the reading one.
     pkgid := at.Get(a, n).a
     if pkgid != 0 && at.KindOf(a, pkgid) == at.AST_IDENTIFIER:
         pk := sym_of(v, s, a, at.Get(a, pkgid).name)
@@ -861,7 +752,6 @@ func lv_expr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
         ret lv_literal(v, a, n)
     end
     if k == at.AST_IDENTIFIER:
-        // A bare function name read as a value: its address, as an i64.
         if node.func_value:
             fvsym := lv_func_symbol(v, s, a, n, node.name)
             if str.Len(fvsym) == 0:
@@ -959,9 +849,6 @@ func lv_expr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
             if gep_from_int_add(v, s, a, n, to_ts, gep):
                 ret make_llv(gep, to_ts)
             end
-            // An array decays to a pointer to its first element. Reading the
-            // array as a value would load the whole block; what a cast to a
-            // pointer asks for is where it lives.
             if (is_ptr_ts(to_ts) || is_str(s, to_ts)) && is_array_ts(at.Get(a, node.a).type_str):
                 ret make_llv(lv_addr_of(v, s, a, node.a).ptr, to_ts)
             end
@@ -976,7 +863,6 @@ func lv_expr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
         ret lv_call(v, s, a, n)
     end
     if k == at.AST_MEMBER:
-        // `pkg.f` read as a value (sema set func_value): its address, i64.
         if node.func_value:
             mfsym := lv_func_symbol(v, s, a, n, node.name)
             if str.Len(mfsym) == 0:
@@ -1002,13 +888,6 @@ func lv_expr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
                 end
             end
         end
-        // pkg.EnumName.Member: node.a is itself pkg.EnumName, an
-        // AST_MEMBER - see the matching fix in check_member/sema_expr.salam
-        // for why the parser always builds this as a plain
-        // left-associative chain. enum_sym/sym_of already search every
-        // known package's scope, so this can look the enum straight up by
-        // its own name (node.a's name, e.g. "Kind") without needing to
-        // separately resolve "pkg" at all.
         if node.a != 0 && at.KindOf(a, node.a) == at.AST_MEMBER:
             e2 := enum_sym(v, s, a, at.Get(a, node.a).name)
             if e2 != 0:
@@ -1021,8 +900,6 @@ func lv_expr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
         ret load_addr(v, s, a, n)
     end
     if k == at.AST_INDEX:
-        // A pointer indexes as a pointer, never through the pointee's
-        // operator_index (see sema's AST_INDEX check).
         if node.a != 0 && str.Len(at.Get(a, node.a).type_str) > 0 && !is_ptr_ts(
             at.Get(a, node.a).type_str
         ):
@@ -1051,11 +928,6 @@ func lv_expr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     if k == at.AST_LAMBDA:
         ret lv_lambda_value(v, s, a, n)
     end
-    // Assignment used as an expression, which is how `a = b = c` parses:
-    // the inner `b = c` is the right operand of the outer assignment.
-    // Store, then yield the value now in the target - reloading rather
-    // than reusing the stored value so a narrowing target produces what a
-    // subsequent read would, matching the C backend's `(a = b)`.
     if k == at.AST_ASSIGN:
         lv_assign(v, s, a, n)
         ad := lv_addr_of(v, s, a, node.a)

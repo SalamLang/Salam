@@ -20,22 +20,6 @@ import net.http2
 import net.internal.rawsock
 import tls
 
-// The gRPC client. A Channel is one HTTP/2 connection; every call is one
-// stream on it, and many calls can be in flight at once because HTTP/2
-// multiplexes them.
-//
-// There is no callback API, because Salam has no closures for one to
-// capture context with. Instead a call is driven explicitly:
-//
-//     sid := grpc.StartCall(ch, "/echo.Echo/Say", md)
-//     grpc.SendMessage(ch, sid, req, true)      // true = last message
-//     reply := grpc.RecvMessage(ch, sid, ok)
-//     st := grpc.FinishCall(ch, sid)
-//
-// which covers all four call shapes: send one message or many, receive
-// one or many, in any interleaving. UnaryCall wraps the common case of
-// exactly one each way.
-
 @en "Channel"
 @fa "کانال"
 @ar "قناة"
@@ -86,8 +70,6 @@ func _finish_channel(ch &: Channel): bool:
         ch.last_error = "HTTP/2 handshake failed"
         ret false
     end
-    // Drain the peer's opening SETTINGS so its real limits are in effect
-    // before the first call goes out.
     if http2.Poll(ch.conn) == http2.H2_POLL_ERROR:
         ch.last_error = "no SETTINGS from server"
         ret false
@@ -189,8 +171,6 @@ pub func StartCall(ch &: Channel, path: str, md: Metadata): int:
     http2.HeadersAdd(hl, ":authority", ch.authority)
     http2.HeadersAdd(hl, "content-type", GRPC_CONTENT_TYPE_PROTO)
     http2.HeadersAdd(hl, "user-agent", ch.user_agent)
-    // `te: trailers` is mandatory: it is how a client promises it will
-    // read the trailing header block that carries grpc-status.
     http2.HeadersAdd(hl, "te", "trailers")
     if ch.timeout_ms > 0:
         http2.HeadersAdd(hl, "grpc-timeout", _timeout_header(ch.timeout_ms))
@@ -297,7 +277,6 @@ pub func FinishCall(ch &: Channel, sid: int): Status:
     mut code_text := http2.HeadersGet(s.trailers, "grpc-status")
     mut msg_text := http2.HeadersGet(s.trailers, "grpc-message")
     if code_text == "":
-        // Trailers-only: the whole reply was one header block.
         code_text = http2.HeadersGet(s.headers, "grpc-status")
         msg_text = http2.HeadersGet(s.headers, "grpc-message")
     end

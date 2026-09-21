@@ -23,65 +23,9 @@ import time
 import encoding.json
 import encoding.value
 
-// A Socket.IO client, whole: Engine.IO v4 underneath, Socket.IO v5 on top,
-// speaking the same wire protocol as socket.io-client and interoperable with
-// any Socket.IO v4 server.
-//
-// What it does: both transports (HTTP long-polling and WebSocket) and the
-// upgrade between them, ws:// and wss://, named events with JSON arguments,
-// binary attachments, acknowledgements in both directions and with
-// deadlines, several namespaces multiplexed over one connection, the
-// heartbeat, automatic reconnection with exponential backoff and jitter,
-// buffering of everything emitted while offline, re-sending an event that
-// goes unacknowledged, and connection state recovery.
-//
-// What it deliberately does not do: permessage-deflate compression, custom
-// parsers, and client certificates. A self-signed server certificate is
-// reachable through Options.insecure.
-//
-// There is no async/await in Salam, so where the JavaScript client hands
-// you a promise this one gives you a choice of two shapes:
-//
-//   handlers      On(c, "chat", (e: Event): ... end) and then Run(c),
-//                 which is the JavaScript program written the same way.
-//
-//   a loop        ev := NextEvent(c, 1000), which is often the better fit
-//                 here, because a Salam lambda captures by value: a handler
-//                 cannot write to a variable in the function that
-//                 registered it, while the body of a loop can. Next is the
-//                 same thing including the lifecycle events.
-//
-// Both are driven by the same pump and can be mixed. Nothing runs in the
-// background: a connection only makes progress inside Pump, Next, Run or a
-// blocking call like EmitAck, so a program that stops calling them stops
-// answering the server's heartbeat and will be dropped.
-//
-//     import net.socketio
-//
-//     func main:
-//         mut c := socketio.Dial("http://localhost:3000")
-//         if !socketio.IsConnected(c):
-//             println "could not connect:", socketio.LastError(c)
-//             ret
-//         end
-//         socketio.EmitStr(c, "hello", "from salam")
-//         mut going := true
-//         until going:
-//             mut ev := socketio.NextEvent(c, 1000)
-//             if ev.name == "reply":
-//                 println socketio.ArgStr(ev, 0)
-//                 going = false
-//             end
-//             socketio.EventFree(ev)
-//         end
-//         socketio.Close(c)
-//     end
-
 // Events a server is not allowed to be sent under, because the client uses
 // them for its own lifecycle and a handler cannot tell the two apart.
 const RESERVED := "|connect|connect_error|disconnect|disconnecting|newListener|removeListener|"
-
-// ------------------------------------------------------------------ naming
 
 func _lifecycle_name(kind: int): str:
     if kind == EV_CONNECT:
@@ -124,8 +68,6 @@ func _event_name(ev: Event): str:
     ret _lifecycle_name(ev.kind)
 end
 
-// ------------------------------------------------------------- dispatching
-
 func _compact_handlers(v &: Vector<Handler>):
     mut kept := Vector {} as Vector<Handler>
     repeat v.len() with i:
@@ -146,8 +88,6 @@ func _deliver(c: Client, ev0: Event):
     mut ev := ev0
     ev.client = c
     mut dead := false
-    // Everything below can run caller code. While it does, Close is not
-    // allowed to release this socket - see the note on Close.
     m[0].dispatching += 1
     if ev.kind == EV_EVENT:
         n := sp[0].any_handlers.len()
@@ -182,10 +122,6 @@ func _deliver(c: Client, ev0: Event):
     end
     m[0].dispatching -= 1
     if sp[0].queueing && sp[0].max_queue > 0:
-        // The queue takes over the attachments; Next hands them on, and the
-        // caller releases them with EventFree. It is bounded so that a
-        // program driven only by handlers, which never reads the queue,
-        // cannot grow without limit - the oldest goes when it is full.
         sp[0].inbox.push(ev)
         until sp[0].inbox.len() > sp[0].max_queue:
             mut old := sp[0].inbox.get(0)
@@ -232,8 +168,6 @@ func _find_sock(m: MgrState*, nsp: str): Client:
     ret Client {}
 end
 
-// --------------------------------------------------------- acknowledgements
-
 func _resolve_ack(c: Client, id: int, data: str, bins &: Vector<Bytes>): bool:
     sp := _sock(c)
     mut found := false
@@ -244,10 +178,6 @@ func _resolve_ack(c: Client, id: int, data: str, bins &: Vector<Bytes>): bool:
             if w.has_packet:
                 mut kept := w.packet
                 _free_bins(kept.bins)
-                // Cleared, not just freed: a settled waiter stays in the
-                // list until the next sweep compacts it, and _free_sock
-                // releases the packets of everything still in there. Leaving
-                // the flag set would free these buffers a second time.
                 w.has_packet = false
             end
             sp[0].waiters.set(i, w)
@@ -256,8 +186,6 @@ func _resolve_ack(c: Client, id: int, data: str, bins &: Vector<Bytes>): bool:
                 w.cb(a)
                 _free_bins(a.bins)
             else if w.internal:
-                // Nobody asked for this one; the id existed only so that
-                // Options.retries had something to wait for.
                 _free_bins(a.bins)
             else:
                 sp[0].results.push(a)
@@ -289,13 +217,9 @@ func _expire_acks(m: MgrState*):
                 dead = true
             else w.has_deadline && now >= w.deadline:
                 if w.internal && m[0].state != ST_OPEN:
-                    // A retry has nothing to send over. Hold the deadline
-                    // rather than spending an attempt on a closed transport.
                     w.deadline = now + (w.interval as i64)
                     sp[0].waiters.set(i, w)
                 else w.retries_left > 0 && w.has_packet:
-                    // Options.retries: the acknowledgement is the only proof
-                    // a packet arrived, so a missing one means send it again.
                     w.retries_left -= 1
                     w.deadline = now + (w.interval as i64)
                     sp[0].waiters.set(i, w)
@@ -389,14 +313,10 @@ func _take_result(sp: SockState*, id: int, out &: Ack): bool:
     ret false
 end
 
-// ------------------------------------------------------- packet dispatching
-
 func _on_connect_packet(c: Client, p: Packet):
     sp := _sock(c)
     sp[0].id = json.Get(p.data, "sid")
     newpid := json.Get(p.data, "pid")
-    // "Recovered" means the server found the session we told it about and
-    // replayed what we missed, so the gap in the stream never happened.
     sp[0].recovered = newpid.len() > 0 && sp[0].pid.len() > 0 && sp[0].pid == newpid
     if newpid.len() > 0:
         sp[0].pid = newpid
@@ -425,10 +345,6 @@ func _on_event_packet(c: Client, p: Packet, bins &: Vector<Bytes>):
         i += 1
     end
     rest += "]"
-    // With connection state recovery on, the server appends the offset of
-    // this event as a trailing string argument. It is left in place - the
-    // JavaScript client passes it through to handlers too - and remembered
-    // so the next CONNECT can ask to resume from here.
     if sp[0].pid.len() > 0 && parts.len() > 1:
         last := parts.get(parts.len() - 1)
         if str.StartsWith(last, "\""):
@@ -462,10 +378,6 @@ func _handle_packet(m: MgrState*, p: Packet, bins &: Vector<Bytes>):
         _free_bins(bins)
         sp[0].connected = false
         sp[0].id = ""
-        // The server threw this namespace out, so a reconnection must not
-        // walk straight back in. socket.io detaches the socket from its
-        // manager at this point for the same reason; Connect re-joins it if
-        // that is really what the caller wants.
         sp[0].active = false
         _fail_pending_acks(sp)
         _deliver(c, Event { kind = EV_DISCONNECT, nsp = sp[0].nsp, message = REASON_SERVER_DISCONNECT, data = "[]" })
@@ -485,8 +397,6 @@ func _on_socketio_text(m: MgrState*, text: str):
         ret
     end
     if p.attachments > 0 && (p.kind == PKT_BINARY_EVENT || p.kind == PKT_BINARY_ACK):
-        // The buffers follow as their own frames; hold the packet until they
-        // have all arrived.
         _free_bins(m[0].recon_bins)
         m[0].recon_bins = Vector {} as Vector<Bytes>
         m[0].recon_pkt = p
@@ -511,8 +421,6 @@ func _on_socketio_binary(m: MgrState*, b: Bytes):
     m[0].recon = false
     _handle_packet(m, p, bins)
 end
-
-// ------------------------------------------------------------------ writing
 
 func _write_packet(m: MgrState*, text: str, bins: Vector<Bytes>): bool:
     if !_engine_write(m, text):
@@ -574,8 +482,6 @@ func _reconnect_namespaces(m: MgrState*):
         end
     end
 end
-
-// ------------------------------------------------------------- the lifecycle
 
 func _engine_shutdown(m: MgrState*, reason: str):
     if m[0].state == ST_CLOSED:
@@ -694,10 +600,6 @@ func _emit_raw(c: Client, kind: int, name: str, a: Args, ack_id0: int, volatile:
     m := sp[0].mgr as MgrState*
     mut ack_id := ack_id0
     mut retrying := false
-    // Options.retries turns every emit into one that asks to be
-    // acknowledged, because an acknowledgement is the only evidence a
-    // packet arrived. The caller never sees this id; the waiter it creates
-    // is marked internal and its answer is thrown away.
     if kind == PKT_EVENT && ack_id < 0 && m[0].opts.retries > 0 && m[0].opts.ack_timeout > 0:
         ack_id = _next_ack_id(sp)
         retrying = true
@@ -728,8 +630,6 @@ func _emit_raw(c: Client, kind: int, name: str, a: Args, ack_id0: int, volatile:
         if volatile:
             ret false
         end
-        // Held, not dropped: this is what makes a reconnection invisible to
-        // the code doing the emitting.
         sp[0].outbuf.push(_copy_outgoing(text, a))
         ret true
     end
@@ -745,9 +645,6 @@ func _wait_connected(c: Client, deadline: i64): bool:
             ret sp[0].connected
         end
         rc := _pump_mgr(m, left)
-        // ST_CLOSED means the transport is down and nothing is retrying it -
-        // reconnection is off, or it ran out of attempts. Waiting longer
-        // cannot change the answer.
         if rc == PUMP_CLOSED && m[0].state == ST_CLOSED:
             ret sp[0].connected
         end
@@ -867,8 +764,6 @@ func _any_active(m: MgrState*): bool:
     ret any
 end
 
-// ------------------------------------------------------------ construction
-
 // NewOptions - the defaults, to change the few that matter and pass on.
 @en "NewOptions"
 @fa "گزینه‌های جدید"
@@ -967,8 +862,6 @@ pub func DialWith(url: str, opts: Options): Client:
     end
     ret c
 end
-
-// ---------------------------------------------------------------- lifecycle
 
 // Connect - open the transport if it is not open, and join this namespace.
 //
@@ -1101,8 +994,6 @@ pub func Close(c: Client):
     _free_sock(c)
 end
 
-// ------------------------------------------------------------------ pumping
-
 // Pump - let the connection make progress for up to `timeout_ms`.
 //
 // Everything happens here: packets are read and handlers called, the
@@ -1174,10 +1065,6 @@ pub func Next(c: Client, timeout_ms: int): Event:
             sp[0].inbox.remove_at(0)
             going = false
         else finished:
-            // Drained, and there will be no more. The queue is checked
-            // FIRST: the pump that ended the connection put a disconnect in
-            // it on the way out, and leaving here without it would report a
-            // timeout for something that was not one.
             going = false
         else:
             mut left := (deadline - time.MonoMillis()) as int
@@ -1188,9 +1075,6 @@ pub func Next(c: Client, timeout_ms: int): Event:
             end
             if going:
                 rc := _pump_mgr(m, left)
-                // ST_CLOSED means the transport is down and nothing is
-                // retrying it - reconnection is off, or it ran out of
-                // attempts. Waiting longer cannot change the answer.
                 if rc == PUMP_CLOSED && m[0].state == ST_CLOSED:
                     finished = true
                 end
@@ -1234,9 +1118,6 @@ pub func NextEvent(c: Client, timeout_ms: int): Event:
                 out = ev
                 going = false
             else ev.kind == EV_DISCONNECT && (!sp[0].active || m[0].state == ST_CLOSED):
-                // A disconnect the connection will not recover from is worth
-                // interrupting the loop for; one that is about to be
-                // reconnected is not.
                 out = ev
                 going = false
             else:
@@ -1292,8 +1173,6 @@ pub func RunFor(c: Client, ms: int):
         _pump_mgr(m, left)
     end
 end
-
-// ---------------------------------------------------------------- handlers
 
 // On - call `cb` every time `name` arrives.
 //
@@ -1386,8 +1265,6 @@ pub func OffAny(c: Client):
     sp[0].any_handlers.free()
     sp[0].any_handlers = Vector {} as Vector<Handler>
 end
-
-// ------------------------------------------------------------------ emitting
 
 // EmitArgs - send an event with a built argument list.
 //
@@ -1493,8 +1370,6 @@ pub func EmitBytes(c: Client, name: str, ptr: void*, n: int): bool:
     ret EmitArgs(c, name, a)
 end
 
-// ---------------------------------------------------------- acknowledgements
-
 // EmitAck - emit and wait for the server's acknowledgement.
 //
 // The shape the JavaScript client spells `await socket.emitWithAck(...)`,
@@ -1540,9 +1415,6 @@ pub func EmitAck(c: Client, name: str, a: Args, timeout_ms: int): Ack:
             end
             if going:
                 rc := _pump_mgr(m, left)
-                // ST_CLOSED means the transport is down and nothing is
-                // retrying it - reconnection is off, or it ran out of
-                // attempts. Waiting longer cannot change the answer.
                 if rc == PUMP_CLOSED && m[0].state == ST_CLOSED:
                     going = false
                 end
@@ -1609,8 +1481,6 @@ pub func ReplyStr(ev: Event, s: str): bool:
     AddStr(a, s)
     ret Reply(ev, a)
 end
-
-// ------------------------------------------------------------------ reading
 
 // ArgCount - how many arguments an event carries.
 @en "ArgCount"
@@ -1781,8 +1651,6 @@ pub func AckFree(a &: Ack):
     _free_bins(a.bins)
     a.bins = Vector {} as Vector<Bytes>
 end
-
-// ------------------------------------------------------------ introspection
 
 // IsConnected - whether the server has accepted this namespace right now.
 @en "IsConnected"

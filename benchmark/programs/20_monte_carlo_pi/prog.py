@@ -1,5 +1,3 @@
-"""Monte Carlo pi estimation benchmark."""
-
 x = 1
 count = 0
 for step in range(5000000):

@@ -1,7 +1,3 @@
-// Minimal, deterministic DOM/BOM stub for running `salam js` bundles under
-// plain Node (no browser, no jsdom). Just enough of document/window/storage
-// for the tests/{en,fa,ar}/js/*.salam suite to exercise std/dom for real.
-
 const allElements = [];
 
 function normClass(el) {

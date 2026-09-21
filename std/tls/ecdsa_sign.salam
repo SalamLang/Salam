@@ -1,21 +1,5 @@
 package tls
 
-// ECDSA signing over P-256 and P-384, the counterpart to ecdsa.salam's
-// verify-only code. ecdsa.salam explains why signing was absent there: a
-// biased or repeated per-signature nonce discloses the private key outright
-// (the Sony PS3 root-key leak and Android's 2013 Bitcoin-wallet thefts were
-// both exactly this bug). Two ways to avoid it: a cryptographically secure
-// random nonce, or a deterministic one derived from the message and key so
-// there is nothing left for a weak RNG to get wrong. This uses the latter -
-// RFC 6979 - because it is independently testable (fixed input always gives
-// the fixed, checkable output) in a way "trust the RNG" is not, and it
-// removes this package's own RNG quality from the ECDSA threat model
-// entirely.
-//
-// r and s come out as fixed-width big-endian integers (cv.nb bytes each);
-// _ecdsa_der_encode wraps them in the SEQUENCE{INTEGER, INTEGER} the wire
-// format (and ecdsa.salam's own _ecdsa_split, on the verify side) expects.
-
 // RFC 6979 section 3.2: deterministic k from an HMAC-DRBG seeded with the
 // private key and the message digest. `kind` is used both for the DRBG's
 // HMAC and, by the caller, for the message digest - the conventional
@@ -24,8 +8,6 @@ func _rfc6979_k(cv: Curve, kind: int, dbytes: void*, h1: void*, h1len: int, kout
     hlen := _hash_size(kind)
     rlen := cv.nb
 
-    // bits2octets(h1): the same leftmost-bits-then-conditional-reduce
-    // construction used to turn a digest into a scalar for verification.
     z := _ecdsa_digest_scalar(cv, h1, h1len)
     mut h1oct := _newbuf(rlen)
     defer _buf_wipe(h1oct)
@@ -50,7 +32,6 @@ func _rfc6979_k(cv: Curve, kind: int, dbytes: void*, h1: void*, h1len: int, kout
     mut seed := _newbuf(hlen + 1 + 2 * rlen)
     defer _buf_wipe(seed)
 
-    // K = HMAC_K(V || 0x00 || int2octets(d) || bits2octets(h1)); V = HMAC_K(V)
     _bufreset(seed)
     _putraw(seed, v.p, hlen)
     _put8(seed, 0x00)
@@ -61,7 +42,6 @@ func _rfc6979_k(cv: Curve, kind: int, dbytes: void*, h1: void*, h1len: int, kout
     _hmac(kind, k.p, hlen, v.p, hlen, scratch.p)
     mem.Copy(v.p, scratch.p, hlen as u64)
 
-    // K = HMAC_K(V || 0x01 || int2octets(d) || bits2octets(h1)); V = HMAC_K(V)
     _bufreset(seed)
     _putraw(seed, v.p, hlen)
     _put8(seed, 0x01)
@@ -72,10 +52,6 @@ func _rfc6979_k(cv: Curve, kind: int, dbytes: void*, h1: void*, h1len: int, kout
     _hmac(kind, k.p, hlen, v.p, hlen, scratch.p)
     mem.Copy(v.p, scratch.p, hlen as u64)
 
-    // Candidate loop (RFC 6979 3.2 step h): build T in hlen-byte chunks until
-    // it holds rlen bytes, take the leading rlen as the candidate. Retrying
-    // (candidate is 0 or >= n) is rare for curves this close to a power of
-    // two, but bounded rather than assumed to always succeed on try one.
     mut t := _newbuf(rlen + hlen)
     defer _buf_wipe(t)
     mut tries := 0
@@ -121,8 +97,6 @@ func _ecdsa_sign(cv: Curve, kind: int, dbytes: void*, digest: void*, dlen: int, 
         ret false
     end
 
-    // R = k*G. Constant-time scalar mul: k is secret, unlike verification's
-    // double-scalar mul where both scalars are public.
     r := _jac_mul(cv, kfe, _jac_generator(cv))
     mut xb := _newbuf(cv.nb)
     defer _buf_free(xb)
@@ -144,7 +118,6 @@ func _ecdsa_sign(cv: Curve, kind: int, dbytes: void*, digest: void*, dlen: int, 
     z := _ecdsa_digest_scalar(cv, digest, dlen)
     dfe := _fe_from_bytes(dbytes, cv.nb)
 
-    // s = k^-1 * (z + r*d) mod n
     mut km := Fe {}
     _sn_to_mont(cv, km, kfe)
     mut kinv := Fe {}

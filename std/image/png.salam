@@ -18,33 +18,6 @@ import compress
 import archive
 import mem
 
-// PNG (RFC 2083 / ISO 15948): chunked container + zlib-compressed,
-// per-row-filtered scanlines. Built entirely on std/compress's real RFC
-// 1950/1951 primitives (RawDeflate/RawInflate for the DEFLATE stream,
-// CRC32 for chunk integrity, Adler32 for the zlib trailer) - PNG's own
-// wire format needs nothing else, so there is no format-specific
-// compression code here, only chunk/filter framing around those.
-//
-// Supported: 8- and 16-bit depth, non-interlaced, color types 0/2/3/4/6
-// (grayscale, RGB, palette [+ tRNS alpha], grayscale+alpha, RGBA) for
-// decode. A 16-bit sample is stored big-endian, so its high byte is
-// already the 8-bit value this image type holds and taking it is the
-// whole of the conversion; 16-bit is what Photoshop, ImageMagick and
-// most scanners write by default, and rejecting it turned an ordinary
-// PNG into "not an image"; encode always writes 8-bit RGBA (color type 6), the one
-// representation every PNG reader accepts unconditionally. Encoding
-// chooses the best of the 5 standard filter types (None/Sub/Up/Average/
-// Paeth) per row by minimizing the sum of absolute filtered-byte values -
-// the same practical heuristic libpng's "minimum sum of absolute
-// differences" heuristic uses - rather than always emitting the simplest
-// (None), so real files come out meaningfully smaller.
-//
-// NOT supported: 16-bit depth, Adam7 interlacing, non-IDAT ancillary
-// chunks (EXIF/text - see this package's header comment on metadata: not
-// reading them also means never writing them, i.e. "strip metadata" is
-// the only mode). All are reported via `ok = false` on decode, never
-// silently misread.
-
 const _CT_IHDR := (73 << 24) | (72 << 16) | (68 << 8) | 82
 const _CT_PLTE := (80 << 24) | (76 << 16) | (84 << 8) | 69
 const _CT_TRNS := (116 << 24) | (82 << 16) | (78 << 8) | 83
@@ -378,8 +351,6 @@ pub func DecodePNG(p: void*, n: int, ok &: bool): Image:
                 fatal = true
                 break
             end
-            // A palette index is never 16 bits wide: the spec allows 1, 2, 4
-            // and 8 there, and this reads the 8-bit form.
             if bit_depth == 16 && color_type == 3:
                 fatal = true
                 break
@@ -417,9 +388,6 @@ pub func DecodePNG(p: void*, n: int, ok &: bool): Image:
     end
 
     channels := _channels_for(color_type)
-    // Bytes per sample: 1 at 8-bit, 2 at 16-bit. The filter works on whole
-    // pixels either way, so it is this that the row stride and the filter's
-    // own left-neighbour distance are built from, not the channel count.
     sample := bit_depth / 8
     bpp := channels * sample
     stride := width * bpp
@@ -448,9 +416,6 @@ pub func DecodePNG(p: void*, n: int, ok &: bool): Image:
         until x < width:
             row_off := y * stride
             off := row_off + x * bpp
-            // Channel n starts `sample` bytes after channel n-1, and its most
-            // significant byte comes first, so `off + n * sample` addresses the
-            // byte wanted at either depth.
             s1 := sample
             s2 := sample * 2
             s3 := sample * 3

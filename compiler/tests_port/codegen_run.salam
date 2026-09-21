@@ -12,26 +12,6 @@
  *
  */
 
-// Equivalence runner for the codegen port (stage 6 gate): mirrors the C
-// driver's build pipeline - source -> langpack detect -> lex -> parse ->
-// condcomp prune -> package dir-merge -> sema Run (DCE enabled, entry
-// roots) -> DCE filter -> cg.Run - and writes the generated module sources
-// to <out_prefix>.h / <out_prefix>.c for a byte-diff against HEAD
-// `bin/salam build --keep-c` output (salam_mod_<module>.{h,c}).
-//
-// Driver parity notes:
-// - the CLI defaults add the SALAM_SAFE define and pass safe=true into
-//   codegen (compiler/src/cli/cli.c), replicated here;
-// - the driver enables DCE across the whole work list and filters each
-//   module's top-level funcs by reachability before codegen_run
-//   (compiler/src/driver/build.c), replicated here;
-// - `link static|dynamic|framework "x"` decls append SALAM_LINK_<X> defines
-//   for later work items.
-//
-// Usage: codegen_run <file.salam> <module> <out_prefix> [--all]
-//   --all also processes the input's transitive file imports and writes
-//   every extra module to <out_prefix>__<module>.{h,c} (the driver's
-//   multi-module emission; needed to compare imported package modules).
 package main
 
 import os
@@ -49,7 +29,6 @@ import cc "../condcomp.salam"
 import sm "../semantic/semantic.salam"
 import cg "../codegen/codegen.salam"
 
-// Unsigned byte read from a str (same idiom as the other ports).
 func byte_at(s: str, i: int): int:
     bp := (s as void*) as i8*
     mut v := bp[i] as int
@@ -59,17 +38,14 @@ func byte_at(s: str, i: int): int:
     ret v
 end
 
-// driver/build.c module_of
 func module_of(path: str): str:
     ret pth.PathStem(path)
 end
 
-// driver/build.c dir_of
 func dir_of(path: str): str:
     ret pth.PathDir(path)
 end
 
-// cli.c link-define sanitizer: SALAM_LINK_<LIB> (A-Z/0-9 kept, rest '_').
 func link_define(lib: str): str:
     mut b := str.NewBuilder()
     str.BufAppend(b, "SALAM_LINK_")
@@ -122,8 +98,6 @@ func main:
     mut work := Vector {} as Vector<str>
     defer work.free()
     work.push(path)
-    // driver/build.c auto-adds mem and core to EVERY build (see
-    // PORTING.md); only matters with --all, which follows real imports.
     if emit_all:
         memp := sm.ResolveImport("", "mem")
         if str.Len(memp) > 0 && os.Exists(memp) && !in_list(work, memp):
@@ -135,7 +109,6 @@ func main:
         end
     end
 
-    // per processed work item (parallel vectors)
     mut w_ast := Vector {} as Vector<at.Ast>
     mut w_sema := Vector {} as Vector<sm.Sema>
     mut w_prog := Vector {} as Vector<int>
@@ -174,7 +147,6 @@ func main:
         _pok := ps.Run(quiet, toks, a, prog)
         tok.StreamFree(toks)
         _ck := cc.PruneProgram(a, quiet, wpath, table, prog)
-        // package dir auto-merge (driver: salam_package_files loop)
         mut pfiles := sm.PackageFiles(wpath)
         mut pi := 1
         until pi < pfiles.len():
@@ -212,7 +184,6 @@ func main:
                 break
             end
         end
-        // link defines + import discovery (driver scans after sema)
         idir := dir_of(wpath)
         repeat prog_n.list.len() with di2:
             did := prog_n.list.get(di2)
@@ -265,7 +236,6 @@ func main:
         mut s2 := w_sema.get(bi)
         prog2 := w_prog.get(bi)
         module2 := w_module.get(bi)
-        // driver DCE filter over the module's top-level funcs
         mut kept := Vector {} as Vector<int>
         pn := at.Get(a2, prog2)
         repeat pn.list.len() with ki:

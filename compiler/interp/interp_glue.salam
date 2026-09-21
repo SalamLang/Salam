@@ -3,12 +3,6 @@ package interp
 import at "../ast.salam"
 import i18 "../i18n.salam"
 
-// ===========================================================================
-// ===== interp_expr.c / interp_stmt.c shared glue (ported in stage A) =====
-// ===========================================================================
-
-// call_func (interp_expr.c) - parameter binding, body execution, LIFO defers.
-// thisv is passed with has_this (the C took a nullable value_t*).
 func call_func(
     ip &: Interp, a &: at.Ast, fnnode: int, defenv: int, has_this: bool, thisv: Value, args: Vector<Value>
 ): Value:
@@ -28,7 +22,6 @@ func call_func(
         p := at.Child(a, fnnode, i)
         pn := at.Get(a, p)
         if i < args.len():
-            // By value unless `&:`; see val_copy_deep.
             env_define(ip, env, pn.name, pn.is_ref ? args.get(i) : val_copy_deep(ip, args.get(i)))
         else pn.a != 0:
             env_define(ip, env, pn.name, eval(ip, a, env, pn.a))
@@ -67,16 +60,6 @@ func call_func(
     ret retv
 end
 
-// The other half: put what the callee left in a `&:` parameter back where the
-// caller passed it from. A plain variable is the common case; an argument like
-// `(_o.next)[0]`, which the derived JSON decoder passes to decode into the
-// memory a pointer field owns, is written straight to those bytes.
-// A field or element the walker holds as a value rather than as bytes -
-// `f(s.key)`, `f(rows[0])` - is still a place the callee's `&:` result has to
-// land in. A shape that is not a place simply has nowhere to write, so this
-// resolves the two cases that are and says no to everything else.
-// `pkg.Global` is deliberately among the no's: the base evaluates to a module,
-// not a struct, and the walker has never supported assigning through it.
 func writeback_value_place(
     ip &: Interp, a &: at.Ast, env: int, arg: int, v: Value
 ): bool:
@@ -138,11 +121,6 @@ func interp_writeback_refs(
                     env_slot_set(ip, where, slot, args.get(i))
                 end
             else k == at.AST_INDEX || k == at.AST_MEMBER:
-                // Otherwise only a place is written back, and only when it
-                // resolves: an argument that is not a place at all (a
-                // temporary) has nowhere to receive the value, and reporting
-                // that here would turn code the walker used to run into a
-                // runtime error.
                 mut maddr := 0 as i64
                 mut mts := ""
                 if interp_mem_lvalue(ip, a, env, arg, maddr, mts):
@@ -155,8 +133,6 @@ func interp_writeback_refs(
     end
 end
 
-// A call from source, where the argument list is still around to write back
-// through. Calls the walker makes on its own behalf use call_func directly.
 func invoke(
     ip &: Interp, a &: at.Ast, env: int, call: int, fnnode: int, defenv: int,
     has_this: bool, thisv: Value, args: Vector<Value>
@@ -169,15 +145,6 @@ func invoke(
     ret r
 end
 
-// A `&:` parameter is a reference: what the callee leaves in it belongs to the
-// caller. The walker has no addresses to bind, so the two halves of that are
-// copy-in (the ordinary argument binding in call_func) and copy-out - here,
-// and then interp_writeback_refs at the call site.
-//
-// Without it a whole-value write to a reference parameter went nowhere:
-// `err = encerr.ErrUnexpectedToken(...)` in json.Unmarshal, and every
-// `_dgstr(s, p, q)`-style out parameter under it, all reported success while
-// leaving the caller's variable untouched.
 func export_ref_params(
     ip &: Interp, a &: at.Ast, fnnode: int, env: int, args: Vector<Value>
 ):
@@ -193,8 +160,6 @@ func export_ref_params(
     end
 end
 
-// exec_list (interp_stmt.c) - executes `owner`'s child list; cooperative
-// unwinding stops the walk once ip.failed is set.
 func exec_list(
     ip &: Interp, a &: at.Ast, env: int, fr &: Frame, owner: int, retv &: Value
 ): int:

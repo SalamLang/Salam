@@ -6,9 +6,6 @@ import tok "../token.salam"
 import at "../ast.salam"
 import sm "../semantic/semantic.salam"
 
-// ===== codegen_expr.c =====
-
-// cg_op - token kind -> C operator text.
 func cg_op(k: int): str:
     if k == tok.TK_PLUS:
         ret "+"
@@ -106,12 +103,6 @@ func cg_op(k: int): str:
     ret "?"
 end
 
-// A string-backed enum's C representation is `const char *` (hdr_enums), so
-// for every purpose codegen cares about (== via strcmp, string coercion) it
-// has to be treated exactly like str/uchar - only its *name* ("Color") isn't
-// literally "str". Int/float-backed enums need no such translation: their C
-// representation already behaves correctly under the plain C operators the
-// generic fallbacks emit (a real C `enum` for int, a `double` for float).
 func cg_ts_is_string_enum(s &: sm.Sema, ts: str): bool:
     if str.Len(ts) == 0:
         ret false
@@ -132,8 +123,6 @@ func cg_str_operand(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
     ret "salam_tostr_" + prim_suffix(print_tag(nn.type_str)) + "(" + cg_expr(g, s, a, n) + ")"
 end
 
-// cg_cescape - C string literal escaping (bug-compat: stops at a NUL byte
-// like the C's char* walk).
 func cg_cescape(sv: str): str:
     mut b := co.SbNew()
     co.SbPutc(b, 34)
@@ -144,10 +133,6 @@ func cg_cescape(sv: str): str:
         if c == 0:
             break
         end
-        // A `?` right after another `?` is written `\?`, so that "??/",
-        // "??=" and the other seven trigraphs never appear in the C text.
-        // Trigraphs are off by default, but gcc and clang still warn about
-        // every one they ignore (-Wtrigraphs is part of -Wall).
         if c == 63 && i > 0 && byte_at(sv, i - 1) == 63:
             co.SbPuts(b, "\\?")
             i += 1
@@ -249,13 +234,6 @@ func cg_match_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
     rty := cg_ctype(str.Len(nn.type_str) > 0 ? nn.type_str : "int32_t")
     subj_ts := at.Get(a, nn.a).type_str
     sty := cg_ctype(str.Len(subj_ts) > 0 ? subj_ts : "int32_t")
-    // tcc 0.9.26 cannot parse a "({ ... })" GNU statement-expression whose
-    // trailing value is a bare identifier of pointer type declared inside
-    // that same block ("unsupported expression type"), even cast-wrapped,
-    // even though the identical block declared as a non-pointer (e.g.
-    // intptr_t) type is fine. Declare the temp as intptr_t internally and
-    // cast the whole "({ ... })" back to the real pointer type from the
-    // outside instead.
     rty_is_ptr := str.Len(rty) > 0 && str.EndsWith(rty, "*")
     res_ctype := rty_is_ptr ? "intptr_t" : rty
     subj_var := "__msubj" + t
@@ -316,8 +294,6 @@ func cg_dyn_box(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
     ret "({ " + cc2 + "* __dp" + t + " = (" + cc2 + "*)" + CG_MEM_ALLOC + "((uint64_t)sizeof(" + cc2 + ")); *__dp" + t + " = (" + cg_expr(g, s, a, nn.a) + "); (_Salam_dyn_" + ci + "){ (void*)__dp" + t + ", &_Salam_vtbl_" + ci + "_" + cc2 + " }; })"
 end
 
-// cg_emit_op_call - operator overloads. lhs/rhs are at.NodeIds (rhs 0 =
-// the C NULL), ssym a SymId; returns "" for the C NULL.
 func cg_emit_op_call(
     g &: Cg, s &: sm.Sema, a &: at.Ast, lhs: int, ssym: int, sname: str, mname: str, rhs: int
 ): str:
@@ -390,23 +366,6 @@ func cg_val_is_bare_ident(v: str): bool:
     ret true
 end
 
-// Two confirmed, distinct tcc 0.9.26 bugs, both reproduced with minimal
-// standalone .c files against the bundled tcc binary (see the matching
-// note in c/src/codegen/codegen_expr.c's own cg_val_needs_hoist):
-// 1. A "({ ... })" GNU statement-expression can't be a compound-literal
-//    initializer-list element at all, positional or designated, even
-//    cast-wrapped - "cast expected". Every stmt-expr this codegen emits
-//    ends in "})", optionally behind an outer cast, so that suffix
-//    reliably detects the shape.
-// 2. A plain bare-identifier field value (e.g. ".f = someVar", regardless
-//    of someVar's type or where it came from) is rejected with "field
-//    expected" whenever it is *not* the list's last element. Both
-//    symptoms disappear once the value lives in its own
-//    "tmp.field = value;" statement instead of the initializer list.
-// NULL/true/false are constant tokens, not variable references - they
-// never trip bug 2 and, unlike one, are always safe to leave in a
-// top-level/global initializer, which can't hold hoisted statements at
-// all (there is no enclosing function body to emit them into).
 func cg_val_needs_hoist(v: str): bool:
     n := str.Len(v)
     if n >= 2 && byte_at(v, n - 1) == 41 && byte_at(v, n - 2) == 125:
@@ -432,10 +391,6 @@ func cg_struct_lit(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
     mut first := true
     mut post_names := Vector {} as Vector<str>
     mut post_vals := Vector {} as Vector<str>
-    // "" for an ordinary post-assignment, the array's C type for a field
-    // that has to be copied in with salam_arrcpy: C cannot initialise or
-    // assign an array from another array, so `arr = o.arr` in a literal is
-    // a copy after the fact.
     mut post_arr := Vector {} as Vector<str>
     if ssym != 0:
         msc := sm.ScopeAt(s, sm.SymAt(s, ssym).members)
@@ -471,11 +426,6 @@ func cg_struct_lit(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
                 continue
             end
             fact := cg_array_ctype(sm.ToString(s, f.ty))
-            // An array field's DEFAULT (not just an explicitly given value)
-            // can itself be an array place now that a function can return
-            // one: `pub cells: int[3] = make_cells()`. Gating this only on
-            // `provided != 0` left the default case falling through to the
-            // plain `.field = val` form below, invalid C for an array.
             if str.Len(fact) > 0 && cg_is_array_place(a, val_node):
                 post_names.push(f.name)
                 post_vals.push(val)
@@ -500,14 +450,6 @@ func cg_struct_lit(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
     if post_names.len() == 0:
         r = "(" + cg_cident(sl_cn) + "){ " + co.SbCstr(inl) + " }"
     else:
-        // At least one field needs the post-assignment treatment:
-        // materialize the literal from only the safe fields into a named
-        // temp, apply the rest as plain "tmp.field = value;" statements
-        // (always accepted regardless of value shape or position), and
-        // use the bare temp as this expression's result. If that result
-        // itself ends up as a field value of an *enclosing* struct
-        // literal, cg_val_needs_hoist catches it there too (a bare
-        // identifier), so this composes safely at any nesting depth.
         g.tmpn += 1
         t := g.tmpn
         cg_line(
@@ -531,21 +473,6 @@ func cg_struct_lit(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
     ret r
 end
 
-// cg_expr - returns the C expression text ("0" for the C NULL node).
-// The C symbol a function name denotes, as a void*. Shared by `&f` and by a
-// bare function name read as a value. An extern keeps its declared C name -
-// it is not ours to mangle; without this a libc extern emits a symbol that
-// exists nowhere (`printf` in std/llvm/orc.salam became
-// `_Salam_llvm_printf_str`).
-// The C spelling of a name that is not a local: a module-level global carries
-// its package (cg_global_cname), anything else is the bare identifier. The
-// cur_lit_home / cur_fn_home / cur_struct fallbacks mirror cg_func_addr - a
-// generic body instantiated into another module is emitted with that module's
-// global scope, so its own package's globals are only reachable through its
-// home.
-//
-// An `extern` global keeps its declared C name; it names an object somebody
-// else defined.
 func cg_global_ref(g &: Cg, s &: sm.Sema, a &: at.Ast, name: str): str:
     mut gsym := sm.Lookup(s, s.global, name)
     if gsym != 0:
@@ -571,17 +498,12 @@ func cg_global_ref(g &: Cg, s &: sm.Sema, a &: at.Ast, name: str): str:
         ret cg_cident(name)
     end
     gv := sm.SymAt(s, gsym)
-    // Raw, for the same reason the header declares it raw.
     if gv.decl != 0 && at.Get(a, gv.decl).is_extern:
         ret name
     end
     ret cg_global_cname(gv.pkgname, name)
 end
 
-// `pkg.f` as a value: the function lives in the package's member scope, not in
-// this module's global one, and mangles with the package it was declared in
-// rather than the one doing the reading. `pkgid` is the AST_IDENTIFIER naming
-// the package (0 when the reference was unqualified).
 func cg_func_addr_pkg(g &: Cg, s &: sm.Sema, a &: at.Ast, pkgid: int, name: str): str:
     if pkgid != 0 && at.KindOf(a, pkgid) == at.AST_IDENTIFIER:
         pname := at.Get(a, pkgid).name
@@ -649,14 +571,6 @@ func cg_func_addr(g &: Cg, s &: sm.Sema, a &: at.Ast, name: str): str:
     ret "((void*)(&" + raw + "))"
 end
 
-// An array literal lowers to a braced list, which C accepts only as an
-// initializer. Anywhere a real expression is wanted - a call argument, a
-// returned value, a ternary arm - it has to be the compound literal
-// "(int32_t[3]){1, 2, 3}" instead, or the emitted C does not parse at all.
-//
-// Deliberately opt-in per slot rather than applied inside cg_expr: a
-// compound literal is not a constant expression, so a file-scope
-// initializer must keep the bare braced form.
 func cg_expr_value(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
     if n != 0 && at.KindOf(a, n) == at.AST_ARRAY_LIT:
         act := cg_array_ctype(at.Get(a, n).type_str)
@@ -677,11 +591,6 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
         if nn.op == tok.TK_INT:
             u := nn.value_int
             ts := nn.type_str
-            // An integer literal that semantic analysis typed as a float
-            // (`16777217 as f32`, or a literal in a float context) is
-            // written with the conversion spelled out. Left bare, it
-            // initialised a float from an int and clang reported the
-            // rounding (-Wimplicit-const-int-float-conversion).
             if str.Equals(ts, "f32") || str.Equals(ts, "f64"):
                 ret "((" + cg_ctype(ts) + ")" + co.U64Toa(u) + (u > (2147483647 as u64) ? "LL" : "") + ")"
             end
@@ -691,10 +600,6 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
                 if u == imax + (1 as u64):
                     ret "(-9223372036854775807LL - 1LL)"
                 end
-                // Suffix only what genuinely needs 64 bits, exactly as the
-                // unsigned branch below does: a bare (-7) is an int, so
-                // passing it to a prototype declared int - libc's abs(),
-                // say - no longer trips clang's -Wabsolute-value.
                 v := u as i64
                 mut nsuf := ""
                 if v < (0 - 2147483647):
@@ -712,10 +617,6 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
         end
         if nn.op == tok.TK_FLOAT:
             fv := nn.value_float
-            // %.17g spells these "inf" and "nan", which C has no literal for
-            // (`inf` is an undeclared identifier). They reach here from
-            // constant folding - `1e308 * 10.0`, `0.0 / 0.0` - and the
-            // division forms are what every C compiler accepts silently.
             if fv != fv:
                 ret "(0.0 / 0.0)"
             end
@@ -757,7 +658,6 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
         ret "0"
     end
     if k == at.AST_IDENTIFIER:
-        // A bare function name read as a value: its address, as an i64.
         if nn.func_value:
             ret "(int64_t)" + cg_func_addr(g, s, a, nn.name)
         end
@@ -854,13 +754,6 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
                 ret "(strcmp(" + ea2 + ", " + eb2 + ") " + opv + " 0)"
             end
         end
-        // Integer operands are converted to the operation's common type and
-        // the result is wrapped back into it. C's integer promotions would
-        // otherwise widen u8/u16/i8/i16 operands to int, so `(200 as u8) +
-        // (100 as u8)` yielded 300 instead of wrapping to 44, and a literal
-        // whose `as u64` cast was folded away would shift as a 32-bit int
-        // (`(1 as u64) << 63` produced 0). Salam defines arithmetic to wrap
-        // modulo 2^n in the operand type (SALAM-TYPES.md 4.1, 15).
         shift := nn.op == tok.TK_SHL || nn.op == tok.TK_SHR
         mut cts := ""
         if cg_is_int_typestr(an.type_str) && cg_is_int_typestr(bn.type_str):
@@ -868,18 +761,6 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
         end
         if str.Len(cts) > 0:
             cty := cg_ctype(cts)
-            // The operands are computed in the unsigned twin for the three
-            // operators that can overflow, and for <<, whose result is
-            // undefined once a signed value shifts into or past the sign bit.
-            // Unsigned arithmetic wraps by definition, which is what Salam
-            // promises; signed overflow is undefined in C, which is what let
-            // gcc fold `(int32_t)x + (int32_t)x` at compile time and reject it
-            // under -Werror=overflow. See cg_unsigned_twin.
-            //
-            // / and % are deliberately not on the list: unsigned division is a
-            // different operation for negative operands, and the only signed
-            // case that overflows is INT_MIN / -1. Bitwise & | ^ and >> cannot
-            // overflow at all.
             wraps := nn.op == tok.TK_PLUS || nn.op == tok.TK_MINUS || nn.op == tok.TK_STAR || nn.op == tok.TK_SHL
             mut aty := cty
             if wraps && !cg_is_unsigned_typestr(cts):
@@ -887,13 +768,6 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
             end
             eaq := cg_expr(g, s, a, nn.a)
             ebq := cg_expr(g, s, a, nn.b)
-            // Shifts keep the left operand's type. A constant count has
-            // already been checked against the width (check_binary); a
-            // computed one is reduced modulo the width here, because a C
-            // shift by the width or more is undefined - gcc folds
-            // `x << 33` on an int32_t to whatever it likes. On x86 and arm
-            // the hardware masks the count the same way, so the `&` is
-            // free for the 32- and 64-bit types.
             if shift:
                 mut ebs := "(" + ebq + ")"
                 if !(at.KindOf(a, nn.b) == at.AST_LITERAL && bn.op == tok.TK_INT):
@@ -942,15 +816,8 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
                 end
             end
         end
-        // '-' and '~' preserve the operand's type (SALAM-TYPES.md 21); C
-        // would promote a narrow operand to int, so `~(0 as u8)` came back
-        // as -1 rather than 255.
         if (nn.op == tok.TK_MINUS || nn.op == tok.TK_TILDE) && nn.a != 0 && cg_is_int_typestr(at.Get(a, nn.a).type_str):
             ucty := cg_ctype(at.Get(a, nn.a).type_str)
-            // Negating the most negative value overflows, which is undefined
-            // for a signed operand; the unsigned twin negates modularly and
-            // converts back to the same bit pattern. '~' cannot overflow, so
-            // it keeps the operand's own type. See cg_unsigned_twin.
             mut oty := ucty
             if nn.op == tok.TK_MINUS && !cg_is_unsigned_typestr(at.Get(a, nn.a).type_str):
                 oty = cg_ctype(cg_unsigned_twin(at.Get(a, nn.a).type_str))
@@ -995,20 +862,12 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
         ret cg_call(g, s, a, n)
     end
     if k == at.AST_MEMBER:
-        // `pkg.f` read as a value (sema set func_value): its address.
         if nn.func_value:
             ret "(int64_t)" + cg_func_addr_pkg(g, s, a, nn.a, nn.name)
         end
         an2 := at.Get(a, nn.a)
         if nn.a != 0 && an2.kind == at.AST_IDENTIFIER && !local_known(g, an2.name):
             mut e := sm.Lookup(s, s.global, an2.name)
-            // A synthesized enum-derive body is checked against its enum's
-            // home scope (sema), so an unqualified "Kind" inside it resolves
-            // fine at the semantic layer even when Kind lives in a non-main
-            // package - but this lookup only ever searches the global
-            // scope, so it needs the same cur_fn_home fallback used
-            // elsewhere for free-function calls inside such bodies, or it
-            // silently fails to find Kind here.
             if (e == 0 || sm.SymAt(s, e).kind != sm.SYM_ENUM) && g.cur_fn_home != 0:
                 e = sm.Lookup(s, g.cur_fn_home, an2.name)
             end
@@ -1028,13 +887,6 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
                 end
             end
         end
-        // pkg.EnumName.Member: n.a is itself pkg.EnumName (an AST_MEMBER,
-        // not a bare identifier - see the matching sema fix in
-        // check_member/sema_expr.salam for why the parser always builds
-        // this as a plain left-associative chain). Without this, n.a falls
-        // to the generic cg_expr(g, s, a, n.a) below, which has no idea
-        // "pkg.EnumName" denotes a type and just emits the two names joined
-        // by literal dots, verbatim, into invalid C.
         if nn.a != 0 && an2.kind == at.AST_MEMBER && an2.a != 0 && at.KindOf(a, an2.a) == at.AST_IDENTIFIER && !local_known(g, at.Get(a, an2.a).name):
             pkname := at.Get(a, an2.a).name
             mut pk := sm.Lookup(s, s.global, pkname)
@@ -1054,8 +906,6 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
     end
     if k == at.AST_INDEX:
         an3 := at.Get(a, nn.a)
-        // A pointer indexes as a pointer, whatever its pointee declares -
-        // see the same rule in sema's AST_INDEX check.
         if nn.a != 0 && str.Len(an3.type_str) > 0 && !cg_is_ptr_ts(an3.type_str):
             mut sname3 := ""
             ssym3 := cg_struct_of(s, an3.type_str, sname3)
@@ -1084,10 +934,6 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
         if g.safe:
             sz := array_size_of(an3.type_str)
             if sz > (0 as i64):
-                // SALAM_IDX, not salam_idx: the check itself is one compare
-                // and belongs in the caller. See the macro in the runtime
-                // header for why the call form cost so much more than the
-                // compare it hid.
                 ret arr + "[SALAM_IDX(" + idx2 + ", " + co.I64Toa(sz) + ")]"
             end
         end

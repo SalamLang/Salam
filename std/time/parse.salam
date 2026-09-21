@@ -12,31 +12,6 @@
  *
  */
 
-// The inverse of time.salam's formatters: text back into an epoch.
-//
-// Every Format* function in this package now has a Parse* partner, so a
-// timestamp this library writes is a timestamp this library can read:
-//
-//     FormatISO       <-> ParseISO
-//     FormatHTTPDate  <-> ParseHTTPDate
-//     Format          <-> ParseISO   (the space-separated form is accepted)
-//     FormatDate      <-> ParseISO   (a date with no time is accepted)
-//
-// TIMEZONES. An ISO 8601 timestamp that carries an offset ("...Z" or
-// "...+05:30") names one instant and is read as that instant. A timestamp
-// with NO offset does not name an instant at all until you say where it was
-// written, and this reads it as LOCAL time - which is what makes ParseISO
-// the exact inverse of FormatISO, since FormatISO prints local wall-clock
-// with no offset. Use ParseISOIn to pin an unzoned string to a specific
-// offset instead, and prefer FormatRFC3339 over FormatISO for anything that
-// leaves the machine: it writes the offset, so the round trip does not
-// depend on where it happens.
-//
-// Conversion of local wall-clock time to an epoch goes through libc
-// mktime, so it respects the host's real DST rules - including the two
-// awkward days a year where a wall-clock time is skipped or repeated.
-// (std/calendar's ZonedToEpoch does the same for an arbitrary named zone
-// rather than the machine's own.)
 package time
 
 import mem
@@ -74,8 +49,6 @@ struct _Parts:
     pub has_offset: bool = false
     pub offset_minutes: int = 0
 end
-
-// -- byte helpers ---------------------------------------------------------
 
 inline pure func _pbp(s: str): i8*: ret (s as void*) as i8* end
 
@@ -168,16 +141,12 @@ end
 // 4 mon (0-11), 5 year (since 1900), 6 wday (0 = Sunday), 7 yday (0-based).
 pure func _gmFieldPure(epoch: i64, idx: int): int:
     days := _pfloordiv(epoch, 86400)
-    // Floored, so this is the seconds into the day and never negative.
     secs := epoch - days * 86400
     if idx == 0: ret (secs % 60) as int end
     if idx == 1: ret ((secs / 60) % 60) as int end
     if idx == 2: ret (secs / 3600) as int end
-    // 1970-01-01 was a Thursday, so day 0 is weekday 4.
     if idx == 6: ret _pfloormod(days + 4, 7) as int end
 
-    // Shift the era so the year starts in March and the leap day lands at
-    // the end of it, which is what removes every special case below.
     z := days + 719468
     era := _pfloordiv(z, 146097)
     doe := z - era * 146097
@@ -202,8 +171,6 @@ end
 // whether DST was in force, which is what makes a repeated or skipped hour
 // resolve the same way the rest of the system resolves it.
 func _localEpoch(y: int, mo: int, d: int, h: int, mi: int, s: int): i64:
-    // Over-allocated: struct tm is 56 bytes on glibc/x86-64 but its exact
-    // size is platform-defined, and mktime writes normalized fields back.
     buf := mem.AllocateZeroed(128 as u64)
     if buf == null: ret _utcEpoch(y, mo, d, h, mi, s) end
     p := buf as int*
@@ -216,8 +183,6 @@ func _localEpoch(y: int, mo: int, d: int, h: int, mi: int, s: int): i64:
     p[8] = 0 - 1
     out := mktime(buf)
     mem.Free(buf)
-    // mktime returns -1 for a time it cannot represent; fall back to
-    // treating the fields as UTC rather than returning a bogus instant.
     if out == (0 - 1) as i64: ret _utcEpoch(y, mo, d, h, mi, s) end
     ret out
 end
@@ -225,8 +190,6 @@ end
 func _resolve(p: _Parts): TimeResult:
     if p.month < 1 || p.month > 12: ret TimeResult { ok = false } end
     if p.day < 1 || p.day > 31: ret TimeResult { ok = false } end
-    // 24:00:00 is a legal ISO 8601 spelling of midnight ending that day;
-    // 60 and 61 seconds are leap seconds, which Unix time does not have.
     if p.hour < 0 || p.hour > 24: ret TimeResult { ok = false } end
     if p.minute < 0 || p.minute > 59: ret TimeResult { ok = false } end
     if p.second < 0 || p.second > 60: ret TimeResult { ok = false } end
@@ -354,7 +317,6 @@ func _scanISO(s: str, p &: _Parts): bool:
     p.month = mo
     p.day = d
     if i >= n: ret true end
-    // Date and time may be joined by T, t or a space.
     sep := _pub(bp, i)
     if sep != 84 && sep != 116 && sep != 32: ret false end
     i += 1
@@ -368,8 +330,6 @@ func _scanISO(s: str, p &: _Parts): bool:
     if !_parseZone(bp, n, i, p): ret false end
     ret i == n
 end
-
-// -- public API -----------------------------------------------------------
 
 // ISO 8601 / RFC 3339. Accepts, with or without a zone:
 //
@@ -425,7 +385,6 @@ pub func ParseHTTPDate(s: str): TimeResult:
     if n < 10: ret bad end
     bp := _pbp(t)
     mut i := 0
-    // Weekday name, in any of the three spellings, then an optional comma.
     until i < n && _pIsAlpha(_pub(bp, i)):
         i += 1
     end
@@ -438,7 +397,6 @@ pub func ParseHTTPDate(s: str): TimeResult:
     _skipSpaces(bp, n, i)
     mut p := _Parts { has_offset = true, offset_minutes = 0 }
     if isAsctime:
-        // asctime: "Jun  9 10:18:14 2021"
         ms := i
         until i < n && _pIsAlpha(_pub(bp, i)):
             i += 1
@@ -458,7 +416,6 @@ pub func ParseHTTPDate(s: str): TimeResult:
         p.year = y
         ret _resolve(p)
     end
-    // RFC 1123: "09 Jun 2021 ..."; RFC 850: "09-Jun-21 ..."
     mut d2 := 0
     if !_someDigits(bp, n, i, 2, d2): ret bad end
     p.day = d2
@@ -473,8 +430,6 @@ pub func ParseHTTPDate(s: str): TimeResult:
     if i < n && (_pub(bp, i) == 45 || _pub(bp, i) == 32): i += 1 end
     mut y2 := 0
     if !_someDigits(bp, n, i, 4, y2): ret bad end
-    // RFC 850 writes a two-digit year; POSIX reads 0-68 as 20xx, 69-99 as
-    // 19xx, which keeps historical Expires headers in the past.
     if y2 < 100:
         if y2 < 69: y2 = y2 + 2000
         else: y2 = y2 + 1900
@@ -607,8 +562,6 @@ pub func ParseISOOr(s: str, fallback: i64): i64:
     if r.ok: ret r.epoch end
     ret fallback
 end
-
-// -- formatters that close the round trip ---------------------------------
 
 // RFC 3339 in UTC: "2024-03-15T14:30:45Z". Unlike FormatISO this names an
 // instant on its own, so it is the right thing to write to a log, a wire

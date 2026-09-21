@@ -14,34 +14,6 @@
 
 package main
 
-// A load-bearing HTTP server whose only job is to be measured. Every route
-// isolates one cost so a number can be attributed to something:
-//
-//   GET  /plaintext      the floor: 13 bytes, no allocation past the response
-//   GET  /json           small-object serialization
-//   GET  /               an HTML page assembled per request
-//   GET  /file           read a file off disk on every request (no cache)
-//   GET  /cached         the same file, read once at boot (isolates the I/O)
-//   GET  /static/...     the server's own static-file path (sendfile-ish)
-//   GET  /users/:id      one path parameter, extracted by the router
-//   GET  /search?q=&n=   query-string parsing
-//   POST /echo           request body read back out
-//   GET  /compute?n=     CPU work, tunable, to find where the server stops
-//                        being the bottleneck
-//   GET  /headers        request headers walked and echoed
-//   GET  /health         a load balancer's poll
-//
-// The point of /cached next to /file, and of /compute's tunable n, is that a
-// single "requests per second" figure is not a fact about a server - it is a
-// fact about a server plus a workload. Two routes that differ in exactly one
-// cost let you subtract.
-//
-// Run it:  salam build tests/en/apps/httpbench/main.salam -o httpbench
-//          ./httpbench            # PORT=8099, or set PORT
-//
-// The comparison against php -S, node/express and nginx, along with the
-// method used to produce it, is in BENCHMARK.md next to this file.
-
 import os
 import mem
 import str
@@ -50,15 +22,9 @@ import net.router
 
 const DEFAULT_PORT := 8099
 
-// Read once at boot so /cached can be compared against /file, whose whole
-// purpose is to pay the read on every request.
 mut _cached_file := ""
 mut _asset_dir := ""
-// Built once at boot rather than concatenated per request: /file is meant to
-// measure a disk read, not a string allocation.
 mut _data_path := ""
-
-// ---------------------------------------------------------------- helpers
 
 func text(ctx: i64, body: str):
     http.Ctx_status(ctx, 200)
@@ -70,19 +36,11 @@ func json_ok(ctx: i64, body: str):
     http.Ctx_json(ctx, body)
 end
 
-// The same, for a body this handler built on the heap. Ctx_own hands it to
-// the request scope, which frees it once the response has gone out; without
-// that the string is simply abandoned, which is a leak per request whether
-// the server has one or not.
 func json_owned(ctx: i64, body: str):
     http.Ctx_status(ctx, 200)
     http.Ctx_json(ctx, http.Ctx_own(ctx, body))
 end
 
-// Note the builder rather than `a.concat(b).concat(c)`. Every concat returns
-// a NEW string, so a chain of them abandons one intermediate per link - only
-// the last pointer is left to hand to Ctx_own, and everything before it
-// leaks. A builder writes into one buffer and produces one string.
 func fail(ctx: i64, code: int, message: str):
     mut b := str.NewBuilder()
     defer str.BufFree(b)
@@ -93,8 +51,6 @@ func fail(ctx: i64, code: int, message: str):
     http.Ctx_json(ctx, http.Ctx_own(ctx, str.BufStr(b)))
 end
 
-// Clamps a query parameter to a range. A benchmark route that takes an
-// unbounded integer from the caller is a denial-of-service route.
 func int_query(ctx: i64, name: str, fallback: int, lo: int, hi: int): int:
     raw := http.Ctx_query(ctx, name)
     if raw.len() == 0: ret fallback end
@@ -104,10 +60,6 @@ func int_query(ctx: i64, name: str, fallback: int, lo: int, hi: int): int:
     ret v
 end
 
-// ---------------------------------------------------------------- routes
-
-// The floor. Whatever this route measures is the server itself: accept,
-// parse, route, serialize, write. Everything else is this plus something.
 func plaintext(ctx: i64):
     text(ctx, "Hello, World!")
 end
@@ -116,8 +68,6 @@ func health(ctx: i64):
     json_ok(ctx, `{"status":"ok","service":"httpbench"}`)
 end
 
-// A small object, built per request rather than returned as a constant, so
-// the string work is real.
 func json_route(ctx: i64):
     json_ok(
         ctx,
@@ -125,8 +75,6 @@ func json_route(ctx: i64):
     )
 end
 
-// An HTML page assembled per request out of pieces, which is what a
-// templating layer ultimately does.
 func home(ctx: i64):
     mut b := str.NewBuilder()
     defer str.BufFree(b)
@@ -166,7 +114,6 @@ func row(b &: str.StringBuilder, path: str, note: str):
     str.BufAppend(b, "</td></tr>\n")
 end
 
-// Pays a full open/read/close per request, on purpose.
 func file_route(ctx: i64):
     body := os.ReadFile(_data_path)
     if body.len() == 0:
@@ -177,14 +124,10 @@ func file_route(ctx: i64):
     json_owned(ctx, body)
 end
 
-// The same bytes with the read hoisted out. /file minus /cached is the cost
-// of the filesystem on this machine, per request.
 func cached_route(ctx: i64):
     json_ok(ctx, _cached_file)
 end
 
-// One path parameter. The response embeds it so a load generator can tell
-// that routing actually happened rather than a static string being returned.
 func user_route(ctx: i64):
     id := http.Ctx_param(ctx, "id")
     if id.len() == 0:
@@ -201,8 +144,6 @@ func user_route(ctx: i64):
     json_owned(ctx, str.BufStr(b))
 end
 
-// Query-string parsing, plus a result list whose length the caller picks, so
-// the response size is a variable rather than a constant.
 func search_route(ctx: i64):
     q := http.Ctx_query(ctx, "q")
     n := int_query(ctx, "n", 5, 0, 100)
@@ -227,8 +168,6 @@ func search_route(ctx: i64):
     json_owned(ctx, str.BufStr(b))
 end
 
-// Reads the request body back out. Measures the read path with a body
-// attached, which the GET routes never exercise.
 func echo_route(ctx: i64):
     body := http.Ctx_body(ctx)
     mut b := str.NewBuilder()
@@ -241,21 +180,6 @@ func echo_route(ctx: i64):
     json_owned(ctx, str.BufStr(b))
 end
 
-// Deliberately minimal: enough that an arbitrary request body cannot break
-// out of the JSON string it is placed in.
-// Appends `s` to `b` as the body of a JSON string, escaping everything that
-// would otherwise end the string early or is not legal raw inside one.
-//
-// Every route that interpolates something the caller sent - the :id segment,
-// the q parameter, the request headers - has to go through here. Without it a
-// single double quote in any of them ends the JSON string and the rest of the
-// value is parsed as structure: `?q=a"b` used to answer
-// `{"query":"a"b",...}`, which no JSON parser will accept. CodeQL reports the
-// same thing as reflected XSS, on the grounds that a client sniffing the
-// response as HTML would then see markup it never should have.
-//
-// Bytes above 127 are passed through unchanged, so UTF-8 survives byte for
-// byte rather than being escaped to \uXXXX.
 func append_json_escaped(b &: str.StringBuilder, s: str):
     p := s as i8 *
     n := s.len()
@@ -270,8 +194,6 @@ func append_json_escaped(b &: str.StringBuilder, s: str):
         else c == 8: str.BufAppend(b, "\\b")
         else c == 12: str.BufAppend(b, "\\f")
         else c < 32:
-            // The rest of the C0 controls have no short form, and JSON does
-            // not allow any of them raw inside a string.
             str.BufAppend(b, "\\u00")
             str.BufAppendChar(b, hex_digit(c / 16))
             str.BufAppendChar(b, hex_digit(c % 16))
@@ -286,9 +208,6 @@ func hex_digit(v: int): int:
     ret 87 + v
 end
 
-// Tunable CPU work. Turn n up until requests per second stops tracking the
-// server and starts tracking this loop - that crossover is the useful
-// number, because past it every server under test converges.
 func compute_route(ctx: i64):
     n := int_query(ctx, "n", 1000, 0, 5000000)
     mut acc := 0 as i64
@@ -307,8 +226,6 @@ func compute_route(ctx: i64):
     json_owned(ctx, str.BufStr(b))
 end
 
-// Walks the parsed request headers. A request with many headers costs more
-// here than a bare one, which is the point.
 func headers_route(ctx: i64):
     mut b := str.NewBuilder()
     defer str.BufFree(b)
@@ -325,8 +242,6 @@ func headers_route(ctx: i64):
     str.BufAppend(b, `"}`)
     json_owned(ctx, str.BufStr(b))
 end
-
-// ---------------------------------------------------------------- boot
 
 func asset_dir(): str:
     d := os.Env("HTTPBENCH_ASSETS")

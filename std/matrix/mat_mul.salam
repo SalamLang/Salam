@@ -16,32 +16,6 @@ package matrix
 
 import mem
 
-// Matrix products: the O(n^3) part of the library, and the only part where
-// the memory layout shows up in the running time.
-//
-// The kernel is the ikj loop order, tiled. Two things follow from row-major
-// storage, and both point the same way:
-//
-//   - In i-k-j order the inner loop reads a contiguous row of Y and writes a
-//     contiguous row of R, with the scalar X(i,k) held in a register. Every
-//     access is a sequential stream, so the hardware prefetcher gets it right
-//     and there is no gather anywhere.
-//   - The textbook i-j-k order instead walks a *column* of Y in the inner
-//     loop, which strides by cols*8 bytes and touches a fresh cache line per
-//     iteration. On anything that does not fit in L1 that costs several times
-//     the ikj version, for identical arithmetic.
-//
-// Tiling on top of that bounds the working set: without it, the inner loop
-// sweeps a full row of Y (cols*8 bytes) per k, so by the time k advances the
-// front of that row has been evicted and every k re-reads it from memory.
-// With a 64-wide tile the block of Y in play is 64*64*8 = 32KB, which is an
-// L1 the size of what real hardware ships.
-//
-// The zero test in the middle loop is not a micro-optimization, it is what
-// makes products involving triangular, banded, permutation and adjacency
-// matrices cost what their sparsity says they should, and those are most of
-// the matrices this library produces internally.
-
 const _MAT_BLOCK := 64
 
 // Square tile side for the transpose. 32x32 f64 is 8 KiB per tile, so the
@@ -169,9 +143,6 @@ func _mm_tile(r &: Matrix, x &: Matrix, y &: Matrix, ii: int, kk: int, jj: int):
         mut k := kk
         until k < k1:
             v := px[xo + k]
-            // The zero test is what makes a sparse operand cost what its
-            // sparsity says it should; it sits in the middle loop, not the
-            // inner one, so it never blocks vectorisation.
             if v != 0.0: _mm_axpy(rrow, v, _row(py, k * yc + jj), cnt) end
             k += 1
         end
@@ -497,7 +468,6 @@ func _strassen(x &: Matrix, y &: Matrix, r &: Matrix):
     mut tb := _raw(k, w)
     mut m := Zeros(h, w)
 
-    // M1 = (A11 + A22)(B11 + B22) -> r00, r11
     _blk_op(x, 0, 0, x, h, k, false, ta)
     _blk_op(y, 0, 0, y, k, w, false, tb)
     _matmul_pick(ta, tb, m)
@@ -505,7 +475,6 @@ func _strassen(x &: Matrix, y &: Matrix, r &: Matrix):
     _blk_acc(r, h, w, m, false)
     _zero_into(m)
 
-    // M2 = (A21 + A22) B11 -> r10, -r11
     _blk_op(x, h, 0, x, h, k, false, ta)
     _blk_copy(y, 0, 0, tb)
     _matmul_pick(ta, tb, m)
@@ -513,7 +482,6 @@ func _strassen(x &: Matrix, y &: Matrix, r &: Matrix):
     _blk_acc(r, h, w, m, true)
     _zero_into(m)
 
-    // M3 = A11 (B12 - B22) -> r01, r11
     _blk_copy(x, 0, 0, ta)
     _blk_op(y, 0, w, y, k, w, true, tb)
     _matmul_pick(ta, tb, m)
@@ -521,7 +489,6 @@ func _strassen(x &: Matrix, y &: Matrix, r &: Matrix):
     _blk_acc(r, h, w, m, false)
     _zero_into(m)
 
-    // M4 = A22 (B21 - B11) -> r00, r10
     _blk_copy(x, h, k, ta)
     _blk_op(y, k, 0, y, 0, 0, true, tb)
     _matmul_pick(ta, tb, m)
@@ -529,7 +496,6 @@ func _strassen(x &: Matrix, y &: Matrix, r &: Matrix):
     _blk_acc(r, h, 0, m, false)
     _zero_into(m)
 
-    // M5 = (A11 + A12) B22 -> -r00, r01
     _blk_op(x, 0, 0, x, 0, k, false, ta)
     _blk_copy(y, k, w, tb)
     _matmul_pick(ta, tb, m)
@@ -537,14 +503,12 @@ func _strassen(x &: Matrix, y &: Matrix, r &: Matrix):
     _blk_acc(r, 0, w, m, false)
     _zero_into(m)
 
-    // M6 = (A21 - A11)(B11 + B12) -> r11
     _blk_op(x, h, 0, x, 0, 0, true, ta)
     _blk_op(y, 0, 0, y, 0, w, false, tb)
     _matmul_pick(ta, tb, m)
     _blk_acc(r, h, w, m, false)
     _zero_into(m)
 
-    // M7 = (A12 - A22)(B21 + B22) -> r00
     _blk_op(x, 0, k, x, h, k, true, ta)
     _blk_op(y, k, 0, y, k, w, false, tb)
     _matmul_pick(ta, tb, m)
@@ -580,18 +544,8 @@ func _matmul_into(x &: Matrix, y &: Matrix, r &: Matrix):
     xc := x.cols
     yc := y.cols
     rc := m
-    // One packing buffer, reused by every column block.
     nfull := (n / _MR) * _MR
     mfull := (m / _NR) * _NR
-    // Three levels, the same shape a tuned BLAS uses and for the same reasons.
-    //
-    //   k blocks of _KC   bound how much of y is live at once
-    //   row blocks of _MC bound the packed x panel to something L2 holds
-    //   the 4x8 micro-kernel keeps its 32 sums in registers
-    //
-    // Each buffer is packed once at the outermost level that can reuse it: y
-    // once per k block, x once per (k block, row block). Both costs are
-    // O(n*k) against O(n*k*m) of arithmetic.
     bpack := mem.Allocate(((_NC * _KC) as u64) * (sizeof(f64) as u64)) as f64*
     defer mem.Free(bpack as void*)
     apack := mem.Allocate(((_MC * _KC) as u64) * (sizeof(f64) as u64)) as f64*
@@ -608,12 +562,6 @@ func _matmul_into(x &: Matrix, y &: Matrix, r &: Matrix):
             end
             mut i0 := 0
             until i0 < nfull:
-                // Rounded down to a whole number of micro-tiles. The packing
-                // loop below advances by _MR, so a block length that is not a
-                // multiple of _MR would let the last step read past the row
-                // block and write past the end of apack. Deriving it here
-                // rather than requiring _MC to divide evenly means the tuning
-                // constants can be changed without that becoming a heap bug.
                 mcap := (_MC / _MR) * _MR
                 ic := _min2(mcap, nfull - i0)
                 mut ip := 0
@@ -640,8 +588,6 @@ func _matmul_into(x &: Matrix, y &: Matrix, r &: Matrix):
         end
         j0 += _NC
     end
-    // Rows below the last full block of four, over the columns the kernel did
-    // cover, and then every remaining column across all rows.
     _mm_edge(pr, rc, px, xc, py, yc, nfull, n, 0, mfull, kn)
     _mm_edge(pr, rc, px, xc, py, yc, 0, n, mfull, m, kn)
 end
@@ -733,10 +679,6 @@ end
 pub func MatMulInto(x &: Matrix, y &: Matrix, out &: Matrix): bool:
     if x.cols != y.rows: ret false end
     if out.rows != x.rows || out.cols != y.cols: ret false end
-    // The kernel accumulates, so the destination starts at zero. Writing
-    // n*m doubles is what MatMul's Zeros did anyway - what is saved here
-    // is the allocation and the free, not the fill. Vector.zeros would
-    // reallocate, which is the whole thing this call exists to avoid.
     pz := out.a.data
     repeat out.rows * out.cols with i:
         pz[i] = 0.0

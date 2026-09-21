@@ -12,31 +12,11 @@
  *
  */
 
-// Flat merge of the salam/token port (see salam/PORTING.md "Layout - FLAT"):
-// token.c + token_xml.c - one package `token`, one file.
-//
-// C differences:
-// - token_kind_t / token_value_kind_t are `type ... = int` aliases plus
-//   TK_* / TV_* constants instead of `enum`s. Two reasons:
-//   (a) the current C backend miscompiles enums declared in a non-main
-//       package (typedef is emitted unprefixed, uses are prefixed), and
-//   (b) enum members are not reachable across packages
-//       (`tok.TokenKind.Eof` is rejected), while `tok.TK_EOF` works.
-//   Values are identical to the C enums, so XML dumps and `as int`
-//   comparisons match the C compiler exactly.
-// - token_value_t's union is a kind tag + separate typed fields
-//   (ival/fval/sval/bval). TV_CHAR payloads live in ival (the codepoint),
-//   as in C. The C `slen` field is dropped: a Salam `str` knows its length.
-// - token_t.span (src_span_t from core/span.h) is inlined as begin_*/end_*/
-//   length fields (u32, mirroring src_pos_t/src_span_t).
-// - token_stream_t is arena-backed in C; here it owns a Vector<Token> - //   call StreamFree() when done.
 package token
 
 import x "xml.salam"
 import co "sal_core.salam"
 
-// ===== token.c =====
-// token_kind_t - order and values MUST stay identical to the C enum.
 pub const TK_EOF := 0
 pub const TK_STMT_END := 1
 pub const TK_IDENT := 2
@@ -147,9 +127,8 @@ pub const TK_LAYOUT_ATTR_NAME := 106
 pub const TK_META := 107
 pub const TK_COMMENT_LINE := 108
 pub const TK_COMMENT_BLOCK := 109
-pub const TK_COUNT := 110 // TK__COUNT - not a real kind
+pub const TK_COUNT := 110
 
-// token_value_kind_t
 pub const TV_NONE := 0
 pub const TV_INT := 1
 pub const TV_FLOAT := 2
@@ -157,7 +136,6 @@ pub const TV_STRING := 3
 pub const TV_CHAR := 4
 pub const TV_BOOL := 5
 
-// k_token_names[] from token.c, indexed by TK_* (110 = TK_COUNT entries).
 k_token_names := [
     "EOF", "STMT_END", "IDENTIFIER", "INT_LITERAL", "FLOAT_LITERAL", "STRING_LITERAL", "TRIPLE_STRING_LITERAL",
     "RAW_STRING_LITERAL", "CHAR_LITERAL", "UTF8_CHAR_LITERAL", "KEYWORD_FUNC", "KEYWORD_RET", "KEYWORD_IF",
@@ -176,23 +154,19 @@ k_token_names := [
     "META", "COMMENT_LINE", "COMMENT_BLOCK"
 ]
 
-// token_kind_t / token_value_kind_t (see file header for why not enums)
 pub type TokenKind = int
 pub type TokenValueKind = int
 
-// token_value_t (union replaced by typed fields; see file header)
 pub struct TokenValue:
-    pub kind: TokenValueKind = 0 // TV_NONE
-    pub ival: u64 = 0 // TV_INT payload; TV_CHAR codepoint
-    pub fval: f64 = 0.0 // TV_FLOAT payload
-    pub sval: str = "" // TV_STRING payload
-    pub bval: bool = false // TV_BOOL payload
+    pub kind: TokenValueKind = 0
+    pub ival: u64 = 0
+    pub fval: f64 = 0.0
+    pub sval: str = ""
+    pub bval: bool = false
 end
 
-// token_t - span fields inlined from core/span.h (src_span_t):
-//   begin/end are src_pos_t { line, col, index }, plus length (all u32).
 pub struct Token:
-    pub kind: TokenKind = 0 // TK_EOF
+    pub kind: TokenKind = 0
     pub lexeme: str = ""
     pub begin_line: u32 = 0
     pub begin_col: u32 = 0
@@ -205,19 +179,15 @@ pub struct Token:
     pub layout_mode: bool = false
 end
 
-// struct token_stream { vec_t v; const char *file; }
 pub struct TokenStream:
     pub toks: Vector<Token> = Vector {}
     pub file: str = ""
 end
 
-// Constructor (cross-package struct literals are not supported, so every
-// consumer builds tokens through this; remaining fields default to zero).
 pub func New(kind: TokenKind, lexeme: str): Token:
     ret Token { kind = kind, lexeme = lexeme }
 end
 
-// token_kind_name()
 pub func KindName(kind: TokenKind): str:
     if kind < 0 || kind >= TK_COUNT:
         ret "UNKNOWN"
@@ -225,13 +195,10 @@ pub func KindName(kind: TokenKind): str:
     ret k_token_names[kind]
 end
 
-// tk_is_keyword()
 pub func IsKeyword(kind: TokenKind): bool:
     ret kind >= TK_KW_FUNC && kind <= TK_KW_MATCH
 end
 
-// Convenience constructors for token_value_t payloads (the C lexer fills
-// the union by hand; these keep call sites tidy).
 pub func ValueNone(): TokenValue:
     ret TokenValue {}
 end
@@ -256,44 +223,30 @@ pub func ValueBool(b: bool): TokenValue:
     ret TokenValue { kind = TV_BOOL, bval = b }
 end
 
-// token_stream_new()
 pub func StreamNew(file: str): TokenStream:
     ret TokenStream { file = file }
 end
 
-// token_stream_push()
 pub func StreamPush(ts &: TokenStream, tok: Token):
     ts.toks.push(tok)
 end
 
-// token_stream_count()
 pub func StreamCount(ts: TokenStream): int:
     ret ts.toks.len()
 end
 
-// token_stream_at()
 pub func StreamAt(ts: TokenStream, i: int): Token:
     ret ts.toks[i]
 end
 
-// token_stream_file()
 pub func StreamFile(ts: TokenStream): str:
     ret ts.file
 end
 
-// No C equivalent (the arena is freed wholesale there); frees the Vector.
 pub func StreamFree(ts &: TokenStream):
     ts.toks.free()
 end
 
-// ===== token_xml.c =====
-// The --emit-tokens-xml dump.
-// - token_value_to_xml (static) is inlined into TokensToXml (E088: the pub
-//   section must stay last, so no private helper here).
-// - sal_u64toa -> core U64Toa; sal_snprintf "%g" -> core Format1("%g", ...),
-//   which delegates to libc snprintf exactly like C.
-// tokens_to_xml - byte-compatible with the C emitter (the driver adds
-// xml.Decl() and writes the file).
 pub func TokensToXml(w &: x.Writer, ts: TokenStream):
     x.Open(w, "tokens")
     x.Attr(w, "source", StreamFile(ts))
@@ -307,7 +260,6 @@ pub func TokensToXml(w &: x.Writer, ts: TokenStream):
         x.Leaf(w, "base", "token_t")
         x.Leaf(w, "type", KindName(t.kind))
         x.Leaf(w, "source", t.lexeme)
-        // token_value_to_xml, inlined (TV_NONE emits nothing)
         if t.value.kind == TV_INT:
             x.Open(w, "value")
             x.Attr(w, "kind", "int")

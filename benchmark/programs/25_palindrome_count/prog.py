@@ -1,5 +1,3 @@
-"""Palindrome-count benchmark."""
-
 count = 0
 for n in range(1, 2000001):
     temp = n

@@ -6,8 +6,6 @@ import at "../ast.salam"
 import i18 "../i18n.salam"
 import sm "../semantic/semantic.salam"
 
-// ===== codegen_call.c =====
-
 func arg_at(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int, i: int): str:
     cn := at.Get(a, n)
     if cn.list.len() > i:
@@ -16,8 +14,6 @@ func arg_at(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int, i: int): str:
     ret "0"
 end
 
-// The C spelling of parameter `i`, falling back to the argument's own type
-// when the callee has no signature (closures, raw function pointers).
 func cg_param_ctype(s &: sm.Sema, a &: at.Ast, sig: int, i: int, argid: int): str:
     if sig != 0 && i < sm.SigAt(s, sig).params.len():
         ret cg_ctype(sm.ToString(s, sm.SigAt(s, sig).params.get(i)))
@@ -32,18 +28,6 @@ func cg_ctype_is_fp(c: str): bool:
     ret str.Equals(c, "double") || str.Equals(c, "float")
 end
 
-// tcc 0.9.27 (x86-64, the current tinycc release and the build bundled with
-// the Windows dist) miscompiles a *prototyped* call in which a computed
-// floating-point argument is followed by another floating-point argument:
-// the earlier one is overwritten with the later one's value. `pow(x/2.0, y)`
-// runs as `pow(y, y)`, and a plain `dist(a + 1.0, b)` loses `a + 1.0`
-// entirely. Only the final float argument of a run is safe, an intervening
-// non-float parameter breaks the run, and variadic calls (every printf the
-// print lowering emits) are unaffected. tcc 0.9.26 and 0.9.28rc are clean.
-//
-// Routing the argument through an opaque identity call forces it into its
-// own slot and sidesteps it. SALAM_FPARG_D/F expand to nothing outside
-// __TINYC__, so no other toolchain pays for this - see hdr_prelude.
 func cg_needs_fparg(
     s &: sm.Sema, a &: at.Ast, sig: int, i: int, argid: int, nextid: int
 ): bool:
@@ -56,8 +40,6 @@ func cg_needs_fparg(
     ret cg_ctype_is_fp(cg_param_ctype(s, a, sig, i + 1, nextid))
 end
 
-// call_emit_arg - appends arg `i`'s C expression to b, taking its address
-// first if the matching param (from sig) is declared `&:`.
 func call_emit_arg(
     g &: Cg, s &: sm.Sema, a &: at.Ast, b &: str.StringBuilder, argid: int, sig: int, i: int,
     nextid: int
@@ -88,24 +70,12 @@ func call_emit_arg(
     sv := sm.SigAt(s, sig)
     mut ref_c := ""
     if at.Get(a, argid).ref_arg_ptr:
-        // Already a pointer to the parameter's type (`this`, or a T*).
         co.SbPuts(b, cg_expr_value(g, s, a, argid))
         ret
     end
     if cg_addressable(s, a, argid):
         ref_c = "&(" + cg_expr(g, s, a, argid) + ")"
     else:
-        // argid isn't a real C lvalue (e.g. a call result, or a member of
-        // a byval-struct-returning call's result) - bind it to a genuine
-        // local temp first, so `&` has an actual lvalue to operate on.
-        //
-        // The temp is declared at FUNCTION scope (g.hoist, spliced in by
-        // cg_hoist_end) and only assigned here. Declaring it inside a
-        // statement expression, `({ T __r = (e); &__r; })`, hands out the
-        // address of an object whose lifetime ends at that expression's
-        // closing brace: the callee then reads a dead stack slot, which
-        // -O0 leaves intact and -O2 reuses - `Clone(Grad(tp, v))` came
-        // back empty in a long function and correct in a short one.
         g.tmpn += 1
         rt := g.tmpn
         argc := cg_expr(g, s, a, argid)
@@ -153,7 +123,6 @@ func cg_fill_defaults(
     end
 end
 
-// call_args - sig is a SigId (0 = C NULL).
 func call_args(g &: Cg, s &: sm.Sema, a &: at.Ast, call: int, sig: int): str:
     mut b := co.SbNew()
     cn := at.Get(a, call)
@@ -193,28 +162,6 @@ func call_args_lead(
     ret r
 end
 
-// cg_sret_wrap - the value of an sret call, given the call text split
-// around where the out-parameter address goes (call_pre + ADDR + call_post)
-// and an optional receiver-binding prefix (pfx_ty "" = none) for a
-// non-addressable receiver/operand a method or operator call still has to
-// take the address of.
-//
-// A struct/vec/dyn/variant return is a normal C value, so `({ decl; call;
-// value; })` can yield it directly - that is what call_sret used before
-// arrays joined type_is_byval_agg, and it is still correct for those.
-// An array return cannot be that block's value the same way (the whole
-// point of giving it a real array declarator is that arrays are not
-// scalars C can hand back from a `({ })`, only decay out of one), and
-// doing that anyway compiles - clang happens not to miscompile it, but
-// gcc does: `array_return.salam` built with --cc=gcc silently printed
-// garbage ("8388608 0 8388608" for "1 2 3") because __sN's storage is
-// scoped to the statement expression's own nested block, and gcc reuses
-// it before the decayed pointer in the enclosing salam_arrcpy/argument
-// position is read - the exact hazard call_emit_arg's own non-
-// addressable-argument temp already hit once under -O2 and was fixed by
-// hoisting rather than nesting. An array temp gets the same fix here:
-// only its bare declaration goes to g.hoist (real function scope), the
-// call and the value are sequenced with it through the comma operator.
 func cg_sret_wrap(
     g &: Cg, s &: sm.Sema, ret_t: int, pfx_ty: str, pfx_name: str, pfx_val: str, call_pre: str, call_post: str
 ): str:
@@ -231,12 +178,6 @@ func cg_sret_wrap(
             g.hoist = g.hoist + "    " + pfx_ty + " " + pfx_name + ";\n"
             lead = "(" + pfx_name + " = (" + pfx_val + ")), "
         end
-        // The callee's own out-parameter is "T (*)[N]" (cg_array_ret_decl,
-        // func_signature) - the pointer C's array-parameter rule would
-        // give this same declarator if it were written as one, not the
-        // plain "T*" a real array object decays to on its own. &tmp is
-        // that pointer; tmp (bare, ordinary decay) is still the right
-        // thing to hand a consumer like salam_arrcpy afterwards.
         ret "(" + lead + call_pre + "&" + tmp + call_post + ", " + tmp + ")"
     end
     if str.Len(act) > 0:
@@ -256,7 +197,6 @@ func cg_sret_wrap(
     ret "({ " + lead3 + rc + " " + tmp3 + "; " + call_pre + "&" + tmp3 + call_post + "; " + tmp3 + "; })"
 end
 
-// call_sret - ret_t is a sm TypeId.
 func call_sret(
     g &: Cg, s &: sm.Sema, ret_t: int, mangled: str, args: str
 ): str:
@@ -277,8 +217,6 @@ func call_value(
     ret "({ void *" + tmp + " = (void*)(" + callee_c + "); ((" + cret + "(*)" + cps + ")(*(void**)" + tmp + "))(" + tmp + args + "); })"
 end
 
-// 'extern func(...)' values are raw C-ABI function pointers (no closure
-// env word) - call the address directly.
 func call_raw_ptr(
     g &: Cg, s &: sm.Sema, a &: at.Ast, n: int, callee: int
 ): str:
@@ -289,24 +227,7 @@ func call_raw_ptr(
     ret "((" + cret + "(*)" + cps + ")(" + cg_expr(g, s, a, callee) + "))(" + args + ")"
 end
 
-// The fflush is not about ordering against salam_ob - it is what makes a
-// printed line reach a redirected stdout at all. The C runtime line-buffers a
-// terminal and fully buffers a file or a pipe, so without it every daemon,
-// container and systemd unit held its log lines in libc's buffer until the
-// buffer filled or the process exited normally - which for a server that runs
-// until it is killed is never. A module that spawns threads deliberately does
-// not touch salam_ob (that buffer is not synchronised), but it needs the flush
-// just as much; leaving it out is what made a threaded program's output look
-// like it was being dropped rather than merely buffered.
-// `pre` holds the argument temporaries (see cg_lower_print) and must stay in
-// front of the call that consumes them. It is emitted before the flush as
-// well as before the printf: an argument may itself print, and its output
-// belongs ahead of this statement's, which only holds if it is evaluated
-// before the buffer is flushed.
 func cg_order_stdout(g &: Cg, pre: str, printf_expr: str): str:
-    // Freestanding there is no stdio and nothing to order against:
-    // salam_out_write_ goes straight to the platform's sink, unbuffered, so
-    // fflush would be an undefined symbol.
     if g.freestanding:
         ret "({ " + pre + printf_expr + "; })"
     end
@@ -316,17 +237,6 @@ func cg_order_stdout(g &: Cg, pre: str, printf_expr: str): str:
     ret "({ " + pre + "salam_out_flush(); " + printf_expr + "; fflush(0); })"
 end
 
-// cg_lower_print_free - the freestanding print path.
-//
-// A hosted build hands everything to printf. Freestanding there is no printf,
-// and providing one would mean shipping a format-string parser and a float
-// formatter into every kernel and every bare-metal program that wanted to
-// print a number. Instead each segment is written directly: literals as
-// themselves, values through the salam_tostr_* family that std/console
-// already defines in pure Salam.
-//
-// The result is a statement expression, so evaluation order is the source
-// order and a segment with a side effect runs exactly once.
 func cg_lower_print_free(
     g &: Cg, s &: sm.Sema, a &: at.Ast, segs &: Vector<PfSeg>, err: bool
 ): str:
@@ -345,8 +255,6 @@ func cg_lower_print_free(
             continue
         end
         e := cg_expr(g, s, a, sg.expr)
-        // Every value becomes a string first. One temporary per segment, so
-        // the expression is evaluated once and in order.
         g.tmpn += 1
         tv := "__pf" + co.I64Toa(g.tmpn as i64)
         mut conv := ""
@@ -363,9 +271,6 @@ func cg_lower_print_free(
         else sg.kind == PF_I32:
             conv = "salam_tostr_i32((int32_t)(" + e + "))"
         else sg.kind == PF_F64:
-            // Floating point formatting needs snprintf and a correctly
-            // rounded conversion; neither exists freestanding, and a kernel
-            // must not touch SSE at all.
             conv = "\"<f64>\""
         else:
             conv = "(" + e + ")"
@@ -444,8 +349,6 @@ func cg_lower_print(
             co.SbPuts(fb, pf_spec_impl(sg2.kind))
             av = "((" + e + `) ? "true" : "false")`
         else sg2.kind == PF_F64:
-            // "%s" over salam_fmt_f64's shortest round-trip text; see
-            // pf_spec_impl.
             co.SbPuts(fb, pf_spec_impl(sg2.kind))
             av = "salam_fmt_f64((double)(" + e + "))"
         else sg2.kind == PF_U32:
@@ -472,19 +375,6 @@ func cg_lower_print(
             co.SbPuts(fb, pf_spec_impl(sg2.kind))
             av = e
         end
-        // Bind to a temporary rather than passing the expression straight to
-        // printf. C leaves the order in which call arguments are evaluated
-        // unspecified, so `println c(), c(), c(), c()` over a counter
-        // closure printed "4 3 2 1" under gcc (right to left) and "1 2 3 4"
-        // under tcc (left to right) - the same program, two answers.
-        // Declarations inside a statement expression are sequenced, so
-        // emitting one per argument pins evaluation to source order on every
-        // compiler. Only done when there is more than one argument to
-        // evaluate: a single one cannot be misordered, and this keeps the
-        // common `println x` unchanged. The stderr path is always bound,
-        // whatever the count: it names the argument list twice (once to
-        // size the buffer with a null snprintf, once to fill it), so an
-        // argument with a side effect would run twice otherwise.
         if nseq > 1 || err:
             g.tmpn += 1
             pi := g.tmpn
@@ -522,9 +412,6 @@ func call_ident(
             mangled = cg_mangle(g, s, "", fnn.name, empty)
             empty.free()
         end
-        // The mangled name carries the callee's declared parameter types, so
-        // the one-argument overload has to be located and its own params used
-        // as the key - the empty list would name the no-argument function.
         if cn.list.len() == 2:
             if fsym != 0:
                 fsv := sm.SymAt(s, fsym)
@@ -540,14 +427,6 @@ func call_ident(
         end
         ret "salam_thread_spawn((salam_thread_fn)" + mangled + ")"
     end
-    /*
-     * Atomic intrinsics. 5 is __ATOMIC_SEQ_CST spelled as its value so no
-     * header has to be reachable from generated code. gcc and clang expand
-     * every one of these to a single instruction; tcc 0.9.27 has none of them
-     * (it treats the name as an implicit declaration and then fails to link),
-     * which is why std/atomic keeps a mutex implementation behind
-     * SALAM_CC_TCC rather than relying on these.
-     */
     if sm.AtomicArity(nm) > 0 && cn.list.len() == sm.AtomicArity(nm) && sm.Lookup(
         s, s.global, nm
     ) == 0:
@@ -565,11 +444,6 @@ func call_ident(
         if str.Equals(nm, "atomic_swap"):
             ret "__atomic_exchange_n(" + pexp + ", (int64_t)(" + vexp + "), 5)"
         end
-        /*
-         * compare_exchange needs a writable `expected`, and salam's is an
-         * rvalue - bind it to a temporary. The weak flag is 0: a spurious
-         * failure would make a caller's retry loop spin for no reason.
-         */
         g.tmpn += 1
         et := g.tmpn
         dexp := cg_expr(g, s, a, cn.list.get(2))
@@ -727,11 +601,6 @@ func call_pkg(
     ret mangled + "(" + args + ")"
 end
 
-// The signature of `method` on the interface behind a "dyn Iface" (or
-// "dyn Iface*", or the qualified "dyn pkg.Iface") receiver type string.
-// 0 when anything along the way does not resolve, which the caller reads
-// as "not an aggregate, no `&:` params" and falls back to the plain call
-// shape.
 func dyn_method_sig(s &: sm.Sema, objts: str, method: str): int:
     if !str.StartsWith(objts, "dyn "):
         ret 0
@@ -764,14 +633,8 @@ func call_dyn(
     if str.Equals(mname, "free"):
         ret "({ " + dynct + " __dv" + t + " = (" + recv + "); " + CG_MEM_FREE + "(__dv" + t + acc + "data); })"
     end
-    // Arguments are shaped by the interface's signature: a `&:` param
-    // takes the argument's address exactly as a direct call would.
     isig := dyn_method_sig(s, objts, mname)
     asv := call_args_lead(g, s, a, n, isig)
-    // A vtable slot whose method returns an aggregate is `void (*)(..., R*)`,
-    // matching the sret lowering every other call path uses, so the result
-    // has to be caught in a temporary and yielded from the statement
-    // expression rather than taken as the call's value.
     ret2 := isig != 0 ? sm.SigAt(s, isig).ret_type : sm.TYPE_NONE
     if type_is_byval_agg(s, ret2):
         dvname := "__dv" + t
@@ -843,9 +706,6 @@ func call_str(
         ret "salam_str_substr(" + recv + ", " + a0 + ", " + a1 + ")"
     end
     if str.Equals(m, "find") || str.Equals(m, "search") || str.Equals(m, "indexOf"):
-        // the match temp is "__fm", never "__fp": clang reserves __fp16 as a
-        // half-float type keyword, so a "__fp" temp that happened to land on
-        // counter 16 emitted a declaration clang parses as a type.
         g.tmpn += 1
         tf := g.tmpn
         ret "({ const char *__fh" + tf + "=(" + recv + "); const char *__fn" + tf + "=(" + a0 + "); const char *__fm" + tf + "=(__fh" + tf + "&&__fn" + tf + ")?strstr(__fh" + tf + ",__fn" + tf + "):0; __fm" + tf + "?(int32_t)(__fm" + tf + "-__fh" + tf + "):-1; })"
@@ -878,15 +738,6 @@ func call_str(
     ret "0"
 end
 
-// A method whose whole body is `ret this.<field>` is a field read wearing a
-// call - len(), cap(), and every other one-line accessor. Both optimizing
-// backends already see through it (a generic instance is emitted `static
-// inline`), but tcc has no inliner at all, so the call survived into the
-// condition of every `each` loop, which re-reads the length once per
-// iteration by design, and into every `until i < v.len():`. Reading the
-// field here is the same read the callee would have done: the receiver is
-// still evaluated exactly once, and a field read has no side effect that
-// could tell the two apart. "" = not one of these.
 func accessor_field(s &: sm.Sema, a &: at.Ast, sig: int): str:
     if sig == 0:
         ret ""
@@ -947,8 +798,6 @@ func call_method(
     ret_struct := sig != 0 && type_is_byval_agg(s, sm.SigAt(s, sig).ret_type)
     ret_t := sig != 0 ? sm.SigAt(s, sig).ret_type : sm.TYPE_NONE
     if obj_is_ptr || addressable:
-        // Generated once: cg_expr can allocate temporaries, so asking it
-        // for the receiver twice would emit two of them.
         oexpr := cg_expr(g, s, a, obj)
         recv := obj_is_ptr ? oexpr : "&(" + oexpr + ")"
         if ret_struct:
@@ -957,9 +806,6 @@ func call_method(
         if str.Len(asv) == 0:
             fld := accessor_field(s, a, sig)
             if str.Len(fld) > 0:
-                // A value receiver reads the field directly: &x-> would
-                // only ask the C compiler to fold the pair back apart,
-                // and tcc has nothing to fold it with.
                 if obj_is_ptr:
                     ret "((" + oexpr + ")->" + cg_cident(fld) + ")"
                 end
@@ -1041,7 +887,6 @@ func call_member(
     ret call_method(g, s, a, n, obj, callee, objts)
 end
 
-// cg_call - returns the C expression text.
 func cg_call(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
     calleeid := at.Get(a, n).a
     if calleeid != 0:

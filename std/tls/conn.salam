@@ -1,15 +1,6 @@
 package tls
 import net.internal.rawsock
 
-
-// The public connection API. The handshake flows live in driver.salam.
-
-// The public TLS connection: dial, handshake, read, write, close.
-//
-// The handshake driver lives here rather than in handshake13.salam so that the
-// message construction and parsing stay independently testable without a
-// socket.
-
 pub struct Config:
     pub server_name: str = ""
     // Path to a PEM trust store. Empty means the default search in roots.salam.
@@ -43,8 +34,6 @@ func _conn_fail(c &: Conn, msg: str): bool:
     ret false
 end
 
-// ---------------------------------------------------------------- public API
-
 // RFC 8446 section 4.6.3. A peer may rekey at any point after the handshake:
 //
 //   application_traffic_secret_N+1 =
@@ -72,7 +61,6 @@ end
 // sending direction and answer in kind.
 func _do_key_update(c &: Conn, requested: bool): bool:
     if c.h.ver != TLS13:
-        // TLS 1.2 has no KeyUpdate; seeing one means the peer is confused
         ret false
     end
     if !_traffic_update(c.h, c.h.s_ap_secret):
@@ -86,8 +74,6 @@ func _do_key_update(c &: Conn, requested: bool): bool:
     if !requested:
         ret true
     end
-    // Answer before rekeying our own send direction, so the reply still goes
-    // out under the key the peer currently has.
     mut msg := _newbuf(8)
     defer _buf_free(msg)
     _put8(msg, HS_KEY_UPDATE)
@@ -132,9 +118,6 @@ func _fill_pending(c &: Conn): bool:
             end
             ret false
         else if typ == REC_HANDSHAKE:
-            // Post-handshake messages. NewSessionTicket carries no application
-            // data and is genuinely safe to drop, but KeyUpdate rekeys the
-            // connection and MUST be acted on.
             if frag.len >= 4:
                 if _bufat(frag, 0) == HS_KEY_UPDATE:
                     req := _bufat(frag, 4) == 1
@@ -171,11 +154,6 @@ pub func Dial(host: str, port: int, cfg: Config): Conn:
     if conf.server_name.len() == 0:
         conf.server_name = host
     end
-    // The name VERIFIED is the configured server_name, not the TCP target.
-    // Those differ whenever a caller connects to one address but expects a
-    // particular identity (a pinned IP, a proxy, a test harness). Checking the
-    // dial target instead would mean a caller who explicitly asked for one
-    // identity silently gets whatever the endpoint happens to prove.
     c.host = conf.server_name
     s := rawsock.Connect(host, port)
     if !rawsock.Ok(s):
@@ -295,9 +273,6 @@ pub func WrapServer(fd: i64, cfg: ServerConfig): Conn:
     c.h.srand = _newbuf(32)
     c.h.ecpriv = _newbuf(32)
     c.h.ecpub = _newbuf(65)
-    // A peer that connects and then goes quiet must not pin this thread
-    // for the life of the process, which is what an unbounded recv on an
-    // accepted socket does.
     c.h.rec.read_deadline_ms = HANDSHAKE_READ_TIMEOUT_MS
     _do_server_handshake(c, cfg)
     c.h.rec.read_deadline_ms = 0

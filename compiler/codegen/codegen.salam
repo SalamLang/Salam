@@ -12,53 +12,6 @@
  *
  */
 
-// Flat merge of the salam/codegen port (see salam/PORTING.md "Layout - FLAT"):
-// compiler/src/codegen/ - one package `codegen`, one file. Import alias for
-// consumers: `cg`. The module's expr/stmt emitters are mutually recursive
-// with everything else, so the module is ported by two sequential agents
-// INTO THIS ONE FILE:
-//
-//   6a (DONE): codegen.c (run/orchestration), codegen_emit.c (emit context),
-//       codegen_type.c (type -> C emission, mangling), codegen_header.c
-//       (the generated .h; dyn vtables), codegen_decl.c (signatures,
-//       extern protos, cg_function), print_fmt.c, plus sig_of_decl from
-//       codegen_overload.c (header emission needs it - 6b: do NOT re-port).
-//   6b (DONE): codegen_expr.c, codegen_stmt.c, codegen_call.c,
-//       codegen_lambda.c, the rest of codegen_overload.c - the former
-//       stubs are replaced in place in the "6b" section below.
-//
-// C -> Salam decisions for this module (6b must inherit these):
-// - cg_t -> `pub struct Cg` (all fields pub - E017). Pointer/struct fields
-//   become indices: cur_struct: SymId, cur_fn_home: ScopeId, cur_lambda:
-//   at.NodeId; "" = the C NULL for every str field (module/pkg/entry/
-//   src_path/target_triple/match_result_tmp/match_end_label).
-// - arena_t* and cg_fmt(...) are GONE: strings are values; call sites build
-//   text with `+` / co.Format* instead of printf-style formats.
-// - sema_result_t* cg->sem is NOT stored in Cg: thread `s &: sm.Sema`
-//   (and `a &: at.Ast` for tree access) through every function, exactly
-//   like the semantic port threads the Ast. Parameter order: (g, s, a, ...).
-// - sb_t *h / *c / *lam_decls / *lam_defs -> four str.StringBuilder fields
-//   bh / bc / blamd / blamf plus a `cur` sink selector (CG_OUT_*). The C
-//   pointer swap `savec = cg->c; cg->c = cg->h;` becomes
-//   `save := g.cur; g.cur = CG_OUT_H; ...; g.cur = save`. Every
-//   sb_puts(cg->c, ...) is out(g, ...) (current sink); sb_puts(cg->h/h, ...)
-//   is outh(g, ...) (always the header). 6b's lambda lifting must write
-//   lam decls/defs the same way (out with g.cur = CG_OUT_LAMD / _LAMF, or
-//   outb directly).
-// - vec_t locals/deferred/vec_types/variant_types/dyn_ifaces/dyn_impls ->
-//   Vector<str>; fn_defers -> Vector<int> (at.NodeIds of AST_DEFER stmts).
-// - type_t* parameter lists (mangling, signatures) -> Vector<int> of
-//   sm TypeIds; type_to_string -> sm.ToString.
-// - The C's fixed char buffers keep their clamps where observable
-//   (iface[96], variant members [64][160], parse_typestr base cap,
-//   cg_vec_elem 96, dyn impl pair 256): giant nested types truncate
-//   identically.
-// - Known C bugs are ported bug-for-bug: hdr_globals emits `extern const`
-//   for a non-mut package global while emit_globals defines it non-const
-//   (the PORTING.md extern-const array bug), hdr_enums emits plain
-//   `typedef enum` names that collide across packages, dyn_collect happily
-//   records non-interface names like "Shape[1]" (filtered later by symbol
-//   kind), and parse_typestr only strips ONE trailing '*'.
 package codegen
 
 import str
@@ -66,17 +19,12 @@ import co "../sal_core.salam"
 import at "../ast.salam"
 import lg "../logger.salam"
 
-// ===== codegen.h =====
-// #define SALAM_MOD_PREFIX / SALAM_MEM_* (names are repo-unique: flat C
-// global namespace, see PORTING.md).
 pub const CG_MOD_PREFIX := "salam_mod_"
 pub const CG_MEM_ALLOC := "_Salam_mem_Allocate_u64"
 pub const CG_MEM_ALLOC_ZEROED := "_Salam_mem_AllocateZeroed_u64"
 pub const CG_MEM_REALLOC := "_Salam_mem_Reallocate_void_ptr_u64"
 pub const CG_MEM_FREE := "_Salam_mem_Free_void_ptr"
 
-// ===== print_fmt.h =====
-// pf_kind_t - order and values MUST stay identical to the C enum.
 pub const PF_LIT := 0
 pub const PF_STR := 1
 pub const PF_I32 := 2
@@ -88,7 +36,6 @@ pub const PF_F64 := 7
 pub const PF_BOOL := 8
 pub const PF_CHAR := 9
 
-// Output sink selector for Cg.cur (replaces the C sb_t* cg->c swaps).
 pub const CG_OUT_C := 0
 pub const CG_OUT_H := 1
 pub const CG_OUT_LAMD := 2
@@ -97,7 +44,6 @@ pub const CG_OUT_LAMF := 3
 const K_CG_CKW_COUNT := 48
 const K_CG_BASE_COUNT := 17
 
-// cg_is_c_keyword's kw[] (codegen_type.c), order kept.
 k_cg_ckw := [
     "auto", "break", "case", "char", "const", "continue", "default", "do", "double", "else", "enum",
     "extern", "float", "for", "goto", "if", "inline", "int", "long", "register", "restrict", "return",
@@ -106,7 +52,6 @@ k_cg_ckw := [
     "_Alignof", "_Atomic", "_Generic", "_Noreturn", "_Static_assert", "_Thread_local"
 ]
 
-// base_ctype's m[] as two parallel arrays (order kept).
 k_cg_base_s := [
     "void", "bool", "char", "str", "uchar", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "size",
     "f32", "f64", "File"
@@ -117,69 +62,42 @@ k_cg_base_c := [
     "uint8_t", "uint16_t", "uint32_t", "uint64_t", "size_t", "float", "double", "salam_file"
 ]
 
-// g_cg_export_{pkg,from,to} - --export=Fn:CName overrides (driver.salam
-// populates via AddExportOverride while scanning each module's own AST, so
-// pkg is always that function's OWN defining package). Keyed by (pkg, fn):
-// name-only would rename every same-named free function this build
-// transitively pulls in (e.g. llvm.salam's own Emit() vs. sal_web.salam's).
 mut g_cg_export_pkg := Vector {} as Vector<str>
 mut g_cg_export_from := Vector {} as Vector<str>
 mut g_cg_export_to := Vector {} as Vector<str>
 
-// ===== codegen.h =====
-// codegen_output_t. C field `module` -> module_name (kept obvious).
 pub struct Output:
     pub module_name: str = ""
     pub h_src: str = ""
     pub c_src: str = ""
 end
 
-// ===== print_fmt.h =====
-// pf_seg_t. `expr` is an at.NodeId (0 = none); `text` "" = the C NULL.
 pub struct PfSeg:
     pub kind: int = 0
     pub text: str = ""
     pub expr: int = 0
 end
 
-// ===== codegen_internal.h =====
-// cg_t (see the file header for every representation change).
 pub struct Cg:
     pub log: lg.Logger = lg.New(2, false)
     pub module: str = ""
-    pub bh: str.StringBuilder = str.NewBuilder() // sb_t *h
-    pub bc: str.StringBuilder = str.NewBuilder() // sb_t *c
-    pub blamd: str.StringBuilder = str.NewBuilder() // sb_t *lam_decls
-    pub blamf: str.StringBuilder = str.NewBuilder() // sb_t *lam_defs
-    pub cur: int = 0 // current sink (CG_OUT_*), replaces cg->c swaps
+    pub bh: str.StringBuilder = str.NewBuilder()
+    pub bc: str.StringBuilder = str.NewBuilder()
+    pub blamd: str.StringBuilder = str.NewBuilder()
+    pub blamf: str.StringBuilder = str.NewBuilder()
+    pub cur: int = 0
     pub indent: int = 0
     pub locals: Vector<str> = Vector {}
-    pub cur_struct: int = 0 // SymId (0 = C NULL)
-    pub cur_fn_home: int = 0 // ScopeId (0 = C NULL)
-    // While a struct literal is filling in a field's DEFAULT expression, the
-    // scope that expression was written in - the declaring module's global
-    // scope, which is not this module's when the struct came from a package.
-    // `pub category: int = ERR_EXECUTION` in std/graphql is emitted at every
-    // construction site, so the global it names has to be spelled the way its
-    // own package defines it. Only cg_global_ref reads this.
-    pub cur_lit_home: int = 0 // ScopeId (0 = C NULL)
+    pub cur_struct: int = 0
+    pub cur_fn_home: int = 0
+    pub cur_lit_home: int = 0
     pub safe: bool = false
     pub debug_info: bool = false
     pub single_threaded: bool = false
     pub src_path: str = ""
     pub tmpn: int = 0
     pub cur_sret: bool = false
-    // Emitting the entry function, which is `int main` in C however the
-    // Salam side declares it - so a bare `ret` inside it has to become
-    // `return 0;`, not `return;`.
     pub cur_is_main: bool = false
-    // Declarations hoisted to the top of the function being emitted, and
-    // the sink offset just inside its opening brace where they go. A call
-    // argument that is an rvalue struct bound to a `&:` parameter needs a
-    // temporary whose lifetime covers the call; a temporary declared inside
-    // a GNU statement expression dies at that expression's closing brace,
-    // so its address dangled and -O2 reused the slot (see call_emit_arg).
-    // The temporaries are declared here instead and assigned in place.
     pub hoist: str = ""
     pub hoist_pos: i64 = 0
     pub hoist_active: bool = false
@@ -190,38 +108,22 @@ pub struct Cg:
     pub pkg: str = ""
     pub entry: str = ""
     pub deferred: Vector<str> = Vector {}
-    // Globals whose initializer runs in the module's init function
-    // (emit_globals defers it), named by their own AST_VAR_DECL/
-    // AST_CONST_DECL node id rather than pre-built text: building the
-    // text has to wait until emit_module_init has opened a hoist scope,
-    // so an array-returning call in the initializer hoists its temp into
-    // the init function itself instead of a doomed nested one.
     pub deferred_globals: Vector<int> = Vector {}
-    pub fn_defers: Vector<int> = Vector {} // at.NodeIds (6b: AST_DEFER stmts)
-    // fn_defers depth at the start of each enclosing loop body, so break and
-    // continue can run that body's defers before jumping over its end.
+    pub fn_defers: Vector<int> = Vector {}
     pub loop_dmark: Vector<int> = Vector {}
     pub lam_n: int = 0
     pub clos_n: int = 0
-    pub cur_lambda: int = 0 // at.NodeId (0 = C NULL)
+    pub cur_lambda: int = 0
     pub is_gui_mode: bool = false
-    // Freestanding: emit no libc includes, no stdio buffering and no
-    // allocator tuning. Set from the target triple in Run.
     pub freestanding: bool = false
-    // Kernel: freestanding, and floating point is rejected.
     pub kernel: bool = false
     pub target_triple: str = ""
     pub match_result_tmp: str = ""
     pub match_end_label: str = ""
-    // C type used to declare match_result_tmp inside its "({ ... })" block,
-    // and the type any match-arm "value; goto end;" assignment into it
-    // should cast to. See cg_match_expr's own comment for why this is
-    // usually the match's real result type, except when that's a pointer.
     pub match_result_ctype: str = ""
     pub compact: bool = false
 end
 
-// cg_export_override - "" if (pkg, fname) has no registered override.
 func cg_export_override(pkg: str, fname: str): str:
     repeat g_cg_export_from.len() with i:
         if str.Equals(g_cg_export_pkg.get(i), pkg) && str.Equals(g_cg_export_from.get(i), fname):
@@ -231,14 +133,8 @@ func cg_export_override(pkg: str, fname: str): str:
     ret ""
 end
 
-// ---------------------------------------------------------------------------
-// Low-level shared helpers (no direct C equivalent).
-// ---------------------------------------------------------------------------
-
-// Unsigned byte read from a str (same idiom as the other ports).
 inline func byte_at(s: str, i: int): int: ret co.ByteAt(s, i) end
 
-// isdigit / isalnum on a byte (C default locale: ASCII only).
 func is_digit_b(c: int): bool:
     ret c >= 48 && c <= 57
 end
@@ -247,7 +143,6 @@ func is_alnum_b(c: int): bool:
     ret (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122)
 end
 
-// &node->span as a co.SrcSpan (nodes inline their span fields).
 func span_of(a &: at.Ast, id: int): co.SrcSpan:
     n := at.Get(a, id)
     ret co.MakeSpan(
@@ -256,7 +151,6 @@ func span_of(a &: at.Ast, id: int): co.SrcSpan:
     )
 end
 
-// sb_puts(cg->c, s) - append to the CURRENT sink (see Cg.cur).
 func out(g &: Cg, s: str):
     if g.cur == CG_OUT_H:
         str.BufAppend(g.bh, s)
@@ -269,7 +163,6 @@ func out(g &: Cg, s: str):
     end
 end
 
-// sb_putc(cg->c, ch)
 func outc(g &: Cg, code: int):
     if g.cur == CG_OUT_H:
         str.BufAppendChar(g.bh, code)
@@ -282,7 +175,6 @@ func outc(g &: Cg, code: int):
     end
 end
 
-// sb_puts(cg->h, s) / sb_puts(h, s) - always the header builder.
 func outh(g &: Cg, s: str):
     str.BufAppend(g.bh, s)
 end

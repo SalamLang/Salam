@@ -6,15 +6,10 @@ import tok "../token.salam"
 import at "../ast.salam"
 import i18 "../i18n.salam"
 
-// ===========================================================================
-// ===== sema_expr.c (5c) =====
-// ===========================================================================
-
 func tk_is_arith(k: int): bool:
     ret k == tok.TK_PLUS || k == tok.TK_MINUS || k == tok.TK_STAR || k == tok.TK_SLASH || k == tok.TK_PERCENT
 end
 
-// sema_tk_is_bitwise (shared with 5d's sema_stmt).
 func sema_tk_is_bitwise(k: int): bool:
     ret k == tok.TK_AMP || k == tok.TK_PIPE || k == tok.TK_CARET || k == tok.TK_SHL || k == tok.TK_SHR
 end
@@ -47,7 +42,6 @@ func int_lit_fits(u: u64, k: int): bool:
     ret false
 end
 
-// sema_type_is_stringable - `+`-concatenation operand rule.
 func sema_type_is_stringable(s &: Sema, t: int): bool:
     k := ty_at(s, t).kind
     ret k == TY_STR || k == TY_UCHAR || k == TY_BOOL || k == TY_CHAR || type_is_numeric(s, t)
@@ -61,7 +55,6 @@ func tk_is_eq(k: int): bool:
     ret k == tok.TK_EQ || k == tok.TK_NE
 end
 
-// sema_op_method - "" = the C NULL (no operator method for this token).
 func sema_op_method(k: int): str:
     if k == tok.TK_PLUS:
         ret "operator_add"
@@ -102,7 +95,6 @@ func sema_op_method(k: int): str:
     ret ""
 end
 
-// sema_compound_base - TK_EOF = the C "not a compound assignment".
 func sema_compound_base(k: int): int:
     if k == tok.TK_PLUS_EQ:
         ret tok.TK_PLUS
@@ -140,8 +132,6 @@ func sema_compound_base(k: int): int:
     ret tok.TK_EOF
 end
 
-// sema_try_op_overload - TYPE_NONE = the C NULL (no such operator method);
-// rhs_type TYPE_NONE = unary (no argument pushed).
 func sema_try_op_overload(
     s &: Sema, a &: at.Ast, n: int, ssym: int, mname: str, rhs_type: int
 ): int:
@@ -222,10 +212,6 @@ func check_binary(s &: Sema, a &: at.Ast, nid: int): int:
                 ret sema_decorate(s, a, nid, ov2)
             end
         end
-        // No operator_eq of its own: two values of one struct type still
-        // compare, field by field, through a derived function. Anything
-        // else used to fall through as if the operands were scalars and
-        // reach the C compiler as `a == b` on two structs.
         if (op == tok.TK_EQ || op == tok.TK_NE) && type_equiv(s, l, r):
             fname := derive_struct_eq(s, a, l, sp)
             if str.Len(fname) > 0:
@@ -309,14 +295,9 @@ func check_binary(s &: Sema, a &: at.Ast, nid: int): int:
             )
             ret sema_decorate(s, a, nid, sema_err_ty(s))
         end
-        // Shifts keep the left operand's (promoted) type; the other bitwise
-        // operators take the common integer type of both operands.
         if op == tok.TK_SHL || op == tok.TK_SHR:
             lt := type_common_arith(s, l, l)
             rt := lt >= 0 ? lt : l
-            // A literal count at or past the operand's width is undefined
-            // in the generated C; the folder makes the same check when
-            // both sides are constants.
             mut cnt := 0 as i64
             if lit_int(a, n.b, cnt):
                 width := fold_ts_bits(type_to_string(s, rt))
@@ -353,11 +334,6 @@ func check_binary(s &: Sema, a &: at.Ast, nid: int): int:
         ):
             cok = true
         end
-        // Two values of one type are only comparable when C can compare
-        // them: a slice, array, Vector, HashMap, `dyn` or Variant is an
-        // aggregate, and `sl == sl2` reached the C compiler as a comparison
-        // of two structs ("invalid operands to binary ==") or, for arrays,
-        // of two addresses.
         if cok && !sema_kind_is_comparable(ty_at(s, l).kind):
             cok = false
         end
@@ -373,10 +349,6 @@ func check_binary(s &: Sema, a &: at.Ast, nid: int): int:
     ret sema_decorate(s, a, nid, sema_err_ty(s))
 end
 
-// sema_kind_is_comparable - the kinds `==`, `<` and friends can be applied to
-// at the C level: scalars, strings (strcmp), pointers, enums and function
-// values. Structs are handled before this by their operator_eq or the
-// derived field-wise comparison.
 func sema_kind_is_comparable(k: int): bool:
     ret k == TY_BOOL || k == TY_CHAR || k == TY_UCHAR || k == TY_STR || k == TY_PTR || k == TY_NULL || k == TY_ENUM || k == TY_FUNC || k == TY_I8 || k == TY_I16 || k == TY_I32 || k == TY_I64 || k == TY_U8 || k == TY_U16 || k == TY_U32 || k == TY_U64 || k == TY_SIZE || k == TY_F32 || k == TY_F64
 end
@@ -441,10 +413,6 @@ func check_ternary(s &: Sema, a &: at.Ast, nid: int): int:
     ret sema_decorate(s, a, nid, sema_err_ty(s))
 end
 
-// `nid` is a `.Member` access whose object already denotes an enum type
-// (`sy`) rather than a value of it - either a bare `EnumName` identifier, or
-// (via the package-qualified branch below) `pkg.EnumName`. Shared so both
-// shapes resolve identically instead of duplicating the member lookup.
 func resolve_enum_member(s &: Sema, a &: at.Ast, nid: int, sy: int): int:
     n := at.Get(a, nid)
     sp := span_of(a, nid)
@@ -493,11 +461,6 @@ func check_member(s &: Sema, a &: at.Ast, nid: int): int:
                 ret sema_decorate(s, a, nid, sema_err_ty(s))
             end
             if mv.kind == SYM_FUNC:
-                // `pkg.f` read as a value decays to its address, typed i64 -
-                // exactly what a bare `f` in the current package does. It used
-                // to be rejected outright, so every function a router or any
-                // other handler table points at had to live in the same file
-                // as the table.
                 if !func_addr_target_ok(s, a, m, mname, sp):
                     ret sema_decorate(s, a, nid, sema_err_ty(s))
                 end
@@ -513,12 +476,6 @@ func check_member(s &: Sema, a &: at.Ast, nid: int): int:
                 at.Put(a, nid, fvn2)
                 ret sema_decorate(s, a, nid, sema_ty(s, TY_I64))
             end
-            // `pkg.EnumName` or `pkg.StructName` alone: a bare reference to
-            // the type itself, not a value - the same rule the unqualified
-            // case enforces below. A caller writing `pkg.EnumName.Member`
-            // reaches it through the branch further below instead, which
-            // recognizes this exact shape one level up before ever landing
-            // here.
             if mv.kind == SYM_ENUM || mv.kind == SYM_STRUCT:
                 serr(
                     s, 1, sp, co.Format2(
@@ -539,11 +496,6 @@ func check_member(s &: Sema, a &: at.Ast, nid: int): int:
         end
     end
 
-    // `pkg.EnumName.Member`: `n.a` is itself `pkg.EnumName`, an AST_MEMBER
-    // node (the parser has no 3-level lookahead, so this always builds as a
-    // plain left-associative member chain). Recognize that shape here,
-    // before the generic sema_check_expr(s, a, n.a) fallback below would
-    // otherwise evaluate `pkg.EnumName` as if it were a value and fail.
     if n.a != 0 && at.KindOf(a, n.a) == at.AST_MEMBER:
         an := at.Get(a, n.a)
         if an.a != 0 && at.KindOf(a, an.a) == at.AST_IDENTIFIER:

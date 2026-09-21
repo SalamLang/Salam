@@ -20,29 +20,6 @@ package term
 import str
 import mem
 
-// The terminal itself: is one attached, how big is it, how much colour does
-// it admit, and how do we take it out of cooked mode. Everything that just
-// *renders* an escape sequence lives in this package's other files -
-// term_color.salam (SGR), term_cursor.salam (cursor/screen), term_key.salam
-// (decoding input), term_progress.salam (bars and spinners) - and all of
-// them route their bytes through Write/Flush here.
-//
-// Two output styles are exported side by side, because a CLI wants both:
-//
-//   - `Seq*` functions RETURN the escape string, so several can be glued
-//     together with `+` (or a str.StringBuilder) and written in one syscall.
-//     They are pure, and so they are what the tests assert on.
-//   - the same name without `Seq` WRITES and flushes immediately, which is
-//     what you want for "hide the cursor, then do a slow thing".
-//
-// Colour helpers additionally honour SetColorMode, so a program whose output
-// is redirected into a file does not fill it with SGR noise.
-//
-// PLATFORM SUPPORT. The POSIX path (termios + TIOCGWINSZ + isatty) is the
-// one exercised here, under a real pty. The Windows path (GetConsoleMode /
-// SetConsoleMode / GetConsoleScreenBufferInfo) is written against the
-// documented API but has NOT been run on a real console.
-
 extern:
     func printf(fmt: str, ...): int
     // Declared by <stdio.h>/<stdlib.h>/<string.h> in every generated module,
@@ -72,8 +49,6 @@ else:
         func cfmakeraw(t: void*)
     end
 end
-
-// ---------------------------------------------------------------- constants
 
 @en "StdinFd"
 @fa "شناسه ورودی"
@@ -139,8 +114,6 @@ const _ECHO := 0x8
 mut _color_mode := 0
 mut _color_auto := 0
 
-// ------------------------------------------------------------------- types
-
 // What Restore needs to put the terminal back exactly as it was found.
 // On POSIX `saved` owns a heap copy of the original `struct termios`; on
 // Windows it stays null and the two console modes carry the state instead.
@@ -162,8 +135,6 @@ pub struct WinSize:
     pub cols: int = 80
     pub rows: int = 24
 end
-
-// --------------------------------------------------------------- internals
 
 func _env(name: str): str:
     v := getenv(name)
@@ -191,15 +162,15 @@ func _lflag_off(): int:
 end
 
 func _vmin_off(): int:
-    if SALAM_OS_MAC: ret 48 end // c_cc at 32 + VMIN 16
-    if SALAM_OS_BSD: ret 32 end // c_cc at 16 + VMIN 16
-    ret 23 // Linux: c_cc at 17 + VMIN 6
+    if SALAM_OS_MAC: ret 48 end
+    if SALAM_OS_BSD: ret 32 end
+    ret 23
 end
 
 func _vtime_off(): int:
-    if SALAM_OS_MAC: ret 49 end // c_cc at 32 + VTIME 17
-    if SALAM_OS_BSD: ret 33 end // c_cc at 16 + VTIME 17
-    ret 22 // Linux: c_cc at 17 + VTIME 5
+    if SALAM_OS_MAC: ret 49 end
+    if SALAM_OS_BSD: ret 33 end
+    ret 22
 end
 
 func _icanon_bit(): int:
@@ -263,11 +234,6 @@ func _set_mode(fd: int, full: bool): TermState:
         if h == null: ret st end
         st.mode_in = _win_mode(fd)
         st.mode_out = _win_mode(StdoutFd)
-        // Clear ENABLE_LINE_INPUT (0x2) and ENABLE_ECHO_INPUT (0x4); drop
-        // ENABLE_PROCESSED_INPUT (0x1) as well for full raw, so that Ctrl-C
-        // arrives as a keystroke, and add ENABLE_VIRTUAL_TERMINAL_INPUT
-        // (0x200) so the arrow keys report the same escape sequences they do
-        // everywhere else.
         mut m := st.mode_in & ~(0x2 | 0x4)
         if full: m = m & ~0x1 end
         m = m | 0x200
@@ -279,8 +245,6 @@ func _set_mode(fd: int, full: bool): TermState:
         saved := mem.Allocate(_TERMIOS_CAP as u64)
         memset(saved, 0, _TERMIOS_CAP as u64)
         if tcgetattr(fd, saved) != 0:
-            // Not a terminal (a pipe, a CI runner): hand back an ok=false
-            // state, which Restore will correctly decline to act on.
             mem.Free(saved)
             ret st
         end
@@ -293,8 +257,6 @@ func _set_mode(fd: int, full: bool): TermState:
             lf := ((work as i64) + _lflag_off()) as int*
             lf[0] = lf[0] & ~(_ECHO | _icanon_bit())
         end
-        // VMIN=1/VTIME=0: a read blocks until exactly one byte is available.
-        // cfmakeraw already arranges this, but cbreak mode has to say so.
         vmin := ((work as i64) + _vmin_off()) as i8*
         vtime := ((work as i64) + _vtime_off()) as i8*
         vmin[0] = 1 as i8
@@ -308,8 +270,6 @@ func _set_mode(fd: int, full: bool): TermState:
         ret st
     end
 end
-
-// ------------------------------------------------------------------- output
 
 // Write goes through printf deliberately: `print`/`println` are printf too,
 // so escape sequences and ordinary program output share one stdio buffer and
@@ -354,8 +314,6 @@ pub func Emit(s: str):
     Flush()
 end
 
-// ---------------------------------------------------------------- detection
-
 @en "IsTTY"
 @fa "پایانه است"
 @ar "هل طرفیة"
@@ -384,10 +342,6 @@ pub func Size(): WinSize:
     if SALAM_OS_WINDOWS:
         h := _win_handle(StdoutFd)
         if h != null:
-            // CONSOLE_SCREEN_BUFFER_INFO: dwSize(4) dwCursorPosition(4)
-            // wAttributes(2) srWindow{Left,Top,Right,Bottom}(8, at offset 10)
-            // dwMaximumWindowSize(4). The window rect, not dwSize, is the
-            // visible area - dwSize is the scrollback buffer.
             info := mem.Allocate(32 as u64)
             defer mem.Free(info)
             memset(info, 0, 32 as u64)
@@ -407,13 +361,9 @@ pub func Size(): WinSize:
             end
         end
     else:
-        // struct winsize { u16 ws_row; ws_col; ws_xpixel; ws_ypixel; }
         ws := mem.Allocate(16 as u64)
         defer mem.Free(ws)
         req := _winsz_req()
-        // stdout first, then stderr, then stdin: a program whose stdout is
-        // piped into `less` still has a terminal on the other two, and that
-        // width is the one worth wrapping to.
         mut fd := StdoutFd
         until fd <= StderrFd:
             memset(ws, 0, 16 as u64)
@@ -452,8 +402,6 @@ pub func Rows(): int:
     s := Size()
     ret s.rows
 end
-
-// ----------------------------------------------------------- colour support
 
 @en "SetColorMode"
 @fa "تنظیم حالت رنگ"
@@ -516,14 +464,6 @@ pub func EnableAnsi(): bool:
         buf := mem.Allocate(8 as u64)
         defer mem.Free(buf)
         memset(buf, 0, 8 as u64)
-        // GetConsoleMode only succeeds on a real console handle. When it
-        // fails, stdout is a pipe or a file: there is no console mode to
-        // switch, and the escape bytes reach the other end untouched -
-        // exactly what happens on POSIX, which reports true for the same
-        // redirected stream. Report true too, so the answer does not depend
-        // on the platform for a case neither platform has to do anything
-        // about. A false here means the opposite: this IS a console and
-        // virtual-terminal processing could not be turned on.
         if GetConsoleMode(h, buf) == 0: ret true end
         p := buf as int*
         ret SetConsoleMode(h, p[0] | 0x4) != 0
@@ -531,8 +471,6 @@ pub func EnableAnsi(): bool:
         ret true
     end
 end
-
-// ----------------------------------------------------------------- raw mode
 
 // MakeRaw hands the program every keystroke unprocessed - no echo, no line
 // editing, and no Ctrl-C/Ctrl-Z signals. ALWAYS pair it with Restore, via a
@@ -570,8 +508,6 @@ pub func Restore(st &: TermState): bool:
     st.ok = false
     ret done
 end
-
-// ------------------------------------------------------------ odds and ends
 
 @en "Bell"
 @fa "زنگ"

@@ -7,8 +7,6 @@ import at "../ast.salam"
 import lg "../logger.salam"
 import sm "../semantic/semantic.salam"
 
-// ===== codegen.c =====
-
 func detect_gui_imports(a &: at.Ast, program: int): bool:
     prog := at.Get(a, program)
     repeat prog.list.len() with i:
@@ -37,10 +35,6 @@ func emit_private_protos(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
         if d.synthetic:
             continue
         end
-        // The bare-name match against g.entry means "this IS the program's
-        // main" only inside the entry package; elsewhere a private function
-        // that happens to be named the same as the entry point is just an
-        // ordinary private function and still needs its forward prototype.
         is_entry := str.Equals(d.name, g.entry) && str.Equals(g.pkg, "main")
         if d.kind == at.AST_FUNC_DEF && !d.is_extern && !is_entry && !d.is_pub:
             fsym := sm.LookupLocal(s, s.global, d.name)
@@ -53,27 +47,6 @@ func emit_private_protos(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
     out(g, "\n")
 end
 
-// A global whose initialiser is not a constant is emitted as a plain
-// definition plus a separate assignment, because C only accepts a constant
-// expression there. Those assignments used to be replayed at the top of `main`
-// and nowhere else, which meant they ran for the main module only: a
-// `mut g_cat := catalog.New()` in an imported package stayed zeroed, and the
-// first read of it failed a long way from the cause ("Vector.get: index out of
-// bounds") with nothing to say the initialiser had never run.
-//
-// Every module gets one of these instead, and runs its imports' first, so the
-// graph comes up bottom-up before main's body starts. The flag is set before
-// the recursion, not after, so an import cycle terminates rather than
-// recursing forever - the same trade C++ makes for static initialisation.
-// emit_deferred_globals - the deferred globals' own initializer statements
-// (emit_globals already wrote their bare declarations and queued their
-// AST ids in g.deferred_globals). Called from inside emit_module_init's
-// own hoist scope, so an array-returning call in one of them hoists its
-// temp into the init function itself - the same reason cg_function opens
-// one before emitting a body - rather than into a `({ T t; f(&t); t; })`
-// whose temp's address stops being safe to use the moment that nested
-// block's own `}` is reached (see cg_sret_wrap and call_emit_arg's own
-// comment for the miscompile this exact shape already caused once).
 func emit_deferred_globals(g &: Cg, s &: sm.Sema, a &: at.Ast):
     repeat g.deferred_globals.len() with i:
         did := g.deferred_globals.get(i)
@@ -97,14 +70,9 @@ func emit_module_init(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
     out(g, "    static int __salam_init_done = 0;\n")
     out(g, "    if (__salam_init_done) return;\n")
     out(g, "    __salam_init_done = 1;\n")
-    // core's init is the one every other module's init calls first, and it
-    // runs before main's body, so it is the single place the process-wide
-    // allocator tuning can be installed exactly once.
     if str.Equals(g.module, "core"):
         out(g, "    salam_tune_allocator();\n")
     end
-    // std/core is every module's dependency without appearing in anyone's
-    // import list - the header includes its header on the same terms.
     if !str.Equals(g.module, "core"):
         out(g, "    " + cg_module_init_name("core") + "();\n")
     end
@@ -144,40 +112,16 @@ func emit_globals(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
             continue
         end
         ts := str.Len(d.type_str) > 0 ? d.type_str : "int32_t"
-        // Package-qualified, so two modules can each declare `COLS`.
         gname := cg_global_cname(g.pkg, d.name)
         decl := cg_decl_cn(ts, gname)
         is_array := str.IndexOf(ts, "[") >= 0
-        // A global array copied from another array (`gx := ga`, another
-        // module-level array, a struct field, a row of a 2-D array, or
-        // now an array-returning call) is exactly the case cg_stmt's own
-        // AST_VAR_DECL handles with salam_arrcpy for a local: C cannot
-        // initialise one array object from another, `int32_t gx[2] = ga;`
-        // is not valid C, and it must run as a statement (in the
-        // module's init function) rather than as a static initializer
-        // either way.
         array_copy := is_array && d.a != 0 && cg_is_array_place(a, d.a)
         act := array_copy ? cg_array_ctype(ts) : ""
         can_defer := (d.kind == at.AST_VAR_DECL && d.a != 0 && at.KindOf(a, d.a) != at.AST_LITERAL && !is_array) || (array_copy && str.Len(act) > 0)
         if can_defer:
-            // The initializer expression itself is built later, by
-            // emit_deferred_globals from inside emit_module_init's own
-            // hoist scope - see deferred_globals's own comment.
             out(g, decl + ";\n")
             g.deferred_globals.push(did)
         else:
-            // Arrays are excluded on purpose. A Salam array parameter is a
-            // plain pointer the callee may write through - `func f(a: u64[8])`
-            // can do `a[0] = x` - so a const array global can reach a mutable
-            // T*, and C says writing through a pointer to a const object is
-            // undefined. std/tls' `const IV384` fed to _sha512_init_with(iv:
-            // u64[8]) is exactly that. Scalars are passed by value and can
-            // never alias, so they keep the qualifier (and .rodata).
-            // codegen_header's extern declaration must agree, or the
-            // definition and the declaration conflict.
-            // A function value is excluded for the same reason an array is:
-            // it lowers to the closure environment pointer, which a callee
-            // takes as a plain `void*`.
             want_const := d.kind == at.AST_CONST_DECL && !is_array && !type_is_callable(ts)
             gct_const := want_const && str.StartsWith(cg_ctype(ts), "const ")
             pfx := (want_const && !gct_const) ? "const " : ""
@@ -271,7 +215,6 @@ func inl_collect_locals(a &: at.Ast, names &: Vector<str>, id: int):
     end
 end
 
-// inl_sym_decl - SymId -> at.NodeId (0 = C NULL).
 func inl_sym_decl(s &: sm.Sema, symid: int): int:
     sv := sm.SymAt(s, symid)
     if sv.decl != 0:
@@ -331,9 +274,6 @@ func inl_body_exportable(
     ret true
 end
 
-// A `pub inline` body is copied into the header, so it may only name things
-// every includer can also see. One that reaches for a module-private symbol
-// loses the inline rather than the compile.
 func demote_if_nonexportable(g &: Cg, s &: sm.Sema, a &: at.Ast, fid: int):
     f := at.Get(a, fid)
     mut names := Vector {} as Vector<str>
@@ -349,8 +289,6 @@ func demote_if_nonexportable(g &: Cg, s &: sm.Sema, a &: at.Ast, fid: int):
     names.free()
 end
 
-// Methods of a generic struct are already emitted `static inline` once per
-// instantiation, so `inline` on them is a no-op rather than a header export.
 func demote_struct_inlines(g &: Cg, s &: sm.Sema, a &: at.Ast, did: int):
     d := at.Get(a, did)
     if d.typarams.len() > 0 || d.synthetic:
@@ -459,8 +397,6 @@ func emit_function_bodies(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
             repeat d.list.len() with j:
                 mid := d.list.get(j)
                 m := at.Get(a, mid)
-                // pub inline methods already have their body in the header,
-                // same as pub inline free functions above.
                 if m.kind == at.AST_FUNC_DEF && !(m.is_inline && m.is_pub):
                     cg_function(g, s, a, mid, ssym)
                 end
@@ -477,19 +413,6 @@ func inst_fn_name(s &: sm.Sema, owner: int, fname: str, sig: int): str:
     )
 end
 
-// Prototypes for the other-package functions a generic instance body calls.
-//
-// An instance is emitted as a `static inline` body appended to *this* module's
-// header, but the module whose header that is need not be the one declaring
-// the callee: `Vector<str>.zeros` lands in str's header and calls mem's
-// allocator. str.h is included well before mem.h declares it, so the call
-// compiled only by C89 implicit declaration - which gcc 16 rejects outright,
-// and which every other compiler resolved to a wrong `int` return. Same
-// reasoning as codegen_header's impl prototypes, one scope out.
-//
-// Only callees actually reached from an instance body are declared, so a
-// package nothing instantiates against costs nothing. Each is guarded, since
-// the owning module emits the same prototype itself.
 func inst_pkg_protos(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
     if n == 0:
         ret
@@ -505,7 +428,6 @@ func inst_pkg_protos(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
                     fn := sm.LookupLocal(s, sm.SymAt(s, pk).members, mem_node.name)
                     if fn != 0 && sm.SymAt(s, fn).kind == sm.SYM_FUNC:
                         save := g.pkg
-                        // func_signature mangles with g.pkg; borrow the callee's.
                         g.pkg = pkname
                         repeat sm.SymAt(s, fn).overloads.len() with k:
                             sig := sm.SymAt(s, fn).overloads.get(k)
@@ -638,8 +560,6 @@ func emit_instances_header(
     g.cur = save
 end
 
-// cg_tidy - trims trailing whitespace, collapses blank-line runs, drops
-// leading/trailing blank lines. Every emitted line ends with '\n'.
 func cg_tidy(sn: str): str:
     mut b := co.SbNew()
     mut emitted := false
@@ -715,9 +635,6 @@ func node_uses_spawn(a &: at.Ast, id: int): bool:
     ret false
 end
 
-// Does this build target Windows? Same question llvmgen's
-// target_is_windows_of answers, asked here for the same reason: the
-// buffered literal-print path below is off on Windows.
 func cg_target_is_windows(triple: str): bool:
     if str.Len(triple) > 0:
         ret str.Contains(triple, "windows") || str.Contains(triple, "mingw") || str.Contains(triple, "win32")
@@ -729,30 +646,13 @@ func cg_target_is_windows(triple: str): bool:
     end
 end
 
-// cg_target_is_freestanding - a BSOS kernel or a UEFI application. There is
-// no libc to include, no stdio to buffer through and no allocator to tune;
-// the program supplies salam_rt_write and the four mem entry points itself.
-// Unlike cg_target_is_windows this never falls back to the host: an empty
-// triple is a hosted build.
 func cg_target_is_freestanding(triple: str): bool:
     if str.Len(triple) == 0:
         ret false
     end
-    // Every BSOS or SalamOS target is freestanding, not just the kernel one.
-    // Neither has a libc: a userspace program links against the runtime
-    // hooks in its own user stdlib and crt, so there is no <stdio.h> to
-    // include and no libc allocator to tune. That changes when either crt
-    // grows far enough to be a hosted C library.
-    // "-none-" names a bare-metal target: no OS, therefore no libc. This is
-    // what reaches a Verifone Verix eVo terminal (thumbebv4t-none-eabi),
-    // where the C library that exists is the terminal's own .SYS.LIB in ROM,
-    // not one the linker can pull in.
     ret str.Contains(triple, "uefi") || str.Contains(triple, "bsos") || str.Contains(triple, "salamos") || str.Contains(triple, "-none-")
 end
 
-// cg_target_is_kernel - ring 0. Freestanding, and additionally float-free:
-// SSE state is not saved on the interrupt path, so a stray f64 is silent
-// corruption rather than a slow path.
 func cg_target_is_kernel(triple: str): bool:
     if str.Len(triple) == 0:
         ret false
@@ -781,8 +681,6 @@ func module_single_threaded_impl(a &: at.Ast, program: int): bool:
     ret true
 end
 
-// Releases everything the Cg owns (the C freed the sbs; the arena took the
-// vectors).
 func cg_free(g &: Cg):
     str.BufFree(g.bh)
     str.BufFree(g.bc)
@@ -799,21 +697,10 @@ func cg_free(g &: Cg):
     g.loop_dmark.free()
 end
 
-// ===========================================================================
-// 6b - codegen_expr.c / codegen_stmt.c / codegen_call.c / codegen_lambda.c /
-// codegen_overload.c (minus sig_of_decl, ported in 6a above).
-// "" = the C NULL for every str return; SymId/SigId/NodeId 0 = C NULL.
-// ===========================================================================
-
-// --- shared 6b helpers (no direct C equivalent) ---
-
-// sb_puts(cg->lam_decls, s) - always the lambda-decls builder.
 func outd(g &: Cg, s2: str):
     str.BufAppend(g.blamd, s2)
 end
 
-// Length of the CURRENT sink (used to capture nested stmt emission the way
-// the C swapped cg->c to a local sb).
 func cur_sink_len(g &: Cg): i64:
     if g.cur == CG_OUT_H:
         ret str.BufLen(g.bh)
@@ -825,8 +712,6 @@ func cur_sink_len(g &: Cg): i64:
     ret str.BufLen(g.bc)
 end
 
-// The current sink's length: the mark a function body starts at, for the
-// hoisted-declaration splice in cg_hoist_end.
 func cur_sink_mark(g &: Cg): i64:
     if g.cur == CG_OUT_H:
         ret str.BufLen(g.bh)
@@ -838,19 +723,12 @@ func cur_sink_mark(g &: Cg): i64:
     ret str.BufLen(g.bc)
 end
 
-// Opens a hoisting scope for the function whose opening brace was just
-// emitted. Pairs with cg_hoist_end; the caller saves and restores the
-// three hoist fields around the pair, since a lambda body is emitted in
-// the middle of its enclosing function.
 func cg_hoist_begin(g &: Cg):
     g.hoist = ""
     g.hoist_pos = cur_sink_mark(g)
     g.hoist_active = true
 end
 
-// Splices the hoisted declarations in at the recorded mark: the body
-// emitted since then is lifted off the sink and re-appended after them.
-// The copy is only paid by functions that actually hoisted something.
 func cg_hoist_end(g &: Cg):
     if str.Len(g.hoist) > 0:
         body := cur_sink_take(g, g.hoist_pos)
@@ -872,8 +750,6 @@ func sb_take(b &: str.StringBuilder, mark: i64): str:
     ret r
 end
 
-// Extract everything appended to the current sink after `mark` and roll the
-// sink back (replaces the C's local sb_t capture in cg_match_expr).
 func cur_sink_take(g &: Cg, mark: i64): str:
     if g.cur == CG_OUT_H:
         ret sb_take(g.bh, mark)
@@ -885,18 +761,12 @@ func cur_sink_take(g &: Cg, mark: i64): str:
     ret sb_take(g.bc, mark)
 end
 
-// cg->locals.len = mark (the C truncated the vec in place).
 func locals_trunc(g &: Cg, mark: int):
     until g.locals.len() > mark:
         _dropped := g.locals.pop()
     end
 end
 
-// IsFreestandingTarget / IsKernelTarget - public queries over the same
-// triple-sniffing rules cg_target_is_freestanding/cg_target_is_kernel use
-// internally, so tooling and tests outside this package (driver_build.salam
-// keeps its own copy for the same reason) can ask the question without
-// duplicating the triple substrings by hand.
 pub func IsFreestandingTarget(triple: str): bool:
     ret cg_target_is_freestanding(triple)
 end

@@ -19,21 +19,6 @@ import conv
 import net.internal.rawsock
 import encoding.value
 
-// The server side: one pure function (HandlePayload) that turns an
-// inbound message into its reply, plus the transports that pump bytes
-// into it - TCP, stdio, and a plain string entry point for embedding the
-// dispatcher in something else (an HTTP route, a message queue consumer,
-// a test).
-//
-// Concurrency: connections are served one at a time. The registry and
-// the call slots are module-level state and Salam has no closures to
-// carry per-connection state through a `void(i64)` handler pointer, so a
-// thread-per-connection server would need a lock around every slot
-// operation and would still serialise on it. A sequential loop is the
-// honest shape for this design; a caller that needs to serve many
-// clients at once should run several processes behind a load balancer,
-// or drive ServeConn itself from its own accept loop.
-
 // The listening socket is kept as a bare fd rather than a tcp.Server:
 // this struct is itself called `Server`, and a struct whose own name
 // shadows the name of a type it holds a field of sends the compiler's
@@ -121,7 +106,6 @@ pub func InvokeBatch(b: Batch): Responses:
             continue
         end
         answered := Invoke(req)
-        // A notification gets no reply document, per both specs.
         if req.has_id: out.items.push(answered) end
         i += 1
     end
@@ -194,9 +178,6 @@ pub func Listen(s &: Server): bool:
     sock := rawsock.Listen(s.port)
     if !rawsock.Ok(sock): ret false end
     s.listen_fd = sock.fd
-    // Bind(0) asks the OS for a free ephemeral port; read back the one
-    // it actually picked so a caller can hand the real number to a
-    // client without hardcoding (and risking) a fixed port.
     s.port = rawsock.LocalPort(sock)
     s.running = true
     ret true
@@ -272,17 +253,10 @@ pub func ServeStdio(framing: int): int:
     until running:
         line := input()
         if line == "":
-            // A blank line is the header/body separator under the LSP
-            // framing and a no-op under line framing; end-of-input shows
-            // up as a blank line too, so only stop once one arrives with
-            // no pending header.
             if framing != RPC_FRAME_HEADER: running = false end
             continue
         end
         if framing == RPC_FRAME_HEADER && line.len() > 8 && line.substr(0, 8).lower() == "content-":
-            // Header line: the body is the next non-empty line, since a
-            // JSON document encoded by this package never contains a raw
-            // newline.
             continue
         end
         reply := HandleText(line)

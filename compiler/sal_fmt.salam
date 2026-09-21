@@ -12,35 +12,6 @@
  *
  */
 
-// Flat single-file module (see salam/PORTING.md "Layout - FLAT").
-// File stem is sal_fmt (NOT fmt) because a file named fmt.salam would
-// collide with the stdlib fmt module in the driver's salam_mod_<stem>.c
-// naming - the package is still `fmt`.
-//
-// ===== port of compiler/src/fmt/ =====
-// fmt_rules.c + fmt.c - the token-based reformatter behind `salam format`
-// (indentation, spacing, comment preservation; the lexer runs with
-// keep_comments=true, see lexer.RunEx).
-//
-// fmt_order.c (fmt_reorder_toplevel - the opt-in `--fix-order` pass) is NOT
-// ported yet: it needs parser_run and sema_check_toplevel_order, and neither
-// the parser nor the semantic module has been ported. Port it here once
-// salam/parser.salam and salam/semantic.salam land.
-//
-// C differences:
-// - fmt_ctx_t's fixed C arrays (ml_stack, paren_is_lambda, block_line,
-//   in_match_arms, q_open) are pre-sized Vectors owned by Tokens() and freed
-//   there; bool arrays hold int 0/1. Capacities and bound checks match the C
-//   FMT_MAX_BRACKET/FMT_MAX_BLOCK limits exactly.
-// - `const token_t *prev` (NULL until the first token) is has_prev +
-//   prev_kind/prev_end_index copies - those are the only fields the C reads.
-// - sb_t -> str.StringBuilder through core's Sb* wrappers.
-// - fmt_source's arena/logger plumbing: the arena is gone; the token stream
-//   is freed before returning.
-// - fmt_style_t consumers can't build cross-package struct literals, so
-//   StyleDefault()/NewStyle() are the constructors.
-// - All span line/index fields (u32 in C) are compared as int (casts at the
-//   token boundary); values are far below 2^31 so semantics are identical.
 package fmt
 
 import str
@@ -52,14 +23,11 @@ import lx "lexer/lexer.salam"
 import ps "parser/parser.salam"
 import at "ast.salam"
 
-// fmt_internal.h / fmt.c
 pub const FMT_INDENT_WIDTH := 4
 const FMT_MAX_BRACKET := 256
 const FMT_MAX_BLOCK := 256
 const FMT_WRAP_WIDTH := 100
 
-// fmt_style_t
-// ord_item_t
 struct OrdItem:
     pub node: int = 0
     pub phase: int = 0
@@ -70,37 +38,31 @@ end
 pub struct FmtStyle:
     pub tabs: bool = false
     pub width: int = 0
-    // Strip everything the lexer treats as trivia: comments (line, block and
-    // doc), indentation, and blank lines. Statement-terminating newlines are
-    // NOT presentation and are always kept - TK_STMT_END is a real token, and
-    // dropping it would weld statements together. Used to shrink the `std/`
-    // tree that gets preloaded into the wasm playground.
     pub minify: bool = false
 end
 
-// fmt_ctx_t (st is carried alongside; the vectors are the C fixed arrays)
 struct FmtCtx:
     pub st: FmtStyle = FmtStyle {}
     pub indent: int = 0
     pub bracket: int = 0
     pub angle: int = 0
     pub bracket_indent: int = 0
-    pub ml_stack: Vector<int> = Vector {} // bool[FMT_MAX_BRACKET]
-    pub paren_is_lambda: Vector<int> = Vector {} // bool[FMT_MAX_BRACKET]
+    pub ml_stack: Vector<int> = Vector {}
+    pub paren_is_lambda: Vector<int> = Vector {}
     pub prev_close_was_lambda: bool = false
     pub ml_top: int = 0
-    pub block_line: Vector<int> = Vector {} // uint32_t[FMT_MAX_BLOCK]
-    pub in_match_arms: Vector<int> = Vector {} // bool[FMT_MAX_BLOCK]
+    pub block_line: Vector<int> = Vector {}
+    pub in_match_arms: Vector<int> = Vector {}
     pub block_top: int = 0
     pub line_has_content: bool = false
     pub force_break: bool = false
     pub no_space_next: bool = false
     pub prev_gt_generic: bool = false
-    pub q_open: Vector<int> = Vector {} // int[FMT_MAX_BRACKET + 1]
-    pub stmt_head: int = 0 // token kind; TK_EOF = unset
+    pub q_open: Vector<int> = Vector {}
+    pub stmt_head: int = 0
     pub match_pending: bool = false
     pub open_colon_line: int = 0
-    pub has_prev: bool = false // C: prev != NULL
+    pub has_prev: bool = false
     pub prev_kind: int = 0
     pub prev_end_index: int = 0
     pub prev_unary: bool = false
@@ -108,32 +70,24 @@ struct FmtCtx:
     pub prev_end_line: int = 0
 end
 
-// ===== fmt_rules.c =====
-// fmt_is_value_end
-// core/sb.c byte access, spelled the way every other ported file spells it.
 inline func byte_at(s: str, i: int): int: ret co.ByteAt(s, i) end
 
 func is_value_end(k: int): bool:
     ret k == tok.TK_IDENT || k == tok.TK_INT || k == tok.TK_FLOAT || k == tok.TK_STRING || k == tok.TK_TRIPLE_STRING || k == tok.TK_RAW_STRING || k == tok.TK_CHAR || k == tok.TK_UTF8_CHAR || k == tok.TK_RPAREN || k == tok.TK_RBRACKET || k == tok.TK_RBRACE || k == tok.TK_KW_TRUE || k == tok.TK_KW_FALSE || k == tok.TK_KW_NULL || k == tok.TK_KW_THIS
 end
 
-// fmt_is_open
 func is_open(k: int): bool:
     ret k == tok.TK_LPAREN || k == tok.TK_LBRACKET || k == tok.TK_LBRACE
 end
 
-// fmt_is_close
 func is_close(k: int): bool:
     ret k == tok.TK_RPAREN || k == tok.TK_RBRACKET || k == tok.TK_RBRACE
 end
 
-// fmt_gap_in_source (a's span.end.index / b's span.begin.index)
 func gap_in_source(a_end_index: int, b_begin_index: int): bool:
     ret b_begin_index > a_end_index
 end
 
-// fmt_need_space - pk/p_end come from the previous token, ck/c_begin from
-// the current one (the only token_t fields the C function reads).
 func need_space(pk: int, p_end: int, ck: int, c_begin: int, prev_unary: bool): bool:
     if pk == tok.TK_DOT || ck == tok.TK_DOT:
         ret false
@@ -171,7 +125,6 @@ func need_space(pk: int, p_end: int, ck: int, c_begin: int, prev_unary: bool): b
     ret true
 end
 
-// fmt_is_prefix
 func is_prefix(k: int, has_prev: bool, prev_kind: int): bool:
     if k == tok.TK_NOT || k == tok.TK_TILDE:
         ret true
@@ -185,8 +138,6 @@ func is_prefix(k: int, has_prev: bool, prev_kind: int): bool:
     ret false
 end
 
-// ===== fmt.c =====
-// fmt_emit_indent
 func emit_indent(out &: str.StringBuilder, style: FmtStyle, indent0: int):
     mut indent := indent0
     if indent < 0:
@@ -198,19 +149,18 @@ func emit_indent(out &: str.StringBuilder, style: FmtStyle, indent0: int):
     if style.tabs:
         mut s := 0
         until s < indent:
-            co.SbPutc(out, 9) // '\t'
+            co.SbPutc(out, 9)
             s += 1
         end
     else:
         mut s := 0
         until s < indent * style.width:
-            co.SbPutc(out, 32) // ' '
+            co.SbPutc(out, 32)
             s += 1
         end
     end
 end
 
-// fmt_bracket_multiline
 func bracket_multiline(ts: tok.TokenStream, open_idx: int): bool:
     o := tok.StreamAt(ts, open_idx)
     n := tok.StreamCount(ts)
@@ -234,7 +184,6 @@ func bracket_multiline(ts: tok.TokenStream, open_idx: int): bool:
     ret false
 end
 
-// fmt_angle_is_generic
 func angle_is_generic(ts: tok.TokenStream, lt_idx: int): bool:
     n := tok.StreamCount(ts)
     mut depth := 0
@@ -250,7 +199,6 @@ func angle_is_generic(ts: tok.TokenStream, lt_idx: int): bool:
                 ret true
             end
         else k == tok.TK_SHR:
-            // '>>' closes two generic levels at once (e.g. 'A<B<C>>').
             depth -= 2
             if depth <= 0:
                 ret true
@@ -264,11 +212,6 @@ func angle_is_generic(ts: tok.TokenStream, lt_idx: int): bool:
     ret false
 end
 
-// fmt_lambda_header_at - every lambda parameter is mandatorily typed
-// ('name: Type'), so a '(' only opens a lambda header if its contents fully
-// match that shape. Used to tell a lambda's parameter list apart from an
-// unrelated grouped expression that simply happens to sit in front of a ':'
-// (e.g. an 'if (a) || (b):' condition).
 func lambda_header_at(ts: tok.TokenStream, open_idx: int): bool:
     n := tok.StreamCount(ts)
     mut i := open_idx + 1
@@ -318,27 +261,22 @@ func lambda_header_at(ts: tok.TokenStream, open_idx: int): bool:
     end
 end
 
-// fmt_head_modifier
 func head_modifier(k: int): bool:
     ret k == tok.TK_KW_PUB || k == tok.TK_KW_INLINE || k == tok.TK_KW_NOINLINE || k == tok.TK_KW_PURE || k == tok.TK_KW_NORET || k == tok.TK_KW_DEPRECATED
 end
 
-// fmt_is_overload_symbol
 func is_overload_symbol(k: int): bool:
     ret k == tok.TK_GT || k == tok.TK_PLUS || k == tok.TK_MINUS || k == tok.TK_STAR || k == tok.TK_SLASH || k == tok.TK_PERCENT || k == tok.TK_POWER || k == tok.TK_EQ || k == tok.TK_NE || k == tok.TK_LT || k == tok.TK_LE || k == tok.TK_GE || k == tok.TK_NOT
 end
 
-// fmt_head_annotates
 func head_annotates(k: int): bool:
     ret k == tok.TK_IDENT || k == tok.TK_KW_MUT || k == tok.TK_KW_CONST || k == tok.TK_KW_THIS
 end
 
-// fmt_type_token
 func type_token(k: int): bool:
     ret k == tok.TK_IDENT || k == tok.TK_DOT || k == tok.TK_STAR || k == tok.TK_AMP || k == tok.TK_LT || k == tok.TK_GT || k == tok.TK_SHR || k == tok.TK_LBRACKET || k == tok.TK_RBRACKET || k == tok.TK_LPAREN || k == tok.TK_RPAREN || k == tok.TK_COMMA || k == tok.TK_INT || k == tok.TK_KW_FUNC
 end
 
-// fmt_colon_is_annotation
 func colon_is_annotation(ts: tok.TokenStream, colon_idx: int): bool:
     n := tok.StreamCount(ts)
     line := tok.StreamAt(ts, colon_idx).end_line as int
@@ -357,11 +295,6 @@ func colon_is_annotation(ts: tok.TokenStream, colon_idx: int): bool:
         if t.kind == tok.TK_KW_FUNC && !saw_type:
             is_func_type = true
         end
-        // salam's type grammar has no use for '(' except a function-pointer
-        // type's own parameter list ('func(int): bool'); anywhere else a
-        // '(' means this is actually a call expression (e.g. 'f(a)' or
-        // 'x.f(a)', like a same-line if-branch body: 'if x: f(a, b)') and
-        // this colon isn't a type annotation at all.
         if t.kind == tok.TK_LPAREN && !is_func_type:
             ret false
         end
@@ -375,7 +308,6 @@ func colon_is_annotation(ts: tok.TokenStream, colon_idx: int): bool:
     ret false
 end
 
-// fmt_step_stmt_end
 func step_stmt_end(c &: FmtCtx, out &: str.StringBuilder, t: tok.Token, cur_ml: bool):
     if c.bracket > 0:
         if cur_ml:
@@ -394,7 +326,7 @@ func step_stmt_end(c &: FmtCtx, out &: str.StringBuilder, t: tok.Token, cur_ml: 
         ret
     end
     if c.line_has_content:
-        co.SbPutc(out, 10) // '\n'
+        co.SbPutc(out, 10)
         c.line_has_content = false
     end
     c.force_break = false
@@ -404,7 +336,6 @@ func step_stmt_end(c &: FmtCtx, out &: str.StringBuilder, t: tok.Token, cur_ml: 
     c.match_pending = false
 end
 
-// fmt_step_break_before
 func step_break_before(
     c &: FmtCtx, out &: str.StringBuilder, t: tok.Token, k: int, cur_ml: bool
 ):
@@ -438,12 +369,10 @@ func step_break_before(
     end
 end
 
-// fmt_in_match_arms
 func in_match_arms_now(c &: FmtCtx): bool:
     ret c.block_top > 0 && c.block_top <= FMT_MAX_BLOCK && c.in_match_arms[c.block_top - 1] != 0
 end
 
-// fmt_step_dedent
 func step_dedent(c &: FmtCtx, out &: str.StringBuilder, t: tok.Token, k: int):
     if k == tok.TK_KW_ELSE && in_match_arms_now(c):
         ret
@@ -463,7 +392,6 @@ func step_dedent(c &: FmtCtx, out &: str.StringBuilder, t: tok.Token, k: int):
     end
 end
 
-// fmt_step_leading
 func step_leading(c &: FmtCtx, out &: str.StringBuilder, t: tok.Token, k: int):
     if !c.line_has_content:
         if !c.st.minify && c.bracket == 0 && c.has_prev && (t.begin_line as int) > c.prev_end_line + 1:
@@ -477,10 +405,6 @@ func step_leading(c &: FmtCtx, out &: str.StringBuilder, t: tok.Token, k: int):
         if c.prev_gt_generic && (k == tok.TK_LPAREN || k == tok.TK_LBRACKET):
             need = false
         end
-        // A name right after '.' is always a member/method reference, even
-        // if it happens to collide with a statement keyword (e.g. the
-        // 'repeat' loop keyword doubling as a method name in 's.repeat(n)')
-        // - it should never get keyword-style spacing before '('.
         if k == tok.TK_LPAREN && c.prev_after_dot:
             need = false
         end
@@ -495,10 +419,6 @@ func step_leading(c &: FmtCtx, out &: str.StringBuilder, t: tok.Token, k: int):
     c.prev_gt_generic = false
 end
 
-// fmt_current_column - bytes emitted since the last newline in the output
-// buffer, used to wrap long multiline bracket contents (see the TK_COMMA
-// case below) instead of reflowing an unbounded number of elements onto a
-// single line.
 func current_column(out &: str.StringBuilder): int:
     n := co.SbLen(out) as int
     if n == 0:
@@ -512,7 +432,6 @@ func current_column(out &: str.StringBuilder): int:
     ret n - i
 end
 
-// fmt_step_state_after
 func step_state_after(
     c &: FmtCtx, out &: str.StringBuilder, t: tok.Token, k: int, ts: tok.TokenStream, i: int
 ):
@@ -575,10 +494,6 @@ func step_state_after(
         c.angle -= 1
         c.prev_gt_generic = true
     else k == tok.TK_SHR && c.angle > 0:
-        // '>>' closes two levels at once - the lexer has no reason to split
-        // it, and `Vector<Vector<int>>` ends on one. Without this the count
-        // never came back to zero, and every block after such a type was
-        // laid out as if it were still inside the type.
         c.angle -= 2
         if c.angle < 0:
             c.angle = 0
@@ -622,12 +537,10 @@ func step_state_after(
     end
 end
 
-// ===== port of compiler/src/fmt/fmt_order.c =====
 func ord_is_modifier_kind(k: int): bool:
     ret k == tok.TK_KW_PUB || k == tok.TK_KW_DEPRECATED || k == tok.TK_KW_INLINE || k == tok.TK_KW_NOINLINE || k == tok.TK_KW_PURE || k == tok.TK_KW_NORET
 end
 
-// Right-trim trailing whitespace/newlines from a raw [start,end) range.
 func ord_rtrim_end(text: str, start: int, end0: int): int:
     mut e := end0
     until e > start:
@@ -652,12 +565,6 @@ func ord_line_is_blank(text: str, a: int, b: int): bool:
     ret true
 end
 
-/*
- * True if the line [a,b) is a '//' comment or an '@lang "..."' annotation
- * line. Sets maybe_block if the line looks like it could open or close a block
- * comment - the caller treats that as "don't know, don't touch" rather than
- * guessing where the comment really begins.
- */
 func ord_line_is_comment_or_meta(text: str, a: int, b: int, maybe_block &: bool): bool:
     mut i := a
     until i < b && (byte_at(text, i) == 32 || byte_at(text, i) == 9):
@@ -698,11 +605,6 @@ func ord_prev_line_start(text: str, pos: int): int:
     ret i
 end
 
-/*
- * Walk backward from `begin` (a line start) over a blank-line-free run of
- * immediately preceding comment/@meta lines, so those travel with the
- * declaration when it moves. Stops at the first blank or non-trivia line.
- */
 func ord_scan_leading_trivia(text: str, begin: int, bail &: bool): int:
     mut cur := begin
     until true:
@@ -729,8 +631,6 @@ func ord_scan_leading_trivia(text: str, begin: int, bail &: bool): int:
     ret cur
 end
 
-// Extend forward past a trailing same-line '// comment' so it is not orphaned
-// when the declaration in front of it moves.
 func ord_extend_trailing_comment(text: str, len0: int, end0: int): int:
     mut i := end0
     until i < len0 && (byte_at(text, i) == 32 || byte_at(text, i) == 9):
@@ -764,16 +664,9 @@ func ord_is_movable(a &: at.Ast, d: int, entry: str): bool:
     if n.synthetic:
         ret false
     end
-    // Member of an 'extern: end' block; no wrapper span exists to relocate
-    // it out of.
     if n.is_extern:
         ret false
     end
-    /*
-     * The entry point is conventionally last regardless of visibility and is
-     * exempt from the pub-ordering rule - matching check_pub_order's own
-     * exemption - so it is never relocated either.
-     */
     if ord_is_entry_point(a, d, entry):
         ret false
     end
@@ -788,18 +681,6 @@ func ord_adjusted_begin(toks: tok.TokenStream, tok_idx: int): int:
     ret tok.StreamAt(toks, i).begin_index as int
 end
 
-/*
- * An AST_IMPORT node's span starts *after* its 'import' keyword, because the
- * parser consumes the keyword before building any entry - unlike AST_LINK,
- * whose node is created while the cursor still sits on 'link'. On top of that
- * one `import "a" "b" "c"` statement yields three sibling nodes sharing that
- * single keyword.
- *
- * Both fall out of one observation: an entry begins a new import *statement*
- * exactly when the token in front of it is the keyword. That identifies the
- * statement's true start, and every following entry that is not so preceded is
- * a continuation to fold into the same movable unit.
- */
 func ord_import_starts_statement(toks: tok.TokenStream, tok_idx: int): bool:
     ret tok_idx > 0 && tok.StreamAt(toks, tok_idx - 1).kind == tok.TK_KW_IMPORT
 end
@@ -817,21 +698,6 @@ func ord_find_token_for_begin(toks: tok.TokenStream, cursor &: int, begin_index:
     ret n
 end
 
-/*
- * Within a phase, private declarations sort before public ones, so the public
- * surface of a file collects at the end of its group.
- *
- * The language only *requires* this of functions (check_pub_order rejects a
- * private function after a pub one). Types are not required to be ordered that
- * way, but the same reading habit applies to them - a caller scanning for what
- * a file exports should find the pub structs, enums and interfaces together -
- * and reordering them is safe because declaration order carries no meaning for
- * types: a struct may hold, by value, another declared further down.
- *
- * Consts and vars are deliberately left alone. Splitting those would separate
- * a private constant from the public one it is derived from, and unlike types
- * they read as one table rather than as an API surface.
- */
 func ord_sort_key(a &: at.Ast, it: OrdItem): int:
     splits := it.phase == at.AST_ORDER_FUNC || it.phase == at.AST_ORDER_TYPEDEF
     mut secondary := 0
@@ -841,8 +707,6 @@ func ord_sort_key(a &: at.Ast, it: OrdItem): int:
     ret it.phase * 2 + secondary
 end
 
-// Stable insertion sort (small n, and stability is what keeps declarations in
-// their original relative order inside one phase).
 func ord_stable_sort(a &: at.Ast, items &: Vector<OrdItem>):
     n := items.len()
     mut i := 1
@@ -859,17 +723,6 @@ func ord_stable_sort(a &: at.Ast, items &: Vector<OrdItem>):
     end
 end
 
-/*
- * Hoist a misplaced `package` line to the top of the file.
- *
- * This one cannot be done with the rest: a package below the first statement
- * is rejected by the *parser* ("only as the very first statement"), so there
- * is no tree left to reorder. It therefore runs on the token stream, before
- * any parse is attempted, and rewrites the text so the parse can succeed.
- *
- * Only `@meta` annotations may legitimately precede a package declaration, so
- * anything else in front of the keyword means it is misplaced.
- */
 func ord_hoist_package(text: str, len0: int, toks: tok.TokenStream, out &: str.StringBuilder): bool:
     n := tok.StreamCount(toks)
     mut kw := n
@@ -881,7 +734,6 @@ func ord_hoist_package(text: str, len0: int, toks: tok.TokenStream, out &: str.S
             break
         end
         if k != tok.TK_META && k != tok.TK_STMT_END && k != tok.TK_EOF:
-            // A real statement came first - any package below it is misplaced.
             mut j := i
             until j < n:
                 if tok.StreamAt(toks, j).kind == tok.TK_KW_PACKAGE:
@@ -897,7 +749,6 @@ func ord_hoist_package(text: str, len0: int, toks: tok.TokenStream, out &: str.S
     if kw >= n:
         ret false
     end
-    // Already ahead of everything but annotations: nothing to do.
     mut only_meta := true
     mut m := 0
     until m < kw:
@@ -925,23 +776,6 @@ func ord_hoist_package(text: str, len0: int, toks: tok.TokenStream, out &: str.S
     if uend <= ustart:
         ret false
     end
-    /*
-     * Insert in front of the first real declaration rather than at byte 0: a
-     * file normally opens with a licence banner, and a package line shoved
-     * above that reads as though it belongs to nothing. The banner is a block
-     * comment, which ord_scan_leading_trivia deliberately refuses to walk
-     * into, so the first declaration's own leading `//` comments are the
-     * boundary - the package lands after the banner and before that
-     * declaration's comment, where a hand-written one would.
-     */
-    /*
-     * Skip a leading block-comment banner, if there is one. It cannot be found
-     * by walking backward from the first declaration the way everything else
-     * here does: ord_scan_leading_trivia refuses to enter a block comment on
-     * purpose, so it stops at the banner rather than stepping over it.
-     * Scanning forward from the top instead is unambiguous - the banner is
-     * whatever block comment the file opens with.
-     */
     mut ins := 0
     mut p := 0
     until p < len0 && (byte_at(text, p) == 32 || byte_at(text, p) == 9 || byte_at(text, p) == 13 || byte_at(text, p) == 10):
@@ -972,7 +806,6 @@ func ord_hoist_package(text: str, len0: int, toks: tok.TokenStream, out &: str.S
     co.SbPuts(out, str.Substr(text, ustart, uend - ustart))
     co.SbPuts(out, "\n\n")
     co.SbPuts(out, str.Substr(text, ins, ustart - ins))
-    // Skip the blank line the moved block left behind.
     mut after := uend
     until after < len0 && (byte_at(text, after) == 32 || byte_at(text, after) == 9 || byte_at(text, after) == 13):
         after += 1
@@ -988,29 +821,14 @@ func ord_push(items &: Vector<OrdItem>, node: int, phase: int, ustart: int, uend
     items.push(OrdItem { node = node, phase = phase, ustart = ustart, uend = uend })
 end
 
-/*
- * fmt_reorder_toplevel - rewrite `sfile` with its top-level declarations in
- * canonical order, writing the result to `out`. Returns false (and copies the
- * text through unchanged) when the file cannot be lexed or parsed.
- */
-
-// ---------------------------------------------------------------------------
-// Public API (E088: pub section last)
-// ---------------------------------------------------------------------------
-
-// fmt_style_default
 pub func StyleDefault(): FmtStyle:
     ret FmtStyle { tabs = false, width = FMT_INDENT_WIDTH }
 end
 
-// Constructor for non-default styles (cross-package struct literals are not
-// supported); mirrors the driver's `style.tabs = opt->fmt_tabs; style.width =
-// opt->fmt_indent_width` assignments.
 pub func NewStyle(tabs: bool, width: int, minify: bool): FmtStyle:
     ret FmtStyle { tabs = tabs, width = width, minify = minify }
 end
 
-// fmt_tokens
 pub func Tokens(ts: tok.TokenStream, style: FmtStyle, out &: str.StringBuilder):
     mut c := FmtCtx {}
     c.st = style
@@ -1028,7 +846,7 @@ pub func Tokens(ts: tok.TokenStream, style: FmtStyle, out &: str.StringBuilder):
         c.q_open.push(0)
         z += 1
     end
-    c.q_open.push(0) // q_open has FMT_MAX_BRACKET + 1 slots
+    c.q_open.push(0)
 
     n := tok.StreamCount(ts)
     mut i := 0
@@ -1044,11 +862,6 @@ pub func Tokens(ts: tok.TokenStream, style: FmtStyle, out &: str.StringBuilder):
             i += 1
             continue
         end
-        // Comments are dropped before any state is touched, so they cannot
-        // leave a force_break or a stale `prev` behind. A block comment that
-        // spanned a newline already had its own TK_STMT_END emitted after it
-        // by the lexer (scan_block_comment), so the statement boundary it
-        // created survives even though the comment text does not.
         if c.st.minify && (k == tok.TK_COMMENT_LINE || k == tok.TK_COMMENT_BLOCK):
             i += 1
             continue
@@ -1059,7 +872,7 @@ pub func Tokens(ts: tok.TokenStream, style: FmtStyle, out &: str.StringBuilder):
         step_leading(c, out, t, k)
 
         if k == tok.TK_META:
-            co.SbPutc(out, 64) // '@'
+            co.SbPutc(out, 64)
         end
         co.SbPuts(out, t.lexeme)
         c.line_has_content = true
@@ -1077,9 +890,6 @@ pub func Tokens(ts: tok.TokenStream, style: FmtStyle, out &: str.StringBuilder):
     end
 end
 
-// fmt_source - lexes with keep_comments=true (the formatter's lexing mode)
-// and formats the token stream. Returns false when the lexer reported errors
-// (out is left untouched, like the C version).
 pub func Source(
     lgr: lg.Logger, pack: int, sfile: src.SourceFile, style: FmtStyle, out &: str.StringBuilder
 ): bool:
@@ -1094,25 +904,6 @@ pub func Source(
     ret true
 end
 
-/*
- * Salam Programming Language (2024-2026)
- *
- *   +-------------------+
- *   |     S A L A M     |
- *   +-------------------+
- *
- * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
- * Born from a decade of language design experience (since 2018)
- *
- * Repository: https://github.com/SalamLang/Salam
- *
- */
-
-/*
- * fmt_reorder_toplevel - rewrite `sfile` with its top-level declarations in
- * canonical order, writing the result to `out`. Returns false (and copies the
- * text through unchanged) when the file cannot be lexed or parsed.
- */
 pub func ReorderToplevel(
     lgr: lg.Logger, pack: int, sfile: src.SourceFile, entry: str, out &: str.StringBuilder
 ): bool:
@@ -1126,11 +917,6 @@ pub func ReorderToplevel(
         ret false
     end
 
-    /*
-     * Runs before the parse, not after: a misplaced package is a *parse*
-     * error, so leaving it in place would mean there is no tree to reorder and
-     * every other fix in this file would be skipped too.
-     */
     mut hoisted := co.SbNew()
     if ord_hoist_package(text, len0, toks, hoisted):
         htext := co.SbCstr(hoisted)
@@ -1159,12 +945,6 @@ pub func ReorderToplevel(
         ret false
     end
 
-    /*
-     * Build the flat sequence of top-level "slots": either a movable
-     * declaration with its true, trivia-inclusive text span, or a barrier
-     * (extern member, top-level 'if', the entry point, or anything this scan
-     * cannot confidently classify) that always stays exactly where it is.
-     */
     mut items := Vector {} as Vector<OrdItem>
     prog := at.Get(a, program)
     mut tok_cursor := 0
@@ -1183,11 +963,6 @@ pub func ReorderToplevel(
             continue
         end
         if at.Get(a, d).kind == at.AST_IMPORT && !ord_import_starts_statement(toks, tok_idx):
-            /*
-             * A continuation entry of `import "a" "b"`: it has no keyword of
-             * its own, so it cannot be a unit. Stretch the statement's unit
-             * over it instead, and let it travel as one piece.
-             */
             if items.len() > 0 && items.get(items.len() - 1).phase == at.AST_ORDER_IMPORT:
                 mut prev := items.get(items.len() - 1)
                 mut e := ord_rtrim_end(text, prev.ustart, at.Get(a, d).end_index as int)
@@ -1211,22 +986,11 @@ pub func ReorderToplevel(
             ord_push(items, d, at.AST_ORDER_NONE, 0, 0)
             continue
         end
-        /*
-         * A node's end can land at column 1 of the FOLLOWING line (a
-         * statement-terminator artifact), which would otherwise make this
-         * item's extracted text quietly swallow the blank line separating it
-         * from whatever comes next. Normalise back to its own content first.
-         */
         mut uend := ord_rtrim_end(text, ustart, at.Get(a, d).end_index as int)
         uend = ord_extend_trailing_comment(text, len0, uend)
         ord_push(items, d, at.ToplevelOrderPhase(a, d), ustart, uend)
     end
 
-    /*
-     * Walk maximal runs of movable items, reordering each run in place -
-     * verbatim text, never touching anything outside a run that actually needs
-     * to change.
-     */
     mut result := co.SbNew()
     mut cursor := 0
     mut r := 0

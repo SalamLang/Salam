@@ -1,27 +1,5 @@
 package tls
 
-// Certificate chain verification (RFC 5280 section 6, simplified profile).
-//
-// This is the part that decides whether a handshake means anything. Everything
-// else in the stack can be correct and the connection is still worthless if
-// this function says yes to a certificate the peer forged. It is written to
-// fail closed: every path that is not an explicit success returns false, and
-// there is no "warn and continue".
-//
-// Checks performed, in order, for each link:
-//   * the child's signature verifies under the parent's public key, over the
-//     child's tbsCertificate bytes exactly as received;
-//   * the child's issuer DN equals the parent's subject DN byte for byte;
-//   * the parent is a CA (basicConstraints CA:TRUE) and, if it asserts
-//     keyUsage, includes keyCertSign;
-//   * the parent's pathLenConstraint still permits the depth being built;
-//   * both certificates are inside their validity window;
-//   * the leaf matches the requested hostname via SubjectAltName.
-//
-// NOT implemented, and deliberately so rather than half-done: revocation
-// (CRL/OCSP), name constraints, and policy constraints. A caller that needs
-// revocation must not assume this provides it.
-
 const MAX_CHAIN_DEPTH := 8
 
 // Reason codes, so a failure can be reported without leaking which byte
@@ -117,21 +95,14 @@ func _cert_signed_by(child: Cert, parent: Cert): bool:
     hlen := _hash_size(kind)
     mut digest := _newbuf(hlen)
     defer _buf_free(digest)
-    // Scratch buffers live at function scope: a `defer` inside a nested block
-    // is hoisted to function exit, where a block-local name is out of scope.
     mut rb := _newbuf(48)
     defer _buf_free(rb)
     mut sb := _newbuf(48)
     defer _buf_free(sb)
     _putzeros(digest, hlen)
-    // hash the tbsCertificate exactly as it arrived on the wire
     _hash_oneshot(kind, child.tbs.p, child.tbs.len, digest.p)
 
     if child.sig_alg == SIG_ECDSA_SHA256 || child.sig_alg == SIG_ECDSA_SHA384:
-        // The curve comes from the ISSUER's key, not from the signature
-        // algorithm OID: ecdsa-with-SHA256 says nothing about which curve
-        // signed, and trusting the OID instead would let a P-256 signature be
-        // checked against a P-384 key.
         if parent.pk_alg == PK_EC_P256:
             if !_ecdsa_split(child.sig, rb, sb, 32):
                 ret false
@@ -167,13 +138,11 @@ func _cert_signed_by(child: Cert, parent: Cert): bool:
     end
 
     if child.sig_alg == SIG_RSA_PSS_SHA256 || child.sig_alg == SIG_RSA_PSS_SHA384:
-        // TLS and the Web PKI both use salt length == digest length
         ret _rsa_verify_pss(kind, digest.p, n.p, n.len, e.p, e.len, sg.p, sg.len, hlen)
     end
     if child.sig_alg == SIG_RSA_PKCS1_SHA256 || child.sig_alg == SIG_RSA_PKCS1_SHA384:
         ret _rsa_verify_pkcs1(kind, digest.p, n.p, n.len, e.p, e.len, sg.p, sg.len)
     end
-    // SHA-512 RSA and anything else is not in the supported set
     ret false
 end
 
@@ -254,8 +223,6 @@ func _verify_chain(chain: Reader[8], nchain: int, roots: Roots, host: str, now: 
         end
     end
 
-    // The leaf must match the hostname and be currently valid before any
-    // signature work is done.
     leaf := certs[0]
     terr := _cert_time_ok(leaf, now)
     if terr != VERR_NONE:
@@ -264,20 +231,10 @@ func _verify_chain(chain: Reader[8], nchain: int, roots: Roots, host: str, now: 
     if !_cert_match_host(leaf, host):
         ret VERR_HOSTNAME
     end
-    // A leaf asserting CA:TRUE is not automatically wrong, but a leaf used for
-    // server authentication must not be relied on to sign other certificates;
-    // if it declares an EKU it has to include serverAuth.
     if leaf.has_eku && !leaf.eku_server_auth:
         ret VERR_USAGE
     end
 
-    // Walk up the chain. The peer's certificates are matched by subject rather
-    // than by position: RFC 8446 recommends sending them in order but does not
-    // require it, and servers that ship a shuffled chain are common enough that
-    // requiring strict leaf-to-root ordering is a real interop failure.
-    //
-    // `used` keeps a certificate from being consumed twice, which is what stops
-    // a cross-signed or self-referential set from looping forever.
     mut used: bool[8]
     repeat 8 with i:
         used[i] = false
@@ -288,8 +245,6 @@ func _verify_chain(chain: Reader[8], nchain: int, roots: Roots, host: str, now: 
     until depth < nchain:
         child := certs[cur]
 
-        // Does a trusted root sign this certificate directly? Checking roots
-        // first means a peer cannot lengthen the chain past a valid anchor.
         mut ri := 0
         until ri < roots.count:
             rd := _roots_get(roots, ri)
@@ -310,7 +265,6 @@ func _verify_chain(chain: Reader[8], nchain: int, roots: Roots, host: str, now: 
             ri += 1
         end
 
-        // Otherwise some certificate the peer sent must be the issuer.
         mut nxt := 0 - 1
         repeat nchain with j:
             if !used[j] && nxt < 0:
@@ -338,7 +292,5 @@ func _verify_chain(chain: Reader[8], nchain: int, roots: Roots, host: str, now: 
         cur = nxt
         depth += 1
     end
-    // Ran out of certificates without reaching a trusted root. A self-signed
-    // certificate at the top does not make itself trusted.
     ret VERR_UNTRUSTED
 end

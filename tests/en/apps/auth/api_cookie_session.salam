@@ -14,30 +14,6 @@
 
 package main
 
-// The same JWT, carried by a browser instead of a client: an HTML form
-// posts to /login, the token goes into an HttpOnly cookie, and /dashboard
-// reads it back.
-//
-//     salam run tests/en/apps/auth/api_cookie_session.salam
-//     open http://localhost:8083
-//
-// WHY A COOKIE AND NOT localStorage
-//
-// A token in localStorage is readable by any script on the page, so one
-// cross-site-scripting hole hands over every session. An HttpOnly cookie is
-// not readable by script at all. The trade is that the browser sends it
-// automatically, which is what CSRF exploits - so SameSite=Lax is not
-// optional here, it is the other half of the decision.
-//
-// jwt.SetSessionCookie sets HttpOnly, SameSite=Lax and Secure together.
-// Secure means the cookie never travels over plain HTTP, which would stop
-// this example working on localhost, so it uses the *Insecure variant and
-// says so. That is the ONE flag to relax for development, and only there.
-//
-// The guard is told `g.cookie = "session"`, so jwt.Require accepts the
-// token from either the Authorization header or that cookie - the same
-// handler then serves both a browser and an API client.
-
 import crypto
 import jwt
 import time
@@ -50,7 +26,6 @@ func guard(): jwt.Guard:
     mut g := jwt.NewGuard("dev-only-secret-change-me")
     g.opts.issuer = "session.example"
     g.opts.require_exp = true
-    // Header first, then this cookie. See jwt.TokenFrom.
     g.cookie = "session"
     ret g
 end
@@ -74,8 +49,6 @@ func login_form(ctx: i64):
 end
 
 func login(ctx: i64):
-    // Ctx_form reads an application/x-www-form-urlencoded body, which is
-    // what a plain <form> posts.
     user := http.Ctx_form(ctx, "user")
     password := http.Ctx_form(ctx, "password")
     stored := password_hash(user)
@@ -91,23 +64,18 @@ func login(ctx: i64):
         page(ctx, "<h1>Could not start a session</h1>")
         ret
     end
-    // Max-Age matches the token's own lifetime, so the browser stops sending
-    // a token that can no longer verify.
     jwt.SetSessionCookieInsecure(ctx, guard(), token, 3600)
     http.Ctx_redirect(ctx, "/dashboard")
 end
 
 func dashboard(ctx: i64):
     mut t := jwt.Token {}
-    // Same call as an API route. The token just arrives by cookie instead.
     if !require_page(ctx, t): ret end
     page(
         ctx, "<h1>Hello, " + t.claims.sub + "</h1>" + "<p>Session ends at " + expiry(t) + ".</p>" + `<form method="post" action="/logout"><button>Sign out</button></form>`
     )
 end
 
-// A browser wants a redirect to the sign-in page, not a 401 with JSON, so
-// this wraps jwt.Check rather than using jwt.Require's API-shaped reply.
 func require_page(ctx: i64, t &: jwt.Token): bool:
     mut err := 0
     verified := jwt.Check(ctx, guard(), err)
@@ -124,9 +92,6 @@ func expiry(t: jwt.Token): str:
 end
 
 func logout(ctx: i64):
-    // Nothing server-side is invalidated: the token stays valid until it
-    // expires. Clearing the cookie is what "sign out" means for a JWT
-    // session, which is the real argument for a short TTL.
     jwt.ClearSessionCookie(ctx, guard())
     http.Ctx_redirect(ctx, "/")
 end

@@ -8,12 +8,6 @@ import i18 "../i18n.salam"
 import src "../source.salam"
 import pth "../sal_path.salam"
 
-// ===========================================================================
-// ===== sema.c (import path resolution) =====
-// ===========================================================================
-
-// norm_ident - ZWNJ (E2 80 8C) -> space, Arabic yeh (D9 8A) -> Farsi yeh
-// (DB 8C), Arabic kaf (D9 83) -> Farsi kaf (DA A9).
 func norm_ident(s0: str): str:
     n := str.Len(s0)
     mut need := false
@@ -58,22 +52,6 @@ func norm_ident(s0: str): str:
     ret out
 end
 
-// pkg_decl_offset - where the `package` DECLARATION starts: the first line
-// whose first non-blank word is "package", or the length when there is none.
-// That is the end of the region the `@lang "name"` markers live in, and the
-// header scan below stops there.
-//
-// It used to stop at the first "package " anywhere in the text - which a
-// comment can contain. std/db's header says "A driver still exposes its own
-// package (db.sqlite, ...)" on line 17, twenty-eight lines above the
-// declaration, so the scan gave up before reaching the @en/@fa/@ar block and
-// `db` went into no index at all. `import دیتابیس.ردیس` then could not
-// resolve and both the Persian and Arabic redis demos failed to build, on
-// every platform. Four other packages sit on the same trap: arabic, text,
-// unicode and llvm.
-//
-// Leading whitespace is skipped rather than requiring column zero, so an
-// indented declaration is still found.
 func pkg_decl_offset(txt: str, n: int): int:
     mut ls := 0
     until ls < n:
@@ -96,8 +74,6 @@ func pkg_decl_offset(txt: str, n: int): int:
     ret n
 end
 
-// index_pkg_file - scans a std package file's pre-`package` header for
-// @en/@fa/@ar "alias" annotations and records (lang, alias, canon) rows.
 func index_pkg_file(path: str, canon: str):
     mut sf := src.New()
     if !src.Load(path, sf):
@@ -158,21 +134,9 @@ func index_pkg_file(path: str, canon: str):
         end
         i += 1
     end
-    // Everything retained above is a str.Substr copy pushed into the g_sm_seg_*
-    // tables, so nothing points into txt once the scan is done. This runs over
-    // every file under std/ (400+) on any invocation that resolves an import,
-    // which made it the single largest source buffer left unreleased.
     src.Free(sf)
 end
 
-// Sorted, because seg_to_canon answers with the FIRST alias that matches and
-// this is the order the aliases are indexed in. A directory walk hands back
-// NTFS's alphabetical order on Windows and whatever the filesystem stored on
-// Linux, so two packages claiming one alias resolved to different packages on
-// different hosts - std/text once shadowed std/str's Arabic name on Linux
-// only, and the Arabic donut test built on Windows and failed CI. Aliases are
-// meant to be unique and a duplicate is still a bug, but which one wins must
-// not depend on the machine.
 func sort_entries(v &: Vector<str>):
     n := v.len()
     mut i := 1
@@ -215,7 +179,6 @@ func build_seg_index(root: str):
     g_sm_seg_root = root
 end
 
-// seg_to_canon - "" = the C NULL.
 func seg_to_canon(root: str, seg: str, lang: str): str:
     if g_sm_seg_n < 0 || !str.Equals(g_sm_seg_root, root):
         build_seg_index(root)
@@ -229,7 +192,6 @@ func seg_to_canon(root: str, seg: str, lang: str): str:
     ret ""
 end
 
-// resolve_ident_import - dotted package name via the alias index; "" = NULL.
 func resolve_ident_import(root: str, dotted: str, lang: str): str:
     n := str.Len(dotted)
     mut spec := ""
@@ -238,7 +200,7 @@ func resolve_ident_import(root: str, dotted: str, lang: str): str:
     until pos < n:
         mut dot := str.IndexFrom(dotted, ".", pos)
         if dot >= n:
-            dot = 0 - 1 // some IndexFrom impls return len; normalize to -1
+            dot = 0 - 1
         end
         seglen := dot >= 0 ? dot - pos : n - pos
         seg := str.Substr(dotted, pos, seglen)
@@ -265,7 +227,6 @@ func resolve_ident_import(root: str, dotted: str, lang: str): str:
     ret "std/" + spec + "/" + last + ".salam"
 end
 
-// resolve_ident_direct - dotted segments used verbatim; "" = NULL.
 func resolve_ident_direct(root: str, dotted: str): str:
     n := str.Len(dotted)
     mut spec := ""
@@ -301,11 +262,6 @@ func resolve_ident_direct(root: str, dotted: str): str:
     ret ""
 end
 
-// An import spec is written by hand, so it arrives in whichever spelling the
-// author typed - on Windows `import "sub\\util.salam"` is what copying the
-// path out of Explorer gives. PathNormalize folds '\' to '/' before the
-// "seg/../" collapse runs, so both spellings of one file produce one dedup
-// key and the module is loaded once.
 func resolve_user_string(dir: str, spec: str): str:
     has_ext := str.Contains(spec, ".salam")
     mut p := pth.PathJoin(dir, spec)
@@ -315,7 +271,6 @@ func resolve_user_string(dir: str, spec: str): str:
     ret pth.PathNormalize(p)
 end
 
-// salam_resolve_import - always returns a path (possibly nonexistent).
 func resolve_import(dir: str, spec: str): str:
     root := get_stdlib_root()
     has_ext := str.Contains(spec, ".salam")
@@ -337,7 +292,6 @@ func resolve_import(dir: str, spec: str): str:
     ret p2
 end
 
-// salam_resolve_import_node - "" = the C NULL (not found).
 func resolve_import_node(a &: at.Ast, dir: str, imp: int, lang: str): str:
     n := at.Get(a, imp)
     if n.value_kind == tok.TV_STRING:
@@ -364,7 +318,6 @@ func resolve_import_node(a &: at.Ast, dir: str, imp: int, lang: str): str:
     ret ""
 end
 
-// import_local_name - the name an import binds in the current scope.
 func import_local_name(a &: at.Ast, imp: int, spec: str): str:
     n := at.Get(a, imp)
     if n.value_kind != tok.TV_STRING:
@@ -389,9 +342,6 @@ func import_local_name(a &: at.Ast, imp: int, spec: str): str:
     ret seg
 end
 
-// salam_package_files - the directory auto-merge list: when the file's stem
-// equals its directory's name, every sibling *.salam joins the package.
-// out[0] is main_path; out[1..] are sorted (insertion sort like the C).
 func package_files(main_path: str): Vector<str>:
     mut out := Vector {} as Vector<str>
     out.push(main_path)
@@ -414,8 +364,6 @@ func package_files(main_path: str): Vector<str>:
     defer entries.free()
     repeat entries.len() with i:
         nm := entries.get(i)
-        // POSIX branch of the C: only the ".salam" suffix is checked
-        // (directories named *.salam would be included too).
         if str.Len(nm) <= 6 || !str.EndsWith(nm, ".salam"):
             continue
         end
@@ -441,7 +389,6 @@ func package_files(main_path: str): Vector<str>:
     ret out
 end
 
-// import_spec_of ("" = the C NULL)
 func import_spec_of(n: at.Node): str:
     if n.value_kind == tok.TV_STRING:
         ret n.value_str
@@ -449,8 +396,6 @@ func import_spec_of(n: at.Node): str:
     ret n.name
 end
 
-// salam_merge_program - appends src's decls to dst, skipping duplicate
-// imports/links; the first appended node gets file_boundary = true.
 func merge_program(a &: at.Ast, dst: int, srcprog: int):
     mut marked := false
     sl := at.Get(a, srcprog).list

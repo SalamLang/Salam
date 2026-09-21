@@ -6,32 +6,12 @@ import tok "../token.salam"
 import at "../ast.salam"
 import i18 "../i18n.salam"
 
-// ===========================================================================
-// FORMER "STUBS FOR LATER STAGES" SECTION - all bodies are real now:
-// 5c filled sema_check_expr / stamp_empty_intrinsic / generic_template /
-// g_instantiate_struct; 5d filled sema_check_match, sema_check_block,
-// sema_check_var_decl, sema_check_layout, sema_stmt_terminates and
-// check_unused_params (plus the dce hooks further down).
-// ===========================================================================
-
-// sema_cast_target_is_context_dependent - whether `aid`'s type can genuinely
-// change depending on the cast's target type (via the `s.expected` hint the
-// AST_CAST case feeds it). For these kinds, the checked type naturally comes
-// out equal to the cast target even when the cast is meaningful (e.g.
-// `1 as i64` picks i64 precisely because of the hint), so an equal-type
-// result there must not be flagged as a useless cast. Everything else
-// already has a fixed type before the cast is applied, so casting it to
-// that same type is always useless.
 func sema_cast_target_is_context_dependent(s &: Sema, a &: at.Ast, aid: int, target: int): bool:
     if aid == 0:
         ret false
     end
     an := at.Get(a, aid)
     if an.kind == at.AST_ARRAY_LIT:
-        // check_array_lit only consults the expected element type for an
-        // empty literal or a 'dyn' element slot; a non-empty literal of any
-        // other element type infers its shape purely from its elements, so
-        // the cast target never changes the outcome there.
         if at.ChildCount(a, aid) == 0:
             ret true
         end
@@ -46,10 +26,6 @@ func sema_cast_target_is_context_dependent(s &: Sema, a &: at.Ast, aid: int, tar
     ret false
 end
 
-// func_addr_target_ok (sema_expr.c) - shared by `&f` and by a bare function
-// name read as a value. Both need one unambiguous, non-generic target: a
-// generic function has no code until it is instantiated, and an overload set
-// gives no way to say which body was meant.
 func func_addr_target_ok(s &: Sema, a &: at.Ast, sym: int, fname: str, sp: co.SrcSpan): bool:
     fsv := sym_at(s, sym)
     mut only_generic := false
@@ -79,16 +55,6 @@ func func_addr_target_ok(s &: Sema, a &: at.Ast, sym: int, fname: str, sp: co.Sr
     ret true
 end
 
-// sema_check_expr (sema_expr.c, 5c) - full expression type checking.
-// Returns the expression's TypeId (never TYPE_NONE except through the
-// still-stubbed match checker).
-// A cast written where the position already fixes the type - `want`. Two
-// things can be wrong with one. Naming a different type than the only one
-// that fits is a mistake the old rule accepted quietly, converting on the
-// way out: `ret 0 as u32` from a u64 function. Naming the same type the
-// position already named is a no-op that costs the next reader a second
-// look. Both are errors, so that every `as` left in the source is one that
-// is doing something.
 func check_cast_in_context(
     s &: Sema, a &: at.Ast, inner: int, sp: co.SrcSpan, want: int, target: int, o3: int
 ):
@@ -108,11 +74,6 @@ func check_cast_in_context(
         )
         ret
     end
-    // Only a cast that changes nothing counts as useless. An int written
-    // where a float is wanted is not that: `as f64` is what makes the value
-    // a float, and E067 asks for exactly that when every `ret` in an f64
-    // function hands back an integer. Same-class widening is the case with
-    // nothing behind it.
     same_class := type_equiv(s, want, o3) || (type_is_integer(s, want) && type_is_integer(s, o3))
     if same_class && (type_assignable(s, want, o3) || widens_nonneg(s, a, inner, want, o3)):
         serr(
@@ -131,8 +92,6 @@ func sema_check_expr(s &: Sema, a &: at.Ast, nid: int): int:
     if k != at.AST_LITERAL && k != at.AST_STRUCT_LIT && k != at.AST_ARRAY_LIT && k != at.AST_CALL && k != at.AST_TERNARY && k != at.AST_MATCH:
         s.expected = TYPE_NONE
     end
-    // Consumed here, so a cast one level down - `ret (x as u32) + 1` - is
-    // not judged against a position it is not in.
     cast_ctx := s.cast_ctx
     s.cast_ctx = TYPE_NONE
     sp := span_of(a, nid)
@@ -169,8 +128,6 @@ func sema_check_expr(s &: Sema, a &: at.Ast, nid: int): int:
     end
     if k == at.AST_IDENTIFIER:
         mut name := at.Get(a, nid).name
-        // The parser already reported why this name could not be read; a
-        // follow-up "unknown identifier '<error>'" would only bury it.
         if at.NameIsErr(name):
             ret sema_decorate(s, a, nid, sema_err_ty(s))
         end
@@ -185,10 +142,6 @@ func sema_check_expr(s &: Sema, a &: at.Ast, nid: int): int:
         end
         if sym == 0:
             mut is_str_lit := false
-            // The node has been rewritten into a literal in place, so the
-            // literal arm above types it - a -d constant then gets exactly
-            // the type the same text written in the source would have, f64
-            // and bool included.
             if builtin_global_const(a, nid, name, is_str_lit):
                 ret sema_check_expr(s, a, nid)
             end
@@ -208,10 +161,6 @@ func sema_check_expr(s &: Sema, a &: at.Ast, nid: int): int:
             )
             ret sema_decorate(s, a, nid, sema_err_ty(s))
         end
-        // A free function read as a value decays to its address, typed i64 -
-        // the handler-slot ABI std/net/router and friends take. `&f` is the
-        // other spelling and still yields a void*, for the C-callback casts
-        // in std/webview.
         if sv.kind == SYM_FUNC:
             if !func_addr_target_ok(s, a, sym, name, sp):
                 ret sema_decorate(s, a, nid, sema_err_ty(s))
@@ -247,10 +196,6 @@ func sema_check_expr(s &: Sema, a &: at.Ast, nid: int): int:
             nv.is_ref = true
             at.Put(a, nid, nv)
         end
-        // A module-level global gets its type from its initializer, in
-        // source order. Read from an earlier global's initializer it has
-        // none yet, and the error type used to flow on without a word and
-        // reach the C as `_3cerror_3e gx;`.
         if svm.ty < 0 && (svm.kind == SYM_VAR || svm.kind == SYM_CONST) && svm.home == s.global:
             serr(
                 s, 97, sp, co.Format1(
@@ -266,7 +211,6 @@ func sema_check_expr(s &: Sema, a &: at.Ast, nid: int): int:
         if at.NameIsErr(fname):
             ret sema_decorate(s, a, nid, sema_err_ty(s))
         end
-        // `&pkg.f` - the package identifier the parser parked in n.a.
         pkgid := at.Get(a, nid).a
         if pkgid != 0 && at.KindOf(a, pkgid) == at.AST_IDENTIFIER:
             pname := at.Get(a, pkgid).name
@@ -474,11 +418,6 @@ func sema_check_expr(s &: Sema, a &: at.Ast, nid: int): int:
             ret sema_decorate(s, a, nid, o3)
         end
         check_cast_in_context(s, a, n4.a, sp, cast_ctx, target, o3)
-        // `x as Variant<...>` where x has one of the member types is a box,
-        // not a conversion: the node becomes the AST_VARIANT_BOX that every
-        // other coercion site builds, so a cast in a struct field default,
-        // a call argument or a return reaches codegen as the tagged
-        // initializer and never as a C cast to a union type.
         if target >= 0 && !type_is_error(s, o3) && ty_at(s, target).kind == TY_VARIANT && ty_at(s, o3).kind != TY_VARIANT:
             vtag := type_variant_tag(s, target, o3)
             if vtag >= 0:
@@ -521,12 +460,6 @@ func sema_check_expr(s &: Sema, a &: at.Ast, nid: int): int:
         n5 := at.Get(a, nid)
         arr := sema_check_expr(s, a, n5.a)
         idx := sema_check_expr(s, a, n5.b)
-        // Only a struct VALUE answers `x[i]` with its operator_index.
-        // Through a pointer that same syntax is address arithmetic - C's
-        // meaning, and the one `d[i]` over a `T*` field relies on. Reading
-        // it as the pointee's operator made `Vector<Vector<int>>` fail to
-        // compile: inside the outer vector, `d[i]` over `Vector_i32*` came
-        // back as the inner vector's element type instead of a Vector.
         ssym2 := ty_at(s, arr).kind == TY_STRUCT ? struct_sym_of(s, arr) : 0
         if ssym2 != 0:
             ovl2 := sema_try_op_overload(
@@ -545,8 +478,6 @@ func sema_check_expr(s &: Sema, a &: at.Ast, nid: int): int:
         end
         av := ty_at(s, arr)
         if av.kind == TY_ARRAY:
-            // A literal index into a fixed array is checked here rather
-            // than left to read past the end at run time.
             ib := at.Get(a, n5.b)
             if ib.kind == at.AST_LITERAL && ib.value_kind == tok.TV_INT:
                 iv := ib.value_int as i64
@@ -603,10 +534,6 @@ func sema_check_expr(s &: Sema, a &: at.Ast, nid: int): int:
         end
         bk := ty_at(s, base).kind
         if bk == TY_ARRAY || bk == TY_SLICE:
-            // A slice is a writable view: whoever receives `a[2:]` may
-            // store through it, so the array it was taken from counts as
-            // mutated here. Without this a `mut` array that is only ever
-            // written through a slice handed to a callee tripped E069.
             mut root := n6.a
             until root != 0 && (at.KindOf(a, root) == at.AST_MEMBER || at.KindOf(a, root) == at.AST_INDEX || at.KindOf(a, root) == at.AST_SLICE):
                 root = at.Get(a, root).a

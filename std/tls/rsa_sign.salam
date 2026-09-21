@@ -1,26 +1,5 @@
 package tls
 
-// RSA signing: RSASSA-PKCS1-v1_5 and RSASSA-PSS (RFC 8017), the counterpart
-// to rsa.salam's verification. Kept in a separate file because the threat
-// model is the opposite of rsa.salam's: here the exponent is SECRET, so
-// bigint.salam's "not constant-time, verification only" modexp is no longer
-// automatically safe to call on it directly.
-//
-// Mitigation: standard RSA blinding (Rivest). Every private-key operation
-// picks a fresh random r, computes (msg * r^e) mod n with the modexp that
-// uses only the PUBLIC exponent e (cheap, and there is nothing secret in
-// that call), exponentiates the blinded value with the secret d, then
-// unblinds by multiplying by r^-1 mod n. r^-1 is obtained via Euler's
-// theorem (r^(phi(n)-1) mod n) rather than a separate signed
-// extended-Euclidean routine - see PrivateKey.rsa_phi in privkey.salam.
-//
-// This decorrelates the modexp's input from the caller's message on every
-// single call, which is what defeats a timing attack that needs to correlate
-// many observations against the SAME operand. It does not make the modexp
-// itself constant-time; the non-constant-time division inside it is still
-// there. That gap, plus the fact that none of this has had independent
-// review, is exactly why std/tls stays marked EXPERIMENTAL.
-
 // m = base^e mod n using the SECRET exponent `dexp`, blinded. `out` receives
 // exactly `klen` bytes (the modulus width).
 func _rsa_private_op_blinded(msg: void*, mlen: int, nmod: void*, nlen: int, dexp: void*, dlen: int, eexp: void*, elen: int, phi: void*, philen: int, out: void*, klen: int): bool:
@@ -54,14 +33,10 @@ func _rsa_private_op_blinded(msg: void*, mlen: int, nmod: void*, nlen: int, dexp
     if !_big_mod(r, rraw, n):
         ret false
     end
-    // A fresh 2048-bit-scale random value landing on 0 is far less likely
-    // than a hardware fault during this call, but the math is undefined
-    // there (r would have no inverse), so it is checked rather than assumed.
     if _big_is_zero(r):
         ret false
     end
 
-    // re = r^e mod n - public exponent, nothing secret in this call.
     mut re := _big_new(n.n + 1)
     defer _big_free(re)
     if !_big_modexp_barrett(re, r, e, n):
@@ -80,15 +55,12 @@ func _rsa_private_op_blinded(msg: void*, mlen: int, nmod: void*, nlen: int, dexp
         ret false
     end
 
-    // The only step touching the secret exponent; its input is decorrelated
-    // from `msg` by r on every call.
     mut s := _big_new(n.n + 1)
     defer _big_wipe_free(s)
     if !_big_modexp_barrett(s, blinded, d, n):
         ret false
     end
 
-    // r^-1 mod n = r^(phi(n)-1) mod n, by Euler's theorem.
     mut one := _big_new(1)
     defer _big_free(one)
     _big_set_u32(one, 1 as u32)

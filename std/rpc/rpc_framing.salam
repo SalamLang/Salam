@@ -19,25 +19,6 @@ import conv
 import mem
 import net.internal.rawsock
 
-// Message framing: a stream carries no record boundaries of its own, so
-// every RPC transport has to say where one message ends and the next
-// begins. Three framings cover essentially everything in the wild:
-//
-//   RPC_FRAME_LINE    one message per '\n'-terminated line
-//                     (JSON Lines - the usual choice for JSON-RPC over
-//                     TCP or stdio between cooperating processes)
-//   RPC_FRAME_HEADER  `Content-Length: N\r\n\r\n` then N bytes
-//                     (the Language Server Protocol framing)
-//   RPC_FRAME_LENGTH  4-byte big-endian length then that many bytes
-//                     (binary-safe; the right one for MessagePack-RPC)
-//
-// Reads go through Stream, a buffered reader over a socket fd that owns
-// its own byte buffer rather than a `str` - a `str` is NUL-terminated,
-// which would silently truncate any msgpack payload containing a zero
-// byte. Stream also drives the in-memory case: FeedStr/FeedBuf push
-// bytes in with no socket at all, which is how the framings are tested
-// and how an in-process client/server pair talks.
-
 // How much to pull off the socket per read.
 pub const RPC_READ_CHUNK := 4096
 // Refuse absurd declared lengths rather than trying to allocate them.
@@ -217,7 +198,6 @@ func _read_line_frame(s &: Stream, ok &: bool): compress.ByteBuf:
     until true:
         idx := _scan_byte(s, 10, 0)
         if idx < 0:
-            // A trailing line with no newline is still a message.
             n := _left(s)
             if n > 0:
                 out := _take(s, n)
@@ -231,7 +211,6 @@ func _read_line_frame(s &: Stream, ok &: bool): compress.ByteBuf:
         mut stop := idx
         if stop > 0 && _at(s, stop - 1) == 13: stop -= 1 end
         if stop == 0:
-            // Blank line between messages - drop it and keep looking.
             s.pos += idx + 1
             _compact(s)
             continue

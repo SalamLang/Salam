@@ -8,33 +8,17 @@ import co "../sal_core.salam"
 import pth "../sal_path.salam"
 import fs
 
-    // ===== driver/build.c =====
-
-    // Unsigned byte read from a str (idiom shared with tests_port/codegen_run.salam).
     inline func byte_at(s: str, i: int): int: ret co.ByteAt(s, i) end
 
-    // driver/build.c module_of
     func module_of(path: str): str:
         ret pth.PathStem(path)
     end
 
-    // driver/build.c dir_of
     func dir_of(path: str): str:
         ret pth.PathDir(path)
     end
 
-    // driver/build.c driver_project_entry_file. The fixed project entry
-    // filename (SALAM_PROJECT_FILE in driver/build.h): when a directory
-    // (or no input at all) is given, <dir>/salam.salam - if present - IS
-    // the project's entry file; no scanning or guessing happens.
-    // Single-file invocations (`salam build test.salam`) never come here.
-    // Returns "" when <dir>/salam.salam does not exist (bare filename for
-    // dir==".", matching list_salam_files).
     func project_entry_file(dir: str): str:
-        // PathJoin trims a trailing separator (`salam build ./compiler/`) and
-        // PathNormalize drops a leading "./", so the entry file comes out
-        // spelled exactly one way whatever the caller typed - the
-        // dedup-by-equality import resolution downstream depends on that.
         p := pth.PathNormalize(pth.PathJoin(dir, "salam.salam"))
         if os.Exists(p) && !os.IsDir(p):
             ret p
@@ -42,18 +26,6 @@ import fs
         ret ""
     end
 
-    // driver/build.c driver_output_stem. Stem for a default output name:
-    // normally the entry file's module name, but the fixed project entry
-    // file salam.salam would make every project's default executable
-    // "salam(.exe)" - which cmd.exe would then run from that directory
-    // instead of the real compiler - so a project executable is named
-    // after its directory instead.
-    //
-    // PORT-NOTE: the C resolves the directory to an absolute path first
-    // (realpath/_fullpath), so "salam build .." also gets a real name;
-    // here only the textual path is inspected and ".."-shaped inputs fall
-    // back to the module name - the common cases (bare build, ./dir,
-    // ../name) behave identically.
     func output_stem_of(path: str): str:
         module := module_of(path)
         if !str.Equals(module, "salam"):
@@ -70,11 +42,6 @@ import fs
         ret base
     end
 
-    // driver/build.c driver_page_stem. Stem for a default web/layout
-    // output name: the page file's module name, except the fixed project
-    // entry file salam.salam, whose page is the site's landing page -
-    // index.html, the name every web server (including `salam serve`)
-    // treats as the directory's entry.
     func page_stem_of(path: str): str:
         module := module_of(path)
         if str.Equals(module, "salam"):
@@ -83,17 +50,7 @@ import fs
         ret module
     end
 
-    // driver/build.c driver_target_is_windows. An empty triple is not "not
-    // Windows", it is "no --target=, so the target is this host". Both other
-    // readings are wrong in one direction: taking it for "not Windows" costs
-    // a native Windows build its .exe (cmd.exe matches on PATHEXT and
-    // refuses to launch an extensionless binary), while assuming Windows
-    // unconditionally - what the C backend used to do - hands every Linux
-    // and macOS build a meaningless "hello.exe".
     func triple_is_windows(t: str): bool:
-        // if/else, not a bare `if` with a trailing `ret false`: condcomp prunes
-        // the untaken branch, so on Windows that form leaves `ret true` followed
-        // by dead code and the compiler rejects itself with E070.
         if str.Len(t) == 0:
             if SALAM_OS_WINDOWS:
                 ret true
@@ -104,9 +61,6 @@ import fs
         ret str.Contains(t, "windows") || str.Contains(t, "mingw") || str.Contains(t, "win32")
     end
 
-    // driver/build.c driver_exe_suffix - executable filename extension for
-    // `triple`: ".exe" for a Windows target (whatever the build host is),
-    // "" for every other one.
     func exe_suffix_for(triple: str): str:
         if triple_is_windows(triple):
             ret ".exe"
@@ -114,27 +68,17 @@ import fs
         ret ""
     end
 
-    // driver/build.c driver_exe_name - `name` spelled as an executable
-    // filename for `triple`: a Windows target gets ".exe" appended unless the
-    // name already carries it, every other target keeps `name` verbatim.
-    // Applied to an explicit --output=NAME too, so a cross-build to Windows
-    // still writes something cmd.exe can launch.
     func exe_name_for(name: str, triple: str): str:
         ext := exe_suffix_for(triple)
         if str.Len(ext) == 0:
             ret name
         end
-        // Case-insensitive: Windows resolves "prog.EXE" and "prog.exe" to the
-        // same file, so a caller who spelled it in caps already named an
-        // executable and must not get "prog.EXE.exe" back.
         if str.EndsWith(str.Lower(name), ext):
             ret name
         end
         ret name + ext
     end
 
-    // driver/build.c write_file (fflush/fsync dropped - os.WriteFile already
-    // opens+writes+closes in one call; no partial-write scenario to guard).
     func write_file(lgr: lg.Logger, path: str, content: str): bool:
         if os.WriteFile(path, content) < 0:
             lg.Log(
@@ -145,10 +89,6 @@ import fs
         ret true
     end
 
-    // driver/build.c file_has_content - true when 'path' already holds exactly
-    // 'content'. Comparing before writing leaves an unchanged generated file
-    // (and therefore its cached .o) untouched, so an incremental build can
-    // skip recompiling that module.
     func file_unchanged(path: str, content: str): bool:
         if !os.Exists(path):
             ret false
@@ -156,9 +96,6 @@ import fs
         ret str.Equals(os.ReadFile(path), content)
     end
 
-    // driver/driver.c salam_scratch_dir - scratch dir for intermediate
-    // salam_mod_*.c/.h codegen files, so a build run from any cwd doesn't
-    // litter it with generated sources. Falls back to "." if unwritable.
     func scratch_dir(): str:
         dir := ".salam-build"
         if os.MkdirAll(dir) != 0:
@@ -167,22 +104,10 @@ import fs
         ret dir
     end
 
-    // Not from build.c: whole-build skip. The per-object cache (file_unchanged
-    // above, checked once codegen has already re-run for every module) only
-    // avoids a needless recompile+relink; it still pays for a full lex/parse/
-    // semantic/codegen pass of the entire program on every invocation, which
-    // dominates wall time once the C-compile step is cheap. This tracks the
-    // exact source-file set and CLI-flag signature a successful build used, so
-    // a second `salam build` with nothing changed can skip straight to "up to
-    // date" without touching the frontend at all.
     func manifest_path(scratch: str): str:
         ret pth.PathJoin(scratch, "salam_build.manifest")
     end
 
-    // CLI flags that change what gets generated/linked without touching any
-    // .salam source file's own mtime (link directives live IN the source, so
-    // they don't need to be listed here - editing them updates that file's
-    // mtime, which the source-list check below already catches).
     func build_signature(opt &: Dr): str:
         mut sig := opt.cc + "|" + (opt.debug_info ? "g" : "") + "|" + (opt.asan ? "a" : "") + "|" + (opt.lto ? "l" : "") + "|" + (opt.safe ? "s" : "") + "|" + opt.stdlib_path + "|" + opt.lang + "|" + opt.output
         repeat opt.defines.len() with di:
@@ -194,9 +119,6 @@ import fs
         ret sig
     end
 
-    // Records the source-file set (`sources`, one path per module actually
-    // compiled) and the CLI-flag signature a successful build used, so the
-    // next invocation can tell whether anything relevant changed.
     func write_build_manifest(scratch: str, sig: str, sources: Vector<str>): bool:
         mut sb := str.NewBuilder()
         str.BufAppend(sb, sig)
@@ -210,10 +132,6 @@ import fs
         ret write_file(lg.New(lg.LOG_OFF, false), manifest_path(scratch), txt)
     end
 
-    // gcc on this Windows/MinGW toolchain silently appends ".exe" to `-o
-    // output` when `output` has no extension of its own, so the file that
-    // actually lands on disk doesn't always match `opt.output`/`output`
-    // verbatim. Resolves to whichever of the two really exists.
     func resolve_output_path(output: str): str:
         if os.Exists(output):
             ret output
@@ -226,12 +144,6 @@ import fs
         ret output
     end
 
-    // True when `output` was already built from exactly this source set under
-    // this flag signature and every one of those sources is still at least as
-    // old as `output` (mtimes, second resolution - same granularity `make`
-    // relies on). Any mismatch - missing manifest, missing output, changed
-    // flags, a moved/deleted/newer source, or a source not seen last time -
-    // returns false and falls back to the ordinary full build below.
     func build_up_to_date(scratch: str, sig: str, output0: str): bool:
         mpath := manifest_path(scratch)
         output := resolve_output_path(output0)

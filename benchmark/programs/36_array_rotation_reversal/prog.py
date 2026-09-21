@@ -1,6 +1,3 @@
-"""array rotation via triple reversal"""
-
-
 def reverse_range(arr, lo, hi):
     while lo < hi:
         tmp = arr[lo]

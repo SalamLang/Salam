@@ -1,5 +1,3 @@
-"""Prime factorization count (Omega function) benchmark via trial division."""
-
 limit = 2000000
 total = 0
 for n in range(2, limit + 1):

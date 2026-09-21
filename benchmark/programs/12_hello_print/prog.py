@@ -1,5 +1,3 @@
-"""Repeated stdout-write benchmark."""
-
 import sys
 
 w = sys.stdout.write

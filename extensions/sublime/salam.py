@@ -1,15 +1,5 @@
-# Sublime Text runs package code in a Python 3.3 host unless the package opts
-# into 3.8, so this file stays on str.format and cannot use f-strings.
 # ruff: noqa: UP030, UP032
 # pylint: disable=import-error,too-few-public-methods,consider-using-f-string
-"""Salam support for Sublime Text.
-
-Syntax highlighting, indentation and completions come from the data files
-next to this one; this module adds the parts that have to shell out to the
-compiler: formatting a buffer and checking it without running it.
-
-Sublime Text 3 and 4 are both supported, so no f-strings.
-"""
 
 import os
 import re
@@ -49,7 +39,6 @@ def is_salam(view):
 
 
 def startup_info():
-    """Keep Windows from flashing a console window for each compiler run."""
     if os.name != "nt":
         return None
     info = subprocess.STARTUPINFO()
@@ -59,14 +48,6 @@ def startup_info():
 
 
 def run_compiler(args, cwd=None):
-    """Run the compiler and return (returncode, stdout, stderr).
-
-    Returns (None, "", message) when the executable cannot be started, which
-    is almost always a compiler_path that is not on PATH, or when it outlived
-    its timeout. Formatting runs on the UI thread because the edit token only
-    exists there, so an unbounded wait would freeze the editor, and freeze a
-    save along with it.
-    """
     command = [setting("compiler_path", "salam")] + args
     seconds = setting("timeout_seconds", 60)
     try:
@@ -101,13 +82,11 @@ def is_arabic_script(codepoint):
 
 
 def directive_lang(head):
-    """The two-letter code from a '//! lang: xx' header, or ''."""
     match = re.search(r"(?:lang|LANG|زبان)\s*:\s*([A-Za-z]{2})", head)
     return match.group(1).lower() if match else ""
 
 
 def detect_lang(text):
-    """Which keyword pack a buffer is written in: 'en', 'fa' or 'ar'."""
     choice = setting("language_pack", "auto")
     if choice in ("en", "fa", "ar"):
         return choice
@@ -135,8 +114,6 @@ def common_args(text):
 
 
 def format_source(text):
-    """Return (formatted_text, error). `salam format` rewrites files in
-    place, so the buffer goes through a scratch file."""
     workdir = tempfile.mkdtemp(prefix="salam-fmt-")
     path = os.path.join(workdir, "document.salam")
     try:
@@ -170,8 +147,6 @@ def show_panel(window, text):
 
 
 class SalamFormatCommand(sublime_plugin.TextCommand):
-    """Reformat the whole buffer with `salam format`."""
-
     def is_enabled(self):
         return is_salam(self.view)
 
@@ -199,12 +174,6 @@ class SalamFormatCommand(sublime_plugin.TextCommand):
 
 
 class SalamCheckCommand(sublime_plugin.TextCommand):
-    """Type-check the file without running it, into the output panel.
-
-    Nothing here needs the edit token, so the compiler runs off the UI thread
-    and only the panel update comes back to it.
-    """
-
     def is_enabled(self):
         return is_salam(self.view)
 
@@ -216,7 +185,6 @@ class SalamCheckCommand(sublime_plugin.TextCommand):
         if self.view.is_dirty():
             self.view.run_command("save")
 
-        # Read the buffer and the settings here, where the UI thread owns them.
         text = self.view.substr(sublime.Region(0, self.view.size()))
         null_device = "NUL" if os.name == "nt" else "/dev/null"
         args = [
@@ -237,7 +205,6 @@ class SalamCheckCommand(sublime_plugin.TextCommand):
 
 
 def check_in_background(window, args, working_dir):
-    """Runs off the UI thread; touches no buffer."""
     code, out, err = run_compiler(args, cwd=working_dir)
     report = (out + err).strip()
     sublime.set_timeout(lambda: report_check(window, code, report), 0)
@@ -252,8 +219,6 @@ def report_check(window, code, report):
 
 
 class SalamToggleFormatOnSaveCommand(sublime_plugin.ApplicationCommand):
-    """Turn the format-on-save setting on or off."""
-
     def run(self):
         config = settings()
         now = not config.get("format_on_save", False)
@@ -265,8 +230,6 @@ class SalamToggleFormatOnSaveCommand(sublime_plugin.ApplicationCommand):
 
 
 class SalamFormatOnSave(sublime_plugin.EventListener):
-    """Reformat a Salam buffer before it is written, when enabled."""
-
     def on_pre_save(self, view):
         if is_salam(view) and setting("format_on_save", False):
             view.run_command("salam_format")

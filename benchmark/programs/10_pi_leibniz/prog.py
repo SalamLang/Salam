@@ -1,5 +1,3 @@
-"""Leibniz pi-series approximation benchmark."""
-
 sum_ = 0.0
 sign = 1.0
 den = 1.0

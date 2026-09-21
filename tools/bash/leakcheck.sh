@@ -1,4 +1,36 @@
 #!/bin/sh
+# Run the whole test corpus through an AddressSanitizer/LeakSanitizer build
+# of salam and fail if the compiler leaked anything.
+#
+# Usage:
+#   sh tools/bash/leakcheck.sh [-j N] [--no-suite] [--no-sweep]
+#                               [--reports=DIR] [--allow=N] [section ...]
+#
+# Env:
+#   SALAM        salam binary to test. MUST be built with -fsanitize=address;
+#                the script refuses to run otherwise, because an
+#                uninstrumented binary reports zero leaks no matter what.
+#                Default: build/asan/salam, which `--build` produces.
+#   SALAM_STD    stdlib root (defaults to ./std, as run-tests.sh does)
+#   LSAN_SUPP    suppression file (default: tools/lsan.supp)
+#   NPROC        parallel workers, same meaning as in run-tests.sh
+#
+# Options:
+#   --build      build the ASan salam first (make -C c ... into build/asan)
+#   --no-suite   skip run-tests.sh, only run the extra-surface sweep
+#   --no-sweep   skip the extra-surface sweep, only run run-tests.sh
+#   --reports=D  where to collect the raw LSan reports (default: a temp dir)
+#   --allow=N    tolerate up to N leaking processes instead of 0. Only for
+#                ratcheting down a known backlog - the C compiler is at 0 and
+#                must stay there.
+#   section ...  forwarded to run-tests.sh (exec, errors, llvm, ...)
+#
+# Why this exists as a script and not just an ASAN_OPTIONS line in CI: a leak
+# is reported by the *child* process that leaked, at its exit, long after the
+# test that spawned it has been graded PASS. Writing every report to its own
+# file under one directory (log_path) and counting the files afterwards is
+# the only way to see them all - and `exitcode=0` keeps a leak from turning
+# into a spurious test failure that hides which test actually leaked.
 
 set -u
 
@@ -43,7 +75,7 @@ while [ $# -gt 0 ]; do
         shift
         ;;
     -h | --help)
-        sed -n '2,36p' "$0"
+        sed -n '2,33p' "$0"
         exit 0
         ;;
     -*)

@@ -1,4 +1,22 @@
 #!/bin/sh
+# Builds the self-hosted compiler: compiler/main.salam, compiled by a seed
+# salam, producing a salam binary.
+#
+# This is what replaced `make -C c`. The seed is an already-built compiler -
+# in CI, the released binary .github/actions/setup-salam installs; locally,
+# whatever `salam` is on PATH. It has to be SEED_MIN (0.3.1) or newer, since
+# older releases cannot resolve compiler/'s `../` imports.
+#
+# For a three-stage bootstrap with a fixpoint check, use
+# compiler/tools/bash/bootstrap.sh instead. This is the one-stage version, for
+# jobs that just need a working compiler.
+#
+# Usage:
+#   tools/bash/build-selfhost.sh [--output FILE] [--seed PROG] [--llvm DIR]
+#                                [--embed DIR] [-- <extra salam build args>]
+#
+# Env:
+#   SALAM_SEED   same as --seed
 
 set -eu
 
@@ -48,7 +66,7 @@ while [ $# -gt 0 ]; do
         break
         ;;
     -h | --help)
-        sed -n '2,20p' "$0"
+        sed -n '2,19p' "$0"
         exit 0
         ;;
     *)

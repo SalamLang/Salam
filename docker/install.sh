@@ -1,4 +1,19 @@
 #!/bin/sh
+# Installs a full Salam release bundle (the `salam` binary plus its std/
+# library, LICENSE and README) for use inside the Salam Docker image.
+#
+# This differs from the repo-root install.sh (which installs only the
+# `salam` binary onto a host PATH): programs that `use` std/ packages need
+# std/ to sit next to the binary, so the whole release bundle is unpacked
+# here, matching the layout the release zip already ships (salam + std/).
+#
+# Usage:
+#   sh install.sh --dir /opt/salam
+#   sh install.sh --dir /opt/salam --version 0.2.9
+#
+# Env vars (mirroring the root install.sh):
+#   SALAM_INSTALL_DIR, SALAM_VERSION
+#
 
 set -eu
 

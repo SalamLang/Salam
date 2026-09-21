@@ -1,4 +1,13 @@
 #!/bin/sh
+# Downloads a released salam for a platform other than this machine's, for
+# builds that happen inside a foreign-architecture container. setup-salam
+# installs the *runner's* architecture, which is the wrong one when the compile
+# runs under docker --platform=linux/386 or arm32v7.
+#
+# Usage:
+#   tools/bash/fetch-seed.sh --slug linux-i686 --out DIR [--version X.Y.Z]
+#
+# Without --version the newest published release is used.
 
 set -eu
 
@@ -34,7 +43,7 @@ while [ $# -gt 0 ]; do
         shift
         ;;
     -h | --help)
-        sed -n '2,12p' "$0"
+        sed -n '2,10p' "$0"
         exit 0
         ;;
     *)

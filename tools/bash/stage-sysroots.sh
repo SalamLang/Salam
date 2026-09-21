@@ -1,4 +1,21 @@
 #!/bin/sh
+# Copies this host's musl and mingw-w64 CRT/import libraries into a staging
+# directory laid out by target triple, ready for tools/bash/build-embed.sh to
+# tar into a self-contained salam.
+#
+# This is c/Makefile's `stage-sysroots` target. Same file lists, same search
+# order, same "missing is fine, incomplete is an error" rule: a toolchain that
+# is not installed is skipped with a note, but one that is installed and half
+# there fails, because that produces a sysroot that links most programs and
+# then breaks on the one that needs the missing piece.
+#
+# Usage:
+#   tools/bash/stage-sysroots.sh [--out DIR] [--musl-arch ARCH]
+#
+# Produces, under DIR:
+#   <arch>-linux-musl/     crt1.o crti.o crtn.o libc.a (+ compiler-rt builtins)
+#   x86_64-w64-mingw32/lib CRT, gcc runtime, and the import libraries
+#   i686-w64-mingw32/lib   the 32-bit counterpart
 
 set -eu
 
@@ -24,7 +41,7 @@ while [ $# -gt 0 ]; do
         shift
         ;;
     -h | --help)
-        sed -n '2,20p' "$0"
+        sed -n '2,18p' "$0"
         exit 0
         ;;
     *)

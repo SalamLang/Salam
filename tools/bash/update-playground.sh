@@ -1,4 +1,17 @@
 #!/usr/bin/env bash
+# Rebuild the Salam online playground (editor/) from the current sources.
+#
+# Usage: tools/bash/update-playground.sh [options]
+#
+#   --selfhost    Bootstrap compiler/*.salam and build the editor with the
+#                 resulting self-hosted compiler instead of the C one. The
+#                 Wasm bundle is unaffected either way: it is the browser
+#                 compiler, emcc over c/src, and has no self-hosted form.
+#   --wasm-only   Skip rebuilding the native C compiler and reuse ./salam.
+#                 Ignored under --selfhost, which needs it as the seed.
+#   --serve       Serve editor/ over HTTP when the build finishes.
+#   --port N      Port for --serve (default 8080).
+#   -h, --help    This text.
 
 set -eu
 . "$(dirname "$0")/lib.sh"
@@ -16,7 +29,7 @@ while [ $# -gt 0 ]; do
         PORT="${1:?--port needs a number}"
         ;;
     -h | --help)
-        sed -n '2,15p' "$0"
+        sed -n '2,14p' "$0"
         exit 0
         ;;
     *)

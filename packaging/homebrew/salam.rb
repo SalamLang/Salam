@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 class Salam < Formula
   desc "General-purpose systems programming language with a built-in DSL"
   homepage "https://github.com/SalamLang/Salam"
@@ -39,7 +41,7 @@ class Salam < Formula
   end
 
   def install
-    seed = buildpath/"bootstrap"
+    seed = buildpath / "bootstrap"
     resource("bootstrap").stage do
       seed.install Dir["*"]
     end
@@ -47,12 +49,12 @@ class Salam < Formula
     # libsalam_llvm.a merges the native shims with LLVM's static archives, so
     # the compiler carries its own LLVM backend instead of shelling out.
     system "sh", "std/llvm/native/build.sh",
-           "--llvm-config", formula_opt_bin("llvm@22")/"llvm-config",
+           "--llvm-config", formula_opt_bin("llvm@22") / "llvm-config",
            "--out", buildpath
 
     ENV.prepend_path "LIBRARY_PATH", formula_opt_lib("zstd")
     ENV.prepend_path "LIBRARY_PATH", formula_opt_lib("libxml2")
-    ENV.prepend_path "CPATH", formula_opt_include("libxml2")/"libxml2"
+    ENV.prepend_path "CPATH", formula_opt_include("libxml2") / "libxml2"
 
     system "sh", "tools/bash/build-selfhost.sh",
            "--output=#{buildpath}/salam",
@@ -64,13 +66,13 @@ class Salam < Formula
     # installed together and the wrapper pins SALAM_STD.
     libexec.install "salam"
     libexec.install "std"
-    bin.write_env_script libexec/"salam", SALAM_STD: libexec/"std"
+    bin.write_env_script libexec / "salam", SALAM_STD: libexec / "std"
 
     doc.install "README.md"
   end
 
   test do
-    (testpath/"hello.salam").write <<~SALAM
+    (testpath / "hello.salam").write <<~SALAM
       func main:
           println "salam"
       end

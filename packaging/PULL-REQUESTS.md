@@ -7,7 +7,7 @@ Replace `0.4.0` if you are shipping a different version.
 
 ## 1. homebrew-core
 
-**Repo:** <https://github.com/Homebrew/homebrew-core>
+**Repository:** <https://github.com/Homebrew/homebrew-core>
 **Branch:** `salam-0.4.0`
 **File:** `Formula/s/salam.rb`
 
@@ -62,7 +62,7 @@ brew audit --strict --new packaging/dist/homebrew/salam.rb
 
 ## 2. microsoft/winget-pkgs
 
-**Repo:** <https://github.com/microsoft/winget-pkgs>
+**Repository:** <https://github.com/microsoft/winget-pkgs>
 **Branch:** `SalamLang.Salam-0.4.0`
 **Files:** `manifests/s/SalamLang/Salam/0.4.0/` - the three rendered YAML files.
 
@@ -101,7 +101,7 @@ folder.
 
 ## 3. nixpkgs
 
-**Repo:** <https://github.com/NixOS/nixpkgs>
+**Repository:** <https://github.com/NixOS/nixpkgs>
 **Branch:** `salam-init-0.4.0`
 **File:** `pkgs/by-name/sa/salam/package.nix`
 
@@ -166,7 +166,7 @@ then set `maintainers = with lib.maintainers; [ maxbase ];`.
 
 ## 4. Alpine aports (merge request, not a PR)
 
-**Repo:** <https://gitlab.alpinelinux.org/alpine/aports>
+**Repository:** <https://gitlab.alpinelinux.org/alpine/aports>
 **Target:** `testing/salam/APKBUILD`
 
 **Title:**

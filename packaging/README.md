@@ -39,11 +39,11 @@ still wins.
 ## What you need before publishing
 
 Where to get each credential, and the secret name CI expects. `RELEASE_TOKEN`
-already exists on this repo, so the `.deb`/`.rpm` jobs need nothing new.
+already exists on this repository, so the `.deb`/`.rpm` jobs need nothing new.
 
 | Service                     | Get the token here                                                                                                                                                     | Secret name                                        | Wired in CI?      |
 | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- | ----------------- |
-| GitHub Releases (.deb/.rpm) | built in - `GITHUB_TOKEN`, falls back to the existing `RELEASE_TOKEN`                                                                                                  | `RELEASE_TOKEN` _(already set)_                    | yes               |
+| GitHub Releases (.deb/.rpm) | built-in - `GITHUB_TOKEN`, falls back to the existing `RELEASE_TOKEN`                                                                                                  | `RELEASE_TOKEN` _(already set)_                    | yes               |
 | AUR                         | register at <https://aur.archlinux.org/register>, then paste an SSH **public** key at <https://aur.archlinux.org/account/> → _Edit_ → _SSH Public Key_                 | `AUR_SSH_PRIVATE_KEY`, `AUR_USERNAME`, `AUR_EMAIL` | yes, secret-gated |
 | npm                         | <https://www.npmjs.com/settings/~/tokens> → _Generate New Token_ → _Granular Access Token_, read+write on `salam-lang`                                                 | `NPM_TOKEN`                                        | not yet           |
 | Chocolatey                  | register at <https://push.chocolatey.org/>, key at <https://push.chocolatey.org/account>                                                                               | `CHOCO_API_KEY`                                    | not yet           |
@@ -96,9 +96,9 @@ First time only, create them:
 
 1. Register at <https://aur.archlinux.org> and add an SSH **public** key under
    _My Account_.
-2. Add the matching **private** key to this repo as `AUR_SSH_PRIVATE_KEY`,
+2. Add the matching **private** key to this repository as `AUR_SSH_PRIVATE_KEY`,
    plus `AUR_USERNAME` and `AUR_EMAIL`.
-3. Seed each repo once by hand:
+3. Seed each repository once by hand:
 
 ```sh
 packaging/bump.sh 0.4.0
@@ -170,7 +170,7 @@ answer is that the embedded LLVM toolchain is the point of the distribution.
 
 ### Nix
 
-`packaging/nix/flake.nix` works straight from the repo:
+`packaging/nix/flake.nix` works straight from the repository:
 
 ```sh
 nix run github:SalamLang/Salam?dir=packaging/nix
@@ -183,7 +183,7 @@ For nixpkgs proper, `packaging/dist/nix/package.nix` goes to
 ### Fedora / RHEL - COPR
 
 Create a project at <https://copr.fedorainfracloud.org>, then either upload
-`packaging/dist/rpm/salam.spec` by hand or point COPR at this repo. The CI
+`packaging/dist/rpm/salam.spec` by hand or point COPR at this repository. The CI
 job already builds the `.rpm` and attaches it to the release, so users can
 also install it directly.
 
@@ -219,7 +219,7 @@ and verifies it against the published `.sha256`. Users get `npx salam-lang`.
 
 ### asdf / mise
 
-`packaging/asdf/` is a plugin. It needs its own repo, `SalamLang/asdf-salam`,
+`packaging/asdf/` is a plugin. It needs its own repository, `SalamLang/asdf-salam`,
 containing just the `bin/` directory. Then:
 
 ```sh

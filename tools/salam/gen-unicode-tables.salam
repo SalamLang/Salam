@@ -1,0 +1,1277 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import os
+import io
+import str
+import conv
+import sort
+import net.http
+
+const UCD_VERSION := "16.0.0"
+const UCD_BASE := "https://www.unicode.org/Public/16.0.0/ucd"
+const CACHE := "tools/salam/.ucd-cache"
+const OUT := "std/unicode/tables.salam"
+
+const MAX_CP := 1114112
+
+const HANGUL_VCOUNT := 21
+const HANGUL_TCOUNT := 28
+const HANGUL_LCOUNT := 19
+const HANGUL_SCOUNT := 11172
+
+struct Rng:
+    pub lo: int = 0
+    pub hi: int = 0
+    pub id: int = 0
+end
+
+struct Span:
+    pub lo: int = 0
+    pub hi: int = 0
+end
+
+struct CaseRun:
+    pub lo: int = 0
+    pub hi: int = 0
+    pub stride: int = 0
+    pub delta: int = 0
+end
+
+struct Comp:
+    pub a: int = 0
+    pub b: int = 0
+    pub cp: int = 0
+end
+
+struct IntMap:
+    pub keys: Vector<int> = Vector {}
+    pub m: HashMap<int, int> = HashMap {}
+end
+
+struct SeqMap:
+    pub keys: Vector<int> = Vector {}
+    pub off: HashMap<int, int> = HashMap {}
+    pub len: HashMap<int, int> = HashMap {}
+    pub seq: Vector<int> = Vector {}
+end
+
+struct Emitter:
+    pub parts: Vector<str> = Vector {}
+end
+
+func si(n: int): str:
+    ret conv.FormatInt(n as i64)
+end
+
+func die(msg: str):
+    io.EPrintln(msg)
+    os.Exit(1)
+end
+
+func hex4(cp: int): str:
+    mut h := conv.FormatHex(cp as u64)
+    h = str.Upper(h)
+    until h.len() < 4:
+        h = "0" + h
+    end
+    ret h
+end
+
+func imap_put(t &: IntMap, k: int, v: int):
+    if t.m.has(k) == false:
+        t.keys.push(k)
+    end
+    t.m.put(k, v)
+end
+
+func sorted_keys(t &: IntMap): Vector<int>:
+    mut ks := Vector {} as Vector<int>
+    each k in t.keys:
+        ks.push(k)
+    end
+    sort.Sort(ks)
+    ret ks
+end
+
+func seq_put(t &: SeqMap, cp: int, vals &: Vector<int>):
+    if t.off.has(cp) == false:
+        t.keys.push(cp)
+    end
+    t.off.put(cp, t.seq.len())
+    t.len.put(cp, vals.len())
+    each v in vals:
+        t.seq.push(v)
+    end
+end
+
+func seq_sorted_keys(t &: SeqMap): Vector<int>:
+    mut ks := Vector {} as Vector<int>
+    each k in t.keys:
+        ks.push(k)
+    end
+    sort.Sort(ks)
+    ret ks
+end
+
+func less_rng(a: Rng, b: Rng): bool:
+    if a.lo != b.lo: ret a.lo < b.lo end
+    if a.hi != b.hi: ret a.hi < b.hi end
+    ret a.id < b.id
+end
+
+func less_pair(a: Span, b: Span): bool:
+    if a.lo != b.lo: ret a.lo < b.lo end
+    ret a.hi < b.hi
+end
+
+func less_comp(a: Comp, b: Comp): bool:
+    if a.a != b.a: ret a.a < b.a end
+    if a.b != b.b: ret a.b < b.b end
+    ret a.cp < b.cp
+end
+
+func categories(): Vector<str>:
+    mut v := Vector {} as Vector<str>
+    v.push("Lu") v.push("Ll") v.push("Lt") v.push("Lm") v.push("Lo")
+    v.push("Mn") v.push("Mc") v.push("Me")
+    v.push("Nd") v.push("Nl") v.push("No")
+    v.push("Pc") v.push("Pd") v.push("Ps") v.push("Pe")
+    v.push("Pi") v.push("Pf") v.push("Po")
+    v.push("Sm") v.push("Sc") v.push("Sk") v.push("So")
+    v.push("Zs") v.push("Zl") v.push("Zp")
+    v.push("Cc") v.push("Cf") v.push("Cs") v.push("Co") v.push("Cn")
+    ret v
+end
+
+func grapheme_classes(): Vector<str>:
+    mut v := Vector {} as Vector<str>
+    v.push("Other") v.push("CR") v.push("LF") v.push("Control")
+    v.push("Extend") v.push("ZWJ") v.push("Regional_Indicator")
+    v.push("Prepend") v.push("SpacingMark")
+    v.push("L") v.push("V") v.push("T") v.push("LV") v.push("LVT")
+    v.push("Extended_Pictographic")
+    ret v
+end
+
+func incb_classes(): Vector<str>:
+    mut v := Vector {} as Vector<str>
+    v.push("None") v.push("Consonant") v.push("Extend") v.push("Linker")
+    ret v
+end
+
+func bidi_classes(): Vector<str>:
+    mut v := Vector {} as Vector<str>
+    v.push("L") v.push("R") v.push("AL") v.push("EN") v.push("ES")
+    v.push("ET") v.push("AN") v.push("CS") v.push("NSM") v.push("BN")
+    v.push("B") v.push("S") v.push("WS") v.push("ON")
+    v.push("LRE") v.push("RLE") v.push("LRO") v.push("RLO") v.push("PDF")
+    v.push("LRI") v.push("RLI") v.push("FSI") v.push("PDI")
+    ret v
+end
+
+func pbt_classes(): Vector<str>:
+    mut v := Vector {} as Vector<str>
+    v.push("None") v.push("Open") v.push("Close")
+    ret v
+end
+
+func index_of_names(names: Vector<str>): HashMap<str, int>:
+    mut m := HashMap {} as HashMap<str, int>
+    mut i := 0
+    each n in names:
+        m.put(n, i)
+        i += 1
+    end
+    ret m
+end
+
+func bidi_long(): HashMap<str, str>:
+    mut m := HashMap {} as HashMap<str, str>
+    m.put("Left_To_Right", "L")
+    m.put("Right_To_Left", "R")
+    m.put("Arabic_Letter", "AL")
+    m.put("European_Number", "EN")
+    m.put("European_Separator", "ES")
+    m.put("European_Terminator", "ET")
+    m.put("Arabic_Number", "AN")
+    m.put("Common_Separator", "CS")
+    m.put("Nonspacing_Mark", "NSM")
+    m.put("Boundary_Neutral", "BN")
+    m.put("Paragraph_Separator", "B")
+    m.put("Segment_Separator", "S")
+    m.put("White_Space", "WS")
+    m.put("Other_Neutral", "ON")
+    ret m
+end
+
+func remote_files(): Vector<str>:
+    mut v := Vector {} as Vector<str>
+    v.push("UnicodeData.txt")
+    v.push("CaseFolding.txt")
+    v.push("PropList.txt")
+    v.push("DerivedCoreProperties.txt")
+    v.push("DerivedNormalizationProps.txt")
+    v.push("auxiliary/GraphemeBreakProperty.txt")
+    v.push("emoji/emoji-data.txt")
+    v.push("extracted/DerivedBidiClass.txt")
+    v.push("BidiBrackets.txt")
+    v.push("Scripts.txt")
+    ret v
+end
+
+func local_name(remote: str): str:
+    at := str.LastIndex(remote, "/")
+    if at < 0: ret remote end
+    ret remote.substr(at + 1, remote.len() - at - 1)
+end
+
+func ucd_path(name: str): str:
+    ret CACHE + "/" + name
+end
+
+func fetch():
+    _mk := os.MkdirAll(CACHE)
+    each remote in remote_files():
+        url := UCD_BASE + "/" + remote
+        io.EPrintln("fetching " + url)
+        r := http.Get(url)
+        if r.err.len() > 0:
+            die("fetch failed for " + url + ": " + r.err)
+        end
+        if r.status != 200:
+            die("fetch failed for " + url + ": HTTP " + si(r.status))
+        end
+        _n := os.WriteFile(ucd_path(local_name(remote)), r.body)
+    end
+end
+
+func raw_lines(name: str): Vector<str>:
+    path := ucd_path(name)
+    if os.Exists(path) == false:
+        io.EPrintln("missing " + path)
+        die("Run with --fetch to download the UCD " + UCD_VERSION + " files.")
+    end
+    ret str.Split(os.ReadFile(path), "\n")
+end
+
+func read_lines(name: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    each line in raw_lines(name):
+        mut t := line
+        h := t.find("#")
+        if h >= 0:
+            t = t.substr(0, h)
+        end
+        t = str.Trim(t)
+        if t.len() > 0:
+            out.push(t)
+        end
+    end
+    ret out
+end
+
+func fields(line: str, delim: str): Vector<str>:
+    ret str.Split(line, delim)
+end
+
+func trimmed_fields(line: str, delim: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    each f in str.Split(line, delim):
+        out.push(str.Trim(f))
+    end
+    ret out
+end
+
+func hex_list(s: str): Vector<int>:
+    mut out := Vector {} as Vector<int>
+    each tok in str.Fields(s):
+        out.push(conv.ParseHex(tok) as int)
+    end
+    ret out
+end
+
+func span_lo(spec: str): int:
+    at := spec.find("..")
+    if at < 0: ret conv.ParseHex(spec) as int end
+    ret conv.ParseHex(spec.substr(0, at)) as int
+end
+
+func span_hi(spec: str): int:
+    at := spec.find("..")
+    if at < 0: ret conv.ParseHex(spec) as int end
+    ret conv.ParseHex(spec.substr(at + 2, spec.len() - at - 2)) as int
+end
+
+func merge_cat_ranges(ranges &: Vector<Rng>): Vector<Rng>:
+    sort.SortBy(ranges, (a: Rng, b: Rng) => less_rng(a, b))
+    mut out := Vector {} as Vector<Rng>
+    each r in ranges:
+        if out.len() > 0:
+            last := out.get(out.len() - 1)
+            if last.id == r.id && last.hi + 1 == r.lo:
+                out.set(out.len() - 1, Rng { lo = last.lo, hi = r.hi, id = r.id })
+                continue
+            end
+        end
+        out.push(r)
+    end
+    ret out
+end
+
+func parse_unicode_data(
+    cat_id: HashMap<str, int>,
+    cats &: Vector<Rng>,
+    upper &: IntMap,
+    lower &: IntMap,
+    title &: IntMap,
+    ccc &: IntMap,
+    canon &: SeqMap,
+    compat &: SeqMap
+):
+    mut ranges := Vector {} as Vector<Rng>
+    mut pending_cp := -1
+    mut pending_cat := ""
+
+    each line in read_lines("UnicodeData.txt"):
+        f := fields(line, ";")
+        cp := conv.ParseHex(f.get(0)) as int
+        name := f.get(1)
+        cat := f.get(2)
+        if cat_id.has(cat) == false:
+            die("unknown general category " + cat + " at U+" + hex4(cp))
+        end
+        cid := cat_id.get(cat)
+
+        if str.EndsWith(name, ", First>"):
+            pending_cp = cp
+            pending_cat = cat
+            continue
+        end
+        if str.EndsWith(name, ", Last>"):
+            if pending_cp < 0 || pending_cat != cat:
+                die("unpaired range terminator at U+" + hex4(cp))
+            end
+            ranges.push(Rng { lo = pending_cp, hi = cp, id = cid })
+            pending_cp = -1
+            pending_cat = ""
+            continue
+        end
+
+        ranges.push(Rng { lo = cp, hi = cp, id = cid })
+
+        if f.get(3) != "0":
+            imap_put(ccc, cp, str.ToInt(f.get(3)))
+        end
+        d := f.get(5)
+        if d.len() > 0:
+            if str.StartsWith(d, "<"):
+                gt := d.find(">")
+                mut vals := hex_list(d.substr(gt + 1, d.len() - gt - 1))
+                seq_put(compat, cp, vals)
+            else:
+                mut vals := hex_list(d)
+                seq_put(canon, cp, vals)
+            end
+        end
+        if f.get(12).len() > 0:
+            imap_put(upper, cp, conv.ParseHex(f.get(12)) as int)
+        end
+        if f.get(13).len() > 0:
+            imap_put(lower, cp, conv.ParseHex(f.get(13)) as int)
+        end
+        if f.get(14).len() > 0:
+            imap_put(title, cp, conv.ParseHex(f.get(14)) as int)
+        end
+    end
+
+    if pending_cp >= 0:
+        die("unterminated range starting at U+" + hex4(pending_cp))
+    end
+
+    merged := merge_cat_ranges(ranges)
+    each r in merged:
+        cats.push(r)
+    end
+end
+
+func expand_cp(cp: int, t &: SeqMap, out &: Vector<int>, depth: int):
+    if depth > 32:
+        die("decomposition of U+" + hex4(cp) + " does not terminate")
+    end
+    if t.off.has(cp) == false:
+        out.push(cp)
+        ret
+    end
+    o := t.off.get(cp)
+    n := t.len.get(cp)
+    repeat n with i:
+        expand_cp(t.seq.get(o + i), t, out, depth + 1)
+    end
+end
+
+func expand_table(src &: SeqMap, table &: SeqMap, dst &: SeqMap):
+    ks := seq_sorted_keys(src)
+    each cp in ks:
+        mut out := Vector {} as Vector<int>
+        expand_cp(cp, table, out, 0)
+        seq_put(dst, cp, out)
+    end
+end
+
+func composition_pairs(canon &: SeqMap, excluded &: Vector<bool>): Vector<Comp>:
+    mut out := Vector {} as Vector<Comp>
+    each cp in canon.keys:
+        n := canon.len.get(cp)
+        if n != 2: continue end
+        if excluded.get(cp): continue end
+        o := canon.off.get(cp)
+        out.push(Comp { a = canon.seq.get(o), b = canon.seq.get(o + 1), cp = cp })
+    end
+    sort.SortBy(out, (x: Comp, y: Comp) => less_comp(x, y))
+    ret out
+end
+
+func merge_adjacent(ranges &: Vector<Rng>, gap_ok: bool): Vector<Rng>:
+    sort.SortBy(ranges, (a: Rng, b: Rng) => less_rng(a, b))
+    mut out := Vector {} as Vector<Rng>
+    each r in ranges:
+        if out.len() > 0:
+            last := out.get(out.len() - 1)
+            mut joins := false
+            if last.id == r.id:
+                if gap_ok:
+                    joins = last.hi + 1 >= r.lo
+                else:
+                    joins = last.hi + 1 == r.lo
+                end
+            end
+            if joins:
+                mut hi := r.hi
+                if gap_ok && last.hi > hi: hi = last.hi end
+                out.set(out.len() - 1, Rng { lo = last.lo, hi = hi, id = r.id })
+                continue
+            end
+        end
+        out.push(r)
+    end
+    ret out
+end
+
+func parse_scripts(names &: Vector<str>): Vector<Rng>:
+    names.push("Unknown")
+    mut index := HashMap {} as HashMap<str, int>
+    index.put("Unknown", 0)
+    mut ranges := Vector {} as Vector<Rng>
+    each line in read_lines("Scripts.txt"):
+        f := trimmed_fields(line, ";")
+        if f.len() < 2: continue end
+        nm := f.get(1)
+        if index.has(nm) == false:
+            index.put(nm, names.len())
+            names.push(nm)
+        end
+        ranges.push(Rng { lo = span_lo(f.get(0)), hi = span_hi(f.get(0)), id = index.get(nm) })
+    end
+    ret merge_adjacent(ranges, true)
+end
+
+func parse_bidi_class(bidi_id: HashMap<str, int>): Vector<Rng>:
+    longs := bidi_long()
+    mut bc := Vector {} as Vector<int>
+    repeat MAX_CP with _:
+        bc.push(-1)
+    end
+
+    mut defaults := 0
+    each line in raw_lines("DerivedBidiClass.txt"):
+        at := line.find("@missing:")
+        if at < 0: continue end
+        spec := str.Trim(line.substr(at + 9, line.len() - at - 9))
+        f := trimmed_fields(spec, ";")
+        if f.len() < 2: continue end
+        nm := f.get(1)
+        if longs.has(nm) == false:
+            die("unknown Bidi_Class default '" + nm + "'")
+        end
+        id := bidi_id.get(longs.get(nm))
+        lo := span_lo(f.get(0))
+        hi := span_hi(f.get(0))
+        mut cp := lo
+        until cp <= hi:
+            bc.set(cp, id)
+            cp += 1
+        end
+        defaults += 1
+    end
+    if defaults == 0:
+        die("DerivedBidiClass.txt has no @missing defaults")
+    end
+
+    each line in read_lines("DerivedBidiClass.txt"):
+        f := trimmed_fields(line, ";")
+        if f.len() < 2: continue end
+        nm := f.get(1)
+        if bidi_id.has(nm) == false:
+            die("unknown Bidi_Class '" + nm + "'")
+        end
+        id := bidi_id.get(nm)
+        lo := span_lo(f.get(0))
+        hi := span_hi(f.get(0))
+        mut cp := lo
+        until cp <= hi:
+            bc.set(cp, id)
+            cp += 1
+        end
+    end
+
+    l_id := bidi_id.get("L")
+    mut out := Vector {} as Vector<Rng>
+    mut cp := 0
+    until cp < MAX_CP:
+        v := bc.get(cp)
+        if v < 0 || v == l_id:
+            cp += 1
+            continue
+        end
+        mut end_cp := cp
+        until end_cp + 1 < MAX_CP && bc.get(end_cp + 1) == v:
+            end_cp += 1
+        end
+        out.push(Rng { lo = cp, hi = end_cp, id = v })
+        cp = end_cp + 1
+    end
+    ret out
+end
+
+func parse_brackets(pbt_id: HashMap<str, int>): Vector<Rng>:
+    mut out := Vector {} as Vector<Rng>
+    each line in read_lines("BidiBrackets.txt"):
+        f := trimmed_fields(line, ";")
+        if f.len() < 3: continue end
+        k := f.get(2)
+        mut kind := -1
+        if k == "o": kind = pbt_id.get("Open") end
+        if k == "c": kind = pbt_id.get("Close") end
+        if kind < 0:
+            die("unknown Bidi_Paired_Bracket_Type '" + k + "'")
+        end
+        out.push(Rng { lo = conv.ParseHex(f.get(0)) as int, hi = conv.ParseHex(f.get(1)) as int, id = kind })
+    end
+    sort.SortBy(out, (a: Rng, b: Rng) => less_rng(a, b))
+    ret out
+end
+
+func parse_incb(incb_id: HashMap<str, int>): Vector<Rng>:
+    mut ranges := Vector {} as Vector<Rng>
+    each line in read_lines("DerivedCoreProperties.txt"):
+        f := trimmed_fields(line, ";")
+        if f.len() < 3: continue end
+        if f.get(1) != "InCB": continue end
+        nm := f.get(2)
+        if incb_id.has(nm) == false:
+            die("unknown Indic_Conjunct_Break value '" + nm + "'")
+        end
+        ranges.push(Rng { lo = span_lo(f.get(0)), hi = span_hi(f.get(0)), id = incb_id.get(nm) })
+    end
+    ret merge_adjacent(ranges, true)
+end
+
+func parse_prop(filename: str, wanted: str): Vector<Span>:
+    mut out := Vector {} as Vector<Span>
+    each line in read_lines(filename):
+        f := trimmed_fields(line, ";")
+        if f.len() < 2: continue end
+        if f.get(1) != wanted: continue end
+        out.push(Span { lo = span_lo(f.get(0)), hi = span_hi(f.get(0)) })
+    end
+    sort.SortBy(out, (a: Span, b: Span) => less_pair(a, b))
+    mut merged := Vector {} as Vector<Span>
+    each p in out:
+        if merged.len() > 0:
+            last := merged.get(merged.len() - 1)
+            if last.hi + 1 >= p.lo:
+                mut hi := p.hi
+                if last.hi > hi: hi = last.hi end
+                merged.set(merged.len() - 1, Span { lo = last.lo, hi = hi })
+                continue
+            end
+        end
+        merged.push(p)
+    end
+    ret merged
+end
+
+func parse_grapheme_break(gcb_id: HashMap<str, int>): Vector<Rng>:
+    mut ranges := Vector {} as Vector<Rng>
+    each line in read_lines("GraphemeBreakProperty.txt"):
+        f := trimmed_fields(line, ";")
+        if f.len() < 2: continue end
+        nm := f.get(1)
+        if nm == "LV" || nm == "LVT": continue end
+        if gcb_id.has(nm) == false:
+            die("unknown Grapheme_Cluster_Break class '" + nm + "'")
+        end
+        ranges.push(Rng { lo = span_lo(f.get(0)), hi = span_hi(f.get(0)), id = gcb_id.get(nm) })
+    end
+    pict := gcb_id.get("Extended_Pictographic")
+    each p in parse_prop("emoji-data.txt", "Extended_Pictographic"):
+        ranges.push(Rng { lo = p.lo, hi = p.hi, id = pict })
+    end
+
+    sort.SortBy(ranges, (a: Rng, b: Rng) => less_rng(a, b))
+    mut i := 1
+    until i < ranges.len():
+        if ranges.get(i).lo <= ranges.get(i - 1).hi:
+            die("overlapping grapheme break ranges at U+" + hex4(ranges.get(i).lo))
+        end
+        i += 1
+    end
+    ret merge_adjacent(ranges, false)
+end
+
+func parse_case_folding(simple &: IntMap, full &: SeqMap):
+    each line in read_lines("CaseFolding.txt"):
+        f := trimmed_fields(line, ";")
+        cp := conv.ParseHex(f.get(0)) as int
+        status := f.get(1)
+        mut cps := hex_list(f.get(2))
+        if status == "C" || status == "S":
+            if cps.len() != 1:
+                die("non-simple mapping for status " + status + " at U+" + hex4(cp))
+            end
+            imap_put(simple, cp, cps.get(0))
+        end
+        if status == "C" || status == "F":
+            if cps.len() > 1:
+                seq_put(full, cp, cps)
+            end
+        end
+    end
+end
+
+func value_ranges(t &: IntMap): Vector<Rng>:
+    ks := sorted_keys(t)
+    mut out := Vector {} as Vector<Rng>
+    mut i := 0
+    n := ks.len()
+    until i < n:
+        cp := ks.get(i)
+        v := t.m.get(cp)
+        mut j := i
+        until j + 1 < n && ks.get(j + 1) == ks.get(j) + 1 && t.m.get(ks.get(j + 1)) == v:
+            j += 1
+        end
+        out.push(Rng { lo = cp, hi = ks.get(j), id = v })
+        i = j + 1
+    end
+    ret out
+end
+
+func case_ranges(t &: IntMap): Vector<CaseRun>:
+    ks := sorted_keys(t)
+    mut out := Vector {} as Vector<CaseRun>
+    mut i := 0
+    n := ks.len()
+    until i < n:
+        cp := ks.get(i)
+        delta := t.m.get(cp) - cp
+        mut best_end := i
+        mut best_stride := 1
+        mut stride := 1
+        until stride <= 2:
+            mut j := i
+            until j + 1 < n && ks.get(j + 1) == ks.get(j) + stride && t.m.get(ks.get(j + 1)) - ks.get(j + 1) == delta:
+                j += 1
+            end
+            if j > best_end:
+                best_end = j
+                best_stride = stride
+            end
+            stride += 1
+        end
+        out.push(CaseRun { lo = cp, hi = ks.get(best_end), stride = best_stride, delta = delta })
+        i = best_end + 1
+    end
+    ret out
+end
+
+func e_raw(e &: Emitter, text: str):
+    e.parts.push(text)
+end
+
+func e_blank(e &: Emitter):
+    e.parts.push("")
+end
+
+func e_comment(e &: Emitter, text: str):
+    mut body := text
+    until str.StartsWith(body, "\n"):
+        body = body.substr(1, body.len() - 1)
+    end
+    until str.EndsWith(body, "\n"):
+        body = body.substr(0, body.len() - 1)
+    end
+    each line in str.Split(body, "\n"):
+        e.parts.push(str.TrimRight("// " + line))
+    end
+end
+
+func e_ints(e &: Emitter, name: str, values &: Vector<int>, per_line: int):
+    if values.len() == 0:
+        die("refusing to emit empty table " + name)
+    end
+    e.parts.push("const " + name + " := [")
+    mut i := 0
+    until i < values.len():
+        mut row := ""
+        mut j := i
+        until j < values.len() && j < i + per_line:
+            if j > i: row = row + ", " end
+            row = row + si(values.get(j))
+            j += 1
+        end
+        e.parts.push("    " + row)
+        i += per_line
+    end
+    e.parts.push("]")
+end
+
+func e_strings(e &: Emitter, name: str, values &: Vector<str>, per_line: int):
+    if values.len() == 0:
+        die("refusing to emit empty table " + name)
+    end
+    e.parts.push("const " + name + " := [")
+    mut i := 0
+    until i < values.len():
+        mut row := ""
+        mut j := i
+        until j < values.len() && j < i + per_line:
+            if j > i: row = row + ", " end
+            row = row + "\"" + values.get(j) + "\""
+            j += 1
+        end
+        e.parts.push("    " + row)
+        i += per_line
+    end
+    e.parts.push("]")
+end
+
+func e_text(e &: Emitter): str:
+    ret str.TrimRight(str.Join(e.parts, "\n")) + "\n"
+end
+
+func banner(): str:
+    mut b := str.NewBuilder()
+    str.BufAppend(b, "/*\n")
+    str.BufAppend(b, " * Salam Programming Language (2024-2026)\n")
+    str.BufAppend(b, " *\n")
+    str.BufAppend(b, " *   +-------------------+\n")
+    str.BufAppend(b, " *   |     S A L A M     |\n")
+    str.BufAppend(b, " *   +-------------------+\n")
+    str.BufAppend(b, " *\n")
+    str.BufAppend(b, " * Designed by Seyyed Ali Mohammadiyeh and the Salam Team\n")
+    str.BufAppend(b, " * Born from a decade of language design experience (since 2018)\n")
+    str.BufAppend(b, " *\n")
+    str.BufAppend(b, " * Repository: https://github.com/SalamLang/Salam\n")
+    str.BufAppend(b, " *\n")
+    str.BufAppend(b, " */\n")
+    ret str.BufStr(b)
+end
+
+func col_lo(rs &: Vector<Rng>): Vector<int>:
+    mut v := Vector {} as Vector<int>
+    each r in rs: v.push(r.lo) end
+    ret v
+end
+
+func col_hi(rs &: Vector<Rng>): Vector<int>:
+    mut v := Vector {} as Vector<int>
+    each r in rs: v.push(r.hi) end
+    ret v
+end
+
+func col_id(rs &: Vector<Rng>): Vector<int>:
+    mut v := Vector {} as Vector<int>
+    each r in rs: v.push(r.id) end
+    ret v
+end
+
+func pair_lo(ps &: Vector<Span>): Vector<int>:
+    mut v := Vector {} as Vector<int>
+    each p in ps: v.push(p.lo) end
+    ret v
+end
+
+func pair_hi(ps &: Vector<Span>): Vector<int>:
+    mut v := Vector {} as Vector<int>
+    each p in ps: v.push(p.hi) end
+    ret v
+end
+
+func emit_case_block(e &: Emitter, t &: IntMap, prefix: str, human: str):
+    rs := case_ranges(t)
+    e_comment(e, human + ": " + si(t.keys.len()) + " mappings compressed into " + si(rs.len()) + " (lo, hi, stride, delta) runs.\n" +
+        "A code point cp in a run maps to cp + delta when\n" +
+        "(cp - lo) is a multiple of stride.")
+    mut lo := Vector {} as Vector<int>
+    mut hi := Vector {} as Vector<int>
+    mut sd := Vector {} as Vector<int>
+    mut dl := Vector {} as Vector<int>
+    each r in rs:
+        lo.push(r.lo) hi.push(r.hi) sd.push(r.stride) dl.push(r.delta)
+    end
+    e_ints(e, prefix + "_LO", lo, 8)
+    e_blank(e)
+    e_ints(e, prefix + "_HI", hi, 8)
+    e_blank(e)
+    e_ints(e, prefix + "_STRIDE", sd, 8)
+    e_blank(e)
+    e_ints(e, prefix + "_DELTA", dl, 8)
+    e_blank(e)
+end
+
+func emit_seq_block(e &: Emitter, t &: SeqMap, prefix: str, human: str, extra: str):
+    ks := seq_sorted_keys(t)
+    mut cps := Vector {} as Vector<int>
+    mut offs := Vector {} as Vector<int>
+    mut lens := Vector {} as Vector<int>
+    mut seq := Vector {} as Vector<int>
+    mut maxlen := 0
+    each cp in ks:
+        o := t.off.get(cp)
+        n := t.len.get(cp)
+        cps.push(cp)
+        offs.push(seq.len())
+        lens.push(n)
+        if n > maxlen: maxlen = n end
+        repeat n with i:
+            seq.push(t.seq.get(o + i))
+        end
+    end
+    e_comment(e, human + " decomposition: " + si(ks.len()) + " code points expanding to " + si(seq.len()) + " in total, at\n" +
+        "most " + si(maxlen) + " each.\n" +
+        "\n" +
+        extra + "\n" +
+        "\n" +
+        "Hangul is not in this table. Its " + si(HANGUL_SCOUNT) + " syllables decompose by\n" +
+        "arithmetic instead - see the Hangul constants in unicode.salam.")
+    e_ints(e, prefix + "_CP", cps, 8)
+    e_blank(e)
+    e_ints(e, prefix + "_OFF", offs, 8)
+    e_blank(e)
+    e_ints(e, prefix + "_LEN", lens, 8)
+    e_blank(e)
+    e_ints(e, prefix + "_SEQ", seq, 8)
+    e_blank(e)
+end
+
+func usage():
+    println "usage: salam run tools/salam/gen-unicode-tables.salam [fetch] [out=PATH]"
+    println ""
+    println "  fetch      download the UCD", UCD_VERSION, "files into", CACHE, "first"
+    println "  out=PATH   write somewhere other than", OUT
+    println ""
+    println "  The modes are bare words, not --flags: `salam run` reads anything"
+    println "  starting with \"-\" as one of its own build options. A compiled"
+    println "  binary accepts --fetch and --out=PATH as well."
+end
+
+func main:
+    args := os.Args()
+    defer args.free()
+    mut want_fetch := false
+    mut out_path := OUT
+    mut i := 1
+    until i < args.len():
+        a := args.get(i)
+        if a == "fetch" || a == "--fetch":
+            want_fetch = true
+        else:
+            if str.StartsWith(a, "out="):
+                out_path = a.substr(4, a.len() - 4)
+            else:
+                if str.StartsWith(a, "--out="):
+                    out_path = a.substr(6, a.len() - 6)
+                else:
+                    usage()
+                    os.Exit(1)
+                end
+            end
+        end
+        i += 1
+    end
+
+    if want_fetch:
+        fetch()
+    end
+
+    cat_names := categories()
+    cat_id := index_of_names(cat_names)
+    gcb_names := grapheme_classes()
+    gcb_id := index_of_names(gcb_names)
+    incb_names := incb_classes()
+    incb_id := index_of_names(incb_names)
+    bidi_names := bidi_classes()
+    bidi_id := index_of_names(bidi_names)
+    pbt_names := pbt_classes()
+    pbt_id := index_of_names(pbt_names)
+
+    mut cats := Vector {} as Vector<Rng>
+    mut upper := IntMap {}
+    mut lower := IntMap {}
+    mut title := IntMap {}
+    mut ccc := IntMap {}
+    mut canon := SeqMap {}
+    mut compat := SeqMap {}
+    parse_unicode_data(cat_id, cats, upper, lower, title, ccc, canon, compat)
+
+    mut fold_simple := IntMap {}
+    mut fold_full := SeqMap {}
+    parse_case_folding(fold_simple, fold_full)
+
+    spaces := parse_prop("PropList.txt", "White_Space")
+    alpha := parse_prop("DerivedCoreProperties.txt", "Alphabetic")
+
+    mut excluded := Vector {} as Vector<bool>
+    repeat MAX_CP with _:
+        excluded.push(false)
+    end
+    each p in parse_prop("DerivedNormalizationProps.txt", "Full_Composition_Exclusion"):
+        mut cp := p.lo
+        until cp <= p.hi:
+            excluded.set(cp, true)
+            cp += 1
+        end
+    end
+
+    mut both := SeqMap {}
+    each cp in canon.keys:
+        o := canon.off.get(cp)
+        n := canon.len.get(cp)
+        mut vals := Vector {} as Vector<int>
+        repeat n with k:
+            vals.push(canon.seq.get(o + k))
+        end
+        seq_put(both, cp, vals)
+    end
+    each cp in compat.keys:
+        o := compat.off.get(cp)
+        n := compat.len.get(cp)
+        mut vals := Vector {} as Vector<int>
+        repeat n with k:
+            vals.push(compat.seq.get(o + k))
+        end
+        seq_put(both, cp, vals)
+    end
+
+    mut full_canon := SeqMap {}
+    expand_table(canon, canon, full_canon)
+    mut full_compat := SeqMap {}
+    expand_table(both, both, full_compat)
+
+    comp := composition_pairs(canon, excluded)
+    gcb := parse_grapheme_break(gcb_id)
+    incb := parse_incb(incb_id)
+    bidi := parse_bidi_class(bidi_id)
+    brackets := parse_brackets(pbt_id)
+    mut script_names := Vector {} as Vector<str>
+    scripts := parse_scripts(script_names)
+
+    mut e := Emitter {}
+    e_raw(e, banner())
+    e_blank(e)
+    e_comment(e, "GENERATED FILE - DO NOT EDIT.\n" +
+        "\n" +
+        "Produced by tools/salam/gen-unicode-tables.salam from the Unicode\n" +
+        "Character Database version " + UCD_VERSION + ". To change anything here, edit that\n" +
+        "script and re-run it; hand edits are lost on the next regeneration.\n" +
+        "\n" +
+        "The lookup functions that read these tables live in unicode.salam.\n" +
+        "Every table is sorted by its first column so all of them can be\n" +
+        "searched with the same binary search.")
+    e_blank(e)
+    e_raw(e, "package unicode")
+    e_blank(e)
+
+    e_comment(e, "The Unicode version these tables were generated from, as a string so\n" +
+        "a program can report it without the compiler folding it into a number.")
+    e_raw(e, "pub const Version := \"" + UCD_VERSION + "\"")
+    e_blank(e)
+
+    mut max_fold := 0
+    each cp in fold_full.keys:
+        n := fold_full.len.get(cp)
+        if n > max_fold: max_fold = n end
+    end
+    e_comment(e, "The longest full case fold in this version, in code points. A buffer\n" +
+        "sized for this can hold the fold of any single code point.")
+    e_raw(e, "pub const MaxFoldLen := " + si(max_fold))
+    e_blank(e)
+
+    e_comment(e, "General category ids. Categories sharing a first letter are numbered\n" +
+        "consecutively so that the group predicates in unicode.salam reduce to\n" +
+        "a range check on the id. CatCn (unassigned) is last and is what\n" +
+        "Category returns for any code point not covered by _CAT_LO/_CAT_HI.")
+    each nm in cat_names:
+        e_raw(e, "pub const Cat" + nm + " := " + si(cat_id.get(nm)))
+    end
+    e_blank(e)
+
+    e_comment(e, "Two-letter category names, indexed by the ids above.")
+    e_strings(e, "_CAT_NAMES", cat_names, 6)
+    e_blank(e)
+
+    cn := cat_id.get("Cn")
+    mut assigned := Vector {} as Vector<Rng>
+    each r in cats:
+        if r.id != cn: assigned.push(r) end
+    end
+    e_comment(e, "Assigned code point ranges and their general category, sorted and\n" +
+        "non-overlapping. Unassigned code points are simply absent: " + si(assigned.len()) + " ranges\n" +
+        "cover the whole of Unicode " + UCD_VERSION + ", which is far smaller than storing a\n" +
+        "category for each of the " + si(MAX_CP) + " code points in the space.")
+    e_ints(e, "_CAT_LO", col_lo(assigned), 8)
+    e_blank(e)
+    e_ints(e, "_CAT_HI", col_hi(assigned), 8)
+    e_blank(e)
+    e_ints(e, "_CAT_ID", col_id(assigned), 8)
+    e_blank(e)
+
+    emit_case_block(e, upper, "_UP", "Simple uppercase")
+    emit_case_block(e, lower, "_LOW", "Simple lowercase")
+    emit_case_block(e, title, "_TITLE", "Simple titlecase")
+    emit_case_block(e, fold_simple, "_FOLD", "Simple case folding")
+
+    ff_keys := seq_sorted_keys(fold_full)
+    mut ff_cp := Vector {} as Vector<int>
+    mut ff_off := Vector {} as Vector<int>
+    mut ff_len := Vector {} as Vector<int>
+    mut ff_seq := Vector {} as Vector<int>
+    each cp in ff_keys:
+        o := fold_full.off.get(cp)
+        n := fold_full.len.get(cp)
+        ff_cp.push(cp)
+        ff_off.push(ff_seq.len())
+        ff_len.push(n)
+        repeat n with k:
+            ff_seq.push(fold_full.seq.get(o + k))
+        end
+    end
+    e_comment(e, "Full case folding for the " + si(ff_keys.len()) + " code points whose fold is longer than one\n" +
+        "code point - German sharp s folds to \"ss\", the ligatures fold to their\n" +
+        "component letters, and a handful of Greek and Armenian forms expand\n" +
+        "similarly. These are why case-insensitive comparison cannot be done\n" +
+        "byte for byte or even code point for code point: the two sides can\n" +
+        "differ in length.\n" +
+        "\n" +
+        "The expansions are code points rather than strings so that this\n" +
+        "package stays free of any string dependency - std/str imports\n" +
+        "std/unicode, so the arrow cannot point back. _FOLDF_CP is the sorted\n" +
+        "key column; _FOLDF_OFF and _FOLDF_LEN slice the expansion out of the\n" +
+        "flattened _FOLDF_SEQ.")
+    e_ints(e, "_FOLDF_CP", ff_cp, 8)
+    e_blank(e)
+    e_ints(e, "_FOLDF_OFF", ff_off, 8)
+    e_blank(e)
+    e_ints(e, "_FOLDF_LEN", ff_len, 8)
+    e_blank(e)
+    e_ints(e, "_FOLDF_SEQ", ff_seq, 8)
+    e_blank(e)
+
+    e_comment(e, "The White_Space property from PropList.txt (" + si(spaces.len()) + " ranges). This is the\n" +
+        "authoritative answer to \"is this a space\" and is deliberately not the\n" +
+        "same as \"category Z\": it adds the ASCII controls tab through carriage\n" +
+        "return and NEL, and it excludes ZERO WIDTH NON-JOINER and friends,\n" +
+        "which are format characters rather than spaces.")
+    e_ints(e, "_WS_LO", pair_lo(spaces), 8)
+    e_blank(e)
+    e_ints(e, "_WS_HI", pair_hi(spaces), 8)
+    e_blank(e)
+
+    e_comment(e, "The Alphabetic property from DerivedCoreProperties.txt (" + si(alpha.len()) + " ranges).\n" +
+        "Broader than category L: it also takes in letter numbers, the marks\n" +
+        "that carry vowels in Indic and Arabic script, and other code points\n" +
+        "with Other_Alphabetic. This, not L alone, is what a caller asking\n" +
+        "\"is this a letter\" almost always means.")
+    e_ints(e, "_ALPHA_LO", pair_lo(alpha), 8)
+    e_blank(e)
+    e_ints(e, "_ALPHA_HI", pair_hi(alpha), 8)
+    e_blank(e)
+
+    ccc_runs := value_ranges(ccc)
+    e_comment(e, "Canonical combining class, as " + si(ccc_runs.len()) + " (lo, hi, class) runs covering the " + si(ccc.keys.len()) + "\n" +
+        "code points whose class is not zero. Everything absent is class 0.\n" +
+        "\n" +
+        "This is the key to canonical ordering: when several marks follow one\n" +
+        "base character, normalization sorts them by this number, so that a\n" +
+        "Persian word written with its harakat in one order compares equal to\n" +
+        "the same word with them typed in another. Marks of class 0, and any\n" +
+        "two marks of equal class, are never reordered relative to each other.")
+    e_ints(e, "_CCC_LO", col_lo(ccc_runs), 8)
+    e_blank(e)
+    e_ints(e, "_CCC_HI", col_hi(ccc_runs), 8)
+    e_blank(e)
+    e_ints(e, "_CCC_VAL", col_id(ccc_runs), 8)
+    e_blank(e)
+
+    emit_seq_block(e, full_canon, "_NFD", "Canonical",
+        "These are the mappings NFD and NFC use. Each is stored fully\n" +
+        "expanded, so no entry here decomposes any further.")
+    emit_seq_block(e, full_compat, "_NFKD", "Compatibility",
+        "These add the mappings NFKD and NFKC use on top of the canonical\n" +
+        "ones. For Arabic and Persian this is the table that matters most:\n" +
+        "the presentation forms in U+FB50..U+FDFF and U+FE70..U+FEFF - the\n" +
+        "isolated, initial, medial and final shapes that some sources store\n" +
+        "literally instead of letting the renderer choose - decompose back to\n" +
+        "the plain letters here, and nowhere else.")
+
+    e_comment(e, "Canonical composition: " + si(comp.len()) + " (starter, combining) pairs that recombine\n" +
+        "into a single code point. This is the decomposition table read\n" +
+        "backwards, minus the composition exclusions - the pairs Unicode says\n" +
+        "must stay apart even though they decomposed.\n" +
+        "\n" +
+        "Sorted by starter and then by the combining mark, so a lookup binary\n" +
+        "searches _COMP_A for the starter and then scans that starter's short\n" +
+        "run for the mark.")
+    mut comp_a := Vector {} as Vector<int>
+    mut comp_b := Vector {} as Vector<int>
+    mut comp_cp := Vector {} as Vector<int>
+    each c in comp:
+        comp_a.push(c.a) comp_b.push(c.b) comp_cp.push(c.cp)
+    end
+    e_ints(e, "_COMP_A", comp_a, 8)
+    e_blank(e)
+    e_ints(e, "_COMP_B", comp_b, 8)
+    e_blank(e)
+    e_ints(e, "_COMP_CP", comp_cp, 8)
+    e_blank(e)
+
+    e_comment(e, "Grapheme_Cluster_Break class ids, used by the segmenter in str.")
+    each nm in gcb_names:
+        e_raw(e, "pub const Gcb" + str.Replace(nm, "_", "") + " := " + si(gcb_id.get(nm)))
+    end
+    e_blank(e)
+
+    e_comment(e, "Grapheme_Cluster_Break, as " + si(gcb.len()) + " (lo, hi, class) ranges. Code points not\n" +
+        "listed are GcbOther. The Hangul LV and LVT classes are absent and are\n" +
+        "derived arithmetically, which is why this is ~800 ranges smaller than\n" +
+        "GraphemeBreakProperty.txt.\n" +
+        "\n" +
+        "This is what lets text be counted and cut by what a reader sees as\n" +
+        "one character rather than by code point: an Arabic letter followed by\n" +
+        "two harakat is three code points and one grapheme cluster.")
+    e_ints(e, "_GCB_LO", col_lo(gcb), 8)
+    e_blank(e)
+    e_ints(e, "_GCB_HI", col_hi(gcb), 8)
+    e_blank(e)
+    e_ints(e, "_GCB_ID", col_id(gcb), 8)
+    e_blank(e)
+
+    e_comment(e, "Indic_Conjunct_Break class ids, used by GB9c in the segmenter.")
+    each nm in incb_names:
+        e_raw(e, "pub const Incb" + nm + " := " + si(incb_id.get(nm)))
+    end
+    e_blank(e)
+
+    e_comment(e, "Indic_Conjunct_Break, as " + si(incb.len()) + " (lo, hi, class) ranges; anything absent is\n" +
+        "IncbNone. This drives one rule, GB9c, which keeps a consonant joined\n" +
+        "to a following consonant by a virama in the same grapheme cluster -\n" +
+        "so Devanagari क्त counts as one character rather than three.")
+    e_ints(e, "_INCB_LO", col_lo(incb), 8)
+    e_blank(e)
+    e_ints(e, "_INCB_HI", col_hi(incb), 8)
+    e_blank(e)
+    e_ints(e, "_INCB_ID", col_id(incb), 8)
+    e_blank(e)
+
+    e_comment(e, "Bidi_Class ids. Grouped by kind so the bidirectional algorithm's\n" +
+        "repeated \"is this an explicit formatting code\" tests are range\n" +
+        "checks: the embedding and override codes are BcLRE..BcPDF and the\n" +
+        "isolate codes are BcLRI..BcPDI.")
+    each nm in bidi_names:
+        e_raw(e, "pub const Bc" + nm + " := " + si(bidi_id.get(nm)))
+    end
+    e_blank(e)
+
+    e_comment(e, "Bidi_Class, as " + si(bidi.len()) + " (lo, hi, class) ranges. Anything absent is BcL.\n" +
+        "\n" +
+        "The absent-means-L rule holds only because the block defaults are\n" +
+        "baked in here: unassigned code points in the Hebrew and Arabic blocks\n" +
+        "are R and AL respectively, and they appear as explicit ranges below\n" +
+        "even though no character is assigned to them yet.")
+    e_ints(e, "_BIDI_LO", col_lo(bidi), 8)
+    e_blank(e)
+    e_ints(e, "_BIDI_HI", col_hi(bidi), 8)
+    e_blank(e)
+    e_ints(e, "_BIDI_ID", col_id(bidi), 8)
+    e_blank(e)
+
+    e_comment(e, "Bidi_Paired_Bracket_Type ids, for rule N0.")
+    each nm in pbt_names:
+        e_raw(e, "pub const Pbt" + nm + " := " + si(pbt_id.get(nm)))
+    end
+    e_blank(e)
+
+    e_comment(e, "Bidi_Paired_Bracket: the " + si(brackets.len()) + " bracket code points, each with the code\n" +
+        "point it pairs with and whether it opens or closes. Rule N0 uses this\n" +
+        "to give both halves of a bracket pair the same direction, so that\n" +
+        "\"(سلام)\" does not come out with its parentheses facing the wrong way.")
+    e_ints(e, "_BRACKET_CP", col_lo(brackets), 8)
+    e_blank(e)
+    e_ints(e, "_BRACKET_PAIR", col_hi(brackets), 8)
+    e_blank(e)
+    e_ints(e, "_BRACKET_TYPE", col_id(brackets), 8)
+    e_blank(e)
+
+    e_comment(e, "Script ids. ScriptUnknown is 0 and is what an unassigned code point\n" +
+        "answers. Only the scripts this version defines are listed.")
+    mut sidx := 0
+    each nm in script_names:
+        e_raw(e, "pub const Script" + str.Replace(nm, "_", "") + " := " + si(sidx))
+        sidx += 1
+    end
+    e_blank(e)
+
+    e_comment(e, "Script names, indexed by the ids above.")
+    e_strings(e, "_SCRIPT_NAMES", script_names, 4)
+    e_blank(e)
+
+    e_comment(e, "The Script property, as " + si(scripts.len()) + " (lo, hi, script) ranges. Anything absent is\n" +
+        "ScriptUnknown.")
+    e_ints(e, "_SCRIPT_LO", col_lo(scripts), 8)
+    e_blank(e)
+    e_ints(e, "_SCRIPT_HI", col_hi(scripts), 8)
+    e_blank(e)
+    e_ints(e, "_SCRIPT_ID", col_id(scripts), 8)
+
+    _n := os.WriteFile(out_path, e_text(e))
+
+    io.EPrintln("wrote " + out_path + " (UCD " + UCD_VERSION + "):")
+    io.EPrintln("  " + si(assigned.len()) + " category ranges, " +
+        si(case_ranges(upper).len()) + "/" + si(case_ranges(lower).len()) + "/" +
+        si(case_ranges(title).len()) + "/" + si(case_ranges(fold_simple).len()) +
+        " case runs, " + si(fold_full.keys.len()) + " full folds")
+    io.EPrintln("  " + si(spaces.len()) + " space ranges, " + si(alpha.len()) +
+        " alphabetic ranges, " + si(ccc_runs.len()) + " combining-class runs")
+    io.EPrintln("  " + si(full_canon.keys.len()) + " canonical and " +
+        si(full_compat.keys.len()) + " compatibility decompositions")
+    io.EPrintln("  " + si(comp.len()) + " composition pairs, " + si(gcb.len()) +
+        " grapheme-break and " + si(incb.len()) + " conjunct-break ranges")
+    io.EPrintln("  " + si(bidi.len()) + " bidi-class ranges, " + si(brackets.len()) +
+        " bracket pairs, " + si(scripts.len()) + " script ranges")
+    ret 0
+end

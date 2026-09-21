@@ -85,6 +85,21 @@ build_loadgen() {
     fi
 }
 
+# `make -C c` drops the binary at the repository root; an installed or
+# cross-built one may sit under c/. Either is fine, SALAM_BIN overrides.
+# The report step needs it too, and takes the prebuilt-server path through
+# build_salam that never reaches the search below.
+resolve_salam_bin() {
+    if [ -z "${SALAM_BIN:-}" ]; then
+        for cand in "$ROOT/salam" "$ROOT/c/salam"; do
+            [ -x "$cand" ] && {
+                SALAM_BIN="$cand"
+                break
+            }
+        done
+    fi
+}
+
 build_salam() {
     # Point SALAM_HTTPBENCH_BIN at an already-built server to skip the build.
     # This is what makes a before/after comparison possible: build the two
@@ -94,16 +109,7 @@ build_salam() {
         cp "$SALAM_HTTPBENCH_BIN" "$RUNDIR/httpbench"
         return 0
     fi
-    # `make -C c` drops the binary at the repository root; an installed or
-    # cross-built one may sit under c/. Either is fine, SALAM_BIN overrides.
-    if [ -z "${SALAM_BIN:-}" ]; then
-        for cand in "$ROOT/salam" "$ROOT/c/salam"; do
-            [ -x "$cand" ] && {
-                SALAM_BIN="$cand"
-                break
-            }
-        done
-    fi
+    resolve_salam_bin
     [ -n "${SALAM_BIN:-}" ] && [ -x "$SALAM_BIN" ] ||
         {
             echo "no salam binary (run: sh tools/bash/build-selfhost.sh)" >&2
@@ -458,4 +464,10 @@ done
 
 [ -n "$CRASHED_ROUTES" ] && say "servers that died during a run:$CRASHED_ROUTES"
 say "results: $RESULTS"
-python3 "$HERE/report.py" "$RESULTS" >"$RUNDIR/results.md" && say "table: $RUNDIR/results.md"
+resolve_salam_bin
+if [ -n "${SALAM_BIN:-}" ] && [ -x "$SALAM_BIN" ]; then
+    "$SALAM_BIN" run "$HERE/report.salam" "$RESULTS" >"$RUNDIR/results.md" &&
+        say "table: $RUNDIR/results.md"
+else
+    say "no salam binary for the report; raw results stay at $RESULTS"
+fi

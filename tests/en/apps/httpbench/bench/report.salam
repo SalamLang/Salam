@@ -1,0 +1,282 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import os
+import io
+import str
+import conv
+import math
+import encoding.json
+
+struct Rows:
+    pub bykey: HashMap<str, str> = HashMap {}
+    pub connections: int = 0
+    pub threads: int = 0
+    pub duration_s: f64 = 0.0
+    pub seeded: bool = false
+end
+
+func server_order(): Vector<str>:
+    mut v := Vector {} as Vector<str>
+    v.push("salam") v.push("nginx") v.push("apache") v.push("node") v.push("php")
+    ret v
+end
+
+func server_labels(): HashMap<str, str>:
+    mut m := HashMap {} as HashMap<str, str>
+    m.put("salam", "Salam")
+    m.put("nginx", "nginx")
+    m.put("apache", "Apache")
+    m.put("node", "node/express")
+    m.put("php", "php -S")
+    ret m
+end
+
+func route_keys(): Vector<str>:
+    mut v := Vector {} as Vector<str>
+    v.push("plaintext") v.push("json") v.push("cached") v.push("file")
+    v.push("users") v.push("search") v.push("compute") v.push("headers")
+    v.push("static") v.push("home") v.push("echo")
+    ret v
+end
+
+func route_labels(): HashMap<str, str>:
+    mut m := HashMap {} as HashMap<str, str>
+    m.put("plaintext", "/plaintext")
+    m.put("json", "/json")
+    m.put("cached", "/cached")
+    m.put("file", "/file")
+    m.put("users", "/users/42")
+    m.put("search", "/search?q=&n=5")
+    m.put("compute", "/compute?n=1000")
+    m.put("headers", "/headers")
+    m.put("static", "/static/style.css")
+    m.put("home", "/")
+    m.put("echo", "POST /echo")
+    ret m
+end
+
+func group_thousands(digits: str): str:
+    mut sign := ""
+    mut body := digits
+    if str.StartsWith(body, "-"):
+        sign = "-"
+        body = body.substr(1, body.len() - 1)
+    end
+    n := body.len()
+    if n <= 3: ret sign + body end
+    mut out := ""
+    mut i := 0
+    until i < n:
+        left := n - i
+        if i > 0 && left % 3 == 0:
+            out = out + ","
+        end
+        out = out + body.substr(i, 1)
+        i += 1
+    end
+    ret sign + out
+end
+
+func round_half_even(v: f64): f64:
+    fl := math.Floor(v)
+    d := v - fl
+    if d > 0.5: ret fl + 1.0 end
+    if d < 0.5: ret fl end
+    half := fl / 2.0
+    if half == math.Floor(half): ret fl end
+    ret fl + 1.0
+end
+
+func fixed0(v: f64): str:
+    ret conv.FormatFloatPrec(round_half_even(v), 0)
+end
+
+func fmt_rps(v: f64): str:
+    ret group_thousands(fixed0(v))
+end
+
+func fmt_us(v: f64): str:
+    if v >= 1000.0:
+        ret conv.FormatFloatPrec(v / 1000.0, 1) + " ms"
+    end
+    ret fixed0(v) + " us"
+end
+
+func fmt_commas(n: int): str:
+    ret group_thousands(conv.FormatInt(n as i64))
+end
+
+func key_of(server: str, route: str): str:
+    ret server + "\t" + route
+end
+
+func load(path: str): Rows:
+    mut rows := Rows {}
+    each line in str.Split(os.ReadFile(path), "\n"):
+        t := str.Trim(line)
+        if t.len() == 0: continue end
+        rows.bykey.put(key_of(json.Get(t, "server"), json.Get(t, "route")), t)
+        if rows.seeded == false:
+            rows.connections = json.GetInt(t, "connections")
+            rows.threads = json.GetInt(t, "threads")
+            rows.duration_s = json.GetFloat(t, "duration_s")
+            rows.seeded = true
+        end
+    end
+    ret rows
+end
+
+func present_servers(rows &: Rows): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    each s in server_order():
+        mut found := false
+        each r in route_keys():
+            if rows.bykey.has(key_of(s, r)): found = true end
+        end
+        if found: out.push(s) end
+    end
+    ret out
+end
+
+func table(rows &: Rows, servers &: Vector<str>, field: str, as_us: bool): str:
+    labels := server_labels()
+    routes := route_keys()
+    rlabels := route_labels()
+
+    mut head := "| Route |"
+    mut sep := "| --- |"
+    each s in servers:
+        head = head + " " + labels.get(s) + " |"
+        sep = sep + " ---: |"
+    end
+
+    mut out := Vector {} as Vector<str>
+    out.push(head)
+    out.push(sep)
+
+    each route in routes:
+        mut cells := Vector {} as Vector<str>
+        mut any := false
+        each s in servers:
+            k := key_of(s, route)
+            if rows.bykey.has(k) == false:
+                cells.push("")
+            else:
+                v := json.GetFloat(rows.bykey.get(k), field)
+                mut c := ""
+                if as_us:
+                    c = fmt_us(v)
+                else:
+                    c = fmt_rps(v)
+                end
+                cells.push(c)
+                if c.len() > 0: any = true end
+            end
+        end
+        if any:
+            mut row := "| `" + rlabels.get(route) + "` |"
+            each c in cells:
+                row = row + " " + c + " |"
+            end
+            out.push(row)
+        end
+    end
+    ret str.Join(out, "\n")
+end
+
+func health_table(rows &: Rows, servers &: Vector<str>): str:
+    labels := server_labels()
+    routes := route_keys()
+    rlabels := route_labels()
+
+    mut out := Vector {} as Vector<str>
+    out.push("| Server | Route | non-2xx | connect errors | I/O errors | reconnects | died |")
+    out.push("| --- | --- | ---: | ---: | ---: | ---: | :---: |")
+
+    each s in servers:
+        each route in routes:
+            k := key_of(s, route)
+            if rows.bykey.has(k) == false: continue end
+            r := rows.bykey.get(k)
+            non2xx := json.GetInt(r, "non2xx")
+            connect_err := json.GetInt(r, "connect_err")
+            io_err := json.GetInt(r, "io_err")
+            reconnects := json.GetInt(r, "reconnects")
+            died := json.Get(r, "died") == "true"
+            bad := non2xx + connect_err + io_err
+            if bad == 0 && reconnects == 0 && died == false: continue end
+            mut mark := ""
+            if died: mark = "**yes**" end
+            out.push("| " + labels.get(s) + " | `" + rlabels.get(route) + "` | " +
+                fmt_commas(non2xx) + " | " + fmt_commas(connect_err) + " | " +
+                fmt_commas(io_err) + " | " + fmt_commas(reconnects) + " | " + mark + " |")
+        end
+    end
+
+    if out.len() > 2:
+        ret str.Join(out, "\n")
+    end
+    ret "_No errors, no forced reconnects, no crashes._"
+end
+
+func main:
+    args := os.Args()
+    defer args.free()
+    if args.len() < 2:
+        println "usage: salam run tests/en/apps/httpbench/bench/report.salam <results.json>"
+        os.Exit(1)
+    end
+    path := args.get(1)
+    if os.Exists(path) == false:
+        io.EPrintln("report: no such file: " + path)
+        os.Exit(1)
+    end
+
+    mut rows := load(path)
+    servers := present_servers(rows)
+    if servers.len() == 0:
+        println "no results"
+        ret 0
+    end
+
+    println "<!-- generated by bench/report.salam from " + path + " -->"
+    println ""
+    println "Load: " + conv.FormatInt(rows.connections as i64) + " connections, " +
+        conv.FormatInt(rows.threads as i64) + " generator threads, " +
+        fixed0(rows.duration_s) + "s measured per route."
+    println ""
+    println "### Requests per second"
+    println ""
+    println table(rows, servers, "rps", false)
+    println ""
+    println "### Requests per minute"
+    println ""
+    println table(rows, servers, "rpm", false)
+    println ""
+    println "### Latency, 99th percentile"
+    println ""
+    println table(rows, servers, "p99_us", true)
+    println ""
+    println "### Latency, median"
+    println ""
+    println table(rows, servers, "p50_us", true)
+    println ""
+    println "### Errors and forced reconnects"
+    println ""
+    println health_table(rows, servers)
+    ret 0
+end

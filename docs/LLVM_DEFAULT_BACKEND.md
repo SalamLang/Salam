@@ -329,7 +329,7 @@ problem: LLVM ships ~200 version-dependent component archives, and the C
 build resolves them by shelling out to `llvm-config --libs` - something a
 `.salam` source file cannot do, since `link` only takes a literal name.
 
-`make -C c libsalam-llvm` now merges the entire graph into one archive via
+`std/llvm/native/build.sh` now merges the entire graph into one archive via
 an `ar -M` script: every archive `llvm-config --libs all` resolves (207 on
 LLVM 22), the six lld component archives, salam's own `llvm_native.o` and
 `lld_link.o` shims, and on Windows `win_lld_demangle_shim.o`'s `__imp_`

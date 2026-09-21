@@ -1,11 +1,4 @@
 #!/usr/bin/env sh
-# Regenerates docs/ai/stdlib-index.json from the std/ tree.
-#
-# The server computes the index live; this just captures that output into the
-# committed copy so tools that cannot run the server (or read it straight from
-# GitHub) see the same data. CI fails if the two disagree.
-#
-# Usage: tools/mcp/gen-index.sh
 set -eu
 
 root=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)

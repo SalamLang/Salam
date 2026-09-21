@@ -1,13 +1,4 @@
 #!/usr/bin/env sh
-# Builds the salam-mcp server with the Salam compiler in this checkout.
-#
-# Usage:
-#   tools/mcp/build.sh [output-path]
-#
-# The compiler used is, in order: $SALAM, ./salam, ./salam.exe, then whatever
-# `salam` resolves to on PATH. Building with the checkout's own compiler
-# matters - an older installed salam parses some flags differently and the
-# resulting server fails in confusing ways.
 set -eu
 
 root=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)

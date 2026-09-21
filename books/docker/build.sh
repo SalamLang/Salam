@@ -1,14 +1,4 @@
 #!/usr/bin/env sh
-#
-# Build the Salam tutorial books (English + Persian) using XeLaTeX via latexmk.
-#
-# Usage:
-# build-books all        # build both English and Persian (default)
-# build-books en         # English only
-# build-books fa         # Persian only
-# build-books clean      # remove build artifacts
-# build-books help
-#
 
 set -eu
 
@@ -35,7 +25,6 @@ run_latexmk() {
     fi
 }
 
-# Every directory under books/<lang>/ that holds a book.tex is a book.
 build_one() {
     lang="$1"
     found=0

@@ -1,13 +1,4 @@
 #!/bin/sh
-# Turns the published Linux release tarballs into .deb packages.
-#
-#   packaging/debian/build-deb.sh --version 0.4.0 --input ./release --output ./debs
-#
-# --input holds the salam-<version>-linux-<arch>.tar.gz files as published on
-# the GitHub release. One .deb is produced per tarball found; missing arches
-# are skipped, not an error.
-#
-# Needs dpkg-deb (dpkg-dev on Debian/Ubuntu, `brew install dpkg` on macOS).
 
 set -eu
 
@@ -15,8 +6,6 @@ VERSION=
 INPUT=.
 OUTPUT=./debs
 REVISION=1
-# xz -9 on a ~325MB binary costs over ten minutes for a few percent; -6 is the
-# dpkg default and a far better trade here.
 COMPRESSION=xz
 COMPRESSION_LEVEL=6
 
@@ -57,12 +46,8 @@ trap 'rm -rf "$WORK"' EXIT INT TERM
 
 built=0
 
-# Read off the shipped binary's DT_NEEDED and its highest GLIBC_ symbol
-# version: libm/libc -> libc6, libgcc_s -> libgcc-s1, libtinfo -> libtinfo6,
-# libxml2 -> libxml2. zlib and zstd are linked statically.
 DEPENDS='libc6 (>= 2.38), libgcc-s1, libtinfo6, libxml2'
 
-# <release arch>:<dpkg arch>
 for spec in \
     "x86_64:amd64" \
     "aarch64:arm64" \
@@ -95,8 +80,6 @@ do
     find "$root/usr/lib/salam/std" -type d -exec chmod 755 {} +
     find "$root/usr/lib/salam/std" -type f -exec chmod 644 {} +
 
-    # The compiler locates std/ from its own path, which a shell running it
-    # off $PATH does not always supply, so /usr/bin/salam pins it explicitly.
     cat > "$root/usr/bin/salam" <<'EOF'
 #!/bin/sh
 SALAM_HOME=/usr/lib/salam

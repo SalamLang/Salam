@@ -1,32 +1,4 @@
 #!/bin/sh
-# Leak ratchet for COMPILED SALAM PROGRAMS (the stdlib demos), as opposed to
-# the compiler that builds them.
-#
-# tools/bash/leakcheck.sh and compiler/tools/bash/leakcheck-selfhost.sh both
-# measure `salam` itself. Nothing measured the programs it emits, and that is
-# where a library leak actually hurts: a demo runs for a second, but the same
-# std/ code inside a training loop or a server runs for hours. Sweeping the
-# demos this way in 2026-08 found a closure environment leaked per loop
-# iteration (a decision tree dropped 460 KB fitting one forest), the compare
-# asserts in std/testing formatting their message on every PASS, and unowned
-# strings in csv, data, gguf, onnx, llm and nn.
-#
-# Each case builds one test program with `--asan` and runs it, then reads
-# LeakSanitizer's own count of blocks still unreachable at exit. The budget
-# file gives a ceiling per program; the script FAILS when a program leaks
-# more and WARNS when it leaks less, exactly like the self-host ratchet.
-# Most lines are 0 and must stay 0.
-#
-# Usage:
-#   sh tools/bash/leakcheck-programs.sh <salam> [budget-file]
-#
-# Env:
-#   SALAM_STD   stdlib root (default: the repository's std/)
-#   SALAM_CC    C compiler to build with (default: gcc, then clang, then cc)
-#   KEEP        set to 1 to keep the build directories for inspection
-#
-# `<salam>` is an ORDINARY compiler, not an ASan one: `--asan` is passed to
-# the build, so it is the program under test that is instrumented.
 
 set -u
 
@@ -68,10 +40,6 @@ rm -rf "$W"
 mkdir -p "$W"
 [ "${KEEP:-0}" = "1" ] || trap 'rm -rf "$W"' EXIT INT TERM
 
-# exitcode=0 so a leak does not look like a crashed program; the SUMMARY line
-# on stderr is what this reads. max_leaks=1 keeps LSan from symbolizing every
-# stack, which turns a one-second measurement into a two-minute one - raise it
-# by hand (and drop fast_unwind_on_malloc) when you want to see WHERE.
 LEAK_ASAN_OPTIONS='detect_leaks=1:exitcode=0:max_leaks=1:print_suppressions=0'
 
 budget_for() {
@@ -83,7 +51,6 @@ UNDER=0
 MISSING=0
 BROKE=0
 
-# run_case <demo-name>  (tests/en/stdlib/<demo-name>.salam)
 run_case() {
     name=$1
     src="$ROOT/tests/en/stdlib/$name.salam"
@@ -92,8 +59,6 @@ run_case() {
         BROKE=$((BROKE + 1))
         return
     fi
-    # Its own directory: .salam-build lands in the working directory, and two
-    # builds sharing one clobber each other's objects.
     d="$W/$name"
     mkdir -p "$d"
     if ! (cd "$d" && "$BIN" build "$src" --output="$d/prog" --asan \
@@ -104,7 +69,6 @@ run_case() {
     fi
     (cd "$d" && ASAN_OPTIONS="$LEAK_ASAN_OPTIONS" "$d/prog" \
         >"$d/run.out" 2>"$d/run.err")
-    # A demo that fails its own assertions is not a leak measurement.
     if ! grep -q '0 failed' "$d/run.out" 2>/dev/null; then
         printf '  %-24s TEST FAILED (see %s)\n' "$name" "$d/run.out"
         BROKE=$((BROKE + 1))
@@ -147,8 +111,6 @@ echo "cc     : $SALAM_CC"
 echo
 echo "leaked allocations per program:"
 
-# Every case named in the budget file, in the order it appears there, so the
-# list lives in one place.
 CASES=$(awk '$1 !~ /^#/ && NF == 2 { print $1 }' "$BUDGET")
 for c in $CASES; do
     run_case "$c"

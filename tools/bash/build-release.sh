@@ -1,5 +1,4 @@
 #!/bin/sh
-# Build a distributable release of the Salam toolchain into dist/.
 
 set -e
 . "$(dirname "$0")/lib.sh"
@@ -7,11 +6,6 @@ CC="${CC:-tcc}"
 VERSION="$(cat VERSION 2>/dev/null || echo 0.0.0-dev)"
 OS="$(uname -s 2>/dev/null | tr '[:upper:]' '[:lower:]' | sed 's/mingw.*/windows/;s/msys.*/windows/')"
 DIST="dist/salam-$VERSION-$OS"
-# Manifests are JSON/TOML, so they cannot read VERSION the way the compiler
-# and the stdlib now do. Stamping them here keeps every in-repo copy in step
-# through one mechanical step rather than a remembered edit - which is how
-# they drifted to three different numbers (0.2.2, 0.2.3, 0.2.9) in the first
-# place.
 stamp_version() { # <file> <sed-expression using $VERSION>
     [ -f "$1" ] || return 0
     sed -i.bak "$2" "$1"

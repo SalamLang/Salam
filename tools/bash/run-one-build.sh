@@ -1,11 +1,4 @@
 #!/bin/sh
-# Build-and-run a single test in an isolated working directory so parallel
-# jobs don't collide on the generated salam_mod_*.c/.h files (those are
-# always written relative to the process's cwd). Prints PASS/FAIL lines in
-# the same format run-tests.sh expects.
-#
-# args: <abs-salam-bin> <work-dir> <label> <salam-file> <lang> <expected-out> [extra salam-build args...]
-#
 
 set -u
 SALAM_BIN="$1"
@@ -17,8 +10,6 @@ exp="$6"
 shift 6
 if [ "$#" -eq 1 ] && [ "$1" = "-" ]; then shift; fi
 
-# /* and C:\ or C:/ are already absolute; only prefix genuinely relative paths.
-# (On Git Bash/MSYS runners TMPDIR is a Windows path, so prefixing it breaks it.)
 case "$f" in /* | [A-Za-z]:*) : ;; *) f="$(pwd)/$f" ;; esac
 case "$WORK" in /* | [A-Za-z]:*) : ;; *) WORK="$(pwd)/$WORK" ;; esac
 
@@ -55,12 +46,6 @@ want=$(tr -d '\r' <"$exp")
 got=""
 _timedout=0
 _try=1
-# Through a pipe the exit status belongs to tr, so a run killed by the
-# timeout was indistinguishable from one that simply printed nothing, and
-# the report blamed the program's output for what was really a hang. A
-# SIGKILLed process loses whatever it had not flushed, which is how the
-# websocket wss loopback failure on Windows came back as an empty `got`.
-# Redirect to a file instead, so the status is the timeout's own.
 _runout="$jobdir/run.out"
 while [ "$_try" -le 4 ]; do
     timeout "${SALAM_TEST_TIMEOUT:-30}" "$exe" >"$_runout" 2>&1

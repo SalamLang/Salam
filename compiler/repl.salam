@@ -12,94 +12,6 @@
  *
  */
 
-// Flat single-file module (see salam/PORTING.md "Layout - FLAT").
-// Port of compiler/src/driver/repl.c + repl_session.c (+ repl.h /
-// repl_internal.h, declarations only). Package `repl`, alias `rp`.
-// Replaces cli.salam's CMD_REPL/CMD_REPL_LAYOUT stub ("the interactive
-// REPL is not ported yet (PORT-TODO)").
-//
-// Scope: driver_repl's whole interactive loop - readline with history and
-// in-place line editing, the parser-driven "is this turn finished?" test
-// (waits for the line that completes a block before running it), the
-// session model repl_session.c holds - definitions bucketed and re-sorted
-// into a legal program, statements accumulated in a synthesized main, a
-// name typed twice REPLACING what it named before - and the layout-REPL's
-// "render a `layout: ... end` block to HTML on every Enter" flow.
-//
-// The prompt is not a file: definitions arrive in whatever order the user
-// thinks of them, statements accumulate one at a time, and a name typed
-// twice means "I changed my mind", not "duplicate symbol". Salam compiles
-// ahead of time, so a turn is not an eval: the session is re-rendered as
-// one whole program and rebuilt on every turn, which is what makes
-// bindings survive from one line to the next. Re-running the program also
-// re-runs the output of the turns before it, so emit_output() prints only
-// what the newest turn added.
-//
-// C -> Salam decisions:
-// - repl_session_t's two parallel malloc'd arrays -> a `Session` struct of
-//   Vector<Entry>/Vector<str>, passed `&:` instead of by pointer.
-// - NOT in the C: a statement that re-binds a name an earlier statement
-//   bound (`x := 5` then `x := "five"`) replaces that earlier statement in
-//   place instead of being appended. Appending is what the C did, and it
-//   reached sema as E001 "redefinition of 'x'", so a prompt could never
-//   change a variable's type. See stmt_binding_name().
-// - repl_hist[REPL_HIST_MAX] (fixed C array) -> a module-global
-//   Vector<str> g_hist, still capped at REPL_HIST_MAX entries (oldest
-//   evicted on overflow, same as the C's memmove-down-by-one), just without
-//   a hand-rolled ring buffer.
-// - char *buf / int len,pos (a hand-edited byte array) -> a plain `str`
-//   line plus an int `pos` (byte offset), rebuilt via substr/concat on
-//   every keystroke instead of memmove'd in place. Editing a REPL line is
-//   never hot enough for the extra allocations to matter; this stays much
-//   closer to idiomatic Salam than porting memmove byte-shuffling would.
-// - repl_compile_pkg + repl_exec's own hand-rolled mini "compile these 7
-//   runtime packages + the session, then cc/system() the result" linker
-//   (RT_PKGS: mem/core/map/text/console/fs/thread) is NOT reproduced.
-//   Instead exec_session() below writes the session to a real temp
-//   .salam file and calls dr.Build() - the SAME full package-resolution
-//   pipeline `salam build` itself uses. This is a deliberate improvement,
-//   not a shortcut: it transitively resolves whatever the session actually
-//   imports (any std package, not just a fixed list of 7), and it's far
-//   less code since dr.Build already existed. It also gets rich
-//   rustc-style diagnostics for free (build_impl calls
-//   lg.SetDiagSource/AddDiagSource internally), where the C's repl_exec
-//   only had plain logger_log output.
-// - repl_readline's Win32 console / POSIX termios raw-input loops are
-//   ported as win_readline/posix_readline below, gated the same way every
-//   other OS-specific pair in this codebase is (`if SALAM_OS_WINDOWS:`).
-//   Both share one non-tty fallback_readline (byte-at-a-time via getchar,
-//   matching the C's fgets fallback - stops at EOF or '\n', strips a
-//   trailing '\r', and - unlike io.Input()/salam_input() - distinguishes
-//   "EOF with zero bytes read" (ok=false, like fgets returning NULL) from
-//   an actual empty line (ok=true, ""), which the REPL's `for(;;)` loop
-//   needs to know when to stop vs. just re-prompt).
-// - INPUT_RECORD/KEY_EVENT_RECORD (wincontypes.h) are read through raw
-//   byte offsets into a manually `mem.Allocate`d buffer (matching
-//   interp.salam's ptr_load/ptr_store idiom) rather than an `extern
-//   struct` binding, which this language doesn't have. Offsets were
-//   computed by hand from the real header
-//   (C:\msys64\mingw64\include\wincontypes.h on this repo's own dev
-//   host) for the standard Win64 layout: EventType:u16@0,
-//   KeyEvent.bKeyDown:i32@4, KeyEvent.wVirtualKeyCode:u16@10,
-//   KeyEvent.uChar.AsciiChar:i8@14, sizeof(INPUT_RECORD)=20 (a 24-byte
-//   buffer is allocated for headroom). See win_readline's own comment for
-//   the layout derivation.
-// - struct termios (bits/termios.h) is likewise read/written through raw
-//   byte offsets rather than a real header include. UNLIKE the Windows
-//   struct above, this layout is **glibc/Linux-specific** (x86_64 and
-//   i386 share it; musl, macOS/BSD, and other libcs lay c_line/c_cc/NCCS
-//   out differently and are NOT handled) - offset 0/4/8/12 = c_iflag/
-//   c_oflag/c_cflag/c_lflag (tcflag_t, 4 bytes each), offset 16 = c_line
-//   (1 byte), offset 17 = c_cc[NCCS=32], c_ispeed/c_ospeed follow at the
-//   next 4-byte-aligned offsets (52/56), size 60. This mirrors how
-//   driver.salam's bundled-musl-tcc detection is already POSIX-scoped to
-//   "whatever this repo's own dev/CI environment provides" rather than
-//   fully general; unlike that gap this one cannot be exercised or
-//   verified at all on this repo's Windows dev host, so it is a
-//   best-effort straight transcription of the C's raw/canon flag toggles
-//   (BRKINT/ICRNL/INPCK/ISTRIP/IXON/CS8/ECHO/ICANON/IEXTEN/ISIG/VMIN/
-//   VTIME/TCSAFLUSH) against those glibc offsets, not independently
-//   tested. A non-glibc POSIX target would need its own offsets.
 package repl
 
 import os
@@ -905,7 +817,8 @@ func render(s &: Session, pack: int, cand: Entry, has_cand: bool): str:
     end
     put_bucket(sb, s, pack, RS_DEF, cand, has_cand, 0)
     put_bucket(sb, s, pack, RS_DEF, cand, has_cand, 1)
-    if !s.has_main:
+    cand_is_main := has_cand && cand.kind == RS_DEF && str.Equals(cand.name, lp.Entry(pack))
+    if !s.has_main && !cand_is_main:
         kw_func := lp.Spelling(pack, tok.TK_KW_FUNC)
         kw_ret := lp.Spelling(pack, tok.TK_KW_RET)
         empty := s.stmts.len() == 0 && !(has_cand && cand.kind == RS_STMT)

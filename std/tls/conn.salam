@@ -3,16 +3,9 @@ import net.internal.rawsock
 
 pub struct Config:
     pub server_name: str = ""
-    // Path to a PEM trust store. Empty means the default search in roots.salam.
     pub ca_file: str = ""
-    // Skip certificate verification. Intended for tests against a known
-    // endpoint; it is deliberately verbose to set and is reported by
-    // Conn.insecure so a caller cannot forget it is on.
     pub insecure_skip_verify: bool = false
     pub alpn: str = ""
-    // Offer only TLS_AES_128_GCM_SHA256. ChaCha20-Poly1305 is preferred by
-    // default because it is constant-time by construction; this exists so the
-    // AES-GCM path gets exercised against real servers too.
     pub aes_only: bool = false
 end
 
@@ -21,7 +14,6 @@ pub struct Conn:
     pub host: str = ""
     pub open: bool = false
     pub insecure: bool = false
-    // decrypted application data not yet handed to the caller
     pub pending: Buf = Buf {}
     pub err: str = ""
 end
@@ -34,17 +26,6 @@ func _conn_fail(c &: Conn, msg: str): bool:
     ret false
 end
 
-// RFC 8446 section 4.6.3. A peer may rekey at any point after the handshake:
-//
-//   application_traffic_secret_N+1 =
-//       HKDF-Expand-Label(application_traffic_secret_N, "traffic upd", "", Hash.length)
-//
-// and the sequence number restarts at zero with the new key.
-//
-// Ignoring a KeyUpdate does not merely lose a feature: every record after it is
-// encrypted under a key we no longer hold, so the connection dies with a
-// bad-MAC error that reads like corruption. Short request/response exchanges
-// never reach it, which is exactly why it went unnoticed.
 func _traffic_update(h &: Handshake, secret &: Buf): bool:
     mut next := _newbuf(h.hlen)
     defer _buf_wipe(next)
@@ -57,8 +38,6 @@ func _traffic_update(h &: Handshake, secret &: Buf): bool:
     ret true
 end
 
-// Handle a KeyUpdate from the peer. `requested` asks us to rekey our own
-// sending direction and answer in kind.
 func _do_key_update(c &: Conn, requested: bool): bool:
     if c.h.ver != TLS13:
         ret false
@@ -90,11 +69,6 @@ func _do_key_update(c &: Conn, requested: bool): bool:
     ret c.h.rec.txk.live
 end
 
-// Pull decrypted application data into c.pending, handling post-handshake
-// NewSessionTicket/KeyUpdate messages and alerts along the way. Shared by
-// Read and ReadBytes, which differ only in how they drain c.pending
-// afterward. Returns false on EOF/alert/error (c.err set if it was an error,
-// not a clean close).
 func _fill_pending(c &: Conn): bool:
     mut frag := _newbuf(REC_MAX_PLAINTEXT)
     defer _buf_free(frag)
@@ -183,13 +157,6 @@ pub func Dial(host: str, port: int, cfg: Config): Conn:
     ret c
 end
 
-// Runs the client side of a TLS handshake on `fd`, an already-connected
-// plain TCP socket, instead of dialing a fresh connection the way Dial
-// does. This is what a STARTTLS-style protocol upgrade needs (SMTP,
-// IMAP, ...): the plaintext greeting/negotiation happens first on a
-// plain rawsock.Connect'd socket, and only then does TLS begin on that same
-// fd. `cfg.server_name` must be set by the caller - unlike Dial, there is
-// no dial-target hostname to default it from here.
 @en "WrapClient"
 @fa "پوشش کارخواه"
 @ar "تغليف العميل"
@@ -226,11 +193,6 @@ pub func WrapClient(fd: i64, cfg: Config): Conn:
     ret c
 end
 
-// Load a server identity: a leaf-first certificate chain PEM and the
-// matching private key PEM (PKCS#1/SEC1/PKCS#8, whichever the file uses -
-// see privkey.salam). `ok` is false if either file was missing, empty, or
-// did not parse; WrapServer refuses to run a handshake with a config that
-// failed to load, rather than fail confusingly mid-handshake instead.
 @en "NewServerConfig"
 @fa "پیکربندی کارساز جدید"
 @ar "إعداد الخادم جدید"
@@ -242,10 +204,6 @@ pub func NewServerConfig(cert_file: str, key_file: str): ServerConfig:
     ret cfg
 end
 
-// Run the server side of a TLS handshake on `fd`, an already-accepted plain
-// TCP socket (e.g. from net.Accept/tcp.Accept). TLS 1.3 only for now - a
-// client that cannot negotiate it is refused with ConnError explaining why,
-// not silently mishandled.
 @en "WrapServer"
 @fa "پوشش کارساز"
 @ar "تغليف الخادم"
@@ -300,12 +258,6 @@ pub func Write(c &: Conn, data: str): int:
     ret WriteBytes(c, data as void*, data.len())
 end
 
-// Byte-count variant of Write. str is a NUL-terminated C string under the
-// hood (confirmed: str.len() stops at the first embedded NUL byte), so any
-// caller layering a binary protocol over TLS - WebSocket framing, with its
-// mandatory XOR-masked payloads that can legitimately contain a 0x00 byte
-// anywhere - must go through this, not Write, or bytes past the first NUL
-// silently never get sent.
 @en "WriteBytes"
 @fa "نوشتن بایت"
 @ar "كتابة بایتات"
@@ -320,7 +272,6 @@ pub func WriteBytes(c &: Conn, ptr: void*, n: int): int:
     ret n
 end
 
-// Read up to `max` bytes of application data. Returns "" at end of stream.
 @en "Read"
 @fa "خواندن"
 @ar "قراءة"
@@ -347,11 +298,6 @@ pub func Read(c &: Conn, max: int): str:
     ret _bufstr(out)
 end
 
-// Byte-count variant of Read: copies decrypted bytes directly into `buf`
-// (caller-owned, at least `max` bytes) and returns the real count, so a
-// caller expecting embedded NUL bytes (e.g. WebSocket frame payloads) does
-// not lose data the way a str-and-.len() round trip would. Returns 0 at end
-// of stream, same as Read returning "".
 @en "ReadBytes"
 @fa "خواندن بایت"
 @ar "قراءة بایتات"
@@ -377,14 +323,6 @@ pub func ReadBytes(c &: Conn, buf: void*, max: int): int:
     ret take
 end
 
-// Pending - decrypted bytes already held, which a Read would hand back
-// without touching the socket.
-//
-// A caller that waits on the socket for readability (rawsock.WaitReadable)
-// has to ask this first: a single TLS record can carry several protocol
-// messages, so the plaintext for the next one is often already here while
-// the socket itself has nothing more to say. Polling the descriptor without
-// checking this stalls until the peer happens to send something else.
 @en "Pending"
 @fa "در انتظار"
 @ar "معلق"
@@ -392,22 +330,6 @@ pub func Pending(c: Conn): int:
     ret c.pending.len
 end
 
-// Readable - whether a Read would hand back data without waiting on the
-// socket.
-//
-// Not the same question as Pending, and asking the wrong one deadlocks. One
-// TCP segment routinely carries several TLS records: the first read takes
-// them all off the descriptor and decrypts only the first, so the plaintext
-// for the next message is not in `pending` yet - it is sitting in the record
-// layer, already arrived, with nothing left on the socket to wake a poll.
-// A caller that checked Pending, found it empty and then waited on the
-// descriptor would wait for traffic it already has.
-//
-// True here promises that a record is ready to decode, not that it carries
-// application data: a buffered key update or alert also counts, and reading
-// past one can still block on the socket for the message behind it. That is
-// rare enough to be worth the trade - the alternative is the deadlock above,
-// which is not rare at all.
 @en "Readable"
 @fa "خواندنی"
 @ar "قابل للقراءة"
@@ -418,9 +340,6 @@ pub func Readable(c: Conn): bool:
     ret _rec_buffered(c.h.rec) > 0
 end
 
-// Fd - the descriptor underneath, for a caller that needs to wait on it
-// (poll/select) rather than read from it. Reading it directly instead of
-// through Read/ReadBytes would desynchronise the record layer.
 @en "Fd"
 @fa "توصیفگر"
 @ar "واصف"

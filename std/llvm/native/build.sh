@@ -1,13 +1,4 @@
 #!/bin/sh
-# Builds libsalam_llvm.a: the six native shim objects merged with every static
-# LLVM (and, when available, LLD) archive on the host, so `link static
-# "salam_llvm"` in std/llvm/llvm.salam resolves without llvm-*-dev installed
-# on the consuming machine.
-#
-# This was also available as c/Makefile's `libsalam-llvm` target. It lives here
-# now, next to the sources it compiles, so the self-hosted compiler can build
-# the archive independently of the C compiler.
-#
 # Usage:
 #   std/llvm/native/build.sh [--out DIR] [--llvm-config PROG]
 #
@@ -63,17 +54,11 @@ command -v "$LLVM_CONFIG" >/dev/null 2>&1 || {
 LIBDIR=$($LLVM_CONFIG --libdir 2>/dev/null || true)
 BINDIR=$($LLVM_CONFIG --bindir 2>/dev/null || true)
 : "${AR:=$(command -v "$BINDIR/llvm-ar" 2>/dev/null || command -v llvm-ar 2>/dev/null || command -v ar)}"
-# LLD_PREFIX is the spelling c/Makefile took, and the selfhost workflow still
-# sets it; its archives live in <prefix>/lib. Accepted here so that contract
-# survives the Makefile.
 if [ -z "${LLD_EXTRA_LIBDIR:-}" ] && [ -n "${LLD_PREFIX:-}" ]; then
     LLD_EXTRA_LIBDIR="$LLD_PREFIX/lib"
 fi
 SEARCH="$LIBDIR ${LLD_EXTRA_LIBDIR:-}"
 
-# LLD is a separate package on most hosts, and its archives are the only
-# thing that can be absorbed here (a .dylib/.so cannot). Without them the
-# stub keeps std/llvm resolving and the compiler links through the host cc.
 find_lib() {
     for d in $SEARCH; do
         [ -f "$d/$1" ] && {
@@ -87,15 +72,6 @@ if [ -z "${WITH_LLD:-}" ]; then
     if find_lib liblldCommon.a >/dev/null 2>&1; then WITH_LLD=1; else WITH_LLD=0; fi
 fi
 
-# lld_link.cc includes <lld/Common/Driver.h>, and in a separate-prefix lld
-# (a Homebrew keg, or what tools/bash/build-static-lld.sh installs) that
-# header is not under `llvm-config --includedir` the way the apt.llvm.org
-# packages have it - it sits beside the archives LLD_EXTRA_LIBDIR names. The
-# old c/Makefile added -I$(LLD_PREFIX)/include for exactly this; without it
-# the C++ shim fails with "file not found" on every supported separate-prefix
-# host. Inferred from LLD_EXTRA_LIBDIR's sibling include/, and only when the
-# header is really there, so a machine without one is unaffected.
-# LLD_EXTRA_INCLUDEDIR overrides for a prefix laid out some other way.
 lld_includedir() {
     if [ -n "${LLD_EXTRA_INCLUDEDIR:-}" ]; then
         printf '%s\n' "$LLD_EXTRA_INCLUDEDIR"
@@ -109,11 +85,6 @@ lld_includedir() {
 
 WORK=$(mktemp -d)
 
-# llvm-ar on MSYS2 is a native Windows binary reading an MRI script full of
-# paths this shell writes. It cannot resolve an MSYS path like /tmp/tmp.XXXX,
-# so every "addmod" line came back as "No such file or directory". Everything
-# that goes INTO the script gets converted; everything used by the shell itself
-# stays as it is.
 to_ar_path() {
     if command -v cygpath >/dev/null 2>&1; then
         cygpath -m "$1"
@@ -124,17 +95,9 @@ to_ar_path() {
 trap 'rm -rf "$WORK"' EXIT INT TERM
 
 echo "llvm-config : $LLVM_CONFIG ($($LLVM_CONFIG --version))"
-# AR is picked by a fallback chain that ends at whatever `llvm-ar` PATH
-# happens to offer, which on a machine carrying two LLVM kegs need not be
-# the one llvm-config points at. Printing it costs nothing and turns a
-# version mismatch into a visible line instead of a later link error.
 echo "ar          : ${AR:-none}"
 echo "in-process LLD : $([ "$WITH_LLD" = 1 ] && echo yes || echo 'no (stubbed)')"
 
-# -DSALAM_HAVE_LLVM is what makes orc_call.c define the five
-# salam_llvm_init_all_* wrappers at all; without it the file compiles to
-# just salam_orc_call_main and std/llvm fails to link on the five macros
-# LLVM only publishes as macros. The include path is for llvm-c/*.h.
 LLVM_INC=$($LLVM_CONFIG --includedir 2>/dev/null)
 CPPDEFS="-DSALAM_HAVE_LLVM -I$LLVM_INC"
 [ "$WITH_LLD" = 1 ] && CPPDEFS="$CPPDEFS -DSALAM_HAVE_LLD"
@@ -161,7 +124,6 @@ else
     LLD_LIBS=""
 fi
 
-# MSYS2 only; see the file's own comment for the __imp_ story.
 case "$(uname -s 2>/dev/null || echo unknown)" in
 MINGW* | MSYS* | CYGWIN*)
     $CC -c "$HERE/win_lld_demangle_shim.S" -o "$WORK/win_shim.o"
@@ -175,12 +137,6 @@ mkdir -p "$OUT"
 echo "create $(to_ar_path "$OUT/libsalam_llvm.a")" >>"$MRI"
 for o in $SHIMS; do echo "addmod $(to_ar_path "$o")" >>"$MRI"; done
 
-# A host can have llvm-config and the headers and still have no static
-# components at all (a shared-only LLVM package). Left unchecked, every
-# addlib below is skipped, the merge produces a shim-only archive, and the
-# script prints "Built" - which is how std/llvm ends up failing at link time
-# on a build that reported success. So the component list has to actually
-# come back, and the archives it names have to actually be found.
 if ! LLVM_LIBS=$($LLVM_CONFIG --link-static --libs all 2>"$WORK/libs.err"); then
     echo "error: $LLVM_CONFIG --link-static --libs all failed:" >&2
     sed 's/^/       /' "$WORK/libs.err" >&2
@@ -205,10 +161,6 @@ for l in $LLVM_LIBS $(for x in $LLD_LIBS; do echo "-l$x"; done); do
     else
         case "$nm" in
         liblld*) missing="$missing $nm" ;;
-        # Polly is optional on purpose: llvm-config lists it whenever LLVM
-        # was configured with it, but several distributions ship the
-        # component names without the archives, and nothing in std/llvm
-        # references a Polly symbol.
         libPolly* | libLLVMPolly*) ;;
         *) missing_llvm="$missing_llvm $nm" ;;
         esac

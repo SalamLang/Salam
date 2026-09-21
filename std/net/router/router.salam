@@ -45,16 +45,7 @@ pub struct Route:
     pub method: str = ""
     pub pattern: str = ""
     pub fn: i64 = 0
-    // The method as a small integer, assigned once at registration. Dispatch
-    // used to strcmp the verb against every route on every request; comparing
-    // an int rejects the wrong ones in a cycle. 0 means "some other verb",
-    // which falls back to comparing the strings.
     pub mid: int = 0
-    // 0 literal, 1 has a ":param", 2 has a "*" - computed once when the
-    // route is registered rather than re-derived from the pattern on every
-    // request. Dispatch used to call _specificity (two substring searches)
-    // for every route, on every level, on every request: with a dozen
-    // routes that is seventy-odd string scans to answer one GET.
     pub spec: int = 0
 end
 
@@ -67,17 +58,6 @@ pub struct Router:
     pub static_dir: str = ""
     pub has_static: bool = false
     pub static_listing: bool = false
-    // Open-addressed index over the literal routes, keyed on (method, path).
-    // Each slot holds a route index plus one, so 0 reads as empty.
-    //
-    // Dispatch was a linear walk of every registered route, comparing two
-    // strings per step. That is fine for the four routes a demo has and
-    // quadratic-feeling for the hundred a real service has, and it put a
-    // strcmp against every unrelated path on the critical path of every
-    // request. Literal routes - which is nearly all of them, and all of the
-    // hot ones - are now one hash and one comparison, whatever the table
-    // size. Parameterised routes still need a walk, so they keep one, but it
-    // only runs when the hash misses.
     pub idx: Vector<int> = Vector {}
     pub idx_mask: int = 0
     pub n_literal: int = 0
@@ -93,9 +73,6 @@ pub struct Match:
     pub params: ParamList = ParamList {}
 end
 
-// Releases a ParamList's captures and its backing array. _try_match may have
-// pushed several before hitting the byte that made it fail, and dropping the
-// vector alone abandons every one of them.
 func _free_params(p &: ParamList):
     n := p.items.len()
     mut i := 0
@@ -120,8 +97,6 @@ func _method_id(m: str): int:
     ret 0
 end
 
-// FNV-1a over the verb id and the path, folded to 32 bits at every step so
-// the multiply cannot overflow into the sign bit.
 func _hash_key(mid: int, s: str): int:
     mut h := 2166136261 as i64
     h = ((h ^ (mid as i64)) * 16777619) & 4294967295
@@ -152,31 +127,11 @@ func _specificity(pattern: str): int:
     ret 0
 end
 
-// The byte at `i` of `s`. A `str` is a NUL-terminated byte pointer
-// underneath, so this is a load and nothing else - which is the entire point
-// of it existing.
-//
-// _try_match used to compare one character at a time as `pattern.substr(pi,
-// 1) == "/"`. Every one of those substr calls heap-allocates a two-byte
-// string, compares it, and drops it: matching "/users/:id" against
-// "/users/42" cost roughly twenty allocations, none of them freed, to answer
-// one request. At thirty thousand requests a second that is the largest
-// single source of the server's memory growth, and it is also most of the
-// time the matcher spends. This version does the identical walk with zero
-// allocations - captures excepted, which are the values the caller asked for.
 func _byte_at(s: str, i: int): int:
     p := s as i8 *
     ret p[i]
 end
 
-// Matches `path` against `pattern` (":name" captures one path segment,
-// "*" matches the remainder unconditionally), appending any captures to
-// `out_params`.
-//
-// The two capture strings are heap-allocated and become the CALLER's to
-// free - net/http's _dispatch hands them straight to the request context,
-// which owns them for the life of the request. Nothing else in here
-// allocates.
 func _try_match(pattern: str, path: str, out_params &: ParamList): bool:
     mut pi := 0
     mut pp := 0
@@ -216,9 +171,6 @@ func _try_match(pattern: str, path: str, out_params &: ParamList): bool:
     ret pi == plen && pp == pathlen
 end
 
-// Inserts route `ri` into the literal index. A key already present is left
-// alone: Dispatch used to return the first matching route in registration
-// order, and registering the same method and path twice must keep doing so.
 func _idx_insert(r &: Router, ri: int):
     route := r.routes.get(ri)
     if route.spec != 0: ret end
@@ -233,9 +185,6 @@ func _idx_insert(r &: Router, ri: int):
     r.idx.set(slot, ri + 1)
 end
 
-// Rebuilds the table at `cap` slots (a power of two) and reinserts every
-// literal route. Called when the load factor would pass a half, which is
-// where open addressing's probe lengths start to grow.
 func _idx_grow(r &: Router, cap: int):
     r.idx.free()
     r.idx = Vector {} as Vector<int>
@@ -251,8 +200,6 @@ func _idx_grow(r &: Router, cap: int):
     end
 end
 
-// The one place a Route is built, so `spec`, `mid` and the index cannot be
-// forgotten. Every registration helper goes through here.
 func _add(r &: Router, method: str, pattern: str, fn: i64):
     mut rt := Route {}
     rt.method = method
@@ -327,14 +274,6 @@ pub func Head(r &: Router, path: str, fn: i64): _add(r, "HEAD", path, fn) end
 @ar "خیارات"
 pub func Options(r &: Router, path: str, fn: i64): _add(r, "OPTIONS", path, fn) end
 
-// Any method at all, for the ones without a helper above.
-//
-// This is what `Route` should be, and callers outside the package have to
-// use this name instead: `Route` is also the name of the struct declared in
-// this file, and the type wins the lookup, so `router.Route(...)` from
-// another package resolves to the struct and fails. Renaming the struct
-// would break every program that names the type, so the function gets the
-// second name.
 @en "Method"
 @fa "روش"
 @ar "طریقة"
@@ -375,17 +314,6 @@ end
 @en "Dispatch"
 @fa "اعزام"
 @ar "إرسال"
-// One pass, not three. The old shape walked the whole route table once per
-// specificity level and recomputed each pattern's level as it went; static
-// beats param beats wildcard is preserved here by keeping the best match
-// seen and only considering routes that could improve on it, which gives
-// the same answer for the same reason without the extra passes.
-//
-// The literal case also skips _try_match entirely: a pattern with no ":"
-// and no "*" matches a path exactly when the two strings are equal, and a
-// string compare does in one call what that character loop does in a
-// hundred, allocating nothing. Since nothing outranks a literal, the first
-// literal hit ends the search.
 pub func Dispatch(r: Router, method: str, path: str): Match:
     mut m := Match {}
     mid := _method_id(method)
@@ -428,9 +356,6 @@ pub func Dispatch(r: Router, method: str, path: str): Match:
     ret m
 end
 
-// Frees the captures in a Match the caller is done with. Dispatch hands back
-// heap-allocated key/value pairs; a caller that does not adopt them (as
-// net/http's _dispatch does) has to release them or they leak per request.
 @en "FreeMatch"
 @fa "آزادسازی تطابق"
 @ar "تحریر المطابقة"

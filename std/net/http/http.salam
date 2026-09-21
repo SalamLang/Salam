@@ -17,16 +17,6 @@
 @ar "HTTP للشبکة"
 package http
 
-// net/http is the merge point for what used to be two separate, only
-// loosely related packages: std/http (client only) and std/web (server
-// only, undocumented as being an HTTP package at all). This file is the
-// client - see server.salam/context.salam/ctx_internal.salam for the
-// server, and net/router for the routing layer the server dispatches
-// through. TLS-server, keep-alive and chunked/gzip response handling on
-// the SERVER side are follow-up work, flagged in server.salam's header;
-// this file's client already had native TLS + gzip decompression added
-// during the migration since both were bounded, additive changes to a
-// single linear function (_fetch_https).
 
 import mem
 import str
@@ -58,9 +48,6 @@ end
 
 mut _g_http_status := 0
 mut _g_http_headers := ""
-// Why the last request produced no response, when it produced none. A failed
-// TLS handshake and a server that answered with nothing both left status 0 and
-// an empty body, with no way for a caller to tell them apart.
 mut _g_http_error := ""
 
 @en "Response"
@@ -70,9 +57,6 @@ pub struct Response:
     pub status: int = 0
     pub body: str = ""
     pub head: str = ""
-    // Empty on any response that came back from the server, including a 500.
-    // Non-empty only when the request never got one: DNS, connect, or - most
-    // often - the TLS handshake. See Error().
     pub err: str = ""
 end
 
@@ -179,14 +163,6 @@ pub struct Client:
     pub func Head(url: str): Response: ret this.Request("HEAD", url, "") end
 end
 
-// Caller-supplied headers take precedence over this client's defaults, so a
-// scraper that has to look like a browser gets ITS User-Agent on the wire
-// rather than a second copy after "Salam/1.0" (servers read the first one).
-// Only User-Agent and Accept are overridable: Accept-Encoding and Connection
-// are owned by the transport, which can inflate gzip and nothing else, and
-// reads the body until EOF. A caller asking for "br" or "keep-alive" would
-// get undecodable bytes or a stall, so those lines are dropped from the
-// caller's block below instead of being honoured.
 func _header_at(headers: str, name: str): int:
     if headers.len() == 0:
         ret 0 - 1
@@ -373,13 +349,6 @@ if SALAM_OS_WINDOWS && !SALAM_NATIVE_TLS:
     end
 else:
 
-    // Reads with the binary-safe *Bytes APIs, not rawsock.Recv/tls.Read -
-    // a chunked+gzip response body (the common case once a client sends
-    // Accept-Encoding: gzip, e.g. against Cloudflare-fronted origins) is
-    // arbitrary binary data that routinely contains embedded NUL bytes,
-    // which the str-returning Recv/Read silently truncate at (str is a
-    // NUL-terminated C string under the hood - see tcp.ReadBytes's doc
-    // comment for the same caveat on the socket layer this builds on).
     func _read_all_plain(s: rawsock.Socket): compress.ByteBuf:
         buf := compress.NewByteBuf()
         tmp := mem.Allocate(16384 as u64)
@@ -412,10 +381,6 @@ else:
         ret buf
     end
 
-    // Byte-offset scans over a ByteBuf, used to split the raw response
-    // into header/body and to walk chunk-size lines without ever routing
-    // binary body bytes through a str (see _read_all_plain's doc comment
-    // above for why that truncates at embedded NULs).
     func _buf_find_crlf(b: compress.ByteBuf, from: int): int:
         p := b.data as i8*
         n := b.len
@@ -475,12 +440,6 @@ else:
         ret v
     end
 
-    // Undo Transfer-Encoding: chunked. The WinHTTP backend hands back a
-    // de-chunked body, so this one must too, or every caller sees framing
-    // bytes mixed into the payload. Works over ByteBuf, not str - chunk
-    // *data* is arbitrary binary (routinely gzip, once content-encoding
-    // is in play), only the size-prefix line on each chunk is guaranteed
-    // ASCII/NUL-free.
     func _dechunk_buf(body: compress.ByteBuf): compress.ByteBuf:
         out := compress.NewByteBuf()
         mut pos := 0
@@ -513,10 +472,6 @@ else:
         ret out
     end
 
-    // url.URL splits the query string out of `path` (net.URL, the type
-    // this used to be built against, kept them joined) - the HTTP
-    // request-target must include it back
-    // ("GET /search?q=x HTTP/1.1"), so it's rejoined here.
     func _request_target(u: url.URL): str:
         mut path := u.path
         if path.len() == 0:
@@ -528,11 +483,6 @@ else:
         ret path
     end
 
-    // The Host header, port included unless it is the scheme's default.
-    // RFC 7230 requires the port, and a server that has more than one thing
-    // on more than one port has nothing else to tell them apart by: a request
-    // to :8092 that says `Host: example.com` is indistinguishable from one to
-    // :8091. Browsers have always sent it; this client used to leave it off.
     func _host_header(u: url.URL): str:
         if u.port == 0:
             ret u.host
@@ -750,9 +700,6 @@ end
 @en "Error"
 @fa "خطا"
 @ar "خطأ"
-// Why no response arrived, or "" when one did. `Status(r) == 0` on its own
-// cannot tell a refused connection or a failed TLS handshake from a server
-// that closed without writing a status line; this can.
 pub func Error(r: Response): str:
     ret r.err
 end

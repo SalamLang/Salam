@@ -1,5 +1,4 @@
 #!/bin/sh
-# Serve the playground (editor/, relative to the repo's compiler/ dir).
 
 set -eu
 . "$(dirname "$0")/lib.sh"

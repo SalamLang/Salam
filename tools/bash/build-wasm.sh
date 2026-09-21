@@ -1,5 +1,4 @@
 #!/bin/sh
-# Build the Salam compiler to WebAssembly for the online playground.
 
 set -e
 . "$(dirname "$0")/lib.sh"
@@ -47,16 +46,6 @@ command -v "$EMCC" >/dev/null 2>&1 || [ -e "$EMCC" ] || {
 OUT_DIR="editor"
 mkdir -p "$OUT_DIR"
 
-# --- stdlib preload image -------------------------------------------------
-# The browser compiler can only ever *import* .salam sources, so stage a
-# preload image holding exactly those. std/doc.html alone is ~2 MB of
-# generated documentation and std/opencv/native/* is C++/CMake consumed only
-# by native builds; neither is reachable from an `import`, so preloading the
-# raw std/ tree shipped megabytes the playground could never open.
-# Then minify the staged copy: `format --minify` strips comments, indentation
-# and blank lines while leaving the token stream identical (verified across
-# all stdlib files), worth another ~500 KB the browser would download and
-# then discard, since the lexer drops that trivia anyway.
 STD_MIN="$(pwd)/.wasm-build/std-min"
 rm -rf "$STD_MIN"
 mkdir -p "$STD_MIN"
@@ -70,30 +59,7 @@ mkdir -p "$STD_MIN"
 "$SALAM" format --minify -r "$STD_MIN" >/dev/null
 echo "staged minified stdlib preload image at $STD_MIN"
 
-# The compiler is Salam now, so the C emcc compiles is what the C backend
-# emits rather than a hand-written src tree. --keep-c leaves those units in
-# .salam-build; the link it also attempts is for this host and irrelevant
-# here, so its failure is not an error.
-#
-# compiler/sal_web.salam already exports salam_web_run_app and friends under
-# those exact names: a `func` with a body inside an `extern:` block survives
-# DCE and keeps its unmangled symbol, which is Salam's EMSCRIPTEN_KEEPALIVE.
-#
-# compiler/main.salam, not a separate wasm_main.salam: the browser entry is
-# the SALAM_OS_WASM arm of that one file, which the --target below selects
-# along with everything else wasm.
 rm -rf .salam-build
-#
-# --target so the condcomp table is built for wasm rather than for this
-# host. Without it a Linux runner prunes every SALAM_OS_WASM arm and keeps
-# the Linux ones, so os.Platform() answered "linux" in the browser and
-# std/fs compiled in its getdents64 path - which emscripten cannot even
-# link ("wasm-ld: undefined symbol: syscall").
-#
-# --emit-c rather than swallowing a link failure: the old `|| true` hid
-# front-end errors too, and since the driver keeps the C it did manage to
-# generate, a half-emitted source set would sail past the find below and
-# reach emcc looking complete.
 "$SALAM" build --backend=c --emit-c --target=wasm32-unknown-emscripten \
     compiler/main.salam --output=.wasm-build/host-salam --log-level=warn
 SRCS=$(find .salam-build -name '*.c' | sort | tr '\n' ' ')
@@ -102,10 +68,6 @@ SRCS=$(find .salam-build -name '*.c' | sort | tr '\n' ' ')
     exit 1
 }
 
-# salam_web_compile_js is not in this list: it was a C-only entry point and
-# the self-hosted sal_web.salam has no counterpart. editor/app.salam cwraps
-# run_app, build_layout, emit and syntax_ok and never asked for it; JS output
-# comes through Emit()'s phase argument.
 # shellcheck disable=SC2086
 "$EMCC" -O2 -I.salam-build $SRCS \
     -o "$OUT_DIR/salam-wa.js" \

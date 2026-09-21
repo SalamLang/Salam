@@ -26,19 +26,6 @@ import crypto
 import tls
 import time
 
-// Migrated from std/socket (renamed - it implemented WebSocket, not a raw
-// socket, which the old name made every caller's `import socket` read
-// backwards). RFC 6455 client + server, ws:// and wss://, plus (new in
-// this migration) server-side wss:// via std/tls.WrapServer and a Hub
-// for broadcast/rooms.
-//
-// wss:// SERVER support (AcceptWSS) was carried over from the migration
-// marked unverified, on the strength of a local check that found
-// std/tls's WrapServer hanging mid-handshake with no test anywhere to
-// compare against. It is verified now:
-// tests/en/general/websocket_wss_loopback.salam runs both halves in one
-// process against the repo's own certificate, and the handshake, several
-// messages in a row, a binary frame and the reply all come through.
 
 const WS_GUID := "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
@@ -72,41 +59,15 @@ pub const PING := 9
 @ar "بونغ"
 pub const PONG := 10
 
-// Not an RFC 6455 opcode - opcodes are four bits, so no frame can ever
-// carry this. Poll() returns it when the wait ran out with no message,
-// which is a different outcome from NONE (the connection ended) and has
-// to be distinguishable: a client with a heartbeat treats one as "nothing
-// yet, carry on" and the other as "reconnect".
 @en "TIMEOUT"
 @fa "مهلت"
 @ar "مهلة"
 pub const TIMEOUT := 100
 
-// Slot table for wss:// connections' underlying std/tls state. Conn cannot
-// embed a tls.Conn field directly - a struct field whose default value
-// references another package's type hits a codegen bug (confirmed via an
-// isolated repro: the generated C either references the foreign struct's
-// bare unqualified name, producing "'Foo' undeclared", or in one variant
-// segfaults the compiler outright). A plain int index into this table, with
-// explicit get/mutate/set around every tls.Read/Write/Close call, avoids the
-// bug entirely and was verified to correctly preserve TLS record state
-// (sequence numbers, buffered plaintext) across calls.
 mut _tls_slots := Vector {} as Vector<tls.Conn>
 
-// Slots whose connection has been torn down, ready to be handed out again.
-//
-// Without this the table only ever grows, one entry per wss:// connection
-// ever made - which is a fixed cost for a program that dials once and an
-// unbounded one for a client that reconnects on a schedule, which is
-// exactly what a protocol with a heartbeat does.
 mut _tls_free := Vector {} as Vector<int>
 
-// tls.ServerConfig is not `pub` in std/tls (see net/http/server.salam's
-// RunTLS for the same constraint), so it cannot be named as a parameter
-// type here either - AcceptWSS reads this global instead of taking a
-// config argument, loaded once via LoadWSSConfig before the accept loop
-// starts, same "set once, read from every connection" pattern RunTLS
-// uses for its own TLS config.
 mut _wss_cfg := tls.NewServerConfig("", "")
 
 @en "Server"
@@ -123,33 +84,17 @@ end
 pub struct Conn:
     pub fd: i64 = 0 - 1
     pub open: bool = false
-    // The target of the handshake request, "/realtime?token=...", as the
-    // client asked for it. A browser cannot set a header on a WebSocket
-    // handshake, so the query string is the only place a client-side
-    // credential can travel; a server that needs one reads it from here.
     pub path: str = ""
     pub client: bool = false
     pub buf: void* = null
     pub blen: int = 0
     pub bcap: int = 0
-    // wss:// - set by DialWSS (client) or AcceptWSS (server). tls_idx
-    // indexes _tls_slots when secure is true.
     pub secure: bool = false
     pub tls_idx: int = 0 - 1
-    // The handshake headers as the peer sent them - the response for a
-    // client, the request for a server. A caller that needs a Set-Cookie
-    // off the upgrade, or the subprotocol the server settled on, reads it
-    // from here; nothing else in this file uses it.
     pub hdr: str = ""
-    // Partial-message state. A message may arrive as several frames, and
-    // Poll() can return between any two of them, so what has been read so
-    // far cannot live in a local the way Receive()'s accumulator used to.
     pub acc: str = ""
     pub acc_kind: int = 0
     pub fragmented: bool = false
-    // The bytes of the binary message being assembled. Owned by the Conn
-    // and reused frame to frame, so a caller never frees it: it stays valid
-    // until the next Poll/Receive on the same connection.
     pub bin: void* = null
     pub binlen: int = 0
     pub bincap: int = 0
@@ -161,20 +106,10 @@ end
 pub struct Message:
     pub kind: int = 0
     pub text: str = ""
-    // A binary message, unabridged. `text` still holds the same bytes for
-    // the callers that have always read it there, but a `str` stops at the
-    // first NUL, so anything that is really binary must be read from here.
-    // The buffer belongs to the Conn - do not free it, and copy it out
-    // before the next Poll/Receive if it has to outlive the call.
     pub data: void* = null
     pub len: int = 0
 end
 
-// Broadcast/rooms registry. `HashMap<str, RoomMembers>` rather than
-// `HashMap<str, Vector<Conn>>` directly - a generic argument that is
-// itself a generic is a known-broken pattern in this compiler regardless
-// of cross-package concerns (see std/encoding/query/query.salam), so the
-// inner Vector is wrapped in a one-field named struct first.
 @en "RoomMembers"
 @fa "اعضای اتاق"
 @ar "أعضاء الغرفة"
@@ -189,8 +124,6 @@ pub struct Hub:
     pub rooms: HashMap<str, RoomMembers> = HashMap {} as HashMap<str, RoomMembers>
 end
 
-// See the comment above _tls_slots (near the consts) for why wss:// state
-// lives in this table instead of a Conn field.
 func _tls_store(tc: tls.Conn): int:
     if _tls_free.len() > 0:
         idx := _tls_free.get(_tls_free.len() - 1)
@@ -202,10 +135,6 @@ func _tls_store(tc: tls.Conn): int:
     ret _tls_slots.len() - 1
 end
 
-// Hands a slot back once its connection is finished with. Only _shutdown
-// calls it - the same place that frees the receive buffer, and by the same
-// rule: whoever tears the connection down owns it. Stop() deliberately does
-// not, because a copy of the Conn may still be reading.
 func _tls_release(idx: int):
     if idx < 0 || idx >= _tls_slots.len():
         ret
@@ -259,15 +188,6 @@ func _bput(p: void*, i: int, v: int):
     bp[i] = v as i8
 end
 
-// _copy_raw - the payload, into the frame buffer at `off`, in one move.
-//
-// This used to be a byte-at-a-time loop calling substr(i, 1) per byte, which
-// allocated a one-byte string for every byte of every frame sent. On a payload
-// of any size that dominated the cost of sending: a couple of kilobytes took
-// tens of milliseconds. str.len() and substr() are both byte-oriented, so a
-// straight memcpy of the same bytes is what the loop was spelling out the slow
-// way. It takes a pointer rather than a `str` so that a binary payload
-// containing a NUL byte is copied whole instead of stopping there.
 func _copy_raw(buf: void*, off: int, payload: void*, n: int):
     if n <= 0:
         ret
@@ -283,15 +203,6 @@ func _byte_at(s: str, i: int): int:
     ret v
 end
 
-// _no_delay - Nagle off for one connection.
-//
-// A WebSocket writes one whole frame per send, and a server that answers a
-// request and also broadcasts an event writes two of them back to back. With
-// Nagle on, the second small write waits for the peer's ACK of the first,
-// which the peer delays by tens of milliseconds - turning a few milliseconds
-// of real work into a ~40ms round trip. Every frame here is already a
-// complete message, so there is nothing for Nagle to coalesce that the
-// protocol has not coalesced itself.
 func _no_delay(fd: i64):
     if fd < 0:
         ret
@@ -341,12 +252,6 @@ func _fill(c &: Conn): int:
     ret n
 end
 
-// _readable - true once the next _fill would not block.
-//
-// For a secure connection the socket is the wrong thing to ask on its own:
-// one TLS record can carry several WebSocket frames, so the bytes for the
-// next message are often already decrypted and waiting while the descriptor
-// itself has nothing new. Check the record layer first, the socket second.
 func _readable(c &: Conn, timeout_ms: int): bool:
     if c.secure:
         tc := _tls_get(c.tls_idx)
@@ -361,7 +266,6 @@ func _readable(c &: Conn, timeout_ms: int): bool:
     ret rawsock.WaitReadable(rawsock.FromFd(c.fd), timeout_ms)
 end
 
-// Room for `need` more bytes in the binary-message accumulator.
 func _bin_ensure(c &: Conn, need: int):
     if need <= c.bincap:
         ret
@@ -389,8 +293,6 @@ func _bin_reset(c &: Conn):
     c.binlen = 0
 end
 
-// The payload of the frame at `off`, unmasked, appended to the binary
-// accumulator. The `str` twin below cannot serve here: it stops at a NUL.
 func _bin_append(c &: Conn, off: int, plen: int, masked: bool, moff: int):
     if plen <= 0:
         ret
@@ -444,9 +346,6 @@ func _dial_wss(host: str, port: int, path: str, extra: str, insecure: bool): Con
     ret c
 end
 
-// The binary accumulator as a `str`, for the callers that have always read a
-// binary message out of Message.text. It stops at the first NUL, which is
-// exactly why Message.data exists next to it.
 func _bin_str(c &: Conn): str:
     if c.binlen <= 0:
         ret ""
@@ -556,7 +455,6 @@ func _read_headers(c &: Conn): str:
     ret hdr
 end
 
-// The target of "GET /path HTTP/1.1", or "" when the request line is not one.
 func _request_path(request: str): str:
     sp := str.Find(request, " ")
     if sp < 0: ret "" end
@@ -608,9 +506,6 @@ func _send_frame(c &: Conn, opcode: int, payload: str): int:
     ret _send_frame_raw(c, opcode, payload as void*, payload.len())
 end
 
-// The frame writer proper. Takes a pointer and a length rather than a `str`
-// so a binary payload with a NUL byte in it survives: a `str` ends at that
-// byte, which silently truncates every image, protobuf or msgpack frame.
 func _send_frame_raw(c &: Conn, opcode: int, payload: void*, plen: int): int:
     if !c.open && opcode != 8:
         ret 0 - 1
@@ -736,16 +631,6 @@ end
 @en "HandshakeRequestWith"
 @fa "درخواست دست دادن با سربرگ"
 @ar "طلب مصافحة مع ترویسات"
-// The same request with caller-supplied headers spliced in before the blank
-// line. `extra` is a ready-made block of "Name: value\r\n" lines, empty or
-// ending in \r\n.
-//
-// A browser cannot set a header on an upgrade and so has nowhere to put a
-// credential but the query string; a program is not so limited, and the
-// protocols built on WebSocket assume it. Socket.IO's polling-then-upgrade
-// handshake is the case in point: the session it opens over HTTP is carried
-// by a cookie the upgrade has to send back, and a sticky-session load
-// balancer routes on exactly that cookie.
 pub func HandshakeRequestWith(host: str, path: str, key: str, extra: str): str:
     mut req := "GET " + path + " HTTP/1.1\r\nHost: " + host + "\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: " + key + "\r\nSec-WebSocket-Version: 13\r\n"
     if str.Trim(extra).len() > 0:
@@ -771,11 +656,6 @@ pub func Ok(srv: Server): bool:
     ret srv.fd >= 0
 end
 
-// The port a server actually ended up bound to. Equal to the port handed
-// to Listen(), except after Listen(0), where it is the ephemeral port the
-// OS picked - the same reason tcp.Port exists. A server that takes that
-// route can never lose a race for a well-known number with an unrelated
-// process that already holds it.
 @en "Port"
 @fa "درگاه"
 @ar "منفذ"
@@ -822,9 +702,6 @@ pub func Accept(srv: Server): Conn:
     ret c
 end
 
-// Loads the certificate/key AcceptWSS will use for every subsequent
-// call - call this once before the accept loop starts, not per
-// connection.
 @en "LoadWSSConfig"
 @fa "بارگذاری پیکربندی امن"
 @ar "تحمیل إعداد TLS"
@@ -832,10 +709,6 @@ pub func LoadWSSConfig(cert_file: str, key_file: str):
     _wss_cfg = tls.NewServerConfig(cert_file, key_file)
 end
 
-// wss:// server-side upgrade: runs the TLS 1.3 handshake on an already-
-// accepted fd (via std/tls.WrapServer, same as net/http's RunTLS) before
-// reading the WebSocket handshake request over it. See this file's
-// header comment for the caveat on WrapServer's verification status.
 @en "AcceptWSS"
 @fa "پذیرش امن"
 @ar "قبول آمن"
@@ -882,7 +755,6 @@ end
 @en "DialWith"
 @fa "شماره گیری با سربرگ"
 @ar "اتصال مع ترویسات"
-// Dial, sending `extra` (a block of "Name: value\r\n" lines) on the upgrade.
 pub func DialWith(host: str, port: int, path: str, extra: str): Conn:
     s := rawsock.Connect(host, port)
     mut c := _new_conn(s.fd, true)
@@ -912,7 +784,6 @@ pub func DialWith(host: str, port: int, path: str, extra: str): Conn:
     ret c
 end
 
-// wss:// - dials over a std/tls connection instead of a plain socket.
 @en "DialWSS"
 @fa "شماره گیری امن"
 @ar "اتصال هاتفی آمن"
@@ -923,7 +794,6 @@ end
 @en "DialWSSWith"
 @fa "شماره گیری امن با سربرگ"
 @ar "اتصال آمن مع ترویسات"
-// DialWSS, sending `extra` (a block of "Name: value\r\n" lines) on the upgrade.
 pub func DialWSSWith(host: str, port: int, path: str, extra: str): Conn:
     ret _dial_wss(host, port, path, extra, false)
 end
@@ -931,12 +801,6 @@ end
 @en "DialWSSUnverified"
 @fa "شماره گیری امن بدون بررسی"
 @ar "اتصال آمن بلا تحقق"
-// DialWSSWith with certificate verification turned OFF.
-//
-// The connection is still encrypted, but nothing checks that the peer is who
-// it says it is, so anything able to sit between the two ends can read and
-// rewrite the traffic. It exists for one situation - a development server
-// with a self-signed certificate - and is the wrong call for every other.
 pub func DialWSSUnverified(host: str, port: int, path: str, extra: str): Conn:
     ret _dial_wss(host, port, path, extra, true)
 end
@@ -951,7 +815,6 @@ end
 @en "Receive"
 @fa "دریافت پیام"
 @ar "استقبال رسالة"
-// Receive - the next message, waiting as long as it takes.
 pub func Receive(c &: Conn): Message:
     ret Poll(c, 0 - 1)
 end
@@ -959,21 +822,6 @@ end
 @en "Poll"
 @fa "دریافت با مهلت"
 @ar "استقبال بمهلة"
-// Poll - the next message, or TIMEOUT once `timeout_ms` has passed.
-//
-// This is Receive with a clock: a negative timeout is Receive exactly, and
-// zero returns whatever is already buffered without ever waiting. It is what
-// makes a protocol with its own heartbeat writable on top of this package -
-// Socket.IO has to answer a server ping within a deadline, and a blocking
-// Receive gives it no way to notice the deadline arriving.
-//
-// A TIMEOUT return leaves the connection untouched and still open, including
-// halfway through a fragmented message: the frames read so far are kept on
-// the Conn, so calling again resumes rather than restarts. A NONE return
-// means the connection ended.
-//
-// A control frame (ping, close) is answered here and does not consume the
-// timeout budget on its own, matching what Receive has always done.
 pub func Poll(c &: Conn, timeout_ms: int): Message:
     mut msg := Message { kind = NONE, text = "" }
     if !c.open:
@@ -1127,8 +975,6 @@ end
 @en "SendBinaryBytes"
 @fa "ارسال بایت دودویی"
 @ar "إرسال بایتات ثنائیة"
-// SendBinary for a payload that is not a `str`: the bytes at `ptr`, all `n`
-// of them, NULs included.
 pub func SendBinaryBytes(c &: Conn, ptr: void*, n: int): int:
     ret _send_frame_raw(c, 2, ptr, n)
 end
@@ -1153,17 +999,6 @@ end
 @en "Stop"
 @fa "توقف"
 @ar "إيقاف"
-// Stop - ends the connection but leaves its buffer alone.
-//
-// For the case where one thread has to end a connection another thread is
-// reading. A Conn is a value: copies of it share one heap buffer, so calling
-// Close on a copy frees memory the reader is still reading into - a
-// use-after-free, and then a double free when the reader tears down in turn.
-//
-// This sends the close frame, shuts the socket down so the reader wakes with
-// an end-of-stream rather than staying blocked, and stops there. The thread
-// that owns the connection calls Close when its loop ends, and that one call
-// releases the buffer.
 pub func Stop(c &: Conn):
     if c.open:
         _send_frame(c, 8, "")
@@ -1199,9 +1034,6 @@ pub func Register(h &: Hub, room: str, c: Conn):
     h.rooms.put(room, members)
 end
 
-// Removes every connection in `room` with a matching fd (plain) or
-// tls_idx (secure) - Conn has no identity field of its own to key on,
-// so the transport handle is the closest thing to one.
 @en "Unregister"
 @fa "لغو ثبت"
 @ar "إلغاء التسجیل"
@@ -1235,9 +1067,6 @@ pub func RoomSize(h: Hub, room: str): int:
     ret h.rooms.get(room).items.len()
 end
 
-// Sends `msg` to every open connection in `room`, dropping ones that
-// fail to send (their .open flips false in _send_frame). Returns how
-// many connections received it.
 @en "Broadcast"
 @fa "پخش"
 @ar "بث"

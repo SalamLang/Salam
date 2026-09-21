@@ -20,33 +20,20 @@ import env
 import os
 import net.httpx
 
-// The address every EC2 instance answers its own metadata on. Link-local, so
-// it is unroutable and cannot be reached from anywhere else.
 const _IMDS_HOST := "http://169.254.169.254"
 
-// The container credential provider lives on a different link-local address,
-// and the task runtime puts the path in the environment.
 const _ECS_HOST := "http://169.254.170.2"
 
-// Metadata is either local and instant or absent and silent. One second is
-// generous for the first and short enough for the second.
 const _IMDS_TIMEOUT_MS := 1000
 
-// How long a fetched IMDSv2 session token stays usable.
 const _IMDS_TTL := "21600"
 
-// Source names, as they appear in Credentials.source and in ChainOptions.
 pub const SOURCE_ENV := "environment"
 pub const SOURCE_PROFILE := "profile"
 pub const SOURCE_WEB_IDENTITY := "web-identity"
 pub const SOURCE_CONTAINER := "container"
 pub const SOURCE_INSTANCE := "instance"
 
-// ChainOptions - which places to look, and in what order.
-//
-// The two that touch the network are off by default. A program that wants them
-// is running somewhere they exist and can say so; a program that does not
-// should never pay a timeout to discover it.
 pub struct ChainOptions:
     pub use_env: bool = true
     pub use_profile: bool = true
@@ -54,17 +41,13 @@ pub struct ChainOptions:
     pub use_web_identity: bool = false
     pub use_container: bool = false
     pub use_instance: bool = false
-    // Follow role_arn/source_profile in the shared config. On by default,
-    // because a profile that names a role is useless without it.
     pub follow_roles: bool = true
-    // How deep a source_profile chain may go before it is called a cycle.
     pub max_role_depth: int = 4
     pub session_name: str = ""
     pub duration: int = 0
     pub timeout_ms: int = 1000
 end
 
-// _http_get - one plain GET against a link-local address, with a deadline.
 func _http_get(url: str, path: str, headers: str, method: str,
     timeout_ms: int, status &: int): str:
     ep := httpx.ParseEndpoint(url)
@@ -79,12 +62,6 @@ func _http_get(url: str, path: str, headers: str, method: str,
     ret httpx.RawText(raw)
 end
 
-// _imds_token - an IMDSv2 session token.
-//
-// Version 2 exists because version 1 answered any GET, which meant a
-// server-side request forgery in an application could read the instance's
-// credentials. Version 2 requires this PUT first, and the token cannot be
-// obtained through a forwarded request. Never fall back to version 1.
 func _imds_token(timeout_ms: int): str:
     mut status := 0
     ret _http_get(_IMDS_HOST, "/latest/api/token",
@@ -97,9 +74,6 @@ func _imds_get(token: str, path: str, timeout_ms: int, status &: int): str:
         "X-aws-ec2-metadata-token: " + token + "\r\n", "GET", timeout_ms, status)
 end
 
-// _creds_from_json - the credential document both metadata services answer
-// with. Same field names in both, which is the one convenient thing about
-// them.
 func _creds_from_json(body: str, source: str): Credentials:
     if body.len() == 0:
         ret Credentials { error = "no credential document was returned",
@@ -125,16 +99,11 @@ func _creds_from_json(body: str, source: str): Credentials:
     ret out
 end
 
-// _profile_text - the shared credentials file and the shared config file, as
-// text. Both are read because the keys live in one and the role settings in
-// the other.
 func _profile_text(path: str): str:
     if path.len() == 0 || !os.Exists(path): ret "" end
     ret os.ReadFile(path)
 end
 
-// _config_value - one setting of a profile in the shared *config* file, where
-// a non-default profile is spelled "[profile name]".
 func _config_value(text: str, profile: str, key: str): str:
     direct := ParseIni(text, profile, key)
     if direct.len() > 0: ret direct end
@@ -162,11 +131,6 @@ func _static_from_profile(creds_text: str, config_text: str,
     ret out
 end
 
-// _resolve_profile - one step of the profile chain.
-//
-// Recursive, with a depth limit rather than a visited set: a source_profile
-// loop is a configuration mistake, and stopping at a stated depth reports it
-// as one instead of running out of stack.
 func _resolve_profile(profile: str, o: ChainOptions, depth: int): Credentials:
     mut name := profile
     if name.len() == 0: name = env.Get("AWS_PROFILE") end
@@ -233,7 +197,6 @@ func _resolve_profile(profile: str, o: ChainOptions, depth: int): Credentials:
     ret assumed
 end
 
-// FromEnvironmentCredentials - the credential the environment carries.
 pub func FromEnvironmentCredentials(): Credentials:
     mut out := Credentials {
         access_key = env.Get("AWS_ACCESS_KEY_ID"),
@@ -249,30 +212,10 @@ pub func FromEnvironmentCredentials(): Credentials:
     ret out
 end
 
-// FromProfileCredentials - a profile's credential, following a role.
-//
-// The case s3_creds.FromProfile() cannot answer. A profile like
-//
-//   [profile deploy]
-//   role_arn = arn:aws:iam::123456789012:role/Deploy
-//   source_profile = default
-//
-// carries no keys at all: the keys are in `default`, and they have to be
-// traded for the role before anything can be signed. This resolves the source
-// profile, calls AssumeRole with it, and returns what comes back.
-//
-// `credential_source = Ec2InstanceMetadata` or `EcsContainer` is honoured too,
-// which is how a profile says "start from the machine's own identity".
 pub func FromProfileCredentials(profile: str, o: ChainOptions): Credentials:
     ret _resolve_profile(profile, o, 0)
 end
 
-// FromWebIdentityCredentials - the token file a pod is given, traded for a
-// role.
-//
-// AWS_WEB_IDENTITY_TOKEN_FILE and AWS_ROLE_ARN are what an EKS pod with a
-// service account role finds in its environment, and what a GitHub Actions job
-// arranges. No AWS secret is involved anywhere.
 pub func FromWebIdentityCredentials(o: ChainOptions): Credentials:
     token_file := env.Get("AWS_WEB_IDENTITY_TOKEN_FILE")
     role_arn := env.Get("AWS_ROLE_ARN")
@@ -298,11 +241,6 @@ pub func FromWebIdentityCredentials(o: ChainOptions): Credentials:
         os.ReadFile(token_file).trim(), o.duration)
 end
 
-// FromContainerCredentials - the credential a task runtime serves.
-//
-// ECS and App Runner put a path in AWS_CONTAINER_CREDENTIALS_RELATIVE_URI, to
-// be fetched from a link-local address; AWS_CONTAINER_CREDENTIALS_FULL_URI
-// carries a whole URL instead, for the cases where the provider is elsewhere.
 pub func FromContainerCredentials(timeout_ms: int): Credentials:
     relative := env.Get("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")
     full := env.Get("AWS_CONTAINER_CREDENTIALS_FULL_URI")
@@ -347,12 +285,6 @@ pub func FromContainerCredentials(timeout_ms: int): Credentials:
     ret _creds_from_json(body, SOURCE_CONTAINER)
 end
 
-// FromInstanceCredentials - the credential an EC2 instance role carries.
-//
-// Version 2 of the metadata protocol only: the PUT that obtains a session
-// token cannot be made through a forwarded request, which is what stopped
-// server-side request forgery from reading an instance's credentials. There is
-// deliberately no fallback to version 1.
 pub func FromInstanceCredentials(timeout_ms: int): Credentials:
     mut ms := timeout_ms
     if ms <= 0: ms = _IMDS_TIMEOUT_MS end
@@ -389,7 +321,6 @@ pub func FromInstanceCredentials(timeout_ms: int): Credentials:
     ret _creds_from_json(body, SOURCE_INSTANCE + " " + first)
 end
 
-// InstanceRegion - the region an EC2 instance is in, from its own metadata.
 pub func InstanceRegion(timeout_ms: int): str:
     mut ms := timeout_ms
     if ms <= 0: ms = _IMDS_TIMEOUT_MS end
@@ -401,12 +332,10 @@ pub func InstanceRegion(timeout_ms: int): str:
     ret where.trim()
 end
 
-// DefaultChain - the sources that cost nothing to try.
 pub func DefaultChain(): ChainOptions:
     ret ChainOptions {}
 end
 
-// ContainerChain - what a program running in ECS or on EC2 should use.
 pub func ContainerChain(): ChainOptions:
     ret ChainOptions {
         use_env = true,
@@ -417,11 +346,6 @@ pub func ContainerChain(): ChainOptions:
     }
 end
 
-// Resolve - the first source in the chain that answers.
-//
-// `source` on the result says which one did, which is the field to log at
-// startup: almost every unexplained AccessDenied is a program using a
-// different credential than its author believed.
 pub func Resolve(o: ChainOptions): Credentials:
     mut last := Credentials {
         error = "no credential source was enabled", code = "NoCredentials"
@@ -454,11 +378,6 @@ pub func Resolve(o: ChainOptions): Credentials:
     ret last
 end
 
-// ResolveConfig - a Config ready to sign, from wherever the credential is.
-//
-// The one call most programs want: say which bucket and which region, say
-// where to look, and get something that works or an error that says what was
-// tried.
 pub func ResolveConfig(bucket: str, region: str, o: ChainOptions): Config:
     creds := Resolve(o)
     mut cfg := ForAws(region, bucket)

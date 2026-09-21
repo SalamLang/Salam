@@ -1,13 +1,4 @@
 #!/bin/sh
-# Downloads a released salam for a platform other than this machine's, for
-# builds that happen inside a foreign-architecture container. setup-salam
-# installs the *runner's* architecture, which is the wrong one when the compile
-# runs under docker --platform=linux/386 or arm32v7.
-#
-# Usage:
-#   tools/bash/fetch-seed.sh --slug linux-i686 --out DIR [--version X.Y.Z]
-#
-# Without --version the newest published release is used.
 
 set -eu
 
@@ -58,17 +49,6 @@ done
     exit 2
 }
 
-# The newest release tag. github.com/OWNER/REPO/releases/latest redirects to
-# .../releases/tag/vX.Y.Z, which is a plain web request; api.github.com answers
-# the same question but allows only 60 unauthenticated calls an hour per IP,
-# shared with everything else on that address. That is what a runner runs out
-# of: the armhf job here got a 403 from the API while the i686 job beside it,
-# on a different address, was fine. So ask github.com first and keep the API as
-# the fallback, authenticated when a token is in the environment (1000 an hour
-# per repository).
-#
-# Two seds rather than a pipeline into head, so a closed pipe cannot take the
-# whole script down with SIGPIPE.
 resolve_latest_tag() {
     eff=$(curl -fsSL --retry 3 -o /dev/null -w '%{url_effective}' \
         "https://github.com/$REPO/releases/latest" 2>/dev/null) || eff=
@@ -118,8 +98,6 @@ bin=$(find "$tmp/x" -name salam -type f 2>/dev/null | sed -n '1p')
     echo "error: no salam binary inside $asset" >&2
     exit 1
 }
-# The whole tree, not just the binary: a release carries its own std/ beside it
-# and some builds resolve through that.
 cp -r "$(dirname "$bin")"/. "$OUT/"
 chmod +x "$OUT/$(basename "$bin")" 2>/dev/null || true
 echo "seed       : $OUT/$(basename "$bin")"

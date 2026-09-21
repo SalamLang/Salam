@@ -1,19 +1,4 @@
 #!/bin/sh
-# Exercise the salam subcommands run-tests.sh never reaches, so the leak gate
-# covers the whole CLI rather than the eight verbs the corpus happens to use.
-#
-#   run-tests.sh runs: build, exec, format, inspect, js, layout build, llvm, web
-#   this script adds: version, help (per language), new, run, obj, doc, cli
-#                     (REPL), layout (REPL), --time-report/--time-trace,
-#                     --keep-c, -g, --release, -B, --asan, --lto, --export,
-#                     --timeout, and the argument error paths (bad file, bad
-#                     option, bad --export/--timeout value, unknown command)
-#
-# It grades nothing: exit codes are printed for eyeballing, and the verdict is
-# whatever LSan wrote to $ASAN_OPTIONS' log_path. Run it through
-# leakcheck.sh, which sets that up; on its own it is just a smoke sweep.
-#
-# Usage: sh tools/bash/leakcheck-sweep.sh <salam-binary>
 
 set -u
 
@@ -30,7 +15,6 @@ case "$SALAM_BIN" in /* | [A-Za-z]:*) ;; *) SALAM_BIN="$(pwd)/$SALAM_BIN" ;; esa
     exit 2
 }
 
-# lib.sh puts us at the repository root, where std/ and tests/ live.
 ROOT=$(pwd)
 if [ -z "${SALAM_STD:-}" ] && [ -d "$ROOT/std" ]; then
     SALAM_STD="$ROOT/std"
@@ -50,8 +34,6 @@ SRC="$ROOT/tests/en/basics/hello.salam"
 cp "$SRC" "$W/hello.salam"
 cd "$W" || exit 1
 
-# Pick a real C compiler for the handful of cases that link: tcc is the
-# default and is not installed everywhere this runs.
 CCPICK=""
 for c in gcc clang cc tcc; do
     command -v "$c" >/dev/null 2>&1 && {
@@ -122,15 +104,11 @@ try js "$SALAM_BIN" js hello.salam --output=a.js
 try js-html "$SALAM_BIN" js hello.salam --output=a.html
 try format-recursive "$SALAM_BIN" format "$ROOT/tests/en/basics" --check -r
 
-# Error paths allocate too, and they are exactly where a cleanup is most
-# likely to have been forgotten.
 try err-missing-file "$SALAM_BIN" build "$W/does-not-exist.salam"
 try err-bad-option "$SALAM_BIN" build hello.salam --not-a-real-option
 try err-unknown-cmd "$SALAM_BIN" frobnicate
 try err-bad-lang "$SALAM_BIN" build hello.salam --lang=nonesuch
 
-# The two REPLs, driven off a here-document so they take a full line-editing
-# path and then exit. Nothing else in CI ever enters them.
 n=$((n + 1))
 "$SALAM_BIN" cli >/dev/null 2>&1 <<'EOF'
 1 + 2

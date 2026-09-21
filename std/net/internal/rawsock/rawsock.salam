@@ -69,7 +69,7 @@ else:
         func shutdown(s: int, how: int): int
         func setsockopt(s: int, level: int, optname: int, optval: void*, optlen: int): int
         func getsockname(s: int, addr: void*, addrlen: void*): int
-        func fcntl(s: int, cmd: int, arg: int): int
+        func fcntl(s: int, cmd: int, ...): int
         func getaddrinfo(node: str, service: str, hints: void*, res: void*): int
         func freeaddrinfo(res: void*)
         func gethostbyname(name: str): void*
@@ -83,6 +83,8 @@ else SALAM_OS_MAC:
     const _SEND_FLAGS := 0
 else SALAM_OS_FREEBSD:
     const _SEND_FLAGS := 131072
+else SALAM_OS_OPENBSD || SALAM_OS_NETBSD:
+    const _SEND_FLAGS := 1024
 else:
     const _SEND_FLAGS := 16384
 end
@@ -91,19 +93,22 @@ pub const AF_INET := 2
 pub const SOCK_STREAM := 1
 pub const SOCK_DGRAM := 2
 
-// AF_INET6 is not portable across platforms. Windows/Linux values below
-// are verified against their public headers; the BSD-family fallback
-// uses FreeBSD's value (28) - OpenBSD (24) and NetBSD (24) differ and are
-// not separately special-cased yet (SALAM_OS_OPENBSD/SALAM_OS_NETBSD
-// exist as macros if that's ever needed).
-pub const AF_INET6 := 10
+if SALAM_OS_WINDOWS:
+    pub const AF_INET6 := 23
+else SALAM_OS_MAC:
+    pub const AF_INET6 := 30
+else SALAM_OS_FREEBSD:
+    pub const AF_INET6 := 28
+else SALAM_OS_OPENBSD || SALAM_OS_NETBSD:
+    pub const AF_INET6 := 24
+else:
+    pub const AF_INET6 := 10
+end
 
 pub const ShutRd := 0
 pub const ShutWr := 1
 pub const ShutRdWr := 2
 
-// SHUT_RDWR. Both directions at once, which is the only mode anything here
-// wants: the point is to end the connection, not to half-close it.
 const _SHUT_BOTH := 2
 
 if SALAM_OS_WINDOWS:
@@ -133,8 +138,6 @@ else:
     end
 end
 
-// Reads the first IPv4 address out of a `struct hostent*` returned by
-// gethostbyname, exactly as std/net/net.salam does today.
 func _hostent_addr4(he: void*): int:
     listp := (he as i64 + 24) as i64*
     list := listp[0]
@@ -152,9 +155,6 @@ func _resolve_addr4(host: str): int:
     ret _hostent_addr4(he)
 end
 
-// Builds a 16-byte sockaddr_in: family/port packed into the first 4
-// bytes (network byte order), then the 4-byte address, then 8 bytes of
-// zero padding - the same ABI-stable layout std/net/net.salam relies on.
 func _make_sa4(h_addr: int, port: int): void*:
     sa := mem.Allocate(16 as u64)
     memset(sa, 0, 16 as u64)
@@ -166,28 +166,6 @@ func _make_sa4(h_addr: int, port: int): void*:
     ret sa
 end
 
-// struct addrinfo layout, size 48 on every 64-bit target, but NOT
-// identical across libc's - verified by dumping real offsetof() values
-// from each platform's own headers (glibc's <netdb.h>, Windows'
-// <ws2tcpip.h>):
-//
-//   field        Windows          Linux (glibc)     macOS/BSD
-//   ai_flags     0 (int)          0 (int)           0 (int)
-//   ai_family    4 (int)          4 (int)           4 (int)
-//   ai_socktype  8 (int)          8 (int)           8 (int)
-//   ai_protocol  12 (int)         12 (int)          12 (int)
-//   ai_addrlen   16 (size_t, 8)   16 (socklen_t, 4)  16 (socklen_t, 4)
-//   ai_canonname 24 (char*)       32 (char*)         24 (char*)
-//   ai_addr      32 (sockaddr*)   24 (sockaddr*)     32 (sockaddr*)
-//   ai_next      40               40                40
-//
-// glibc reorders ai_addr before ai_canonname relative to the struct's
-// documented declaration order (which Windows and the BSD family keep);
-// getting this wrong reads ai_canonname (NULL, since AI_CANONNAME is
-// never requested here) as the sockaddr pointer on Linux, and the
-// caller's subsequent memcpy from that NULL pointer segfaults - this
-// was hit by every code path that resolves a hostname to connect out
-// (rawsock.ConnectProto and everything built on it).
 func _ai_family(ai: void*): int: ret ((ai as i64 + 4) as int*)[0] end
 func _ai_addrlen(ai: void*): i64:
     if SALAM_OS_WINDOWS:
@@ -205,12 +183,6 @@ func _ai_addr(ai: void*): void*:
 end
 func _ai_next(ai: void*): void*: ret ((ai as i64 + 40) as i64*)[0] as void* end
 
-// Resolves `host` to a raw sockaddr blob usable directly with connect()/
-// sendto(), preferring an address of `family_hint` (AF_INET or AF_INET6)
-// if present, falling back to whatever getaddrinfo returns first
-// otherwise. `family_hint` of 0 means "first result, any family".
-// Returns (sockaddr void*, addrlen, family) via out-params; the caller
-// owns the returned buffer and must mem.Free it.
 func _resolve_sockaddr(host: str, family_hint: int, port: int, out_len &: int, out_family &: int): void*:
     _net_init()
     hints := mem.Allocate(48 as u64)
@@ -260,9 +232,6 @@ func _copy_sockaddr(ai: void*, out_len &: int): void*:
     ret out
 end
 
-// macOS has no MSG_NOSIGNAL, so the same protection is a socket option
-// there, set once when the socket is made. Everywhere else this is nothing:
-// the flag on each send has already done the job.
 func _no_sigpipe(fd: i64):
     if fd < 0:
         ret
@@ -411,22 +380,6 @@ pub func Listen(port: int): Socket:
     ret ListenOn("", port, SOCK_STREAM)
 end
 
-// The port a bound Socket actually ended up on - the number to hand a
-// peer after ListenOn(host, 0, ...)/Listen(0) asked the OS for a free
-// ephemeral port instead of a caller-chosen one, which is what test code
-// and short-lived local servers should do rather than hardcode a port
-// number that might collide with another process or a host-level
-// dynamic port reservation (observed on Windows: Hyper-V/WSL2's NAT
-// carves out large "excluded" TCP ranges - see `netsh interface ipv4
-// show excludedportrange protocol=tcp` - that shift over the life of a
-// dev session and silently blackhole a hardcoded port's SYN packets).
-// Reads sin_port directly out of the sockaddr_in getsockname() fills in
-// (bytes 2-3, network/big-endian order) rather than reconstructing it
-// via arithmetic on the packed 32-bit word ListenOn's _make_sa4 builds -
-// ports at or above 32768 flip that word's sign bit, and plain integer
-// division does not recover an unsigned high half from a negative signed
-// dividend the way a same-signedness bit shift would. Returns 0 if the
-// socket is not bound (or getsockname fails for any other reason).
 @en "LocalPort"
 @fa "درگاه محلی"
 @ar "المنفذ المحلي"
@@ -533,13 +486,6 @@ end
 @en "Shutdown"
 @fa "خاموش کردن"
 @ar "إيقاف"
-// Shutdown - ends the connection without releasing the descriptor.
-//
-// Distinct from Close, and the distinction matters when another thread is
-// blocked reading: close() leaves that thread blocked on a descriptor whose
-// number can then be handed to a new connection, while shutdown() wakes it
-// immediately with an end-of-stream. Close the descriptor afterwards, from
-// whichever thread owns it.
 pub func Shutdown(sock: Socket):
     if sock.fd < 0: ret end
     if SALAM_OS_WINDOWS:
@@ -578,8 +524,6 @@ pub func Resolve(host: str): str:
     ret str.Clone(inet_ntoa(addr))
 end
 
-// The raw packed IPv4 address (network byte order), for callers building
-// their own sockaddr/option structs (net/udp's multicast group join).
 @en "ResolveAddr4Raw"
 @fa "نشانی خام آی‌پی۴"
 @ar "عنوان IPv4 الخام"
@@ -601,10 +545,14 @@ pub func SetNonBlocking(sock: Socket, enable: bool):
     else:
         mut flags := fcntl(sock.fd as int, 3, 0)
         if flags < 0: ret end
+        mut nb := 2048
+        if SALAM_OS_MAC || SALAM_OS_BSD:
+            nb = 4
+        end
         if enable:
-            flags = flags | 2048
+            flags = flags | nb
         else:
-            flags = flags & (0 - 2049)
+            flags = flags & (0 - nb - 1)
         end
         fcntl(sock.fd as int, 4, flags)
     end
@@ -630,25 +578,16 @@ pub func SetTimeout(sock: Socket, millis: int):
         usec := tv as i64 + 8
         usecp := usec as i64*
         usecp[0] = ((millis % 1000) * 1000) as i64
-        setsockopt(sock.fd as int, 1, 20, tv, 16)
-        setsockopt(sock.fd as int, 1, 21, tv, 16)
+        if SALAM_OS_MAC || SALAM_OS_BSD:
+            setsockopt(sock.fd as int, 65535, 4102, tv, 16)
+            setsockopt(sock.fd as int, 65535, 4101, tv, 16)
+        else:
+            setsockopt(sock.fd as int, 1, 20, tv, 16)
+            setsockopt(sock.fd as int, 1, 21, tv, 16)
+        end
     end
 end
 
-// WaitReadable - true once a read on `sock` would not block.
-//
-// The one primitive a protocol with a heartbeat cannot do without: a
-// WebSocket client has to notice that nothing arrived for N milliseconds
-// and send a pong of its own, which a blocking recv() can never tell it.
-// SetTimeout would do it by consuming, and that is exactly the problem -
-// a receive that times out halfway through a TLS record leaves the record
-// layer holding a fragment it can never finish. poll() touches no bytes,
-// so it composes with a buffering transport (std/tls) the way a timed
-// recv() does not.
-//
-// A negative `timeout_ms` waits forever. "Readable" includes end-of-stream
-// and a pending error: in both cases the following read returns
-// immediately, which is all the caller is promised.
 @en "WaitReadable"
 @fa "انتظار برای خواندن"
 @ar "انتظار القراءة"
@@ -685,6 +624,8 @@ pub func SetKeepAlive(sock: Socket, enable: bool):
     if enable: o32[0] = 1 else: o32[0] = 0 end
     if SALAM_OS_WINDOWS:
         setsockopt(sock.fd, 65535, 8, opt, 4)
+    else SALAM_OS_MAC || SALAM_OS_BSD:
+        setsockopt(sock.fd as int, 65535, 8, opt, 4)
     else:
         setsockopt(sock.fd as int, 1, 9, opt, 4)
     end
@@ -705,9 +646,6 @@ pub func SetNoDelay(sock: Socket, enable: bool):
     end
 end
 
-// Generic setsockopt passthrough for options this file doesn't already
-// wrap (e.g. IP_ADD_MEMBERSHIP for multicast, which net/udp builds on
-// top of this rather than duplicating the Windows/POSIX fd-cast split).
 @en "SetOpt"
 @fa "تنظیم گزینه سوکت"
 @ar "تعیین خیار المقبس"
@@ -729,13 +667,13 @@ pub func SetBroadcast(sock: Socket, enable: bool):
     if enable: o32[0] = 1 else: o32[0] = 0 end
     if SALAM_OS_WINDOWS:
         setsockopt(sock.fd, 65535, 32, opt, 4)
+    else SALAM_OS_MAC || SALAM_OS_BSD:
+        setsockopt(sock.fd as int, 65535, 32, opt, 4)
     else:
         setsockopt(sock.fd as int, 1, 6, opt, 4)
     end
 end
 
-// Sends one datagram to host:port. Resolution is IPv4-only for now (same
-// limitation as ListenOn).
 @en "SendToBytes"
 @fa "ارسال بایت به"
 @ar "إرسال بایتات إلی"
@@ -758,11 +696,6 @@ pub func SendTo(sock: Socket, host: str, port: int, data: str): int:
     ret SendToBytes(sock, host, port, data as void*, data.len())
 end
 
-// Byte-count-returning receive - the `str`-returning RecvFrom below
-// truncates at an embedded NUL (`str` is a NUL-terminated C string under
-// the hood), which is wrong for a binary protocol like DNS where a
-// zero byte can legitimately appear mid-message. Binary-safe callers
-// (net/dns) use this one directly.
 @en "RecvFromBytes"
 @fa "دریافت بایت از"
 @ar "استقبال بایتات من"

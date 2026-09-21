@@ -15,7 +15,6 @@ struct Handshake:
     pub cipher: int = 0
     pub hash: int = 0
     pub hlen: int = 0
-    // running transcript hash over every handshake message
     pub tr: Hash = Hash {}
     pub priv: Buf = Buf {}
     pub pub_key: Buf = Buf {}
@@ -26,13 +25,9 @@ struct Handshake:
     pub s_hs_secret: Buf = Buf {}
     pub c_ap_secret: Buf = Buf {}
     pub s_ap_secret: Buf = Buf {}
-    // the server's certificate chain, as received
     pub certs: Buf = Buf {}
     pub cert_off: Buf = Buf {}
     pub ncerts: int = 0
-    // negotiated version, and the randoms TLS 1.2 signs and seeds with
-    // the cipher suite exactly as the server sent it, kept so the
-    // connection can be reported accurately rather than reconstructed
     pub suite: int = 0
     pub ver: int = 0
     pub crand: Buf = Buf {}
@@ -70,22 +65,18 @@ func _hs_fail(h &: Handshake, msg: str): bool:
     ret false
 end
 
-// Transcript-hash of everything absorbed so far.
 func _hs_transcript(h: Handshake, out &: Buf):
     _bufreset(out)
     _putzeros(out, h.hlen)
     _hash_final(h.tr, out.p)
 end
 
-// Derive-Secret(secret, label, transcript) for the current hash.
 func _hs_derive(h: Handshake, secret: Buf, label: str, th: Buf, out &: Buf): bool:
     _bufreset(out)
     _putzeros(out, h.hlen)
     ret _derive_secret(h.hash, secret.p, secret.len, label, th.p, th.len, out.p)
 end
 
-// RFC 8446 section 7.1. With no PSK the early secret is Extract(0, 0), and the
-// binder between stages is Derive-Secret(prev, "derived", "").
 func _hs_key_schedule(h &: Handshake): bool:
     mut zeros := _newbuf(h.hlen)
     defer _buf_wipe(zeros)
@@ -132,8 +123,6 @@ func _hs_key_schedule(h &: Handshake): bool:
     ret true
 end
 
-// finished_key = HKDF-Expand-Label(secret, "finished", "", hlen)
-// verify_data  = HMAC(finished_key, transcript_hash)
 func _hs_finished_mac(h: Handshake, secret: Buf, th: Buf, out &: Buf): bool:
     mut fk := _newbuf(h.hlen)
     defer _buf_wipe(fk)
@@ -147,12 +136,6 @@ func _hs_finished_mac(h: Handshake, secret: Buf, th: Buf, out &: Buf): bool:
     ret true
 end
 
-// Read a Certificate message's chain into the handshake buffer.
-//
-// The two versions differ only at the edges: TLS 1.3 prefixes a
-// certificate_request_context and follows each entry with an extensions
-// vector, TLS 1.2 has neither. Everything between was duplicated, including
-// the depth cap and the offset bookkeeping the verifier later reads.
 func _hs_read_cert_list(h &: Handshake, msg: Reader, tls13: bool): bool:
     mut r := msg
     if tls13:
@@ -197,9 +180,6 @@ func _hs_parse_certificate(h &: Handshake, msg: Reader): bool:
     ret _hs_read_cert_list(h, msg, true)
 end
 
-// The CertificateVerify signature covers a fixed context string rather than the
-// transcript alone. The 64 spaces and the label make a signature produced for
-// one role or protocol version unusable in another.
 func _hs_cv_content(_h: Handshake, th: Buf, out &: Buf):
     _bufreset(out)
     repeat 64:

@@ -18,15 +18,6 @@ import matrix
 import pool
 import sort
 
-// A k-d tree over the rows of a matrix, and the parallel query driver
-// the KNN models use. Nodes split the widest dimension at its median;
-// leaves hold up to leaf_size rows. A query walks the near child first
-// and skips a far child whenever the distance to the splitting plane
-// already exceeds the k-th best distance found.
-//
-// Results match the brute-force search exactly (same rows, same
-// squared distances) as long as distances are distinct; ties may come
-// back in a different order.
 
 @en "KNN_BRUTE"
 @fa "همسایه جستجوی کامل"
@@ -38,8 +29,6 @@ pub const KNN_BRUTE := 0
 @ar "جيران شجرة كي دي"
 pub const KNN_KDTREE := 1
 
-// The query being answered in parallel: every worker reads these and
-// writes its own rows of _knn_out.
 mut _knn_q := matrix.Matrix {}
 mut _knn_xtrain := matrix.Matrix {}
 mut _knn_ytrain := matrix.Matrix {}
@@ -94,8 +83,6 @@ pub struct KDTree:
     @ar "عدد العقد"
     pub func node_count(): int: ret this.node_lo.len() end
 
-    // Indices of the k rows nearest to row qi of q, nearest first, with
-    // their squared distances in dist_out.
     @en "query"
     @fa "پرس‌وجو"
     @ar "استعلام"
@@ -200,7 +187,6 @@ func _kd_build(t &: KDTree):
     stack.free()
 end
 
-// Keeps the k best (index, squared distance) pairs in ascending order.
 func _kd_offer(best_i &: Vector<int>, best_d &: Vector<f64>, k: int, i: int, d: f64):
     if best_i.len() == k && d >= best_d.get(k - 1): ret end
     mut pos := best_i.len()
@@ -255,8 +241,6 @@ func _kd_query(t &: KDTree, q &: matrix.Matrix, qi: int, k: int, out &: Vector<i
     bounds.free()
 end
 
-// One query row: class shares into `out`'s row (classification) or the
-// neighbor mean (regression, classes == 0).
 func _knn_one(q &: matrix.Matrix, xtrain &: matrix.Matrix, ytrain &: matrix.Matrix, tree &: KDTree, out &: matrix.Matrix, qi: int, k: int, weighted: bool, classes: int, alg: int):
     mut dist := Vector {} as Vector<f64>
     mut nb := Vector {} as Vector<int>
@@ -289,15 +273,10 @@ func _knn_one(q &: matrix.Matrix, xtrain &: matrix.Matrix, ytrain &: matrix.Matr
     dist.free()
 end
 
-// The worker body of the parallel path, reading the query globals.
 func _knn_row(qi64: i64):
     _knn_one(_knn_q, _knn_xtrain, _knn_ytrain, _knn_tree, _knn_out, qi64 as int, _knn_k, _knn_weighted, _knn_classes, _knn_alg)
 end
 
-// Answers every query row of `q` into `out`. The serial path touches no
-// globals, so a model with workers = 0 is safe inside another parallel
-// loop (cross-validation, a grid search); workers > 1 uses the module
-// query globals and is NOT re-entrant.
 func _knn_run(q &: matrix.Matrix, xtrain &: matrix.Matrix, ytrain &: matrix.Matrix, tree &: KDTree, out &: matrix.Matrix, k: int, weighted: bool, classes: int, alg: int, workers: int):
     mut w := workers
     if w < 0: w = pool.CPUCount() as int end

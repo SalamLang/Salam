@@ -17,23 +17,12 @@ package aws
 import str
 import encoding.xml
 
-// The page size S3 uses when none is asked for, and its hard ceiling.
 const _S3_LIST_MAX := 1000
 
-// The ceiling S3ListAll() stops at, so a mistaken prefix on a bucket with ten
-// million keys fails visibly rather than running until memory is gone.
 const _S3_LIST_ALL_CAP := 100000
 
-// The number of keys one batch delete accepts. S3's limit, not this
-// package's; DeleteMany() splits a longer list into batches of this size.
 const _S3_DELETE_BATCH := 1000
 
-// ObjectEntry - one row of a listing.
-//
-// A listing tells you less than a HEAD does: no content type, no user
-// metadata. That is S3's answer, not a shortcut here - listing a thousand keys
-// cannot afford to carry a thousand metadata blocks. Use S3Stat() when the
-// missing fields matter.
 pub struct ObjectEntry:
     pub key: str = ""
     pub size: i64 = 0
@@ -42,25 +31,18 @@ pub struct ObjectEntry:
     pub modified_epoch: i64 = 0
     pub storage_class: str = ""
     pub owner: str = ""
-    // Only a version listing fills these in.
     pub version_id: str = ""
     pub is_latest: bool = false
     pub delete_marker: bool = false
 end
 
-// ObjectList - one page of a listing.
-//
-// `truncated` and `next_token` are the pair that matters: while `truncated` is
-// true there are more keys, and `next_token` is where to resume.
 pub struct ObjectList:
     pub ok: bool = false
     pub status: int = 0
     pub items: Vector<ObjectEntry> = Vector {}
-    // The "folders": prefixes collapsed by the delimiter.
     pub prefixes: Vector<str> = Vector {}
     pub truncated: bool = false
     pub next_token: str = ""
-    // A version listing resumes on two markers rather than one token.
     pub next_key_marker: str = ""
     pub next_version_marker: str = ""
     pub key_count: int = 0
@@ -71,7 +53,6 @@ pub struct ObjectList:
     pub code: str = ""
 end
 
-// BucketEntry - one bucket of an account.
 pub struct BucketEntry:
     pub name: str = ""
     pub created: str = ""
@@ -88,31 +69,16 @@ pub struct BucketList:
     pub code: str = ""
 end
 
-// ListOptions - how to narrow a listing.
 pub struct ListOptions:
     pub prefix: str = ""
-    // "/" turns a flat key space into folders. Empty lists everything below
-    // the prefix, however deep.
     pub delimiter: str = ""
-    // Keys per page, capped at 1000 by S3. Zero takes the default.
     pub max_keys: int = 0
-    // From a previous page's next_token.
     pub continuation_token: str = ""
-    // Resume from just after this key, without a token. Useful for a resumable
-    // scan that stores a key rather than an opaque token.
     pub start_after: str = ""
     pub fetch_owner: bool = false
-    // Ask S3 to percent-encode the keys it returns. On by default, and worth
-    // leaving on: without it a key containing a newline or a control character
-    // produces XML that no parser can read back faithfully.
     pub url_encode: bool = true
 end
 
-// KeyList - a plain list of keys, for the calls that only need names.
-//
-// A struct rather than a bare Vector<str> because a public function that
-// returns a generic vector across a package boundary does not compile; the
-// same reason encoding.xml has an XMLNodeList.
 pub struct KeyList:
     pub items: Vector<str> = Vector {}
 end
@@ -179,8 +145,6 @@ func _list_failure(res: Result): ObjectList:
     }
 end
 
-// _parse_list - a ListBucketResult, from either list-type. The two differ only
-// in how they say "there is more".
 func _parse_list(res: Result): ObjectList:
     if !res.ok: ret _list_failure(res) end
     mut ok := false
@@ -218,8 +182,6 @@ func _parse_list(res: Result): ObjectList:
     ret out
 end
 
-// _delete_body - the XML a batch delete sends. Quiet mode asks S3 to report
-// only failures, which is what turns a thousand-key delete into a short answer.
 func _delete_body(keys: KeyList, from: int, count: int, quiet: bool): str:
     mut sb := str.NewBuilder()
     defer str.BufFree(sb)
@@ -236,7 +198,6 @@ func _delete_body(keys: KeyList, from: int, count: int, quiet: bool): str:
     ret str.BufStr(sb)
 end
 
-// _list_result - a failed listing as a plain Result.
 func _list_result(l: ObjectList): Result:
     ret Result {
         ok = l.ok, status = l.status, error = l.error, code = l.code,
@@ -244,10 +205,6 @@ func _list_result(l: ObjectList): Result:
     }
 end
 
-// S3List - one page of a listing.
-//
-// The delimiter is what makes this feel like a filesystem: with "/" the answer
-// separates keys directly under the prefix from the prefixes below it.
 pub func S3List(cfg: Config, o: ListOptions): ObjectList:
     mut r := NewRequest("GET", "")
     SetQuery(r, "list-type", "2")
@@ -255,19 +212,14 @@ pub func S3List(cfg: Config, o: ListOptions): ObjectList:
     ret _parse_list(Do(cfg, r))
 end
 
-// S3ListPrefix - the short form: everything under a prefix, one page.
 pub func S3ListPrefix(cfg: Config, prefix: str): ObjectList:
     ret S3List(cfg, ListOptions { prefix = prefix })
 end
 
-// S3ListFolder - one level under a prefix, with the deeper keys collapsed into
-// `prefixes`. What a file browser shows.
 pub func S3ListFolder(cfg: Config, prefix: str): ObjectList:
     ret S3List(cfg, ListOptions { prefix = prefix, delimiter = "/" })
 end
 
-// S3ListV1 - the older listing, for an S3-compatible service that never
-// implemented list-type=2. The answer is the same shape.
 pub func S3ListV1(cfg: Config, o: ListOptions, marker: str): ObjectList:
     mut r := NewRequest("GET", "")
     _list_query(r, o, false)
@@ -275,17 +227,10 @@ pub func S3ListV1(cfg: Config, o: ListOptions, marker: str): ObjectList:
     ret _parse_list(Do(cfg, r))
 end
 
-// S3ListAll - every key under a prefix, following the pagination.
-//
-// Stops at a hundred thousand keys and says so in `truncated`, because the
-// alternative is that a typo in a prefix turns into an unbounded allocation.
-// A bucket genuinely larger than that wants S3List() and a loop that processes
-// each page instead of collecting them.
 pub func S3ListAll(cfg: Config, prefix: str): ObjectList:
     ret S3ListAllWith(cfg, ListOptions { prefix = prefix })
 end
 
-// S3ListAllWith - the same, with a delimiter or a page size.
 pub func S3ListAllWith(cfg: Config, o: ListOptions): ObjectList:
     mut opts := o
     mut out := ObjectList { ok = true, prefix = o.prefix, delimiter = o.delimiter }
@@ -324,8 +269,6 @@ pub func S3ListAllWith(cfg: Config, o: ListOptions): ObjectList:
     end
 end
 
-// S3ListVersions - every version and delete marker under a prefix, one page.
-// Only a versioned bucket answers with more than the current versions.
 pub func S3ListVersions(cfg: Config, o: ListOptions, key_marker: str,
     version_marker: str): ObjectList:
     mut r := NewRequest("GET", "")
@@ -338,7 +281,6 @@ pub func S3ListVersions(cfg: Config, o: ListOptions, key_marker: str,
     ret _parse_list(Do(cfg, r))
 end
 
-// S3Keys - just the names, for a caller that does not need the sizes.
 pub func S3Keys(cfg: Config, prefix: str): KeyList:
     listing := S3ListAll(cfg, prefix)
     mut out := KeyList {}
@@ -350,12 +292,8 @@ pub func S3Keys(cfg: Config, prefix: str): KeyList:
     ret out
 end
 
-// ListCount - the number of objects in a listing.
 pub func ListCount(l: ObjectList): int: ret l.items.len() end
 
-// ListAt - one entry. Out of range answers an empty entry rather than
-// trapping, so a loop with an off-by-one misbehaves visibly instead of
-// killing the process.
 pub func ListAt(l: ObjectList, i: int): ObjectEntry:
     if i < 0 || i >= l.items.len(): ret ObjectEntry {} end
     ret l.items.get(i)
@@ -368,7 +306,6 @@ pub func ListPrefixAt(l: ObjectList, i: int): str:
     ret l.prefixes.get(i)
 end
 
-// ListTotalSize - the bytes a listing accounts for.
 pub func ListTotalSize(l: ObjectList): i64:
     mut total := 0 as i64
     mut i := 0
@@ -397,11 +334,6 @@ pub func KeyPush(k &: KeyList, key: str): k.items.push(key) end
 
 pub func KeyFree(k &: KeyList): k.items.free() end
 
-// S3DeleteMany - remove up to a thousand objects per request.
-//
-// The reason to prefer this over a loop of deletes is not tidiness: it is one
-// round trip instead of a thousand, which against a service on the other side
-// of an ocean is the difference between a second and several minutes.
 pub func S3DeleteMany(cfg: Config, keys: KeyList): Result:
     total := keys.items.len()
     if total == 0: ret Result { ok = true, status = 200 } end
@@ -431,11 +363,6 @@ pub func S3DeleteMany(cfg: Config, keys: KeyList): Result:
     ret last
 end
 
-// S3DeletePrefix - remove everything under a prefix.
-//
-// The operation a bucket has no primitive for, and the one an application
-// most often means by "delete the folder". Lists, then deletes in batches,
-// repeating while the listing is truncated.
 pub func S3DeletePrefix(cfg: Config, prefix: str): Result:
     if prefix.len() == 0:
         ret Failure("refusing to delete every object in the bucket; pass a prefix")
@@ -470,19 +397,10 @@ pub func S3DeletePrefix(cfg: Config, prefix: str): Result:
     end
 end
 
-// ListToResult - a failed listing as a plain Result, for a caller threading
-// one error type through several operations.
 pub func ListToResult(l: ObjectList): Result:
     ret _list_result(l)
 end
 
-// ParseListing - a listing document that arrived from somewhere other than
-// this package's own request.
-//
-// Public for two reasons: it is the only way to exercise the parser without a
-// service in front of it, and an application that already has a stored answer
-// - a cached page, a replayed capture - should not have to re-fetch it to read
-// it back.
 pub func ParseListing(body: str, status: int): ObjectList:
     ret _parse_list(Result {
         ok = status >= 200 && status < 300, status = status, body = body

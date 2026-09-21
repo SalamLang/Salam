@@ -445,9 +445,9 @@ We are currently triaging issues with the **Super-Linter** workflow and the team
 
 ### 🧪 Memory leak checks
 
-The **Memory Leaks** workflow runs the entire test corpus through AddressSanitizer/LeakSanitizer builds of both compilers. The two compilers are held to different bars, on purpose.
+The **Memory Leaks** workflow runs the entire test corpus through AddressSanitizer/LeakSanitizer builds of the compiler.
 
-The reference compiler in `c/` allocates nearly everything from an arena it frees on the way out, so LeakSanitizer currently sees **zero** leaks across the whole corpus. That is a property worth keeping, so it is a hard gate:
+`tools/bash/leakcheck.sh` builds an ASan compiler and runs the corpus plus the subcommand sweep under LeakSanitizer. LeakSanitizer only works on Linux - on macOS every run aborts with "detect_leaks is not supported on this platform", and the script now stops with `LEAKCHECK: INCONCLUSIVE` rather than reporting a misleading clean result:
 
 ```sh
 sh tools/bash/leakcheck.sh --build          # build an ASan salam, then run everything
@@ -459,7 +459,7 @@ That runs `run-tests.sh` plus `leakcheck-sweep.sh`, which covers the subcommands
 The self-hosted compiler in `compiler/` is written in Salam, which is manually memory-managed and has no arena behind its string temporaries, so zero is not reachable without changing how the compiler allocates. It is a ratchet instead, measured against `compiler/tools/selfhost-leak-budget.txt`:
 
 ```sh
-make -C c                                     # a normal salam to bootstrap with
+sh install.sh                                 # a released salam to bootstrap with
 ./salam build compiler/main.salam --output=salam-selfhost-asan --cc=gcc --asan
 sh compiler/tools/bash/leakcheck-selfhost.sh ./salam-selfhost-asan
 ```

@@ -1,52 +1,33 @@
 package conv
 
-// Limbs are 32 bits so a product fits in 64 without a wider type.
-//
-// The size is set by the worst case in strtod, not in printing: a subnormal
-// needs the numerator shifted left by 1075 bits on top of a mantissa that may
-// already carry several hundred digits. 264 limbs is 8448 bits, comfortably
-// past that; printing never needs more than 80.
 const BN_CAP := 264
 const BN_BYTES := 1064
 
-// Nine digits is the most that fits in a u32 divisor while leaving the
-// running remainder room in a u64.
 const DEC_CHUNK := 1000000000
 
-// 5^13, the largest power of five that keeps limb * multiplier inside 64 bits.
 const POW5_13 := 1220703125
 const POW5_13_EXP := 13
 
-// 2^29, chosen on the same grounds for the shifting path.
 const POW2_29_EXP := 29
 
-const MAX_DIGITS := 800 // significant digits kept when parsing
+const MAX_DIGITS := 800
 const DIGIT_BUF := 1200
 
 const EXP_BIAS := 1023
 const MANT_BITS := 52
 const SUBNORMAL_EXP := -1074
 
-// Seven big-integer registers, a digit buffer, and eight bytes for punning a
-// double. Six registers are what reading a decimal back needs at once;
-// writing one out needs a single register.
 const BN_REGS := 7
-const OFF_DIGITS := 7448 // BN_REGS * BN_BYTES
-const OFF_PUN := 8648 // OFF_DIGITS + DIGIT_BUF
+const OFF_DIGITS := 7448
+const OFF_PUN := 8648
 pub const SCRATCH_BYTES := 8704
 
 const TWO52 := 0x10000000000000
 const TWO53 := 0x20000000000000
 
-// Scratch, supplied once via Init. Laid out as a fixed set of big-integer
-// registers plus a digit buffer, because the worst case is known in advance
-// and a formatter that allocates is a formatter that can fail.
 mut _scratch := 0 as u64
 mut _ready := false
 
-// Limb 0 holds the count; the digits themselves start at 1. Keeping the
-// length with the data means one pointer describes a whole number, which
-// matters because Salam cannot take the address of a local.
 func _bn_len(b: u32*): int:
     ret b[0] as int
 end
@@ -132,8 +113,6 @@ func _bn_trim(b: u32*):
     _bn_set_len(b, n)
 end
 
-// _bn_mul_small - multiply in place. The multiplier must be under 2^30 so
-// that limb * multiplier + carry cannot overflow 64 bits.
 func _bn_mul_small(b: u32*, m: u32): bool:
     n := _bn_len(b)
     mut carry := 0 as u64
@@ -181,8 +160,6 @@ func _bn_add_small(b: u32*, a: u32): bool:
     ret true
 end
 
-// _bn_divmod_small - divide in place, returning the remainder. Used only to
-// peel decimal chunks off the front of an exact expansion.
 func _bn_divmod_small(b: u32*, d: u32): u32:
     n := _bn_len(b)
     mut rem := 0 as u64
@@ -265,7 +242,6 @@ func _bn_shr1(b: u32*):
     _bn_trim(b)
 end
 
-// _bn_cmp - -1, 0 or 1 for a < b, a == b, a > b.
 func _bn_cmp(a: u32*, b: u32*): int:
     na := _bn_len(a)
     nb := _bn_len(b)
@@ -290,7 +266,6 @@ func _bn_cmp(a: u32*, b: u32*): int:
     ret 0
 end
 
-// _bn_sub - a -= b, which the caller has already established is not negative.
 func _bn_sub(a: u32*, b: u32*):
     na := _bn_len(a)
     nb := _bn_len(b)
@@ -314,7 +289,6 @@ func _bn_sub(a: u32*, b: u32*):
     _bn_trim(a)
 end
 
-// _bn_mul_pow5 - multiply by 5^e, thirteen exponents at a time.
 func _bn_mul_pow5(b: u32*, e: int): bool:
     mut left := e
     while left >= POW5_13_EXP:
@@ -342,11 +316,6 @@ func _bn_mul_pow10(b: u32*, e: int): bool:
     ret _bn_shl(b, e)
 end
 
-// _bn_div - floor(p / q), leaving the remainder in p.
-//
-// Shift-and-subtract rather than a general long division, because every
-// caller wants a quotient of at most 64 bits and can afford one pass per
-// quotient bit. `t` is caller-supplied scratch so this allocates nothing.
 func _bn_div(p: u32*, q: u32*, t: u32*): u64:
     bp := _bn_bitlen(p)
     bq := _bn_bitlen(q)
@@ -382,12 +351,6 @@ func _u64_bitlen(v: u64): int:
     ret n
 end
 
-// _exact_digits - write the complete decimal expansion of a double's
-// significand into `digits`, most significant first.
-//
-// Returns the digit count and sets out[0] to the decimal exponent, so that
-// value = 0.d1d2... shifted appropriately: the number is `digits` read as an
-// integer, times 10^out[0].
 func _exact_digits(bits: u64, digits: u8*, out: i64*, work: u32*): int:
     be := ((bits >> (52 as u64)) & (0x7FF as u64)) as int
     frac := bits & (0xFFFFFFFFFFFFF as u64)
@@ -451,12 +414,6 @@ func _exact_digits(bits: u64, digits: u8*, out: i64*, work: u32*): int:
     ret pos
 end
 
-// _round_to - round a digit string to `p` significant digits in place.
-//
-// Half-to-even, matching what printf does. Ties are real here rather than
-// theoretical: the expansion is exact and finite, so a trailing 5 with
-// nothing after it happens routinely. Returns 1 if the carry propagated off
-// the front, in which case the caller's exponent goes up by one.
 func _round_to(digits: u8*, ndig: int, p: int): int:
     if ndig <= p || p < 1:
         ret 0
@@ -513,7 +470,6 @@ func _put(buf: u8*, cap: int, pos: int, c: u8): int:
     ret pos + 1
 end
 
-// _emit_exponent - "e+05" style: a sign always, and at least two digits.
 func _emit_exponent(buf: u8*, cap: int, start: int, x: int): int:
     mut pos := _put(buf, cap, start, 101 as u8)
     mut v := x
@@ -545,9 +501,6 @@ func _emit_exponent(buf: u8*, cap: int, start: int, x: int): int:
     ret pos
 end
 
-// _digit_at - the i'th significant digit, or '0' past the end of the exact
-// expansion. Padding rather than a special case keeps the two output styles
-// below from each needing their own bounds check.
 func _digit_at(digits: u8*, ndig: int, i: int): u8:
     if i < 0 || i >= ndig:
         ret 48
@@ -555,10 +508,6 @@ func _digit_at(digits: u8*, ndig: int, i: int): u8:
     ret digits[i]
 end
 
-// _format - render `bits` per one printf conversion.
-//
-// `kind` is 'g', 'e' or 'f'. Returns the length the result would have, the
-// way snprintf does, whether or not it fit.
 func _format(bits: u64, prec: int, kind: int, buf: u8*, cap: int, digits: u8*, out: i64*, work: u32*): int:
     mut pos := 0
     neg := (bits >> (63 as u64)) != (0 as u64)
@@ -704,10 +653,6 @@ func _format(bits: u64, prec: int, kind: int, buf: u8*, cap: int, digits: u8*, o
     ret pos
 end
 
-// _round_quotient - drop `excess` low bits of q, rounding half to even.
-//
-// `sticky` says whether anything nonzero was discarded before this point,
-// which is what distinguishes an exact tie from a value just above one.
 func _round_quotient(q: u64, excess: int, sticky: bool): u64:
     if excess <= 0:
         ret q
@@ -728,7 +673,6 @@ func _round_quotient(q: u64, excess: int, sticky: bool): u64:
     ret m
 end
 
-// _encode - assemble the IEEE bit pattern for m * 2^e2.
 func _encode(neg: bool, m: u64, e2: int): u64:
     mut bits := 0 as u64
     if m == (0 as u64):
@@ -751,11 +695,6 @@ func _encode(neg: bool, m: u64, e2: int): u64:
     ret bits
 end
 
-// _decimal_to_bits - the correctly rounded double nearest to d * 10^dexp.
-//
-// The value is held as an exact fraction p/q, then just enough bits of the
-// quotient are produced to round once. Producing the whole quotient would be
-// both slower and no more accurate.
 func _decimal_to_bits(neg: bool, d: u32*, nd: int, dexp: int, trunc: bool, p: u32*, q: u32*, t: u32*, p0: u32*, q0: u32*): u64:
     if _bn_is_zero(d):
         ret _encode(neg, 0 as u64, 0)
@@ -848,15 +787,10 @@ func _lower(c: int): int:
     ret c
 end
 
-// _byte reads through conv's own _ub, rather than repeating it.
 inline func _byte(s: i8*, i: int): int:
     ret _ub(s, i)
 end
 
-// _strtod_core - parse a decimal number and return the nearest double's bits.
-//
-// out[0] receives the index one past the last character consumed, so the
-// caller can fill in strtod's endptr.
 func _strtod_core(sp: i8*, out: i64*): u64:
     mut i := 0
     mut c := _byte(sp, i)
@@ -984,8 +918,6 @@ func _strtod_core(sp: i8*, out: i64*): u64:
     ret bits
 end
 
-// _dtoa_into - one conversion into a caller's buffer, using the scratch
-// registers. Returns the length it would have needed, as snprintf does.
 func _dtoa_into(bits: u64, prec: int, kind: int, out: u8*, cap: int): int:
     if !_dtoa_ready():
         ret -1
@@ -1002,10 +934,6 @@ func _dtoa_into(bits: u64, prec: int, kind: int, out: u8*, cap: int): int:
     ret n
 end
 
-// _dtoa_ready - claim the scratch on first use.
-//
-// One allocation for the life of the program, because a formatter that can
-// fail to allocate is a formatter that can fail to print a number.
 func _dtoa_ready(): bool:
     if _scratch == (0 as u64):
         b := malloc(SCRATCH_BYTES as u64)
@@ -1019,11 +947,6 @@ end
 
 if SALAM_KERNEL:
 else:
-// _dtoa_shortest - the shortest text that reads back as exactly this double.
-//
-// Fifteen significant digits, then sixteen, then seventeen: the first that
-// survives a round trip wins, and seventeen always does. That is the answer
-// Python's repr and JavaScript's String() give.
 func _dtoa_shortest(v: f64, out: void*, cap: int): int:
     if !_dtoa_ready():
         ret -1
@@ -1042,7 +965,6 @@ func _dtoa_shortest(v: f64, out: void*, cap: int): int:
     ret _dtoa_into(bits, 17, 103, out as u8*, cap)
 end
 
-// _dtoa_parse - the correctly rounded double nearest to the text.
 func _dtoa_parse(s: str, endp: void*): f64:
     if !_dtoa_ready() || (s as void*) as u64 == (0 as u64):
         ret 0.0

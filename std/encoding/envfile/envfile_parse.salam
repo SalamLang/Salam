@@ -18,8 +18,6 @@ import str
 import mem
 import encoding.encerr
 
-// Result of reading one token. `value` doubles as the error message when
-// `ok` is false, which keeps the private helpers to a single shape.
 struct _DV:
     pub value: str = ""
     pub next: int = 0
@@ -27,14 +25,6 @@ struct _DV:
     pub ok: bool = true
 end
 
-// Cuts [i, i+ln) out of the document.
-//
-// This is what `s.substr(i, ln)` does, minus the part that made it the
-// wrong tool here: substr clamps its arguments against the string
-// length, so it strlens the WHOLE document on every call. The parser
-// already knows the bounds are good at the point it cuts, so that scan
-// is pure waste and is skipped here. Extracting a
-// key or a value stays proportional to the token, not to the file.
 func _slice(s: str, i: int, ln: int): str:
     if ln <= 0: ret "" end
     p := mem.AllocateZeroed((ln + 1) as u64)
@@ -55,8 +45,6 @@ func _is_key_char(c: int): bool:
     ret c == 95 || c == 46 || c == 45
 end
 
-// Editors on Windows routinely leave a UTF-8 BOM on a .env file. Without
-// this the first key would be named "\xEF\xBB\xBFPATH" and silently miss.
 func _skip_bom(s: str, n: int, i: int): int:
     if n < 3: ret i end
     bp := _bp(s)
@@ -73,8 +61,6 @@ func _skip_hspace(s: str, n: int, i: int): int:
     ret p
 end
 
-// Always lands on the start of the next line, so the caller is
-// guaranteed to make progress even on a malformed line.
 func _skip_to_eol(s: str, n: int, i: int): int:
     bp := _bp(s)
     mut p := i
@@ -102,9 +88,6 @@ func _skip_blank(s: str, n: int, i: int): int:
     ret p
 end
 
-// Compared byte by byte rather than with a substr, which would allocate
-// a 7 byte string and strlen the document once per entry just to throw
-// both away on the common case of no 'export ' prefix.
 func _skip_export(s: str, n: int, i: int): int:
     if i + 7 > n: ret i end
     bp := _bp(s)
@@ -116,18 +99,6 @@ func _skip_export(s: str, n: int, i: int): int:
     ret _skip_hspace(s, n, i + 7)
 end
 
-// Returns the byte an escape stands for, or -1 when the sequence is not
-// one we define. Unknown escapes are kept verbatim (backslash and all)
-// rather than silently dropping the backslash.
-//
-// '\$' is deliberately NOT resolved here. Reading happens before
-// expansion, so collapsing it to a bare '$' at this point would hand the
-// expander something indistinguishable from a real reference and the
-// escape would achieve nothing. It is left intact and envfile_expand.salam
-// turns it into a literal '$'. The corner this leaves: inside double
-// quotes a backslash written directly before '$' always reads as that
-// escape, so a literal backslash followed by an expansion needs single
-// quotes instead.
 func _escape_char(c: int): int:
     if c == 110: ret 10 end
     if c == 114: ret 13 end
@@ -139,8 +110,6 @@ func _escape_char(c: int): int:
     ret 0 - 1
 end
 
-// `p` points at the character after a backslash. Returns the next
-// position to read from.
 func _append_escape(sb &: str.StringBuilder, s: str, p: int): int:
     c := _ub(_bp(s), p)
     e := _escape_char(c)
@@ -162,9 +131,6 @@ func _read_key(s: str, n: int, i: int): _DV:
     ret _DV { value = _slice(s, i, p - i), next = p, ok = p > i }
 end
 
-// `i` points just past the opening quote. Double quotes process escapes
-// and stay eligible for expansion; single quotes are verbatim. Both may
-// run past a newline until the matching quote.
 func _read_quoted(s: str, n: int, i: int, q: int): _DV:
     bp := _bp(s)
     mut sb := str.NewBuilder()
@@ -191,10 +157,6 @@ func _read_quoted(s: str, n: int, i: int, q: int): _DV:
     ret _DV { value = out, next = _skip_to_eol(s, n, p), flag = flag, ok = closed }
 end
 
-// An unquoted value ends at the newline, or at a '#' that follows
-// whitespace. A '#' with no space before it is part of the value, which
-// is what keeps a URL fragment or a colour like #ff0000 intact.
-// `semi` additionally treats ';' as a comment opener, for INI callers.
 func _read_bare(s: str, n: int, i: int, semi: bool): _DV:
     bp := _bp(s)
     mut p := i
@@ -251,10 +213,6 @@ func _parse_into(d &: Doc, text: str, err &: encerr.EncodingError, strict: bool)
     end
 end
 
-// Parses without resolving any variable reference. Values keep their
-// '$NAME' text and each entry keeps its expansion eligibility, which is
-// what lets a caller resolve against something this package cannot see,
-// such as the real process environment. See RefNames and ExpandDoc.
 @en "ParseRaw"
 @fa "تجزیه خام"
 @ar "تحلیل خام"
@@ -265,8 +223,6 @@ pub func ParseRaw(text: str): Doc:
     ret out
 end
 
-// Parses and resolves references against the file's own earlier entries.
-// Malformed lines are skipped; use ParseStrict to be told about them.
 @en "Parse"
 @fa "تجزیه"
 @ar "تحلیل"
@@ -278,9 +234,6 @@ pub func Parse(text: str): Doc:
     ret ExpandDoc(raw, base)
 end
 
-// Stops at the first malformed line and reports it through `err`. A line
-// is malformed when it is neither blank nor a comment yet has no usable
-// KEY=, or when a quoted value is never closed.
 @en "ParseStrict"
 @fa "تجزیه سخت گیرانه"
 @ar "تحلیل صارم"
@@ -304,10 +257,6 @@ pub func Valid(text: str): bool:
     ret encerr.IsError(err) == false
 end
 
-// Reads a single already-split value the way a .env value is read:
-// trimmed, quotes honoured with escapes, inline comment removed. Exposed
-// because std/config needs exactly this for INI values too, and a second
-// copy of the rules is how the two formats would drift apart.
 @en "ParseScalar"
 @fa "تجزیه مقدار"
 @ar "تحلیل قیمة"
@@ -315,8 +264,6 @@ pub func ParseScalar(raw: str): str:
     ret ParseScalarEx(raw, false)
 end
 
-// As ParseScalar, but `semi` also lets ';' open an inline comment, which
-// INI allows and .env does not.
 @en "ParseScalarEx"
 @fa "تجزیه مقدار گسترده"
 @ar "تحلیل قیمة موسع"

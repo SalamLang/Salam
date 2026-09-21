@@ -21,22 +21,15 @@ extern:
     func mktime(tp: void*): i64
 end
 
-// A parse outcome. Salam has no Result type, and every i64 is a valid
-// epoch (negative ones are simply pre-1970), so there is no sentinel to
-// spare - check `ok` before using `epoch`.
 @en "TimeResult"
 @fa "نتیجه زمان"
 @ar "نتیجة الوقت"
 pub struct TimeResult:
     pub ok: bool = false
     pub epoch: i64 = 0
-    // Sub-second part of the parsed text, kept so that "…:00.250Z" is not
-    // silently truncated. The epoch itself has one-second resolution.
     pub nanos: int = 0
 end
 
-// Broken-down civil time collected while scanning, before it is resolved
-// against a timezone.
 struct _Parts:
     pub year: int = 1970
     pub month: int = 1
@@ -45,7 +38,6 @@ struct _Parts:
     pub minute: int = 0
     pub second: int = 0
     pub nanos: int = 0
-    // has_offset false means "no zone was written"; see the header note.
     pub has_offset: bool = false
     pub offset_minutes: int = 0
 end
@@ -64,7 +56,6 @@ pure func _pIsAlpha(c: int): bool:
     ret (c >= 65 && c <= 90) || (c >= 97 && c <= 122)
 end
 
-// Exactly `count` digits starting at `i`, or false. Advances `i`.
 func _fixedDigits(bp: i8*, n: int, i &: int, count: int, out &: int): bool:
     if i + count > n: ret false end
     mut v := 0
@@ -78,7 +69,6 @@ func _fixedDigits(bp: i8*, n: int, i &: int, count: int, out &: int): bool:
     ret true
 end
 
-// One to `maxd` digits, at least one. Advances `i`.
 func _someDigits(bp: i8*, n: int, i &: int, maxd: int, out &: int): bool:
     mut v := 0
     mut got := 0
@@ -92,7 +82,6 @@ func _someDigits(bp: i8*, n: int, i &: int, maxd: int, out &: int): bool:
     ret true
 end
 
-// Floor division, needed because _daysFromCivil runs over negative years.
 pure func _pfloordiv(a: i64, b: i64): i64:
     q := a / b
     r := a - q * b
@@ -100,9 +89,6 @@ pure func _pfloordiv(a: i64, b: i64): i64:
     ret q
 end
 
-// Days since 1970-01-01 for a proleptic Gregorian date (Howard Hinnant's
-// days_from_civil). Used to build a UTC epoch without libc timegm, which
-// Windows does not have.
 pure func _daysFromCivil(y0: int, m: int, d: int): i64:
     mut y := y0 as i64
     mm := m as i64
@@ -115,30 +101,14 @@ pure func _daysFromCivil(y0: int, m: int, d: int): i64:
     ret era * 146097 + doe - 719468
 end
 
-// Civil UTC fields -> epoch seconds.
 pure func _utcEpoch(y: int, mo: int, d: int, h: int, mi: int, s: int): i64:
     ret _daysFromCivil(y, mo, d) * 86400 + (h as i64) * 3600 + (mi as i64) * 60 + (s as i64)
 end
 
-// Floor modulo, the companion to _pfloordiv.
 pure func _pfloormod(a: i64, b: i64): i64:
     ret a - _pfloordiv(a, b) * b
 end
 
-// Epoch seconds -> civil UTC fields: the exact inverse of _daysFromCivil
-// (Hinnant's civil_from_days), read out one `struct tm` field at a time so
-// it can stand in for gmtime().
-//
-// This REPLACES libc gmtime rather than merely backing it up. The MSVC CRT
-// cannot represent a negative time_t and returns NULL for every pre-1970
-// instant, so on Windows those came back as all-zero fields - Year() 1900,
-// Month() 1, Day() 0 - and the text the formatters then wrote no longer
-// parsed. The arithmetic here is proleptic Gregorian and defined for every
-// i64: it agrees with glibc across the range glibc handles, and keeps
-// working outside it.
-//
-// `idx` is the C struct tm field order: 0 sec, 1 min, 2 hour, 3 mday,
-// 4 mon (0-11), 5 year (since 1900), 6 wday (0 = Sunday), 7 yday (0-based).
 pure func _gmFieldPure(epoch: i64, idx: int): int:
     days := _pfloordiv(epoch, 86400)
     secs := epoch - days * 86400
@@ -166,10 +136,6 @@ pure func _gmFieldPure(epoch: i64, idx: int): int:
     ret 0
 end
 
-// Local wall-clock fields -> epoch seconds, via libc mktime, so the host's
-// real DST rules decide. tm_isdst = -1 asks mktime to work out for itself
-// whether DST was in force, which is what makes a repeated or skipped hour
-// resolve the same way the rest of the system resolves it.
 func _localEpoch(y: int, mo: int, d: int, h: int, mi: int, s: int): i64:
     buf := mem.AllocateZeroed(128 as u64)
     if buf == null: ret _utcEpoch(y, mo, d, h, mi, s) end
@@ -220,9 +186,6 @@ func _monthFromName(name: str): int:
     ret 0
 end
 
-// A trailing zone designator: Z, +hh, +hhmm, +hh:mm, or a named GMT/UTC.
-// Sets has_offset when one is present. Returns false only on a malformed
-// one; an empty tail is a valid "no zone".
 func _parseZone(bp: i8*, n: int, i &: int, p &: _Parts): bool:
     if i >= n: ret true end
     c := _pub(bp, i)
@@ -258,7 +221,6 @@ func _skipSpaces(bp: i8*, n: int, i &: int):
     end
 end
 
-// HH:MM[:SS] into the hour/minute/second of `p`.
 func _parseClock(bp: i8*, n: int, i &: int, p &: _Parts): bool:
     mut hh := 0
     if !_fixedDigits(bp, n, i, 2, hh): ret false end
@@ -277,8 +239,6 @@ func _parseClock(bp: i8*, n: int, i &: int, p &: _Parts): bool:
     ret true
 end
 
-// Fractional seconds after a '.' or ',', scaled to nanoseconds. Digits past
-// the ninth are below the resolution and are consumed but dropped.
 func _parseFraction(bp: i8*, n: int, i &: int, out &: int): bool:
     mut scale := 100000000
     mut acc := 0
@@ -296,8 +256,6 @@ func _parseFraction(bp: i8*, n: int, i &: int, out &: int): bool:
     ret true
 end
 
-// Scans an ISO 8601 / RFC 3339 timestamp into `p` without resolving it
-// against a timezone, so both ParseISO and ParseISOIn can share it.
 func _scanISO(s: str, p &: _Parts): bool:
     n := s.len()
     if n < 8: ret false end
@@ -331,17 +289,6 @@ func _scanISO(s: str, p &: _Parts): bool:
     ret i == n
 end
 
-// ISO 8601 / RFC 3339. Accepts, with or without a zone:
-//
-//     2024-03-15
-//     2024-03-15T14:30
-//     2024-03-15T14:30:45
-//     2024-03-15 14:30:45          (the separator Format() writes)
-//     2024-03-15T14:30:45.250Z
-//     2024-03-15T14:30:45+05:30    (also +0530 and +05)
-//
-// With no zone the text is read as local wall-clock time, making this the
-// exact inverse of FormatISO and Format. See the file header.
 @en "ParseISO"
 @fa "تجزیه ایزو"
 @ar "تحلیل ایزو"
@@ -351,9 +298,6 @@ pub func ParseISO(s: str): TimeResult:
     ret _resolve(p)
 end
 
-// ParseISO for a string known to have been written at a specific UTC
-// offset. An offset present in the text wins; this only supplies one for
-// text that has none, so it is safe to use on mixed input.
 @en "ParseISOIn"
 @fa "تجزیه ایزو در"
 @ar "تحلیل ایزو فی"
@@ -367,14 +311,6 @@ pub func ParseISOIn(s: str, offsetMinutes: int): TimeResult:
     ret _resolve(p)
 end
 
-// RFC 1123 "HTTP-date", the inverse of FormatHTTPDate:
-//
-//     Wed, 09 Jun 2021 10:18:14 GMT
-//
-// Also accepts the two other formats RFC 7231 requires a client to
-// understand - RFC 850 ("Wednesday, 09-Jun-21 10:18:14 GMT") and asctime
-// ("Wed Jun  9 10:18:14 2021") - because real servers still emit them.
-// Always UTC, as the HTTP specification requires.
 @en "ParseHTTPDate"
 @fa "تجزیه تاریخ اچ‌تی‌تی‌پی"
 @ar "تحلیل تاریخ HTTP"
@@ -441,18 +377,6 @@ pub func ParseHTTPDate(s: str): TimeResult:
     ret _resolve(p)
 end
 
-// strftime-style parsing for a layout this package does not already cover.
-// Supported directives:
-//
-//     %Y 4-digit year      %y 2-digit year     %m month     %d day
-//     %H hour (00-23)      %M minute           %S second    %f fraction
-//     %b/%B month name     %a/%A weekday name (read and ignored)
-//     %z +hhmm/+hh:mm/Z    %Z zone name (GMT/UTC honored, others ignored)
-//     %% a literal percent
-//
-// Any other character in `pattern` must appear literally in `s`, except
-// that a space matches a run of whitespace. With no %z or %Z, the text is
-// read as local time, exactly as ParseISO does.
 @en "ParseFormat"
 @fa "تجزیه با قالب"
 @ar "تحلیل بتنسیق"
@@ -553,7 +477,6 @@ pub func ParseFormat(pattern: str, s: str): TimeResult:
     ret _resolve(p)
 end
 
-// ParseISO with a fallback, for config values and defaults.
 @en "ParseISOOr"
 @fa "تجزیه ایزو یا"
 @ar "تحلیل ایزو أو"
@@ -563,9 +486,6 @@ pub func ParseISOOr(s: str, fallback: i64): i64:
     ret fallback
 end
 
-// RFC 3339 in UTC: "2024-03-15T14:30:45Z". Unlike FormatISO this names an
-// instant on its own, so it is the right thing to write to a log, a wire
-// protocol or a database.
 @en "FormatISOUTC"
 @fa "قالب ایزو جهانی"
 @ar "تنسیق ایزو عالمی"
@@ -576,9 +496,6 @@ pub func FormatISOUTC(epoch: i64): str:
     ret conv.FormatInt(y as i64) + "-" + pad2(mo) + "-" + pad2(d) + "T" + pad2(_gm_field(epoch, 2)) + ":" + pad2(_gm_field(epoch, 1)) + ":" + pad2(_gm_field(epoch, 0)) + "Z"
 end
 
-// RFC 3339 in local time with an explicit offset:
-// "2024-03-15T14:30:45+03:30". Round-trips through ParseISO from anywhere,
-// because the offset travels with it.
 @en "FormatRFC3339"
 @fa "قالب آر‌اف‌سی۳۳۳۹"
 @ar "تنسیق RFC3339"
@@ -595,8 +512,6 @@ pub func FormatRFC3339(epoch: i64): str:
     ret body + sign + pad2(v / 60) + ":" + pad2(v % 60)
 end
 
-// The machine's UTC offset in minutes at one instant, DST included. Derived
-// from libc localtime, so it agrees with FormatDate/FormatTime.
 @en "LocalOffsetMinutesAt"
 @fa "اختلاف محلی در"
 @ar "الفرق المحلی عند"
@@ -605,10 +520,6 @@ pub func LocalOffsetMinutesAt(epoch: i64): int:
     ret ((local - epoch) / 60) as int
 end
 
-// Local wall-clock fields to an epoch, through libc mktime - the inverse of
-// Year/Month/Day/Hour/Minute/Second, and the local-time counterpart to
-// calendar.GregorianToUnixUTC. tm_isdst is left as "unknown", so the system
-// decides how a skipped or repeated hour resolves.
 @en "FromLocalParts"
 @fa "از اجزای محلی"
 @ar "من الأجزاء المحلیة"
@@ -616,7 +527,6 @@ pub func FromLocalParts(year: int, month: int, day: int, hour: int, minute: int,
     ret _localEpoch(year, month, day, hour, minute, second)
 end
 
-// The same, treating the fields as UTC. Portable stand-in for timegm.
 @en "FromUTCParts"
 @fa "از اجزای جهانی"
 @ar "من الأجزاء العالمیة"

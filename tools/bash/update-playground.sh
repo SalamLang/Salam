@@ -1,17 +1,4 @@
 #!/usr/bin/env bash
-# Rebuild the Salam online playground (editor/) from the current sources.
-#
-# Usage: tools/bash/update-playground.sh [options]
-#
-#   --selfhost    Bootstrap compiler/*.salam and build the editor with the
-#                 resulting self-hosted compiler instead of the C one. The
-#                 Wasm bundle is unaffected either way: it is the browser
-#                 compiler, emcc over c/src, and has no self-hosted form.
-#   --wasm-only   Skip rebuilding the native C compiler and reuse ./salam.
-#                 Ignored under --selfhost, which needs it as the seed.
-#   --serve       Serve editor/ over HTTP when the build finishes.
-#   --port N      Port for --serve (default 8080).
-#   -h, --help    This text.
 
 set -eu
 . "$(dirname "$0")/lib.sh"
@@ -48,11 +35,6 @@ if [ "$WASM_ONLY" -eq 0 ] || [ "$SELFHOST" -eq 1 ]; then
 fi
 if [ "$SELFHOST" -eq 1 ]; then
     echo "==> Bootstrapping the self-hosted compiler (compiler/tools/bash/bootstrap.sh) ..."
-    # Two stages, not one: stage 1 is built by the C seed and only proves the
-    # seed can parse compiler/*.salam, while stage 2 is the first binary that
-    # a self-hosted compiler produced, which is the one worth shipping the
-    # editor from. The extra fixpoint stage belongs in the bootstrap suite,
-    # not here.
     sh compiler/tools/bash/bootstrap.sh ./salam build/selfhost --stages 2
     SALAM="$(pwd)/build/selfhost/salam-stage2"
     [ -x "$SALAM" ] || SALAM="$SALAM.exe"

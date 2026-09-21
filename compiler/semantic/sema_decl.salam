@@ -202,6 +202,76 @@ func check_link(s &: Sema, a &: at.Ast, did: int):
     end
 end
 
+func struct_value_target(s &: Sema, t0: int): int:
+    mut t := t0
+    mut guard := 0
+    until guard < 16:
+        if t < 0:
+            ret 0
+        end
+        v := ty_at(s, t)
+        if v.kind == TY_STRUCT:
+            ret v.decl
+        end
+        if v.kind != TY_ARRAY:
+            ret 0
+        end
+        t = v.elem
+        guard += 1
+    end
+    ret 0
+end
+
+func struct_reaches(s &: Sema, from: int, target: int, depth: int): bool:
+    if from == 0 || depth > 64:
+        ret false
+    end
+    fv := sym_at(s, from)
+    if fv.members == 0:
+        ret false
+    end
+    syms := scope_at(s, fv.members).symbols
+    repeat syms.len() with i:
+        mv := sym_at(s, syms.get(i))
+        if mv.kind == SYM_FIELD:
+            tgt := struct_value_target(s, mv.ty)
+            if tgt != 0:
+                if tgt == target:
+                    ret true
+                end
+                if struct_reaches(s, tgt, target, depth + 1):
+                    ret true
+                end
+            end
+        end
+    end
+    ret false
+end
+
+func check_struct_cycles(s &: Sema, a &: at.Ast, program: int):
+    mut i := 0
+    until i < at.ChildCount(a, program):
+        did := at.Child(a, program, i)
+        i += 1
+        d := at.Get(a, did)
+        if d.synthetic || d.kind != at.AST_STRUCT_DEF || d.typarams.len() > 0:
+            continue
+        end
+        ssym := scope_lookup_local(s, s.global, d.name)
+        if ssym == 0:
+            continue
+        end
+        if struct_reaches(s, ssym, ssym, 0):
+            serr(
+                s, 99, span_of(a, did), co.Format1(
+                    i18.Tr("struct '%s' contains itself by value, so it has no finite size; make the field a pointer"),
+                    co.ArgStr(d.name)
+                )
+            )
+        end
+    end
+end
+
 func sema_collect(s &: Sema, a &: at.Ast, program: int):
     save_file := s.file
     mut i := 0
@@ -593,6 +663,7 @@ func sema_collect(s &: Sema, a &: at.Ast, program: int):
             end
         end
     end
+    check_struct_cycles(s, a, program)
     s.file = save_file
 end
 

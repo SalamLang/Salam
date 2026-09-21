@@ -1,9 +1,4 @@
 #!/usr/bin/env bash
-# Builds the sticky benchmark PR comment body from benchmark/RESULTS.md.
-#
-# Usage: build_pr_comment.sh <RESULTS.md path>
-# Env:   SHORT_SHA, RUN_URL, ARTIFACT_NAME (all optional, used for footer links)
-#
 
 set -euo pipefail
 

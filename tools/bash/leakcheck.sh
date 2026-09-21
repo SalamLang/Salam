@@ -1,36 +1,4 @@
 #!/bin/sh
-# Run the whole test corpus through an AddressSanitizer/LeakSanitizer build
-# of salam and fail if the compiler leaked anything.
-#
-# Usage:
-#   sh tools/bash/leakcheck.sh [-j N] [--no-suite] [--no-sweep]
-#                               [--reports=DIR] [--allow=N] [section ...]
-#
-# Env:
-#   SALAM        salam binary to test. MUST be built with -fsanitize=address;
-#                the script refuses to run otherwise, because an
-#                uninstrumented binary reports zero leaks no matter what.
-#                Default: build/asan/salam, which `--build` produces.
-#   SALAM_STD    stdlib root (defaults to ./std, as run-tests.sh does)
-#   LSAN_SUPP    suppression file (default: tools/lsan.supp)
-#   NPROC        parallel workers, same meaning as in run-tests.sh
-#
-# Options:
-#   --build      build the ASan salam first (make -C c ... into build/asan)
-#   --no-suite   skip run-tests.sh, only run the extra-surface sweep
-#   --no-sweep   skip the extra-surface sweep, only run run-tests.sh
-#   --reports=D  where to collect the raw LSan reports (default: a temp dir)
-#   --allow=N    tolerate up to N leaking processes instead of 0. Only for
-#                ratcheting down a known backlog - the C compiler is at 0 and
-#                must stay there.
-#   section ...  forwarded to run-tests.sh (exec, errors, llvm, ...)
-#
-# Why this exists as a script and not just an ASAN_OPTIONS line in CI: a leak
-# is reported by the *child* process that leaked, at its exit, long after the
-# test that spawned it has been graded PASS. Writing every report to its own
-# file under one directory (log_path) and counting the files afterwards is
-# the only way to see them all - and `exitcode=0` keeps a leak from turning
-# into a spurious test failure that hides which test actually leaked.
 
 set -u
 
@@ -89,43 +57,22 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-# lib.sh leaves us at the repository root, which is where run-tests.sh
-# expects to run from (it reaches the corpus as tests/...) and where std/
-# and tests/ live. CDIR and REPO are the same directory; both names are
-# kept because the two are used for different things below (absolutising
-# our own arguments vs locating the stdlib).
 CDIR=$(pwd)
 REPO=$CDIR
-# Repo-relative, for the SALAM default and the absolute OUTDIR handed to
-# make. MAKE_BUILD_DIR is the same directory spelled relative to c/, which
-# is what `make -C c` resolves BUILD_DIR against.
-ASAN_BUILD_DIR=c/build/asan
-MAKE_BUILD_DIR=build/asan
+ASAN_BUILD_DIR=build/asan
 : "${SALAM:=$ASAN_BUILD_DIR/salam}"
 : "${LSAN_SUPP:=tools/lsan.supp}"
 
-# ---------------------------------------------------------------------------
-# Build (opt-in). Deliberately WITH_LLVM=0: the LLVM path is covered by its
-# own leakcheck run, and linking LLVM here would drag ~1 GB of development
-# packages into what should be a two-minute build.
-# ---------------------------------------------------------------------------
 if [ "$DO_BUILD" -eq 1 ]; then
     echo "== building ASan salam ($ASAN_BUILD_DIR/salam) =="
-    # EXTRA_LDFLAGS, never LDFLAGS: a `make LDFLAGS=...` command-line
-    # assignment OVERRIDES the Makefile's own `LDFLAGS += $(llvm-config
-    # --ldflags)`, so a WITH_LLVM=1 build would lose -L/usr/lib/llvm-NN/lib
-    # and fail to find every single -lLLVM*. EXTRA_LDFLAGS exists on the link
-    # line beside LDFLAGS for exactly this. CFLAGS is safe to override,
-    # because nothing in the Makefile appends to it after the `?=`.
-    ASAN_CFLAGS="-O1 -g -fsanitize=address -fno-omit-frame-pointer"
-    ASAN_CFLAGS="$ASAN_CFLAGS -std=gnu89 -Wall -Wextra -Wno-unused-parameter"
-    ASAN_CFLAGS="$ASAN_CFLAGS -Wno-unused-function -Wno-unused-variable"
-    make -C c -j"${NPROC:-4}" \
-        CC="${CC:-gcc}" \
-        LLVM_CONFIG="${LLVM_CONFIG:-llvm-config}" \
-        WITH_LLVM="${WITH_LLVM:-0}" WITH_LLD="${WITH_LLD:-0}" \
-        BUILD_DIR="$MAKE_BUILD_DIR" OUTDIR="$CDIR/$ASAN_BUILD_DIR" \
-        CFLAGS="$ASAN_CFLAGS" EXTRA_LDFLAGS="-fsanitize=address" ||
+    SEED=${SALAM_SEED:-salam}
+    command -v "$SEED" >/dev/null 2>&1 || [ -x "$SEED" ] || {
+        echo "leakcheck: no seed compiler '$SEED' (install one with install.sh, or set SALAM_SEED)" >&2
+        exit 1
+    }
+    mkdir -p "$ASAN_BUILD_DIR"
+    "$SEED" build compiler/main.salam --output="$CDIR/$ASAN_BUILD_DIR/salam" \
+        --asan --debug-info --cc="${CC:-cc}" ||
         {
             echo "leakcheck: ASan build failed" >&2
             exit 1
@@ -150,9 +97,6 @@ esac
     exit 2
 }
 
-# A salam without -fsanitize=address exits cleanly no matter how much it
-# leaks, so a misconfigured job would report a perfect score forever. Prove
-# the instrumentation is really there before trusting a single result.
 if ! (strings "$SALAM_ABS" 2>/dev/null || cat "$SALAM_ABS") |
     grep -q '__asan_init\|AddressSanitizer'; then
     echo "leakcheck: '$SALAM_ABS' is not an AddressSanitizer build." >&2
@@ -170,27 +114,20 @@ case "$REPORTS" in
 *) REPORTS="$CDIR/$REPORTS" ;;
 esac
 
-# exitcode=0: a leak must NOT fail the process it was found in. Otherwise the
-# test that leaked is graded FAIL, run-tests.sh stops being a usable signal,
-# and the leak itself is buried under a wall of unrelated diffs. The reports
-# on disk are the verdict; the tests keep grading correctness only.
+LSAN_SUPPORTED=1
+if ASAN_OPTIONS=detect_leaks=1 "$SALAM_ABS" version 2>&1 |
+    grep -q 'detect_leaks is not supported'; then
+    LSAN_SUPPORTED=0
+    echo "leakcheck: warning - LeakSanitizer is not supported on this platform;" >&2
+    echo "  every run will abort and no leak can be detected. Use Linux." >&2
+fi
+
 ASAN_OPTIONS="detect_leaks=1:exitcode=0:log_path=$REPORTS/leak"
 ASAN_OPTIONS="$ASAN_OPTIONS:max_leaks=200:fast_unwind_on_malloc=0"
 export ASAN_OPTIONS
-# Suppressions belong to LSAN_OPTIONS, NOT ASAN_OPTIONS. ASan parses
-# `suppressions=` with its own parser, which knows interceptor_via_fun /
-# interceptor_via_lib / odr_violation and nothing else - hand it a file of
-# `leak:` lines and every single process dies at startup with
-# "AddressSanitizer: failed to parse suppressions", which reads exactly like
-# a compiler that cannot build anything.
 LSAN_OPTIONS="suppressions=$SUPP_ABS:print_suppressions=0"
 export LSAN_OPTIONS
 export SALAM="$SALAM_ABS"
-# run-tests.sh auto-sets SALAM_STD from ./std, which does now exist here.
-# Setting it explicitly anyway: an ASan salam lives under c/build/asan
-# rather than beside the repository's std/, and a compiler that resolves no
-# stdlib fails every test for a reason that has nothing to do with leaks.
-# Cheap insurance against that auto-detection changing again.
 if [ -z "${SALAM_STD:-}" ] && [ -d "$REPO/std" ]; then
     SALAM_STD="$REPO/std"
     export SALAM_STD
@@ -216,21 +153,18 @@ if [ "$DO_SWEEP" -eq 1 ]; then
     echo
 fi
 
-# ---------------------------------------------------------------------------
-# Verdict. log_path gives one file per process that had anything to report, so
-# the count is "how many salam invocations the sanitizer flagged". That is
-# leaks in practice, but a heap-use-after-free or a buffer overflow lands here
-# too - which is the right behaviour: none of them should ever be zero-count.
-# ---------------------------------------------------------------------------
 nleaks=$(find "$REPORTS" -type f 2>/dev/null | wc -l | tr -d ' ')
 echo "========================================"
-if [ "$nleaks" -eq 0 ]; then
+if [ "$LSAN_SUPPORTED" -eq 0 ]; then
+    echo "LEAKCHECK: INCONCLUSIVE - LeakSanitizer is unsupported here, nothing was checked"
+    echo "  (ASan aborts every run with 'detect_leaks is not supported on this"
+    echo "   platform'; run this on Linux for a real answer)"
+    exit 2
+elif [ "$nleaks" -eq 0 ]; then
     echo "LEAKCHECK: clean - 0 sanitizer reports"
 else
     echo "LEAKCHECK: $nleaks salam invocation(s) reported a leak or memory error"
     echo
-    # Distinct allocation sites, not distinct processes: the same leak in
-    # 300 tests is one thing to fix, and printing it 300 times helps nobody.
     echo "--- distinct allocation sites ---"
     find "$REPORTS" -type f -print0 2>/dev/null |
         xargs -0 grep -h '^    #[0-9]* 0x' 2>/dev/null |

@@ -17,31 +17,19 @@ package aws
 import str
 import encoding.xml
 
-// S3's own limits. Five mebibytes is the floor for every part but the last,
-// ten thousand is the ceiling on the count, and the two together set the
-// largest object a given part size can build.
 pub const S3_PART_MIN := 5242880
 pub const S3_PART_MAX_COUNT := 10000
 
-// The default, at eight mebibytes: comfortably over the floor, small enough
-// that a failed part is cheap to resend, and large enough that a
-// hundred-gigabyte object still fits inside the part-count ceiling.
 pub const S3_PART_DEFAULT := 8388608
 
 const _S3_MD5_SIZE := 16
 
-// PartRef - one uploaded part: the number it was given and the ETag S3
-// answered with. Completing the upload means handing both back.
 pub struct PartRef:
     pub number: int = 0
     pub etag: str = ""
     pub size: i64 = 0
 end
 
-// Upload - one multipart upload in progress.
-//
-// `parts` accumulates as parts are uploaded, so completing is a matter of
-// handing this back rather than of the caller keeping a parallel list.
 pub struct Upload:
     pub ok: bool = false
     pub status: int = 0
@@ -53,9 +41,6 @@ pub struct Upload:
     pub code: str = ""
 end
 
-// PartList - the parts a service says an upload currently holds. Worth reading
-// before resuming an interrupted upload: it is the only authority on which
-// parts actually arrived.
 pub struct PartList:
     pub ok: bool = false
     pub status: int = 0
@@ -66,7 +51,6 @@ pub struct PartList:
     pub code: str = ""
 end
 
-// UploadRef - one in-progress upload, as a listing reports it.
 pub struct UploadRef:
     pub key: str = ""
     pub upload_id: str = ""
@@ -92,8 +76,6 @@ func _upload_failure(res: Result): Upload:
     }
 end
 
-// _complete_body - the manifest that stitches the parts together. S3 requires
-// ascending part numbers, and answers InvalidPartOrder rather than sorting.
 func _complete_body(u: Upload): str:
     mut sb := str.NewBuilder()
     defer str.BufFree(sb)
@@ -112,8 +94,6 @@ func _complete_body(u: Upload): str:
     ret str.BufStr(sb)
 end
 
-// _sorted_parts - a copy in ascending part order. Parts may legitimately be
-// uploaded out of order, in parallel; the manifest may not be out of order.
 func _sorted_parts(u: Upload): Upload:
     mut out := u
     mut sorted := Vector {} as Vector<PartRef>
@@ -150,15 +130,10 @@ func _part_size_of(want: int): int:
     ret size
 end
 
-// _md5_into - one part's raw MD5, for the multipart ETag calculation.
 func _md5_into(p: void*, n: int, out: void*):
     crypto.Md5Bytes(p, n, out)
 end
 
-// S3CreateUpload - begin a multipart upload.
-//
-// From this point the parts are being stored and billed. Every path out of
-// this function's caller must reach S3CompleteUpload or S3AbortUpload.
 pub func S3CreateUpload(cfg: Config, key: str, o: PutOptions): Upload:
     mut r := NewRequest("POST", key)
     SetFlag(r, "uploads")
@@ -184,13 +159,6 @@ pub func S3CreateUpload(cfg: Config, key: str, o: PutOptions): Upload:
     }
 end
 
-// S3UploadPart - send one part.
-//
-// Part numbers run from 1 to 10000 and need not be contiguous, but the
-// completing manifest must list them in ascending order, which S3CompleteUpload
-// takes care of. Every part but the last must be at least five mebibytes; a
-// smaller one is accepted here and refused at completion, which is S3's own
-// behaviour and not worth second-guessing locally.
 pub func S3UploadPart(cfg: Config, u &: Upload, number: int, data: void*,
     n: int): Result:
     if !u.ok || u.upload_id.len() == 0:
@@ -213,11 +181,6 @@ pub func S3UploadPart(cfg: Config, u &: Upload, number: int, data: void*,
     ret res
 end
 
-// S3UploadPartCopy - build a part out of a range of an object that is already
-// in the store, without the bytes travelling here and back.
-//
-// This is how an object larger than five gigabytes is copied, and how several
-// stored objects are concatenated into one.
 pub func S3UploadPartCopy(cfg: Config, u &: Upload, number: int,
     src_key: str, o: CopyOptions, start: i64, stop: i64): Result:
     if !u.ok || u.upload_id.len() == 0:
@@ -243,12 +206,6 @@ pub func S3UploadPartCopy(cfg: Config, u &: Upload, number: int,
     ret res
 end
 
-// S3CompleteUpload - stitch the parts together and publish the object.
-//
-// The answer can be a failure with a 200 status: S3 holds the connection open
-// while it assembles a large object and writes the outcome into the body once
-// it knows. A caller that only reads the status line will treat a failed
-// assembly as a success.
 pub func S3CompleteUpload(cfg: Config, u: Upload): Result:
     if !u.ok || u.upload_id.len() == 0:
         ret Failure("the upload was never created")
@@ -277,10 +234,6 @@ pub func S3CompleteUpload(cfg: Config, u: Upload): Result:
     ret out
 end
 
-// S3AbortUpload - discard an upload and release the parts it holds.
-//
-// Safe to call on an upload that was already completed or aborted; S3 answers
-// NoSuchUpload, which is the same outcome from where the caller stands.
 pub func S3AbortUpload(cfg: Config, u: Upload): Result:
     if u.upload_id.len() == 0: ret Failure("the upload was never created") end
     mut r := NewRequest("DELETE", u.key)
@@ -288,9 +241,6 @@ pub func S3AbortUpload(cfg: Config, u: Upload): Result:
     ret Do(cfg, r)
 end
 
-// S3ListParts - the parts a service currently holds for an upload. The
-// authority when resuming: a part the client thinks it sent and this does not
-// list did not arrive.
 pub func S3ListParts(cfg: Config, key: str, upload_id: str): PartList:
     mut r := NewRequest("GET", key)
     SetQuery(r, "uploadId", upload_id)
@@ -327,11 +277,6 @@ pub func S3ListParts(cfg: Config, key: str, upload_id: str): PartList:
     ret out
 end
 
-// S3ListUploads - the multipart uploads a bucket is currently holding open.
-//
-// The only way to find the storage a crashed process left behind. Worth
-// running on a schedule against any bucket that takes large uploads, and worth
-// pairing with a lifecycle rule that aborts them automatically.
 pub func S3ListUploads(cfg: Config, prefix: str): UploadList:
     mut r := NewRequest("GET", "")
     SetFlag(r, "uploads")
@@ -373,11 +318,6 @@ pub func S3ListUploads(cfg: Config, prefix: str): UploadList:
     ret out
 end
 
-// S3PutLarge - store a buffer as a multipart upload.
-//
-// For an object that is already in memory and too large for one request. The
-// upload is aborted on any failure, so a partial transfer does not turn into
-// storage nobody is looking at.
 pub func S3PutLarge(cfg: Config, key: str, data: void*, n: int, part_size: int,
     o: PutOptions): Result:
     size := _part_size_of(part_size)
@@ -410,8 +350,6 @@ pub func S3PutLarge(cfg: Config, key: str, data: void*, n: int, part_size: int,
     ret done
 end
 
-// S3CopyLarge - copy an object of any size, by copying ranges of it into the
-// parts of a new upload. The bytes never leave the service.
 pub func S3CopyLarge(cfg: Config, src_key: str, dst_key: str, part_size: int,
     o: CopyOptions): Result:
     mut src_cfg := cfg
@@ -453,15 +391,6 @@ pub func S3CopyLarge(cfg: Config, src_key: str, dst_key: str, part_size: int,
     ret done
 end
 
-// S3MultipartEtag - the ETag S3 will report for a buffer uploaded in parts of
-// a given size.
-//
-// A multipart ETag is not a hash of the object: it is the MD5 of the
-// concatenated part MD5s, followed by a dash and the part count. That is why
-// two identical objects uploaded with different part sizes have different
-// ETags, and why comparing an ETag to a local MD5 fails for anything large.
-// Computing the value the same way S3 will is the only way to verify a
-// multipart upload from this side.
 pub func S3MultipartEtag(data: void*, n: int, part_size: int): str:
     size := _part_size_of(part_size)
     if n <= size: ret S3ContentHashMd5(data, n) end
@@ -485,8 +414,6 @@ pub func S3MultipartEtag(data: void*, n: int, part_size: int): str:
     ret _hex(outer, _S3_MD5_SIZE) + "-" + count
 end
 
-// S3ContentHashMd5 - the hex MD5 of a buffer, which is the ETag of any object
-// stored in a single request.
 pub func S3ContentHashMd5(data: void*, n: int): str:
     digest := mem.Allocate(_S3_MD5_SIZE as u64)
     if digest == null: ret "" end
@@ -495,7 +422,6 @@ pub func S3ContentHashMd5(data: void*, n: int): str:
     ret _hex(digest, _S3_MD5_SIZE)
 end
 
-// PartCount - the parts in a list.
 pub func PartCount(p: PartList): int: ret p.items.len() end
 
 pub func PartAt(p: PartList, i: int): PartRef:
@@ -510,10 +436,8 @@ pub func UploadAt(u: UploadList, i: int): UploadRef:
     ret u.items.get(i)
 end
 
-// UploadParts - how many parts have been accepted so far.
 pub func UploadParts(u: Upload): int: ret u.parts.len() end
 
-// UploadBytes - how many bytes those parts account for.
 pub func UploadBytes(u: Upload): i64:
     mut total := 0 as i64
     mut i := 0

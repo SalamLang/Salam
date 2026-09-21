@@ -22,8 +22,6 @@ import mem
 
 extern:
     func printf(fmt: str, ...): int
-    // Declared by <stdio.h>/<stdlib.h>/<string.h> in every generated module,
-    // so these declarations emit no C of their own.
     func fflush(stream: void*): int
     func getenv(name: str): void*
     func memset(ptr: void*, val: int, n: u64): void*
@@ -40,12 +38,9 @@ if SALAM_OS_WINDOWS:
 else:
     extern:
         func isatty(fd: int): int
-        func ioctl(fd: int, req: u64, arg: void*): int
+        func ioctl(fd: int, req: u64, ...): int
         func tcgetattr(fd: int, t: void*): int
         func tcsetattr(fd: int, act: int, t: void*): int
-        // POSIX-2008; present in glibc, musl, macOS and the BSDs. It clears
-        // the whole cooked-mode flag set in one call, which is a great deal
-        // safer than open-coding four bitmasks whose values differ per libc.
         func cfmakeraw(t: void*)
     end
 end
@@ -90,33 +85,18 @@ pub const ColorAlways := 1
 @ar "بدون لون"
 pub const ColorNever := 2
 
-// TCSAFLUSH: apply on the next drain, discarding unread input. The value is
-// 2 on Linux, macOS and the BSDs alike.
 const _TCSAFLUSH := 2
 
-// 128 bytes is comfortably above every real struct termios (Linux 60,
-// macOS 72, FreeBSD 44). The buffer is only ever handed straight back to
-// tcsetattr, so over-allocating costs nothing while under-allocating would
-// let libc write past the end of it.
 const _TERMIOS_CAP := 128
 
 const _TIOCGWINSZ_LINUX := 0x5413
 const _TIOCGWINSZ_BSD := 0x40087468
 
-// ECHO happens to be 0x8 in both the Linux and BSD lineages; ICANON does not
-// agree and is picked per platform by _icanon_bit below.
 const _ECHO := 0x8
 
-// _color_mode is the caller's policy (ColorAuto unless SetColorMode says
-// otherwise); _color_auto caches what auto-detection decided, so the
-// getenv+isatty probe runs once per process rather than once per painted
-// word. 0 = not yet probed, 1 = colour, 2 = no colour.
 mut _color_mode := 0
 mut _color_auto := 0
 
-// What Restore needs to put the terminal back exactly as it was found.
-// On POSIX `saved` owns a heap copy of the original `struct termios`; on
-// Windows it stays null and the two console modes carry the state instead.
 @en "TermState"
 @fa "وضعیت پایانه"
 @ar "حالة الطرفیة"
@@ -142,50 +122,31 @@ func _env(name: str): str:
     ret str.Clone(v as str)
 end
 
-// struct termios is not layout-compatible across the POSIX platforms, so
-// every field this package touches is reached through an offset chosen here.
-//
-//   Linux/glibc: tcflag_t is 4 bytes; c_iflag c_oflag c_cflag c_lflag at
-//     0/4/8/12, c_line at 16, c_cc[32] at 17 (VTIME=5, VMIN=6).
-//   macOS: the four flags are `unsigned long` (8 bytes) at 0/8/16/24, and
-//     c_cc[20] starts at 32 (VMIN=16, VTIME=17).
-//   FreeBSD: 4-byte flags at 0/4/8/12 as on Linux, but the BSD c_cc[20]
-//     layout at 16 (VMIN=16, VTIME=17).
-//
-// c_lflag is read and written through an `int*` on purpose. On macOS that
-// touches only the low 4 bytes of an 8-byte field, which is exactly right:
-// every flag cleared here lives in the low 32 bits, and the high half is
-// left untouched rather than truncated away.
 func _lflag_off(): int:
-    if SALAM_OS_MAC: ret 24 end
-    ret 12
+    if SALAM_OS_MAC: ret 24 else: ret 12 end
 end
 
 func _vmin_off(): int:
-    if SALAM_OS_MAC: ret 48 end
-    if SALAM_OS_BSD: ret 32 end
-    ret 23
+    if SALAM_OS_MAC: ret 48
+    else SALAM_OS_BSD: ret 32
+    else: ret 23 end
 end
 
 func _vtime_off(): int:
-    if SALAM_OS_MAC: ret 49 end
-    if SALAM_OS_BSD: ret 33 end
-    ret 22
+    if SALAM_OS_MAC: ret 49
+    else SALAM_OS_BSD: ret 33
+    else: ret 22 end
 end
 
 func _icanon_bit(): int:
-    if SALAM_OS_MAC || SALAM_OS_BSD: ret 0x100 end
-    ret 0x2
+    if SALAM_OS_MAC || SALAM_OS_BSD: ret 0x100 else: ret 0x2 end
 end
 
 func _winsz_req(): u64:
-    if SALAM_OS_MAC || SALAM_OS_BSD: ret _TIOCGWINSZ_BSD as u64 end
-    ret _TIOCGWINSZ_LINUX
+    if SALAM_OS_MAC || SALAM_OS_BSD: ret _TIOCGWINSZ_BSD
+    else: ret _TIOCGWINSZ_LINUX end
 end
 
-// Windows std handle ids (STD_INPUT_HANDLE = -10, STD_OUTPUT_HANDLE = -11,
-// STD_ERROR_HANDLE = -12). `_fd` carries the leading underscore because off
-// Windows the whole body compiles away and the parameter goes unread.
 func _win_handle(_fd: int): void*:
     if SALAM_OS_WINDOWS:
         if _fd == StdinFd: ret GetStdHandle(0 - 10) end
@@ -211,10 +172,6 @@ func _win_mode(_fd: int): int:
     end
 end
 
-// The de-facto contract every modern CLI implements:
-//   NO_COLOR set (to anything at all, even "") -> never colour  [no-color.org]
-//   CLICOLOR_FORCE set and not "0"             -> always colour
-//   TERM=dumb, or stdout is not a tty          -> no colour
 func _detect_color(): bool:
     if getenv("NO_COLOR") != null: ret false end
     force := _env("CLICOLOR_FORCE")
@@ -223,10 +180,6 @@ func _detect_color(): bool:
     ret IsTTY(StdoutFd)
 end
 
-// _set_mode is MakeRaw and MakeCbreak in one: `full` picks cfmakeraw (no
-// echo, no line editing, no signals, no CR/LF translation - a full-screen
-// app's mode) over cbreak (unbuffered keys, no echo, but Ctrl-C still
-// interrupts - what a prompt or a menu wants).
 func _set_mode(fd: int, full: bool): TermState:
     mut st := TermState { fd = fd }
     if SALAM_OS_WINDOWS:
@@ -271,9 +224,6 @@ func _set_mode(fd: int, full: bool): TermState:
     end
 end
 
-// Write goes through printf deliberately: `print`/`println` are printf too,
-// so escape sequences and ordinary program output share one stdio buffer and
-// can never arrive out of order. A raw write(2) here would reorder them.
 @en "Write"
 @fa "نوشتن"
 @ar "کتابة"
@@ -284,13 +234,6 @@ end
 @en "WriteErr"
 @fa "نوشتن خطا"
 @ar "کتابة خطأ"
-// `printerr`, not a hand-declared write(2). The count argument is ssize_t
-// and size_t sized, so a fixed-width declaration is right for one target
-// only - and it cannot be kept in step with the one codegen puts in every
-// module header, because a bootstrap build takes this file from the tree
-// and that header from the seed. codegen lowers the builtin against the
-// prelude it just emitted, so there is one declaration per compilation and
-// it always matches.
 pub func WriteErr(s: str):
     printerr s
 end
@@ -302,10 +245,6 @@ pub func Flush():
     _r := fflush(null as void*)
 end
 
-// Emit is what every non-`Seq` helper in this package is built from: put the
-// sequence into the stdout buffer and push it out at once. A control sequence
-// is a request to a terminal that is watching in real time, so leaving one
-// sitting in a buffer until the next newline defeats the point.
 @en "Emit"
 @fa "فرستادن"
 @ar "إرسال"
@@ -330,10 +269,6 @@ end
 @ar "متصل بطرفیة"
 pub func IsTerminal(): bool: ret IsTTY(StdoutFd) end
 
-// Size asks the operating system first and believes the environment only if
-// there is no kernel answer - COLUMNS/LINES are frequently stale (they are
-// not re-exported when the window is resized), so they are a fallback for
-// pipes and CI, not a source of truth.
 @en "Size"
 @fa "اندازه"
 @ar "حجم"
@@ -431,9 +366,6 @@ pub func SupportsColor(): bool:
     ret _color_auto == 1
 end
 
-// 256-colour and 24-bit are reported independently of SupportsColor's policy
-// gate on purpose: they answer "what can this terminal render", while
-// SupportsColor answers "should this program colour its output at all".
 @en "Supports256Color"
 @fa "رنگ ۲۵۶ پشتیبانی می‌شود"
 @ar "یدعم ۲۵۶ لونا"
@@ -451,9 +383,6 @@ pub func SupportsTrueColor(): bool:
     ret ct == "truecolor" || ct == "24bit"
 end
 
-// Windows consoles only interpret ANSI once ENABLE_VIRTUAL_TERMINAL_PROCESSING
-// (0x4) is switched on; everywhere else it already holds. Call this once at
-// start-up - it is a no-op off Windows, and reports whether ANSI can be used.
 @en "EnableAnsi"
 @fa "فعال‌سازی انسی"
 @ar "تفعیل أنسي"
@@ -472,18 +401,11 @@ pub func EnableAnsi(): bool:
     end
 end
 
-// MakeRaw hands the program every keystroke unprocessed - no echo, no line
-// editing, and no Ctrl-C/Ctrl-Z signals. ALWAYS pair it with Restore, via a
-// `defer term.Restore(st)` on the very next line: a program that exits
-// without restoring leaves the user's shell in raw mode.
 @en "MakeRaw"
 @fa "حالت خام"
 @ar "الوضع الخام"
 pub func MakeRaw(fd: int): TermState: ret _set_mode(fd, true) end
 
-// MakeCbreak is the gentler half: keys arrive immediately and unechoed, but
-// the terminal still turns Ctrl-C into an interrupt. This is the right mode
-// for a single-key prompt, a menu, or a pager.
 @en "MakeCbreak"
 @fa "حالت نیمه‌خام"
 @ar "وضع نصف خام"
@@ -514,8 +436,6 @@ end
 @ar "جرس"
 pub func Bell(): Emit("\x07") end
 
-// OSC 0 sets both the window and the icon title. Terminals that do not know
-// the sequence swallow it, so this is safe to call unconditionally.
 @en "SeqTitle"
 @fa "دنباله عنوان"
 @ar "تسلسل العنوان"

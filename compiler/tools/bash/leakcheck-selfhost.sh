@@ -1,37 +1,4 @@
 #!/bin/sh
-# Leak ratchet for the SELF-HOSTED compiler (compiler/*.salam).
-#
-# The C compiler is held to zero leaks (tools/bash/leakcheck.sh) because it
-# allocates almost everything from an arena it frees on the way out. The
-# self-hosted compiler cannot be held to the same bar today: Salam is manually
-# memory-managed and has no arena behind its string temporaries, so every
-# discarded `a + b` is a live allocation until the process exits. Demanding
-# zero would mean rewriting the compiler's whole allocation discipline before
-# any leak work could land at all.
-#
-# So this measures instead of forbidding, in the same shape as
-# compiler/tools/selfhost-parity-budget.txt: a per-invocation ceiling on
-# leaked allocations that CI enforces and that only ever moves down. A fix
-# shows up as "budget can be lowered"; a regression fails the job.
-#
-# The counts are reproducible to the allocation on any one machine - the same
-# binary leaks the same number of blocks every run - so the ratchet is a real
-# signal rather than a threshold tuned to hide noise. They do drift by a few
-# dozen BETWEEN machines, because the compiler allocates while walking
-# absolute paths and no two checkouts sit at the same depth; the budgets
-# therefore carry ~2% headroom and the "lower it" nag has a 5% deadband.
-#
-# Usage:
-#   compiler/tools/bash/leakcheck-selfhost.sh <asan-selfhosted-salam> [budget-file]
-#
-# Env:
-#   SALAM_STD   stdlib root (default: the repository's std/)
-#   SALAM_CC    C compiler for the one case that links (default: gcc/clang/cc)
-#
-# Build the input like this, from a normal (non-ASan) salam:
-#   salam build compiler/main.salam --output=salam-selfhost-asan --cc=gcc --asan
-# `--asan` makes the Salam driver hand -fsanitize=address to the C compiler and
-# define SALAM_MEM_DEBUG, so std/mem routes through the sanitized allocator.
 
 set -u
 
@@ -53,9 +20,6 @@ case "$BIN" in /* | [A-Za-z]:*) ;; *) BIN="$(pwd)/$BIN" ;; esac
     exit 2
 }
 
-# Same guard as the C-side leakcheck: an uninstrumented binary reports a
-# perfect score no matter how much it leaks, and a green job for that reason
-# is worse than no job.
 if ! (strings "$BIN" 2>/dev/null || cat "$BIN") |
     grep -q '__asan_init\|AddressSanitizer'; then
     echo "leakcheck-selfhost: '$BIN' is not an AddressSanitizer build" >&2
@@ -80,14 +44,8 @@ mkdir -p "$W"
 trap 'rm -rf "$W"' EXIT INT TERM
 cp "$ROOT/tests/en/basics/hello.salam" "$W/hello.salam"
 
-# exitcode=0 so a leak does not look like a crashed compiler; the SUMMARY line
-# on stderr is what this reads. max_leaks is deliberately tiny: only the total
-# in SUMMARY is used, and asking LSan to symbolize 100k stacks turns a
-# one-second measurement into a two-minute one. Raise it (and drop
-# fast_unwind_on_malloc) by hand when you want to see WHERE, not HOW MUCH.
 LEAK_ASAN_OPTIONS='detect_leaks=1:exitcode=0:max_leaks=1:print_suppressions=0'
 
-# measure <name> <args...> -> "<bytes> <allocs>"
 measure() {
     name=$1
     shift
@@ -121,13 +79,6 @@ run_case() {
         MISSING=$((MISSING + 1))
         return
     fi
-    # The nag threshold is 5% below the budget, not "one allocation below".
-    # Repeated runs of one binary on one machine are bit-identical, but the
-    # count moves by a few dozen between MACHINES - the compiler allocates
-    # while walking absolute paths, and /home/runner/work/Salam/Salam is not
-    # the same length as anyone's checkout. Budgets therefore carry ~2%
-    # headroom, and only a real improvement (past that headroom) should ask
-    # to be ratcheted down.
     slack=$((want / 20))
     [ "$slack" -lt 50 ] && slack=50
     if [ "$allocs" -gt "$want" ]; then

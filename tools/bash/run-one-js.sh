@@ -1,13 +1,4 @@
 #!/bin/sh
-# Build-and-run a single JS-backend test in an isolated working directory so
-# parallel jobs don't collide on the generated bundle file. Compiles with
-# `salam js`, then runs the bundle under Node with tools/js/dom_stub.js
-# preloaded (see that file for why: every bundle checks document.readyState
-# unconditionally, even DOM-free programs). Prints PASS/FAIL lines in the same
-# format run-tests.sh expects.
-#
-# args: <abs-salam-bin> <work-dir> <label> <salam-file> <lang> <expected-out>
-#
 
 set -u
 SALAM_BIN="$1"

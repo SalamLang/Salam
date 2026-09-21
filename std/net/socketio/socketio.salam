@@ -23,8 +23,6 @@ import time
 import encoding.json
 import encoding.value
 
-// Events a server is not allowed to be sent under, because the client uses
-// them for its own lifecycle and a handler cannot tell the two apart.
 const RESERVED := "|connect|connect_error|disconnect|disconnecting|newListener|removeListener|"
 
 func _lifecycle_name(kind: int): str:
@@ -80,8 +78,6 @@ func _compact_handlers(v &: Vector<Handler>):
     v = kept
 end
 
-// One event, to the handlers registered for it and then, if anybody is
-// reading with Next(), to the queue.
 func _deliver(c: Client, ev0: Event):
     sp := _sock(c)
     m := sp[0].mgr as MgrState*
@@ -133,7 +129,6 @@ func _deliver(c: Client, ev0: Event):
     end
 end
 
-// The outgoing counterpart of OnAny: every emit, as it goes out.
 func _notify_outgoing(c: Client, name: str, data: str, ack_id: int):
     sp := _sock(c)
     if sp[0].out_handlers.len() == 0:
@@ -199,12 +194,6 @@ func _resolve_ack(c: Client, id: int, data: str, bins &: Vector<Bytes>): bool:
     ret found
 end
 
-// Fails every acknowledgement whose deadline has passed, and clears out the
-// ones already settled.
-//
-// The sweep is where a resolved waiter is actually removed: _resolve_ack runs
-// while iterating the list and can only mark, so without this a long-lived
-// connection accumulates one dead entry per acknowledgement it ever made.
 func _expire_acks(m: MgrState*):
     now := time.MonoMillis()
     repeat m[0].socks.len() with s:
@@ -258,16 +247,6 @@ func _free_waiter_packets(sp: SockState*):
     end
 end
 
-// Fails every acknowledgement the caller is still waiting on.
-//
-// Called when the connection or the namespace goes away. The answer is never
-// coming - the server that would have sent it no longer has the packet's id,
-// and a reconnection starts the numbering again - so a caller blocked in
-// EmitAck with no deadline would otherwise wait for ever. socket.io rejects
-// them at the same moment and for the same reason.
-//
-// Retry waiters (Options.retries) are left alone on purpose: their packet is
-// re-sent when the connection returns, which is the whole point of them.
 func _fail_pending_acks(sp: SockState*):
     mut dead := false
     repeat sp[0].waiters.len() with i:
@@ -448,13 +427,6 @@ func _send_connect(m: MgrState*, c: Client):
     _engine_write(m, EncodeEngine(EIO_MESSAGE, EncodePacket(p)))
 end
 
-// Everything held while there was no connection, now that there is one.
-//
-// The whole group goes in one request rather than one request each. Over a
-// WebSocket that changes nothing - a write is a frame either way - but over
-// polling each write is an HTTP round trip, so a client coming back with
-// twenty held events would otherwise open twenty connections to say what
-// fits in one body.
 func _flush_outbuf(c: Client):
     sp := _sock(c)
     m := sp[0].mgr as MgrState*
@@ -510,9 +482,6 @@ func _engine_shutdown(m: MgrState*, reason: str):
     end
 end
 
-// Exponential backoff with jitter. Doubling alone would have every client a
-// server dropped come back in the same millisecond and drop it again; the
-// jitter spreads them out.
 func _backoff(m: MgrState*): i64:
     cap := m[0].opts.reconnection_delay_max as i64
     mut d := m[0].opts.reconnection_delay as i64
@@ -584,8 +553,6 @@ func _pump_mgr(m: MgrState*, timeout_ms: int): int:
     ret rc
 end
 
-// One copy of an outgoing packet, owning its own attachments, for a buffer
-// or a retry to hold on to after the caller has freed its Args.
 func _copy_outgoing(text: str, a: Args): Outgoing:
     mut o := Outgoing { text = text }
     repeat a.bins.len() with i:
@@ -656,14 +623,6 @@ func _reserved(name: str): bool:
     ret str.Contains(RESERVED, "|" + name + "|")
 end
 
-// A namespace name, as the server will see it.
-//
-// Only a missing leading slash is corrected, and only because "chat" is a
-// slip nobody means. A trailing slash is left alone: "/chat/" and "/chat"
-// are two different namespaces to a Socket.IO server, and quietly sending
-// one when the caller wrote the other would be a bug that only shows up as
-// "Invalid namespace" from the far end. (ParseURL does strip it, because
-// there a trailing slash is a URL convention rather than a name.)
 func _norm_nsp(nsp: str): str:
     mut s := str.Trim(nsp)
     if s.len() == 0:
@@ -689,11 +648,6 @@ func _norm_path(path: str): str:
     ret s
 end
 
-// How long to wait for an acknowledgement: what the caller asked for, or
-// Options.ack_timeout when they asked for nothing in particular, or forever.
-// How long one connection attempt may take. A non-positive Options.timeout
-// is read as the default rather than as zero: zero would mean every attempt
-// fails before the first packet can arrive, which nobody sets on purpose.
 func _connect_timeout(m: MgrState*): int:
     if m[0].opts.timeout > 0:
         ret m[0].opts.timeout
@@ -764,7 +718,6 @@ func _any_active(m: MgrState*): bool:
     ret any
 end
 
-// NewOptions - the defaults, to change the few that matter and pass on.
 @en "NewOptions"
 @fa "گزینه‌های جدید"
 @ar "خیارات جدیدة"
@@ -772,10 +725,6 @@ pub func NewOptions(): Options:
     ret Options {}
 end
 
-// NewManager - a connection to a server, not yet opened.
-//
-// Use this when one connection is to carry several namespaces; for a single
-// namespace, Dial does this and the rest in one call.
 @en "NewManager"
 @fa "مدیر جدید"
 @ar "مدیر جدید"
@@ -792,8 +741,6 @@ pub func NewManager(url: str, opts: Options): Manager:
     ret m
 end
 
-// Of - the Client for one namespace on this connection, created on first
-// use. `Of(m, "/")` and `Of(m, "")` are the same default namespace.
 @en "Of"
 @fa "از"
 @ar "من"
@@ -819,7 +766,6 @@ pub func Of(m: Manager, nsp: str): Client:
     ret c
 end
 
-// ManagerOf - the connection a Client belongs to.
 @en "ManagerOf"
 @fa "مدیر"
 @ar "مدیر"
@@ -830,11 +776,6 @@ pub func ManagerOf(c: Client): Manager:
     ret Manager { p = _sock(c)[0].mgr }
 end
 
-// Dial - connect to a server and to the namespace named in the URL.
-//
-// Returns once the server has accepted the namespace or the attempt has
-// failed; check IsConnected, and LastError for why not. The namespace comes
-// from the URL's path, so "http://host:3000/chat" joins "/chat".
 @en "Dial"
 @fa "اتصال"
 @ar "اتصال"
@@ -842,8 +783,6 @@ pub func Dial(url: str): Client:
     ret DialWith(url, NewOptions())
 end
 
-// DialWith - Dial with options: a path, a query, an auth payload, headers,
-// a transport choice, a reconnection policy.
 @en "DialWith"
 @fa "اتصال با"
 @ar "اتصال مع"
@@ -863,10 +802,6 @@ pub func DialWith(url: str, opts: Options): Client:
     ret c
 end
 
-// Connect - open the transport if it is not open, and join this namespace.
-//
-// Blocks until the server has accepted the namespace, the attempt failed, or
-// Options.timeout has passed.
 @en "Connect"
 @fa "وصل شدن"
 @ar "الاتصال"
@@ -899,9 +834,6 @@ pub func Connect(c: Client): bool:
     ret _wait_connected(c, time.MonoMillis() + (_connect_timeout(m) as i64))
 end
 
-// Disconnect - leave this namespace, and close the transport once no
-// namespace is using it. The connection is not reopened by itself
-// afterwards; Connect does that.
 @en "Disconnect"
 @fa "قطع اتصال"
 @ar "قطع الاتصال"
@@ -926,12 +858,6 @@ pub func Disconnect(c: Client):
     end
 end
 
-// CloseManager - disconnect every namespace and release the connection.
-//
-// Called from inside a handler it disconnects but does not release: the
-// dispatch loop is standing on the memory it would free. Release it from the
-// loop that drives the connection instead, which is where a program that
-// owns a connection closes it anyway.
 @en "CloseManager"
 @fa "بستن مدیر"
 @ar "إغلاق المدیر"
@@ -960,11 +886,6 @@ pub func CloseManager(m: Manager):
     mem.Free(m.p)
 end
 
-// Close - leave this namespace and release it, taking the whole connection
-// down with it if no other namespace is left on it.
-//
-// From inside a handler this disconnects but does not release, for the
-// reason CloseManager gives; use Disconnect there, which is what it becomes.
 @en "Close"
 @fa "بستن"
 @ar "إغلاق"
@@ -994,18 +915,6 @@ pub func Close(c: Client):
     _free_sock(c)
 end
 
-// Pump - let the connection make progress for up to `timeout_ms`.
-//
-// Everything happens here: packets are read and handlers called, the
-// server's heartbeat is answered, expired acknowledgements are failed, and
-// a lost connection is retried. A program that stops calling it (or Next,
-// or Run) stops answering the heartbeat and the server drops it.
-//
-// Returns PUMP_OK if something arrived, PUMP_TIMEOUT if the wait ran out,
-// PUMP_CLOSED if the connection ended and is not being retried. Over the
-// polling transport the timeout is a floor rather than a ceiling: an HTTP
-// request already in flight cannot be abandoned, so a long-poll returns when
-// the server answers it.
 @en "Pump"
 @fa "پمپ"
 @ar "ضخ"
@@ -1016,7 +925,6 @@ pub func Pump(c: Client, timeout_ms: int): int:
     ret _pump_mgr(_mgr_of(c), timeout_ms)
 end
 
-// PumpManager - Pump for a connection with several namespaces on it.
 @en "PumpManager"
 @fa "پمپ مدیر"
 @ar "ضخ المدیر"
@@ -1027,21 +935,6 @@ pub func PumpManager(m: Manager, timeout_ms: int): int:
     ret _pump_mgr(_mgr(m), timeout_ms)
 end
 
-// Next - the next event on this namespace, or an EV_TIMEOUT event when
-// `timeout_ms` passes with nothing to report.
-//
-// The loop-shaped half of the API, and usually the better half in Salam: a
-// lambda registered with On captures its surroundings by value and cannot
-// write a result back to the function that registered it, while the body of
-// a `until` loop around Next is ordinary code in the caller's own scope.
-//
-// Everything comes through here, lifecycle events included - a connect, a
-// disconnect, a heartbeat, an upgrade - so a loop that only wants what the
-// server sent either checks `ev.kind == EV_EVENT` or calls NextEvent.
-//
-// The returned event owns its binary attachments; release it with EventFree
-// when it may have any. Handlers registered with On still run, from inside
-// this call.
 @en "Next"
 @fa "بعدی"
 @ar "التالی"
@@ -1084,14 +977,6 @@ pub func Next(c: Client, timeout_ms: int): Event:
     ret out
 end
 
-// NextEvent - the next application event, skipping the lifecycle ones.
-//
-// Next hands back everything, connects and pings included, because a program
-// driven by a loop still has to see them. Most loops only care about what
-// the server sent, and this is that loop without the `if ev.kind ==
-// EV_EVENT` around its body. An EV_TIMEOUT still comes back when the wait
-// runs out, and so does an EV_DISCONNECT that ends the connection for good,
-// so the loop can stop.
 @en "NextEvent"
 @fa "رویداد بعدی"
 @ar "الحدث التالی"
@@ -1128,10 +1013,6 @@ pub func NextEvent(c: Client, timeout_ms: int): Event:
     ret out
 end
 
-// Run - pump until this namespace is disconnected for good.
-//
-// Ends when the client disconnects itself (a handler calling Disconnect) or
-// when reconnection is off or exhausted after a drop.
 @en "Run"
 @fa "اجرا"
 @ar "تشغیل"
@@ -1146,12 +1027,6 @@ pub func Run(c: Client):
     end
 end
 
-// RunFor - Run, but for roughly `ms` milliseconds.
-//
-// Roughly, not at most: over the polling transport a long-poll already in
-// flight cannot be abandoned, so a quiet connection can overshoot by as much
-// as the server's ping interval. Pump says the same thing about its own
-// timeout and for the same reason.
 @en "RunFor"
 @fa "اجرا برای"
 @ar "تشغیل لمدة"
@@ -1174,15 +1049,6 @@ pub func RunFor(c: Client, ms: int):
     end
 end
 
-// On - call `cb` every time `name` arrives.
-//
-// `name` is an application event, or one of the lifecycle names: "connect",
-// "disconnect", "connect_error", "error", "ping", "reconnect",
-// "reconnect_attempt", "reconnect_error", "reconnect_failed".
-//
-// Remember that the lambda captures by value. To carry state out of a
-// handler, either write to a top-level `mut` global, or drive the connection
-// with Next instead.
 @en "On"
 @fa "روی"
 @ar "علی"
@@ -1194,7 +1060,6 @@ pub func On(c: Client, name: str, cb: func (Event)):
     sp[0].handlers.push(Handler { name = name, cb = cb })
 end
 
-// Once - On, for the first occurrence only.
 @en "Once"
 @fa "یک‌بار"
 @ar "مرة"
@@ -1206,7 +1071,6 @@ pub func Once(c: Client, name: str, cb: func (Event)):
     sp[0].handlers.push(Handler { name = name, once = true, cb = cb })
 end
 
-// Off - remove every handler for `name`.
 @en "Off"
 @fa "خاموش"
 @ar "إیقاف"
@@ -1225,7 +1089,6 @@ pub func Off(c: Client, name: str):
     _compact_handlers(sp[0].handlers)
 end
 
-// OffAll - remove every handler, catch-all ones included.
 @en "OffAll"
 @fa "خاموش همه"
 @ar "إیقاف الكل"
@@ -1240,8 +1103,6 @@ pub func OffAll(c: Client):
     sp[0].any_handlers = Vector {} as Vector<Handler>
 end
 
-// OnAny - call `cb` for every application event, whatever its name. The
-// name is on the event.
 @en "OnAny"
 @fa "روی هر"
 @ar "علی أی"
@@ -1253,7 +1114,6 @@ pub func OnAny(c: Client, cb: func (Event)):
     sp[0].any_handlers.push(Handler { name = "*", cb = cb })
 end
 
-// OffAny - remove the catch-all handlers.
 @en "OffAny"
 @fa "خاموش هر"
 @ar "إیقاف أی"
@@ -1266,11 +1126,6 @@ pub func OffAny(c: Client):
     sp[0].any_handlers = Vector {} as Vector<Handler>
 end
 
-// EmitArgs - send an event with a built argument list.
-//
-// An emit on a namespace that is not connected is held and sent when it
-// connects, which is what makes a reconnection invisible to the code doing
-// the emitting. Returns false only for a reserved name or a dead client.
 @en "EmitArgs"
 @fa "ارسال با آرگومان"
 @ar "إرسال مع وسائط"
@@ -1281,9 +1136,6 @@ pub func EmitArgs(c: Client, name: str, a: Args): bool:
     ret _emit_raw(c, PKT_EVENT, name, a, 0 - 1, false)
 end
 
-// EmitVolatile - EmitArgs, but dropped rather than buffered when the
-// namespace is not connected. For data that is worthless late: a cursor
-// position, a live reading.
 @en "EmitVolatile"
 @fa "ارسال ناپایدار"
 @ar "إرسال متطایر"
@@ -1294,7 +1146,6 @@ pub func EmitVolatile(c: Client, name: str, a: Args): bool:
     ret _emit_raw(c, PKT_EVENT, name, a, 0 - 1, true)
 end
 
-// Emit - an event with no arguments.
 @en "Emit"
 @fa "ارسال"
 @ar "إرسال"
@@ -1304,7 +1155,6 @@ pub func Emit(c: Client, name: str): bool:
     ret EmitArgs(c, name, a)
 end
 
-// EmitStr - an event with one string argument.
 @en "EmitStr"
 @fa "ارسال رشته"
 @ar "إرسال نص"
@@ -1315,7 +1165,6 @@ pub func EmitStr(c: Client, name: str, s: str): bool:
     ret EmitArgs(c, name, a)
 end
 
-// EmitInt - an event with one integer argument.
 @en "EmitInt"
 @fa "ارسال عدد"
 @ar "إرسال عدد"
@@ -1326,7 +1175,6 @@ pub func EmitInt(c: Client, name: str, n: i64): bool:
     ret EmitArgs(c, name, a)
 end
 
-// EmitFloat - an event with one floating-point argument.
 @en "EmitFloat"
 @fa "ارسال اعشاری"
 @ar "إرسال عشری"
@@ -1337,7 +1185,6 @@ pub func EmitFloat(c: Client, name: str, n: f64): bool:
     ret EmitArgs(c, name, a)
 end
 
-// EmitBool - an event with one boolean argument.
 @en "EmitBool"
 @fa "ارسال بولی"
 @ar "إرسال منطقی"
@@ -1348,7 +1195,6 @@ pub func EmitBool(c: Client, name: str, b: bool): bool:
     ret EmitArgs(c, name, a)
 end
 
-// EmitJSON - an event with one argument that is already JSON.
 @en "EmitJSON"
 @fa "ارسال جیسون"
 @ar "إرسال جیسون"
@@ -1359,7 +1205,6 @@ pub func EmitJSON(c: Client, name: str, raw: str): bool:
     ret EmitArgs(c, name, a)
 end
 
-// EmitBytes - an event with one binary argument.
 @en "EmitBytes"
 @fa "ارسال بایت"
 @ar "إرسال بایتات"
@@ -1370,17 +1215,6 @@ pub func EmitBytes(c: Client, name: str, ptr: void*, n: int): bool:
     ret EmitArgs(c, name, a)
 end
 
-// EmitAck - emit and wait for the server's acknowledgement.
-//
-// The shape the JavaScript client spells `await socket.emitWithAck(...)`,
-// and the one to reach for here: it pumps the connection while it waits, so
-// handlers still run, and it hands the answer back as a return value rather
-// than into a callback that could not reach the caller's variables.
-//
-// `timeout_ms` above zero is a deadline in milliseconds; zero takes
-// Options.ack_timeout, and below zero waits forever whatever the options
-// say. On a timeout the result has `ok = false` and no data - the server may
-// still have acted on the event. Release it with AckFree.
 @en "EmitAck"
 @fa "ارسال و تایید"
 @ar "إرسال وانتظار الإقرار"
@@ -1429,9 +1263,6 @@ pub func EmitAck(c: Client, name: str, a: Args, timeout_ms: int): Ack:
     ret out
 end
 
-// EmitWithAck - emit, and call `cb` when the acknowledgement arrives or the
-// wait runs out. The callback runs inside a later Pump/Next/Run, from this
-// thread; it never runs concurrently with anything.
 @en "EmitWithAck"
 @fa "ارسال با تایید"
 @ar "إرسال مع إقرار"
@@ -1446,10 +1277,6 @@ pub func EmitWithAck(c: Client, name: str, a: Args, timeout_ms: int, cb: func (A
     ret _emit_raw(c, PKT_EVENT, name, a, id, false)
 end
 
-// Reply - acknowledge an event the server asked to have acknowledged.
-//
-// Does nothing for an event with no acknowledgement id (ev.ack_id < 0),
-// which is most of them.
 @en "Reply"
 @fa "پاسخ"
 @ar "رد"
@@ -1460,7 +1287,6 @@ pub func Reply(ev: Event, a: Args): bool:
     ret _emit_raw(ev.client, PKT_ACK, "", a, ev.ack_id, false)
 end
 
-// ReplyJSON - Reply with one argument that is already JSON.
 @en "ReplyJSON"
 @fa "پاسخ جیسون"
 @ar "رد جیسون"
@@ -1471,7 +1297,6 @@ pub func ReplyJSON(ev: Event, raw: str): bool:
     ret Reply(ev, a)
 end
 
-// ReplyStr - Reply with one string argument.
 @en "ReplyStr"
 @fa "پاسخ رشته"
 @ar "رد نصی"
@@ -1482,7 +1307,6 @@ pub func ReplyStr(ev: Event, s: str): bool:
     ret Reply(ev, a)
 end
 
-// ArgCount - how many arguments an event carries.
 @en "ArgCount"
 @fa "شمار آرگومان"
 @ar "عدد الوسائط"
@@ -1490,7 +1314,6 @@ pub func ArgCount(ev: Event): int:
     ret ItemCount(ev.data)
 end
 
-// Arg - argument `i` as raw JSON.
 @en "Arg"
 @fa "آرگومان"
 @ar "وسیط"
@@ -1498,7 +1321,6 @@ pub func Arg(ev: Event, i: int): str:
     ret Item(ev.data, i)
 end
 
-// ArgStr - argument `i` as text, unescaped.
 @en "ArgStr"
 @fa "آرگومان رشته"
 @ar "وسیط نصی"
@@ -1527,8 +1349,6 @@ pub func ArgBool(ev: Event, i: int): bool:
     ret ItemBool(ev.data, i)
 end
 
-// ArgValue - argument `i` parsed into a value tree, for an object or an
-// array. Free it with value.ValueFree.
 @en "ArgValue"
 @fa "مقدار آرگومان"
 @ar "قیمة الوسیط"
@@ -1536,7 +1356,6 @@ pub func ArgValue(ev: Event, i: int): value.Value:
     ret ItemValue(ev.data, i)
 end
 
-// ArgIsBinary - whether argument `i` is a binary attachment rather than JSON.
 @en "ArgIsBinary"
 @fa "آرگومان دودویی است"
 @ar "وسیط ثنائی"
@@ -1544,7 +1363,6 @@ pub func ArgIsBinary(ev: Event, i: int): bool:
     ret PlaceholderNum(Item(ev.data, i)) >= 0
 end
 
-// ArgBytes - argument `i` as its attached buffer. Owned by the event.
 @en "ArgBytes"
 @fa "آرگومان بایتی"
 @ar "وسیط بایتات"
@@ -1556,7 +1374,6 @@ pub func ArgBytes(ev: Event, i: int): Bytes:
     ret ev.bins.get(n)
 end
 
-// AckCount / AckArg / AckStr / AckInt - the same, over an acknowledgement.
 @en "AckCount"
 @fa "شمار تایید"
 @ar "عدد الإقرار"
@@ -1599,8 +1416,6 @@ pub func AckBool(a: Ack, i: int): bool:
     ret ItemBool(a.data, i)
 end
 
-// AckIsBinary - whether answer `i` is a binary attachment rather than JSON.
-// A server can acknowledge with bytes as readily as it can emit them.
 @en "AckIsBinary"
 @fa "تایید دودویی است"
 @ar "إقرار ثنائی"
@@ -1608,8 +1423,6 @@ pub func AckIsBinary(a: Ack, i: int): bool:
     ret PlaceholderNum(Item(a.data, i)) >= 0
 end
 
-// AckBytes - answer `i` as its attached buffer. Owned by the Ack, and
-// released by AckFree.
 @en "AckBytes"
 @fa "بایت تایید"
 @ar "بایتات الإقرار"
@@ -1621,8 +1434,6 @@ pub func AckBytes(a: Ack, i: int): Bytes:
     ret a.bins.get(n)
 end
 
-// AckValue - answer `i` parsed into a value tree. Free it with
-// value.ValueFree.
 @en "AckValue"
 @fa "مقدار تایید"
 @ar "قیمة الإقرار"
@@ -1630,11 +1441,6 @@ pub func AckValue(a: Ack, i: int): value.Value:
     ret ItemValue(a.data, i)
 end
 
-// EventFree - release an event taken from Next.
-//
-// Only events carrying binary attachments own anything; calling it on the
-// rest is free, and it is easier to call it always than to remember which
-// are which.
 @en "EventFree"
 @fa "آزادسازی رویداد"
 @ar "تحریر الحدث"
@@ -1643,7 +1449,6 @@ pub func EventFree(ev &: Event):
     ev.bins = Vector {} as Vector<Bytes>
 end
 
-// AckFree - release an acknowledgement returned by EmitAck.
 @en "AckFree"
 @fa "آزادسازی تایید"
 @ar "تحریر الإقرار"
@@ -1652,7 +1457,6 @@ pub func AckFree(a &: Ack):
     a.bins = Vector {} as Vector<Bytes>
 end
 
-// IsConnected - whether the server has accepted this namespace right now.
 @en "IsConnected"
 @fa "متصل است"
 @ar "متصل"
@@ -1663,8 +1467,6 @@ pub func IsConnected(c: Client): bool:
     ret _sock(c)[0].connected
 end
 
-// Id - the server's id for this namespace's socket, empty while
-// disconnected. It changes on every reconnection; it is not an identity.
 @en "Id"
 @fa "شناسه"
 @ar "معرف"
@@ -1675,8 +1477,6 @@ pub func Id(c: Client): str:
     ret _sock(c)[0].id
 end
 
-// Sid - the Engine.IO session id, shared by every namespace on the
-// connection.
 @en "Sid"
 @fa "شناسه نشست"
 @ar "معرف الجلسة"
@@ -1687,7 +1487,6 @@ pub func Sid(c: Client): str:
     ret _mgr_of(c)[0].sid
 end
 
-// Namespace - which namespace this Client is.
 @en "Namespace"
 @fa "فضای نام"
 @ar "مساحة الاسم"
@@ -1698,9 +1497,6 @@ pub func Namespace(c: Client): str:
     ret _sock(c)[0].nsp
 end
 
-// Recovered - whether the last connect resumed the previous session rather
-// than starting a new one, so nothing sent in the gap was lost. Only ever
-// true against a server with connection state recovery enabled.
 @en "Recovered"
 @fa "بازیابی شده"
 @ar "مستعاد"
@@ -1711,8 +1507,6 @@ pub func Recovered(c: Client): bool:
     ret _sock(c)[0].recovered
 end
 
-// Transport - which transport is carrying the connection now,
-// TRANSPORT_WEBSOCKET or TRANSPORT_POLLING.
 @en "Transport"
 @fa "حمل‌ونقل"
 @ar "النقل"
@@ -1723,7 +1517,6 @@ pub func Transport(c: Client): int:
     ret _mgr_of(c)[0].transport
 end
 
-// LastError - why the last connection attempt failed, or "".
 @en "LastError"
 @fa "آخرین خطا"
 @ar "آخر خطأ"
@@ -1734,7 +1527,6 @@ pub func LastError(c: Client): str:
     ret _mgr_of(c)[0].last_error
 end
 
-// Buffered - how many emits are waiting for a connection.
 @en "Buffered"
 @fa "بافر شده"
 @ar "مخزن مؤقتا"
@@ -1745,8 +1537,6 @@ pub func Buffered(c: Client): int:
     ret _sock(c)[0].outbuf.len()
 end
 
-// Attempts - how many reconnection attempts have been made since the last
-// successful connection.
 @en "Attempts"
 @fa "تلاش‌ها"
 @ar "المحاولات"
@@ -1757,7 +1547,6 @@ pub func Attempts(c: Client): int:
     ret _mgr_of(c)[0].attempts
 end
 
-// EndpointOf - the parsed URL a Client is connected to.
 @en "EndpointOf"
 @fa "نقطه پایانی"
 @ar "نقطة النهایة"
@@ -1768,7 +1557,6 @@ pub func EndpointOf(c: Client): Endpoint:
     ret _mgr_of(c)[0].ep
 end
 
-// Send - the "message" event, socket.io's `socket.send(...)`.
 @en "Send"
 @fa "فرستادن"
 @ar "بعث"
@@ -1776,7 +1564,6 @@ pub func Send(c: Client, msg: str): bool:
     ret EmitStr(c, "message", msg)
 end
 
-// PrependAny - OnAny, but ahead of the catch-alls already registered.
 @en "PrependAny"
 @fa "پیش‌افزودن هر"
 @ar "إضافة أمامیة لأی"
@@ -1794,16 +1581,6 @@ pub func PrependAny(c: Client, cb: func (Event)):
     sp[0].any_handlers = fresh
 end
 
-// OnAnyOutgoing - call `cb` for every event this client sends.
-//
-// The mirror of OnAny, and the place to put logging or tracing so that it
-// does not have to wrap every Emit call. The event handed over is the one
-// going out: `name`, `data` and the acknowledgement id the caller asked
-// for, if any.
-//
-// It fires when the packet is made, which is what socket.io's
-// onAnyOutgoing does - so it also sees an emit that is then held for a
-// connection, or dropped because it was volatile and there was none.
 @en "OnAnyOutgoing"
 @fa "روی هر خروجی"
 @ar "علی أی صادر"
@@ -1815,7 +1592,6 @@ pub func OnAnyOutgoing(c: Client, cb: func (Event)):
     sp[0].out_handlers.push(Handler { name = "*", cb = cb })
 end
 
-// PrependAnyOutgoing - OnAnyOutgoing, ahead of the ones already registered.
 @en "PrependAnyOutgoing"
 @fa "پیش‌افزودن هر خروجی"
 @ar "إضافة أمامیة لأی صادر"
@@ -1833,7 +1609,6 @@ pub func PrependAnyOutgoing(c: Client, cb: func (Event)):
     sp[0].out_handlers = fresh
 end
 
-// OffAnyOutgoing - remove the outgoing catch-alls.
 @en "OffAnyOutgoing"
 @fa "خاموش هر خروجی"
 @ar "إیقاف أی صادر"
@@ -1846,7 +1621,6 @@ pub func OffAnyOutgoing(c: Client):
     sp[0].out_handlers = Vector {} as Vector<Handler>
 end
 
-// ListenerCount - how many handlers are registered for `name`.
 @en "ListenerCount"
 @fa "شمار شنونده"
 @ar "عدد المستمعین"
@@ -1865,7 +1639,6 @@ pub func ListenerCount(c: Client, name: str): int:
     ret n
 end
 
-// HasListeners - whether anything is listening for `name`.
 @en "HasListeners"
 @fa "شنونده دارد"
 @ar "لدیه مستمعون"
@@ -1873,8 +1646,6 @@ pub func HasListeners(c: Client, name: str): bool:
     ret ListenerCount(c, name) > 0
 end
 
-// AnyListenerCount - how many catch-alls are registered, incoming and
-// outgoing.
 @en "AnyListenerCount"
 @fa "شمار شنونده هر"
 @ar "عدد مستمعی أی"
@@ -1886,8 +1657,6 @@ pub func AnyListenerCount(c: Client): int:
     ret sp[0].any_handlers.len() + sp[0].out_handlers.len()
 end
 
-// Disconnected - the opposite of IsConnected, spelled the way socket.io
-// spells it.
 @en "Disconnected"
 @fa "قطع شده"
 @ar "منفصل"
@@ -1895,13 +1664,6 @@ pub func Disconnected(c: Client): bool:
     ret !IsConnected(c)
 end
 
-// Active - whether the caller still wants this namespace connected.
-//
-// True between Connect and Disconnect, including while a reconnection is in
-// flight, which is the difference from IsConnected. It says what the caller
-// asked for, not what the connection is managing: after reconnection has run
-// out of attempts this is still true while nothing is retrying any more, and
-// Pump returning PUMP_CLOSED is what says so.
 @en "Active"
 @fa "فعال"
 @ar "نشط"
@@ -1912,7 +1674,6 @@ pub func Active(c: Client): bool:
     ret _sock(c)[0].active
 end
 
-// Pending - how many acknowledgements are still outstanding.
 @en "Pending"
 @fa "در انتظار"
 @ar "معلق"
@@ -1930,7 +1691,6 @@ pub func Pending(c: Client): int:
     ret n
 end
 
-// Queued - how many events are waiting for Next to take them.
 @en "Queued"
 @fa "در صف"
 @ar "فی الطابور"
@@ -1941,8 +1701,6 @@ pub func Queued(c: Client): int:
     ret _sock(c)[0].inbox.len()
 end
 
-// TransportName - "websocket" or "polling", for logging and for a test that
-// wants to prove the upgrade happened.
 @en "TransportName"
 @fa "نام حمل‌ونقل"
 @ar "اسم النقل"
@@ -1956,8 +1714,6 @@ pub func TransportName(c: Client): str:
     ret "polling"
 end
 
-// PingInterval / PingTimeout - the heartbeat the server asked for, in
-// milliseconds. Known only once the session is open.
 @en "PingInterval"
 @fa "بازه پینگ"
 @ar "فترة البینغ"
@@ -1978,8 +1734,6 @@ pub func PingTimeout(c: Client): int:
     ret _mgr_of(c)[0].ping_timeout
 end
 
-// MaxPayload - the largest body the server accepts on the polling
-// transport, which is what packets are batched against.
 @en "MaxPayload"
 @fa "بیشینه بار"
 @ar "أقصی حمولة"
@@ -1990,11 +1744,6 @@ pub func MaxPayload(c: Client): int:
     ret _mgr_of(c)[0].max_payload
 end
 
-// SetAuth - replace the CONNECT payload for this namespace.
-//
-// It takes effect on the NEXT connect, which is the point: a token that
-// expired is why the connection dropped, and this is where the new one goes
-// before the reconnection carries it.
 @en "SetAuth"
 @fa "تنظیم احراز"
 @ar "ضبط المصادقة"
@@ -2006,7 +1755,6 @@ pub func SetAuth(c: Client, auth json: str):
     sp[0].auth = auth json
 end
 
-// AuthOf - the CONNECT payload this namespace will send.
 @en "AuthOf"
 @fa "احراز"
 @ar "المصادقة"
@@ -2017,8 +1765,6 @@ pub func AuthOf(c: Client): str:
     ret _sock(c)[0].auth
 end
 
-// SetReconnection - turn automatic reconnection on or off on a live
-// connection.
 @en "SetReconnection"
 @fa "تنظیم اتصال دوباره"
 @ar "ضبط إعادة الاتصال"
@@ -2030,7 +1776,6 @@ pub func SetReconnection(m: Manager, enabled: bool):
     mp[0].opts.reconnection = enabled
 end
 
-// SetReconnectionAttempts - how many tries before giving up; 0 is forever.
 @en "SetReconnectionAttempts"
 @fa "تنظیم تلاش‌های دوباره"
 @ar "ضبط محاولات الإعادة"
@@ -2042,7 +1787,6 @@ pub func SetReconnectionAttempts(m: Manager, n: int):
     mp[0].opts.reconnection_attempts = n
 end
 
-// SetReconnectionDelay - the first backoff step, in milliseconds.
 @en "SetReconnectionDelay"
 @fa "تنظیم تاخیر دوباره"
 @ar "ضبط تأخیر الإعادة"
@@ -2054,7 +1798,6 @@ pub func SetReconnectionDelay(m: Manager, ms: int):
     mp[0].opts.reconnection_delay = ms
 end
 
-// SetReconnectionDelayMax - the ceiling the backoff doubles towards.
 @en "SetReconnectionDelayMax"
 @fa "تنظیم بیشینه تاخیر"
 @ar "ضبط أقصی تأخیر"
@@ -2066,7 +1809,6 @@ pub func SetReconnectionDelayMax(m: Manager, ms: int):
     mp[0].opts.reconnection_delay_max = ms
 end
 
-// SetRandomizationFactor - the jitter, as a percentage of the delay.
 @en "SetRandomizationFactor"
 @fa "تنظیم ضریب تصادفی"
 @ar "ضبط معامل العشوائیة"
@@ -2078,7 +1820,6 @@ pub func SetRandomizationFactor(m: Manager, percent: int):
     mp[0].opts.randomization_factor = percent
 end
 
-// SetTimeout - how long one connection attempt may take, in milliseconds.
 @en "SetTimeout"
 @fa "تنظیم مهلت"
 @ar "ضبط المهلة"
@@ -2090,7 +1831,6 @@ pub func SetTimeout(m: Manager, ms: int):
     mp[0].opts.timeout = ms
 end
 
-// OptionsOf - the options a connection is running with, as they stand.
 @en "OptionsOf"
 @fa "گزینه‌ها"
 @ar "الخیارات"
@@ -2101,8 +1841,6 @@ pub func OptionsOf(m: Manager): Options:
     ret _mgr(m)[0].opts
 end
 
-// Sockets - every namespace open on this connection. The vector is the
-// caller's to free; the Clients in it are not.
 @en "Sockets"
 @fa "سوکت‌ها"
 @ar "المقابس"
@@ -2118,10 +1856,6 @@ pub func Sockets(m: Manager): Vector<Client>:
     ret out
 end
 
-// Open - bring the transport up without joining a namespace, socket.io's
-// `manager.open()`. Connect does this on its own; this is for a program that
-// wants the connection established before it decides which namespaces to
-// join.
 @en "Open"
 @fa "باز کردن"
 @ar "فتح"
@@ -2147,8 +1881,6 @@ pub func Open(m: Manager): bool:
     ret true
 end
 
-// IsOpen - whether the transport underneath is up, whatever the namespaces
-// on it are doing.
 @en "IsOpen"
 @fa "باز است"
 @ar "مفتوح"
@@ -2159,7 +1891,6 @@ pub func IsOpen(m: Manager): bool:
     ret _mgr(m)[0].state == ST_OPEN
 end
 
-// ManagerError - why the last connection attempt on this manager failed.
 @en "ManagerError"
 @fa "خطای مدیر"
 @ar "خطأ المدیر"
@@ -2170,12 +1901,6 @@ pub func ManagerError(m: Manager): str:
     ret _mgr(m)[0].last_error
 end
 
-// Refused - whether the server turned this namespace away, and why.
-//
-// Distinct from a connection that simply is not up: a refusal came from the
-// server's own middleware ("Not authorized"), and reconnecting without
-// changing anything - a new token through SetAuth, usually - will be
-// refused again.
 @en "Refused"
 @fa "رد شده"
 @ar "مرفوض"

@@ -1,5 +1,4 @@
 #!/bin/sh
-# Build + run every Persian (fa) example test and verify it compiles and runs.
 
 set -u
 . "$(dirname "$0")/lib.sh"

@@ -25,7 +25,6 @@ const _KC := 512
 const _MC := 128
 const _NC := 1024
 
-// GEP helpers, the pointer-offset idiom every kernel below indexes with.
 inline func _p32(p: f32*, off: int): f32*:
     ret (p as i64 + (off as i64) * (sizeof(f32) as i64)) as f32*
 end
@@ -39,8 +38,6 @@ func _gmin(a: int, b: int): int:
     ret b
 end
 
-// x rows i0..i0+_MR interleaved k-major, so the four scalars step k
-// broadcasts sit in one cache line.
 func _gg_pack_a(px: f32*, xc: int, i0: int, k0: int, kc: int, dst: f32*):
     a0 := _p32(px, i0 * xc + k0)
     a1 := _p32(px, (i0 + 1) * xc + k0)
@@ -55,7 +52,6 @@ func _gg_pack_a(px: f32*, xc: int, i0: int, k0: int, kc: int, dst: f32*):
     end
 end
 
-// y[k0..k1) x [j0..j0+_NR) as a contiguous k-major panel.
 func _gg_pack_b(py: f32*, yc: int, k0: int, k1: int, j0: int, dst: f32*):
     mut k := k0
     mut o := 0
@@ -68,11 +64,6 @@ func _gg_pack_b(py: f32*, yc: int, k0: int, k1: int, j0: int, dst: f32*):
     end
 end
 
-// The 4x16 micro-kernel. Sixty-four running sums live in locals for the
-// whole k loop and reach memory exactly once, at the end. They start
-// from what the result already holds, so successive k blocks accumulate
-// - and so callers building a fresh product must hand this a zeroed
-// destination.
 func _gg_micro(pa: f32*, pb: f32*, kn: i64, c0: f32*, c1: f32*, c2: f32*, c3: f32*):
     mut c0_0 := c0[0]
     mut c0_1 := c0[1]
@@ -292,9 +283,6 @@ func _gg_micro(pa: f32*, pb: f32*, kn: i64, c0: f32*, c1: f32*, c2: f32*, c3: f3
     c3[15] = c3_15
 end
 
-// The edge strip: rows or columns the 4x16 kernel could not cover, one
-// f32 dot product at a time, accumulated in f64 like every other scalar
-// fallback in the package.
 func _gg_edge(pr: f32*, rc: int, px: f32*, xc: int, py: f32*, yc: int, i0: int, i1: int, j0: int, j1: int, kn: int):
     mut i := i0
     until i < i1:
@@ -311,9 +299,6 @@ func _gg_edge(pr: f32*, rc: int, px: f32*, xc: int, py: f32*, yc: int, i0: int, 
     end
 end
 
-// The accumulating product core: r += x y over raw contiguous buffers.
-// r is n x m, x is n x kn, y is kn x m, all row-major with their natural
-// strides. Callers wanting a fresh product zero r first.
 func _gemm_acc(px: f32*, py: f32*, pr: f32*, n: int, kn: int, m: int):
     if n <= 0 || m <= 0 || kn <= 0: ret end
     nfull := (n / _MR) * _MR
@@ -401,8 +386,6 @@ pub func Transpose2D(x &: Tensor): Tensor:
     ret t
 end
 
-// The (n,k)x(k,m) product of two rank-2 tensors. Inner dimensions must
-// agree; a mismatch is the empty tensor, as everywhere.
 @en "MatMul"
 @fa "ضرب ماتریسی"
 @ar "ضرب المصفوفات"
@@ -417,8 +400,6 @@ pub func MatMul(x &: Tensor, y &: Tensor): Tensor:
     ret t
 end
 
-// Product into a destination the caller owns, zeroed here first. `out`
-// must not alias either operand.
 @en "MatMulInto"
 @fa "ضرب ماتریسی در"
 @ar "ضرب المصفوفات في"
@@ -435,8 +416,6 @@ pub func MatMulInto(x &: Tensor, y &: Tensor, out &: Tensor): bool:
     ret true
 end
 
-// out += x y, the form backpropagation wants: gradients accumulate into
-// a buffer that already holds the contributions of other consumers.
 @en "MatMulAcc"
 @fa "ضرب ماتریسی انباشته"
 @ar "ضرب المصفوفات تراكمي"
@@ -450,9 +429,6 @@ pub func MatMulAcc(x &: Tensor, y &: Tensor, out &: Tensor): bool:
     ret true
 end
 
-// X^T Y without asking the caller to build the transpose: one tiled
-// transpose copy, then the packed kernel. The copy is O(n*k) against the
-// product's O(n*k*m).
 @en "TransposeMul"
 @fa "ضرب ترانهاده"
 @ar "ضرب المنقول"
@@ -465,7 +441,6 @@ pub func TransposeMul(x &: Tensor, y &: Tensor): Tensor:
     ret r
 end
 
-// X Y^T, the same one-copy strategy.
 @en "MulTranspose"
 @fa "ضرب در ترانهاده"
 @ar "ضرب في المنقول"
@@ -478,7 +453,6 @@ pub func MulTranspose(x &: Tensor, y &: Tensor): Tensor:
     ret r
 end
 
-// [B,n,k] x [B,k,m] -> [B,n,m]: the packed kernel swept along the batch.
 @en "BatchMatMul"
 @fa "ضرب ماتریسی دسته‌ای"
 @ar "ضرب المصفوفات دفعي"
@@ -495,7 +469,6 @@ pub func BatchMatMul(x &: Tensor, y &: Tensor): Tensor:
     ret t
 end
 
-// A x for a rank-2 A and rank-1 x, returned rank-1.
 @en "MatVec"
 @fa "ضرب در بردار"
 @ar "ضرب بمتجه"
@@ -517,9 +490,6 @@ pub func MatVec(a &: Tensor, x &: Tensor): Tensor:
     ret t
 end
 
-// The transpose of a raw n x m row-major buffer, as a fresh [m, n]
-// tensor. The companion expert entry to GemmAcc below, for callers
-// flattening higher-rank tensors by pointer.
 @en "TransposeRaw"
 @fa "ترانهاده خام"
 @ar "منقول خام"
@@ -529,12 +499,6 @@ pub func TransposeRaw(px: f32*, n: int, m: int): Tensor:
     ret t
 end
 
-// The expert entry: r += x y over raw contiguous row-major buffers
-// (r is n x m, x is n x k, y is k x m), no shape checks, serial. This
-// exists for callers - convolution backward above all - that address
-// samples inside a batched buffer by offset, where wrapping each slice
-// in a Tensor would mean a copy per sample. Everything about safety is
-// the caller's problem; everyone else wants MatMul or MatMulAcc.
 @en "GemmAcc"
 @fa "ضرب انباشته خام"
 @ar "ضرب تراكمي خام"
@@ -542,7 +506,6 @@ pub func GemmAcc(px: f32*, py: f32*, pr: f32*, n: int, k: int, m: int):
     _gemm_acc(px, py, pr, n, k, m)
 end
 
-// The dot product of two rank-1 tensors, accumulated in f64.
 @en "Dot"
 @fa "ضرب داخلی"
 @ar "ضرب داخلي"

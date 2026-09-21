@@ -1,21 +1,4 @@
 #!/bin/sh
-# Copies this host's musl and mingw-w64 CRT/import libraries into a staging
-# directory laid out by target triple, ready for tools/bash/build-embed.sh to
-# tar into a self-contained salam.
-#
-# This is c/Makefile's `stage-sysroots` target. Same file lists, same search
-# order, same "missing is fine, incomplete is an error" rule: a toolchain that
-# is not installed is skipped with a note, but one that is installed and half
-# there fails, because that produces a sysroot that links most programs and
-# then breaks on the one that needs the missing piece.
-#
-# Usage:
-#   tools/bash/stage-sysroots.sh [--out DIR] [--musl-arch ARCH]
-#
-# Produces, under DIR:
-#   <arch>-linux-musl/     crt1.o crti.o crtn.o libc.a (+ compiler-rt builtins)
-#   x86_64-w64-mingw32/lib CRT, gcc runtime, and the import libraries
-#   i686-w64-mingw32/lib   the 32-bit counterpart
 
 set -eu
 
@@ -53,15 +36,12 @@ done
 
 echo "Staging sysroots into $OUT ..."
 
-# ---- musl ------------------------------------------------------------------
 MUSL_SR="$OUT/$MUSL_ARCH-linux-musl"
 if [ -f "/usr/lib/$MUSL_ARCH-linux-musl/crt1.o" ]; then
     mkdir -p "$MUSL_SR"
     for f in crt1.o crti.o crtn.o libc.a; do
         cp "/usr/lib/$MUSL_ARCH-linux-musl/$f" "$MUSL_SR/"
     done
-    # compiler-rt's builtins cover the helpers libgcc would otherwise supply.
-    # Optional: a musl sysroot without them still links most programs.
     rt=$(find /usr/lib -path "*/lib/clang/*/lib/linux/libclang_rt.builtins-$MUSL_ARCH.a" \
         2>/dev/null | sort | head -1)
     if [ -n "$rt" ]; then
@@ -74,14 +54,9 @@ else
     echo "  (musl not found - skipped; 'apt install musl-dev' to cross-compile Linux)"
 fi
 
-# ---- mingw -----------------------------------------------------------------
-# Where these live differs by host: a Linux cross-build keeps them under
-# /usr/<triple>, an MSYS2 host directly in /mingw64/lib. Both are searched so
-# this works natively on Windows too.
 MINGW_CRT="crt2.o dllcrt2.o libmingw32.a libmingwex.a libmoldname.a"
 MINGW_CRT="$MINGW_CRT libmsvcrt.a libadvapi32.a libshell32.a"
 MINGW_CRT="$MINGW_CRT libuser32.a libkernel32.a"
-# Beyond the bare CRT: what `link dynamic "ws2_32"` and friends resolve against.
 MINGW_EXTRA="libws2_32.a libgdi32.a libole32.a liboleaut32.a libuuid.a"
 MINGW_EXTRA="$MINGW_EXTRA libcomdlg32.a libwinspool.a libpsapi.a libiphlpapi.a"
 MINGW_EXTRA="$MINGW_EXTRA libcrypt32.a libbcrypt.a libsecur32.a libwinmm.a"

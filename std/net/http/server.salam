@@ -39,7 +39,6 @@ if SALAM_OS_WINDOWS:
 else:
     extern:
         func signal(signum: int, handler: void *): void *
-        // 13 is SIGPIPE and 1 is SIG_IGN on Linux, macOS and the BSDs.
         func _http_ignore_sigpipe():
             signal(13, 1 as void *)
         end
@@ -66,11 +65,6 @@ else:
     end
 end
 
-// Everything Run does before it starts accepting. Split out so the listening
-// socket is open - or known to have failed - before RunBackground returns,
-// rather than on whatever schedule the new thread happens to get: a test that
-// starts a server and immediately connects to it would otherwise be racing
-// the bind.
 func _bind(s: Server): i64:
     _reqctx_sizeof()
     _warm_up_split()
@@ -78,11 +72,6 @@ func _bind(s: Server): i64:
     ret _net_listen(s.host, s.port)
 end
 
-// The accept loop, as a thread entry point. `packed` is the server's slot in
-// the high half and its listening descriptor in the low half (see
-// ctx_internal.salam's server table); each accepted connection is handed on
-// with the same slot, so its handler thread knows which router to dispatch
-// through.
 func _accept_loop(packed: i64):
     slot := _srv_slot_of(packed)
     lfd := _srv_fd_of(packed)
@@ -151,15 +140,6 @@ pub func Run(s: Server):
     _accept_loop(_srv_pack(_srv_claim(s.router, s.hide_tokens, s.access_log), lfd))
 end
 
-// Run, without blocking: the listener is open when this returns, and its
-// accept loop runs on a thread of its own.
-//
-// This is what makes a second server practical. `Run` never returns, so a
-// program that wants an API on one port and its OpenAPI docs on another (see
-// net/http/swagger) has to background one of them, and backgrounding the
-// small one keeps `main` reading the way it did before. Returns false when
-// the port could not be bound - the usual reason a second listener fails
-// while the first one is fine.
 @en "RunBackground"
 @fa "اجرا در پس زمینه"
 @ar "تشغیل في الخلفیة"
@@ -173,28 +153,6 @@ pub func RunBackground(s: Server): bool:
     ret true
 end
 
-// TLS-serving counterpart to Run: loads `cert_file`/`key_file` once
-// (std/tls.NewServerConfig - PEM certificate chain + private key),
-// stores the resulting config in a package-global read only from then
-// on (same "set once before the accept loop starts, read from every
-// handler thread" pattern Run already uses for `_current_router` - see
-// ctx_internal.salam), then spawns _web_tls_conn_handler per accepted
-// connection instead of the plain handler. If the cert/key fail to
-// load, every connection is refused with a handshake error rather than
-// silently falling back to plaintext.
-//
-// KNOWN ISSUE, not yet root-caused: an end-to-end check (this server
-// against a real tls.Dial client, both local) got past cert loading
-// (cfg.ok was true, no "bad certificate" error) and past accept (the
-// server did take the connection), then hung inside the handshake
-// itself with no error on either side. `grep -r WrapServer tests/`
-// turns up zero existing coverage anywhere in this repo - this call is
-// wired exactly per std/tls/conn.salam's documented signature and
-// usage, but WrapServer's handshake path appears to be genuinely
-// unexercised by any test in the codebase, which is consistent with a
-// pre-existing gap in std/tls itself rather than a bug in this wiring.
-// Treat RunTLS as unverified until std/tls's server-side handshake gets
-// its own passing local client/server test.
 @en "RunTLS"
 @fa "اجرای امن"
 @ar "تشغیل آمن"

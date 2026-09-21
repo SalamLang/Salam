@@ -1,0 +1,64 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+
+import net.http
+import net.router
+import net.internal.rawsock
+import str
+
+const PORT := 19463
+
+func echo hdr(ctx: i64):
+    http.Ctx_set_header(ctx, "X-Echo", http.Ctx_query(ctx, "v"))
+    http.Ctx_text(ctx, "ok")
+end
+
+func main:
+    mut r := router.NewRouter()
+    router.Get(r, "/h", echo hdr)
+    s := http.NewServer(PORT)
+    http.Use(s, r)
+    if !http.RunBackground(s):
+        println "server failed to start"
+        ret
+    end
+
+    c := rawsock.Connect("127.0.0.1", PORT)
+    if !rawsock.Ok(c):
+        println "connect failed"
+        ret
+    end
+    rawsock.SetTimeout(c, 2000)
+    rawsock.Send(c, "GET /h?v=x%0d%0aX-Injected:%20yes%0d%0aSet-Cookie:%20evil=1 HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+    mut all := ""
+    mut tries := 0
+    until tries < 8:
+        part := rawsock.Recv(c, 2048)
+        if part.len() == 0: break end
+        all = all.concat(part)
+        tries += 1
+    end
+    rawsock.Close(c)
+
+    mut injected := 0
+    if str.IndexFrom(all, "\r\nX-Injected:", 0) >= 0: injected += 1 end
+    if str.IndexFrom(all, "\r\nSet-Cookie:", 0) >= 0: injected += 1 end
+    println "injected-header-lines=" + str.FromInt(injected as i64)
+    if str.IndexFrom(all, "\r\nX-Echo:", 0) >= 0:
+        println "echo-header-present"
+    else:
+        println "echo-header-missing"
+    end
+end

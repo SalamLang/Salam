@@ -1,4 +1,24 @@
 #!/bin/sh
+# Builds libsalam_embed.a: the sysroot tarballs a self-contained salam carries
+# inside itself, so `--target=` cross-compiles without the user installing a
+# musl or mingw toolchain.
+#
+# This is c/Makefile's embed_musl_arch/embed_mingw_arch macros as a standalone
+# script. Same trick: tar the staged sysroot, emit a .S that .incbin's it, and
+# assemble. It exports a pointer and a length per target rather than the C's
+# start/end symbol pair, because Salam has no address-of on an extern.
+#
+# Every target gets a symbol pair whether or not it was staged; the ones that
+# were not come out as a null pointer and a zero length, which is what
+# driver_embed.salam reads as "nothing embedded for this one". That keeps the
+# compiler side free of per-target conditionals.
+#
+# Usage:
+#   tools/bash/build-embed.sh --out DIR [--musl-x86_64 DIR] [--musl-aarch64 DIR]
+#                             [--musl-i686 DIR] [--musl-arm DIR]
+#                             [--mingw-x86_64 DIR] [--mingw-i686 DIR]
+#
+# Build the compiler with -DSALAM_HAVE_EMBED --libpath=DIR to link it.
 
 set -eu
 
@@ -74,7 +94,7 @@ while [ $# -gt 0 ]; do
         shift 2
         ;;
     -h | --help)
-        sed -n '2,22p' "$0"
+        sed -n '2,21p' "$0"
         exit 0
         ;;
     *)

@@ -36,17 +36,8 @@ func _cookie_header(m: MgrState*): str:
     ret "Cookie: " + ck + "\r\n"
 end
 
-// The header block for an HTTP request: the caller's own headers, then the
-// session cookie.
-//
-// The caller's block is closed off if they did not: an "Authorization: x"
-// with no CRLF after it would run into the next header and produce a request
-// no server can read, which is a miserable thing to debug from the outside.
 func _headers_of(m: MgrState*): str:
     mut own := m[0].opts.headers
-    // A block that is only whitespace is nothing: left in, its blank line
-    // would end the headers early and turn the rest of the request into a
-    // body.
     if str.Trim(own).len() == 0:
         own = ""
     else !str.EndsWith(own, "\r\n"):
@@ -63,9 +54,6 @@ func _absorb_cookies(m: MgrState*, r: http.Response):
     end
 end
 
-// The query string every request of a session carries. `t` is Engine.IO's
-// cache-buster: without it a proxy is free to answer a long-poll from its
-// cache, and the session simply stops.
 func _query_of(m: MgrState*, transport: str, sid: str): str:
     mut q := "EIO=4&transport=" + transport
     if sid.len() > 0:
@@ -86,9 +74,6 @@ func _query_of(m: MgrState*, transport: str, sid: str): str:
     ret q
 end
 
-// "/socket.io" + "/" + "?EIO=4...". The slash is what Engine.IO puts there
-// and what a server mounted the usual way expects; Options.trailing_slash
-// drops it for the ones behind a proxy that rewrites paths.
 func _mount(m: MgrState*): str:
     if m[0].opts.trailing_slash && m[0].ep.path != "/":
         ret m[0].ep.path + "/?"
@@ -96,9 +81,6 @@ func _mount(m: MgrState*): str:
     ret m[0].ep.path + "?"
 end
 
-// A query fragment with any leading "?" or "&" taken off, so that writing
-// Options.query as "?a=1" - which is what a caller who has just copied it out
-// of a URL will do - does not produce "&?a=1".
 func _clean_query(q: str): str:
     mut out := str.Trim(q)
     until str.StartsWith(out, "?") || str.StartsWith(out, "&"):
@@ -115,7 +97,6 @@ func _ws_path(m: MgrState*, sid: str): str:
     ret _mount(m) + _query_of(m, "websocket", sid)
 end
 
-// The open packet: the session id, and the two numbers the heartbeat runs on.
 func _read_open(m: MgrState*, body: str): bool:
     if json.Get(body, "sid").len() == 0:
         ret false
@@ -152,9 +133,6 @@ func _ws_open(m: MgrState*, sid: str): bool:
     ret true
 end
 
-// A WebSocket session opened without a prior handshake: the server sends the
-// open packet as the first frame, so there is one round trip instead of the
-// polling handshake's three.
 func _ws_direct(m: MgrState*): bool:
     if !_ws_open(m, ""):
         ret false
@@ -215,9 +193,6 @@ func _poll_handshake(m: MgrState*): bool:
     ret true
 end
 
-// The upgrade handshake: a probe over the new transport, and only once the
-// server has echoed it does the old one stand down. A probe that goes
-// unanswered costs nothing - the session carries on over polling.
 func _try_upgrade(m: MgrState*): bool:
     if !m[0].can_upgrade:
         ret false
@@ -263,19 +238,11 @@ func _try_upgrade(m: MgrState*): bool:
     ret true
 end
 
-// Opens the session, by whichever route the options allow.
 func _engine_open(m: MgrState*): bool:
     m[0].last_error = ""
     m[0].sid = ""
     m[0].recon = false
     m[0].pollout.clear()
-    // An unverified TLS connection can only be made by the WebSocket
-    // transport; the polling transport's HTTP client has no way to be told
-    // to skip the check, so its handshake would fail before the upgrade got
-    // a chance.
-    // remember_upgrade: the last connection on this manager reached
-    // WebSocket, so start there instead of paying for the polling handshake
-    // and the upgrade probe all over again.
     remembered := m[0].opts.remember_upgrade && m[0].upgraded_before && m[0].opts.transports == TRANSPORT_AUTO
     if m[0].opts.transports == TRANSPORT_WEBSOCKET || remembered || (m[0].ep.secure && m[0].opts.insecure):
         if _ws_direct(m):
@@ -313,13 +280,6 @@ func _engine_close(m: MgrState*):
     m[0].sid = ""
 end
 
-// Everything queued for the polling transport, in one POST.
-// Everything queued for the polling transport, in as few POSTs as the
-// server's maxPayload allows.
-//
-// The batching is not an optimisation, it is a requirement: a server that
-// announced maxPayload rejects a larger body outright, so one oversized
-// batch would lose every packet in it rather than the one that overflowed.
 func _poll_flush(m: MgrState*): bool:
     if m[0].pollout.len() == 0:
         ret true
@@ -379,8 +339,6 @@ func _engine_write(m: MgrState*, payload: str): bool:
     ret _poll_flush(m)
 end
 
-// A binary attachment. Over a WebSocket it is a binary frame; over polling
-// there is only a text body, so Engine.IO base64s it behind a "b" marker.
 func _engine_write_bytes(m: MgrState*, b: Bytes): bool:
     if m[0].state != ST_OPEN:
         ret false
@@ -403,8 +361,6 @@ func _heartbeat_expired(m: MgrState*): bool:
     ret _now() - m[0].last_rx > limit
 end
 
-// One Engine.IO payload, dispatched. The Socket.IO layer above only ever
-// sees the body of a MESSAGE.
 func _engine_payload(m: MgrState*, payload: str):
     if payload.len() == 0:
         ret
@@ -426,13 +382,6 @@ func _engine_binary(m: MgrState*, b: Bytes):
     _on_socketio_binary(m, b)
 end
 
-// One turn of the polling transport: write what is waiting, then hold a
-// request open until the server has something to say.
-//
-// The timeout argument cannot be honoured here the way the WebSocket
-// transport honours it - an HTTP request in flight cannot be abandoned
-// halfway - so a long-poll returns when the server answers, which it does at
-// the latest on its next heartbeat.
 func _poll_turn(m: MgrState*): int:
     if !_poll_flush(m):
         ret PUMP_CLOSED
@@ -463,13 +412,6 @@ func _poll_turn(m: MgrState*): int:
     ret PUMP_OK
 end
 
-// One base64 attachment out of a polling body.
-//
-// Not Base64Decode into a `str`: that is where the bytes would be lost. A
-// decoded attachment is arbitrary binary, a `str` ends at its first NUL, and
-// a buffer whose first byte is zero - which is most compressed and most
-// binary formats - would arrive empty. The pointer form reports the real
-// length instead.
 func _poll_binary(m: MgrState*, encoded: str):
     if encoded.len() == 0:
         ret
@@ -511,7 +453,6 @@ func _ws_turn(m: MgrState*, timeout_ms: int): int:
     ret PUMP_CLOSED
 end
 
-// Reads whatever the active transport has, for at most `timeout_ms`.
 func _transport_read(m: MgrState*, timeout_ms: int): int:
     if m[0].state != ST_OPEN:
         ret PUMP_CLOSED

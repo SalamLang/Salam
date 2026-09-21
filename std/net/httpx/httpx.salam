@@ -22,9 +22,6 @@ import net.tcp
 const READ_CHUNK := 16384
 const MAX_RESPONSE := 33554432
 
-// Response - one answer. `body` is text because every S3 response this package
-// makes is either XML, empty, or an object the caller asked for as text; GetBytes
-// hands binary back through a buffer instead.
 pub struct Response:
     pub status: int = 0
     pub head: str = ""
@@ -33,7 +30,6 @@ pub struct Response:
     pub error: str = ""
 end
 
-// Endpoint - a URL split into the parts a connection needs.
 pub struct Endpoint:
     pub host: str = ""
     pub port: int = 443
@@ -41,14 +37,12 @@ pub struct Endpoint:
     pub ok: bool = false
 end
 
-// _status_of - the code out of a status line.
 func _status_of(head: str): int:
     sp := head.find(" ")
     if sp < 0: ret 0 end
     ret head.substr(sp + 1, 3).to_int()
 end
 
-// _split - the head and body of a response that has already been read.
 func _split(raw: str, out &: Response):
     sep := raw.find("\r\n\r\n")
     if sep < 0:
@@ -59,8 +53,6 @@ func _split(raw: str, out &: Response):
     out.body = raw.substr(sep + 4, raw.len() - sep - 4)
 end
 
-// _read_plain - a response over a plain socket, up to the ceiling. Reading to
-// the close is enough because this transport never asks for keep-alive.
 func _read_plain(c: tcp.Conn): str:
     mut sb := str.NewBuilder()
     defer str.BufFree(sb)
@@ -87,7 +79,6 @@ func _read_tls(c &: tls.Conn): str:
     ret str.BufStr(sb)
 end
 
-// _send_plain - head then body, over an unencrypted connection.
 func _send_plain(ep: Endpoint, head: str, body: void*, n: int): Response:
     c := tcp.Dial(ep.host, ep.port)
     if !tcp.ConnOk(c):
@@ -133,9 +124,6 @@ func _trim_value(head: str, start: int, stop: int): str:
     ret str.Trim(head.substr(start, e - start))
 end
 
-// ParseEndpoint - "https://host:port" into its parts. Only the scheme and
-// authority; a path in the endpoint is a configuration mistake rather than
-// something to support, because the path is the object key.
 pub func ParseEndpoint(endpoint: str): Endpoint:
     mut rest := endpoint
     mut secure := true
@@ -158,25 +146,17 @@ pub func ParseEndpoint(endpoint: str): Endpoint:
     ret Endpoint { host = rest, port = port, secure = secure, ok = true }
 end
 
-// Send - one request with a binary body.
-//
-// `head` is the complete request line and header block, terminated by a blank
-// line; `body` and `n` are the bytes that follow it. Pass null and 0 for a
-// request with no body.
 pub func Send(ep: Endpoint, head: str, body: void*, n: int): Response:
     if !ep.ok: ret Response { error = "the endpoint could not be parsed" } end
     if ep.secure: ret _send_tls(ep, head, body, n) end
     ret _send_plain(ep, head, body, n)
 end
 
-// SendText - the same for a body that is text.
 pub func SendText(ep: Endpoint, head: str, body: str): Response:
     if body.len() == 0: ret Send(ep, head, null, 0) end
     ret Send(ep, head, body as void*, body.len())
 end
 
-// HeaderValue - one header out of a response, case-insensitively. Returns ""
-// when it is absent.
 pub func HeaderValue(head: str, name: str): str:
     lower := head.lower()
     needle := "\r\n" + name.lower() + ":"
@@ -186,11 +166,6 @@ pub func HeaderValue(head: str, name: str): str:
     ret _trim_value(head, start, str.IndexFrom(lower, "\r\n", start))
 end
 
-// CopyOut - a response body into a fresh buffer, for a caller that wants the
-// bytes rather than the text. Text is what came off the wire, so a body with a
-// NUL in it is already truncated by the time it gets here - which is why
-// GetBytes reads its own length from Content-Length and warns when they
-// disagree rather than silently handing back a short object.
 pub func CopyOut(body: str, out_len &: int): void*:
     n := body.len()
     if n == 0:

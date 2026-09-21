@@ -19,6 +19,7 @@ package poller
 
 import mem
 
+
 if SALAM_OS_WINDOWS:
     link dynamic "ws2_32"
 end
@@ -123,22 +124,6 @@ func _find_reg(p: Poller, fd: i64): int:
     ret 0 - 1
 end
 
-// struct epoll_event is NOT the same shape on every Linux architecture:
-// the kernel headers only mark it __attribute__((packed)) on plain
-// x86_64 (EPOLL_PACKED in <linux/eventpoll.h>), giving a 12-byte struct
-// with the u64 `data` union unaligned at offset 4. Every other
-// architecture - including aarch64 and 32-bit arm, both real CI targets
-// here - gets the natural-alignment layout instead: 4 bytes of padding
-// after `events` so `data` lands 8-byte-aligned at offset 8, for a
-// 16-byte struct. (i686/x86 is packed-or-not moot: a u64 only needs
-// 4-byte alignment there either way, so it's 12 bytes regardless.)
-// Verified empirically (offsetof against the real kernel headers) via
-// gcc on x86_64 (12/@4) and an aarch64-linux-gnu cross-compile run under
-// qemu-aarch64-static (16/@8). Getting this wrong doesn't just misread
-// the fd back out of Wait() - epoll_ctl and epoll_wait are told `cap`
-// structs of whatever size THIS code assumes, so an undersized buffer
-// against the kernel's real (larger, on non-x86_64) per-entry stride is
-// an out-of-bounds write in epoll_wait's buffer, not just a bad read.
 func _epoll_evsize(): int:
     if SALAM_ARCH_ARM64 || SALAM_ARCH_ARM:
         ret 16
@@ -190,7 +175,7 @@ func _epoll_modify(_p &: Poller, _fd: i64, _interest: int): bool:
         ev32[0] = evbits
         evi64 := (ev as i64 + off) as i64*
         evi64[0] = _fd
-        r := epoll_ctl(_p.kfd as int, 3, _fd as int, ev) // EPOLL_CTL_MOD
+        r := epoll_ctl(_p.kfd as int, 3, _fd as int, ev)
         ret r == 0
     else:
         ret false
@@ -241,8 +226,9 @@ func _kevent_add(_p &: Poller, _fd: i64, _filter: int, _flags: int): bool:
         f16[0] = packed
         r := kevent(_p.kfd as int, kev, 1, null, 0, null)
         ret r == 0
+    else:
+        ret false
     end
-    ret false
 end
 
 func _kqueue_register(_p &: Poller, _fd: i64, _interest: int): bool:
@@ -256,10 +242,14 @@ func _kqueue_register(_p &: Poller, _fd: i64, _interest: int): bool:
     ret ok
 end
 
-func _kqueue_unregister(_p &: Poller, _fd: i64): bool:
+func _kqueue_unregister(_p &: Poller, _fd: i64, _interest: int): bool:
     mut ok := true
-    ok = ok && _kevent_add(_p, _fd, 0 - 1, 2) // EVFILT_READ, EV_DELETE
-    ok = ok && _kevent_add(_p, _fd, 0 - 2, 2) // EVFILT_WRITE, EV_DELETE
+    if (_interest & Readable) != 0:
+        ok = ok && _kevent_add(_p, _fd, 0 - 1, 2)
+    end
+    if (_interest & Writable) != 0:
+        ok = ok && _kevent_add(_p, _fd, 0 - 2, 2)
+    end
     ret ok
 end
 
@@ -294,8 +284,6 @@ func _kqueue_wait(_p &: Poller, _timeout_ms: int): Events:
     ret out
 end
 
-// WSAPOLLFD is { SOCKET fd (8); SHORT events (2); SHORT revents (2) },
-// padded to 16 bytes for 8-byte array alignment.
 func _wsapoll_wait(_p &: Poller, _timeout_ms: int): Events:
     out := Events {}
     if SALAM_OS_WINDOWS:
@@ -337,8 +325,6 @@ func _wsapoll_wait(_p &: Poller, _timeout_ms: int): Events:
     ret out
 end
 
-// POSIX pollfd is { int fd (4); short events (2); short revents (2) } =
-// 8 bytes, naturally aligned, no padding.
 func _poll_wait(_p &: Poller, _timeout_ms: int): Events:
     out := Events {}
     if !SALAM_OS_WINDOWS:
@@ -424,11 +410,12 @@ pub func Modify(p &: Poller, fd: i64, interest: int): bool:
     if idx < 0:
         ret Register(p, fd, interest)
     end
+    old := p.regs.items.get(idx).interest
     p.regs.items.set(idx, RegisteredFd { fd = fd, interest = interest })
     if p.backend == BackendEpoll:
         ret _epoll_modify(p, fd, interest)
     else p.backend == BackendKqueue:
-        ret _kqueue_unregister(p, fd) && _kqueue_register(p, fd, interest)
+        ret _kqueue_unregister(p, fd, old) && _kqueue_register(p, fd, interest)
     end
     ret true
 end
@@ -438,22 +425,19 @@ end
 @ar "إلغاء التسجیل"
 pub func Unregister(p &: Poller, fd: i64): bool:
     idx := _find_reg(p, fd)
+    mut interest := Readable | Writable
     if idx >= 0:
+        interest = p.regs.items.get(idx).interest
         p.regs.items.remove_at(idx)
     end
     if p.backend == BackendEpoll:
         ret _epoll_unregister(p, fd)
     else p.backend == BackendKqueue:
-        ret _kqueue_unregister(p, fd)
+        ret _kqueue_unregister(p, fd, interest)
     end
     ret true
 end
 
-// Returns an Events wrapper (not a bare Vector<Event>) - a cross-package
-// generic return (Vector<T> where T is a foreign struct) is a known-broken
-// codegen pattern in this compiler; wrapping it in a one-field named
-// struct, the same trick std/encoding/query/query.salam uses for its
-// QueryValues/QueryMap, sidesteps it. Access results via `.items`.
 @en "Wait"
 @fa "انتظار"
 @ar "انتظار"
